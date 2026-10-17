@@ -1,2 +1,12 @@
 .superpowers/
 docs/local/
+node_modules/
+dist/
+data/
+.local/
+.worktrees/
+test-results/
+playwright-report/
+exporter-mod/build/
+exporter-mod/.gradle/
+exporter-mod/run/
