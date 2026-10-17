@@ -40,6 +40,13 @@ drukoz and friends on the server (a handful of people). drukoz runs the server a
 - When the group already owns machines that make a part (found in the world), the planner suggests reusing them. The group decides.
 - Steps that need a crafting table are listed as hand-crafting steps by default (my call); they can be marked as automated if the group has a block for it.
 
+### 3.3b Where materials come from (planets and dimensions) — added after approval at the user's request
+- Base-material decisions depend on **which planets and dimensions the group can reach at their current tier**.
+- For every base material the tool knows its sources from the pack itself: ore veins and small ores per dimension (GT, BartWorks, GT++), fluid sources per dimension (underground fluids/oil, gases, pumps), and ore-processing byproducts.
+- **Reachable dimensions**: by default, those the group's current tier can reach in GTNH progression (rocket tier per planet) plus those the world shows they have actually been to; editable per project as a checklist of planets/dimensions.
+- A base material counts as available only if it can be mined in a reachable dimension (directly, or as a byproduct of a reachable ore) or made at their tier from available materials. Otherwise it is **not** a free leaf: the planner makes it from available materials if it can, else chooses recipes that avoid it, else flags the step with what unlocks it (e.g. "needs the Moon — tier 1 rocket").
+- The materials list shows where each base material comes from (dimension), and — where the group's prospecting data has it — where they have already found that ore (my call).
+
 ### 3.4 World reading
 - Reads the world **straight from the server folder** on this Mac (read-only, preferring the latest 30-minute backup / a snapshot copy so it never reads files mid-write), plus **manual upload** in the browser (whole world zip, or just `level.dat` plus selected region files) for anyone not on this Mac.
 - Finds **bases** automatically (clusters of mod machines/blocks), in any dimension.
@@ -145,6 +152,7 @@ Decided with drukoz:
 - Batch mode runs on owned machines, adding only what's missing, with a time estimate.
 - Map view, flow diagram, materials/steps and 3D view as in the approved mockups; real textures grabbed from the game files.
 - Project folder `~/gtnh-planner`, published as a public GitHub project.
+- Base-material availability follows the planets/dimensions reachable at the current tier (added after approval).
 
 My calls (open to change):
 - Include GT super/quantum chests and tanks, iron chests and plain chests in the storage scan; "have" counts everything at the base, broken down by location, flagging what the line can reach.
