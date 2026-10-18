@@ -2,11 +2,11 @@
 //
 // Files are read in this order, so every reference resolves: manifest → items → fluids → fluid containers → ore
 // dictionary → recipe maps → recipes (GT, assembly line, crafting, furnace) → machines → structures; then the electric
-// furnace and microwave recipes are derived from the smelting list and the indices built. Materials and worldgen are
-// not read yet: their Pack fields stay empty. Files are never read into one string; `readJsonl` streams them line by
-// line. Structural damage (bad gzip, bad JSON, a line count that differs from the manifest, an index that
-// points nowhere) fails with the file and line instead of returning a half-loaded pack; recoverable oddities become
-// `pack.warnings`.
+// furnace and microwave recipes are derived from the smelting list and the indices built; then GT materials and ore
+// materials; and last the nine worldgen files, because capability yields need the items' materials. Files are never
+// read into one string; `readJsonl` streams them line by line. Structural damage (bad gzip, bad JSON, a line count that
+// differs from the manifest, an index that points nowhere) fails with the file and line instead of returning a
+// half-loaded pack; recoverable oddities become `pack.warnings`.
 
 import { createReadStream } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
@@ -23,8 +23,10 @@ import {
 import { buildIndices, buildMachinesByMap, deriveFurnaceRecipes } from './indices.ts';
 import { PSEUDO_MACHINE_ENTRIES, toMachine, toStructure } from './machines.ts';
 import { aliasesOf, normalizeMapId } from './map-aliases.ts';
+import { buildMaterials } from './materials.ts';
 import { nbtHash } from './recipe-id.ts';
 import { assemblyLineRecipe, craftingRecipe, furnaceEntry, furnaceRecipe, gtRecipe, RecipeCollector, type FurnaceEntry } from './recipes.ts';
+import { buildWorldgen, type WorldgenInput } from './worldgen.ts';
 
 /** Minecraft's OreDictionary.WILDCARD_VALUE: "any meta". Expanded here, never part of a key (architecture §5). */
 const WILDCARD_META = 32767;
@@ -508,6 +510,46 @@ function setIndices({ pack }: LoadState): void {
   pack.machinesByMap = buildMachinesByMap(pack.machines);
 }
 
+/** Every line of `file` in order; `check` sees each line first and throws for a reference the export does not have. */
+async function collectLines<K extends ExportFileKey>(src: ExportSource, file: K, check?: (value: ExportLineTypes[K]) => void): Promise<Array<ExportLineTypes[K]>> {
+  const lines: Array<ExportLineTypes[K]> = [];
+  await eachLine(src, file, (value) => {
+    check?.(value);
+    lines.push(value);
+  });
+  return lines;
+}
+
+/** Throws a RangeError for an item index the export does not have. */
+function checkItemIndices(ctx: LoadContext, indices: Iterable<number>): void {
+  for (const i of indices) ctx.items.keyAt(i);
+}
+
+/** GT materials and ore materials become `pack.materials`; returns the ore-material key → material name map. */
+async function readMaterials({ src, pack, ctx }: LoadState): Promise<Map<string, string>> {
+  const gt = await collectLines(src, 'materials');
+  const ores = await collectLines(src, 'oreMaterials', (line) => checkItemIndices(ctx, Object.values(line.parts)));
+  const { materials, nameOfKey } = buildMaterials(gt, ores, ctx);
+  pack.materials = materials;
+  return nameOfKey;
+}
+
+/** The nine worldgen files become `pack.worldgen`; material keys resolve through `nameOfKey`. */
+async function readWorldgen({ src, pack, ctx }: LoadState, nameOfKey: ReadonlyMap<string, string>): Promise<void> {
+  const input: WorldgenInput = {
+    dimensions: await collectLines(src, 'dimensions'),
+    celestial: await collectLines(src, 'celestial'),
+    veins: await collectLines(src, 'oreVeins'),
+    smallOres: await collectLines(src, 'smallOres'),
+    undergroundFluids: await collectLines(src, 'undergroundFluids'),
+    voidMiner: await collectLines(src, 'voidMiner', (line) => checkItemIndices(ctx, [...line.drops, ...line.extra].map(({ item }) => item))),
+    gasSiphon: await collectLines(src, 'gasSiphon'),
+    spacePump: await collectLines(src, 'spacePump'),
+    spaceAsteroids: await collectLines(src, 'spaceAsteroids', (line) => checkItemIndices(ctx, line.outputs)),
+  };
+  pack.worldgen = buildWorldgen(input, ctx, { materials: pack.materials, nameOfKey, items: pack.items });
+}
+
 /** Reads `src` into a Pack, file by file in the order of the header comment. */
 export async function buildPack(src: ExportSource): Promise<Pack> {
   const state = newLoadState(src);
@@ -522,6 +564,8 @@ export async function buildPack(src: ExportSource): Promise<Pack> {
   addDerivedRecipes(state);
   setRecipes(state);
   setIndices(state);
+  const nameOfKey = await readMaterials(state);
+  await readWorldgen(state, nameOfKey);
   return state.pack;
 }
 
