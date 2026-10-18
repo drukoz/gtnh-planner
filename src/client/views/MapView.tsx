@@ -260,8 +260,8 @@ class MapRenderer {
   }
 }
 
-/** A press on the canvas: where it started, whether an overlay took it, and whether it has become a drag. */
-interface Press { pointerId: number; startX: number; startY: number; lastX: number; lastY: number; consumed: boolean; dragging: boolean }
+/** A press on the canvas: where it started, whether an overlay took it, whether it has become a drag and panned the map. */
+interface Press { pointerId: number; startX: number; startY: number; lastX: number; lastY: number; consumed: boolean; dragging: boolean; panned: boolean }
 
 export function MapView(props: MapViewProps): ReactElement {
   const { scanId, dim, focus } = props;
@@ -351,7 +351,7 @@ export function MapView(props: MapViewProps): ReactElement {
     if (e.button !== 0) return;
     const [px, py] = pointOf(e);
     e.currentTarget.setPointerCapture(e.pointerId);
-    press.current = { pointerId: e.pointerId, startX: px, startY: py, lastX: px, lastY: py, consumed: toOverlays('down', px, py), dragging: false };
+    press.current = { pointerId: e.pointerId, startX: px, startY: py, lastX: px, lastY: py, consumed: toOverlays('down', px, py), dragging: false, panned: false };
   };
   const onPointerMove = (e: PointerEvent<HTMLCanvasElement>): void => {
     const [px, py] = pointOf(e);
@@ -367,6 +367,7 @@ export function MapView(props: MapViewProps): ReactElement {
     if (!p.consumed && !consumed) {
       const dx = px - p.lastX, dy = py - p.lastY;
       e.currentTarget.style.cursor = 'grabbing';
+      p.panned = true;
       setView((v) => panBy(v, dx, dy));
     }
     p.lastX = px;
@@ -385,6 +386,8 @@ export function MapView(props: MapViewProps): ReactElement {
         return;
       }
     }
+    // A pan keeps the same world point under the pointer, so its release would look like a click to the overlays.
+    if (p.panned) return;
     toOverlays('up', px, py);
   };
   const onPointerCancel = (e: PointerEvent<HTMLCanvasElement>): void => {
