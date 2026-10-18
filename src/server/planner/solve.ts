@@ -136,10 +136,11 @@ const S3_MAX_NODES = 5000;
 const S3_BIG_M = 10;
 
 /**
- * The fewest-recipes stage (S3) breaks its ties, in this order: the least free input (water, air, cobblestone, lava,
- * and what the chains of bought derived leaves take), then the least power (what S2 would pick), then the derived
- * purchases with the shortest chains. Each is a share of one recipe, scaled to what the least-raw plan takes, so the
- * recipe count always comes first. On the real export a free input is often tied with another (oxygen from 10,000 L
+ * The fewest-recipes stage (S3) breaks its ties by the least free input (water, air, cobblestone, lava, and what the
+ * chains of bought derived leaves take), then the least power (what S2 would pick), then the derived purchases with
+ * the shortest chains. Each is a share of one recipe, scaled to what the least-raw plan takes, so the recipe count
+ * always comes first; the order among them is by weight, not strict (a line of very high power weighs a difference in
+ * power less). On the real export a free input is often tied with another (oxygen from 10,000 L
  * of air in a centrifuge, or from 3,000 L of water in an electrolyzer; Helium for the blast furnace, distilled from
  * 1,000 L of air per litre), and recipes of one count with another (Steel or Magnetic Steel, steel and a polarizer,
  * extruded into rods); without these S3 picked among them at random and power then kept the pick.
