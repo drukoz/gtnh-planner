@@ -4,11 +4,11 @@
 import type { IncomingMessage } from 'node:http';
 import type { AppContext } from '../../app.ts';
 import { searchPack } from '../../pack/search.ts';
+import { EXCLUSION_RULES } from '../../planner/candidates.ts';
 import { HttpError, sendJson, type Route } from '../router.ts';
 import { recipeTier } from '../../../shared/gt/tiers.ts';
 import type { PackInfo, RecipeSummary, StuffInfo } from '../../../shared/types/api.ts';
 import type { Pack, Recipe } from '../../../shared/types/pack.ts';
-import { DEFAULT_EXCLUDED_CATEGORIES } from '../../../shared/types/plan.ts';
 
 const MAX_RECIPES_PER_SIDE = 50;
 const DEFAULT_SEARCH_LIMIT = 20;
@@ -70,7 +70,7 @@ export function packRoutes(app: AppContext): Route[] {
         const info: PackInfo = {
           manifest: pack.manifest, mapCount: pack.maps.size, recipeCount: pack.recipes.length, itemCount: pack.items.size,
           dimensions: pack.worldgen.dimensions, capabilities: pack.worldgen.capabilities,
-          exclusionRules: [...DEFAULT_EXCLUDED_CATEGORIES],
+          exclusionRules: Object.keys(EXCLUSION_RULES),
         };
         sendJson(res, 200, info);
       },
