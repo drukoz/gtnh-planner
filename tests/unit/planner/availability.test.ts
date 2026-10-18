@@ -52,6 +52,20 @@ describe('computeAvailability', () => {
     expect(a.classOf('gold@0')).toBe('byproduct');
     expect(a.sources('gold@0')).toEqual([{ kind: 'byproduct', dims: ['overworld'], detail: 'byproduct of Iron ore' }]);
   });
+  it('never fires a recipe with a slot that accepts nothing', () => {
+    // The loader keeps a crafting slot whose ore name lists no items, with no options (src/server/pack/recipes.ts).
+    const p = packFromSpec({
+      items: [{ key: 'log@0', name: 'Log' }, { key: 'plank@0', name: 'Plank' }, { key: 'widget@0', name: 'Widget' }, { key: 'gadget@0', name: 'Gadget' }],
+      recipes: [
+        { id: 'plank', map: 'crafting', in: [['log@0', 1]], out: [['plank@0', 4]] },
+        { id: 'widget', map: 'crafting', in: [['log@0', 1], { any: [] }], out: [['widget@0', 1]] },
+        { id: 'gadget', map: 'crafting', in: [{ any: [] }], out: [['gadget@0', 1]] },
+      ],
+    });
+    const a = computeAvailability(p, { tier: 1, reachable: new Set(['overworld']), lowGravity: false, coilHeat: 1801, excluded: new Set() });
+    expect(['log@0', 'plank@0', 'widget@0', 'gadget@0'].map((k) => a.classOf(k))).toEqual(['natural', 'derived', 'unavailable', 'unavailable']);
+    expect(a.sources('widget@0')).toEqual([]);
+  });
   it('knows base and natural items', () => {
     expect(['t:iron_dust@0', 't:iron_plate@0', 'fluid:oil', 'fluid:molten.iron', 'minecraft:cobblestone@0'].map((k) => isBaseItem(pack, k)))
       .toEqual([true, false, true, false, true]);
@@ -67,5 +81,36 @@ describe('unlockText', () => {
     expect(unlockText(pack, 'fluid:oil', from)).toBe('Oil: needs MV machines');
     expect(unlockText(packFromSpec({ items: [{ key: 'x@0', name: 'Unobtainium', gt: { prefix: 'dust', material: 'Unobtainium' } }] }), 'x@0', from))
       .toBe('Unobtainium: no source in this pack\'s data');
+  });
+  it('names only the dimensions of seeds the group cannot reach yet', () => {
+    const vein = (name: string, dims: string[], material: string) => ({
+      name, dims, materials: { primary: material, secondary: material, between: material, sporadic: material },
+      weight: 1, minY: 0, maxY: 255, size: 1, density: 1, kind: 'vein' as const,
+    });
+    const p = packFromSpec({
+      items: [
+        { key: 'iron@0', name: 'Iron Dust', gt: { prefix: 'dust', material: 'Iron' } }, { key: 'ti@0', name: 'Titanium Dust', gt: { prefix: 'dust', material: 'Titanium' } },
+        { key: 'steel@0', name: 'Steel Thing' }, { key: 'alloy@0', name: 'Iron-Titanium Mix' },
+      ],
+      machines: [{ mteId: 1, name: 'Basic Mixer', maps: ['gt.recipe.mixer'], tier: 1 }, { mteId: 2, name: 'Advanced Mixer III', maps: ['gt.recipe.mixer'], tier: 3 }],
+      recipes: [
+        { id: 'steel', map: 'gt.recipe.mixer', in: [['iron@0', 1]], out: [['steel@0', 1]], eut: 480 },
+        { id: 'alloy', map: 'gt.recipe.mixer', in: [['iron@0', 1], ['ti@0', 1]], out: [['alloy@0', 1]], eut: 16 },
+      ],
+      worldgen: {
+        dimensions: [
+          { key: 'overworld', id: 0, name: 'Overworld', mod: 'minecraft', kind: 'dimension', defaultTier: 0 },
+          { key: 'moon', id: 28, name: 'Moon', mod: 'galacticraftcore', kind: 'moon', rocketTier: 1, defaultTier: 3 },
+          { key: 'mars', id: 29, name: 'Mars', mod: 'galacticraftmars', kind: 'planet', rocketTier: 2, defaultTier: 3 },
+        ],
+        veins: [vein('ore.mix.iron', ['overworld', 'moon'], 'Iron'), vein('ore.mix.iron.mars', ['mars'], 'Iron'), vein('ore.mix.ilmenite', ['moon'], 'Titanium')],
+      },
+    });
+    const r = reachableDims(p.worldgen, prog, [], 1);
+    const env: PlanEnv = { tier: 1, reachable: r.keys, lowGravity: r.lowGravity, coilHeat: 1801, excluded: new Set() };
+    expect(computeAvailability(p, env).classOf('iron@0')).toBe('direct');
+    const from = { env, settings: defaultSettings(), visited: [] };
+    expect(unlockText(p, 'steel@0', from)).toBe('Steel Thing: needs HV machines');
+    expect(unlockText(p, 'alloy@0', from)).toBe('Iron-Titanium Mix: needs Moon (T1 rocket) — reachable at HV');
   });
 });

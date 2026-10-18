@@ -87,9 +87,9 @@ interface PackFacts {
   /** Index of each recipe's first input in the flat slot array. */
   slotStart: Int32Array;
   slotTotal: number;
-  /** Input slots with at least one option, per recipe. */
+  /** Input slots per recipe. A slot with no option (an ore name that lists no items) is never satisfied. */
   slotCount: Int32Array;
-  /** Recipes without an input slot: they fire as soon as the group can run them. */
+  /** Recipes without any input slot: they fire as soon as the group can run them. */
   inputless: number[];
 }
 
@@ -128,9 +128,8 @@ function factsOf(pack: Pack): PackFacts {
   pack.recipes.forEach((r, i) => {
     slotStart[i] = slotTotal;
     slotTotal += r.inputs.length;
-    const count = r.inputs.filter((ing) => ing.options.length > 0).length;
-    slotCount[i] = count;
-    if (count === 0) inputless.push(i);
+    slotCount[i] = r.inputs.length;
+    if (r.inputs.length === 0) inputless.push(i);
   });
 
   facts = {
@@ -384,12 +383,12 @@ function seedsOf(pack: Pack, state: State, key: StuffKey): StuffKey[] {
   return seeds;
 }
 
-/** The dimensions and capabilities the sources of a seed rely on. */
-function reachOf(pack: Pack, state: State, seed: StuffKey): string[] {
+/** The sources of a seed that is a direct material's base item or a sourced fluid (none for free and natural goods). */
+function sourcesOf(pack: Pack, state: State, seed: StuffKey): Source[] {
   const list = isFluidKey(seed)
     ? state.fluidSources.get(seed)
     : state.materialSources.get(baseMaterialWith(pack, factsOf(pack).partOf, seed) ?? '');
-  return (list ?? []).flatMap((s) => s.reach);
+  return list ?? [];
 }
 
 /** Dimension (with its rocket tier) and capability names of `keys`, in the pack's order. */
@@ -405,7 +404,9 @@ function placeNames(worldgen: Worldgen, keys: ReadonlySet<string>): string[] {
 /**
  * What would make `key` available (materials-availability §8.1 "Unlock hints"): the first tier above `from.env.tier`
  * at which progression defaults (same visited dimensions, the tier's default coils unless the project sets them) make
- * it available, and the dimensions new at that tier that its first chain relies on.
+ * it available, and the dimensions new at that tier that its first chain relies on: only the seeds that first appear
+ * at that tier count, so a seed the group already gets, or could get from a place it already reaches (or from no
+ * place) once its tier allows, names no dimension.
  */
 export function unlockText(pack: Pack, key: StuffKey, from: { env: PlanEnv; settings: PlanSettings; visited: readonly string[] }): string {
   const name = pack.nameOf(key);
@@ -415,9 +416,14 @@ export function unlockText(pack: Pack, key: StuffKey, from: { env: PlanEnv; sett
       tier, reachable: reach.keys, lowGravity: reach.lowGravity, coilHeat: from.settings.coilHeat ?? defaultCoilHeat(tier), excluded: from.env.excluded,
     });
     if (!state.avail.available.has(key)) continue;
+    const now = stateFor(pack, from.env).avail.available;
+    const reachedNow = (s: Source): boolean => s.reach.length === 0 || s.reach.some((place) => from.env.reachable.has(place));
     const added = new Set<string>();
     for (const seed of seedsOf(pack, state, key)) {
-      for (const place of reachOf(pack, state, seed)) if (!from.env.reachable.has(place)) added.add(place);
+      if (now.has(seed)) continue;
+      const sources = sourcesOf(pack, state, seed);
+      if (sources.some(reachedNow)) continue;   // a fluid source the group reaches, gated only by its minimum tier
+      for (const s of sources) for (const place of s.reach) added.add(place);
     }
     const places = placeNames(pack.worldgen, added);
     return places.length > 0 ? `${name}: needs ${places.join(' or ')} — reachable at ${tierName(tier)}` : `${name}: needs ${tierName(tier)} machines`;
