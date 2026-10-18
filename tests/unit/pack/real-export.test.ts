@@ -83,6 +83,28 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('real export (GTNH 2.9.0-RC-1)',
     expect(worldgen.byproducts.Iron).toContain('Nickel');
   });
 
+  it('names only dimensions the pack has, and vein materials by the name their part items carry (§11.4)', () => {
+    const { worldgen } = pack;
+    const dims = new Set(worldgen.dimensions.map((d) => d.key));
+    const unknown = [
+      ...worldgen.fluidSources.flatMap((s) => s.dims.filter((d) => !dims.has(d)).map((d) => `${s.kind} ${s.fluid}: ${d}`)),
+      ...worldgen.veins.flatMap((v) => v.dims.filter((d) => !dims.has(d)).map((d) => `vein ${v.name}: ${d}`)),
+      ...worldgen.capabilities.filter((c) => c.dim !== undefined && !dims.has(c.dim)).map((c) => `capability ${c.key}: ${c.dim}`),
+    ];
+    expect(unknown).toEqual([]);
+    expect(worldgen.fluidSources.filter((s) => s.kind === 'gas_siphon').flatMap((s) => s.dims)).toContain('station:jupiter');
+    const mismatched: string[] = [];
+    for (const name of new Set(worldgen.veins.flatMap((v) => Object.values(v.materials)))) {
+      const material = pack.materials.get(name);
+      if (material === undefined) mismatched.push(`${name}: no such material`);
+      for (const key of Object.values(material?.parts ?? {})) {
+        const said = pack.items.get(key)?.gt?.material;
+        if (said !== undefined && said !== name) mismatched.push(`${name}: part ${key} says ${said}`);
+      }
+    }
+    expect(mismatched).toEqual([]);
+  });
+
   it('gives the same recipe ids as the export made just before it (run npm run export twice in a row)', async () => {
     const active = activeExportDir(loadConfig());
     const root = dirname(active);

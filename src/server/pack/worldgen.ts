@@ -110,6 +110,14 @@ function stationKey(planet: string): string {
   return STATION_PREFIX + dimKey(planet);
 }
 
+/**
+ * The celestial body a gas-siphon line names. GT stores the body's unlocalized name (`planet.jupiter`), while bodies
+ * and their stations go by the plain name (`jupiter`, `station:jupiter`), so only the part after the last '.' counts.
+ */
+export function siphonPlanet(planet: string): string {
+  return planet.slice(planet.lastIndexOf('.') + 1);
+}
+
 function unique<T>(values: Iterable<T>): T[] {
   return [...new Set(values)];
 }
@@ -236,8 +244,10 @@ function buildFluidSources(input: WorldgenInput, dimensions: readonly DimensionI
   for (const { dim, fluid } of airIntakes) {
     add('air_intake', fluidKey(fluid), dim.id === null ? [dim.key] : keysById.get(dim.id) ?? [dim.key], CAPABILITY_MIN_TIER.airIntake);
   }
+  const known = new Set(dimensions.map((dim) => dim.key));
   for (const line of input.gasSiphon) {
-    const station = stationKey(line.planet);
+    const station = stationKey(siphonPlanet(line.planet));
+    if (!known.has(station)) warn(`gas siphon ${line.planet}: no space station ${station} among the dimensions`);
     const minTier = tierDefaultOf(station)?.tier ?? ROCKET_TIER_DEFAULT[line.tier] ?? UNKNOWN_DIM_TIER;
     for (const [, fluid] of line.depths) add('gas_siphon', fluidKey(fluid), [station], minTier);
   }
