@@ -8,7 +8,7 @@ import { constants, copyFile, mkdir, readdir, readFile, rename, rm, stat, writeF
 import { basename, dirname, join, resolve } from 'node:path';
 import { Transform, type Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import type { WorldSourcesResponse } from '../../shared/types/world-api.ts';
+import { UPLOAD_LIMITS, type UploadLimits, type WorldSourcesResponse } from '../../shared/types/world-api.ts';
 import type { WorldSource } from '../../shared/types/world.ts';
 import { parseRegionPath, regionPathOf } from '../../shared/world/region.ts';
 import { openDirWorld, type WorldFiles } from './files.ts';
@@ -213,9 +213,8 @@ export async function copyServerSideFiles(serverDir: string, worldId: string | n
 // ---- Uploads: data/uploads/<uploadId>/upload.json and files/<rel> ----
 
 const MiB = 1024 ** 2;
-export const UPLOAD_LIMITS: Readonly<{ levelDat: number; region: number; files: number; total: number }> =
-  Object.freeze({ levelDat: 32 * MiB, region: 128 * MiB, files: 4096, total: 8 * 1024 * MiB });
-export type UploadLimits = typeof UPLOAD_LIMITS;
+// The limits live with the API types so the browser checks the same numbers (ledger ruling M-R8).
+export { UPLOAD_LIMITS, type UploadLimits } from '../../shared/types/world-api.ts';
 
 interface UploadMeta { createdAt: string; by: string | null; complete: boolean; files: number; bytes: number }
 

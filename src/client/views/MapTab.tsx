@@ -76,7 +76,8 @@ function newNoteId(): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-function sourceText(source: WorldSource): string {
+/** Where a scan's world came from, in words (also the World page's scan list). */
+export function sourceText(source: WorldSource): string {
   return source.kind === 'server' ? 'server folder' : source.kind === 'backup' ? `backup ${source.file}` : 'upload';
 }
 

@@ -37,6 +37,7 @@
     "vitest": "5.0.3"
   },
   "dependencies": {
+    "@zip.js/zip.js": "2.22.1",
     "elkjs": "0.12.0",
     "highs": "1.15.3",
     "react": "19.3.0",
