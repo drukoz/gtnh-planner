@@ -173,11 +173,11 @@ function sum(nodes: ReadonlyMap<string, number> | undefined): number {
 }
 
 /** What each recipe with runs makes and consumes of each good (`coeffs` × runs), convert recipes included. */
-function recipeAmounts(graph: CandidateGraph, sol: Solution): { made: Amounts; used: Amounts } {
+function recipeAmounts(graph: CandidateGraph, runsById: ReadonlyMap<string, number>): { made: Amounts; used: Amounts } {
   const made: Amounts = new Map();
   const used: Amounts = new Map();
   for (const r of graph.recipes) {
-    const runs = sol.runs.get(r.id);
+    const runs = runsById.get(r.id);
     if (runs === undefined) continue;
     for (const [key, c] of r.coeffs) addAmount(c > 0 ? made : used, key, r.id, Math.abs(c) * runs);
   }
@@ -201,11 +201,11 @@ function busiestOption(options: readonly Option[], conversions: ReadonlyMap<Stuf
 }
 
 /** Virtual good → option → runs of the convert recipe that fills it from that option. */
-function conversionRuns(graph: CandidateGraph, sol: Solution): Map<StuffKey, Map<StuffKey, number>> {
+function conversionRuns(graph: CandidateGraph, runsById: ReadonlyMap<string, number>): Map<StuffKey, Map<StuffKey, number>> {
   const runs = new Map<StuffKey, Map<StuffKey, number>>();
   for (const r of graph.recipes) {
     const ends = r.kind === 'convert' ? convertEnds(r) : null;
-    if (ends !== null) addAmount(runs, ends.virtual, ends.option, sol.runs.get(r.id) ?? 0);
+    if (ends !== null) addAmount(runs, ends.virtual, ends.option, runsById.get(r.id) ?? 0);
   }
   return runs;
 }
@@ -223,7 +223,7 @@ function stepInputs(r: Recipe, conversions: ReadonlyMap<StuffKey, ReadonlyMap<St
 }
 
 /** The output that is a target, else the one the other recipes consume most (ties: the smallest key). */
-function mainOutputOf(r: Recipe, targets: ReadonlySet<StuffKey>, used: Amounts): StuffKey | undefined {
+function mainOutputOf(r: Recipe, targets: ReadonlySet<StuffKey>, used: ReadonlyMap<StuffKey, ReadonlyMap<string, number>>): StuffKey | undefined {
   const outputs = [...new Set(r.outputs.map((p) => p.key))].sort(byString);
   const target = outputs.find((key) => targets.has(key));
   if (target !== undefined) return target;
@@ -240,11 +240,91 @@ function mainOutputOf(r: Recipe, targets: ReadonlySet<StuffKey>, used: Amounts):
   return best;
 }
 
+/** A recipe the solution runs that is a step (convert recipes are not), and the machine that runs it. */
+export interface PickedRecipe { id: string; runs: number; lp: LpRecipe; mapId: string; recipe: Recipe; pick: MachinePick }
+
+/**
+ * The recipes in `runs` that are steps, sorted by id, each with its machine: `pickMachine` with the recipe's own tier
+ * from `settings.machineTier` and the group's `owned` machines. Shared by the rate plan and Make N.
+ */
+export function pickStepMachines(
+  pack: Pack, graph: CandidateGraph, runs: ReadonlyMap<string, number>,
+  opts: { settings: PlanSettings; groupTier: number; coilHeat: number; owned: ReadonlyMap<number, number> },
+): PickedRecipe[] {
+  const { settings, groupTier, coilHeat, owned } = opts;
+  const lpById = new Map(graph.recipes.map((r) => [r.id, r]));
+  const picked: PickedRecipe[] = [];
+  for (const [id, n] of [...runs].sort(([a], [b]) => byString(a, b))) {
+    const lp = lpById.get(id);
+    if (lp === undefined || lp.kind === 'convert' || lp.mapId === null) continue;
+    const recipe = pack.recipeById.get(id);
+    if (recipe === undefined) throw new Error(`recipe ${id} of the plan is not in the pack`);
+    const wantTier = Object.hasOwn(settings.machineTier, id) ? settings.machineTier[id] : undefined;
+    const pick = pickMachine(pack, recipe, lp.mapId, { groupTier, wantTier, coilHeat, automateCrafting: settings.automateCrafting, owned });
+    picked.push({ id, runs: n, lp, mapId: lp.mapId, recipe, pick });
+  }
+  return picked;
+}
+
+/** What describing a step needs from the whole line: its targets, what its recipes consume, its ore-dictionary conversions. */
+export interface StepLine {
+  targets: ReadonlySet<StuffKey>;
+  used: ReadonlyMap<StuffKey, ReadonlyMap<string, number>>;
+  conversions: ReadonlyMap<StuffKey, ReadonlyMap<StuffKey, number>>;
+}
+
+/** The `StepLine` of a line that runs each recipe `runs` times (per second or in all; only the proportions matter). */
+export function stepLine(graph: CandidateGraph, runs: ReadonlyMap<string, number>): StepLine {
+  return { targets: new Set(graph.targets), used: recipeAmounts(graph, runs).used, conversions: conversionRuns(graph, runs) };
+}
+
+/** The warnings that follow from a step's recipe and machine: cleanroom, fast hand-crafting, one energy hatch. */
+export function machineWarnings(lp: LpRecipe, pick: MachinePick, runsPerSecond: number): string[] {
+  const warnings: string[] = [];
+  if (lp.needsCleanroom) warnings.push('Needs a cleanroom');
+  if (pick.handCraft && runsPerSecond > HAND_CRAFT_RUNS_PER_SECOND) {
+    warnings.push('More than one craft per second by hand — consider automating it');
+  }
+  if (pick.kind === 'multiblock') warnings.push(`Multiblock: count assumes one energy hatch at ${tierName(pick.tier)}`);
+  return warnings;
+}
+
+/** How the caller sized a step: machines, owned ones among them, rate, how busy they are, and the step's warnings. */
+export type StepSize = Pick<PlanStep, 'count' | 'owned' | 'runsPerSecond' | 'utilization' | 'warnings'>;
+
+/**
+ * The step of a picked recipe, sized by the caller: the machine and its overclocked speed, per-run inputs and outputs
+ * (expected amounts), the main output, the overclock inputs, the cleanroom flag and the programmed circuit.
+ * `alternatives` stays empty here (Task 14 fills it).
+ */
+export function describeStep(pack: Pack, p: PickedRecipe, line: StepLine, size: StepSize): PlanStep {
+  const { id, recipe: r, pick } = p;
+  const step: PlanStep = {
+    id, recipeId: id, mapId: p.mapId, machine: { mteId: pick.mteId, name: pick.name, tier: pick.tier },
+    count: size.count, owned: size.owned, runsPerSecond: size.runsPerSecond, utilization: size.utilization,
+    euPerTick: pick.oc.euPerTick, durationTicks: pick.oc.durationTicks, overclocks: pick.oc.overclocks,
+    inputs: stepInputs(r, line.conversions),
+    outputs: r.outputs.map((o) => ({ key: o.key, amount: o.amount * o.chance, chance: o.chance })),
+    alternatives: [], handCraft: pick.handCraft, warnings: size.warnings,
+  };
+  const mainOutput = mainOutputOf(r, line.targets, line.used);
+  if (mainOutput !== undefined) step.mainOutput = mainOutput;
+  step.oc = {
+    recipeEuPerTick: r.euPerTick, recipeDurationTicks: baseDurationTicks(r, pick), machineVoltage: pick.oc.machineVoltage,
+    machineAmps: pick.oc.machineAmps, perfect: pick.kind === 'multiblock' && pack.machines.get(pick.mteId)?.perfectOC === true,
+    heatOverclocks: pick.oc.heatOverclocks,
+  };
+  if (p.lp.needsCleanroom) step.needsCleanroom = true;
+  const circuit = recipeCircuit(r);
+  if (circuit !== undefined) step.circuit = circuit;
+  return step;
+}
+
 /**
  * One step per recipe the solution runs (convert recipes are not steps), sorted by id: the picked machine, how many
  * of it the rate needs (`perSecondScale` turns runs into runs per second) and how busy they are, how many of them the
  * group already owns (each owned machine serves one step, earlier steps first), per-run inputs and outputs, and its
- * warnings. `alternatives` stays empty here (Task 14 fills it).
+ * warnings.
  */
 export function planSteps(
   pack: Pack, graph: CandidateGraph, sol: Solution,
@@ -253,55 +333,19 @@ export function planSteps(
   const { settings, groupTier, coilHeat, ctx, perSecondScale } = opts;
   const owned = ownedMachineMap(ctx, settings);
   const unclaimed = new Map(owned);
-  const lpById = new Map(graph.recipes.map((r) => [r.id, r]));
-  const targets = new Set(graph.targets);
-  const { used } = recipeAmounts(graph, sol);
-  const conversions = conversionRuns(graph, sol);
-
-  const steps: PlanStep[] = [];
-  for (const [id, runs] of [...sol.runs].sort(([a], [b]) => byString(a, b))) {
-    const lp = lpById.get(id);
-    if (lp === undefined || lp.kind === 'convert' || lp.mapId === null) continue;
-    const r = pack.recipeById.get(id);
-    if (r === undefined) throw new Error(`planSteps: recipe ${id} of the plan is not in the pack`);
-    const wantTier = Object.hasOwn(settings.machineTier, id) ? settings.machineTier[id] : undefined;
-    const pick = pickMachine(pack, r, lp.mapId, { groupTier, wantTier, coilHeat, automateCrafting: settings.automateCrafting, owned });
-
-    const runsPerSecond = runs * perSecondScale;
-    const perMachine = pick.runsPerSecondPerMachine;
+  const line = stepLine(graph, sol.runs);
+  return pickStepMachines(pack, graph, sol.runs, { settings, groupTier, coilHeat, owned }).map((p) => {
+    const runsPerSecond = p.runs * perSecondScale;
+    const perMachine = p.pick.runsPerSecondPerMachine;
     const count = Math.max(1, Math.ceil(runsPerSecond / perMachine - TINY));
-    const free = unclaimed.get(pick.mteId) ?? 0;
+    const free = unclaimed.get(p.pick.mteId) ?? 0;
     const reused = Math.max(0, Math.min(count, free));
-    if (reused > 0) unclaimed.set(pick.mteId, free - reused);
-
-    const warnings: string[] = [];
-    if (lp.needsCleanroom) warnings.push('Needs a cleanroom');
-    if (pick.handCraft && runsPerSecond > HAND_CRAFT_RUNS_PER_SECOND) {
-      warnings.push('More than one craft per second by hand — consider automating it');
-    }
-    if (pick.kind === 'multiblock') warnings.push(`Multiblock: count assumes one energy hatch at ${tierName(pick.tier)}`);
-
-    const step: PlanStep = {
-      id, recipeId: id, mapId: lp.mapId, machine: { mteId: pick.mteId, name: pick.name, tier: pick.tier },
+    if (reused > 0) unclaimed.set(p.pick.mteId, free - reused);
+    return describeStep(pack, p, line, {
       count, owned: reused, runsPerSecond, utilization: runsPerSecond / (count * perMachine),
-      euPerTick: pick.oc.euPerTick, durationTicks: pick.oc.durationTicks, overclocks: pick.oc.overclocks,
-      inputs: stepInputs(r, conversions),
-      outputs: r.outputs.map((p) => ({ key: p.key, amount: p.amount * p.chance, chance: p.chance })),
-      alternatives: [], handCraft: pick.handCraft, warnings,
-    };
-    const mainOutput = mainOutputOf(r, targets, used);
-    if (mainOutput !== undefined) step.mainOutput = mainOutput;
-    step.oc = {
-      recipeEuPerTick: r.euPerTick, recipeDurationTicks: baseDurationTicks(r, pick), machineVoltage: pick.oc.machineVoltage,
-      machineAmps: pick.oc.machineAmps, perfect: pick.kind === 'multiblock' && pack.machines.get(pick.mteId)?.perfectOC === true,
-      heatOverclocks: pick.oc.heatOverclocks,
-    };
-    if (lp.needsCleanroom) step.needsCleanroom = true;
-    const circuit = recipeCircuit(r);
-    if (circuit !== undefined) step.circuit = circuit;
-    steps.push(step);
-  }
-  return steps;
+      warnings: machineWarnings(p.lp, p.pick, runsPerSecond),
+    });
+  });
 }
 
 /** The duration the pick started from: a crafting table's fixed craft time, the furnace's own, else the recipe's. */
@@ -318,7 +362,7 @@ function baseDurationTicks(r: Recipe, pick: MachinePick): number {
  * decimal places and sorted by `from`, `to`, `key`.
  */
 export function buildFlows(graph: CandidateGraph, sol: Solution, targets: StuffKey[]): PlanFlow[] {
-  const { made, used } = recipeAmounts(graph, sol);
+  const { made, used } = recipeAmounts(graph, sol.runs);
   for (const [key, amount] of sol.buys) addAmount(made, key, RAW, amount);
   for (const [key, amount] of sol.sinks) addAmount(used, key, SINK, amount);
   for (const target of new Set(targets)) {
