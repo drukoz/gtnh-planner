@@ -24,6 +24,8 @@ import { buildSteps } from './steps.ts';
 export { effectiveTier } from './basis.ts';
 
 const SECONDS_PER: Readonly<Record<PlanSettings['per'], number>> = { min: 60, hour: 3600 };
+/** Rounds of pricing the derived leaves a line buys (planLine). */
+const MAX_PRICING_ROUNDS = 6;
 const DEFAULT_CACHE_SIZE = 32;
 /** A machine or amp count this little above a whole number stays whole. */
 const TINY = 1e-9;
@@ -133,8 +135,8 @@ export class PlanCache {
   }
 }
 
-/** The cost analysis behind stop-item prices and alternatives, and the graph it ran on. */
-interface CostModel { graph: CandidateGraph; costs: CostAnalysis }
+/** The cost analysis behind stop-item prices and alternatives, the graph it ran on, and the stop items it took. */
+interface CostModel { graph: CandidateGraph; costs: CostAnalysis; stopItems: StuffKey[] }
 
 /**
  * Raw-material costs over a candidate graph built without pins and stop items and with derived base materials routed,
@@ -149,13 +151,40 @@ async function costModel(pack: Pack, settings: PlanSettings, basis: PlanBasis, t
     await yieldToEventLoop();
     const s: PlanSettings = { ...settings, recipeChoice: {}, stopItems, routeDerived: true };
     const graph = buildCandidates(pack, s, basis.env, makeLeafOracle(pack, s, basis.avail, basis.prices), [target]);
-    return { graph, costs: await analyzeCosts(graph) };
+    return { graph, costs: await analyzeCosts(graph), stopItems };
   };
   const open = await analyze([]);
   const unmade = (key: StuffKey): boolean => key !== target && open.graph.goods.has(key) && !Number.isFinite(open.costs.cost(key));
   const derived = [...open.graph.goods.keys()].filter((key) => basis.avail.classOf(key) === 'derived' && isBaseItem(pack, key));
   const stuck = [...new Set([...settings.stopItems, ...derived])].filter(unmade);
   return stuck.length > 0 ? analyze(stuck) : open;
+}
+
+/**
+ * What making each derived material of `keys` on its own costs, never consuming the line's target (`standaloneCosts`
+ * over the cost model's graph, where derived materials are routed). One that graph never walked (its pruning found no
+ * cheap way to make it along the target's chain) is priced over a graph walked from it alone, but never below its
+ * plain price: at the flat 1 Magnetic Steel was the cheapest way to the LV Machine Hull's plates, while its own chain
+ * costs what the steel costs; and a graph walked from it alone is not the line's, so it may count ore-processing yields
+ * the flat price of mined items over-rewards (an end-stone iron ore smelted into 40 nuggets) as savings the line never
+ * makes. Infinity = only a chain through the target makes it; no entry = its plain price.
+ */
+async function derivedCosts(
+  pack: Pack, settings: PlanSettings, basis: PlanBasis, model: CostModel, target: StuffKey, keys: readonly StuffKey[],
+): Promise<Map<StuffKey, Standalone>> {
+  const out = new Map<StuffKey, Standalone>();
+  const inModel = keys.filter((key) => model.graph.goods.has(key));
+  const own = keys.filter((key) => !model.graph.goods.has(key));
+  for (const [key, made] of await standaloneCosts(model.graph, inModel, [target])) if (made !== undefined) out.set(key, made);
+  if (own.length > 0) {
+    await yieldToEventLoop();
+    const s: PlanSettings = { ...settings, recipeChoice: {}, stopItems: model.stopItems, routeDerived: true };
+    const alone = buildCandidates(pack, s, basis.env, makeLeafOracle(pack, s, basis.avail, basis.prices), own);
+    for (const [key, made] of await standaloneCosts(alone, own, [target])) {
+      if (made !== undefined) out.set(key, { ...made, cost: Math.max(made.cost, basis.prices.price(key)) });
+    }
+  }
+  return out;
 }
 
 /** A swap list holds at most this many recipes (the one in use always among them). */
@@ -483,20 +512,20 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
     const cost = model.costs.cost(key);
     return Number.isFinite(cost) ? cost : basis.prices.price(key);
   };
-  // Derived leaves cost what making them on their own costs (`standaloneCosts` over the cost model's graph, where they
-  // are routed, never consuming the target): first the graph at their plain prices, then again with the derived leaves
-  // it buys priced, twice at most. One only a chain through the target makes is no leaf (Infinity).
+  // Derived leaves cost what making them on their own costs (`derivedCosts`): first the graph at their plain prices,
+  // then again with the derived leaves it buys priced, until it buys no unpriced one (MAX_PRICING_ROUNDS at most). One
+  // only a chain through the target makes is no leaf (Infinity), and walking it can meet further derived leaves.
   const priced = new Map<StuffKey, Standalone>();
   const tried = new Set<StuffKey>();
   const leafWith = (): LeafOracle => makeLeafOracle(pack, settings, basis.avail, basis.prices, stopCost, (key) => priced.get(key));
   let leaf = leafWith();
   await yieldToEventLoop();
   let graph = buildCandidates(pack, settings, basis.env, leaf, [target]);
-  for (let round = 0; round < 2; round++) {
+  for (let round = 0; round < MAX_PRICING_ROUNDS; round++) {
     const unpriced = [...graph.goods.values()].filter((g) => g.leafClass === 'derived' && g.buyable && !tried.has(g.key)).map((g) => g.key);
     if (unpriced.length === 0) break;
     for (const key of unpriced) tried.add(key);
-    for (const [key, cost] of await standaloneCosts(model.graph, unpriced, [target])) if (cost !== undefined) priced.set(key, cost);
+    for (const [key, cost] of await derivedCosts(pack, settings, basis, model, target, unpriced)) priced.set(key, cost);
     leaf = leafWith();
     await yieldToEventLoop();
     graph = buildCandidates(pack, settings, basis.env, leaf, [target]);

@@ -177,6 +177,29 @@ describe('planLine', () => {
     expect(mv.warnings).toEqual([{ code: 'unavailable', key: 'thing@0', text: 'Thing: needs HV machines' }]);
     expect(mv.unlocks).toEqual([{ key: 'thing@0', text: 'Thing: needs HV machines' }]);
   });
+  it('never prices a derived material the cost model did not walk below what its own chain costs', async () => {
+    // Plates bend from steel (made from iron and coal), press from iron, or alloy-smelt from Magnetic Steel (2 steel per
+    // ingot). The cost model keeps the three cheapest plate recipes, so it never walks Magnetic Steel; at its flat price
+    // of 1 the smelter was the cheapest plate. Its own chain costs 4 (2 steel), so the line makes plates for 2.
+    const p = packFromSpec({
+      items: [{ key: 'iron@0', name: 'Iron Dust', gt: { prefix: 'dust', material: 'Iron' } }, { key: 'coal@0', name: 'Coal Dust', gt: { prefix: 'dust', material: 'Coal' } },
+              { key: 'steel@0', name: 'Steel Ingot', gt: { prefix: 'ingot', material: 'Steel' } },
+              { key: 'magnetic@0', name: 'Magnetic Steel Ingot', gt: { prefix: 'ingot', material: 'SteelMagnetic' } },
+              { key: 'plate@0', name: 'Steel Plate', gt: { prefix: 'plate', material: 'Steel' } }],
+      machines: [{ mteId: 1, name: 'Basic Alloy Smelter', maps: ['gt.recipe.alloysmelter'], tier: 1 }, { mteId: 2, name: 'Basic Polarizer', maps: ['gt.recipe.polarizer'], tier: 1 },
+                 { mteId: 3, name: 'Basic Bending Machine', maps: ['gt.recipe.metalbender'], tier: 1 }, { mteId: 4, name: 'Basic Press', maps: ['gt.recipe.press'], tier: 1 }],
+      recipes: [{ id: 'steel', map: 'gt.recipe.alloysmelter', in: [['iron@0', 1], ['coal@0', 1]], out: [['steel@0', 1]], eut: 16 },
+                { id: 'magnetize', map: 'gt.recipe.polarizer', in: [['steel@0', 2]], out: [['magnetic@0', 1]], eut: 16 },
+                { id: 'bend', map: 'gt.recipe.metalbender', in: [['steel@0', 1]], out: [['plate@0', 1]], eut: 16 },
+                { id: 'mold', map: 'gt.recipe.alloysmelter', in: [['magnetic@0', 1]], out: [['plate@0', 1]], eut: 16 },
+                { id: 'press-a', map: 'gt.recipe.press', in: [['iron@0', 1], ['coal@0', 1]], out: [['plate@0', 1]], eut: 16 },
+                { id: 'press-b', map: 'gt.recipe.press', in: [['iron@0', 3]], out: [['plate@0', 1]], eut: 16 }],
+      worldgen: { veins: [vein('ore.mix.iron', 'Iron'), vein('ore.mix.coal', 'Coal')] },
+    });
+    const plan = await planLine(p, S({ target: 'plate@0', tier: 1, amount: 60, per: 'min' }), emptyContext());
+    expect(plan.rawInputs.map((r) => r.key)).not.toContain('magnetic@0');
+    expect(plan.rawInputs.reduce((sum, r) => sum + r.cost, 0)).toBeCloseTo(2, 6);
+  });
   it('says when whole crafts leave a Make N batch short', () => {
     expect(batchShortWarning(pack, [], 't:circuit@0', 10)).toEqual([]);
     expect(batchShortWarning(pack, [{ key: 'fluid:oil', amount: 1000, chance: 1 }, { key: 't:copper_wire@0', amount: 2, chance: 1 }], 't:circuit@0', 10)).toEqual([{
