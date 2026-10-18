@@ -128,6 +128,8 @@ public final class TextureExporter implements ExportSection {
     private int textureSetsBuilt;
     /** Builder-made basic machines without known overlays (drawn with their casing only). */
     private List<Integer> overlaysUnknown;
+    /** Icon refs of the blocks' {@code getIcon} tables, resolved or not ({@link #iconLayers}). */
+    private Part iconRefs;
 
     @Override
     public String name() {
@@ -587,6 +589,7 @@ public final class TextureExporter implements ExportSection {
 
     private void blocks() throws IOException {
         Part part = new Part("blocks");
+        iconRefs = new Part("blockIconRefs");
         w.name("blocks");
         w.beginArray();
         for (Block block : GameData.getBlockRegistry()
@@ -595,6 +598,7 @@ public final class TextureExporter implements ExportSection {
         }
         w.endArray();
         part.done();
+        iconRefs.done();
     }
 
     /**
@@ -655,13 +659,24 @@ public final class TextureExporter implements ExportSection {
 
     /**
      * The layers of the icon container {@code ref} names: its static field (array element when
-     * {@code index ≥ 0}; nothing when out of bounds), read by reflection. Resolved once per ref.
+     * {@code index ≥ 0}; nothing when out of bounds), found as the JVM resolves {@code GETSTATIC} and read by
+     * reflection. A ref whose class or field the server does not have (client-only members are stripped) is an
+     * empty face, counted in {@code blockIconRefsFailed}. Resolved once per ref.
      */
     private List<LayerRec> iconLayers(IconRef ref, ClassLoader loader) throws ReflectiveOperationException {
         List<LayerRec> layers = iconLayers.get(ref);
         if (layers == null) {
-            Class<?> owner = Class.forName(ref.owner.replace('/', '.'), false, loader);
-            Object value = accessible(owner, ref.field).get(null);
+            Field field;
+            try {
+                field = ref.resolve(loader);
+            } catch (ClassNotFoundException | NoSuchFieldException | LinkageError e) {
+                iconRefs.failed(ref, e);
+                layers = Collections.emptyList();
+                iconLayers.put(ref, layers);
+                return layers;
+            }
+            iconRefs.wrote();
+            Object value = field.get(null);
             if (ref.index >= 0) {
                 boolean inBounds = value != null && value.getClass()
                     .isArray() && ref.index < Array.getLength(value);
@@ -934,6 +949,7 @@ public final class TextureExporter implements ExportSection {
         f.setAccessible(true);
         return f;
     }
+
 
     private static String blockId(Block block) {
         String id = GameData.getBlockRegistry()
