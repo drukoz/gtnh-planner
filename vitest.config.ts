@@ -8,6 +8,7 @@ export default defineConfig({
         extends: true,
         test: { name: 'server', include: ['tests/unit/**/*.test.ts'], environment: 'node', experimental: { viteModuleRunner: false } },
       },
+      { extends: true, test: { name: 'client', include: ['tests/client/**/*.test.tsx'], environment: 'node' } },
     ],
   },
 });

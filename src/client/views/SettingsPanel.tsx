@@ -1,0 +1,472 @@
+// The project's settings beside its views (spec §3.2–§3.3b, §3.6, §3.11): what to make and how much, the tier, where
+// the group can mine, how the line is fed, what materials cost, which recipe groups to skip and the planner's options.
+// Everyone sees the same settings: every change sends one `settings` op carrying whole field values, and nothing is
+// sent for an amount or a cost that would be refused.
+
+import { useEffect, useId, useRef, useState, type FormEvent, type ReactElement } from 'react';
+import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
+import { COIL_HEATS } from '../../shared/gt/overclock.ts';
+import { tierName } from '../../shared/gt/tiers.ts';
+import type { PackInfo } from '../../shared/types/api.ts';
+import type { SearchHit } from '../../shared/types/pack.ts';
+import { LogisticsMode, type Plan, type PlanSettings } from '../../shared/types/plan.ts';
+import { ItemIcon } from '../components/ItemIcon.tsx';
+import { ItemSearch } from '../components/ItemSearch.tsx';
+import { TierPicker } from '../components/TierPicker.tsx';
+import type { ProjectViewProps } from './project-tabs.ts';
+import { EXCLUSION_LABELS, dimOverridePatch, dimRows, groupDimRows, parseAmount, parseCost, toggleList } from './settings-model.ts';
+
+/** Typing pauses this long before the amount is sent (one plan per pause, not one per keystroke). */
+const AMOUNT_DELAY_MS = 500;
+
+type Patch = (patch: Partial<PlanSettings>) => void;
+type NameOf = (key: string) => string;
+
+const MODES: ReadonlyArray<{ value: PlanSettings['mode']; label: string }> = [
+  { value: 'rate', label: 'Rate' },
+  { value: 'makeN', label: 'Make N (batch)' },   // the spec still calls this mode "Batch" (§3.2, §3.10, §7)
+];
+const PERS: ReadonlyArray<{ value: PlanSettings['per']; label: string }> = [
+  { value: 'min', label: 'per minute' },
+  { value: 'hour', label: 'per hour' },
+];
+const POLICIES: ReadonlyArray<{ value: PlanSettings['dims']['policy']; label: string }> = [
+  { value: 'progression', label: 'By progression' },
+  { value: 'visited', label: 'Only where we have been' },
+];
+const LOGISTICS: ReadonlyArray<{ value: LogisticsMode; label: string }> = [
+  { value: LogisticsMode.Direct, label: 'Machine to machine' },
+  { value: LogisticsMode.Routed, label: 'Project Red routed' },
+  { value: LogisticsMode.AE2, label: 'AE2' },
+];
+const DIM_STATES = ['auto', 'on', 'off'] as const;
+
+function byString(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/** A cost override keyed by an item or fluid (not by a material name such as "Silver"). */
+function isStuffKey(key: string): boolean {
+  return isFluidKey(key) || key.includes('@');
+}
+
+/** One choice out of a few, as radio buttons; `heading` shows the legend as the section's title. */
+function Choice<T extends string>(props: {
+  legend: string; heading?: boolean; value: T; options: ReadonlyArray<{ value: T; label: string }>; onChange(value: T): void;
+}): ReactElement {
+  const { legend, heading, value, options, onChange } = props;
+  const name = useId();
+  return (
+    <fieldset className="choice">
+      <legend className={heading === true ? 'settings-title' : undefined}>{legend}</legend>
+      {options.map((o) => (
+        <label key={o.value} className="check">
+          <input type="radio" name={name} value={o.value} checked={o.value === value} onChange={() => onChange(o.value)} />
+          {o.label}
+        </label>
+      ))}
+    </fieldset>
+  );
+}
+
+function AmountField(props: { settings: PlanSettings; patch: Patch }): ReactElement {
+  const { settings, patch } = props;
+  const { amount, mode, per } = settings;
+  const id = useId();
+  const [draft, setDraft] = useState<string | null>(null);   // null: show the shared amount
+  const input = useRef<HTMLInputElement | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const latest = useRef({ amount, mode, patch });   // what a pending send uses: the settings it fires against
+  useEffect(() => {
+    latest.current = { amount, mode, patch };
+  });
+  useEffect(() => () => {
+    if (timer.current !== null) clearTimeout(timer.current);
+  }, []);
+
+  const stopTimer = (): void => {
+    if (timer.current !== null) clearTimeout(timer.current);
+    timer.current = null;
+  };
+  /** Sends `text` when it is a valid amount that differs from the shared one; true when it is valid. */
+  const commit = (text: string): boolean => {
+    stopTimer();
+    const now = latest.current;
+    const parsed = parseAmount(text, now.mode);
+    if (!('amount' in parsed)) return false;
+    if (parsed.amount !== now.amount) now.patch({ amount: parsed.amount });
+    return true;
+  };
+
+  useEffect(() => {
+    // A left-behind draft the old mode refused (2.5 in Make N) may suit the new one (Rate): send it now.
+    if (draft !== null && document.activeElement !== input.current && commit(draft)) setDraft(null);
+  }, [mode]);   // only a mode change re-checks the draft; `commit` reads the settings through `latest`
+
+  const parsed = draft === null ? null : parseAmount(draft, mode);
+  const error = parsed !== null && 'error' in parsed ? parsed.error : null;
+  return (
+    <div className="field">
+      <label className="field-label" htmlFor={id}>Amount</label>
+      <div className="row">
+        <input
+          id={id}
+          ref={input}
+          className="amount-input"
+          type="text"
+          inputMode="decimal"
+          autoComplete="off"
+          value={draft ?? String(amount)}
+          aria-invalid={error !== null}
+          aria-describedby={error !== null ? `${id}-error` : undefined}
+          onChange={(e) => {
+            const text = e.currentTarget.value;
+            setDraft(text);
+            stopTimer();
+            if ('amount' in parseAmount(text, mode)) timer.current = setTimeout(() => commit(text), AMOUNT_DELAY_MS);
+          }}
+          onBlur={(e) => {
+            if (draft !== null && commit(e.currentTarget.value)) setDraft(null);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && draft !== null) commit(e.currentTarget.value);
+            if (e.key === 'Escape') {
+              stopTimer();
+              setDraft(null);
+            }
+          }}
+        />
+        {mode === 'rate' && (
+          <select aria-label="Rate unit" value={per} onChange={(e) => patch({ per: PERS.find((p) => p.value === e.currentTarget.value)?.value ?? 'min' })}>
+            {PERS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+          </select>
+        )}
+      </div>
+      {error !== null && <p className="field-error error" id={`${id}-error`} role="alert">{error}</p>}
+    </div>
+  );
+}
+
+function MakeSection(props: { settings: PlanSettings; patch: Patch; nameOf: NameOf; remember(hit: SearchHit): void }): ReactElement {
+  const { settings, patch, nameOf, remember } = props;
+  const { target, amount } = settings;
+  const setMode = (mode: PlanSettings['mode']): void => {
+    if (mode === settings.mode) return;
+    // Make N takes whole crafts only, so a rate such as 2.5 becomes the nearest whole amount in the same op.
+    if (mode === 'makeN' && !Number.isInteger(amount)) patch({ mode, amount: Math.max(1, Math.round(amount)) });
+    else patch({ mode });
+  };
+  return (
+    <section className="settings-section">
+      <h3>Make</h3>
+      {target === null ? (
+        <p className="muted">Nothing picked yet</p>
+      ) : (
+        <div className="settings-target">
+          <ItemIcon itemKey={target} size={28} />
+          <span className="settings-target-name">{nameOf(target)}</span>
+          <button type="button" onClick={() => patch({ target: null })}>Clear</button>
+        </div>
+      )}
+      <ItemSearch
+        onPick={(hit) => {
+          remember(hit);
+          if (hit.key !== target) patch({ target: hit.key });
+        }}
+      />
+      <Choice legend="Mode" value={settings.mode} options={MODES} onChange={setMode} />
+      <AmountField settings={settings} patch={patch} />
+    </section>
+  );
+}
+
+function TierSection(props: { settings: PlanSettings; plan: Plan | null; patch: Patch }): ReactElement {
+  const { settings, plan, patch } = props;
+  return (
+    <section className="settings-section">
+      <label className="field">
+        <span className="settings-title">Tier</span>
+        <TierPicker value={settings.tier} onChange={(tier) => patch({ tier })} />
+      </label>
+      {settings.tier === null && plan !== null && <p className="muted">{`Planning at ${tierName(plan.tier)}`}</p>}
+    </section>
+  );
+}
+
+function DimsSection(props: { info: PackInfo | null; settings: PlanSettings; plan: Plan | null; patch: Patch }): ReactElement {
+  const { info, settings, plan, patch } = props;
+  const rows = info === null ? [] : dimRows(info, settings, plan);
+  const reachable = rows.filter((r) => r.reachable).length;
+  return (
+    <details className="settings-section">
+      <summary>
+        <h3>Reachable dimensions</h3>
+        {plan !== null && rows.length > 0 && <span className="muted">{`${reachable} of ${rows.length} reachable`}</span>}
+      </summary>
+      <Choice legend="Count as reachable" value={settings.dims.policy} options={POLICIES} onChange={(policy) => patch({ dims: { ...settings.dims, policy } })} />
+      {info === null ? (
+        <p className="muted">The pack is not loaded yet.</p>
+      ) : (
+        groupDimRows(rows).map(({ group, rows: list }) => (
+          <div key={group} className="dim-group">
+            <h4>{group}</h4>
+            <ul className="dim-rows">
+              {list.map((row) => (
+                <li key={row.key} className={row.reachable ? 'dim-row reachable' : 'dim-row'} data-dim-key={row.key}>
+                  <span className="dim-name">{row.name}</span>
+                  <select aria-label={row.name} value={row.state} onChange={(e) => {
+                    const state = DIM_STATES.find((s) => s === e.currentTarget.value) ?? 'auto';
+                    patch(dimOverridePatch(settings, row.key, state));
+                  }}>
+                    {DIM_STATES.map((s) => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                  <span className="dim-label muted">{row.label}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))
+      )}
+    </details>
+  );
+}
+
+function CostRow(props: { costKey: string; name: string; value: number; onChange(cost: number): void; onRemove(): void }): ReactElement {
+  const { costKey, name, value, onChange, onRemove } = props;
+  const [draft, setDraft] = useState<string | null>(null);
+  const parsed = draft === null ? null : parseCost(draft);
+  const error = parsed !== null && 'error' in parsed ? parsed.error : null;
+  const commit = (text: string): void => {
+    const p = parseCost(text);
+    if (!('cost' in p)) return;
+    if (p.cost !== value) onChange(p.cost);
+    setDraft(null);
+  };
+  return (
+    <tr data-cost-key={costKey}>
+      <td>
+        <span className="cost-name" title={costKey}>
+          {isStuffKey(costKey) && <ItemIcon itemKey={costKey} size={18} />}
+          {name}
+        </span>
+      </td>
+      <td>
+        <input
+          className="cost-input"
+          type="text"
+          inputMode="decimal"
+          aria-label={`Cost of ${name}`}
+          aria-invalid={error !== null}
+          title={error ?? undefined}
+          value={draft ?? String(value)}
+          onChange={(e) => setDraft(e.currentTarget.value)}
+          onBlur={(e) => commit(e.currentTarget.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') commit(e.currentTarget.value);
+            if (e.key === 'Escape') setDraft(null);
+          }}
+        />
+        {error !== null && <span className="field-error error" role="alert">{error}</span>}
+      </td>
+      <td>
+        <button type="button" className="small" aria-label={`Remove ${name}`} onClick={onRemove}>Remove</button>
+      </td>
+    </tr>
+  );
+}
+
+function CostsSection(props: { settings: PlanSettings; patch: Patch; nameOf: NameOf; remember(hit: SearchHit): void }): ReactElement {
+  const { settings, patch, nameOf, remember } = props;
+  const overrides = settings.costOverrides;
+  const [material, setMaterial] = useState('');
+  const [item, setItem] = useState<SearchHit | null>(null);
+  const [cost, setCost] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const set = (key: string, value: number): void => patch({ costOverrides: { ...overrides, [key]: value } });
+  const remove = (key: string): void => {
+    const next = { ...overrides };
+    delete next[key];
+    patch({ costOverrides: next });
+  };
+  const add = (e: FormEvent<HTMLFormElement>): void => {
+    e.preventDefault();
+    const key = item?.key ?? material.trim();
+    if (key === '') {
+      setError('Enter a material name or pick an item');
+      return;
+    }
+    const parsed = parseCost(cost);
+    if (!('cost' in parsed)) {
+      setError(parsed.error);
+      return;
+    }
+    set(key, parsed.cost);
+    setMaterial('');
+    setItem(null);
+    setCost('');
+    setError(null);
+  };
+  const keys = Object.keys(overrides).sort(byString);
+  return (
+    <section className="settings-section">
+      <h3>Material costs</h3>
+      <p className="muted small">Every base item counts 1; 144 L of molten metal is one ingot.</p>
+      {keys.length > 0 && (
+        <table className="cost-table">
+          <thead>
+            <tr><th scope="col">Material or item</th><th scope="col">Cost</th><th scope="col"><span className="visually-hidden">Remove</span></th></tr>
+          </thead>
+          <tbody>
+            {keys.map((key) => (
+              <CostRow key={key} costKey={key} name={nameOf(key)} value={overrides[key]!} onChange={(v) => set(key, v)} onRemove={() => remove(key)} />
+            ))}
+          </tbody>
+        </table>
+      )}
+      <form className="cost-add" onSubmit={add}>
+        {item === null ? (
+          <>
+            <label className="field">
+              <span>Material</span>
+              <input value={material} placeholder="e.g. Silver" onChange={(e) => setMaterial(e.currentTarget.value)} />
+            </label>
+            <ItemSearch
+              placeholder="…or pick an item"
+              onPick={(hit) => {
+                remember(hit);
+                setItem(hit);
+              }}
+            />
+          </>
+        ) : (
+          <div className="settings-target">
+            <ItemIcon itemKey={item.key} size={20} />
+            <span className="settings-target-name">{item.name}</span>
+            <button type="button" className="small" onClick={() => setItem(null)}>Change</button>
+          </div>
+        )}
+        <div className="row">
+          <label className="field cost-field">
+            <span>Cost</span>
+            <input type="text" inputMode="decimal" value={cost} onChange={(e) => setCost(e.currentTarget.value)} />
+          </label>
+          <button type="submit">Add</button>
+        </div>
+        {error !== null && <p className="field-error error" role="alert">{error}</p>}
+      </form>
+    </section>
+  );
+}
+
+function SkipSection(props: { info: PackInfo | null; settings: PlanSettings; patch: Patch }): ReactElement {
+  const { info, settings, patch } = props;
+  const excluded = settings.excludedCategories;
+  return (
+    <section className="settings-section">
+      <h3>Skip recipe groups</h3>
+      {info === null ? (
+        <p className="muted">The pack is not loaded yet.</p>
+      ) : (
+        info.exclusionRules.map((rule) => (
+          <label key={rule} className="check">
+            <input
+              type="checkbox"
+              checked={excluded.includes(rule)}
+              onChange={(e) => patch({ excludedCategories: toggleList(excluded, rule, e.currentTarget.checked) })}
+            />
+            {EXCLUSION_LABELS[rule] ?? rule}
+          </label>
+        ))
+      )}
+    </section>
+  );
+}
+
+function OptionsSection(props: { settings: PlanSettings; patch: Patch }): ReactElement {
+  const { settings, patch } = props;
+  const { coilHeat } = settings;
+  const coils = COIL_HEATS.map((c) => ({ heat: c.heat, label: `${c.name} (${c.heat} K)` }));
+  if (coilHeat !== null && !coils.some((c) => c.heat === coilHeat)) coils.push({ heat: coilHeat, label: `${coilHeat} K` });
+  return (
+    <section className="settings-section">
+      <h3>Options</h3>
+      <label className="check">
+        <input type="checkbox" checked={settings.routeDerived} onChange={(e) => patch({ routeDerived: e.currentTarget.checked })} />
+        Plan derived materials instead of buying them
+      </label>
+      <label className="check">
+        <input type="checkbox" checked={settings.automateCrafting} onChange={(e) => patch({ automateCrafting: e.currentTarget.checked })} />
+        Crafting-table steps are automated
+      </label>
+      <label className="field">
+        <span>EBF coil</span>
+        <select
+          value={coilHeat === null ? '' : String(coilHeat)}
+          onChange={(e) => patch({ coilHeat: e.currentTarget.value === '' ? null : Number(e.currentTarget.value) })}
+        >
+          <option value="">Auto</option>
+          {coils.map((c) => <option key={c.heat} value={String(c.heat)}>{c.label}</option>)}
+        </select>
+      </label>
+    </section>
+  );
+}
+
+function KeyListSection(props: { title: string; keys: readonly StuffKey[]; empty: string; nameOf: NameOf; onRemove(key: StuffKey): void }): ReactElement {
+  const { title, keys, empty, nameOf, onRemove } = props;
+  return (
+    <section className="settings-section">
+      <h3>{title}</h3>
+      {keys.length === 0 ? (
+        <p className="muted">{empty}</p>
+      ) : (
+        <ul className="key-list">
+          {keys.map((key) => (
+            <li key={key} data-item-row={key}>
+              <ItemIcon itemKey={key} size={20} />
+              <span className="key-name" title={key}>{nameOf(key)}</span>
+              <button type="button" className="small" aria-label={`Remove ${nameOf(key)}`} onClick={() => onRemove(key)}>Remove</button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+export function SettingsPanel(props: ProjectViewProps & { info: PackInfo | null }): ReactElement {
+  const { project, plan, send, info } = props;
+  const { settings } = project;
+  // Names of what was picked here, until the plan (which names every key it uses) arrives.
+  const [picked, setPicked] = useState<Record<string, string>>({});
+  const remember = (hit: SearchHit): void => setPicked((names) => (names[hit.key] === hit.name ? names : { ...names, [hit.key]: hit.name }));
+  const nameOf: NameOf = (key) => plan?.names?.[key] ?? picked[key] ?? key;
+  const patch: Patch = (p) => send([{ op: 'settings', patch: p }]);
+  return (
+    <div className="settings">
+      <MakeSection settings={settings} patch={patch} nameOf={nameOf} remember={remember} />
+      <TierSection settings={settings} plan={plan} patch={patch} />
+      <DimsSection info={info} settings={settings} plan={plan} patch={patch} />
+      <section className="settings-section">
+        <Choice legend="Logistics" heading value={settings.logistics} options={LOGISTICS} onChange={(logistics) => patch({ logistics })} />
+      </section>
+      <CostsSection settings={settings} patch={patch} nameOf={nameOf} remember={remember} />
+      <SkipSection info={info} settings={settings} patch={patch} />
+      <OptionsSection settings={settings} patch={patch} />
+      <KeyListSection
+        title="We already make"
+        keys={settings.stopItems}
+        empty="Nothing yet. A step's “We already make this” adds it here."
+        nameOf={nameOf}
+        onRemove={(key) => patch({ stopItems: toggleList(settings.stopItems, key, false) })}
+      />
+      <KeyListSection
+        title="We make ourselves"
+        keys={settings.expandItems}
+        empty="Nothing yet. A base material's “We'll make it ourselves” adds it here."
+        nameOf={nameOf}
+        onRemove={(key) => patch({ expandItems: toggleList(settings.expandItems, key, false) })}
+      />
+    </div>
+  );
+}
