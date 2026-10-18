@@ -4,9 +4,24 @@
 import { closeSync, fchmodSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 
-export interface AppConfig { dataDir: string; serverFolder: string | null; activeExportId: string | null }
+export interface AppConfig {
+  dataDir: string;
+  serverFolder: string | null;
+  activeExportId: string | null;
+  port: number;
+  host: string;
+  /** `scrypt$N$r$p$<salt>$<key>` from `npm run set-password`; `''` = no password set yet. */
+  passwordHash: string;
+  /** Hex key that signs session cookies; `''` until `npm run set-password` creates it. */
+  sessionSecret: string;
+  /** The Minecraft 1.7.10 client jar (architecture §11.17, read by Plan 3's `extract-assets`). */
+  clientJar?: string | null;
+}
 
-export const DEFAULT_CONFIG: Readonly<AppConfig> = Object.freeze({ dataDir: 'data', serverFolder: null, activeExportId: null });
+export const DEFAULT_CONFIG: Readonly<AppConfig> = Object.freeze({
+  dataDir: 'data', serverFolder: null, activeExportId: null,
+  port: 8765, host: '0.0.0.0', passwordHash: '', sessionSecret: '', clientJar: null,
+});
 
 /** The settings file cannot be read, is not valid JSON, or holds a value of the wrong type. */
 export class ConfigError extends Error {
