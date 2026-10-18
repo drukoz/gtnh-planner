@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Pack } from '../../../src/shared/types/pack.ts';
-import { dimKey } from '../../../src/server/pack/worldgen.ts';
+import { dimKey, siphonPlanet } from '../../../src/server/pack/worldgen.ts';
 import { makePack } from '../../helpers/make-pack.ts';
 import { sampleExportSpec } from '../../helpers/sample-export.ts';
 
@@ -89,6 +89,23 @@ describe('veins, fluid sources, capabilities and byproducts', () => {
     expect(cap('space_elevator_mining_mk3')!.minTier).toBe(10);
     expect(cap('low_gravity')).toEqual({ key: 'low_gravity', name: 'Low-gravity processing (space station)', minTier: 3, dim: 'station:overworld', yields: [] });
     expect(worldgen.byproducts).toMatchObject({ Iron: ['Nickel', 'Tin'], Nickel: ['Iron'], Prasiolite: [] });
+  });
+
+  it('puts gas-siphon fluids on the station of the planet, whether the line names it as GT does or plainly', async () => {
+    expect(['planet.jupiter', 'jupiter', 'planet.saturn'].map(siphonPlanet)).toEqual(['jupiter', 'jupiter', 'saturn']);
+    const spec = sampleExportSpec();
+    spec.gasSiphon = [
+      { planet: 'planet.jupiter', tier: 3, depths: [[1, 'hydrogen', 15000], [2, 'helium', 500]] },
+      { planet: 'jupiter', tier: 3, depths: [[3, 'nitrogen', 300]] },
+      { planet: 'planet.saturn', tier: 5, depths: [[1, 'deuterium', 5000]] },
+    ];
+    const pack = await makePack(spec);
+    const siphon = pack.worldgen.fluidSources.filter((s) => s.kind === 'gas_siphon').map((s) => [s.fluid, s.dims, s.minTier]);
+    expect(siphon).toEqual([
+      ['fluid:hydrogen', ['station:jupiter'], 5], ['fluid:helium', ['station:jupiter'], 5], ['fluid:nitrogen', ['station:jupiter'], 5],
+      ['fluid:deuterium', ['station:saturn'], 6],
+    ]);
+    expect(pack.warnings).toEqual(['gas siphon planet.saturn: no space station station:saturn among the dimensions']);
   });
 
   it('skips unknown underground dimension ids and items without a material, and rejects an unknown item index', async () => {

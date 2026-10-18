@@ -18,6 +18,7 @@
     "test": "tsc -b && vitest run",
     "e2e": "vite build && playwright test",
     "pack:info": "node --disable-warning=ExperimentalWarning src/server/cli/pack-info.ts",
+    "export": "node --disable-warning=ExperimentalWarning src/server/cli/export.ts",
     "set-password": "node --disable-warning=ExperimentalWarning src/server/cli/set-password.ts",
     "start": "node --disable-warning=ExperimentalWarning src/server/main.ts"
   },

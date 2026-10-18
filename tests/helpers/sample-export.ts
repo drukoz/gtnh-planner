@@ -173,7 +173,7 @@ export function sampleExportSpec(): ExportSpec {
       { dim: 'moon', drops: [{ item: 2, weight: 80 }], extra: [] },
       { dim: 'Underdark', drops: [{ item: 2, weight: 1 }], extra: [] },
     ],
-    gasSiphon: [{ planet: 'jupiter', tier: 3, depths: [[1, 'hydrogen', 15000]] }],
+    gasSiphon: [{ planet: 'planet.jupiter', tier: 3, depths: [[1, 'hydrogen', 15000]] }],   // GT's unlocalized body name
     spacePump: [{ planetType: 2, gasType: 1, fluid: 'chlorobenzene', amount: 896000 }],
     spaceAsteroids: [{ name: 'Iron asteroid', outputs: [1, 3], chances: [7000, 3000], moduleTier: 1, droneTiers: [0, 3], distance: [10, 50], weight: 100 }],
   };
