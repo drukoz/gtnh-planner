@@ -153,15 +153,58 @@ describe('internal routing edge cases', () => {
     expect(r.warnings).toEqual([]);
   });
 
-  it('puts one pump on a face that makes two fluids, sized for both', () => {
+  it('places no pump on a face that makes two fluids when the pipe above carries only one of them', () => {
     const pack = layoutPack();
     const plan = makePlan([{ id: 'x', mteId: IDS.EXTRACTOR, count: 1, outputs: [['fluid:molten.iron', 144], ['fluid:oxygen', 10]] }], {
       flows: [{ from: 'raw', to: 'x', key: 't:in@0', perSecond: 1 }, { from: 'x', to: 'out', key: 'fluid:molten.iron', perSecond: 2 },
         { from: 'x', to: 'out', key: 'fluid:oxygen', perSecond: 3 }] });
     const { r } = route(pack, plan, null);
-    expect(r.covers).toEqual([{ pos: [1, 0, 1], cover: { face: 'up', item: 'gregtech:gt.metaitem.01@32610',
+    // a singleblock has one cell above it for all its fluids, so only the first fluid's pipe reaches it, and a pump
+    // there would push the oxygen into the molten iron pipe
+    expect(blockAt(r, [1, 1, 1])?.label).toBe('Small Bronze Fluid Pipe (Molten Iron)');
+    expect(r.covers).toEqual([]);
+    expect(r.warnings).toEqual([
+      { code: 'route_failed', stepId: 'x', text: 'Could not lay the Oxygen pipe to Basic Fluid Extractor — connect it by hand' },
+      { code: 'fluid_port_shared', stepId: 'x', text: 'Basic Fluid Extractor: the Molten Iron pipe uses the cell above it, so a pump there would '
+        + 'push Oxygen into that pipe — no pump placed; pump Molten Iron and Oxygen out of another side by hand' },
+    ]);
+    // with no pipe laid above it, the face keeps its one pump, sized for both fluids
+    const noPipe = layoutPack();
+    for (const id of [IDS.SMALL_BRONZE_PIPE, IDS.BRONZE_PIPE]) noPipe.machines.delete(id);
+    expect(route(noPipe, plan, null).r.covers).toEqual([{ pos: [1, 0, 1], cover: { face: 'up', item: 'gregtech:gt.metaitem.01@32610',
       settings: { mode: 'export', allowInput: false, rate: 5, unit: 'L/s' } } }]);
-    // a singleblock has one cell above it for all its fluids, so only the first fluid's pipe reaches it
+  });
+
+  it('places no pump where the pipe above carries a fluid the machine takes, and says why', () => {
+    const pack = layoutPack();
+    // the input's key sorts first, so its pipe takes the one cell above the extractor
+    const plan = makePlan([
+      { id: 'x', mteId: IDS.EXTRACTOR, count: 1, inputs: [['fluid:molten.iron', 144]], outputs: [['fluid:oxygen', 10]] },
+      { id: 'y', mteId: IDS.SOLIDIFIER, count: 1, inputs: [['fluid:oxygen', 10]], outputs: [['t:out_y@0', 1]] },
+    ]);
+    const { r } = route(pack, plan, null);
+    expect(blockAt(r, [1, 1, 1])?.label).toBe('Small Bronze Fluid Pipe (Molten Iron)');
+    expect(r.covers.filter((c) => posKey(c.pos) === posKey([1, 0, 1]) && c.cover.face === 'up')).toEqual([]);
+    expect(r.covers).toEqual([]);
+    expect(r.warnings).toEqual([
+      { code: 'route_failed', stepId: 'x', text: 'Could not lay the Oxygen pipe to Basic Fluid Extractor — connect it by hand' },
+      { code: 'fluid_port_shared', stepId: 'x', text: 'Basic Fluid Extractor: the Molten Iron pipe uses the cell above it, so a pump there would '
+        + 'push Oxygen into that pipe — no pump placed; pump Oxygen out of another side by hand' },
+    ]);
+  });
+
+  it('keeps the pump where the pipe above carries the fluid the machine makes', () => {
+    const pack = layoutPack();
+    // the output's key sorts first, so its own pipe takes the cell above the extractor
+    const plan = makePlan([
+      { id: 'x', mteId: IDS.EXTRACTOR, count: 1, inputs: [['fluid:oxygen', 10]], outputs: [['fluid:molten.iron', 144]] },
+      { id: 'y', mteId: IDS.SOLIDIFIER, count: 1, inputs: [['fluid:molten.iron', 144]], outputs: [['t:out_y@0', 1]] },
+    ]);
+    const { r } = route(pack, plan, null);
+    expect(blockAt(r, [1, 1, 1])?.label).toBe('Small Bronze Fluid Pipe (Molten Iron)');
+    expect(r.covers).toEqual([{ pos: [1, 0, 1], cover: { face: 'up', item: 'gregtech:gt.metaitem.01@32610',
+      settings: { mode: 'export', allowInput: false, rate: 1, unit: 'L/s' } } }]);
+    expect(r.warnings.map((w) => w.code)).not.toContain('fluid_port_shared');
     expect(r.warnings).toEqual([{ code: 'route_failed', stepId: 'x', text: 'Could not lay the Oxygen pipe to Basic Fluid Extractor — connect it by hand' }]);
   });
 

@@ -1,7 +1,8 @@
 // Internal routing of a line (Plan 5 Task 6; spec §3.5 never overvolt, §3.6 shared runs; gt-mechanics §3.3, §3.6):
 // the power head — one straight cable run per voltage tier along z, with step-down transformer banks between
 // neighbouring runs — then one cable tree per feed tier from its run to the power port of every machine of that tier,
-// then one GT fluid-pipe tree per fluid with a pump cover, sized to its share, on every face that makes the fluid.
+// then one GT fluid-pipe tree per fluid with a pump cover, sized to its share, on every face that makes the fluid
+// (unless that face's port carries another fluid's pipe: then no pump, and a `fluid_port_shared` warning).
 // A cable only ever links to its own tier's run, so no machine receives more than `V[its tier]`. Every network keeps
 // off the cells other networks connect to (their ports and tail roots), so one network never takes another's cell.
 // All routes use the deterministic A* router (Task 2); every order and tie-break is fixed.
@@ -310,10 +311,11 @@ function fluidCellsOf(plan: FluidPlan): Vec3[] {
 /**
  * One pipe tree per fluid, in key order: from the tail root (a fluid that enters or leaves the line) or the first free
  * producer port to every other port of the net. Port cells link down into their machine or hatch. The box reaches up
- * to the highest tail root, which may sit above the units.
+ * to the highest tail root, which may sit above the units. `pipeAt` records which net's fluid each laid pipe cell
+ * carries.
  */
 function pipeFluids(input: InternalInput, plans: readonly FluidPlan[], fluidCells: ReadonlySet<string>, powerPorts: ReadonlySet<string>,
-  grid: Grid): InternalResult['fluidPipes'] {
+  pipeAt: Map<string, StuffKey>, grid: Grid): InternalResult['fluidPipes'] {
   const { pack, placement } = input;
   const [w, h, l] = placement.size;
   const top = plans.reduce((y, p) => Math.max(y, p.tailRoot?.[1] ?? 0), h);
@@ -350,7 +352,10 @@ function pipeFluids(input: InternalInput, plans: readonly FluidPlan[], fluidCell
     const others = plan.ports.filter((p) => posKey(p) !== posKey(root));
     const tree = others.length === 0 ? { cells: [], links: [], unreached: [] } : growTree([root], others, { bounds, passable });
     const label = `${pipe.name} (${net.name})`;
-    for (const c of [root, ...tree.cells]) grid.lay(c, pipe, 'pipe', label);
+    for (const c of [root, ...tree.cells]) {
+      grid.lay(c, pipe, 'pipe', label);
+      pipeAt.set(posKey(c), net.key);
+    }
     grid.links.push(...tree.links);
     const unreached = new Set(tree.unreached.map(posKey));
     for (const p of plan.ports) if (!unreached.has(posKey(p))) grid.links.push([p, step(p, DOWN)]);
@@ -362,23 +367,44 @@ function pipeFluids(input: InternalInput, plans: readonly FluidPlan[], fluidCell
 
 /**
  * A pump cover on every producing face, sized to the litres it must move (a face two nets share moves both), sorted by
- * pos, then face; `cover_rate` once per step when no pump up to the group's tier moves that much.
+ * pos, then face; `cover_rate` once per step when no pump up to the group's tier moves that much. A face whose cell
+ * (the port it opens onto) holds the pipe of one fluid while the face also exports another gets no pump, since the
+ * pump would push that other fluid into the pipe (a singleblock's one top port, taken by another net): it gets
+ * `fluid_port_shared` once per step instead, and no `cover_rate` check.
  */
-function pumpCovers(input: InternalInput, plans: readonly FluidPlan[], grid: Grid): HostCover[] {
+function pumpCovers(input: InternalInput, plans: readonly FluidPlan[], pipeAt: ReadonlyMap<string, StuffKey>, grid: Grid): HostCover[] {
   const { pack, placement, groupTier } = input;
-  const faces = new Map<string, { pos: Vec3; side: number; stepId: string; rate: number }>();
+  // `keys`: the fluids the face exports, in key order (the plans are)
+  const faces = new Map<string, { pos: Vec3; side: number; stepId: string; rate: number; keys: StuffKey[] }>();
   for (const { net } of plans) {
     for (const f of net.faces) {
       const key = `${posKey(f.pos)}/${f.side}`;
       const known = faces.get(key);
-      if (known === undefined) faces.set(key, { pos: [...f.pos], side: f.side, stepId: f.stepId, rate: f.rate });
-      else known.rate += f.rate;
+      if (known === undefined) faces.set(key, { pos: [...f.pos], side: f.side, stepId: f.stepId, rate: f.rate, keys: [net.key] });
+      else {
+        known.rate += f.rate;
+        known.keys.push(net.key);
+      }
     }
   }
   const names = new Map(placement.units.map((u) => [u.stepId, u.name]));
+  const fluidNames = new Map(plans.map(({ net }) => [net.key, net.name]));
+  const fluidName = (key: StuffKey) => fluidNames.get(key) ?? key;
   const warned = new Set<string>();
+  const sharedWarned = new Set<string>();
   const covers: HostCover[] = [];
   for (const f of [...faces.values()].sort((a, b) => comparePos(a.pos, b.pos) || a.side - b.side)) {
+    const piped = pipeAt.get(posKey(step(f.pos, f.side)));
+    if (piped !== undefined && f.keys.some((k) => k !== piped)) {
+      if (!sharedWarned.has(f.stepId)) {
+        sharedWarned.add(f.stepId);
+        const others = f.keys.filter((k) => k !== piped).map(fluidName);
+        grid.warnings.add({ code: 'fluid_port_shared', stepId: f.stepId,
+          text: `${names.get(f.stepId) ?? f.stepId}: the ${fluidName(piped)} pipe uses the cell above it, so a pump there would push `
+            + `${joinNames(others)} into that pipe — no pump placed; pump ${joinNames(f.keys.map(fluidName))} out of another side by hand` });
+      }
+      continue;
+    }
     const pick = pickPump(pack, f.rate, groupTier);
     covers.push({ pos: f.pos, cover: { face: FACES[f.side]!, item: pick.key, settings: { mode: 'export', allowInput: false, rate: f.rate, unit: 'L/s' } } });
     if (pick.short && !warned.has(f.stepId)) {
@@ -408,7 +434,8 @@ export function routeInternal(input: InternalInput): InternalResult {
     supplyRun = runs[0]!.cells.map((c): Vec3 => [...c]);
     for (const run of runs) if (run.cable !== null) cables.push({ tier: run.tier, cable: run.cable, cells: cells.get(run.tier) ?? run.cells.length });
   }
-  const fluidPipes = pipeFluids(input, fluids, fluidCells, powerPorts, grid);
-  const covers = pumpCovers(input, fluids, grid);
+  const pipeAt = new Map<string, StuffKey>();
+  const fluidPipes = pipeFluids(input, fluids, fluidCells, powerPorts, pipeAt, grid);
+  const covers = pumpCovers(input, fluids, pipeAt, grid);
   return { blocks: grid.finish(), covers, supplyRun, cables, fluidPipes, warnings: grid.warnings.list };
 }
