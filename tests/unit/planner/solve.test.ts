@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec, type RecipeSpec } from '../../helpers/pack-spec.ts';
 import { solveLine, findBlockers } from '../../../src/server/planner/solve.ts';
-import { buildCandidates, type PlanEnv, type LeafOracle } from '../../../src/server/planner/candidates.ts';
+import {
+  buildCandidates, type CandidateGraph, type GoodInfo, type LeafDecision, type LeafOracle, type LpRecipe, type PlanEnv,
+} from '../../../src/server/planner/candidates.ts';
 import { computeAvailability, reachableDims } from '../../../src/server/planner/availability.ts';
 import { makeLeafOracle, makePrices } from '../../../src/server/planner/costs.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
@@ -102,5 +104,44 @@ describe('loop guard and blockers', () => {
       { id: 'make-t2', map: 'gt.recipe.macerator', in: [['a@0', 1]], out: [['t@0', 1]], eut: 2 }] });
     expect(findBlockers(graphFor(p, 't@0', 1, rawOnly)).map((b) => `${b.key} ${b.reason}`))
       .toEqual(['a@0 no-recipe', 'b@0 no-recipe', 'c@0 no-recipe', 'd@0 no-recipe', 'e@0 no-recipe']);
+  });
+
+  // make-t: x -> t, where an ingot x and its block b turn into each other with no gain (9 x <-> 1 b): both have producers
+  // although nothing reachable makes either. `blocked` says the recipe that really makes x needs tier 4.
+  const lpRecipe = (id: string, coeffs: Array<[string, number]>): LpRecipe =>
+    ({ id, kind: 'recipe', mapId: 'gt.recipe.macerator', coeffs, euPerRun: 0, nonConsumed: [], needsCleanroom: false });
+  const cycleGraph = (leafClass: LeafDecision['leafClass'], withBlocked: boolean): CandidateGraph => ({
+    targets: ['t@0'],
+    recipes: [lpRecipe('block-to-x', [['b@0', -1], ['x@0', 9]]), lpRecipe('make-t', [['t@0', 1], ['x@0', -1]]),
+              lpRecipe('x-to-block', [['b@0', 1], ['x@0', -9]])],
+    goods: new Map<string, GoodInfo>([['t@0', null], ['x@0', leafClass], ['b@0', leafClass]].map(([key, lc]) =>
+      [key as string, { key: key as string, buyable: false, cost: 0, leafClass: lc as LeafDecision['leafClass'], virtual: false }])),
+    blocked: new Map(withBlocked ? [['x@0', [{ recipeId: 'make-x', why: 'tier' as const, needTier: 4 }]]] : []),
+    warnings: [],
+  });
+  it('names the out-of-reach good on a no-gain cycle (ingot <-> block)', async () => {
+    const graph = cycleGraph('unavailable', true);
+    expect(findBlockers(graph)).toEqual([{ key: 'x@0', reason: 'unavailable' }]);
+    const s = await solveLine(graph, one('t@0'));
+    expect(s.status).toBe('infeasible');
+    expect(s.blockers).toEqual([{ key: 'x@0', reason: 'unavailable' }]);
+  });
+  it('names the rejected recipe of a good on a no-gain cycle', () => {
+    expect(findBlockers(cycleGraph(null, true))).toEqual([{ key: 'x@0', reason: 'rejected', needTier: 4 }]);
+  });
+  it('names the target when nothing on its no-gain cycle says more', () => {
+    expect(findBlockers(cycleGraph(null, false))).toEqual([{ key: 't@0', reason: 'no-recipe' }]);
+  });
+  it('names an out-of-reach base material that the candidate graph expands into its cycle', async () => {
+    const p = packFromSpec({ machines, recipes: [
+      { id: 'block-to-x', map: 'gt.recipe.macerator', in: [['b@0', 1]], out: [['x@0', 9]], eut: 2 },
+      { id: 'make-t', map: 'gt.recipe.macerator', in: [['x@0', 1]], out: [['t@0', 1]], eut: 2 },
+      { id: 'x-to-block', map: 'gt.recipe.macerator', in: [['x@0', 9]], out: [['b@0', 1]], eut: 2 }] });
+    const leaf: LeafOracle = (k) => (k === 'x@0' || k === 'b@0' ? { buyable: false, cost: 0, leafClass: 'unavailable' } : rawOnly(k));
+    const graph = graphFor(p, 't@0', 1, leaf);
+    expect(graph.recipes.map((r) => r.id)).toEqual(['block-to-x', 'make-t', 'x-to-block']);
+    const s = await solveLine(graph, one('t@0'));
+    expect(s.status).toBe('infeasible');
+    expect(s.blockers).toEqual([{ key: 'x@0', reason: 'unavailable' }]);
   });
 });

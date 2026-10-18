@@ -263,9 +263,12 @@ function blockerFor(graph: CandidateGraph, key: StuffKey): Blocker {
 }
 
 /**
- * Why the targets cannot be made: walking from each target the makeable fixpoint misses, through the producers of goods
- * it misses, every such good with no producer in the graph — `unavailable` (a base material out of reach), `rejected`
- * (its recipes cannot run here; `needTier` is the lowest tier one of them names) or `no-recipe`. Sorted by key, at most 5.
+ * Why the targets cannot be made. Each target the makeable fixpoint misses is walked on its own, through the producers of
+ * the goods the fixpoint misses. A good it misses is a blocker when it has no producer in the graph or is a base
+ * material out of reach (`leafClass` 'unavailable'); the walk does not go past a blocker. A walk that finds none only
+ * met goods on no-gain cycles (ingot <-> block, nugget or molten), so its blockers are the goods it visited that have a
+ * `blocked` entry, or else the target itself. Reasons: `unavailable`, else `rejected` (its recipes cannot run here;
+ * `needTier` is the lowest tier one of them names), else `no-recipe`. All targets together, sorted by key, at most 5.
  */
 export function findBlockers(graph: CandidateGraph): Blocker[] {
   const makeable = makeableGoods(graph);
@@ -273,17 +276,26 @@ export function findBlockers(graph: CandidateGraph): Blocker[] {
   for (const r of graph.recipes) for (const [key, c] of r.coeffs) if (c > 0) pushTo(producers, key, r);
 
   const blockers = new Map<StuffKey, Blocker>();
-  const seen = new Set<StuffKey>();
-  const stack = graph.targets.filter((key) => !makeable.has(key));
-  while (stack.length > 0) {
-    const key = stack.pop() as StuffKey;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const made = producers.get(key) ?? [];
-    if (made.length === 0) blockers.set(key, blockerFor(graph, key));
-    for (const r of made) {
-      for (const [input, c] of r.coeffs) if (c < 0 && !makeable.has(input) && !seen.has(input)) stack.push(input);
+  for (const target of new Set(graph.targets)) {
+    if (makeable.has(target)) continue;
+    const seen = new Set<StuffKey>();
+    const found: StuffKey[] = [];
+    const stack = [target];
+    while (stack.length > 0) {
+      const key = stack.pop() as StuffKey;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const made = producers.get(key) ?? [];
+      if (made.length === 0 || graph.goods.get(key)?.leafClass === 'unavailable') {
+        found.push(key);
+        continue;
+      }
+      for (const r of made) {
+        for (const [input, c] of r.coeffs) if (c < 0 && !makeable.has(input) && !seen.has(input)) stack.push(input);
+      }
     }
+    const named = found.length > 0 ? found : [...seen].filter((key) => graph.blocked.has(key));
+    for (const key of named.length > 0 ? named : [target]) blockers.set(key, blockerFor(graph, key));
   }
   return [...blockers.values()].sort((a, b) => byString(a.key, b.key)).slice(0, MAX_BLOCKERS);
 }
