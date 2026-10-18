@@ -109,6 +109,13 @@ drukoz and friends on the server (a handful of people). drukoz runs the server a
 - The code lives in a **public GitHub repository** (account `drukoz`), project folder `~/gtnh-planner`.
 - The repo holds only our own code and docs. Everything taken from the game or the server — exported recipes, textures/icons, world scans, project data — and the shared password are **generated locally and never committed** (mod assets carry their own licenses; the world and player data are private). Anyone cloning it points it at their own GTNH 2.9 pack and runs the export themselves.
 
+### 3.13 In-game ghost projector mod (added 2026-10-18 at the user's request; Plan 6)
+- A **client-side** Forge 1.7.10 mod for the GTNH 2.9 client (nothing installed on the server; only players who want ghosts install it).
+- `/planner load <project>` fetches the project's layout from the planner API over HTTP(S) using a **per-project token** copied from the project page (never the shared password; tokens can be revoked). Default host = the address of the Minecraft server the client is connected to, plus the planner port; overridable in the mod config.
+- Draws **translucent ghost blocks exactly where the layout places them**, with real textures (GT machines with casing + front overlay, cables, pipes, covers on their faces). Options: all layers, one Y layer, or only the current build step.
+- **Checks the build:** correct block = green, wrong block or wrong facing = red, not yet placed = faint ghost. When every block of a build step is placed correctly, the mod marks that step done in the shared checklist (with the player's name).
+- Works offline from the server's point of view: it only reads the world the client already sees.
+
 ## 4. Non-goals
 - Not a recipe tutorial or NEI replacement.
 - Never writes to the world or changes the server.
@@ -155,6 +162,7 @@ Decided with drukoz:
 - Map view, flow diagram, materials/steps and 3D view as in the approved mockups; real textures grabbed from the game files.
 - Project folder `~/gtnh-planner`, published as a public GitHub project.
 - Base-material availability follows the planets/dimensions reachable at the current tier (added after approval).
+- An in-game client-side ghost projector mod (Plan 6) that loads a project's layout from the planner API with a per-project token, renders ghost blocks in place, checks placed blocks and ticks off build steps.
 
 My calls (open to change):
 - Include GT super/quantum chests and tanks, iron chests and plain chests in the storage scan; "have" counts everything at the base, broken down by location, flagging what the line can reach.
