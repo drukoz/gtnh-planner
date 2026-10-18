@@ -15,6 +15,7 @@ import io.github.drukoz.gtnhplanner.export.sections.FurnaceSection;
 import io.github.drukoz.gtnhplanner.export.sections.MachinesSection;
 import io.github.drukoz.gtnhplanner.export.sections.OreDictSection;
 import io.github.drukoz.gtnhplanner.export.sections.RecipeMapsSection;
+import io.github.drukoz.gtnhplanner.export.sections.StructuresSection;
 
 /**
  * Runs every {@link ExportSection} in order, then writes {@code items.jsonl.gz} and {@code manifest.json}. The wire
@@ -72,6 +73,7 @@ public final class Exporter {
         sections.add(new CraftingSection());
         sections.add(new FurnaceSection());
         sections.add(new MachinesSection());
+        sections.add(new StructuresSection());
         return sections;
     }
 
