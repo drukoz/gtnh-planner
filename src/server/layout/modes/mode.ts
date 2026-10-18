@@ -1,19 +1,22 @@
-// Logistics modes (Plan 5 Task 7; spec §3.6, research gt-mechanics §3.8): what sits on a line's spine and tail in each
-// logistics mode, the covers and settings the mode puts on machines and on its own blocks, where the base's logistics
-// network hooks in, and the mode's build-step drafts. This module holds the contract every mode returns, the dispatch
-// and the helpers the modes share (flow sums, names, sized conveyor covers, what a shared pipe can misroute). Each mode
-// lives in its own file. Every order and tie-break is fixed, so the same plan gives the same result.
+// Logistics modes (Plan 5 Tasks 7–8; spec §3.6, research gt-mechanics §3.8): what sits on a line's spine and tail in
+// each logistics mode, the covers and settings the mode puts on machines and on its own blocks, where the base's
+// logistics network hooks in, and the mode's build-step drafts. This module holds the contract every mode returns, the
+// dispatch and the helpers the modes share (flow sums, names, item ports, sized conveyor covers, what a shared pipe can
+// misroute). Each mode lives in its own file. Every order and tie-break is fixed, so the same plan gives the same
+// result.
 
 import { isFluidKey, type StuffKey } from '../../../shared/keys.ts';
 import { joinNames } from '../../../shared/layout/format.ts';
-import type { Vec3 } from '../../../shared/layout/geometry.ts';
+import { OPPOSITE, step, type Vec3 } from '../../../shared/layout/geometry.ts';
 import { FACES } from '../../../shared/types/assets.ts';
 import type { Pack } from '../../../shared/types/pack.ts';
 import type { BomLine, BuildStep, LogisticsMode, Plan, PlanFlow, PlanWarning } from '../../../shared/types/plan.ts';
 import type { LogisticsNetwork } from '../../../shared/types/world.ts';
-import type { BlockConfig, HostConfig, HostCover, LocalBlock, Placement } from '../arrange.ts';
+import type { BlockConfig, HostConfig, HostCover, LocalBlock, PlacedUnit, Placement } from '../arrange.ts';
 import { coverRateWarning, pickConveyor, type PartId, type Parts } from '../parts.ts';
+import { ae2Mode } from './ae2.ts';
 import { directMode } from './direct.ts';
+import { routedMode } from './routed.ts';
 
 // ---- Types ----
 
@@ -56,8 +59,8 @@ export const PORT_SPACING: Readonly<Record<LogisticsMode, 0 | 1 | 2>> = Object.f
 export function buildMode(mode: LogisticsMode, input: ModeInput): ModeResult {
   switch (mode) {
     case 'direct': return directMode(input);
-    case 'routed': throw new Error('not implemented');                                     // Task 8
-    case 'ae2': throw new Error('not implemented');                                        // Task 8
+    case 'routed': return routedMode(input);
+    case 'ae2': return ae2Mode(input);
     default: throw new Error(`unknown logistics mode ${String(mode)}`);
   }
 }
@@ -81,6 +84,11 @@ function distinctKeys(flows: readonly PlanFlow[]): StuffKey[] {
 
 function isFinal(to: string): boolean {
   return to === 'out' || to === 'sink';
+}
+
+/** A mode result with nothing in it: no unit moves items, or the mode cannot lay its line. */
+export function emptyModeResult(warnings: PlanWarning[] = []): ModeResult {
+  return { blocks: [], covers: [], configs: [], logisticsPort: null, hookup: null, extraParts: [], drafts: [], warnings, tailFluidY: 1 };
 }
 
 /** The step ids that have units in the placement, in unit order. */
@@ -118,6 +126,32 @@ export function rawItemRate(plan: Plan, placed: ReadonlySet<string>): number {
 /** The item keys flowing placed step → out | sink, sorted. */
 export function finalItemOutputs(plan: Plan, placed: ReadonlySet<string>): StuffKey[] {
   return distinctKeys(itemFlows(plan).filter((f) => placed.has(f.from) && isFinal(f.to)));
+}
+
+/**
+ * The items a step's machine takes: the item keys of the flows into it, or its `step.inputs` item keys when no item
+ * flows into it (ruling R4). Sorted, each once.
+ */
+export function stepItemInputs(plan: Plan, stepId: string): StuffKey[] {
+  const fed = distinctKeys(itemFlows(plan).filter((f) => f.to === stepId));
+  if (fed.length > 0) return fed;
+  const own = plan.steps.find((s) => s.id === stepId)?.inputs ?? [];
+  return [...new Set(own.filter((p) => !isFluidKey(p.key)).map((p) => p.key))].sort(compareText);
+}
+
+// ---- Item ports ----
+
+/** A spine cell in front of a unit, and the unit's cell behind it that takes or gives the items. */
+export interface ItemPort { pos: Vec3; behind: Vec3; unit: PlacedUnit; /** The unit's first item port. */ first: boolean }
+
+/**
+ * The item ports (`UnitPorts.items`) of the units that move items, in unit then port order. A unit that moves only
+ * fluids keeps its spine cell plain: an interface there would have nothing to take or give.
+ */
+export function itemPorts(placement: Placement): ItemPort[] {
+  return placement.units.filter((u) => u.io.itemIn || u.io.itemOut).flatMap((u) => u.ports.items.map((pos, i): ItemPort => ({
+    pos: [...pos], behind: step(pos, OPPOSITE[u.facing]!), unit: u, first: i === 0,
+  })));
 }
 
 // ---- Names ----
@@ -178,12 +212,11 @@ export function spineConflicts(pack: Pack, plan: Plan, placed: ReadonlySet<strin
     (pack.consumers.get(key) ?? []).flatMap((i) => pack.recipes[i]?.maps ?? []);
   const out: Array<{ stepId: string; keys: StuffKey[] }> = [];
   for (const stepId of placed) {
-    const step = plan.steps.find((s) => s.id === stepId);
-    if (step === undefined) continue;
-    const fed = flows.filter((f) => f.to === stepId).map((f) => f.key);
-    const inputs = new Set(fed.length > 0 ? fed : step.inputs.filter((p) => !isFluidKey(p.key)).map((p) => p.key));
-    const maps = new Set(pack.machines.get(step.machine.mteId)?.maps ?? []);
-    if (step.mapId !== '') maps.add(step.mapId);
+    const planStep = plan.steps.find((s) => s.id === stepId);
+    if (planStep === undefined) continue;
+    const inputs = new Set(stepItemInputs(plan, stepId));
+    const maps = new Set(pack.machines.get(planStep.machine.mteId)?.maps ?? []);
+    if (planStep.mapId !== '') maps.add(planStep.mapId);
     const keys = carried.filter((k) => !inputs.has(k) && consumerMaps(k).some((m) => maps.has(m)));
     if (keys.length > 0) out.push({ stepId, keys });
   }
