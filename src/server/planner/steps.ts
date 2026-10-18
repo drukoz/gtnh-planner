@@ -7,7 +7,7 @@ import { isFluidKey, parseItemKey, type StuffKey } from '../../shared/keys.ts';
 import type { Pack } from '../../shared/types/pack.ts';
 import type { BuildStep, LogisticsMode, PlanSettings, PlanStep, PowerSummary } from '../../shared/types/plan.ts';
 import { PROGRAMMED_CIRCUIT_ID } from '../pack/recipes.ts';
-import { cleanroomMachine, stepOneOffs, stepProductName, type Bom } from './bom.ts';
+import { cleanroomMachine, stepOneOffs, stepProductName, stepTools, type Bom } from './bom.ts';
 
 /** The gather step names this many base materials. */
 const GATHER_SHOWN = 8;
@@ -77,7 +77,8 @@ function handCraftText(pack: Pack, step: PlanStep, settings: PlanSettings, total
   const rate = settings.mode === 'makeN'
     ? `${amountText(step.runs ?? Math.ceil(step.runsPerSecond * (totalSeconds ?? 0)))}×`
     : `${amountText(step.runsPerSecond * SECONDS_PER[settings.per])}/${RATE_UNIT[settings.per]}`;
-  return `Hand-craft ${rate} ${stepProductName(pack, step)} at a crafting table`;
+  const tools = stepTools(pack, step).map((key) => pack.nameOf(key));
+  return `Hand-craft ${rate} ${stepProductName(pack, step)} at a crafting table` + (tools.length > 0 ? ` (tools: ${tools.join(', ')})` : '');
 }
 
 function testText(pack: Pack, settings: PlanSettings, target: StuffKey, totalSeconds: number | undefined): string {
@@ -92,9 +93,9 @@ function testText(pack: Pack, settings: PlanSettings, target: StuffKey, totalSec
 /**
  * The build steps in order (`order` = position + 1): gather the build's base materials; craft each top-level build
  * line in build-list order; place the machines; connect power; hook up logistics for the project's mode; configure
- * each step with a programmed circuit or other parts that stay in the machine; hand-craft each hand-crafting step;
- * test the line. Gather is left out when the build needs no base materials, place when the line has no real machine,
- * and power when it draws no EU.
+ * each step with a programmed circuit or other parts that stay in the machine (hand-crafting tools are none of these,
+ * Task 13 ruling); hand-craft each hand-crafting step, naming its tools; test the line. Gather is left out when the
+ * build needs no base materials, place when the line has no real machine, and power when it draws no EU.
  */
 export function buildSteps(
   pack: Pack,
@@ -116,13 +117,17 @@ export function buildSteps(
   }
 
   const roomKey = cleanroomMachine(pack)?.itemKey;
+  // Task 13 ruling: a one-off that is only a hand-crafting tool (no step keeps it in a machine) is worded as a tool.
+  const machineParts = new Set(steps.flatMap((s) => stepOneOffs(pack, s).map((o) => o.key)));
+  const toolsOnly = new Set(steps.flatMap((s) => stepTools(pack, s)).filter((key) => !machineParts.has(key)));
   for (const line of bom.lines) {
     const group = line.group ?? 'machines';
     const name = pack.nameOf(line.key);
     // A key can only repeat in another group; that line gets the group in its id.
     const id = ids.has(`craft:${line.key}`) ? `craft:${group}:${line.key}` : `craft:${line.key}`;
     const amount = amountText(line.amount);
-    if (group === 'one-off') add(id, 'craft', `Make ${amount}× ${name} (stays in the machine)`);
+    if (group === 'one-off' && toolsOnly.has(line.key)) add(id, 'craft', `Make ${amount}× ${name} (a tool for hand-crafting)`);
+    else if (group === 'one-off') add(id, 'craft', `Make ${amount}× ${name} (stays in the machine)`);
     else if (group === 'machines' && line.key === roomKey) add(id, 'craft', `Build a cleanroom (${name}) around the steps that need it`);
     else add(id, 'craft', `Craft ${amount}× ${name}`);
   }

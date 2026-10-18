@@ -85,6 +85,54 @@ describe('buildBom', () => {
     const rate = await buildBom(pack, steps, opts);
     expect(rate.lines.map((l) => [l.key, l.amount, l.why])).toEqual([['machine:101@0', 2, '1× Basic Bending Machine; 1× Basic Bending Machine']]);
   });
+  it('warns when its own recipe graph is too large to break the build list down fully', async () => {
+    // make-assembler needs t:a and t:b; t:a has 20,000 producers, so the walk stops before it ever expands t:b.
+    const p = packFromSpec({ maps: [{ id: 'gt.recipe.assembler' }],
+      machines: [{ mteId: 121, name: 'Basic Assembler', maps: ['gt.recipe.assembler'], tier: 1 }],
+      recipes: [
+        { id: 'make-assembler', map: 'gt.recipe.assembler', in: [['t:a@0', 1], ['t:b@0', 1]], out: [['machine:121@0', 1]], eut: 16 },
+        { id: 'make-b', map: 'gt.recipe.assembler', in: [['t:c@0', 1]], out: [['t:b@0', 1]], eut: 16 },
+        ...Array.from({ length: 20_000 }, (_, i) => ({ id: `a${String(i).padStart(5, '0')}`, map: 'gt.recipe.assembler', out: [['t:a@0', 1]] as Array<[string, number]>, eut: 16 }))] });
+    const settings = { ...defaultSettings(), tier: 1 };
+    const b = planBasis(p, settings, emptyContextForTest());
+    const steps = [step({ id: 'make-b', recipeId: 'make-b', machine: { mteId: 121, name: 'Basic Assembler', tier: 1 } })];
+    const bom = await buildBom(p, steps, { settings, env: b.env, leaf: b.leaf, ctx: emptyContextForTest() });
+    expect(bom.warnings).toEqual([{ code: 'graph-too-big', text: 'The build list is too large to break down fully; mark some parts as "we already make this"' }]);
+    expect(bom.totals.map((l) => [l.key, l.amount])).toEqual([['t:b@0', 1]]);   // never expanded, so it reads as a base material
+    const r = await expandBomLines(p, bom.lines.map(({ key, amount, why, group }) => ({ key, amount, why, ...(group === undefined ? {} : { group }) })), settings, emptyContextForTest());
+    expect(Object.keys(r).sort()).toEqual(['lines', 'totals']);
+    expect(r.totals).toEqual(bom.totals);
+  });
+  it('lists a hand-crafting tool once, not as a part that stays in a machine (Task 13 ruling)', async () => {
+    const p = packFromSpec({ maps: [{ id: 'crafting' }],
+      items: [{ key: 't:hammer@0', name: 'Hammer' }, { key: 't:iron_plate@0', name: 'Iron Plate' }],
+      recipes: [{ id: 'hammer-plate', map: 'crafting', in: [['t:iron_ingot@0', 2], { nc: 't:hammer@0' }], out: [['t:iron_plate@0', 1]] }] });
+    const settings = { ...defaultSettings(), tier: 1, target: 't:iron_plate@0', amount: 30, per: 'min' as const };
+    const b = planBasis(p, settings, emptyContextForTest());
+    const steps = [step({ id: 'hammer-plate', recipeId: 'hammer-plate', handCraft: true, count: 2, runsPerSecond: 0.5, mainOutput: 't:iron_plate@0', machine: { mteId: -3, name: 'Crafting table (by hand)', tier: 0 } })];
+    const bom = await buildBom(p, steps, { settings, env: b.env, leaf: b.leaf, ctx: emptyContextForTest() });
+    expect(bom.lines.map((l) => [l.key, l.amount, l.why, l.group])).toEqual([['t:hammer@0', 1, '1× Hammer (tool for hand-crafting Iron Plate)', 'one-off']]);
+    const out = buildSteps(p, { steps, bom, power: { peakEUt: 0, averageEUt: 0, voltageTier: 0, amps: 0 }, settings, tier: 1, target: 't:iron_plate@0' });
+    expect(out.find((s) => s.id === 'craft:t:hammer@0')?.text).toBe('Make 1× Hammer (a tool for hand-crafting)');
+    expect(out.find((s) => s.id === 'handcraft:hammer-plate')?.text).toBe('Hand-craft 30/min Iron Plate at a crafting table (tools: Hammer)');
+    expect(out.find((s) => s.id === 'configure:hammer-plate')).toBeUndefined();
+    expect(out.filter((s) => s.kind === 'configure')).toEqual([]);
+  });
+  it('merges a hand-crafting tool with the same part an automated step keeps in its machine', async () => {
+    const p = packFromSpec({ maps: [{ id: 'crafting' }],
+      items: [{ key: 't:hammer@0', name: 'Hammer' }, { key: 't:iron_plate@0', name: 'Iron Plate' }],
+      recipes: [{ id: 'hammer-plate', map: 'crafting', in: [['t:iron_ingot@0', 2], { nc: 't:hammer@0' }], out: [['t:iron_plate@0', 1]] }] });
+    const settings = { ...defaultSettings(), tier: 1, target: 't:iron_plate@0', amount: 30, per: 'min' as const };
+    const b = planBasis(p, settings, emptyContextForTest());
+    const steps = [step({ id: 'auto-plate', recipeId: 'hammer-plate', count: 3, mainOutput: 't:iron_plate@0', machine: { mteId: 211, name: 'Basic Crafter', tier: 1 } }),
+                   step({ id: 'hand-plate', recipeId: 'hammer-plate', handCraft: true, mainOutput: 't:iron_plate@0', machine: { mteId: -3, name: 'Crafting table (by hand)', tier: 0 } })];
+    const bom = await buildBom(p, steps, { settings, env: b.env, leaf: b.leaf, ctx: emptyContextForTest() });
+    expect(bom.lines.map((l) => [l.key, l.amount, l.why, l.group])).toEqual([
+      ['t:hammer@0', 4, '3× Hammer (stays in the machine); 1× Hammer (tool for hand-crafting Iron Plate)', 'one-off']]);
+    const out = buildSteps(p, { steps, bom, power: { peakEUt: 0, averageEUt: 0, voltageTier: 0, amps: 0 }, settings, tier: 1, target: 't:iron_plate@0' });
+    expect(out.find((s) => s.id === 'craft:t:hammer@0')?.text).toBe('Make 4× Hammer (stays in the machine)');
+    expect(out.filter((s) => s.kind === 'configure').map((s) => [s.id, s.text])).toEqual([['configure:auto-plate', 'Put Hammer in the Basic Crafter that makes Iron Plate']]);
+  });
 });
 
 describe('expandBomLines', () => {

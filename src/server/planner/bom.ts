@@ -44,12 +44,29 @@ export function cleanroomMachine(pack: Pack): Machine | undefined {
   return room;
 }
 
-/** The not-consumed inputs of a step's recipe (the first option of each slot), per machine. */
+/**
+ * The not-consumed inputs of a step's recipe (the first option of each slot), per machine: the parts that stay in the
+ * machine. A hand-crafting step has none (Task 13 ruling): its not-consumed inputs are tools in the crafter's hands.
+ */
 export function stepOneOffs(pack: Pack, step: PlanStep): Array<{ key: StuffKey; amount: number }> {
+  if (step.handCraft) return [];
   return (pack.recipeById.get(step.recipeId)?.inputs ?? []).flatMap((ing) => {
     const first = ing.options[0];
     return !ing.consumed && first !== undefined ? [{ key: first.key, amount: first.amount }] : [];
   });
+}
+
+/**
+ * The tools of a hand-crafting step (Task 13 ruling): the not-consumed inputs of its recipe (the first option of each
+ * slot, as the loader marks only crafting-table tool slots so), deduped, in slot order; none for any other step.
+ */
+export function stepTools(pack: Pack, step: PlanStep): StuffKey[] {
+  if (!step.handCraft) return [];
+  const inputs = [...(pack.recipeById.get(step.recipeId)?.inputs ?? [])].sort((a, b) => a.slot - b.slot);
+  return [...new Set(inputs.flatMap((ing) => {
+    const first = ing.options[0];
+    return !ing.consumed && first !== undefined ? [first.key] : [];
+  }))];
 }
 
 /** The English name of what a step makes: its main output, else its first output, else its recipe id. */
@@ -74,10 +91,11 @@ function structureParts(pack: Pack, m: Machine): Map<StuffKey, number> {
 
 /**
  * The build list of a line's steps: per step its new machines (`count − owned`; pseudo machines skipped) and, for a
- * multiblock, the blocks of their structures; the not-consumed inputs of every step's recipe for all `count` machines
- * (owned ones need them too); one cleanroom when any step needs one. In Make N the steps of one machine type share
- * its machines (make-n.ts), so only the first step of a type adds machines. Lines with the same key and group are
- * merged, sorted by group then key, and broken down to base materials.
+ * multiblock, the blocks of their structures; the not-consumed inputs of every machine step's recipe for all `count`
+ * machines (owned ones need them too); each hand-crafting tool once, however many steps use it (Task 13 ruling); one
+ * cleanroom when any step needs one. In Make N the steps of one machine type share its machines (make-n.ts), so only
+ * the first step of a type adds machines. Lines with the same key and group are merged, sorted by group then key, and
+ * broken down to base materials. The warnings are `no-cleanroom` and the breakdown's own `graph-too-big`.
  */
 export async function buildBom(
   pack: Pack, steps: PlanStep[], opts: { settings: PlanSettings; env: PlanEnv; leaf: LeafOracle; ctx: PlanContext },
@@ -111,6 +129,17 @@ export async function buildBom(
       if (n > 0) add(key, n, `${n}× ${pack.nameOf(key)} (stays in the machine)`, 'one-off');
     }
   }
+  const toolUses = new Map<StuffKey, Set<string>>();   // tool → the names of what it hand-crafts, in step order
+  for (const step of steps) {
+    for (const key of stepTools(pack, step)) {
+      const products = toolUses.get(key) ?? new Set<string>();
+      products.add(stepProductName(pack, step));
+      toolUses.set(key, products);
+    }
+  }
+  for (const [key, products] of toolUses) {
+    add(key, 1, `1× ${pack.nameOf(key)} (tool for hand-crafting ${[...products].join(', ')})`, 'one-off');
+  }
 
   const warnings: PlanWarning[] = [];
   const clean = steps.filter((s) => s.needsCleanroom === true);
@@ -125,18 +154,20 @@ export async function buildBom(
     .map((d) => ({ key: d.key, amount: round9(d.amount), why: d.whys.join('; '), group: d.group }))
     .sort((a, b) => GROUP_ORDER.indexOf(a.group) - GROUP_ORDER.indexOf(b.group) || byString(a.key, b.key));
   const expanded = await expandWith(pack, lines, opts);
-  return { lines: expanded.lines, totals: expanded.totals, warnings };
+  return { lines: expanded.lines, totals: expanded.totals, warnings: [...warnings, ...expanded.warnings] };
 }
 
 /**
  * Breaks lines that do not come from plan steps (Plan 5's layout parts) down to base materials exactly as `buildBom`
  * does, in the environment `planBasis` derives from `settings` and `ctx`: one output line per input line, in input order.
+ * The return shape is architecture §11.15's, so the breakdown's warnings are not passed on here.
  */
 export async function expandBomLines(
   pack: Pack, lines: BomLine[], settings: PlanSettings, ctx: PlanContext,
 ): Promise<{ lines: BomLine[]; totals: BomLine[] }> {
   const { env, leaf } = planBasis(pack, settings, ctx);
-  return expandWith(pack, lines, { settings, env, leaf, ctx });
+  const expanded = await expandWith(pack, lines, { settings, env, leaf, ctx });
+  return { lines: expanded.lines, totals: expanded.totals };
 }
 
 interface Expansion { settings: PlanSettings; env: PlanEnv; leaf: LeafOracle; ctx: PlanContext }
@@ -150,9 +181,18 @@ interface RecipeBook {
   producersOf(key: StuffKey): Producer[];
   /** The consumed inputs of one run, ore-dictionary slots resolved to their cheapest option, summed per key and sorted. */
   inputsOf(lp: LpRecipe): Array<[StuffKey, number]>;
+  /**
+   * `BOM_TOO_BIG` when the graph stopped growing at its recipe cap: the goods it never expanded have no producers, so
+   * they read as base materials. The graph's other warnings are not passed on: `planLine` reports its own graph's.
+   */
+  warnings: PlanWarning[];
 }
 
-const NO_RECIPES: RecipeBook = { producersOf: () => [], inputsOf: () => [] };
+const NO_RECIPES: RecipeBook = { producersOf: () => [], inputsOf: () => [], warnings: [] };
+/** The build list's wording of candidates.ts's `graph-too-big`. */
+const BOM_TOO_BIG: Readonly<PlanWarning> = {
+  code: 'graph-too-big', text: 'The build list is too large to break down fully; mark some parts as "we already make this"',
+};
 
 function byCostThenId(a: Producer, b: Producer): number {
   return a.cost < b.cost ? -1 : a.cost > b.cost ? 1 : byString(a.lp.id, b.lp.id);
@@ -198,6 +238,7 @@ async function recipeBook(pack: Pack, x: Expansion, targets: StuffKey[]): Promis
   };
 
   return {
+    warnings: graph.warnings.some((w) => w.code === 'graph-too-big') ? [{ ...BOM_TOO_BIG }] : [],
     producersOf(key) {
       let list = ranked.get(key);
       if (list === undefined) {
@@ -243,9 +284,12 @@ function haveOf(ctx: PlanContext, key: StuffKey): BomLine['have'] {
  * cheapest accepted recipe (raw cost from the cost analysis of the lines' own candidate graph, ties by id):
  * `ceil(amount / made per run)` runs, whose consumed inputs × runs are its children (sorted by key, ruling R7).
  * `totals` sums the leaves per key, sorted by key. Lines that are leaves themselves are not targets of the graph, so
- * where another line consumes them they keep their purchase price.
+ * where another line consumes them they keep their purchase price. `warnings` holds the graph's `graph-too-big`, in
+ * the build list's words, when the graph hit its recipe cap.
  */
-async function expandWith(pack: Pack, lines: readonly BomLine[], x: Expansion): Promise<{ lines: BomLine[]; totals: BomLine[] }> {
+async function expandWith(
+  pack: Pack, lines: readonly BomLine[], x: Expansion,
+): Promise<{ lines: BomLine[]; totals: BomLine[]; warnings: PlanWarning[] }> {
   const leafKeys = new Map<StuffKey, boolean>();
   const isLeaf = (key: StuffKey): boolean => {
     let leaf = leafKeys.get(key);
@@ -297,6 +341,7 @@ async function expandWith(pack: Pack, lines: readonly BomLine[], x: Expansion): 
 
   const expanded = lines.map((line) => node(line, 0, []));
   return {
+    warnings: book.warnings,
     lines: expanded,
     totals: [...totals].sort(([a], [b]) => byString(a, b)).map(([key, amount]) => {
       const total: BomLine = { key, amount: round9(amount), why: TOTAL_WHY };
