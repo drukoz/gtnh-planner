@@ -1,32 +1,31 @@
-// Placeholder item icon (architecture §6.5): a colored square with two letters, the same color for the same key every
-// time. Plan 3 replaces the body with the real game texture and keeps this signature, the title and the size.
+// Item and fluid icon (architecture §6.5, spec §3.8): the game's own texture once it is loaded, composited from the
+// server's layers; until then, and for anything without a texture, a plain-colour square with two letters, the same
+// colour for the same key every time (the server's fallback colour once it has answered).
 
 import type { ReactElement } from 'react';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
+import { hashColor } from '../../shared/types/assets.ts';
+import { useItemIcon } from '../assets/icons.ts';
 
 const FLUID_PREFIX = 'fluid:';
 
-/** 32-bit FNV-1a of the key. */
-function hash(text: string): number {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < text.length; i++) {
-    h ^= text.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  return h >>> 0;
+/** Two capital letters or digits from the registry name after its last ':' (a fluid: its name after 'fluid:'). */
+export function placeholderLetters(key: StuffKey): string {
+  const text = Array.from(ownName(key).replace(/[^\p{L}\p{N}]/gu, '')).slice(0, 2).join('').toUpperCase();
+  return text === '' ? '?' : text;
 }
 
-/** Two capital letters from the registry name after its last ':' (a fluid: its name after 'fluid:'). */
-function letters(key: StuffKey): string {
-  const registryName = isFluidKey(key) ? key.slice(FLUID_PREFIX.length) : key.replace(/@[^@]*$/, '');
-  const own = registryName.slice(registryName.lastIndexOf(':') + 1);
-  const text = Array.from(own.replace(/[^\p{L}\p{N}]/gu, '')).slice(0, 2).join('').toUpperCase();
-  return text === '' ? '?' : text;
+function ownName(key: StuffKey): string {
+  if (isFluidKey(key)) return key.slice(FLUID_PREFIX.length);
+  const registryName = key.replace(/@[^@]*$/, '');
+  return registryName.slice(registryName.lastIndexOf(':') + 1);
 }
 
 export function ItemIcon(props: { itemKey: StuffKey; size?: number }): ReactElement {
   const { itemKey } = props;
   const size = props.size ?? 24;
+  const { desc, url } = useItemIcon(itemKey, size);
+  const [r, g, b] = desc?.fallbackColor ?? hashColor(itemKey);
   return (
     <span
       className="item-icon"
@@ -34,12 +33,16 @@ export function ItemIcon(props: { itemKey: StuffKey; size?: number }): ReactElem
       aria-label={itemKey}
       title={itemKey}
       data-item-key={itemKey}
+      data-icon-source={desc?.source ?? 'loading'}
       style={{
-        width: size, height: size, borderRadius: Math.max(2, Math.round(size / 6)), fontSize: Math.max(7, Math.round(size * 0.42)),
-        background: `hsl(${hash(itemKey) % 360}, 45%, 55%)`,
+        display: 'inline-flex', width: size, height: size,
+        borderRadius: Math.max(2, Math.round(size / 6)), fontSize: Math.max(7, Math.round(size * 0.42)),
+        ...(url === null ? { background: `rgb(${r}, ${g}, ${b})` } : {}),
       }}
     >
-      {letters(itemKey)}
+      {url === null
+        ? placeholderLetters(itemKey)
+        : <img src={url} width={size} height={size} alt="" style={{ imageRendering: 'pixelated' }} />}
     </span>
   );
 }
