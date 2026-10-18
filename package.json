@@ -11,10 +11,12 @@
     "node": ">=24.10.0 <25"
   },
   "scripts": {
+    "dev:server": "node --watch --disable-warning=ExperimentalWarning src/server/main.ts",
     "typecheck": "tsc -b",
     "test": "tsc -b && vitest run",
     "pack:info": "node --disable-warning=ExperimentalWarning src/server/cli/pack-info.ts",
-    "set-password": "node --disable-warning=ExperimentalWarning src/server/cli/set-password.ts"
+    "set-password": "node --disable-warning=ExperimentalWarning src/server/cli/set-password.ts",
+    "start": "node --disable-warning=ExperimentalWarning src/server/main.ts"
   },
   "devDependencies": {
     "@types/node": "24.19.1",
