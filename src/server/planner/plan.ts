@@ -3,29 +3,27 @@
 // machines (Make N), the raw inputs with their sources, power, the build list and build steps, and the English names
 // the client shows. Also the settings hash and the plan cache the plan route keys on (architecture §7, §11.8).
 
-import { createHash } from 'node:crypto';
 import { V, tierName } from '../../shared/gt/tiers.ts';
 import type { StuffKey } from '../../shared/keys.ts';
 import type { DimensionInfo, Pack, Product } from '../../shared/types/pack.ts';
 import type {
   BomLine, Plan, PlanContext, PlanFlow, PlanSettings, PlanStep, PlanWarning, PowerSummary, RawInput, SourceInfo,
 } from '../../shared/types/plan.ts';
-import { isBaseItem, unlockText } from './availability.ts';
-import { planBasis, type PlanBasis } from './basis.ts';
+import { unlockText } from './availability.ts';
+import { planBasis, settingsHash, type PlanBasis } from './basis.ts';
 import { buildBom } from './bom.ts';
-import { buildCandidates, type CandidateGraph, type LeafOracle, type LpRecipe } from './candidates.ts';
-import { analyzeCosts, makeLeafOracle, type CostAnalysis } from './costs.ts';
+import type { CandidateGraph, LpRecipe } from './candidates.ts';
+import { analyzeCosts, type CostAnalysis } from './costs.ts';
 import { buildFlows, planSteps } from './machines.ts';
 import { makeN, wholeRuns } from './make-n.ts';
 import { yieldToEventLoop } from './lp.ts';
-import { MAX_NAMED_LOOP_RECIPES, solveLine, standaloneCosts, type Solution, type Standalone } from './solve.ts';
+import { linePricing, type CostModel } from './pricing.ts';
+import { MAX_NAMED_LOOP_RECIPES, solveLine, type Solution } from './solve.ts';
 import { buildSteps } from './steps.ts';
 
-export { effectiveTier } from './basis.ts';
+export { effectiveTier, settingsHash } from './basis.ts';
 
 const SECONDS_PER: Readonly<Record<PlanSettings['per'], number>> = { min: 60, hour: 3600 };
-/** Rounds of pricing the derived leaves a line buys (planLine). */
-const MAX_PRICING_ROUNDS = 6;
 const DEFAULT_CACHE_SIZE = 32;
 /** A machine or amp count this little above a whole number stays whole. */
 const TINY = 1e-9;
@@ -46,19 +44,6 @@ function round6(x: number): number {
 /** No world scan: nothing owned, nothing in storage, no visited dimensions, tier and coil heat unknown. */
 export function emptyContext(): PlanContext {
   return { ownedMachines: [], storage: new Map(), visitedDims: [], topTier: null, coilHeat: null, prospected: [] };
-}
-
-/** A copy of `value` whose objects list their keys in sorted order, at every depth; arrays keep their order. */
-function withSortedKeys(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(withSortedKeys);
-  if (value === null || typeof value !== 'object') return value;
-  const record = value as Record<string, unknown>;
-  return Object.fromEntries(Object.keys(record).sort(byString).map((key) => [key, withSortedKeys(record[key])]));
-}
-
-/** The first 16 hex digits of the SHA-1 of the settings as JSON with every object's keys sorted. */
-export function settingsHash(s: PlanSettings): string {
-  return createHash('sha1').update(JSON.stringify(withSortedKeys(s))).digest('hex').slice(0, 16);
 }
 
 /**
@@ -135,58 +120,6 @@ export class PlanCache {
   }
 }
 
-/** The cost analysis behind stop-item prices and alternatives, the graph it ran on, and the stop items it took. */
-interface CostModel { graph: CandidateGraph; costs: CostAnalysis; stopItems: StuffKey[] }
-
-/**
- * Raw-material costs over a candidate graph built without pins and stop items and with derived base materials routed,
- * so every recipe of a good is an alternative, costs count raw material (not stop prices), and every derived material
- * the line may buy has the cost of making it (`makeLeafOracle`'s `derivedCost`). A stop item or derived material that
- * graph cannot make (nothing at the tier makes it, but the group already does, or gets it some other way) would cost
- * Infinity there and hide every recipe that uses it, the one the plan chose among them; such goods are leaves at their
- * stop price (key override, else price) instead.
- */
-async function costModel(pack: Pack, settings: PlanSettings, basis: PlanBasis, target: StuffKey): Promise<CostModel> {
-  const analyze = async (stopItems: StuffKey[]): Promise<CostModel> => {
-    await yieldToEventLoop();
-    const s: PlanSettings = { ...settings, recipeChoice: {}, stopItems, routeDerived: true };
-    const graph = buildCandidates(pack, s, basis.env, makeLeafOracle(pack, s, basis.avail, basis.prices), [target]);
-    return { graph, costs: await analyzeCosts(graph), stopItems };
-  };
-  const open = await analyze([]);
-  const unmade = (key: StuffKey): boolean => key !== target && open.graph.goods.has(key) && !Number.isFinite(open.costs.cost(key));
-  const derived = [...open.graph.goods.keys()].filter((key) => basis.avail.classOf(key) === 'derived' && isBaseItem(pack, key));
-  const stuck = [...new Set([...settings.stopItems, ...derived])].filter(unmade);
-  return stuck.length > 0 ? analyze(stuck) : open;
-}
-
-/**
- * What making each derived material of `keys` on its own costs, never consuming the line's target (`standaloneCosts`
- * over the cost model's graph, where derived materials are routed). One that graph never walked (its pruning found no
- * cheap way to make it along the target's chain) is priced over a graph walked from it alone, but never below its
- * plain price: at the flat 1 Magnetic Steel was the cheapest way to the LV Machine Hull's plates, while its own chain
- * costs what the steel costs; and a graph walked from it alone is not the line's, so it may count ore-processing yields
- * the flat price of mined items over-rewards (an end-stone iron ore smelted into 40 nuggets) as savings the line never
- * makes. Infinity = only a chain through the target makes it; no entry = its plain price.
- */
-async function derivedCosts(
-  pack: Pack, settings: PlanSettings, basis: PlanBasis, model: CostModel, target: StuffKey, keys: readonly StuffKey[],
-): Promise<Map<StuffKey, Standalone>> {
-  const out = new Map<StuffKey, Standalone>();
-  const inModel = keys.filter((key) => model.graph.goods.has(key));
-  const own = keys.filter((key) => !model.graph.goods.has(key));
-  for (const [key, made] of await standaloneCosts(model.graph, inModel, [target])) if (made !== undefined) out.set(key, made);
-  if (own.length > 0) {
-    await yieldToEventLoop();
-    const s: PlanSettings = { ...settings, recipeChoice: {}, stopItems: model.stopItems, routeDerived: true };
-    const alone = buildCandidates(pack, s, basis.env, makeLeafOracle(pack, s, basis.avail, basis.prices), own);
-    for (const [key, made] of await standaloneCosts(alone, own, [target])) {
-      if (made !== undefined) out.set(key, { ...made, cost: Math.max(made.cost, basis.prices.price(key)) });
-    }
-  }
-  return out;
-}
-
 /** A swap list holds at most this many recipes (the one in use always among them). */
 const MAX_ALTERNATIVES = 20;
 /** Inputs and outputs listed per alternative. */
@@ -211,8 +144,14 @@ function recipeParts(pack: Pack, recipeId: string): { inputs: Array<{ key: Stuff
   };
 }
 
+type Alternative = PlanStep['alternatives'][number];
+
+function byRawCostThenId(a: Alternative, b: Alternative): number {
+  return a.rawCost - b.rawCost || byString(a.recipeId, b.recipeId);
+}
+
 /** Producers of each wanted good in the cost graph, ranked by raw cost per unit then id; finite costs only. */
-function alternativesFor(model: CostModel, wanted: ReadonlySet<StuffKey>): Map<StuffKey, PlanStep['alternatives']> {
+function alternativesFor(model: CostModel, wanted: ReadonlySet<StuffKey>): Map<StuffKey, Alternative[]> {
   const producers = new Map<StuffKey, LpRecipe[]>();
   for (const r of model.graph.recipes) {
     if (r.kind !== 'recipe' || r.mapId === null) continue;
@@ -223,28 +162,49 @@ function alternativesFor(model: CostModel, wanted: ReadonlySet<StuffKey>): Map<S
       else list.push(r);
     }
   }
-  const out = new Map<StuffKey, PlanStep['alternatives']>();
+  const out = new Map<StuffKey, Alternative[]>();
   for (const key of wanted) {
     const list = (producers.get(key) ?? []).flatMap((r) => {
       const rawCost = model.costs.recipeCost(r.id, key);
       return Number.isFinite(rawCost) ? [{ recipeId: r.id, rawCost: round6(rawCost), mapId: r.mapId as string }] : [];
     });
-    out.set(key, list.sort((a, b) => a.rawCost - b.rawCost || byString(a.recipeId, b.recipeId)));
+    out.set(key, list.sort(byRawCostThenId));
   }
   return out;
 }
 
 /**
  * Each step's swap list (spec §3.9, alternatives by raw material use): the cheapest MAX_ALTERNATIVES producers of its
- * main output in the cost graph, the step's own recipe always kept, each with what it takes and makes.
+ * main output in the cost graph, each with what it takes and makes, and always the step's own recipe (Plan 2 Task 14:
+ * "the one in use kept"), in the last place when it is not among the cheapest. The cost graph prunes by its own
+ * estimates and the line's graph prices derived leaves and stop items differently, so the line can run a producer the
+ * cost graph dropped (or a pinned one), even make a good the cost graph never walked: its recipe is listed anyway, at
+ * its raw cost in the cost graph when it can run there, else at its raw cost in the line's own graph (`analyzeCosts`
+ * of `graph`, run only then), else at what the good costs there. A step without a main output has nothing to swap.
  */
-function addAlternatives(pack: Pack, steps: PlanStep[], model: CostModel): void {
+async function addAlternatives(pack: Pack, steps: PlanStep[], model: CostModel, graph: CandidateGraph): Promise<void> {
   const wanted = new Set(steps.flatMap((s) => (s.mainOutput === undefined ? [] : [s.mainOutput])));
   const alternatives = alternativesFor(model, wanted);
+  let lineCosts: CostAnalysis | undefined;
+  const ownCost = async (recipeId: string, main: StuffKey): Promise<number> => {
+    const inModel = model.costs.recipeCost(recipeId, main);
+    if (Number.isFinite(inModel)) return inModel;
+    lineCosts ??= await analyzeCosts(graph);
+    const inLine = lineCosts.recipeCost(recipeId, main);
+    if (Number.isFinite(inLine)) return inLine;
+    const good = lineCosts.cost(main);   // the recipe makes no net amount of it (it also consumes it)
+    return Number.isFinite(good) ? good : 0;
+  };
   for (const step of steps) {
-    const all = step.mainOutput === undefined ? [] : (alternatives.get(step.mainOutput) ?? []);
-    const kept = all.slice(0, MAX_ALTERNATIVES);
-    const own = all.find((a) => a.recipeId === step.recipeId);
+    const main = step.mainOutput;
+    const all = main === undefined ? [] : (alternatives.get(main) ?? []);
+    let own = all.find((a) => a.recipeId === step.recipeId);
+    let ranked = all;
+    if (own === undefined && main !== undefined) {
+      own = { recipeId: step.recipeId, rawCost: round6(await ownCost(step.recipeId, main)), mapId: step.mapId };
+      ranked = [...all, own].sort(byRawCostThenId);
+    }
+    const kept = ranked.slice(0, MAX_ALTERNATIVES);
     if (own !== undefined && !kept.includes(own)) kept[kept.length - 1] = own;
     step.alternatives = kept.map((a) => ({ ...a, ...recipeParts(pack, a.recipeId) }));
   }
@@ -530,37 +490,15 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
   // Each synchronous stretch (availability, each candidate walk, each LP solve) yields first, so other
   // requests and live events go on between them (ledger 200).
   await yieldToEventLoop();
-  const basis = planBasis(pack, settings, ctx);
-  const target = settings.target;
-  if (target === null) return assemble(pack, settings, basis, bodyWithout('empty', [{ code: 'no-target', text: 'Pick something to make' }]));
-  if (!pack.items.has(target) && !pack.fluids.has(target)) {
-    return assemble(pack, settings, basis, bodyWithout('empty', [{ code: 'unknown-target', text: 'This item is not in the current recipe export' }]));
+  // The line's prices (pricing.ts), shared with `expandBomLines`; none without a target the export knows.
+  const pricing = linePricing(pack, settings, ctx);
+  if (pricing === null) {
+    const empty: PlanWarning = settings.target === null
+      ? { code: 'no-target', text: 'Pick something to make' }
+      : { code: 'unknown-target', text: 'This item is not in the current recipe export' };
+    return assemble(pack, settings, planBasis(pack, settings, ctx), bodyWithout('empty', [empty]));
   }
-
-  const model = await costModel(pack, settings, basis, target);
-  const stopCost = (key: StuffKey): number => {
-    const cost = model.costs.cost(key);
-    return Number.isFinite(cost) ? cost : basis.prices.price(key);
-  };
-  // Derived leaves cost what making them on their own costs (`derivedCosts`): first the graph at their plain prices,
-  // then again with the derived leaves it buys priced, until it buys no unpriced one. One only a chain through the
-  // target makes is no leaf (Infinity), and walking it can meet further derived leaves; after MAX_PRICING_ROUNDS a
-  // derived leaf the last graph meets first keeps its plain price.
-  const priced = new Map<StuffKey, Standalone>();
-  const tried = new Set<StuffKey>();
-  const leafWith = (): LeafOracle => makeLeafOracle(pack, settings, basis.avail, basis.prices, stopCost, (key) => priced.get(key));
-  let leaf = leafWith();
-  await yieldToEventLoop();
-  let graph = buildCandidates(pack, settings, basis.env, leaf, [target]);
-  for (let round = 0; round < MAX_PRICING_ROUNDS; round++) {
-    const unpriced = [...graph.goods.values()].filter((g) => g.leafClass === 'derived' && g.buyable && !tried.has(g.key)).map((g) => g.key);
-    if (unpriced.length === 0) break;
-    for (const key of unpriced) tried.add(key);
-    for (const [key, cost] of await derivedCosts(pack, settings, basis, model, target, unpriced)) priced.set(key, cost);
-    leaf = leafWith();
-    await yieldToEventLoop();
-    graph = buildCandidates(pack, settings, basis.env, leaf, [target]);
-  }
+  const { target, basis, model, leaf, graph } = await pricing;
   const batch = settings.mode === 'makeN';
   const demand = new Map([[target, batch ? settings.amount : settings.amount / SECONDS_PER[settings.per]]]);
   const sol = await solveLine(graph, demand);
@@ -598,7 +536,7 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
     buys = sol.buys;
     sinks = sol.sinks;
   }
-  addAlternatives(pack, steps, model);
+  await addAlternatives(pack, steps, model, graph);
 
   const raw = rawInputsOf(pack, graph, basis, ctx, buys, made?.totalSeconds ?? null);
   // Make N steps of one machine type share that type's machines (makeN), so they draw at most once per type.

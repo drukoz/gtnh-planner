@@ -90,7 +90,7 @@ export function hasCostOverride(pack: Pack, overrides: Record<string, number>, k
  * Steel) it is no leaf at all, so the line never buys a form of its own target. Base items it cannot get are never
  * buyable.
  *
- * `derivedCost` is what making the derived item on its own costs (planLine: `standaloneCosts` over the cost model's
+ * `derivedCost` is what making the derived item on its own costs (pricing.ts: `standaloneCosts` over the cost model's
  * graph, where derived materials are routed), undefined when that is not known. A flat price of 1 made exotic derived
  * dusts the cheapest way to make ordinary parts (Poly-Si and gallium arsenide wafers for an Electronic Circuit), and a
  * price above what the line pays to make it in place made the LP route the whole chain anyway (the 20-step oil chain

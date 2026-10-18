@@ -231,6 +231,41 @@ describe('planLine', () => {
     expect(plan.rawInputs.map((r) => r.key)).not.toContain('magnetic@0');
     expect(plan.rawInputs.reduce((sum, r) => sum + r.cost, 0)).toBeCloseTo(2, 6);
   });
+  it('lists the recipe each step runs among its swaps, also one the cost model pruned', async () => {
+    // Thing comes from 13 P, 15 Q, 17 R or 19 S dust per 10, or from one Part. Part bends from Alloy, which nothing mines:
+    // a centrifuge splits one X dust into a Left and a Right half and a mixer joins them again, so Alloy costs 1 X. The
+    // walk's estimate charges that X to both halves (2), so the cost model, which routes Alloy, keeps the three cheapest
+    // dust recipes and never walks Part. The line buys Alloy at what its chain costs (1) and makes Thing through Part:
+    // neither step's recipe is among the cost model's, and Part has no producer there at all.
+    const dust = (key: string, name: string, material: string) => ({ key, name, gt: { prefix: 'dust', material } });
+    const p = packFromSpec({
+      items: [dust('x@0', 'X Dust', 'X'), dust('p@0', 'P Dust', 'P'), dust('q@0', 'Q Dust', 'Q'), dust('r@0', 'R Dust', 'R'), dust('s@0', 'S Dust', 'S'),
+              { key: 'alloy@0', name: 'Alloy Ingot', gt: { prefix: 'ingot', material: 'Alloy' } },
+              { key: 'left@0', name: 'Left' }, { key: 'right@0', name: 'Right' }, { key: 'part@0', name: 'Part' }, { key: 'thing@0', name: 'Thing' }],
+      maps: [{ id: 'gt.recipe.centrifuge' }, { id: 'gt.recipe.mixer' }, { id: 'gt.recipe.metalbender' }, { id: 'gt.recipe.assembler' }],
+      machines: [{ mteId: 1, name: 'Basic Centrifuge', maps: ['gt.recipe.centrifuge'], tier: 1 }, { mteId: 2, name: 'Basic Mixer', maps: ['gt.recipe.mixer'], tier: 1 },
+                 { mteId: 3, name: 'Basic Bending Machine', maps: ['gt.recipe.metalbender'], tier: 1 }, { mteId: 4, name: 'Basic Assembler', maps: ['gt.recipe.assembler'], tier: 1 }],
+      recipes: [{ id: 'split', map: 'gt.recipe.centrifuge', in: [['x@0', 1]], out: [['left@0', 1], ['right@0', 1]], eut: 16 },
+                { id: 'join', map: 'gt.recipe.mixer', in: [['left@0', 1], ['right@0', 1]], out: [['alloy@0', 1]], eut: 16 },
+                { id: 'bend', map: 'gt.recipe.metalbender', in: [['alloy@0', 1]], out: [['part@0', 1]], eut: 16 },
+                { id: 'from-part', map: 'gt.recipe.assembler', in: [['part@0', 1]], out: [['thing@0', 1]], eut: 16 },
+                { id: 'from-p', map: 'gt.recipe.assembler', in: [['p@0', 13]], out: [['thing@0', 10]], eut: 16 },
+                { id: 'from-q', map: 'gt.recipe.assembler', in: [['q@0', 15]], out: [['thing@0', 10]], eut: 16 },
+                { id: 'from-r', map: 'gt.recipe.assembler', in: [['r@0', 17]], out: [['thing@0', 10]], eut: 16 },
+                { id: 'from-s', map: 'gt.recipe.assembler', in: [['s@0', 19]], out: [['thing@0', 10]], eut: 16 }],
+      worldgen: { veins: ['X', 'P', 'Q', 'R', 'S'].map((m) => vein(`ore.mix.${m}`, m)) },
+    });
+    const swaps = (plan: Plan, id: string) => plan.steps.find((s) => s.id === id)?.alternatives.map((a) => [a.recipeId, a.rawCost]);
+    const plan = await planLine(p, S({ target: 'thing@0', tier: 1, amount: 60, per: 'min' }), emptyContext());
+    expect(plan.steps.map((s) => s.id)).toEqual(['bend', 'from-part']);
+    expect(plan.rawInputs.map((r) => [r.key, r.leafClass])).toEqual([['alloy@0', 'derived']]);
+    expect(swaps(plan, 'from-part')).toEqual([['from-part', 1], ['from-p', 1.3], ['from-q', 1.5], ['from-r', 1.7]]);
+    expect(swaps(plan, 'bend')).toEqual([['bend', 1]]);
+    // A pinned recipe the cost model pruned (the fourth dust recipe) is the one in use, so it is listed too.
+    const pinned = await planLine(p, S({ target: 'thing@0', tier: 1, amount: 60, per: 'min', recipeChoice: { 'thing@0': 'from-s' } }), emptyContext());
+    expect(pinned.steps.map((s) => s.id)).toEqual(['from-s']);
+    expect(swaps(pinned, 'from-s')).toEqual([['from-p', 1.3], ['from-q', 1.5], ['from-r', 1.7], ['from-s', 1.9]]);
+  });
   it('says when whole crafts leave a Make N batch short', () => {
     expect(batchShortWarning(pack, [], 't:circuit@0', 10)).toEqual([]);
     expect(batchShortWarning(pack, [{ key: 'fluid:oil', amount: 1000, chance: 1 }, { key: 't:copper_wire@0', amount: 2, chance: 1 }], 't:circuit@0', 10)).toEqual([{

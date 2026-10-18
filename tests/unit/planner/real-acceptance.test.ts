@@ -10,10 +10,11 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
 import { loadPack } from '../../../src/server/pack/load.ts';
 import { planBasis } from '../../../src/server/planner/basis.ts';
+import { expandBomLines } from '../../../src/server/planner/bom.ts';
 import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import type { Pack } from '../../../src/shared/types/pack.ts';
-import type { Plan, PlanSettings } from '../../../src/shared/types/plan.ts';
+import type { BomLine, Plan, PlanSettings } from '../../../src/shared/types/plan.ts';
 
 const ELECTRONIC_CIRCUIT = 'IC2:itemPartCircuit@0';
 const GOOD_ELECTRONIC_CIRCUIT = 'gregtech:gt.metaitem.01@32702';
@@ -74,7 +75,13 @@ function expectSane(plan: Plan, seconds: number, maxSteps: number, alsoRaw: read
   expect(perMinute(plan, 'fluid:lava')).toBe(0);
   expect(perMinute(plan, 'fluid:water')).toBeLessThan(3000);
   expect(plan.steps.map((s) => s.mapId).filter((m) => NEVER_HERE.includes(m))).toEqual([]);
+  // Every step's swap list holds the recipe it runs (spec §3.9: swap a recipe, or keep the one in use).
+  expect(plan.steps.filter((s) => !s.alternatives.some((a) => a.recipeId === s.recipeId)).map((s) => s.recipeId)).toEqual([]);
 }
+
+/** The build list's top-level lines as Plan 5 hands its layout parts to expandBomLines: key, amount, why and group. */
+const topLines = (plan: Plan): BomLine[] =>
+  plan.buildList.map(({ key, amount, why, group }) => ({ key, amount, why, ...(group === undefined ? {} : { group }) }));
 
 describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 2.9 export', () => {
   let pack: Pack;
@@ -83,14 +90,21 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
     const p = await planLine(pack, { ...defaultSettings(), per: 'min', ...s }, emptyContext());
     return { plan: p, seconds: (performance.now() - started) / 1000 };
   };
+  /** expandBomLines breaks the plan's own top-level build lines down to the plan's totals (architecture §11.15). */
+  const expectSameBreakdown = async (p: Plan, s: Partial<PlanSettings>): Promise<void> => {
+    const expanded = await expandBomLines(pack, topLines(p), { ...defaultSettings(), per: 'min', ...s }, emptyContext());
+    expect(expanded.totals).toEqual(p.buildTotals);
+  };
 
   beforeAll(async () => {
     pack = await loadPack(activeExportDir(loadConfig()));
   }, 120_000);
 
   it('plans 1 Electronic Circuit a minute at MV from ordinary materials, in under 40 steps and 5 s', async () => {
-    const { plan: p, seconds } = await plan({ target: ELECTRONIC_CIRCUIT, amount: 1, tier: 2 });
+    const settings = { target: ELECTRONIC_CIRCUIT, amount: 1, tier: 2 };
+    const { plan: p, seconds } = await plan(settings);
     expectSane(p, seconds, 40);
+    await expectSameBreakdown(p, settings);
     expect(p.rawInputs.some((r) => COPPER.includes(r.key))).toBe(true);
     expect(p.rawInputs.some((r) => SOLDER.includes(r.key))).toBe(true);
     // The last step makes the circuit in GT's circuit assembler: crafting a Programmed Circuit (any LV circuit) back into
@@ -99,8 +113,10 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
   }, 60_000);
 
   it('plans 2 Good Electronic Circuits a minute at HV from ordinary materials, in under 45 steps and 5 s', async () => {
-    const { plan: p, seconds } = await plan({ target: GOOD_ELECTRONIC_CIRCUIT, amount: 2, tier: 3 });
+    const settings = { target: GOOD_ELECTRONIC_CIRCUIT, amount: 2, tier: 3 };
+    const { plan: p, seconds } = await plan(settings);
     expectSane(p, seconds, 45);
+    await expectSameBreakdown(p, settings);
     expect(p.steps.find((s) => s.mainOutput === GOOD_ELECTRONIC_CIRCUIT)?.mapId).toBe('gt.recipe.circuitassembler');
     expect(perMinute(p, 'minecraft:gold_ingot@0') + perMinute(p, 'gregtech:gt.metaitem.01@2086')).toBeGreaterThan(0);   // the board's gold foil
   }, 60_000);
@@ -115,8 +131,10 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
   }, 60_000);
 
   it('plans an LV Machine Hull at LV on LV machines: 8 steel plates, tin cable, polyethylene', async () => {
-    const { plan: p, seconds } = await plan({ target: LV_MACHINE_HULL, amount: 1, tier: 1 });
+    const settings = { target: LV_MACHINE_HULL, amount: 1, tier: 1 };
+    const { plan: p, seconds } = await plan(settings);
     expectSane(p, seconds, 12);
+    await expectSameBreakdown(p, settings);
     expect(p.steps.every((s) => s.machine.tier <= 1)).toBe(true);
     expect(perMinute(p, 'gregtech:gt.metaitem.01@11305')).toBeCloseTo(8, 6);
     expect(perMinute(p, 'gregtech:gt.metaitem.01@11057')).toBeGreaterThan(0);

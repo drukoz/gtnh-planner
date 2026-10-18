@@ -6,10 +6,10 @@ import { PSEUDO_MACHINES } from '../../shared/gt/tiers.ts';
 import { itemKey, type StuffKey } from '../../shared/keys.ts';
 import type { Machine, Pack } from '../../shared/types/pack.ts';
 import type { BomLine, PlanContext, PlanSettings, PlanStep, PlanWarning } from '../../shared/types/plan.ts';
-import { planBasis } from './basis.ts';
 import { buildCandidates, type LeafOracle, type LpRecipe, type PlanEnv } from './candidates.ts';
 import { analyzeCosts, type CostAnalysis } from './costs.ts';
 import { yieldToEventLoop } from './lp.ts';
+import { lineLeaf } from './pricing.ts';
 
 export interface Bom { lines: BomLine[] /* top level, with children */; totals: BomLine[] /* leaves summed, sorted by key */; warnings: PlanWarning[] }
 
@@ -160,13 +160,15 @@ export async function buildBom(
 
 /**
  * Breaks lines that do not come from plan steps (Plan 5's layout parts) down to base materials exactly as `buildBom`
- * does, in the environment `planBasis` derives from `settings` and `ctx`: one output line per input line, in input order.
- * The return shape is architecture §11.15's, so the breakdown's warnings are not passed on here.
+ * does for the line's plan: in its environment and at its prices (`lineLeaf`: stop items at their cost-model price,
+ * derived leaves at their own chain's cost; the plain prices of `planBasis` when the settings name no target the export
+ * knows), so the same lines break down the same way in both. One output line per input line, in input order. The return
+ * shape is architecture §11.15's, so the breakdown's warnings are not passed on here.
  */
 export async function expandBomLines(
   pack: Pack, lines: BomLine[], settings: PlanSettings, ctx: PlanContext,
 ): Promise<{ lines: BomLine[]; totals: BomLine[] }> {
-  const { env, leaf } = planBasis(pack, settings, ctx);
+  const { env, leaf } = await lineLeaf(pack, settings, ctx);
   const expanded = await expandWith(pack, lines, { settings, env, leaf, ctx });
   return { lines: expanded.lines, totals: expanded.totals };
 }
