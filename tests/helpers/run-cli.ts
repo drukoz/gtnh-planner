@@ -17,7 +17,7 @@ export interface CliResult { code: number | null; stdout: string; stderr: string
  * `opts.onSpawn` gets the child right after it is spawned (e.g. to send it a signal).
  */
 export function runCli(
-  script: 'pack-info' | 'export' | 'extract-assets',
+  script: 'pack-info' | 'export' | 'extract-assets' | 'import-nei-icons',
   args: string[],
   opts: { cwd: string; env?: Record<string, string | undefined>; timeoutMs?: number; onSpawn?: (child: ChildProcess) => void },
 ): Promise<CliResult> {
