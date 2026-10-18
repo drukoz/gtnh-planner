@@ -8,6 +8,7 @@ import java.util.Collection;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 
 import net.minecraft.init.Items;
 import net.minecraft.item.ItemStack;
@@ -51,6 +52,7 @@ public final class RecipeMapsSection implements ExportSection {
         Field translationKey = accessible(SimpleSpecialValueFormatter.class.getDeclaredField("translationKey"));
         Map<RecipeMap<?>, Integer> catalysts = hardCodedCatalysts(ctx);
         ItemTable items = ctx.items();
+        Map<String, Integer> oversized = new TreeMap<>();
 
         try (JsonlWriter maps = ctx.jsonl("recipeMaps"); JsonlWriter recipes = ctx.jsonl("recipesGt")) {
             int index = -1;
@@ -68,7 +70,7 @@ public final class RecipeMapsSection implements ExportSection {
                 try {
                     for (GTRecipe r : all) {
                         try {
-                            writeRecipe(recipes, index, map, r, identifier, items);
+                            writeRecipe(recipes, index, map, r, identifier, items, oversized);
                         } catch (Throwable t) {
                             ctx.warn("recipe " + position + " of " + map.unlocalizedName + ": " + t);
                         }
@@ -78,6 +80,10 @@ public final class RecipeMapsSection implements ExportSection {
                     ctx.warn("recipes of " + map.unlocalizedName + " after " + position + ": " + t);
                 }
             }
+        }
+        for (Map.Entry<String, Integer> e : oversized.entrySet()) {
+            ctx.warn("recipe meta " + e.getKey() + ": " + e.getValue() + " values with more than "
+                + MetaValues.MAX_NODES + " nodes written as their class name");
         }
     }
 
@@ -167,7 +173,7 @@ public final class RecipeMapsSection implements ExportSection {
     }
 
     private static void writeRecipe(JsonlWriter out, int mapIndex, RecipeMap<?> map, GTRecipe r, Field identifier,
-        ItemTable items) throws IOException, IllegalAccessException {
+        ItemTable items, Map<String, Integer> oversized) throws IOException, IllegalAccessException {
         JsonWriter j = out.begin();
         j.beginObject();
         j.name("map").value(mapIndex);
@@ -196,19 +202,21 @@ public final class RecipeMapsSection implements ExportSection {
         if (category != null && !map.unlocalizedName.equals(category.unlocalizedName)) {
             j.name("cat").value(category.unlocalizedName);
         }
-        writeMeta(j, r, identifier, items);
+        writeMeta(j, r, identifier, items, oversized);
         writeOwners(j, r.owners);
         j.endObject();
         out.end();
     }
 
     /**
-     * Every metadata entry by its identifier: {@code Boolean} and finite {@code Number} values as they are,
-     * {@code ItemStack} as {@code {"item": index}}, anything else as {@code String.valueOf}. Null values are left out:
+     * Every metadata entry by its identifier, the value written by {@link MetaValues} (the same JSON on every export of
+     * the pack: {@code Boolean} and finite numbers as they are, {@code ItemStack} as {@code {"item": index}}, enums by
+     * name, arrays element by element, other objects as their fields, never {@code Object.toString}). A value too
+     * large for MetaValues is written as its class name and counted in {@code oversized}. Null values are left out:
      * the wire format has no null meta value.
      */
-    private static void writeMeta(JsonWriter j, GTRecipe r, Field identifier, ItemTable items)
-        throws IOException, IllegalAccessException {
+    private static void writeMeta(JsonWriter j, GTRecipe r, Field identifier, ItemTable items,
+        Map<String, Integer> oversized) throws IOException, IllegalAccessException {
         IRecipeMetadataStorage storage = r.getMetadataStorage();
         if (storage == null) return;
         boolean open = false;
@@ -219,15 +227,14 @@ public final class RecipeMapsSection implements ExportSection {
                 j.name("meta").beginObject();
                 open = true;
             }
-            j.name(String.valueOf(identifier.get(e.getKey())));
-            if (value instanceof Boolean) {
-                j.value(((Boolean) value).booleanValue());
-            } else if (value instanceof Number && isFinite((Number) value)) {
-                j.value((Number) value);
-            } else if (value instanceof ItemStack) {
-                j.beginObject().name("item").value(items.intern((ItemStack) value)).endObject();
-            } else {
-                j.value(String.valueOf(value));
+            String name = String.valueOf(identifier.get(e.getKey()));
+            j.name(name);
+            try {
+                MetaValues.write(j, value, items);
+            } catch (MetaValues.Oversized tooLarge) {
+                j.value(MetaValues.typeName(value.getClass())); // nothing of the value was written yet
+                Integer n = oversized.get(name);
+                oversized.put(name, n == null ? 1 : n + 1);
             }
         }
         if (open) j.endObject();
@@ -247,11 +254,6 @@ public final class RecipeMapsSection implements ExportSection {
 
     private static void flag(JsonWriter j, String name, boolean set) throws IOException {
         if (set) j.name(name).value(true);
-    }
-
-    private static boolean isFinite(Number n) {
-        double d = n.doubleValue();
-        return !Double.isNaN(d) && !Double.isInfinite(d);
     }
 
     private static Field accessible(Field f) {

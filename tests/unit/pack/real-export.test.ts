@@ -1,8 +1,10 @@
+import { existsSync, readdirSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
-import type { Pack } from '../../../src/shared/types/pack.ts';
+import type { Pack, Recipe } from '../../../src/shared/types/pack.ts';
 import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
 import { loadPack } from '../../../src/server/pack/load.ts';
-import { recipeId } from '../../../src/server/pack/recipe-id.ts';
+import { canonicalRecipe, recipeId } from '../../../src/server/pack/recipe-id.ts';
 import { searchPack } from '../../../src/server/pack/search.ts';
 import { runCli } from '../../helpers/run-cli.ts';
 
@@ -80,6 +82,26 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('real export (GTNH 2.9.0-RC-1)',
     expect(worldgen.fluidSources.some((s) => s.kind === 'air_intake' && s.dims.includes('nether'))).toBe(true);   // Nether Air is a fluid, not a gas
     expect(worldgen.byproducts.Iron).toContain('Nickel');
   });
+
+  it('gives the same recipe ids as the export made just before it (run npm run export twice in a row)', async () => {
+    const active = activeExportDir(loadConfig());
+    const root = dirname(active);
+    const earlier = readdirSync(root)
+      .filter((id) => id.startsWith(`${pack.manifest.packVersion}_`) && id < basename(active) && existsSync(join(root, id, 'EXPORT_OK')))
+      .sort();
+    expect(earlier.length, 'needs an earlier export of the same pack by the same exporter: run npm run export twice in a row').toBeGreaterThan(0);
+    const previous = await loadPack(join(root, earlier.at(-1)!));
+    const differing = (a: Pack, b: Pack): string[] => {
+      const ids = new Set(b.recipes.map((r) => r.id));
+      return a.recipes.filter((r) => !ids.has(r.id)).map((r: Recipe) => canonicalRecipe({ ...r, fake: r.flags.fake }));
+    };
+    const onlyNow = differing(pack, previous);
+    const onlyBefore = differing(previous, pack);
+    console.log(`re-export ${earlier.at(-1)} → ${basename(active)}: ${pack.recipes.length} / ${previous.recipes.length} recipes, `
+      + `${onlyNow.length} ids only in the active export, ${onlyBefore.length} only in the earlier one`);
+    expect({ onlyNow: onlyNow.slice(0, 5), onlyBefore: onlyBefore.slice(0, 5) }).toEqual({ onlyNow: [], onlyBefore: [] });
+    expect(pack.recipes.length).toBe(previous.recipes.length);
+  }, 180_000);
 
   it('answers pack:info --find', async () => {
     // 51 producers at 0 EU/t (crafting, Eye of Harmony) sort before the first Macerator recipe, past the default 20

@@ -7,8 +7,11 @@
 // - Item slot: null keeps the slot position; amount 0 = not consumed; chance on GT's 1/10000 scale, omitted when 10000.
 // - Fluid slot: litres; chance as for items.
 // - inAlt[i], finAlt[i]: alternatives for slot i of in/fin; null or [] = none.
-// - meta: every GT metadata entry by identifier; ItemStack values as { "item": index }, other non-primitive
-//   values as String.valueOf.
+// - meta: every GT metadata entry by identifier, as JSON that is the same on every export of one pack (the loader
+//   hashes it into the recipe id): booleans and finite numbers as they are, ItemStack as { "item": index } at any
+//   depth, FluidStack as [fluid name, litres], enums by name, arrays and lists element by element, sets sorted, maps
+//   and other objects as objects keyed by name (an object's instance fields); never Object.toString, whose identity
+//   hash changes from run to run. null only inside arrays.
 // - Dimension names: GT ore-gen names exactly as GT stores them (Overworld, The End, EndAsteroid, moon, Underdark);
 //   the loader normalizes.
 // - Material keys: gt: / bw: / gtpp: + IOreMaterial.getInternalName().
@@ -27,7 +30,8 @@ export const MARKER_FAILED = 'EXPORT_FAILED';
 
 export type ItemSlot = null | [item: number, amount: number] | [item: number, amount: number, chance: number];
 export type FluidSlot = null | [fluid: string, litres: number] | [fluid: string, litres: number, chance: number];
-export type MetaValue = boolean | number | string | { item: number };
+/** A `meta` value; an object that is exactly `{ item: number }` is an item reference. */
+export type MetaValue = boolean | number | string | null | MetaValue[] | { [key: string]: MetaValue };
 export type CraftingSlot = null | number | { ore: string } | number[];
 
 export interface ItemLine { i: number; id: string; m: number; nid?: number; nbt?: string; un?: string | null; dn?: string | null; od?: string[]; gtPrefix?: string; gtMat?: string; gtAmt?: number; electric?: { maxCharge: number; tier: number; canProvideEnergy: boolean } }

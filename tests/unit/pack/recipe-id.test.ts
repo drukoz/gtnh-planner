@@ -15,9 +15,44 @@ const ebf = (): RecipeContent => ({
 describe('recipeId', () => {
   it('hashes the documented canonical form', () => {
     const canonical =
-      '["v1","gt",null,0,120,1000,1000,[[0,1,1,[["gregtech:gt.metaitem.01@2032",1]]]],[["gregtech:gt.metaitem.01@11305",1,1]],{"coilHeat":1000}]';
+      '["v2","gt",null,0,120,1000,1000,[[1,1,[["gregtech:gt.metaitem.01@2032",1]]]],[["gregtech:gt.metaitem.01@11305",1,1]],{"coilHeat":1000}]';
     expect(canonicalRecipe(ebf())).toBe(canonical);
     expect(recipeId(ebf())).toBe(sha(canonical, 16));
+  });
+
+  it('hashes the documented canonical form with every position distinct and inputs and outputs given unsorted', () => {
+    const golden: RecipeContent = {
+      source: 'gt', category: 'gt.recipe.category.golden', fake: true, euPerTick: 30, durationTicks: 200, specialValue: 1500,
+      inputs: [
+        { slot: 100, consumed: true, chance: 0.9, options: [{ key: 'fluid:water', amount: 1000 }] },
+        { slot: 0, consumed: true, chance: 0.25, options: [{ key: 'b:x@2', amount: 3 }, { key: 'a:y@4', amount: 5 }] },
+      ],
+      outputs: [{ key: 'z:out@7', amount: 6, chance: 0.75 }, { key: 'c:out@8', amount: 9, chance: 0.5 }],
+      meta: { owners: ['examplemod'], b: [3, 1], a: { d: 4, c: 2 } },
+    };
+    const canonical = '["v2","gt","gt.recipe.category.golden",1,30,200,1500,'
+      + '[[1,0.25,[["a:y@4",5],["b:x@2",3]]],[1,0.9,[["fluid:water",1000]]]],'
+      + '[["c:out@8",9,0.5],["z:out@7",6,0.75]],'
+      + '{"a":{"c":2,"d":4},"b":[3,1]}]';
+    expect(canonicalRecipe(golden)).toBe(canonical);
+    expect(recipeId(golden)).toBe(sha(canonical, 16));
+  });
+
+  it('ignores input slots and the order of inputs and outputs, and leaves the caller\'s lists alone', () => {
+    const a = ebf();
+    a.inputs = [
+      { slot: 0, consumed: true, chance: 1, options: [{ key: 'a:x@0', amount: 1 }] },
+      { slot: 1, consumed: false, chance: 0, options: [{ key: 'gregtech:gt.integrated_circuit@1', amount: 0 }] },
+      { slot: 100, consumed: true, chance: 1, options: [{ key: 'fluid:oxygen', amount: 1000 }] },
+    ];
+    a.outputs = [{ key: 'b:y@0', amount: 1, chance: 1 }, { key: 'a:y@0', amount: 2, chance: 0.5 }, { key: 'fluid:hydrogen', amount: 100, chance: 1 }];
+    const b = ebf();
+    b.inputs = [a.inputs[2]!, a.inputs[0]!, a.inputs[1]!].map((i, slot) => ({ ...i, slot: slot === 0 ? 100 : slot - 1 }));
+    b.outputs = [a.outputs[2]!, a.outputs[0]!, a.outputs[1]!];
+    expect(recipeId(b)).toBe(recipeId(a));
+    expect(canonicalRecipe(b)).toBe(canonicalRecipe(a));
+    expect(a.outputs.map((o) => o.key)).toEqual(['b:y@0', 'a:y@0', 'fluid:hydrogen']);
+    expect(a.inputs.map((i) => i.slot)).toEqual([0, 1, 100]);
   });
 
   it('ignores option order, meta key order and owners', () => {
@@ -61,7 +96,7 @@ describe('recipeId, the rest of the canonical form', () => {
   it('sorts options by key, then amount, and leaves the order of the caller\'s list alone', () => {
     const r = ebf();
     r.inputs[0]!.options = [{ key: 'b:x@0', amount: 1 }, { key: 'a:x@0', amount: 5 }, { key: 'a:x@0', amount: 2 }];
-    expect(canonicalRecipe(r)).toContain('[[0,1,1,[["a:x@0",2],["a:x@0",5],["b:x@0",1]]]]');
+    expect(canonicalRecipe(r)).toContain('[[1,1,[["a:x@0",2],["a:x@0",5],["b:x@0",1]]]]');
     expect(r.inputs[0]!.options.map((o) => `${o.key}/${o.amount}`)).toEqual(['b:x@0/1', 'a:x@0/5', 'a:x@0/2']);
   });
 
@@ -73,11 +108,12 @@ describe('recipeId, the rest of the canonical form', () => {
 
   const moreChanges: Array<[string, (r: RecipeContent) => void]> = [
     ['special value', (r) => { r.specialValue = 1001; }],
-    ['input slot', (r) => { r.inputs[0]!.slot = 1; }],
     ['input chance', (r) => { r.inputs[0]!.chance = 0.5; }],
     ['input option amount', (r) => { r.inputs[0]!.options[0]!.amount = 2; }],
     ['input option key', (r) => { r.inputs[0]!.options[0]!.key = 'gregtech:gt.metaitem.01@2033'; }],
     ['output key', (r) => { r.outputs[0]!.key = 'gregtech:gt.metaitem.01@11306'; }],
+    ['number of equal inputs', (r) => { r.inputs.push({ ...r.inputs[0]!, slot: 1 }); }],
+    ['number of equal outputs', (r) => { r.outputs.push({ ...r.outputs[0]! }); }],
     ['meta value', (r) => { r.meta = { coilHeat: 1001 }; }],
     ['set of meta keys', (r) => { r.meta = { coilHeat: 1000, cleanroom: true }; }],
   ];

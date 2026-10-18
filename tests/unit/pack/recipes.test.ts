@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Pack, Recipe } from '../../../src/shared/types/pack.ts';
 import { itemKey } from '../../../src/shared/keys.ts';
 import { nbtHash } from '../../../src/server/pack/recipe-id.ts';
+import type { GtRecipeLine } from '../../../src/server/pack/format.ts';
 import { RecipeCollector } from '../../../src/server/pack/recipes.ts';
 import { makePack } from '../../helpers/make-pack.ts';
 import { SAMPLE, sampleExportSpec } from '../../helpers/sample-export.ts';
@@ -82,6 +83,23 @@ describe('GT recipes', () => {
     expect(inMap(pack, 'gt.recipe.circuitassembler')[0]!.meta).toEqual({
       cleanroom: true, lowGravity: true, coilHeat: 1800, research_item: SAMPLE.ironDust, fuel_value: 7, owners: ['gregtech'],
     });
+  });
+
+  it('turns item references at any depth of a metadata value into keys and keeps the rest of it', async () => {
+    const recipe = (meta: GtRecipeLine['meta']): GtRecipeLine => ({ map: 6, in: [[4, 1]], out: [[16, 1]], fin: [], fout: [], eut: 30, dur: 200, meta });
+    const meta = {
+      SIEVERT: { isExact: true, sievert: 5 }, condensate_input: [['helium', 1000], null], nanite_tiers: ['Carbon', 'Gold'],
+      target_chamber_metadata: { amount: 100, focusItem: { item: 3 }, minEnergy: 0.0005 }, crops: [{ item: 1 }, { item: 0 }],
+      lookalike: { item: 7, size: 2 },
+    };
+    const pack = await makePack({ ...sampleExportSpec(), recipesGt: [recipe(meta)] });
+    expect(inMap(pack, 'gt.recipe.circuitassembler')[0]!.meta).toEqual({
+      SIEVERT: { isExact: true, sievert: 5 }, condensate_input: [['helium', 1000], null], nanite_tiers: ['Carbon', 'Gold'],
+      target_chamber_metadata: { amount: 100, focusItem: SAMPLE.nickelDust, minEnergy: 0.0005 }, crops: [SAMPLE.ironDust, SAMPLE.ironIngot],
+      lookalike: { item: 7, size: 2 },
+    });
+    await expect(makePack({ ...sampleExportSpec(), recipesGt: [recipe({ deep: [{ a: { item: 99 } }] })] }))
+      .rejects.toMatchObject({ name: 'ExportFormatError', file: 'recipes-gt.jsonl.gz', line: 1 });
   });
 
   it('reports a recipe that names an unknown map', async () => {

@@ -1,14 +1,17 @@
 // Content-hash recipe ids and NBT hashes (architecture §5, §11.4). Server side: this file uses node:crypto.
 //
 // Plan 2 stores recipe ids inside projects, so the canonical form below is fixed. Change it only on purpose and
-// bump CANONICAL_VERSION when you do.
+// bump CANONICAL_VERSION when you do. v2 replaced v1 before any project stored an id: v1 kept the order of inputs and
+// outputs (and the input slots), which GT fills from hash-ordered collections for some recipes, so two exports of one
+// pack gave those recipes different ids.
 
 import { createHash } from 'node:crypto';
 import type { Ingredient, Product, RecipeSource } from '../../shared/types/pack.ts';
 
 /**
- * What identifies a recipe. Recipe maps, amps and the hidden/recycling/dynamicMap flags are not part of it, so the
- * same recipe in two maps (prior-art T10) and the same recipe in a re-export (T5) get one id.
+ * What identifies a recipe. Recipe maps, amps, the hidden/recycling/dynamicMap flags, input slots and the order of
+ * inputs and outputs are not part of it, so the same recipe in two maps (prior-art T10) and the same recipe in a
+ * re-export (T5) get one id.
  */
 export type RecipeContent = {
   source: RecipeSource;
@@ -22,7 +25,7 @@ export type RecipeContent = {
   fake?: boolean;
 };
 
-const CANONICAL_VERSION = 'v1';
+const CANONICAL_VERSION = 'v2';
 
 export function sha1Hex(text: string): string {
   return createHash('sha1').update(text, 'utf8').digest('hex');
@@ -54,17 +57,26 @@ function sortKeys(value: unknown): unknown {
   return value;
 }
 
+/** The entries sorted by their JSON text, compared by UTF-16 code units (never by the locale). */
+function sortedByText(entries: readonly unknown[]): unknown[] {
+  return entries
+    .map((entry) => ({ entry, text: JSON.stringify(entry) }))
+    .sort((a, b) => (a.text < b.text ? -1 : a.text > b.text ? 1 : 0))
+    .map(({ entry }) => entry);
+}
+
 /**
  * The canonical text of a recipe: a JSON array of the format version, source, category (or null), fake flag (0/1),
- * EU/t, duration, special value, the inputs (slot, consumed 0/1, chance, options sorted by key then amount as
- * [key, amount]), the outputs ([key, amount, chance]) and the meta without its `owners` key, object keys sorted
- * recursively. Inputs and outputs keep the order they are given in.
+ * EU/t, duration, special value, the inputs ([consumed 0/1, chance, options sorted by key then amount as
+ * [key, amount]]), the outputs ([key, amount, chance]) and the meta without its `owners` key, object keys sorted
+ * recursively. Inputs and outputs are each sorted by the JSON text of their entries, so their order does not count;
+ * an input's slot is left out, as it is only its position (fluid options are told apart by their `fluid:` keys).
  */
 export function canonicalRecipe(r: RecipeContent): string {
   return JSON.stringify([
     CANONICAL_VERSION, r.source, r.category ?? null, r.fake ? 1 : 0, r.euPerTick, r.durationTicks, r.specialValue,
-    r.inputs.map((i) => [i.slot, i.consumed ? 1 : 0, i.chance, i.options.toSorted(byKeyThenAmount).map((o) => [o.key, o.amount])]),
-    r.outputs.map((o) => [o.key, o.amount, o.chance]),
+    sortedByText(r.inputs.map((i) => [i.consumed ? 1 : 0, i.chance, i.options.toSorted(byKeyThenAmount).map((o) => [o.key, o.amount])])),
+    sortedByText(r.outputs.map((o) => [o.key, o.amount, o.chance])),
     sortKeys(Object.fromEntries(Object.entries(r.meta).filter(([key]) => key !== 'owners'))),
   ]);
 }

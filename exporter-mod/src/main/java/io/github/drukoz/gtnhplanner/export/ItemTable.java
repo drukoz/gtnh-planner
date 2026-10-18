@@ -39,20 +39,31 @@ public final class ItemTable {
      * first sight. Throws {@link IllegalArgumentException} for a stack without a registered item.
      */
     public int intern(ItemStack s) {
-        if (s == null || s.getItem() == null) throw new IllegalArgumentException("empty item stack");
-        String id = registryName(s);
-        if (id == null) throw new IllegalArgumentException("item not in the item registry: " + s);
-        int meta = s.getItemDamage();
-        String nbt = s.hasTagCompound() ? s.getTagCompound().toString() : null;
-        String key = id + "@" + meta + (nbt != null ? "#" + nbt : "");
+        String key = keyOf(s);
         Integer known = byKey.get(key);
         if (known != null) return known;
         ItemStack copy = s.copy();
         copy.stackSize = 1;
         int index = entries.size();
-        entries.add(new Entry(copy, id, meta, nbt));
+        entries.add(new Entry(copy, registryName(s), s.getItemDamage(), nbtOf(s)));
         byKey.put(key, index);
         return index;
+    }
+
+    /**
+     * The variant's table key, {@code registryName@damage} plus {@code #SNBT} for a stack with NBT, without adding
+     * it: the same for every export of one pack, unlike an index. Throws like {@link #intern(ItemStack)}.
+     */
+    public static String keyOf(ItemStack s) {
+        if (s == null || s.getItem() == null) throw new IllegalArgumentException("empty item stack");
+        String id = registryName(s);
+        if (id == null) throw new IllegalArgumentException("item not in the item registry: " + s);
+        String nbt = nbtOf(s);
+        return id + "@" + s.getItemDamage() + (nbt != null ? "#" + nbt : "");
+    }
+
+    private static String nbtOf(ItemStack s) {
+        return s.hasTagCompound() ? s.getTagCompound().toString() : null;
     }
 
     /**
