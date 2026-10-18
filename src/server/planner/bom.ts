@@ -10,7 +10,6 @@ import { planBasis } from './basis.ts';
 import { buildCandidates, type LeafOracle, type LpRecipe, type PlanEnv } from './candidates.ts';
 import { analyzeCosts, type CostAnalysis } from './costs.ts';
 import { yieldToEventLoop } from './lp.ts';
-import type { RoughCosts } from './rough.ts';
 
 export interface Bom { lines: BomLine[] /* top level, with children */; totals: BomLine[] /* leaves summed, sorted by key */; warnings: PlanWarning[] }
 
@@ -100,7 +99,7 @@ function structureParts(pack: Pack, m: Machine): Map<StuffKey, number> {
  * broken down to base materials. The warnings are `no-cleanroom` and the breakdown's own `graph-too-big`.
  */
 export async function buildBom(
-  pack: Pack, steps: PlanStep[], opts: { settings: PlanSettings; env: PlanEnv; leaf: LeafOracle; ctx: PlanContext; rough?: RoughCosts },
+  pack: Pack, steps: PlanStep[], opts: { settings: PlanSettings; env: PlanEnv; leaf: LeafOracle; ctx: PlanContext },
 ): Promise<Bom> {
   const drafts = new Map<string, { key: StuffKey; amount: number; whys: string[]; group: Group }>();
   const add = (key: StuffKey, amount: number, why: string, group: Group): void => {
@@ -167,12 +166,12 @@ export async function buildBom(
 export async function expandBomLines(
   pack: Pack, lines: BomLine[], settings: PlanSettings, ctx: PlanContext,
 ): Promise<{ lines: BomLine[]; totals: BomLine[] }> {
-  const { env, leaf, rough } = planBasis(pack, settings, ctx);
-  const expanded = await expandWith(pack, lines, { settings, env, leaf, ctx, rough });
+  const { env, leaf } = planBasis(pack, settings, ctx);
+  const expanded = await expandWith(pack, lines, { settings, env, leaf, ctx });
   return { lines: expanded.lines, totals: expanded.totals };
 }
 
-interface Expansion { settings: PlanSettings; env: PlanEnv; leaf: LeafOracle; ctx: PlanContext; rough?: RoughCosts }
+interface Expansion { settings: PlanSettings; env: PlanEnv; leaf: LeafOracle; ctx: PlanContext }
 
 /** One accepted recipe that makes a good: how much of it per run, and the raw cost per unit (cost analysis). */
 interface Producer { lp: LpRecipe; perRun: number; cost: number }
@@ -202,7 +201,7 @@ function byCostThenId(a: Producer, b: Producer): number {
 
 async function recipeBook(pack: Pack, x: Expansion, targets: StuffKey[]): Promise<RecipeBook> {
   await yieldToEventLoop();
-  const graph = buildCandidates(pack, x.settings, x.env, x.leaf, targets, x.rough === undefined ? {} : { rough: x.rough });
+  const graph = buildCandidates(pack, x.settings, x.env, x.leaf, targets);
   const costs: CostAnalysis = await analyzeCosts(graph);
   const makers = new Map<StuffKey, Array<{ lp: LpRecipe; perRun: number }>>();
   const options = new Map<StuffKey, Array<{ key: StuffKey; amount: number }>>();

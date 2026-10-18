@@ -101,14 +101,17 @@ describe('loop guard and blockers', () => {
   });
   it('gives up as infeasible, in one plain warning, when every round still finds a loop', async () => {
     // Six loops, loop i making i + 1 y per x: the guard bans the best one each round, five times, and the sixth remains.
-    const loops: RecipeSpec[] = Array.from({ length: 6 }, (_, i) => [
+    // The candidate walk keeps three producers of y, so the graph is the union of one walk per loop.
+    const graphs = Array.from({ length: 6 }, (_, i) => graphFor(packFromSpec({ machines, recipes: [
       { id: `loop${i}-a`, map: 'gt.recipe.macerator', in: [[`x${i}@0`, 1]], out: [['y@0', i + 2]], eut: 2 },
       { id: `loop${i}-b`, map: 'gt.recipe.macerator', in: [['y@0', 1]], out: [[`x${i}@0`, 1]], eut: 2 },
-    ] as RecipeSpec[]).flat();
-    const p = packFromSpec({ machines, recipes: [...loops,
       { id: 'honest', map: 'gt.recipe.macerator', in: [['raw@0', 1]], out: [['y@0', 1]], eut: 2 },
-      { id: 'make-t', map: 'gt.recipe.macerator', in: [['y@0', 1]], out: [['t@0', 1]], eut: 2 }] });
-    const s = await solveLine(graphFor(p, 't@0', 1, rawOnly), one('t@0'));
+      { id: 'make-t', map: 'gt.recipe.macerator', in: [['y@0', 1]], out: [['t@0', 1]], eut: 2 }] }), 't@0', 1, rawOnly));
+    const union: CandidateGraph = { ...graphs[0]!,
+      recipes: [...new Map(graphs.flatMap((g) => g.recipes).map((r) => [r.id, r])).values()].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)),
+      goods: new Map(graphs.flatMap((g) => [...g.goods])) };
+    expect(union.recipes.filter((r) => r.id.startsWith('loop'))).toHaveLength(12);
+    const s = await solveLine(union, one('t@0'));
     expect(s.status).toBe('infeasible');
     expect(s.runs.size).toBe(0);
     expect(s.blockers).toEqual([]);

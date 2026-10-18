@@ -147,7 +147,7 @@ async function costModel(pack: Pack, settings: PlanSettings, basis: PlanBasis, t
     await yieldToEventLoop();
     const s: PlanSettings = { ...settings, recipeChoice: {}, stopItems };
     const leaf = makeLeafOracle(pack, s, basis.avail, basis.prices, undefined, basis.madeCost);
-    const graph = buildCandidates(pack, s, basis.env, leaf, [target], { rough: basis.rough });
+    const graph = buildCandidates(pack, s, basis.env, leaf, [target]);
     return { graph, costs: await analyzeCosts(graph) };
   };
   const open = await analyze([]);
@@ -482,7 +482,7 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
   };
   const leaf = makeLeafOracle(pack, settings, basis.avail, basis.prices, stopCost, basis.madeCost);
   await yieldToEventLoop();
-  const graph = buildCandidates(pack, settings, basis.env, leaf, [target], { rough: basis.rough });
+  const graph = buildCandidates(pack, settings, basis.env, leaf, [target]);
   const batch = settings.mode === 'makeN';
   const demand = new Map([[target, batch ? settings.amount : settings.amount / SECONDS_PER[settings.per]]]);
   const sol = await solveLine(graph, demand);
@@ -525,7 +525,7 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
   const raw = rawInputsOf(pack, graph, basis, ctx, buys, made?.totalSeconds ?? null);
   // Make N steps of one machine type share that type's machines (makeN), so they draw at most once per type.
   const power = powerSummary(steps, { sharedByType: batch });
-  const bom = await buildBom(pack, steps, { settings, env: basis.env, leaf: basis.leaf, ctx, rough: basis.rough });
+  const bom = await buildBom(pack, steps, { settings, env: basis.env, leaf: basis.leaf, ctx });
   const body: PlanBody = {
     status: 'ok', unlocks: [], steps, flows, rawInputs: raw.rawInputs, byproducts: byproductsOf(graph, sinks, target), power,
     buildList: bom.lines, buildTotals: bom.totals,

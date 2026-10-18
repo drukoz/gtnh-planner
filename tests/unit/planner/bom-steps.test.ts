@@ -86,23 +86,27 @@ describe('buildBom', () => {
     expect(rate.lines.map((l) => [l.key, l.amount, l.why])).toEqual([['machine:101@0', 2, '1× Basic Bending Machine; 1× Basic Bending Machine']]);
   });
   it('warns when its own recipe graph is too large to break the build list down fully', async () => {
-    // make-assembler needs t:a and t:b; t:a has MAX_RECIPES producers, none of them priced (each needs t:z, which nothing
-    // makes), so no rough cost prunes them and the walk stops before it ever expands t:b.
+    // make-assembler needs t:a and t:x, t:x needs t:w, t:w needs t:b. t:a takes 200 parts of 200 parts each (40,201
+    // recipes in all, one per good), so the walk stops at MAX_RECIPES before it ever expands t:b, three levels down.
+    const ins = (prefix: string): Array<[string, number]> => Array.from({ length: 200 }, (_, i): [string, number] => [`${prefix}_${i}@0`, 1]);
     const p = packFromSpec({ maps: [{ id: 'gt.recipe.assembler' }],
       machines: [{ mteId: 121, name: 'Basic Assembler', maps: ['gt.recipe.assembler'], tier: 1 }],
       recipes: [
-        { id: 'make-assembler', map: 'gt.recipe.assembler', in: [['t:a@0', 1], ['t:b@0', 1]], out: [['machine:121@0', 1]], eut: 16 },
+        { id: 'make-assembler', map: 'gt.recipe.assembler', in: [['t:a@0', 1], ['t:x@0', 1]], out: [['machine:121@0', 1]], eut: 16 },
+        { id: 'make-x', map: 'gt.recipe.assembler', in: [['t:w@0', 1]], out: [['t:x@0', 1]], eut: 16 },
+        { id: 'make-w', map: 'gt.recipe.assembler', in: [['t:b@0', 1]], out: [['t:w@0', 1]], eut: 16 },
         { id: 'make-b', map: 'gt.recipe.assembler', in: [['t:c@0', 1]], out: [['t:b@0', 1]], eut: 16 },
-        ...Array.from({ length: MAX_RECIPES }, (_, i) => ({
-          id: `a${String(i).padStart(5, '0')}`, map: 'gt.recipe.assembler', in: [['t:z@0', 1]] as IngredientSpec[], out: [['t:a@0', 1]] as Array<[string, number]>, eut: 16,
-        }))] });
+        { id: 'make-a', map: 'gt.recipe.assembler', in: ins('t:a'), out: [['t:a@0', 1]], eut: 16 },
+        ...ins('t:a').flatMap(([part], i) => [
+          { id: `a${i}`, map: 'gt.recipe.assembler', in: ins(`t:a${i}`), out: [[part, 1]] as Array<[string, number]>, eut: 16 },
+          ...ins(`t:a${i}`).map(([leaf], j) => ({ id: `a${i}_${j}`, map: 'gt.recipe.assembler', out: [[leaf, 1]] as Array<[string, number]>, eut: 16 }))])] });
+    expect(p.recipes.length).toBeGreaterThan(MAX_RECIPES);
     const settings = { ...defaultSettings(), tier: 1 };
     const b = planBasis(p, settings, emptyContextForTest());
     const steps = [step({ id: 'make-b', recipeId: 'make-b', machine: { mteId: 121, name: 'Basic Assembler', tier: 1 } })];
-    const bom = await buildBom(p, steps, { settings, env: b.env, leaf: b.leaf, ctx: emptyContextForTest(), rough: b.rough });
+    const bom = await buildBom(p, steps, { settings, env: b.env, leaf: b.leaf, ctx: emptyContextForTest() });
     expect(bom.warnings).toEqual([{ code: 'graph-too-big', text: 'The build list is too large to break down fully; mark some parts as "we already make this"' }]);
-    // t:b was never expanded, so it reads as a base material; t:a breaks down along its first unpriced producer.
-    expect(bom.totals.map((l) => [l.key, l.amount])).toEqual([['t:b@0', 1], ['t:z@0', 1]]);
+    expect(bom.totals.map((l) => [l.key, l.amount])).toContainEqual(['t:b@0', 1]);   // never expanded, so it reads as a base material
     const r = await expandBomLines(p, bom.lines.map(({ key, amount, why, group }) => ({ key, amount, why, ...(group === undefined ? {} : { group }) })), settings, emptyContextForTest());
     expect(Object.keys(r).sort()).toEqual(['lines', 'totals']);
     expect(r.totals).toEqual(bom.totals);

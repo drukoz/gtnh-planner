@@ -1,11 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { miniGt } from '../../helpers/mini-gt.ts';
-import { packFromSpec, type IngredientSpec } from '../../helpers/pack-spec.ts';
+import { packFromSpec, type IngredientSpec, type RecipeSpec } from '../../helpers/pack-spec.ts';
 import { acceptRecipe, buildCandidates, MAX_RECIPES, virtualKey, type PlanEnv, type LeafOracle } from '../../../src/server/planner/candidates.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import { EXCLUSION_RULES } from '../../../src/server/planner/candidates.ts';
 import { DEFAULT_EXCLUDED_CATEGORIES } from '../../../src/shared/types/plan.ts';
-import { roughCosts } from '../../../src/server/planner/rough.ts';
 
 const pack = miniGt();
 const env = (tier: number, extra: Partial<PlanEnv> = {}): PlanEnv => ({ tier, reachable: new Set(['overworld', 'nether']), lowGravity: false,
@@ -137,10 +136,33 @@ describe('candidate rules without a fixture test above', () => {
     expect(g.recipes.map((r) => [r.id, r.coeffs])).toEqual([['both', [['b@0', 0.5], ['raw@0', -1], ['t@0', 1]]]]);
     expect([...g.goods.keys()].sort()).toEqual(['b@0', 'raw@0', 't@0']);
   });
+  it('keeps the three cheapest producers of a good, within twice the cheapest estimated raw cost', () => {
+    const recipes: RecipeSpec[] = [1, 1.5, 2, 2.5, 3, 10].map((n, i) => ({ id: `p${i}`, map: 'gt.recipe.macerator', in: [['raw@0', n]], out: [['t@0', 1]] }));
+    recipes.push({ id: 'by', map: 'gt.recipe.macerator', in: [['raw@0', 1]], out: [['u@0', 1], ['t@0', 1, 0.01]] });   // 100 per t
+    const p = packFromSpec({ machines: [M(1, ['gt.recipe.macerator'], 1)], recipes });
+    const raw: LeafOracle = (k) => (k === 'raw@0' ? { buyable: true, cost: 1, leafClass: 'direct' } : { buyable: false, cost: 0, leafClass: null });
+    expect(buildCandidates(p, defaultSettings(), env(1), raw, ['t@0']).recipes.map((r) => r.id)).toEqual(['p0', 'p1', 'p2']);
+  });
+  it('ranks producers made from goods settled before the output first (no closed loop of equally cheap recipes)', () => {
+    // Sand from gravel and sand from sandstone (made from sand) cost the same; only the first is grounded.
+    const p = packFromSpec({ machines: [M(1, ['gt.recipe.macerator'], 1)], recipes: [
+      { id: 'a-from-sandstone', map: 'gt.recipe.macerator', in: [['sandstone@0', 1]], out: [['sand@0', 4]] },
+      { id: 'b-sandstone', map: 'gt.recipe.macerator', in: [['sand@0', 4]], out: [['sandstone@0', 1]] },
+      { id: 'c-a', map: 'gt.recipe.macerator', in: [['sandstone@0', 1]], out: [['sand@0', 4]] },
+      { id: 'c-b', map: 'gt.recipe.macerator', in: [['sandstone@0', 1]], out: [['sand@0', 4]] },
+      { id: 'z-from-gravel', map: 'gt.recipe.macerator', in: [['gravel@0', 1]], out: [['sand@0', 1]] }] });
+    const gravel: LeafOracle = (k) => (k === 'gravel@0' ? { buyable: true, cost: 1, leafClass: 'free' } : { buyable: false, cost: 0, leafClass: null });
+    expect(buildCandidates(p, defaultSettings(), env(1), gravel, ['sand@0']).recipes.map((r) => r.id)).toContain('z-from-gravel');
+  });
   it('stops adding recipes at the cap (40,000) and says the graph was cut short', () => {
     expect(MAX_RECIPES).toBe(40_000);
-    const p = packFromSpec({ machines: [M(1, ['gt.recipe.macerator'], 1)],
-      recipes: Array.from({ length: MAX_RECIPES + 1 }, (_, i) => ({ id: `r${String(i).padStart(5, '0')}`, map: 'gt.recipe.macerator', out: [['t@0', 1]] as Array<[string, number]> })) });
+    // t ← one recipe of 200 inputs, each made from 200 more, each made from nothing: 40,201 recipes, one per good.
+    const ins = (prefix: string): Array<[string, number]> => Array.from({ length: 200 }, (_, i): [string, number] => [`${prefix}_${i}@0`, 1]);
+    const p = packFromSpec({ machines: [M(1, ['gt.recipe.macerator'], 1)], recipes: [
+      { id: 'r', map: 'gt.recipe.macerator', in: ins('w'), out: [['t@0', 1]] },
+      ...ins('w').flatMap(([w], i) => [
+        { id: `r${i}`, map: 'gt.recipe.macerator', in: ins(`w${i}`), out: [[w, 1]] as Array<[string, number]> },
+        ...ins(`w${i}`).map(([leaf], j) => ({ id: `r${i}_${j}`, map: 'gt.recipe.macerator', out: [[leaf, 1]] as Array<[string, number]> }))])] });
     const g = buildCandidates(p, defaultSettings(), env(1), oracle, ['t@0']);
     expect(g.recipes).toHaveLength(MAX_RECIPES);
     expect(g.truncated).toBe(true);
@@ -181,35 +203,5 @@ describe('real-data rules (final review)', () => {
     expect(acceptRecipe(p, p.recipeById.get('back')!, env(1, { excluded: new Set() })).ok).toBe(true);
     expect(acceptRecipe(p, p.recipeById.get('dust')!, env(1)).ok).toBe(true);
     expect(acceptRecipe(p, p.recipeById.get('obsidian')!, env(1, { fromNothing: new Set(['obsidian']) }))).toEqual({ ok: false, why: 'excluded' });
-  });
-  it('with rough costs, walks only the producers that can matter', () => {
-    // t has a cheap recipe, one at 1.4× (kept), one at 3× (dropped), one making it as a 5% byproduct (dropped), and one
-    // that only hands back the container it took (never a producer of the empty container).
-    const p = packFromSpec({ machines: [M(1, ['gt.recipe.assembler'], 1)], recipes: [
-      { id: 'cheap', map: 'gt.recipe.assembler', in: [['a@0', 10]], out: [['t@0', 10]], eut: 2 },
-      { id: 'close', map: 'gt.recipe.assembler', in: [['a@0', 14]], out: [['t@0', 10]], eut: 2 },
-      { id: 'dear', map: 'gt.recipe.assembler', in: [['b@0', 3]], out: [['t@0', 1]], eut: 2 },
-      { id: 'side', map: 'gt.recipe.assembler', in: [['a@0', 1]], out: [['x@0', 1], ['t@0', 1, 0.05]], eut: 2 },
-      { id: 'use-cell', map: 'gt.recipe.assembler', in: [['t@0', 1], ['full@0', 1]], out: [['u@0', 1], ['cell@0', 1]], eut: 2 },
-      { id: 'make-cell', map: 'gt.recipe.assembler', in: [['b@0', 2]], out: [['cell@0', 1]], eut: 2 }] });
-    p.fluidContainers = [{ container: 'full@0', empty: 'cell@0', fluid: 'fluid:f', amount: 1000 }];
-    const prices = new Map([['a@0', 1], ['b@0', 1], ['fluid:f', 0.001]]);
-    const leaf: LeafOracle = (k) => (prices.has(k) ? { buyable: true, cost: prices.get(k)!, leafClass: 'direct' } : { buyable: false, cost: 0, leafClass: null });
-    const all = new Set([...p.items.keys(), ...p.fluids.keys()]);
-    const rough = roughCosts(p, env(1), leaf, all, 'candidates-test');
-    const ids = (target: string, others: string[] = []) => buildCandidates(p, defaultSettings(), env(1), leaf, [target, ...others], { rough }).recipes.map((r) => r.id);
-    // As a target t keeps more choices (3× the cheapest), as an input the usual 1.5×.
-    expect(ids('t@0')).toEqual(['cheap', 'close', 'dear']);
-    expect(ids('u@0')).toEqual(['cheap', 'close', 'use-cell']);
-    expect(ids('cell@0')).toEqual(['make-cell']);
-    expect(buildCandidates(p, defaultSettings(), env(1), leaf, ['t@0']).recipes.map((r) => r.id)).toEqual(['cheap', 'close', 'dear', 'side']);
-  });
-  it('with rough costs, keeps the first listed of equally cheap ore-dictionary options', () => {
-    const p = packFromSpec({ machines: [M(1, ['gt.recipe.assembler'], 1)],
-      recipes: [{ id: 'chest', map: 'gt.recipe.assembler', in: [{ any: [['oak@0', 8], ['acacia@0', 8], ['sacred@0', 8], ['dear@0', 8]] }], out: [['chest@0', 1]], eut: 4 }] });
-    const leaf: LeafOracle = (k) => (k === 'chest@0' ? { buyable: false, cost: 0, leafClass: null } : { buyable: true, cost: k === 'dear@0' ? 5 : 1, leafClass: 'natural' });
-    const rough = roughCosts(p, env(1), leaf, new Set([...p.items.keys()]), 'options-test');
-    const g = buildCandidates(p, defaultSettings(), env(1), leaf, ['chest@0'], { rough });
-    expect(g.recipes.filter((r) => r.kind === 'convert').map((r) => r.id.split(':').at(-1))).toEqual(['oak@0']);
   });
 });
