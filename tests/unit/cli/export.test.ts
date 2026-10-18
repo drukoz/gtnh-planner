@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -63,6 +63,19 @@ describe('npm run export', () => {
     const r = await run('ok');
     expect(r.code).toBe(1);
     expect(r.stdout + r.stderr).toContain('few-maps');
+    expect((await config()).activeExportId).toBe('previous');
+  });
+
+  it('refuses a server folder with a symbolic link out of it before the export copy starts', async () => {
+    const { root, server, run, config } = await setup({ previous: 'previous' });
+    const shared = join(root, 'live-config');
+    await mkdir(shared);
+    await symlink(shared, join(server, 'shared-config'));
+    const r = await run('ok');
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain(`shared-config -> ${shared}`);
+    expect(existsSync(join(root, 'args.txt'))).toBe(false);   // the fake JVM never started
+    expect(existsSync(join(root, '.local', 'export-server'))).toBe(false);
     expect((await config()).activeExportId).toBe('previous');
   });
 

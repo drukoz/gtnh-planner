@@ -1,9 +1,11 @@
 // Copies the server folder to the export clone under `.local/` with APFS clones (`cp -c`, no extra disk space), leaving
 // world data, backups, logs, player files and the looping start scripts behind (export-mod.md §5.1). The server folder
 // is only ever read: every check runs before anything is removed or written, and nothing is written outside the target.
+// `cp -R` copies a symbolic link as a link, so a clone whose links lead outside it is refused and removed before anyone
+// configures or starts it: the export server would read and write the live server's files through such a link.
 
 import { execFile } from 'node:child_process';
-import { mkdir, readdir, readFile, realpath, rm, stat } from 'node:fs/promises';
+import { mkdir, readdir, readFile, readlink, realpath, rm, stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { readLevelName } from './configure.ts';
@@ -21,6 +23,8 @@ export const CLONE_EXCLUDES: readonly string[] = Object.freeze([
 export const CLONE_EXCLUDE_PATTERNS: readonly RegExp[] = Object.freeze([/^World-.*\.zip$/i]);
 
 const APFS_HINT = 'APFS clone failed — keep the repo and the server folder on the same APFS volume';
+/** Links named in a refusal; the rest are counted. */
+const MAX_LINKS_SHOWN = 10;
 
 /** The source is not a server folder, the target is not a safe place for the clone, or `cp -c` failed. */
 export class CloneError extends Error {
@@ -64,6 +68,27 @@ async function isKind(path: string, kind: 'file' | 'folder'): Promise<boolean> {
   return kind === 'file' ? info?.isFile() === true : info?.isDirectory() === true;
 }
 
+/**
+ * The symbolic links below `clone` that may lead outside it, as `path -> target` (path relative to the clone). A link
+ * is safe when its target is relative without a `..` segment (it can only lead further down, through links that are
+ * checked themselves) or when it resolves, following every link, to an existing place inside the clone. Anything
+ * else counts: an absolute target or one with `..` that resolves outside the clone, or that cannot be resolved at
+ * all (dangling or looping), as there is no telling where a write through it would end up.
+ */
+async function linksLeaving(clone: string): Promise<string[]> {
+  const inside = await realpath(clone);
+  const unsafe: string[] = [];
+  for (const entry of await readdir(clone, { recursive: true, withFileTypes: true })) {
+    if (!entry.isSymbolicLink()) continue;
+    const link = join(entry.parentPath, entry.name);
+    const to = await readlink(link);
+    if (!isAbsolute(to) && !to.split(/[/\\]/).includes('..')) continue;
+    const resolved = await realpath(link).catch(() => null);
+    if (resolved === null || !within(inside, resolved)) unsafe.push(`${relative(clone, link)} -> ${to}`);
+  }
+  return unsafe.sort();
+}
+
 /** Excluded names compare without letter case, as on macOS's default (case-insensitive) APFS volumes. */
 function isExcluded(name: string, skipNames: ReadonlySet<string>): boolean {
   return skipNames.has(name.toLowerCase()) || CLONE_EXCLUDE_PATTERNS.some((p) => p.test(name));
@@ -74,7 +99,8 @@ function isExcluded(name: string, skipNames: ReadonlySet<string>): boolean {
  * top-level entry except `CLONE_EXCLUDES`, `CLONE_EXCLUDE_PATTERNS` and the world folder named by the source's
  * `level-name`. Refuses (`CloneError`), before touching anything, a `source` without `mods/` and `server.properties`, a
  * `target` that is not inside `<root>/.local/`, and a `target` that is the source, lies inside it or contains it (also
- * through symbolic links). Relative paths resolve against the working directory.
+ * through symbolic links). After copying it refuses, and removes the clone again, when the clone holds a symbolic
+ * link that may lead outside it (see `linksLeaving`). Relative paths resolve against the working directory.
  */
 export async function cloneServer(opts: { source: string; target: string; root: string }): Promise<CloneResult> {
   const source = resolve(opts.source);
@@ -110,6 +136,18 @@ export async function cloneServer(opts: { source: string; target: string; root: 
       const detail = typeof stderr === 'string' && stderr.trim() !== '' ? stderr.trim() : (err as Error).message;
       throw new CloneError(`cp -c -R ${name} failed: ${detail}\n${APFS_HINT}`, { cause: err });
     }
+  }
+  const unsafe = await linksLeaving(target);
+  if (unsafe.length > 0) {
+    await rm(target, { recursive: true, force: true });   // removes the links themselves, never what they point at
+    const shown = unsafe.slice(0, MAX_LINKS_SHOWN).map((line) => `  ${line}`);
+    if (unsafe.length > MAX_LINKS_SHOWN) shown.push(`  … and ${unsafe.length - MAX_LINKS_SHOWN} more`);
+    throw new CloneError([
+      `refusing to export from ${source}: it holds symbolic links that lead outside the server folder copy, so the `
+        + 'export server would read and write the files they point at (for example the live server\'s config):',
+      ...shown,
+      'Replace them with real files or folders, or with links that stay inside the server folder, and run the export again.',
+    ].join('\n'));
   }
   return { target, copied, skipped };
 }

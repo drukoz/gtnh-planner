@@ -1,9 +1,9 @@
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readlink, rename, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { cloneServer } from '../../../src/server/export/clone.ts';
+import { CloneError, cloneServer } from '../../../src/server/export/clone.ts';
 import { configureClone } from '../../../src/server/export/configure.ts';
 import { makeFakeServer, snapshot } from '../../helpers/fake-server.ts';
 
@@ -84,5 +84,44 @@ describe('cloneServer safety', () => {
     expect(existsSync(join(target, 'MyWorld'))).toBe(false);
     expect(result.skipped).toContain('MyWorld');
     expect(result.copied).toContain('mods');
+  });
+});
+
+describe('cloneServer and symbolic links', () => {
+  it('refuses a server folder whose config folder is a link outside it, removes the clone and changes nothing', async () => {
+    const { root, source, target } = await setup();
+    const shared = join(root, 'live-config');
+    await rename(join(source, 'config'), shared);
+    await symlink(shared, join(source, 'config'));   // cp -R copies it as a link: Forge would rewrite the live files
+    const before = { source: await snapshot(source), shared: await snapshot(shared) };
+    const err = await cloneServer({ source, target, root }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CloneError);
+    expect((err as Error).message).toContain(`config -> ${shared}`);
+    expect((err as Error).message).toMatch(/symbolic links that lead outside/);
+    expect(existsSync(target)).toBe(false);
+    expect(existsSync(join(shared, 'GregTech', 'MachineStats.cfg'))).toBe(true);
+    expect({ source: await snapshot(source), shared: await snapshot(shared) }).toEqual(before);
+  });
+
+  it('refuses a relative link that climbs out of the folder and a dangling link', async () => {
+    const { root, source, target } = await setup();
+    await mkdir(join(root, 'shared-libs'));
+    await symlink('../../shared-libs', join(source, 'libraries', 'shared'));
+    await symlink('/nowhere/at/all', join(source, 'mods', 'gone.jar'));
+    const err = await cloneServer({ source, target, root }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CloneError);
+    expect((err as Error).message).toContain(`${join('libraries', 'shared')} -> ../../shared-libs`);
+    expect((err as Error).message).toContain(`${join('mods', 'gone.jar')} -> /nowhere/at/all`);
+    expect(existsSync(target)).toBe(false);
+  });
+
+  it('keeps links that stay inside the folder', async () => {
+    const { root, source, target } = await setup();
+    await symlink('gregtech-5.09.54.183.jar', join(source, 'mods', 'latest.jar'));
+    await symlink('../../java9args.txt', join(source, 'config', 'GregTech', 'args.txt'));
+    await cloneServer({ source, target, root });
+    expect((await lstat(join(target, 'mods', 'latest.jar'))).isSymbolicLink()).toBe(true);
+    expect(await readlink(join(target, 'config', 'GregTech', 'args.txt'))).toBe('../../java9args.txt');
+    expect(existsSync(join(target, 'config', 'GregTech', 'args.txt'))).toBe(true);
   });
 });

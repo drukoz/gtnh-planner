@@ -13,7 +13,7 @@ You need macOS (the copy uses APFS clones), Node 24, the Java your GTNH 2.9 serv
 
 1. `npm install`
 2. `npm run export -- --server "/path/to/your/GTNH server folder"` — the first time; afterwards just `npm run export`.
-   It builds a small exporter mod, makes a copy-on-write clone of the server folder in `.local/export-server` (no world, backups, logs or player files), starts that copy on 127.0.0.1:25566 with a fresh flat world, writes the export, stops the copy and deletes it. Your live server and world are never touched, and the server can keep running. The first run downloads about 2 GB of build tools into `.local/gradle-home`; an export takes a few minutes.
+   It builds a small exporter mod, makes a copy-on-write clone of the server folder in `.local/export-server` (no world, backups, logs or player files), starts that copy on 127.0.0.1:25566 with a fresh flat world, writes the export, stops the copy and deletes it. Your live server and world are never touched, and the server can keep running; a server folder with symbolic links that lead outside it is refused, because the copy would write through them into your live files. The first run downloads about 2 GB of build tools into `.local/gradle-home`; an export takes a few minutes.
 3. `npm run pack:info` shows what was exported; `npm run pack:info -- --find "Iron Dust"` lists the recipes that make something.
 
 Each export lands in `data/export/<pack version>_<date>/` and becomes the active one only after it passes its checks; a failed or interrupted export leaves the previous one active. Run `npm run export` again after a pack update. Exports stay on your machine (`data/` is git-ignored) — never commit them.
