@@ -20,13 +20,16 @@
     "pack:info": "node --disable-warning=ExperimentalWarning src/server/cli/pack-info.ts",
     "export": "node --disable-warning=ExperimentalWarning src/server/cli/export.ts",
     "set-password": "node --disable-warning=ExperimentalWarning src/server/cli/set-password.ts",
-    "start": "node --disable-warning=ExperimentalWarning src/server/main.ts"
+    "start": "node --disable-warning=ExperimentalWarning src/server/main.ts",
+    "extract-assets": "node --disable-warning=ExperimentalWarning src/server/cli/extract-assets.ts",
+    "import-nei-icons": "node --disable-warning=ExperimentalWarning src/server/cli/import-nei-icons.ts"
   },
   "devDependencies": {
     "@playwright/test": "1.63.0",
     "@types/node": "24.19.1",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
+    "@types/yauzl": "3.4.0",
     "@vitejs/plugin-react": "6.1.1",
     "typescript": "6.0.3",
     "vite": "8.3.2",
@@ -36,6 +39,7 @@
     "elkjs": "0.12.0",
     "highs": "1.15.3",
     "react": "19.3.0",
-    "react-dom": "19.3.0"
+    "react-dom": "19.3.0",
+    "yauzl": "3.4.0"
   }
 }
