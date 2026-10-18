@@ -20,7 +20,7 @@ export interface ExportSpec extends PlainLineArrays {
   omitFiles?: ExportFileKey[];
   /** Appends this many maps `gt.recipe.filler.<n>` (n from 1) after `recipeMaps`. */
   fillerMaps?: number;
-  /** Appended verbatim after the JSON lines of a file, one string per line. */
+  /** Appended verbatim after the JSON lines of a file, one string per line (written files only: `makePack` rejects them). */
   rawLines?: Partial<Record<ExportFileKey, string[]>>;
   countOverrides?: Partial<Record<ExportFileKey, number>>;
   /** `i` is assigned by position. */
@@ -53,22 +53,41 @@ function linesOf(spec: ExportSpec, key: ExportFileKey): readonly unknown[] {
   return spec[key] ?? [];
 }
 
+type ExportLines = { [K in ExportFileKey]?: ExportLineTypes[K][] };
+
+/**
+ * The export `spec` describes: the manifest (counts = lines plus raw lines, or `countOverrides`), the parsed lines of
+ * every file except `omitFiles`, and the raw lines of the files that have some. `exportId` unless `spec.manifest`
+ * names one. Shared by `makeExport` (writes it) and `makePack` (loads it in memory).
+ */
+export function specToFiles(spec: ExportSpec, exportId: string): { manifest: ManifestFile; files: ExportLines; raw: Partial<Record<ExportFileKey, string[]>> } {
+  const omitted = new Set(spec.omitFiles);
+  const files: Partial<Record<ExportFileKey, unknown[]>> = {};
+  const raw: Partial<Record<ExportFileKey, string[]>> = {};
+  const counts: ManifestFile['counts'] = {};
+  for (const key of FILE_KEYS) {
+    if (omitted.has(key)) continue;
+    const lines = [...linesOf(spec, key)];
+    const rawLines = spec.rawLines?.[key] ?? [];
+    files[key] = lines;
+    if (rawLines.length > 0) raw[key] = [...rawLines];
+    counts[key] = lines.length + rawLines.length;
+  }
+  const manifest: ManifestFile = { ...defaultManifest(exportId), ...spec.manifest, counts: { ...counts, ...spec.countOverrides } };
+  return { manifest, files: files as ExportLines, raw };
+}
+
 /**
  * Writes every file of `EXPORT_FILES` except `omitFiles` into `dir` (created if needed), then `manifest.json`
  * (counts = lines written, or `countOverrides`), then the marker. Returns `dir`; `exportId` defaults to its basename.
  */
 export async function makeExport(dir: string, spec: ExportSpec): Promise<string> {
   await mkdir(dir, { recursive: true });
-  const omitted = new Set(spec.omitFiles);
-  const counts: ManifestFile['counts'] = {};
+  const { manifest, files, raw } = specToFiles(spec, basename(dir));
   for (const key of FILE_KEYS) {
-    if (omitted.has(key)) continue;
-    const lines = linesOf(spec, key);
-    const raw = spec.rawLines?.[key] ?? [];
-    await writeJsonlGz(join(dir, EXPORT_FILES[key]), lines, raw);
-    counts[key] = lines.length + raw.length;
+    const lines = files[key];
+    if (lines !== undefined) await writeJsonlGz(join(dir, EXPORT_FILES[key]), lines, raw[key]);
   }
-  const manifest: ManifestFile = { ...defaultManifest(basename(dir)), ...spec.manifest, counts: { ...counts, ...spec.countOverrides } };
   await writeFile(join(dir, EXPORT_FILES.manifest), `${JSON.stringify(manifest, null, 2)}\n`);
   const marker = spec.marker === undefined ? MARKER_OK : spec.marker;
   if (marker !== null) await writeFile(join(dir, marker), MARKER_TEXT[marker]);
