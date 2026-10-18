@@ -1,22 +1,33 @@
 package io.github.drukoz.gtnhplanner.export.textures;
 
+import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.lang.reflect.Array;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.net.JarURLConnection;
+import java.net.URISyntaxException;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.Callable;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 
 import net.minecraft.block.Block;
 import net.minecraft.item.Item;
@@ -32,6 +43,8 @@ import cpw.mods.fml.relauncher.ReflectionHelper;
 import gregtech.api.GregTechAPI;
 import gregtech.api.covers.CoverRegistry;
 import gregtech.api.enums.Materials;
+import gregtech.api.enums.MetaTileEntityIDs;
+import gregtech.api.enums.Mods;
 import gregtech.api.enums.OrePrefixes;
 import gregtech.api.enums.TextureSet;
 import gregtech.api.enums.Textures;
@@ -44,8 +57,12 @@ import gregtech.api.items.MetaGeneratedItemX32;
 import gregtech.api.metatileentity.BaseMetaPipeEntity;
 import gregtech.api.metatileentity.BaseMetaTileEntity;
 import gregtech.api.metatileentity.MetaPipeEntity;
+import gregtech.api.metatileentity.implementations.MTEBasicMachineWithRecipe;
+import gregtech.api.metatileentity.implementations.MTETieredMachineBlock;
 import gregtech.api.objects.GTItemStack;
+import gregtech.api.render.TextureFactory;
 import gregtech.common.fluid.GTFluid;
+import gregtech.common.tileentities.machines.basic.MTEBasicMachineWithRecipeBuilder;
 import io.github.drukoz.gtnhplanner.export.ExportContext;
 import io.github.drukoz.gtnhplanner.export.ExportSection;
 import io.github.drukoz.gtnhplanner.export.Tags;
@@ -82,6 +99,13 @@ public final class TextureExporter implements ExportSection {
     /** {@link #iconTables} value of a class that declares no {@code getIcon}. */
     private static final IconRef[][] NO_TABLE = new IconRef[0][];
 
+    /** What a tiered machine's registration passed to {@code getTextureSet} when it made no textures. */
+    private static final ITexture[] NO_TEXTURES = new ITexture[0];
+    /** The faces, in argument order, of the textures {@code MTEBasicMachineWithRecipe} builds from its overlays. */
+    private static final String[] OVERLAY_FACES = { "SIDE_ACTIVE", "SIDE", "FRONT_ACTIVE", "FRONT", "TOP_ACTIVE", "TOP",
+        "BOTTOM_ACTIVE", "BOTTOM" };
+    private static final int BUFFER = 1 << 13;
+
     private final McTextureEnv env = new McTextureEnv();
 
     // The export in progress: export() sets these afresh, so every export starts with empty caches and stats.
@@ -96,6 +120,14 @@ public final class TextureExporter implements ExportSection {
     private Field prefixList;
     /** The public {@code getCoverTexture()} of the package-private {@code CoverRegistration}. */
     private Method coverTexture;
+    /** The final {@code MTETieredMachineBlock.mTextures}, looked up on first use. */
+    private Field tieredTextures;
+    /** Builder machine id → its overlay folder name ({@link #builderOverlays()}). */
+    private Map<Integer, String> builderOverlays;
+    /** Machines whose texture set {@link #buildTextureSet} built. */
+    private int textureSetsBuilt;
+    /** Builder-made basic machines without known overlays (drawn with their casing only). */
+    private List<Integer> overlaysUnknown;
 
     @Override
     public String name() {
@@ -114,6 +146,8 @@ public final class TextureExporter implements ExportSection {
         stats = new LinkedHashMap<>();
         iconTables = new HashMap<>();
         iconLayers = new HashMap<>();
+        textureSetsBuilt = 0;
+        overlaysUnknown = new ArrayList<>();
         try (JsonWriter writer = ctx.gzipJson(FILE)) {
             w = writer;
             write();
@@ -304,10 +338,12 @@ public final class TextureExporter implements ExportSection {
     /**
      * Every machine id ≥ 1 in a tile entity of its own, outside any world: front on north, inactive and active
      * ({@code active} left out when it equals {@code inactive}); a pipe connected on all sides, inactive only.
-     * A machine that fails is written as {@code {id, cls, error}}.
+     * A machine that fails is written as {@code {id, cls, error}}. A tiered machine gets its texture set first
+     * ({@link #buildTextureSet}).
      */
     private void mte() throws IOException {
         Part part = new Part("mte");
+        builderOverlays = builderOverlays();
         w.name("mte");
         w.beginArray();
         IMetaTileEntity[] all = GregTechAPI.METATILEENTITIES;
@@ -328,6 +364,7 @@ public final class TextureExporter implements ExportSection {
                     inactive = machineFaces(te);
                 } else {
                     BaseMetaTileEntity te = machine(id);
+                    buildTextureSet(te.getMetaTileEntity(), id);
                     te.setActive(false);
                     inactive = machineFaces(te);
                     te.setActive(true);
@@ -362,6 +399,131 @@ public final class TextureExporter implements ExportSection {
         }
         w.endArray();
         part.done();
+        stats.put("mteTextureSets", textureSetsBuilt);
+        stats.put("mteOverlaysUnknown", overlaysUnknown.size());
+        if (!overlaysUnknown.isEmpty()) {
+            List<Integer> first = overlaysUnknown.subList(0, Math.min(LISTED_FAILURES, overlaysUnknown.size()));
+            ctx.warn(
+                "textures mte: " + overlaysUnknown.size()
+                    + " basic machines with recipes have no known builder overlays and show their casing only: "
+                    + first);
+        }
+    }
+
+    /**
+     * A dedicated server never builds a tiered machine's texture set: {@code MTETieredMachineBlock} stores
+     * {@code mTextures} only when {@code GT.isClientSide()} (javap of GT 5.09.54.183), so {@code getTexture} throws.
+     * This builds it on {@code mte}, the tile entity's own copy (never the registered prototype), the way the client
+     * does, from what the registration passed: the builder's overlays for a basic machine with recipes, nothing
+     * otherwise. That is exact for every class whose {@code getTextureSet} ignores its argument (hulls,
+     * transformers, buffers, generators, boilers, steam machines, …); the other basic machines (scanner, pump, crop
+     * machines, …) made their overlays in their own constructor and show their casing only.
+     */
+    private void buildTextureSet(IMetaTileEntity mte, int id) throws ReflectiveOperationException {
+        if (!(mte instanceof MTETieredMachineBlock)) return;
+        MTETieredMachineBlock tiered = (MTETieredMachineBlock) mte;
+        if (tiered.mTextures != null) return;
+        ITexture[] given = NO_TEXTURES;
+        boolean unknown = false;
+        if (mte instanceof MTEBasicMachineWithRecipe) {
+            String overlays = builderOverlays.get(id);
+            if (overlays != null) given = builderTextures(overlays);
+            else unknown = true;
+        }
+        ITexture[][][] set = tiered.getTextureSet(given);
+        if (tieredTextures == null) tieredTextures = accessible(MTETieredMachineBlock.class, "mTextures");
+        tieredTextures.set(tiered, set);
+        textureSetsBuilt++;
+        if (unknown) overlaysUnknown.add(id);
+    }
+
+    /**
+     * The textures {@code MTEBasicMachineWithRecipe(…, String aOverlays, …)} makes from its overlay folder name
+     * (javap of GT 5.09.54.183): per face of {@link #OVERLAY_FACES}, the overlay and its glowing twin.
+     */
+    private static ITexture[] builderTextures(String overlays) {
+        String domain = Mods.GregTech.resourceDomain;
+        String base = "basicmachines/" + overlays.toLowerCase(Locale.ENGLISH) + "/OVERLAY_";
+        ITexture[] out = new ITexture[OVERLAY_FACES.length];
+        for (int i = 0; i < out.length; i++) {
+            String name = base + OVERLAY_FACES[i];
+            out[i] = TextureFactory.of(
+                TextureFactory.of(Textures.BlockIcons.customOptional(domain, name)),
+                TextureFactory.builder()
+                    .addIcon(Textures.BlockIcons.customOptional(domain, name + "_GLOW"))
+                    .glow()
+                    .build());
+        }
+        return out;
+    }
+
+    /**
+     * Builder machine id → overlay folder name, from every class file of the jar that holds GT's machine builder
+     * ({@link BuilderOverlayScanner}); empty, with a warning, when that jar cannot be read.
+     */
+    private Map<Integer, String> builderOverlays() {
+        Map<Integer, String> out = new HashMap<>();
+        try {
+            for (Map.Entry<String, String> e : scanBuilderJar().entrySet()) {
+                MetaTileEntityIDs id;
+                try {
+                    id = MetaTileEntityIDs.valueOf(e.getKey());
+                } catch (IllegalArgumentException notInThisVersion) {
+                    continue;
+                }
+                out.put(id.ID, e.getValue());
+            }
+        } catch (Throwable t) {
+            ctx.warn("textures mte: the builder machines' overlays could not be read, they show their casing only: " + t);
+        }
+        return out;
+    }
+
+    /** {@link BuilderOverlayScanner#scan} over every class file (outside {@code META-INF/}) of the builder's jar. */
+    private static Map<String, String> scanBuilderJar() throws IOException, URISyntaxException {
+        Class<?> builder = MTEBasicMachineWithRecipeBuilder.class;
+        String resource = builder.getName()
+            .replace('.', '/') + ".class";
+        URL url = builder.getClassLoader()
+            .getResource(resource);
+        if (url == null || !"jar".equals(url.getProtocol())) throw new IOException(resource + " is not in a jar: " + url);
+        File jar = new File(((JarURLConnection) url.openConnection()).getJarFileURL()
+            .toURI());
+        byte[] marker = BuilderOverlayScanner.MARKER.getBytes(StandardCharsets.US_ASCII);
+        Map<String, String> out = new LinkedHashMap<>();
+        try (ZipFile zip = new ZipFile(jar)) {
+            for (Enumeration<? extends ZipEntry> entries = zip.entries(); entries.hasMoreElements();) {
+                ZipEntry entry = entries.nextElement();
+                String name = entry.getName();
+                if (!name.endsWith(".class") || name.startsWith("META-INF/")) continue;
+                byte[] bytes = read(zip, entry);
+                if (!contains(bytes, marker)) continue;
+                for (Map.Entry<String, String> e : BuilderOverlayScanner.scan(bytes)
+                    .entrySet()) {
+                    if (!out.containsKey(e.getKey())) out.put(e.getKey(), e.getValue());
+                }
+            }
+        }
+        return out;
+    }
+
+    private static byte[] read(ZipFile zip, ZipEntry entry) throws IOException {
+        try (InputStream in = zip.getInputStream(entry)) {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buffer = new byte[BUFFER];
+            for (int n; (n = in.read(buffer)) != -1;) out.write(buffer, 0, n);
+            return out.toByteArray();
+        }
+    }
+
+    private static boolean contains(byte[] bytes, byte[] part) {
+        outer: for (int i = 0; i + part.length <= bytes.length; i++) {
+            for (int j = 0; j < part.length; j++) {
+                if (bytes[i + j] != part[j]) continue outer;
+            }
+            return true;
+        }
+        return false;
     }
 
     /** A machine tile entity for {@code id} in the canonical orientation (front and main facing north). */
