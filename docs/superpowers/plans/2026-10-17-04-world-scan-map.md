@@ -4,9 +4,9 @@
 
 **Goal:** Read the group's GTNH 2.9 world without ever disturbing the live server (newest complete backup zip, a snapshot copy, or a friend's upload), find bases, machines, power, logistics, storage, visited dimensions and prospected veins, feed that into the planner as a `PlanContext`, and draw it on a block-accurate top-down map with notes.
 
-**Architecture:** A worker thread (`scan.worker.ts`) streams region files out of a zip or folder, skip-parses every chunk for `InhabitedTime` and whitelisted tile entities (never building objects for GT ore TEs), classifies them (`classify/*.ts`), clusters bases, builds power/logistics/storage graphs, copies the region files around bases into `data/scans/<id>/regions/`, and writes `scan.json` + `palette.json`. The main thread only tracks status; map tiles and `readArea` voxels are decoded on demand from the copied regions. The client gets a `map` project tab (canvas `MapView`, overlays, note pins, "Found in world" panel, base picker) and a top-level World page (sources, scans, uploads via folder picker or zip.js).
+**Architecture:** A worker thread (`scan.worker.ts`) streams region files out of a zip or folder, skip-parses every chunk for `InhabitedTime` and whitelisted tile entities (never building objects for GT ore TEs), classifies them (`classify/*.ts`), clusters bases, builds power/logistics/storage graphs, copies the region files around bases into `data/scans/<id>/regions/`, and writes `scan.json` + `palette.json`. The main thread only tracks status; map tiles and `readArea` voxels are decoded on demand from the copied regions. The client gets a `map` project tab (canvas `MapView`, overlays, note pins, "Found in world" panel, base picker) and a top-level World page (sources, scans, uploads). Uploads are smart by default: the browser reads the picked folder or zip (zip.js) with the same NBT/region code the server uses (`src/shared/world/`), finds players, spawn, claimed and inhabited chunks, and sends only `level.dat` plus one trimmed region file per touched region after showing the areas, radius and size; whole-dimension upload stays as an advanced option.
 
-**Tech Stack:** TypeScript 6.0.3 on Node 24 (type stripping, `node:worker_threads`, `node:zlib`), yauzl 3.4.0, React 19 + canvas 2D, @zip.js/zip.js 2.22.1 (browser), vitest 5, Playwright 1.63.
+**Tech Stack:** TypeScript 6.0.3 on Node 24 (type stripping, `node:worker_threads`, `node:zlib`), yauzl 3.4.0, React 19 + canvas 2D, @zip.js/zip.js 2.22.1 and `DecompressionStream` (browser), vitest 5, Playwright 1.63.
 
 **Spec:** `docs/superpowers/specs/2026-10-17-gtnh-planner-design.md` (§3.3b, §3.4, §3.5, §3.7, §5 anti-goals). Contracts: `docs/superpowers/plans/2026-10-17-00-architecture.md` (§2, §5, §6.6, §7, §7.1, §7.2, §9, §10) — authoritative. Facts: `docs/research/world-format.md` (primary), `docs/research/materials-availability.md` §6–§7, `docs/research/gt-mechanics.md` §3.2–§4.4 and §6.4, `docs/research/web-stack.md` §4.2, §4.5, §5.4, §9, `docs/research/textures-icons.md` §5.
 
@@ -21,18 +21,21 @@
 - Directions are ForgeDirection ordinals: 0 down (−y), 1 up (+y), 2 north (−z), 3 south (+z), 4 west (−x), 5 east (+x); connection bit for side `s` is `1 << s`.
 - Units and keys (architecture §5): tiers 0..14 with `V[t] = 8·4^t`; EU/t; ticks (20 t = 1 s); fluids in L; item keys `itemKey(registryName, damage)` (scan storage keys never carry the `#nbt` suffix); fluid keys `fluid:<FluidName>`; dimension = Minecraft dim id, folder `DIM<id>`, Overworld has no prefix; world positions `[x, y, z]` + `dim`.
 - Spec §3.4: every logistics and storage kind is optional; a world with none of them scans fine and yields a valid `PlanContext`. Storage whose contents cannot be read reliably has `contents: null` (found-but-unknown), never a guess.
+- Power figures (spec §3.5 and §7, amended wording): "clear-weather, rain and 24-hour-average figures; a line fits when the average covers it and the buffers cover a rain outage (~8 min)". Reason, gt-mechanics §4.2: an HP solar boiler stays hot through all but ≈1 min of a clear night, while rain stops it after 8,399 ticks (≈7 min) — "size battery buffers for weather, not for the night". So `PowerNetwork.generatorEUt` is `{ clear, rain, average }`, buffers are judged against `RAIN_OUTAGE_SECONDS = 480`, and nothing in this plan reports a day/night pair. (Until the amendment is made, the spec file still says "day and night"; the spec and Plan 5's Global Constraints take this exact line — neither is edited by this plan.)
 - Spec §3.3b / materials-availability §6.2: a dimension is "visited" only by `InhabitedTime > 0` in one of its chunks, a player's `Dimension` / `Spawns` / `ReturnPortals`, a completed BetterQuesting location quest, or team prospecting there — never by region files existing.
 - Drawer reach (world-format §6.6): BFS over the 6 face neighbours from the controller, a position only if `max(|dx|,|dy|,|dz|) ≤ range` and its block is a Storage Drawers networked block; stop the whole search when the drawer count would pass `maxDrawers`. Values come from `config/StorageDrawers.cfg` in the server folder (`range=4`, `maxDrawers=50` in this pack) and fall back to those numbers.
-- All `/api/world/*` routes require the auth cookie (no `public: true`). Upload paths are allow-listed (`level.dat`, `region/r.<int>.<int>.mca`, `DIM<int>/region/r.<int>.<int>.mca`, `world.zip`); limits `level.dat` 32 MiB, region file 128 MiB, `world.zip` 4 GiB, 4,096 files and 8 GiB per upload.
+- All `/api/world/*` routes require the auth cookie (no `public: true`). Upload paths are allow-listed (`level.dat`, `region/r.<int>.<int>.mca`, `DIM<int>/region/r.<int>.<int>.mca`) — there is no zip upload kind; limits `level.dat` 32 MiB, region file 128 MiB, 4,096 files and 8 GiB per upload.
+- Smart upload (spec §3.4, architecture §11.12): "a friend never uploads the whole world … finds where players are and where bases are likely (player positions, spawn, claimed chunks, chunks people have spent time in), and uploads only those chunks … Player files and everything else stay on their computer. The upload shows what it will send (areas and size) before sending, and lets them widen or narrow the radius." The browser reads the picked folder or zip locally and sends only `level.dat` and trimmed region files; `playerdata/`, claim, quest and team files are read in the browser and never sent.
+- Pure parsing code the browser needs (NBT, region headers and trimming, section decode, `level.dat`, the chunk summary, player and claim readers, storage totals) lives in `src/shared/world/`: no `node:*` import, no `Buffer`, decompression injected as `Inflate` (server `node:zlib`, browser `DecompressionStream`); `src/server/world/` re-exports it (architecture §11.12).
 - Commits use a conventional prefix and the message ends with the line `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 
 ## Review Focus
 
-1. **Negative coordinates and negative dimension ids** (`r.-1.-1.mca`, `DIM-1`, chunk `cx = -1`, blocks at `x = -1`, tiles at `tx = -1`): every block, TE, tile and BFS step lands on the right column with floor division, never truncation. Tests: Task 1 "maps negative chunk coordinates", Task 8 "renders a tile at negative tile coordinates", Task 11 "reaches drawers breadth-first within range, through trim, across the x = 0 / x = -1 border", Task 15 "round-trips negative world coordinates".
+1. **Negative coordinates and negative dimension ids** (`r.-1.-1.mca`, `DIM-1`, chunk `cx = -1`, blocks at `x = -1`, tiles at `tx = -1`): every block, TE, tile and BFS step lands on the right column with floor division, never truncation. Tests: Task 1 "maps negative chunk coordinates", Task 8 "renders a tile at negative tile coordinates", Task 11 "reaches drawers breadth-first within range, through trim, across the x = 0 / x = -1 border", Task 15 "round-trips negative world coordinates", Task 17a "selects the square around each hotspot across region borders".
 2. **A backup being written, rotated or deleted while a scan runs** (ServerUtilities writes a new zip every 30 minutes and prunes old ones): only complete zips at least 2 minutes old are offered; if the file vanishes or turns unreadable mid-scan, the scan ends `failed` with a clear message, the partial scan folder is removed, and the server folder is untouched. Tests: Task 2 "skips zips that are too new or truncated", Task 12 "fails with a clear message when the source is gone", Task 13 "fails cleanly when a queued backup disappears".
-3. **Torn or corrupt chunks** (snapshot copied mid-write, truncated upload, bad sector offset): the chunk is skipped and counted, the scan finishes `done` with "N chunks skipped" in its message. Tests: Task 3 "skips a corrupt chunk and keeps the rest of the region", Task 12 "completes with skipped chunks reported".
-4. **Hostile or careless upload paths and sizes** (`../level.dat`, `%2e%2e/`, absolute paths, `Region/` case, `.mca` outside `region/`, a 200 MiB "region", too many files, uploading to a completed upload): 400/413/409, nothing written outside `data/uploads/<uploadId>/`, partial files removed. Tests: Task 2 "upload path %s → %i" table and "enforces size and count limits and leaves no partial file", Task 14 "runs the upload flow and refuses bad paths", Task 17 "refuses an oversized region before uploading anything".
-5. **Worlds without the optional parts, or a pack/world mismatch** (only `level.dat` + one region, no AE2/drawers/routed pipes/claims/VisualProspecting, mIDs the active export does not know, no export at all): the scan still finishes with empty arrays, unknown machines stay on the map as kind `unknown` without a tier, `topTier` ignores them and `contextFromScan` drops them from `ownedMachines`. Tests: Task 4 "keeps unknown mIDs as unknown", Task 12 "scans a minimal upload: level.dat and one region, no side files", Task 14 "builds a valid context from an empty scan" and "builds the context of another base and drops machines the export does not know"; Task 7 "findBase falls back to the anchor chunk after a rescan".
+3. **Torn or corrupt chunks** (snapshot copied mid-write, truncated upload, bad sector offset): the chunk is skipped and counted, the scan finishes `done` with "N chunks skipped" in its message; in the browser, the smart upload skips it while looking for hotspots and leaves it out of the trimmed file. Tests: Task 3 "skips a corrupt chunk and keeps the rest of the region", Task 12 "completes with skipped chunks reported", Task 1 "trimRegion drops a kept chunk whose payload overflows the file", Task 17a "works without player or claim files and skips a corrupt chunk".
+4. **Hostile or careless upload paths and sizes** (`../level.dat`, `%2e%2e/`, absolute paths, `Region/` case, `.mca` outside `region/`, `world.zip` or `playerdata/…`, a 200 MiB "region", too many files, uploading to a completed upload): 400/413/409, nothing written outside `data/uploads/<uploadId>/`, partial files removed. Tests: Task 2 "upload path %s → %i" table and "enforces size and count limits and leaves no partial file", Task 14 "runs the upload flow and refuses bad paths", Task 17 "refuses an oversized region before uploading anything".
+5. **Worlds without the optional parts, or a pack/world mismatch** (only `level.dat` + one region, no AE2/drawers/routed pipes/claims/VisualProspecting, mIDs the active export does not know, no export at all): the scan still finishes with empty arrays, unknown machines stay on the map as kind `unknown` without a tier, `topTier` ignores them and `contextFromScan` drops them from `ownedMachines`. Tests: Task 4 "keeps unknown mIDs as unknown", Task 12 "scans a minimal upload: level.dat and one region, no side files", Task 14 "builds a valid context from an empty scan" and "builds the context of another base and drops machines the export does not know"; Task 7 "findBase falls back to the anchor chunk after a rescan"; Task 17a "works without player or claim files and skips a corrupt chunk" (a single-player folder still gets a smart upload from spawn and inhabited chunks).
 
 ## File map
 
@@ -40,10 +43,12 @@
 |---|---|
 | `src/shared/types/world.ts` | architecture §6.6 types (+ optional fields listed in Task 1) |
 | `src/shared/types/api.ts` (append) | `WorldSourcesResponse`, `WorldScanListItem`, `StartScanRequest`, upload responses |
-| `src/server/world/nbt.ts` | NBT full parse + compound skip-scan primitives |
-| `src/server/world/region.ts` | region header, chunk payload inflate, file name ↔ coordinates |
-| `src/server/world/sections.ts` | per-section decode (legacy / EndlessIDs cascade), biomes |
-| `src/server/world/level-dat.ts` | `level.dat`: separate block/item maps, spawn, mods, chunk managers |
+| `src/shared/world/nbt.ts`, `inflate.ts` | NBT full parse + compound skip-scan primitives; the injected `Inflate` and the helpers that use it |
+| `src/shared/world/region.ts` | region header, chunk payload, file name ↔ coordinates, `trimRegion` |
+| `src/shared/world/sections.ts` | per-section decode (legacy / EndlessIDs cascade), biomes |
+| `src/shared/world/level-dat.ts`, `chunk-summary.ts` | `level.dat` from its NBT root (block/item maps, spawn, mods, chunk managers); `xPos`/`zPos`/`InhabitedTime` skip-scan |
+| `src/shared/world/side-files.ts`, `storage-totals.ts` | player position and claimed-chunk readers; per-item storage totals with `where` and mode-aware reach |
+| `src/server/world/{nbt,region,sections,level-dat}.ts` | re-export the shared modules; `node:zlib` wrappers `readGzipNbt`, `nodeInflate`, `inflateChunk`, `readLevelDat` |
 | `src/server/world/files.ts` | `WorldFiles` interface, folder-backed implementation |
 | `src/server/world/zip.ts` | yauzl-backed `WorldFiles`, newest complete backup |
 | `src/server/world/sources.ts` | sources listing, source resolution (backup / snapshot / upload), upload storage |
@@ -66,20 +71,21 @@
 | `src/server/cli/scan.ts` | `npm run scan` |
 | `src/server/http/routes/world.ts` | architecture §7 world rows (+ cancel) |
 | `src/client/map/*` | `types.ts` (§7.2), `api.ts`, `tile-cache.ts`, `palette.ts`, `render.ts`, `overlays.ts`, `summary.ts`, `FoundPanel.tsx` |
-| `src/client/views/MapView.tsx`, `MapTab.tsx`, `WorldPage.tsx` | map canvas, project `map` tab, World page |
+| `src/client/views/MapView.tsx`, `MapTab.tsx`, `WorldPage.tsx`, `SmartUploadPanel.tsx` | map canvas, project `map` tab, World page, smart-upload preview |
 | `src/client/world/{pick-files,zip-pick,upload}.ts` | choosing world files in the browser and uploading them |
+| `src/client/world/{inflate,smart}.ts` | `DecompressionStream` inflate; hotspots, chunk selection and trimmed-region upload plan |
 | `src/client/views/project-tabs.ts`, `top-pages.ts` (modify) | `map` tab first; `/world` page (Architecture change request 4) |
-| `tests/helpers/{nbt-write,region-write,zip-write,make-world,world-tes,world-facts,sample-world,scan-fixture,serve-routes}.ts` | synthetic fixtures |
+| `tests/helpers/{nbt-write,region-write,zip-write,make-world,world-tes,world-facts,sample-world,scan-fixture,serve-routes,pick-dir}.ts` | synthetic fixtures |
 
 ## What this plan uses from Plans 1–3
 
 - Plan 1: `itemKey`, `fluidKey`, `parseItemKey` (`src/shared/keys.ts`); `TIER_NAMES`, `V`, `tierName` (`src/shared/gt/tiers.ts`); `Pack`, `Machine`, `MachineKind`, `BlockRef`, `DimensionInfo`, `Item` (`src/shared/types/pack.ts`); `AppConfig`, `loadConfig()` (`src/server/config.ts`); `loadPack`, `activeExportDir`.
-- Plan 2: `PlanContext`, `emptyContext()` (`src/shared/types/plan.ts`, `src/server/planner/plan.ts`); `Project`, `ProjectOp`, `Note` (`src/shared/types/project.ts`); `Route`, `Handler`, `RequestContext`, `sendJson`, `readJson` (`src/server/http/router.ts`); `AppContext` (`src/server/app.ts`); `ROUTE_MODULES` (`src/server/http/routes/index.ts`); `app.services.planContext` hook; `ProjectViewProps`, `ProjectTab`, `PROJECT_TABS` (`src/client/views/project-tabs.ts`); the e2e helpers `login` and `createProject` in `tests/e2e/helpers.ts` (Architecture change request 7).
-- Plan 3: `POST /api/assets/blocks {blocks}` → `BlockFaces[]` and `GET /api/assets/file/<path>` for top-face colours; `BlockFaces`, `TextureLayer` (`src/shared/types/assets.ts`). The map works without them (fallback colours).
+- Plan 2: `PlanContext`, `LogisticsMode`, `emptyContext()` (`src/shared/types/plan.ts`, `src/server/planner/plan.ts`); `Project`, `ProjectOp`, `Note` (`src/shared/types/project.ts`); `Route`, `Handler`, `RequestContext`, `sendJson`, `readJson`, `HttpError`, `matchRoute` (`src/server/http/router.ts`); `AppContext` (`src/server/app.ts`); `ROUTE_MODULES` (`src/server/http/routes/index.ts`); `app.services.planContext` hook; `ProjectViewProps`, `ProjectTab`, `PROJECT_TABS` (`src/client/views/project-tabs.ts`); `apiGet`, `apiPost`, `ApiError` (`src/client/api/client.ts`), `getName` (`src/client/state/name.ts`), `NAME_HEADER` (`src/shared/types/api.ts`); the e2e helpers `login(page)`, `setName(page, name)` and `createProject(page, name)` (leaves the page on the new project) in `tests/e2e/helpers.ts` (architecture §11.7).
+- Plan 3: `POST /api/assets/blocks {blocks}` → `BlockFaces[]` for top-face colours; `BlockFaces`, `TextureLayer`, `Rgb` (`src/shared/types/assets.ts`); `LayerPixels`, `compositeLayers` (`src/client/assets/composite.ts`); `loadLayerBitmap` (`src/client/assets/texture-image.ts`, which reads `GET /api/assets/file/<path>`). The map works without them (fallback colours).
 
 ## Tasks (outline)
 
-1. NBT, region, section and `level.dat` decoding (+ shared world types)
+1. NBT, region, section and `level.dat` decoding in `src/shared/world/` (+ shared world types)
 2. World file sources: backup zips, snapshot copy, upload folders
 3. Synthetic world builder and the chunk tile-entity skip-scan
 4. Pack facts and the GregTech classifier (machines, pipes, buffers, boilers, super/quantum chests and tanks)
@@ -96,25 +102,31 @@
 15. Client map core: tiles, palette colours, `MapView`
 16. The `map` project tab: overlays, note pins, "Found in world", base picker
 17. World page: sources, scans, uploads
+17a. Smart upload: hotspots, trimmed regions, radius and size preview (inserted before Task 18, whose end-to-end test uses it)
 18. End-to-end check and README
 
 ---
 
-### Task 1: NBT, region, section and `level.dat` decoding (+ shared world types)
+### Task 1: NBT, region, section and `level.dat` decoding in `src/shared/world/` (+ shared world types)
 
 **Files:**
-- Create: `src/shared/types/world.ts`, `src/server/world/nbt.ts`, `src/server/world/region.ts`, `src/server/world/sections.ts`, `src/server/world/level-dat.ts`
+- Create: `src/shared/types/world.ts`
+- Create (pure — no `node:*`, no `Buffer`; the browser's smart upload reuses them, architecture §11.12): `src/shared/world/nbt.ts`, `src/shared/world/inflate.ts`, `src/shared/world/region.ts`, `src/shared/world/sections.ts`, `src/shared/world/level-dat.ts`, `src/shared/world/chunk-summary.ts`
+- Create (server re-exports + `node:zlib` wrappers): `src/server/world/nbt.ts`, `src/server/world/region.ts`, `src/server/world/sections.ts`, `src/server/world/level-dat.ts`
 - Create: `tests/helpers/nbt-write.ts`, `tests/helpers/region-write.ts`
-- Test: `tests/unit/world/nbt.test.ts`, `tests/unit/world/region.test.ts`, `tests/unit/world/sections.test.ts`, `tests/unit/world/level-dat.test.ts`, `tests/unit/world/tile-codec.test.ts`
+- Test: `tests/unit/world/nbt.test.ts`, `tests/unit/world/region.test.ts`, `tests/unit/world/sections.test.ts`, `tests/unit/world/level-dat.test.ts`, `tests/unit/world/tile-codec.test.ts`, `tests/unit/world/shared-world.test.ts`
 
 **Interfaces:**
 - Consumes: `BlockRef`, `MachineKind` (`src/shared/types/pack.ts`, Plan 1).
 - Produces:
   - `src/shared/types/world.ts`: every architecture §6.6 type verbatim, with these optional additions (Architecture change request 6): `PlacedMachine.{kind?: MachineKind | 'unknown'; tier?: number; name?: string; recipeEUt?: number; coilHeat?: number}`, `PlacedPipe.{kind?: 'cable' | 'fluid' | 'item'; voltageTier?: number; amps?: number; networkId?: string}`, `PowerNetwork.{loadEUt?: number; solarShare?: number}`, `LogisticsNetwork.{parts?: Record<string, number>}`, `StorageBlock.{capacityStacks?: number | null; controller?: [number, number, number]}`, `WorldScan.{logisticsBlocks?: LogisticsBlock[]; warnings?: string[]; skippedChunks?: number}`. New exports: `interface LogisticsBlock { dim: number; pos: [number, number, number]; kind: LogisticsNetwork['kind']; networkId: string | null; connections: number }`, `type BBox = Base['bbox']` (inclusive), `interface Voxels { origin: [number, number, number]; size: [number, number, number]; blocks: Uint32Array; palette: BlockRef[] }` with index `(y·size[2] + z)·size[0] + x` relative to `origin`, `AIR_INDEX = 0`, `UNKNOWN_INDEX = 1`, `UNKNOWN_BLOCK: BlockRef = { id: 'gtnh-planner:unknown', meta: 0 }` (palette entries 0 and 1 of every palette), `TILE_SIZE = 64`, `tileOf(blockCoord: number): number` (`Math.floor(c / 64)`), `encodeMapTile(t: MapTile): Uint8Array` (20,480 bytes: u32 LE palette index × 4096, then u8 height × 4096; column `i = lz·64 + lx`), `decodeMapTile(bytes: Uint8Array, dim: number, tx: number, tz: number): MapTile`.
-  - `nbt.ts`: `TAG` (`as const`, End 0 … LongArray 12); `type NbtValue = number | string | Uint8Array | Int32Array | number[] | NbtValue[] | NbtCompound` (Byte/Short/Int/Long/Float/Double → `number`; ByteArray → `Uint8Array` view without copy; IntArray → `Int32Array`; LongArray → `number[]`); `interface NbtCompound { [key: string]: NbtValue }`; `class NbtError extends Error`; `interface NbtCursor { buf: Uint8Array; view: DataView; pos: number }`; `cursor(buf: Uint8Array, pos?: number): NbtCursor`; `readName(c: NbtCursor): string`; `readPayload(c: NbtCursor, type: number): NbtValue`; `skipPayload(c: NbtCursor, type: number): void`; `parseNbt(buf: Uint8Array): NbtCompound` (root compound, root name ignored); `readGzipNbt(buf: Uint8Array): NbtCompound` (gunzips when the first bytes are `1f 8b`, else raw); small getters `num(v: NbtValue | undefined, fallback = 0): number`, `str(v: NbtValue | undefined): string | null`, `comp(v: NbtValue | undefined): NbtCompound | null`, `list(v: NbtValue | undefined): NbtValue[]`.
-  - `region.ts`: `interface RegionChunkRef { index: number; localX: number; localZ: number; offset: number /* bytes */; sectors: number; timestamp: number }`; `regionChunkRefs(header: Uint8Array): RegionChunkRef[]`; `chunkPayload(region: Uint8Array, ref: RegionChunkRef): { compression: number; data: Uint8Array } | null` (null when length/offset overflow the file); `inflateChunk(p: { compression: number; data: Uint8Array }): Buffer` (2 zlib, 1 gzip, 3 none; throws otherwise); `chunkIndex(cx: number, cz: number): number` (`(cx & 31) + (cz & 31) * 32`); `regionOfChunk(c: number): number` (`c >> 5`); `parseRegionPath(rel: string): { dim: number; rx: number; rz: number } | null`; `regionPathOf(dim: number, rx: number, rz: number): string`.
-  - `sections.ts`: `interface DecodedSection { ids: Uint32Array; meta: Uint16Array }`; `sectionIndex(x: number, y: number, z: number): number`; `isLegacySection(sec: NbtCompound): boolean`; `decodeSection(sec: NbtCompound): DecodedSection`; `biomeAt(level: NbtCompound, x: number, z: number): number` (−1 for null/absent).
-  - `level-dat.ts`: `interface LevelInfo { levelName: string; spawn: [number, number, number]; blockNames: Map<number, string>; itemNames: Map<number, string>; blockIds: Map<string, number>; mods: Record<string, string>; managers: Record<string, string>; warnings: string[] }`; `KNOWN_MANAGERS = { 'endlessids:blockid': '1.7.4', 'endlessids:metadata': '1.7.4', 'endlessids:biome': 'endlessids', 'archaicfix:lighting': '1.0' }`; `readLevelDat(buf: Uint8Array): LevelInfo`.
+  - `src/shared/world/nbt.ts`: `TAG` (`as const`, End 0 … LongArray 12); `type NbtValue = number | string | Uint8Array | Int32Array | number[] | NbtValue[] | NbtCompound` (Byte/Short/Int/Long/Float/Double → `number`; ByteArray → `Uint8Array` view without copy; IntArray → `Int32Array`; LongArray → `number[]`); `interface NbtCompound { [key: string]: NbtValue }`; `class NbtError extends Error`; `interface NbtCursor { buf: Uint8Array; view: DataView; pos: number }`; `cursor(buf: Uint8Array, pos?: number): NbtCursor`; `readName(c: NbtCursor): string`; `readPayload(c: NbtCursor, type: number): NbtValue`; `skipPayload(c: NbtCursor, type: number): void`; `parseNbt(buf: Uint8Array): NbtCompound` (root compound, root name ignored); `isGzip(buf: Uint8Array): boolean` (first bytes `1f 8b`); small getters `num(v: NbtValue | undefined, fallback = 0): number`, `str(v: NbtValue | undefined): string | null`, `comp(v: NbtValue | undefined): NbtCompound | null`, `list(v: NbtValue | undefined): NbtValue[]`.
+  - `src/shared/world/inflate.ts` (decompression is injected, never imported): `type Inflate = (data: Uint8Array, kind: 'zlib' | 'gzip') => Promise<Uint8Array>` (server: `node:zlib`; browser: `DecompressionStream`, Task 17a); `readNbtWith(buf: Uint8Array, inflate: Inflate): Promise<NbtCompound>` (gunzips through `inflate` when `isGzip`, else parses raw); `inflateChunkWith(p: { compression: number; data: Uint8Array }, inflate: Inflate): Promise<Uint8Array>` (2 → `'zlib'`, 1 → `'gzip'`, 3 → the data as is; any other value throws `NbtError`).
+  - `src/shared/world/region.ts`: `REGION_HEADER_BYTES = 8192`, `SECTOR_BYTES = 4096`; `interface RegionChunkRef { index: number; localX: number; localZ: number; offset: number /* bytes */; sectors: number; timestamp: number }`; `regionChunkRefs(header: Uint8Array): RegionChunkRef[]`; `chunkPayload(region: Uint8Array, ref: RegionChunkRef): { compression: number; data: Uint8Array } | null` (null when length/offset overflow the file); `chunkIndex(cx: number, cz: number): number` (`(cx & 31) + (cz & 31) * 32`); `regionOfChunk(c: number): number` (`c >> 5`); `parseRegionPath(rel: string): { dim: number; rx: number; rz: number } | null`; `regionPathOf(dim: number, rx: number, rz: number): string`; `trimRegion(region: Uint8Array, keep: readonly number[]): Uint8Array` — a valid Anvil file holding only the chunks whose `index` is in `keep` and whose `chunkPayload` is not `null`: kept chunks are written in index order from sector 2, each as `u32 BE length (= data.length + 1)`, the compression byte, the data and zero padding to `ceil((data.length + 5) / 4096)` sectors; their location entries point there and their timestamps are copied; every other header entry is 0; indices absent from the file are ignored; `trimRegion(r, [])` is the 8,192-byte header alone.
+  - `src/shared/world/sections.ts`: `interface DecodedSection { ids: Uint32Array; meta: Uint16Array }`; `sectionIndex(x: number, y: number, z: number): number`; `isLegacySection(sec: NbtCompound): boolean`; `decodeSection(sec: NbtCompound): DecodedSection`; `biomeAt(level: NbtCompound, x: number, z: number): number` (−1 for null/absent).
+  - `src/shared/world/level-dat.ts`: `interface LevelInfo { levelName: string; spawn: [number, number, number]; blockNames: Map<number, string>; itemNames: Map<number, string>; blockIds: Map<string, number>; mods: Record<string, string>; managers: Record<string, string>; warnings: string[] }`; `KNOWN_MANAGERS = { 'endlessids:blockid': '1.7.4', 'endlessids:metadata': '1.7.4', 'endlessids:biome': 'endlessids', 'archaicfix:lighting': '1.0' }`; `levelInfoFromNbt(root: NbtCompound): LevelInfo` (the decompressed `level.dat` root).
+  - `src/shared/world/chunk-summary.ts`: `INHABITED_KEEP_TICKS = 72_000` (one hour with a player nearby — Task 7's base rule and Task 17a's smart upload share it); `interface ChunkSummary { cx: number; cz: number; inhabitedTime: number }`; `chunkSummary(nbt: Uint8Array): ChunkSummary` (decompressed chunk bytes; cursor skip-scan of root → `Level` reading `xPos`, `zPos` and `InhabitedTime` (Long → number), skipping `Sections`, `TileEntities`, `Entities` and every other key by length, so no section is decoded; `InhabitedTime` missing → 0; `Level`, `xPos` or `zPos` missing → `NbtError`).
+  - `src/server/world/` (server code keeps importing from here; each file is `export * from` its shared module plus): `nbt.ts` — `readGzipNbt(buf: Uint8Array): NbtCompound` (`gunzipSync` when `isGzip`, else raw) and `nodeInflate: Inflate` (`inflateSync` / `gunzipSync`, as a resolved promise); `region.ts` — `inflateChunk(p: { compression: number; data: Uint8Array }): Buffer` (2 zlib, 1 gzip, 3 none; throws otherwise; synchronous for the scan worker); `sections.ts` — nothing more; `level-dat.ts` — `readLevelDat(buf: Uint8Array): LevelInfo` (`levelInfoFromNbt(readGzipNbt(buf))`).
   - Test helpers: `tests/helpers/nbt-write.ts` — tagged builders `byte, short, int, long (bigint), float, double, str, bytes, ints, longs, list(elemType, items), comp(record)` and `writeNbt(root, name = ''): Buffer`, `parseTag(t: Tag): NbtCompound` (= `parseNbt(writeNbt(t))`, used by classifier tests); `tests/helpers/region-write.ts` — `regionFile(chunks: Array<{ cx: number; cz: number; nbt: Uint8Array; timestamp?: number; compression?: 1 | 2; corrupt?: boolean }>): Buffer` (4 KiB-sector Anvil layout; `corrupt` writes 64 bytes of `0xff` as the payload).
 
 - [ ] **Step 1: Write the failing tests**
@@ -187,27 +199,61 @@ it('round-trips a tile in 20,480 little-endian bytes', () => {
   expect(decodeMapTile(bytes, -1, -1, 2)).toEqual(t);
   expect([tileOf(-1), tileOf(-64), tileOf(-65), tileOf(63)]).toEqual([-1, -1, -2, 0]);
 });
+
+// tests/unit/world/shared-world.test.ts — A, B, C = writeNbt(comp({ Level: comp({ xPos: int(…), zPos: int(…) }) })) for three chunks
+it('keeps src/shared/world free of node modules and Buffer', async () => {
+  for (const f of await readdir('src/shared/world'))
+    expect(await readFile(join('src/shared/world', f), 'utf8')).not.toMatch(/from ['"]node:|\bBuffer\b|\brequire\(/);
+});
+it('decompresses only through the injected inflate', async () => {
+  const raw = writeNbt(comp({ a: int(1) })), calls: string[] = [];
+  const spy: Inflate = (d, kind) => { calls.push(kind); return nodeInflate(d, kind); };
+  expect([await readNbtWith(gzipSync(raw), spy), await readNbtWith(raw, spy)]).toEqual([{ a: 1 }, { a: 1 }]);
+  expect(await inflateChunkWith({ compression: 2, data: deflateSync(raw) }, spy)).toEqual(new Uint8Array(raw));
+  expect(await inflateChunkWith({ compression: 3, data: raw }, spy)).toEqual(new Uint8Array(raw));
+  expect(calls).toEqual(['gzip', 'zlib']);
+  await expect(inflateChunkWith({ compression: 9, data: raw }, spy)).rejects.toThrow(NbtError);
+});
+it('trims a region to the kept chunks with byte-identical payloads', () => {
+  const reg = regionFile([{ cx: 0, cz: 0, nbt: A, timestamp: 5 }, { cx: 3, cz: 1, nbt: B, timestamp: 6 }, { cx: 31, cz: 31, nbt: C, compression: 1, timestamp: 7 }]);
+  const t = trimRegion(reg, [chunkIndex(31, 31), chunkIndex(3, 1), chunkIndex(7, 7)]);   // (7,7) is not in the file
+  const refs = regionChunkRefs(t.subarray(0, REGION_HEADER_BYTES)), before = regionChunkRefs(reg.subarray(0, REGION_HEADER_BYTES));
+  expect(refs.map((r) => [r.index, r.timestamp])).toEqual([[35, 6], [1023, 7]]);
+  for (const r of refs) expect(chunkPayload(t, r)).toEqual(chunkPayload(reg, before.find((b) => b.index === r.index)!));
+  expect([t.length % SECTOR_BYTES, trimRegion(reg, []).length]).toEqual([0, 8192]);
+});
+it('trimRegion drops a kept chunk whose payload overflows the file', () => {
+  const reg = regionFile([{ cx: 0, cz: 0, nbt: A }, { cx: 1, cz: 0, nbt: B, corrupt: true }]);
+  expect(regionChunkRefs(trimRegion(reg, [0, 1]).subarray(0, 8192)).map((r) => r.index)).toEqual([0]);
+});
+it('reads xPos, zPos and InhabitedTime without decoding sections', () => {
+  const chunk = writeNbt(comp({ Level: comp({ Sections: list('compound', [comp({ Y: byte(0), Blocks: bytes(new Uint8Array(4096)) })]),
+    xPos: int(-3), zPos: int(18), InhabitedTime: long(72_000n) }) }));
+  expect(chunkSummary(chunk)).toEqual({ cx: -3, cz: 18, inhabitedTime: 72_000 });
+  expect(chunkSummary(writeNbt(comp({ Level: comp({ xPos: int(0), zPos: int(0) }) }))).inhabitedTime).toBe(0);
+  expect(() => chunkSummary(writeNbt(comp({ Level: comp({ xPos: int(0) }) })))).toThrow(NbtError);
+});
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `npx vitest run --project server tests/unit/world/`
-Expected: FAIL — `Cannot find module '…/src/server/world/nbt.ts'` (and the same for the other new modules).
+Expected: FAIL — `Cannot find module '…/src/server/world/nbt.ts'` (and the same for the other new modules, shared and server).
 
-- [ ] **Step 3: Implement the five modules**
+- [ ] **Step 3: Implement the six shared modules and the four server modules**
 
-`nbt.ts` is an iterative-or-recursive big-endian reader over a `DataView` (strings via `TextDecoder('utf-8')`; every key here is ASCII); `skipPayload` advances by length for arrays/strings and recurses only into lists of compounds/lists. `sections.ts` follows world-format §3.3 and §9 exactly (decide per section by the `Blocks16` key; cascade `Add` → `BlocksB2Hi` → `BlocksB3`, `Data1High` → `Data2`). `readLevelDat` warns once per manager whose version differs from `KNOWN_MANAGERS` and never refuses a world.
+`src/shared/world/nbt.ts` is an iterative-or-recursive big-endian reader over a `DataView` (strings via `TextDecoder('utf-8')`; every key here is ASCII); `skipPayload` advances by length for arrays/strings and recurses only into lists of compounds/lists. `sections.ts` follows world-format §3.3 and §9 exactly (decide per section by the `Blocks16` key; cascade `Add` → `BlocksB2Hi` → `BlocksB3`, `Data1High` → `Data2`). `levelInfoFromNbt` warns once per manager whose version differs from `KNOWN_MANAGERS` and never refuses a world. Shared files use only `Uint8Array`, `DataView` and `TextDecoder`; each `src/server/world/` file starts with `export * from '../../shared/world/<name>.ts'` and adds only its `node:zlib` wrappers.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `npx vitest run --project server tests/unit/world/ && npm run typecheck`
-Expected: PASS (5 files), `tsc -b` exits 0.
+Expected: PASS (6 files), `tsc -b` exits 0.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/shared/types/world.ts src/server/world/nbt.ts src/server/world/region.ts src/server/world/sections.ts src/server/world/level-dat.ts tests/helpers/nbt-write.ts tests/helpers/region-write.ts tests/unit/world/
-git commit -m "feat(world): NBT, region, section and level.dat decoding" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git add src/shared/types/world.ts src/shared/world/ src/server/world/nbt.ts src/server/world/region.ts src/server/world/sections.ts src/server/world/level-dat.ts tests/helpers/nbt-write.ts tests/helpers/region-write.ts tests/unit/world/
+git commit -m "feat(world): shared NBT, region, section and level.dat decoding with server zlib wrappers" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ### Task 2: World file sources: backup zips, snapshot copy, upload folders
@@ -223,7 +269,7 @@ git commit -m "feat(world): NBT, region, section and level.dat decoding" -m "Co-
   - `src/shared/types/api.ts` (append): `interface WorldSourcesResponse { server: boolean; backups: string[] }`, `interface StartScanRequest { source: WorldSource }`, `interface StartScanResponse { scanId: string }`, `interface WorldScanListItem extends ScanStatus { source: WorldSource; levelName: string | null }`, `interface CreateUploadResponse { uploadId: string }`.
   - `files.ts`: `interface WorldEntry { path: string /* world-relative, '/' separators */; size: number }`; `interface WorldFiles { readonly label: string; list(): Promise<WorldEntry[]>; read(rel: string): Promise<Buffer | null>; close(): Promise<void> }`; `isScanPath(rel: string): boolean` — true only for `level.dat`, region files (`parseRegionPath` ≠ null), `playerdata/<name>.dat`, `serverutilities/teams/claimedchunks/<name>.dat`, `gtnhteams/<name>.json`, `betterquesting/QuestProgress/<name>.json`, `data/visualprospecting.dat`; `openDirWorld(root: string, label?: string): Promise<WorldFiles>` (lists only scan paths; `read` of an unlisted path returns `null`).
   - `zip.ts`: `BACKUP_MIN_AGE_MS = 120_000`; `class ZipWorldError extends Error`; `isCompleteZip(path: string): Promise<boolean>`; `listCompleteBackups(backupsDir: string, now?: number): Promise<string[]>` (basenames of `*.zip`, complete and `mtime ≤ now − BACKUP_MIN_AGE_MS`, newest first); `openZipWorld(zipPath: string, label?: string): Promise<WorldFiles>` (world root = directory of the shallowest `level.dat` entry; entries outside it are ignored; one entry inflated at a time).
-  - `sources.ts`: `interface ServerLayout { serverDir: string; worldDir: string; backupsDir: string }`; `serverLayout(serverFolder: string): ServerLayout` (`level-name` from `server.properties`, default `World`; backups in `<serverDir>/backups`); `class SourceError extends Error { status: number }`; `listSources(cfg: AppConfig, now?: number): Promise<WorldSourcesResponse>`; `type ResolvedSource = { kind: 'zip'; path: string; label: string } | { kind: 'snapshot'; worldDir: string; label: string } | { kind: 'dir'; path: string; label: string }`; `resolveSource(cfg: AppConfig, source: WorldSource, now?: number): Promise<ResolvedSource>` (`server` → newest complete backup, else snapshot of the world folder; `backup` → only a name in `listCompleteBackups`; `upload` → a completed upload, `world.zip` inside it opens as a zip); `openResolved(src: ResolvedSource, scanDir: string): Promise<WorldFiles>` (snapshot = every `isScanPath` file cloned with `fs.copyFile(src, dst, fs.constants.COPYFILE_FICLONE)` into `<scanDir>/snapshot/`, then `openDirWorld`); `copyServerSideFiles(serverDir: string, worldId: string | null, scanDir: string): Promise<{ vpDir: string | null; drawersCfg: string | null }>` (clones `visualprospecting/server/<worldId>/DIM*.dat` and `config/StorageDrawers.cfg` into `<scanDir>/side/`); uploads: `UPLOAD_LIMITS = { levelDat: 32 MiB, region: 128 MiB, zip: 4 GiB, files: 4096, total: 8 GiB }`, `type UploadLimits = typeof UPLOAD_LIMITS`, `uploadKind(rel: string): 'level' | 'region' | 'zip' | null`, `isUploadId(s: string): boolean` (`/^[0-9a-f]{32}$/`), `createUpload(dataDir: string, by: string | null): Promise<string>`, `storeUploadFile(dataDir: string, uploadId: string, rel: string, body: Readable, declaredLength: number | null, limits?: UploadLimits): Promise<void>`, `completeUpload(dataDir: string, uploadId: string): Promise<WorldSource>`. Upload layout: `data/uploads/<uploadId>/upload.json` (`{ createdAt, by, complete, files, bytes }`) and the files under `data/uploads/<uploadId>/files/<rel>`, each written to `.<uuid>.part` and renamed on success.
+  - `sources.ts`: `interface ServerLayout { serverDir: string; worldDir: string; backupsDir: string }`; `serverLayout(serverFolder: string): ServerLayout` (`level-name` from `server.properties`, default `World`; backups in `<serverDir>/backups`); `class SourceError extends Error { status: number }`; `listSources(cfg: AppConfig, now?: number): Promise<WorldSourcesResponse>`; `type ResolvedSource = { kind: 'zip'; path: string; label: string } | { kind: 'snapshot'; worldDir: string; label: string } | { kind: 'dir'; path: string; label: string }`; `resolveSource(cfg: AppConfig, source: WorldSource, now?: number): Promise<ResolvedSource>` (`server` → newest complete backup, else snapshot of the world folder; `backup` → only a name in `listCompleteBackups`; `upload` → a completed upload folder, `{ kind: 'dir' }` over `data/uploads/<uploadId>/files/`); `openResolved(src: ResolvedSource, scanDir: string): Promise<WorldFiles>` (snapshot = every `isScanPath` file cloned with `fs.copyFile(src, dst, fs.constants.COPYFILE_FICLONE)` into `<scanDir>/snapshot/`, then `openDirWorld`); `copyServerSideFiles(serverDir: string, worldId: string | null, scanDir: string): Promise<{ vpDir: string | null; drawersCfg: string | null }>` (clones `visualprospecting/server/<worldId>/DIM*.dat` and `config/StorageDrawers.cfg` into `<scanDir>/side/`); uploads: `UPLOAD_LIMITS = { levelDat: 32 MiB, region: 128 MiB, files: 4096, total: 8 GiB }`, `type UploadLimits = typeof UPLOAD_LIMITS`, `uploadKind(rel: string): 'level' | 'region' | null` (no zip kind: a whole `world.zip` carries player files, which never leave the browser — spec §3.4 smart upload, architecture §11.12; a picked zip is read in the browser by Task 17), `isUploadId(s: string): boolean` (`/^[0-9a-f]{32}$/`), `createUpload(dataDir: string, by: string | null): Promise<string>`, `storeUploadFile(dataDir: string, uploadId: string, rel: string, body: Readable, declaredLength: number | null, limits?: UploadLimits): Promise<void>`, `completeUpload(dataDir: string, uploadId: string): Promise<WorldSource>`. Upload layout: `data/uploads/<uploadId>/upload.json` (`{ createdAt, by, complete, files, bytes }`) and the files under `data/uploads/<uploadId>/files/<rel>`, each written to `.<uuid>.part` and renamed on success.
   - `tests/helpers/zip-write.ts`: `zipBuffer(entries: Array<{ name: string; data: Uint8Array }>): Buffer` (method 8 via `deflateRawSync`, CRC via `zlib.crc32`) and `writeZip(path: string, entries, opts?: { truncateBytes?: number; mtime?: Date }): Promise<void>`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -270,7 +316,7 @@ it('snapshot copies never write into the server folder', async () => {
   expect(await treeWithMtimes(srv)).toEqual(before);
 });
 it.each([
-  ['level.dat', 204], ['region/r.0.0.mca', 204], ['DIM-1/region/r.-1.2.mca', 204], ['world.zip', 204],
+  ['level.dat', 204], ['region/r.0.0.mca', 204], ['DIM-1/region/r.-1.2.mca', 204], ['world.zip', 400],
   ['../level.dat', 400], ['/level.dat', 400], ['Region/r.0.0.mca', 400], ['DIM-1/r.0.0.mca', 400], ['region/../level.dat', 400],
   ['region/r.0.0.mca/x', 400], ['playerdata/a.dat', 400], ['region\\r.0.0.mca', 400], ['level.dat\0', 400],
 ])('upload path %s → %i', async (rel, status) => {
@@ -286,7 +332,7 @@ it('enforces size and count limits and leaves no partial file', async () => {
   expect((await readdir(join(dataDir, 'uploads', id, 'files', 'region')).catch(() => []))).toEqual([]);
   // two small files accepted, the third → 413
 });
-it('completes only uploads with level.dat or world.zip; refuses writes after completion', async () => {
+it('completes only uploads with level.dat; refuses writes after completion', async () => {
   await expect(completeUpload(dataDir, empty)).rejects.toMatchObject({ status: 400, message: 'level.dat is missing' });
   expect(await completeUpload(dataDir, withLevel)).toEqual({ kind: 'upload', uploadId: withLevel });
   await expect(storeUploadFile(dataDir, withLevel, 'region/r.0.0.mca', Readable.from([B1]), 1)).rejects.toMatchObject({ status: 409 });
@@ -301,7 +347,7 @@ Expected: FAIL — `Cannot find module '…/src/server/world/zip.ts'`.
 
 - [ ] **Step 3: Implement `files.ts`, `zip.ts`, `sources.ts`, the api types and `zip-write.ts`**
 
-Upload paths are checked with `uploadKind` *before* any filesystem call: exactly `level.dat`, `world.zip`, or `parseRegionPath(rel) !== null` and `rel === regionPathOf(...)` of the parsed values (so no `..`, no backslash, no NUL, no case variants). The byte limit is a counting `Transform` in `pipeline(body, meter, createWriteStream(tmp))`; any error removes the `.part` file. `upload.json` is rewritten with the new file count and byte total after each stored file. Every server-folder access in this file is a read (`readFile`, `readdir`, `stat`, `copyFile` *from* it).
+Upload paths are checked with `uploadKind` *before* any filesystem call: exactly `level.dat`, or `parseRegionPath(rel) !== null` and `rel === regionPathOf(...)` of the parsed values (so no `..`, no backslash, no NUL, no case variants). The byte limit is a counting `Transform` in `pipeline(body, meter, createWriteStream(tmp))`; any error removes the `.part` file. `upload.json` is rewritten with the new file count and byte total after each stored file. Every server-folder access in this file is a read (`readFile`, `readdir`, `stat`, `copyFile` *from* it).
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -399,11 +445,11 @@ git commit -m "feat(world): synthetic world builder and chunk tile-entity skip-s
 **Interfaces:**
 - Consumes: `Pack`, `Machine`, `MachineKind`, `DimensionInfo`, `Item` (Plan 1); `V` (Plan 1 tiers); `fluidKey` (Plan 1 keys); Task 3 (`RawTe`, `ItemCount`, `readStack`).
 - Produces:
-  - `facts.ts`: `type FactMachine = Omit<Machine, 'structure'>`; `interface ScanPackFacts { exportId: string | null; machines: Map<number, FactMachine>; dimensions: DimensionInfo[]; electric: Map<ItemKey, { maxCharge: number; tier: number }> }` (structured-clone safe, passed to the worker); `packFacts(pack: Pack | null): ScanPackFacts` (electric entries from `Item.electric`, Architecture change request 1; empty when absent); `emptyFacts(): ScanPackFacts`.
+  - `facts.ts`: `type FactMachine = Omit<Machine, 'structure'>`; `interface ScanPackFacts { exportId: string | null; machines: Map<number, FactMachine>; dimensions: DimensionInfo[]; electric: Map<ItemKey, { maxCharge: number; tier: number }> }` (structured-clone safe, passed to the worker); `packFacts(pack: Pack | null): ScanPackFacts` (electric entries from `Item.electric`, Architecture change request 1; empty when absent); `emptyFacts(): ScanPackFacts`; `simpleClassName(cls: string | null | undefined): string | null` (the text after the last `.`, the whole string when it has none, `null` for `null`/`undefined`/`''`) — architecture §11.19: `Machine.cls` is the fully qualified Java class name (e.g. `gregtech.common.tileentities.machines.multi.MTEElectricBlastFurnace`), so **every** class check in this plan compares `simpleClassName(cls)`, never the raw `cls`; `ENERGY_HATCH_RE = /Energy/` (tested only as `ENERGY_HATCH_RE.test(simpleClassName(cls) ?? '')` on kind `hatch`; used by Tasks 4, 9 and 14).
   - `model.ts` (add): `interface StorageRec { dim: number; pos: Vec3; kind: StorageBlock['kind']; contents: ItemCount[] | null; capacityStacks?: number | null }`.
-  - `classify/gt.ts`: `interface GtMachineRec { dim: number; pos: Vec3; mteId: number; facing: number; mainFacing?: number; color: number; storedEU: number; works: boolean; kind: MachineKind | 'unknown'; tier: number | null; name: string | null; cls: string | null; multiblock: boolean; recipeEUt: number; running: boolean; boiler?: { runTime: number; temperature: number }; batteries?: Array<{ key: ItemKey; charge: number }>; inventory: Array<ItemCount & { slot: number }> }`; `interface GtPipeRec { dim: number; pos: Vec3; mteId: number; connections: number; pipeKind: 'cable' | 'fluid' | 'item'; color: number; cable?: { voltage: number; amps: number; loss: number }; voltageTier?: number }`; `classifyGtMachine(te: RawTe, facts: ScanPackFacts, itemNames: Map<number, string>): GtMachineRec`; `classifyGtPipe(te: RawTe, facts: ScanPackFacts): GtPipeRec`; `voltageTier(volts: number): number` (smallest `t` with `V[t] ≥ volts`, min 0); `TIER_KINDS: ReadonlySet<MachineKind>` = basic, generator, turbine, battery_buffer, transformer; `countsForTopTier(r: GtMachineRec): boolean` (`TIER_KINDS` or kind `hatch` with `/Energy/` in `cls`; never `unknown`); `toPlacedMachine(r: GtMachineRec, baseId: string | null): PlacedMachine`; `toPlacedPipe(r: GtPipeRec, networkId?: string): PlacedPipe`.
-  - `classify/gtchests.ts`: `GT_CHEST_IDS` = 125–129 and 135–139, `GT_TANK_IDS` = 120–124 and 130–134; `classifyGtStorage(te: RawTe, facts: ScanPackFacts, itemNames: Map<number, string>): StorageRec | null` (chest when the id is in `GT_CHEST_IDS`, the export class is `MTEQuantumChest`/`MTESuperChest`, or the NBT has `mItemCount`; tank when in `GT_TANK_IDS` or class `MTEQuantumTank`/`MTESuperTank`).
-  - `tests/helpers/world-facts.ts`: `testFacts(): ScanPackFacts`, `testPack(): Pack` (a full `Pack` object literal with empty recipe maps) and `packWithout(pack: Pack, mteId: number): Pack`, built from one table — 105 Simple Solar Boiler (`boiler`, cls `MTEBoilerSolar`, steamPerSecondMax 120); 114 High Pressure Solar Boiler (`boiler`, `MTEBoilerSolarSteel`, 360); 1120/1121/1122 Basic/Advanced/Turbo Steam Turbine (`turbine`, tier 1/2/3, voltage 32/128/512, amps 1, `MTESteamTurbine`); 1130 Combustion Generator (`generator`, tier 1, 32 V, 1 A); 161 Battery Buffer 1x1 LV (`battery_buffer`, tier 1, batterySlots 1); 193 Battery Buffer 4x4 HV (tier 3, 16 slots); 21 Transformer MV/LV (`transformer`, tier 1); 1246 1x Tin Cable (`cable`, 32 V, 1 A, loss 1); 1386 1x Annealed Copper Cable (128 V, 1 A, loss 1); 1466 1x Silver Cable (512 V, 1 A, loss 1); 5120 Bronze Fluid Pipe (`fluid_pipe`); 5600 Tin Item Pipe (`item_pipe`); 2001 Basic Macerator (`basic`, tier 1); 2002 Advanced Assembler (`basic`, tier 2); 2003 Chemical Reactor HV (`basic`, tier 3); 1000 Electric Blast Furnace (`multiblock`, `MTEElectricBlastFurnace`, heatOC true); 42 Energy Hatch MV (`hatch`, tier 2, `MTEHatchEnergy`); 125 Quantum Chest LV (`other`, `MTEQuantumChest`); 130 Super Tank I (`other`, `MTESuperTank`). Dimensions: overworld 0, nether −1, theend 1, endasteroid 1, twilightforest 7, moon 28, ross128b 64. Electric: `gregtech:gt.metaitem.01@32539` → `{ maxCharge: 1_600_000, tier: 3 }` (Large Lithium Battery), `gregtech:gt.metaitem.01@32519` → `{ maxCharge: 100_000, tier: 1 }` (Small Lithium Battery). Dimension names: Overworld, Nether, The End, End Asteroids, Twilight Forest, Moon, Ross 128b.
+  - `classify/gt.ts`: `interface GtMachineRec { dim: number; pos: Vec3; mteId: number; facing: number; mainFacing?: number; color: number; storedEU: number; works: boolean; kind: MachineKind | 'unknown'; tier: number | null; name: string | null; cls: string | null; multiblock: boolean; recipeEUt: number; running: boolean; boiler?: { runTime: number; temperature: number }; batteries?: Array<{ key: ItemKey; charge: number }>; inventory: Array<ItemCount & { slot: number }> }`; `interface GtPipeRec { dim: number; pos: Vec3; mteId: number; connections: number; pipeKind: 'cable' | 'fluid' | 'item'; color: number; cable?: { voltage: number; amps: number; loss: number }; voltageTier?: number }`; `classifyGtMachine(te: RawTe, facts: ScanPackFacts, itemNames: Map<number, string>): GtMachineRec`; `classifyGtPipe(te: RawTe, facts: ScanPackFacts): GtPipeRec`; `voltageTier(volts: number): number` (smallest `t` with `V[t] ≥ volts`, min 0); `TIER_KINDS: ReadonlySet<MachineKind>` = basic, generator, turbine, battery_buffer, transformer; `countsForTopTier(r: GtMachineRec): boolean` (`TIER_KINDS`, or kind `hatch` with `ENERGY_HATCH_RE.test(simpleClassName(r.cls) ?? '')`; never `unknown`); `toPlacedMachine(r: GtMachineRec, baseId: string | null): PlacedMachine`; `toPlacedPipe(r: GtPipeRec, networkId?: string): PlacedPipe`.
+  - `classify/gtchests.ts`: `GT_CHEST_IDS` = 125–129 and 135–139, `GT_TANK_IDS` = 120–124 and 130–134; `classifyGtStorage(te: RawTe, facts: ScanPackFacts, itemNames: Map<number, string>): StorageRec | null` (chest when the id is in `GT_CHEST_IDS`, `simpleClassName` of the export class is `MTEQuantumChest`/`MTESuperChest`, or the NBT has `mItemCount`; tank when in `GT_TANK_IDS` or the simple class name is `MTEQuantumTank`/`MTESuperTank`).
+  - `tests/helpers/world-facts.ts`: `testFacts(): ScanPackFacts`, `testPack(): Pack` (a full `Pack` object literal with empty recipe maps) and `packWithout(pack: Pack, mteId: number): Pack`, built from one table, every `cls` **fully qualified** exactly as Plan 1 exports it (Plan 5's fixture does the same) — 105 Simple Solar Boiler (`boiler`, cls `gregtech.common.tileentities.boilers.MTEBoilerSolar`, steamPerSecondMax 120); 114 High Pressure Solar Boiler (`boiler`, `gregtech.common.tileentities.boilers.MTEBoilerSolarSteel`, 360); 100 Small Coal Boiler (`boiler`, `gregtech.common.tileentities.boilers.MTEBoilerBronze`, **no** steamPerSecondMax — Plan 1 writes it only for `MTEBoilerSolar` and its subclass); 1120/1121/1122 Basic/Advanced/Turbo Steam Turbine (`turbine`, tier 1/2/3, voltage 32/128/512, amps 1, `gregtech.common.tileentities.generators.MTESteamTurbine`); 1130 Combustion Generator (`generator`, tier 1, 32 V, 1 A); 161 Battery Buffer 1x1 LV (`battery_buffer`, tier 1, batterySlots 1); 193 Battery Buffer 4x4 HV (tier 3, 16 slots); 21 Transformer MV/LV (`transformer`, tier 1); 1246 1x Tin Cable (`cable`, 32 V, 1 A, loss 1); 1386 1x Annealed Copper Cable (128 V, 1 A, loss 1); 1466 1x Silver Cable (512 V, 1 A, loss 1); 5120 Bronze Fluid Pipe (`fluid_pipe`); 5600 Tin Item Pipe (`item_pipe`); 2001 Basic Macerator (`basic`, tier 1); 2002 Advanced Assembler (`basic`, tier 2); 2003 Chemical Reactor HV (`basic`, tier 3); 1000 Electric Blast Furnace (`multiblock`, `gregtech.common.tileentities.machines.multi.MTEElectricBlastFurnace`, heatOC true); 42 Energy Hatch MV (`hatch`, tier 2, `gregtech.api.metatileentity.implementations.MTEHatchEnergy`); 125 Quantum Chest LV (`other`, `gregtech.common.tileentities.storage.MTEQuantumChest`); 130 Super Tank I (`other`, `gregtech.common.tileentities.storage.MTESuperTank`). Dimensions: overworld 0, nether −1, theend 1, endasteroid 1, twilightforest 7, moon 28, ross128b 64. Electric: `gregtech:gt.metaitem.01@32539` → `{ maxCharge: 1_600_000, tier: 3 }` (Large Lithium Battery), `gregtech:gt.metaitem.01@32519` → `{ maxCharge: 100_000, tier: 1 }` (Small Lithium Battery). Dimension names: Overworld, Nether, The End, End Asteroids, Twilight Forest, Moon, Ross 128b.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -453,6 +499,13 @@ it('reads a super tank', () => {
 });
 it('ignores machines that are not GT storage', () => expect(classifyGtStorage(raw(gtMachine({ pos: P, mID: 2002 })), facts, itemNames)).toBeNull());
 it('voltageTier maps volts to the smallest covering tier', () => expect([8, 32, 33, 128, 512].map(voltageTier)).toEqual([0, 1, 2, 2, 3]));
+it('compares class simple names, never the fully qualified cls', () => {
+  expect([simpleClassName('gregtech.common.tileentities.boilers.MTEBoilerSolar'), simpleClassName('MTEBoilerSolar'), simpleClassName(null), simpleClassName('')])
+    .toEqual(['MTEBoilerSolar', 'MTEBoilerSolar', null, null]);
+  expect(countsForTopTier(classifyGtMachine(raw(gtMachine({ pos: P, mID: 42 })), facts, itemNames))).toBe(true);   // cls ...implementations.MTEHatchEnergy
+  const moved = { ...facts, machines: new Map([...facts.machines, [9125, { ...facts.machines.get(125)!, mteId: 9125 }]]) };   // quantum chest class outside GT_CHEST_IDS
+  expect(classifyGtStorage(raw(gtMachine({ pos: P, mID: 9125, extra: { mItemStack: stack(265, 1) } })), moved, itemNames)!.kind).toBe('gt_chest');
+});
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -641,9 +694,9 @@ git commit -m "feat(world): classify routed pipes, conduits and AE2 blocks" -m "
 - Test: `tests/unit/world/bases.test.ts`, `tests/unit/world/dims.test.ts`, `tests/unit/world/prospecting.test.ts`
 
 **Interfaces:**
-- Consumes: Task 1 (`readGzipNbt`, getters), Task 3 (`ChunkStat`, `Vec3`, `makeWorld` side files), Task 4 (`ScanPackFacts.dimensions`), `Base`, `DimSummary`, `WorldScan` (Task 1).
+- Consumes: Task 1 (`readGzipNbt`, getters, `INHABITED_KEEP_TICKS`), Task 3 (`ChunkStat`, `Vec3`, `makeWorld` side files), Task 4 (`ScanPackFacts.dimensions`), `Base`, `DimSummary`, `WorldScan` (Task 1).
 - Produces:
-  - `bases.ts`: `interface BaseSignal { dim: number; pos: Vec3; seed: boolean; machine: boolean; tier: number | null }` (seeds = every classified record except vanilla `Chest`; `machine` = GT machine; `tier` only when `countsForTopTier`); `interface BaseHints { claims: Array<{ team: string; dim: number; cx: number; cz: number }>; beds: Array<{ dim: number; x: number; z: number }> }`; `LINK_CHUNKS = 3`, `MIN_SEEDS = 4`, `INHABITED_KEEP_TICKS = 72_000`; `findBases(signals: BaseSignal[], chunks: ChunkStat[], hints: BaseHints, dimName: (dim: number) => string): Base[]`; `baseAt(bases: Base[], dim: number, pos: Vec3): Base | null`. In `src/shared/types/world.ts`: `baseIdOf(dim: number, cx: number, cz: number): string` (`"dim:cx:cz"`) and `findBase(scan: Pick<WorldScan, 'bases'>, baseId: string | null): Base | null`.
+  - `bases.ts`: `interface BaseSignal { dim: number; pos: Vec3; seed: boolean; machine: boolean; tier: number | null }` (seeds = every classified record except vanilla `Chest`; `machine` = GT machine; `tier` only when `countsForTopTier`); `interface BaseHints { claims: Array<{ team: string; dim: number; cx: number; cz: number }>; beds: Array<{ dim: number; x: number; z: number }> }`; `LINK_CHUNKS = 3`, `MIN_SEEDS = 4`, `INHABITED_KEEP_TICKS` (72,000 — re-exported from `src/shared/world/chunk-summary.ts`, Task 1, so the browser's smart upload keeps the same chunks a base needs); `findBases(signals: BaseSignal[], chunks: ChunkStat[], hints: BaseHints, dimName: (dim: number) => string): Base[]`; `baseAt(bases: Base[], dim: number, pos: Vec3): Base | null`. In `src/shared/types/world.ts`: `baseIdOf(dim: number, cx: number, cz: number): string` (`"dim:cx:cz"`) and `findBase(scan: Pick<WorldScan, 'bases'>, baseId: string | null): Base | null`.
   - Clustering rule (the plan's decision; spec §8 leaves it to the builder): per dimension, chunks holding ≥ 1 seed are linked when their Chebyshev chunk distance ≤ `LINK_CHUNKS`; a cluster is kept when it has ≥ `MIN_SEEDS` seeds, or a chunk with `InhabitedTime ≥ INHABITED_KEEP_TICKS`, or a claimed chunk or bed spawn inside its chunk bounds. `bbox` covers every signal (seed or not) inside those chunk bounds; `center` = floor of the bbox midpoint; `machineCount` = GT machines in it; `topTier` = highest `tier`, 0 when none. **Stable id** = `baseIdOf` of the cluster chunk with the highest `InhabitedTime` (ties: more seeds, then lower `cx`, then lower `cz`) — inhabited time only grows, so the id survives rescans. `findBase` falls back to the base of the same dimension whose bbox contains that anchor chunk's centre. **Name** = `"<team> base (x, z)"` when a team's claim overlaps, else `"<dimension name> base (x, z)"` with `x, z` = centre. Bases are sorted by `machineCount` descending, then id.
   - `dims.ts`: `LOCATION_QUESTS = { 479: { dim: -1, name: 'THE NETHER' }, 225: { dim: 7, name: 'Searching for Answers' }, 986: { dim: 1, name: 'Is This the End?' }, 1072: { dim: 28, name: 'Moon Arrival' }, 2311: { dim: 64, name: 'Ross128b Trip' }, 2634: { dim: 227, name: 'A Vision of the Future' } }` (questIDHigh 0); `interface VisitHint { dim: number; why: string }`; `playerHints(player: NbtCompound): { visits: VisitHint[]; beds: BaseHints['beds'] }` (`Dimension` → `player location`, `Spawns[].Dim` → `bed spawn`, `ForgeData.PlayerPersisted.ReturnPortals[].FromDim/ToDim` → `portal use`; beds from `Spawns[].SpawnX/SpawnZ`); `questVisits(progress: unknown): VisitHint[]` (BetterQuesting JSON with `:<type>` key suffixes; lists may be arrays or `"<i>:10"`-keyed objects; a quest counts when its `completed` has ≥ 1 entry); `claimHints(team: string, claims: NbtCompound): BaseHints['claims']` (`ClaimedChunks: { "<dim>": [{ x, z }] }`); `dimSummaries(chunks: ChunkStat[], hints: VisitHint[], dims: DimensionInfo[]): DimSummary[]` (one entry per dim that has chunks or hints, sorted by dim id; `keys` = every `DimensionInfo.key` with that id; `name` = first such info's name, else `Overworld` for 0, else `DIM<id>`; `visitEvidence` = `inhabited chunks: <n>` when n > 0, then each distinct `why` with ` (×<count>)` when repeated); `visitedKeys(s: DimSummary[]): string[]` (all keys of visited dims, in dim order). Evidence strings never contain player names or UUIDs.
   - `prospecting.ts`: `interface VpVein { dim: number; chunkX: number; chunkZ: number; vein: string; depleted: boolean }`; `vpWorldId(visualprospectingDat: Uint8Array): string | null` (first String under `data` matching `/_[0-9a-f-]{36}$/`); `readVpDimension(buf: Uint8Array): VpVein[]` (gzip NBT version 3; `chunkX`/`chunkZ`/`veinTypeIndex` as IntArray or List<Int>, `depleted` ByteArray); `interface TeamDiscoveries { dim: number; veins: Array<[number, number]>; depleted: Array<[number, number]> }`; `teamBlobOf(json: unknown): string | null` (`TeamData.visualprospecting.blob`); `decodeTeamBlob(b64: string): TeamDiscoveries[]` (gzip, big-endian `int nDims; { int dim; LongSet veins; LongSet fluidFields; LongSet depleted }`, key = `chunkX << 32 | chunkZ & 0xffffffff`); `joinDiscoveries(cache: VpVein[], teams: TeamDiscoveries[][]): { prospected: WorldScan['prospected']; unmatched: number }` (block coordinates of the vein chunk centre `x = chunkX·16 + 8`, `z = chunkZ·16 + 8`; de-duplicated across teams; sorted by dim, x, z).
@@ -820,20 +873,20 @@ git commit -m "feat(world): block reader, voxel areas and map tiles" -m "Co-Auth
 - Test: `tests/unit/world/power.test.ts`
 
 **Interfaces:**
-- Consumes: Task 3 (`Vec3`, `posKey`, `DIRS`, `OPPOSITE`, `step`), Task 4 (`GtMachineRec`, `GtPipeRec`, `ScanPackFacts`, `voltageTier`), `V` (Plan 1), `PowerNetwork`, `TapPoint` (Task 1).
+- Consumes: Task 3 (`Vec3`, `posKey`, `DIRS`, `OPPOSITE`, `step`), Task 4 (`GtMachineRec`, `GtPipeRec`, `ScanPackFacts`, `voltageTier`, `simpleClassName`, `ENERGY_HATCH_RE`), `V` (Plan 1), `PowerNetwork`, `TapPoint` (Task 1).
 - Produces:
   - `graph.ts` (shared with Task 10): `class UnionFind { find(k: string): string; union(a: string, b: string): void; groups(): Map<string, string[]> }`; `comparePos(a: Vec3, b: Vec3): number` (x, then y, then z, numeric); `smallestPos(ps: Vec3[]): Vec3`; `majority(ids: Array<string | null>): string | null` (most common non-null, ties → smallest string); `pickTaps(cands: Vec3[], max: number): Vec3[]` (one per 16×16×16 cell, the smallest position of each cell, sorted with `comparePos`, first `max`).
-  - Constants (gt-mechanics §4.2; weather timing is vanilla 1.7.10 `World.updateWeatherBody` — rain lasts 12,000–23,999 ticks, clear spells 12,000–179,999, see open risks): `SOLAR_BOILERS = { MTEBoilerSolar: { max: 120, min: 40, calcTicks: 1_080_000, hotFraction: 16_843 / 24_000 }, MTEBoilerSolarSteel: { max: 360, min: 120, calcTicks: 1_080_000, hotFraction: 22_577 / 24_000 } }` (also matched by mteId 105 / 114 when the export has no class); `WEATHER = { meanRainTicks: 18_000, meanClearTicks: 96_000, solarRainHoldTicks: 8_399 }`; `RAIN_OUTAGE_SECONDS = 480`; `RAIN_OUTAGE_FRACTION = 9_601 / 114_000`; `ENERGY_HATCH_RE = /Energy/`; `HATCH_LINK_RANGE = 8`; `MAX_TAPS_PER_NETWORK = 12`.
+  - Constants (gt-mechanics §4.2; weather timing is vanilla 1.7.10 `World.updateWeatherBody` — rain lasts 12,000–23,999 ticks, clear spells 12,000–179,999, see open risks): `SOLAR_BOILERS = { MTEBoilerSolar: { max: 120, min: 40, calcTicks: 1_080_000, hotFraction: 16_843 / 24_000 }, MTEBoilerSolarSteel: { max: 360, min: 120, calcTicks: 1_080_000, hotFraction: 22_577 / 24_000 } }`; `solarBoilerOf(m: Pick<GtMachineRec, 'mteId' | 'cls'>): (typeof SOLAR_BOILERS)[keyof typeof SOLAR_BOILERS] | null` (`SOLAR_BOILERS[simpleClassName(m.cls)]` — architecture §11.19, `cls` is fully qualified; only when `m.cls` is `null` does mteId 105 → `MTEBoilerSolar` / 114 → `MTEBoilerSolarSteel` apply; a known class that is not a solar boiler gives `null` whatever the id); `WEATHER = { meanRainTicks: 18_000, meanClearTicks: 96_000, solarRainHoldTicks: 8_399 }`; `RAIN_OUTAGE_SECONDS = 480`; `RAIN_OUTAGE_FRACTION = 9_601 / 114_000`; `HATCH_LINK_RANGE = 8`; `MAX_TAPS_PER_NETWORK = 12` (`ENERGY_HATCH_RE` comes from Task 4's `facts.ts`).
   - `solarOutput(b: { max: number; min: number; calcTicks: number }, runTime: number): number` (L/s: `max` while `runTime ≤ calcTicks`; then `max − Math.floor(max·(runTime − calcTicks)/calcTicks)` but never below `min`); `turbineSteamForFull(tier: number): number` (`(V[t] + 2^max(0, t−1)) × (6 + t) × 20 / 3` L/s, one division last); `turbineEUt(tier: number, steamLps: number): number` (`min(V[t], steam × 3 × V[t] / (20 × (6 + t) × (V[t] + 2^max(0, t−1))))`, one division, so a full turbine gives exactly `V[t]`).
-  - `interface PowerInput { machines: GtMachineRec[]; pipes: GtPipeRec[]; facts: ScanPackFacts; baseOf: (dim: number, pos: Vec3) => string | null; occupied: (dim: number, pos: Vec3) => boolean }`; `interface PowerResult { networks: PowerNetwork[]; cableNetwork: Map<string, string> /* posKey → network id */; cableTier: Map<string, number> /* posKey → voltage tier on that cable */ }`; `buildPower(input: PowerInput): PowerResult`.
+  - `interface PowerInput { machines: GtMachineRec[]; pipes: GtPipeRec[]; facts: ScanPackFacts; baseOf: (dim: number, pos: Vec3) => string | null; occupied: (dim: number, pos: Vec3) => boolean }`; `interface PowerResult { networks: PowerNetwork[]; cableNetwork: Map<string, string> /* posKey → network id */; cableTier: Map<string, number> /* posKey → voltage tier on that cable */; unknownBoilers: number /* boilers whose steam output the export does not give (rule 5) */ }`; `buildPower(input: PowerInput): PowerResult`.
   - Model (the plan's decisions; each is pinned by a test below):
     1. Cable sub-networks: union-find over `pipeKind: 'cable'`; adjacent cables join when either has the bit toward the other. A cable whose bit points at an adjacent GT machine attaches that machine.
     2. Emitter outputs: turbines, `generator`s and battery buffers output on their front (`facing`); transformers on the 5 non-front faces when `works` (step-down, output tier `t`), else on the front (step-up, output tier `t + 1`). An emitter output face touching another GT machine directly attaches both.
     3. A power network is the union of sub-networks and machines through shared machines (energy flows through buffers and transformers). Id = `p:<dim>:<x>:<y>:<z>` of its smallest node position (x, then y, then z); `baseId` = most common `baseOf` among nodes (ties → smallest id), else `null`. Networks with no generator, buffer or consumer are dropped.
     4. Steam: union-find over `fluid` pipes (bits), a boiler joins through the block in front of it, a turbine through any fluid pipe whose bit points at it (or a boiler front touching it). Per steam component, supply per figure is shared among its turbines in proportion to `turbineSteamForFull`, capped at full; each turbine's EU/t counts toward its own power network.
-    5. Figures per solar boiler: `clear = solarOutput(rt) × hotFraction`, `rain = 0`, `average = clear × (1 − RAIN_OUTAGE_FRACTION)`. Other boilers: `steamPerSecondMax` in all three. Non-steam `generator`s: `V[tier] × (amps ?? 1)` in all three (assumed fuelled).
+    5. Figures per solar boiler (`solarBoilerOf(m) !== null`): `clear = solarOutput(rt) × hotFraction`, `rain = 0`, `average = clear × (1 − RAIN_OUTAGE_FRACTION)`. Other boilers (kind `boiler`, not solar): the export's `steamPerSecondMax` in all three when it is present; when it is missing (Plan 1 writes it only for `MTEBoilerSolar` and its subclass; architecture §11.19: missing = unknown, not zero) the boiler adds **no** steam to any figure — never `?? 0` arithmetic that could read as a measured 0, never `NaN` — and is counted once in `PowerResult.unknownBoilers` (Task 12 turns the count into a `WorldScan.warnings` line). Non-steam `generator`s: `V[tier] × (amps ?? 1)` in all three (assumed fuelled).
     6. `voltageTier` = highest emitter output tier, else highest cable rating tier. `storedEU` = Σ buffers (`storedEU` + battery charges); `capacityEU` = Σ buffers (`V[t]·64·batterySlots` + `maxCharge` of batteries known in `facts.electric`).
-    7. `consumersMaxEUt` = Σ basic machines `V[tier]` + Σ energy hatches (`kind: 'hatch'`, class matching `ENERGY_HATCH_RE`) `2 × V[tier]`; `loadEUt` = Σ running basic machines' `recipeEUt` + for each running multiblock controller its `recipeEUt`, counted once at the nearest energy hatch within `HATCH_LINK_RANGE` (Chebyshev); `solarShare` = solar part of `clear`.
+    7. `consumersMaxEUt` = Σ basic machines `V[tier]` + Σ energy hatches (`kind: 'hatch'` with `ENERGY_HATCH_RE.test(simpleClassName(cls) ?? '')`) `2 × V[tier]`; `loadEUt` = Σ running basic machines' `recipeEUt` + for each running multiblock controller its `recipeEUt`, counted once at the nearest energy hatch within `HATCH_LINK_RANGE` (Chebyshev); `solarShare` = solar part of `clear`.
     8. Taps: cables with at least one side whose bit is unset and whose neighbour is not `occupied`; one per 16×16×16 cell (smallest `posKey`), at most `MAX_TAPS_PER_NETWORK`, sorted by position; `voltageTier` = that cable's tier from `cableTier`; `freeAmps = min(cable amps, max(0, floor((average − loadEUt) / V[tier])))`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -883,6 +936,21 @@ it('a step-up transformer outputs one tier higher on its front', () => {
   const r = buildPower(input([m(1130, [0, 64, 0], { facing: 5 }), m(21, [1, 64, 0], { facing: 5, works: false }), m(2002, [3, 64, 0], {})],
                              [c(1386, [2, 64, 0], 16 | 32, 'cable')]));
   expect([r.cableTier.get(posKey(0, 2, 64, 0)), r.networks[0].voltageTier, r.networks.length]).toEqual([2, 2, 1]);
+});
+it('finds solar boilers by class simple name; mteId 105/114 only without a class', () => {
+  const HP = 'gregtech.common.tileentities.boilers.MTEBoilerSolarSteel';
+  expect(solarBoilerOf({ mteId: 9114, cls: HP })).toBe(SOLAR_BOILERS.MTEBoilerSolarSteel);
+  expect(solarBoilerOf({ mteId: 105, cls: null })).toBe(SOLAR_BOILERS.MTEBoilerSolar);
+  expect(solarBoilerOf({ mteId: 114, cls: 'gregtech.common.tileentities.boilers.MTEBoilerBronze' })).toBeNull();
+});
+it('a boiler without steamPerSecondMax adds no steam (not 0 L/s, not NaN) and is counted as unknown', () => {
+  // HP boiler 114 at (0,64,0) facing east and coal boiler 100 at (1,64,1) facing north both front onto fluid pipe 5120 at (1,64,0) (bits W|S|E),
+  // which feeds LV turbine 1120 at (2,64,0) facing east → tin cable 1246 at (3,64,0) (W|E) → LV macerator 2001 at (4,64,0)
+  const r = buildPower(input([m(114, [0, 64, 0], { facing: 5 }), m(100, [1, 64, 1], { facing: 2 }), m(1120, [2, 64, 0], { facing: 5 }), m(2001, [4, 64, 0], {})],
+                             [c(5120, [1, 64, 0], 16 | 8 | 32, 'fluid'), c(1246, [3, 64, 0], 16 | 32, 'cable')]));
+  expect(r.unknownBoilers).toBe(1);
+  expect(Object.values(r.networks[0].generatorEUt).every(Number.isFinite)).toBe(true);
+  expect(r.networks[0].generatorEUt.clear).toBeCloseTo(7.037, 3);   // the same as the HP boiler alone
 });
 it('returns no networks for a world without power', () => expect(buildPower(input([], [])).networks).toEqual([]));
 it('rain outage constants', () => { expect(RAIN_OUTAGE_SECONDS).toBe(480); expect(RAIN_OUTAGE_FRACTION).toBeCloseTo(0.08422, 5); });
@@ -986,16 +1054,16 @@ git commit -m "feat(world): routed, conduit, GT pipe and AE2 logistics networks"
 ### Task 11: Storage: drawer reach, reachable flag, per-base totals
 
 **Files:**
-- Create: `src/server/world/storage.ts`
+- Create: `src/server/world/storage.ts`, `src/shared/world/storage-totals.ts` (pure: no `node:*`, no `Buffer` — Task 14 uses it on the server, Task 16 in the browser, so the Map tab and the materials list show the same numbers)
 - Test: `tests/unit/world/storage.test.ts`
 
 **Interfaces:**
-- Consumes: Task 4 (`StorageRec`), Task 5 (`DrawerConfig`, `isNetworkedDrawerBlock`, `countsAsDrawer`), Task 6 (`Ae2Rec`), Task 8 (`BlockReader`), Task 10 (`Attachments`), `StorageBlock`, `LogisticsNetwork` (Task 1).
+- Consumes: Task 4 (`StorageRec`), Task 5 (`DrawerConfig`, `isNetworkedDrawerBlock`, `countsAsDrawer`), Task 6 (`Ae2Rec`), Task 8 (`BlockReader`), Task 10 (`Attachments`), `StorageBlock`, `LogisticsNetwork` (Task 1), `LogisticsMode` (Plan 2 `src/shared/types/plan.ts`).
 - Produces:
-  - `REQUEST_KINDS: ReadonlySet<LogisticsNetwork['kind']>` = `routed`, `ae2` — the networks a line can order arbitrary items from; enderio and GT pipe networks only move items point to point, so storage on them is "found" but not "reachable" (spec §3.4 "flags what the line's chosen logistics can reach automatically").
+  - `src/shared/world/storage-totals.ts`: `REQUEST_KINDS: ReadonlySet<LogisticsNetwork['kind']>` = `routed`, `ae2` — the networks a line can order arbitrary items from; enderio and GT pipe networks only move items point to point, so storage on them is "found" but not "reachable" (spec §3.4 "flags what the line's chosen logistics can reach automatically"); `reachKinds(mode: LogisticsMode | undefined): ReadonlySet<LogisticsNetwork['kind']>` (`'routed'` → {routed}; `'ae2'` → {ae2}; `'direct'` or `undefined` → `REQUEST_KINDS`); `interface StorageWhere { kind: StorageBlock['kind']; pos: [number, number, number]; count: number; reachable: boolean }`; `interface StorageTotal { total: number; reachable: number; where: StorageWhere[] }`; `storageTotals` (below). `storage.ts` imports `REQUEST_KINDS` from here for its network preference.
   - `drawerReach(reader: BlockReader, blockNames: Map<number, string>, dim: number, controller: Vec3, cfg: DrawerConfig): Promise<{ drawers: Vec3[]; members: Vec3[] }>` — world-format §6.6: FIFO queue from the controller; dequeue a position, skip if seen, skip if `max(|dx|,|dy|,|dz|) > cfg.range`, skip unless `isNetworkedDrawerBlock(name)` (a missing chunk is not networked); a `countsAsDrawer` block that would make `drawers.length > cfg.maxDrawers` ends the whole search; otherwise record it (`members` holds every networked position incl. controller, slaves and trim) and enqueue the neighbours in the order x−1, x+1, z−1, z+1, y−1, y+1.
   - `interface StorageInput { recs: StorageRec[]; ae2: Ae2Rec[]; attachments: Attachments; networks: LogisticsNetwork[]; reader: BlockReader; blockNames: Map<number, string>; drawerCfg: DrawerConfig; baseOf: (dim: number, pos: Vec3) => string | null }`; `buildStorage(input: StorageInput): Promise<StorageBlock[]>` — one block per record plus `ae2_drive` blocks for AE2 drives and ME chests (`contents` = `cells`); `id = s:<dim>:<x>:<y>:<z>`; drawers reached by a controller get `controller` = its position and share one `networkId`: the first attachment of a `REQUEST_KINDS` network on any member position, else the first attachment of any kind, else `null`; every other block takes its own attachments by the same preference; sorted by id.
-  - `storageTotals(storage: StorageBlock[], networks: LogisticsNetwork[], baseId: string | null): Map<StuffKey, { total: number; reachable: number }>` (only blocks of that base, all blocks when `baseId` is `null`; blocks with `contents: null` are skipped; `reachable` counts blocks whose network kind is in `REQUEST_KINDS`).
+  - `storageTotals(storage: StorageBlock[], networks: LogisticsNetwork[], baseId: string | null, kinds: ReadonlySet<LogisticsNetwork['kind']> = REQUEST_KINDS): Map<StuffKey, StorageTotal>` (in `storage-totals.ts`; only blocks of that base, all blocks when `baseId` is `null`; blocks with `contents: null` are skipped; `reachable` counts blocks whose network kind is in `kinds` — the project's logistics mode decides, through `reachKinds`, spec §3.4; `where` = every block holding the key — spec §3.4 "broken down by where it sits" — with its count and the same reachable rule, sorted by count descending, ties by position x, then y, then z; no cap).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1022,9 +1090,21 @@ it('gives reached drawers the controller network and flags only request networks
   expect(storage.find((s) => s.pos[0] === 1)).toMatchObject({ id: 's:0:1:64:0', networkId: 'r:0:0:65:0', controller: [0, 64, 0], baseId: '0:0:4' });
   expect(storage.find((s) => s.pos[0] === 5)!.networkId).toBeNull();
   expect(storage.find((s) => s.pos[0] === 10)!.networkId).toBe('e:item:0:9:64:0');
-  expect(storageTotals(storage, NETS, '0:0:4').get('minecraft:iron_ingot@0')).toEqual({ total: 1080, reachable: 1000 });
+  expect(storageTotals(storage, NETS, '0:0:4').get('minecraft:iron_ingot@0')).toMatchObject({ total: 1080, reachable: 1000 });
   expect(storageTotals(storage, NETS, 'other-base').size).toBe(0);
+  const reach = (mode: LogisticsMode) => storageTotals(storage, NETS, '0:0:4', reachKinds(mode)).get('minecraft:iron_ingot@0')!.reachable;
+  expect([reach('routed'), reach('ae2'), reach('direct')]).toEqual([1000, 0, 1000]);   // only the chosen logistics counts as reachable
 });
+it('lists every block holding an item with its count', () => {
+  // blk(kind, pos, [[key, count]], networkId) = a StorageBlock of base '0:0:0'; the sample world's iron (Task 12): barrel 3,000, routed drawer 1,000, quantum chest 500
+  const blocks = [blk('drawer', [1, 64, 10], [[IRON, 1000]], 'r:0:0:65:10'), blk('barrel', [5, 64, 10], [[IRON, 3000]], null), blk('gt_chest', [7, 64, 10], [[IRON, 500]], null)];
+  expect(storageTotals(blocks, [ROUTED_NET], '0:0:0').get(IRON)).toEqual({ total: 4500, reachable: 1000, where: [
+    { kind: 'barrel', pos: [5, 64, 10], count: 3000, reachable: false }, { kind: 'drawer', pos: [1, 64, 10], count: 1000, reachable: true },
+    { kind: 'gt_chest', pos: [7, 64, 10], count: 500, reachable: false }] });
+});
+it('maps logistics modes to the networks they can order from', () =>
+  expect([reachKinds('routed'), reachKinds('ae2'), reachKinds('direct'), reachKinds(undefined)].map((s) => [...s].sort()))
+    .toEqual([['routed'], ['ae2'], ['ae2', 'routed'], ['ae2', 'routed']]));
 it('adds AE2 drives as reachable storage', async () => { /* ae2 drive with cells [[iron, 500]] attached to 'a:0:…' → kind 'ae2_drive', reachable 500 */ });
 it('handles a base with no storage at all', async () =>
   expect(storageTotals(await buildStorage({ ...EMPTY_INPUT }), [], null)).toEqual(new Map()));
@@ -1047,7 +1127,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/server/world/storage.ts tests/unit/world/storage.test.ts
+git add src/server/world/storage.ts src/shared/world/storage-totals.ts tests/unit/world/storage.test.ts
 git commit -m "feat(world): storage contents, drawer reach and reachable totals" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
@@ -1060,17 +1140,17 @@ git commit -m "feat(world): storage contents, drawer reach and reachable totals"
 **Interfaces:**
 - Consumes: everything from Tasks 1–11; `itemKey` (Plan 1).
 - Produces:
-  - `coils.ts`: `COIL_BLOCK = 'gregtech:gt.blockcasings5'`; `COIL_HEAT_BY_META = { 0: 1801, 1: 2701, 2: 3601, 3: 4501, 4: 5401, 5: 7201, 6: 8101, 7: 9901, 8: 10801, 9: 6301, 10: 9001, 11: 11701, 12: 12601, 13: 13501 }` (heats from gt-mechanics §6.4; the meta order is GT's `BlockCasings5.getCoilHeat`, checked by the `GTNH_LOCAL` step of Task 18); `isEbf(m: GtMachineRec): boolean` (class `MTEElectricBlastFurnace` or mteId 1000); `ebfCoilHeat(reader: BlockReader, blockNames: Map<number, string>, dim: number, controller: Vec3, facing: number): Promise<number | null>` (centre = controller − `DIRS[facing]`; the 8 ring blocks around the centre at y+1 and y+2 must all be coils with a known meta; result = the lowest heat, else `null`).
+  - `coils.ts`: `COIL_BLOCK = 'gregtech:gt.blockcasings5'`; `COIL_HEAT_BY_META = { 0: 1801, 1: 2701, 2: 3601, 3: 4501, 4: 5401, 5: 7201, 6: 8101, 7: 9901, 8: 10801, 9: 6301, 10: 9001, 11: 11701, 12: 12601, 13: 13501 }` (heats from gt-mechanics §6.4; the meta order is GT's `BlockCasings5.getCoilHeat`, checked by the `GTNH_LOCAL` step of Task 18); `isEbf(m: GtMachineRec): boolean` (`simpleClassName(m.cls) === 'MTEElectricBlastFurnace'` — `cls` is fully qualified, architecture §11.19 — or mteId 1000); `ebfCoilHeat(reader: BlockReader, blockNames: Map<number, string>, dim: number, controller: Vec3, facing: number): Promise<number | null>` (centre = controller − `DIRS[facing]`; the 8 ring blocks around the centre at y+1 and y+2 must all be coils with a known meta; result = the lowest heat, else `null`).
   - `scan.worker.ts`: `MAP_MARGIN = 128`; `interface ScanJob { scanId: string; scanDir: string; request: WorldSource; source: ResolvedSource; serverDir: string | null; facts: ScanPackFacts }`; `type WorkerMessage = { type: 'progress'; progress: number; message: string } | { type: 'done'; summary: string } | { type: 'error'; message: string }`; `runScanJob(job: ScanJob, report: (progress: number, message: string) => void): Promise<WorldScan>`; `scanSummary(scan: WorldScan): string` (`"Done: 2 bases, 7 machines"` + `" (1 chunk skipped)"` / `" (3 chunks skipped)"`; singular "1 base", "1 machine"); a bootstrap that runs only when `!isMainThread && workerData?.scanJob`, posting `WorkerMessage`s.
   - Passes inside `runScanJob` (progress values are fixed so the UI moves steadily): open source (0.02) → `level.dat` (missing → throws `Error('level.dat is missing')`) and side files: players, claims, quests, team files, `data/visualprospecting.dat`, then `copyServerSideFiles` + VisualProspecting cache + `readDrawerConfig` (0.05) → every region entry in (dim, rx, rz) order through `scanRegionBuffer` and the classifiers, progress by bytes up to 0.80, message `"Scanning <dim name> r.<rx>.<rz>"` → bases (0.82) → copy every region file intersecting a base bbox expanded by `MAP_MARGIN` into `<scanDir>/regions/<regionPathOf(...)>` (0.85) → palette from every present chunk of the copied regions + surface tiles (`maxY` 255) for every tile holding ≥ 1 present chunk into `<scanDir>/tiles/<dim>/<tx>_<tz>.bin` (0.95) → EBF coils, power, logistics, storage (`occupied` = any classified record's position; `baseOf` = `baseAt`), dims (visit hints from players, quests and — one `team prospecting` hint per dimension with team discoveries), prospecting, `topTier` (highest `countsForTopTier` tier, else `null`), `coilHeat` (highest EBF coil heat, else `null`) (0.98) → write `scan.json`, `palette.json` and `meta.json` (`{ source: WorldSource; levelName: string; blockNames: Array<[number, string]> }`) each via a temp file + rename, close the source, delete `<scanDir>/snapshot` and `<scanDir>/side`.
-  - `WorldScan` assembly: `machines` = `toPlacedMachine` with `baseId = baseAt(...)?.id ?? null` and `coilHeat` on EBFs; `pipes` = `toPlacedPipe` with `voltageTier` from `cableTier` (else the cable rating) and `networkId` from `PowerResult.cableNetwork` (cables) or the logistics network holding the pipe (item/fluid); `logisticsBlocks`, `warnings` (level.dat manager warnings, `"<n> prospected veins had no vein type"`), `skippedChunks`.
+  - `WorldScan` assembly: `machines` = `toPlacedMachine` with `baseId = baseAt(...)?.id ?? null` and `coilHeat` on EBFs; `pipes` = `toPlacedPipe` with `voltageTier` from `cableTier` (else the cable rating) and `networkId` from `PowerResult.cableNetwork` (cables) or the logistics network holding the pipe (item/fluid); `logisticsBlocks`, `warnings` (level.dat manager warnings, `"<n> prospected veins had no vein type"`, and when `PowerResult.unknownBoilers` > 0 `"1 boiler with unknown steam output"` / `"<n> boilers with unknown steam output"`), `skippedChunks`.
   - `tests/helpers/sample-world.ts`: `sampleSpec(): WorldSpec`, `makeSampleWorld(dir: string): Promise<{ serverDir: string; worldDir: string }>` (= `makeWorld(dir, sampleSpec())` + one backup `2026-10-17-11-00-00.zip` with mtime 10 minutes ago) and `SAMPLE` (expected values) for one rich world reused by Tasks 13, 14 and 18:
     - DIM 0, EID chunks (0,0) [InhabitedTime 500,000], (1,0), (0,1), (1,1) with a stone floor at y 63 over x/z 0..31, and an empty chunk (3,3): HP solar boiler 114 at (0,64,0) facing east → LV turbine 1120 at (1,64,0) facing east → tin cable 1246 at (2,64,0) bits W|E|UP → LV macerator 2001 at (3,64,0) running 2 EU/t, and LV buffer 161 at (2,65,0) facing up with one Small Lithium Battery (`@32519`, charge 100,000) and `mStoredEnergy` 1,000; EBF 1000 at (8,64,8) facing north with a Kanthal (meta 1) coil ring around (8,·,9) at y 65–66; drawer controller at (0,64,10), drawers at (1,64,10) (iron × 1,000) and (3,64,10) (cobblestone × 640), trim at (2,64,10); routed interface pipe at (0,65,10) (`io` 0, connects down and east) and request pipe at (1,65,10) (connects west); JABBA barrel at (5,64,10) (iron × 3,000); vanilla chest at (6,64,10) (cobblestone × 64); quantum chest 125 at (7,64,10) (iron × 500). Claimed by team `Alpha`: chunks (0,0), (0,1).
     - Every tile entity stands on its owner block (`gregtech:gt.blockmachines` for GT machines and pipes, `StorageDrawers:controller` / `fullDrawers4`, `ForgeMultipart:block`, `JABBA:barrel`, `minecraft:chest`), as in a real world (world-format §3.3), so tiles, areas and the drawer BFS see them.
     - DIM −1, legacy chunk (−1,−1) [InhabitedTime 72,000, 300 ore TEs]: MV assemblers 2002 at (−2..−5, 64, −2).
     - DIM 7, EID chunks (0,0), (1,0), InhabitedTime 0, no TEs.
-    - One player in DIM 0 with a portal use 0 → −1; quest 1072 (Moon Arrival) completed; VisualProspecting world id `World_00000000-0000-4000-8000-000000000000` with vein `ore.mix.copper` at chunk (−3,5) in DIM 0; team `Alpha` discovered (−3,5).
-    - `SAMPLE` = `{ baseIds: ['0:0:0', '-1:-1:-1'], baseNames: ['Alpha base (4, 5)', 'Nether base (-4, -2)'], machineCount: [6, 4], topTier: 2, baseTopTier: [1, 2], coilHeat: 2701, visitedDims: ['nether', 'overworld', 'moon'], routedId: 'r:0:0:65:10', power: { clear: 7.037, storedEU: 101_000, capacityEU: 102_048 }, totals: { 'minecraft:iron_ingot@0': { total: 4500, reachable: 1000 }, 'minecraft:cobblestone@0': { total: 704, reachable: 640 } }, prospected: [{ dim: 0, x: -40, z: 88, vein: 'ore.mix.copper' }] }`.
+    - `level.dat` spawn (8, 64, 8); one player (`playerdata/<file>.dat`) in DIM 0 at (4.5, 65, 5.5) with a portal use 0 → −1 — so a smart upload (Task 17a) of this world keeps exactly two areas, the Overworld base chunks and the Nether chunk (InhabitedTime 72,000 = `INHABITED_KEEP_TICKS`), and never DIM 7; quest 1072 (Moon Arrival) completed; VisualProspecting world id `World_00000000-0000-4000-8000-000000000000` with vein `ore.mix.copper` at chunk (−3,5) in DIM 0; team `Alpha` discovered (−3,5).
+    - `SAMPLE` = `{ baseIds: ['0:0:0', '-1:-1:-1'], baseNames: ['Alpha base (4, 5)', 'Nether base (-4, -2)'], machineCount: [6, 4], topTier: 2, baseTopTier: [1, 2], coilHeat: 2701, visitedDims: ['nether', 'overworld', 'moon'], routedId: 'r:0:0:65:10', power: { clear: 7.037, storedEU: 101_000, capacityEU: 102_048 }, totals: { 'minecraft:iron_ingot@0': { total: 4500, reachable: 1000, where: [{ kind: 'barrel', pos: [5, 64, 10], count: 3000, reachable: false }, { kind: 'drawer', pos: [1, 64, 10], count: 1000, reachable: true }, { kind: 'gt_chest', pos: [7, 64, 10], count: 500, reachable: false }] }, 'minecraft:cobblestone@0': { total: 704, reachable: 640, where: [{ kind: 'drawer', pos: [3, 64, 10], count: 640, reachable: true }, { kind: 'chest', pos: [6, 64, 10], count: 64, reachable: false }] } }, prospected: [{ dim: 0, x: -40, z: 88, vein: 'ore.mix.copper' }] }` (`totals` as `storageTotals` gives them with the default kinds, i.e. logistics mode `direct`).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1080,6 +1160,11 @@ it('reads EBF coil heat from a full ring and rejects a broken one', async () => 
   expect(await ebfCoilHeat(reader(fullKanthalRing), names, 0, [8, 64, 8], 2)).toBe(2701);
   expect(await ebfCoilHeat(reader(ringMissingOne), names, 0, [8, 64, 8], 2)).toBeNull();
   expect(await ebfCoilHeat(reader(mixedNichromeKanthal), names, 0, [8, 64, 8], 2)).toBe(2701);   // lowest coil wins
+});
+it('recognises an EBF by its fully qualified class or, without one, by mteId 1000', () => {
+  const EBF = 'gregtech.common.tileentities.machines.multi.MTEElectricBlastFurnace';
+  expect([isEbf(rec({ mteId: 5555, cls: EBF })), isEbf(rec({ mteId: 1000, cls: null })), isEbf(rec({ mteId: 5556, cls: 'x.MTEElectricBlastFurnaceMk2' }))])
+    .toEqual([true, true, false]);   // rec = a GtMachineRec with those fields
 });
 
 // tests/unit/world/scan-job.test.ts — runScanJob in-process on makeSampleWorld; job = its ScanJob with source { kind: 'snapshot', worldDir, label: 'snapshot' },
@@ -1122,6 +1207,9 @@ it('fails with a clear message when the source is gone', async () => {
 });
 it('fails when level.dat is missing', async () => {
   await expect(runScanJob(jobFor(dirWithoutLevel, { kind: 'dir' }), () => {})).rejects.toThrow('level.dat is missing');
+});
+it('warns about boilers with unknown steam output', async () => {   // the sample spec plus a coal boiler 100 at (0,64,1)
+  expect((await runScanJob(jobFor(sampleWithCoalBoiler), () => {})).warnings).toContain('1 boiler with unknown steam output');
 });
 ```
 
@@ -1269,19 +1357,19 @@ git commit -m "feat(world): scan service with worker thread, cancel, cache and n
 - Test: `tests/unit/world/context.test.ts`, `tests/unit/world/routes-world.test.ts`
 
 **Interfaces:**
-- Consumes: `PlanContext`, `emptyContext()` (Plan 2), `Pack` (Plan 1), `Project` (Plan 2), `Route`, `RequestContext`, `sendJson`, `readJson` (Plan 2 router), `AppContext` (Plan 2), Task 7 (`findBase`), Task 9 (`RAIN_OUTAGE_SECONDS`, `ENERGY_HATCH_RE`), Task 4 (`TIER_KINDS`, `packFacts`, `emptyFacts`), Task 11 (`storageTotals`), Task 2 (uploads, `SourceError`, `isUploadId`), Task 13 (`WorldService`, `createWorldService`, `isScanId`).
+- Consumes: `PlanContext`, `emptyContext()`, `LogisticsMode` (Plan 2), `Pack` (Plan 1), `Project` (Plan 2), `Route`, `RequestContext`, `sendJson`, `readJson`, `HttpError`, `matchRoute(routes: Route[], method: string, pathname: string): { route: Route; params: Record<string, string> } | null` (Plan 2 router; `matchRoute` decodes every param once and throws `HttpError(400, 'bad-path')` on malformed encoding), `AppContext` (Plan 2), Task 7 (`findBase`), Task 9 (`RAIN_OUTAGE_SECONDS`), Task 4 (`TIER_KINDS`, `packFacts`, `emptyFacts`, `simpleClassName`, `ENERGY_HATCH_RE`), Task 11 (`storageTotals`, `reachKinds`, `StorageTotal` from `src/shared/world/storage-totals.ts`), Task 2 (uploads, `SourceError`, `isUploadId`), Task 13 (`WorldService`, `createWorldService`, `isScanId`).
 - Produces:
-  - `context.ts`: `contextFromScan(scan: WorldScan, pack: Pack, baseId: string | null): PlanContext` — `base = findBase(scan, baseId)`; machines of that base (all when no base); `ownedMachines` = counts per `mteId` present in `pack.machines`, sorted by `mteId`; `storage = storageTotals(scan.storage, scan.logistics, base?.id ?? null)`; `visitedDims = scan.visitedDims`; `topTier` = highest `pack.machines` tier among those machines whose export kind is in `TIER_KINDS` or is a `hatch` with class matching `ENERGY_HATCH_RE`, else `null`; `coilHeat` = highest `coilHeat`, else `null`; `prospected = scan.prospected`; `power` (omitted when the base has no network) = `{ averageEUt: Σ average, spareEUt: Σ average − Σ loadEUt, voltageTier: tier of the network with the largest average, storedEU: Σ storedEU, rainOutageSeconds: any solarShare > 0 ? RAIN_OUTAGE_SECONDS : 0 }`.
-  - `routes/world.ts`: `worldService(app: AppContext): WorldService` (get-or-create `app.services.world`; facts = `packFacts(await app.pack())`, or `emptyFacts()` when no export loads); `planContextHook(app: AppContext): (project: Project) => Promise<PlanContext>` (no scan id or scan not done → `emptyContext()`); `worldRoutes(app: AppContext): Route[]` (sets `app.services.world` and `app.services.planContext` once). Routes (none `public`; errors are `{ error: string }`):
+  - `context.ts`: `contextFromScan(scan: WorldScan, pack: Pack, baseId: string | null, mode?: LogisticsMode): PlanContext` (the optional fourth argument is additive — three-argument callers such as Plan 5 get mode `direct`'s reach; Architecture change request 9) — `base = findBase(scan, baseId)`; machines of that base (all when no base); `ownedMachines` = counts per `mteId` present in `pack.machines`, sorted by `mteId`; `storage = storageTotals(scan.storage, scan.logistics, base?.id ?? null, reachKinds(mode))` — each map value keeps its `where` list as an extra field (`{ total, reachable, where }`; `where` becomes a declared optional field of `PlanContext.storage` values with Architecture change request 8, until then it rides along unread); `visitedDims = scan.visitedDims`; `topTier` = highest `pack.machines` tier among those machines whose export kind is in `TIER_KINDS` or is a `hatch` with `ENERGY_HATCH_RE.test(simpleClassName(cls) ?? '')` (`cls` fully qualified, architecture §11.19), else `null`; `coilHeat` = highest `coilHeat`, else `null`; `prospected = scan.prospected`; `power` (omitted when the base has no network) = `{ averageEUt: Σ average, spareEUt: Σ average − Σ loadEUt, voltageTier: tier of the network with the largest average, storedEU: Σ storedEU, rainOutageSeconds: any solarShare > 0 ? RAIN_OUTAGE_SECONDS : 0 }`.
+  - `routes/world.ts`: `worldService(app: AppContext): WorldService` (get-or-create `app.services.world`; facts = `packFacts(await app.pack())`, or `emptyFacts()` when no export loads); `planContextHook(app: AppContext): (project: Project) => Promise<PlanContext>` (no scan id or scan not done → `emptyContext()`; otherwise `contextFromScan(scan, pack, project.world.baseId, project.settings.logistics)` — Plan 2's plan cache already keys on the settings hash, so a mode change re-plans with the new reach); `worldRoutes(app: AppContext): Route[]` (sets `app.services.world` and `app.services.planContext` once). Routes (none `public`; errors are `{ error: string }`):
     - `GET /api/world/sources` → `WorldSourcesResponse`
     - `POST /api/world/scans` `StartScanRequest` → `StartScanResponse` (body shape checked: `kind` is `server`, `backup` with a string `file`, or `upload` with an `isUploadId` id → else 400; `SourceError` → its status)
     - `GET /api/world/scans` → `WorldScanListItem[]`; `GET /api/world/scans/:id` → `WorldScan`; `GET /api/world/scans/:id/status` → `ScanStatus`; `GET /api/world/scans/:id/palette` → `BlockRef[]` — 400 when `!isScanId(id)`, 404 when `!hasScan`, 409 `Scan is not finished` while not `done`
     - `POST /api/world/scans/:id/cancel` → 204, 409 when not queued/running, 404 when unknown (Architecture change request 5)
     - `GET /api/world/scans/:id/tiles/:dim/:tx/:tz?y=<0..255>` → `application/octet-stream`, 20,480 bytes, `Cache-Control: private, max-age=3600`; integers only (`/^-?\d{1,8}$/`), `y` default 255 → else 400
     - `POST /api/world/uploads` → `CreateUploadResponse` (records `ctx.me`)
-    - `PUT /api/world/uploads/:uploadId/files/*` → raw body to `storeUploadFile` (path = `decodeURIComponent(params['*'])`, malformed → 400; declared `Content-Length` passed for the early 413) → 204; a client abort is not answered and leaves no partial file
+    - `PUT /api/world/uploads/:uploadId/files/*` → raw body to `storeUploadFile` (path = `params['*']` exactly as given: Plan 2's `matchRoute` has already decoded it once and turns malformed encoding into `HttpError(400, 'bad-path')`, architecture §11.17, so the route never decodes again — `%2525` stays `%25`; `uploadKind` still refuses anything not allow-listed; declared `Content-Length` passed for the early 413) → 204; a client abort is not answered and leaves no partial file
     - `POST /api/world/uploads/:uploadId/complete` → `completeUpload` then `startScan` → `StartScanResponse`
-  - `tests/helpers/serve-routes.ts`: `serveRoutes(routes: Route[]): Promise<{ url: string; close(): Promise<void> }>` (plain `node:http` server matching `:param` and trailing `/*` like architecture §7.1, `ctx = { me: decoded X-Planner-Name or null, authed: true }`, `requestTimeout: 0`).
+  - `tests/helpers/serve-routes.ts`: `serveRoutes(routes: Route[]): Promise<{ url: string; close(): Promise<void> }>` — a plain `node:http` server (`requestTimeout: 0`) that dispatches through Plan 2's exported `matchRoute(routes, req.method, pathname)` on the raw, undecoded pathname (so params are decoded exactly once, as in production) and answers like Plan 2's `server.ts`: no match → 404 `{ error: 'not-found' }`; an `HttpError` thrown by `matchRoute` or a handler → its `status` with `{ error: code, message }`; `ctx = { me: decoded X-Planner-Name or null, authed: true }`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1303,9 +1391,14 @@ it('builds the context of another base and drops machines the export does not kn
 });
 it('builds a valid context from an empty scan', () =>
   expect(contextFromScan(EMPTY_SCAN, testPack(), null)).toEqual({ ...emptyContext(), storage: new Map(), power: undefined }));
+it('AE2 mode counts nothing reachable at a routed-only base', () =>
+  expect(contextFromScan(scan, testPack(), '0:0:0', 'ae2').storage.get('minecraft:iron_ingot@0')).toMatchObject({ total: 4500, reachable: 0 }));
+it('routed mode keeps 1,000 reachable', () =>
+  expect(contextFromScan(scan, testPack(), '0:0:0', 'routed').storage.get('minecraft:iron_ingot@0')).toMatchObject({ total: 4500, reachable: 1000 }));
 
 // tests/unit/world/routes-world.test.ts — app = { config, services: {}, pack: async () => testPack() } as unknown as AppContext, served with serveRoutes(worldRoutes(app));
-// getJson/postJson/call(method, path, body?) wrap fetch; put(uploadId, path, bytes) PUTs to /files/<path exactly as given>; putDeclared sends only a
+// getJson/postJson/call(method, path, body?) wrap fetch; put(uploadId, path, bytes) PUTs to /files/<path exactly as given> with node:http request()
+// (fetch's URL parser would resolve '%2e%2e/' away before the server sees it); putDeclared sends only a
 // Content-Length header; DONE = id of a finished scan of the sample backup; EMPTY_SCAN = a WorldScan whose arrays are all empty
 it('lists sources, runs a scan and serves scan, palette and tiles', async () => {
   expect(await getJson('/api/world/sources')).toEqual({ server: true, backups: [BACKUP] });
@@ -1325,7 +1418,8 @@ it('runs the upload flow and refuses bad paths', async () => {
   const { uploadId } = await postJson('/api/world/uploads', {});
   expect((await put(uploadId, 'level.dat', LEVEL_BYTES)).status).toBe(204);
   expect((await put(uploadId, 'region%2Fr.0.0.mca', REGION_BYTES)).status).toBe(204);
-  for (const bad of ['..%2Flevel.dat', '%2e%2e/level.dat', 'Region/r.0.0.mca', 'DIM-1/r.0.0.mca', '%E0%A4%A'])
+  for (const bad of ['..%2Flevel.dat', '%2e%2e/level.dat', 'Region/r.0.0.mca', 'DIM-1/r.0.0.mca', '%E0%A4%A',
+                     'region%252Fr.3.0.mca'])               // decoded once → 'region%2Fr.3.0.mca'; a second decode would wrongly accept it
     expect((await put(uploadId, bad, B1)).status).toBe(400);
   expect((await putDeclared(uploadId, 'region/r.1.0.mca', 134_217_729)).status).toBe(413);   // declared Content-Length only
   const { scanId } = await postJson(`/api/world/uploads/${uploadId}/complete`, {});
@@ -1337,6 +1431,7 @@ it('sets the planner hook', async () => {
   worldRoutes(app);
   const hook = app.services.planContext as (p: Project) => Promise<PlanContext>;
   expect((await hook(projectWith(DONE, '0:0:0'))).topTier).toBe(1);
+  expect((await hook(projectWith(DONE, '0:0:0', { logistics: 'ae2' }))).storage.get('minecraft:iron_ingot@0')!.reachable).toBe(0);   // the project's mode reaches the context
   expect(await hook(projectWith(null, null))).toEqual(emptyContext());
 });
 ```
@@ -1369,12 +1464,12 @@ git commit -m "feat(world): plan context from scans, world routes and uploads" -
 - Test: `tests/client/map-render.test.tsx`, `tests/client/map-palette.test.tsx`, `tests/client/map-tile-cache.test.tsx`, `tests/client/map-view.test.tsx`
 
 **Interfaces:**
-- Consumes: `decodeMapTile`, `AIR_INDEX`, `UNKNOWN_INDEX`, `tileOf`, world types (Task 1); API types (Task 2); `BlockFaces`, `TextureLayer` (Plan 3 `src/shared/types/assets.ts`); `POST /api/assets/blocks`, `GET /api/assets/file/<path>` (Plan 3).
+- Consumes: `decodeMapTile`, `AIR_INDEX`, `UNKNOWN_INDEX`, `tileOf`, world types (Task 1); API types (Task 2); `BlockFaces`, `TextureLayer`, `Rgb` (Plan 3 `src/shared/types/assets.ts`); `LayerPixels`, `compositeLayers(size, layers)` (Plan 3 `src/client/assets/composite.ts`); `loadLayerBitmap(layer: TextureLayer, size?: number): Promise<ImageBitmap | null>` (Plan 3 `src/client/assets/texture-image.ts` — URL built segment by segment with `assetFileUrl`, frame 0 cropped with `frameHeight(width, height, layer.frames)`, `null` on any failure, cached per path and size); `POST /api/assets/blocks` (Plan 3); `apiGet<T>(path)`, `apiPost<T>(path, body)`, `ApiError` (Plan 2 `src/client/api/client.ts` — JSON, send `X-Planner-Name`, 401 → login); `getName()` (Plan 2 `src/client/state/name.ts`); `NAME_HEADER` (Plan 2 `src/shared/types/api.ts`, value `encodeURIComponent(name)`).
 - Produces:
   - `map/types.ts` — architecture §7.2 verbatim: `MapViewport`, `MapOverlay`, `MapMarker`, plus `interface MapViewProps { scanId: string; dim: number; focus?: [number, number]; overlays?: MapOverlay[]; markers?: MapMarker[]; onMarkerClick?: (m: MapMarker) => void }`.
-  - `map/api.ts`: `class ApiError extends Error { status: number }`; `getJson<T>(path: string): Promise<T>`; `postJson<T>(path: string, body: unknown): Promise<T>`; `worldApi = { sources, scans, scan(id), status(id), start(source), cancel(id), palette(id), tile(scanId, dim, tx, tz, y): Promise<MapTile>, createUpload(): Promise<string>, putFile(uploadId, rel, body: Blob): Promise<void> /* each path segment encodeURIComponent'd */, completeUpload(uploadId): Promise<string>, blockFaces(blocks: BlockRef[]): Promise<BlockFaces[]> }`.
+  - `map/api.ts`: `worldApi = { sources, scans, scan(id), status(id), start(source), cancel(id), palette(id), tile(scanId, dim, tx, tz, y): Promise<MapTile>, createUpload(): Promise<string>, putFile(uploadId, rel, body: Blob): Promise<void> /* each path segment encodeURIComponent'd */, completeUpload(uploadId): Promise<string>, blockFaces(blocks: BlockRef[]): Promise<BlockFaces[]> }`. Every JSON call is Plan 2's `apiGet`/`apiPost` (so `createUpload` records `ctx.me`, a 401 goes to the login page and errors are Plan 2's `ApiError`); no second `ApiError`, `getJson` or `postJson`. `tile` (binary answer) and `putFile` (raw body) are the only direct `fetch` calls: `credentials: 'same-origin'`, header `NAME_HEADER: encodeURIComponent(getName())` when a name is set, and a non-2xx answer throws Plan 2's `ApiError` with the status and the server's `{ error, message }`.
   - `map/tile-cache.ts`: `interface TileKey { scanId: string; dim: number; tx: number; tz: number; y: number }`; `interface TileCache { get(k: TileKey): MapTile | undefined; load(k: TileKey): Promise<MapTile>; surfaceY(scanId: string, dim: number, x: number, z: number): number | null; clear(): void }`; `createTileCache(fetchTile: (k: TileKey) => Promise<MapTile>, max?: number /* 512 */): TileCache` (LRU; concurrent loads of one key share one fetch; `surfaceY` reads a cached `y = 255` tile, `null` when not cached or height 0); `tileCache` singleton over `worldApi.tile`.
-  - `map/palette.ts`: `type Rgb = [number, number, number]`; `interface LayerPixels { data: Uint8ClampedArray; width: number; height: number; tint?: Rgb }`; `averageTopColor(layers: LayerPixels[]): Rgb | null` (frame 0 = the top `width × width` rows; layers composited bottom to top with alpha; tint multiplies RGB; mean of pixels with alpha > 0, rounded); `OVERRIDE_COLORS: Record<string, Rgb>` (`minecraft:grass` [127,178,56], `minecraft:leaves`/`leaves2` [72,181,24], `minecraft:tallgrass`/`vine` [72,181,24], `minecraft:waterlily` [32,128,48], `minecraft:water`/`flowing_water` [63,118,228], `minecraft:lava`/`flowing_lava` [255,106,0], `gtnh-planner:unknown` [32,32,36]); `fallbackColor(ref: BlockRef): Rgb` (override, else name rules `/stone|cobble|ore/` [125,125,125], `/log|wood|planks/` [143,119,72], `/sand/` [219,207,163], `/dirt/` [134,96,67], `/glass/` [192,220,235], `gregtech:gt.blockmachines` [96,125,139], `/casing/` [158,158,158], else an FNV-1a hash colour of `id@meta`); `packRgb(c: Rgb): number`, `unpackRgb(n: number): Rgb`; `FACES_BATCH = 200`; `interface PaletteDeps { faces(blocks: BlockRef[]): Promise<BlockFaces[]>; image(path: string): Promise<LayerPixels | null> }`; `resolvePaletteColors(palette: BlockRef[], deps: PaletteDeps, onUpdate?: (colors: Uint32Array) => void): Promise<Uint32Array>` (fallback colours first and `onUpdate` at once; then `faces` in batches of `FACES_BATCH`; per entry: override > average of the `up` face layers > `BlockFaces.fallbackColor` when `resolved` is false > `fallbackColor`; any assets error keeps fallbacks and never throws).
+  - `map/palette.ts` (no local `Rgb` or `LayerPixels`: both are imported from Plan 3): `PALETTE_TEXTURE_SIZE = 16`; `averageTopColor(layers: readonly LayerPixels[]): Rgb | null` (all layers `w × w`: Plan 3's `compositeLayers(w, layers)` — bottom to top, straight alpha, tint multiplies RGB — then the mean of the pixels with alpha > 0, rounded; `null` without layers or opaque pixels; frame 0 is already cut by `loadLayerBitmap`, so nothing is cropped here); `layerPixels(layer: TextureLayer): Promise<LayerPixels | null>` (the default `PaletteDeps.image`: `loadLayerBitmap(layer, PALETTE_TEXTURE_SIZE)`, drawn into a `PALETTE_TEXTURE_SIZE × PALETTE_TEXTURE_SIZE` `OffscreenCanvas`, read with `getImageData`, `tint: layer.tint`; `null` when the bitmap is `null`); `OVERRIDE_COLORS: Record<string, Rgb>` (`minecraft:grass` [127,178,56], `minecraft:leaves`/`leaves2` [72,181,24], `minecraft:tallgrass`/`vine` [72,181,24], `minecraft:waterlily` [32,128,48], `minecraft:water`/`flowing_water` [63,118,228], `minecraft:lava`/`flowing_lava` [255,106,0], `gtnh-planner:unknown` [32,32,36]); `fallbackColor(ref: BlockRef): Rgb` (override, else name rules `/stone|cobble|ore/` [125,125,125], `/log|wood|planks/` [143,119,72], `/sand/` [219,207,163], `/dirt/` [134,96,67], `/glass/` [192,220,235], `gregtech:gt.blockmachines` [96,125,139], `/casing/` [158,158,158], else an FNV-1a hash colour of `id@meta`); `packRgb(c: Rgb): number`, `unpackRgb(n: number): Rgb`; `FACES_BATCH = 200`; `interface PaletteDeps { faces(blocks: BlockRef[]): Promise<BlockFaces[]>; image(layer: TextureLayer): Promise<LayerPixels | null> }`; `resolvePaletteColors(palette: BlockRef[], deps: PaletteDeps, onUpdate?: (colors: Uint32Array) => void): Promise<Uint32Array>` (fallback colours first and `onUpdate` at once; then `faces` in batches of `FACES_BATCH`; per entry: override > average of the `up` face layers > `BlockFaces.fallbackColor` when `resolved` is false > `fallbackColor`; any assets error keeps fallbacks and never throws).
   - `map/render.ts`: `MIN_PPB = 0.25`, `MAX_PPB = 32`; `worldToScreen(v: MapViewport, x: number, z: number): [number, number]` (`(x − centerX)·ppb + width/2`); `screenToWorld(v, px, py): [number, number]`; `visibleTiles(v): Array<[number, number]>` (tiles covering `[left, right) × [top, bottom)`, row-major by tz then tx); `zoomAt(v, px, py, factor): MapViewport` (keeps the world point under the cursor, clamps ppb); `panBy(v, dxPx, dyPx): MapViewport`; `shadeTile(tile: MapTile, colors: Uint32Array, out: Uint8ClampedArray): void` (RGBA 64×64; air → alpha 0; unknown → its colour; brightness ×1.12 when higher than the column to the north (`lz − 1`), ×0.86 when lower, ×1 on row 0, clamped, rounded); `chunkGridLines(v): { xs: number[]; zs: number[] }` (screen positions of chunk borders `16k` within the view; empty below 2 px/block).
   - `views/MapView.tsx`: `MapView(props: MapViewProps)` — canvas sized to its container (ResizeObserver, devicePixelRatio), `role="img"` and `aria-label="Map of <dimension>"`; starts at `focus` (else 0, 0), 4 px/block, `y = 255`; draws visible tiles from `tileCache` at the current `y` (each shaded tile cached as an `OffscreenCanvas` per tile key and palette version), the chunk grid, `overlays` in order, then `markers` (circle radius 9 px with `n`, `label` as tooltip). Pointer events go to overlays in reverse order with world coordinates (`Math.floor`ed blocks); unconsumed drags pan; wheel zooms by `1.2^(−deltaY/100)` at the cursor; a click within 10 px of a marker calls `onMarkerClick`. Controls: Y slider `<input type="range" min="0" max="255" aria-label="Y level">` labelled "Y ≤ <y>" ("surface" at 255), zoom buttons, "Re-centre" when `focus` is set.
 
@@ -1413,12 +1508,20 @@ it('draws chunk borders only from 2 px/block', () => {
 });
 
 // tests/client/map-palette.test.tsx
-it('averages opaque pixels, applies tint, uses frame 0 only and alpha-composites overlays', () => {
+it('averages opaque pixels, applies tint and alpha-composites overlays', () => {
   const px = (...a: number[]) => new Uint8ClampedArray(a);
   expect(averageTopColor([{ data: px(255, 0, 0, 255, 0, 0, 255, 255, 0, 0, 0, 0, 255, 255, 255, 255), width: 2, height: 2 }])).toEqual([170, 85, 170]);
   expect(averageTopColor([{ data: px(255, 0, 0, 255, 0, 0, 255, 255, 0, 0, 0, 0, 255, 255, 255, 255), width: 2, height: 2, tint: [128, 255, 255] }])).toEqual([85, 85, 170]);
   expect(averageTopColor([{ data: px(100, 100, 100, 255), width: 1, height: 1 }, { data: px(200, 0, 0, 128), width: 1, height: 1 }])).toEqual([150, 50, 50]);
-  expect(averageTopColor([{ data: px(10, 10, 10, 255, 250, 250, 250, 255), width: 1, height: 2 }])).toEqual([10, 10, 10]);   // 2 frames
+  expect([averageTopColor([]), averageTopColor([{ data: px(9, 9, 9, 0), width: 1, height: 1 }])]).toEqual([null, null]);
+});
+it('loads layer pixels through Plan 3 loadLayerBitmap at 16 px', async () => {
+  // vi.mock('../../src/client/assets/texture-image.ts') → loadLayerBitmap resolves a fake bitmap; globalThis.OffscreenCanvas = a fake whose getImageData returns 16×16 grey
+  const p = await layerPixels({ path: 'gregtech/textures/blocks/iconsets/MACHINE_MV_SIDE.png', tint: [128, 255, 255], frames: 4 });
+  expect(loadLayerBitmap).toHaveBeenCalledWith({ path: 'gregtech/textures/blocks/iconsets/MACHINE_MV_SIDE.png', tint: [128, 255, 255], frames: 4 }, 16);
+  expect([p!.width, p!.height, p!.data.length, p!.tint]).toEqual([16, 16, 1024, [128, 255, 255]]);
+  vi.mocked(loadLayerBitmap).mockResolvedValueOnce(null);
+  expect(await layerPixels({ path: 'missing.png' })).toBeNull();
 });
 it('resolves colours in batches with overrides and fallbacks, and survives a failing assets API', async () => {
   const palette = [AIR, UNKNOWN_BLOCK, { id: 'minecraft:stone', meta: 0 }, { id: 'gregtech:gt.blockmachines', meta: 0, mteId: 2001 }, { id: 'minecraft:grass', meta: 0 },
@@ -1461,7 +1564,7 @@ Expected: FAIL — `Failed to resolve import "../../src/client/map/render.ts"`.
 
 - [ ] **Step 3: Implement the five modules and `MapView`**
 
-`MapView` loads the palette once per `scanId` (`worldApi.palette`, then `resolvePaletteColors` with `deps.faces = worldApi.blockFaces` and `deps.image` = fetch `/api/assets/file/<path>` → `createImageBitmap` → `OffscreenCanvas.getContext('2d').getImageData`), redraws on `onUpdate`, and requests tiles only for `visibleTiles` (most recent view first, at most 6 in flight).
+`MapView` loads the palette once per `scanId` (`worldApi.palette`, then `resolvePaletteColors` with `deps.faces = worldApi.blockFaces` and `deps.image = layerPixels`), redraws on `onUpdate`, and requests tiles only for `visibleTiles` (most recent view first, at most 6 in flight).
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -1483,12 +1586,12 @@ git commit -m "feat(map): canvas map view with tiles, texture colours, zoom, pan
 - Test: `tests/client/map-overlays.test.tsx`, `tests/client/map-summary.test.tsx`, `tests/client/map-tab.test.tsx`
 
 **Interfaces:**
-- Consumes: Task 15 (`MapView`, `MapOverlay`, `MapMarker`, `MapViewport`, `worldToScreen`, `worldApi`, `tileCache`), `findBase` (Task 7, shared), `Project`, `Note`, `ProjectOp`, `ProjectViewProps`, `PROJECT_TABS` (Plan 2), `ItemIcon` (Plans 2/3), `tierName` (Plan 1), `GET /api/pack/stuff/:key` for item names (Plan 2).
+- Consumes: Task 15 (`MapView`, `MapOverlay`, `MapMarker`, `MapViewport`, `worldToScreen`, `worldApi`, `tileCache`), `findBase` (Task 7, shared), `storageTotals`, `reachKinds`, `StorageWhere` (Task 11, `src/shared/world/storage-totals.ts`), `Project`, `Note`, `ProjectOp`, `ProjectViewProps`, `PROJECT_TABS`, `LogisticsMode` (Plan 2), `ItemIcon` (Plans 2/3), `tierName` (Plan 1), `GET /api/pack/stuff/:key` for item names (Plan 2).
 - Produces:
   - `map/overlays.ts`: `VOLTAGE_COLORS` (15 entries, ULV…MAX: `#8a8a8a #3fa34d #1e88e5 #fdd835 #8e24aa #e53935 #00acc1 #fb8c00 #6d4c41 #d81b60 #43a047 #5e35b1 #00897b #c0ca33 #212121`); `LOGISTICS_COLORS = { routed: '#ff7043', enderio: '#26c6da', gtpipe: '#9ccc65', ae2: '#7e57c2' }`; `STORAGE_COLOR = '#ffca28'`, `MACHINE_COLOR = '#90a4ae'`, `BASE_OUTLINE_COLOR = '#ffffff'`, `NOTE_COLOR = '#ffb300'`; `machinesOverlay(scan: WorldScan): MapOverlay` (id `machines`, a filled 1×1-block square per machine of `view.dim`); `cablesOverlay(scan)` (id `cables`, pipes of kind `cable`: line from the block centre toward each connected horizontal side, `VOLTAGE_COLORS[voltageTier ?? 0]`, a dot for up/down-only links); `logisticsOverlay(scan)` (id `logistics`, the same drawing over `logisticsBlocks` in `LOGISTICS_COLORS[kind]`); `storageOverlay(scan)` (id `storage`, outlined square, filled when the block's network kind is `routed` or `ae2`); `baseOutlineOverlay(base: Base)` (id `outline`, dashed `[6, 4]` bbox rectangle); `noteClickOverlay(onPick: (x: number, z: number) => void): MapOverlay` (id `note-click`; never consumes `down`/`move`; consumes `up` and calls `onPick` with the `up` block when it is within 1 block of the `down` block); `noteMarkers(notes: Note[], dim: number): MapMarker[]` (pinned notes numbered 1… by their order among **all** pinned notes, so numbers do not change between dimensions; only those in `dim`; colour `NOTE_COLOR`; `label` = text).
-  - `map/summary.ts`: `interface FoundSummary { machineCount: number; topTier: number | null; machines: Array<{ name: string; tier: number | null; count: number }>; power: Array<{ id: string; voltageTier: number; clear: number; rain: number; average: number; storedEU: number; capacityEU: number; spare: number }>; logistics: Array<{ id: string; kind: LogisticsNetwork['kind']; nodes: number; channels: string | null; parts: string | null }>; storage: { blocks: Array<{ kind: StorageBlock['kind']; count: number; unknown: number }>; barrelBanks: Array<{ barrels: number; pos: [number, number, number] }>; topItems: Array<{ key: StuffKey; total: number; reachable: number; where: Array<{ kind: StorageBlock['kind']; pos: [number, number, number]; count: number; reachable: boolean }> }> }; dims: Array<{ name: string; visited: boolean; evidence: string[] }>; prospected: Array<{ vein: string; x: number; z: number; distance: number }> }`; `summarize(scan: WorldScan, baseId: string | null): FoundSummary` (machines grouped by name + tier, unknown names as `Unknown machine #<mteId>`, sorted by count desc then name; `topTier` = the base's; `spare = average − (loadEUt ?? 0)`; `channels` = `"<used> / <max>"` for AE2; `parts` = the network's `parts` as `"1 interface, 1 request, 2 chip:responder"` (keys sorted), `null` when absent; storage kinds in a fixed order `drawer_controller, drawer, barrel, chest, iron_chest, gt_chest, gt_tank, ae2_drive`, `unknown` = blocks with `contents: null`; `barrelBanks` = face-adjacent JABBA barrels grouped into one bank each (spec §3.4: shown as a storage bank), `pos` = smallest position, largest bank first; top 10 items by total, each with `where` = its storage blocks by count desc (at most 5) — spec §3.4 "broken down by where it sits"; prospected veins in the base's dimension, nearest 10 by horizontal distance to the base centre, rounded).
-  - `map/FoundPanel.tsx`: `FoundPanel(props: { summary: FoundSummary; notes: Note[]; onFocusNote: (n: number) => void })` — sections "Machines" (count, top tier via `tierName`), "Power" (per network: clear / rain / average EU/t, stored EU, spare EU/t, with the rain caveat "solar boilers stop ≈7 min into rain"), "Logistics", "Storage" (block counts per kind, "JABBA bank: <n> barrels" per bank, rows `data-key=<key>` with `ItemIcon`, name, total and "<n> reachable", expandable to the `where` list with a "show on map" button per block), "Dimensions", "Prospected veins", "Notes" (numbered pinned notes). Empty sections say "None found" — all optional (spec §3.4). Numbers use `toLocaleString('en-US')` with EU/t rounded to 0.1.
-  - `views/MapTab.tsx`: `MapTab(props: ProjectViewProps)` — without `project.world.scanId`: a picker of done scans (`worldApi.scans`) and their bases that sends `[{ op: 'world', scanId, baseId }]`, plus a link to `/world` ("Scan the world"); with one: loads the scan, `findBase`, renders `MapView` (`dim` = base dim, `focus` = base centre x/z + 0.5 so the view is centred on a block, not on a block edge, overlays from five toggles persisted per viewer in `localStorage` key `gtnh-planner:map-overlays` inside try/catch, plus `noteClickOverlay`) beside `FoundPanel`, a base `<select>` and a scan `<select>` that send the `world` op. A map click opens "Add note at x, y, z" (y = `tileCache.surfaceY(...)` else the slider y) whose Save sends `[{ op: 'addNote', note: { id: crypto.randomUUID(), text, pin: { dim, x, y, z } } }]`; marker clicks highlight the note in the panel. Plan 5 adds its own overlays and markers through `MapView`'s props.
+  - `map/summary.ts`: `interface FoundSummary { machineCount: number; topTier: number | null; machines: Array<{ name: string; tier: number | null; count: number }>; power: Array<{ id: string; voltageTier: number; clear: number; rain: number; average: number; storedEU: number; capacityEU: number; spare: number }>; logistics: Array<{ id: string; kind: LogisticsNetwork['kind']; nodes: number; channels: string | null; parts: string | null }>; storage: { blocks: Array<{ kind: StorageBlock['kind']; count: number; unknown: number }>; barrelBanks: Array<{ barrels: number; pos: [number, number, number] }>; items: Array<{ key: StuffKey; total: number; reachable: number; where: StorageWhere[] }> }; dims: Array<{ name: string; visited: boolean; evidence: string[] }>; prospected: Array<{ vein: string; x: number; z: number; distance: number }> }`; `summarize(scan: WorldScan, baseId: string | null, mode?: LogisticsMode): FoundSummary` (machines grouped by name + tier, unknown names as `Unknown machine #<mteId>`, sorted by count desc then name; `topTier` = the base's; `spare = average − (loadEUt ?? 0)`; `channels` = `"<used> / <max>"` for AE2; `parts` = the network's `parts` as `"1 interface, 1 request, 2 chip:responder"` (keys sorted), `null` when absent; storage kinds in a fixed order `drawer_controller, drawer, barrel, chest, iron_chest, gt_chest, gt_tank, ae2_drive`, `unknown` = blocks with `contents: null`; `barrelBanks` = face-adjacent JABBA barrels grouped into one bank each (spec §3.4: shown as a storage bank), `pos` = smallest position, largest bank first; `items` = **every** item at the base from `storageTotals(scan.storage, scan.logistics, baseId, reachKinds(mode))` — the same numbers and the same mode-aware reachable flag the planner gets from `contextFromScan` — sorted by total descending, then key, each with its full `where` list (no top-10 or 5-place cap; spec §3.4 "counts everything at the base, broken down by where it sits"); prospected veins in the base's dimension, nearest 10 by horizontal distance to the base centre, rounded).
+  - `map/FoundPanel.tsx`: `FoundPanel(props: { summary: FoundSummary; notes: Note[]; onFocusNote: (n: number) => void })` — sections "Machines" (count, top tier via `tierName`), "Power" (per network: clear / rain / average EU/t, stored EU, spare EU/t, with the rain caveat "solar boilers stop ≈7 min into rain"), "Logistics", "Storage" (block counts per kind, "JABBA bank: <n> barrels" per bank, rows `data-key=<key>` with `ItemIcon`, name, total and "<n> reachable", expandable to the whole `where` list — one line per block, "<count> in <kind> at x y z", with a "show on map" button; the first `ITEMS_PAGE = 10` rows show at once and a "Show all <n> items" button reveals the rest, so nothing is cut off), "Dimensions", "Prospected veins", "Notes" (numbered pinned notes). Empty sections say "None found" — all optional (spec §3.4). Numbers use `toLocaleString('en-US')` with EU/t rounded to 0.1.
+  - `views/MapTab.tsx`: `MapTab(props: ProjectViewProps)` — without `project.world.scanId`: a picker of done scans (`worldApi.scans`) and their bases that sends `[{ op: 'world', scanId, baseId }]`, plus a link to `/world` ("Scan the world"); with one: loads the scan, `findBase`, `summarize(scan, baseId, project.settings.logistics)`, renders `MapView` (`dim` = base dim, `focus` = base centre x/z + 0.5 so the view is centred on a block, not on a block edge, overlays from five toggles persisted per viewer in `localStorage` key `gtnh-planner:map-overlays` inside try/catch, plus `noteClickOverlay`) beside `FoundPanel`, a base `<select>` and a scan `<select>` that send the `world` op. A map click opens "Add note at x, y, z" (y = `tileCache.surfaceY(...)` else the slider y) whose Save sends `[{ op: 'addNote', note: { id: crypto.randomUUID(), text, pin: { dim, x, y, z } } }]`; marker clicks highlight the note in the panel. Plan 5 adds its own overlays and markers through `MapView`'s props.
   - `tests/helpers/scan-fixture.ts`: `SCAN_FIXTURE: WorldScan` — a hand-written scan with one base `0:0:0` centred at (4, 64, 5) (machines: 2 × "Basic Macerator" LV, 1 × "Basic Steam Turbine" LV, 1 unknown mteId 31999; one LV cable at (2,64,0) with connections W|E; one routed network `r:0:0:65:10` with two `logisticsBlocks`; storage: a drawer at (1,64,10) (iron × 1,000, network `r:0:0:65:10`), a chest at (6,64,10) (iron × 30, no network), a compacting drawer at (3,64,10) (`contents: null`), two empty JABBA barrels at (5,64,10) and (5,65,10); one power network clear 7.037 / rain 0 / average 6.444, loadEUt 2, stored 101,000, capacity 102,048; dims Overworld visited, Twilight Forest not; prospected `ore.mix.copper` at (−40, 88)).
 
 - [ ] **Step 1: Write the failing tests**
@@ -1530,9 +1633,17 @@ it('summarizes what was found at the base', () => {
   expect(s.logistics).toEqual([{ id: 'r:0:0:65:10', kind: 'routed', nodes: 2, channels: null, parts: null }]);
   expect(s.storage.blocks).toEqual([{ kind: 'drawer', count: 2, unknown: 1 }, { kind: 'barrel', count: 2, unknown: 0 }, { kind: 'chest', count: 1, unknown: 0 }]);
   expect(s.storage.barrelBanks).toEqual([{ barrels: 2, pos: [5, 64, 10] }]);
-  expect(s.storage.topItems).toEqual([{ key: 'minecraft:iron_ingot@0', total: 1030, reachable: 1000, where: [
+  expect(s.storage.items).toEqual([{ key: 'minecraft:iron_ingot@0', total: 1030, reachable: 1000, where: [
     { kind: 'drawer', pos: [1, 64, 10], count: 1000, reachable: true }, { kind: 'chest', pos: [6, 64, 10], count: 30, reachable: false }] }]);
+  expect(summarize(SCAN_FIXTURE, '0:0:0', 'ae2').storage.items[0].reachable).toBe(0);   // the project's logistics mode decides reach
   expect(s.prospected).toEqual([{ vein: 'ore.mix.copper', x: -40, z: 88, distance: 94 }]);
+});
+it('lists every item and every place it sits, without caps', () => {
+  // manyItems(12, 7) = SCAN_FIXTURE plus chests at base 0:0:0 holding 12 different items, the first of them spread over 7 chests
+  const s = summarize(manyItems(12, 7), '0:0:0');
+  expect([s.storage.items.length, s.storage.items.find((i) => i.key === 'test:item@0')!.where.length]).toEqual([13, 7]);   // 12 + iron
+  const html = renderToStaticMarkup(<FoundPanel summary={s} notes={[]} onFocusNote={() => {}} />);
+  expect(html).toContain('Show all 13 items');
 });
 it('says nothing was found for an empty base', () => { /* summarize(EMPTY_SCAN, null) → zero counts, empty lists, topTier null */ });
 
@@ -1574,12 +1685,12 @@ git commit -m "feat(map): project map tab with overlays, note pins and found-in-
 - Test: `tests/client/world-pick.test.tsx`, `tests/client/world-upload.test.tsx`, `tests/client/world-page.test.tsx`
 
 **Interfaces:**
-- Consumes: Task 15 (`worldApi`, `ApiError`), Task 2 (`zipBuffer` test helper, `UPLOAD_LIMITS` values), `@zip.js/zip.js` 2.22.1 (`ZipReader`, `BlobReader`, `BlobWriter`, `type Entry`, `type FileEntry`), `ScanStatus`, `WorldScanListItem` (Tasks 1–2).
+- Consumes: Task 15 (`worldApi`), `ApiError` (Plan 2 `src/client/api/client.ts`), Task 1 (`parseRegionPath`, `regionPathOf` from `src/shared/world/region.ts`), Task 2 (`zipBuffer` test helper, `UPLOAD_LIMITS` values), `@zip.js/zip.js` 2.22.1 (`ZipReader`, `BlobReader`, `BlobWriter`, `type Entry`, `type FileEntry`), `ScanStatus`, `WorldScanListItem` (Tasks 1–2).
 - Produces:
-  - `world/pick-files.ts`: `interface PickedEntry { path: string; size: number }`; `interface WorldPick { root: string | null; files: Array<{ path: string; rel: string; dim: number | null; size: number }>; dims: Array<{ dim: number; files: number; bytes: number }> }`; `uploadRel(worldRelative: string): string | null` (the server allow-list mirrored: `level.dat`, `region/r.<int>.<int>.mca`, `DIM<int>/region/r.<int>.<int>.mca`); `pickWorldFiles(entries: PickedEntry[]): WorldPick` (root = folder of the shallowest `level.dat`, `''` at top level, `null` when none; only allow-listed files under the root; `dims` sorted by dim); `selectDims(pick: WorldPick, dims: number[]): WorldPick['files']` (`level.dat` first, then the region files of those dims); `dimLabel(dim: number): string` (0 `Overworld`, −1 `Nether`, 1 `The End`, else `DIM<n>` — the browser has no pack data).
+  - `world/pick-files.ts`: `interface PickedEntry { path: string; size: number }`; `interface WorldPick { root: string | null; files: Array<{ path: string; rel: string; dim: number | null; size: number }>; local: Array<{ path: string; rel: string; size: number }>; dims: Array<{ dim: number; files: number; bytes: number }> }`; `uploadRel(worldRelative: string): string | null` (the server allow-list mirrored with the shared helpers, never a second regex: `level.dat`, or `parseRegionPath(p)` non-null **and** `p === regionPathOf(dim, rx, rz)` of the parsed values); `pickWorldFiles(entries: PickedEntry[]): WorldPick` (root = folder of the shallowest `level.dat`, `''` at top level, `null` when none; `files` = only allow-listed files under the root; `local` = `playerdata/<name>.dat` and `serverutilities/teams/claimedchunks/<name>.dat` under the root — read in the browser by Task 17a's smart upload and **never** an upload item; `dims` sorted by dim); `selectDims(pick: WorldPick, dims: number[]): WorldPick['files']` (`level.dat` first, then the region files of those dims); `dimLabel(dim: number): string` (0 `Overworld`, −1 `Nether`, 1 `The End`, else `DIM<n>` — the browser has no pack data).
   - `world/zip-pick.ts`: `interface ZipWorld { entries: Array<PickedEntry & { read(): Promise<Blob> }>; close(): Promise<void> }`; `openZipInBrowser(file: Blob): Promise<ZipWorld>` (central directory via `File.slice`; directories skipped).
   - `world/upload.ts`: `interface UploadItem { rel: string; size: number; blob: () => Promise<Blob> }`; `interface UploadProgress { done: number; total: number; bytesDone: number; bytesTotal: number; current: string }`; `uploadWorld(items: UploadItem[], api: Pick<typeof worldApi, 'createUpload' | 'putFile' | 'completeUpload'>, onProgress: (p: UploadProgress) => void, signal?: AbortSignal): Promise<string /* scanId */>` (one upload, `level.dat` first, then the rest with at most 2 in flight, then `completeUpload`; refuses before uploading when a file exceeds the server limits — 32 MiB `level.dat`, 128 MiB region — naming the file; an aborted signal rejects with an `AbortError`; a failed file rejects with `"<rel>: <server error>"`).
-  - `views/WorldPage.tsx`: `WorldPage()` — "Server folder": when `sources.server`, a "Scan newest backup" button (`{ kind: 'server' }`) and the complete backups newest first, each with "Scan"; otherwise "No server folder configured — set `serverFolder` in `data/config.json`, or upload below". "Scans": rows (`data-testid="scan-row"`, `data-state`) with start time, source, a progress bar, message and "Cancel" while queued/running; polled every 1,000 ms while any scan is queued or running. "Upload a world": a folder picker (`<input type="file" webkitdirectory multiple data-testid="world-folder-input">`, preferred) and a zip picker (`<input type="file" accept=".zip" data-testid="world-zip-input">`); after picking, a checklist of dimensions labelled with `dimLabel`, file counts and sizes (Overworld ticked), the total, "Upload and scan" (`data-testid="upload-button"`), a progress bar and errors in plain words. After upload the new scan appears in "Scans". A footer explains that scans never touch the live server and that a scan is chosen on a project's Map tab.
+  - `views/WorldPage.tsx`: `WorldPage()` — "Server folder": when `sources.server`, a "Scan newest backup" button (`{ kind: 'server' }`) and the complete backups newest first, each with "Scan"; otherwise "No server folder configured — set `serverFolder` in `data/config.json`, or upload below". "Scans": rows (`data-testid="scan-row"`, `data-state`) with start time, source, a progress bar, message and "Cancel" while queued/running; polled every 1,000 ms while any scan is queued or running. "Upload a world": a folder picker (`<input type="file" webkitdirectory multiple data-testid="world-folder-input">`, preferred) and a zip picker (`<input type="file" accept=".zip" data-testid="world-zip-input">`); after picking, an "Advanced: whole dimensions" disclosure (`<details>`) holding a checklist of dimensions labelled with `dimLabel`, file counts and sizes (Overworld ticked), the total, "Upload whole dimensions and scan" (`data-testid="upload-dims-button"`), a progress bar and errors in plain words — Task 17a puts the default smart upload above it. After upload the new scan appears in "Scans". A footer explains that scans never touch the live server and that a scan is chosen on a project's Map tab.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1592,15 +1703,16 @@ it('finds the world root and keeps only the files a scan needs', () => {
     { path: 'MyWorld/DIM7/data/x.dat', size: 1 }, { path: 'MyWorld/Region/r.0.0.mca', size: 1 } ]);
   expect(pick.root).toBe('MyWorld/');
   expect(pick.files.map((f) => f.rel)).toEqual(['level.dat', 'region/r.0.0.mca', 'region/r.-1.0.mca', 'DIM-1/region/r.-1.0.mca']);
+  expect(pick.local.map((f) => f.rel)).toEqual(['playerdata/a.dat']);   // read in the browser only
   expect(pick.dims).toEqual([{ dim: -1, files: 1, bytes: 1000 }, { dim: 0, files: 2, bytes: 12288 }]);
   expect(selectDims(pick, [-1]).map((f) => f.rel)).toEqual(['level.dat', 'DIM-1/region/r.-1.0.mca']);
 });
 it('picks the shallowest level.dat and returns nothing without one', () => {
   expect(pickWorldFiles([{ path: 'saves/World/level.dat', size: 1 }, { path: 'saves/World/backup/level.dat', size: 1 }]).root).toBe('saves/World/');
-  expect(pickWorldFiles([{ path: 'x/region/r.0.0.mca', size: 1 }])).toEqual({ root: null, files: [], dims: [] });
+  expect(pickWorldFiles([{ path: 'x/region/r.0.0.mca', size: 1 }])).toEqual({ root: null, files: [], local: [], dims: [] });
 });
 it.each(['level.dat', 'region/r.0.0.mca', 'DIM-1/region/r.-1.2.mca'])('allows %s', (p) => expect(uploadRel(p)).toBe(p));
-it.each(['../level.dat', 'Region/r.0.0.mca', 'DIM-1/r.0.0.mca', 'region/r.0.0.mcr', 'playerdata/a.dat'])('refuses %s', (p) => expect(uploadRel(p)).toBeNull());
+it.each(['../level.dat', 'Region/r.0.0.mca', 'DIM-1/r.0.0.mca', 'region/r.0.0.mcr', 'playerdata/a.dat', 'world.zip', 'region/r.01.0.mca'])('refuses %s', (p) => expect(uploadRel(p)).toBeNull());
 it('lists a zipped world in the browser and extracts one entry', async () => {
   const zip = await openZipInBrowser(new Blob([zipBuffer([{ name: 'World/level.dat', data: LEVEL }, { name: 'World/region/r.0.0.mca', data: REG }])]));
   expect(zip.entries.map((e) => e.path)).toEqual(['World/level.dat', 'World/region/r.0.0.mca']);
@@ -1629,6 +1741,7 @@ it('stops on abort and reports the failing file', async () => {
 it('renders the three sections and the pickers', () => {
   const html = renderToStaticMarkup(<WorldPage />);
   for (const t of ['Server folder', 'Scans', 'Upload a world', 'data-testid="world-folder-input"', 'webkitdirectory', 'data-testid="world-zip-input"']) expect(html).toContain(t);
+  expect(html).not.toContain('world.zip');   // a zip is read in the browser, never uploaded whole
 });
 ```
 
@@ -1639,7 +1752,7 @@ Expected: FAIL — `Failed to resolve import "../../src/client/world/pick-files.
 
 - [ ] **Step 3: Implement the three modules, the page and the page registration**
 
-The folder picker maps `File.webkitRelativePath` to `PickedEntry.path`; the zip picker uses `openZipInBrowser`. Only `selectDims(...)` files are sent — never the whole folder (spec §6: partial uploads must work for a ~1 GB world).
+The folder picker maps `File.webkitRelativePath` to `PickedEntry.path`; the zip picker uses `openZipInBrowser`. Only `selectDims(...)` files are sent — never the whole folder (spec §6: partial uploads must work for a ~1 GB world) and never anything in `pick.local`.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -1653,6 +1766,110 @@ git add src/client/world/pick-files.ts src/client/world/zip-pick.ts src/client/w
 git commit -m "feat(world): world page with scans, backups and partial uploads" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
+### Task 17a: Smart upload: hotspots, trimmed regions, radius and size preview
+
+Spec §3.4 smart upload and architecture §11.12. Inserted here because Task 18's end-to-end test uploads this way.
+
+**Files:**
+- Create: `src/shared/world/side-files.ts`, `src/client/world/inflate.ts`, `src/client/world/smart.ts`, `src/client/views/SmartUploadPanel.tsx`, `tests/helpers/pick-dir.ts`
+- Modify: `src/server/world/dims.ts` (`claimHints` maps the shared `claimedChunks` instead of reading `ClaimedChunks` itself), `src/client/views/WorldPage.tsx` (smart upload first; Task 17's checklist stays under "Advanced: whole dimensions")
+- Test: `tests/client/world-smart.test.tsx`
+
+**Interfaces:**
+- Consumes: Task 1 from `src/shared/world/` (`NbtCompound`, getters, `Inflate`, `readNbtWith`, `inflateChunkWith`, `regionChunkRefs`, `chunkPayload`, `chunkIndex`, `regionOfChunk`, `regionPathOf`, `trimRegion`, `REGION_HEADER_BYTES`, `levelInfoFromNbt`, `chunkSummary`, `INHABITED_KEEP_TICKS`); Task 3 (`makeWorld`; `scanRegionBuffer` in tests only); Task 7 (`claimHints` keeps its signature); Task 15 (`worldApi`); Task 17 (`WorldPick`, `pickWorldFiles`, `uploadRel`, `dimLabel`, `UploadItem`, `uploadWorld`, `openZipInBrowser`).
+- Produces:
+  - `src/shared/world/side-files.ts`: `playerPosition(player: NbtCompound): { dim: number; x: number; y: number; z: number } | null` (`Dimension` Int and `Pos` List of 3 Doubles; `null` when either is missing); `claimedChunks(claims: NbtCompound): Array<{ dim: number; cx: number; cz: number }>` (`ClaimedChunks: { "<dim>": [{ x, z }] }`, the format Task 7 reads; `claimHints(team, claims)` becomes `claimedChunks(claims)` plus `team`).
+  - `src/client/world/inflate.ts`: `browserInflate: Inflate` — `DecompressionStream('deflate')` for `'zlib'` (zlib-wrapped, as region chunks are) and `DecompressionStream('gzip')` for `'gzip'`; the bytes are written to `ds.writable` and read back with `new Response(ds.readable).arrayBuffer()`.
+  - `src/client/world/smart.ts`:
+    - `SMART_RADIUS = { min: 2, max: 32, default: 8 }` (chunks; 8 chunks = 128 blocks = Task 12's `MAP_MARGIN`, so the map around a base is complete).
+    - `type ReadFile = (rel: string) => Promise<Uint8Array | null>` (a world-relative path from `pick.files` or `pick.local`).
+    - `interface Hotspot { dim: number; cx: number; cz: number; why: 'player' | 'spawn' | 'claim' | 'inhabited' }`; `HOTSPOT_ORDER = ['player', 'spawn', 'claim', 'inhabited'] as const`. A **present** chunk is a header entry whose `chunkPayload` is not `null`.
+    - `findHotspots(pick: WorldPick, read: ReadFile, inflate: Inflate, onProgress?: (done: number, total: number) => void): Promise<Hotspot[]>` — `spawn` from `level.dat` (`levelInfoFromNbt(await readNbtWith(bytes, inflate)).spawn`, dim 0, chunk `x >> 4`, `z >> 4`); `player` from each `playerdata/*.dat` in `pick.local` through `playerPosition` (chunk `Math.floor(x) >> 4`, `Math.floor(z) >> 4`); `claim` from each `serverutilities/teams/claimedchunks/*.dat` in `pick.local` through `claimedChunks`; `inhabited` from every region file of `pick.files`, read one at a time and dropped after use: each present chunk through `inflateChunkWith` + `chunkSummary`, kept when `inhabitedTime ≥ INHABITED_KEEP_TICKS`, at `rx·32 + localX`, `rz·32 + localZ` (the file position, not the chunk's own `xPos`). `onProgress(done, total)` after each region file. A side file or chunk that fails to read, inflate or parse is skipped, never thrown. De-duplicated by (dim, cx, cz, why); sorted by dim, cx, cz, then `HOTSPOT_ORDER`.
+    - `selectChunks(h: readonly Hotspot[], radiusChunks: number): Map<string, number[]>` — every chunk within Chebyshev distance ≤ `radiusChunks` of a hotspot of the same dimension (the `(2r + 1)²` square), keyed by `regionPathOf(dim, regionOfChunk(cx), regionOfChunk(cz))`, values the sorted, distinct `chunkIndex(cx, cz)`; keys ordered by dim, rx, rz.
+    - `interface SmartArea { dim: number; x: number; z: number; why: string; chunks: number }`; `interface SmartPlan { items: UploadItem[]; areas: SmartArea[]; bytes: number; chunks: number }`.
+    - `planSmartUpload(pick: WorldPick, hotspots: readonly Hotspot[], radiusChunks: number, read: ReadFile): Promise<SmartPlan>` — `items[0]` = `level.dat` as picked; then, for each `selectChunks` key (in key order) that is a region file in `pick.files`, that file cut with `trimRegion(region, indices)` and kept when it holds ≥ 1 present chunk: `{ rel: key, size: trimmed.length, blob: async () => new Blob([trimmed]) }`. `chunks` = present chunks in the trimmed files; `bytes` = Σ item sizes, `level.dat` included. `areas`: per dimension, the 8-connected groups of selected chunks holding ≥ 1 present chunk; `x` = `Math.floor((minCx + maxCx + 1) · 8)` and `z` likewise over the group's present chunks (the block centre of their bounding box); `why` = the distinct kinds of the hotspots inside the group in `HOTSPOT_ORDER`, joined with `', '`; `chunks` = present chunks in the group; sorted by `chunks` descending, then dim, x, z. Nothing from `pick.local` is ever an item. It takes the hotspots and the reader (not just `pick` and the radius) so that moving the slider re-plans without reading the whole world again.
+    - `formatSize(bytes: number): string` (below 1,048,576 → `"<Math.ceil(bytes / 1024)> KB"`, else `"<(bytes / 1_048_576).toFixed(1)> MB"`).
+  - `views/SmartUploadPanel.tsx`: `SmartUploadPanel(props: { reading: { done: number; total: number } | null; plan: SmartPlan | null; radius: number; busy: boolean; onRadius(r: number): void; onUpload(): void })` — heading "Smart upload (recommended)"; while `reading`: "Reading your world… <done> / <total> region files"; one row per area (`data-testid="smart-area"`): "<dimLabel(dim)> around <x>, <z> — <why> — <n> chunk(s)"; a slider `<input type="range" min="2" max="32" step="1" aria-label="Radius in chunks">` with "<r> chunks (<r·16> blocks) around each spot"; the total (`data-testid="smart-total"`): "<chunks> chunk(s), <formatSize(bytes)>"; the note "Only level.dat and the trimmed region files are sent; player files stay on your computer."; "Upload and scan" (`data-testid="upload-button"`), disabled while `reading` or `busy` or when `plan` holds no region item. Plurals: "1 chunk", "<n> chunks".
+  - `WorldPage` (modify): after a pick it builds a `ReadFile` over the picked `File`s or zip entries, runs `findHotspots(pick, read, browserInflate, …)` once, then `planSmartUpload` with `SMART_RADIUS.default` and again on each radius change; it caches only the region bytes `planSmartUpload` reads (the touched regions), never what `findHotspots` streams through (a ~1 GB world must not sit in memory). "Upload and scan" calls `uploadWorld(plan.items, worldApi, …)` with Task 17's progress bar. `SmartUploadPanel` comes first; Task 17's "Advanced: whole dimensions" stays below it.
+  - `tests/helpers/pick-dir.ts`: `pickDir(worldDir: string): Promise<{ pick: WorldPick; read: ReadFile }>` (walks the folder with `node:fs` into `PickedEntry`s under `World/`, calls `pickWorldFiles`; `read(rel)` = that file's bytes, or `null`).
+
+- [ ] **Step 1: Write the failing tests**
+
+```tsx
+// tests/client/world-smart.test.tsx — ({ pick, read } = await pickDir((await makeWorld(tmp, SMART)).worldDir)); hs = await findHotspots(pick, read, browserInflate)
+// (the client project runs in Node 24, which has DecompressionStream). SMART: spawn (-100, 64, 40) → chunk (-7, 2); player p1 in DIM -1 at (-40.5, 70, 300.2)
+// → chunk (-3, 18); team Alpha claims DIM 0 chunk (30, -2); DIM 0 chunks (0,0) InhabitedTime 500,000, (5,5) 10, (-7,2) 0, (30,-2) 0, (40,40) 0;
+// DIM -1 chunk (-3,18) 0; DIM 7 chunk (0,0) 0.
+it('finds players, spawn, claims and inhabited chunks', () => expect(hs).toEqual([
+  { dim: -1, cx: -3, cz: 18, why: 'player' }, { dim: 0, cx: -7, cz: 2, why: 'spawn' },
+  { dim: 0, cx: 0, cz: 0, why: 'inhabited' }, { dim: 0, cx: 30, cz: -2, why: 'claim' }]));
+it('selects the square around each hotspot across region borders', () => {
+  const sel = selectChunks([{ dim: 0, cx: 0, cz: 0, why: 'spawn' }], 1);
+  expect([...sel.keys()].sort()).toEqual(['region/r.-1.-1.mca', 'region/r.-1.0.mca', 'region/r.0.-1.mca', 'region/r.0.0.mca']);
+  expect([sel.get('region/r.0.0.mca'), sel.get('region/r.-1.-1.mca')]).toEqual([[0, 1, 32, 33], [1023]]);
+});
+it('trims a region to the chosen chunks', async () => {
+  const trimmed = trimRegion((await read('region/r.0.0.mca'))!, [chunkIndex(0, 0)]);   // the file holds (0,0) and (5,5)
+  expect(regionChunkRefs(trimmed.subarray(0, REGION_HEADER_BYTES)).map((r) => r.index)).toEqual([0]);
+  const out = scanRegionBuffer(trimmed, 0);
+  expect([out.chunks.map((c) => [c.stat.cx, c.stat.cz]), out.skipped]).toEqual([[[0, 0]], 0]);
+});
+it('never sends player files', async () => {
+  const plan = await planSmartUpload(pick, hs, SMART_RADIUS.default, read);
+  expect(plan.items.map((i) => i.rel)).toEqual(['level.dat', 'DIM-1/region/r.-1.0.mca', 'region/r.-1.0.mca', 'region/r.0.-1.mca', 'region/r.0.0.mca']);
+  for (const item of plan.items) { expect(uploadRel(item.rel)).toBe(item.rel); expect(item.rel.startsWith('playerdata/')).toBe(false); }
+  expect(pick.local.map((f) => f.rel).sort()).toEqual(['playerdata/p1.dat', 'serverutilities/teams/claimedchunks/Alpha.dat']);   // read here, never sent
+});
+it('radius 2 sends fewer chunks and bytes than radius 8', async () => {
+  const [r2, r8] = [await planSmartUpload(pick, hs, 2, read), await planSmartUpload(pick, hs, 8, read)];
+  expect([r2.chunks, r8.chunks]).toEqual([4, 5]);   // (5,5) only at radius 8
+  expect(r2.bytes).toBeLessThan(r8.bytes);
+});
+it('groups the selection into areas with their reasons', async () =>
+  expect((await planSmartUpload(pick, hs, 8, read)).areas).toEqual([
+    { dim: 0, x: -8, z: 48, why: 'spawn, inhabited', chunks: 3 }, { dim: -1, x: -40, z: 296, why: 'player', chunks: 1 },
+    { dim: 0, x: 488, z: -24, why: 'claim', chunks: 1 }]));
+it('works without player or claim files and skips a corrupt chunk', async () => {
+  // BARE: level.dat (spawn 0, 64, 0) and one region: chunk (0,0) InhabitedTime 100,000, chunk (1,0) corrupt; no playerdata, no claims
+  const bare = await pickDir((await makeWorld(tmp2, BARE)).worldDir), bhs = await findHotspots(bare.pick, bare.read, browserInflate);
+  expect(bhs).toEqual([{ dim: 0, cx: 0, cz: 0, why: 'spawn' }, { dim: 0, cx: 0, cz: 0, why: 'inhabited' }]);
+  expect((await planSmartUpload(bare.pick, bhs, 8, bare.read)).chunks).toBe(1);
+});
+it('inflates zlib and gzip like node:zlib', async () => {
+  const raw = new TextEncoder().encode('chunk'.repeat(100));
+  expect([await browserInflate(deflateSync(raw), 'zlib'), await browserInflate(gzipSync(raw), 'gzip')]).toEqual([raw, raw]);
+});
+it('shows areas, the radius and the total before upload', () => {
+  // PLAN = { items: [level.dat + 4 regions], areas: the three areas above, bytes: 12_288, chunks: 5 }
+  const html = renderToStaticMarkup(<SmartUploadPanel reading={null} plan={PLAN} radius={8} busy={false} onRadius={() => {}} onUpload={() => {}} />);
+  for (const t of ['Smart upload (recommended)', 'type="range"', 'min="2"', 'max="32"', 'value="8"', '8 chunks (128 blocks) around each spot',
+    'data-testid="smart-area"', 'Overworld around -8, 48 — spawn, inhabited — 3 chunks', 'data-testid="smart-total"', '5 chunks, 12 KB',
+    'player files stay on your computer', 'data-testid="upload-button"']) expect(html).toContain(t);
+  expect([formatSize(1), formatSize(5 * 1_048_576 + 1)]).toEqual(['1 KB', '5.0 MB']);
+});
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `npx vitest run --project client tests/client/world-smart.test.tsx`
+Expected: FAIL — `Failed to resolve import "../../src/client/world/smart.ts"`.
+
+- [ ] **Step 3: Implement `side-files.ts`, `inflate.ts`, `smart.ts`, `SmartUploadPanel.tsx`, `pick-dir.ts`, then wire `WorldPage` and switch `claimHints` to `claimedChunks`**
+
+Areas come from a flood fill over the selected chunk set of each dimension (8 neighbours); everything else is fixed by the signatures above.
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `npx vitest run --project client tests/client/world-smart.test.tsx tests/client/world-page.test.tsx && npx vitest run --project server tests/unit/world/dims.test.ts tests/unit/world/shared-world.test.ts && npm run typecheck`
+Expected: PASS; Task 7's dims tests still pass with `claimHints` on the shared reader.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/shared/world/side-files.ts src/client/world/inflate.ts src/client/world/smart.ts src/client/views/SmartUploadPanel.tsx src/client/views/WorldPage.tsx src/server/world/dims.ts tests/helpers/pick-dir.ts tests/client/world-smart.test.tsx
+git commit -m "feat(world): smart upload of trimmed regions around players, spawn, claims and inhabited chunks" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
 ### Task 18: End-to-end check and README
 
 **Files:**
@@ -1660,7 +1877,7 @@ git commit -m "feat(world): world page with scans, backups and partial uploads" 
 - Modify: `README.md` (section "World map")
 
 **Interfaces:**
-- Consumes: Plan 2's `tests/e2e/helpers.ts` (`login(page: Page): Promise<void>`, `createProject(page: Page, name: string): Promise<string>` — leaves the page on the new project; Architecture change request 7), `makeSampleWorld` + `SAMPLE` (Task 12), everything this plan ships.
+- Consumes: Plan 2's `tests/e2e/helpers.ts` (`login(page: Page): Promise<void>`, `setName(page: Page, name: string): Promise<void>` — stores the display name before the first navigation, so Plan 2's `NamePrompt` modal ("What should we call you?") never covers the page and ops carry `X-Planner-Name`, `createProject(page: Page, name: string): Promise<string>` — leaves the page on the new project; architecture §11.7), `makeSampleWorld` + `SAMPLE` (Task 12), everything this plan ships.
 - Produces: no new code interfaces.
 
 - [ ] **Step 1: Write the end-to-end test**
@@ -1668,18 +1885,23 @@ git commit -m "feat(world): world page with scans, backups and partial uploads" 
 ```ts
 // tests/e2e/world.spec.ts
 test.beforeAll(async () => { tmp = await mkdtemp(join(tmpdir(), 'gp-e2e-world-')); await makeSampleWorld(tmp); });
-test('upload a world, scan it, pick a base, read the map and pin a note', async ({ page }) => {
+test('smart upload of the sample world sends only trimmed regions; scan, pick the base, read the map and pin a note', async ({ page }) => {
   await login(page);
+  await setName(page, 'E2E');                                       // before any navigation: no name prompt, addNote carries X-Planner-Name
+  const sent: string[] = [];
+  page.on('request', (r) => { if (r.method() === 'PUT' && r.url().includes('/api/world/uploads/')) sent.push(decodeURIComponent(r.url().split('/files/')[1])); });
   await page.goto('/world');
   await page.setInputFiles('[data-testid=world-folder-input]', join(tmp, 'World'));
-  for (const name of ['Overworld', 'Nether', 'DIM7']) await page.getByLabel(new RegExp(name)).check();
+  await expect(page.getByTestId('smart-area')).toHaveCount(2);      // the Overworld base chunks and the Nether chunk; DIM 7 was never lived in
+  await expect(page.getByTestId('smart-total')).toContainText('KB');
   await page.getByTestId('upload-button').click();
   await expect(page.getByTestId('scan-row').first()).toHaveAttribute('data-state', 'done', { timeout: 60_000 });
+  expect([...sent].sort()).toEqual(['DIM-1/region/r.-1.-1.mca', 'level.dat', 'region/r.0.0.mca']);   // no playerdata, no claims, no DIM7
 
   await createProject(page, 'E2E map');
   await page.getByText('Map', { exact: true }).first().click();     // the first project tab (Task 16)
   await page.getByLabel('World scan').selectOption({ index: 1 });
-  await page.getByLabel('Base').selectOption({ label: 'Overworld base (4, 5)' });   // claim files are not uploaded, so no team name
+  await page.getByLabel('Base').selectOption({ label: 'Overworld base (4, 5)' });   // the smart upload keeps claim files local, so the base has no team ("Alpha") name
   await page.getByRole('button', { name: 'Use this base' }).click();
 
   const panel = page.getByTestId('found-panel');
@@ -1706,7 +1928,7 @@ test('upload a world, scan it, pick a base, read the map and pin a note', async 
 });
 ```
 
-`data-testid`s used here (`found-panel`, `machine-count`, `note-<n>`) and the labels `World scan`, `Base`, `Use this base`, `Note`, `Save note` and the dimension checkboxes labelled with dimension names are part of Tasks 16–17's markup; add any that are missing there.
+`data-testid`s used here (`found-panel`, `machine-count`, `note-<n>`, `smart-area`, `smart-total`, `upload-button`, `scan-row`) and the labels `World scan`, `Base`, `Use this base`, `Note`, `Save note` are part of Tasks 16, 17 and 17a's markup; add any that are missing there.
 
 - [ ] **Step 2: Run the whole suite and the end-to-end test**
 
@@ -1722,13 +1944,13 @@ Expected: PASS; the printed summary shows the group's bases, steam power and rou
 
 - [ ] **Step 4: Write the README section**
 
-Add "## World map" to `README.md` (user-facing, ~25 lines, no local paths): what it reads (the newest *complete* backup in `<server>/backups`, else a snapshot copy; never the live world files; nothing is written to the server folder); setting `serverFolder` in `data/config.json`; `npm run scan` (`--backup <file>`, `--json`); scanning from the World page; friends uploading from their browser (pick the world folder, tick the dimensions they need — only `level.dat` and those region files are sent — or pick a zip); where scans live (`data/scans/<id>/`, safe to delete old folders while the app is stopped); choosing a scan and base on a project's Map tab; what the map shows and how to add notes; that power figures are estimates (clear, rain, average) and storage that cannot be read reliably is shown as unknown.
+Add "## World map" to `README.md` (user-facing, ~25 lines, no local paths): what it reads (the newest *complete* backup in `<server>/backups`, else a snapshot copy; never the live world files; nothing is written to the server folder); setting `serverFolder` in `data/config.json`; `npm run scan` (`--backup <file>`, `--json`); scanning from the World page; friends uploading from their browser (pick the world folder or a zip; the browser finds players, spawn, claimed and lived-in chunks, shows the areas and the size, lets them change the radius, and sends only `level.dat` plus the trimmed region files — player files never leave their computer; "Advanced: whole dimensions" sends whole dimensions instead); where scans live (`data/scans/<id>/`, safe to delete old folders while the app is stopped); choosing a scan and base on a project's Map tab; what the map shows and how to add notes; that power figures are estimates (clear, rain, average) and storage that cannot be read reliably is shown as unknown.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add tests/e2e/world.spec.ts tests/unit/world/real-world.test.ts README.md
-git commit -m "test(world): end-to-end world upload, scan and map; docs: world map README" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -m "test(world): end-to-end smart upload, scan and map; docs: world map README" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1743,4 +1965,7 @@ The tasks above assume each request is granted. All are additive; none renames o
 4. **Top-level client pages (Plan 2, §7.2).** Plan 2 creates `src/client/views/top-pages.ts` with `export interface TopPage { path: string; label: string; component: ComponentType }` and `export const TOP_PAGES: TopPage[]` (Plan 2: projects list), read by its router and header navigation — the same append-only pattern as `PROJECT_TABS`. Plan 4 appends `{ path: '/world', label: 'World', component: WorldPage }`. *Why:* a world scan belongs to the whole group, not to one project, and the architecture has no other place for a top-level page.
 5. **Two world API additions (§7).** `POST /api/world/scans/:id/cancel` → 204 / 404 / 409 (spec anti-goal: a slow scan must be stoppable), and an optional `?y=<0..255>` query on `GET /api/world/scans/:id/tiles/:dim/:tx/:tz` (default 255 = surface) for the map's Y-level control (spec §3.7).
 6. **§6.6 additions (optional fields and helpers, listed for visibility).** `PlacedMachine.{kind?, tier?, name?, recipeEUt?, coilHeat?}`, `PlacedPipe.{kind?, voltageTier?, amps?, networkId?}`, `PowerNetwork.{loadEUt?, solarShare?}`, `LogisticsNetwork.{parts?}`, `StorageBlock.{capacityStacks?, controller?}`, `WorldScan.{logisticsBlocks?, warnings?, skippedChunks?}`; new exports in `src/shared/types/world.ts`: `LogisticsBlock`, `BBox`, `Voxels` (moved here from the prose of §6.6 so Plan 5 can import it; index `(y·size[2] + z)·size[0] + x`, palette entry 0 = air and 1 = `UNKNOWN_BLOCK` for unscanned blocks), `AIR_INDEX`, `UNKNOWN_INDEX`, `UNKNOWN_BLOCK`, `TILE_SIZE`, `tileOf`, `encodeMapTile`, `decodeMapTile` (column `i = lz·64 + lx`), `baseIdOf`, `findBase`. The §6.6 server functions are the methods of `WorldService` (`src/server/world/scan.ts`), registered as `app.services.world`; `contextFromScan` is exported from `src/server/world/context.ts`.
-7. **Plan 2's e2e helpers.** `tests/e2e/helpers.ts` exports `login(page: Page): Promise<void>` and `createProject(page: Page, name: string): Promise<string>` (returns the id and leaves the page on the new project). Task 18 relies on exactly these.
+7. **Plan 2's e2e helpers — granted as architecture §11.7.** `tests/e2e/helpers.ts` exports `login(page)`, `setName(page, name)` and `createProject(page, name)` (returns the id and leaves the page on the new project) exactly as §11.7 defines them; Task 18 calls all three.
+8. **Where each material sits (§6.3, Plan 2; spec §3.4 "broken down by where it sits", §3.10 have-counts next to each line).** `src/shared/types/plan.ts` gains `interface StorageWhere { kind: string /* a StorageBlock kind: 'drawer', 'barrel', 'chest', … — written as string because plan.ts lands before world.ts */; pos: [number, number, number]; count: number; reachable: boolean }` and an optional `where?: StorageWhere[]` on the `PlanContext.storage` map value, on `RawInput.have` and on `BomLine.have`. Plan 2 copies `where` from the context into `RawInput.have` and `BomLine.have`, and a have cell in `MaterialsView` expands to one line per entry, "<count> in <kind> at x y z" (Plan 2 test `materials.test` "shows where a material sits"). Task 11's `StorageWhere` (kind `StorageBlock['kind']`) is assignable to it; Task 14 already fills it. *Without it:* the list rides along in the context unread and only the Map tab's "Found in world" panel shows locations.
+9. **`contextFromScan` takes the logistics mode (§6.6, listed for visibility).** `contextFromScan(scan, pack, baseId, mode?: LogisticsMode)` — an optional fourth argument, so existing three-argument callers keep compiling; `reachable` then counts only storage on the networks that mode can order from (routed → routed, ae2 → AE2, direct → routed and AE2; spec §3.4 "what the line's chosen logistics can reach"). Task 14's planner hook passes `project.settings.logistics`; Plan 5's `layoutLine` should pass it too.
+10. **Shared world parsing and smart upload — granted as architecture §11.12.** The pure modules listed in Task 1, Task 11 (`storage-totals.ts`) and Task 17a (`side-files.ts`) live in `src/shared/world/` instead of the `src/server/world/` files named in §3's layout; `src/server/world/{nbt,region,sections,level-dat}.ts` remain and re-export them, so every server-side name in this plan is unchanged. The upload API (§7) accepts only `level.dat` and region paths — no zip upload.
