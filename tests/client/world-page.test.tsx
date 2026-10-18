@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { localTime } from '../../src/client/format.ts';
 import { matchPath } from '../../src/client/router.ts';
-import { ScanList, UploadStatus, WholeDimensions, WorldPage } from '../../src/client/views/WorldPage.tsx';
+import { SmartUploadPanel } from '../../src/client/views/SmartUploadPanel.tsx';
+import { ScanList, smartView, UploadStatus, WholeDimensions, WorldPage, type PickedWorld, type SmartWork } from '../../src/client/views/WorldPage.tsx';
 import { TOP_PAGES } from '../../src/client/views/top-pages.ts';
 import { pickWorldFiles } from '../../src/client/world/pick-files.ts';
+import type { Hotspot, SmartPlan } from '../../src/client/world/smart.ts';
 import type { WorldScanListItem } from '../../src/shared/types/api.ts';
 
 const PICK = pickWorldFiles([
@@ -126,5 +128,46 @@ describe('UploadStatus', () => {
     expect(renderToStaticMarkup(<UploadStatus upload={{ ...IDLE, outcome: 'Sent 3 files. The scan is listed under Scans.' }} onStop={() => {}} />))
       .toContain('The scan is listed under Scans.');
     expect(renderToStaticMarkup(<UploadStatus upload={IDLE} onStop={() => {}} />)).toBe('');
+  });
+});
+
+// useSmartPlan shows `smartView` of what it has worked out (its effects do not run in a server-side render).
+describe('useSmartPlan: what the smart upload shows', () => {
+  const picked = (label: string): PickedWorld => ({ label, pick: PICK, blob: async () => new Blob([]), close: async () => {} });
+  const HOTSPOTS: Hotspot[] = [{ dim: 0, cx: 0, cz: 0, why: 'spawn' }];
+  const plan = (chunks: number): SmartPlan => ({
+    items: [{ rel: 'level.dat', size: 300, blob: async () => new Blob([]) }, { rel: 'region/r.0.0.mca', size: 4096, blob: async () => new Blob([]) }],
+    areas: [{ dim: 0, x: 0, z: 0, why: 'spawn', chunks }], bytes: 4396, chunks,
+  });
+  const WORLD = picked('World');
+  /** The plan for radius 8 is in; the user has just moved the slider. */
+  const AT_8: SmartWork = { reading: null, found: { world: WORLD, hotspots: HOTSPOTS }, planned: { hotspots: HOTSPOTS, radius: 8, plan: plan(289) }, error: null };
+
+  it('shows a plan only for the radius it was made for, so a stale plan is never shown or sent', () => {
+    expect(smartView(AT_8, WORLD, 8).plan).toBe(AT_8.planned!.plan);
+    expect(smartView(AT_8, WORLD, 4)).toEqual({ reading: null, plan: null, error: null });   // radius 4 is still being planned
+    const html = renderToStaticMarkup(
+      <SmartUploadPanel reading={null} plan={smartView(AT_8, WORLD, 4).plan} radius={4} busy={false} onRadius={() => {}} onUpload={() => {}} />);
+    expect(html).toContain('Working out what to send');
+    expect(html).toContain('4 chunks (64 blocks) around each spot');
+    expect(html).not.toContain('data-testid="smart-area"');
+    expect(html).not.toContain('data-testid="smart-total"');
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*data-testid="upload-button"/);
+  });
+
+  it('shows the plan again once it is made for the new radius', () => {
+    const at4: SmartWork = { ...AT_8, planned: { hotspots: HOTSPOTS, radius: 4, plan: plan(81) } };
+    expect(smartView(at4, WORLD, 4).plan?.chunks).toBe(81);
+    expect(smartView(at4, WORLD, 8).plan).toBeNull();
+  });
+
+  it('shows nothing of an older pick, nor a plan made from other hotspots', () => {
+    const older = picked('Old');
+    const stale: SmartWork = {
+      reading: { world: older, done: 1, total: 3 }, found: { world: older, hotspots: HOTSPOTS }, planned: AT_8.planned, error: { world: older, message: 'Could not read the world: x' },
+    };
+    expect(smartView(stale, WORLD, 8)).toEqual({ reading: null, plan: null, error: null });
+    expect(smartView(stale, older, 8)).toEqual({ reading: { done: 1, total: 3 }, plan: AT_8.planned!.plan, error: 'Could not read the world: x' });
+    expect(smartView({ ...AT_8, found: { world: WORLD, hotspots: [...HOTSPOTS] } }, WORLD, 8).plan).toBeNull();   // found again: plan anew
   });
 });

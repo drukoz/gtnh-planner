@@ -257,7 +257,7 @@ export function WholeDimensions(props: {
 }
 
 /** A picked folder or zip: what it holds and the bytes of one of its files, read only when asked. */
-interface PickedWorld { label: string; pick: WorldPick; blob(path: string): Promise<Blob>; close(): Promise<void> }
+export interface PickedWorld { label: string; pick: WorldPick; blob(path: string): Promise<Blob>; close(): Promise<void> }
 
 const notPicked = (path: string): Error => new Error(`${path} is not in the picked files`);
 
@@ -323,11 +323,40 @@ function keeping(read: ReadFile): ReadFile {
 
 interface SmartState { reading: { done: number; total: number } | null; plan: SmartPlan | null; error: string | null }
 
+/** What useSmartPlan has worked out so far, each part with the pick (and a plan with the hotspots and radius) it is for. */
+export interface SmartWork {
+  reading: { world: PickedWorld; done: number; total: number } | null;
+  found: { world: PickedWorld; hotspots: Hotspot[] } | null;
+  planned: { hotspots: Hotspot[]; radius: number; plan: SmartPlan } | null;
+  error: { world: PickedWorld; message: string } | null;
+}
+
+/** The hotspots found in `picked`; null while they are being found, or when the ones found are another pick's. */
+function hotspotsOf(found: SmartWork['found'], picked: PickedWorld | null): Hotspot[] | null {
+  return found !== null && found.world === picked ? found.hotspots : null;
+}
+
+/**
+ * What the smart upload shows for `picked` at `radius`: only what was worked out for this pick, and only the plan made
+ * from its hotspots at this very radius. While another radius is being planned the plan is null, so the panel says
+ * "Working out what to send…" and "Upload and scan" waits: the preview is always exactly what the button sends (spec
+ * §3.4), never the previous radius's areas, total or files.
+ */
+export function smartView(work: SmartWork, picked: PickedWorld | null, radius: number): SmartState {
+  const { reading, planned, error } = work;
+  const hotspots = hotspotsOf(work.found, picked);
+  return {
+    reading: reading !== null && reading.world === picked ? { done: reading.done, total: reading.total } : null,
+    plan: planned !== null && hotspots !== null && planned.hotspots === hotspots && planned.radius === radius ? planned.plan : null,
+    error: error !== null && error.world === picked ? error.message : null,
+  };
+}
+
 /**
  * The smart upload of the picked world: its hotspots, found once per pick by reading every file through and keeping
  * none of it (a ~1 GB world must not sit in memory), then the plan for `radius`, made again on every radius from the
- * touched region files, which alone are kept. Everything is tied to the pick it was made for, so a newer pick never
- * shows an older one's reading, plan or error.
+ * touched region files, which alone are kept. What it shows is `smartView` of what it has worked out: a newer pick
+ * never shows an older one's reading, plan or error, and a new radius never shows the previous radius's plan.
  */
 function useSmartPlan(picked: PickedWorld | null, radius: number): SmartState {
   const readers = useMemo(() => {
@@ -336,9 +365,9 @@ function useSmartPlan(picked: PickedWorld | null, radius: number): SmartState {
     return { world: picked, read, planRead: keeping(read) };
   }, [picked]);
   const [reading, setReading] = useState<{ world: PickedWorld; done: number; total: number } | null>(null);
-  const [found, setFound] = useState<{ world: PickedWorld; hotspots: Hotspot[] } | null>(null);
-  const [planned, setPlanned] = useState<{ hotspots: Hotspot[]; plan: SmartPlan } | null>(null);
-  const [error, setError] = useState<{ world: PickedWorld; message: string } | null>(null);
+  const [found, setFound] = useState<SmartWork['found']>(null);
+  const [planned, setPlanned] = useState<SmartWork['planned']>(null);
+  const [error, setError] = useState<SmartWork['error']>(null);
 
   useEffect(() => {
     if (readers === null) return;
@@ -365,7 +394,7 @@ function useSmartPlan(picked: PickedWorld | null, radius: number): SmartState {
     };
   }, [readers]);
 
-  const hotspots = found !== null && found.world === picked ? found.hotspots : null;
+  const hotspots = hotspotsOf(found, picked);
   useEffect(() => {
     if (readers === null || hotspots === null) return;
     const { world, planRead } = readers;
@@ -373,7 +402,7 @@ function useSmartPlan(picked: PickedWorld | null, radius: number): SmartState {
     planSmartUpload(world.pick, hotspots, radius, planRead).then(
       (plan) => {
         if (!live) return;
-        setPlanned({ hotspots, plan });
+        setPlanned({ hotspots, radius, plan });
         setError(null);
       },
       (err: unknown) => {
@@ -385,11 +414,7 @@ function useSmartPlan(picked: PickedWorld | null, radius: number): SmartState {
     };
   }, [readers, hotspots, radius]);
 
-  return {
-    reading: reading !== null && reading.world === picked ? { done: reading.done, total: reading.total } : null,
-    plan: planned !== null && hotspots !== null && planned.hotspots === hotspots ? planned.plan : null,
-    error: error !== null && error.world === picked ? error.message : null,
-  };
+  return smartView({ reading, found, planned, error }, picked, radius);
 }
 
 function UploadSection(props: { onUploaded(): void }): ReactElement {
