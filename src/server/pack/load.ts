@@ -1,10 +1,11 @@
 // The pack loader (architecture §6.2 server API): streams an export into the in-memory `Pack`.
 //
 // Files are read in this order, so every reference resolves: manifest → items → fluids → fluid containers → ore
-// dictionary → recipe maps, then recipes, machines, structures, materials and worldgen (not read yet: their Pack fields
-// stay empty). Files are never read into one string; `readJsonl` streams them line by line. Structural damage (bad gzip, bad JSON, a line
-// count that differs from the manifest, an index that points nowhere) fails with the file and line instead of
-// returning a half-loaded pack; recoverable oddities become `pack.warnings`.
+// dictionary → recipe maps → recipes (GT, assembly line, crafting, furnace), then machines, structures, materials and
+// worldgen (not read yet: their Pack fields stay empty). Files are never read into one string; `readJsonl` streams
+// them line by line. Structural damage (bad gzip, bad JSON, a line count that differs from the manifest, an index that
+// points nowhere) fails with the file and line instead of returning a half-loaded pack; recoverable oddities become
+// `pack.warnings`.
 
 import { createReadStream } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
@@ -20,6 +21,7 @@ import {
 } from './format.ts';
 import { aliasesOf, normalizeMapId } from './map-aliases.ts';
 import { nbtHash } from './recipe-id.ts';
+import { assemblyLineRecipe, craftingRecipe, furnaceEntry, furnaceRecipe, gtRecipe, RecipeCollector, type FurnaceEntry } from './recipes.ts';
 
 /** Minecraft's OreDictionary.WILDCARD_VALUE: "any meta". Expanded here, never part of a key (architecture §5). */
 const WILDCARD_META = 32767;
@@ -287,6 +289,10 @@ interface LoadState {
   readonly pack: LoadingPack;
   readonly mapsByIndex: Map<number, RecipeMapInfo>;
   readonly ctx: LoadContext;
+  /** Every recipe read so far, merged by id; `setRecipes` puts the list into the pack. */
+  readonly recipes: RecipeCollector;
+  /** The smelting entries, kept for the electric furnace and microwave recipes derived from them. */
+  readonly furnace: FurnaceEntry[];
 }
 
 function toPackManifest(m: ManifestFile): PackManifest {
@@ -314,7 +320,10 @@ function newLoadState(src: ExportSource): LoadState {
     pack.warnings.push(message);
   };
   const mapsByIndex = new Map<number, RecipeMapInfo>();
-  return { src, pack, mapsByIndex, ctx: { items: new ItemRefs(warn), mapsByIndex, oreDict: pack.oreDict, warn } };
+  return {
+    src, pack, mapsByIndex, ctx: { items: new ItemRefs(warn), mapsByIndex, oreDict: pack.oreDict, warn },
+    recipes: new RecipeCollector(), furnace: [],
+  };
 }
 
 /** Calls `fn` for every line of `file`; whatever it throws becomes an `ExportFormatError` with the file and line. */
@@ -426,6 +435,32 @@ async function readRecipeMaps({ src, pack, mapsByIndex, ctx }: LoadState): Promi
   }
 }
 
+/** GT, assembly-line, crafting and furnace recipes, in that order, all through one collector. */
+async function readRecipes({ src, ctx, recipes, furnace }: LoadState): Promise<void> {
+  await eachLine(src, 'recipesGt', (line) => {
+    const recipe = gtRecipe(line, ctx);
+    if (recipe !== null) recipes.add(recipe);
+  });
+  await eachLine(src, 'recipesAssemblyLine', (line) => recipes.add(assemblyLineRecipe(line, ctx)));
+  let withoutOutput = 0;
+  await eachLine(src, 'recipesCrafting', (line) => {
+    if (line.out == null) withoutOutput += 1;
+    else recipes.add(craftingRecipe(line, ctx));
+  });
+  if (withoutOutput > 0) ctx.warn(`${EXPORT_FILES.recipesCrafting}: skipped ${withoutOutput} crafting recipe(s) without an output`);
+  await eachLine(src, 'recipesFurnace', (line) => {
+    const entry = furnaceEntry(line, ctx);
+    furnace.push(entry);
+    recipes.add(furnaceRecipe(entry));
+  });
+}
+
+/** The collected recipes become `pack.recipes`, and `recipeById` points at the same objects. */
+function setRecipes({ pack, recipes }: LoadState): void {
+  pack.recipes = recipes.list();
+  for (const recipe of pack.recipes) pack.recipeById.set(recipe.id, recipe);
+}
+
 /** Reads `src` into a Pack, file by file in the order of the header comment. */
 export async function buildPack(src: ExportSource): Promise<Pack> {
   const state = newLoadState(src);
@@ -434,6 +469,8 @@ export async function buildPack(src: ExportSource): Promise<Pack> {
   await readFluidContainers(state);
   await readOreDict(state);
   await readRecipeMaps(state);
+  await readRecipes(state);
+  setRecipes(state);
   return state.pack;
 }
 
