@@ -1,0 +1,166 @@
+import { describe, it, expect } from 'vitest';
+import { miniGt } from '../../helpers/mini-gt.ts';
+import { packFromSpec } from '../../helpers/pack-spec.ts';
+import { buildBom, expandBomLines } from '../../../src/server/planner/bom.ts';
+import { buildSteps } from '../../../src/server/planner/steps.ts';
+import { planBasis, effectiveTier } from '../../../src/server/planner/basis.ts';
+import { computeAvailability, reachableDims } from '../../../src/server/planner/availability.ts';
+import { makeLeafOracle, makePrices } from '../../../src/server/planner/costs.ts';
+import type { PlanEnv } from '../../../src/server/planner/candidates.ts';
+import type { PlanStep } from '../../../src/shared/types/plan.ts';
+import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
+import { emptyContextForTest } from '../../helpers/plan-context.ts';
+
+const pack = miniGt();
+const env: PlanEnv = { tier: 1, reachable: reachableDims(pack.worldgen, { policy: 'progression', overrides: {} }, [], 1).keys, lowGravity: false, coilHeat: 1801, excluded: new Set(defaultSettings().excludedCategories) };
+const leaf = makeLeafOracle(pack, defaultSettings(), computeAvailability(pack, env), makePrices(pack, {}));
+const step = (p: Partial<PlanStep>): PlanStep => ({ id: 'x', recipeId: 'x', mapId: 'm', machine: { mteId: 0, name: '', tier: 1 }, count: 1, owned: 0, runsPerSecond: 0.1,
+  utilization: 1, euPerTick: 0, durationTicks: 20, overclocks: 0, inputs: [], outputs: [], alternatives: [], handCraft: false, warnings: [], ...p });
+const opts = { settings: defaultSettings(), env, leaf, ctx: emptyContextForTest() };
+const PC = 'gregtech:gt.integrated_circuit@2';
+
+describe('planBasis', () => {
+  it('derives tier, reachability and the leaf oracle like planLine', () => {
+    const ctx = { ...emptyContextForTest(), topTier: 3 };
+    expect([effectiveTier(defaultSettings(), ctx), effectiveTier({ ...defaultSettings(), tier: 2 }, ctx), effectiveTier(defaultSettings(), emptyContextForTest())]).toEqual([3, 2, 1]);
+    const b = planBasis(pack, { ...defaultSettings(), tier: 1 }, emptyContextForTest());
+    expect(b.env).toMatchObject({ tier: 1, lowGravity: false });
+    expect(b.env.reachable.has('overworld')).toBe(true);
+    expect(b.leaf('t:iron_ingot@0')).toMatchObject({ buyable: true, leafClass: 'direct' });
+  });
+});
+
+describe('buildBom', () => {
+  it('lists new machines and breaks them down to base materials', async () => {
+    const bom = await buildBom(pack, [step({ id: 'wire', recipeId: 'wire', machine: { mteId: 111, name: 'Basic Wiremill', tier: 1 } })], opts);
+    expect(bom.lines.map((l) => [l.key, l.amount, l.why])).toEqual([['machine:111@0', 1, '1× Basic Wiremill']]);
+    expect(bom.lines.map((l) => l.group)).toEqual(['machines']);
+    expect(bom.lines[0]?.children?.map((l) => [l.key, l.amount])).toEqual([['t:circuit@0', 2], ['t:copper_wire@0', 4], ['t:hull_lv@0', 1]]);
+    expect(bom.totals.map((l) => [l.key, l.amount])).toEqual([['t:copper_ingot@0', 4], ['t:iron_ingot@0', 10], ['t:redstone@0', 2], ['t:tin_ingot@0', 1]]);
+  });
+  it('skips owned machines but keeps one-off items for every machine', async () => {
+    const bom = await buildBom(pack, [step({ id: 'circuit-lv', recipeId: 'circuit-lv', count: 5, owned: 5, machine: { mteId: 121, name: 'Basic Assembler', tier: 1 } })], opts);
+    expect(bom.lines.map((l) => [l.key, l.amount, l.why])).toEqual([[PC, 5, '5× Programmed Circuit (stays in the machine)']]);
+    expect(bom.lines.map((l) => l.group)).toEqual(['one-off']);
+  });
+  it('counts a multiblock controller once, not again inside its structure', async () => {
+    const p = packFromSpec({ maps: [{ id: 'gt.recipe.blastfurnace', specialValue: 'heat' }],
+      machines: [
+        { mteId: 1000, name: 'Electric Blast Furnace', maps: ['gt.recipe.blastfurnace'], kind: 'multiblock', structure: { size: [3, 1, 1], controller: [1, 0, 0], air: [], blocks: [
+          { pos: [0, 0, 0], block: { id: 't:casing', meta: 11 } },
+          { pos: [1, 0, 0], block: { id: 'gregtech:gt.blockmachines', meta: 0, mteId: 1000 } },
+          { pos: [2, 0, 0], block: { id: 'gregtech:gt.blockmachines', meta: 0, mteId: 50 } }] } },
+        { mteId: 50, name: 'LV Energy Hatch', maps: [], kind: 'hatch', tier: 1 }],
+      recipes: [{ id: 'ebf', map: 'gt.recipe.blastfurnace', in: [['a@0', 1]], out: [['b@0', 1]], eut: 120 }] });
+    const settings = { ...defaultSettings(), tier: 1 };
+    const b = planBasis(p, settings, emptyContextForTest());
+    const bom = await buildBom(p, [step({ id: 'ebf', recipeId: 'ebf', machine: { mteId: 1000, name: 'Electric Blast Furnace', tier: 1 } })], { settings, env: b.env, leaf: b.leaf, ctx: emptyContextForTest() });
+    expect(bom.lines.map((l) => [l.key, l.amount, l.group])).toEqual([['machine:1000@0', 1, 'machines'], ['machine:50@0', 1, 'machines'], ['t:casing@11', 1, 'machines']]);
+    expect(bom.lines.find((l) => l.key === 'machine:1000@0')?.why).toBe('1× Electric Blast Furnace');
+  });
+  it('adds one cleanroom for the steps that need it, and warns when the pack has none', async () => {
+    const spec = (cls: string) => packFromSpec({ maps: [{ id: 'gt.recipe.assembler' }],
+      machines: [{ mteId: 121, name: 'Basic Assembler', maps: ['gt.recipe.assembler'], tier: 1 },
+                 { mteId: 1172, name: 'Cleanroom', maps: [], kind: 'multiblock', cls }],
+      recipes: [{ id: 'chip', map: 'gt.recipe.assembler', in: [['t:wafer@0', 1]], out: [['t:chip@0', 1]], eut: 16, meta: { cleanroom: true } }] });
+    const steps = [step({ id: 'chip', recipeId: 'chip', needsCleanroom: true, mainOutput: 't:chip@0', machine: { mteId: 121, name: 'Basic Assembler', tier: 1 } })];
+    const settings = { ...defaultSettings(), tier: 1 };
+    const withRoom = spec('gregtech.common.tileentities.machines.multi.MTECleanroom');
+    const b = planBasis(withRoom, settings, emptyContextForTest());
+    const bom = await buildBom(withRoom, steps, { settings, env: b.env, leaf: b.leaf, ctx: emptyContextForTest() });
+    expect(bom.lines.map((l) => [l.key, l.amount, l.why, l.group])).toEqual([
+      ['machine:1172@0', 1, 'cleanroom for t:chip@0', 'machines'], ['machine:121@0', 1, '1× Basic Assembler', 'machines']]);
+    expect(bom.warnings).toEqual([]);
+    const without = spec('test.NotACleanroom');
+    const nb = planBasis(without, settings, emptyContextForTest());
+    const none = await buildBom(without, steps, { settings, env: nb.env, leaf: nb.leaf, ctx: emptyContextForTest() });
+    expect(none.lines.map((l) => l.key)).toEqual(['machine:121@0']);
+    expect(none.warnings.map((w) => w.code)).toEqual(['no-cleanroom']);
+  });
+  it('counts a machine that Make N steps share once', async () => {
+    const steps = [step({ id: 'bend-plate', recipeId: 'bend-plate', count: 1, owned: 0, machine: { mteId: 101, name: 'Basic Bending Machine', tier: 1 } }),
+                   step({ id: 'bend-ti', recipeId: 'bend-ti', count: 1, owned: 0, machine: { mteId: 101, name: 'Basic Bending Machine', tier: 1 } })];
+    const makeN = await buildBom(pack, steps, { ...opts, settings: { ...defaultSettings(), mode: 'makeN' } });
+    expect(makeN.lines.map((l) => [l.key, l.amount, l.why])).toEqual([['machine:101@0', 1, '1× Basic Bending Machine']]);
+    const rate = await buildBom(pack, steps, opts);
+    expect(rate.lines.map((l) => [l.key, l.amount, l.why])).toEqual([['machine:101@0', 2, '1× Basic Bending Machine; 1× Basic Bending Machine']]);
+  });
+});
+
+describe('expandBomLines', () => {
+  it('expands lines that do not come from plan steps, keeping their group and why', async () => {
+    const ctx = { ...emptyContextForTest(), storage: new Map([['t:tin_cable@0', { total: 5, reachable: 1 }]]) };
+    const r = await expandBomLines(pack, [{ key: 't:tin_cable@0', amount: 3, why: 'cable to the power tap', group: 'power' }], { ...defaultSettings(), tier: 1 }, ctx);
+    expect(r.lines).toHaveLength(1);
+    expect(r.lines[0]).toMatchObject({ key: 't:tin_cable@0', amount: 3, why: 'cable to the power tap', group: 'power', have: { total: 5, reachable: 1 } });
+    expect(r.lines[0]?.children?.map((l) => [l.key, l.amount, l.why])).toEqual([['t:tin_ingot@0', 2, 'for 1x Tin Cable']]);   // 2 runs of 1 → 2
+    expect(r.totals.map((l) => [l.key, l.amount])).toEqual([['t:tin_ingot@0', 2]]);
+  });
+  it('copies where the stock sits into have (ruling R9)', async () => {
+    const where = [{ kind: 'drawer', pos: [10, 64, -5] as [number, number, number], count: 64, reachable: true }];
+    const ctx = { ...emptyContextForTest(), storage: new Map([['t:tin_cable@0', { total: 64, reachable: 64, where }]]) };
+    const r = await expandBomLines(pack, [{ key: 't:tin_cable@0', amount: 3, why: 'cable to the power tap', group: 'power' }], { ...defaultSettings(), tier: 1 }, ctx);
+    expect(r.lines[0]?.have).toEqual({ total: 64, reachable: 64, where });
+  });
+  it('never loops back, and takes the cheapest option of an ore-dictionary slot', async () => {
+    const p = packFromSpec({ maps: [{ id: 'crafting' }],
+      recipes: [
+        { id: 'a-unpack', map: 'crafting', in: [['t:block@0', 1]], out: [['t:bar@0', 9]] },   // ties with c-bar and sorts first
+        { id: 'b-pack', map: 'crafting', in: [['t:bar@0', 9]], out: [['t:block@0', 1]] },
+        { id: 'c-bar', map: 'crafting', in: [['t:a@0', 1]], out: [['t:bar@0', 1]] },
+        { id: 'frame', map: 'crafting', in: [['t:bar@0', 2], { any: [['t:a@0', 2], ['t:b@0', 1]] }], out: [['t:frame@0', 1]] }] });
+    const r = await expandBomLines(p, [{ key: 't:frame@0', amount: 3, why: 'frames' }], { ...defaultSettings(), tier: 1 }, emptyContextForTest());
+    expect(r.lines[0]?.children?.map((l) => [l.key, l.amount, l.children?.map((c) => [c.key, c.amount])])).toEqual([
+      ['t:b@0', 3, undefined], ['t:bar@0', 6, [['t:a@0', 6]]]]);
+    expect(r.totals.map((l) => [l.key, l.amount])).toEqual([['t:a@0', 6], ['t:b@0', 3]]);
+  });
+  it('stops at a base material the group cannot reach yet', async () => {
+    const settings = { ...defaultSettings(), tier: 3, coilHeat: 2701, dims: { policy: 'progression' as const, overrides: { moon: 'off' as const } } };
+    const r = await expandBomLines(pack, [{ key: 't:titanium_plate@0', amount: 1, why: 'plate' }], settings, emptyContextForTest());
+    expect(r.lines[0]?.children).toEqual([{ key: 't:titanium_ingot@0', amount: 1, why: 'for Titanium Plate' }]);
+    expect(r.totals.map((l) => [l.key, l.amount])).toEqual([['t:titanium_ingot@0', 1]]);
+  });
+});
+
+describe('buildSteps', () => {
+  it('orders the build and keeps ids stable', async () => {
+    const steps = [step({ id: 'circuit-lv', recipeId: 'circuit-lv', count: 5, owned: 2, circuit: 2, mainOutput: 't:circuit@0', machine: { mteId: 121, name: 'Basic Assembler', tier: 1 } }),
+                   step({ id: 'hammer-plate', recipeId: 'hammer-plate', handCraft: true, runsPerSecond: 0.5, mainOutput: 't:iron_plate@0', machine: { mteId: -3, name: 'Crafting table (by hand)', tier: 0 } })];
+    const bom = await buildBom(pack, steps, opts);
+    const settings = { ...defaultSettings(), target: 't:circuit@0', amount: 30, per: 'min' as const };
+    const out = buildSteps(pack, { steps, bom, power: { peakEUt: 80, averageEUt: 80, voltageTier: 1, amps: 3 }, settings, tier: 1, target: 't:circuit@0' });
+    expect(out.map((s) => s.id)).toEqual(['gather', 'craft:machine:121@0', `craft:${PC}`, 'place', 'power', 'logistics:direct', 'configure:circuit-lv', 'handcraft:hammer-plate', 'test']);
+    expect(out.map((s) => s.order)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(out.find((s) => s.id === 'handcraft:hammer-plate')?.text).toBe('Hand-craft 30/min Iron Plate at a crafting table');
+    expect(out.find((s) => s.id === 'place')?.text).toBe('Place the machines: 3× Basic Assembler; reuse your 2× Basic Assembler');
+    expect(out.find((s) => s.id === 'configure:circuit-lv')?.text).toBe('Put a Programmed Circuit set to 2 in the Basic Assembler that makes Basic Circuit');
+    expect(out.at(-1)?.text).toBe('Run the line and check it makes 30 Basic Circuit per minute');
+  });
+  it('words the base materials, crafts, power and a Make N batch', async () => {
+    const steps = [step({ id: 'wire', recipeId: 'wire', runs: 5, mainOutput: 't:copper_wire@0', machine: { mteId: 111, name: 'Basic Wiremill', tier: 1 } }),
+                   step({ id: 'circuit-lv', recipeId: 'circuit-lv', owned: 1, runs: 5, circuit: 2, mainOutput: 't:circuit@0', machine: { mteId: 121, name: 'Basic Assembler', tier: 1 } }),
+                   step({ id: 'cable', recipeId: 'cable', handCraft: true, runs: 3, mainOutput: 't:tin_cable@0', machine: { mteId: -3, name: 'Crafting table (by hand)', tier: 0 } })];
+    const settings = { ...defaultSettings(), target: 't:circuit@0', mode: 'makeN' as const, amount: 10, logistics: 'ae2' as const };
+    const bom = await buildBom(pack, steps, { ...opts, settings });
+    const out = buildSteps(pack, { steps, bom, power: { peakEUt: 24, averageEUt: 24, voltageTier: 1, amps: 1 }, settings, tier: 1, target: 't:circuit@0', totalSeconds: 115 });
+    const text = (id: string) => out.find((s) => s.id === id)?.text;
+    expect(out.map((s) => s.id)).toEqual(['gather', 'craft:machine:111@0', `craft:${PC}`, 'place', 'power', 'logistics:ae2', 'configure:circuit-lv', 'handcraft:cable', 'test']);
+    expect(text('gather')).toBe('Gather the base materials: 1× Programmed Circuit, 4× Copper Ingot, 10× Iron Ingot, 2× Redstone, 1× Tin Ingot');
+    expect(text(`craft:${PC}`)).toBe('Make 1× Programmed Circuit (stays in the machine)');
+    expect(text('place')).toBe('Place the machines: 1× Basic Wiremill; reuse your 1× Basic Assembler');
+    expect(text('power')).toBe('Connect power: up to 24 EU/t at LV — never feed a machine more than its tier\'s voltage');
+    expect(text('logistics:ae2')).toBe('Give every machine an ME interface with its patterns');
+    expect(text('handcraft:cable')).toBe('Hand-craft 3× 1x Tin Cable at a crafting table');
+    expect(out.at(-1)?.text).toBe('Run the batch: 10× Basic Circuit in about 2 min');
+  });
+  it('shortens a long gather list and leaves out steps the line does not need', () => {
+    const totals = 'abcdefghij'.split('').map((c) => ({ key: `t:${c}@0`, amount: 1, why: 'base material' }));
+    const steps = [step({ id: 'planks', recipeId: 'planks', handCraft: true, runsPerSecond: 0.25, mainOutput: 'minecraft:planks@0', machine: { mteId: -3, name: 'Crafting table (by hand)', tier: 0 } })];
+    const settings = { ...defaultSettings(), target: 'minecraft:planks@0', amount: 60, per: 'hour' as const, logistics: 'routed' as const };
+    const out = buildSteps(pack, { steps, bom: { lines: [], totals, warnings: [] }, power: { peakEUt: 0, averageEUt: 0, voltageTier: 0, amps: 0 }, settings, tier: 1, target: 'minecraft:planks@0' });
+    expect(out.map((s) => [s.id, s.kind])).toEqual([['gather', 'gather'], ['logistics:routed', 'logistics'], ['handcraft:planks', 'handcraft'], ['test', 'test']]);
+    expect(out[0]?.text).toBe('Gather the base materials: 1× t:a@0, 1× t:b@0, 1× t:c@0, 1× t:d@0, 1× t:e@0, 1× t:f@0, 1× t:g@0, 1× t:h@0 (and 2 more)');
+    expect(out.find((s) => s.id === 'handcraft:planks')?.text).toBe('Hand-craft 900/h Oak Planks at a crafting table');
+    expect(out.at(-1)?.text).toBe('Run the line and check it makes 60 Oak Planks per hour');
+  });
+});
