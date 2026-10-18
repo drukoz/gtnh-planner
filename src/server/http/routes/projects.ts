@@ -106,17 +106,43 @@ async function finishedPlan(app: AppContext, plan: Plan, project: Project): Prom
   }
 }
 
+/** Per app and project: the newest project state waiting for the replan in flight to end (null: none waits). */
+const REPLANS = new WeakMap<AppContext, Map<string, { next: Project | null }>>();
+
 /**
  * Plans `project` (as an ops batch left it) in the background, then sends its tabs `event: plan` with that rev — also
- * when planning fails, so they refetch and show the error.
+ * when planning fails, so they refetch and show the error. One replan runs per project at a time: a batch that lands
+ * while one is in flight only records its project state, and when the replan ends it runs once more for the newest
+ * state that waited (ledger 200: amounts typed digit by digit, quick clicks in Settings). A real-pack plan takes about
+ * a second of mostly synchronous work, so a burst would otherwise queue one full solve per rev on the one Node thread
+ * while friends tick and stream during play; the tabs only ever fetch the newest plan anyway.
  */
 function replanInBackground(app: AppContext, project: Project): void {
-  const event: PlanEvent = { rev: project.rev };
-  void planForProject(app, project)
-    .catch(() => {})   // the plan route reports the failure when the tabs refetch
-    .then(() => {
-      app.sse.send(project.id, 'plan', event);
-    });
+  let perApp = REPLANS.get(app);
+  if (perApp === undefined) {
+    perApp = new Map();
+    REPLANS.set(app, perApp);
+  }
+  const waiting = perApp.get(project.id);
+  if (waiting !== undefined) {
+    if (waiting.next === null || project.rev >= waiting.next.rev) waiting.next = project;
+    return;
+  }
+  const entry: { next: Project | null } = { next: null };
+  perApp.set(project.id, entry);
+  const run = (p: Project): void => {
+    const event: PlanEvent = { rev: p.rev };
+    void planForProject(app, p)
+      .catch(() => {})   // the plan route reports the failure when the tabs refetch
+      .then(() => {
+        app.sse.send(p.id, 'plan', event);
+        const next = entry.next;
+        entry.next = null;
+        if (next !== null) run(next);
+        else perApp.delete(p.id);
+      });
+  };
+  run(project);
 }
 
 export function projectRoutes(app: AppContext): Route[] {
