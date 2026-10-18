@@ -71,6 +71,7 @@ drukoz and friends on the server (a handful of people). drukoz runs the server a
   2. **Project Red routed network**: every machine gets an interface pipe and chips; work is ordered from the request pipe (how their drawers work today).
   3. **AE2**: ME interfaces and patterns, once they have an AE2 network.
 - Arranges machines compactly with shared cable/pipe runs, respecting which way machines face and which blocks touch; multiblocks use their real in-game sizes; reports the total footprint.
+- **Piping and logistics are first-class (added at the user's request):** every cable, transformer, item/fluid pipe, cover (conveyor, pump, filters), bus/hatch, input/output chest, routed pipe and chip, ME cable/interface and pattern — in every logistics mode — is (1) counted in the build cost and broken down to base materials alongside the machines, (2) sized to the line: pipe and cover throughput checked against the item/fluid rates it must carry, cable tier and amps against the power it must carry, AE2 idle power added to the power figure, (3) listed in the build steps, and (4) drawn on the map and in the 3D view.
 
 ### 3.7 Map view (mockup approved)
 - Top-down, block-accurate map around a base, chunk grid, zoom/pan, Y-level control.
