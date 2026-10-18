@@ -106,6 +106,18 @@ describe('candidate rules without a fixture test above', () => {
     expect(['flagged', 'mf', 'rep', 'rc', 'sb', 'stone', 'plain', 'obsidian', 'lava'].map(hits))
       .toEqual([['recycling'], ['massfab'], ['replicator'], ['scrap'], ['scrap'], ['lava-centrifuge'], [], ['lava-centrifuge'], ['lava-centrifuge']]);
   });
+  it('skips crafting a programmed circuit back into a circuit, not setting its number or using it in a recipe', () => {
+    const pc = (n: number) => ({ key: `gregtech:gt.integrated_circuit@${n}`, id: 'gregtech:gt.integrated_circuit', name: 'Programmed Circuit' });
+    const p = packFromSpec({ items: [pc(0), pc(1), pc(2)], recipes: [
+      { id: 'back', map: 'crafting', in: [{ any: [['gregtech:gt.integrated_circuit@0', 1], ['gregtech:gt.integrated_circuit@1', 1]] }], out: [['IC2:itemPartCircuit@0', 1]] },
+      { id: 'renumber', map: 'crafting', in: [['gregtech:gt.integrated_circuit@0', 1], { nc: 'screwdriver@0' }], out: [['gregtech:gt.integrated_circuit@2', 1]] },
+      { id: 'to-pc', map: 'crafting', in: [['IC2:itemPartCircuit@0', 1]], out: [['gregtech:gt.integrated_circuit@0', 1]] },
+      { id: 'bus', map: 'crafting', in: [['gregtech:gt.integrated_circuit@1', 1], ['bus@0', 1]], out: [['bus@1', 1]] },
+      { id: 'machine', map: 'gt.recipe.assembler', in: [['gregtech:gt.integrated_circuit@0', 1]], out: [['IC2:itemPartCircuit@0', 1]] }] });
+    const rule = EXCLUSION_RULES['programmed-circuit-conversion']!;
+    expect(['back', 'renumber', 'to-pc', 'bus', 'machine'].map((id) => rule(p.recipeById.get(id)!, p))).toEqual([true, false, false, false, false]);
+    expect(DEFAULT_EXCLUDED_CATEGORIES).toContain('programmed-circuit-conversion');
+  });
   it('reports no-machine, and the voltage tier for multiblocks', () => {
     const p = packFromSpec({ machines: [{ mteId: 1, name: 'Big', maps: ['gt.recipe.big'], kind: 'multiblock' }],
       recipes: [{ id: 'none', map: 'gt.recipe.nobody', eut: 2 }, { id: 'big', map: 'gt.recipe.big', eut: 2000 }] });

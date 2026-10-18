@@ -88,6 +88,14 @@ describe('real-data rules (final review)', () => {
     expect(['EMT:EMTItems@8', 'minecraft:slime_ball@0', 'bread@0', 'beef@0', 'card@0', 'log@0', 'IC2:itemHarz@0'].map((k) => isNatural(p, k)))
       .toEqual([false, true, false, true, false, true, true]);
   });
+  it('keeps crafting a programmed circuit back into a circuit available even when the plan skips it', () => {
+    // From LV the group has programmed circuits; the export shows no other way to the first Electronic Circuit.
+    const p = packFromSpec({ items: [{ key: 'gregtech:gt.integrated_circuit@0', name: 'Programmed Circuit' }, { key: 'IC2:itemPartCircuit@0', name: 'Electronic Circuit' }],
+      recipes: [{ id: 'back', map: 'crafting', in: [['gregtech:gt.integrated_circuit@0', 1]], out: [['IC2:itemPartCircuit@0', 1]] }] });
+    const e: PlanEnv = { tier: 1, reachable: new Set(['overworld']), lowGravity: false, coilHeat: 1801, excluded: new Set(defaultSettings().excludedCategories) };
+    expect(e.excluded.has('programmed-circuit-conversion')).toBe(true);
+    expect(computeAvailability(p, e).available.has('IC2:itemPartCircuit@0')).toBe(true);
+  });
   it('leaves out recipes that separate free inputs into ore materials (obsidian dust into iron), not plain conversions', () => {
     const p = packFromSpec({
       items: [

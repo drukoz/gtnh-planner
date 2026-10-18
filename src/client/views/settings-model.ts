@@ -21,6 +21,7 @@ export const EXCLUSION_LABELS: Record<string, string> = {
   replicator: 'Replicator',
   scrap: 'Scrap and recycler',
   'lava-centrifuge': 'Lava and stone-dust centrifuging',
+  'programmed-circuit-conversion': 'Programmed circuit back into circuits',
 };
 
 function byString(a: string, b: string): number {

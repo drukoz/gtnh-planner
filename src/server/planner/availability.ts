@@ -575,6 +575,15 @@ function computeState(pack: Pack, env: PlanEnv): State {
 /** Availability results per pack, keyed by the env's content; the least recently used entry goes first. */
 const STATES = new WeakMap<Pack, Map<string, State>>();
 
+/**
+ * Excluded categories availability does not apply. From LV every group has programmed circuits (`computeState`), and
+ * crafting one back into an Electronic Circuit is the only way the export shows to the first circuits: the circuit
+ * assembler's vacuum tube needs a glass tube, whose ball mold comes from a Tinkers' casting table, not a recipe.
+ * Skipping that crafting (the default) only steers the plan to GTNH's circuit-assembler route; without it here no
+ * LV group could build an Electric Blast Furnace.
+ */
+const AVAILABILITY_KEEPS: ReadonlySet<string> = new Set(['programmed-circuit-conversion']);
+
 function stateFor(pack: Pack, env: PlanEnv): State {
   let perPack = STATES.get(pack);
   if (perPack === undefined) {
@@ -582,7 +591,7 @@ function stateFor(pack: Pack, env: PlanEnv): State {
     STATES.set(pack, perPack);
   }
   const reachable = [...env.reachable].sort(byString);
-  const excluded = [...env.excluded].sort(byString);
+  const excluded = [...env.excluded].filter((category) => !AVAILABILITY_KEEPS.has(category)).sort(byString);
   const key = JSON.stringify([env.tier, reachable, env.lowGravity, env.coilHeat, excluded]);
   let state = perPack.get(key);
   if (state !== undefined) {

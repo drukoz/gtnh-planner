@@ -7,6 +7,7 @@ import { V, tierName } from '../../shared/gt/tiers.ts';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import type { Ingredient, Pack, Recipe } from '../../shared/types/pack.ts';
 import type { LeafClass, PlanSettings, PlanWarning } from '../../shared/types/plan.ts';
+import { PROGRAMMED_CIRCUIT_ID } from '../pack/recipes.ts';
 
 export interface PlanEnv {
   tier: number; reachable: ReadonlySet<string> /* DimensionInfo.key and Capability.key */; lowGravity: boolean; coilHeat: number; excluded: ReadonlySet<string>;
@@ -128,6 +129,20 @@ function smeltsBack(r: Recipe, pack: Pack): boolean {
   });
 }
 
+/**
+ * A crafting-table recipe that turns a Programmed Circuit back into a circuit: its only consumed inputs are programmed
+ * circuits and it makes no programmed circuit (the screwdriver recipes that set another number do). Any LV circuit
+ * crafts into a programmed circuit and that back into an Electronic Circuit, so the least raw material made Electronic
+ * Circuits from whatever LV circuit is cheapest instead of GTNH's own circuit-assembler recipe.
+ */
+function programmedCircuitBack(r: Recipe, pack: Pack): boolean {
+  if (!r.maps.includes('crafting')) return false;
+  const programmed = (key: StuffKey): boolean => pack.items.get(key)?.id === PROGRAMMED_CIRCUIT_ID;
+  const consumed = r.inputs.filter((ing) => ing.consumed);
+  return consumed.length > 0 && consumed.every((ing) => ing.options.length > 0 && ing.options.every((o) => programmed(o.key)))
+    && r.outputs.length > 0 && !r.outputs.some((p) => programmed(p.key));
+}
+
 /** Recipe categories the group leaves out unless it turns the rule off; the keys are `DEFAULT_EXCLUDED_CATEGORIES`. */
 export const EXCLUSION_RULES: Record<string, (r: Recipe, pack: Pack) => boolean> = {
   recycling: (r, pack) => r.flags.recycling === true || (r.category?.includes('recycling') ?? false) || smeltsBack(r, pack),
@@ -142,6 +157,7 @@ export const EXCLUSION_RULES: Record<string, (r: Recipe, pack: Pack) => boolean>
     // ingot. With lava free it made every such metal cost 0 (24 refineries, 5.7M L lava/min for 2 Good Circuits/min).
     || (anyMapContains(r, 'thermalboiler') && r.outputs.some((p) => !isFluidKey(p.key))
       && r.inputs.some((ing) => ing.consumed && ing.options.some((o) => o.key === LAVA))),
+  'programmed-circuit-conversion': programmedCircuitBack,
 };
 
 /** The machines that can run one recipe map, as the acceptance test needs them. */
