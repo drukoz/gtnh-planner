@@ -7,7 +7,7 @@ import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import type { Pack } from '../../shared/types/pack.ts';
 import { FREE_KEYS, type PlanSettings } from '../../shared/types/plan.ts';
 import { isBaseItem, isOrePrefix, type Availability } from './availability.ts';
-import type { CandidateGraph, LeafDecision, LeafOracle, LpRecipe } from './candidates.ts';
+import type { CandidateGraph, LeafDecision, LeafOracle } from './candidates.ts';
 import { solveLp, type LpRow } from './lp.ts';
 
 /** GT's material unit: one dust or ingot is 3628800 M. */
@@ -21,6 +21,8 @@ const FREE: ReadonlySet<StuffKey> = new Set(FREE_KEYS);
 /** Upper bound of a good the line cannot buy in the cost analysis; reaching it means nothing reachable makes the good. */
 const UNREACHED = 1e6;
 const UNREACHED_TOLERANCE = 1e-6;
+/** A good is makeable when the makeability LP gives it a surplus above this; at the optimum every surplus is 0 or 1. */
+const MAKEABLE = 0.5;
 
 export interface PriceTable { price(key: StuffKey): number /* per item or per litre */; costPerIngot(material: string): number }
 
@@ -105,52 +107,45 @@ export function makeLeafOracle(
 export interface CostAnalysis { cost(key: StuffKey): number /* Infinity when nothing reachable makes it */; recipeCost(recipeId: string, forKey: StuffKey): number }
 
 /**
- * The recipes of `graph` that can run from what the line buys: a forward fixpoint in which every buyable good is
- * makeable and a recipe fires once every good it consumes (negative coefficient) is makeable, making its outputs makeable.
+ * The goods of `graph` the line can make in steady state, from the main LP's own rows (solve.ts): an activity
+ * `x_r ≥ 0` per recipe, a purchase `b_g ≥ 0` per buyable good and a surplus `s_g` in `[0, 1]` per good, one row
+ * `Σ a_rg·x_r + b_g − s_g ≥ 0` per good, maximizing `Σ s_g`. Apart from `s ≤ 1` the LP is a cone, so at the optimum
+ * every surplus is 0 or 1, and a good is makeable exactly when some steady state yields a surplus of it: a loop with no
+ * entry recipe counts when it gains, and goods that only unreachable goods make never count, whatever the yield.
  */
-function runnableRecipes(graph: CandidateGraph): LpRecipe[] {
-  const waiting = new Int32Array(graph.recipes.length);
-  const consumers = new Map<StuffKey, number[]>();
-  graph.recipes.forEach((r, i) => {
-    for (const [key, c] of r.coeffs) {
-      if (c >= 0) continue;
-      waiting[i] = (waiting[i] as number) + 1;
-      const list = consumers.get(key);
-      if (list === undefined) consumers.set(key, [i]);
-      else list.push(i);
-    }
-  });
+async function makeableGoods(graph: CandidateGraph, goods: readonly StuffKey[], indexOf: ReadonlyMap<StuffKey, number>): Promise<Set<StuffKey>> {
+  const recipeCount = graph.recipes.length;
+  const buyable = goods.filter((key) => graph.goods.get(key)?.buyable === true);
+  const firstSurplus = recipeCount + buyable.length;
+  const width = firstSurplus + goods.length;
 
-  const made = new Set<StuffKey>();
-  const queue: StuffKey[] = [];
-  const make = (key: StuffKey): void => {
-    if (made.has(key)) return;
-    made.add(key);
-    queue.push(key);
-  };
-  const fire = (i: number): void => {
-    for (const [key, c] of (graph.recipes[i] as LpRecipe).coeffs) if (c > 0) make(key);
-  };
-  for (const good of graph.goods.values()) if (good.buyable) make(good.key);
-  graph.recipes.forEach((_, i) => {
-    if (waiting[i] === 0) fire(i);
+  const entries: Array<Array<[number, number]>> = goods.map(() => []);
+  const rowOf = (key: StuffKey): Array<[number, number]> => entries[indexOf.get(key) as number] as Array<[number, number]>;
+  graph.recipes.forEach((r, j) => {
+    for (const [key, c] of r.coeffs) rowOf(key).push([j, c]);
   });
-  for (let head = 0; head < queue.length; head++) {
-    for (const i of consumers.get(queue[head] as StuffKey) ?? []) {
-      waiting[i] = (waiting[i] as number) - 1;
-      if (waiting[i] === 0) fire(i);
-    }
-  }
-  return graph.recipes.filter((_, i) => waiting[i] === 0);
+  buyable.forEach((key, i) => rowOf(key).push([recipeCount + i, 1]));
+  const rows: LpRow[] = entries.map((row, g) => ({ lower: 0, upper: Infinity, entries: [...row, [firstSurplus + g, -1]] }));
+
+  const result = await solveLp({
+    sense: 'max',
+    colCost: new Array<number>(width).fill(0, 0, firstSurplus).fill(1, firstSurplus),
+    colLower: new Array<number>(width).fill(0),
+    colUpper: new Array<number>(width).fill(Infinity, 0, firstSurplus).fill(1, firstSurplus),
+    rows,
+  });
+  if (result.status !== 'optimal') throw new Error(`cost analysis: the makeability LP is ${result.status}`);
+  return new Set(goods.filter((_, g) => (result.x[firstSurplus + g] ?? 0) > MAKEABLE));
 }
 
 /**
  * YAFC-style dual LP (prior-art §3.4 step 2): one cost variable per good, in `[0, cost]` for a buyable good and
- * `[0, 1e6]` otherwise; maximize the sum of all costs subject to `Σ out·c − Σ in·c ≤ 0` for each recipe, so every good
- * gets the cost of its cheapest way to make or buy it. Only recipes that can run from what the line buys get a row: a
- * recipe that cannot run must not make anything look cheaper, and a good that only such recipes make stays at its 1e6
- * bound and reads as Infinity, whatever their yields. The LP is always feasible (all zeros) and bounded. With
- * co-products the split of a recipe's cost between them is not unique, so these costs rank and price; they never plan.
+ * `[0, 1e6]` otherwise; maximize the sum of all costs subject to `Σ out·c − Σ in·c ≤ 0` for each recipe that can run,
+ * so every good gets the cost of its cheapest way to make or buy it. A recipe can run when every good it consumes
+ * (negative coefficient) is makeable (`makeableGoods`): a recipe that cannot run must not make anything look cheaper,
+ * so a good the line cannot make is in no row, stays at its 1e6 bound and reads as Infinity. The LP is always feasible
+ * (all zeros) and bounded. With co-products the split of a recipe's cost between them is not unique, so these costs
+ * rank and price; they never plan.
  */
 export async function analyzeCosts(graph: CandidateGraph): Promise<CostAnalysis> {
   const keys = new Set(graph.goods.keys());
@@ -158,11 +153,13 @@ export async function analyzeCosts(graph: CandidateGraph): Promise<CostAnalysis>
   const columns = [...keys].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   const columnOf = new Map(columns.map((key, i) => [key, i]));
 
+  const makeable = await makeableGoods(graph, columns, columnOf);
+  const runnable = graph.recipes.filter((r) => r.coeffs.every(([key, c]) => c >= 0 || makeable.has(key)));
   const upper = columns.map((key) => {
     const good = graph.goods.get(key);
     return good?.buyable === true ? good.cost : UNREACHED;
   });
-  const rows: LpRow[] = runnableRecipes(graph).map((r) => ({
+  const rows: LpRow[] = runnable.map((r) => ({
     lower: -Infinity, upper: 0, entries: r.coeffs.map(([key, c]): [number, number] => [columnOf.get(key) as number, c]),
   }));
   const result = await solveLp({ sense: 'max', colCost: columns.map(() => 1), colLower: columns.map(() => 0), colUpper: upper, rows });

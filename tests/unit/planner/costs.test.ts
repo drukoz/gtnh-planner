@@ -84,6 +84,22 @@ describe('analyzeCosts', () => {
     expect(c.cost('t@0')).toBeCloseTo(2, 6);
     expect(c.recipeCost('honest', 't@0')).toBeCloseTo(2, 6);
   });
+  const rawOnly: LeafOracle = (k) => (k === 'raw@0' ? { buyable: true, cost: 1, leafClass: 'direct' } : { buyable: false, cost: 0, leafClass: null });
+  const loop = (zPerRun: number) => packFromSpec({ machines: [macerator],
+    recipes: [{ id: 'A', map: 'gt.recipe.macerator', in: [['raw@0', 1], ['z@0', 1]], out: [['y@0', 1]], eut: 2 },
+              { id: 'B', map: 'gt.recipe.macerator', in: [['y@0', 1]], out: [['z@0', zPerRun]], eut: 2 }] });
+  it('prices goods in a loop with no entry recipe', async () => {
+    const c = await analyzeCosts(buildCandidates(loop(2), defaultSettings(), lv, rawOnly, ['z@0']));
+    expect(c.cost('z@0')).toBeCloseTo(1, 6);
+    expect(c.cost('y@0')).toBeCloseTo(2, 6);
+    expect(c.recipeCost('B', 'z@0')).toBeCloseTo(1, 6);
+    expect(c.recipeCost('A', 'y@0')).toBeCloseTo(2, 6);
+  });
+  it('is Infinity for goods in a loop with no entry recipe and no gain', async () => {
+    const c = await analyzeCosts(buildCandidates(loop(1), defaultSettings(), lv, rawOnly, ['z@0']));
+    expect([c.cost('z@0'), c.cost('y@0'), c.recipeCost('B', 'z@0'), c.recipeCost('A', 'y@0')]).toEqual([Infinity, Infinity, Infinity, Infinity]);
+    expect(c.cost('raw@0')).toBeCloseTo(1, 6);
+  });
   it('credits co-products at their cost', async () => {
     const p = packFromSpec({ machines: [macerator],
       recipes: [{ id: 'both', map: 'gt.recipe.macerator', in: [['raw@0', 4]], out: [['t@0', 1], ['s@0', 1]], eut: 2 },
