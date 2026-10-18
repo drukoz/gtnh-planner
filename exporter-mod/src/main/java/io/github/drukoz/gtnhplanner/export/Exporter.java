@@ -120,6 +120,7 @@ public final class Exporter {
                     throw t;
                 }
                 failedSections.add(name);
+                ExporterMod.LOG.warn("optional section " + name + " failed", t);
                 ctx.warn("section " + name + " failed: " + t);
             } finally {
                 sectionMillis.put(name, millisSince(t0));

@@ -419,6 +419,7 @@ public final class StructuresSection implements ExportSection {
     private static void clear(World world, List<int[]> positions) {
         int failed = 0;
         String first = null;
+        Throwable firstError = null;
         for (int[] p : positions) {
             Throwable error = null;
             try {
@@ -428,10 +429,13 @@ public final class StructuresSection implements ExportSection {
             }
             if (error != null || !world.isAirBlock(p[0], p[1], p[2])) {
                 if (failed++ == 0) first = Arrays.toString(p) + (error != null ? ": " + error : "");
+                if (firstError == null) firstError = error;
             }
         }
         if (failed > 0) {
-            throw new IllegalStateException("structures: " + failed + " blocks could not be cleared, the first at " + first);
+            throw new IllegalStateException(
+                "structures: " + failed + " blocks could not be cleared, the first at " + first,
+                firstError);
         }
     }
 
