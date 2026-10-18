@@ -296,7 +296,10 @@ function blockerWarnings(
     unlocks.push({ key, text });
   };
   const target = settings.target;
-  const sideRoad = (b: Solution['blockers'][number]): boolean => b.reason !== 'unavailable' && (b.key !== target || b.reason === 'no-recipe');
+  // The target as a no-recipe blocker is a side road only when some recipe of the pack does make it.
+  const madeHere = target !== null && (pack.producers.get(target)?.length ?? 0) > 0;
+  const sideRoad = (b: Solution['blockers'][number]): boolean =>
+    b.reason !== 'unavailable' && (b.key !== target || (b.reason === 'no-recipe' && madeHere));
   const sideRoads = sol.blockers.length > 0 && sol.blockers.every(sideRoad);
   if (target !== null && sideRoads && !basis.avail.available.has(target)) {
     unlock(target);
@@ -540,8 +543,9 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
     return Number.isFinite(cost) ? cost : basis.prices.price(key);
   };
   // Derived leaves cost what making them on their own costs (`derivedCosts`): first the graph at their plain prices,
-  // then again with the derived leaves it buys priced, until it buys no unpriced one (MAX_PRICING_ROUNDS at most). One
-  // only a chain through the target makes is no leaf (Infinity), and walking it can meet further derived leaves.
+  // then again with the derived leaves it buys priced, until it buys no unpriced one. One only a chain through the
+  // target makes is no leaf (Infinity), and walking it can meet further derived leaves; after MAX_PRICING_ROUNDS a
+  // derived leaf the last graph meets first keeps its plain price.
   const priced = new Map<StuffKey, Standalone>();
   const tried = new Set<StuffKey>();
   const leafWith = (): LeafOracle => makeLeafOracle(pack, settings, basis.avail, basis.prices, stopCost, (key) => priced.get(key));

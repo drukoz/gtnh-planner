@@ -86,6 +86,23 @@ describe('solveLine', () => {
     expect(Object.fromEntries(s.runs)).toEqual({ direct: 1 });
     expect(s.rawCost).toBeCloseTo(1, 9);
   });
+  it('counts recipes before any tie-break, however much power the fewer recipes draw', async () => {
+    // One recipe at 6,000,000 EU a run, or two at 40 EU: the tie-breaks only choose among plans of the fewest recipes.
+    const p = packFromSpec({ machines: [{ mteId: 1, name: 'M', maps: ['gt.recipe.macerator'], tier: 1 }], recipes: [
+      { id: 'direct', map: 'gt.recipe.macerator', in: [['raw@0', 1]], out: [['t@0', 1]], eut: 30, dur: 200_000 },
+      { id: 'step-a', map: 'gt.recipe.macerator', in: [['raw@0', 1]], out: [['m@0', 1]], eut: 2, dur: 20 },
+      { id: 'step-b', map: 'gt.recipe.macerator', in: [['m@0', 1]], out: [['t@0', 1]], eut: 2, dur: 20 }] });
+    const leaf: LeafOracle = (k) => (k === 'raw@0' ? { buyable: true, cost: 1, leafClass: 'direct' } : { buyable: false, cost: 0, leafClass: null });
+    const s = await solveLine(graphFor(p, 't@0', 1, leaf), one('t@0'));
+    expect(Object.fromEntries(s.runs)).toEqual({ direct: 1 });
+    // The same with free input: one recipe on 1,000,000 L of water, or two on none.
+    const wet = packFromSpec({ machines: [{ mteId: 1, name: 'M', maps: ['gt.recipe.macerator'], tier: 1 }], recipes: [
+      { id: 'direct', map: 'gt.recipe.macerator', in: [['raw@0', 1], ['fluid:water', 1_000_000]], out: [['t@0', 1]], eut: 2 },
+      { id: 'step-a', map: 'gt.recipe.macerator', in: [['raw@0', 1]], out: [['m@0', 1]], eut: 2 },
+      { id: 'step-b', map: 'gt.recipe.macerator', in: [['m@0', 1]], out: [['t@0', 1]], eut: 2 }] });
+    const freeWater: LeafOracle = (k) => (k === 'fluid:water' ? { buyable: true, cost: 0, leafClass: 'free' } : leaf(k));
+    expect(Object.fromEntries((await solveLine(graphFor(wet, 't@0', 1, freeWater), one('t@0'))).runs)).toEqual({ direct: 1 });
+  });
   it('breaks a fewest-recipes tie by free input first, then by power', async () => {
     // Oxygen from 10,000 L of air at 2 EU/t, or from 3,000 L of water at 30 EU/t: power alone would take the air.
     const p = packFromSpec({ machines: [{ mteId: 1, name: 'M', maps: ['gt.recipe.centrifuge', 'gt.recipe.electrolyzer'], tier: 1 }], recipes: [

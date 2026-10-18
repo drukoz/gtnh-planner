@@ -120,8 +120,8 @@ function mainLp(graph: CandidateGraph, recipes: readonly LpRecipe[], demand: Rea
 }
 
 /**
- * Minimizes `cost` over the main rows plus `locks`; every column ≥ 0, purchases at most `buyUpper`, the recipe columns
- * in `off` fixed to 0.
+ * Minimizes `cost` over the main rows plus `locks`; every column ≥ 0, purchases at most `buyUpper`, the columns in
+ * `off` (recipes, or purchases the fewest-recipes stage left out) fixed to 0.
  */
 function minimize(lp: MainLp, cost: readonly number[], locks: readonly LpRow[], buyUpper = Infinity, off: ReadonlySet<number> = new Set()): Promise<LpResult> {
   const width = cost.length;
@@ -136,14 +136,14 @@ const S3_MAX_NODES = 5000;
 const S3_BIG_M = 10;
 
 /**
- * The fewest-recipes stage (S3) breaks its ties by the least free input (water, air, cobblestone, lava, and what the
- * chains of bought derived leaves take), then the least power (what S2 would pick), then the derived purchases with
- * the shortest chains. Each is a share of one recipe, scaled to what the least-raw plan takes, so the recipe count
- * always comes first; the order among them is by weight, not strict (a line of very high power weighs a difference in
- * power less). On the real export a free input is often tied with another (oxygen from 10,000 L
- * of air in a centrifuge, or from 3,000 L of water in an electrolyzer; Helium for the blast furnace, distilled from
- * 1,000 L of air per litre), and recipes of one count with another (Steel or Magnetic Steel, steel and a polarizer,
- * extruded into rods); without these S3 picked among them at random and power then kept the pick.
+ * The fewest-recipes stage (S3) first finds the fewest recipes, then, among the plans with that many, takes the one
+ * with the least weighted sum of the free input (water, air, cobblestone, lava, and what the chains of bought derived
+ * leaves take), the power (what S2 would pick) and the chains of the derived leaves it buys. The weights below are
+ * scaled to what the least-raw plan takes, so their order is by weight, not strict (a line of very high power weighs a
+ * difference in power less). On the real export a free input is often tied with another (oxygen from 10,000 L of air
+ * in a centrifuge, or from 3,000 L of water in an electrolyzer; Helium for the blast furnace, distilled from 1,000 L of
+ * air per litre), and recipes of one count with another (Steel or Magnetic Steel, steel and a polarizer, extruded into
+ * rods); without these S3 picked among them at random and power then kept the pick.
  */
 const S3_FREE_SHARE = 1e-3;
 const S3_POWER_SHARE = 1e-5;
@@ -165,39 +165,55 @@ function tieBreaks(lp: MainLp, x: readonly number[]): number[] {
 
 /**
  * S3 (prior-art §3.4 step 4: fewest distinct recipes, for simpler lines) as the MILP the prior art suggests: one binary
- * per step recipe, `runs ≤ M × binary`, minimizing the binaries within `locks` (M is `S3_BIG_M` × the largest run count
- * of the least-raw plan), with the tie-breaks above (a priced derived purchase gets a binary too, its M exact: what
- * the raw-material lock lets the line buy of it). Returns the columns it leaves out, or null when it finds no whole
- * solution (then `fewestRecipes` approximates it).
+ * per step recipe, `runs ≤ M × binary`, minimizing the binaries within `locks`. M is `S3_BIG_M` × the largest run count
+ * of the least-raw plan, so a plan that would run a recipe more than that is not looked at (`simplest` checks what
+ * comes out). A second MIP keeps the count found (Σ binaries ≤ it) and minimizes the tie-breaks above; a derived
+ * purchase with a price gets a binary there, its M exact (what the raw-material lock lets the line buy of it); one
+ * that costs nothing is weighed by its free input only. Returns the columns left out, or null when the first MIP finds
+ * no whole solution (then `fewestRecipes` approximates it); the first MIP's when the second finds none.
  */
 async function fewestRecipesMip(lp: MainLp, s1: LpResult, locks: readonly LpRow[]): Promise<Set<number> | null> {
   let largest = 0;
   for (let j = 0; j < lp.firstBuy; j++) largest = Math.max(largest, s1.x[j] ?? 0);
   if (largest <= TINY) return null;
-  const counted: Array<{ j: number; weight: number; bigM: number }> = [];
-  lp.recipes.forEach((r, j) => {
-    if (r.kind === 'recipe') counted.push({ j, weight: 1, bigM: largest * S3_BIG_M });
-  });
-  if (counted.length === 0) return null;
-  lp.derivedSteps.forEach((steps, j) => {
-    const cost = lp.rawCost[j] ?? 0;
-    if (steps > 0 && cost > 0) counted.push({ j, weight: S3_DERIVED_STEP * steps, bigM: (s1.objective / cost) * (1 + S3_TOLERANCE) + TINY });
-  });
   const width = lp.rawCost.length;
-  const rows: LpRow[] = [...lp.rows, ...locks, ...counted.map((c, k): LpRow => ({ lower: -Infinity, upper: 0, entries: [[c.j, 1], [width + k, -c.bigM]] }))];
-  const all = width + counted.length;
-  const colCost = [...tieBreaks(lp, s1.x), ...counted.map((c) => c.weight)];
-  const result = await solveLp({
-    sense: 'min', colCost, colLower: new Array<number>(all).fill(0),
-    colUpper: new Array<number>(all).fill(Infinity).fill(1, width), rows,
-    integer: new Array<boolean>(all).fill(false).fill(true, width), maxNodes: S3_MAX_NODES,
+  const steps: Array<{ j: number; weight: number; bigM: number }> = [];
+  lp.recipes.forEach((r, j) => {
+    if (r.kind === 'recipe') steps.push({ j, weight: 1, bigM: largest * S3_BIG_M });
   });
-  if (result.status !== 'optimal' && result.status !== 'feasible') return null;
-  const off = new Set<number>();
-  counted.forEach((c, k) => {
-    if ((result.x[width + k] ?? 0) < 0.5) off.add(c.j);
+  if (steps.length === 0) return null;
+  const derived: Array<{ j: number; weight: number; bigM: number }> = [];
+  lp.derivedSteps.forEach((n, j) => {
+    const cost = lp.rawCost[j] ?? 0;
+    if (n > 0 && cost > 0) derived.push({ j, weight: S3_DERIVED_STEP * n, bigM: (s1.objective / cost) * (1 + S3_TOLERANCE) + TINY });
   });
-  return off;
+  /** One MIP over `counted` binaries (`column ≤ M × binary`), with `extra` rows over the binaries (k = their index). */
+  const solve = (counted: typeof steps, colCost: number[], extra: LpRow[]): Promise<LpResult> => {
+    const rows: LpRow[] = [...lp.rows, ...locks, ...counted.map((c, k): LpRow => ({ lower: -Infinity, upper: 0, entries: [[c.j, 1], [width + k, -c.bigM]] })), ...extra];
+    const all = width + counted.length;
+    return solveLp({
+      sense: 'min', colCost, colLower: new Array<number>(all).fill(0), colUpper: new Array<number>(all).fill(Infinity).fill(1, width), rows,
+      integer: new Array<boolean>(all).fill(false).fill(true, width), maxNodes: S3_MAX_NODES,
+    });
+  };
+  const offOf = (counted: typeof steps, x: readonly number[]): Set<number> => {
+    const off = new Set<number>();
+    counted.forEach((c, k) => {
+      if ((x[width + k] ?? 0) < 0.5) off.add(c.j);
+    });
+    return off;
+  };
+  const found = (r: LpResult): boolean => r.status === 'optimal' || r.status === 'feasible';
+  const fewest = await solve(steps, [...new Array<number>(width).fill(0), ...steps.map((c) => c.weight)], []);
+  if (!found(fewest)) return null;
+  let count = 0;
+  steps.forEach((_, k) => {
+    count += Math.round(fewest.x[width + k] ?? 0);
+  });
+  const counted = [...steps, ...derived];
+  const atMost: LpRow = { lower: -Infinity, upper: count, entries: steps.map((_, k): [number, number] => [width + k, 1]) };
+  const tied = await solve(counted, [...tieBreaks(lp, s1.x), ...steps.map(() => 0), ...derived.map((c) => c.weight)], [atMost]);
+  return found(tied) ? offOf(counted, tied.x) : offOf(steps, fewest.x);
 }
 
 /** Rounds of the fewest-recipes stage. */
@@ -210,12 +226,12 @@ const S3_DELTA = 1e-6;
  * minimizes Σ runs_r / (runs_r of the round before + δ) within `locks`, so a recipe that ran little is pushed out when
  * the least raw material does not need it. On the real export the least raw material is often reached by many plans
  * (free water, air and cobblestone, cell fill/empty pairs, three cutting-saw variants), and power alone then picked
- * mixtures such as two electrolysis variants of the same salt water. Purchases of derived leaves and the tie-breaks
- * count as in `fewestRecipesMip`. Returns the counted columns the plan no longer uses, or null when no round solves.
+ * mixtures such as two electrolysis variants of the same salt water. Purchases of derived leaves count their chains a
+ * little, as in `fewestRecipesMip`; the free-input and power tie-breaks are left to the MIP, as here they could
+ * outweigh a recipe. Returns the counted columns the plan no longer uses, or null when no round solves.
  */
-async function fewestRecipes(lp: MainLp, s1: readonly number[], locks: readonly LpRow[]): Promise<Set<number> | null> {
+async function fewestRecipes(lp: MainLp, locks: readonly LpRow[]): Promise<Set<number> | null> {
   const step = lp.recipes.map((r) => r.kind === 'recipe');   // ore-dictionary conversions are not steps
-  const ties = tieBreaks(lp, s1);
   const counts = (j: number): number => (step[j] === true ? 1 : S3_DERIVED_STEP * (lp.derivedSteps[j] ?? 0));
   let x: readonly number[] | null = null;
   let solved = false;
@@ -224,12 +240,11 @@ async function fewestRecipes(lp: MainLp, s1: readonly number[], locks: readonly 
     if (x !== null) for (let j = 0; j < lp.firstSink; j++) largest = Math.max(largest, x[j] ?? 0);
     const delta = largest * S3_DELTA;
     const prev = x;
-    // The first round weighs every step 1 (least total runs); later ones 1 / (runs before + δ). The tie-breaks of
-    // `fewestRecipesMip` come on top.
+    // The first round weighs every step 1 (least total runs); later ones 1 / (runs before + δ). A derived purchase
+    // counts its chain, a little, as in `fewestRecipesMip`.
     const cost = lp.canonical.map((_, j) => {
       const c = counts(j);
-      const reweighted = c === 0 ? 0 : prev === null ? c : c / ((prev[j] ?? 0) + delta + TINY);
-      return reweighted + (ties[j] ?? 0);
+      return c === 0 ? 0 : prev === null ? c : c / ((prev[j] ?? 0) + delta + TINY);
     });
     const result = await minimize(lp, cost, locks);
     if (result.status !== 'optimal') break;
@@ -310,26 +325,27 @@ const S3_TOLERANCE = 1e-6;
  * binary sits just above 0), so the least raw material is solved again without the left-out recipes: within
  * `S3_TOLERANCE` of S1 the stages lock that instead, else S3 is dropped (and approximated without a MIP).
  */
-async function simplest(lp: MainLp, s1: LpResult, locks: LpRow[]): Promise<{ off: Set<number>; locks: LpRow[] }> {
-  const candidates = [await fewestRecipesMip(lp, s1, locks), await fewestRecipes(lp, s1.x, locks)];
+async function simplest(lp: MainLp, s1: LpResult, locks: LpRow[]): Promise<{ off: Set<number>; locks: LpRow[]; base: LpResult }> {
+  const candidates = [await fewestRecipesMip(lp, s1, locks), await fewestRecipes(lp, locks)];
   for (const off of candidates) {
     if (off === null || off.size === 0) continue;
     const again = await minimize(lp, lp.rawCost, [], Infinity, off);
     if (again.status === 'optimal' && again.objective <= s1.objective * (1 + S3_TOLERANCE) + TINY) {
-      return { off, locks: lockRow(lp.rawCost, Math.max(again.objective, s1.objective)) };
+      return { off, locks: lockRow(lp.rawCost, Math.max(again.objective, s1.objective)), base: again };
     }
   }
-  return { off: new Set(), locks };
+  return { off: new Set(), locks, base: s1 };
 }
 
 /** S3, S2 and S4 on top of an optimal S1, then the rounded maps. */
 async function finish(lp: MainLp, s1: LpResult, warnings: PlanWarning[]): Promise<Solution> {
   // S3, S2 and S4 only break ties: a stage that does not solve (numerically, or S2 unbounded by a recipe with negative
-  // EU) keeps the previous stage's plan, which already uses the least raw material. S3 runs before power, so power
-  // never picks a longer chain among equally cheap ones; the later stages keep to the recipes S3 left.
-  let best = s1;
+  // EU) keeps the previous stage's plan, which already uses the least raw material (S3's: the least raw material
+  // without the recipes it left out). S3 runs before power, so power never picks a longer chain among equally cheap
+  // ones; the later stages keep to the recipes S3 left.
   const open = lockRow(lp.rawCost, s1.objective);
-  const { off, locks } = await simplest(lp, s1, open);
+  const { off, locks, base } = await simplest(lp, s1, open);
+  let best = base;
   const s2 = await minimize(lp, lp.power, locks, Infinity, off);
   if (s2.status === 'optimal') {
     best = s2;
