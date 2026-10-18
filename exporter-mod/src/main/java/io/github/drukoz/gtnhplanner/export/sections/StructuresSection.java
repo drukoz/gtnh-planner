@@ -2,6 +2,7 @@ package io.github.drukoz.gtnhplanner.export.sections;
 
 import java.io.IOException;
 import java.lang.reflect.Field;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.BitSet;
@@ -9,6 +10,7 @@ import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 import net.minecraft.block.Block;
@@ -69,6 +71,13 @@ public final class StructuresSection implements ExportSection {
     private static final int PRELOAD_MARGIN_CHUNKS = 2;
 
     private static final String MAIN_PIECE = "main";
+
+    /**
+     * The owner every controller gets, as a player's would on placement: a multiblock's {@code onRemoval} looks up
+     * its owner's team (GT's powerfail tracker) and throws for a machine without an owner UUID.
+     */
+    private static final String OWNER_NAME = "gtnhplannerexport";
+    private static final UUID OWNER_UUID = UUID.nameUUIDFromBytes(OWNER_NAME.getBytes(StandardCharsets.UTF_8));
 
     /** A {@code "main"} piece with more cells than this gets no air cells (the fit is quadratic). */
     private static final int MAX_PIECE_CELLS = 4096;
@@ -200,8 +209,8 @@ public final class StructuresSection implements ExportSection {
     }
 
     /**
-     * Places the controller as {@code ItemMachines.placeBlockAt} does and turns it to face north. Throws unless the
-     * machine is buildable and really sits in the canonical orientation.
+     * Places the controller as {@code ItemMachines.placeBlockAt} does, owner included, and turns it to face north.
+     * Throws unless the machine is buildable and really sits in the canonical orientation.
      */
     private static IConstructable placeController(World world, int id) {
         IMetaTileEntity prototype = GregTechAPI.METATILEENTITIES[id];
@@ -214,6 +223,8 @@ public final class StructuresSection implements ExportSection {
         }
         IGregTechTileEntity gt = (IGregTechTileEntity) te;
         gt.setInitialValuesAsNBT(null, (short) id);
+        gt.setOwnerName(OWNER_NAME);
+        gt.setOwnerUuid(OWNER_UUID);
         gt.setFrontFacing(ForgeDirection.NORTH);
         IMetaTileEntity machine = gt.getMetaTileEntity();
         if (!(machine instanceof IConstructable)) {
