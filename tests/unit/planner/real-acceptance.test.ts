@@ -20,11 +20,15 @@ const GOOD_ELECTRONIC_CIRCUIT = 'gregtech:gt.metaitem.01@32702';
 const LV_MACHINE_HULL = 'gregtech:gt.blockmachines@11';
 const STEEL_INGOT = 'gregtech:gt.metaitem.01@11305';
 const ALUMINIUM_INGOT = 'gregtech:gt.metaitem.01@11019';
-/** The circuit assembler recipe of the Electronic Circuit: board, 2 resistors, 2 red alloy wires, 2 vacuum tubes, solder. */
-const EC_CIRCUIT_ASSEMBLER = '9cbcefac6fe44dd1';
+/**
+ * The circuit assembler recipe of the Electronic Circuit: board, 2 resistors, 2 red alloy wires, 2 vacuum tubes, solder.
+ * (Its id since the loader keeps recipe ids stable across re-exports, dcb0ce4; it was 9cbcefac6fe44dd1 before.)
+ */
+const EC_CIRCUIT_ASSEMBLER = 'c0106c4cb6b4b041';
 
 const COPPER = ['gregtech:gt.metaitem.01@11035', 'fluid:molten.copper', 'gregtech:gt.metaitem.01@11345' /* annealed */];
-const SOLDER = ['gregtech:gt.metaitem.01@2314' /* soldering alloy dust */, 'gregtech:gt.metaitem.01@11057' /* tin ingot */, 'fluid:molten.tin'];
+const SOLDER = ['gregtech:gt.metaitem.01@2314' /* soldering alloy dust */, 'gregtech:gt.metaitem.01@11314' /* soldering alloy ingot */,
+  'gregtech:gt.metaitem.01@11057' /* tin ingot */, 'fluid:molten.tin'];
 
 /** Ordinary base materials of GTNH's LV–HV circuit, hull and casing lines, by key. */
 const ORDINARY: ReadonlySet<string> = new Set([
@@ -89,9 +93,9 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
     expectSane(p, seconds, 40);
     expect(p.rawInputs.some((r) => COPPER.includes(r.key))).toBe(true);
     expect(p.rawInputs.some((r) => SOLDER.includes(r.key))).toBe(true);
-    // The last step makes the circuit: GT's circuit assembler, or the programmed-circuit crafting that turns any LV
-    // circuit back into an Electronic Circuit (the least raw material in 2.9: red alloy is 1 copper + 4 redstone).
-    expect(p.steps.find((s) => s.mainOutput === ELECTRONIC_CIRCUIT)?.mapId).toMatch(/^(gt\.recipe\.circuitassembler|crafting)$/);
+    // The last step makes the circuit in GT's circuit assembler: crafting a Programmed Circuit (any LV circuit) back into
+    // an Electronic Circuit is skipped by default (exclusion category programmed-circuit-conversion).
+    expect(p.steps.find((s) => s.mainOutput === ELECTRONIC_CIRCUIT)?.mapId).toBe('gt.recipe.circuitassembler');
   }, 60_000);
 
   it('plans 2 Good Electronic Circuits a minute at HV from ordinary materials, in under 45 steps and 5 s', async () => {
@@ -120,8 +124,12 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
 
   it('makes steel at MV in one Electric Blast Furnace step from a base material', async () => {
     const { plan: p, seconds } = await plan({ target: STEEL_INGOT, amount: 10, tier: 2 });
-    expectSane(p, seconds, 2);
+    // Steel Dust (made only from steel: macerated ingots, magnetic or electrical steel) is no way to make steel; the
+    // least raw material is then the blast furnace's cast iron recipe (1 Cast Iron Dust + 1,000 L Oxygen per ingot,
+    // against 1 Iron Dust + 1 Coal Dust + 1,000 L Oxygen), Cast Iron Dust being iron nuggets smelted into cast iron.
+    expectSane(p, seconds, 2, ['gregtech:gt.metaitem.01@2304' /* cast iron dust */]);
     expect(p.steps.map((s) => s.machine.name)).toContain('Electric Blast Furnace');
+    expect(p.rawInputs.map((r) => r.key)).not.toContain('gregtech:gt.metaitem.01@2305' /* steel dust */);
   }, 60_000);
 
   it('makes aluminium, an EBF-only metal, at HV in one EBF step from mined dust; at LV it says MV unlocks it', async () => {
