@@ -79,13 +79,14 @@ describe('real-data rules (final review)', () => {
     name, dims, materials: { primary: material, secondary: material, between: material, sporadic: material },
     weight: 1, minY: 0, maxY: 255, size: 1, density: 1, kind: 'vein' as const,
   });
-  it('counts as natural only items with a gathered ore-dictionary name (or a mob slime ball), not crafted look-alikes', () => {
+  it('counts as natural only items with a gathered ore-dictionary name (or sticky resin, a mob slime ball), not crafted look-alikes', () => {
     const p = packFromSpec({ items: [
       { key: 'EMT:EMTItems@8', name: 'Glue', oreDict: ['slimeball'] }, { key: 'minecraft:slime_ball@0', name: 'Slimeball', oreDict: ['slimeball'] },
       { key: 'bread@0', name: 'Bread', oreDict: ['foodBread'] }, { key: 'beef@0', name: 'Raw Beef', oreDict: ['listAllmeatraw'] },
-      { key: 'card@0', name: 'GregTech Sensor Card' }, { key: 'log@0', name: 'Oak Wood', oreDict: ['logWood'] }] });
-    expect(['EMT:EMTItems@8', 'minecraft:slime_ball@0', 'bread@0', 'beef@0', 'card@0', 'log@0'].map((k) => isNatural(p, k)))
-      .toEqual([false, true, false, true, false, true]);
+      { key: 'card@0', name: 'GregTech Sensor Card' }, { key: 'log@0', name: 'Oak Wood', oreDict: ['logWood'] },
+      { key: 'IC2:itemHarz@0', name: 'Sticky Resin', oreDict: ['slimeball'] }] });
+    expect(['EMT:EMTItems@8', 'minecraft:slime_ball@0', 'bread@0', 'beef@0', 'card@0', 'log@0', 'IC2:itemHarz@0'].map((k) => isNatural(p, k)))
+      .toEqual([false, true, false, true, false, true, true]);
   });
   it('leaves out recipes that separate free inputs into ore materials (obsidian dust into iron), not plain conversions', () => {
     const p = packFromSpec({
