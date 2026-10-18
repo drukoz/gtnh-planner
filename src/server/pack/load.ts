@@ -1,9 +1,10 @@
 // The pack loader (architecture §6.2 server API): streams an export into the in-memory `Pack`.
 //
 // Files are read in this order, so every reference resolves: manifest → items → fluids → fluid containers → ore
-// dictionary → recipe maps → recipes (GT, assembly line, crafting, furnace), then machines, structures, materials and
-// worldgen (not read yet: their Pack fields stay empty). Files are never read into one string; `readJsonl` streams
-// them line by line. Structural damage (bad gzip, bad JSON, a line count that differs from the manifest, an index that
+// dictionary → recipe maps → recipes (GT, assembly line, crafting, furnace) → machines → structures; then the electric
+// furnace and microwave recipes are derived from the smelting list and the indices built. Materials and worldgen are
+// not read yet: their Pack fields stay empty. Files are never read into one string; `readJsonl` streams them line by
+// line. Structural damage (bad gzip, bad JSON, a line count that differs from the manifest, an index that
 // points nowhere) fails with the file and line instead of returning a half-loaded pack; recoverable oddities become
 // `pack.warnings`.
 
@@ -19,6 +20,8 @@ import {
   EXPORT_FILES, EXPORT_FORMAT, OPTIONAL_EXPORT_FILES,
   type ExportFileKey, type ExportLineTypes, type ItemLine, type ManifestFile, type RecipeMapLine,
 } from './format.ts';
+import { buildIndices, buildMachinesByMap, deriveFurnaceRecipes } from './indices.ts';
+import { PSEUDO_MACHINE_ENTRIES, toMachine, toStructure } from './machines.ts';
 import { aliasesOf, normalizeMapId } from './map-aliases.ts';
 import { nbtHash } from './recipe-id.ts';
 import { assemblyLineRecipe, craftingRecipe, furnaceEntry, furnaceRecipe, gtRecipe, RecipeCollector, type FurnaceEntry } from './recipes.ts';
@@ -455,10 +458,54 @@ async function readRecipes({ src, ctx, recipes, furnace }: LoadState): Promise<v
   });
 }
 
+/** The export's machines (a duplicate id warns, the first line wins), then the pack's copies of the pseudo machines. */
+async function readMachines({ src, pack, ctx }: LoadState): Promise<void> {
+  await eachLine(src, 'machines', (line, n) => {
+    if (pack.machines.has(line.id)) ctx.warn(`${EXPORT_FILES.machines}:${n}: duplicate machine id ${line.id} ignored, the first line wins`);
+    else pack.machines.set(line.id, toMachine(line, ctx));
+  });
+  for (const pseudo of PSEUDO_MACHINE_ENTRIES) {
+    if (pack.machines.has(pseudo.mteId)) ctx.warn(`machine ${pseudo.mteId} of the export is replaced by the pseudo machine of that id`);
+    pack.machines.set(pseudo.mteId, { ...pseudo, maps: [...pseudo.maps] });
+  }
+}
+
+/** Each structure goes to the machine of its id; one for an unknown machine, a second one and a truncated one warn. */
+async function readStructures({ src, pack, ctx }: LoadState): Promise<void> {
+  await eachLine(src, 'structures', (line, n) => {
+    const machine = pack.machines.get(line.id);
+    if (machine === undefined) {
+      ctx.warn(`${EXPORT_FILES.structures}:${n}: structure for unknown machine ${line.id} ignored`);
+      return;
+    }
+    if (machine.structure !== undefined) {
+      ctx.warn(`${EXPORT_FILES.structures}:${n}: duplicate structure for machine ${line.id} ignored, the first line wins`);
+      return;
+    }
+    machine.structure = toStructure(line);
+    if (machine.structure.truncated) {
+      ctx.warn(`machine ${line.id} (${machine.metaName}): structure truncated, a block lay on the exporter's scan box boundary, it may be incomplete`);
+    }
+  });
+}
+
+/** The electric furnace and microwave recipes of the smelting list, through the same collector as the others. */
+function addDerivedRecipes({ pack, recipes, furnace }: LoadState): void {
+  for (const recipe of deriveFurnaceRecipes(furnace, pack.maps)) recipes.add(recipe);
+}
+
 /** The collected recipes become `pack.recipes`, and `recipeById` points at the same objects. */
 function setRecipes({ pack, recipes }: LoadState): void {
   pack.recipes = recipes.list();
   for (const recipe of pack.recipes) pack.recipeById.set(recipe.id, recipe);
+}
+
+/** Producers and consumers over `pack.recipes`, and the machines of every map. */
+function setIndices({ pack }: LoadState): void {
+  const { producers, consumers } = buildIndices(pack.recipes);
+  pack.producers = producers;
+  pack.consumers = consumers;
+  pack.machinesByMap = buildMachinesByMap(pack.machines);
 }
 
 /** Reads `src` into a Pack, file by file in the order of the header comment. */
@@ -470,7 +517,11 @@ export async function buildPack(src: ExportSource): Promise<Pack> {
   await readOreDict(state);
   await readRecipeMaps(state);
   await readRecipes(state);
+  await readMachines(state);
+  await readStructures(state);
+  addDerivedRecipes(state);
   setRecipes(state);
+  setIndices(state);
   return state.pack;
 }
 
