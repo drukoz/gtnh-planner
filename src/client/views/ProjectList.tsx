@@ -1,7 +1,8 @@
 // The group's projects, newest change first (spec §3.11: each build is a project with its own link), and a form to
 // start a new one. Anyone can delete a project here or on its page; the deleted ones wait under "Recently deleted"
 // for 7 days, where anyone can restore them (§11.24). The list has no live channel: it loads on open and after its
-// own deletes and restores (ruling C17).
+// own deletes and restores (ruling C17), and a row someone else deleted meanwhile counts as deleted when its Delete
+// finds it gone.
 
 import { useEffect, useState, type FormEvent, type ReactElement } from 'react';
 import { MAX_NAME_LENGTH, validateOp } from '../../shared/project/apply-op.ts';
@@ -13,7 +14,7 @@ import { DeleteProject } from '../components/DeleteProject.tsx';
 import { ItemIcon } from '../components/ItemIcon.tsx';
 import { localTime } from '../format.ts';
 import { followLink, navigate } from '../router.ts';
-import { deletedNotice, takeDeletedNotice } from '../state/deleted-notice.ts';
+import { alreadyDeletedNotice, deletedNotice, takeDeletedNotice } from '../state/deleted-notice.ts';
 import { useName } from '../state/name.ts';
 
 /** Display names of the projects' targets; a key the pack cannot name (or no export yet) shows as the key. */
@@ -171,6 +172,11 @@ export function ProjectList(): ReactElement {
                   id={p.id} name={p.name} label="Delete"
                   onDeleted={() => {
                     setNotice(deletedNotice(p.name, me));
+                    reload();
+                  }}
+                  onGone={() => {
+                    // The row was stale (no live channel, ruling C17): someone else deleted it; the reload catches up.
+                    setNotice(alreadyDeletedNotice(p.name));
                     reload();
                   }}
                 />

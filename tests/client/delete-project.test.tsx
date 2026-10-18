@@ -1,10 +1,10 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { isValidElement, type ReactElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { canDelete, DeleteConfirm } from '../../src/client/components/DeleteProject.tsx';
+import { canDelete, DeleteConfirm, deleteOrGone } from '../../src/client/components/DeleteProject.tsx';
 import { RecentlyDeleted } from '../../src/client/views/ProjectList.tsx';
 import { createProjectStore, type StoreDeps } from '../../src/client/state/project-store.ts';
-import { deletedNotice, leaveDeletedProject, takeDeletedNotice } from '../../src/client/state/deleted-notice.ts';
+import { alreadyDeletedNotice, deletedNotice, leaveDeletedProject, takeDeletedNotice } from '../../src/client/state/deleted-notice.ts';
 import { deleteProject, restoreProject } from '../../src/client/api/projects.ts';
 import { ApiError } from '../../src/client/api/client.ts';
 import { defaultSettings } from '../../src/shared/project/apply-op.ts';
@@ -71,6 +71,22 @@ describe('typed confirmation', () => {
     vi.stubGlobal('fetch', fetch);
     await expect(deleteProject('p 1')).resolves.toBeUndefined();
     expect(fetch).toHaveBeenCalledWith('/api/projects/p%201', expect.objectContaining({ method: 'DELETE' }));
+  });
+  it('counts a project someone else deleted already as gone, not as a failure (a stale list row, ruling C17)', async () => {
+    const answer = (status: number, body?: unknown) => async () =>
+      new Response(body === undefined ? null : JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+    vi.stubGlobal('fetch', vi.fn(answer(204)));
+    await expect(deleteOrGone('p1')).resolves.toBe('deleted');
+    const fetch = vi.fn(answer(404, { error: 'not-found', message: 'No project p1' }));
+    vi.stubGlobal('fetch', fetch);
+    await expect(deleteOrGone('p1')).resolves.toBe('gone');
+    expect(fetch).toHaveBeenCalledWith('/api/projects/p1', expect.objectContaining({ method: 'DELETE' }));
+    expect(alreadyDeletedNotice('MV circuits')).toBe('MV circuits was already deleted');
+    // Anything else is still an error the confirmation shows.
+    vi.stubGlobal('fetch', vi.fn(answer(400, { error: 'name-required', message: 'Say who you are first' })));
+    await expect(deleteOrGone('p1')).rejects.toMatchObject({ status: 400, code: 'name-required' });
+    vi.stubGlobal('fetch', vi.fn(answer(404)));                                   // not the planner's not-found
+    await expect(deleteOrGone('p1')).rejects.toMatchObject({ status: 404, code: 'http-404' });
   });
 });
 

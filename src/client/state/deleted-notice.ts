@@ -11,6 +11,11 @@ export function deletedNotice(name: string | null, by: string | null): string {
   return by === null ? `${name} was deleted` : `${name} was deleted by ${by}`;
 }
 
+/** The notice for a project someone else had deleted by the time this tab asked to delete it. */
+export function alreadyDeletedNotice(name: string): string {
+  return `${name} was already deleted`;
+}
+
 /** Opens the project list, which then shows the notice for `name`. */
 export function leaveDeletedProject(name: string | null, by: string | null): void {
   pending = deletedNotice(name, by);

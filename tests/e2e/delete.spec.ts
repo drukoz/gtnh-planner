@@ -43,3 +43,38 @@ test('a deleted project leaves every open tab within 2 s, and comes back with it
   await pa.getByRole('tab', { name: 'Notes' }).click();
   await expect(pa.locator('.note-text')).toHaveText('tap power here');
 });
+
+test('a project is deleted from its row on the list, and a row someone else deleted meanwhile catches up', async ({ browser }) => {
+  const page = await (await browser.newContext()).newPage();
+  await login(page); await setName(page, 'Cy');
+  const run = test.info().repeatEachIndex + 1;                                         // one per run: the server is shared
+  const listed = `Row delete ${run}`;
+  const stale = `Stale row ${run}`;
+  await createProject(page, listed);
+  const staleId = await createProject(page, stale);
+  await page.goto('/');
+  const rowOf = (name: string) => page.locator('.project-card').filter({ has: page.getByRole('link', { name, exact: true }) });
+  const deletedRow = (name: string) => page.getByRole('region', { name: 'Recently deleted' }).getByRole('listitem').filter({ hasText: name });
+  const confirmDelete = async (name: string): Promise<void> => {
+    const row = rowOf(name);
+    await row.getByRole('button', { name: 'Delete' }).click();
+    const form = row.getByRole('form', { name: 'Confirm delete' });
+    await form.getByLabel('Type the project name to confirm').fill(name);
+    await form.getByRole('button', { name: 'Delete', exact: true }).click();
+  };
+
+  await confirmDelete(listed);
+  await expect(page.getByText(`${listed} was deleted by Cy`)).toHaveCount(1);
+  await expect(page.getByRole('link', { name: listed, exact: true })).toHaveCount(0);
+  await expect(deletedRow(listed)).toContainText('Deleted by Cy');
+
+  // The list has no live channel (ruling C17): Dee deletes the other project while this list still shows its row.
+  const res = await page.context().request.delete(`/api/projects/${staleId}`, { headers: { 'X-Planner-Name': 'Dee' } });
+  expect(res.status()).toBe(204);
+  await expect(page.getByRole('link', { name: stale, exact: true })).toBeVisible();
+  await confirmDelete(stale);
+  await expect(page.getByText(`${stale} was already deleted`)).toHaveCount(1);
+  await expect(page.getByRole('alert')).toHaveCount(0);                                 // no "No project <id>"
+  await expect(page.getByRole('link', { name: stale, exact: true })).toHaveCount(0);
+  await expect(deletedRow(stale)).toContainText('Deleted by Dee');
+});

@@ -5,6 +5,21 @@
 import { useState, type FormEvent, type ReactElement } from 'react';
 import { messageOf } from '../api/client.ts';
 import { deleteProject } from '../api/projects.ts';
+import { isProjectGone } from '../api/sse.ts';
+
+/**
+ * Deletes the project: 'deleted' once the server did, 'gone' when it answers that there is no such project any more
+ * (someone else deleted it first: a list row can be stale, ruling C17); any other failure rejects.
+ */
+export async function deleteOrGone(id: string): Promise<'deleted' | 'gone'> {
+  try {
+    await deleteProject(id);
+    return 'deleted';
+  } catch (err) {
+    if (isProjectGone(err)) return 'gone';
+    throw err;
+  }
+}
 
 /** Exactly the name: no trimming and no case folding (a mis-typed name never deletes). */
 export function canDelete(typed: string, name: string): boolean {
@@ -47,9 +62,12 @@ export function DeleteConfirm(props: DeleteConfirmProps): ReactElement {
   );
 }
 
-/** The `label` button, then the confirmation; `onDeleted` runs once the server deleted the project. */
-export function DeleteProject(props: { id: string; name: string; label: string; onDeleted(): void }): ReactElement {
-  const { id, name, label, onDeleted } = props;
+/**
+ * The `label` button, then the confirmation; `onDeleted` runs once the server deleted the project. With `onGone`, a
+ * project the server no longer has counts as deleted already: `onGone` runs instead of the error showing.
+ */
+export function DeleteProject(props: { id: string; name: string; label: string; onDeleted(): void; onGone?(): void }): ReactElement {
+  const { id, name, label, onDeleted, onGone } = props;
   const [open, setOpen] = useState(false);
   const [typed, setTyped] = useState('');
   const [busy, setBusy] = useState(false);
@@ -60,10 +78,12 @@ export function DeleteProject(props: { id: string; name: string; label: string; 
   const confirm = (): void => {
     setBusy(true);
     setError(null);
-    deleteProject(id).then(onDeleted, (err: unknown) => {
+    const failed = (err: unknown): void => {
       setError(messageOf(err));
       setBusy(false);
-    });
+    };
+    if (onGone === undefined) deleteProject(id).then(onDeleted, failed);
+    else deleteOrGone(id).then((outcome) => (outcome === 'gone' ? onGone() : onDeleted()), failed);
   };
   const cancel = (): void => {
     setOpen(false);
