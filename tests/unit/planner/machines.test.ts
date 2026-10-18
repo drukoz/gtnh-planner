@@ -7,7 +7,7 @@ import { makeLeafOracle, makePrices } from '../../../src/server/planner/costs.ts
 import { solveLine } from '../../../src/server/planner/solve.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import { emptyContextForTest } from '../../helpers/plan-context.ts';
-import { packFromSpec, type PackSpec } from '../../helpers/pack-spec.ts';
+import { packFromSpec, type IngredientSpec, type PackSpec } from '../../helpers/pack-spec.ts';
 import type { PlanSettings } from '../../../src/shared/types/plan.ts';
 
 const pack = miniGt();
@@ -92,6 +92,24 @@ describe('more machine and flow cases', () => {
     expect(steps.map((s) => [s.id, s.mainOutput, s.inputs])).toEqual([
       ['make-b', 'b@0', [{ key: 'raw@0', amount: 1, chance: 1 }]],
       ['use', 't@0', [{ key: 'b@0', amount: 2, chance: 1 }]]]);
+  });
+  it('lists a good that fills several slots of a recipe once, with the amounts added up', async () => {
+    // A real export gives each crafting-grid slot its own ingredient of amount 1 (recipes.ts craftingRecipe).
+    const slot = (key: string): IngredientSpec => [key, 1];
+    const spec: PackSpec = {
+      machines: [{ mteId: 1, name: 'M', maps: ['gt.recipe.macerator'], tier: 1 }],
+      recipes: [
+        { id: 'hull', map: 'crafting', out: [['t@0', 1]],
+          in: [slot('plate@0'), slot('plate@0'), slot('plate@0'), slot('cable@0'), slot('plate@0'), slot('plate@0'), slot('plate@0'), slot('plate@0'), slot('cable@0'), slot('plate@0')] },
+        { id: 'make-cable', map: 'gt.recipe.macerator', in: [['raw@0', 1]], out: [['cable@0', 2]], eut: 2 },
+        { id: 'make-plate', map: 'gt.recipe.macerator', in: [['raw@0', 1], ['raw@0', 1, 0.5]], out: [['plate@0', 1]], eut: 2 },
+      ],
+    };
+    const { steps } = await planned(spec, 't@0', 1, 1);
+    expect(steps.map((s) => [s.id, s.inputs])).toEqual([
+      ['hull', [{ key: 'plate@0', amount: 8, chance: 1 }, { key: 'cable@0', amount: 2, chance: 1 }]],
+      ['make-cable', [{ key: 'raw@0', amount: 1, chance: 1 }]],
+      ['make-plate', [{ key: 'raw@0', amount: 1.5, chance: 0.75 }]]]);
   });
   it('passes flows through ore-dictionary conversions and sends byproducts to the sink', async () => {
     const { flows } = await planned(oreDict, 't@0', 1, 1);

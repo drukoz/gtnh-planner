@@ -210,16 +210,36 @@ function conversionRuns(graph: CandidateGraph, runsById: ReadonlyMap<string, num
   return runs;
 }
 
-/** The consumed inputs per run, expected amounts; not-consumed ones are one-off items of the machine (Task 13). */
+/** One good of a step's inputs, added up over the slots it fills. */
+interface InputTotal { expected: number; nominal: number; chance: number; sameChance: boolean }
+
+/**
+ * The consumed inputs per run with expected amounts (`amount × chance`), one entry per good in the order of the slot
+ * it first fills: a good in several slots (a real crafting recipe has one ingredient of amount 1 per grid slot,
+ * recipes.ts) is added up. Its `chance` is the slots' chance when they share one, else the expected amount over the
+ * nominal one. Not-consumed inputs are one-off items of the machine (Task 13).
+ */
 function stepInputs(r: Recipe, conversions: ReadonlyMap<StuffKey, ReadonlyMap<StuffKey, number>>): Product[] {
-  return r.inputs.flatMap((ing): Product[] => {
-    if (!ing.consumed || ing.options.length === 0) return [];
+  const totals = new Map<StuffKey, InputTotal>();
+  for (const ing of r.inputs) {
+    if (!ing.consumed || ing.options.length === 0) continue;
     // A slot with one option is that good itself; a longer one is the virtual good candidates.ts made for it.
     const option = ing.options.length === 1
       ? (ing.options[0] as Option)
       : busiestOption(ing.options, conversions.get(virtualKey(ing.options)));
-    return [{ key: option.key, amount: option.amount * ing.chance, chance: ing.chance }];
-  });
+    const expected = option.amount * ing.chance;
+    const total = totals.get(option.key);
+    if (total === undefined) {
+      totals.set(option.key, { expected, nominal: option.amount, chance: ing.chance, sameChance: true });
+    } else {
+      total.expected += expected;
+      total.nominal += option.amount;
+      total.sameChance &&= total.chance === ing.chance;
+    }
+  }
+  return [...totals].map(([key, t]) => ({
+    key, amount: t.expected, chance: t.sameChance || t.nominal <= 0 ? t.chance : t.expected / t.nominal,
+  }));
 }
 
 /** The output that is a target, else the one the other recipes consume most (ties: the smallest key). */
@@ -293,8 +313,9 @@ export function machineWarnings(lp: LpRecipe, pick: MachinePick, runsPerSecond: 
 export type StepSize = Pick<PlanStep, 'count' | 'owned' | 'runsPerSecond' | 'utilization' | 'warnings'>;
 
 /**
- * The step of a picked recipe, sized by the caller: the machine and its overclocked speed, per-run inputs and outputs
- * (expected amounts), the main output, the overclock inputs, the cleanroom flag and the programmed circuit.
+ * The step of a picked recipe, sized by the caller: the machine and its overclocked speed, per-run inputs (one per
+ * good, slots added up) and outputs (expected amounts), the main output, the overclock inputs, the cleanroom flag and
+ * the programmed circuit.
  * `alternatives` stays empty here (Task 14 fills it).
  */
 export function describeStep(pack: Pack, p: PickedRecipe, line: StepLine, size: StepSize): PlanStep {
