@@ -106,6 +106,22 @@ describe('buildTexturesDump tables', () => {
   });
 });
 
+describe('buildTexturesDump ores', () => {
+  it('keeps the GT ore blocks with their stones and marks glowing ores; a dump without the part has none', () => {
+    const d = buildTexturesDump(dumpFile({
+      materials: [{ name: 'Uraninite', id: 922, rgba: [35, 35, 35, 0], set: 0, oreGlow: 1 }, { name: 'Iron', id: 32, rgba: [200, 200, 220, 0], set: 0 }],
+      ores: { ore: 68, oreSmall: 67, smallOffset: 16000, naturalOffset: 8000, blocks: [
+        { id: 'gregtech:gt.blockores2', stones: [[{ copy: ['minecraft:stone', 0, 0] }], [{ p: [I + 'NOT_EXTRACTED.png'] }], [{ p: [I + 'MACHINE_LV_SIDE.png'] }]] }] },
+    }), ix);
+    expect(d.materialsById.get(922)).toEqual({ name: 'Uraninite', id: 922, rgb: [35, 35, 35], set: 0, oreGlow: true });
+    expect(d.materialsById.get(32)!.oreGlow).toBeUndefined();
+    expect(d.ores).toEqual({ ore: 68, oreSmall: 67, smallOffset: 16000, naturalOffset: 8000, blocks: new Map([['gregtech:gt.blockores2',
+      [[{ copy: ['minecraft:stone', 0, 0] }], [], [{ path: I + 'MACHINE_LV_SIDE.png' }]]]]) });
+    expect(d.stats).toEqual({ droppedLayers: 1, errorLayers: 0 });
+    expect(buildTexturesDump(dumpFile(), ix).ores).toBeNull();
+  });
+});
+
 describe('loadTexturesDump', () => {
   it('loads the file, ignores a missing or failed dump, rejects anything else', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'gp-td-'));

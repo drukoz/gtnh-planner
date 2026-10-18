@@ -19,6 +19,7 @@ import type { Pack, Product, Recipe, RecipeMapInfo } from '../../src/shared/type
 import { makeExport, type ExportSpec } from '../helpers/make-export.ts';
 import { MINI_GT } from '../helpers/mini-gt.ts';
 import { packFromSpec, type PackSpec } from '../helpers/pack-spec.ts';
+import { prepareAssets } from './assets-fixture.ts';
 import { E2E_PASSWORD } from './helpers.ts';
 
 /** GT's chance scale in the wire format: 10000 = 100 %. */
@@ -299,6 +300,7 @@ async function main(): Promise<void> {
     port: 18787, host: '127.0.0.1', dataDir: 'data/e2e', serverFolder: null, activeExportId: 'e2e',
     passwordHash: hashPassword(E2E_PASSWORD), sessionSecret: newSessionSecret(),
   }, 'data/e2e/config.json');
+  await prepareAssets('data/e2e', 'data/e2e/export/e2e');
 }
 
 if (import.meta.main) await main();

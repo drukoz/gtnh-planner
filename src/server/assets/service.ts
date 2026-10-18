@@ -1,6 +1,7 @@
 // The loaded asset sources behind `/api/assets/*` (spec §3.8): the extracted-file index, the active export's texture
-// dump and the NEI icon import, each reloaded when its file changes, so `npm run extract-assets`, `npm run export` and
-// `npm run import-nei-icons` take effect without a server restart. Nothing is read until the first request.
+// dump and the NEI icon import, each reloaded when its file changes, so `npm run extract-assets` and
+// `npm run import-nei-icons` take effect without a server restart. A new `npm run export` needs one, as for the
+// recipes: the server reads data/config.json (activeExportId) only at start. Nothing is read until the first request.
 
 import { stat } from 'node:fs/promises';
 import { join } from 'node:path';

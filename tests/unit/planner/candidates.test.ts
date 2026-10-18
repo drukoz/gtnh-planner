@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { miniGt } from '../../helpers/mini-gt.ts';
-import { packFromSpec, type IngredientSpec } from '../../helpers/pack-spec.ts';
-import { acceptRecipe, buildCandidates, virtualKey, type PlanEnv, type LeafOracle } from '../../../src/server/planner/candidates.ts';
+import { packFromSpec, type IngredientSpec, type RecipeSpec } from '../../helpers/pack-spec.ts';
+import { acceptRecipe, buildCandidates, MAX_RECIPES, virtualKey, type PlanEnv, type LeafOracle } from '../../../src/server/planner/candidates.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import { EXCLUSION_RULES } from '../../../src/server/planner/candidates.ts';
 import { DEFAULT_EXCLUDED_CATEGORIES } from '../../../src/shared/types/plan.ts';
@@ -97,13 +97,26 @@ describe('candidate rules without a fixture test above', () => {
   const M = (mteId: number, maps: string[], tier: number) => ({ mteId, name: `M${mteId}`, maps, tier });
   it('has one exclusion rule per default excluded category, each matching its recipes', () => {
     expect(Object.keys(EXCLUSION_RULES)).toEqual([...DEFAULT_EXCLUDED_CATEGORIES]);
-    const p = packFromSpec({ items: [{ key: 'stone@0', oreDict: ['dustStone'] }], recipes: [
+    const p = packFromSpec({ items: [{ key: 'stone@0', oreDict: ['dustStone'] }, { key: 'obsidian@0', oreDict: ['dustObsidian'] }], recipes: [
       { id: 'flagged', map: 'gt.recipe.macerator', flags: { recycling: true } }, { id: 'mf', map: 'gt.recipe.massfab' },
       { id: 'rep', map: 'gt.recipe.replicator' }, { id: 'rc', map: 'ic2.recycler' }, { id: 'sb', map: 'ic2.scrapbox' },
-      { id: 'stone', map: 'gt.recipe.centrifuge', in: [['stone@0', 1]] }, { id: 'plain', map: 'gt.recipe.centrifuge', in: [['a@0', 1]] }] });
+      { id: 'stone', map: 'gt.recipe.centrifuge', in: [['stone@0', 1]] }, { id: 'plain', map: 'gt.recipe.centrifuge', in: [['a@0', 1]] },
+      { id: 'obsidian', map: 'gt.recipe.electrolyzer', in: [['obsidian@0', 12]] }, { id: 'lava', map: 'gt.recipe.centrifuge', in: [['fluid:lava', 100]] }] });
     const hits = (id: string) => Object.keys(EXCLUSION_RULES).filter((k) => EXCLUSION_RULES[k]!(p.recipeById.get(id)!, p));
-    expect(['flagged', 'mf', 'rep', 'rc', 'sb', 'stone', 'plain'].map(hits))
-      .toEqual([['recycling'], ['massfab'], ['replicator'], ['scrap'], ['scrap'], ['lava-centrifuge'], []]);
+    expect(['flagged', 'mf', 'rep', 'rc', 'sb', 'stone', 'plain', 'obsidian', 'lava'].map(hits))
+      .toEqual([['recycling'], ['massfab'], ['replicator'], ['scrap'], ['scrap'], ['lava-centrifuge'], [], ['lava-centrifuge'], ['lava-centrifuge']]);
+  });
+  it('skips crafting a programmed circuit back into a circuit, not setting its number or using it in a recipe', () => {
+    const pc = (n: number) => ({ key: `gregtech:gt.integrated_circuit@${n}`, id: 'gregtech:gt.integrated_circuit', name: 'Programmed Circuit' });
+    const p = packFromSpec({ items: [pc(0), pc(1), pc(2)], recipes: [
+      { id: 'back', map: 'crafting', in: [{ any: [['gregtech:gt.integrated_circuit@0', 1], ['gregtech:gt.integrated_circuit@1', 1]] }], out: [['IC2:itemPartCircuit@0', 1]] },
+      { id: 'renumber', map: 'crafting', in: [['gregtech:gt.integrated_circuit@0', 1], { nc: 'screwdriver@0' }], out: [['gregtech:gt.integrated_circuit@2', 1]] },
+      { id: 'to-pc', map: 'crafting', in: [['IC2:itemPartCircuit@0', 1]], out: [['gregtech:gt.integrated_circuit@0', 1]] },
+      { id: 'bus', map: 'crafting', in: [['gregtech:gt.integrated_circuit@1', 1], ['bus@0', 1]], out: [['bus@1', 1]] },
+      { id: 'machine', map: 'gt.recipe.assembler', in: [['gregtech:gt.integrated_circuit@0', 1]], out: [['IC2:itemPartCircuit@0', 1]] }] });
+    const rule = EXCLUSION_RULES['programmed-circuit-conversion']!;
+    expect(['back', 'renumber', 'to-pc', 'bus', 'machine'].map((id) => rule(p.recipeById.get(id)!, p))).toEqual([true, false, false, false, false]);
+    expect(DEFAULT_EXCLUDED_CATEGORIES).toContain('programmed-circuit-conversion');
   });
   it('reports no-machine, and the voltage tier for multiblocks', () => {
     const p = packFromSpec({ machines: [{ mteId: 1, name: 'Big', maps: ['gt.recipe.big'], kind: 'multiblock' }],
@@ -136,11 +149,88 @@ describe('candidate rules without a fixture test above', () => {
     expect(g.recipes.map((r) => [r.id, r.coeffs])).toEqual([['both', [['b@0', 0.5], ['raw@0', -1], ['t@0', 1]]]]);
     expect([...g.goods.keys()].sort()).toEqual(['b@0', 'raw@0', 't@0']);
   });
-  it('stops adding recipes after 20,000', () => {
-    const p = packFromSpec({ machines: [M(1, ['gt.recipe.macerator'], 1)],
-      recipes: Array.from({ length: 20_001 }, (_, i) => ({ id: `r${String(i).padStart(5, '0')}`, map: 'gt.recipe.macerator', out: [['t@0', 1]] as Array<[string, number]> })) });
+  it('keeps the three cheapest producers of a good, within twice the cheapest estimated raw cost', () => {
+    const recipes: RecipeSpec[] = [1, 1.5, 2, 2.5, 3, 10].map((n, i) => ({ id: `p${i}`, map: 'gt.recipe.macerator', in: [['raw@0', n]], out: [['t@0', 1]] }));
+    recipes.push({ id: 'by', map: 'gt.recipe.macerator', in: [['raw@0', 1]], out: [['u@0', 1], ['t@0', 1, 0.01]] });   // 100 per t
+    const p = packFromSpec({ machines: [M(1, ['gt.recipe.macerator'], 1)], recipes });
+    const raw: LeafOracle = (k) => (k === 'raw@0' ? { buyable: true, cost: 1, leafClass: 'direct' } : { buyable: false, cost: 0, leafClass: null });
+    expect(buildCandidates(p, defaultSettings(), env(1), raw, ['t@0']).recipes.map((r) => r.id)).toEqual(['p0', 'p1', 'p2']);
+  });
+  it('ranks producers made from goods settled before the output first (no closed loop of equally cheap recipes)', () => {
+    // Sand from gravel and sand from sandstone (made from sand) cost the same; only the first is grounded.
+    const p = packFromSpec({ machines: [M(1, ['gt.recipe.macerator'], 1)], recipes: [
+      { id: 'a-from-sandstone', map: 'gt.recipe.macerator', in: [['sandstone@0', 1]], out: [['sand@0', 4]] },
+      { id: 'b-sandstone', map: 'gt.recipe.macerator', in: [['sand@0', 4]], out: [['sandstone@0', 1]] },
+      { id: 'c-a', map: 'gt.recipe.macerator', in: [['sandstone@0', 1]], out: [['sand@0', 4]] },
+      { id: 'c-b', map: 'gt.recipe.macerator', in: [['sandstone@0', 1]], out: [['sand@0', 4]] },
+      { id: 'z-from-gravel', map: 'gt.recipe.macerator', in: [['gravel@0', 1]], out: [['sand@0', 1]] }] });
+    const gravel: LeafOracle = (k) => (k === 'gravel@0' ? { buyable: true, cost: 1, leafClass: 'free' } : { buyable: false, cost: 0, leafClass: null });
+    expect(buildCandidates(p, defaultSettings(), env(1), gravel, ['sand@0']).recipes.map((r) => r.id)).toContain('z-from-gravel');
+  });
+  it('keeps the same producers whatever order the export lists recipes and options in', () => {
+    // x and y cost the same and each is made from the other: which one counts as made first must not follow the
+    // export's order, or y→x is grounded in one export of a pack and not in the next.
+    const recipes: RecipeSpec[] = [
+      { id: 'a-from-y', map: 'gt.recipe.macerator', in: [['y@0', 1]], out: [['x@0', 1]] },
+      { id: 'x-from-raw', map: 'gt.recipe.macerator', in: [['raw@0', 2]], out: [['x@0', 1]] },
+      { id: 'x-from-raw2', map: 'gt.recipe.macerator', in: [{ any: [['raw2@0', 2], ['raw3@0', 2]] }], out: [['x@0', 1]] },
+      { id: 'x-from-raw4', map: 'gt.recipe.macerator', in: [['raw4@0', 2]], out: [['x@0', 1]] },
+      { id: 'y-from-raw', map: 'gt.recipe.macerator', in: [['raw@0', 2]], out: [['y@0', 1]] },
+      { id: 'y-from-x', map: 'gt.recipe.macerator', in: [['x@0', 1]], out: [['y@0', 1]] }];
+    const raw: LeafOracle = (k) => (k.startsWith('raw') ? { buyable: true, cost: 0.5, leafClass: 'direct' } : { buyable: false, cost: 0, leafClass: null });
+    const ids = (list: RecipeSpec[]) => buildCandidates(packFromSpec({ machines: [M(1, ['gt.recipe.macerator'], 1)], recipes: list }),
+      defaultSettings(), env(1), raw, ['x@0']).recipes.map((r) => r.id);
+    const reversed = [...recipes].reverse().map((r) => ({ ...r, in: r.in?.map((ing) => (typeof ing === 'object' && 'any' in ing ? { any: [...ing.any].reverse() } : ing)) }));
+    expect(ids(reversed)).toEqual(ids(recipes));
+  });
+  it('stops adding recipes at the cap (40,000) and says the graph was cut short', () => {
+    expect(MAX_RECIPES).toBe(40_000);
+    // t ← one recipe of 200 inputs, each made from 200 more, each made from nothing: 40,201 recipes, one per good.
+    const ins = (prefix: string): Array<[string, number]> => Array.from({ length: 200 }, (_, i): [string, number] => [`${prefix}_${i}@0`, 1]);
+    const p = packFromSpec({ machines: [M(1, ['gt.recipe.macerator'], 1)], recipes: [
+      { id: 'r', map: 'gt.recipe.macerator', in: ins('w'), out: [['t@0', 1]] },
+      ...ins('w').flatMap(([w], i) => [
+        { id: `r${i}`, map: 'gt.recipe.macerator', in: ins(`w${i}`), out: [[w, 1]] as Array<[string, number]> },
+        ...ins(`w${i}`).map(([leaf], j) => ({ id: `r${i}_${j}`, map: 'gt.recipe.macerator', out: [[leaf, 1]] as Array<[string, number]> }))])] });
     const g = buildCandidates(p, defaultSettings(), env(1), oracle, ['t@0']);
-    expect(g.recipes).toHaveLength(20_000);
+    expect(g.recipes).toHaveLength(MAX_RECIPES);
+    expect(g.truncated).toBe(true);
     expect(g.warnings).toEqual([{ code: 'graph-too-big', text: 'This chain is too large to plan in one go; mark some parts as "we already make this"' }]);
+    expect(buildCandidates(p, defaultSettings(), env(1), oracle, ['t@0'], { maxRecipes: 10 }).recipes).toHaveLength(10);
+  });
+});
+
+describe('real-data rules (final review)', () => {
+  const M = (mteId: number, maps: string[], tier: number) => ({ mteId, name: `M${mteId}`, maps, tier });
+  it('never makes goods from a generator fuel list', () => {
+    const p = packFromSpec({
+      maps: [{ id: 'bw.fuels.acidgens', specialValue: 'fuel' }, { id: 'gt.recipe.rtg' }],
+      machines: [{ mteId: 1, name: 'Large Neutralization Engine', maps: ['bw.fuels.acidgens'], kind: 'multiblock' },
+                 { mteId: 2, name: 'RTG', maps: ['gt.recipe.rtg'], kind: 'generator', tier: 1 }],
+      recipes: [{ id: 'acid', map: 'bw.fuels.acidgens', in: [['acid-cell@0', 1]], out: [['cell@0', 1]] },
+                { id: 'rtg', map: 'gt.recipe.rtg', in: [['pellet@0', 1]], out: [['depleted@0', 1]] }] });
+    expect(acceptRecipe(p, p.recipeById.get('acid')!, env(5))).toEqual({ ok: false, why: 'fuel' });
+    expect(acceptRecipe(p, p.recipeById.get('rtg')!, env(5))).toEqual({ ok: false, why: 'fuel' });
+  });
+  it('runs a multiblock recipe only where the group can build the multiblock (EU/t 0 endgame machines)', () => {
+    const p = packFromSpec({ machines: [{ mteId: 9, name: 'Eye of Harmony', maps: ['gt.recipe.eyeofharmony'], kind: 'multiblock' }],
+      recipes: [{ id: 'eoh', map: 'gt.recipe.eyeofharmony', out: [['t:iron_dust@0', 64]], eut: 0 }] });
+    const r = p.recipeById.get('eoh')!;
+    expect(acceptRecipe(p, r, env(1)).ok).toBe(true);                                         // no gate given: any multiblock
+    expect(acceptRecipe(p, r, env(1, { multiblocks: new Set() }))).toEqual({ ok: false, why: 'multiblock' });
+    expect(acceptRecipe(p, r, env(1, { multiblocks: new Set([9]) })).ok).toBe(true);
+  });
+  it('leaves out the recipes an env names as making ore from nothing, and smelting parts back into metal', () => {
+    const p = packFromSpec({
+      items: [{ key: 'spring@0', name: 'Steel Spring', gt: { prefix: 'spring', material: 'Steel' } }, { key: 'steel@0', name: 'Steel Ingot', gt: { prefix: 'ingot', material: 'Steel' } },
+              { key: 'sdust@0', name: 'Steel Dust', gt: { prefix: 'dust', material: 'Steel' } }],
+      machines: [M(1, ['gt.recipe.furnace'], 1), M(2, ['gt.recipe.electrolyzer'], 1)],
+      recipes: [{ id: 'back', map: 'gt.recipe.furnace', source: 'derived', in: [['spring@0', 1]], out: [['steel@0', 1]], eut: 4 },
+                { id: 'dust', map: 'gt.recipe.furnace', source: 'derived', in: [['sdust@0', 1]], out: [['steel@0', 1]], eut: 4 },
+                { id: 'obsidian', map: 'gt.recipe.electrolyzer', in: [['odust@0', 12]], out: [['t:iron_dust@0', 1], ['mg@0', 1]], eut: 90 }] });
+    expect(acceptRecipe(p, p.recipeById.get('back')!, env(1))).toEqual({ ok: false, why: 'excluded' });
+    expect(acceptRecipe(p, p.recipeById.get('back')!, env(1, { excluded: new Set() })).ok).toBe(true);
+    expect(acceptRecipe(p, p.recipeById.get('dust')!, env(1)).ok).toBe(true);
+    expect(acceptRecipe(p, p.recipeById.get('obsidian')!, env(1, { fromNothing: new Set(['obsidian']) }))).toEqual({ ok: false, why: 'excluded' });
   });
 });

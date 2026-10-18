@@ -79,6 +79,23 @@ describe('project store', () => {
     expect(store.getSnapshot().error).toBe('op 1: name must be 1 to 80 characters');
     expect(store.getSnapshot().project?.marks['run:a']).toBeUndefined();
   });
+  it('clears a failed fetch once the server confirms the project again', async () => {
+    const { deps, store, events } = harness();
+    events().snapshot({ ...P0, rev: 2 });
+    deps.fetchProject = vi.fn(async () => { throw new Error('Failed to fetch'); });
+    events().op({ rev: 5, op: { op: 'rename', name: 'x' }, by: 'Bob', at: 'now' });     // gap: refetch, which fails
+    await vi.waitFor(() => expect(store.getSnapshot().error).toBe('Failed to fetch'));
+    events().snapshot({ ...P0, rev: 5 });                                              // the stream comes back
+    expect(store.getSnapshot()).toMatchObject({ error: null, project: { rev: 5 } });
+  });
+  it('keeps a rejected batch\'s reason when the project is confirmed', async () => {
+    const { store, events } = harness(async () => { throw new Error('op 0: name must be 1 to 80 characters'); });
+    events().snapshot(P0);
+    store.send([{ op: 'rename', name: 'New' }]);
+    await vi.waitFor(() => expect(store.getSnapshot().error).toBe('op 0: name must be 1 to 80 characters'));
+    events().snapshot({ ...P0, rev: 1 });
+    expect(store.getSnapshot().error).toBe('op 0: name must be 1 to 80 characters');
+  });
   it('ignores an answer older than what the events already brought', async () => {
     let answer: ((p: Project) => void) | undefined;
     const { deps, store, events } = harness();

@@ -22,6 +22,15 @@ All data comes from **your own** copy of the pack and world: recipes are exporte
 
 **Status:** in development. Design: [docs/superpowers/specs/2026-10-17-gtnh-planner-design.md](docs/superpowers/specs/2026-10-17-gtnh-planner-design.md).
 
+## Textures and icons
+
+- The planner draws blocks and items with your own pack's textures. Nothing game-made is in the repository: it is extracted into `data/assets/` (git-ignored) and served only to people logged in to the planner.
+- `npm run extract-assets` reads `mods/*.jar` of the server folder in `data/config.json` (or `--server <folder>`), read-only, plus the official Minecraft 1.7.10 client jar. Prism Launcher keeps it at `~/Library/Application Support/PrismLauncher/libraries/com/mojang/minecraft/1.7.10/minecraft-1.7.10-client.jar`, the official launcher at `~/Library/Application Support/minecraft/versions/1.7.10/1.7.10.jar`; otherwise pass `--client-jar <path>` or set `"clientJar"` in `data/config.json`. Its SHA-1 must be `e80d9b3bf5085002218d4be59e668bac718abbc6`.
+- `npm run export` also writes `textures.json.gz`, which tells the planner how GregTech draws each machine, casing, cover, material item and fluid. After a pack update, run both again: a running planner picks up new textures from `extract-assets` on its next request; restart it after `npm run export` (as for the recipes). A failed extraction keeps the previous textures.
+- When two jars ship the same texture: a mod beats vanilla, then a jar that overrides another mod's texture beats that mod's own jar (GTNewHorizonsCoreMod over gregtech), then the jar whose name sorts last. `data/assets/index.json` lists every conflict.
+- Optional icons for everything else: in a **copy** of the client instance (never the one you play with), in a creative single-player world, open NEI options → Tools → Data Dumps → Item Panel. With an empty search box and every collapsible group expanded, dump CSV, then PNG, in the same session; then run `npm run import-nei-icons -- --csv <copy>/.minecraft/dumps/itempanel.csv --png <copy>/.minecraft/dumps/itempanel_icons`. Fluid icons are matched by their display name against the active export, so run `npm run export` first. A dump whose rows and images do not line up is refused.
+- Anything without a texture is drawn in a plain colour: by machine kind for blocks, by material for GT items, otherwise a fixed colour per item.
+
 ## Using the planner
 
 1. **One-time setup**, on the computer that runs the planner (Node.js 24):

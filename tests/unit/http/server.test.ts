@@ -51,7 +51,7 @@ describe('auth', () => {
 describe('pack routes', () => {
   it('GET /api/pack', async () => {
     expect(await (await s.request('/api/pack')).json()).toMatchObject({ recipeCount: 1, mapCount: 1, itemCount: 2,
-      exclusionRules: ['recycling', 'massfab', 'replicator', 'scrap', 'lava-centrifuge'] });
+      exclusionRules: ['recycling', 'massfab', 'replicator', 'scrap', 'lava-centrifuge', 'programmed-circuit-conversion'] });
   });
   it('search and stuff', async () => {
     const hits = await (await s.request('/api/pack/search?q=iron%20pl')).json();

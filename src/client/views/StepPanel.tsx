@@ -3,7 +3,7 @@
 // its product "we already make this" and read its warnings; click a raw material to see where it comes from and, for
 // a base material, plan it in the line instead. Every choice sends one `settings` op with whole field values.
 
-import { useId, type ReactElement } from 'react';
+import { useId, useState, type ReactElement } from 'react';
 import type { StuffKey } from '../../shared/keys.ts';
 import type { LeafClass, Plan, PlanSettings, PlanStep, RawInput, SourceInfo } from '../../shared/types/plan.ts';
 import { ItemIcon } from '../components/ItemIcon.tsx';
@@ -16,6 +16,8 @@ type NameOf = (key: string) => string;
 
 /** Found spots listed per source before the rest is summed up. */
 const MAX_FOUND_AT = 3;
+/** Swap options shown before "more…" (the one in use and a pinned one always show). */
+const SWAP_SHOWN = 5;
 
 const LEAF_TEXT: Record<LeafClass, string> = {
   free: 'Free: water, air, cobblestone and lava cost nothing',
@@ -43,10 +45,26 @@ function settingsSender(send: Send): (patch: Partial<PlanSettings>) => void {
   return (patch) => send([{ op: 'settings', patch }]);
 }
 
-/** A recipe map id in words: `gt.recipe.assembler` → `Assembler`. Plan.names has no map names. */
+/** A recipe map id in words: `gt.recipe.assembler` → `Assembler`, for a plan whose names have no `map:` entry. */
 function mapLabel(mapId: string): string {
   const words = mapId.replace(/^.*?recipe\./, '').replace(/[._-]+/g, ' ').trim();
   return words === '' ? mapId : words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+type Alternative = PlanStep['alternatives'][number];
+
+/** "2× Copper Wire, Redstone": a list of goods with their amounts per run. */
+function partsText(parts: Alternative['inputs'], nameOf: NameOf): string {
+  return (parts ?? []).map((p) => `${p.key.startsWith('fluid:') ? `${formatNumber(p.amount)} L ` : p.amount === 1 ? '' : `${formatNumber(p.amount)}× `}${nameOf(p.key)}`).join(', ');
+}
+
+/** One swap option in words: its machine, what a run takes and makes, and its raw material use. */
+function alternativeText(a: Alternative, nameOf: NameOf): string {
+  const machine = nameOf(`map:${a.mapId}`) === `map:${a.mapId}` ? mapLabel(a.mapId) : nameOf(`map:${a.mapId}`);
+  const takes = partsText(a.inputs, nameOf);
+  const makes = partsText(a.outputs, nameOf);
+  const what = takes === '' && makes === '' ? '' : `: ${takes === '' ? 'nothing' : takes} → ${makes}`;
+  return `${machine}${what} · ${formatNumber(a.rawCost)} raw/unit`;
 }
 
 function PanelHead(props: { itemKey: StuffKey | null; title: string; onClose(): void }): ReactElement {
@@ -79,6 +97,7 @@ function ReuseSection(props: { step: PlanStep; settings: PlanSettings; patch(p: 
 function SwapSection(props: { step: PlanStep; settings: PlanSettings; nameOf: NameOf; patch(p: Partial<PlanSettings>): void }): ReactElement {
   const { step, settings, nameOf, patch } = props;
   const group = useId();
+  const [expanded, setExpanded] = useState(false);
   const main = step.mainOutput;
   if (main === undefined) {
     return (
@@ -97,6 +116,10 @@ function SwapSection(props: { step: PlanStep; settings: PlanSettings; nameOf: Na
     patch({ recipeChoice: next });
   };
   const listed = pinned === undefined || step.alternatives.some((a) => a.recipeId === pinned);
+  // Sorted by raw material use already (server); the first few, plus the one in use and a pinned one wherever they are.
+  const shown = expanded ? step.alternatives
+    : step.alternatives.filter((a, i) => i < SWAP_SHOWN || a.recipeId === step.recipeId || a.recipeId === pinned);
+  const hidden = step.alternatives.length - shown.length;
   return (
     <fieldset className="flow-panel-section">
       <legend className="flow-panel-title">Swap recipe</legend>
@@ -104,16 +127,18 @@ function SwapSection(props: { step: PlanStep; settings: PlanSettings; nameOf: Na
         <input type="radio" name={group} checked={pinned === undefined} onChange={() => choose(null)} />
         Let the planner choose
       </label>
-      {step.alternatives.map((a) => (
-        <label key={a.recipeId} className="check swap-option">
+      {shown.map((a) => (
+        <label key={a.recipeId} className="check swap-option" title={`recipe ${a.recipeId}`}>
           <input type="radio" name={group} checked={pinned === a.recipeId} onChange={() => choose(a.recipeId)} />
-          <span className="swap-text">
-            {mapLabel(a.mapId)} <span className="muted small">{a.recipeId}</span>
-            {` · ${formatNumber(a.rawCost)} raw/unit`}
-          </span>
+          <span className="swap-text">{alternativeText(a, nameOf)}</span>
           {a.recipeId === step.recipeId && <span className="badge">in use</span>}
         </label>
       ))}
+      {hidden > 0 && (
+        <div className="row">
+          <button type="button" className="small" onClick={() => setExpanded(true)}>{`${hidden} more…`}</button>
+        </div>
+      )}
       {!listed && <p className="muted small">{`The pinned recipe ${pinned} is not usable now, so the planner chose another.`}</p>}
       {step.alternatives.length <= 1 && <p className="muted small">{`No other recipe for ${nameOf(main)} is usable here.`}</p>}
     </fieldset>

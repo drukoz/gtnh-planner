@@ -1,8 +1,8 @@
 // `npm run extract-assets -- [--server <folder>] [--client-jar <path> | --no-client]`: copies the block and item
 // textures of the server pack's mod jars and of the official Minecraft 1.7.10 client jar into `<dataDir>/assets/`
-// (Task 3). The server folder is only read. Exit 0 extracted; 1 the extraction failed (the previous textures stay in
-// place); 2 bad arguments or settings, or no usable client jar. Every path is resolved from the working directory,
-// which is the repo root under npm.
+// (Task 3). The server folder is only read. Exit 0 extracted; 1 the extraction failed, also when no mod jar could be
+// read (the previous textures stay in place); 2 bad arguments or settings, or no usable client jar. Every path is
+// resolved from the working directory, which is the repo root under npm.
 
 import { createHash } from 'node:crypto';
 import { createReadStream, statSync } from 'node:fs';

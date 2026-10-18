@@ -34,6 +34,7 @@ drukoz and friends on the server (a handful of people). drukoz runs the server a
 - Expands the target into a full production chain down to base materials.
 - **Objective: least raw material used per output at the current tier.** Machine count, power and speed are shown but are not what it optimizes. Byproducts that can be fed back count as savings. "Material use" means material consumed while the line runs, not the cost to build the machines.
 - **How materials are counted (decided):** every base item counts 1; 144 L of molten metal = 1 ingot; 1,000 L of any other fluid = 1; water, air, cobblestone and lava are free. **Each material's cost can be changed per project** (e.g. mark silver as expensive, or something they mass-produce as cheap).
+- **Materials to avoid** (added 2026-10-18 at the user's request): each project has an "Avoid" list of materials (by name, covering every form: ingot, dust, plate, molten, …) or specific items/fluids. The planner chooses recipes that use none of them anywhere in the chain. If no recipe at the current tier avoids one, the plan still comes out, and every step that needs it carries a warning naming the material and why (my call: hard avoid with a visible fallback instead of an unplannable line).
 - Items marked "we already make this" stop the chain there and become inputs, counted at their (editable) cost like any other input (my call).
 - GT overclocking rules decide how fast a recipe runs on the tier of machine used, and so how many machines are needed.
 - "Base material" by default = ores, ingots, dusts and basic fluids.
@@ -104,6 +105,7 @@ drukoz and friends on the server (a handful of people). drukoz runs the server a
 - Each build is a project with its own link.
 - Shared state across the group: ticks, crossed-off steps, notes/pins, recipe choices, material costs, logistics mode, target/tier. Everyone sees the same thing (refresh or live).
 - No accounts: each person types their name once. One shared password keeps strangers out.
+- **Projects can be deleted** (added 2026-10-18 at the user's request) by anyone in the group, after confirming by typing the project name. A deleted project leaves the list at once (open tabs are told and go back to the list), stays restorable from "Recently deleted" for 7 days, then is removed for good with its notes, ticks, history and projector tokens (my call: restorable, so a mis-click never loses the group's progress).
 
 ### 3.12 Public GitHub project
 - The code lives in a **public GitHub repository** (account `drukoz`), project folder `~/gtnh-planner`.

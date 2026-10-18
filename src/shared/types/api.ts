@@ -58,3 +58,8 @@ export interface AssetBlocksRequest { blocks: BlockRef[]; facing?: number }
 export interface AssetCoversRequest { items: StuffKey[] }
 export const ASSET_KEYS_MAX = 500;
 export const ASSET_BLOCKS_MAX = 500;
+
+/** `GET /api/projects?deleted=1` (§11.24), newest deletion first: restorable until purged 7 days after `deletedAt`. */
+export interface DeletedProjectSummary { id: string; name: string; rev: number; target: StuffKey | null; updatedAt: string; deletedAt: string; deletedBy: string }
+/** SSE `deleted` (§11.24): the last event of every stream of a project someone deleted; the stream then ends. */
+export interface DeletedEvent { id: string; by: string; at: string }
