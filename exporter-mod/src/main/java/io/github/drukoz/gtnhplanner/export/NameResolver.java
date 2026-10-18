@@ -22,6 +22,19 @@ public final class NameResolver {
 
     /** The English name, or {@code null} (counted as a failure) when neither the item nor the table has one. */
     public String itemName(ItemStack s) {
+        String name = uncountedName(s);
+        if (name == null) {
+            failures++;
+            if (samples.size() < MAX_SAMPLES) samples.add(sample(s));
+        }
+        return name;
+    }
+
+    /**
+     * {@link #itemName} without counting a failure or keeping a sample: for wildcard stacks (meta 32767), which are
+     * not items of their own and must not inflate {@code nameFailures} or crowd out the concrete samples.
+     */
+    String uncountedName(ItemStack s) {
         try {
             String name = s.getDisplayName();
             if (name != null) return name;
@@ -34,8 +47,6 @@ public final class NameResolver {
         } catch (Throwable t) {
             // the unlocalized name failed as well
         }
-        failures++;
-        if (samples.size() < MAX_SAMPLES) samples.add(sample(s));
         return null;
     }
 

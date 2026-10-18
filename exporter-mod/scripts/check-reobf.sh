@@ -3,7 +3,12 @@
 #  1. every field/method reference into net/minecraft/** uses its SRG name (func_<n>_<x> / field_<n>_<x>), so the
 #     jar was reobfuscated (the -dev jar keeps MCP names such as ItemStack.getDisplayName and fails here);
 #     constructors, static initializers and the Object/Enum methods vanilla never renames are allowed;
+#     SRG suffixes can end in '_' (func_70302_i_ = IInventory.getSizeInventory, func_70071_h_ = Entity.onUpdate),
+#     so <x> is [A-Za-z_]+;
 #  2. every class file is Java 8 bytecode (magic cafebabe, version 0000 0034).
+# The references come from each class's constant pool (javap -v), not from the disassembled code (javap -c): the
+# pool also holds the member a method reference (Foo::bar, a bootstrap MethodHandle argument) points at, which
+# javap -c never prints.
 # Usage: scripts/check-reobf.sh <jar>      Exit 0: "reobf OK: <n> classes"; exit 1: the offending names.
 set -euo pipefail
 
@@ -39,20 +44,23 @@ if [ ${#wrong_version[@]} -gt 0 ]; then
   status=1
 fi
 
-# javap prints each constant-pool reference as "// Method owner.name:desc", "// InterfaceMethod …" or "// Field …";
-# owners may be quoted (array types) and so may names ("<init>").
+# javap -v lists each member reference in the constant pool as
+#   "#12 = Methodref          #45.#48        // net/minecraft/item/ItemStack.func_77973_b:()Lnet/minecraft/item/Item;"
+# (also InterfaceMethodref and Fieldref); owners may be quoted (array types) and so may names ("<init>").
 unmapped=$(
-  javap -c -p "${classes[@]}" \
-    | { grep -oE '// (InterfaceMethod|Method|Field) [^ ]+' || true; } \
-    | awk '{
-        ref = $3
+  javap -v -p "${classes[@]}" \
+    | awk '
+      $1 ~ /^#[0-9]+$/ && $2 == "=" && ($3 == "Methodref" || $3 == "InterfaceMethodref" || $3 == "Fieldref") {
+        i = index($0, "// ")
+        if (i == 0) next
+        ref = substr($0, i + 3)
         sub(/:.*/, "", ref)
         gsub(/"/, "", ref)
         if (!match(ref, /\.[^.]*$/)) next
         owner = substr(ref, 1, RSTART - 1)
         name = substr(ref, RSTART + 1)
         if (owner !~ /^net\/minecraft\//) next
-        if (name ~ /^(func|field)_[0-9]+_[A-Za-z]+$/) next
+        if (name ~ /^(func|field)_[0-9]+_[A-Za-z_]+$/) next
         if (name ~ /^(<init>|<clinit>|toString|hashCode|equals|values|valueOf|ordinal|name)$/) next
         print owner "." name
       }' \

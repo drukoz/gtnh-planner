@@ -87,7 +87,9 @@ public final class ItemTable {
 
     /**
      * Writes {@code items.jsonl.gz}, one line per index in order. Every index gets its line: when the full line
-     * fails, a minimal one ({@code i}, {@code id}, {@code m}, {@code nbt}) is written instead.
+     * fails, a minimal one ({@code i}, {@code id}, {@code m}, {@code nbt}) is written instead. A wildcard line
+     * (meta 32767) gets its {@code dn} too, but a missing name there is not counted in {@code nameFailures}: a
+     * wildcard is never an item of its own, and the failure ratio is taken over concrete items.
      */
     public void write(ExportContext ctx) throws IOException {
         NameResolver names = ctx.names();
@@ -123,8 +125,8 @@ public final class ItemTable {
         } catch (Throwable t) {
             // written as null
         }
-        String dn = names.itemName(s);
         boolean concrete = e.meta != WILDCARD;
+        String dn = concrete ? names.itemName(s) : names.uncountedName(s);
         List<String> od = concrete ? oreNames(s, e, ctx) : null;
         ItemData gt = concrete ? association(s, e, ctx) : null;
         Electric electric = concrete ? electric(s, e, ctx) : null;
