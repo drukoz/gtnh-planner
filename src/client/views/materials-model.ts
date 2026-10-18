@@ -81,6 +81,15 @@ export interface BuildRow {
   hasChildren: boolean; group: BuildGroup /* of its top-level line; missing → 'machines' */;
   /** One line per storage block holding some of it (architecture §11.20); only when the scan says where. */
   where?: string[];
+  /** A good on the avoid list the line still uses, as nothing at the tier avoids it (`unavoidableKeys`). */
+  avoid?: true;
+}
+
+const NONE: ReadonlySet<StuffKey> = new Set();
+
+/** The goods the plan uses although the avoid list covers them, as nothing at its tier avoids them (spec §3.3). */
+export function unavoidableKeys(plan: Plan): Set<StuffKey> {
+  return new Set((plan.avoided ?? []).filter((a) => a.unavoidable).map((a) => a.key));
 }
 
 /** The have and where texts of a row, set only when there is something to show. */
@@ -95,17 +104,21 @@ function stockOf(have: Have | undefined): { have?: string; where?: string[] } {
 
 /**
  * The build tree as rows, depth first: each line, then its children when its `path` (`<parent path>/<key>`, a top-level
- * line's path is its key) is in `expanded`.
+ * line's path is its key) is in `expanded`; a row of a good in `unavoidable` is marked `avoid`.
  */
-export function buildRows(lines: BomLine[], names: Record<string, string>, expanded: ReadonlySet<string>): BuildRow[] {
+export function buildRows(
+  lines: BomLine[], names: Record<string, string>, expanded: ReadonlySet<string>, unavoidable: ReadonlySet<StuffKey> = NONE,
+): BuildRow[] {
   const rows: BuildRow[] = [];
   const visit = (line: BomLine, parentPath: string | null, depth: number, group: BuildGroup): void => {
     const path = parentPath === null ? line.key : `${parentPath}/${line.key}`;
     const children = line.children ?? [];
-    rows.push({
+    const row: BuildRow = {
       row: `build:${line.key}`, path, key: line.key, name: names[line.key] ?? line.key, amount: amountText(line.amount), why: line.why,
       ...stockOf(line.have), depth, hasChildren: children.length > 0, group,
-    });
+    };
+    if (unavoidable.has(line.key)) row.avoid = true;
+    rows.push(row);
     if (expanded.has(path)) for (const child of children) visit(child, path, depth + 1, group);
   };
   for (const line of lines) visit(line, null, 0, line.group ?? DEFAULT_GROUP);
@@ -114,10 +127,10 @@ export function buildRows(lines: BomLine[], names: Record<string, string>, expan
 
 /** The build list split into its groups (a line without one is a machine), in `BUILD_GROUPS` order; empty groups are left out. */
 export function groupBuildRows(
-  lines: BomLine[], names: Record<string, string>, expanded: ReadonlySet<string>,
+  lines: BomLine[], names: Record<string, string>, expanded: ReadonlySet<string>, unavoidable: ReadonlySet<StuffKey> = NONE,
 ): Array<{ id: BuildGroup; label: string; rows: BuildRow[] }> {
   return BUILD_GROUPS
-    .map(({ id, label }) => ({ id, label, rows: buildRows(lines.filter((line) => (line.group ?? DEFAULT_GROUP) === id), names, expanded) }))
+    .map(({ id, label }) => ({ id, label, rows: buildRows(lines.filter((line) => (line.group ?? DEFAULT_GROUP) === id), names, expanded, unavoidable) }))
     .filter((group) => group.rows.length > 0);
 }
 
@@ -126,6 +139,8 @@ export interface RunRow {
   sources: string[]; unlock?: string; have?: string; canExpand: boolean; isStop: boolean;
   /** One line per storage block holding some of it (architecture §11.20); only when the scan says where. */
   where?: string[];
+  /** A good on the avoid list the line still uses, as nothing at the tier avoids it (`unavoidableKeys`). */
+  avoid?: true;
 }
 
 /** The badge of a raw input; one without a leaf class is a plain base material, or out of reach when it is not available. */
@@ -136,11 +151,13 @@ function badgeOf(input: RawInput): string {
 
 /**
  * The base materials the line runs on: per hour in rate mode (spec §3.10 "base materials per hour"), for the whole
- * batch in Make N; with their raw-material cost on the same basis, sources, unlock text and stock.
+ * batch in Make N; with their raw-material cost on the same basis, sources, unlock text, stock, and whether the line
+ * uses one on the avoid list.
  */
 export function runRows(plan: Plan, mode: 'rate' | 'makeN'): RunRow[] {
   const names = plan.names ?? {};
   const unlocks = new Map(plan.unlocks.map((u) => [u.key, u.text]));
+  const unavoidable = unavoidableKeys(plan);
   return plan.rawInputs.map((input): RunRow => {
     const batch = input.total ?? input.perSecond * (plan.makeN?.totalSeconds ?? 0);
     const amount = mode === 'rate' ? `${amountText(input.perSecond * SECONDS_PER_HOUR)}/h` : amountText(batch);
@@ -152,6 +169,7 @@ export function runRows(plan: Plan, mode: 'rate' | 'makeN'): RunRow[] {
     };
     const unlock = unlocks.get(input.key);
     if (unlock !== undefined) row.unlock = unlock;
+    if (unavoidable.has(input.key)) row.avoid = true;
     return row;
   });
 }

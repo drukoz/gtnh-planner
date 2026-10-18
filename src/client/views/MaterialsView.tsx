@@ -1,7 +1,8 @@
 // The Materials & steps tab (spec §3.10): what to build once (grouped as architecture §11.13, expandable down to base
 // materials), the base materials that build needs, what the line runs on (per hour, or for the whole batch in Make N)
 // with where it comes from and what unlocks it (spec §3.3b), what is left over, and then the build steps. Every row can
-// be ticked off by anyone, and the have-counts from the world scan sit next to each line (spec §3.4, §11.20).
+// be ticked off by anyone, and the have-counts from the world scan sit next to each line (spec §3.4, §11.20). A row of
+// a good on the avoid list that nothing at the tier avoids carries a small "avoid" marker (spec §3.3).
 
 import { useState, type ReactElement } from 'react';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
@@ -11,7 +12,7 @@ import type { Mark } from '../../shared/types/project.ts';
 import { ItemIcon } from '../components/ItemIcon.tsx';
 import { Tick } from '../components/Tick.tsx';
 import { formatRate } from './flow-model.ts';
-import { amountText, buildRows, groupBuildRows, runRows, type BuildRow, type RunRow } from './materials-model.ts';
+import { amountText, buildRows, groupBuildRows, runRows, unavoidableKeys, type BuildRow, type RunRow } from './materials-model.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
 import { toggleList } from './settings-model.ts';
 import { StepsView } from './StepsView.tsx';
@@ -34,6 +35,11 @@ function quantity(key: StuffKey, amount: string): string {
 
 function marker(send: Send, row: string): (on: boolean) => void {
   return (on) => send([{ op: 'mark', row, on }]);
+}
+
+/** The marker of a good on the avoid list that the line still uses (`BuildRow.avoid`, `RunRow.avoid`). */
+function AvoidMarker(): ReactElement {
+  return <span className="badge avoid-badge" title="On the avoid list, but no recipe at this tier avoids it">avoid</span>;
 }
 
 /** The have-count; when the scan says where the stock sits, it opens to one line per storage block. */
@@ -71,6 +77,7 @@ function BuildItem(props: { row: BuildRow; marks: Marks; send: Send; expanded?: 
       <ItemIcon itemKey={row.key} size={ICON_SIZE} />
       <Tick row={row.row} mark={marks[row.row]} label={row.name} onToggle={marker(send, row.row)}>
         <span className="mat-amount">{quantity(row.key, row.amount)}</span>
+        {row.avoid === true && <AvoidMarker />}
         <span className="muted small">{row.why}</span>
         <Stock have={row.have} where={row.where} />
       </Tick>
@@ -78,8 +85,8 @@ function BuildItem(props: { row: BuildRow; marks: Marks; send: Send; expanded?: 
   );
 }
 
-function BuildSection(props: { plan: Plan; names: Record<string, string>; marks: Marks; send: Send }): ReactElement {
-  const { plan, names, marks, send } = props;
+function BuildSection(props: { plan: Plan; names: Record<string, string>; marks: Marks; send: Send; unavoidable: ReadonlySet<StuffKey> }): ReactElement {
+  const { plan, names, marks, send, unavoidable } = props;
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(NOTHING_EXPANDED);
   const toggle = (path: string): void => {
     setExpanded((open) => {
@@ -89,7 +96,7 @@ function BuildSection(props: { plan: Plan; names: Record<string, string>; marks:
       return next;
     });
   };
-  const groups = groupBuildRows(plan.buildList, names, expanded);
+  const groups = groupBuildRows(plan.buildList, names, expanded, unavoidable);
   return (
     <section className="materials-section" aria-labelledby="to-build-title">
       <h3 id="to-build-title">To build (once)</h3>
@@ -108,9 +115,9 @@ function BuildSection(props: { plan: Plan; names: Record<string, string>; marks:
   );
 }
 
-function TotalsSection(props: { plan: Plan; names: Record<string, string>; marks: Marks; send: Send }): ReactElement {
-  const { plan, names, marks, send } = props;
-  const rows = buildRows(plan.buildTotals ?? [], names, NOTHING_EXPANDED);
+function TotalsSection(props: { plan: Plan; names: Record<string, string>; marks: Marks; send: Send; unavoidable: ReadonlySet<StuffKey> }): ReactElement {
+  const { plan, names, marks, send, unavoidable } = props;
+  const rows = buildRows(plan.buildTotals ?? [], names, NOTHING_EXPANDED, unavoidable);
   return (
     <section className="materials-section" aria-labelledby="build-totals-title">
       <h3 id="build-totals-title">Base materials for the build</h3>
@@ -136,6 +143,7 @@ function RunItem(props: { row: RunRow; marks: Marks; settings: PlanSettings; sen
       <Tick row={row.row} mark={marks[row.row]} label={row.name} onToggle={marker(send, row.row)}>
         <span className="mat-amount">{quantity(row.key, row.amount)}</span>
         <span className="badge">{row.badge}</span>
+        {row.avoid === true && <AvoidMarker />}
         <span className="muted small">{row.cost}</span>
         <Stock have={row.have} where={row.where} />
         {row.sources.length > 0 && (
@@ -216,10 +224,11 @@ export function MaterialsView(props: ProjectViewProps): ReactElement {
   const marks = project.marks;
   // The plan's own mode, not the settings': while a new plan is on its way, the shown one keeps its own units.
   const mode = plan.makeN === undefined ? 'rate' : 'makeN';
+  const unavoidable = unavoidableKeys(plan);
   return (
     <div className="materials">
-      <BuildSection plan={plan} names={names} marks={marks} send={send} />
-      <TotalsSection plan={plan} names={names} marks={marks} send={send} />
+      <BuildSection plan={plan} names={names} marks={marks} send={send} unavoidable={unavoidable} />
+      <TotalsSection plan={plan} names={names} marks={marks} send={send} unavoidable={unavoidable} />
       <RunSection plan={plan} mode={mode} marks={marks} settings={project.settings} send={send} />
       <LeftOverSection plan={plan} names={names} />
       <StepsView {...props} />

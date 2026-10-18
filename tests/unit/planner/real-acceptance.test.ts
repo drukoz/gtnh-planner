@@ -9,7 +9,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
 import { loadPack } from '../../../src/server/pack/load.ts';
-import { planBasis } from '../../../src/server/planner/basis.ts';
+import { planBasis, resolveAvoid } from '../../../src/server/planner/basis.ts';
 import { expandBomLines } from '../../../src/server/planner/bom.ts';
 import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
@@ -175,5 +175,37 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
     const b = (await plan({ target: ELECTRONIC_CIRCUIT, amount: 1, tier: 2 })).plan;
     expect(b.steps).toEqual(a.steps);
     expect(b.rawInputs).toEqual(a.rawInputs);
+  }, 60_000);
+
+  // Materials to avoid (plan 2026-10-18-08, ruling R15): no expectSane, as the way round a material may need goods
+  // outside ORDINARY.
+  /** Every good the avoid list matches is out of the line, or flagged as unavoidable at each step it goes into. */
+  const expectAvoided = (p: Plan, seconds: number, avoid: string[]): void => {
+    const codes = p.warnings.map((w) => w.code);
+    expect(p.status, JSON.stringify(p.warnings)).toBe('ok');
+    expect(codes).not.toContain('graph-too-big');
+    expect(codes).not.toContain('free-loop');
+    expect(seconds).toBeLessThan(PLAN_SECONDS);
+    const steps = new Set(p.steps.map((s) => s.id));
+    const unavoidable = new Set((p.avoided ?? []).filter((a) => a.unavoidable).map((a) => a.key));
+    for (const key of resolveAvoid(pack, avoid).goods) {
+      const into = new Set(p.flows.filter((f) => f.key === key && steps.has(f.to)).map((f) => f.to));
+      if (into.size === 0 && !p.rawInputs.some((r) => r.key === key)) continue;
+      expect(unavoidable.has(key), key).toBe(true);
+      for (const stepId of into) expect(p.warnings).toContainEqual(expect.objectContaining({ code: 'avoid-unavoidable', key, stepId }));
+    }
+  };
+
+  it('keeps Silver out of 2 Good Electronic Circuits a minute at HV, or flags each use, in under 5 s', async () => {
+    const avoid = ['Silver'];
+    const { plan: p, seconds } = await plan({ target: GOOD_ELECTRONIC_CIRCUIT, amount: 2, tier: 3, avoid });
+    expectAvoided(p, seconds, avoid);
+  }, 60_000);
+
+  it('plans 2 Good Electronic Circuits a minute at HV around Gold, which the plain plan uses, or flags each use, in under 5 s', async () => {
+    const avoid = ['Gold'];
+    const { plan: p, seconds } = await plan({ target: GOOD_ELECTRONIC_CIRCUIT, amount: 2, tier: 3, avoid });
+    expectAvoided(p, seconds, avoid);
+    expect(p.avoided?.length).toBeGreaterThan(0);   // the board's gold foil: the restricted plan really ran
   }, 60_000);
 });

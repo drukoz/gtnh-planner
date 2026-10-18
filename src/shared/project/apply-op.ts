@@ -8,6 +8,9 @@ import type { Note, Project, ProjectOp } from '../types/project.ts';
 
 export const MAX_NOTE_LENGTH = 4000;
 export const MAX_NAME_LENGTH = 80;
+/** Entries of `PlanSettings.avoid`, and the characters of each. */
+export const MAX_AVOID_ENTRIES = 50;
+export const MAX_AVOID_ENTRY_LENGTH = 300;
 
 const MAX_TIER = 14;
 const MAX_AMOUNT = 1e9;
@@ -25,16 +28,25 @@ export function defaultSettings(): PlanSettings {
     target: null, mode: 'rate', amount: 1, per: 'min', tier: null, dims: { policy: 'progression', overrides: {} },
     routeDerived: false, logistics: 'direct', costOverrides: {}, stopItems: [], expandItems: [], recipeChoice: {},
     machineTier: {}, excludedCategories: [...DEFAULT_EXCLUDED_CATEGORIES], coilHeat: null, automateCrafting: false,
-    declineReuse: [],
+    avoid: [], declineReuse: [],
   };
 }
 
-/** Fills the fields an older stored project lacks (later plans add settings), `dims` field by field. */
+/**
+ * Fills the fields an older stored project lacks (later plans add settings), `dims` field by field, and drops repeated
+ * avoid entries.
+ */
 export function normalizeSettings(s: Partial<PlanSettings> | undefined): PlanSettings {
   const defaults = defaultSettings();
   const merged = { ...defaults, ...definedOnly(s ?? {}) };
   merged.dims = { ...defaults.dims, ...definedOnly(s?.dims ?? {}) };
+  merged.avoid = withoutRepeats(merged.avoid);
   return merged;
+}
+
+/** `list` with each value only where it first appears. */
+function withoutRepeats(list: readonly string[]): string[] {
+  return [...new Set(list)];
 }
 
 /** A copy without the keys whose value is `undefined`, so spreading it never blanks a default. */
@@ -48,9 +60,12 @@ export function applyOp(p: Project, op: ProjectOp, by: string, at: string): Proj
   switch (op.op) {
     case 'rename':
       return { ...next, name: op.name.trim() };
-    case 'settings':
-      // Records and arrays in the patch replace the old value whole.
-      return { ...next, settings: { ...p.settings, ...op.patch } };
+    case 'settings': {
+      // Records and arrays in the patch replace the old value whole; an avoid list keeps the first of repeated entries.
+      const settings = { ...p.settings, ...op.patch };
+      if (op.patch.avoid !== undefined) settings.avoid = withoutRepeats(op.patch.avoid);
+      return { ...next, settings };
+    }
     case 'mark': {
       const marks = { ...p.marks };
       if (op.on) marks[op.row] = { by, at };
@@ -133,6 +148,9 @@ const SETTING_CHECKS: { readonly [K in keyof PlanSettings]-?: Check } = {
     v === null || (Number.isInteger(v) && (v as number) >= 0 && (v as number) <= MAX_COIL_HEAT)
       ? null : `coilHeat must be empty or a whole number from 0 to ${MAX_COIL_HEAT}`,
   automateCrafting: booleanField('automateCrafting'),
+  // Counted as sent, repeats included: applyOp drops the repeats.
+  avoid: (v) => (Array.isArray(v) && v.length <= MAX_AVOID_ENTRIES && v.every((x) => isStringOfLength(x, 1, MAX_AVOID_ENTRY_LENGTH))
+    ? null : `avoid must be a list of at most ${MAX_AVOID_ENTRIES} entries of 1 to ${MAX_AVOID_ENTRY_LENGTH} characters`),
   declineReuse: (v) => (Array.isArray(v) && v.every((x) => Number.isSafeInteger(x)) ? null : 'declineReuse must be a list of whole numbers'),
 };
 

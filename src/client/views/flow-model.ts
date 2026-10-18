@@ -1,15 +1,22 @@
-// What the flow diagram shows (spec §3.9), as pure functions: the boxes and arrows of a plan, the ELK graph that lays
-// them out (web-stack §7) and the laid-out picture read back from it, the rate and overclock texts, and the settings
-// patch for "reuse our machines". Base materials sit on the left and the target on the right.
+// What the flow diagram shows (spec §3.9), as pure functions: the boxes and arrows of a plan (a step that cannot avoid
+// a material on the avoid list badged, spec §3.3), the ELK graph that lays them out (web-stack §7) and the laid-out
+// picture read back from it, the rate and overclock texts, and the settings patch for "reuse our machines". Base
+// materials sit on the left and the target on the right.
 
 import type { ElkExtendedEdge, ElkNode } from 'elkjs/lib/elk-api.js';
 import type { StuffKey } from '../../shared/keys.ts';
 import { TIER_NAMES, V } from '../../shared/gt/tiers.ts';
-import type { Plan, PlanSettings, PlanStep } from '../../shared/types/plan.ts';
+import type { Plan, PlanSettings, PlanStep, PlanWarning } from '../../shared/types/plan.ts';
 
 export interface FlowNode {
   id: string; kind: 'raw' | 'step' | 'out' | 'sink'; key: StuffKey | null; title: string; lines: string[];
   owned: 'all' | 'some' | 'none'; width: number; height: number;
+  // optional addition
+  /**
+   * A step that uses goods on the avoid list because nothing at the tier avoids them (`avoid-unavoidable`): the badge
+   * text below its lines (one line more of height) and the warnings behind it.
+   */
+  avoidBadge?: { text: string; warnings: string[] };
 }
 
 export interface FlowEdge { id: string; from: string; to: string; key: StuffKey; label: string }
@@ -103,20 +110,41 @@ function ratesBy(flows: Plan['flows'], pick: (f: Plan['flows'][number]) => boole
   return rates;
 }
 
+/** Each step's `avoid-unavoidable` warnings (Plan 8): the goods on the avoid list it uses as nothing at the tier avoids them. */
+function unavoidableByStep(plan: Plan): Map<string, PlanWarning[]> {
+  const byStep = new Map<string, PlanWarning[]>();
+  for (const w of plan.warnings) {
+    if (w.code !== 'avoid-unavoidable' || w.stepId === undefined) continue;
+    const list = byStep.get(w.stepId);
+    if (list === undefined) byStep.set(w.stepId, [w]);
+    else list.push(w);
+  }
+  return byStep;
+}
+
 /**
  * The boxes and arrows of a plan: one box per step, per raw material, per thrown-away good (`sink:<key>`) and one for
  * the target (`out`, from the flows into it); one arrow per flow, labelled with the good and its rate. Sorted by id.
+ * A step that uses goods on the avoid list gets a badge naming them (`FlowNode.avoidBadge`).
  */
 export function flowGraph(plan: Plan, per: 'min' | 'hour'): { nodes: FlowNode[]; edges: FlowEdge[] } {
   const nameOf = (key: StuffKey): string => plan.names?.[key] ?? key;
   const rate = (perSecond: number): string => formatRate(perSecond, per);
   const nodes: FlowNode[] = [];
+  const unavoidable = unavoidableByStep(plan);
 
   for (const step of plan.steps) {
     const lines = [`${tierText(step.machine.tier)} · ${step.euPerTick} EU/t · ${percent(step.utilization)}% busy`];
     if (step.mainOutput !== undefined) lines.push(`makes ${nameOf(step.mainOutput)}`);
     if (step.owned > 0) lines.push(`${step.owned} owned`);
-    nodes.push(node(step.id, 'step', step.mainOutput ?? null, `${step.count}× ${step.machine.name}`, lines, ownedState(step)));
+    const box = node(step.id, 'step', step.mainOutput ?? null, `${step.count}× ${step.machine.name}`, lines, ownedState(step));
+    const uses = unavoidable.get(step.id);
+    if (uses !== undefined) {
+      const goods = [...new Set(uses.flatMap((w) => (w.key === undefined ? [] : [nameOf(w.key)])))];
+      box.avoidBadge = { text: `⚠ uses avoided ${goods.join(', ')}`, warnings: uses.map((w) => w.text) };
+      box.height += NODE_LINE_HEIGHT;
+    }
+    nodes.push(box);
   }
   for (const [key, perSecond] of ratesBy(plan.flows, (f) => f.from === RAW)) {
     nodes.push(node(`${RAW}:${key}`, 'raw', key, nameOf(key), [`raw · ${rate(perSecond)}`]));

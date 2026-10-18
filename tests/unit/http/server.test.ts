@@ -53,6 +53,19 @@ describe('pack routes', () => {
     expect(await (await s.request('/api/pack')).json()).toMatchObject({ recipeCount: 1, mapCount: 1, itemCount: 2,
       exclusionRules: ['recycling', 'massfab', 'replicator', 'scrap', 'lava-centrifuge', 'programmed-circuit-conversion'] });
   });
+  it('GET /api/pack lists the materials an avoid entry can name, by display name then name (ruling R12)', async () => {
+    const named = packFromSpec({
+      items: [{ key: 't:ss@0', name: 'Stainless Steel Ingot', gt: { prefix: 'ingot', material: 'StainlessSteel' } },
+              { key: 't:cu@0', name: 'Copper Ingot', gt: { prefix: 'ingot', material: 'Copper' } }],
+      materials: ['Ash'],
+    });
+    named.materials.get('StainlessSteel')!.displayName = 'Stainless Steel';
+    named.materials.delete('Copper');   // known only from an item's material
+    const t = await startTestServer({ pack: named });
+    expect((await (await t.request('/api/pack')).json()).materials).toEqual([
+      { name: 'Ash', label: 'Ash' }, { name: 'Copper', label: 'Copper' }, { name: 'StainlessSteel', label: 'Stainless Steel' }]);
+    await t.close();
+  });
   it('search and stuff', async () => {
     const hits = await (await s.request('/api/pack/search?q=iron%20pl')).json();
     expect(hits[0]).toMatchObject({ key: 't:iron_plate@0', name: 'Iron Plate' });

@@ -8,7 +8,7 @@ import { isFluidKey, parseItemKey, type StuffKey } from '../../shared/keys.ts';
 import type { Ingredient, Machine, Pack, Product, Recipe } from '../../shared/types/pack.ts';
 import type { PlanContext, PlanFlow, PlanSettings, PlanStep } from '../../shared/types/plan.ts';
 import { PROGRAMMED_CIRCUIT_ID } from '../pack/recipes.ts';
-import { virtualKey, type CandidateGraph, type LpRecipe } from './candidates.ts';
+import { keptOptions, virtualKey, type CandidateGraph, type LpRecipe } from './candidates.ts';
 import type { Solution } from './solve.ts';
 
 export interface MachinePick {
@@ -223,16 +223,19 @@ interface InputTotal { expected: number; nominal: number; chance: number; sameCh
  * The consumed inputs per run with expected amounts (`amount × chance`), one entry per good in the order of the slot
  * it first fills: a good in several slots (a real crafting recipe has one ingredient of amount 1 per grid slot,
  * recipes.ts) is added up. Its `chance` is the slots' chance when they share one, else the expected amount over the
- * nominal one. Not-consumed inputs are one-off items of the machine (Task 13).
+ * nominal one. Not-consumed inputs are one-off items of the machine (Task 13). A slot is read as the graph has it, so
+ * without the options the line avoids (`keptOptions`, ruling R7).
  */
-function stepInputs(r: Recipe, conversions: ReadonlyMap<StuffKey, ReadonlyMap<StuffKey, number>>): Product[] {
+function stepInputs(r: Recipe, line: StepLine): Product[] {
   const totals = new Map<StuffKey, InputTotal>();
   for (const ing of r.inputs) {
-    if (!ing.consumed || ing.options.length === 0) continue;
+    if (!ing.consumed) continue;
+    const options = keptOptions(ing.options, line.avoid);
+    if (options.length === 0) continue;
     // A slot with one option is that good itself; a longer one is the virtual good candidates.ts made for it.
-    const option = ing.options.length === 1
-      ? (ing.options[0] as Option)
-      : busiestOption(ing.options, conversions.get(virtualKey(ing.options)));
+    const option = options.length === 1
+      ? (options[0] as Option)
+      : busiestOption(options, line.conversions.get(virtualKey(options)));
     const expected = option.amount * ing.chance;
     const total = totals.get(option.key);
     if (total === undefined) {
@@ -292,16 +295,22 @@ export function pickStepMachines(
   return picked;
 }
 
-/** What describing a step needs from the whole line: its targets, what its recipes consume, its ore-dictionary conversions. */
+/**
+ * What describing a step needs from the whole line: its targets, what its recipes consume, its ore-dictionary
+ * conversions, and the goods its graph avoids.
+ */
 export interface StepLine {
   targets: ReadonlySet<StuffKey>;
   used: ReadonlyMap<StuffKey, ReadonlyMap<string, number>>;
   conversions: ReadonlyMap<StuffKey, ReadonlyMap<StuffKey, number>>;
+  avoid?: ReadonlySet<StuffKey>;
 }
 
 /** The `StepLine` of a line that runs each recipe `runs` times (per second or in all; only the proportions matter). */
 export function stepLine(graph: CandidateGraph, runs: ReadonlyMap<string, number>): StepLine {
-  return { targets: new Set(graph.targets), used: recipeAmounts(graph, runs).used, conversions: conversionRuns(graph, runs) };
+  const line: StepLine = { targets: new Set(graph.targets), used: recipeAmounts(graph, runs).used, conversions: conversionRuns(graph, runs) };
+  if (graph.avoid !== undefined) line.avoid = graph.avoid;
+  return line;
 }
 
 /** The warnings that follow from a step's recipe and machine: cleanroom, fast hand-crafting, one energy hatch. */
@@ -330,7 +339,7 @@ export function describeStep(pack: Pack, p: PickedRecipe, line: StepLine, size: 
     id, recipeId: id, mapId: p.mapId, machine: { mteId: pick.mteId, name: pick.name, tier: pick.tier },
     count: size.count, owned: size.owned, runsPerSecond: size.runsPerSecond, utilization: size.utilization,
     euPerTick: pick.oc.euPerTick, durationTicks: pick.oc.durationTicks, overclocks: pick.oc.overclocks,
-    inputs: stepInputs(r, line.conversions),
+    inputs: stepInputs(r, line),
     outputs: r.outputs.map((o) => ({ key: o.key, amount: o.amount * o.chance, chance: o.chance })),
     alternatives: [], handCraft: pick.handCraft, warnings: size.warnings,
   };

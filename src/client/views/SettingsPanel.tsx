@@ -1,20 +1,22 @@
 // The project's settings beside its views (spec §3.2–§3.3b, §3.6, §3.11): what to make and how much, the tier, where
-// the group can mine, how the line is fed, what materials cost, which recipe groups to skip and the planner's options.
+// the group can mine, how the line is fed, what materials cost, which materials to avoid, which recipe groups to skip
+// and the planner's options.
 // Everyone sees the same settings: every change sends one `settings` op carrying whole field values, and nothing is
 // sent for an amount or a cost that would be refused.
 
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactElement } from 'react';
-import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
+import type { StuffKey } from '../../shared/keys.ts';
 import { COIL_HEATS } from '../../shared/gt/overclock.ts';
 import { tierName } from '../../shared/gt/tiers.ts';
 import type { PackInfo } from '../../shared/types/api.ts';
 import type { SearchHit } from '../../shared/types/pack.ts';
 import { LogisticsMode, type Plan, type PlanSettings } from '../../shared/types/plan.ts';
+import { AvoidPicker } from '../components/AvoidPicker.tsx';
 import { ItemIcon } from '../components/ItemIcon.tsx';
 import { ItemSearch } from '../components/ItemSearch.tsx';
 import { TierPicker } from '../components/TierPicker.tsx';
 import type { ProjectViewProps } from './project-tabs.ts';
-import { EXCLUSION_LABELS, dimOverridePatch, dimRows, groupDimRows, parseAmount, parseCost, toggleList } from './settings-model.ts';
+import { EXCLUSION_LABELS, dimOverridePatch, dimRows, groupDimRows, isStuffKey, parseAmount, parseCost, toggleList } from './settings-model.ts';
 
 /** Typing pauses this long before the amount is sent (one plan per pause, not one per keystroke). */
 const AMOUNT_DELAY_MS = 500;
@@ -43,11 +45,6 @@ const DIM_STATES = ['auto', 'on', 'off'] as const;
 
 function byString(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
-}
-
-/** A cost override keyed by an item or fluid (not by a material name such as "Silver"). */
-function isStuffKey(key: string): boolean {
-  return isFluidKey(key) || key.includes('@');
 }
 
 /** One choice out of a few, as radio buttons; `heading` shows the legend as the section's title. */
@@ -358,6 +355,19 @@ function CostsSection(props: { settings: PlanSettings; patch: Patch; nameOf: Nam
   );
 }
 
+function AvoidSection(props: {
+  info: PackInfo | null; settings: PlanSettings; send: ProjectViewProps['send']; nameOf: NameOf; remember(hit: SearchHit): void;
+}): ReactElement {
+  const { info, settings, send, nameOf, remember } = props;
+  return (
+    <section className="settings-section">
+      <h3>Avoid materials</h3>
+      <p className="muted small">Kept out of the whole chain; a step that cannot do without one at this tier is flagged.</p>
+      <AvoidPicker avoid={settings.avoid ?? []} materials={info?.materials ?? []} nameOf={nameOf} send={send} remember={remember} />
+    </section>
+  );
+}
+
 function SkipSection(props: { info: PackInfo | null; settings: PlanSettings; patch: Patch }): ReactElement {
   const { info, settings, patch } = props;
   const excluded = settings.excludedCategories;
@@ -451,6 +461,7 @@ export function SettingsPanel(props: ProjectViewProps & { info: PackInfo | null 
         <Choice legend="Logistics" heading value={settings.logistics} options={LOGISTICS} onChange={(logistics) => patch({ logistics })} />
       </section>
       <CostsSection settings={settings} patch={patch} nameOf={nameOf} remember={remember} />
+      <AvoidSection info={info} settings={settings} send={send} nameOf={nameOf} remember={remember} />
       <SkipSection info={info} settings={settings} patch={patch} />
       <OptionsSection settings={settings} patch={patch} />
       <KeyListSection

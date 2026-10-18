@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { buildRows, groupBuildRows, runRows, sourceText, amountText, haveText, whereLines } from '../../src/client/views/materials-model.ts';
+import { buildRows, groupBuildRows, runRows, sourceText, amountText, haveText, whereLines, unavoidableKeys } from '../../src/client/views/materials-model.ts';
 import { StepsView } from '../../src/client/views/StepsView.tsx';
 import { MaterialsView } from '../../src/client/views/MaterialsView.tsx';
 import { PROJECT_TABS } from '../../src/client/views/project-tabs.ts';
@@ -38,6 +38,21 @@ describe('materials model', () => {
     expect(groupBuildRows(lines, names, new Set()).map((g) => [g.label, g.rows.map((r) => r.key)])).toEqual([
       ['Machines', ['machine:111@0']], ['Power', ['p:cable@0']], ['Piping & logistics', ['p:chip@0']], ['One-off items', ['p:circ@2']]]);
     expect(groupBuildRows([lines[1]!], names, new Set()).map((g) => g.label)).toEqual(['One-off items']);   // empty groups are hidden
+  });
+  it('marks the run and build rows of goods on the avoid list that nothing at the tier avoids', () => {
+    const flagged = { ...plan, avoided: [{ key: 't:iron_ingot@0', name: 'Iron Ingot', unavoidable: true }, { key: 't:titanium_ingot@0', name: 'Titanium Ingot', unavoidable: false }] } as Plan;
+    const unavoidable = unavoidableKeys(flagged);
+    expect([...unavoidable]).toEqual(['t:iron_ingot@0']);
+    expect(runRows(flagged, 'rate').map((r) => [r.key, r.avoid])).toEqual([['t:iron_ingot@0', true], ['t:titanium_ingot@0', undefined]]);
+    expect(buildRows(flagged.buildTotals!, names, new Set(), unavoidable).map((r) => r.avoid)).toEqual([true]);
+    expect(groupBuildRows(flagged.buildList, names, new Set(['machine:111@0']), unavoidable).flatMap((g) => g.rows.map((r) => r.avoid))).toEqual([undefined, undefined]);
+    expect(runRows(plan, 'rate').some((r) => r.avoid !== undefined)).toBe(false);
+    const html = renderToStaticMarkup(<MaterialsView project={{ id: 'p', name: 'x', createdAt: '', createdBy: '', rev: 3, settings: { mode: 'rate', per: 'min', stopItems: [], expandItems: [] },
+      world: { scanId: null, baseId: null }, placement: null, notes: [], marks: {} } as never} plan={flagged} send={() => {}} me="Ann" />);
+    const row = (id: string) => new RegExp(`<li class="mat-row"(?:(?!</li>).)*data-row="${id}"(?:(?!</li>).)*</li>`, 's').exec(html)?.[0] ?? '';
+    expect(row('run:t:iron_ingot@0')).toContain('avoid-badge');
+    expect(row('build:t:iron_ingot@0')).toContain('avoid-badge');
+    expect(row('run:t:titanium_ingot@0')).not.toContain('avoid-badge');
   });
   it('lists run materials per hour or per batch, with unlocks', () => {
     const rows = runRows(plan, 'rate');
