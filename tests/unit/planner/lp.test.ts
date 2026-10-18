@@ -27,6 +27,13 @@ describe('solveLp', () => {
     const r = await solveLp({ sense: 'min', colCost: [], colLower: [], colUpper: [], rows: [{ lower: 1, upper: Infinity, entries: [] }] });
     expect(r.status).toBe('infeasible');
   });
+  it('solves a small MIP with whole columns', async () => {
+    const r = await solveLp({ sense: 'max', colCost: [1, 1], colLower: [0, 0], colUpper: [Infinity, Infinity],
+      rows: [{ lower: -Infinity, upper: 3, entries: [[0, 2], [1, 2]] }], integer: [true, true], maxNodes: 100 });
+    expect(r.status).toBe('optimal');
+    expect(r.objective).toBeCloseTo(1, 9);
+    expect(r.x.every((v) => Math.abs(v - Math.round(v)) < 1e-9)).toBe(true);
+  });
   it('rejects a row with a missing column, a repeated column or a non-finite coefficient', async () => {
     const model = (entries: Array<[number, number]>) => ({ sense: 'min' as const, colCost: [1], colLower: [0], colUpper: [1], rows: [{ lower: 0, upper: 1, entries }] });
     await expect(solveLp(model([[1, 1]]))).rejects.toThrow(RangeError);

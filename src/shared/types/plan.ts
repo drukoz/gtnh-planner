@@ -10,9 +10,12 @@ export type LogisticsMode = (typeof LogisticsMode)[keyof typeof LogisticsMode];
 
 /**
  * Recipe categories left out unless the group turns the rule off: recycling, mass fab, replicator, scrap, lava/stone-dust
- * centrifuge (which also covers the Large Thermal Refinery's lava filter: metals out of free lava).
+ * centrifuge (which also covers the Large Thermal Refinery's lava filter: metals out of free lava), and crafting a
+ * Programmed Circuit back into a circuit.
  */
-export const DEFAULT_EXCLUDED_CATEGORIES: readonly string[] = ['recycling', 'massfab', 'replicator', 'scrap', 'lava-centrifuge'];
+export const DEFAULT_EXCLUDED_CATEGORIES: readonly string[] = [
+  'recycling', 'massfab', 'replicator', 'scrap', 'lava-centrifuge', 'programmed-circuit-conversion',
+];
 
 /**
  * Inputs that cost nothing (architecture §5). Nether Air and Toxic Air are not free: they are dimension-gated
@@ -34,7 +37,7 @@ export interface PlanSettings {
   expandItems: StuffKey[];                 // base items the group wants to make themselves
   recipeChoice: Record<StuffKey, string>;  // pinned recipe id per produced item
   machineTier: Record<string, number>;     // per recipe id
-  excludedCategories: string[];            // default list in Plan 2 (recycling, mass fab, replicator, scrap, lava/stone-dust centrifuge)
+  excludedCategories: string[];            // default: DEFAULT_EXCLUDED_CATEGORIES
   coilHeat: number | null;                 // EBF coil heat (K); null = default for tier or from world
   automateCrafting: boolean;               // false = crafting-table steps are hand-crafting
   // optional addition
@@ -62,7 +65,13 @@ export interface PlanStep {
   id: string /* = recipe id */; recipeId: string; mapId: string; machine: { mteId: number; name: string; tier: number };
   count: number; owned: number; runsPerSecond: number; utilization: number; euPerTick: number; durationTicks: number; overclocks: number;
   inputs: Product[]; outputs: Product[];   // per run, after chances (expected)
-  alternatives: Array<{ recipeId: string; rawCost: number; mapId: string }>; handCraft: boolean; warnings: string[];
+  alternatives: Array<{
+    recipeId: string; rawCost: number; mapId: string;
+    // optional additions: what one run of the alternative takes and makes (first option per slot, summed per key, at
+    // most 4 each), named in `Plan.names`, so the swap list can tell recipes of one map apart
+    inputs?: Array<{ key: StuffKey; amount: number }>; outputs?: Array<{ key: StuffKey; amount: number }>;
+  }>;
+  handCraft: boolean; warnings: string[];
   // optional additions
   /** The good this step was chosen to make; the key used for `PlanSettings.recipeChoice`. */
   mainOutput?: StuffKey;
@@ -102,7 +111,7 @@ export interface Plan {
   buildTotals?: BomLine[];
   /**
    * English name of every key used in the plan, plus `dim:<DimensionInfo.key>` and `dimId:<Minecraft dim id>`
-   * → dimension name, so the client never needs the pack.
+   * → dimension name and `map:<recipe map id>` → map name, so the client never needs the pack.
    */
   names?: Record<string, string>;
 }

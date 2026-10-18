@@ -1,11 +1,14 @@
 // One project (spec §3.11): its name (anyone can rename it), whether this tab is live, what the plan warns about or
 // needs unlocked, the settings panel and, beside it, the project tabs. The tab follows the URL hash, so links elsewhere
-// (a build step's map pin sets `#map`) switch it too.
+// (a build step's map pin sets `#map`) switch it too. Anyone can delete the project; once it is deleted, here or
+// elsewhere, the page goes back to the project list, which says so (§11.24).
 
 import { useEffect, useRef, useState, type ReactElement } from 'react';
 import type { PackInfo } from '../../shared/types/api.ts';
 import type { Plan } from '../../shared/types/plan.ts';
 import { apiGet, messageOf } from '../api/client.ts';
+import { DeleteProject } from '../components/DeleteProject.tsx';
+import { leaveDeletedProject } from '../state/deleted-notice.ts';
 import { useName } from '../state/name.ts';
 import { useProject } from '../state/project-store.ts';
 import { PROJECT_TABS, tabFromHash } from './project-tabs.ts';
@@ -104,8 +107,13 @@ export function ProjectPage(props: { id: string }): ReactElement {
     follow();
     return () => removeEventListener('hashchange', follow);
   }, []);
+  const { project, plan, send, deleted } = view;
+  // The store sets `deleted` once, whether this tab deleted the project or was told, so the list says so once. The name
+  // is the one this tab showed when the project went.
+  useEffect(() => {
+    if (deleted !== null) leaveDeletedProject(project?.name ?? null, deleted.by);
+  }, [deleted]);
 
-  const { project, plan, send } = view;
   if (project === null) {
     return (
       <main className="page">
@@ -120,6 +128,7 @@ export function ProjectPage(props: { id: string }): ReactElement {
       <div className="project-head">
         <ProjectName name={project.name} onRename={(name) => send([{ op: 'rename', name }])} />
         <span className={view.connected ? 'connection live' : 'connection'}>{view.connected ? 'live' : 'reconnecting…'}</span>
+        <DeleteProject id={project.id} name={project.name} label="Delete project" onDeleted={() => view.markDeleted(me)} />
       </div>
       {view.error !== null && <p className="banner error" role="alert">{view.error}</p>}
       <PlanBanner plan={plan} planError={view.planError} planLoading={view.planLoading} />

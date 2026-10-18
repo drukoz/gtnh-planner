@@ -74,6 +74,60 @@ describe('computeAvailability', () => {
   });
 });
 
+describe('real-data rules (final review)', () => {
+  const vein = (name: string, dims: string[], material: string) => ({
+    name, dims, materials: { primary: material, secondary: material, between: material, sporadic: material },
+    weight: 1, minY: 0, maxY: 255, size: 1, density: 1, kind: 'vein' as const,
+  });
+  it('counts as natural only items with a gathered ore-dictionary name (or sticky resin, a mob slime ball), not crafted look-alikes', () => {
+    const p = packFromSpec({ items: [
+      { key: 'EMT:EMTItems@8', name: 'Glue', oreDict: ['slimeball'] }, { key: 'minecraft:slime_ball@0', name: 'Slimeball', oreDict: ['slimeball'] },
+      { key: 'bread@0', name: 'Bread', oreDict: ['foodBread'] }, { key: 'beef@0', name: 'Raw Beef', oreDict: ['listAllmeatraw'] },
+      { key: 'card@0', name: 'GregTech Sensor Card' }, { key: 'log@0', name: 'Oak Wood', oreDict: ['logWood'] },
+      { key: 'IC2:itemHarz@0', name: 'Sticky Resin', oreDict: ['slimeball'] }] });
+    expect(['EMT:EMTItems@8', 'minecraft:slime_ball@0', 'bread@0', 'beef@0', 'card@0', 'log@0', 'IC2:itemHarz@0'].map((k) => isNatural(p, k)))
+      .toEqual([false, true, false, true, false, true, true]);
+  });
+  it('keeps crafting a programmed circuit back into a circuit available even when the plan skips it', () => {
+    // From LV the group has programmed circuits; the export shows no other way to the first Electronic Circuit.
+    const p = packFromSpec({ items: [{ key: 'gregtech:gt.integrated_circuit@0', name: 'Programmed Circuit' }, { key: 'IC2:itemPartCircuit@0', name: 'Electronic Circuit' }],
+      recipes: [{ id: 'back', map: 'crafting', in: [['gregtech:gt.integrated_circuit@0', 1]], out: [['IC2:itemPartCircuit@0', 1]] }] });
+    const e: PlanEnv = { tier: 1, reachable: new Set(['overworld']), lowGravity: false, coilHeat: 1801, excluded: new Set(defaultSettings().excludedCategories) };
+    expect(e.excluded.has('programmed-circuit-conversion')).toBe(true);
+    expect(computeAvailability(p, e).available.has('IC2:itemPartCircuit@0')).toBe(true);
+  });
+  it('leaves out recipes that separate free inputs into ore materials (obsidian dust into iron), not plain conversions', () => {
+    const p = packFromSpec({
+      items: [
+        { key: 'obsidian@0', name: 'Obsidian', gt: { prefix: 'block', material: 'Obsidian' } }, { key: 'odust@0', name: 'Obsidian Dust', gt: { prefix: 'dust', material: 'Obsidian' } },
+        { key: 'fe@0', name: 'Iron Dust', gt: { prefix: 'dust', material: 'Iron' } }, { key: 'mg@0', name: 'Magnesium Dust', gt: { prefix: 'dust', material: 'Magnesium' } },
+        { key: 'qsand@0', name: 'Quartz Sand', gt: { prefix: 'dust', material: 'QuartzSand' } }, { key: 'feingot@0', name: 'Iron Ingot', gt: { prefix: 'ingot', material: 'Iron' } },
+      ],
+      machines: [{ mteId: 1, name: 'Basic Solidifier', maps: ['gt.recipe.fluidsolidifier'], tier: 1 }, { mteId: 2, name: 'Basic Macerator', maps: ['gt.recipe.macerator'], tier: 1 },
+                 { mteId: 3, name: 'Basic Electrolyzer', maps: ['gt.recipe.electrolyzer'], tier: 1 }, { mteId: 4, name: 'Basic Furnace', maps: ['gt.recipe.furnace'], tier: 1 }],
+      recipes: [
+        { id: 'solidify', map: 'gt.recipe.fluidsolidifier', in: [['fluid:lava', 1000]], out: [['obsidian@0', 1]], eut: 8 },
+        { id: 'mace', map: 'gt.recipe.macerator', in: [['obsidian@0', 1]], out: [['odust@0', 2]], eut: 2 },
+        { id: 'electro', map: 'gt.recipe.electrolyzer', in: [['odust@0', 12]], out: [['fe@0', 1], ['mg@0', 1]], eut: 30 },
+        { id: 'sand', map: 'gt.recipe.macerator', in: [['minecraft:cobblestone@0', 1]], out: [['qsand@0', 1]], eut: 2 },
+        { id: 'smelt', map: 'gt.recipe.furnace', in: [['fe@0', 1]], out: [['feingot@0', 1]], eut: 4 },
+      ],
+      worldgen: {
+        dimensions: [{ key: 'overworld', id: 0, name: 'Overworld', mod: 'minecraft', kind: 'dimension', defaultTier: 0 },
+                     { key: 'moon', id: 28, name: 'Moon', mod: 'galacticraftcore', kind: 'moon', rocketTier: 1, defaultTier: 3 }],
+        veins: [vein('ore.mix.iron', ['moon'], 'Iron'), vein('ore.mix.magnesium', ['moon'], 'Magnesium'), vein('ore.mix.quartzsand', ['moon'], 'QuartzSand')],
+      },
+    });
+    const at = (excluded: string[]): PlanEnv => ({ tier: 1, reachable: new Set(['overworld']), lowGravity: false, coilHeat: 1801, excluded: new Set(excluded) });
+    const on = computeAvailability(p, at(defaultSettings().excludedCategories));
+    expect([...on.fromNothing]).toEqual(['electro']);
+    expect(['odust@0', 'fe@0', 'feingot@0', 'qsand@0'].map((k) => on.classOf(k))).toEqual(['derived', 'unavailable', 'unavailable', 'derived']);
+    const off = computeAvailability(p, at([]));
+    expect(off.fromNothing.size).toBe(0);
+    expect(off.classOf('fe@0')).toBe('derived');
+  });
+});
+
 describe('unlockText', () => {
   it('names the first tier and the new dimension', () => {
     const from = { env: envAt(1), settings: defaultSettings(), visited: [] };
@@ -112,5 +166,38 @@ describe('unlockText', () => {
     const from = { env, settings: defaultSettings(), visited: [] };
     expect(unlockText(p, 'steel@0', from)).toBe('Steel Thing: needs HV machines');
     expect(unlockText(p, 'alloy@0', from)).toBe('Iron-Titanium Mix: needs Moon (T1 rocket) — reachable at HV');
+  });
+  it('joins the places of one material with "or" and materials that are each needed with "and"', () => {
+    const vein = (name: string, dims: string[], material: string) => ({
+      name, dims, materials: { primary: material, secondary: material, between: material, sporadic: material },
+      weight: 1, minY: 0, maxY: 255, size: 1, density: 1, kind: 'vein' as const,
+    });
+    const p = packFromSpec({
+      items: [
+        { key: 'cu@0', name: 'Copper Dust', gt: { prefix: 'dust', material: 'Copper' } }, { key: 'sn@0', name: 'Tin Dust', gt: { prefix: 'dust', material: 'Tin' } },
+        { key: 'zn@0', name: 'Zinc Dust', gt: { prefix: 'dust', material: 'Zinc' } }, { key: 'brass@0', name: 'Bell Metal' },
+        { key: 'bronze@0', name: 'Bronze Mix' },
+      ],
+      machines: [{ mteId: 1, name: 'Basic Mixer', maps: ['gt.recipe.mixer'], tier: 1 }],
+      recipes: [
+        { id: 'bell', map: 'gt.recipe.mixer', in: [['cu@0', 1], ['sn@0', 1], ['zn@0', 1]], out: [['brass@0', 3]], eut: 16 },
+        { id: 'bronze', map: 'gt.recipe.mixer', in: [['cu@0', 3], ['sn@0', 1]], out: [['bronze@0', 4]], eut: 16 },
+      ],
+      worldgen: {
+        dimensions: [
+          { key: 'overworld', id: 0, name: 'Overworld', mod: 'minecraft', kind: 'dimension', defaultTier: 0 },
+          { key: 'moon', id: 28, name: 'Moon', mod: 'galacticraftcore', kind: 'moon', rocketTier: 1, defaultTier: 3 },
+          { key: 'mars', id: 29, name: 'Mars', mod: 'galacticraftmars', kind: 'planet', rocketTier: 2, defaultTier: 3 },
+          { key: 'phobos', id: 38, name: 'Phobos', mod: 'galaxyspace', kind: 'moon', rocketTier: 2, defaultTier: 3 },
+        ],
+        // Copper only on the Moon, tin on Mars or Phobos, zinc on Mars too (going to Mars for tin brings it).
+        veins: [vein('ore.mix.copper', ['moon'], 'Copper'), vein('ore.mix.tin', ['mars', 'phobos'], 'Tin'), vein('ore.mix.zinc', ['mars'], 'Zinc')],
+      },
+    });
+    const r = reachableDims(p.worldgen, prog, [], 1);
+    const env: PlanEnv = { tier: 1, reachable: r.keys, lowGravity: r.lowGravity, coilHeat: 1801, excluded: new Set() };
+    const from = { env, settings: defaultSettings(), visited: [] };
+    expect(unlockText(p, 'brass@0', from)).toBe('Bell Metal: needs Mars (T2 rocket) and Moon (T1 rocket) — reachable at HV');
+    expect(unlockText(p, 'bronze@0', from)).toBe('Bronze Mix: needs Moon (T1 rocket) and either Mars (T2 rocket) or Phobos (T2 rocket) — reachable at HV');
   });
 });

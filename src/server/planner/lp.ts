@@ -11,9 +11,21 @@ const loadHighs = highsDefault as unknown as typeof highsDefault.default;
 
 /** `lower ≤ Σ coefficient · x[column] ≤ upper`; ±Infinity for a missing bound; each column at most once per row. */
 export interface LpRow { lower: number; upper: number; entries: Array<[number /* column */, number /* coefficient */]> }
-export interface LpModel { sense: 'min' | 'max'; colCost: number[]; colLower: number[]; colUpper: number[] /* Infinity allowed */; rows: LpRow[] }
-/** `objective` and `x` (one value per column) are meaningful only when `optimal`; otherwise they are NaN and `[]`. */
-export interface LpResult { status: 'optimal' | 'infeasible' | 'unbounded' | 'error'; objective: number; x: number[] }
+export interface LpModel {
+  sense: 'min' | 'max'; colCost: number[]; colLower: number[]; colUpper: number[] /* Infinity allowed */; rows: LpRow[];
+  // optional additions (fewest recipes, solve.ts; Make N's whole runs, make-n.ts)
+  /** Per column, whether it must be a whole number: the model is then a MIP. */
+  integer?: readonly boolean[];
+  /** A MIP stops after this many branch-and-bound nodes (deterministic, unlike a time limit) with its best solution. */
+  maxNodes?: number;
+  /** Seconds the solve may take; a MIP that runs out keeps its best whole solution (`feasible`), if it found one. */
+  timeLimit?: number;
+}
+/**
+ * `objective` and `x` (one value per column) are meaningful only when `optimal`, or `feasible` (a MIP that stopped at
+ * its node or time limit with a whole solution); otherwise they are NaN and `[]`.
+ */
+export interface LpResult { status: 'optimal' | 'feasible' | 'infeasible' | 'unbounded' | 'error'; objective: number; x: number[] }
 
 let loading: Promise<Highs> | null = null;
 
@@ -70,13 +82,16 @@ function modelData(highs: Highs, model: LpModel): ModelData {
     }
   });
 
-  return {
+  const data: ModelData = {
     numCols, numRows,
     sense: model.sense === 'max' ? highs.constants.objectiveSense.maximize : highs.constants.objectiveSense.minimize,
     colCost: Float64Array.from(model.colCost), colLower: Float64Array.from(model.colLower), colUpper: Float64Array.from(model.colUpper),
     rowLower, rowUpper,
     matrix: { format: 'csc', numRows, numCols, starts, indices, values },
   };
+  if (model.integer === undefined) return data;
+  const { integer, continuous } = highs.constants.variableType;
+  return { ...data, integrality: Int32Array.from(model.integer, (whole) => (whole ? integer : continuous)) };
 }
 
 /** A model without columns: every row's activity is 0 (HiGHS reports such a model as "empty" without checking rows). */
@@ -85,13 +100,26 @@ function solveEmpty(model: LpModel): LpResult {
   return feasible ? { status: 'optimal', objective: 0, x: [] } : notOptimal('infeasible');
 }
 
+/** Lets the event loop run queued I/O (other requests, SSE, ticks) before the next synchronous stretch of planning. */
+export function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => {
+    setImmediate(resolve);
+  });
+}
+
 export async function solveLp(model: LpModel): Promise<LpResult> {
   if (model.colCost.length === 0) return solveEmpty(model);
+  // A solve is synchronous WebAssembly: yield first, so a plan of a dozen solves never holds the thread for all of them.
+  await yieldToEventLoop();
   const highs = await runtime();
   const data = modelData(highs, model);
   const statuses = highs.constants.modelStatus;
   return highs.withModel((m): LpResult => {
-    m.options.set({ output_flag: false });
+    m.options.set({
+      output_flag: false,
+      ...(model.timeLimit === undefined ? {} : { time_limit: model.timeLimit }),
+      ...(model.maxNodes === undefined ? {} : { mip_max_nodes: model.maxNodes, mip_rel_gap: 0, mip_abs_gap: 0, mip_feasibility_tolerance: 1e-10 }),
+    });
     m.passModel(data);
     try {
       m.run();
@@ -107,6 +135,10 @@ export async function solveLp(model: LpModel): Promise<LpResult> {
       case statuses.unboundedOrInfeasible:
         return notOptimal('unbounded');
       default:
+        // A MIP stopped by its node or time limit keeps its best whole solution, if it found one (status 2 = feasible).
+        if (model.integer !== undefined && Number(m.info.get('primal_solution_status')) === 2) {
+          return { status: 'feasible', objective: m.getObjectiveValue(), x: Array.from(m.getSolution().colValue) };
+        }
         return notOptimal('error');
     }
   });
