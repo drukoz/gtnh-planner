@@ -56,6 +56,19 @@ describe('resolveBlocks', () => {
     expect(resolveBlocks(src, [{ id: 'gregtech:gt.blockcasings9', meta: 0 }])[0]!.fallbackColor).toEqual(KIND_COLORS.casing);
   });
 
+  it('never draws a failed or unknown machine with the machine block\'s own icon', () => {
+    // The real dump has a getIcon table for gt.blockmachines itself (the LV hull side on every face and meta).
+    const file = gtSampleFile();
+    const hull = buildTexturesDump({ ...file, blocks: [...file.blocks, { id: GT, metas: { '0': [0, 1, 2, 3, 4, 5].map(() => [{ p: [I + 'MACHINE_LV_SIDE.png'] }]) } }] }, index);
+    const withHull: AssetSources = { ...src, dump: hull };
+    const empty = { down: [], up: [], north: [], south: [], west: [], east: [] };
+    expect(resolveBlocks(withHull, [{ id: GT, meta: 0, mteId: 999 }, { id: GT, meta: 0, mteId: 12345 }])).toEqual([
+      { block: { id: GT, meta: 0, mteId: 999 }, faces: empty, fallbackColor: KIND_COLORS.other, resolved: false },
+      { block: { id: GT, meta: 0, mteId: 12345 }, faces: empty, fallbackColor: KIND_COLORS.other, resolved: false }]);
+    expect(resolveIcons(withHull, [`${GT}@999`, `${GT}@0`]).map((d) => d.source)).toEqual(['fallback', 'fallback']);
+    expect(resolveBlocks(withHull, [{ id: GT, meta: 0, mteId: 301 }])[0]!.faces.north).toEqual([{ path: I + 'MACHINE_LV_SIDE.png' }, { path: BM + 'OVERLAY_FRONT.png' }]);
+  });
+
   it('follows copies four levels deep and draws hatches with the casing they copy', () => {
     const chain = (n: number) => buildTexturesDump(dumpFile({ blocks: Array.from({ length: n + 1 }, (_, i) => ({ id: `c:${i}`, metas: { '0': [0, 1, 2, 3, 4, 5].map((s) =>
       [i < n ? { copy: [`c:${i + 1}`, 0, s] as [string, number, number] } : { p: [I + 'MACHINE_LV_TOP.png'] }]) } })) }), index);

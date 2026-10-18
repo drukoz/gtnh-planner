@@ -77,10 +77,15 @@ function blockFaces(src: AssetSources, id: string, meta: number, copy: CopyResol
   return layer === null ? null : { faces: allFaces(layer), from: 'jar' };
 }
 
-/** Block step (1), the idle GT machine of `mteId`, then steps (2)–(4). */
+/**
+ * Block step (1), the idle GT machine of `mteId`, alone: a machine the dump lacks or failed on gets nothing, never the
+ * machine block's own icon (the real dump has a `gt.blockmachines` table that draws the LV hull side). A ref without
+ * `mteId` takes steps (2)–(4).
+ */
 function refFaces(src: AssetSources, ref: BlockRef, copy: CopyResolver): FoundFaces | null {
-  const gt = ref.mteId === undefined || src.dump === null ? null : gtMachineFaces(src.dump, ref.mteId, copy);
-  return gt !== null ? { faces: gt, from: 'gt' } : blockFaces(src, ref.id, ref.meta, copy);
+  if (ref.mteId === undefined) return blockFaces(src, ref.id, ref.meta, copy);
+  const gt = src.dump === null ? null : gtMachineFaces(src.dump, ref.mteId, copy);
+  return gt === null ? null : { faces: gt, from: 'gt' };
 }
 
 /** Spec §3.8: a plain colour by machine kind, the casing colour for casings, else a stable colour per block. */
