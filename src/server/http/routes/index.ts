@@ -7,5 +7,6 @@ import { assetRoutes } from './assets.ts';
 import { authRoutes } from './auth.ts';
 import { packRoutes } from './pack.ts';
 import { projectRoutes } from './projects.ts';
+import { worldRoutes } from './world.ts';
 
-export const ROUTE_MODULES: Array<(app: AppContext) => Route[]> = [authRoutes, packRoutes, projectRoutes, assetRoutes];
+export const ROUTE_MODULES: Array<(app: AppContext) => Route[]> = [authRoutes, packRoutes, projectRoutes, assetRoutes, worldRoutes];
