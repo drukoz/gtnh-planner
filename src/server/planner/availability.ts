@@ -127,7 +127,7 @@ export const GATHERED_ORE_PREFIXES: readonly string[] = Object.freeze([
  * Gathered items no ore-dictionary name of `GATHERED_ORE_PREFIXES` covers: sticky resin (tapped from rubber logs) and
  * the slime balls of mobs (the `slimeball` ore name also covers crafted glue balls, so it is not a gathered name).
  */
-export const GATHERED_KEYS: readonly StuffKey[] = Object.freeze(['IC2:itemHarz@0', 'minecraft:slime_ball@0', 'TConstruct:strangeFood@0']);
+export const GATHERED_KEYS: readonly StuffKey[] = Object.freeze(['IC2:itemHarz@0', 'minecraft:slime_ball@0']);
 
 /** `name` is `prefix` or `prefix` followed by an upper-case letter (logWood, cropWheat; not logistics). */
 function hasOrePrefix(name: string, prefix: string): boolean {
