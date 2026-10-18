@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { gtSampleFile, GT_SAMPLE_ASSETS, I, BM, MI } from '../../helpers/gt-sample.ts';
 import { indexOf } from '../../helpers/assets-dir.ts';
 import { dumpFile } from '../../helpers/textures-dump.ts';
-import { buildTexturesDump } from '../../../src/server/assets/textures-dump.ts';
+import { buildTexturesDump, type TexturesDumpFile } from '../../../src/server/assets/textures-dump.ts';
 import { resolveBlocks, resolveIcons, resolveCovers, type AssetSources, type PackView } from '../../../src/server/assets/resolve.ts';
 import { hashColor, KIND_COLORS } from '../../../src/shared/types/assets.ts';
 import type { Item, Machine, MachineKind } from '../../../src/shared/types/pack.ts';
@@ -77,6 +77,55 @@ describe('resolveBlocks', () => {
     const hatch = resolveBlocks(src, [{ id: GT, meta: 0, mteId: 50 }], 1)[0]!;
     expect(hatch).toMatchObject({ block: { id: GT, meta: 0, mteId: 50 }, resolved: true });
     expect(hatch.faces.up).toEqual([{ path: I + 'MACHINE_CASING_SOLID_STEEL.png' }, { path: I + 'OVERLAY_PIPE_IN.png' }]);
+  });
+});
+
+describe('GT ore blocks', () => {
+  const B = 'gregtech/textures/blocks/materialicons/';
+  const STONE = 'minecraft/textures/blocks/stone.png';
+  const O = 'gregtech:gt.blockores2';
+  const oreIndex = indexOf({ ...GT_SAMPLE_ASSETS, [STONE]: {}, [I + 'GRANITE_BLACK_STONE.png']: {},
+    [B + 'METALLIC/ore.png']: {}, [B + 'METALLIC/oreSmall.png']: {}, [B + 'DULL/ore.png']: {}, [B + 'DULL/ore_OVERLAY.png']: {} });
+  const file = gtSampleFile();
+  const oreFile: TexturesDumpFile = {
+    ...file,
+    sets: [
+      { ...file.sets[0]!, icons: { ...file.sets[0]!.icons,
+        '67': [{ p: [B + 'METALLIC/oreSmall.png'] }, { p: [B + 'METALLIC/oreSmall_OVERLAY.png'] }],
+        '68': [{ p: [B + 'METALLIC/ore.png'] }, { p: [B + 'METALLIC/ore_OVERLAY.png'] }] } },
+      { name: 'DULL', icons: { '68': [{ p: [B + 'DULL/ore.png'] }, { p: [B + 'DULL/ore_OVERLAY.png'] }] } },
+      { name: 'NONE', icons: {} },
+    ],
+    materials: [...file.materials, { name: 'Uraninite', id: 922, rgba: [35, 35, 35, 0], set: 1, oreGlow: 1 }, { name: 'Plain', id: 5, rgba: [1, 2, 3, 0], set: 2 }],
+    blocks: [...file.blocks, { id: 'gregtech:gt.blockgranites', metas: { '0': [0, 1, 2, 3, 4, 5].map(() => [{ p: [I + 'GRANITE_BLACK_STONE.png'] }]) } }],
+    ores: { ore: 68, oreSmall: 67, smallOffset: 16000, naturalOffset: 8000, blocks: [{ id: O, stones: [
+      [{ copy: ['minecraft:stone', 0, 0] }], [{ copy: ['gregtech:gt.blockgranites', 0, 0] }], [{ copy: ['GalaxySpace:phobosblocks', 2, 0] }]] }] },
+    textureNames: { blocks: { 'minecraft:stone': 'stone' }, items: {} },
+  };
+  const ores: AssetSources = { index: oreIndex, dump: buildTexturesDump(oreFile, oreIndex), nei: null, pack: null };
+  const ironOre = (stone: string) => [{ path: stone }, { path: B + 'METALLIC/ore.png', tint: [200, 200, 220] }];
+
+  it('draws the stone\'s down face under the tinted ore icon on every face (GTBlockOre.getTextures)', () => {
+    const [iron, granite, natural] = resolveBlocks(ores, [{ id: O, meta: 32 }, { id: O, meta: 1032 }, { id: O, meta: 8032 }]);
+    expect(iron).toEqual({ block: { id: O, meta: 32 }, resolved: true, fallbackColor: hashColor(`${O}@32`), faces: {
+      down: ironOre(STONE), up: ironOre(STONE), north: ironOre(STONE), south: ironOre(STONE), west: ironOre(STONE), east: ironOre(STONE) } });
+    expect(granite!.faces.south).toEqual(ironOre(I + 'GRANITE_BLACK_STONE.png'));
+    expect(natural!.faces).toEqual(iron!.faces);   // world-generated ores (+8000) look the same
+  });
+
+  it('gives ore items their block face: small ores, glowing ores, and the ore alone on a stone without a texture', () => {
+    const [iron, small, uraninite, phobos] = resolveIcons(ores, [`${O}@32`, `${O}@17032`, `${O}@922`, `${O}@2032`]);
+    expect(iron).toMatchObject({ source: 'gt', layers: ironOre(STONE) });
+    expect(small!.layers).toEqual([{ path: I + 'GRANITE_BLACK_STONE.png' }, { path: B + 'METALLIC/oreSmall.png', tint: [200, 200, 220] }]);
+    expect(uraninite!.layers).toEqual([{ path: STONE }, { path: B + 'DULL/ore.png', tint: [35, 35, 35], glow: true }, { path: B + 'DULL/ore_OVERLAY.png', glow: true }]);
+    expect(phobos).toMatchObject({ source: 'gt', layers: [{ path: B + 'METALLIC/ore.png', tint: [200, 200, 220] }] });
+  });
+
+  it('leaves an unknown stone, material or ore icon, another block and a dump without ores to the fallback', () => {
+    expect(resolveIcons(ores, [`${O}@3032`, `${O}@999`, `${O}@5`, 'gregtech:gt.blockores3@32']).map((d) => d.source))
+      .toEqual(['fallback', 'fallback', 'fallback', 'fallback']);
+    const { ores: _, ...withoutOres } = oreFile;
+    expect(resolveIcons({ ...ores, dump: buildTexturesDump(withoutOres, oreIndex) }, [`${O}@32`])[0]!.source).toBe('fallback');
   });
 });
 

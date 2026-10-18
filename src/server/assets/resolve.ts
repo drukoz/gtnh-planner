@@ -10,7 +10,7 @@ import {
 } from '../../shared/types/assets.ts';
 import type { BlockRef, Pack } from '../../shared/types/pack.ts';
 import { curatedBlock } from './curated.ts';
-import { coverLayers, gtBlockFaces, gtFluidIcon, gtItemIcon, gtMachineFaces, type CopyResolver } from './gt-faces.ts';
+import { coverLayers, gtBlockFaces, gtFluidIcon, gtItemIcon, gtMachineFaces, gtOreFaces, type CopyResolver } from './gt-faces.ts';
 import { iconPath, type AssetIndex } from './index.ts';
 import type { TexturesDump } from './textures-dump.ts';
 
@@ -58,10 +58,13 @@ function copier(src: AssetSources, depth: number): CopyResolver {
   };
 }
 
-/** Block steps (2)–(4): the dump's block table, the curated table, the block's texture name; first match wins. */
+/**
+ * Block steps (2)–(4): the dump's block table or GT ore block, the curated table, the block's texture name; first
+ * match wins.
+ */
 function blockFaces(src: AssetSources, id: string, meta: number, copy: CopyResolver): FoundFaces | null {
   const { index, dump } = src;
-  const gt = dump === null ? null : gtBlockFaces(dump, id, meta, copy);
+  const gt = dump === null ? null : gtBlockFaces(dump, id, meta, copy) ?? gtOreFaces(dump, index, id, meta, copy);
   if (gt !== null) return { faces: gt, from: 'gt' };
   const curated = curatedBlock(id, meta);
   if (curated !== null) {

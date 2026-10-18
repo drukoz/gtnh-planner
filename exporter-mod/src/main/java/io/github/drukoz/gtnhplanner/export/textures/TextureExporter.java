@@ -30,6 +30,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 import net.minecraft.block.Block;
+import net.minecraft.init.Blocks;
 import net.minecraft.item.Item;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraftforge.common.util.ForgeDirection;
@@ -37,15 +38,18 @@ import net.minecraftforge.fluids.Fluid;
 import net.minecraftforge.fluids.FluidRegistry;
 
 import com.google.gson.stream.JsonWriter;
+import com.gtnewhorizon.gtnhlib.util.data.ImmutableBlockMeta;
 
 import cpw.mods.fml.common.registry.GameData;
 import cpw.mods.fml.relauncher.ReflectionHelper;
 import gregtech.api.GregTechAPI;
 import gregtech.api.covers.CoverRegistry;
+import gregtech.api.enums.MaterialIconRegistry;
 import gregtech.api.enums.Materials;
 import gregtech.api.enums.MetaTileEntityIDs;
 import gregtech.api.enums.Mods;
 import gregtech.api.enums.OrePrefixes;
+import gregtech.api.enums.StoneType;
 import gregtech.api.enums.TextureSet;
 import gregtech.api.enums.Textures;
 import gregtech.api.interfaces.IIconContainer;
@@ -61,6 +65,7 @@ import gregtech.api.metatileentity.implementations.MTEBasicMachineWithRecipe;
 import gregtech.api.metatileentity.implementations.MTETieredMachineBlock;
 import gregtech.api.objects.GTItemStack;
 import gregtech.api.render.TextureFactory;
+import gregtech.common.blocks.GTBlockOre;
 import gregtech.common.fluid.GTFluid;
 import gregtech.common.tileentities.machines.basic.MTEBasicMachineWithRecipeBuilder;
 import io.github.drukoz.gtnhplanner.export.ExportContext;
@@ -71,8 +76,8 @@ import io.github.drukoz.gtnhplanner.export.Tags;
  * {@code textures.json.gz}: GregTech's own texture data, one gzip'd JSON document in the format {@value #FORMAT}
  * (the loader is {@code src/server/assets/textures-dump.ts}). Parts, in file order: {@code sets} and
  * {@code materials} (research §6.1), {@code metaItems} (§6.1–§6.2), {@code mte} (§3.5 A), {@code casingPages}
- * (§3.6), {@code blocks} (§3.7), {@code covers} (§3.8), {@code fluids} (§6.3), {@code textureNames} (§6.4),
- * {@code blockIds} and {@code stats}.
+ * (§3.6), {@code blocks} (§3.7), {@code ores} (GT ore blocks), {@code covers} (§3.8), {@code fluids} (§6.3),
+ * {@code textureNames} (§6.4), {@code blockIds} and {@code stats}.
  *
  * <p>
  * Every element is computed fully before it is written, inside its own catch: a failed element is left out (a
@@ -173,6 +178,7 @@ public final class TextureExporter implements ExportSection {
         mte();
         casingPages();
         blocks();
+        ores();
         covers();
         fluids();
         textureNames();
@@ -200,6 +206,7 @@ public final class TextureExporter implements ExportSection {
                 if (names.contains(name)) continue;
                 int id = m.mMetaItemSubID;
                 int[] rgba = { m.mRGBa[0], m.mRGBa[1], m.mRGBa[2], m.mRGBa[3] };
+                boolean oreGlow = m.hasGlowingOre();
                 int set = setIndex(m.mIconSet, setIndices, sets, setPart);
                 materials.add(() -> {
                     w.beginObject();
@@ -211,6 +218,10 @@ public final class TextureExporter implements ExportSection {
                     writeInts(rgba);
                     w.name("set")
                         .value(set);
+                    if (oreGlow) {
+                        w.name("oreGlow")
+                            .value(1);
+                    }
                     w.endObject();
                 });
                 names.add(name);
@@ -687,6 +698,67 @@ public final class TextureExporter implements ExportSection {
             iconLayers.put(ref, layers);
         }
         return layers;
+    }
+
+    // --- ore blocks (GTBlockOre) ---
+
+    /**
+     * {@code {ore, oreSmall, smallOffset, naturalOffset, blocks}}: the {@code sets} texture index of the ore and
+     * small-ore icon (the slots {@code TextureSet.getOreTexture} reads), {@code GTBlockOre}'s meta offsets, and per
+     * ore block {@code {id, stones}}. {@code GTBlockOre.getTextures} draws, on every face, its stone's
+     * {@code getTexture(0)} under the material's ore icon; that texture is the stone's {@code getIcon(0)}, the down
+     * face of the stone's main block ({@code Blocks.stone} for a disabled stone type). So each stone, in
+     * {@code stoneTypes} order, is written as one layer that copies that block's down face.
+     */
+    private void ores() throws IOException {
+        Part part = new Part("ores");
+        w.name("ores");
+        w.beginObject();
+        w.name("ore")
+            .value(MaterialIconRegistry.IconType.ORE.ordinal());
+        w.name("oreSmall")
+            .value(MaterialIconRegistry.IconType.ORE_SMALL.ordinal());
+        w.name("smallOffset")
+            .value(GTBlockOre.SMALL_ORE_META_OFFSET);
+        w.name("naturalOffset")
+            .value(GTBlockOre.NATURAL_ORE_META_OFFSET);
+        w.name("blocks");
+        w.beginArray();
+        for (Block block : GameData.getBlockRegistry()
+            .typeSafeIterable()) {
+            if (block instanceof GTBlockOre) element(part, describe(block), () -> oreBlock((GTBlockOre) block));
+        }
+        w.endArray();
+        w.endObject();
+        part.done();
+    }
+
+    /** {@code {id, stones}}: per stone index, a copy of its main block's down face (none when it has no block). */
+    private Element oreBlock(GTBlockOre block) {
+        String id = blockId(block);
+        List<List<LayerRec>> stones = new ArrayList<>();
+        for (StoneType stone : block.stoneTypes) {
+            Block stoneBlock = Blocks.stone; // what GT draws for a missing or disabled stone type
+            int stoneMeta = 0;
+            if (stone != null && stone.isEnabled()) {
+                ImmutableBlockMeta main = stone.getStone();
+                stoneBlock = main == null ? null : main.getBlock();
+                stoneMeta = main == null ? 0 : main.getBlockMeta();
+            }
+            stones.add(
+                stoneBlock == null ? Collections.<LayerRec>emptyList()
+                    : Collections.singletonList(LayerRec.copy(blockId(stoneBlock), stoneMeta, 0)));
+        }
+        return () -> {
+            w.beginObject();
+            w.name("id")
+                .value(id);
+            w.name("stones");
+            w.beginArray();
+            for (List<LayerRec> stone : stones) writeLayers(stone);
+            w.endArray();
+            w.endObject();
+        };
     }
 
     // --- covers (research §3.8) ---
