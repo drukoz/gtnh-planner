@@ -6,7 +6,7 @@
 // index that points nowhere fails with its file and line.
 
 import type { ItemKey } from '../../shared/keys.ts';
-import type { GtMaterial, OrePart } from '../../shared/types/pack.ts';
+import type { GtMaterial, Item, OrePart } from '../../shared/types/pack.ts';
 import { EXPORT_FILES, type MaterialLine, type OreMaterialLine } from './format.ts';
 import type { LoadContext } from './load.ts';
 
@@ -63,13 +63,25 @@ function oreMaterial(line: OreMaterialLine, name: string, parts: Parts): GtMater
   };
 }
 
+/** Whether the part items that have a GT material (`Item.gt.material`) all name `name`, and at least one does. */
+function partsNamed(parts: Parts, name: string, items: ReadonlyMap<ItemKey, Item>): boolean {
+  const named = Object.values(parts).map((key) => items.get(key)?.gt?.material).filter((m) => m !== undefined);
+  return named.length > 0 && named.every((m) => m === name);
+}
+
 /**
- * GT materials by name, then the ore materials in file order: a `gt` ore line adds its key, family and parts to the
- * GT material of its name (or creates the material); a `bw`/`gtpp` line, or a `gt` line whose name a non-GT material
- * already holds, creates a material named after the line, or after its key when that name is taken. Byproducts of
- * created materials are ore keys, turned into names once every line is known. Duplicates warn; the first line wins.
+ * GT materials by name, then the ore materials: the `gt` lines first, then the `bw`/`gtpp` lines, each in file order.
+ * An ore line joins the material of its name when that material is the same one: it has no ore data yet (no `key`;
+ * BartWorks registers a GT material of the same name for each of its own), or the line's part items say it is (their
+ * `gt.material` is that name). Joining sets the material's key, family and parts when it had none, and a `bw`/`gtpp`
+ * line adds its byproducts that the material lacks. Otherwise the line creates a material named after the line, or
+ * after its key when that name belongs to a different material (`gtpp:Iron`). The ore keys of every line resolve to
+ * the material's name, so `Item.gt.material`, vein materials and capability yields use one name (§11.4). Byproducts
+ * are ore keys, turned into names once every line is known. Duplicates warn; the first line wins.
  */
-export function buildMaterials(gt: readonly MaterialLine[], ores: readonly OreMaterialLine[], ctx: LoadContext): { materials: Map<string, GtMaterial>; nameOfKey: Map<string, string> } {
+export function buildMaterials(
+  gt: readonly MaterialLine[], ores: readonly OreMaterialLine[], ctx: LoadContext, items: ReadonlyMap<ItemKey, Item>,
+): { materials: Map<string, GtMaterial>; nameOfKey: Map<string, string> } {
   const warn = (message: string): void => ctx.warn(message);
   const materials = new Map<string, GtMaterial>();
   gt.forEach((line, n) => {
@@ -79,31 +91,41 @@ export function buildMaterials(gt: readonly MaterialLine[], ores: readonly OreMa
 
   const nameOfKey = new Map<string, string>();
   const created: Array<{ material: GtMaterial; line: OreMaterialLine }> = [];
-  ores.forEach((line, n) => {
+  const joined: Array<{ material: GtMaterial; line: OreMaterialLine }> = [];
+  const numbered = ores.map((line, n) => ({ line, n }));
+  const gtFirst = [...numbered.filter(({ line }) => line.family === 'gt'), ...numbered.filter(({ line }) => line.family !== 'gt')];
+  for (const { line, n } of gtFirst) {
     const where = `${EXPORT_FILES.oreMaterials}:${n + 1}`;
     if (nameOfKey.has(line.key)) {
       warn(`${where}: duplicate ore material ${line.key} ignored, the first line wins`);
-      return;
+      continue;
     }
     const parts = partKeys(line.parts, ctx);
     const existing = materials.get(line.name);
-    if (line.family === 'gt' && existing !== undefined && existing.key === undefined) {
-      Object.assign(existing, { key: line.key, family: line.family, parts });
+    if (existing !== undefined && (existing.key === undefined || partsNamed(parts, existing.name, items))) {
+      if (existing.key === undefined) Object.assign(existing, { key: line.key, family: line.family, parts });
       nameOfKey.set(line.key, existing.name);
-      return;
+      if (line.family !== 'gt') joined.push({ material: existing, line });
+      continue;
     }
     const name = existing === undefined ? line.name : line.key;
     if (materials.has(name)) {
       warn(`${where}: ore material ${line.key} ignored, the names ${line.name} and ${line.key} are both taken`);
-      return;
+      continue;
     }
     const material = oreMaterial(line, name, parts);
     materials.set(name, material);
     nameOfKey.set(line.key, name);
     created.push({ material, line });
-  });
+  }
 
   const nameOf = materialNameResolver(nameOfKey, warn);
   for (const { material, line } of created) material.oreByproducts = line.byproducts.map((key) => nameOf(key, `ore material ${line.key}`));
+  for (const { material, line } of joined) {
+    for (const key of line.byproducts) {
+      const name = nameOf(key, `ore material ${line.key}`);
+      if (!material.oreByproducts.includes(name)) material.oreByproducts.push(name);
+    }
+  }
   return { materials, nameOfKey };
 }

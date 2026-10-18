@@ -529,7 +529,7 @@ function checkItemIndices(ctx: LoadContext, indices: Iterable<number>): void {
 async function readMaterials({ src, pack, ctx }: LoadState): Promise<Map<string, string>> {
   const gt = await collectLines(src, 'materials');
   const ores = await collectLines(src, 'oreMaterials', (line) => checkItemIndices(ctx, Object.values(line.parts)));
-  const { materials, nameOfKey } = buildMaterials(gt, ores, ctx);
+  const { materials, nameOfKey } = buildMaterials(gt, ores, ctx, pack.items);
   pack.materials = materials;
   return nameOfKey;
 }

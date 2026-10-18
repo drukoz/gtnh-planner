@@ -102,8 +102,14 @@ function withId(content: RecipeContent): Recipe {
   return { id: recipeId({ source, inputs, outputs, euPerTick, durationTicks, specialValue, meta, category, fake: flags.fake }), ...content };
 }
 
+/** The value with every item reference (an object that is exactly `{ item: index }`), at any depth, as its key. */
 function metaValue(value: MetaValue, items: ItemRefs): unknown {
-  return typeof value === 'object' && value !== null && typeof value.item === 'number' ? firstKeyAt(items, value.item) : value;
+  if (Array.isArray(value)) return value.map((v) => metaValue(v, items));
+  if (typeof value !== 'object' || value === null) return value;
+  const keys = Object.keys(value);
+  if (keys.length === 1 && keys[0] === 'item' && typeof value.item === 'number') return firstKeyAt(items, value.item);
+  // Object.fromEntries defines own properties, so a field named `__proto__` stays an ordinary key.
+  return Object.fromEntries(keys.map((key) => [key, metaValue(value[key] as MetaValue, items)]));
 }
 
 /** The meta of the first not-consumed concrete programmed circuit among the item inputs (alternatives aside). */
