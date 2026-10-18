@@ -25,6 +25,7 @@ This page collects the exact GregTech numbers and rules the planner computes wit
 | Delivery losses | Every emitter (generator, battery buffer, transformer) pays `V + 2^max(0, t−1)` EU per amp sent (ULV +1, LV +1, MV +2, HV +4, EV +8, IV +16; *reviewer: `max(0, …)` as in the code, so ULV pays +1, not +0.5*). Cables drop the voltage by the sum of their per-block loss along the path, per amp. | §3.2, §3.3 |
 | Damage | A GT machine explodes when a packet **arrives** with more volts than its tier. A cable burns instantly when a packet's volts exceed its rating, and burns when the amps it carried, minus its rated amps per tick, pile up past 40 × its rated amps. | §3.3, §3.4 |
 | Power shortage | Singleblock: progress reset and a 100-tick pause, inputs kept. Multiblock: shuts down (`POWER_LOSS`), **the running recipe's outputs are voided**, and it stays off until something re-enables it: a player (soft mallet or GUI), or a Machine Controller cover in a non-safe mode (*refined by reviewer*, §3.5). | §3.5 |
+| Line parts | Conveyor covers move 3.2 / 12.8 / 64 / 320 / 1,280 / 5,120 / 20,480 items/s (LV–ZPM). Pump covers move 640 L/s at LV, ×4 per tier. A bus has `(tier + 1)²` slots and a fluid hatch holds `8000 × 2^tier` L. A basic machine's input filter is off by default. AE2 interfaces and export buses idle at 1 AE/t, cables at 0, and 1 EU = 2 AE. Not yet re-checked against the jars. | §3.8 |
 | Steam turbines | LV/MV/HV give 3 EU per 7/8/9 L of steam (85.7/75/66.7 %), 1 A out. Full output needs 1,540 / 6,933 / 30,960 L/s. | §4.1 |
 | HP ("Advanced") solar boiler | 360 L/s whenever above 100 °C. In clear weather that is ≈94–95 % of every Minecraft day (≈58–71 s per day with no steam, depending on the boiler's own tick phase; *refined by reviewer*, §4.2), so "no steam at night" is wrong for this boiler. Rain stops it in ≈7 min, thunder in ≈5.3 min. Calcification on plain water: full output for 1,080,000 producing ticks, then linear down to 120 L/s at 1,800,000. Distilled water never calcifies; breaking and replacing the boiler descales it. | §4.2 |
 | Battery buffer | Amps out = number of batteries **of exactly the buffer's tier** that can provide energy (no matching battery: 0 A). Capacity = the batteries' charge plus an internal `64·V·slots`. | §4.3 |
@@ -404,6 +405,64 @@ A transformer between tiers t+1 and t has `mTier` = t, the lower tier. The enum 
 ### 3.7 Energy hatches
 
 Normal energy hatch (`MTEHatchEnergy`): `maxEUInput = V[tier]`, `maxAmperesIn = 2`, buffer `512 + 8·V[tier]`. **[src]** `SRC/gregtech/api/metatileentity/implementations/MTEHatchEnergy.java#L76-L88`; **[jar]** `ldc2_w 2l`, `ldc2_w 512l ... ldc2_w 8l lmul`. Multi-amp and laser hatches (TecTech) exist from EV up; they appear as "exotic" hatches in §2.3 and were not studied further.
+
+### 3.8 Line parts
+
+These are the parts the line layout sizes besides machines, cables and transformers: conveyor and pump covers, the item filter cover, bus and hatch sizes, a basic machine's input filter, and the idle power of AE2 parts. Plan 5's `src/server/layout/parts.ts` uses them.
+
+*Provenance:* these facts were recorded for Plan 5 Task 3. Each one names the class and method it comes from. `$GT` and the AE2 jar were **not** re-read when this section was written, so none of its claims carries a **[jar]** or **[src]** tag yet. Treat them as **UNVERIFIED** against the jars until someone checks them. Plan 5's `GTNH_LOCAL` check runs against a real export and prints every part key that does not resolve.
+
+**Conveyor covers.**
+- `gregtech.common.items.MetaGeneratedItem01.registerCovers` builds `new CoverConveyor(ctx, tickRate, stacksPerTransfer, itemsPerStack, texture)`.
+- `CoverConveyor.doTransfer` moves up to `stacksPerTransfer` stacks of at most `itemsPerStack` items every `tickRate` ticks. That gives `stacksPerTransfer × itemsPerStack × 20 / tickRate` items/s.
+- The items are `IDMetaItem01.Conveyor_Module_<T>`, ids 630…636, which are `gregtech:gt.metaitem.01@32630…32636`.
+
+**Pump covers.**
+- They are built as `new CoverPump(ctx, litresPerTick, texture)`.
+- `CoverPump.transferFluid` moves `mTransferRate × tickRate` L per run, so `litresPerTick × 20` L/s.
+- The rate is 32 L/t at LV and grows ×4 per tier, up to 131,072 L/t at ZPM.
+- The items are `Electric_Pump_<T>`, ids 610…616, which are `@32610…32616`.
+
+| Tier | Conveyor item | `(tickRate, stacksPerTransfer, itemsPerStack)` | Items/s | Pump item | L/t | L/s |
+|---|---|---|---|---|---|---|
+| LV | `@32630` Conveyor Module (LV) | (100, 1, 16) | 3.2 | `@32610` Electric Pump (LV) | 32 | 640 |
+| MV | `@32631` Conveyor Module (MV) | (100, 1, 64) | 12.8 | `@32611` Electric Pump (MV) | 128 | 2,560 |
+| HV | `@32632` Conveyor Module (HV) | (20, 1, 64) | 64 | `@32612` Electric Pump (HV) | 512 | 10,240 |
+| EV | `@32633` Conveyor Module (EV) | (4, 1, 64) | 320 | `@32613` Electric Pump (EV) | 2,048 | 40,960 |
+| IV | `@32634` Conveyor Module (IV) | (1, 1, 64) | 1,280 | `@32614` Electric Pump (IV) | 8,192 | 163,840 |
+| LuV | `@32635` Conveyor Module (LuV) | (1, 4, 64) | 5,120 | `@32615` Electric Pump (LuV) | 32,768 | 655,360 |
+| ZPM | `@32636` Conveyor Module (ZPM) | (1, 16, 64) | 20,480 | `@32616` Electric Pump (ZPM) | 131,072 | 2,621,440 |
+
+- Planner use: `COVER_RATES` holds this table. `pickConveyor` and `pickPump` take the smallest cover at or below the line's tier (never below LV) that carries the flow. When none does, they take the biggest one and the layout warns `cover_rate`.
+
+**Item filter cover.**
+- The cover items are `ItemFilter_Export` (270, `@32270`, "Filtered Conveyor Cover (Export)") and `ItemFilter_Import` (271, `@32271`).
+- `CoverItemFilter` holds one filter item (`LimitingItemStackHandler(1, 1)`) and has a whitelist toggle. It actively moves the items that match.
+- It does **not** block other items. `letsItemsIn` and `letsItemsOut` are true for every item, and `MTEItemPipe` asks only its own side cover's `letsItemsOut(-1)`. So the cover never stops a pipe from delivering other items into the machine it sits on.
+- `@32729` is `Component_Filter`, a crafting component, not the cover.
+
+**Buses and hatches.**
+- A bus has `MTEHatch.getSlots(tier) = (tier + 1)²` item slots. Input buses have one more slot, for a programmed circuit.
+- A fluid hatch holds `MTEHatchInput` / `MTEHatchOutput.getCapacity() = 8000 << tier` L.
+
+| Tier | ULV | LV | MV | HV | EV | IV |
+|---|---|---|---|---|---|---|
+| Bus slots `(tier + 1)²` | 1 | 4 | 9 | 16 | 25 | 36 |
+| Fluid hatch L `8000 × 2^tier` | 8,000 | 16,000 | 32,000 | 64,000 | 128,000 | 256,000 |
+
+- Planner use: `busSlots`, `hatchLitres` and `pickHatch` take the lowest tier that holds what one run needs. When no hatch is big enough, the layout warns `hatch_small`.
+
+**Machine input filter.**
+- `MTEBasicMachine.mDisableFilter` starts `true`. The GUI shows "Input Filter Off" (lang key `GT5U.hatch.disableFilter.true`).
+- `allowPutStack` calls `allowPutStackValidated` (the recipe-map check) only when the filter is on.
+- So by default a basic machine takes any item a pipe offers. It takes items through its output side only when "allow input from output side" is set.
+
+**AE2 idle draw (rv3-beta-1073-GTNH).**
+- `AENetworkProxy.idleDraw` defaults to 1.0 AE/t.
+- `PartCable` sets it to 0.0.
+- `TileInterface` / `DualityInterface` and `PartExportBus` keep the default of 1 AE/t.
+- `AEConfig` `PowerRatios.IC2` defaults to 2.0, and GTNH's `AppliedEnergistics2.cfg` keeps `D:IC2=2.0`. So 1 EU = 2 AE.
+- Planner use: `ae2IdleEUt` = Σ idle AE/t of the placed ME interfaces, ME cables and export buses ÷ 2. The result is added to the line's power before the power fit.
 
 ## 4. Generators and storage
 
