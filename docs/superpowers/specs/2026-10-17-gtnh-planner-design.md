@@ -27,7 +27,7 @@ drukoz and friends on the server (a handful of people). drukoz runs the server a
 - Search box covering **any item or fluid** in the pack (works like NEI search).
 - Two modes:
   - **Rate** (per minute / per hour): plans a dedicated line.
-  - **Make N** (a one-off batch, e.g. 64; named so it doesn't clash with GregTech's own multiblock "batch mode"): runs the batch on **machines the group already owns**, adds machines only for steps nothing they own can do, and shows how long it will take. Build cost of any added machines is shown (decided).
+  - **Batch** (e.g. 64): runs the batch on **machines the group already owns**, adds machines only for steps nothing they own can do, and shows how long it will take. Build cost of any added machines is shown (decided).
 - **Current tier** (ULV, LV, MV, HV, EV, IV, …) is **detected from the world** (highest-tier GT machine found at the base) and can be changed by hand. Only recipes the group can actually run at that tier are used.
 
 ### 3.3 Planner
@@ -49,6 +49,7 @@ drukoz and friends on the server (a handful of people). drukoz runs the server a
 
 ### 3.4 World reading
 - Reads the world **straight from the server folder** on this Mac (read-only, preferring the latest 30-minute backup / a snapshot copy so it never reads files mid-write), plus **manual upload** in the browser (whole world zip, or just `level.dat` plus selected region files) for anyone not on this Mac.
+- **Smart upload (added at the user's request):** a friend never uploads the whole world. They pick their world folder (or zip) in the browser; the browser reads it locally, finds where players are and where bases are likely (player positions, spawn, claimed chunks, chunks people have spent time in), and uploads only those chunks — typically a few MB instead of ~1 GB. Player files and everything else stay on their computer. The upload shows what it will send (areas and size) before sending, and lets them widen or narrow the radius.
 - Finds **bases** automatically (clusters of mod machines/blocks), in any dimension.
 - Finds and classifies — **all optional**: a base may have none of the logistics or storage below, and every plan must still work:
   - **GregTech machines**: type and voltage tier, singleblock and multiblock.
@@ -59,7 +60,7 @@ drukoz and friends on the server (a handful of people). drukoz runs the server a
 
 ### 3.5 Power
 - Spare power is an **estimate** from what is built (the world file does not record live usage).
-- Shows **clear-weather and rain** figures and an average. (Corrected after research: high-pressure solar boilers stay hot through about 95 % of a clear Minecraft day; rain and thunder are what stop them, after roughly 5–7 minutes. Calcification lowers their output over time and is read from the world.) A line "fits" when the average covers it and the battery buffers cover a rain outage (my call for the exact rule).
+- Shows **day and night** figures (solar boilers make no steam at night; battery buffers carry the night) and a 24-hour average. A line "fits" when the average covers it and the buffers cover the night (my call for the exact rule).
 - When a line doesn't fit: **warn and suggest** how many extra boilers/turbines (or other generators available at their tier) would cover it, as an optional add-on to the build list (decided). Generators are not auto-placed on the map.
 - Never plans a connection that would overvolt a machine (GT machines explode) or overload a cable; adds transformers where needed.
 
@@ -160,7 +161,7 @@ My calls (open to change):
 - Suggest (not force) reusing machines the group already owns.
 - "We already make this" inputs keep their normal cost (not free).
 - Crafting-table steps default to hand-crafting.
-- Power "fits" rule: the average covers the line and buffers cover a rain outage.
+- Power "fits" rule: 24-hour average covers the line and buffers cover the night.
 - Item/fluid icons from the game, same as block textures.
 
 ## 8. Left to the builder
