@@ -107,6 +107,76 @@ function minimize(lp: MainLp, cost: readonly number[], locks: readonly LpRow[], 
   return solveLp({ sense: 'min', colCost: [...cost], colLower: new Array<number>(width).fill(0), colUpper, rows: [...lp.rows, ...locks] });
 }
 
+/** Branch-and-bound nodes the fewest-recipes MIP may use (Good Electronic Circuit at HV: optimal in well under 1,000). */
+const S3_MAX_NODES = 5000;
+/** A recipe left in by the MIP may run at most this many times the largest run count of the least-raw plan. */
+const S3_BIG_M = 10;
+
+/**
+ * S3 (prior-art §3.4 step 4: fewest distinct recipes, for simpler lines) as the MILP the prior art suggests: one binary
+ * per step recipe, `runs ≤ M × binary`, minimizing the binaries within `locks`. Returns the recipe columns it leaves
+ * out, or null when it finds no whole solution (then `fewestRecipes` approximates it).
+ */
+async function fewestRecipesMip(lp: MainLp, s1: readonly number[], locks: readonly LpRow[]): Promise<Set<number> | null> {
+  const steps: number[] = [];
+  lp.recipes.forEach((r, j) => {
+    if (r.kind === 'recipe') steps.push(j);
+  });
+  let largest = 0;
+  for (const j of steps) largest = Math.max(largest, s1[j] ?? 0);
+  if (steps.length === 0 || largest <= TINY) return null;
+  const width = lp.rawCost.length;
+  const bigM = largest * S3_BIG_M;
+  const rows: LpRow[] = [...lp.rows, ...locks, ...steps.map((j, k): LpRow => ({ lower: -Infinity, upper: 0, entries: [[j, 1], [width + k, -bigM]] }))];
+  const all = width + steps.length;
+  const result = await solveLp({
+    sense: 'min', colCost: new Array<number>(all).fill(0).fill(1, width), colLower: new Array<number>(all).fill(0),
+    colUpper: new Array<number>(all).fill(Infinity).fill(1, width), rows,
+    integer: new Array<boolean>(all).fill(false).fill(true, width), maxNodes: S3_MAX_NODES,
+  });
+  if (result.status !== 'optimal' && result.status !== 'feasible') return null;
+  const off = new Set<number>();
+  steps.forEach((j, k) => {
+    if ((result.x[width + k] ?? 0) < 0.5) off.add(j);
+  });
+  return off;
+}
+
+/** Rounds of the fewest-recipes stage. */
+const S3_ROUNDS = 4;
+/** A recipe's weight in the fewest-recipes stage is 1 / (its runs in the round before + this × the largest runs). */
+const S3_DELTA = 1e-6;
+
+/**
+ * S3 (prior-art §3.4 step 4: fewer distinct recipes, for simpler lines), as reweighted L1 instead of a MILP: each round
+ * minimizes Σ runs_r / (runs_r of the round before + δ) within `locks`, so a recipe that ran little is pushed out when
+ * the least raw material does not need it. On the real export the least raw material is often reached by many plans
+ * (free water, air and cobblestone, cell fill/empty pairs, three cutting-saw variants), and power alone then picked
+ * mixtures such as two electrolysis variants of the same salt water. Returns the recipe columns the plan no longer uses,
+ * or null when no round solves.
+ */
+async function fewestRecipes(lp: MainLp, locks: readonly LpRow[]): Promise<Set<number> | null> {
+  const step = lp.recipes.map((r) => r.kind === 'recipe');   // ore-dictionary conversions are not steps
+  let x: readonly number[] | null = null;
+  let solved = false;
+  for (let round = 0; round < S3_ROUNDS; round++) {
+    let largest = 0;
+    if (x !== null) for (let j = 0; j < lp.firstBuy; j++) largest = Math.max(largest, x[j] ?? 0);
+    const delta = largest * S3_DELTA;
+    const prev = x;
+    // The first round weighs every step 1 (least total runs); later ones 1 / (runs before + δ).
+    const cost = lp.canonical.map((_, j) => (j >= lp.firstBuy || step[j] !== true ? 0 : prev === null ? 1 : 1 / ((prev[j] ?? 0) + delta + TINY)));
+    const result = await minimize(lp, cost, locks);
+    if (result.status !== 'optimal') break;
+    x = result.x;
+    solved = true;
+  }
+  if (!solved) return null;
+  const off = new Set<number>();
+  for (let j = 0; j < lp.firstBuy; j++) if (((x as readonly number[])[j] ?? 0) <= TINY) off.add(j);
+  return off;
+}
+
 /**
  * `Σ cost·column ≤ value`, so the next stage keeps this stage's optimum (no row when the cost is all 0). The lock has no
  * slack: with `value × (1 + 1e-9) + 1e-9` S2 buys that much more raw material to save power (a hammer-crafted plate at
@@ -165,18 +235,40 @@ async function freeLoop(lp: MainLp): Promise<LpRecipe[]> {
   return lp.recipes.filter((_, j) => (x[j] ?? 0) > TINY);
 }
 
-/** S2 and S4 on top of an optimal S1, then the rounded maps. */
+/** The least raw material without the recipes S3 leaves out may exceed S1 by this much (relative) for S3 to stand. */
+const S3_TOLERANCE = 1e-6;
+
+/**
+ * S3 and the lock the later stages keep. The MIP's big-M lets a recipe it leaves out still run a tiny amount (its
+ * binary sits just above 0), so the least raw material is solved again without the left-out recipes: within
+ * `S3_TOLERANCE` of S1 the stages lock that instead, else S3 is dropped (and approximated without a MIP).
+ */
+async function simplest(lp: MainLp, s1: LpResult, locks: LpRow[]): Promise<{ off: Set<number>; locks: LpRow[] }> {
+  const candidates = [await fewestRecipesMip(lp, s1.x, locks), await fewestRecipes(lp, locks)];
+  for (const off of candidates) {
+    if (off === null || off.size === 0) continue;
+    const again = await minimize(lp, lp.rawCost, [], Infinity, off);
+    if (again.status === 'optimal' && again.objective <= s1.objective * (1 + S3_TOLERANCE) + TINY) {
+      return { off, locks: lockRow(lp.rawCost, Math.max(again.objective, s1.objective)) };
+    }
+  }
+  return { off: new Set(), locks };
+}
+
+/** S3, S2 and S4 on top of an optimal S1, then the rounded maps. */
 async function finish(lp: MainLp, s1: LpResult, warnings: PlanWarning[]): Promise<Solution> {
-  // S2 and S4 only break ties: a stage that does not solve (numerically, or S2 unbounded by a recipe with negative EU)
-  // keeps the previous stage's plan, which already uses the least raw material.
+  // S3, S2 and S4 only break ties: a stage that does not solve (numerically, or S2 unbounded by a recipe with negative
+  // EU) keeps the previous stage's plan, which already uses the least raw material. S3 runs before power, so power
+  // never picks a longer chain among equally cheap ones; the later stages keep to the recipes S3 left.
   let best = s1;
-  const locks = lockRow(lp.rawCost, s1.objective);
-  const s2 = await minimize(lp, lp.power, locks);
+  const open = lockRow(lp.rawCost, s1.objective);
+  const { off, locks } = await simplest(lp, s1, open);
+  const s2 = await minimize(lp, lp.power, locks, Infinity, off);
   if (s2.status === 'optimal') {
     best = s2;
     locks.push(...lockRow(lp.power, s2.objective));
   }
-  const s4 = await minimize(lp, lp.canonical, locks);
+  const s4 = await minimize(lp, lp.canonical, locks, Infinity, off);
   if (s4.status === 'optimal') best = s4;
 
   let rawCost = 0;
@@ -199,13 +291,13 @@ function cappedList(ids: readonly string[]): string {
 }
 
 /**
- * The cheapest steady state that meets `demand` (per unit of time): S1 least raw material (spec §3.3), S2 least power among
- * those, S4 the least total of runs, purchases and sinks (canonical). After S1 the loop guard may ban recipes that make
- * matter from nothing and start again, 5 times at most: then one `free-loop` warning names what it left out (`banned`).
- * When the solve after the fifth ban still finds such a loop, the line is `infeasible` with one warning: there is no
- * honest way to make the targets from these recipes, and the plan never shows one that makes something from nothing
- * (Review Focus #4). Infeasible → the goods that block it, unless the graph was cut short (`truncated`): goods it never walked
- * look unmakeable there, so it names none.
+ * The cheapest steady state that meets `demand` (per unit of time): S1 least raw material (spec §3.3), S3 as few recipes
+ * as that allows (`simplest`), S2 least power among those, S4 the least total of runs, purchases and sinks (canonical).
+ * After S1 the loop guard may ban recipes that make matter from nothing and start again, 5 times at most: then one
+ * `free-loop` warning names what it left out (`banned`). When the solve after the fifth ban still finds such a loop, the
+ * line is `infeasible` with one warning: there is no honest way to make the targets from these recipes, and the plan
+ * never shows one that makes something from nothing (Review Focus #4). Infeasible → the goods that block it, unless the
+ * graph was cut short (`truncated`): goods it never walked look unmakeable there, so it names none.
  */
 export async function solveLine(graph: CandidateGraph, demand: ReadonlyMap<StuffKey, number>): Promise<Solution> {
   const banned: string[] = [];

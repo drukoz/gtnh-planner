@@ -13,14 +13,19 @@ const loadHighs = highsDefault as unknown as typeof highsDefault.default;
 export interface LpRow { lower: number; upper: number; entries: Array<[number /* column */, number /* coefficient */]> }
 export interface LpModel {
   sense: 'min' | 'max'; colCost: number[]; colLower: number[]; colUpper: number[] /* Infinity allowed */; rows: LpRow[];
-  // optional additions (Make N's whole runs, make-n.ts)
+  // optional additions (fewest recipes, solve.ts; Make N's whole runs, make-n.ts)
   /** Per column, whether it must be a whole number: the model is then a MIP. */
   integer?: readonly boolean[];
-  /** Seconds the solve may take; a MIP that runs out reports `error`. */
+  /** A MIP stops after this many branch-and-bound nodes (deterministic, unlike a time limit) with its best solution. */
+  maxNodes?: number;
+  /** Seconds the solve may take; a MIP that runs out keeps its best whole solution (`feasible`), if it found one. */
   timeLimit?: number;
 }
-/** `objective` and `x` (one value per column) are meaningful only when `optimal`; otherwise they are NaN and `[]`. */
-export interface LpResult { status: 'optimal' | 'infeasible' | 'unbounded' | 'error'; objective: number; x: number[] }
+/**
+ * `objective` and `x` (one value per column) are meaningful only when `optimal`, or `feasible` (a MIP that stopped at
+ * its node or time limit with a whole solution); otherwise they are NaN and `[]`.
+ */
+export interface LpResult { status: 'optimal' | 'feasible' | 'infeasible' | 'unbounded' | 'error'; objective: number; x: number[] }
 
 let loading: Promise<Highs> | null = null;
 
@@ -110,7 +115,11 @@ export async function solveLp(model: LpModel): Promise<LpResult> {
   const data = modelData(highs, model);
   const statuses = highs.constants.modelStatus;
   return highs.withModel((m): LpResult => {
-    m.options.set(model.timeLimit === undefined ? { output_flag: false } : { output_flag: false, time_limit: model.timeLimit });
+    m.options.set({
+      output_flag: false,
+      ...(model.timeLimit === undefined ? {} : { time_limit: model.timeLimit }),
+      ...(model.maxNodes === undefined ? {} : { mip_max_nodes: model.maxNodes, mip_rel_gap: 0, mip_feasibility_tolerance: 1e-10 }),
+    });
     m.passModel(data);
     try {
       m.run();
@@ -126,6 +135,10 @@ export async function solveLp(model: LpModel): Promise<LpResult> {
       case statuses.unboundedOrInfeasible:
         return notOptimal('unbounded');
       default:
+        // A MIP stopped by its node or time limit keeps its best whole solution, if it found one (status 2 = feasible).
+        if (model.integer !== undefined && Number(m.info.get('primal_solution_status')) === 2) {
+          return { status: 'feasible', objective: m.getObjectiveValue(), x: Array.from(m.getSolution().colValue) };
+        }
         return notOptimal('error');
     }
   });
