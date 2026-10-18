@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec, type RecipeSpec } from '../../helpers/pack-spec.ts';
-import { solveLine, findBlockers } from '../../../src/server/planner/solve.ts';
+import { solveLine, findBlockers, standaloneCosts } from '../../../src/server/planner/solve.ts';
 import {
   buildCandidates, type CandidateGraph, type GoodInfo, type LeafDecision, type LeafOracle, type LpRecipe, type PlanEnv,
 } from '../../../src/server/planner/candidates.ts';
@@ -61,6 +61,18 @@ describe('solveLine', () => {
     const s = await solveLine(graphFor(p, 'y@0', 1, leaf), one('y@0'));
     expect([...s.runs.keys()]).toEqual(['honest']);
     expect(s.warnings).toEqual([expect.objectContaining({ code: 'free-loop', text: expect.stringContaining('loop-a') })]);
+  });
+  it('prices a good at what making it on its own costs, never through the target', async () => {
+    const p = packFromSpec({ machines: [{ mteId: 1, name: 'M', maps: ['gt.recipe.macerator'], tier: 1 }], recipes: [
+      { id: 'smelt', map: 'gt.recipe.macerator', in: [['iron@0', 1], ['coal@0', 1]], out: [['steel@0', 1], ['slag@0', 1]], eut: 2 },
+      { id: 'magnetize', map: 'gt.recipe.macerator', in: [['steel@0', 1]], out: [['magnetic@0', 1]], eut: 2 },
+      { id: 'use', map: 'gt.recipe.macerator', in: [['magnetic@0', 1]], out: [['t@0', 1]], eut: 2 },
+      { id: 'other', map: 'gt.recipe.macerator', in: [['steel@0', 1]], out: [['t@0', 1]], eut: 2 }] });
+    const leaf: LeafOracle = (k) => (k === 'iron@0' || k === 'coal@0' ? { buyable: true, cost: 1, leafClass: 'direct' } : { buyable: false, cost: 0, leafClass: null });
+    const g = graphFor(p, 't@0', 1, leaf);
+    const costs = await standaloneCosts(g, ['steel@0', 'magnetic@0', 'nowhere@0']);
+    expect([...costs]).toEqual([['steel@0', 2], ['magnetic@0', 2], ['nowhere@0', undefined]]);   // the slag is sunk
+    expect((await standaloneCosts(g, ['magnetic@0'], ['steel@0'])).get('magnetic@0')).toBe(Infinity);
   });
   it('free inputs are still inputs (water electrolysis is not a loop)', async () => {
     const p = packFromSpec({ machines: [{ mteId: 1, name: 'E', maps: ['gt.recipe.electrolyzer'], tier: 1 }],

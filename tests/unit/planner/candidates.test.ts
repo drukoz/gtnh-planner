@@ -97,13 +97,14 @@ describe('candidate rules without a fixture test above', () => {
   const M = (mteId: number, maps: string[], tier: number) => ({ mteId, name: `M${mteId}`, maps, tier });
   it('has one exclusion rule per default excluded category, each matching its recipes', () => {
     expect(Object.keys(EXCLUSION_RULES)).toEqual([...DEFAULT_EXCLUDED_CATEGORIES]);
-    const p = packFromSpec({ items: [{ key: 'stone@0', oreDict: ['dustStone'] }], recipes: [
+    const p = packFromSpec({ items: [{ key: 'stone@0', oreDict: ['dustStone'] }, { key: 'obsidian@0', oreDict: ['dustObsidian'] }], recipes: [
       { id: 'flagged', map: 'gt.recipe.macerator', flags: { recycling: true } }, { id: 'mf', map: 'gt.recipe.massfab' },
       { id: 'rep', map: 'gt.recipe.replicator' }, { id: 'rc', map: 'ic2.recycler' }, { id: 'sb', map: 'ic2.scrapbox' },
-      { id: 'stone', map: 'gt.recipe.centrifuge', in: [['stone@0', 1]] }, { id: 'plain', map: 'gt.recipe.centrifuge', in: [['a@0', 1]] }] });
+      { id: 'stone', map: 'gt.recipe.centrifuge', in: [['stone@0', 1]] }, { id: 'plain', map: 'gt.recipe.centrifuge', in: [['a@0', 1]] },
+      { id: 'obsidian', map: 'gt.recipe.electrolyzer', in: [['obsidian@0', 12]] }, { id: 'lava', map: 'gt.recipe.centrifuge', in: [['fluid:lava', 100]] }] });
     const hits = (id: string) => Object.keys(EXCLUSION_RULES).filter((k) => EXCLUSION_RULES[k]!(p.recipeById.get(id)!, p));
-    expect(['flagged', 'mf', 'rep', 'rc', 'sb', 'stone', 'plain'].map(hits))
-      .toEqual([['recycling'], ['massfab'], ['replicator'], ['scrap'], ['scrap'], ['lava-centrifuge'], []]);
+    expect(['flagged', 'mf', 'rep', 'rc', 'sb', 'stone', 'plain', 'obsidian', 'lava'].map(hits))
+      .toEqual([['recycling'], ['massfab'], ['replicator'], ['scrap'], ['scrap'], ['lava-centrifuge'], [], ['lava-centrifuge'], ['lava-centrifuge']]);
   });
   it('reports no-machine, and the voltage tier for multiblocks', () => {
     const p = packFromSpec({ machines: [{ mteId: 1, name: 'Big', maps: ['gt.recipe.big'], kind: 'multiblock' }],

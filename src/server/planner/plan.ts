@@ -10,15 +10,15 @@ import type { DimensionInfo, Pack, Product } from '../../shared/types/pack.ts';
 import type {
   BomLine, Plan, PlanContext, PlanFlow, PlanSettings, PlanStep, PlanWarning, PowerSummary, RawInput, SourceInfo,
 } from '../../shared/types/plan.ts';
-import { unlockText } from './availability.ts';
+import { isBaseItem, unlockText } from './availability.ts';
 import { planBasis, type PlanBasis } from './basis.ts';
 import { buildBom } from './bom.ts';
-import { buildCandidates, type CandidateGraph, type LpRecipe } from './candidates.ts';
+import { buildCandidates, type CandidateGraph, type LeafOracle, type LpRecipe } from './candidates.ts';
 import { analyzeCosts, makeLeafOracle, type CostAnalysis } from './costs.ts';
 import { buildFlows, planSteps } from './machines.ts';
 import { makeN, wholeRuns } from './make-n.ts';
 import { yieldToEventLoop } from './lp.ts';
-import { MAX_NAMED_LOOP_RECIPES, solveLine, type Solution } from './solve.ts';
+import { MAX_NAMED_LOOP_RECIPES, solveLine, standaloneCosts, type Solution } from './solve.ts';
 import { buildSteps } from './steps.ts';
 
 export { effectiveTier } from './basis.ts';
@@ -137,22 +137,25 @@ export class PlanCache {
 interface CostModel { graph: CandidateGraph; costs: CostAnalysis }
 
 /**
- * Raw-material costs over a candidate graph built without pins and stop items, so every recipe of a good is an
- * alternative and costs count raw material, not stop prices. A stop item that graph cannot make (nothing at the tier
- * makes it, but the group already does) would cost Infinity there and hide every recipe that uses it, the one the
- * plan chose among them; such stop items are leaves at their stop price (key override, else price) instead.
+ * Raw-material costs over a candidate graph built without pins and stop items and with derived base materials routed,
+ * so every recipe of a good is an alternative, costs count raw material (not stop prices), and every derived material
+ * the line may buy has the cost of making it (`makeLeafOracle`'s `derivedCost`). A stop item or derived material that
+ * graph cannot make (nothing at the tier makes it, but the group already does, or gets it some other way) would cost
+ * Infinity there and hide every recipe that uses it, the one the plan chose among them; such goods are leaves at their
+ * stop price (key override, else price) instead.
  */
 async function costModel(pack: Pack, settings: PlanSettings, basis: PlanBasis, target: StuffKey): Promise<CostModel> {
   const analyze = async (stopItems: StuffKey[]): Promise<CostModel> => {
     await yieldToEventLoop();
-    const s: PlanSettings = { ...settings, recipeChoice: {}, stopItems };
-    const leaf = makeLeafOracle(pack, s, basis.avail, basis.prices, undefined, basis.madeCost);
-    const graph = buildCandidates(pack, s, basis.env, leaf, [target]);
+    const s: PlanSettings = { ...settings, recipeChoice: {}, stopItems, routeDerived: true };
+    const graph = buildCandidates(pack, s, basis.env, makeLeafOracle(pack, s, basis.avail, basis.prices), [target]);
     return { graph, costs: await analyzeCosts(graph) };
   };
   const open = await analyze([]);
-  const unmade = settings.stopItems.filter((key) => key !== target && open.graph.goods.has(key) && !Number.isFinite(open.costs.cost(key)));
-  return unmade.length > 0 ? analyze(unmade) : open;
+  const unmade = (key: StuffKey): boolean => key !== target && open.graph.goods.has(key) && !Number.isFinite(open.costs.cost(key));
+  const derived = [...open.graph.goods.keys()].filter((key) => basis.avail.classOf(key) === 'derived' && isBaseItem(pack, key));
+  const stuck = [...new Set([...settings.stopItems, ...derived])].filter(unmade);
+  return stuck.length > 0 ? analyze(stuck) : open;
 }
 
 /** A swap list holds at most this many recipes (the one in use always among them). */
@@ -465,7 +468,7 @@ function assemble(pack: Pack, settings: PlanSettings, basis: PlanBasis, body: Pl
  * nothing reachable makes gives an `infeasible` plan whose warnings say what blocks it and what unlocks it.
  */
 export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanContext): Promise<Plan> {
-  // Each synchronous stretch (availability and rough costs, each candidate walk, each LP solve) yields first, so other
+  // Each synchronous stretch (availability, each candidate walk, each LP solve) yields first, so other
   // requests and live events go on between them (ledger 200).
   await yieldToEventLoop();
   const basis = planBasis(pack, settings, ctx);
@@ -480,9 +483,24 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
     const cost = model.costs.cost(key);
     return Number.isFinite(cost) ? cost : basis.prices.price(key);
   };
-  const leaf = makeLeafOracle(pack, settings, basis.avail, basis.prices, stopCost, basis.madeCost);
+  // Derived leaves cost what making them on their own costs (`standaloneCosts` over the cost model's graph, where they
+  // are routed, never consuming the target): first the graph at their plain prices, then again with the derived leaves
+  // it buys priced, twice at most. One only a chain through the target makes is no leaf (Infinity).
+  const priced = new Map<StuffKey, number>();
+  const tried = new Set<StuffKey>();
+  const leafWith = (): LeafOracle => makeLeafOracle(pack, settings, basis.avail, basis.prices, stopCost, (key) => priced.get(key));
+  let leaf = leafWith();
   await yieldToEventLoop();
-  const graph = buildCandidates(pack, settings, basis.env, leaf, [target]);
+  let graph = buildCandidates(pack, settings, basis.env, leaf, [target]);
+  for (let round = 0; round < 2; round++) {
+    const unpriced = [...graph.goods.values()].filter((g) => g.leafClass === 'derived' && g.buyable && !tried.has(g.key)).map((g) => g.key);
+    if (unpriced.length === 0) break;
+    for (const key of unpriced) tried.add(key);
+    for (const [key, cost] of await standaloneCosts(model.graph, unpriced, [target])) if (cost !== undefined) priced.set(key, cost);
+    leaf = leafWith();
+    await yieldToEventLoop();
+    graph = buildCandidates(pack, settings, basis.env, leaf, [target]);
+  }
   const batch = settings.mode === 'makeN';
   const demand = new Map([[target, batch ? settings.amount : settings.amount / SECONDS_PER[settings.per]]]);
   const sol = await solveLine(graph, demand);
@@ -525,7 +543,7 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
   const raw = rawInputsOf(pack, graph, basis, ctx, buys, made?.totalSeconds ?? null);
   // Make N steps of one machine type share that type's machines (makeN), so they draw at most once per type.
   const power = powerSummary(steps, { sharedByType: batch });
-  const bom = await buildBom(pack, steps, { settings, env: basis.env, leaf: basis.leaf, ctx });
+  const bom = await buildBom(pack, steps, { settings, env: basis.env, leaf, ctx });
   const body: PlanBody = {
     status: 'ok', unlocks: [], steps, flows, rawInputs: raw.rawInputs, byproducts: byproductsOf(graph, sinks, target), power,
     buildList: bom.lines, buildTotals: bom.totals,

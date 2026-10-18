@@ -99,6 +99,8 @@ class CostHeap {
   }
 }
 const LAVA: StuffKey = 'fluid:lava';
+/** Dusts of rock the line gets for free: stone (cobblestone) and obsidian (lava). */
+const FREE_ROCK_DUSTS: readonly string[] = ['dustStone', 'dustObsidian'];
 
 function anyMapContains(r: Recipe, part: string): boolean {
   return r.maps.some((map) => map.includes(part));
@@ -132,8 +134,10 @@ export const EXCLUSION_RULES: Record<string, (r: Recipe, pack: Pack) => boolean>
   massfab: (r) => anyMapContains(r, 'massfab'),
   replicator: (r) => anyMapContains(r, 'replicator'),
   scrap: (r) => anyMapContains(r, 'recycler') || anyMapContains(r, 'scrapbox'),
-  'lava-centrifuge': (r, pack) => (anyMapContains(r, 'centrifuge') && r.inputs.some((ing) => ing.options.some(
-    (o) => o.key === LAVA || (pack.items.get(o.key)?.oreDict.includes('dustStone') ?? false))))
+  // Centrifuging or electrolysing lava, stone dust (free cobblestone) or obsidian dust (free lava through a fluid
+  // solidifier): 12 obsidian dust electrolyse into magnesium, iron, silicon and oxygen, which made silicon free.
+  'lava-centrifuge': (r, pack) => ((anyMapContains(r, 'centrifuge') || anyMapContains(r, 'electrolyzer') || anyMapContains(r, 'multielectro')) && r.inputs.some((ing) => ing.options.some(
+    (o) => o.key === LAVA || (pack.items.get(o.key)?.oreDict.some((name) => FREE_ROCK_DUSTS.includes(name)) ?? false))))
     // The Large Thermal Refinery's lava filter: 1,000 L of free lava → a few % of a copper, tin, gold, silver or tantalum
     // ingot. With lava free it made every such metal cost 0 (24 refineries, 5.7M L lava/min for 2 Good Circuits/min).
     || (anyMapContains(r, 'thermalboiler') && r.outputs.some((p) => !isFluidKey(p.key))

@@ -246,6 +246,47 @@ export async function solveLine(graph: CandidateGraph, demand: ReadonlyMap<Stuff
   }
 }
 
+/**
+ * The least raw material that makes one unit of each of `keys` on its own in `graph`: S1 of the main LP with that one
+ * demand and every byproduct sunk, no recipe consuming a good of `notInputs` (the line's target). It is what buying the
+ * good instead of making it should cost, without the arbitrary split of a recipe's cost between its co-products that
+ * the cost analysis (costs.ts) makes (pyrolysis there priced charcoal at 0 and gave the whole log to its wood gas).
+ * Infinity when only a chain through `notInputs` makes the good (Magnetic Steel from the Steel target); undefined when
+ * the graph cannot make it at all.
+ */
+export async function standaloneCosts(
+  graph: CandidateGraph, keys: readonly StuffKey[], notInputs: readonly StuffKey[] = [],
+): Promise<Map<StuffKey, number | undefined>> {
+  const out = new Map<StuffKey, number | undefined>();
+  if (keys.length === 0) return out;
+  const lp = mainLp(graph, graph.recipes, new Map());
+  const rowOf = new Map(lp.goods.map((key, g) => [key, g]));
+  const width = lp.rawCost.length;
+  const barredKeys = new Set(notInputs);
+  const barred = new Set<number>();
+  lp.recipes.forEach((r, j) => {
+    if (r.coeffs.some(([key, c]) => c < 0 && barredKeys.has(key))) barred.add(j);
+  });
+  const solve = (g: number, off: ReadonlySet<number>): Promise<LpResult> => {
+    const colUpper = new Array<number>(width).fill(Infinity);
+    for (const j of off) colUpper[j] = 0;
+    const rows = lp.rows.map((row, i) => (i === g ? { ...row, lower: 1, upper: 1 } : row));
+    return solveLp({ sense: 'min', colCost: [...lp.rawCost], colLower: new Array<number>(width).fill(0), colUpper, rows });
+  };
+  for (const key of keys) {
+    const g = rowOf.get(key);
+    if (g === undefined) {
+      out.set(key, undefined);
+      continue;
+    }
+    const result = await solve(g, barred);
+    if (result.status === 'optimal') out.set(key, Math.max(0, result.objective));
+    else if (barred.size > 0 && (await solve(g, new Set())).status === 'optimal') out.set(key, Infinity);
+    else out.set(key, undefined);
+  }
+  return out;
+}
+
 /** Forward fixpoint: buyable goods are makeable; a recipe fires once every good it consumes is; its outputs then are. */
 function makeableGoods(graph: CandidateGraph): Set<StuffKey> {
   const makeable = new Set<StuffKey>();

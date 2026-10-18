@@ -230,7 +230,7 @@ describe('planLine', () => {
                 { id: 'make-t', map: 'gt.recipe.macerator', in: [['y@0', 1]], out: [['t@0', 1]], eut: 2 }],
       worldgen: { veins: [vein('ore.mix.raw', 'Raw')] },
     });
-    // A loop on the target itself never survives: rough costs never take the target as an input. One upstream does.
+    // A loop upstream of the target: the guard leaves it out and names its recipes.
     const p = await planLine(loop, S({ target: 't@0', tier: 1 }), emptyContext());
     expect(p.steps.map((s) => s.id)).toEqual(['honest', 'make-t']);
     // The left-out recipes by machine and product, not by their 16-hex ids.

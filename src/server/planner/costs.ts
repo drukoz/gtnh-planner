@@ -71,33 +71,40 @@ export function makePrices(pack: Pack, overrides: Record<string, number>): Price
 
 const NOT_A_LEAF: LeafDecision = { buyable: false, cost: 0, leafClass: null };
 const UNAVAILABLE: LeafDecision = { buyable: false, cost: 0, leafClass: 'unavailable' };
-/**
- * A derived base item bought at what making it costs is marked up by this share, so a line that can make the target
- * itself never buys a derived form of it instead at the same cost (Magnetic Steel Ingot demagnetized into the Steel
- * Ingot target, Molten Iron solidified into an Iron Plate).
- */
-const DERIVED_MARKUP = 1e-6;
+
+/** A cost override for `key` itself, its GT material, or the material of its molten fluid (the rules of `makePrices`). */
+export function hasCostOverride(pack: Pack, overrides: Record<string, number>, key: StuffKey): boolean {
+  if (Object.hasOwn(overrides, key)) return true;
+  const material = pack.items.get(key)?.gt?.material
+    ?? (key.startsWith(MOLTEN_PREFIX) ? moltenMaterials(pack).get(key.slice(MOLTEN_PREFIX.length)) : undefined);
+  return material !== undefined && Object.hasOwn(overrides, material);
+}
 
 /**
  * Which goods the line buys (spec §3.3, §5): "we already make this" items at their cost (key override, else `stopCost`,
  * else the price), free and natural goods, and base items the group can get at its tier; a derived base item only
- * while the project does not route derived materials, and then (without a key override) at `madeCost`, what its
- * chain would cost the line (rough.ts), marked up by DERIVED_MARKUP; not at all when that is Infinity (only a chain
- * through the target makes it); at its price when `madeCost` has no estimate. Base items it cannot get are never
- * buyable.
+ * while the project does not route derived materials, and then at `derivedCost` when that knows what making it costs
+ * and no cost override names it, else at its price. When `derivedCost` says Infinity (only a chain through the line's
+ * target makes it: Magnetic Steel for Steel) it is no leaf at all, so the line never buys a form of its own target.
+ * Base items it cannot get are never buyable.
+ *
+ * `derivedCost` is what making the derived item on its own costs (planLine: `standaloneCosts` over the cost model's
+ * graph, where derived materials are routed), undefined when that is not known. A flat price of 1 made exotic derived
+ * dusts the cheapest way to make ordinary parts (Poly-Si and gallium arsenide wafers for an Electronic Circuit), and a
+ * price above what the line pays to make it in place made the LP route the whole chain anyway (the 20-step oil chain
+ * behind an Epoxid Bar priced at 1 while making it costs 0.69). At exactly that cost, buying it and making it in place
+ * tie and the later stages (fewest recipes, then power) choose.
  */
 export function makeLeafOracle(
   pack: Pack, settings: PlanSettings, avail: Availability, prices: PriceTable, stopCost?: (key: StuffKey) => number,
-  madeCost?: (key: StuffKey) => number | undefined,
+  derivedCost?: (key: StuffKey) => number | undefined,
 ): LeafOracle {
-  /** A derived leaf: its key override, else what making it costs (marked up), else its price without `madeCost`. */
+  /** A derived leaf: its price under a cost override, else what making it costs, else its price. */
   const derived = (key: StuffKey): LeafDecision => {
-    const override = own(settings.costOverrides, key);
-    if (override !== undefined) return { buyable: true, cost: override, leafClass: 'derived' };
-    const made = madeCost?.(key);
+    const made = hasCostOverride(pack, settings.costOverrides, key) ? undefined : derivedCost?.(key);
     if (made === undefined) return { buyable: true, cost: prices.price(key), leafClass: 'derived' };
     // Only a chain through the target itself makes it: the line cannot buy it to make the target.
-    return Number.isFinite(made) ? { buyable: true, cost: made * (1 + DERIVED_MARKUP), leafClass: 'derived' } : NOT_A_LEAF;
+    return Number.isFinite(made) ? { buyable: true, cost: made, leafClass: 'derived' } : NOT_A_LEAF;
   };
   const expand = new Set(settings.expandItems);
   const stop = new Set(settings.stopItems);
