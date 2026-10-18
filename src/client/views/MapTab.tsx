@@ -172,6 +172,12 @@ function ScanSelect(props: {
   );
 }
 
+/**
+ * The picker's text for a finished scan without bases. A scan copies region files, and so draws map tiles, only around
+ * its bases (`copyBaseRegions` in scan.worker.ts), so such a scan has no map; the planner then counts the whole world.
+ */
+export const NO_BASES_TEXT = 'This scan found no bases, so the map has nothing to show (a scan keeps the map only around bases); the plan then counts the whole world.';
+
 function WorldLink(): ReactElement {
   return <a href="/world" onClick={(e) => followLink(e, '/world')}>Scan the world</a>;
 }
@@ -203,7 +209,7 @@ function WorldPicker(props: { scans: WorldScanListItem[] | null; scansError: str
       {picked.error !== null && <p className="error">{`Could not load that scan: ${picked.error}`}</p>}
       {scanId !== '' && picked.scan === null && picked.error === null && <p className="muted">Loading the scan…</p>}
       {picked.scan !== null && (bases.length === 0 ? (
-        <p className="muted">This scan found no bases; the map then shows the whole Overworld and the plan counts the whole world.</p>
+        <p className="muted">{NO_BASES_TEXT}</p>
       ) : (
         <SelectField label="Base" value={base?.id ?? ''} onChange={setBaseId}>
           {bases.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}

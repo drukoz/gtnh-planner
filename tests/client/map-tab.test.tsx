@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { MapTab } from '../../src/client/views/MapTab.tsx';
+import { MapTab, NO_BASES_TEXT } from '../../src/client/views/MapTab.tsx';
 import { PROJECT_TABS, tabFromHash } from '../../src/client/views/project-tabs.ts';
 import { defaultSettings } from '../../src/shared/project/apply-op.ts';
 import type { Project } from '../../src/shared/types/project.ts';
@@ -31,6 +31,13 @@ describe('MapTab (server-side render only: effects do not run)', () => {
   });
 
   it('is the first project tab', () => expect(PROJECT_TABS[0]).toMatchObject({ id: 'map', label: 'Map' }));
+
+  it('says a scan without bases has no map, and that the plan then counts the whole world', () => {
+    // a scan copies region files (and draws tiles) only around its bases, so it cannot show the whole Overworld
+    expect(NO_BASES_TEXT).toContain('the map has nothing to show');
+    expect(NO_BASES_TEXT).toContain('the plan then counts the whole world');
+    expect(NO_BASES_TEXT).not.toMatch(/shows the whole/);
+  });
 
   it('opens the map when no tab is named and keeps the other tabs in their order', () => {
     expect(tabFromHash('')).toBe('map');
