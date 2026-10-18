@@ -104,6 +104,7 @@ drukoz and friends on the server (a handful of people). drukoz runs the server a
 - Each build is a project with its own link.
 - Shared state across the group: ticks, crossed-off steps, notes/pins, recipe choices, material costs, logistics mode, target/tier. Everyone sees the same thing (refresh or live).
 - No accounts: each person types their name once. One shared password keeps strangers out.
+- **Projects can be deleted** (added 2026-10-18 at the user's request) by anyone in the group, after confirming by typing the project name. A deleted project leaves the list at once (open tabs are told and go back to the list), stays restorable from "Recently deleted" for 7 days, then is removed for good with its notes, ticks, history and projector tokens (my call: restorable, so a mis-click never loses the group's progress).
 
 ### 3.12 Public GitHub project
 - The code lives in a **public GitHub repository** (account `drukoz`), project folder `~/gtnh-planner`.
