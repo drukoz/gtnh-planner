@@ -11,7 +11,14 @@ const loadHighs = highsDefault as unknown as typeof highsDefault.default;
 
 /** `lower ≤ Σ coefficient · x[column] ≤ upper`; ±Infinity for a missing bound; each column at most once per row. */
 export interface LpRow { lower: number; upper: number; entries: Array<[number /* column */, number /* coefficient */]> }
-export interface LpModel { sense: 'min' | 'max'; colCost: number[]; colLower: number[]; colUpper: number[] /* Infinity allowed */; rows: LpRow[] }
+export interface LpModel {
+  sense: 'min' | 'max'; colCost: number[]; colLower: number[]; colUpper: number[] /* Infinity allowed */; rows: LpRow[];
+  // optional additions (Make N's whole runs, make-n.ts)
+  /** Per column, whether it must be a whole number: the model is then a MIP. */
+  integer?: readonly boolean[];
+  /** Seconds the solve may take; a MIP that runs out reports `error`. */
+  timeLimit?: number;
+}
 /** `objective` and `x` (one value per column) are meaningful only when `optimal`; otherwise they are NaN and `[]`. */
 export interface LpResult { status: 'optimal' | 'infeasible' | 'unbounded' | 'error'; objective: number; x: number[] }
 
@@ -70,13 +77,16 @@ function modelData(highs: Highs, model: LpModel): ModelData {
     }
   });
 
-  return {
+  const data: ModelData = {
     numCols, numRows,
     sense: model.sense === 'max' ? highs.constants.objectiveSense.maximize : highs.constants.objectiveSense.minimize,
     colCost: Float64Array.from(model.colCost), colLower: Float64Array.from(model.colLower), colUpper: Float64Array.from(model.colUpper),
     rowLower, rowUpper,
     matrix: { format: 'csc', numRows, numCols, starts, indices, values },
   };
+  if (model.integer === undefined) return data;
+  const { integer, continuous } = highs.constants.variableType;
+  return { ...data, integrality: Int32Array.from(model.integer, (whole) => (whole ? integer : continuous)) };
 }
 
 /** A model without columns: every row's activity is 0 (HiGHS reports such a model as "empty" without checking rows). */
@@ -85,13 +95,22 @@ function solveEmpty(model: LpModel): LpResult {
   return feasible ? { status: 'optimal', objective: 0, x: [] } : notOptimal('infeasible');
 }
 
+/** Lets the event loop run queued I/O (other requests, SSE, ticks) before the next synchronous stretch of planning. */
+export function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => {
+    setImmediate(resolve);
+  });
+}
+
 export async function solveLp(model: LpModel): Promise<LpResult> {
   if (model.colCost.length === 0) return solveEmpty(model);
+  // A solve is synchronous WebAssembly: yield first, so a plan of a dozen solves never holds the thread for all of them.
+  await yieldToEventLoop();
   const highs = await runtime();
   const data = modelData(highs, model);
   const statuses = highs.constants.modelStatus;
   return highs.withModel((m): LpResult => {
-    m.options.set({ output_flag: false });
+    m.options.set(model.timeLimit === undefined ? { output_flag: false } : { output_flag: false, time_limit: model.timeLimit });
     m.passModel(data);
     try {
       m.run();

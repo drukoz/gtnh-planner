@@ -90,13 +90,36 @@ describe('loop guard and blockers', () => {
       { id: 'make-t', map: 'gt.recipe.macerator', in: [['y@0', 1]], out: [['t@0', 1]], eut: 2 }] });
     const s = await solveLine(graphFor(p, 't@0', 1, rawOnly), one('t@0'));
     expect(Object.fromEntries(s.runs)).toEqual({ honest: 1, 'make-t': 1 });
-    expect(s.warnings).toEqual([{ code: 'free-loop', text: 'Ignored recipes that make t@0 from nothing (likely a recipe data loop): loop-a, loop-b' }]);
+    expect(s.warnings).toEqual([{ code: 'free-loop', text: 'Ignored 2 recipes that make t@0 from nothing (likely a recipe data loop): loop-a, loop-b' }]);
+    expect(s.banned).toEqual(['loop-a', 'loop-b']);
   });
   it('names what blocks a target only a loop makes', async () => {
     const s = await solveLine(graphFor(packFromSpec({ machines, recipes: loop() }), 'y@0', 1, rawOnly), one('y@0'));
     expect(s.status).toBe('infeasible');
     expect(s.blockers).toEqual([{ key: 'y@0', reason: 'no-recipe' }]);
     expect(s.warnings.map((w) => w.code)).toEqual(['free-loop']);
+  });
+  it('gives up as infeasible, in one plain warning, when every round still finds a loop', async () => {
+    // Six loops, loop i making i + 1 y per x: the guard bans the best one each round, five times, and the sixth remains.
+    const loops: RecipeSpec[] = Array.from({ length: 6 }, (_, i) => [
+      { id: `loop${i}-a`, map: 'gt.recipe.macerator', in: [[`x${i}@0`, 1]], out: [['y@0', i + 2]], eut: 2 },
+      { id: `loop${i}-b`, map: 'gt.recipe.macerator', in: [['y@0', 1]], out: [[`x${i}@0`, 1]], eut: 2 },
+    ] as RecipeSpec[]).flat();
+    const p = packFromSpec({ machines, recipes: [...loops,
+      { id: 'honest', map: 'gt.recipe.macerator', in: [['raw@0', 1]], out: [['y@0', 1]], eut: 2 },
+      { id: 'make-t', map: 'gt.recipe.macerator', in: [['y@0', 1]], out: [['t@0', 1]], eut: 2 }] });
+    const s = await solveLine(graphFor(p, 't@0', 1, rawOnly), one('t@0'));
+    expect(s.status).toBe('infeasible');
+    expect(s.runs.size).toBe(0);
+    expect(s.blockers).toEqual([]);
+    expect(s.banned).toHaveLength(10);
+    expect(s.warnings).toEqual([{ code: 'free-loop', text: expect.stringMatching(/^No honest way to make t@0 here: .* even after leaving out loop5-a, loop5-b, loop4-a, loop4-b, loop3-a and 5 more$/) }]);
+  });
+  it('names no blockers in a graph cut short at its recipe cap', async () => {
+    const graph = graphFor(mini, 't:titanium_plate@0', 1);
+    expect((await solveLine(graph, one('t:titanium_plate@0'))).blockers).not.toEqual([]);
+    const cut = await solveLine({ ...graph, truncated: true }, one('t:titanium_plate@0'));
+    expect([cut.status, cut.blockers]).toEqual(['infeasible', []]);
   });
   it('lists at most five blockers, once each, sorted by key', () => {
     const p = packFromSpec({ machines, recipes: [

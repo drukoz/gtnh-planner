@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec, type IngredientSpec } from '../../helpers/pack-spec.ts';
-import { acceptRecipe, buildCandidates, virtualKey, type PlanEnv, type LeafOracle } from '../../../src/server/planner/candidates.ts';
+import { acceptRecipe, buildCandidates, MAX_RECIPES, virtualKey, type PlanEnv, type LeafOracle } from '../../../src/server/planner/candidates.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import { EXCLUSION_RULES } from '../../../src/server/planner/candidates.ts';
 import { DEFAULT_EXCLUDED_CATEGORIES } from '../../../src/shared/types/plan.ts';
+import { roughCosts } from '../../../src/server/planner/rough.ts';
 
 const pack = miniGt();
 const env = (tier: number, extra: Partial<PlanEnv> = {}): PlanEnv => ({ tier, reachable: new Set(['overworld', 'nether']), lowGravity: false,
@@ -136,11 +137,79 @@ describe('candidate rules without a fixture test above', () => {
     expect(g.recipes.map((r) => [r.id, r.coeffs])).toEqual([['both', [['b@0', 0.5], ['raw@0', -1], ['t@0', 1]]]]);
     expect([...g.goods.keys()].sort()).toEqual(['b@0', 'raw@0', 't@0']);
   });
-  it('stops adding recipes after 20,000', () => {
+  it('stops adding recipes at the cap (40,000) and says the graph was cut short', () => {
+    expect(MAX_RECIPES).toBe(40_000);
     const p = packFromSpec({ machines: [M(1, ['gt.recipe.macerator'], 1)],
-      recipes: Array.from({ length: 20_001 }, (_, i) => ({ id: `r${String(i).padStart(5, '0')}`, map: 'gt.recipe.macerator', out: [['t@0', 1]] as Array<[string, number]> })) });
+      recipes: Array.from({ length: MAX_RECIPES + 1 }, (_, i) => ({ id: `r${String(i).padStart(5, '0')}`, map: 'gt.recipe.macerator', out: [['t@0', 1]] as Array<[string, number]> })) });
     const g = buildCandidates(p, defaultSettings(), env(1), oracle, ['t@0']);
-    expect(g.recipes).toHaveLength(20_000);
+    expect(g.recipes).toHaveLength(MAX_RECIPES);
+    expect(g.truncated).toBe(true);
     expect(g.warnings).toEqual([{ code: 'graph-too-big', text: 'This chain is too large to plan in one go; mark some parts as "we already make this"' }]);
+    expect(buildCandidates(p, defaultSettings(), env(1), oracle, ['t@0'], { maxRecipes: 10 }).recipes).toHaveLength(10);
+  });
+});
+
+describe('real-data rules (final review)', () => {
+  const M = (mteId: number, maps: string[], tier: number) => ({ mteId, name: `M${mteId}`, maps, tier });
+  it('never makes goods from a generator fuel list', () => {
+    const p = packFromSpec({
+      maps: [{ id: 'bw.fuels.acidgens', specialValue: 'fuel' }, { id: 'gt.recipe.rtg' }],
+      machines: [{ mteId: 1, name: 'Large Neutralization Engine', maps: ['bw.fuels.acidgens'], kind: 'multiblock' },
+                 { mteId: 2, name: 'RTG', maps: ['gt.recipe.rtg'], kind: 'generator', tier: 1 }],
+      recipes: [{ id: 'acid', map: 'bw.fuels.acidgens', in: [['acid-cell@0', 1]], out: [['cell@0', 1]] },
+                { id: 'rtg', map: 'gt.recipe.rtg', in: [['pellet@0', 1]], out: [['depleted@0', 1]] }] });
+    expect(acceptRecipe(p, p.recipeById.get('acid')!, env(5))).toEqual({ ok: false, why: 'fuel' });
+    expect(acceptRecipe(p, p.recipeById.get('rtg')!, env(5))).toEqual({ ok: false, why: 'fuel' });
+  });
+  it('runs a multiblock recipe only where the group can build the multiblock (EU/t 0 endgame machines)', () => {
+    const p = packFromSpec({ machines: [{ mteId: 9, name: 'Eye of Harmony', maps: ['gt.recipe.eyeofharmony'], kind: 'multiblock' }],
+      recipes: [{ id: 'eoh', map: 'gt.recipe.eyeofharmony', out: [['t:iron_dust@0', 64]], eut: 0 }] });
+    const r = p.recipeById.get('eoh')!;
+    expect(acceptRecipe(p, r, env(1)).ok).toBe(true);                                         // no gate given: any multiblock
+    expect(acceptRecipe(p, r, env(1, { multiblocks: new Set() }))).toEqual({ ok: false, why: 'multiblock' });
+    expect(acceptRecipe(p, r, env(1, { multiblocks: new Set([9]) })).ok).toBe(true);
+  });
+  it('leaves out the recipes an env names as making ore from nothing, and smelting parts back into metal', () => {
+    const p = packFromSpec({
+      items: [{ key: 'spring@0', name: 'Steel Spring', gt: { prefix: 'spring', material: 'Steel' } }, { key: 'steel@0', name: 'Steel Ingot', gt: { prefix: 'ingot', material: 'Steel' } },
+              { key: 'sdust@0', name: 'Steel Dust', gt: { prefix: 'dust', material: 'Steel' } }],
+      machines: [M(1, ['gt.recipe.furnace'], 1), M(2, ['gt.recipe.electrolyzer'], 1)],
+      recipes: [{ id: 'back', map: 'gt.recipe.furnace', source: 'derived', in: [['spring@0', 1]], out: [['steel@0', 1]], eut: 4 },
+                { id: 'dust', map: 'gt.recipe.furnace', source: 'derived', in: [['sdust@0', 1]], out: [['steel@0', 1]], eut: 4 },
+                { id: 'obsidian', map: 'gt.recipe.electrolyzer', in: [['odust@0', 12]], out: [['t:iron_dust@0', 1], ['mg@0', 1]], eut: 90 }] });
+    expect(acceptRecipe(p, p.recipeById.get('back')!, env(1))).toEqual({ ok: false, why: 'excluded' });
+    expect(acceptRecipe(p, p.recipeById.get('back')!, env(1, { excluded: new Set() })).ok).toBe(true);
+    expect(acceptRecipe(p, p.recipeById.get('dust')!, env(1)).ok).toBe(true);
+    expect(acceptRecipe(p, p.recipeById.get('obsidian')!, env(1, { fromNothing: new Set(['obsidian']) }))).toEqual({ ok: false, why: 'excluded' });
+  });
+  it('with rough costs, walks only the producers that can matter', () => {
+    // t has a cheap recipe, one at 1.4× (kept), one at 3× (dropped), one making it as a 5% byproduct (dropped), and one
+    // that only hands back the container it took (never a producer of the empty container).
+    const p = packFromSpec({ machines: [M(1, ['gt.recipe.assembler'], 1)], recipes: [
+      { id: 'cheap', map: 'gt.recipe.assembler', in: [['a@0', 10]], out: [['t@0', 10]], eut: 2 },
+      { id: 'close', map: 'gt.recipe.assembler', in: [['a@0', 14]], out: [['t@0', 10]], eut: 2 },
+      { id: 'dear', map: 'gt.recipe.assembler', in: [['b@0', 3]], out: [['t@0', 1]], eut: 2 },
+      { id: 'side', map: 'gt.recipe.assembler', in: [['a@0', 1]], out: [['x@0', 1], ['t@0', 1, 0.05]], eut: 2 },
+      { id: 'use-cell', map: 'gt.recipe.assembler', in: [['t@0', 1], ['full@0', 1]], out: [['u@0', 1], ['cell@0', 1]], eut: 2 },
+      { id: 'make-cell', map: 'gt.recipe.assembler', in: [['b@0', 2]], out: [['cell@0', 1]], eut: 2 }] });
+    p.fluidContainers = [{ container: 'full@0', empty: 'cell@0', fluid: 'fluid:f', amount: 1000 }];
+    const prices = new Map([['a@0', 1], ['b@0', 1], ['fluid:f', 0.001]]);
+    const leaf: LeafOracle = (k) => (prices.has(k) ? { buyable: true, cost: prices.get(k)!, leafClass: 'direct' } : { buyable: false, cost: 0, leafClass: null });
+    const all = new Set([...p.items.keys(), ...p.fluids.keys()]);
+    const rough = roughCosts(p, env(1), leaf, all, 'candidates-test');
+    const ids = (target: string, others: string[] = []) => buildCandidates(p, defaultSettings(), env(1), leaf, [target, ...others], { rough }).recipes.map((r) => r.id);
+    // As a target t keeps more choices (3× the cheapest), as an input the usual 1.5×.
+    expect(ids('t@0')).toEqual(['cheap', 'close', 'dear']);
+    expect(ids('u@0')).toEqual(['cheap', 'close', 'use-cell']);
+    expect(ids('cell@0')).toEqual(['make-cell']);
+    expect(buildCandidates(p, defaultSettings(), env(1), leaf, ['t@0']).recipes.map((r) => r.id)).toEqual(['cheap', 'close', 'dear', 'side']);
+  });
+  it('with rough costs, keeps the first listed of equally cheap ore-dictionary options', () => {
+    const p = packFromSpec({ machines: [M(1, ['gt.recipe.assembler'], 1)],
+      recipes: [{ id: 'chest', map: 'gt.recipe.assembler', in: [{ any: [['oak@0', 8], ['acacia@0', 8], ['sacred@0', 8], ['dear@0', 8]] }], out: [['chest@0', 1]], eut: 4 }] });
+    const leaf: LeafOracle = (k) => (k === 'chest@0' ? { buyable: false, cost: 0, leafClass: null } : { buyable: true, cost: k === 'dear@0' ? 5 : 1, leafClass: 'natural' });
+    const rough = roughCosts(p, env(1), leaf, new Set([...p.items.keys()]), 'options-test');
+    const g = buildCandidates(p, defaultSettings(), env(1), leaf, ['chest@0'], { rough });
+    expect(g.recipes.filter((r) => r.kind === 'convert').map((r) => r.id.split(':').at(-1))).toEqual(['oak@0']);
   });
 });

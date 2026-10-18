@@ -71,15 +71,34 @@ export function makePrices(pack: Pack, overrides: Record<string, number>): Price
 
 const NOT_A_LEAF: LeafDecision = { buyable: false, cost: 0, leafClass: null };
 const UNAVAILABLE: LeafDecision = { buyable: false, cost: 0, leafClass: 'unavailable' };
+/**
+ * A derived base item bought at what making it costs is marked up by this share, so a line that can make the target
+ * itself never buys a derived form of it instead at the same cost (Magnetic Steel Ingot demagnetized into the Steel
+ * Ingot target, Molten Iron solidified into an Iron Plate).
+ */
+const DERIVED_MARKUP = 1e-6;
 
 /**
  * Which goods the line buys (spec §3.3, §5): "we already make this" items at their cost (key override, else `stopCost`,
  * else the price), free and natural goods, and base items the group can get at its tier; a derived base item only
- * while the project does not route derived materials. Base items it cannot get are never buyable.
+ * while the project does not route derived materials, and then (without a key override) at `madeCost`, what its
+ * chain would cost the line (rough.ts), marked up by DERIVED_MARKUP; not at all when that is Infinity (only a chain
+ * through the target makes it); at its price when `madeCost` has no estimate. Base items it cannot get are never
+ * buyable.
  */
 export function makeLeafOracle(
   pack: Pack, settings: PlanSettings, avail: Availability, prices: PriceTable, stopCost?: (key: StuffKey) => number,
+  madeCost?: (key: StuffKey) => number | undefined,
 ): LeafOracle {
+  /** A derived leaf: its key override, else what making it costs (marked up), else its price without `madeCost`. */
+  const derived = (key: StuffKey): LeafDecision => {
+    const override = own(settings.costOverrides, key);
+    if (override !== undefined) return { buyable: true, cost: override, leafClass: 'derived' };
+    const made = madeCost?.(key);
+    if (made === undefined) return { buyable: true, cost: prices.price(key), leafClass: 'derived' };
+    // Only a chain through the target itself makes it: the line cannot buy it to make the target.
+    return Number.isFinite(made) ? { buyable: true, cost: made * (1 + DERIVED_MARKUP), leafClass: 'derived' } : NOT_A_LEAF;
+  };
   const expand = new Set(settings.expandItems);
   const stop = new Set(settings.stopItems);
   return (key) => {
@@ -95,7 +114,7 @@ export function makeLeafOracle(
       case 'byproduct':
         return { buyable: true, cost: prices.price(key), leafClass };
       case 'derived':
-        return settings.routeDerived ? NOT_A_LEAF : { buyable: true, cost: prices.price(key), leafClass };
+        return settings.routeDerived ? NOT_A_LEAF : derived(key);
       case 'unavailable':
         return UNAVAILABLE;
       default:

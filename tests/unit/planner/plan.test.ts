@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec } from '../../helpers/pack-spec.ts';
-import { planLine, emptyContext, settingsHash, planCacheKey, PlanCache, powerSummary } from '../../../src/server/planner/plan.ts';
+import { planLine, emptyContext, settingsHash, planCacheKey, PlanCache, powerSummary, batchShortWarning } from '../../../src/server/planner/plan.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import type { OreVein } from '../../../src/shared/types/pack.ts';
 import type { Plan, PlanSettings, PlanStep } from '../../../src/shared/types/plan.ts';
@@ -24,8 +24,11 @@ describe('planLine', () => {
     expect(p.steps.map((s) => s.id)).toEqual(['bend-plate', 'circuit-lv', 'wire']);
     expect(p.rawInputs.map((r) => [r.key, r.perSecond, r.leafClass])).toEqual([
       ['t:copper_ingot@0', 0.5, 'direct'], ['t:iron_ingot@0', 0.5, 'direct'], ['t:redstone@0', 0.5, 'direct']]);
-    expect(p.steps[0]?.alternatives).toEqual([{ recipeId: 'bend-plate', rawCost: 1, mapId: 'gt.recipe.metalbender' },
-                                             { recipeId: 'hammer-plate', rawCost: 2, mapId: 'crafting' }]);
+    // Each swap option says what one run takes and makes, by key; Plan.names names them and the map (StepPanel).
+    expect(p.steps[0]?.alternatives).toEqual([
+      { recipeId: 'bend-plate', rawCost: 1, mapId: 'gt.recipe.metalbender', inputs: [{ key: 't:iron_ingot@0', amount: 1 }], outputs: [{ key: 't:iron_plate@0', amount: 1 }] },
+      { recipeId: 'hammer-plate', rawCost: 2, mapId: 'crafting', inputs: [{ key: 't:iron_ingot@0', amount: 2 }], outputs: [{ key: 't:iron_plate@0', amount: 1 }] }]);
+    expect(p.names).toMatchObject({ 'map:gt.recipe.metalbender': 'Bending Machine', 'map:crafting': 'Crafting', 't:iron_ingot@0': 'Iron Ingot' });
     expect(p.power).toMatchObject({ peakEUt: 3 * 24 + 5 * 16 + 3 * 8, voltageTier: 1 });
     expect(p.buildSteps.at(-1)?.id).toBe('test');
     expect(p.exportId).toBe('test');
@@ -130,12 +133,64 @@ describe('planLine', () => {
     expect(routed.rawInputs.map((r) => [r.key, r.leafClass])).toEqual([['iron@0', 'direct']]);
     expect(routed.warnings.map((w) => w.code)).not.toContain('derived-leaf');
   });
+  it('never buys a derived form of the target to make the target, and prices derived leaves at their chain', async () => {
+    // Magnetic steel is made only from steel; demagnetizing it is the cheapest-looking way to "make" steel from a
+    // bought leaf at the flat price of 1, but its chain runs through the target itself.
+    const steel = packFromSpec({
+      items: [{ key: 'iron@0', name: 'Iron Dust', gt: { prefix: 'dust', material: 'Iron' } }, { key: 'coal@0', name: 'Coal Dust', gt: { prefix: 'dust', material: 'Coal' } },
+              { key: 'steel@0', name: 'Steel Ingot', gt: { prefix: 'ingot', material: 'Steel' } },
+              { key: 'magnetic@0', name: 'Magnetic Steel Ingot', gt: { prefix: 'ingot', material: 'SteelMagnetic' } },
+              { key: 'steel_plate@0', name: 'Steel Plate', gt: { prefix: 'plate', material: 'Steel' } }],
+      machines: [{ mteId: 1, name: 'Basic Alloy Smelter', maps: ['gt.recipe.alloysmelter'], tier: 1 },
+                 { mteId: 2, name: 'Basic Polarizer', maps: ['gt.recipe.polarizer'], tier: 1 },
+                 { mteId: 3, name: 'Basic Bending Machine', maps: ['gt.recipe.metalbender'], tier: 1 }],
+      recipes: [{ id: 'smelt', map: 'gt.recipe.alloysmelter', in: [['iron@0', 1], ['coal@0', 1]], out: [['steel@0', 1]], eut: 30, dur: 400 },
+                { id: 'magnetize', map: 'gt.recipe.polarizer', in: [['steel@0', 1]], out: [['magnetic@0', 1]], eut: 16 },
+                { id: 'demagnetize', map: 'gt.recipe.alloysmelter', in: [['magnetic@0', 1]], out: [['steel@0', 1]], eut: 2 },
+                { id: 'bend', map: 'gt.recipe.metalbender', in: [['steel@0', 1]], out: [['steel_plate@0', 1]], eut: 16 }],
+      worldgen: { veins: [vein('ore.mix.iron', 'Iron'), vein('ore.mix.coal', 'Coal')] },
+    });
+    const p = await planLine(steel, S({ target: 'steel@0', tier: 1 }), emptyContext());
+    expect(p.steps.map((s) => s.id)).toEqual(['smelt']);
+    expect(p.rawInputs.map((r) => r.key)).toEqual(['coal@0', 'iron@0']);
+    // Bought for a plate, steel costs what its chain costs (iron + coal), not the flat 1 of a base item.
+    const plate = await planLine(steel, S({ target: 'steel_plate@0', tier: 1, amount: 60, per: 'min' }), emptyContext());
+    expect(plate.rawInputs.map((r) => [r.key, r.leafClass])).toEqual([['steel@0', 'derived']]);
+    expect(plate.rawInputs[0]?.cost).toBeCloseTo(2, 5);
+  });
+  it('names the target\'s own unlock when the walk only meets side roads', async () => {
+    // Thing comes from its hot form (an EV freezer) or from molten Thing, which only Thing itself or Thing Bars (an HV
+    // smelter) make: the walk only finds the bars, a side road; what the group needs is HV for Thing.
+    const p = packFromSpec({
+      items: [{ key: 'thing@0', name: 'Thing' }, { key: 'bars@0', name: 'Thing Bars' }, { key: 'hot@0', name: 'Hot Thing' }, { key: 'raw@0', name: 'Raw', gt: { prefix: 'dust', material: 'Raw' } }],
+      machines: [{ mteId: 1, name: 'Basic Solidifier', maps: ['gt.recipe.fluidsolidifier'], tier: 1 }, { mteId: 2, name: 'Basic Extractor', maps: ['gt.recipe.fluidextractor'], tier: 1 },
+                 { mteId: 3, name: 'Smelter III', maps: ['gt.recipe.smelter'], tier: 3 }, { mteId: 4, name: 'Freezer IV', maps: ['gt.recipe.vacuumfreezer'], tier: 4 }],
+      recipes: [{ id: 'solidify', map: 'gt.recipe.fluidsolidifier', in: [['fluid:molten.thing', 144]], out: [['thing@0', 1]], eut: 8 },
+                { id: 'extract', map: 'gt.recipe.fluidextractor', in: [['thing@0', 1]], out: [['fluid:molten.thing', 144]], eut: 30 },
+                { id: 'melt-bars', map: 'gt.recipe.fluidextractor', in: [['bars@0', 1]], out: [['fluid:molten.thing', 144]], eut: 30 },
+                { id: 'make-bars', map: 'gt.recipe.smelter', in: [['raw@0', 1]], out: [['bars@0', 1]], eut: 480 },
+                { id: 'freeze', map: 'gt.recipe.vacuumfreezer', in: [['hot@0', 1]], out: [['thing@0', 1]], eut: 1920 }],
+      worldgen: { veins: [vein('ore.mix.raw', 'Raw')] },
+    });
+    const mv = await planLine(p, S({ target: 'thing@0', tier: 2 }), emptyContext());
+    expect(mv.status).toBe('infeasible');
+    expect(mv.warnings).toEqual([{ code: 'unavailable', key: 'thing@0', text: 'Thing: needs HV machines' }]);
+    expect(mv.unlocks).toEqual([{ key: 'thing@0', text: 'Thing: needs HV machines' }]);
+  });
+  it('says when whole crafts leave a Make N batch short', () => {
+    expect(batchShortWarning(pack, [], 't:circuit@0', 10)).toEqual([]);
+    expect(batchShortWarning(pack, [{ key: 'fluid:oil', amount: 1000, chance: 1 }, { key: 't:copper_wire@0', amount: 2, chance: 1 }], 't:circuit@0', 10)).toEqual([{
+      code: 'batch-short', key: 'fluid:oil',
+      text: 'Whole crafts do not balance: have 1,000 L Oil, 2× 1x Copper Wire ready before you start (cells or catalysts the chain hands round), or the batch comes out short.',
+    }]);
+    expect(batchShortWarning(pack, [{ key: 't:circuit@0', amount: 3, chance: 1 }], 't:circuit@0', 10)[0]?.text).toBe('The batch makes only 7 of 10 Basic Circuit.');
+  });
   it('keeps a stop item the line cannot make at its stop price, so its recipe stays an alternative', async () => {
     // At MV nothing reachable makes titanium ingots; the group says it already makes them.
     const p = await planLine(pack, S({ target: 't:titanium_plate@0', tier: 2, stopItems: ['t:titanium_ingot@0'] }), emptyContext());
     expect(p.status).toBe('ok');
     expect(p.rawInputs.map((r) => [r.key, r.leafClass, r.cost])).toEqual([['t:titanium_ingot@0', 'stop', 0.016666667]]);
-    expect(p.steps[0]?.alternatives).toEqual([{ recipeId: 'bend-ti', rawCost: 1, mapId: 'gt.recipe.metalbender' }]);
+    expect(p.steps[0]?.alternatives.map((a) => [a.recipeId, a.rawCost, a.mapId])).toEqual([['bend-ti', 1, 'gt.recipe.metalbender']]);
   });
   it('gives Make N flows and leftovers per second over the batch', async () => {
     const p = await planLine(pack, S({ target: 't:circuit@0', mode: 'makeN', amount: 10, tier: 1 }), emptyContext());
@@ -165,16 +220,21 @@ describe('planLine', () => {
   });
   it('names the target in a free-loop warning', async () => {
     const loop = packFromSpec({
-      items: [{ key: 'raw@0', name: 'Raw Dust', gt: { prefix: 'dust', material: 'Raw' } }, { key: 'y@0', name: 'Widget' }],
+      items: [{ key: 'raw@0', name: 'Raw Dust', gt: { prefix: 'dust', material: 'Raw' } }, { key: 'y@0', name: 'Widget' }, { key: 'x@0', name: 'Gizmo' },
+              { key: 't@0', name: 'Thing' }],
+      maps: [{ id: 'gt.recipe.macerator', name: 'Macerator' }],
       machines: [{ mteId: 1, name: 'M', maps: ['gt.recipe.macerator'], tier: 1 }],
       recipes: [{ id: 'loop-a', map: 'gt.recipe.macerator', in: [['x@0', 1]], out: [['y@0', 2]], eut: 2 },
                 { id: 'loop-b', map: 'gt.recipe.macerator', in: [['y@0', 1]], out: [['x@0', 1]], eut: 2 },
-                { id: 'honest', map: 'gt.recipe.macerator', in: [['raw@0', 1]], out: [['y@0', 1]], eut: 2 }],
+                { id: 'honest', map: 'gt.recipe.macerator', in: [['raw@0', 1]], out: [['y@0', 1]], eut: 2 },
+                { id: 'make-t', map: 'gt.recipe.macerator', in: [['y@0', 1]], out: [['t@0', 1]], eut: 2 }],
       worldgen: { veins: [vein('ore.mix.raw', 'Raw')] },
     });
-    const p = await planLine(loop, S({ target: 'y@0', tier: 1 }), emptyContext());
-    expect(p.steps.map((s) => s.id)).toEqual(['honest']);
-    expect(p.warnings).toEqual([{ code: 'free-loop', text: 'Ignored recipes that make Widget from nothing (likely a recipe data loop): loop-a, loop-b' }]);
+    // A loop on the target itself never survives: rough costs never take the target as an input. One upstream does.
+    const p = await planLine(loop, S({ target: 't@0', tier: 1 }), emptyContext());
+    expect(p.steps.map((s) => s.id)).toEqual(['honest', 'make-t']);
+    // The left-out recipes by machine and product, not by their 16-hex ids.
+    expect(p.warnings).toEqual([{ code: 'free-loop', text: 'Ignored 2 recipes that make Thing from nothing (likely a recipe data loop): Macerator making Widget, Macerator making Gizmo' }]);
   });
 });
 

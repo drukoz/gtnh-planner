@@ -22,12 +22,17 @@ export interface Solution {
   rawCost: number;
   blockers: Blocker[];
   warnings: PlanWarning[];
+  // optional addition
+  /** Ids of the recipes the loop guard left out, in the order it did; planLine names them. */
+  banned?: string[];
 }
 
 /** Values up to this count as zero: they never reach the maps, and a loop-guard run below it uses no recipe. */
 const TINY = 1e-9;
 const MAX_LOOP_ROUNDS = 5;
 const MAX_BLOCKERS = 5;
+/** A free-loop warning names this many recipes, then counts the rest. */
+export const MAX_NAMED_LOOP_RECIPES = 5;
 /** The loop guard can only succeed when S1 needs no raw material at all, so it runs only for an S1 up to this. */
 const ZERO_RAW = 1e-6;
 
@@ -190,33 +195,57 @@ async function finish(lp: MainLp, s1: LpResult, warnings: PlanWarning[]): Promis
   };
 }
 
+/** The ids of `ids`, at most MAX_NAMED_LOOP_RECIPES of them and a count of the rest. */
+function cappedList(ids: readonly string[]): string {
+  const shown = ids.slice(0, MAX_NAMED_LOOP_RECIPES).join(', ');
+  return ids.length > MAX_NAMED_LOOP_RECIPES ? `${shown} and ${ids.length - MAX_NAMED_LOOP_RECIPES} more` : shown;
+}
+
 /**
  * The cheapest steady state that meets `demand` (per unit of time): S1 least raw material (spec §3.3), S2 least power among
  * those, S4 the least total of runs, purchases and sinks (canonical). After S1 the loop guard may ban recipes that make
- * matter from nothing (warning `free-loop`) and start again, at most 5 times. Infeasible → the goods that block it.
+ * matter from nothing and start again, 5 times at most: then one `free-loop` warning names what it left out (`banned`).
+ * When the solve after the fifth ban still finds such a loop, the line is `infeasible` with one warning: there is no
+ * honest way to make the targets from these recipes, and the plan never shows one that makes something from nothing
+ * (Review Focus #4). Infeasible → the goods that block it, unless the graph was cut short (`truncated`): goods it never walked
+ * look unmakeable there, so it names none.
  */
 export async function solveLine(graph: CandidateGraph, demand: ReadonlyMap<StuffKey, number>): Promise<Solution> {
-  const warnings: PlanWarning[] = [];
-  const banned = new Set<string>();
+  const banned: string[] = [];
+  const bannedSet = new Set<string>();
+  const loopWarnings = (): PlanWarning[] => (banned.length === 0 ? [] : [{
+    code: 'free-loop',
+    text: `Ignored ${banned.length === 1 ? '1 recipe' : `${banned.length} recipes`} that make ${graph.targets.join(', ')} from nothing (likely a recipe data loop): ${cappedList(banned)}`,
+  }]);
+  const infeasible = (blockers: Blocker[], warnings: PlanWarning[]): Solution => ({
+    status: 'infeasible', runs: new Map(), buys: new Map(), sinks: new Map(), rawCost: 0, blockers, warnings, banned: [...banned],
+  });
   for (let round = 0; ; round++) {
-    const recipes = graph.recipes.filter((r) => !banned.has(r.id));
+    const recipes = graph.recipes.filter((r) => !bannedSet.has(r.id));
     const lp = mainLp(graph, recipes, demand);
     const s1 = await minimize(lp, lp.rawCost, []);
     if (s1.status === 'error') throw new Error('rate solver: the raw-material LP failed');
     // Costs are ≥ 0, so S1 is bounded below: an "unbounded or infeasible" answer can only mean infeasible.
     if (s1.status !== 'optimal') {
-      return {
-        status: 'infeasible', runs: new Map(), buys: new Map(), sinks: new Map(), rawCost: 0,
-        blockers: findBlockers({ ...graph, recipes }), warnings,
-      };
+      return infeasible(graph.truncated === true ? [] : findBlockers({ ...graph, recipes }), loopWarnings());
     }
-    const loop = round < MAX_LOOP_ROUNDS && s1.objective <= ZERO_RAW ? await freeLoop(lp) : [];
-    if (loop.length === 0) return finish(lp, s1, warnings);
-    for (const r of loop) banned.add(r.id);
-    warnings.push({
-      code: 'free-loop',
-      text: `Ignored recipes that make ${graph.targets.join(', ')} from nothing (likely a recipe data loop): ${loop.map((r) => r.id).join(', ')}`,
-    });
+    const loop = s1.objective <= ZERO_RAW ? await freeLoop(lp) : [];
+    if (loop.length === 0) {
+      const done = await finish(lp, s1, loopWarnings());
+      done.banned = [...banned];
+      return done;
+    }
+    if (round >= MAX_LOOP_ROUNDS) {
+      return infeasible([], [{
+        code: 'free-loop',
+        text: `No honest way to make ${graph.targets.join(', ')} here: every plan the recipes allow makes it from nothing (likely recipe data loops), even after leaving out ${cappedList(banned)}`,
+      }]);
+    }
+    for (const r of loop) {
+      if (bannedSet.has(r.id)) continue;
+      bannedSet.add(r.id);
+      banned.push(r.id);
+    }
   }
 }
 

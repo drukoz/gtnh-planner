@@ -17,7 +17,8 @@ import { buildCandidates, type CandidateGraph, type LpRecipe } from './candidate
 import { analyzeCosts, makeLeafOracle, type CostAnalysis } from './costs.ts';
 import { buildFlows, planSteps } from './machines.ts';
 import { makeN, wholeRuns } from './make-n.ts';
-import { solveLine, type Solution } from './solve.ts';
+import { yieldToEventLoop } from './lp.ts';
+import { MAX_NAMED_LOOP_RECIPES, solveLine, type Solution } from './solve.ts';
 import { buildSteps } from './steps.ts';
 
 export { effectiveTier } from './basis.ts';
@@ -143,13 +144,39 @@ interface CostModel { graph: CandidateGraph; costs: CostAnalysis }
  */
 async function costModel(pack: Pack, settings: PlanSettings, basis: PlanBasis, target: StuffKey): Promise<CostModel> {
   const analyze = async (stopItems: StuffKey[]): Promise<CostModel> => {
+    await yieldToEventLoop();
     const s: PlanSettings = { ...settings, recipeChoice: {}, stopItems };
-    const graph = buildCandidates(pack, s, basis.env, makeLeafOracle(pack, s, basis.avail, basis.prices), [target]);
+    const leaf = makeLeafOracle(pack, s, basis.avail, basis.prices, undefined, basis.madeCost);
+    const graph = buildCandidates(pack, s, basis.env, leaf, [target], { rough: basis.rough });
     return { graph, costs: await analyzeCosts(graph) };
   };
   const open = await analyze([]);
   const unmade = settings.stopItems.filter((key) => key !== target && open.graph.goods.has(key) && !Number.isFinite(open.costs.cost(key)));
   return unmade.length > 0 ? analyze(unmade) : open;
+}
+
+/** A swap list holds at most this many recipes (the one in use always among them). */
+const MAX_ALTERNATIVES = 20;
+/** Inputs and outputs listed per alternative. */
+const MAX_ALTERNATIVE_PARTS = 4;
+
+/** What one run of a recipe takes (first option of each consumed slot) and makes, summed per key, largest first, at most 4. */
+function recipeParts(pack: Pack, recipeId: string): { inputs: Array<{ key: StuffKey; amount: number }>; outputs: Array<{ key: StuffKey; amount: number }> } {
+  const r = pack.recipeById.get(recipeId);
+  const sum = (entries: Array<[StuffKey, number]>): Array<{ key: StuffKey; amount: number }> => {
+    const totals = new Map<StuffKey, number>();
+    for (const [key, amount] of entries) totals.set(key, (totals.get(key) ?? 0) + amount);
+    return [...totals].map(([key, amount]) => ({ key, amount: round6(amount) }))
+      .sort((a, b) => b.amount - a.amount || byString(a.key, b.key)).slice(0, MAX_ALTERNATIVE_PARTS);
+  };
+  if (r === undefined) return { inputs: [], outputs: [] };
+  return {
+    inputs: sum(r.inputs.flatMap((ing): Array<[StuffKey, number]> => {
+      const first = ing.options[0];
+      return ing.consumed && first !== undefined ? [[first.key, first.amount]] : [];
+    })),
+    outputs: sum(r.outputs.map((p): [StuffKey, number] => [p.key, p.amount])),
+  };
 }
 
 /** Producers of each wanted good in the cost graph, ranked by raw cost per unit then id; finite costs only. */
@@ -175,31 +202,75 @@ function alternativesFor(model: CostModel, wanted: ReadonlySet<StuffKey>): Map<S
   return out;
 }
 
-function addAlternatives(steps: PlanStep[], model: CostModel): void {
+/**
+ * Each step's swap list (spec §3.9, alternatives by raw material use): the cheapest MAX_ALTERNATIVES producers of its
+ * main output in the cost graph, the step's own recipe always kept, each with what it takes and makes.
+ */
+function addAlternatives(pack: Pack, steps: PlanStep[], model: CostModel): void {
   const wanted = new Set(steps.flatMap((s) => (s.mainOutput === undefined ? [] : [s.mainOutput])));
   const alternatives = alternativesFor(model, wanted);
-  for (const step of steps) step.alternatives = step.mainOutput === undefined ? [] : [...(alternatives.get(step.mainOutput) ?? [])];
+  for (const step of steps) {
+    const all = step.mainOutput === undefined ? [] : (alternatives.get(step.mainOutput) ?? []);
+    const kept = all.slice(0, MAX_ALTERNATIVES);
+    const own = all.find((a) => a.recipeId === step.recipeId);
+    if (own !== undefined && !kept.includes(own)) kept[kept.length - 1] = own;
+    step.alternatives = kept.map((a) => ({ ...a, ...recipeParts(pack, a.recipeId) }));
+  }
 }
 
-/** Rewrites the target keys of a `free-loop` warning (solve.ts has no pack) into their names. */
-function namedSolverWarning(pack: Pack, graph: CandidateGraph, w: PlanWarning): PlanWarning {
+/** "<machine> making <product>" for a recipe of the graph (a convert recipe: "any of <product>"). */
+function recipeLabel(pack: Pack, recipe: LpRecipe | undefined, id: string): string {
+  if (recipe === undefined) return id;
+  const product = recipe.main ?? recipe.coeffs.find(([, c]) => c > 0)?.[0];
+  const what = product === undefined ? id : pack.nameOf(product);
+  if (recipe.mapId === null) return `any of ${what}`;
+  return `${pack.maps.get(recipe.mapId)?.name ?? recipe.mapId} making ${what}`;
+}
+
+/**
+ * A `free-loop` warning in names (solve.ts has no pack): the targets by name and the recipes the loop guard left out
+ * as "<machine> making <product>", the same label once, at most MAX_NAMED_LOOP_RECIPES and a count of the rest.
+ */
+function namedSolverWarning(pack: Pack, graph: CandidateGraph, sol: Solution, w: PlanWarning): PlanWarning {
   if (w.code !== 'free-loop') return w;
-  const keys = `make ${graph.targets.join(', ')} from nothing`;
-  return { ...w, text: w.text.replace(keys, `make ${graph.targets.map((key) => pack.nameOf(key)).join(', ')} from nothing`) };
+  const byId = new Map(graph.recipes.map((r) => [r.id, r]));
+  const labels = [...new Set((sol.banned ?? []).map((id) => recipeLabel(pack, byId.get(id), id)))];
+  const shown = labels.slice(0, MAX_NAMED_LOOP_RECIPES).join(', ');
+  const list = labels.length > MAX_NAMED_LOOP_RECIPES ? `${shown} and ${labels.length - MAX_NAMED_LOOP_RECIPES} more` : shown;
+  const targets = graph.targets.map((key) => pack.nameOf(key)).join(', ');
+  if (sol.status === 'infeasible') {
+    return { ...w, text: `No honest way to make ${targets} here: every plan these recipes allow makes it from nothing (likely recipe data loops), even without ${list}` };
+  }
+  const count = (sol.banned ?? []).length;
+  return { ...w, text: `Ignored ${count === 1 ? '1 recipe' : `${count} recipes`} that make ${targets} from nothing (likely a recipe data loop): ${list}` };
 }
 
-/** Plain words for each blocker of an infeasible line (Review Focus #3), and the unlock hints among them. */
+/**
+ * Plain words for each blocker of an infeasible line (Review Focus #3), and the unlock hints among them. When the
+ * target itself is out of reach at this tier and no blocker names it or an out-of-reach base material, the blockers
+ * are side roads of the walk (a part that only a recycling chain would turn back into the target), so the target's
+ * own unlock hint ("needs EV machines") replaces them.
+ */
 function blockerWarnings(
   pack: Pack, sol: Solution, basis: PlanBasis, settings: PlanSettings, ctx: PlanContext,
 ): { warnings: PlanWarning[]; unlocks: Plan['unlocks'] } {
   const warnings: PlanWarning[] = [];
   const unlocks: Plan['unlocks'] = [];
+  const unlock = (key: StuffKey): void => {
+    const text = unlockText(pack, key, { env: basis.env, settings, visited: ctx.visitedDims });
+    warnings.push({ code: 'unavailable', key, text });
+    unlocks.push({ key, text });
+  };
+  const target = settings.target;
+  const sideRoads = sol.blockers.length > 0 && sol.blockers.every((b) => b.reason !== 'unavailable' && b.key !== target);
+  if (target !== null && sideRoads && !basis.avail.available.has(target)) {
+    unlock(target);
+    return { warnings, unlocks };
+  }
   for (const b of sol.blockers) {
     const name = pack.nameOf(b.key);
     if (b.reason === 'unavailable') {
-      const text = unlockText(pack, b.key, { env: basis.env, settings, visited: ctx.visitedDims });
-      warnings.push({ code: 'unavailable', key: b.key, text });
-      unlocks.push({ key: b.key, text });
+      unlock(b.key);
     } else if (b.reason === 'rejected') {
       const needs = b.needTier === undefined ? '' : ` (needs ${tierName(b.needTier)})`;
       warnings.push({ code: 'no-recipe', key: b.key, text: `Nothing at ≤ ${tierName(basis.tier)} makes ${name}${needs}` });
@@ -269,6 +340,30 @@ function byproductsOf(graph: CandidateGraph, sinks: ReadonlyMap<StuffKey, number
     .map(([key, amount]) => ({ key, amount: round9(amount), chance: 1 }));
 }
 
+/** "3× Empty Cell", "1,000 L Oxygen": an amount of a good in words, at most 2 decimal places. */
+function amountOf(pack: Pack, key: StuffKey, amount: number): string {
+  const n = (Math.round(amount * 100) / 100).toLocaleString('en-US');
+  return key.startsWith('fluid:') ? `${n} L ${pack.nameOf(key)}` : `${n}× ${pack.nameOf(key)}`;
+}
+
+/** Shown before the rest of a list is counted. */
+const MAX_LISTED = 5;
+
+/**
+ * The Make N warning for goods whole crafts could not balance (make-n.ts `short`): the batch under-delivers them, so
+ * the plan says so instead of reading as if it worked out (spec §3.2 "shows how long it will take").
+ */
+export function batchShortWarning(pack: Pack, short: readonly Product[], target: StuffKey, amount: number): PlanWarning[] {
+  if (short.length === 0) return [];
+  const missingTarget = short.find((p) => p.key === target);
+  const others = short.filter((p) => p.key !== target);
+  const listed = others.slice(0, MAX_LISTED).map((p) => amountOf(pack, p.key, p.amount)).join(', ');
+  const more = others.length > MAX_LISTED ? ` and ${others.length - MAX_LISTED} more` : '';
+  const head = missingTarget === undefined ? '' : `The batch makes only ${Math.max(0, Math.round((amount - missingTarget.amount) * 100) / 100)} of ${amount} ${pack.nameOf(target)}. `;
+  const tail = others.length === 0 ? '' : `Whole crafts do not balance: have ${listed}${more} ready before you start (cells or catalysts the chain hands round), or the batch comes out short.`;
+  return [{ code: 'batch-short', key: missingTarget?.key ?? others[0]?.key, text: `${head}${tail}`.trim() }];
+}
+
 function scaled(values: ReadonlyMap<string, number>, factor: number): Map<string, number> {
   return new Map([...values].map(([key, value]) => [key, value * factor]));
 }
@@ -294,9 +389,10 @@ function dimensionOfId(byKey: ReadonlyMap<string, DimensionInfo>, sortedDims: re
 }
 
 /**
- * The English name of every key the plan uses (target, steps, flows, raw inputs, byproducts, build list with its
- * breakdown, totals, unlocks and warnings), `dim:<key>` for every dimension it reaches or a source names, and
- * `dimId:<n>` for every dimension id a found spot names; keys in sorted order.
+ * The English name of every key the plan uses (target, steps and their swap lists, flows, raw inputs, byproducts, build
+ * list with its breakdown, totals, unlocks and warnings), `map:<id>` for every recipe map of a step or alternative,
+ * `dim:<key>` for every dimension it reaches or a source names, and `dimId:<n>` for every dimension id a found spot
+ * names; keys in sorted order.
  */
 function planNames(pack: Pack, plan: Plan, target: StuffKey | null): Record<string, string> {
   const names = new Map<string, string>();
@@ -310,9 +406,17 @@ function planNames(pack: Pack, plan: Plan, target: StuffKey | null): Record<stri
     }
   };
   add(target ?? undefined);
+  const addMap = (mapId: string): void => {
+    if (!names.has(`map:${mapId}`)) names.set(`map:${mapId}`, pack.maps.get(mapId)?.name ?? mapId);
+  };
   for (const step of plan.steps) {
     add(step.mainOutput);
     for (const p of [...step.inputs, ...step.outputs]) add(p.key);
+    addMap(step.mapId);
+    for (const a of step.alternatives) {
+      addMap(a.mapId);
+      for (const p of [...(a.inputs ?? []), ...(a.outputs ?? [])]) add(p.key);
+    }
   }
   for (const flow of plan.flows) add(flow.key);
   for (const input of plan.rawInputs) add(input.key);
@@ -361,6 +465,9 @@ function assemble(pack: Pack, settings: PlanSettings, basis: PlanBasis, body: Pl
  * nothing reachable makes gives an `infeasible` plan whose warnings say what blocks it and what unlocks it.
  */
 export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanContext): Promise<Plan> {
+  // Each synchronous stretch (availability and rough costs, each candidate walk, each LP solve) yields first, so other
+  // requests and live events go on between them (ledger 200).
+  await yieldToEventLoop();
   const basis = planBasis(pack, settings, ctx);
   const target = settings.target;
   if (target === null) return assemble(pack, settings, basis, bodyWithout('empty', [{ code: 'no-target', text: 'Pick something to make' }]));
@@ -373,13 +480,16 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
     const cost = model.costs.cost(key);
     return Number.isFinite(cost) ? cost : basis.prices.price(key);
   };
-  const graph = buildCandidates(pack, settings, basis.env, makeLeafOracle(pack, settings, basis.avail, basis.prices, stopCost), [target]);
+  const leaf = makeLeafOracle(pack, settings, basis.avail, basis.prices, stopCost, basis.madeCost);
+  await yieldToEventLoop();
+  const graph = buildCandidates(pack, settings, basis.env, leaf, [target], { rough: basis.rough });
   const batch = settings.mode === 'makeN';
   const demand = new Map([[target, batch ? settings.amount : settings.amount / SECONDS_PER[settings.per]]]);
   const sol = await solveLine(graph, demand);
-  const solverWarnings = sol.warnings.map((w) => namedSolverWarning(pack, graph, w));
+  const solverWarnings = sol.warnings.map((w) => namedSolverWarning(pack, graph, sol, w));
 
   if (sol.status === 'infeasible') {
+    // A graph cut short at its recipe cap names no blockers (solve.ts): its `graph-too-big` warning says why.
     const blocked = blockerWarnings(pack, sol, basis, settings, ctx);
     return assemble(pack, settings, basis, bodyWithout('infeasible', [...graph.warnings, ...solverWarnings, ...blocked.warnings], blocked.unlocks));
   }
@@ -390,11 +500,13 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
   let buys: ReadonlyMap<StuffKey, number>;
   let sinks: ReadonlyMap<StuffKey, number>;
   let made: Plan['makeN'];
+  let batchWarnings: PlanWarning[] = [];
   if (batch) {
-    const run = makeN(pack, graph, sol, demand, opts);
+    const run = await makeN(pack, graph, sol, demand, opts);
+    batchWarnings = batchShortWarning(pack, run.short, target, settings.amount);
     // The whole runs makeN planned (the same rounding again), spread over the batch's time: flows and byproducts are
     // rates, as in every plan, and the leftovers are what the line sinks.
-    const whole = wholeRuns(graph, sol, demand);
+    const whole = await wholeRuns(graph, sol, demand);
     const perSecond = run.totalSeconds > 0 ? 1 / run.totalSeconds : 0;
     const leftovers = scaled(new Map(whole.leftovers.map((p) => [p.key, p.amount])), perSecond);
     flows = buildFlows(graph, { ...sol, runs: scaled(whole.runs, perSecond), buys: scaled(whole.buys, perSecond), sinks: leftovers }, [target]);
@@ -408,17 +520,17 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
     buys = sol.buys;
     sinks = sol.sinks;
   }
-  addAlternatives(steps, model);
+  addAlternatives(pack, steps, model);
 
   const raw = rawInputsOf(pack, graph, basis, ctx, buys, made?.totalSeconds ?? null);
   // Make N steps of one machine type share that type's machines (makeN), so they draw at most once per type.
   const power = powerSummary(steps, { sharedByType: batch });
-  const bom = await buildBom(pack, steps, { settings, env: basis.env, leaf: basis.leaf, ctx });
+  const bom = await buildBom(pack, steps, { settings, env: basis.env, leaf: basis.leaf, ctx, rough: basis.rough });
   const body: PlanBody = {
     status: 'ok', unlocks: [], steps, flows, rawInputs: raw.rawInputs, byproducts: byproductsOf(graph, sinks, target), power,
     buildList: bom.lines, buildTotals: bom.totals,
     buildSteps: buildSteps(pack, { steps, bom, power, settings, tier: basis.tier, target, totalSeconds: made?.totalSeconds }),
-    warnings: [...graph.warnings, ...solverWarnings, ...raw.warnings, ...bom.warnings],
+    warnings: [...graph.warnings, ...solverWarnings, ...batchWarnings, ...raw.warnings, ...bom.warnings],
   };
   if (made !== undefined) body.makeN = made;
   return assemble(pack, settings, basis, body);
