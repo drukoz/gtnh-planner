@@ -50,6 +50,17 @@ export function createProjectStore(id: string, deps: StoreDeps): ProjectStore {
   let planRequest = 0;
   /** The stream was down, so plan events may have been missed; the snapshot after the reconnect refetches the plan. */
   let missedPlanEvents = false;
+  /**
+   * Where the shown `error` came from: a failed project fetch is cleared by the next project the server confirms (a
+   * later fetch or snapshot, Review Focus #1: a tab waking from sleep converges and must not keep a stale banner); a
+   * rejected batch stays until this tab sends again.
+   */
+  let errorFrom: 'fetch' | 'send' | null = null;
+
+  function showError(from: 'fetch' | 'send', message: string): void {
+    errorFrom = from;
+    update({ error: message });
+  }
 
   function update(patch: Partial<ProjectViewState>): void {
     if (closed) return;
@@ -68,7 +79,12 @@ export function createProjectStore(id: string, deps: StoreDeps): ProjectStore {
   function confirm(project: Project): void {
     confirmed = project;
     pending = pending.filter((b) => b.ackRev === null || b.ackRev > project.rev);
-    update({ project: visible() });
+    if (errorFrom === 'fetch') {
+      errorFrom = null;
+      update({ project: visible(), error: null });
+    } else {
+      update({ project: visible() });
+    }
   }
 
   /** Loads the project; an answer older than what the events already brought is dropped (a stale tab never goes back). */
@@ -83,7 +99,7 @@ export function createProjectStore(id: string, deps: StoreDeps): ProjectStore {
         (project) => {
           if (confirmed === null || project.rev >= confirmed.rev) confirm(project);
         },
-        (err: unknown) => update({ error: messageOf(err) }),
+        (err: unknown) => showError('fetch', messageOf(err)),
       )
       .finally(() => {
         fetching = false;
@@ -142,12 +158,13 @@ export function createProjectStore(id: string, deps: StoreDeps): ProjectStore {
     for (const [i, op] of ops.entries()) {
       const problem = validateOp(op);
       if (problem !== null) {
-        update({ error: `op ${i}: ${problem}` });
+        showError('send', `op ${i}: ${problem}`);
         return;
       }
     }
     const batch: Batch = { ops, by: deps.me(), at: deps.now(), ackRev: null };
     pending = [...pending, batch];
+    errorFrom = null;
     update({ project: visible(), error: null });
     deps.postOps(id, ops).then(
       (result) => {
@@ -156,6 +173,7 @@ export function createProjectStore(id: string, deps: StoreDeps): ProjectStore {
       },
       (err: unknown) => {
         pending = pending.filter((b) => b !== batch);
+        errorFrom = 'send';
         update({ project: visible(), error: messageOf(err) });
       },
     );

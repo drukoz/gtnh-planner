@@ -66,4 +66,18 @@ describe('flow model', () => {
     expect(panel(0, [121])).toContain('Reuse your Basic Assembler machines');
     expect(panel(0, [])).not.toContain('Reuse your');
   });
+  it('tells swap options apart by what they take and make, and lists five before "more…"', () => {
+    const alt = (n: number) => ({ recipeId: `r${n}`, rawCost: n, mapId: 'gt.recipe.assembler',
+      inputs: [{ key: 't:redstone@0', amount: n }, { key: 'fluid:water', amount: 1000 }], outputs: [{ key: 't:circuit@0', amount: 1 }] });
+    const alts = [1, 2, 3, 4, 5, 6, 7].map(alt);
+    const named = { ...plan, names: { ...plan.names, 'map:gt.recipe.assembler': 'Assembler', 'fluid:water': 'Water' } } as Plan;
+    const html = renderToStaticMarkup(<StepPanel step={step({ recipeId: 'r7', alternatives: alts })} plan={named}
+      settings={defaultSettings()} send={() => {}} onClose={() => {}} />);
+    expect(html).toContain('Assembler: 2× Redstone, 1000 L Water → Basic Circuit · 2 raw/unit');
+    expect(html).toContain('Assembler: Redstone, 1000 L Water → Basic Circuit · 1 raw/unit');
+    expect(html).not.toContain('r1</span>');                                   // no bare recipe ids
+    expect(html).toContain('· 7 raw/unit');                                    // the one in use always shows
+    expect(html).not.toContain('· 6 raw/unit');
+    expect(html).toContain('1 more…');
+  });
 });
