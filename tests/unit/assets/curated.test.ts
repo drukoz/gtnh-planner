@@ -46,4 +46,10 @@ describe('curated block tables', () => {
     expect(curatedPaths()).toContain('jabba/textures/blocks/barrel_top_0.png');
     expect(curatedPaths().every((p) => /^[a-z0-9_.-]+\/textures\/(blocks|items)\/.+\.png$/.test(p))).toBe(true);
   });
+
+  it('answers null for ids named after Object.prototype members', () => {
+    for (const name of ['constructor', '__proto__', 'toString', 'hasOwnProperty', 'valueOf']) {
+      for (const id of [name, `fmp:${name}`, `conduit:${name}`, `ae2cable:${name}`]) expect(curatedBlock(id, 0)).toBeNull();
+    }
+  });
 });
