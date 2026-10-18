@@ -72,6 +72,17 @@ describe('ScanList', () => {
     expect(rows.map((r) => r.includes('>Cancel</button>'))).toEqual([true, true, false, false]);
   });
 
+  it('shows the warnings of a finished scan under its row', () => {
+    const warned = scanItem('20261017T140000Z-000004', 'done', {
+      progress: 1, message: 'Done: 1 base, 3 machines (2 chunks skipped)', warnings: ['Scanned without a recipe export: machines are unknown', '1 boiler with unknown steam output'],
+    });
+    const html = renderToStaticMarkup(<ScanList scans={[warned, ...scans]} error={null} onCancel={() => {}} />);
+    const rows = html.split('data-testid="scan-row"').slice(1);
+    expect(rows.map((r) => r.includes('data-testid="scan-row-notes"'))).toEqual([true, false, false, false, false]);
+    expect(rows[0]).toMatch(/Scan notes[^]*Scanned without a recipe export: machines are unknown[^]*1 boiler with unknown steam output/);
+    expect(rows[0]).toContain('2 chunks skipped');   // the skipped chunks stay in the message
+  });
+
   it('says when there are no scans yet, while it loads, and when listing fails', () => {
     expect(renderToStaticMarkup(<ScanList scans={[]} error={null} onCancel={() => {}} />)).toContain('No scans yet');
     expect(renderToStaticMarkup(<ScanList scans={null} error={null} onCancel={() => {}} />)).toContain('Loading');

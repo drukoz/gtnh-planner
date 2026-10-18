@@ -62,10 +62,27 @@ function useScans(): { scans: WorldScanListItem[] | null; error: string | null; 
 
 const STATE_TEXT: Record<WorldScanListItem['state'], string> = { queued: 'Queued', running: 'Running', done: 'Done', failed: 'Failed' };
 
+/**
+ * A finished scan's warnings (no recipe export, an unknown chunk manager, unreadable side files, boilers with unknown
+ * steam output, veins without a type), right under its row, so a degraded scan never looks like a complete one; the
+ * skipped chunks are already in its message.
+ */
+function ScanRowNotes(props: { notes: readonly string[] }): ReactElement {
+  return (
+    <div className="small" data-testid="scan-row-notes">
+      <strong>Scan notes</strong>
+      <ul style={{ margin: '2px 0 0', paddingLeft: 18 }}>
+        {props.notes.map((note, i) => <li key={`${i}|${note}`}>{note}</li>)}
+      </ul>
+    </div>
+  );
+}
+
 function ScanRow(props: { scan: WorldScanListItem; onCancel(id: string): void }): ReactElement {
   const { scan, onCancel } = props;
   const active = scan.state === 'queued' || scan.state === 'running';
   const state = STATE_TEXT[scan.state];
+  const notes = scan.state === 'done' ? scan.warnings ?? [] : [];
   return (
     <li className="card" data-testid="scan-row" data-state={scan.state} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       <div className="row" style={{ gap: 12 }}>
@@ -76,6 +93,7 @@ function ScanRow(props: { scan: WorldScanListItem; onCancel(id: string): void })
       </div>
       <progress max={1} value={scan.progress} aria-label={`${state}, ${Math.round(scan.progress * 100)}%`} style={{ width: '100%' }} />
       <span className={scan.state === 'failed' ? 'error' : 'muted'}>{scan.message}</span>
+      {notes.length > 0 && <ScanRowNotes notes={notes} />}
     </li>
   );
 }

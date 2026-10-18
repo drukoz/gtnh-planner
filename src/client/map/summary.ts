@@ -1,7 +1,8 @@
 // "Found in world" for one base (spec §3.4, §3.5, §3.7 side panel): its machines and top tier, power estimate,
 // logistics, storage (everything at the base, broken down by where it sits and what the project's logistics can
-// reach), the world's dimensions and the prospected veins nearest the base. Every part is optional: a base without
-// any of them gives empty lists (ledger ruling M-R6 for a base that is not found).
+// reach), the world's dimensions and the prospected veins nearest the base, plus the scan's own notes (what it could
+// not read or work out). Every part is optional: a base without any of them gives empty lists (ledger ruling M-R6
+// for a base that is not found).
 
 import type { StuffKey } from '../../shared/keys.ts';
 import type { LogisticsMode } from '../../shared/types/plan.ts';
@@ -19,6 +20,12 @@ export interface FoundSummary {
   };
   dims: Array<{ name: string; visited: boolean; evidence: string[] }>;
   prospected: Array<{ vein: string; x: number; z: number; distance: number }>;
+  /**
+   * What the scan could not read or work out, world-wide (spec §3.5: an honest estimate): its warnings — no recipe
+   * export, an unknown chunk manager, unreadable side files, boilers with unknown steam output, veins without a type —
+   * then a line for the chunks it skipped.
+   */
+  scanNotes: string[];
 }
 
 /** The order storage kinds are listed in: networked storage first, then plain containers, then GT and AE2 blocks. */
@@ -100,6 +107,14 @@ function barrelBanks(blocks: readonly StorageBlock[]): FoundSummary['storage']['
   return banks.sort((a, b) => b.barrels - a.barrels || comparePos(a.pos, b.pos));
 }
 
+/** The scan's warnings, then "<n> chunk(s) could not be read and was / were left out" when it skipped any. */
+export function scanNotesOf(scan: Pick<WorldScan, 'warnings' | 'skippedChunks'>): string[] {
+  const skipped = scan.skippedChunks ?? 0;
+  const notes = [...(scan.warnings ?? [])];
+  if (skipped > 0) notes.push(`${skipped.toLocaleString('en-US')} ${skipped === 1 ? 'chunk' : 'chunks'} could not be read and ${skipped === 1 ? 'was' : 'were'} left out`);
+  return notes;
+}
+
 /** The veins of the base's dimension nearest its centre (horizontal distance, rounded to a block). */
 function nearestVeins(scan: WorldScan, base: Base): FoundSummary['prospected'] {
   const [cx, , cz] = base.center;
@@ -114,13 +129,16 @@ function nearestVeins(scan: WorldScan, base: Base): FoundSummary['prospected'] {
 /**
  * What was found at base `baseId` (`findBase`, so a rescan that moved the base's anchor still finds it). Item totals
  * and reach come from `storageTotals` with the network kinds of `mode`, exactly as the planner's context counts them.
- * Dimensions are world-wide; everything else is the base's, and empty when there is no such base.
+ * Dimensions and the scan's notes are world-wide; everything else is the base's, and empty when there is no such base.
  */
 export function summarize(scan: WorldScan, baseId: string | null, mode?: LogisticsMode): FoundSummary {
   const dims = scan.dims.map((d) => ({ name: d.name, visited: d.visited, evidence: [...d.visitEvidence] }));
+  const scanNotes = scanNotesOf(scan);
   const base = findBase(scan, baseId);
   if (base === null) {
-    return { machineCount: 0, topTier: null, machines: [], power: [], logistics: [], storage: { blocks: [], barrelBanks: [], items: [] }, dims, prospected: [] };
+    return {
+      machineCount: 0, topTier: null, machines: [], power: [], logistics: [], storage: { blocks: [], barrelBanks: [], items: [] }, dims, prospected: [], scanNotes,
+    };
   }
   const atBase = <T extends { baseId: string | null }>(records: readonly T[]): T[] => records.filter((r) => r.baseId === base.id);
   const machines = atBase(scan.machines);
@@ -140,5 +158,6 @@ export function summarize(scan: WorldScan, baseId: string | null, mode?: Logisti
     storage: { blocks: blockRows(storage), barrelBanks: barrelBanks(storage), items },
     dims,
     prospected: nearestVeins(scan, base),
+    scanNotes,
   };
 }

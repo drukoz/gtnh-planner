@@ -1,5 +1,6 @@
 // The Map tab's side panel (spec §3.7, §3.4, §3.5): what the scan found at the base, the world's dimensions, the
-// prospected veins near it and the numbered note pins. Every section is optional and says "None found" when empty.
+// prospected veins near it and the numbered note pins. Every section is optional and says "None found" when empty;
+// "Scan notes" (what the scan could not read or work out) comes first and only when there is something to say.
 // Items show their pack name once `GET /api/pack/stuff/:key` answers (asked once per key per page), the key until then.
 
 import { useEffect, useState, useSyncExternalStore, type ReactElement, type ReactNode } from 'react';
@@ -84,6 +85,22 @@ function Section(props: { title: string; empty: boolean; hint?: string; children
 }
 
 const LIST_STYLE = { margin: 0, paddingLeft: 18 } as const;
+
+/**
+ * What the scan could not read or work out, so the counts and the power estimate below are read with it in mind
+ * (spec §3.5). Nothing when there is nothing to say. Plain text only, no accessible label: the note dialog's text
+ * field is the one thing on the Map tab labelled "Note" (ruling M-R5).
+ */
+function ScanNotes(props: { notes: readonly string[] }): ReactElement | null {
+  if (props.notes.length === 0) return null;
+  return (
+    <Section title="Scan notes" empty={false}>
+      <ul className="small" data-testid="scan-notes" style={LIST_STYLE}>
+        {props.notes.map((note, i) => <li key={`${i}|${note}`}>{note}</li>)}
+      </ul>
+    </Section>
+  );
+}
 
 function Machines(props: { summary: FoundSummary }): ReactElement {
   const { machineCount, topTier, machines } = props.summary;
@@ -260,6 +277,7 @@ export function FoundPanel(props: FoundPanelProps): ReactElement {
   const [showAllItems, setShowAllItems] = useState(false);
   return (
     <div className="found-panel" data-testid="found-panel" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <ScanNotes notes={summary.scanNotes} />
       <Machines summary={summary} />
       <Power power={summary.power} />
       <Logistics logistics={summary.logistics} />

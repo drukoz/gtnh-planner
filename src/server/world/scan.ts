@@ -65,7 +65,7 @@ export interface WorldService {
   cancelScan(id: string): boolean;
   hasScan(id: string): boolean;
   scanStatus(id: string): ScanStatus;
-  /** Every scan folder with a readable status, newest first. */
+  /** Every scan folder with a readable status, newest first; a finished scan also has its level name and warnings. */
   listScans(): Promise<WorldScanListItem[]>;
   /** Null unless the scan is done. The object is shared by every caller: read it, never change it. */
   getScan(id: string): Promise<WorldScan | null>;
@@ -270,6 +270,9 @@ type Outcome = { ok: true; summary: string } | { ok: false; message: string };
 /** A finished scan's map renderer: the saved palette, frozen, over the region files copied into the scan folder. */
 interface ScanView { palette: Palette; input: AreaInput }
 
+/** What the scan list shows of a finished scan, from its meta.json. */
+interface DoneMeta { levelName: string | null; warnings: readonly string[] }
+
 export function createWorldService(opts: WorldServiceOptions): WorldService {
   const { config, facts } = opts;
   const useWorker = opts.useWorker ?? true;
@@ -290,7 +293,7 @@ export function createWorldService(opts: WorldServiceOptions): WorldService {
   const palettes = new Lru<Promise<BlockRef[]>>(PARSED_SCANS);
   const views = new Lru<Promise<ScanView>>(PARSED_SCANS);
   const tiles = new Lru<Promise<Uint8Array>>(RENDERED_TILES);
-  const levelNames = new Map<string, string | null>();
+  const doneMeta = new Map<string, DoneMeta>();
 
   markInterrupted(scansDir);
 
@@ -476,17 +479,20 @@ export function createWorldService(opts: WorldServiceOptions): WorldService {
     });
   }
 
-  async function levelNameOf(id: string): Promise<string | null> {
-    if (levelNames.has(id)) return levelNames.get(id)!;
-    let name: string | null = null;
+  /** A finished scan's level name and warnings from its meta.json (null and none when it cannot be read); cached once read. */
+  async function doneMetaOf(id: string): Promise<DoneMeta> {
+    const known = doneMeta.get(id);
+    if (known !== undefined) return known;
+    let meta: Record<string, unknown>;
     try {
-      const meta = await readMeta(id);
-      if (typeof meta.levelName === 'string') name = meta.levelName;
+      meta = await readMeta(id);
     } catch {
-      return null;
+      return { levelName: null, warnings: [] };
     }
-    levelNames.set(id, name);
-    return name;
+    const warnings = Array.isArray(meta.warnings) ? meta.warnings.filter((w): w is string => typeof w === 'string') : [];
+    const read: DoneMeta = { levelName: typeof meta.levelName === 'string' ? meta.levelName : null, warnings };
+    doneMeta.set(id, read);
+    return read;
   }
 
   return {
@@ -538,7 +544,12 @@ export function createWorldService(opts: WorldServiceOptions): WorldService {
         const entry = entries.get(id);
         const rec = entry !== undefined ? { status: entry.status, source: entry.source } : (settled.get(id) ?? await readStatus(dirOf(id), id));
         if (rec === null || rec.source === null) continue;
-        items.push({ ...rec.status, source: rec.source, levelName: rec.status.state === 'done' ? await levelNameOf(id) : null });
+        if (rec.status.state !== 'done') {
+          items.push({ ...rec.status, source: rec.source, levelName: null });
+          continue;
+        }
+        const { levelName, warnings } = await doneMetaOf(id);
+        items.push({ ...rec.status, source: rec.source, levelName, ...(warnings.length > 0 ? { warnings: [...warnings] } : {}) });
       }
       const order = (a: string, b: string): number => (a < b ? 1 : a > b ? -1 : 0);
       return items.sort((a, b) => order(a.startedAt, b.startedAt) || order(a.id, b.id));

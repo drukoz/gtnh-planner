@@ -7,7 +7,11 @@ import type { ScanStatus, WorldSource } from './world.ts';
 export interface WorldSourcesResponse { server: boolean; backups: string[] }
 export interface StartScanRequest { source: WorldSource }
 export interface StartScanResponse { scanId: string }
-export interface WorldScanListItem extends ScanStatus { source: WorldSource; levelName: string | null }
+export interface WorldScanListItem extends ScanStatus {
+  source: WorldSource; levelName: string | null;
+  /** A finished scan's `WorldScan.warnings`; absent when it has none (or was made before scans kept them in meta.json). */
+  warnings?: string[];
+}
 export interface CreateUploadResponse { uploadId: string }
 
 const MiB = 1024 ** 2;

@@ -8,7 +8,12 @@ import { EMPTY_SCAN, manyItems, SCAN_FIXTURE } from '../helpers/scan-fixture.ts'
 
 const NOTHING: FoundSummary = {
   machineCount: 0, topTier: null, machines: [], power: [], logistics: [],
-  storage: { blocks: [], barrelBanks: [], items: [] }, dims: [], prospected: [],
+  storage: { blocks: [], barrelBanks: [], items: [] }, dims: [], prospected: [], scanNotes: [],
+};
+/** SCAN_FIXTURE as a scan that could not read everything: two warnings and three skipped chunks. */
+const DEGRADED: WorldScan = {
+  ...SCAN_FIXTURE, warnings: ['Scanned without a recipe export: machines are unknown (run npm run export, then scan again)', '2 boilers with unknown steam output'],
+  skippedChunks: 3,
 };
 
 describe('summarize', () => {
@@ -89,6 +94,14 @@ describe('summarize', () => {
     expect(html.match(/data-key="/g)).toHaveLength(10);   // ITEMS_PAGE rows until "Show all"
   });
 
+  it('passes on what the scan could not read or work out, world-wide, then the skipped chunks', () => {
+    const notes = [...DEGRADED.warnings!, '3 chunks could not be read and were left out'];
+    expect([summarize(DEGRADED, '0:0:0').scanNotes, summarize(DEGRADED, null).scanNotes]).toEqual([notes, notes]);   // no base: still the scan's
+    expect(summarize({ ...SCAN_FIXTURE, skippedChunks: 1 }, '0:0:0').scanNotes).toEqual(['1 chunk could not be read and was left out']);
+    expect(summarize({ ...SCAN_FIXTURE, warnings: [], skippedChunks: 0 }, '0:0:0').scanNotes).toEqual([]);
+    expect(summarize(SCAN_FIXTURE, '0:0:0').scanNotes).toEqual([]);   // older scans may have neither field
+  });
+
   it('says nothing was found for an empty base', () => {
     expect(summarize(EMPTY_SCAN, null)).toEqual(NOTHING);
     expect(summarize(SCAN_FIXTURE, null)).toEqual({ ...NOTHING, dims: summarize(SCAN_FIXTURE, '0:0:0').dims });   // no base: nothing is at it
@@ -143,5 +156,14 @@ describe('FoundPanel', () => {
 
   it('offers "show on map" only when the map can show a place', () => {
     expect(renderToStaticMarkup(<FoundPanel summary={s} notes={[]} onFocusNote={() => {}} />)).not.toContain('show on map');
+  });
+
+  it('shows the scan notes first, and no such section when the scan read everything', () => {
+    const degraded = renderToStaticMarkup(<FoundPanel summary={summarize(DEGRADED, '0:0:0')} notes={[]} onFocusNote={() => {}} />);
+    expect(degraded.indexOf('>Scan notes<')).toBeGreaterThan(-1);
+    expect(degraded.indexOf('>Scan notes<')).toBeLessThan(degraded.indexOf('>Machines<'));
+    expect(degraded).toMatch(/data-testid="scan-notes"[^]*Scanned without a recipe export[^]*2 boilers with unknown steam output[^]*3 chunks could not be read/);
+    expect(degraded).not.toMatch(/aria-label="[^"]*[Nn]ote/);   // the note dialog's field stays the only "Note" label (ruling M-R5)
+    expect(html).not.toContain('Scan notes');
   });
 });

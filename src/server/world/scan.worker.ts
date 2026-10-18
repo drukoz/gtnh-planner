@@ -469,7 +469,7 @@ export async function runScanJob(job: ScanJob, report: (progress: number, messag
     report(P_NETWORKS, 'Writing the scan');
     await writeJsonAtomic(join(scanDir, 'palette.json'), palette.refs);
     await writeJsonAtomic(join(scanDir, 'meta.json'), {
-      source: job.request, levelName: side.level.levelName, blockNames: [...blockNames].sort((a, b) => a[0] - b[0]),
+      source: job.request, levelName: side.level.levelName, warnings: scan.warnings, blockNames: [...blockNames].sort((a, b) => a[0] - b[0]),
     });
     await writeJsonAtomic(join(scanDir, 'scan.json'), scan);
     return scan;
