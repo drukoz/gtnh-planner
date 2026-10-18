@@ -7,7 +7,8 @@ import { V, tierName } from '../../shared/gt/tiers.ts';
 import { isFluidKey, type ItemKey, type StuffKey } from '../../shared/keys.ts';
 import type { Item, OrePart, Pack, Recipe, Worldgen } from '../../shared/types/pack.ts';
 import { FREE_KEYS, type LeafClass, type PlanSettings, type ReachableDim, type SourceInfo } from '../../shared/types/plan.ts';
-import { acceptRecipe, type PlanEnv } from './candidates.ts';
+import { PROGRAMMED_CIRCUIT_ID } from '../pack/recipes.ts';
+import { acceptRecipe, multiblocksFor, type PlanEnv } from './candidates.ts';
 
 const MAX_TIER = V.length - 1;
 const OVERWORLD = 'overworld';
@@ -91,17 +92,20 @@ interface PackFacts {
   slotCount: Int32Array;
   /** Recipes without any input slot: they fire as soon as the group can run them. */
   inputless: number[];
+  /** Every programmed circuit (GT's not-consumed configuration item) the pack lists. */
+  programmedCircuits: ItemKey[];
 }
 
 const FACTS = new WeakMap<Pack, PackFacts>();
 
 /**
  * Ore-dictionary prefixes of things gathered in the world: logs, saplings, leaves, crops, seeds, flowers, mushrooms,
- * plants and mob drops. On the real 2.9 export nearly every such item has some producer (tree farms, fishing ports,
- * centrifuges…), while ~6,500 items no recipe makes are not gathered at all: sensor and location cards made by using a
+ * plants, clay and mob drops. "No recipe makes it" does not find them on the real 2.9 export: nearly every gathered item
+ * has some producer (tree farms, fishing ports, centrifuges…), so availability could not even reach rubber wood and
+ * sticky resin; while ~6,500 items no recipe makes are not gathered at all (sensor and location cards made by using a
  * kit on a block, legacy multiblock controllers, data orbs with NBT, creative and display blocks, other mods' copies of
- * GT parts. Treating those as hand-gathered at cost 1 made disassembly recipes (a GregTech Sensor Card → 3 Electronic
- * Circuits) the cheapest way to make their outputs, so a natural item must carry one of these names.
+ * GT parts), and as cost-1 leaves they made disassembly recipes (a GregTech Sensor Card → 3 Electronic Circuits) the
+ * cheapest way to make their outputs. So a natural item is one that carries one of these names.
  */
 export const GATHERED_ORE_PREFIXES: readonly string[] = Object.freeze([
   'log', 'treeSapling', 'treeLeaves', 'crop', 'seed', 'listAll', 'flower', 'mushroom', 'sugarcane', 'blockCactus', 'vine',
@@ -143,7 +147,7 @@ function factsOf(pack: Pack): PackFacts {
   for (const item of pack.items.values()) {
     const material = baseMaterialWith(pack, partOf, item.key);
     if (material !== undefined) addTo(baseItems, material, item.key);
-    else if (item.gt === undefined && (pack.producers.get(item.key)?.length ?? 0) === 0 && looksGathered(item)) natural.add(item.key);
+    else if (item.gt === undefined && looksGathered(item)) natural.add(item.key);
   }
 
   const n = pack.recipes.length;
@@ -158,9 +162,10 @@ function factsOf(pack: Pack): PackFacts {
     if (r.inputs.length === 0) inputless.push(i);
   });
 
+  const programmedCircuits = [...pack.items.values()].filter((item) => item.id === PROGRAMMED_CIRCUIT_ID && item.nbt === undefined).map((item) => item.key);
   facts = {
     partOf, baseItems, natural, sourcedFluids: new Set(pack.worldgen.fluidSources.map((s) => s.fluid)),
-    slotStart, slotTotal, slotCount, inputless,
+    slotStart, slotTotal, slotCount, inputless, programmedCircuits,
   };
   FACTS.set(pack, facts);
   return facts;
@@ -178,8 +183,8 @@ export function isBaseItem(pack: Pack, key: StuffKey): boolean {
 }
 
 /**
- * An item with no GT association that no recipe in the pack produces and that carries a gathered ore-dictionary name
- * (`GATHERED_ORE_PREFIXES`: logs, crops, seeds, mob drops…): gathered by hand.
+ * An item with no GT association that carries a gathered ore-dictionary name (`GATHERED_ORE_PREFIXES`: logs, crops,
+ * seeds, mob drops…): gathered by hand, whether or not some machine can also make it.
  */
 export function isNatural(pack: Pack, key: StuffKey): boolean {
   return factsOf(pack).natural.has(key);
@@ -188,6 +193,8 @@ export function isNatural(pack: Pack, key: StuffKey): boolean {
 export interface Availability {
   tier: number; available: ReadonlySet<StuffKey>; classOf(key: StuffKey): LeafClass; sources(key: StuffKey): SourceInfo[];
   why: ReadonlyMap<StuffKey, string /* recipe id */>;
+  /** The multiblocks the group can build: their controller item is available (`PlanEnv.multiblocks`). */
+  multiblocks: ReadonlySet<number>;
 }
 
 /** One way to get a direct material or a sourced fluid, and the reachable keys it relies on. */
@@ -258,52 +265,109 @@ function firstOptions(r: Recipe, rank: ReadonlyMap<StuffKey, number>): StuffKey[
   return keys;
 }
 
+/** Multiblock mteIds by the key of their controller item. */
+const CONTROLLERS = new WeakMap<Pack, Map<StuffKey, number[]>>();
+
+function controllersOf(pack: Pack): Map<StuffKey, number[]> {
+  let byItem = CONTROLLERS.get(pack);
+  if (byItem === undefined) {
+    byItem = new Map();
+    for (const m of pack.machines.values()) if (m.kind === 'multiblock') addTo(byItem, m.itemKey, m.mteId);
+    CONTROLLERS.set(pack, byItem);
+  }
+  return byItem;
+}
+
 /**
  * materials-availability §8.1: seeds are the free inputs, natural items, the base items of direct materials and the
  * sourced fluids; a recipe the group can run fires once every input slot (consumed or not) has an available option,
- * and makes all its outputs with a chance above 0 available.
+ * and makes all its outputs with a chance above 0 available. A recipe only a multiblock runs also waits for one of
+ * those multiblocks to be built: its controller item must be available (the machine's own minimum tier, §8.1 "Skip
+ * recipes above T"), so a multiblock whose controller needs UMV parts never runs at MV. `env.multiblocks` is ignored:
+ * this fixpoint is what decides it.
  */
 function computeState(pack: Pack, env: PlanEnv): State {
   const facts = factsOf(pack);
+  const controllers = controllersOf(pack);
+  const built = new Set<number>();
   const { materials: materialSources, fluids: fluidSources } = reachedSources(pack.worldgen, env);
 
   const rank = new Map<StuffKey, number>();
   const queue: StuffKey[] = [];
   const why = new Map<StuffKey, string>();
+  /** Recipes that have every input slot and wait for one of their multiblocks, by mteId; and those released. */
+  const parked = new Map<number, number[]>();
+  const released: number[] = [];
   const add = (key: StuffKey, recipeId?: string): void => {
     if (rank.has(key)) return;
     rank.set(key, queue.length);
     queue.push(key);
     if (recipeId !== undefined) why.set(key, recipeId);
+    // An NBT variant stands for its plain item too: GT makes every tool with its material in NBT
+    // (gt.metatool.01@22#…), while crafting tool slots accept the plain screwdriver gt.metatool.01@22.
+    const plain = isFluidKey(key) ? -1 : key.indexOf('#');
+    if (plain > 0) add(key.slice(0, plain), recipeId);
+    for (const id of controllers.get(key) ?? []) {
+      if (built.has(id)) continue;
+      built.add(id);
+      released.push(...(parked.get(id) ?? []));
+      parked.delete(id);
+    }
   };
 
   for (const key of FREE_KEYS) add(key);
   for (const key of facts.natural) add(key);
+  // From LV on every group has programmed circuits. The export cannot show the bootstrap: the first circuit needs a
+  // vacuum tube, whose glass tube needs a ball mold, whose casting form comes from a Tinkers' casting table (not a
+  // recipe) or from a fluid solidifier that itself needs a programmed circuit; without this seed nothing that takes
+  // one as its not-consumed configuration item (most GT recipes, every multiblock controller) is ever available.
+  if (env.tier >= 1) for (const key of facts.programmedCircuits) add(key);
   const direct = new Set<StuffKey>();
   for (const material of materialSources.keys()) for (const key of facts.baseItems.get(material) ?? []) direct.add(key);
   for (const key of fluidSources.keys()) direct.add(key);
   for (const key of direct) add(key);
 
-  const runs: Array<boolean | undefined> = new Array(pack.recipes.length);
-  const canRun = (i: number): boolean => {
-    let ok = runs[i];
-    if (ok === undefined) {
-      ok = acceptRecipe(pack, pack.recipes[i] as Recipe, env).ok;
-      runs[i] = ok;
+  const ungated: PlanEnv = { ...env, multiblocks: undefined };
+  const noMultiblock: PlanEnv = { ...env, multiblocks: new Set() };
+  /** Per recipe: undefined = not judged yet; [] = runs without a multiblock; null = never runs here; else its multiblocks. */
+  const gates: Array<number[] | null | undefined> = new Array(pack.recipes.length);
+  const gateOf = (i: number): number[] | null => {
+    let gate = gates[i];
+    if (gate === undefined) {
+      const r = pack.recipes[i] as Recipe;
+      if (!acceptRecipe(pack, r, ungated).ok) gate = null;
+      else gate = acceptRecipe(pack, r, noMultiblock).ok ? [] : multiblocksFor(pack, r, env);
+      gates[i] = gate;
     }
-    return ok;
+    return gate;
   };
-  const fire = (r: Recipe): void => {
+  const canRun = (i: number): boolean => gateOf(i) !== null;
+  const fired = new Uint8Array(pack.recipes.length);
+  const fireNow = (i: number): void => {
+    if (fired[i] === 1) return;
+    fired[i] = 1;
+    const r = pack.recipes[i] as Recipe;
     for (const p of r.outputs) if (p.chance > 0) add(p.key, r.id);
+  };
+  /** Every slot of recipe `i` is satisfied: it fires now, or once one of its multiblocks is built. */
+  const ready = (i: number): void => {
+    const gate = gateOf(i) as number[];
+    if (gate.length === 0 || gate.some((id) => built.has(id))) fireNow(i);
+    else for (const id of gate) addTo(parked, id, i);
   };
   const need = Int32Array.from(facts.slotCount);
   const satisfied = new Uint8Array(facts.slotTotal);
 
-  for (const i of facts.inputless) if (canRun(i)) fire(pack.recipes[i] as Recipe);
-  for (let head = 0; head < queue.length; head++) {
-    const x = queue[head] as StuffKey;
+  for (const i of facts.inputless) if (canRun(i)) ready(i);
+  for (let head = 0; head < queue.length || released.length > 0; ) {
+    const freed = released.pop();
+    if (freed !== undefined) {
+      fireNow(freed);
+      continue;
+    }
+    const x = queue[head++] as StuffKey;
     for (const i of pack.consumers.get(x) ?? []) {
-      if (need[i] === 0 || !canRun(i)) continue;   // fired already, or the group cannot run it
+      if (need[i] === 0 || !canRun(i)) continue;   // ready already, or the group cannot run it
       const r = pack.recipes[i] as Recipe;
       const start = facts.slotStart[i] as number;
       r.inputs.forEach((ing, s) => {
@@ -311,7 +375,7 @@ function computeState(pack: Pack, env: PlanEnv): State {
         satisfied[start + s] = 1;
         need[i] = (need[i] as number) - 1;
       });
-      if (need[i] === 0) fire(r);
+      if (need[i] === 0) ready(i);
     }
   }
 
@@ -336,7 +400,7 @@ function computeState(pack: Pack, env: PlanEnv): State {
   const derivedSource = (key: StuffKey): SourceInfo[] => {
     const r = pack.recipeById.get(why.get(key) ?? '');
     if (r === undefined) return [];
-    const accepted = acceptRecipe(pack, r, env);
+    const accepted = acceptRecipe(pack, r, { ...env, multiblocks: built });
     const mapId = accepted.ok ? accepted.mapId : (r.maps[0] ?? '');
     const inputs = firstOptions(r, rank).map((k) => pack.nameOf(k));
     const by = `made by ${pack.maps.get(mapId)?.name ?? mapId}`;
@@ -365,7 +429,7 @@ function computeState(pack: Pack, env: PlanEnv): State {
     }
   };
 
-  return { avail: { tier: env.tier, available, classOf, sources, why }, rank, materialSources, fluidSources };
+  return { avail: { tier: env.tier, available, classOf, sources, why, multiblocks: built }, rank, materialSources, fluidSources };
 }
 
 /** Availability results per pack, keyed by the env's content; the least recently used entry goes first. */

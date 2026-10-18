@@ -18,15 +18,17 @@ export interface PlanBasis { tier: number; coilHeat: number; reach: Reachability
 
 /**
  * The planner's environment for a project in a world: tier (`effectiveTier`); coil heat (the project's, else the
- * world's, else the default coil of the tier); the dimensions it reaches; the env candidate recipes are judged in;
- * what it can get there; prices with the project's cost overrides; and the leaf oracle over those.
+ * world's, else the default coil of the tier); the dimensions it reaches; what it can get there; the env candidate
+ * recipes are judged in, with the multiblocks it can build; prices with the project's cost overrides; and the leaf oracle over those.
  */
 export function planBasis(pack: Pack, settings: PlanSettings, ctx: PlanContext): PlanBasis {
   const tier = effectiveTier(settings, ctx);
   const coilHeat = settings.coilHeat ?? ctx.coilHeat ?? defaultCoilHeat(tier);
   const reach = reachableDims(pack.worldgen, settings.dims, ctx.visitedDims, tier);
-  const env: PlanEnv = { tier, reachable: reach.keys, lowGravity: reach.lowGravity, coilHeat, excluded: new Set(settings.excludedCategories) };
-  const avail = computeAvailability(pack, env);
+  const open: PlanEnv = { tier, reachable: reach.keys, lowGravity: reach.lowGravity, coilHeat, excluded: new Set(settings.excludedCategories) };
+  const avail = computeAvailability(pack, open);
+  // Candidate recipes may only use the multiblocks the group can build at this tier (availability.ts).
+  const env: PlanEnv = { ...open, multiblocks: avail.multiblocks };
   const prices = makePrices(pack, settings.costOverrides);
   const leaf = makeLeafOracle(pack, settings, avail, prices);
   return { tier, coilHeat, reach, env, avail, prices, leaf };

@@ -138,12 +138,12 @@ function fillSeconds(graph: CandidateGraph, runs: ReadonlyMap<string, number>, p
  */
 export function makeN(
   pack: Pack, graph: CandidateGraph, sol: Solution, demand: ReadonlyMap<StuffKey, number>,
-  opts: { settings: PlanSettings; groupTier: number; coilHeat: number; ctx: PlanContext },
+  opts: { settings: PlanSettings; groupTier: number; coilHeat: number; ctx: PlanContext; multiblocks?: ReadonlySet<number> },
 ): MakeNResult {
-  const { settings, groupTier, coilHeat, ctx } = opts;
+  const { settings, groupTier, coilHeat, ctx, multiblocks } = opts;
   const whole = wholeRuns(graph, sol, demand);
   const owned = ownedMachineMap(ctx, settings);
-  const picked = pickStepMachines(pack, graph, whole.runs, { settings, groupTier, coilHeat, owned });
+  const picked = pickStepMachines(pack, graph, whole.runs, { settings, groupTier, coilHeat, owned, multiblocks });
 
   const ownedOf = (mteId: number): number => Math.max(0, owned.get(mteId) ?? 0);
   const machinesOf = (mteId: number): number => ownedOf(mteId) || 1;
