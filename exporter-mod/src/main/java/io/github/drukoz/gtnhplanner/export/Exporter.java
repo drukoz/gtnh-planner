@@ -12,6 +12,7 @@ import io.github.drukoz.gtnhplanner.export.sections.AssemblyLineSection;
 import io.github.drukoz.gtnhplanner.export.sections.CraftingSection;
 import io.github.drukoz.gtnhplanner.export.sections.FluidsSection;
 import io.github.drukoz.gtnhplanner.export.sections.FurnaceSection;
+import io.github.drukoz.gtnhplanner.export.sections.MachinesSection;
 import io.github.drukoz.gtnhplanner.export.sections.OreDictSection;
 import io.github.drukoz.gtnhplanner.export.sections.RecipeMapsSection;
 
@@ -70,6 +71,7 @@ public final class Exporter {
         sections.add(new AssemblyLineSection());
         sections.add(new CraftingSection());
         sections.add(new FurnaceSection());
+        sections.add(new MachinesSection());
         return sections;
     }
 
