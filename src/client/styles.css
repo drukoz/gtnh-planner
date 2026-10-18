@@ -215,6 +215,89 @@ details.settings-section > summary h3 { display: inline; margin-right: 8px; }
 .key-list li { display: flex; align-items: center; gap: 8px; }
 .key-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 
+/* Flow diagram: green = owned machines, blue = new ones, half and half = partly owned (spec §3.9). */
+:root {
+  --flow-owned: #d9f0e1; --flow-owned-line: #2e8b57;
+  --flow-new: #dce8fb; --flow-new-line: #2f6fd6;
+  --flow-raw: #eceef2; --flow-raw-line: #8a919d;
+  --flow-out: #fff4d6; --flow-out-line: #c49a2a;
+  --flow-edge: #7d8593;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --flow-owned: #1d3a2a; --flow-owned-line: #4fbf7f;
+    --flow-new: #1d2c47; --flow-new-line: #5b93ec;
+    --flow-raw: #272b33; --flow-raw-line: #6f7785;
+    --flow-out: #3a3218; --flow-out-line: #c7a447;
+    --flow-edge: #8a92a0;
+  }
+}
+.flow { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
+.flow.has-panel { grid-template-columns: minmax(0, 1fr) minmax(260px, 340px); }
+.flow-main { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.flow-diagram { display: flex; flex-direction: column; gap: 8px; }
+.flow-toolbar button { min-width: 2.2em; }
+.flow-canvas {
+  display: block; width: 100%; min-height: 240px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); cursor: grab; touch-action: none; user-select: none;
+}
+.flow-canvas:active { cursor: grabbing; }
+.flow-node rect { stroke-width: 1.5; fill: var(--flow-raw); stroke: var(--flow-raw-line); }
+.flow-node.owned rect { fill: var(--flow-owned); stroke: var(--flow-owned-line); }
+.flow-node.new rect { fill: var(--flow-new); stroke: var(--flow-new-line); }
+.flow-node.partly-owned rect { fill: url(#flow-partly); stroke: var(--flow-owned-line); }
+.flow-node.out rect { fill: var(--flow-out); stroke: var(--flow-out-line); }
+.flow-node.sink rect { fill: var(--surface); stroke-dasharray: 4 3; }
+.flow-node[role='button'] { cursor: pointer; }
+.flow-node[role='button']:hover rect, .flow-node.selected rect { stroke-width: 3; }
+.flow-node:focus { outline: none; }
+.flow-node:focus-visible rect { stroke: var(--accent); stroke-width: 3; }
+.flow-node text { fill: var(--text); font-size: 11.5px; }
+.flow-node .flow-node-title { font-size: 13px; font-weight: 600; }
+.flow-node .flow-node-line { fill: var(--muted); }
+.flow-stop-owned { stop-color: var(--flow-owned); }
+.flow-stop-new { stop-color: var(--flow-new); }
+.flow-edge path { fill: none; stroke: var(--flow-edge); stroke-width: 1.5; }
+.flow-arrow-head { fill: var(--flow-edge); }
+.flow-edge-label {
+  fill: var(--text); font-size: 11px; paint-order: stroke; stroke: var(--surface); stroke-width: 3px; stroke-linejoin: round;
+}
+.flow-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 0.85rem; color: var(--muted); }
+.flow-legend li { display: inline-flex; align-items: center; gap: 6px; }
+.swatch { width: 14px; height: 14px; border-radius: 3px; border: 1.5px solid var(--flow-raw-line); background: var(--flow-raw); }
+.swatch.owned { background: var(--flow-owned); border-color: var(--flow-owned-line); }
+.swatch.new { background: var(--flow-new); border-color: var(--flow-new-line); }
+.swatch.partly-owned { background: linear-gradient(90deg, var(--flow-owned) 50%, var(--flow-new) 50%); border-color: var(--flow-owned-line); }
+.swatch.out { background: var(--flow-out); border-color: var(--flow-out-line); }
+.flow-infeasible {
+  background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: var(--radius); padding: 10px 14px; max-width: 760px;
+}
+.flow-infeasible p { margin: 0 0 4px; }
+.flow-infeasible ul { margin: 0; padding-left: 20px; }
+.flow-panel {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 12px; position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto;
+}
+.flow-panel > p { margin: 0; }
+.flow-panel-head { display: flex; align-items: center; gap: 8px; }
+.flow-panel-head h3 { flex: 1; min-width: 0; margin: 0; font-size: 1rem; overflow-wrap: anywhere; }
+.flow-panel-section { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; border-top: 1px solid var(--border); }
+fieldset.flow-panel-section { border-left: none; border-right: none; border-bottom: none; margin: 0; padding: 10px 0 0; min-width: 0; }
+.flow-panel-section p { margin: 0; }
+.flow-panel-title { font-size: 0.95rem; font-weight: 600; margin: 0; padding: 0; color: var(--text); }
+fieldset.flow-panel-section > legend.flow-panel-title { float: left; width: 100%; margin-bottom: 2px; }
+.oc-lines, .flow-panel .warnings, .flow-panel .sources { margin: 0; padding-left: 18px; font-size: 0.9rem; }
+.oc-lines li, .flow-panel .sources li { overflow-wrap: anywhere; }
+.flow-panel .warnings { color: var(--error); }
+.swap-option { align-items: flex-start; }
+.swap-option input { margin-top: 4px; }
+.swap-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+
+@media (max-width: 1100px) {
+  .flow.has-panel { grid-template-columns: minmax(0, 1fr); }
+  .flow-panel { position: static; max-height: none; }
+}
+
 @media (max-width: 900px) {
   .project-body { grid-template-columns: 1fr; }
   .settings-panel { position: static; max-height: none; }
