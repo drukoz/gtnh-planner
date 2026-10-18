@@ -10,3 +10,4 @@ playwright-report/
 exporter-mod/build/
 exporter-mod/.gradle/
 exporter-mod/run/
+*.tsbuildinfo
