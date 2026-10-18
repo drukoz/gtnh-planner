@@ -2,4 +2,10 @@
 // compileOnly: the pack provides GT at run time, nothing is bundled into our jar.
 dependencies {
     compileOnly("com.github.GTNewHorizons:GT5-Unofficial:5.09.54.183:dev")
+    // Plan 3: casing icon parser. FML depends on the ASM tree API and the pack ships asm-tree 9.4, so nothing is bundled.
+    compileOnly("org.ow2.asm:asm-tree:9.4")
+    testImplementation("org.ow2.asm:asm-tree:9.4")
+    testImplementation("com.google.code.gson:gson:2.2.4")          // same Gson as Minecraft 1.7.10, for LayerRec JSON tests (Task 5)
+    testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.11.4")
 }
