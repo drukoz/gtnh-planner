@@ -418,8 +418,9 @@ public final class TextureExporter implements ExportSection {
      * This builds it on {@code mte}, the tile entity's own copy (never the registered prototype), the way the client
      * does, from what the registration passed: the builder's overlays for a basic machine with recipes, nothing
      * otherwise. That is exact for every class whose {@code getTextureSet} ignores its argument (hulls,
-     * transformers, buffers, generators, boilers, steam machines, …); the other basic machines (scanner, pump, crop
-     * machines, …) made their overlays in their own constructor and show their casing only.
+     * transformers, buffers, generators, boilers, …) and for machines registered without textures (steam
+     * machines); the other basic machines (scanner, pump, crop machines, …) made their overlays in their own
+     * constructor and show their casing only.
      */
     private void buildTextureSet(IMetaTileEntity mte, int id) throws ReflectiveOperationException {
         if (!(mte instanceof MTETieredMachineBlock)) return;
