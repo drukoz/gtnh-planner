@@ -51,6 +51,15 @@ describe('makeLeafOracle', () => {
     const a = computeAvailability(p, e);
     expect(makeLeafOracle(p, defaultSettings(), a, makePrices(p, {}))('alu@0')).toEqual({ buyable: true, cost: 1, leafClass: 'derived' });
     expect(makeLeafOracle(p, { ...defaultSettings(), routeDerived: true }, a, makePrices(p, {}))('alu@0').buyable).toBe(false);
+    // Priced at what its chain costs, with that chain's recipes and free input; no leaf when only the target's chain
+    // makes it; a cost override (here by material) keeps the price.
+    const made = (cost: number) => () => ({ cost, steps: 2, free: 3 });
+    expect(makeLeafOracle(p, defaultSettings(), a, makePrices(p, {}), undefined, made(0.4))('alu@0'))
+      .toEqual({ buyable: true, cost: 0.4, leafClass: 'derived', steps: 2, free: 3 });
+    expect(makeLeafOracle(p, defaultSettings(), a, makePrices(p, {}), undefined, made(Infinity))('alu@0').buyable).toBe(false);
+    expect(makeLeafOracle(p, defaultSettings(), a, makePrices(p, {}), undefined, () => undefined)('alu@0')).toEqual({ buyable: true, cost: 1, leafClass: 'derived' });
+    expect(makeLeafOracle(p, { ...defaultSettings(), costOverrides: { Aluminium: 5 } }, a, makePrices(p, { Aluminium: 5 }), undefined, made(0.4))('alu@0'))
+      .toEqual({ buyable: true, cost: 5, leafClass: 'derived' });
   });
 });
 

@@ -18,7 +18,7 @@ import { analyzeCosts, makeLeafOracle, type CostAnalysis } from './costs.ts';
 import { buildFlows, planSteps } from './machines.ts';
 import { makeN, wholeRuns } from './make-n.ts';
 import { yieldToEventLoop } from './lp.ts';
-import { MAX_NAMED_LOOP_RECIPES, solveLine, standaloneCosts, type Solution } from './solve.ts';
+import { MAX_NAMED_LOOP_RECIPES, solveLine, standaloneCosts, type Solution, type Standalone } from './solve.ts';
 import { buildSteps } from './steps.ts';
 
 export { effectiveTier } from './basis.ts';
@@ -486,7 +486,7 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
   // Derived leaves cost what making them on their own costs (`standaloneCosts` over the cost model's graph, where they
   // are routed, never consuming the target): first the graph at their plain prices, then again with the derived leaves
   // it buys priced, twice at most. One only a chain through the target makes is no leaf (Infinity).
-  const priced = new Map<StuffKey, number>();
+  const priced = new Map<StuffKey, Standalone>();
   const tried = new Set<StuffKey>();
   const leafWith = (): LeafOracle => makeLeafOracle(pack, settings, basis.avail, basis.prices, stopCost, (key) => priced.get(key));
   let leaf = leafWith();

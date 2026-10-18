@@ -38,9 +38,22 @@ export interface LpRecipe {
   /** The good the recipe is for: its first listed output (a convert recipe's virtual good). */
   main?: StuffKey;
 }
-export interface LeafDecision { buyable: boolean; cost: number; leafClass: LeafClass | null /* null = not a leaf, must be made */ }
+export interface LeafDecision {
+  buyable: boolean; cost: number; leafClass: LeafClass | null /* null = not a leaf, must be made */;
+  // optional additions: a bought derived leaf's chain (`Standalone`, solve.ts), which the solver's tie-breaks read
+  /** The recipes the chain that makes it runs. */
+  steps?: number;
+  /** The free input (water, air, cobblestone, lava) that chain takes per unit. */
+  free?: number;
+}
 export type LeafOracle = (key: StuffKey) => LeafDecision;
-export interface GoodInfo { key: StuffKey; buyable: boolean; cost: number; leafClass: LeafClass | null; virtual: boolean }
+export interface GoodInfo {
+  key: StuffKey; buyable: boolean; cost: number; leafClass: LeafClass | null; virtual: boolean;
+  // optional additions
+  /** `LeafDecision.steps` and `free` of a bought derived leaf. */
+  steps?: number;
+  free?: number;
+}
 export interface CandidateGraph {
   targets: StuffKey[]; recipes: LpRecipe[] /* sorted by id */; goods: Map<StuffKey, GoodInfo>;
   blocked: Map<StuffKey, Array<{ recipeId: string; why: Rejection; needTier?: number }>>; warnings: PlanWarning[];
@@ -463,8 +476,10 @@ export function buildCandidates(
   const register = (key: StuffKey): GoodInfo => {
     let good = goods.get(key);
     if (good === undefined) {
-      const { buyable, cost, leafClass } = decide(key);
+      const { buyable, cost, leafClass, steps, free } = decide(key);
       good = { key, buyable, cost, leafClass, virtual: false };
+      if (steps !== undefined) good.steps = steps;
+      if (free !== undefined) good.free = free;
       goods.set(key, good);
     }
     return good;

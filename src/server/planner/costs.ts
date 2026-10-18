@@ -8,6 +8,7 @@ import type { Pack } from '../../shared/types/pack.ts';
 import { FREE_KEYS, type PlanSettings } from '../../shared/types/plan.ts';
 import { isBaseItem, isOrePrefix, type Availability } from './availability.ts';
 import type { CandidateGraph, LeafDecision, LeafOracle } from './candidates.ts';
+import type { Standalone } from './solve.ts';
 import { solveLp, type LpRow } from './lp.ts';
 
 /** GT's material unit: one dust or ingot is 3628800 M. */
@@ -84,9 +85,10 @@ export function hasCostOverride(pack: Pack, overrides: Record<string, number>, k
  * Which goods the line buys (spec §3.3, §5): "we already make this" items at their cost (key override, else `stopCost`,
  * else the price), free and natural goods, and base items the group can get at its tier; a derived base item only
  * while the project does not route derived materials, and then at `derivedCost` when that knows what making it costs
- * and no cost override names it, else at its price. When `derivedCost` says Infinity (only a chain through the line's
- * target makes it: Magnetic Steel for Steel) it is no leaf at all, so the line never buys a form of its own target.
- * Base items it cannot get are never buyable.
+ * and no cost override names it (with the recipes and free input of its chain, `LeafDecision.steps` and `free`), else
+ * at its price. When `derivedCost` says Infinity (only a chain through the line's target makes it: Magnetic Steel for
+ * Steel) it is no leaf at all, so the line never buys a form of its own target. Base items it cannot get are never
+ * buyable.
  *
  * `derivedCost` is what making the derived item on its own costs (planLine: `standaloneCosts` over the cost model's
  * graph, where derived materials are routed), undefined when that is not known. A flat price of 1 made exotic derived
@@ -97,14 +99,14 @@ export function hasCostOverride(pack: Pack, overrides: Record<string, number>, k
  */
 export function makeLeafOracle(
   pack: Pack, settings: PlanSettings, avail: Availability, prices: PriceTable, stopCost?: (key: StuffKey) => number,
-  derivedCost?: (key: StuffKey) => number | undefined,
+  derivedCost?: (key: StuffKey) => Standalone | undefined,
 ): LeafOracle {
   /** A derived leaf: its price under a cost override, else what making it costs, else its price. */
   const derived = (key: StuffKey): LeafDecision => {
     const made = hasCostOverride(pack, settings.costOverrides, key) ? undefined : derivedCost?.(key);
     if (made === undefined) return { buyable: true, cost: prices.price(key), leafClass: 'derived' };
     // Only a chain through the target itself makes it: the line cannot buy it to make the target.
-    return Number.isFinite(made) ? { buyable: true, cost: made, leafClass: 'derived' } : NOT_A_LEAF;
+    return Number.isFinite(made.cost) ? { buyable: true, cost: made.cost, leafClass: 'derived', steps: made.steps, free: made.free } : NOT_A_LEAF;
   };
   const expand = new Set(settings.expandItems);
   const stop = new Set(settings.stopItems);

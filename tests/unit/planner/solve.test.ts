@@ -71,8 +71,9 @@ describe('solveLine', () => {
     const leaf: LeafOracle = (k) => (k === 'iron@0' || k === 'coal@0' ? { buyable: true, cost: 1, leafClass: 'direct' } : { buyable: false, cost: 0, leafClass: null });
     const g = graphFor(p, 't@0', 1, leaf);
     const costs = await standaloneCosts(g, ['steel@0', 'magnetic@0', 'nowhere@0']);
-    expect([...costs]).toEqual([['steel@0', 2], ['magnetic@0', 2], ['nowhere@0', undefined]]);   // the slag is sunk
-    expect((await standaloneCosts(g, ['magnetic@0'], ['steel@0'])).get('magnetic@0')).toBe(Infinity);
+    // The slag is sunk; magnetic steel takes the smelter and the polarizer.
+    expect([...costs]).toEqual([['steel@0', { cost: 2, steps: 1, free: 0 }], ['magnetic@0', { cost: 2, steps: 2, free: 0 }], ['nowhere@0', undefined]]);
+    expect((await standaloneCosts(g, ['magnetic@0'], ['steel@0'])).get('magnetic@0')?.cost).toBe(Infinity);
   });
   it('takes the plan with the fewest recipes among the cheapest, before power', async () => {
     // Both use one raw@0 per t@0; the two-step chain draws less power (80 EU against 60,000), the direct recipe is one step.
@@ -84,6 +85,26 @@ describe('solveLine', () => {
     const s = await solveLine(graphFor(p, 't@0', 1, leaf), one('t@0'));
     expect(Object.fromEntries(s.runs)).toEqual({ direct: 1 });
     expect(s.rawCost).toBeCloseTo(1, 9);
+  });
+  it('breaks a fewest-recipes tie by free input first, then by power', async () => {
+    // Oxygen from 10,000 L of air at 2 EU/t, or from 3,000 L of water at 30 EU/t: power alone would take the air.
+    const p = packFromSpec({ machines: [{ mteId: 1, name: 'M', maps: ['gt.recipe.centrifuge', 'gt.recipe.electrolyzer'], tier: 1 }], recipes: [
+      { id: 'air', map: 'gt.recipe.centrifuge', in: [['fluid:air', 10000]], out: [['fluid:oxygen', 1000]], eut: 2 },
+      { id: 'water', map: 'gt.recipe.electrolyzer', in: [['fluid:water', 3000]], out: [['fluid:oxygen', 1000]], eut: 30 }] });
+    const free: LeafOracle = (k) => (k === 'fluid:air' || k === 'fluid:water' ? { buyable: true, cost: 0, leafClass: 'free' } : { buyable: false, cost: 0, leafClass: null });
+    const s = await solveLine(graphFor(p, 'fluid:oxygen', 1, free), one('fluid:oxygen'));
+    expect([...s.runs.keys()]).toEqual(['water']);
+  });
+  it('breaks a fewest-recipes tie by power before the chains of bought derived leaves, and by those chains last', async () => {
+    // Rods from Steel (a chain of 1 recipe) or from Magnetic Steel (2: steel, then a polarizer), at the same raw cost.
+    const rods = (steelEu: number, magneticEu: number) => packFromSpec({ machines: [{ mteId: 1, name: 'M', maps: ['gt.recipe.extruder'], tier: 1 }], recipes: [
+      { id: 'from-magnetic', map: 'gt.recipe.extruder', in: [['magnetic@0', 1]], out: [['rod@0', 2]], eut: magneticEu },
+      { id: 'from-steel', map: 'gt.recipe.extruder', in: [['steel@0', 1]], out: [['rod@0', 2]], eut: steelEu }] });
+    const leaf: LeafOracle = (k) => (k === 'steel@0' ? { buyable: true, cost: 2, leafClass: 'derived', steps: 1, free: 0 }
+      : k === 'magnetic@0' ? { buyable: true, cost: 2, leafClass: 'derived', steps: 2, free: 0 } : { buyable: false, cost: 0, leafClass: null });
+    const run = async (steelEu: number, magneticEu: number) => [...(await solveLine(graphFor(rods(steelEu, magneticEu), 'rod@0', 1, leaf), one('rod@0'))).runs.keys()];
+    expect(await run(30, 30)).toEqual(['from-steel']);
+    expect(await run(30, 8)).toEqual(['from-magnetic']);
   });
   it('free inputs are still inputs (water electrolysis is not a loop)', async () => {
     const p = packFromSpec({ machines: [{ mteId: 1, name: 'E', maps: ['gt.recipe.electrolyzer'], tier: 1 }],

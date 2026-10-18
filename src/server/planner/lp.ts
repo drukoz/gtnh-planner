@@ -118,7 +118,7 @@ export async function solveLp(model: LpModel): Promise<LpResult> {
     m.options.set({
       output_flag: false,
       ...(model.timeLimit === undefined ? {} : { time_limit: model.timeLimit }),
-      ...(model.maxNodes === undefined ? {} : { mip_max_nodes: model.maxNodes, mip_rel_gap: 0, mip_feasibility_tolerance: 1e-10 }),
+      ...(model.maxNodes === undefined ? {} : { mip_max_nodes: model.maxNodes, mip_rel_gap: 0, mip_abs_gap: 0, mip_feasibility_tolerance: 1e-10 }),
     });
     m.passModel(data);
     try {
