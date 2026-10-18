@@ -80,7 +80,10 @@ function clientGone(res: ServerResponse): boolean {
   return res.destroyed || res.socket?.destroyed === true;
 }
 
-/** The app's world service, created on first use; scans get the active export's facts, or none when no export loads. */
+/**
+ * The app's world service, created on first use. Scans get the active export's facts; when no export loads, the
+ * reason goes to the log and the scan runs with none: every machine stays unknown, and the scan's warnings say so.
+ */
 export function worldService(app: AppContext): WorldService {
   const existing = app.services.world as WorldService | undefined;
   if (existing !== undefined) return existing;
@@ -89,7 +92,8 @@ export function worldService(app: AppContext): WorldService {
     facts: async () => {
       try {
         return packFacts(await app.pack());
-      } catch {
+      } catch (err) {
+        console.warn(`World scan without a recipe export (${err instanceof Error ? err.message : String(err)}): its machines stay unknown`);
         return emptyFacts();
       }
     },

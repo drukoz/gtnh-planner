@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { Worker } from 'node:worker_threads';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { MAP_MARGIN, runScanJob, scanSummary, type ScanJob, type WorkerMessage } from '../../../src/server/world/scan.worker.ts';
+import { emptyFacts } from '../../../src/server/world/facts.ts';
+import { MAP_MARGIN, NO_EXPORT_WARNING, runScanJob, scanSummary, type ScanJob, type WorkerMessage } from '../../../src/server/world/scan.worker.ts';
 import type { ResolvedSource } from '../../../src/server/world/sources.ts';
 import type { BlockRef } from '../../../src/shared/types/pack.ts';
 import { decodeMapTile, type WorldScan, type WorldSource } from '../../../src/shared/types/world.ts';
@@ -213,6 +214,12 @@ describe('the scan job on other worlds', () => {
 
   it('warns about boilers with unknown steam output', async () => {   // the sample spec plus a coal boiler 100 at (0,64,1)
     expect((await runScanJob(await jobFor(sampleWithCoalBoiler), () => {})).warnings).toContain('1 boiler with unknown steam output');
+  });
+
+  it('says when it scanned without a recipe export, first', async () => {
+    const scan = await runScanJob({ ...(await jobFor(sample.worldDir)), facts: emptyFacts() }, () => {});
+    expect(scan.warnings).toEqual([NO_EXPORT_WARNING]);
+    expect([scan.machines.length, scan.machines.every((m) => m.kind === 'unknown' && m.name === undefined)]).toEqual([SAMPLE.machineCount.reduce((a, b) => a + b, 0), true]);
   });
 });
 

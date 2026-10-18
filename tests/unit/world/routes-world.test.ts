@@ -5,9 +5,10 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, expect, it, vi } from 'vitest';
 import type { AppContext } from '../../../src/server/app.ts';
 import { DEFAULT_CONFIG, type AppConfig } from '../../../src/server/config.ts';
-import { worldRoutes } from '../../../src/server/http/routes/world.ts';
+import { worldRoutes, worldService } from '../../../src/server/http/routes/world.ts';
 import { emptyContext } from '../../../src/server/planner/plan.ts';
 import type { WorldService } from '../../../src/server/world/scan.ts';
+import { NO_EXPORT_WARNING } from '../../../src/server/world/scan.worker.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import { NAME_HEADER } from '../../../src/shared/types/api.ts';
 import type { PlanContext, PlanSettings } from '../../../src/shared/types/plan.ts';
@@ -253,6 +254,25 @@ it('is served by the app server, only with the session cookie', async () => {
     expect(typeof server.app.services.planContext).toBe('function');
   } finally {
     await server.close();
+  }
+});
+
+it('scans without a recipe export when none loads, and says so in the log and in the scan', { timeout: 60_000 }, async () => {
+  const warned = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    const noExport = {
+      config: { ...config, dataDir: join(tmp, 'data-no-export') }, services: {},
+      pack: async () => { throw new Error('No recipe export yet — run npm run export'); },
+    } as unknown as AppContext;
+    const world = worldService(noExport);
+    const id = await world.startScan({ kind: 'backup', file: BACKUP });
+    await world.idle();
+    const scan = await world.getScan(id);
+    expect([scan?.warnings?.[0], scan?.machines.every((m) => m.kind === 'unknown')]).toEqual([NO_EXPORT_WARNING, true]);
+    expect(warned).toHaveBeenCalledTimes(1);
+    expect(warned).toHaveBeenCalledWith(expect.stringContaining('No recipe export yet — run npm run export'));
+  } finally {
+    warned.mockRestore();
   }
 });
 
