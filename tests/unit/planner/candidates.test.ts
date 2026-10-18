@@ -167,6 +167,22 @@ describe('candidate rules without a fixture test above', () => {
     const gravel: LeafOracle = (k) => (k === 'gravel@0' ? { buyable: true, cost: 1, leafClass: 'free' } : { buyable: false, cost: 0, leafClass: null });
     expect(buildCandidates(p, defaultSettings(), env(1), gravel, ['sand@0']).recipes.map((r) => r.id)).toContain('z-from-gravel');
   });
+  it('keeps the same producers whatever order the export lists recipes and options in', () => {
+    // x and y cost the same and each is made from the other: which one counts as made first must not follow the
+    // export's order, or y→x is grounded in one export of a pack and not in the next.
+    const recipes: RecipeSpec[] = [
+      { id: 'a-from-y', map: 'gt.recipe.macerator', in: [['y@0', 1]], out: [['x@0', 1]] },
+      { id: 'x-from-raw', map: 'gt.recipe.macerator', in: [['raw@0', 2]], out: [['x@0', 1]] },
+      { id: 'x-from-raw2', map: 'gt.recipe.macerator', in: [{ any: [['raw2@0', 2], ['raw3@0', 2]] }], out: [['x@0', 1]] },
+      { id: 'x-from-raw4', map: 'gt.recipe.macerator', in: [['raw4@0', 2]], out: [['x@0', 1]] },
+      { id: 'y-from-raw', map: 'gt.recipe.macerator', in: [['raw@0', 2]], out: [['y@0', 1]] },
+      { id: 'y-from-x', map: 'gt.recipe.macerator', in: [['x@0', 1]], out: [['y@0', 1]] }];
+    const raw: LeafOracle = (k) => (k.startsWith('raw') ? { buyable: true, cost: 0.5, leafClass: 'direct' } : { buyable: false, cost: 0, leafClass: null });
+    const ids = (list: RecipeSpec[]) => buildCandidates(packFromSpec({ machines: [M(1, ['gt.recipe.macerator'], 1)], recipes: list }),
+      defaultSettings(), env(1), raw, ['x@0']).recipes.map((r) => r.id);
+    const reversed = [...recipes].reverse().map((r) => ({ ...r, in: r.in?.map((ing) => (typeof ing === 'object' && 'any' in ing ? { any: [...ing.any].reverse() } : ing)) }));
+    expect(ids(reversed)).toEqual(ids(recipes));
+  });
   it('stops adding recipes at the cap (40,000) and says the graph was cut short', () => {
     expect(MAX_RECIPES).toBe(40_000);
     // t ← one recipe of 200 inputs, each made from 200 more, each made from nothing: 40,201 recipes, one per good.

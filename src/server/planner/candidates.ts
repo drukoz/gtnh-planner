@@ -79,15 +79,21 @@ const KEEP_WITHIN = 2;
 /** Slack when comparing estimates. */
 const ESTIMATE_TOLERANCE = 1e-9;
 
-/** A binary min-heap of [cost, key]. */
+/**
+ * A binary min-heap of [cost, key], equal costs by key: the order goods settle in must not depend on the order the
+ * export lists recipes and ore-dictionary options in (two exports of one pack list them differently).
+ */
 class CostHeap {
   readonly #items: Array<[number, StuffKey]> = [];
+  static #before(a: [number, StuffKey], b: [number, StuffKey]): boolean {
+    return a[0] < b[0] || (a[0] === b[0] && a[1] < b[1]);
+  }
   push(cost: number, key: StuffKey): void {
     const a = this.#items;
     a.push([cost, key]);
     for (let i = a.length - 1; i > 0; ) {
       const up = (i - 1) >> 1;
-      if ((a[up] as [number, StuffKey])[0] <= cost) break;
+      if (!CostHeap.#before(a[i] as [number, StuffKey], a[up] as [number, StuffKey])) break;
       [a[i], a[up]] = [a[up] as [number, StuffKey], a[i] as [number, StuffKey]];
       i = up;
     }
@@ -102,8 +108,8 @@ class CostHeap {
         const l = 2 * i + 1;
         const r = l + 1;
         let m = i;
-        if (l < a.length && (a[l] as [number, StuffKey])[0] < (a[m] as [number, StuffKey])[0]) m = l;
-        if (r < a.length && (a[r] as [number, StuffKey])[0] < (a[m] as [number, StuffKey])[0]) m = r;
+        if (l < a.length && CostHeap.#before(a[l] as [number, StuffKey], a[m] as [number, StuffKey])) m = l;
+        if (r < a.length && CostHeap.#before(a[r] as [number, StuffKey], a[m] as [number, StuffKey])) m = r;
         if (m === i) break;
         [a[i], a[m]] = [a[m] as [number, StuffKey], a[i] as [number, StuffKey]];
         i = m;
