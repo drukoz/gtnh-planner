@@ -293,6 +293,31 @@ fieldset.flow-panel-section > legend.flow-panel-title { float: left; width: 100%
 .swap-option input { margin-top: 4px; }
 .swap-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 
+/* Materials & steps (spec §3.10): the tree indents by depth, unlock texts are warnings, ticked rows are crossed out. */
+.materials { display: flex; flex-direction: column; gap: 22px; max-width: 960px; }
+.materials-section { display: flex; flex-direction: column; gap: 6px; }
+.materials-section h3 { font-size: 1.05rem; margin: 0; }
+.materials-section > p { margin: 0; }
+.mat-group h4 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 8px 0 2px; }
+.mat-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.mat-row { display: flex; align-items: flex-start; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--border); }
+.mat-row > .item-icon { margin-top: 1px; }
+.mat-row > .tick { flex: 1; min-width: 0; gap: 4px 10px; }
+.mat-toggle { width: 1.6em; flex-shrink: 0; padding: 0; border: none; background: none; text-align: center; color: var(--muted); }
+span.mat-toggle { display: inline-block; }
+.mat-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.mat-amount { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
+.mat-have summary { cursor: pointer; }
+.mat-where { margin: 2px 0 0; padding-left: 18px; }
+.mat-sources, .mat-unlock, .mat-actions { flex-basis: 100%; }
+.mat-sources { margin: 0; padding-left: 18px; overflow-wrap: anywhere; }
+.mat-unlock {
+  margin: 0; padding: 4px 8px; background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: 6px;
+}
+.step-list { margin: 0; padding-left: 24px; display: flex; flex-direction: column; gap: 4px; }
+.step-row { padding: 3px 0; }
+.step-row .tick-label { overflow-wrap: anywhere; }
+
 @media (max-width: 1100px) {
   .flow.has-panel { grid-template-columns: minmax(0, 1fr); }
   .flow-panel { position: static; max-height: none; }
