@@ -70,16 +70,31 @@ export function planCacheKey(hash: string, exportId: string, scanId: string | nu
  * The line's draw: `peakEUt` = Σ count × EU/t, `averageEUt` = Σ count × EU/t × utilization, `voltageTier` the highest
  * machine tier of the steps (0 without steps) and `amps` the amps that peak needs at that tier's voltage (0 without
  * draw). Whether it fits the group's power (`fits`) is Plan 5's.
+ *
+ * `sharedByType` (Make N, where every step of a machine type runs on that type's machines): the peak is instead
+ * Σ over machine types (mteId) of the largest count × the largest EU/t among that type's steps, so shared machines
+ * are counted once. The average is the same either way, because utilization already divides by the shared count.
  */
-export function powerSummary(steps: PlanStep[]): PowerSummary {
+export function powerSummary(steps: PlanStep[], opts: { sharedByType?: boolean } = {}): PowerSummary {
   let peak = 0;
   let average = 0;
   let voltageTier = 0;
+  const byType = new Map<number, { count: number; euPerTick: number }>();
   for (const step of steps) {
-    peak += step.count * step.euPerTick;
     average += step.count * step.euPerTick * step.utilization;
     voltageTier = Math.max(voltageTier, step.machine.tier);
+    if (opts.sharedByType !== true) {
+      peak += step.count * step.euPerTick;
+      continue;
+    }
+    const type = byType.get(step.machine.mteId);
+    if (type === undefined) byType.set(step.machine.mteId, { count: step.count, euPerTick: step.euPerTick });
+    else {
+      type.count = Math.max(type.count, step.count);
+      type.euPerTick = Math.max(type.euPerTick, step.euPerTick);
+    }
   }
+  for (const type of byType.values()) peak += type.count * type.euPerTick;
   const peakEUt = round9(peak);
   const amps = peakEUt > 0 ? Math.ceil(peakEUt / (V[voltageTier] as number) - TINY) : 0;
   return { peakEUt, averageEUt: round9(average), voltageTier, amps };
@@ -396,7 +411,8 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
   addAlternatives(steps, model);
 
   const raw = rawInputsOf(pack, graph, basis, ctx, buys, made?.totalSeconds ?? null);
-  const power = powerSummary(steps);
+  // Make N steps of one machine type share that type's machines (makeN), so they draw at most once per type.
+  const power = powerSummary(steps, { sharedByType: batch });
   const bom = await buildBom(pack, steps, { settings, env: basis.env, leaf: basis.leaf, ctx });
   const body: PlanBody = {
     status: 'ok', unlocks: [], steps, flows, rawInputs: raw.rawInputs, byproducts: byproductsOf(graph, sinks, target), power,

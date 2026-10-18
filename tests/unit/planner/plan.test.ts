@@ -144,6 +144,25 @@ describe('planLine', () => {
     expect(out?.perSecond).toBeCloseTo(10 / 115, 9);
     expect(p.rawInputs[0]?.perSecond).toBeCloseTo(10 / 115, 9);
   });
+  it('counts the machines Make N steps share once in the peak draw', async () => {
+    // Progress ruling (Task 14): both assembler steps run on the same 2 owned assemblers, so the peak is 2 × 30 EU/t.
+    const shared = packFromSpec({
+      items: [{ key: 'raw@0', name: 'Raw Dust', gt: { prefix: 'dust', material: 'Raw' } }, { key: 'a@0', name: 'Part' }, { key: 't@0', name: 'Thing' }],
+      maps: [{ id: 'gt.recipe.assembler', name: 'Assembler' }],
+      machines: [{ mteId: 1, name: 'Basic Assembler', maps: ['gt.recipe.assembler'], tier: 1 }],
+      recipes: [{ id: 'r1', map: 'gt.recipe.assembler', in: [['raw@0', 1]], out: [['a@0', 1]], eut: 30 },
+                { id: 'r2', map: 'gt.recipe.assembler', in: [['a@0', 1]], out: [['t@0', 1]], eut: 16 }],
+      worldgen: { veins: [vein('ore.mix.raw', 'Raw')] },
+    });
+    const ctx = { ...emptyContext(), ownedMachines: [{ mteId: 1, count: 2 }] };
+    const p = await planLine(shared, S({ target: 't@0', mode: 'makeN', amount: 4, tier: 1 }), ctx);
+    expect(p.steps.map((s) => [s.id, s.machine.mteId, s.count, s.euPerTick])).toEqual([['r1', 1, 2, 30], ['r2', 1, 2, 16]]);
+    expect(p.power).toMatchObject({ peakEUt: 60, voltageTier: 1, amps: 2 });
+    expect(p.buildSteps.find((s) => s.kind === 'power')?.text).toMatch(/^Connect power: up to 60 EU\/t at LV/);
+    // Rate mode gives every step its own machines, so the plain sum stays.
+    const rate = await planLine(shared, S({ target: 't@0', amount: 60, per: 'min', tier: 1 }), ctx);
+    expect(rate.power).toMatchObject({ peakEUt: rate.steps.reduce((sum, s) => sum + s.count * s.euPerTick, 0) });
+  });
   it('names the target in a free-loop warning', async () => {
     const loop = packFromSpec({
       items: [{ key: 'raw@0', name: 'Raw Dust', gt: { prefix: 'dust', material: 'Raw' } }, { key: 'y@0', name: 'Widget' }],
@@ -207,5 +226,13 @@ describe('powerSummary', () => {
                          step({ count: 2, euPerTick: 120, utilization: 0.25, machine: { mteId: 2, name: 'N', tier: 2 } })]))
       .toEqual({ peakEUt: 312, averageEUt: 96, voltageTier: 2, amps: 3 });
     expect(powerSummary([step({ count: 4, euPerTick: 32 })])).toMatchObject({ peakEUt: 128, amps: 4 });
+  });
+  it('counts a machine type once per type when its steps share the machines', () => {
+    const steps = [step({ id: 'a', count: 2, euPerTick: 30 }), step({ id: 'b', count: 2, euPerTick: 16 })];
+    expect(powerSummary(steps, { sharedByType: true })).toMatchObject({ peakEUt: 60, voltageTier: 1, amps: 2 });
+    expect(powerSummary(steps)).toMatchObject({ peakEUt: 92, voltageTier: 1, amps: 3 });
+    expect(powerSummary(steps, { sharedByType: false })).toMatchObject({ peakEUt: 92, amps: 3 });
+    // The average already divides by the shared count, so it is the same either way.
+    expect(powerSummary(steps, { sharedByType: true }).averageEUt).toBe(powerSummary(steps).averageEUt);
   });
 });
