@@ -37,7 +37,7 @@
 
 1. Shared asset types, PNG size and `.mcmeta` frames, synthetic PNG builder — `src/shared/types/assets.ts`, `src/server/assets/png.ts`, `tests/helpers/png.ts`.
 2. Jar texture extraction: scan, duplicate winner rule, `index.json`, staged swap — `src/server/assets/extract.ts`, `src/server/assets/index.ts`, `tests/helpers/jar.ts`.
-3. `npm run extract-assets` CLI: pack jars + sha1-verified client jar (config or flag), summary and conflict log — `src/server/cli/extract-assets.ts`.
+3. `npm run extract-assets` CLI: pack jars + sha1-verified client jar (config or flag), summary and conflict log; `AppConfig.clientJar` (architecture §11.17) — `src/server/cli/extract-assets.ts`, `src/server/config.ts`.
 4. Exporter: Java test setup, `TexturePaths`, `CasingIconParser` (casing `getIcon` table-switch parse) — `exporter-mod/…/export/textures/`.
 5. Exporter: `TextureFlattener` (GT `ITexture` trees → flat layer records).
 6. Exporter: `TextureExporter` section (materials, meta-item tables, MTE faces, casing pages, casing blocks, covers, fluids, texture names), appended to `Exporter.sections()`.
@@ -62,6 +62,7 @@
 | `src/server/assets/index.ts` | `index.json` format, loader, `AssetIndex.layer()` |
 | `src/server/assets/extract.ts` | jar scan, duplicate winner rule, staging + swap |
 | `src/server/cli/extract-assets.ts` | `npm run extract-assets` |
+| `src/server/config.ts` (modify) | `AppConfig.clientJar?: string \| null`, default `null` (architecture §11.17) |
 | `src/server/assets/textures-dump.ts` | `textures.json.gz` format and loader |
 | `src/server/assets/gt-faces.ts` | GT machine faces, casings, covers, material / meta-item / fluid icons |
 | `src/server/assets/curated.ts` | non-GT block tables (Storage Drawers, JABBA, Iron Chests, Project Red, EnderIO, AE2, multi-texture vanilla blocks) |
@@ -79,7 +80,7 @@
 
 ## What this plan uses from Plans 1 and 2
 
-- Plan 1 (TypeScript): `parseItemKey`, `isFluidKey`, `StuffKey`, `ItemKey` (`src/shared/keys.ts`); `BlockRef`, `Pack`, `Machine`, `MachineKind`, `Item`, `GtMaterial` (`src/shared/types/pack.ts`); `AppConfig`, `loadConfig()`, `activeExportDir(cfg)` (`src/server/config.ts`), `loadPack` (`src/server/pack/load.ts`, Task 15 only). `Pack.machines` gives fallback colours by kind; `Pack.items[].gt` + `Pack.materials` give a material colour when no texture dump exists.
+- Plan 1 (TypeScript): `parseItemKey`, `isFluidKey`, `StuffKey`, `ItemKey` (`src/shared/keys.ts`); `BlockRef`, `Pack`, `Machine`, `MachineKind`, `Item`, `GtMaterial` (`src/shared/types/pack.ts`); `AppConfig`, `DEFAULT_CONFIG`, `loadConfig(file?)`, `saveConfig(c, file?)`, `activeExportDir(cfg)` (`src/server/config.ts`; with no `file`, the path comes from `configPath()`, which honours `GTNH_PLANNER_CONFIG`; Task 3 adds `clientJar` to `AppConfig` and `DEFAULT_CONFIG`, architecture §11.17), `loadPack` (`src/server/pack/load.ts`, Task 15 only). `Pack.machines` gives fallback colours by kind; `Pack.items[].gt` + `Pack.materials` give a material colour when no texture dump exists.
 - Plan 1 (exporter mod, Plan 1 Task 9, package `io.github.drukoz.gtnhplanner.export`): `ExportSection` (`name()`, `export(ExportContext)`, `optional()`), `ExportContext` (`dir()`, `gzipJson(String fileName)` → Gson `JsonWriter` over one gzip'd JSON document, `warn(String)`, `count(String, long)`), `Exporter.sections()` (ordered list; Plan 1 says "Plan 3 appends TextureExporter last"), `scripts/check-reobf.sh`, the `$GTDEV` / Gradle conventions of Plan 1 ("Conventions for every task"), and `npm run export` (runs the mod on the APFS clone only). Plan 1's JSONL writer is not used: the dump is one gzip'd JSON document, written through `ctx.gzipJson("textures.json.gz")`.
 - Plan 1 tests: `runCli(script, args, opts)` (`tests/helpers/run-cli.ts`; Tasks 3 and 11 add their script names to its union) and `snapshot(dir)` (`tests/helpers/fake-server.ts`).
 - Plan 2: `Route`, `Handler`, `HttpError`, `sendJson`, `readJson` (`src/server/http/router.ts`), `AppContext` with `services` (`src/server/app.ts`), `ROUTE_MODULES` (`src/server/http/routes/index.ts`), `apiPost` (`src/client/api/client.ts`), the `ItemIcon` placeholder (`src/client/components/ItemIcon.tsx`, props `{ itemKey: StuffKey; size?: number }`; Plan 2's `tests/client/scaffold.test.tsx` expects `title="<key>"` and `width:32px` in its static markup, which the real body keeps), `startTestServer({ pack })` (`tests/helpers/test-server.ts`), and the shared Playwright harness `tests/e2e/{helpers,prepare}.ts` with the signatures of architecture §11.7: `login(page)`, `setName(page, name)`, `createProject(page, name)` (leaves the page on the new project); plans 3–5 extend `prepare.ts`.
@@ -456,11 +457,14 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 **Files:**
 - Create: `src/server/cli/extract-assets.ts`
+- Modify: `src/server/config.ts` (Plan 1, with Plan 2's auth fields): `AppConfig` gains `clientJar?: string | null` (architecture §11.17) and `DEFAULT_CONFIG` gains `clientJar: null`, so `loadConfig()` returns `null` for a config file without the key and keeps a saved path. Nothing else in the file changes, and nothing else reads the field.
+- Modify: `tests/unit/server/config.test.ts` (Plan 1): add `clientJar: null` to the exact expected objects in "returns defaults when the file does not exist" and "round-trips, keeps unknown keys, writes mode 0600 and a trailing newline", because every loaded or re-saved config now carries the default.
 - Modify: `package.json` (script `"extract-assets": "node --disable-warning=ExperimentalWarning src/server/cli/extract-assets.ts"`), `tests/helpers/run-cli.ts` (Plan 1; add `'extract-assets'` to the `script` union)
 - Test: `tests/unit/cli/extract-assets.test.ts`
 
 **Interfaces:**
-- Consumes: `extractAssets`, `ExtractError`, `ExtractSummary` (Task 2); `AppConfig`, `loadConfig()` (`src/server/config.ts`; `clientJar` per Architecture change request 1); `runCli` (Plan 1), `snapshot` (Plan 1, `tests/helpers/fake-server.ts`).
+- Consumes: `extractAssets`, `ExtractError`, `ExtractSummary` (Task 2); `AppConfig`, `DEFAULT_CONFIG`, `configPath()`, `loadConfig(file?)`, `saveConfig(c, file?)` (`src/server/config.ts`, Plan 1 with Plan 2's auth fields; with no `file` both use `configPath()`, which honours `GTNH_PLANNER_CONFIG`); `runCli` (Plan 1), `snapshot` (Plan 1, `tests/helpers/fake-server.ts`).
+- Produces (`src/server/config.ts`): `AppConfig.clientJar?: string | null`, the path of the Minecraft 1.7.10 client jar, with `DEFAULT_CONFIG.clientJar === null` (architecture §11.17).
 - Produces (`src/server/cli/extract-assets.ts`):
   ```ts
   export const CLIENT_JAR_SHA1 = 'e80d9b3bf5085002218d4be59e668bac718abbc6';
@@ -476,8 +480,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 Behaviour (decided here):
 - Flags (`node:util` `parseArgs`, strict): `--server <folder>`, `--client-jar <path>`, `--no-client`, `--help` (prints `Usage: npm run extract-assets -- [--server <folder>] [--client-jar <path> | --no-client]`, exit 0).
-- Server folder = `--server`, else `config.serverFolder`; none → exit 2 with `No server folder: set "serverFolder" in data/config.json or pass --server <folder>`. No `<server>/mods` → exit 2 `No mods folder in <server>`. The server folder is only read (jars opened read-only), never written.
-- Client jar: `--no-client` skips it (prints `warning: no client jar - vanilla block and item textures will be missing`); otherwise `findClientJar`; a flag path that does not exist → exit 2 `Client jar not found: <path>`; none → exit 2 with `No Minecraft 1.7.10 client jar found. Pass --client-jar <path> or set "clientJar" in data/config.json (Prism Launcher keeps it at ~/<candidate 1>), or use --no-client.` A sha1 other than `deps.clientSha1 ?? CLIENT_JAR_SHA1` → exit 2 with `<path> is not the official Minecraft 1.7.10 client jar (sha1 <got>, expected <expected>)`.
+- `config` = `deps.config ?? loadConfig()`. Server folder = `--server`, else `config.serverFolder`; none → exit 2 with `No server folder: set "serverFolder" in data/config.json or pass --server <folder>`. No `<server>/mods` → exit 2 `No mods folder in <server>`. The server folder is only read (jars opened read-only), never written.
+- Client jar: `--no-client` skips it (prints `warning: no client jar - vanilla block and item textures will be missing`); otherwise `findClientJar({ flag: <--client-jar value or null>, config: config.clientJar, home: deps.home ?? os.homedir() })`; a flag path that does not exist → exit 2 `Client jar not found: <path>`; none → exit 2 with `No Minecraft 1.7.10 client jar found. Pass --client-jar <path> or set "clientJar" in data/config.json (Prism Launcher keeps it at ~/<candidate 1>), or use --no-client.` A sha1 other than `deps.clientSha1 ?? CLIENT_JAR_SHA1` → exit 2 with `<path> is not the official Minecraft 1.7.10 client jar (sha1 <got>, expected <expected>)`.
 - Runs `extractAssets({ jars, dataDir: config.dataDir, clientSha1 })` and prints `Extracted <files> textures (<MB, one decimal> MB) from <jars> jars into <dataDir>/assets`, then `<identical> identical duplicates, <n> conflicting paths (winner: mod over vanilla, then an overriding jar over the texture's own mod, then the last jar by name):`, up to 20 lines `  <path>: <winner> over <losers joined by ', '>` and `  … <rest> more in <dataDir>/assets/index.json`, then `warning: skipped <jar>: <error>` per skipped jar → exit 0. `ExtractError` → `Extraction failed; the previous textures are still in place: <message>` → exit 1.
 
 - [ ] **Step 1: Write the failing tests**
@@ -485,7 +489,7 @@ Behaviour (decided here):
 `tests/unit/cli/extract-assets.test.ts`:
 
 ```ts
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdtemp, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -494,7 +498,7 @@ import { makePng } from '../../helpers/png.ts';
 import { snapshot } from '../../helpers/fake-server.ts';
 import { runCli } from '../../helpers/run-cli.ts';
 import { main, listModJars, findClientJar, sha1File, CLIENT_JAR_CANDIDATES } from '../../../src/server/cli/extract-assets.ts';
-import type { AppConfig } from '../../../src/server/config.ts';
+import { DEFAULT_CONFIG, configPath, loadConfig, saveConfig, type AppConfig } from '../../../src/server/config.ts';
 
 const PNG = makePng(16, 16, [90, 90, 90, 255]);
 
@@ -506,12 +510,14 @@ async function setup() {
   await makeJar(join(srv, 'mods', '1.7.10', 'Extra.jar'), { 'assets/extra/textures/items/thing.png': PNG });
   await writeFile(join(srv, 'mods', 'notes.txt'), 'not a jar');
   const client = await makeJar(join(dir, 'client.jar'), { 'assets/minecraft/textures/blocks/stone.png': PNG });
-  const config = { dataDir: join(dir, 'data'), serverFolder: srv, activeExportId: null, clientJar: null } as unknown as AppConfig;
+  const config: AppConfig = { ...DEFAULT_CONFIG, dataDir: join(dir, 'data'), serverFolder: srv };
   const lines: string[] = [];
   return { dir, srv, client, config, lines, deps: { config, home: join(dir, 'home'), out: (l: string) => lines.push(l), err: (l: string) => lines.push(l) } };
 }
 
 describe('extract-assets CLI', () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
+
   it('lists mod jars, including mods/1.7.10, by name', async () => {
     const { srv } = await setup();
     expect((await listModJars(srv)).map((p) => p.slice(srv.length + 1))).toEqual(['mods/1.7.10/Extra.jar', 'mods/gregtech-5.09.54.183.jar']);
@@ -525,6 +531,17 @@ describe('extract-assets CLI', () => {
     expect(findClientJar({ flag: null, config: null, home })).toBeNull();
     await makeJar(join(home, CLIENT_JAR_CANDIDATES[0]!), {});
     expect(findClientJar({ flag: null, config: null, home })).toBe(join(home, CLIENT_JAR_CANDIDATES[0]!));
+  });
+
+  it('finds the client jar from a saved config', async () => {
+    const { dir, client } = await setup();
+    const file = join(dir, 'config.json');
+    vi.stubEnv('GTNH_PLANNER_CONFIG', file);
+    expect(configPath()).toBe(file);   // never touch the real data/config.json
+    await writeFile(file, JSON.stringify({ dataDir: 'data', serverFolder: null, activeExportId: null }));   // saved before this task: no clientJar key
+    expect(loadConfig().clientJar).toBeNull();
+    saveConfig({ ...loadConfig(), clientJar: client });
+    expect(findClientJar({ flag: null, config: loadConfig().clientJar, home: join(dir, 'home') })).toBe(client);
   });
 
   it('refuses a client jar that is not the official one', async () => {
@@ -566,17 +583,17 @@ describe('extract-assets CLI', () => {
 Run: `npx vitest run tests/unit/cli/extract-assets.test.ts`
 Expected: FAIL — `Cannot find module '../../../src/server/cli/extract-assets.ts'`.
 
-- [ ] **Step 3: Implement `src/server/cli/extract-assets.ts`, add the npm script and extend the `runCli` script union**
+- [ ] **Step 3: Add `clientJar?: string | null` to `AppConfig` and `clientJar: null` to `DEFAULT_CONFIG` in `src/server/config.ts`, add `clientJar: null` to the two expected objects in `tests/unit/server/config.test.ts`, implement `src/server/cli/extract-assets.ts`, add the npm script and extend the `runCli` script union**
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `npx vitest run tests/unit/cli/extract-assets.test.ts && npm run typecheck`
-Expected: PASS (`Test Files  1 passed`), typecheck exits 0.
+Run: `npx vitest run tests/unit/cli/extract-assets.test.ts tests/unit/server/config.test.ts && npm run typecheck`
+Expected: PASS (`Test Files  2 passed`), typecheck exits 0.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add package.json src/server/cli/extract-assets.ts tests/helpers/run-cli.ts tests/unit/cli/extract-assets.test.ts
+git add package.json src/server/config.ts src/server/cli/extract-assets.ts tests/helpers/run-cli.ts tests/unit/server/config.test.ts tests/unit/cli/extract-assets.test.ts
 git commit -m "feat(assets): npm run extract-assets with a verified 1.7.10 client jar
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
@@ -2356,7 +2373,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 The tasks above assume these are granted. Each is additive; nothing in the architecture is renamed.
 
-1. **`AppConfig.clientJar` (architecture §9, Plan 1/2 `src/server/config.ts`).** Why: `npm run extract-assets` takes the 1.7.10 client jar "from config or flag", and a friend's clone may keep it outside the launcher folders. Diff: `clientJar?: string | null` in `AppConfig`; `loadConfig()` fills `null` when absent; nothing else reads it.
+1. **`AppConfig.clientJar` (architecture §9; granted as §11.17).** Why: `npm run extract-assets` takes the 1.7.10 client jar "from config or flag", and a friend's clone may keep it outside the launcher folders. Diff: `clientJar?: string | null` in `AppConfig`; `DEFAULT_CONFIG.clientJar` is `null`, so `loadConfig()` fills `null` when absent; nothing else reads it. Neither Plan 1 nor Plan 2 adds the field, so Task 3 makes this change in `src/server/config.ts` itself and updates Plan 1's two exact-object config tests.
 2. **Malformed percent-encoding is a 400 (Plan 2 `matchRoute`).** Why: `GET /api/assets/file/*` must answer 400 or 404 to crafted URLs (Review Focus 3); today a param such as `%E0%A4%A` makes `decodeURIComponent` throw a `URIError`, which the server turns into a 500. Diff: `matchRoute` catches the `URIError` and throws `HttpError(400, 'bad-path', 'Malformed URL')`.
 3. **Java test setup in Plan 1's exporter project.** Why: the casing parser and the texture flattener are pure Java and worth unit tests, while Plan 1's convention ("Java tasks have no unit tests") was written for code that needs a running server. Diff (Task 4): `exporter-mod/dependencies.gradle` gains `compileOnly`/`testImplementation` `org.ow2.asm:asm-tree:9.4`, `testImplementation` `com.google.code.gson:gson:2.2.4` and `org.junit.jupiter:junit-jupiter:5.11.4`, `testRuntimeOnly` `org.junit.platform:junit-platform-launcher:1.11.4`; new `exporter-mod/addon.gradle` with `useJUnitPlatform()`. ASM is not bundled (the pack ships asm-tree 9.4; FML uses the tree API).
 4. **Export folder gains `textures.json.gz` (granted in architecture §11.3; one point to confirm).** The optional section `textures` writes one gzip'd JSON document through `ExportContext.gzipJson`; it is not a JSONL table and is not counted, so `EXPORT_FILES` does not change. Please confirm that Plan 1's validation ignores files outside `EXPORT_FILES` and that `textures` in `failedSections` does not block activation, as for `structures`.
