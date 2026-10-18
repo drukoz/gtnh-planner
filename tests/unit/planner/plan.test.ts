@@ -177,6 +177,20 @@ describe('planLine', () => {
     expect(mv.warnings).toEqual([{ code: 'unavailable', key: 'thing@0', text: 'Thing: needs HV machines' }]);
     expect(mv.unlocks).toEqual([{ key: 'thing@0', text: 'Thing: needs HV machines' }]);
   });
+  it('names the target\'s own unlock when only a chain through the target itself is left (nuggets cut from the ingot)', async () => {
+    const p = packFromSpec({
+      items: [{ key: 'al@0', name: 'Aluminium Ingot' }, { key: 'nugget@0', name: 'Aluminium Nugget' }, { key: 'dust@0', name: 'Aluminium Dust', gt: { prefix: 'dust', material: 'Aluminium' } }],
+      machines: [{ mteId: 1, name: 'Basic Cutter', maps: ['gt.recipe.cuttingsaw'], tier: 1 }, { mteId: 2, name: 'Smelter II', maps: ['gt.recipe.smelter'], tier: 2 }],
+      recipes: [{ id: 'craft', map: 'crafting', in: [['nugget@0', 9]], out: [['al@0', 1]] },
+                { id: 'cut', map: 'gt.recipe.cuttingsaw', in: [['al@0', 1]], out: [['nugget@0', 9]], eut: 8 },
+                { id: 'smelt', map: 'gt.recipe.smelter', in: [['dust@0', 1]], out: [['al@0', 1]], eut: 120 }],
+      worldgen: { veins: [vein('ore.mix.al', 'Aluminium')] },
+    });
+    const lv = await planLine(p, S({ target: 'al@0', tier: 1 }), emptyContext());
+    expect(lv.status).toBe('infeasible');
+    expect(lv.warnings).toEqual([{ code: 'unavailable', key: 'al@0', text: 'Aluminium Ingot: needs MV machines' }]);
+    expect(lv.unlocks).toEqual([{ key: 'al@0', text: 'Aluminium Ingot: needs MV machines' }]);
+  });
   it('never prices a derived material the cost model did not walk below what its own chain costs', async () => {
     // Plates bend from steel (made from iron and coal), press from iron, or alloy-smelt from Magnetic Steel (2 steel per
     // ingot). The cost model keeps the three cheapest plate recipes, so it never walks Magnetic Steel; at its flat price

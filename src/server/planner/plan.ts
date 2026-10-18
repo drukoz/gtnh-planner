@@ -279,9 +279,11 @@ function namedSolverWarning(pack: Pack, graph: CandidateGraph, sol: Solution, w:
 
 /**
  * Plain words for each blocker of an infeasible line (Review Focus #3), and the unlock hints among them. When the
- * target itself is out of reach at this tier and no blocker names it or an out-of-reach base material, the blockers
- * are side roads of the walk (a part that only a recycling chain would turn back into the target), so the target's
- * own unlock hint ("needs EV machines") replaces them.
+ * target itself is out of reach at this tier and no blocker is an out-of-reach base material or a recipe the tier
+ * rejects for the target, the blockers are side roads of the walk (a part that only a recycling chain would turn
+ * back into the target, or the target itself when only such a chain is left: Aluminium Ingot at LV crafts from
+ * nuggets cut from the ingot, "nothing in this pack makes" it), so the target's own unlock hint ("needs MV machines")
+ * replaces them.
  */
 function blockerWarnings(
   pack: Pack, sol: Solution, basis: PlanBasis, settings: PlanSettings, ctx: PlanContext,
@@ -294,7 +296,8 @@ function blockerWarnings(
     unlocks.push({ key, text });
   };
   const target = settings.target;
-  const sideRoads = sol.blockers.length > 0 && sol.blockers.every((b) => b.reason !== 'unavailable' && b.key !== target);
+  const sideRoad = (b: Solution['blockers'][number]): boolean => b.reason !== 'unavailable' && (b.key !== target || b.reason === 'no-recipe');
+  const sideRoads = sol.blockers.length > 0 && sol.blockers.every(sideRoad);
   if (target !== null && sideRoads && !basis.avail.available.has(target)) {
     unlock(target);
     return { warnings, unlocks };
