@@ -14,10 +14,12 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Supplier;
 
 import net.minecraft.item.ItemStack;
 import net.minecraft.world.WorldProvider;
 import net.minecraftforge.common.DimensionManager;
+import net.minecraftforge.fluids.Fluid;
 import net.minecraftforge.fluids.FluidStack;
 
 import org.apache.commons.lang3.tuple.Pair;
@@ -203,8 +205,9 @@ public final class WorldgenSection implements ExportSection {
 
     /**
      * The gas GT++'s air intake hatch makes in a dimension ({@code MTEHatchAirIntake.getFluidToGenerate}): Toxic Air
-     * in the Toxic Everglades, Nether Air in DIM -1, Air everywhere else. Each name is resolved once; one that cannot
-     * be resolved is {@code null}, with a warning.
+     * in the Toxic Everglades, Nether Air in DIM -1, Air everywhere else, each taken from the same {@link Materials}
+     * field the hatch reads (Nether Air is the material's fluid, not its gas). Each name is resolved once; one that
+     * cannot be resolved is {@code null}, with a warning.
      */
     private static final class AirIntake {
 
@@ -221,9 +224,9 @@ public final class WorldgenSection implements ExportSection {
                 ctx.warn("worldgen dimensions: Toxic Everglades dimension id: " + t);
             }
             evergladesId = everglades;
-            air = gasName(ctx, "Air", Materials.Air);
-            netherAir = gasName(ctx, "NetherAir", Materials.NetherAir);
-            toxicAir = gasName(ctx, "ToxicAir", Materials.ToxicAir);
+            air = fluidName(ctx, "Air", () -> Materials.Air.getGas(1).getFluid());
+            netherAir = fluidName(ctx, "NetherAir", () -> Materials.NetherAir.mFluid);
+            toxicAir = fluidName(ctx, "ToxicAir", () -> Materials.ToxicAir.mGas);
         }
 
         String gasFor(int id) {
@@ -232,9 +235,9 @@ public final class WorldgenSection implements ExportSection {
             return air;
         }
 
-        private static String gasName(ExportContext ctx, String label, Materials m) {
+        private static String fluidName(ExportContext ctx, String label, Supplier<Fluid> fluid) {
             try {
-                return m.getGas(1).getFluid().getName();
+                return fluid.get().getName();
             } catch (Throwable t) {
                 ctx.warn("worldgen dimensions: gas of " + label + ": " + t);
                 return null;
