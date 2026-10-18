@@ -1,0 +1,43 @@
+// Request and response bodies of the HTTP API (architecture §7, §8, §11.6). Plans 3–5 append their own; nothing here is
+// renamed or reshaped. Pure TypeScript shared by server and browser: nothing from node:* may be imported here.
+
+import type { StuffKey } from '../keys.ts';
+import type { Capability, DimensionInfo, PackManifest, RecipeSource } from './pack.ts';
+import type { PlanSettings } from './plan.ts';
+import type { ProjectOp } from './project.ts';
+
+/** Who is acting; the value is `encodeURIComponent(name)` and the server decodes it. */
+export const NAME_HEADER = 'X-Planner-Name';
+
+/** The body of every error response. */
+export interface ApiError { error: string; message: string }
+
+/** `GET /api/pack`: §7's fields plus the settings panel's checklists (§11.6). */
+export interface PackInfo {
+  manifest: PackManifest; mapCount: number; recipeCount: number; itemCount: number;
+  dimensions: DimensionInfo[]; capabilities: Capability[]; exclusionRules: string[];
+}
+
+/** One recipe as the item browser shows it; an ingredient with alternatives shows its first option. */
+export interface RecipeSummary {
+  id: string; source: RecipeSource; maps: string[]; machineName: string; tier: number; euPerTick: number; durationTicks: number;
+  inputs: Array<{ key: StuffKey; name: string; amount: number; consumed: boolean }>;
+  outputs: Array<{ key: StuffKey; name: string; amount: number; chance: number }>;
+  /** From `flags.fake`: display only, the machine runs its own code. */
+  fake?: boolean;
+}
+
+/** `GET /api/pack/stuff/:key`: at most 50 producers and 50 consumers. */
+export interface StuffInfo { key: StuffKey; name: string; producers: RecipeSummary[]; consumers: RecipeSummary[] }
+
+/** `GET /api/projects`, newest first. */
+export interface ProjectListEntry { id: string; name: string; rev: number; target: StuffKey | null; updatedAt: string }
+
+export interface CreateProjectBody { name: string; settings?: Partial<PlanSettings> }
+export interface OpsBody { ops: ProjectOp[] }
+export interface OpsResult { rev: number }
+
+/** SSE `op` (§8). */
+export interface OpEvent { rev: number; op: ProjectOp; by: string; at: string }
+/** SSE `plan` (§8): the plan and the layout of this revision may have changed. */
+export interface PlanEvent { rev: number }
