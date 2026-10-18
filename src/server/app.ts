@@ -9,6 +9,20 @@ import { SseHub } from './http/sse.ts';
 import { loadPack } from './pack/load.ts';
 import { ProjectStore } from './projects/store.ts';
 import type { Pack } from '../shared/types/pack.ts';
+import type { Plan, PlanContext } from '../shared/types/plan.ts';
+import type { Project } from '../shared/types/project.ts';
+
+/**
+ * What later plans register. The planner hooks are read on every call, never captured at start (ruling R20):
+ * `planContext` (architecture §7.1, set by Plan 4) gives the world a project is planned in, else the planner uses an
+ * empty context; `planFinish` (§11.16, set by Plan 5) finishes a plan the cache holds before the plan route sends it,
+ * and returns a new plan rather than changing the one it gets.
+ */
+export interface AppServices {
+  planContext?: (project: Project) => Promise<PlanContext>;
+  planFinish?: (plan: Plan, project: Project) => Promise<Plan>;
+  [name: string]: unknown;
+}
 
 export interface AppContext {
   config: AppConfig;
@@ -16,8 +30,8 @@ export interface AppContext {
   projects: ProjectStore;
   sse: SseHub;
   pack(): Promise<Pack>;
-  /** Plans 3–5 register e.g. services.assets, services.world, services.layout. */
-  services: Record<string, unknown>;
+  /** Plans 3–5 register e.g. services.assets, services.world, services.layout, and the planner hooks. */
+  services: AppServices;
 }
 
 export interface AppDeps {
