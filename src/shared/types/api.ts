@@ -41,3 +41,8 @@ export interface OpsResult { rev: number }
 export interface OpEvent { rev: number; op: ProjectOp; by: string; at: string }
 /** SSE `plan` (§8): the plan and the layout of this revision may have changed. */
 export interface PlanEvent { rev: number }
+
+/** `GET /api/projects?deleted=1` (§11.24), newest deletion first: restorable until purged 7 days after `deletedAt`. */
+export interface DeletedProjectSummary { id: string; name: string; rev: number; target: StuffKey | null; updatedAt: string; deletedAt: string; deletedBy: string }
+/** SSE `deleted` (§11.24): the last event of every stream of a project someone deleted; the stream then ends. */
+export interface DeletedEvent { id: string; by: string; at: string }

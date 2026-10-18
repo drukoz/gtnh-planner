@@ -3,6 +3,8 @@
 // those pending ops applied on top of `confirmed` with the same `applyOp` the server runs; every op is idempotent, so
 // re-applying one the server already confirmed changes nothing. Events from the server apply in rev order only: an
 // older rev is ignored, a gap (or an op this client does not know) refetches the whole project, never guesses.
+// A project someone deleted (its `deleted` event, this tab's own delete, or a 404 for it) is set as `deleted` once and
+// the store goes quiet; the page then leaves for the project list (§11.24).
 
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { applyOp, validateOp } from '../../shared/project/apply-op.ts';
@@ -10,10 +12,14 @@ import type { OpEvent, OpsBody, OpsResult } from '../../shared/types/api.ts';
 import type { Plan } from '../../shared/types/plan.ts';
 import type { Project, ProjectOp } from '../../shared/types/project.ts';
 import { apiGet, apiPost, messageOf } from '../api/client.ts';
-import { openProjectEvents } from '../api/sse.ts';
+import { isProjectGone, openProjectEvents } from '../api/sse.ts';
 import { getName } from './name.ts';
 
-export interface ProjectViewState { project: Project | null; plan: Plan | null; planLoading: boolean; planError: string | null; connected: boolean; error: string | null }
+export interface ProjectViewState {
+  project: Project | null; plan: Plan | null; planLoading: boolean; planError: string | null; connected: boolean; error: string | null;
+  /** Set once when the project is gone: who deleted it, or null when this tab only found it missing. */
+  deleted: { by: string | null } | null;
+}
 
 export interface StoreDeps {
   fetchProject(id: string): Promise<Project>;
@@ -29,6 +35,8 @@ export interface ProjectStore {
   subscribe(fn: () => void): () => void;
   getSnapshot(): ProjectViewState;
   send(ops: ProjectOp[]): void;
+  /** This tab deleted the project as `by` (the server's `deleted` event may come first or not at all). */
+  markDeleted(by: string): void;
   close(): void;
 }
 
@@ -41,7 +49,7 @@ interface Batch { ops: ProjectOp[]; by: string; at: string; ackRev: number | nul
 export function createProjectStore(id: string, deps: StoreDeps): ProjectStore {
   let confirmed: Project | null = null;
   let pending: Batch[] = [];
-  let state: ProjectViewState = { project: null, plan: null, planLoading: false, planError: null, connected: false, error: null };
+  let state: ProjectViewState = { project: null, plan: null, planLoading: false, planError: null, connected: false, error: null, deleted: null };
   const listeners = new Set<() => void>();
   let closed = false;
   let fetching = false;
@@ -63,9 +71,17 @@ export function createProjectStore(id: string, deps: StoreDeps): ProjectStore {
   }
 
   function update(patch: Partial<ProjectViewState>): void {
-    if (closed) return;
+    if (closed || state.deleted !== null) return;
     state = { ...state, ...patch };
     for (const fn of [...listeners]) fn();
+  }
+
+  /** The project is gone for good: stop listening and asking, and say so once. */
+  function markDeleted(by: string | null): void {
+    if (closed || state.deleted !== null) return;
+    stopEvents();
+    if (planTimer !== null) clearTimeout(planTimer);
+    update({ deleted: { by } });
   }
 
   function visible(): Project | null {
@@ -99,7 +115,10 @@ export function createProjectStore(id: string, deps: StoreDeps): ProjectStore {
         (project) => {
           if (confirmed === null || project.rev >= confirmed.rev) confirm(project);
         },
-        (err: unknown) => showError('fetch', messageOf(err)),
+        (err: unknown) => {
+          if (isProjectGone(err)) markDeleted(null);
+          else showError('fetch', messageOf(err));
+        },
       )
       .finally(() => {
         fetching = false;
@@ -193,6 +212,7 @@ export function createProjectStore(id: string, deps: StoreDeps): ProjectStore {
       if (!ok) missedPlanEvents = true;
       update({ connected: ok });
     },
+    deleted: (e) => markDeleted(e?.by ?? null),
   });
   fetchProject();
   loadPlan();
@@ -204,6 +224,7 @@ export function createProjectStore(id: string, deps: StoreDeps): ProjectStore {
     },
     getSnapshot: () => state,
     send,
+    markDeleted,
     close() {
       if (closed) return;
       closed = true;
@@ -229,13 +250,13 @@ function liveDeps(): StoreDeps {
   };
 }
 
-const LOADING: ProjectViewState = { project: null, plan: null, planLoading: true, planError: null, connected: false, error: null };
+const LOADING: ProjectViewState = { project: null, plan: null, planLoading: true, planError: null, connected: false, error: null, deleted: null };
 const noStore = (): (() => void) => () => {};
 const loading = (): ProjectViewState => LOADING;
 const ignore = (): void => {};
 
 /** The live project `id` for a component: one store (and one event stream) while the component shows that project. */
-export function useProject(id: string): ProjectViewState & { send(ops: ProjectOp[]): void } {
+export function useProject(id: string): ProjectViewState & Pick<ProjectStore, 'send' | 'markDeleted'> {
   const [open, setOpen] = useState<{ id: string; store: ProjectStore } | null>(null);
   useEffect(() => {
     // Created here, not during render, so StrictMode's second mount closes the first store and its event stream.
@@ -245,5 +266,5 @@ export function useProject(id: string): ProjectViewState & { send(ops: ProjectOp
   }, [id]);
   const store = open !== null && open.id === id ? open.store : null;
   const state = useSyncExternalStore(store?.subscribe ?? noStore, store?.getSnapshot ?? loading);
-  return useMemo(() => ({ ...state, send: store?.send ?? ignore }), [state, store]);
+  return useMemo(() => ({ ...state, send: store?.send ?? ignore, markDeleted: store?.markDeleted ?? ignore }), [state, store]);
 }
