@@ -85,7 +85,11 @@ function chooseSingleblock(accepting: Machine[], wantTier: number | undefined, o
  */
 export function pickMachine(
   pack: Pack, r: Recipe, mapId: string,
-  opts: { groupTier: number; wantTier?: number; coilHeat: number; automateCrafting: boolean; owned: ReadonlyMap<number, number> },
+  opts: {
+    groupTier: number; wantTier?: number; coilHeat: number; automateCrafting: boolean; owned: ReadonlyMap<number, number>;
+    /** The multiblocks the group can build (`PlanEnv.multiblocks`); absent = any. */
+    multiblocks?: ReadonlySet<number>;
+  },
 ): MachinePick {
   if (mapId === 'crafting') {
     const hand = !opts.automateCrafting;
@@ -114,7 +118,9 @@ export function pickMachine(
     return picked({ mteId: m.mteId, name: m.name, tier: tierOf(m), kind: 'basic', oc, handCraft: false });
   }
 
-  const multi = machines.filter((m) => m.kind === 'multiblock').sort((a, b) => a.mteId - b.mteId)[0];
+  const built = opts.multiblocks;
+  const multis = machines.filter((m) => m.kind === 'multiblock').sort((a, b) => a.mteId - b.mteId);
+  const multi = (built === undefined ? undefined : multis.find((m) => built.has(m.mteId))) ?? multis[0];
   if (multi === undefined) throw new Error(`pickMachine: no machine on ${mapId} runs recipe ${r.id} at ${tierName(opts.groupTier)}`);
   // Never a hatch above the group's tier, nor one too weak for the recipe (spec §5).
   const hatchTier = clamp(opts.wantTier ?? opts.groupTier, Math.min(voltageTier(r.euPerTick), opts.groupTier), opts.groupTier);
@@ -269,9 +275,9 @@ export interface PickedRecipe { id: string; runs: number; lp: LpRecipe; mapId: s
  */
 export function pickStepMachines(
   pack: Pack, graph: CandidateGraph, runs: ReadonlyMap<string, number>,
-  opts: { settings: PlanSettings; groupTier: number; coilHeat: number; owned: ReadonlyMap<number, number> },
+  opts: { settings: PlanSettings; groupTier: number; coilHeat: number; owned: ReadonlyMap<number, number>; multiblocks?: ReadonlySet<number> },
 ): PickedRecipe[] {
-  const { settings, groupTier, coilHeat, owned } = opts;
+  const { settings, groupTier, coilHeat, owned, multiblocks } = opts;
   const lpById = new Map(graph.recipes.map((r) => [r.id, r]));
   const picked: PickedRecipe[] = [];
   for (const [id, n] of [...runs].sort(([a], [b]) => byString(a, b))) {
@@ -280,7 +286,7 @@ export function pickStepMachines(
     const recipe = pack.recipeById.get(id);
     if (recipe === undefined) throw new Error(`recipe ${id} of the plan is not in the pack`);
     const wantTier = Object.hasOwn(settings.machineTier, id) ? settings.machineTier[id] : undefined;
-    const pick = pickMachine(pack, recipe, lp.mapId, { groupTier, wantTier, coilHeat, automateCrafting: settings.automateCrafting, owned });
+    const pick = pickMachine(pack, recipe, lp.mapId, { groupTier, wantTier, coilHeat, automateCrafting: settings.automateCrafting, owned, multiblocks });
     picked.push({ id, runs: n, lp, mapId: lp.mapId, recipe, pick });
   }
   return picked;
@@ -349,13 +355,13 @@ export function describeStep(pack: Pack, p: PickedRecipe, line: StepLine, size: 
  */
 export function planSteps(
   pack: Pack, graph: CandidateGraph, sol: Solution,
-  opts: { settings: PlanSettings; groupTier: number; coilHeat: number; ctx: PlanContext; perSecondScale: number },
+  opts: { settings: PlanSettings; groupTier: number; coilHeat: number; ctx: PlanContext; perSecondScale: number; multiblocks?: ReadonlySet<number> },
 ): PlanStep[] {
-  const { settings, groupTier, coilHeat, ctx, perSecondScale } = opts;
+  const { settings, groupTier, coilHeat, ctx, perSecondScale, multiblocks } = opts;
   const owned = ownedMachineMap(ctx, settings);
   const unclaimed = new Map(owned);
   const line = stepLine(graph, sol.runs);
-  return pickStepMachines(pack, graph, sol.runs, { settings, groupTier, coilHeat, owned }).map((p) => {
+  return pickStepMachines(pack, graph, sol.runs, { settings, groupTier, coilHeat, owned, multiblocks }).map((p) => {
     const runsPerSecond = p.runs * perSecondScale;
     const perMachine = p.pick.runsPerSecondPerMachine;
     const count = Math.max(1, Math.ceil(runsPerSecond / perMachine - TINY));

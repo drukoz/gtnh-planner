@@ -44,7 +44,7 @@ describe('makeLeafOracle', () => {
     expect(makeLeafOracle(pack, { ...s, costOverrides: { 't:iron_plate@0': 4 } }, avail, prices, () => 1.25)('t:iron_plate@0').cost).toBe(4);
   });
   it('routes derived base materials only when asked', () => {
-    const p = packFromSpec({ items: [{ key: 'clay@0', name: 'Clay' }, { key: 'alu@0', name: 'Aluminium Dust', gt: { prefix: 'dust', material: 'Aluminium' } }],
+    const p = packFromSpec({ items: [{ key: 'clay@0', name: 'Clay', oreDict: ['itemClay'] }, { key: 'alu@0', name: 'Aluminium Dust', gt: { prefix: 'dust', material: 'Aluminium' } }],
       machines: [{ mteId: 1, name: 'Basic Electrolyzer', maps: ['gt.recipe.electrolyzer'], tier: 1 }],
       recipes: [{ id: 'el', map: 'gt.recipe.electrolyzer', in: [['clay@0', 1]], out: [['alu@0', 1]], eut: 30 }] });
     const e: PlanEnv = { tier: 1, reachable: new Set(['overworld']), lowGravity: false, coilHeat: 1801, excluded: new Set() };

@@ -27,7 +27,7 @@ export const MINI_GT: PackSpec = {
     // The real GT key, so Plan 1's loader derives the same `meta.circuit` from the e2e export.
     { key: 'gregtech:gt.integrated_circuit@2', name: 'Programmed Circuit' },
     { key: 't:hull_lv@0', name: 'LV Machine Hull' },
-    { key: 'minecraft:log@0', name: 'Oak Wood' },
+    { key: 'minecraft:log@0', name: 'Oak Wood', oreDict: ['logWood'] },
     { key: 'minecraft:planks@0', name: 'Oak Planks' },
     { key: 'minecraft:cobblestone@0', name: 'Cobblestone' },
   ],

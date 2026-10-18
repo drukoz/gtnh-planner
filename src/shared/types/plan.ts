@@ -8,7 +8,10 @@ import type { Product } from './pack.ts';
 export const LogisticsMode = { Direct: 'direct', Routed: 'routed', AE2: 'ae2' } as const;
 export type LogisticsMode = (typeof LogisticsMode)[keyof typeof LogisticsMode];
 
-/** Recipe categories left out unless the group turns the rule off: recycling, mass fab, replicator, scrap, lava/stone-dust centrifuge. */
+/**
+ * Recipe categories left out unless the group turns the rule off: recycling, mass fab, replicator, scrap, lava/stone-dust
+ * centrifuge (which also covers the Large Thermal Refinery's lava filter: metals out of free lava).
+ */
 export const DEFAULT_EXCLUDED_CATEGORIES: readonly string[] = ['recycling', 'massfab', 'replicator', 'scrap', 'lava-centrifuge'];
 
 /**

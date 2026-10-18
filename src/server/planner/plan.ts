@@ -384,7 +384,7 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
     return assemble(pack, settings, basis, bodyWithout('infeasible', [...graph.warnings, ...solverWarnings, ...blocked.warnings], blocked.unlocks));
   }
 
-  const opts = { settings, groupTier: basis.tier, coilHeat: basis.coilHeat, ctx };
+  const opts = { settings, groupTier: basis.tier, coilHeat: basis.coilHeat, ctx, multiblocks: basis.env.multiblocks };
   let steps: PlanStep[];
   let flows: PlanFlow[];
   let buys: ReadonlyMap<StuffKey, number>;

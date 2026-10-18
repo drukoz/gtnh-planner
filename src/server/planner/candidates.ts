@@ -4,12 +4,20 @@
 
 import { ebfHeat, voltageTier } from '../../shared/gt/overclock.ts';
 import { V, tierName } from '../../shared/gt/tiers.ts';
-import type { StuffKey } from '../../shared/keys.ts';
+import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import type { Ingredient, Pack, Recipe } from '../../shared/types/pack.ts';
 import type { LeafClass, PlanSettings, PlanWarning } from '../../shared/types/plan.ts';
 
-export interface PlanEnv { tier: number; reachable: ReadonlySet<string> /* DimensionInfo.key and Capability.key */; lowGravity: boolean; coilHeat: number; excluded: ReadonlySet<string> }
-export type Rejection = 'fake' | 'opaque' | 'excluded' | 'vanilla-furnace' | 'low-gravity' | 'heat' | 'tier' | 'no-machine';
+export interface PlanEnv {
+  tier: number; reachable: ReadonlySet<string> /* DimensionInfo.key and Capability.key */; lowGravity: boolean; coilHeat: number; excluded: ReadonlySet<string>;
+  /**
+   * The mteIds of the multiblocks the group can build at this tier: their controller is available (availability.ts).
+   * Absent = every multiblock counts as built. Multiblocks carry no tier in the export, so without this gate the
+   * Eye of Harmony, the Godforge modules or the HTGR (EU/t 0 or 1) would run at any tier.
+   */
+  multiblocks?: ReadonlySet<number>;
+}
+export type Rejection = 'fake' | 'opaque' | 'excluded' | 'vanilla-furnace' | 'low-gravity' | 'heat' | 'tier' | 'no-machine' | 'multiblock';
 export type Acceptance = { ok: true; mapId: string } | { ok: false; why: Rejection; needTier?: number };
 
 export interface LpRecipe {
@@ -44,8 +52,12 @@ export const EXCLUSION_RULES: Record<string, (r: Recipe, pack: Pack) => boolean>
   massfab: (r) => anyMapContains(r, 'massfab'),
   replicator: (r) => anyMapContains(r, 'replicator'),
   scrap: (r) => anyMapContains(r, 'recycler') || anyMapContains(r, 'scrapbox'),
-  'lava-centrifuge': (r, pack) => anyMapContains(r, 'centrifuge') && r.inputs.some((ing) => ing.options.some(
-    (o) => o.key === LAVA || (pack.items.get(o.key)?.oreDict.includes('dustStone') ?? false))),
+  'lava-centrifuge': (r, pack) => (anyMapContains(r, 'centrifuge') && r.inputs.some((ing) => ing.options.some(
+    (o) => o.key === LAVA || (pack.items.get(o.key)?.oreDict.includes('dustStone') ?? false))))
+    // The Large Thermal Refinery's lava filter: 1,000 L of free lava → a few % of a copper, tin, gold, silver or tantalum
+    // ingot. With lava free it made every such metal cost 0 (24 refineries, 5.7M L lava/min for 2 Good Circuits/min).
+    || (anyMapContains(r, 'thermalboiler') && r.outputs.some((p) => !isFluidKey(p.key))
+      && r.inputs.some((ing) => ing.consumed && ing.options.some((o) => o.key === LAVA))),
 };
 
 /** The machines that can run one recipe map, as the acceptance test needs them. */
@@ -54,10 +66,10 @@ interface MapMachines {
   amps: number;
   /** Tiers of the singleblocks (`kind: 'basic'`), ascending, without repeats. */
   basicTiers: number[];
-  /** A multiblock without a heat check runs the map. */
-  plainMultiblock: boolean;
-  /** A multiblock whose recipes need coil heat (heat map, or `heatOC`) runs the map. */
-  heatedMultiblock: boolean;
+  /** The multiblocks without a heat check that run the map, by mteId. */
+  plain: number[];
+  /** The multiblocks whose recipes need coil heat (heat map, or `heatOC`) that run the map, by mteId. */
+  heated: number[];
 }
 
 const MAP_MACHINES = new WeakMap<Pack, Map<string, MapMachines>>();
@@ -73,13 +85,13 @@ function machinesOfMap(pack: Pack, mapId: string): MapMachines {
     const info = pack.maps.get(mapId);
     const heatMap = info?.specialValue === 'heat';
     const tiers = new Set<number>();
-    table = { amps: info?.amps ?? 1, basicTiers: [], plainMultiblock: false, heatedMultiblock: false };
+    table = { amps: info?.amps ?? 1, basicTiers: [], plain: [], heated: [] };
     for (const id of pack.machinesByMap.get(mapId) ?? []) {
       const machine = pack.machines.get(id);
       if (machine?.kind === 'basic') tiers.add(machine.tier ?? 0);
       else if (machine?.kind === 'multiblock') {
-        if (heatMap || machine.heatOC === true) table.heatedMultiblock = true;
-        else table.plainMultiblock = true;
+        if (heatMap || machine.heatOC === true) table.heated.push(id);
+        else table.plain.push(id);
       }
     }
     table.basicTiers = [...tiers].sort((a, b) => a - b);
@@ -88,8 +100,17 @@ function machinesOfMap(pack: Pack, mapId: string): MapMachines {
   return table;
 }
 
-/** Why one map cannot run the recipe at the group's tier: no machine, coil heat, or the lowest tier that would run it. */
-type MapVerdict = { ok: true } | { ok: false; hasMachine: boolean; heat: boolean; needTier: number /* Infinity: none */ };
+/**
+ * Why one map cannot run the recipe at the group's tier: no machine, coil heat, a multiblock the group cannot build yet
+ * (`unbuilt`), or the lowest tier that would run it.
+ */
+type MapVerdict = { ok: true } | { ok: false; hasMachine: boolean; heat: boolean; unbuilt: boolean; needTier: number /* Infinity: none */ };
+
+/** Some of `ids` is built: any of them when the env does not gate multiblocks. */
+function anyBuilt(ids: readonly number[], env: PlanEnv): boolean {
+  const built = env.multiblocks;
+  return built === undefined ? ids.length > 0 : ids.some((id) => built.has(id));
+}
 
 /** `true` when a singleblock runs the recipe at the group's tier, else the lowest tier that would (Infinity: none). */
 function judgeSingleblocks(t: MapMachines, euPerTick: number, tier: number): true | number {
@@ -108,23 +129,27 @@ function judgeSingleblocks(t: MapMachines, euPerTick: number, tier: number): tru
 function judgeMap(pack: Pack, r: Recipe, mapId: string, env: PlanEnv): MapVerdict {
   if (mapId === 'crafting' || mapId === 'furnace') return { ok: true };   // the vanilla furnace only gets here at ULV
   const t = machinesOfMap(pack, mapId);
-  const hasMultiblock = t.plainMultiblock || t.heatedMultiblock;
+  const hasMultiblock = t.plain.length > 0 || t.heated.length > 0;
   const single = judgeSingleblocks(t, r.euPerTick, env.tier);
   if (single === true) return { ok: true };
   let heat = false;
+  let unbuilt = false;
   let needTier = single;
   if (hasMultiblock) {
     const volts = V[env.tier] as number;   // one energy hatch at the group's tier
+    const hot = (r.meta.coilHeat ?? r.specialValue) <= ebfHeat(env.coilHeat, volts);
     if (r.euPerTick > volts) {
       const voltage = voltageTier(r.euPerTick);
       needTier = Math.min(needTier, voltage <= MAX_TIER ? voltage : Infinity);
-    } else if (t.plainMultiblock || (r.meta.coilHeat ?? r.specialValue) <= ebfHeat(env.coilHeat, volts)) {
+    } else if (anyBuilt(t.plain, env) || (hot && anyBuilt(t.heated, env))) {
       return { ok: true };
-    } else {
+    } else if (!hot && anyBuilt(t.heated, env)) {
       heat = true;
+    } else {
+      unbuilt = true;
     }
   }
-  return { ok: false, hasMachine: t.basicTiers.length > 0 || hasMultiblock, heat, needTier };
+  return { ok: false, hasMachine: t.basicTiers.length > 0 || hasMultiblock, heat, unbuilt, needTier };
 }
 
 /** Whether the group can run `r` at `env.tier` where it is, and on which map (the first that works, by map id). */
@@ -140,17 +165,35 @@ export function acceptRecipe(pack: Pack, r: Recipe, env: PlanEnv): Acceptance {
 
   let hasMachine = false;
   let heat = false;
+  let unbuilt = false;
   let needTier = Infinity;
   for (const mapId of [...r.maps].sort()) {
     const verdict = judgeMap(pack, r, mapId, env);
     if (verdict.ok) return { ok: true, mapId };
     hasMachine ||= verdict.hasMachine;
     heat ||= verdict.heat;
+    unbuilt ||= verdict.unbuilt;
     needTier = Math.min(needTier, verdict.needTier);
   }
   if (!hasMachine) return { ok: false, why: 'no-machine' };
   if (heat) return { ok: false, why: 'heat' };   // better coils fix it at this tier
-  return Number.isFinite(needTier) ? { ok: false, why: 'tier', needTier } : { ok: false, why: 'tier' };
+  if (Number.isFinite(needTier)) return { ok: false, why: 'tier', needTier };
+  return unbuilt ? { ok: false, why: 'multiblock' } : { ok: false, why: 'tier' };
+}
+
+/**
+ * The multiblocks that would run `r` at `env` if the group could build them (any map of the recipe, by mteId, sorted),
+ * whatever `env.multiblocks` says; empty when a singleblock, the crafting table or the furnace runs it, or nothing does.
+ */
+export function multiblocksFor(pack: Pack, r: Recipe, env: PlanEnv): number[] {
+  const none: PlanEnv = { ...env, multiblocks: new Set() };
+  if (acceptRecipe(pack, r, none).ok || !acceptRecipe(pack, r, { ...env, multiblocks: undefined }).ok) return [];
+  const ids = new Set<number>();
+  for (const mapId of r.maps) {
+    const t = machinesOfMap(pack, mapId);
+    for (const id of [...t.plain, ...t.heated]) if (acceptRecipe(pack, r, { ...env, multiblocks: new Set([id]) }).ok) ids.add(id);
+  }
+  return [...ids].sort((a, b) => a - b);
 }
 
 /** The virtual good one ore-dictionary slot stands for. */
