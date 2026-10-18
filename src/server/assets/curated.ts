@@ -52,7 +52,7 @@ const AE2_CABLES: Record<string, [string, string]> = {
 };
 
 function ae2Cable(center: string): CuratedBlock | null {
-  const c = AE2_CABLES[center];
+  const c = Object.hasOwn(AE2_CABLES, center) ? AE2_CABLES[center] : undefined;
   if (!c) return null;
   const [part, family] = c;
   const list = [`${AE}/textures/items/ItemPart.${part}.png`, `${AE}/textures/blocks/ItemPart.${part}.png`, `${AE}/textures/blocks/${family}_Grey.png`];
@@ -116,15 +116,16 @@ function logBlock(w: string): CuratedBlock {
   return blocks('minecraft', { up: `log_${w}_top`, down: `log_${w}_top` }, `log_${w}`);
 }
 
-
-function pseudo(id: string, meta: number): CuratedBlock | null {
-  void meta;
+/** A pseudo id's table entry; only own keys count, so `ae2cable:constructor` or `conduit:__proto__` is unknown. */
+function pseudo(id: string): CuratedBlock | null {
   if (id.startsWith('fmp:')) {
-    const x = PIPES[id.slice(4)];
+    const k = id.slice(4);
+    const x = Object.hasOwn(PIPES, k) ? PIPES[k] : undefined;
     return x ? all(PR, `mechanical/pipes/${x}`) : null;
   }
   if (id.startsWith('conduit:')) {
-    const x = CONDUITS[id.slice(8)];
+    const k = id.slice(8);
+    const x = Object.hasOwn(CONDUITS, k) ? CONDUITS[k] : undefined;
     return x ? all(EIO, x) : null;
   }
   if (id.startsWith('ae2cable:')) return ae2Cable(id.slice(9));
@@ -133,7 +134,7 @@ function pseudo(id: string, meta: number): CuratedBlock | null {
 
 export function curatedBlock(id: string, meta: number): CuratedBlock | null {
   const fn = Object.hasOwn(TABLE, id) ? TABLE[id] : undefined;
-  return fn ? fn(meta) : pseudo(id, meta);
+  return fn ? fn(meta) : pseudo(id);
 }
 
 export function curatedIds(): string[] {

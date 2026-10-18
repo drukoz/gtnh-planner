@@ -1,5 +1,7 @@
 package io.github.drukoz.gtnhplanner.export.textures;
 
+import java.lang.reflect.Field;
+
 /**
  * A static field, or one element of a static array field, that holds an icon container (for GT a
  * {@code Textures.BlockIcons} constant or an {@code IIconContainer[]} element). Only names, so the exporter resolves
@@ -18,6 +20,33 @@ public final class IconRef {
         this.owner = owner;
         this.field = field;
         this.index = index;
+    }
+
+    /**
+     * The static field this ref names, found as the JVM resolves {@code GETSTATIC owner.field} (JVMS §5.4.3.2): the
+     * field {@code owner} declares, else one of its superinterfaces' (recursively), else its superclass's
+     * (recursively); made accessible. {@code owner} is loaded through {@code loader} without being initialized.
+     */
+    public Field resolve(ClassLoader loader) throws ClassNotFoundException, NoSuchFieldException {
+        Class<?> c = Class.forName(owner.replace('/', '.'), false, loader);
+        Field f = lookUp(c);
+        if (f == null) throw new NoSuchFieldException(c.getName() + "." + field);
+        f.setAccessible(true);
+        return f;
+    }
+
+    private Field lookUp(Class<?> c) {
+        try {
+            return c.getDeclaredField(field);
+        } catch (NoSuchFieldException notHere) {
+            // then the superinterfaces, then the superclass
+        }
+        for (Class<?> i : c.getInterfaces()) {
+            Field f = lookUp(i);
+            if (f != null) return f;
+        }
+        Class<?> s = c.getSuperclass();
+        return s == null ? null : lookUp(s);
     }
 
     @Override

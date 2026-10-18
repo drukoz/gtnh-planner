@@ -1,13 +1,17 @@
 // Shared projects (architecture §7, §8): list, create and read them, change them only through ops applied in arrival
 // order, one event stream per open tab that starts with the project and then carries every applied op, and the
 // project's plan, cached per settings, export, scan and base, with a `plan` event whenever it may have changed.
+// Anyone may delete a project; it waits in "Recently deleted" until restored or purged (§11.24, spec §3.11).
 
+import type { IncomingMessage } from 'node:http';
 import type { AppContext } from '../../app.ts';
 import { emptyContext, planCacheKey, planLine, PlanCache, settingsHash } from '../../planner/plan.ts';
 import { OpError, type ProjectStore } from '../../projects/store.ts';
 import { HttpError, readJson, sendJson, type RequestContext, type Route } from '../router.ts';
 import { validateOp } from '../../../shared/project/apply-op.ts';
-import type { CreateProjectBody, OpEvent, OpsResult, PlanEvent, ProjectListEntry } from '../../../shared/types/api.ts';
+import type {
+  CreateProjectBody, DeletedEvent, DeletedProjectSummary, OpEvent, OpsResult, PlanEvent, ProjectListEntry,
+} from '../../../shared/types/api.ts';
 import type { Plan } from '../../../shared/types/plan.ts';
 import type { Project, ProjectOp } from '../../../shared/types/project.ts';
 
@@ -28,6 +32,13 @@ function requireName(ctx: RequestContext): string {
 
 function notFound(id: string): HttpError {
   return new HttpError(404, 'not-found', `No project ${id}`);
+}
+
+/** `?deleted=1`: the list of recently deleted projects instead of the live ones. */
+function wantsDeleted(req: IncomingMessage): boolean {
+  const url = req.url ?? '';
+  const i = url.indexOf('?');
+  return new URLSearchParams(i < 0 ? '' : url.slice(i + 1)).get('deleted') === '1';
 }
 
 /** The create body after its checks: the name as a rename op would take it, the settings as a settings op would. */
@@ -106,24 +117,55 @@ async function finishedPlan(app: AppContext, plan: Plan, project: Project): Prom
   }
 }
 
+/** Per app and project: the newest project state waiting for the replan in flight to end (null: none waits). */
+const REPLANS = new WeakMap<AppContext, Map<string, { next: Project | null }>>();
+
 /**
  * Plans `project` (as an ops batch left it) in the background, then sends its tabs `event: plan` with that rev — also
- * when planning fails, so they refetch and show the error.
+ * when planning fails, so they refetch and show the error. One replan runs per project at a time: a batch that lands
+ * while one is in flight only records its project state, and when the replan ends it runs once more for the newest
+ * state that waited (ledger 200: amounts typed digit by digit, quick clicks in Settings). A real-pack plan takes about
+ * a second of mostly synchronous work, so a burst would otherwise queue one full solve per rev on the one Node thread
+ * while friends tick and stream during play; the tabs only ever fetch the newest plan anyway.
  */
 function replanInBackground(app: AppContext, project: Project): void {
-  const event: PlanEvent = { rev: project.rev };
-  void planForProject(app, project)
-    .catch(() => {})   // the plan route reports the failure when the tabs refetch
-    .then(() => {
-      app.sse.send(project.id, 'plan', event);
-    });
+  let perApp = REPLANS.get(app);
+  if (perApp === undefined) {
+    perApp = new Map();
+    REPLANS.set(app, perApp);
+  }
+  const waiting = perApp.get(project.id);
+  if (waiting !== undefined) {
+    if (waiting.next === null || project.rev >= waiting.next.rev) waiting.next = project;
+    return;
+  }
+  const entry: { next: Project | null } = { next: null };
+  perApp.set(project.id, entry);
+  const run = (p: Project): void => {
+    const event: PlanEvent = { rev: p.rev };
+    void planForProject(app, p)
+      .catch(() => {})   // the plan route reports the failure when the tabs refetch
+      .then(() => {
+        app.sse.send(p.id, 'plan', event);
+        const next = entry.next;
+        entry.next = null;
+        if (next !== null) run(next);
+        else perApp.delete(p.id);
+      });
+  };
+  run(project);
 }
 
 export function projectRoutes(app: AppContext): Route[] {
   return [
     {
       method: 'GET', path: '/api/projects',
-      handler: async (_req, res) => {
+      handler: async (req, res) => {
+        if (wantsDeleted(req)) {
+          const deleted: DeletedProjectSummary[] = app.projects.listDeleted();
+          sendJson(res, 200, deleted);
+          return;
+        }
         const list: ProjectListEntry[] = app.projects.list();
         sendJson(res, 200, list);
       },
@@ -142,6 +184,30 @@ export function projectRoutes(app: AppContext): Route[] {
         const project = app.projects.get(params.id!);
         if (project === null) throw notFound(params.id!);
         sendJson(res, 200, project);
+      },
+    },
+    {
+      method: 'DELETE', path: '/api/projects/:id',
+      handler: async (_req, res, params, ctx) => {
+        const id = params.id!;
+        const by = requireName(ctx);
+        const deleted = app.projects.delete(id, by);
+        if (deleted === null) throw notFound(id);
+        // No await since the store marked it: no stream can join the channel between the mark and its end.
+        const event: DeletedEvent = { id, by, at: deleted.deletedAt };
+        app.sse.end(id, { event: 'deleted', data: event });
+        res.writeHead(204, { 'Cache-Control': 'no-store' });
+        res.end();
+      },
+    },
+    {
+      method: 'POST', path: '/api/projects/:id/restore',
+      handler: async (_req, res, params) => {
+        const id = params.id!;
+        const restored = app.projects.restore(id);
+        if (restored === null) throw notFound(id);
+        if (restored === 'not-deleted') throw new HttpError(409, 'not-deleted', `Project ${id} is not deleted`);
+        sendJson(res, 200, restored);
       },
     },
     {

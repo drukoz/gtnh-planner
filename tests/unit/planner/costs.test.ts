@@ -44,13 +44,22 @@ describe('makeLeafOracle', () => {
     expect(makeLeafOracle(pack, { ...s, costOverrides: { 't:iron_plate@0': 4 } }, avail, prices, () => 1.25)('t:iron_plate@0').cost).toBe(4);
   });
   it('routes derived base materials only when asked', () => {
-    const p = packFromSpec({ items: [{ key: 'clay@0', name: 'Clay' }, { key: 'alu@0', name: 'Aluminium Dust', gt: { prefix: 'dust', material: 'Aluminium' } }],
+    const p = packFromSpec({ items: [{ key: 'clay@0', name: 'Clay', oreDict: ['itemClay'] }, { key: 'alu@0', name: 'Aluminium Dust', gt: { prefix: 'dust', material: 'Aluminium' } }],
       machines: [{ mteId: 1, name: 'Basic Electrolyzer', maps: ['gt.recipe.electrolyzer'], tier: 1 }],
       recipes: [{ id: 'el', map: 'gt.recipe.electrolyzer', in: [['clay@0', 1]], out: [['alu@0', 1]], eut: 30 }] });
     const e: PlanEnv = { tier: 1, reachable: new Set(['overworld']), lowGravity: false, coilHeat: 1801, excluded: new Set() };
     const a = computeAvailability(p, e);
     expect(makeLeafOracle(p, defaultSettings(), a, makePrices(p, {}))('alu@0')).toEqual({ buyable: true, cost: 1, leafClass: 'derived' });
     expect(makeLeafOracle(p, { ...defaultSettings(), routeDerived: true }, a, makePrices(p, {}))('alu@0').buyable).toBe(false);
+    // Priced at what its chain costs, with that chain's recipes and free input; no leaf when only the target's chain
+    // makes it; a cost override (here by material) keeps the price.
+    const made = (cost: number) => () => ({ cost, steps: 2, free: 3 });
+    expect(makeLeafOracle(p, defaultSettings(), a, makePrices(p, {}), undefined, made(0.4))('alu@0'))
+      .toEqual({ buyable: true, cost: 0.4, leafClass: 'derived', steps: 2, free: 3 });
+    expect(makeLeafOracle(p, defaultSettings(), a, makePrices(p, {}), undefined, made(Infinity))('alu@0').buyable).toBe(false);
+    expect(makeLeafOracle(p, defaultSettings(), a, makePrices(p, {}), undefined, () => undefined)('alu@0')).toEqual({ buyable: true, cost: 1, leafClass: 'derived' });
+    expect(makeLeafOracle(p, { ...defaultSettings(), costOverrides: { Aluminium: 5 } }, a, makePrices(p, { Aluminium: 5 }), undefined, made(0.4))('alu@0'))
+      .toEqual({ buyable: true, cost: 5, leafClass: 'derived' });
   });
 });
 

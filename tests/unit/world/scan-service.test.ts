@@ -3,7 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MAX_AREA_VOXELS } from '../../../src/server/world/area.ts';
+import { emptyFacts } from '../../../src/server/world/facts.ts';
 import { createWorldService, isScanId, newScanId, type WorldService } from '../../../src/server/world/scan.ts';
+import { NO_EXPORT_WARNING } from '../../../src/server/world/scan.worker.ts';
 import type { WorldConfig } from '../../../src/server/world/sources.ts';
 import { decodeMapTile, type ScanStatus, type WorldSource } from '../../../src/shared/types/world.ts';
 import { makeBackup } from '../../helpers/make-world.ts';
@@ -241,6 +243,15 @@ describe('the world service', () => {
     expect(await offline.listScans()).toEqual([]);
     expect(await offline.listSources()).toEqual({ server: false, backups: [] });
     expect(await svc.listSources()).toEqual({ server: true, backups: [NEWER] });
+  });
+
+  it('lists the warnings of a finished scan, and none for a scan without any', async () => {
+    const bare = createWorldService({ config: { ...config, dataDir: join(tmp, 'data-no-export') }, facts: async () => emptyFacts(), useWorker: false });
+    const noExport = await bare.startScan({ kind: 'server' });
+    await bare.idle();
+    expect((await bare.listScans()).find((s) => s.id === noExport)).toMatchObject({ state: 'done', levelName: 'World', warnings: [NO_EXPORT_WARNING] });
+    expect((await bare.getScan(noExport))!.warnings).toEqual([NO_EXPORT_WARNING]);
+    expect(Object.keys((await svc.listScans()).find((s) => s.id === id)!)).not.toContain('warnings');   // the sample scans clean
   });
 
   it('lists only scan folders that hold a status', async () => {

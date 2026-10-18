@@ -29,7 +29,7 @@ async function errorOf(res: Response): Promise<ApiError> {
   return new ApiError(res.status, code, message);
 }
 
-async function call<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
+async function call<T>(method: 'GET' | 'POST' | 'DELETE', path: string, body?: unknown): Promise<T> {
   const headers: Record<string, string> = { Accept: 'application/json' };
   const name = getName();
   if (name !== null) headers[NAME_HEADER] = encodeURIComponent(name);
@@ -54,6 +54,11 @@ export function apiGet<T>(path: string): Promise<T> {
 
 export function apiPost<T>(path: string, body: unknown): Promise<T> {
   return call<T>('POST', path, body);
+}
+
+/** Same headers, 401 redirect and ApiError as apiPost; resolves on 204 (architecture §11.23). */
+export function apiDelete(path: string): Promise<void> {
+  return call<void>('DELETE', path);
 }
 
 /** What went wrong, in words fit to show: the server's message, or the browser's for a network failure. */

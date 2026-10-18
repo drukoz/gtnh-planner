@@ -8,6 +8,7 @@ import type { Pack } from '../../shared/types/pack.ts';
 import { FREE_KEYS, type PlanSettings } from '../../shared/types/plan.ts';
 import { isBaseItem, isOrePrefix, type Availability } from './availability.ts';
 import type { CandidateGraph, LeafDecision, LeafOracle } from './candidates.ts';
+import type { Standalone } from './solve.ts';
 import { solveLp, type LpRow } from './lp.ts';
 
 /** GT's material unit: one dust or ingot is 3628800 M. */
@@ -72,14 +73,41 @@ export function makePrices(pack: Pack, overrides: Record<string, number>): Price
 const NOT_A_LEAF: LeafDecision = { buyable: false, cost: 0, leafClass: null };
 const UNAVAILABLE: LeafDecision = { buyable: false, cost: 0, leafClass: 'unavailable' };
 
+/** A cost override for `key` itself, its GT material, or the material of its molten fluid (the rules of `makePrices`). */
+export function hasCostOverride(pack: Pack, overrides: Record<string, number>, key: StuffKey): boolean {
+  if (Object.hasOwn(overrides, key)) return true;
+  const material = pack.items.get(key)?.gt?.material
+    ?? (key.startsWith(MOLTEN_PREFIX) ? moltenMaterials(pack).get(key.slice(MOLTEN_PREFIX.length)) : undefined);
+  return material !== undefined && Object.hasOwn(overrides, material);
+}
+
 /**
  * Which goods the line buys (spec §3.3, §5): "we already make this" items at their cost (key override, else `stopCost`,
  * else the price), free and natural goods, and base items the group can get at its tier; a derived base item only
- * while the project does not route derived materials. Base items it cannot get are never buyable.
+ * while the project does not route derived materials, and then at `derivedCost` when that knows what making it costs
+ * and no cost override names it (with the recipes and free input of its chain, `LeafDecision.steps` and `free`), else
+ * at its price. When `derivedCost` says Infinity (only a chain through the line's target makes it: Magnetic Steel for
+ * Steel) it is no leaf at all, so the line never buys a form of its own target. Base items it cannot get are never
+ * buyable.
+ *
+ * `derivedCost` is what making the derived item on its own costs (pricing.ts: `standaloneCosts` over the cost model's
+ * graph, where derived materials are routed), undefined when that is not known. A flat price of 1 made exotic derived
+ * dusts the cheapest way to make ordinary parts (Poly-Si and gallium arsenide wafers for an Electronic Circuit), and a
+ * price above what the line pays to make it in place made the LP route the whole chain anyway (the 20-step oil chain
+ * behind an Epoxid Bar priced at 1 while making it costs 0.69). At exactly that cost, buying it and making it in place
+ * tie and the later stages (fewest recipes, then power) choose.
  */
 export function makeLeafOracle(
   pack: Pack, settings: PlanSettings, avail: Availability, prices: PriceTable, stopCost?: (key: StuffKey) => number,
+  derivedCost?: (key: StuffKey) => Standalone | undefined,
 ): LeafOracle {
+  /** A derived leaf: its price under a cost override, else what making it costs, else its price. */
+  const derived = (key: StuffKey): LeafDecision => {
+    const made = hasCostOverride(pack, settings.costOverrides, key) ? undefined : derivedCost?.(key);
+    if (made === undefined) return { buyable: true, cost: prices.price(key), leafClass: 'derived' };
+    // Only a chain through the target itself makes it: the line cannot buy it to make the target.
+    return Number.isFinite(made.cost) ? { buyable: true, cost: made.cost, leafClass: 'derived', steps: made.steps, free: made.free } : NOT_A_LEAF;
+  };
   const expand = new Set(settings.expandItems);
   const stop = new Set(settings.stopItems);
   return (key) => {
@@ -95,7 +123,7 @@ export function makeLeafOracle(
       case 'byproduct':
         return { buyable: true, cost: prices.price(key), leafClass };
       case 'derived':
-        return settings.routeDerived ? NOT_A_LEAF : { buyable: true, cost: prices.price(key), leafClass };
+        return settings.routeDerived ? NOT_A_LEAF : derived(key);
       case 'unavailable':
         return UNAVAILABLE;
       default:

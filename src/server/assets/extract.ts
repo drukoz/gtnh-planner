@@ -41,6 +41,8 @@ const UNSAFE_CHAR = /[\\\p{Cc}]/u;
 const MCMETA = '.mcmeta';
 /** `<dataDir>/assets/nei/` belongs to the NEI icon import (Task 11), so no jar domain is extracted there. */
 const NEI_DIR = 'nei';
+/** Skipped jars named in the error when no mod jar could be read. */
+const LISTED_SKIPPED = 20;
 
 function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -257,8 +259,9 @@ async function swapIn(dataDir: string, staging: string): Promise<void> {
 
 /**
  * Pass 1 reads every jar's central directory (client jars first, then mods by case-insensitive name; a jar that
- * cannot be read is skipped), the winners are chosen by `pickWinner`, and pass 2 copies them into a staging folder
- * and writes `index.json` there before `swapIn`. At most one jar is open at a time.
+ * cannot be read is skipped, and when no mod jar is left the run fails before anything is written), the winners are
+ * chosen by `pickWinner`, and pass 2 copies them into a staging folder and writes `index.json` there before
+ * `swapIn`. At most one jar is open at a time.
  */
 export async function extractAssets(opts: ExtractOptions): Promise<ExtractSummary> {
   const ordered = [...opts.jars].sort((a, b) =>
@@ -283,6 +286,12 @@ export async function extractAssets(opts: ExtractOptions): Promise<ExtractSummar
     } catch (err) {
       skippedJars.push({ jar: name, error: messageOf(err) });
     }
+  }
+  if (scanned.every((jar) => jar.source.kind !== 'mod')) {
+    // Every mod jar unreadable (or none given) is a broken setup, not an empty pack: keep the previous textures.
+    const listed = skippedJars.slice(0, LISTED_SKIPPED).map((s) => `${s.jar} (${s.error})`);
+    if (skippedJars.length > LISTED_SKIPPED) listed.push(`… ${skippedJars.length - LISTED_SKIPPED} more`);
+    throw new ExtractError(`no mod jar could be read: ${listed.length === 0 ? 'none was found' : listed.join('; ')}`);
   }
 
   // The home jar of a domain: the mod jar with the most PNGs of that domain, the first by name on a tie.

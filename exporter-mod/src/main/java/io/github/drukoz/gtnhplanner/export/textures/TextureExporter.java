@@ -1,24 +1,36 @@
 package io.github.drukoz.gtnhplanner.export.textures;
 
+import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.lang.reflect.Array;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.net.JarURLConnection;
+import java.net.URISyntaxException;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.Callable;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 
 import net.minecraft.block.Block;
+import net.minecraft.init.Blocks;
 import net.minecraft.item.Item;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraftforge.common.util.ForgeDirection;
@@ -26,13 +38,18 @@ import net.minecraftforge.fluids.Fluid;
 import net.minecraftforge.fluids.FluidRegistry;
 
 import com.google.gson.stream.JsonWriter;
+import com.gtnewhorizon.gtnhlib.util.data.ImmutableBlockMeta;
 
 import cpw.mods.fml.common.registry.GameData;
 import cpw.mods.fml.relauncher.ReflectionHelper;
 import gregtech.api.GregTechAPI;
 import gregtech.api.covers.CoverRegistry;
+import gregtech.api.enums.MaterialIconRegistry;
 import gregtech.api.enums.Materials;
+import gregtech.api.enums.MetaTileEntityIDs;
+import gregtech.api.enums.Mods;
 import gregtech.api.enums.OrePrefixes;
+import gregtech.api.enums.StoneType;
 import gregtech.api.enums.TextureSet;
 import gregtech.api.enums.Textures;
 import gregtech.api.interfaces.IIconContainer;
@@ -44,8 +61,14 @@ import gregtech.api.items.MetaGeneratedItemX32;
 import gregtech.api.metatileentity.BaseMetaPipeEntity;
 import gregtech.api.metatileentity.BaseMetaTileEntity;
 import gregtech.api.metatileentity.MetaPipeEntity;
+import gregtech.api.metatileentity.implementations.MTEBasicMachine;
+import gregtech.api.metatileentity.implementations.MTEBasicMachineWithRecipe;
+import gregtech.api.metatileentity.implementations.MTETieredMachineBlock;
 import gregtech.api.objects.GTItemStack;
+import gregtech.api.render.TextureFactory;
+import gregtech.common.blocks.GTBlockOre;
 import gregtech.common.fluid.GTFluid;
+import gregtech.common.tileentities.machines.basic.MTEBasicMachineWithRecipeBuilder;
 import io.github.drukoz.gtnhplanner.export.ExportContext;
 import io.github.drukoz.gtnhplanner.export.ExportSection;
 import io.github.drukoz.gtnhplanner.export.Tags;
@@ -54,8 +77,8 @@ import io.github.drukoz.gtnhplanner.export.Tags;
  * {@code textures.json.gz}: GregTech's own texture data, one gzip'd JSON document in the format {@value #FORMAT}
  * (the loader is {@code src/server/assets/textures-dump.ts}). Parts, in file order: {@code sets} and
  * {@code materials} (research §6.1), {@code metaItems} (§6.1–§6.2), {@code mte} (§3.5 A), {@code casingPages}
- * (§3.6), {@code blocks} (§3.7), {@code covers} (§3.8), {@code fluids} (§6.3), {@code textureNames} (§6.4),
- * {@code blockIds} and {@code stats}.
+ * (§3.6), {@code blocks} (§3.7), {@code ores} (GT ore blocks), {@code covers} (§3.8), {@code fluids} (§6.3),
+ * {@code textureNames} (§6.4), {@code blockIds} and {@code stats}.
  *
  * <p>
  * Every element is computed fully before it is written, inside its own catch: a failed element is left out (a
@@ -82,6 +105,21 @@ public final class TextureExporter implements ExportSection {
     /** {@link #iconTables} value of a class that declares no {@code getIcon}. */
     private static final IconRef[][] NO_TABLE = new IconRef[0][];
 
+    /** What a tiered machine's registration passed to {@code getTextureSet} when it made no textures. */
+    private static final ITexture[] NO_TEXTURES = new ITexture[0];
+    /** The faces, in argument order, of the textures {@code MTEBasicMachineWithRecipe} builds from its overlays. */
+    private static final String[] OVERLAY_FACES = { "SIDE_ACTIVE", "SIDE", "FRONT_ACTIVE", "FRONT", "TOP_ACTIVE", "TOP",
+        "BOTTOM_ACTIVE", "BOTTOM" };
+    /**
+     * The {@code MTEBasicMachine} methods {@code getTextureSet} draws a face with when it was given no texture for it
+     * (javap of GT 5.09.54.183); each returns the tier casing, plus the pipe overlay for the {@code Pipe} ones.
+     */
+    private static final String[] FACE_METHODS = { "getSideFacingActive", "getSideFacingInactive",
+        "getFrontFacingActive", "getFrontFacingInactive", "getTopFacingActive", "getTopFacingInactive",
+        "getBottomFacingActive", "getBottomFacingInactive", "getBottomFacingPipeActive", "getBottomFacingPipeInactive",
+        "getTopFacingPipeActive", "getTopFacingPipeInactive", "getSideFacingPipeActive", "getSideFacingPipeInactive" };
+    private static final int BUFFER = 1 << 13;
+
     private final McTextureEnv env = new McTextureEnv();
 
     // The export in progress: export() sets these afresh, so every export starts with empty caches and stats.
@@ -96,6 +134,20 @@ public final class TextureExporter implements ExportSection {
     private Field prefixList;
     /** The public {@code getCoverTexture()} of the package-private {@code CoverRegistration}. */
     private Method coverTexture;
+    /** The final {@code MTETieredMachineBlock.mTextures}, looked up on first use. */
+    private Field tieredTextures;
+    /** Builder machine id → its overlay folder name ({@link #builderOverlays()}). */
+    private Map<Integer, String> builderOverlays;
+    /** Machines whose texture set {@link #buildTextureSet} built. */
+    private int textureSetsBuilt;
+    /** Builder-made basic machines without known overlays (drawn with their casing only). */
+    private List<Integer> overlaysUnknown;
+    /** Other basic machines, given no textures and drawing none of their own (their casing only). */
+    private List<Integer> casingOnly;
+    /** Per class: whether it draws its faces with {@code MTEBasicMachine}'s own methods ({@link #drawsCasingOnly}). */
+    private Map<Class<?>, Boolean> casingOnlyClasses;
+    /** Icon refs of the blocks' {@code getIcon} tables, resolved or not ({@link #iconLayers}). */
+    private Part iconRefs;
 
     @Override
     public String name() {
@@ -114,6 +166,10 @@ public final class TextureExporter implements ExportSection {
         stats = new LinkedHashMap<>();
         iconTables = new HashMap<>();
         iconLayers = new HashMap<>();
+        textureSetsBuilt = 0;
+        overlaysUnknown = new ArrayList<>();
+        casingOnly = new ArrayList<>();
+        casingOnlyClasses = new HashMap<>();
         try (JsonWriter writer = ctx.gzipJson(FILE)) {
             w = writer;
             write();
@@ -137,6 +193,7 @@ public final class TextureExporter implements ExportSection {
         mte();
         casingPages();
         blocks();
+        ores();
         covers();
         fluids();
         textureNames();
@@ -164,6 +221,7 @@ public final class TextureExporter implements ExportSection {
                 if (names.contains(name)) continue;
                 int id = m.mMetaItemSubID;
                 int[] rgba = { m.mRGBa[0], m.mRGBa[1], m.mRGBa[2], m.mRGBa[3] };
+                boolean oreGlow = m.hasGlowingOre();
                 int set = setIndex(m.mIconSet, setIndices, sets, setPart);
                 materials.add(() -> {
                     w.beginObject();
@@ -175,6 +233,10 @@ public final class TextureExporter implements ExportSection {
                     writeInts(rgba);
                     w.name("set")
                         .value(set);
+                    if (oreGlow) {
+                        w.name("oreGlow")
+                            .value(1);
+                    }
                     w.endObject();
                 });
                 names.add(name);
@@ -304,10 +366,12 @@ public final class TextureExporter implements ExportSection {
     /**
      * Every machine id ≥ 1 in a tile entity of its own, outside any world: front on north, inactive and active
      * ({@code active} left out when it equals {@code inactive}); a pipe connected on all sides, inactive only.
-     * A machine that fails is written as {@code {id, cls, error}}.
+     * A machine that fails is written as {@code {id, cls, error}}. A tiered machine gets its texture set first
+     * ({@link #buildTextureSet}).
      */
     private void mte() throws IOException {
         Part part = new Part("mte");
+        builderOverlays = builderOverlays();
         w.name("mte");
         w.beginArray();
         IMetaTileEntity[] all = GregTechAPI.METATILEENTITIES;
@@ -328,6 +392,7 @@ public final class TextureExporter implements ExportSection {
                     inactive = machineFaces(te);
                 } else {
                     BaseMetaTileEntity te = machine(id);
+                    buildTextureSet(te.getMetaTileEntity(), id);
                     te.setActive(false);
                     inactive = machineFaces(te);
                     te.setActive(true);
@@ -362,6 +427,169 @@ public final class TextureExporter implements ExportSection {
         }
         w.endArray();
         part.done();
+        stats.put("mteTextureSets", textureSetsBuilt);
+        stats.put("mteOverlaysUnknown", overlaysUnknown.size());
+        if (!overlaysUnknown.isEmpty()) {
+            List<Integer> first = overlaysUnknown.subList(0, Math.min(LISTED_FAILURES, overlaysUnknown.size()));
+            ctx.warn(
+                "textures mte: " + overlaysUnknown.size()
+                    + " basic machines with recipes have no known builder overlays and show their casing only: "
+                    + first);
+        }
+        stats.put("mteCasingOnly", casingOnly.size());
+        if (!casingOnly.isEmpty()) {
+            List<Integer> first = casingOnly.subList(0, Math.min(LISTED_FAILURES, casingOnly.size()));
+            ctx.warn(
+                "textures mte: " + casingOnly.size()
+                    + " basic machines make their overlays in their own constructor, which a server never keeps,"
+                    + " and show their casing only: "
+                    + first);
+        }
+    }
+
+    /**
+     * A dedicated server never builds a tiered machine's texture set: {@code MTETieredMachineBlock} stores
+     * {@code mTextures} only when {@code GT.isClientSide()} (javap of GT 5.09.54.183), so {@code getTexture} throws.
+     * This builds it on {@code mte}, the tile entity's own copy (never the registered prototype), the way the client
+     * does, from what the registration passed: the builder's overlays for a basic machine with recipes, nothing
+     * otherwise. That is exact for every class whose {@code getTextureSet} ignores its argument (hulls,
+     * transformers, buffers, generators, boilers, …) and for machines registered without textures (steam
+     * machines); the other basic machines (scanner, pump, crop machines, …) made their overlays in their own
+     * constructor and show their casing only. Those still count as resolved faces, so they are listed in
+     * {@code stats.mteCasingOnly} and one warning.
+     */
+    private void buildTextureSet(IMetaTileEntity mte, int id) throws ReflectiveOperationException {
+        if (!(mte instanceof MTETieredMachineBlock)) return;
+        MTETieredMachineBlock tiered = (MTETieredMachineBlock) mte;
+        if (tiered.mTextures != null) return;
+        ITexture[] given = NO_TEXTURES;
+        boolean unknown = false, bare = false;
+        if (mte instanceof MTEBasicMachineWithRecipe) {
+            String overlays = builderOverlays.get(id);
+            if (overlays != null) given = builderTextures(overlays);
+            else unknown = true;
+        } else if (mte instanceof MTEBasicMachine) {
+            bare = drawsCasingOnly(mte.getClass());
+        }
+        ITexture[][][] set = tiered.getTextureSet(given);
+        if (tieredTextures == null) tieredTextures = accessible(MTETieredMachineBlock.class, "mTextures");
+        tieredTextures.set(tiered, set);
+        textureSetsBuilt++;
+        if (unknown) overlaysUnknown.add(id);
+        if (bare) casingOnly.add(id);
+    }
+
+    /**
+     * Whether a basic machine given no textures shows its tier casing only: its class inherits
+     * {@code getTextureSet} and every {@link #FACE_METHODS} method from {@code MTEBasicMachine} (true for the
+     * scanner, pump, miner, crop machines, …; false for the steam machines, which draw their own faces, and for a
+     * class with its own {@code getTextureSet}). A class whose public methods cannot be listed counts as true.
+     */
+    private boolean drawsCasingOnly(Class<?> cls) {
+        Boolean known = casingOnlyClasses.get(cls);
+        if (known != null) return known;
+        boolean bare;
+        try {
+            bare = cls.getMethod("getTextureSet", ITexture[].class)
+                .getDeclaringClass() == MTEBasicMachine.class;
+            for (int i = 0; bare && i < FACE_METHODS.length; i++) {
+                bare = cls.getMethod(FACE_METHODS[i], byte.class)
+                    .getDeclaringClass() == MTEBasicMachine.class;
+            }
+        } catch (Throwable t) {
+            bare = true;
+        }
+        casingOnlyClasses.put(cls, bare);
+        return bare;
+    }
+
+    /**
+     * The textures {@code MTEBasicMachineWithRecipe(…, String aOverlays, …)} makes from its overlay folder name
+     * (javap of GT 5.09.54.183): per face of {@link #OVERLAY_FACES}, the overlay and its glowing twin.
+     */
+    private static ITexture[] builderTextures(String overlays) {
+        String domain = Mods.GregTech.resourceDomain;
+        String base = "basicmachines/" + overlays.toLowerCase(Locale.ENGLISH) + "/OVERLAY_";
+        ITexture[] out = new ITexture[OVERLAY_FACES.length];
+        for (int i = 0; i < out.length; i++) {
+            String name = base + OVERLAY_FACES[i];
+            out[i] = TextureFactory.of(
+                TextureFactory.of(Textures.BlockIcons.customOptional(domain, name)),
+                TextureFactory.builder()
+                    .addIcon(Textures.BlockIcons.customOptional(domain, name + "_GLOW"))
+                    .glow()
+                    .build());
+        }
+        return out;
+    }
+
+    /**
+     * Builder machine id → overlay folder name, from every class file of the jar that holds GT's machine builder
+     * ({@link BuilderOverlayScanner}); empty, with a warning, when that jar cannot be read.
+     */
+    private Map<Integer, String> builderOverlays() {
+        Map<Integer, String> out = new HashMap<>();
+        try {
+            for (Map.Entry<String, String> e : scanBuilderJar().entrySet()) {
+                MetaTileEntityIDs id;
+                try {
+                    id = MetaTileEntityIDs.valueOf(e.getKey());
+                } catch (IllegalArgumentException notInThisVersion) {
+                    continue;
+                }
+                out.put(id.ID, e.getValue());
+            }
+        } catch (Throwable t) {
+            ctx.warn("textures mte: the builder machines' overlays could not be read, they show their casing only: " + t);
+        }
+        return out;
+    }
+
+    /** {@link BuilderOverlayScanner#scan} over every class file (outside {@code META-INF/}) of the builder's jar. */
+    private static Map<String, String> scanBuilderJar() throws IOException, URISyntaxException {
+        Class<?> builder = MTEBasicMachineWithRecipeBuilder.class;
+        String resource = builder.getName()
+            .replace('.', '/') + ".class";
+        URL url = builder.getClassLoader()
+            .getResource(resource);
+        if (url == null || !"jar".equals(url.getProtocol())) throw new IOException(resource + " is not in a jar: " + url);
+        File jar = new File(((JarURLConnection) url.openConnection()).getJarFileURL()
+            .toURI());
+        byte[] marker = BuilderOverlayScanner.MARKER.getBytes(StandardCharsets.US_ASCII);
+        Map<String, String> out = new LinkedHashMap<>();
+        try (ZipFile zip = new ZipFile(jar)) {
+            for (Enumeration<? extends ZipEntry> entries = zip.entries(); entries.hasMoreElements();) {
+                ZipEntry entry = entries.nextElement();
+                String name = entry.getName();
+                if (!name.endsWith(".class") || name.startsWith("META-INF/")) continue;
+                byte[] bytes = read(zip, entry);
+                if (!contains(bytes, marker)) continue;
+                for (Map.Entry<String, String> e : BuilderOverlayScanner.scan(bytes)
+                    .entrySet()) {
+                    if (!out.containsKey(e.getKey())) out.put(e.getKey(), e.getValue());
+                }
+            }
+        }
+        return out;
+    }
+
+    private static byte[] read(ZipFile zip, ZipEntry entry) throws IOException {
+        try (InputStream in = zip.getInputStream(entry)) {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buffer = new byte[BUFFER];
+            for (int n; (n = in.read(buffer)) != -1;) out.write(buffer, 0, n);
+            return out.toByteArray();
+        }
+    }
+
+    private static boolean contains(byte[] bytes, byte[] part) {
+        outer: for (int i = 0; i + part.length <= bytes.length; i++) {
+            for (int j = 0; j < part.length; j++) {
+                if (bytes[i + j] != part[j]) continue outer;
+            }
+            return true;
+        }
+        return false;
     }
 
     /** A machine tile entity for {@code id} in the canonical orientation (front and main facing north). */
@@ -425,6 +653,7 @@ public final class TextureExporter implements ExportSection {
 
     private void blocks() throws IOException {
         Part part = new Part("blocks");
+        iconRefs = new Part("blockIconRefs");
         w.name("blocks");
         w.beginArray();
         for (Block block : GameData.getBlockRegistry()
@@ -433,6 +662,7 @@ public final class TextureExporter implements ExportSection {
         }
         w.endArray();
         part.done();
+        iconRefs.done();
     }
 
     /**
@@ -493,13 +723,24 @@ public final class TextureExporter implements ExportSection {
 
     /**
      * The layers of the icon container {@code ref} names: its static field (array element when
-     * {@code index ≥ 0}; nothing when out of bounds), read by reflection. Resolved once per ref.
+     * {@code index ≥ 0}; nothing when out of bounds), found as the JVM resolves {@code GETSTATIC} and read by
+     * reflection. A ref whose class or field the server does not have (client-only members are stripped) is an
+     * empty face, counted in {@code blockIconRefsFailed}. Resolved once per ref.
      */
     private List<LayerRec> iconLayers(IconRef ref, ClassLoader loader) throws ReflectiveOperationException {
         List<LayerRec> layers = iconLayers.get(ref);
         if (layers == null) {
-            Class<?> owner = Class.forName(ref.owner.replace('/', '.'), false, loader);
-            Object value = accessible(owner, ref.field).get(null);
+            Field field;
+            try {
+                field = ref.resolve(loader);
+            } catch (ClassNotFoundException | NoSuchFieldException | LinkageError e) {
+                iconRefs.failed(ref, e);
+                layers = Collections.emptyList();
+                iconLayers.put(ref, layers);
+                return layers;
+            }
+            iconRefs.wrote();
+            Object value = field.get(null);
             if (ref.index >= 0) {
                 boolean inBounds = value != null && value.getClass()
                     .isArray() && ref.index < Array.getLength(value);
@@ -509,6 +750,67 @@ public final class TextureExporter implements ExportSection {
             iconLayers.put(ref, layers);
         }
         return layers;
+    }
+
+    // --- ore blocks (GTBlockOre) ---
+
+    /**
+     * {@code {ore, oreSmall, smallOffset, naturalOffset, blocks}}: the {@code sets} texture index of the ore and
+     * small-ore icon (the slots {@code TextureSet.getOreTexture} reads), {@code GTBlockOre}'s meta offsets, and per
+     * ore block {@code {id, stones}}. {@code GTBlockOre.getTextures} draws, on every face, its stone's
+     * {@code getTexture(0)} under the material's ore icon; that texture is the stone's {@code getIcon(0)}, the down
+     * face of the stone's main block ({@code Blocks.stone} for a disabled stone type). So each stone, in
+     * {@code stoneTypes} order, is written as one layer that copies that block's down face.
+     */
+    private void ores() throws IOException {
+        Part part = new Part("ores");
+        w.name("ores");
+        w.beginObject();
+        w.name("ore")
+            .value(MaterialIconRegistry.IconType.ORE.ordinal());
+        w.name("oreSmall")
+            .value(MaterialIconRegistry.IconType.ORE_SMALL.ordinal());
+        w.name("smallOffset")
+            .value(GTBlockOre.SMALL_ORE_META_OFFSET);
+        w.name("naturalOffset")
+            .value(GTBlockOre.NATURAL_ORE_META_OFFSET);
+        w.name("blocks");
+        w.beginArray();
+        for (Block block : GameData.getBlockRegistry()
+            .typeSafeIterable()) {
+            if (block instanceof GTBlockOre) element(part, describe(block), () -> oreBlock((GTBlockOre) block));
+        }
+        w.endArray();
+        w.endObject();
+        part.done();
+    }
+
+    /** {@code {id, stones}}: per stone index, a copy of its main block's down face (none when it has no block). */
+    private Element oreBlock(GTBlockOre block) {
+        String id = blockId(block);
+        List<List<LayerRec>> stones = new ArrayList<>();
+        for (StoneType stone : block.stoneTypes) {
+            Block stoneBlock = Blocks.stone; // what GT draws for a missing or disabled stone type
+            int stoneMeta = 0;
+            if (stone != null && stone.isEnabled()) {
+                ImmutableBlockMeta main = stone.getStone();
+                stoneBlock = main == null ? null : main.getBlock();
+                stoneMeta = main == null ? 0 : main.getBlockMeta();
+            }
+            stones.add(
+                stoneBlock == null ? Collections.<LayerRec>emptyList()
+                    : Collections.singletonList(LayerRec.copy(blockId(stoneBlock), stoneMeta, 0)));
+        }
+        return () -> {
+            w.beginObject();
+            w.name("id")
+                .value(id);
+            w.name("stones");
+            w.beginArray();
+            for (List<LayerRec> stone : stones) writeLayers(stone);
+            w.endArray();
+            w.endObject();
+        };
     }
 
     // --- covers (research §3.8) ---
@@ -772,6 +1074,7 @@ public final class TextureExporter implements ExportSection {
         f.setAccessible(true);
         return f;
     }
+
 
     private static String blockId(Block block) {
         String id = GameData.getBlockRegistry()

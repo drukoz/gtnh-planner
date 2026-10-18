@@ -103,6 +103,23 @@ describe('extractAssets', () => {
     expect(await readFile(P(dir, 'index.json'), 'utf8')).toBe(first);
     expect((await readdir(dir)).filter((n) => n.startsWith('assets.'))).toEqual([]);
   });
+
+  it('leaves the previous assets in place when no mod jar can be read', async () => {
+    const { dir, jars } = await pack();
+    await extractAssets({ jars, dataDir: dir });
+    const first = await readFile(P(dir, 'index.json'));
+    const client = jars.filter((j) => j.kind === 'client');
+    const broken = jars.filter((j) => j.path.endsWith('broken.jar'));
+    const err = await extractAssets({ jars: broken, dataDir: dir }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ExtractError);
+    expect((err as Error).message).toMatch(/^no mod jar could be read: broken\.jar \(.+\)$/);
+    for (const only of [[...client, ...broken], client, []]) {   // the client jar alone, or no jar at all, is no pack either
+      await expect(extractAssets({ jars: only, dataDir: dir })).rejects.toThrow(/^no mod jar could be read: /);
+    }
+    expect((await readFile(P(dir, 'index.json'))).equals(first)).toBe(true);
+    expect(await readFile(P(dir, 'gregtech/textures/blocks/iconsets/OVERLAY_ACCELERATOR.png'))).toEqual(BLUE);
+    expect((await readdir(dir)).filter((n) => n.startsWith('assets.'))).toEqual([]);
+  });
 });
 
 describe('extractAssets edge cases', () => {

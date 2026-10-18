@@ -21,3 +21,39 @@ Each export lands in `data/export/<pack version>_<date>/` and becomes the active
 All data comes from **your own** copy of the pack and world: recipes are exported from a copy of your server, textures come from your mod jars, and the world is read locally. None of that is stored in this repository.
 
 **Status:** in development. Design: [docs/superpowers/specs/2026-10-17-gtnh-planner-design.md](docs/superpowers/specs/2026-10-17-gtnh-planner-design.md).
+
+## Textures and icons
+
+- The planner draws blocks and items with your own pack's textures. Nothing game-made is in the repository: it is extracted into `data/assets/` (git-ignored) and served only to people logged in to the planner.
+- `npm run extract-assets` reads `mods/*.jar` of the server folder in `data/config.json` (or `--server <folder>`), read-only, plus the official Minecraft 1.7.10 client jar. Prism Launcher keeps it at `~/Library/Application Support/PrismLauncher/libraries/com/mojang/minecraft/1.7.10/minecraft-1.7.10-client.jar`, the official launcher at `~/Library/Application Support/minecraft/versions/1.7.10/1.7.10.jar`; otherwise pass `--client-jar <path>` or set `"clientJar"` in `data/config.json`. Its SHA-1 must be `e80d9b3bf5085002218d4be59e668bac718abbc6`.
+- `npm run export` also writes `textures.json.gz`, which tells the planner how GregTech draws each machine, casing, cover, material item and fluid. After a pack update, run both again: a running planner picks up new textures from `extract-assets` on its next request; restart it after `npm run export` (as for the recipes). A failed extraction keeps the previous textures.
+- When two jars ship the same texture: a mod beats vanilla, then a jar that overrides another mod's texture beats that mod's own jar (GTNewHorizonsCoreMod over gregtech), then the jar whose name sorts last. `data/assets/index.json` lists every conflict.
+- Optional icons for everything else: in a **copy** of the client instance (never the one you play with), in a creative single-player world, open NEI options → Tools → Data Dumps → Item Panel. With an empty search box and every collapsible group expanded, dump CSV, then PNG, in the same session; then run `npm run import-nei-icons -- --csv <copy>/.minecraft/dumps/itempanel.csv --png <copy>/.minecraft/dumps/itempanel_icons`. Fluid icons are matched by their display name against the active export, so run `npm run export` first. A dump whose rows and images do not line up is refused.
+- Anything without a texture is drawn in a plain colour: by machine kind for blocks, by material for GT items, otherwise a fixed colour per item.
+
+## Using the planner
+
+1. **One-time setup**, on the computer that runs the planner (Node.js 24):
+   - `npm install`
+   - `npm run export` reads the recipes from a copy of your server.
+   - `npm run set-password` asks for the password your group will share. Only a hash of it is kept.
+2. **Start it:** `npm run build && npm start`, then open `http://<this-computer>:8765`. Friends use the port you forward to this computer.
+3. **First visit:** enter the shared password, then your name. The name is stored in this browser only and shows next to your ticks.
+4. **A project** is one line you want to build, with its own link. Pick what to make, then an amount per minute or per hour, or **Make N (batch)**: a fixed number, made on the machines you already own. Set your tier and the planets and dimensions you can reach. The flow diagram shows each machine step: green boxes are machines you already have, blue ones are new. Click a box to swap its recipe, mark "we already make this" or see the overclock math.
+5. **Materials & steps** lists what to build once, what the line uses per hour and where each raw material comes from. Tick rows as you go: everyone sees the ticks live, with the name of who ticked them.
+6. If the page says "No recipe export yet", run `npm run export`. To change the password, run `npm run set-password` again and restart the planner; `npm run set-password -- --rotate-sessions` also logs everyone out.
+
+## World map
+
+The planner reads your world so a line can fit into the base you already have. A scan never touches the live server: it reads the newest *complete* backup in `<server>/backups` (a zip that opens cleanly and is at least two minutes old, so one still being written is skipped), or, when there is none, a snapshot copy of the world folder made into the planner's own data folder. It never reads the live world files directly and never writes anything to the server folder, so the server can keep running.
+
+1. **Point it at the server:** set `serverFolder` in `data/config.json` to your server folder (the one holding `server.properties`).
+2. **Scan:** open the **World** page and press **Scan newest backup**, or pick one backup from the list. From the shell, `npm run scan` does the same; `npm run scan -- --backup <file>` reads one backup, and `--json` prints the whole scan instead of the summary. Scans run in the background, one at a time, and can be cancelled. When a scan could not read or work out everything (no recipe export yet, side files it could not read, boilers whose steam output the export does not give, chunks it had to skip), it says so under the scan on the World page and in **Scan notes** at the top of **Found in world**.
+3. **Friends without the server folder** upload from their browser on the World page: pick the world folder (or a zip of it). The browser reads it on their computer, finds where players are, the spawn, claimed chunks and chunks people have spent time in, and shows the areas and the total size before anything is sent. A radius slider widens or narrows the area around each spot; the upload button waits until the preview shows the new radius. Only `level.dat` and trimmed region files with just those chunks are sent — player files, claims, quests and everything else never leave their computer. **Advanced: whole dimensions** sends every region file of the dimensions they tick instead.
+4. **Use it in a project:** on a project's **Map** tab, choose a finished scan and the base the line is for. The plan then counts the machines and storage already there. A scan that found no base has no map (a scan keeps the map only around bases); a project using it counts the whole world.
+
+Scans live in `data/scans/<id>/` and uploads in `data/uploads/<id>/` (git-ignored). Old scan folders are safe to delete while the planner is stopped.
+
+**The Map tab** shows the base from above, coloured from your block textures, with switchable layers: machines, power cables coloured by voltage tier, logistics (Project Red routed pipes, EnderIO conduits, GT pipes, AE2), storage (filled where a routed or AE2 network reaches it) and the base outline. Drag to pan, scroll or use **+**/**−** to zoom, and move the **Y level** slider to cut through floors. Beside the map, **Found in world** lists the machines and top tier, power networks, logistics networks, stored items with their totals and how many the line's logistics can reach, the world's dimensions and which ones you have visited, prospected veins nearby and the notes. Click the map to pin a numbered note there; everyone on the project sees it.
+
+Power figures are estimates from what is built: clear weather, rain and a 24-hour average. Solar boilers stop about seven minutes into rain, so battery buffers are judged against a rain outage of about eight minutes. Storage whose contents cannot be read reliably is shown as unknown, never guessed.

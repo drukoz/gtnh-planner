@@ -1,12 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { miniGt } from '../../helpers/mini-gt.ts';
-import { packFromSpec } from '../../helpers/pack-spec.ts';
+import { packFromSpec, type IngredientSpec } from '../../helpers/pack-spec.ts';
 import { buildBom, expandBomLines } from '../../../src/server/planner/bom.ts';
 import { buildSteps } from '../../../src/server/planner/steps.ts';
+import { planLine } from '../../../src/server/planner/plan.ts';
 import { planBasis, effectiveTier } from '../../../src/server/planner/basis.ts';
 import { computeAvailability, reachableDims } from '../../../src/server/planner/availability.ts';
 import { makeLeafOracle, makePrices } from '../../../src/server/planner/costs.ts';
-import type { PlanEnv } from '../../../src/server/planner/candidates.ts';
+import { MAX_RECIPES, type PlanEnv } from '../../../src/server/planner/candidates.ts';
 import type { PlanStep } from '../../../src/shared/types/plan.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import { emptyContextForTest } from '../../helpers/plan-context.ts';
@@ -86,22 +87,66 @@ describe('buildBom', () => {
     expect(rate.lines.map((l) => [l.key, l.amount, l.why])).toEqual([['machine:101@0', 2, '1× Basic Bending Machine; 1× Basic Bending Machine']]);
   });
   it('warns when its own recipe graph is too large to break the build list down fully', async () => {
-    // make-assembler needs t:a and t:b; t:a has 20,000 producers, so the walk stops before it ever expands t:b.
+    // make-assembler needs t:a and t:x, t:x needs t:w, t:w needs t:b. t:a takes 200 parts of 200 parts each (40,201
+    // recipes in all, one per good), so the walk stops at MAX_RECIPES before it ever expands t:b, three levels down.
+    const ins = (prefix: string): Array<[string, number]> => Array.from({ length: 200 }, (_, i): [string, number] => [`${prefix}_${i}@0`, 1]);
     const p = packFromSpec({ maps: [{ id: 'gt.recipe.assembler' }],
       machines: [{ mteId: 121, name: 'Basic Assembler', maps: ['gt.recipe.assembler'], tier: 1 }],
       recipes: [
-        { id: 'make-assembler', map: 'gt.recipe.assembler', in: [['t:a@0', 1], ['t:b@0', 1]], out: [['machine:121@0', 1]], eut: 16 },
+        { id: 'make-assembler', map: 'gt.recipe.assembler', in: [['t:a@0', 1], ['t:x@0', 1]], out: [['machine:121@0', 1]], eut: 16 },
+        { id: 'make-x', map: 'gt.recipe.assembler', in: [['t:w@0', 1]], out: [['t:x@0', 1]], eut: 16 },
+        { id: 'make-w', map: 'gt.recipe.assembler', in: [['t:b@0', 1]], out: [['t:w@0', 1]], eut: 16 },
         { id: 'make-b', map: 'gt.recipe.assembler', in: [['t:c@0', 1]], out: [['t:b@0', 1]], eut: 16 },
-        ...Array.from({ length: 20_000 }, (_, i) => ({ id: `a${String(i).padStart(5, '0')}`, map: 'gt.recipe.assembler', out: [['t:a@0', 1]] as Array<[string, number]>, eut: 16 }))] });
+        { id: 'make-a', map: 'gt.recipe.assembler', in: ins('t:a'), out: [['t:a@0', 1]], eut: 16 },
+        ...ins('t:a').flatMap(([part], i) => [
+          { id: `a${i}`, map: 'gt.recipe.assembler', in: ins(`t:a${i}`), out: [[part, 1]] as Array<[string, number]>, eut: 16 },
+          ...ins(`t:a${i}`).map(([leaf], j) => ({ id: `a${i}_${j}`, map: 'gt.recipe.assembler', out: [[leaf, 1]] as Array<[string, number]>, eut: 16 }))])] });
+    expect(p.recipes.length).toBeGreaterThan(MAX_RECIPES);
     const settings = { ...defaultSettings(), tier: 1 };
     const b = planBasis(p, settings, emptyContextForTest());
     const steps = [step({ id: 'make-b', recipeId: 'make-b', machine: { mteId: 121, name: 'Basic Assembler', tier: 1 } })];
     const bom = await buildBom(p, steps, { settings, env: b.env, leaf: b.leaf, ctx: emptyContextForTest() });
     expect(bom.warnings).toEqual([{ code: 'graph-too-big', text: 'The build list is too large to break down fully; mark some parts as "we already make this"' }]);
-    expect(bom.totals.map((l) => [l.key, l.amount])).toEqual([['t:b@0', 1]]);   // never expanded, so it reads as a base material
+    expect(bom.totals.map((l) => [l.key, l.amount])).toContainEqual(['t:b@0', 1]);   // never expanded, so it reads as a base material
     const r = await expandBomLines(p, bom.lines.map(({ key, amount, why, group }) => ({ key, amount, why, ...(group === undefined ? {} : { group }) })), settings, emptyContextForTest());
     expect(Object.keys(r).sort()).toEqual(['lines', 'totals']);
     expect(r.totals).toEqual(bom.totals);
+  });
+  it('breaks the build list down at the line\'s prices, the same in expandBomLines, with a derived leaf and a stop item', async () => {
+    // The line bends U from D (an alloy of 3 X, mined nowhere) and assembles T from U and S (4 Y, which the group says it
+    // already makes). Its assembler is crafted from 1 D or 2 P, its bender from 1 S or 2 Q. At plain prices D and S cost
+    // 1 each; the line buys D at what its chain costs (3) and S at the cost model's 4, so both machines are made from
+    // P and Q, and expandBomLines, given the same top-level lines, breaks them down at those same prices.
+    const dust = (key: string, material: string) => ({ key, name: `${material} Dust`, gt: { prefix: 'dust', material } });
+    const vein = (material: string) => ({ name: `ore.mix.${material}`, dims: ['overworld'], kind: 'vein' as const, weight: 1, minY: 0, maxY: 255, size: 1, density: 1,
+      materials: { primary: material, secondary: material, between: material, sporadic: material } });
+    const p = packFromSpec({
+      items: [dust('x@0', 'X'), dust('y@0', 'Y'), dust('p@0', 'P'), dust('q@0', 'Q'), { key: 'd@0', name: 'D Ingot', gt: { prefix: 'ingot', material: 'D' } },
+              { key: 's@0', name: 'Stop Part' }, { key: 'u@0', name: 'U Part' }, { key: 't@0', name: 'Thing' }],
+      maps: [{ id: 'gt.recipe.alloysmelter' }, { id: 'gt.recipe.assembler' }, { id: 'gt.recipe.metalbender' }, { id: 'crafting' }],
+      machines: [{ mteId: 1, name: 'Basic Assembler', maps: ['gt.recipe.assembler'], tier: 1 }, { mteId: 2, name: 'Basic Bending Machine', maps: ['gt.recipe.metalbender'], tier: 1 },
+                 { mteId: 3, name: 'Basic Alloy Smelter', maps: ['gt.recipe.alloysmelter'], tier: 1 }],
+      recipes: [{ id: 'make-d', map: 'gt.recipe.alloysmelter', in: [['x@0', 3]], out: [['d@0', 1]], eut: 16 },
+                { id: 'make-s', map: 'gt.recipe.assembler', in: [['y@0', 4]], out: [['s@0', 1]], eut: 16 },
+                { id: 'make-u', map: 'gt.recipe.metalbender', in: [['d@0', 1]], out: [['u@0', 1]], eut: 16 },
+                { id: 'make-t', map: 'gt.recipe.assembler', in: [['u@0', 1], ['s@0', 1]], out: [['t@0', 1]], eut: 16 },
+                { id: 'assembler-d', map: 'crafting', in: [['d@0', 1]], out: [['machine:1@0', 1]] },
+                { id: 'assembler-p', map: 'crafting', in: [['p@0', 2]], out: [['machine:1@0', 1]] },
+                { id: 'bender-s', map: 'crafting', in: [['s@0', 1]], out: [['machine:2@0', 1]] },
+                { id: 'bender-q', map: 'crafting', in: [['q@0', 2]], out: [['machine:2@0', 1]] }],
+      worldgen: { veins: ['X', 'Y', 'P', 'Q'].map(vein) },
+    });
+    const settings = { ...defaultSettings(), tier: 1, target: 't@0', stopItems: ['s@0'] };
+    const plan = await planLine(p, settings, emptyContextForTest());
+    expect(plan.status).toBe('ok');
+    expect(plan.rawInputs.map((r) => [r.key, r.leafClass])).toEqual([['d@0', 'derived'], ['s@0', 'stop']]);
+    expect(plan.rawInputs.map((r) => Math.round(r.cost / r.perSecond * 1e6) / 1e6)).toEqual([3, 4]);   // per unit
+    expect(plan.buildList.map((l) => l.key)).toEqual(['machine:1@0', 'machine:2@0']);
+    expect(plan.buildTotals?.map((l) => [l.key, l.amount])).toEqual([['p@0', 2], ['q@0', 2]]);
+    const top = plan.buildList.map(({ key, amount, why, group }) => ({ key, amount, why, ...(group === undefined ? {} : { group }) }));
+    const r = await expandBomLines(p, top, settings, emptyContextForTest());
+    expect(r.totals).toEqual(plan.buildTotals);
+    expect(r.lines).toEqual(plan.buildList);
   });
   it('lists a hand-crafting tool once, not as a part that stays in a machine (Task 13 ruling)', async () => {
     const p = packFromSpec({ maps: [{ id: 'crafting' }],
@@ -152,6 +197,7 @@ describe('expandBomLines', () => {
   });
   it('never loops back, and takes the cheapest option of an ore-dictionary slot', async () => {
     const p = packFromSpec({ maps: [{ id: 'crafting' }],
+      items: [{ key: 't:a@0', oreDict: ['logWood'] }, { key: 't:b@0', oreDict: ['logWood'] }],
       recipes: [
         { id: 'a-unpack', map: 'crafting', in: [['t:block@0', 1]], out: [['t:bar@0', 9]] },   // ties with c-bar and sorts first
         { id: 'b-pack', map: 'crafting', in: [['t:bar@0', 9]], out: [['t:block@0', 1]] },

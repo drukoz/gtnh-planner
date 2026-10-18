@@ -56,6 +56,8 @@ button:hover:not(:disabled) { background: var(--surface-2); }
 button:disabled { opacity: 0.55; cursor: default; }
 button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
 button.primary:hover:not(:disabled) { filter: brightness(1.08); background: var(--accent); }
+button.danger { border-color: var(--error); color: var(--error); }
+button.danger:hover:not(:disabled) { background: var(--error-bg); }
 input, textarea, select {
   padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface);
 }
@@ -75,22 +77,43 @@ textarea { resize: vertical; width: 100%; }
 .top-nav a[aria-current='page'] { color: var(--text); border-bottom-color: var(--accent); }
 
 .page { max-width: 1200px; margin: 0 auto; padding: 20px; }
+/* The project page uses the full window width so the flow diagram, map and 3D view get room. */
+.page.project-page { max-width: none; padding: 16px 24px; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; }
 .cards { list-style: none; padding: 0; margin: 0 0 20px; display: grid; gap: 10px; }
 .banner { padding: 10px 14px; border-radius: var(--radius); margin: 0 0 var(--gap); }
 .banner.error { background: var(--error-bg); }
+.banner.notice { background: var(--surface-2); border: 1px solid var(--border); }
 
-.project-card { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 2fr) auto; gap: 12px; align-items: center; }
+.project-card { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 2fr) auto auto; gap: 12px; align-items: center; }
+.project-card .delete-open { justify-self: start; }
+.project-card .delete-confirm { grid-column: 1 / -1; }
 .project-link { font-weight: 600; text-decoration: none; }
 .project-target { display: flex; gap: 8px; align-items: center; min-width: 0; }
 .new-project { display: flex; gap: 12px; align-items: flex-end; max-width: 520px; }
 .new-project .field { flex: 1; }
 
+.delete-confirm {
+  display: flex; flex-direction: column; gap: 10px; padding: 12px 14px;
+  border: 1px solid var(--error); border-radius: var(--radius); background: var(--error-bg);
+}
+.delete-confirm p { margin: 0; }
+.delete-confirm .field { max-width: 360px; }
+.delete-confirm input { background: var(--surface); }
+
+.recently-deleted { margin-top: 28px; }
+.recently-deleted h2 { margin-bottom: 4px; }
+.recently-deleted > p { margin: 0 0 var(--gap); }
+.deleted-card { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr) auto; gap: 12px; align-items: center; }
+.deleted-name { font-weight: 600; overflow-wrap: anywhere; }
+.deleted-card button { justify-self: start; }
+
 .login-page { min-height: 100vh; display: grid; place-items: center; padding: 20px; }
 .login { width: min(360px, 100%); display: flex; flex-direction: column; gap: 14px; }
 .login .error { margin: 0; }
 
-.project-head { display: flex; align-items: center; gap: 16px; margin-bottom: var(--gap); }
+.project-head { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin-bottom: var(--gap); }
+.project-head .delete-confirm { flex-basis: 100%; }
 .project-name {
   flex: 1; font-size: 1.4rem; font-weight: 600; padding: 4px 8px;
   border-color: transparent; background: transparent;
@@ -293,6 +316,31 @@ fieldset.flow-panel-section > legend.flow-panel-title { float: left; width: 100%
 .swap-option input { margin-top: 4px; }
 .swap-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 
+/* Materials & steps (spec §3.10): the tree indents by depth, unlock texts are warnings, ticked rows are crossed out. */
+.materials { display: flex; flex-direction: column; gap: 22px; max-width: 1600px; }
+.materials-section { display: flex; flex-direction: column; gap: 6px; }
+.materials-section h3 { font-size: 1.05rem; margin: 0; }
+.materials-section > p { margin: 0; }
+.mat-group h4 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 8px 0 2px; }
+.mat-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.mat-row { display: flex; align-items: flex-start; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--border); }
+.mat-row > .item-icon { margin-top: 1px; }
+.mat-row > .tick { flex: 1; min-width: 0; gap: 4px 10px; }
+.mat-toggle { width: 1.6em; flex-shrink: 0; padding: 0; border: none; background: none; text-align: center; color: var(--muted); }
+span.mat-toggle { display: inline-block; }
+.mat-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.mat-amount { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
+.mat-have summary { cursor: pointer; }
+.mat-where { margin: 2px 0 0; padding-left: 18px; }
+.mat-sources, .mat-unlock, .mat-actions { flex-basis: 100%; }
+.mat-sources { margin: 0; padding-left: 18px; overflow-wrap: anywhere; }
+.mat-unlock {
+  margin: 0; padding: 4px 8px; background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: 6px;
+}
+.step-list { margin: 0; padding-left: 24px; display: flex; flex-direction: column; gap: 4px; }
+.step-row { padding: 3px 0; }
+.step-row .tick-label { overflow-wrap: anywhere; }
+
 @media (max-width: 1100px) {
   .flow.has-panel { grid-template-columns: minmax(0, 1fr); }
   .flow-panel { position: static; max-height: none; }
@@ -304,7 +352,7 @@ fieldset.flow-panel-section > legend.flow-panel-title { float: left; width: 100%
 }
 
 @media (max-width: 640px) {
-  .project-card { grid-template-columns: 1fr; }
+  .project-card, .deleted-card { grid-template-columns: 1fr; }
   .new-project { flex-direction: column; align-items: stretch; }
   .top-nav { gap: 12px; padding: 10px 14px; }
 }

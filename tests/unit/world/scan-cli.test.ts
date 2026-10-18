@@ -1,10 +1,13 @@
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { runScanCli } from '../../../src/server/cli/scan.ts';
 import type { WorldConfig } from '../../../src/server/world/sources.ts';
-import type { Base } from '../../../src/shared/types/world.ts';
+import type { Base, WorldScan } from '../../../src/shared/types/world.ts';
+import { makeExport } from '../../helpers/make-export.ts';
+import { runCli } from '../../helpers/run-cli.ts';
+import { sampleExportSpec } from '../../helpers/sample-export.ts';
 import { SAMPLE, SAMPLE_BACKUP, makeSampleWorld } from '../../helpers/sample-world.ts';
 import { testFacts } from '../../helpers/world-facts.ts';
 
@@ -72,4 +75,58 @@ it.each([
   expect(await runScanCli(argv, io)).toBe(1);
   expect(io.err).toContain('Usage: npm run scan -- [--backup <file> | --upload <uploadId>] [--json]');
   expect(await readdir(join(tmp, 'data', 'scans'))).toEqual(before);   // nothing was started
+});
+
+// `npm run scan` as a child process (ledger rulings R5, D-R2): a working folder whose data/config.json points at the
+// sample server, so the CLI loads the config itself and scans in its own data/scans.
+describe('npm run scan', () => {
+  const env = { GTNH_PLANNER_CONFIG: undefined };
+  let roots = 0;
+
+  /** A fresh working folder with `data/config.json` (`text` as given, else the sample server and `activeExportId`). */
+  async function root(activeExportId: string | null, text?: string): Promise<string> {
+    const dir = join(tmp, `cli-root-${++roots}`);
+    await mkdir(join(dir, 'data'), { recursive: true });
+    await writeFile(join(dir, 'data', 'config.json'), text ?? JSON.stringify({ dataDir: 'data', serverFolder: config.serverFolder, activeExportId }));
+    return dir;
+  }
+
+  it('loads the config, warns that no export is active and prints the scan', { timeout: 60_000 }, async () => {
+    const r = await runCli('scan', ['--json'], { cwd: await root(null), env, timeoutMs: 50_000 });
+    expect(r.code).toBe(0);
+    expect(r.stderr).toContain('Warning: No active export. Run `npm run export` first; scanning without pack facts\n');
+    const scan = JSON.parse(r.stdout) as WorldScan;
+    expect(scan.source).toEqual({ kind: 'server' });
+    expect(scan.levelName).toBe('World');
+  });
+
+  it('scans with the facts of the active export, without a warning', { timeout: 60_000 }, async () => {
+    const dir = await root('sample');
+    await makeExport(join(dir, 'data', 'export', 'sample'), sampleExportSpec());
+    const r = await runCli('scan', ['--json'], { cwd: dir, env, timeoutMs: 50_000 });
+    expect(r.code).toBe(0);
+    expect(r.stderr).not.toContain('Warning: ');
+    expect((JSON.parse(r.stdout) as WorldScan).source).toEqual({ kind: 'server' });
+  });
+
+  it('warns and scans without facts when the active export does not load', { timeout: 60_000 }, async () => {
+    const r = await runCli('scan', [], { cwd: await root('missing'), env, timeoutMs: 50_000 });
+    expect(r.code).toBe(0);
+    expect(r.stderr).toMatch(/^Warning: .*; scanning without pack facts$/m);
+    expect(r.stdout).toMatch(/^Done: /);
+  });
+
+  it('exits 1 naming an unknown backup', { timeout: 30_000 }, async () => {
+    const r = await runCli('scan', ['--backup', 'nope.zip'], { cwd: await root(null), env });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('nope.zip');
+    expect(r.stdout).toBe('');
+  });
+
+  it('exits 1 with the message of a damaged settings file', { timeout: 30_000 }, async () => {
+    const r = await runCli('scan', [], { cwd: await root(null, '{ not json'), env });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('the settings file is not valid JSON');
+    expect(r.stdout).toBe('');
+  });
 });

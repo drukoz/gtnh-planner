@@ -30,11 +30,17 @@ export type DumpFaces = DumpLayer[][];                                         /
 export interface TexturesDumpFile {
   format: 'gtnh-planner-textures/1'; exporterVersion: string;
   sets: Array<{ name: string; icons: Record<string /* texture index */, DumpLayer[]> }>;
-  materials: Array<{ name: string; id: number /* mMetaItemSubID */; rgba: [number, number, number, number]; set: number /* index into sets */ }>;
+  materials: Array<{ name: string; id: number /* mMetaItemSubID */; rgba: [number, number, number, number]; set: number /* index into sets */; oreGlow?: 1 /* hasGlowingOre() */ }>;
   metaItems: Array<{ id: string /* registry name */; offset: number; unlocalized: string; prefixes: Array<{ i: number /* meta / 1000 */; prefix: string; texture: number }> }>;
   mte: Array<{ id: number; cls: string; pipe?: true; inactive?: DumpFaces; active?: DumpFaces /* omitted when equal to inactive */; error?: string }>;
   casingPages: Array<{ id: number /* page << 7 | index */; faces: DumpFaces }>;
   blocks: Array<{ id: string; metas: Record<string /* meta */, DumpFaces> }>;
+  /** GT ore blocks (`GTBlockOre`); absent from dumps written before the exporter had this part. */
+  ores?: {
+    ore: number; oreSmall: number;                // `sets` texture index of the ore and the small-ore icon (TextureSet.getOreTexture)
+    smallOffset: number; naturalOffset: number;   // GTBlockOre.SMALL_ORE_META_OFFSET, NATURAL_ORE_META_OFFSET
+    blocks: Array<{ id: string; stones: DumpLayer[][] /* per stone index (stoneTypes order): the stone drawn under the ore */ }>;
+  };
   covers: Array<{ item: string /* registry@meta */; layers: DumpLayer[] }>;
   fluids: Array<{ name: string; color: number /* Fluid.getColor(), 0xAARRGGBB as a signed int */; still?: string }>;
   textureNames: { blocks: Record<string, string>; items: Record<string, string> };   // registry name → Block.textureName / Item.iconString
@@ -48,7 +54,9 @@ export interface CopyRef { copy: [string, number, number] }               // blo
 export type FaceLayer = TextureLayer | CopyRef;
 export type ResolvedFaces = FaceLayer[][];                                 // 6 lists, ForgeDirection order
 export interface DumpMte { cls: string; pipe: boolean; inactive: ResolvedFaces | null; active: ResolvedFaces | null; error?: string }
-export interface DumpMaterial { name: string; id: number; rgb: Rgb; set: number }
+export interface DumpMaterial { name: string; id: number; rgb: Rgb; set: number; oreGlow?: true }
+/** GT ore blocks: meta = stone index · 1000 + material id, plus `naturalOffset` (world-generated) and `smallOffset` (small ore). */
+export interface DumpOres { ore: number; oreSmall: number; smallOffset: number; naturalOffset: number; blocks: Map<string, FaceLayer[][]> }
 export interface DumpStats { droppedLayers: number; errorLayers: number }
 export interface TexturesDump {
   exporterVersion: string;
@@ -56,6 +64,7 @@ export interface TexturesDump {
   materialsById: Map<number, DumpMaterial>; materialsByName: Map<string, DumpMaterial>;
   metaItems: Map<string, { offset: number; unlocalized: string; prefixes: Map<number, { prefix: string; texture: number }> }>;
   mte: Map<number, DumpMte>; casingPages: Map<number, ResolvedFaces>; blocks: Map<string, Map<number, ResolvedFaces>>;
+  ores: DumpOres | null;                                                   // null: the dump has no ore part
   covers: Map<string, FaceLayer[]>; fluids: Map<string, { color: Rgb; still: TextureLayer | null }>;
   textureNames: { blocks: Map<string, string>; items: Map<string, string> }; blockIds: Set<string>; stats: DumpStats;
 }
@@ -138,7 +147,7 @@ export function resolveDumpLayers(layers: readonly DumpLayer[], index: AssetInde
   return out;
 }
 
-/** Joins a whole dump to the asset index; every face and cover list is resolved exactly once. */
+/** Joins a whole dump to the asset index; every face, cover and ore stone list is resolved exactly once. */
 export function buildTexturesDump(file: TexturesDumpFile, index: AssetIndex): TexturesDump {
   const stats: DumpStats = { droppedLayers: 0, errorLayers: 0 };
   const layers = (list: unknown): FaceLayer[] => (Array.isArray(list) ? resolveDumpLayers(list as DumpLayer[], index, stats) : []);
@@ -151,6 +160,7 @@ export function buildTexturesDump(file: TexturesDumpFile, index: AssetIndex): Te
   const materialsByName = new Map<string, DumpMaterial>();
   for (const m of file.materials) {
     const material: DumpMaterial = { name: m.name, id: m.id, rgb: [m.rgba[0], m.rgba[1], m.rgba[2]], set: m.set };
+    if (m.oreGlow === 1) material.oreGlow = true;
     materialsByName.set(material.name, material);
     if (material.id >= 0) materialsById.set(material.id, material);   // -1: the material has no generated items
   }
@@ -185,6 +195,10 @@ export function buildTexturesDump(file: TexturesDumpFile, index: AssetIndex): Te
     mte,
     casingPages: new Map(file.casingPages.map((c) => [c.id, faces(c.faces)])),
     blocks: new Map(file.blocks.map((b) => [b.id, new Map(Object.entries(b.metas).map(([meta, f]) => [Number(meta), faces(f)]))])),
+    ores: file.ores === undefined ? null : {
+      ore: file.ores.ore, oreSmall: file.ores.oreSmall, smallOffset: file.ores.smallOffset, naturalOffset: file.ores.naturalOffset,
+      blocks: new Map(file.ores.blocks.map((b) => [b.id, b.stones.map((stone) => layers(stone))])),
+    },
     covers: new Map(file.covers.map((c) => [c.item, layers(c.layers)])),
     fluids,
     textureNames: { blocks: new Map(Object.entries(file.textureNames.blocks)), items: new Map(Object.entries(file.textureNames.items)) },

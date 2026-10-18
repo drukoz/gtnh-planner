@@ -85,7 +85,11 @@ function chooseSingleblock(accepting: Machine[], wantTier: number | undefined, o
  */
 export function pickMachine(
   pack: Pack, r: Recipe, mapId: string,
-  opts: { groupTier: number; wantTier?: number; coilHeat: number; automateCrafting: boolean; owned: ReadonlyMap<number, number> },
+  opts: {
+    groupTier: number; wantTier?: number; coilHeat: number; automateCrafting: boolean; owned: ReadonlyMap<number, number>;
+    /** The multiblocks the group can build (`PlanEnv.multiblocks`); absent = any. */
+    multiblocks?: ReadonlySet<number>;
+  },
 ): MachinePick {
   if (mapId === 'crafting') {
     const hand = !opts.automateCrafting;
@@ -114,7 +118,9 @@ export function pickMachine(
     return picked({ mteId: m.mteId, name: m.name, tier: tierOf(m), kind: 'basic', oc, handCraft: false });
   }
 
-  const multi = machines.filter((m) => m.kind === 'multiblock').sort((a, b) => a.mteId - b.mteId)[0];
+  const built = opts.multiblocks;
+  const multis = machines.filter((m) => m.kind === 'multiblock').sort((a, b) => a.mteId - b.mteId);
+  const multi = (built === undefined ? undefined : multis.find((m) => built.has(m.mteId))) ?? multis[0];
   if (multi === undefined) throw new Error(`pickMachine: no machine on ${mapId} runs recipe ${r.id} at ${tierName(opts.groupTier)}`);
   // Never a hatch above the group's tier, nor one too weak for the recipe (spec §5).
   const hatchTier = clamp(opts.wantTier ?? opts.groupTier, Math.min(voltageTier(r.euPerTick), opts.groupTier), opts.groupTier);
@@ -210,16 +216,36 @@ function conversionRuns(graph: CandidateGraph, runsById: ReadonlyMap<string, num
   return runs;
 }
 
-/** The consumed inputs per run, expected amounts; not-consumed ones are one-off items of the machine (Task 13). */
+/** One good of a step's inputs, added up over the slots it fills. */
+interface InputTotal { expected: number; nominal: number; chance: number; sameChance: boolean }
+
+/**
+ * The consumed inputs per run with expected amounts (`amount × chance`), one entry per good in the order of the slot
+ * it first fills: a good in several slots (a real crafting recipe has one ingredient of amount 1 per grid slot,
+ * recipes.ts) is added up. Its `chance` is the slots' chance when they share one, else the expected amount over the
+ * nominal one. Not-consumed inputs are one-off items of the machine (Task 13).
+ */
 function stepInputs(r: Recipe, conversions: ReadonlyMap<StuffKey, ReadonlyMap<StuffKey, number>>): Product[] {
-  return r.inputs.flatMap((ing): Product[] => {
-    if (!ing.consumed || ing.options.length === 0) return [];
+  const totals = new Map<StuffKey, InputTotal>();
+  for (const ing of r.inputs) {
+    if (!ing.consumed || ing.options.length === 0) continue;
     // A slot with one option is that good itself; a longer one is the virtual good candidates.ts made for it.
     const option = ing.options.length === 1
       ? (ing.options[0] as Option)
       : busiestOption(ing.options, conversions.get(virtualKey(ing.options)));
-    return [{ key: option.key, amount: option.amount * ing.chance, chance: ing.chance }];
-  });
+    const expected = option.amount * ing.chance;
+    const total = totals.get(option.key);
+    if (total === undefined) {
+      totals.set(option.key, { expected, nominal: option.amount, chance: ing.chance, sameChance: true });
+    } else {
+      total.expected += expected;
+      total.nominal += option.amount;
+      total.sameChance &&= total.chance === ing.chance;
+    }
+  }
+  return [...totals].map(([key, t]) => ({
+    key, amount: t.expected, chance: t.sameChance || t.nominal <= 0 ? t.chance : t.expected / t.nominal,
+  }));
 }
 
 /** The output that is a target, else the one the other recipes consume most (ties: the smallest key). */
@@ -249,9 +275,9 @@ export interface PickedRecipe { id: string; runs: number; lp: LpRecipe; mapId: s
  */
 export function pickStepMachines(
   pack: Pack, graph: CandidateGraph, runs: ReadonlyMap<string, number>,
-  opts: { settings: PlanSettings; groupTier: number; coilHeat: number; owned: ReadonlyMap<number, number> },
+  opts: { settings: PlanSettings; groupTier: number; coilHeat: number; owned: ReadonlyMap<number, number>; multiblocks?: ReadonlySet<number> },
 ): PickedRecipe[] {
-  const { settings, groupTier, coilHeat, owned } = opts;
+  const { settings, groupTier, coilHeat, owned, multiblocks } = opts;
   const lpById = new Map(graph.recipes.map((r) => [r.id, r]));
   const picked: PickedRecipe[] = [];
   for (const [id, n] of [...runs].sort(([a], [b]) => byString(a, b))) {
@@ -260,7 +286,7 @@ export function pickStepMachines(
     const recipe = pack.recipeById.get(id);
     if (recipe === undefined) throw new Error(`recipe ${id} of the plan is not in the pack`);
     const wantTier = Object.hasOwn(settings.machineTier, id) ? settings.machineTier[id] : undefined;
-    const pick = pickMachine(pack, recipe, lp.mapId, { groupTier, wantTier, coilHeat, automateCrafting: settings.automateCrafting, owned });
+    const pick = pickMachine(pack, recipe, lp.mapId, { groupTier, wantTier, coilHeat, automateCrafting: settings.automateCrafting, owned, multiblocks });
     picked.push({ id, runs: n, lp, mapId: lp.mapId, recipe, pick });
   }
   return picked;
@@ -293,8 +319,9 @@ export function machineWarnings(lp: LpRecipe, pick: MachinePick, runsPerSecond: 
 export type StepSize = Pick<PlanStep, 'count' | 'owned' | 'runsPerSecond' | 'utilization' | 'warnings'>;
 
 /**
- * The step of a picked recipe, sized by the caller: the machine and its overclocked speed, per-run inputs and outputs
- * (expected amounts), the main output, the overclock inputs, the cleanroom flag and the programmed circuit.
+ * The step of a picked recipe, sized by the caller: the machine and its overclocked speed, per-run inputs (one per
+ * good, slots added up) and outputs (expected amounts), the main output, the overclock inputs, the cleanroom flag and
+ * the programmed circuit.
  * `alternatives` stays empty here (Task 14 fills it).
  */
 export function describeStep(pack: Pack, p: PickedRecipe, line: StepLine, size: StepSize): PlanStep {
@@ -328,13 +355,13 @@ export function describeStep(pack: Pack, p: PickedRecipe, line: StepLine, size: 
  */
 export function planSteps(
   pack: Pack, graph: CandidateGraph, sol: Solution,
-  opts: { settings: PlanSettings; groupTier: number; coilHeat: number; ctx: PlanContext; perSecondScale: number },
+  opts: { settings: PlanSettings; groupTier: number; coilHeat: number; ctx: PlanContext; perSecondScale: number; multiblocks?: ReadonlySet<number> },
 ): PlanStep[] {
-  const { settings, groupTier, coilHeat, ctx, perSecondScale } = opts;
+  const { settings, groupTier, coilHeat, ctx, perSecondScale, multiblocks } = opts;
   const owned = ownedMachineMap(ctx, settings);
   const unclaimed = new Map(owned);
   const line = stepLine(graph, sol.runs);
-  return pickStepMachines(pack, graph, sol.runs, { settings, groupTier, coilHeat, owned }).map((p) => {
+  return pickStepMachines(pack, graph, sol.runs, { settings, groupTier, coilHeat, owned, multiblocks }).map((p) => {
     const runsPerSecond = p.runs * perSecondScale;
     const perMachine = p.pick.runsPerSecondPerMachine;
     const count = Math.max(1, Math.ceil(runsPerSecond / perMachine - TINY));

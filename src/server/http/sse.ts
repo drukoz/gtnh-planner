@@ -67,6 +67,22 @@ export class SseHub {
     return reached;
   }
 
+  /** Writes `last` to every open stream of `channel`, then ends them all; returns how many streams it reached. */
+  end(channel: string, last: { event: string; data: unknown }): number {
+    const listeners = this.#channels.get(channel);
+    if (listeners === undefined) return 0;
+    this.#channels.delete(channel);
+    const text = frame(last.event, last.data);
+    let reached = 0;
+    for (const { res, heartbeat } of listeners) {
+      clearInterval(heartbeat);
+      if (!writable(res)) continue;
+      res.end(text);
+      reached++;
+    }
+    return reached;
+  }
+
   count(channel: string): number {
     return this.#channels.get(channel)?.size ?? 0;
   }

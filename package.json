@@ -16,14 +16,17 @@
     "build": "vite build",
     "typecheck": "tsc -b",
     "test": "tsc -b && vitest run",
+    "e2e": "vite build && playwright test",
     "pack:info": "node --disable-warning=ExperimentalWarning src/server/cli/pack-info.ts",
     "export": "node --disable-warning=ExperimentalWarning src/server/cli/export.ts",
+    "scan": "node --disable-warning=ExperimentalWarning src/server/cli/scan.ts",
     "set-password": "node --disable-warning=ExperimentalWarning src/server/cli/set-password.ts",
     "start": "node --disable-warning=ExperimentalWarning src/server/main.ts",
     "extract-assets": "node --disable-warning=ExperimentalWarning src/server/cli/extract-assets.ts",
     "import-nei-icons": "node --disable-warning=ExperimentalWarning src/server/cli/import-nei-icons.ts"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "@types/node": "24.19.1",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
@@ -34,6 +37,7 @@
     "vitest": "5.0.3"
   },
   "dependencies": {
+    "@zip.js/zip.js": "2.22.1",
     "elkjs": "0.12.0",
     "highs": "1.15.3",
     "react": "19.3.0",

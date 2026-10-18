@@ -1,10 +1,11 @@
 // `npm start`: the planner's one Node process (web-stack §2.2). It serves the API and the built client on the configured
-// port, backs the project database up once a day, and shuts down cleanly on Ctrl-C or SIGTERM.
+// port, backs the project database up and purges projects deleted over 7 days ago once a day (and at start), and shuts
+// down cleanly on Ctrl-C or SIGTERM.
 
 import { join } from 'node:path';
 import { createApp } from './app.ts';
 import { ConfigError, configPath, loadConfig, type AppConfig } from './config.ts';
-import { backupDaily } from './db/db.ts';
+import { backupDaily, PURGE_AFTER_MS } from './db/db.ts';
 import { startServer } from './http/server.ts';
 
 const DAY_MS = 86_400_000;
@@ -50,12 +51,22 @@ async function main(): Promise<void> {
     fail(`Cannot listen on ${config.host}:${config.port}: ${messageOf(err)}`);
   }
 
-  const backup = (): void => {
-    backupDaily(app.db, join(config.dataDir, 'backups'), new Date())
-      .catch((err: unknown) => console.error(`Daily backup failed: ${messageOf(err)}`));
+  const purge = (): void => {
+    try {
+      const purged = app.db.purgeDeletedProjects(new Date(), PURGE_AFTER_MS);
+      if (purged > 0) console.log(`Removed ${purged} project(s) deleted more than 7 days ago`);
+    } catch (err) {
+      console.error(`Purging deleted projects failed: ${messageOf(err)}`);
+    }
   };
-  backup();
-  const backups = setInterval(backup, DAY_MS);
+  // The backup goes first, so the day's copy still holds what the purge then removes for good.
+  const daily = (): void => {
+    backupDaily(app.db, join(config.dataDir, 'backups'), new Date())
+      .catch((err: unknown) => console.error(`Daily backup failed: ${messageOf(err)}`))
+      .finally(purge);
+  };
+  daily();
+  const backups = setInterval(daily, DAY_MS);
   backups.unref();
 
   console.log(`GTNH Line Planner on ${server.url}`);

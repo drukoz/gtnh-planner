@@ -374,8 +374,12 @@ function teamHints(teams: TeamDiscoveries[][]): VisitHint[] {
   return [...dims].map((dim) => ({ dim, why: 'team prospecting' }));
 }
 
-function warningsOf(side: SideData, unmatchedVeins: number, unknownBoilers: number): string[] {
-  const warnings = [...side.level.warnings];
+/** The warning of a scan made without pack facts (no export loaded): it knows no machine, so it has no names or power. */
+export const NO_EXPORT_WARNING = 'Scanned without a recipe export: machines are unknown (run npm run export, then scan again)';
+
+function warningsOf(facts: ScanPackFacts, side: SideData, unmatchedVeins: number, unknownBoilers: number): string[] {
+  const warnings = facts.exportId === null ? [NO_EXPORT_WARNING] : [];
+  warnings.push(...side.level.warnings);
   if (side.unreadable > 0) warnings.push(`${plural(side.unreadable, 'side file')} could not be read`);
   if (unmatchedVeins > 0) warnings.push(`${plural(unmatchedVeins, 'prospected vein')} had no vein type`);
   if (unknownBoilers > 0) warnings.push(`${plural(unknownBoilers, 'boiler')} with unknown steam output`);
@@ -459,13 +463,13 @@ export async function runScanJob(job: ScanJob, report: (progress: number, messag
       id: job.scanId, source: job.request, scannedAt, levelName: side.level.levelName,
       dims, bases, machines, pipes, power: power.networks, logistics: logistics.networks, storage,
       visitedDims: visitedKeys(dims), topTier: highest(rec.machines.map((m) => (countsForTopTier(m) ? m.tier : null))), coilHeat: highest(coilHeats),
-      prospected, logisticsBlocks: logistics.blocks, warnings: warningsOf(side, unmatched, power.unknownBoilers), skippedChunks: rec.skipped,
+      prospected, logisticsBlocks: logistics.blocks, warnings: warningsOf(facts, side, unmatched, power.unknownBoilers), skippedChunks: rec.skipped,
     };
 
     report(P_NETWORKS, 'Writing the scan');
     await writeJsonAtomic(join(scanDir, 'palette.json'), palette.refs);
     await writeJsonAtomic(join(scanDir, 'meta.json'), {
-      source: job.request, levelName: side.level.levelName, blockNames: [...blockNames].sort((a, b) => a[0] - b[0]),
+      source: job.request, levelName: side.level.levelName, warnings: scan.warnings, blockNames: [...blockNames].sort((a, b) => a[0] - b[0]),
     });
     await writeJsonAtomic(join(scanDir, 'scan.json'), scan);
     return scan;

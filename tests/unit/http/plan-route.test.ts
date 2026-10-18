@@ -131,6 +131,38 @@ describe('planForProject and planFinish (architecture §11.16)', () => {
   });
 });
 
+describe('background replans (ledger 200)', () => {
+  it('keeps one replan in flight per project and runs once more for the newest state', async () => {
+    const p = await create({ target: 't:circuit@0', tier: 1 });
+    const started: number[] = [];
+    let release: (() => void) | undefined;
+    // The first replan waits in the context hook until released; the batches behind it must not start their own.
+    s.app.services.planContext = async (pr) => {
+      started.push(pr.rev);
+      if (started.length === 1) await new Promise<void>((resolve) => { release = resolve; });
+      return emptyContext();
+    };
+    const es = await events(p.id);
+    try {
+      await es.next('snapshot');
+      const first = await send(p.id, [{ op: 'settings', patch: { amount: 2 } }]);
+      await vi.waitFor(() => expect(release).toBeDefined());
+      await send(p.id, [{ op: 'settings', patch: { amount: 3 } }]);
+      await send(p.id, [{ op: 'settings', patch: { amount: 4 } }]);
+      const last = await send(p.id, [{ op: 'settings', patch: { amount: 5 } }]);
+      expect(started).toEqual([first]);
+      release!();
+      expect((await es.next('plan')).data).toEqual({ rev: first });
+      expect((await es.next('plan')).data).toEqual({ rev: last });
+      expect(started).toEqual([first, last]);
+      await expect(es.next('plan', 300)).rejects.toThrow('"plan"');
+    } finally {
+      delete s.app.services.planContext;
+      es.close();
+    }
+  });
+});
+
 describe('plan events (architecture §11.8, §11.16)', () => {
   it('tells the tabs after placement ops, from the cache', async () => {
     const p = await create({ target: 't:circuit@0', tier: 1, per: 'hour' });

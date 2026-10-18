@@ -1,11 +1,13 @@
 // `npm run scan -- [--backup <file> | --upload <uploadId>] [--json]` (Plan 4 Task 13): one world scan from the shell,
 // through the same world service as the app, with progress lines on stderr and a summary (or the scan as JSON) on
-// stdout. Importing this module does nothing: the direct-run entry that loads the config and the pack is added with
-// Plan 1's config.ts (ledger ruling R5); until then `runScanCli` is the entry, with the config and facts injected.
+// stdout. Importing this module does nothing: run directly, `main` loads the config and the active export's pack
+// facts (ledger rulings R5, D-R1); `runScanCli` is the entry with the config and facts injected.
 
 import { parseArgs } from 'node:util';
 import type { PowerNetwork, WorldScan, WorldSource } from '../../shared/types/world.ts';
-import type { ScanPackFacts } from '../world/facts.ts';
+import { activeExportDir, ConfigError, loadConfig, type AppConfig } from '../config.ts';
+import { loadPack } from '../pack/load.ts';
+import { emptyFacts, packFacts, type ScanPackFacts } from '../world/facts.ts';
 import { createWorldService } from '../world/scan.ts';
 import { scanSummary } from '../world/scan.worker.ts';
 import { SourceError, type WorldConfig } from '../world/sources.ts';
@@ -119,3 +121,35 @@ export async function runScanCli(argv: string[], io: ScanCliIo): Promise<number>
   }
   return 0;
 }
+
+/**
+ * The facts of the active export, loaded when the scan starts. Without an active export, or when it does not load,
+ * one `Warning: ` line on stderr and `emptyFacts()`: the scan still runs, it just knows no machine.
+ */
+function activeExportFacts(cfg: AppConfig, stderr: (s: string) => void): () => Promise<ScanPackFacts> {
+  return async () => {
+    try {
+      return packFacts(await loadPack(activeExportDir(cfg)));
+    } catch (err) {
+      stderr(`Warning: ${errorMessage(err).replace(/\.$/, '')}; scanning without pack facts\n`);
+      return emptyFacts();
+    }
+  };
+}
+
+/** `npm run scan`: `runScanCli` with the settings file's config and the active export; 1 for a damaged settings file. */
+export async function main(argv: string[]): Promise<number> {
+  const stdout = (s: string): void => { process.stdout.write(s); };
+  const stderr = (s: string): void => { process.stderr.write(s); };
+  let cfg: AppConfig;
+  try {
+    cfg = loadConfig();
+  } catch (err) {
+    if (!(err instanceof ConfigError)) throw err;
+    stderr(`${err.message}\n`);
+    return 1;
+  }
+  return runScanCli(argv, { config: cfg, facts: activeExportFacts(cfg, stderr), stdout, stderr });
+}
+
+if (import.meta.main) process.exitCode = await main(process.argv.slice(2));

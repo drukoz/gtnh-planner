@@ -56,7 +56,7 @@ describe('defaultSettings / normalizeSettings', () => {
     const s = defaultSettings();
     expect(s).toMatchObject({ target: null, mode: 'rate', amount: 1, per: 'min', tier: null, routeDerived: false,
       logistics: 'direct', coilHeat: null, automateCrafting: false, dims: { policy: 'progression', overrides: {} } });
-    expect(s.excludedCategories).toEqual(['recycling', 'massfab', 'replicator', 'scrap', 'lava-centrifuge']);
+    expect(s.excludedCategories).toEqual(['recycling', 'massfab', 'replicator', 'scrap', 'lava-centrifuge', 'programmed-circuit-conversion']);
     expect(s.declineReuse).toEqual([]);
   });
   it('fills fields missing from an older stored project', () => {

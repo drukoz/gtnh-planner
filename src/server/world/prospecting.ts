@@ -4,7 +4,7 @@
 
 import { gunzipSync } from 'node:zlib';
 import type { WorldScan } from '../../shared/types/world.ts';
-import { comp, list, readGzipNbt, type NbtValue } from './nbt.ts';
+import { comp, INFLATE_LIMIT, list, readGzipNbt, type NbtValue } from './nbt.ts';
 
 /** One vein of the server cache, keyed by the chunk of its centre. */
 export interface VpVein { dim: number; chunkX: number; chunkZ: number; vein: string; depleted: boolean }
@@ -82,10 +82,10 @@ export function teamBlobOf(json: unknown): string | null {
 /**
  * A team blob (§7.2): Base64 of GZIP of a big-endian stream `int nDims; nDims × { int dim; LongSet veins;
  * LongSet fluidFields; LongSet depleted }`, LongSet = `int n; n × long`, vein key `chunkX << 32 | chunkZ & 0xffffffff`.
- * Fluid fields are skipped. A truncated stream or a negative count throws.
+ * Fluid fields are skipped. A truncated stream, a negative count or a blob inflating past `MAX_INFLATED_BYTES` throws.
  */
 export function decodeTeamBlob(b64: string): TeamDiscoveries[] {
-  const raw = gunzipSync(Buffer.from(b64, 'base64'));
+  const raw = gunzipSync(Buffer.from(b64, 'base64'), INFLATE_LIMIT);
   const view = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
   let pos = 0;
   const need = (n: number): void => {

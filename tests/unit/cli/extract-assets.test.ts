@@ -82,6 +82,21 @@ describe('extract-assets CLI', () => {
     expect(lines.join('\n')).toContain('warning: no client jar');
   });
 
+  it('fails with exit 1 and keeps the previous textures when no mod jar can be read', async () => {
+    const { dir, config, deps, lines } = await setup();
+    expect(await main(['--no-client'], deps)).toBe(0);
+    const index = join(config.dataDir, 'assets', 'index.json');
+    const first = await readFile(index);
+    const bad = join(dir, 'bad-srv');
+    await mkdir(join(bad, 'mods'), { recursive: true });
+    expect(await main(['--no-client', '--server', bad], deps)).toBe(1);   // mods/ holds no jar
+    expect(lines.at(-1)).toBe('Extraction failed; the previous textures are still in place: no mod jar could be read: none was found');
+    await writeFile(join(bad, 'mods', 'broken.jar'), 'this is not a zip');
+    expect(await main(['--no-client', '--server', bad], deps)).toBe(1);
+    expect(lines.at(-1)).toMatch(/^Extraction failed; the previous textures are still in place: no mod jar could be read: broken\.jar \(.+\)$/);
+    expect((await readFile(index)).equals(first)).toBe(true);
+  });
+
   it('runs as a script', async () => {
     const r = await runCli('extract-assets', ['--help'], { cwd: (await setup()).dir });
     expect(r.code).toBe(0);
