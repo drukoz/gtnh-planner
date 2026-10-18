@@ -8,8 +8,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import io.github.drukoz.gtnhplanner.export.sections.AssemblyLineSection;
+import io.github.drukoz.gtnhplanner.export.sections.CraftingSection;
 import io.github.drukoz.gtnhplanner.export.sections.FluidsSection;
+import io.github.drukoz.gtnhplanner.export.sections.FurnaceSection;
 import io.github.drukoz.gtnhplanner.export.sections.OreDictSection;
+import io.github.drukoz.gtnhplanner.export.sections.RecipeMapsSection;
 
 /**
  * Runs every {@link ExportSection} in order, then writes {@code items.jsonl.gz} and {@code manifest.json}. The wire
@@ -62,6 +66,10 @@ public final class Exporter {
         List<ExportSection> sections = new ArrayList<>();
         sections.add(new FluidsSection());
         sections.add(new OreDictSection());
+        sections.add(new RecipeMapsSection());
+        sections.add(new AssemblyLineSection());
+        sections.add(new CraftingSection());
+        sections.add(new FurnaceSection());
         return sections;
     }
 
