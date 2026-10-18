@@ -152,6 +152,7 @@ describe('expandBomLines', () => {
   });
   it('never loops back, and takes the cheapest option of an ore-dictionary slot', async () => {
     const p = packFromSpec({ maps: [{ id: 'crafting' }],
+      items: [{ key: 't:a@0', oreDict: ['logWood'] }, { key: 't:b@0', oreDict: ['logWood'] }],
       recipes: [
         { id: 'a-unpack', map: 'crafting', in: [['t:block@0', 1]], out: [['t:bar@0', 9]] },   // ties with c-bar and sorts first
         { id: 'b-pack', map: 'crafting', in: [['t:bar@0', 9]], out: [['t:block@0', 1]] },

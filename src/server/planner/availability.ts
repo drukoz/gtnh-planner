@@ -5,7 +5,7 @@
 import { defaultCoilHeat } from '../../shared/gt/overclock.ts';
 import { V, tierName } from '../../shared/gt/tiers.ts';
 import { isFluidKey, type ItemKey, type StuffKey } from '../../shared/keys.ts';
-import type { OrePart, Pack, Recipe, Worldgen } from '../../shared/types/pack.ts';
+import type { Item, OrePart, Pack, Recipe, Worldgen } from '../../shared/types/pack.ts';
 import { FREE_KEYS, type LeafClass, type PlanSettings, type ReachableDim, type SourceInfo } from '../../shared/types/plan.ts';
 import { acceptRecipe, type PlanEnv } from './candidates.ts';
 
@@ -95,6 +95,32 @@ interface PackFacts {
 
 const FACTS = new WeakMap<Pack, PackFacts>();
 
+/**
+ * Ore-dictionary prefixes of things gathered in the world: logs, saplings, leaves, crops, seeds, flowers, mushrooms,
+ * plants and mob drops. On the real 2.9 export nearly every such item has some producer (tree farms, fishing ports,
+ * centrifuges…), while ~6,500 items no recipe makes are not gathered at all: sensor and location cards made by using a
+ * kit on a block, legacy multiblock controllers, data orbs with NBT, creative and display blocks, other mods' copies of
+ * GT parts. Treating those as hand-gathered at cost 1 made disassembly recipes (a GregTech Sensor Card → 3 Electronic
+ * Circuits) the cheapest way to make their outputs, so a natural item must carry one of these names.
+ */
+export const GATHERED_ORE_PREFIXES: readonly string[] = Object.freeze([
+  'log', 'treeSapling', 'treeLeaves', 'crop', 'seed', 'listAll', 'flower', 'mushroom', 'sugarcane', 'blockCactus', 'vine',
+  'slimeball', 'string', 'bone', 'feather', 'leather', 'egg', 'food', 'itemClay',
+]);
+
+/** `name` is `prefix` or `prefix` followed by an upper-case letter (logWood, cropWheat; not logistics). */
+function hasOrePrefix(name: string, prefix: string): boolean {
+  if (!name.startsWith(prefix)) return false;
+  const next = name.charAt(prefix.length);
+  return next === '' || (next >= 'A' && next <= 'Z');
+}
+
+/** An item that looks gathered: no NBT, no charge, and a gathered ore-dictionary name. */
+function looksGathered(item: Item): boolean {
+  if (item.nbt !== undefined || item.electric !== undefined) return false;
+  return item.oreDict.some((name) => GATHERED_ORE_PREFIXES.some((prefix) => hasOrePrefix(name, prefix)));
+}
+
 function baseMaterialWith(pack: Pack, partOf: ReadonlyMap<ItemKey, string>, key: StuffKey): string | undefined {
   const gt = pack.items.get(key)?.gt;
   if (gt !== undefined && isBasePrefix(gt.prefix)) return gt.material;
@@ -117,7 +143,7 @@ function factsOf(pack: Pack): PackFacts {
   for (const item of pack.items.values()) {
     const material = baseMaterialWith(pack, partOf, item.key);
     if (material !== undefined) addTo(baseItems, material, item.key);
-    else if (item.gt === undefined && (pack.producers.get(item.key)?.length ?? 0) === 0) natural.add(item.key);
+    else if (item.gt === undefined && (pack.producers.get(item.key)?.length ?? 0) === 0 && looksGathered(item)) natural.add(item.key);
   }
 
   const n = pack.recipes.length;
@@ -151,7 +177,10 @@ export function isBaseItem(pack: Pack, key: StuffKey): boolean {
   return baseMaterialWith(pack, facts.partOf, key) !== undefined;
 }
 
-/** An item with no GT association that no recipe in the pack produces (logs, sand, mob drops…): gathered by hand. */
+/**
+ * An item with no GT association that no recipe in the pack produces and that carries a gathered ore-dictionary name
+ * (`GATHERED_ORE_PREFIXES`: logs, crops, seeds, mob drops…): gathered by hand.
+ */
 export function isNatural(pack: Pack, key: StuffKey): boolean {
   return factsOf(pack).natural.has(key);
 }

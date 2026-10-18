@@ -55,7 +55,7 @@ describe('computeAvailability', () => {
   it('never fires a recipe with a slot that accepts nothing', () => {
     // The loader keeps a crafting slot whose ore name lists no items, with no options (src/server/pack/recipes.ts).
     const p = packFromSpec({
-      items: [{ key: 'log@0', name: 'Log' }, { key: 'plank@0', name: 'Plank' }, { key: 'widget@0', name: 'Widget' }, { key: 'gadget@0', name: 'Gadget' }],
+      items: [{ key: 'log@0', name: 'Log', oreDict: ['logWood'] }, { key: 'plank@0', name: 'Plank' }, { key: 'widget@0', name: 'Widget' }, { key: 'gadget@0', name: 'Gadget' }],
       recipes: [
         { id: 'plank', map: 'crafting', in: [['log@0', 1]], out: [['plank@0', 4]] },
         { id: 'widget', map: 'crafting', in: [['log@0', 1], { any: [] }], out: [['widget@0', 1]] },
