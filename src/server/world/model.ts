@@ -2,6 +2,7 @@
 // ForgeDirection steps, the tile entities a chunk pass keeps and its per-chunk statistics.
 
 import type { StuffKey } from '../../shared/keys.ts';
+import type { StorageBlock } from '../../shared/types/world.ts';
 import type { NbtCompound } from './nbt.ts';
 
 /** A block position `[x, y, z]`. */
@@ -16,6 +17,12 @@ export interface ChunkStat { dim: number; cx: number; cz: number; inhabitedTime:
 export interface ChunkScanResult { stat: ChunkStat; tes: RawTe[] }
 
 export interface ItemCount { key: StuffKey; count: number }
+
+/**
+ * A storage block as its classifier read it, before reach and networks are known. `contents: null` = found but not
+ * readable reliably (spec §3.4); `capacityStacks: null` = unlimited or unknown, left out when the classifier has none.
+ */
+export interface StorageRec { dim: number; pos: Vec3; kind: StorageBlock['kind']; contents: ItemCount[] | null; capacityStacks?: number | null }
 
 export function posKey(dim: number, x: number, y: number, z: number): string {
   return `${dim}:${x}:${y}:${z}`;
