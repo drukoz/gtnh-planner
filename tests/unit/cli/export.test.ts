@@ -1,4 +1,5 @@
-import { existsSync } from 'node:fs';
+import type { ChildProcess } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,10 +22,12 @@ async function setup(opts: { previous?: string; fillerMaps?: number } = {}) {
     await writeFile(join(root, 'data', 'config.json'), JSON.stringify({ dataDir: 'data', serverFolder: server, activeExportId: opts.previous }));
   }
   const config = async () => JSON.parse(await readFile(join(root, 'data', 'config.json'), 'utf8'));
-  const run = (mode: string, extra: string[] = []) => runCli('export', ['--server', server, '--jar', jar, '--java', java, ...extra], {
-    cwd: root, timeoutMs: 30_000,
-    env: { GTNH_PLANNER_CONFIG: undefined, FAKE_JAVA_MODE: mode, FAKE_EXPORT_SRC: fixture, FAKE_JAVA_ARGS: join(root, 'args.txt') },
-  });
+  const run = (mode: string, extra: string[] = [], more: { env?: Record<string, string>; onSpawn?: (child: ChildProcess) => void } = {}) => runCli(
+    'export', ['--server', server, '--jar', jar, '--java', java, ...extra], {
+      cwd: root, timeoutMs: 30_000, onSpawn: more.onSpawn,
+      env: { GTNH_PLANNER_CONFIG: undefined, FAKE_JAVA_MODE: mode, FAKE_EXPORT_SRC: fixture, FAKE_JAVA_ARGS: join(root, 'args.txt'), ...more.env },
+    },
+  );
   return { root, server, run, config };
 }
 
@@ -64,6 +67,34 @@ describe('npm run export', () => {
     expect(r.code).toBe(1);
     expect(r.stdout + r.stderr).toContain('few-maps');
     expect((await config()).activeExportId).toBe('previous');
+  });
+
+  it('stops the export copy and cleans up when the terminal closes (SIGHUP)', async () => {
+    const { root, run, config } = await setup({ previous: 'previous' });
+    const pidFile = join(root, 'pids.txt');
+    const pids = () => (existsSync(pidFile) ? readFileSync(pidFile, 'utf8').trim().split('\n').filter((l) => l !== '').map(Number) : []);
+    const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    try {
+      const r = await run('hang', [], {
+        env: { FAKE_JAVA_PIDS: pidFile },
+        onSpawn: (child) => {
+          const poll = setInterval(() => {
+            if (pids().length < 2) return;   // the fake JVM and the sleep it waits for are both running
+            clearInterval(poll);
+            child.kill('SIGHUP');
+          }, 50);
+          child.once('exit', () => clearInterval(poll));
+        },
+      });
+      expect(r.code).toBe(130);
+      expect(r.stderr).toContain('SIGHUP: stopping the export');
+      expect(pids().filter(alive)).toEqual([]);
+      expect(existsSync(join(root, '.local', 'export-server'))).toBe(false);
+      expect(existsSync(join(root, '.local', 'export.lock'))).toBe(false);
+      expect((await config()).activeExportId).toBe('previous');
+    } finally {
+      for (const pid of pids()) try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ }
+    }
   });
 
   it('refuses a server folder with a symbolic link out of it before the export copy starts', async () => {

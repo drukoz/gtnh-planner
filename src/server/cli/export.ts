@@ -294,7 +294,9 @@ export async function main(argv: string[]): Promise<number> {
     say(USAGE);
     return 0;
   }
-  // Ctrl-C or SIGTERM stops the export copy (its whole process group) instead of leaving it running.
+  // Ctrl-C, SIGTERM or a closed terminal (SIGHUP) stops the export copy (its whole process group) instead of leaving it
+  // running: the JVM has its own process group, so the terminal's hangup never reaches it, and without a handler Node
+  // would exit at once and leave it running with no watchdog.
   const interrupt = new AbortController();
   const onSignal = (signal: NodeJS.Signals) => {
     if (!interrupt.signal.aborted) tell(`${signal}: stopping the export…`);
@@ -306,11 +308,13 @@ export async function main(argv: string[]): Promise<number> {
   process.stderr.on('error', ignore);
   process.on('SIGINT', onSignal);
   process.on('SIGTERM', onSignal);
+  process.on('SIGHUP', onSignal);
   try {
     return await exportPack(opts, interrupt.signal);
   } finally {
     process.off('SIGINT', onSignal);
     process.off('SIGTERM', onSignal);
+    process.off('SIGHUP', onSignal);
   }
 }
 
