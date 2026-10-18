@@ -334,16 +334,46 @@ function haveOf(ctx: PlanContext, key: StuffKey): RawInput['have'] {
   return have;
 }
 
+/** Derived leaves a grouped `derived-leaf` warning names before it counts the rest. */
+const MAX_NAMED_DERIVED = 5;
+
+/** "a", "a and b", "a, b and c". */
+function listed(names: readonly string[]): string {
+  return names.length <= 1 ? (names[0] ?? '') : `${names.slice(0, -1).join(', ')} and ${names.at(-1) as string}`;
+}
+
+/**
+ * The one `derived-leaf` warning for the derived leaves a line buys (by key), keyed to the first: for one, where it
+ * comes from; for several, their names (at most MAX_NAMED_DERIVED, then a count), as their sources say the rest.
+ */
+function derivedLeafWarning(pack: Pack, derived: ReadonlyArray<{ key: StuffKey; detail: string }>): PlanWarning[] {
+  const first = derived[0];
+  if (first === undefined) return [];
+  if (derived.length === 1) {
+    return [{
+      code: 'derived-leaf', key: first.key,
+      text: `${pack.nameOf(first.key)} is not mined anywhere you can reach; it is ${first.detail}. Turn on "plan derived materials" to include that chain.`,
+    }];
+  }
+  const names = derived.slice(0, MAX_NAMED_DERIVED).map((d) => pack.nameOf(d.key));
+  const rest = derived.length - names.length;
+  const who = rest > 0 ? `${names.join(', ')} and ${rest} more` : listed(names);
+  return [{
+    code: 'derived-leaf', key: first.key,
+    text: `${who} are not mined anywhere you can reach; the line buys them made from other materials (see their sources). Turn on "plan derived materials" to include their chains.`,
+  }];
+}
+
 /**
  * One raw input per purchase, sorted by key: per second (in Make N the batch's total spread over its time, plus the
- * total), its cost (leaf cost × the amount: per second, or the batch's), sources, stock and leaf class; a `derived`
- * leaf also gets a warning that says how to plan its chain.
+ * total), its cost (leaf cost × the amount: per second, or the batch's), sources, stock and leaf class; the `derived`
+ * leaves also get one warning that says how to plan their chains (`derivedLeafWarning`).
  */
 function rawInputsOf(
   pack: Pack, graph: CandidateGraph, basis: PlanBasis, ctx: PlanContext, buys: ReadonlyMap<StuffKey, number>, batchSeconds: number | null,
 ): { rawInputs: RawInput[]; warnings: PlanWarning[] } {
   const rawInputs: RawInput[] = [];
-  const warnings: PlanWarning[] = [];
+  const derived: Array<{ key: StuffKey; detail: string }> = [];
   for (const [key, amount] of [...buys].sort(([a], [b]) => byString(a, b))) {
     const good = graph.goods.get(key);
     const leafClass = good?.leafClass ?? undefined;
@@ -356,15 +386,9 @@ function rawInputsOf(
     if (have !== undefined) input.have = have;
     if (leafClass !== undefined) input.leafClass = leafClass;
     rawInputs.push(input);
-    if (leafClass === 'derived') {
-      const detail = input.sources.find((s) => s.kind === 'derived')?.detail ?? 'made from other materials';
-      warnings.push({
-        code: 'derived-leaf', key,
-        text: `${pack.nameOf(key)} is not mined anywhere you can reach; it is ${detail}. Turn on "plan derived materials" to include that chain.`,
-      });
-    }
+    if (leafClass === 'derived') derived.push({ key, detail: input.sources.find((s) => s.kind === 'derived')?.detail ?? 'made from other materials' });
   }
-  return { rawInputs, warnings };
+  return { rawInputs, warnings: derivedLeafWarning(pack, derived) };
 }
 
 /** What the line throws away other than the target, per second; virtual ore-dictionary goods are never byproducts. */

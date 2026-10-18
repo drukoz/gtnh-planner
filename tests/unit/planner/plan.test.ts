@@ -191,6 +191,23 @@ describe('planLine', () => {
     expect(lv.warnings).toEqual([{ code: 'unavailable', key: 'al@0', text: 'Aluminium Ingot: needs MV machines' }]);
     expect(lv.unlocks).toEqual([{ key: 'al@0', text: 'Aluminium Ingot: needs MV machines' }]);
   });
+  it('says in one warning which derived materials the line buys', async () => {
+    // A widget of steel and red alloy, both made here from mined iron, copper and redstone.
+    const p = packFromSpec({
+      items: [{ key: 'iron@0', name: 'Iron Ingot', gt: { prefix: 'ingot', material: 'Iron' } }, { key: 'copper@0', name: 'Copper Ingot', gt: { prefix: 'ingot', material: 'Copper' } },
+              { key: 'steel@0', name: 'Steel Ingot', gt: { prefix: 'ingot', material: 'Steel' } }, { key: 'redalloy@0', name: 'Red Alloy Ingot', gt: { prefix: 'ingot', material: 'RedAlloy' } },
+              { key: 'widget@0', name: 'Widget' }],
+      machines: [{ mteId: 1, name: 'Basic Alloy Smelter', maps: ['gt.recipe.alloysmelter'], tier: 1 }, { mteId: 2, name: 'Basic Assembler', maps: ['gt.recipe.assembler'], tier: 1 }],
+      recipes: [{ id: 'steel', map: 'gt.recipe.alloysmelter', in: [['iron@0', 1]], out: [['steel@0', 1]], eut: 16 },
+                { id: 'redalloy', map: 'gt.recipe.alloysmelter', in: [['copper@0', 1]], out: [['redalloy@0', 1]], eut: 16 },
+                { id: 'widget', map: 'gt.recipe.assembler', in: [['steel@0', 1], ['redalloy@0', 1]], out: [['widget@0', 1]], eut: 16 }],
+      worldgen: { veins: [vein('ore.mix.iron', 'Iron'), vein('ore.mix.copper', 'Copper')] },
+    });
+    const plan = await planLine(p, S({ target: 'widget@0', tier: 1 }), emptyContext());
+    expect(plan.rawInputs.map((r) => [r.key, r.leafClass])).toEqual([['redalloy@0', 'derived'], ['steel@0', 'derived']]);
+    expect(plan.warnings.filter((w) => w.code === 'derived-leaf')).toEqual([{ code: 'derived-leaf', key: 'redalloy@0',
+      text: 'Red Alloy Ingot and Steel Ingot are not mined anywhere you can reach; the line buys them made from other materials (see their sources). Turn on "plan derived materials" to include their chains.' }]);
+  });
   it('never prices a derived material the cost model did not walk below what its own chain costs', async () => {
     // Plates bend from steel (made from iron and coal), press from iron, or alloy-smelt from Magnetic Steel (2 steel per
     // ingot). The cost model keeps the three cheapest plate recipes, so it never walks Magnetic Steel; at its flat price
