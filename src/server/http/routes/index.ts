@@ -6,5 +6,6 @@ import type { Route } from '../router.ts';
 import { authRoutes } from './auth.ts';
 import { packRoutes } from './pack.ts';
 import { projectRoutes } from './projects.ts';
+import { worldRoutes } from './world.ts';
 
-export const ROUTE_MODULES: Array<(app: AppContext) => Route[]> = [authRoutes, packRoutes, projectRoutes];
+export const ROUTE_MODULES: Array<(app: AppContext) => Route[]> = [authRoutes, packRoutes, projectRoutes, worldRoutes];

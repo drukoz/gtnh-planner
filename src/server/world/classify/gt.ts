@@ -143,8 +143,11 @@ export function classifyGtPipe(te: RawTe, facts: ScanPackFacts): GtPipeRec {
   return rec;
 }
 
-/** Whether a machine's tier counts toward a base's or the world's top tier; never for an unknown mID or no tier. */
-export function countsForTopTier(r: GtMachineRec): boolean {
+/**
+ * Whether a machine's tier counts toward a base's, the world's or a plan context's top tier; never for an unknown mID
+ * or no tier.
+ */
+export function countsForTopTier(r: Pick<GtMachineRec, 'kind' | 'tier' | 'cls'>): boolean {
   if (r.kind === 'unknown' || r.tier === null) return false;
   return TIER_KINDS.has(r.kind) || (r.kind === 'hatch' && ENERGY_HATCH_RE.test(simpleClassName(r.cls) ?? ''));
 }
