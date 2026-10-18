@@ -1,29 +1,24 @@
-// The World page (spec §3.4, §6; architecture §11.10): scan the server folder (its newest complete backup or one
-// chosen backup), follow every scan, and upload a world from a friend's computer. A picked folder or zip is read in
+// The World page (spec §3.4, §6; architecture §11.10, §11.12): scan the server folder (its newest complete backup or
+// one chosen backup), follow every scan, and upload a world from a friend's computer. A picked folder or zip is read in
 // this browser; only level.dat and region files are ever sent (never the whole folder, never a zip, never a player
-// file), so a ~1 GB world can go up one dimension at a time.
+// file). The smart upload comes first: it sends only the chunks around players, spawn, claims and lived-in chunks, a
+// few MB of a ~1 GB world; "Advanced: whole dimensions" sends whole dimensions instead.
 
-import { useCallback, useEffect, useId, useRef, useState, type ChangeEvent, type ReactElement, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type ReactElement, type ReactNode } from 'react';
 import type { WorldScanListItem, WorldSourcesResponse } from '../../shared/types/api.ts';
 import type { WorldSource } from '../../shared/types/world.ts';
 import { messageOf } from '../api/client.ts';
 import { localTime } from '../format.ts';
 import { worldApi } from '../map/api.ts';
+import { browserInflate } from '../world/inflate.ts';
 import { dimLabel, pickWorldFiles, selectDims, type WorldPick } from '../world/pick-files.ts';
+import { findHotspots, formatSize, planSmartUpload, plural, SMART_RADIUS, type Hotspot, type ReadFile, type SmartPlan } from '../world/smart.ts';
 import { uploadWorld, type UploadItem, type UploadProgress } from '../world/upload.ts';
 import { sourceText } from './MapTab.tsx';
+import { SmartUploadPanel } from './SmartUploadPanel.tsx';
 
 /** How often the scan list is asked again while a scan is queued or running. */
 const POLL_MS = 1000;
-
-/** Below 1 MiB in whole KB (rounded up), else MB with one decimal: the smart upload's `formatSize` rule (Task 17a). */
-function sizeText(bytes: number): string {
-  return bytes < 1_048_576 ? `${Math.ceil(bytes / 1024)} KB` : `${(bytes / 1_048_576).toFixed(1)} MB`;
-}
-
-function plural(n: number, word: string): string {
-  return `${n.toLocaleString('en-US')} ${word}${n === 1 ? '' : 's'}`;
-}
 
 function Section(props: { title: string; children: ReactNode }): ReactElement {
   const id = useId();
@@ -195,7 +190,7 @@ export function UploadStatus(props: { upload: UploadState; onStop(): void }): Re
         <>
           <progress max={progress.bytesTotal} value={progress.bytesDone} aria-label="Upload progress" style={{ width: '100%' }} />
           <span className="muted">
-            {`${progress.done} of ${plural(progress.total, 'file')}, ${sizeText(progress.bytesDone)} of ${sizeText(progress.bytesTotal)} — sending ${progress.current}`}
+            {`${progress.done} of ${plural(progress.total, 'file')}, ${formatSize(progress.bytesDone)} of ${formatSize(progress.bytesTotal)} — sending ${progress.current}`}
           </span>
         </>
       ))}
@@ -226,12 +221,12 @@ export function WholeDimensions(props: {
             {pick.dims.map((d) => (
               <label key={d.dim} className="check">
                 <input type="checkbox" checked={chosen.includes(d.dim)} disabled={upload.running} onChange={(e) => toggle(d.dim, e.currentTarget.checked)} />
-                {dimLabel(d.dim)} <span className="muted">{`${plural(d.files, 'file')}, ${sizeText(d.bytes)}`}</span>
+                {dimLabel(d.dim)} <span className="muted">{`${plural(d.files, 'file')}, ${formatSize(d.bytes)}`}</span>
               </label>
             ))}
           </fieldset>
         )}
-        <p style={{ margin: 0 }}>{`Total: level.dat and ${plural(regionFiles, 'region file')}, ${sizeText(bytes)}`}</p>
+        <p style={{ margin: 0 }}>{`Total: level.dat and ${plural(regionFiles, 'region file')}, ${formatSize(bytes)}`}</p>
         <div>
           <button type="button" className="primary" disabled={upload.running || regionFiles === 0} data-testid="upload-dims-button" onClick={onUpload}>
             Upload whole dimensions and scan
@@ -278,11 +273,106 @@ async function zipWorld(file: File): Promise<PickedWorld> {
 function pickText(world: PickedWorld): string {
   const regions = world.pick.files.filter((f) => f.dim !== null);
   const bytes = regions.reduce((n, f) => n + f.size, 0);
-  return `${world.label}: level.dat and ${plural(regions.length, 'region file')} in ${plural(world.pick.dims.length, 'dimension')}, ${sizeText(bytes)}. `
+  return `${world.label}: level.dat and ${plural(regions.length, 'region file')} in ${plural(world.pick.dims.length, 'dimension')}, ${formatSize(bytes)}. `
     + 'Player files stay on this computer.';
 }
 
 const isAbort = (err: unknown): boolean => (err as { name?: unknown } | null)?.name === 'AbortError';
+
+// ---- Smart upload ----
+
+/** A `ReadFile` over the picked world's files (`pick.files` and `pick.local`), each read only when asked. */
+function readerOf(world: PickedWorld): ReadFile {
+  const paths = new Map([...world.pick.files, ...world.pick.local].map((f) => [f.rel, f.path]));
+  return async (rel) => {
+    const path = paths.get(rel);
+    return path === undefined ? null : new Uint8Array(await (await world.blob(path)).arrayBuffer());
+  };
+}
+
+/** `read` keeping what it answered (a failed read is tried again next time). */
+function keeping(read: ReadFile): ReadFile {
+  const kept = new Map<string, Promise<Uint8Array | null>>();
+  return (rel) => {
+    let bytes = kept.get(rel);
+    if (bytes === undefined) {
+      kept.set(rel, bytes = read(rel));
+      bytes.catch(() => kept.delete(rel));
+    }
+    return bytes;
+  };
+}
+
+interface SmartState { reading: { done: number; total: number } | null; plan: SmartPlan | null; error: string | null }
+
+/**
+ * The smart upload of the picked world: its hotspots, found once per pick by reading every file through and keeping
+ * none of it (a ~1 GB world must not sit in memory), then the plan for `radius`, made again on every radius from the
+ * touched region files, which alone are kept. Everything is tied to the pick it was made for, so a newer pick never
+ * shows an older one's reading, plan or error.
+ */
+function useSmartPlan(picked: PickedWorld | null, radius: number): SmartState {
+  const readers = useMemo(() => {
+    if (picked === null) return null;
+    const read = readerOf(picked);
+    return { world: picked, read, planRead: keeping(read) };
+  }, [picked]);
+  const [reading, setReading] = useState<{ world: PickedWorld; done: number; total: number } | null>(null);
+  const [found, setFound] = useState<{ world: PickedWorld; hotspots: Hotspot[] } | null>(null);
+  const [planned, setPlanned] = useState<{ hotspots: Hotspot[]; plan: SmartPlan } | null>(null);
+  const [error, setError] = useState<{ world: PickedWorld; message: string } | null>(null);
+
+  useEffect(() => {
+    if (readers === null) return;
+    const { world, read } = readers;
+    let live = true;
+    const total = world.pick.files.filter((f) => f.dim !== null).length;
+    setReading({ world, done: 0, total });
+    findHotspots(world.pick, read, browserInflate, (done) => {
+      if (live) setReading({ world, done, total });
+    }).then(
+      (hotspots) => {
+        if (!live) return;
+        setReading(null);
+        setFound({ world, hotspots });
+      },
+      (err: unknown) => {
+        if (!live) return;
+        setReading(null);
+        setError({ world, message: `Could not read the world: ${messageOf(err)}` });
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, [readers]);
+
+  const hotspots = found !== null && found.world === picked ? found.hotspots : null;
+  useEffect(() => {
+    if (readers === null || hotspots === null) return;
+    const { world, planRead } = readers;
+    let live = true;
+    planSmartUpload(world.pick, hotspots, radius, planRead).then(
+      (plan) => {
+        if (!live) return;
+        setPlanned({ hotspots, plan });
+        setError(null);
+      },
+      (err: unknown) => {
+        if (live) setError({ world, message: `Could not work out what to send: ${messageOf(err)}` });
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, [readers, hotspots, radius]);
+
+  return {
+    reading: reading !== null && reading.world === picked ? { done: reading.done, total: reading.total } : null,
+    plan: planned !== null && hotspots !== null && planned.hotspots === hotspots ? planned.plan : null,
+    error: error !== null && error.world === picked ? error.message : null,
+  };
+}
 
 function UploadSection(props: { onUploaded(): void }): ReactElement {
   const { onUploaded } = props;
@@ -290,7 +380,11 @@ function UploadSection(props: { onUploaded(): void }): ReactElement {
   const [reading, setReading] = useState<string | null>(null);
   const [pickError, setPickError] = useState<string | null>(null);
   const [chosen, setChosen] = useState<number[]>([]);
+  const [radius, setRadius] = useState<number>(SMART_RADIUS.default);
   const [upload, setUpload] = useState<UploadState>(IDLE_UPLOAD);
+  /** Which button started the upload, so its progress shows beside that button. */
+  const [via, setVia] = useState<'smart' | 'dims'>('smart');
+  const smart = useSmartPlan(picked, radius);
   const current = useRef<PickedWorld | null>(null);
   const stopper = useRef<AbortController | null>(null);
   const pickSeq = useRef(0);   // a newer pick (or leaving the page) discards a zip still being read
@@ -308,6 +402,7 @@ function UploadSection(props: { onUploaded(): void }): ReactElement {
     setPicked(world);
     setPickError(error);
     setChosen(world?.pick.dims.some((d) => d.dim === 0) === true ? [0] : []);
+    setRadius(SMART_RADIUS.default);
     setUpload(IDLE_UPLOAD);
   };
 
@@ -347,10 +442,11 @@ function UploadSection(props: { onUploaded(): void }): ReactElement {
     );
   };
 
-  /** Uploads `items` with the progress and Stop button below; the new scan then shows under "Scans". */
-  const send = (items: UploadItem[]): void => {
+  /** Uploads `items` with the progress and Stop button below the button `from`; the new scan then shows under "Scans". */
+  const send = (items: UploadItem[], from: 'smart' | 'dims'): void => {
     const ac = new AbortController();
     stopper.current = ac;
+    setVia(from);
     setUpload({ ...IDLE_UPLOAD, running: true });
     uploadWorld(items, worldApi, (progress) => setUpload((u) => ({ ...u, progress })), ac.signal).then(
       () => {
@@ -367,8 +463,13 @@ function UploadSection(props: { onUploaded(): void }): ReactElement {
 
   const uploadDims = (): void => {
     if (picked === null) return;
-    send(selectDims(picked.pick, chosen).map((f): UploadItem => ({ rel: f.rel, size: f.size, blob: () => picked.blob(f.path) })));
+    send(selectDims(picked.pick, chosen).map((f): UploadItem => ({ rel: f.rel, size: f.size, blob: () => picked.blob(f.path) })), 'dims');
   };
+
+  const uploadSmart = (): void => {
+    if (smart.plan !== null) send(smart.plan.items, 'smart');   // exactly what the preview shows
+  };
+  const stop = (): void => stopper.current?.abort();
 
   return (
     <Section title="Upload a world">
@@ -391,13 +492,16 @@ function UploadSection(props: { onUploaded(): void }): ReactElement {
       {picked !== null && (
         <>
           <p style={{ margin: 0 }}>{pickText(picked)}</p>
+          <SmartUploadPanel reading={smart.reading} plan={smart.plan} radius={radius} busy={upload.running} onRadius={setRadius} onUpload={uploadSmart} />
+          {smart.error !== null && <p className="error" role="alert" style={{ margin: 0 }}>{smart.error}</p>}
+          {via === 'smart' && <UploadStatus upload={upload} onStop={stop} />}
           <WholeDimensions
             pick={picked.pick}
             chosen={chosen}
-            upload={upload}
+            upload={via === 'dims' ? upload : { ...IDLE_UPLOAD, running: upload.running }}
             onChoose={setChosen}
             onUpload={uploadDims}
-            onStop={() => stopper.current?.abort()}
+            onStop={stop}
           />
         </>
       )}

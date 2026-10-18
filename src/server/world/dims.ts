@@ -5,6 +5,7 @@
 
 import type { DimensionInfo } from '../../shared/types/pack.ts';
 import type { DimSummary } from '../../shared/types/world.ts';
+import { claimedChunks } from '../../shared/world/side-files.ts';
 import type { BaseHints } from './bases.ts';
 import type { ChunkStat } from './model.ts';
 import { comp, list, type NbtCompound, type NbtValue } from './nbt.ts';
@@ -89,19 +90,9 @@ export function questVisits(progress: unknown): VisitHint[] {
   return visits;
 }
 
-/** A ServerUtilities claims file (world-format §7): `ClaimedChunks: { "<dim>": [{ x, z }] }`, chunk coordinates. */
+/** A ServerUtilities claims file (world-format §7): every claimed chunk (the shared `claimedChunks`) with its team. */
 export function claimHints(team: string, claims: NbtCompound): BaseHints['claims'] {
-  const out: BaseHints['claims'] = [];
-  for (const [key, chunks] of Object.entries(comp(claims.ClaimedChunks) ?? {})) {
-    if (!/^-?\d+$/.test(key)) continue;
-    const dim = Number(key);
-    for (const entry of list(chunks)) {
-      const chunk = comp(entry);
-      const cx = intOf(chunk?.x), cz = intOf(chunk?.z);
-      if (cx !== null && cz !== null) out.push({ team, dim, cx, cz });
-    }
-  }
-  return out;
+  return claimedChunks(claims).map(({ dim, cx, cz }) => ({ team, dim, cx, cz }));
 }
 
 /**
