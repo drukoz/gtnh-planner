@@ -4,7 +4,7 @@
 
 import { ebfHeat, voltageTier } from '../../shared/gt/overclock.ts';
 import { V, tierName } from '../../shared/gt/tiers.ts';
-import type { StuffKey } from '../../shared/keys.ts';
+import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import type { Ingredient, Pack, Recipe } from '../../shared/types/pack.ts';
 import type { LeafClass, PlanSettings, PlanWarning } from '../../shared/types/plan.ts';
 
@@ -52,8 +52,12 @@ export const EXCLUSION_RULES: Record<string, (r: Recipe, pack: Pack) => boolean>
   massfab: (r) => anyMapContains(r, 'massfab'),
   replicator: (r) => anyMapContains(r, 'replicator'),
   scrap: (r) => anyMapContains(r, 'recycler') || anyMapContains(r, 'scrapbox'),
-  'lava-centrifuge': (r, pack) => anyMapContains(r, 'centrifuge') && r.inputs.some((ing) => ing.options.some(
-    (o) => o.key === LAVA || (pack.items.get(o.key)?.oreDict.includes('dustStone') ?? false))),
+  'lava-centrifuge': (r, pack) => (anyMapContains(r, 'centrifuge') && r.inputs.some((ing) => ing.options.some(
+    (o) => o.key === LAVA || (pack.items.get(o.key)?.oreDict.includes('dustStone') ?? false))))
+    // The Large Thermal Refinery's lava filter: 1,000 L of free lava → a few % of a copper, tin, gold, silver or tantalum
+    // ingot. With lava free it made every such metal cost 0 (24 refineries, 5.7M L lava/min for 2 Good Circuits/min).
+    || (anyMapContains(r, 'thermalboiler') && r.outputs.some((p) => !isFluidKey(p.key))
+      && r.inputs.some((ing) => ing.consumed && ing.options.some((o) => o.key === LAVA))),
 };
 
 /** The machines that can run one recipe map, as the acceptance test needs them. */
