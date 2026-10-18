@@ -93,6 +93,26 @@ describe('loop guard and blockers', () => {
     expect(s.warnings).toEqual([{ code: 'free-loop', text: 'Ignored 2 recipes that make t@0 from nothing (likely a recipe data loop): loop-a, loop-b' }]);
     expect(s.banned).toEqual(['loop-a', 'loop-b']);
   });
+  it('keeps recipes that only share a no-gain cycle with a loop (cells filled and emptied)', async () => {
+    // The real export's guard banned 58 recipes for an Electronic Circuit: every used recipe on any cycle, cell
+    // fill/empty pairs and the salt water mixer among them. Only loop-a and loop-b make matter from nothing here.
+    const p = packFromSpec({ machines, recipes: [...loop(),
+      { id: 'honest', map: 'gt.recipe.macerator', in: [['raw@0', 1]], out: [['y@0', 1]], eut: 2 },
+      { id: 'fill', map: 'gt.recipe.macerator', in: [['cell@0', 1], ['y@0', 1]], out: [['y_cell@0', 1]], eut: 2 },
+      { id: 'make-t', map: 'gt.recipe.macerator', in: [['y_cell@0', 1]], out: [['t@0', 1], ['cell@0', 1]], eut: 2 },
+      { id: 'cell', map: 'gt.recipe.macerator', in: [['raw@0', 1]], out: [['cell@0', 1]], eut: 2 }] });
+    const s = await solveLine(graphFor(p, 't@0', 1, rawOnly), one('t@0'));
+    expect(Object.fromEntries(s.runs)).toEqual({ fill: 1, honest: 1, 'make-t': 1 });
+    expect(s.warnings).toEqual([{ code: 'free-loop', text: 'Ignored 2 recipes that make t@0 from nothing (likely a recipe data loop): loop-a, loop-b' }]);
+    expect(s.banned).toEqual(['loop-a', 'loop-b']);
+  });
+  it('lets a recipe that consumes nothing (a rock breaker, a pond) make the target, without a loop warning', async () => {
+    const p = packFromSpec({ machines, recipes: [{ id: 'breaker', map: 'gt.recipe.macerator', in: [{ nc: 'circuit@0' }], out: [['t@0', 1]], eut: 2 }] });
+    const s = await solveLine(graphFor(p, 't@0', 1, rawOnly), one('t@0'));
+    expect(s.status).toBe('ok');
+    expect(Object.fromEntries(s.runs)).toEqual({ breaker: 1 });
+    expect(s.warnings).toEqual([]);
+  });
   it('names what blocks a target only a loop makes', async () => {
     const s = await solveLine(graphFor(packFromSpec({ machines, recipes: loop() }), 'y@0', 1, rawOnly), one('y@0'));
     expect(s.status).toBe('infeasible');

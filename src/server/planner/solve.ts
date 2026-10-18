@@ -96,14 +96,15 @@ function mainLp(graph: CandidateGraph, recipes: readonly LpRecipe[], demand: Rea
   return { recipes: sorted, buyKeys, goods, firstBuy, firstSink, rows, rawCost, power, canonical: new Array<number>(width).fill(1) };
 }
 
-/** Minimizes `cost` over the main rows plus `locks`; every column ≥ 0, purchases at most `buyUpper`. */
-function minimize(lp: MainLp, cost: readonly number[], locks: readonly LpRow[], buyUpper = Infinity): Promise<LpResult> {
+/**
+ * Minimizes `cost` over the main rows plus `locks`; every column ≥ 0, purchases at most `buyUpper`, the recipe columns
+ * in `off` fixed to 0.
+ */
+function minimize(lp: MainLp, cost: readonly number[], locks: readonly LpRow[], buyUpper = Infinity, off: ReadonlySet<number> = new Set()): Promise<LpResult> {
   const width = cost.length;
-  return solveLp({
-    sense: 'min', colCost: [...cost], colLower: new Array<number>(width).fill(0),
-    colUpper: new Array<number>(width).fill(Infinity).fill(buyUpper, lp.firstBuy, lp.firstSink),
-    rows: [...lp.rows, ...locks],
-  });
+  const colUpper = new Array<number>(width).fill(Infinity).fill(buyUpper, lp.firstBuy, lp.firstSink);
+  for (const j of off) colUpper[j] = 0;
+  return solveLp({ sense: 'min', colCost: [...cost], colLower: new Array<number>(width).fill(0), colUpper, rows: [...lp.rows, ...locks] });
 }
 
 /**
@@ -127,45 +128,41 @@ function kept(keys: readonly string[], x: readonly number[], first: number): Map
   return out;
 }
 
-/**
- * The used recipes that make matter from nothing: each one that consumes nothing, and each one on a cycle among the
- * used recipes (it makes a good another used recipe consumes, and so on back to it). Recipes downstream of such a loop
- * only turn its output into the target; they are not the loop and stay.
- */
-function matterFromNothing(used: readonly LpRecipe[]): LpRecipe[] {
-  const consumers = new Map<StuffKey, number[]>();
-  used.forEach((r, i) => {
-    for (const [key, c] of r.coeffs) if (c < 0) pushTo(consumers, key, i);
+/** Recipe columns that consume nothing: sources (rock breakers, ponds, farms), never part of a loop. */
+function sourceColumns(lp: MainLp): Set<number> {
+  const sources = new Set<number>();
+  lp.recipes.forEach((r, j) => {
+    if (r.coeffs.every(([, c]) => c >= 0)) sources.add(j);
   });
-  const next = used.map((r) => [...new Set(r.coeffs.flatMap(([key, c]) => (c > 0 ? consumers.get(key) ?? [] : [])))]);
-  const onCycle = (start: number): boolean => {
-    const seen = new Set<number>();
-    const stack = [...(next[start] as number[])];
-    while (stack.length > 0) {
-      const i = stack.pop() as number;
-      if (i === start) return true;
-      if (seen.has(i)) continue;
-      seen.add(i);
-      for (const j of next[i] as number[]) stack.push(j);
-    }
-    return false;
-  };
-  return used.filter((r, i) => r.coeffs.every(([, c]) => c >= 0) || onCycle(i));
+  return sources;
 }
 
 /**
- * The loop guard: the same rows with every purchase fixed to 0 (free goods too), using as few runs as it can. When that
- * still meets the demand, the line makes matter from nothing, and this returns the recipes that do it (every used one
- * when rounding hides the loop among them); otherwise none.
+ * The loop guard. A line that needs no raw material at all either runs on sources (recipes that consume nothing, free
+ * goods made by them) or on a loop in the data that makes matter from nothing (x → 2 y, y → x). It is a loop when the
+ * demand can still be met with every purchase and every source fixed to 0; then the loop is the least-runs steady state
+ * that, again without purchases or sources and with no demand, leaves any surplus at all: only the loop's own recipes,
+ * not the recipes that turn its output into the target, nor recipes that merely share a no-gain cycle with it (cells
+ * filled and emptied). On the real export the old rule (every used recipe on any cycle) banned 58 recipes for an
+ * Electronic Circuit, the salt water mixer and cell canners among them, because the Eye of Harmony (a source) ran.
  */
 async function freeLoop(lp: MainLp): Promise<LpRecipe[]> {
+  const sources = sourceColumns(lp);
   const runsOnly = lp.canonical.map((_, j) => (j < lp.firstBuy ? 1 : 0));
-  const result = await minimize(lp, runsOnly, [], 0);
-  if (result.status === 'error') throw new Error('rate solver: the loop-guard LP failed');
-  if (result.status !== 'optimal') return [];
-  const used = lp.recipes.filter((_, j) => (result.x[j] ?? 0) > TINY);
-  const loop = matterFromNothing(used);
-  return loop.length > 0 ? loop : used;
+  const fromNothing = await minimize(lp, runsOnly, [], 0, sources);
+  if (fromNothing.status === 'error') throw new Error('rate solver: the loop-guard LP failed');
+  if (fromNothing.status !== 'optimal') return [];
+  const width = lp.rawCost.length;
+  const surplus: LpRow = { lower: 1, upper: Infinity, entries: lp.goods.map((_, g): [number, number] => [lp.firstSink + g, 1]) };
+  const colUpper = new Array<number>(width).fill(Infinity).fill(0, lp.firstBuy, lp.firstSink);
+  for (const j of sources) colUpper[j] = 0;
+  const circulation = await solveLp({
+    sense: 'min', colCost: runsOnly, colLower: new Array<number>(width).fill(0), colUpper,
+    rows: [...lp.rows.map((row) => ({ ...row, lower: 0, upper: 0 })), surplus],
+  });
+  if (circulation.status === 'error') throw new Error('rate solver: the loop-guard LP failed');
+  const x = circulation.status === 'optimal' ? circulation.x : fromNothing.x;   // rounding hid the loop: name every used recipe
+  return lp.recipes.filter((_, j) => (x[j] ?? 0) > TINY);
 }
 
 /** S2 and S4 on top of an optimal S1, then the rounded maps. */
