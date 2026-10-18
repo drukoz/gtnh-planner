@@ -1,16 +1,16 @@
-// Optional NEI item-panel icon import (Task 11, research §6.5.1). NEI's "Item Panel" data dump, taken by hand in a
-// copy of the client instance, writes `itempanel.csv` (and `itempanel.json`, one NBT compound per line) and
-// `itempanel_icons/<display name>.png` from the same item list, in the same order. This module joins them by row
-// order, replaying NEI's file-name rule, and copies each icon to `<dataDir>/assets/nei/icons/` with
-// `nei/index.json` (key → path). It owns `<dataDir>/assets/nei/` and its `nei.staging-<ms>/` folder; `npm run
-// extract-assets` carries `nei/` over unchanged.
+// Optional NEI item-panel icon import (Task 11, research §6.5.1, Rulings R16 and R17). NEI's "Item Panel" data dump,
+// taken by hand in a copy of the client instance, writes `itempanel.csv` and `itempanel_icons/<display name>.png`
+// from the same item list, in the same order. This module joins them by row order, replaying NEI's CSV and file-name
+// rules, keys fluid rows by their display name against the pack's fluids, and copies each icon to
+// `<dataDir>/assets/nei/icons/` with `nei/index.json` (key → path). It owns `<dataDir>/assets/nei/` and its
+// `nei.staging-<ms>/` folder; `npm run extract-assets` carries `nei/` over unchanged.
 
 import { createHash } from 'node:crypto';
 import type { Dirent } from 'node:fs';
 import { copyFile, lstat, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { TextureLayer } from '../../shared/types/assets.ts';
-import { fluidKey, type StuffKey } from '../../shared/keys.ts';
+import type { FluidKey, StuffKey } from '../../shared/keys.ts';
 import type { IconSource } from './resolve.ts';
 
 export const NEI_INDEX_FORMAT = 'gtnh-planner-nei/1';
@@ -30,9 +30,13 @@ export class NeiImportError extends Error {
 const NEI_DIR = 'nei';                         // <dataDir>/assets/nei
 const ICONS_DIR = 'icons';                     // <dataDir>/assets/nei/icons
 const NEI_INDEX_FILE = 'index.json';           // <dataDir>/assets/nei/index.json
-/** NEI's own display item for fluids; its NBT names the fluid. */
+/**
+ * NEI's own display item for fluids. Its meta is the dump world's `FluidRegistry` id and its NBT holds only the amount
+ * (`ItemFluidDisplay.createStack`), so a fluid row is matched by its Display Name (`Fluid.getLocalizedName()`).
+ */
 const FLUID_DISPLAY = 'NotEnoughItems:neiFluidDisplay';
-const FLUID_NAME = /"?FluidName"?\s*:\s*"([^"]+)"/;
+/** A quoted field's inner text, when every `"` in it is one of a doubled pair. */
+const DOUBLED_QUOTES_ONLY = /^(?:[^"]|"")*$/;
 /** What `GuiItemIconDumper.cleanFileName` replaces with `_`. */
 const NEI_ILLEGAL = /["<>|:*?\\/\u0000-\u001f]/g;
 const WHOLE_NUMBER = /^-?\d+$/;
@@ -94,17 +98,60 @@ export function parseCsv(text: string): string[][] {
   return rows;
 }
 
-/** The rows of NEI's `itempanel.csv`; its header must be `NEI_HEADER`. `Item ID` is world-specific and dropped. */
+/** `DataDumper.concat` wraps a field in quotes (doubling its `"`) only when its first `,` or `"` is past index 0. */
+function neiQuotes(value: string): boolean {
+  return value.indexOf(',') > 0 || value.indexOf('"') > 0;
+}
+
+/**
+ * The Display Name as NEI meant it: the quoted reading of `"…"` (inner `""` → `"`) when NEI would have quoted that
+ * value, else the text as it is. NEI writes a name that starts with `"` or `,` unquoted, so `"Enderios"` stays as it is.
+ */
+function neiDisplay(raw: string): string {
+  if (raw.length < 2 || !raw.startsWith('"') || !raw.endsWith('"')) return raw;
+  const inner = raw.slice(1, -1);
+  if (!DOUBLED_QUOTES_ONLY.test(inner)) return raw;
+  const decoded = inner.replaceAll('""', '"');
+  return neiQuotes(decoded) ? decoded : raw;
+}
+
+/** One line of NEI's CSV: the text between its first four commas, then everything after the 4th; null with fewer commas. */
+function splitNeiLine(line: string): [string, string, string, string, string] | null {
+  const fields: string[] = [];
+  let from = 0;
+  for (let k = 1; k < NEI_HEADER.length; k++) {
+    const comma = line.indexOf(',', from);
+    if (comma < 0) return null;
+    fields.push(line.slice(from, comma));
+    from = comma + 1;
+  }
+  return [...fields, neiDisplay(line.slice(from))] as [string, string, string, string, string];
+}
+
+/**
+ * The rows of NEI's `itempanel.csv` (`DataDumper.concat`'s format, not RFC 4180): one line per row, LF or CRLF; the
+ * first four fields never hold `,` or `"`, and the Display Name is everything after the 4th comma (see `neiDisplay`).
+ * The header must be `NEI_HEADER`. `Item ID` is world-specific and dropped.
+ */
 export function parseNeiCsv(text: string): NeiRow[] {
-  const [header, ...body] = parseCsv(text.startsWith('﻿') ? text.slice(1) : text);
-  if (header === undefined || header.length !== NEI_HEADER.length || header.some((cell, i) => cell !== NEI_HEADER[i])) {
-    throw new NeiImportError(`The CSV header is ${JSON.stringify(header ?? [])}, expected ${JSON.stringify(NEI_HEADER)}: `
+  const lines = (text.startsWith('\uFEFF') ? text.slice(1) : text).split(/\r?\n/);
+  if (lines.at(-1) === '') lines.pop();
+  const [headerLine, ...body] = lines;
+  const header = headerLine === undefined ? null : splitNeiLine(headerLine);
+  if (header === null || header.some((cell, i) => cell !== NEI_HEADER[i])) {
+    throw new NeiImportError(`The CSV header is ${JSON.stringify(headerLine ?? '')}, expected ${JSON.stringify(NEI_HEADER.join(','))}: `
       + 'not an NEI item panel dump (NEI options → Tools → Data Dumps → Item Panel, CSV mode)');
   }
-  return body.map((fields, i) => {
+  return body.map((line, i) => {
     const where = `CSV row ${i + 1}`;
-    if (fields.length !== NEI_HEADER.length) throw new NeiImportError(`${where} has ${fields.length} fields, expected ${NEI_HEADER.length}`);
-    const [name, , metaText, nbt, display] = fields as [string, string, string, string, string];
+    const fields = splitNeiLine(line);
+    if (fields === null) throw new NeiImportError(`${where} has ${line.split(',').length} fields, expected ${NEI_HEADER.length}`);
+    const quoted = fields.slice(0, -1).findIndex((field) => field.includes('"'));
+    if (quoted >= 0) {
+      throw new NeiImportError(`${where}: "${NEI_HEADER[quoted]}" is ${JSON.stringify(fields[quoted])}, but NEI never quotes it: `
+        + 'not an NEI item panel dump');
+    }
+    const [name, , metaText, nbt, display] = fields;
     const meta = Number(metaText);
     if (!WHOLE_NUMBER.test(metaText) || !Number.isSafeInteger(meta)) {
       throw new NeiImportError(`${where}: "Item meta" is ${JSON.stringify(metaText)}, not a whole number`);
@@ -135,13 +182,6 @@ export function assignNeiFiles(rows: readonly NeiRow[], caseInsensitive: boolean
   });
 }
 
-/** The fluid name on each line of NEI's `itempanel.json` (null when the line names none). */
-export function fluidNames(jsonDump: string): Array<string | null> {
-  const lines = jsonDump.split(/\r?\n/);
-  if (lines.at(-1) === '') lines.pop();
-  return lines.map((line) => FLUID_NAME.exec(line)?.[1] ?? null);
-}
-
 export interface NeiImportResult { rows: number; imported: number; skippedNbt: number; fluids: number; duplicates: number; caseInsensitive: boolean }
 
 async function readText(file: string, what: string): Promise<string> {
@@ -161,6 +201,17 @@ async function listPngs(pngDir: string): Promise<Set<string>> {
     throw new NeiImportError(`Cannot read the PNG folder ${pngDir}: ${messageOf(err)}`, { cause: err });
   }
   return new Set(entries.filter((e) => e.isFile() && e.name.endsWith('.png')).map((e) => e.name));
+}
+
+/** Display name → the key of the one fluid with that name; null when two or more fluids share the name. */
+function fluidsByName(fluids: Iterable<{ key: FluidKey; name: string }>): Map<string, FluidKey | null> {
+  const byName = new Map<string, FluidKey | null>();
+  for (const { key, name } of fluids) {
+    const seen = byName.get(name);
+    if (seen === undefined) byName.set(name, key);
+    else if (seen !== key) byName.set(name, null);
+  }
+  return byName;
 }
 
 interface Assignment { files: string[]; caseInsensitive: boolean; firstMiss: number /* -1 when every file is listed */; found: number }
@@ -241,20 +292,17 @@ async function swapIn(assetsDir: string, staging: string): Promise<void> {
 }
 
 /**
- * Joins an NEI item-panel dump to keys and installs its icons under `<dataDir>/assets/nei/`. The dump is checked
- * completely (CSV, Json line count, PNG count, every row's file) before anything is written; the icons and
- * `index.json` go to `<dataDir>/assets/nei.staging-<ms>/`, which replaces `nei/` only once it is complete.
+ * Joins an NEI item-panel dump to keys and installs its icons under `<dataDir>/assets/nei/`. A row without NBT gets
+ * `<name>@<meta>`; a `NotEnoughItems:neiFluidDisplay` row gets the key of the one fluid in `fluids` whose name equals
+ * its Display Name; every other row is skipped (`skippedNbt`). The dump is checked completely (CSV, PNG count, every
+ * row's file) before anything is written; the icons and `index.json` go to `<dataDir>/assets/nei.staging-<ms>/`, which
+ * replaces `nei/` only once it is complete.
  */
-export async function importNeiIcons(opts: { csv: string /* file */; json?: string | null /* file */; pngDir: string; dataDir: string; now?: () => Date }): Promise<NeiImportResult> {
+export async function importNeiIcons(opts: {
+  csv: string /* file */; fluids?: Iterable<{ key: FluidKey; name: string }> | null; pngDir: string; dataDir: string; now?: () => Date;
+}): Promise<NeiImportResult> {
   const rows = parseNeiCsv(await readText(opts.csv, 'the CSV'));
-  let fluids: Array<string | null> | null = null;
-  if (opts.json !== undefined && opts.json !== null) {
-    fluids = fluidNames(await readText(opts.json, 'the Json dump'));
-    if (fluids.length !== rows.length) {
-      throw new NeiImportError(`The CSV has ${rows.length} rows but ${opts.json} has ${fluids.length} lines. `
-        + 'Dump again with an empty search box and every collapsible group expanded, CSV and Json in the same session.');
-    }
-  }
+  const fluidOf = fluidsByName(opts.fluids ?? []);
   const pngs = await listPngs(opts.pngDir);
   if (pngs.size !== rows.length) throw new NeiImportError(`The CSV has ${rows.length} rows but ${opts.pngDir} has ${pngs.size} PNGs. ${REDUMP}`);
   const { files, caseInsensitive } = matchFiles(rows, pngs, opts.pngDir);
@@ -265,12 +313,14 @@ export async function importNeiIcons(opts: { csv: string /* file */; json?: stri
   let fluidIcons = 0;
   let duplicates = 0;
   for (const [i, row] of rows.entries()) {
-    const fluid = row.hasNbt && row.name === FLUID_DISPLAY ? (fluids?.[i] ?? null) : null;
-    if (row.hasNbt && fluid === null) {
+    // A fluid row's meta is the dump world's fluid id, so it never gets an item key.
+    const isFluid = row.name === FLUID_DISPLAY;
+    const fluid = isFluid ? (fluidOf.get(row.display) ?? null) : null;
+    if (isFluid ? fluid === null : row.hasNbt) {
       skippedNbt++;
       continue;
     }
-    const key = fluid === null ? `${row.name}@${row.meta}` : fluidKey(fluid);
+    const key: StuffKey = fluid ?? `${row.name}@${row.meta}`;
     if (icons.has(key)) {
       duplicates++;
       continue;
