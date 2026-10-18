@@ -97,3 +97,26 @@ export function decodeMapTile(bytes: Uint8Array, dim: number, tx: number, tz: nu
   const height = new Uint8Array(bytes.subarray(TILE_TOP_BYTES));
   return { dim, tx, tz, size: TILE_SIZE, top, height };
 }
+
+// ---- Base ids (Plan 4 Task 7) ----
+
+/** The id of the base anchored on chunk (cx, cz) of `dim`: `"dim:cx:cz"`. */
+export function baseIdOf(dim: number, cx: number, cz: number): string {
+  return `${dim}:${cx}:${cz}`;
+}
+
+const BASE_ID_RE = /^(-?\d+):(-?\d+):(-?\d+)$/;
+
+/**
+ * The base with id `baseId`; after a rescan moved the anchor, the base of the same dimension whose bbox holds the
+ * centre column of the old anchor chunk (first in `scan.bases` order). Null for null, a malformed id or no match.
+ */
+export function findBase(scan: Pick<WorldScan, 'bases'>, baseId: string | null): Base | null {
+  if (baseId === null) return null;
+  const exact = scan.bases.find((b) => b.id === baseId);
+  if (exact !== undefined) return exact;
+  const m = BASE_ID_RE.exec(baseId);
+  if (m === null) return null;
+  const dim = Number(m[1]), x = Number(m[2]) * 16 + 8, z = Number(m[3]) * 16 + 8;
+  return scan.bases.find((b) => b.dim === dim && b.bbox.minX <= x && x <= b.bbox.maxX && b.bbox.minZ <= z && z <= b.bbox.maxZ) ?? null;
+}
