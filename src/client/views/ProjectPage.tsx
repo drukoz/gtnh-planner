@@ -1,12 +1,15 @@
 // One project (spec §3.11): its name (anyone can rename it), whether this tab is live, what the plan warns about or
-// needs unlocked, and the project tabs. The tab follows the URL hash, so links elsewhere (a build step's map pin sets
-// `#map`) switch it too.
+// needs unlocked, the settings panel and, beside it, the project tabs. The tab follows the URL hash, so links elsewhere
+// (a build step's map pin sets `#map`) switch it too.
 
 import { useEffect, useRef, useState, type ReactElement } from 'react';
+import type { PackInfo } from '../../shared/types/api.ts';
 import type { Plan } from '../../shared/types/plan.ts';
+import { apiGet, messageOf } from '../api/client.ts';
 import { useName } from '../state/name.ts';
 import { useProject } from '../state/project-store.ts';
 import { PROJECT_TABS, tabFromHash } from './project-tabs.ts';
+import { SettingsPanel } from './SettingsPanel.tsx';
 
 function ProjectName(props: { name: string; onRename(name: string): void }): ReactElement {
   const { name, onRename } = props;
@@ -70,8 +73,29 @@ function PlanBanner(props: { plan: Plan | null; planError: string | null; planLo
   );
 }
 
+/** The pack's dimensions, capabilities and recipe groups for the settings panel, fetched once per page. */
+function usePackInfo(): { info: PackInfo | null; error: string | null } {
+  const [state, setState] = useState<{ info: PackInfo | null; error: string | null }>({ info: null, error: null });
+  useEffect(() => {
+    let live = true;
+    apiGet<PackInfo>('/api/pack').then(
+      (info) => {
+        if (live) setState({ info, error: null });
+      },
+      (err: unknown) => {
+        if (live) setState({ info: null, error: messageOf(err) });
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, []);
+  return state;
+}
+
 export function ProjectPage(props: { id: string }): ReactElement {
   const view = useProject(props.id);
+  const pack = usePackInfo();
   const me = useName() ?? '';
   const [tab, setTab] = useState(() => tabFromHash(location.hash));
   useEffect(() => {
@@ -99,26 +123,34 @@ export function ProjectPage(props: { id: string }): ReactElement {
       </div>
       {view.error !== null && <p className="banner error" role="alert">{view.error}</p>}
       <PlanBanner plan={plan} planError={view.planError} planLoading={view.planLoading} />
-      <div className="tabs" role="tablist" aria-label="Project views">
-        {PROJECT_TABS.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            role="tab"
-            id={`tab-${t.id}`}
-            aria-selected={t.id === active.id}
-            aria-controls={`panel-${t.id}`}
-            onClick={() => {
-              location.hash = `#${t.id}`;
-            }}
-          >
-            {t.label}
-          </button>
-        ))}
+      <div className="project-body">
+        <aside className="settings-panel" aria-label="Project settings">
+          {pack.error !== null && <p className="error small">{`Could not load the pack: ${pack.error}`}</p>}
+          <SettingsPanel project={project} plan={plan} send={send} me={me} info={pack.info} />
+        </aside>
+        <div className="project-views">
+          <div className="tabs" role="tablist" aria-label="Project views">
+            {PROJECT_TABS.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                role="tab"
+                id={`tab-${t.id}`}
+                aria-selected={t.id === active.id}
+                aria-controls={`panel-${t.id}`}
+                onClick={() => {
+                  location.hash = `#${t.id}`;
+                }}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+          <section className="tab-panel" role="tabpanel" id={`panel-${active.id}`} aria-labelledby={`tab-${active.id}`}>
+            <View project={project} plan={plan} send={send} me={me} />
+          </section>
+        </div>
       </div>
-      <section className="tab-panel" role="tabpanel" id={`panel-${active.id}`} aria-labelledby={`tab-${active.id}`}>
-        <View project={project} plan={plan} send={send} me={me} />
-      </section>
     </main>
   );
 }

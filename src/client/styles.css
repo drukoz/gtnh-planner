@@ -146,6 +146,80 @@ textarea { resize: vertical; width: 100%; }
   user-select: none; text-shadow: 0 1px 1px rgb(0 0 0 / 0.35);
 }
 
+.small { font-size: 0.85rem; }
+button.small { padding: 2px 10px; }
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+}
+.badge {
+  font-size: 0.75rem; padding: 1px 7px; border: 1px solid var(--border); border-radius: 999px; white-space: nowrap;
+}
+
+.project-body { display: grid; grid-template-columns: minmax(260px, 330px) minmax(0, 1fr); gap: 20px; align-items: start; }
+.project-views { min-width: 0; }
+.settings-panel {
+  position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px;
+}
+.settings { display: flex; flex-direction: column; gap: 14px; }
+.settings-section { display: flex; flex-direction: column; gap: 8px; padding-bottom: 14px; border-bottom: 1px solid var(--border); }
+.settings-section:last-child { border-bottom: none; padding-bottom: 0; }
+details.settings-section { display: block; }
+details.settings-section > :not(summary) { margin-top: 8px; }
+details.settings-section > summary { cursor: pointer; }
+details.settings-section > summary h3 { display: inline; margin-right: 8px; }
+.settings-section h3, .settings-title { font-size: 0.95rem; font-weight: 600; margin: 0; color: var(--text); }
+.settings-section h4 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 6px 0 4px; }
+.settings-section p { margin: 0; }
+.settings .field > span.settings-title { color: var(--text); font-size: 0.95rem; }
+.field-label { font-size: 0.9rem; color: var(--muted); }
+.field-error { margin: 0; font-size: 0.85rem; }
+.choice { border: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.choice > legend { padding: 0; margin-bottom: 4px; font-size: 0.9rem; color: var(--muted); }
+.choice > legend.settings-title { color: var(--text); font-size: 0.95rem; }
+.check { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.amount-input { width: 9em; }
+.settings-target { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.settings-target-name { flex: 1; min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
+
+.item-search { display: flex; flex-direction: column; gap: 4px; }
+.item-search input { width: 100%; }
+.search-results {
+  list-style: none; margin: 0; padding: 4px; max-height: 320px; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.search-hit { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 6px; cursor: pointer; }
+.search-hit.active { background: var(--surface-2); }
+.search-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.search-note { margin: 0; font-size: 0.85rem; }
+
+.dim-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.dim-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 8px; align-items: center; }
+.dim-row select { padding: 2px 6px; }
+.dim-name { overflow-wrap: anywhere; }
+.dim-name::before {
+  content: ''; display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 50%; background: var(--border);
+}
+.dim-row.reachable .dim-name::before { background: var(--ok); }
+.dim-label { grid-column: 1 / -1; font-size: 0.8rem; }
+
+.cost-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+.cost-table th { text-align: left; font-weight: 500; color: var(--muted); padding: 2px 4px; }
+.cost-table td { padding: 3px 4px; vertical-align: middle; }
+.cost-name { display: inline-flex; align-items: center; gap: 6px; overflow-wrap: anywhere; }
+.cost-input { width: 6em; padding: 3px 6px; }
+.cost-add { display: flex; flex-direction: column; gap: 8px; }
+.cost-add .row { align-items: flex-end; }
+.cost-field input { width: 7em; }
+.key-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.key-list li { display: flex; align-items: center; gap: 8px; }
+.key-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+
+@media (max-width: 900px) {
+  .project-body { grid-template-columns: 1fr; }
+  .settings-panel { position: static; max-height: none; }
+}
+
 @media (max-width: 640px) {
   .project-card { grid-template-columns: 1fr; }
   .new-project { flex-direction: column; align-items: stretch; }
