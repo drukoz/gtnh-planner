@@ -57,9 +57,66 @@ export function stack(id: number, count: number, damage = 0, extra: Record<strin
   return comp({ ...stackFields(id, count, damage), ...extra });
 }
 
+/** Chest `Items` (world-format §6.8): `{ Slot: Byte } + stack` per entry; slot 200 is written as Byte −56. */
+function chestItems(items: ReadonlyArray<[slot: number, stack: Tag]>): Tag {
+  return compounds(items.map(([slot, s]) => comp({ Slot: byte(slot), ...entriesOf(s) })));
+}
+
 /** A vanilla chest (`Chest`, world-format §6.8): `Items` of `{ Slot: Byte } + stack`; slot 200 is written as Byte −56. */
 export function chest(pos: Vec3, items: Array<[slot: number, stack: Tag]>): Tag {
-  return te('Chest', pos, { Items: compounds(items.map(([slot, s]) => comp({ Slot: byte(slot), ...entriesOf(s) }))) });
+  return te('Chest', pos, { Items: chestItems(items) });
+}
+
+/** An IronChest chest (world-format §6.8): TE id `IronChest.<type>`, `Items` as a vanilla chest, `facing` Byte. */
+export function ironChest(pos: Vec3, type: string, items: Array<[slot: number, stack: Tag]>): Tag {
+  return te(`IronChest.${type}`, pos, { Items: chestItems(items), facing: byte(2) });
+}
+
+/**
+ * A Storage Drawers slot: `[itemId, count, damage = 0]`, written `{ ItemStack: <stack, Count 1>, Count: Int }`; a slot
+ * compound written as given (such as the legacy `{ Item, Meta, Count }`); or null for an empty slot `{}`.
+ */
+export type DrawerSlot = [id: number, count: number, damage?: number] | Tag | null;
+
+/**
+ * A Storage Drawers drawer (world-format §6.6): `StorageDrawers:tileDrawersStandard` with `Slots`, `Cap` Int (base
+ * stacks per slot) and `Dir`, plus `Upgrades` (`{ Slot: Byte } + stack` per `[itemId, damage]`) when any are given.
+ * `comp` writes a compacting drawer (`StorageDrawers:tileDrawersComp`) with its pooled `Count` Int.
+ */
+export function drawer(o: { pos: Vec3; slots: readonly DrawerSlot[]; cap?: number; comp?: boolean; upgrades?: ReadonlyArray<[id: number, damage: number]> }): Tag {
+  const { pos, slots, cap = 16, comp: compacting = false, upgrades = [] } = o;
+  const slotTags = slots.map((s) =>
+    s === null ? comp({}) : Array.isArray(s) ? comp({ ItemStack: stack(s[0], 1, s[2] ?? 0), Count: int(s[1]) }) : s);
+  const pooled = slots.reduce((sum, s) => sum + (Array.isArray(s) ? s[1] : 0), 0);
+  return te(compacting ? 'StorageDrawers:tileDrawersComp' : 'StorageDrawers:tileDrawersStandard', pos, {
+    Slots: compounds(slotTags), Cap: int(cap), Dir: byte(2),
+    ...(upgrades.length === 0 ? {} : { Upgrades: compounds(upgrades.map(([id, damage], i) => comp({ Slot: byte(i), ...stackFields(id, 1, damage) }))) }),
+    ...(compacting ? { Count: int(pooled) } : {}),
+  });
+}
+
+/** A drawer controller (`StorageDrawers:tileController`): it saves only `Dir` (world-format §6.6). */
+export function drawerController(pos: Vec3): Tag {
+  return te('StorageDrawers:tileController', pos, { Dir: byte(2) });
+}
+
+/** A controller slave (`StorageDrawers:tileControllerSlave`): `Controller: { x, y, z }` of the controller it joined. */
+export function drawerSlave(pos: Vec3, controller: Vec3): Tag {
+  return te('StorageDrawers:tileControllerSlave', pos, { Controller: comp({ x: int(controller[0]), y: int(controller[1]), z: int(controller[2]) }) });
+}
+
+/**
+ * A JABBA barrel (`TileEntityBarrel`, world-format §6.7): `storage { amount, maxstacks, upgCapacity, current_item? }`
+ * with the stored item written at Count 0, plus the facing Ints and the `creative`/`ender`/`linked` Bytes.
+ */
+export function barrel(o: { pos: Vec3; item?: number; damage?: number; amount: number; maxstacks?: number; linked?: boolean; ender?: boolean }): Tag {
+  const { pos, item, damage = 0, amount, maxstacks = 64, linked = false, ender = false } = o;
+  const storage = comp({
+    amount: int(amount), maxstacks: int(maxstacks), upgCapacity: int(0), ...(item === undefined ? {} : { current_item: stack(item, 0, damage) }),
+  });
+  return te('TileEntityBarrel', pos, {
+    storage, rotation: int(2), orientation: int(1), creative: byte(0), ender: byte(ender ? 1 : 0), linked: byte(linked ? 1 : 0),
+  });
 }
 
 /** A pre-upgrade GT ore TE (world-format §8): the 61-byte `{ m: Short, n: Byte, id, x, y, z }`. */
