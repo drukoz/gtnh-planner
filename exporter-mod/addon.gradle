@@ -1,0 +1,2 @@
+// Applied by GTNHGradle after the main build script. Plan 3: the exporter's pure-Java helpers have JUnit 5 tests.
+tasks.named('test') { useJUnitPlatform() }
