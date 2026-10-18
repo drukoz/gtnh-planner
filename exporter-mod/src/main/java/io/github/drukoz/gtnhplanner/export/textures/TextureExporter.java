@@ -61,6 +61,7 @@ import gregtech.api.items.MetaGeneratedItemX32;
 import gregtech.api.metatileentity.BaseMetaPipeEntity;
 import gregtech.api.metatileentity.BaseMetaTileEntity;
 import gregtech.api.metatileentity.MetaPipeEntity;
+import gregtech.api.metatileentity.implementations.MTEBasicMachine;
 import gregtech.api.metatileentity.implementations.MTEBasicMachineWithRecipe;
 import gregtech.api.metatileentity.implementations.MTETieredMachineBlock;
 import gregtech.api.objects.GTItemStack;
@@ -109,6 +110,14 @@ public final class TextureExporter implements ExportSection {
     /** The faces, in argument order, of the textures {@code MTEBasicMachineWithRecipe} builds from its overlays. */
     private static final String[] OVERLAY_FACES = { "SIDE_ACTIVE", "SIDE", "FRONT_ACTIVE", "FRONT", "TOP_ACTIVE", "TOP",
         "BOTTOM_ACTIVE", "BOTTOM" };
+    /**
+     * The {@code MTEBasicMachine} methods {@code getTextureSet} draws a face with when it was given no texture for it
+     * (javap of GT 5.09.54.183); each returns the tier casing, plus the pipe overlay for the {@code Pipe} ones.
+     */
+    private static final String[] FACE_METHODS = { "getSideFacingActive", "getSideFacingInactive",
+        "getFrontFacingActive", "getFrontFacingInactive", "getTopFacingActive", "getTopFacingInactive",
+        "getBottomFacingActive", "getBottomFacingInactive", "getBottomFacingPipeActive", "getBottomFacingPipeInactive",
+        "getTopFacingPipeActive", "getTopFacingPipeInactive", "getSideFacingPipeActive", "getSideFacingPipeInactive" };
     private static final int BUFFER = 1 << 13;
 
     private final McTextureEnv env = new McTextureEnv();
@@ -133,6 +142,10 @@ public final class TextureExporter implements ExportSection {
     private int textureSetsBuilt;
     /** Builder-made basic machines without known overlays (drawn with their casing only). */
     private List<Integer> overlaysUnknown;
+    /** Other basic machines, given no textures and drawing none of their own (their casing only). */
+    private List<Integer> casingOnly;
+    /** Per class: whether it draws its faces with {@code MTEBasicMachine}'s own methods ({@link #drawsCasingOnly}). */
+    private Map<Class<?>, Boolean> casingOnlyClasses;
     /** Icon refs of the blocks' {@code getIcon} tables, resolved or not ({@link #iconLayers}). */
     private Part iconRefs;
 
@@ -155,6 +168,8 @@ public final class TextureExporter implements ExportSection {
         iconLayers = new HashMap<>();
         textureSetsBuilt = 0;
         overlaysUnknown = new ArrayList<>();
+        casingOnly = new ArrayList<>();
+        casingOnlyClasses = new HashMap<>();
         try (JsonWriter writer = ctx.gzipJson(FILE)) {
             w = writer;
             write();
@@ -421,6 +436,15 @@ public final class TextureExporter implements ExportSection {
                     + " basic machines with recipes have no known builder overlays and show their casing only: "
                     + first);
         }
+        stats.put("mteCasingOnly", casingOnly.size());
+        if (!casingOnly.isEmpty()) {
+            List<Integer> first = casingOnly.subList(0, Math.min(LISTED_FAILURES, casingOnly.size()));
+            ctx.warn(
+                "textures mte: " + casingOnly.size()
+                    + " basic machines make their overlays in their own constructor, which a server never keeps,"
+                    + " and show their casing only: "
+                    + first);
+        }
     }
 
     /**
@@ -431,24 +455,52 @@ public final class TextureExporter implements ExportSection {
      * otherwise. That is exact for every class whose {@code getTextureSet} ignores its argument (hulls,
      * transformers, buffers, generators, boilers, …) and for machines registered without textures (steam
      * machines); the other basic machines (scanner, pump, crop machines, …) made their overlays in their own
-     * constructor and show their casing only.
+     * constructor and show their casing only. Those still count as resolved faces, so they are listed in
+     * {@code stats.mteCasingOnly} and one warning.
      */
     private void buildTextureSet(IMetaTileEntity mte, int id) throws ReflectiveOperationException {
         if (!(mte instanceof MTETieredMachineBlock)) return;
         MTETieredMachineBlock tiered = (MTETieredMachineBlock) mte;
         if (tiered.mTextures != null) return;
         ITexture[] given = NO_TEXTURES;
-        boolean unknown = false;
+        boolean unknown = false, bare = false;
         if (mte instanceof MTEBasicMachineWithRecipe) {
             String overlays = builderOverlays.get(id);
             if (overlays != null) given = builderTextures(overlays);
             else unknown = true;
+        } else if (mte instanceof MTEBasicMachine) {
+            bare = drawsCasingOnly(mte.getClass());
         }
         ITexture[][][] set = tiered.getTextureSet(given);
         if (tieredTextures == null) tieredTextures = accessible(MTETieredMachineBlock.class, "mTextures");
         tieredTextures.set(tiered, set);
         textureSetsBuilt++;
         if (unknown) overlaysUnknown.add(id);
+        if (bare) casingOnly.add(id);
+    }
+
+    /**
+     * Whether a basic machine given no textures shows its tier casing only: its class inherits
+     * {@code getTextureSet} and every {@link #FACE_METHODS} method from {@code MTEBasicMachine} (true for the
+     * scanner, pump, miner, crop machines, …; false for the steam machines, which draw their own faces, and for a
+     * class with its own {@code getTextureSet}). A class whose public methods cannot be listed counts as true.
+     */
+    private boolean drawsCasingOnly(Class<?> cls) {
+        Boolean known = casingOnlyClasses.get(cls);
+        if (known != null) return known;
+        boolean bare;
+        try {
+            bare = cls.getMethod("getTextureSet", ITexture[].class)
+                .getDeclaringClass() == MTEBasicMachine.class;
+            for (int i = 0; bare && i < FACE_METHODS.length; i++) {
+                bare = cls.getMethod(FACE_METHODS[i], byte.class)
+                    .getDeclaringClass() == MTEBasicMachine.class;
+            }
+        } catch (Throwable t) {
+            bare = true;
+        }
+        casingOnlyClasses.put(cls, bare);
+        return bare;
     }
 
     /**
