@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { cloneServer } from '../../../src/server/export/clone.ts';
 import {
-  EXPORT_PROPERTIES, EulaError, StartScriptError, configureClone, findStartScript, readLevelName, readStartArgs, rewriteProperties,
+  EXPORT_PROPERTIES, EulaError, StartScriptError, configureClone, detectPackVersion, findStartScript, makeExportId, readLevelName,
+  readStartArgs, rewriteProperties,
 } from '../../../src/server/export/configure.ts';
 import { makeFakeServer } from '../../helpers/fake-server.ts';
 
@@ -114,5 +115,19 @@ describe('configureClone never writes through a link', () => {
     await symlink(join(source, 'mods'), join(target, 'mods'));
     await expect(configureClone(target, { jar })).rejects.toThrow(/not a folder of the clone/);
     expect(await readdir(join(source, 'mods'))).toEqual(['gregtech-5.09.54.183.jar', 'gtnhplannerexport-0.0.9.jar']);
+  });
+});
+
+describe('pack version and export id', () => {
+  it('takes the pack version from a GTNH server folder name', () => {
+    expect(detectPackVersion('/x/GT_New_Horizons_2.9.0-RC-1_Server_Java_17-26')).toBe('2.9.0-RC-1');
+    expect(detectPackVersion('/x/GT_New_Horizons_2.8.3_Server_Java_17-25/')).toBe('2.8.3');
+    expect(detectPackVersion('/x/server')).toBeNull();
+    expect(detectPackVersion('/x/GT_New_Horizons_2.9.0_Client')).toBeNull();
+  });
+
+  it('names an export by its pack version and UTC time', () => {
+    expect(makeExportId('2.9.0-RC-1', new Date(Date.UTC(2026, 9, 17, 14, 30, 5, 999)))).toBe('2.9.0-RC-1_20261017-143005');
+    expect(makeExportId('2.9 final/b', new Date(Date.UTC(2026, 0, 2, 3, 4, 5)))).toBe('2.9-final-b_20260102-030405');
   });
 });

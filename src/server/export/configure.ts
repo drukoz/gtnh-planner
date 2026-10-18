@@ -1,5 +1,6 @@
 // Turns a clone of the server folder into a private export server (export-mod.md §5.2, §5.7), and reads what the
-// orchestrator needs from the pack's own files: the world name and the java arguments of its start script.
+// orchestrator needs from the pack's own files: the world name and the java arguments of its start script; also the
+// export's name, from the pack version in the server folder's name.
 // Every write goes into the clone; a file is replaced, never written through, so a symbolic link copied from the
 // server folder cannot carry a write back into it.
 
@@ -98,6 +99,24 @@ export function rewriteProperties(text: string, overrides: Readonly<Record<strin
 /** The world folder the server uses: `level-name`, `World` (the pack's value) when it is missing or empty. */
 export function readLevelName(propertiesText: string): string {
   return readProperty(propertiesText, 'level-name') || 'World';
+}
+
+/** A GTNH server download's folder name: `GT_New_Horizons_<version>_Server…`. */
+const PACK_FOLDER = /^GT_New_Horizons_([^_]+)_Server/;
+
+/** The pack version in the server folder's name (`GT_New_Horizons_2.9.0-RC-1_Server_Java_17-26` → `2.9.0-RC-1`), else null. */
+export function detectPackVersion(serverFolder: string): string | null {
+  return PACK_FOLDER.exec(basename(resolve(serverFolder)))?.[1] ?? null;
+}
+
+/**
+ * The folder name of a new export: the pack version with every character outside `[A-Za-z0-9._-]` replaced by `-`,
+ * then `_` and the UTC time `yyyyMMdd-HHmmss` (`2.9.0-RC-1_20261017-143005`).
+ */
+export function makeExportId(packVersion: string, at: Date): string {
+  const iso = at.toISOString();   // 2026-10-17T14:30:05.123Z
+  const stamp = `${iso.slice(0, 10).replaceAll('-', '')}-${iso.slice(11, 19).replaceAll(':', '')}`;
+  return `${packVersion.replace(/[^A-Za-z0-9._-]/g, '-')}_${stamp}`;
 }
 
 /** The absolute path of the server's `startserver-java9.sh`, else its `startserver.sh`. */
