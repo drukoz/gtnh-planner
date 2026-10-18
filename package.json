@@ -13,7 +13,8 @@
   "scripts": {
     "typecheck": "tsc -b",
     "test": "tsc -b && vitest run",
-    "pack:info": "node --disable-warning=ExperimentalWarning src/server/cli/pack-info.ts"
+    "pack:info": "node --disable-warning=ExperimentalWarning src/server/cli/pack-info.ts",
+    "set-password": "node --disable-warning=ExperimentalWarning src/server/cli/set-password.ts"
   },
   "devDependencies": {
     "@types/node": "24.19.1",
