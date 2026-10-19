@@ -22,7 +22,10 @@ export const PROJECTOR_FORMAT = 'gtnh-planner-projector/1' as const;
 export interface ProjectorCover { face: number /* ForgeDirection */; item: StuffKey; label: string }
 export interface ProjectorBlock {
   pos: [number, number, number]; id: string /* real registry name */; meta: number | null /* null = do not compare */;
-  mteId?: number; facing?: number /* only when the front is checked */; part?: string /* multipart / conduit / ME cable part */;
+  mteId?: number; facing?: number /* only when the front is checked: GT's front facing */;
+  /** `facing` is a single-block machine's output side (its GT front facing); its face overlay is on another side. */
+  facingIsOutput?: true;
+  part?: string /* multipart / conduit / ME cable part */;
   role: BlockRole; label: string; step: string | null /* build step id */; covers?: ProjectorCover[];
 }
 export interface ProjectorStep { id: string; order: number; kind: BuildStep['kind']; text: string; blocks: number[] /* indices into blocks */; done: boolean }

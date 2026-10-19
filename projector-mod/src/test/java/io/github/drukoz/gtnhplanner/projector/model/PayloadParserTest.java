@@ -30,6 +30,7 @@ public class PayloadParserTest {
         PlannedBlock mac = d.blocks.get(3);
         assertArrayEquals(new int[] {102, 64, 201}, new int[] {mac.x, mac.y, mac.z});
         assertEquals("gregtech:gt.blockmachines", mac.id); assertEquals(-1, mac.meta); assertEquals(201, mac.mteId); assertEquals(3, mac.facing);
+        assertTrue(mac.facingIsOutput); assertFalse(d.blocks.get(2).facingIsOutput);   // a single-block machine; a transformer
         assertEquals("machine", mac.role); assertEquals("Basic Macerator", mac.label); assertEquals("layout:place:s1", d.steps.get(mac.step).id);
         assertEquals(1, mac.covers.size()); assertEquals(3, mac.covers.get(0).face); assertEquals("Conveyor Module (LV)", mac.covers.get(0).label);
         assertEquals(-1, d.blocks.get(0).facing); assertEquals(11, d.blocks.get(9).meta);
@@ -58,9 +59,13 @@ public class PayloadParserTest {
     }
 
     @Test void givesOptionalValuesTheirStandInsAndCannotBeChanged() throws Exception {
-        ProjectorData d = PayloadParser.parse(new StringReader(mutate(o -> { block(o, 0).add("step", JsonNull.INSTANCE); block(o, 2).add("facing", JsonNull.INSTANCE); })));
+        ProjectorData d = PayloadParser.parse(new StringReader(mutate(o -> {
+            block(o, 0).add("step", JsonNull.INSTANCE); block(o, 2).add("facing", JsonNull.INSTANCE);
+            block(o, 3).remove("facingIsOutput"); block(o, 4).add("facingIsOutput", JsonNull.INSTANCE);
+        })));
         assertEquals(-1, d.blocks.get(0).step); assertEquals(-1, d.blocks.get(0).meta);
         assertEquals(-1, d.blocks.get(2).facing); assertEquals(21, d.blocks.get(2).mteId);
+        assertFalse(d.blocks.get(3).facingIsOutput); assertFalse(d.blocks.get(4).facingIsOutput); assertEquals(3, d.blocks.get(3).facing);
         assertEquals("minecraft:chest", d.blocks.get(6).id); assertEquals(-1, d.blocks.get(6).mteId);
         assertThrows(UnsupportedOperationException.class, () -> d.blocks.clear());
         assertThrows(UnsupportedOperationException.class, () -> d.steps.clear());

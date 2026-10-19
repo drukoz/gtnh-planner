@@ -11,9 +11,10 @@ import net.minecraft.util.IIcon;
 /**
  * How each planned block looks as a ghost (spec §3.13: real textures, plain colour by kind only where a texture
  * cannot be resolved, as §3.8 says for the 3D view). A GT machine shows the faces GT draws for it with its front
- * where the planner puts it; any other block the client knows shows its own face icons; a multipart, conduit or ME
- * cable part (only its container block is known), a block the client does not know, and anything whose icons are
- * missing show white stained clay tinted by the block's role. Used on the game thread only.
+ * facing (a single-block machine's output side) where the planner puts it; any other block the client knows shows its
+ * own face icons; a multipart, conduit or ME cable part (only its container block is known), a block the client does
+ * not know, and anything whose icons are missing show white stained clay tinted by the block's role. Used on the game
+ * thread only.
  */
 public final class BlockIcons {
 

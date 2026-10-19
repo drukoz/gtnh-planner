@@ -12,9 +12,9 @@ import java.util.Map;
  * Reads the planner's projector payload ({@code ProjectorPayload} in {@code src/shared/types/projector.ts}): Gson
  * fills private classes that mirror it field for field, then the checks below turn them into the immutable
  * {@link ProjectorData}. The payload's optional values get fixed stand-ins: {@code meta} null, a missing
- * {@code mteId} or {@code facing}, and {@code step} null become −1; missing {@code covers} become an empty list and a
- * missing {@code part} null. Everything else the payload type requires must be there, so later code never meets a
- * null.
+ * {@code mteId} or {@code facing}, and {@code step} null become −1; a missing {@code facingIsOutput} becomes false;
+ * missing {@code covers} become an empty list and a missing {@code part} null. Everything else the payload type
+ * requires must be there, so later code never meets a null.
  */
 public final class PayloadParser {
 
@@ -102,7 +102,7 @@ public final class PayloadParser {
             step = j;
         }
         return new PlannedBlock(pos[0], pos[1], pos[2], id, b.meta == null ? -1 : b.meta,
-            b.mteId == null ? -1 : b.mteId, facing, b.part, role, label, step, covers);
+            b.mteId == null ? -1 : b.mteId, facing, Boolean.TRUE.equals(b.facingIsOutput), b.part, role, label, step, covers);
     }
 
     private static List<PlannedCover> covers(List<Cover> raw, String at) throws PayloadException {
@@ -173,6 +173,7 @@ public final class PayloadParser {
         List<Integer> pos;
         String id;
         Integer meta, mteId, facing;
+        Boolean facingIsOutput;
         String part, role, label, step;
         List<Cover> covers;
     }

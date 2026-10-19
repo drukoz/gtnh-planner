@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { containerBlock, stepMembership, projectorPayload, payloadVersion } from '../../../src/server/projector/payload.ts';
-import { projectorLayout, projectorProject, CONVEYOR } from '../../helpers/projector-fixtures.ts';
+import { projectorLayout, projectorPack, projectorProject, CONVEYOR } from '../../helpers/projector-fixtures.ts';
+import type { MachineKind } from '../../../src/shared/types/pack.ts';
+import type { BuildStep } from '../../../src/shared/types/plan.ts';
 
-const nameOf = (k: string) => (k === CONVEYOR ? 'Conveyor Module (LV)' : k);
+const pack = projectorPack();
 const SAMPLE = 'projector-mod/src/test/resources/projector-sample.json';
 
 describe('projector payload', () => {
@@ -45,12 +47,12 @@ describe('projector payload', () => {
   });
 
   it('compares meta and facing only where they mean something', () => {
-    const p = projectorPayload(projectorProject(), projectorLayout(), nameOf);
+    const p = projectorPayload(projectorProject(), projectorLayout(), pack);
     expect(p.blocks).toHaveLength(10);
     expect(p.blocks[0]).toEqual({ pos: [100, 64, 201], id: 'gregtech:gt.blockmachines', meta: null, mteId: 1180, role: 'cable', label: '1x Tin Cable', step: 'layout:power:hookup' });
     expect(p.blocks[2]).toMatchObject({ mteId: 21, facing: 4, meta: null });
-    expect(p.blocks[3]).toEqual({ pos: [102, 64, 201], id: 'gregtech:gt.blockmachines', meta: null, mteId: 201, facing: 3, role: 'machine', label: 'Basic Macerator',
-      step: 'layout:place:s1', covers: [{ face: 3, item: CONVEYOR, label: 'Conveyor Module (LV)' }] });
+    expect(p.blocks[3]).toEqual({ pos: [102, 64, 201], id: 'gregtech:gt.blockmachines', meta: null, mteId: 201, facing: 3, facingIsOutput: true, role: 'machine',
+      label: 'Basic Macerator', step: 'layout:place:s1', covers: [{ face: 3, item: CONVEYOR, label: 'Conveyor Module (LV)' }] });
     expect('covers' in p.blocks[4]!).toBe(false);
     expect(p.blocks[6]).toEqual({ pos: [104, 64, 202], id: 'minecraft:chest', meta: null, role: 'chest', label: 'Chest (input)', step: 'layout:logistics:line' });
     expect(p.blocks[8]).toMatchObject({ id: 'ForgeMultipart:block', part: 'pr_rinterface', meta: null });
@@ -58,8 +60,24 @@ describe('projector payload', () => {
     expect(p.blocks[9]).toEqual({ pos: [103, 65, 203], id: 'gregtech:gt.blockcasings', meta: 11, role: 'casing', label: 'Heat Proof Machine Casing', step: 'layout:place:s2' });
   });
 
+  it("says when the checked facing is a single-block machine's output side", () => {
+    const withKind = (kind: MachineKind | null) => {
+      const machines = new Map(pack.machines);
+      if (kind === null) machines.delete(201); else machines.set(201, { kind });
+      return projectorPayload(projectorProject(), projectorLayout(), { ...pack, machines });
+    };
+    // GT front facing = output side on basic and steam machines; a transformer's front is its front
+    expect(withKind('steam').blocks[3]).toMatchObject({ facing: 3, facingIsOutput: true });
+    expect(withKind('basic').blocks[4]).toMatchObject({ facing: 3, facingIsOutput: true });
+    expect('facingIsOutput' in withKind('basic').blocks[2]!).toBe(false);
+    for (const kind of ['multiblock', 'hatch', null] as const) expect('facingIsOutput' in withKind(kind).blocks[3]!, String(kind)).toBe(false);
+    // no hint without a checked facing
+    const noFacing = projectorLayout(); delete noFacing.blocks[4]!.facing;
+    expect(Object.keys(projectorPayload(projectorProject(), noFacing, pack).blocks[4]!)).not.toContain('facingIsOutput');
+  });
+
   it('lists each step\'s blocks and which steps are done', () => {
-    const p = projectorPayload(projectorProject(), projectorLayout(), nameOf);
+    const p = projectorPayload(projectorProject(), projectorLayout(), pack);
     expect(p.steps.map((s) => [s.order, s.id, s.blocks, s.done])).toEqual([
       [1, 'layout:site', [], false], [2, 'layout:place:s1', [3, 4], false], [3, 'layout:place:s2', [9], true],
       [4, 'layout:power:stage:1', [2], false], [5, 'layout:power:wire:1', [1], false], [6, 'layout:power:hookup', [0], false],
@@ -69,24 +87,48 @@ describe('projector payload', () => {
       .toEqual(['gtnh-planner-projector/1', 'Pr0jectAb1', 'Steel line', 7, 'ok', null, 0, [99, 64, 200], [7, 2, 4]]);
   });
 
+  it("numbers the steps as the checklist does, with the plan's own steps around the layout's", () => {
+    const planSteps: BuildStep[] = [
+      { id: 'gather', order: 1, kind: 'gather', text: 'Gather the base materials: 24× Iron Ingot' },
+      { id: 'craft:machine:201@0', order: 2, kind: 'craft', text: 'Craft 2× Basic Macerator' },
+      { id: 'place', order: 3, kind: 'place', text: 'Place the machines' },
+      { id: 'power', order: 4, kind: 'power', text: 'Connect power' },
+      { id: 'logistics:direct', order: 5, kind: 'logistics', text: 'Connect the machines' },
+      { id: 'configure:s1', order: 6, kind: 'configure', text: 'Put a Programmed Circuit (1) in the Basic Macerator' },
+      { id: 'test', order: 7, kind: 'test', text: 'Run the line' },
+    ];
+    const p = projectorPayload({ ...projectorProject(), marks: { 'step:gather': { by: 'Ann', at: '2026-10-18T10:00:00.000Z' } } }, projectorLayout(), pack, planSteps);
+    // gather and craft first, then the layout's steps (Plan 2's generic place, power and logistics steps are left out),
+    // then configure and test, numbered from 1; steps that place nothing come with no blocks
+    expect(p.steps.map((s) => [s.order, s.id, s.blocks, s.done])).toEqual([
+      [1, 'gather', [], true], [2, 'craft:machine:201@0', [], false], [3, 'layout:site', [], false], [4, 'layout:place:s1', [3, 4], false],
+      [5, 'layout:place:s2', [9], false], [6, 'layout:power:stage:1', [2], false], [7, 'layout:power:wire:1', [1], false], [8, 'layout:power:hookup', [0], false],
+      [9, 'layout:logistics:line', [5, 6, 8], false], [10, 'layout:logistics:fluid:fluid:water', [7], false], [11, 'layout:configure:s1', [], false],
+      [12, 'layout:test', [], false], [13, 'configure:s1', [], false], [14, 'test', [], false]]);
+    expect(p.steps[1]).toMatchObject({ kind: 'craft', text: 'Craft 2× Basic Macerator' });
+    expect(p.blocks[3]!.step).toBe('layout:place:s1');
+    // other numbers are another version: the mod reloads its steps
+    expect(p.version).not.toBe(projectorPayload(projectorProject(), projectorLayout(), pack).version);
+  });
+
   it('sends no blocks for an unplaced or empty layout', () => {
-    const p = projectorPayload(projectorProject(), { ...projectorLayout(), status: 'no-world' }, nameOf);
+    const p = projectorPayload(projectorProject(), { ...projectorLayout(), status: 'no-world' }, pack);
     expect([p.status, p.blocks, p.steps, p.message]).toEqual(['no-world', [], [], 'This project is not placed in the world yet: pick a world scan and base on its Map tab']);
-    expect(projectorPayload(projectorProject(), { ...projectorLayout(), status: 'empty' }, nameOf).message).toBe('Nothing to build yet: this plan places no machines');
+    expect(projectorPayload(projectorProject(), { ...projectorLayout(), status: 'empty' }, pack).message).toBe('Nothing to build yet: this plan places no machines');
   });
 
   it('keeps its version when only ticks change, and changes it when a block moves', () => {
-    const a = projectorPayload(projectorProject(), projectorLayout(), nameOf);
-    const ticked = projectorPayload({ ...projectorProject(), marks: {} }, projectorLayout(), nameOf);
+    const a = projectorPayload(projectorProject(), projectorLayout(), pack);
+    const ticked = projectorPayload({ ...projectorProject(), marks: {} }, projectorLayout(), pack);
     const moved = projectorLayout(); moved.blocks[4]!.pos = [103, 64, 199];
     expect(a.version).toMatch(/^[0-9a-f]{16}$/);
     expect(ticked.version).toBe(a.version);
-    expect(projectorPayload(projectorProject(), moved, nameOf).version).not.toBe(a.version);
+    expect(projectorPayload(projectorProject(), moved, pack).version).not.toBe(a.version);
     expect(payloadVersion(a)).toBe(a.version);
   });
 
   it('matches the shared sample the mod tests against', () => {
-    const json = `${JSON.stringify(projectorPayload(projectorProject(), projectorLayout(), nameOf), null, 2)}\n`;
+    const json = `${JSON.stringify(projectorPayload(projectorProject(), projectorLayout(), pack), null, 2)}\n`;
     if (process.env.UPDATE_PROJECTOR_SAMPLE === '1') { mkdirSync('projector-mod/src/test/resources', { recursive: true }); writeFileSync(SAMPLE, json); }
     expect(readFileSync(SAMPLE, 'utf8')).toBe(json);
   });

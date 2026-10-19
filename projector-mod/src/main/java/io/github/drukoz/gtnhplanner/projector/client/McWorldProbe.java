@@ -1,10 +1,8 @@
 package io.github.drukoz.gtnhplanner.projector.client;
 
 import cpw.mods.fml.common.registry.GameData;
-import gregtech.api.interfaces.metatileentity.IMetaTileEntity;
 import gregtech.api.interfaces.tileentity.IGregTechTileEntity;
 import gregtech.api.metatileentity.BaseMetaTileEntity;
-import gregtech.api.metatileentity.implementations.MTEBasicMachine;
 import io.github.drukoz.gtnhplanner.projector.check.WorldProbe;
 import net.minecraft.block.Block;
 import net.minecraft.tileentity.TileEntity;
@@ -98,32 +96,23 @@ public final class McWorldProbe implements WorldProbe {
     }
 
     /**
-     * The side the GT machine's front overlay is on (the planner's facing), as ForgeDirection 0…5; −1 for anything
-     * else and for a side that is not known. A basic machine (every single-block recipe machine, steam ones too) draws
-     * its front overlay on its main facing, and GT never lets its front facing (the output side) be that side: placing
-     * one sets the main facing to the side its front was put on and moves the front facing to the opposite side, and
-     * a front facing on the main facing is refused from then on. So a basic machine answers its main facing, which
-     * reaches the client with the tile's data ({@code getUpdateData} → {@code onValueUpdate}) and is unknown until
-     * then; every other GT machine answers its front facing.
+     * The GT machine's front facing ({@code getFrontFacing()}), as ForgeDirection 0…5; −1 for anything else and for a
+     * front that is no side. That is the planner's facing for every GT machine: a hatch's or a multiblock
+     * controller's face, a transformer's input side, and a single-block machine's output side, which the line's spine
+     * needs (its pipe feeds the machine and its conveyor cover drains it there). GT draws a single-block machine's face
+     * overlay on its main facing instead, a side GT moves no items or fluids through and never lets be the output side,
+     * so the main facing is not compared. A plain wrench sets the front facing.
      */
     @Override
     public int facingAt(int x, int y, int z) {
         try {
             TileEntity tile = world.getTileEntity(x, y, z);
-            if (tile instanceof IGregTechTileEntity) {
-                IMetaTileEntity mte = ((IGregTechTileEntity) tile).getMetaTileEntity();
-                if (mte instanceof MTEBasicMachine) return side(((MTEBasicMachine) mte).mMainFacing);
-            }
             if (!(tile instanceof BaseMetaTileEntity)) return -1;
-            return side(((BaseMetaTileEntity) tile).getFrontFacing());
+            ForgeDirection front = ((BaseMetaTileEntity) tile).getFrontFacing();
+            int side = front == null ? -1 : front.ordinal();
+            return side >= 0 && side <= 5 ? side : -1;
         } catch (Throwable t) {
             return -1;
         }
-    }
-
-    /** {@code direction} as ForgeDirection 0…5; −1 for none and for {@code UNKNOWN}, which is no side. */
-    private static int side(ForgeDirection direction) {
-        int side = direction == null ? -1 : direction.ordinal();
-        return side >= 0 && side <= 5 ? side : -1;
     }
 }

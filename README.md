@@ -86,7 +86,7 @@ Get `gtnhplannerprojector-<version>.jar` from the person who runs the planner, o
 ### Connect
 
 1. On the project page open **In-game projector**, type who the token is for (for example `Steve`) and press **Create token**.
-2. Press **Copy** next to the `/planner load …` line and paste it into Minecraft chat. The token is shown only now; the mod saves it for that project, so afterwards `/planner load <project>` is enough.
+2. Press **Copy** next to the `/planner load …` line (the button says **Copied**) and paste it into Minecraft chat. If the browser will not copy it, which can happen when the planner is opened over plain `http://`, the line is selected instead and the panel says so under it: press Ctrl+C (Cmd+C on a Mac). The token is shown only now; the mod saves it for that project, so afterwards `/planner load <project>` is enough.
 3. The mod looks for the planner at the Minecraft server's address on port 8765: for a server at `mc.example.org` that is `http://mc.example.org:8765` (in single player, `http://127.0.0.1:8765`). If yours is elsewhere, also run the `/planner url …` line the panel shows, once.
 
 ### Commands
@@ -97,7 +97,7 @@ Get `gtnhplannerprojector-<version>.jar` from the person who runs the planner, o
 
 - `/planner load <project> [token]` fetches the project's line and shows all of it. A token is saved for that project; without one, the saved token is used.
 - `/planner layer <y|all>` shows only the blocks at height `y` (0 to 255), or every layer.
-- `/planner step <n|all|next>` shows only the blocks of build step `n`, or of every step; `next` is the first build step with blocks that is not ticked yet.
+- `/planner step <n|all|next>` shows only the blocks of build step `n`, numbered as in the project's **Build steps** list (a step that places nothing, such as gathering or crafting, has none to show), or of every step; `next` is the first build step with blocks that is not ticked yet.
 - `/planner reload` fetches the latest layout now. The mod also checks about once a minute, so a line you move or rotate in the planner follows by itself.
 - `/planner url <url|auto>` sets where the planner is, for example `/planner url http://mc.example.org:9000`; `auto` goes back to the Minecraft server's address on port 8765.
 - `/planner xray [on|off]` shows the ghosts through walls and terrain; without `on` or `off` it switches.
@@ -105,7 +105,7 @@ Get `gtnhplannerprojector-<version>.jar` from the person who runs the planner, o
 
 ### Colours
 
-Faint is a block not placed yet, green is the right block (with the right front), red is a wrong block or a wrong front, and bluish is a block the mod cannot check (its step is never ticked automatically). Blocks in chunks your game has not loaded stay faint, neither right nor wrong. Covers show as their item's icon on the face they go on; covers and settings (the **configure** steps) are ticked by hand. The top left of the screen shows how far the build has got (`Planner: Steel line — 12/40 placed, 1 wrong`) and, when you look at a planned block, what it needs.
+Faint is a block not placed yet, green is the right block (with the right front), red is a wrong block or a wrong front, and bluish is a block the mod cannot check (its step is never ticked automatically). A GT machine's front is the side GT calls its front, the one a plain wrench sets: the face of a hatch or a multiblock controller, but on a single-block machine such as a Basic Macerator its **output side** (look at one that is turned wrong and the top left says "its output side should face …"). A single-block machine shows its face on another side, which is not checked: placed, it faces you with its output side at the back. Its ghost shows the output overlay on the side the output must face. Blocks in chunks your game has not loaded stay faint, neither right nor wrong. Covers show as their item's icon on the face they go on; covers and settings (the **configure** steps) are ticked by hand. The top left of the screen shows how far the build has got (`Planner: Steel line — 12/40 placed, 1 wrong`) and, when you look at a planned block, what it needs.
 
 ### Troubleshooting
 

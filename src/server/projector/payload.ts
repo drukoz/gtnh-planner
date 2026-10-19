@@ -1,16 +1,21 @@
 // The projector payload (spec §3.13, architecture §11.22–§11.23): a project's cached line layout boiled down to what the
 // in-game mod draws and checks. Everything that needs the planner's knowledge is decided here, once, in tested
 // TypeScript, so the Java side only parses and compares: the real registry name of pseudo part ids (§11.17), whether
-// meta or facing mean anything for a block, the covers on each face, and which build step each block belongs to.
-// Ghosts (blocks that already exist in the world) are not sent; the mod has nothing to draw or check for them.
+// meta or facing mean anything for a block, the covers on each face, which build step each block belongs to, and the
+// checklist's numbering of the steps. Ghosts (blocks that already exist in the world) are not sent; the mod has nothing
+// to draw or check for them.
 
 import { createHash } from 'node:crypto';
-import type { StuffKey } from '../../shared/keys.ts';
+import { mergeBuildSteps } from '../layout/merge.ts';
 import { FACES } from '../../shared/types/assets.ts';
 import type { BlockRole, Layout, LayoutBlock } from '../../shared/types/layout.ts';
-import type { BlockRef } from '../../shared/types/pack.ts';
+import type { BlockRef, Machine, MachineKind, Pack } from '../../shared/types/pack.ts';
+import type { BuildStep } from '../../shared/types/plan.ts';
 import type { Project } from '../../shared/types/project.ts';
 import { PROJECTOR_FORMAT, type ProjectorBlock, type ProjectorPayload, type ProjectorStep } from '../../shared/types/projector.ts';
+
+/** What the payload reads from the pack: the names of cover items and the kinds of GT machines. */
+export type PayloadPack = Pick<Pack, 'nameOf'> & { machines: ReadonlyMap<number, Pick<Machine, 'kind'>> };
 
 /** Pseudo block id prefixes (`fmp:<part>`, `conduit:<type>`, `ae2cable:<centre>`, §11.17) → the block that holds the part in the world. */
 export const CONTAINER_BLOCKS: Readonly<Record<string, string>> = {
@@ -22,8 +27,18 @@ export const CONTAINER_BLOCKS: Readonly<Record<string, string>> = {
 /** Blocks whose meta is not what the plan chose (a vanilla chest's meta is its orientation), so meta is not compared. */
 export const META_FREE_BLOCKS: ReadonlySet<string> = new Set(['minecraft:chest', 'minecraft:trapped_chest']);
 
-/** Roles whose front the mod checks (GT `getFrontFacing()`); a cable or pipe has no front worth comparing. */
+/**
+ * Roles whose facing the mod checks: GT's front facing (`getFrontFacing()`), which on a single-block machine is its
+ * output side; a cable or pipe has no front worth comparing.
+ */
 export const FACING_ROLES: ReadonlySet<BlockRole> = new Set<BlockRole>(['machine', 'hatch', 'transformer']);
+
+/**
+ * Single-block recipe machines (GT `MTEBasicMachine`, steam ones too). Their GT front facing, which the layout turns
+ * to the spine and the mod checks, is their output side: GT draws the face overlay on another side (the main facing,
+ * opposite the output side once placed), and moves no items or fluids through that one.
+ */
+export const OUTPUT_FACING_KINDS: ReadonlySet<MachineKind> = new Set<MachineKind>(['basic', 'steam']);
 
 /** What the mod tells the player when the layout has nothing to project. */
 export const STATUS_MESSAGES: Readonly<Record<'empty' | 'no-world', string>> = {
@@ -93,31 +108,40 @@ export function payloadVersion(p: Pick<ProjectorPayload, 'dim' | 'blocks' | 'ste
   return createHash('sha1').update(text).digest('hex').slice(0, 16);
 }
 
-function projectorBlock(b: LayoutBlock, step: string | null, nameOf: (k: StuffKey) => string): ProjectorBlock {
+/** Whether GT machine `mteId` is a single-block machine, whose checked facing is its output side. */
+function isSingleBlockMachine(pack: PayloadPack, mteId: number): boolean {
+  const kind = pack.machines.get(mteId)?.kind;
+  return kind !== undefined && OUTPUT_FACING_KINDS.has(kind);
+}
+
+function projectorBlock(b: LayoutBlock, step: string | null, pack: PayloadPack): ProjectorBlock {
   const { id, part } = containerBlock(b.block);
   const { mteId } = b.block;
+  const facing = FACING_ROLES.has(b.role) && mteId !== undefined ? b.facing : undefined;
+  const outputSide = facing !== undefined && mteId !== undefined && isSingleBlockMachine(pack, mteId);
   const covers = b.covers ?? [];
   return {
     pos: [...b.pos], id, ...(part === undefined ? {} : { part }),
     // a GT machine is identified by its tile's mte id, a part by its container block, a chest by its name
     meta: mteId !== undefined || part !== undefined || META_FREE_BLOCKS.has(id) ? null : b.block.meta,
     ...(mteId === undefined ? {} : { mteId }),
-    ...(FACING_ROLES.has(b.role) && mteId !== undefined && b.facing !== undefined ? { facing: b.facing } : {}),
+    ...(facing === undefined ? {} : { facing }),
+    ...(outputSide ? { facingIsOutput: true as const } : {}),
     role: b.role, label: b.label, step,
-    ...(covers.length === 0 ? {} : { covers: covers.map((c) => ({ face: FACES.indexOf(c.face), item: c.item, label: nameOf(c.item) })) }),
+    ...(covers.length === 0 ? {} : { covers: covers.map((c) => ({ face: FACES.indexOf(c.face), item: c.item, label: pack.nameOf(c.item) })) }),
   };
 }
 
-function payloadBlocks(layout: Layout, nameOf: (k: StuffKey) => string): ProjectorBlock[] {
+function payloadBlocks(layout: Layout, pack: PayloadPack): ProjectorBlock[] {
   const owners = stepMembership(layout);
   const out: ProjectorBlock[] = [];
   layout.blocks.forEach((b, i) => {
-    if (b.role !== 'ghost') out.push(projectorBlock(b, owners[i] ?? null, nameOf));
+    if (b.role !== 'ghost') out.push(projectorBlock(b, owners[i] ?? null, pack));
   });
   return out;
 }
 
-function payloadSteps(project: Project, layout: Layout, blocks: readonly ProjectorBlock[]): ProjectorStep[] {
+function payloadSteps(project: Project, checklist: readonly BuildStep[], blocks: readonly ProjectorBlock[]): ProjectorStep[] {
   const members = new Map<string, number[]>();
   blocks.forEach((b, i) => {
     if (b.step === null) return;
@@ -125,7 +149,7 @@ function payloadSteps(project: Project, layout: Layout, blocks: readonly Project
     if (list === undefined) members.set(b.step, [i]);
     else list.push(i);
   });
-  return [...layout.buildSteps].sort((a, b) => a.order - b.order).map((s): ProjectorStep => ({
+  return [...checklist].sort((a, b) => a.order - b.order).map((s): ProjectorStep => ({
     id: s.id, order: s.order, kind: s.kind, text: s.text, blocks: members.get(s.id) ?? [],
     done: project.marks[`step:${s.id}`] !== undefined,
   }));
@@ -133,13 +157,18 @@ function payloadSteps(project: Project, layout: Layout, blocks: readonly Project
 
 /**
  * What `GET /api/projects/:id/projector` sends (spec §3.13): the project's identity, the layout's frame, the non-ghost
- * blocks in layout order and every build step with the indices of its blocks and whether the checklist shows it done.
- * A layout that is not `ok` (`empty`, `no-world`) sends no blocks and no steps, only a `message` for the player.
+ * blocks in layout order, and every step of the project's checklist with the indices of its blocks (none for a step
+ * that places nothing, such as gather and craft) and whether the checklist shows it done. The steps are numbered as
+ * the Steps view numbers them: the plan route's `planFinish` merges `planSteps` (the plan's own steps, before the
+ * layout is merged in) with the layout's through `mergeBuildSteps`, so `/planner step <n>` and "Step <n> done" name
+ * the number the group's checklist shows. A layout that is not `ok` (`empty`, `no-world`) sends no blocks and no
+ * steps, only a `message` for the player. `pack` names the cover items and says which GT machines are single-block
+ * ones (`facingIsOutput`).
  */
-export function projectorPayload(project: Project, layout: Layout, nameOf: (k: StuffKey) => string): ProjectorPayload {
+export function projectorPayload(project: Project, layout: Layout, pack: PayloadPack, planSteps: readonly BuildStep[] = []): ProjectorPayload {
   const status = layout.status ?? 'ok';
-  const blocks = status === 'ok' ? payloadBlocks(layout, nameOf) : [];
-  const steps = status === 'ok' ? payloadSteps(project, layout, blocks) : [];
+  const blocks = status === 'ok' ? payloadBlocks(layout, pack) : [];
+  const steps = status === 'ok' ? payloadSteps(project, mergeBuildSteps(planSteps, layout.buildSteps), blocks) : [];
   return {
     format: PROJECTOR_FORMAT, projectId: project.id, name: project.name, rev: project.rev,
     version: payloadVersion({ dim: layout.dim, blocks, steps }), status,
