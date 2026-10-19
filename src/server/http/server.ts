@@ -1,11 +1,12 @@
-// The one HTTP server (web-stack §4): `/api/*` goes through the route table with the session check, everything else is
-// the built web client. Timeouts allow slow 1 GB world uploads (architecture §11.9).
+// The one HTTP server (web-stack §4): `/api/*` goes through the route table with the session check (or, on the few
+// routes that allow it, a project token), everything else is the built web client. Timeouts allow slow 1 GB world
+// uploads (architecture §11.9).
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { AppContext } from '../app.ts';
-import { SESSION_COOKIE, readCookie, verifySession } from './auth.ts';
-import { HttpError, matchRoute, sendJson, type RequestContext, type Route } from './router.ts';
+import { SESSION_COOKIE, bearerToken, readCookie, verifySession } from './auth.ts';
+import { HttpError, matchRoute, sendJson, type RequestContext, type Route, type TokenVerifier } from './router.ts';
 import { ROUTE_MODULES } from './routes/index.ts';
 import { serveStatic } from './static.ts';
 
@@ -47,6 +48,26 @@ function sendError(req: IncomingMessage, res: ServerResponse, status: number, er
   sendJson(res, status, { error, message });
 }
 
+/**
+ * The auth step (architecture §11.23) for a request to `route`, whose `:id` param is `projectId`. A public route lets
+ * everyone in, with `authed` saying whether the session cookie is valid. Otherwise a valid session cookie gives full
+ * rights and always wins over an Authorization header; failing that, a route flagged `bearer` takes a project token
+ * that `app.services.verifyToken` (read on every request) accepts for `projectId`, and its handler sees `ctx.bearer`.
+ * Null: answer 401.
+ */
+function authenticate(
+  app: AppContext, req: IncomingMessage, route: Route, projectId: string | undefined,
+): Omit<RequestContext, 'me'> | null {
+  const authed = verifySession(app.config.sessionSecret, readCookie(req.headers.cookie, SESSION_COOKIE), Date.now());
+  if (route.public || authed) return { authed };
+  if (!route.bearer || projectId === undefined) return null;
+  const token = bearerToken(req.headers.authorization);
+  const verify = app.services.verifyToken;
+  if (token === null || typeof verify !== 'function') return null;
+  const hit = (verify as TokenVerifier)(token, projectId);
+  return hit === null ? null : { authed: true, bearer: { projectId, tokenId: hit.tokenId } };
+}
+
 async function handleApi(app: AppContext, routes: Route[], req: IncomingMessage, res: ServerResponse, pathname: string): Promise<void> {
   try {
     const match = matchRoute(routes, req.method ?? 'GET', pathname);
@@ -54,12 +75,12 @@ async function handleApi(app: AppContext, routes: Route[], req: IncomingMessage,
       sendError(req, res, 404, 'not-found', `No API route ${req.method} ${pathname}`);
       return;
     }
-    const authed = verifySession(app.config.sessionSecret, readCookie(req.headers.cookie, SESSION_COOKIE), Date.now());
-    if (!match.route.public && !authed) {
+    const access = authenticate(app, req, match.route, match.params.id);
+    if (access === null) {
       sendError(req, res, 401, 'auth', 'Log in first');
       return;
     }
-    const ctx: RequestContext = { me: displayName(req), authed };
+    const ctx: RequestContext = { me: displayName(req), ...access };
     await match.route.handler(req, res, match.params, ctx);
   } catch (err) {
     if (err instanceof HttpError) {
