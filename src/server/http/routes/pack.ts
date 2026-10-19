@@ -1,9 +1,10 @@
-// The loaded pack for the browser (architecture §7, §11.6): what it holds, item and fluid search, and the recipes that
-// make or use one item or fluid.
+// The loaded pack for the browser (architecture §7, §11.6): what it holds (with the materials an avoid list can name),
+// item and fluid search, and the recipes that make or use one item or fluid.
 
 import type { IncomingMessage } from 'node:http';
 import type { AppContext } from '../../app.ts';
 import { searchPack } from '../../pack/search.ts';
+import { avoidableMaterials } from '../../planner/basis.ts';
 import { EXCLUSION_RULES } from '../../planner/candidates.ts';
 import { HttpError, sendJson, type Route } from '../router.ts';
 import { recipeTier } from '../../../shared/gt/tiers.ts';
@@ -70,7 +71,7 @@ export function packRoutes(app: AppContext): Route[] {
         const info: PackInfo = {
           manifest: pack.manifest, mapCount: pack.maps.size, recipeCount: pack.recipes.length, itemCount: pack.items.size,
           dimensions: pack.worldgen.dimensions, capabilities: pack.worldgen.capabilities,
-          exclusionRules: Object.keys(EXCLUSION_RULES),
+          exclusionRules: Object.keys(EXCLUSION_RULES), materials: [...avoidableMaterials(pack)],
         };
         sendJson(res, 200, info);
       },

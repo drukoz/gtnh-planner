@@ -166,3 +166,27 @@ describe('validateOp (more)', () => {
     expect(validateOp(op)).toBeNull();
   });
 });
+
+// Materials to avoid (plan 2026-10-18-08, rulings R1 and R3).
+describe('avoid', () => {
+  const avoidOp = (avoid: unknown) => ({ op: 'settings', patch: { avoid } });
+  it('is an empty list by default and for an older stored project', () => {
+    expect(defaultSettings().avoid).toEqual([]);
+    expect(normalizeSettings({ target: 't:x@0' } as never).avoid).toEqual([]);
+  });
+  it('takes at most 50 entries of 1 to 300 characters', () => {
+    const fifty = Array.from({ length: 50 }, (_, i) => `t:x@${i}`);
+    expect(validateOp(avoidOp(fifty))).toBeNull();
+    expect(validateOp(avoidOp([...fifty, 'Tin']))).toEqual(expect.any(String));
+    expect(validateOp(avoidOp(new Array(51).fill('Tin')))).toEqual(expect.any(String));   // counted before duplicates go
+    expect(validateOp(avoidOp(['x'.repeat(300)]))).toBeNull();
+    expect(validateOp(avoidOp(['x'.repeat(301)]))).toEqual(expect.any(String));
+    for (const avoid of [[''], [5], 'Tin', null, { Tin: true }]) expect(validateOp(avoidOp(avoid)), JSON.stringify(avoid)).toEqual(expect.any(String));
+  });
+  it('collapses duplicates, keeping the first of each where it was', () => {
+    const q = applyOp(project(), { op: 'settings', patch: { avoid: ['Tin', 'Silver', 'Tin', 't:x@0', 'Silver'] } }, 'Ann', AT);
+    expect(q.settings.avoid).toEqual(['Tin', 'Silver', 't:x@0']);
+    expect(applyOp(q, { op: 'settings', patch: { amount: 2 } }, 'Ann', AT).settings.avoid).toEqual(['Tin', 'Silver', 't:x@0']);
+    expect(normalizeSettings({ avoid: ['Gold', 'Gold', 'Tin'] } as never).avoid).toEqual(['Gold', 'Tin']);
+  });
+});

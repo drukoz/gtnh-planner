@@ -50,6 +50,19 @@ describe('flow model', () => {
     if (ids.includes('materials')) expect(ids.indexOf('flow')).toBeLessThan(ids.indexOf('materials'));
     expect(ids.indexOf('flow')).toBeLessThan(ids.indexOf('notes'));
   });
+  it('badges a step that uses a material on the avoid list nothing at the tier avoids', () => {
+    const text = 'Basic Assembler uses Redstone — no recipe at LV avoids it';
+    const flagged = { ...plan, warnings: [{ code: 'avoid-unavoidable', key: 't:redstone@0', stepId: 'circuit-lv', text }] } as Plan;
+    const g = flowGraph(flagged, 'min');
+    const box = g.nodes.find((n) => n.id === 'circuit-lv')!;
+    expect(box.avoidBadge).toEqual({ text: '⚠ uses avoided Redstone', warnings: [text] });
+    expect(box.height).toBe(flowGraph(plan, 'min').nodes.find((n) => n.id === 'circuit-lv')!.height + 16);   // one line taller
+    expect(g.nodes.filter((n) => n.avoidBadge !== undefined).map((n) => n.id)).toEqual(['circuit-lv']);
+    const html = renderToStaticMarkup(<svg><FlowNodeShape node={{ ...box, x: 0, y: 0 }} /></svg>);
+    expect(html).toMatch(/data-avoid-badge="".*⚠ uses avoided Redstone/s);
+    expect(html).toContain(text);                                       // in the box's tooltip and accessible name
+    expect(renderToStaticMarkup(<svg><FlowNodeShape node={{ ...flowGraph(plan, 'min').nodes[0]!, x: 0, y: 0 }} /></svg>)).not.toContain('data-avoid-badge');
+  });
   it('renders an item icon in raw and step nodes', () => {
     const g = flowGraph(plan, 'min');
     const html = (id: string) => renderToStaticMarkup(<svg><FlowNodeShape node={{ ...g.nodes.find((n) => n.id === id)!, x: 0, y: 0 }} /></svg>);

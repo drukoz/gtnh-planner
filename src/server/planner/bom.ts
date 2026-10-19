@@ -6,7 +6,7 @@ import { PSEUDO_MACHINES } from '../../shared/gt/tiers.ts';
 import { itemKey, type StuffKey } from '../../shared/keys.ts';
 import type { Machine, Pack } from '../../shared/types/pack.ts';
 import type { BomLine, PlanContext, PlanSettings, PlanStep, PlanWarning } from '../../shared/types/plan.ts';
-import { buildCandidates, type LeafOracle, type LpRecipe, type PlanEnv } from './candidates.ts';
+import { buildCandidates, heldOption, type HeldAvoid, type LeafOracle, type LpRecipe, type PlanEnv } from './candidates.ts';
 import { analyzeCosts, type CostAnalysis } from './costs.ts';
 import { yieldToEventLoop } from './lp.ts';
 import { lineLeaf } from './pricing.ts';
@@ -46,27 +46,28 @@ export function cleanroomMachine(pack: Pack): Machine | undefined {
 }
 
 /**
- * The not-consumed inputs of a step's recipe (the first option of each slot), per machine: the parts that stay in the
- * machine. A hand-crafting step has none (Task 13 ruling): its not-consumed inputs are tools in the crafter's hands.
+ * The not-consumed inputs of a step's recipe (what each slot holds, `heldOption`: for a line that avoids `avoid`, an
+ * option it may use), per machine: the parts that stay in the machine. A hand-crafting step has none (Task 13 ruling):
+ * its not-consumed inputs are tools in the crafter's hands.
  */
-export function stepOneOffs(pack: Pack, step: PlanStep): Array<{ key: StuffKey; amount: number }> {
+export function stepOneOffs(pack: Pack, step: PlanStep, avoid?: HeldAvoid): Array<{ key: StuffKey; amount: number }> {
   if (step.handCraft) return [];
   return (pack.recipeById.get(step.recipeId)?.inputs ?? []).flatMap((ing) => {
-    const first = ing.options[0];
-    return !ing.consumed && first !== undefined ? [{ key: first.key, amount: first.amount }] : [];
+    const held = ing.consumed ? undefined : heldOption(ing.options, avoid);
+    return held !== undefined ? [{ key: held.key, amount: held.amount }] : [];
   });
 }
 
 /**
- * The tools of a hand-crafting step (Task 13 ruling): the not-consumed inputs of its recipe (the first option of each
- * slot, as the loader marks only crafting-table tool slots so), deduped, in slot order; none for any other step.
+ * The tools of a hand-crafting step (Task 13 ruling): the not-consumed inputs of its recipe (what each slot holds,
+ * `heldOption`, as the loader marks only crafting-table tool slots so), deduped, in slot order; none for any other step.
  */
-export function stepTools(pack: Pack, step: PlanStep): StuffKey[] {
+export function stepTools(pack: Pack, step: PlanStep, avoid?: HeldAvoid): StuffKey[] {
   if (!step.handCraft) return [];
   const inputs = [...(pack.recipeById.get(step.recipeId)?.inputs ?? [])].sort((a, b) => a.slot - b.slot);
   return [...new Set(inputs.flatMap((ing) => {
-    const first = ing.options[0];
-    return !ing.consumed && first !== undefined ? [first.key] : [];
+    const held = ing.consumed ? undefined : heldOption(ing.options, avoid);
+    return held !== undefined ? [held.key] : [];
   }))];
 }
 
@@ -96,10 +97,13 @@ function structureParts(pack: Pack, m: Machine): Map<StuffKey, number> {
  * machines (owned ones need them too); each hand-crafting tool once, however many steps use it (Task 13 ruling); one
  * cleanroom when any step needs one. In Make N the steps of one machine type share its machines (make-n.ts), so only
  * the first step of a type adds machines. Lines with the same key and group are merged, sorted by group then key, and
- * broken down to base materials. The warnings are `no-cleanroom` and the breakdown's own `graph-too-big`.
+ * broken down to base materials. The warnings are `no-cleanroom` and the breakdown's own `graph-too-big`. With `avoid`
+ * (what the line avoids) each not-consumed slot holds an option the line may use (`heldOption`); the breakdown itself
+ * avoids nothing (ruling R6).
  */
 export async function buildBom(
-  pack: Pack, steps: PlanStep[], opts: { settings: PlanSettings; env: PlanEnv; leaf: LeafOracle; ctx: PlanContext },
+  pack: Pack, steps: PlanStep[],
+  opts: { settings: PlanSettings; env: PlanEnv; leaf: LeafOracle; ctx: PlanContext; avoid?: HeldAvoid },
 ): Promise<Bom> {
   const drafts = new Map<string, { key: StuffKey; amount: number; whys: string[]; group: Group }>();
   const add = (key: StuffKey, amount: number, why: string, group: Group): void => {
@@ -125,14 +129,14 @@ export async function buildBom(
         for (const [key, cells] of structureParts(pack, machine)) add(key, cells * n, `structure of ${n}× ${step.machine.name}`, 'machines');
       }
     }
-    for (const { key, amount } of stepOneOffs(pack, step)) {
+    for (const { key, amount } of stepOneOffs(pack, step, opts.avoid)) {
       const n = amount * step.count;
       if (n > 0) add(key, n, `${n}× ${pack.nameOf(key)} (stays in the machine)`, 'one-off');
     }
   }
   const toolUses = new Map<StuffKey, Set<string>>();   // tool → the names of what it hand-crafts, in step order
   for (const step of steps) {
-    for (const key of stepTools(pack, step)) {
+    for (const key of stepTools(pack, step, opts.avoid)) {
       const products = toolUses.get(key) ?? new Set<string>();
       products.add(stepProductName(pack, step));
       toolUses.set(key, products);
