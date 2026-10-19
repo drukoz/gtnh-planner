@@ -8,12 +8,14 @@ import { FlowView } from './FlowView.tsx';
 import { MapTab } from './MapTab.tsx';
 import { MaterialsView } from './MaterialsView.tsx';
 import { NotesView } from './NotesView.tsx';
+import { View3DTab } from './View3DTab.tsx';
 
 export interface ProjectViewProps { project: Project; plan: Plan | null; send: (ops: ProjectOp[]) => void; me: string }
 export interface ProjectTab { id: 'map' | '3d' | 'flow' | 'materials' | 'notes'; label: string; component: ComponentType<ProjectViewProps> }
 
 export const PROJECT_TABS: ProjectTab[] = [
   { id: 'map', label: 'Map', component: MapTab },
+  { id: '3d', label: '3D', component: View3DTab },
   { id: 'flow', label: 'Flow', component: FlowView },
   { id: 'materials', label: 'Materials & steps', component: MaterialsView },
   { id: 'notes', label: 'Notes', component: NotesView },
