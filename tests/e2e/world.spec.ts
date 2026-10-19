@@ -1,7 +1,8 @@
 // The world map end to end (Plan 4 Task 18; spec §3.4, §3.7): a friend picks the synthetic sample world's folder on
 // the World page, the browser finds its hotspots and sends only level.dat and the two trimmed region files, the server
 // scans the upload, and a project picks the scan's Overworld base on its Map tab, reads what was found, sees the map
-// drawn and pins a note that survives a reload. Last, the upload route refuses a path that climbs out of the upload.
+// drawn, hovers its centre to see what is there and pins a note that survives a reload. Last, the upload route refuses
+// a path that climbs out of the upload.
 
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -52,7 +53,16 @@ test('smart upload of the sample world sends only trimmed regions; scan, pick th
     return c.getContext('2d')!.getImageData(c.width / 2, c.height / 2, 1, 1).data[3]! > 0;
   });
 
-  const box = (await page.locator('canvas[role=img]').boundingBox())!;
+  const canvas = page.locator('canvas[role=img]');
+  const box = (await canvas.boundingBox())!;
+  // Resting on the base-centre column describes it (architecture §11, Map hover): its block, named by the names route
+  // (the Mini-GT export has no stone item, so by its registry name), and its position; the canvas points at the tooltip.
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  const tip = page.getByRole('tooltip');
+  await expect(tip).toBeVisible();
+  await expect(tip).toContainText('minecraft:stone');
+  await expect(tip).toContainText('4 63 5');
+  await expect(canvas).toHaveAttribute('aria-describedby', (await tip.getAttribute('id'))!);
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
   await expect(page.getByText('Add note at 4, 63, 5')).toBeVisible();
   await page.getByLabel('Note').fill('Build here');

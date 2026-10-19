@@ -62,8 +62,8 @@ function askName(key: StuffKey): void {
   );
 }
 
-/** The pack names known so far; asks for the names of `keys` it does not have yet. */
-function useItemNames(keys: readonly StuffKey[]): ReadonlyMap<StuffKey, string> {
+/** The pack names known so far; asks for the names of `keys` it does not have yet (also the map's hover tooltip). */
+export function useItemNames(keys: readonly StuffKey[]): ReadonlyMap<StuffKey, string> {
   useSyncExternalStore(subscribeNames, namesSnapshot, namesSnapshot);
   const wanted = keys.join('\n');
   useEffect(() => {

@@ -355,7 +355,7 @@ function ScanMap(props: { project: Project; scan: WorldScan; scans: WorldScanLis
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'stretch' }}>
         <div style={MAP_STYLE}>
-          <MapView scanId={scan.id} dim={dim} focus={focus} overlays={overlays} markers={markers} onMarkerClick={(m) => setFocusedNote(m.n ?? null)} />
+          <MapView scanId={scan.id} scan={scan} dim={dim} focus={focus} overlays={overlays} markers={markers} onMarkerClick={(m) => setFocusedNote(m.n ?? null)} />
         </div>
         <aside aria-label="Found in world" style={PANEL_STYLE}>
           <FoundPanel
