@@ -12,6 +12,7 @@ import { layoutFlow } from '../workers/elk.worker.ts';
 import { NODE_LINE_HEIGHT, NODE_TITLE_HEIGHT, flowGraph, fromElk, toElk, type FlowLayout, type FlowNode } from './flow-model.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
 import { RawPanel, StepPanel } from './StepPanel.tsx';
+import { WhatChanged } from './WhatChanged.tsx';
 
 type PlacedNode = FlowNode & { x: number; y: number };
 type PlacedEdge = FlowLayout['edges'][number];
@@ -89,7 +90,7 @@ export function FlowNodeShape(props: { node: PlacedNode; selected?: boolean }): 
       <rect width={node.width} height={node.height} rx={6} />
       {icon !== null && (
         <foreignObject x={TEXT_LEFT} y={ICON_TOP} width={ICON_SIZE} height={ICON_SIZE}>
-          <ItemIcon itemKey={icon} size={ICON_SIZE} />
+          <ItemIcon itemKey={icon} size={ICON_SIZE} name={node.keyName} />
         </foreignObject>
       )}
       {/* A nested svg clips text that is wider than the box; the full text is in the title. */}
@@ -254,9 +255,11 @@ function FlowCanvas(props: { layout: FlowLayout; selectedId: string | null; onPi
   );
 }
 
-/** Plans the diagram, lays it out and shows the panel of the clicked box. */
-function FlowDiagram(props: { plan: Plan; settings: PlanSettings; per: 'min' | 'hour'; send: ProjectViewProps['send'] }): ReactElement {
-  const { plan, settings, per, send } = props;
+/** Plans the diagram, lays it out and shows the panel of the clicked box, below what the last settings change did. */
+function FlowDiagram(props: {
+  plan: Plan; previousPlan: Plan | null | undefined; settings: PlanSettings; per: 'min' | 'hour'; send: ProjectViewProps['send'];
+}): ReactElement {
+  const { plan, previousPlan, settings, per, send } = props;
   const graph = useMemo(() => flowGraph(plan, per), [plan, per]);
   const [layout, setLayout] = useState<FlowLayout | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -288,14 +291,16 @@ function FlowDiagram(props: { plan: Plan; settings: PlanSettings; per: 'min' | '
   let panel: ReactElement | null = null;
   if (picked?.kind === 'step') {
     const step = plan.steps.find((s) => s.id === picked.id);
-    if (step !== undefined) panel = <StepPanel step={step} plan={plan} settings={settings} send={send} onClose={close} />;
+    // Keyed by the step, so its open "more…" pages close when another step is picked.
+    if (step !== undefined) panel = <StepPanel key={step.id} step={step} plan={plan} settings={settings} per={per} send={send} onClose={close} onSelect={setSelectedId} />;
   } else if (picked?.kind === 'raw' && picked.key !== null) {
-    panel = <RawPanel itemKey={picked.key} plan={plan} settings={settings} per={per} send={send} onClose={close} />;
+    panel = <RawPanel itemKey={picked.key} plan={plan} settings={settings} per={per} send={send} onClose={close} onSelect={setSelectedId} />;
   }
 
   return (
     <div className={panel === null ? 'flow' : 'flow has-panel'}>
       <div className="flow-main">
+        <WhatChanged previous={previousPlan} plan={plan} />
         {error !== null && <p className="error" role="alert">{`Could not lay out the diagram: ${error}`}</p>}
         {layout === null ? (
           error === null && <p className="muted">Laying out the diagram…</p>
@@ -330,5 +335,5 @@ export function FlowView(props: ProjectViewProps): ReactElement {
   if (plan.status === 'infeasible') return <Infeasible plan={plan} />;
   const { settings } = project;
   const per = settings.mode === 'makeN' ? 'hour' : settings.per;
-  return <FlowDiagram plan={plan} settings={settings} per={per} send={send} />;
+  return <FlowDiagram plan={plan} previousPlan={props.previousPlan} settings={settings} per={per} send={send} />;
 }

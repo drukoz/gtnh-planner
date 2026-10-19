@@ -1,12 +1,17 @@
 // What the flow diagram shows (spec §3.9), as pure functions: the boxes and arrows of a plan (a step that cannot avoid
 // a material on the avoid list badged, spec §3.3), the ELK graph that lays them out (web-stack §7) and the laid-out
-// picture read back from it, the rate and overclock texts, and the settings patch for "reuse our machines". Base
-// materials sit on the left and the target on the right.
+// picture read back from it, the rate and overclock texts (the shared formatter of fix spec §6.1), the word for each
+// kind of import, and the settings patches the panels send (fix spec §6.3), each with the whole new value of one
+// setting. Base materials sit on the left and the target on the right.
 
 import type { ElkExtendedEdge, ElkNode } from 'elkjs/lib/elk-api.js';
-import type { StuffKey } from '../../shared/keys.ts';
+import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import { TIER_NAMES, V } from '../../shared/gt/tiers.ts';
-import type { Plan, PlanSettings, PlanStep, PlanWarning } from '../../shared/types/plan.ts';
+import type { LeafClass, Plan, PlanFlow, PlanSettings, PlanStep, PlanWarning } from '../../shared/types/plan.ts';
+import { formatDuration, formatNumber, formatPercent, formatRate } from '../format.ts';
+import { toggleList } from './settings-model.ts';
+
+export { formatNumber, formatRate };
 
 export interface FlowNode {
   id: string; kind: 'raw' | 'step' | 'out' | 'sink'; key: StuffKey | null; title: string; lines: string[];
@@ -17,7 +22,24 @@ export interface FlowNode {
    * text below its lines (one line more of height) and the warnings behind it.
    */
   avoidBadge?: { text: string; warnings: string[] };
+  // optional addition
+  /** The name of `key`, for its icon's tooltip and accessible name. */
+  keyName?: string;
 }
+
+/**
+ * What kind of import a raw input is, in the words of fix spec §6.2 (the flow's import stubs and the raw-material
+ * panel's header); the Materials badges keep their own words (`LEAF_BADGES`, ruling P26).
+ */
+export const LEAF_WORD: Record<LeafClass, string> = {
+  free: 'free',
+  direct: 'mined',
+  byproduct: 'ore byproduct',
+  derived: 'bought (made elsewhere)',
+  natural: 'gathered',
+  stop: 'supplied (we make it)',
+  unavailable: 'not reachable',
+};
 
 export interface FlowEdge { id: string; from: string; to: string; key: StuffKey; label: string }
 
@@ -58,35 +80,22 @@ function trimZeros(text: string): string {
   return text.includes('.') ? text.replace(/0+$/, '').replace(/\.$/, '') : text;
 }
 
-/** `x` with at most `digits` significant digits, written out in full (never `1e-7`). */
-function significant(x: number, digits: number): string {
-  if (x === 0 || !Number.isFinite(x)) return String(x);
-  const rounded = Number(x.toPrecision(digits));
-  const decimals = Math.max(0, digits - 1 - Math.floor(Math.log10(Math.abs(rounded))));
-  return trimZeros(rounded.toFixed(Math.min(decimals, 20)));
-}
-
-/** A number with at most three significant digits (runs per second, raw cost per unit). */
-export function formatNumber(x: number): string {
-  return significant(x, 3);
-}
-
 /** A tier's name; a tier outside 0..14 shows as its number instead of breaking the diagram. */
 function tierText(t: number): string {
   return TIER_NAMES[t] ?? `tier ${t}`;
 }
 
-/** `<n>/min` or `<n>/h`: whole from 100, at most one decimal from 1, else two significant digits. */
-export function formatRate(perSecond: number, per: 'min' | 'hour'): string {
-  const amount = perSecond * (per === 'min' ? 60 : 3600);
-  const unit = per === 'min' ? '/min' : '/h';
-  const size = Math.abs(amount);
-  const text = size >= 100 ? String(Math.round(amount)) : size >= 1 ? trimZeros(amount.toFixed(1)) : significant(amount, 2);
-  return `${text}${unit}`;
+/** A rate of a good in the project's unit, in litres for a fluid. */
+function goodRate(perSecond: number, per: 'min' | 'hour', key: StuffKey): string {
+  return formatRate(perSecond, per, { fluid: isFluidKey(key) });
 }
 
-function percent(utilization: number): number {
-  return Math.round(utilization * 100);
+/** Under this many runs a second, a run rate reads as how often one run comes ("1 run every 373 days"). */
+const FEWEST_RUNS_PER_SECOND = 0.01;
+
+/** `0.4 runs/s`, or for a rare run how often it comes: `1 run every 373 days`. */
+function runsText(perSecond: number): string {
+  return perSecond > 0 && perSecond < FEWEST_RUNS_PER_SECOND ? `1 run every ${formatDuration(1 / perSecond)}` : `${formatNumber(perSecond)} runs/s`;
 }
 
 function ownedState(step: PlanStep): FlowNode['owned'] {
@@ -101,6 +110,11 @@ function node(id: string, kind: FlowNode['kind'], key: StuffKey | null, title: s
 /** The node a flow end stands for: `raw` → `raw:<key>`, `sink` → `sink:<key>`, a step id or `out` as given. */
 function endId(end: string, key: StuffKey): string {
   return end === RAW || end === SINK ? `${end}:${key}` : end;
+}
+
+/** The id of the arrow a flow is drawn as (the step panels light it through the flow focus). */
+export function flowEdgeId(f: Pick<PlanFlow, 'from' | 'to' | 'key'>): string {
+  return `${endId(f.from, f.key)}->${endId(f.to, f.key)}:${f.key}`;
 }
 
 /** Sums of `perSecond` by key for the flows `pick` selects. */
@@ -129,15 +143,16 @@ function unavoidableByStep(plan: Plan): Map<string, PlanWarning[]> {
  */
 export function flowGraph(plan: Plan, per: 'min' | 'hour'): { nodes: FlowNode[]; edges: FlowEdge[] } {
   const nameOf = (key: StuffKey): string => plan.names?.[key] ?? key;
-  const rate = (perSecond: number): string => formatRate(perSecond, per);
   const nodes: FlowNode[] = [];
   const unavoidable = unavoidableByStep(plan);
+  const leafOf = new Map(plan.rawInputs.map((r) => [r.key, r.leafClass]));
+  const named = (box: FlowNode): FlowNode => (box.key === null ? box : { ...box, keyName: nameOf(box.key) });
 
   for (const step of plan.steps) {
-    const lines = [`${tierText(step.machine.tier)} · ${step.euPerTick} EU/t · ${percent(step.utilization)}% busy`];
+    const lines = [`${tierText(step.machine.tier)} · ${step.euPerTick} EU/t · ${formatPercent(step.utilization)} busy`];
     if (step.mainOutput !== undefined) lines.push(`makes ${nameOf(step.mainOutput)}`);
     if (step.owned > 0) lines.push(`${step.owned} owned`);
-    const box = node(step.id, 'step', step.mainOutput ?? null, `${step.count}× ${step.machine.name}`, lines, ownedState(step));
+    const box = named(node(step.id, 'step', step.mainOutput ?? null, `${step.count}× ${step.machine.name}`, lines, ownedState(step)));
     const uses = unavoidable.get(step.id);
     if (uses !== undefined) {
       const goods = [...new Set(uses.flatMap((w) => (w.key === undefined ? [] : [nameOf(w.key)])))];
@@ -147,14 +162,15 @@ export function flowGraph(plan: Plan, per: 'min' | 'hour'): { nodes: FlowNode[];
     nodes.push(box);
   }
   for (const [key, perSecond] of ratesBy(plan.flows, (f) => f.from === RAW)) {
-    nodes.push(node(`${RAW}:${key}`, 'raw', key, nameOf(key), [`raw · ${rate(perSecond)}`]));
+    const leaf = leafOf.get(key);
+    nodes.push(named(node(`${RAW}:${key}`, 'raw', key, nameOf(key), [`${leaf === undefined ? 'raw' : LEAF_WORD[leaf]} · ${goodRate(perSecond, per, key)}`])));
   }
   for (const [key, perSecond] of ratesBy(plan.flows, (f) => f.to === SINK)) {
-    nodes.push(node(`${SINK}:${key}`, 'sink', key, nameOf(key), [`byproduct · ${rate(perSecond)}`]));
+    nodes.push(named(node(`${SINK}:${key}`, 'sink', key, nameOf(key), [`byproduct · ${goodRate(perSecond, per, key)}`])));
   }
-  // Plan has no target field: the target is what flows into `out` (one good; the first by key if ever more).
+  // The target is what flows into `out` (one good; the first by key if ever more).
   const out = [...ratesBy(plan.flows, (f) => f.to === OUT)].sort((a, b) => byString(a[0], b[0]))[0];
-  if (out !== undefined) nodes.push(node(OUT, 'out', out[0], nameOf(out[0]), [rate(out[1])]));
+  if (out !== undefined) nodes.push(named(node(OUT, 'out', out[0], nameOf(out[0]), [goodRate(out[1], per, out[0])])));
 
   const ids = new Set(nodes.map((n) => n.id));
   const edges: FlowEdge[] = [];
@@ -162,7 +178,7 @@ export function flowGraph(plan: Plan, per: 'min' | 'hour'): { nodes: FlowNode[];
     const from = endId(f.from, f.key);
     const to = endId(f.to, f.key);
     if (!ids.has(from) || !ids.has(to)) continue;   // a flow to a step the plan does not list would break the layout
-    edges.push({ id: `${from}->${to}:${f.key}`, from, to, key: f.key, label: `${nameOf(f.key)} ${rate(f.perSecond)}` });
+    edges.push({ id: flowEdgeId(f), from, to, key: f.key, label: `${nameOf(f.key)} ${goodRate(f.perSecond, per, f.key)}` });
   }
   return { nodes: nodes.sort((a, b) => byString(a.id, b.id)), edges: edges.sort((a, b) => byString(a.id, b.id)) };
 }
@@ -218,6 +234,40 @@ export function reusePatch(settings: PlanSettings, mteId: number, reuse: boolean
   return { declineReuse: [...declined].sort((a, b) => a - b) };
 }
 
+/** "Use only this recipe for <good>": `recipeChoice` pinning `recipeId` for `key`. */
+export function useOnlyPatch(settings: PlanSettings, key: StuffKey, recipeId: string): Partial<PlanSettings> {
+  return { recipeChoice: { ...settings.recipeChoice, [key]: recipeId } };
+}
+
+/** "Import <good> instead", "We already make <line>": `stopItems` with `key` in it. */
+export function importInsteadPatch(settings: PlanSettings, key: StuffKey): Partial<PlanSettings> {
+  return { stopItems: toggleList(settings.stopItems, key, true) };
+}
+
+/** "Make it here instead": `expandItems` with `key` in it. */
+export function makeHerePatch(settings: PlanSettings, key: StuffKey): Partial<PlanSettings> {
+  return { expandItems: toggleList(settings.expandItems, key, true) };
+}
+
+/** "We already have a supply of <good>" (`on`) or "Plan its generator again": `haveSupply` with `key` put in or out. */
+export function haveSupplyPatch(settings: PlanSettings, key: StuffKey, on: boolean): Partial<PlanSettings> {
+  return { haveSupply: toggleList(settings.haveSupply ?? [], key, on) };
+}
+
+/** The `optionChoice` key of one ingredient slot of a recipe (fix spec R9). */
+export function optionSlotKey(recipeId: string, slot: number): string {
+  return `${recipeId}#${slot}`;
+}
+
+/** "Pin this option" (`key`) or "Let the planner choose" (null): `optionChoice` with that slot's pin set or taken out. */
+export function optionPatch(settings: PlanSettings, recipeId: string, slot: number, key: StuffKey | null): Partial<PlanSettings> {
+  const pins = { ...(settings.optionChoice ?? {}) };
+  const slotKey = optionSlotKey(recipeId, slot);
+  if (key === null) delete pins[slotKey];
+  else pins[slotKey] = key;
+  return { optionChoice: pins };
+}
+
 function seconds(ticks: number): string {
   return trimZeros((ticks / TICKS_PER_SECOND).toFixed(2));
 }
@@ -230,7 +280,8 @@ function overclockKind(oc: NonNullable<PlanStep['oc']>): string {
 
 /**
  * The overclock math of a step in four lines: the recipe, the machine, the overclocks and their result, and how many
- * machines the rate needs. A step without its overclock inputs reads as the machine's tier voltage and 1 A.
+ * machines the rate needs. A step without its overclock inputs reads as the machine's tier voltage and 1 A. A rare run
+ * reads as how often it comes, and a machine that runs at all is never "0% busy" (fix spec §6.1).
  */
 export function ocLines(step: PlanStep): string[] {
   const oc = step.oc ?? {
@@ -247,6 +298,6 @@ export function ocLines(step: PlanStep): string[] {
     `Recipe: ${oc.recipeEuPerTick} EU/t × ${oc.recipeDurationTicks} t (${seconds(oc.recipeDurationTicks)} s)`,
     `Machine: ${tierText(step.machine.tier)}, ${oc.machineVoltage} V × ${oc.machineAmps} A`,
     `${n} ${n === 1 ? 'overclock' : 'overclocks'}${how} → ${step.euPerTick} EU/t × ${step.durationTicks} t`,
-    `One machine: ${formatNumber(perMachine)} runs/s · needed: ${formatNumber(step.runsPerSecond)} runs/s → ${machines}, ${percent(step.utilization)}% busy`,
+    `One machine: ${runsText(perMachine)} · needed: ${runsText(step.runsPerSecond)} → ${machines}, ${formatPercent(step.utilization)} busy`,
   ];
 }

@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import ELK from 'elkjs/lib/elk.bundled.js';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { formatRate, flowGraph, toElk, fromElk, ocLines, reusePatch } from '../../src/client/views/flow-model.ts';
+import { formatNumber, formatRate, flowGraph, toElk, fromElk, ocLines, reusePatch, LEAF_WORD } from '../../src/client/views/flow-model.ts';
+import { formatNumber as sharedNumber, formatRate as sharedRate } from '../../src/shared/format.ts';
 import { FlowView, FlowNodeShape } from '../../src/client/views/FlowView.tsx';
 import { StepPanel } from '../../src/client/views/StepPanel.tsx';
 import { defaultSettings } from '../../src/shared/project/apply-op.ts';
@@ -15,9 +16,26 @@ const plan = { status: 'ok', steps: [step({})], names: { 't:circuit@0': 'Basic C
   flows: [{ from: 'raw', to: 'circuit-lv', key: 't:redstone@0', perSecond: 0.5 }, { from: 'circuit-lv', to: 'out', key: 't:circuit@0', perSecond: 0.5 }],
   rawInputs: [{ key: 't:redstone@0', perSecond: 0.5, cost: 0.5, available: true, sources: [] }], byproducts: [], warnings: [], unlocks: [] } as unknown as Plan;
 
+/** What a reader sees: the markup without its tags and comments, entities decoded. */
+function text(html: string): string {
+  return html.replace(/<!--[\s\S]*?-->/g, '').replace(/<[^>]+>/g, '')
+    .replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+}
+
 describe('flow model', () => {
   it('formats rates', () => {
-    expect([formatRate(0.5, 'min'), formatRate(0.5, 'hour'), formatRate(0.0123, 'min'), formatRate(1 / 24, 'min')]).toEqual(['30/min', '1800/h', '0.74/min', '2.5/min']);
+    expect([formatRate(0.5, 'min'), formatRate(0.5, 'hour'), formatRate(0.0123, 'min'), formatRate(1 / 24, 'min')]).toEqual(['30/min', '1,800/h', '0.738/min', '2.5/min']);
+    expect(formatRate).toBe(sharedRate);                                      // the one shared formatter (fix spec §6.1)
+    expect(formatNumber).toBe(sharedNumber);
+  });
+  it('gives fluids their litres and calls each import by its kind', () => {
+    const fluid = { ...plan, names: { ...plan.names, 'fluid:water': 'Water' }, rawInputs: [{ ...plan.rawInputs[0]!, leafClass: 'direct' }],
+      flows: [...plan.flows, { from: 'raw', to: 'circuit-lv', key: 'fluid:water', perSecond: 0.5 }] } as unknown as Plan;
+    const g = flowGraph(fluid, 'min');
+    expect(g.edges.find((e) => e.key === 'fluid:water')?.label).toBe('Water 30 L/min');
+    expect(g.nodes.find((n) => n.id === 'raw:t:redstone@0')?.lines).toEqual(['mined · 30/min']);
+    expect(LEAF_WORD).toEqual({ free: 'free', direct: 'mined', byproduct: 'ore byproduct', derived: 'bought (made elsewhere)', natural: 'gathered',
+      stop: 'supplied (we make it)', unavailable: 'not reachable' });
   });
   it('builds nodes and edges from the plan', () => {
     const g = flowGraph(plan, 'min');
@@ -34,6 +52,10 @@ describe('flow model', () => {
       oc: { recipeEuPerTick: 24, recipeDurationTicks: 100, machineVoltage: 128, machineAmps: 1, perfect: false, heatOverclocks: 0 } });
     expect(ocLines(mv)[2]).toBe('1 overclock (×4 EU/t, ÷2 time) → 96 EU/t × 50 t');
     expect(ocLines(mv)[3]).toBe('One machine: 0.4 runs/s · needed: 1 runs/s → 3 machines, 83% busy');
+    // A step the line needs once in a year: how often it runs, never "0 runs/s" or "0% busy".
+    const rare = step({ count: 1, runsPerSecond: 3.1e-8, utilization: 3.1e-7 });
+    expect(ocLines(rare)[3]).toMatch(/needed: 1 run every 373 days → 1 machine, <0\.1% busy$/);
+    expect(ocLines(rare)[3]).toBe('One machine: 0.1 runs/s · needed: 1 run every 373 days → 1 machine, <0.1% busy');
   });
   it('lays out raw materials left of the target', async () => {
     const g = flowGraph(plan, 'min');
@@ -86,11 +108,20 @@ describe('flow model', () => {
     const named = { ...plan, names: { ...plan.names, 'map:gt.recipe.assembler': 'Assembler', 'fluid:water': 'Water' } } as Plan;
     const html = renderToStaticMarkup(<StepPanel step={step({ recipeId: 'r7', alternatives: alts })} plan={named}
       settings={defaultSettings()} send={() => {}} onClose={() => {}} />);
-    expect(html).toContain('Assembler: 2× Redstone, 1000 L Water → Basic Circuit · 2 raw/unit');
-    expect(html).toContain('Assembler: Redstone, 1000 L Water → Basic Circuit · 1 raw/unit');
+    expect(text(html)).toContain('Assembler: 2× Redstone, 1,000 L Water → Basic Circuit · 2 raw/unit');
+    expect(text(html)).toContain('Assembler: Redstone, 1,000 L Water → Basic Circuit · 1 raw/unit');
     expect(html).not.toContain('r1</span>');                                   // no bare recipe ids
-    expect(html).toContain('· 7 raw/unit');                                    // the one in use always shows
-    expect(html).not.toContain('· 6 raw/unit');
-    expect(html).toContain('1 more…');
+    expect(text(html)).toContain('· 7 raw/unit');                              // the one in use always shows
+    expect(text(html)).not.toContain('· 6 raw/unit');
+    expect(text(html)).toContain('1 more…');
+  });
+  it('writes an ingredient of several options as all of them', () => {
+    const alt = { recipeId: 'ca', rawCost: 0.6, mapId: 'gt.recipe.circuitassembler', outputs: [{ key: 't:circuit@0', amount: 1 }],
+      inputs: [{ key: 't:part@0', amount: 2 }, { key: 'fluid:molten.solderingalloy', amount: 72,
+        options: [{ key: 'fluid:molten.solderingalloy', amount: 72 }, { key: 'fluid:molten.tin', amount: 144 }, { key: 'fluid:molten.lead', amount: 288 }] }] };
+    const named = { ...plan, names: { ...plan.names, 'map:gt.recipe.circuitassembler': 'Circuit Assembler', 't:part@0': 'Part',
+      'fluid:molten.solderingalloy': 'Molten Soldering Alloy', 'fluid:molten.tin': 'Molten Tin', 'fluid:molten.lead': 'Molten Lead' } } as Plan;
+    const html = renderToStaticMarkup(<StepPanel step={step({ recipeId: 'ca', alternatives: [alt] })} plan={named} settings={defaultSettings()} send={() => {}} onClose={() => {}} />);
+    expect(text(html)).toContain('Circuit Assembler: 2× Part, 72 L Molten Soldering Alloy / 144 L Molten Tin / 288 L Molten Lead → Basic Circuit · 0.6 raw/unit');
   });
 });

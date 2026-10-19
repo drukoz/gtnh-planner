@@ -152,6 +152,8 @@ describe('derived materials (R6, R7)', () => {
     expect(raw.cost / raw.perSecond).toBeCloseTo(1, 9);
     expect(raw.pricedVia).toEqual({ recipeId: 'smelt2', mapId: 'gt.recipe.alloysmelter', inputs: ['t:m@0'], steps: 1 });
     expect(raw.sources).toEqual([{ kind: 'derived', dims: [], detail: 'made by Alloy Smelter from M Dust (1 recipe in all)' }]);
+    // The client names that chain from the plan alone (the step panel's "Bought: usually made by …"): no step runs it.
+    expect(plan.names).toMatchObject({ 'map:gt.recipe.alloysmelter': 'Alloy Smelter', 't:m@0': 'M Dust' });
   });
   it('names every derived material it buys in one warning', async () => {
     // Fix spec R7: no cut-off after five names (the client shows each as a chip).

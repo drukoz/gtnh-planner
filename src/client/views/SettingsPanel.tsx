@@ -1,6 +1,7 @@
 // The project's settings beside its views (spec §3.2–§3.3b, §3.6, §3.11): what to make and how much, the tier, where
-// the group can mine, how the line is fed, what materials cost, which materials to avoid, which recipe groups to skip
-// and the planner's options.
+// the group can mine, how the line is fed, what materials cost, which materials to avoid, which recipe groups to skip,
+// the planner's options (supporting lines, how many steps a little raw material is worth), and the lists the panels
+// fill: what the group already makes, makes itself, already has a supply of, and the ingredient options it pinned.
 // Everyone sees the same settings: every change sends one `settings` op carrying whole field values, and nothing is
 // sent for an amount or a cost that would be refused.
 
@@ -15,8 +16,12 @@ import { AvoidPicker } from '../components/AvoidPicker.tsx';
 import { ItemIcon } from '../components/ItemIcon.tsx';
 import { ItemSearch } from '../components/ItemSearch.tsx';
 import { TierPicker } from '../components/TierPicker.tsx';
+import { haveSupplyPatch, optionPatch } from './flow-model.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
-import { EXCLUSION_LABELS, dimOverridePatch, dimRows, groupDimRows, isStuffKey, parseAmount, parseCost, toggleList } from './settings-model.ts';
+import {
+  EXCLUSION_LABELS, dimOverridePatch, dimRows, groupDimRows, isStuffKey, optionPinRows, parseAmount, parseCost, stepChargeOf, stepChargeOptions,
+  stepChargePatch, toggleList,
+} from './settings-model.ts';
 
 /** Typing pauses this long before the amount is sent (one plan per pause, not one per keystroke). */
 const AMOUNT_DELAY_MS = 500;
@@ -160,7 +165,7 @@ function MakeSection(props: { settings: PlanSettings; patch: Patch; nameOf: Name
         <p className="muted">Nothing picked yet</p>
       ) : (
         <div className="settings-target">
-          <ItemIcon itemKey={target} size={28} />
+          <ItemIcon itemKey={target} size={28} name={nameOf(target)} />
           <span className="settings-target-name">{nameOf(target)}</span>
           <button type="button" onClick={() => patch({ target: null })}>Clear</button>
         </div>
@@ -243,7 +248,7 @@ function CostRow(props: { costKey: string; name: string; value: number; onChange
     <tr data-cost-key={costKey}>
       <td>
         <span className="cost-name" title={costKey}>
-          {isStuffKey(costKey) && <ItemIcon itemKey={costKey} size={18} />}
+          {isStuffKey(costKey) && <ItemIcon itemKey={costKey} size={18} name={name} />}
           {name}
         </span>
       </td>
@@ -337,7 +342,7 @@ function CostsSection(props: { settings: PlanSettings; patch: Patch; nameOf: Nam
           </>
         ) : (
           <div className="settings-target">
-            <ItemIcon itemKey={item.key} size={20} />
+            <ItemIcon itemKey={item.key} size={20} name={item.name} />
             <span className="settings-target-name">{item.name}</span>
             <button type="button" className="small" onClick={() => setItem(null)}>Change</button>
           </div>
@@ -395,6 +400,31 @@ function SkipSection(props: { info: PackInfo | null; settings: PlanSettings; pat
   );
 }
 
+/**
+ * "Steps vs raw material" (fix spec §3, §6.4): the presets as "<name> (<n>%)", and a stored value that is none of them
+ * as "Custom (<n>%)"; picking one sends `stepCharge`.
+ */
+export function StepChargeField(props: { settings: PlanSettings; patch: Patch }): ReactElement {
+  const { settings, patch } = props;
+  const charge = stepChargeOf(settings);
+  return (
+    <label className="field">
+      <span>Steps vs raw material</span>
+      <select
+        aria-label="Steps vs raw material"
+        value={String(charge)}
+        onChange={(e) => {
+          const next = stepChargePatch(e.currentTarget.value);
+          if (next !== null && next.stepCharge !== charge) patch(next);
+        }}
+      >
+        {stepChargeOptions(charge).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+      <span className="muted small">A recipe step is built only when it saves this share of the line&apos;s least raw material.</span>
+    </label>
+  );
+}
+
 function OptionsSection(props: { settings: PlanSettings; patch: Patch }): ReactElement {
   const { settings, patch } = props;
   const { coilHeat } = settings;
@@ -405,8 +435,9 @@ function OptionsSection(props: { settings: PlanSettings; patch: Patch }): ReactE
       <h3>Options</h3>
       <label className="check">
         <input type="checkbox" checked={settings.routeDerived} onChange={(e) => patch({ routeDerived: e.currentTarget.checked })} />
-        Plan derived materials instead of buying them
+        Plan supporting lines for alloys, plastics and chemicals (off: buy the shallow ones)
       </label>
+      <StepChargeField settings={settings} patch={patch} />
       <label className="check">
         <input type="checkbox" checked={settings.automateCrafting} onChange={(e) => patch({ automateCrafting: e.currentTarget.checked })} />
         Crafting-table steps are automated
@@ -436,9 +467,52 @@ function KeyListSection(props: { title: string; keys: readonly StuffKey[]; empty
         <ul className="key-list">
           {keys.map((key) => (
             <li key={key} data-item-row={key}>
-              <ItemIcon itemKey={key} size={20} />
+              <ItemIcon itemKey={key} size={20} name={nameOf(key)} />
               <span className="key-name" title={key}>{nameOf(key)}</span>
               <button type="button" className="small" aria-label={`Remove ${nameOf(key)}`} onClick={() => onRemove(key)}>Remove</button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+/** The free inputs the group already supplies (`haveSupply`, fix spec R2): the line plans no generator for them. */
+export function HaveSupplySection(props: { settings: PlanSettings; nameOf: NameOf; patch: Patch }): ReactElement {
+  const { settings, nameOf, patch } = props;
+  return (
+    <KeyListSection
+      title="We already have a supply"
+      keys={settings.haveSupply ?? []}
+      empty="Nothing yet. “We already have a supply” on a generator step adds it here."
+      nameOf={nameOf}
+      onRemove={(key) => patch(haveSupplyPatch(settings, key, false))}
+    />
+  );
+}
+
+/** The ingredient options the group pinned (`optionChoice`, fix spec R9), by the step that takes them; each can be removed. */
+export function OptionPinsSection(props: { settings: PlanSettings; plan: Plan | null; nameOf: NameOf; patch: Patch }): ReactElement {
+  const { settings, plan, nameOf, patch } = props;
+  const rows = optionPinRows(settings, plan, nameOf);
+  return (
+    <section className="settings-section">
+      <h3>Pinned ingredient options</h3>
+      {rows.length === 0 ? (
+        <p className="muted">Nothing yet. A step&apos;s ingredient options can pin one.</p>
+      ) : (
+        <ul className="key-list">
+          {rows.map((row) => (
+            <li key={row.pin} data-option-pin={row.pin}>
+              <ItemIcon itemKey={row.option} size={20} name={row.optionName} />
+              <span className="key-name" title={row.pin}>{row.label}</span>
+              <button
+                type="button" className="small" aria-label={`Remove the pin of ${row.optionName}`}
+                onClick={() => patch(optionPatch(settings, row.recipeId, row.slot, null))}
+              >
+                Remove
+              </button>
             </li>
           ))}
         </ul>
@@ -481,6 +555,8 @@ export function SettingsPanel(props: ProjectViewProps & { info: PackInfo | null 
         nameOf={nameOf}
         onRemove={(key) => patch({ expandItems: toggleList(settings.expandItems, key, false) })}
       />
+      <HaveSupplySection settings={settings} nameOf={nameOf} patch={patch} />
+      <OptionPinsSection settings={settings} plan={plan} nameOf={nameOf} patch={patch} />
     </div>
   );
 }

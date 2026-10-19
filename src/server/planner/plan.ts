@@ -806,7 +806,14 @@ function planNames(pack: Pack, plan: Plan, settings: PlanSettings): Record<strin
     }
   }
   for (const flow of plan.flows) add(flow.key);
-  for (const input of plan.rawInputs) add(input.key);
+  for (const input of plan.rawInputs) {
+    add(input.key);
+    // What a bought material stands for (fix spec R7): the client names its map and inputs from the plan alone.
+    if (input.pricedVia !== undefined) {
+      addMap(input.pricedVia.mapId);
+      for (const key of input.pricedVia.inputs) add(key);
+    }
+  }
   for (const p of plan.byproducts) add(p.key);
   addLines(plan.buildList);
   addLines(plan.buildTotals ?? []);

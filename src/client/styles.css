@@ -130,6 +130,20 @@ textarea { resize: vertical; width: 100%; }
 .plan-banner p { margin: 0 0 4px; }
 .plan-banner ul { margin: 0 0 4px; padding-left: 20px; }
 .plan-banner .banner-heading { font-weight: 600; margin-top: 6px; }
+.plan-banner .banner-heading.error { color: var(--error); }
+.plan-banner .banner-heading button { margin-left: 6px; font-weight: 400; }
+.banner-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 6px; }
+button.banner-chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px 2px 4px; border-radius: 999px; font-size: 0.85rem;
+}
+.banner-cost { color: var(--muted); }
+
+/* What changed with the last settings change (fix spec §6.4), above the flow diagram and the materials. */
+.what-changed { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; }
+.what-changed-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.what-changed h4 { margin: 0; font-size: 0.95rem; }
+.what-changed ul { margin: 4px 0 0; padding-left: 20px; font-size: 0.9rem; }
+.what-changed li { overflow-wrap: anywhere; }
 
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
 .tabs [role='tab'] {
@@ -329,6 +343,30 @@ fieldset.flow-panel-section > legend.flow-panel-title { float: left; width: 100%
 .swap-option { align-items: flex-start; }
 .swap-option input { margin-top: 4px; }
 .swap-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+/* A way or an option the group cannot use here: greyed, no radio, with why not. */
+.swap-option.unusable, .option-choice.unusable { color: var(--muted); padding-left: 24px; font-size: 0.9rem; overflow-wrap: anywhere; }
+abbr.unit-hint { text-decoration: underline dotted; cursor: help; }
+button.link {
+  padding: 0; border: none; border-radius: 0; background: none; color: var(--accent); text-decoration: underline; font: inherit;
+}
+button.link:hover:not(:disabled) { background: none; text-decoration: none; }
+/* Takes / Makes: per good its rate, and the steps it comes from or goes to (fix spec §6.3). */
+.ports { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 0.9rem; }
+.port-row { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; }
+.port-name { min-width: 0; overflow-wrap: anywhere; }
+.port-name.port-main { font-weight: 700; }
+.port-rate { font-variant-numeric: tabular-nums; }
+.port-peers { flex-basis: 100%; padding-left: 22px; overflow-wrap: anywhere; }
+.port-short .port-rate, .port-warn { color: var(--error); }
+.also-made, .flow-panel .used-by { margin: 0; padding-left: 18px; font-size: 0.9rem; }
+.option-slot {
+  border: 1px solid var(--border); border-radius: 6px; margin: 0; padding: 6px 8px; display: flex; flex-direction: column; gap: 4px; min-width: 0;
+}
+.option-slot-title { font-size: 0.85rem; color: var(--muted); padding: 0 4px; }
+.option-why { margin: 0; }
+.option-choice { align-items: flex-start; }
+.option-choice input { margin-top: 4px; }
+.choice-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 
 /* Materials & steps (spec §3.10): the tree indents by depth, unlock texts are warnings, ticked rows are crossed out. */
 .materials { display: flex; flex-direction: column; gap: 22px; max-width: 1600px; }
@@ -351,6 +389,11 @@ span.mat-toggle { display: inline-block; }
 .mat-unlock {
   margin: 0; padding: 4px 8px; background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: 6px;
 }
+.mat-used-by { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.chip { padding: 1px 8px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); overflow-wrap: anywhere; }
+.mat-needed summary { cursor: pointer; }
+.mat-missing .tick-label { color: var(--error); font-weight: 600; }
+.missing-badge { color: var(--error); border-color: var(--error); background: var(--error-bg); }
 .step-list { margin: 0; padding-left: 24px; display: flex; flex-direction: column; gap: 4px; }
 .step-row { padding: 3px 0; }
 .step-row .tick-label { overflow-wrap: anywhere; }

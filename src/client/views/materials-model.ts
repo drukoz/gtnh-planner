@@ -1,10 +1,15 @@
 // What the Materials & steps tab shows (spec §3.10), as pure functions: the build list as rows (expandable down to
-// base materials and split into the groups of architecture §11.13), the base materials the line runs on (per hour, or
-// for the whole batch in Make N) with where they come from (spec §3.3b) and what unlocks them, and the amount, stock
-// and storage texts next to each row (spec §3.4, architecture §11.20).
+// base materials and split into the groups of architecture §11.13; each base-material total opens to the build lines
+// that need it), the base materials the line runs on (per hour, or for the whole batch in Make N) with where they come
+// from (spec §3.3b), what unlocks them and which steps use them, the inputs nothing in the plan supplies (fix spec
+// §6.4), and the amount, stock and storage texts next to each row (spec §3.4, architecture §11.20). Amounts never read
+// 0: tiny rates read "1 every N days" (fix spec §6.1).
 
-import type { StuffKey } from '../../shared/keys.ts';
-import type { BomLine, LeafClass, Plan, RawInput, SourceInfo, StorageWhere } from '../../shared/types/plan.ts';
+import { tierName } from '../../shared/gt/tiers.ts';
+import { isFluidKey, parseItemKey, type StuffKey } from '../../shared/keys.ts';
+import type { PlanIndex } from '../../shared/plan/balance.ts';
+import type { BomLine, LeafClass, Plan, PlanStep, RawInput, SourceInfo, StorageWhere } from '../../shared/types/plan.ts';
+import { formatNumber, formatPercent, formatRate } from '../format.ts';
 
 type BuildGroup = NonNullable<BomLine['group']>;
 type Have = { total: number; reachable: number; where?: StorageWhere[] };
@@ -34,18 +39,38 @@ const DEFAULT_GROUP: BuildGroup = 'machines';
 const EXPANDABLE: ReadonlySet<LeafClass> = new Set<LeafClass>(['direct', 'byproduct', 'derived']);
 /** Found spots listed per source before the rest is counted. */
 const MAX_FOUND_AT = 3;
-const SECONDS_PER_HOUR = 3600;
 /** How close to a whole number an amount must be to show as one (rates carry float noise such as 360.00000000000006). */
 const WHOLE_TOLERANCE = 1e-9;
+/** Below this, two decimals would read `0.00` (or `0.01` for 0.005): such an amount keeps its own digits instead. */
+const SMALLEST_TWO_DECIMALS = 0.01;
+/** The pack's Programmed Circuit (the loader's PROGRAMMED_CIRCUIT_ID): one item per configuration, the meta. */
+const PROGRAMMED_CIRCUIT_ID = 'gregtech:gt.integrated_circuit';
 
 // A fixed locale, so every friend's browser (and the tests) writes `1,440` the same way.
 const WHOLE = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
 const TWO_DECIMALS = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-/** Whole numbers with thousands separators (`1,440`), anything else with two decimals (`0.13`). */
+/**
+ * Whole numbers with thousands separators (`1,440`), anything else with two decimals (`0.13`); an amount too small for
+ * two decimals keeps its significant digits (`0.004`), so a positive amount never reads `0.00`.
+ */
 export function amountText(n: number): string {
   const whole = Math.round(n) || 0;   // never `-0`
-  return Math.abs(n - whole) <= WHOLE_TOLERANCE * Math.max(1, Math.abs(n)) ? WHOLE.format(whole) : TWO_DECIMALS.format(n);
+  if (Math.abs(n - whole) <= WHOLE_TOLERANCE * Math.max(1, Math.abs(n))) return WHOLE.format(whole);
+  return Math.abs(n) < SMALLEST_TWO_DECIMALS ? formatNumber(n) : TWO_DECIMALS.format(n);
+}
+
+/** A good's name in a build list: a Programmed Circuit says its configuration ("Programmed Circuit (config 3)"). */
+function buildName(key: StuffKey, names: Record<string, string>): string {
+  const name = names[key] ?? key;
+  if (isFluidKey(key) || !key.includes('@')) return name;
+  const { id, meta, nbtHash } = parseItemKey(key);
+  return id === PROGRAMMED_CIRCUIT_ID && nbtHash === undefined ? `${name} (config ${meta})` : name;
+}
+
+/** "Mixer (Glue)": a step by its machine and what it makes. */
+function stepLabel(step: PlanStep, names: Record<string, string>): string {
+  return step.mainOutput === undefined ? step.machine.name : `${step.machine.name} (${names[step.mainOutput] ?? step.mainOutput})`;
 }
 
 /** `have <total> (<reachable> reachable)`; nothing when the plan knows no stock for the line. */
@@ -83,6 +108,8 @@ export interface BuildRow {
   where?: string[];
   /** A good on the avoid list the line still uses, as nothing at the tier avoids it (`unavoidableKeys`). */
   avoid?: true;
+  /** On a total of base materials (`BomLine.neededFor`, fix spec D15): each build line that needs it, and how much. */
+  neededFor?: Array<{ key: StuffKey; name: string; amount: string }>;
 }
 
 const NONE: ReadonlySet<StuffKey> = new Set();
@@ -114,10 +141,13 @@ export function buildRows(
     const path = parentPath === null ? line.key : `${parentPath}/${line.key}`;
     const children = line.children ?? [];
     const row: BuildRow = {
-      row: `build:${line.key}`, path, key: line.key, name: names[line.key] ?? line.key, amount: amountText(line.amount), why: line.why,
+      row: `build:${line.key}`, path, key: line.key, name: buildName(line.key, names), amount: amountText(line.amount), why: line.why,
       ...stockOf(line.have), depth, hasChildren: children.length > 0, group,
     };
     if (unavoidable.has(line.key)) row.avoid = true;
+    if (line.neededFor !== undefined && line.neededFor.length > 0) {
+      row.neededFor = line.neededFor.map((n) => ({ key: n.key, name: buildName(n.key, names), amount: amountText(n.amount) }));
+    }
     rows.push(row);
     if (expanded.has(path)) for (const child of children) visit(child, path, depth + 1, group);
   };
@@ -134,13 +164,23 @@ export function groupBuildRows(
     .filter((group) => group.rows.length > 0);
 }
 
+/** A step that takes a good, and how much: per hour in rate mode, for the whole batch in Make N. */
+export interface UsedBy { stepId: string; label: string /* "Mixer (Glue)" */; rate: string }
+
 export interface RunRow {
-  row: string /* run:<key> */; key: StuffKey; name: string; amount: string /* "<n>/h" in rate mode, "<n>" in Make N */; cost: string; badge: string;
+  row: string /* run:<key> */; key: StuffKey; name: string;
+  /** In rate mode a rate with its unit ("1,800/h", "71.9 L/h", "1 L every 12.1 days"); in Make N a count ("10"). */
+  amount: string;
+  cost: string; badge: string;
   sources: string[]; unlock?: string; have?: string; canExpand: boolean; isStop: boolean;
   /** One line per storage block holding some of it (architecture §11.20); only when the scan says where. */
   where?: string[];
   /** A good on the avoid list the line still uses, as nothing at the tier avoids it (`unavoidableKeys`). */
   avoid?: true;
+  /** The steps it goes to, largest first (fix spec §6.4). */
+  usedBy: UsedBy[];
+  /** Why the group cannot make it in the line instead: nothing at the tier makes it (`RawInput.canMake` false). */
+  cannotMake?: string;
 }
 
 /** The badge of a raw input; one without a leaf class is a plain base material, or out of reach when it is not available. */
@@ -149,10 +189,31 @@ function badgeOf(input: RawInput): string {
   return input.available ? 'base material' : LEAF_BADGES.unavailable;
 }
 
+/** An amount of `key` a second: per hour in rate mode (litres for a fluid), the whole batch's in Make N (a bare count). */
+function amountOf(plan: Plan, mode: 'rate' | 'makeN', key: StuffKey, perSecond: number): string {
+  return mode === 'rate' ? formatRate(perSecond, 'hour', { fluid: isFluidKey(key) }) : amountText(perSecond * (plan.makeN?.totalSeconds ?? 0));
+}
+
+/** The same with its unit in Make N too ("10×", "250 L"), for a text that stands on its own (a chip). */
+function amountWithUnit(plan: Plan, mode: 'rate' | 'makeN', key: StuffKey, perSecond: number): string {
+  const text = amountOf(plan, mode, key, perSecond);
+  return mode === 'rate' ? text : isFluidKey(key) ? `${text} L` : `${text}×`;
+}
+
+/** The steps the flows of `key` from `from` go to, largest first, by their machine and product. */
+function usersOf(plan: Plan, mode: 'rate' | 'makeN', key: StuffKey, from: string): UsedBy[] {
+  const names = plan.names ?? {};
+  const steps = new Map(plan.steps.map((s) => [s.id, s]));
+  const perStep = new Map<string, number>();
+  for (const f of plan.flows) if (f.from === from && f.key === key && steps.has(f.to)) perStep.set(f.to, (perStep.get(f.to) ?? 0) + f.perSecond);
+  return [...perStep].sort(([a, x], [b, y]) => y - x || (a < b ? -1 : a > b ? 1 : 0))
+    .map(([stepId, perSecond]) => ({ stepId, label: stepLabel(steps.get(stepId) as PlanStep, names), rate: amountWithUnit(plan, mode, key, perSecond) }));
+}
+
 /**
  * The base materials the line runs on: per hour in rate mode (spec §3.10 "base materials per hour"), for the whole
- * batch in Make N; with their raw-material cost on the same basis, sources, unlock text, stock, and whether the line
- * uses one on the avoid list.
+ * batch in Make N; with their raw-material cost on the same basis, sources, unlock text, stock, whether the line uses
+ * one on the avoid list, the steps that take it, and why a base material cannot be made in the line instead.
  */
 export function runRows(plan: Plan, mode: 'rate' | 'makeN'): RunRow[] {
   const names = plan.names ?? {};
@@ -160,16 +221,49 @@ export function runRows(plan: Plan, mode: 'rate' | 'makeN'): RunRow[] {
   const unavoidable = unavoidableKeys(plan);
   return plan.rawInputs.map((input): RunRow => {
     const batch = input.total ?? input.perSecond * (plan.makeN?.totalSeconds ?? 0);
-    const amount = mode === 'rate' ? `${amountText(input.perSecond * SECONDS_PER_HOUR)}/h` : amountText(batch);
-    const cost = mode === 'rate' ? `cost ${amountText(input.cost * SECONDS_PER_HOUR)}/h` : `cost ${amountText(input.cost)}`;
+    const amount = mode === 'rate' ? formatRate(input.perSecond, 'hour', { fluid: isFluidKey(input.key) }) : amountText(batch);
+    const cost = mode === 'rate' ? `cost ${formatRate(input.cost, 'hour')}` : `cost ${amountText(input.cost)}`;
     const row: RunRow = {
       row: `run:${input.key}`, key: input.key, name: names[input.key] ?? input.key, amount, cost, badge: badgeOf(input),
       sources: input.sources.map((s) => sourceText(s, names)), ...stockOf(input.have),
       canExpand: input.leafClass !== undefined && EXPANDABLE.has(input.leafClass), isStop: input.leafClass === 'stop',
+      usedBy: usersOf(plan, mode, input.key, 'raw'),
     };
     const unlock = unlocks.get(input.key);
     if (unlock !== undefined) row.unlock = unlock;
     if (unavoidable.has(input.key)) row.avoid = true;
+    if (row.canExpand && input.canMake === false) row.cannotMake = `Nothing at ${tierName(plan.tier)} makes ${row.name}`;
     return row;
+  });
+}
+
+/** An input of a step that nothing in the plan supplies, or supplies short (`orphan-input`, `short-input`). */
+export interface MissingRow {
+  row: string /* missing:<key>@<stepId> */; key: StuffKey; name: string; stepId: string;
+  /** How much is missing: per hour in rate mode, for the whole batch in Make N. */
+  amount: string;
+  badge: string /* "no source in the plan" | "short: gets <pct>" */;
+  usedBy: UsedBy[];
+}
+
+/**
+ * The inputs the plan does not supply (fix spec §6.4), from the integrity issues of `index` (`indexPlan(plan)`), in
+ * its order: listed before the base materials, as a plan with one does not add up.
+ */
+export function missingRows(plan: Plan, index: PlanIndex): MissingRow[] {
+  const names = plan.names ?? {};
+  const steps = new Map(plan.steps.map((s) => [s.id, s]));
+  const mode = plan.makeN === undefined ? 'rate' : 'makeN';
+  return index.issues.flatMap((issue): MissingRow[] => {
+    if ((issue.code !== 'orphan-input' && issue.code !== 'short-input') || issue.stepId === undefined) return [];
+    const step = steps.get(issue.stepId);
+    const need = issue.needPerSecond ?? 0;
+    const got = issue.gotPerSecond ?? 0;
+    const missing = amountOf(plan, mode, issue.key, issue.code === 'orphan-input' ? need : Math.max(0, need - got));
+    const badge = issue.code === 'orphan-input' ? 'no source in the plan' : `short: gets ${formatPercent(need > 0 ? got / need : 0)}`;
+    return [{
+      row: `missing:${issue.key}@${issue.stepId}`, key: issue.key, name: names[issue.key] ?? issue.key, stepId: issue.stepId, amount: missing, badge,
+      usedBy: step === undefined ? [] : [{ stepId: step.id, label: stepLabel(step, names), rate: amountWithUnit(plan, mode, issue.key, need) }],
+    }];
   });
 }
