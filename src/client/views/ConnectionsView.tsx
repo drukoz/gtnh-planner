@@ -1,11 +1,11 @@
 // The Connections tab (plan 11 Task 8; spec §3.8c; architecture §7.2 and "EnderIO conduits, granted change requests
 // (add-on 11)"): the laid-out line as a schematic of boxes and links, from the pure model in ../connections/model.ts.
 // Every placed machine, chest, interface and hookup is a box whose rows name its configured faces, and every flow is a
-// link drawn in the colour of what carries it, or of its EnderIO channel. ELK lays the boxes out in its worker, as for
-// the flow diagram. The picture scrolls both ways, and a click on a box, one of its face rows or a link shows its full
-// configuration in the side panel.
+// link drawn in the colour of what carries it, or of its EnderIO channel. ELK lays the boxes out in its worker, and a
+// drag moves the picture, the wheel zooms it and Fit shows all of it (./pan-zoom.ts), as for the flow diagram; a click
+// on a box, one of its face rows or a link shows its full configuration in the side panel.
 
-import { useEffect, useMemo, useState, type ReactElement } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactElement } from 'react';
 import { DYE_HEX } from '../../shared/layout/enderio.ts';
 import type { Layout } from '../../shared/types/layout.ts';
 import type { Plan } from '../../shared/types/plan.ts';
@@ -16,6 +16,7 @@ import {
 } from '../connections/model.ts';
 import { useLayout } from '../state/use-layout.ts';
 import { layoutFlow } from '../workers/elk.worker.ts';
+import { DRAG_THRESHOLD, fitView, wheelFactor, zoomAround, type View } from './pan-zoom.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
 
 export interface ConnectionsShellProps {
@@ -33,7 +34,7 @@ const INFEASIBLE_TEXT = 'This line cannot be planned yet, so there is nothing to
 const LAYING_OUT_TEXT = 'Laying out the line…';
 const NOTHING_TEXT = 'Nothing to connect yet: the line places no new machines';
 const DRAWING_TEXT = 'Drawing the connections…';
-const HINT_TEXT = 'Click a box, one of its face rows or a link for its full configuration.';
+const HINT_TEXT = 'Drag or use the arrow keys to move, scroll to zoom, and click a box, one of its face rows or a link for its full configuration.';
 const loadFailed = (error: string): string => `Could not load the layout: ${error}`;
 const drawFailed = (error: string): string => `Could not lay out the connections: ${error}`;
 
@@ -60,6 +61,11 @@ const DIVIDER_GAP = 2;
  */
 const TITLE_CHARS = 32;
 const ROW_CHARS = 38;
+/** Room around the fitted picture, in screen pixels, as in the flow diagram. */
+const PAD = 16;
+/** An arrow key moves the picture this far (px), the way it scrolls a page: → shows more of its right. */
+const KEY_PAN = 40;
+const PAN_KEYS: Readonly<Record<string, readonly [number, number]>> = { ArrowLeft: [1, 0], ArrowRight: [-1, 0], ArrowUp: [0, 1], ArrowDown: [0, -1] };
 
 /** `text`, or its first `max` characters and '…' when it is longer, so the box shows where its text is cut. */
 function cut(text: string, max: number): string {
@@ -148,25 +154,118 @@ function EdgeShape(props: { edge: PlacedEdge; selected: boolean; onPick(pick: Co
 }
 
 /**
- * The picture at its own size (the box around it scrolls): the links first, then the boxes over them. A group, not an
- * image, so assistive technology reads the boxes, rows and links inside it, as for the flow diagram (plan 11, Task 8's
- * review ruling).
+ * The picture, under a Fit button, in an area as tall as the picture at its own size (at most 75vh) that moves and
+ * zooms it as the flow diagram does: a drag moves it, from a box too once the pointer has moved DRAG_THRESHOLD px (a
+ * plain click still picks, and the click that ends a drag picks nothing), the wheel or a pinch zooms around the
+ * pointer, and the arrow keys move it while the area has focus. Fit, also when the picture first shows and whenever its
+ * boxes change, shows all of it. The links come first, then the boxes over them. A group, not an image, so assistive
+ * technology reads the boxes, rows and links inside it, as for the flow diagram (plan 11, Task 8's review ruling).
  */
 function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: boolean; onPick(pick: ConnPick): void }): ReactElement {
   const { picture, pick, busy, onPick } = props;
   const pickedEdge = pick !== null && 'edge' in pick ? pick.edge : null;
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const [view, setView] = useState<View>({ x: PAD, y: PAD, k: 1 });
+  const [dragging, setDragging] = useState(false);
+  const drag = useRef<{ pointer: number; sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null);
+  const dragged = useRef(false);
+  // The view is fitted again only when the boxes change, not when someone else's change only moves a rate.
+  const shape = useMemo(() => picture.nodes.map((n) => n.id).join('\n'), [picture]);
+
+  const fit = (): void => {
+    const svg = svgRef.current;
+    setView(fitView(picture, { width: svg?.clientWidth ?? 0, height: svg?.clientHeight ?? 0 }, PAD));
+  };
+  useLayoutEffect(() => fit(), [shape]);   // reads the current picture; only a change of boxes refits
+
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (svg === null) return undefined;
+    // React's wheel listener is passive, so it cannot stop the page from scrolling (or zooming, on a pinch); this can.
+    const onWheel = (e: WheelEvent): void => {
+      e.preventDefault();
+      const box = svg.getBoundingClientRect();
+      const factor = wheelFactor(e.deltaY, e.deltaMode === WheelEvent.DOM_DELTA_LINE);
+      setView((v) => zoomAround(v, e.clientX - box.left, e.clientY - box.top, factor));
+    };
+    svg.addEventListener('wheel', onWheel, { passive: false });
+    return () => svg.removeEventListener('wheel', onWheel);
+  }, []);
+
+  const onPointerDown = (e: PointerEvent<SVGSVGElement>): void => {
+    if (e.button !== 0 || drag.current !== null) return;   // one pointer at a time moves the picture
+    drag.current = { pointer: e.pointerId, sx: e.clientX, sy: e.clientY, ox: view.x, oy: view.y, moved: false };
+  };
+  const onPointerEnd = (e: PointerEvent<SVGSVGElement>): void => {
+    const d = drag.current;
+    if (d === null || d.pointer !== e.pointerId) return;
+    drag.current = null;
+    if (!d.moved) return;
+    setDragging(false);
+    dragged.current = true;   // the click that ends a drag picks nothing
+    setTimeout(() => {
+      dragged.current = false;
+    }, 0);
+  };
+  const onPointerMove = (e: PointerEvent<SVGSVGElement>): void => {
+    const d = drag.current;
+    if (d === null || d.pointer !== e.pointerId) return;
+    if ((e.buttons & 1) === 0) {
+      onPointerEnd(e);   // released outside the picture before the drag began, so the svg never heard it
+      return;
+    }
+    const dx = e.clientX - d.sx;
+    const dy = e.clientY - d.sy;
+    if (!d.moved) {
+      if (Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
+      d.moved = true;
+      setDragging(true);
+      e.currentTarget.setPointerCapture(e.pointerId);   // only now: a plain click must still reach the box under it
+    }
+    setView((v) => ({ ...v, x: d.ox + dx, y: d.oy + dy }));
+  };
+  const pickUnlessDragged = (p: ConnPick): void => {
+    if (!dragged.current) onPick(p);
+  };
+  const onKeyDown = (e: KeyboardEvent<SVGSVGElement>): void => {
+    const step = PAN_KEYS[e.key];
+    if (step === undefined || e.altKey || e.ctrlKey || e.metaKey) return;   // Alt+← is the browser's Back
+    e.preventDefault();   // the page does not scroll too
+    setView((v) => ({ ...v, x: v.x + step[0] * KEY_PAN, y: v.y + step[1] * KEY_PAN }));
+  };
+
   return (
-    <div className="connections" data-testid="connections" aria-busy={busy}>
-      <svg role="group" aria-label="Connections of the line" width={Math.ceil(picture.width)} height={Math.ceil(picture.height)}>
-        <defs>
-          <marker id="conn-arrow" viewBox="0 0 10 10" refX={10} refY={5} markerWidth={9} markerHeight={9} markerUnits="userSpaceOnUse" orient="auto-start-reverse">
-            <path className="conn-arrow-head" d="M 0 0 L 10 5 L 0 10 z" />
-          </marker>
-        </defs>
-        {picture.edges.map((edge) => <EdgeShape key={edge.id} edge={edge} selected={edge.id === pickedEdge} onPick={onPick} />)}
-        {picture.nodes.map((node) => <NodeShape key={node.id} node={node} pick={pick} onPick={onPick} />)}
-      </svg>
-    </div>
+    <>
+      <div className="conn-toolbar row">
+        <button type="button" className="small" onClick={() => fit()}>Fit</button>
+        <span className="muted small">{HINT_TEXT}</span>
+      </div>
+      <div className="connections" data-testid="connections" aria-busy={busy}>
+        <svg
+          ref={svgRef}
+          role="group"
+          aria-label="Connections of the line"
+          className={dragging ? 'dragging' : undefined}
+          tabIndex={0}
+          style={{ height: `min(${Math.ceil(picture.height + 2 * PAD)}px, 75vh)` }}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerEnd}
+          onPointerCancel={onPointerEnd}
+          onKeyDown={onKeyDown}
+        >
+          <defs>
+            <marker id="conn-arrow" viewBox="0 0 10 10" refX={10} refY={5} markerWidth={9} markerHeight={9} markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+              <path className="conn-arrow-head" d="M 0 0 L 10 5 L 0 10 z" />
+            </marker>
+          </defs>
+          <g className="conn-pan" transform={`translate(${view.x} ${view.y}) scale(${view.k})`}>
+            {picture.edges.map((edge) => <EdgeShape key={edge.id} edge={edge} selected={edge.id === pickedEdge} onPick={pickUnlessDragged} />)}
+            {picture.nodes.map((node) => <NodeShape key={node.id} node={node} pick={pick} onPick={pickUnlessDragged} />)}
+          </g>
+        </svg>
+      </div>
+    </>
   );
 }
 
@@ -200,9 +299,10 @@ function Panel(props: { details: Details; onClose(): void }): ReactElement {
 }
 
 /**
- * Everything the tab shows, from its state (pure markup; tested with renderToStaticMarkup): why there is nothing to
- * draw yet, else the picture with its legend and, for a pick that names something in `graph`, the side panel. While a
- * newer layout or picture is on its way, or failed, the last picture stays up (dimmed while busy) under the reason.
+ * Everything the tab shows, from its state (markup but for the picture's own view, which it moves and zooms; tested
+ * with renderToStaticMarkup): why there is nothing to draw yet, else the picture with its legend and, for a pick that
+ * names something in `graph`, the side panel. While a newer layout or picture is on its way, or failed, the last
+ * picture stays up (dimmed while busy) under the reason.
  */
 export function ConnectionsShell(props: ConnectionsShellProps): ReactElement {
   const { plan, layout, loading, error, graph, picture, layoutError, pick, onPick } = props;
@@ -219,7 +319,6 @@ export function ConnectionsShell(props: ConnectionsShellProps): ReactElement {
       <div className="conn-main">
         {error !== null && <p className="error" role="alert">{loadFailed(error)}</p>}
         {layoutError !== null && <p className="error" role="alert">{drawFailed(layoutError)}</p>}
-        <p className="muted small">{HINT_TEXT}</p>
         <Picture picture={picture} pick={details === null ? null : pick} busy={loading} onPick={onPick} />
         <Legend edges={picture.edges} />
       </div>

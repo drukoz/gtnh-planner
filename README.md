@@ -88,7 +88,7 @@ Choose **EnderIO conduits** under **Logistics** in a project's settings. The lin
 - Power still runs over GT cables.
 - The parts list counts every conduit, filter and upgrade, and the build steps set every face.
 
-The **Connections** tab of a project draws any line, in all four logistics modes, as boxes and links that show every face's settings. Click a box, a face or a link for the details.
+The **Connections** tab of a project draws any line, in all four logistics modes, as boxes and links that show every face's settings; drag to move it, scroll to zoom and press **Fit** to see all of it. Click a box, a face or a link for the details.
 
 Limits: rates follow EnderIO's default conduit config, so a server that changes the conduit rates in `EnderIO.cfg` may need more speed upgrades or a bigger fluid conduit. A face holds at most 24 filtered items, and more are flagged. Ender fluid conduits have no priority, so when machines take a fluid whose surplus also leaves through an open end, the tank takes its turn with them; the line warns about it. The line plans no redstone signal control (every extract face is simply set to Always active).
 
