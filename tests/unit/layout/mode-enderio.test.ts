@@ -96,6 +96,29 @@ describe('EnderIO mode — items', () => {
     expect(faces(m).find((f) => f.target === 'Basic Macerator')!.extract!.roundRobin).toBe(true);
   });
 
+  it('leaves round robin off when the output chest takes a side\'s item on its colour, though no flow of that side goes there', () => {
+    // a's dust goes only to b and d, but x sends its surplus dust out, and b, taking dust from both, puts a, x and the
+    // output chest on one channel. EnderIO offers each extraction to every face of the side's colour whose filter
+    // passes the item (NetworkedInventory.updateInsertOrder), so with round robin on the chest would take every third
+    // of a's dust too
+    const plan = makePlan([
+      { id: 'a', mteId: IDS.MACERATOR, count: 1, outputs: [['t:dust@0', 2]] },
+      { id: 'x', mteId: IDS.EXTRACTOR, count: 1, outputs: [['t:dust@0', 2]] },
+      { id: 'b', mteId: IDS.ASSEMBLER, count: 1, tier: 2, inputs: [['t:dust@0', 2]], outputs: [['t:ingot@0', 1]] },
+      { id: 'd', mteId: IDS.CHEM_HV, count: 1, tier: 3, inputs: [['t:dust@0', 1]], outputs: [['t:out_d@0', 1]] },
+    ], { flows: [{ from: 'raw', to: 'a', key: 't:in@0', perSecond: 2 }, { from: 'raw', to: 'x', key: 't:in@0', perSecond: 2 },
+      { from: 'a', to: 'b', key: 't:dust@0', perSecond: 1 }, { from: 'a', to: 'd', key: 't:dust@0', perSecond: 1 },
+      { from: 'x', to: 'b', key: 't:dust@0', perSecond: 1 }, { from: 'x', to: 'out', key: 't:dust@0', perSecond: 1 },
+      { from: 'b', to: 'out', key: 't:ingot@0', perSecond: 1 }, { from: 'd', to: 'out', key: 't:out_d@0', perSecond: 1 }] });
+    const r = buildMode('enderio', { ...setup(plan), network: null });
+    const at = (target: string) => faces(r).find((f) => f.target === target)!;
+    const [a, x, b, d, out] = [at('Basic Macerator'), at('Basic Fluid Extractor'), at('Advanced Assembler'), at('Advanced Chemical Reactor'),
+      at('Chest (output)')];
+    expect([a.extract!.color, x.extract!.color, b.insert!.color, d.insert!.color, out.insert!.color]).toEqual(['red', 'red', 'red', 'red', 'red']);
+    expect(out.insert!.filter!.keys).toContain('t:dust@0');
+    expect([a.extract!.roundRobin, x.extract!.roundRobin, b.insert!.priority, d.insert!.priority, out.insert!.priority]).toEqual([false, false, 1, 1, 0]);
+  });
+
   it('sends items for owned machines and unplanned byproducts through the chests', () => {
     const plan = makePlan([
       { id: 'p', mteId: IDS.ASSEMBLER, count: 1, owned: 1, tier: 2, outputs: [['t:dust@0', 1]] },

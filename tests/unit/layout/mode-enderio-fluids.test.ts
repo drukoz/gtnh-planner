@@ -164,6 +164,23 @@ describe('EnderIO mode — the fluid network in detail', () => {
     expect(buildMode('enderio', { ...setup(fluidOnly()), network: null }).warnings).toEqual([]);
   });
 
+  it('round robins a fluid face whose colour reaches the open end, though its own flow goes only to a machine', () => {
+    // x and z both make Molten Iron for y, and z sends its surplus out, so y puts x, z and the open end on one channel.
+    // EnderIO fills any face of x's colour whose filter passes the fluid (EnderLiquidConduitNetwork.fillFrom): without
+    // round robin x would keep filling whichever face took fluid last, the tank once it took any, so x round robins too
+    const plan = makePlan([fluidSteps[0]!, { id: 'z', mteId: IDS.MACERATOR, count: 1, outputs: [['fluid:molten.iron', 144]] }, fluidSteps[1]!], {
+      flows: [{ from: 'raw', to: 'x', key: 't:in@0', perSecond: 1 }, { from: 'raw', to: 'z', key: 't:in@0', perSecond: 1 },
+        { from: 'x', to: 'y', key: 'fluid:molten.iron', perSecond: 1 }, { from: 'z', to: 'y', key: 'fluid:molten.iron', perSecond: 1 },
+        { from: 'z', to: 'out', key: 'fluid:molten.iron', perSecond: 1 }, { from: 'y', to: 'out', key: 't:out_y@0', perSecond: 1 }] });
+    const r = buildMode('enderio', { ...setup(plan), network: null });
+    expect(fluidFaces(r).filter((f) => f.mode !== 'disabled').map((f) => [f.mode, f.target, f.extract?.color ?? f.insert!.color, f.extract?.roundRobin ?? null]))
+      .toEqual([
+        ['extract', 'Basic Fluid Extractor', 'red', true], ['extract', 'Basic Macerator', 'red', true], ['insert', 'Basic Fluid Solidifier', 'red', null],
+        ['insert', 'your tank', 'red', null]]);
+    expect(r.warnings).toEqual([{ code: 'conduit_share', text: 'Basic Fluid Solidifier shares Molten Iron with the open end for your tank turn by turn '
+      + '(ender fluid conduits have no priority), so it can run short: if it does, take the tank off that end' }]);
+  });
+
   it('sizes the fluid conduit to the busiest insert face too and names the side that is short', () => {
     // five faces extract 4,000 L/s each, an Ender Fluid Conduit's most, into one face that takes 20,000 (past its 16,000)
     expect(fluidKinds(buildMode('enderio', { ...setup(manyToOne(5, 20_000)), network: null }))).toEqual(['liquid_crystalline']);

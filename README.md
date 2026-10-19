@@ -64,7 +64,7 @@ Choose **EnderIO conduits** under **Logistics** in a project's settings. The lin
 
 - Every conduit face that touches a machine or chest is set to **Extract**, **Insert** or **In / Out** (**Disabled** where it must not connect).
 - Each face has its own extract filter and insert filter (a Basic, Advanced or Big Item Filter with the exact items, matching meta, and NBT only when the item has it) and its own extract and insert channel colours, so each machine's outputs reach only the machines that take them.
-- Machines that use an item are filled first (priority 1) and the surplus goes to the output chest (priority 0). A face that feeds several machines and no chest is set to round robin (EnderIO's round robin takes turns whatever the priority, so a face that also feeds a chest leaves it off), and a face that must move more than 8 items/s gets speed upgrades.
+- Machines that use an item are filled first (priority 1) and the surplus goes to the output chest (priority 0). A face whose items go to several machines and to no chest is set to round robin (EnderIO's round robin takes turns whatever the priority, so a face whose items a chest on its channel could also take leaves it off), and a face that must move more than 8 items/s gets speed upgrades.
 - Every extract face is set to **Always active**, because a conduit left at its default waits for a redstone signal.
 - Green is left to your base's own network. When the scan found an EnderIO network at the base, the line joins it at the input chest, whose face inserts at priority 1 so the raw inputs come to the line before any other storage on Green; otherwise a build step says to fill the input chest by hand.
 - Power still runs over GT cables.

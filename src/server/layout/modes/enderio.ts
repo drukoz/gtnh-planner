@@ -5,15 +5,16 @@
 // each side with its own channel colour and a whitelist of its exact items or fluids; faces toward anything else they
 // could trade with are Disabled. Extract sides get redstone Always active (an unset face extracts only with a signal);
 // item extract sides also get the speed upgrades their rate needs and self feed off, and item insert sides fill
-// machines (priority 1) before chests (0). EnderIO's round robin rotates over every target of a face whatever its
-// priority, so an item extract side gets it only when it feeds two or more machine faces and no chest; a fluid extract
-// side (ender fluid conduits have no priority) gets it when it feeds two or more faces, and a fluid whose surplus leaves
-// through an open end while machines take it is warned about. The plan's flows link what makes an item or fluid to what
-// takes it, and linked sides share a channel; items and fluids are separate networks with their own channels. Only raw
-// inputs and final outputs touch storage, at the tail: an input chest the line extracts from, which an EnderIO network
-// at the base keeps stocked on Green (a colour the line never uses), output chests of 24 items each, and one open fluid
-// conduit end per fluid that enters or leaves the line, for a tank. The fluid conduit is the slowest ender tier that
-// moves the busiest face. Every order and tie-break is fixed, so the same plan gives the same faces and colours.
+// machines (priority 1) before chests (0). A side's targets are the insert sides of its colour that pass one of its
+// keys, and EnderIO's round robin rotates over them whatever their priority, so an item extract side gets it only when
+// it can hand to two or more machine faces and no chest; a fluid extract side (ender fluid conduits have no priority)
+// gets it for any two or more, and a fluid it hands both to machines and to an open end is warned about. The plan's
+// flows link what makes an item or fluid to what takes it, and linked sides share a channel; items and fluids are
+// separate networks with their own channels. Only raw inputs and final outputs touch storage, at the tail: an input
+// chest the line extracts from, which an EnderIO network at the base keeps stocked on Green (a colour the line never
+// uses), output chests of 24 items each, and one open fluid conduit end per fluid that enters or leaves the line, for a
+// tank. The fluid conduit is the slowest ender tier that moves the busiest face. Every order and tie-break is fixed, so
+// the same plan gives the same faces and colours.
 
 import { isFluidKey, type StuffKey } from '../../../shared/keys.ts';
 import { conduitSideText } from '../../../shared/layout/configure-text.ts';
@@ -178,9 +179,6 @@ function unitTraders(placement: Placement, trades: (u: PlacedUnit, b: LocalBlock
 
 // ---- Channels, faces and blocks (items and fluids alike) ----
 
-/** Each end's colour (`ChannelPlan`) and the insert ends each extract end feeds. */
-interface Channels extends ChannelPlan { fed: ReadonlyMap<string, ReadonlySet<string>> }
-
 /**
  * The channels of one conduit network's faces (items and fluids each get their own). Each flow links the extract sides
  * that give its key at its source to the insert sides that take it at its target, where the faces without a step (the
@@ -188,7 +186,7 @@ interface Channels extends ChannelPlan { fed: ReadonlyMap<string, ReadonlySet<st
  * links its machine to the faces outside the line that take it. Ends in face order, extract before insert.
  */
 function planChannels(plans: readonly FacePlan[], flows: readonly PlanFlow[], placed: ReadonlySet<string>,
-  strays: ReadonlyArray<{ stepId: string; key: StuffKey }>): Channels {
+  strays: ReadonlyArray<{ stepId: string; key: StuffKey }>): ChannelPlan {
   const sidesOf = (owner: string | null, side: SideName, key: StuffKey): string[] =>
     plans.filter((f) => f.stepId === owner && f[side]?.keys.includes(key) === true).map((f) => endId(f, side));
   const links: ChannelLink[] = [];
@@ -204,27 +202,41 @@ function planChannels(plans: readonly FacePlan[], flows: readonly PlanFlow[], pl
     ...(f.extract === null ? [] : [{ id: endId(f, 'extract'), keys: f.extract.keys }]),
     ...(f.insert === null ? [] : [{ id: endId(f, 'insert'), keys: f.insert.keys }]),
   ]);
-  const fed = new Map<string, Set<string>>();
-  for (const l of links) fed.set(l.from, (fed.get(l.from) ?? new Set<string>()).add(l.to));
-  return { ...assignChannels(ends, links), fed };
+  return assignChannels(ends, links);
 }
 
 /**
- * Round robin for an extract end: on when it feeds two or more insert ends and `even(those ends)` holds. With it on,
- * EnderIO starts each extraction at the target after the one served last, over every target of the face
- * (`NetworkedInventory.getTargetIterator` hands out EnderCore's `RoundRobinIterator` over the priority-sorted targets,
- * and its index only moves on), so priority no longer decides who is served first; with it off, an item goes to the
- * first target that takes it (sticky, then priority, then distance) and a fluid to the one that took fluid last
- * (`EnderLiquidConduitNetwork$TankIterator.rewind`).
+ * The insert sides an extract side can hand to, in face order. EnderIO offers each extraction to every other face of
+ * the network whose insert colour is the side's extract colour (`NetworkedInventory.updateInsertOrder`,
+ * `EnderLiquidConduitNetwork.fillFrom`; self feed is off) and lets that face's filter decide, so these are the insert
+ * sides of its colour that pass one of its keys: those the plan's flows link it to, and any other on its channel (a
+ * machine that also takes from another maker, the output chest of another maker's surplus) or, past the palette, on its
+ * colour.
  */
-function roundRobin(channels: Channels, extractEnd: string, even: (insertEnds: ReadonlySet<string>) => boolean): boolean {
-  const fed = channels.fed.get(extractEnd);
-  return fed !== undefined && fed.size >= 2 && even(fed);
+function targetsOf(plans: readonly FacePlan[], colors: ChannelPlan['colors'], from: FacePlan): FacePlan[] {
+  const color = colors.get(endId(from, 'extract'));
+  const keys = from.extract?.keys ?? [];
+  return plans.filter((g) => g !== from && g.insert !== null && colors.get(endId(g, 'insert')) === color && g.insert.keys.some((k) => keys.includes(k)));
 }
 
 /** An item insert side's priority (higher is filled first): 1 toward a machine, 0 toward a tail chest. */
 function insertPriority(face: FacePlan): number {
   return face.stepId === null ? 0 : 1;
+}
+
+/**
+ * Round robin for an extract side that can hand to `targets` (`targetsOf`). With it on, EnderIO starts each extraction
+ * at the target after the one served last, over all of them whatever their priority (`NetworkedInventory.getTargetIterator`
+ * hands out EnderCore's `RoundRobinIterator` over the priority-sorted targets, and its index only moves on); with it
+ * off, an item goes to the first target that takes it (sticky, then priority, then distance) and a fluid first to the
+ * face that took fluid last (`EnderLiquidConduitNetwork$TankIterator.rewind`). So an item side gets it only for two or
+ * more targets that are machine faces of one priority, never with a tail chest among them (round robin would hand the
+ * chest its turn before the machines are full); a fluid side, whose faces have no priority, for any two or more
+ * (without it, a tank that took fluid once would be tried first from then on and take it all).
+ */
+function roundRobin(kind: 'item' | 'fluid', targets: readonly FacePlan[]): boolean {
+  if (targets.length < 2) return false;
+  return kind === 'fluid' || targets.every((g) => g.stepId !== null && insertPriority(g) === insertPriority(targets[0]!));
 }
 
 /** Each face's mode and sides from the side builders, called face by face, extract first. */
@@ -322,18 +334,17 @@ function filterFullWarning(input: ModeInput, face: FacePlan, side: SideName, fil
 }
 
 /**
- * `conduit_share`, one per fluid (in key order) that a face extracts into both an open end (the surplus, for your tank)
- * and machines that take it: ender fluid conduits have no priority, so the tank takes its turn with those machines
- * however much they need. Without the tank the fluid has nowhere else to go, so the maker waits for the machines.
+ * `conduit_share`, one per fluid (in key order) that a face can hand (`targetsOf`) both to an open end (the surplus, for
+ * your tank) and to machines that take it: ender fluid conduits have no priority, so the tank takes its turn with those
+ * machines however much they need. Without the tank the fluid has nowhere else to go, so the maker waits for the machines.
  */
-function fluidShareWarnings(input: ModeInput, plans: readonly FacePlan[], channels: Channels): PlanWarning[] {
-  const inserts = new Map(plans.filter((f) => f.insert !== null).map((f) => [endId(f, 'insert'), f]));
+function fluidShareWarnings(input: ModeInput, plans: readonly FacePlan[], channels: ChannelPlan): PlanWarning[] {
   const sharing = new Map<StuffKey, string[]>();
   for (const f of plans) {
     if (f.extract === null) continue;
-    const fed = [...(channels.fed.get(endId(f, 'extract')) ?? [])].map((e) => inserts.get(e)!);
+    const targets = targetsOf(plans, channels.colors, f);
     for (const key of f.extract.keys) {
-      const takes = fed.filter((g) => g.insert!.keys.includes(key));
+      const takes = targets.filter((g) => g.insert!.keys.includes(key));
       const machines = takes.filter((g) => g.stepId !== null).map((g) => g.target);
       if (machines.length > 0 && takes.some((g) => g.stepId === null)) sharing.set(key, [...(sharing.get(key) ?? []), ...machines]);
     }
@@ -415,18 +426,13 @@ function crossing(plan: Plan, items: readonly PlanFlow[], placed: ReadonlySet<st
 /**
  * Each item side's colour, filter, speed upgrades, priority and round robin, by face, with the `conduit_rate` warnings
  * (once per step, and for the input chest's face) and then the `filter_full` ones. Round robin is on only for a side
- * that feeds two or more insert sides of one priority, none of them a tail chest's: round robin would hand a chest its
- * turn before the machines are full, while without it the machines (priority 1) are filled first and the chest takes
- * what is left.
+ * that can hand to two or more insert sides, all machine faces of one priority (`roundRobin`): round robin would hand a
+ * chest its turn before the machines are full, while without it the machines (priority 1) are filled first and the chest
+ * takes what is left.
  */
-function itemSettings(input: ModeInput, plans: readonly FacePlan[], channels: Channels): { configured: FaceSettings; warnings: PlanWarning[] } {
+function itemSettings(input: ModeInput, plans: readonly FacePlan[], channels: ChannelPlan): { configured: FaceSettings; warnings: PlanWarning[] } {
   const { parts } = input;
   const rateWarnings = new WarningList(), filterWarnings = new WarningList();
-  const inserts = new Map(plans.filter((f) => f.insert !== null).map((f) => [endId(f, 'insert'), f]));
-  const even = (ends: ReadonlySet<string>): boolean => {
-    const faces = [...ends].map((e) => inserts.get(e)!);
-    return faces.every((f) => f.stepId !== null) && new Set(faces.map(insertPriority)).size === 1;
-  };
   const filterOf = (f: FacePlan, side: SideName, keys: readonly StuffKey[]): ConduitFilter => {
     const { filter, dropped } = itemFilterFor(parts, keys);
     if (dropped.length > 0) filterWarnings.add(filterFullWarning(input, f, side, filter, dropped));
@@ -437,7 +443,7 @@ function itemSettings(input: ModeInput, plans: readonly FacePlan[], channels: Ch
     const speed = speedUpgradesFor(s.rate);
     if (speed.short) rateWarnings.add(itemRateWarning(parts, s.rate, f.stepId === null ? 'the input chest' : f.target, f.stepId));
     return {
-      color: channels.colors.get(id)!, filter: filterOf(f, 'extract', s.keys), rate: s.rate, roundRobin: roundRobin(channels, id, even),
+      color: channels.colors.get(id)!, filter: filterOf(f, 'extract', s.keys), rate: s.rate, roundRobin: roundRobin('item', targetsOf(plans, channels.colors, f)),
       selfFeed: false, redstone: 'ignore', ...(speed.count > 0 ? { speed: { item: parts.eio_speed_upgrade.key, count: speed.count } } : {}),
     };
   };
@@ -665,10 +671,11 @@ function fluidNetwork(placement: Placement, ports: readonly Vec3[], ends: number
 
 /**
  * Each fluid side's colour, filter and round robin, by face (fluid conduits have no self feed, speed upgrades or
- * priority), with the `filter_full` warnings. Round robin is on for a side that feeds two or more insert sides, open
- * ends among them: without it, a tank that took fluid once would be tried first from then on and take it all.
+ * priority), with the `filter_full` warnings. Round robin is on for a side that can hand to two or more insert sides,
+ * open ends among them (`roundRobin`): without it, a tank that took fluid once would be tried first from then on and
+ * take it all.
  */
-function fluidSettings(input: ModeInput, plans: readonly FacePlan[], channels: Channels): { configured: FaceSettings; warnings: PlanWarning[] } {
+function fluidSettings(input: ModeInput, plans: readonly FacePlan[], channels: ChannelPlan): { configured: FaceSettings; warnings: PlanWarning[] } {
   const filterWarnings = new WarningList();
   const filterOf = (f: FacePlan, side: SideName, keys: readonly StuffKey[]): ConduitFilter => {
     const { filter, dropped } = fluidFilterFor(keys);
@@ -677,7 +684,10 @@ function fluidSettings(input: ModeInput, plans: readonly FacePlan[], channels: C
   };
   const extractOf = (f: FacePlan, s: Side): ConduitExtract => {
     const id = endId(f, 'extract');
-    return { color: channels.colors.get(id)!, filter: filterOf(f, 'extract', s.keys), rate: s.rate, roundRobin: roundRobin(channels, id, () => true), redstone: 'ignore' };
+    return {
+      color: channels.colors.get(id)!, filter: filterOf(f, 'extract', s.keys), rate: s.rate, roundRobin: roundRobin('fluid', targetsOf(plans, channels.colors, f)),
+      redstone: 'ignore',
+    };
   };
   const insertOf = (f: FacePlan, s: Side): ConduitInsert => ({
     color: channels.colors.get(endId(f, 'insert'))!, filter: filterOf(f, 'insert', s.keys), rate: s.rate,
