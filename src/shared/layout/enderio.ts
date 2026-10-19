@@ -7,8 +7,10 @@
 // - The ender fluid conduits' extract and max IO rates per face are EnderIO's `Config` defaults, which the pack's
 //   `EnderIO.cfg` keeps. The basic and pressurized fluid conduits carry one fluid per network and have no channels,
 //   so the mode never lays them.
-// - A face nobody set extracts on Green (`ItemConduit.getInputColor`) and only with a redstone signal, ON
-//   (`ItemConduit.getExtractionRedstoneMode`), so the line never hands out Green and sets every extract face's redstone.
+// - A face nobody set is Extract (`INPUT`: `ItemConduit` and `AbstractLiquidConduit` override `AbstractConduit`'s
+//   `IN_OUT` in `getDefaultConnectionMode`), so it never inserts. It is Green on both sides (`getInputColor` and
+//   `getOutputColor` fall back to `GREEN`) and extracts only with a redstone signal, ON (`getExtractionRedstoneMode`),
+//   so the line never hands out Green and sets every extract face's redstone.
 // - Insert targets fill sticky ones first, then by priority, highest first, then by distance
 //   (`NetworkedInventory$Target.compareTo`).
 // - Item filters hold 5 (Basic), 10 (Advanced) or 24 (Big) items and match meta and NBT by default
