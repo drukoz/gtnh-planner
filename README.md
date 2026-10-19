@@ -57,3 +57,18 @@ Scans live in `data/scans/<id>/` and uploads in `data/uploads/<id>/` (git-ignore
 **The Map tab** shows the base from above, coloured from your block textures, with switchable layers: machines, power cables coloured by voltage tier, logistics (Project Red routed pipes, EnderIO conduits, GT pipes, AE2), storage (filled where a routed or AE2 network reaches it) and the base outline. Drag to pan, scroll or use **+**/**−** to zoom, and move the **Y level** slider to cut through floors. Beside the map, **Found in world** lists the machines and top tier, power networks, logistics networks, stored items with their totals and how many the line's logistics can reach, the world's dimensions and which ones you have visited, prospected veins nearby and the notes. Click the map to pin a numbered note there; everyone on the project sees it.
 
 Power figures are estimates from what is built: clear weather, rain and a 24-hour average. Solar boilers stop about seven minutes into rain, so battery buffers are judged against a rain outage of about eight minutes. Storage whose contents cannot be read reliably is shown as unknown, never guessed.
+
+## Line layout and 3D view
+
+Once a project has a scan and a base, the planner lays the line out block by block: it puts the machines on clear, flat ground next to that base, as close as it can to where it can tap into your power and logistics, and works out every cable, pipe, cover and part needed to hook it up. Those parts join the **Materials & steps** list, grouped into machines, power, and piping & logistics.
+
+- **Logistics**, picked in the project settings:
+  - **Machine to machine:** conveyor and pump covers move goods from machine to machine through one shared item pipe (and fluid pipes); every machine's Input Filter is on, and each final product goes into its own output chest through a filtered cover.
+  - **Project Red routed:** a routed interface pipe with routing chips on every machine; you order from the request pipe.
+  - **AE2:** ME interfaces with their patterns; their idle power draw counts towards the power check.
+  - The line is only hooked into networks the scan found. The planner never assumes one you have not built.
+- **Configured parts:** every cover, filter, chip, pattern and programmed circuit gets a build step that says exactly how to set it (face, mode, rate, whitelist, circuit number). Pipes, covers, buses and cables are sized to what they carry.
+- **Power:** nothing is connected above its tier; transformer banks step the voltage down one tier at a time. The power check says whether the base's spare power covers the line and its batteries carry it through rain, and suggests boilers and turbines when they do not. Generators are never placed for you.
+- **On the Map tab** the line is solid and everything still to build to hook it up is dashed. Numbered pins mark the site, the power tap, the logistics tap, machines you can reuse and problems, and a build step that names a pin links to it on the map. **Move line** (then drag it), **Rotate 90°** and **Auto place** change where the line goes, for everyone on the project.
+- **The 3D tab** shows the line in your pack's textures: drag to turn, right-drag to pan, scroll to zoom and step through the layers with the slider. Hover a block for its name and settings; click it for its facing and recipe. Blocks already in your base show as faint ghosts. Textures need `npm run extract-assets`; without them blocks are plain colours.
+- **Limits:** pipe heat ratings and Project Red crafting chips are not planned, and a GregTech filter cover holds one item, so a machine whose recipes also take another step's item is flagged instead of fixed. Check those in game.

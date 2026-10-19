@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { layoutPack, IDS, EBF_STRUCTURE, makePlan, makeScan, flatVoxels, areaReader, STONE } from '../../helpers/layout-fixtures.ts';
+import { layoutPack, IDS, EBF_STRUCTURE, makePlan, makeScan, flatVoxels, areaReader, STONE, addLineParts, emptyPack } from '../../helpers/layout-fixtures.ts';
+import { withLineParts } from '../../helpers/line-parts-export.ts';
+import { makePack } from '../../helpers/make-pack.ts';
+import type { Machine } from '../../../src/shared/types/pack.ts';
 import { AIR_INDEX, UNKNOWN_INDEX } from '../../../src/shared/types/world.ts';
+
+/** The machine fields the line-parts export must load back exactly (ruling R19). */
+const LOADED_FIELDS = ['mteId', 'metaName', 'name', 'cls', 'kind', 'itemKey', 'tier', 'cable', 'fluidPipe', 'itemPipe', 'steamPerSecondMax'] as const;
 
 describe('layout fixtures', () => {
   it('builds a pack with line parts', () => {
@@ -25,5 +31,16 @@ describe('layout fixtures', () => {
     const part = await areaReader(vox)(0, { minX: 2, minY: 62, minZ: 2, maxX: 5, maxY: 64, maxZ: 3 });
     expect(part.size).toEqual([4, 3, 2]);
     expect(part.blocks[(0 * 2 + 0) * 4 + 3]).toBe(UNKNOWN_INDEX);
+  });
+
+  it('writes the line parts as export rows that load back to the fixture values', async () => {
+    const want = addLineParts(emptyPack());
+    const pack = await makePack(withLineParts({}));
+    expect(pack.warnings ?? []).toEqual([]);
+    expect(want.machines.size).toBe(30);
+    // toEqual takes an undefined field as missing: a field the fixture leaves out must be missing after loading too
+    const fields = (m: Machine | undefined) => Object.fromEntries(LOADED_FIELDS.map((f) => [f, m?.[f]]));
+    for (const m of want.machines.values()) expect(fields(pack.machines.get(m.mteId)), `machine ${m.mteId}`).toEqual(fields(m));
+    for (const [key, item] of want.items) expect(pack.items.get(key)?.name, key).toBe(item.name);
   });
 });
