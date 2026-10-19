@@ -3,7 +3,9 @@
 // applying the same op again with the same `by` and `at` changes nothing but `rev`.
 // Pure TypeScript shared by server and browser: nothing from node:* may be imported here.
 
-import { DEFAULT_EXCLUDED_CATEGORIES, DEFAULT_STEP_CHARGE, LogisticsMode, type PlanSettings } from '../types/plan.ts';
+import {
+  DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_EXCLUDED_CATEGORIES, DEFAULT_STEP_CHARGE, LogisticsMode, type PlanSettings,
+} from '../types/plan.ts';
 import type { Note, Project, ProjectOp } from '../types/project.ts';
 
 export const MAX_NOTE_LENGTH = 4000;
@@ -13,6 +15,8 @@ export const MAX_AVOID_ENTRIES = 50;
 export const MAX_AVOID_ENTRY_LENGTH = 300;
 /** The largest `PlanSettings.stepCharge` (fix spec §3): a step must then save half the line's least raw material. */
 export const MAX_STEP_CHARGE = 0.5;
+/** The longest `PlanSettings.buildHorizonHours` (architecture §11.39): a year of running. */
+export const MAX_BUILD_HORIZON_HOURS = 8760;
 /** Characters of a pinned option (`PlanSettings.optionChoice` values, fix spec §3). */
 export const MAX_OPTION_KEY_LENGTH = 300;
 /** `<recipe id>#<Ingredient.slot>`: the keys of `PlanSettings.optionChoice` (fix spec §3). */
@@ -46,7 +50,7 @@ export function defaultSettings(): PlanSettings {
     routeDerived: true, logistics: 'direct', costOverrides: {}, stopItems: [], expandItems: [], recipeChoice: {},
     machineTier: {}, excludedCategories: [...DEFAULT_EXCLUDED_CATEGORIES], coilHeat: null, automateCrafting: false,
     avoid: [], declineReuse: [], settingsVersion: SETTINGS_VERSION, haveSupply: [], stepCharge: DEFAULT_STEP_CHARGE,
-    optionChoice: {}, reuseOwned: true, ownedManual: [],
+    optionChoice: {}, reuseOwned: true, ownedManual: [], buildHorizonHours: DEFAULT_BUILD_HORIZON_HOURS,
   };
 }
 
@@ -54,7 +58,8 @@ export function defaultSettings(): PlanSettings {
  * Fills the fields an older stored project lacks (later plans add settings), `dims` field by field, and drops repeated
  * avoid entries and sums repeated machines of the "Machines we have" list. A missing `settingsVersion` is 1, not the
  * default: the project was stored before it, and the server switches such projects to the new defaults once
- * (`ProjectStore.migrateSettings`); every stored value, a stored `routeDerived: false` among them, is kept.
+ * (`ProjectStore.migrateSettings`); every stored value, a stored `routeDerived: false` or `buildHorizonHours: null`
+ * ("Ignore build cost") among them, is kept.
  */
 export function normalizeSettings(s: Partial<PlanSettings> | undefined): PlanSettings {
   const defaults = defaultSettings();
@@ -206,6 +211,9 @@ const SETTING_CHECKS: { readonly [K in keyof PlanSettings]-?: Check } = {
   // Counted as sent, repeats included: applyOp sums the counts of a repeated machine.
   ownedManual: (v) => (Array.isArray(v) && v.length <= MAX_OWNED_MANUAL_ENTRIES && v.every(isOwnedEntry)
     ? null : `ownedManual must be a list of at most ${MAX_OWNED_MANUAL_ENTRIES} machines, each an mteId of 0 or more with a whole count from 1 to ${MAX_OWNED_MANUAL_COUNT}`),
+  // null = ignore build cost (rate mode).
+  buildHorizonHours: (v) => (v === null || (typeof v === 'number' && Number.isFinite(v) && v > 0 && v <= MAX_BUILD_HORIZON_HOURS)
+    ? null : `buildHorizonHours must be empty or above 0 and at most ${MAX_BUILD_HORIZON_HOURS}`),
 };
 
 const SETTING_KEYS: ReadonlySet<string> = new Set(Object.keys(defaultSettings()));

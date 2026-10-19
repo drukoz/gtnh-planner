@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
-  applyOp, defaultSettings, MAX_OWNED_MANUAL_COUNT, MAX_OWNED_MANUAL_ENTRIES, MAX_STEP_CHARGE, normalizeSettings, SETTINGS_VERSION, validateOp,
+  applyOp, defaultSettings, MAX_BUILD_HORIZON_HOURS, MAX_OWNED_MANUAL_COUNT, MAX_OWNED_MANUAL_ENTRIES, MAX_STEP_CHARGE, normalizeSettings,
+  SETTINGS_VERSION, validateOp,
 } from '../../../src/shared/project/apply-op.ts';
-import { DEFAULT_STEP_CHARGE } from '../../../src/shared/types/plan.ts';
+import { DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_STEP_CHARGE, NETWORKED_LOGISTICS } from '../../../src/shared/types/plan.ts';
 import type { Project } from '../../../src/shared/types/project.ts';
 
 const AT = '2026-10-17T12:00:00.000Z';
@@ -299,5 +300,38 @@ describe('reuseOwned and ownedManual', () => {
     const q = applyOp(project(), ownedOp([{ mteId: 121, count: 10_000 }, { mteId: 121, count: 1 }]) as never, 'Ann', AT);
     expect(q.settings.ownedManual).toEqual([{ mteId: 121, count: 10_000 }]);
     expect(normalizeSettings({ ownedManual: [{ mteId: 121, count: 6_000 }, { mteId: 121, count: 6_000 }] } as never).ownedManual).toEqual([{ mteId: 121, count: 10_000 }]);
+  });
+});
+
+// "Count build cost against" (plan 12 Task 1; architecture §11.28, §11.39): the hours of running the build cost of new
+// machines is weighed against, null to ignore it.
+describe('buildHorizonHours', () => {
+  const horizonOp = (buildHorizonHours: unknown) => ({ op: 'settings', patch: { buildHorizonHours } });
+  it('counts the build cost over 24 hours by default', () => {
+    expect(DEFAULT_BUILD_HORIZON_HOURS).toBe(24);
+    expect(defaultSettings().buildHorizonHours).toBe(24);
+  });
+  it('takes empty or a number of hours above 0 and at most 8760', () => {
+    expect(MAX_BUILD_HORIZON_HOURS).toBe(8760);
+    for (const v of [null, 1, 0.5, 168, 8760]) expect(validateOp(horizonOp(v)), `${typeof v} ${String(v)}`).toBeNull();
+    // Number.POSITIVE_INFINITY stands for 1e309, which JSON parsing turns into Infinity.
+    for (const v of [0, -1, 8761, '24', true, Number.POSITIVE_INFINITY]) {
+      expect(validateOp(horizonOp(v)), `${typeof v} ${String(v)}`).toEqual(expect.any(String));
+    }
+    expect(validateOp(horizonOp(0))).toBe('buildHorizonHours must be empty or above 0 and at most 8760');
+  });
+  it('fills the build horizon of an old project', () => {
+    expect(normalizeSettings({ target: 't:x@0' } as never).buildHorizonHours).toBe(24);
+    expect(normalizeSettings({ buildHorizonHours: null } as never).buildHorizonHours).toBeNull();
+    expect(normalizeSettings({ buildHorizonHours: 8 } as never).buildHorizonHours).toBe(8);
+  });
+});
+
+describe('NETWORKED_LOGISTICS', () => {
+  it('lists the networked logistics modes', () => {
+    expect([...NETWORKED_LOGISTICS].sort()).toEqual(['ae2', 'routed']);
+    expect(NETWORKED_LOGISTICS.has('direct')).toBe(false);
+    // EnderIO plans like machine to machine, each step on its own machines (controller ruling).
+    expect(NETWORKED_LOGISTICS.has('enderio')).toBe(false);
   });
 });
