@@ -1,8 +1,14 @@
 import { describe, it, expect, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { ItemIcon, placeholderLetters } from '../../src/client/components/ItemIcon.tsx';
-import { iconImageUrl, iconPixelSize } from '../../src/client/assets/icons.ts';
+import { ItemIcon, placeholderClass, placeholderInk, placeholderLetters } from '../../src/client/components/ItemIcon.tsx';
+import { iconImageUrl, iconPixelSize, useItemIcon } from '../../src/client/assets/icons.ts';
 import type { IconDescriptor } from '../../src/shared/types/assets.ts';
+
+// The real hook, except where a test hands ItemIcon a descriptor and an image URL (server rendering never gets either).
+vi.mock('../../src/client/assets/icons.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/client/assets/icons.ts')>();
+  return { ...actual, useItemIcon: vi.fn(actual.useItemIcon) };
+});
 
 describe('ItemIcon', () => {
   it('renders the placeholder until the icon is ready', () => {
@@ -24,6 +30,38 @@ describe('ItemIcon', () => {
   it('renders at least 16 device pixels', () => {
     expect(iconPixelSize(8)).toBe(16);
     expect(iconPixelSize(24)).toBe(24);
+  });
+});
+
+describe('placeholder ink', () => {
+  it('light placeholders get dark ink; hash colours keep white letters; every placeholder has a border', () => {
+    expect(placeholderInk([255, 255, 255])).toBe('dark');   // GT Basic, white non-GT fluids
+    expect(placeholderInk([255, 233, 0])).toBe('dark');     // luma 213
+    expect(placeholderInk([192, 192, 89])).toBe('light');   // the lightest hashColor (luma 180)
+    expect(placeholderInk([128, 128, 128])).toBe('light');
+    expect(placeholderClass([255, 255, 255])).toBe('item-icon placeholder ink-dark');
+    expect(placeholderClass([89, 192, 106])).toBe('item-icon placeholder');
+    expect(renderToStaticMarkup(<ItemIcon itemKey="fluid:water" size={16} />)).toContain('class="item-icon placeholder"');
+  });
+
+  it('switches to dark ink at luma 200 exactly', () => {
+    expect(placeholderInk([200, 200, 200])).toBe('dark');
+    expect(placeholderInk([199, 199, 199])).toBe('light');
+  });
+
+  it('puts dark ink on a light server colour, and drops the placeholder class once the image shows', () => {
+    const desc: IconDescriptor = { key: 'fluid:snow', source: 'fallback', fallbackColor: [255, 255, 255], layers: [] };
+    vi.mocked(useItemIcon).mockReturnValueOnce({ desc, url: null });
+    const placeholder = renderToStaticMarkup(<ItemIcon itemKey="fluid:snow" size={16} />);
+    expect(placeholder).toContain('class="item-icon placeholder ink-dark"');
+    expect(placeholder).toContain('background:rgb(255, 255, 255)');
+
+    vi.mocked(useItemIcon).mockReturnValueOnce({ desc: { ...desc, source: 'nei' }, url: 'blob:icon-1' });
+    const shown = renderToStaticMarkup(<ItemIcon itemKey="fluid:snow" size={16} />);
+    expect(shown).toContain('class="item-icon"');
+    expect(shown).toContain('src="blob:icon-1"');
+    expect(shown).not.toContain('placeholder');
+    expect(shown).not.toContain('background');
   });
 });
 
