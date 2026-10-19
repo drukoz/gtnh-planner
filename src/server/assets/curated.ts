@@ -1,14 +1,22 @@
 // Curated face tables for blocks whose icons are chosen in client-only code, so a dedicated
 // server cannot report them (research §2.3, §5). Paths are relative to data/assets/; each face
 // lists candidates and the first extracted one wins (Task 10). A face may instead draw layers cut
-// out of a sheet (architecture §11.43 (b)), and a few items have an icon row of their own.
+// out of a sheet (architecture §11.43 (b)), a pipe has the crops of its model sheet the 3D view draws it with (§11.43
+// (c)), and a few items have an icon row of their own.
 import { FACES } from '../../shared/types/assets.ts';
 import type { Face, LayerRegion, Rect, Rgb } from '../../shared/types/assets.ts';
 
 /** One layer: the first extracted of `paths`, cut to `region`, in `tint` (else its block face's tint). */
 export interface CuratedLayer { paths: readonly string[]; region?: LayerRegion; tint?: Rgb }
-/** A face with `layers` draws them when every one resolves, else its `faces` candidates as without them. */
-export interface CuratedBlock { faces: Record<Face, readonly string[]>; tint?: Partial<Record<Face, Rgb>>; layers?: Partial<Record<Face, readonly CuratedLayer[]>> }
+/**
+ * A face with `layers` draws them when every one resolves, else its `faces` candidates as without them. A block the 3D
+ * view draws as a core with arms also has `pipe`: its core's, an arm's long faces' and an arm's tip's layers, cut out of
+ * its model sheet; its `faces` stay the whole sheet, which the Map and the item icons draw.
+ */
+export interface CuratedBlock {
+  faces: Record<Face, readonly string[]>; tint?: Partial<Record<Face, Rgb>>; layers?: Partial<Record<Face, readonly CuratedLayer[]>>;
+  pipe?: { core: readonly CuratedLayer[]; arm: readonly CuratedLayer[]; end: readonly CuratedLayer[] };
+}
 
 type FaceSpec = Partial<Record<Face, string | readonly string[]>>;
 
@@ -94,19 +102,50 @@ const CONDUITS: Record<string, string> = {
   liquid_stellar: 'liquidConduitStellarEnder',
   connector_extract: 'itemConduitInput', connector_insert: 'itemConduitOutput', connector_in_out: 'itemConduitInOut_Out',
 };
-const AE2_CABLES: Record<string, [string, string]> = {
-  glass: ['CableGlass', 'MECable'], covered: ['CableCovered', 'MECovered'], smart: ['CableSmart', 'MESmart'],
-  dense: ['CableDense', 'MEDense'], dense_covered: ['CableDenseCovered', 'MEDenseCovered'],
-};
+/**
+ * ProjectRed's pipe model on its 16 px sheet (`mrtjp.projectred.transportation.PipeModelGenerator`, javap of
+ * ProjRed-4.12.44-GTNH: `w = 0.25`): the centre's faces sample u 4–12, v 0–8; an arm's long faces u 0–4 along the arm,
+ * v 0–8 across; the arm's end cap u 8–16, v 8–16. The straight-run model (u 0–8, v 8–16) is not used: the planner draws
+ * a straight run as a core and two arms.
+ */
+const PR_PIPE_SHEET = 16;
+const PR_PIPE_CORE: Rect = [4, 0, 8, 8];
+const PR_PIPE_ARM: Rect = [0, 0, 4, 8];
+const PR_PIPE_END: Rect = [8, 8, 8, 8];
 
+/** ProjectRed pipe sheet `name` (`PIPES`). */
+function prPipeSheet(name: string): string {
+  return `${PR}/textures/blocks/mechanical/pipes/${name}.png`;
+}
+
+/** A ProjectRed pipe drawn from sheet `name`: the whole sheet on every face, and its model's crops as its pipe layers. */
+function prPipe(name: string): CuratedBlock {
+  const crop = (src: Rect): CuratedLayer[] => [{ paths: [prPipeSheet(name)], region: { sheet: PR_PIPE_SHEET, src: [...src] } }];
+  return { ...all(PR, `mechanical/pipes/${name}`), pipe: { core: crop(PR_PIPE_CORE), arm: crop(PR_PIPE_ARM), end: crop(PR_PIPE_END) } };
+}
+
+/**
+ * AE2's cables by centre kind: the part's sheet, the family of its coloured block textures, and the middle square of a
+ * 16 px sheet its faces show. AE2 takes a face's UVs from the part's bounds (the `setBounds` constants of `PartCable`,
+ * `PartCableCovered`, `PartCableSmart` and `PartDenseCable` `renderStatic`, javap of appliedenergistics2-rv3-beta-1073-GTNH):
+ * glass 6–10, covered and smart 5–11, dense 3–13.
+ */
+const AE2_CABLES: Record<string, [string, string, Rect]> = {
+  glass: ['CableGlass', 'MECable', [6, 6, 4, 4]], covered: ['CableCovered', 'MECovered', [5, 5, 6, 6]], smart: ['CableSmart', 'MESmart', [5, 5, 6, 6]],
+  dense: ['CableDense', 'MEDense', [3, 3, 10, 10]], dense_covered: ['CableDenseCovered', 'MEDenseCovered', [3, 3, 10, 10]],
+};
+const AE2_SHEET = 16;
+
+/** An AE2 cable: its candidates on every face, and the same middle square of them on its core, an arm and an arm's tip. */
 function ae2Cable(center: string): CuratedBlock | null {
   const c = Object.hasOwn(AE2_CABLES, center) ? AE2_CABLES[center] : undefined;
   if (!c) return null;
-  const [part, family] = c;
+  const [part, family, middle] = c;
   const list = [`${AE}/textures/items/ItemPart.${part}.png`, `${AE}/textures/blocks/ItemPart.${part}.png`, `${AE}/textures/blocks/${family}_Grey.png`];
   const faces = {} as Record<Face, readonly string[]>;
   for (const f of FACES) faces[f] = list;
-  return { faces };
+  const crop = (): CuratedLayer[] => [{ paths: list, region: { sheet: AE2_SHEET, src: [...middle] } }];
+  return { faces, pipe: { core: crop(), arm: crop(), end: crop() } };
 }
 
 function drawers(w: string, n: number): CuratedBlock {
@@ -129,7 +168,7 @@ const TABLE: Record<string, (meta: number) => CuratedBlock | null> = {
     const t = CHEST_TYPES[m] ?? 'iron';
     return chest(ironChestSheet(t), blocks('ironchest', { north: `${t}_front`, up: `${t}_top`, down: `${t}_top` }, `${t}_side`));
   },
-  'ForgeMultipart:block': () => all(PR, 'mechanical/pipes/basic'),
+  'ForgeMultipart:block': () => prPipe('basic'),
   'EnderIO:blockConduitBundle': () => all(EIO, 'conduitConnector'),
   'appliedenergistics2:tile.BlockController': () => all(AE, ['BlockControllerPowered', 'BlockController']),
   'appliedenergistics2:tile.BlockDrive': () => blocks(AE, { north: 'BlockDriveFront', up: 'BlockDrive', down: 'BlockDriveBottom' }, 'BlockDriveSide'),
@@ -374,7 +413,7 @@ function pseudo(id: string): CuratedBlock | null {
   if (id.startsWith('fmp:')) {
     const k = id.slice(4);
     const x = Object.hasOwn(PIPES, k) ? PIPES[k] : undefined;
-    return x ? all(PR, `mechanical/pipes/${x}`) : null;
+    return x ? prPipe(x) : null;
   }
   if (id.startsWith('conduit:')) {
     const k = id.slice(8);
@@ -425,7 +464,7 @@ function partIcon(meta: number): CuratedLayer | null {
 /** A pipe item: the centre face of its pipe model's sheet. */
 function pipeIcon(meta: number): CuratedLayer | null {
   const pipe = PIPE_FILES[meta];
-  return pipe === undefined ? null : { paths: [`${PR}/textures/blocks/mechanical/pipes/${pipe}.png`], region: { sheet: 16, src: [4, 0, 8, 8] } };
+  return pipe === undefined ? null : { paths: [prPipeSheet(pipe)], region: { sheet: PR_PIPE_SHEET, src: [...PR_PIPE_CORE] } };
 }
 
 /** Item `id`'s curated icon at `meta`; null for an item or meta the table does not know (only own keys count). */
@@ -438,17 +477,19 @@ export function curatedItemIds(): string[] {
   return Object.keys(ITEMS);
 }
 
-/** Every candidate path in the tables (faces, layers and items), over every meta value that changes the answer. */
+/** Every candidate path in the tables (faces, layers, pipe crops and items), over every meta value that changes the answer. */
 export function curatedPaths(): string[] {
   const out = new Set<string>();
   const add = (paths: readonly string[]): void => { for (const p of paths) out.add(p); };
   for (const id of curatedIds()) {
     for (let meta = 0; meta < 16; meta++) {
       const b = curatedBlock(id, meta);
-      if (b) for (const f of FACES) {
+      if (!b) continue;
+      for (const f of FACES) {
         add(b.faces[f]);
         for (const layer of b.layers?.[f] ?? []) add(layer.paths);
       }
+      for (const layer of [...b.pipe?.core ?? [], ...b.pipe?.arm ?? [], ...b.pipe?.end ?? []]) add(layer.paths);
     }
   }
   for (const id of curatedItemIds()) for (let meta = 0; meta < ITEMS[id]!.metas; meta++) add(curatedItem(id, meta)?.paths ?? []);

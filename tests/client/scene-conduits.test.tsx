@@ -29,7 +29,12 @@ describe('conduits in the 3D view', () => {
   });
   it('draws each conduit of a bundle side by side, with connector arms on its configured faces', () => {
     const scene = buildScene(bundleLayout, faces, new Map(), new Map());
-    const texture = (tile: number) => (JSON.parse(scene.tiles[tile]!.key) as Array<{ path: string }>)[0]!.path.replace(/^.*\/(\w+)\.png$/, '$1');
+    const UNDER = 'under:255,179,0|';   // every conduit tile is drawn over the pipe role's colour (plan 16 Task 9)
+    const texture = (tile: number) => {
+      const { key } = scene.tiles[tile]!;
+      expect(key.startsWith(UNDER)).toBe(true);
+      return (JSON.parse(key.slice(UNDER.length)) as Array<{ path: string }>)[0]!.path.replace(/^.*\/(\w+)\.png$/, '$1');
+    };
     expect(scene.instances.map((i) => [i.shape, i.side, i.offset, texture(i.tiles[2])])).toEqual([
       ['core', -1, [0, -0.1875, 0], 'itemConduit'], ['arm', 2, [0, -0.1875, 0], 'itemConduitInOut_Out'], ['arm', 5, [0, -0.1875, 0], 'itemConduit'],
       ['core', -1, [0, 0.1875, 0], 'liquidConduitEnder'], ['arm', 1, [0, 0.1875, 0], 'itemConduitInput'], ['arm', 4, [0, 0.1875, 0], 'liquidConduitEnder']]);

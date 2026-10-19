@@ -7,6 +7,8 @@ const MC = 'minecraft/textures/blocks/';
 const BOP = 'biomesoplenty/textures/blocks/';
 const CHESTS = 'minecraft/textures/entity/chest/';
 const MODELS = 'ironchest/textures/model/';
+const PR = 'projectred/textures/blocks/mechanical/pipes/';
+const AE = 'appliedenergistics2/textures/';
 /** Every face with these candidates (none by default), and every face in one tint. */
 const all = (...paths: string[]) => Object.fromEntries(FACES.map((f) => [f, paths]));
 const allTint = (rgb: Rgb) => Object.fromEntries(FACES.map((f) => [f, rgb]));
@@ -169,12 +171,43 @@ describe('curated block tables', () => {
     }
   });
 
+  it("cuts a pipe's core, arm and end out of its model sheet", () => {
+    const pr = (n: string, src: Rect) => [{ paths: [PR + n + '.png'], region: { sheet: 16, src } }];
+    expect(curatedBlock('fmp:pr_rbasic', 0)!.pipe).toEqual({ core: pr('routedjunc', [4, 0, 8, 8]), arm: pr('routedjunc', [0, 0, 4, 8]), end: pr('routedjunc', [8, 8, 8, 8]) });
+    expect(curatedBlock('ForgeMultipart:block', 0)!.pipe!.core).toEqual(pr('basic', [4, 0, 8, 8]));
+    const glass = curatedBlock('ae2cable:glass', 0)!.pipe!;
+    expect(glass.core).toEqual([{ paths: [AE + 'items/ItemPart.CableGlass.png', AE + 'blocks/ItemPart.CableGlass.png', AE + 'blocks/MECable_Grey.png'], region: { sheet: 16, src: [6, 6, 4, 4] } }]);
+    expect(glass.arm).toEqual(glass.core);
+    expect(glass.end).toEqual(glass.core);
+    expect(curatedBlock('ae2cable:dense', 0)!.pipe!.core[0]!.region).toEqual({ sheet: 16, src: [3, 3, 10, 10] });
+    expect(curatedBlock('ae2cable:smart', 0)!.pipe!.core[0]!.region!.src).toEqual([5, 5, 6, 6]);
+    expect(curatedBlock('appliedenergistics2:tile.BlockCableBus', 0)!.pipe!.core[0]!.region!.src).toEqual([6, 6, 4, 4]);
+    expect(curatedBlock('JABBA:barrel', 0)!.pipe).toBeUndefined();
+  });
+
   it('draws the ender fluid conduits and the connector of each conduit mode', () => {
     expect(curatedBlock('conduit:liquid_ender', 0)!.faces.north).toEqual(['enderio/textures/blocks/liquidConduitEnder.png']);
     expect(curatedBlock('conduit:liquid_stellar', 0)!.faces.up).toEqual(['enderio/textures/blocks/liquidConduitStellarEnder.png']);
     expect(['connector_extract', 'connector_insert', 'connector_in_out'].map((k) => curatedBlock(`conduit:${k}`, 0)!.faces.north)).toEqual([
       ['enderio/textures/blocks/itemConduitInput.png'], ['enderio/textures/blocks/itemConduitOutput.png'], ['enderio/textures/blocks/itemConduitInOut_Out.png']]);
     expect(curatedIds()).toEqual(expect.arrayContaining(['conduit:liquid_crystalline', 'conduit:liquid_pink_slime', 'conduit:liquid_melodic']));
+  });
+
+  // ---- after the plan's own tests: the edges the plan leaves open ----
+
+  it("gives every ProjectRed pipe its own sheet's crops and keeps its whole sheet as its faces", () => {
+    const pipes = curatedIds().filter((id) => id.startsWith('fmp:')).map((id) => curatedBlock(id, 0)!);
+    for (const b of pipes) expect([b.pipe!.core, b.pipe!.arm, b.pipe!.end].map((layers) => layers.map((l) => l.paths))).toEqual(Array(3).fill([b.faces.north]));
+    expect(pipes.map((b) => b.faces)).toEqual(PIPE_FILES.map((name) => all(PR + name + '.png')));   // the Map and the item icons keep the whole sheet
+    expect(curatedBlock('ForgeMultipart:block', 0)!.pipe!.end).toEqual([{ paths: [PR + 'basic.png'], region: { sheet: 16, src: [8, 8, 8, 8] } }]);
+  });
+
+  it("crops every AE2 cable to its middle square, the same on core, arm and end, and gives conduits no pipe crops", () => {
+    const src = (center: string) => { const p = curatedBlock(`ae2cable:${center}`, 0)!.pipe!; return [p.core, p.arm, p.end].map((l) => l[0]!.region!.src); };
+    expect(['glass', 'covered', 'smart', 'dense', 'dense_covered'].map(src)).toEqual([[6, 6, 4, 4], [5, 5, 6, 6], [5, 5, 6, 6], [3, 3, 10, 10], [3, 3, 10, 10]]
+      .map((rect) => Array(3).fill(rect)));
+    expect(curatedBlock('ae2cable:dense_covered', 0)!.pipe!.arm[0]!.paths).toEqual(curatedBlock('ae2cable:dense_covered', 0)!.faces.north);
+    expect(curatedBlock('conduit:item', 0)!.pipe).toBeUndefined();
   });
 });
 

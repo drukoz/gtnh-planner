@@ -332,6 +332,25 @@ describe('curated layers and items', () => {
     expect(gold!.faces.down).toEqual([{ path: GOLD + 'top.png' }]);
     expect(gold!.faces.east).toEqual([{ path: GOLD + 'side.png' }]);
   });
+
+  it("gives a curated pipe its core, arm and end crops when its sheet is extracted, and keeps its faces", () => {
+    const crop = (src: Rect) => [{ path: PIPE, region: { sheet: 16, src } }];
+    const [pipe] = resolveBlocks(only({ [PIPE]: {} }), [{ id: 'fmp:pr_rbasic', meta: 0 }]);
+    expect(pipe!.pipe).toEqual({ core: crop([4, 0, 8, 8]), arm: crop([0, 0, 4, 8]), end: crop([8, 8, 8, 8]) });
+    expect(pipe!.faces.north).toEqual([{ path: PIPE }]);                                         // the Map and the item icons keep the whole sheet
+    expect(resolveBlocks(only({}), [{ id: 'fmp:pr_rbasic', meta: 0 }])[0]).not.toHaveProperty('pipe');
+  });
+
+  // ---- after the plan's own tests: the edges the plan leaves open ----
+
+  it("crops an AE2 cable's first extracted candidate, turns no crop with the facing, and draws no pipe on a block that is not one", () => {
+    const GREY = 'appliedenergistics2/textures/blocks/MECable_Grey.png';
+    const middle = [{ path: GREY, region: { sheet: 16, src: [6, 6, 4, 4] } }];
+    const [cable] = resolveBlocks(only({ [GREY]: {} }), [{ id: 'ae2cable:glass', meta: 0 }], 1);
+    expect(cable!.pipe).toEqual({ core: middle, arm: middle, end: middle });
+    expect(cable!.pipe!.arm).not.toBe(cable!.pipe!.core);                                        // fresh layers, never one shared list
+    expect(resolveBlocks(only({ 'jabba/textures/blocks/barrel_side_0.png': {} }), [{ id: 'JABBA:barrel', meta: 0 }])[0]).not.toHaveProperty('pipe');
+  });
 });
 
 describe('GT material templates and pipe sides', () => {

@@ -269,7 +269,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('real coverage', { timeout: 300_
       'IC2:itemPartCircuit@0': '637 blocks: unresolved 4, GT pipes and insulated cables with pipe 0 of 427, other pipe MTEs 0; RC5 39, vertical 18',
       'fluid:ethylene': '909 blocks: unresolved 0, GT pipes and insulated cables with pipe 0 of 602, other pipe MTEs 0; RC5 0, vertical 37',
     };
-    show('layout blocks (RC5 and vertical facings printed only: Tasks 9 and 10)', TARGETS.flatMap(([target, logistics]) => {
+    show('layout blocks (vertical facings printed only: Task 10)', TARGETS.flatMap(([target, logistics]) => {
       const unresolved = blocksOf(target).filter((b) => !facesOf(b).resolved).map((b) => blockKey(b.block));
       const pipes = gtPipes(target);
       return [
@@ -284,6 +284,9 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('real coverage', { timeout: 300_
     expect(TARGETS.map(([t]) => withPipe(gtPipes(t)).length)).toEqual(TARGETS.map(([t]) => gtPipes(t).length));
     expect(TARGETS.map(([t]) => withPipe(otherPipeMtes(t)).length)).toEqual([0, 0]);
     expect(gtPipes('fluid:ethylene').length).toBeGreaterThan(0);
+    // rc5(t): the ProjectRed pipes, AE2 cables and ForgeMultipart ghosts, each drawn from its model sheet's crops (39 and 0 at 340dad8)
+    expect(TARGETS.map(([t]) => withPipe(rc5(t)).length)).toEqual(TARGETS.map(([t]) => rc5(t).length));
+    expect(rc5('IC2:itemPartCircuit@0').length).toBeGreaterThan(0);
   });
 
   it("the user's reports and the named rules", () => {

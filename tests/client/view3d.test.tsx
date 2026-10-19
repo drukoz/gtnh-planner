@@ -2,12 +2,13 @@ import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { View3DShell, type View3DShellProps } from '../../src/client/views/View3D.tsx';
 import { PROJECT_TABS } from '../../src/client/views/project-tabs.ts';
-import { VERTEX_SHADER, FRAGMENT_SHADER } from '../../src/client/three/renderer.ts';
+import { VERTEX_SHADER, FRAGMENT_SHADER, shapeGeometry } from '../../src/client/three/renderer.ts';
 import { loadSceneInputs, tilesFor } from '../../src/client/three/load-textures.ts';
-import { buildScene, blockKey } from '../../src/client/three/scene-data.ts';
-import { solidTile } from '../../src/client/three/textures.ts';
-import { sampleLayout, sampleFaces, sampleIcons, sampleCovers } from './layout-fixture.ts';
+import { buildScene, blockKey, type SceneData } from '../../src/client/three/scene-data.ts';
+import { solidTile, TILE } from '../../src/client/three/textures.ts';
+import { sampleLayout, sampleFaces, sampleIcons, sampleCovers, L } from './layout-fixture.ts';
 // for the tests after the plan's own
+import { BoxGeometry, type BufferGeometry } from 'three';
 import { webgl2Available } from '../../src/client/views/View3D.tsx';
 import type { TextureDeps } from '../../src/client/three/load-textures.ts';
 import type { BlockFaces, TextureLayer } from '../../src/shared/types/assets.ts';
@@ -138,5 +139,50 @@ describe('3D tab: the rules in detail', () => {
     const asked: TextureLayer[] = [];
     await tilesFor(strip, { ...noTextures, image: async (layer) => { asked.push(layer); return { data: solidTile([200, 100, 50]) }; } });
     expect(asked).toEqual([crop(0), crop(2)]);
+  });
+
+  // Plan 16 Task 9 (architecture §11.43 (c)): pipe tiles over their role's colour, and u along an arm.
+  it('draws a tile over its under colour, and the plain colour when nothing loads', async () => {
+    const scene: SceneData = { tiles: [{ key: 'fallback', layers: [], color: [128, 128, 128] }, { key: 'k', layers: [L('x')], color: [1, 2, 3], under: [10, 20, 30] }], instances: [], size: [1, 1, 1] };
+    const dot = new Uint8ClampedArray(TILE * TILE * 4);
+    dot.set([200, 0, 0, 255], 0);
+    const [, drawn] = await tilesFor(scene, { ...noTextures, image: async () => ({ data: dot }) });
+    expect([...drawn!.slice(0, 8)]).toEqual([200, 0, 0, 255, 10, 20, 30, 255]);
+    const [, none] = await tilesFor(scene, { ...noTextures, image: async () => null });
+    expect(none).toEqual(solidTile([1, 2, 3]));
+  });
+
+  it("runs u along an arm on all four of its long faces", () => {
+    const g = shapeGeometry('arm');
+    const pos = g.getAttribute('position'), uv = g.getAttribute('uv');
+    for (const face of [0, 1, 2, 3]) {                     // +x, −x, +y, −y: the long faces of an arm built along −z
+      const uAtZ = new Map<number, number>();
+      for (let i = face * 4; i < face * 4 + 4; i++) {
+        const z = pos.getZ(i), u = uv.getX(i);
+        if (uAtZ.has(z)) expect(u).toBe(uAtZ.get(z)); else uAtZ.set(z, u);
+      }
+      expect(new Set(uAtZ.values()).size).toBe(2);
+    }
+  });
+
+  // ---- after the plan's own tests: the edges the plan leaves open ----
+
+  it('draws the layers that load over the under colour, and the plain colour for an image of another size', async () => {
+    const scene: SceneData = { tiles: [{ key: 'fallback', layers: [], color: [128, 128, 128] }, { key: 'k', layers: [L('a'), L('b')], color: [1, 2, 3], under: [10, 20, 30] }], instances: [], size: [1, 1, 1] };
+    const dot = new Uint8ClampedArray(TILE * TILE * 4);
+    dot.set([200, 0, 0, 255], 0);
+    const [, half] = await tilesFor(scene, { ...noTextures, image: async (l) => (l.path.endsWith('/a.png') ? { data: dot } : null) });
+    expect([...half!.slice(0, 8)]).toEqual([200, 0, 0, 255, 10, 20, 30, 255]);
+    const [, odd] = await tilesFor(scene, { ...noTextures, image: async () => ({ data: new Uint8ClampedArray(4) }) });
+    expect(odd).toEqual(solidTile([1, 2, 3]));
+  });
+
+  it("keeps three's UVs on the cube, the core, the plate and an arm's ±x faces and ends", () => {
+    const uvs = (g: BufferGeometry): number[] => [...g.getAttribute('uv').array];
+    const box = uvs(new BoxGeometry(1, 1, 1));               // 2 numbers per vertex, 4 vertices per face: faces 0–1 are 0–15, faces 4–5 are 32–47
+    for (const shape of ['cube', 'core', 'plate'] as const) expect(uvs(shapeGeometry(shape))).toEqual(box);
+    const arm = uvs(shapeGeometry('arm'));
+    expect([...arm.slice(0, 16), ...arm.slice(32)]).toEqual([...box.slice(0, 16), ...box.slice(32)]);
+    expect(arm.slice(16, 32)).not.toEqual(box.slice(16, 32));
   });
 });

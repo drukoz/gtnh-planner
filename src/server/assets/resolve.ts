@@ -9,7 +9,7 @@ import {
   type BlockFaces, type CoverLayers, type Face, type IconDescriptor, type PipeLayers, type Rgb, type TextureLayer,
 } from '../../shared/types/assets.ts';
 import type { BlockRef, Pack } from '../../shared/types/pack.ts';
-import { curatedBlock, curatedItem, type CuratedLayer } from './curated.ts';
+import { curatedBlock, curatedItem, type CuratedBlock, type CuratedLayer } from './curated.ts';
 import {
   coverLayers, facesFrom, gtBlockFaces, gtFluidIcon, gtItemIcon, gtMachineFaces, gtMaterialBlockFaces, gtOreFaces, gtTemplateIcon, type CopyResolver,
 } from './gt-faces.ts';
@@ -32,8 +32,11 @@ const MAX_COPY_DEPTH = 4;
 const FLUID_SOURCE_META = 0;
 
 type Faces = Record<Face, TextureLayer[]>;
-/** Canonical faces and where they came from: GT's texture dump, or the jar files (curated table, texture name, file name). */
-interface FoundFaces { faces: Faces; from: 'gt' | 'jar' }
+/**
+ * Canonical faces and where they came from: GT's texture dump, or the jar files (curated table, texture name, file
+ * name); a curated pipe's crops of its model sheet too.
+ */
+interface FoundFaces { faces: Faces; from: 'gt' | 'jar'; pipe?: PipeLayers }
 /** An icon's layers and where they came from. */
 interface FoundIcon { layers: TextureLayer[]; source: 'nei' | 'gt' | 'jar' }
 interface ItemRef { id: string; meta: number }
@@ -108,7 +111,10 @@ function blockFaces(src: AssetSources, id: string, meta: number, copy: CopyResol
   return curatedFaces(index, id, meta) ?? textureNameBlockFaces(src, id, meta) ?? fileNameBlockFaces(src, id, meta);
 }
 
-/** The curated table's faces: a face's `layers` when every one is extracted, else the first extracted of its candidates. */
+/**
+ * The curated table's faces: a face's `layers` when every one is extracted, else the first extracted of its candidates;
+ * and a pipe's crops when every layer of its core, arm and end is extracted.
+ */
 function curatedFaces(index: AssetIndex, id: string, meta: number): FoundFaces | null {
   const curated = curatedBlock(id, meta);
   if (curated === null) return null;
@@ -123,7 +129,17 @@ function curatedFaces(index: AssetIndex, id: string, meta: number): FoundFaces |
     const layer = index.firstLayer(curated.faces[face], { tint });
     faces[face] = layer === null ? [] : [layer];
   }
-  return { faces, from: 'jar' };
+  const pipe = curatedPipe(index, curated.pipe);
+  return pipe === null ? { faces, from: 'jar' } : { faces, from: 'jar', pipe };
+}
+
+/** A curated pipe's core, arm and end, each layer cut to its region; null without them or when one layer is missing. */
+function curatedPipe(index: AssetIndex, pipe: CuratedBlock['pipe']): PipeLayers | null {
+  if (pipe === undefined) return null;
+  const core = curatedLayers(index, pipe.core, undefined);
+  const arm = curatedLayers(index, pipe.arm, undefined);
+  const end = curatedLayers(index, pipe.end, undefined);
+  return core === null || arm === null || end === null ? null : { core, arm, end };
 }
 
 /** Every curated layer of a face, each cut to its region and in its own tint (else the face's); null without layers or when one is missing. */
@@ -174,8 +190,10 @@ export function blockFallbackColor(ref: BlockRef, pack: PackView | null): Rgb {
 
 /**
  * Each block's faces turned so its front points to `facing` (ForgeDirection index, default north); same order as
- * `refs`. A GT pipe also gets `pipe`: its core and arms drawn as its side with nothing connected, its arm tips as its
- * (connected) north face.
+ * `refs`. A block drawn as a core with arms also gets `pipe` (architecture §11.43 (c)): a curated pipe (ProjectRed's,
+ * AE2's) the crops of its model sheet when every one is extracted; else a GT pipe its core and arms drawn as its side
+ * with nothing connected, its arm tips as its (connected) north face. The faces stay the whole texture, which the Map
+ * and the item icons draw.
  */
 export function resolveBlocks(src: AssetSources, refs: readonly BlockRef[], facing?: number): BlockFaces[] {
   return refs.map((ref) => {
@@ -188,7 +206,7 @@ export function resolveBlocks(src: AssetSources, refs: readonly BlockRef[], faci
       fallbackColor: blockFallbackColor(ref, src.pack),
       resolved: FACES.every((face) => faces[face].length > 0),
     };
-    const pipe = pipeLayers(src, ref, faces, copy);
+    const pipe = found?.pipe ?? pipeLayers(src, ref, faces, copy);
     if (pipe !== null) out.pipe = pipe;
     return out;
   });

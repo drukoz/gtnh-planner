@@ -2,16 +2,17 @@
 // layout as instances of four shapes, the face textures they share as tile sources for one array texture, which
 // instances the layer slider and the ghost and hookup toggles show, the side list of blocks to place, and the texts
 // for hover and click. An EnderIO conduit bundle (architecture "EnderIO conduits, granted change requests (add-on
-// 11)") draws each of its conduits side by side, with a connector arm on every face that is set. Pure TypeScript — no
-// DOM, no three.js — so it is tested without a browser; the viewer turns these lists into meshes and the loader turns
-// the tile sources into pixels.
+// 11)") draws each of its conduits side by side, with a connector arm on every face that is set. A pipe with pipe
+// layers (architecture §11.43 (c)) draws its core, arms and arm tips from them, over its role's colour. Pure
+// TypeScript — no DOM, no three.js — so it is tested without a browser; the viewer turns these lists into meshes and
+// the loader turns the tile sources into pixels.
 
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import { TIER_NAMES } from '../../shared/gt/tiers.ts';
 import { conduitLines, configuredLines } from '../../shared/layout/configure-text.ts';
 import { CONDUIT_NAMES } from '../../shared/layout/enderio.ts';
 import { fmtInt, fmtRate } from '../../shared/layout/format.ts';
-import { SIDE_NAMES, posKey, type Vec3 } from '../../shared/layout/geometry.ts';
+import { SIDE_NAMES, posKey, step, type Vec3 } from '../../shared/layout/geometry.ts';
 import {
   FACES, KIND_COLORS, conduitBlockRef, rotateFaces,
   type BlockFaces, type CoverLayers, type Face, type IconDescriptor, type Rgb, type TextureLayer,
@@ -68,11 +69,16 @@ export function frontOf(b: Pick<Layout['blocks'][number], 'facing' | 'mainFacing
 
 /** One layer of the array texture: the texture layers to blend, or a plain colour when there are none. */
 export interface TileSource {
-  /** `fallback`, `color:<r>,<g>,<b>` for a plain colour, else the JSON of `layers`: tiles with the same key are one tile. */
+  /**
+   * `fallback`, `color:<r>,<g>,<b>` for a plain colour, `under:<r>,<g>,<b>|` and the JSON of `layers` for layers drawn
+   * over a plain colour, else the JSON of `layers`: tiles with the same key are one tile.
+   */
   key: string;
   layers: TextureLayer[];
   /** The plain colour this tile shows when no layer can be drawn (the first colour any instance gave it). */
   color: Rgb;
+  /** The plain colour the layers are drawn over, so none of the tile's pixels is transparent; only on a tile with layers. */
+  under?: Rgb;
 }
 
 /** One drawn shape of one block. */
@@ -137,27 +143,44 @@ function onAllSides(tile: number): SceneInstance['tiles'] {
  * a `core` and an `arm` per side (ascending) that is one of its links (all faces the conduit's `north` texture) or one
  * of its faces that is not Disabled (the `north` texture of `conduit:connector_<mode>`); in a bundle of n ≥ 2 every
  * shape of conduit i carries `offset` [0, (i − (n − 1) / 2) × 6/16, 0], so the conduits sit side by side. Any other
- * cable, pipe or chip pipe is a `core` plus an `arm` per connected side (ascending), all faces its `north` texture;
- * any other block is one `cube` whose world side shows the canonical face its front (`frontOf`) puts there. After a
- * block's own shapes come its covers, one `plate` per cover in `covers` order, on the cover's face and carrying the cover's
- * in-world overlay — else its item icon, else a plain colour — on all six tiles. A face with no layers, or a block
- * with no faces, is a plain colour, and a tile is shared by everything that draws the same layers. Every tile's
- * `color` is what it falls back to: the block's own fallback colour (a conduit's or connector's own), the cover
- * item's, or the role's.
+ * cable, pipe or chip pipe is a `core` plus an `arm` per connected side (ascending), and so is a ghost whose faces carry
+ * `pipe`, its connected sides those whose neighbour is one of the line's cables or pipes (never a ghost): with `pipe`
+ * (architecture §11.43 (c)) the core shows `pipe.core` on all six sides and an arm `pipe.end` on the side it points to,
+ * its tip, and `pipe.arm` on the other five; without it every side is the `north` texture. The textured tiles of these
+ * cores and arms, a conduit's included, are drawn over the block role's colour (`under`; a ghost's is the ghost grey),
+ * so no pixel of a model sheet is see-through. Any other block is one `cube` whose world side shows the canonical face
+ * its front (`frontOf`) puts there. After a block's own shapes come its covers, one `plate` per cover in `covers`
+ * order, on the cover's face and carrying the cover's in-world overlay — else its item icon, else a plain colour — on
+ * all six tiles. A face with no layers, or a block with no faces, is a plain colour, and a tile is shared by
+ * everything that draws the same layers over the same colour. Every tile's `color` is what it falls back to: the
+ * block's own fallback colour (a conduit's or connector's own), the cover item's, or the role's.
  */
 export function buildScene(
   layout: Layout, faces: ReadonlyMap<string, BlockFaces>, icons: ReadonlyMap<StuffKey, IconDescriptor>, covers: ReadonlyMap<StuffKey, CoverLayers>,
 ): SceneData {
   const tiles: TileSource[] = [{ key: FALLBACK_KEY, layers: [], color: [...FALLBACK_COLOR] }];
   const tileOf = new Map<string, number>([[FALLBACK_KEY, 0]]);
-  /** The tile for `layers`, or for the plain `color` when there are none; the colour of the first request for a tile stays. */
-  const tile = (layers: readonly TextureLayer[], color: Rgb): number => {
-    const key = layers.length === 0 ? `color:${color[0]},${color[1]},${color[2]}` : JSON.stringify(layers);
+  /**
+   * The tile for `layers`, drawn over the plain `under` when it is given, or for the plain `color` when there are no
+   * layers; the colour of the first request for a tile stays.
+   */
+  const tile = (layers: readonly TextureLayer[], color: Rgb, under?: Rgb): number => {
+    const over = layers.length === 0 ? undefined : under;   // a plain colour is never drawn over another
+    const key = layers.length === 0 ? `color:${color[0]},${color[1]},${color[2]}`
+      : over === undefined ? JSON.stringify(layers) : `under:${over[0]},${over[1]},${over[2]}|${JSON.stringify(layers)}`;
     const known = tileOf.get(key);
     if (known !== undefined) return known;
-    tiles.push({ key, layers: [...layers], color: [...color] });
+    tiles.push({ key, layers: [...layers], color: [...color], ...(over === undefined ? {} : { under: [...over] }) });
     tileOf.set(key, tiles.length - 1);
     return tiles.length - 1;
+  };
+  /** The cells of the line's cables, pipes and chip pipes, which a ghost pipe reaches its arms toward. */
+  const pipeCells = new Set(layout.blocks.filter((b) => PIPE_ROLES.has(b.role)).map((b) => posKey(b.pos)));
+  /** The connection bits of the sides of `at` (a world cell) whose neighbour is in `pipeCells`. */
+  const linksToPipes = (at: Vec3): number => {
+    let bits = 0;
+    for (let side = 0; side < 6; side++) if (pipeCells.has(posKey(step(at, side)))) bits |= 1 << side;
+    return bits;
   };
 
   const instances: SceneInstance[] = [];
@@ -170,13 +193,15 @@ export function buildScene(
     };
     const found = faces.get(blockKey(b.block));
     const faceTile = (face: Face): number => tile(found?.faces[face] ?? [], found?.fallbackColor ?? ROLE_FALLBACK[b.role]);
+    /** What the textured tiles of a core or an arm are drawn over. */
+    const under = ROLE_FALLBACK[b.role];
 
     if (b.conduits !== undefined && b.conduits.length > 0) {
       const n = b.conduits.length;
       /** The `north` face of a conduit's or connector's pseudo block, else the block role's plain colour. */
       const northTile = (ref: BlockRef): number => {
         const own = faces.get(blockKey(ref));
-        return tile(own?.faces.north ?? [], own?.fallbackColor ?? ROLE_FALLBACK[b.role]);
+        return tile(own?.faces.north ?? [], own?.fallbackColor ?? ROLE_FALLBACK[b.role], under);
       };
       b.conduits.forEach((conduit, i) => {
         const offset: Vec3 | undefined = n < 2 ? undefined : [0, (i - (n - 1) / 2) * BUNDLE_SPACING, 0];
@@ -188,11 +213,18 @@ export function buildScene(
           else if (conduit.connections & (1 << side)) add('arm', side, onAllSides(t), offset);
         }
       });
-    } else if (PIPE_ROLES.has(b.role)) {
-      const t = faceTile('north');
-      add('core', -1, onAllSides(t));
+    } else if (PIPE_ROLES.has(b.role) || (ghost && found?.pipe !== undefined)) {
+      const connections = ghost ? linksToPipes(b.pos) : b.connections ?? 0;
+      const north = found?.faces.north ?? [];
+      const layers = found?.pipe ?? { core: north, arm: north, end: north };
+      const pipeTile = (list: readonly TextureLayer[]): number => tile(list, found?.fallbackColor ?? ROLE_FALLBACK[b.role], under);
+      const core = pipeTile(layers.core), arm = pipeTile(layers.arm), end = pipeTile(layers.end);
+      add('core', -1, onAllSides(core));
       for (let side = 0; side < 6; side++) {
-        if ((b.connections ?? 0) & (1 << side)) add('arm', side, onAllSides(t));
+        if ((connections & (1 << side)) === 0) continue;
+        const sides = onAllSides(arm);
+        sides[side] = end;   // the arm's tip, on the side it points to
+        add('arm', side, sides);
       }
     } else {
       const at = (side: number): number => faceTile(canonicalFaceFor(frontOf(b), side));
