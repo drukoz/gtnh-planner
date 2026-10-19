@@ -25,14 +25,15 @@ test('smart upload of the sample world sends only trimmed regions; scan, pick th
   await page.setInputFiles('[data-testid=world-folder-input]', join(tmp, 'World'));
   await expect(page.getByTestId('smart-area')).toHaveCount(2);      // the Overworld base chunks and the Nether chunk; DIM 7 was never lived in
   await expect(page.getByTestId('smart-total')).toContainText('KB');
-  // A server that already holds a done scan (a repeated run) would pass the first-row check before this upload starts,
-  // so wait for the new row (newest first) before asking that it is done.
+  // Other specs upload scans to this server at the same time (layout.spec.ts), so rows are not counted: the page's own
+  // upload answers with its scan id, and that scan is the one waited for and picked below.
   const rows = page.getByTestId('scan-row');
   await expect(page.getByText('No scans yet').or(rows.first())).toBeVisible();
-  const before = await rows.count();
+  const completed = page.waitForResponse((r) => r.request().method() === 'POST' && /\/api\/world\/uploads\/[^/]+\/complete$/.test(r.url()));
   await page.getByTestId('upload-button').click();
-  await expect(rows).toHaveCount(before + 1);
-  await expect(page.getByTestId('scan-row').first()).toHaveAttribute('data-state', 'done', { timeout: 60_000 });
+  const { scanId } = (await (await completed).json()) as { scanId: string };
+  await expect.poll(async () => (await (await page.request.get(`/api/world/scans/${scanId}/status`)).json()).state, { timeout: 60_000 }).toBe('done');
+  await expect(page.locator('[data-testid=scan-row][data-state=done]').first()).toBeVisible();
   expect([...sent].sort()).toEqual(['DIM-1/region/r.-1.-1.mca', 'level.dat', 'region/r.0.0.mca']);   // no playerdata, no claims, no DIM7
 
   // The base-centre column's surface tile is held back until the pointer has rested there (architecture §11, Map hover).
@@ -45,7 +46,7 @@ test('smart upload of the sample world sends only trimmed regions; scan, pick th
   await page.getByText('Map', { exact: true }).first().click();     // the first project tab (Task 16)
   // exact: the settings panel's tier select also has "world scan" in its label (its "From world (LV until a world scan
   // exists)" option), and a substring match would pick that one before the Map tab has rendered, or both after
-  await page.getByLabel('World scan', { exact: true }).selectOption({ index: 1 });
+  await page.getByLabel('World scan', { exact: true }).selectOption(scanId);
   await page.getByLabel('Base').selectOption({ label: 'Overworld base (4, 5)' });   // the smart upload keeps claim files local, so the base has no team ("Alpha") name
   await page.getByRole('button', { name: 'Use this base' }).click();
 

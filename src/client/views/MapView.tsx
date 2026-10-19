@@ -232,13 +232,14 @@ class MapRenderer {
       ctx.lineWidth = 2;
       ctx.strokeStyle = 'rgba(0, 0, 0, 0.7)';
       ctx.stroke();
-      if (m.n === undefined) continue;
+      const text = m.text ?? (m.n === undefined ? undefined : String(m.n));
+      if (text === undefined) continue;
       // Dark digits with a light halo read on any marker colour.
       ctx.lineWidth = 3;
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
-      ctx.strokeText(String(m.n), x, y + 0.5);
+      ctx.strokeText(text, x, y + 0.5);
       ctx.fillStyle = '#111111';
-      ctx.fillText(String(m.n), x, y + 0.5);
+      ctx.fillText(text, x, y + 0.5);
     }
   }
 

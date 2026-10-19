@@ -142,7 +142,10 @@ public final class MachinesSection implements ExportSection {
             if (tier >= 0 && tier < GTValues.V.length) j.name("voltage").value(GTValues.V[tier]);
         }
         if (m instanceof MTEBasicMachine) j.name("amps").value(((MTEBasicMachine) m).mAmperage);
-        else if (m instanceof MTEBasicBatteryBuffer) j.name("amps").value(((MTEBasicBatteryBuffer) m).maxAmperesOut());
+        else if (m instanceof MTEBasicBatteryBuffer) {
+            MTEBasicBatteryBuffer b = (MTEBasicBatteryBuffer) m;
+            j.name("amps").value(BatteryBuffers.ampsOut(b.mInventory.length, b.maxAmperesOut()));
+        }
         if (maps != null && !maps.isEmpty()) {
             j.name("maps").beginArray();
             for (String map : maps) j.value(map);
@@ -238,7 +241,9 @@ public final class MachinesSection implements ExportSection {
             j.name("material").value(materialName(p.mMaterial));
             j.endObject();
         }
-        if (m instanceof MTEBasicBatteryBuffer) j.name("batterySlots").value(((MTEBasicBatteryBuffer) m).mBatteryCount);
+        // the slot count the constructor sized the inventory with (the base class's maxEUStore() is V × 64 × slots);
+        // mBatteryCount counts the batteries a placed buffer holds, 0 on a prototype
+        if (m instanceof MTEBasicBatteryBuffer) j.name("batterySlots").value(((MTEBasicBatteryBuffer) m).mInventory.length);
         if (m instanceof MTEBoilerSolar) j.name("steamPerSecondMax").value(((MTEBoilerSolar) m).getMaxOutputPerSecond());
         if (m instanceof MTESteamTurbine && steam != null) {
             MTESteamTurbine t = (MTESteamTurbine) m;
