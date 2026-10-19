@@ -1,11 +1,27 @@
 // GregTech's own textures (research §6.1-§6.2) read from the loaded dump: machine, casing, block and ore-block faces,
-// cover overlays, material and meta-item icons, and fluids. A face layer that copies another block is resolved by the
-// caller's `CopyResolver`, which owns the cycle guard (Task 10).
+// cover overlays, material and meta-item icons, fluids, and the material templates GT computes from material data
+// (frames, sheetmetal, storage blocks, metaitem.98/99 and BartWorks items, by the pack's `gt {prefix, material}`). A
+// face layer that copies another block is resolved by the caller's `CopyResolver`, which owns the cycle guard (Task 10).
 
-import { parseItemKey, type ItemKey } from '../../shared/keys.ts';
+import { isFluidKey, parseItemKey, type ItemKey } from '../../shared/keys.ts';
 import { FACES, type Face, type Rgb, type TextureLayer } from '../../shared/types/assets.ts';
-import type { AssetIndex } from './index.ts';
+import { iconDomain, type AssetIndex } from './index.ts';
+import type { PackView } from './resolve.ts';
 import { textureSetLayers, type DumpLayer, type FaceLayer, type ResolvedFaces, type TexturesDump } from './textures-dump.ts';
+
+const FRAMES = new Set(['gregtech:gt.blockframes', 'gregtech:bw.frames']);
+const SHEETMETAL = new Set(['gregtech:gt.sheetmetal', 'gregtech:bw.sheetmetal']);
+/** `BlockMetal`'s blocks of material (`gt.blockmetal1…9`, `gt.blockgem1…3`), each drawn with its `BLOCK_<MATERIAL>` icon. */
+const STORAGE_BLOCK = /^gregtech:gt\.block(?:metal|gem)\d+$/;
+const STORAGE_ICON = 'gregtech/textures/blocks/iconsets/BLOCK_';
+/** Meta items whose icon is the material set's icon of their prefix (`MetaGeneratedItem99.getIconContainer`). */
+const TEMPLATE_ITEM = 'gregtech:gt.metaitem.99';
+const BARTWORKS_ITEM = 'bartworks:gt.bwMetaGenerated';
+/** GT's cells of other mods' fluids (`MetaGeneratedItem98`), every one drawn as the `FLUID` set's `cell` icon. */
+const FLUID_CELL = 'gregtech:gt.metaitem.98';
+const FLUID_SET = 'FLUID';
+const CELL_PREFIX = 'cell';
+const FLUID_PREFIX = 'fluid:';   // as shared/keys.ts fluidKey() writes it
 
 /** The faces of block `block` meta `meta` on `side` (ForgeDirection index), for a `copy` layer. */
 export type CopyResolver = (block: string, meta: number, side: number) => TextureLayer[];
@@ -84,7 +100,10 @@ export function coverLayers(dump: TexturesDump, item: ItemKey, copy: CopyResolve
   return layers === undefined ? null : layersFrom(layers, copy);
 }
 
-/** Material items (`meta < offset`) from the texture set, and numbered meta items from `<unlocalized>/<n>.png`; null when nothing resolves. */
+/**
+ * Material items (`meta < offset`) from the texture set, and numbered meta items from `<unlocalized>/<n>.png` in the
+ * item's own domain (its mod id lower-cased: GGFab's `gt.ggfab.d1` icons are GGFab's); null when nothing resolves.
+ */
 export function gtItemIcon(dump: TexturesDump, index: AssetIndex, key: ItemKey): TextureLayer[] | null {
   let parsed: { id: string; meta: number };
   try {
@@ -96,7 +115,7 @@ export function gtItemIcon(dump: TexturesDump, index: AssetIndex, key: ItemKey):
   if (item === undefined) return null;
   if (parsed.meta >= item.offset) {
     const n = parsed.meta - item.offset;
-    const base = `gregtech/textures/items/${item.unlocalized}/${n}`;
+    const base = `${iconDomain(parsed.id)}/textures/items/${item.unlocalized}/${n}`;
     const found = index.firstLayer([`${base}.png`, `${base}/0.png`, `${base}/1.png`]);
     return found === null ? null : [found];
   }
@@ -125,6 +144,80 @@ function setIconLayers(list: readonly DumpLayer[], rgb: Rgb, index: AssetIndex, 
     }
   }
   return out;
+}
+
+/**
+ * What GT draws for `prefix` of `material` (by name): the material's texture set's icon at the prefix's texture index,
+ * in the material's colour. Null when the dump lacks the prefix's index, the material, its set or that icon, or when
+ * none of the icon's files was extracted.
+ */
+export function materialTemplate(dump: TexturesDump, index: AssetIndex, prefix: string, material: string): TextureLayer[] | null {
+  const texture = dump.prefixTextures.get(prefix);
+  const found = dump.materialsByName.get(material);
+  if (texture === undefined || found === undefined) return null;
+  const list = dump.sets[found.set]?.get(texture);
+  if (list === undefined) return null;
+  const out = setIconLayers(list, found.rgb, index);
+  return out.length === 0 ? null : out;
+}
+
+/**
+ * A GT material block, by the material the pack gives its item (`gt.material`), the same on all six faces: frame
+ * boxes their `frameGt` template, sheetmetal its `sheetmetal` template, storage blocks their own untinted
+ * `BLOCK_<MATERIAL>` icon (`BlockMetal.mBlockIcons`). Null for any other block, a block without a pack material, or
+ * one whose texture does not resolve.
+ */
+export function gtMaterialBlockFaces(dump: TexturesDump, index: AssetIndex, pack: PackView | null, id: string, meta: number): Record<Face, TextureLayer[]> | null {
+  const material = pack?.items.get(`${id}@${meta}`)?.gt?.material;
+  const layers = material === undefined ? null : materialBlockLayers(dump, index, id, material);
+  if (layers === null) return null;
+  const faces = {} as Record<Face, TextureLayer[]>;
+  for (const face of FACES) faces[face] = [...layers];
+  return faces;
+}
+
+/** Every face's layers of material block `id` in `material`; null for another block or when nothing resolves. */
+function materialBlockLayers(dump: TexturesDump, index: AssetIndex, id: string, material: string): TextureLayer[] | null {
+  if (FRAMES.has(id)) return materialTemplate(dump, index, 'frameGt', material);
+  if (SHEETMETAL.has(id)) return materialTemplate(dump, index, 'sheetmetal', material);
+  if (!STORAGE_BLOCK.test(id)) return null;
+  const icon = index.layer(`${STORAGE_ICON}${material.toUpperCase()}.png`);
+  return icon === null ? null : [icon];
+}
+
+/**
+ * The icons GT builds from a material template instead of its own file: `gt.metaitem.99` and BartWorks' generated
+ * items by the pack's `gt {prefix, material}` (`MetaGeneratedItem99.getIconContainer`: the material set's icon of the
+ * prefix), and `gt.metaitem.98` cells (`fluidCellIcon`). Null for any other item or when nothing resolves.
+ */
+export function gtTemplateIcon(dump: TexturesDump, index: AssetIndex, pack: PackView | null, key: ItemKey): TextureLayer[] | null {
+  let parsed: { id: string; meta: number };
+  try {
+    parsed = parseItemKey(key);
+  } catch {
+    return null;
+  }
+  const item = `${parsed.id}@${parsed.meta}`;
+  if (parsed.id === FLUID_CELL) return fluidCellIcon(dump, index, pack, item);
+  if (parsed.id !== TEMPLATE_ITEM && !parsed.id.startsWith(BARTWORKS_ITEM)) return null;
+  const gt = pack?.items.get(item)?.gt;
+  return gt === undefined ? null : materialTemplate(dump, index, gt.prefix, gt.material);
+}
+
+/**
+ * A `gt.metaitem.98` cell: the `FLUID` set's `cell` icon, in the colour the dump gives the fluid its
+ * `Pack.fluidContainers` row holds. `MetaGeneratedItem98` draws every one of its cells with a prefix of Water's `FLUID`
+ * set, `cell` for its 1000 L and 144 L cells; it has no molten or plasma cell, so the amount never picks another icon.
+ * Null without that row, the fluid's colour, the set or the icon's files.
+ */
+function fluidCellIcon(dump: TexturesDump, index: AssetIndex, pack: PackView | null, container: ItemKey): TextureLayer[] | null {
+  const fluid = pack?.fluidContainers?.find((row) => row.container === container)?.fluid;
+  const color = fluid !== undefined && isFluidKey(fluid) ? dump.fluids.get(fluid.slice(FLUID_PREFIX.length))?.color : undefined;
+  const texture = dump.prefixTextures.get(CELL_PREFIX);
+  const list = texture === undefined ? undefined : dump.sets[dump.setNames.indexOf(FLUID_SET)]?.get(texture);
+  if (color === undefined || list === undefined) return null;
+  const out = setIconLayers(list, color, index);
+  return out.length === 0 ? null : out;
 }
 
 /** The fluid's colour and tinted still texture (`layers` is empty for a fluid without one); null for an unknown fluid. */

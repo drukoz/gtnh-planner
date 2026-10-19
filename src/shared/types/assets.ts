@@ -11,7 +11,12 @@ export type Rect = [number, number, number, number];
 export interface LayerRegion { sheet: number; src: Rect; dst?: Rect }
 export interface TextureLayer { path: string /* data/assets-relative, e.g. "gregtech/textures/blocks/iconsets/MACHINE_MV_SIDE.png" */; tint?: [number, number, number]; glow?: boolean; frames?: number; region?: LayerRegion }
 export type Face = 'down' | 'up' | 'north' | 'south' | 'west' | 'east';
-export interface BlockFaces { block: BlockRef; faces: Record<Face, TextureLayer[]>; fallbackColor: [number, number, number]; resolved: boolean }
+/**
+ * A block drawn as a core with arms (architecture §11.43 (c)): `core` on the middle box, `arm` on an arm's long faces
+ * (u along the arm), `end` on an arm's tip.
+ */
+export interface PipeLayers { core: TextureLayer[]; arm: TextureLayer[]; end: TextureLayer[] }
+export interface BlockFaces { block: BlockRef; faces: Record<Face, TextureLayer[]>; fallbackColor: [number, number, number]; resolved: boolean; pipe?: PipeLayers }
 export interface IconDescriptor { key: StuffKey; layers: TextureLayer[]; source: 'nei' | 'gt' | 'jar' | 'fallback'; fallbackColor: [number, number, number] }
 
 /** A GT cover's in-world overlay. */
