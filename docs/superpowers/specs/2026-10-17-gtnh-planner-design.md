@@ -73,6 +73,7 @@ drukoz and friends on the server (a handful of people). drukoz runs the server a
   1. **Machine to machine** (default): each machine pushes output straight into the next with GT conveyor/pump covers or short pipes; only raw inputs and final output touch storage — by hand (input/output chests) or hooked into whatever network exists.
   2. **Project Red routed network**: every machine gets an interface pipe and chips; work is ordered from the request pipe (how their drawers work today).
   3. **AE2**: ME interfaces and patterns, once they have an AE2 network.
+  4. **EnderIO conduits** (added 2026-10-18 at the user's request): item conduits (and fluid conduits for fluids) in conduit bundles along the line, each machine face set to extract / insert / both with a channel colour, EnderIO item filters (basic/advanced, whitelist/blacklist, the exact items) where a face must only pass certain items, and redstone control where needed. Power still runs over GT cables (GT machines take EU).
 - Arranges machines compactly with shared cable/pipe runs, respecting which way machines face and which blocks touch; multiblocks use their real in-game sizes; reports the total footprint.
 - **Piping and logistics are first-class (added at the user's request):** every cable, transformer, item/fluid pipe, cover (conveyor, pump, filters), bus/hatch, input/output chest, routed pipe and chip, ME cable/interface and pattern — in every logistics mode — — **including filters and every configured part**: item/fluid/ore-dictionary filter covers, conveyor and pump cover direction and rate, programmed-circuit settings in input buses, routed-pipe chip settings, EnderIO conduit filters, AE2 interface settings and patterns — is (1) counted in the build cost and broken down to base materials alongside the machines, with the exact configuration written into the build steps (which item, whitelist or blacklist, which face, direction, rate, circuit number) and shown when you hover or click that block in the 3D view, (2) sized to the line: pipe and cover throughput checked against the item/fluid rates it must carry, cable tier and amps against the power it must carry, AE2 idle power added to the power figure, (3) listed in the build steps, and (4) drawn on the map and in the 3D view.
 
@@ -90,6 +91,11 @@ drukoz and friends on the server (a handful of people). drukoz runs the server a
 - Side list: blocks to place (with counts), hookups, overall size.
 - **Real in-game textures**, taken from the pack's own files (mod jars) (decided); plain color by machine kind only as a fallback where a texture can't be resolved. The same layout drives the map, the 3D view and the block list, so they always agree.
 - Item/fluid icons in the search, flow diagram and materials lists also come from the game (my call — same source, same fallback rule).
+
+### 3.8c Connections view (added 2026-10-18 at the user's request)
+- A schematic "Connections" view of the planned line: every placed machine, chest, interface, pipe/conduit run and hookup as a box or line, showing which output goes into which input and over what (GT cover + pipe, routed pipe, ME, EnderIO conduit channel).
+- Every connection and machine face shows its configuration: cover type and mode (import/export, rate), filter contents and whitelist/blacklist, conduit channel colour and extract/insert setting, routed chip settings, programmed circuit number, AE2 patterns.
+- The logistics and power parts (pipes, conduits, covers, filters, chips, interfaces, cables, transformers) are listed with counts in the materials "to build" list under Power / Piping & logistics, broken down to base materials.
 
 ### 3.9 Flow diagram (mockup approved)
 - Auto-generated: base materials on the left, target on the right. Each box = one recipe step: machine type, tier, count, EU/t, how busy. Arrows = items/fluids with rates.
