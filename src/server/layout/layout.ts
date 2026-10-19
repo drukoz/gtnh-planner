@@ -12,7 +12,10 @@ import { fmtInt, fmtRate } from '../../shared/layout/format.ts';
 import {
   DIRS, posKey, rotateConnections, rotatedSize, rotateFace, rotateFacing, sideToward, step, toWorld, type Rotation, type Vec3,
 } from '../../shared/layout/geometry.ts';
-import type { CoverSpec, Hookup, Layout, LayoutBlock, LayoutPowerContext, LayoutStatus, LayoutTap } from '../../shared/types/layout.ts';
+import { FACES } from '../../shared/types/assets.ts';
+import type {
+  ConduitFace, ConduitSpec, CoverSpec, Hookup, Layout, LayoutBlock, LayoutPowerContext, LayoutStatus, LayoutTap,
+} from '../../shared/types/layout.ts';
 import type { Pack } from '../../shared/types/pack.ts';
 import type { BomLine, LogisticsMode, Plan, PlanContext, PlanWarning, PowerSummary } from '../../shared/types/plan.ts';
 import type { Project } from '../../shared/types/project.ts';
@@ -182,9 +185,11 @@ function buildLocal(input: {
     headWidth: headWidthFor(stages), portSpacing: PORT_SPACING[mode], ...(stages === null ? {} : { supplyTier: stages.supplyTier }),
   });
   const modeResult = buildMode(mode, { pack, plan, parts, placement, network });
+  // a mode that lays its own fluid network (EnderIO's ender fluid conduits) gets no GT fluid pipes or pump covers
   const internal = routeInternal({
-    pack, parts, placement, occupied: [...placement.blocks, ...modeResult.blocks], stages, fluids: fluidNets(pack, plan, placement),
-    tailFluidY: modeResult.tailFluidY, groupTier: plan.tier, supplyLossVolts: stages === null ? 0 : hookupAllowanceVolts(stages.supplyTier),
+    pack, parts, placement, occupied: [...placement.blocks, ...modeResult.blocks], stages,
+    fluids: modeResult.ownsFluids === true ? [] : fluidNets(pack, plan, placement), tailFluidY: modeResult.tailFluidY, groupTier: plan.tier,
+    supplyLossVolts: stages === null ? 0 : hookupAllowanceVolts(stages.supplyTier),
   });
   const blocks = attachCovers([...placement.blocks, ...modeResult.blocks, ...internal.blocks], [...modeResult.covers, ...internal.covers], modeResult.configs);
   const top = blocks.reduce((y, b) => Math.max(y, b.pos[1]), 0);
@@ -318,6 +323,16 @@ function worldCover(c: CoverSpec, r: Rotation): CoverSpec {
   return { face: rotateFace(c.face, r), item: c.item, settings: { ...c.settings }, ...(c.filter === undefined ? {} : { filter: [...c.filter] }) };
 }
 
+/**
+ * The conduit turned with its block (architecture "EnderIO conduits, granted change requests (add-on 11)"): its links by
+ * `rotateConnections`, each face by `rotateFace`, the faces back in FACES order; their settings unchanged.
+ */
+function worldConduit(c: ConduitSpec, r: Rotation): ConduitSpec {
+  const faces = c.faces.map((f): ConduitFace => ({ ...f, face: rotateFace(f.face, r) }))
+    .sort((a, b) => FACES.indexOf(a.face) - FACES.indexOf(b.face));
+  return { kind: c.kind, item: c.item, connections: rotateConnections(c.connections, r), faces };
+}
+
 /** The line's world box, inclusive. */
 function worldBox(f: Frame): PathBounds {
   const size = rotatedSize(f.size, f.rotation);
@@ -334,6 +349,8 @@ function worldBlock(b: LocalBlock, f: Frame): LayoutBlock {
     ...(b.config === undefined ? {} : { config: { ...b.config } }),
     ...(b.item === undefined ? {} : { item: b.item }),
     ...(b.connections === undefined ? {} : { connections: rotateConnections(b.connections, r) }),
+    ...(b.conduits === undefined ? {} : { conduits: b.conduits.map((c) => worldConduit(c, r)) }),
+    ...(b.tail === undefined ? {} : { tail: { side: b.tail.side, keys: [...b.tail.keys] } }),
   };
 }
 
@@ -351,10 +368,32 @@ interface Hookups {
 }
 
 /**
+ * The world posKeys a hookup of item conduits that ends on a conduit face routes around: every cell face-adjacent to
+ * a line block holding an Item Conduit (plan 11, ruling R14: EnderIO joins touching item conduits into one network, so
+ * the base network's channels would trade with the line's), or to a line machine, hatch or chest other than the
+ * port's own block (R14 as widened in the Task 5 review: an item conduit joins any inventory it touches, and only the
+ * hookup's last cell sets a face, so a run cell there would get an unset face, Extract on Green, that pulls the
+ * block's items onto the base's network whenever redstone power reaches it and that no build step names). Goal cells
+ * are not exempt, so the hookup's last cell touches no line inventory but the port's chest.
+ */
+export function hookupKeepOff(lineBlocks: readonly LayoutBlock[], port: Vec3): Set<string> {
+  const cells = new Set<string>();
+  const portKey = posKey(port);
+  for (const b of lineBlocks) {
+    const conduit = b.conduits?.some((c) => c.kind === 'item') === true;
+    const inventory = (b.role === 'machine' || b.role === 'hatch' || b.role === 'chest') && posKey(b.pos) !== portKey;
+    if (!conduit && !inventory) continue;
+    DIRS.forEach((_, side) => cells.add(posKey(step(b.pos, side))));
+  }
+  return cells;
+}
+
+/**
  * Spec §3.5, §3.6, §3.8: the power hookup from the supply-tier tap whose cable can carry the line to the supply run,
  * and the logistics hookup from the network's tap nearest the logistics port. Each goes round the line's box (never
  * through it, so it ends beside its port), the multiblocks' air cells and the hookups laid before it; the power hookup
- * also keeps off everything of another tier, in the line and in the base. The taps they join show as ghosts.
+ * also keeps off everything of another tier, in the line and in the base, and a logistics hookup that ends on a
+ * conduit face keeps off the cells `hookupKeepOff` names. The taps they join show as ghosts.
  */
 function buildHookups(input: {
   pack: Pack; parts: Parts; scan: WorldScan; dim: number; line: LocalLine; frame: Frame; vox: Voxels | null; lineBlocks: readonly LayoutBlock[];
@@ -402,9 +441,13 @@ function buildHookups(input: {
     const port = worldPos(logisticsPort, frame);
     const tap = nearestTap(logisticsNet.taps, port);
     if (tap !== null) {
+      // a hookup that ends on a conduit face keeps off the line's Item Conduits, machines, hatches and chests, all but
+      // the port's chest (plan 11, ruling R14 as widened in the Task 5 review)
+      const world: RouteWorld = { vox, line: routeLine, box, ...(hookup.endConduit === undefined ? {} : { keepOff: hookupKeepOff(lineBlocks, port) }) };
       const build = logisticsHookup({
-        pack, parts, tap, ports: [port], world: { vox, line: routeLine, box }, part: hookup.part, end: hookup.end,
-        ...(hookup.endConfig === undefined ? {} : { endConfig: hookup.endConfig }), maxNodes,
+        pack, parts, tap, ports: [port], world, part: hookup.part, end: hookup.end,
+        ...(hookup.endConfig === undefined ? {} : { endConfig: hookup.endConfig }),
+        ...(hookup.endConduit === undefined ? {} : { endConduit: hookup.endConduit }), maxNodes,
       });
       add(build, tap);
       out.logistics = { build, tap, network: logisticsNet };

@@ -66,6 +66,7 @@ Once a project has a scan and a base, the planner lays the line out block by blo
   - **Machine to machine:** conveyor and pump covers move goods from machine to machine through one shared item pipe (and fluid pipes); every machine's Input Filter is on, and each final product goes into its own output chest through a filtered cover.
   - **Project Red routed:** a routed interface pipe with routing chips on every machine; you order from the request pipe.
   - **AE2:** ME interfaces with their patterns; their idle power draw counts towards the power check.
+  - **EnderIO conduits:** item and ender fluid conduits with every face set; see [EnderIO conduits and the Connections view](#enderio-conduits-and-the-connections-view).
   - The line is only hooked into networks the scan found. The planner never assumes one you have not built.
 - **Configured parts:** every cover, filter, chip, pattern and programmed circuit gets a build step that says exactly how to set it (face, mode, rate, whitelist, circuit number). Pipes, covers, buses and cables are sized to what they carry.
 - **Facing:** a GregTech basic machine has a front and a separate output side. Each one is placed with its output side toward the middle row, where its covers go and where it takes its items ("allow input from the output side"), and its front facing up, or toward the power head when its top is a fluid port.
@@ -74,6 +75,22 @@ Once a project has a scan and a base, the planner lays the line out block by blo
 - **On the Map tab** the line is solid and everything still to build to hook it up is dashed. Numbered pins mark the site, the power tap, the logistics tap, machines you can reuse and problems, and a build step that names a pin links to it on the map (your notes are N1, N2, …). The **New line** panel sits above what was found. **Move line** (then drag it), **Rotate 90°** and **Auto place** change where the line goes, for everyone on the project. A moved line is checked against the blocks really there, and the layout says how much of the spot the scan did not cover. A spot more than 96 blocks from the base centre is not used, and choosing another base clears it.
 - **The 3D tab** shows the line in your pack's textures: drag to turn, right-drag to pan, scroll to zoom and step through the layers with the slider. Hover a block for its name and settings; click it for its facing and recipe. Blocks already in your base show as faint ghosts. Textures need `npm run extract-assets`; without them blocks are plain colours.
 - **Limits:** pipe heat ratings and Project Red crafting chips are not planned, and a GregTech filter cover holds one item, so a machine whose recipes also take another step's item is flagged instead of fixed. In machine to machine mode the output chests sit on the shared pipe behind a filtered cover, which may not stop the pipe from pushing other items in. Check those in game.
+
+## EnderIO conduits and the Connections view
+
+Choose **EnderIO conduits** under **Logistics** in a project's settings. The line then gets an Item Conduit along its middle row and Ender Fluid Conduits from every fluid port; where both pass through one cell they share it as a conduit bundle.
+
+- Every conduit face that touches a machine or chest is set to **Extract**, **Insert** or **In / Out** (**Disabled** where it must not connect).
+- Each face has its own extract filter and insert filter (a Basic, Advanced or Big Item Filter with the exact items, matching meta, and NBT only when the item has it) and its own extract and insert channel colours, so each machine's outputs reach only the machines that take them.
+- Machines that use an item are filled first (priority 1) and the surplus goes to the output chest (priority 0). A face whose items go to several machines and to no chest is set to round robin (EnderIO's round robin takes turns whatever the priority, so a face whose items a chest on its channel could also take leaves it off), and a face that must move more than 8 items/s gets speed upgrades.
+- Every extract face is set to **Always active**, because a conduit left at its default waits for a redstone signal.
+- Green is left to your base's own network. When the scan found an EnderIO network at the base, the line joins it at the input chest, whose face inserts at priority 1 so the raw inputs come to the line before any other storage on Green; otherwise a build step says to fill the input chest by hand.
+- Power still runs over GT cables.
+- The parts list counts every conduit, filter and upgrade, and the build steps set every face.
+
+The **Connections** tab of a project draws any line, in all four logistics modes, as boxes and links that show every face's settings. Click a box, a face or a link for the details.
+
+Limits: rates follow EnderIO's default conduit config, so a server that changes the conduit rates in `EnderIO.cfg` may need more speed upgrades or a bigger fluid conduit. A face holds at most 24 filtered items, and more are flagged. Ender fluid conduits have no priority, so when machines take a fluid whose surplus also leaves through an open end, the tank takes its turn with them; the line warns about it. The line plans no redstone signal control (every extract face is simply set to Always active).
 
 ## In-game ghost projector
 

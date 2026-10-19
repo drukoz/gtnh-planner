@@ -9,6 +9,7 @@ import { isFluidKey, type StuffKey } from '../../../shared/keys.ts';
 import { joinNames } from '../../../shared/layout/format.ts';
 import { OPPOSITE, posKey, step, type Vec3 } from '../../../shared/layout/geometry.ts';
 import { FACES } from '../../../shared/types/assets.ts';
+import type { ConduitFace, ConduitKind } from '../../../shared/types/layout.ts';
 import type { Pack } from '../../../shared/types/pack.ts';
 import type { BomLine, BuildStep, LogisticsMode, Plan, PlanFlow, PlanWarning } from '../../../shared/types/plan.ts';
 import type { LogisticsNetwork } from '../../../shared/types/world.ts';
@@ -16,6 +17,7 @@ import type { BlockConfig, HostConfig, HostCover, LocalBlock, PlacedUnit, Placem
 import { coverRateWarning, pickConveyor, type PartId, type Parts } from '../parts.ts';
 import { ae2Mode } from './ae2.ts';
 import { directMode } from './direct.ts';
+import { enderioMode } from './enderio.ts';
 import { routedMode } from './routed.ts';
 
 // ---- Types ----
@@ -30,7 +32,14 @@ export interface ModeInput {
 }
 
 /** The hookup path's part; `end` replaces its last cell (facing the port); `endConfig` goes on the last cell. */
-export interface ModeHookup { part: PartId; end: PartId | null; endConfig?: BlockConfig }
+export interface ModeHookup {
+  part: PartId; end: PartId | null; endConfig?: BlockConfig;
+  /**
+   * The conduit face the hookup's last cell turns toward the port; the hookup fills in `face`, the side that touches the
+   * port, where its route ends (architecture "EnderIO conduits, granted change requests (add-on 11)").
+   */
+  endConduit?: { kind: ConduitKind; face: Omit<ConduitFace, 'face'> };
+}
 
 export interface ModeResult {
   /** Sorted by x, y, z, then facing; every block carries `item`. */
@@ -49,18 +58,24 @@ export interface ModeResult {
   warnings: PlanWarning[];
   /** The lowest y the tail's fluid roots may use (above the mode's tail blocks). */
   tailFluidY: number;
+  /** The mode lays the line's fluid network itself: internal routing then gets no fluid nets (no GT fluid pipes, no pump covers). */
+  ownsFluids?: boolean;
 }
 
 // ---- Dispatch ----
 
-/** How far apart units' item ports must be in each mode (Task 5 `placeUnits`): direct may share, routed and AE2 may not. */
-export const PORT_SPACING: Readonly<Record<LogisticsMode, 0 | 1 | 2>> = Object.freeze({ direct: 0, routed: 1, ae2: 2 });
+/**
+ * How far apart units' item ports must be in each mode (Task 5 `placeUnits`): direct may share, routed and AE2 may not.
+ * EnderIO may share too: each face of a conduit is set on its own, so the N and S machines may share a spine cell.
+ */
+export const PORT_SPACING: Readonly<Record<LogisticsMode, 0 | 1 | 2>> = Object.freeze({ direct: 0, routed: 1, ae2: 2, enderio: 0 });
 
 export function buildMode(mode: LogisticsMode, input: ModeInput): ModeResult {
   switch (mode) {
     case 'direct': return directMode(input);
     case 'routed': return routedMode(input);
     case 'ae2': return ae2Mode(input);
+    case 'enderio': return enderioMode(input);
     default: throw new Error(`unknown logistics mode ${String(mode)}`);
   }
 }
@@ -136,6 +151,12 @@ export function stepItemInputs(plan: Plan, stepId: string): StuffKey[] {
   const fed = distinctKeys(itemFlows(plan).filter((f) => f.to === stepId));
   if (fed.length > 0) return fed;
   const own = plan.steps.find((s) => s.id === stepId)?.inputs ?? [];
+  return [...new Set(own.filter((p) => !isFluidKey(p.key)).map((p) => p.key))].sort(compareText);
+}
+
+/** The item keys of `step.outputs`, sorted, each once. */
+export function stepItemOutputs(plan: Plan, stepId: string): StuffKey[] {
+  const own = plan.steps.find((s) => s.id === stepId)?.outputs ?? [];
   return [...new Set(own.filter((p) => !isFluidKey(p.key)).map((p) => p.key))].sort(compareText);
 }
 

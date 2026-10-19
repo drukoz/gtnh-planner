@@ -21,6 +21,7 @@ const LOGISTICS_TEXT: Readonly<Record<LogisticsMode, string>> = {
   direct: 'Connect each machine\'s output to the next one with conveyor/pump covers or short pipes; only raw inputs and the final output touch storage',
   routed: 'Give every machine an interface pipe with chips and order work from the request pipe',
   ae2: 'Give every machine an ME interface with its patterns',
+  enderio: 'Connect every machine to an EnderIO conduit face set to Extract, Insert or In / Out, with its channel colours and filters; only raw inputs and the final outputs touch storage',
 };
 
 /** Whole numbers with thousands separators (`1,440`), anything else with two decimals (as the Materials view shows them). */

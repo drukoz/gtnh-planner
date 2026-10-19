@@ -11,7 +11,7 @@
 
 import { isFluidKey, itemKey, type ItemKey, type StuffKey } from '../../shared/keys.ts';
 import { OPPOSITE, posKey, step, type Vec3 } from '../../shared/layout/geometry.ts';
-import type { BlockRole, CoverSpec } from '../../shared/types/layout.ts';
+import type { BlockRole, ConduitSpec, CoverSpec, TailChest } from '../../shared/types/layout.ts';
 import type { BlockRef, Machine, Pack, Product } from '../../shared/types/pack.ts';
 import type { BomLine, Plan, PlanStep, PlanWarning } from '../../shared/types/plan.ts';
 import { UNKNOWN_BLOCK } from '../../shared/types/world.ts';
@@ -21,10 +21,17 @@ import { busSlots, hatchLitres, machineRef, pickHatch, type HatchClass } from '.
 
 export type BlockConfig = Record<string, string | number | boolean>;
 
-/** A block in the line's local grid; mirrors `LayoutBlock` (architecture §11.14). */
+/**
+ * A block in the line's local grid; mirrors `LayoutBlock` (architecture §11.14, and "EnderIO conduits, granted change
+ * requests (add-on 11)" for `conduits` and `tail`).
+ */
 export interface LocalBlock {
   pos: Vec3; block: BlockRef; role: BlockRole; facing?: number; mainFacing?: number; stepId?: string; label: string; item?: StuffKey; connections?: number;
   covers?: CoverSpec[]; config?: BlockConfig;
+  /** A conduit bundle's conduits, item first, faces in the local grid (`LayoutBlock.conduits`). */
+  conduits?: ConduitSpec[];
+  /** Set on the tail's input and output chests (`LayoutBlock.tail`). */
+  tail?: TailChest;
 }
 /** A cover for the block at `pos` (Tasks 6–8). */
 export interface HostCover { pos: Vec3; cover: CoverSpec }

@@ -41,7 +41,7 @@ describe('settings model', () => {
   it('renders every section', () => {
     const html = renderToStaticMarkup(<SettingsPanel info={info} project={{ id: 'p', name: 'x', createdAt: '', createdBy: '', rev: 0, settings: defaultSettings(),
       world: { scanId: null, baseId: null }, placement: null, marks: {}, notes: [] }} plan={null} send={() => {}} me="Ann" />);
-    for (const s of ['Make', 'Make N (batch)', 'Tier', 'Reachable dimensions', 'Logistics', 'Material costs', 'Skip recipe groups', 'We already make', 'Lava and stone-dust centrifuging'])
+    for (const s of ['Make', 'Make N (batch)', 'Tier', 'Reachable dimensions', 'Logistics', 'EnderIO conduits', 'Material costs', 'Skip recipe groups', 'We already make', 'Lava and stone-dust centrifuging'])
       expect(html).toContain(s);
   });
   it('groups rows by rocket and names overrides and progression', () => {
