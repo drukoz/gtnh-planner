@@ -79,7 +79,7 @@ describe('the Connections graph', () => {
     const layout = connLayout('enderio');
     layout.blocks.push({ pos: [3, 64, 0], block: { id: 'conduit:item', meta: 0 }, role: 'pipe', label: 'Item Conduit', item: ITEM, hookup: 0, connections: 16 | 32,
       conduits: [{ kind: 'item', item: ITEM, connections: 32,
-        faces: [{ face: 'west', mode: 'insert', target: 'Chest (input)', insert: { color: 'green', filter: basic(['t:in@0']), rate: 1, priority: 0 } }] }] });
+        faces: [{ face: 'west', mode: 'insert', target: 'Chest (input)', insert: { color: 'green', filter: basic(['t:in@0']), rate: 1, priority: 1 } }] }] });
     layout.hookups.push({ kind: 'logistics', from: { pos: [4, 64, 0], dim: 0, kind: 'pipe', networkId: 'e:item:0:0' }, path: [[3, 64, 0]],
       parts: [{ key: ITEM, amount: 1, why: 'logistics hookup', group: 'logistics' }], found: true });
     const g = connectionsGraph(layout, connPlan, 'min');

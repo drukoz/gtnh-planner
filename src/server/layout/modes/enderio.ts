@@ -450,8 +450,11 @@ function itemSettings(input: ModeInput, plans: readonly FacePlan[], channels: Ch
 /**
  * How an EnderIO item network at the base keeps the input chest stocked (spec §3.6 "hooked into whatever network
  * exists"): Plan 5's hookup lays Item Conduits from the storage tap, the last one inserting into the chest on Green with
- * the chest's whitelist. The conduit face at the tap is the base's own, so its settings are a drafted configure step,
- * and its filter and speed upgrades are parts lines.
+ * the chest's whitelist at priority 1. Every Insert face already on the base's network is at EnderIO's default 0, and
+ * an extraction goes to the first target that takes it (sticky, then priority, then distance; the tap's round robin
+ * is off), so the raw inputs reach the line before any nearer storage on Green. The conduit face at the tap is the
+ * base's own, so its settings are a drafted configure step: Extract, or In / Out when that face already inserts into
+ * the storage (Extract alone would stop it storing), and its filter and speed upgrades are parts lines.
  */
 function storageHookup(input: ModeInput, keys: readonly StuffKey[], rate: number): { hookup: ModeHookup; extraParts: BomLine[]; draft: StepDraft } {
   const { pack, plan, parts } = input;
@@ -464,14 +467,15 @@ function storageHookup(input: ModeInput, keys: readonly StuffKey[], rate: number
   const extraParts: BomLine[] = [];
   if (filter.item !== undefined) extraParts.push({ key: filter.item, amount: 1, why: 'filter at the storage tap', group: 'logistics' });
   if (speed.count > 0) extraParts.push({ key: parts.eio_speed_upgrade.key, amount: speed.count, why: 'speed upgrades at the storage tap', group: 'logistics' });
-  // the end face holds a filter of its own: it is a second part, on a block the hookup places
-  const end: ConduitInsert = { color: DEFAULT_CHANNEL, filter: itemFilterFor(parts, keys).filter, rate, priority: 0 };
+  // the end face holds a filter of its own: it is a second part, on a block the hookup places; its priority is above
+  // the base network's own Insert faces (EnderIO's default 0), as the line's machine faces are
+  const end: ConduitInsert = { color: DEFAULT_CHANNEL, filter: itemFilterFor(parts, keys).filter, rate, priority: 1 };
   const tapText = conduitSideText('extract', tap, (k) => nameList(plan, pack, [k]));
   return {
     hookup: { part: 'eio_item_conduit', end: null, endConduit: { kind: 'item', face: { mode: 'insert', target: INPUT_CHEST, insert: end } } },
     extraParts,
     draft: { id: 'layout:configure:conduit-tap', kind: 'configure', pin: 'logistics',
-      text: `At the storage tap set the conduit face toward your storage to Extract; ${tapText}` },
+      text: `At the storage tap set the conduit face toward your storage to Extract (In / Out if it already inserts); ${tapText}` },
   };
 }
 

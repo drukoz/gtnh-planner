@@ -53,9 +53,10 @@ describe('an EnderIO line in the layout', () => {
     const end = layout.blocks.find((b) => b.hookup === hookup && b.conduits !== undefined)!;
     const chest = layout.blocks.find((b) => b.tail?.side === 'input')!;
     expect(end.conduits![0]!.faces).toEqual([{ face: FACES[sideToward(end.pos, chest.pos)], mode: 'insert', target: 'Chest (input)',
-      insert: { color: 'green', filter: basic(['t:in@0']), rate: 1, priority: 0 } }]);
+      insert: { color: 'green', filter: basic(['t:in@0']), rate: 1, priority: 1 } }]);
     expect(layout.buildSteps.find((s) => s.id === 'layout:configure:conduit-tap')!.text).toBe('At the storage tap set the conduit face toward your storage '
-      + 'to Extract; extract on Green with a Basic Item Filter (whitelist: Raw Input; match meta, ignore NBT), round robin off, self feed off, redstone Always active');
+      + 'to Extract (In / Out if it already inserts); extract on Green with a Basic Item Filter (whitelist: Raw Input; match meta, ignore NBT), '
+      + 'round robin off, self feed off, redstone Always active');
     expect(layout.bom).toContainEqual({ key: BASIC, amount: 10, why: 'conduit filters; filter at the storage tap', group: 'logistics' });
     const endStep = layout.buildSteps.find((s) => s.id.startsWith('layout:conduit:') && s.text.includes('insert on Green'))!;
     expect(endStep.pin).toBe(layout.pins.find((p) => p.kind === 'logistics')!.n);
@@ -89,8 +90,8 @@ const stepsInput = (over: Partial<StepsInput>): StepsInput => ({ status: 'ok', p
   transformerName: () => 'Low Voltage Transformer', cables: [], power: null, supplyTier: null, drafts: [], fluids: [], logistics: null, reuse: [],
   blocks: [], origin: [0, 64, 0], nameOf, ...over });
 
-/** The hookup's end face of Task 3's storage hookup: Insert on Green into the input chest, whitelisting Raw Input. */
-const END_FACE: Omit<ConduitFace, 'face'> = { mode: 'insert', target: 'Chest (input)', insert: { color: 'green', filter: basic(['t:in@0']), rate: 1, priority: 0 } };
+/** The hookup's end face of Task 3's storage hookup: Insert on Green into the input chest at priority 1, whitelisting Raw Input. */
+const END_FACE: Omit<ConduitFace, 'face'> = { mode: 'insert', target: 'Chest (input)', insert: { color: 'green', filter: basic(['t:in@0']), rate: 1, priority: 1 } };
 
 /**
  * A bundle (an Item Conduit with an In / Out face, Basic extract filter, 2 speed upgrades and Advanced insert filter, and a
@@ -131,7 +132,7 @@ describe('EnderIO conduits in the steps, the parts list and the hookup', () => {
       ['layout:conduit:1,0,2:liquid_ender:up', 1, 'Ender Fluid Conduit, top face to your tank: Extract; extract on Red with a fluid filter (whitelist: '
         + 'Molten Iron), round robin off, redstone Always active'],
       ['layout:conduit:2,1,1:item:down', 2, 'Item Conduit, bottom face to Chest (input): Insert; insert on Green with a Basic Item Filter (whitelist: '
-        + 'Raw Input; match meta, ignore NBT), priority 0'],
+        + 'Raw Input; match meta, ignore NBT), priority 1'],
       ['layout:configure:conduit-tap', 2, 'At the storage tap set the conduit face to Extract']]);
     expect(layoutSteps(stepsInput({ status: 'empty', blocks: conduitBlocks() })).some((s) => s.id.startsWith('layout:conduit:'))).toBe(false);
   });

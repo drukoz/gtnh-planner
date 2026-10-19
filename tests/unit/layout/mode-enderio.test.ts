@@ -49,12 +49,13 @@ describe('EnderIO mode — items', () => {
     const network = makeScan({ logistics: [{ kind: 'enderio', taps: [[0, 64, 0]] }] }).logistics[0]!;
     const r = buildMode('enderio', { ...setup(), network });
     expect(r.logisticsPort).toEqual([3, 0, 1]);
+    // priority 1: above the base network's own Insert faces, which EnderIO leaves at 0, so the raw inputs come to the line first
     expect(r.hookup).toEqual({ part: 'eio_item_conduit', end: null, endConduit: { kind: 'item',
-      face: { mode: 'insert', target: 'Chest (input)', insert: { color: 'green', filter: basic(['t:in@0']), rate: 1, priority: 0 } } } });
+      face: { mode: 'insert', target: 'Chest (input)', insert: { color: 'green', filter: basic(['t:in@0']), rate: 1, priority: 1 } } } });
     expect(r.extraParts).toEqual([{ key: 'EnderIO:itemBasicFilterUpgrade@0', amount: 1, why: 'filter at the storage tap', group: 'logistics' }]);
     expect(r.drafts.map((d) => [d.id, d.pin])).toEqual([['layout:logistics:line', 'site'], ['layout:configure:conduit-tap', 'logistics']]);
-    expect(r.drafts[1]!.text).toBe('At the storage tap set the conduit face toward your storage to Extract; extract on Green with a Basic Item Filter '
-      + '(whitelist: Raw Input; match meta, ignore NBT), round robin off, self feed off, redstone Always active');
+    expect(r.drafts[1]!.text).toBe('At the storage tap set the conduit face toward your storage to Extract (In / Out if it already inserts); '
+      + 'extract on Green with a Basic Item Filter (whitelist: Raw Input; match meta, ignore NBT), round robin off, self feed off, redstone Always active');
   });
 
   it('joins a shared item into one channel and fills machines before the chest', () => {
@@ -228,9 +229,10 @@ describe('EnderIO mode — tail chests, the storage tap and warnings', () => {
       { key: BASIC, amount: 1, why: 'filter at the storage tap', group: 'logistics' },
       { key: SPEED, amount: 2, why: 'speed upgrades at the storage tap', group: 'logistics' }]);
     expect(r.drafts.map((d) => d.id)).toEqual(['layout:logistics:line', 'layout:configure:conduit-tap']);
-    expect(r.drafts[1]!.text).toBe('At the storage tap set the conduit face toward your storage to Extract; extract on Green with a Basic Item Filter '
-      + '(whitelist: Raw Input; match meta, ignore NBT), 2× Item Conduit Speed Upgrade, round robin off, self feed off, redstone Always active');
-    expect(r.hookup!.endConduit!.face.insert).toEqual({ color: 'green', filter: basic(['t:in@0']), rate: 20, priority: 0 });
+    expect(r.drafts[1]!.text).toBe('At the storage tap set the conduit face toward your storage to Extract (In / Out if it already inserts); '
+      + 'extract on Green with a Basic Item Filter (whitelist: Raw Input; match meta, ignore NBT), 2× Item Conduit Speed Upgrade, round robin off, '
+      + 'self feed off, redstone Always active');
+    expect(r.hookup!.endConduit!.face.insert).toEqual({ color: 'green', filter: basic(['t:in@0']), rate: 20, priority: 1 });
   });
 
   it("disables the face toward a multiblock's controller and names the multiblock on each of its faces", () => {
