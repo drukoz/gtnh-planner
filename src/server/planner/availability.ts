@@ -5,7 +5,7 @@
 import { defaultCoilHeat } from '../../shared/gt/overclock.ts';
 import { V, tierName } from '../../shared/gt/tiers.ts';
 import { isFluidKey, type ItemKey, type StuffKey } from '../../shared/keys.ts';
-import type { Item, OrePart, Pack, Recipe, Worldgen } from '../../shared/types/pack.ts';
+import type { Ingredient, Item, OrePart, Pack, Recipe, Worldgen } from '../../shared/types/pack.ts';
 import { FREE_KEYS, type LeafClass, type PlanSettings, type ReachableDim, type SourceInfo } from '../../shared/types/plan.ts';
 import { PROGRAMMED_CIRCUIT_ID } from '../pack/recipes.ts';
 import { acceptRecipe, multiblocksFor, type PlanEnv } from './candidates.ts';
@@ -129,6 +129,20 @@ export const GATHERED_ORE_PREFIXES: readonly string[] = Object.freeze([
  */
 export const GATHERED_KEYS: readonly StuffKey[] = Object.freeze(['IC2:itemHarz@0', 'minecraft:slime_ball@0']);
 
+/**
+ * World blocks a group digs or picks up by the stack (fix spec R1, D4), by the dimension they are gathered in
+ * (`DimensionInfo.key`). Where that dimension is reachable, each is a natural leaf at its normal price (1; a cost override
+ * applies), so a line imports Sand instead of crafting it from free cobblestone through gravel; elsewhere (End stone
+ * below HV) it is classified like any other good. Stone is not here: a rock breaker makes it.
+ */
+export const GATHERED_BLOCKS: Readonly<Record<StuffKey, string /* DimensionInfo.key */>> = Object.freeze({
+  'minecraft:sand@0': 'overworld', 'minecraft:sand@1': 'overworld', 'minecraft:gravel@0': 'overworld',
+  'minecraft:dirt@0': 'overworld', 'minecraft:clay@0': 'overworld', 'minecraft:flint@0': 'overworld',
+  'minecraft:sandstone@0': 'overworld', 'minecraft:snowball@0': 'overworld', 'minecraft:snow@0': 'overworld',
+  'minecraft:ice@0': 'overworld', 'minecraft:packed_ice@0': 'overworld',
+  'minecraft:netherrack@0': 'nether', 'minecraft:soul_sand@0': 'nether', 'minecraft:end_stone@0': 'theend',
+});
+
 /** `name` is `prefix` or `prefix` followed by an upper-case letter (logWood, cropWheat; not logistics). */
 function hasOrePrefix(name: string, prefix: string): boolean {
   if (!name.startsWith(prefix)) return false;
@@ -203,7 +217,9 @@ function factsOf(pack: Pack): PackFacts {
 
 /**
  * A base item (spec §3.3): a free input; an ore, raw ore, dust, ingot or gem (by GT prefix, or as a material's ore
- * part); or a fluid that `worldgen.fluidSources` names. Molten metals are not base: they are made from their ingot.
+ * part); or a fluid that `worldgen.fluidSources` names. Such a fluid counts as base only where a source is reachable
+ * (`classOf` 'direct'): where none is, it is derived, and derived fluids are made, never bought (`makeLeafOracle`, fix
+ * spec R5). Molten metals are not base: they are made from their ingot.
  */
 export function isBaseItem(pack: Pack, key: StuffKey): boolean {
   if (FREE.has(key)) return true;
@@ -229,6 +245,12 @@ export interface Availability {
    * of them became available before `key`, so following them back always ends.
    */
   derivedFrom(key: StuffKey): StuffKey[];
+  /**
+   * Recipe layers from the seeds (fix spec R6): 0 for a seed (a free, natural or direct good) and for a good the group
+   * cannot get; else 1 + the largest, over the consumed slots of its first-found recipe (`why`), of the smallest depth
+   * among that slot's available options. With supporting lines off, only shallow derived materials are bought.
+   */
+  depth(key: StuffKey): number;
   /** The multiblocks the group can build: their controller item is available (`PlanEnv.multiblocks`). */
   multiblocks: ReadonlySet<number>;
   /** Ids of the recipes that make an ore material from free inputs alone (`fromNothingRecipes`, `PlanEnv.fromNothing`). */
@@ -406,8 +428,9 @@ export function fromNothingRecipes(pack: Pack, canRun: (index: number) => boolea
 }
 
 /**
- * materials-availability §8.1: seeds are the free inputs, natural items, the base items of direct materials and the
- * sourced fluids; a recipe the group can run fires once every input slot (consumed or not) has an available option,
+ * materials-availability §8.1: seeds are the free inputs, natural items, the gathered blocks of reachable dimensions
+ * (`GATHERED_BLOCKS`), the base items of direct materials and the reachable sourced fluids; a recipe the group can run
+ * fires once every input slot (consumed or not) has an available option,
  * and makes all its outputs with a chance above 0 available. A recipe only a multiblock runs also waits for one of
  * those multiblocks to be built: its controller item must be available (the machine's own minimum tier, §8.1 "Skip
  * recipes above T"), so a multiblock whose controller needs UMV parts never runs at MV. `env.multiblocks` is ignored:
@@ -420,6 +443,8 @@ function computeState(pack: Pack, env: PlanEnv): State {
   const direct = new Set<StuffKey>();
   for (const material of materialSources.keys()) for (const key of facts.baseItems.get(material) ?? []) direct.add(key);
   for (const key of fluidSources.keys()) direct.add(key);
+  /** The gathered blocks whose dimension `env` reaches, with that dimension (fix spec R1). */
+  const gathered = new Map(Object.entries(GATHERED_BLOCKS).filter(([, dim]) => env.reachable.has(dim)));
 
   const ungated: PlanEnv = { ...env, multiblocks: undefined, fromNothing: undefined };
   const noMultiblock: PlanEnv = { ...ungated, multiblocks: new Set() };
@@ -464,6 +489,7 @@ function computeState(pack: Pack, env: PlanEnv): State {
 
     for (const key of FREE_KEYS) add(key);
     for (const key of facts.natural) add(key);
+    for (const key of gathered.keys()) add(key);
     // From LV on every group has programmed circuits. The export cannot show the bootstrap: the first circuit needs a
     // vacuum tube, whose glass tube needs a ball mold, whose casting form comes from a Tinkers' casting table (not a
     // recipe) or from a fluid solidifier that itself needs a programmed circuit; without this seed nothing that takes
@@ -537,15 +563,24 @@ function computeState(pack: Pack, env: PlanEnv): State {
 
   const classOf = (key: StuffKey): LeafClass => {
     if (FREE.has(key)) return 'free';
-    if (facts.natural.has(key)) return 'natural';
+    if (facts.natural.has(key) || gathered.has(key)) return 'natural';
     if (direct.has(key)) return 'direct';
     if (!available.has(key)) return 'unavailable';
     const material = baseMaterialOf(key);
     return material !== undefined && byproductOf.has(material) ? 'byproduct' : 'derived';
   };
 
+  /** The filled container `r` only empties into `key` (a canner: Ethylene Cell → Ethylene + Empty Cell), if it is one. */
+  const emptiedFrom = (r: Recipe, key: StuffKey): StuffKey | undefined => {
+    const consumed = r.inputs.filter((ing) => ing.consumed);
+    const only = consumed.length === 1 ? consumed[0]!.options[0]?.key : undefined;
+    return only !== undefined && (pack.fluidContainers ?? []).some((c) => c.container === only && c.fluid === key) ? only : undefined;
+  };
   const derivedSource = (key: StuffKey): SourceInfo[] => {
-    const r = pack.recipeById.get(why.get(key) ?? '');
+    let r = pack.recipeById.get(why.get(key) ?? '');
+    // A fluid first reached by emptying its cell is described by what made the cell (the chemistry, not the canner).
+    const cell = r === undefined ? undefined : emptiedFrom(r, key);
+    if (cell !== undefined) r = pack.recipeById.get(why.get(cell) ?? '') ?? r;
     if (r === undefined) return [];
     const accepted = acceptRecipe(pack, r, { ...env, multiblocks: built });
     const mapId = accepted.ok ? accepted.mapId : (r.maps[0] ?? '');
@@ -558,8 +593,12 @@ function computeState(pack: Pack, env: PlanEnv): State {
     switch (classOf(key)) {
       case 'free':
         return [{ kind: 'natural', dims: [], detail: 'free' }];
-      case 'natural':
-        return [{ kind: 'natural', dims: [OVERWORLD], detail: 'gathered by hand' }];
+      case 'natural': {
+        const dim = gathered.get(key);
+        return dim === undefined
+          ? [{ kind: 'natural', dims: [OVERWORLD], detail: 'gathered by hand' }]
+          : [{ kind: 'natural', dims: [dim], detail: 'gathered (dig it)' }];
+      }
       case 'direct': {
         const list = isFluidKey(key) ? fluidSources.get(key) : materialSources.get(baseMaterialOf(key) ?? '');
         return (list ?? []).map((s) => copyOf(s.info));
@@ -581,10 +620,65 @@ function computeState(pack: Pack, env: PlanEnv): State {
     return r === undefined ? [] : firstOptions(r, rank, true);
   };
 
+  let depths: ReadonlyMap<StuffKey, number> | undefined;
+  const depth = (key: StuffKey): number => (depths ??= depthsOf(pack, queue, why)).get(key) ?? 0;
+
   const fromNothingIds = new Set([...fromNothing].map((i) => (pack.recipes[i] as Recipe).id));
   return {
-    avail: { tier: env.tier, available, classOf, sources, why, derivedFrom, multiblocks: built, fromNothing: fromNothingIds }, rank, materialSources, fluidSources,
+    avail: { tier: env.tier, available, classOf, sources, why, derivedFrom, depth, multiblocks: built, fromNothing: fromNothingIds },
+    rank, materialSources, fluidSources,
   };
+}
+
+/**
+ * `Availability.depth` of every good of `available` (fix spec R6), worked out once per state: the seeds (goods with no
+ * `why` recipe) are 0, and a good whose first-found recipe has its last consumed slot filled by a good of depth d is
+ * d + 1, the slots filled layer by layer, so each slot counts the smallest depth among its options and each recipe the
+ * largest of its slots (a recipe that consumes nothing is 1). Every available good gets one: its recipe fired once every
+ * slot had an option that became available before it. Built bottom-up rather than by following each good back, so a loop
+ * in the data (an option made from the good itself) never counts, and a depth never depends on which good is asked
+ * about first.
+ */
+function depthsOf(pack: Pack, available: readonly StuffKey[], why: ReadonlyMap<StuffKey, string>): Map<StuffKey, number> {
+  const depth = new Map<StuffKey, number>();
+  /** The goods each first-found recipe made available, by recipe id. */
+  const madeBy = new Map<string, StuffKey[]>();
+  for (const [key, id] of why) addTo(madeBy, id, key);
+  /** Consumed slots per recipe that no settled good fills yet, and the slots each good can fill, with their recipe. */
+  const open = new Map<string, number>();
+  const fills = new Map<StuffKey, Array<{ id: string; slot: Ingredient }>>();
+  const filled = new Set<Ingredient>();
+  let layer: StuffKey[] = available.filter((key) => !why.has(key));
+  let next: StuffKey[] = [];
+  /** The goods recipe `id` made available have depth `d`; they fill slots in the next round. */
+  const settle = (id: string, d: number): void => {
+    for (const key of madeBy.get(id) ?? []) {
+      if (depth.has(key)) continue;
+      depth.set(key, d);
+      next.push(key);
+    }
+  };
+  for (const key of layer) depth.set(key, 0);
+  for (const id of madeBy.keys()) {
+    const slots = (pack.recipeById.get(id)?.inputs ?? []).filter((ing) => ing.consumed);
+    open.set(id, slots.length);
+    for (const slot of slots) for (const o of slot.options) addTo(fills, o.key, { id, slot });
+    if (slots.length === 0) settle(id, 1);
+  }
+  for (let d = 0; layer.length > 0 || next.length > 0; d++) {
+    for (const key of layer) {
+      for (const { id, slot } of fills.get(key) ?? []) {
+        if (filled.has(slot)) continue;
+        filled.add(slot);
+        const left = (open.get(id) as number) - 1;
+        open.set(id, left);
+        if (left === 0) settle(id, d + 1);
+      }
+    }
+    layer = next;
+    next = [];
+  }
+  return depth;
 }
 
 /** Availability results per pack, keyed by the env's content; the least recently used entry goes first. */

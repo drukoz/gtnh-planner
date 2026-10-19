@@ -19,6 +19,11 @@ export interface ProjectViewState {
   project: Project | null; plan: Plan | null; planLoading: boolean; planError: string | null; connected: boolean; error: string | null;
   /** Set once when the project is gone: who deleted it, or null when this tab only found it missing. */
   deleted: { by: string | null } | null;
+  /**
+   * The plan that a plan of other settings (another `settingsHash`) replaced, for the "What changed" note (fix spec
+   * §6.4); null until a settings change replans. A plan of the same settings (a refetch, a rescan) leaves it.
+   */
+  previousPlan: Plan | null;
 }
 
 export interface StoreDeps {
@@ -49,7 +54,9 @@ interface Batch { ops: ProjectOp[]; by: string; at: string; ackRev: number | nul
 export function createProjectStore(id: string, deps: StoreDeps): ProjectStore {
   let confirmed: Project | null = null;
   let pending: Batch[] = [];
-  let state: ProjectViewState = { project: null, plan: null, planLoading: false, planError: null, connected: false, error: null, deleted: null };
+  let state: ProjectViewState = {
+    project: null, plan: null, planLoading: false, planError: null, connected: false, error: null, deleted: null, previousPlan: null,
+  };
   const listeners = new Set<() => void>();
   let closed = false;
   let fetching = false;
@@ -149,13 +156,16 @@ export function createProjectStore(id: string, deps: StoreDeps): ProjectStore {
     confirm(next);
   }
 
-  /** Fetches the plan; only the answer to the latest request is kept. */
+  /** Fetches the plan; only the answer to the latest request is kept, and the plan it replaces when its settings differ. */
   function loadPlan(): void {
     const request = ++planRequest;
     update({ planLoading: true });
     deps.fetchPlan(id).then(
       (plan) => {
-        if (request === planRequest) update({ plan, planLoading: false, planError: null });
+        if (request !== planRequest) return;
+        const shown = state.plan;
+        const previousPlan = shown !== null && shown.settingsHash !== plan.settingsHash ? shown : state.previousPlan;
+        update({ plan, previousPlan, planLoading: false, planError: null });
       },
       (err: unknown) => {
         if (request === planRequest) update({ planLoading: false, planError: messageOf(err) });
@@ -250,7 +260,9 @@ function liveDeps(): StoreDeps {
   };
 }
 
-const LOADING: ProjectViewState = { project: null, plan: null, planLoading: true, planError: null, connected: false, error: null, deleted: null };
+const LOADING: ProjectViewState = {
+  project: null, plan: null, planLoading: true, planError: null, connected: false, error: null, deleted: null, previousPlan: null,
+};
 const noStore = (): (() => void) => () => {};
 const loading = (): ProjectViewState => LOADING;
 const ignore = (): void => {};

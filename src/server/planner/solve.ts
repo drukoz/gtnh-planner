@@ -1,16 +1,45 @@
 // The rate solver (spec §3.3, prior-art §3.4 steps 3, 4 and 7): the main LP in extent form, solved in lexicographic
-// stages (least raw material, then power as a tie-break only, then a canonical form), a guard against recipe data loops
-// that make matter from nothing, and the goods that block a target nothing reachable can make, for plain-words warnings.
+// stages (least raw material, then a step charge or fewest recipes, then power as a tie-break only, then a canonical
+// form), a guard against recipe data loops that make matter from nothing, and the goods that block a target nothing
+// reachable can make, for plain-words warnings.
 
-import type { StuffKey } from '../../shared/keys.ts';
+import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import type { PlanWarning } from '../../shared/types/plan.ts';
-import type { CandidateGraph, LpRecipe } from './candidates.ts';
+import { canonicalRank, type CandidateGraph, type LpRecipe } from './candidates.ts';
 import { solveLp, type LpResult, type LpRow } from './lp.ts';
+import { sig9 } from './round.ts';
+
+/** How `solveLine` trades steps against raw material, and whether it only probes (fix spec R3, architecture §11.34). */
+export interface SolveOptions {
+  /** Share of the least raw material (S1) one recipe step must save to be built; 0 = least raw material, fewest recipes as tie-break. */
+  stepCharge?: number;
+  /** Weight of a crafting-table step: HAND_STEP_WEIGHT in rate mode with automateCrafting off, else 1. */
+  handWeight?: number;
+  /** S1 only: whether the line plans and its least-raw solution (avoid trials, below). */
+  probe?: boolean;
+}
+
+/** The step charge never lets total raw material go above (1 + this) × the least (S1) (fix spec §3). */
+export const STEP_CHARGE_CAP = 0.25;
+/** A crafting-table step weighs this many steps in a running line with crafting not automated (fix spec D7). */
+export const HAND_STEP_WEIGHT = 3;
+/** In the step-charge MIP a step recipe runs at most this many times the largest run count of S1 (its big-M). */
+export const STEP_BIG_M = 100;
+/** The step-charge MIP stops after its root node: a node limit, never a time limit, so the plan is deterministic. */
+export const STEP_MIP_MAX_NODES = 1;
+/**
+ * Fix spec R10: the tie-break weight of a non-canonical (`canonicalRank` 1) purchase or ore-dictionary option per unit,
+ * in the step-charge MIP (relative to raw material: a purchase pays this share of its raw cost more, a conversion this
+ * share of one unit of raw material) and in S4 (added to the column's canonical weight of 1).
+ */
+export const CANON_RANK_S3 = 1e-6;
+export const CANON_RANK_S4 = 1e-3;
 
 export interface Blocker { key: StuffKey; reason: 'unavailable' | 'rejected' | 'no-recipe'; needTier?: number }
 /**
- * The maps hold only values above 1e-9, rounded to 9 decimal places (so an exact 1 stays 1 and equal plans compare
- * equal), inserted in sorted key order; `rawCost` is rounded the same way. An infeasible solution has empty maps.
+ * The maps hold only values above 1e-9 per unit of the largest demand (the stages solve at unit demand, `solveLine`),
+ * scaled to the demand and kept to 9 significant digits (`sig9`: an exact 1 stays 1 and equal plans compare equal),
+ * inserted in sorted key order; `rawCost` and `leastRawCost` likewise. An infeasible solution has empty maps and costs 0.
  */
 export interface Solution {
   status: 'ok' | 'infeasible';
@@ -20,6 +49,8 @@ export interface Solution {
   sinks: Map<StuffKey, number>;
   /** Σ cost × buy. */
   rawCost: number;
+  /** The least raw material any plan of this graph needs (S1), never above `rawCost`: what the later stages trade. */
+  leastRawCost: number;
   blockers: Blocker[];
   warnings: PlanWarning[];
   // optional addition
@@ -27,8 +58,17 @@ export interface Solution {
   banned?: string[];
 }
 
-/** Values up to this count as zero: they never reach the maps, and a loop-guard run below it uses no recipe. */
+/**
+ * Values up to this count as zero (at unit demand: per unit of the largest demand): they never reach the maps, and a
+ * loop-guard run below it uses no recipe.
+ */
 const TINY = 1e-9;
+/**
+ * A stage balances a good when `|Σ a·x − d| ≤ RESIDUAL_ABS + RESIDUAL_REL × max(|d|, max |a·x|)` at unit demand
+ * (`residualViolations`); HiGHS's absolute tolerances can leave more, and a stage that does not balance is not used.
+ */
+export const RESIDUAL_REL = 1e-6;
+export const RESIDUAL_ABS = 1e-9;
 const MAX_LOOP_ROUNDS = 5;
 const MAX_BLOCKERS = 5;
 /** A free-loop warning names this many recipes, then counts the rest. */
@@ -38,11 +78,6 @@ const ZERO_RAW = 1e-6;
 
 function byString(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
-}
-
-/** 9 decimal places; −0 reads 0. */
-function round9(x: number): number {
-  return Math.round(x * 1e9) / 1e9 || 0;
 }
 
 function pushTo<K, V>(map: Map<K, V[]>, key: K, value: V): void {
@@ -62,9 +97,12 @@ interface MainLp {
   /**
    * Per column: cost × buy (S1), EU per run (S2), and 1 on every column (S4), but 1 + the recipes of its chain for buying
    * a derived leaf (`GoodInfo.steps`): among plans equal in everything else the one that buys Steel for its rods is
-   * simpler than the one that buys Magnetic Steel (steel, then a polarizer).
+   * simpler than the one that buys Magnetic Steel (steel, then a polarizer). A purchase or ore-dictionary conversion of a
+   * non-canonical good (`rank`) weighs CANON_RANK_S4 more in S4.
    */
   rawCost: number[]; power: number[]; canonical: number[];
+  /** Per column, `canonicalRank` of the good a purchase buys or a conversion takes (fix spec R10); 0 for other columns. */
+  rank: number[];
   /**
    * Per column, the free input (water, air, cobblestone, lava) one unit of it takes: 1 for buying a free good, what the
    * chain of a bought derived leaf takes per unit (`GoodInfo.free`), else 0. The fewest-recipes stage breaks its ties
@@ -116,7 +154,18 @@ function mainLp(graph: CandidateGraph, recipes: readonly LpRecipe[], demand: Rea
     canonical[firstBuy + i] = 1 + (derivedSteps[firstBuy + i] as number);
     free[firstBuy + i] = good.free ?? 0;
   });
-  return { recipes: sorted, buyKeys, goods, firstBuy, firstSink, rows, rawCost, power, canonical, free, derivedSteps };
+  const rank = new Array<number>(width).fill(0);
+  sorted.forEach((r, j) => {
+    const option = r.kind === 'convert' ? r.coeffs.find(([, c]) => c < 0)?.[0] : undefined;
+    if (option !== undefined) rank[j] = canonicalRank(option);
+  });
+  buyKeys.forEach((key, i) => {
+    rank[firstBuy + i] = canonicalRank(key);
+  });
+  rank.forEach((n, j) => {
+    canonical[j] = (canonical[j] as number) + CANON_RANK_S4 * n;
+  });
+  return { recipes: sorted, buyKeys, goods, firstBuy, firstSink, rows, rawCost, power, canonical, rank, free, derivedSteps };
 }
 
 /**
@@ -270,33 +319,67 @@ function lockRow(cost: readonly number[], value: number): LpRow[] {
   return entries.length === 0 ? [] : [{ lower: -Infinity, upper: value, entries }];
 }
 
-/** The values of `keys` (columns from `first` on) above TINY once rounded; the keys are already in sorted order. */
+/** The values of `keys` (columns from `first` on) above TINY, to 9 significant digits; the keys are already in sorted order. */
 function kept(keys: readonly string[], x: readonly number[], first: number): Map<string, number> {
   const out = new Map<string, number>();
   keys.forEach((key, i) => {
-    const value = round9(x[first + i] ?? 0);
-    if (value > TINY) out.set(key, value);
+    const value = x[first + i] ?? 0;
+    if (value > TINY) out.set(key, sig9(value));
   });
   return out;
 }
 
-/** Recipe columns that consume nothing: sources (rock breakers, ponds, farms), never part of a loop. */
+/**
+ * The rows `x` does not balance: per row, `residual` = activity − the nearest bound (`Σ a·x − d` for a row of demand
+ * `d`, purchases and sinks included) and `scale` = max(|that bound|, max |a·x|); a row fails when
+ * `|residual| > RESIDUAL_ABS + RESIDUAL_REL × scale`, or when its activity is not a number.
+ */
+export function residualViolations(rows: readonly LpRow[], x: readonly number[]): Array<{ row: number; residual: number; scale: number }> {
+  const out: Array<{ row: number; residual: number; scale: number }> = [];
+  rows.forEach((r, row) => {
+    let activity = 0;
+    let largest = 0;
+    for (const [j, a] of r.entries) {
+      const term = a * (x[j] ?? 0);
+      activity += term;
+      largest = Math.max(largest, Math.abs(term));
+    }
+    const bound = activity < r.lower ? r.lower : activity > r.upper ? r.upper : activity;
+    const residual = activity - bound;
+    const scale = Math.max(Number.isFinite(bound) ? Math.abs(bound) : 0, largest);
+    if (!Number.isFinite(residual) || Math.abs(residual) > RESIDUAL_ABS + RESIDUAL_REL * scale) out.push({ row, residual, scale });
+  });
+  return out;
+}
+
+/** The first of `stages` whose solution balances every row (`residualViolations`), or null when none does. */
+export function firstBalanced<T extends { x: readonly number[] }>(stages: readonly T[], rows: readonly LpRow[]): T | null {
+  for (const stage of stages) if (residualViolations(rows, stage.x).length === 0) return stage;
+  return null;
+}
+
+/**
+ * The source columns, never part of a loop: recipes that consume nothing (rock breakers, pumps, ponds, farms), and
+ * supply recipes (`LpRecipe.supply`, fix spec R2) such as the compressor that fills with air the cells a canner empties,
+ * so a line that runs on free inputs alone (Nitrogen from air) keeps them.
+ */
 function sourceColumns(lp: MainLp): Set<number> {
   const sources = new Set<number>();
   lp.recipes.forEach((r, j) => {
-    if (r.coeffs.every(([, c]) => c >= 0)) sources.add(j);
+    if (r.supply === true || r.coeffs.every(([, c]) => c >= 0)) sources.add(j);
   });
   return sources;
 }
 
 /**
- * The loop guard. A line that needs no raw material at all either runs on sources (recipes that consume nothing, free
- * goods made by them) or on a loop in the data that makes matter from nothing (x → 2 y, y → x). It is a loop when the
- * demand can still be met with every purchase and every source fixed to 0; then the loop is the least-runs steady state
- * that, again without purchases or sources and with no demand, leaves any surplus at all: only the loop's own recipes,
- * not the recipes that turn its output into the target, nor recipes that merely share a no-gain cycle with it (cells
- * filled and emptied). On the real export the old rule (every used recipe on any cycle) banned 58 recipes for an
- * Electronic Circuit, the salt water mixer and cell canners among them, because the Eye of Harmony (a source) ran.
+ * The loop guard. A line that needs no raw material at all either runs on sources (`sourceColumns`: recipes that consume
+ * nothing and supply recipes, and the goods made from them) or on a loop in the data that makes matter from nothing
+ * (x → 2 y, y → x). It is a loop when the demand can still be met with every purchase and every source fixed to 0; then
+ * the loop is the least-runs steady state that, again without purchases or sources and with no demand, leaves any
+ * surplus at all: only the loop's own recipes, not the recipes that turn its output into the target, nor recipes that
+ * merely share a no-gain cycle with it (cells filled and emptied). On the real export the old rule (every used recipe on
+ * any cycle) banned 58 recipes for an Electronic Circuit, the salt water mixer and cell canners among them, because the
+ * Eye of Harmony (a source) ran.
  */
 async function freeLoop(lp: MainLp): Promise<LpRecipe[]> {
   const sources = sourceColumns(lp);
@@ -321,38 +404,241 @@ async function freeLoop(lp: MainLp): Promise<LpRecipe[]> {
 const S3_TOLERANCE = 1e-6;
 
 /**
- * S3 and the lock the later stages keep. The MIP's big-M lets a recipe it leaves out still run a tiny amount (its
- * binary sits just above 0), so the least raw material is solved again without the left-out recipes: within
- * `S3_TOLERANCE` of S1 the stages lock that instead, else S3 is dropped (and approximated without a MIP).
+ * What the simplification stage leaves the later stages: the columns it fixes to 0 (step recipes, and derived purchases
+ * it does without), the lock on raw material they keep, its least-raw plan over the rest (`base`), and whether it
+ * failed (`skipped`, fix spec D2).
  */
-async function simplest(lp: MainLp, s1: LpResult, locks: LpRow[]): Promise<{ off: Set<number>; locks: LpRow[]; base: LpResult }> {
-  const candidates = [await fewestRecipesMip(lp, s1, locks), await fewestRecipes(lp, locks)];
-  for (const off of candidates) {
-    if (off === null || off.size === 0) continue;
-    const again = await minimize(lp, lp.rawCost, [], Infinity, off);
-    if (again.status === 'optimal' && again.objective <= s1.objective * (1 + S3_TOLERANCE) + TINY) {
-      return { off, locks: lockRow(lp.rawCost, Math.max(again.objective, s1.objective)), base: again };
-    }
-  }
-  return { off: new Set(), locks, base: s1 };
+interface Simplified { off: Set<number>; locks: LpRow[]; base: LpResult; skipped: boolean }
+
+/**
+ * Step charge 0, "Least raw material" (fix spec R3): the step-charge stage with the raw material held at the least (a
+ * cap of 0) and every step recipe weighing this, crafted by hand or not. Among the plans of least raw material it
+ * looks for one of fewest recipes, then the least free input and power: a recipe weighs 10 times what the least-raw
+ * plan's free input weighs in S3's tie-breaks (S3_FREE_SHARE), so a plan of one more recipe wins only where the fewer
+ * would take over 10 times that free input. S3's fewest-recipes MIPs (`fewestRecipesMip`, S3_MAX_NODES each) took up to
+ * 14 s on the real-data corpus and 181 s on the user's settings at Advanced Circuit HV, on the larger graphs of the
+ * step-bounded pruning (R4); this root-node MIP, started from S1, plans them in under 3 s, within 2 steps of S3's
+ * count. A weight of 0.05 to 1 made HiGHS's root node take 5 to 14 s on one of those lines.
+ */
+const LEAST_RAW_STEP = 0.01;
+
+/**
+ * The simplification stage (fix spec R3), for a line that needs raw material: the step-charge stage, at
+ * `opts.stepCharge` when it is above 0, else held at the least raw material (`LEAST_RAW_STEP`). A line that needs
+ * none has nothing to weigh its steps against: today's fewest recipes (`fewestRecipesStage`).
+ */
+function simplest(lp: MainLp, s1: LpResult, locks: LpRow[], opts: SolveOptions): Promise<Simplified> {
+  if (!(s1.objective > TINY)) return fewestRecipesStage(lp, s1, locks);
+  const charge = opts.stepCharge ?? 0;
+  if (Number.isFinite(charge) && charge > 0) return chargedStage(lp, s1, locks, charge, opts.handWeight ?? 1, STEP_CHARGE_CAP);
+  return chargedStage(lp, s1, locks, LEAST_RAW_STEP, 1, 0);
 }
 
-/** S3, S2 and S4 on top of an optimal S1, then the rounded maps. */
-async function finish(lp: MainLp, s1: LpResult, warnings: PlanWarning[]): Promise<Solution> {
-  // S3, S2 and S4 only break ties: a stage that does not solve (numerically, or S2 unbounded by a recipe with negative
-  // EU) keeps the previous stage's plan, which already uses the least raw material (S3's: the least raw material
-  // without the recipes it left out). S3 runs before power, so power never picks a longer chain among equally cheap
-  // ones; the later stages keep to the recipes S3 left.
-  const open = lockRow(lp.rawCost, s1.objective);
-  const { off, locks, base } = await simplest(lp, s1, open);
-  let best = base;
-  const s2 = await minimize(lp, lp.power, locks, Infinity, off);
-  if (s2.status === 'optimal') {
-    best = s2;
-    locks.push(...lockRow(lp.power, s2.objective));
+/**
+ * S3 and the lock the later stages keep. The MIP's big-M lets a recipe it leaves out still run a tiny amount (its
+ * binary sits just above 0), so the least raw material is solved again without the left-out recipes: within
+ * `S3_TOLERANCE` of S1 the stages lock that instead, else S3 is dropped (and approximated without a MIP). `skipped`:
+ * neither stage came back, or each that left recipes out failed that check (fix spec D2: never skip silently); one that
+ * leaves nothing out (every recipe of the graph is needed) is a plan as simple as it gets, so nothing was skipped.
+ */
+async function fewestRecipesStage(lp: MainLp, s1: LpResult, locks: LpRow[]): Promise<Simplified> {
+  const candidates = [await fewestRecipesMip(lp, s1, locks), await fewestRecipes(lp, locks)];
+  let simple = false;
+  for (const off of candidates) {
+    if (off === null) continue;
+    if (off.size === 0) {
+      simple = true;
+      continue;
+    }
+    const again = await minimize(lp, lp.rawCost, [], Infinity, off);
+    if (again.status === 'optimal' && again.objective <= s1.objective * (1 + S3_TOLERANCE) + TINY) {
+      return { off, locks: lockRow(lp.rawCost, Math.max(again.objective, s1.objective)), base: again, skipped: false };
+    }
   }
+  return { off: new Set(), locks, base: s1, skipped: !simple };
+}
+
+/** A step recipe's weight in the step charge: `handWeight` for a crafting-table recipe, 1 for any other. */
+function stepWeight(r: LpRecipe, handWeight: number): number {
+  return r.mapId === 'crafting' ? handWeight : 1;
+}
+
+/**
+ * The step-charge MIP (fix spec R3 step 2). Over the main rows and `Σ raw ≤ (1 + cap) × S1` it minimizes the
+ * raw material in units of S1's, with S3's free-input and power tie-breaks (`tieBreaks`) and the canonical rank
+ * (CANON_RANK_S3), plus `charge` × `stepWeight` for each step recipe it runs and S3's small charge for each priced
+ * derived leaf it buys. One binary per step recipe and per such purchase, `column ≤ M × binary` (M: STEP_BIG_M × the
+ * largest S1 run for a recipe, what the cap lets the line buy for a purchase). It starts from S1 (each counted column
+ * S1 uses above TINY on) and stops after STEP_MIP_MAX_NODES nodes with the best whole solution it has, which may be the
+ * start. Returns the counted columns it leaves out (binary off, or a step recipe it does not run), or null when it has
+ * no whole solution or nothing to count.
+ */
+async function chargeMip(lp: MainLp, s1: LpResult, charge: number, handWeight: number, cap: number): Promise<Set<number> | null> {
+  const least = s1.objective;
+  let largest = 0;
+  for (let j = 0; j < lp.firstBuy; j++) largest = Math.max(largest, s1.x[j] ?? 0);
+  if (largest <= TINY || !(least > TINY)) return null;
+  const width = lp.rawCost.length;
+  const capped = (1 + cap) * least;
+  const counted: Array<{ j: number; weight: number; bigM: number; step: boolean }> = [];
+  lp.recipes.forEach((r, j) => {
+    if (r.kind === 'recipe') counted.push({ j, weight: charge * stepWeight(r, handWeight), bigM: STEP_BIG_M * largest, step: true });
+  });
+  if (counted.length === 0) return null;
+  lp.derivedSteps.forEach((n, j) => {
+    const cost = lp.rawCost[j] ?? 0;
+    if (n > 0 && cost > 0) counted.push({ j, weight: S3_DERIVED_STEP * n, bigM: (capped / cost) * (1 + S3_TOLERANCE) + TINY, step: false });
+  });
+  const tb = tieBreaks(lp, s1.x);
+  const isPurchase = (j: number): boolean => j >= lp.firstBuy && j < lp.firstSink;
+  const colCost = [
+    ...lp.rawCost.map((c, j) => c / least + (tb[j] ?? 0) + (CANON_RANK_S3 * (lp.rank[j] ?? 0) * (isPurchase(j) ? c : 1)) / least),
+    ...counted.map((c) => c.weight),
+  ];
+  const all = width + counted.length;
+  const result = await solveLp({
+    sense: 'min', colCost, colLower: new Array<number>(all).fill(0), colUpper: new Array<number>(all).fill(Infinity).fill(1, width),
+    rows: [
+      ...lp.rows, ...lockRow(lp.rawCost, capped),
+      ...counted.map((c, k): LpRow => ({ lower: -Infinity, upper: 0, entries: [[c.j, 1], [width + k, -c.bigM]] })),
+    ],
+    integer: new Array<boolean>(all).fill(false).fill(true, width), maxNodes: STEP_MIP_MAX_NODES,
+    start: [...lp.rawCost.map((_, j) => Math.max(0, s1.x[j] ?? 0)), ...counted.map((c) => ((s1.x[c.j] ?? 0) > TINY ? 1 : 0))],
+  });
+  if (result.status !== 'optimal' && result.status !== 'feasible') return null;
+  const off = new Set<number>();
+  counted.forEach((c, k) => {
+    if ((result.x[width + k] ?? 0) < 0.5 || (c.step && (result.x[c.j] ?? 0) <= TINY)) off.add(c.j);
+  });
+  return off;
+}
+
+/** What one run of `r` nets of `key` (its coefficient; 0 when it has none). */
+function netOf(r: LpRecipe | undefined, key: StuffKey): number {
+  return r?.coeffs.find(([k]) => k === key)?.[1] ?? 0;
+}
+
+/**
+ * Consolidation (fix spec R3 step 4): for each good that is the main output (`LpRecipe.main`) of two or more step
+ * recipes `base` runs, its smaller producers, least made first, one LP each: leave it out when the least raw material
+ * without it, in units of S1's, plus `charge` × the weights of the step recipes that plan runs is lower (and within
+ * `limit`, the cap). Goods by key, so the result does not depend on the export's order.
+ */
+async function consolidated(
+  lp: MainLp, s1: LpResult, start: { off: Set<number>; base: LpResult }, charge: number, handWeight: number, limit: number,
+): Promise<{ off: Set<number>; base: LpResult }> {
+  const score = (plan: LpResult): number => {
+    let weights = 0;
+    lp.recipes.forEach((r, j) => {
+      if (r.kind === 'recipe' && (plan.x[j] ?? 0) > TINY) weights += stepWeight(r, handWeight);
+    });
+    return plan.objective / s1.objective + charge * weights;
+  };
+  let { off, base } = start;
+  let best = score(base);
+  const producers = new Map<StuffKey, number[]>();
+  lp.recipes.forEach((r, j) => {
+    if (r.kind === 'recipe' && r.main !== undefined) pushTo(producers, r.main, j);
+  });
+  for (const key of [...producers.keys()].sort(byString)) {
+    const made = (j: number): number => (base.x[j] ?? 0) * netOf(lp.recipes[j], key);
+    const running = (producers.get(key) as number[]).filter((j) => !off.has(j) && (base.x[j] ?? 0) > TINY);
+    if (running.length < 2) continue;
+    running.sort((a, b) => made(b) - made(a) || byString((lp.recipes[a] as LpRecipe).id, (lp.recipes[b] as LpRecipe).id));
+    for (const j of running.slice(1).reverse()) {
+      if (!((base.x[j] ?? 0) > TINY)) continue;   // an earlier removal left it idle
+      const without = new Set(off).add(j);
+      const tried = await minimize(lp, lp.rawCost, [], Infinity, without);
+      if (tried.status !== 'optimal' || tried.objective > limit) continue;
+      const s = score(tried);
+      if (s + TINY < best) {
+        off = without;
+        base = tried;
+        best = s;
+      }
+    }
+  }
+  return { off, base };
+}
+
+/**
+ * The step-charge stage (fix spec R3 steps 2–5), raw material at most (1 + `cap`) × S1: the charge MIP's support
+ * (`chargeMip`), its least raw material solved again over that support (`base`, within the cap); when either fails,
+ * today's fewest recipes with the exact lock (`fewestRecipesStage`, which says so when it fails too); then
+ * `consolidated`. The later stages run only the step recipes the base runs, the derived purchases left out stay out,
+ * and they lock raw material at the base's.
+ */
+async function chargedStage(lp: MainLp, s1: LpResult, open: LpRow[], charge: number, handWeight: number, cap: number): Promise<Simplified> {
+  const limit = (1 + cap) * s1.objective * (1 + S3_TOLERANCE) + TINY;
+  let start: { off: Set<number>; base: LpResult } | undefined;
+  const mipOff = await chargeMip(lp, s1, charge, handWeight, cap);
+  if (mipOff !== null) {
+    const base = await minimize(lp, lp.rawCost, [], Infinity, mipOff);
+    if (base.status === 'optimal' && base.objective <= limit) start = { off: mipOff, base };
+  }
+  if (start === undefined) {
+    const fallback = await fewestRecipesStage(lp, s1, open);
+    if (fallback.skipped) return fallback;
+    start = { off: fallback.off, base: fallback.base };
+  }
+  const { off, base } = await consolidated(lp, s1, start, charge, handWeight, limit);
+  const leftOut = new Set([...off].filter((j) => j >= lp.firstBuy));
+  lp.recipes.forEach((r, j) => {
+    if (r.kind === 'recipe' && !((base.x[j] ?? 0) > TINY)) leftOut.add(j);
+  });
+  return { off: leftOut, locks: lockRow(lp.rawCost, Math.max(base.objective, s1.objective)), base, skipped: false };
+}
+
+/** The `simplify-skipped` warning (fix spec D2), a fresh object per plan. */
+function simplifySkipped(): PlanWarning {
+  return { code: 'simplify-skipped', text: 'Could not simplify this plan; it may use more machines than it needs' };
+}
+
+/**
+ * The `numerics` warning (fix spec D2) for the stage solution `x` that does not balance: it names the good of its worst
+ * row (the most times over its allowance) by key; planLine names it in words.
+ */
+function numericsWarning(lp: MainLp, x: readonly number[]): PlanWarning {
+  let worst: { row: number; over: number } | undefined;
+  for (const v of residualViolations(lp.rows, x)) {
+    const over = Number.isFinite(v.residual) ? Math.abs(v.residual) / (RESIDUAL_ABS + RESIDUAL_REL * v.scale) : Infinity;
+    if (worst === undefined || over > worst.over) worst = { row: v.row, over };
+  }
+  const key = lp.goods[worst?.row ?? -1];
+  return key === undefined
+    ? { code: 'numerics', text: 'The solver could not balance this plan exactly; the plan uses an earlier stage' }
+    : { code: 'numerics', key, text: `The solver could not balance ${key} exactly; the plan uses an earlier stage` };
+}
+
+/**
+ * S3 (or the step charge, `opts`), S2 and S4 on top of an optimal S1, the latest of them that balances (`firstBalanced`),
+ * then the rounded maps.
+ */
+async function finish(lp: MainLp, s1: LpResult, warnings: PlanWarning[], opts: SolveOptions): Promise<Solution> {
+  // S3 (fewest recipes), S2 and S4 only break ties: a stage that does not solve (numerically, or S2 unbounded by a
+  // recipe with negative EU) keeps the previous stage's plan, which already uses the least raw material (S3's: the
+  // least raw material without the recipes it left out). With a step charge S3 instead trades raw material for steps, up
+  // to the cap (at 0 there is no room above S1). S3 runs before power, so power never picks a longer chain among equally
+  // cheap ones; the later stages keep to the recipes S3 left.
+  const open = lockRow(lp.rawCost, s1.objective);
+  const { off, locks, base, skipped } = await simplest(lp, s1, open, opts);
+  const s2 = await minimize(lp, lp.power, locks, Infinity, off);
+  if (s2.status === 'optimal') locks.push(...lockRow(lp.power, s2.objective));
   const s4 = await minimize(lp, lp.canonical, locks, Infinity, off);
-  if (s4.status === 'optimal') best = s4;
+  // Latest first: S4, S2, the simplified base, S1. A stage whose solution leaves a good unbalanced beyond the residual
+  // allowance (HiGHS's absolute tolerances) gives way to an earlier one, and the plan says so; when none balances, the
+  // latest stays and the warning names its worst good.
+  const stages: LpResult[] = [];
+  if (s4.status === 'optimal') stages.push(s4);
+  if (s2.status === 'optimal') stages.push(s2);
+  stages.push(base);
+  if (base !== s1) stages.push(s1);
+  const latest = stages[0] as LpResult;
+  const balanced = firstBalanced(stages, lp.rows);
+  const best = balanced ?? latest;
+  const notes = [...warnings];
+  if (skipped) notes.push(simplifySkipped());
+  if (best !== latest || balanced === null) notes.push(numericsWarning(lp, latest.x));
 
   let rawCost = 0;
   lp.rawCost.forEach((c, j) => {
@@ -363,7 +649,24 @@ async function finish(lp: MainLp, s1: LpResult, warnings: PlanWarning[]): Promis
     runs: kept(lp.recipes.map((r) => r.id), best.x, 0),
     buys: kept(lp.buyKeys, best.x, lp.firstBuy),
     sinks: kept(lp.goods, best.x, lp.firstSink),
-    rawCost: round9(rawCost), blockers: [], warnings,
+    // Within tolerance a later stage may read a hair under S1's objective; the least is never more than the plan's.
+    rawCost: sig9(rawCost), leastRawCost: sig9(Math.min(s1.objective, rawCost)), blockers: [], warnings: notes,
+  };
+}
+
+/**
+ * A probe's answer (`SolveOptions.probe`, fix spec R3): S1's plan as it stands, no later stage; its raw material is the
+ * least (`rawCost` = `leastRawCost`).
+ */
+function probed(lp: MainLp, s1: LpResult, warnings: PlanWarning[]): Solution {
+  let rawCost = 0;
+  lp.rawCost.forEach((c, j) => {
+    rawCost += c * (s1.x[j] ?? 0);
+  });
+  const least = sig9(Math.min(s1.objective, rawCost));
+  return {
+    status: 'ok', runs: kept(lp.recipes.map((r) => r.id), s1.x, 0), buys: kept(lp.buyKeys, s1.x, lp.firstBuy),
+    sinks: kept(lp.goods, s1.x, lp.firstSink), rawCost: least, leastRawCost: least, blockers: [], warnings,
   };
 }
 
@@ -376,13 +679,38 @@ function cappedList(ids: readonly string[]): string {
 /**
  * The cheapest steady state that meets `demand` (per unit of time): S1 least raw material (spec §3.3), S3 as few recipes
  * as that allows (`simplest`), S2 least power among those, S4 the least total of runs, purchases and sinks (canonical).
+ * With `opts.stepCharge` above 0 S3 is the step charge instead (fix spec R3): each step recipe must save that share of
+ * S1 to be built (a crafting-table one `opts.handWeight` times it), never above STEP_CHARGE_CAP over S1; without it
+ * (0) the same stage keeps raw material at S1's and weighs every step recipe alike (`LEAST_RAW_STEP`), for as few
+ * recipes as the least raw material allows. `opts.probe` stops after S1 (and the loop guard).
  * After S1 the loop guard may ban recipes that make matter from nothing and start again, 5 times at most: then one
  * `free-loop` warning names what it left out (`banned`). When the solve after the fifth ban still finds such a loop, the
  * line is `infeasible` with one warning: there is no honest way to make the targets from these recipes, and the plan
  * never shows one that makes something from nothing (Review Focus #4). Infeasible → the goods that block it, unless the
  * graph was cut short (`truncated`): goods it never walked look unmakeable there, so it names none.
+ *
+ * The LP is homogeneous in the demand (no fixed costs), so every stage solves the demand divided by its largest amount
+ * and the result is scaled back (fix spec D1): the stages see the same numbers at 1 per hour as at 1 per second.
+ * HiGHS's feasibility tolerances are absolute (1e-7 on rows lp.ts divides by their largest coefficient), so at
+ * 1 Electronic Circuit per hour (flows of 1e-8..1e-4 per second) S1 took cells from nothing, the fewest-recipes MIP
+ * found its raw lock infeasible, and S2/S4 dropped whole chains (Polyvinyl Acetate) inside the tolerance. Every
+ * absolute threshold (`TINY`, `ZERO_RAW`, the S3 big-M, the tie-break scalings) is thereby per unit of target.
  */
-export async function solveLine(graph: CandidateGraph, demand: ReadonlyMap<StuffKey, number>): Promise<Solution> {
+export async function solveLine(graph: CandidateGraph, demand: ReadonlyMap<StuffKey, number>, opts: SolveOptions = {}): Promise<Solution> {
+  let scale = 0;
+  for (const amount of demand.values()) scale = Math.max(scale, Math.abs(amount));
+  if (!(scale > 0) || !Number.isFinite(scale) || scale === 1) return solveUnit(graph, demand, opts);
+  const unit = new Map([...demand].map(([key, amount]): [StuffKey, number] => [key, amount / scale]));
+  const sol = await solveUnit(graph, unit, opts);
+  const times = <K>(values: ReadonlyMap<K, number>): Map<K, number> => new Map([...values].map(([key, v]): [K, number] => [key, sig9(v * scale)]));
+  return {
+    ...sol, runs: times(sol.runs), buys: times(sol.buys), sinks: times(sol.sinks),
+    rawCost: sig9(sol.rawCost * scale), leastRawCost: sig9(sol.leastRawCost * scale),
+  };
+}
+
+/** `solveLine` at the demand given (unit demand, or a demand that cannot be scaled). */
+async function solveUnit(graph: CandidateGraph, demand: ReadonlyMap<StuffKey, number>, opts: SolveOptions): Promise<Solution> {
   const banned: string[] = [];
   const bannedSet = new Set<string>();
   const loopWarnings = (): PlanWarning[] => (banned.length === 0 ? [] : [{
@@ -390,7 +718,7 @@ export async function solveLine(graph: CandidateGraph, demand: ReadonlyMap<Stuff
     text: `Ignored ${banned.length === 1 ? '1 recipe' : `${banned.length} recipes`} that make ${graph.targets.join(', ')} from nothing (likely a recipe data loop): ${cappedList(banned)}`,
   }]);
   const infeasible = (blockers: Blocker[], warnings: PlanWarning[]): Solution => ({
-    status: 'infeasible', runs: new Map(), buys: new Map(), sinks: new Map(), rawCost: 0, blockers, warnings, banned: [...banned],
+    status: 'infeasible', runs: new Map(), buys: new Map(), sinks: new Map(), rawCost: 0, leastRawCost: 0, blockers, warnings, banned: [...banned],
   });
   for (let round = 0; ; round++) {
     const recipes = graph.recipes.filter((r) => !bannedSet.has(r.id));
@@ -403,7 +731,7 @@ export async function solveLine(graph: CandidateGraph, demand: ReadonlyMap<Stuff
     }
     const loop = s1.objective <= ZERO_RAW ? await freeLoop(lp) : [];
     if (loop.length === 0) {
-      const done = await finish(lp, s1, loopWarnings());
+      const done = opts.probe === true ? probed(lp, s1, loopWarnings()) : await finish(lp, s1, loopWarnings(), opts);
       done.banned = [...banned];
       return done;
     }
@@ -424,9 +752,35 @@ export async function solveLine(graph: CandidateGraph, demand: ReadonlyMap<Stuff
 /**
  * What making one unit of a good on its own costs: `cost` in raw material (Infinity: only a chain through the line's
  * target makes it), `steps`, the recipes that chain runs (ore-dictionary conversions are not recipes), and `free`, the
- * free input it takes (`MainLp.free`).
+ * free input it takes (`MainLp.free`); `recipes` and `top` say which recipes those are (fix spec R7).
  */
-export interface Standalone { cost: number; steps: number; free: number }
+export interface Standalone {
+  cost: number; steps: number; free: number;
+  /** The step recipes the chain runs (`steps` of them), the most runs first, equal runs by id. */
+  recipes: string[];
+  /**
+   * The recipe of the chain that makes most of the good, container moves left out (`isContainerMove`); for a fluid, the
+   * filled containers of it a recipe makes count as that fluid. None when no other recipe of the chain makes it.
+   */
+  top?: string;
+}
+
+/** A filled container and the litres of its fluid (`Pack.fluidContainers`). */
+export interface FluidContainer { container: StuffKey; fluid: StuffKey; amount: number }
+
+/**
+ * A recipe that only moves `fluid` between a container and its bulk form: one whose only consumed good is a filled
+ * container of it (a canner emptying an Ethylene Cell), or one that only makes filled containers of it, from it (a
+ * canner filling cells). `holds` gives a filled container's fluid.
+ */
+function isContainerMove(r: LpRecipe, fluid: StuffKey | undefined, holds: ReadonlyMap<StuffKey, FluidContainer>): boolean {
+  if (fluid === undefined) return false;
+  const inputs = r.coeffs.filter(([, c]) => c < 0).map(([key]) => key);
+  const outputs = r.coeffs.filter(([, c]) => c > 0).map(([key]) => key);
+  const holdsFluid = (key: StuffKey): boolean => holds.get(key)?.fluid === fluid;
+  if (inputs.length === 1 && holdsFluid(inputs[0] as StuffKey)) return true;
+  return inputs.includes(fluid) && outputs.length > 0 && outputs.every(holdsFluid);
+}
 
 /**
  * The least raw material that makes one unit of each of `keys` on its own in `graph`: S1 of the main LP with that one
@@ -434,13 +788,26 @@ export interface Standalone { cost: number; steps: number; free: number }
  * good instead of making it should cost, without the arbitrary split of a recipe's cost between its co-products that
  * the cost analysis (costs.ts) makes (pyrolysis there priced charcoal at 0 and gave the whole log to its wood gas).
  * Infinity when only a chain through `notInputs` makes the good (Magnetic Steel from the Steel target); undefined when
- * the graph cannot make it at all.
+ * the graph cannot make it at all. `containers` (the pack's filled containers) tell the recipes that only fill or empty
+ * one from the chemistry `Standalone.top` names.
  */
 export async function standaloneCosts(
-  graph: CandidateGraph, keys: readonly StuffKey[], notInputs: readonly StuffKey[] = [],
+  graph: CandidateGraph, keys: readonly StuffKey[], notInputs: readonly StuffKey[] = [], containers: readonly FluidContainer[] = [],
 ): Promise<Map<StuffKey, Standalone | undefined>> {
   const out = new Map<StuffKey, Standalone | undefined>();
   if (keys.length === 0) return out;
+  const holds = new Map<StuffKey, FluidContainer>();
+  for (const c of containers) if (!holds.has(c.container)) holds.set(c.container, c);
+  /** What one run of `r` makes of `key`: its own output, and for a fluid each filled container of it at its litres. */
+  const madeOf = (r: LpRecipe, key: StuffKey): number => {
+    let made = 0;
+    for (const [k, c] of r.coeffs) {
+      if (c <= 0) continue;
+      if (k === key) made += c;
+      else if (holds.get(k)?.fluid === key) made += c * (holds.get(k) as FluidContainer).amount;
+    }
+    return made;
+  };
   const lp = mainLp(graph, graph.recipes, new Map());
   const rowOf = new Map(lp.goods.map((key, g) => [key, g]));
   const width = lp.rawCost.length;
@@ -463,14 +830,26 @@ export async function standaloneCosts(
     }
     const result = await solve(g, barred);
     if (result.status === 'optimal') {
-      const steps = lp.recipes.filter((r, j) => r.kind === 'recipe' && (result.x[j] ?? 0) > TINY).length;
+      const ran = lp.recipes.flatMap((r, j) => {
+        const runs = result.x[j] ?? 0;
+        return r.kind === 'recipe' && runs > TINY ? [{ r, runs: sig9(runs) }] : [];
+      }).sort((a, b) => b.runs - a.runs || byString(a.r.id, b.r.id));
       let free = 0;
       lp.free.forEach((f, j) => {
         free += f * (result.x[j] ?? 0);
       });
-      out.set(key, { cost: Math.max(0, result.objective), steps, free: round9(free) });
+      const fluid = isFluidKey(key) ? key : holds.get(key)?.fluid;
+      let top: { id: string; made: number } | undefined;
+      for (const { r, runs } of ran) {
+        if (isContainerMove(r, fluid, holds)) continue;
+        const made = sig9(runs * madeOf(r, key));
+        if (made > TINY && (top === undefined || made > top.made || (made === top.made && r.id < top.id))) top = { id: r.id, made };
+      }
+      const made: Standalone = { cost: Math.max(0, result.objective), steps: ran.length, free: sig9(free), recipes: ran.map(({ r }) => r.id) };
+      if (top !== undefined) made.top = top.id;
+      out.set(key, made);
     } else if (barred.size > 0 && (await solve(g, new Set())).status === 'optimal') {
-      out.set(key, { cost: Infinity, steps: 0, free: 0 });
+      out.set(key, { cost: Infinity, steps: 0, free: 0, recipes: [] });
     } else {
       out.set(key, undefined);
     }

@@ -1,13 +1,14 @@
 // The build list (spec §3.10 "to build the line (once)", architecture §11.13 and §11.15): the machines, multiblock
 // structures, cleanroom and one-off items a line needs, each broken down along its cheapest accepted recipe to base
-// materials, plus those base materials summed. `expandBomLines` gives Plan 5's layout parts the same breakdown.
+// materials, plus those base materials summed, each saying which lines need it. `expandBomLines` gives Plan 5's layout
+// parts the same breakdown.
 
 import { PSEUDO_MACHINES } from '../../shared/gt/tiers.ts';
 import { itemKey, type StuffKey } from '../../shared/keys.ts';
 import type { Machine, Pack } from '../../shared/types/pack.ts';
-import type { BomLine, PlanContext, PlanSettings, PlanStep, PlanWarning } from '../../shared/types/plan.ts';
+import { FREE_KEYS, type BomLine, type PlanContext, type PlanSettings, type PlanStep, type PlanWarning } from '../../shared/types/plan.ts';
 import { buildCandidates, heldOption, type HeldAvoid, type LeafOracle, type LpRecipe, type PlanEnv } from './candidates.ts';
-import { analyzeCosts, type CostAnalysis } from './costs.ts';
+import { analyzeCosts, makePrices, type CostAnalysis } from './costs.ts';
 import { yieldToEventLoop } from './lp.ts';
 import { lineLeaf } from './pricing.ts';
 
@@ -23,8 +24,8 @@ const MAX_DEPTH = 12;
 const TINY = 1e-9;
 /** Ruling R8 (architecture §11.19): the cleanroom is the machine with this simple class name. */
 const CLEANROOM_CLASS = 'MTECleanroom';
-const TOTAL_WHY = 'base material';
 const PSEUDO_IDS: ReadonlySet<number> = new Set(Object.values(PSEUDO_MACHINES));
+const FREE: ReadonlySet<StuffKey> = new Set(FREE_KEYS);
 
 function byString(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
@@ -179,12 +180,18 @@ export async function expandBomLines(
 
 interface Expansion { settings: PlanSettings; env: PlanEnv; leaf: LeafOracle; ctx: PlanContext }
 
-/** One accepted recipe that makes a good: how much of it per run, and the raw cost per unit (cost analysis). */
+/**
+ * One accepted recipe that makes a good: how much of it per run, and the raw cost of a run's inputs per unit made (cost
+ * analysis), with no credit for its other outputs.
+ */
 interface Producer { lp: LpRecipe; perRun: number; cost: number }
 
 /** The accepted recipes of a candidate graph, ranked per good, and the option each ore-dictionary slot takes. */
 interface RecipeBook {
-  /** Cheapest first (lowest raw cost, ties by id); only the pinned recipe when `settings.recipeChoice` pins one of them. */
+  /**
+   * Cheapest first (lowest `Producer.cost`, ties by id), for an empty container none that consumes a filled container
+   * or the container itself; only the pinned recipe when `settings.recipeChoice` pins one of them.
+   */
   producersOf(key: StuffKey): Producer[];
   /** The consumed inputs of one run, ore-dictionary slots resolved to their cheapest option, summed per key and sorted. */
   inputsOf(lp: LpRecipe): Array<[StuffKey, number]>;
@@ -232,6 +239,14 @@ async function recipeBook(pack: Pack, x: Expansion, targets: StuffKey[]): Promis
 
   const ranked = new Map<StuffKey, Producer[]>();
   const resolved = new Map<string, Array<[StuffKey, number]>>();
+  const filled = new Set((pack.fluidContainers ?? []).map((c) => c.container));
+  const empties = new Set((pack.fluidContainers ?? []).flatMap((c) => (c.empty === null ? [] : [c.empty])));
+  /** What a run's inputs cost per unit of `key`, without credit for its other outputs: the breakdown throws those away. */
+  const gross = (lp: LpRecipe, perRun: number): number => {
+    let total = 0;
+    for (const [input, c] of lp.coeffs) if (c < 0) total -= c * costs.cost(input);
+    return total / perRun;
+  };
   const chosenOption = new Map<StuffKey, { key: StuffKey; amount: number } | undefined>();
   const optionFor = (virtual: StuffKey): { key: StuffKey; amount: number } | undefined => {
     if (!chosenOption.has(virtual)) {
@@ -250,7 +265,13 @@ async function recipeBook(pack: Pack, x: Expansion, targets: StuffKey[]): Promis
     producersOf(key) {
       let list = ranked.get(key);
       if (list === undefined) {
-        const all = (makers.get(key) ?? []).map(({ lp, perRun }) => ({ lp, perRun, cost: costs.recipeCost(lp.id, key) }));
+        // Ranked by `gross` cost: credit for the outputs the breakdown throws away made the Advanced Glue mixer, 3 Empty
+        // Cells beside 5,000 L of glue, the "cheapest" Empty Cell (fix spec D15, audit patch G-bom-containers). And an
+        // empty container is made from its own parts, never by emptying or reacting a filled one (or itself).
+        const empty = empties.has(key);
+        const all = (makers.get(key) ?? [])
+          .filter(({ lp }) => !empty || !lp.coeffs.some(([input, c]) => c < 0 && (filled.has(input) || input === key)))
+          .map(({ lp, perRun }) => ({ lp, perRun, cost: gross(lp, perRun) }));
         const pin = Object.hasOwn(x.settings.recipeChoice, key) ? x.settings.recipeChoice[key] : undefined;
         const pinned = all.filter((p) => p.lp.id === pin);
         list = pinned.length > 0 ? pinned : all.sort(byCostThenId);
@@ -275,6 +296,19 @@ async function recipeBook(pack: Pack, x: Expansion, targets: StuffKey[]): Promis
   };
 }
 
+/**
+ * The breakdown's leaf oracle: the line's, except that every free input (`FREE_KEYS`) is a leaf at its price (fix spec
+ * R2): a running line makes its own with a generator (`PlanBasis.supplied`), but the one-off materials of its machines
+ * get none.
+ */
+function freeLeaves(pack: Pack, x: Expansion): LeafOracle {
+  const prices = makePrices(pack, x.settings.costOverrides);
+  return (key) => {
+    const d = x.leaf(key);
+    return d.buyable || !FREE.has(key) ? d : { buyable: true, cost: prices.price(key), leafClass: 'free' };
+  };
+}
+
 /** A copy of what storage holds of `key` (§11.20, ruling R9): `total` and `reachable`, plus `where` when known. */
 function haveOf(ctx: PlanContext, key: StuffKey): BomLine['have'] {
   const stock = ctx.storage.get(key);
@@ -286,18 +320,22 @@ function haveOf(ctx: PlanContext, key: StuffKey): BomLine['have'] {
 
 /**
  * The breakdown `buildBom` and `expandBomLines` share, so the two can never differ. Each line keeps its key, amount,
- * why and group and gets what storage holds of it. A good is a leaf when the line can buy it, when it is a base
+ * why and group and gets what storage holds of it. A good is a leaf when it is a free input (`freeLeaves`: always, even
+ * where the line itself plans its generator), when the line can buy it, when it is a base
  * material out of reach (the material itself is what the group must unlock, as solve.ts names it), when no accepted
  * recipe makes it without consuming a good it is being made for, or 12 levels down. Anything else is made by its
- * cheapest accepted recipe (raw cost from the cost analysis of the lines' own candidate graph, ties by id):
- * `ceil(amount / made per run)` runs, whose consumed inputs × runs are its children (sorted by key, ruling R7).
- * `totals` sums the leaves per key, sorted by key. Lines that are leaves themselves are not targets of the graph, so
- * where another line consumes them they keep their purchase price. `warnings` holds the graph's `graph-too-big`, in
- * the build list's words, when the graph hit its recipe cap.
+ * cheapest accepted recipe (`RecipeBook.producersOf`: what a run's inputs cost in the cost analysis of the lines' own
+ * candidate graph, ties by id; an Empty Cell never from a filled one): `ceil(amount / made per run)` runs, whose
+ * consumed inputs × runs are its children (sorted by key, ruling R7). `totals` sums the leaves per key, sorted by key,
+ * each with the top-level lines that need it (`neededFor`, fix spec D15: by key, in the order of the lines, summed) and
+ * the why "for <their names>", each name once (ruling P18). Lines that are leaves themselves are not targets of the
+ * graph, so where another line consumes them they keep their purchase price; such a line needs itself. `warnings` holds
+ * the graph's `graph-too-big`, in the build list's words, when the graph hit its recipe cap.
  */
 async function expandWith(
-  pack: Pack, lines: readonly BomLine[], x: Expansion,
+  pack: Pack, lines: readonly BomLine[], expansion: Expansion,
 ): Promise<{ lines: BomLine[]; totals: BomLine[]; warnings: PlanWarning[] }> {
+  const x: Expansion = { ...expansion, leaf: freeLeaves(pack, expansion) };
   const leafKeys = new Map<StuffKey, boolean>();
   const isLeaf = (key: StuffKey): boolean => {
     let leaf = leafKeys.get(key);
@@ -311,6 +349,8 @@ async function expandWith(
   const targets = [...new Set(lines.map((l) => l.key))].filter((key) => !isLeaf(key));
   const book = targets.length > 0 ? await recipeBook(pack, x, targets) : NO_RECIPES;
   const totals = new Map<StuffKey, number>();
+  /** Per leaf, what each top-level line (by key, first need first) needs of it. */
+  const neededBy = new Map<StuffKey, Map<StuffKey, number>>();
 
   const consumesAny = (lp: LpRecipe, goods: readonly StuffKey[]): boolean => book.inputsOf(lp).some(([input]) => goods.includes(input));
   /** A good with recipes that all consume one of `lineage`: making it there would loop back. */
@@ -342,8 +382,16 @@ async function expandWith(
     if (have !== undefined) out.have = have;
     if (line.amount <= TINY) return out;   // nothing to make, nothing to gather
     const children = breakDown(line.key, line.amount, depth, path);
-    if (children === null) totals.set(line.key, (totals.get(line.key) ?? 0) + line.amount);
-    else if (children.length > 0) out.children = children;
+    if (children === null) {
+      totals.set(line.key, (totals.get(line.key) ?? 0) + line.amount);
+      // `path` starts with the top-level line this one is part of; a top-level line has an empty path.
+      const top = path[0] ?? line.key;
+      const byLine = neededBy.get(line.key) ?? new Map<StuffKey, number>();
+      byLine.set(top, (byLine.get(top) ?? 0) + line.amount);
+      neededBy.set(line.key, byLine);
+    } else if (children.length > 0) {
+      out.children = children;
+    }
     return out;
   };
 
@@ -352,7 +400,10 @@ async function expandWith(
     warnings: book.warnings,
     lines: expanded,
     totals: [...totals].sort(([a], [b]) => byString(a, b)).map(([key, amount]) => {
-      const total: BomLine = { key, amount: round9(amount), why: TOTAL_WHY };
+      const neededFor = [...(neededBy.get(key) ?? [])].map(([top, n]) => ({ key: top, amount: round9(n) }));
+      // Each name once: the programmed circuits of several configurations are all "Programmed Circuit".
+      const names = [...new Set(neededFor.map((n) => pack.nameOf(n.key)))];
+      const total: BomLine = { key, amount: round9(amount), why: `for ${names.join(', ')}`, neededFor };
       const have = haveOf(x.ctx, key);
       if (have !== undefined) total.have = have;
       return total;

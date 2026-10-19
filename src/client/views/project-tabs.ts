@@ -12,7 +12,12 @@ import { MaterialsView } from './MaterialsView.tsx';
 import { NotesView } from './NotesView.tsx';
 import { View3DTab } from './View3DTab.tsx';
 
-export interface ProjectViewProps { project: Project; plan: Plan | null; send: (ops: ProjectOp[]) => void; me: string }
+export interface ProjectViewProps {
+  project: Project; plan: Plan | null; send: (ops: ProjectOp[]) => void; me: string;
+  // optional addition
+  /** The plan a settings change replaced (`ProjectViewState.previousPlan`), for the "What changed" note (fix spec §6.4). */
+  previousPlan?: Plan | null;
+}
 export interface ProjectTab { id: 'map' | '3d' | 'connections' | 'flow' | 'materials' | 'notes'; label: string; component: ComponentType<ProjectViewProps> }
 
 export const PROJECT_TABS: ProjectTab[] = [

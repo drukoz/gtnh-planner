@@ -73,6 +73,26 @@ describe('computeAvailability', () => {
     expect(['log@0', 'plank@0', 'widget@0', 'gadget@0'].map((k) => a.classOf(k))).toEqual(['natural', 'derived', 'unavailable', 'unavailable']);
     expect(a.sources('widget@0')).toEqual([]);
   });
+  it('counts recipe layers from the seeds: the shallowest option of each consumed slot, the deepest slot (fix spec R6)', () => {
+    const p = packFromSpec({
+      items: [{ key: 'a@0', name: 'A Dust', gt: { prefix: 'dust', material: 'A' } }],
+      machines: [{ mteId: 1, name: 'M', maps: ['gt.recipe.mixer'], tier: 1 }],
+      recipes: [
+        { id: 'b', map: 'gt.recipe.mixer', in: [['a@0', 1]], out: [['b@0', 1]], eut: 2 },
+        { id: 'c', map: 'gt.recipe.mixer', in: [['b@0', 1]], out: [['c@0', 1]], eut: 2 },
+        // c or a, and b: 1 + max(min(2, 0), 1); the c the machine only holds does not count.
+        { id: 'd', map: 'gt.recipe.mixer', in: [{ any: [['c@0', 1], ['a@0', 1]] }, ['b@0', 1], { nc: 'c@0' }], out: [['d@0', 1]], eut: 2 },
+        // A loop: g from f or a, f from g. Going round it never changes how deep g is.
+        { id: 'g', map: 'gt.recipe.mixer', in: [{ any: [['f@0', 1], ['a@0', 1]] }], out: [['g@0', 1]], eut: 2 },
+        { id: 'f', map: 'gt.recipe.mixer', in: [['g@0', 1]], out: [['f@0', 1]], eut: 2 },
+        { id: 'h', map: 'gt.recipe.mixer', out: [['h@0', 1]], eut: 2 },   // consumes nothing: one layer
+      ],
+      worldgen: { veins: [{ name: 'ore.mix.a', dims: ['overworld'], materials: { primary: 'A', secondary: 'A', between: 'A', sporadic: 'A' },
+        weight: 1, minY: 0, maxY: 255, size: 1, density: 1, kind: 'vein' }] },
+    });
+    const a = computeAvailability(p, { tier: 1, reachable: new Set(['overworld']), lowGravity: false, coilHeat: 1801, excluded: new Set() });
+    expect(['a@0', 'fluid:water', 'b@0', 'c@0', 'd@0', 'g@0', 'f@0', 'h@0', 'nowhere@0'].map((k) => a.depth(k))).toEqual([0, 0, 1, 2, 2, 1, 2, 1, 0]);
+  });
   it('knows base and natural items', () => {
     expect(['t:iron_dust@0', 't:iron_plate@0', 'fluid:oil', 'fluid:molten.iron', 'minecraft:cobblestone@0'].map((k) => isBaseItem(pack, k)))
       .toEqual([true, false, true, false, true]);
