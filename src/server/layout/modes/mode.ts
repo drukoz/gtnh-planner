@@ -53,8 +53,11 @@ export interface ModeResult {
 
 // ---- Dispatch ----
 
-/** How far apart units' item ports must be in each mode (Task 5 `placeUnits`): direct may share, routed and AE2 may not. */
-export const PORT_SPACING: Readonly<Record<LogisticsMode, 0 | 1 | 2>> = Object.freeze({ direct: 0, routed: 1, ae2: 2 });
+/**
+ * How far apart units' item ports must be in each mode (Task 5 `placeUnits`): direct may share, routed and AE2 may not.
+ * EnderIO may share too: each face of a conduit is set on its own, so the N and S machines may share a spine cell.
+ */
+export const PORT_SPACING: Readonly<Record<LogisticsMode, 0 | 1 | 2>> = Object.freeze({ direct: 0, routed: 1, ae2: 2, enderio: 0 });
 
 export function buildMode(mode: LogisticsMode, input: ModeInput): ModeResult {
   switch (mode) {

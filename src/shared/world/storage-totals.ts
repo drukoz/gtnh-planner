@@ -5,23 +5,30 @@
 import type { StuffKey } from '../keys.ts';
 import type { LogisticsNetwork, StorageBlock } from '../types/world.ts';
 
-/** The value union of architecture §6.3's `LogisticsMode` (ruling R4). */
-export type ReachMode = 'direct' | 'routed' | 'ae2';
+/**
+ * The value union of architecture §6.3's `LogisticsMode` (ruling R4), with `enderio` (architecture "EnderIO conduits,
+ * granted change requests (add-on 11)").
+ */
+export type ReachMode = 'direct' | 'routed' | 'ae2' | 'enderio';
 
 type NetworkKind = LogisticsNetwork['kind'];
 
 /**
  * The networks a line can order arbitrary items from. EnderIO and GT pipe networks only move items point to point,
- * so storage on them is found but not reachable (spec §3.4).
+ * so storage on them is found but not reachable (spec §3.4), except EnderIO storage in `enderio` mode (`reachKinds`).
  */
 export const REQUEST_KINDS: ReadonlySet<NetworkKind> = new Set<NetworkKind>(['routed', 'ae2']);
 
 const ROUTED_ONLY: ReadonlySet<NetworkKind> = new Set<NetworkKind>(['routed']);
 const AE2_ONLY: ReadonlySet<NetworkKind> = new Set<NetworkKind>(['ae2']);
+const ENDERIO_ONLY: ReadonlySet<NetworkKind> = new Set<NetworkKind>(['enderio']);
 
-/** The network kinds that count as reachable under a project's logistics mode; no mode means any request network. */
+/**
+ * The network kinds that count as reachable under a project's logistics mode; no mode means any request network. In
+ * `enderio` mode the line's hookup joins the base's EnderIO network, and any storage face on it can be set to Extract.
+ */
 export function reachKinds(mode: ReachMode | undefined): ReadonlySet<NetworkKind> {
-  return mode === 'routed' ? ROUTED_ONLY : mode === 'ae2' ? AE2_ONLY : REQUEST_KINDS;
+  return mode === 'routed' ? ROUTED_ONLY : mode === 'ae2' ? AE2_ONLY : mode === 'enderio' ? ENDERIO_ONLY : REQUEST_KINDS;
 }
 
 /** One block holding an item; `kind` stays assignable to architecture §11.20's `StorageWhere.kind: string`. */

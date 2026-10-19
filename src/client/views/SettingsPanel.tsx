@@ -40,6 +40,7 @@ const LOGISTICS: ReadonlyArray<{ value: LogisticsMode; label: string }> = [
   { value: LogisticsMode.Direct, label: 'Machine to machine' },
   { value: LogisticsMode.Routed, label: 'Project Red routed' },
   { value: LogisticsMode.AE2, label: 'AE2' },
+  { value: LogisticsMode.EnderIO, label: 'EnderIO conduits' },
 ];
 const DIM_STATES = ['auto', 'on', 'off'] as const;
 

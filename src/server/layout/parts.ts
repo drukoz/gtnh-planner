@@ -6,9 +6,10 @@
 
 import { tierName } from '../../shared/gt/tiers.ts';
 import { parseItemKey, type ItemKey, type StuffKey } from '../../shared/keys.ts';
+import { CONDUIT_NAMES, FLUID_CONDUITS } from '../../shared/layout/enderio.ts';
 import { fmtRate } from '../../shared/layout/format.ts';
 import { ae2CableBlockRef, conduitBlockRef, partBlockRef } from '../../shared/types/assets.ts';
-import type { LayoutBlock } from '../../shared/types/layout.ts';
+import type { ConduitKind, LayoutBlock } from '../../shared/types/layout.ts';
 import type { BlockRef, Machine, Pack } from '../../shared/types/pack.ts';
 import type { PlanWarning } from '../../shared/types/plan.ts';
 import { simpleClassName } from '../world/facts.ts';
@@ -18,7 +19,8 @@ import { GT_MACHINE_BLOCK } from '../world/tiles.ts';
 
 export type PartId = 'conveyor_cover' | 'pump_cover' | 'item_filter_cover' | 'chest' | 'pr_junction' | 'pr_interface' | 'pr_request'
   | 'chip_responder' | 'chip_extractor' | 'chip_stock_keeper' | 'me_interface' | 'me_cable' | 'me_export_bus' | 'blank_pattern'
-  | 'eio_item_conduit' | 'eio_basic_filter';
+  | 'eio_item_conduit' | 'eio_basic_filter' | 'eio_advanced_filter' | 'eio_big_filter' | 'eio_speed_upgrade'
+  | 'eio_fluid_ender' | 'eio_fluid_crystalline' | 'eio_fluid_pink_slime' | 'eio_fluid_melodic' | 'eio_fluid_stellar';
 
 /**
  * `keys` are tried in order against the pack, then `names` (English, ignoring case). `block` is what a placed part
@@ -28,11 +30,19 @@ export interface PartDef { name: string; keys: readonly ItemKey[]; names: readon
 
 const GT_META_ITEM = 'gregtech:gt.metaitem.01';
 const PR_TRANSPORT = 'ProjRed|Transportation:projectred.transportation';
+const EIO_LIQUID_CONDUIT = 'EnderIO:itemLiquidConduit';
 
 function partDef(name: string, key: ItemKey, block: BlockRef | 'item', otherNames: readonly string[] = []): PartDef {
   return Object.freeze({
     name, keys: Object.freeze([key]), names: Object.freeze([name, ...otherNames]), block: block === 'item' ? block : Object.freeze(block),
   });
+}
+
+/** An ender fluid conduit by its `FLUID_CONDUITS` row: the pack's item name and meta, drawn as its `conduit:<kind>` pseudo block. */
+function fluidConduitDef(kind: ConduitKind): PartDef {
+  const row = FLUID_CONDUITS.find((c) => c.kind === kind);
+  if (row === undefined) throw new RangeError(`${kind} is not an ender fluid conduit`);
+  return partDef(CONDUIT_NAMES[kind], `${EIO_LIQUID_CONDUIT}@${row.meta}`, conduitBlockRef(kind));
 }
 
 /** The pack's usual ids for each part (research gt-mechanics §3.8 for the GT covers). */
@@ -54,6 +64,14 @@ export const PART_DEFS: Readonly<Record<PartId, PartDef>> = Object.freeze({
   blank_pattern: partDef('Blank Pattern', 'appliedenergistics2:item.ItemMultiMaterial@52', 'item'),
   eio_item_conduit: partDef('Item Conduit', 'EnderIO:itemItemConduit@0', conduitBlockRef('item')),
   eio_basic_filter: partDef('Basic Item Filter', 'EnderIO:itemBasicFilterUpgrade@0', 'item'),
+  eio_advanced_filter: partDef('Advanced Item Filter', 'EnderIO:itemBasicFilterUpgrade@1', 'item'),
+  eio_big_filter: partDef('Big Item Filter', 'EnderIO:itemBigFilterUpgrade@0', 'item'),
+  eio_speed_upgrade: partDef('Item Conduit Speed Upgrade', 'EnderIO:itemExtractSpeedUpgrade@0', 'item'),
+  eio_fluid_ender: fluidConduitDef('liquid_ender'),
+  eio_fluid_crystalline: fluidConduitDef('liquid_crystalline'),
+  eio_fluid_pink_slime: fluidConduitDef('liquid_pink_slime'),
+  eio_fluid_melodic: fluidConduitDef('liquid_melodic'),
+  eio_fluid_stellar: fluidConduitDef('liquid_stellar'),
 });
 
 const PART_IDS = Object.keys(PART_DEFS) as PartId[];

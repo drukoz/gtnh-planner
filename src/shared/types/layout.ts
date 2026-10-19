@@ -1,5 +1,7 @@
 // The line layout: architecture §6.7, with configured parts (§11.14: `CoverSpec`, `LayoutBlock.covers/config`), the
-// owning build step for the projector (§11.23: `LayoutBlock.buildStep`) and Plan 5's optional additions.
+// owning build step for the projector (§11.23: `LayoutBlock.buildStep`), EnderIO conduit faces and tail chests
+// (architecture "EnderIO conduits, granted change requests (add-on 11)": `ConduitSpec`, `LayoutBlock.conduits/tail`)
+// and Plan 5's optional additions.
 // Fields after an "optional addition" comment extend §6.7 without renaming or reshaping it.
 // Pure TypeScript shared by server and browser: nothing from node:* may be imported here.
 
@@ -20,6 +22,37 @@ export interface CoverSpec {
   filter?: StuffKey[];
 }
 
+// ---- EnderIO conduits (architecture "EnderIO conduits, granted change requests (add-on 11)") ----
+// Every face has its own extract side and insert side, each with its own channel colour and filter.
+
+/** The conduits a line lays; `conduit:<kind>` is the pseudo block of Plan 3's curated table. */
+export type ConduitKind = 'item' | 'liquid_ender' | 'liquid_crystalline' | 'liquid_pink_slime' | 'liquid_melodic' | 'liquid_stellar';
+/** EnderIO `ConnectionMode` (NBT `conModes`): extract = INPUT (1), insert = OUTPUT (2), in_out = IN_OUT (0), disabled = DISABLED (3). */
+export type ConduitMode = 'extract' | 'insert' | 'in_out' | 'disabled';
+/** EnderIO `DyeColor` in ordinal order (NBT `inSC.<DIR>` / `outSC.<DIR>`). */
+export type DyeColor = 'black' | 'red' | 'green' | 'brown' | 'blue' | 'purple' | 'cyan' | 'silver' | 'gray' | 'pink' | 'lime' | 'yellow' | 'light_blue' | 'magenta' | 'orange' | 'white';
+/** EnderIO `RedstoneControlMode` IGNORE, ON, OFF, NEVER (NBT `extRM.<DIR>`). */
+export type RedstoneMode = 'ignore' | 'on' | 'off' | 'never';
+export interface ConduitFilter {
+  /** The filter upgrade in the slot; absent for an ender fluid conduit's own fluid filter. */
+  item?: StuffKey;
+  whitelist: boolean; keys: StuffKey[];
+  /** Item filters only. */
+  matchMeta?: boolean; matchNbt?: boolean; oreDict?: boolean; sticky?: boolean;
+}
+export interface ConduitExtract {
+  color: DyeColor; filter: ConduitFilter | null; /** items/s or L/s the face must move */ rate: number; roundRobin: boolean; redstone: RedstoneMode;
+  /** Item conduits only; `speed` is absent when no upgrade is needed. */
+  selfFeed?: boolean; speed?: { item: StuffKey; count: number };
+}
+export interface ConduitInsert { color: DyeColor; filter: ConduitFilter | null; rate: number; /** item conduits only; higher is filled first */ priority?: number }
+/** `extract` iff mode is extract or in_out, `insert` iff insert or in_out; `target` names what is on that side. */
+export interface ConduitFace { face: Face; mode: ConduitMode; target: string; extract?: ConduitExtract; insert?: ConduitInsert }
+/** `connections`: links to the same kind in neighbouring cells, bits `1 << side`; `faces` in `FACES` order. */
+export interface ConduitSpec { kind: ConduitKind; item: StuffKey; connections: number; faces: ConduitFace[] }
+/** A tail chest: where raw inputs go in, or which final outputs it collects. */
+export interface TailChest { side: 'input' | 'output'; keys: StuffKey[] }
+
 export interface LayoutBlock {
   pos: [number, number, number]; block: BlockRef; role: BlockRole; facing?: number; stepId?: string; label: string;
   // §11.14: covers on this block's faces; programmed circuit number, chip settings, interface/pattern settings
@@ -33,6 +66,10 @@ export interface LayoutBlock {
   hookup?: number;
   /** The id of the build step that places this block (§11.23, for the in-game projector). */
   buildStep?: string;
+  /** A conduit bundle's conduits, item first; the block's `connections` = OR of each conduit's links and its non-disabled face bits. */
+  conduits?: ConduitSpec[];
+  /** Set on the tail's input and output chests. */
+  tail?: TailChest;
 }
 
 export interface Hookup {

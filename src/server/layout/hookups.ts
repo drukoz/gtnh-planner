@@ -40,7 +40,7 @@ const END_ROLES: Partial<Record<PartId, BlockRole>> = { pr_interface: 'chip_pipe
 
 /** The kinds of network each logistics mode hooks into, most wanted first; never a GT pipe network (research §3.8). */
 const MODE_KINDS: Readonly<Record<LogisticsMode, ReadonlyArray<LogisticsNetwork['kind']>>> = {
-  routed: ['routed'], ae2: ['ae2'], direct: ['routed', 'ae2', 'enderio'],
+  routed: ['routed'], ae2: ['ae2'], direct: ['routed', 'ae2', 'enderio'], enderio: ['enderio'],
 };
 /** Plan 4 names EnderIO networks `e:<conduit type>:…`; a liquid conduit network carries no items. */
 const ENDERIO_LIQUID_PREFIX = 'e:liquid:';

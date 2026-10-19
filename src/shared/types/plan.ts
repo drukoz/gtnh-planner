@@ -5,7 +5,8 @@
 import type { StuffKey } from '../keys.ts';
 import type { Product } from './pack.ts';
 
-export const LogisticsMode = { Direct: 'direct', Routed: 'routed', AE2: 'ae2' } as const;
+/** Spec §3.6 modes 1–4; `enderio` is architecture §11.30. */
+export const LogisticsMode = { Direct: 'direct', Routed: 'routed', AE2: 'ae2', EnderIO: 'enderio' } as const;
 export type LogisticsMode = (typeof LogisticsMode)[keyof typeof LogisticsMode];
 
 /**
