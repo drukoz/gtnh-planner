@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { indexOf } from '../../helpers/assets-dir.ts';
 import { assetIndexFrom, loadAssetIndex, iconPath, AssetIndexError, ASSET_INDEX_FORMAT, type AssetIndexFile } from '../../../src/server/assets/index.ts';
 
 const FILE: AssetIndexFile = {
@@ -30,6 +31,13 @@ describe('asset index', () => {
     expect(ix.layer('gregtech/textures/blocks/iconsets/NOPE.png')).toBeNull();
     expect(ix.firstLayer(['a/textures/blocks/x.png', 'minecraft/textures/blocks/stone.png'])).toEqual({ path: 'minecraft/textures/blocks/stone.png' });
     expect(ix.firstLayer(['a/textures/blocks/x.png'])).toBeNull();
+  });
+
+  it('frames are always square, also in an index written before the fix', () => {
+    const biomass = 'forestry/textures/blocks/liquid/biomass_still.png';
+    expect(indexOf({ [biomass]: { w: 16, h: 512, frames: 16 } }).layer(biomass)).toEqual({ path: biomass, frames: 32 });
+    const square = 'x/textures/blocks/square.png';   // an old index counted two frames of `"height": 16`
+    expect(indexOf({ [square]: { w: 32, h: 32, frames: 2 } }).layer(square)).toEqual({ path: square });
   });
 
   it('loads from disk, empty when missing, error on a foreign file', async () => {

@@ -34,9 +34,13 @@ export function gtMachineFaces(dump: TexturesDump, mteId: number, copy: CopyReso
   return faces === null ? null : facesFrom(faces, copy);
 }
 
+/**
+ * A block's faces from the dump's block table. Null when the table lacks the meta, or when its six lists are all empty
+ * after dropped and error layers (copies not yet followed): those faces would shadow the block's texture name (RC17).
+ */
 export function gtBlockFaces(dump: TexturesDump, id: string, meta: number, copy: CopyResolver): Record<Face, TextureLayer[]> | null {
   const faces = dump.blocks.get(id)?.get(meta);
-  return faces === undefined ? null : facesFrom(faces, copy);
+  return faces === undefined || faces.every((list) => list.length === 0) ? null : facesFrom(faces, copy);
 }
 
 /**

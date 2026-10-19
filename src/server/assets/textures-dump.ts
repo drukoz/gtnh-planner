@@ -42,7 +42,7 @@ export interface TexturesDumpFile {
     blocks: Array<{ id: string; stones: DumpLayer[][] /* per stone index (stoneTypes order): the stone drawn under the ore */ }>;
   };
   covers: Array<{ item: string /* registry@meta */; layers: DumpLayer[] }>;
-  fluids: Array<{ name: string; color: number /* Fluid.getColor(), 0xAARRGGBB as a signed int */; still?: string }>;
+  fluids: Array<{ name: string; color: number /* Fluid.getColor(), 0xAARRGGBB as a signed int */; still?: string; block?: string /* 0.4.0: the fluid's block, by registry name */ }>;
   textureNames: { blocks: Record<string, string>; items: Record<string, string> };   // registry name → Block.textureName / Item.iconString
   blockIds: string[];                                                            // every block registry name, sorted
   stats: Record<string, number>;                                                 // counts per part, '<part>Failed', 'unknown:<class>'
@@ -57,7 +57,10 @@ export interface DumpMte { cls: string; pipe: boolean; inactive: ResolvedFaces |
 export interface DumpMaterial { name: string; id: number; rgb: Rgb; set: number; oreGlow?: true }
 /** GT ore blocks: meta = stone index · 1000 + material id, plus `naturalOffset` (world-generated) and `smallOffset` (small ore). */
 export interface DumpOres { ore: number; oreSmall: number; smallOffset: number; naturalOffset: number; blocks: Map<string, FaceLayer[][]> }
-export interface DumpStats { droppedLayers: number; errorLayers: number }
+/** `still` is null when the fluid has none or its file was not extracted; `block` only from exporter 0.4.0 on. */
+export interface DumpFluid { color: Rgb; still: TextureLayer | null; block?: string }
+/** `missingStill`: fluids whose `still` names a file the index lacks. */
+export interface DumpStats { droppedLayers: number; errorLayers: number; missingStill: number }
 export interface TexturesDump {
   exporterVersion: string;
   sets: Array<Map<number, DumpLayer[]>>;                                  // raw: the tint comes from the material at lookup time (Task 8)
@@ -65,7 +68,7 @@ export interface TexturesDump {
   metaItems: Map<string, { offset: number; unlocalized: string; prefixes: Map<number, { prefix: string; texture: number }> }>;
   mte: Map<number, DumpMte>; casingPages: Map<number, ResolvedFaces>; blocks: Map<string, Map<number, ResolvedFaces>>;
   ores: DumpOres | null;                                                   // null: the dump has no ore part
-  covers: Map<string, FaceLayer[]>; fluids: Map<string, { color: Rgb; still: TextureLayer | null }>;
+  covers: Map<string, FaceLayer[]>; fluids: Map<string, DumpFluid>;
   textureNames: { blocks: Map<string, string>; items: Map<string, string> }; blockIds: Set<string>; stats: DumpStats;
 }
 
@@ -149,7 +152,7 @@ export function resolveDumpLayers(layers: readonly DumpLayer[], index: AssetInde
 
 /** Joins a whole dump to the asset index; every face, cover and ore stone list is resolved exactly once. */
 export function buildTexturesDump(file: TexturesDumpFile, index: AssetIndex): TexturesDump {
-  const stats: DumpStats = { droppedLayers: 0, errorLayers: 0 };
+  const stats: DumpStats = { droppedLayers: 0, errorLayers: 0, missingStill: 0 };
   const layers = (list: unknown): FaceLayer[] => (Array.isArray(list) ? resolveDumpLayers(list as DumpLayer[], index, stats) : []);
   const faces = (raw: unknown): ResolvedFaces => {
     const lists = Array.isArray(raw) ? raw : [];
@@ -176,11 +179,15 @@ export function buildTexturesDump(file: TexturesDumpFile, index: AssetIndex): Te
     mte.set(m.id, { cls: m.cls, pipe, inactive, active: m.active === undefined ? inactive : faces(m.active) });
   }
 
-  const fluids = new Map<string, { color: Rgb; still: TextureLayer | null }>();
+  const fluids = new Map<string, DumpFluid>();
   for (const f of file.fluids) {
     const c = f.color;
     const color: Rgb = [(c >> 16) & 255, (c >> 8) & 255, c & 255];
-    fluids.set(f.name, { color, still: typeof f.still === 'string' ? index.layer(f.still, { tint: color }) : null });
+    const still = typeof f.still === 'string' ? index.layer(f.still, { tint: color }) : null;
+    if (typeof f.still === 'string' && still === null) stats.missingStill++;
+    const fluid: DumpFluid = { color, still };
+    if (typeof f.block === 'string' && f.block !== '') fluid.block = f.block;
+    fluids.set(f.name, fluid);
   }
 
   return {

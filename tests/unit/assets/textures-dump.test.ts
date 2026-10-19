@@ -46,7 +46,7 @@ describe('buildTexturesDump', () => {
     expect(m.inactive![5]).toEqual([{ copy: ['gregtech:gt.blockcasings2', 0, 5] }]);
     expect(m.active).toEqual(m.inactive);
     expect(d.mte.get(999)).toEqual({ cls: 'Broken', pipe: false, inactive: null, active: null, error: 'java.lang.NullPointerException' });
-    expect(d.stats).toEqual({ droppedLayers: 2, errorLayers: 1 });
+    expect(d.stats).toEqual({ droppedLayers: 2, errorLayers: 1, missingStill: 0 });
   });
 
   it('turns fluid colours into RGB and tints the still texture', () => {
@@ -54,24 +54,32 @@ describe('buildTexturesDump', () => {
     expect(d.fluids.get('water')).toEqual({ color: [0, 0, 255], still: { path: FLUID, tint: [0, 0, 255], frames: 4 } });
     expect(d.fluids.get('oil')).toEqual({ color: [34, 34, 34], still: null });
   });
+
+  it('keeps the fluid\'s block (0.4.0) and counts stills that were not extracted', () => {
+    const d = buildTexturesDump(dumpFile({ fluids: [{ name: 'a', color: 0, still: 'gregtech/textures/blocks/fluids/fluid.a.png' },
+      { name: 'p', color: -1, block: 'IC2:fluidPahoehoeLava' }] }), indexOf({}));
+    expect(d.stats.missingStill).toBe(1);
+    expect(d.fluids.get('a')).toStrictEqual({ color: [0, 0, 0], still: null });   // no block key without one
+    expect(d.fluids.get('p')).toStrictEqual({ color: [255, 255, 255], still: null, block: 'IC2:fluidPahoehoeLava' });
+  });
 });
 
 describe('resolveDumpLayers', () => {
   it('tints and lights path layers and splits texture sets', () => {
-    const stats: DumpStats = { droppedLayers: 0, errorLayers: 0 };
+    const stats: DumpStats = { droppedLayers: 0, errorLayers: 0, missingStill: 0 };
     expect(resolveDumpLayers([{ p: [I + 'NOPE.png', I + 'MACHINE_LV_SIDE.png'], rgb: [10, 20, 30], glow: 1 }, { ts: ts('DULL', 'ingot'), rgb: [1, 2, 3] },
       { ts: ts('DULL', 'plate') }, { p: [I + 'MACHINE_LV_TOP.png'], rgb: [255, 255, 255] }], ix, stats)).toEqual([
       { path: I + 'MACHINE_LV_SIDE.png', tint: [10, 20, 30], glow: true }, { path: M + 'NONE/ingot.png', tint: [1, 2, 3] }, { path: M + 'NONE/ingot_OVERLAY.png' },
       { path: I + 'MACHINE_LV_TOP.png' }]);
-    expect(stats).toEqual({ droppedLayers: 1, errorLayers: 0 });
+    expect(stats).toEqual({ droppedLayers: 1, errorLayers: 0, missingStill: 0 });
   });
 
   it('counts layers it cannot read as errors (Ruling R7)', () => {
-    const stats: DumpStats = { droppedLayers: 0, errorLayers: 0 };
+    const stats: DumpStats = { droppedLayers: 0, errorLayers: 0, missingStill: 0 };
     const odd = [{ copy: [null, 0, 2] }, { copy: ['b', 0, 6] }, { x: 1 }, null, { p: I + 'MACHINE_LV_SIDE.png' }, { ts: ['a', 'b'] },
       { p: [I + 'MACHINE_LV_SIDE.png'], rgb: [1, 2] }] as unknown as DumpLayer[];
     expect(resolveDumpLayers(odd, ix, stats)).toEqual([]);
-    expect(stats).toEqual({ droppedLayers: 0, errorLayers: 7 });
+    expect(stats).toEqual({ droppedLayers: 0, errorLayers: 7, missingStill: 0 });
   });
 });
 
@@ -102,7 +110,7 @@ describe('buildTexturesDump tables', () => {
     expect(d.covers.get('gregtech:gt.metaitem.01@32630')).toEqual([{ path: I + 'MACHINE_LV_SIDE.png' }]);
     expect([d.textureNames.blocks.get('minecraft:stone'), d.textureNames.items.get('minecraft:apple')]).toEqual(['stone', 'apple']);
     expect([...d.blockIds]).toEqual(['minecraft:stone']);
-    expect(d.stats).toEqual({ droppedLayers: 0, errorLayers: 0 });
+    expect(d.stats).toEqual({ droppedLayers: 0, errorLayers: 0, missingStill: 0 });
   });
 });
 
@@ -117,7 +125,7 @@ describe('buildTexturesDump ores', () => {
     expect(d.materialsById.get(32)!.oreGlow).toBeUndefined();
     expect(d.ores).toEqual({ ore: 68, oreSmall: 67, smallOffset: 16000, naturalOffset: 8000, blocks: new Map([['gregtech:gt.blockores2',
       [[{ copy: ['minecraft:stone', 0, 0] }], [], [{ path: I + 'MACHINE_LV_SIDE.png' }]]]]) });
-    expect(d.stats).toEqual({ droppedLayers: 1, errorLayers: 0 });
+    expect(d.stats).toEqual({ droppedLayers: 1, errorLayers: 0, missingStill: 0 });
     expect(buildTexturesDump(dumpFile(), ix).ores).toBeNull();
   });
 });
