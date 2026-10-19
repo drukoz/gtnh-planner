@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { miniGt } from '../../helpers/mini-gt.ts';
+import { MINI_GT, miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec, type IngredientSpec } from '../../helpers/pack-spec.ts';
 import { buildBom, expandBomLines } from '../../../src/server/planner/bom.ts';
 import { buildSteps } from '../../../src/server/planner/steps.ts';
@@ -163,6 +163,29 @@ describe('buildBom', () => {
     expect(out.find((s) => s.id === 'configure:hammer-plate')).toBeUndefined();
     expect(out.filter((s) => s.kind === 'configure')).toEqual([]);
   });
+  it('keeps free inputs as leaves of a breakdown', async () => {
+    // Fix spec R2: with a pump at LV a running line pumps its water (it is no leaf for the line), but the one-off
+    // materials of its machines get no generator. The chemical bath is crafted from two parts that each take 500 L of it.
+    const p = packFromSpec({
+      ...MINI_GT,
+      items: [...MINI_GT.items!, { key: 't:part@0', name: 'Bath Part' }],
+      maps: [...MINI_GT.maps!, { id: 'gt.recipe.chemicalbath', name: 'Chemical Bath' }],
+      machines: [...MINI_GT.machines!, { mteId: 171, name: 'Basic Chemical Bath', maps: ['gt.recipe.chemicalbath'], tier: 1 },
+                 { mteId: 1140, name: 'Basic Pump', maps: [], tier: 1, cls: 'gregtech.common.tileentities.machines.basic.MTEPump' }],
+      recipes: [...MINI_GT.recipes!,
+                { id: 'make-part', map: 'gt.recipe.assembler', in: [['t:iron_ingot@0', 1], ['fluid:water', 500]], out: [['t:part@0', 1]], eut: 16 },
+                { id: 'make-bath', map: 'crafting', in: [['t:part@0', 2]], out: [['machine:171@0', 1]] }],
+    });
+    const settings = { ...defaultSettings(), tier: 1 };
+    const b = planBasis(p, settings, emptyContextForTest());
+    expect(b.supplied.has('fluid:water')).toBe(true);
+    expect(b.leaf('fluid:water').buyable).toBe(false);
+    const steps = [step({ id: 'wash', recipeId: 'wash', machine: { mteId: 171, name: 'Basic Chemical Bath', tier: 1 } })];
+    const bom = await buildBom(p, steps, { settings, env: b.env, leaf: b.leaf, ctx: emptyContextForTest() });
+    expect(bom.totals.map((l) => [l.key, l.amount])).toEqual([['fluid:water', 1000], ['t:iron_ingot@0', 2]]);
+    const r = await expandBomLines(p, [{ key: 'machine:171@0', amount: 1, why: '1× Basic Chemical Bath', group: 'machines' }], settings, emptyContextForTest());
+    expect(r.totals).toEqual(bom.totals);
+  });
   it('merges a hand-crafting tool with the same part an automated step keeps in its machine', async () => {
     const p = packFromSpec({ maps: [{ id: 'crafting' }],
       items: [{ key: 't:hammer@0', name: 'Hammer' }, { key: 't:iron_plate@0', name: 'Iron Plate' }],
@@ -256,5 +279,16 @@ describe('buildSteps', () => {
     expect(out[0]?.text).toBe('Gather the base materials: 1× t:a@0, 1× t:b@0, 1× t:c@0, 1× t:d@0, 1× t:e@0, 1× t:f@0, 1× t:g@0, 1× t:h@0 (and 2 more)');
     expect(out.find((s) => s.id === 'handcraft:planks')?.text).toBe('Hand-craft 900/h Oak Planks at a crafting table');
     expect(out.at(-1)?.text).toBe('Run the line and check it makes 60 Oak Planks per hour');
+  });
+  it('writes litres for fluids in build steps', () => {
+    // Spec §6.1: counts of things keep their "×", fluids are amounts in litres.
+    const totals = [{ key: 'fluid:water', amount: 1000, why: 'base material' }, { key: 't:iron_ingot@0', amount: 3, why: 'base material' }];
+    const settings = { ...defaultSettings(), target: 'fluid:molten.iron', mode: 'makeN' as const, amount: 1440 };
+    const out = buildSteps(pack, { steps: [], bom: { lines: [], totals, warnings: [] }, power: { peakEUt: 0, averageEUt: 0, voltageTier: 0, amps: 0 }, settings, tier: 1, target: 'fluid:molten.iron' });
+    const gather = out.find((s) => s.id === 'gather')?.text;
+    expect(gather).toContain('1,000 L Water');
+    expect(gather).toContain('3× Iron Ingot');
+    expect(gather).toBe('Gather the base materials: 1,000 L Water, 3× Iron Ingot');
+    expect(out.at(-1)?.text).toBe('Run the batch: 1,440 L Molten Iron');
   });
 });

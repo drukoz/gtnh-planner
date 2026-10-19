@@ -571,9 +571,15 @@ function gatheredOrBase(basis: PlanBasis, key: StuffKey): string | null {
   return GATHERED_BLOCKS.has(key) ? 'world block' : null;
 }
 
-/** The chains of steps fed by free inputs alone that end in a base or gathered material the plan then uses. */
+/**
+ * The chains of steps fed by free inputs alone that end in a base or gathered material the plan then uses. What a
+ * supply step makes (`PlanStep.supply`: a rock breaker's stone, a pump's water) counts as free input too (ruling P5).
+ */
 export function freeDetours(pack: Pack, plan: Plan, basis: PlanBasis): Detour[] {
-  const freeRaw = new Set<StuffKey>([...FREE, ...plan.rawInputs.filter((r) => r.leafClass === 'free').map((r) => r.key)]);
+  const freeRaw = new Set<StuffKey>([
+    ...FREE, ...plan.rawInputs.filter((r) => r.leafClass === 'free').map((r) => r.key),
+    ...plan.steps.flatMap((s) => (s.supply === undefined ? [] : [s.supply])),
+  ]);
   const freeFed = new Set<string>();
   const freeGoods = new Set<StuffKey>(freeRaw);
   for (let changed = true; changed; ) {

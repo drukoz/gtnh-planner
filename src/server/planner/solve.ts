@@ -317,23 +317,28 @@ export function firstBalanced<T extends { x: readonly number[] }>(stages: readon
   return null;
 }
 
-/** Recipe columns that consume nothing: sources (rock breakers, ponds, farms), never part of a loop. */
+/**
+ * The source columns, never part of a loop: recipes that consume nothing (rock breakers, pumps, ponds, farms), and
+ * supply recipes (`LpRecipe.supply`, fix spec R2) such as the compressor that fills with air the cells a canner empties,
+ * so a line that runs on free inputs alone (Nitrogen from air) keeps them.
+ */
 function sourceColumns(lp: MainLp): Set<number> {
   const sources = new Set<number>();
   lp.recipes.forEach((r, j) => {
-    if (r.coeffs.every(([, c]) => c >= 0)) sources.add(j);
+    if (r.supply === true || r.coeffs.every(([, c]) => c >= 0)) sources.add(j);
   });
   return sources;
 }
 
 /**
- * The loop guard. A line that needs no raw material at all either runs on sources (recipes that consume nothing, free
- * goods made by them) or on a loop in the data that makes matter from nothing (x → 2 y, y → x). It is a loop when the
- * demand can still be met with every purchase and every source fixed to 0; then the loop is the least-runs steady state
- * that, again without purchases or sources and with no demand, leaves any surplus at all: only the loop's own recipes,
- * not the recipes that turn its output into the target, nor recipes that merely share a no-gain cycle with it (cells
- * filled and emptied). On the real export the old rule (every used recipe on any cycle) banned 58 recipes for an
- * Electronic Circuit, the salt water mixer and cell canners among them, because the Eye of Harmony (a source) ran.
+ * The loop guard. A line that needs no raw material at all either runs on sources (`sourceColumns`: recipes that consume
+ * nothing and supply recipes, and the goods made from them) or on a loop in the data that makes matter from nothing
+ * (x → 2 y, y → x). It is a loop when the demand can still be met with every purchase and every source fixed to 0; then
+ * the loop is the least-runs steady state that, again without purchases or sources and with no demand, leaves any
+ * surplus at all: only the loop's own recipes, not the recipes that turn its output into the target, nor recipes that
+ * merely share a no-gain cycle with it (cells filled and emptied). On the real export the old rule (every used recipe on
+ * any cycle) banned 58 recipes for an Electronic Circuit, the salt water mixer and cell canners among them, because the
+ * Eye of Harmony (a source) ran.
  */
 async function freeLoop(lp: MainLp): Promise<LpRecipe[]> {
   const sources = sourceColumns(lp);

@@ -36,7 +36,7 @@ export function defaultSettings(): PlanSettings {
     target: null, mode: 'rate', amount: 1, per: 'min', tier: null, dims: { policy: 'progression', overrides: {} },
     routeDerived: true, logistics: 'direct', costOverrides: {}, stopItems: [], expandItems: [], recipeChoice: {},
     machineTier: {}, excludedCategories: [...DEFAULT_EXCLUDED_CATEGORIES], coilHeat: null, automateCrafting: false,
-    avoid: [], declineReuse: [], settingsVersion: SETTINGS_VERSION,
+    avoid: [], declineReuse: [], settingsVersion: SETTINGS_VERSION, haveSupply: [],
   };
 }
 
@@ -166,6 +166,8 @@ const SETTING_CHECKS: { readonly [K in keyof PlanSettings]-?: Check } = {
   // Never back below the current version: a project switched to the new defaults stays switched.
   settingsVersion: (v) => (Number.isSafeInteger(v) && (v as number) >= SETTINGS_VERSION
     ? null : `settingsVersion must be a whole number of at least ${SETTINGS_VERSION}`),
+  // Keys of free inputs; one that is no free input is kept and has no effect (fix spec §3).
+  haveSupply: stringList('haveSupply'),
 };
 
 const SETTING_KEYS: ReadonlySet<string> = new Set(Object.keys(defaultSettings()));

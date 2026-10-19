@@ -101,7 +101,11 @@ async function computePricing(pack: Pack, settings: PlanSettings, ctx: PlanConte
   // derived leaf the last graph meets first keeps its plain price.
   const priced = new Map<StuffKey, Standalone>();
   const tried = new Set<StuffKey>();
-  const leafWith = (): LeafOracle => makeLeafOracle(pack, settings, basis.avail, basis.prices, stopCost, (key) => priced.get(key));
+  // The line makes the free inputs of `basis.supplied` with their generators (fix spec R2). The cost model above buys
+  // them, at 0 like their generators' runs: its costs and the free input of a derived chain (`Standalone.free`, a
+  // tie-break) stay what they were.
+  const leafWith = (): LeafOracle =>
+    makeLeafOracle(pack, settings, basis.avail, basis.prices, stopCost, (key) => priced.get(key), { supplied: basis.supplied });
   let leaf = leafWith();
   await yieldToEventLoop();
   let graph = buildCandidates(pack, settings, basis.env, leaf, [target]);

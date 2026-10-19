@@ -33,7 +33,17 @@ export type RecipeSource = 'gt' | 'assemblyline' | 'crafting' | 'furnace' | 'der
 export interface Recipe {
   id: string; source: RecipeSource; maps: string[]; inputs: Ingredient[]; outputs: Product[];
   euPerTick: number; durationTicks: number; amps: number; specialValue: number;
-  meta: { coilHeat?: number; cleanroom?: boolean; lowGravity?: boolean; circuit?: number; [k: string]: unknown };
+  meta: {
+    coilHeat?: number; cleanroom?: boolean; lowGravity?: boolean; circuit?: number;
+    // optional addition (fix spec R2, architecture §11.31): what the loader made a supply recipe (server/pack/supply.ts)
+    /**
+     * A recipe that makes a free input for a running line: `rock-breaker` (a rock breaker's display-only recipe made real,
+     * source 'derived'), `pump` (water or lava on the pseudo map `pump`, source 'derived') or `compressor` (fills an
+     * empty cell with air; the export's own recipe, its id unchanged).
+     */
+    supply?: 'rock-breaker' | 'pump' | 'compressor';
+    [k: string]: unknown;
+  };
   flags: {
     hidden?: boolean; recycling?: boolean; dynamicMap?: 'overwrite' | 'fallback' | 'modify'; shaped?: boolean; opaque?: boolean;
     // optional addition: GT mFakeRecipe, display only (the machine runs its own code)

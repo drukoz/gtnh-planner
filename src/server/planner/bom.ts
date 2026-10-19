@@ -5,9 +5,9 @@
 import { PSEUDO_MACHINES } from '../../shared/gt/tiers.ts';
 import { itemKey, type StuffKey } from '../../shared/keys.ts';
 import type { Machine, Pack } from '../../shared/types/pack.ts';
-import type { BomLine, PlanContext, PlanSettings, PlanStep, PlanWarning } from '../../shared/types/plan.ts';
+import { FREE_KEYS, type BomLine, type PlanContext, type PlanSettings, type PlanStep, type PlanWarning } from '../../shared/types/plan.ts';
 import { buildCandidates, heldOption, type HeldAvoid, type LeafOracle, type LpRecipe, type PlanEnv } from './candidates.ts';
-import { analyzeCosts, type CostAnalysis } from './costs.ts';
+import { analyzeCosts, makePrices, type CostAnalysis } from './costs.ts';
 import { yieldToEventLoop } from './lp.ts';
 import { lineLeaf } from './pricing.ts';
 
@@ -25,6 +25,7 @@ const TINY = 1e-9;
 const CLEANROOM_CLASS = 'MTECleanroom';
 const TOTAL_WHY = 'base material';
 const PSEUDO_IDS: ReadonlySet<number> = new Set(Object.values(PSEUDO_MACHINES));
+const FREE: ReadonlySet<StuffKey> = new Set(FREE_KEYS);
 
 function byString(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
@@ -275,6 +276,19 @@ async function recipeBook(pack: Pack, x: Expansion, targets: StuffKey[]): Promis
   };
 }
 
+/**
+ * The breakdown's leaf oracle: the line's, except that every free input (`FREE_KEYS`) is a leaf at its price (fix spec
+ * R2): a running line makes its own with a generator (`PlanBasis.supplied`), but the one-off materials of its machines
+ * get none.
+ */
+function freeLeaves(pack: Pack, x: Expansion): LeafOracle {
+  const prices = makePrices(pack, x.settings.costOverrides);
+  return (key) => {
+    const d = x.leaf(key);
+    return d.buyable || !FREE.has(key) ? d : { buyable: true, cost: prices.price(key), leafClass: 'free' };
+  };
+}
+
 /** A copy of what storage holds of `key` (§11.20, ruling R9): `total` and `reachable`, plus `where` when known. */
 function haveOf(ctx: PlanContext, key: StuffKey): BomLine['have'] {
   const stock = ctx.storage.get(key);
@@ -286,7 +300,8 @@ function haveOf(ctx: PlanContext, key: StuffKey): BomLine['have'] {
 
 /**
  * The breakdown `buildBom` and `expandBomLines` share, so the two can never differ. Each line keeps its key, amount,
- * why and group and gets what storage holds of it. A good is a leaf when the line can buy it, when it is a base
+ * why and group and gets what storage holds of it. A good is a leaf when it is a free input (`freeLeaves`: always, even
+ * where the line itself plans its generator), when the line can buy it, when it is a base
  * material out of reach (the material itself is what the group must unlock, as solve.ts names it), when no accepted
  * recipe makes it without consuming a good it is being made for, or 12 levels down. Anything else is made by its
  * cheapest accepted recipe (raw cost from the cost analysis of the lines' own candidate graph, ties by id):
@@ -296,8 +311,9 @@ function haveOf(ctx: PlanContext, key: StuffKey): BomLine['have'] {
  * the build list's words, when the graph hit its recipe cap.
  */
 async function expandWith(
-  pack: Pack, lines: readonly BomLine[], x: Expansion,
+  pack: Pack, lines: readonly BomLine[], expansion: Expansion,
 ): Promise<{ lines: BomLine[]; totals: BomLine[]; warnings: PlanWarning[] }> {
+  const x: Expansion = { ...expansion, leaf: freeLeaves(pack, expansion) };
   const leafKeys = new Map<StuffKey, boolean>();
   const isLeaf = (key: StuffKey): boolean => {
     let leaf = leafKeys.get(key);

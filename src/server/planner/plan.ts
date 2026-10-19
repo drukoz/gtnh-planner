@@ -473,11 +473,11 @@ function dimensionOfId(byKey: ReadonlyMap<string, DimensionInfo>, sortedDims: re
 }
 
 /**
- * The English name of every key the plan uses (target, steps and their swap lists, flows, raw inputs, byproducts, build
- * list with its breakdown, totals, unlocks, warnings, the avoided goods with what they are made from and the item and
- * fluid entries of the avoid list, ruling R11), `map:<id>` for every recipe map of a step or alternative, `dim:<key>`
- * for every dimension it reaches or a source names, and `dimId:<n>` for every dimension id a found spot names; keys in
- * sorted order.
+ * The English name of every key the plan uses (target, steps with what they supply and their swap lists, flows, raw
+ * inputs, byproducts, build list with its breakdown, totals, unlocks, warnings, the avoided goods with what they are
+ * made from and the item and fluid entries of the avoid list, ruling R11), `map:<id>` for every recipe map of a step or
+ * alternative, `dim:<key>` for every dimension it reaches or a source names, and `dimId:<n>` for every dimension id a
+ * found spot names; keys in sorted order.
  */
 function planNames(pack: Pack, plan: Plan, settings: PlanSettings): Record<string, string> {
   const target = settings.target;
@@ -497,6 +497,7 @@ function planNames(pack: Pack, plan: Plan, settings: PlanSettings): Record<strin
   };
   for (const step of plan.steps) {
     add(step.mainOutput);
+    add(step.supply);
     for (const p of [...step.inputs, ...step.outputs]) add(p.key);
     addMap(step.mapId);
     for (const a of step.alternatives) {

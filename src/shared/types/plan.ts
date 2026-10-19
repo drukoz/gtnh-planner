@@ -58,6 +58,13 @@ export interface PlanSettings {
    * `normalizeSettings()` fills a missing one with 1 (a project stored before it), which the server switches once.
    */
   settingsVersion?: number;
+  // optional addition
+  /**
+   * Free inputs (`FREE_KEYS`) the group already supplies (fix spec R2, architecture §11.26): the line buys them free
+   * instead of planning their generator (rock breaker, pump, compressor). Entries that are no free input have no effect.
+   * `defaultSettings()` and `normalizeSettings()` always fill it; readers use `?? []`.
+   */
+  haveSupply?: StuffKey[];
 }
 
 /** One storage block holding some of a good (§11.20). */
@@ -104,6 +111,12 @@ export interface PlanStep {
   runs?: number;
   /** The programmed-circuit configuration the recipe needs (spec §3.6). */
   circuit?: number;
+  // optional addition
+  /**
+   * The good this step's supply recipe makes for the line (fix spec R2: a rock breaker's cobblestone or stone, a pump's
+   * water or lava, the fluid of the cells a compressor fills); absent for every other step.
+   */
+  supply?: StuffKey;
 }
 
 export interface PlanFlow { from: string /* step id | 'raw' */; to: string /* step id | 'out' | 'sink' */; key: StuffKey; perSecond: number }

@@ -16,6 +16,7 @@ const SECONDS_PER: Readonly<Record<PlanSettings['per'], number>> = { min: 60, ho
 const RATE_UNIT: Readonly<Record<PlanSettings['per'], string>> = { min: 'min', hour: 'h' };
 const PER_WORD: Readonly<Record<PlanSettings['per'], string>> = { min: 'minute', hour: 'hour' };
 const PSEUDO_IDS: ReadonlySet<number> = new Set(Object.values(PSEUDO_MACHINES));
+const LAVA: StuffKey = 'fluid:lava';
 
 const LOGISTICS_TEXT: Readonly<Record<LogisticsMode, string>> = {
   direct: 'Connect each machine\'s output to the next one with conveyor/pump covers or short pipes; only raw inputs and the final output touch storage',
@@ -29,6 +30,11 @@ function amountText(n: number): string {
   return Number.isInteger(x)
     ? x.toLocaleString('en-US')
     : x.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+/** "3× Iron Ingot", "1,000 L Water": an amount of a good, items counted and fluids in litres (spec §6.1). */
+function amountOf(pack: Pack, key: StuffKey, amount: number): string {
+  return isFluidKey(key) ? `${amountText(amount)} L ${pack.nameOf(key)}` : `${amountText(amount)}× ${pack.nameOf(key)}`;
 }
 
 function isProgrammedCircuit(key: StuffKey): boolean {
@@ -77,6 +83,26 @@ function configureText(pack: Pack, step: PlanStep, avoid: HeldAvoid | undefined)
   return others.length > 0 ? `Put ${others.join(', ')} ${where}` : null;
 }
 
+/**
+ * Where a supply step's machine must stand to make its free input (fix spec R2), or null: a rock breaker needs water
+ * and lava beside it, a pump an infinite water source or a lava pool under it; the compressor needs nothing.
+ */
+function supplyText(pack: Pack, step: PlanStep): string | null {
+  const supply = step.supply;
+  if (supply === undefined) return null;
+  const kind = pack.recipeById.get(step.recipeId)?.meta.supply;
+  const machine = step.machine.name;
+  if (kind === 'rock-breaker') return `Place water and lava next to the ${machine} that makes ${pack.nameOf(supply)}`;
+  if (kind === 'pump') return supply === LAVA ? `Put the ${machine} over a lava pool` : `Put the ${machine} over an infinite water source (a 2×2 pool)`;
+  return null;
+}
+
+/** The `configure` text of a step: its supply setting-up, then the parts it holds, as one instruction; null for none. */
+function configureStepText(pack: Pack, step: PlanStep, avoid: HeldAvoid | undefined): string | null {
+  const parts = [supplyText(pack, step), configureText(pack, step, avoid)].filter((t): t is string => t !== null);
+  return parts.length === 0 ? null : parts.map((t, i) => (i === 0 ? t : t[0]!.toLowerCase() + t.slice(1))).join('; ');
+}
+
 function handCraftText(
   pack: Pack, step: PlanStep, settings: PlanSettings, totalSeconds: number | undefined, avoid: HeldAvoid | undefined,
 ): string {
@@ -88,21 +114,22 @@ function handCraftText(
 }
 
 function testText(pack: Pack, settings: PlanSettings, target: StuffKey, totalSeconds: number | undefined): string {
-  const name = pack.nameOf(target);
   if (settings.mode === 'makeN') {
     const time = totalSeconds === undefined ? '' : ` in about ${Math.max(1, Math.round(totalSeconds / 60))} min`;
-    return `Run the batch: ${amountText(settings.amount)}× ${name}${time}`;
+    return `Run the batch: ${amountOf(pack, target, settings.amount)}${time}`;
   }
-  return `Run the line and check it makes ${amountText(settings.amount)} ${name} per ${PER_WORD[settings.per]}`;
+  const amount = `${amountText(settings.amount)}${isFluidKey(target) ? ' L' : ''}`;
+  return `Run the line and check it makes ${amount} ${pack.nameOf(target)} per ${PER_WORD[settings.per]}`;
 }
 
 /**
  * The build steps in order (`order` = position + 1): gather the build's base materials; craft each top-level build
  * line in build-list order; place the machines; connect power; hook up logistics for the project's mode; configure
  * each step with a programmed circuit or other parts that stay in the machine (hand-crafting tools are none of these,
- * Task 13 ruling); hand-craft each hand-crafting step, naming its tools; test the line. Gather is left out when the
- * build needs no base materials, place when the line has no real machine, and power when it draws no EU. `avoid` is
- * what the line avoids, as for `buildBom`: the parts and tools named are the ones the line may use.
+ * Task 13 ruling), and each supply step where its machine must stand (`supplyText`); hand-craft each hand-crafting step,
+ * naming its tools; test the line. Amounts count items ("3×") and give fluids in litres ("1,000 L"). Gather is left
+ * out when the build needs no base materials, place when the line has no real machine, and power when it draws no EU.
+ * `avoid` is what the line avoids, as for `buildBom`: the parts and tools named are the ones the line may use.
  */
 export function buildSteps(
   pack: Pack,
@@ -121,7 +148,7 @@ export function buildSteps(
   };
 
   if (bom.totals.length > 0) {
-    const shown = bom.totals.slice(0, GATHER_SHOWN).map((l) => `${amountText(l.amount)}× ${pack.nameOf(l.key)}`).join(', ');
+    const shown = bom.totals.slice(0, GATHER_SHOWN).map((l) => amountOf(pack, l.key, l.amount)).join(', ');
     const more = bom.totals.length - GATHER_SHOWN;
     add('gather', 'gather', `Gather the base materials: ${shown}${more > 0 ? ` (and ${more} more)` : ''}`);
   }
@@ -132,14 +159,13 @@ export function buildSteps(
   const toolsOnly = new Set(steps.flatMap((s) => stepTools(pack, s, avoid)).filter((key) => !machineParts.has(key)));
   for (const line of bom.lines) {
     const group = line.group ?? 'machines';
-    const name = pack.nameOf(line.key);
     // A key can only repeat in another group; that line gets the group in its id.
     const id = ids.has(`craft:${line.key}`) ? `craft:${group}:${line.key}` : `craft:${line.key}`;
-    const amount = amountText(line.amount);
-    if (group === 'one-off' && toolsOnly.has(line.key)) add(id, 'craft', `Make ${amount}× ${name} (a tool for hand-crafting)`);
-    else if (group === 'one-off') add(id, 'craft', `Make ${amount}× ${name} (stays in the machine)`);
-    else if (group === 'machines' && line.key === roomKey) add(id, 'craft', `Build a cleanroom (${name}) around the steps that need it`);
-    else add(id, 'craft', `Craft ${amount}× ${name}`);
+    const amount = amountOf(pack, line.key, line.amount);
+    if (group === 'one-off' && toolsOnly.has(line.key)) add(id, 'craft', `Make ${amount} (a tool for hand-crafting)`);
+    else if (group === 'one-off') add(id, 'craft', `Make ${amount} (stays in the machine)`);
+    else if (group === 'machines' && line.key === roomKey) add(id, 'craft', `Build a cleanroom (${pack.nameOf(line.key)}) around the steps that need it`);
+    else add(id, 'craft', `Craft ${amount}`);
   }
 
   const place = placeText(steps, makeN);
@@ -149,7 +175,7 @@ export function buildSteps(
   }
   add(`logistics:${settings.logistics}`, 'logistics', LOGISTICS_TEXT[settings.logistics]);
   for (const step of steps) {
-    const text = configureText(pack, step, avoid);
+    const text = configureStepText(pack, step, avoid);
     if (text !== null) add(`configure:${step.id}`, 'configure', text);
   }
   for (const step of steps) {

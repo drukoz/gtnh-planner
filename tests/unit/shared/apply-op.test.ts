@@ -178,6 +178,21 @@ describe('validateOp (more)', () => {
   });
 });
 
+// Free inputs the group already supplies (plan 09 Task 3; fix spec R2, §3).
+describe('haveSupply', () => {
+  it('is an empty list by default and for an older stored project', () => {
+    expect(defaultSettings().haveSupply).toEqual([]);
+    expect(normalizeSettings({ target: 't:x@0' } as never).haveSupply).toEqual([]);
+    expect(normalizeSettings({ haveSupply: ['fluid:water'] } as never).haveSupply).toEqual(['fluid:water']);
+  });
+  it('takes a list of keys', () => {
+    expect(validateOp({ op: 'settings', patch: { haveSupply: ['minecraft:cobblestone@0', 'fluid:water'] } })).toBeNull();
+    expect(validateOp({ op: 'settings', patch: { haveSupply: [] } })).toBeNull();
+    expect(validateOp({ op: 'settings', patch: { haveSupply: 'x' } })).toEqual(expect.any(String));
+    expect(validateOp({ op: 'settings', patch: { haveSupply: [1] } })).toEqual(expect.any(String));
+  });
+});
+
 // Materials to avoid (plan 2026-10-18-08, rulings R1 and R3).
 describe('avoid', () => {
   const avoidOp = (avoid: unknown) => ({ op: 'settings', patch: { avoid } });

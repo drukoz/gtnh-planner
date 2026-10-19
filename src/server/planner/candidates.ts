@@ -38,6 +38,12 @@ export interface LpRecipe {
   // optional addition
   /** The good the recipe is for: its first listed output (a convert recipe's virtual good). */
   main?: StuffKey;
+  // optional addition
+  /**
+   * A supply recipe (`Recipe.meta.supply`, fix spec R2: a rock breaker, a pump, the compressor filling air cells): a
+   * source of free input, which the loop guard never takes for a loop (solve.ts `sourceColumns`).
+   */
+  supply?: true;
 }
 export interface LeafDecision {
   buyable: boolean; cost: number; leafClass: LeafClass | null /* null = not a leaf, must be made */;
@@ -644,6 +650,7 @@ export function buildCandidates(
     };
     const main = r.outputs[0]?.key;
     if (main !== undefined) lp.main = main;
+    if (r.meta.supply !== undefined) lp.supply = true;
     recipes.set(r.id, lp);
     for (const [key, c] of lp.coeffs) {
       const options = slots.get(key);

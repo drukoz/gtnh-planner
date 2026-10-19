@@ -8,6 +8,7 @@ import { isFluidKey, parseItemKey, type StuffKey } from '../../shared/keys.ts';
 import type { Ingredient, Machine, Pack, Product, Recipe } from '../../shared/types/pack.ts';
 import type { PlanContext, PlanFlow, PlanSettings, PlanStep } from '../../shared/types/plan.ts';
 import { PROGRAMMED_CIRCUIT_ID } from '../pack/recipes.ts';
+import { suppliedKey } from '../pack/supply.ts';
 import { keptOptions, virtualKey, type CandidateGraph, type LpRecipe } from './candidates.ts';
 import { sig9 } from './round.ts';
 import type { Solution } from './solve.ts';
@@ -378,8 +379,8 @@ export type StepSize = Pick<PlanStep, 'count' | 'owned' | 'runsPerSecond' | 'uti
 
 /**
  * The step of a picked recipe, sized by the caller: the machine and its overclocked speed, per-run inputs (one per
- * good, slots added up) and outputs (expected amounts), the main output, the overclock inputs, the cleanroom flag and
- * the programmed circuit.
+ * good, slots added up) and outputs (expected amounts), the main output, the overclock inputs, the cleanroom flag, the
+ * programmed circuit and, for a supply recipe, the good it supplies (`suppliedKey`, fix spec R2).
  * `alternatives` stays empty here (Task 14 fills it).
  */
 export function describeStep(pack: Pack, p: PickedRecipe, line: StepLine, size: StepSize): PlanStep {
@@ -402,6 +403,8 @@ export function describeStep(pack: Pack, p: PickedRecipe, line: StepLine, size: 
   if (p.lp.needsCleanroom) step.needsCleanroom = true;
   const circuit = recipeCircuit(r);
   if (circuit !== undefined) step.circuit = circuit;
+  const supply = suppliedKey(r, pack.fluidContainers);
+  if (supply !== undefined) step.supply = supply;
   return step;
 }
 

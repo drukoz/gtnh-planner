@@ -81,6 +81,7 @@ export function makePrices(pack: Pack, overrides: Record<string, number>): Price
 
 const NOT_A_LEAF: LeafDecision = { buyable: false, cost: 0, leafClass: null };
 const UNAVAILABLE: LeafDecision = { buyable: false, cost: 0, leafClass: 'unavailable' };
+const NO_KEYS: ReadonlySet<StuffKey> = new Set();
 
 /** A cost override for `key` itself, its GT material, or the material of its molten fluid (the rules of `makePrices`). */
 export function hasCostOverride(pack: Pack, overrides: Record<string, number>, key: StuffKey): boolean {
@@ -116,8 +117,9 @@ function isMaterialLine(pack: Pack, target: StuffKey | null): boolean {
 
 /**
  * Which goods the line buys (spec §3.3, §5): "we already make this" items at their cost (key override, else `stopCost`,
- * else the price), free and natural goods (gathered blocks among them, fix spec R1), and base items the group can get
- * at its tier, with three exceptions (fix spec R5, R6, R8):
+ * else the price), free and natural goods (gathered blocks among them, fix spec R1) except the free inputs of
+ * `opts.supplied` (`PlanBasis.supplied`, fix spec R2: a running line makes those with their generator, a rock breaker,
+ * pump or compressor), and base items the group can get at its tier, with three exceptions (fix spec R5, R6, R8):
  * - a derived fluid is never bought: a sourced fluid is bought only where a source is reachable (`direct`), and every
  *   other fluid the line needs is made, so chemicals such as ethylene get a line behind them;
  * - a derived base item is bought only while the project does not plan supporting lines (`routeDerived`) and only when
@@ -139,8 +141,9 @@ function isMaterialLine(pack: Pack, target: StuffKey | null): boolean {
  */
 export function makeLeafOracle(
   pack: Pack, settings: PlanSettings, avail: Availability, prices: PriceTable, stopCost?: (key: StuffKey) => number,
-  derivedCost?: (key: StuffKey) => Standalone | undefined,
+  derivedCost?: (key: StuffKey) => Standalone | undefined, opts?: { supplied?: ReadonlySet<StuffKey> },
 ): LeafOracle {
+  const supplied = opts?.supplied ?? NO_KEYS;
   /** A derived leaf: its price under a cost override, else what making it costs, else its price. */
   const derived = (key: StuffKey): LeafDecision => {
     const made = hasCostOverride(pack, settings.costOverrides, key) ? undefined : derivedCost?.(key);
@@ -157,6 +160,7 @@ export function makeLeafOracle(
       return { buyable: true, cost: own(settings.costOverrides, key) ?? stopCost?.(key) ?? prices.price(key), leafClass: 'stop' };
     }
     const leafClass = avail.classOf(key);
+    if (leafClass === 'free' && supplied.has(key)) return NOT_A_LEAF;
     if (leafClass === 'free' || leafClass === 'natural') return { buyable: true, cost: prices.price(key), leafClass };
     if (!isBaseItem(pack, key)) return NOT_A_LEAF;
     switch (leafClass) {
