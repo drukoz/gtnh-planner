@@ -38,7 +38,7 @@ function c(mteId: number, pos: Vec3, bits: number, kind: GtPipeRec['pipeKind']):
 /** `occupied` = any of the given records' positions; no bases unless `over` names them. */
 function input(machines: GtMachineRec[], pipes: GtPipeRec[], over: Partial<PowerInput> = {}): PowerInput {
   const taken = new Set([...machines, ...pipes].map((r) => posKey(r.dim, ...r.pos)));
-  return { machines, pipes, facts, baseOf: () => null, occupied: (dim, p) => taken.has(posKey(dim, ...p)), ...over };
+  return { machines, pipes, tanks: [], facts, baseOf: () => null, occupied: (dim, p) => taken.has(posKey(dim, ...p)), ...over };
 }
 
 /** HP solar boilers at (x, 64, −1) facing south onto a bronze fluid pipe line at (x, 64, 0), x = 0 … count − 1. */

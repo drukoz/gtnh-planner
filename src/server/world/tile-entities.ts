@@ -1,7 +1,8 @@
 // The chunk pass (world-format §8 Pass 2): a cursor skip-scan of each chunk that reads `xPos`, `zPos` and
-// `InhabitedTime`, and walks `TileEntities` looking only at each element's `id`. Whitelisted TEs are parsed in full;
-// everything else, `Sections`, `Entities` and biomes included, is skipped by length. GT ore TEs (~99.6% of all TEs in
-// a real world) are recognised by comparing bytes, so no string or object is ever built for them (spec §5).
+// `InhabitedTime`, and walks `TileEntities` looking only at each element's `id`. Whitelisted TEs are parsed in full, and
+// so is any other TE whose bytes hold the fluid name of steam (a tank of the steam graph, plan 10 ruling R5); everything
+// else, `Sections`, `Entities` and biomes included, is skipped by length. GT ore TEs (~99.6% of all TEs in a real world)
+// are recognised by comparing bytes, so no string or object is ever built for them (spec §5).
 // Also the item-stack reader every classifier uses (world-format §5).
 
 import { itemKey, type ItemKey } from '../../shared/keys.ts';
@@ -11,11 +12,22 @@ import {
 } from './nbt.ts';
 import { chunkPayload, inflateChunk, REGION_HEADER_BYTES, regionChunkRefs } from './region.ts';
 
-/** TE ids the scan keeps (world-format §6): GregTech, JABBA, chests, Forge Multipart, EnderIO and AE2. */
+/**
+ * The parts of Railcraft iron and steel tanks (`Railcraft:machine.beta` walls, gauges and valves, world-format §6.12),
+ * kept whatever they hold: a tank keeps its fluid in one master part only (plan 10, ruling R4).
+ */
+export const RAILCRAFT_TANK_TES: ReadonlySet<string> = new Set(
+  ['Iron', 'Steel'].flatMap((metal) => ['Wall', 'Gauge', 'Valve'].map((part) => `RC${metal}Tank${part}Tile`)),
+);
+
+/** TE ids the scan keeps (world-format §6): GregTech, JABBA, chests, Forge Multipart, EnderIO, AE2 and Railcraft tank parts. */
 export const TE_WHITELIST: ReadonlySet<string> = new Set([
   'BaseMetaTileEntity', 'BaseMetaPipeEntity', 'TileEntityBarrel', 'Chest', 'savedMultipart', 'blockConduitBundleTileEntity',
-  'BlockCableBus', 'BlockController', 'BlockDrive', 'BlockChest', 'BlockInterface',
+  'BlockCableBus', 'BlockController', 'BlockDrive', 'BlockChest', 'BlockInterface', ...RAILCRAFT_TANK_TES,
 ]);
+
+/** The Forge fluid names of steam: GregTech's and Railcraft's `steam`, IC2's `ic2steam`. */
+export const STEAM_FLUIDS: readonly string[] = Object.freeze(['steam', 'ic2steam']);
 
 /** TE id prefixes the scan keeps: every IronChest type and every Storage Drawers TE. */
 export const TE_PREFIXES: readonly string[] = Object.freeze(['IronChest.', 'StorageDrawers:']);
@@ -29,6 +41,23 @@ export function isWantedTe(id: string): boolean {
 const ASCII = new TextEncoder();
 const ID_BYTES = ASCII.encode('id');
 const ORE_ID_BYTES = ASCII.encode(ORE_TE_ID);
+
+/** Each steam fluid name as the bytes of an NBT string: a u16 length, then the name. */
+const STEAM_NAME_BYTES: readonly Buffer[] = STEAM_FLUIDS.map((name) => {
+  const bytes = Buffer.alloc(2 + name.length);
+  bytes.writeUInt16BE(name.length);
+  bytes.write(name, 2, 'latin1');
+  return bytes;
+});
+
+/**
+ * True when `buf[from, to)` holds a steam fluid name as an NBT string. A cheap test that may say yes too often (a tag
+ * *named* steam matches as well), so the tank classifier checks the parsed values (classify/tanks.ts).
+ */
+function mayHoldSteam(buf: Uint8Array, from: number, to: number): boolean {
+  const bytes = Buffer.from(buf.buffer, buf.byteOffset + from, to - from);
+  return STEAM_NAME_BYTES.some((name) => bytes.includes(name));
+}
 
 /** True when the u16-length string at the cursor (a tag name or a String payload) is exactly `bytes`; the cursor stays. */
 function stringIs(c: NbtCursor, bytes: Uint8Array): boolean {
@@ -61,7 +90,10 @@ function skimTeId(c: NbtCursor): string | null {
 
 interface TeTally { teCount: number; oreTes: number }
 
-/** The `TileEntities` list at the cursor (its type byte and name already read): counts every element, keeps wanted ones. */
+/**
+ * The `TileEntities` list at the cursor (its type byte and name already read): counts every element, keeps wanted ones
+ * and any other that may hold steam.
+ */
 function scanTileEntities(c: NbtCursor, dim: number, tally: TeTally, tes: RawTe[]): void {
   const elem = readTagType(c);
   const count = readPayload(c, TAG.Int) as number;
@@ -78,8 +110,8 @@ function scanTileEntities(c: NbtCursor, dim: number, tally: TeTally, tes: RawTe[
       tally.oreTes++;
       continue;
     }
-    if (id === null || !isWantedTe(id)) continue;
     const end = c.pos;
+    if (id === null || !(isWantedTe(id) || mayHoldSteam(c.buf, start, end))) continue;
     c.pos = start;
     const nbt = readPayload(c, TAG.Compound) as NbtCompound;
     c.pos = end;
