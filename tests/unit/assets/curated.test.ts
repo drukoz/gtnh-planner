@@ -1,10 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { curatedBlock, curatedIds, curatedItem, curatedItemIds, curatedPaths, PIPE_FILES } from '../../../src/server/assets/curated.ts';
-import { FACES, type Rgb } from '../../../src/shared/types/assets.ts';
+import { CHEST_SHEET, chestLayers, curatedBlock, curatedIds, curatedItem, curatedItemIds, curatedPaths, PIPE_FILES } from '../../../src/server/assets/curated.ts';
+import { FACES, type Face, type Rect, type Rgb } from '../../../src/shared/types/assets.ts';
 
 const SD = 'storagedrawers/textures/blocks/';
 const MC = 'minecraft/textures/blocks/';
 const BOP = 'biomesoplenty/textures/blocks/';
+const CHESTS = 'minecraft/textures/entity/chest/';
+const MODELS = 'ironchest/textures/model/';
 /** Every face with these candidates (none by default), and every face in one tint. */
 const all = (...paths: string[]) => Object.fromEntries(FACES.map((f) => [f, paths]));
 const allTint = (rgb: Rgb) => Object.fromEntries(FACES.map((f) => [f, rgb]));
@@ -110,12 +112,55 @@ describe('curated block tables', () => {
     expect(wood.faces).toEqual(all());
   });
 
+  it('draws the chest from its model sheet, with the planks as the fallback', () => {
+    const N = CHESTS + 'normal.png';
+    const r = (src: Rect, dst: Rect) => ({ paths: [N], region: { sheet: 64, src, dst } });
+    expect(curatedBlock('minecraft:chest', 0)!.layers!.north).toEqual([r([14, 33, 14, 10], [1, 6, 14, 10]), r([14, 14, 14, 5], [1, 2, 14, 5]), r([1, 1, 2, 4], [7, 5, 2, 4])]);
+    expect(curatedBlock('minecraft:chest', 0)!.layers!.up).toEqual([r([14, 0, 14, 14], [1, 1, 14, 14])]);
+    expect(curatedBlock('minecraft:chest', 0)!.faces.north).toEqual(['minecraft/textures/blocks/planks_oak.png']);
+    expect(curatedBlock('IronChest:BlockIronChest', 7)!.layers!.down![0]!.paths).toEqual(['ironchest/textures/model/dirtchest.png']);
+    expect(curatedBlock('IronChest:BlockIronChest', 4)!.faces.north).toEqual(['ironchest/textures/blocks/silver_front.png']);   // unchanged fallback
+  });
+
+  it('lays the chest out as ModelChest does: base, lid and knob cut from a 64 px sheet, bottom to top', () => {
+    expect(CHEST_SHEET).toBe(64);
+    const layers = chestLayers('s.png');
+    const cut = (face: Face) => layers[face].map((l) => [l.region!.src, l.region!.dst]);
+    expect(cut('north')).toEqual([[[14, 33, 14, 10], [1, 6, 14, 10]], [[14, 14, 14, 5], [1, 2, 14, 5]], [[1, 1, 2, 4], [7, 5, 2, 4]]]);   // front, then the knob
+    expect(cut('south')).toEqual([[[42, 33, 14, 10], [1, 6, 14, 10]], [[42, 14, 14, 5], [1, 2, 14, 5]]]);   // back
+    expect(cut('west')).toEqual([[[28, 33, 14, 10], [1, 6, 14, 10]], [[28, 14, 14, 5], [1, 2, 14, 5]]]);    // the model's +X side
+    expect(cut('east')).toEqual([[[0, 33, 14, 10], [1, 6, 14, 10]], [[0, 14, 14, 5], [1, 2, 14, 5]]]);      // the model's -X side
+    expect(cut('up')).toEqual([[[14, 0, 14, 14], [1, 1, 14, 14]]]);                                         // lid top
+    expect(cut('down')).toEqual([[[28, 19, 14, 14], [1, 1, 14, 14]]]);                                      // base bottom
+    expect(FACES.flatMap((f) => layers[f]).every((l) => l.paths.length === 1 && l.paths[0] === 's.png' && l.region!.sheet === 64 && l.tint === undefined)).toBe(true);
+  });
+
+  it('draws the trapped and the ender chest from their sheets, with planks and obsidian as the fallback', () => {
+    for (const [id, sheet, fallback] of [['minecraft:trapped_chest', 'trapped', 'planks_oak'], ['minecraft:ender_chest', 'ender', 'obsidian']] as const) {
+      const b = curatedBlock(id, 0)!;
+      expect(b.layers).toEqual(chestLayers(CHESTS + sheet + '.png'));
+      expect(b.faces).toEqual(all(MC + fallback + '.png'));
+      expect(b.tint).toBeUndefined();
+    }
+    expect(curatedBlock('minecraft:chest', 5)!.layers).toEqual(chestLayers(CHESTS + 'normal.png'));   // any meta: the facing is the caller's
+  });
+
+  it('names the Iron Chest sheet by type, and keeps the type\'s block icons as the fallback', () => {
+    const types = ['iron', 'gold', 'diamond', 'copper', 'silver', 'crystal', 'obsidian', 'dirt', 'netherite', 'darksteel', 'silver', 'iron'];   // meta 11 and up: iron, as before
+    types.forEach((t, meta) => expect(curatedBlock('IronChest:BlockIronChest', meta)!.layers).toEqual(chestLayers(`${MODELS}${t}chest.png`)));
+    expect(curatedBlock('IronChest:BlockIronChest', 15)!.layers).toEqual(chestLayers(MODELS + 'ironchest.png'));
+    expect(curatedBlock('IronChest:BlockIronChest', 1)!.faces).toEqual({
+      ...all('ironchest/textures/blocks/gold_side.png'), north: ['ironchest/textures/blocks/gold_front.png'],
+      up: ['ironchest/textures/blocks/gold_top.png'], down: ['ironchest/textures/blocks/gold_top.png'] });
+    expect(curatedBlock('IronChest:BlockIronChest', 7)!.faces.north).toEqual(['ironchest/textures/blocks/dirtchest9000_front.png']);   // the block icons keep the type's own name
+  });
+
   it('answers nothing else and lists what it knows', () => {
     expect(curatedBlock('minecraft:stone', 0)).toBeNull();
     expect(curatedBlock('nope:nope', 0)).toBeNull();
     expect(curatedIds()).toEqual(expect.arrayContaining(['StorageDrawers:fullDrawers1', 'JABBA:barrel', 'fmp:pr_pipe', 'conduit:oc', 'ae2cable:smart', 'minecraft:hopper']));
     expect(curatedPaths()).toContain('jabba/textures/blocks/barrel_top_0.png');
-    expect(curatedPaths().every((p) => /^[a-z0-9_.-]+\/textures\/(blocks|items)\/.+\.png$/.test(p))).toBe(true);
+    expect(curatedPaths().every((p) => /^[a-z0-9_.-]+\/textures\/(blocks|items|entity\/chest|model)\/.+\.png$/.test(p))).toBe(true);
   });
 
   it('answers null for ids named after Object.prototype members', () => {
@@ -156,5 +201,6 @@ describe('curated items', () => {
       'minecraft:bow', 'minecraft:coal', 'minecraft:dye']);
     expect(curatedPaths()).toEqual(expect.arrayContaining(['ic2/textures/blocks/blockRubWood.png', 'minecraft/textures/items/charcoal.png', PARTS + 'electro_silicon.png',
       'botania/textures/items/gaiaHead.png', 'ztones/textures/blocks/sets/zyth/zyth_ (15).png']));   // parts 16–59 too: each item row over its own metas
+    expect(curatedPaths()).toEqual(expect.arrayContaining([CHESTS + 'normal.png', CHESTS + 'trapped.png', CHESTS + 'ender.png', MODELS + 'ironchest.png', MODELS + 'dirtchest.png', MODELS + 'darksteelchest.png']));
   });
 });

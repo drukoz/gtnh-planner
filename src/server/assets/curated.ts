@@ -3,7 +3,7 @@
 // lists candidates and the first extracted one wins (Task 10). A face may instead draw layers cut
 // out of a sheet (architecture §11.43 (b)), and a few items have an icon row of their own.
 import { FACES } from '../../shared/types/assets.ts';
-import type { Face, LayerRegion, Rgb } from '../../shared/types/assets.ts';
+import type { Face, LayerRegion, Rect, Rgb } from '../../shared/types/assets.ts';
 
 /** One layer: the first extracted of `paths`, cut to `region`, in `tint` (else its block face's tint). */
 export interface CuratedLayer { paths: readonly string[]; region?: LayerRegion; tint?: Rgb }
@@ -18,6 +18,11 @@ const LOG2_WOODS = ['acacia', 'big_oak'];
 const WOOL = ['white', 'orange', 'magenta', 'light_blue', 'yellow', 'lime', 'pink', 'gray', 'silver', 'cyan', 'purple', 'blue', 'brown', 'green', 'red', 'black'];
 const STONEBRICK = ['stonebrick', 'stonebrick_mossy', 'stonebrick_cracked', 'stonebrick_carved'];
 const CHEST_TYPES = ['iron', 'gold', 'diamond', 'copper', 'silver', 'crystal', 'obsidian', 'dirtchest9000', 'netherite', 'darksteel', 'silver'];
+/** The chests' model sheets (architecture §11.43 (e)): the client jar's skins of the vanilla chests, and IronChest's `<type>chest.png`. */
+const CHEST_SKINS = 'minecraft/textures/entity/chest/';
+const IRON_CHEST_MODELS = 'ironchest/textures/model/';
+/** The width of a chest sheet in pixels (`ModelChest.setTextureSize(64, 64)`; IronChest's sheets lay out the same). */
+export const CHEST_SHEET = 64;
 const SAPLINGS = ['oak', 'spruce', 'birch', 'jungle', 'acacia', 'roofed_oak'];
 const TALLGRASS = ['deadbush', 'tallgrass', 'fern'];
 const DOUBLE_PLANTS = ['sunflower', 'syringa', 'grass', 'fern', 'rose', 'paeonia'];
@@ -116,7 +121,7 @@ const TABLE: Record<string, (meta: number) => CuratedBlock | null> = {
   'JABBA:barrel': () => blocks('jabba', { north: 'barrel_label_0', up: 'barrel_top_0', down: 'barrel_top_0' }, 'barrel_side_0'),
   'IronChest:BlockIronChest': (m) => {
     const t = CHEST_TYPES[m] ?? 'iron';
-    return blocks('ironchest', { north: `${t}_front`, up: `${t}_top`, down: `${t}_top` }, `${t}_side`);
+    return chest(ironChestSheet(t), blocks('ironchest', { north: `${t}_front`, up: `${t}_top`, down: `${t}_top` }, `${t}_side`));
   },
   'ForgeMultipart:block': () => all(PR, 'mechanical/pipes/basic'),
   'EnderIO:blockConduitBundle': () => all(EIO, 'conduitConnector'),
@@ -134,7 +139,9 @@ const TABLE: Record<string, (meta: number) => CuratedBlock | null> = {
   'minecraft:stonebrick': (m) => all('minecraft', STONEBRICK[m & 3]!),
   'minecraft:sandstone': (m) => sandstone(m),
   'minecraft:quartz_block': () => quartzBlock(),
-  'minecraft:chest': () => all('minecraft', 'planks_oak'),
+  'minecraft:chest': () => chest(`${CHEST_SKINS}normal.png`, all(MC, 'planks_oak')),
+  'minecraft:trapped_chest': () => chest(`${CHEST_SKINS}trapped.png`, all(MC, 'planks_oak')),
+  'minecraft:ender_chest': () => chest(`${CHEST_SKINS}ender.png`, all(MC, 'obsidian')),
   'minecraft:crafting_table': () => blocks('minecraft', { north: 'crafting_table_front', up: 'crafting_table_top', down: 'planks_oak' }, 'crafting_table_side'),
   'minecraft:furnace': () => blocks('minecraft', { north: 'furnace_front_off', up: 'furnace_top', down: 'furnace_top' }, 'furnace_side'),
   'minecraft:lit_furnace': () => blocks('minecraft', { north: 'furnace_front_on', up: 'furnace_top', down: 'furnace_top' }, 'furnace_side'),
@@ -317,6 +324,37 @@ function ic2Strip(path: string): CuratedBlock {
     layers[face] = [{ paths: [path], region: { sheet: IC2_STRIP_WIDTH, src: [IC2_FACE * side, 0, IC2_FACE, IC2_FACE] } }];
   });
   return { faces, layers };
+}
+
+/**
+ * A chest cut from its model sheet `path`, each face's layers from bottom to top (architecture §11.43 (b)). ModelChest
+ * (1.7.10) is a lid box 14×5×14 at texture offset (0, 0), a base 14×10×14 at (0, 19) and a knob 2×4×1 at (0, 0); ModelBox
+ * lays a box (dx, dy, dz) at (u, v) out as its top at (u+dz, v), its bottom at (u+dz+dx, v) and, at row v+dz, its −X side,
+ * front, +X side and back side by side. Model y grows downward, so on a face the lid spans rows 2–7, the base rows 6–16
+ * and the knob columns 7–9, rows 5–9. The front is north; the model's +X side is west.
+ */
+export function chestLayers(path: string): Record<Face, CuratedLayer[]> {
+  const layer = (src: Rect, dst: Rect): CuratedLayer => ({ paths: [path], region: { sheet: CHEST_SHEET, src, dst } });
+  // One side of the base (row 33) and of the lid (row 14), `u` columns in.
+  const side = (u: number): CuratedLayer[] => [layer([u, 33, 14, 10], [1, 6, 14, 10]), layer([u, 14, 14, 5], [1, 2, 14, 5])];
+  return {
+    down: [layer([28, 19, 14, 14], [1, 1, 14, 14])],
+    up: [layer([14, 0, 14, 14], [1, 1, 14, 14])],
+    north: [...side(14), layer([1, 1, 2, 4], [7, 5, 2, 4])],
+    south: side(42),
+    west: side(28),
+    east: side(0),
+  };
+}
+
+/** A chest drawn from its model sheet; a face whose sheet was not extracted draws `fallback`'s candidates, as before the sheets were copied. */
+function chest(sheet: string, fallback: CuratedBlock): CuratedBlock {
+  return { ...fallback, layers: chestLayers(sheet) };
+}
+
+/** IronChest's model sheet of chest type `type` (`CHEST_TYPES`): `<type>chest.png`, but `dirtchest.png` for the dirt chest. */
+function ironChestSheet(type: string): string {
+  return `${IRON_CHEST_MODELS}${type === 'dirtchest9000' ? 'dirt' : type}chest.png`;
 }
 
 /** `Ztones:tile.<set>Block` for every set, and `Ztones:tile.glaxx`: one file per meta, `sets/<set>/<set>_ (<meta>).png`. */
