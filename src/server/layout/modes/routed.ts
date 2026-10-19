@@ -15,8 +15,8 @@ import type { BlockConfig, LocalBlock } from '../arrange.ts';
 import { linkBits } from '../path.ts';
 import type { Part } from '../parts.ts';
 import {
-  emptyModeResult, finalItemOutputs, itemPorts, nameList, placedStepIds, rawItemInputs, stepItemInputs, type ModeInput, type ModeResult,
-  type StepDraft,
+  emptyModeResult, finalItemOutputs, itemPorts, nameList, outputSideInputs, placedStepIds, rawItemInputs, stepItemInputs, type ModeInput,
+  type ModeResult, type StepDraft,
 } from './mode.ts';
 
 const UP = 1, SOUTH = 3, EAST = 5;
@@ -115,7 +115,8 @@ export function routedMode(input: ModeInput): ModeResult {
         return connections === undefined ? b : { ...b, connections };
       })
       .sort((a, b) => comparePos(a.pos, b.pos) || (a.facing ?? -1) - (b.facing ?? -1)),
-    covers: [], configs: [],
+    // the interface pipe inserts through the machine's output side
+    covers: [], configs: [...outputSideInputs(placement).values()].sort((a, b) => comparePos(a.pos, b.pos)),
     logisticsPort: hooked ? request : null,
     hookup: hooked ? { part: 'pr_junction', end: null } : null,
     extraParts, drafts, warnings, tailFluidY: 2,

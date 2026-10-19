@@ -5,8 +5,8 @@
 import { apiGet, apiPost, ApiError } from '../api/client.ts';
 import { getName } from '../state/name.ts';
 import {
-  NAME_HEADER, type ApiError as ApiErrorBody, type CreateUploadResponse, type StartScanRequest, type StartScanResponse, type WorldScanListItem,
-  type WorldSourcesResponse,
+  NAME_HEADER, type ApiError as ApiErrorBody, type CreateUploadResponse, type PaletteName, type StartScanRequest, type StartScanResponse,
+  type WorldScanListItem, type WorldSourcesResponse,
 } from '../../shared/types/api.ts';
 import type { BlockFaces } from '../../shared/types/assets.ts';
 import type { BlockRef } from '../../shared/types/pack.ts';
@@ -57,6 +57,8 @@ export const worldApi = {
   },
   cancel: (id: string): Promise<void> => apiPost<void>(`${scanPath(id)}/cancel`, undefined),
   palette: (id: string): Promise<BlockRef[]> => apiGet<BlockRef[]>(`${scanPath(id)}/palette`),
+  /** The palette with each entry's English name, in the same order (architecture §11, Map hover); 503 without an export. */
+  paletteNames: (id: string): Promise<PaletteName[]> => apiGet<PaletteName[]>(`${scanPath(id)}/palette?names=1`),
   /** The 64×64 map tile (tx, tz) of `dim`, showing the first block at or below `y` (255 = surface). */
   tile: async (scanId: string, dim: number, tx: number, tz: number, y: number): Promise<MapTile> => {
     const res = await rawFetch(`${scanPath(scanId)}/tiles/${dim}/${tx}/${tz}?y=${y}`, { method: 'GET', accept: 'application/octet-stream' });

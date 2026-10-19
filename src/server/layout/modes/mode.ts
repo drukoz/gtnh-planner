@@ -7,7 +7,7 @@
 
 import { isFluidKey, type StuffKey } from '../../../shared/keys.ts';
 import { joinNames } from '../../../shared/layout/format.ts';
-import { OPPOSITE, step, type Vec3 } from '../../../shared/layout/geometry.ts';
+import { OPPOSITE, posKey, step, type Vec3 } from '../../../shared/layout/geometry.ts';
 import { FACES } from '../../../shared/types/assets.ts';
 import type { ConduitFace, ConduitKind } from '../../../shared/types/layout.ts';
 import type { Pack } from '../../../shared/types/pack.ts';
@@ -173,6 +173,22 @@ export function itemPorts(placement: Placement): ItemPort[] {
   return placement.units.filter((u) => u.io.itemIn || u.io.itemOut).flatMap((u) => u.ports.items.map((pos, i): ItemPort => ({
     pos: [...pos], behind: step(pos, OPPOSITE[u.facing]!), unit: u, first: i === 0,
   })));
+}
+
+/**
+ * A singleblock takes its items through its spine face, which is its output side (GT keeps its front, `mainFacing`,
+ * elsewhere): so in every mode each singleblock with item inputs gets "allow input from the output side" on its
+ * machine. Keyed by the machine cell's posKey, in unit order.
+ */
+export function outputSideInputs(placement: Placement): Map<string, HostConfig> {
+  const configs = new Map<string, HostConfig>();
+  for (const u of placement.units) {
+    const port = u.ports.items[0];
+    if (u.multiblock || !u.io.itemIn || port === undefined) continue;
+    const cell = step(port, OPPOSITE[u.facing]!);
+    configs.set(posKey(cell), { pos: cell, config: { inputFromOutputSide: true } });
+  }
+  return configs;
 }
 
 // ---- Names ----

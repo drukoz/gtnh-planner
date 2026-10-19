@@ -62,6 +62,14 @@ function opsOf(body: unknown): ProjectOp[] {
   return ops as ProjectOp[];
 }
 
+/**
+ * Whether a projector token may send `ops` (architecture §11.23): every op is `{ op: 'mark' }` on a build step's row
+ * ("step:…"). The ops are not validated yet, so anything else in the array, even a non-object, makes it false.
+ */
+export function tokenMayApply(ops: readonly ProjectOp[]): boolean {
+  return ops.every((op: unknown) => isRecord(op) && op.op === 'mark' && typeof op.row === 'string' && op.row.startsWith('step:'));
+}
+
 /** The store's apply, with a rejected op answered as 400 `bad-op` "op <index>: <reason>"; null for an unknown project. */
 function applyOps(app: AppContext, id: string, ops: ProjectOp[], by: string): ReturnType<ProjectStore['apply']> {
   try {
@@ -179,7 +187,7 @@ export function projectRoutes(app: AppContext): Route[] {
       },
     },
     {
-      method: 'GET', path: '/api/projects/:id',
+      method: 'GET', path: '/api/projects/:id', bearer: true,
       handler: async (_req, res, params) => {
         const project = app.projects.get(params.id!);
         if (project === null) throw notFound(params.id!);
@@ -211,11 +219,15 @@ export function projectRoutes(app: AppContext): Route[] {
       },
     },
     {
-      method: 'POST', path: '/api/projects/:id/ops',
+      method: 'POST', path: '/api/projects/:id/ops', bearer: true,
       handler: async (req, res, params, ctx) => {
         const id = params.id!;
         const by = requireName(ctx);
-        const result = applyOps(app, id, opsOf(await readJson<unknown>(req)), by);
+        const ops = opsOf(await readJson<unknown>(req));
+        if (ctx.bearer !== undefined && !tokenMayApply(ops)) {
+          throw new HttpError(403, 'token-scope', 'A projector token can only tick build steps');
+        }
+        const result = applyOps(app, id, ops, by);
         if (result === null) throw notFound(id);
         // The store applies a batch synchronously, so the events of concurrent batches reach every tab in rev order.
         for (const a of result.applied) {

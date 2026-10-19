@@ -150,6 +150,10 @@ describe('FoundPanel', () => {
     expect(html).toContain('94 blocks');
     expect(html).toMatch(/data-testid="note-1"[^]*Build here/);
     expect(html).toMatch(/data-testid="note-2"[^]*Nether portal/);
+    // N1, N2 as the map draws note pins: a plain number is a layout pin (a build step's "pin 1")
+    expect(html).toMatch(/data-testid="note-1"[^]*?<span class="badge">N1<\/span>/);
+    expect(html).toMatch(/data-testid="note-2"[^]*?<span class="badge">N2<\/span>/);
+    expect(html).not.toMatch(/<span class="badge">\d+<\/span>/);
     expect(html).toMatch(/id="found-note-2" data-testid="note-2" aria-current="true"/);   // the note whose marker was clicked
     expect(html).not.toContain('not pinned');
   });

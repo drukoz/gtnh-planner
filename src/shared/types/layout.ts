@@ -70,6 +70,11 @@ export interface LayoutBlock {
   conduits?: ConduitSpec[];
   /** Set on the tail's input and output chests. */
   tail?: TailChest;
+  /**
+   * A GT basic machine's front (`mMainFacing`), which GT keeps apart from its output side: then `facing` is the output
+   * side (`mFacing`, where its output cover and inputs go). Only singleblock machines carry it.
+   */
+  mainFacing?: number;
 }
 
 export interface Hookup {

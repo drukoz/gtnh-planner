@@ -90,6 +90,15 @@ export function readCookie(header: string | undefined, name: string): string | u
   return undefined;
 }
 
+/** The scheme in any case, one or more spaces, then a token with no whitespace in it, to the end of the header. */
+const BEARER = /^bearer +(\S+)$/i;
+
+/** The token in an `Authorization: Bearer <token>` header (architecture §11.22), else null. */
+export function bearerToken(header: string | undefined): string | null {
+  if (header === undefined) return null;
+  return BEARER.exec(header)?.[1] ?? null;
+}
+
 /**
  * Counts wrong passwords per client address: once an address has `maxFailures` (5) failures less than `windowMs`
  * (15 minutes) old, it is refused until enough of them are older than that. Memory stays bounded by the addresses

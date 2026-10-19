@@ -43,6 +43,11 @@ function samePos(a: Vec3, b: Vec3): boolean {
   return a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
 }
 
+/** "A", "A or B", "A, B or C". */
+function orNames(names: readonly string[]): string {
+  return names.length <= 1 ? (names[0] ?? '') : `${names.slice(0, -1).join(', ')} or ${names.at(-1)!}`;
+}
+
 /** " at pin <n>", or nothing without that pin. */
 function atPin(n: number | undefined): string {
   return n === undefined ? '' : ` at pin ${n}`;
@@ -69,7 +74,12 @@ function hatchLabels(u: PlacedUnit): string[] {
   return [...chosen, ...exported].map((c) => c.label);
 }
 
-/** One step per placed plan step, in unit order: how many to place and, for a multiblock, its size and hatches. */
+const UP = 1;
+
+/**
+ * One step per placed plan step, in unit order: how many to place and which way they face — a singleblock's output
+ * side and its front, which GT keeps apart (`PlacedUnit.mainFacing`); a multiblock's size, controller and hatches.
+ */
 function placeSteps(units: readonly PlacedUnit[], sitePin: number | undefined): Draft[] {
   const byStep = new Map<string, { first: PlacedUnit; n: number }>();
   for (const u of units) {
@@ -78,7 +88,10 @@ function placeSteps(units: readonly PlacedUnit[], sitePin: number | undefined): 
     else seen.n += 1;
   }
   return [...byStep].map(([stepId, { first: u, n }]) => {
-    if (!u.multiblock) return draft(`layout:place:${stepId}`, 'place', sitePin, `Place ${fmtInt(n)}× ${u.name} facing the middle row`);
+    if (!u.multiblock) {
+      const front = u.mainFacing === UP ? 'facing up' : 'facing the power head';
+      return draft(`layout:place:${stepId}`, 'place', sitePin, `Place ${fmtInt(n)}× ${u.name} with its output side facing the middle row and its front ${front}`);
+    }
     const labels = hatchLabels(u);
     const hatches = labels.length === 0 ? '' : `; hatches: ${labels.join(', ')}`;
     return draft(`layout:place:${stepId}`, 'place', sitePin,
@@ -96,8 +109,14 @@ function powerSteps(input: StepsInput, sitePin: number | undefined, powerPin: nu
     out.push(draft(`layout:power:stage:${s.toTier}`, 'power', powerPin,
       `Place ${fmtInt(s.count)}× ${input.transformerName(s.toTier)} between the ${from} and ${to} cables, front (input) toward ${from}`));
   }
+  // GT joins a cable to the block it is placed against, so two tiers must never touch (spec §3.5)
+  const tiers = input.cables.map((c) => c.tier);
   for (const c of input.cables) {
-    out.push(draft(`layout:power:wire:${c.tier}`, 'power', sitePin, `Wire the ${tierName(c.tier)} machines with ${c.cable} (${fmtInt(c.cells)} blocks)`));
+    const lower = tiers.filter((t) => t < c.tier), higher = tiers.filter((t) => t > c.tier);
+    const apart = tiers.length < 2 ? '' : lower.length > 0
+      ? `; connect only the drawn sides, and never let the ${tierName(c.tier)} cables touch the ${orNames(lower.map(tierName))} cables`
+      : `; connect only the drawn sides, and never let the ${orNames(higher.map(tierName))} cables touch the ${tierName(c.tier)} cables`;
+    out.push(draft(`layout:power:wire:${c.tier}`, 'power', sitePin, `Wire the ${tierName(c.tier)} machines with ${c.cable} (${fmtInt(c.cells)} blocks)${apart}`));
   }
   if (input.supplyTier !== null) {
     const p = input.power;

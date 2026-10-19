@@ -57,6 +57,15 @@ export function canonicalFaceFor(facing: number, worldSide: number): Face {
   return rotateFaces(IDENTITY, facing)[face];
 }
 
+/**
+ * The side a block's front texture goes on: its facing; for a GT basic machine with a front of its own (`mainFacing`)
+ * that front, unless it faces up or down — then GT draws the front on the output side (`facing`, research
+ * textures-icons §3.3 "Which face gets what").
+ */
+export function frontOf(b: Pick<Layout['blocks'][number], 'facing' | 'mainFacing'>): number {
+  return b.mainFacing !== undefined && b.mainFacing > 1 ? b.mainFacing : b.facing ?? DEFAULT_FACING;
+}
+
 /** One layer of the array texture: the texture layers to blend, or a plain colour when there are none. */
 export interface TileSource {
   /** `fallback`, `color:<r>,<g>,<b>` for a plain colour, else the JSON of `layers`: tiles with the same key are one tile. */
@@ -129,8 +138,8 @@ function onAllSides(tile: number): SceneInstance['tiles'] {
  * of its faces that is not Disabled (the `north` texture of `conduit:connector_<mode>`); in a bundle of n ≥ 2 every
  * shape of conduit i carries `offset` [0, (i − (n − 1) / 2) × 6/16, 0], so the conduits sit side by side. Any other
  * cable, pipe or chip pipe is a `core` plus an `arm` per connected side (ascending), all faces its `north` texture;
- * any other block is one `cube` whose world side shows the canonical face its facing puts there. After a block's own
- * shapes come its covers, one `plate` per cover in `covers` order, on the cover's face and carrying the cover's
+ * any other block is one `cube` whose world side shows the canonical face its front (`frontOf`) puts there. After a
+ * block's own shapes come its covers, one `plate` per cover in `covers` order, on the cover's face and carrying the cover's
  * in-world overlay — else its item icon, else a plain colour — on all six tiles. A face with no layers, or a block
  * with no faces, is a plain colour, and a tile is shared by everything that draws the same layers. Every tile's
  * `color` is what it falls back to: the block's own fallback colour (a conduit's or connector's own), the cover
@@ -186,8 +195,7 @@ export function buildScene(
         if ((b.connections ?? 0) & (1 << side)) add('arm', side, onAllSides(t));
       }
     } else {
-      const facing = b.facing ?? DEFAULT_FACING;
-      const at = (side: number): number => faceTile(canonicalFaceFor(facing, side));
+      const at = (side: number): number => faceTile(canonicalFaceFor(frontOf(b), side));
       add('cube', -1, [at(0), at(1), at(2), at(3), at(4), at(5)]);
     }
 
@@ -315,7 +323,10 @@ export function pickInfo(layout: Layout, plan: Plan | null, blockIndex: number):
   const nameOf = nameIn(plan);
   const lines: string[] = [];
   const facing = block.facing === undefined ? undefined : SIDE_NAMES[block.facing];
-  if (facing !== undefined) lines.push(`Facing ${facing}`);
+  const front = block.mainFacing === undefined ? undefined : SIDE_NAMES[block.mainFacing];
+  // a GT basic machine keeps its front and its output side apart: name both
+  if (front !== undefined) lines.push(`Front facing ${front}`, ...(facing === undefined ? [] : [`Output side ${facing}`]));
+  else if (facing !== undefined) lines.push(`Facing ${facing}`);
   const step = block.stepId === undefined ? undefined : plan?.steps.find((s) => s.id === block.stepId);
   if (step !== undefined) lines.push(...stepLines(step, nameOf));
   lines.push(...configuredLines(block, nameOf));

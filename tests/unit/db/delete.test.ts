@@ -129,19 +129,19 @@ describe('schema versions', () => {
     } finally {
       old.close();
     }
-    expect(schemaVersion(v1)).toEqual({ value: '2' });
+    expect(schemaVersion(v1)).toEqual({ value: '3' });
     openDb(v1).close();                                                  // opening it again changes nothing
-    expect(schemaVersion(v1)).toEqual({ value: '2' });
+    expect(schemaVersion(v1)).toEqual({ value: '3' });
   });
   it('creates a new database at the newest version', () => {
-    expect(schemaVersion(file)).toEqual({ value: '2' });
+    expect(schemaVersion(file)).toEqual({ value: '3' });
   });
   it('refuses a database written by a newer planner', () => {
     const newer = join(dir, 'newer.sqlite');
     const raw = new DatabaseSync(newer);
-    raw.exec(`CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL); INSERT INTO meta VALUES ('schema_version', '3');`);
+    raw.exec(`CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL); INSERT INTO meta VALUES ('schema_version', '4');`);
     raw.close();
-    expect(() => openDb(newer)).toThrow('planner.sqlite has schema 3; this planner knows up to 2 — update the planner');
-    expect(schemaVersion(newer)).toEqual({ value: '3' });
+    expect(() => openDb(newer)).toThrow('planner.sqlite has schema 4; this planner knows up to 3 — update the planner');
+    expect(schemaVersion(newer)).toEqual({ value: '4' });
   });
 });

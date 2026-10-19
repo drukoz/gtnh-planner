@@ -1,7 +1,8 @@
 // The world map end to end (Plan 4 Task 18; spec §3.4, §3.7): a friend picks the synthetic sample world's folder on
 // the World page, the browser finds its hotspots and sends only level.dat and the two trimmed region files, the server
-// scans the upload, and a project picks the scan's Overworld base on its Map tab, reads what was found, sees the map
-// drawn and pins a note that survives a reload. Last, the upload route refuses a path that climbs out of the upload.
+// scans the upload, and a project picks the scan's Overworld base on its Map tab, reads what was found, hovers its
+// centre to see what is there (before and after its tile is drawn, and gone once the pointer leaves the map) and pins a
+// note that survives a reload. Last, the upload route refuses a path that climbs out of the upload.
 
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -35,6 +36,12 @@ test('smart upload of the sample world sends only trimmed regions; scan, pick th
   await expect(page.locator('[data-testid=scan-row][data-state=done]').first()).toBeVisible();
   expect([...sent].sort()).toEqual(['DIM-1/region/r.-1.-1.mca', 'level.dat', 'region/r.0.0.mca']);   // no playerdata, no claims, no DIM7
 
+  // The base-centre column's surface tile is held back until the pointer has rested there (architecture §11, Map hover).
+  let releaseCentreTile = (): void => {};
+  const centreTileHeld = new Promise<void>((resolve) => { releaseCentreTile = resolve; });
+  const CENTRE_TILE = /\/api\/world\/scans\/[^/]+\/tiles\/0\/0\/0\?y=255$/;
+  await page.route(CENTRE_TILE, async (route) => { await centreTileHeld; await route.continue(); });
+
   await createProject(page, 'E2E map');
   await page.getByText('Map', { exact: true }).first().click();     // the first project tab (Task 16)
   // exact: the settings panel's tier select also has "world scan" in its label (its "From world (LV until a world scan
@@ -48,13 +55,33 @@ test('smart upload of the sample world sends only trimmed regions; scan, pick th
   await expect(panel.locator('[data-key="minecraft:iron_ingot@0"]')).toContainText('4,500');
   await expect(panel.locator('[data-key="minecraft:iron_ingot@0"]')).toContainText('1,000 reachable');
   await expect(panel.getByText('Routed network')).toBeVisible();
+
+  const canvas = page.locator('canvas[role=img]');
+  const box = (await canvas.boundingBox())!;
+  const centre = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  // Resting on the base-centre column describes it (architecture §11, Map hover). While its tile is on its way the
+  // tooltip only knows the base the column lies in; when the tile lands it fills in, with the pointer still resting.
+  await page.mouse.move(centre.x, centre.y);
+  const tip = page.getByRole('tooltip');
+  await expect(tip).toHaveText('Base: Overworld base (4, 5)');
+  releaseCentreTile();
   await page.waitForFunction(() => {                                      // tiles are drawn at the base centre
     const c = document.querySelector<HTMLCanvasElement>('canvas[role=img]')!;
     return c.getContext('2d')!.getImageData(c.width / 2, c.height / 2, 1, 1).data[3]! > 0;
   });
-
-  const box = (await page.locator('canvas[role=img]').boundingBox())!;
-  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await page.unroute(CENTRE_TILE);
+  // Its block, named by the names route (the Mini-GT export has no stone item, so by its registry name), and its
+  // position; the canvas points at the tooltip.
+  await expect(tip).toContainText('minecraft:stone');
+  await expect(tip).toContainText('4 63 5');
+  await expect(canvas).toHaveAttribute('aria-describedby', (await tip.getAttribute('id'))!);
+  // Leaving the map (for the Y slider above it) hides the tooltip, and the canvas no longer points at it.
+  const slider = (await page.getByLabel('Y level').boundingBox())!;
+  await page.mouse.move(slider.x + slider.width / 2, slider.y + slider.height / 2);
+  await expect(tip).toHaveCount(0);
+  await expect(canvas).not.toHaveAttribute('aria-describedby');
+  await page.mouse.move(centre.x, centre.y);
+  await page.mouse.click(centre.x, centre.y);
   await expect(page.getByText('Add note at 4, 63, 5')).toBeVisible();
   await page.getByLabel('Note').fill('Build here');
   await page.getByRole('button', { name: 'Save note' }).click();

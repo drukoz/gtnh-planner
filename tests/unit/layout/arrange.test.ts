@@ -116,3 +116,56 @@ describe('placement', () => {
     expect(compactness(p)).toBeCloseTo(35 / 10, 5);
   });
 });
+
+// Final review C2 and the GT facings.
+describe('placement: tiers apart, front and output side apart', () => {
+  it('keeps machines fed at different tiers a column apart, also from the power head', () => {
+    const { units } = unitsFromPlan(layoutPack(), twoStep());
+    // MV supply: the head ends with the LV run, so the LV macerators stand at x 3 and the MV assembler at 5, not 4
+    const p = placeUnits(units, { headWidth: 3, portSpacing: 0, supplyTier: 2 });
+    expect(p.units.map((u) => [u.stepId, u.row, u.at[0]])).toEqual([['s1', 'N', 3], ['s1', 'S', 3], ['s2', 'N', 5]]);
+    expect(p.units.map((u) => u.ports.power)).toEqual([[3, 0, 0], [3, 0, 4], [5, 0, 0]]);
+    // an LV supply feeds all three at LV: no gap
+    expect(placeUnits(units, { headWidth: 1, portSpacing: 0, supplyTier: 1 }).units.map((u) => u.at[0])).toEqual([1, 1, 2]);
+    // the first unit of a row fed at another tier than the head's last run keeps a column away from it (the LV
+    // macerator now stands first, next to the head; the MV assembler starts row S)
+    const mvFirst = unitsFromPlan(layoutPack(), makePlan([{ id: 'a', mteId: IDS.ASSEMBLER, count: 1, tier: 2, euPerTick: 120 },
+      { id: 'b', mteId: IDS.MACERATOR, count: 1, euPerTick: 30 }], { flows: [] })).units;
+    expect(placeUnits(mvFirst, { headWidth: 3, portSpacing: 0, supplyTier: 2 }).units.map((u) => [u.stepId, u.row, u.at[0]]))
+      .toEqual([['b', 'N', 3], ['a', 'S', 4]]);
+  });
+
+  it('stands the lowest feed tier next to the power head whatever the flow order, and leaves a steam machine in its place', () => {
+    // Plan 5's final ruling: Task 6 grows the lowest tier's tree first from the head's last run, so a higher tier's
+    // machines (and the tree that crosses the spine to them) standing in front of a lower tier's walled those off
+    const STEAM = 2099;
+    const pack = layoutPack();
+    pack.machines.set(STEAM, { ...pack.machines.get(IDS.MACERATOR)!, mteId: STEAM, name: 'Steam Macerator', kind: 'steam' });
+    const plan = makePlan([
+      { id: 'h', mteId: IDS.CHEM_HV, count: 1, tier: 3, euPerTick: 256 },
+      { id: 'm', mteId: IDS.ASSEMBLER, count: 2, tier: 2, euPerTick: 64 },
+      { id: 's', mteId: STEAM, count: 1 },
+      { id: 'l', mteId: IDS.MACERATOR, count: 1, euPerTick: 16 },
+    ]);
+    const { units } = unitsFromPlan(pack, plan);
+    expect(units.map((u) => [u.stepId, u.electric])).toEqual([['h', true], ['m', true], ['m', true], ['s', false], ['l', true]]);
+    // HV supply: the electric units take the electric units' slots LV first, then MV in flow order, then HV; the steam
+    // macerator keeps its own slot (it has no feed tier)
+    const hv = placeUnits(units, { headWidth: 5, portSpacing: 0, supplyTier: 3 });
+    expect(hv.units.map((u) => [u.stepId, u.index, u.row, u.at[0]])).toEqual([['l', 0, 'N', 5], ['m', 0, 'S', 6], ['m', 1, 'N', 7], ['s', 0, 'S', 7], ['h', 0, 'N', 9]]);
+    // MV supply: the HV reactor is fed at MV, so it keeps its flow place among the MV machines
+    expect(placeUnits(units, { headWidth: 3, portSpacing: 0, supplyTier: 2 }).units.map((u) => u.stepId)).toEqual(['l', 'h', 'm', 's', 'm']);
+    // without the supply tier the units keep their flow order
+    expect(placeUnits(units, { headWidth: 5, portSpacing: 0 }).units.map((u) => u.stepId)).toEqual(['h', 'm', 'm', 's', 'l']);
+  });
+
+  it("gives a singleblock its front up (toward the power head when its top is a fluid port) and its output side toward the spine", () => {
+    const plan = makePlan([{ id: 'm', mteId: IDS.MACERATOR, count: 1 }, { id: 'x', mteId: IDS.EXTRACTOR, count: 1, outputs: [['fluid:molten.iron', 144]] }]);
+    const p = placeUnits(unitsFromPlan(layoutPack(), plan).units, { headWidth: 1, portSpacing: 0 });
+    expect(p.units.map((u) => [u.stepId, u.facing, u.mainFacing])).toEqual([['m', 3, 1], ['x', 2, 4]]);
+    expect(p.blocks.filter((b) => b.role === 'machine').map((b) => [b.facing, b.mainFacing])).toEqual([[3, 1], [2, 4]]);
+    const ebf = placeUnits(unitsFromPlan(layoutPack(), makePlan([ebfStep])).units, { headWidth: 1, portSpacing: 0 });
+    expect(ebf.units[0]!.mainFacing).toBeUndefined();
+    expect(ebf.blocks.some((b) => b.mainFacing !== undefined)).toBe(false);
+  });
+});

@@ -46,7 +46,7 @@ export interface OpEvent { rev: number; op: ProjectOp; by: string; at: string }
 export interface PlanEvent { rev: number }
 
 // Plan 4: the /api/world bodies live in world-api.ts (ruling R2).
-export type { WorldSourcesResponse, StartScanRequest, StartScanResponse, WorldScanListItem, CreateUploadResponse } from './world-api.ts';
+export type { WorldSourcesResponse, StartScanRequest, StartScanResponse, WorldScanListItem, CreateUploadResponse, PaletteName } from './world-api.ts';
 
 // --- assets (Plan 3; architecture §6.5, §11.17) ---
 

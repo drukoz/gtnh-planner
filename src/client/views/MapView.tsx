@@ -1,16 +1,21 @@
 // The map canvas (spec §3.4b, architecture §7.2): top-down tiles of a finished scan at a Y level, coloured from the
 // block textures, with the chunk grid, the overlays and markers other views pass in, drag to pan, wheel to zoom.
 // Drawing runs outside React: a MapRenderer redraws once per animation frame after any change and asks for the
-// visible tiles only, at most MAX_IN_FLIGHT at a time, the newest view's tiles first.
+// visible tiles only, at most MAX_IN_FLIGHT at a time, the newest view's tiles first. A block the pointer rests on is
+// described in a tooltip (architecture §11, Map hover).
 
-import { useEffect, useRef, useState, type PointerEvent, type ReactElement } from 'react';
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type PointerEvent, type ReactElement } from 'react';
 import { messageOf } from '../api/client.ts';
 import { worldApi } from '../map/api.ts';
+import { useItemNames } from '../map/FoundPanel.tsx';
+import { buildColumnIndex, columnItemKeys, createHoverTimer, describeColumn, mteNamesOf, topBlockAt, type HoverTimer } from '../map/hover.ts';
+import { MapTooltip, tooltipPosition } from '../map/MapTooltip.tsx';
 import { layerPixels, resolvePaletteColors } from '../map/palette.ts';
 import { chunkGridLines, dimLabel, panBy, screenToWorld, shadeTile, visibleTiles, worldToScreen, zoomAt } from '../map/render.ts';
 import { lruSet, SURFACE_Y, tileCache, tileKeyId, type TileKey } from '../map/tile-cache.ts';
 import type { MapMarker, MapOverlay, MapViewport, MapViewProps } from '../map/types.ts';
-import { TILE_SIZE, type MapTile } from '../../shared/types/world.ts';
+import type { StuffKey } from '../../shared/keys.ts';
+import { TILE_SIZE, tileOf, type MapTile, type WorldScan } from '../../shared/types/world.ts';
 
 const START_PPB = 4;
 const ZOOM_STEP = 2;
@@ -36,6 +41,10 @@ const SHADED_MAX = 512;
 const RETRY_MS = 10_000;
 const NO_OVERLAYS: readonly MapOverlay[] = [];
 const NO_MARKERS: readonly MapMarker[] = [];
+const NO_KEYS: readonly StuffKey[] = [];
+const NO_LINES: readonly string[] = [];
+/** Without a scan the hover tooltip has no scan records and no base to name. */
+const NO_SCAN: Pick<WorldScan, 'machines' | 'pipes' | 'storage' | 'bases'> = { machines: [], pipes: [], storage: [], bases: [] };
 
 function markerPoint(v: MapViewport, m: MapMarker): [number, number] {
   return worldToScreen(v, m.pos[0] + 0.5, m.pos[2] + 0.5);
@@ -264,6 +273,31 @@ class MapRenderer {
 /** A press on the canvas: where it started, whether an overlay took it, whether it has become a drag and panned the map. */
 interface Press { pointerId: number; startX: number; startY: number; lastX: number; lastY: number; consumed: boolean; dragging: boolean; panned: boolean }
 
+/** A scan's palette names: each entry's English name in palette order, and every GT tile entity's name by mteId. */
+interface PaletteNames { blocks: readonly string[]; mte: ReadonlyMap<number, string> }
+
+/**
+ * The English names of the palette entries of scan `scanId` (`GET …/palette?names=1`), asked once per scan apart from
+ * the colours' palette; null while they load or when they cannot be had (no recipe export), and the tooltip then goes
+ * without block, cable and pipe names.
+ */
+function usePaletteNames(scanId: string): PaletteNames | null {
+  const [loaded, setLoaded] = useState<{ scanId: string; names: PaletteNames } | null>(null);
+  useEffect(() => {
+    let current = true;
+    worldApi.paletteNames(scanId).then(
+      (entries) => {
+        if (current) setLoaded({ scanId, names: { blocks: entries.map((e) => e.name), mte: mteNamesOf(entries) } });
+      },
+      () => {},   // no names: positions and what the scan found still show
+    );
+    return () => {
+      current = false;
+    };
+  }, [scanId]);
+  return loaded !== null && loaded.scanId === scanId ? loaded.names : null;
+}
+
 export function MapView(props: MapViewProps): ReactElement {
   const { scanId, dim, focus } = props;
   const overlays = props.overlays ?? NO_OVERLAYS;
@@ -336,6 +370,57 @@ export function MapView(props: MapViewProps): ReactElement {
     return () => canvas.removeEventListener('wheel', onWheel);
   }, []);
 
+  // ---- The hover tooltip (architecture §11, Map hover) ----
+  // `hover` is the column the pointer has rested on. The pointer's latest point stays in a ref, so the tooltip follows
+  // it within that column without a render.
+  const tipId = useId();
+  const tipRef = useRef<HTMLDivElement | null>(null);
+  const pointer = useRef<[number, number]>([0, 0]);
+  const [hover, setHover] = useState<{ x: number; z: number } | null>(null);
+  const timerRef = useRef<HoverTimer | null>(null);
+  timerRef.current ??= createHoverTimer(setHover);
+  const hoverTimer = timerRef.current;
+  const paletteNames = usePaletteNames(scanId);
+  const scan = props.scan ?? NO_SCAN;
+  const columns = useMemo(() => buildColumnIndex(scan, view.dim), [scan, view.dim]);
+  // The column's top block comes from the tile drawn for this Y level. A tile not loaded yet gives none, and the tooltip
+  // is drawn again once it lands: a tile's arrival only redraws the canvas. load() joins the renderer's request in flight.
+  const hoverTileKey: TileKey | null = hover === null ? null : { scanId, dim: view.dim, tx: tileOf(hover.x), tz: tileOf(hover.z), y: view.y };
+  const hoverTile = hoverTileKey === null ? undefined : tileCache.get(hoverTileKey);
+  const awaitedTile = hoverTileKey !== null && hoverTile === undefined ? hoverTileKey : null;
+  const awaitedTileId = awaitedTile === null ? null : tileKeyId(awaitedTile);
+  const [, setTilesLanded] = useState(0);
+  useEffect(() => {
+    if (awaitedTile === null) return;
+    let current = true;
+    tileCache.load(awaitedTile).then(
+      () => {
+        if (current) setTilesLanded((n) => n + 1);
+      },
+      () => {},   // a failed tile: the renderer asks again later, and the next column the pointer rests on reads it
+    );
+    return () => {
+      current = false;
+    };
+  }, [awaitedTileId]);   // the id names awaitedTile
+  const hovered = hover === null ? null : { ...hover, ...topBlockAt(hoverTile, hover.x, hover.z, paletteNames?.blocks ?? null) };
+  // The Found panel's page-wide item names: asked for (after render) only for the contents the tooltip shows.
+  const itemNames = useItemNames(hovered === null ? NO_KEYS : columnItemKeys(columns, hovered.x, hovered.z, hovered.topY));
+  const tipLines = hovered === null ? NO_LINES : describeColumn({
+    ...hovered, index: columns, scan, overlays, itemName: (key) => itemNames.get(key) ?? key, mteName: (mteId) => paletteNames?.mte.get(mteId),
+  });
+  /** Puts the tooltip beside the pointer (it needs its own size, so once it is rendered). */
+  const placeTip = (): void => {
+    const el = tipRef.current;
+    if (el === null || hover === null) return;
+    const { left, top } = tooltipPosition(view, hover, pointer.current, { width: el.offsetWidth, height: el.offsetHeight });
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
+  };
+  useLayoutEffect(placeTip);
+  // A new view (pan, zoom, Y level, dimension, size) or scan hides the tooltip before it is painted, as unmounting does.
+  useLayoutEffect(() => () => hoverTimer.clear(), [hoverTimer, view, scanId]);
+
   const pointOf = (e: PointerEvent<HTMLCanvasElement>): [number, number] => {
     const box = e.currentTarget.getBoundingClientRect();
     return [e.clientX - box.left, e.clientY - box.top];
@@ -347,8 +432,21 @@ export function MapView(props: MapViewProps): ReactElement {
     for (let i = overlays.length - 1; i >= 0; i--) if (overlays[i]!.onPointer?.(ev) === true) return true;
     return false;
   };
+  /** The pointer is at (px, py) without a press: the column there is described once the pointer rests, but not on a marker. */
+  const hoverAt = (px: number, py: number): void => {
+    pointer.current = [px, py];
+    if (press.current !== null || markerAt(view, markers, px, py) !== null) {
+      hoverTimer.clear();   // another pointer's press; a marker shows its own label
+      return;
+    }
+    const [wx, wz] = screenToWorld(view, px, py);
+    const x = Math.floor(wx), z = Math.floor(wz);
+    hoverTimer.move(x, z);
+    if (hover !== null && hover.x === x && hover.z === z) placeTip();
+  };
 
   const onPointerDown = (e: PointerEvent<HTMLCanvasElement>): void => {
+    hoverTimer.clear();   // a press (a click, a pan, an overlay's drag) hides the tooltip
     if (e.button !== 0) return;
     const [px, py] = pointOf(e);
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -361,6 +459,7 @@ export function MapView(props: MapViewProps): ReactElement {
     if (p === null || p.pointerId !== e.pointerId) {
       const title = markerAt(view, markers, px, py)?.label ?? '';   // the marker's label as its tooltip
       if (e.currentTarget.title !== title) e.currentTarget.title = title;
+      hoverAt(px, py);
       return;
     }
     if (!p.dragging && Math.hypot(px - p.startX, py - p.startY) >= DRAG_THRESHOLD) p.dragging = true;
@@ -392,6 +491,7 @@ export function MapView(props: MapViewProps): ReactElement {
     toOverlays('up', px, py);
   };
   const onPointerCancel = (e: PointerEvent<HTMLCanvasElement>): void => {
+    hoverTimer.clear();
     if (press.current?.pointerId !== e.pointerId) return;
     press.current = null;   // the browser took the gesture: neither a click nor the end of a drag
     e.currentTarget.style.cursor = 'grab';
@@ -431,12 +531,15 @@ export function MapView(props: MapViewProps): ReactElement {
           ref={canvasRef}
           role="img"
           aria-label={`Map of ${dimLabel(dim)}`}
+          aria-describedby={tipLines.length > 0 ? tipId : undefined}
           style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', display: 'block', touchAction: 'none', cursor: 'grab' }}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
           onPointerCancel={onPointerCancel}
+          onPointerLeave={() => hoverTimer.clear()}
         />
+        {tipLines.length > 0 && <MapTooltip ref={tipRef} id={tipId} lines={tipLines} />}
       </div>
     </div>
   );

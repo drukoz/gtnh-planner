@@ -36,7 +36,10 @@ describe('routed mode', () => {
     expect([r.logisticsPort, r.hookup, r.tailFluidY, r.warnings]).toEqual([[4, 0, 2], { part: 'pr_junction', end: null }, 2, []]);
     expect(spine[0]!.config).toEqual({ chips: 'Item Responder Chip (whitelist: Raw Input) + Item Extractor Chip' });
     expect(r.blocks.find((b) => b.label === 'Routed Interface Pipe (output chest)')!.config).toEqual({ chips: 'Item Responder Chip (whitelist: t:out_s2@0)' });
-    expect([r.covers, r.configs, r.drafts.map((d) => d.kind)]).toEqual([[], [], ['logistics', 'logistics']]);
+    expect([r.covers, r.drafts.map((d) => d.kind)]).toEqual([[], ['logistics', 'logistics']]);
+    // final review: the interface pipe inserts through each machine's output side (its front is elsewhere), as in every mode
+    const fromOutputSide = { inputFromOutputSide: true };
+    expect(r.configs).toEqual([{ pos: [1, 0, 1], config: fromOutputSide }, { pos: [2, 0, 3], config: fromOutputSide }, { pos: [3, 0, 1], config: fromOutputSide }]);
   });
 
   it('builds its own network and says so when the base has none', () => {
@@ -73,6 +76,9 @@ describe('AE2 mode', () => {
     expect(r.blocks.find((b) => b.pos[0] === 1 && b.role === 'interface')!.config)
       .toEqual({ patterns: 1, pattern: '1× Raw Input → 1× t:out_s1@0', blockingMode: false });
     expect(r.drafts.map((d) => d.id)).toEqual(['layout:logistics:line']);
+    // final review: the interface pushes the pattern's inputs through each machine's output side
+    expect(r.configs.map((c) => [c.pos, c.config])).toEqual([[[1, 0, 1], { inputFromOutputSide: true }], [[3, 0, 3], { inputFromOutputSide: true }],
+      [[5, 0, 1], { inputFromOutputSide: true }]]);
   });
 
   it('never assumes an AE2 network the scan did not find', () => {
@@ -88,5 +94,7 @@ describe('AE2 mode', () => {
       [1, 'interface', undefined], [2, 'pipe', 16 | 32], [3, 'pipe', 16 | 32], [4, 'pipe', 16 | 32], [5, 'interface', undefined], [6, 'pipe', 16]]);
     expect(r.blocks[4]!.config).toEqual({ patterns: 1, pattern: '1× Raw Input → 144× Molten Iron', blockingMode: false });
     expect([r.extraParts[0]!.amount, r.covers.map((c) => c.pos), r.warnings]).toEqual([2, [[1, 0, 1]], []]);
+    // only the machines that take items get input from their output side: the chemical reactor takes only oxygen
+    expect(r.configs.map((c) => c.pos)).toEqual([[1, 0, 1], [5, 0, 1]]);
   });
 });

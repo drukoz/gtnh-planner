@@ -22,12 +22,13 @@ describe('an EnderIO line in the layout', () => {
   it('puts every conduit and filter in the parts list and gives every configured face its own configure step', async () => {
     const layout = await layoutLine(layoutPack(), twoStep(), lineScan(), placed(0), lineGround());
     expect([layout.status, layout.mode, layout.rotation]).toEqual(['ok', 'enderio', 0]);
-    expect(layout.bom).toContainEqual({ key: ITEM, amount: 3, why: 'conduits', group: 'logistics' });
+    expect(layout.bom).toContainEqual({ key: ITEM, amount: 4, why: 'conduits', group: 'logistics' });
     expect(layout.bom).toContainEqual({ key: BASIC, amount: 8, why: 'conduit filters', group: 'logistics' });
     const steps = layout.buildSteps.filter((s) => s.id.startsWith('layout:conduit:'));
-    // plan 11, ruling R12: the line's power head is 3 columns wide, so its spine is local x 3..5
-    expect(steps.map((s) => s.id)).toEqual(['layout:conduit:3,0,2:item:north', 'layout:conduit:3,0,2:item:south', 'layout:conduit:4,0,2:item:north',
-      'layout:conduit:5,0,2:item:north', 'layout:conduit:5,0,2:item:south']);
+    // plan 11, ruling R12: the line's power head is 3 columns wide, so its spine starts at local x 3; Plan 5's tier
+    // spacing leaves x 4 empty between the LV macerators (x 3) and the MV assembler (x 5), and the tail is x 6
+    expect(steps.map((s) => s.id)).toEqual(['layout:conduit:3,0,2:item:north', 'layout:conduit:3,0,2:item:south', 'layout:conduit:5,0,2:item:north',
+      'layout:conduit:6,0,2:item:north', 'layout:conduit:6,0,2:item:south']);
     expect(steps.every((s) => s.kind === 'configure' && s.pin === layout.pins.find((p) => p.kind === 'site')!.n)).toBe(true);
     expect(steps[3]!.text).toBe('Item Conduit, north face to Chest (input): Extract; extract on Blue with a Basic Item Filter '
       + '(whitelist: Raw Input; match meta, ignore NBT), round robin on, self feed off, redstone Always active');
@@ -161,9 +162,9 @@ describe('EnderIO conduits in the steps, the parts list and the hookup', () => {
 
   it('sets the end face on a hookup end that touches its port, linked toward the hookup only, and none on an end that does not (plan 11, ruling R13)', () => {
     const pack = layoutPack();
-    const hookAt = (port: Vec3, line: ReadonlySet<string>) => logisticsHookup({ pack, parts: resolveParts(pack),
+    const hookAt = (port: Vec3, line: ReadonlySet<string>, maxNodes?: number) => logisticsHookup({ pack, parts: resolveParts(pack),
       tap: { pos: [0, 64, 0], dim: 0, kind: 'pipe', networkId: 'e' }, ports: [port], world: { vox: null, line }, part: 'eio_item_conduit', end: null,
-      endConduit: { kind: 'item', face: END_FACE } });
+      endConduit: { kind: 'item', face: END_FACE }, ...(maxNodes === undefined ? {} : { maxNodes }) });
     const port: Vec3 = [7, 64, 0];
     const hook = (line: ReadonlySet<string>) => hookAt(port, line);
     const touching = hook(new Set([posKey(port)]));
@@ -175,13 +176,14 @@ describe('EnderIO conduits in the steps, the parts list and the hookup', () => {
     const enclosed = hook(new Set([port, ...DIRS.map((_, side) => step(port, side))].map(posKey)));
     expect(enclosed.blocks.at(-1)!.pos).toEqual([5, 64, 0]);
     expect(enclosed.blocks.some((b) => b.conduits !== undefined)).toBe(false);
-    // a straight guide may pass the port before it ends: only its last cell gets the face
-    const passing = hookAt([3, 64, 1], new Set([posKey([3, 64, 1])]));
+    // a straight guide, the last resort (here a node budget of 1 leaves the dashed guide's search nothing), may pass
+    // the port before it ends: only its last cell gets the face
+    const passing = hookAt([3, 64, 1], new Set([posKey([3, 64, 1])]), 1);
     expect(passing.blocks.map((b) => [b.pos, b.conduits?.[0]?.faces.map((f) => f.face)])).toEqual([
       [[0, 64, 1], undefined], [[1, 64, 1], undefined], [[2, 64, 1], undefined], [[3, 64, 0], ['south']]]);
   });
 
-  it('routes a hookup around the cells it keeps off, but draws a straight guide through them (plan 11, ruling R14)', () => {
+  it('routes a hookup and its dashed guide around the cells it keeps off; only a straight guide crosses them (plan 11, ruling R14)', () => {
     const vox = flatVoxels({ origin: [-4, 60, -4], size: [30, 12, 20], groundY: 63 });
     const straight = hookupPath({ vox, line: new Set() }, [0, 64, 0], [[7, 64, 0]]);
     expect(straight.path).toEqual([[1, 64, 0], [2, 64, 0], [3, 64, 0], [4, 64, 0], [5, 64, 0], [6, 64, 0]]);
@@ -189,7 +191,10 @@ describe('EnderIO conduits in the steps, the parts list and the hookup', () => {
     const around = hookupPath({ vox, line: new Set(), keepOff }, [0, 64, 0], [[7, 64, 0]]);
     expect(around.found).toBe(true);
     expect(around.path.some((p) => keepOff.has(posKey(p)))).toBe(false);
-    expect(hookupPath({ vox: null, line: new Set(), keepOff }, [0, 64, 0], [[7, 64, 0]])).toEqual({ path: straight.path, found: false });
+    // without voxels the dashed guide searches round them as the route does; a straight guide, the last resort when
+    // even that finds nothing (here a node budget of 1), crosses them
+    expect(hookupPath({ vox: null, line: new Set(), keepOff }, [0, 64, 0], [[7, 64, 0]])).toEqual({ path: around.path, found: false });
+    expect(hookupPath({ vox: null, line: new Set(), keepOff }, [0, 64, 0], [[7, 64, 0]], 1)).toEqual({ path: straight.path, found: false });
   });
 
   it("keeps an EnderIO hookup off every cell next to the line's Item Conduits (plan 11, ruling R14)", async () => {
@@ -197,7 +202,7 @@ describe('EnderIO conduits in the steps, the parts list and the hookup', () => {
     const layout = await run();
     const hookup = layout.hookups.find((h) => h.kind === 'logistics')!;
     const lineConduits = layout.blocks.filter((b) => b.hookup === undefined && b.conduits?.some((c) => c.kind === 'item') === true);
-    expect([hookup.found, lineConduits.length]).toEqual([true, 3]);
+    expect([hookup.found, lineConduits.length]).toEqual([true, 4]);
     expect(hookup.path.filter((p) => lineConduits.some((b) => manhattan(b.pos, p) === 1))).toEqual([]);
     expect(JSON.stringify(await run())).toBe(JSON.stringify(layout));
   });
