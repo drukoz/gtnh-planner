@@ -1,11 +1,15 @@
 // The words for a configured part (Plan 5 Task 10; architecture §11.14): a cover's item, face, mode, rate and filter,
 // and a block's own settings (programmed circuit, input filter, routing chips, AE2 patterns). Written from the block's
 // `covers` and `config` by this one formatter, so the configure build steps, the 3D hover and the 3D click info say
-// the same thing. Pure TypeScript shared by server and browser: nothing from node:* may be imported here.
+// the same thing. The same goes for an EnderIO conduit face (architecture "EnderIO conduits, granted change requests
+// (add-on 11)"): its mode, and for each side its channel colour, filter, speed upgrades, round robin, priority and
+// redstone setting, written from the block's `conduits`. Pure TypeScript shared by server and browser: nothing from
+// node:* may be imported here.
 
 import type { StuffKey } from '../keys.ts';
 import type { Face } from '../types/assets.ts';
-import type { CoverSpec, LayoutBlock } from '../types/layout.ts';
+import type { ConduitExtract, ConduitFace, ConduitFilter, ConduitInsert, ConduitKind, CoverSpec, LayoutBlock } from '../types/layout.ts';
+import { CONDUIT_MODE_NAMES, CONDUIT_NAMES, DYE_NAMES, REDSTONE_NAMES } from './enderio.ts';
 import { fmtInt, fmtRate, joinNames } from './format.ts';
 
 type Value = string | number | boolean;
@@ -68,4 +72,65 @@ export function configTexts(config: Readonly<Record<string, Value>>): string[] {
 /** Everything to set on a block: its covers' texts in order, then its settings' texts. */
 export function configuredLines(block: Pick<LayoutBlock, 'covers' | 'config'>, nameOf: (k: StuffKey) => string): string[] {
   return [...(block.covers ?? []).map((c) => coverText(c, nameOf)), ...configTexts(block.config ?? {})];
+}
+
+// ---- EnderIO conduit faces ----
+
+/**
+ * A filter in a builder's words: `<filter name> (<whitelist|blacklist>: <names>; <match meta|ignore meta>,
+ * <match NBT|ignore NBT>[, ore dictionary][, sticky])`. An ender fluid conduit's own filter has no item and no flags:
+ * `fluid filter (<whitelist|blacklist>: <names>)`. A flag the filter does not set reads as off.
+ */
+export function conduitFilterText(filter: ConduitFilter, nameOf: (k: StuffKey) => string): string {
+  const list = `${filter.whitelist ? 'whitelist' : 'blacklist'}: ${joinNames(filter.keys.map((k) => nameOf(k)))}`;
+  if (filter.item === undefined) return `fluid filter (${list})`;
+  const flags = [filter.matchMeta === true ? 'match meta' : 'ignore meta', filter.matchNbt === true ? 'match NBT' : 'ignore NBT'];
+  if (filter.oreDict === true) flags.push('ore dictionary');
+  if (filter.sticky === true) flags.push('sticky');
+  return `${nameOf(filter.item)} (${list}; ${flags.join(', ')})`;
+}
+
+/** ` with a Basic Item Filter (…)`, ` with an Advanced Item Filter (…)` (an before a vowel), or nothing for a side without a filter. */
+function filterClause(filter: ConduitFilter | null, nameOf: (k: StuffKey) => string): string {
+  if (filter === null) return '';
+  const text = conduitFilterText(filter, nameOf);
+  return ` with ${/^[aeiou]/i.test(text) ? 'an' : 'a'} ${text}`;
+}
+
+function extractText(s: ConduitExtract, nameOf: (k: StuffKey) => string): string {
+  const text = [`extract on ${DYE_NAMES[s.color]}${filterClause(s.filter, nameOf)}`];
+  if (s.speed !== undefined) text.push(`${fmtInt(s.speed.count)}× ${nameOf(s.speed.item)}`);
+  text.push(`round robin ${s.roundRobin ? 'on' : 'off'}`);
+  if (s.selfFeed !== undefined) text.push(`self feed ${s.selfFeed ? 'on' : 'off'}`);
+  text.push(`redstone ${REDSTONE_NAMES[s.redstone]}`);
+  return text.join(', ');
+}
+
+function insertText(s: ConduitInsert, nameOf: (k: StuffKey) => string): string {
+  const head = `insert on ${DYE_NAMES[s.color]}${filterClause(s.filter, nameOf)}`;
+  return s.priority === undefined ? head : `${head}, priority ${fmtInt(s.priority)}`;
+}
+
+/**
+ * One side of a conduit face: `extract on <colour>[ with a <filter>][, <n>× <upgrade name>], round robin <on|off>[, self
+ * feed <on|off>], redstone <redstone name>` (self feed only when set), or `insert on <colour>[ with a <filter>][, priority <n>]`.
+ */
+export function conduitSideText(side: 'extract', s: ConduitExtract, nameOf: (k: StuffKey) => string): string;
+export function conduitSideText(side: 'insert', s: ConduitInsert, nameOf: (k: StuffKey) => string): string;
+export function conduitSideText(side: 'extract' | 'insert', s: ConduitExtract | ConduitInsert, nameOf: (k: StuffKey) => string): string {
+  return side === 'extract' ? extractText(s as ConduitExtract, nameOf) : insertText(s as ConduitInsert, nameOf);
+}
+
+/** `<conduit name>, <face> face to <target>: <mode name>[; <extract side>][; <insert side>]`. */
+export function conduitFaceText(kind: ConduitKind, face: ConduitFace, nameOf: (k: StuffKey) => string): string {
+  const text = [`${CONDUIT_NAMES[kind]}, ${faceName(face.face)} face to ${face.target}: ${CONDUIT_MODE_NAMES[face.mode]}`];
+  if (face.extract !== undefined) text.push(conduitSideText('extract', face.extract, nameOf));
+  if (face.insert !== undefined) text.push(conduitSideText('insert', face.insert, nameOf));
+  return text.join('; ');
+}
+
+/** One text per face of every conduit of the block, conduits in bundle order, faces in stored order. */
+export function conduitLines(block: Pick<LayoutBlock, 'conduits'>, nameOf: (k: StuffKey) => string): Array<{ kind: ConduitKind; face: Face; text: string }> {
+  return (block.conduits ?? []).flatMap((conduit) =>
+    conduit.faces.map((face) => ({ kind: conduit.kind, face: face.face, text: conduitFaceText(conduit.kind, face, nameOf) })));
 }
