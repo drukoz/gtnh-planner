@@ -4,6 +4,9 @@
 // gt-mechanics §5); the programmed circuit goes on the machine or its input bus. Units are then placed in two rows
 // facing a one-block spine, row N turned 180° so every front faces the spine, with the ports the routing, logistics
 // and hookup stages connect to. Covers and settings from those stages are attached to their host blocks here too.
+// A singleblock's output side faces the spine and its front (GT's `mMainFacing`, kept apart from the output side) faces
+// up, or toward the power head when its top is a fluid port. With the supply tier given, the lowest feed tier stands
+// next to the power head and machines fed at different tiers stand a column apart, so their power ports never touch.
 // Every order and tie-break is fixed, so the same plan gives the same placement.
 
 import { isFluidKey, itemKey, type ItemKey, type StuffKey } from '../../shared/keys.ts';
@@ -20,7 +23,7 @@ export type BlockConfig = Record<string, string | number | boolean>;
 
 /** A block in the line's local grid; mirrors `LayoutBlock` (architecture §11.14). */
 export interface LocalBlock {
-  pos: Vec3; block: BlockRef; role: BlockRole; facing?: number; stepId?: string; label: string; item?: StuffKey; connections?: number;
+  pos: Vec3; block: BlockRef; role: BlockRole; facing?: number; mainFacing?: number; stepId?: string; label: string; item?: StuffKey; connections?: number;
   covers?: CoverSpec[]; config?: BlockConfig;
 }
 /** A cover for the block at `pos` (Tasks 6–8). */
@@ -63,8 +66,13 @@ export interface PlacedUnit extends Unit {
   row: 'N' | 'S';
   /** Local min corner. */
   at: Vec3;
-  /** 3 in row N, 2 in row S: toward the spine. */
+  /** 3 in row N, 2 in row S: toward the spine (a singleblock's output side, a multiblock's controller front). */
   facing: number;
+  /**
+   * A singleblock's front (GT's `mMainFacing`, kept apart from its output side `facing`): up, or toward the power head
+   * (local west) when its top is a fluid port. Undefined for a multiblock.
+   */
+  mainFacing?: number;
   ports: UnitPorts;
 }
 
@@ -81,7 +89,7 @@ export interface Placement {
 
 // ---- Small helpers ----
 
-const UP = 1, NORTH = 2, SOUTH = 3;
+const UP = 1, NORTH = 2, SOUTH = 3, WEST = 4;
 
 function compareText(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
@@ -430,15 +438,44 @@ function unitPorts(u: Unit, row: Row, x: number, spineZ: number): UnitPorts {
   };
 }
 
+/** A singleblock's front: up, unless its top is the cell its fluids use; then toward the power head (local west). */
+function singleblockMainFacing(u: Unit): number {
+  return u.io.fluidIn.length > 0 || u.io.fluidOut.length > 0 ? WEST : UP;
+}
+
 /**
- * Two rows along x facing a spine at z = `spineZ`, after a power head of `headWidth` columns. Each unit goes to the
- * shorter row (N on a tie), one column apart from a multiblock neighbour, and moves along until its item ports are
- * `portSpacing` cells apart from every earlier unit's (0: may share; 1: own cell; 2: not even neighbouring).
+ * `units` with the electric ones stably sorted by `feedTier`, lowest first, in the places the electric units had; the
+ * others (steam units, which have no feed tier) keep theirs.
  */
-export function placeUnits(units: readonly Unit[], opts: { headWidth: number; portSpacing: 0 | 1 | 2 }): Placement {
-  const { headWidth, portSpacing } = opts;
+function lowestFeedFirst(units: readonly Unit[], feedTier: (u: Unit) => number | null): Unit[] {
+  const electric = units.filter((u) => feedTier(u) !== null).sort((a, b) => feedTier(a)! - feedTier(b)!);
+  let next = 0;
+  return units.map((u) => (feedTier(u) === null ? u : electric[next++]!));
+}
+
+/**
+ * Two rows along x facing a spine at z = `spineZ`, after a power head of `headWidth` columns. Units are placed in the
+ * order given (flow order). Each goes to the shorter row (N on a tie), one column apart from a multiblock neighbour, and
+ * moves along until its item ports are `portSpacing` cells apart from every earlier unit's (0: may share; 1: own cell;
+ * 2: not even neighbouring).
+ * With `supplyTier`, the electric units are placed by feed tier (`min(tier, supplyTier)`), lowest first and each tier in
+ * flow order (`lowestFeedFirst`): the lowest feed tier stands next to the head, whose last column is that tier's run, so
+ * a tier's cable tree never has to get past a higher tier's machines, or the tree that crosses the spine to them, to
+ * reach its own (Task 6 grows the trees lowest first). Units fed at different tiers never stand side by side, and a
+ * unit fed at another tier than the head's last column keeps a column away from it, so cables of two tiers never have
+ * to touch (spec §3.5): their power ports stay at least two cells apart.
+ */
+export function placeUnits(units: readonly Unit[], opts: { headWidth: number; portSpacing: 0 | 1 | 2; supplyTier?: number }): Placement {
+  const { headWidth, portSpacing, supplyTier } = opts;
   const cursor: Record<Row, number> = { N: headWidth, S: headWidth };
   const previous: Record<Row, Unit | null> = { N: null, S: null };
+  const feedTier = (u: Unit): number | null => (supplyTier === undefined || !u.electric ? null : Math.min(u.tier, supplyTier));
+  const ordered = lowestFeedFirst(units, feedTier);                                   // without `supplyTier`: flow order
+  const feeds = ordered.map(feedTier).filter((t): t is number => t !== null);
+  // the head's last column is the run of the lowest feed tier (Task 6 lays one run per fed tier, lowest last)
+  const headTier = headWidth > 0 && feeds.length > 0 ? Math.min(...feeds) : null;
+  /** The feed tier the next unit of a row stands beside: the head's, the previous unit's, or none (a steam unit). */
+  const besideTier: Record<Row, number | null> = { N: headTier, S: headTier };
   const claimed = new Set<number>();
   const near = (px: number) => {
     for (let d = -(portSpacing - 1); d <= portSpacing - 1; d++) if (claimed.has(px + d)) return true;
@@ -447,14 +484,17 @@ export function placeUnits(units: readonly Unit[], opts: { headWidth: number; po
   // item ports lie on the spine, so their x does not depend on where the spine ends up
   const portXs = (u: Unit, row: Row, x: number) => unitPorts(u, row, x, 0).items.map((p) => p[0]);
   const slots: Array<{ u: Unit; row: Row; x: number }> = [];
-  for (const u of units) {
+  for (const u of ordered) {
     const row: Row = cursor.N <= cursor.S ? 'N' : 'S';
     const before = previous[row];
-    let x = cursor[row] + (before !== null && (u.multiblock || before.multiblock) ? 1 : 0);
+    const tier = feedTier(u);
+    const otherTier = tier !== null && besideTier[row] !== null && tier !== besideTier[row];
+    let x = cursor[row] + ((before !== null && (u.multiblock || before.multiblock)) || otherTier ? 1 : 0);
     if (portSpacing > 0) while (portXs(u, row, x).some(near)) x += 1;
     for (const px of portXs(u, row, x)) claimed.add(px);
     cursor[row] = x + u.size[0];
     previous[row] = u;
+    besideTier[row] = tier;
     slots.push({ u, row, x });
   }
 
@@ -469,17 +509,20 @@ export function placeUnits(units: readonly Unit[], opts: { headWidth: number; po
   const reserved: Vec3[] = [];
   for (const { u, row, x } of slots) {
     const toSpine = towardSpine(row);
+    // a singleblock's output side faces the spine (its covers and inputs go there), its front elsewhere (GT keeps the two apart)
+    const mainFacing = u.multiblock ? undefined : singleblockMainFacing(u);
     for (const c of u.cells) {
       const facing = c.role === 'machine' ? toSpine : c.role === 'hatch' ? hatchFacing(c.hatch, row) : undefined;
       blocks.push({
         pos: localCell(u, row, x, spineZ, c.pos), block: { ...c.block }, role: c.role, ...(facing === undefined ? {} : { facing }),
+        ...(c.role === 'machine' && mainFacing !== undefined ? { mainFacing } : {}),
         stepId: u.stepId, label: c.label, ...(c.item === undefined ? {} : { item: c.item }),
         ...(c.config === undefined ? {} : { config: { ...c.config } }),
       });
     }
     for (const a of u.air) reserved.push(localCell(u, row, x, spineZ, a));
     const at: Vec3 = row === 'S' ? [x, 0, spineZ + 1] : [x, 0, spineZ - u.size[2]];
-    placed.push({ ...u, row, at, facing: toSpine, ports: unitPorts(u, row, x, spineZ) });
+    placed.push({ ...u, row, at, facing: toSpine, ...(mainFacing === undefined ? {} : { mainFacing }), ports: unitPorts(u, row, x, spineZ) });
   }
   blocks.sort((a, b) => comparePos(a.pos, b.pos));
   reserved.sort(comparePos);

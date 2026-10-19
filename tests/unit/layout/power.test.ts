@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { tierGroups, transformerStages, lineLossEUt, fitPower, generatorSuggestion, LOSS_WARN_FRACTION } from '../../../src/server/layout/power.ts';
+import { tierGroups, transformerStages, lineLossEUt, fitPower, generatorSuggestion, LOSS_WARN_FRACTION, bankLossEUt, deliveredVolts, hookupAllowanceVolts,
+} from '../../../src/server/layout/power.ts';
 import { layoutPack } from '../../helpers/layout-fixtures.ts';
 import { emptyContext } from '../../../src/server/planner/plan.ts';
 import type { LayoutPowerContext } from '../../../src/shared/types/layout.ts';
@@ -85,5 +86,24 @@ describe('power rules', () => {
     expect(fit.power.detail).toBe('No power network found at this base; the line needs 54 EU/t on average');
     expect(fit.power.suggestions).toEqual(['Add about 9× High Pressure Solar Boiler and 2× Basic Steam Turbine to cover 54 EU/t']);
     expect(generatorSuggestion(layoutPack(), 100, 7)).toEqual({ text: 'Add generators for about 100 EU/t at ZPM', lines: [] });
+  });
+});
+
+// Final review I4: machines and banks counted at the volts they get after cable loss (gt-mechanics §3.1, §3.3).
+describe('power rules: sized for the volts that arrive', () => {
+  it('counts each machine at its delivered volts and each bank at the volts it takes in', () => {
+    // 30 EU/t at 32 V is 1 A; at 28 V (4 V lost) it is 2 A
+    expect(tierGroups([{ tier: 1, euPerTick: 30, lossVolts: 4 }, { tier: 1, euPerTick: 30 }])).toEqual([
+      { tier: 1, euPerTick: [30, 30], peakEUt: 60, amps: 3, lossVolts: [4, 0] }]);
+    const groups = tierGroups([{ tier: 1, euPerTick: 30, lossVolts: 4 }, { tier: 1, euPerTick: 30, lossVolts: 4 }, { tier: 2, euPerTick: 120, lossVolts: 14 }]);
+    // the bank gives 4 A at LV (+1 EU each) and takes them at 128 − 3 = 125 V: ceil(4 × 33 / 125) = 2 A
+    expect(transformerStages(groups, 2, (fromTier) => (fromTier === 2 ? 3 : 0))).toEqual({ supplyTier: 2, supplyAmps: 4, lossEUt: 4,
+      under: [], stages: [{ fromTier: 2, toTier: 1, count: 1, ampsIn: 2, ampsOut: 4 }] });
+    // a machine above the supply tier draws from the supply run at the supply volts less its own loss: 120 / (32 − 7) → 5 A
+    const low = transformerStages(tierGroups([{ tier: 2, euPerTick: 120, lossVolts: 7 }]), 1);
+    expect(low.supplyAmps).toBe(5);
+    expect(deliveredVolts(32, 40)).toBe(1);                                         // never below 1 V
+    expect([hookupAllowanceVolts(1), hookupAllowanceVolts(2)]).toEqual([3.2, 12.8]);
+    expect(bankLossEUt([{ fromTier: 3, toTier: 2, count: 1, ampsIn: 1, ampsOut: 2 }, { fromTier: 2, toTier: 1, count: 2, ampsIn: 2, ampsOut: 6 }])).toBe(10);
   });
 });

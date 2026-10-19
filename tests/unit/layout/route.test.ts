@@ -43,7 +43,8 @@ describe('layout route', () => {
     const { srv, id } = await serverWithProject(false);
     const res = await srv.request(`/api/projects/${id}/layout`);
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ status: 'no-world', warnings: [{ code: 'no_scan' }] });
+    const layout = await res.json();
+    expect([layout.status, layout.warnings[0]?.code]).toEqual(['no-world', 'no_scan']);   // the line's own wiring warnings follow
     await srv.close();
   });
 

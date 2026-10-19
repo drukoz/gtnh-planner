@@ -12,7 +12,9 @@ import type { BomLine, PlanWarning } from '../../../shared/types/plan.ts';
 import { comparePos } from '../../world/graph.ts';
 import type { HostCover, LocalBlock } from '../arrange.ts';
 import { linkBits } from '../path.ts';
-import { amountList, conveyorCover, emptyModeResult, itemPorts, unitItemRate, type ModeInput, type ModeResult, type StepDraft } from './mode.ts';
+import {
+  amountList, conveyorCover, emptyModeResult, itemPorts, outputSideInputs, unitItemRate, type ModeInput, type ModeResult, type StepDraft,
+} from './mode.ts';
 
 /** A network whose scan gives no channel figures is taken to have the 8 channels of a network without a controller. */
 const DEFAULT_CHANNELS_MAX = 8;
@@ -88,7 +90,8 @@ export function ae2Mode(input: ModeInput): ModeResult {
       })
       .sort((a, b) => comparePos(a.pos, b.pos) || (a.facing ?? -1) - (b.facing ?? -1)),
     covers: covers.sort((a, b) => comparePos(a.pos, b.pos) || FACES.indexOf(a.cover.face) - FACES.indexOf(b.cover.face)),
-    configs: [],
+    // the interface pushes the pattern's inputs through the machine's output side
+    configs: [...outputSideInputs(placement).values()].sort((a, b) => comparePos(a.pos, b.pos)),
     logisticsPort: hooked ? [tailX, 0, spineZ] : null,
     hookup: hooked ? { part: 'me_cable', end: null } : null,
     extraParts, drafts, warnings, tailFluidY: 1,

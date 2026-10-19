@@ -58,9 +58,23 @@ describe('layout steps', () => {
       [8, 'layout:power:hookup', 'power', 2], [9, 'layout:logistics:line', 'logistics', 1], [10, 'layout:configure:s1', 'configure', undefined],
       [11, 'layout:test', 'test', 1]]);
     expect(steps[0]!.text).toBe('Clear a 6×5 spot at pin 1 (1 high) and keep a 1-block path around it; dig 2 and fill 0 blocks to level it');
-    expect(steps[2]!.text).toBe('Place 2× Basic Macerator facing the middle row');
+    // final review: a basic machine's front and output side are two faces (GT's mMainFacing and mFacing)
+    expect(steps[2]!.text).toBe('Place 2× Basic Macerator with its output side facing the middle row and its front facing up');
     expect(steps[4]!.text).toBe('Place 1× Low Voltage Transformer between the MV and LV cables, front (input) toward MV');
+    // final review C2: GT joins a cable to the block it is placed against, so the wire steps say to keep tiers apart
+    expect([steps[5]!.text, steps[6]!.text]).toEqual([
+      'Wire the MV machines with 2x Annealed Copper Cable (8 blocks); connect only the drawn sides, and never let the MV cables touch the LV cables',
+      'Wire the LV machines with 2x Tin Cable (7 blocks); connect only the drawn sides, and never let the MV cables touch the LV cables']);
     expect(steps[7]!.text).toBe('Run 12× 2x Annealed Copper Cable from the tap at pin 2 to the line: up to 2 A at MV, arriving at 116 V');
+  });
+
+  it('puts the front of a machine with a fluid port toward the power head, and a one-tier line has no tier rule', () => {
+    const plan = makePlan([{ id: 'x', mteId: IDS.EXTRACTOR, count: 1, outputs: [['fluid:molten.iron', 144]] }]);
+    const placement = placeUnits(unitsFromPlan(layoutPack(), plan).units, { headWidth: 1, portSpacing: 0 });
+    const steps = layoutSteps(base({ units: placement.units, cables: [{ tier: 1, cable: '1x Tin Cable', cells: 6 }], supplyTier: 1 }));
+    expect(steps.find((s) => s.id === 'layout:place:x')!.text)
+      .toBe('Place 1× Basic Fluid Extractor with its output side facing the middle row and its front facing the power head');
+    expect(steps.find((s) => s.id === 'layout:power:wire:1')!.text).toBe('Wire the LV machines with 1x Tin Cable (6 blocks)');
   });
 
   it('describes multiblocks with their hatches and drops pins without a world', () => {

@@ -1,10 +1,12 @@
 // Hookups of a line into the base (Plan 5 Task 9; spec §3.5, §3.6, §3.8, §5): which power and logistics network the
 // line joins and at which tap, the route of the hookup through the scanned world from the tap to the line, the cable
 // or logistics parts laid along it, and the existing blocks shown as faint ghosts where the line connects.
-// A hookup cable is never laid onto a tap whose cable carries fewer amps than the line draws (spec §5): that hookup
-// stays a dashed guide with `power_amps_low`, and Task 10 writes the upgrade step from `blocked`. A route that cannot
-// be found within the node budget becomes a straight guide (`found: false`, `no_path`). Every order and tie-break is
-// fixed, so the same scan and voxels give the same hookups.
+// A hookup goes round the line's box and ends beside it, and touches nothing it must keep away from (another tier's
+// cable, a machine below its tier); its blocks link only to each other, the tap and the port they end at.
+// A hookup cable is never laid onto a tap whose own cable is rated for fewer amps than the line draws (spec §5): that
+// hookup stays a dashed guide with `power_amps_low`, and Task 10 writes the upgrade step from `blocked`. A route that
+// cannot be found within the node budget becomes a dashed guide round the line (`found: false`, `no_path`). Every
+// order and tie-break is fixed, so the same scan and voxels give the same hookups.
 
 import { tierName, V } from '../../shared/gt/tiers.ts';
 import { itemKey, type StuffKey } from '../../shared/keys.ts';
@@ -24,7 +26,18 @@ import { isReplaceable } from './site.ts';
 
 // ---- Types ----
 
-export interface RouteWorld { vox: Voxels | null; line: ReadonlySet<string> /* world posKeys of every line block */ }
+export interface RouteWorld {
+  vox: Voxels | null;
+  /** World posKeys of every line block (and of the air cells a multiblock needs). */
+  line: ReadonlySet<string>;
+  /**
+   * The line's world box, inclusive: a hookup goes round it, never through, over or under it (no cell in the box's
+   * columns), and ends at a port's level neighbour outside it.
+   */
+  box?: PathBounds;
+  /** World posKeys of blocks no hookup cell may touch: another tier's cable, a transformer, a machine below its tier. */
+  keepAway?: ReadonlySet<string>;
+}
 export interface HookupBuild { hookup: Hookup; blocks: LayoutBlock[]; warnings: PlanWarning[]; found: boolean }
 export interface PowerHookupBuild extends HookupBuild {
   cable: Machine | null; lossEUt: number; arrivingVolts: number;
@@ -57,8 +70,31 @@ function voltsOf(tier: number): number {
   return v;
 }
 
-function neighbours(p: Vec3): Vec3[] {
-  return DIRS.map((_, side) => step(p, side));
+/** The horizontal sides first (north, south, west, east), then up, then down: a hookup prefers to arrive level. */
+const LEVEL_FIRST: readonly number[] = [2, 3, 4, 5, 1, 0];
+const LEVEL: readonly number[] = [2, 3, 4, 5];
+
+/** Whether `p` stands in one of the box's columns (any height): over, in or under the line. */
+function inColumns(p: Vec3, box: PathBounds): boolean {
+  return p[0] >= box.min[0] && p[0] <= box.max[0] && p[2] >= box.min[2] && p[2] <= box.max[2];
+}
+
+/** Whether a hookup may use `p` whatever the terrain: not a line cell, outside the line's columns, touching nothing to keep away from. */
+function clearOfLine(world: RouteWorld, p: Vec3): boolean {
+  if (world.line.has(posKey(p)) || (world.box !== undefined && inColumns(p, world.box))) return false;
+  const keepAway = world.keepAway;
+  return keepAway === undefined || !DIRS.some((_, side) => keepAway.has(posKey(step(p, side))));
+}
+
+/** The sides of a port a hookup may end at: with a line box only the level ones (it arrives beside the line). */
+function portSides(world: RouteWorld): readonly number[] {
+  return world.box === undefined ? LEVEL_FIRST : LEVEL;
+}
+
+/** The cells a hookup may start from (the tap's neighbours, level ones first) and end at (the ports' neighbours). */
+function endCells(world: RouteWorld, tap: Vec3, ports: readonly Vec3[]): { starts: Vec3[]; goals: Vec3[] } {
+  const sides = portSides(world);
+  return { starts: LEVEL_FIRST.map((side) => step(tap, side)), goals: ports.flatMap((p) => sides.map((side) => step(p, side))) };
 }
 
 /** The first of `ps` with the smallest manhattan distance to `target`; undefined for none. */
@@ -188,6 +224,17 @@ function cableAmpsOf(tap: LayoutTap): number {
 }
 
 /**
+ * The amp rating of the tap's own cable: `tap.cableAmps`, else the cable whose block stands at the tap in `vox`;
+ * undefined when neither says (spec §5: the cable is what a hookup must not overload; spare generation is the power
+ * fit's business).
+ */
+export function tapCableAmps(pack: Pack, vox: Voxels | null, tap: LayoutTap): number | undefined {
+  if (tap.cableAmps !== undefined) return tap.cableAmps;
+  const ref = existingBlock(vox, tap.pos);
+  return ref?.mteId === undefined ? undefined : pack.machines.get(ref.mteId)?.cable?.amps;
+}
+
+/**
  * Spec §3.5, §5 (never overload a cable): the nearest tap with `amps` free; else the nearest whose cable carries `amps`
  * (only generation is short, which the power fit reports); else the nearest of all (its hookup stays a guide).
  */
@@ -199,40 +246,49 @@ export function choosePowerTap(taps: readonly LayoutTap[], target: Vec3, amps: n
 
 // ---- Routes ----
 
-/** A neighbour of `p` nearest to `toward` (ties in DIRS order), outside the line unless every neighbour is in it. */
-function guideEnd(p: Vec3, toward: Vec3, line: ReadonlySet<string>): Vec3 {
-  const all = neighbours(p);
-  const outside = all.filter((c) => !line.has(posKey(c)));
-  return nearestOf(outside.length > 0 ? outside : all, toward)!;
+/** A neighbour of `p` nearest to `toward` (ties level first), clear of the line unless no neighbour is. */
+function guideEnd(world: RouteWorld, p: Vec3, toward: Vec3, sides: readonly number[]): Vec3 {
+  const all = sides.map((side) => step(p, side));
+  const clear = all.filter((c) => clearOfLine(world, c));
+  return nearestOf(clear.length > 0 ? clear : all, toward)!;
 }
 
 /** A straight guide from the tap's neighbour nearest to the nearest port to that port's neighbour nearest to the tap. */
-function guidePath(line: ReadonlySet<string>, tap: Vec3, ports: readonly Vec3[]): Vec3[] {
+function straightGuide(world: RouteWorld, tap: Vec3, ports: readonly Vec3[]): Vec3[] {
   const port = nearestOf(ports, tap);
   if (port === undefined) return [];
-  return straightPath(guideEnd(tap, port, line), guideEnd(port, tap, line));
+  return straightPath(guideEnd(world, tap, port, LEVEL_FIRST), guideEnd(world, port, tap, portSides(world)));
+}
+
+/** The box around the tap and the ports (and the line), `HOOKUP_REACH` wider on every side. */
+function reachBounds(world: RouteWorld, tap: Vec3, ports: readonly Vec3[]): PathBounds {
+  const around = bboxOf([tap, ...ports, ...(world.box === undefined ? [] : [world.box.min, world.box.max])])!;
+  return {
+    min: [around.min[0] - HOOKUP_REACH, around.min[1] - HOOKUP_REACH, around.min[2] - HOOKUP_REACH],
+    max: [around.max[0] + HOOKUP_REACH, around.max[1] + HOOKUP_REACH, around.max[2] + HOOKUP_REACH],
+  };
 }
 
 /**
- * The route of a hookup: A* from the tap's free face neighbours to the free face neighbours of the ports, through
- * cells that are inside the voxel box, known, air or replaceable and not part of the line, within 16 blocks of the
- * tap and ports. Without voxels or when nothing is found: a straight guide, `found: false`.
+ * The route of a hookup: A* from the tap's face neighbours to the ports' face neighbours (`endCells`), through cells
+ * that are inside the voxel box, known, air or replaceable, clear of the line (`clearOfLine`) and within 16 blocks of
+ * the tap and ports. Without voxels or when nothing is found: a dashed guide (`found: false`) by the same search with
+ * the terrain ignored, so it still goes round the line; a straight one only when even that finds nothing.
  */
 export function hookupPath(world: RouteWorld, tap: Vec3, ports: readonly Vec3[], maxNodes?: number): { path: Vec3[]; found: boolean } {
-  const { vox, line } = world;
-  if (vox !== null && ports.length > 0) {
-    const around = bboxOf([tap, ...ports])!;
-    const passable = (p: Vec3) => !line.has(posKey(p)) && isFreeVoxel(vox, p);
-    const starts = neighbours(tap).filter(passable);
-    const goals = ports.flatMap(neighbours).filter(passable);
-    const reach: PathBounds = {
-      min: [around.min[0] - HOOKUP_REACH, around.min[1] - HOOKUP_REACH, around.min[2] - HOOKUP_REACH],
-      max: [around.max[0] + HOOKUP_REACH, around.max[1] + HOOKUP_REACH, around.max[2] + HOOKUP_REACH],
-    };
-    const route = findPath(starts, goals, { passable, bounds: intersect(voxelBounds(vox), reach), maxNodes: maxNodes ?? MAX_PATH_NODES });
+  const { vox } = world;
+  if (ports.length === 0) return { path: [], found: false };
+  const clear = (p: Vec3) => clearOfLine(world, p);
+  const { starts, goals } = endCells(world, tap, ports);
+  const reach = reachBounds(world, tap, ports);
+  const budget = maxNodes ?? MAX_PATH_NODES;
+  if (vox !== null) {
+    const passable = (p: Vec3) => clear(p) && isFreeVoxel(vox, p);
+    const route = findPath(starts.filter(passable), goals.filter(passable), { passable, bounds: intersect(voxelBounds(vox), reach), maxNodes: budget });
     if (route.found) return { path: route.path, found: true };
   }
-  return { path: guidePath(line, tap, ports), found: false };
+  const guide = findPath(starts.filter(clear), goals.filter(clear), { passable: clear, bounds: reach, maxNodes: budget });
+  return { path: guide.found ? guide.path : straightGuide(world, tap, ports), found: false };
 }
 
 /** The side of `cell` that touches a port (DIRS order); -1 when none does. */
@@ -241,26 +297,32 @@ function portSide(cell: Vec3, ports: readonly Vec3[]): number {
   return DIRS.findIndex((_, side) => portKeys.has(posKey(step(cell, side))));
 }
 
-/** The connection bits of a hookup: consecutive cells, the first cell toward the tap, the last toward its port. */
-function hookupBits(path: readonly Vec3[], tap: Vec3, ports: readonly Vec3[]): Map<string, number> {
+/**
+ * The connection bits of a hookup's laid cells: between consecutive laid cells, the first path cell toward the tap and
+ * the last toward its port when laid. Never toward a cell the hookup does not lay (a line cell a straight guide crossed).
+ */
+function hookupBits(path: readonly Vec3[], laid: ReadonlySet<string>, tap: Vec3, ports: readonly Vec3[]): Map<string, number> {
+  const isLaid = (p: Vec3 | undefined): p is Vec3 => p !== undefined && laid.has(posKey(p));
   const links: Array<[Vec3, Vec3]> = [];
   const first = path[0], last = path[path.length - 1];
-  if (first !== undefined && sideToward(first, tap) !== -1) links.push([first, tap]);
-  for (let i = 0; i + 1 < path.length; i++) links.push([path[i]!, path[i + 1]!]);
-  if (last !== undefined) {
+  if (isLaid(first) && sideToward(first, tap) !== -1) links.push([first, tap]);
+  for (let i = 0; i + 1 < path.length; i++) if (isLaid(path[i]) && isLaid(path[i + 1])) links.push([path[i]!, path[i + 1]!]);
+  if (isLaid(last)) {
     const side = portSide(last, ports);
     if (side !== -1) links.push([last, step(last, side)]);
   }
   return linkBits(links);
 }
 
-/** The cells a hookup lays a block on: every path cell except those a line block already holds (a guide may cross the line). */
-function runCells(path: readonly Vec3[], line: ReadonlySet<string>): Vec3[] {
-  return path.filter((p) => !line.has(posKey(p)));
+/** The cells a hookup lays a block on: every path cell outside the line and its columns (only a straight guide can cross them). */
+function runCells(path: readonly Vec3[], world: RouteWorld): Vec3[] {
+  return path.filter((p) => !world.line.has(posKey(p)) && (world.box === undefined || !inColumns(p, world.box)));
 }
 
-function copyTap<T extends TapPoint>(tap: T): T {
-  return { ...tap, pos: [...tap.pos] };
+/** The tap as Plan 4 gives it (a `LayoutTap`'s `cableAmps` is the layout's own reading, not part of the hookup). */
+function copyTap(tap: LayoutTap): TapPoint {
+  const { cableAmps: _rating, ...plain } = tap;
+  return { ...plain, pos: [...tap.pos] };
 }
 
 function noPathWarning(kind: Hookup['kind']): PlanWarning {
@@ -274,17 +336,20 @@ function noPathWarning(kind: Hookup['kind']): PlanWarning {
 
 /**
  * Spec §3.5: a cable rated for the supply volts and the line's amps on every cell of the route. A tap whose own cable
- * cannot carry the line is never wired — the route stays a dashed guide and `blocked` names the cable to upgrade —
- * but the loss and arriving volts still describe the run that is laid after the upgrade.
+ * is rated for fewer amps than the line draws (`tapCableAmps`; unknown → its free amps, ruling R9) is never wired — the
+ * route stays a dashed guide and `blocked` names the cable to upgrade — but the loss and arriving volts still describe
+ * the run that is laid after the upgrade. Spare generation below the line's amps is not a reason: the power fit says it.
  */
 export function powerHookup(input: { pack: Pack; tap: LayoutTap; ports: readonly Vec3[]; world: RouteWorld; supplyTier: number; amps: number; maxNodes?: number }): PowerHookupBuild {
   const { pack, tap, ports, world, supplyTier, amps } = input;
   const volts = voltsOf(supplyTier);
   const route = hookupPath(world, tap.pos, ports, input.maxNodes);
-  const run = runCells(route.path, world.line);
-  const tapTooSmall = freeAmpsOf(tap) < amps && cableAmpsOf(tap) < amps;
+  const run = runCells(route.path, world);
+  const rated = tapCableAmps(pack, world.vox, tap);
+  const tapTooSmall = (rated ?? freeAmpsOf(tap)) < amps;
   const tapBlock = existingBlock(world.vox, tap.pos);
-  const blocked = tapTooSmall ? { cable: tapBlock === null ? 'cable' : blockName(pack, tapBlock), amps } : null;
+  const tapCable = tapBlock === null ? 'cable' : blockName(pack, tapBlock);
+  const blocked = tapTooSmall ? { cable: tapCable, amps } : null;
   const warnings: PlanWarning[] = [];
   const pick = pickCable(pack, { volts, amps });
   let blocks: LayoutBlock[] = [];
@@ -302,7 +367,7 @@ export function powerHookup(input: { pack: Pack; tap: LayoutTap; ports: readonly
         text: `The power run loses ${Math.round((100 * run.length * lossPerBlock) / volts)}% over ${run.length} blocks of ${cable.name} — move the line closer to the tap or use a better cable` });
     }
     if (!tapTooSmall && run.length > 0) {
-      const bits = hookupBits(route.path, tap.pos, ports);
+      const bits = hookupBits(route.path, new Set(run.map(posKey)), tap.pos, ports);
       blocks = run.map((pos): LayoutBlock => {
         const connections = bits.get(posKey(pos));
         return { pos: [...pos], block: machineRef(cable), role: 'cable', label: cable.name, item: cable.itemKey, ...(connections === undefined ? {} : { connections }) };
@@ -311,8 +376,10 @@ export function powerHookup(input: { pack: Pack; tap: LayoutTap; ports: readonly
     }
   }
   if (blocked !== null) {
-    warnings.push({ code: 'power_amps_low',
-      text: `The tap has ${fmtInt(freeAmpsOf(tap))} A free at ${tierName(tap.voltageTier ?? supplyTier)}; the line draws up to ${fmtInt(amps)} A` });
+    const tier = tierName(tap.voltageTier ?? supplyTier);
+    warnings.push({ code: 'power_amps_low', text: rated === undefined
+      ? `The tap has ${fmtInt(freeAmpsOf(tap))} A free at ${tier} and its cable's rating is unknown; the line draws up to ${fmtInt(amps)} A`
+      : `The tap's ${tapCable} carries ${fmtInt(rated)} A at ${tier}; the line draws up to ${fmtInt(amps)} A` });
   }
   if (pick?.ampsShort) {
     const cable = pick.cable;
@@ -338,8 +405,8 @@ export function logisticsHookup(input: {
 }): HookupBuild {
   const { parts, tap, ports, world, part, end, endConfig } = input;
   const route = hookupPath(world, tap.pos, ports, input.maxNodes);
-  const run = runCells(route.path, world.line);
-  const bits = hookupBits(route.path, tap.pos, ports);
+  const run = runCells(route.path, world);
+  const bits = hookupBits(route.path, new Set(run.map(posKey)), tap.pos, ports);
   const blocks = run.map((pos, i): LayoutBlock => {
     const last = i === run.length - 1;
     const endPart = last && end !== null ? end : null;

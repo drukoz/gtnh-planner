@@ -21,7 +21,8 @@ export interface SiteRequest {
   taps: { power?: Vec3; logistics?: Vec3 };                              // world positions
   avoid: ReadonlySet<string>;                                            // posKeys of every scanned machine, pipe, storage and logistics block
 }
-export interface Site { origin: Vec3; rotation: Rotation; size: Vec3 /* world */; floorY: number; dig: number; fill: number; blocked: number; unsupported: number; score: number; reason: 'search' | 'placement' | 'fallback'; moved: boolean }
+/** `unknown`: cells of the line's volume and floor the voxels do not know (outside the read box or not scanned). */
+export interface Site { origin: Vec3; rotation: Rotation; size: Vec3 /* world */; floorY: number; dig: number; fill: number; blocked: number; unsupported: number; unknown: number; score: number; reason: 'search' | 'placement' | 'fallback'; moved: boolean }
 
 const REPLACEABLE: ReadonlySet<string> = new Set([
   'minecraft:air', 'minecraft:tallgrass', 'minecraft:double_plant', 'minecraft:red_flower', 'minecraft:yellow_flower',
@@ -75,8 +76,11 @@ function clampY(y: number): number {
   return Math.min(Math.max(y, 0), WORLD_TOP_Y);
 }
 
-/** The voxel box the site search reads: the base box and its margin, every tap, and headroom above and below the floor. */
-export function siteSearchBox(base: Base, floorY: number, footprint: Footprint, taps: readonly Vec3[]): BBox {
+/**
+ * The voxel box the site search reads: the base box and its margin, every tap, `include` (a dragged placement with its
+ * ring and floor) and headroom above and below the floor; at most `MAX_SITE_SPAN` across, centred on the base.
+ */
+export function siteSearchBox(base: Base, floorY: number, footprint: Footprint, taps: readonly Vec3[], include: BBox | null = null): BBox {
   const b = base.bbox;
   let minX = b.minX - SITE_MARGIN, maxX = b.maxX + SITE_MARGIN;
   let minZ = b.minZ - SITE_MARGIN, maxZ = b.maxZ + SITE_MARGIN;
@@ -85,6 +89,11 @@ export function siteSearchBox(base: Base, floorY: number, footprint: Footprint, 
     minX = Math.min(minX, t[0] - TAP_REACH); maxX = Math.max(maxX, t[0] + TAP_REACH);
     minY = Math.min(minY, t[1] - TAP_REACH); maxY = Math.max(maxY, t[1] + TAP_REACH);
     minZ = Math.min(minZ, t[2] - TAP_REACH); maxZ = Math.max(maxZ, t[2] + TAP_REACH);
+  }
+  if (include !== null) {
+    minX = Math.min(minX, include.minX); maxX = Math.max(maxX, include.maxX);
+    minY = Math.min(minY, include.minY); maxY = Math.max(maxY, include.maxY);
+    minZ = Math.min(minZ, include.minZ); maxZ = Math.max(maxZ, include.maxZ);
   }
   [minX, maxX] = capSpan(minX, maxX, base.center[0]);
   [minZ, maxZ] = capSpan(minZ, maxZ, base.center[2]);
@@ -237,7 +246,7 @@ export function findSite(req: SiteRequest, vox: Voxels): Site | null {
         if (best !== null && score >= best.score) continue;
         best = {
           origin, rotation: r, size: rotatedSize(size, r), floorY: level.y0, dig: level.dig, fill: level.fill,
-          blocked: 0, unsupported: 0, score, reason: 'search', moved: false,
+          blocked: 0, unsupported: 0, unknown: 0, score, reason: 'search', moved: false,
         };
       }
     }
@@ -248,7 +257,8 @@ export function findSite(req: SiteRequest, vox: Voxels): Site | null {
 /**
  * The line at `at` turned by `rotation`, its y clamped into the world (`moved` when clamped), with what is in the way:
  * `blocked` known cells in its volume that are not air or replaceable (fluids count), `unsupported` columns whose
- * floor cell is known and air, replaceable or fluid, and the dig/fill to level the known column tops to the floor.
+ * floor cell is known and air, replaceable or fluid, `unknown` cells of its volume and floor the voxels do not know,
+ * and the dig/fill to level the known column tops to the floor.
  */
 function measure(req: SiteRequest, vox: Voxels | null, at: Vec3, rotation: Rotation, reason: Site['reason']): Site {
   const { w, h, l } = req.footprint;
@@ -256,7 +266,7 @@ function measure(req: SiteRequest, vox: Voxels | null, at: Vec3, rotation: Rotat
   const y = Math.min(Math.max(at[1], 1), WORLD_TOP_Y + 1 - h);
   const origin: Vec3 = [at[0], y, at[2]];
   const floorY = y - 1;
-  let dig = 0, fill = 0, blocked = 0, unsupported = 0;
+  let dig = 0, fill = 0, blocked = 0, unsupported = 0, unknown = 0;
   if (vox !== null) {
     const cells = new VoxelCells(vox);
     const [ox, oy, oz] = vox.origin;
@@ -266,9 +276,11 @@ function measure(req: SiteRequest, vox: Voxels | null, at: Vec3, rotation: Rotat
         for (let dy = 0; dy < size[1]; dy++) {
           const cls = cells.classAt(x, y0 + dy, z);
           if (cls === SOLID || cls === FLUID || cls === MACHINE) blocked++;
+          else if (cls === UNKNOWN) unknown++;
         }
         const below = cells.classAt(x, y0 - 1, z);
         if (below === CLEAR || below === FLUID) unsupported++;
+        else if (below === UNKNOWN) unknown++;
         const t = cells.topAt(x, z);
         if (t === -1 || cells.classAt(x, t, z) === UNKNOWN) continue;
         const d = oy + t - floorY;
@@ -277,7 +289,7 @@ function measure(req: SiteRequest, vox: Voxels | null, at: Vec3, rotation: Rotat
       }
     }
   }
-  return { origin, rotation, size, floorY, dig, fill, blocked, unsupported, score: 0, reason, moved: y !== at[1] };
+  return { origin, rotation, size, floorY, dig, fill, blocked, unsupported, unknown, score: 0, reason, moved: y !== at[1] };
 }
 
 /** The spot the user chose, checked against the voxels; with `vox === null` every count is 0. */

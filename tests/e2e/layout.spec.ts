@@ -42,6 +42,11 @@ test('plan a line, see it on the map, move it, follow a pin and look at it in 3D
   await expect(panel).toContainText('2 new');
   await expect(panel).toContainText('Does not fit');
   await expect(panel.getByTestId('pin-1')).toBeVisible();
+  // the line's panel comes before what the scan found, so its buttons stay in reach on a big base (final review)
+  expect(await page.evaluate(() => {
+    const line = document.querySelector('[data-testid=line-panel]'), found = document.querySelector('[data-testid=found-panel]');
+    return line !== null && found !== null && (line.compareDocumentPosition(found) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+  })).toBe(true);
 
   await panel.getByRole('button', { name: 'Move line' }).click();
   const box = (await page.locator('canvas[role=img]').boundingBox())!;
