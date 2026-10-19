@@ -5,8 +5,9 @@ import type { AppContext } from '../../app.ts';
 import type { Route } from '../router.ts';
 import { assetRoutes } from './assets.ts';
 import { authRoutes } from './auth.ts';
+import { layoutRoutes } from './layout.ts';
 import { packRoutes } from './pack.ts';
 import { projectRoutes } from './projects.ts';
 import { worldRoutes } from './world.ts';
 
-export const ROUTE_MODULES: Array<(app: AppContext) => Route[]> = [authRoutes, packRoutes, projectRoutes, assetRoutes, worldRoutes];
+export const ROUTE_MODULES: Array<(app: AppContext) => Route[]> = [authRoutes, packRoutes, projectRoutes, assetRoutes, worldRoutes, layoutRoutes];

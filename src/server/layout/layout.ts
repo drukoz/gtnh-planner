@@ -13,11 +13,11 @@ import {
 } from '../../shared/layout/geometry.ts';
 import type { CoverSpec, Hookup, Layout, LayoutBlock, LayoutStatus, LayoutTap } from '../../shared/types/layout.ts';
 import type { Pack } from '../../shared/types/pack.ts';
-import type { BomLine, LogisticsMode, Plan, PlanContext, PlanWarning, PowerSummary } from '../../shared/types/plan.ts';
+import type { BomLine, LogisticsMode, Plan, PlanWarning, PowerSummary } from '../../shared/types/plan.ts';
 import type { Project } from '../../shared/types/project.ts';
 import { findBase, type Base, type BBox, type LogisticsNetwork, type PowerNetwork, type Voxels, type WorldScan } from '../../shared/types/world.ts';
 import { emptyContext } from '../planner/plan.ts';
-import { RAIN_OUTAGE_SECONDS } from '../world/power.ts';
+import { contextFromScan } from '../world/context.ts';
 import { attachCovers, placeUnits, replacedCasings, unitsFromPlan, type LocalBlock, type Placement, type Unit } from './arrange.ts';
 import {
   chooseLogisticsNetwork, choosePowerNetwork, choosePowerTap, ghostBlocks, logisticsHookup, nearestTap, powerHookup,
@@ -38,11 +38,6 @@ export interface LayoutDeps {
   readArea?: (dim: number, bbox: BBox) => Promise<Voxels>;
   /** The A* budget of each hookup search (default `MAX_PATH_NODES`). */
   maxPathNodes?: number;
-  /**
-   * Ruling R1: the plan context of a base — Plan 4's `contextFromScan` once it lands (Task 12). Without it the base's
-   * power networks are summed here the way Plan 4 Task 14 documents, which is all the power fit reads.
-   */
-  context?: (scan: WorldScan, pack: Pack, baseId: string) => PlanContext;
 }
 
 /** Where a line without a scan or base is drawn. */
@@ -82,29 +77,6 @@ function dedupeWarnings(warnings: readonly PlanWarning[]): PlanWarning[] {
 
 function insideBox(p: Vec3, size: Vec3): boolean {
   return p.every((v, i) => v >= 0 && v < size[i]!);
-}
-
-// ---- Context ----
-
-/**
- * Ruling R1 (Plan 4 Task 14's formula): the base's power networks summed — average generation, spare (generation less
- * load), the tier of the network that generates most, the stored EU, and the rain outage when any of them is solar.
- * No `power` when the base has no network.
- */
-function scanPowerContext(scan: WorldScan, base: Base): PlanContext {
-  const networks = scan.power.filter((n) => n.baseId === base.id);
-  const first = networks[0];
-  if (first === undefined) return emptyContext();
-  let averageEUt = 0, loadEUt = 0, storedEU = 0;
-  let largest: PowerNetwork = first;
-  for (const n of networks) {
-    averageEUt += n.generatorEUt.average;
-    loadEUt += n.loadEUt ?? 0;
-    storedEU += n.storedEU;
-    if (n.generatorEUt.average > largest.generatorEUt.average) largest = n;
-  }
-  const rainOutageSeconds = networks.some((n) => (n.solarShare ?? 0) > 0) ? RAIN_OUTAGE_SECONDS : 0;
-  return { ...emptyContext(), power: { averageEUt, spareEUt: averageEUt - loadEUt, voltageTier: largest.voltageTier, storedEU, rainOutageSeconds } };
 }
 
 // ---- The line in its local grid (stages 3–5) ----
@@ -387,7 +359,7 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
   const worldWarnings: PlanWarning[] = base !== null ? []
     : project.world.scanId === null ? [{ code: 'no_scan', text: 'Pick a world scan and base on the Map tab to place the line' }]
       : [{ code: 'no_base', text: 'This scan has no base here to build next to' }];
-  const ctx = base === null ? emptyContext() : deps.context !== undefined ? deps.context(scan, pack, base.id) : scanPowerContext(scan, base);
+  const ctx = base === null ? emptyContext() : contextFromScan(scan, pack, base.id);
   const dim = base?.dim ?? 0;
 
   // stages 3–4

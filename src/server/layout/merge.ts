@@ -17,7 +17,8 @@ function compareText(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-function isOptional(line: BomLine): boolean {
+/** A layout part that is only a suggestion: it is never broken down to base materials (the layout service skips it too). */
+export function isOptional(line: BomLine): boolean {
   return line.why.startsWith(OPTIONAL_PREFIX);
 }
 
