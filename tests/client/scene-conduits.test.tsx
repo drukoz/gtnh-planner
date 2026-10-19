@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-// instanceTranslation lives in scene-data.ts until Plan 5's renderer.ts is merged (plan 11, ruling R5)
+// instanceTranslation stays in the pure scene-data.ts, and renderer.ts places every instance by it; load-textures.ts asks
+// for every block's sceneBlockRefs (plan 11, ruling R5, merge follow-ups F1 and F2)
+import { loadSceneInputs } from '../../src/client/three/load-textures.ts';
 import { blockKey, blockList, buildScene, hoverText, instanceTranslation, pickInfo, sceneBlockRefs, type SceneInstance } from '../../src/client/three/scene-data.ts';
 import type { BlockFaces } from '../../src/shared/types/assets.ts';
 import type { ConduitSpec, Layout, LayoutBlock } from '../../src/shared/types/layout.ts';
@@ -18,6 +20,12 @@ const plan = { names: enderioNames } as unknown as Plan;
 describe('conduits in the 3D view', () => {
   it('names the conduit and connector textures a bundle needs', () => {
     expect(sceneBlockRefs(bundle).map((r) => r.id)).toEqual(['conduit:item', 'conduit:connector_in_out', 'conduit:liquid_ender', 'conduit:connector_extract']);
+  });
+  it('asks the asset API for every conduit and connector texture of a bundle, each once', async () => {
+    const asked: string[] = [];
+    await loadSceneInputs({ ...bundleLayout, blocks: [bundle, { ...bundle, pos: [11, 64, 20] }] }, { blocks: async (refs) => { asked.push(...refs.map(blockKey)); return []; },
+      icons: async () => [], covers: async (items) => items.map((item) => ({ item, layers: [] })), image: async () => null });
+    expect(asked).toEqual(sceneBlockRefs(bundle).map(blockKey));
   });
   it('draws each conduit of a bundle side by side, with connector arms on its configured faces', () => {
     const scene = buildScene(bundleLayout, faces, new Map(), new Map());
