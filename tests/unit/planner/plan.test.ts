@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec } from '../../helpers/pack-spec.ts';
 import { planLine, emptyContext, settingsHash, planCacheKey, PlanCache, powerSummary, batchShortWarning } from '../../../src/server/planner/plan.ts';
+import { linePricing } from '../../../src/server/planner/pricing.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import type { OreVein } from '../../../src/shared/types/pack.ts';
 import type { Plan, PlanSettings, PlanStep } from '../../../src/shared/types/plan.ts';
@@ -313,6 +314,30 @@ describe('planLine', () => {
     expect(plan.rawInputs.map((r) => [r.key, r.perSecond])).toEqual([['raw@0', 1], ['x@0', 1]]);
     expect(plan.warnings).toEqual([{ code: 'bought-and-made', key: 'x@0', text: 'X Dust is both bought (50%) and made by Basic Macerator.',
       stepId: 'split', stepIds: ['split'], share: [0.5] }]);
+  });
+  it('names a step after its product, not the free water beside it, when the cost model never walked the product', async () => {
+    // Fix spec D13 as ruled in Task 1: a good's value is its cost-model cost (0 when not finite), never below its plain
+    // price. The group pins the assembler recipe that takes 1 Charcoal and 2,000 L Water; a pyrolyse oven makes the
+    // charcoal with 1,000 L Water beside it, and the line buys the other 1,000 L. The cost model keeps only the cheaper
+    // dust recipe, so it never walks Charcoal (Infinity, like the real Methyl Acetate Cell). At 0 against free Water the
+    // litres won: the oven "made Water", and the plan said Water is both bought and made.
+    const p = packFromSpec({
+      items: [{ key: 'minecraft:log@0', name: 'Oak Wood', oreDict: ['logWood'] }, { key: 't:charcoal@0', name: 'Charcoal' },
+              { key: 't:x_dust@0', name: 'X Dust', gt: { prefix: 'dust', material: 'X' } }, { key: 't:thing@0', name: 'Thing' }],
+      fluids: [{ key: 'fluid:water', name: 'Water' }],
+      maps: [{ id: 'gt.recipe.pyro', name: 'Pyrolyse Oven' }, { id: 'gt.recipe.assembler', name: 'Assembler' }],
+      machines: [{ mteId: 1, name: 'Pyrolyse Oven', maps: ['gt.recipe.pyro'], tier: 1 }, { mteId: 2, name: 'Basic Assembler', maps: ['gt.recipe.assembler'], tier: 1 }],
+      recipes: [{ id: 'pyrolyse', map: 'gt.recipe.pyro', in: [['minecraft:log@0', 1]], out: [['t:charcoal@0', 1], ['fluid:water', 1000]], eut: 8 },
+                { id: 'make-thing', map: 'gt.recipe.assembler', in: [['t:charcoal@0', 1], ['fluid:water', 2000]], out: [['t:thing@0', 1]], eut: 2 },
+                { id: 'from-dust', map: 'gt.recipe.assembler', in: [['t:x_dust@0', 1]], out: [['t:thing@0', 4]], eut: 2 }],
+      worldgen: { veins: [vein('ore.mix.x', 'X')] },
+    });
+    const settings = S({ target: 't:thing@0', tier: 1, amount: 60, per: 'min', recipeChoice: { 't:thing@0': 'make-thing' } });
+    expect((await linePricing(p, settings, emptyContext()))?.model.costs.cost('t:charcoal@0')).toBe(Infinity);
+    const plan = await planLine(p, settings, emptyContext());
+    expect(plan.steps.map((s) => [s.id, s.mainOutput])).toEqual([['make-thing', 't:thing@0'], ['pyrolyse', 't:charcoal@0']]);
+    expect(plan.rawInputs.map((r) => [r.key, r.perSecond])).toEqual([['fluid:water', 1000], ['minecraft:log@0', 1]]);
+    expect(plan.warnings.filter((w) => w.code === 'bought-and-made' || w.code === 'multi-producer')).toEqual([]);
   });
   it('gives Make N flows and leftovers per second over the batch', async () => {
     const p = await planLine(pack, S({ target: 't:circuit@0', mode: 'makeN', amount: 10, tier: 1 }), emptyContext());

@@ -288,10 +288,15 @@ Auditor ids: invariants INV-n, rootcause RCn, gtnh Gn, ui UI-n. "Decision" resol
   beat items and returned cells count ("makes Empty Cell", "Pyrolyse Oven makes Water"). It is also the
   `recipeChoice` key.
 - **Fix.** `mainOutput` = the target if the recipe makes it, else the output with the largest
-  `value = costModel.cost(key) × (amount the other steps take)`, ignoring an empty container the recipe hands back (a key
-  that is the `empty` of some `pack.fluidContainers` entry) unless the recipe makes nothing else; ties by key.
-  `StepLine` gets `valueOf?(key): number` (cost-model cost; 0 when not finite) and `empties?: ReadonlySet<StuffKey>` (those
-  empty containers), passed by `planSteps` and `makeN`.
+  `value = valueOf(key) × (amount the other steps take)`, ignoring an empty container the recipe hands back (a key
+  that is the `empty` of some `pack.fluidContainers` entry) unless the recipe makes nothing else; equal values go to the
+  output the other steps take most of, then by key. `StepLine` gets `valueOf?(key): number` and
+  `empties?: ReadonlySet<StuffKey>` (those empty containers), passed by `planSteps` and `makeN`. `planLine`'s
+  `valueOf(key)` = `max(costModel.cost(key) when finite else 0, basis.prices.price(key))`: never below the good's plain
+  price, as R7 floors bought derived materials. The cost model splits a recipe's cost between its co-products
+  arbitrarily and prices many intermediates 0 (Sulfuric Acid beside Water) or not at all (a Methyl Acetate Cell it never
+  walked); at 0 against free Water the litres won, so the user's Electronic Circuit MV step "made Water" and the plan
+  warned "Water is both bought and made".
 
 ### D14 (minor) A thrown-away filled container makes the line extrude new cells — RC7
 
@@ -688,7 +693,7 @@ All commands from the repository root. Real-data tests: `GTNH_LOCAL=1`, skipped 
 
 | File | What it proves |
 |---|---|
-| `tests/unit/planner/numerics.test.ts` | Mini-GT circuits at MV planned at `amount` 30, 1 and 1e-6 per hour give the same step ids `['circuit-mv','extract-iron','wire']`, the same 6 flows (one into `out`) and rates in exact proportion (1e-9 relative) — fails on cd6fcce, where 1e-6/h comes back with no steps; every `runsPerSecond`, flow, raw input and byproduct value `v` satisfies `Number(v.toPrecision(9)) === v`; per good, made + bought − taken − sunk − demand is within 1e-9 relative of the largest term; the exported pure helpers `residualViolations(rows, x)` and `firstBalanced(stages, rows)` reject an off-by-1e-3 row and pick the earlier stage |
+| `tests/unit/planner/numerics.test.ts` | Mini-GT circuits at MV planned at `amount` 30, 1 and 1e-6 per hour give the same step ids `['circuit-mv','extract-iron','wire']`, the same 6 flows (one into `out`) and rates in exact proportion (1e-9 relative) — fails on cd6fcce, where 1e-6/h comes back with no steps; every `runsPerSecond`, flow, raw input and byproduct value `v` satisfies `Number(v.toPrecision(9)) === v`; per good, made + bought − taken − sunk − demand is within 1e-8 of the sum of those terms (each keeps 9 significant digits, rounded at unit demand and again when scaled back); the exported pure helpers `residualViolations(rows, x)` and `firstBalanced(stages, rows)` reject an off-by-1e-3 row and pick the earlier stage |
 | `tests/unit/shared/balance.test.ts` | `indexPlan` on a synthetic plan: orphan PVA→mixer, multi-producer plate [solid 99.9 %, saw 0.1 %], short glue→assembler 99.2 % flagged; 99.6 % not flagged; a by-product Empty Cell from two steps not flagged; peers largest first; `issueText` gives the §6.4 texts for each code |
 | `tests/unit/planner/leaves.test.ts` | R1: sand gathered → glass tube at MV is `[extract-glass, solidify-tube]` with Sand `natural`, no cobblestone, no gravel step; End stone not natural at MV, natural at HV. R5: ethylene sourced only on an unreachable dim is made, never a raw input, with `routeDerived` false and true; a reachable sourced fluid is `direct`. R8: ore block not bought for a circuit, bought for a dust target. R6: derived at depth 5 not a leaf with `routeDerived: false`, depth 1 a leaf; default settings route both. R7: a derived leaf whose chain costs 0.5 is priced 1; `pricedVia` names the alloy smelter, never a canner; `canMake` false for a mined ingot nothing makes |
 | `tests/unit/pack/supply.test.ts` | `deriveSupply` un-fakes the display-item rock breaker recipe (cobblestone), leaves the redstone→obsidian one fake, adds pump map/machines/recipes for an `MTEPump` machine, flags the empty-cell→air-cell compressor; ids are stable across two calls |
