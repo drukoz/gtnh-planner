@@ -234,7 +234,9 @@ public final class GhostRenderer {
     /**
      * Draws both batches, translucent, without lighting, the lightmap, face culling or alpha test, without writing
      * depth (and without the depth test for see-through ghosts), at the line's origin relative to the camera. Every
-     * GL flag it changes is put back as it was.
+     * GL flag it changes is put back as it was. That includes the lightmap (texture unit 1's 2D texture), which
+     * vanilla has already turned off when {@code RenderWorldLastEvent} fires: it is turned back on only if it was on,
+     * so whatever draws after the ghosts is not lit by it.
      */
     private void draw(ProjectorData data, double cx, double cy, double cz, float partialTicks) {
         boolean blend = GL11.glIsEnabled(GL11.GL_BLEND);
@@ -242,6 +244,9 @@ public final class GhostRenderer {
         boolean cull = GL11.glIsEnabled(GL11.GL_CULL_FACE);
         boolean depth = GL11.glIsEnabled(GL11.GL_DEPTH_TEST);
         boolean alphaTest = GL11.glIsEnabled(GL11.GL_ALPHA_TEST);
+        OpenGlHelper.setActiveTexture(OpenGlHelper.lightmapTexUnit);
+        boolean lightmap = GL11.glIsEnabled(GL11.GL_TEXTURE_2D);
+        OpenGlHelper.setActiveTexture(OpenGlHelper.defaultTexUnit);
         mc.entityRenderer.disableLightmap(partialTicks);
         try {
             GL11.glEnable(GL11.GL_BLEND);
@@ -267,7 +272,7 @@ public final class GhostRenderer {
             restore(GL11.GL_ALPHA_TEST, alphaTest);
             GL11.glDepthMask(true);
             GL11.glColor4f(1f, 1f, 1f, 1f);
-            mc.entityRenderer.enableLightmap(partialTicks);
+            if (lightmap) mc.entityRenderer.enableLightmap(partialTicks);
         }
     }
 
