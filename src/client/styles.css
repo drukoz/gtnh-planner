@@ -130,6 +130,20 @@ textarea { resize: vertical; width: 100%; }
 .plan-banner p { margin: 0 0 4px; }
 .plan-banner ul { margin: 0 0 4px; padding-left: 20px; }
 .plan-banner .banner-heading { font-weight: 600; margin-top: 6px; }
+.plan-banner .banner-heading.error { color: var(--error); }
+.plan-banner .banner-heading button { margin-left: 6px; font-weight: 400; }
+.banner-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 6px; }
+button.banner-chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px 2px 4px; border-radius: 999px; font-size: 0.85rem;
+}
+.banner-cost { color: var(--muted); }
+
+/* What changed with the last settings change (fix spec §6.4), above the flow diagram and the materials. */
+.what-changed { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; }
+.what-changed-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.what-changed h4 { margin: 0; font-size: 0.95rem; }
+.what-changed ul { margin: 4px 0 0; padding-left: 20px; font-size: 0.9rem; }
+.what-changed li { overflow-wrap: anywhere; }
 
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
 .tabs [role='tab'] {
@@ -231,9 +245,10 @@ details.settings-section > summary h3 { display: inline; margin-right: 8px; }
 .cost-table td { padding: 3px 4px; vertical-align: middle; }
 .cost-name { display: inline-flex; align-items: center; gap: 6px; overflow-wrap: anywhere; }
 .cost-input { width: 6em; padding: 3px 6px; }
-.cost-add { display: flex; flex-direction: column; gap: 8px; }
-.cost-add .row { align-items: flex-end; }
+.cost-add, .owned-machines, .owned-add { display: flex; flex-direction: column; gap: 8px; }
+.cost-add .row, .owned-add .row { align-items: flex-end; }
 .cost-field input { width: 7em; }
+.owned-add select { width: 100%; }
 .key-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .key-list li { display: flex; align-items: center; gap: 8px; }
 .key-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
@@ -250,13 +265,24 @@ button.avoid-chip-remove {
 button.avoid-chip-remove:hover:not(:disabled) { background: var(--surface-2); }
 .avoid-badge { background: var(--warn-bg); border-color: var(--warn-border); }
 
-/* Flow diagram: green = owned machines, blue = new ones, half and half = partly owned (spec §3.9). */
+/*
+ * Flow diagram (spec §3.9, fix spec §6.2): green = owned machines, blue = new ones, half and half = partly owned; olive
+ * import stubs (dashed grey when free), red dashed stubs where nothing supplies an input, violet supporting lines. Under
+ * a focus the canvas gets `focusing`, everything not lit `dim`; the boxes that make the good get a solid accent outline,
+ * those that take it a dashed one, lit arrows are 3 px accent.
+ */
 :root {
   --flow-owned: #d9f0e1; --flow-owned-line: #2e8b57;
   --flow-new: #dce8fb; --flow-new-line: #2f6fd6;
   --flow-raw: #eceef2; --flow-raw-line: #8a919d;
   --flow-out: #fff4d6; --flow-out-line: #c49a2a;
+  --flow-import: #eef3e8; --flow-import-line: #6f8f4e;
+  --flow-free: #f4f5f7;
+  --flow-missing: #fde8e6; --flow-missing-line: #b3261e;
+  --flow-line: #f3eefb; --flow-line-line: #8461c4;
+  --flow-amber: #9a5b00;
   --flow-edge: #7d8593;
+  --flow-hover: rgb(47 111 214 / 0.12);
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -264,7 +290,13 @@ button.avoid-chip-remove:hover:not(:disabled) { background: var(--surface-2); }
     --flow-new: #1d2c47; --flow-new-line: #5b93ec;
     --flow-raw: #272b33; --flow-raw-line: #6f7785;
     --flow-out: #3a3218; --flow-out-line: #c7a447;
+    --flow-import: #26301e; --flow-import-line: #8fb36a;
+    --flow-free: #23262c;
+    --flow-missing: #3d1f1d; --flow-missing-line: #ff8a80;
+    --flow-line: #2a2338; --flow-line-line: #a98be6;
+    --flow-amber: #e0a85a;
     --flow-edge: #8a92a0;
+    --flow-hover: rgb(91 147 236 / 0.18);
   }
 }
 .flow { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
@@ -272,33 +304,77 @@ button.avoid-chip-remove:hover:not(:disabled) { background: var(--surface-2); }
 .flow-main { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
 .flow-diagram { display: flex; flex-direction: column; gap: 8px; }
 .flow-toolbar button { min-width: 2.2em; }
+.flow-toolbar select.flow-find { max-width: 260px; padding: 2px 8px; }
 .flow-canvas {
   display: block; width: 100%; min-height: 240px; background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius); cursor: grab; touch-action: none; user-select: none;
 }
 .flow-canvas:active { cursor: grabbing; }
-.flow-node > rect { stroke-width: 1.5; fill: var(--flow-raw); stroke: var(--flow-raw-line); }
-.flow-node.owned > rect { fill: var(--flow-owned); stroke: var(--flow-owned-line); }
-.flow-node.new > rect { fill: var(--flow-new); stroke: var(--flow-new-line); }
-.flow-node.partly-owned > rect { fill: url(#flow-partly); stroke: var(--flow-owned-line); }
-.flow-node.out > rect { fill: var(--flow-out); stroke: var(--flow-out-line); }
-.flow-node.sink > rect { fill: var(--surface); stroke-dasharray: 4 3; }
-.flow-node[role='button'] { cursor: pointer; }
-.flow-node[role='button']:hover > rect, .flow-node.selected > rect { stroke-width: 3; }
-.flow-node:focus { outline: none; }
-.flow-node:focus-visible > rect { stroke: var(--accent); stroke-width: 3; }
+.flow-canvas g:focus { outline: none; }
+.flow-hit { fill: transparent; stroke: none; }
+.flow-node-box { stroke-width: 1.5; fill: var(--flow-raw); stroke: var(--flow-raw-line); }
+.flow-node.owned > .flow-node-box { fill: var(--flow-owned); stroke: var(--flow-owned-line); }
+.flow-node.new > .flow-node-box { fill: var(--flow-new); stroke: var(--flow-new-line); }
+.flow-node.partly-owned > .flow-node-box { fill: url(#flow-partly); stroke: var(--flow-owned-line); }
+.flow-node.out > .flow-node-box { fill: var(--flow-out); stroke: var(--flow-out-line); }
+.flow-node.import > .flow-node-box { fill: var(--flow-import); stroke: var(--flow-import-line); }
+.flow-node.import.leaf-free > .flow-node-box { fill: var(--flow-free); stroke: var(--flow-raw-line); stroke-dasharray: 2 2; }
+.flow-node.import.leaf-unavailable > .flow-node-box { stroke: var(--flow-missing-line); }
+.flow-node.missing > .flow-node-box { fill: var(--flow-missing); stroke: var(--flow-missing-line); stroke-width: 2; stroke-dasharray: 5 3; }
+.flow-node.sink > .flow-node-box { fill: var(--surface); stroke-dasharray: 4 3; }
+.flow-node.line > .flow-node-box { fill: var(--flow-line); stroke: var(--flow-line-line); stroke-dasharray: 6 3; }
+.flow-node-head[role='button'], .flow-row, .flow-edge, .flow-line-toggle { cursor: pointer; }
+.flow-node-head[role='button']:hover > .flow-hit { fill: var(--flow-hover); }
+.flow-node.selected > .flow-node-box { stroke-width: 3; }
+.flow-node-head:focus-visible > .flow-hit, .flow-row:focus-visible > .flow-hit { stroke: var(--accent); stroke-width: 2; }
 .flow-node text { fill: var(--text); font-size: 11.5px; }
 .flow-node .flow-node-title { font-size: 13px; font-weight: 600; }
 .flow-node .flow-node-line { fill: var(--muted); }
 .flow-node .flow-avoid-badge rect { fill: var(--warn-bg); stroke: var(--warn-border); stroke-width: 1; }
 .flow-node .flow-avoid-badge text { font-size: 11px; }
+/* A row per good: its port on the box's edge, the main output bold, a problem in red (no source, short) or amber. */
+.flow-row:hover > .flow-hit, .flow-row.hl > .flow-hit { fill: var(--flow-hover); }
+.flow-row-rate { fill: var(--muted); }
+.flow-row.main .flow-row-text { font-weight: 700; }
+.flow-row.issue-orphan-input .flow-row-text, .flow-row.issue-short-input .flow-row-text { fill: var(--error); }
+.flow-row.issue-multi-producer .flow-row-text, .flow-row.issue-bought-and-made .flow-row-text { fill: var(--flow-amber); }
+.flow-row.issue-orphan-input .flow-row-rate, .flow-row.issue-short-input .flow-row-rate { fill: var(--error); }
+.flow-port { fill: var(--surface); stroke: var(--flow-edge); stroke-width: 1.5; }
+.flow-row.hl .flow-port { fill: var(--accent); stroke: var(--accent); }
 .flow-stop-owned { stop-color: var(--flow-owned); }
 .flow-stop-new { stop-color: var(--flow-new); }
-.flow-edge path { fill: none; stroke: var(--flow-edge); stroke-width: 1.5; }
+.flow-edge-line { fill: none; stroke: var(--flow-edge); stroke-width: 1.5; }
+/* What a pointer catches: 10 px of transparent stroke along the arrow. */
+.flow-edge-hit { fill: none; stroke: transparent; stroke-width: 10; }
+.flow-edge:hover .flow-edge-line { stroke-width: 2.5; }
+.flow-edge.missing .flow-edge-line { stroke: var(--flow-missing-line); stroke-dasharray: 5 3; }
 .flow-arrow-head { fill: var(--flow-edge); }
+.flow-arrow-head-hl { fill: var(--accent); }
 .flow-edge-label {
   fill: var(--text); font-size: 11px; paint-order: stroke; stroke: var(--surface); stroke-width: 3px; stroke-linejoin: round;
 }
+/* An open supporting line: a frame around its boxes, its name and its collapse button on top. */
+.flow-group-box { fill: var(--flow-line); fill-opacity: 0.5; stroke: var(--flow-line-line); stroke-width: 1.5; stroke-dasharray: 6 3; }
+.flow-group-title { fill: var(--flow-line-line); font-size: 12.5px; font-weight: 600; }
+.flow-line-toggle rect { fill: var(--surface); stroke: var(--flow-line-line); stroke-width: 1; }
+.flow-line-toggle text { fill: var(--text); font-size: 15px; font-weight: 700; }
+.flow-line-toggle:hover rect { fill: var(--flow-hover); }
+.flow-line-toggle:focus-visible rect { stroke: var(--accent); stroke-width: 2; }
+/* Focus (fix spec §6.2). */
+.flow-canvas.focusing .dim { opacity: 0.18; }
+.flow-node.producer > .flow-node-box { stroke: var(--accent); stroke-width: 3; }
+.flow-node.consumer > .flow-node-box { stroke: var(--accent); stroke-width: 2.5; stroke-dasharray: 6 3; }
+.flow-edge.hl .flow-edge-line { stroke: var(--accent); stroke-width: 3; }
+/* A lit arrow's good and rate, on a tag above the boxes; it never takes the pointer from what is under it. */
+.flow-edge-tag { pointer-events: none; }
+.flow-edge-tag rect { fill: var(--surface); stroke: var(--accent); stroke-width: 1; }
+.flow-edge-tag text { fill: var(--text); font-size: 11px; font-weight: 600; }
+/* What does not add up, above the canvas: red with an input nothing supplies, else amber. */
+.flow-issues { background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: var(--radius); padding: 8px 12px; }
+.flow-issues.error { background: var(--error-bg); border-color: var(--error); }
+.flow-issues ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: 0.9rem; }
+.flow-issues li { overflow-wrap: anywhere; }
+.flow-issues li button { margin-left: 6px; }
 .flow-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 0.85rem; color: var(--muted); }
 .flow-legend li { display: inline-flex; align-items: center; gap: 6px; }
 .swatch { width: 14px; height: 14px; border-radius: 3px; border: 1.5px solid var(--flow-raw-line); background: var(--flow-raw); }
@@ -306,6 +382,11 @@ button.avoid-chip-remove:hover:not(:disabled) { background: var(--surface-2); }
 .swatch.new { background: var(--flow-new); border-color: var(--flow-new-line); }
 .swatch.partly-owned { background: linear-gradient(90deg, var(--flow-owned) 50%, var(--flow-new) 50%); border-color: var(--flow-owned-line); }
 .swatch.out { background: var(--flow-out); border-color: var(--flow-out-line); }
+.swatch.import { background: var(--flow-import); border-color: var(--flow-import-line); }
+.swatch.free { background: var(--flow-free); border-style: dashed; }
+.swatch.missing { background: var(--flow-missing); border-color: var(--flow-missing-line); border-style: dashed; }
+.swatch.sink { background: var(--surface); border-style: dashed; }
+.swatch.line { background: var(--flow-line); border-color: var(--flow-line-line); border-style: dashed; }
 .flow-infeasible {
   background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: var(--radius); padding: 10px 14px; max-width: 760px;
 }
@@ -329,6 +410,30 @@ fieldset.flow-panel-section > legend.flow-panel-title { float: left; width: 100%
 .swap-option { align-items: flex-start; }
 .swap-option input { margin-top: 4px; }
 .swap-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+/* A way or an option the group cannot use here: greyed, no radio, with why not. */
+.swap-option.unusable, .option-choice.unusable { color: var(--muted); padding-left: 24px; font-size: 0.9rem; overflow-wrap: anywhere; }
+abbr.unit-hint { text-decoration: underline dotted; cursor: help; }
+button.link {
+  padding: 0; border: none; border-radius: 0; background: none; color: var(--accent); text-decoration: underline; font: inherit;
+}
+button.link:hover:not(:disabled) { background: none; text-decoration: none; }
+/* Takes / Makes: per good its rate, and the steps it comes from or goes to (fix spec §6.3). */
+.ports { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 0.9rem; }
+.port-row { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; }
+.port-name { min-width: 0; overflow-wrap: anywhere; }
+.port-name.port-main { font-weight: 700; }
+.port-rate { font-variant-numeric: tabular-nums; }
+.port-peers { flex-basis: 100%; padding-left: 22px; overflow-wrap: anywhere; }
+.port-short .port-rate, .port-warn { color: var(--error); }
+.also-made, .flow-panel .used-by { margin: 0; padding-left: 18px; font-size: 0.9rem; }
+.option-slot {
+  border: 1px solid var(--border); border-radius: 6px; margin: 0; padding: 6px 8px; display: flex; flex-direction: column; gap: 4px; min-width: 0;
+}
+.option-slot-title { font-size: 0.85rem; color: var(--muted); padding: 0 4px; }
+.option-why { margin: 0; }
+.option-choice { align-items: flex-start; }
+.option-choice input { margin-top: 4px; }
+.choice-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 
 /* Materials & steps (spec §3.10): the tree indents by depth, unlock texts are warnings, ticked rows are crossed out. */
 .materials { display: flex; flex-direction: column; gap: 22px; max-width: 1600px; }
@@ -351,9 +456,91 @@ span.mat-toggle { display: inline-block; }
 .mat-unlock {
   margin: 0; padding: 4px 8px; background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: 6px;
 }
+.mat-used-by { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.chip { padding: 1px 8px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); overflow-wrap: anywhere; }
+.mat-needed summary { cursor: pointer; }
+.mat-missing .tick-label { color: var(--error); font-weight: 600; }
+.missing-badge { color: var(--error); border-color: var(--error); background: var(--error-bg); }
 .step-list { margin: 0; padding-left: 24px; display: flex; flex-direction: column; gap: 4px; }
 .step-row { padding: 3px 0; }
 .step-row .tick-label { overflow-wrap: anywhere; }
+
+/* Connections (spec §3.8c, plan 11): a box per machine, chest, interface and hookup with a row per configured face,
+   and a link per flow. Boxes, face rows, the picked box and the panel follow the flow diagram's look. A link takes its
+   EnderIO channel's colour (its stroke attribute), else the colour of what carries it, the same as the map's
+   LOGISTICS_COLORS (src/client/map/overlays.ts); a hookup is dashed, like everything still to build to hook the line up. */
+:root { --conn-halo: rgb(0 0 0 / 0.55); }
+@media (prefers-color-scheme: dark) {
+  :root { --conn-halo: rgb(255 255 255 / 0.55); }
+}
+.conn-view { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
+.conn-view.has-panel { grid-template-columns: minmax(0, 1fr) minmax(260px, 340px); }
+.conn-main { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.conn-main > p { margin: 0; }
+.conn-toolbar > span { flex: 1 1 16em; }   /* the hint wraps beside Fit rather than below it */
+.connections {
+  overflow: hidden; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.connections > svg {
+  display: block; width: 100%; min-height: 240px; cursor: grab; touch-action: none; user-select: none; transition: opacity 0.2s;
+}
+/* a drag shows grabbing over the boxes and links too. A click focuses the area (for the arrow keys) without a ring, the
+   keyboard with one, inside it, as the box clips its outside. */
+.connections > svg.dragging, .connections > svg.dragging * { cursor: grabbing; }
+.connections > svg:focus { outline: none; }
+.connections > svg:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.connections[aria-busy='true'] > svg { opacity: 0.6; }
+.conn-node > rect, .conn-node > path { stroke-width: 1.5; fill: var(--flow-raw); stroke: var(--flow-raw-line); cursor: pointer; }
+.conn-node > path { fill: var(--surface); }
+.conn-machine > rect { fill: var(--flow-new); }
+.conn-machine > rect, .conn-machine > path { stroke: var(--flow-new-line); }
+.conn-chest > rect { fill: var(--flow-out); }
+.conn-chest > rect, .conn-chest > path { stroke: var(--flow-out-line); }
+.conn-hookup > rect, .conn-source > rect, .conn-sink > rect { fill: var(--surface); }
+.conn-hookup > rect, .conn-hookup > path { stroke-dasharray: 4 3; }
+.conn-node:hover > rect, .conn-node:hover > path, .conn-node.selected > rect, .conn-node.selected > path { stroke-width: 3; }
+/* only the face rows take clicks among a box's texts; a click anywhere else on the box picks the box */
+.conn-node text { fill: var(--text); font-size: 11.5px; pointer-events: none; }
+.conn-node .conn-title { font-size: 13px; font-weight: 600; }
+.conn-node .conn-line { fill: var(--muted); }
+.conn-node .conn-face { fill: var(--accent); cursor: pointer; pointer-events: auto; }
+.conn-node .conn-face:hover, .conn-node .conn-face.selected { text-decoration: underline; }
+.conn-node .conn-face.selected { font-weight: 600; }
+.conn-via-gt_pipe { --conn-link: #9ccc65; }
+.conn-via-fluid_pipe { --conn-link: #1e88e5; }
+.conn-via-routed { --conn-link: #ff7043; }
+.conn-via-ae2 { --conn-link: #7e57c2; }
+.conn-via-item_conduit, .conn-via-fluid_conduit { --conn-link: #26c6da; }
+.conn-via-attached, .conn-via-hookup { --conn-link: var(--flow-edge); }
+.conn-edge { cursor: pointer; }
+.conn-edge polyline { fill: none; stroke-width: 2.5; }
+.conn-edge polyline:not([stroke]) { stroke: var(--conn-link, var(--flow-edge)); }
+/* a channel can have the canvas's own colour (White on light, Black on dark), so channel lines get a thin halo */
+.conn-edge polyline[stroke] { filter: drop-shadow(0 0 1px var(--conn-halo)); }
+.conn-via-hookup polyline { stroke-dasharray: 6 4; }
+.conn-via-attached polyline { stroke-dasharray: 2 3; }
+.conn-edge:hover polyline, .conn-edge.selected polyline { stroke-width: 4; }
+.conn-arrow-head { fill: var(--flow-edge); }
+.conn-label {
+  fill: var(--text); font-size: 11px; paint-order: stroke; stroke: var(--surface); stroke-width: 3px; stroke-linejoin: round;
+}
+.conn-edge.selected .conn-label { font-weight: 600; }
+.conn-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 0.85rem; color: var(--muted); }
+.conn-legend li { display: inline-flex; align-items: center; gap: 6px; }
+.conn-swatch { width: 22px; border-top: 3px solid var(--conn-link, var(--flow-edge)); }
+.conn-swatch.conn-via-hookup { border-top-style: dashed; }
+.conn-panel {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 12px; position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto;
+}
+.conn-panel-head { display: flex; align-items: center; gap: 8px; }
+.conn-panel-head h3 { flex: 1; min-width: 0; margin: 0; font-size: 1rem; overflow-wrap: anywhere; }
+.conn-panel-lines { margin: 0; padding-left: 18px; font-size: 0.9rem; display: flex; flex-direction: column; gap: 4px; }
+.conn-panel-lines li { overflow-wrap: anywhere; }
+@media (max-width: 1100px) {
+  .conn-view.has-panel { grid-template-columns: minmax(0, 1fr); }
+  .conn-panel { position: static; max-height: none; }
+}
 
 @media (max-width: 1100px) {
   .flow.has-panel { grid-template-columns: minmax(0, 1fr); }

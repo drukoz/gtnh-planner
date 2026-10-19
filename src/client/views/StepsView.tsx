@@ -1,9 +1,17 @@
 // The build steps (spec §3.10): the plan's steps in order, each one a row anyone can cross off, showing who did it and
-// when. Plan 5 adds a link from a step to its map pin.
+// when. A step with a map pin links to it: the link focuses the pin and opens the Map tab, which centres on it.
 
 import type { ReactElement } from 'react';
 import { Tick } from '../components/Tick.tsx';
+import { focusPin } from '../state/pin-focus.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
+
+const PIN_LINK_STYLE = { padding: '2px 10px', fontSize: '0.85rem' } as const;
+
+function showPin(n: number): void {
+  focusPin(n);
+  location.hash = '#map';
+}
 
 export function StepsView(props: ProjectViewProps): ReactElement {
   const { project, plan, send } = props;
@@ -17,9 +25,14 @@ export function StepsView(props: ProjectViewProps): ReactElement {
         <ol className="step-list">
           {steps.map((step) => {
             const row = `step:${step.id}`;
+            const { pin } = step;
             return (
               <li key={step.id} className="step-row">
-                <Tick row={row} mark={project.marks[row]} label={step.text} onToggle={(on) => send([{ op: 'mark', row, on }])} />
+                <Tick row={row} mark={project.marks[row]} label={step.text} onToggle={(on) => send([{ op: 'mark', row, on }])}>
+                  {pin !== undefined && (
+                    <button type="button" className="pin-link" data-pin={pin} style={PIN_LINK_STYLE} onClick={() => showPin(pin)}>{`pin ${pin}`}</button>
+                  )}
+                </Tick>
               </li>
             );
           })}

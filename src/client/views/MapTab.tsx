@@ -1,18 +1,24 @@
 // The Map tab (spec §3.7, §3.4): without a world, a picker of finished scans and their bases; with one, the map of
 // the project's base with what the scan found drawn over it (five overlays, each switched on or off per viewer), the
 // "Found in world" panel beside it, and numbered note pins anyone can add by clicking the map. Choosing a scan or a
-// base sends the `world` op, so the planner counts what that base already has. Plan 5 adds its own overlays and
-// markers to the arrays built here.
+// base sends the `world` op (and clears a placement dragged at another base), so the planner counts what that base
+// already has. Plan 5 adds the new line: its layout drawn over the map with its numbered pins next to the note pins
+// (notes show N1, N2, …), and the "New line" panel above the Found panel (and under the picker), whose buttons move the
+// line by dragging, turn it or re-place it. A focused layout pin (a build step's pin link, a row of the panel or a pin
+// marker) centres the map on it.
 
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactElement, type ReactNode } from 'react';
 import { MAX_NOTE_LENGTH } from '../../shared/project/apply-op.ts';
 import type { WorldScanListItem } from '../../shared/types/api.ts';
-import type { Note, Project } from '../../shared/types/project.ts';
+import type { Plan, PlanFlow } from '../../shared/types/plan.ts';
+import type { Note, Project, ProjectOp } from '../../shared/types/project.ts';
 import { findBase, type WorldScan, type WorldSource } from '../../shared/types/world.ts';
 import { messageOf } from '../api/client.ts';
 import { localTime } from '../format.ts';
 import { worldApi } from '../map/api.ts';
 import { FoundPanel } from '../map/FoundPanel.tsx';
+import { combinedMarkers, layoutOverlay, rotatedPlacement, type Drag } from '../map/layout-overlay.ts';
+import { LinePanel } from '../map/LinePanel.tsx';
 import {
   baseOutlineOverlay, cablesOverlay, logisticsOverlay, machinesOverlay, noteClickOverlay, noteMarkers, numberedPins, storageOverlay,
 } from '../map/overlays.ts';
@@ -20,10 +26,17 @@ import { summarize } from '../map/summary.ts';
 import { tileCache } from '../map/tile-cache.ts';
 import type { MapMarker, MapOverlay, MapViewport } from '../map/types.ts';
 import { followLink } from '../router.ts';
+import { focusPin, usePinFocus } from '../state/pin-focus.ts';
+import { useLayout, type LayoutState } from '../state/use-layout.ts';
 import { MapView } from './MapView.tsx';
 import type { ProjectViewProps } from './project-tabs.ts';
 
 type Send = ProjectViewProps['send'];
+/** The new line for the map: the plan (its flows and numbers), its layout and the layout pin the viewer asked to see. */
+interface LineProps { plan: Plan | null; line: LayoutState; focusedPin: number | null }
+
+const NO_FLOWS: readonly PlanFlow[] = [];
+const noop = (): void => {};
 
 /** Which overlays this viewer shows, kept in this browser only. */
 export const OVERLAYS_STORAGE_KEY = 'gtnh-planner:map-overlays';
@@ -36,7 +49,9 @@ type OverlayChoice = Record<OverlayId, boolean>;
 const ALL_OVERLAYS: OverlayChoice = { machines: true, cables: true, logistics: true, storage: true, outline: true };
 // The panel sits beside the map while both fit, and below it on a narrow screen.
 const MAP_STYLE = { flex: '3 1 420px', minWidth: 0, height: 'min(72vh, 760px)', minHeight: 420 } as const;
-const PANEL_STYLE = { flex: '1 1 300px', maxWidth: 400, maxHeight: 'min(72vh, 760px)', overflowY: 'auto', paddingRight: 4 } as const;
+const PANEL_STYLE = {
+  flex: '1 1 300px', maxWidth: 400, maxHeight: 'min(72vh, 760px)', overflowY: 'auto', paddingRight: 4, display: 'flex', flexDirection: 'column', gap: 14,
+} as const;
 
 function loadOverlayChoice(): OverlayChoice {
   const choice = { ...ALL_OVERLAYS };
@@ -74,6 +89,15 @@ function newNoteId(): string {
   b[8] = (b[8]! & 0x3f) | 0x80;
   const hex = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+/**
+ * The ops that point the project at a scan and base. A dragged placement belongs to its base, so moving to another base
+ * (or to none) clears it; otherwise the old coordinates would be reused at the new base or in its dimension.
+ */
+export function worldOps(project: { placement: Project['placement']; world: Project['world'] }, scanId: string | null, baseId: string | null): ProjectOp[] {
+  const keep = project.placement === null || baseId === project.world.baseId;
+  return [{ op: 'world', scanId, baseId }, ...(keep ? [] : [{ op: 'clearPlacement' } as const])];
 }
 
 /** Where a scan's world came from, in words (also the World page's scan list). */
@@ -183,8 +207,8 @@ function WorldLink(): ReactElement {
 }
 
 /** No world yet: pick a finished scan, then one of its bases. */
-function WorldPicker(props: { scans: WorldScanListItem[] | null; scansError: string | null; send: Send }): ReactElement {
-  const { scans, scansError, send } = props;
+function WorldPicker(props: { project: Project; scans: WorldScanListItem[] | null; scansError: string | null; send: Send }): ReactElement {
+  const { project, scans, scansError, send } = props;
   const [scanId, setScanId] = useState('');
   const [baseId, setBaseId] = useState('');
   const picked = useScan(scanId === '' ? null : scanId);
@@ -220,7 +244,7 @@ function WorldPicker(props: { scans: WorldScanListItem[] | null; scansError: str
           type="button"
           className="primary"
           disabled={picked.scan === null}
-          onClick={() => send([{ op: 'world', scanId, baseId: base?.id ?? null }])}
+          onClick={() => send(worldOps(project, scanId, base?.id ?? null))}
         >
           {picked.scan !== null && base === null ? 'Use this scan' : 'Use this base'}
         </button>
@@ -260,11 +284,12 @@ function NoteDialog(props: { pin: Pick; onSave(text: string): void; onCancel(): 
   );
 }
 
-/** A place the viewer asked to see (a note or a storage block), for one scan and base. */
+/** A place the viewer asked to see (a note, a storage block or a layout pin), for one scan and base. */
 interface Spot { key: string; dim: number; x: number; z: number }
 
-function ScanMap(props: { project: Project; scan: WorldScan; scans: WorldScanListItem[] | null; send: Send }): ReactElement {
-  const { project, scan, scans, send } = props;
+function ScanMap(props: { project: Project; scan: WorldScan; scans: WorldScanListItem[] | null; send: Send } & LineProps): ReactElement {
+  const { project, scan, scans, send, plan, line, focusedPin } = props;
+  const { layout } = line;
   const { baseId } = project.world;
   const logistics = project.settings.logistics;
   const base = findBase(scan, baseId);
@@ -274,7 +299,10 @@ function ScanMap(props: { project: Project; scan: WorldScan; scans: WorldScanLis
   const [spot, setSpot] = useState<Spot | null>(null);
   const [focusedNote, setFocusedNote] = useState<number | null>(null);
   const [pick, setPick] = useState<Pick | null>(null);
+  const [moving, setMoving] = useState(false);
+  const [drag, setDrag] = useState<Drag | null>(null);
   const lastView = useRef<MapViewport | null>(null);
+  const sentPin = useRef<number | null>(null);
 
   const spotKey = `${scan.id}|${base?.id ?? ''}`;
   const shown = spot !== null && spot.key === spotKey ? spot : null;   // another scan or base starts at its centre again
@@ -282,6 +310,42 @@ function ScanMap(props: { project: Project; scan: WorldScan; scans: WorldScanLis
   const focus: [number, number] | undefined = shown !== null
     ? [shown.x + 0.5, shown.z + 0.5]
     : base !== null ? [base.center[0] + 0.5, base.center[2] + 0.5] : undefined;   // the middle of a block, not its edge
+
+  // A focused layout pin sends the view to it once: when it is focused, or when the layout holding it arrives (a build
+  // step's pin link focuses it before this tab has its layout). A newer layout that moves the pin leaves the view be.
+  useEffect(() => {
+    if (focusedPin === null) {
+      sentPin.current = null;
+      return;
+    }
+    if (sentPin.current === focusedPin || layout === null || layout.status === 'no-world') return;
+    const pin = layout.pins.find((p) => p.n === focusedPin);
+    if (pin === undefined) return;
+    sentPin.current = focusedPin;
+    setSpot({ key: spotKey, dim: pin.dim, x: pin.pos[0], z: pin.pos[2] });
+  }, [focusedPin, layout, spotKey]);
+
+  // The new line on this map: only a line placed in the world (one without a base sits at a default origin), and only
+  // in the dimension the map shows (ruling R13 c).
+  const placedLine = layout !== null && layout.status !== 'no-world' && layout.dim === dim ? layout : null;
+  const { placement } = project;
+  // While moving, the drag. Otherwise a placement the layout has not caught up with yet (this tab's drop, or someone
+  // else's move) is drawn where the line is going — the server keeps a placement's x and z — so it never jumps back.
+  const shownDrag = useMemo((): Drag | null => {
+    if (moving) return drag;
+    if (placedLine === null || placement === null || placement.rotation !== placedLine.rotation) return null;
+    const [x, , z] = placement.origin, [ox, , oz] = placedLine.origin;
+    return x === ox && z === oz ? null : { from: { x: ox, z: oz }, to: { x, z } };
+  }, [moving, drag, placedLine, placement]);
+  const flows = plan?.flows ?? NO_FLOWS;
+  const lineOverlay = useMemo(() => (placedLine === null ? null : layoutOverlay(placedLine, {
+    moving, drag: shownDrag, flows, onDrag: setDrag,
+    onDrop: (origin) => {
+      if (origin[0] === placedLine.origin[0] && origin[2] === placedLine.origin[2]) return;   // a click on the line: nothing moved
+      send([{ op: 'placement', origin, rotation: placedLine.rotation }]);
+      setMoving(false);
+    },
+  })), [placedLine, moving, shownDrag, flows, send]);
 
   const found = useMemo(
     () => ({ machines: machinesOverlay(scan), cables: cablesOverlay(scan), logistics: logisticsOverlay(scan), storage: storageOverlay(scan) }),
@@ -304,21 +368,36 @@ function ScanMap(props: { project: Project; scan: WorldScan; scans: WorldScanLis
       const overlay = id === 'outline' ? outline : found[id];
       if (choice[id] && overlay !== null) list.push(overlay);
     }
-    list.push(noteClick);   // last: it sees a click first
+    list.push(noteClick);   // after what was found: it sees a click before them
+    if (lineOverlay !== null) list.push(lineOverlay);   // last: drawn on top, and in move mode a drag on the line is its own
     return list;
-  }, [choice, found, outline, noteClick]);
-  const markers: MapMarker[] = useMemo(() => noteMarkers(project.notes, dim), [project.notes, dim]);
+  }, [choice, found, outline, noteClick, lineOverlay]);
+  const markers: MapMarker[] = useMemo(() => combinedMarkers(noteMarkers(project.notes, dim), placedLine), [project.notes, dim, placedLine]);
 
   const toggle = (id: OverlayId, on: boolean): void => {
     const next = { ...choice, [id]: on };
     setChoice(next);
     saveOverlayChoice(next);
   };
+  /** The view goes somewhere else than a layout pin: that pin is no longer focused, so focusing it again centres on it. */
+  const showSpot = (next: Spot | null): void => {
+    focusPin(null);
+    setSpot(next);
+  };
   const focusNote = (n: number): void => {
     const pinned = numberedPins(project.notes).find((p) => p.n === n);
     if (pinned === undefined) return;
     setFocusedNote(n);
-    setSpot({ key: spotKey, dim: pinned.note.pin.dim, x: pinned.note.pin.x, z: pinned.note.pin.z });
+    showSpot({ key: spotKey, dim: pinned.note.pin.dim, x: pinned.note.pin.x, z: pinned.note.pin.z });
+  };
+  // A note marker (drawn N<n>) is highlighted in the Found panel; a layout pin marker is focused (ruling R13 d).
+  const clickMarker = (m: MapMarker): void => {
+    if (m.text !== undefined) setFocusedNote(m.n ?? null);
+    else if (m.n !== undefined) focusPin(m.n);
+  };
+  const toggleMove = (): void => {
+    setMoving(!moving);
+    setDrag(null);
   };
   const saveNote = (text: string): void => {
     if (pick === null) return;
@@ -335,9 +414,9 @@ function ScanMap(props: { project: Project; scan: WorldScan; scans: WorldScanLis
           value={scan.id}
           current={{ id: scan.id, label: `${scan.levelName} · ${sourceText(scan.source)} · ${localTime(scan.scannedAt)}` }}
           emptyLabel="None: plan without the world"
-          onChange={(id) => send([{ op: 'world', scanId: id === '' ? null : id, baseId: id === '' ? null : baseId }])}
+          onChange={(id) => send(worldOps(project, id === '' ? null : id, id === '' ? null : baseId))}
         />
-        <SelectField label="Base" value={base?.id ?? ''} onChange={(id) => send([{ op: 'world', scanId: scan.id, baseId: id === '' ? null : id }])}>
+        <SelectField label="Base" value={base?.id ?? ''} onChange={(id) => send(worldOps(project, scan.id, id === '' ? null : id))}>
           {base === null && <option value="">{scan.bases.length === 0 ? 'No bases found' : 'Choose a base…'}</option>}
           {scan.bases.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
         </SelectField>
@@ -350,22 +429,41 @@ function ScanMap(props: { project: Project; scan: WorldScan; scans: WorldScanLis
             </label>
           ))}
         </fieldset>
-        {shown !== null && base !== null && <button type="button" className="small" onClick={() => setSpot(null)}>Back to the base</button>}
+        {shown !== null && base !== null && <button type="button" className="small" onClick={() => showSpot(null)}>Back to the base</button>}
         <WorldLink />
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'stretch' }}>
         <div style={MAP_STYLE}>
-          <MapView scanId={scan.id} dim={dim} focus={focus} overlays={overlays} markers={markers} onMarkerClick={(m) => setFocusedNote(m.n ?? null)} />
+          <MapView scanId={scan.id} scan={scan} dim={dim} focus={focus} overlays={overlays} markers={markers} onMarkerClick={clickMarker} />
         </div>
-        <aside aria-label="Found in world" style={PANEL_STYLE}>
-          <FoundPanel
-            summary={summary}
-            notes={project.notes}
-            onFocusNote={focusNote}
-            focusedNote={focusedNote}
-            onShowOnMap={(pos) => setSpot({ key: spotKey, dim: base?.dim ?? dim, x: pos[0], z: pos[2] })}
-          />
-        </aside>
+        {/* the new line first: its summary and buttons stay in reach above a long list of what the scan found (spec §3.7) */}
+        <div style={PANEL_STYLE}>
+          <aside aria-label="New line">
+            <LinePanel
+              layout={layout}
+              plan={plan}
+              loading={line.loading}
+              error={line.error}
+              moving={moving}
+              onToggleMove={toggleMove}
+              onRotate={() => {
+                if (layout !== null) send([{ op: 'placement', ...rotatedPlacement(layout) }]);
+              }}
+              onAutoPlace={() => send([{ op: 'clearPlacement' }])}
+              onPin={focusPin}
+              focusedPin={focusedPin}
+            />
+          </aside>
+          <aside aria-label="Found in world" style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+            <FoundPanel
+              summary={summary}
+              notes={project.notes}
+              onFocusNote={focusNote}
+              focusedNote={focusedNote}
+              onShowOnMap={(pos) => showSpot({ key: spotKey, dim: base?.dim ?? dim, x: pos[0], z: pos[2] })}
+            />
+          </aside>
+        </div>
       </div>
       {pick !== null && <NoteDialog pin={pick} onSave={saveNote} onCancel={() => setPick(null)} />}
     </div>
@@ -373,10 +471,12 @@ function ScanMap(props: { project: Project; scan: WorldScan; scans: WorldScanLis
 }
 
 /** The project's world scan, loaded; while it loads or when it cannot be loaded, the scan can still be changed. */
-function ProjectMap(props: { project: Project; scanId: string; scans: WorldScanListItem[] | null; send: Send }): ReactElement {
-  const { project, scanId, scans, send } = props;
+function ProjectMap(props: { project: Project; scanId: string; scans: WorldScanListItem[] | null; send: Send } & LineProps): ReactElement {
+  const { project, scanId, scans, send, plan, line, focusedPin } = props;
   const loaded = useScan(scanId);
-  if (loaded.scan !== null) return <ScanMap project={project} scan={loaded.scan} scans={scans} send={send} />;
+  if (loaded.scan !== null) {
+    return <ScanMap project={project} scan={loaded.scan} scans={scans} send={send} plan={plan} line={line} focusedPin={focusedPin} />;
+  }
   return (
     <div className="map-tab" style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 560 }}>
       {loaded.error === null ? <p className="muted">Loading the world scan…</p> : <p className="error">{`Could not load the world scan: ${loaded.error}`}</p>}
@@ -387,7 +487,7 @@ function ProjectMap(props: { project: Project; scanId: string; scans: WorldScanL
             value={scanId}
             current={{ id: scanId, label: scanId }}
             emptyLabel="None: plan without the world"
-            onChange={(id) => send([{ op: 'world', scanId: id === '' ? null : id, baseId: id === '' ? null : project.world.baseId }])}
+            onChange={(id) => send(worldOps(project, id === '' ? null : id, id === '' ? null : project.world.baseId))}
           />
           <WorldLink />
         </>
@@ -397,9 +497,34 @@ function ProjectMap(props: { project: Project; scanId: string; scans: WorldScanL
 }
 
 export function MapTab(props: ProjectViewProps): ReactElement {
-  const { project, send } = props;
+  const { project, plan, send } = props;
   const { scans, error } = useDoneScans();
+  const line = useLayout(project.id, plan, project);
+  const focusedPin = usePinFocus();
   const { scanId } = project.world;
-  if (scanId === null) return <WorldPicker scans={scans} scansError={error} send={send} />;
-  return <ProjectMap project={project} scanId={scanId} scans={scans} send={send} />;
+  if (scanId === null) {
+    // No map to drag the line on; the panel says to pick a scan (Review Focus 1).
+    return (
+      <>
+        <WorldPicker project={project} scans={scans} scansError={error} send={send} />
+        <div style={{ maxWidth: 560 }}>
+          <LinePanel
+            layout={line.layout}
+            plan={plan}
+            loading={line.loading}
+            error={line.error}
+            moving={false}
+            onToggleMove={noop}
+            onRotate={() => {
+              if (line.layout !== null) send([{ op: 'placement', ...rotatedPlacement(line.layout) }]);
+            }}
+            onAutoPlace={() => send([{ op: 'clearPlacement' }])}
+            onPin={focusPin}
+            focusedPin={focusedPin}
+          />
+        </div>
+      </>
+    );
+  }
+  return <ProjectMap project={project} scanId={scanId} scans={scans} send={send} plan={plan} line={line} focusedPin={focusedPin} />;
 }

@@ -62,8 +62,8 @@ function askName(key: StuffKey): void {
   );
 }
 
-/** The pack names known so far; asks for the names of `keys` it does not have yet. */
-function useItemNames(keys: readonly StuffKey[]): ReadonlyMap<StuffKey, string> {
+/** The pack names known so far; asks for the names of `keys` it does not have yet (also the map's hover tooltip). */
+export function useItemNames(keys: readonly StuffKey[]): ReadonlyMap<StuffKey, string> {
   useSyncExternalStore(subscribeNames, namesSnapshot, namesSnapshot);
   const wanted = keys.join('\n');
   useEffect(() => {
@@ -160,7 +160,7 @@ function ItemRow(props: { item: FoundSummary['storage']['items'][number]; name: 
       <details>
         <summary style={{ cursor: 'pointer' }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, verticalAlign: 'middle' }}>
-            <ItemIcon itemKey={item.key} size={ICON_SIZE} />
+            <ItemIcon itemKey={item.key} size={ICON_SIZE} name={name} />
             <span style={{ overflowWrap: 'anywhere' }}>{name}</span>
           </span>
           {` · ${int(item.total)} · `}
@@ -253,7 +253,8 @@ function Notes(props: { notes: readonly Note[]; focusedNote: number | null; onFo
               style={{ width: '100%', textAlign: 'left', ...(n === focusedNote ? { borderColor: 'var(--accent)', background: 'var(--surface-2)' } : {}) }}
               onClick={() => onFocusNote(n)}
             >
-              <span className="badge">{n}</span>
+              {/* N<n>, as the map draws note pins: a plain number is a layout pin (a build step's "pin 1") */}
+              <span className="badge">{`N${n}`}</span>
               {` ${note.text} `}
               <span className="muted">{`at ${note.pin.x} ${note.pin.y} ${note.pin.z} (${dimLabel(note.pin.dim)})`}</span>
             </button>

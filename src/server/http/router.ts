@@ -6,7 +6,10 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 export interface RequestContext {
   /** Display name from the X-Planner-Name header, URI-decoded and trimmed; null when absent or empty. */
   me: string | null;
+  /** The session cookie is valid, or a project token let the request into a `bearer` route (then `bearer` is set). */
   authed: boolean;
+  /** Set when a project token, not the session cookie, let the request in (architecture §11.23). */
+  bearer?: { projectId: string; tokenId: string };
 }
 
 export type Handler = (req: IncomingMessage, res: ServerResponse, params: Record<string, string>, ctx: RequestContext) => Promise<void>;
@@ -18,7 +21,15 @@ export interface Route {
   handler: Handler;
   /** Reachable without the session cookie. */
   public?: boolean;
+  /** Also accept a project token for params.id (`Authorization: Bearer <token>`) instead of the session cookie. */
+  bearer?: boolean;
 }
+
+/**
+ * The id of `token` when it is a live token of project `projectId`, else null. Registered as `app.services.verifyToken`
+ * (Plan 6's projector routes set it); the server reads it on every request, so a test may replace it after start.
+ */
+export type TokenVerifier = (token: string, projectId: string) => { tokenId: string } | null;
 
 /** Thrown by handlers (and the router) to answer with `status` and the body `{ error: code, message }`. */
 export class HttpError extends Error {

@@ -7,7 +7,10 @@ import type { Db, ProjectRow } from '../db/db.ts';
 import type { PlanSettings } from '../../shared/types/plan.ts';
 import type { Project, ProjectOp } from '../../shared/types/project.ts';
 import type { StuffKey } from '../../shared/keys.ts';
-import { applyOp, defaultSettings, normalizeSettings, validateOp } from '../../shared/project/apply-op.ts';
+import { applyOp, defaultSettings, normalizeSettings, SETTINGS_VERSION, validateOp } from '../../shared/project/apply-op.ts';
+
+/** Who the changes the planner makes on its own are recorded as (`migrateSettings`). */
+export const PLANNER_UPDATE = 'Planner update';
 
 export interface ProjectSummary { id: string; name: string; rev: number; target: StuffKey | null; updatedAt: string }
 export interface DeletedSummary extends ProjectSummary { deletedAt: string; deletedBy: string }
@@ -75,6 +78,25 @@ export class ProjectStore {
       for (const a of applied) this.#db.appendOp(id, a.rev, JSON.stringify(a.op), by, at);
       this.#db.updateProject({ id, name: project.name, rev: project.rev, state: JSON.stringify(project), createdAt: row.createdAt, updatedAt: at });
       return { project, applied };
+    });
+  }
+
+  /**
+   * Brings every live project whose settings predate `SETTINGS_VERSION` to it, as `by` (architecture §11.32, the user's
+   * answer to fix spec §10 question 2): one recorded settings op `{ routeDerived: true, settingsVersion: 2 }` each, so
+   * projects stored while buying derived materials was the default plan supporting lines, as new ones do. A project at
+   * the current version is never touched, so a later deliberate `routeDerived: false` sticks; running it again changes
+   * nothing. A deleted project waits until it is restored and the next run. Returns the ids it changed, in list order.
+   */
+  migrateSettings(by: string): string[] {
+    return this.#db.tx(() => {
+      const changed: string[] = [];
+      for (const row of this.#db.listProjects()) {
+        if ((this.#parse(row.state).settings.settingsVersion ?? 0) >= SETTINGS_VERSION) continue;
+        this.apply(row.id, [{ op: 'settings', patch: { routeDerived: true, settingsVersion: SETTINGS_VERSION } }], by);
+        changed.push(row.id);
+      }
+      return changed;
     });
   }
 

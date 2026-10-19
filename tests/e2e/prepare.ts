@@ -16,6 +16,7 @@ import { FLUID_SLOT_BASE, META_RENAMES, VANILLA_FURNACE_TICKS } from '../../src/
 import { CAPABILITY_MIN_TIER, TIER_DEFAULTS, UNKNOWN_DIM_TIER, dimKey } from '../../src/server/pack/worldgen.ts';
 import { isFluidKey, parseItemKey, type ItemKey, type StuffKey } from '../../src/shared/keys.ts';
 import type { Pack, Product, Recipe, RecipeMapInfo } from '../../src/shared/types/pack.ts';
+import { withLineParts } from '../helpers/line-parts-export.ts';
 import { makeExport, type ExportSpec } from '../helpers/make-export.ts';
 import { MINI_GT } from '../helpers/mini-gt.ts';
 import { packFromSpec, type PackSpec } from '../helpers/pack-spec.ts';
@@ -291,11 +292,11 @@ function worldgenLines(pack: Pack): WorldgenFiles {
   };
 }
 
-/** Removes and recreates data/e2e: the Mini-GT export `e2e` and the config the e2e server starts with. */
+/** Removes and recreates data/e2e: the Mini-GT export `e2e` with the line parts, and the config the e2e server starts with. */
 async function main(): Promise<void> {
   await rm('data/e2e', { recursive: true, force: true });
   await mkdir('data/e2e', { recursive: true });
-  await makeExport('data/e2e/export/e2e', toExportSpec(MINI_GT));
+  await makeExport('data/e2e/export/e2e', withLineParts(toExportSpec(MINI_GT)));
   saveConfig({
     port: 18787, host: '127.0.0.1', dataDir: 'data/e2e', serverFolder: null, activeExportId: 'e2e',
     passwordHash: hashPassword(E2E_PASSWORD), sessionSecret: newSessionSecret(),

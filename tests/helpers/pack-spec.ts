@@ -1,7 +1,8 @@
 // A synchronous, in-memory `Pack` for the planner tests (Plan 2). Not Plan 1's async `makePack(spec: ExportSpec)` in
 // make-pack.ts (architecture §11.18): this one skips the export format and fills the Pack directly, with the loader's
-// conventions (§11.4) as defaults. Only declared maps and machines exist (no pseudo maps or machines); keys that recipes
-// use without declaring them become items, or fluids for `fluid:` keys, named after their key.
+// conventions (§11.4) as defaults. Only declared maps and machines exist (no pseudo maps or machines), except that the
+// loader's supply recipes are derived as it does (fix spec R2: a pump machine brings the pseudo map `pump`); keys that
+// recipes use without declaring them become items, or fluids for `fluid:` keys, named after their key.
 
 import { V } from '../../src/shared/gt/tiers.ts';
 import { isFluidKey, parseItemKey, type FluidKey, type ItemKey, type StuffKey } from '../../src/shared/keys.ts';
@@ -11,8 +12,13 @@ import type {
 } from '../../src/shared/types/pack.ts';
 import { buildIndices, buildMachinesByMap } from '../../src/server/pack/indices.ts';
 import { PSEUDO_MAPS } from '../../src/server/pack/load.ts';
+import { deriveSupply } from '../../src/server/pack/supply.ts';
 
-export interface PackSpec { exportId?: string; items?: ItemSpec[]; fluids?: FluidSpec[]; maps?: MapSpec[]; machines?: MachineSpec[]; recipes?: RecipeSpec[]; materials?: string[]; worldgen?: Partial<Worldgen> }
+export interface PackSpec {
+  exportId?: string; items?: ItemSpec[]; fluids?: FluidSpec[]; maps?: MapSpec[]; machines?: MachineSpec[]; recipes?: RecipeSpec[]; materials?: string[]; worldgen?: Partial<Worldgen>;
+  /** Filled containers and the fluid each holds (`Pack.fluidContainers`), copied into the pack; their keys become items. */
+  fluidContainers?: Pack['fluidContainers'];
+}
 export interface ItemSpec { key: ItemKey; name?: string; oreDict?: string[]; gt?: { prefix: string; material: string; amount?: number /* M units, default 3628800 */ } }
 export interface FluidSpec { key: FluidKey; name?: string; gas?: boolean }
 export interface MapSpec { id: string; name?: string; amps?: number; specialValue?: RecipeMapInfo['specialValue'] }
@@ -124,6 +130,26 @@ function addOnce<K, T>(map: Map<K, T>, key: K, value: T, what: string): void {
   map.set(key, value);
 }
 
+/**
+ * The loader's supply recipes (load.ts `addDerivedRecipes`, fix spec R2), added the same way: the derived recipes join
+ * `recipes` (one the spec already has by id is not added again), a pump machine gets the pseudo map `pump`, and the
+ * compressor recipes are marked `meta.supply` with their ids unchanged (ruling P20).
+ */
+function addSupply(recipes: Recipe[], machines: Map<number, Machine>, maps: Map<string, RecipeMapInfo>, fluidContainers: NonNullable<Pack['fluidContainers']>): void {
+  const supply = deriveSupply({ recipes, machines, maps, fluidContainers });
+  const flagged = new Set(supply.flagged);
+  for (const r of recipes) if (flagged.has(r.id)) r.meta.supply = 'compressor';
+  const ids = new Set(recipes.map((r) => r.id));
+  for (const r of supply.recipes) if (!ids.has(r.id)) recipes.push(r);
+  if (supply.pumpMap === null) return;
+  const map = supply.pumpMap.id;
+  maps.set(map, supply.pumpMap);
+  for (const id of supply.pumpMachines) {
+    const machine = machines.get(id);
+    if (machine !== undefined && !machine.maps.includes(map)) machine.maps.push(map);
+  }
+}
+
 export function packFromSpec(spec: PackSpec): Pack {
   const exportId = spec.exportId ?? 'test';
   const manifest: PackManifest = {
@@ -137,6 +163,17 @@ export function packFromSpec(spec: PackSpec): Pack {
   for (const s of spec.fluids ?? []) addOnce(fluids, s.key, fluidFor(s.key, s), 'fluid');
 
   const recipes = (spec.recipes ?? []).map(recipeFrom);
+  const fluidContainers = (spec.fluidContainers ?? []).map((c) => ({ ...c }));
+  for (const c of fluidContainers) {
+    for (const key of c.empty === null ? [c.container] : [c.container, c.empty]) if (!items.has(key)) items.set(key, itemFor(key));
+    if (!fluids.has(c.fluid)) fluids.set(c.fluid, fluidFor(c.fluid));
+  }
+  const maps = new Map<string, RecipeMapInfo>();
+  for (const s of spec.maps ?? []) addOnce(maps, s.id, mapFrom(s), 'map');
+  const machines = new Map<number, Machine>();
+  for (const s of spec.machines ?? []) addOnce(machines, s.mteId, machineFrom(s), 'machine');
+  addSupply(recipes, machines, maps, fluidContainers);
+
   const recipeById = new Map<string, Recipe>();
   for (const r of recipes) {
     addOnce(recipeById, r.id, r, 'recipe');
@@ -159,11 +196,6 @@ export function packFromSpec(spec: PackSpec): Pack {
     }
   }
 
-  const maps = new Map<string, RecipeMapInfo>();
-  for (const s of spec.maps ?? []) addOnce(maps, s.id, mapFrom(s), 'map');
-  const machines = new Map<number, Machine>();
-  for (const s of spec.machines ?? []) addOnce(machines, s.mteId, machineFrom(s), 'machine');
-
   const worldgen: Worldgen = { ...defaultWorldgen(), ...spec.worldgen };
   const materials = new Map<string, GtMaterial>();
   const materialNames = [...(spec.materials ?? []), ...[...items.values()].flatMap((item) => (item.gt ? [item.gt.material] : []))];
@@ -173,9 +205,11 @@ export function packFromSpec(spec: PackSpec): Pack {
   }
 
   const { producers, consumers } = buildIndices(recipes);
-  return {
+  const pack: Pack = {
     manifest, items, fluids, oreDict, maps, recipes, recipeById, producers, consumers,
     machines, machinesByMap: buildMachinesByMap(machines), materials, worldgen,
     nameOf: (key) => items.get(key)?.name ?? fluids.get(key)?.name ?? key,
   };
+  if (spec.fluidContainers !== undefined) pack.fluidContainers = fluidContainers;
+  return pack;
 }

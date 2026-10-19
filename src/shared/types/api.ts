@@ -19,12 +19,23 @@ export interface PackInfo {
   // optional addition
   /** The material names an avoid entry can be, with their display names, sorted by display name (§11.25). */
   materials?: Array<{ name: string; label: string }>;
+  // optional addition
+  /**
+   * The machines the "Machines we have" list can name (plan 09 ruling P21): those a plan can put on a step (a singleblock
+   * or a multiblock running a recipe map), sorted by name, then tier, then mteId. `tier` is absent for a multiblock,
+   * which has none of its own (it runs at its energy hatch's).
+   */
+  machines?: Array<{ mteId: number; name: string; tier?: number }>;
 }
 
 /** One recipe as the item browser shows it; an ingredient with alternatives shows its first option. */
 export interface RecipeSummary {
   id: string; source: RecipeSource; maps: string[]; machineName: string; tier: number; euPerTick: number; durationTicks: number;
-  inputs: Array<{ key: StuffKey; name: string; amount: number; consumed: boolean }>;
+  inputs: Array<{
+    key: StuffKey; name: string; amount: number; consumed: boolean;
+    // optional addition (plan 09 controller rulings): every option of an ore-dictionary slot, the first one included
+    options?: Array<{ key: StuffKey; name: string; amount: number }>;
+  }>;
   outputs: Array<{ key: StuffKey; name: string; amount: number; chance: number }>;
   /** From `flags.fake`: display only, the machine runs its own code. */
   fake?: boolean;
@@ -46,7 +57,7 @@ export interface OpEvent { rev: number; op: ProjectOp; by: string; at: string }
 export interface PlanEvent { rev: number }
 
 // Plan 4: the /api/world bodies live in world-api.ts (ruling R2).
-export type { WorldSourcesResponse, StartScanRequest, StartScanResponse, WorldScanListItem, CreateUploadResponse } from './world-api.ts';
+export type { WorldSourcesResponse, StartScanRequest, StartScanResponse, WorldScanListItem, CreateUploadResponse, PaletteName } from './world-api.ts';
 
 // --- assets (Plan 3; architecture §6.5, §11.17) ---
 

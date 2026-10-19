@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { MapTab, NO_BASES_TEXT } from '../../src/client/views/MapTab.tsx';
+import { MapTab, NO_BASES_TEXT, worldOps } from '../../src/client/views/MapTab.tsx';
 import { PROJECT_TABS, tabFromHash } from '../../src/client/views/project-tabs.ts';
 import { defaultSettings } from '../../src/shared/project/apply-op.ts';
 import type { Project } from '../../src/shared/types/project.ts';
@@ -44,5 +44,16 @@ describe('MapTab (server-side render only: effects do not run)', () => {
     expect(tabFromHash('#flow')).toBe('flow');
     const ids = PROJECT_TABS.map((t) => t.id);   // relative order only: Plan 5 inserts 3d after map
     expect(ids.filter((id) => id === 'flow' || id === 'materials' || id === 'notes')).toEqual(['flow', 'materials', 'notes']);
+  });
+});
+
+// Final review: a placement belongs to its base, so another base (or none) clears it.
+describe('MapTab world ops', () => {
+  it('clears a dragged placement when the base changes, and only then', () => {
+    const placed = { ...projectWithWorld('S1', '0:0:0'), placement: { origin: [1, 64, 1] as [number, number, number], rotation: 0 as const } };
+    expect(worldOps(placed, 'S1', '0:1:1')).toEqual([{ op: 'world', scanId: 'S1', baseId: '0:1:1' }, { op: 'clearPlacement' }]);
+    expect(worldOps(placed, null, null)).toEqual([{ op: 'world', scanId: null, baseId: null }, { op: 'clearPlacement' }]);
+    expect(worldOps(placed, 'S2', '0:0:0')).toEqual([{ op: 'world', scanId: 'S2', baseId: '0:0:0' }]);   // a rescan of the same base keeps it
+    expect(worldOps(projectWithWorld('S1', '0:0:0'), 'S1', '0:1:1')).toEqual([{ op: 'world', scanId: 'S1', baseId: '0:1:1' }]);
   });
 });

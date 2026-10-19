@@ -1,0 +1,2 @@
+// Applied by GTNHGradle after the main build script (Plan 3's setup): the projector's pure-Java packages have JUnit 5 tests.
+tasks.named('test') { useJUnitPlatform() }

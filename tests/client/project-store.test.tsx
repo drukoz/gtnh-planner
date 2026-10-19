@@ -96,6 +96,31 @@ describe('project store', () => {
     events().snapshot({ ...P0, rev: 1 });
     expect(store.getSnapshot().error).toBe('op 0: name must be 1 to 80 characters');
   });
+  it('keeps the plan that a plan of other settings replaced, not one a refetch replaced', async () => {
+    vi.useFakeTimers();
+    const { deps, store, events } = harness();
+    events().snapshot(P0);
+    await vi.advanceTimersByTimeAsync(0);
+    const first = store.getSnapshot().plan;
+    expect(first).toEqual({ settingsHash: 'h' });
+    expect(store.getSnapshot().previousPlan).toBeNull();
+    const answer = (plan: object): void => { deps.fetchPlan = vi.fn(async () => plan as never); };
+    answer({ settingsHash: 'h', n: 2 });                                     // the same settings planned again (a rescan, a replan)
+    events().plan({ rev: 1 });
+    await vi.advanceTimersByTimeAsync(150);
+    expect(store.getSnapshot().plan).toEqual({ settingsHash: 'h', n: 2 });
+    expect(store.getSnapshot().previousPlan).toBeNull();
+    answer({ settingsHash: 'h2' });                                          // someone changed a setting
+    events().plan({ rev: 2 });
+    await vi.advanceTimersByTimeAsync(150);
+    expect(store.getSnapshot().plan).toEqual({ settingsHash: 'h2' });
+    expect(store.getSnapshot().previousPlan).toEqual({ settingsHash: 'h', n: 2 });
+    answer({ settingsHash: 'h2', n: 3 });
+    events().plan({ rev: 3 });
+    await vi.advanceTimersByTimeAsync(150);
+    expect(store.getSnapshot().previousPlan).toEqual({ settingsHash: 'h', n: 2 });   // a refetch keeps what changed
+    vi.useRealTimers();
+  });
   it('ignores an answer older than what the events already brought', async () => {
     let answer: ((p: Project) => void) | undefined;
     const { deps, store, events } = harness();
