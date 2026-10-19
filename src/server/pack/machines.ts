@@ -20,6 +20,13 @@ const ASSEMBLY_LINE_MAP = 'assemblyline';
 const GT_MACHINE_BLOCK = 'gregtech:gt.blockmachines';
 /** Item pipes move `slots` stacks every `tickTime` ticks. */
 const TICKS_PER_SECOND = 20;
+/**
+ * GT's names of battery buffers (plan 10, ruling R10): `batterybuffer.<slots>.tier.<tier>`, and
+ * `batterycharger.16.tier.<tier>` and `batteryturbocharger.16.tier.<tier>` for the chargers.
+ */
+const BATTERY_BUFFER_NAME_RE = /^battery(?:buffer|charger|turbocharger)\.(\d+)\.tier\.\d+$/;
+/** The slots GT registers every charger and turbo charger with (`LoaderMetaTileEntities`); their 16 is not a slot count. */
+const CHARGER_SLOTS = 4;
 
 function pseudoMachine(mteId: number, metaName: string, name: string, key: ItemKey, map: string): Machine {
   return Object.freeze({ mteId, metaName, name, cls: 'pseudo', itemKey: key, kind: 'other', maps: [map] });
@@ -42,8 +49,25 @@ function machineMaps(raw: readonly string[]): string[] {
 }
 
 /**
+ * The slots of a battery buffer exported with 0 (exporter 0.2.0 and older wrote the prototype's battery count, 0 for
+ * every buffer; plan 10 Task 2): the count its metaName gives, or 0 when the name gives none (TecTech's Tesla coils share
+ * one name across sizes); one warning either way.
+ */
+function slotsFromName(line: MachineLine, ctx: LoadContext): number {
+  const m = BATTERY_BUFFER_NAME_RE.exec(line.name);
+  if (m === null) {
+    ctx.warn(`machine ${line.id} (${line.name}): the export gives 0 battery slots and its name does not tell how many, slots unknown`);
+    return 0;
+  }
+  const slots = line.name.startsWith('batterybuffer.') ? Number(m[1]) : CHARGER_SLOTS;
+  ctx.warn(`machine ${line.id} (${line.name}): the export gives 0 battery slots, using ${slots} from its name`);
+  return slots;
+}
+
+/**
  * A machine line: names, item, kind and maps, plus the stats the line has (pipe throughputs per second). A line whose
- * maps the exporter could not read warns and has no maps.
+ * maps the exporter could not read warns and has no maps; a battery buffer exported with 0 slots takes them from its
+ * name.
  */
 export function toMachine(line: MachineLine, ctx: LoadContext): Machine {
   if (line.mapsError) ctx.warn(`machine ${line.id} (${line.name}): recipe maps unreadable: ${line.mapsError}`);
@@ -64,7 +88,8 @@ export function toMachine(line: MachineLine, ctx: LoadContext): Machine {
     const { slots, tickTime, material } = line.itemPipe;
     machine.itemPipe = { stacksPerSecond: (slots * TICKS_PER_SECOND) / tickTime, material: material ?? '' };
   }
-  if (line.batterySlots != null) machine.batterySlots = line.batterySlots;
+  const { batterySlots } = line;
+  if (batterySlots != null) machine.batterySlots = line.kind === 'battery_buffer' && batterySlots === 0 ? slotsFromName(line, ctx) : batterySlots;
   if (line.steamPerSecondMax != null) machine.steamPerSecondMax = line.steamPerSecondMax;
   if (line.turbineEfficiency != null) machine.turbineEfficiency = line.turbineEfficiency;
   if (line.perfectOC != null) machine.perfectOC = line.perfectOC;

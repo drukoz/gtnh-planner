@@ -14,7 +14,7 @@ import { DIRS, posKey, step } from '../../../src/server/world/model.ts';
 import { createWorldService } from '../../../src/server/world/scan.ts';
 import { scanSummary } from '../../../src/server/world/scan.worker.ts';
 import type { Pack } from '../../../src/shared/types/pack.ts';
-import type { WorldScan } from '../../../src/shared/types/world.ts';
+import type { PowerNetwork, WorldScan } from '../../../src/shared/types/world.ts';
 
 const SCAN_LIMIT_MS = 180_000;
 const MAX_LAG_MS = 100;
@@ -23,6 +23,9 @@ const UNKNOWN_MANAGER = 'Unknown chunk manager';
 /** The scan notes of plan 10 Task 1 and the unknown-boiler note, with their counts. */
 const UNFED_NOTE = /^(\d+) steam turbines? gets? no steam the scan can follow$/;
 const UNKNOWN_BOILERS_NOTE = /^(\d+) boilers? with unknown steam output$/;
+/** The pack warnings of plan 10 Task 2: battery slots taken from a name, or unknown, on an export from before the fix. */
+const SLOTS_FROM_NAME = /: the export gives 0 battery slots, using \d+ from its name$/;
+const SLOTS_UNKNOWN = /: the export gives 0 battery slots and its name does not tell how many, slots unknown$/;
 
 /**
  * The ids of the power networks holding a generator or steam turbine, from the scan's own blocks as buildPower joins
@@ -118,5 +121,19 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('a scan of the real world', () =
     ].join('\n'));
     expect(checked.length).toBeGreaterThan(0);
     expect(generating.length).toBe(checked.length);
+  });
+
+  it('reports storedEU ≤ capacityEU on every power network (plan 10 Task 2)', () => {
+    expect(scanned, 'the scan the first check made').not.toBeNull();
+    const networks = scanned!.power;
+    const over = networks.filter((n) => n.storedEU > n.capacityEU);
+    const sum = (pick: (n: PowerNetwork) => number): number => networks.reduce((s, n) => s + pick(n), 0);
+    const warnings = pack.warnings ?? [];
+    console.log([
+      `real-world: exporter ${pack.manifest.exporterVersion}, battery slots from names ${warnings.filter((w) => SLOTS_FROM_NAME.test(w)).length}, unknown ${warnings.filter((w) => SLOTS_UNKNOWN.test(w)).length}`,
+      `power networks ${networks.length}, ${networks.filter((n) => n.capacityEU > 0).length} with storage, ${over.length} holding more than their capacity`,
+      `stored ${sum((n) => n.storedEU)} of ${sum((n) => n.capacityEU)} EU in all`,
+    ].join('\n'));
+    expect(over.length, 'power networks holding more EU than their capacity').toBe(0);
   });
 });

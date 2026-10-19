@@ -98,6 +98,22 @@ it('sums buffer charge and capacity, known batteries only for capacity', () => {
   const n = buildPower(input([buf, m(2003, [0, 64, -1], {})], [])).networks[0]!;
   expect([n.storedEU, n.capacityEU, n.voltageTier]).toEqual([1_611_000, 512 * 64 * 16 + 1_600_000, 3]);
 });
+it("counts a buffer's own charge at most up to its 64 × V × slots, never its one-packet overshoot (plan 10, ruling R12)", () => {
+  // 4×4 HV buffer 193 next to an HV machine, holding 205 EU more than its own 512 × 64 × 16 (gt-mechanics §4.3) and a
+  // full Large Lithium Battery, whose charge always counts in full
+  const own = 512 * 64 * 16, overshoot = 205, battery = 1_600_000;
+  const buffer = (over: Partial<GtMachineRec> = {}) =>
+    m(193, [0, 64, 0], { facing: 2, storedEU: own + overshoot, batteries: [{ key: 'gregtech:gt.metaitem.01@32539', charge: battery }], ...over });
+  const network = (b: GtMachineRec, over: Partial<PowerInput> = {}) => buildPower(input([b, m(2003, [0, 64, -1], {})], [], over)).networks[0]!;
+  const full = network(buffer());
+  expect([full.storedEU, full.capacityEU]).toEqual([own + battery, own + battery]);
+  // with 0 slots or no tier the buffer has no own capacity to cap at, so its charge counts as it is
+  const noSlots = testFacts();
+  noSlots.machines.set(193, { ...noSlots.machines.get(193)!, batterySlots: 0 });
+  const zero = network(buffer(), { facts: noSlots }), untiered = network(buffer({ tier: null }));
+  expect([zero.storedEU, zero.capacityEU]).toEqual([own + overshoot + battery, battery]);
+  expect([untiered.storedEU, untiered.capacityEU]).toEqual([own + overshoot + battery, battery]);
+});
 it('counts a running multiblock once, at its nearest energy hatch', () => {
   const n = buildPower(input([m(1130, [0, 64, 0], { facing: 5 }), m(42, [1, 64, 0], {}), m(1000, [2, 63, 3], { running: true, recipeEUt: 120 })],
                              [])).networks[0]!;   // generator front touches the hatch directly

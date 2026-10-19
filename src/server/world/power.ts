@@ -388,8 +388,11 @@ export function buildPower(input: PowerInput): PowerResult {
     for (const m of machines) {
       if (m.kind !== 'battery_buffer') continue;
       const slots = facts.machines.get(m.mteId)?.batterySlots;
-      storedEU += m.storedEU;
-      if (knownTier(m.tier) && slots !== undefined) capacityEU += V[m.tier]! * 64 * slots;
+      // The buffer's own store, 64 × V × slots, takes up to one packet more (gt-mechanics §4.3); a store of known size
+      // caps the charge counted, so the overshoot never shows (plan 10, ruling R12).
+      const own = knownTier(m.tier) && slots !== undefined ? V[m.tier]! * 64 * slots : 0;
+      storedEU += own > 0 ? Math.min(m.storedEU, own) : m.storedEU;
+      capacityEU += own;
       for (const b of m.batteries ?? []) {
         storedEU += b.charge;
         capacityEU += facts.electric.get(b.key)?.maxCharge ?? 0;
