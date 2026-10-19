@@ -24,7 +24,7 @@ import java.util.concurrent.Executor;
  * {@code main}, which the game thread drains every tick: the game never waits for the network, callbacks run on the
  * game thread, and every request gets exactly one answer.
  */
-public final class PlannerClient {
+public final class PlannerClient implements PlannerApi {
 
     public static final int CONNECT_TIMEOUT_MS = 5000, READ_TIMEOUT_MS = 15000, MAX_BODY_BYTES = 8 << 20;
 

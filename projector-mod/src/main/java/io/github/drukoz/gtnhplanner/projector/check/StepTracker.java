@@ -15,9 +15,10 @@ import java.util.Set;
  * planner does not show it ticked and this session has not sent it. A failed send is tried again no sooner than
  * {@link #RETRY_MS} later. Nothing ever unticks: steps only ever become done.
  *
- * <p>One tracker per loaded {@link ProjectorData}. The set of steps sent this session belongs to the session and
- * outlives reloads, so no layout sends a step twice; answers and refreshes that name steps this tracker's data does not
- * have are ignored. Used on the game thread only.
+ * <p>One tracker per loaded {@link ProjectorData}. The set of steps sent this session belongs to the session (one set
+ * per project, as step ids repeat between projects) and outlives reloads, so no layout of a project sends one of its
+ * steps twice; answers and refreshes that name steps this tracker's data does not have are ignored. Used on the game
+ * thread only.
  */
 public final class StepTracker {
 
@@ -29,7 +30,7 @@ public final class StepTracker {
     private final List<PlannedStep> steps;
     /** The ids of {@link #steps}. */
     private final Set<String> stepIds = new HashSet<>();
-    /** The session's set of steps it has sent; shared with the trackers of earlier and later layouts. */
+    /** The session's set of steps it has sent; shared with the trackers of earlier and later layouts of the project. */
     private final Set<String> sentThisSession;
     /** The steps the planner shows ticked: the payload's own ticks, then those later refreshes see. */
     private final Set<String> plannerDone;
@@ -42,7 +43,8 @@ public final class StepTracker {
 
     /**
      * A tracker for {@code data}'s steps, taking the steps the payload shows done as done. {@code sentThisSession} is
-     * kept, not copied: the session owns it and hands the same set to the tracker of every layout it loads.
+     * kept, not copied: the session owns it and hands the same set to the tracker of every layout it loads for that
+     * project.
      */
     public StepTracker(ProjectorData data, Set<String> sentThisSession) {
         steps = data.steps;
