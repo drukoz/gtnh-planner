@@ -52,6 +52,20 @@ const ROW_BASELINE = 11;
 const CORNER = 6;
 /** A box's face rows start below a divider this far under its last line, and this far below the divider. */
 const DIVIDER_GAP = 2;
+/**
+ * A box text longer than this many characters shows its first that many and '…' (plan 11, Task 8's review ruling): a
+ * title (13 px bold) and a line or face row (11.5 px). Measured for a box `CONN_NODE_WIDTH` (260 px) wide: cut there,
+ * every title and face row of the pack's machines and hatches fits with 8 px to spare on each side. The box's tooltip
+ * and the panel hold the whole text.
+ */
+const TITLE_CHARS = 32;
+const ROW_CHARS = 38;
+
+/** `text`, or its first `max` characters and '…' when it is longer, so the box shows where its text is cut. */
+function cut(text: string, max: number): string {
+  const chars = Array.from(text);
+  return chars.length <= max ? text : `${chars.slice(0, max).join('')}…`;
+}
 
 /** Where a box's face rows begin: the divider under its title and lines. */
 function facesTop(node: PlacedNode): number {
@@ -68,7 +82,9 @@ function facesOutline(width: number, top: number, bottom: number): string {
  * One box: its title, its lines and, under a divider, a row per face (its title). The rect is the box above the face
  * rows (the whole box when it has none): a click on it, or on the face rows' background, picks the box, and a click on
  * a face row picks that face. Only the face rows take clicks among the texts, so the middle of the rect is always the
- * rect's own. Text wider than the box is cut off at its edge; the panel shows it in full.
+ * rect's own. A text too long for the box ends in '…' (`cut`), and the box's tooltip, its first child as in the flow
+ * diagram, holds every text in full, one per line; the panel shows a picked one in full too. The nested svg still
+ * clips anything wider than the box.
  */
 function NodeShape(props: { node: PlacedNode; pick: ConnPick | null; onPick(pick: ConnPick): void }): ReactElement {
   const { node, pick, onPick } = props;
@@ -77,13 +93,14 @@ function NodeShape(props: { node: PlacedNode; pick: ConnPick | null; onPick(pick
   const pickBox = (): void => onPick({ node: node.id });
   return (
     <g data-node={node.id} className={`conn-node conn-${node.kind}${picked === null ? '' : ' selected'}`} transform={`translate(${node.x} ${node.y})`}>
+      <title>{[node.title, ...node.lines, ...node.faces.map((face) => face.title)].join('\n')}</title>
       {/* the face rows' part, drawn over the rect's rounded lower corners, gives the box one outline */}
       <rect width={node.width} height={node.faces.length === 0 ? node.height : top + CORNER} rx={CORNER} onClick={pickBox} />
       {node.faces.length > 0 && <path d={facesOutline(node.width, top, node.height)} onClick={pickBox} />}
       <svg width={node.width} height={node.height}>
-        <text className="conn-title" x={TEXT_LEFT} y={TITLE_BASELINE}>{node.title}</text>
+        <text className="conn-title" x={TEXT_LEFT} y={TITLE_BASELINE}>{cut(node.title, TITLE_CHARS)}</text>
         {node.lines.map((line, i) => (
-          <text key={`${i}:${line}`} className="conn-line" x={TEXT_LEFT} y={CONN_TITLE_HEIGHT + CONN_LINE_HEIGHT * i + ROW_BASELINE}>{line}</text>
+          <text key={`${i}:${line}`} className="conn-line" x={TEXT_LEFT} y={CONN_TITLE_HEIGHT + CONN_LINE_HEIGHT * i + ROW_BASELINE}>{cut(line, ROW_CHARS)}</text>
         ))}
         {node.faces.map((face, i) => (
           <text
@@ -94,7 +111,7 @@ function NodeShape(props: { node: PlacedNode; pick: ConnPick | null; onPick(pick
             y={top + DIVIDER_GAP + CONN_LINE_HEIGHT * i + ROW_BASELINE}
             onClick={() => onPick({ node: node.id, face: face.id })}
           >
-            {face.title}
+            {cut(face.title, ROW_CHARS)}
           </text>
         ))}
       </svg>
@@ -130,13 +147,17 @@ function EdgeShape(props: { edge: PlacedEdge; selected: boolean; onPick(pick: Co
   );
 }
 
-/** The picture at its own size (the box around it scrolls): the links first, then the boxes over them. */
+/**
+ * The picture at its own size (the box around it scrolls): the links first, then the boxes over them. A group, not an
+ * image, so assistive technology reads the boxes, rows and links inside it, as for the flow diagram (plan 11, Task 8's
+ * review ruling).
+ */
 function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: boolean; onPick(pick: ConnPick): void }): ReactElement {
   const { picture, pick, busy, onPick } = props;
   const pickedEdge = pick !== null && 'edge' in pick ? pick.edge : null;
   return (
     <div className="connections" data-testid="connections" aria-busy={busy}>
-      <svg role="img" aria-label="Connections of the line" width={Math.ceil(picture.width)} height={Math.ceil(picture.height)}>
+      <svg role="group" aria-label="Connections of the line" width={Math.ceil(picture.width)} height={Math.ceil(picture.height)}>
         <defs>
           <marker id="conn-arrow" viewBox="0 0 10 10" refX={10} refY={5} markerWidth={9} markerHeight={9} markerUnits="userSpaceOnUse" orient="auto-start-reverse">
             <path className="conn-arrow-head" d="M 0 0 L 10 5 L 0 10 z" />

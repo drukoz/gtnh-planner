@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { connectionsElk, connectionsFromElk, connectionsGraph } from '../../src/client/connections/model.ts';
+import { CONN_NODE_WIDTH, connectionsElk, connectionsFromElk, connectionsGraph, type ConnNode } from '../../src/client/connections/model.ts';
 import { ConnectionsShell, ConnectionsView, type ConnectionsShellProps } from '../../src/client/views/ConnectionsView.tsx';
 import { PROJECT_TABS, tabFromHash } from '../../src/client/views/project-tabs.ts';
 import { connLayout, connPlan } from './connections-fixture.ts';
@@ -23,6 +23,7 @@ describe('the Connections tab', () => {
   it('draws every box, face row and link with its channel colour', () => {
     const html = shell();
     expect(html).toContain('data-testid="connections"');
+    expect(html).toContain('<svg role="group" aria-label="Connections of the line"');   // plan 11, Task 8's review ruling (not role="img")
     for (const id of ['step:a', 'step:b', 'chest:2,64,0', 'chest:2,64,2']) expect(html).toContain(`data-node="${id}"`);
     expect(html).toContain('data-face="step:a#conduit:0,64,1:item:north"');
     expect(html).toContain('Titanium Dust 60/min · Red');
@@ -68,6 +69,26 @@ describe('the Connections tab', () => {
     expect(html).toContain('data-testid="connections" aria-busy="true"');
     expect(html).toContain('Could not load the layout: boom');
     expect(html).toContain('Could not lay out the connections: elk');
+  });
+  // plan 11, Task 8's review ruling: a box is a fixed 260 px wide, so a text too long for it ends in … and the box's
+  // tooltip (its first child, as in the flow diagram) holds every text in full
+  it('cuts a box text too long for its box with …, and keeps every text of the box in full in its tooltip', () => {
+    const box = /<g data-node="step:b"[^>]*>(.*?)<\/g>/s.exec(shell())![1]!;
+    expect(/^<title>(.*?)<\/title><rect /s.exec(box)?.[1]).toBe('1× Advanced Assembler\nMV · 30 EU/t\nAdvanced Assembler, south side · Item Conduit');
+    expect(box).toMatch(/data-face="step:b#conduit:1,64,1:item:north"[^>]*>Advanced Assembler, south side · Item …<\/text>/);
+    expect(box).not.toContain('Item Conduit</text>');
+  });
+  it('shows a title of up to 32 characters and a line or face row of up to 38 whole, and cuts a longer one there', () => {
+    const text = (n: number): string => 'abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ'.slice(0, n);
+    const draw = (title: number, row: number): string => {
+      const node: ConnNode = { id: 'box', kind: 'machine', title: text(title), lines: [text(row)], faces: [{ id: 'box#face', title: text(row), lines: [] }],
+        blocks: [], width: CONN_NODE_WIDTH, height: 68 };
+      return shell({ graph: { nodes: [node], edges: [] }, picture: { width: 300, height: 100, nodes: [{ ...node, x: 0, y: 0 }], edges: [] } });
+    };
+    const texts = (html: string): string[] => [...html.matchAll(/<text class="(conn-[a-z]+)"[^>]*>(.*?)<\/text>/g)].map((m) => `${m[1]}: ${m[2]}`);
+    expect(texts(draw(32, 38))).toEqual([`conn-title: ${text(32)}`, `conn-line: ${text(38)}`, `conn-face: ${text(38)}`]);
+    expect(texts(draw(33, 39))).toEqual([`conn-title: ${text(32)}…`, `conn-line: ${text(38)}…`, `conn-face: ${text(38)}…`]);
+    expect(draw(33, 39)).toContain(`<title>${text(33)}\n${text(39)}\n${text(39)}</title>`);
   });
   it('lays the line out before it draws it', () => {
     const project = { id: 'P1', settings: { mode: 'rate', per: 'min', logistics: 'enderio' }, placement: null, world: { scanId: null, baseId: null } } as never;
