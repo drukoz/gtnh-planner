@@ -8,7 +8,10 @@ import type { StuffKey } from '../../shared/keys.ts';
 import type { Pack, Product } from '../../shared/types/pack.ts';
 import type { PlanContext, PlanSettings, PlanStep } from '../../shared/types/plan.ts';
 import type { CandidateGraph, LpRecipe } from './candidates.ts';
-import { describeStep, machineWarnings, ownedMachineMap, pickStepMachines, stepLine, type PickedRecipe, type StepLine } from './machines.ts';
+import {
+  describeStep, machineWarnings, ownedCounts, ownedMachineTypes, pickStepMachines, reusedMachines, stepLine, type PickedRecipe, type StepLine,
+  type StepSize,
+} from './machines.ts';
 import { solveLp, type LpRow } from './lp.ts';
 import type { Solution } from './solve.ts';
 
@@ -301,10 +304,12 @@ function fillSeconds(graph: CandidateGraph, runs: ReadonlyMap<string, number>, p
 
 /**
  * Make N on the group's machines (spec §3.2, prior-art §3.6). Each step runs on the machine `pickMachine` chooses with
- * the group's owned machines (a type in `settings.declineReuse` counts as not owned): an owned type gives the step all
- * the owned machines of that type (`count = owned`), shared with the other steps of that type; any other type gets one
- * new machine (`count 1, owned 0`, in `addedMachines`), likewise shared. Pseudo machines (hand-crafting, crafting
- * table, furnace) are never added. `totalSeconds` = the busiest machine type (Σ work ÷ its machines) plus the fill time.
+ * the group's owned machines (`ownedMachineTypes`: the scan's and the "Machines we have" list's, none with "Reuse
+ * machines we have" off, and a type in `settings.declineReuse` counts as not owned): an owned type gives the step all
+ * the owned machines of that type (`count = owned`, `reused` saying where they stand), shared with the other steps of
+ * that type; any other type gets one new machine (`count 1, owned 0`, in `addedMachines`), likewise shared. Pseudo
+ * machines (hand-crafting, crafting table, furnace) are never added. `totalSeconds` = the busiest machine type (Σ work
+ * ÷ its machines) plus the fill time.
  */
 export async function makeN(
   pack: Pack, graph: CandidateGraph, sol: Solution, demand: ReadonlyMap<StuffKey, number>,
@@ -316,7 +321,8 @@ export async function makeN(
 ): Promise<MakeNResult> {
   const { settings, groupTier, coilHeat, ctx, multiblocks } = opts;
   const whole = await wholeRuns(graph, sol, demand);
-  const owned = ownedMachineMap(ctx, settings);
+  const types = ownedMachineTypes(ctx, settings);
+  const owned = ownedCounts(types);
   const picked = pickStepMachines(pack, graph, whole.runs, { settings, groupTier, coilHeat, owned, multiblocks });
 
   const ownedOf = (mteId: number): number => Math.max(0, owned.get(mteId) ?? 0);
@@ -348,7 +354,10 @@ export async function makeN(
       warnings.push(`Shares machines with ${others.join(', ')} — swap circuits/molds between batches`);
     }
     if (p.recipe.outputs.some((o) => o.chance < 1)) warnings.push(CHANCED_WARNING);
-    const step = describeStep(pack, p, line, { count, owned: ownedOf(mteId), runsPerSecond, utilization, warnings });
+    const size: StepSize = { count, owned: ownedOf(mteId), runsPerSecond, utilization, warnings };
+    const type = types.get(mteId);
+    if (type !== undefined && size.owned > 0) size.reused = reusedMachines(size.owned, type.where);
+    const step = describeStep(pack, p, line, size);
     step.runs = p.runs;
     return step;
   });

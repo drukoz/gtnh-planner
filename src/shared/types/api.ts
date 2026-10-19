@@ -19,6 +19,13 @@ export interface PackInfo {
   // optional addition
   /** The material names an avoid entry can be, with their display names, sorted by display name (§11.25). */
   materials?: Array<{ name: string; label: string }>;
+  // optional addition
+  /**
+   * The machines the "Machines we have" list can name (plan 09 ruling P21): those a plan can put on a step (a singleblock
+   * or a multiblock running a recipe map), sorted by name, then tier, then mteId. `tier` is absent for a multiblock,
+   * which has none of its own (it runs at its energy hatch's).
+   */
+  machines?: Array<{ mteId: number; name: string; tier?: number }>;
 }
 
 /** One recipe as the item browser shows it; an ingredient with alternatives shows its first option. */

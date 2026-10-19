@@ -1,5 +1,5 @@
-// The loaded pack for the browser (architecture §7, §11.6): what it holds (with the materials an avoid list can name),
-// item and fluid search, and the recipes that make or use one item or fluid.
+// The loaded pack for the browser (architecture §7, §11.6): what it holds (with the materials an avoid list can name and
+// the machines the "Machines we have" list can), item and fluid search, and the recipes that make or use one item or fluid.
 
 import type { IncomingMessage } from 'node:http';
 import type { AppContext } from '../../app.ts';
@@ -59,6 +59,22 @@ export function summarizeRecipe(pack: Pack, r: Recipe): RecipeSummary {
   return summary;
 }
 
+function byString(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * The machines the "Machines we have" list can name (`PackInfo.machines`, ruling P21): the singleblocks and multiblocks
+ * that run a recipe map, the only kinds `pickMachine` puts on a step (no generator, pipe or pseudo machine), by name,
+ * tier (none first) and mteId.
+ */
+function ownableMachines(pack: Pack): NonNullable<PackInfo['machines']> {
+  return [...pack.machines.values()]
+    .filter((m) => (m.kind === 'basic' || m.kind === 'multiblock') && m.maps.length > 0 && m.mteId >= 0)
+    .map((m) => (m.tier === undefined ? { mteId: m.mteId, name: m.name } : { mteId: m.mteId, name: m.name, tier: m.tier }))
+    .sort((a, b) => byString(a.name, b.name) || (a.tier ?? -1) - (b.tier ?? -1) || a.mteId - b.mteId);
+}
+
 function summaries(pack: Pack, indices: readonly number[] | undefined): RecipeSummary[] {
   return (indices ?? []).slice(0, MAX_RECIPES_PER_SIDE).flatMap((i) => {
     const r = pack.recipes[i];
@@ -75,7 +91,7 @@ export function packRoutes(app: AppContext): Route[] {
         const info: PackInfo = {
           manifest: pack.manifest, mapCount: pack.maps.size, recipeCount: pack.recipes.length, itemCount: pack.items.size,
           dimensions: pack.worldgen.dimensions, capabilities: pack.worldgen.capabilities,
-          exclusionRules: Object.keys(EXCLUSION_RULES), materials: [...avoidableMaterials(pack)],
+          exclusionRules: Object.keys(EXCLUSION_RULES), materials: [...avoidableMaterials(pack)], machines: ownableMachines(pack),
         };
         sendJson(res, 200, info);
       },

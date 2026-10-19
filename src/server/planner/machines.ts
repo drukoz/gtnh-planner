@@ -6,7 +6,7 @@ import { multiblockOverclock, singleblockOverclock, voltageTier, type MachineOc 
 import { PSEUDO_MACHINES, V, tierName } from '../../shared/gt/tiers.ts';
 import { isFluidKey, parseItemKey, type StuffKey } from '../../shared/keys.ts';
 import type { Ingredient, Machine, Pack, Product, Recipe } from '../../shared/types/pack.ts';
-import type { PlanContext, PlanFlow, PlanSettings, PlanStep } from '../../shared/types/plan.ts';
+import type { MachineWhere, PlanContext, PlanFlow, PlanSettings, PlanStep } from '../../shared/types/plan.ts';
 import { PROGRAMMED_CIRCUIT_ID } from '../pack/recipes.ts';
 import { suppliedKey } from '../pack/supply.ts';
 import { keptOptions, virtualKey, type CandidateGraph, type LpRecipe } from './candidates.ts';
@@ -133,17 +133,44 @@ export function pickMachine(
   return picked({ mteId: multi.mteId, name: multi.name, tier: hatchTier, kind: 'multiblock', oc, handCraft: false });
 }
 
+/** The machines of one type a line may run on: how many, and where those a world scan found stand (at most `count`). */
+export interface OwnedType { count: number; where: MachineWhere[] }
+
 /**
- * The group's own machines per mteId (`ctx.ownedMachines` summed), leaving out the types it declined to reuse for this
- * line (`settings.declineReuse`): a declined type counts as not owned everywhere.
+ * The machines the line may run on, per mteId (architecture §11.29): none when the project turned "Reuse machines we
+ * have" off (`settings.reuseOwned === false`); else the world scan's (`ctx.ownedMachines`, with where they stand) and
+ * then the "Machines we have" list's (`settings.ownedManual`, without a position), added up per type, in that order,
+ * leaving out the types the group declined to reuse for this line (`settings.declineReuse`).
  */
-export function ownedMachineMap(ctx: PlanContext, settings: PlanSettings): Map<number, number> {
+export function ownedMachineTypes(ctx: PlanContext, settings: PlanSettings): Map<number, OwnedType> {
+  const owned = new Map<number, OwnedType>();
+  if (settings.reuseOwned === false) return owned;
   const declined = new Set(settings.declineReuse ?? []);
-  const owned = new Map<number, number>();
-  for (const { mteId, count } of ctx.ownedMachines) {
-    if (!declined.has(mteId)) owned.set(mteId, (owned.get(mteId) ?? 0) + count);
-  }
+  const add = (mteId: number, count: number, where: readonly MachineWhere[]): void => {
+    if (declined.has(mteId) || !(count > 0)) return;
+    let type = owned.get(mteId);
+    if (type === undefined) owned.set(mteId, (type = { count: 0, where: [] }));
+    type.count += count;
+    type.where.push(...where.slice(0, count));
+  };
+  for (const m of ctx.ownedMachines) add(m.mteId, m.count, m.where ?? []);
+  for (const m of settings.ownedManual ?? []) add(m.mteId, m.count, []);
   return owned;
+}
+
+/** How many machines of each type `types` holds: the owned machines `pickMachine` prefers. */
+export function ownedCounts(types: ReadonlyMap<number, OwnedType>): Map<number, number> {
+  return new Map([...types].map(([mteId, type]) => [mteId, type.count]));
+}
+
+/** How many machines of each type the line may run on (`ownedMachineTypes`): a declined type counts as not owned everywhere. */
+export function ownedMachineMap(ctx: PlanContext, settings: PlanSettings): Map<number, number> {
+  return ownedCounts(ownedMachineTypes(ctx, settings));
+}
+
+/** `PlanStep.reused` of a step running on `count` owned machines, with where those a scan found stand (copies). */
+export function reusedMachines(count: number, where: readonly MachineWhere[]): NonNullable<PlanStep['reused']> {
+  return { count, where: where.map(({ dim, pos }) => ({ dim, pos: [pos[0], pos[1], pos[2]] })) };
 }
 
 /** The programmed-circuit number a recipe needs: `meta.circuit`, else the meta of a not-consumed programmed circuit. */
@@ -393,13 +420,17 @@ export function machineWarnings(lp: LpRecipe, pick: MachinePick, runsPerSecond: 
   return warnings;
 }
 
-/** How the caller sized a step: machines, owned ones among them, rate, how busy they are, and the step's warnings. */
-export type StepSize = Pick<PlanStep, 'count' | 'owned' | 'runsPerSecond' | 'utilization' | 'warnings'>;
+/**
+ * How the caller sized a step: machines, owned ones among them (and, when there are any, which: `reused`), rate, how
+ * busy they are, and the step's warnings.
+ */
+export type StepSize = Pick<PlanStep, 'count' | 'owned' | 'runsPerSecond' | 'utilization' | 'warnings' | 'reused'>;
 
 /**
  * The step of a picked recipe, sized by the caller: the machine and its overclocked speed, per-run inputs (one per
  * good, slots added up) and outputs (expected amounts), the main output, the overclock inputs, the cleanroom flag, the
- * programmed circuit and, for a supply recipe, the good it supplies (`suppliedKey`, fix spec R2).
+ * programmed circuit, for a supply recipe the good it supplies (`suppliedKey`, fix spec R2), and the owned machines it
+ * runs on (`size.reused`).
  * `alternatives` stays empty here (Task 14 fills it).
  */
 export function describeStep(pack: Pack, p: PickedRecipe, line: StepLine, size: StepSize): PlanStep {
@@ -424,14 +455,15 @@ export function describeStep(pack: Pack, p: PickedRecipe, line: StepLine, size: 
   if (circuit !== undefined) step.circuit = circuit;
   const supply = suppliedKey(r, pack.fluidContainers);
   if (supply !== undefined) step.supply = supply;
+  if (size.reused !== undefined) step.reused = size.reused;
   return step;
 }
 
 /**
  * One step per recipe the solution runs (convert recipes are not steps), sorted by id: the picked machine, how many
  * of it the rate needs (`perSecondScale` turns runs into runs per second) and how busy they are, how many of them the
- * group already owns (each owned machine serves one step, earlier steps first), per-run inputs and outputs, and its
- * warnings.
+ * group already owns (`ownedMachineTypes`; each owned machine serves one step, earlier steps first, those a scan found
+ * before those of the list, and `reused` says where they stand), per-run inputs and outputs, and its warnings.
  */
 export function planSteps(
   pack: Pack, graph: CandidateGraph, sol: Solution,
@@ -442,20 +474,26 @@ export function planSteps(
   },
 ): PlanStep[] {
   const { settings, groupTier, coilHeat, ctx, perSecondScale, multiblocks } = opts;
-  const owned = ownedMachineMap(ctx, settings);
-  const unclaimed = new Map(owned);
+  const types = ownedMachineTypes(ctx, settings);
+  const owned = ownedCounts(types);
+  const claimed = new Map<number, number>();   // per type: the owned machines earlier steps run on
   const line = stepLine(graph, sol.runs, opts.value);
   return pickStepMachines(pack, graph, sol.runs, { settings, groupTier, coilHeat, owned, multiblocks }).map((p) => {
     const runsPerSecond = p.runs * perSecondScale;
     const perMachine = p.pick.runsPerSecondPerMachine;
     const count = Math.max(1, Math.ceil(runsPerSecond / perMachine - TINY));
-    const free = unclaimed.get(p.pick.mteId) ?? 0;
-    const reused = Math.max(0, Math.min(count, free));
-    if (reused > 0) unclaimed.set(p.pick.mteId, free - reused);
-    return describeStep(pack, p, line, {
+    const type = types.get(p.pick.mteId);
+    const before = claimed.get(p.pick.mteId) ?? 0;
+    const reused = type === undefined ? 0 : Math.max(0, Math.min(count, type.count - before));
+    const size: StepSize = {
       count, owned: reused, runsPerSecond, utilization: runsPerSecond / (count * perMachine),
       warnings: machineWarnings(p.lp, p.pick, runsPerSecond),
-    });
+    };
+    if (type !== undefined && reused > 0) {
+      claimed.set(p.pick.mteId, before + reused);
+      size.reused = reusedMachines(reused, type.where.slice(before, before + reused));
+    }
+    return describeStep(pack, p, line, size);
   });
 }
 

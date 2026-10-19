@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { applyOp, defaultSettings, MAX_STEP_CHARGE, normalizeSettings, SETTINGS_VERSION, validateOp } from '../../../src/shared/project/apply-op.ts';
+import {
+  applyOp, defaultSettings, MAX_OWNED_MANUAL_COUNT, MAX_OWNED_MANUAL_ENTRIES, MAX_STEP_CHARGE, normalizeSettings, SETTINGS_VERSION, validateOp,
+} from '../../../src/shared/project/apply-op.ts';
 import { DEFAULT_STEP_CHARGE } from '../../../src/shared/types/plan.ts';
 import type { Project } from '../../../src/shared/types/project.ts';
 
@@ -57,9 +59,10 @@ describe('defaultSettings / normalizeSettings', () => {
     const s = defaultSettings();
     expect(s).toMatchObject({ target: null, mode: 'rate', amount: 1, per: 'min', tier: null, routeDerived: true,
       logistics: 'direct', coilHeat: null, automateCrafting: false, dims: { policy: 'progression', overrides: {} }, settingsVersion: 2,
-      stepCharge: 0.02 });
+      stepCharge: 0.02, reuseOwned: true });
     expect(s.excludedCategories).toEqual(['recycling', 'massfab', 'replicator', 'scrap', 'lava-centrifuge', 'programmed-circuit-conversion']);
     expect(s.declineReuse).toEqual([]);
+    expect(s.ownedManual).toEqual([]);
     expect(SETTINGS_VERSION).toBe(2);
     // Fix spec §3 as the user answered it (§10 answer 3): each step must save 2 % of the least raw material; at most 50 %.
     expect(DEFAULT_STEP_CHARGE).toBe(0.02);
@@ -78,10 +81,10 @@ describe('defaultSettings / normalizeSettings', () => {
     expect(normalizeSettings({ routeDerived: false, settingsVersion: 2 } as never)).toMatchObject({ routeDerived: false, settingsVersion: 2 });
   });
   it('fills the new settings of an old project', () => {
-    // A project stored before plan 09: no stepCharge, haveSupply or settingsVersion, supporting lines off. Normalizing
-    // fills the new defaults and keeps its own choice (the server switches routeDerived once, ruling P10).
+    // A project stored before plan 09: no stepCharge, haveSupply, reuseOwned, ownedManual or settingsVersion, supporting
+    // lines off. Normalizing fills the new defaults and keeps its own choice (the server switches routeDerived once, P10).
     const s = normalizeSettings({ target: 't:x@0', routeDerived: false } as never);
-    expect(s).toMatchObject({ stepCharge: 0.02, haveSupply: [], optionChoice: {}, routeDerived: false, settingsVersion: 1 });
+    expect(s).toMatchObject({ stepCharge: 0.02, haveSupply: [], optionChoice: {}, reuseOwned: true, ownedManual: [], routeDerived: false, settingsVersion: 1 });
     expect(normalizeSettings({ stepCharge: 0.15 } as never).stepCharge).toBe(0.15);
   });
 });
@@ -125,6 +128,10 @@ describe('validateOp', () => {
     [{ op: 'settings', patch: { stepCharge: -0.1 } }],
     [{ op: 'settings', patch: { stepCharge: 'x' } }],
     [{ op: 'settings', patch: { stepCharge: Number.NaN } }],
+    [{ op: 'settings', patch: { reuseOwned: 'x' } }],
+    [{ op: 'settings', patch: { ownedManual: Array.from({ length: 201 }, (_, i) => ({ mteId: i, count: 1 })) } }],
+    [{ op: 'settings', patch: { ownedManual: [{ mteId: 121, count: 0 }] } }],
+    [{ op: 'settings', patch: { ownedManual: [{ mteId: -1, count: 1 }] } }],
     [{ op: 'mark', row: 'foo', on: true }],
     [{ op: 'addNote', note: { id: 'n', text: 'x'.repeat(4001) } }],
     [{ op: 'rename', name: '   ' }],
@@ -251,5 +258,46 @@ describe('avoid', () => {
     expect(q.settings.avoid).toEqual(['Tin', 'Silver', 't:x@0']);
     expect(applyOp(q, { op: 'settings', patch: { amount: 2 } }, 'Ann', AT).settings.avoid).toEqual(['Tin', 'Silver', 't:x@0']);
     expect(normalizeSettings({ avoid: ['Gold', 'Gold', 'Tin'] } as never).avoid).toEqual(['Gold', 'Tin']);
+  });
+});
+
+// "Reuse machines we have" and the "Machines we have" list (plan 09 Task 9; architecture §11.29, ruling P22).
+describe('reuseOwned and ownedManual', () => {
+  const ownedOp = (ownedManual: unknown) => ({ op: 'settings', patch: { ownedManual } });
+  const entries = (n: number) => Array.from({ length: n }, (_, i) => ({ mteId: i, count: 1 }));
+  it('reuses owned machines and lists none by default and for an older stored project', () => {
+    expect(defaultSettings()).toMatchObject({ reuseOwned: true, ownedManual: [] });
+    expect(normalizeSettings({ target: 't:x@0' } as never)).toMatchObject({ reuseOwned: true, ownedManual: [] });
+    expect(normalizeSettings({ reuseOwned: false, ownedManual: [{ mteId: 121, count: 2 }] } as never))
+      .toMatchObject({ reuseOwned: false, ownedManual: [{ mteId: 121, count: 2 }] });
+  });
+  it('takes the switch as true or false', () => {
+    for (const reuseOwned of [true, false]) expect(validateOp({ op: 'settings', patch: { reuseOwned } })).toBeNull();
+    for (const reuseOwned of ['x', 1, null]) expect(validateOp({ op: 'settings', patch: { reuseOwned } }), String(reuseOwned)).toEqual(expect.any(String));
+  });
+  it('takes at most 200 entries, each a machine id of 0 or more and a whole count from 1 to 10,000', () => {
+    expect([MAX_OWNED_MANUAL_ENTRIES, MAX_OWNED_MANUAL_COUNT]).toEqual([200, 10_000]);
+    expect(validateOp(ownedOp([]))).toBeNull();
+    expect(validateOp(ownedOp(entries(200)))).toBeNull();
+    expect(validateOp(ownedOp([{ mteId: 0, count: 10_000 }, { mteId: 15512, count: 1 }]))).toBeNull();
+    expect(validateOp(ownedOp(entries(201)))).toEqual(expect.any(String));
+    expect(validateOp(ownedOp(new Array(201).fill({ mteId: 121, count: 1 })))).toEqual(expect.any(String));   // counted before repeats merge
+    for (const entry of [{ mteId: 121, count: 0 }, { mteId: 121, count: -1 }, { mteId: 121, count: 1.5 }, { mteId: 121, count: 10_001 },
+      { mteId: 121, count: '2' }, { mteId: -1, count: 1 }, { mteId: 1.5, count: 1 }, { mteId: '121', count: 1 }, { mteId: 121 }, { count: 1 }, null, 121]) {
+      expect(validateOp(ownedOp([entry])), JSON.stringify(entry)).toEqual(expect.any(String));
+    }
+    for (const list of [null, 'x', { mteId: 121, count: 1 }]) expect(validateOp(ownedOp(list)), JSON.stringify(list)).toEqual(expect.any(String));
+  });
+  it('sums the counts of a repeated machine where it first appears, keeping only id and count', () => {
+    const q = applyOp(project(), ownedOp([{ mteId: 121, count: 2 }, { mteId: 101, count: 1 }, { mteId: 121, count: 3 }]) as never, 'Ann', AT);
+    expect(q.settings.ownedManual).toEqual([{ mteId: 121, count: 5 }, { mteId: 101, count: 1 }]);
+    expect(applyOp(q, { op: 'settings', patch: { amount: 2 } }, 'Ann', AT).settings.ownedManual).toEqual([{ mteId: 121, count: 5 }, { mteId: 101, count: 1 }]);
+    expect(normalizeSettings({ ownedManual: [{ mteId: 7, count: 1 }, { mteId: 7, count: 1 }] } as never).ownedManual).toEqual([{ mteId: 7, count: 2 }]);
+    expect(applyOp(project(), ownedOp([{ mteId: 121, count: 1, note: 'x' }]) as never, 'Ann', AT).settings.ownedManual).toEqual([{ mteId: 121, count: 1 }]);
+  });
+  it('never sums a machine above 10,000 (ruling P22)', () => {
+    const q = applyOp(project(), ownedOp([{ mteId: 121, count: 10_000 }, { mteId: 121, count: 1 }]) as never, 'Ann', AT);
+    expect(q.settings.ownedManual).toEqual([{ mteId: 121, count: 10_000 }]);
+    expect(normalizeSettings({ ownedManual: [{ mteId: 121, count: 6_000 }, { mteId: 121, count: 6_000 }] } as never).ownedManual).toEqual([{ mteId: 121, count: 10_000 }]);
   });
 });

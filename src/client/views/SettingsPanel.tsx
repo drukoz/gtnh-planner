@@ -1,7 +1,8 @@
 // The project's settings beside its views (spec §3.2–§3.3b, §3.6, §3.11): what to make and how much, the tier, where
 // the group can mine, how the line is fed, what materials cost, which materials to avoid, which recipe groups to skip,
-// the planner's options (supporting lines, how many steps a little raw material is worth), and the lists the panels
-// fill: what the group already makes, makes itself, already has a supply of, and the ingredient options it pinned.
+// the planner's options (supporting lines, how many steps a little raw material is worth, reusing the machines the group
+// has), the machines it has that no world scan shows, and the lists the panels fill: what the group already makes,
+// makes itself, already has a supply of, and the ingredient options it pinned.
 // Everyone sees the same settings: every change sends one `settings` op carrying whole field values, and nothing is
 // sent for an amount or a cost that would be refused.
 
@@ -15,6 +16,7 @@ import { LogisticsMode, type Plan, type PlanSettings } from '../../shared/types/
 import { AvoidPicker } from '../components/AvoidPicker.tsx';
 import { ItemIcon } from '../components/ItemIcon.tsx';
 import { ItemSearch } from '../components/ItemSearch.tsx';
+import { OwnedMachinesEditor } from '../components/OwnedMachinesEditor.tsx';
 import { TierPicker } from '../components/TierPicker.tsx';
 import { haveSupplyPatch, optionPatch } from './flow-model.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
@@ -426,6 +428,20 @@ export function StepChargeField(props: { settings: PlanSettings; patch: Patch })
   );
 }
 
+/**
+ * "Reuse machines we have" (design spec §3.3, architecture §11.29): on (the default, also for a project stored before
+ * the switch), a step runs first on the machines the group owns; off, every machine is planned new.
+ */
+export function ReuseOwnedField(props: { settings: PlanSettings; patch: Patch }): ReactElement {
+  const { settings, patch } = props;
+  return (
+    <label className="check">
+      <input type="checkbox" name="reuseOwned" checked={settings.reuseOwned !== false} onChange={(e) => patch({ reuseOwned: e.currentTarget.checked })} />
+      Reuse machines we have (off: plan every machine new)
+    </label>
+  );
+}
+
 function OptionsSection(props: { settings: PlanSettings; patch: Patch }): ReactElement {
   const { settings, patch } = props;
   const { coilHeat } = settings;
@@ -439,6 +455,7 @@ function OptionsSection(props: { settings: PlanSettings; patch: Patch }): ReactE
         Plan supporting lines for alloys, plastics and chemicals (off: buy the shallow ones)
       </label>
       <StepChargeField settings={settings} patch={patch} />
+      <ReuseOwnedField settings={settings} patch={patch} />
       <label className="check">
         <input type="checkbox" checked={settings.automateCrafting} onChange={(e) => patch({ automateCrafting: e.currentTarget.checked })} />
         Crafting-table steps are automated
@@ -453,6 +470,29 @@ function OptionsSection(props: { settings: PlanSettings; patch: Patch }): ReactE
           {coils.map((c) => <option key={c.heat} value={String(c.heat)}>{c.label}</option>)}
         </select>
       </label>
+    </section>
+  );
+}
+
+/**
+ * "Machines we have" (architecture §11.28–§11.29): machines the group owns that the linked world scan does not show,
+ * which the line runs on like the scan's while "Reuse machines we have" is on; the list stays when it is off.
+ */
+function OwnedMachinesSection(props: { info: PackInfo | null; settings: PlanSettings; patch: Patch }): ReactElement {
+  const { info, settings, patch } = props;
+  return (
+    <section className="settings-section">
+      <h3>Machines we have</h3>
+      <p className="muted small">
+        Machines the group owns outside the linked world&apos;s base, or with no world linked: steps run on them before
+        new ones are built.
+      </p>
+      {settings.reuseOwned === false && <p className="muted small">Reuse machines we have is off: the line plans every machine new.</p>}
+      <OwnedMachinesEditor
+        owned={settings.ownedManual ?? []}
+        machines={info === null ? undefined : (info.machines ?? [])}
+        onChange={(ownedManual) => patch({ ownedManual })}
+      />
     </section>
   );
 }
@@ -542,6 +582,7 @@ export function SettingsPanel(props: ProjectViewProps & { info: PackInfo | null 
       <AvoidSection info={info} settings={settings} send={send} nameOf={nameOf} remember={remember} />
       <SkipSection info={info} settings={settings} patch={patch} />
       <OptionsSection settings={settings} patch={patch} />
+      <OwnedMachinesSection info={info} settings={settings} patch={patch} />
       <KeyListSection
         title="We already make"
         keys={settings.stopItems}

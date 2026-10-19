@@ -1,11 +1,12 @@
 // What the settings panel shows and sends (spec §3.2–§3.3b, §3.6), as pure functions: the reachable-dimension rows
 // and their labels, the patches the panel sends (each a whole field value, so one `settings` op says everything), the
 // checks an amount or a cost must pass before anything is sent, the avoid list's suggestions, labels and changes, the
-// "Steps vs raw material" presets (fix spec §3) and the pinned ingredient options in words (fix spec §6.4).
+// "Steps vs raw material" presets (fix spec §3), the pinned ingredient options in words (fix spec §6.4) and the
+// "Machines we have" list's machines, counts and changes (architecture §11.29).
 
 import { TIER_NAMES, tierName } from '../../shared/gt/tiers.ts';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
-import { MAX_AVOID_ENTRIES, MAX_AVOID_ENTRY_LENGTH, MAX_STEP_CHARGE } from '../../shared/project/apply-op.ts';
+import { MAX_AVOID_ENTRIES, MAX_AVOID_ENTRY_LENGTH, MAX_OWNED_MANUAL_COUNT, MAX_OWNED_MANUAL_ENTRIES, MAX_STEP_CHARGE } from '../../shared/project/apply-op.ts';
 import type { PackInfo } from '../../shared/types/api.ts';
 import { DEFAULT_STEP_CHARGE, type Plan, type PlanSettings, type ReachableDim } from '../../shared/types/plan.ts';
 import { formatNumber } from '../format.ts';
@@ -235,4 +236,60 @@ export function optionPinRows(settings: PlanSettings, plan: Plan | null, nameOf:
     const optionName = nameOf(option);
     return [{ pin, recipeId, slot, option, label: `${where}: ${optionName}`, optionName }];
   });
+}
+
+/** A machine the "Machines we have" list can name (`PackInfo.machines`). */
+export type OwnableMachine = NonNullable<PackInfo['machines']>[number];
+/** One entry of the "Machines we have" list (`PlanSettings.ownedManual`). */
+export type OwnedEntry = NonNullable<PlanSettings['ownedManual']>[number];
+
+const OWNED_COUNT_ERROR = `Enter a whole number from 1 to ${formatNumber(MAX_OWNED_MANUAL_COUNT)}`;
+/** The add form's group of the machines without a tier of their own. */
+const MULTIBLOCKS = 'Multiblocks';
+
+/** A machine in words: its name and tier ("Basic Assembler (LV)"), a multiblock by its name, one the pack does not know by its id. */
+export function ownedMachineLabel(machine: OwnableMachine | undefined, mteId: number): string {
+  if (machine === undefined) return `Machine #${mteId}`;
+  return machine.tier === undefined ? machine.name : `${machine.name} (${tierText(machine.tier)})`;
+}
+
+/** The machines of the add form by tier, the lowest first, then the multiblocks; each group in the list's order. */
+export function ownableMachineGroups(machines: readonly OwnableMachine[]): Array<{ label: string; machines: OwnableMachine[] }> {
+  const byTier = new Map<number, OwnableMachine[]>();   // multiblocks under +∞
+  for (const m of machines) {
+    const tier = m.tier ?? Number.POSITIVE_INFINITY;
+    const list = byTier.get(tier);
+    if (list === undefined) byTier.set(tier, [m]);
+    else list.push(m);
+  }
+  return [...byTier].sort(([a], [b]) => a - b)
+    .map(([tier, list]) => ({ label: Number.isFinite(tier) ? tierText(tier) : MULTIBLOCKS, machines: list }));
+}
+
+/** How many of a machine the group has, as typed into the "Machines we have" form, or why it cannot be sent. */
+export function parseOwnedCount(text: string): { count: number } | { error: string } {
+  const trimmed = text.trim();
+  const count = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
+  return count >= 1 && count <= MAX_OWNED_MANUAL_COUNT ? { count } : { error: OWNED_COUNT_ERROR };
+}
+
+/**
+ * `owned` with `count` more of machine `mteId`: added to its entry (up to the most one entry may count) or at the end;
+ * else why that cannot be sent (validateOp's limits).
+ */
+export function ownedWith(owned: readonly OwnedEntry[], mteId: number, count: number): { owned: OwnedEntry[] } | { error: string } {
+  if (!Number.isInteger(count) || count < 1 || count > MAX_OWNED_MANUAL_COUNT) return { error: OWNED_COUNT_ERROR };
+  const entry = owned.find((e) => e.mteId === mteId);
+  if (entry === undefined) {
+    return owned.length >= MAX_OWNED_MANUAL_ENTRIES
+      ? { error: `The list holds at most ${MAX_OWNED_MANUAL_ENTRIES} machine types; remove one first` }
+      : { owned: [...owned, { mteId, count }] };
+  }
+  if (entry.count >= MAX_OWNED_MANUAL_COUNT) return { error: `The list already counts ${formatNumber(MAX_OWNED_MANUAL_COUNT)} of this machine` };
+  return { owned: owned.map((e) => (e === entry ? { mteId, count: Math.min(MAX_OWNED_MANUAL_COUNT, e.count + count) } : e)) };
+}
+
+/** `owned` without machine `mteId`. */
+export function ownedWithout(owned: readonly OwnedEntry[], mteId: number): OwnedEntry[] {
+  return owned.filter((e) => e.mteId !== mteId);
 }

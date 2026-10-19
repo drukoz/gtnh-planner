@@ -1,9 +1,10 @@
 // The panel beside the flow diagram (spec §3.9, fix spec §6.3). A step's panel: what it takes and makes and from or to
 // which step (hovering a row lights the item in the diagram, clicking a step selects it), who else makes its product,
 // why it uses the ingredient option it does (pin another), the free input it supplies or the supporting line it belongs
-// to, reusing the group's machines, its overclock math, every way to make its product (swap its recipe, or import the
-// product instead) and its warnings. A raw material's panel: what kind of import it is, which steps use it, what a
-// bought one stands for, and making it in the line instead. Every choice sends one `settings` op with whole field values.
+// to, the group's machines it reuses and where they stand, its overclock math, every way to make its product (swap its
+// recipe, or import the product instead) and its warnings. A raw material's panel: what kind of import it is, which
+// steps use it, what a bought one stands for, and making it in the line instead. Every choice sends one `settings` op
+// with whole field values.
 
 import { useId, useState, type ReactElement, type ReactNode } from 'react';
 import { tierName } from '../../shared/gt/tiers.ts';
@@ -14,7 +15,7 @@ import { ItemIcon } from '../components/ItemIcon.tsx';
 import { formatNumber, formatPercent, formatRate } from '../format.ts';
 import { endHoverFlowFocus, hoverFlowFocus } from '../state/flow-focus.ts';
 import {
-  flowEdgeId, haveSupplyPatch, importInsteadPatch, LEAF_WORD, makeHerePatch, ocLines, optionPatch, optionSlotKey, reusePatch, useOnlyPatch,
+  flowEdgeId, haveSupplyPatch, importInsteadPatch, LEAF_WORD, makeHerePatch, ocLines, optionPatch, optionSlotKey, reusePatch, tierText, useOnlyPatch,
 } from './flow-model.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
 
@@ -25,6 +26,8 @@ type Patch = (p: Partial<PlanSettings>) => void;
 
 /** Found spots listed per source before the rest is summed up. */
 const MAX_FOUND_AT = 3;
+/** Where reused machines stand: the positions listed before the rest is summed up. */
+const MAX_REUSED_AT = 3;
 /** Swap options shown before "more…" (the one in use and a pinned one always show). */
 const SWAP_SHOWN = 5;
 /** Swap options each "more…" adds: a product can have a thousand ways (Wood Pulp), too many to list at once. */
@@ -402,14 +405,35 @@ function LineSection(props: { step: PlanStep; settings: PlanSettings; patch: Pat
   );
 }
 
+/**
+ * Which owned machines a step runs on and where they stand (architecture §11.29): "2× Basic Assembler (LV) reused — at
+ * your base 1 64 2, 3 64 2" for machines a world scan found (the first few positions), "— from your list" for those of
+ * the "Machines we have" list, both for a mix; just "… reused" for a plan that does not say where; null for none.
+ */
+export function reusedText(step: PlanStep): string | null {
+  const count = step.reused?.count ?? step.owned;
+  if (count <= 0) return null;
+  const machines = `${formatNumber(count)}× ${step.machine.name} (${tierText(step.machine.tier)}) reused`;
+  const where = step.reused?.where;
+  if (where === undefined) return machines;
+  if (where.length === 0) return `${machines} — from your list`;
+  const more = where.length > MAX_REUSED_AT ? ` and ${where.length - MAX_REUSED_AT} more` : '';
+  const spots = `at your base ${where.slice(0, MAX_REUSED_AT).map(({ pos }) => pos.join(' ')).join(', ')}${more}`;
+  const listed = count - where.length;
+  return listed > 0 ? `${machines} — ${formatNumber(where.length)} ${spots}; ${formatNumber(listed)} from your list` : `${machines} — ${spots}`;
+}
+
 function ReuseSection(props: { step: PlanStep; settings: PlanSettings; patch: Patch }): ReactElement | null {
   const { step, settings, patch } = props;
   const { mteId, name } = step.machine;
   const declined = (settings.declineReuse ?? []).includes(mteId);
-  if (step.owned <= 0 && !declined) return null;
+  // With "Reuse machines we have" off nothing is reused, whatever a machine type's own switch says.
+  if (settings.reuseOwned === false || (step.owned <= 0 && !declined)) return null;
+  const reused = reusedText(step);
   return (
     <section className="flow-panel-section">
       <h4 className="flow-panel-title">Reuse</h4>
+      {reused !== null && <p>{reused}</p>}
       <label className="check">
         <input type="checkbox" name="reuse" checked={!declined} onChange={(e) => patch(reusePatch(settings, mteId, e.currentTarget.checked))} />
         {declined ? `Reuse your ${name} machines` : `Reuse your ${step.owned}× ${name}`}
