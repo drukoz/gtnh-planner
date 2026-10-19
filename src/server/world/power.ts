@@ -151,6 +151,16 @@ function outputTier(m: GtMachineRec): number | null {
 }
 
 /**
+ * The factor k of a battery buffer's own store, k × V[tier] × slots (GT's `maxEUStore()`), by the simple name of its
+ * class (plan 10, ruling R15): 256 for a charger, 6,144 for a turbo charger and 64 for every other buffer
+ * (`MTEBasicBatteryBuffer`, gt-mechanics §4.3; `MTETeslaCoil` inherits it).
+ */
+function bufferStoreFactor(cls: string | null): number {
+  const name = simpleClassName(cls);
+  return name === 'MTECharger' ? 256 : name === 'MTETurboCharger' ? 6144 : 64;
+}
+
+/**
  * A steam producer's steam in L/s per figure (rule 5): a solar boiler's from its calcification and hot share of the day,
  * any other's (a multiblock's too) the export's `steamPerSecondMax`; null when the export does not give it (unknown,
  * never 0).
@@ -388,9 +398,9 @@ export function buildPower(input: PowerInput): PowerResult {
     for (const m of machines) {
       if (m.kind !== 'battery_buffer') continue;
       const slots = facts.machines.get(m.mteId)?.batterySlots;
-      // The buffer's own store, 64 × V × slots, takes up to one packet more (gt-mechanics §4.3); a store of known size
-      // caps the charge counted, so the overshoot never shows (plan 10, ruling R12).
-      const own = knownTier(m.tier) && slots !== undefined ? V[m.tier]! * 64 * slots : 0;
+      // The buffer's own store, k × V × slots with k by class (ruling R15), takes up to one packet more (gt-mechanics
+      // §4.3); a store of known size caps the charge counted, so the overshoot never shows (plan 10, ruling R12).
+      const own = knownTier(m.tier) && slots !== undefined ? V[m.tier]! * bufferStoreFactor(m.cls) * slots : 0;
       storedEU += own > 0 ? Math.min(m.storedEU, own) : m.storedEU;
       capacityEU += own;
       for (const b of m.batteries ?? []) {
