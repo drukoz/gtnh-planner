@@ -23,8 +23,11 @@ const UNKNOWN_MANAGER = 'Unknown chunk manager';
 /** The scan notes of plan 10 Task 1 and the unknown-boiler note, with their counts. */
 const UNFED_NOTE = /^(\d+) steam turbines? gets? no steam the scan can follow$/;
 const UNKNOWN_BOILERS_NOTE = /^(\d+) boilers? with unknown steam output$/;
-/** The pack warnings of plan 10 Task 2: battery slots taken from a name, or unknown, on an export from before the fix. */
-const SLOTS_FROM_NAME = /: the export gives 0 battery slots, using \d+ from its name$/;
+/**
+ * The pack warnings of plan 10 Task 2 on an export from before the fix: battery slots taken from a name (a buffer's
+ * number, a charger's family), or unknown.
+ */
+const SLOTS_FROM_NAME = /: the export gives 0 battery slots, using \d+(?: from its name|, the slot count GT gives every charger)$/;
 const SLOTS_UNKNOWN = /: the export gives 0 battery slots and its name does not tell how many, slots unknown$/;
 
 /**

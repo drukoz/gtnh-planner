@@ -22,9 +22,10 @@ const GT_MACHINE_BLOCK = 'gregtech:gt.blockmachines';
 const TICKS_PER_SECOND = 20;
 /**
  * GT's names of battery buffers (plan 10, ruling R10): `batterybuffer.<slots>.tier.<tier>`, and
- * `batterycharger.16.tier.<tier>` and `batteryturbocharger.16.tier.<tier>` for the chargers.
+ * `batterycharger.16.tier.<tier>` and `batteryturbocharger.16.tier.<tier>` for the chargers. Group 1 is the family
+ * (`buffer`, `charger` or `turbocharger`), group 2 the number, a slot count only for `buffer` (ruling R16).
  */
-const BATTERY_BUFFER_NAME_RE = /^battery(?:buffer|charger|turbocharger)\.(\d+)\.tier\.\d+$/;
+const BATTERY_BUFFER_NAME_RE = /^battery(buffer|charger|turbocharger)\.(\d+)\.tier\.\d+$/;
 /** The slots GT registers every charger and turbo charger with (`LoaderMetaTileEntities`); their 16 is not a slot count. */
 const CHARGER_SLOTS = 4;
 
@@ -50,8 +51,8 @@ function machineMaps(raw: readonly string[]): string[] {
 
 /**
  * The slots of a battery buffer exported with 0 (exporter 0.2.0 and older wrote the prototype's battery count, 0 for
- * every buffer; plan 10 Task 2): the count its metaName gives, or 0 when the name gives none (TecTech's Tesla coils share
- * one name across sizes); one warning either way.
+ * every buffer; plan 10 Task 2): the count a `batterybuffer` metaName gives, `CHARGER_SLOTS` for a charger or turbo
+ * charger, or 0 when the name gives none (TecTech's Tesla coils share one name across sizes); one warning either way.
  */
 function slotsFromName(line: MachineLine, ctx: LoadContext): number {
   const m = BATTERY_BUFFER_NAME_RE.exec(line.name);
@@ -59,7 +60,11 @@ function slotsFromName(line: MachineLine, ctx: LoadContext): number {
     ctx.warn(`machine ${line.id} (${line.name}): the export gives 0 battery slots and its name does not tell how many, slots unknown`);
     return 0;
   }
-  const slots = line.name.startsWith('batterybuffer.') ? Number(m[1]) : CHARGER_SLOTS;
+  if (m[1] !== 'buffer') {
+    ctx.warn(`machine ${line.id} (${line.name}): the export gives 0 battery slots, using ${CHARGER_SLOTS}, the slot count GT gives every charger`);
+    return CHARGER_SLOTS;
+  }
+  const slots = Number(m[2]);
   ctx.warn(`machine ${line.id} (${line.name}): the export gives 0 battery slots, using ${slots} from its name`);
   return slots;
 }

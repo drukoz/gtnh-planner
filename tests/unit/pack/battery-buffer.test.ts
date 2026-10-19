@@ -48,8 +48,8 @@ describe('battery buffer slots from old exports', () => {
       'machine 161 (batterybuffer.01.tier.01): the export gives 0 battery slots, using 1 from its name',
       'machine 182 (batterybuffer.09.tier.02): the export gives 0 battery slots, using 9 from its name',
       'machine 193 (batterybuffer.16.tier.03): the export gives 0 battery slots, using 16 from its name',
-      'machine 691 (batterycharger.16.tier.01): the export gives 0 battery slots, using 4 from its name',
-      'machine 12041 (batteryturbocharger.16.tier.01): the export gives 0 battery slots, using 4 from its name',
+      'machine 691 (batterycharger.16.tier.01): the export gives 0 battery slots, using 4, the slot count GT gives every charger',
+      'machine 12041 (batteryturbocharger.16.tier.01): the export gives 0 battery slots, using 4, the slot count GT gives every charger',
     ]);
   });
 
