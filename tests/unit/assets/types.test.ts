@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { FACES, rotateFaces, hashColor, KIND_COLORS, partBlockRef, conduitBlockRef, ae2CableBlockRef, type Face } from '../../../src/shared/types/assets.ts';
+import {
+  FACES, rotateFaces, hashColor, KIND_COLORS, partBlockRef, conduitBlockRef, ae2CableBlockRef, regionRect, layerKey, type Face, type Rect,
+} from '../../../src/shared/types/assets.ts';
 
 const C: Record<Face, string> = { down: 'D', up: 'U', north: 'N', south: 'S', west: 'W', east: 'E' };
 
@@ -35,5 +37,20 @@ describe('asset types', () => {
     expect(partBlockRef('pr_rinterface')).toEqual({ id: 'fmp:pr_rinterface', meta: 0 });
     expect(conduitBlockRef('item')).toEqual({ id: 'conduit:item', meta: 0 });
     expect(ae2CableBlockRef('smart')).toEqual({ id: 'ae2cable:smart', meta: 0 });
+  });
+
+  it('places a region in the tile and keys a layer by path and region', () => {
+    const chest = { path: 'p.png', region: { sheet: 64, src: [14, 33, 14, 10] as Rect, dst: [1, 6, 14, 10] as Rect } };
+    expect(regionRect(chest, 32)).toEqual([2, 12, 28, 20]);
+    expect(regionRect({ path: 'p.png' }, 32)).toEqual([0, 0, 32, 32]);
+    expect(regionRect({ path: 'p.png', region: { sheet: 16, src: [4, 0, 8, 8] } }, 24)).toEqual([0, 0, 24, 24]);
+    expect(layerKey({ path: 'a.png' })).toBe('a.png');
+    expect(layerKey(chest)).toBe('p.png#{"sheet":64,"src":[14,33,14,10],"dst":[1,6,14,10]}');
+  });
+
+  it('rounds a region\'s place and never makes it narrower than a pixel', () => {
+    const knob = { path: 'p.png', region: { sheet: 64, src: [1, 1, 2, 4] as Rect, dst: [7, 5, 2, 4] as Rect } };
+    expect(regionRect(knob, 24)).toEqual([11, 8, 3, 6]);   // 10.5, 7.5, 3, 6
+    expect(regionRect(knob, 2)).toEqual([1, 1, 1, 1]);     // 0.875, 0.625, 0.25 (at least 1), 0.5
   });
 });

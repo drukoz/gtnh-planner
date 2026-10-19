@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { indexOf } from '../../helpers/assets-dir.ts';
 import { assetIndexFrom, loadAssetIndex, iconPath, AssetIndexError, ASSET_INDEX_FORMAT, type AssetIndexFile } from '../../../src/server/assets/index.ts';
+import type { LayerRegion } from '../../../src/shared/types/assets.ts';
 
 const FILE: AssetIndexFile = {
   format: ASSET_INDEX_FORMAT, createdAt: '2026-10-17T00:00:00.000Z', sources: [], conflicts: [], identicalDuplicates: 0,
@@ -31,6 +32,17 @@ describe('asset index', () => {
     expect(ix.layer('gregtech/textures/blocks/iconsets/NOPE.png')).toBeNull();
     expect(ix.firstLayer(['a/textures/blocks/x.png', 'minecraft/textures/blocks/stone.png'])).toEqual({ path: 'minecraft/textures/blocks/stone.png' });
     expect(ix.firstLayer(['a/textures/blocks/x.png'])).toBeNull();
+  });
+
+  it('puts a copy of the region on the layer', () => {
+    const ix = assetIndexFrom(FILE);
+    const region: LayerRegion = { sheet: 64, src: [14, 33, 14, 10], dst: [1, 6, 14, 10] };
+    const layer = ix.firstLayer(['a/textures/blocks/x.png', 'minecraft/textures/blocks/stone.png'], { tint: [10, 20, 30], region })!;
+    expect(layer).toEqual({ path: 'minecraft/textures/blocks/stone.png', tint: [10, 20, 30], region: { sheet: 64, src: [14, 33, 14, 10], dst: [1, 6, 14, 10] } });
+    region.src[0] = 99;
+    region.dst![0] = 99;
+    expect([layer.region!.src[0], layer.region!.dst![0]]).toEqual([14, 1]);
+    expect(Object.keys(ix.layer('minecraft/textures/blocks/stone.png', { region: { sheet: 16, src: [4, 0, 8, 8] } })!.region!)).toEqual(['sheet', 'src']);
   });
 
   it('frames are always square, also in an index written before the fix', () => {

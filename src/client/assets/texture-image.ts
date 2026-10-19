@@ -1,10 +1,11 @@
 // Loads one texture layer from `GET /api/assets/file/<path>` as an ImageBitmap: frame 0 of an animated strip (the top
 // `height / frames` rows), optionally resized evenly (architecture §11.43 (h)): a whole multiple of the frame is
 // nearest-neighbour, any other upscale goes nearest-neighbour to the next whole multiple and then smooth to the target,
-// a downscale is smooth. Shared by the flat item icons and Plan 5's 3D view; the tint is not applied here (icons tint
-// in compositeLayers, the 3D view in its shader).
+// a downscale is smooth. A layer with a region is its `src` crop instead, scaled nearest-neighbour to its place in the
+// tile (§11.43 (b), (h)); callers draw it there (`regionRect`). Shared by the flat item icons and Plan 5's 3D view; the
+// tint is not applied here (icons tint in compositeLayers, the 3D view in its shader).
 
-import type { TextureLayer } from '../../shared/types/assets.ts';
+import { layerKey, regionRect, type LayerRegion, type Rect, type TextureLayer } from '../../shared/types/assets.ts';
 
 const FILE_ROUTE = '/api/assets/file/';
 
@@ -34,16 +35,25 @@ export function resizeSteps(from: number, to: number): ResizeStep[] {
   return [{ size: Math.ceil(to / from) * from, quality: 'pixelated' }, { size: to, quality: 'high' }];
 }
 
-/** Per `path|size`, for the life of the page; a layer that could not be loaded stays `null`. */
+/** Region `src` in pixels of a decoded file `width` pixels wide: scaled by `width / sheet`, rounded, at least 1 by 1. */
+function regionCrop(region: LayerRegion, width: number): Rect {
+  const scale = width / region.sheet;
+  const px = (v: number): number => Math.round(v * scale);
+  const [x, y, w, h] = region.src;
+  return [px(x), px(y), Math.max(1, px(w)), Math.max(1, px(h))];
+}
+
+/** Per `layerKey|size` (path and region), for the life of the page; a layer that could not be loaded stays `null`. */
 const cache = new Map<string, Promise<ImageBitmap | null>>();
 
 /**
  * Frame 0 of `layer`'s texture, resized to `size`×`size` by `resizeSteps` when `size` is given (else at its own size);
- * `null` when the file is missing, the server refuses it or it does not decode. The default deps are the browser's
- * own, looked up at call time.
+ * for a layer with a region, its crop, resized nearest-neighbour to its `regionRect` in a `size` tile (else at its own
+ * size). `null` when the file is missing, the server refuses it or it does not decode. The default deps are the
+ * browser's own, looked up at call time.
  */
 export function loadLayerBitmap(layer: TextureLayer, size?: number, deps?: LayerImageDeps): Promise<ImageBitmap | null> {
-  const key = `${layer.path}|${size ?? ''}`;
+  const key = `${layerKey(layer)}|${size ?? ''}`;
   let bitmap = cache.get(key);
   if (!bitmap) {
     bitmap = load(layer, size, deps);
@@ -61,6 +71,10 @@ async function load(layer: TextureLayer, size: number | undefined, deps: LayerIm
     const decoded = await decode(await res.blob());
     try {
       const { width, height } = decoded;
+      if (layer.region !== undefined) {
+        const [x, y, w, h] = regionCrop(layer.region, width);
+        return await decode(decoded, x, y, w, h, size ? placeOptions(regionRect(layer, size)) : undefined);
+      }
       // A frame is square, so the steps start from its width. The first one rides on the crop, the rest resize its result.
       const [first, ...later] = size ? resizeSteps(width, size) : [];
       let bitmap = await decode(decoded, 0, 0, width, frameHeight(width, height, layer.frames), first ? resizeOptions(first) : undefined);
@@ -83,4 +97,9 @@ async function load(layer: TextureLayer, size: number | undefined, deps: LayerIm
 
 function resizeOptions(step: ResizeStep): ImageBitmapOptions {
   return { resizeWidth: step.size, resizeHeight: step.size, resizeQuality: step.quality };
+}
+
+/** A region crop to the width and height of its place in the tile, nearest-neighbour (architecture §11.43 (h)). */
+function placeOptions([, , w, h]: Rect): ImageBitmapOptions {
+  return { resizeWidth: w, resizeHeight: h, resizeQuality: 'pixelated' };
 }

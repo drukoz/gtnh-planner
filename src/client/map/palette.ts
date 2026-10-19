@@ -4,7 +4,7 @@
 
 import { compositeLayers, type LayerPixels } from '../assets/composite.ts';
 import { loadLayerBitmap } from '../assets/texture-image.ts';
-import { hashColor, type BlockFaces, type Rgb, type TextureLayer } from '../../shared/types/assets.ts';
+import { hashColor, regionRect, type BlockFaces, type Rgb, type TextureLayer } from '../../shared/types/assets.ts';
 import type { BlockRef } from '../../shared/types/pack.ts';
 
 /** Textures are averaged at 16×16 (frame 0 only, cut by loadLayerBitmap). */
@@ -78,7 +78,10 @@ export function averageTopColor(layers: readonly LayerPixels[]): Rgb | null {
   return n === 0 ? null : [Math.round(r / n), Math.round(g / n), Math.round(b / n)];
 }
 
-/** One layer's frame 0 at PALETTE_TEXTURE_SIZE², read back from an OffscreenCanvas; null when the texture did not load. */
+/**
+ * One layer's frame 0 (or region, at its place) in a PALETTE_TEXTURE_SIZE² tile, read back from an OffscreenCanvas; null
+ * when the texture did not load.
+ */
 export async function layerPixels(layer: TextureLayer): Promise<LayerPixels | null> {
   const bitmap = await loadLayerBitmap(layer, PALETTE_TEXTURE_SIZE);
   if (bitmap === null) return null;
@@ -86,7 +89,8 @@ export async function layerPixels(layer: TextureLayer): Promise<LayerPixels | nu
   const ctx = canvas.getContext('2d');
   if (ctx === null) return null;
   // The bitmap is loadLayerBitmap's cached copy: drawn, never closed.
-  ctx.drawImage(bitmap, 0, 0, PALETTE_TEXTURE_SIZE, PALETTE_TEXTURE_SIZE);
+  const [x, y, w, h] = regionRect(layer, PALETTE_TEXTURE_SIZE);
+  ctx.drawImage(bitmap, x, y, w, h);
   const { data } = ctx.getImageData(0, 0, PALETTE_TEXTURE_SIZE, PALETTE_TEXTURE_SIZE);
   return { data, width: PALETTE_TEXTURE_SIZE, height: PALETTE_TEXTURE_SIZE, tint: layer.tint };
 }

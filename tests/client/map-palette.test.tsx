@@ -83,6 +83,18 @@ describe('layerPixels', () => {
     expect(await layerPixels({ path: 'missing.png' })).toBeNull();
     expect(PALETTE_TEXTURE_SIZE).toBe(16);
   });
+
+  it('draws a region layer at its place in the 16 px tile', async () => {
+    vi.stubGlobal('OffscreenCanvas', FakeCanvas);
+    FakeCanvas.draws = [];
+    const bitmap = { width: 14, height: 10, close() {} } as unknown as ImageBitmap;
+    vi.mocked(loadLayerBitmap).mockResolvedValueOnce(bitmap);
+    const layer: TextureLayer = { path: 'x.png', region: { sheet: 64, src: [14, 33, 14, 10], dst: [1, 6, 14, 10] } };
+    const p = await layerPixels(layer);
+    expect(loadLayerBitmap).toHaveBeenLastCalledWith(layer, 16);
+    expect(FakeCanvas.draws).toEqual([[bitmap, 1, 6, 14, 10]]);
+    expect([p!.width, p!.height]).toEqual([16, 16]);
+  });
 });
 
 describe('fallbackColor and packing', () => {

@@ -10,7 +10,7 @@ import { sampleLayout, sampleFaces, sampleIcons, sampleCovers } from './layout-f
 // for the tests after the plan's own
 import { webgl2Available } from '../../src/client/views/View3D.tsx';
 import type { TextureDeps } from '../../src/client/three/load-textures.ts';
-import type { BlockFaces } from '../../src/shared/types/assets.ts';
+import type { BlockFaces, TextureLayer } from '../../src/shared/types/assets.ts';
 import type { Layout, LayoutBlock } from '../../src/shared/types/layout.ts';
 import { CONV } from './layout-fixture.ts';
 
@@ -127,5 +127,15 @@ describe('3D tab: the rules in detail', () => {
     const tinted = { ...scene, tiles: [{ key: 'k', layers: [{ path: 'x/a.png', tint: [255, 0, 0] as [number, number, number] }], color: [0, 0, 0] as [number, number, number] }] };
     const [red] = await tilesFor(tinted, { ...noTextures, image: async () => ({ data: solidTile([200, 100, 50]) }) });
     expect([...red!.slice(0, 4)]).toEqual([200, 0, 0, 255]);
+  });
+
+  it('asks for each crop of a sheet once, and never shares one crop\'s image with another', async () => {
+    const crop = (side: number): TextureLayer => ({ path: 'ic2/textures/blocks/blockRubWood.png', region: { sheet: 96, src: [16 * side, 0, 16, 16] } });
+    const scene = buildScene(sampleLayout, sampleFaces, sampleIcons, sampleCovers);
+    const strip = { ...scene, tiles: [{ key: 'a', layers: [crop(0), crop(2)], color: [0, 0, 0] as [number, number, number] },
+      { key: 'b', layers: [crop(0)], color: [0, 0, 0] as [number, number, number] }] };
+    const asked: TextureLayer[] = [];
+    await tilesFor(strip, { ...noTextures, image: async (layer) => { asked.push(layer); return { data: solidTile([200, 100, 50]) }; } });
+    expect(asked).toEqual([crop(0), crop(2)]);
   });
 });

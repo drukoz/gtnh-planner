@@ -250,3 +250,31 @@ describe('rules by name', () => {
     expect(resolveIcons({ ...named, dump: null }, ['fluid:steam'])[0]!.source).toBe('fallback');
   });
 });
+
+describe('curated layers and items', () => {
+  const STRIP = 'ic2/textures/blocks/blockRubWood.png';
+  const PIPE = 'projectred/textures/blocks/mechanical/pipes/routedjunc.png';
+  const NO_FACES = { down: [], up: [], north: [], south: [], west: [], east: [] };
+  const only = (spec: AssetSpec, part?: Partial<TexturesDumpFile>): AssetSources => {
+    const ix = indexOf(spec);
+    return { index: ix, dump: part === undefined ? null : buildTexturesDump(dumpFile(part), ix), nei: null, pack: null };
+  };
+
+  it('draws IC2 rubber wood from its strip, a region per face, and nothing without the strip', () => {
+    const strip = only({ [STRIP]: { w: 96, h: 16 } });
+    const [wood] = resolveBlocks(strip, [{ id: 'IC2:blockRubWood', meta: 3 }]);
+    expect(wood!.resolved).toBe(true);
+    expect(wood!.faces.up).toEqual([{ path: STRIP, region: { sheet: 96, src: [16, 0, 16, 16] } }]);
+    expect(resolveIcons(strip, ['IC2:blockRubWood@0'])[0]).toMatchObject({ source: 'jar', layers: [{ path: STRIP, region: { sheet: 96, src: [32, 0, 16, 16] } }] });
+    expect(resolveBlocks(only({}), [{ id: 'IC2:blockRubWood', meta: 3 }])[0]).toMatchObject({ resolved: false, faces: NO_FACES });
+  });
+
+  it('a curated item beats the item texture name, keeps its region, and leaves a missing file to the later steps', () => {
+    const coal = only({ 'minecraft/textures/items/coal.png': {}, 'minecraft/textures/items/charcoal.png': {} }, { textureNames: { blocks: {}, items: { 'minecraft:coal': 'coal' } } });
+    expect(resolveIcons(coal, ['minecraft:coal@1'])[0]!.layers[0]!.path).toBe('minecraft/textures/items/charcoal.png');
+    const noCharcoal = only({ 'minecraft/textures/items/coal.png': {} }, { textureNames: { blocks: {}, items: { 'minecraft:coal': 'coal' } } });
+    expect(resolveIcons(noCharcoal, ['minecraft:coal@1'])[0]).toMatchObject({ source: 'jar', layers: [{ path: 'minecraft/textures/items/coal.png' }] });   // its texture name
+    expect(resolveIcons(only({ [PIPE]: {} }), ['ProjRed|Transportation:projectred.transportation.pipe@1'])[0])
+      .toMatchObject({ source: 'jar', layers: [{ path: PIPE, region: { sheet: 16, src: [4, 0, 8, 8] } }] });
+  });
+});

@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { compositeLayers, solidPixels } from '../../src/client/assets/composite.ts';
 import { createIconBatcher } from '../../src/client/assets/icon-batcher.ts';
 import { assetFileUrl, frameHeight, loadLayerBitmap, resizeSteps } from '../../src/client/assets/texture-image.ts';
-import { hashColor, type IconDescriptor } from '../../src/shared/types/assets.ts';
+import { hashColor, type IconDescriptor, type TextureLayer } from '../../src/shared/types/assets.ts';
 
 const one = (rgba: number[], tint?: [number, number, number]) => ({ data: new Uint8ClampedArray(rgba), width: 1, height: 1, ...(tint ? { tint } : {}) });
 
@@ -175,5 +175,27 @@ describe('texture images', () => {
     };
     expect(await loadLayerBitmap({ path: 'nei/icons/failing.png' }, 48, deps)).toBeNull();
     expect([...closed].sort()).toEqual(['decoded', 'x64']);
+  });
+
+  it('crops a region, scaled to the file, straight to its place nearest-neighbour; caches by path and region', async () => {
+    const calls: unknown[][] = [];
+    const bitmap = (w: number, h: number) => ({ width: w, height: h, close() {} }) as unknown as ImageBitmap;
+    const deps = {
+      fetch: vi.fn(async () => new Response(new Uint8Array([1]))) as unknown as typeof fetch,
+      createImageBitmap: vi.fn(async (...args: unknown[]) => { calls.push(args); return args.length > 1 ? bitmap(14, 10) : bitmap(128, 128); }) as unknown as typeof createImageBitmap,
+    };
+    const chest: TextureLayer = { path: 'x.png', region: { sheet: 64, src: [14, 33, 14, 10], dst: [1, 6, 14, 10] } };
+    const cropped = await loadLayerBitmap(chest, 16, deps);
+    expect(cropped).not.toBeNull();
+    expect(calls).toHaveLength(2);   // decode, then the one crop: no second resize step
+    expect(calls[1]!.slice(1)).toEqual([28, 66, 28, 20, { resizeWidth: 14, resizeHeight: 10, resizeQuality: 'pixelated' }]);
+    expect(await loadLayerBitmap({ ...chest, region: { ...chest.region! } }, 16, deps)).toBe(cropped);   // an equal region is the same entry
+    expect(deps.fetch).toHaveBeenCalledTimes(1);
+    expect(await loadLayerBitmap({ path: 'x.png' }, 16, deps)).not.toBe(cropped);   // the same file without a region is its own entry
+    await loadLayerBitmap({ path: 'x.png' }, 16, deps);
+    expect(deps.fetch).toHaveBeenCalledTimes(2);
+    await loadLayerBitmap(chest, undefined, deps);   // no size: the crop at its own size
+    expect(calls.at(-1)!.slice(1)).toEqual([28, 66, 28, 20, undefined]);
+    expect(deps.fetch).toHaveBeenCalledTimes(3);
   });
 });

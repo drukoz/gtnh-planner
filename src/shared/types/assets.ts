@@ -2,7 +2,14 @@ import type { BlockRef, MachineKind } from './pack.ts';
 import type { StuffKey } from '../keys.ts';
 
 export type Rgb = [number, number, number];
-export interface TextureLayer { path: string /* data/assets-relative, e.g. "gregtech/textures/blocks/iconsets/MACHINE_MV_SIDE.png" */; tint?: [number, number, number]; glow?: boolean; frames?: number }
+/** `[x, y, w, h]`. */
+export type Rect = [number, number, number, number];
+/**
+ * Part of a texture drawn into part of the tile (architecture §11.43 (b)): `src` in pixels of a sheet `sheet` pixels
+ * wide (scaled to the file's real width), `dst` in sixteenths of the tile (default the whole tile).
+ */
+export interface LayerRegion { sheet: number; src: Rect; dst?: Rect }
+export interface TextureLayer { path: string /* data/assets-relative, e.g. "gregtech/textures/blocks/iconsets/MACHINE_MV_SIDE.png" */; tint?: [number, number, number]; glow?: boolean; frames?: number; region?: LayerRegion }
 export type Face = 'down' | 'up' | 'north' | 'south' | 'west' | 'east';
 export interface BlockFaces { block: BlockRef; faces: Record<Face, TextureLayer[]>; fallbackColor: [number, number, number]; resolved: boolean }
 export interface IconDescriptor { key: StuffKey; layers: TextureLayer[]; source: 'nei' | 'gt' | 'jar' | 'fallback'; fallbackColor: [number, number, number] }
@@ -12,6 +19,24 @@ export interface CoverLayers { item: StuffKey; layers: TextureLayer[] }
 
 /** ForgeDirection order 0..5. */
 export const FACES: readonly Face[] = ['down', 'up', 'north', 'south', 'west', 'east'];
+
+/** A region's `dst` is in sixteenths of the tile. */
+const TILE_SIXTEENTHS = 16;
+
+/**
+ * Where `layer` goes in a `size`×`size` tile, in pixels: its region's `dst`, else the whole tile, scaled from
+ * sixteenths to `size`; each value rounded, the width and height at least 1.
+ */
+export function regionRect(layer: TextureLayer, size: number): Rect {
+  const [x, y, w, h] = layer.region?.dst ?? [0, 0, TILE_SIXTEENTHS, TILE_SIXTEENTHS];
+  const px = (v: number): number => Math.round((v * size) / TILE_SIXTEENTHS);
+  return [px(x), px(y), Math.max(1, px(w)), Math.max(1, px(h))];
+}
+
+/** What an image cache keys a layer by (architecture §11.43 (b)): its path, plus `#` and its region's JSON when it has one. */
+export function layerKey(layer: TextureLayer): string {
+  return layer.region === undefined ? layer.path : `${layer.path}#${JSON.stringify(layer.region)}`;
+}
 
 // Result face <- canonical face, per facing (canonical front is north).
 const FACING_MAPS: Record<number, Partial<Record<Face, Face>>> = {

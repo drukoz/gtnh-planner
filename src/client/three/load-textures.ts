@@ -6,7 +6,7 @@
 
 import type { StuffKey } from '../../shared/keys.ts';
 import { ASSET_KEYS_MAX, type AssetCoversRequest } from '../../shared/types/api.ts';
-import type { BlockFaces, CoverLayers, IconDescriptor, TextureLayer } from '../../shared/types/assets.ts';
+import { layerKey, type BlockFaces, type CoverLayers, type IconDescriptor, type TextureLayer } from '../../shared/types/assets.ts';
 import type { Layout } from '../../shared/types/layout.ts';
 import type { BlockRef } from '../../shared/types/pack.ts';
 import { apiPost } from '../api/client.ts';
@@ -110,16 +110,18 @@ async function imageOrNull(deps: TextureDeps, layer: TextureLayer): Promise<Tile
 
 /**
  * The pixels of every scene tile, in tile order: its layers composited bottom to top, each with its own tint (Task
- * 14's `compositeTile`), each texture path asked for once however many tiles use it; a tile without layers, whose
- * images all fail to load, or that cannot be composited is `solidTile(tile.color)`. Never rejects.
+ * 14's `compositeTile`), each texture asked for once per path and region (`layerKey`) however many tiles use it; a
+ * tile without layers, whose images all fail to load, or that cannot be composited is `solidTile(tile.color)`. Never
+ * rejects.
  */
 export async function tilesFor(scene: SceneData, deps: TextureDeps): Promise<Uint8ClampedArray[]> {
   const images = new Map<string, Promise<TileImage | null>>();
   const imageOf = (layer: TextureLayer): Promise<TileImage | null> => {
-    let image = images.get(layer.path);
+    const key = layerKey(layer);
+    let image = images.get(key);
     if (image === undefined) {
       image = imageOrNull(deps, layer);
-      images.set(layer.path, image);
+      images.set(key, image);
     }
     return image;
   };

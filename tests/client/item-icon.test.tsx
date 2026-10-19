@@ -73,6 +73,8 @@ describe('iconImageUrl', () => {
     constructor(readonly rgba: number[]) {}
     close(): void {}
   }
+  /** Every drawImage call's arguments, in order. */
+  const draws: unknown[][] = [];
   class FakeCanvas {
     pixels = new Uint8ClampedArray(4);
     constructor(readonly width: number, readonly height: number) {}
@@ -81,7 +83,7 @@ describe('iconImageUrl', () => {
       return {
         imageSmoothingEnabled: true,
         clearRect: () => { canvas.pixels = new Uint8ClampedArray(4); },
-        drawImage: (bitmap: FakeBitmap) => { canvas.pixels = new Uint8ClampedArray(bitmap.rgba); },
+        drawImage: (bitmap: FakeBitmap, ...at: number[]) => { draws.push([bitmap, ...at]); canvas.pixels = new Uint8ClampedArray(bitmap.rgba); },
         getImageData: () => ({ data: new Uint8ClampedArray(canvas.pixels) }),
         createImageData: () => ({ data: new Uint8ClampedArray(4) }),
         putImageData: (image: { data: Uint8ClampedArray }) => { canvas.pixels = new Uint8ClampedArray(image.data); },
@@ -89,7 +91,7 @@ describe('iconImageUrl', () => {
     }
     async convertToBlob(): Promise<Blob> { return new Blob([JSON.stringify([...this.pixels])]); }
   }
-  const FILES: Record<string, number[]> = { 'u/base.png': [200, 100, 50, 255], 'u/over.png': [255, 0, 0, 128] };
+  const FILES: Record<string, number[]> = { 'u/base.png': [200, 100, 50, 255], 'u/over.png': [255, 0, 0, 128], 'u/sheet.png': [10, 20, 30, 255] };
 
   async function withBrowser<T>(run: (made: Blob[]) => Promise<T>): Promise<T> {
     const made: Blob[] = [];
@@ -132,6 +134,17 @@ describe('iconImageUrl', () => {
       const desc: IconDescriptor = { key: 't:gone@0', source: 'jar', fallbackColor: [1, 2, 3], layers: [{ path: 'u/nothing.png' }] };
       expect(await iconImageUrl(desc, 1)).toBeNull();
       expect(made).toHaveLength(0);
+    });
+  });
+
+  it('draws a region layer at its place in the icon', async () => {
+    await withBrowser(async () => {
+      draws.length = 0;
+      const desc: IconDescriptor = { key: 't:chest@0', source: 'jar', fallbackColor: [1, 2, 3],
+        layers: [{ path: 'u/sheet.png', region: { sheet: 64, src: [14, 33, 14, 10], dst: [1, 6, 14, 10] } }] };
+      // The 1×1 fake canvas cannot composite a 32 px icon (compositeLayers refuses its 4 bytes); only where the layer goes counts here.
+      await iconImageUrl(desc, 32).catch(() => null);
+      expect(draws).toEqual([[expect.any(FakeBitmap), 2, 12, 28, 20]]);
     });
   });
 });

@@ -1,8 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { curatedBlock, curatedIds, curatedPaths } from '../../../src/server/assets/curated.ts';
+import { curatedBlock, curatedIds, curatedItem, curatedItemIds, curatedPaths, PIPE_FILES } from '../../../src/server/assets/curated.ts';
+import { FACES, type Rgb } from '../../../src/shared/types/assets.ts';
 
 const SD = 'storagedrawers/textures/blocks/';
 const MC = 'minecraft/textures/blocks/';
+const BOP = 'biomesoplenty/textures/blocks/';
+/** Every face with these candidates (none by default), and every face in one tint. */
+const all = (...paths: string[]) => Object.fromEntries(FACES.map((f) => [f, paths]));
+const allTint = (rgb: Rgb) => Object.fromEntries(FACES.map((f) => [f, rgb]));
 
 describe('curated block tables', () => {
   it('maps Storage Drawers by wood and drawer count', () => {
@@ -34,9 +39,75 @@ describe('curated block tables', () => {
     expect(g.faces.up).toEqual([MC + 'grass_top.png']);
     expect(g.faces.down).toEqual([MC + 'dirt.png']);
     expect(g.tint).toEqual({ up: [145, 189, 89] });
-    expect(curatedBlock('minecraft:log', 6)!.faces.up).toEqual([MC + 'log_birch_top.png']);
+    expect(curatedBlock('minecraft:log', 2)!.faces.up).toEqual([MC + 'log_birch_top.png']);
     expect(curatedBlock('minecraft:wool', 14)!.faces.north).toEqual([MC + 'wool_colored_red.png']);
     expect(curatedBlock('minecraft:furnace', 0)!.faces.north).toEqual([MC + 'furnace_front_off.png']);
+  });
+
+  it('maps vanilla blocks by meta: stairs, slabs, sandstone, carpets, log axes, crops and pumpkins', () => {
+    expect(curatedBlock('minecraft:spruce_stairs', 3)!.faces.north).toEqual([MC + 'planks_spruce.png']);
+    expect(curatedBlock('minecraft:sandstone', 2)!.faces.west).toEqual([MC + 'sandstone_smooth.png']);
+    expect(curatedBlock('minecraft:sandstone', 1)!.faces.up).toEqual([MC + 'sandstone_top.png']);
+    expect(curatedBlock('minecraft:stone_slab', 9)!.faces.up).toEqual([MC + 'sandstone_top.png']);
+    expect(curatedBlock('minecraft:double_stone_slab', 8)!.faces.north).toEqual([MC + 'stone_slab_top.png']);
+    expect(curatedBlock('minecraft:carpet', 14)!.faces.up).toEqual([MC + 'wool_colored_red.png']);
+    expect(curatedBlock('minecraft:log', 4)!.faces.west).toEqual([MC + 'log_oak_top.png']);
+    expect(curatedBlock('minecraft:log', 4)!.faces.up).toEqual([MC + 'log_oak.png']);
+    expect(curatedBlock('minecraft:carrots', 5)!.faces.up).toEqual([MC + 'carrots_stage_2.png']);
+    expect(curatedBlock('minecraft:pumpkin', 0)!.faces.north).toEqual([MC + 'pumpkin_face_off.png']);
+  });
+
+  it('turns logs along their axis and draws the other per-meta vanilla rows', () => {
+    const log = (meta: number) => FACES.map((f) => curatedBlock('minecraft:log2', meta)!.faces[f][0]!.slice(MC.length));
+    expect(log(1)).toEqual(['log_big_oak_top.png', 'log_big_oak_top.png', 'log_big_oak.png', 'log_big_oak.png', 'log_big_oak.png', 'log_big_oak.png']);
+    expect(log(8)).toEqual(['log_acacia.png', 'log_acacia.png', 'log_acacia_top.png', 'log_acacia_top.png', 'log_acacia.png', 'log_acacia.png']);
+    expect(log(12)).toEqual(Array(6).fill('log_acacia.png'));
+    expect(['sandstone', 'sandstone', 'sandstone', 'sandstone_stairs'].map((id, meta) => curatedBlock(`minecraft:${id}`, meta)!.faces.down))
+      .toEqual([[MC + 'sandstone_bottom.png'], [MC + 'sandstone_top.png'], [MC + 'sandstone_top.png'], [MC + 'sandstone_bottom.png']]);   // BlockSandStone.getIcon
+    expect(curatedBlock('minecraft:double_stone_slab', 9)!.faces.down).toEqual([MC + 'sandstone_top.png']);
+    expect(curatedBlock('minecraft:double_stone_slab', 15)!.faces.west).toEqual([MC + 'quartz_block_top.png']);   // the top bit: the kind's top everywhere
+    expect(curatedBlock('minecraft:stone_slab', 15)!.faces.west).toEqual([MC + 'quartz_block_side.png']);       // a single slab: its upper half
+    expect(curatedBlock('minecraft:sapling', 7)!.faces.up).toEqual([MC + 'sapling_roofed_oak.png']);            // BlockSapling clamps the type to 5
+    expect([6, 7].map((meta) => curatedBlock('minecraft:double_plant', meta))).toEqual([null, null]);
+    expect(curatedBlock('minecraft:stone_slab', 0)).toMatchObject({ faces: { up: [MC + 'stone_slab_top.png'], north: [MC + 'stone_slab_side.png'] } });
+    expect(curatedBlock('minecraft:double_wooden_slab', 13)!.faces.east).toEqual([MC + 'planks_big_oak.png']);
+    expect(curatedBlock('minecraft:double_plant', 10)).toEqual({ faces: all(MC + 'double_plant_grass_top.png'), tint: allTint([145, 189, 89]) });
+    expect(curatedBlock('minecraft:double_plant', 0)).toEqual({ faces: all(MC + 'double_plant_sunflower_bottom.png') });
+    expect(curatedBlock('minecraft:tallgrass', 0)).toEqual({ faces: all(MC + 'deadbush.png') });
+    expect(curatedBlock('minecraft:tallgrass', 2)).toEqual({ faces: all(MC + 'fern.png'), tint: allTint([145, 189, 89]) });
+    expect(curatedBlock('minecraft:redstone_wire', 15)).toEqual({ faces: all(MC + 'redstone_dust_cross.png'), tint: allTint([76, 0, 0]) });
+    expect(curatedBlock('minecraft:bed', 9)!.faces).toMatchObject({ up: [MC + 'bed_head_top.png'], south: [MC + 'bed_head_end.png'], east: [MC + 'bed_head_side.png'], down: [MC + 'planks_oak.png'] });
+    expect(curatedBlock('minecraft:anvil', 8)!.faces).toMatchObject({ up: [MC + 'anvil_top_damaged_2.png'], north: [MC + 'anvil_base.png'] });
+    expect(curatedBlock('minecraft:red_mushroom_block', 10)!.faces).toMatchObject({ up: [MC + 'mushroom_block_inside.png'], west: [MC + 'mushroom_block_skin_stem.png'] });
+    expect(curatedBlock('minecraft:wooden_door', 8)!.faces.north).toEqual([MC + 'door_wood_upper.png']);
+    expect(curatedBlock('minecraft:farmland', 7)!.faces).toMatchObject({ up: [MC + 'farmland_wet.png'], down: [MC + 'dirt.png'] });
+    expect(curatedBlock('minecraft:cocoa', 11)!.faces.up).toEqual([MC + 'cocoa_stage_2.png']);
+    expect(curatedBlock('minecraft:nether_wart', 2)!.faces.up).toEqual([MC + 'nether_wart_stage_1.png']);
+    expect(curatedBlock('minecraft:monster_egg', 5)!.faces.up).toEqual([MC + 'stonebrick_carved.png']);
+    expect(curatedBlock('minecraft:dropper', 0)!.faces).toMatchObject({ north: [MC + 'dropper_front_horizontal.png'], up: [MC + 'furnace_top.png'], west: [MC + 'furnace_side.png'] });
+  });
+
+  it('maps BOP logs, planks and foliage, Natura bloodwood and Ztones', () => {
+    expect(curatedBlock('BiomesOPlenty:logs4', 0)!.faces.up).toEqual([BOP + 'log_pine_heart.png']);
+    expect(curatedBlock('BiomesOPlenty:logs1', 9)!.faces.north).toEqual([BOP + 'log_cherry_heart.png']);
+    expect(curatedBlock('BiomesOPlenty:logs3', 3)).toBeNull();
+    expect(curatedBlock('BiomesOPlenty:planks', 12)!.faces.up).toEqual([BOP + 'plank_hell_bark.png']);
+    expect(curatedBlock('BiomesOPlenty:foliage', 10)).toMatchObject({ faces: { up: [BOP + 'wheatgrass.png'] }, tint: { up: [145, 189, 89] } });
+    expect(curatedBlock('BiomesOPlenty:foliage', 15)!.tint).toBeUndefined();
+    expect(curatedBlock('Ztones:tile.crayBlock', 5)!.faces.up).toEqual(['ztones/textures/blocks/sets/cray/cray_ (5).png']);
+    expect(curatedBlock('BiomesOPlenty:logs2', 7)!.faces.west).toEqual([BOP + 'log_palm_heart.png']);   // palm, lying west–east
+    expect(curatedBlock('BiomesOPlenty:logs2', 15)!.faces.west).toEqual([BOP + 'log_palm_side.png']);   // bark everywhere
+    expect(curatedBlock('BiomesOPlenty:foliage', 9)!.tint!.north).toEqual([119, 171, 47]);
+    expect(curatedBlock('Natura:bloodwood', 0)!.faces).toMatchObject({ up: ['natura/textures/blocks/bloodwood_heart_small.png'], east: ['natura/textures/blocks/bloodwood_bark.png'] });
+    expect(curatedBlock('Ztones:tile.glaxx', 15)!.faces.south).toEqual(['ztones/textures/blocks/sets/glaxx/glaxx_ (15).png']);
+    expect(curatedIds().filter((id) => id.startsWith('Ztones:'))).toHaveLength(34);
+  });
+
+  it('draws IC2 rubber wood from its strip, one region per face', () => {
+    const wood = curatedBlock('IC2:blockRubWood', 3)!;
+    expect(wood.layers!.east).toEqual([{ paths: ['ic2/textures/blocks/blockRubWood.png'], region: { sheet: 96, src: [80, 0, 16, 16] } }]);
+    expect(FACES.map((f) => wood.layers![f]![0]!.region!.src[0])).toEqual([0, 16, 32, 48, 64, 80]);
+    expect(wood.faces).toEqual(all());
   });
 
   it('answers nothing else and lists what it knows', () => {
@@ -51,5 +122,39 @@ describe('curated block tables', () => {
     for (const name of ['constructor', '__proto__', 'toString', 'hasOwnProperty', 'valueOf']) {
       for (const id of [name, `fmp:${name}`, `conduit:${name}`, `ae2cable:${name}`]) expect(curatedBlock(id, 0)).toBeNull();
     }
+  });
+});
+
+describe('curated items', () => {
+  const PARTS = 'projectred/textures/items/base/';
+
+  it('draws vanilla coal and dye, ProjectRed parts and pipes, and the gaia head', () => {
+    expect(curatedItem('minecraft:coal', 1)).toEqual({ paths: ['minecraft/textures/items/charcoal.png'] });
+    expect(curatedItem('minecraft:dye', 4)).toEqual({ paths: ['minecraft/textures/items/dye_powder_blue.png'] });
+    expect(curatedItem('ProjRed|Core:projectred.core.part', 20)).toEqual({ paths: ['projectred/textures/items/base/illumar1.png'] });
+    expect(curatedItem('ProjRed|Transportation:projectred.transportation.pipe', 1))
+      .toEqual({ paths: ['projectred/textures/blocks/mechanical/pipes/routedjunc.png'], region: { sheet: 16, src: [4, 0, 8, 8] } });
+    expect(curatedItem('minecraft:stone', 0)).toBeNull();
+    for (const name of ['constructor', '__proto__', 'toString']) expect(curatedItem(name, 0)).toBeNull();
+    expect(curatedItem('Botania:gaiaHeadBlock', 0)).toEqual({ paths: ['botania/textures/items/gaiaHead.png'] });
+    expect(curatedItem('Botania:gaiaHeadBlock', 1)).toBeNull();
+  });
+
+  it('follows the game\'s orders, and nothing past their ends', () => {
+    expect(curatedItem('minecraft:coal', 0)).toEqual({ paths: ['minecraft/textures/items/coal.png'] });
+    expect(curatedItem('minecraft:dye', 15)).toEqual({ paths: ['minecraft/textures/items/dye_powder_white.png'] });
+    expect(curatedItem('minecraft:bow', 0)).toEqual({ paths: ['minecraft/textures/items/bow_standby.png'] });
+    expect([37, 52, 59, 60].map((meta) => curatedItem('ProjRed|Core:projectred.core.part', meta)?.paths[0] ?? null))
+      .toEqual([PARTS + 'gemruby.png', PARTS + 'copper_ingot.png', PARTS + 'electro_silicon.png', null]);
+    expect(PIPE_FILES).toEqual(['basic', 'routedjunc', 'routedint', 'routedcrafting', 'routedrequest', 'routedextension', 'routedfire',
+      'pressuretube', 'resistancetube', 'netvalve_inout', 'netlatency']);
+    expect(curatedItem('ProjRed|Transportation:projectred.transportation.pipe', 11)).toBeNull();
+  });
+
+  it('lists the item ids, and every layer and item path among the curated paths', () => {
+    expect(curatedItemIds().sort()).toEqual(['Botania:gaiaHeadBlock', 'ProjRed|Core:projectred.core.part', 'ProjRed|Transportation:projectred.transportation.pipe',
+      'minecraft:bow', 'minecraft:coal', 'minecraft:dye']);
+    expect(curatedPaths()).toEqual(expect.arrayContaining(['ic2/textures/blocks/blockRubWood.png', 'minecraft/textures/items/charcoal.png', PARTS + 'electro_silicon.png',
+      'botania/textures/items/gaiaHead.png', 'ztones/textures/blocks/sets/zyth/zyth_ (15).png']));   // parts 16–59 too: each item row over its own metas
   });
 });

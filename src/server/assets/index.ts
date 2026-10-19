@@ -3,7 +3,7 @@
 
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { Rgb, TextureLayer } from '../../shared/types/assets.ts';
+import type { LayerRegion, Rgb, TextureLayer } from '../../shared/types/assets.ts';
 
 export const ASSET_INDEX_FORMAT = 'gtnh-planner-assets/1';
 export const INDEX_FILE = 'index.json';                              // data/assets/index.json
@@ -25,11 +25,14 @@ export class AssetIndexError extends Error {
   }
 }
 
+/** What a layer carries besides its file: a tint (white is dropped), the glow flag and the region it draws. */
+export interface LayerOptions { tint?: Rgb; glow?: boolean; region?: LayerRegion }
+
 export interface AssetIndex {
   readonly size: number; readonly file: AssetIndexFile | null;
   has(path: string): boolean; info(path: string): AssetFileInfo | undefined;
-  layer(path: string, opts?: { tint?: Rgb; glow?: boolean }): TextureLayer | null;
-  firstLayer(paths: readonly string[], opts?: { tint?: Rgb; glow?: boolean }): TextureLayer | null;
+  layer(path: string, opts?: LayerOptions): TextureLayer | null;
+  firstLayer(paths: readonly string[], opts?: LayerOptions): TextureLayer | null;
 }
 
 /** A white tint draws a texture as it is, so a layer never carries one. */
@@ -45,8 +48,14 @@ function framesOf(info: AssetFileInfo): number {
   return info.frames !== undefined && info.frames > 1 && info.w > 0 ? Math.max(1, Math.floor(info.h / info.w)) : 1;
 }
 
+/** A fresh copy of `region`, so a layer never shares (or alters) a table's arrays. */
+function copyRegion(region: LayerRegion): LayerRegion {
+  const { sheet, src, dst } = region;
+  return dst === undefined ? { sheet, src: [...src] } : { sheet, src: [...src], dst: [...dst] };
+}
+
 function indexOver(files: ReadonlyMap<string, AssetFileInfo>, file: AssetIndexFile | null): AssetIndex {
-  const layer = (path: string, opts?: { tint?: Rgb; glow?: boolean }): TextureLayer | null => {
+  const layer = (path: string, opts?: LayerOptions): TextureLayer | null => {
     const info = files.get(path);
     if (info === undefined) return null;
     const out: TextureLayer = { path };
@@ -54,6 +63,7 @@ function indexOver(files: ReadonlyMap<string, AssetFileInfo>, file: AssetIndexFi
     if (opts?.glow === true) out.glow = true;
     const frames = framesOf(info);
     if (frames > 1) out.frames = frames;
+    if (opts?.region !== undefined) out.region = copyRegion(opts.region);
     return out;
   };
   return {
