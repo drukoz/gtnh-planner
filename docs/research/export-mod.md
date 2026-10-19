@@ -10,6 +10,7 @@ Every load-bearing claim carries its evidence inline: a command with a trimmed o
 
 - `PACK`: the folder of the GTNH 2.9.0-RC-1 server pack, read-only.
 - `J`: `javap` from a JDK 25 install. `GT`: `$PACK/mods/gregtech-5.09.54.183.jar`. `FORGE`: `$PACK/forge-1.7.10-10.13.4.1614-1.7.10-universal.jar`.
+- `GTDEV`: `GT5-Unofficial-5.09.54.183-dev.jar`, the deobfuscated `dev` jar of the same GT version that the exporter compiles against (§1), from the Gradle cache (`$GRADLE_USER_HOME/caches/modules-2/files-2.1/com.github.GTNewHorizons/GT5-Unofficial/5.09.54.183/…`). Like `GT` it is a multi-release jar (`Multi-Release: true`), so it is read with `--multi-release 17`.
 - `MC`: `build/rfg/recompiled_minecraft-1.7.10.jar`, the Forge-patched Minecraft with MCP names that the RFG build in §1 produces.
 - `MCPCSV`: `methods.csv` from `mcp_stable-12-1.7.10.zip` (https://maven.minecraftforge.net/de/oceanlabs/mcp/mcp_stable/12-1.7.10/mcp_stable-12-1.7.10.zip). Its `side` column is 0 = client only, 1 = server only, 2 = both.
 - `SKEL`: the skeleton exporter built while researching this page (§1.4). It **compiles** against GT 5.09.54.183 and the excerpts in Appendix A come from it. It was **never run in a server**: no server process was started for this research.
@@ -664,7 +665,7 @@ Safe on prototypes, because they read only fields:
 - `MTEBasicMachine.maxEUInput()` (= `V[mTier]`);
 - `MTESteamTurbine.getEfficiency()` (= `6 + mTier`) and `consumedFluidPerOperation()` (= `getEfficiency()`);
 - `MTEBoilerSolar.getMaxOutputPerSecond()` (field `maxOutputPerSecond`, set from `MachineStats` config in the constructor);
-- `MTEBasicBatteryBuffer.maxAmperesIn()` (= `mChargeableCount × 2`) and `maxAmperesOut()` (= `mBatteryCount`).
+- `MTEBasicBatteryBuffer.maxAmperesIn()` (= `mChargeableCount × 2`) and `maxAmperesOut()` (= `mBatteryCount`). They do not throw, but they say nothing about the machine: `mBatteryCount` and `mChargeableCount` are runtime counts of the batteries in the buffer's slots, set to 0 by the constructor and recounted only by `onPostTick` in a placed buffer, so on a prototype both getters return 0. A buffer's slot count is `mInventory.length` (§3.7). *Corrected in plan 10: exporter 0.2.0 wrote `mBatteryCount` as every buffer's slots (0 for all of them) and `maxAmperesOut()` as its amps (0 for every basic buffer).*
 
 `MTEBasicMachine.maxAmperesIn()` depends on the running `mEUt` and is meaningless on a prototype. Generators: export `mTier` and compute `V[tier]`; never call `maxEUOutput()`.
 
@@ -702,9 +703,9 @@ $ J -cp $GT -p -c gregtech.api.metatileentity.implementations.MTEFluidPipe | awk
 | Other singleblock generators | `…generators.MTEDieselGenerator`, `MTEGasTurbine`, `MTEPlasmaGenerator`, `MTESolarGenerator`; bartworks `MTEAcidGenerator` | 1115-1119 gas turbines, … | `getRecipeMap()` = their fuel map |
 | Large boilers | `…multi.MTELargeBoilerBronze/Steel/Titanium/TungstenSteel` (+ `…Legacy`), `MTEThermalBoiler` | 1020-1023 | multiblock |
 | Large turbines | `…multi.turbines.MTELargeTurbineSteam/HPSteam/SCSteam/Gas/Plasma`, XL `…multi.xlturbines.*`, legacy `…multi.MTELargeTurbine*Legacy` | 1131, 1151-1153 | multiblock |
-| Battery buffers | `gregtech.api.metatileentity.implementations.MTEBasicBatteryBuffer` | 60 IDs: 160-199 (1×1 … 4×4, ULV-UHV), 11240-11275 (UEV and up) | `mTier`, `mBatteryCount` (slots), `maxAmperesOut()` = `mBatteryCount`, `maxAmperesIn()` = `2 × mChargeableCount` |
+| Battery buffers | `gregtech.api.metatileentity.implementations.MTEBasicBatteryBuffer` (also the base class of the chargers below and of TecTech's `MTETeslaCoil`) | 60 IDs: 160-199 (1×1 … 4×4, ULV-UHV), 11240-11275 (UEV and up) | `mTier`; `batterySlots` = `mInventory.length` (set by the constructor from its slot argument); `amps` = `BatteryBuffers.ampsOut(slots, maxAmperesOut())`: one per slot when the prototype's `maxAmperesOut()` is 0, else that value. The base class's `maxAmperesOut()` = `mBatteryCount` and `maxAmperesIn()` = `2 × mChargeableCount` read runtime battery counts, 0 on a prototype (§3.5), never the slots. `maxEUStore()` = `V × 64 × mInventory.length` (gt-mechanics §4.3) |
 | Transformers | `…implementations.MTETransformer` (+ `MTEWetTransformer`) | 20-28, 11220-11224; hi-amp `877-885` (`Transformer_HA_*`) | `mTier` only; `maxEU*` throw on prototypes (§3.5) |
-| Chargers | `gregtech.common.tileentities.machines.basic.MTECharger`, `MTETurboCharger` | — | — |
+| Chargers | `gregtech.common.tileentities.machines.basic.MTECharger` (extends `MTEBasicBatteryBuffer`, so export kind `battery_buffer`), `MTETurboCharger` (extends `MTECharger`) | `MTECharger`: 690-699 (`BATTERY_CHARGER_4_BY_4_ULV` … `_UHV`), 11280-11283 (`BATTERY_CHARGER_4_4_UEV` … `_UXV`); `MTETurboCharger`: 12040-12049 (`TURBO_CHARGER_ULV` … `_UHV`) | 4 slots each (`mInventory.length`; the `16` in `batterycharger.16.tier.TT` and `batteryturbocharger.16.tier.TT` is not a slot count). `MTECharger.maxAmperesOut()` = `max(4 × mBatteryCount, 2)`, so 2 on a prototype; `MTETurboCharger.maxAmperesOut()` = `4 × mInventory.length`, so 16. `maxEUStore()` = `V × 256 × slots` (charger) and `V × 6144 × slots` (turbo charger), gt-mechanics §4.3 |
 
 ```
 $ J -cp $GT -p gregtech.common.tileentities.boilers.MTEBoilerSolarSteel | head -2   → … extends gregtech.common.tileentities.boilers.MTEBoilerSolar
@@ -712,6 +713,21 @@ $ J -cp $GT -p -c -constants gregtech.common.tileentities.generators.MTESteamTur
    0: bipush 6  3: getfield mTier  6: iadd  …  GTModHandler.isAnySteam … iconst_3
 $ J -cp $GT -p -c gregtech.common.tileentities.boilers.MTEBoilerSolar | grep maxOutputPerSecond   → getfield …MachineStats$BronzeSolarBoiler.maxOutputPerSecond … putfield maxOutputPerSecond
 $ J -cp $GT -p -c gregtech.api.metatileentity.implementations.MTEBasicBatteryBuffer | awk '/maxAmperes(In|Out)\(\)/,/lreturn/'   → mChargeableCount … 2l lmul / mBatteryCount
+$ J -cp $GTDEV --multi-release 17 -p -c -constants gregtech.api.metatileentity.implementations.MTEBasicBatteryBuffer | awk '/MTEBasicBatteryBuffer\(int, java.lang.String, java.lang.String, int, java.lang.String, int\);/,/return/'
+  iload 6 … invokespecial MTETieredMachineBlock."<init>":(ILjava/lang/String;Ljava/lang/String;IILjava/lang/String;…)V … iconst_0 putfield mBatteryCount … iconst_0 putfield mChargeableCount
+$ J -cp $GTDEV --multi-release 17 -p -c -constants gregtech.api.metatileentity.implementations.MTETieredMachineBlock | awk '/MTETieredMachineBlock\(int, java.lang.String, java.lang.String, int, int, java.lang.String, gregtech.api.interfaces.ITexture...\);/,/return/'
+  iload 5  invokespecial MetaTileEntity."<init>":(ILjava/lang/String;Ljava/lang/String;I)V …   (MetaTileEntity passes it on to CommonMetaTileEntity)
+$ J -cp $GTDEV --multi-release 17 -p -c -constants gregtech.api.metatileentity.CommonMetaTileEntity | awk '/CommonMetaTileEntity\(int, java.lang.String, int\);/,/return/' | grep -A2 iload_3
+  iload_3  anewarray net/minecraft/item/ItemStack  putfield mInventory
+$ J -cp $GTDEV --multi-release 17 -p -c -constants gregtech.common.tileentities.machines.basic.MTECharger | awk '/public long (maxEUStore|maxAmperesOut)\(\)/,/lreturn/'
+  maxEUStore: GTValues.V … getfield mTier laload  ldc2_w long 256l lmul  getfield mInventory arraylength i2l lmul
+  maxAmperesOut: getfield mBatteryCount i2l  ldc2_w long 4l lmul  ldc2_w long 2l  invokestatic Math.max:(JJ)J
+$ J -cp $GTDEV --multi-release 17 -p -c -constants gregtech.common.tileentities.machines.basic.MTETurboCharger | awk '/extends|public long (maxEUStore|maxAmperesOut)\(\)/,/lreturn|\{/'
+  class …basic.MTETurboCharger extends …basic.MTECharger
+  maxEUStore: GTValues.V … getfield mTier laload  ldc2_w long 6144l lmul  getfield mInventory arraylength i2l lmul
+  maxAmperesOut: ldc2_w long 4l  getfield mInventory arraylength i2l lmul
+$ J -cp $GTDEV --multi-release 17 -p -c -constants gregtech.loaders.preload.LoaderMetaTileEntities | grep -B1 -E 'basic/MTE(Turbo)?Charger\."<init>"' | grep -c iconst_4   → 24
+  (all 14 MTECharger and 10 MTETurboCharger registrations pass slot count 4, e.g. "batterycharger.16.tier.01", "", 1, "", 4)
 ```
 
 The IDs come from `MetaTileEntityIDs` (pack-level constants, not world data). For the solar boilers and the steam turbine, the class-to-ID pairing was checked in GT's registration code:

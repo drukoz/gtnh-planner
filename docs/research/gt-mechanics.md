@@ -28,7 +28,7 @@ This page collects the exact GregTech numbers and rules the planner computes wit
 | Line parts | Conveyor covers move 3.2 / 12.8 / 64 / 320 / 1,280 / 5,120 / 20,480 items/s (LV–ZPM). Pump covers move 640 L/s at LV, ×4 per tier. A bus has `(tier + 1)²` slots and a fluid hatch holds `8000 × 2^tier` L. A basic machine's input filter is off by default. AE2 interfaces and export buses idle at 1 AE/t, cables at 0, and 1 EU = 2 AE. Not yet re-checked against the jars. | §3.8 |
 | Steam turbines | LV/MV/HV give 3 EU per 7/8/9 L of steam (85.7/75/66.7 %), 1 A out. Full output needs 1,540 / 6,933 / 30,960 L/s. | §4.1 |
 | HP ("Advanced") solar boiler | 360 L/s whenever above 100 °C. In clear weather that is ≈94–95 % of every Minecraft day (≈58–71 s per day with no steam, depending on the boiler's own tick phase; *refined by reviewer*, §4.2), so "no steam at night" is wrong for this boiler. Rain stops it in ≈7 min, thunder in ≈5.3 min. Calcification on plain water: full output for 1,080,000 producing ticks, then linear down to 120 L/s at 1,800,000. Distilled water never calcifies; breaking and replacing the boiler descales it. | §4.2 |
-| Battery buffer | Amps out = number of batteries **of exactly the buffer's tier** that can provide energy (no matching battery: 0 A). Capacity = the batteries' charge plus an internal `64·V·slots`. | §4.3 |
+| Battery buffer | Amps out = number of batteries **of exactly the buffer's tier** that can provide energy (no matching battery: 0 A). Capacity = the batteries' charge plus an internal `64·V·slots`. The chargers, battery-buffer subclasses with 4 slots each, store more and send other amps: `MTECharger` `256·V·slots` and `max(4 × batteries, 2)` A, `MTETurboCharger` `6,144·V·slots` and `4·slots` A. | §4.3 |
 | Footprints | Computable at export time from StructureLib (`StructureDefinition.occupiedSpaces`) or by building each multiblock in a void world, as the in-pack NEI preview does. Tooltip dimensions are not reliable. | §5 |
 
 ## 1. Voltage tiers and recipe tier
@@ -568,9 +568,25 @@ Design impact: for advanced solar boilers the "night" gap is about **58–71 s p
   - [jar] `MTEBasicBatteryBuffer.onPostTick` (server side) zeroes both counters. Then, per slot, `getfield mTier … GTModHandler.isElectricItem:(Lnet/minecraft/item/ItemStack;B)Z` → `GTModHandler.isChargerItem` → `mBatteryCount++`, and `mChargeableCount++` for any tier match.
   - `isElectricItem(stack, byte)` is `instanceof ic2/api/item/IElectricItem … IElectricItem.getTier … if_icmpne` (exact equality). `isChargerItem` is `IElectricItem.canProvideEnergy`.
   - `maxAmperesOut` = `getfield mBatteryCount i2l`, read by `BaseMetaTileEntity.getOutputAmperage` = `maxAmperesOut()`.
-  - So a buffer with no batteries, or only items of another tier, or only items that cannot provide energy, **outputs 0 A**.
+  - So a buffer with no batteries, or only items of another tier, or only items that cannot provide energy, **outputs 0 A** (an `MTEBasicBatteryBuffer`; the chargers below differ).
   - `maxEUStore` = `V[mTier] · ldc2_w 64l · mInventory.length`. A world sample shows up to one packet more than this, because `injectEnergyUnits` accepts `1 + (capacity − stored) / voltage` amps. **[jar]** `maxAmperesOut`: `getfield mBatteryCount i2l`; `maxAmperesIn`: `mChargeableCount ... 2l lmul`; `maxEUStore`: `... 64l lmul ... arraylength i2l lmul`.
 - Example: a 4×4 LV buffer full of Small Lithium Batteries holds 16 × 100,000 + 32,768 EU and can send 16 A × 32 V = 512 EU/t, paying 16 × 33 EU/t (§3.2).
+
+Subclasses (*added in plan 10*). GT's chargers `MTECharger` (`batterycharger.16.tier.TT`, IDs 690–699 and 11280–11283) and `MTETurboCharger` (`batteryturbocharger.16.tier.TT`, IDs 12040–12049; it extends `MTECharger`), and TecTech's `MTETeslaCoil`, all extend `MTEBasicBatteryBuffer`, so the export lists them as battery buffers. Every charger and turbo charger has 4 slots: the `16` in its name is not a slot count. The chargers override the store and the amps; the Tesla coil overrides neither:
+
+| Class (tier t, s slots) | Internal buffer (`maxEUStore`) | Minimum kept (`getMinimumStoredEU`) | Amps out | Amps in |
+|---|---|---|---|---|
+| `MTEBasicBatteryBuffer` (the table above) | `64 × V[t] × s` | `16 × V[t] × s` | `mBatteryCount` | `2 × mChargeableCount` |
+| `MTECharger` | `256 × V[t] × s` | `64 × V[t] × s` | `max(4 × mBatteryCount, 2)` | `max(8 × mChargeableCount, 4)` |
+| `MTETurboCharger` | `6,144 × V[t] × s` | `1,536 × V[t] × s` | `4 × s` | `16 × s` |
+| `MTETeslaCoil` (TecTech) | inherited (`64 × V[t] × s`) | inherited | inherited | inherited |
+
+- **[jar]**, read from `GT5-Unofficial-5.09.54.183-dev.jar`, the deobfuscated jar of the same GT version that the exporter compiles against (`javap --multi-release 17 -c -p -constants`; `MTECharger` and `MTETurboCharger` exist only as root classes, `MTEBasicBatteryBuffer` and `MTETeslaCoil` also under `META-INF/versions/17`, and both copies agree):
+  - `MTECharger.maxEUStore` = `GTValues.V … mTier laload`, `ldc2_w 256l lmul`, `mInventory arraylength i2l lmul`; `getMinimumStoredEU` the same with `64l`; `maxAmperesOut` = `mBatteryCount i2l`, `4l lmul`, `2l`, `Math.max:(JJ)J`; `maxAmperesIn` = `mChargeableCount i2l`, `8l lmul`, `4l`, `Math.max`.
+  - `MTETurboCharger` (`extends …basic.MTECharger`): `maxEUStore` with `6144l`, `getMinimumStoredEU` with `1536l`, `maxAmperesOut` = `4l`, `mInventory arraylength i2l lmul`, `maxAmperesIn` = `16l`, `mInventory arraylength i2l lmul`.
+  - `MTEBasicBatteryBuffer`: `maxEUStore` with `64l` and `getMinimumStoredEU` with `16l`, in the root and the `META-INF/versions/17` class alike. `javap -p` of both `MTETeslaCoil` classes lists no `maxEUStore`, `getMinimumStoredEU`, `maxAmperesIn` or `maxAmperesOut`.
+  - Slots: `LoaderMetaTileEntities.registerCharger4x4` and `registerTurboCharger4By4` pass slot count `iconst_4` to all 14 `MTECharger` and all 10 `MTETurboCharger` constructors (e.g. `new MTECharger(BATTERY_CHARGER_4_BY_4_LV.ID, "batterycharger.16.tier.01", "", 1, "", 4)`), and both constructors hand it on to `MTEBasicBatteryBuffer` unchanged.
+- Example: an HV charger stores `256 × 512 × 4` = 524,288 EU of its own, an HV turbo charger `6,144 × 512 × 4` = 12,582,912 EU. A charger without a battery of its tier still has `maxAmperesOut()` = 2; a turbo charger's is 16 with or without batteries.
 
 Batteries (tier = IC2 tier; max charge in EU):
 

@@ -7,10 +7,24 @@ import {
   buildPower, RAIN_OUTAGE_FRACTION, RAIN_OUTAGE_SECONDS, SOLAR_BOILERS, solarBoilerOf, solarOutput, turbineEUt, turbineSteamForFull,
   type PowerInput,
 } from '../../../src/server/world/power.ts';
+import { itemKey } from '../../../src/shared/keys.ts';
 import { testFacts } from '../../helpers/world-facts.ts';
 
 const facts = testFacts();
 const N = 1 << 2, S = 1 << 3, W = 1 << 4, E = 1 << 5;
+
+// The test table plus the export's HV charger and HV turbo charger, as 2.9.0-RC-1_20261019-010938 gives them: 4 battery
+// slots each, and an own store GT sizes by class (plan 10, ruling R15)
+const HV_CHARGER = 693, HV_TURBO_CHARGER = 12043;
+const CHARGERS = 'gregtech.common.tileentities.machines.basic.';
+facts.machines.set(HV_CHARGER, {
+  mteId: HV_CHARGER, metaName: 'batterycharger.16.tier.03', name: 'High Voltage Battery Charger', cls: `${CHARGERS}MTECharger`,
+  itemKey: itemKey('gregtech:gt.blockmachines', HV_CHARGER), kind: 'battery_buffer', maps: [], tier: 3, voltage: 512, amps: 2, batterySlots: 4,
+});
+facts.machines.set(HV_TURBO_CHARGER, {
+  mteId: HV_TURBO_CHARGER, metaName: 'batteryturbocharger.16.tier.03', name: 'High Voltage Turbo Charger', cls: `${CHARGERS}MTETurboCharger`,
+  itemKey: itemKey('gregtech:gt.blockmachines', HV_TURBO_CHARGER), kind: 'battery_buffer', maps: [], tier: 3, voltage: 512, amps: 16, batterySlots: 4,
+});
 
 /** A machine of the test table at `pos` in dim 0: idle, enabled, empty; boilers clean and hot. */
 function m(mteId: number, pos: Vec3, opts: Partial<Omit<GtMachineRec, 'dim' | 'pos' | 'mteId'>>): GtMachineRec {
@@ -38,7 +52,7 @@ function c(mteId: number, pos: Vec3, bits: number, kind: GtPipeRec['pipeKind']):
 /** `occupied` = any of the given records' positions; no bases unless `over` names them. */
 function input(machines: GtMachineRec[], pipes: GtPipeRec[], over: Partial<PowerInput> = {}): PowerInput {
   const taken = new Set([...machines, ...pipes].map((r) => posKey(r.dim, ...r.pos)));
-  return { machines, pipes, facts, baseOf: () => null, occupied: (dim, p) => taken.has(posKey(dim, ...p)), ...over };
+  return { machines, pipes, tanks: [], facts, baseOf: () => null, occupied: (dim, p) => taken.has(posKey(dim, ...p)), ...over };
 }
 
 /** HP solar boilers at (x, 64, −1) facing south onto a bronze fluid pipe line at (x, 64, 0), x = 0 … count − 1. */
@@ -97,6 +111,32 @@ it('sums buffer charge and capacity, known batteries only for capacity', () => {
   const buf = m(193, [0, 64, 0], { facing: 2, storedEU: 1000, batteries: [{ key: 'gregtech:gt.metaitem.01@32539', charge: 1_600_000 }, { key: 'x:unknown@0', charge: 10_000 }] });
   const n = buildPower(input([buf, m(2003, [0, 64, -1], {})], [])).networks[0]!;
   expect([n.storedEU, n.capacityEU, n.voltageTier]).toEqual([1_611_000, 512 * 64 * 16 + 1_600_000, 3]);
+});
+it("counts a buffer's own charge at most up to its 64 × V × slots, never its one-packet overshoot (plan 10, ruling R12)", () => {
+  // 4×4 HV buffer 193 next to an HV machine, holding 205 EU more than its own 512 × 64 × 16 (gt-mechanics §4.3) and a
+  // full Large Lithium Battery, whose charge always counts in full
+  const own = 512 * 64 * 16, overshoot = 205, battery = 1_600_000;
+  const buffer = (over: Partial<GtMachineRec> = {}) =>
+    m(193, [0, 64, 0], { facing: 2, storedEU: own + overshoot, batteries: [{ key: 'gregtech:gt.metaitem.01@32539', charge: battery }], ...over });
+  const network = (b: GtMachineRec, over: Partial<PowerInput> = {}) => buildPower(input([b, m(2003, [0, 64, -1], {})], [], over)).networks[0]!;
+  const full = network(buffer());
+  expect([full.storedEU, full.capacityEU]).toEqual([own + battery, own + battery]);
+  // with 0 slots or no tier the buffer has no own capacity to cap at, so its charge counts as it is
+  const noSlots = testFacts();
+  noSlots.machines.set(193, { ...noSlots.machines.get(193)!, batterySlots: 0 });
+  const zero = network(buffer(), { facts: noSlots }), untiered = network(buffer({ tier: null }));
+  expect([zero.storedEU, zero.capacityEU]).toEqual([own + overshoot + battery, battery]);
+  expect([untiered.storedEU, untiered.capacityEU]).toEqual([own + overshoot + battery, battery]);
+});
+it("sizes a charger's own store by its class: 256 × V × slots, a turbo charger's 6,144 × V × slots (plan 10, ruling R15)", () => {
+  // an HV (512 V) 4-slot charger or turbo charger next to an HV machine, holding no batteries, so its own store is the capacity
+  const network = (mteId: number, storedEU: number) =>
+    buildPower(input([m(mteId, [0, 64, 0], { facing: 2, storedEU }), m(2003, [0, 64, -1], {})], [])).networks[0]!;
+  expect([network(HV_CHARGER, 0).capacityEU, network(HV_TURBO_CHARGER, 0).capacityEU]).toEqual([524_288, 12_582_912]);
+  // a charger holding 400,000 EU counts all of it (64 × V × slots would count 131,072 of 131,072), and ruling R12's cap
+  // uses the same store: a packet over it counts as full
+  const charged = network(HV_CHARGER, 400_000), overshot = network(HV_CHARGER, 524_288 + 512);
+  expect([charged.storedEU, charged.capacityEU, overshot.storedEU]).toEqual([400_000, 524_288, 524_288]);
 });
 it('counts a running multiblock once, at its nearest energy hatch', () => {
   const n = buildPower(input([m(1130, [0, 64, 0], { facing: 5 }), m(42, [1, 64, 0], {}), m(1000, [2, 63, 3], { running: true, recipeEUt: 120 })],

@@ -1,8 +1,10 @@
 // What the settings panel shows and sends (spec §3.2–§3.3b, §3.6), as pure functions: the reachable-dimension rows
-// and their labels, the patches the panel sends (each a whole field value, so one `settings` op says everything), and
-// the checks an amount or a cost must pass before anything is sent.
+// and their labels, the patches the panel sends (each a whole field value, so one `settings` op says everything), the
+// checks an amount or a cost must pass before anything is sent, and the avoid list's suggestions, labels and changes.
 
 import { TIER_NAMES, tierName } from '../../shared/gt/tiers.ts';
+import { isFluidKey } from '../../shared/keys.ts';
+import { MAX_AVOID_ENTRIES, MAX_AVOID_ENTRY_LENGTH } from '../../shared/project/apply-op.ts';
 import type { PackInfo } from '../../shared/types/api.ts';
 import type { Plan, PlanSettings, ReachableDim } from '../../shared/types/plan.ts';
 
@@ -117,4 +119,57 @@ export function parseCost(text: string): { cost: number } | { error: string } {
   const trimmed = text.trim();
   const cost = trimmed === '' ? Number.NaN : Number(trimmed);
   return Number.isFinite(cost) && cost >= 0 ? { cost } : { error: 'Enter a cost of 0 or more' };
+}
+
+/** A cost override or avoid entry keyed by an item or fluid (not by a material name such as "Silver"). */
+export function isStuffKey(key: string): boolean {
+  return isFluidKey(key) || key.includes('@');
+}
+
+/** A material an avoid entry can name (`PackInfo.materials`): its exact name and its display name. */
+export type AvoidMaterial = NonNullable<PackInfo['materials']>[number];
+
+/** Material suggestions shown at most. */
+const MAX_MATERIAL_SUGGESTIONS = 8;
+
+/**
+ * The materials whose name or display name holds `query`, ignoring case and the query's outer spaces: those equal to it
+ * first, then those starting with it, then the rest, each group in the list's order; at most `limit`.
+ */
+export function materialSuggestions(materials: readonly AvoidMaterial[], query: string, limit = MAX_MATERIAL_SUGGESTIONS): AvoidMaterial[] {
+  const q = query.trim().toLowerCase();
+  if (q === '') return [];
+  const rank = (m: AvoidMaterial): number => {
+    const texts = [m.name.toLowerCase(), m.label.toLowerCase()];
+    if (texts.includes(q)) return 0;
+    if (texts.some((t) => t.startsWith(q))) return 1;
+    return texts.some((t) => t.includes(q)) ? 2 : -1;
+  };
+  return materials.map((m) => ({ m, r: rank(m) })).filter((x) => x.r >= 0).sort((a, b) => a.r - b.r).slice(0, limit).map((x) => x.m);
+}
+
+/** The material whose name or display name is `text`, ignoring case and outer spaces. */
+export function materialFor(materials: readonly AvoidMaterial[], text: string): AvoidMaterial | undefined {
+  const q = text.trim().toLowerCase();
+  return materials.find((m) => m.name.toLowerCase() === q || m.label.toLowerCase() === q);
+}
+
+/**
+ * `avoid` with `entry` (without its outer spaces) added at the end, or null when nothing should be sent: it is empty or
+ * longer than an entry may be, already listed, or the list is full (validateOp's limits).
+ */
+export function avoidWith(avoid: readonly string[], entry: string): string[] | null {
+  const value = entry.trim();
+  if (value === '' || value.length > MAX_AVOID_ENTRY_LENGTH || avoid.includes(value) || avoid.length >= MAX_AVOID_ENTRIES) return null;
+  return [...avoid, value];
+}
+
+/** `avoid` without `entry`. */
+export function avoidWithout(avoid: readonly string[], entry: string): string[] {
+  return avoid.filter((e) => e !== entry);
+}
+
+/** What an avoid entry's chip says: a material's display name, else the item or fluid's name (`nameOf`). */
+export function avoidLabel(entry: string, materials: readonly AvoidMaterial[], nameOf: (key: string) => string): string {
+  return materials.find((m) => m.name === entry)?.label ?? nameOf(entry);
 }

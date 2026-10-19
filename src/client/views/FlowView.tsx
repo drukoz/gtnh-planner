@@ -1,5 +1,6 @@
 // The flow diagram (spec §3.9): base materials on the left, the target on the right, one box per recipe step (machine,
-// tier, count, EU/t, how busy) and arrows with rates. Green boxes are machines the group owns, blue ones are new. ELK
+// tier, count, EU/t, how busy) and arrows with rates. Green boxes are machines the group owns, blue ones are new; a
+// warning badge marks a step that uses a material on the avoid list as nothing at the tier avoids it (spec §3.3). ELK
 // lays it out in its own worker (web-stack §7); drag pans, the wheel zooms, and clicking a box opens its panel.
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactElement } from 'react';
@@ -33,6 +34,8 @@ const TEXT_LEFT = 8;
 const ICON_TOP = 6;
 /** The title moves right by this much when the box shows an item icon. */
 const ICON_SHIFT = 20;
+/** The avoid badge's background starts this far in from the box's sides. */
+const BADGE_LEFT = 4;
 
 const OWNED_CLASS: Record<FlowNode['owned'], string> = { all: 'owned', some: 'partly-owned', none: 'new' };
 
@@ -61,7 +64,10 @@ function isClickable(node: FlowNode): boolean {
   return node.kind === 'step' || node.kind === 'raw';
 }
 
-/** One box: `data-node-id` (and `data-step-id` for a step) on a group holding the box, its item icon, title and lines. */
+/**
+ * One box: `data-node-id` (and `data-step-id` for a step) on a group holding the box, its item icon, title and lines,
+ * and below them the badge of avoided goods it uses (`data-avoid-badge`), whose warnings join its tooltip.
+ */
 export function FlowNodeShape(props: { node: PlacedNode; selected?: boolean }): ReactElement {
   const { node, selected = false } = props;
   const icon = node.key !== null && node.kind !== 'sink' ? node.key : null;
@@ -69,7 +75,8 @@ export function FlowNodeShape(props: { node: PlacedNode; selected?: boolean }): 
   if (node.kind === 'step') classes.push(OWNED_CLASS[node.owned]);
   if (selected) classes.push('selected');
   const clickable = isClickable(node);
-  const text = [node.title, ...node.lines];
+  const badge = node.avoidBadge;
+  const text = [node.title, ...node.lines, ...(badge?.warnings ?? [])];
   return (
     <g
       className={classes.join(' ')}
@@ -91,6 +98,12 @@ export function FlowNodeShape(props: { node: PlacedNode; selected?: boolean }): 
         {node.lines.map((line, i) => (
           <text key={`${i}:${line}`} className="flow-node-line" x={TEXT_LEFT} y={NODE_TITLE_HEIGHT + NODE_LINE_HEIGHT * i + 11}>{line}</text>
         ))}
+        {badge !== undefined && (
+          <g className="flow-avoid-badge" data-avoid-badge="" transform={`translate(${BADGE_LEFT} ${NODE_TITLE_HEIGHT + NODE_LINE_HEIGHT * node.lines.length})`}>
+            <rect width={node.width - 2 * BADGE_LEFT} height={NODE_LINE_HEIGHT - 2} rx={4} />
+            <text x={TEXT_LEFT - BADGE_LEFT} y={11}>{badge.text}</text>
+          </g>
+        )}
       </svg>
     </g>
   );

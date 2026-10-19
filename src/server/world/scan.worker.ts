@@ -22,6 +22,7 @@ import {
 import { classifyGtStorage } from './classify/gtchests.ts';
 import { classifyBarrel } from './classify/jabba.ts';
 import { classifyMultipart, type PrPipeRec } from './classify/projectred.ts';
+import { classifyTank, type TankRec } from './classify/tanks.ts';
 import { ebfCoilHeat, isEbf } from './coils.ts';
 import { claimHints, dimSummaries, playerHints, questVisits, visitedKeys, type VisitHint } from './dims.ts';
 import type { ScanPackFacts } from './facts.ts';
@@ -30,7 +31,7 @@ import { readLevelDat, type LevelInfo } from './level-dat.ts';
 import { buildLogistics } from './logistics.ts';
 import { posKey, type ChunkStat, type RawTe, type StorageRec, type Vec3 } from './model.ts';
 import { readGzipNbt } from './nbt.ts';
-import { buildPower } from './power.ts';
+import { buildPower, type PowerResult } from './power.ts';
 import { decodeTeamBlob, joinDiscoveries, readVpDimension, teamBlobOf, vpWorldId, type TeamDiscoveries, type VpVein } from './prospecting.ts';
 import { parseRegionPath, REGION_HEADER_BYTES, regionChunkRefs, regionPathOf } from './region.ts';
 import { copyServerSideFiles, openResolved, type ResolvedSource } from './sources.ts';
@@ -207,6 +208,8 @@ interface Records {
   chunks: ChunkStat[];
   machines: GtMachineRec[]; pipes: GtPipeRec[]; storage: StorageRec[];
   prPipes: PrPipeRec[]; conduits: ConduitRec[]; ae2: Ae2Rec[];
+  /** The steam graph's tanks: Railcraft tank parts, GT super and quantum tanks, other TEs holding steam. */
+  tanks: TankRec[];
   skipped: number;
 }
 
@@ -218,13 +221,18 @@ function regionEntries(entries: WorldEntry[]): RegionEntry[] {
   }).sort((a, b) => a.dim - b.dim || a.rx - b.rx || a.rz - b.rz);
 }
 
-/** Hands one tile entity to the classifier for its id; ids no classifier knows add nothing. */
+/**
+ * Hands one tile entity to the classifier for its id; a TE no other classifier takes may still be a tank (a Railcraft
+ * tank part, or a TE holding steam), and anything else adds nothing.
+ */
 function classify(te: RawTe, facts: ScanPackFacts, itemNames: Map<number, string>, drawerCfg: DrawerConfig, out: Records): void {
   switch (te.id) {
     case 'BaseMetaTileEntity': {
       out.machines.push(classifyGtMachine(te, facts, itemNames));
       const digital = classifyGtStorage(te, facts, itemNames);
-      if (digital !== null) out.storage.push(digital);
+      if (digital === null) return;
+      out.storage.push(digital);
+      if (digital.kind === 'gt_tank') out.tanks.push({ dim: digital.dim, pos: digital.pos, kind: 'single' });   // whatever it holds (ruling R4)
       return;
     }
     case 'BaseMetaPipeEntity':
@@ -253,14 +261,19 @@ function classify(te: RawTe, facts: ScanPackFacts, itemNames: Map<number, string
     return;
   }
   const ae2 = classifyAe2(te, itemNames);
-  if (ae2 !== null) out.ae2.push(ae2);
+  if (ae2 !== null) {
+    out.ae2.push(ae2);
+    return;
+  }
+  const tank = classifyTank(te);
+  if (tank !== null) out.tanks.push(tank);
 }
 
 async function scanRegions(
   files: WorldFiles, regions: RegionEntry[], job: ScanJob, side: SideData, dimName: (dim: number) => string,
   report: (progress: number, message: string) => void,
 ): Promise<Records> {
-  const out: Records = { chunks: [], machines: [], pipes: [], storage: [], prPipes: [], conduits: [], ae2: [], skipped: 0 };
+  const out: Records = { chunks: [], machines: [], pipes: [], storage: [], prPipes: [], conduits: [], ae2: [], tanks: [], skipped: 0 };
   const total = regions.reduce((sum, r) => sum + r.size, 0);
   let done = 0;
   for (const r of regions) {
@@ -377,12 +390,18 @@ function teamHints(teams: TeamDiscoveries[][]): VisitHint[] {
 /** The warning of a scan made without pack facts (no export loaded): it knows no machine, so it has no names or power. */
 export const NO_EXPORT_WARNING = 'Scanned without a recipe export: machines are unknown (run npm run export, then scan again)';
 
-function warningsOf(facts: ScanPackFacts, side: SideData, unmatchedVeins: number, unknownBoilers: number): string[] {
+/** The note for a power network with `turbines` steam turbines that no steam producer is connected to (ruling R2). */
+function unfedTurbinesWarning(turbines: number): string {
+  return `${plural(turbines, 'steam turbine')} ${turbines === 1 ? 'gets' : 'get'} no steam the scan can follow`;
+}
+
+function warningsOf(facts: ScanPackFacts, side: SideData, unmatchedVeins: number, power: PowerResult): string[] {
   const warnings = facts.exportId === null ? [NO_EXPORT_WARNING] : [];
   warnings.push(...side.level.warnings);
   if (side.unreadable > 0) warnings.push(`${plural(side.unreadable, 'side file')} could not be read`);
   if (unmatchedVeins > 0) warnings.push(`${plural(unmatchedVeins, 'prospected vein')} had no vein type`);
-  if (unknownBoilers > 0) warnings.push(`${plural(unknownBoilers, 'boiler')} with unknown steam output`);
+  if (power.unknownBoilers > 0) warnings.push(`${plural(power.unknownBoilers, 'boiler')} with unknown steam output`);
+  for (const { turbines } of power.unfedTurbines) warnings.push(unfedTurbinesWarning(turbines));
   return warnings;
 }
 
@@ -426,7 +445,9 @@ export async function runScanJob(job: ScanJob, report: (progress: number, messag
     report(P_TILES, 'Reading power, logistics and storage');
     const sourceReader: BlockReader = createBlockReader(regionStoreFromFiles(files));
     const occupiedAt = new Set<string>();
-    for (const r of [...rec.machines, ...rec.pipes, ...rec.storage, ...rec.prPipes, ...rec.conduits, ...rec.ae2]) occupiedAt.add(posKey(r.dim, ...r.pos));
+    for (const r of [...rec.machines, ...rec.pipes, ...rec.storage, ...rec.prPipes, ...rec.conduits, ...rec.ae2, ...rec.tanks]) {
+      occupiedAt.add(posKey(r.dim, ...r.pos));
+    }
     const occupied = (dim: number, pos: Vec3): boolean => occupiedAt.has(posKey(dim, ...pos));
 
     const machines: PlacedMachine[] = [];
@@ -442,7 +463,7 @@ export async function runScanJob(job: ScanJob, report: (progress: number, messag
       }
       machines.push(placed);
     }
-    const power = buildPower({ machines: rec.machines, pipes: rec.pipes, facts, baseOf, occupied });
+    const power = buildPower({ machines: rec.machines, pipes: rec.pipes, tanks: rec.tanks, facts, baseOf, occupied });
     const logistics = buildLogistics({ prPipes: rec.prPipes, conduits: rec.conduits, gtPipes: rec.pipes, ae2: rec.ae2, baseOf, occupied });
     const storage = await buildStorage({
       recs: rec.storage, ae2: rec.ae2, attachments: logistics.attachments, networks: logistics.networks,
@@ -463,7 +484,7 @@ export async function runScanJob(job: ScanJob, report: (progress: number, messag
       id: job.scanId, source: job.request, scannedAt, levelName: side.level.levelName,
       dims, bases, machines, pipes, power: power.networks, logistics: logistics.networks, storage,
       visitedDims: visitedKeys(dims), topTier: highest(rec.machines.map((m) => (countsForTopTier(m) ? m.tier : null))), coilHeat: highest(coilHeats),
-      prospected, logisticsBlocks: logistics.blocks, warnings: warningsOf(facts, side, unmatched, power.unknownBoilers), skippedChunks: rec.skipped,
+      prospected, logisticsBlocks: logistics.blocks, warnings: warningsOf(facts, side, unmatched, power), skippedChunks: rec.skipped,
     };
 
     report(P_NETWORKS, 'Writing the scan');

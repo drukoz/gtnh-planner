@@ -237,6 +237,18 @@ details.settings-section > summary h3 { display: inline; margin-right: 8px; }
 .key-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .key-list li { display: flex; align-items: center; gap: 8px; }
 .key-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.avoid-picker { display: flex; flex-direction: column; gap: 8px; }
+.avoid-chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.avoid-chip {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 2px 4px 2px 8px;
+  background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: 999px; font-size: 0.85rem;
+}
+.avoid-chip-name { min-width: 0; overflow-wrap: anywhere; }
+button.avoid-chip-remove {
+  padding: 0; width: 24px; height: 24px; flex-shrink: 0; border: none; border-radius: 50%; background: transparent; line-height: 1;
+}
+button.avoid-chip-remove:hover:not(:disabled) { background: var(--surface-2); }
+.avoid-badge { background: var(--warn-bg); border-color: var(--warn-border); }
 
 /* Flow diagram: green = owned machines, blue = new ones, half and half = partly owned (spec §3.9). */
 :root {
@@ -265,19 +277,21 @@ details.settings-section > summary h3 { display: inline; margin-right: 8px; }
   border-radius: var(--radius); cursor: grab; touch-action: none; user-select: none;
 }
 .flow-canvas:active { cursor: grabbing; }
-.flow-node rect { stroke-width: 1.5; fill: var(--flow-raw); stroke: var(--flow-raw-line); }
-.flow-node.owned rect { fill: var(--flow-owned); stroke: var(--flow-owned-line); }
-.flow-node.new rect { fill: var(--flow-new); stroke: var(--flow-new-line); }
-.flow-node.partly-owned rect { fill: url(#flow-partly); stroke: var(--flow-owned-line); }
-.flow-node.out rect { fill: var(--flow-out); stroke: var(--flow-out-line); }
-.flow-node.sink rect { fill: var(--surface); stroke-dasharray: 4 3; }
+.flow-node > rect { stroke-width: 1.5; fill: var(--flow-raw); stroke: var(--flow-raw-line); }
+.flow-node.owned > rect { fill: var(--flow-owned); stroke: var(--flow-owned-line); }
+.flow-node.new > rect { fill: var(--flow-new); stroke: var(--flow-new-line); }
+.flow-node.partly-owned > rect { fill: url(#flow-partly); stroke: var(--flow-owned-line); }
+.flow-node.out > rect { fill: var(--flow-out); stroke: var(--flow-out-line); }
+.flow-node.sink > rect { fill: var(--surface); stroke-dasharray: 4 3; }
 .flow-node[role='button'] { cursor: pointer; }
-.flow-node[role='button']:hover rect, .flow-node.selected rect { stroke-width: 3; }
+.flow-node[role='button']:hover > rect, .flow-node.selected > rect { stroke-width: 3; }
 .flow-node:focus { outline: none; }
-.flow-node:focus-visible rect { stroke: var(--accent); stroke-width: 3; }
+.flow-node:focus-visible > rect { stroke: var(--accent); stroke-width: 3; }
 .flow-node text { fill: var(--text); font-size: 11.5px; }
 .flow-node .flow-node-title { font-size: 13px; font-weight: 600; }
 .flow-node .flow-node-line { fill: var(--muted); }
+.flow-node .flow-avoid-badge rect { fill: var(--warn-bg); stroke: var(--warn-border); stroke-width: 1; }
+.flow-node .flow-avoid-badge text { font-size: 11px; }
 .flow-stop-owned { stop-color: var(--flow-owned); }
 .flow-stop-new { stop-color: var(--flow-new); }
 .flow-edge path { fill: none; stroke: var(--flow-edge); stroke-width: 1.5; }

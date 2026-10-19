@@ -9,7 +9,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
 import { loadPack } from '../../../src/server/pack/load.ts';
-import { planBasis } from '../../../src/server/planner/basis.ts';
+import { planBasis, resolveAvoid } from '../../../src/server/planner/basis.ts';
 import { expandBomLines } from '../../../src/server/planner/bom.ts';
 import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
@@ -20,6 +20,11 @@ const ELECTRONIC_CIRCUIT = 'IC2:itemPartCircuit@0';
 const GOOD_ELECTRONIC_CIRCUIT = 'gregtech:gt.metaitem.01@32702';
 const LV_MACHINE_HULL = 'gregtech:gt.blockmachines@11';
 const STEEL_INGOT = 'gregtech:gt.metaitem.01@11305';
+const MICROPROCESSOR = 'gregtech:gt.metaitem.03@32078';
+const DIAMOND_LENS = 'gregtech:gt.metaitem.01@24500';
+const CALCITE_DUST = 'gregtech:gt.metaitem.01@2823';
+const MAGNETIC_STEEL_INGOT = 'gregtech:gt.metaitem.01@11355';
+const ANNEALED_COPPER_INGOT = 'gregtech:gt.metaitem.01@11345';
 const ALUMINIUM_INGOT = 'gregtech:gt.metaitem.01@11019';
 /**
  * The circuit assembler recipe of the Electronic Circuit: board, 2 resistors, 2 red alloy wires, 2 vacuum tubes, solder.
@@ -175,5 +180,82 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
     const b = (await plan({ target: ELECTRONIC_CIRCUIT, amount: 1, tier: 2 })).plan;
     expect(b.steps).toEqual(a.steps);
     expect(b.rawInputs).toEqual(a.rawInputs);
+  }, 60_000);
+
+  // Materials to avoid (plan 2026-10-18-08, ruling R15): no expectSane, as the way round a material may need goods
+  // outside ORDINARY.
+  /** Every good the avoid list matches is out of the line, or flagged as unavoidable at each step it goes into. */
+  const expectAvoided = (p: Plan, seconds: number, avoid: string[]): void => {
+    const codes = p.warnings.map((w) => w.code);
+    expect(p.status, JSON.stringify(p.warnings)).toBe('ok');
+    expect(codes).not.toContain('graph-too-big');
+    expect(codes).not.toContain('free-loop');
+    expect(seconds).toBeLessThan(PLAN_SECONDS);
+    const steps = new Set(p.steps.map((s) => s.id));
+    const unavoidable = new Set((p.avoided ?? []).filter((a) => a.unavoidable).map((a) => a.key));
+    const goods = resolveAvoid(pack, avoid).goods;
+    for (const key of goods) {
+      const into = new Set(p.flows.filter((f) => f.key === key && steps.has(f.to)).map((f) => f.to));
+      if (into.size === 0 && !p.rawInputs.some((r) => r.key === key)) continue;
+      expect(unavoidable.has(key), key).toBe(true);
+      for (const stepId of into) expect(p.warnings).toContainEqual(expect.objectContaining({ code: 'avoid-unavoidable', key, stepId }));
+    }
+    // Final review: a part a machine holds counts (a one-off of a matched good is flagged where it is needed), and so
+    // does a derived material bought although it is made from a matched good (`avoided` lists it with `madeFrom`).
+    for (const line of p.buildList.filter((l) => l.group === 'one-off' && goods.has(l.key))) {
+      expect(unavoidable.has(line.key), line.key).toBe(true);
+      expect(p.warnings).toContainEqual(expect.objectContaining({ code: 'avoid-unavoidable', key: line.key }));
+    }
+    for (const a of p.avoided ?? []) if (p.rawInputs.some((r) => r.key === a.key)) expect(a.unavoidable, a.key).toBe(true);
+  };
+
+  it('keeps Silver out of 2 Good Electronic Circuits a minute at HV, or flags each use, in under 5 s', async () => {
+    const avoid = ['Silver'];
+    const { plan: p, seconds } = await plan({ target: GOOD_ELECTRONIC_CIRCUIT, amount: 2, tier: 3, avoid });
+    expectAvoided(p, seconds, avoid);
+  }, 60_000);
+
+  it('plans 2 Good Electronic Circuits a minute at HV around Gold, which the plain plan uses, or flags each use, in under 5 s', async () => {
+    const avoid = ['Gold'];
+    const { plan: p, seconds } = await plan({ target: GOOD_ELECTRONIC_CIRCUIT, amount: 2, tier: 3, avoid });
+    expectAvoided(p, seconds, avoid);
+    expect(p.avoided?.length).toBeGreaterThan(0);   // the board's gold foil: the restricted plan really ran
+  }, 60_000);
+
+  // The final review's probes on this export: a lens or catalyst a machine holds, and a derived material made from an
+  // avoided one, used to be kept in the line with nothing said.
+  it('keeps the Diamond Lens out of the laser engraver of a Microprocessor at HV: the slot holds another lens it takes', async () => {
+    const avoid = ['Diamond'];
+    const { plan: p, seconds } = await plan({ target: MICROPROCESSOR, amount: 2, tier: 3, avoid });
+    expectAvoided(p, seconds, avoid);
+    expect(p.avoided).toContainEqual({ key: DIAMOND_LENS, name: 'Diamond Lens', unavoidable: false });
+    expect(p.buildList.filter((l) => l.group === 'one-off').map((l) => l.key)).not.toContain(DIAMOND_LENS);
+    expect(p.buildList.some((l) => l.group === 'one-off' && pack.items.get(l.key)?.gt?.prefix === 'lens')).toBe(true);
+  }, 60_000);
+
+  it("keeps the Large Chemical Reactor's Calcite catalyst out of 2 Good Electronic Circuits a minute at HV", async () => {
+    const avoid = ['Calcite'];
+    const { plan: p, seconds } = await plan({ target: GOOD_ELECTRONIC_CIRCUIT, amount: 2, tier: 3, avoid });
+    expectAvoided(p, seconds, avoid);
+    expect(p.avoided?.map((a) => a.key)).toContain(CALCITE_DUST);   // the plain plan's catalyst
+  }, 60_000);
+
+  it('never buys Magnetic Steel for an LV Machine Hull avoiding Steel: the steel it is polarized from is flagged instead', async () => {
+    const avoid = ['Steel'];
+    const { plan: p, seconds } = await plan({ target: LV_MACHINE_HULL, amount: 1, tier: 1, avoid });
+    expectAvoided(p, seconds, avoid);
+    expect(p.rawInputs.map((r) => r.key)).not.toContain(MAGNETIC_STEEL_INGOT);
+    expect(p.avoided).toContainEqual({ key: STEEL_INGOT, name: 'Steel Ingot', unavoidable: true });
+  }, 60_000);
+
+  it('flags the Annealed Copper that 2 Good Electronic Circuits a minute at HV still buy when avoiding Copper, naming the copper', async () => {
+    const avoid = ['Copper'];
+    const { plan: p, seconds } = await plan({ target: GOOD_ELECTRONIC_CIRCUIT, amount: 2, tier: 3, avoid });
+    expectAvoided(p, seconds, avoid);
+    const annealed = p.avoided?.find((a) => a.key === ANNEALED_COPPER_INGOT);
+    expect(annealed?.madeFrom?.length).toBeGreaterThan(0);   // made by an arc furnace from copper dust
+    const flags = p.warnings.filter((w) => w.code === 'avoid-unavoidable' && w.key === ANNEALED_COPPER_INGOT);
+    if (p.rawInputs.some((r) => r.key === ANNEALED_COPPER_INGOT)) expect(flags.length).toBeGreaterThan(0);
+    expect(flags.every((w) => w.text.includes('Annealed Copper Ingot (made from '))).toBe(true);
   }, 60_000);
 });
