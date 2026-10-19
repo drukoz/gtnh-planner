@@ -1,13 +1,13 @@
 // An EnderIO line end to end (plan 11 Task 9; spec §3.6 mode 4, §3.8c): a project on the uploaded sample world's
 // Overworld base plans Iron Plates in EnderIO mode; its layout sets every conduit face with a configure step of its
-// own and lists the Item Conduits under logistics, and the Connections tab draws the line and shows a box's faces in
-// full. The 3D view's conduit check, and the title's words for it, come back with Plan 5's 3D tab (plan 11, ruling R7).
+// own and lists the Item Conduits under logistics, the Connections tab draws the line and shows a box's faces in full,
+// and the 3D tab lists the Item Conduits (plan 11, ruling R7's lines, back with Plan 5's 3D tab as merge follow-up F3).
 
 import { test, expect } from '@playwright/test';
 import { createProject, login, setName } from './helpers.ts';
 import { uploadSampleWorld } from './world-upload.ts';
 
-test('plan an EnderIO line and read its conduit faces in the Connections tab', async ({ page }) => {
+test('plan an EnderIO line, read its conduit faces in the Connections tab and see the conduits in 3D', async ({ page }) => {
   await login(page);
   await setName(page, 'E2E');
   const scanId = await uploadSampleWorld(page);
@@ -33,4 +33,6 @@ test('plan an EnderIO line and read its conduit faces in the Connections tab', a
   await expect(view.locator('[data-edge^="flow:"]:has(polyline[stroke])').first()).toBeVisible();
   await view.locator('.conn-machine rect').first().click();
   await expect(page.getByTestId('conn-panel')).toContainText('In / Out');
+  await page.getByRole('tab', { name: '3D' }).click();
+  await expect(page.getByTestId('block-list')).toContainText('Item Conduit');
 });
