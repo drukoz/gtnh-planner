@@ -14,9 +14,10 @@ import { DeleteProject } from '../components/DeleteProject.tsx';
 import { ItemIcon } from '../components/ItemIcon.tsx';
 import { formatPercent } from '../format.ts';
 import { leaveDeletedProject } from '../state/deleted-notice.ts';
-import { showInFlow } from '../state/flow-focus.ts';
+import { setFlowFocus, showInFlow } from '../state/flow-focus.ts';
 import { useName } from '../state/name.ts';
 import { useProject } from '../state/project-store.ts';
+import { ISSUE_ORDER, problemId } from './flow-model.ts';
 import { PROJECT_TABS, tabFromHash } from './project-tabs.ts';
 import { stepChargeLabel, stepChargeOf } from './settings-model.ts';
 import { SettingsPanel } from './SettingsPanel.tsx';
@@ -57,8 +58,7 @@ function ProjectName(props: { name: string; onRename(name: string): void }): Rea
   );
 }
 
-/** The integrity issues, most serious first (fix spec R11): what the summary counts first and "Show in the flow" shows. */
-const ISSUE_ORDER: readonly PlanIssueCode[] = ['orphan-input', 'short-input', 'multi-producer', 'bought-and-made'];
+/** The integrity issue codes (fix spec R11), to tell a server's integrity warnings from its other warnings. */
 const ISSUE_CODES: ReadonlySet<string> = new Set(ISSUE_ORDER);
 /** A plan uses more raw material than the least only when it does by more than this share (not by rounding). */
 const COST_GAP_REL = 1e-6;
@@ -76,11 +76,6 @@ function issueCount(code: PlanIssueCode, n: number, issues: readonly PlanIssue[]
     }
     case 'bought-and-made': return one ? '1 good is both bought and made' : `${n} goods are both bought and made`;
   }
-}
-
-/** A warning's or an issue's identity: the same problem of the same good at the same step. */
-function problemId(p: { code: string; key?: StuffKey | undefined; stepId?: string | undefined }): string {
-  return `${p.code}|${p.key ?? ''}|${p.stepId ?? ''}`;
 }
 
 /**
@@ -215,6 +210,8 @@ export function ProjectPage(props: { id: string }): ReactElement {
   useEffect(() => {
     if (deleted !== null) leaveDeletedProject(project?.name ?? null, deleted.by);
   }, [deleted]);
+  // What the flow diagram lights belongs to this project: leaving it (for another project or another page) clears it.
+  useEffect(() => () => setFlowFocus(null), [props.id]);
 
   if (project === null) {
     return (
