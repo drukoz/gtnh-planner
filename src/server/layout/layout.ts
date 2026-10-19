@@ -220,6 +220,7 @@ function worldBlock(b: LocalBlock, f: Frame): LayoutBlock {
     ...(b.item === undefined ? {} : { item: b.item }),
     ...(b.connections === undefined ? {} : { connections: rotateConnections(b.connections, r) }),
     ...(b.conduits === undefined ? {} : { conduits: b.conduits.map((c) => worldConduit(c, r)) }),
+    ...(b.tail === undefined ? {} : { tail: { side: b.tail.side, keys: [...b.tail.keys] } }),
   };
 }
 
@@ -234,6 +235,20 @@ interface Hookups {
   warnings: PlanWarning[];
   /** The first path cell of the hookup that raised each `no_path` warning, by text. */
   noPathAt: Map<string, Vec3>;
+}
+
+/**
+ * The world posKeys of every cell face-adjacent to a line block holding an Item Conduit (plan 11, ruling R14): EnderIO
+ * joins touching item conduits into one network, so a hookup of item conduits routes around these cells and the base
+ * network's channels never trade with the line's.
+ */
+function itemConduitNeighbours(lineBlocks: readonly LayoutBlock[]): Set<string> {
+  const cells = new Set<string>();
+  for (const b of lineBlocks) {
+    if (b.conduits?.some((c) => c.kind === 'item') !== true) continue;
+    DIRS.forEach((_, side) => cells.add(posKey(step(b.pos, side))));
+  }
+  return cells;
 }
 
 /**
@@ -284,9 +299,12 @@ function buildHookups(input: {
     const port = worldPos(logisticsPort, frame);
     const tap = nearestTap(logisticsNet.taps, port);
     if (tap !== null) {
+      // a hookup that ends on a conduit face keeps off the line's Item Conduits (plan 11, ruling R14)
+      const world = { vox, line: routeLine, ...(hookup.endConduit === undefined ? {} : { keepOff: itemConduitNeighbours(lineBlocks) }) };
       const build = logisticsHookup({
-        pack, parts, tap, ports: [port], world: { vox, line: routeLine }, part: hookup.part, end: hookup.end,
-        ...(hookup.endConfig === undefined ? {} : { endConfig: hookup.endConfig }), maxNodes,
+        pack, parts, tap, ports: [port], world, part: hookup.part, end: hookup.end,
+        ...(hookup.endConfig === undefined ? {} : { endConfig: hookup.endConfig }),
+        ...(hookup.endConduit === undefined ? {} : { endConduit: hookup.endConduit }), maxNodes,
       });
       add(build, tap);
       out.logistics = { build, tap, network: logisticsNet };

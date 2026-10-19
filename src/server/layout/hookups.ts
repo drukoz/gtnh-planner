@@ -10,13 +10,15 @@ import { tierName, V } from '../../shared/gt/tiers.ts';
 import { itemKey, type StuffKey } from '../../shared/keys.ts';
 import { fmtInt } from '../../shared/layout/format.ts';
 import { bboxOf, DIRS, manhattan, posKey, sideToward, step, type Vec3 } from '../../shared/layout/geometry.ts';
-import type { BlockRole, Hookup, LayoutBlock, LayoutTap } from '../../shared/types/layout.ts';
+import { FACES } from '../../shared/types/assets.ts';
+import type { BlockRole, ConduitSpec, Hookup, LayoutBlock, LayoutTap } from '../../shared/types/layout.ts';
 import type { BlockRef, Machine, Pack } from '../../shared/types/pack.ts';
 import type { BomLine, LogisticsMode, PlanWarning } from '../../shared/types/plan.ts';
 import {
   AIR_INDEX, UNKNOWN_INDEX, type Base, type LogisticsNetwork, type PowerNetwork, type TapPoint, type Voxels, type WorldScan,
 } from '../../shared/types/world.ts';
 import type { BlockConfig } from './arrange.ts';
+import type { ModeHookup } from './modes/mode.ts';
 import { findPath, linkBits, MAX_PATH_NODES, straightPath, type PathBounds } from './path.ts';
 import { machineRef, pickCable, type PartId, type Parts } from './parts.ts';
 import { lineLossEUt, LOSS_WARN_FRACTION } from './power.ts';
@@ -24,7 +26,11 @@ import { isReplaceable } from './site.ts';
 
 // ---- Types ----
 
-export interface RouteWorld { vox: Voxels | null; line: ReadonlySet<string> /* world posKeys of every line block */ }
+export interface RouteWorld {
+  vox: Voxels | null; line: ReadonlySet<string> /* world posKeys of every line block */;
+  /** World posKeys the route search also keeps off (plan 11, ruling R14); a straight guide and the laid cells ignore them. */
+  keepOff?: ReadonlySet<string>;
+}
 export interface HookupBuild { hookup: Hookup; blocks: LayoutBlock[]; warnings: PlanWarning[]; found: boolean }
 export interface PowerHookupBuild extends HookupBuild {
   cable: Machine | null; lossEUt: number; arrivingVolts: number;
@@ -215,14 +221,14 @@ function guidePath(line: ReadonlySet<string>, tap: Vec3, ports: readonly Vec3[])
 
 /**
  * The route of a hookup: A* from the tap's free face neighbours to the free face neighbours of the ports, through
- * cells that are inside the voxel box, known, air or replaceable and not part of the line, within 16 blocks of the
- * tap and ports. Without voxels or when nothing is found: a straight guide, `found: false`.
+ * cells that are inside the voxel box, known, air or replaceable, not part of the line and not kept off, within 16
+ * blocks of the tap and ports. Without voxels or when nothing is found: a straight guide, `found: false`.
  */
 export function hookupPath(world: RouteWorld, tap: Vec3, ports: readonly Vec3[], maxNodes?: number): { path: Vec3[]; found: boolean } {
-  const { vox, line } = world;
+  const { vox, line, keepOff } = world;
   if (vox !== null && ports.length > 0) {
     const around = bboxOf([tap, ...ports])!;
-    const passable = (p: Vec3) => !line.has(posKey(p)) && isFreeVoxel(vox, p);
+    const passable = (p: Vec3) => !line.has(posKey(p)) && keepOff?.has(posKey(p)) !== true && isFreeVoxel(vox, p);
     const starts = neighbours(tap).filter(passable);
     const goals = ports.flatMap(neighbours).filter(passable);
     const reach: PathBounds = {
@@ -329,14 +335,28 @@ export function powerHookup(input: { pack: Pack; tap: LayoutTap; ports: readonly
 // ---- Logistics hookup ----
 
 /**
+ * The conduit on a hookup's last cell (architecture "EnderIO conduits, granted change requests (add-on 11)"): linked
+ * like the cell but not toward the port (a chest is no conduit), with `endConduit`'s face on the side that touches the
+ * port. Null when the cell does not touch a port (the end of a straight guide, plan 11 ruling R13).
+ */
+function endConduitSpec(endConduit: NonNullable<ModeHookup['endConduit']>, item: StuffKey, pos: Vec3, ports: readonly Vec3[],
+  connections: number | undefined): ConduitSpec | null {
+  const side = portSide(pos, ports);
+  const face = FACES[side];
+  if (face === undefined) return null;
+  return { kind: endConduit.kind, item, connections: (connections ?? 0) & ~(1 << side), faces: [{ face, ...endConduit.face }] };
+}
+
+/**
  * The mode's hookup part on every cell of the route (role `pipe`); with `end`, the last cell is that part facing the
- * port it touches, and `endConfig` goes on the last cell. Parts are counted per key, sorted by key.
+ * port it touches, and `endConfig` goes on the last cell; with `endConduit`, the last cell's conduit sets that face
+ * toward the port it touches. Parts are counted per key, sorted by key.
  */
 export function logisticsHookup(input: {
   pack: Pack; parts: Parts; tap: TapPoint; ports: readonly Vec3[]; world: RouteWorld; part: PartId; end: PartId | null;
-  endConfig?: BlockConfig; maxNodes?: number;
+  endConfig?: BlockConfig; endConduit?: ModeHookup['endConduit']; maxNodes?: number;
 }): HookupBuild {
-  const { parts, tap, ports, world, part, end, endConfig } = input;
+  const { parts, tap, ports, world, part, end, endConfig, endConduit } = input;
   const route = hookupPath(world, tap.pos, ports, input.maxNodes);
   const run = runCells(route.path, world.line);
   const bits = hookupBits(route.path, tap.pos, ports);
@@ -346,11 +366,13 @@ export function logisticsHookup(input: {
     const p = parts[endPart ?? part];
     const facing = endPart === null ? -1 : portSide(pos, ports);
     const connections = bits.get(posKey(pos));
+    const conduit = last && endConduit !== undefined ? endConduitSpec(endConduit, parts[part].key, pos, ports, connections) : null;
     return {
       pos: [...pos], block: { ...p.block }, role: endPart === null ? 'pipe' : END_ROLES[endPart] ?? 'pipe',
       ...(facing === -1 ? {} : { facing }), label: p.name, item: p.key,
       ...(connections === undefined ? {} : { connections }),
       ...(last && endConfig !== undefined ? { config: { ...endConfig } } : {}),
+      ...(conduit === null ? {} : { conduits: [conduit] }),
     };
   });
   const counts = new Map<StuffKey, number>();

@@ -9,6 +9,7 @@
 import { joinNames } from '../../../shared/layout/format.ts';
 import { OPPOSITE, posKey, step, type Vec3 } from '../../../shared/layout/geometry.ts';
 import { FACES } from '../../../shared/types/assets.ts';
+import type { TailChest } from '../../../shared/types/layout.ts';
 import type { BomLine, PlanWarning } from '../../../shared/types/plan.ts';
 import { comparePos } from '../../world/graph.ts';
 import type { HostConfig, HostCover, LocalBlock, Placement } from '../arrange.ts';
@@ -96,8 +97,9 @@ export function directMode(input: ModeInput): ModeResult {
   const layPipe = (pos: Vec3): void => {
     blocks.push({ pos, block: machineRef(pipe), role: 'pipe', label: pipe.name, item: pipe.itemKey });
   };
-  const layChest = (pos: Vec3, label: string): void => {
-    blocks.push({ pos, block: { ...parts.chest.block }, role: 'chest', label, item: parts.chest.key });
+  // the tail chests say which side they are and what they hold (architecture "EnderIO conduits, granted change requests (add-on 11)")
+  const layChest = (pos: Vec3, label: string, tail: TailChest): void => {
+    blocks.push({ pos, block: { ...parts.chest.block }, role: 'chest', label, item: parts.chest.key, tail });
   };
 
   const spine = new Set<string>();
@@ -135,7 +137,7 @@ export function directMode(input: ModeInput): ModeResult {
   let inputChest: Vec3 | null = null;
   if (raw.length > 0) {
     inputChest = [tailX, 0, spineZ - 1];
-    layChest(inputChest, 'Chest (input)');
+    layChest(inputChest, 'Chest (input)', { side: 'input', keys: [...raw] });
     links.push([tail, inputChest]);
     const { cover, warning } = conveyorCover(input, { pos: tail, side: NORTH }, 'import', false, rawItemRate(plan, placed), 'the input chest');
     covers.push(cover);
@@ -149,7 +151,7 @@ export function directMode(input: ModeInput): ModeResult {
       layPipe(cell);
       links.push([[tailX, i - 1, spineZ], cell]);
     }
-    layChest(chest, 'Chest (output)');
+    layChest(chest, 'Chest (output)', { side: 'output', keys: [key] });
     links.push([cell, chest]);
     covers.push({ pos: cell, cover: { face: FACES[SOUTH]!, item: parts.item_filter_cover.key, settings: { mode: 'whitelist' }, filter: [key] } });
   });
