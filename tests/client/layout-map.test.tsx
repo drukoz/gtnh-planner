@@ -6,9 +6,11 @@ import { lineSummary, LinePanel } from '../../src/client/map/LinePanel.tsx';
 import { layoutInputKey, createLayoutLoader } from '../../src/client/state/use-layout.ts';
 import { focusPin, getFocusedPin } from '../../src/client/state/pin-focus.ts';
 import { StepsView } from '../../src/client/views/StepsView.tsx';
-import type { Layout } from '../../src/shared/types/layout.ts';
+import { hookupNetworkKind } from '../../src/shared/layout/enderio.ts';
+import type { ConduitFace, Layout } from '../../src/shared/types/layout.ts';
 import type { Plan } from '../../src/shared/types/plan.ts';
 import type { Project } from '../../src/shared/types/project.ts';
+import { bundle, bundleLayout } from './enderio-fixture.ts';
 // for the tests after the plan's own
 import { ApiError } from '../../src/client/api/client.ts';
 import { subscribePinFocus } from '../../src/client/state/pin-focus.ts';
@@ -118,6 +120,17 @@ describe('the line on the map', () => {
     const project = { id: 'P1', name: 'T', createdAt: '', createdBy: 'a', rev: 1, settings: {}, world: { scanId: null, baseId: null },
       placement: null, marks: {}, notes: [] } as unknown as Project;
     expect(renderToStaticMarkup(<StepsView project={project} plan={plan} send={() => {}} me="Ann" />)).toContain('data-pin="1"');
+  });
+
+  it('draws an EnderIO line in the EnderIO colour with a dot on its configured conduits', () => {
+    const hookup = { kind: 'logistics' as const, from: { pos: [8, 64, 20] as [number, number, number], dim: 0, kind: 'pipe' as const, networkId: 'enderio:0:0' },
+      path: [[8, 64, 20], [9, 64, 20]] as Array<[number, number, number]>, parts: [] };
+    const shapes = overlayShapes({ ...bundleLayout, hookups: [hookup] }, view, null, []);
+    expect(shapes.find((s) => s.kind === 'rect' && s.fill !== null)).toMatchObject({ fill: '#26c6da' });
+    expect(shapes.filter((s) => s.kind === 'dot')).toHaveLength(1);
+    expect(shapes.find((s) => s.kind === 'path')).toMatchObject({ stroke: '#26c6da' });
+    expect([hookupNetworkKind(hookup, 'direct'), hookupNetworkKind({ ...hookup, from: { ...hookup.from, networkId: 'e:item:0:1' } }, 'direct'),
+      hookupNetworkKind({ ...hookup, kind: 'power' }, 'enderio')]).toEqual(['gtpipe', 'enderio', null]);
   });
 });
 
@@ -234,5 +247,22 @@ describe('the line on the map: the rules in detail', () => {
     const html = renderToStaticMarkup(<StepsView project={project} plan={withGather} send={() => {}} me="Ann" />);
     expect(html).toMatch(/data-row="step:layout:site"[^]*<button type="button" class="pin-link" data-pin="1"[^>]*>pin 1<\/button>/);
     expect(html.match(/class="pin-link"/g)).toHaveLength(1);
+  });
+
+  it('gives a conduit column the EnderIO colour only when a conduit colours it, and dots only conduits with faces', () => {
+    const fills = (l: Layout) => overlayShapes(l, view, null, []).filter((s) => s.kind === 'rect' && s.fill !== null).map((s) => s.kind === 'rect' && s.fill);
+    const machineAbove = { pos: [10, 65, 20] as [number, number, number], block: GT(2001), role: 'machine' as const, label: 'Basic Macerator', stepId: 's1' };
+    expect(fills({ ...bundleLayout, blocks: [bundle, machineAbove] })).toEqual(['#90caf9']);   // the machine wins the column
+    const cell = (faces: ConduitFace[]) => ({ ...bundle, label: 'Item Conduit', conduits: [{ ...bundle.conduits![0]!, faces }] });
+    const dots = (l: Layout) => overlayShapes(l, view, null, []).filter((s) => s.kind === 'dot').length;
+    expect([dots({ ...bundleLayout, blocks: [cell([])] }), dots({ ...bundleLayout, blocks: [cell([{ face: 'south', mode: 'disabled', target: 'Basic Macerator' }])] })])
+      .toEqual([0, 1]);   // links alone set nothing; a Disabled face is still set by hand
+    expect(fills({ ...bundleLayout, blocks: [cell([])] })).toEqual(['#26c6da']);
+  });
+
+  it('keeps a routed or AE2 tap its own kind in any mode', () => {
+    const from = { pos: [8, 64, 20] as [number, number, number], dim: 0, networkId: 'e:item:0:1' };
+    expect((['routed', 'ae2'] as const).map((kind) => hookupNetworkKind({ kind: 'logistics', from: { ...from, kind }, path: [], parts: [] }, 'enderio')))
+      .toEqual(['routed', 'ae2']);
   });
 });

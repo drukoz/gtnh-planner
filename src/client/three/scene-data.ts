@@ -1,19 +1,22 @@
 // The 3D view's scene as plain data (Plan 5 Task 14; spec §3.8, architecture §11.14, web-stack §8): the blocks of a
 // layout as instances of four shapes, the face textures they share as tile sources for one array texture, which
 // instances the layer slider and the ghost and hookup toggles show, the side list of blocks to place, and the texts
-// for hover and click. Pure TypeScript — no DOM, no three.js — so it is tested without a browser; the viewer turns
-// these lists into meshes and the loader turns the tile sources into pixels.
+// for hover and click. An EnderIO conduit bundle (architecture "EnderIO conduits, granted change requests (add-on
+// 11)") draws each of its conduits side by side, with a connector arm on every face that is set. Pure TypeScript — no
+// DOM, no three.js — so it is tested without a browser; the viewer turns these lists into meshes and the loader turns
+// the tile sources into pixels.
 
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import { TIER_NAMES } from '../../shared/gt/tiers.ts';
-import { configuredLines } from '../../shared/layout/configure-text.ts';
+import { conduitLines, configuredLines } from '../../shared/layout/configure-text.ts';
+import { CONDUIT_NAMES } from '../../shared/layout/enderio.ts';
 import { fmtInt, fmtRate } from '../../shared/layout/format.ts';
 import { SIDE_NAMES, posKey, type Vec3 } from '../../shared/layout/geometry.ts';
 import {
-  FACES, KIND_COLORS, rotateFaces,
+  FACES, KIND_COLORS, conduitBlockRef, rotateFaces,
   type BlockFaces, type CoverLayers, type Face, type IconDescriptor, type Rgb, type TextureLayer,
 } from '../../shared/types/assets.ts';
-import type { BlockRole, Layout } from '../../shared/types/layout.ts';
+import type { BlockRole, ConduitMode, Layout, LayoutBlock } from '../../shared/types/layout.ts';
 import type { BlockRef, Product } from '../../shared/types/pack.ts';
 import type { Plan, PlanStep } from '../../shared/types/plan.ts';
 
@@ -34,6 +37,8 @@ const FALLBACK_KEY = 'fallback';
 const FALLBACK_COLOR: Rgb = [128, 128, 128];
 /** A machine with no facing looks north, like the canonical textures. */
 const DEFAULT_FACING = 2;
+/** How far apart (blocks) the conduits of a bundle are drawn, one above the other. */
+const BUNDLE_SPACING = 6 / 16;
 
 /** `${id}@${meta}`, plus `#${mteId}` for a GregTech machine: how the scene names a block to the asset routes. */
 export function blockKey(ref: BlockRef): string {
@@ -73,6 +78,37 @@ export interface SceneInstance {
   /** Index into `SceneData.tiles` per world side, in ForgeDirection order (down, up, north, south, west, east). */
   tiles: [number, number, number, number, number, number];
   ghost: boolean;
+  /** Shift from the cell centre, in blocks: conduits of one bundle side by side. */
+  offset?: Vec3;
+}
+
+/** Where an instance sits: its cell centre plus `offset`. */
+export function instanceTranslation(inst: SceneInstance): Vec3 {
+  const [dx, dy, dz] = inst.offset ?? [0, 0, 0];
+  return [inst.pos[0] + 0.5 + dx, inst.pos[1] + 0.5 + dy, inst.pos[2] + 0.5 + dz];
+}
+
+/** The pseudo block whose texture a conduit face set to `mode` shows on its arm (Plan 3's curated `conduit:connector_<mode>`). */
+function connectorRef(mode: Exclude<ConduitMode, 'disabled'>): BlockRef {
+  return conduitBlockRef(`connector_${mode}`);
+}
+
+/**
+ * The refs a block is drawn with: its own, then per conduit `conduit:<kind>` and `conduit:connector_<mode>` for each
+ * non-disabled face; each once, in that order.
+ */
+export function sceneBlockRefs(b: LayoutBlock): BlockRef[] {
+  const refs = new Map<string, BlockRef>();
+  const add = (ref: BlockRef): void => {
+    const key = blockKey(ref);
+    if (!refs.has(key)) refs.set(key, ref);
+  };
+  add({ ...b.block });
+  for (const conduit of b.conduits ?? []) {
+    add(conduitBlockRef(conduit.kind));
+    for (const face of conduit.faces) if (face.mode !== 'disabled') add(connectorRef(face.mode));
+  }
+  return [...refs.values()];
 }
 
 export interface SceneData {
@@ -88,12 +124,16 @@ function onAllSides(tile: number): SceneInstance['tiles'] {
 }
 
 /**
- * The scene of a layout, instances in block order. A cable, pipe or chip pipe is a `core` plus an `arm` per connected
- * side (ascending), all faces its `north` texture; any other block is one `cube` whose world side shows the canonical
- * face its facing puts there. After a block's own shapes come its covers, one `plate` per cover in `covers` order, on
- * the cover's face and carrying the cover's in-world overlay — else its item icon, else a plain colour — on all six
- * tiles. A face with no layers, or a block with no faces, is a plain colour, and a tile is shared by everything that
- * draws the same layers. Every tile's `color` is what it falls back to: the block's own fallback colour, the cover
+ * The scene of a layout, instances in block order. A block holding EnderIO conduits draws, per conduit in bundle order,
+ * a `core` and an `arm` per side (ascending) that is one of its links (all faces the conduit's `north` texture) or one
+ * of its faces that is not Disabled (the `north` texture of `conduit:connector_<mode>`); in a bundle of n ≥ 2 every
+ * shape of conduit i carries `offset` [0, (i − (n − 1) / 2) × 6/16, 0], so the conduits sit side by side. Any other
+ * cable, pipe or chip pipe is a `core` plus an `arm` per connected side (ascending), all faces its `north` texture;
+ * any other block is one `cube` whose world side shows the canonical face its facing puts there. After a block's own
+ * shapes come its covers, one `plate` per cover in `covers` order, on the cover's face and carrying the cover's
+ * in-world overlay — else its item icon, else a plain colour — on all six tiles. A face with no layers, or a block
+ * with no faces, is a plain colour, and a tile is shared by everything that draws the same layers. Every tile's
+ * `color` is what it falls back to: the block's own fallback colour (a conduit's or connector's own), the cover
  * item's, or the role's.
  */
 export function buildScene(
@@ -116,13 +156,30 @@ export function buildScene(
   layout.blocks.forEach((b, block) => {
     const pos: Vec3 = [b.pos[0] - ox, b.pos[1] - oy, b.pos[2] - oz];
     const ghost = b.role === 'ghost';
-    const add = (shape: ShapeKind, side: number, sides: SceneInstance['tiles']): void => {
-      instances.push({ block, shape, pos: [...pos], side, tiles: sides, ghost });
+    const add = (shape: ShapeKind, side: number, sides: SceneInstance['tiles'], offset?: Vec3): void => {
+      instances.push({ block, shape, pos: [...pos], side, tiles: sides, ghost, ...(offset === undefined ? {} : { offset: [...offset] }) });
     };
     const found = faces.get(blockKey(b.block));
     const faceTile = (face: Face): number => tile(found?.faces[face] ?? [], found?.fallbackColor ?? ROLE_FALLBACK[b.role]);
 
-    if (PIPE_ROLES.has(b.role)) {
+    if (b.conduits !== undefined && b.conduits.length > 0) {
+      const n = b.conduits.length;
+      /** The `north` face of a conduit's or connector's pseudo block, else the block role's plain colour. */
+      const northTile = (ref: BlockRef): number => {
+        const own = faces.get(blockKey(ref));
+        return tile(own?.faces.north ?? [], own?.fallbackColor ?? ROLE_FALLBACK[b.role]);
+      };
+      b.conduits.forEach((conduit, i) => {
+        const offset: Vec3 | undefined = n < 2 ? undefined : [0, (i - (n - 1) / 2) * BUNDLE_SPACING, 0];
+        const t = northTile(conduitBlockRef(conduit.kind));
+        add('core', -1, onAllSides(t), offset);
+        for (let side = 0; side < 6; side++) {
+          const face = conduit.faces.find((f) => f.face === FACES[side]);
+          if (face !== undefined && face.mode !== 'disabled') add('arm', side, onAllSides(northTile(connectorRef(face.mode))), offset);
+          else if (conduit.connections & (1 << side)) add('arm', side, onAllSides(t), offset);
+        }
+      });
+    } else if (PIPE_ROLES.has(b.role)) {
       const t = faceTile('north');
       add('core', -1, onAllSides(t));
       for (let side = 0; side < 6; side++) {
@@ -161,25 +218,53 @@ function byText(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
+/** What a block adds to the side list: a row under its label, or a `pipe` row per conduit it holds, under the conduit's name. */
+function placedRows(b: LayoutBlock): Array<Pick<BlockListRow, 'label' | 'role'>> {
+  const conduits = b.conduits ?? [];
+  if (conduits.length === 0) return [{ label: b.label, role: b.role }];
+  return conduits.map((c): Pick<BlockListRow, 'label' | 'role'> => ({ label: CONDUIT_NAMES[c.kind], role: 'pipe' }));
+}
+
+/** The filters and speed upgrades on a block's conduit faces: each side's filter item once, each upgrade `count` times. */
+function conduitFaceParts(b: LayoutBlock): Array<{ item: StuffKey; count: number }> {
+  const parts: Array<{ item: StuffKey; count: number }> = [];
+  for (const conduit of b.conduits ?? []) {
+    for (const face of conduit.faces) {
+      for (const side of [face.extract, face.insert]) {
+        const item = side?.filter?.item;
+        if (item !== undefined) parts.push({ item, count: 1 });
+      }
+      if (face.extract?.speed !== undefined) parts.push({ item: face.extract.speed.item, count: face.extract.speed.count });
+    }
+  }
+  return parts;
+}
+
 /**
- * The side list (spec §3.8): the blocks to place, grouped by label, with one row per cover item (`<name> cover`, counted
- * over every block's covers), the most numerous first and by label among equals; one line per hookup, naming how many
- * of its blocks the line lays and the pin that marks its tap; and the footprint as W×L×H. Ghosts are not placed, so
- * they are not listed.
+ * The side list (spec §3.8): the blocks to place, grouped by label (a block holding conduits counts each conduit under
+ * its name instead), with one row per cover item (`<name> cover`, counted over every block's covers) and one per filter
+ * or speed upgrade on a conduit face (`<name>`, role `cover`), the most numerous first and by label among equals; one
+ * line per hookup, naming how many of its blocks the line lays and the pin that marks its tap; and the footprint as
+ * W×L×H. Ghosts are not placed, so they are not listed.
  */
 export function blockList(layout: Layout, names?: Readonly<Record<string, string>>): { place: BlockListRow[]; hookups: string[]; size: string } {
   const blocks = new Map<string, BlockListRow>();
   const coverItems = new Map<StuffKey, number>();
+  const faceParts = new Map<StuffKey, number>();
   const hookupBlocks = new Map<number, number>();
   for (const b of layout.blocks) {
     if (b.role === 'ghost') continue;
-    const row = blocks.get(b.label);
-    if (row === undefined) blocks.set(b.label, { label: b.label, role: b.role, count: 1 });
-    else row.count++;
+    for (const { label, role } of placedRows(b)) {
+      const row = blocks.get(label);
+      if (row === undefined) blocks.set(label, { label, role, count: 1 });
+      else row.count++;
+    }
     for (const cover of b.covers ?? []) coverItems.set(cover.item, (coverItems.get(cover.item) ?? 0) + 1);
+    for (const { item, count } of conduitFaceParts(b)) faceParts.set(item, (faceParts.get(item) ?? 0) + count);
     if (b.hookup !== undefined) hookupBlocks.set(b.hookup, (hookupBlocks.get(b.hookup) ?? 0) + 1);
   }
-  const place = [...blocks.values(), ...[...coverItems].map(([item, count]): BlockListRow => ({ label: `${names?.[item] ?? item} cover`, role: 'cover', count }))];
+  const place = [...blocks.values(), ...[...coverItems].map(([item, count]): BlockListRow => ({ label: `${names?.[item] ?? item} cover`, role: 'cover', count })),
+    ...[...faceParts].map(([item, count]): BlockListRow => ({ label: names?.[item] ?? item, role: 'cover', count }))];
   place.sort((a, b) => b.count - a.count || byText(a.label, b.label));
 
   const hookups = layout.hookups.map((h, index) => {
@@ -220,8 +305,9 @@ function stepLines(step: PlanStep, nameOf: (k: StuffKey) => string): string[] {
 /**
  * What a click on a block shows (spec §3.8, §11.14): its label as the title, then where it faces; for a block of a
  * plan step what the step makes from what, and its tier and power; every cover's item, face, settings and filter and
- * the block's own settings, in the words of its configure step; that it belongs to a hookup; that it is a ghost. A
- * block index outside the layout (a stale pick) gives an empty title and no lines.
+ * the block's own settings, then every conduit face's mode and settings, in the words of its configure step; that it
+ * belongs to a hookup; that it is a ghost. A block index outside the layout (a stale pick) gives an empty title and no
+ * lines.
  */
 export function pickInfo(layout: Layout, plan: Plan | null, blockIndex: number): { title: string; lines: string[] } {
   const block = layout.blocks[blockIndex];
@@ -233,15 +319,20 @@ export function pickInfo(layout: Layout, plan: Plan | null, blockIndex: number):
   const step = block.stepId === undefined ? undefined : plan?.steps.find((s) => s.id === block.stepId);
   if (step !== undefined) lines.push(...stepLines(step, nameOf));
   lines.push(...configuredLines(block, nameOf));
+  lines.push(...conduitLines(block, nameOf).map((l) => l.text));
   const hookup = block.hookup === undefined ? undefined : layout.hookups[block.hookup];
   if (hookup !== undefined) lines.push(`Part of the ${hookup.kind} hookup`);
   if (block.role === 'ghost') lines.push('Already in your base');
   return { title: block.label, lines };
 }
 
-/** What hovering a block shows: its label, then each cover's and setting's text, joined with a dash; empty for a block outside the layout. */
+/**
+ * What hovering a block shows: its label, then each cover's and setting's text, then each conduit face's, joined with
+ * a dash; empty for a block outside the layout.
+ */
 export function hoverText(layout: Layout, plan: Plan | null, blockIndex: number): string {
   const block = layout.blocks[blockIndex];
   if (block === undefined) return '';
-  return [block.label, ...configuredLines(block, nameIn(plan))].join(' — ');
+  const nameOf = nameIn(plan);
+  return [block.label, ...configuredLines(block, nameOf), ...conduitLines(block, nameOf).map((l) => l.text)].join(' — ');
 }

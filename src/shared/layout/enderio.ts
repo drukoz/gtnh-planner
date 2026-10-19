@@ -17,9 +17,13 @@
 //   (`ItemFilter.DEFAULT_MBT`); an ender fluid conduit's own `FluidFilter` holds 5 fluids.
 // - `ConnectionMode`, `DyeColor` and `RedstoneControlMode` are the enums behind the face types in `../types/layout.ts`;
 //   the names are the conduit GUI's (`en_US.lang`, `gui.conduit.ioMode.*` for the modes).
+// - Plan 4 names a scanned EnderIO network `e:<conduit type>:…` and gives its taps the kind `pipe`, as it does a GT pipe
+//   network's, so `hookupNetworkKind` tells the two apart by the network id.
 // Pure TypeScript shared by server and browser: nothing from node:* may be imported here.
 
-import type { ConduitKind, ConduitMode, DyeColor, RedstoneMode } from '../types/layout.ts';
+import type { ConduitKind, ConduitMode, DyeColor, Hookup, RedstoneMode } from '../types/layout.ts';
+import type { LogisticsMode } from '../types/plan.ts';
+import type { LogisticsNetwork } from '../types/world.ts';
 
 const TICKS_PER_SECOND = 20;
 
@@ -114,3 +118,18 @@ export const ITEM_FILTER_SLOTS: { readonly basic: 5; readonly advanced: 10; read
 
 /** Fluid slots of an ender fluid conduit's own filter. */
 export const FLUID_FILTER_SLOTS: 5 = 5;
+
+// ---- Networks ----
+
+/** How Plan 4's ids of EnderIO networks start: `e:item:…`, `e:liquid:…`. */
+const ENDERIO_NETWORK_PREFIX = 'e:';
+
+/**
+ * The network a hookup joins: null for power; a `pipe` tap is EnderIO in enderio mode or when its network id starts
+ * with `e:` (Plan 4's `e:item:…`), else a GT pipe.
+ */
+export function hookupNetworkKind(h: Hookup, mode: LogisticsMode): LogisticsNetwork['kind'] | null {
+  if (h.kind === 'power') return null;
+  if (h.from.kind === 'routed' || h.from.kind === 'ae2') return h.from.kind;
+  return mode === 'enderio' || h.from.networkId.startsWith(ENDERIO_NETWORK_PREFIX) ? 'enderio' : 'gtpipe';
+}
