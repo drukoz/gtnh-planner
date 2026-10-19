@@ -90,6 +90,24 @@ describe('NEI dump rules', () => {
     expect(matchNeiFiles(foo, new Set(['Bar.png', 'FOO.png']), 'icons')).toEqual({ files: ['Foo.png', 'FOO.png'], caseInsensitive: false, missing: [0] });
   });
 
+  it('matches a dump with a _<n> name case-sensitively when a case-insensitive disk would not have numbered it otherwise', () => {
+    // MK.png and Mk.png cannot both be on a case-insensitive disk, so "Mk:2" drawn as "Zed" leaves Mk.png to row 2 (an
+    // importNeiIcons test refuses the same rows when the PNGs may come from either kind of disk).
+    const mk = asRows([{ name: 't:a', meta: 0, display: 'MK' }, { name: 't:b', meta: 0, display: 'Mk' }, { name: 't:c', meta: 0, display: 'Mk:2' }]);
+    expect(matchNeiFiles(mk, new Set(['MK.png', 'Mk.png', 'Zed.png']), 'icons')).toEqual({ files: ['MK.png', 'Mk.png', 'Mk_2.png'], caseInsensitive: false, missing: [2] });
+    // Without names that differ only in case, either kind of disk gives "Mk:2" Mk_2.png.
+    const qed = asRows([{ name: 't:c', meta: 0, display: 'Mk:2' }, QED]);
+    expect(matchNeiFiles(qed, new Set(['Mk_2.png', 'QED (Quantum Ender Diviner).png']), 'icons'))
+      .toEqual({ files: ['Mk_2.png', 'QED (Quite Elegant Device).png'], caseInsensitive: false, missing: [1] });
+  });
+
+  it('matches a dump with a _<n> name case-insensitively when that finds more files', () => {
+    // A case-insensitive disk numbered "FOO" after "Foo"; matched that way, only the QED misses its file.
+    const rows = asRows([{ name: 't:a', meta: 0, display: 'Foo' }, { name: 't:b', meta: 0, display: 'FOO' }, { name: 't:c', meta: 0, display: 'Mk:2' }, QED]);
+    expect(matchNeiFiles(rows, new Set(['Foo.png', 'FOO_2.png', 'Mk_2.png', 'QED (Quantum Ender Diviner).png']), 'icons'))
+      .toEqual({ files: ['Foo.png', 'FOO_2.png', 'Mk_2.png', 'QED (Quite Elegant Device).png'], caseInsensitive: true, missing: [3] });
+  });
+
   it('allows one row without a PNG per 1000 rows in a large dump', () => {
     const rows = asRows(items(11_999));
     const listing = (renamed: number) => new Set(rows.map((_, i) => (i < renamed ? `Other ${i}.png` : `Item ${i}.png`)));
@@ -226,6 +244,19 @@ describe('importNeiIcons', () => {
     await renamePngs(d.pngDir, [['Foo.png', 'Foo_2.png'], ['Baz.png', 'Foo.png']]);
     await expect(importNeiIcons({ csv: d.csv, pngDir: d.pngDir, dataDir: join(dir, 'data') }))
       .rejects.toThrow(/^Row 1 \(t:a@0 "Baz"\) expects "Baz.png", which is not in .*ambiguous/);
+    expect(await loadNeiIndex(join(dir, 'data', 'assets'))).toBeNull();
+  });
+
+  it('refuses a case-sensitive match of PNGs that a case-insensitive disk may have numbered', async () => {
+    // On a case-insensitive disk NEI writes "MK", "Mk", "Mk:2" as MK.png, Mk_2.png, Mk_2_2.png; it drew the third as
+    // "Zed". Matched case-sensitively only row 2 misses its file (Mk.png), and row 3 would get row 2's Mk_2.png. The
+    // same three files from a case-sensitive disk would mean that row 2 was drawn as "Zed".
+    const dir = await mkdtemp(join(tmpdir(), 'gp-nei-'));
+    const rows = [{ name: 't:a', meta: 0, display: 'MK' }, { name: 't:b', meta: 0, display: 'Mk' }, { name: 't:c', meta: 0, display: 'Mk:2' }];
+    const d = await writeNeiDump(join(dir, 'dumps'), rows, { caseInsensitive: true });
+    await renamePngs(d.pngDir, [['Mk_2_2.png', 'Zed.png']]);
+    await expect(importNeiIcons({ csv: d.csv, pngDir: d.pngDir, dataDir: join(dir, 'data') })).rejects.toThrow(
+      /^Row 2 \(t:b@0 "Mk"\) expects "Mk.png", which is not in .*ambiguous: row 2 expects "Mk_2.png" if the PNGs were written on a case-insensitive disk/);
     expect(await loadNeiIndex(join(dir, 'data', 'assets'))).toBeNull();
   });
 

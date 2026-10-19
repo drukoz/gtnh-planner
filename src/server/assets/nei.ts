@@ -233,6 +233,11 @@ function assignment(rows: readonly NeiRow[], pngs: ReadonlySet<string>, caseInse
   return { files, caseInsensitive, missing: files.flatMap((file, i) => (pngs.has(file) ? [] : [i])) };
 }
 
+/** The reason given when a changed name may have moved NEI's `_2`, `_3` numbering, with what shows it (`why`). */
+function ambiguous(why: string): string {
+  return `The names are ambiguous: ${why}, so NEI's _2, _3 numbering may have shifted.`;
+}
+
 /** Why the rows that miss their file cannot all be items that changed their name (see `matchNeiFiles`), else null. */
 function whyRefused(rows: readonly NeiRow[], pngs: ReadonlySet<string>, match: NeiMatch): string | null {
   const { files, caseInsensitive, missing } = match;
@@ -249,7 +254,6 @@ function whyRefused(rows: readonly NeiRow[], pngs: ReadonlySet<string>, match: N
     if (firstRow.has(base)) shared.add(base);
     else firstRow.set(base, i);
   }
-  const ambiguous = (why: string) => `The names are ambiguous: ${why}, so NEI's _2, _3 numbering may have shifted.`;
   for (const i of missing) {
     const base = neiFileBase(rows[i]!.display);
     if (shared.has(fold(base)) || files[i] !== `${base}.png`) return ambiguous(`row ${i + 1} shares its file name with another row`);
@@ -259,6 +263,19 @@ function whyRefused(rows: readonly NeiRow[], pngs: ReadonlySet<string>, match: N
     if (row !== undefined) return ambiguous(`"${orphan}" belongs to no row but is named like row ${row + 1}`);
   }
   return null;
+}
+
+/**
+ * Why the case-sensitive assignment may hand a row another row's file although `whyRefused` accepts it: a
+ * case-insensitive disk may have written the PNGs (no two listed names differ only in case), a row's file base ends in
+ * `_<n>`, and the case-insensitive assignment names other files (see `matchNeiFiles`); else null.
+ */
+function whyEitherDisk(rows: readonly NeiRow[], pngs: ReadonlySet<string>, sensitive: NeiMatch, insensitive: NeiMatch): string | null {
+  if (new Set([...pngs].map((file) => file.toLowerCase())).size < pngs.size) return null;
+  if (!rows.some((row) => COLLISION_SUFFIX.test(neiFileBase(row.display)))) return null;
+  const first = insensitive.files.findIndex((file, i) => file !== sensitive.files[i]);
+  if (first < 0) return null;
+  return ambiguous(`row ${first + 1} expects "${insensitive.files[first]}" if the PNGs were written on a case-insensitive disk`);
 }
 
 /**
@@ -272,16 +289,23 @@ function whyRefused(rows: readonly NeiRow[], pngs: ReadonlySet<string>, match: N
  * rows that miss their file are accepted as such items (`missing`) when (a) there are at most max(10, rows / 1000) of
  * them, (b) as many listed files belong to no row, and (c) the names are not ambiguous: each missing row is the only
  * row with its file base (compared case-insensitively for the case-insensitive assignment) and expects
- * `<base>.png`, not a number after another row's file; and no file that belongs to no row has, without `.png` and a
- * `_<n>` suffix, the base of a row. Otherwise a changed name may have moved NEI's `_2`, `_3` numbering, so that a row
- * would get another row's icon, and the dump is refused, naming the first missing row.
+ * `<base>.png`, not a number after another row's file; no file that belongs to no row has, without `.png` and a
+ * `_<n>` suffix, the base of a row; and, for the case-sensitive assignment, a case-insensitive disk cannot have
+ * numbered the files otherwise: two listed names differ only in case, no row's file base ends in `_<n>`, or the
+ * case-insensitive assignment names the same files ("MK", "Mk", "Mk:2" with the third drawn as "Zed" give MK.png,
+ * Mk_2.png, Zed.png on a case-insensitive disk, the files of "Mk" drawn as "Zed" on a case-sensitive one). Otherwise
+ * a changed name may have moved NEI's `_2`, `_3` numbering, so that a row would get another row's icon, and the dump is
+ * refused, naming the first missing row. Names alone cannot show a changed row drawn under the CSV name of another
+ * changed row: "Alpha", "Beta" drawn as "Beta", "Gamma" give the files of "Alpha" drawn as "Gamma", and the second row
+ * gets the first one's icon, as with two rows that swap their names.
  */
 export function matchNeiFiles(rows: readonly NeiRow[], pngs: ReadonlySet<string>, pngDir: string): NeiMatch {
   const sensitive = assignment(rows, pngs, false);
   if (sensitive.missing.length === 0) return sensitive;
   const insensitive = assignment(rows, pngs, true);
   const match = insensitive.missing.length < sensitive.missing.length ? insensitive : sensitive;
-  const refused = match.missing.length === 0 ? null : whyRefused(rows, pngs, match);
+  const refused = match.missing.length === 0 ? null
+    : whyRefused(rows, pngs, match) ?? (match === sensitive ? whyEitherDisk(rows, pngs, sensitive, insensitive) : null);
   if (refused === null) return match;
   const first = match.missing[0]!;
   const row = rows[first]!;
