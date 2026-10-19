@@ -6,7 +6,8 @@ import { tierName } from '../../../src/shared/gt/tiers.ts';
 import { OPPOSITE, step } from '../../../src/shared/layout/geometry.ts';
 import type { Layout, LayoutBlock } from '../../../src/shared/types/layout.ts';
 import type { Pack } from '../../../src/shared/types/pack.ts';
-import type { Plan } from '../../../src/shared/types/plan.ts';
+import type { Plan, PlanFlow } from '../../../src/shared/types/plan.ts';
+import type { StuffKey } from '../../../src/shared/keys.ts';
 import { layoutPack, makePlan, makeProject, makeScan, flatVoxels, areaReader, IDS, STONE, type StepSpec } from '../../helpers/layout-fixtures.ts';
 
 const twoStep = () => makePlan([
@@ -350,6 +351,119 @@ describe('layoutLine: mixed-tier lines', () => {
     }
     // mostly mixed-tier lines (the seed fixes these counts)
     expect(fedAt).toEqual([55, 124, 21]);
+    expect({ failed: failed.length, first: failed.slice(0, 5) }).toEqual({ failed: 0, first: [] });
+  });
+
+  // Review of the fix above: a higher tier's tree that serves both rows crosses the spine one block up, which walled in a
+  // fluid pipe kept to the units' height (and the logistics fill the spine below). Such a pipe climbs over the cable.
+  const MI: StuffKey = 'fluid:molten.iron', OX: StuffKey = 'fluid:oxygen';
+  /** The fluids a step takes or makes. */
+  const fluidsOf = (plan: Plan, stepId: string | undefined): StuffKey[] => {
+    const s = plan.steps.find((x) => x.id === stepId);
+    return s === undefined ? [] : [...new Set([...s.inputs, ...s.outputs].map((p) => p.key).filter((k) => k.startsWith('fluid:')))];
+  };
+
+  /**
+   * What is wrong with the line's fluid pipes, as text: every "Could not lay" warning, and every basic machine that takes
+   * or makes a fluid without a pipe of that fluid above it, linked down into it and joined (by the pipes' connection bits)
+   * to the pipe above every other machine of that fluid.
+   */
+  function pipeProblems(layout: Layout, plan: Plan, pack: Pack): string[] {
+    const out = layout.warnings.filter((w) => w.code === 'route_failed' && w.text.startsWith('Could not lay')).map((w) => w.text);
+    const pipes = new Map(layout.blocks.filter((b) => b.role === 'pipe' && b.hookup === undefined).map((b) => [key(b.pos), b]));
+    const machines = layout.blocks.filter((b) => b.role === 'machine' && b.mainFacing !== undefined);
+    for (const fluid of [...new Set(plan.steps.flatMap((s) => fluidsOf(plan, s.id)))]) {
+      const name = pack.nameOf(fluid);
+      const ports = machines.filter((m) => fluidsOf(plan, m.stepId).includes(fluid)).map((m) => key(step(m.pos, 1)));
+      const joined = new Set<string>();
+      const queue = ports.slice(0, 1);
+      while (queue.length > 0) {
+        const at = queue.shift()!;
+        const b = pipes.get(at);
+        if (b === undefined || !b.label.endsWith(`(${name})`) || joined.has(at)) continue;
+        joined.add(at);
+        for (let side = 0; side < 6; side++) if (((b.connections ?? 0) & (1 << side)) !== 0) queue.push(key(step(b.pos, side)));
+      }
+      for (const p of ports) if (!joined.has(p) || ((pipes.get(p)!.connections ?? 0) & 1) === 0) out.push(`no ${name} pipe into the machine below ${p}`);
+    }
+    return out;
+  }
+
+  it('lays a fluid pipe over a higher tier\'s cable that crosses the spine, in every mode', async () => {
+    const plans: Array<[number, Plan]> = [
+      // the review's line: the LV extractor stands next to the head, the HV reactors behind it in both rows
+      [3, makePlan([
+        { id: 'p1', mteId: IDS.CHEM_HV, count: 1, tier: 3, euPerTick: 512, inputs: [['t:in@0', 1], [OX, 1000]] },
+        { id: 'p2', mteId: IDS.EXTRACTOR, count: 1, euPerTick: 24, inputs: [['t:out_p1@0', 1]], outputs: [[MI, 144]] },
+        { id: 'p3', mteId: IDS.CHEM_HV, count: 1, tier: 3, euPerTick: 128, inputs: [[MI, 1]] },
+      ])],
+      // an LV extractor feeding two MV assemblers
+      [2, makePlan([
+        { id: 'x', mteId: IDS.EXTRACTOR, count: 1, euPerTick: 24, outputs: [[MI, 144]] },
+        { id: 'a', mteId: IDS.ASSEMBLER, count: 2, tier: 2, euPerTick: 120, inputs: [[MI, 1]] },
+      ])],
+      // an MV assembler, then an LV extractor feeding another MV assembler
+      [2, makePlan([
+        { id: 'a', mteId: IDS.ASSEMBLER, count: 1, tier: 2, euPerTick: 120 },
+        { id: 'x', mteId: IDS.EXTRACTOR, count: 1, euPerTick: 24, inputs: [['t:out_a@0', 1]], outputs: [[MI, 144]] },
+        { id: 'b', mteId: IDS.ASSEMBLER, count: 1, tier: 2, euPerTick: 120, inputs: [[MI, 1]] },
+      ])],
+    ];
+    for (const [supply, plan] of plans) {
+      for (const mode of MODES) {
+        const pack = layoutPack();
+        const layout = await layoutLine(pack, plan, netScan(supply), makeProject({ logistics: mode }), ground());
+        expect([plan.steps[0]!.id, mode, pipeProblems(layout, plan, pack), powerProblems(layout, plan, pack, supply)]).toEqual([plan.steps[0]!.id, mode, [], []]);
+      }
+    }
+  });
+
+  it('pipes every fluid of random LV, MV and HV lines in every mode, but a second fluid at a basic machine\'s one port', async () => {
+    // 150 chained plans of 2–4 steps, each 1–3 machines of a random tier on an MV or HV network; now and then a step makes
+    // molten iron, which the next step takes, or takes oxygen from outside the line (its pipe starts above the tail). A
+    // basic machine has one cell above it for all its fluids, so the pipe of a second fluid there may fail
+    // (`fluid_port_shared`); in these lines no other pipe does. The fixed seed lays out the same 450 lines every run,
+    // without voxels.
+    const random = seeded(20261020);
+    const pick = <T>(xs: readonly T[]): T => xs[Math.floor(random() * xs.length)]!;
+    const machines: Record<number, { plain: number; makes: number; takes: number; euPerTick: number[] }> = {
+      1: { plain: IDS.MACERATOR, makes: IDS.EXTRACTOR, takes: IDS.SOLIDIFIER, euPerTick: [8, 16, 30] },
+      2: { plain: IDS.ASSEMBLER, makes: IDS.ASSEMBLER, takes: IDS.ASSEMBLER, euPerTick: [64, 120] },
+      3: { plain: IDS.CHEM_HV, makes: IDS.CHEM_HV, takes: IDS.CHEM_HV, euPerTick: [256, 480] },
+    };
+    const pack = layoutPack();
+    let mixed = 0;                                                                    // lines piping molten iron between two feed tiers
+    const failed: string[] = [];
+    for (let i = 0; i < 150; i++) {
+      const supply = pick([2, 3]);
+      const steps: StepSpec[] = [];
+      const flows: PlanFlow[] = [];
+      let from = 'raw', item: StuffKey = 't:in@0';
+      const length = pick([2, 3, 4]);
+      for (let j = 0; j < length; j++) {
+        const id = `s${j + 1}`, tier = pick([1, 2, 3]), m = machines[tier]!;
+        const makes = random() < 0.3, oxygen = random() < 0.2;
+        const made: StuffKey = makes ? MI : `t:out_${id}@0`;
+        steps.push({ id, mteId: makes ? m.makes : item === MI ? m.takes : m.plain, count: pick([1, 2, 3]), tier, euPerTick: pick(m.euPerTick),
+          inputs: oxygen ? [[item, 1], [OX, 100]] : [[item, 1]], outputs: [[made, 1]] });
+        flows.push({ from, to: id, key: item, perSecond: 1 }, ...(oxygen ? [{ from: 'raw', to: id, key: OX, perSecond: 1 }] : []));
+        from = id;
+        item = made;
+      }
+      flows.push({ from, to: 'out', key: item, perSecond: 1 });
+      const feed = new Map(steps.map((s) => [s.id, Math.min(s.tier!, supply)]));
+      if (flows.some((f) => f.key === MI && feed.has(f.from) && feed.has(f.to) && feed.get(f.from) !== feed.get(f.to))) mixed += 1;
+      const plan = makePlan(steps, { flows });
+      for (const mode of MODES) {
+        const layout = await layoutLine(pack, plan, netScan(supply), makeProject({ logistics: mode }));
+        const walled = layout.warnings.filter((w) => w.code === 'route_failed' && w.text.startsWith('Could not lay') && fluidsOf(plan, w.stepId).length < 2);
+        const problems = [...walled.map((w) => w.text), ...powerProblems(layout, plan, pack, supply)];
+        if (problems.length > 0) {
+          failed.push(`${mode} on ${tierName(supply)}, ${steps.map((s) => `${s.count}× ${s.id} ${tierName(s.tier!)} ${fluidsOf(plan, s.id).join('+')}`).join(' → ')}: ${problems[0]!}`);
+        }
+      }
+    }
+    expect(mixed).toBe(51);                                                           // the seed fixes this count
     expect({ failed: failed.length, first: failed.slice(0, 5) }).toEqual({ failed: 0, first: [] });
   });
 });

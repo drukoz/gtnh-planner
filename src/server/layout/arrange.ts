@@ -5,9 +5,9 @@
 // facing a one-block spine, row N turned 180° so every front faces the spine, with the ports the routing, logistics
 // and hookup stages connect to. Covers and settings from those stages are attached to their host blocks here too.
 // A singleblock's output side faces the spine and its front (GT's `mMainFacing`, kept apart from the output side) faces
-// up, or toward the power head when its top is a fluid port. With the supply tier given, machines fed at different
-// tiers stand a column apart, so their power ports never touch. Every order and tie-break is fixed, so the same plan
-// gives the same placement.
+// up, or toward the power head when its top is a fluid port. With the supply tier given, the lowest feed tier stands
+// next to the power head and machines fed at different tiers stand a column apart, so their power ports never touch.
+// Every order and tie-break is fixed, so the same plan gives the same placement.
 
 import { isFluidKey, itemKey, type ItemKey, type StuffKey } from '../../shared/keys.ts';
 import { OPPOSITE, posKey, step, type Vec3 } from '../../shared/layout/geometry.ts';
@@ -444,19 +444,34 @@ function singleblockMainFacing(u: Unit): number {
 }
 
 /**
- * Two rows along x facing a spine at z = `spineZ`, after a power head of `headWidth` columns. Each unit goes to the
- * shorter row (N on a tie), one column apart from a multiblock neighbour, and moves along until its item ports are
- * `portSpacing` cells apart from every earlier unit's (0: may share; 1: own cell; 2: not even neighbouring).
- * With `supplyTier`, units fed at different tiers (`min(tier, supplyTier)`) never stand side by side, and a unit fed at
- * another tier than the head's last column (the lowest run) keeps a column away from it, so cables of two tiers never
- * have to touch (spec §3.5): their power ports stay at least two cells apart.
+ * `units` with the electric ones stably sorted by `feedTier`, lowest first, in the places the electric units had; the
+ * others (steam units, which have no feed tier) keep theirs.
+ */
+function lowestFeedFirst(units: readonly Unit[], feedTier: (u: Unit) => number | null): Unit[] {
+  const electric = units.filter((u) => feedTier(u) !== null).sort((a, b) => feedTier(a)! - feedTier(b)!);
+  let next = 0;
+  return units.map((u) => (feedTier(u) === null ? u : electric[next++]!));
+}
+
+/**
+ * Two rows along x facing a spine at z = `spineZ`, after a power head of `headWidth` columns. Units are placed in the
+ * order given (flow order). Each goes to the shorter row (N on a tie), one column apart from a multiblock neighbour, and
+ * moves along until its item ports are `portSpacing` cells apart from every earlier unit's (0: may share; 1: own cell;
+ * 2: not even neighbouring).
+ * With `supplyTier`, the electric units are placed by feed tier (`min(tier, supplyTier)`), lowest first and each tier in
+ * flow order (`lowestFeedFirst`): the lowest feed tier stands next to the head, whose last column is that tier's run, so
+ * a tier's cable tree never has to get past a higher tier's machines, or the tree that crosses the spine to them, to
+ * reach its own (Task 6 grows the trees lowest first). Units fed at different tiers never stand side by side, and a
+ * unit fed at another tier than the head's last column keeps a column away from it, so cables of two tiers never have
+ * to touch (spec §3.5): their power ports stay at least two cells apart.
  */
 export function placeUnits(units: readonly Unit[], opts: { headWidth: number; portSpacing: 0 | 1 | 2; supplyTier?: number }): Placement {
   const { headWidth, portSpacing, supplyTier } = opts;
   const cursor: Record<Row, number> = { N: headWidth, S: headWidth };
   const previous: Record<Row, Unit | null> = { N: null, S: null };
   const feedTier = (u: Unit): number | null => (supplyTier === undefined || !u.electric ? null : Math.min(u.tier, supplyTier));
-  const feeds = units.map(feedTier).filter((t): t is number => t !== null);
+  const ordered = lowestFeedFirst(units, feedTier);                                   // without `supplyTier`: flow order
+  const feeds = ordered.map(feedTier).filter((t): t is number => t !== null);
   // the head's last column is the run of the lowest feed tier (Task 6 lays one run per fed tier, lowest last)
   const headTier = headWidth > 0 && feeds.length > 0 ? Math.min(...feeds) : null;
   /** The feed tier the next unit of a row stands beside: the head's, the previous unit's, or none (a steam unit). */
@@ -469,7 +484,7 @@ export function placeUnits(units: readonly Unit[], opts: { headWidth: number; po
   // item ports lie on the spine, so their x does not depend on where the spine ends up
   const portXs = (u: Unit, row: Row, x: number) => unitPorts(u, row, x, 0).items.map((p) => p[0]);
   const slots: Array<{ u: Unit; row: Row; x: number }> = [];
-  for (const u of units) {
+  for (const u of ordered) {
     const row: Row = cursor.N <= cursor.S ? 'N' : 'S';
     const before = previous[row];
     const tier = feedTier(u);

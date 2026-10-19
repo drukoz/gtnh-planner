@@ -8,7 +8,8 @@
 // another tier's run, cable or power port and beside a machine of a lower tier, never lies in a bank column or on top
 // of a bank that sends another tier, and crosses the lower runs two blocks up. So no machine receives more than
 // `V[its tier]` and no two tiers can be joined by a natural click. The lowest tier is wired first, its machines next to
-// the head, and each higher tier's tree goes over the trees below it, so no tier walls another's machines off.
+// the head, and each higher tier's tree goes over the trees below it, so no tier walls another's machines off; a fluid
+// pipe walled in by a cable (or another pipe) climbs over it.
 // Cables and banks are sized for the volts each machine really gets (gt-mechanics §3.1, §3.3): `V[tier]` less the
 // loss from where the power enters its run — a bank, or for the supply run its far end after the hookup's allowance —
 // to the machine; a bank likewise for what it takes from the run above. Every network keeps off the cells other
@@ -23,7 +24,7 @@ import { FACES } from '../../shared/types/assets.ts';
 import type { Machine, Pack } from '../../shared/types/pack.ts';
 import type { Plan, PlanWarning } from '../../shared/types/plan.ts';
 import type { HostCover, LocalBlock, Placement, PlacedUnit } from './arrange.ts';
-import { growTree, linkBits, type PathBounds, type PathOptions } from './path.ts';
+import { growTree, linkBits, type PathBounds, type PathOptions, type TreeResult } from './path.ts';
 import { coverRateWarning, machineRef, pickCable, pickFluidPipe, pickPump, pickTransformer, type Parts } from './parts.ts';
 import { bankLossEUt, deliveredVolts, LOSS_WARN_FRACTION, tierGroups, transformerStages, type Stage, type Stages } from './power.ts';
 
@@ -249,13 +250,13 @@ function warnUnderVoltage(units: readonly PlacedUnit[], supply: number, warnings
 
 /**
  * One cable tree per feed tier, lowest first: from the tier's run to the power port of every electric unit fed at that
- * tier (`min(unit tier, supply)`). The lowest tier's machines stand next to the head (`layoutLine` places them so), and
- * each higher tier's tree, grown after the trees below it, goes over them to its machines further along. Its cells keep
- * off `keepOff`, the bank columns, the ports of other feed tiers and the cells on top of a bank that sends another tier,
- * and never touch another tier's run, tree or port or a machine of a lower tier; the box reaches H + 1 high, so a tree
- * crosses a lower run two blocks up, and two blocks higher for every run past the second, so it can also pass over the
- * lower tiers' crossings. The cells are taken but not yet laid: the cables are chosen once the trees give the lengths.
- * Units that cannot be reached (or whose tier has no run) get `route_failed`.
+ * tier (`min(unit tier, supply)`). The lowest tier's machines stand next to the head (`placeUnits` places them so, given
+ * the supply tier), and each higher tier's tree, grown after the trees below it, goes over them to its machines further
+ * along. Its cells keep off `keepOff`, the bank columns, the ports of other feed tiers and the cells on top of a bank
+ * that sends another tier, and never touch another tier's run, tree or port or a machine of a lower tier; the box
+ * reaches H + 1 high, so a tree crosses a lower run two blocks up, and two blocks higher for every run past the second,
+ * so it can also pass over the lower tiers' crossings. The cells are taken but not yet laid: the cables are chosen once
+ * the trees give the lengths. Units that cannot be reached (or whose tier has no run) get `route_failed`.
  */
 function growTrees(input: InternalInput, stages: Stages, head: { runs: readonly Run[]; banks: readonly Bank[] }, keepOff: ReadonlySet<string>,
   grid: Grid, warnings: WarningList): Tree[] {
@@ -663,7 +664,10 @@ function fluidCellsOf(plan: FluidPlan): Vec3[] {
 /**
  * One pipe tree per fluid, in key order: from the tail root (a fluid that enters or leaves the line) or the first free
  * producer port to every other port of the net. Port cells link down into their machine or hatch. The box reaches up
- * to the highest tail root, which may sit above the units. `pipeAt` records which net's fluid each laid pipe cell
+ * to the highest tail root, which may sit above the units. A net that cannot reach every port in it, walled in by what
+ * is laid already (a higher tier's cable that crosses the spine one block up, another fluid's pipe), is grown again in
+ * a box one block above everything laid so far, so it climbs over the wall (the line may then stand taller); a net
+ * that reaches every port in the first box keeps that tree. `pipeAt` records which net's fluid each laid pipe cell
  * carries.
  */
 function pipeFluids(input: InternalInput, plans: readonly FluidPlan[], fluidCells: ReadonlySet<string>, powerPorts: ReadonlySet<string>,
@@ -702,7 +706,13 @@ function pipeFluids(input: InternalInput, plans: readonly FluidPlan[], fluidCell
       continue;
     }
     const others = plan.ports.filter((p) => posKey(p) !== posKey(root));
-    const tree = others.length === 0 ? { cells: [], links: [], unreached: [] } : growTree([root], others, { bounds, passable });
+    let tree: TreeResult = others.length === 0 ? { cells: [], links: [], unreached: [] } : growTree([root], others, { bounds, passable });
+    if (tree.unreached.length > 0) {
+      // walled in: once more, with room to climb over everything laid so far
+      const highest = [...input.occupied, ...grid.blocks].reduce((y, b) => Math.max(y, b.pos[1]), top);
+      const over = growTree([root], others, { bounds: { min: bounds.min, max: [w - 1, highest + 1, l - 1] }, passable });
+      if (over.unreached.length < tree.unreached.length) tree = over;
+    }
     const label = `${pipe.name} (${net.name})`;
     for (const c of [root, ...tree.cells]) {
       grid.lay(c, pipe, 'pipe', label);

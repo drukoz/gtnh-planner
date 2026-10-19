@@ -169,20 +169,17 @@ interface LocalLine {
 
 /**
  * Stages 3–5 in the line's own grid. Machines fed at different tiers stand apart (their cables never touch), the lowest
- * feed tier next to the power head, whose last run is that tier's: a tier's tree then never has to get past a higher
- * tier's machines and tree to reach its own. The supply run is sized for packets that already lost up to the hookup's
- * allowance (spec §3.5 never overload a cable).
+ * feed tier next to the power head, whose last run is that tier's (`placeUnits` with the supply tier): a tier's tree
+ * then never has to get past a higher tier's machines and tree to reach its own. The supply run is sized for packets
+ * that already lost up to the hookup's allowance (spec §3.5 never overload a cable).
  */
 function buildLocal(input: {
   pack: Pack; plan: Plan; parts: Parts; mode: LogisticsMode; units: readonly Unit[]; stages: Stages | null;
   network: LogisticsNetwork | null;
 }): LocalLine {
   const { pack, plan, parts, mode, units, stages, network } = input;
-  const supply = stages?.supplyTier;
-  // a stable sort: the units of one feed tier keep their flow order
-  const ordered = supply === undefined ? units : [...units].sort((a, b) => Math.min(a.tier, supply) - Math.min(b.tier, supply));
-  const placement = placeUnits(ordered, {
-    headWidth: headWidthFor(stages), portSpacing: PORT_SPACING[mode], ...(supply === undefined ? {} : { supplyTier: supply }),
+  const placement = placeUnits(units, {
+    headWidth: headWidthFor(stages), portSpacing: PORT_SPACING[mode], ...(stages === null ? {} : { supplyTier: stages.supplyTier }),
   });
   const modeResult = buildMode(mode, { pack, plan, parts, placement, network });
   const internal = routeInternal({

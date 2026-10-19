@@ -185,6 +185,27 @@ describe('internal routing edge cases', () => {
     expect(tierContacts(r.blocks, r.cables, placement)).toEqual([]);
   });
 
+  it("lays a pipe walled in by a higher tier's cable one block over the cable", () => {
+    // the LV extractor stands next to the head and the MV assemblers behind it in both rows, so the MV tree crosses the
+    // spine one block up between them (x 4); with the spine taken (stones for the logistics) the pipe can only go over it
+    const plan = makePlan([
+      { id: 'a', mteId: IDS.EXTRACTOR, count: 1, euPerTick: 24, outputs: [['fluid:molten.iron', 144]] },
+      { id: 'b', mteId: IDS.ASSEMBLER, count: 1, tier: 2, euPerTick: 120 },
+      { id: 'c', mteId: IDS.ASSEMBLER, count: 1, tier: 2, euPerTick: 120, inputs: [['fluid:molten.iron', 144]] },
+    ], { flows: [{ from: 'raw', to: 'a', key: 't:in@0', perSecond: 1 }, { from: 'raw', to: 'b', key: 't:in@0', perSecond: 1 },
+      { from: 'a', to: 'c', key: 'fluid:molten.iron', perSecond: 1 }, { from: 'b', to: 'out', key: 't:out_b@0', perSecond: 1 },
+      { from: 'c', to: 'out', key: 't:out_c@0', perSecond: 1 }] });
+    const pack = layoutPack();
+    const { placement, r } = route(pack, plan, 2, [3, 4, 5, 6].map((x) => stone([x, 0, 2])));
+    expect(placement.units.map((u) => [u.stepId, u.row, u.at[0]])).toEqual([['a', 'N', 3], ['b', 'S', 4], ['c', 'N', 5]]);
+    expect([0, 1, 2, 3, 4].map((z) => blockAt(r, [4, 1, z])?.label)).toEqual(Array(5).fill('2x Annealed Copper Cable'));
+    // up from the extractor, over the cable at y 2 and down into the far assembler
+    expect(r.blocks.filter((b) => b.role === 'pipe').map((b) => [posKey(b.pos), b.connections]))
+      .toEqual([['3,1,1', 1 | 2], ['3,2,1', 1 | 32], ['4,2,1', 16 | 32], ['5,1,1', 1 | 2], ['5,2,1', 1 | 16]]);
+    expect(r.fluidPipes.map((f) => [f.key, f.cells])).toEqual([['fluid:molten.iron', 5]]);
+    expect(r.warnings.map((w) => w.code)).not.toContain('route_failed');
+  });
+
   it('lays a second fluid that enters the line above the first, even over the units', () => {
     const pack = layoutPack();
     const plan = makePlan([
@@ -357,12 +378,27 @@ describe('internal routing: tiers apart, sized for the loss', () => {
   });
 
   it('wires the lowest tier first and lets each higher tier climb over the trees below it', () => {
-    // two machines per tier, one in each row, lowest next to the head as `layoutLine` places them: the MV tree crosses
+    // two machines per tier, one in each row, lowest next to the head as `placeUnits` places them: the MV tree crosses
     // the LV run two blocks up, and the HV tree must cross both runs and keep off the MV crossing, so it goes higher
     const plan = makePlan([
       { id: 'l', mteId: IDS.MACERATOR, count: 2, euPerTick: 16 },
       { id: 'm', mteId: IDS.ASSEMBLER, count: 2, tier: 2, euPerTick: 64 },
       { id: 'h', mteId: IDS.CHEM_HV, count: 2, tier: 3, euPerTick: 256 },
+    ]);
+    for (const portSpacing of [0, 1, 2] as const) {
+      const { placement, r } = route(plan, 3, 0, portSpacing);
+      expect(placement.units.map((u) => [u.stepId, u.row])).toEqual([['l', 'N'], ['l', 'S'], ['m', 'N'], ['m', 'S'], ['h', 'N'], ['h', 'S']]);
+      expect([portSpacing, r.warnings.filter((w) => w.code === 'route_failed'), tierContacts(r.blocks, r.cables, placement)]).toEqual([portSpacing, [], []]);
+      expect(placement.units.map((u) => reachesRun(r.blocks, u.ports.power!, runX(3, u.tier)))).toEqual(Array(6).fill(true));
+    }
+  });
+
+  it('wires every machine of a line whose flow order runs HV, MV, LV: the placement stands LV next to the head', () => {
+    // in flow order the HV reactors would stand next to the head and the LV tree, grown first, would wall them off
+    const plan = makePlan([
+      { id: 'h', mteId: IDS.CHEM_HV, count: 2, tier: 3, euPerTick: 256 },
+      { id: 'm', mteId: IDS.ASSEMBLER, count: 2, tier: 2, euPerTick: 64 },
+      { id: 'l', mteId: IDS.MACERATOR, count: 2, euPerTick: 16 },
     ]);
     for (const portSpacing of [0, 1, 2] as const) {
       const { placement, r } = route(plan, 3, 0, portSpacing);
