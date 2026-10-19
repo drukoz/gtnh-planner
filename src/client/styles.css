@@ -77,6 +77,8 @@ textarea { resize: vertical; width: 100%; }
 .top-nav a[aria-current='page'] { color: var(--text); border-bottom-color: var(--accent); }
 
 .page { max-width: 1200px; margin: 0 auto; padding: 20px; }
+/* The project page uses the full window width so the flow diagram, map and 3D view get room. */
+.page.project-page { max-width: none; padding: 16px 24px; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; }
 .cards { list-style: none; padding: 0; margin: 0 0 20px; display: grid; gap: 10px; }
 .banner { padding: 10px 14px; border-radius: var(--radius); margin: 0 0 var(--gap); }
@@ -329,7 +331,7 @@ fieldset.flow-panel-section > legend.flow-panel-title { float: left; width: 100%
 .swap-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 
 /* Materials & steps (spec §3.10): the tree indents by depth, unlock texts are warnings, ticked rows are crossed out. */
-.materials { display: flex; flex-direction: column; gap: 22px; max-width: 960px; }
+.materials { display: flex; flex-direction: column; gap: 22px; max-width: 1600px; }
 .materials-section { display: flex; flex-direction: column; gap: 6px; }
 .materials-section h3 { font-size: 1.05rem; margin: 0; }
 .materials-section > p { margin: 0; }

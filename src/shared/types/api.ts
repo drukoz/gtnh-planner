@@ -2,7 +2,7 @@
 // renamed or reshaped. Pure TypeScript shared by server and browser: nothing from node:* may be imported here.
 
 import type { StuffKey } from '../keys.ts';
-import type { Capability, DimensionInfo, PackManifest, RecipeSource } from './pack.ts';
+import type { BlockRef, Capability, DimensionInfo, PackManifest, RecipeSource } from './pack.ts';
 import type { PlanSettings } from './plan.ts';
 import type { ProjectOp } from './project.ts';
 
@@ -44,6 +44,23 @@ export interface OpsResult { rev: number }
 export interface OpEvent { rev: number; op: ProjectOp; by: string; at: string }
 /** SSE `plan` (§8): the plan and the layout of this revision may have changed. */
 export interface PlanEvent { rev: number }
+
+// Plan 4: the /api/world bodies live in world-api.ts (ruling R2).
+export type { WorldSourcesResponse, StartScanRequest, StartScanResponse, WorldScanListItem, CreateUploadResponse } from './world-api.ts';
+
+// --- assets (Plan 3; architecture §6.5, §11.17) ---
+
+/** `POST /api/assets/icons` → `IconDescriptor[]` in request order; at most `ASSET_KEYS_MAX` keys. */
+export interface AssetIconsRequest { keys: StuffKey[] }
+/**
+ * `POST /api/assets/blocks` → `BlockFaces[]` in request order; at most `ASSET_BLOCKS_MAX` blocks. `facing`
+ * (ForgeDirection 0..5, default 2 = north) applies to every block, so each facing is its own request.
+ */
+export interface AssetBlocksRequest { blocks: BlockRef[]; facing?: number }
+/** `POST /api/assets/covers` → `CoverLayers[]` in request order; at most `ASSET_KEYS_MAX` items. */
+export interface AssetCoversRequest { items: StuffKey[] }
+export const ASSET_KEYS_MAX = 500;
+export const ASSET_BLOCKS_MAX = 500;
 
 /** `GET /api/projects?deleted=1` (§11.24), newest deletion first: restorable until purged 7 days after `deletedAt`. */
 export interface DeletedProjectSummary { id: string; name: string; rev: number; target: StuffKey | null; updatedAt: string; deletedAt: string; deletedBy: string }
