@@ -62,7 +62,7 @@ describe('solveLine', () => {
     expect([...s.runs.keys()]).toEqual(['honest']);
     expect(s.warnings).toEqual([expect.objectContaining({ code: 'free-loop', text: expect.stringContaining('loop-a') })]);
   });
-  it('prices a good at what making it on its own costs, never through the target', async () => {
+  it('prices a good at what making it on its own costs, never through the target, and names the recipes of that chain', async () => {
     const p = packFromSpec({ machines: [{ mteId: 1, name: 'M', maps: ['gt.recipe.macerator'], tier: 1 }], recipes: [
       { id: 'smelt', map: 'gt.recipe.macerator', in: [['iron@0', 1], ['coal@0', 1]], out: [['steel@0', 1], ['slag@0', 1]], eut: 2 },
       { id: 'magnetize', map: 'gt.recipe.macerator', in: [['steel@0', 1]], out: [['magnetic@0', 1]], eut: 2 },
@@ -71,9 +71,29 @@ describe('solveLine', () => {
     const leaf: LeafOracle = (k) => (k === 'iron@0' || k === 'coal@0' ? { buyable: true, cost: 1, leafClass: 'direct' } : { buyable: false, cost: 0, leafClass: null });
     const g = graphFor(p, 't@0', 1, leaf);
     const costs = await standaloneCosts(g, ['steel@0', 'magnetic@0', 'nowhere@0']);
-    // The slag is sunk; magnetic steel takes the smelter and the polarizer.
-    expect([...costs]).toEqual([['steel@0', { cost: 2, steps: 1, free: 0 }], ['magnetic@0', { cost: 2, steps: 2, free: 0 }], ['nowhere@0', undefined]]);
-    expect((await standaloneCosts(g, ['magnetic@0'], ['steel@0'])).get('magnetic@0')?.cost).toBe(Infinity);
+    // The slag is sunk; magnetic steel takes the smelter and the polarizer (fix spec R7: its recipes, most runs first and
+    // equal runs by id, and the one that makes it).
+    expect([...costs]).toEqual([['steel@0', { cost: 2, steps: 1, free: 0, recipes: ['smelt'], top: 'smelt' }],
+      ['magnetic@0', { cost: 2, steps: 2, free: 0, recipes: ['magnetize', 'smelt'], top: 'magnetize' }], ['nowhere@0', undefined]]);
+    expect((await standaloneCosts(g, ['magnetic@0'], ['steel@0'])).get('magnetic@0')).toEqual({ cost: Infinity, steps: 0, free: 0, recipes: [] });
+  });
+  it('names the chemistry behind a fluid, not the canner that empties its cells (fix spec R7)', async () => {
+    // A reactor makes Gas Cells (1,000 L each) from 2 raw; a canner empties them; another canner fills cells again.
+    const p = packFromSpec({
+      machines: [{ mteId: 1, name: 'M', maps: ['gt.recipe.macerator'], tier: 1 }],
+      recipes: [{ id: 'react', map: 'gt.recipe.macerator', in: [['raw@0', 2], ['cell@0', 1]], out: [['gas_cell@0', 1]], eut: 2 },
+                { id: 'empty', map: 'gt.recipe.macerator', in: [['gas_cell@0', 1]], out: [['fluid:gas', 1000], ['cell@0', 1]], eut: 2 },
+                { id: 'fill', map: 'gt.recipe.macerator', in: [['fluid:gas', 1000], ['cell@0', 1]], out: [['gas_cell@0', 1]], eut: 2 },
+                { id: 'use', map: 'gt.recipe.macerator', in: [['fluid:gas', 1000]], out: [['t@0', 1]], eut: 2 }],
+    });
+    const leaf: LeafOracle = (k) => (k === 'raw@0' || k === 'cell@0' ? { buyable: true, cost: 1, leafClass: 'direct' } : { buyable: false, cost: 0, leafClass: null });
+    const g = graphFor(p, 't@0', 1, leaf);
+    const containers = [{ container: 'gas_cell@0', fluid: 'fluid:gas', amount: 1000 }];
+    const costs = await standaloneCosts(g, ['fluid:gas', 'gas_cell@0'], [], containers);
+    expect(costs.get('fluid:gas')).toMatchObject({ steps: 2, recipes: ['empty', 'react'], top: 'react' });
+    expect(costs.get('gas_cell@0')).toMatchObject({ steps: 1, recipes: ['react'], top: 'react' });
+    // Without the containers the canner is the only recipe that makes the gas itself.
+    expect((await standaloneCosts(g, ['fluid:gas'])).get('fluid:gas')?.top).toBe('empty');
   });
   it('takes the plan with the fewest recipes among the cheapest, before power', async () => {
     // Both use one raw@0 per t@0; the two-step chain draws less power (80 EU against 60,000), the direct recipe is one step.
@@ -137,6 +157,17 @@ describe('solveLine', () => {
     expect(lv.status).toBe('infeasible');
     expect(lv.blockers).toEqual([{ key: 't:titanium_plate@0', reason: 'rejected', needTier: 2 }]);
     expect(findBlockers(graphFor(mini, 't:titanium_plate@0', 2))).toEqual([{ key: 't:titanium_ingot@0', reason: 'unavailable' }]);
+  });
+  it('probes the least raw material only', async () => {
+    // Fix spec R3: a probe says whether the line plans and what its least raw material is (the avoid trials need no more).
+    const graph = graphFor(mini, 't:circuit@0', 1);
+    const full = await solveLine(graph, one('t:circuit@0'), { stepCharge: 0.05, handWeight: 3 });
+    const probe = await solveLine(graph, one('t:circuit@0'), { stepCharge: 0.05, handWeight: 3, probe: true });
+    expect(probe.status).toBe(full.status);
+    expect(probe.rawCost).toBe(full.leastRawCost);
+    expect(probe.leastRawCost).toBe(full.leastRawCost);
+    const lv = await solveLine(graphFor(mini, 't:titanium_plate@0', 1), one('t:titanium_plate@0'), { probe: true });
+    expect(lv.status).toBe('infeasible');
   });
 });
 

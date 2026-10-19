@@ -34,6 +34,36 @@ describe('solveLp', () => {
     expect(r.objective).toBeCloseTo(1, 9);
     expect(r.x.every((v) => Math.abs(v - Math.round(v)) < 1e-9)).toBe(true);
   });
+  it('accepts a start solution', async () => {
+    const r = await solveLp({ sense: 'max', colCost: [1, 1], colLower: [0, 0], colUpper: [Infinity, Infinity],
+      rows: [{ lower: -Infinity, upper: 3, entries: [[0, 2], [1, 2]] }], integer: [true, true], maxNodes: 100, start: [1, 0] });
+    expect(r.status).toBe('optimal');
+    expect(r.objective).toBeCloseTo(1, 9);
+    expect(r.x.every((v) => Math.abs(v - Math.round(v)) < 1e-9)).toBe(true);
+  });
+  it('keeps the start as the solution of a MIP its node limit stops at once', async () => {
+    // 40 binaries whose weights must add up to exactly `b`: HiGHS finds no whole solution before its first node, so with
+    // no node to search the start is the solution (fix spec R3: the step-charge MIP starts from the least-raw plan).
+    let seed = 1;
+    const next = (): number => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed / 2147483648;
+    };
+    const weights = Array.from({ length: 40 }, () => 100 + Math.floor(next() * 900));
+    const costs = Array.from({ length: 40 }, () => 1 + Math.floor(next() * 100));
+    const start = weights.map(() => (next() < 0.5 ? 1 : 0));
+    const b = weights.reduce((sum, w, i) => sum + w * (start[i] as number), 0);
+    const r = await solveLp({
+      sense: 'min', colCost: costs, colLower: new Array<number>(40).fill(0), colUpper: new Array<number>(40).fill(1),
+      rows: [{ lower: b, upper: b, entries: weights.map((w, i): [number, number] => [i, w]) }],
+      integer: new Array<boolean>(40).fill(true), maxNodes: 0, start,
+    });
+    expect(r.status).toBe('feasible');
+    expect(r.objective).toBe(costs.reduce((sum, c, i) => sum + c * (start[i] as number), 0));
+  });
+  it('rejects a start of the wrong length', async () => {
+    await expect(solveLp({ sense: 'min', colCost: [1, 1], colLower: [0, 0], colUpper: [1, 1], rows: [], start: [1] })).rejects.toThrow(RangeError);
+  });
   it('rejects a row with a missing column, a repeated column or a non-finite coefficient', async () => {
     const model = (entries: Array<[number, number]>) => ({ sense: 'min' as const, colCost: [1], colLower: [0], colUpper: [1], rows: [{ lower: 0, upper: 1, entries }] });
     await expect(solveLp(model([[1, 1]]))).rejects.toThrow(RangeError);

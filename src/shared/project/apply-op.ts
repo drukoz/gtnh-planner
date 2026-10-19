@@ -3,7 +3,7 @@
 // applying the same op again with the same `by` and `at` changes nothing but `rev`.
 // Pure TypeScript shared by server and browser: nothing from node:* may be imported here.
 
-import { DEFAULT_EXCLUDED_CATEGORIES, LogisticsMode, type PlanSettings } from '../types/plan.ts';
+import { DEFAULT_EXCLUDED_CATEGORIES, DEFAULT_STEP_CHARGE, LogisticsMode, type PlanSettings } from '../types/plan.ts';
 import type { Note, Project, ProjectOp } from '../types/project.ts';
 
 export const MAX_NOTE_LENGTH = 4000;
@@ -11,6 +11,12 @@ export const MAX_NAME_LENGTH = 80;
 /** Entries of `PlanSettings.avoid`, and the characters of each. */
 export const MAX_AVOID_ENTRIES = 50;
 export const MAX_AVOID_ENTRY_LENGTH = 300;
+/** The largest `PlanSettings.stepCharge` (fix spec §3): a step must then save half the line's least raw material. */
+export const MAX_STEP_CHARGE = 0.5;
+/** Characters of a pinned option (`PlanSettings.optionChoice` values, fix spec §3). */
+export const MAX_OPTION_KEY_LENGTH = 300;
+/** `<recipe id>#<Ingredient.slot>`: the keys of `PlanSettings.optionChoice` (fix spec §3). */
+const OPTION_SLOT = /^[^#]{1,100}#\d{1,4}$/;
 
 const MAX_TIER = 14;
 const MAX_AMOUNT = 1e9;
@@ -23,24 +29,36 @@ const MARK_ROW = /^(build|run|step):.{1,300}$/;
 const ROTATIONS: readonly unknown[] = [0, 90, 180, 270];
 const LOGISTICS_MODES: readonly unknown[] = Object.values(LogisticsMode);
 
+/**
+ * The version of the defaults new settings are made under (`PlanSettings.settingsVersion`, architecture §11.32): 2 since
+ * supporting lines (`routeDerived: true`) became the default (plan 09). Settings stored before it read as version 1.
+ */
+export const SETTINGS_VERSION = 2;
+/** What `normalizeSettings` gives settings stored before `settingsVersion` existed. */
+const FIRST_SETTINGS_VERSION = 1;
+
 export function defaultSettings(): PlanSettings {
   return {
     target: null, mode: 'rate', amount: 1, per: 'min', tier: null, dims: { policy: 'progression', overrides: {} },
-    routeDerived: false, logistics: 'direct', costOverrides: {}, stopItems: [], expandItems: [], recipeChoice: {},
+    routeDerived: true, logistics: 'direct', costOverrides: {}, stopItems: [], expandItems: [], recipeChoice: {},
     machineTier: {}, excludedCategories: [...DEFAULT_EXCLUDED_CATEGORIES], coilHeat: null, automateCrafting: false,
-    avoid: [], declineReuse: [],
+    avoid: [], declineReuse: [], settingsVersion: SETTINGS_VERSION, haveSupply: [], stepCharge: DEFAULT_STEP_CHARGE,
+    optionChoice: {},
   };
 }
 
 /**
  * Fills the fields an older stored project lacks (later plans add settings), `dims` field by field, and drops repeated
- * avoid entries.
+ * avoid entries. A missing `settingsVersion` is 1, not the default: the project was stored before it, and the server
+ * switches such projects to the new defaults once (`ProjectStore.migrateSettings`); every stored value, a stored
+ * `routeDerived: false` among them, is kept.
  */
 export function normalizeSettings(s: Partial<PlanSettings> | undefined): PlanSettings {
   const defaults = defaultSettings();
   const merged = { ...defaults, ...definedOnly(s ?? {}) };
   merged.dims = { ...defaults.dims, ...definedOnly(s?.dims ?? {}) };
   merged.avoid = withoutRepeats(merged.avoid);
+  if (s?.settingsVersion === undefined) merged.settingsVersion = FIRST_SETTINGS_VERSION;
   return merged;
 }
 
@@ -152,6 +170,16 @@ const SETTING_CHECKS: { readonly [K in keyof PlanSettings]-?: Check } = {
   avoid: (v) => (Array.isArray(v) && v.length <= MAX_AVOID_ENTRIES && v.every((x) => isStringOfLength(x, 1, MAX_AVOID_ENTRY_LENGTH))
     ? null : `avoid must be a list of at most ${MAX_AVOID_ENTRIES} entries of 1 to ${MAX_AVOID_ENTRY_LENGTH} characters`),
   declineReuse: (v) => (Array.isArray(v) && v.every((x) => Number.isSafeInteger(x)) ? null : 'declineReuse must be a list of whole numbers'),
+  // Never back below the current version: a project switched to the new defaults stays switched.
+  settingsVersion: (v) => (Number.isSafeInteger(v) && (v as number) >= SETTINGS_VERSION
+    ? null : `settingsVersion must be a whole number of at least ${SETTINGS_VERSION}`),
+  // Keys of free inputs; one that is no free input is kept and has no effect (fix spec §3).
+  haveSupply: stringList('haveSupply'),
+  stepCharge: (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= MAX_STEP_CHARGE
+    ? null : `stepCharge must be a number from 0 to ${MAX_STEP_CHARGE}`),
+  // A pin the pack no longer fits is kept and ignored with a warning (fix spec R9); only its shape is checked here.
+  optionChoice: (v) => (isRecord(v) && Object.entries(v).every(([slot, key]) => OPTION_SLOT.test(slot) && isStringOfLength(key, 1, MAX_OPTION_KEY_LENGTH))
+    ? null : `optionChoice keys must look like <recipe id>#<slot>, with options of 1 to ${MAX_OPTION_KEY_LENGTH} characters`),
 };
 
 const SETTING_KEYS: ReadonlySet<string> = new Set(Object.keys(defaultSettings()));

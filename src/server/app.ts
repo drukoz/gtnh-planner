@@ -7,7 +7,7 @@ import { openDb, type Db } from './db/db.ts';
 import { HttpError } from './http/router.ts';
 import { SseHub } from './http/sse.ts';
 import { loadPack } from './pack/load.ts';
-import { ProjectStore } from './projects/store.ts';
+import { PLANNER_UPDATE, ProjectStore } from './projects/store.ts';
 import type { Pack } from '../shared/types/pack.ts';
 import type { Plan, PlanContext } from '../shared/types/plan.ts';
 import type { Project } from '../shared/types/project.ts';
@@ -41,13 +41,16 @@ export interface AppDeps {
 }
 
 /**
- * Opens `<dataDir>/planner.sqlite` and wires the store and the hub. `pack()` loads the active export on first use and
- * again only when `config.activeExportId` changes; callers that arrive while it loads share that load, and a load that
- * fails is forgotten so the next call tries again.
+ * Opens `<dataDir>/planner.sqlite` and wires the store and the hub. Projects stored before the current settings defaults
+ * are brought to them first, as recorded 'Planner update' ops (`ProjectStore.migrateSettings`), before anything can read
+ * or plan them. `pack()` loads the active export on first use and again only when `config.activeExportId` changes;
+ * callers that arrive while it loads share that load, and a load that fails is forgotten so the next call tries again.
  */
 export function createApp(config: AppConfig, deps: AppDeps = {}): AppContext {
   const load = deps.loadPack ?? loadPack;
   const db = openDb(join(config.dataDir, 'planner.sqlite'));
+  const projects = new ProjectStore(db, { now: deps.now });
+  projects.migrateSettings(PLANNER_UPDATE);
   let loaded: { exportId: string; pack: Promise<Pack> } | null = null;
 
   function pack(): Promise<Pack> {
@@ -67,7 +70,7 @@ export function createApp(config: AppConfig, deps: AppDeps = {}): AppContext {
   return {
     config,
     db,
-    projects: new ProjectStore(db, { now: deps.now }),
+    projects,
     sse: new SseHub(),
     pack,
     services: {},

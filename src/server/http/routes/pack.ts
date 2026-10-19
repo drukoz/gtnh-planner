@@ -41,13 +41,17 @@ function machineNameOf(pack: Pack, r: Recipe): string {
   return lowest?.name ?? pack.maps.get(map)?.name ?? map;
 }
 
+/** A recipe as the item browser shows it: each ingredient by its first option, an ore-dictionary slot with all of them. */
 export function summarizeRecipe(pack: Pack, r: Recipe): RecipeSummary {
   const summary: RecipeSummary = {
     id: r.id, source: r.source, maps: r.maps, machineName: machineNameOf(pack, r), tier: recipeTier(r.euPerTick, r.amps),
     euPerTick: r.euPerTick, durationTicks: r.durationTicks,
     inputs: r.inputs.flatMap((ing) => {
       const first = ing.options[0];
-      return first === undefined ? [] : [{ key: first.key, name: pack.nameOf(first.key), amount: first.amount, consumed: ing.consumed }];
+      if (first === undefined) return [];
+      const input: RecipeSummary['inputs'][number] = { key: first.key, name: pack.nameOf(first.key), amount: first.amount, consumed: ing.consumed };
+      if (ing.options.length > 1) input.options = ing.options.map((o) => ({ key: o.key, name: pack.nameOf(o.key), amount: o.amount }));
+      return [input];
     }),
     outputs: r.outputs.map((p) => ({ key: p.key, name: pack.nameOf(p.key), amount: p.amount, chance: p.chance })),
   };

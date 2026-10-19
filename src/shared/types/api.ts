@@ -24,7 +24,11 @@ export interface PackInfo {
 /** One recipe as the item browser shows it; an ingredient with alternatives shows its first option. */
 export interface RecipeSummary {
   id: string; source: RecipeSource; maps: string[]; machineName: string; tier: number; euPerTick: number; durationTicks: number;
-  inputs: Array<{ key: StuffKey; name: string; amount: number; consumed: boolean }>;
+  inputs: Array<{
+    key: StuffKey; name: string; amount: number; consumed: boolean;
+    // optional addition (plan 09 controller rulings): every option of an ore-dictionary slot, the first one included
+    options?: Array<{ key: StuffKey; name: string; amount: number }>;
+  }>;
   outputs: Array<{ key: StuffKey; name: string; amount: number; chance: number }>;
   /** From `flags.fake`: display only, the machine runs its own code. */
   fake?: boolean;

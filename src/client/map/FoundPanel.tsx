@@ -160,7 +160,7 @@ function ItemRow(props: { item: FoundSummary['storage']['items'][number]; name: 
       <details>
         <summary style={{ cursor: 'pointer' }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, verticalAlign: 'middle' }}>
-            <ItemIcon itemKey={item.key} size={ICON_SIZE} />
+            <ItemIcon itemKey={item.key} size={ICON_SIZE} name={name} />
             <span style={{ overflowWrap: 'anywhere' }}>{name}</span>
           </span>
           {` · ${int(item.total)} · `}

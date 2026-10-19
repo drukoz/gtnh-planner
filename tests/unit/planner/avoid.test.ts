@@ -13,7 +13,8 @@ import type { Pack } from '../../../src/shared/types/pack.ts';
 import type { Plan, PlanSettings } from '../../../src/shared/types/plan.ts';
 
 const pack = miniGt();
-const S = (p: Partial<PlanSettings>): PlanSettings => ({ ...defaultSettings(), ...p });
+/** Supporting lines off (the default before plan 09): these cases buy derived materials. */
+const S = (p: Partial<PlanSettings>): PlanSettings => ({ ...defaultSettings(), routeDerived: false, ...p });
 /** Half a dust or ingot in GT's material units: 1x wires and cables. */
 const HALF = 1_814_400;
 
@@ -197,6 +198,42 @@ describe('planLine with materials to avoid', () => {
     expect(settingsHash({ ...s, avoid: ['Tin'] })).not.toBe(settingsHash({ ...s, avoid: ['Copper'] }));
     expect(settingsHash(old as PlanSettings)).toBe(settingsHash({ ...s, avoid: [] }));
   });
+  it('keeps out of what the full line uses although its least-raw probe used none of it (fix spec R3)', async () => {
+    // A Part is 1 copper ingot (1 raw, 1 step) or the end of a 4-step chain from 0.99 tin ingots (0.99 raw). The probe
+    // the avoid search starts from runs the chain and uses no copper; the 2 % step charge would take the copper.
+    const p = extended({
+      items: [
+        { key: 't:part@0', name: 'Part' }, { key: 't:tin_part1@0', name: 'Tin Part 1' }, { key: 't:tin_part2@0', name: 'Tin Part 2' },
+        { key: 't:tin_part3@0', name: 'Tin Part 3' },
+      ],
+      recipes: [
+        { id: 'part-copper', map: 'gt.recipe.assembler', in: [['t:copper_ingot@0', 1]], out: [['t:part@0', 1]], eut: 16, dur: 100 },
+        { id: 'part-tin-1', map: 'gt.recipe.assembler', in: [['t:tin_ingot@0', 99]], out: [['t:tin_part1@0', 100]], eut: 16, dur: 100 },
+        { id: 'part-tin-2', map: 'gt.recipe.assembler', in: [['t:tin_part1@0', 1]], out: [['t:tin_part2@0', 1]], eut: 16, dur: 100 },
+        { id: 'part-tin-3', map: 'gt.recipe.assembler', in: [['t:tin_part2@0', 1]], out: [['t:tin_part3@0', 1]], eut: 16, dur: 100 },
+        { id: 'part-tin-4', map: 'gt.recipe.assembler', in: [['t:tin_part3@0', 1]], out: [['t:part@0', 1]], eut: 16, dur: 100 },
+      ],
+    });
+    const settings = S({ target: 't:part@0', tier: 1 });
+    const chain = ['part-tin-1', 'part-tin-2', 'part-tin-3', 'part-tin-4'];
+    expect((await planLine(p, settings, emptyContext())).steps.map((s) => s.id)).toEqual(['part-copper']);
+    expect((await planLine(p, { ...settings, stepCharge: 0 }, emptyContext())).steps.map((s) => s.id)).toEqual(chain);
+    const plan = await planLine(p, { ...settings, avoid: ['Copper'] }, emptyContext());
+    expect(plan.steps.map((s) => s.id)).toEqual(chain);
+    expect(usesOf(p, plan, 'Copper')).toEqual([]);
+    expect(plan.avoided).toEqual([{ key: 't:copper_ingot@0', name: 'Copper Ingot', unavoidable: false }]);
+    expect(avoidWarnings(plan)).toEqual([]);
+  });
+  it('plans the plain line when it uses nothing avoided', async () => {
+    // Fix spec R3: the plain line and the avoid trials are probes (least raw material only) and only the line the avoid
+    // list leads to is planned in full; here that is the plain line itself.
+    const settings = S({ target: 't:circuit@0', tier: 2 });
+    const open = await planLine(pack, settings, emptyContext());
+    const p = await planLine(pack, { ...settings, avoid: ['Titanium'] }, emptyContext());
+    expect(p.status).toBe('ok');
+    expect(p.steps).toEqual(open.steps);
+    expect(p.avoided).toEqual([]);
+  });
   it('(g) plans a project without an avoid list exactly like one with an empty list', async () => {
     const s = S({ target: 't:circuit@0', amount: 30, tier: 1 });
     const { avoid: _, ...old } = s;
@@ -356,5 +393,40 @@ describe('planLine with a derived material made from an avoided one (final revie
     expect(usesOf(p, plan, 'Tin')).toEqual([]);
     expect(plan.avoided).toEqual([{ key: 't:bronze_ingot@0', name: 'Bronze Ingot', unavoidable: false, madeFrom: ['t:tin_ingot@0'] }]);
     expect(avoidWarnings(plan)).toEqual([]);
+  });
+  it('flags what the plan buys where its least-raw probe used the avoided material itself (fix spec R3)', async () => {
+    // A Bronze Gear is 4 bought Bronze Ingots (4 raw, 1 step) or a tenth of 39 tin rods, each from a tin plate (3.9 raw,
+    // 3 steps). The least raw material, the probe the avoid search starts from, runs the tin chain; the 2 % step charge
+    // buys the bronze, which is made from tin. Nothing at LV does without tin, so the plan buys the bronze and says so.
+    const p = extended({
+      items: [
+        { key: 't:bronze_ingot@0', name: 'Bronze Ingot', gt: { prefix: 'ingot', material: 'Bronze' } },
+        { key: 't:bronze_gear@0', name: 'Bronze Gear' }, { key: 't:tin_plate@0', name: 'Tin Plate' }, { key: 't:tin_rod@0', name: 'Tin Rod' },
+      ],
+      ...ALLOY_SMELTER,
+      recipes: [
+        { id: 'alloy-bronze', map: 'gt.recipe.alloysmelter', in: [['t:copper_ingot@0', 3], ['t:tin_ingot@0', 1]], out: [['t:bronze_ingot@0', 4]], eut: 16, dur: 200 },
+        { id: 'bronze-gear', map: 'crafting', in: [['t:bronze_ingot@0', 4]], out: [['t:bronze_gear@0', 1]] },
+        { id: 'tin-plate', map: 'gt.recipe.assembler', in: [['t:tin_ingot@0', 1]], out: [['t:tin_plate@0', 1]], eut: 16, dur: 100 },
+        { id: 'tin-rod', map: 'gt.recipe.assembler', in: [['t:tin_plate@0', 1]], out: [['t:tin_rod@0', 1]], eut: 16, dur: 100 },
+        { id: 'tin-gear', map: 'gt.recipe.assembler', in: [['t:tin_rod@0', 39]], out: [['t:bronze_gear@0', 10]], eut: 16, dur: 100 },
+      ],
+    });
+    const settings = S({ target: 't:bronze_gear@0', tier: 1, automateCrafting: true });
+    expect((await planLine(p, settings, emptyContext())).rawInputs.map((r) => [r.key, r.leafClass])).toEqual([['t:bronze_ingot@0', 'derived']]);
+    expect((await planLine(p, { ...settings, stepCharge: 0 }, emptyContext())).steps.map((s) => s.id)).toEqual(['tin-gear', 'tin-plate', 'tin-rod']);
+    const plan = await planLine(p, { ...settings, avoid: ['t:tin_ingot@0'] }, emptyContext());
+    expect(plan.status).toBe('ok');
+    expect(plan.steps.map((s) => s.id)).toEqual(['bronze-gear']);
+    expect(plan.avoided).toEqual([{ key: 't:bronze_ingot@0', name: 'Bronze Ingot', unavoidable: true, madeFrom: ['t:tin_ingot@0'] }]);
+    expect(avoidWarnings(plan)).toEqual([{
+      code: 'avoid-unavoidable', key: 't:bronze_ingot@0', stepId: 'bronze-gear',
+      text: 'Crafting table (automated) uses Bronze Ingot (made from Tin Ingot) — no recipe at LV avoids it',
+    }]);
+    // With no charge the plan is the probe's tin chain, and the tin is flagged where it goes in.
+    const least = await planLine(p, { ...settings, stepCharge: 0, avoid: ['t:tin_ingot@0'] }, emptyContext());
+    expect(least.steps.map((s) => s.id)).toEqual(['tin-gear', 'tin-plate', 'tin-rod']);
+    expect(least.avoided).toEqual([{ key: 't:tin_ingot@0', name: 'Tin Ingot', unavoidable: true }]);
+    expect(avoidWarnings(least).map((w) => [w.code, w.key, w.stepId])).toEqual([['avoid-unavoidable', 't:tin_ingot@0', 'tin-plate']]);
   });
 });

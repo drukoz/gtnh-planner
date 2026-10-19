@@ -114,7 +114,7 @@ export function ItemSearch(props: { onPick(hit: SearchHit): void; placeholder?: 
               onMouseEnter={() => setActive(i)}
               onClick={() => pick(hit)}
             >
-              <ItemIcon itemKey={hit.key} size={20} />
+              <ItemIcon itemKey={hit.key} size={20} name={hit.name} />
               <span className="search-name">{hit.name}</span>
               {hit.kind === 'fluid' && <span className="badge">fluid</span>}
               {!hit.produced && <span className="badge muted">nothing makes this</span>}

@@ -1,23 +1,40 @@
-// The panel beside the flow diagram (spec §3.9): click a step to reuse the group's machines or not (spec §3.3 "suggests
-// reusing them. The group decides."), see its overclock math, swap its recipe (alternatives by raw material use), mark
-// its product "we already make this" and read its warnings; click a raw material to see where it comes from and, for
-// a base material, plan it in the line instead. Every choice sends one `settings` op with whole field values.
+// The panel beside the flow diagram (spec §3.9, fix spec §6.3). A step's panel: what it takes and makes and from or to
+// which step (hovering a row lights the item in the diagram, clicking a step selects it), who else makes its product,
+// why it uses the ingredient option it does (pin another), the free input it supplies or the supporting line it belongs
+// to, reusing the group's machines, its overclock math, every way to make its product (swap its recipe, or import the
+// product instead) and its warnings. A raw material's panel: what kind of import it is, which steps use it, what a
+// bought one stands for, and making it in the line instead. Every choice sends one `settings` op with whole field values.
 
-import { useId, useState, type ReactElement } from 'react';
-import type { StuffKey } from '../../shared/keys.ts';
-import type { LeafClass, Plan, PlanSettings, PlanStep, RawInput, SourceInfo } from '../../shared/types/plan.ts';
+import { useId, useState, type ReactElement, type ReactNode } from 'react';
+import { tierName } from '../../shared/gt/tiers.ts';
+import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
+import { indexPlan, ORPHAN_REL, SHORT_INPUT_SHARE, type PlanIndex } from '../../shared/plan/balance.ts';
+import { FREE_KEYS, type LeafClass, type Plan, type PlanFlow, type PlanSettings, type PlanStep, type RawInput, type SourceInfo, type StepOption } from '../../shared/types/plan.ts';
 import { ItemIcon } from '../components/ItemIcon.tsx';
-import { formatNumber, formatRate, ocLines, reusePatch } from './flow-model.ts';
+import { formatNumber, formatPercent, formatRate } from '../format.ts';
+import { endHoverFlowFocus, hoverFlowFocus } from '../state/flow-focus.ts';
+import {
+  flowEdgeId, haveSupplyPatch, importInsteadPatch, LEAF_WORD, makeHerePatch, ocLines, optionPatch, optionSlotKey, reusePatch, useOnlyPatch,
+} from './flow-model.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
-import { toggleList } from './settings-model.ts';
 
 type Send = ProjectViewProps['send'];
 type NameOf = (key: string) => string;
+type Per = 'min' | 'hour';
+type Patch = (p: Partial<PlanSettings>) => void;
 
 /** Found spots listed per source before the rest is summed up. */
 const MAX_FOUND_AT = 3;
 /** Swap options shown before "more…" (the one in use and a pinned one always show). */
 const SWAP_SHOWN = 5;
+/** Swap options each "more…" adds: a product can have a thousand ways (Wood Pulp), too many to list at once. */
+const SWAP_PAGE = 25;
+const PORT_ICON_SIZE = 16;
+const RAW = 'raw';
+const OUT = 'out';
+const SINK = 'sink';
+/** What "raw/unit" means (fix spec §6.3). */
+export const RAW_UNIT_TITLE = 'raw-material units per unit made (1 base item, 144 L molten metal or 1,000 L other fluid = 1)';
 
 const LEAF_TEXT: Record<LeafClass, string> = {
   free: 'Free: water, air, cobblestone and lava cost nothing',
@@ -41,8 +58,13 @@ function namesOf(plan: Plan): NameOf {
   return (key) => plan.names?.[key] ?? key;
 }
 
-function settingsSender(send: Send): (patch: Partial<PlanSettings>) => void {
+function settingsSender(send: Send): Patch {
   return (patch) => send([{ op: 'settings', patch }]);
+}
+
+/** "a", "a and b", "a, b and c". */
+function listed(parts: readonly string[]): string {
+  return parts.length <= 1 ? (parts[0] ?? '') : `${parts.slice(0, -1).join(', ')} and ${parts.at(-1) as string}`;
 }
 
 /** A recipe map id in words: `gt.recipe.assembler` → `Assembler`, for a plan whose names have no `map:` entry. */
@@ -51,34 +73,336 @@ function mapLabel(mapId: string): string {
   return words === '' ? mapId : words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-type Alternative = PlanStep['alternatives'][number];
-
-/** "2× Copper Wire, Redstone": a list of goods with their amounts per run. */
-function partsText(parts: Alternative['inputs'], nameOf: NameOf): string {
-  return (parts ?? []).map((p) => `${p.key.startsWith('fluid:') ? `${formatNumber(p.amount)} L ` : p.amount === 1 ? '' : `${formatNumber(p.amount)}× `}${nameOf(p.key)}`).join(', ');
+/** The machine a recipe map runs on, by the plan's name for the map. */
+function mapName(mapId: string, nameOf: NameOf): string {
+  const name = nameOf(`map:${mapId}`);
+  return name === `map:${mapId}` ? mapLabel(mapId) : name;
 }
 
-/** One swap option in words: its machine, what a run takes and makes, and its raw material use. */
+/** "Wiremill (1x Copper Wire)": a step by its machine and what it makes. */
+function stepWords(step: PlanStep, nameOf: NameOf): string {
+  return step.mainOutput === undefined ? step.machine.name : `${step.machine.name} (${nameOf(step.mainOutput)})`;
+}
+
+/** "72 L Molten Tin", "2× Redstone", "Redstone": an amount of a good. */
+function amountWords(key: StuffKey, amount: number, nameOf: NameOf): string {
+  if (isFluidKey(key)) return `${formatNumber(amount)} L ${nameOf(key)}`;
+  return amount === 1 ? nameOf(key) : `${formatNumber(amount)}× ${nameOf(key)}`;
+}
+
+function rateOf(perSecond: number, per: Per, key: StuffKey): string {
+  return formatRate(perSecond, per, { fluid: isFluidKey(key) });
+}
+
+/** A raw-material cost to two decimals, so choices line up ("0.50 vs 1.00"); a sliver keeps its own digits. */
+function rawText(x: number): string {
+  if (x === 0) return '0';
+  return Math.abs(x) < 0.01 || Math.abs(x) >= 1000 ? formatNumber(x) : x.toFixed(2);
+}
+
+/** "circuit" for Electronic Circuit, "wire" for 1x Copper Wire, "PE" for Molten PE: the unit a product is counted in. */
+function unitWord(name: string): string {
+  const words = name.replace(/\([^)]*\)/g, ' ').trim().split(/\s+/);
+  const last = words.at(-1) ?? '';
+  if (last === '') return 'unit';
+  return /^[A-Z0-9]+$/.test(last) ? last : last.toLowerCase();
+}
+
+type Alternative = PlanStep['alternatives'][number];
+
+/** "2× Copper Wire, 72 L Molten Soldering Alloy / 144 L Molten Tin": goods with their amounts per run, every option of a slot. */
+function partsText(parts: Alternative['inputs'], nameOf: NameOf): string {
+  return (parts ?? []).map((p) => (p.options !== undefined && p.options.length > 1 ? p.options : [p]).map((o) => amountWords(o.key, o.amount, nameOf)).join(' / ')).join(', ');
+}
+
+/** One swap option in words: its machine and what a run takes and makes. */
 function alternativeText(a: Alternative, nameOf: NameOf): string {
-  const machine = nameOf(`map:${a.mapId}`) === `map:${a.mapId}` ? mapLabel(a.mapId) : nameOf(`map:${a.mapId}`);
   const takes = partsText(a.inputs, nameOf);
   const makes = partsText(a.outputs, nameOf);
   const what = takes === '' && makes === '' ? '' : `: ${takes === '' ? 'nothing' : takes} → ${makes}`;
-  return `${machine}${what} · ${formatNumber(a.rawCost)} raw/unit`;
+  return `${mapName(a.mapId, nameOf)}${what}`;
 }
 
-function PanelHead(props: { itemKey: StuffKey | null; title: string; onClose(): void }): ReactElement {
-  const { itemKey, title, onClose } = props;
+/** "raw/unit", with what it means on hover. */
+function RawUnit(): ReactElement {
+  return <abbr className="unit-hint" title={RAW_UNIT_TITLE}>raw/unit</abbr>;
+}
+
+function PanelHead(props: { itemKey: StuffKey | null; itemName?: string; title: string; onClose(): void }): ReactElement {
+  const { itemKey, itemName, title, onClose } = props;
   return (
     <header className="flow-panel-head">
-      {itemKey !== null && <ItemIcon itemKey={itemKey} size={24} />}
+      {itemKey !== null && <ItemIcon itemKey={itemKey} size={24} name={itemName} />}
       <h3>{title}</h3>
       <button type="button" className="small" aria-label="Close the panel" onClick={onClose}>Close</button>
     </header>
   );
 }
 
-function ReuseSection(props: { step: PlanStep; settings: PlanSettings; patch(p: Partial<PlanSettings>): void }): ReactElement | null {
+/**
+ * What a step takes and makes (fix spec §6.3): per good its icon, name and rate (an input supplied short in red), and
+ * the steps it comes from or goes to with their rates. Hovering a row lights the item in the diagram; clicking a step
+ * (when `onSelect` is given) selects it.
+ */
+export function PortsSection(props: { step: PlanStep; plan: Plan; per: Per; onSelect?(stepId: string): void; index?: PlanIndex }): ReactElement | null {
+  const { step, plan, per, onSelect } = props;
+  const index = props.index ?? indexPlan(plan);
+  const nameOf = namesOf(plan);
+  const steps = new Map(plan.steps.map((s) => [s.id, s]));
+  const leafOf = new Map(plan.rawInputs.map((r) => [r.key, r.leafClass]));
+  // Flows carry net amounts (balance.ts), so a step makes of a good what it makes per run less what it takes of it; a
+  // good it takes and hands back in full (a cell, a catalyst) has neither a Takes nor a Makes row.
+  const perRun = (products: PlanStep['inputs']): Map<StuffKey, number> => {
+    const amounts = new Map<StuffKey, number>();
+    for (const p of products) amounts.set(p.key, (amounts.get(p.key) ?? 0) + p.amount);
+    return amounts;
+  };
+  const takes = perRun(step.inputs);
+  const made = new Map([...perRun(step.outputs)].map(([key, amount]) => [key, Math.max(0, amount - (takes.get(key) ?? 0)) * step.runsPerSecond]));
+  const ins = [...(index.inputs.get(step.id) ?? [])].filter(([, port]) => port.needPerSecond > 0 || port.perSecond > 0);
+  const main = step.mainOutput;
+  const outs = [...(index.outputs.get(step.id) ?? [])].filter(([key, port]) => (made.get(key) ?? 0) > 0 || port.perSecond > 0)
+    .sort(([a], [b]) => Number(b === main) - Number(a === main));
+  if (ins.length === 0 && outs.length === 0) return null;
+
+  const peerOf = (node: string, key: StuffKey, perSecond: number): ReactNode => {
+    const rate = rateOf(perSecond, per, key);
+    const other = steps.get(node);
+    if (other !== undefined) {
+      if (onSelect === undefined) return `${stepWords(other, nameOf)} ${rate}`;
+      return (
+        <>
+          <button type="button" className="link" onClick={() => onSelect(node)}>{stepWords(other, nameOf)}</button>
+          {` ${rate}`}
+        </>
+      );
+    }
+    if (node === RAW) {
+      const leaf = leafOf.get(key);
+      return `import${leaf === undefined ? '' : ` (${LEAF_WORD[leaf]})`} ${rate}`;
+    }
+    if (node === OUT) return `the target ${rate}`;
+    if (node === SINK) return `left over ${rate}`;
+    return `${node} ${rate}`;
+  };
+  const peers = (word: string, key: StuffKey, list: ReadonlyArray<{ node: string; perSecond: number }>): ReactNode => (
+    list.length === 0 ? null : (
+      <span className="port-peers muted small">
+        {`${word} `}
+        {list.map((p, i) => <span key={p.node}>{i > 0 && ' · '}{peerOf(p.node, key, p.perSecond)}</span>)}
+      </span>
+    )
+  );
+  const row = (key: StuffKey, body: ReactNode, short: boolean): ReactElement => (
+    <li
+      key={key}
+      className={short ? 'port-row port-short' : 'port-row'}
+      data-port-key={key}
+      onMouseEnter={() => hoverFlowFocus({ kind: 'item', key })}
+      onMouseLeave={endHoverFlowFocus}
+    >
+      <ItemIcon itemKey={key} size={PORT_ICON_SIZE} name={nameOf(key)} />
+      {body}
+    </li>
+  );
+
+  return (
+    <section className="flow-panel-section">
+      {ins.length > 0 && (
+        <>
+          <h4 className="flow-panel-title">Takes</h4>
+          <ul className="ports">
+            {ins.map(([key, port]) => {
+              const need = port.needPerSecond;
+              const orphan = need > 0 && port.perSecond <= ORPHAN_REL * need;
+              const short = need > 0 && port.perSecond < SHORT_INPUT_SHARE * need;
+              return row(key, (
+                <>
+                  <span className="port-name">{nameOf(key)}</span>
+                  <span className="port-rate">{rateOf(need > 0 ? need : port.perSecond, per, key)}</span>
+                  {short && <span className="port-warn">{orphan ? 'nothing supplies it' : `gets only ${formatPercent(port.perSecond / need)}`}</span>}
+                  {peers('from', key, port.peers)}
+                </>
+              ), short);
+            })}
+          </ul>
+        </>
+      )}
+      {outs.length > 0 && (
+        <>
+          <h4 className="flow-panel-title">Makes</h4>
+          <ul className="ports">
+            {outs.map(([key, port]) => {
+              const makes = made.get(key) ?? 0;
+              return row(key, (
+                <>
+                  <span className={key === main ? 'port-name port-main' : 'port-name'}>{nameOf(key)}</span>
+                  <span className="port-rate">{rateOf(makes > 0 ? makes : port.perSecond, per, key)}</span>
+                  {peers('to', key, port.peers)}
+                </>
+              ), false);
+            })}
+          </ul>
+        </>
+      )}
+    </section>
+  );
+}
+
+/** For a step that shares making its product with others (`multi-producer`): who else makes how much, and "use only this recipe". */
+function AlsoMadeBySection(props: { step: PlanStep; plan: Plan; index: PlanIndex; settings: PlanSettings; nameOf: NameOf; patch: Patch }): ReactElement | null {
+  const { step, plan, index, settings, nameOf, patch } = props;
+  const main = step.mainOutput;
+  if (main === undefined) return null;
+  const makers = (index.producers.get(main) ?? []).filter((p) => p.main);
+  const mine = makers.find((p) => p.stepId === step.id);
+  if (makers.length < 2 || mine === undefined) return null;
+  const steps = new Map(plan.steps.map((s) => [s.id, s]));
+  /** "imported PE Bar, Molten PE": what another maker takes, the goods it imports said so. */
+  const fromWords = (stepId: string): string => {
+    const goods = [...(index.inputs.get(stepId) ?? [])].filter(([, port]) => port.needPerSecond > 0 || port.perSecond > 0)
+      .map(([key, port]) => (port.peers.some((p) => p.node === RAW) ? `imported ${nameOf(key)}` : nameOf(key)));
+    return goods.length === 0 ? '' : ` (from ${listed(goods)})`;
+  };
+  return (
+    <section className="flow-panel-section">
+      <h4 className="flow-panel-title">Also made by</h4>
+      <ul className="also-made">
+        {makers.filter((p) => p.stepId !== step.id).map((p) => {
+          const other = steps.get(p.stepId);
+          return <li key={p.stepId}>{`${other?.machine.name ?? p.stepId} makes ${formatPercent(p.share)} of ${nameOf(main)}${fromWords(p.stepId)}`}</li>;
+        })}
+      </ul>
+      <p className="muted small">{`This step makes ${formatPercent(mine.share)}.`}</p>
+      <div className="row">
+        <button type="button" onClick={() => patch(useOnlyPatch(settings, main, step.recipeId))}>{`Use only this recipe for ${nameOf(main)}`}</button>
+      </div>
+    </section>
+  );
+}
+
+function stepsWords(n: number): string {
+  return n === 0 ? 'no extra steps' : n === 1 ? '1 extra step' : `${n} extra steps`;
+}
+
+/** One multi-option slot: why the line takes the option it does, every option with its cost and chain, and the pin. */
+function OptionSlot(props: { step: PlanStep; slot: StepOption; settings: PlanSettings; nameOf: NameOf; patch: Patch }): ReactElement {
+  const { step, slot, settings, nameOf, patch } = props;
+  const group = useId();
+  const pins = settings.optionChoice ?? {};
+  const pinKey = optionSlotKey(step.recipeId, slot.slot);
+  const pin = Object.hasOwn(pins, pinKey) ? pins[pinKey] : undefined;
+  const choose = (key: StuffKey | null): void => patch(optionPatch(settings, step.recipeId, slot.slot, key));
+  const main = step.mainOutput;
+  const mainPerRun = main === undefined ? 0 : step.outputs.filter((p) => p.key === main).reduce((sum, p) => sum + p.amount, 0);
+  const divisor = mainPerRun > 0 ? mainPerRun : 1;
+  const unit = mainPerRun > 0 && main !== undefined ? unitWord(nameOf(main)) : 'run';
+  const usable = slot.choices.filter((c) => c.unusable === undefined);
+  const chosen = [...slot.choices].sort((a, b) => b.share - a.share)[0];
+  let why: string | null = null;
+  if (chosen !== undefined && chosen.share > 0) {
+    const rival = usable.filter((c) => c.key !== chosen.key).sort((a, b) => a.rawPerRun - b.rawPerRun)[0];
+    const vs = rival === undefined ? '' : ` vs ${rawText(rival.rawPerRun / divisor)} for ${nameOf(rival.key)}`;
+    const needs = chosen.via !== undefined && chosen.via.length > 0 ? `; needs ${chosen.via.join(' + ')}` : '';
+    why = `${nameOf(chosen.key)} ${slot.pinned === chosen.key ? 'pinned' : 'chosen'}: ${rawText(chosen.rawPerRun / divisor)} raw per ${unit}${vs}${needs}`;
+  }
+  const choiceText = (c: StepOption['choices'][number]): string => {
+    const via = c.via !== undefined && c.via.length > 0 ? ` (via ${c.via.join(', ')})` : '';
+    return `${amountWords(c.key, c.amount, nameOf)} · ${rawText(c.rawPerRun)} raw per run, ${stepsWords(c.steps)}${via}`;
+  };
+  const use = (share: number): string => (share >= 1 ? 'in use' : share > 0 ? `in use (${formatPercent(share)})` : 'not used by this plan');
+  return (
+    <fieldset className="option-slot" data-slot={slot.slot}>
+      <legend className="option-slot-title">{slot.choices.map((c) => nameOf(c.key)).join(' / ')}</legend>
+      {why !== null && <p className="option-why small">{why}</p>}
+      <label className="check">
+        <input type="radio" name={group} checked={pin === undefined} onChange={() => choose(null)} />
+        Let the planner choose
+      </label>
+      {slot.choices.map((c) => (c.unusable === undefined ? (
+        <label key={c.key} className="check option-choice" title="Pin this option">
+          <input type="radio" name={group} checked={pin === c.key} onChange={() => choose(c.key)} />
+          <span className="choice-text">
+            {`${choiceText(c)} `}
+            <span className={c.share > 0 ? 'badge' : 'badge muted'}>{use(c.share)}</span>
+          </span>
+        </label>
+      ) : (
+        <div key={c.key} className="option-choice unusable">{`${choiceText(c)} — ${c.unusable.join('; ')}`}</div>
+      )))}
+      {pin !== undefined && slot.pinned !== pin && (
+        <p className="muted small">{`The pinned option ${nameOf(pin)} is not usable now, so the planner chose another.`}</p>
+      )}
+    </fieldset>
+  );
+}
+
+/** The step's multi-option ingredient slots (fix spec R9, §6.3). */
+function OptionsSection(props: { step: PlanStep; settings: PlanSettings; nameOf: NameOf; patch: Patch }): ReactElement | null {
+  const { step, settings, nameOf, patch } = props;
+  const slots = step.options ?? [];
+  if (slots.length === 0) return null;
+  return (
+    <section className="flow-panel-section">
+      <h4 className="flow-panel-title">Ingredient options</h4>
+      {slots.map((slot) => <OptionSlot key={slot.slot} step={step} slot={slot} settings={settings} nameOf={nameOf} patch={patch} />)}
+    </section>
+  );
+}
+
+/** A supply step (fix spec R2): the free input it makes, and counting that input as supplied when the line consumes it. */
+function SupplySection(props: { step: PlanStep; plan: Plan; settings: PlanSettings; nameOf: NameOf; patch: Patch }): ReactElement | null {
+  const { step, plan, settings, nameOf, patch } = props;
+  const good = step.supply;
+  if (good === undefined) return null;
+  const steps = new Set(plan.steps.map((s) => s.id));
+  // Only a free input the line takes can be supplied instead (Task 3's review: a stone breaker's Stone, or air the
+  // compressor fills into cells the line itself makes, would change nothing).
+  const offer = FREE_KEYS.includes(good) && plan.flows.some((f) => f.key === good && steps.has(f.to));
+  const name = nameOf(good);
+  let action: ReactElement | null = null;
+  if (offer) {
+    action = (settings.haveSupply ?? []).includes(good)
+      ? <p className="muted small">{`${name} is marked supplied already; the plan is catching up.`}</p>
+      : (
+        <>
+          <p className="muted small">{`The line then takes ${name} free and plans no machine for it.`}</p>
+          <div className="row">
+            <button type="button" onClick={() => patch(haveSupplyPatch(settings, good, true))}>{`We already have a supply of ${name}`}</button>
+          </div>
+        </>
+      );
+  }
+  return (
+    <section className="flow-panel-section">
+      <h4 className="flow-panel-title">Supply</h4>
+      <p>{`Supplies ${name} for this line`}</p>
+      {action}
+    </section>
+  );
+}
+
+/** A step of a supporting line (fix spec R6): which line, and "we already make" its material. */
+function LineSection(props: { step: PlanStep; settings: PlanSettings; patch: Patch }): ReactElement | null {
+  const { step, settings, patch } = props;
+  const line = step.line;
+  if (line === undefined) return null;
+  return (
+    <section className="flow-panel-section">
+      <h4 className="flow-panel-title">Supporting line</h4>
+      <p>{`Part of the ${line.name} line`}</p>
+      {settings.stopItems.includes(line.key) ? (
+        <p className="muted small">{`${line.name} is marked already; the plan is catching up.`}</p>
+      ) : (
+        <div className="row">
+          <button type="button" onClick={() => patch(importInsteadPatch(settings, line.key))}>{`We already make ${line.name}`}</button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ReuseSection(props: { step: PlanStep; settings: PlanSettings; patch: Patch }): ReactElement | null {
   const { step, settings, patch } = props;
   const { mteId, name } = step.machine;
   const declined = (settings.declineReuse ?? []).includes(mteId);
@@ -94,10 +418,23 @@ function ReuseSection(props: { step: PlanStep; settings: PlanSettings; patch(p: 
   );
 }
 
-function SwapSection(props: { step: PlanStep; settings: PlanSettings; nameOf: NameOf; patch(p: Partial<PlanSettings>): void }): ReactElement {
+/**
+ * The swap rows shown while `limit` rows are open (the server sorts them: usable ways first, each group by raw material
+ * use): the first `limit`, plus the one in use and a pinned one wherever they are; "more…" raises the limit a page at a
+ * time (`SWAP_SHOWN`, then `SWAP_PAGE` more), so every way can be reached however many there are.
+ */
+export function shownWays<T extends { recipeId: string }>(ways: readonly T[], limit: number, inUse: string, pinned: string | undefined): T[] {
+  return ways.filter((a, i) => i < limit || a.recipeId === inUse || a.recipeId === pinned);
+}
+
+/**
+ * Every way the export knows to make the step's product (controller rulings of plan 09): those the group can use with a
+ * radio each, the others greyed with why not; the first few, then pages of "more…"; last, importing the product instead.
+ */
+function SwapSection(props: { step: PlanStep; settings: PlanSettings; nameOf: NameOf; patch: Patch }): ReactElement {
   const { step, settings, nameOf, patch } = props;
   const group = useId();
-  const [expanded, setExpanded] = useState(false);
+  const [limit, setLimit] = useState(SWAP_SHOWN);
   const main = step.mainOutput;
   if (main === undefined) {
     return (
@@ -115,41 +452,63 @@ function SwapSection(props: { step: PlanStep; settings: PlanSettings; nameOf: Na
     else next[main] = recipeId;
     patch({ recipeChoice: next });
   };
-  const listed = pinned === undefined || step.alternatives.some((a) => a.recipeId === pinned);
-  // Sorted by raw material use already (server); the first few, plus the one in use and a pinned one wherever they are.
-  const shown = expanded ? step.alternatives
-    : step.alternatives.filter((a, i) => i < SWAP_SHOWN || a.recipeId === step.recipeId || a.recipeId === pinned);
-  const hidden = step.alternatives.length - shown.length;
+  const alternatives = step.alternatives;
+  const usable = alternatives.filter((a) => a.unusable === undefined);
+  const pinUsable = pinned === undefined || usable.some((a) => a.recipeId === pinned);
+  const shown = shownWays(alternatives, limit, step.recipeId, pinned);
+  const hidden = alternatives.length - shown.length;
+  // A product the line imports is counted at the cheapest way the group can make it (the stop item's price).
+  const importCost = usable.reduce((least, a) => Math.min(least, a.rawCost), Number.POSITIVE_INFINITY);
+  const ways = step.ways;
   return (
-    <fieldset className="flow-panel-section">
+    <fieldset className="flow-panel-section" data-swap="">
       <legend className="flow-panel-title">Swap recipe</legend>
+      {ways !== undefined && (
+        <p className="muted small">{`${ways.total} ${ways.total === 1 ? 'way' : 'ways'} to make ${nameOf(main)}: ${ways.usable} you can use now`}</p>
+      )}
       <label className="check">
         <input type="radio" name={group} checked={pinned === undefined} onChange={() => choose(null)} />
         Let the planner choose
       </label>
-      {shown.map((a) => (
+      {shown.map((a) => (a.unusable === undefined ? (
         <label key={a.recipeId} className="check swap-option" title={`recipe ${a.recipeId}`}>
           <input type="radio" name={group} checked={pinned === a.recipeId} onChange={() => choose(a.recipeId)} />
-          <span className="swap-text">{alternativeText(a, nameOf)}</span>
+          <span className="swap-text">{`${alternativeText(a, nameOf)} · ${formatNumber(a.rawCost)} `}<RawUnit /></span>
           {a.recipeId === step.recipeId && <span className="badge">in use</span>}
         </label>
-      ))}
+      ) : (
+        <div key={a.recipeId} className="swap-option unusable" title={`recipe ${a.recipeId}`}>
+          <span className="swap-text">{`${alternativeText(a, nameOf)} · ${formatNumber(a.rawCost)} `}<RawUnit />{` — ${a.unusable.join('; ')}`}</span>
+        </div>
+      )))}
       {hidden > 0 && (
         <div className="row">
-          <button type="button" className="small" onClick={() => setExpanded(true)}>{`${hidden} more…`}</button>
+          <button type="button" className="small" onClick={() => setLimit((n) => n + SWAP_PAGE)}>
+            {hidden <= SWAP_PAGE ? `${hidden} more…` : `${SWAP_PAGE} more… (${hidden} not shown)`}
+          </button>
         </div>
       )}
-      {!listed && <p className="muted small">{`The pinned recipe ${pinned} is not usable now, so the planner chose another.`}</p>}
-      {step.alternatives.length <= 1 && <p className="muted small">{`No other recipe for ${nameOf(main)} is usable here.`}</p>}
+      {main !== settings.target && (
+        <label className="check swap-option">
+          <input type="radio" name={group} checked={settings.stopItems.includes(main)} onChange={() => patch(importInsteadPatch(settings, main))} />
+          <span className="swap-text">
+            {Number.isFinite(importCost) ? `Import it (counted at ${formatNumber(importCost)} ` : 'Import it'}
+            {Number.isFinite(importCost) && <><RawUnit />)</>}
+          </span>
+        </label>
+      )}
+      {!pinUsable && <p className="muted small">{`The pinned recipe ${pinned} is not usable now, so the planner chose another.`}</p>}
+      {usable.length <= 1 && <p className="muted small">{`No other recipe for ${nameOf(main)} is usable here.`}</p>}
     </fieldset>
   );
 }
 
-function StopSection(props: { step: PlanStep; settings: PlanSettings; nameOf: NameOf; patch(p: Partial<PlanSettings>): void }): ReactElement {
+/** Stopping the chain at the step's product: the group supplies it from outside the line (`stopItems`). */
+function StopSection(props: { step: PlanStep; settings: PlanSettings; nameOf: NameOf; patch: Patch }): ReactElement {
   const { step, settings, nameOf, patch } = props;
   const main = step.mainOutput;
   let body: ReactElement;
-  if (main === undefined) body = <p className="muted">This step has no main product to mark.</p>;
+  if (main === undefined) body = <p className="muted">This step has no main product to import.</p>;
   else if (main === settings.target) body = <p className="muted">This step makes the target itself.</p>;
   else if (settings.stopItems.includes(main)) body = <p className="muted">{`${nameOf(main)} is marked already; the plan is catching up.`}</p>;
   else {
@@ -157,30 +516,47 @@ function StopSection(props: { step: PlanStep; settings: PlanSettings; nameOf: Na
       <>
         <p className="muted small">{`Stops the chain here: ${nameOf(main)} becomes an input of the line, counted at its cost.`}</p>
         <div className="row">
-          <button type="button" onClick={() => patch({ stopItems: toggleList(settings.stopItems, main, true) })}>{`We already make ${nameOf(main)}`}</button>
+          <button type="button" onClick={() => patch(importInsteadPatch(settings, main))}>{`Import ${nameOf(main)} instead`}</button>
         </div>
       </>
     );
   }
   return (
     <section className="flow-panel-section">
-      <h4 className="flow-panel-title">We already make this</h4>
+      <h4 className="flow-panel-title">Supply it from outside</h4>
       {body}
     </section>
   );
 }
 
-export function StepPanel(props: { step: PlanStep; plan: Plan; settings: PlanSettings; send: Send; onClose(): void }): ReactElement {
-  const { step, plan, settings, send, onClose } = props;
+export function StepPanel(props: {
+  step: PlanStep; plan: Plan; settings: PlanSettings; send: Send; onClose(): void;
+  /** The project's rate unit (default per hour). */
+  per?: Per;
+  /** Selects another step of the diagram (a Takes/Makes peer). */
+  onSelect?(stepId: string): void;
+}): ReactElement {
+  const { step, plan, settings, send, onClose, onSelect } = props;
+  const per = props.per ?? 'hour';
   const nameOf = namesOf(plan);
   const patch = settingsSender(send);
+  const index = indexPlan(plan);
   const warnings = [...new Set([...step.warnings, ...plan.warnings.filter((w) => w.stepId === step.id).map((w) => w.text)])];
+  const machines = step.count === 1 ? '1 machine' : `${step.count} machines`;
   return (
-    <aside className="flow-panel" aria-label={`Step: ${step.count}× ${step.machine.name}`}>
-      <PanelHead itemKey={step.mainOutput ?? null} title={`${step.count}× ${step.machine.name}`} onClose={onClose} />
-      {step.mainOutput !== undefined && (
-        <p className="muted">{`makes ${nameOf(step.mainOutput)}${step.handCraft ? ' · by hand' : ''}`}</p>
-      )}
+    <aside className="flow-panel" aria-label={`Step: ${step.machine.name}`}>
+      <PanelHead
+        itemKey={step.mainOutput ?? null} title={step.machine.name} onClose={onClose}
+        itemName={step.mainOutput === undefined ? undefined : nameOf(step.mainOutput)}
+      />
+      <p className="muted">
+        {[machines, ...(step.mainOutput === undefined ? [] : [`makes ${nameOf(step.mainOutput)}`]), ...(step.handCraft ? ['by hand'] : [])].join(' · ')}
+      </p>
+      <PortsSection step={step} plan={plan} per={per} index={index} onSelect={onSelect} />
+      <AlsoMadeBySection step={step} plan={plan} index={index} settings={settings} nameOf={nameOf} patch={patch} />
+      <SupplySection step={step} plan={plan} settings={settings} nameOf={nameOf} patch={patch} />
+      <LineSection step={step} settings={settings} patch={patch} />
+      <OptionsSection step={step} settings={settings} nameOf={nameOf} patch={patch} />
       <ReuseSection step={step} settings={settings} patch={patch} />
       <section className="flow-panel-section">
         <h4 className="flow-panel-title">Overclock</h4>
@@ -211,33 +587,76 @@ function sourceText(source: SourceInfo, names: Plan['names']): string {
 
 /** Where the group found it: the first few spots, their dimension by name (`dimId:<n>` in Plan.names) else `DIM<n>`. */
 function foundText(spots: NonNullable<SourceInfo['foundAt']>, names: Plan['names']): string {
-  const listed = spots.slice(0, MAX_FOUND_AT).map((s) => `found at ${s.x} ${s.z} (${names?.[`dimId:${s.dim}`] ?? `DIM${s.dim}`})`);
+  const listedSpots = spots.slice(0, MAX_FOUND_AT).map((s) => `found at ${s.x} ${s.z} (${names?.[`dimId:${s.dim}`] ?? `DIM${s.dim}`})`);
   const more = spots.length > MAX_FOUND_AT ? ` and ${spots.length - MAX_FOUND_AT} more` : '';
-  return `${listed.join('; ')}${more}`;
+  return `${listedSpots.join('; ')}${more}`;
 }
 
-/** The panel of a raw-material box: its rate, what kind of leaf it is, where it comes from and what is in storage. */
-export function RawPanel(props: { itemKey: StuffKey; plan: Plan; settings: PlanSettings; per: 'min' | 'hour'; send: Send; onClose(): void }): ReactElement {
-  const { itemKey, plan, settings, per, send, onClose } = props;
+/** "Bought: usually made by Alloy Smelter from Copper Ingot, Redstone (1 recipe)": what buying a derived material stands for. */
+function pricedViaText(input: RawInput, nameOf: NameOf): string | null {
+  const via = input.pricedVia;
+  if (via === undefined || (input.leafClass !== 'derived' && input.leafClass !== 'stop')) return null;
+  const from = via.inputs.length > 0 ? ` from ${via.inputs.map(nameOf).join(', ')}` : '';
+  const head = input.leafClass === 'derived' ? 'Bought' : 'Supplied from outside';
+  return `${head}: usually made by ${mapName(via.mapId, nameOf)}${from} (${via.steps} ${via.steps === 1 ? 'recipe' : 'recipes'})`;
+}
+
+/**
+ * The panel of a raw-material box (fix spec §6.3): what kind of import it is and how much, which steps use it (hovering
+ * one lights its arrow, clicking selects the step), what a bought one stands for, where it comes from and what is in
+ * storage; for a base material "Make it here instead" (greyed when nothing at the tier makes it), for a free input the
+ * group said it supplies "Plan its generator again".
+ */
+export function RawPanel(props: {
+  itemKey: StuffKey; plan: Plan; settings: PlanSettings; per: Per; send: Send; onClose(): void; onSelect?(stepId: string): void;
+}): ReactElement {
+  const { itemKey, plan, settings, per, send, onClose, onSelect } = props;
   const nameOf = namesOf(plan);
   const patch = settingsSender(send);
+  const name = nameOf(itemKey);
+  const fluid = isFluidKey(itemKey);
   const input: RawInput | undefined = plan.rawInputs.find((r) => r.key === itemKey);
   const sources = input?.sources ?? [];
   const leaf = input?.leafClass;
+  const steps = new Map(plan.steps.map((s) => [s.id, s]));
+  const users: PlanFlow[] = plan.flows.filter((f) => f.from === RAW && f.key === itemKey && steps.has(f.to));
   const canExpand = leaf !== undefined && BASE_MATERIALS.has(leaf) && !settings.expandItems.includes(itemKey);
+  const cannotMake = input?.canMake === false;
+  const supplied = leaf === 'free' && (settings.haveSupply ?? []).includes(itemKey);
+  const kind = leaf !== undefined ? LEAF_WORD[leaf] : input === undefined || input.available ? 'base material' : LEAF_WORD.unavailable;
+  const via = input === undefined ? null : pricedViaText(input, nameOf);
   return (
-    <aside className="flow-panel" aria-label={`Raw material: ${nameOf(itemKey)}`}>
-      <PanelHead itemKey={itemKey} title={nameOf(itemKey)} onClose={onClose} />
+    <aside className="flow-panel" aria-label={`Import: ${name}`}>
+      <PanelHead itemKey={itemKey} itemName={name} title={name} onClose={onClose} />
       {input !== undefined && (
         <p className="muted">
-          {`raw · ${formatRate(input.perSecond, per)}`}
-          {input.total !== undefined && ` · ${Number(input.total.toFixed(2))} for the whole run`}
+          {`Import · ${kind} · ${formatRate(input.perSecond, per, { fluid })}`}
+          {input.total !== undefined && ` · ${formatNumber(input.total)}${fluid ? ' L' : ''} for the whole batch`}
         </p>
       )}
       {leaf !== undefined && <p>{LEAF_TEXT[leaf]}</p>}
       {input !== undefined && !input.available && leaf !== 'unavailable' && <p className="error">{LEAF_TEXT.unavailable}</p>}
+      {via !== null && <p>{via}</p>}
       {input?.have !== undefined && (
-        <p className="muted">{`In storage: ${input.have.total} (${input.have.reachable} reachable by the line)`}</p>
+        <p className="muted">{`In storage: ${formatNumber(input.have.total)} (${formatNumber(input.have.reachable)} reachable by the line)`}</p>
+      )}
+      {users.length > 0 && (
+        <section className="flow-panel-section">
+          <h4 className="flow-panel-title">Used by</h4>
+          <ul className="used-by">
+            {users.map((f) => {
+              const user = steps.get(f.to) as PlanStep;
+              return (
+                <li key={f.to} onMouseEnter={() => hoverFlowFocus({ kind: 'edge', id: flowEdgeId(f) })} onMouseLeave={endHoverFlowFocus}>
+                  {onSelect === undefined
+                    ? stepWords(user, nameOf)
+                    : <button type="button" className="link" onClick={() => onSelect(f.to)}>{stepWords(user, nameOf)}</button>}
+                  {` ${formatRate(f.perSecond, per, { fluid })}`}
+                </li>
+              );
+            })}
+          </ul>
+        </section>
       )}
       <section className="flow-panel-section">
         <h4 className="flow-panel-title">Sources</h4>
@@ -258,9 +677,18 @@ export function RawPanel(props: { itemKey: StuffKey; plan: Plan; settings: PlanS
       </section>
       {canExpand && (
         <section className="flow-panel-section">
-          <p className="muted small">Plan its own recipe in this line instead of counting it as a base material.</p>
+          <p className="muted small">Plan its own recipe in this line instead of importing it.</p>
           <div className="row">
-            <button type="button" onClick={() => patch({ expandItems: toggleList(settings.expandItems, itemKey, true) })}>We'll make it ourselves</button>
+            <button type="button" disabled={cannotMake} onClick={() => patch(makeHerePatch(settings, itemKey))}>Make it here instead</button>
+          </div>
+          {cannotMake && <p className="muted small">{`Nothing at ${tierName(plan.tier)} makes ${name}`}</p>}
+        </section>
+      )}
+      {supplied && (
+        <section className="flow-panel-section">
+          <p className="muted small">{`You said the group already has a supply of ${name}, so the line takes it free.`}</p>
+          <div className="row">
+            <button type="button" onClick={() => patch(haveSupplyPatch(settings, itemKey, false))}>Plan its generator again</button>
           </div>
         </section>
       )}

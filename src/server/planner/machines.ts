@@ -8,7 +8,9 @@ import { isFluidKey, parseItemKey, type StuffKey } from '../../shared/keys.ts';
 import type { Ingredient, Machine, Pack, Product, Recipe } from '../../shared/types/pack.ts';
 import type { PlanContext, PlanFlow, PlanSettings, PlanStep } from '../../shared/types/plan.ts';
 import { PROGRAMMED_CIRCUIT_ID } from '../pack/recipes.ts';
+import { suppliedKey } from '../pack/supply.ts';
 import { keptOptions, virtualKey, type CandidateGraph, type LpRecipe } from './candidates.ts';
+import { sig9 } from './round.ts';
 import type { Solution } from './solve.ts';
 
 export interface MachinePick {
@@ -25,6 +27,11 @@ const CRAFT_TICKS = 20;
  */
 const TINY = 1e-9;
 const HAND_CRAFT_RUNS_PER_SECOND = 1;
+/**
+ * A flow below this share of what its producer makes of the good is dropped (fix spec D3): relative, so a line keeps
+ * its arrows at 1 per hour (an absolute 1e-9 per second dropped real ones there).
+ */
+export const FLOW_DROP_REL = 1e-9;
 
 const HAND_NAME = 'Crafting table (by hand)';
 const CRAFTING_TABLE_NAME = 'Crafting table (automated)';
@@ -37,11 +44,6 @@ const SINK = 'sink';
 
 function byString(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
-}
-
-/** 9 decimal places; −0 reads 0 (the rounding of `Solution`). */
-function round9(x: number): number {
-  return Math.round(x * 1e9) / 1e9 || 0;
 }
 
 function clamp(x: number, lo: number, hi: number): number {
@@ -197,13 +199,27 @@ function convertEnds(r: LpRecipe): { virtual: StuffKey; option: StuffKey } | nul
   return virtual === undefined || option === undefined ? null : { virtual, option };
 }
 
-/** For an ore-dictionary slot, the option its conversions used most (ties: the smallest key). */
-function busiestOption(options: readonly Option[], conversions: ReadonlyMap<StuffKey, number> | undefined): Option {
-  const runs = (o: Option): number => conversions?.get(o.key) ?? 0;
-  const sorted = [...options].sort((a, b) => byString(a.key, b.key));
-  let best = sorted[0] as Option;
-  for (const option of sorted) if (runs(option) > runs(best)) best = option;
-  return best;
+/** One option of a consumed slot and its share of the slot in the line (0..1). */
+export interface OptionShare { option: Option; share: number }
+
+/**
+ * Every option of consumed slot `ing` of `r` the line may take (`keptOptions`: none the graph avoids), by key, each with
+ * its share of the slot (fix spec R9): the runs of the convert recipe that filled the slot's virtual good from it over
+ * those of all of them. A slot the graph pins (`StepLine.optionPins`) is its pin alone, the others at 0; a slot of one
+ * option is that option. When no conversion of the slot ran, the first option by key takes it whole.
+ */
+export function optionShares(r: Recipe, ing: Ingredient, line: StepLine): OptionShare[] {
+  const kept = keptOptions(ing.options, line.avoid);
+  const sorted = [...kept].sort((a, b) => byString(a.key, b.key));
+  const pin = line.optionPins?.get(`${r.id}#${ing.slot}`);
+  if (pin !== undefined && sorted.some((o) => o.key === pin)) return sorted.map((option) => ({ option, share: option.key === pin ? 1 : 0 }));
+  if (sorted.length <= 1) return sorted.map((option) => ({ option, share: 1 }));
+  // A slot with several options is the virtual good candidates.ts made for it.
+  const runs = line.conversions.get(virtualKey(kept));
+  const ran = (o: Option): number => Math.max(0, runs?.get(o.key) ?? 0);
+  let total = 0;
+  for (const option of sorted) total += ran(option);
+  return sorted.map((option, i) => ({ option, share: total > 0 ? sig9(ran(option) / total) : i === 0 ? 1 : 0 }));
 }
 
 /** Virtual good → option → runs of the convert recipe that fills it from that option. */
@@ -224,26 +240,27 @@ interface InputTotal { expected: number; nominal: number; chance: number; sameCh
  * it first fills: a good in several slots (a real crafting recipe has one ingredient of amount 1 per grid slot,
  * recipes.ts) is added up. Its `chance` is the slots' chance when they share one, else the expected amount over the
  * nominal one. Not-consumed inputs are one-off items of the machine (Task 13). A slot is read as the graph has it, so
- * without the options the line avoids (`keptOptions`, ruling R7).
+ * without the options the line avoids (`keptOptions`, ruling R7) and with its pin (`optionPins`). An ore-dictionary slot
+ * lists every option it took (fix spec R9, `optionShares`), each at its share of the slot: `amount × chance × share`,
+ * with chance `chance × share` when the slot is split.
  */
-function stepInputs(r: Recipe, line: StepLine): Product[] {
+export function stepInputs(r: Recipe, line: StepLine): Product[] {
   const totals = new Map<StuffKey, InputTotal>();
   for (const ing of r.inputs) {
     if (!ing.consumed) continue;
-    const options = keptOptions(ing.options, line.avoid);
-    if (options.length === 0) continue;
-    // A slot with one option is that good itself; a longer one is the virtual good candidates.ts made for it.
-    const option = options.length === 1
-      ? (options[0] as Option)
-      : busiestOption(options, line.conversions.get(virtualKey(options)));
-    const expected = option.amount * ing.chance;
-    const total = totals.get(option.key);
-    if (total === undefined) {
-      totals.set(option.key, { expected, nominal: option.amount, chance: ing.chance, sameChance: true });
-    } else {
-      total.expected += expected;
-      total.nominal += option.amount;
-      total.sameChance &&= total.chance === ing.chance;
+    for (const { option, share } of optionShares(r, ing, line)) {
+      if (share <= 0) continue;
+      const whole = share === 1;
+      const expected = whole ? option.amount * ing.chance : sig9(option.amount * ing.chance * share);
+      const chance = whole ? ing.chance : sig9(ing.chance * share);
+      const total = totals.get(option.key);
+      if (total === undefined) {
+        totals.set(option.key, { expected, nominal: option.amount, chance, sameChance: true });
+      } else {
+        total.expected += expected;
+        total.nominal += option.amount;
+        total.sameChance &&= total.chance === chance;
+      }
     }
   }
   return [...totals].map(([key, t]) => ({
@@ -251,18 +268,38 @@ function stepInputs(r: Recipe, line: StepLine): Product[] {
   }));
 }
 
-/** The output that is a target, else the one the other recipes consume most (ties: the smallest key). */
-function mainOutputOf(r: Recipe, targets: ReadonlySet<StuffKey>, used: ReadonlyMap<StuffKey, ReadonlyMap<string, number>>): StuffKey | undefined {
+/**
+ * `line.valueOf` when the line was given one. The name (fix spec D13) shadows `Object.prototype.valueOf`, which every
+ * object inherits, so only an own property counts: TypeScript makes every `StepLine` literal spell it out (`undefined`
+ * when there is none), and this guards the objects that reach here some other way.
+ */
+function valueOfLine(line: Pick<StepLine, 'valueOf'>): ((key: StuffKey) => number) | undefined {
+  return Object.hasOwn(line, 'valueOf') && typeof line.valueOf === 'function' ? line.valueOf : undefined;
+}
+
+/**
+ * What the step is for (fix spec D13): the target when the recipe makes it; else the output with the largest value,
+ * `line.valueOf(key)` × what the other recipes take of it, then the most taken, then the smallest key; never an empty
+ * container the recipe hands back (`line.empties`) unless it makes nothing else. Without `valueOf` every value is 0, so
+ * the output the other recipes take most of wins (the rule before values: litres beat items there).
+ */
+function mainOutputOf(r: Recipe, line: StepLine): StuffKey | undefined {
   const outputs = [...new Set(r.outputs.map((p) => p.key))].sort(byString);
-  const target = outputs.find((key) => targets.has(key));
+  const target = outputs.find((key) => line.targets.has(key));
   if (target !== undefined) return target;
+  const handedBack = (key: StuffKey): boolean => line.empties?.has(key) === true;
+  const candidates = outputs.some((key) => !handedBack(key)) ? outputs.filter((key) => !handedBack(key)) : outputs;
+  const valueOf = valueOfLine(line);
   let best: StuffKey | undefined;
+  let bestValue = -Infinity;
   let bestUse = -Infinity;
-  for (const key of outputs) {
-    const nodes = used.get(key);
+  for (const key of candidates) {
+    const nodes = line.used.get(key);
     const use = sum(nodes) - (nodes?.get(r.id) ?? 0);
-    if (use > bestUse) {
+    const value = valueOf === undefined ? 0 : valueOf(key) * use;
+    if (value > bestValue || (value === bestValue && use > bestUse)) {
       best = key;
+      bestValue = value;
       bestUse = use;
     }
   }
@@ -304,13 +341,45 @@ export interface StepLine {
   used: ReadonlyMap<StuffKey, ReadonlyMap<string, number>>;
   conversions: ReadonlyMap<StuffKey, ReadonlyMap<StuffKey, number>>;
   avoid?: ReadonlySet<StuffKey>;
+  // optional additions (fix spec D13): what names a step's main output
+  /**
+   * What one unit of a good is worth (planLine: its cost-model raw cost, never below its plain price). Read only as an
+   * own property (`valueOfLine`); a literal without values sets it `undefined`, as TypeScript otherwise sees `Object`'s
+   * valueOf there.
+   */
+  valueOf?: (key: StuffKey) => number;
+  /** The empty containers of the pack (`emptyContainers`): a recipe handing one back is not there for it. */
+  empties?: ReadonlySet<StuffKey>;
+  // optional addition (fix spec R9)
+  /** The ingredient options the graph pins (`CandidateGraph.optionPins`): `<recipe id>#<slot>` → the option it takes. */
+  optionPins?: ReadonlyMap<string, StuffKey>;
 }
 
-/** The `StepLine` of a line that runs each recipe `runs` times (per second or in all; only the proportions matter). */
-export function stepLine(graph: CandidateGraph, runs: ReadonlyMap<string, number>): StepLine {
-  const line: StepLine = { targets: new Set(graph.targets), used: recipeAmounts(graph, runs).used, conversions: conversionRuns(graph, runs) };
+/**
+ * The `StepLine` of a line that runs each recipe `runs` times (per second or in all; only the proportions matter), with
+ * the `value` of its goods when the caller has one.
+ */
+export function stepLine(graph: CandidateGraph, runs: ReadonlyMap<string, number>, value?: Pick<StepLine, 'valueOf' | 'empties'>): StepLine {
+  const line: StepLine = {
+    targets: new Set(graph.targets), used: recipeAmounts(graph, runs).used, conversions: conversionRuns(graph, runs),
+    valueOf: value === undefined ? undefined : valueOfLine(value),
+  };
   if (graph.avoid !== undefined) line.avoid = graph.avoid;
+  if (value?.empties !== undefined) line.empties = value.empties;
+  if (graph.optionPins !== undefined) line.optionPins = graph.optionPins;
   return line;
+}
+
+const EMPTIES = new WeakMap<Pack, ReadonlySet<StuffKey>>();
+
+/** Every empty container of the pack (the `empty` of a `fluidContainers` entry: an Empty Cell), once per pack. */
+export function emptyContainers(pack: Pack): ReadonlySet<StuffKey> {
+  let set = EMPTIES.get(pack);
+  if (set === undefined) {
+    set = new Set((pack.fluidContainers ?? []).flatMap((c) => (c.empty === null ? [] : [c.empty])));
+    EMPTIES.set(pack, set);
+  }
+  return set;
 }
 
 /** The warnings that follow from a step's recipe and machine: cleanroom, fast hand-crafting, one energy hatch. */
@@ -329,8 +398,8 @@ export type StepSize = Pick<PlanStep, 'count' | 'owned' | 'runsPerSecond' | 'uti
 
 /**
  * The step of a picked recipe, sized by the caller: the machine and its overclocked speed, per-run inputs (one per
- * good, slots added up) and outputs (expected amounts), the main output, the overclock inputs, the cleanroom flag and
- * the programmed circuit.
+ * good, slots added up) and outputs (expected amounts), the main output, the overclock inputs, the cleanroom flag, the
+ * programmed circuit and, for a supply recipe, the good it supplies (`suppliedKey`, fix spec R2).
  * `alternatives` stays empty here (Task 14 fills it).
  */
 export function describeStep(pack: Pack, p: PickedRecipe, line: StepLine, size: StepSize): PlanStep {
@@ -343,7 +412,7 @@ export function describeStep(pack: Pack, p: PickedRecipe, line: StepLine, size: 
     outputs: r.outputs.map((o) => ({ key: o.key, amount: o.amount * o.chance, chance: o.chance })),
     alternatives: [], handCraft: pick.handCraft, warnings: size.warnings,
   };
-  const mainOutput = mainOutputOf(r, line.targets, line.used);
+  const mainOutput = mainOutputOf(r, line);
   if (mainOutput !== undefined) step.mainOutput = mainOutput;
   step.oc = {
     recipeEuPerTick: r.euPerTick, recipeDurationTicks: baseDurationTicks(r, pick), machineVoltage: pick.oc.machineVoltage,
@@ -353,6 +422,8 @@ export function describeStep(pack: Pack, p: PickedRecipe, line: StepLine, size: 
   if (p.lp.needsCleanroom) step.needsCleanroom = true;
   const circuit = recipeCircuit(r);
   if (circuit !== undefined) step.circuit = circuit;
+  const supply = suppliedKey(r, pack.fluidContainers);
+  if (supply !== undefined) step.supply = supply;
   return step;
 }
 
@@ -364,12 +435,16 @@ export function describeStep(pack: Pack, p: PickedRecipe, line: StepLine, size: 
  */
 export function planSteps(
   pack: Pack, graph: CandidateGraph, sol: Solution,
-  opts: { settings: PlanSettings; groupTier: number; coilHeat: number; ctx: PlanContext; perSecondScale: number; multiblocks?: ReadonlySet<number> },
+  opts: {
+    settings: PlanSettings; groupTier: number; coilHeat: number; ctx: PlanContext; perSecondScale: number; multiblocks?: ReadonlySet<number>;
+    /** What the line's goods are worth and the pack's empty containers, for each step's main output (`StepLine`). */
+    value?: Pick<StepLine, 'valueOf' | 'empties'>;
+  },
 ): PlanStep[] {
   const { settings, groupTier, coilHeat, ctx, perSecondScale, multiblocks } = opts;
   const owned = ownedMachineMap(ctx, settings);
   const unclaimed = new Map(owned);
-  const line = stepLine(graph, sol.runs);
+  const line = stepLine(graph, sol.runs, opts.value);
   return pickStepMachines(pack, graph, sol.runs, { settings, groupTier, coilHeat, owned, multiblocks }).map((p) => {
     const runsPerSecond = p.runs * perSecondScale;
     const perMachine = p.pick.runsPerSecondPerMachine;
@@ -394,16 +469,18 @@ function baseDurationTicks(r: Recipe, pick: MachinePick): number {
  * Item and fluid flows per unit of time. Per real good, each producer (`raw` for what the line buys, else the recipe)
  * is split across its consumers (recipes, `out` for the targets' demand, `sink` for what the line throws away) in
  * proportion to what each takes. Convert recipes are transparent: what one takes of an option goes on to the recipes
- * that consume its virtual good, in proportion to their use. Flows under 1e-9 are dropped; values are rounded to 9
- * decimal places and sorted by `from`, `to`, `key`.
+ * that consume its virtual good, in proportion to their use. A flow at most `FLOW_DROP_REL` of what its producer makes
+ * of the good is dropped, and a target's `out` flow needs more than that share of what is made of it; values keep 9
+ * significant digits and are sorted by `from`, `to`, `key`.
  */
 export function buildFlows(graph: CandidateGraph, sol: Solution, targets: StuffKey[]): PlanFlow[] {
   const { made, used } = recipeAmounts(graph, sol.runs);
   for (const [key, amount] of sol.buys) addAmount(made, key, RAW, amount);
   for (const [key, amount] of sol.sinks) addAmount(used, key, SINK, amount);
   for (const target of new Set(targets)) {
-    const out = sum(made.get(target)) - sum(used.get(target));
-    if (out > TINY) addAmount(used, target, OUT, out);
+    const total = sum(made.get(target));
+    const out = total - sum(used.get(target));
+    if (out > FLOW_DROP_REL * total) addAmount(used, target, OUT, out);
   }
 
   // Convert recipes are transparent: what one takes of an option goes on to the users of its virtual good.
@@ -428,7 +505,7 @@ export function buildFlows(graph: CandidateGraph, sol: Solution, targets: StuffK
     for (const [from, produced] of producers) {
       for (const [to, amount] of consumers) {
         const perSecond = (produced * amount) / total;
-        if (perSecond >= TINY) flows.push({ from, to, key, perSecond: round9(perSecond) });
+        if (perSecond > FLOW_DROP_REL * produced) flows.push({ from, to, key, perSecond: sig9(perSecond) });
       }
     }
   }

@@ -8,7 +8,7 @@ import type { StuffKey } from '../../shared/keys.ts';
 import type { Pack, Product } from '../../shared/types/pack.ts';
 import type { PlanContext, PlanSettings, PlanStep } from '../../shared/types/plan.ts';
 import type { CandidateGraph, LpRecipe } from './candidates.ts';
-import { describeStep, machineWarnings, ownedMachineMap, pickStepMachines, stepLine, type PickedRecipe } from './machines.ts';
+import { describeStep, machineWarnings, ownedMachineMap, pickStepMachines, stepLine, type PickedRecipe, type StepLine } from './machines.ts';
 import { solveLp, type LpRow } from './lp.ts';
 import type { Solution } from './solve.ts';
 
@@ -30,7 +30,7 @@ const TICKS_PER_SECOND = 20;
 const PSEUDO_IDS: ReadonlySet<number> = new Set(Object.values(PSEUDO_MACHINES));
 const CHANCED_WARNING = 'Chanced outputs: amounts are expected values; a small batch may come out short';
 
-/** 9 decimal places; −0 reads 0 (the rounding of `Solution`). */
+/** 9 decimal places; −0 reads 0: whole-batch amounts (rates use `sig9`). */
 function round9(x: number): number {
   return Math.round(x * 1e9) / 1e9 || 0;
 }
@@ -308,7 +308,11 @@ function fillSeconds(graph: CandidateGraph, runs: ReadonlyMap<string, number>, p
  */
 export async function makeN(
   pack: Pack, graph: CandidateGraph, sol: Solution, demand: ReadonlyMap<StuffKey, number>,
-  opts: { settings: PlanSettings; groupTier: number; coilHeat: number; ctx: PlanContext; multiblocks?: ReadonlySet<number> },
+  opts: {
+    settings: PlanSettings; groupTier: number; coilHeat: number; ctx: PlanContext; multiblocks?: ReadonlySet<number>;
+    /** What the line's goods are worth and the pack's empty containers, for each step's main output (`StepLine`). */
+    value?: Pick<StepLine, 'valueOf' | 'empties'>;
+  },
 ): Promise<MakeNResult> {
   const { settings, groupTier, coilHeat, ctx, multiblocks } = opts;
   const whole = await wholeRuns(graph, sol, demand);
@@ -330,7 +334,7 @@ export async function makeN(
   for (const [mteId, ticks] of workOfType) busiest = Math.max(busiest, ticks / (machinesOf(mteId) * TICKS_PER_SECOND));
   const totalSeconds = busiest + fillSeconds(graph, whole.runs, picked, demand.keys());
 
-  const line = stepLine(graph, whole.runs);
+  const line = stepLine(graph, whole.runs, opts.value);
   const steps = picked.map((p): PlanStep => {
     const mteId = p.pick.mteId;
     const count = machinesOf(mteId);

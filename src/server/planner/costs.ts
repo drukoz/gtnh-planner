@@ -24,6 +24,15 @@ const UNREACHED = 1e6;
 const UNREACHED_TOLERANCE = 1e-6;
 /** A good is makeable when the makeability LP gives it a surplus above this; at the optimum every surplus is 0 or 1. */
 const MAKEABLE = 0.5;
+/**
+ * With supporting lines off (`routeDerived: false`), a derived material is bought only within this many recipe layers
+ * of the seeds (`Availability.depth`; fix spec R6): on the 2.9 export that keeps stock alloys (red alloy 1, soldering
+ * alloy 2, annealed copper 2, redstone alloy 3, gallium arsenide 3, aluminium at MV 4) and leaves out plastics and
+ * petrochemicals (polyethylene 6, PVC 6, PTFE 7, epoxid 8, SBR 8).
+ */
+export const DERIVED_LEAF_MAX_DEPTH = 4;
+/** GT prefixes of the material forms an ore gives: only a line whose target has one of them buys ore blocks (fix spec R8). */
+export const ORE_LINE_PREFIXES: readonly string[] = Object.freeze(['dust', 'ingot', 'gem', 'nugget', 'crushed', 'ore', 'rawOre']);
 
 export interface PriceTable { price(key: StuffKey): number /* per item or per litre */; costPerIngot(material: string): number }
 
@@ -47,6 +56,11 @@ function moltenMaterials(pack: Pack): Map<string, string> {
   return byId;
 }
 
+/** The material a molten fluid (`fluid:molten.<id>`) is of: `fluid:molten.redalloy` → `RedAlloy`; none for other keys. */
+export function moltenMaterial(pack: Pack, key: StuffKey): string | undefined {
+  return key.startsWith(MOLTEN_PREFIX) ? moltenMaterials(pack).get(key.slice(MOLTEN_PREFIX.length)) : undefined;
+}
+
 /**
  * Prices in ingot-equivalents (architecture §5). `overrides` holds per-project costs by key (which win over every rule)
  * and costs per ingot by material name. A molten fluid whose material the pack does not list still counts 144 L per ingot.
@@ -59,7 +73,7 @@ export function makePrices(pack: Pack, overrides: Record<string, number>): Price
     if (FREE.has(key)) return 0;
     if (isFluidKey(key)) {
       if (pack.fluids.get(key)?.molten !== true) return 1 / LITRES_PER_UNIT;
-      const material = key.startsWith(MOLTEN_PREFIX) ? moltenMaterials(pack).get(key.slice(MOLTEN_PREFIX.length)) : undefined;
+      const material = moltenMaterial(pack, key);
       return (material === undefined ? 1 : costPerIngot(material)) / LITRES_PER_INGOT;
     }
     const gt = pack.items.get(key)?.gt;
@@ -72,35 +86,68 @@ export function makePrices(pack: Pack, overrides: Record<string, number>): Price
 
 const NOT_A_LEAF: LeafDecision = { buyable: false, cost: 0, leafClass: null };
 const UNAVAILABLE: LeafDecision = { buyable: false, cost: 0, leafClass: 'unavailable' };
+const NO_KEYS: ReadonlySet<StuffKey> = new Set();
 
 /** A cost override for `key` itself, its GT material, or the material of its molten fluid (the rules of `makePrices`). */
 export function hasCostOverride(pack: Pack, overrides: Record<string, number>, key: StuffKey): boolean {
   if (Object.hasOwn(overrides, key)) return true;
-  const material = pack.items.get(key)?.gt?.material
-    ?? (key.startsWith(MOLTEN_PREFIX) ? moltenMaterials(pack).get(key.slice(MOLTEN_PREFIX.length)) : undefined);
+  const material = pack.items.get(key)?.gt?.material ?? moltenMaterial(pack, key);
   return material !== undefined && Object.hasOwn(overrides, material);
+}
+
+const ORE_PARTS = new WeakMap<Pack, ReadonlySet<StuffKey>>();
+
+/** An ore block or raw ore: its GT prefix is an ore prefix (`isOrePrefix`), or some material lists it as its ore part. */
+function isOreBlock(pack: Pack, key: StuffKey): boolean {
+  const prefix = pack.items.get(key)?.gt?.prefix;
+  if (prefix !== undefined && isOrePrefix(prefix)) return true;
+  let parts = ORE_PARTS.get(pack);
+  if (parts === undefined) {
+    const keys = new Set<StuffKey>();
+    for (const material of pack.materials.values()) {
+      for (const part of [material.parts?.ore, material.parts?.rawOre]) if (part !== undefined) keys.add(part);
+    }
+    parts = keys;
+    ORE_PARTS.set(pack, parts);
+  }
+  return parts.has(key);
+}
+
+/** The line makes a material form an ore gives (`ORE_LINE_PREFIXES`): its target is a GT item with such a prefix. */
+function isMaterialLine(pack: Pack, target: StuffKey | null): boolean {
+  const prefix = target === null ? undefined : pack.items.get(target)?.gt?.prefix;
+  return prefix !== undefined && ORE_LINE_PREFIXES.some((p) => prefix.startsWith(p));
 }
 
 /**
  * Which goods the line buys (spec §3.3, §5): "we already make this" items at their cost (key override, else `stopCost`,
- * else the price), free and natural goods, and base items the group can get at its tier; a derived base item only
- * while the project does not route derived materials, and then at `derivedCost` when that knows what making it costs
- * and no cost override names it (with the recipes and free input of its chain, `LeafDecision.steps` and `free`), else
- * at its price. When `derivedCost` says Infinity (only a chain through the line's target makes it: Magnetic Steel for
- * Steel) it is no leaf at all, so the line never buys a form of its own target. Base items it cannot get are never
- * buyable.
+ * else the price), free and natural goods (gathered blocks among them, fix spec R1) except the free inputs of
+ * `opts.supplied` (`PlanBasis.supplied`, fix spec R2: a running line makes those with their generator, a rock breaker,
+ * pump or compressor), and base items the group can get at its tier, with three exceptions (fix spec R5, R6, R8):
+ * - a derived fluid is never bought: a sourced fluid is bought only where a source is reachable (`direct`), and every
+ *   other fluid the line needs is made, so chemicals such as ethylene get a line behind them;
+ * - a derived base item is bought only while the project does not plan supporting lines (`routeDerived`) and only when
+ *   it is shallow (`Availability.depth` at most `DERIVED_LEAF_MAX_DEPTH`: alloys, not plastics), and then at
+ *   `derivedCost` when that knows what making it costs and no cost override names it (with the recipes and free input
+ *   of its chain, `LeafDecision.steps` and `free`), else at its price. When `derivedCost` says Infinity (only a chain
+ *   through the line's target makes it: Magnetic Steel for Steel) it is no leaf at all, so the line never buys a form of
+ *   its own target;
+ * - an ore block or raw ore (`isOreBlock`) is bought only by a line whose target is a material form an ore gives
+ *   (`isMaterialLine`): any other line bought Chalcopyrite Ore to run ore processing for its sulfuric acid and copper.
+ * Base items it cannot get are never buyable.
  *
  * `derivedCost` is what making the derived item on its own costs (pricing.ts: `standaloneCosts` over the cost model's
- * graph, where derived materials are routed), undefined when that is not known. A flat price of 1 made exotic derived
- * dusts the cheapest way to make ordinary parts (Poly-Si and gallium arsenide wafers for an Electronic Circuit), and a
- * price above what the line pays to make it in place made the LP route the whole chain anyway (the 20-step oil chain
- * behind an Epoxid Bar priced at 1 while making it costs 0.69). At exactly that cost, buying it and making it in place
- * tie and the later stages (fewest recipes, then power) choose.
+ * graph, where derived materials are routed, never below its price), undefined when that is not known. A flat price of
+ * 1 made exotic derived dusts the cheapest way to make ordinary parts (Poly-Si and gallium arsenide wafers for an
+ * Electronic Circuit), and a price above what the line pays to make it in place made the LP route the whole chain
+ * anyway (the 20-step oil chain behind an Epoxid Bar priced at 1 while making it costs 0.69). At exactly that cost,
+ * buying it and making it in place tie and the later stages (fewest recipes, then power) choose.
  */
 export function makeLeafOracle(
   pack: Pack, settings: PlanSettings, avail: Availability, prices: PriceTable, stopCost?: (key: StuffKey) => number,
-  derivedCost?: (key: StuffKey) => Standalone | undefined,
+  derivedCost?: (key: StuffKey) => Standalone | undefined, opts?: { supplied?: ReadonlySet<StuffKey> },
 ): LeafOracle {
+  const supplied = opts?.supplied ?? NO_KEYS;
   /** A derived leaf: its price under a cost override, else what making it costs, else its price. */
   const derived = (key: StuffKey): LeafDecision => {
     const made = hasCostOverride(pack, settings.costOverrides, key) ? undefined : derivedCost?.(key);
@@ -110,20 +157,24 @@ export function makeLeafOracle(
   };
   const expand = new Set(settings.expandItems);
   const stop = new Set(settings.stopItems);
+  const buysOres = isMaterialLine(pack, settings.target);
   return (key) => {
     if (expand.has(key)) return NOT_A_LEAF;
     if (stop.has(key)) {
       return { buyable: true, cost: own(settings.costOverrides, key) ?? stopCost?.(key) ?? prices.price(key), leafClass: 'stop' };
     }
     const leafClass = avail.classOf(key);
+    if (leafClass === 'free' && supplied.has(key)) return NOT_A_LEAF;
     if (leafClass === 'free' || leafClass === 'natural') return { buyable: true, cost: prices.price(key), leafClass };
     if (!isBaseItem(pack, key)) return NOT_A_LEAF;
     switch (leafClass) {
       case 'direct':
       case 'byproduct':
+        if (!buysOres && isOreBlock(pack, key)) return NOT_A_LEAF;
         return { buyable: true, cost: prices.price(key), leafClass };
       case 'derived':
-        return settings.routeDerived ? NOT_A_LEAF : derived(key);
+        if (isFluidKey(key) || settings.routeDerived || avail.depth(key) > DERIVED_LEAF_MAX_DEPTH) return NOT_A_LEAF;
+        return derived(key);
       case 'unavailable':
         return UNAVAILABLE;
       default:

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { applyOp, defaultSettings, normalizeSettings, validateOp } from '../../../src/shared/project/apply-op.ts';
+import { applyOp, defaultSettings, MAX_STEP_CHARGE, normalizeSettings, SETTINGS_VERSION, validateOp } from '../../../src/shared/project/apply-op.ts';
+import { DEFAULT_STEP_CHARGE } from '../../../src/shared/types/plan.ts';
 import type { Project } from '../../../src/shared/types/project.ts';
 
 const AT = '2026-10-17T12:00:00.000Z';
@@ -54,10 +55,15 @@ describe('applyOp', () => {
 describe('defaultSettings / normalizeSettings', () => {
   it('has the decided defaults', () => {
     const s = defaultSettings();
-    expect(s).toMatchObject({ target: null, mode: 'rate', amount: 1, per: 'min', tier: null, routeDerived: false,
-      logistics: 'direct', coilHeat: null, automateCrafting: false, dims: { policy: 'progression', overrides: {} } });
+    expect(s).toMatchObject({ target: null, mode: 'rate', amount: 1, per: 'min', tier: null, routeDerived: true,
+      logistics: 'direct', coilHeat: null, automateCrafting: false, dims: { policy: 'progression', overrides: {} }, settingsVersion: 2,
+      stepCharge: 0.02 });
     expect(s.excludedCategories).toEqual(['recycling', 'massfab', 'replicator', 'scrap', 'lava-centrifuge', 'programmed-circuit-conversion']);
     expect(s.declineReuse).toEqual([]);
+    expect(SETTINGS_VERSION).toBe(2);
+    // Fix spec §3 as the user answered it (§10 answer 3): each step must save 2 % of the least raw material; at most 50 %.
+    expect(DEFAULT_STEP_CHARGE).toBe(0.02);
+    expect(MAX_STEP_CHARGE).toBe(0.5);
   });
   it('fills fields missing from an older stored project', () => {
     const s = normalizeSettings({ target: 'fluid:steam', amount: 5 } as never);
@@ -65,6 +71,38 @@ describe('defaultSettings / normalizeSettings', () => {
     expect(s.stopItems).toEqual([]);
     expect(s.declineReuse).toEqual([]);
     expect(s.dims).toEqual({ policy: 'progression', overrides: {} });
+    // Ruling P10: a project stored before plan 09 reads as settings version 1 (so the server switches it once), and
+    // normalizing alone keeps the routeDerived it stored.
+    expect(s.settingsVersion).toBe(1);
+    expect(normalizeSettings({ routeDerived: false } as never)).toMatchObject({ routeDerived: false, settingsVersion: 1 });
+    expect(normalizeSettings({ routeDerived: false, settingsVersion: 2 } as never)).toMatchObject({ routeDerived: false, settingsVersion: 2 });
+  });
+  it('fills the new settings of an old project', () => {
+    // A project stored before plan 09: no stepCharge, haveSupply or settingsVersion, supporting lines off. Normalizing
+    // fills the new defaults and keeps its own choice (the server switches routeDerived once, ruling P10).
+    const s = normalizeSettings({ target: 't:x@0', routeDerived: false } as never);
+    expect(s).toMatchObject({ stepCharge: 0.02, haveSupply: [], optionChoice: {}, routeDerived: false, settingsVersion: 1 });
+    expect(normalizeSettings({ stepCharge: 0.15 } as never).stepCharge).toBe(0.15);
+  });
+});
+
+// Pinned ingredient options (plan 09 Task 5; fix spec R9, §3).
+describe('optionChoice', () => {
+  const optionOp = (optionChoice: unknown) => ({ op: 'settings', patch: { optionChoice } });
+  it('is empty by default and for an older stored project', () => {
+    expect(defaultSettings().optionChoice).toEqual({});
+    expect(normalizeSettings({ target: 't:x@0' } as never).optionChoice).toEqual({});
+    expect(normalizeSettings({ optionChoice: { 'r1#100': 'fluid:molten.tin' } } as never).optionChoice).toEqual({ 'r1#100': 'fluid:molten.tin' });
+  });
+  it('takes <recipe id>#<slot> keys and option keys of 1 to 300 characters', () => {
+    expect(validateOp(optionOp({ 'r1#100': 'fluid:molten.tin' }))).toBeNull();
+    expect(validateOp(optionOp({}))).toBeNull();
+    expect(validateOp(optionOp({ [`${'r'.repeat(100)}#9999`]: 'x'.repeat(300) }))).toBeNull();
+    for (const key of ['nohash', 'r#x', '#1', 'r#12345', `${'r'.repeat(101)}#1`, 'a#b#1']) {
+      expect(validateOp(optionOp({ [key]: 'fluid:molten.tin' })), key).toEqual(expect.any(String));
+    }
+    for (const value of ['x'.repeat(301), '', 5, null]) expect(validateOp(optionOp({ 'r1#100': value })), String(value)).toEqual(expect.any(String));
+    for (const v of [null, 'r1#100', ['r1#100']]) expect(validateOp(optionOp(v)), JSON.stringify(v)).toEqual(expect.any(String));
   });
 });
 
@@ -80,6 +118,13 @@ describe('validateOp', () => {
     [{ op: 'settings', patch: { bogus: 1 } }],
     [{ op: 'settings', patch: { declineReuse: ['121'] } }],
     [{ op: 'settings', patch: { declineReuse: [1.5] } }],
+    [{ op: 'settings', patch: { settingsVersion: 1 } }],
+    [{ op: 'settings', patch: { settingsVersion: 1.5 } }],
+    [{ op: 'settings', patch: { settingsVersion: 'x' } }],
+    [{ op: 'settings', patch: { stepCharge: 0.6 } }],
+    [{ op: 'settings', patch: { stepCharge: -0.1 } }],
+    [{ op: 'settings', patch: { stepCharge: 'x' } }],
+    [{ op: 'settings', patch: { stepCharge: Number.NaN } }],
     [{ op: 'mark', row: 'foo', on: true }],
     [{ op: 'addNote', note: { id: 'n', text: 'x'.repeat(4001) } }],
     [{ op: 'rename', name: '   ' }],
@@ -90,7 +135,9 @@ describe('validateOp', () => {
   it('accepts a normal settings patch and a tick', () => {
     expect(validateOp({ op: 'settings', patch: { mode: 'makeN', amount: 64, tier: 2 } })).toBeNull();
     expect(validateOp({ op: 'settings', patch: { declineReuse: [121, 1000] } })).toBeNull();
+    expect(validateOp({ op: 'settings', patch: { routeDerived: true, settingsVersion: 2 } })).toBeNull();
     expect(validateOp({ op: 'mark', row: 'build:gregtech:gt.metaitem.01@2032', on: true })).toBeNull();
+    for (const stepCharge of [0, 0.02, 0.15, 0.5]) expect(validateOp({ op: 'settings', patch: { stepCharge } })).toBeNull();
   });
 });
 
@@ -125,7 +172,8 @@ describe('applyOp (more)', () => {
 describe('normalizeSettings (more)', () => {
   it('fills a partial dims and an absent settings object', () => {
     expect(normalizeSettings({ dims: { policy: 'visited' } } as never).dims).toEqual({ policy: 'visited', overrides: {} });
-    expect(normalizeSettings(undefined)).toEqual(defaultSettings());
+    // A missing settings object is an old project's: version 1 (ruling P10), every other field the default.
+    expect(normalizeSettings(undefined)).toEqual({ ...defaultSettings(), settingsVersion: 1 });
   });
 });
 
@@ -164,6 +212,21 @@ describe('validateOp (more)', () => {
     [{ op: 'clearPlacement' }],
   ])('accepts %j', (op) => {
     expect(validateOp(op)).toBeNull();
+  });
+});
+
+// Free inputs the group already supplies (plan 09 Task 3; fix spec R2, §3).
+describe('haveSupply', () => {
+  it('is an empty list by default and for an older stored project', () => {
+    expect(defaultSettings().haveSupply).toEqual([]);
+    expect(normalizeSettings({ target: 't:x@0' } as never).haveSupply).toEqual([]);
+    expect(normalizeSettings({ haveSupply: ['fluid:water'] } as never).haveSupply).toEqual(['fluid:water']);
+  });
+  it('takes a list of keys', () => {
+    expect(validateOp({ op: 'settings', patch: { haveSupply: ['minecraft:cobblestone@0', 'fluid:water'] } })).toBeNull();
+    expect(validateOp({ op: 'settings', patch: { haveSupply: [] } })).toBeNull();
+    expect(validateOp({ op: 'settings', patch: { haveSupply: 'x' } })).toEqual(expect.any(String));
+    expect(validateOp({ op: 'settings', patch: { haveSupply: [1] } })).toEqual(expect.any(String));
   });
 });
 

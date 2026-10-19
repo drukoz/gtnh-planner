@@ -39,6 +39,18 @@ describe('mergeLayoutIntoPlan', () => {
       { key: 'k', amount: 3, why: 'a; b', group: 'logistics' }, { key: 'm', amount: 2, why: 'm; n', group: 'machines' }]);
   });
 
+  it('keeps what each build line needs of a total, summed per line in the order first seen (architecture §11.36)', () => {
+    const merged = mergeBom(
+      [{ key: 't:tin@0', amount: 6, why: 'for Basic Macerator, Basic Assembler', neededFor: [{ key: 'gregtech:gt.blockmachines@2001', amount: 4 }, { key: 'gregtech:gt.blockmachines@2002', amount: 2 }] }],
+      [{ key: 't:tin@0', amount: 5, why: 'for 2x Tin Cable, Basic Assembler', neededFor: [{ key: 'gregtech:gt.blockmachines@1247', amount: 3 }, { key: 'gregtech:gt.blockmachines@2002', amount: 2 }] }]);
+    expect(merged).toEqual([{ key: 't:tin@0', amount: 11, why: 'for Basic Macerator, Basic Assembler; for 2x Tin Cable, Basic Assembler', neededFor: [
+      { key: 'gregtech:gt.blockmachines@2001', amount: 4 }, { key: 'gregtech:gt.blockmachines@2002', amount: 4 }, { key: 'gregtech:gt.blockmachines@1247', amount: 3 }] }]);
+    expect(merged[0]!.neededFor!.reduce((sum, n) => sum + n.amount, 0)).toBe(merged[0]!.amount);
+    // a merged line without neededFor leaves it out: the rest would no longer add up to the amount
+    expect(mergeBom([{ key: 'k', amount: 1, why: 'a', neededFor: [{ key: 'x', amount: 1 }] }], [{ key: 'k', amount: 2, why: 'b' }]))
+      .toEqual([{ key: 'k', amount: 3, why: 'a; b' }]);
+  });
+
   it('takes the casings that energy and maintenance hatches replace off an EBF build list', () => {
     const plan = { ...makePlan([{ id: 'e', mteId: IDS.EBF, count: 1, tier: 2, euPerTick: 120 }]), buildList: [
       { key: 'gregtech:gt.blockcasings5@1', amount: 16, why: 'structure of 1× Electric Blast Furnace', group: 'machines' as const },
