@@ -158,6 +158,17 @@ describe('solveLine', () => {
     expect(lv.blockers).toEqual([{ key: 't:titanium_plate@0', reason: 'rejected', needTier: 2 }]);
     expect(findBlockers(graphFor(mini, 't:titanium_plate@0', 2))).toEqual([{ key: 't:titanium_ingot@0', reason: 'unavailable' }]);
   });
+  it('probes the least raw material only', async () => {
+    // Fix spec R3: a probe says whether the line plans and what its least raw material is (the avoid trials need no more).
+    const graph = graphFor(mini, 't:circuit@0', 1);
+    const full = await solveLine(graph, one('t:circuit@0'), { stepCharge: 0.05, handWeight: 3 });
+    const probe = await solveLine(graph, one('t:circuit@0'), { stepCharge: 0.05, handWeight: 3, probe: true });
+    expect(probe.status).toBe(full.status);
+    expect(probe.rawCost).toBe(full.leastRawCost);
+    expect(probe.leastRawCost).toBe(full.leastRawCost);
+    const lv = await solveLine(graphFor(mini, 't:titanium_plate@0', 1), one('t:titanium_plate@0'), { probe: true });
+    expect(lv.status).toBe('infeasible');
+  });
 });
 
 describe('loop guard and blockers', () => {

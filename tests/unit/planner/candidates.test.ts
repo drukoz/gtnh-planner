@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec, type IngredientSpec, type RecipeSpec } from '../../helpers/pack-spec.ts';
 import { acceptRecipe, buildCandidates, MAX_RECIPES, virtualKey, type PlanEnv, type LeafOracle } from '../../../src/server/planner/candidates.ts';
+import { solveLine } from '../../../src/server/planner/solve.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import { EXCLUSION_RULES } from '../../../src/server/planner/candidates.ts';
 import { DEFAULT_EXCLUDED_CATEGORIES } from '../../../src/shared/types/plan.ts';
@@ -197,6 +198,81 @@ describe('candidate rules without a fixture test above', () => {
     expect(g.truncated).toBe(true);
     expect(g.warnings).toEqual([{ code: 'graph-too-big', text: 'This chain is too large to plan in one go; mark some parts as "we already make this"' }]);
     expect(buildCandidates(p, defaultSettings(), env(1), oracle, ['t@0'], { maxRecipes: 10 }).recipes).toHaveLength(10);
+  });
+});
+
+// Fix spec R4 (pruning keeps the simplest route), R10 (canonical members win ties) and D14 (a filled container is emptied).
+describe('pruning by steps, carried containers and canonical ties', () => {
+  const M = (mteId: number, maps: string[]) => ({ mteId, name: `M${mteId}`, maps, tier: 1 });
+  const step = (id: string, from: string, to: string, amount = 1): RecipeSpec => ({ id, map: 'gt.recipe.assembler', in: [[from, amount]], out: [[to, 1]], eut: 16 });
+  const priced = (costs: Record<string, number>): LeafOracle => (k) => (Object.hasOwn(costs, k)
+    ? { buyable: true, cost: costs[k] as number, leafClass: 'direct' } : { buyable: false, cost: 0, leafClass: null });
+  const ids = (p: ReturnType<typeof packFromSpec>, leaf: LeafOracle, target: string) =>
+    buildCandidates(p, defaultSettings(), env(1), leaf, [target]).recipes.map((r) => r.id);
+
+  it('neither charges nor waits for cells a recipe hands on', () => {
+    // Steel from iron dust and 1,000 L oxygen (an EBF), or from an iron ingot and 2 coal (a Bricked Blast Furnace, 3 raw).
+    // Oxygen comes from free water in an electrolyzer that hands its 2 Empty Cells on as Hydrogen Cells, or from 10
+    // quartz dust (12.5 raw). Charging the cells (15 tin each) and waiting for them to be priced made oxygen cost 12.5,
+    // so the EBF recipe (13.5) was pruned.
+    const p = packFromSpec({
+      machines: [M(1, ['gt.recipe.blastfurnace']), M(2, ['gt.recipe.primitiveblastfurnace']), M(3, ['gt.recipe.electrolyzer']), M(4, ['gt.recipe.assembler'])],
+      recipes: [
+        { id: 'ebf-steel', map: 'gt.recipe.blastfurnace', in: [['t:iron_dust@0', 1], ['fluid:oxygen', 1000]], out: [['t:steel_ingot@0', 1]], eut: 30 },
+        { id: 'bbf-steel', map: 'gt.recipe.primitiveblastfurnace', in: [['t:iron_ingot@0', 1], ['t:coal@0', 2]], out: [['t:steel_ingot@0', 1]] },
+        { id: 'electrolyze', map: 'gt.recipe.electrolyzer', in: [['t:empty_cell@0', 2], ['fluid:water', 1000]], out: [['fluid:oxygen', 1000], ['t:h_cell@0', 2]], eut: 30 },
+        { id: 'dust-oxygen', map: 'gt.recipe.electrolyzer', in: [['t:quartz_dust@0', 10]], out: [['fluid:oxygen', 1000]], eut: 30 },
+        step('make-cell', 't:tin_ingot@0', 't:empty_cell@0', 15),
+      ],
+      fluidContainers: [{ container: 't:h_cell@0', empty: 't:empty_cell@0', fluid: 'fluid:hydrogen', amount: 1000 }],
+    });
+    const leaf = priced({ 't:iron_dust@0': 1, 't:iron_ingot@0': 1, 't:coal@0': 1, 'fluid:water': 0, 't:quartz_dust@0': 1.25, 't:tin_ingot@0': 1 });
+    expect(ids(p, leaf, 't:steel_ingot@0')).toEqual(expect.arrayContaining(['ebf-steel', 'electrolyze']));
+  });
+  it('keeps the simplest producer', () => {
+    // One recipe from s (2.5), or four from r (1): the short route is 2.5× the cheapest and still kept.
+    const p = packFromSpec({ machines: [M(1, ['gt.recipe.assembler'])], recipes: [
+      step('simple', 't:s@0', 't:t@0'),
+      step('c1', 't:r@0', 't:m1@0'), step('c2', 't:m1@0', 't:m2@0'), step('c3', 't:m2@0', 't:m3@0'), step('from-m', 't:m3@0', 't:t@0'),
+    ] });
+    expect(ids(p, priced({ 't:s@0': 2.5, 't:r@0': 1 }), 't:t@0')).toEqual(['c1', 'c2', 'c3', 'from-m', 'simple']);
+  });
+  it('drops a producer far longer than the simplest', () => {
+    // t from s in 1 recipe (1.2), from r in 2 (1), or from l in 8 (1.5, or 0.5): the 8-recipe route is 7 steps longer
+    // than the simplest, so it stays only while it is the cheapest.
+    const long = Array.from({ length: 8 }, (_, i) => step(`l${i + 1}`, i === 0 ? 't:l@0' : `t:l${i}@0`, i === 7 ? 't:t@0' : `t:l${i + 1}@0`));
+    const p = packFromSpec({ machines: [M(1, ['gt.recipe.assembler'])], recipes: [
+      step('simple', 't:s@0', 't:t@0'), step('n1', 't:r@0', 't:n1@0'), step('from-n', 't:n1@0', 't:t@0'), ...long,
+    ] });
+    expect(ids(p, priced({ 't:s@0': 1.2, 't:r@0': 1, 't:l@0': 1.5 }), 't:t@0')).toEqual(['from-n', 'n1', 'simple']);
+    expect(ids(p, priced({ 't:s@0': 1.2, 't:r@0': 1, 't:l@0': 0.5 }), 't:t@0')).toEqual(expect.arrayContaining(['l1', 'l8', 'simple']));
+  });
+  it('prefers the canonical member at a tie', async () => {
+    // Oak Wood and modded logs fill one slot at the same price, the modded ones sorting first by key.
+    const logs = (keys: string[]) => packFromSpec({ machines: [M(1, ['gt.recipe.assembler'])], recipes: [
+      { id: 'saw', map: 'gt.recipe.assembler', in: [{ any: keys.map((k): [string, number] => [k, 1]) }], out: [['t:planks@0', 4]], eut: 16 }] });
+    const natural: LeafOracle = (k) => (k.includes(':log') ? { buyable: true, cost: 1, leafClass: 'natural' } : { buyable: false, cost: 0, leafClass: null });
+    const options = (p: ReturnType<typeof packFromSpec>) => buildCandidates(p, defaultSettings(), env(1), natural, ['t:planks@0']).recipes
+      .filter((r) => r.kind === 'convert').map((r) => r.coeffs.find(([, c]) => c < 0)?.[0]);
+    // A slot keeps three options: Oak Wood is among them.
+    expect(options(logs(['BiomesOPlenty:logs1@0', 'BiomesOPlenty:logs1@1', 'BiomesOPlenty:logs1@2', 'minecraft:log@0']))).toContain('minecraft:log@0');
+    // When the line keeps only one of two, it is Oak Wood.
+    const two = logs(['BiomesOPlenty:logs1@0', 'minecraft:log@0']);
+    const graph = buildCandidates(two, defaultSettings(), env(1), natural, ['t:planks@0']);
+    for (const opts of [{}, { stepCharge: 0.05 }]) {
+      const sol = await solveLine(graph, new Map([['t:planks@0', 1]]), opts);
+      expect([...sol.buys.keys()]).toEqual(['minecraft:log@0']);
+    }
+  });
+  it('adds the recipe that empties a filled container a recipe makes', () => {
+    // The press hands back an Oxygen Cell; a canner can empty it into its Empty Cell instead of the line throwing it away.
+    const p = packFromSpec({
+      machines: [M(1, ['gt.recipe.assembler']), M(2, ['gt.recipe.canner'])],
+      recipes: [{ id: 'press', map: 'gt.recipe.assembler', in: [['t:raw@0', 1]], out: [['t:t@0', 1], ['t:o2_cell@0', 1]], eut: 16 },
+                { id: 'empty-o2', map: 'gt.recipe.canner', in: [['t:o2_cell@0', 1]], out: [['fluid:oxygen', 1000], ['t:empty_cell@0', 1]], eut: 4 }],
+      fluidContainers: [{ container: 't:o2_cell@0', empty: 't:empty_cell@0', fluid: 'fluid:oxygen', amount: 1000 }],
+    });
+    expect(ids(p, priced({ 't:raw@0': 1 }), 't:t@0')).toEqual(['empty-o2', 'press']);
   });
 });
 

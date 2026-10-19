@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { applyOp, defaultSettings, normalizeSettings, SETTINGS_VERSION, validateOp } from '../../../src/shared/project/apply-op.ts';
+import { applyOp, defaultSettings, MAX_STEP_CHARGE, normalizeSettings, SETTINGS_VERSION, validateOp } from '../../../src/shared/project/apply-op.ts';
+import { DEFAULT_STEP_CHARGE } from '../../../src/shared/types/plan.ts';
 import type { Project } from '../../../src/shared/types/project.ts';
 
 const AT = '2026-10-17T12:00:00.000Z';
@@ -55,10 +56,14 @@ describe('defaultSettings / normalizeSettings', () => {
   it('has the decided defaults', () => {
     const s = defaultSettings();
     expect(s).toMatchObject({ target: null, mode: 'rate', amount: 1, per: 'min', tier: null, routeDerived: true,
-      logistics: 'direct', coilHeat: null, automateCrafting: false, dims: { policy: 'progression', overrides: {} }, settingsVersion: 2 });
+      logistics: 'direct', coilHeat: null, automateCrafting: false, dims: { policy: 'progression', overrides: {} }, settingsVersion: 2,
+      stepCharge: 0.02 });
     expect(s.excludedCategories).toEqual(['recycling', 'massfab', 'replicator', 'scrap', 'lava-centrifuge', 'programmed-circuit-conversion']);
     expect(s.declineReuse).toEqual([]);
     expect(SETTINGS_VERSION).toBe(2);
+    // Fix spec §3 as the user answered it (§10 answer 3): each step must save 2 % of the least raw material; at most 50 %.
+    expect(DEFAULT_STEP_CHARGE).toBe(0.02);
+    expect(MAX_STEP_CHARGE).toBe(0.5);
   });
   it('fills fields missing from an older stored project', () => {
     const s = normalizeSettings({ target: 'fluid:steam', amount: 5 } as never);
@@ -71,6 +76,13 @@ describe('defaultSettings / normalizeSettings', () => {
     expect(s.settingsVersion).toBe(1);
     expect(normalizeSettings({ routeDerived: false } as never)).toMatchObject({ routeDerived: false, settingsVersion: 1 });
     expect(normalizeSettings({ routeDerived: false, settingsVersion: 2 } as never)).toMatchObject({ routeDerived: false, settingsVersion: 2 });
+  });
+  it('fills the new settings of an old project', () => {
+    // A project stored before plan 09: no stepCharge, haveSupply or settingsVersion, supporting lines off. Normalizing
+    // fills the new defaults and keeps its own choice (the server switches routeDerived once, ruling P10).
+    const s = normalizeSettings({ target: 't:x@0', routeDerived: false } as never);
+    expect(s).toMatchObject({ stepCharge: 0.02, haveSupply: [], routeDerived: false, settingsVersion: 1 });
+    expect(normalizeSettings({ stepCharge: 0.15 } as never).stepCharge).toBe(0.15);
   });
 });
 
@@ -89,6 +101,10 @@ describe('validateOp', () => {
     [{ op: 'settings', patch: { settingsVersion: 1 } }],
     [{ op: 'settings', patch: { settingsVersion: 1.5 } }],
     [{ op: 'settings', patch: { settingsVersion: 'x' } }],
+    [{ op: 'settings', patch: { stepCharge: 0.6 } }],
+    [{ op: 'settings', patch: { stepCharge: -0.1 } }],
+    [{ op: 'settings', patch: { stepCharge: 'x' } }],
+    [{ op: 'settings', patch: { stepCharge: Number.NaN } }],
     [{ op: 'mark', row: 'foo', on: true }],
     [{ op: 'addNote', note: { id: 'n', text: 'x'.repeat(4001) } }],
     [{ op: 'rename', name: '   ' }],
@@ -101,6 +117,7 @@ describe('validateOp', () => {
     expect(validateOp({ op: 'settings', patch: { declineReuse: [121, 1000] } })).toBeNull();
     expect(validateOp({ op: 'settings', patch: { routeDerived: true, settingsVersion: 2 } })).toBeNull();
     expect(validateOp({ op: 'mark', row: 'build:gregtech:gt.metaitem.01@2032', on: true })).toBeNull();
+    for (const stepCharge of [0, 0.02, 0.15, 0.5]) expect(validateOp({ op: 'settings', patch: { stepCharge } })).toBeNull();
   });
 });
 

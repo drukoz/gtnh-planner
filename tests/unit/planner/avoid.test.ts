@@ -198,6 +198,16 @@ describe('planLine with materials to avoid', () => {
     expect(settingsHash({ ...s, avoid: ['Tin'] })).not.toBe(settingsHash({ ...s, avoid: ['Copper'] }));
     expect(settingsHash(old as PlanSettings)).toBe(settingsHash({ ...s, avoid: [] }));
   });
+  it('plans the plain line when it uses nothing avoided', async () => {
+    // Fix spec R3: the plain line and the avoid trials are probes (least raw material only) and only the line the avoid
+    // list leads to is planned in full; here that is the plain line itself.
+    const settings = S({ target: 't:circuit@0', tier: 2 });
+    const open = await planLine(pack, settings, emptyContext());
+    const p = await planLine(pack, { ...settings, avoid: ['Titanium'] }, emptyContext());
+    expect(p.status).toBe('ok');
+    expect(p.steps).toEqual(open.steps);
+    expect(p.avoided).toEqual([]);
+  });
   it('(g) plans a project without an avoid list exactly like one with an empty list', async () => {
     const s = S({ target: 't:circuit@0', amount: 30, tier: 1 });
     const { avoid: _, ...old } = s;

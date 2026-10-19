@@ -3,7 +3,7 @@
 // applying the same op again with the same `by` and `at` changes nothing but `rev`.
 // Pure TypeScript shared by server and browser: nothing from node:* may be imported here.
 
-import { DEFAULT_EXCLUDED_CATEGORIES, LogisticsMode, type PlanSettings } from '../types/plan.ts';
+import { DEFAULT_EXCLUDED_CATEGORIES, DEFAULT_STEP_CHARGE, LogisticsMode, type PlanSettings } from '../types/plan.ts';
 import type { Note, Project, ProjectOp } from '../types/project.ts';
 
 export const MAX_NOTE_LENGTH = 4000;
@@ -11,6 +11,8 @@ export const MAX_NAME_LENGTH = 80;
 /** Entries of `PlanSettings.avoid`, and the characters of each. */
 export const MAX_AVOID_ENTRIES = 50;
 export const MAX_AVOID_ENTRY_LENGTH = 300;
+/** The largest `PlanSettings.stepCharge` (fix spec §3): a step must then save half the line's least raw material. */
+export const MAX_STEP_CHARGE = 0.5;
 
 const MAX_TIER = 14;
 const MAX_AMOUNT = 1e9;
@@ -36,7 +38,7 @@ export function defaultSettings(): PlanSettings {
     target: null, mode: 'rate', amount: 1, per: 'min', tier: null, dims: { policy: 'progression', overrides: {} },
     routeDerived: true, logistics: 'direct', costOverrides: {}, stopItems: [], expandItems: [], recipeChoice: {},
     machineTier: {}, excludedCategories: [...DEFAULT_EXCLUDED_CATEGORIES], coilHeat: null, automateCrafting: false,
-    avoid: [], declineReuse: [], settingsVersion: SETTINGS_VERSION, haveSupply: [],
+    avoid: [], declineReuse: [], settingsVersion: SETTINGS_VERSION, haveSupply: [], stepCharge: DEFAULT_STEP_CHARGE,
   };
 }
 
@@ -168,6 +170,8 @@ const SETTING_CHECKS: { readonly [K in keyof PlanSettings]-?: Check } = {
     ? null : `settingsVersion must be a whole number of at least ${SETTINGS_VERSION}`),
   // Keys of free inputs; one that is no free input is kept and has no effect (fix spec §3).
   haveSupply: stringList('haveSupply'),
+  stepCharge: (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= MAX_STEP_CHARGE
+    ? null : `stepCharge must be a number from 0 to ${MAX_STEP_CHARGE}`),
 };
 
 const SETTING_KEYS: ReadonlySet<string> = new Set(Object.keys(defaultSettings()));

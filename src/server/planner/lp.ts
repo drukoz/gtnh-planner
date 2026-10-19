@@ -20,6 +20,12 @@ export interface LpModel {
   maxNodes?: number;
   /** Seconds the solve may take; a MIP that runs out keeps its best whole solution (`feasible`), if it found one. */
   timeLimit?: number;
+  // optional addition (the step-charge MIP, solve.ts; fix spec R3)
+  /**
+   * A start solution, one value per column (HiGHS `setSolution`): a MIP whose node limit stops it before it finds a
+   * better whole solution keeps this one (`feasible`). Only rows are scaled, so the columns' values need no scaling.
+   */
+  start?: number[];
 }
 /**
  * `objective` and `x` (one value per column) are meaningful only when `optimal`, or `feasible` (a MIP that stopped at
@@ -107,8 +113,19 @@ export function yieldToEventLoop(): Promise<void> {
   });
 }
 
+/** Throws RangeError for a start that does not give every column one finite value. */
+function checkStart(model: LpModel): void {
+  const start = model.start;
+  if (start === undefined) return;
+  if (start.length !== model.colCost.length) throw new RangeError(`LP start has ${start.length} values for ${model.colCost.length} columns`);
+  start.forEach((value, col) => {
+    if (!Number.isFinite(value)) throw new RangeError(`LP start: column ${col} is ${value}`);
+  });
+}
+
 export async function solveLp(model: LpModel): Promise<LpResult> {
   if (model.colCost.length === 0) return solveEmpty(model);
+  checkStart(model);
   // A solve is synchronous WebAssembly: yield first, so a plan of a dozen solves never holds the thread for all of them.
   await yieldToEventLoop();
   const highs = await runtime();
@@ -121,6 +138,13 @@ export async function solveLp(model: LpModel): Promise<LpResult> {
       ...(model.maxNodes === undefined ? {} : { mip_max_nodes: model.maxNodes, mip_rel_gap: 0, mip_abs_gap: 0, mip_feasibility_tolerance: 1e-10 }),
     });
     m.passModel(data);
+    if (model.start !== undefined) {
+      try {
+        m.setSolution({ colValue: Float64Array.from(model.start) });
+      } catch {
+        // A start HiGHS refuses (its shape was checked above) only loses the head start: the model solves without it.
+      }
+    }
     try {
       m.run();
     } catch {

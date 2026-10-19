@@ -26,6 +26,12 @@ export const FREE_KEYS: readonly StuffKey[] = ['fluid:water', 'fluid:lava', 'flu
 /** Why a raw input is a leaf of the plan instead of something the line makes. */
 export type LeafClass = 'free' | 'direct' | 'byproduct' | 'derived' | 'natural' | 'stop' | 'unavailable';
 
+/**
+ * The default `PlanSettings.stepCharge` (fix spec R3, architecture §11.34): a recipe step is built only when it saves
+ * at least 2 % of the line's least raw material (the user chose 2 % over the 5 % first proposed).
+ */
+export const DEFAULT_STEP_CHARGE = 0.02;
+
 export interface PlanSettings {
   target: StuffKey | null; mode: 'rate' | 'makeN'; amount: number; per: 'min' | 'hour';   // per ignored for makeN
   tier: number | null;                     // null = from world scan (fallback LV = 1)
@@ -65,6 +71,13 @@ export interface PlanSettings {
    * `defaultSettings()` and `normalizeSettings()` always fill it; readers use `?? []`.
    */
   haveSupply?: StuffKey[];
+  // optional addition
+  /**
+   * Steps vs raw material (fix spec R3, architecture §11.34): the share of the line's least raw material one recipe step
+   * must save to be built, 0 to 0.5 (0 = least raw material, fewest recipes only to break ties). `defaultSettings()` and
+   * `normalizeSettings()` always fill it; readers use `?? DEFAULT_STEP_CHARGE`.
+   */
+  stepCharge?: number;
 }
 
 /** One storage block holding some of a good (§11.20). */

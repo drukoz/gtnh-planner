@@ -4,12 +4,14 @@
 // build list and build steps, and the English names the client shows. Also the settings hash and the plan cache the
 // plan route keys on (architecture §7, §11.8).
 
+import { formatNumber, formatRate } from '../../shared/format.ts';
 import { V, tierName } from '../../shared/gt/tiers.ts';
-import type { StuffKey } from '../../shared/keys.ts';
+import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import { indexPlan, issueText, type PlanIssue } from '../../shared/plan/balance.ts';
 import type { DimensionInfo, Pack, Product, Recipe } from '../../shared/types/pack.ts';
-import type {
-  BomLine, LeafClass, Plan, PlanContext, PlanFlow, PlanSettings, PlanStep, PlanWarning, PowerSummary, RawInput, SourceInfo,
+import {
+  DEFAULT_STEP_CHARGE, type BomLine, type LeafClass, type Plan, type PlanContext, type PlanFlow, type PlanSettings, type PlanStep,
+  type PlanWarning, type PowerSummary, type RawInput, type SourceInfo,
 } from '../../shared/types/plan.ts';
 import { isBaseItem, unlockText, type Availability } from './availability.ts';
 import { planBasis, resolveAvoid, settingsHash, type PlanBasis } from './basis.ts';
@@ -24,7 +26,7 @@ import { makeN, wholeRuns } from './make-n.ts';
 import { yieldToEventLoop } from './lp.ts';
 import { linePricing, type CostModel, type LinePricing } from './pricing.ts';
 import { sig9 } from './round.ts';
-import { MAX_NAMED_LOOP_RECIPES, solveLine, type Solution, type Standalone } from './solve.ts';
+import { HAND_STEP_WEIGHT, MAX_NAMED_LOOP_RECIPES, solveLine, type Solution, type SolveOptions, type Standalone } from './solve.ts';
 import { buildSteps } from './steps.ts';
 
 export { effectiveTier, settingsHash } from './basis.ts';
@@ -33,6 +35,23 @@ const SECONDS_PER: Readonly<Record<PlanSettings['per'], number>> = { min: 60, ho
 const DEFAULT_CACHE_SIZE = 32;
 /** A machine or amp count this little above a whole number stays whole. */
 const TINY = 1e-9;
+/**
+ * A pinned recipe whose raw material per unit is above this many times the cheapest alternative's gets a `pin-dominated`
+ * warning (fix spec D24): the user's resistor pin used 0.783 raw per resistor where another recipe used 0.533.
+ */
+export const PIN_DOMINATED_SHARE = 1.01;
+
+/**
+ * How the line's solves trade steps against raw material (fix spec R3): the project's step charge (a project stored
+ * before it gets the default), and a crafting-table step weighs HAND_STEP_WEIGHT steps in a running line whose crafting
+ * is not automated (fix spec D7; a Make N batch may be crafted by hand).
+ */
+export function solveOptions(settings: PlanSettings): SolveOptions {
+  return {
+    stepCharge: settings.stepCharge ?? DEFAULT_STEP_CHARGE,
+    handWeight: settings.mode === 'rate' && !settings.automateCrafting ? HAND_STEP_WEIGHT : 1,
+  };
+}
 
 function byString(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
@@ -716,29 +735,48 @@ const NOT_BOUGHT: LeafDecision = { buyable: false, cost: 0, leafClass: null };
  * is avoided again wherever the line still plans without it. At most twice as many passes as goods used. When even
  * allowing them all back plans nothing (the walk without the rest prunes differently), the plain line, all of them
  * allowed back.
+ *
+ * A full solve (the step charge, fix spec R3) costs far more than its least-raw stage, and only whether a line plans
+ * and what it uses matter here: `plain` is a probe (`SolveOptions.probe`) and so is every trial; only the line found is
+ * solved in full (`options`). When the probe of the plain line used no avoided good, that line in full is the plan,
+ * unless it uses one after all (a tie the probe broke the other way): then the search goes on from it as if the plain
+ * line had used it.
  */
 async function avoidingLine(
   pack: Pack, settings: PlanSettings, pricing: LinePricing, plain: Solution, demand: ReadonlyMap<StuffKey, number>, request: AvoidRequest,
+  options: SolveOptions,
 ): Promise<AvoidingLine> {
   const open = pricing.graph;
   const goods = request.goods;
-  const amounts = amountsUsed(open, plain, request);
+  let whole: Solution | undefined;
+  /** The plain line solved in full, at most once. */
+  const plainInFull = async (): Promise<Solution> => (whole ??= await solveLine(open, demand, options));
+  /** `line` with its graph solved in full. */
+  const inFull = async (line: AvoidingLine): Promise<AvoidingLine> => ({
+    ...line, sol: line.graph === open ? await plainInFull() : await solveLine(line.graph, demand, options),
+  });
+  let from = plain;
+  let amounts = amountsUsed(open, from, request);
+  if (amounts.size === 0) {
+    from = await plainInFull();
+    amounts = amountsUsed(open, from, request);
+    if (amounts.size === 0) return { graph: open, sol: from, avoid: goods, used: [], reallowed: new Set() };
+  }
   const used = [...amounts.keys()].sort(byString);
   const without = (allowed: ReadonlySet<StuffKey>): Set<StuffKey> => new Set([...goods].filter((key) => !allowed.has(key)));
-  if (used.length === 0) return { graph: open, sol: plain, avoid: goods, used, reallowed: new Set() };
   /** The derived leaves made from avoided goods the plain line buys. */
   const bought = used.filter((key) => !goods.has(key));
   const solve = async (allowed: ReadonlySet<StuffKey>): Promise<SolvedLine> => {
     const avoid = without(allowed);
     // The list's goods are all ones the plain line uses, allowed back with the derived leaves it buys: the plain line.
-    if (avoid.size === 0 && bought.every((key) => allowed.has(key))) return { graph: open, sol: plain, avoid };
+    if (avoid.size === 0 && bought.every((key) => allowed.has(key))) return { graph: open, sol: from, avoid };
     const leaf: LeafOracle = (key) => (!allowed.has(key) && request.madeFrom(key).length > 0 ? NOT_BOUGHT : pricing.leaf(key));
     await yieldToEventLoop();
     const graph = buildCandidates(pack, settings, pricing.basis.env, leaf, [pricing.target], { avoid });
-    return { graph, sol: await solveLine(graph, demand), avoid };
+    return { graph, sol: await solveLine(graph, demand, { ...options, probe: true }), avoid };
   };
   const strict = await solve(new Set());
-  if (strict.sol.status === 'ok') return { ...strict, used, reallowed: new Set() };
+  if (strict.sol.status === 'ok') return inFull({ ...strict, used, reallowed: new Set() });
 
   const unitCost = (key: StuffKey): number => {
     const cost = pricing.model.costs.cost(key);
@@ -755,18 +793,54 @@ async function avoidingLine(
       break;
     }
   }
-  if (best === undefined) return { graph: open, sol: plain, avoid: without(new Set(used)), used, reallowed: new Set(used) };
+  if (best === undefined) return inFull({ graph: open, sol: from, avoid: without(new Set(used)), used, reallowed: new Set(used) });
   for (const key of [...reallowed].slice(0, -1)) {
     reallowed.delete(key);
     const tried = await solve(reallowed);
     if (tried.sol.status === 'ok') best = tried;
     else reallowed.add(key);
   }
-  return { ...best, used, reallowed };
+  return inFull({ ...best, used, reallowed });
 }
 
 /** The flow end of what the line buys (machines.ts `buildFlows`). */
 const RAW = 'raw';
+
+/**
+ * One `hand-step` warning per step of a running line crafted by hand (fix spec D7): what it makes and how much an hour.
+ * The step charge weighs such a step three times, so one that remains has no machine recipe that pays.
+ */
+function handStepWarnings(pack: Pack, steps: readonly PlanStep[]): PlanWarning[] {
+  return steps.filter((s) => s.handCraft).map((s): PlanWarning => {
+    const key = s.mainOutput ?? s.outputs[0]?.key ?? s.recipeId;
+    let perRun = 0;
+    for (const p of s.outputs) if (p.key === key) perRun += p.amount;
+    const rate = formatRate(perRun * s.runsPerSecond, 'hour', { fluid: isFluidKey(key) });
+    return { code: 'hand-step', stepId: s.id, text: `${pack.nameOf(key)} is crafted by hand: ${rate}; mark crafting as automated or pin a machine recipe` };
+  });
+}
+
+/**
+ * One `pin-dominated` warning per step whose recipe the project pins for its main output (`recipeChoice`) while its
+ * cheapest alternative uses less than the pinned recipe's raw material per unit divided by PIN_DOMINATED_SHARE (fix spec
+ * D24): the swap list's raw costs (`addAlternatives`, which leaves out recipes using an avoided good).
+ */
+function pinDominatedWarnings(pack: Pack, settings: PlanSettings, steps: readonly PlanStep[]): PlanWarning[] {
+  const warnings: PlanWarning[] = [];
+  for (const step of steps) {
+    const key = step.mainOutput;
+    if (key === undefined || !Object.hasOwn(settings.recipeChoice, key) || settings.recipeChoice[key] !== step.recipeId) continue;
+    const pinned = step.alternatives.find((a) => a.recipeId === step.recipeId);
+    const cheapest = step.alternatives.find((a) => a.recipeId !== step.recipeId);   // sorted by raw cost, then id
+    if (pinned === undefined || cheapest === undefined || !(cheapest.rawCost < pinned.rawCost / PIN_DOMINATED_SHARE)) continue;
+    const machine = pack.maps.get(cheapest.mapId)?.name ?? cheapest.mapId;
+    warnings.push({
+      code: 'pin-dominated', stepId: step.id, key,
+      text: `${pack.nameOf(key)}: the pinned recipe uses ${formatNumber(pinned.rawCost)} raw per unit; ${machine} makes it for ${formatNumber(cheapest.rawCost)}`,
+    });
+  }
+  return warnings;
+}
 
 /** What the line avoids where its machines hold parts (`heldOption`); nothing for a project that avoids nothing. */
 function heldAvoid(request: AvoidRequest, line: SolvedLine): HeldAvoid | undefined {
@@ -828,10 +902,11 @@ function unavoidableUses(
 }
 
 /**
- * Plans one line (spec §3.2–§3.11): least raw material at the project's tier where the group can reach, as a steady
- * rate or as a batch of N on the machines the group owns, keeping out of the materials the project avoids where any
- * plan can (`avoidingLine`). A missing or unknown target gives an `empty` plan; a target nothing reachable makes gives
- * an `infeasible` plan whose warnings say what blocks it and what unlocks it.
+ * Plans one line (spec §3.2–§3.11): least raw material at the project's tier where the group can reach, each recipe step
+ * paying for itself in raw material (the project's step charge, `solveOptions`), as a steady rate or as a batch of N on
+ * the machines the group owns, keeping out of the materials the project avoids where any plan can (`avoidingLine`). A
+ * missing or unknown target gives an `empty` plan; a target nothing reachable makes gives an `infeasible` plan whose
+ * warnings say what blocks it and what unlocks it.
  */
 export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanContext): Promise<Plan> {
   // Each synchronous stretch (availability, each candidate walk, each LP solve) yields first, so other
@@ -854,7 +929,11 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
   // What the plan is for (fix spec R11): the client reads the target and its rate instead of guessing them from flows.
   const aim: Pick<PlanBody, 'target' | 'targetPerSecond'> = batch
     ? { target } : { target, targetPerSecond: sig9(settings.amount / SECONDS_PER[settings.per]) };
-  const plain = await solveLine(priced.graph, demand);
+  // Steps vs raw material (fix spec R3) for every solve of the line. With goods to avoid, the plain line is first only
+  // probed (its least raw material: whether it plans and what it uses), and `avoidingLine` solves in full what it finds.
+  const options = solveOptions(settings);
+  const probing = avoid.goods.size > 0;
+  const plain = await solveLine(priced.graph, demand, probing ? { ...options, probe: true } : options);
 
   if (plain.status === 'infeasible') {
     // A graph cut short at its recipe cap names no blockers (solve.ts): its `graph-too-big` warning says why.
@@ -863,7 +942,9 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
     const warnings = [...priced.graph.warnings, ...solverWarnings, ...blocked.warnings, ...avoid.warnings];
     return assemble(pack, settings, basis, { ...withAvoided(bodyWithout('infeasible', warnings, blocked.unlocks), avoid, []), ...aim });
   }
-  const line = await avoidingLine(pack, settings, priced, plain, demand, avoid);
+  const line: AvoidingLine = probing
+    ? await avoidingLine(pack, settings, priced, plain, demand, avoid, options)
+    : { graph: priced.graph, sol: plain, avoid: avoid.goods, used: [], reallowed: new Set() };
   const { graph, sol } = line;
   const solverWarnings = sol.warnings.map((w) => namedSolverWarning(pack, graph, sol, w));
 
@@ -906,6 +987,8 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
     sinks = sol.sinks;
   }
   await addAlternatives(pack, steps, model, graph, line.avoid);
+  // A batch may be crafted by hand (fix spec D7); a pin is judged against the swap list just made (D24).
+  const stepWarnings = [...(batch ? [] : handStepWarnings(pack, steps)), ...pinDominatedWarnings(pack, settings, steps)];
 
   const raw = rawInputsOf(pack, graph, basis, priced.chains, ctx, buys, made?.totalSeconds ?? null);
   // Make N steps of one machine type share that type's machines (makeN), so they draw at most once per type.
@@ -918,7 +1001,9 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
     status: 'ok', unlocks: [], steps, flows, rawInputs: raw.rawInputs, byproducts: byproductsOf(graph, sinks, target), power,
     buildList: bom.lines, buildTotals: bom.totals,
     buildSteps: buildSteps(pack, { steps, bom, power, settings, tier: basis.tier, target, totalSeconds: made?.totalSeconds, avoid: held }),
-    warnings: [...graph.warnings, ...solverWarnings, ...batchWarnings, ...raw.warnings, ...bom.warnings, ...avoid.warnings, ...uses.warnings],
+    warnings: [
+      ...graph.warnings, ...solverWarnings, ...stepWarnings, ...batchWarnings, ...raw.warnings, ...bom.warnings, ...avoid.warnings, ...uses.warnings,
+    ],
     ...aim,
   };
   if (made !== undefined) body.makeN = made;

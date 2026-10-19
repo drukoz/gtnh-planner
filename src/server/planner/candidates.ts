@@ -90,6 +90,28 @@ const KEEP_PRODUCERS = 3;
 const KEEP_WITHIN = 2;
 /** Slack when comparing estimates. */
 const ESTIMATE_TOLERANCE = 1e-9;
+/**
+ * Fix spec R4: a good's producers also keep the one with the fewest recipe steps down to leaves (`stepsTo`), and drop
+ * one whose chain is more than this many steps longer than that one's, unless it is the cheapest by estimate. Ranking by
+ * the raw estimate alone dropped short routes (sand → molten glass → tube) and kept 10-recipe detours.
+ */
+export const MAX_EXTRA_PRODUCER_STEPS = 6;
+
+/**
+ * Fix spec R10: 0 for the canonical member of a group of interchangeable goods (an item without NBT of Minecraft at meta
+ * 0, or of GregTech or IC2 at any meta, or a fluid), else 1. Equal estimates go to the canonical one (`cheapest`), and
+ * the solver's tie-breaks weigh it (solve.ts): Oak Wood over "Sacred Oak Log" or "Bloodwood", Sand over Red Sand.
+ */
+export function canonicalRank(key: StuffKey): 0 | 1 {
+  if (isFluidKey(key)) return 0;
+  if (key.includes('#')) return 1;
+  const at = key.lastIndexOf('@');
+  const id = at < 0 ? key : key.slice(0, at);
+  const colon = id.indexOf(':');
+  const mod = colon < 0 ? '' : id.slice(0, colon);
+  if (mod === 'gregtech' || mod === 'IC2') return 0;
+  return mod === 'minecraft' && key.slice(at + 1) === '0' ? 0 : 1;
+}
 
 /**
  * A binary min-heap of [cost, key], equal costs by key: the order goods settle in must not depend on the order the
@@ -391,14 +413,61 @@ function sortedCoeffs(coeffs: ReadonlyMap<StuffKey, number>): Array<[StuffKey, n
 
 const NOT_A_LEAF: LeafDecision = { buyable: false, cost: 0, leafClass: null };
 
+function pushTo<K, V>(map: Map<K, V[]>, key: K, value: V): void {
+  const list = map.get(key);
+  if (list === undefined) map.set(key, [value]);
+  else list.push(value);
+}
+
 /** The options of a slot the walk may take (`keptOptions`). */
 type SlotOptions = (ing: Ingredient) => Ingredient['options'];
+/** The consumed slots of a recipe it hands on (`carriedSlots`). */
+type CarriedSlots = (r: Recipe) => ReadonlySet<Ingredient>;
 
-/** The estimated raw cost of one run of `r`: its consumed inputs, each slot at its cheapest option (amount × estimate). */
-function recipeInputCost(r: Recipe, estimateOf: (key: StuffKey) => number, optionsOf: SlotOptions): number {
+const EMPTY_OF_FILLED = new WeakMap<Pack, ReadonlyMap<StuffKey, StuffKey>>();
+
+/** Each filled container of the pack (`fluidContainers`) that has an empty one → that empty container; once per pack. */
+function emptyOfFilled(pack: Pack): ReadonlyMap<StuffKey, StuffKey> {
+  let byFilled = EMPTY_OF_FILLED.get(pack);
+  if (byFilled === undefined) {
+    const map = new Map<StuffKey, StuffKey>();
+    for (const c of pack.fluidContainers ?? []) if (c.empty !== null && !map.has(c.container)) map.set(c.container, c.empty);
+    byFilled = map;
+    EMPTY_OF_FILLED.set(pack, byFilled);
+  }
+  return byFilled;
+}
+
+/**
+ * The consumed slots `r` hands on (fix spec R4): slots whose every option is an empty container the recipe gives back
+ * filled (it makes a filled container whose `fluidContainers` entry has that empty one), as a water electrolyzer takes
+ * Empty Cells and makes Hydrogen Cells of them. The estimate neither charges them nor waits for them: an Empty Cell
+ * priced at its tin made Oxygen from free water dearer than from dust, and the EBF steel recipe was pruned for it.
+ */
+function carriedSlots(pack: Pack, r: Recipe, optionsOf: SlotOptions): Set<Ingredient> {
+  const filled = emptyOfFilled(pack);
+  const handedOn = new Set<StuffKey>();
+  for (const p of r.outputs) {
+    const empty = p.amount * p.chance > 0 ? filled.get(p.key) : undefined;
+    if (empty !== undefined) handedOn.add(empty);
+  }
+  const carried = new Set<Ingredient>();
+  if (handedOn.size === 0) return carried;
+  for (const ing of r.inputs) {
+    const options = ing.consumed ? optionsOf(ing) : [];
+    if (options.length > 0 && options.every((o) => handedOn.has(o.key))) carried.add(ing);
+  }
+  return carried;
+}
+
+/**
+ * The estimated raw cost of one run of `r`: its consumed inputs it does not hand on (`carried`), each slot at its
+ * cheapest option (amount × estimate).
+ */
+function recipeInputCost(r: Recipe, estimateOf: (key: StuffKey) => number, optionsOf: SlotOptions, carried: ReadonlySet<Ingredient>): number {
   let total = 0;
   for (const ing of r.inputs) {
-    if (!ing.consumed) continue;
+    if (!ing.consumed || carried.has(ing)) continue;
     let best = Infinity;
     for (const o of optionsOf(ing)) best = Math.min(best, o.amount * estimateOf(o.key));
     total += ing.chance * best;
@@ -406,16 +475,53 @@ function recipeInputCost(r: Recipe, estimateOf: (key: StuffKey) => number, optio
   return total;
 }
 
+type Option = Ingredient['options'][number];
+
+/**
+ * The option of a slot the estimate charges (`recipeInputCost`): the least amount × estimate, equal ones by canonical
+ * rank (fix spec R10), then key; none when no option has a finite estimate.
+ */
+function cheapestOption(options: readonly Option[], estimateOf: (key: StuffKey) => number): Option | undefined {
+  let best: Option | undefined;
+  let bestCost = Infinity;
+  for (const o of options) {
+    const cost = o.amount * estimateOf(o.key);
+    if (!Number.isFinite(cost)) continue;
+    const before = best === undefined || cost < bestCost
+      || (cost === bestCost && (canonicalRank(o.key) - canonicalRank(best.key) || byString(o.key, best.key)) < 0);
+    if (before) {
+      best = o;
+      bestCost = cost;
+    }
+  }
+  return best;
+}
+
+/** What `estimateCosts` finds. */
+interface Estimates {
+  estimate: Map<StuffKey, number>;
+  /** The order the goods settled in. */
+  settledAt: Map<StuffKey, number>;
+  /** Fix spec R4: the recipe steps of the simplest chain from leaves to each good (`settleSteps`). */
+  steps: Map<StuffKey, number>;
+  /**
+   * The goods one run of a recipe takes, as the steps count them: the option the estimate charges (`cheapestOption`) of
+   * each consumed slot it does not hand on, each good once; null when some such slot has no priced option.
+   */
+  inputsOf: (r: Recipe) => readonly StuffKey[] | null;
+}
+
 /**
  * A rough raw cost per unit of every good `targets` can reach through `usable` recipes (each slot option the walk may
  * take, `optionsOf`, counts as reached): leaves at their cost; a recipe's consumed inputs, each ore-dictionary slot at
- * its cheapest option, charged in full to each output. Goods settle cheapest first and once each (a generalized
- * Dijkstra), so a gain loop in the data (x → 2 y, y → x) cannot drive its goods' estimates to 0. `settledAt` is the
- * order the goods settled in.
+ * its cheapest option, charged in full to each output, except the slots it hands on (`carried`: never charged, never
+ * waited for). Goods settle cheapest first and once each (a generalized Dijkstra), so a gain loop in the data (x → 2 y,
+ * y → x) cannot drive its goods' estimates to 0. A second pass over the same recipes counts the steps to each good.
  */
 function estimateCosts(
   pack: Pack, targets: readonly StuffKey[], decide: (key: StuffKey) => LeafDecision, usable: (r: Recipe) => boolean, optionsOf: SlotOptions,
-): { estimate: Map<StuffKey, number>; settledAt: Map<StuffKey, number> } {
+  carried: CarriedSlots,
+): Estimates {
   const estimate = new Map<StuffKey, number>();
   const settledAt = new Map<StuffKey, number>();
   const consumersOf = new Map<StuffKey, Recipe[]>();
@@ -460,11 +566,11 @@ function estimateCosts(
     heap.push(cost, key);
   };
   for (const [key, cost] of leaves) offer(key, cost);
-  /** Consumed slots per recipe that no settled good fills yet. */
-  const open = new Map<Recipe, number>(reached.map((r) => [r, r.inputs.filter((ing) => ing.consumed).length]));
+  /** Consumed slots per recipe, other than those it hands on, that no settled good fills yet. */
+  const open = new Map<Recipe, number>(reached.map((r) => [r, r.inputs.filter((ing) => ing.consumed && !carried(r).has(ing)).length]));
   const filled = new Set<Ingredient>();
   const run = (r: Recipe): void => {
-    const total = recipeInputCost(r, estimateOf, optionsOf);
+    const total = recipeInputCost(r, estimateOf, optionsOf, carried(r));
     if (!Number.isFinite(total)) return;
     for (const p of r.outputs) {
       const made = p.amount * p.chance;
@@ -480,7 +586,7 @@ function estimateCosts(
     for (const r of consumersOf.get(key) ?? []) {
       let left = open.get(r) as number;
       for (const ing of r.inputs) {
-        if (!ing.consumed || filled.has(ing) || !optionsOf(ing).some((o) => o.key === key)) continue;
+        if (!ing.consumed || filled.has(ing) || carried(r).has(ing) || !optionsOf(ing).some((o) => o.key === key)) continue;
         filled.add(ing);
         left--;
       }
@@ -488,7 +594,74 @@ function estimateCosts(
       if (left === 0) run(r);
     }
   }
-  return { estimate, settledAt };
+
+  const inputs = new Map<Recipe, readonly StuffKey[] | null>();
+  const inputsOf = (r: Recipe): readonly StuffKey[] | null => {
+    const known = inputs.get(r);
+    if (known !== undefined) return known;
+    const chosen = new Set<StuffKey>();
+    let priced = true;
+    for (const ing of r.inputs) {
+      if (!ing.consumed || carried(r).has(ing)) continue;
+      const option = cheapestOption(optionsOf(ing), estimateOf);
+      if (option === undefined) {
+        priced = false;
+        break;
+      }
+      chosen.add(option.key);
+    }
+    const keys = priced ? [...chosen] : null;
+    inputs.set(r, keys);
+    return keys;
+  };
+  const steps = settleSteps(reached, leaves.map(([key]) => key), (key) => decide(key).buyable, inputsOf);
+  return { estimate, settledAt, steps, inputsOf };
+}
+
+/**
+ * Fix spec R4: the recipe steps of the simplest chain from leaves to each good `reached` can make. A leaf takes 0; a
+ * recipe 1 + the steps of each good it takes (`inputsOf`: one option per slot, each good once); a good the fewest of the
+ * recipes that make it. Goods settle fewest steps first, equal counts by key, as the costs do (`estimateCosts`).
+ */
+function settleSteps(
+  reached: readonly Recipe[], leaves: readonly StuffKey[], isLeaf: (key: StuffKey) => boolean, inputsOf: (r: Recipe) => readonly StuffKey[] | null,
+): Map<StuffKey, number> {
+  const steps = new Map<StuffKey, number>();
+  const heap = new CostHeap();
+  const tentative = new Map<StuffKey, number>();
+  const offer = (key: StuffKey, n: number): void => {
+    if (steps.has(key) || n >= (tentative.get(key) ?? Infinity)) return;
+    tentative.set(key, n);
+    heap.push(n, key);
+  };
+  for (const key of leaves) offer(key, 0);
+  const waiting = new Map<Recipe, number>();
+  const waitersOf = new Map<StuffKey, Recipe[]>();
+  const run = (r: Recipe): void => {
+    let n = 1;
+    for (const key of inputsOf(r) ?? []) n += steps.get(key) as number;
+    for (const p of r.outputs) if (p.amount * p.chance > 0 && !isLeaf(p.key)) offer(p.key, n);
+  };
+  const ready: Recipe[] = [];
+  for (const r of reached) {
+    const keys = inputsOf(r);
+    if (keys === null) continue;   // a slot without a priced option: the recipe never runs
+    waiting.set(r, keys.length);
+    for (const key of keys) pushTo(waitersOf, key, r);
+    if (keys.length === 0) ready.push(r);
+  }
+  for (const r of ready) run(r);
+  for (let top = heap.pop(); top !== undefined; top = heap.pop()) {
+    const [n, key] = top;
+    if (steps.has(key)) continue;
+    steps.set(key, n);
+    for (const r of waitersOf.get(key) ?? []) {
+      const left = (waiting.get(r) as number) - 1;
+      waiting.set(r, left);
+      if (left === 0) run(r);
+    }
+  }
+  return steps;
 }
 
 /** Optional parts of `buildCandidates`. */
@@ -511,7 +684,11 @@ export interface CandidateOptions {
  * cost, a recipe's consumed inputs (each ore-dictionary slot at its cheapest option) charged in full to each output,
  * settled cheapest first. It ignores byproduct credit, so it only prunes; the LP over the kept recipes still credits
  * byproducts. A good nothing reachable makes keeps a few producers anyway, so `findBlockers` can name what is missing.
- * Goods of `opts.avoid` are never bought, consumed or held (`CandidateOptions.avoid`), in the estimate as in the graph.
+ * Fix spec R4 and R10: the empty containers a recipe hands on filled cost it nothing; each good also keeps its producer
+ * of fewest steps and drops one far longer than that (`MAX_EXTRA_PRODUCER_STEPS`) unless it is the cheapest; equal
+ * estimates go to canonical goods (`canonicalRank`). D14: a filled container a kept recipe makes brings the recipe that
+ * empties it. Goods of `opts.avoid` are never bought, consumed or held (`CandidateOptions.avoid`), in the estimate as in
+ * the graph.
  */
 export function buildCandidates(
   pack: Pack, settings: PlanSettings, env: PlanEnv, leaf: LeafOracle, targets: StuffKey[], opts: CandidateOptions = {},
@@ -570,17 +747,26 @@ export function buildCandidates(
     return !full;
   };
   const optionsOf: SlotOptions = (ing) => keptOptions(ing.options, avoid);
-  const { estimate, settledAt } = estimateCosts(pack, targets, decide, (r) => accept(r).ok && !usesAvoided(r, avoid), optionsOf);
+  const carriedByRecipe = new Map<Recipe, ReadonlySet<Ingredient>>();
+  const carried: CarriedSlots = (r) => {
+    let slots = carriedByRecipe.get(r);
+    if (slots === undefined) {
+      slots = carriedSlots(pack, r, optionsOf);
+      carriedByRecipe.set(r, slots);
+    }
+    return slots;
+  };
+  const { estimate, settledAt, steps, inputsOf } = estimateCosts(pack, targets, decide, (r) => accept(r).ok && !usesAvoided(r, avoid), optionsOf, carried);
   const estimateOf = (key: StuffKey): number => estimate.get(key) ?? Infinity;
-  const inputCost = (r: Recipe): number => recipeInputCost(r, estimateOf, optionsOf);
+  const inputCost = (r: Recipe): number => recipeInputCost(r, estimateOf, optionsOf, carried(r));
   /**
-   * Whether `r` makes `key` from goods the estimate settled before `key`. A producer that is not (sand from sandstone
-   * when sandstone is made from sand) can tie with the real one at the same estimate, and a graph of only such
-   * producers is a closed loop the LP cannot enter, so grounded producers rank first.
+   * Whether `r` makes `key` from goods the estimate settled before `key` (the slots it hands on aside). A producer that is
+   * not (sand from sandstone when sandstone is made from sand) can tie with the real one at the same estimate, and a
+   * graph of only such producers is a closed loop the LP cannot enter, so grounded producers rank first.
    */
   const grounded = (r: Recipe, key: StuffKey): boolean => {
     const at = settledAt.get(key) ?? Infinity;
-    return r.inputs.every((ing) => !ing.consumed || optionsOf(ing).some((o) => (settledAt.get(o.key) ?? Infinity) < at));
+    return r.inputs.every((ing) => !ing.consumed || carried(r).has(ing) || optionsOf(ing).some((o) => (settledAt.get(o.key) ?? Infinity) < at));
   };
   /** Estimated raw cost per unit of `key` made by `r`. */
   const unitCost = (r: Recipe, key: StuffKey): number => {
@@ -588,26 +774,69 @@ export function buildCandidates(
     for (const p of r.outputs) if (p.key === key) made += p.amount * p.chance;
     return made > 0 ? inputCost(r) / made : Infinity;
   };
+  /** Fix spec R4: the recipe steps of the simplest chain through `r` (1 + the steps of what it takes), else Infinity. */
+  const stepsOf = (r: Recipe): number => {
+    const keys = inputsOf(r);
+    if (keys === null) return Infinity;
+    let n = 1;
+    for (const key of keys) n += steps.get(key) ?? Infinity;
+    return n;
+  };
+  /** Fix spec R10: the canonical rank of what `r` takes (one option per slot, as `stepsOf` counts them), added up. */
+  const inputRank = (r: Recipe): number => {
+    let rank = 0;
+    for (const key of inputsOf(r) ?? []) rank += canonicalRank(key);
+    return rank;
+  };
   /**
-   * The cheapest of `items` by `cost`, those `first` holds before the others, ties by `id`: at most `max`, within
-   * `KEEP_WITHIN` of the best; when none has a finite cost, the first `fallback` by id.
+   * The cheapest of `items` by `cost`, those `first` holds before the others, equal costs by canonical rank (`canon`, fix
+   * spec R10), then by `id`: at most `max`, within `KEEP_WITHIN` of the best; when none has a finite cost, the first
+   * `fallback` by canonical rank, then id.
    */
   const cheapest = <T>(
-    items: readonly T[], cost: (t: T) => number, id: (t: T) => string, max: number, fallback: number, first: (t: T) => boolean = () => true,
+    items: readonly T[], cost: (t: T) => number, id: (t: T) => string, max: number, fallback: number,
+    first: (t: T) => boolean = () => true, canon: (t: T) => number = () => 0,
   ): T[] => {
-    const scored = items.map((t) => ({ t, c: cost(t), id: id(t), rank: first(t) ? 0 : 1 }));
+    const scored = items.map((t) => ({ t, c: cost(t), id: id(t), rank: first(t) ? 0 : 1, canon: canon(t) }));
     const finite = scored.filter((x) => Number.isFinite(x.c));
-    if (finite.length === 0) return scored.sort((a, b) => byString(a.id, b.id)).slice(0, fallback).map((x) => x.t);
+    if (finite.length === 0) return scored.sort((a, b) => a.canon - b.canon || byString(a.id, b.id)).slice(0, fallback).map((x) => x.t);
     const best = Math.min(...finite.map((x) => x.c));
     return finite.filter((x) => x.c <= best * KEEP_WITHIN + ESTIMATE_TOLERANCE)
-      .sort((a, b) => a.rank - b.rank || a.c - b.c || byString(a.id, b.id)).slice(0, max).map((x) => x.t);
+      .sort((a, b) => a.rank - b.rank || a.c - b.c || a.canon - b.canon || byString(a.id, b.id)).slice(0, max).map((x) => x.t);
+  };
+  type Producer = { r: Recipe; mapId: string };
+  /**
+   * Fix spec R4: `kept` (the cheapest producers of `key`) with the accepted producer of fewest steps (`stepsOf`; equal
+   * ones by estimate, the canonical rank of what they take, then id) added, less every producer more than
+   * MAX_EXTRA_PRODUCER_STEPS steps longer than that one, unless it is the cheapest of them by estimate. A producer whose
+   * steps are not known (the steps pass never reached its chain) is not dropped for them.
+   */
+  const simplestAndNotFar = (key: StuffKey, accepted: readonly Producer[], kept: readonly Producer[]): Producer[] => {
+    let simplest: { x: Producer; steps: number; cost: number; rank: number } | undefined;
+    for (const x of accepted) {
+      const n = stepsOf(x.r);
+      if (!Number.isFinite(n)) continue;
+      const cost = unitCost(x.r, key);
+      const rank = inputRank(x.r);
+      const better = simplest === undefined || n < simplest.steps || (n === simplest.steps
+        && (cost < simplest.cost || (cost === simplest.cost && (rank < simplest.rank || (rank === simplest.rank && x.r.id < simplest.x.r.id)))));
+      if (better) simplest = { x, steps: n, cost, rank };
+    }
+    if (simplest === undefined) return [...kept];
+    const all = kept.includes(simplest.x) ? [...kept] : [...kept, simplest.x];
+    const least = Math.min(...all.map((x) => unitCost(x.r, key)));
+    const limit = simplest.steps + MAX_EXTRA_PRODUCER_STEPS;
+    return all.filter((x) => {
+      const n = stepsOf(x.r);
+      return !(Number.isFinite(n) && n > limit) || unitCost(x.r, key) <= least + ESTIMATE_TOLERANCE;
+    });
   };
 
   /** Ruling R6: a virtual good never asks the oracle and is never bought; its kept options are made or bought. */
   const addVirtual = (vkey: StuffKey, options: Ingredient['options']): void => {
     if (goods.has(vkey)) return;
     goods.set(vkey, { key: vkey, buyable: false, cost: 0, leafClass: null, virtual: true });
-    const kept = cheapest(options, (o) => o.amount * estimateOf(o.key), (o) => o.key, KEEP_PRODUCERS, MAX_UNBUYABLE_OPTIONS)
+    const kept = cheapest(options, (o) => o.amount * estimateOf(o.key), (o) => o.key, KEEP_PRODUCERS, MAX_UNBUYABLE_OPTIONS, undefined, (o) => canonicalRank(o.key))
       .sort((a, b) => byString(a.key, b.key));
     for (const option of kept) {
       const id = `convert:${vkey}:${option.key}`;
@@ -617,6 +846,33 @@ export function buildCandidates(
       recipes.set(id, { id, kind: 'convert', mapId: null, coeffs: sortedCoeffs(coeffs), euPerRun: 0, nonConsumed: [], needsCleanroom: false, main: vkey });
       need(option.key);
     }
+  };
+
+  const emptiers = new Map<StuffKey, Producer | null>();
+  /**
+   * Fix spec D14 (audit patch E-containers): the pack's recipe that empties the filled container `key` back into its
+   * empty one, when the line may run it: its only consumed slot takes `key` alone, it makes the empty container, and it
+   * runs here without an avoided good. The one of smallest id when several do (whatever order the export lists them
+   * in); none for a good that is no filled container with an empty one.
+   */
+  const emptierOf = (key: StuffKey): Producer | null => {
+    const known = emptiers.get(key);
+    if (known !== undefined) return known;
+    let found: Producer | null = null;
+    const empty = emptyOfFilled(pack).get(key);
+    if (empty !== undefined) {
+      for (const i of pack.consumers.get(key) ?? []) {
+        const r = pack.recipes[i];
+        const consumed = r?.inputs.filter((ing) => ing.consumed) ?? [];
+        if (r === undefined || (found !== null && found.r.id < r.id)) continue;
+        if (consumed.length !== 1 || !(consumed[0] as Ingredient).options.every((o) => o.key === key)) continue;
+        if (!r.outputs.some((p) => p.key === empty) || usesAvoided(r, avoid)) continue;
+        const a = accept(r);
+        if (a.ok) found = { r, mapId: a.mapId };
+      }
+    }
+    emptiers.set(key, found);
+    return found;
   };
 
   const addRecipe = (r: Recipe, mapId: string): void => {
@@ -658,6 +914,12 @@ export function buildCandidates(
       else if (c < 0) need(key);
       else register(key);   // an output: known to the LP, but nothing needs more of it
     }
+    // A filled container it makes (a Water Cell beside Vinyl Acetate) can be emptied back into its container instead of
+    // being thrown away while another step makes new cells from steel.
+    for (const [key, c] of lp.coeffs) {
+      const emptier = c > 0 && !slots.has(key) ? emptierOf(key) : null;
+      if (emptier !== null) addRecipe(emptier.r, emptier.mapId);
+    }
   };
 
   /** The recipe pinned for `key`, when it still exists, makes `key` and runs here. */
@@ -684,7 +946,7 @@ export function buildCandidates(
       });
     }
     const rejected: Array<{ recipeId: string; why: Rejection; needTier?: number }> = [];
-    const accepted: Array<{ r: Recipe; mapId: string }> = [];
+    const accepted: Producer[] = [];
     for (const i of pack.producers.get(key) ?? []) {
       const r = pack.recipes[i];
       // One that consumes or holds an avoided good is no producer here at all: the line re-allows the good when it needs it.
@@ -693,8 +955,8 @@ export function buildCandidates(
       if (a.ok) accepted.push({ r, mapId: a.mapId });
       else rejected.push(a.needTier === undefined ? { recipeId: r.id, why: a.why } : { recipeId: r.id, why: a.why, needTier: a.needTier });
     }
-    const kept = cheapest(accepted, (x) => unitCost(x.r, key), (x) => x.r.id, KEEP_PRODUCERS, KEEP_PRODUCERS, (x) => grounded(x.r, key));
-    for (const { r, mapId } of kept) addRecipe(r, mapId);
+    const kept = cheapest(accepted, (x) => unitCost(x.r, key), (x) => x.r.id, KEEP_PRODUCERS, KEEP_PRODUCERS, (x) => grounded(x.r, key), (x) => inputRank(x.r));
+    for (const { r, mapId } of simplestAndNotFar(key, accepted, kept)) addRecipe(r, mapId);
     if (accepted.length === 0 && rejected.length > 0) blocked.set(key, rejected.sort((a, b) => byString(a.recipeId, b.recipeId)));
   };
 
