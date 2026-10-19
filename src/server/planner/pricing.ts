@@ -118,7 +118,8 @@ const MEMOS = new WeakMap<Pack, Map<string, Promise<LinePricing>>>();
  * The line's prices for `settings` in `ctx` (null when it has no target the export knows), computed once per pack,
  * settings hash and the context fields its basis reads (`basisContextKey`), for at most MEMO_SIZE such keys per pack:
  * the plan and every later `expandBomLines` of the same project share one pricing. Callers asking while it is computed
- * share that computation; one that fails is not kept.
+ * share that computation; one that fails is not kept. The avoid list plays no part (ruling R6: only `planLine`'s own
+ * graphs honor it), so projects that differ only in it share one pricing, priced and walked without it.
  */
 export function linePricing(pack: Pack, settings: PlanSettings, ctx: PlanContext): Promise<LinePricing> | null {
   const target = plannableTarget(pack, settings);
@@ -128,14 +129,15 @@ export function linePricing(pack: Pack, settings: PlanSettings, ctx: PlanContext
     memo = new Map();
     MEMOS.set(pack, memo);
   }
-  const key = `${settingsHash(settings)}|${basisContextKey(ctx)}`;
+  const open: PlanSettings = { ...settings, avoid: [] };
+  const key = `${settingsHash(open)}|${basisContextKey(ctx)}`;
   const hit = memo.get(key);
   if (hit !== undefined) {
     memo.delete(key);
     memo.set(key, hit);
     return hit;
   }
-  const pricing = computePricing(pack, settings, ctx, target);
+  const pricing = computePricing(pack, open, ctx, target);
   memo.set(key, pricing);
   if (memo.size > MEMO_SIZE) memo.delete(memo.keys().next().value as string);
   const kept = memo;

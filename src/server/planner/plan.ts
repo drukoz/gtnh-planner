@@ -1,7 +1,8 @@
 // The line planner (spec §3.2–§3.11): one pass from a project's settings and world context to the whole `Plan` — the
-// candidate recipes, raw-material costs and alternatives, the solve, machines per step (rate) or whole crafts on owned
-// machines (Make N), the raw inputs with their sources, power, the build list and build steps, and the English names
-// the client shows. Also the settings hash and the plan cache the plan route keys on (architecture §7, §11.8).
+// candidate recipes, raw-material costs and alternatives, the solve (around the materials the project avoids, §3.3),
+// machines per step (rate) or whole crafts on owned machines (Make N), the raw inputs with their sources, power, the
+// build list and build steps, and the English names the client shows. Also the settings hash and the plan cache the
+// plan route keys on (architecture §7, §11.8).
 
 import { V, tierName } from '../../shared/gt/tiers.ts';
 import type { StuffKey } from '../../shared/keys.ts';
@@ -9,15 +10,18 @@ import type { DimensionInfo, Pack, Product } from '../../shared/types/pack.ts';
 import type {
   BomLine, Plan, PlanContext, PlanFlow, PlanSettings, PlanStep, PlanWarning, PowerSummary, RawInput, SourceInfo,
 } from '../../shared/types/plan.ts';
-import { unlockText } from './availability.ts';
-import { planBasis, settingsHash, type PlanBasis } from './basis.ts';
+import { isBaseItem, unlockText, type Availability } from './availability.ts';
+import { planBasis, resolveAvoid, settingsHash, type PlanBasis } from './basis.ts';
 import { buildBom } from './bom.ts';
-import type { CandidateGraph, LpRecipe } from './candidates.ts';
+import {
+  buildCandidates, heldOption, keptOptions, usesAvoided, type CandidateGraph, type HeldAvoid, type LeafDecision, type LeafOracle,
+  type LpRecipe,
+} from './candidates.ts';
 import { analyzeCosts, type CostAnalysis } from './costs.ts';
 import { buildFlows, planSteps } from './machines.ts';
 import { makeN, wholeRuns } from './make-n.ts';
 import { yieldToEventLoop } from './lp.ts';
-import { linePricing, type CostModel } from './pricing.ts';
+import { linePricing, type CostModel, type LinePricing } from './pricing.ts';
 import { MAX_NAMED_LOOP_RECIPES, solveLine, type Solution } from './solve.ts';
 import { buildSteps } from './steps.ts';
 
@@ -125,8 +129,13 @@ const MAX_ALTERNATIVES = 20;
 /** Inputs and outputs listed per alternative. */
 const MAX_ALTERNATIVE_PARTS = 4;
 
-/** What one run of a recipe takes (first option of each consumed slot) and makes, summed per key, largest first, at most 4. */
-function recipeParts(pack: Pack, recipeId: string): { inputs: Array<{ key: StuffKey; amount: number }>; outputs: Array<{ key: StuffKey; amount: number }> } {
+/**
+ * What one run of a recipe takes (first option of each consumed slot the line may take, `keptOptions`) and makes, summed
+ * per key, largest first, at most 4.
+ */
+function recipeParts(
+  pack: Pack, recipeId: string, avoid: ReadonlySet<StuffKey>,
+): { inputs: Array<{ key: StuffKey; amount: number }>; outputs: Array<{ key: StuffKey; amount: number }> } {
   const r = pack.recipeById.get(recipeId);
   const sum = (entries: Array<[StuffKey, number]>): Array<{ key: StuffKey; amount: number }> => {
     const totals = new Map<StuffKey, number>();
@@ -137,7 +146,7 @@ function recipeParts(pack: Pack, recipeId: string): { inputs: Array<{ key: Stuff
   if (r === undefined) return { inputs: [], outputs: [] };
   return {
     inputs: sum(r.inputs.flatMap((ing): Array<[StuffKey, number]> => {
-      const first = ing.options[0];
+      const first = keptOptions(ing.options, avoid)[0];
       return ing.consumed && first !== undefined ? [[first.key, first.amount]] : [];
     })),
     outputs: sum(r.outputs.map((p): [StuffKey, number] => [p.key, p.amount])),
@@ -181,10 +190,16 @@ function alternativesFor(model: CostModel, wanted: ReadonlySet<StuffKey>): Map<S
  * cost graph dropped (or a pinned one), even make a good the cost graph never walked: its recipe is listed anyway, at
  * its raw cost in the cost graph when it can run there, else at its raw cost in the line's own graph (`analyzeCosts`
  * of `graph`, run only then), else at what the good costs there. A step without a main output has nothing to swap.
+ * A recipe that consumes or holds a good the line avoids (`avoid`, `usesAvoided`) is no alternative (ruling R6), except
+ * the step's own.
  */
-async function addAlternatives(pack: Pack, steps: PlanStep[], model: CostModel, graph: CandidateGraph): Promise<void> {
+async function addAlternatives(pack: Pack, steps: PlanStep[], model: CostModel, graph: CandidateGraph, avoid: ReadonlySet<StuffKey>): Promise<void> {
   const wanted = new Set(steps.flatMap((s) => (s.mainOutput === undefined ? [] : [s.mainOutput])));
   const alternatives = alternativesFor(model, wanted);
+  const avoids = (recipeId: string): boolean => {
+    const r = pack.recipeById.get(recipeId);
+    return r !== undefined && usesAvoided(r, avoid);
+  };
   let lineCosts: CostAnalysis | undefined;
   const ownCost = async (recipeId: string, main: StuffKey): Promise<number> => {
     const inModel = model.costs.recipeCost(recipeId, main);
@@ -197,7 +212,7 @@ async function addAlternatives(pack: Pack, steps: PlanStep[], model: CostModel, 
   };
   for (const step of steps) {
     const main = step.mainOutput;
-    const all = main === undefined ? [] : (alternatives.get(main) ?? []);
+    const all = (main === undefined ? [] : (alternatives.get(main) ?? [])).filter((a) => a.recipeId === step.recipeId || !avoids(a.recipeId));
     let own = all.find((a) => a.recipeId === step.recipeId);
     let ranked = all;
     if (own === undefined && main !== undefined) {
@@ -206,7 +221,7 @@ async function addAlternatives(pack: Pack, steps: PlanStep[], model: CostModel, 
     }
     const kept = ranked.slice(0, MAX_ALTERNATIVES);
     if (own !== undefined && !kept.includes(own)) kept[kept.length - 1] = own;
-    step.alternatives = kept.map((a) => ({ ...a, ...recipeParts(pack, a.recipeId) }));
+    step.alternatives = kept.map((a) => ({ ...a, ...recipeParts(pack, a.recipeId, avoid) }));
   }
 }
 
@@ -396,6 +411,7 @@ interface PlanBody {
   unlocks: Plan['unlocks']; steps: PlanStep[]; flows: PlanFlow[]; rawInputs: RawInput[]; byproducts: Product[];
   power: PowerSummary; buildList: BomLine[]; buildTotals: BomLine[]; buildSteps: Plan['buildSteps']; warnings: PlanWarning[];
   makeN?: Plan['makeN'];
+  avoided?: Plan['avoided'];
 }
 
 function bodyWithout(status: PlanBody['status'], warnings: PlanWarning[], unlocks: Plan['unlocks'] = []): PlanBody {
@@ -412,11 +428,13 @@ function dimensionOfId(byKey: ReadonlyMap<string, DimensionInfo>, sortedDims: re
 
 /**
  * The English name of every key the plan uses (target, steps and their swap lists, flows, raw inputs, byproducts, build
- * list with its breakdown, totals, unlocks and warnings), `map:<id>` for every recipe map of a step or alternative,
- * `dim:<key>` for every dimension it reaches or a source names, and `dimId:<n>` for every dimension id a found spot
- * names; keys in sorted order.
+ * list with its breakdown, totals, unlocks, warnings, the avoided goods with what they are made from and the item and
+ * fluid entries of the avoid list, ruling R11), `map:<id>` for every recipe map of a step or alternative, `dim:<key>`
+ * for every dimension it reaches or a source names, and `dimId:<n>` for every dimension id a found spot names; keys in
+ * sorted order.
  */
-function planNames(pack: Pack, plan: Plan, target: StuffKey | null): Record<string, string> {
+function planNames(pack: Pack, plan: Plan, settings: PlanSettings): Record<string, string> {
+  const target = settings.target;
   const names = new Map<string, string>();
   const add = (key: StuffKey | undefined): void => {
     if (key !== undefined && !names.has(key)) names.set(key, pack.nameOf(key));
@@ -447,6 +465,8 @@ function planNames(pack: Pack, plan: Plan, target: StuffKey | null): Record<stri
   addLines(plan.buildTotals ?? []);
   for (const u of plan.unlocks) add(u.key);
   for (const w of plan.warnings) add(w.key);
+  for (const a of plan.avoided ?? []) for (const key of [a.key, ...(a.madeFrom ?? [])]) add(key);
+  for (const entry of settings.avoid ?? []) if (pack.items.has(entry) || pack.fluids.has(entry)) add(entry);
 
   const dims = pack.worldgen.dimensions;
   const byKey = new Map(dims.map((d) => [d.key, d]));
@@ -477,14 +497,275 @@ function assemble(pack: Pack, settings: PlanSettings, basis: PlanBasis, body: Pl
   if (body.makeN !== undefined) plan.makeN = body.makeN;
   plan.status = body.status;
   plan.buildTotals = body.buildTotals;
-  plan.names = planNames(pack, plan, settings.target);
+  if (body.avoided !== undefined) plan.avoided = body.avoided;
+  plan.names = planNames(pack, plan, settings);
   return plan;
+}
+
+/** What a project's avoid list asks of its line (§11.25). */
+interface AvoidRequest {
+  /** The list has entries: the plan then says what they matched (`Plan.avoided`), even when nothing. */
+  listed: boolean;
+  /** The goods the line avoids: what the list matches, but never the target (ruling R9). */
+  goods: ReadonlySet<StuffKey>;
+  /**
+   * For a good the line would buy as a derived leaf, whose chain runs outside the plan: the goods of `goods` that chain
+   * is made from (`derivedMadeFrom`), sorted by key; none for any other good. The line buys no such leaf while it can do
+   * without (`avoidingLine`): the Magnetic Steel bought for a hull's plates would hide the steel it is polarized from.
+   */
+  madeFrom(key: StuffKey): readonly StuffKey[];
+  /**
+   * One `avoid-unknown` per entry that matches nothing (no material, item or fluid of the pack, or a material of it
+   * without goods), in list order, then `avoid-target` when the list matches the target.
+   */
+  warnings: readonly PlanWarning[];
+}
+
+const MADE_FROM_NOTHING = (): readonly StuffKey[] => [];
+const NOTHING_AVOIDED: AvoidRequest = { listed: false, goods: new Set(), madeFrom: MADE_FROM_NOTHING, warnings: [] };
+
+/**
+ * The goods of `avoided` a derived material was made from: those among what availability first made it from
+ * (`Availability.derivedFrom`, the inputs its source names), and for each of those that is a base material itself
+ * (`isBaseItem`: Bronze Dust ground from a Bronze Ingot) what that was made from, back to base materials no recipe made
+ * available. A part or other intermediate it was made from (a cell, a plate, a fluid like Molten Epoxid) is not
+ * followed back: such goods are made in many ways, and the first way availability found is no more how this one is
+ * made than any other (every chemical first made with a cell would count as made from the tin of the cell). Memoized;
+ * sorted by key.
+ */
+function derivedMadeFrom(pack: Pack, avail: Availability, avoided: ReadonlySet<StuffKey>): (key: StuffKey) => readonly StuffKey[] {
+  const reached = new Map<StuffKey, readonly StuffKey[]>();
+  const followed = (input: StuffKey): boolean => !avoided.has(input) && isBaseItem(pack, input);
+  return (start) => {
+    // Depth first, each good once. Every input became available before what it made, so this ends; `entered` keeps a
+    // loop in the data from running forever all the same (a good met again on its own path adds nothing).
+    const stack = [start];
+    const entered = new Set<StuffKey>();
+    while (stack.length > 0) {
+      const key = stack[stack.length - 1] as StuffKey;
+      if (reached.has(key)) {
+        stack.pop();
+        continue;
+      }
+      const inputs = avail.derivedFrom(key);
+      if (!entered.has(key)) {
+        entered.add(key);
+        for (const input of inputs) if (followed(input) && !reached.has(input) && !entered.has(input)) stack.push(input);
+        continue;
+      }
+      stack.pop();
+      const from = new Set<StuffKey>();
+      for (const input of inputs) {
+        if (avoided.has(input)) from.add(input);
+        else if (followed(input)) for (const good of reached.get(input) ?? []) from.add(good);
+      }
+      reached.set(key, [...from].sort(byString));
+    }
+    return reached.get(start) ?? [];
+  };
+}
+
+/**
+ * The avoid list of `settings` for a line that makes `target` (null: no target the export knows) at the prices of
+ * `pricing` (null: no line, so no derived leaf to judge).
+ */
+function avoidRequest(pack: Pack, settings: PlanSettings, target: StuffKey | null, pricing: LinePricing | null): AvoidRequest {
+  const entries = settings.avoid ?? [];
+  if (entries.length === 0) return NOTHING_AVOIDED;
+  const { goods, unknown, empty } = resolveAvoid(pack, entries);
+  const warnings: PlanWarning[] = [];
+  for (const entry of new Set(entries)) {
+    if (unknown.includes(entry)) {
+      warnings.push({ code: 'avoid-unknown', text: `"${entry}" is no material, item or fluid of this pack, so nothing is avoided for it` });
+    } else if (empty.includes(entry)) {
+      warnings.push({ code: 'avoid-unknown', text: `"${entry}" matches nothing in this pack: no item or fluid is made of it, so nothing is avoided for it` });
+    }
+  }
+  if (target !== null && goods.delete(target)) {
+    warnings.push({ code: 'avoid-target', key: target, text: `${pack.nameOf(target)} is what this line makes, so it is planned although the avoid list covers it` });
+  }
+  if (pricing === null || goods.size === 0) return { listed: true, goods, madeFrom: MADE_FROM_NOTHING, warnings };
+  const reach = derivedMadeFrom(pack, pricing.basis.avail, goods);
+  const known = new Map<StuffKey, readonly StuffKey[]>();
+  const madeFrom = (key: StuffKey): readonly StuffKey[] => {
+    let from = known.get(key);
+    if (from === undefined) {
+      const d = goods.has(key) || key === target ? undefined : pricing.leaf(key);
+      from = d !== undefined && d.buyable && d.leafClass === 'derived' ? reach(key) : [];
+      known.set(key, from);
+    }
+    return from;
+  };
+  return { listed: true, goods, madeFrom, warnings };
+}
+
+/** `body` with what the avoid list matched (`Plan.avoided`), when it lists anything; old projects never get the field. */
+function withAvoided(body: PlanBody, avoid: AvoidRequest, avoided: NonNullable<Plan['avoided']>): PlanBody {
+  return avoid.listed ? { ...body, avoided } : body;
+}
+
+/**
+ * What a solution uses of what `request` avoids (`AvoidingLine.used`), by key, and how much: each avoided good it
+ * consumes (in a recipe or ore-dictionary conversion it runs) or buys; each one its recipes hold in a not-consumed slot
+ * (`LpRecipe.nonConsumed`), at 0, as a lens, mold or catalyst costs nothing while the line runs, so it is allowed back
+ * first; and each derived leaf it buys that is made from avoided goods (`AvoidRequest.madeFrom`).
+ */
+function amountsUsed(graph: CandidateGraph, sol: Solution, request: AvoidRequest): Map<StuffKey, number> {
+  const used = new Map<StuffKey, number>();
+  const add = (key: StuffKey, amount: number): void => {
+    used.set(key, (used.get(key) ?? 0) + amount);
+  };
+  for (const r of graph.recipes) {
+    const runs = sol.runs.get(r.id) ?? 0;
+    if (runs <= 0) continue;
+    for (const [key, c] of r.coeffs) if (c < 0 && request.goods.has(key)) add(key, -c * runs);
+    for (const key of r.nonConsumed) if (request.goods.has(key)) add(key, 0);
+  }
+  for (const [key, amount] of sol.buys) if (request.goods.has(key) || request.madeFrom(key).length > 0) add(key, amount);
+  return used;
+}
+
+/** A line graph, its solution, and the goods the plan keeps out of (its swap lists and the parts its machines hold too). */
+interface SolvedLine { graph: CandidateGraph; sol: Solution; avoid: ReadonlySet<StuffKey> }
+
+/**
+ * The line for an avoid list: `used` is what the plain line uses of it (`amountsUsed`), by key, and `reallowed` what
+ * this one may use of that.
+ */
+interface AvoidingLine extends SolvedLine { used: StuffKey[]; reallowed: ReadonlySet<StuffKey> }
+
+/**
+ * A derived leaf made from avoided goods, as the walk sees it: no leaf, so the line makes it (keeping out of them there
+ * too) or goes without.
+ */
+const NOT_BOUGHT: LeafDecision = { buyable: false, cost: 0, leafClass: null };
+
+/**
+ * The line that keeps out of what `request` avoids (architecture §11.25, ruling R10), from the plain line
+ * (`pricing.graph`, solved as `plain`): the plain line itself when it uses none of it (`amountsUsed`); else the line
+ * walked without it all (`CandidateOptions.avoid`; a derived leaf made from avoided goods is no leaf there, so the line
+ * makes it from what it may use or goes without); else, as nothing at the tier avoids it all, the line with the fewest
+ * of what the plain line used allowed back: one at a time, least raw-cost impact first (unit cost × what the plain line
+ * consumes and buys of it; what a machine only holds counts 0), until the line plans, and then each one before the last
+ * is avoided again wherever the line still plans without it. At most twice as many passes as goods used. When even
+ * allowing them all back plans nothing (the walk without the rest prunes differently), the plain line, all of them
+ * allowed back.
+ */
+async function avoidingLine(
+  pack: Pack, settings: PlanSettings, pricing: LinePricing, plain: Solution, demand: ReadonlyMap<StuffKey, number>, request: AvoidRequest,
+): Promise<AvoidingLine> {
+  const open = pricing.graph;
+  const goods = request.goods;
+  const amounts = amountsUsed(open, plain, request);
+  const used = [...amounts.keys()].sort(byString);
+  const without = (allowed: ReadonlySet<StuffKey>): Set<StuffKey> => new Set([...goods].filter((key) => !allowed.has(key)));
+  if (used.length === 0) return { graph: open, sol: plain, avoid: goods, used, reallowed: new Set() };
+  /** The derived leaves made from avoided goods the plain line buys. */
+  const bought = used.filter((key) => !goods.has(key));
+  const solve = async (allowed: ReadonlySet<StuffKey>): Promise<SolvedLine> => {
+    const avoid = without(allowed);
+    // The list's goods are all ones the plain line uses, allowed back with the derived leaves it buys: the plain line.
+    if (avoid.size === 0 && bought.every((key) => allowed.has(key))) return { graph: open, sol: plain, avoid };
+    const leaf: LeafOracle = (key) => (!allowed.has(key) && request.madeFrom(key).length > 0 ? NOT_BOUGHT : pricing.leaf(key));
+    await yieldToEventLoop();
+    const graph = buildCandidates(pack, settings, pricing.basis.env, leaf, [pricing.target], { avoid });
+    return { graph, sol: await solveLine(graph, demand), avoid };
+  };
+  const strict = await solve(new Set());
+  if (strict.sol.status === 'ok') return { ...strict, used, reallowed: new Set() };
+
+  const unitCost = (key: StuffKey): number => {
+    const cost = pricing.model.costs.cost(key);
+    return Number.isFinite(cost) ? cost : pricing.basis.prices.price(key);
+  };
+  const impact = (key: StuffKey): number => unitCost(key) * (amounts.get(key) ?? 0);
+  const reallowed = new Set<StuffKey>();
+  let best: SolvedLine | undefined;
+  for (const key of [...used].sort((a, b) => impact(a) - impact(b) || byString(a, b))) {
+    reallowed.add(key);
+    const tried = await solve(reallowed);
+    if (tried.sol.status === 'ok') {
+      best = tried;
+      break;
+    }
+  }
+  if (best === undefined) return { graph: open, sol: plain, avoid: without(new Set(used)), used, reallowed: new Set(used) };
+  for (const key of [...reallowed].slice(0, -1)) {
+    reallowed.delete(key);
+    const tried = await solve(reallowed);
+    if (tried.sol.status === 'ok') best = tried;
+    else reallowed.add(key);
+  }
+  return { ...best, used, reallowed };
+}
+
+/** The flow end of what the line buys (machines.ts `buildFlows`). */
+const RAW = 'raw';
+
+/** What the line avoids where its machines hold parts (`heldOption`); nothing for a project that avoids nothing. */
+function heldAvoid(request: AvoidRequest, line: SolvedLine): HeldAvoid | undefined {
+  return request.listed ? { listed: request.goods, avoid: line.avoid } : undefined;
+}
+
+/**
+ * `Plan.avoided` and the `avoid-unavoidable` warnings of the final line (ruling R10): each good of what the plain line
+ * used (`AvoidingLine.used`; a derived leaf with what it is made from), `unavoidable` when it is allowed back and this
+ * line still uses it; one warning per step and allowed-back good it uses, by step id then key: one flowing into the
+ * step (flows, so ore-dictionary slots and Make N count), or one a not-consumed slot of its recipe holds (`heldOption`:
+ * the machine "needs" it). A derived leaf uses what it is made from only where the line buys it (a flow from `raw`):
+ * made in the line, its own steps avoid what they can.
+ */
+function unavoidableUses(
+  pack: Pack, request: AvoidRequest, line: AvoidingLine, steps: readonly PlanStep[], flows: readonly PlanFlow[],
+  buys: ReadonlyMap<StuffKey, number>, tier: number,
+): { avoided: NonNullable<Plan['avoided']>; warnings: PlanWarning[] } {
+  const stepOf = new Map(steps.map((s) => [s.id, s]));
+  /** A derived leaf made from avoided goods: the rest of what the plain line used is on the list itself. */
+  const derived = (key: StuffKey): boolean => !request.goods.has(key);
+  const inUse = new Set([...buys.keys()].filter((key) => line.reallowed.has(key)));
+  const uses = new Map<string, { stepId: string; key: StuffKey; machine: string; holds: boolean }>();
+  for (const f of flows) {
+    const step = stepOf.get(f.to);
+    if (step === undefined || !line.reallowed.has(f.key) || (derived(f.key) && f.from !== RAW)) continue;
+    inUse.add(f.key);
+    uses.set(`${f.to}\n${f.key}`, { stepId: f.to, key: f.key, machine: step.machine.name, holds: false });
+  }
+  const parts = heldAvoid(request, line);
+  for (const step of steps) {
+    for (const ing of pack.recipeById.get(step.recipeId)?.inputs ?? []) {
+      const key = ing.consumed ? undefined : heldOption(ing.options, parts)?.key;
+      if (key === undefined || !line.reallowed.has(key) || derived(key)) continue;
+      const id = `${step.id}\n${key}`;
+      if (uses.has(id)) continue;
+      inUse.add(key);
+      uses.set(id, { stepId: step.id, key, machine: step.machine.name, holds: true });
+    }
+  }
+  /** "Magnetic Steel Ingot (made from Steel Ingot)" for a derived leaf, else the good's name. */
+  const named = (key: StuffKey): string => {
+    const from = request.madeFrom(key).map((k) => pack.nameOf(k));
+    if (from.length === 0) return pack.nameOf(key);
+    const shown = from.length > MAX_LISTED ? `${from.slice(0, MAX_LISTED).join(', ')} and ${from.length - MAX_LISTED} more` : listed(from);
+    return `${pack.nameOf(key)} (made from ${shown})`;
+  };
+  const warnings = [...uses.values()]
+    .sort((a, b) => byString(a.stepId, b.stepId) || byString(a.key, b.key))
+    .map(({ stepId, key, machine, holds }): PlanWarning => ({
+      code: 'avoid-unavoidable', key, stepId, text: `${machine} ${holds ? 'needs' : 'uses'} ${named(key)} — no recipe at ${tierName(tier)} avoids it`,
+    }));
+  const avoided = line.used.map((key): NonNullable<Plan['avoided']>[number] => {
+    const entry = { key, name: pack.nameOf(key), unavoidable: inUse.has(key) };
+    const from = request.madeFrom(key);
+    return from.length === 0 ? entry : { ...entry, madeFrom: [...from] };
+  });
+  return { avoided, warnings };
 }
 
 /**
  * Plans one line (spec §3.2–§3.11): least raw material at the project's tier where the group can reach, as a steady
- * rate or as a batch of N on the machines the group owns. A missing or unknown target gives an `empty` plan; a target
- * nothing reachable makes gives an `infeasible` plan whose warnings say what blocks it and what unlocks it.
+ * rate or as a batch of N on the machines the group owns, keeping out of the materials the project avoids where any
+ * plan can (`avoidingLine`). A missing or unknown target gives an `empty` plan; a target nothing reachable makes gives
+ * an `infeasible` plan whose warnings say what blocks it and what unlocks it.
  */
 export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanContext): Promise<Plan> {
   // Each synchronous stretch (availability, each candidate walk, each LP solve) yields first, so other
@@ -496,19 +777,26 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
     const empty: PlanWarning = settings.target === null
       ? { code: 'no-target', text: 'Pick something to make' }
       : { code: 'unknown-target', text: 'This item is not in the current recipe export' };
-    return assemble(pack, settings, planBasis(pack, settings, ctx), bodyWithout('empty', [empty]));
+    const avoid = avoidRequest(pack, settings, null, null);
+    return assemble(pack, settings, planBasis(pack, settings, ctx), withAvoided(bodyWithout('empty', [empty, ...avoid.warnings]), avoid, []));
   }
-  const { target, basis, model, leaf, graph } = await pricing;
+  const priced = await pricing;
+  const { target, basis, model, leaf } = priced;
+  const avoid = avoidRequest(pack, settings, target, priced);
   const batch = settings.mode === 'makeN';
   const demand = new Map([[target, batch ? settings.amount : settings.amount / SECONDS_PER[settings.per]]]);
-  const sol = await solveLine(graph, demand);
-  const solverWarnings = sol.warnings.map((w) => namedSolverWarning(pack, graph, sol, w));
+  const plain = await solveLine(priced.graph, demand);
 
-  if (sol.status === 'infeasible') {
+  if (plain.status === 'infeasible') {
     // A graph cut short at its recipe cap names no blockers (solve.ts): its `graph-too-big` warning says why.
-    const blocked = blockerWarnings(pack, sol, basis, settings, ctx);
-    return assemble(pack, settings, basis, bodyWithout('infeasible', [...graph.warnings, ...solverWarnings, ...blocked.warnings], blocked.unlocks));
+    const solverWarnings = plain.warnings.map((w) => namedSolverWarning(pack, priced.graph, plain, w));
+    const blocked = blockerWarnings(pack, plain, basis, settings, ctx);
+    const warnings = [...priced.graph.warnings, ...solverWarnings, ...blocked.warnings, ...avoid.warnings];
+    return assemble(pack, settings, basis, withAvoided(bodyWithout('infeasible', warnings, blocked.unlocks), avoid, []));
   }
+  const line = await avoidingLine(pack, settings, priced, plain, demand, avoid);
+  const { graph, sol } = line;
+  const solverWarnings = sol.warnings.map((w) => namedSolverWarning(pack, graph, sol, w));
 
   const opts = { settings, groupTier: basis.tier, coilHeat: basis.coilHeat, ctx, multiblocks: basis.env.multiblocks };
   let steps: PlanStep[];
@@ -536,18 +824,21 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
     buys = sol.buys;
     sinks = sol.sinks;
   }
-  await addAlternatives(pack, steps, model, graph);
+  await addAlternatives(pack, steps, model, graph, line.avoid);
 
   const raw = rawInputsOf(pack, graph, basis, ctx, buys, made?.totalSeconds ?? null);
   // Make N steps of one machine type share that type's machines (makeN), so they draw at most once per type.
   const power = powerSummary(steps, { sharedByType: batch });
-  const bom = await buildBom(pack, steps, { settings, env: basis.env, leaf, ctx });
+  // The parts the machines hold are ones the line may use (ruling R7): never an option it still avoids.
+  const held = heldAvoid(avoid, line);
+  const bom = await buildBom(pack, steps, { settings, env: basis.env, leaf, ctx, avoid: held });
+  const uses = unavoidableUses(pack, avoid, line, steps, flows, buys, basis.tier);
   const body: PlanBody = {
     status: 'ok', unlocks: [], steps, flows, rawInputs: raw.rawInputs, byproducts: byproductsOf(graph, sinks, target), power,
     buildList: bom.lines, buildTotals: bom.totals,
-    buildSteps: buildSteps(pack, { steps, bom, power, settings, tier: basis.tier, target, totalSeconds: made?.totalSeconds }),
-    warnings: [...graph.warnings, ...solverWarnings, ...batchWarnings, ...raw.warnings, ...bom.warnings],
+    buildSteps: buildSteps(pack, { steps, bom, power, settings, tier: basis.tier, target, totalSeconds: made?.totalSeconds, avoid: held }),
+    warnings: [...graph.warnings, ...solverWarnings, ...batchWarnings, ...raw.warnings, ...bom.warnings, ...avoid.warnings, ...uses.warnings],
   };
   if (made !== undefined) body.makeN = made;
-  return assemble(pack, settings, basis, body);
+  return assemble(pack, settings, basis, withAvoided(body, avoid, uses.avoided));
 }

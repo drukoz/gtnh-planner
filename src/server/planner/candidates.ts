@@ -1,6 +1,7 @@
 // Candidate recipes (spec §3.3 and §5, gt-mechanics §1.2(b) and §6.4): which recipes the group can run at its tier, and
 // the recipe graph the LP plans over, walked back from the targets to buyable leaves. Ore-dictionary slots become
-// virtual `alt:` goods that free `convert` recipes fill from each kept option.
+// virtual `alt:` goods that free `convert` recipes fill from each kept option. A graph can avoid goods (§11.25): it
+// never buys one, consumes one or holds one in a machine (a lens, mold or catalyst slot).
 
 import { ebfHeat, voltageTier } from '../../shared/gt/overclock.ts';
 import { V, tierName } from '../../shared/gt/tiers.ts';
@@ -57,9 +58,14 @@ export interface GoodInfo {
 export interface CandidateGraph {
   targets: StuffKey[]; recipes: LpRecipe[] /* sorted by id */; goods: Map<StuffKey, GoodInfo>;
   blocked: Map<StuffKey, Array<{ recipeId: string; why: Rejection; needTier?: number }>>; warnings: PlanWarning[];
-  // optional addition
+  // optional additions
   /** The walk stopped at its recipe cap: goods it never expanded look unmakeable, so blockers would name the wrong goods. */
   truncated?: boolean;
+  /**
+   * The goods the graph avoids (`CandidateOptions.avoid`), when there are any: its slots lack them, consumed ones (its
+   * ore-dictionary slots) and the not-consumed ones its recipes hold (`LpRecipe.nonConsumed`) alike.
+   */
+  avoid?: ReadonlySet<StuffKey>;
 }
 
 const MAX_TIER = V.length - 1;
@@ -330,6 +336,41 @@ export function virtualKey(options: Ingredient['options']): StuffKey {
   return 'alt:' + options.map((o) => `${o.key}*${o.amount}`).sort().join('|');
 }
 
+/**
+ * The options of a slot a line that avoids `avoid` may take (ruling R7), consumed or not (a lens, mold or catalyst the
+ * machine holds): the ones not avoided; `options` itself when none is avoided, so its virtual key stays; none when all
+ * are.
+ */
+export function keptOptions(options: Ingredient['options'], avoid: ReadonlySet<StuffKey> | undefined): Ingredient['options'] {
+  if (avoid === undefined || !options.some((o) => avoid.has(o.key))) return options;
+  return options.filter((o) => !avoid.has(o.key));
+}
+
+/**
+ * What a line avoids, as what its machines hold reads it (`heldOption`): every good its avoid list covers (`listed`),
+ * and those of them it still avoids (`avoid`: without the ones it had to allow back).
+ */
+export interface HeldAvoid { listed: ReadonlySet<StuffKey>; avoid: ReadonlySet<StuffKey> }
+
+/**
+ * The option a not-consumed slot holds (a lens, mold or catalyst; ruling R7): its first one, or for a line that avoids
+ * `line` its first one on no avoid list, else its first one the line had to allow back, else its first. So a lens slot
+ * that also takes a lens off the list holds that one, even where the line allows the avoided lens back for another
+ * step.
+ */
+export function heldOption(options: Ingredient['options'], line?: HeldAvoid): Ingredient['options'][number] | undefined {
+  if (line === undefined) return options[0];
+  return keptOptions(options, line.listed)[0] ?? keptOptions(options, line.avoid)[0] ?? options[0];
+}
+
+/**
+ * Whether `r` uses an avoided good: some slot, consumed or held in the machine (not consumed), has options and every
+ * one of them is avoided. Such a recipe is no candidate of a line that avoids `avoid`.
+ */
+export function usesAvoided(r: Recipe, avoid: ReadonlySet<StuffKey> | undefined): boolean {
+  return avoid !== undefined && r.inputs.some((ing) => ing.options.length > 0 && keptOptions(ing.options, avoid).length === 0);
+}
+
 function byString(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
@@ -344,26 +385,30 @@ function sortedCoeffs(coeffs: ReadonlyMap<StuffKey, number>): Array<[StuffKey, n
 
 const NOT_A_LEAF: LeafDecision = { buyable: false, cost: 0, leafClass: null };
 
+/** The options of a slot the walk may take (`keptOptions`). */
+type SlotOptions = (ing: Ingredient) => Ingredient['options'];
+
 /** The estimated raw cost of one run of `r`: its consumed inputs, each slot at its cheapest option (amount × estimate). */
-function recipeInputCost(r: Recipe, estimateOf: (key: StuffKey) => number): number {
+function recipeInputCost(r: Recipe, estimateOf: (key: StuffKey) => number, optionsOf: SlotOptions): number {
   let total = 0;
   for (const ing of r.inputs) {
     if (!ing.consumed) continue;
     let best = Infinity;
-    for (const o of ing.options) best = Math.min(best, o.amount * estimateOf(o.key));
+    for (const o of optionsOf(ing)) best = Math.min(best, o.amount * estimateOf(o.key));
     total += ing.chance * best;
   }
   return total;
 }
 
 /**
- * A rough raw cost per unit of every good `targets` can reach through accepted recipes (each slot option counts as
- * reached): leaves at their cost; a recipe's consumed inputs, each ore-dictionary slot at its cheapest option, charged
- * in full to each output. Goods settle cheapest first and once each (a generalized Dijkstra), so a gain loop in the data
- * (x → 2 y, y → x) cannot drive its goods' estimates to 0. `settledAt` is the order the goods settled in.
+ * A rough raw cost per unit of every good `targets` can reach through `usable` recipes (each slot option the walk may
+ * take, `optionsOf`, counts as reached): leaves at their cost; a recipe's consumed inputs, each ore-dictionary slot at
+ * its cheapest option, charged in full to each output. Goods settle cheapest first and once each (a generalized
+ * Dijkstra), so a gain loop in the data (x → 2 y, y → x) cannot drive its goods' estimates to 0. `settledAt` is the
+ * order the goods settled in.
  */
 function estimateCosts(
-  pack: Pack, targets: readonly StuffKey[], decide: (key: StuffKey) => LeafDecision, accept: (r: Recipe) => Acceptance,
+  pack: Pack, targets: readonly StuffKey[], decide: (key: StuffKey) => LeafDecision, usable: (r: Recipe) => boolean, optionsOf: SlotOptions,
 ): { estimate: Map<StuffKey, number>; settledAt: Map<StuffKey, number> } {
   const estimate = new Map<StuffKey, number>();
   const settledAt = new Map<StuffKey, number>();
@@ -382,12 +427,12 @@ function estimateCosts(
     }
     for (const index of pack.producers.get(key) ?? []) {
       const r = pack.recipes[index];
-      if (r === undefined || taken.has(r.id) || !accept(r).ok) continue;
+      if (r === undefined || taken.has(r.id) || !usable(r)) continue;
       taken.add(r.id);
       reached.push(r);
       for (const ing of r.inputs) {
         if (!ing.consumed) continue;
-        for (const o of ing.options) {
+        for (const o of optionsOf(ing)) {
           const list = consumersOf.get(o.key);
           if (list === undefined) consumersOf.set(o.key, [r]);
           else if (list[list.length - 1] !== r) list.push(r);
@@ -413,7 +458,7 @@ function estimateCosts(
   const open = new Map<Recipe, number>(reached.map((r) => [r, r.inputs.filter((ing) => ing.consumed).length]));
   const filled = new Set<Ingredient>();
   const run = (r: Recipe): void => {
-    const total = recipeInputCost(r, estimateOf);
+    const total = recipeInputCost(r, estimateOf, optionsOf);
     if (!Number.isFinite(total)) return;
     for (const p of r.outputs) {
       const made = p.amount * p.chance;
@@ -429,7 +474,7 @@ function estimateCosts(
     for (const r of consumersOf.get(key) ?? []) {
       let left = open.get(r) as number;
       for (const ing of r.inputs) {
-        if (!ing.consumed || filled.has(ing) || !ing.options.some((o) => o.key === key)) continue;
+        if (!ing.consumed || filled.has(ing) || !optionsOf(ing).some((o) => o.key === key)) continue;
         filled.add(ing);
         left--;
       }
@@ -444,6 +489,12 @@ function estimateCosts(
 export interface CandidateOptions {
   /** The recipe cap (default `MAX_RECIPES`). */
   maxRecipes?: number;
+  /**
+   * Goods the line avoids (§11.25, rulings R6–R8): never bought, and no candidate consumes one or holds one in a
+   * not-consumed slot. A recipe with a slot of avoided options only is left out (`usesAvoided`; a pinned one too), and a
+   * slot with others keeps only those (`keptOptions`). Absent or empty = none.
+   */
+  avoid?: ReadonlySet<StuffKey>;
 }
 
 /**
@@ -454,11 +505,13 @@ export interface CandidateOptions {
  * cost, a recipe's consumed inputs (each ore-dictionary slot at its cheapest option) charged in full to each output,
  * settled cheapest first. It ignores byproduct credit, so it only prunes; the LP over the kept recipes still credits
  * byproducts. A good nothing reachable makes keeps a few producers anyway, so `findBlockers` can name what is missing.
+ * Goods of `opts.avoid` are never bought, consumed or held (`CandidateOptions.avoid`), in the estimate as in the graph.
  */
 export function buildCandidates(
   pack: Pack, settings: PlanSettings, env: PlanEnv, leaf: LeafOracle, targets: StuffKey[], opts: CandidateOptions = {},
 ): CandidateGraph {
   const maxRecipes = opts.maxRecipes ?? MAX_RECIPES;
+  const avoid = opts.avoid !== undefined && opts.avoid.size > 0 ? opts.avoid : undefined;
   const targetSet = new Set(targets);
   const decisions = new Map<StuffKey, LeafDecision>();
   const goods = new Map<StuffKey, GoodInfo>();
@@ -471,7 +524,8 @@ export function buildCandidates(
   let full = false;
 
   const decide = (key: StuffKey): LeafDecision => {
-    if (targetSet.has(key)) return NOT_A_LEAF;
+    // An avoided good is never bought; as no candidate consumes it either, it is only ever some recipe's byproduct.
+    if (targetSet.has(key) || avoid?.has(key) === true) return NOT_A_LEAF;
     let d = decisions.get(key);
     if (d === undefined) {
       d = leaf(key);
@@ -509,9 +563,10 @@ export function buildCandidates(
     if (recipes.size >= maxRecipes) full = true;
     return !full;
   };
-  const { estimate, settledAt } = estimateCosts(pack, targets, decide, accept);
+  const optionsOf: SlotOptions = (ing) => keptOptions(ing.options, avoid);
+  const { estimate, settledAt } = estimateCosts(pack, targets, decide, (r) => accept(r).ok && !usesAvoided(r, avoid), optionsOf);
   const estimateOf = (key: StuffKey): number => estimate.get(key) ?? Infinity;
-  const inputCost = (r: Recipe): number => recipeInputCost(r, estimateOf);
+  const inputCost = (r: Recipe): number => recipeInputCost(r, estimateOf, optionsOf);
   /**
    * Whether `r` makes `key` from goods the estimate settled before `key`. A producer that is not (sand from sandstone
    * when sandstone is made from sand) can tie with the real one at the same estimate, and a graph of only such
@@ -519,7 +574,7 @@ export function buildCandidates(
    */
   const grounded = (r: Recipe, key: StuffKey): boolean => {
     const at = settledAt.get(key) ?? Infinity;
-    return r.inputs.every((ing) => !ing.consumed || ing.options.some((o) => (settledAt.get(o.key) ?? Infinity) < at));
+    return r.inputs.every((ing) => !ing.consumed || optionsOf(ing).some((o) => (settledAt.get(o.key) ?? Infinity) < at));
   };
   /** Estimated raw cost per unit of `key` made by `r`. */
   const unitCost = (r: Recipe, key: StuffKey): number => {
@@ -564,15 +619,21 @@ export function buildCandidates(
     const slots = new Map<StuffKey, Ingredient['options']>();
     const nonConsumed: StuffKey[] = [];
     for (const ing of r.inputs) {
-      const first = ing.options[0];
-      if (first === undefined) continue;
+      if (ing.options.length === 0) continue;
+      // Never every option avoided: such a recipe is no candidate (`usesAvoided`).
+      const options = optionsOf(ing);
       if (!ing.consumed) {
-        nonConsumed.push(first.key);
-      } else if (ing.options.length === 1) {
-        addTo(coeffs, first.key, -first.amount * ing.chance);
+        // What the machine holds, for the walk: the first option it may take (a plan names `heldOption`'s pick).
+        const held = options[0];
+        if (held !== undefined) nonConsumed.push(held.key);
+        continue;
+      }
+      const only = options.length === 1 ? options[0] : undefined;
+      if (only !== undefined) {
+        addTo(coeffs, only.key, -only.amount * ing.chance);
       } else {
-        const vkey = virtualKey(ing.options);
-        slots.set(vkey, ing.options);
+        const vkey = virtualKey(options);
+        slots.set(vkey, options);
         addTo(coeffs, vkey, -ing.chance);
       }
     }
@@ -604,20 +665,23 @@ export function buildCandidates(
     const pin = Object.hasOwn(settings.recipeChoice, key) ? settings.recipeChoice[key] : undefined;
     if (pin !== undefined) {
       const pinned = pinnedFor(key, pin);
-      if (pinned !== null) {
+      if (pinned !== null && !usesAvoided(pinned.r, avoid)) {
         addRecipe(pinned.r, pinned.mapId);
         return;
       }
       warnings.push({
         code: 'stale-choice', key,
-        text: `${pack.nameOf(key)}: the chosen recipe is gone or cannot run at ${tierName(env.tier)}; using the best one available`,
+        text: pinned === null
+          ? `${pack.nameOf(key)}: the chosen recipe is gone or cannot run at ${tierName(env.tier)}; using the best one available`
+          : `${pack.nameOf(key)}: the chosen recipe uses a material on the avoid list; using the best one that avoids it`,
       });
     }
     const rejected: Array<{ recipeId: string; why: Rejection; needTier?: number }> = [];
     const accepted: Array<{ r: Recipe; mapId: string }> = [];
     for (const i of pack.producers.get(key) ?? []) {
       const r = pack.recipes[i];
-      if (r === undefined) continue;
+      // One that consumes or holds an avoided good is no producer here at all: the line re-allows the good when it needs it.
+      if (r === undefined || usesAvoided(r, avoid)) continue;
       const a = accept(r);
       if (a.ok) accepted.push({ r, mapId: a.mapId });
       else rejected.push(a.needTier === undefined ? { recipeId: r.id, why: a.why } : { recipeId: r.id, why: a.why, needTier: a.needTier });
@@ -633,7 +697,9 @@ export function buildCandidates(
     warnings.push({ code: 'graph-too-big', text: 'This chain is too large to plan in one go; mark some parts as "we already make this"' });
   }
 
-  return {
+  const graph: CandidateGraph = {
     targets: [...targets], recipes: [...recipes.values()].sort((a, b) => byString(a.id, b.id)), goods, blocked, warnings, truncated: full,
   };
+  if (avoid !== undefined) graph.avoid = avoid;
+  return graph;
 }

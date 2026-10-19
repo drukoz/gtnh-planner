@@ -40,6 +40,11 @@ export interface PlanSettings {
   excludedCategories: string[];            // default: DEFAULT_EXCLUDED_CATEGORIES
   coilHeat: number | null;                 // EBF coil heat (K); null = default for tier or from world
   automateCrafting: boolean;               // false = crafting-table steps are hand-crafting
+  /**
+   * Materials to avoid (§11.25): GT material names ("Silver": every form of it) or StuffKeys, at most 50, no repeats.
+   * `defaultSettings()` and `normalizeSettings()` always fill it; readers still use `?? []` (projects stored before it).
+   */
+  avoid: string[];
   // optional addition
   /**
    * mteIds of owned machine types the group does not want to reuse for this line (spec §3.3 "suggests reusing them.
@@ -114,6 +119,13 @@ export interface Plan {
    * → dimension name and `map:<recipe map id>` → map name, so the client never needs the pack.
    */
   names?: Record<string, string>;
+  /**
+   * The goods the avoid list matched that the plan without it uses (§11.25), sorted by key: `unavoidable` when this plan
+   * still uses one because nothing at the tier avoids it. Absent when the settings avoid nothing. A good it uses in a
+   * not-consumed slot (a lens, mold or catalyst its machine holds) counts. So does a derived material it would buy that
+   * is made from goods the list matched (`madeFrom`, those goods): buying it would use them outside the plan.
+   */
+  avoided?: Array<{ key: StuffKey; name: string; unavoidable: boolean; madeFrom?: StuffKey[] }>;
 }
 
 export interface PlanContext {           // filled from a world scan by Plan 4; Plan 2 works with an empty one

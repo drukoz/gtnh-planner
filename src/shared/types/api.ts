@@ -16,6 +16,9 @@ export interface ApiError { error: string; message: string }
 export interface PackInfo {
   manifest: PackManifest; mapCount: number; recipeCount: number; itemCount: number;
   dimensions: DimensionInfo[]; capabilities: Capability[]; exclusionRules: string[];
+  // optional addition
+  /** The material names an avoid entry can be, with their display names, sorted by display name (§11.25). */
+  materials?: Array<{ name: string; label: string }>;
 }
 
 /** One recipe as the item browser shows it; an ingredient with alternatives shows its first option. */
