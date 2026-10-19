@@ -2,9 +2,10 @@
 
 Date 2026-10-19 · Author: lead engineer (from four audits and a prototype) · Status: ready to implement
 
-Implementation plan: `2026-10-19-09-planner-quality.md` (8 tasks). This document is the spec that plan argues from. When
-the work starts, copy this file to `docs/superpowers/specs/2026-10-19-planner-quality-fix.md` and the plan to
-`docs/superpowers/plans/2026-10-19-09-planner-quality.md` (Task 1, Step 1).
+Implementation plan: `docs/superpowers/plans/2026-10-19-09-planner-quality.md` (9 tasks; Task 9 was added with the
+user's answers in §10). This document is the spec that plan argues from; plan 09 Task 1, Step 1 committed it under this
+name, `docs/superpowers/specs/2026-10-19-planner-quality-fix.md`, and recorded the user's answers to §10 in §1, §3, §8,
+§9 and §10.
 
 Inputs read for this spec:
 - The user's report (the six complaints) and the relayed request: *"the fluid extractor using cobble and 2 different
@@ -32,13 +33,13 @@ Paths below without a prefix are repository paths. `audit/` means
 | No input from nowhere ("we are missing the import") | complaint 1 | §4 D1–D3: the solver works at unit demand, rates keep 9 significant digits, a residual check refuses unbalanced plans, and the server and the client both flag any input nothing supplies |
 | One process per product unless truly needed | complaint 3 | §4 D2, D6: the simplification stage works again and charges every step, so a second producer stays only when it saves more than a step is worth; any that remains is flagged with its share and a "keep only" action |
 | Gathered items like sand are imports, never crafted from free cobblestone | complaint 5, relayed request | §4 D4–D5: sand, gravel and other world blocks are gathered leaves; free inputs need their generator machine, so a free-cobblestone detour costs steps |
-| Complex materials (ethylene, PE, alloys…) get a line behind them, shown as supporting lines | complaint 2, clarification §11.27 | §4 D9–D10, §5 R6: derived fluids are always made; `routeDerived` defaults to `true`; steps are grouped into supporting lines that can be switched to "we already make this" |
+| Complex materials (ethylene, PE, alloys…) get a line behind them, shown as supporting lines | complaint 2, clarification §11.27 | §4 D9–D10, §5 R6: derived fluids are always made; `routeDerived` defaults to `true`, and projects stored before plan 09 are switched to `true` once (§10 answer 2); steps are grouped into supporting lines that can be switched to "we already make this" |
 | Imports clearly shown | complaints 1–2 | §6: import stubs next to the step that uses them, a leaf word (mined, gathered, free, bought…) and the chain a bought material stands for |
 | Where an item comes from can be highlighted | complaint 4 | §6: item ports on every box, hover or click an item to light its producers, edges and consumers, a Find box, and Takes/Makes in the step panel |
-| Sensible step counts | complaints 3, 5, 6 | §4 D6–D8: each step must save at least 5 % of the line's least raw material (per-project setting); hand-crafting in a running line weighs 3 steps; pruning keeps the simplest route |
+| Sensible step counts | complaints 3, 5, 6 | §4 D6–D8: each step must save at least 2 % of the line's least raw material by default (per-project setting; §10 answer 3); hand-crafting in a running line weighs 3 steps; pruning keeps the simplest route |
 | Free inputs need a generator ("we need a stone generator") | clarification §11.26 | §4 D5: rock breaker, pump and compressed-air supply steps, unless the project says it already has a supply |
 | Choosable solder option with an explanation | clarification | §4 D12, §6: every option a step uses is listed with its raw cost and the steps its chain needs, and can be pinned |
-| Build cost of machines in the objective | clarification §11.28 | **Deferred** to plan 10 (§9), together with reusing owned machines (§11.29, which main's architecture assigns to plan 09). The step charge is the stand-in until the build list is trustworthy |
+| Build cost of machines in the objective | clarification §11.28 | **Deferred** to plan 10 (§9), together with the rest of reusing owned machines (§11.29: owned machines in the objective, sharing one owned machine across steps). Plan 09 Task 9 ships §11.29's "Reuse machines we have" switch, the manual "Machines we have" list and `PlanStep.reused` for machine assignment and the build list (§10 answer 1). The step charge is the stand-in until the build list is trustworthy |
 
 ---
 
@@ -57,6 +58,10 @@ this independently).
 | Ethylene | bought from "Canner from Ethylene Cell" | bought | not used (refined-glue boards) | not used |
 | Raw material per hour | 8.913 (below the true optimum: material from tolerance) | 8.914 | 12.65 (+21 % on the least, −11 steps) | 10.99 (+23 % on the least) |
 | Same recipes at 1/min | no (29 vs 26) | yes | yes | yes |
+
+The prototype columns here and in the corpus below ran the step charge at 5 %, the default this spec first proposed.
+The user chose 2 % (§10 answer 3): on this line it keeps the biomass-ethylene PE board line, 22 steps at +1.5 % raw
+material.
 
 Corpus (prototype, 1 per minute unless stated; "before" from `docs/local/planner-audit/corpus-table.md`):
 
@@ -87,7 +92,7 @@ Every corpus plan in the prototype: 0 errors of the invariant checker's kinds a�
 
 | Name | Value | File | Meaning |
 |---|---|---|---|
-| `DEFAULT_STEP_CHARGE` | `0.05` | `src/shared/types/plan.ts` | default of `PlanSettings.stepCharge` |
+| `DEFAULT_STEP_CHARGE` | `0.02` (§10 answer 3) | `src/shared/types/plan.ts` | default of `PlanSettings.stepCharge` |
 | `STEP_CHARGE_PRESETS` | `[0, 0.02, 0.05, 0.15]` labelled "Least raw material", "Some steps", "Balanced", "Fewest machines" | `src/client/views/settings-model.ts` | settings panel presets |
 | `MAX_STEP_CHARGE` | `0.5` | `src/shared/project/apply-op.ts` | `validateOp` upper bound |
 | `STEP_CHARGE_CAP` | `0.25` | `src/server/planner/solve.ts` | total raw ≤ (1 + cap) × least raw (S1) |
@@ -111,13 +116,17 @@ gets a `SETTING_CHECKS` entry in `apply-op.ts`):
 
 | Field | Type | Default | Check |
 |---|---|---|---|
-| `stepCharge` | `number` | `0.05` | finite, `0 ≤ v ≤ 0.5` |
+| `stepCharge` | `number` | `0.02` | finite, `0 ≤ v ≤ 0.5` |
 | `haveSupply` | `StuffKey[]` | `[]` | list of strings; only `FREE_KEYS` entries have an effect |
 | `optionChoice` | `Record<string, StuffKey>` | `{}` | keys match `/^[^#]{1,100}#\d{1,4}$/` (`<recipeId>#<slot>`), values strings of 1–300 chars |
+| `settingsVersion` | `number` | `2` (`normalizeSettings()` fills a missing one with `1`) | safe integer `≥ 2` |
 | `routeDerived` (existing) | `boolean` | **`true`** (was `false`) | unchanged |
 
-Stored projects keep their stored `routeDerived` (see §10 question 2). Changing the defaults changes the settings hash
-of every project, so every cached plan is recomputed once; that is intended.
+Projects stored before plan 09 are switched to `routeDerived: true` once (§10 answer 2, §8 entry 32): at server start
+one recorded settings op `{ routeDerived: true, settingsVersion: 2 }` by `'Planner update'` is applied to every live
+project whose `settingsVersion` is below 2; a project at `settingsVersion ≥ 2` is never touched again, so a later
+deliberate `false` sticks. `normalizeSettings()` alone keeps a stored `routeDerived`. Changing the defaults changes the
+settings hash of every project, so every cached plan is recomputed once; that is intended.
 
 ---
 
@@ -210,7 +219,8 @@ Auditor ids: invariants INV-n, rootcause RCn, gtnh Gn, ui UI-n. "Decision" resol
   still left Electronic Circuit LV at 27 steps and took 7.3 s; the charge gave 14 steps in 2.2 s; a charge is
   rate-invariant, weighs hand-crafting, and becomes the build-cost term of plan 10 later. A charge per *machine*
   (machines needed × charge) was also tried and **rejected**: it broke rate invariance on 13 of 17 lines and made the MIP
-  unstable; machine counts belong to the build-cost objective of plan 10. Rule R3.
+  unstable; machine counts belong to the build-cost objective of plan 10. Rule R3. The default charge is 2 %, not G1's
+  5 % (§10 answer 3: least raw material comes first for the user).
 
 ### D7 (important) Hand-crafting wins the power tie-break in rate mode — G6
 
@@ -395,7 +405,7 @@ Planner:
 
 ### R3 Steps vs raw material: the step charge (D6, D7, D2) — architecture §11.34
 
-`PlanSettings.stepCharge?: number` (default 0.05). `solveLine(graph, demand, opts: SolveOptions = {})` with
+`PlanSettings.stepCharge?: number` (default `DEFAULT_STEP_CHARGE` = 0.02, §10 answer 3). `solveLine(graph, demand, opts: SolveOptions = {})` with
 ```ts
 export interface SolveOptions {
   /** Share of the least raw material (S1) one recipe step must save to be built; 0 = least raw material, fewest recipes as tie-break. */
@@ -463,7 +473,8 @@ In `candidates.ts`:
 ### R6 Supporting lines and the derived-material modes (D10) — architecture §11.27, §11.32
 
 - `defaultSettings().routeDerived = true`. Label in the settings panel: "Plan supporting lines for alloys, plastics and
-  chemicals (off: buy the shallow ones)".
+  chemicals (off: buy the shallow ones)". Projects stored before plan 09 are switched to `true` once by the recorded
+  `'Planner update'` op of §3 (keyed on `PlanSettings.settingsVersion`, §10 answer 2).
 - `routeDerived: false`: a derived base item is a leaf only when `avail.depth(key) ≤ DERIVED_LEAF_MAX_DEPTH`. New
   `Availability.depth(key): number` = recipe layers from the seeds along availability's first-found recipes (`why`): a
   seed has depth 0; a good first made by recipe `r` has depth `1 + max over r's consumed slots of the smallest depth
@@ -693,7 +704,7 @@ All commands from the repository root. Real-data tests: `GTNH_LOCAL=1`, skipped 
 | `tests/client/step-panel.test.tsx` | Takes/Makes peers, Also made by + use-only patch, Options section text and pin patch, Supply and Line sections, renamed Supply-it-from-outside, RawPanel Used by, priced-via text, Make-it-here disabled when `canMake` false; patch builders' outputs |
 | `tests/client/materials.test.tsx` (updated) | "1 L every 12.1 days" for 0.003438 L/h; never "0.00"; `usedBy`; `missingRows` first with the badge; totals' needed-for |
 | `tests/client/plan-diff.test.ts` | added/removed imports and steps, new issues |
-| `tests/unit/shared/apply-op.test.ts` (updated) | defaults (`routeDerived: true`, `stepCharge: 0.05`, `haveSupply: []`, `optionChoice: {}`), checks reject `stepCharge: 0.6`, `-0.1`, `'x'`, bad option keys |
+| `tests/unit/shared/apply-op.test.ts` (updated) | defaults (`routeDerived: true`, `stepCharge: 0.02`, `haveSupply: []`, `optionChoice: {}`, `settingsVersion: 2`; `normalizeSettings` fills a missing `settingsVersion` with 1), checks reject `stepCharge: 0.6`, `-0.1`, `'x'`, bad option keys and a `settingsVersion` below 2 |
 | `tests/e2e/flow-focus.spec.ts` (Playwright, Mini-GT; fixture plans via `page.route('**/api/projects/*/plan', …)` from `tests/e2e/fixtures/plans.ts`) | (1) import stub's right edge ≤ the Wiremill's left edge and < 160 px away at zoom 1; (2) hovering `[data-port$="|out|t:copper_wire@0"]` lights one edge, the assembler `consumer`, the wiremill `producer`, dims the rest, Esc clears; (3) Find item centres the producer; (4) a fixture without the raw→wiremill flow shows `missing:t:copper_ingot@0@…` and the banner text "Nothing supplies Copper Ingot"; (5) a two-producer fixture shows "made 2 ways", and "Keep only …" POSTs a `recipeChoice` patch; (6) a 1/hour fixture shows no `0/h` text and fluids with " L"; (7) "Make it here instead" on Iron Ingot then "What changed" names the new furnace step |
 
 ### 7.2 Real-data acceptance (`GTNH_LOCAL=1`)
@@ -715,6 +726,11 @@ Each `planLine` < 5 s.
 | 4 "where the wire is coming out" | `focusSets(flowGraph(P,'hour'), { kind: 'item', key: 'gregtech:gt.blockmachines@2000' })` (1x Red Alloy Wire) has exactly one producer (the wiremill step) and the circuit assembler `c0106c4cb6b4b041` among its consumers; every `PortSide` of `indexPlan(P)` has its peers |
 | 5 "cobble … molten glass from sand" | no raw input and no step input is `minecraft:cobblestone@0`; no step makes `minecraft:gravel@0` or `minecraft:sand@0`; no step `handCraft`; the glass tube comes from sand or glass dust within 2 steps of an import (`P`: Glass Dust → forming press/alloy smelter; `PR`: Sand gathered) |
 | 6 "recheck the planning step" | `P.steps.length ≤ 20` (prototype 15), `PR.steps.length ≤ 32` (27); `P.rawCost.perSecond ≤ 1.25 × P.rawCost.leastPerSecond`; sorted recipe ids of `P` equal `P1m`'s and every rate is 60× (1e-9 relative); `checkPlanInvariants(pack, settings, P)` has no violation of kinds a, b, d, e, f; warnings include `pin-dominated` for step `0a074f4241a9e0f9`; no `numerics`, `simplify-skipped`, `free-loop`, `graph-too-big` |
+
+The step caps above and the real-acceptance "step caps from §2" come from the 5 % prototype. At the 2 % default (§10
+answer 3) plan 09 Task 8 measures them again and sets each cap to the measured count + 5 (the same headroom; `P ≤ 27`
+from the 22 steps §10 reports at 2 %), and `P` also asserts `P.rawCost.perSecond ≤ 1.10 × P.rawCost.leastPerSecond`.
+Every other assertion stands as written.
 
 **`tests/unit/planner/real-corpus.test.ts`** — 16 targets (Electronic, Good Electronic, Integrated Logic and Advanced
 Circuits, Vacuum Tube, Resistor, Glass Tube, Circuit Board, LV and MV Machine Hull, Electric Motor (LV), Electric Pump
@@ -757,7 +773,8 @@ worst case under load average ≈ 11: 5.04 s (Robot Arm MV); median ≈ 3.3 s.
 Main's architecture already has §11.26 (free inputs need their generator), §11.27 (supporting lines), §11.28 (build cost
 in the objective), §11.29 (reusing owned machines) and §11.30 (EnderIO conduits), written from the user's
 clarifications on 2026-10-18. §11.26 leaves "details of machine choice and rates" and §11.27 "how old projects migrate"
-to this plan; §11.29 names this plan as its implementer (this spec moves it to plan 10, §9 and §10 question 1). Plan 09
+to this plan; §11.29 names this plan as its implementer (plan 09 Task 9 implements its switch, manual list and
+`PlanStep.reused`; the rest moves to plan 10, §9 and §10 answer 1). Plan 09
 leaves 26–30 as they are and appends the entries below (if another plan has taken a number meanwhile, renumber
 consecutively and update the cross-references in this spec and plan 09):
 
@@ -769,16 +786,23 @@ consecutively and update the cross-references in this spec and plan 09):
     loop guard; build-material breakdowns keep free inputs as leaves.
 32. **Supporting lines, details** (amends 27; plan 09 Tasks 2 and 5): with `routeDerived` off a derived material is
     bought only within `DERIVED_LEAF_MAX_DEPTH = 4` layers (`Availability.depth`), derived fluids never; `PlanStep.line?`
-    per R6; stored projects keep their stored `routeDerived` (the stored value cannot tell a choice from the old
-    default) and the plan banner offers "Plan them as supporting lines" (§10 question 2).
+    per R6; projects stored before plan 09 are switched once (§10 answer 2; plan 09 Task 2):
+    `PlanSettings.settingsVersion?: number` (optional addition; `defaultSettings()` sets 2, `normalizeSettings()` fills a
+    missing one with 1, `SETTING_CHECKS.settingsVersion` accepts safe integers ≥ 2), and at server start (`createApp`) one
+    recorded settings op `{ routeDerived: true, settingsVersion: 2 }` by `'Planner update'` is applied to every live
+    project with `settingsVersion` < 2; a project at `settingsVersion` ≥ 2 is never touched again, so a later deliberate
+    `false` sticks; `normalizeSettings()` alone keeps a stored `routeDerived`; the plan banner offers "Plan them as
+    supporting lines" to projects set to `false`.
 33. **Numerics and plan integrity** (plan 09 Task 1): unit-demand solve, 9 significant digits, relative flow drop,
     residual check with `numerics`/`simplify-skipped` warnings, `src/shared/plan/balance.ts` (`indexPlan`, `issueText`),
     `src/shared/format.ts`, integrity `PlanWarning` codes with `stepIds?`/`share?`, `mainOutput` by value,
     `Plan.target?`, `Plan.targetPerSecond?`, `Plan.rawCost?`.
 34. **Steps vs raw material** (plan 09 Task 4; the stand-in for 28 until plan 10): `PlanSettings.stepCharge?` (default
-    0.05, 0–0.5), hand steps ×3 in rate mode, cap +25 %, `hand-step` and `pin-dominated` warnings; `LpModel.start?` (MIP
-    start); avoid trials (25) solve as S1-only probes and only the returned line fully. Plan 10 implements 28 and 29 (build cost, owned and manual machines, machine sharing) and then decides
-    whether the step charge stays.
+    0.02 per §10 answer 3, 0–0.5; presets 0, 0.02, 0.05, 0.15), hand steps ×3 in rate mode, cap +25 %, `hand-step` and
+    `pin-dominated` warnings; `LpModel.start?` (MIP start); avoid trials (25) solve as S1-only probes and only the
+    returned line fully. Plan 09 Task 9 implements 29's `reuseOwned` switch, `ownedManual` list and `PlanStep.reused`
+    for machine assignment and the build list (§10 answer 1); plan 10 keeps 28 and the rest of 29 (owned machines in the
+    objective, sharing one owned machine across steps) and then decides whether the step charge stays.
 35. **Ingredient options** (plan 09 Task 5): `PlanSettings.optionChoice?`, every used option in `PlanStep.inputs`,
     `PlanStep.options?: StepOption[]`, `stale-option` warning.
 36. **Leaf rules and provenance** (plan 09 Tasks 2 and 5): `GATHERED_BLOCKS`, derived fluids never leaves, ore blocks only
@@ -790,13 +814,14 @@ Spec amendments (`docs/superpowers/specs/2026-10-17-gtnh-planner-design.md`; mai
 bullets on build cost, generators, supporting lines and reuse — plan 09 adds to them and replaces none of their
 decisions):
 - §3.3 Objective bullet, appended: "Until the build cost is implemented (plan 10), each recipe step must save at least
-  the project's step charge (default 5 % of the line's least raw material) to be built; a step crafted by hand in a
+  the project's step charge (default 2 % of the line's least raw material) to be built; a step crafted by hand in a
   running line counts as 3; never more than 25 % above the least raw material."
 - §3.3 "How materials are counted": "air: a gas collector or air intake" becomes "air: a compressor filling cells and a
   canner emptying them"; appended: "A Make N batch, and a tier with no supply machine, take them free."
 - §3.3 after the supporting-lines bullet: "With supporting lines switched off, a derived material is bought when the pack
   makes it within four recipe layers; derived fluids are always made. Gathered world blocks (sand, gravel, clay, …) are
-  bought like logs and crops."
+  bought like logs and crops. Projects made before supporting lines were the default are switched to them once (a
+  recorded 'Planner update' change); after that a project's own choice stays."
 - §3.3 "Base material" bullet becomes: "'Base material' by default = mined ingots, dusts and gems, gathered items, and
   fluids pumpable where the group can reach; ore blocks only for lines that make a material."
 - §3.9: "Each import sits next to the step that uses it and says what kind of import it is; boxes list what they take and
@@ -812,7 +837,7 @@ decisions):
 | Item | Why deferred | Where |
 |---|---|---|
 | Build cost of unowned machines in the objective, `buildHorizonHours`, integer machine counts, `Plan.cost` (clarification §11.28) | needs a trustworthy build list first (D15 only partly fixes it); a machine-count term broke rate invariance in the prototype; gtnh §5: at 1/hour a 24 h horizon makes each MV machine ≈ 29 % of the line's raw | plan 10 |
-| Reusing owned machines (§11.29: `reuseOwned`, `ownedManual`, sharing an owned machine type across steps, `PlanStep.reused`) — main's architecture assigns it to plan 09 | its core, "owned machines cost nothing to build", steers the plan only once the build cost is in the objective, and sharing is the same trade-off as `shareGroup`; none of the six complaints needs it | plan 10 (§10 question 1) |
+| The rest of reusing owned machines (§11.29): owned machines in the objective (no build cost for what the group owns) and sharing one owned machine across steps. Plan 09 Task 9 ships `reuseOwned`, `ownedManual` and `PlanStep.reused` for machine assignment and the build list (§10 answer 1) | "owned machines cost nothing to build" steers the plan only once the build cost is in the objective, and sharing is the same trade-off as `shareGroup`; none of the six complaints needs it | plan 10 |
 | Pooling build-list demand before rounding; stopping breakdowns at stocked components (G9) | design change of `expandWith` | plan 10 |
 | Machine tier choice (lowest tier that meets the rate, G11) and machine sharing (`PlanStep.shareGroup`, UI-10) | build-cost trade-offs | plan 10 |
 | Mob drops as gathered items (ender pearl, blaze rod, ghast tear, G2) | changes availability broadly; not needed for the reported lines | later |
@@ -821,7 +846,9 @@ decisions):
 
 ---
 
-## 10. Decisions that need the user
+## 10. Decisions that needed the user (answered)
+
+The questions as asked:
 
 1. **Build cost in the objective (§11.28) and reusing owned machines (§11.29) move to plan 10**; plan 09 ships the
    relative step charge (default 5 %) as their stand-in. Main's architecture says plan 09 implements §11.29; this spec
@@ -834,3 +861,19 @@ decisions):
 3. **Default step charge 5 %.** On the user's line at 1/hour it gives 15 steps at +21 % raw (refined-glue boards, no PE);
    2 % keeps the biomass-ethylene PE board line (22 steps, +1.5 %). Presets let each project choose; keep 5 % as the
    default?
+
+The user's answers (2026-10-18; priorities: least raw material first, ethylene/PE supporting lines, and a whole-project
+switch for reusing machines). The sections above follow them:
+
+1. **Plan 09 gains the switch and the list.** Task 9 (after Task 8) adds `PlanSettings.reuseOwned?` (default `true`),
+   `PlanSettings.ownedManual?` (default `[]`) and `PlanStep.reused?`, for machine assignment and the build list. Build cost
+   in the objective (§11.28) and sharing one owned machine across steps (the rest of §11.29) stay in plan 10.
+2. **Every existing project is switched to `routeDerived: true` once**, by a recorded settings op
+   `{ routeDerived: true, settingsVersion: 2 }` by `'Planner update'` at server start, for every stored project whose
+   `settingsVersion` is below 2 (`PlanSettings.settingsVersion?`: `defaultSettings()` sets 2, `normalizeSettings()` fills
+   a missing one with 1). A project at `settingsVersion` ≥ 2 is never touched again, so a later deliberate `false`
+   sticks; the banner's "Plan them as supporting lines" serves projects set to `false` later.
+3. **The default step charge is 2 %** (`DEFAULT_STEP_CHARGE = 0.02`): at 5 % the user's Electronic Circuit line uses 21 %
+   more raw material and loses the PE board line; at 2 % it uses 1.5 % more with the biomass-ethylene PE line. The
+   presets stay 0, 2, 5 and 15 % ("Least raw material", "Some steps", "Balanced", "Fewest machines"); a project without
+   a stored `stepCharge` shows "Some steps (2%)".
