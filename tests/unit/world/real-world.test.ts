@@ -106,8 +106,8 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('a scan of the real world', () =
     expect((scan.warnings ?? []).filter((w) => w.startsWith(UNKNOWN_MANAGER))).toEqual([]);
   });
 
-  // Ruling R8, narrowed as it allows: the base also has a network of machines fed only through a diode, which holds no
-  // generator (docs/local/world-runs.md), so the check covers the base networks that hold one.
+  // Ruling R8, narrowed as it allows: a base network fed only through something the scan does not follow holds no
+  // generator, so the check covers the base networks that hold one (why: docs/local/world-runs.md).
   it('reports generation > 0 in clear weather on every power network of a base that holds a generator (plan 10, ruling R8)', () => {
     expect(scanned, 'the scan the first check made').not.toBeNull();
     const scan = scanned!;
