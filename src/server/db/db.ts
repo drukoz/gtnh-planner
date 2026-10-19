@@ -8,6 +8,8 @@ export interface ProjectRow { id: string; name: string; rev: number; state: stri
 /** A row as stored: `deletedAt`/`deletedBy` (ISO time, display name) are set while the project is soft-deleted. */
 export interface StoredProjectRow extends ProjectRow { deletedAt: string | null; deletedBy: string | null }
 export interface DeletedProjectRow extends ProjectRow { deletedAt: string; deletedBy: string }
+/** A projector token as stored (Plan 6): its sha256 `hash` and first 8 characters (`hint`), never the token itself. */
+export interface TokenRow { id: string; projectId: string; hash: string; hint: string; label: string; createdAt: string; createdBy: string; lastUsedAt: string | null }
 
 /** How long a deleted project stays restorable before `purgeDeletedProjects` removes it for good (spec §3.11). */
 export const PURGE_AFTER_MS = 7 * 24 * 3600 * 1000;
@@ -29,8 +31,17 @@ export interface Db {
   restoreProject(id: string): StoredProjectRow | undefined;
   /** The soft-deleted projects, newest deletion first. */
   listDeletedProjects(): DeletedProjectRow[];
-  /** Removes, with their ops, the projects deleted more than `olderThanMs` before `now`; returns how many. */
+  /** Removes, with their ops and projector tokens, the projects deleted more than `olderThanMs` before `now`; returns how many. */
   purgeDeletedProjects(now: Date, olderThanMs: number): number;
+  insertToken(row: TokenRow): void;
+  /** Oldest first; tokens made in the same millisecond in the order they were made. */
+  listTokens(projectId: string): TokenRow[];
+  tokenByHash(hash: string): TokenRow | undefined;
+  /** True when project `projectId` had the token `id`, now deleted. */
+  deleteToken(projectId: string, id: string): boolean;
+  /** Sets the token's `last_used_at`. */
+  touchToken(id: string, at: string): void;
+  countTokens(projectId: string): number;
   backup(toFile: string): Promise<void>;
   close(): void;
 }
@@ -55,6 +66,13 @@ INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '1');
 const MIGRATIONS: ReadonlyArray<{ to: number; sql: string }> = [
   // Soft delete (spec §3.11, architecture §11.24): set while a project waits in "Recently deleted".
   { to: 2, sql: 'ALTER TABLE project ADD COLUMN deleted_at TEXT NULL; ALTER TABLE project ADD COLUMN deleted_by TEXT NULL;' },
+  // Projector tokens (spec §3.13, architecture §11.23; schema 3 since §11.24 took 2): a token's hash, never the token.
+  {
+    to: 3,
+    sql: `CREATE TABLE project_token(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES project(id), hash TEXT NOT NULL UNIQUE,
+            hint TEXT NOT NULL, label TEXT NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL, last_used_at TEXT);
+          CREATE INDEX project_token_project ON project_token(project_id);`,
+  },
 ];
 const SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]!.to;
 
@@ -103,6 +121,18 @@ function toDeletedRow(r: RawRow): DeletedProjectRow {
   return { ...toRow(r), deletedAt: r.deleted_at ?? '', deletedBy: r.deleted_by ?? '' };
 }
 
+interface RawTokenRow {
+  id: string; project_id: string; hash: string; hint: string; label: string; created_at: string; created_by: string;
+  last_used_at: string | null;
+}
+
+function toTokenRow(r: RawTokenRow): TokenRow {
+  return {
+    id: r.id, projectId: r.project_id, hash: r.hash, hint: r.hint, label: r.label, createdAt: r.created_at,
+    createdBy: r.created_by, lastUsedAt: r.last_used_at,
+  };
+}
+
 export function openDb(file: string): Db {
   mkdirSync(dirname(file), { recursive: true });
   const sql = new DatabaseSync(file, { enableForeignKeyConstraints: true, timeout: 5000 });
@@ -125,9 +155,17 @@ export function openDb(file: string): Db {
   const restoreP = sql.prepare('UPDATE project SET deleted_at = NULL, deleted_by = NULL WHERE id = ? AND deleted_at IS NOT NULL');
   const listDeletedP = sql.prepare('SELECT * FROM project WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC, id');
   // Every table that references a project loses its rows first (foreign keys are enforced, without ON DELETE CASCADE).
-  // Plan 6 adds `DELETE FROM project_token ...` here (ruling C7).
+  const purgeTokensP = sql.prepare('DELETE FROM project_token WHERE project_id IN (SELECT id FROM project WHERE deleted_at IS NOT NULL AND deleted_at < ?)');
   const purgeOpsP = sql.prepare('DELETE FROM project_op WHERE project_id IN (SELECT id FROM project WHERE deleted_at IS NOT NULL AND deleted_at < ?)');
   const purgeP = sql.prepare('DELETE FROM project WHERE deleted_at IS NOT NULL AND deleted_at < ?');
+  const insertTokenP = sql.prepare(
+    'INSERT INTO project_token (id, project_id, hash, hint, label, created_at, created_by, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+  );
+  const listTokensP = sql.prepare('SELECT * FROM project_token WHERE project_id = ? ORDER BY created_at, rowid');
+  const tokenByHashP = sql.prepare('SELECT * FROM project_token WHERE hash = ?');
+  const deleteTokenP = sql.prepare('DELETE FROM project_token WHERE project_id = ? AND id = ?');
+  const touchTokenP = sql.prepare('UPDATE project_token SET last_used_at = ? WHERE id = ?');
+  const countTokensP = sql.prepare('SELECT COUNT(*) AS n FROM project_token WHERE project_id = ?');
   let depth = 0;
 
   function tx<T>(fn: () => T): T {
@@ -183,9 +221,29 @@ export function openDb(file: string): Db {
       // ISO times of one format compare as strings.
       const cutoff = new Date(now.getTime() - olderThanMs).toISOString();
       return tx(() => {
+        purgeTokensP.run(cutoff);
         purgeOpsP.run(cutoff);
         return Number(purgeP.run(cutoff).changes);
       });
+    },
+    insertToken(r) {
+      insertTokenP.run(r.id, r.projectId, r.hash, r.hint, r.label, r.createdAt, r.createdBy, r.lastUsedAt);
+    },
+    listTokens(projectId) {
+      return (listTokensP.all(projectId) as unknown as RawTokenRow[]).map(toTokenRow);
+    },
+    tokenByHash(hash) {
+      const r = tokenByHashP.get(hash) as RawTokenRow | undefined;
+      return r ? toTokenRow(r) : undefined;
+    },
+    deleteToken(projectId, id) {
+      return Number(deleteTokenP.run(projectId, id).changes) > 0;
+    },
+    touchToken(id, at) {
+      touchTokenP.run(at, id);
+    },
+    countTokens(projectId) {
+      return Number((countTokensP.get(projectId) as { n: number | bigint }).n);
     },
     async backup(toFile) {
       mkdirSync(dirname(toFile), { recursive: true });
