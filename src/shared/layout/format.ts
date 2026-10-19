@@ -1,5 +1,15 @@
-// Number and name formatting for layout texts (warnings, power detail, build steps), shared by the server and the
-// browser so both write the same words. Pure TypeScript: nothing from node:* may be imported here.
+// Number and name formatting for layout texts (warnings, power detail, build steps, the Connections view), shared by the
+// server and the browser so both write the same words. Pure TypeScript: nothing from node:* may be imported here.
+
+import type { LogisticsNetwork } from '../types/world.ts';
+
+/**
+ * A logistics network kind as the build steps, pins and the Connections view name it (moved here from the server's
+ * pins.ts: architecture "EnderIO conduits, granted change requests (add-on 11)").
+ */
+export const NETWORK_NAMES: Readonly<Record<LogisticsNetwork['kind'], string>> = Object.freeze({
+  routed: 'Project Red routed', ae2: 'AE2', gtpipe: 'GT pipe', enderio: 'EnderIO',
+});
 
 /** Turns −0 (from rounding a small negative number) into 0, so it never prints as "-0". */
 function unsignedZero(n: number): number {
