@@ -91,8 +91,11 @@ describe('layout service', () => {
     const svc = createLayoutService(deps({
       scan: async () => null, layout: async (...args) => { reads.push(args[4]?.readArea !== undefined); return layoutLine(...args); },
     }));
-    expect(await svc.layoutFor(makeProject())).toMatchObject({ status: 'no-world', warnings: [{ code: 'no_base' }] });
-    expect(await svc.layoutFor(makeProject({ scanId: null, baseId: null }))).toMatchObject({ status: 'no-world', warnings: [{ code: 'no_scan' }] });
+    // the warning that says what to pick comes first; the line's own wiring warnings follow it
+    const noBase = await svc.layoutFor(makeProject());
+    expect([noBase.status, noBase.warnings[0]?.code]).toEqual(['no-world', 'no_base']);
+    const noScan = await svc.layoutFor(makeProject({ scanId: null, baseId: null }));
+    expect([noScan.status, noScan.warnings[0]?.code]).toEqual(['no-world', 'no_scan']);
     expect(reads).toEqual([true, false]);
   });
 });

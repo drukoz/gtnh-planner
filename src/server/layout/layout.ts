@@ -2,33 +2,37 @@
 // machines placed in two rows around a spine in the project's logistics mode, wired and piped inside the line, the line
 // put on clear, flat ground near the base (or where the group dragged it), hooked up to the base's power and logistics
 // taps through the scanned world, with numbered pins, build steps, the grouped parts list and the power fit.
-// Without a scan or base the line is still laid out at a default origin, so the 3D view and the parts list work.
-// Every stage has fixed orders and tie-breaks, so the same inputs give byte-identical layout JSON.
+// The line is fed only from taps on the supply tier, through a hookup that touches no other tier, judged against the
+// one network it is wired to. Without a scan or base the line is still laid out at a default origin, so the 3D view
+// and the parts list work. Every stage has fixed orders and tie-breaks, so the same inputs give byte-identical JSON.
 
-import { tierName } from '../../shared/gt/tiers.ts';
+import { tierName, V } from '../../shared/gt/tiers.ts';
 import type { StuffKey } from '../../shared/keys.ts';
 import { fmtInt, fmtRate } from '../../shared/layout/format.ts';
 import {
-  DIRS, posKey, rotateConnections, rotatedSize, rotateFace, rotateFacing, step, toWorld, type Rotation, type Vec3,
+  DIRS, posKey, rotateConnections, rotatedSize, rotateFace, rotateFacing, sideToward, step, toWorld, type Rotation, type Vec3,
 } from '../../shared/layout/geometry.ts';
-import type { CoverSpec, Hookup, Layout, LayoutBlock, LayoutStatus, LayoutTap } from '../../shared/types/layout.ts';
+import type { CoverSpec, Hookup, Layout, LayoutBlock, LayoutPowerContext, LayoutStatus, LayoutTap } from '../../shared/types/layout.ts';
 import type { Pack } from '../../shared/types/pack.ts';
-import type { BomLine, LogisticsMode, Plan, PlanWarning, PowerSummary } from '../../shared/types/plan.ts';
+import type { BomLine, LogisticsMode, Plan, PlanContext, PlanWarning, PowerSummary } from '../../shared/types/plan.ts';
 import type { Project } from '../../shared/types/project.ts';
 import { findBase, type Base, type BBox, type LogisticsNetwork, type PowerNetwork, type Voxels, type WorldScan } from '../../shared/types/world.ts';
 import { emptyContext } from '../planner/plan.ts';
 import { contextFromScan } from '../world/context.ts';
+import { ENERGY_HATCH_RE, simpleClassName } from '../world/facts.ts';
+import { RAIN_OUTAGE_SECONDS } from '../world/power.ts';
 import { attachCovers, placeUnits, replacedCasings, unitsFromPlan, type LocalBlock, type Placement, type Unit } from './arrange.ts';
 import {
-  chooseLogisticsNetwork, choosePowerNetwork, choosePowerTap, ghostBlocks, logisticsHookup, nearestTap, powerHookup,
-  type HookupBuild, type PowerHookupBuild,
+  chooseLogisticsNetwork, choosePowerNetwork, choosePowerTap, ghostBlocks, logisticsHookup, nearestTap, powerHookup, tapCableAmps,
+  type HookupBuild, type PowerHookupBuild, type RouteWorld,
 } from './hookups.ts';
-import { fluidNets, headWidthFor, routeInternal, type InternalResult } from './internal.ts';
+import { fluidNets, headWidthFor, routeInternal, supplyRunLoss, type InternalResult } from './internal.ts';
 import { buildMode, PORT_SPACING, type ModeResult } from './modes/mode.ts';
 import { ae2IdleEUt, COVER_RATES, pickTransformer, resolveParts, type Parts } from './parts.ts';
+import type { PathBounds } from './path.ts';
 import { findReuse, logisticsText, makePins, networkName, powerText, siteText, type PinInput, type ReuseFind } from './pins.ts';
-import { fitPower, tierGroups, transformerStages, type Stages } from './power.ts';
-import { baseFloorY, checkPlacement, fallbackSite, findSite, siteSearchBox, type Site, type SiteRequest } from './site.ts';
+import { fitPower, hookupAllowanceVolts, tierGroups, transformerStages, type Stages } from './power.ts';
+import { baseFloorY, checkPlacement, fallbackSite, findSite, MAX_SITE_SPAN, siteSearchBox, type Site, type SiteRequest } from './site.ts';
 import { assignBuildSteps, bomFromBlocks, layoutSteps, type StepsInput } from './steps.ts';
 
 // ---- Types ----
@@ -79,10 +83,82 @@ function insideBox(p: Vec3, size: Vec3): boolean {
   return p.every((v, i) => v >= 0 && v < size[i]!);
 }
 
+// ---- Power supply (stage 4) ----
+
+/**
+ * Spec §3.5, §5: the network's taps the line may be fed from — those on the network's own tier (Plan 4's highest
+ * emitter tier); when none is, those on the highest tier any tap has (a cable behind one of the base's transformers),
+ * which then is the line's supply tier (`other`). Taps whose tier Plan 4 could not read count only when no tap's is known.
+ */
+function supplyTaps(net: PowerNetwork): { tier: number; taps: LayoutTap[]; other: boolean } {
+  const known = net.taps.filter((t) => t.voltageTier !== undefined);
+  if (known.length === 0) return { tier: net.voltageTier, taps: [...net.taps], other: false };
+  const own = known.filter((t) => t.voltageTier === net.voltageTier);
+  if (own.length > 0) return { tier: net.voltageTier, taps: own, other: false };
+  const tier = Math.max(...known.map((t) => t.voltageTier!));
+  return { tier, taps: known.filter((t) => t.voltageTier === tier), other: true };
+}
+
+/** The taps with their own cable's amp rating (`cableAmps`): the scan's cable at the tap, else its block in `vox`. */
+function ratedTaps(pack: Pack, scan: WorldScan, vox: Voxels | null, taps: readonly LayoutTap[]): LayoutTap[] {
+  const ratings = new Map<string, number>();
+  for (const p of scan.pipes) if (p.amps !== undefined && (p.kind ?? pack.machines.get(p.mteId)?.kind) === 'cable') ratings.set(`${p.dim}|${posKey(p.pos)}`, p.amps);
+  return taps.map((t): LayoutTap => {
+    const amps = t.cableAmps ?? ratings.get(`${t.dim}|${posKey(t.pos)}`) ?? tapCableAmps(pack, vox, t);
+    return amps === undefined ? { ...t, pos: [...t.pos] } : { ...t, pos: [...t.pos], cableAmps: amps };
+  });
+}
+
+/**
+ * The power the line is judged against (spec §3.5): the one network it is wired to — its average generation less its
+ * load, its stored EU, what it still makes in rain, and the rain outage when any of it is solar.
+ */
+function networkPower(net: PowerNetwork): LayoutPowerContext {
+  const average = net.generatorEUt.average;
+  return {
+    averageEUt: average, spareEUt: average - (net.loadEUt ?? 0), voltageTier: net.voltageTier, storedEU: net.storedEU,
+    rainOutageSeconds: (net.solarShare ?? 0) > 0 ? RAIN_OUTAGE_SECONDS : 0, rainEUt: net.generatorEUt.rain,
+  };
+}
+
+/** Kinds that send EU into a cable they touch. */
+const EMITTER_KINDS: ReadonlySet<string> = new Set(['generator', 'turbine', 'battery_buffer', 'transformer']);
+
+/** The tier a cable of `volts` is rated for (the lowest whose volts it takes); −1 above every tier. */
+function ratedTier(volts: number): number {
+  return V.findIndex((v) => v >= volts);
+}
+
+/**
+ * World posKeys of base blocks a supply-tier hookup must not touch (spec §3.5, §5): cables of another tier (the tier the
+ * scan saw on them, else their rating), machines below the supply tier and emitters of another tier; never the tap.
+ */
+function baseKeepAway(pack: Pack, scan: WorldScan, dim: number, supplyTier: number, tap: Vec3): Set<string> {
+  const keys = new Set<string>();
+  for (const p of scan.pipes) {
+    const machine = pack.machines.get(p.mteId);
+    if (p.dim !== dim || (p.kind ?? machine?.kind) !== 'cable') continue;
+    const tier = p.voltageTier ?? (machine?.cable === undefined ? undefined : ratedTier(machine.cable.voltage));
+    if (tier !== supplyTier) keys.add(posKey(p.pos));
+  }
+  for (const m of scan.machines) {
+    if (m.dim !== dim) continue;
+    const machine = pack.machines.get(m.mteId);
+    const kind = m.kind ?? machine?.kind, tier = m.tier ?? machine?.tier;
+    if (kind === undefined || tier === undefined) continue;
+    const consumer = kind === 'basic' || (kind === 'hatch' && machine !== undefined && ENERGY_HATCH_RE.test(simpleClassName(machine.cls) ?? ''));
+    if ((consumer && tier < supplyTier) || (EMITTER_KINDS.has(kind) && tier !== supplyTier)) keys.add(posKey(m.pos));
+  }
+  keys.delete(posKey(tap));
+  return keys;
+}
+
 // ---- The line in its local grid (stages 3–5) ----
 
 interface LocalLine {
-  placement: Placement; mode: ModeResult; internal: InternalResult; stages: Stages | null;
+  placement: Placement; mode: ModeResult; internal: InternalResult;
+  /** The transformer stages sized for the volts every machine gets (Task 6's `InternalResult.stages`). */
+  stages: Stages | null;
   /** Units, mode and routing blocks with their covers and settings attached. */
   blocks: LocalBlock[];
   /** W, H (1 + the highest block), L. */
@@ -91,21 +167,27 @@ interface LocalLine {
   warnings: PlanWarning[];
 }
 
+/**
+ * Stages 3–5 in the line's own grid. Machines fed at different tiers stand apart (their cables never touch), and the
+ * supply run is sized for packets that already lost up to the hookup's allowance (spec §3.5 never overload a cable).
+ */
 function buildLocal(input: {
   pack: Pack; plan: Plan; parts: Parts; mode: LogisticsMode; units: readonly Unit[]; stages: Stages | null;
   network: LogisticsNetwork | null;
 }): LocalLine {
   const { pack, plan, parts, mode, units, stages, network } = input;
-  const placement = placeUnits(units, { headWidth: headWidthFor(stages), portSpacing: PORT_SPACING[mode] });
+  const placement = placeUnits(units, {
+    headWidth: headWidthFor(stages), portSpacing: PORT_SPACING[mode], ...(stages === null ? {} : { supplyTier: stages.supplyTier }),
+  });
   const modeResult = buildMode(mode, { pack, plan, parts, placement, network });
   const internal = routeInternal({
     pack, parts, placement, occupied: [...placement.blocks, ...modeResult.blocks], stages, fluids: fluidNets(pack, plan, placement),
-    tailFluidY: modeResult.tailFluidY, groupTier: plan.tier,
+    tailFluidY: modeResult.tailFluidY, groupTier: plan.tier, supplyLossVolts: stages === null ? 0 : hookupAllowanceVolts(stages.supplyTier),
   });
   const blocks = attachCovers([...placement.blocks, ...modeResult.blocks, ...internal.blocks], [...modeResult.covers, ...internal.covers], modeResult.configs);
   const top = blocks.reduce((y, b) => Math.max(y, b.pos[1]), 0);
   return {
-    placement, mode: modeResult, internal, stages, blocks, size: [placement.size[0], 1 + top, placement.size[2]],
+    placement, mode: modeResult, internal, stages: internal.stages, blocks, size: [placement.size[0], 1 + top, placement.size[2]],
     warnings: [...modeResult.warnings, ...internal.warnings],
   };
 }
@@ -130,21 +212,43 @@ function placementBlockedText(n: number): string {
   return `${fmtInt(n)} ${n === 1 ? 'block is' : 'blocks are'} in the way at the chosen spot`;
 }
 
+function placementUncheckedText(n: number): string {
+  return n === 1 ? '1 block at the chosen spot was not scanned, so it could not be checked: look there in game before building'
+    : `${fmtInt(n)} blocks at the chosen spot were not scanned, so they could not be checked: look there in game before building`;
+}
+
+/** The world box a placement covers (its y kept inside the world as `checkPlacement` keeps it), with its free ring and floor. */
+function placementBox(placement: NonNullable<Project['placement']>, size: Vec3): BBox {
+  const [w, h, l] = rotatedSize(size, placement.rotation);
+  const [x, y0, z] = placement.origin;
+  const y = Math.min(Math.max(y0, 1), 256 - h);
+  return { minX: x - 1, minY: y - 1, minZ: z - 1, maxX: x + w, maxY: y + h - 1, maxZ: z + l };
+}
+
+/** Whether `box` lies in the `MAX_SITE_SPAN` square around the base centre, the most the site search reads. */
+function withinReach(base: Base, box: BBox): boolean {
+  const half = MAX_SITE_SPAN / 2;
+  const [cx, , cz] = base.center;
+  return box.minX >= cx - half && box.maxX <= cx + half - 1 && box.minZ >= cz - half && box.maxZ <= cz + half - 1;
+}
+
 /**
- * Spec §3.6, Review Focus 2 and 5: the dragged placement, checked; else the best clear, flat spot near the base and
- * its taps; else the spot beside the base box with what is in the way. Unreadable terrain places the line beside the
- * base unchecked.
+ * Spec §3.6, Review Focus 2 and 5: the dragged placement, checked against voxels read around it too; else the best
+ * clear, flat spot near the base and its taps; else the spot beside the base box with what is in the way. A placement
+ * farther from the base than the search reads (one kept from another base) is ignored with `placement_ignored`, and
+ * one partly outside the scan says how much of it is unknown (`placement_unchecked`): nothing is placed silently.
+ * Unreadable terrain places the line unchecked.
  */
 async function chooseSite(input: {
-  scan: WorldScan; project: Project; base: Base; line: LocalLine; powerNet: PowerNetwork | null; logisticsNet: LogisticsNetwork | null; deps: LayoutDeps;
+  scan: WorldScan; project: Project; base: Base; line: LocalLine; powerTaps: readonly LayoutTap[] | null; logisticsNet: LogisticsNetwork | null; deps: LayoutDeps;
 }): Promise<{ site: Site; vox: Voxels | null; warnings: PlanWarning[] }> {
-  const { scan, project, base, line, powerNet, logisticsNet, deps } = input;
+  const { scan, project, base, line, powerTaps, logisticsNet, deps } = input;
   const [w, h, l] = line.size;
   const ports: SiteRequest['ports'] = {};
   const taps: SiteRequest['taps'] = {};
   if (line.stages !== null) {
     ports.power = [-1, 0, line.placement.spineZ];
-    const tap = powerNet === null ? null : nearestTap(powerNet.taps, base.center);
+    const tap = powerTaps === null ? null : nearestTap(powerTaps, base.center);
     if (tap !== null) taps.power = [...tap.pos];
   }
   if (line.mode.logisticsPort !== null) {
@@ -155,9 +259,20 @@ async function chooseSite(input: {
   const floorY = baseFloorY(scan, base);
   const req: SiteRequest = { dim: base.dim, footprint: { w, h, l }, base, baseFloorY: floorY, ports, taps, avoid: scannedCells(scan, base.dim) };
   const warnings: PlanWarning[] = [];
+  let placement = project.placement;
+  let placed: BBox | null = null;
+  if (placement !== null) {
+    placed = placementBox(placement, line.size);
+    if (!withinReach(base, placed)) {
+      warnings.push({ code: 'placement_ignored',
+        text: `The chosen spot is more than ${MAX_SITE_SPAN / 2} blocks from this base's centre, too far to check: the line is placed near the base instead — move it closer` });
+      placement = null;
+      placed = null;
+    }
+  }
   let vox: Voxels | null = null;
   if (deps.readArea !== undefined) {
-    const box = siteSearchBox(base, floorY, req.footprint, [taps.power, taps.logistics].filter((t): t is Vec3 => t !== undefined));
+    const box = siteSearchBox(base, floorY, req.footprint, [taps.power, taps.logistics].filter((t): t is Vec3 => t !== undefined), placed);
     try {
       vox = await deps.readArea(base.dim, box);
     } catch (e) {
@@ -165,11 +280,14 @@ async function chooseSite(input: {
     }
   }
   if (vox === null) {
-    warnings.push({ code: 'terrain_unknown', text: 'The ground around the base could not be read; the line is placed beside the base unchecked' });
+    warnings.push({ code: 'terrain_unknown', text: placement === null
+      ? 'The ground around the base could not be read; the line is placed beside the base unchecked'
+      : 'The ground around the base could not be read; the line is placed at the chosen spot unchecked' });
   }
-  if (project.placement !== null) {
-    const site = checkPlacement(req, vox, project.placement);
+  if (placement !== null) {
+    const site = checkPlacement(req, vox, placement);
     if (site.blocked > 0) warnings.push({ code: 'placement_blocked', text: placementBlockedText(site.blocked) });
+    if (site.unknown > 0) warnings.push({ code: 'placement_unchecked', text: placementUncheckedText(site.unknown) });
     if (site.moved) warnings.push({ code: 'placement_moved', text: `Moved the line to y=${site.origin[1]} to stay inside the world height` });
     return { site, vox, warnings };
   }
@@ -198,10 +316,17 @@ function worldCover(c: CoverSpec, r: Rotation): CoverSpec {
   return { face: rotateFace(c.face, r), item: c.item, settings: { ...c.settings }, ...(c.filter === undefined ? {} : { filter: [...c.filter] }) };
 }
 
+/** The line's world box, inclusive. */
+function worldBox(f: Frame): PathBounds {
+  const size = rotatedSize(f.size, f.rotation);
+  return { min: [...f.origin], max: [f.origin[0] + size[0] - 1, f.origin[1] + size[1] - 1, f.origin[2] + size[2] - 1] };
+}
+
 function worldBlock(b: LocalBlock, f: Frame): LayoutBlock {
   const r = f.rotation;
   return {
     pos: worldPos(b.pos, f), block: { ...b.block }, role: b.role, ...(b.facing === undefined ? {} : { facing: rotateFacing(b.facing, r) }),
+    ...(b.mainFacing === undefined ? {} : { mainFacing: rotateFacing(b.mainFacing, r) }),
     ...(b.stepId === undefined ? {} : { stepId: b.stepId }), label: b.label,
     ...(b.covers === undefined ? {} : { covers: b.covers.map((c) => worldCover(c, r)) }),
     ...(b.config === undefined ? {} : { config: { ...b.config } }),
@@ -224,18 +349,21 @@ interface Hookups {
 }
 
 /**
- * Spec §3.5, §3.6, §3.8: the power hookup from the tap that can carry the line to the supply run, and the logistics
- * hookup from the network's tap nearest the logistics port. Each routes around the line, the multiblocks' air cells
- * and the hookups laid before it; the taps they join show as ghosts.
+ * Spec §3.5, §3.6, §3.8: the power hookup from the supply-tier tap whose cable can carry the line to the supply run,
+ * and the logistics hookup from the network's tap nearest the logistics port. Each goes round the line's box (never
+ * through it, so it ends beside its port), the multiblocks' air cells and the hookups laid before it; the power hookup
+ * also keeps off everything of another tier, in the line and in the base. The taps they join show as ghosts.
  */
 function buildHookups(input: {
-  pack: Pack; parts: Parts; line: LocalLine; frame: Frame; vox: Voxels | null; lineBlocks: readonly LayoutBlock[]; supplyTier: number;
-  powerNet: PowerNetwork | null; logisticsNet: LogisticsNetwork | null; maxNodes: number | undefined;
+  pack: Pack; parts: Parts; scan: WorldScan; dim: number; line: LocalLine; frame: Frame; vox: Voxels | null; lineBlocks: readonly LayoutBlock[];
+  supplyTier: number; powerNet: PowerNetwork | null; powerTaps: readonly LayoutTap[]; logisticsNet: LogisticsNetwork | null; maxNodes: number | undefined;
 }): Hookups {
-  const { pack, parts, line, frame, vox, lineBlocks, supplyTier, powerNet, logisticsNet, maxNodes } = input;
+  const { pack, parts, scan, dim, line, frame, vox, lineBlocks, supplyTier, powerNet, powerTaps, logisticsNet, maxNodes } = input;
   const taken = new Set(lineBlocks.map((b) => posKey(b.pos)));
   // a hookup must never fill a cell a multiblock needs empty
   const routeLine = new Set([...taken, ...line.placement.reserved.map((p) => posKey(worldPos(p, frame)))]);
+  const box = worldBox(frame);
+  const lineKeepAway = line.internal.keepAway.map((p) => posKey(worldPos(p, frame)));
   const out: Hookups = { hookups: [], blocks: [], power: null, logistics: null, warnings: [], noPathAt: new Map() };
   const taps: LayoutTap[] = [];
   const add = (build: HookupBuild, tap: LayoutTap): void => {
@@ -255,11 +383,12 @@ function buildHookups(input: {
   if (stages !== null) {
     if (powerNet === null) out.warnings.push({ code: 'no_power_tap', text: 'No power network found at this base' });
     else {
-      const tap = choosePowerTap(powerNet.taps, worldPos([-1, 0, line.placement.spineZ], frame), stages.supplyAmps);
+      const tap = choosePowerTap(ratedTaps(pack, scan, vox, powerTaps), worldPos([-1, 0, line.placement.spineZ], frame), stages.supplyAmps);
       if (tap !== null) {
+        const keepAway = new Set([...lineKeepAway, ...baseKeepAway(pack, scan, dim, supplyTier, tap.pos)]);
+        const world: RouteWorld = { vox, line: routeLine, box, keepAway };
         const build = powerHookup({
-          pack, tap, ports: line.internal.supplyRun.map((c) => worldPos(c, frame)), world: { vox, line: routeLine }, supplyTier,
-          amps: stages.supplyAmps, maxNodes,
+          pack, tap, ports: line.internal.supplyRun.map((c) => worldPos(c, frame)), world, supplyTier, amps: stages.supplyAmps, maxNodes,
         });
         add(build, tap);
         out.power = { build, tap };
@@ -272,7 +401,7 @@ function buildHookups(input: {
     const tap = nearestTap(logisticsNet.taps, port);
     if (tap !== null) {
       const build = logisticsHookup({
-        pack, parts, tap, ports: [port], world: { vox, line: routeLine }, part: hookup.part, end: hookup.end,
+        pack, parts, tap, ports: [port], world: { vox, line: routeLine, box }, part: hookup.part, end: hookup.end,
         ...(hookup.endConfig === undefined ? {} : { endConfig: hookup.endConfig }), maxNodes,
       });
       add(build, tap);
@@ -288,6 +417,14 @@ function buildHookups(input: {
     }
   }
   return out;
+}
+
+/** The supply-run cell (its index z) the power hookup's last cell touches; null without a power hookup. */
+function landingZ(line: LocalLine, frame: Frame, hookup: Hookup | undefined): number | null {
+  const last = hookup?.path.at(-1);
+  if (last === undefined) return null;
+  const z = line.internal.supplyRun.findIndex((c) => sideToward(last, worldPos(c, frame)) !== -1);
+  return z === -1 ? null : z;
 }
 
 /** Spec §3.6 (AE2 idle draw, architecture §11.13): the line's power need with its ME parts' idle draw added. */
@@ -331,7 +468,9 @@ function unknownParts(pack: Pack, parts: Parts, blocks: readonly LayoutBlock[], 
 // ---- Layout ----
 
 /** Warnings pinned at the site centre (stage 9). */
-const SITE_PINNED: ReadonlySet<string> = new Set(['site_not_clear', 'placement_blocked', 'no_power_tap', 'routed_missing', 'ae2_missing']);
+const SITE_PINNED: ReadonlySet<string> = new Set([
+  'site_not_clear', 'placement_blocked', 'placement_unchecked', 'placement_ignored', 'no_power_tap', 'routed_missing', 'ae2_missing',
+]);
 
 /** What stage 9 hands the build steps: the status, pins, reuse finds, earthwork and hookups (none of them without a base). */
 interface Finish {
@@ -367,8 +506,12 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
   const electric = units.filter((u) => u.electric);
   const lineTier = electric.length > 0 ? Math.max(...electric.map((u) => u.tier)) : plan.tier;
   const powerNet = base === null ? null : choosePowerNetwork(scan, base, lineTier);
-  const supplyTier = powerNet?.voltageTier ?? lineTier;
-  const stages = electric.length === 0 ? null : transformerStages(tierGroups(electric), supplyTier);
+  // the line is fed from taps of one tier only, and that tier is its supply (spec §3.5, §5)
+  const supply = powerNet === null ? null : supplyTaps(powerNet);
+  const supplyTier = supply?.tier ?? lineTier;
+  // judged against the network it is wired to; the base's power only when there is none (spec §3.5)
+  const fitCtx: PlanContext = powerNet === null ? ctx : { ...ctx, power: networkPower(powerNet) };
+  const provisional = electric.length === 0 ? null : transformerStages(tierGroups(electric), supplyTier);
   const logisticsNet = base === null ? null : chooseLogisticsNetwork(scan, base, mode);
 
   if (units.length === 0) {
@@ -379,7 +522,7 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
       status: 'empty', pins, size: [0, 0, 0], site: null, units: [], stages: [], transformerName, cables: [], power: null, supplyTier: null,
       drafts: [], fluids: [], logistics: null, reuse, blocks: [], origin: [...DEFAULT_ORIGIN], nameOf,
     });
-    const fit = base === null ? null : fitPower({ power: plan.power, ctx, extraLossEUt: 0, pack, tier: supplyTier });
+    const fit = base === null ? null : fitPower({ power: plan.power, ctx: fitCtx, extraLossEUt: 0, pack, tier: supplyTier });
     return {
       dim, origin: [...DEFAULT_ORIGIN], size: [0, 0, 0], rotation: 0, mode, blocks: [], hookups: [], pins, buildSteps,
       bom: bomFromBlocks([], fit?.optional ?? []), warnings: dedupeWarnings([...unitWarnings, ...worldWarnings]), status: 'empty',
@@ -387,12 +530,16 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
     };
   }
 
-  // stage 5
-  const line = buildLocal({ pack, plan, parts, mode, units, stages, network: logisticsNet });
+  // stage 5; from here on the stages are the ones sized for the volts every machine gets
+  const line = buildLocal({ pack, plan, parts, mode, units, stages: provisional, network: logisticsNet });
+  const { stages } = line;
   const replaced = replacedCasings(units);
+  const supplyWarnings: PlanWarning[] = stages === null || powerNet === null || supply === null || !supply.other ? [] : [{ code: 'power_tap_tier',
+    text: `The ${tierName(powerNet.voltageTier)} network has no ${tierName(powerNet.voltageTier)} cable to tap: the line is fed at `
+      + `${tierName(supplyTier)} from a cable behind one of its transformers` }];
 
   // stages 6–7
-  const chosen = base === null ? null : await chooseSite({ scan, project, base, line, powerNet, logisticsNet, deps });
+  const chosen = base === null ? null : await chooseSite({ scan, project, base, line, powerTaps: supply?.taps ?? null, logisticsNet, deps });
   const frame: Frame = chosen === null ? { origin: [...DEFAULT_ORIGIN], rotation: 0, size: line.size }
     : { origin: [...chosen.site.origin], rotation: chosen.site.rotation, size: line.size };
   const vox = chosen?.vox ?? null;
@@ -402,19 +549,23 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
 
   // stage 8
   const hooked = base === null ? null : buildHookups({
-    pack, parts, line, frame, vox, lineBlocks, supplyTier, powerNet, logisticsNet, maxNodes: deps.maxPathNodes,
+    pack, parts, scan, dim, line, frame, vox, lineBlocks, supplyTier, powerNet, powerTaps: supply?.taps ?? [], logisticsNet, maxNodes: deps.maxPathNodes,
   });
   const blocks = [...lineBlocks, ...(hooked?.blocks ?? [])].sort(compareBlocks);
   const idle = ae2IdleEUt(blocks, parts);
   const need = withIdleDraw(plan.power, idle);
-  const fit = base === null ? null : fitPower({
-    power: need, ctx, extraLossEUt: (stages?.lossEUt ?? 0) + (hooked?.power?.build.lossEUt ?? 0), pack, tier: supplyTier,
-  });
+  // the supply run's own loss counts from where the hookup lands on it (the worst cell without a hookup)
+  const supplyRun = supplyRunLoss(line.internal.supply, landingZ(line, frame, hooked?.power?.build.hookup));
+  // the need counts the banks' emitter loss, the line's own cables and the hookup (spec §3.5)
+  const lossEUt = (stages?.lossEUt ?? 0) + line.internal.lossEUt + supplyRun.lossEUt + (hooked?.power?.build.lossEUt ?? 0);
+  const fit = base === null ? null : fitPower({ power: need, ctx: fitCtx, extraLossEUt: lossEUt, pack, tier: supplyTier });
 
   // stages 10–11 (parts and warnings first: the warning pins come from them)
   const bom = bomFromBlocks(blocks, [...line.mode.extraParts, ...(fit?.optional ?? [])]);
+  // without a base the warning that says to pick one comes first (Review Focus 1)
   const warnings = dedupeWarnings([
-    ...unitWarnings, ...line.warnings, ...siteWarnings, ...(hooked?.warnings ?? []), ...unknownParts(pack, parts, blocks, bom, nameOf),
+    ...(base === null ? siteWarnings : []), ...unitWarnings, ...line.warnings, ...(supplyRun.warning === null ? [] : [supplyRun.warning]),
+    ...(base === null ? [] : siteWarnings), ...supplyWarnings, ...(hooked?.warnings ?? []), ...unknownParts(pack, parts, blocks, bom, nameOf),
   ]);
 
   // stage 9

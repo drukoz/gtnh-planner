@@ -11,7 +11,8 @@ const twoStep = () => makePlan([
 const scan = () => makeScan({
   base: { center: [20, 64, 20], bbox: { minX: 16, minY: 64, minZ: 16, maxX: 24, maxY: 65, maxZ: 24 } },
   machines: [{ pos: [18, 64, 18], mteId: IDS.MACERATOR }],
-  power: [{ voltageTier: 2, average: 1000, loadEUt: 100, storedEU: 10_000_000, taps: [{ pos: [16, 64, 30], freeAmps: 8 }] }],
+  // the tap's own cable is rated for the line (the 1x Annealed Copper block below would carry 1 A; the line draws 4)
+  power: [{ voltageTier: 2, average: 1000, loadEUt: 100, storedEU: 10_000_000, taps: [{ pos: [16, 64, 30], freeAmps: 8, cableAmps: 8 }] }],
 });
 const GT = (mteId: number) => ({ id: 'gregtech:gt.blockmachines', meta: 0, mteId });
 const ground = (boxes: Parameters<typeof flatVoxels>[0]['boxes'] = []) => ({ readArea: areaReader(flatVoxels({
@@ -49,7 +50,9 @@ describe('layoutLine', () => {
   it('lays out without a scan so the 3D view and parts still work', async () => {
     const layout = await layoutLine(layoutPack(), twoStep(), emptyScan(), makeProject({ scanId: null, baseId: null }));
     expect([layout.status, layout.origin, layout.hookups, layout.pins]).toEqual(['no-world', [0, 64, 0], [], []]);
-    expect(layout.warnings).toEqual([{ code: 'no_scan', text: 'Pick a world scan and base on the Map tab to place the line' }]);
+    // the warning that says what to do comes first; the line's own wiring warnings follow (final review I4)
+    expect(layout.warnings[0]).toEqual({ code: 'no_scan', text: 'Pick a world scan and base on the Map tab to place the line' });
+    expect(layout.warnings.slice(1).map((w) => w.code)).toEqual(['cable_amps', 'cable_loss_high', 'cable_loss_high']);
     expect(layout.blocks.filter((b) => b.role === 'machine')).toHaveLength(3);
     expect(layout.buildSteps.every((s) => s.pin === undefined)).toBe(true);
   });
@@ -91,4 +94,135 @@ describe('layoutLine', () => {
     const layout = await layoutLine(layoutPack(), makePlan([], { status: 'empty' }), scan(), makeProject(), ground());
     expect([layout.status, layout.blocks, layout.pins, layout.buildSteps]).toEqual(['empty', [], [], []]);
   });
+
+  it('counts the banks, the line\'s own cables and the hookup in the power need', async () => {
+    // banks 4 A out × 1 EU; LV: 2 macerators × 2 A × 4 V; MV from the hookup's landing cell (z 4): assembler 2 A × 14,
+    // bank 2 A × 3; hookup 6 cables × 4 A × 1 V
+    const layout = await layoutLine(layoutPack(), twoStep(), scan(), makeProject(), ground());
+    expect(layout.power!.detail).toBe('Needs 258 EU/t on average (180 + 78 loss); 900 EU/t spare');
+    expect(layout.buildSteps.find((s) => s.id === 'layout:power:hookup')!.text)
+      .toBe('Run 6× 2x Annealed Copper Cable from the tap at pin 2 to the line: up to 4 A at MV, arriving at 122 V');
+  });
 });
+
+// Final review findings, end to end.
+describe('layoutLine: the final review', () => {
+  const DIRS: Array<[number, number, number]> = [[0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1], [-1, 0, 0], [1, 0, 0]];
+  const key = (p: readonly number[]) => p.join();
+  const near = (p: readonly number[]) => DIRS.map((d) => key([p[0]! + d[0], p[1]! + d[1], p[2]! + d[2]]));
+  const hvLine = () => makePlan([{ id: 'h', mteId: IDS.CHEM_HV, count: 1, tier: 3, euPerTick: 300 }]);
+  const hvScan = (networks: NonNullable<NonNullable<Parameters<typeof makeScan>[0]>['power']>) => makeScan({ base: scan().bases[0], power: networks });
+
+  it('C1: a guide that would cross the line goes round it and links only to its own cables, the tap and the run', async () => {
+    const hvless = makeScan({ base: scan().bases[0], power: [{ voltageTier: 2, average: 1000, loadEUt: 100, storedEU: 10_000_000,
+      taps: [{ pos: [40, 64, 12], freeAmps: 8, cableAmps: 8 }] }] });
+    for (const rotation of [270, 0] as const) {
+      const layout = await layoutLine(layoutPack(), twoStep(), hvless, makeProject({ placement: { origin: [20, 64, 10], rotation } }));
+      const [min, size] = [layout.origin, layout.size];
+      const inColumns = (p: number[]) => p[0]! >= min[0] && p[0]! < min[0] + size[0] && p[2]! >= min[2] && p[2]! < min[2] + size[2];
+      const hookup = layout.hookups[0]!;
+      expect([hookup.found, hookup.path.some(inColumns)]).toEqual([false, false]);
+      const supplyRun = layout.blocks.filter((b) => b.buildStep === 'layout:power:wire:2' && inColumns(b.pos) && b.pos[1] === min[1]).map((b) => key(b.pos));
+      const last = hookup.path.at(-1)!;
+      expect(last[1]).toBe(64);                                                     // beside the run, not under it
+      expect(near(last).some((k) => supplyRun.includes(k))).toBe(true);
+      const own = new Set(layout.blocks.filter((b) => b.hookup === 0).map((b) => key(b.pos)));
+      const lineCables = new Set(layout.blocks.filter((b) => b.hookup === undefined && b.role !== 'ghost').map((b) => key(b.pos)));
+      for (const b of layout.blocks.filter((x) => x.hookup === 0)) {
+        near(b.pos).forEach((k, side) => {
+          if (((b.connections ?? 0) & (1 << side)) === 0) return;
+          expect(own.has(k) || k === '40,64,12' || (lineCables.has(k) && supplyRun.includes(k))).toBe(true);
+        });
+      }
+    }
+  });
+
+  it('C2: no two cables of different tiers touch, and no cable touches a machine below its tier', async () => {
+    const layout = await layoutLine(layoutPack(), twoStep(), scan(), makeProject(), ground());
+    const plan = twoStep();
+    const tierOf = (b: (typeof layout.blocks)[number]): number | undefined =>
+      b.hookup !== undefined ? 2 : b.buildStep?.startsWith('layout:power:wire:') ? Number(b.buildStep.split(':').at(-1)) : undefined;
+    const placed = layout.blocks.filter((b) => b.role !== 'ghost');
+    const at = new Map(placed.map((b) => [key(b.pos), b]));
+    const cables = placed.filter((b) => b.role === 'cable');
+    expect(cables.every((b) => tierOf(b) !== undefined)).toBe(true);
+    const contacts: string[] = [];
+    for (const b of cables) {
+      for (const k of near(b.pos)) {
+        const other = at.get(k);
+        if (other?.role === 'cable' && tierOf(other) !== tierOf(b)) contacts.push(`${key(b.pos)}~${k}`);
+        const machineTier = other?.role === 'machine' ? plan.steps.find((s) => s.id === other.stepId)?.machine.tier : undefined;
+        if (machineTier !== undefined && machineTier < tierOf(b)!) contacts.push(`${key(b.pos)}>${k}`);
+      }
+    }
+    expect(contacts).toEqual([]);
+    expect(layout.buildSteps.filter((s) => s.id.startsWith('layout:power:wire:')).every((s) => s.text.endsWith('never let the MV cables touch the LV cables'))).toBe(true);
+  });
+
+  it('I3: feeds the line only from a tap on its supply tier, and says so when the network has none on its own', async () => {
+    // an HV network whose nearest tap is an LV tin cable (1 A free) and whose HV tap is far away
+    const mixed = hvScan([{ voltageTier: 3, average: 5000, loadEUt: 100, storedEU: 10_000_000, taps: [{ pos: [16, 64, 30], freeAmps: 1 }, { pos: [60, 64, 60], freeAmps: 4 }] }]);
+    mixed.power[0]!.taps[0]!.voltageTier = 1;
+    const layout = await layoutLine(layoutPack(), hvLine(), mixed, makeProject(), ground());
+    expect(layout.hookups.map((h) => [h.from.pos, h.from.voltageTier])).toEqual([[[60, 64, 60], 3]]);
+    expect(layout.pins.find((p) => p.kind === 'power')!.text).toBe('Tap power here: HV, 4 A free (the line needs 1 A)');
+    // only LV taps: the line is fed at LV, and the warning says why
+    const lvOnly = hvScan([{ voltageTier: 3, average: 5000, loadEUt: 100, storedEU: 10_000_000, taps: [{ pos: [16, 64, 30], freeAmps: 4 }] }]);
+    lvOnly.power[0]!.taps[0]!.voltageTier = 1;
+    const fed = await layoutLine(layoutPack(), hvLine(), lvOnly, makeProject(), ground());
+    expect(fed.warnings).toContainEqual({ code: 'power_tap_tier', text: 'The HV network has no HV cable to tap: the line is fed at LV from a cable behind one of its transformers' });
+    expect(fed.warnings.map((w) => w.code)).toContain('power_tier_low');
+    // the HV machine fed at LV: 300 EU/t at 23.8 V (the hookup's 3.2 V and 5 cables lost) is 13 A, more than the 1x cable carries
+    expect(fed.buildSteps.find((s) => s.id === 'layout:power:hookup')!.text)
+      .toBe('Upgrade the 1x Annealed Copper Cable from the tap at pin 2 to carry 13 A, then connect the line');
+    expect(fed.warnings).toContainEqual({ code: 'power_amps_low', text: "The tap's 1x Annealed Copper Cable carries 1 A at LV; the line draws up to 13 A" });
+  });
+
+  it('I-tap: reads the tap cable\'s own rating, so a cable that carries the line is wired whatever the spare power', async () => {
+    // 400 EU/t spare at HV: Plan 4 gives 0 A free, but the tap is a 2x Silver Cable (2 A)
+    const spare = hvScan([{ voltageTier: 3, average: 500, loadEUt: 100, storedEU: 10_000_000, taps: [{ pos: [16, 64, 30], freeAmps: 0 }] }]);
+    const layout = await layoutLine(layoutPack(), hvLine(), spare, makeProject(), ground([{ from: [16, 64, 30], to: [16, 64, 30], block: GT(IDS.SILVER_2X) }]));
+    expect(layout.warnings.map((w) => w.code)).not.toContain('power_amps_low');
+    expect(layout.buildSteps.find((s) => s.id === 'layout:power:hookup')!.text).toMatch(/^Run \d+× 1x Silver Cable from the tap at pin 2 to the line: up to 1 A at HV/);
+    expect(layout.blocks.filter((b) => b.hookup === 0).length).toBeGreaterThan(0);
+    expect(layout.power!.fits).toBe('yes');
+  });
+
+  it('I-fit: judges the line against the one network it is wired to', async () => {
+    // the HV network has nothing spare; an MV network beside it (no taps the line can use) has 6,000 EU/t
+    const two = hvScan([
+      { voltageTier: 3, average: 1000, loadEUt: 1000, storedEU: 0, taps: [{ pos: [16, 64, 30], freeAmps: 0, cableAmps: 2 }] },
+      { voltageTier: 2, average: 6000, loadEUt: 0, storedEU: 0, taps: [] }]);
+    const layout = await layoutLine(layoutPack(), hvLine(), two, makeProject(), ground());
+    expect(layout.power!.fits).toBe('no');
+    expect(layout.power!.detail).toMatch(/; 0 EU\/t spare$/);
+  });
+
+  it('I-placement: checks a placement far from the base against what is really there, and never uses one from too far away', async () => {
+    const hill = await layoutLine(layoutPack(), twoStep(), scan(), makeProject({ placement: { origin: [55, 64, 20], rotation: 0 } }),
+      ground([{ from: [50, 64, 15], to: [65, 70, 30], block: STONE }]));
+    expect([hill.origin, hill.warnings.filter((w) => w.code.startsWith('placement'))]).toEqual([[55, 64, 20],
+      [{ code: 'placement_blocked', text: '105 blocks are in the way at the chosen spot' }]]);
+    const edge = await layoutLine(layoutPack(), twoStep(), scan(), makeProject({ placement: { origin: [66, 64, 20], rotation: 0 } }), ground());
+    expect(edge.warnings).toContainEqual({ code: 'placement_unchecked',
+      text: '60 blocks at the chosen spot were not scanned, so they could not be checked: look there in game before building' });
+    expect(edge.pins.some((p) => p.kind === 'warning' && p.text.startsWith('60 blocks at the chosen spot'))).toBe(true);
+    // a placement kept from another base (or dragged off the map) is not used
+    const far = await layoutLine(layoutPack(), twoStep(), scan(), makeProject({ placement: { origin: [600, 64, 20], rotation: 0 } }), ground());
+    const auto = await layoutLine(layoutPack(), twoStep(), scan(), makeProject(), ground());
+    expect(far.origin).toEqual(auto.origin);
+    expect(far.warnings).toContainEqual({ code: 'placement_ignored',
+      text: "The chosen spot is more than 96 blocks from this base's centre, too far to check: the line is placed near the base instead — move it closer" });
+    const unread = await layoutLine(layoutPack(), twoStep(), scan(), makeProject({ placement: { origin: [30, 64, 30], rotation: 0 } }));
+    expect(unread.warnings).toContainEqual({ code: 'terrain_unknown', text: 'The ground around the base could not be read; the line is placed at the chosen spot unchecked' });
+  });
+
+  it('gives a singleblock its front and output side apart, turned with the line', async () => {
+    const layout = await layoutLine(layoutPack(), twoStep(), scan(), makeProject({ placement: { origin: [30, 64, 30], rotation: 90 } }), ground());
+    const machines = layout.blocks.filter((b) => b.role === 'machine');
+    expect(machines.every((b) => b.mainFacing === 1)).toBe(true);                    // front up: the output side keeps the spine face
+    expect(new Set(machines.map((b) => b.facing))).toEqual(new Set([4, 5]));         // the two rows face the spine, turned 90°
+    expect(machines.every((b) => b.config?.inputFromOutputSide === true)).toBe(true);
+  });
+});
+

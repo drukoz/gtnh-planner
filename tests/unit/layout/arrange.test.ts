@@ -116,3 +116,30 @@ describe('placement', () => {
     expect(compactness(p)).toBeCloseTo(35 / 10, 5);
   });
 });
+
+// Final review C2 and the GT facings.
+describe('placement: tiers apart, front and output side apart', () => {
+  it('keeps machines fed at different tiers a column apart, also from the power head', () => {
+    const { units } = unitsFromPlan(layoutPack(), twoStep());
+    // MV supply: the head ends with the LV run, so the LV macerators stand at x 3 and the MV assembler at 5, not 4
+    const p = placeUnits(units, { headWidth: 3, portSpacing: 0, supplyTier: 2 });
+    expect(p.units.map((u) => [u.stepId, u.row, u.at[0]])).toEqual([['s1', 'N', 3], ['s1', 'S', 3], ['s2', 'N', 5]]);
+    expect(p.units.map((u) => u.ports.power)).toEqual([[3, 0, 0], [3, 0, 4], [5, 0, 0]]);
+    // an LV supply feeds all three at LV: no gap
+    expect(placeUnits(units, { headWidth: 1, portSpacing: 0, supplyTier: 1 }).units.map((u) => u.at[0])).toEqual([1, 1, 2]);
+    // the first unit of a row fed at another tier than the head's last run keeps a column away from it
+    const mvFirst = unitsFromPlan(layoutPack(), makePlan([{ id: 'a', mteId: IDS.ASSEMBLER, count: 1, tier: 2, euPerTick: 120 },
+      { id: 'b', mteId: IDS.MACERATOR, count: 1, euPerTick: 30 }], { flows: [] })).units;
+    expect(placeUnits(mvFirst, { headWidth: 3, portSpacing: 0, supplyTier: 2 }).units.map((u) => [u.stepId, u.at[0]])).toEqual([['a', 4], ['b', 3]]);
+  });
+
+  it("gives a singleblock its front up (toward the power head when its top is a fluid port) and its output side toward the spine", () => {
+    const plan = makePlan([{ id: 'm', mteId: IDS.MACERATOR, count: 1 }, { id: 'x', mteId: IDS.EXTRACTOR, count: 1, outputs: [['fluid:molten.iron', 144]] }]);
+    const p = placeUnits(unitsFromPlan(layoutPack(), plan).units, { headWidth: 1, portSpacing: 0 });
+    expect(p.units.map((u) => [u.stepId, u.facing, u.mainFacing])).toEqual([['m', 3, 1], ['x', 2, 4]]);
+    expect(p.blocks.filter((b) => b.role === 'machine').map((b) => [b.facing, b.mainFacing])).toEqual([[3, 1], [2, 4]]);
+    const ebf = placeUnits(unitsFromPlan(layoutPack(), makePlan([ebfStep])).units, { headWidth: 1, portSpacing: 0 });
+    expect(ebf.units[0]!.mainFacing).toBeUndefined();
+    expect(ebf.blocks.some((b) => b.mainFacing !== undefined)).toBe(false);
+  });
+});

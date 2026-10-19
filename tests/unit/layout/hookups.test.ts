@@ -1,14 +1,15 @@
 import { describe, it, expect } from 'vitest';
-import { choosePowerNetwork, chooseLogisticsNetwork, nearestTap, choosePowerTap, powerHookup, logisticsHookup, ghostBlocks } from '../../../src/server/layout/hookups.ts';
+import { choosePowerNetwork, chooseLogisticsNetwork, nearestTap, choosePowerTap, powerHookup, logisticsHookup, ghostBlocks, hookupPath, tapCableAmps } from '../../../src/server/layout/hookups.ts';
 import { resolveParts } from '../../../src/server/layout/parts.ts';
 import { layoutPack, makeScan, flatVoxels, IDS, STONE } from '../../helpers/layout-fixtures.ts';
-import { posKey, type Vec3 } from '../../../src/shared/layout/geometry.ts';
+import { DIRS, posKey, step, type Vec3 } from '../../../src/shared/layout/geometry.ts';
 import type { LayoutTap } from '../../../src/shared/types/layout.ts';
 
 const tap = (pos: Vec3, over: Partial<LayoutTap> = {}): LayoutTap => ({ pos, dim: 0, kind: 'power', voltageTier: 1, freeAmps: 4, networkId: 'p:0:0', ...over });
 const GT = (mteId: number) => ({ id: 'gregtech:gt.blockmachines', meta: 0, mteId });
-const vox = (wall: Array<{ from: Vec3; to: Vec3; block: typeof STONE }> = []) => flatVoxels({ origin: [-4, 60, -4], size: [30, 12, 20], groundY: 63,
-  boxes: [{ from: [0, 64, 0], to: [0, 64, 0], block: GT(IDS.TIN_1X) }, ...wall] });
+// the tap is a 4x Tin Cable (4 A, enough for the 2 A line) unless a test gives another cable
+const vox = (wall: Array<{ from: Vec3; to: Vec3; block: typeof STONE }> = [], tapCable: number = IDS.TIN_4X) => flatVoxels({ origin: [-4, 60, -4], size: [30, 12, 20], groundY: 63,
+  boxes: [{ from: [0, 64, 0], to: [0, 64, 0], block: GT(tapCable) }, ...wall] });
 const lineAt = (x0: number, x1: number, z0: number, z1: number) => {
   const s = new Set<string>();
   for (let x = x0; x <= x1; x++) for (let z = z0; z <= z1; z++) s.add(posKey([x, 64, z]));
@@ -69,12 +70,21 @@ describe('hookups', () => {
   });
 
   it('never lays a hookup onto a tap whose cable carries fewer amps than the line draws', () => {
-    const r = power(vox(), 1, 1);
+    // the rating of the tap's own cable decides (its block in the voxels, or a rating the tap carries); spare
+    // generation does not (final review: Plan 4 floors free amps to whole amps of spare power)
+    const small = vox([], IDS.TIN_1X);
+    const r = power(small, 1);
     expect([r.blocks, r.hookup.parts]).toEqual([[], []]);
     expect(r.hookup.path).toHaveLength(10);                         // still drawn, dashed
-    expect(r.warnings).toContainEqual({ code: 'power_amps_low', text: 'The tap has 1 A free at LV; the line draws up to 2 A' });
+    expect(r.warnings).toContainEqual({ code: 'power_amps_low', text: "The tap's 1x Tin Cable carries 1 A at LV; the line draws up to 2 A" });
     expect(r.blocked).toEqual({ cable: '1x Tin Cable', amps: 2 });   // Task 10 turns this into the upgrade step
-    expect(power(vox(), 1).blocks).toEqual([]);                      // cable rating unknown: treated as the free amps
+    expect(power(small, 4).blocks).toEqual([]);                      // free amps never make the cable bigger
+    expect(power(vox(), 0).blocked).toBeNull();                      // a 4x Tin Cable carries the line with no spare: the power fit says so
+    expect(power(small, 1, 4).blocked).toBeNull();                   // a rating the tap carries wins over the block
+    expect([tapCableAmps(layoutPack(), small, tap([0, 64, 0])), tapCableAmps(layoutPack(), null, tap([0, 64, 0]))]).toEqual([1, undefined]);
+    const unknown = powerHookup({ pack: layoutPack(), tap: tap([0, 64, 0], { freeAmps: 1 }), ports: [[11, 64, 0]], world: { vox: null, line: lineAt(11, 14, 0, 3) },
+      supplyTier: 1, amps: 2 });                                     // no voxels, no rating: the free amps stand in (ruling R9)
+    expect(unknown.warnings).toContainEqual({ code: 'power_amps_low', text: "The tap has 1 A free at LV and its cable's rating is unknown; the line draws up to 2 A" });
     const shortOnPower = power(vox(), 1, 4);                         // the cable carries 4 A; only generation is short
     expect([shortOnPower.blocks.length, shortOnPower.blocked]).toEqual([10, null]);
     expect(shortOnPower.warnings.map((w) => w.code)).not.toContain('power_amps_low');
@@ -98,8 +108,36 @@ describe('hookups', () => {
   });
 
   it('shows the existing block at the tap as a ghost', () => {
-    expect(ghostBlocks(vox(), layoutPack(), [[0, 64, 0], [3, 64, 3]], new Set())).toEqual([
+    expect(ghostBlocks(vox([], IDS.TIN_1X), layoutPack(), [[0, 64, 0], [3, 64, 3]], new Set())).toEqual([
       { pos: [0, 64, 0], block: GT(IDS.TIN_1X), role: 'ghost', label: 'existing 1x Tin Cable' }]);
     expect(ghostBlocks(null, layoutPack(), [[0, 64, 0]], new Set())).toEqual([]);
+  });
+
+  // final review C1: a guide that would cross the line goes round it, ends level beside the run, and its cables link
+  // only to each other, the tap and the run (never into a cell the hookup does not lay)
+  it('goes round the line when it cannot route, ending beside the run', () => {
+    const line = lineAt(11, 14, 0, 3);
+    const box = { min: [11, 64, 0] as Vec3, max: [14, 64, 3] as Vec3 };
+    const ports: Vec3[] = [[11, 64, 0], [11, 64, 1], [11, 64, 2], [11, 64, 3]];
+    const r = powerHookup({ pack: layoutPack(), tap: tap([20, 64, 1], { cableAmps: 4 }), ports, world: { vox: null, line, box }, supplyTier: 1, amps: 2 });
+    const inColumns = (p: Vec3) => p[0] >= 11 && p[0] <= 14 && p[2] >= 0 && p[2] <= 3;
+    expect([r.found, r.hookup.path.some(inColumns)]).toEqual([false, false]);
+    const last = r.hookup.path.at(-1)!;
+    expect(last[1]).toBe(64);                                        // level with the run, not under or over it
+    expect(ports.some((p) => DIRS.some((_, side) => posKey(step(last, side)) === posKey(p)))).toBe(true);
+    const laid = new Set(r.blocks.map((b) => posKey(b.pos)));
+    const allowed = new Set([...laid, posKey([20, 64, 1]), ...ports.map(posKey)]);
+    for (const b of r.blocks) for (let side = 0; side < 6; side++) if ((b.connections ?? 0) & (1 << side)) expect(allowed.has(posKey(step(b.pos, side)))).toBe(true);
+    expect(r.blocks).toHaveLength(r.hookup.path.length);
+    expect(r.warnings).toContainEqual({ code: 'no_path', text: 'Could not find a free route for the power hookup — the dashed line is a straight guide; route it around obstacles' });
+  });
+
+  it('keeps away from the cells it must not touch', () => {
+    const plain = hookupPath({ vox: vox(), line: lineAt(11, 14, 0, 3) }, [0, 64, 0], [[11, 64, 0]]);
+    expect(plain.path).toEqual(Array.from({ length: 10 }, (_, i) => [i + 1, 64, 0]));
+    // an LV cable of the base beside the straight route: the MV hookup must not run along it
+    const away = hookupPath({ vox: vox(), line: lineAt(11, 14, 0, 3), keepAway: new Set([posKey([5, 64, 1])]) }, [0, 64, 0], [[11, 64, 0]]);
+    expect(away.found).toBe(true);
+    expect(away.path.some((p) => DIRS.some((_, side) => posKey(step(p, side)) === '5,64,1'))).toBe(false);
   });
 });

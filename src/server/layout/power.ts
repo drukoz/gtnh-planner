@@ -32,21 +32,38 @@ function emitterLoss(tier: number): number {
 
 // ---- Tier groups and transformer stages ----
 
-/** The machines of one tier: their EU/t in input order, the sum, and Σ `ceil(EU/t ÷ V[tier])` amps. */
-export interface TierGroup { tier: number; euPerTick: number[]; peakEUt: number; amps: number }
+/**
+ * The volts a packet still has after losing `lossVolts` on its way (gt-mechanics §3.3); at least 1, so a run that loses
+ * everything (flagged `cable_loss_high`) counts each EU as one amp instead of dividing by zero.
+ */
+export function deliveredVolts(volts: number, lossVolts: number): number {
+  return Math.max(1, volts - lossVolts);
+}
 
-/** One group per tier, highest tier first; each machine counts `ceil(EU/t ÷ V[tier])` amps (gt-mechanics §3.1). */
-export function tierGroups(units: ReadonlyArray<{ tier: number; euPerTick: number }>): TierGroup[] {
+/**
+ * The machines of one tier: their EU/t in input order, the sum, and Σ `ceil(EU/t ÷ (V[tier] − loss))` amps.
+ * `lossVolts` (per machine, in input order) is there only when the caller gave a loss for some machine.
+ */
+export interface TierGroup { tier: number; euPerTick: number[]; peakEUt: number; amps: number; lossVolts?: number[] }
+
+/**
+ * One group per tier, highest tier first; each machine counts `ceil(EU/t ÷ delivered volts)` amps, where delivered
+ * volts = `V[tier]` less the volts its packets lose on the way (`lossVolts`, default 0; gt-mechanics §3.1, §3.3).
+ */
+export function tierGroups(units: ReadonlyArray<{ tier: number; euPerTick: number; lossVolts?: number }>): TierGroup[] {
   const byTier = new Map<number, TierGroup>();
+  const lossGiven = units.some((u) => u.lossVolts !== undefined);
   for (const u of units) {
     let group = byTier.get(u.tier);
     if (group === undefined) {
-      group = { tier: u.tier, euPerTick: [], peakEUt: 0, amps: 0 };
+      group = { tier: u.tier, euPerTick: [], peakEUt: 0, amps: 0, ...(lossGiven ? { lossVolts: [] } : {}) };
       byTier.set(u.tier, group);
     }
+    const loss = u.lossVolts ?? 0;
     group.euPerTick.push(u.euPerTick);
+    group.lossVolts?.push(loss);
     group.peakEUt += u.euPerTick;
-    group.amps += Math.ceil(u.euPerTick / voltsOf(u.tier));
+    group.amps += Math.ceil(u.euPerTick / deliveredVolts(voltsOf(u.tier), loss));
   }
   return [...byTier.values()].sort((a, b) => b.tier - a.tier);
 }
@@ -58,10 +75,12 @@ export interface Stages { supplyTier: number; stages: Stage[] /* from the supply
 
 /**
  * Step-down banks from `supplyTier` to every lower group tier, one tier per bank (gt-mechanics §3.6). Working up from
- * the lowest group, each bank gives the amps needed at its tier and takes `ceil(out × (V[k] + loss) / V[k+1])` amps
- * from the tier above, which adds them to that tier's need; every bank pays the emitter loss per amp out.
+ * the lowest group, each bank gives the amps needed at its tier and takes `ceil(out × (V[k] + loss) / (V[k+1] − lost))`
+ * amps from the tier above, where `lost` = `bankLossVolts(k + 1)` is what the packets lose on the tier-above run before
+ * they reach the bank (default 0); that adds them to that tier's need. Every bank pays the emitter loss per amp out.
+ * Machines above the supply tier draw from the supply run at the supply volts less their own `lossVolts`.
  */
-export function transformerStages(groups: readonly TierGroup[], supplyTier: number): Stages {
+export function transformerStages(groups: readonly TierGroup[], supplyTier: number, bankLossVolts: (fromTier: number) => number = () => 0): Stages {
   const supplyVolts = voltsOf(supplyTier);
   const under = groups.filter((g) => g.tier > supplyTier);
   const fed = groups.filter((g) => g.tier <= supplyTier);
@@ -74,20 +93,37 @@ export function transformerStages(groups: readonly TierGroup[], supplyTier: numb
     const ampsOut = need.get(k) ?? 0;
     if (ampsOut <= 0) continue;
     const loss = emitterLoss(k);
-    const ampsIn = Math.ceil((ampsOut * (voltsOf(k) + loss)) / voltsOf(k + 1));
+    const ampsIn = Math.ceil((ampsOut * (voltsOf(k) + loss)) / deliveredVolts(voltsOf(k + 1), bankLossVolts(k + 1)));
     const count = Math.max(Math.ceil(ampsOut / TRANSFORMER_AMPS_OUT), Math.ceil(ampsIn / TRANSFORMER_AMPS_IN));
     need.set(k + 1, (need.get(k + 1) ?? 0) + ampsIn);
     lossEUt += ampsOut * loss;
     upwards.push({ fromTier: k + 1, toTier: k, count, ampsIn, ampsOut });
   }
   let supplyAmps = need.get(supplyTier) ?? 0;
-  for (const g of under) for (const euPerTick of g.euPerTick) supplyAmps += Math.ceil(euPerTick / supplyVolts);
+  for (const g of under) {
+    g.euPerTick.forEach((euPerTick, i) => {
+      supplyAmps += Math.ceil(euPerTick / deliveredVolts(supplyVolts, g.lossVolts?.[i] ?? 0));
+    });
+  }
   return { supplyTier, stages: upwards.reverse(), supplyAmps, lossEUt, under };
+}
+
+/** EU/t the banks' emitters pay on top of what they send: `ampsOut × 2^max(0, toTier − 1)` each (gt-mechanics §3.2). */
+export function bankLossEUt(stages: readonly Stage[]): number {
+  return stages.reduce((sum, s) => sum + s.ampsOut * emitterLoss(s.toTier), 0);
 }
 
 /** EU/t a cable run loses: every amp loses `lossPerBlock` volts per block (gt-mechanics §3.3). */
 export function lineLossEUt(amps: number, blocks: number, lossPerBlock: number): number {
   return amps * blocks * lossPerBlock;
+}
+
+/**
+ * The volts a line's supply run is sized to have lost already on the hookup: `LOSS_WARN_FRACTION` of the supply volts,
+ * the most a hookup loses before it is flagged `cable_loss_high` (spec §3.5 never overload a cable).
+ */
+export function hookupAllowanceVolts(supplyTier: number): number {
+  return LOSS_WARN_FRACTION * voltsOf(supplyTier);
 }
 
 // ---- Power fit ----
