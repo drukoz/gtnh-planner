@@ -1,12 +1,13 @@
 // The layout's build steps and parts list (Plan 5 Task 10; spec §3.7, §3.10, architecture §11.13–§11.14, §11.23):
 // clear the site, roof it, place the machines, power them through the transformer banks and cable trees, hook up the
-// tap, lay the logistics, configure every covered or set block with its exact settings, reuse owned machines, test.
+// tap, lay the logistics, configure every covered or set block and every EnderIO conduit face with its exact settings,
+// reuse owned machines, test.
 // Steps link to the numbered pins and keep stable ids, so ticks survive re-plans. The parts list counts every placed
 // part and cover by key in its group. Every order and tie-break is fixed, so the same inputs give the same steps.
 
 import { tierName } from '../../shared/gt/tiers.ts';
 import type { StuffKey } from '../../shared/keys.ts';
-import { configuredLines } from '../../shared/layout/configure-text.ts';
+import { conduitLines, configuredLines } from '../../shared/layout/configure-text.ts';
 import { fmtInt } from '../../shared/layout/format.ts';
 import { posKey, type Vec3 } from '../../shared/layout/geometry.ts';
 import type { BlockRole, Hookup, LayoutBlock, LayoutStatus, Pin } from '../../shared/types/layout.ts';
@@ -168,6 +169,21 @@ function configureSteps(input: StepsInput, sitePin: number | undefined, logistic
   return entries.map((e) => draft(e.id, 'configure', e.pin, `${e.label}${e.n > 1 ? ` ×${fmtInt(e.n)}` : ''}: ${e.lines.join('; ')}`));
 }
 
+/**
+ * Architecture "EnderIO conduits, granted change requests (add-on 11)": one step per face of every conduit of every
+ * non-ghost block, in block, bundle and face order, written by the shared formatter
+ * (`layout:conduit:<position relative to origin>:<conduit kind>:<face>`). Hookup blocks point at the logistics pin, the
+ * others at the site pin.
+ */
+function conduitSteps(input: StepsInput, sitePin: number | undefined, logisticsPin: number | undefined): Draft[] {
+  return input.blocks.flatMap((b) => {
+    if (b.role === 'ghost') return [];
+    const rel: Vec3 = [b.pos[0] - input.origin[0], b.pos[1] - input.origin[1], b.pos[2] - input.origin[2]];
+    const pin = b.hookup === undefined ? sitePin : logisticsPin;
+    return conduitLines(b, input.nameOf).map((l) => draft(`layout:conduit:${posKey(rel)}:${l.kind}:${l.face}`, 'configure', pin, l.text));
+  });
+}
+
 // ---- Steps ----
 
 /** The pin of a reuse find: the reuse pin `makePins` put at its nearest machine. */
@@ -210,6 +226,7 @@ export function layoutSteps(input: StepsInput): BuildStep[] {
         `Connect the line to your ${g.kindName} network${atPin(logisticsPin)}: ${fmtInt(g.blocks)}× ${g.part}`));
     }
     steps.push(...configureSteps(input, sitePin, logisticsPin));
+    steps.push(...conduitSteps(input, sitePin, logisticsPin));
     // settings on blocks the line does not place (e.g. the EnderIO extract face)
     for (const d of input.drafts) if (d.kind === 'configure') steps.push(draft(d.id, d.kind, kindPin(d.pin), d.text));
   }
@@ -232,8 +249,9 @@ const PLACED_ROLES: ReadonlySet<BlockRole> = new Set<BlockRole>(['machine', 'cas
  * Each block with `buildStep` = the id of the step that places it, for the in-game projector: the first rule whose
  * step exists wins — a hookup block its hookup's step; a machine, casing or hatch its `layout:place:<stepId>`; a
  * transformer the stage whose transformer has its label; a cable the wire step whose cable has its label; a fluid pipe
- * (`<pipe> (<fluid name>)`) its fluid's step; a pipe, interface, chip pipe or chest the `layout:logistics:line` step.
- * Ghosts and blocks no rule matches get none. The input blocks are not changed.
+ * (`<pipe> (<fluid name>)`) its fluid's step; a block whose conduits are all fluid conduits `layout:logistics:fluids`
+ * (architecture "EnderIO conduits, granted change requests (add-on 11)"); a pipe, interface, chip pipe or chest the
+ * `layout:logistics:line` step. Ghosts and blocks no rule matches get none. The input blocks are not changed.
  */
 export function assignBuildSteps(blocks: readonly LayoutBlock[], steps: readonly BuildStep[],
   input: Pick<StepsInput, 'cables' | 'stages' | 'transformerName' | 'fluids'>, hookups: readonly Hookup[]): LayoutBlock[] {
@@ -259,6 +277,7 @@ export function assignBuildSteps(blocks: readonly LayoutBlock[], steps: readonly
       const fluid = input.fluids.find((f) => `${f.pipe} (${f.name})` === b.label);
       candidates.push(fluid === undefined ? undefined : `layout:logistics:fluid:${fluid.key}`);
     }
+    if (b.conduits !== undefined && b.conduits.length > 0 && b.conduits.every((c) => c.kind !== 'item')) candidates.push('layout:logistics:fluids');
     if (LINE_ROLES.has(b.role)) candidates.push('layout:logistics:line');
     return candidates.find(has);
   };
@@ -283,9 +302,25 @@ const BLOCK_PARTS: Partial<Readonly<Record<BlockRole, { why: string; hookupWhy?:
 };
 
 /**
+ * The parts of a block's conduits (architecture "EnderIO conduits, granted change requests (add-on 11)"): each conduit
+ * once, the filter upgrade of every side of their faces once (an ender fluid conduit's own filter is no part), and the
+ * speed upgrades of every extract side.
+ */
+function conduitParts(b: LayoutBlock): Array<{ key: StuffKey; amount: number; why: string }> {
+  return (b.conduits ?? []).flatMap((c) => [
+    { key: c.item, amount: 1, why: b.hookup === undefined ? 'conduits' : 'logistics hookup' },
+    ...c.faces.flatMap((f) => [
+      ...[f.extract?.filter, f.insert?.filter].flatMap((filter) => (filter?.item === undefined ? [] : [{ key: filter.item, amount: 1, why: 'conduit filters' }])),
+      ...(f.extract?.speed === undefined ? [] : [{ key: f.extract.speed.item, amount: f.extract.speed.count, why: 'conduit speed upgrades' }]),
+    ]),
+  ]);
+}
+
+/**
  * Spec §3.10: every cable, transformer, hatch, pipe, interface, chip pipe and chest the layout places (machines and
  * casings are on Plan 2's build list; ghosts are there already) and one per cover of every non-ghost block, plus
  * `extra`, by key: amounts summed, the distinct whys sorted and joined with "; ", the first group set; sorted by key.
+ * A non-ghost block with conduits lists its `conduitParts` (group `logistics`) instead of its item.
  */
 export function bomFromBlocks(blocks: readonly LayoutBlock[], extra: readonly BomLine[]): BomLine[] {
   const lines = new Map<StuffKey, { amount: number; whys: Set<string>; group: Group | undefined }>();
@@ -301,7 +336,12 @@ export function bomFromBlocks(blocks: readonly LayoutBlock[], extra: readonly Bo
   };
   for (const b of blocks) {
     const part = BLOCK_PARTS[b.role];
-    if (part !== undefined && b.item !== undefined) add(b.item, 1, b.hookup !== undefined ? part.hookupWhy ?? part.why : part.why, part.group);
+    // a conduit block's item is its first conduit's, which its conduit parts already count
+    if (b.role !== 'ghost' && b.conduits !== undefined) {
+      for (const l of conduitParts(b)) add(l.key, l.amount, l.why, 'logistics');
+    } else if (part !== undefined && b.item !== undefined) {
+      add(b.item, 1, b.hookup !== undefined ? part.hookupWhy ?? part.why : part.why, part.group);
+    }
     if (b.role !== 'ghost') for (const c of b.covers ?? []) add(c.item, 1, 'covers', 'logistics');
   }
   for (const l of extra) add(l.key, l.amount, l.why, l.group);

@@ -14,7 +14,7 @@ import {
 } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import type { Layout } from '../../shared/types/layout.ts';
-import { visible, type SceneData, type SceneInstance, type ShapeKind } from './scene-data.ts';
+import { instanceTranslation, visible, type SceneData, type SceneInstance, type ShapeKind } from './scene-data.ts';
 import { packTiles, solidTile, TILE } from './textures.ts';
 
 export const VERTEX_SHADER = `
@@ -99,9 +99,10 @@ function groupsOf(scene: SceneData, layout: Layout): Group[] {
 }
 
 /**
- * The group's mesh: each instance at its cell (an arm or plate turned to its side) with its six tiles in `aTiles0`
- * (down, up, north) and `aTiles1` (south, west, east) — a tile without an array layer drawn as tile 0 — and its layer
- * (y relative to the origin) in `aLayer`.
+ * The group's mesh: each instance at its cell, shifted by its `offset` (`instanceTranslation`: a bundle's conduits sit
+ * side by side; plan 11 merge follow-up F1), an arm or plate turned to its side, with its six tiles in `aTiles0` (down,
+ * up, north) and `aTiles1` (south, west, east) — a tile without an array layer drawn as tile 0 — and its layer (y
+ * relative to the origin) in `aLayer`.
  */
 function meshOf(group: Group, material: ShaderMaterial, layerCount: number): InstancedMesh {
   const geometry = shapeGeometry(group.shape);
@@ -116,7 +117,8 @@ function meshOf(group: Group, material: ShaderMaterial, layerCount: number): Ins
     tiles0.set([down!, up!, north!], i * 3);
     tiles1.set([south!, west!, east!], i * 3);
     layers[i] = inst.pos[1];
-    at.makeTranslation(inst.pos[0] + 0.5, inst.pos[1] + 0.5, inst.pos[2] + 0.5);
+    const [x, y, z] = instanceTranslation(inst);
+    at.makeTranslation(x, y, z);
     const turn = SIDE_TURNS[inst.side];
     if (turn !== undefined) at.multiply(turn);
     mesh.setMatrixAt(i, at);

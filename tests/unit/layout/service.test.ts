@@ -77,6 +77,25 @@ describe('layout service', () => {
     expect(done.buildTotals).toEqual(totals);
   });
 
+  it('keeps what each build line needs of every total it merges (architecture §11.36)', async () => {
+    const plan = { ...twoStep(), buildTotals: [
+      { key: 't:iron@0', amount: 6, why: 'for Basic Macerator, Basic Assembler', neededFor: [{ key: 'gregtech:gt.blockmachines@2001', amount: 4 }, { key: 'gregtech:gt.blockmachines@2002', amount: 2 }] },
+      { key: 't:tin@0', amount: 1, why: 'for Basic Assembler', neededFor: [{ key: 'gregtech:gt.blockmachines@2002', amount: 1 }] }] };
+    const svc = createLayoutService(deps({
+      plan: async () => plan,
+      expand: async (_pack, lines) => ({ lines, totals: [
+        { key: 't:copper@0', amount: 2, why: 'for 1x Copper Cable', neededFor: [{ key: 'gregtech:gt.blockmachines@1366', amount: 2 }] },
+        { key: 't:tin@0', amount: 5, why: 'for 2x Tin Cable, 1x Tin Cable', neededFor: [{ key: 'gregtech:gt.blockmachines@1247', amount: 3 }, { key: 'gregtech:gt.blockmachines@1246', amount: 2 }] }] }),
+    }));
+    const done = await svc.finishPlan(plan, makeProject());
+    expect(done.buildTotals).toEqual([
+      { key: 't:copper@0', amount: 2, why: 'for 1x Copper Cable', neededFor: [{ key: 'gregtech:gt.blockmachines@1366', amount: 2 }] },
+      { key: 't:iron@0', amount: 6, why: 'for Basic Macerator, Basic Assembler', neededFor: [{ key: 'gregtech:gt.blockmachines@2001', amount: 4 }, { key: 'gregtech:gt.blockmachines@2002', amount: 2 }] },
+      { key: 't:tin@0', amount: 6, why: 'for Basic Assembler; for 2x Tin Cable, 1x Tin Cable', neededFor: [
+        { key: 'gregtech:gt.blockmachines@2002', amount: 1 }, { key: 'gregtech:gt.blockmachines@1247', amount: 3 }, { key: 'gregtech:gt.blockmachines@1246', amount: 2 }] }]);
+    for (const total of done.buildTotals!) expect(total.neededFor!.reduce((sum, n) => sum + n.amount, 0)).toBe(total.amount);
+  });
+
   it('does not keep a failed parts breakdown', async () => {
     let fail = true;
     const svc = createLayoutService(deps({ expand: async (_pack, lines) => { if (fail) throw new Error('no prices'); return { lines, totals: [] }; } }));

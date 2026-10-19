@@ -33,7 +33,8 @@ describe('3D tab', () => {
   });
 
   it('puts the 3D tab right after the map', () => {
-    expect(PROJECT_TABS.map((t) => t.id)).toEqual(['map', '3d', 'flow', 'materials', 'notes']);
+    // plan 11 inserts its Connections tab right after this one
+    expect(PROJECT_TABS.map((t) => t.id)).toEqual(['map', '3d', 'connections', 'flow', 'materials', 'notes']);
     expect(PROJECT_TABS[1]!.label).toBe('3D');
   });
 

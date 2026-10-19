@@ -2,7 +2,8 @@
 // line joins and at which tap, the route of the hookup through the scanned world from the tap to the line, the cable
 // or logistics parts laid along it, and the existing blocks shown as faint ghosts where the line connects.
 // A hookup goes round the line's box and ends beside it, and touches nothing it must keep away from (another tier's
-// cable, a machine below its tier); its blocks link only to each other, the tap and the port they end at.
+// cable, a machine below its tier); its blocks link only to each other, the tap and the port they end at. One that
+// ends on an EnderIO conduit face also keeps off its `keepOff` cells (plan 11, ruling R14).
 // A hookup cable is never laid onto a tap whose own cable is rated for fewer amps than the line draws (spec §5): that
 // hookup stays a dashed guide with `power_amps_low`, and Task 10 writes the upgrade step from `blocked`. A route that
 // cannot be found within the node budget becomes a dashed guide round the line (`found: false`, `no_path`). Every
@@ -12,13 +13,15 @@ import { tierName, V } from '../../shared/gt/tiers.ts';
 import { itemKey, type StuffKey } from '../../shared/keys.ts';
 import { fmtInt } from '../../shared/layout/format.ts';
 import { bboxOf, DIRS, manhattan, posKey, sideToward, step, type Vec3 } from '../../shared/layout/geometry.ts';
-import type { BlockRole, Hookup, LayoutBlock, LayoutTap } from '../../shared/types/layout.ts';
+import { FACES } from '../../shared/types/assets.ts';
+import type { BlockRole, ConduitSpec, Hookup, LayoutBlock, LayoutTap } from '../../shared/types/layout.ts';
 import type { BlockRef, Machine, Pack } from '../../shared/types/pack.ts';
 import type { BomLine, LogisticsMode, PlanWarning } from '../../shared/types/plan.ts';
 import {
   AIR_INDEX, UNKNOWN_INDEX, type Base, type LogisticsNetwork, type PowerNetwork, type TapPoint, type Voxels, type WorldScan,
 } from '../../shared/types/world.ts';
 import type { BlockConfig } from './arrange.ts';
+import type { ModeHookup } from './modes/mode.ts';
 import { findPath, linkBits, MAX_PATH_NODES, straightPath, type PathBounds } from './path.ts';
 import { machineRef, pickCable, type PartId, type Parts } from './parts.ts';
 import { lineLossEUt, LOSS_WARN_FRACTION } from './power.ts';
@@ -37,6 +40,11 @@ export interface RouteWorld {
   box?: PathBounds;
   /** World posKeys of blocks no hookup cell may touch: another tier's cable, a transformer, a machine below its tier. */
   keepAway?: ReadonlySet<string>;
+  /**
+   * World posKeys no hookup cell may take (plan 11, ruling R14): set only for a hookup that ends on an EnderIO conduit
+   * face. The route search and the dashed guide's search keep off them; a straight guide, the last resort, does not.
+   */
+  keepOff?: ReadonlySet<string>;
 }
 export interface HookupBuild { hookup: Hookup; blocks: LayoutBlock[]; warnings: PlanWarning[]; found: boolean }
 export interface PowerHookupBuild extends HookupBuild {
@@ -53,7 +61,7 @@ const END_ROLES: Partial<Record<PartId, BlockRole>> = { pr_interface: 'chip_pipe
 
 /** The kinds of network each logistics mode hooks into, most wanted first; never a GT pipe network (research §3.8). */
 const MODE_KINDS: Readonly<Record<LogisticsMode, ReadonlyArray<LogisticsNetwork['kind']>>> = {
-  routed: ['routed'], ae2: ['ae2'], direct: ['routed', 'ae2', 'enderio'],
+  routed: ['routed'], ae2: ['ae2'], direct: ['routed', 'ae2', 'enderio'], enderio: ['enderio'],
 };
 /** Plan 4 names EnderIO networks `e:<conduit type>:…`; a liquid conduit network carries no items. */
 const ENDERIO_LIQUID_PREFIX = 'e:liquid:';
@@ -79,9 +87,12 @@ function inColumns(p: Vec3, box: PathBounds): boolean {
   return p[0] >= box.min[0] && p[0] <= box.max[0] && p[2] >= box.min[2] && p[2] <= box.max[2];
 }
 
-/** Whether a hookup may use `p` whatever the terrain: not a line cell, outside the line's columns, touching nothing to keep away from. */
+/**
+ * Whether a hookup may use `p` whatever the terrain: not a line cell, not kept off, outside the line's columns, touching
+ * nothing to keep away from.
+ */
 function clearOfLine(world: RouteWorld, p: Vec3): boolean {
-  if (world.line.has(posKey(p)) || (world.box !== undefined && inColumns(p, world.box))) return false;
+  if (world.line.has(posKey(p)) || world.keepOff?.has(posKey(p)) === true || (world.box !== undefined && inColumns(p, world.box))) return false;
   const keepAway = world.keepAway;
   return keepAway === undefined || !DIRS.some((_, side) => keepAway.has(posKey(step(p, side))));
 }
@@ -396,14 +407,28 @@ export function powerHookup(input: { pack: Pack; tap: LayoutTap; ports: readonly
 // ---- Logistics hookup ----
 
 /**
+ * The conduit on a hookup's last cell (architecture "EnderIO conduits, granted change requests (add-on 11)"): linked
+ * like the cell but not toward the port (a chest is no conduit), with `endConduit`'s face on the side that touches the
+ * port. Null when the cell does not touch a port (the end of a straight guide, plan 11 ruling R13).
+ */
+function endConduitSpec(endConduit: NonNullable<ModeHookup['endConduit']>, item: StuffKey, pos: Vec3, ports: readonly Vec3[],
+  connections: number | undefined): ConduitSpec | null {
+  const side = portSide(pos, ports);
+  const face = FACES[side];
+  if (face === undefined) return null;
+  return { kind: endConduit.kind, item, connections: (connections ?? 0) & ~(1 << side), faces: [{ face, ...endConduit.face }] };
+}
+
+/**
  * The mode's hookup part on every cell of the route (role `pipe`); with `end`, the last cell is that part facing the
- * port it touches, and `endConfig` goes on the last cell. Parts are counted per key, sorted by key.
+ * port it touches, and `endConfig` goes on the last cell; with `endConduit`, the last cell's conduit sets that face
+ * toward the port it touches. Parts are counted per key, sorted by key.
  */
 export function logisticsHookup(input: {
   pack: Pack; parts: Parts; tap: TapPoint; ports: readonly Vec3[]; world: RouteWorld; part: PartId; end: PartId | null;
-  endConfig?: BlockConfig; maxNodes?: number;
+  endConfig?: BlockConfig; endConduit?: ModeHookup['endConduit']; maxNodes?: number;
 }): HookupBuild {
-  const { parts, tap, ports, world, part, end, endConfig } = input;
+  const { parts, tap, ports, world, part, end, endConfig, endConduit } = input;
   const route = hookupPath(world, tap.pos, ports, input.maxNodes);
   const run = runCells(route.path, world);
   const bits = hookupBits(route.path, new Set(run.map(posKey)), tap.pos, ports);
@@ -413,11 +438,13 @@ export function logisticsHookup(input: {
     const p = parts[endPart ?? part];
     const facing = endPart === null ? -1 : portSide(pos, ports);
     const connections = bits.get(posKey(pos));
+    const conduit = last && endConduit !== undefined ? endConduitSpec(endConduit, parts[part].key, pos, ports, connections) : null;
     return {
       pos: [...pos], block: { ...p.block }, role: endPart === null ? 'pipe' : END_ROLES[endPart] ?? 'pipe',
       ...(facing === -1 ? {} : { facing }), label: p.name, item: p.key,
       ...(connections === undefined ? {} : { connections }),
       ...(last && endConfig !== undefined ? { config: { ...endConfig } } : {}),
+      ...(conduit === null ? {} : { conduits: [conduit] }),
     };
   });
   const counts = new Map<StuffKey, number>();

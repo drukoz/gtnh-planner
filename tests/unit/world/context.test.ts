@@ -18,6 +18,9 @@ const EMPTY_SCAN: WorldScan = {
   visitedDims: [], topTier: null, coilHeat: null, prospected: [],
 };
 
+/** The sample world's four MV assemblers in the Nether base (sample-world.ts), in the scan's order. */
+const NETHER_ASSEMBLERS = [-2, -3, -4, -5].map((x) => ({ dim: -1, pos: [x, 64, -2] }));
+
 let tmp: string, scan: WorldScan;
 
 beforeAll(async () => {
@@ -34,8 +37,11 @@ afterAll(() => rm(tmp, { recursive: true, force: true }));
 
 it('builds the context of the main base', () => {
   const ctx = contextFromScan(scan, testPack(), '0:0:0');
-  expect(ctx.ownedMachines).toEqual([{ mteId: 114, count: 1 }, { mteId: 125, count: 1 }, { mteId: 161, count: 1 },
-    { mteId: 1000, count: 1 }, { mteId: 1120, count: 1 }, { mteId: 2001, count: 1 }]);
+  // Ruling P22: where each machine stands, so a plan can say where the machines it reuses are.
+  const at = (x: number, y: number, z: number) => [{ dim: 0, pos: [x, y, z] }];
+  expect(ctx.ownedMachines).toEqual([{ mteId: 114, count: 1, where: at(0, 64, 0) }, { mteId: 125, count: 1, where: at(7, 64, 10) },
+    { mteId: 161, count: 1, where: at(2, 65, 0) }, { mteId: 1000, count: 1, where: at(8, 64, 8) }, { mteId: 1120, count: 1, where: at(1, 64, 0) },
+    { mteId: 2001, count: 1, where: at(3, 64, 0) }]);
   expect(Object.fromEntries(ctx.storage)).toEqual(SAMPLE.totals);
   expect([ctx.topTier, ctx.coilHeat, ctx.visitedDims, ctx.prospected]).toEqual([1, 2701, SAMPLE.visitedDims, SAMPLE.prospected]);
   expect(ctx.power).toMatchObject({ voltageTier: 1, storedEU: 101_000, rainOutageSeconds: 480 });
@@ -44,7 +50,7 @@ it('builds the context of the main base', () => {
 });
 
 it('builds the context of another base and drops machines the export does not know', () => {
-  expect(contextFromScan(scan, testPack(), '-1:-1:-1')).toMatchObject({ ownedMachines: [{ mteId: 2002, count: 4 }], topTier: 2, coilHeat: null, power: undefined });
+  expect(contextFromScan(scan, testPack(), '-1:-1:-1')).toMatchObject({ ownedMachines: [{ mteId: 2002, count: 4, where: NETHER_ASSEMBLERS }], topTier: 2, coilHeat: null, power: undefined });
   const unknown = contextFromScan(scan, packWithout(testPack(), 2002), '-1:-1:-1');
   expect(unknown.ownedMachines).toEqual([]);
   expect(unknown.topTier).toBeNull();   // a machine the export does not know has no tier
@@ -52,8 +58,8 @@ it('builds the context of another base and drops machines the export does not kn
 
 it('takes every machine, network and storage block when no base is chosen', () => {
   const ctx = contextFromScan(scan, testPack(), null);
-  expect(ctx.ownedMachines).toContainEqual({ mteId: 2002, count: 4 });
-  expect(ctx.ownedMachines).toContainEqual({ mteId: 2001, count: 1 });
+  expect(ctx.ownedMachines).toContainEqual({ mteId: 2002, count: 4, where: NETHER_ASSEMBLERS });
+  expect(ctx.ownedMachines).toContainEqual({ mteId: 2001, count: 1, where: [{ dim: 0, pos: [3, 64, 0] }] });
   expect(ctx.topTier).toBe(2);
   expect(Object.fromEntries(ctx.storage)).toEqual(SAMPLE.totals);   // every storage block is in the main base
   expect(ctx.power).toMatchObject({ voltageTier: 1, storedEU: 101_000 });
@@ -72,4 +78,6 @@ it('does not share arrays with the scan, which every caller reads', () => {
   const ctx = contextFromScan(scan, testPack(), '0:0:0');
   expect(ctx.visitedDims).not.toBe(scan.visitedDims);
   expect(ctx.prospected).not.toBe(scan.prospected);
+  const placed = scan.machines.find((m) => m.mteId === 2001)!;
+  expect(ctx.ownedMachines.find((m) => m.mteId === 2001)?.where?.[0]?.pos).not.toBe(placed.pos);
 });

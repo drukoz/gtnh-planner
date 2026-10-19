@@ -8,14 +8,15 @@
 
 import type { StuffKey } from '../../../shared/keys.ts';
 import { posKey, step, type Vec3 } from '../../../shared/layout/geometry.ts';
-import type { BlockRole } from '../../../shared/types/layout.ts';
+import type { BlockRole, TailChest } from '../../../shared/types/layout.ts';
 import type { BomLine, PlanWarning } from '../../../shared/types/plan.ts';
 import { comparePos } from '../../world/graph.ts';
 import type { BlockConfig, LocalBlock } from '../arrange.ts';
 import { linkBits } from '../path.ts';
 import type { Part } from '../parts.ts';
 import {
-  emptyModeResult, finalItemOutputs, itemPorts, nameList, outputSideInputs, placedStepIds, stepItemInputs, type ModeInput, type ModeResult, type StepDraft,
+  emptyModeResult, finalItemOutputs, itemPorts, nameList, outputSideInputs, placedStepIds, rawItemInputs, stepItemInputs, type ModeInput,
+  type ModeResult, type StepDraft,
 } from './mode.ts';
 
 const UP = 1, SOUTH = 3, EAST = 5;
@@ -38,6 +39,10 @@ export function routedMode(input: ModeInput): ModeResult {
   const chipsUsed: Chip[] = [];
   const lay = (pos: Vec3, part: Part, role: BlockRole, label: string, config?: BlockConfig): void => {
     blocks.push({ pos, block: { ...part.block }, role, label, item: part.key, ...(config === undefined ? {} : { config }) });
+  };
+  // the tail chests say which side they are and what they hold (architecture "EnderIO conduits, granted change requests (add-on 11)")
+  const layChest = (pos: Vec3, label: string, tail: TailChest): void => {
+    blocks.push({ pos, block: { ...parts.chest.block }, role: 'chest', label, item: parts.chest.key, tail });
   };
   /** An interface pipe on `pos` joined to the inventory `onto`; its chips are its config. */
   const layInterface = (pos: Vec3, onto: Vec3, label: string, chips: readonly Chip[]): void => {
@@ -67,13 +72,15 @@ export function routedMode(input: ModeInput): ModeResult {
   const request: Vec3 = [tailX, 0, spineZ];
   const inputChest: Vec3 = [tailX, 0, spineZ - 1];
   const outputChest: Vec3 = [tailX, 0, spineZ + 1];
+  const placed = placedStepIds(placement);
+  const finals = finalItemOutputs(plan, placed);
   lay(request, parts.pr_request, 'pipe', parts.pr_request.name);
   links.push([request, inputChest]);
-  lay(inputChest, parts.chest, 'chest', 'Chest (input)');
-  lay(outputChest, parts.chest, 'chest', 'Chest (output)');
+  layChest(inputChest, 'Chest (input)', { side: 'input', keys: rawItemInputs(plan, placed) });
+  layChest(outputChest, 'Chest (output)', { side: 'output', keys: [...finals] });
   lay(step(request, UP), parts.pr_junction, 'pipe', parts.pr_junction.name);
   layInterface(step(inputChest, UP), inputChest, 'input chest', [extractor]);
-  layInterface(step(outputChest, UP), outputChest, 'output chest', responder(finalItemOutputs(plan, placedStepIds(placement))));
+  layInterface(step(outputChest, UP), outputChest, 'output chest', responder(finals));
 
   // every pair of face-adjacent pipe cells is joined
   const pipeCells = new Set(blocks.filter((b) => PIPE_ROLES.has(b.role)).map((b) => posKey(b.pos)));

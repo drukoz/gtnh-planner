@@ -21,6 +21,15 @@ describe('ItemIcon', () => {
     expect(html).toContain('>WA<');
   });
 
+  it('names the good it shows in its tooltip and accessible name', () => {
+    const html = renderToStaticMarkup(<ItemIcon itemKey="t:copper_wire@0" size={16} name="Copper Wire" />);
+    expect(html).toContain('title="Copper Wire"');
+    expect(html).toContain('aria-label="Copper Wire"');
+    expect(html).not.toContain('title="t:copper_wire@0"');
+    expect(html).not.toContain('aria-label="t:copper_wire@0"');
+    expect(html).toContain('data-item-key="t:copper_wire@0"');               // the key stays for the code that looks it up
+  });
+
   it('keeps the placeholder letters', () => {
     expect(placeholderLetters('gregtech:gt.metaitem.01@2032')).toBe('GT');
     expect(placeholderLetters('fluid:molten.iron')).toBe('MO');

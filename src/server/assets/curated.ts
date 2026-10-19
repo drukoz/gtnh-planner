@@ -87,6 +87,12 @@ const PIPES: Record<string, string> = {
 const CONDUITS: Record<string, string> = {
   item: 'itemConduit', liquid: 'liquidConduit', power: 'powerConduit', redstone: 'redstoneConduit',
   me: 'meConduit', gas: 'gasConduit', oc: 'ocConduit', other: 'conduitConnector',
+  // architecture "EnderIO conduits, granted change requests (add-on 11)": the ender fluid conduits the EnderIO mode lays,
+  // and the connector a face shows in each mode (the textures ItemConduit and AbstractEnderLiquidConduit draw for it)
+  liquid_ender: 'liquidConduitEnder', liquid_crystalline: 'liquidConduitCrystallineEnder',
+  liquid_pink_slime: 'liquidConduitCrystallinePinkSlimeEnder', liquid_melodic: 'liquidConduitMelodicEnder',
+  liquid_stellar: 'liquidConduitStellarEnder',
+  connector_extract: 'itemConduitInput', connector_insert: 'itemConduitOutput', connector_in_out: 'itemConduitInOut_Out',
 };
 const AE2_CABLES: Record<string, [string, string]> = {
   glass: ['CableGlass', 'MECable'], covered: ['CableCovered', 'MECovered'], smart: ['CableSmart', 'MESmart'],

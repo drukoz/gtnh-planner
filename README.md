@@ -67,6 +67,7 @@ Once a project has a scan and a base, the planner lays the line out block by blo
   - **Machine to machine:** conveyor and pump covers move goods from machine to machine through one shared item pipe (and fluid pipes); every machine's Input Filter is on, and each final product goes into its own output chest through a filtered cover.
   - **Project Red routed:** a routed interface pipe with routing chips on every machine; you order from the request pipe.
   - **AE2:** ME interfaces with their patterns; their idle power draw counts towards the power check.
+  - **EnderIO conduits:** item and ender fluid conduits with every face set; see [EnderIO conduits and the Connections view](#enderio-conduits-and-the-connections-view).
   - The line is only hooked into networks the scan found. The planner never assumes one you have not built.
 - **Configured parts:** every cover, filter, chip, pattern and programmed circuit gets a build step that says exactly how to set it (face, mode, rate, whitelist, circuit number). Pipes, covers, buses and cables are sized to what they carry.
 - **Facing:** a GregTech basic machine has a front and a separate output side. Each one is placed with its output side toward the middle row, where its covers go and where it takes its items ("allow input from the output side"), and its front facing up, or toward the power head when its top is a fluid port.
@@ -75,3 +76,62 @@ Once a project has a scan and a base, the planner lays the line out block by blo
 - **On the Map tab** the line is solid and everything still to build to hook it up is dashed. Numbered pins mark the site, the power tap, the logistics tap, machines you can reuse and problems, and a build step that names a pin links to it on the map (your notes are N1, N2, …). The **New line** panel sits above what was found. **Move line** (then drag it), **Rotate 90°** and **Auto place** change where the line goes, for everyone on the project. A moved line is checked against the blocks really there, and the layout says how much of the spot the scan did not cover. A spot more than 96 blocks from the base centre is not used, and choosing another base clears it.
 - **The 3D tab** shows the line in your pack's textures: drag to turn, right-drag to pan, scroll to zoom and step through the layers with the slider. Hover a block for its name and settings; click it for its facing and recipe. Blocks already in your base show as faint ghosts. Textures need `npm run extract-assets`; without them blocks are plain colours.
 - **Limits:** pipe heat ratings and Project Red crafting chips are not planned, and a GregTech filter cover holds one item, so a machine whose recipes also take another step's item is flagged instead of fixed. In machine to machine mode the output chests sit on the shared pipe behind a filtered cover, which may not stop the pipe from pushing other items in. Check those in game.
+
+## EnderIO conduits and the Connections view
+
+Choose **EnderIO conduits** under **Logistics** in a project's settings. The line then gets an Item Conduit along its middle row and Ender Fluid Conduits from every fluid port; where both pass through one cell they share it as a conduit bundle.
+
+- Every conduit face that touches a machine or chest is set to **Extract**, **Insert** or **In / Out** (**Disabled** where it must not connect).
+- Each face has its own extract filter and insert filter (a Basic, Advanced or Big Item Filter with the exact items, matching meta, and NBT only when the item has it) and its own extract and insert channel colours, so each machine's outputs reach only the machines that take them.
+- Machines that use an item are filled first (priority 1) and the surplus goes to the output chest (priority 0). A face whose items go to several machines and to no chest is set to round robin (EnderIO's round robin takes turns whatever the priority, so a face whose items a chest on its channel could also take leaves it off), and a face that must move more than 8 items/s gets speed upgrades.
+- Every extract face is set to **Always active**, because a conduit left at its default waits for a redstone signal.
+- Green is left to your base's own network. When the scan found an EnderIO network at the base, the line joins it at the input chest, whose face inserts at priority 1 so the raw inputs come to the line before any other storage on Green; otherwise a build step says to fill the input chest by hand.
+- Power still runs over GT cables.
+- The parts list counts every conduit, filter and upgrade, and the build steps set every face.
+
+The **Connections** tab of a project draws any line, in all four logistics modes, as boxes and links that show every face's settings; drag to move it, scroll to zoom and press **Fit** to see all of it. Click a box, a face or a link for the details.
+
+Limits: rates follow EnderIO's default conduit config, so a server that changes the conduit rates in `EnderIO.cfg` may need more speed upgrades or a bigger fluid conduit. A face holds at most 24 filtered items, and more are flagged. Ender fluid conduits have no priority, so when machines take a fluid whose surplus also leaves through an open end, the tank takes its turn with them; the line warns about it. The line plans no redstone signal control (every extract face is simply set to Always active).
+
+## In-game ghost projector
+
+The **GTNH Planner Projector** is a small mod for your own Minecraft client (GTNH 2.9, Minecraft 1.7.10). It draws the planned line in your game as translucent ghost blocks exactly where the layout puts them: faint where nothing is placed yet, green where the right block stands, red where a block or its front is wrong. When every block of a build step is placed correctly, it ticks that step in the project's checklist, in your name. It is a client-side mod: nothing is installed on the Minecraft server, so only the players who want ghosts need it, and if only you want them, only you install it.
+
+### Install
+
+Get `gtnhplannerprojector-<version>.jar` from the person who runs the planner, or build it yourself with `cd projector-mod && VERSION=0.1.0 ./gradlew assemble`; the jar lands in `projector-mod/build/libs/`. Put it into **your client's** `mods` folder (in Prism Launcher: right-click the instance, choose **Folder**, then open `.minecraft/mods`) and start the game. Never put it into the server's `mods` folder.
+
+### Connect
+
+1. On the project page open **In-game projector**, type who the token is for (for example `Steve`) and press **Create token**.
+2. Press **Copy** next to the `/planner load …` line (the button says **Copied**) and paste it into Minecraft chat. If the browser will not copy it, which can happen when the planner is opened over plain `http://`, the line is selected instead and the panel says so under it: press Ctrl+C (Cmd+C on a Mac). The token is shown only now; the mod saves it for that project, so afterwards `/planner load <project>` is enough.
+3. The mod looks for the planner at the Minecraft server's address on port 8765: for a server at `mc.example.org` that is `http://mc.example.org:8765` (in single player, `http://127.0.0.1:8765`). If yours is elsewhere, also run the `/planner url …` line the panel shows, once.
+
+### Commands
+
+```
+/planner load <project> [token] | clear | layer <y|all> | step <n|all|next> | reload | url <url|auto> | xray [on|off]
+```
+
+- `/planner load <project> [token]` fetches the project's line and shows all of it. A token is saved for that project; without one, the saved token is used.
+- `/planner layer <y|all>` shows only the blocks at height `y` (0 to 255), or every layer.
+- `/planner step <n|all|next>` shows only the blocks of build step `n`, numbered as in the project's **Build steps** list (a step that places nothing, such as gathering or crafting, has none to show), or of every step; `next` is the first build step with blocks that is not ticked yet.
+- `/planner reload` fetches the latest layout now. The mod also checks about once a minute, so a line you move or rotate in the planner follows by itself.
+- `/planner url <url|auto>` sets where the planner is, for example `/planner url http://mc.example.org:9000`; `auto` goes back to the Minecraft server's address on port 8765.
+- `/planner xray [on|off]` shows the ghosts through walls and terrain; without `on` or `off` it switches.
+- `/planner clear` hides the ghosts until you load a project again.
+
+### Colours
+
+Faint is a block not placed yet, green is the right block (with the right front), red is a wrong block or a wrong front, and bluish is a block the mod cannot check (its step is never ticked automatically). A GT machine's front is the side GT calls its front, the one a plain wrench sets: the face of a hatch or a multiblock controller, but on a single-block machine such as a Basic Macerator its **output side** (look at one that is turned wrong and the top left says "its output side should face …"). A single-block machine shows its face on another side, which is not checked: placed, it faces you with its output side at the back. Its ghost shows the output overlay on the side the output must face. Blocks in chunks your game has not loaded stay faint, neither right nor wrong. Covers show as their item's icon on the face they go on; covers and settings (the **configure** steps) are ticked by hand. The top left of the screen shows how far the build has got (`Planner: Steel line — 12/40 placed, 1 wrong`) and, when you look at a planned block, what it needs.
+
+### Troubleshooting
+
+- **"Cannot reach the planner …":** is the planner running, and is its port forwarded to you? Set its address with `/planner url <url>`.
+- **"The planner refused this token …":** the token was revoked. Create a new one in the project's **In-game projector** panel and run its `/planner load` line.
+- **Nothing is drawn:** you may be in another dimension than the line (the top-left line names the line's dimension), a filter may be on (`/planner layer all`, `/planner step all`), or you may be farther from the ghosts than `maxDistance` (96 blocks by default; raise it in `config/gtnhplannerprojector.properties` in your instance's Minecraft folder and restart the game). If the top-left line says the project is not placed in the world yet, pick a world scan and base on its Map tab.
+- **The top-left lines show but the ghosts are invisible:** set `useDisplayLists=false` in `config/gtnhplannerprojector.properties` and restart the game.
+
+### Privacy
+
+A token lets whoever holds it read that one project and tick its build steps, nothing else: it cannot open another project, tick materials or change settings. The mod keeps it in your `config/gtnhplannerprojector.properties`, so keep that file private, and revoke tokens you no longer use (**Revoke** in the panel). Tokens travel over plain HTTP unless the planner is behind HTTPS.

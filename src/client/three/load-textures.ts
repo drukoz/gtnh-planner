@@ -13,7 +13,7 @@ import { apiPost } from '../api/client.ts';
 import { iconBatcher } from '../assets/icons.ts';
 import { worldApi } from '../map/api.ts';
 import { FACES_BATCH, layerPixels } from '../map/palette.ts';
-import { blockKey, type SceneData } from './scene-data.ts';
+import { blockKey, sceneBlockRefs, type SceneData } from './scene-data.ts';
 import { compositeTile, solidTile, TILE, type TileImage } from './textures.ts';
 
 /** The asset lookups the 3D view makes; the browser's are `realTextureDeps`, tests pass their own. */
@@ -76,9 +76,10 @@ async function answersBy<A, V>(keys: readonly string[], args: A[], ask: (args: A
 }
 
 /**
- * The faces of every distinct block of `layout` (by `blockKey`, ghosts included), and for every distinct cover item
- * its in-world overlay (`covers`) and its icon (`icons`, what a plate shows when the overlay is `[]`): one request of
- * each kind, in the order the layout first names them.
+ * The faces of every distinct block the scene draws (`sceneBlockRefs`: each block of `layout`, and for a block holding
+ * EnderIO conduits each conduit's and connector's pseudo block; plan 11 merge follow-up F2), by `blockKey`, ghosts
+ * included, and for every distinct cover item its in-world overlay (`covers`) and its icon (`icons`, what a plate shows
+ * when the overlay is `[]`): one request of each kind, in the order the layout first names them.
  */
 export async function loadSceneInputs(layout: Layout, deps: TextureDeps): Promise<{
   faces: Map<string, BlockFaces>; icons: Map<StuffKey, IconDescriptor>; covers: Map<StuffKey, CoverLayers>;
@@ -86,8 +87,10 @@ export async function loadSceneInputs(layout: Layout, deps: TextureDeps): Promis
   const blocks = new Map<string, BlockRef>();
   const coverItems = new Set<StuffKey>();
   for (const b of layout.blocks) {
-    const key = blockKey(b.block);
-    if (!blocks.has(key)) blocks.set(key, b.block);
+    for (const ref of sceneBlockRefs(b)) {
+      const key = blockKey(ref);
+      if (!blocks.has(key)) blocks.set(key, ref);
+    }
     for (const cover of b.covers ?? []) coverItems.add(cover.item);
   }
   const items = [...coverItems];

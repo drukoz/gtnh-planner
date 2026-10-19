@@ -37,9 +37,14 @@ function ownName(key: StuffKey): string {
   return registryName.slice(registryName.lastIndexOf(':') + 1);
 }
 
-export function ItemIcon(props: { itemKey: StuffKey; size?: number }): ReactElement {
+/**
+ * The icon of `itemKey`; `name` (an optional addition to architecture §6.5's props, fix spec §6.4) is the good's name
+ * for its tooltip and accessible name, which show the key when no name is given.
+ */
+export function ItemIcon(props: { itemKey: StuffKey; size?: number; name?: string }): ReactElement {
   const { itemKey } = props;
   const size = props.size ?? 24;
+  const label = props.name ?? itemKey;
   const { desc, url } = useItemIcon(itemKey, size);
   const color = desc?.fallbackColor ?? hashColor(itemKey);
   const [r, g, b] = color;
@@ -47,8 +52,8 @@ export function ItemIcon(props: { itemKey: StuffKey; size?: number }): ReactElem
     <span
       className={url === null ? placeholderClass(color) : 'item-icon'}
       role="img"
-      aria-label={itemKey}
-      title={itemKey}
+      aria-label={label}
+      title={label}
       data-item-key={itemKey}
       data-icon-source={desc?.source ?? 'loading'}
       style={{

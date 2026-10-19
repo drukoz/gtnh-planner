@@ -19,7 +19,7 @@ describe('parts', () => {
     expect(resolveParts(emptyPack()).pump_cover).toMatchObject({ key: 'gregtech:gt.metaitem.01@32610', name: 'Electric Pump (LV)', found: false });
     expect(parts.item_filter_cover).toMatchObject({ key: 'gregtech:gt.metaitem.01@32270', name: 'Filtered Conveyor Cover (Export)' });
     expect(parts.eio_item_conduit.block).toEqual({ id: 'conduit:item', meta: 0 });
-    expect(Object.keys(PART_DEFS)).toHaveLength(16);
+    expect(Object.keys(PART_DEFS)).toHaveLength(24);
   });
 
   it('picks the smallest pump cover that carries the flow', () => {

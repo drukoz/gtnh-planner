@@ -1,13 +1,15 @@
 import { describe, it, expect } from 'vitest';
-import { miniGt } from '../../helpers/mini-gt.ts';
-import { packFromSpec } from '../../helpers/pack-spec.ts';
+import { MINI_GT, miniGt } from '../../helpers/mini-gt.ts';
+import { packFromSpec, type RecipeSpec } from '../../helpers/pack-spec.ts';
 import { planLine, emptyContext, settingsHash, planCacheKey, PlanCache, powerSummary, batchShortWarning } from '../../../src/server/planner/plan.ts';
+import { linePricing } from '../../../src/server/planner/pricing.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import type { OreVein } from '../../../src/shared/types/pack.ts';
 import type { Plan, PlanSettings, PlanStep } from '../../../src/shared/types/plan.ts';
 
 const pack = miniGt();
-const S = (p: Partial<PlanSettings>): PlanSettings => ({ ...defaultSettings(), ...p });
+/** Supporting lines off (the default before plan 09): these cases buy derived materials. */
+const S = (p: Partial<PlanSettings>): PlanSettings => ({ ...defaultSettings(), routeDerived: false, ...p });
 /** An overworld vein of one material. */
 const vein = (name: string, material: string): OreVein => ({ name, dims: ['overworld'], kind: 'vein', weight: 1, minY: 0, maxY: 255, size: 1, density: 1,
   materials: { primary: material, secondary: material, between: material, sporadic: material } });
@@ -127,8 +129,9 @@ describe('planLine', () => {
     });
     const p = await planLine(steel, S({ target: 'steel_plate@0', tier: 1 }), emptyContext());
     expect(p.rawInputs.map((r) => [r.key, r.leafClass])).toEqual([['steel@0', 'derived']]);
+    // Fix spec R7: the source names the chain the purchase stands for, and the warning points at supporting lines.
     expect(p.warnings).toContainEqual({ code: 'derived-leaf', key: 'steel@0',
-      text: 'Steel Ingot is not mined anywhere you can reach; it is made by Alloy Smelter from Iron Ingot. Turn on "plan derived materials" to include that chain.' });
+      text: 'Steel Ingot is not mined anywhere you can reach; it is made by Alloy Smelter from Iron Ingot (1 recipe in all). Plan them as supporting lines to include their chains.' });
     const routed = await planLine(steel, S({ target: 'steel_plate@0', tier: 1, routeDerived: true }), emptyContext());
     expect(routed.rawInputs.map((r) => [r.key, r.leafClass])).toEqual([['iron@0', 'direct']]);
     expect(routed.warnings.map((w) => w.code)).not.toContain('derived-leaf');
@@ -206,7 +209,7 @@ describe('planLine', () => {
     const plan = await planLine(p, S({ target: 'widget@0', tier: 1 }), emptyContext());
     expect(plan.rawInputs.map((r) => [r.key, r.leafClass])).toEqual([['redalloy@0', 'derived'], ['steel@0', 'derived']]);
     expect(plan.warnings.filter((w) => w.code === 'derived-leaf')).toEqual([{ code: 'derived-leaf', key: 'redalloy@0',
-      text: 'Red Alloy Ingot and Steel Ingot are not mined anywhere you can reach; the line buys them made from other materials (see their sources). Turn on "plan derived materials" to include their chains.' }]);
+      text: 'Red Alloy Ingot and Steel Ingot are not mined anywhere you can reach; the line buys them made from other materials (see their sources). Plan them as supporting lines to include their chains.' }]);
   });
   it('never prices a derived material the cost model did not walk below what its own chain costs', async () => {
     // Plates bend from steel (made from iron and coal), press from iron, or alloy-smelt from Magnetic Steel (2 steel per
@@ -259,12 +262,85 @@ describe('planLine', () => {
     const plan = await planLine(p, S({ target: 'thing@0', tier: 1, amount: 60, per: 'min' }), emptyContext());
     expect(plan.steps.map((s) => s.id)).toEqual(['bend', 'from-part']);
     expect(plan.rawInputs.map((r) => [r.key, r.leafClass])).toEqual([['alloy@0', 'derived']]);
-    expect(swaps(plan, 'from-part')).toEqual([['from-part', 1], ['from-p', 1.3], ['from-q', 1.5], ['from-r', 1.7]]);
+    // Controller ruling (every recipe that makes the product is listed): the fourth dust recipe, which the cost model
+    // pruned, too, at its estimate (19 S dust at 1 each per 10).
+    expect(swaps(plan, 'from-part')).toEqual([['from-part', 1], ['from-p', 1.3], ['from-q', 1.5], ['from-r', 1.7], ['from-s', 1.9]]);
     expect(swaps(plan, 'bend')).toEqual([['bend', 1]]);
-    // A pinned recipe the cost model pruned (the fourth dust recipe) is the one in use, so it is listed too.
+    expect(plan.steps.find((s) => s.id === 'from-part')?.ways).toEqual({ total: 5, usable: 5 });
+    // A pinned recipe the cost model pruned (the fourth dust recipe) is the one in use; Part, which neither graph walks
+    // now, is listed at its estimate (one Part at its price).
     const pinned = await planLine(p, S({ target: 'thing@0', tier: 1, amount: 60, per: 'min', recipeChoice: { 'thing@0': 'from-s' } }), emptyContext());
     expect(pinned.steps.map((s) => s.id)).toEqual(['from-s']);
-    expect(swaps(pinned, 'from-s')).toEqual([['from-p', 1.3], ['from-q', 1.5], ['from-r', 1.7], ['from-s', 1.9]]);
+    expect(swaps(pinned, 'from-s')).toEqual([['from-part', 1], ['from-p', 1.3], ['from-q', 1.5], ['from-r', 1.7], ['from-s', 1.9]]);
+  });
+  it('lists every way to make the product, saying why the group cannot use the others', async () => {
+    // Controller rulings (plan 09, "show all ways to make the output"): a Widget assembled at LV, MV or HV, in a
+    // recycling recipe (excluded by default), or from Titanium Dust, which only the Moon has. At LV one is usable and
+    // four are greyed, each with its reason; usable first, then the rest, each group by raw cost per unit, then id.
+    const p = packFromSpec({
+      ...MINI_GT,
+      items: [...MINI_GT.items!, { key: 't:widget@0', name: 'Widget' }],
+      recipes: [...MINI_GT.recipes!,
+        { id: 'widget-lv', map: 'gt.recipe.assembler', in: [['t:iron_plate@0', 2]], out: [['t:widget@0', 1]], eut: 16 },
+        { id: 'widget-mv', map: 'gt.recipe.assembler', in: [['t:iron_plate@0', 3]], out: [['t:widget@0', 1]], eut: 120 },
+        { id: 'widget-hv', map: 'gt.recipe.assembler', in: [['t:copper_ingot@0', 2]], out: [['t:widget@0', 1]], eut: 480 },
+        { id: 'widget-recycled', map: 'gt.recipe.assembler', in: [['t:iron_dust@0', 4]], out: [['t:widget@0', 1]], eut: 16, flags: { recycling: true } },
+        { id: 'widget-ti', map: 'gt.recipe.assembler', in: [['t:titanium_dust@0', 1]], out: [['t:widget@0', 1]], eut: 16 }],
+    });
+    const plan = await planLine(p, S({ target: 't:widget@0', tier: 1 }), emptyContext());
+    const step = plan.steps.find((s) => s.mainOutput === 't:widget@0')!;
+    expect(step.recipeId).toBe('widget-lv');
+    expect(step.ways).toEqual({ total: 5, usable: 1 });
+    expect(step.alternatives.map((a) => [a.recipeId, a.rawCost, a.unusable])).toEqual([
+      ['widget-lv', 2, undefined],
+      ['widget-ti', 1, ['needs Moon (T1 rocket)']],
+      ['widget-hv', 2, ['needs HV (your tier is LV)']],
+      ['widget-mv', 3, ['needs MV (your tier is LV)']],
+      ['widget-recycled', 4, ['excluded: recycling (see Settings)']],
+    ]);
+    // Every row says what it takes, named in the plan.
+    expect(step.alternatives.find((a) => a.recipeId === 'widget-ti')?.inputs).toEqual([{ key: 't:titanium_dust@0', amount: 1 }]);
+    expect(plan.names?.['t:titanium_dust@0']).toBe('Titanium Dust');
+    // At MV the MV recipe is usable too.
+    const mv = (await planLine(p, S({ target: 't:widget@0', tier: 2 }), emptyContext())).steps.find((s) => s.mainOutput === 't:widget@0')!;
+    expect(mv.ways).toEqual({ total: 5, usable: 2 });
+    expect(mv.alternatives.filter((a) => a.unusable === undefined).map((a) => a.recipeId).sort()).toEqual(['widget-lv', 'widget-mv']);
+  });
+  it('lists every way to make the product, however many there are', async () => {
+    // Controller rulings (plan 09, "ALL ways the export knows"): no cut of the cheapest. 40 Widget recipes run at LV and
+    // 20 more need MV; at LV all 60 are listed, the 40 usable ones first, each group by raw cost per unit, then id.
+    const widget = (id: string, plates: number, eut: number): RecipeSpec => ({ id, map: 'gt.recipe.assembler', in: [['t:iron_plate@0', plates]], out: [['t:widget@0', 1]], eut });
+    const lv = Array.from({ length: 40 }, (_, i) => widget(`widget-lv-${String(i).padStart(2, '0')}`, i + 2, 16));
+    const mv = Array.from({ length: 20 }, (_, i) => widget(`widget-mv-${String(i).padStart(2, '0')}`, i + 2, 120));
+    const p = packFromSpec({ ...MINI_GT, items: [...MINI_GT.items!, { key: 't:widget@0', name: 'Widget' }], recipes: [...MINI_GT.recipes!, ...lv, ...mv] });
+    const step = (await planLine(p, S({ target: 't:widget@0', tier: 1 }), emptyContext())).steps.find((s) => s.mainOutput === 't:widget@0')!;
+    expect(step.recipeId).toBe('widget-lv-00');
+    expect(step.ways).toEqual({ total: 60, usable: 40 });
+    expect(step.alternatives.map((a) => a.recipeId)).toEqual([...lv, ...mv].map((r) => r.id));
+    expect(step.alternatives.map((a) => a.rawCost)).toEqual([...lv.map((_, i) => i + 2), ...mv.map((_, i) => i + 2)]);
+    expect(step.alternatives.filter((a) => a.unusable !== undefined).map((a) => a.unusable)).toEqual(mv.map(() => ['needs MV (your tier is LV)']));
+  });
+  it('leaves display-only and duplicate recipes out of the swap list and names a machine nothing builds', async () => {
+    // A fake (display-only) recipe and the vanilla furnace's copy of a smelting recipe the electric furnace runs are no
+    // ways of their own; a recipe of a multiblock whose controller nothing makes needs a machine nothing can build; one
+    // whose ingredient only an MV recipe makes (Titanium Plate, bent at 120 EU/t) needs MV.
+    const p = packFromSpec({
+      ...MINI_GT,
+      items: [...MINI_GT.items!, { key: 't:widget@0', name: 'Widget' }],
+      recipes: [...MINI_GT.recipes!,
+        { id: 'widget-lv', map: 'gt.recipe.assembler', in: [['t:iron_plate@0', 2]], out: [['t:widget@0', 1]], eut: 16 },
+        { id: 'widget-shown', map: 'gt.recipe.assembler', in: [['t:redstone@0', 1]], out: [['t:widget@0', 1]], eut: 16, flags: { fake: true } },
+        { id: 'widget-ebf', map: 'gt.recipe.blastfurnace', in: [['t:iron_dust@0', 1]], out: [['t:widget@0', 1]], eut: 30 },
+        { id: 'widget-smelt', map: 'gt.recipe.furnace', source: 'derived', in: [['t:copper_ingot@0', 3]], out: [['t:widget@0', 1]], eut: 4, dur: 128 },
+        { id: 'widget-furnace', map: 'furnace', in: [['t:copper_ingot@0', 3]], out: [['t:widget@0', 1]], dur: 200 },
+        { id: 'widget-plate', map: 'gt.recipe.assembler', in: [['t:titanium_plate@0', 1]], out: [['t:widget@0', 1]], eut: 16 }],
+    });
+    const plan = await planLine(p, S({ target: 't:widget@0', tier: 1 }), emptyContext());
+    const step = plan.steps.find((s) => s.mainOutput === 't:widget@0')!;
+    expect(step.ways).toEqual({ total: 4, usable: 2 });
+    expect(step.alternatives.map((a) => [a.recipeId, a.unusable])).toEqual([
+      ['widget-lv', undefined], ['widget-smelt', undefined], ['widget-ebf', ['needs a machine nothing can build here']],
+      ['widget-plate', ['needs MV (your tier is LV)']]]);
   });
   it('says when whole crafts leave a Make N batch short', () => {
     expect(batchShortWarning(pack, [], 't:circuit@0', 10)).toEqual([]);
@@ -278,8 +354,65 @@ describe('planLine', () => {
     // At MV nothing reachable makes titanium ingots; the group says it already makes them.
     const p = await planLine(pack, S({ target: 't:titanium_plate@0', tier: 2, stopItems: ['t:titanium_ingot@0'] }), emptyContext());
     expect(p.status).toBe('ok');
-    expect(p.rawInputs.map((r) => [r.key, r.leafClass, r.cost])).toEqual([['t:titanium_ingot@0', 'stop', 0.016666667]]);
+    expect(p.rawInputs.map((r) => [r.key, r.leafClass, r.cost])).toEqual([['t:titanium_ingot@0', 'stop', 0.0166666667]]);
     expect(p.steps[0]?.alternatives.map((a) => [a.recipeId, a.rawCost, a.mapId])).toEqual([['bend-ti', 1, 'gt.recipe.metalbender']]);
+  });
+  it('names the target and the raw-cost trade-off', async () => {
+    // Spec R3/R11: the client reads the target and its rate from the plan, and how much raw material the plan uses
+    // against the least possible (one MV circuit takes 2.5 raw: 1 copper, 1 redstone, half an iron ingot).
+    const rate = await planLine(pack, S({ target: 't:circuit@0', tier: 2, amount: 30, per: 'min' }), emptyContext());
+    expect(rate.target).toBe('t:circuit@0');
+    expect(rate.targetPerSecond).toBe(0.5);
+    expect(rate.rawCost?.perSecond).toBeCloseTo(1.25, 9);
+    expect(rate.rawCost?.leastPerSecond).toBeCloseTo(1.25, 9);
+    expect(rate.rawCost!.leastPerSecond).toBeLessThanOrEqual(rate.rawCost!.perSecond);
+    const batch = await planLine(pack, S({ target: 't:circuit@0', tier: 2, mode: 'makeN', amount: 10 }), emptyContext());
+    expect(batch.status).toBe('ok');
+    expect(batch.target).toBe('t:circuit@0');
+    expect(batch.targetPerSecond).toBeUndefined();
+    expect(batch.rawCost).toBeUndefined();
+  });
+  it('says in a warning what the plan does not add up on', async () => {
+    // A macerator splits raw dust into X and Y; a thing takes 2 X and 1 Y. X is also mined, so the line runs the
+    // macerator once and buys the other X: X is both bought and made (spec R11), and the plan says so.
+    const p = packFromSpec({
+      items: [{ key: 'raw@0', name: 'Raw Dust', gt: { prefix: 'dust', material: 'Raw' } }, { key: 'x@0', name: 'X Dust', gt: { prefix: 'dust', material: 'X' } },
+              { key: 'y@0', name: 'Y Part' }, { key: 't@0', name: 'Thing' }],
+      maps: [{ id: 'gt.recipe.macerator', name: 'Macerator' }, { id: 'gt.recipe.assembler', name: 'Assembler' }],
+      machines: [{ mteId: 1, name: 'Basic Macerator', maps: ['gt.recipe.macerator'], tier: 1 }, { mteId: 2, name: 'Basic Assembler', maps: ['gt.recipe.assembler'], tier: 1 }],
+      recipes: [{ id: 'split', map: 'gt.recipe.macerator', in: [['raw@0', 1]], out: [['x@0', 1], ['y@0', 1]], eut: 2 },
+                { id: 'make-t', map: 'gt.recipe.assembler', in: [['x@0', 2], ['y@0', 1]], out: [['t@0', 1]], eut: 2 }],
+      worldgen: { veins: [vein('ore.mix.raw', 'Raw'), vein('ore.mix.x', 'X')] },
+    });
+    const plan = await planLine(p, S({ target: 't@0', tier: 1, amount: 60, per: 'min' }), emptyContext());
+    expect(plan.steps.map((s) => [s.id, s.mainOutput])).toEqual([['make-t', 't@0'], ['split', 'x@0']]);
+    expect(plan.rawInputs.map((r) => [r.key, r.perSecond])).toEqual([['raw@0', 1], ['x@0', 1]]);
+    expect(plan.warnings).toEqual([{ code: 'bought-and-made', key: 'x@0', text: 'X Dust is both bought (50%) and made by Basic Macerator.',
+      stepId: 'split', stepIds: ['split'], share: [0.5] }]);
+  });
+  it('names a step after its product, not the free water beside it, when the cost model never walked the product', async () => {
+    // Fix spec D13 as ruled in Task 1: a good's value is its cost-model cost (0 when not finite), never below its plain
+    // price. The group pins the assembler recipe that takes 1 Charcoal and 2,000 L Water; a pyrolyse oven makes the
+    // charcoal with 1,000 L Water beside it, and the line buys the other 1,000 L. The cost model keeps only the cheaper
+    // dust recipe, so it never walks Charcoal (Infinity, like the real Methyl Acetate Cell). At 0 against free Water the
+    // litres won: the oven "made Water", and the plan said Water is both bought and made.
+    const p = packFromSpec({
+      items: [{ key: 'minecraft:log@0', name: 'Oak Wood', oreDict: ['logWood'] }, { key: 't:charcoal@0', name: 'Charcoal' },
+              { key: 't:x_dust@0', name: 'X Dust', gt: { prefix: 'dust', material: 'X' } }, { key: 't:thing@0', name: 'Thing' }],
+      fluids: [{ key: 'fluid:water', name: 'Water' }],
+      maps: [{ id: 'gt.recipe.pyro', name: 'Pyrolyse Oven' }, { id: 'gt.recipe.assembler', name: 'Assembler' }],
+      machines: [{ mteId: 1, name: 'Pyrolyse Oven', maps: ['gt.recipe.pyro'], tier: 1 }, { mteId: 2, name: 'Basic Assembler', maps: ['gt.recipe.assembler'], tier: 1 }],
+      recipes: [{ id: 'pyrolyse', map: 'gt.recipe.pyro', in: [['minecraft:log@0', 1]], out: [['t:charcoal@0', 1], ['fluid:water', 1000]], eut: 8 },
+                { id: 'make-thing', map: 'gt.recipe.assembler', in: [['t:charcoal@0', 1], ['fluid:water', 2000]], out: [['t:thing@0', 1]], eut: 2 },
+                { id: 'from-dust', map: 'gt.recipe.assembler', in: [['t:x_dust@0', 1]], out: [['t:thing@0', 4]], eut: 2 }],
+      worldgen: { veins: [vein('ore.mix.x', 'X')] },
+    });
+    const settings = S({ target: 't:thing@0', tier: 1, amount: 60, per: 'min', recipeChoice: { 't:thing@0': 'make-thing' } });
+    expect((await linePricing(p, settings, emptyContext()))?.model.costs.cost('t:charcoal@0')).toBe(Infinity);
+    const plan = await planLine(p, settings, emptyContext());
+    expect(plan.steps.map((s) => [s.id, s.mainOutput])).toEqual([['make-thing', 't:thing@0'], ['pyrolyse', 't:charcoal@0']]);
+    expect(plan.rawInputs.map((r) => [r.key, r.perSecond])).toEqual([['fluid:water', 1000], ['minecraft:log@0', 1]]);
+    expect(plan.warnings.filter((w) => w.code === 'bought-and-made' || w.code === 'multi-producer')).toEqual([]);
   });
   it('gives Make N flows and leftovers per second over the batch', async () => {
     const p = await planLine(pack, S({ target: 't:circuit@0', mode: 'makeN', amount: 10, tier: 1 }), emptyContext());

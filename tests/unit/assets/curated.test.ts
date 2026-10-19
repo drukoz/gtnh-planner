@@ -168,6 +168,14 @@ describe('curated block tables', () => {
       for (const id of [name, `fmp:${name}`, `conduit:${name}`, `ae2cable:${name}`]) expect(curatedBlock(id, 0)).toBeNull();
     }
   });
+
+  it('draws the ender fluid conduits and the connector of each conduit mode', () => {
+    expect(curatedBlock('conduit:liquid_ender', 0)!.faces.north).toEqual(['enderio/textures/blocks/liquidConduitEnder.png']);
+    expect(curatedBlock('conduit:liquid_stellar', 0)!.faces.up).toEqual(['enderio/textures/blocks/liquidConduitStellarEnder.png']);
+    expect(['connector_extract', 'connector_insert', 'connector_in_out'].map((k) => curatedBlock(`conduit:${k}`, 0)!.faces.north)).toEqual([
+      ['enderio/textures/blocks/itemConduitInput.png'], ['enderio/textures/blocks/itemConduitOutput.png'], ['enderio/textures/blocks/itemConduitInOut_Out.png']]);
+    expect(curatedIds()).toEqual(expect.arrayContaining(['conduit:liquid_crystalline', 'conduit:liquid_pink_slime', 'conduit:liquid_melodic']));
+  });
 });
 
 describe('curated items', () => {

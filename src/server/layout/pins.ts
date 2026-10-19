@@ -4,7 +4,7 @@
 // order and tie-break is fixed, so the same inputs give the same pins.
 
 import { tierName } from '../../shared/gt/tiers.ts';
-import { fmtInt } from '../../shared/layout/format.ts';
+import { fmtInt, NETWORK_NAMES } from '../../shared/layout/format.ts';
 import { manhattan, posKey, type Vec3 } from '../../shared/layout/geometry.ts';
 import type { Pin } from '../../shared/types/layout.ts';
 import type { Pack } from '../../shared/types/pack.ts';
@@ -103,11 +103,7 @@ export function powerText(tap: TapPoint, amps: number): string {
   return `Tap power here: ${tier}${free} (the line needs ${fmtInt(amps)} A)`;
 }
 
-const NETWORK_NAMES: Readonly<Record<LogisticsNetwork['kind'], string>> = {
-  routed: 'Project Red routed', ae2: 'AE2', gtpipe: 'GT pipe', enderio: 'EnderIO',
-};
-
-/** The name of a logistics network kind, as the build steps and pins write it. */
+/** The name of a logistics network kind, as the build steps and pins write it (`NETWORK_NAMES`, shared with the Connections view). */
 export function networkName(kind: LogisticsNetwork['kind']): string {
   return NETWORK_NAMES[kind];
 }
