@@ -59,6 +59,9 @@ describe('the Connections graph', () => {
     expect(pickDetails(g, { node: 'step:a', face: face.id })).toEqual({ title: face.title, lines: face.lines });
     expect(pickDetails(g, { edge: 'flow:step:a>step:b:t:dust@0' })!.title).toBe('Titanium Dust 60/min · Red');
     expect(pickDetails(g, { node: 'nope' })).toBeNull();
+    // an attached link has no label, so its one line titles it
+    expect(pickDetails(connectionsGraph(connLayout('routed'), connPlan, 'min'), { edge: 'attach:iface:0,64,1>step:a' }))
+      .toEqual({ title: 'Attached to 1× Basic Macerator', lines: ['Attached to 1× Basic Macerator'] });
   });
 
   it('lays inputs first and outputs last, with a label box on every flow', () => {

@@ -303,9 +303,10 @@ function attachedEdges(nodes: readonly ConnNode[], grid: Grid): ConnEdge[] {
 }
 
 /**
- * Each logistics hookup to the line box it joins (plan 11, ruling R20): the one holding the block its end block points
- * at (its facing, or a face of its conduit that is not Disabled); else the first touching the last cell of its path;
- * else the first touching any of its blocks; else none. Its own end interface is not a candidate.
+ * Each logistics hookup to the line box it joins (plan 11, ruling R20 as amended in Task 7's review): the one holding
+ * the block its end block points at (its facing, or a face of its conduit that is not Disabled); else the input chest,
+ * where a hookup brings the base's items in (a routed hookup's request pipe fills it); else `raw`, which stands for the
+ * base's ME network in AE2 mode, where the line has no chests; else none. Its own end interface is not a candidate.
  */
 function hookupEdges(layout: Layout, nodes: readonly ConnNode[], grid: Grid): ConnEdge[] {
   return layout.hookups.flatMap((h, n): ConnEdge[] => {
@@ -323,8 +324,7 @@ function hookupEdges(layout: Layout, nodes: readonly ConnNode[], grid: Grid): Co
       const i = grid.at.get(posKey(step(end.pos, side)));
       return line.find((x) => i !== undefined && x.id === grid.owner.get(i));
     }).find(defined);
-    const target = pointed ?? (last === undefined ? undefined : touching([last], line, grid)[0])
-      ?? touching(grid.blocks.filter((b, i) => b.role !== 'ghost' && own(i)).map((b) => b.pos), line, grid)[0];
+    const target = pointed ?? nodes.find((x) => x.tail === 'input') ?? nodes.find((x) => x.id === RAW);
     return target === undefined ? [] : [plainEdge(`hookup:${n}>${target.id}`, `hookup:${n}`, target.id, 'hookup', 'hookup', `Joins the line at ${target.title}`)];
   });
 }
@@ -445,12 +445,13 @@ export function connectionsFromElk(g: ConnGraph, laid: ElkNode): ConnLayout {
 
 /**
  * What a pick tells: a box, its lines and then every face row's title and lines; one face row, its own; a link, its
- * label and lines. Null for anything the graph does not hold.
+ * label (or its first line when it has none, as an attached link) and its lines. Null for anything the graph does not
+ * hold.
  */
 export function pickDetails(g: ConnGraph, pick: ConnPick): { title: string; lines: string[] } | null {
   if ('edge' in pick) {
     const e = g.edges.find((x) => x.id === pick.edge);
-    return e === undefined ? null : { title: e.label, lines: [...e.lines] };
+    return e === undefined ? null : { title: e.label === '' ? e.lines[0] ?? '' : e.label, lines: [...e.lines] };
   }
   const n = g.nodes.find((x) => x.id === pick.node);
   if (n === undefined) return null;

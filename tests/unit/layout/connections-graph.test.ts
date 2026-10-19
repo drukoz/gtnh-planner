@@ -30,6 +30,28 @@ describe('Connections of laid-out lines', () => {
     }
   });
 
+  it('joins a routed hookup at the input chest and an AE2 hookup at the raw inputs, in every rotation', async () => {
+    // the request pipe and the tail ME cable are in no box: a routed tap fills the input chest, an AE2 tap feeds the raw inputs
+    const seen: unknown[] = [];
+    const want: unknown[] = [];
+    for (const rotation of [0, 90, 180, 270] as const) {
+      for (const mode of ['routed', 'ae2'] as const) {
+        const layout = await layoutLine(layoutPack(), twoStep(), lineScan({ logistics: [{ kind: mode, taps: [[26, 64, 12]] }] }),
+          makeProject({ logistics: mode, placement: { ...placement, rotation } }), lineGround());
+        const hookup = layout.hookups.findIndex((h) => h.kind === 'logistics');
+        const links = connectionsGraph(layout, twoStep(), 'min').edges.filter((e) => e.via === 'hookup');
+        if (mode === 'routed') {
+          seen.push([mode, rotation, links.map((e) => [e.from, e.to])]);
+          want.push([mode, rotation, [[`hookup:${hookup}`, `chest:${posKey(layout.blocks.find((b) => b.tail?.side === 'input')!.pos)}`]]]);
+        } else {
+          seen.push([mode, rotation, links.map((e) => [e.from, e.to, e.lines])]);
+          want.push([mode, rotation, [[`hookup:${hookup}`, 'raw', ['Joins the line at Raw inputs']]]]);
+        }
+      }
+    }
+    expect(seen).toEqual(want);
+  });
+
   it('puts the open fluid ends on the raw inputs and final outputs, linked over the ender fluid conduit', async () => {
     // a Basic Fluid Extractor taking Oxygen from outside the line and sending Molten Iron out of it: two open ends at the tail
     const plan = makePlan([{ id: 'x', mteId: IDS.EXTRACTOR, count: 1, inputs: [['fluid:oxygen', 10]], outputs: [['fluid:molten.iron', 144]] }],
