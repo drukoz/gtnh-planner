@@ -440,16 +440,19 @@ function emptyOfFilled(pack: Pack): ReadonlyMap<StuffKey, StuffKey> {
 
 /**
  * The consumed slots `r` hands on (fix spec R4): slots whose every option is an empty container the recipe gives back
- * filled (it makes a filled container whose `fluidContainers` entry has that empty one), as a water electrolyzer takes
- * Empty Cells and makes Hydrogen Cells of them. The estimate neither charges them nor waits for them: an Empty Cell
- * priced at its tin made Oxygen from free water dearer than from dust, and the EBF steel recipe was pruned for it.
+ * filled (it makes a filled container whose `fluidContainers` entry has that empty one) and the line can empty again
+ * (`canEmpty` of the filled one: D14's emptier runs here), as a water electrolyzer takes Empty Cells and makes Hydrogen
+ * Cells of them, which a canner empties. The estimate neither charges them nor waits for them: an Empty Cell priced at
+ * its tin made Oxygen from free water dearer than from dust, and the EBF steel recipe was pruned for it. A filled
+ * container nothing here empties leaves the line with its container, so its slot is charged like any other: at 0 it
+ * pruned every priced producer that was not the simplest (KEEP_WITHIN × 0), and the line made new cells from tin.
  */
-function carriedSlots(pack: Pack, r: Recipe, optionsOf: SlotOptions): Set<Ingredient> {
+function carriedSlots(pack: Pack, r: Recipe, optionsOf: SlotOptions, canEmpty: (filled: StuffKey) => boolean): Set<Ingredient> {
   const filled = emptyOfFilled(pack);
   const handedOn = new Set<StuffKey>();
   for (const p of r.outputs) {
     const empty = p.amount * p.chance > 0 ? filled.get(p.key) : undefined;
-    if (empty !== undefined) handedOn.add(empty);
+    if (empty !== undefined && canEmpty(p.key)) handedOn.add(empty);
   }
   const carried = new Set<Ingredient>();
   if (handedOn.size === 0) return carried;
@@ -684,7 +687,8 @@ export interface CandidateOptions {
  * cost, a recipe's consumed inputs (each ore-dictionary slot at its cheapest option) charged in full to each output,
  * settled cheapest first. It ignores byproduct credit, so it only prunes; the LP over the kept recipes still credits
  * byproducts. A good nothing reachable makes keeps a few producers anyway, so `findBlockers` can name what is missing.
- * Fix spec R4 and R10: the empty containers a recipe hands on filled cost it nothing; each good also keeps its producer
+ * Fix spec R4 and R10: the empty containers a recipe hands on filled, where the line can empty them again (D14's
+ * emptier), cost it nothing; each good also keeps its producer
  * of fewest steps and drops one far longer than that (`MAX_EXTRA_PRODUCER_STEPS`) unless it is the cheapest; equal
  * estimates go to canonical goods (`canonicalRank`). D14: a filled container a kept recipe makes brings the recipe that
  * empties it. Goods of `opts.avoid` are never bought, consumed or held (`CandidateOptions.avoid`), in the estimate as in
@@ -747,11 +751,40 @@ export function buildCandidates(
     return !full;
   };
   const optionsOf: SlotOptions = (ing) => keptOptions(ing.options, avoid);
+  /** An accepted recipe and the map it runs on here. */
+  type Producer = { r: Recipe; mapId: string };
+  const emptiers = new Map<StuffKey, Producer | null>();
+  /**
+   * Fix spec D14 (audit patch E-containers): the pack's recipe that empties the filled container `key` back into its
+   * empty one, when the line may run it: its only consumed slot takes `key` alone, it makes the empty container, and it
+   * runs here without an avoided good. The one of smallest id when several do (whatever order the export lists them
+   * in); none for a good that is no filled container with an empty one. A recipe hands its empty containers on only
+   * through filled ones this finds (`carriedSlots`), and the walk adds it beside each recipe that makes one (`addRecipe`).
+   */
+  const emptierOf = (key: StuffKey): Producer | null => {
+    const known = emptiers.get(key);
+    if (known !== undefined) return known;
+    let found: Producer | null = null;
+    const empty = emptyOfFilled(pack).get(key);
+    if (empty !== undefined) {
+      for (const i of pack.consumers.get(key) ?? []) {
+        const r = pack.recipes[i];
+        const consumed = r?.inputs.filter((ing) => ing.consumed) ?? [];
+        if (r === undefined || (found !== null && found.r.id < r.id)) continue;
+        if (consumed.length !== 1 || !(consumed[0] as Ingredient).options.every((o) => o.key === key)) continue;
+        if (!r.outputs.some((p) => p.key === empty) || usesAvoided(r, avoid)) continue;
+        const a = accept(r);
+        if (a.ok) found = { r, mapId: a.mapId };
+      }
+    }
+    emptiers.set(key, found);
+    return found;
+  };
   const carriedByRecipe = new Map<Recipe, ReadonlySet<Ingredient>>();
   const carried: CarriedSlots = (r) => {
     let slots = carriedByRecipe.get(r);
     if (slots === undefined) {
-      slots = carriedSlots(pack, r, optionsOf);
+      slots = carriedSlots(pack, r, optionsOf, (filled) => emptierOf(filled) !== null);
       carriedByRecipe.set(r, slots);
     }
     return slots;
@@ -804,7 +837,6 @@ export function buildCandidates(
     return finite.filter((x) => x.c <= best * KEEP_WITHIN + ESTIMATE_TOLERANCE)
       .sort((a, b) => a.rank - b.rank || a.c - b.c || a.canon - b.canon || byString(a.id, b.id)).slice(0, max).map((x) => x.t);
   };
-  type Producer = { r: Recipe; mapId: string };
   /**
    * Fix spec R4: `kept` (the cheapest producers of `key`) with the accepted producer of fewest steps (`stepsOf`; equal
    * ones by estimate, the canonical rank of what they take, then id) added, less every producer more than
@@ -846,33 +878,6 @@ export function buildCandidates(
       recipes.set(id, { id, kind: 'convert', mapId: null, coeffs: sortedCoeffs(coeffs), euPerRun: 0, nonConsumed: [], needsCleanroom: false, main: vkey });
       need(option.key);
     }
-  };
-
-  const emptiers = new Map<StuffKey, Producer | null>();
-  /**
-   * Fix spec D14 (audit patch E-containers): the pack's recipe that empties the filled container `key` back into its
-   * empty one, when the line may run it: its only consumed slot takes `key` alone, it makes the empty container, and it
-   * runs here without an avoided good. The one of smallest id when several do (whatever order the export lists them
-   * in); none for a good that is no filled container with an empty one.
-   */
-  const emptierOf = (key: StuffKey): Producer | null => {
-    const known = emptiers.get(key);
-    if (known !== undefined) return known;
-    let found: Producer | null = null;
-    const empty = emptyOfFilled(pack).get(key);
-    if (empty !== undefined) {
-      for (const i of pack.consumers.get(key) ?? []) {
-        const r = pack.recipes[i];
-        const consumed = r?.inputs.filter((ing) => ing.consumed) ?? [];
-        if (r === undefined || (found !== null && found.r.id < r.id)) continue;
-        if (consumed.length !== 1 || !(consumed[0] as Ingredient).options.every((o) => o.key === key)) continue;
-        if (!r.outputs.some((p) => p.key === empty) || usesAvoided(r, avoid)) continue;
-        const a = accept(r);
-        if (a.ok) found = { r, mapId: a.mapId };
-      }
-    }
-    emptiers.set(key, found);
-    return found;
   };
 
   const addRecipe = (r: Recipe, mapId: string): void => {

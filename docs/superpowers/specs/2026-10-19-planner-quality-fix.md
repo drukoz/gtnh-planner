@@ -99,6 +99,7 @@ Every corpus plan in the prototype: 0 errors of the invariant checker's kinds a�
 | `HAND_STEP_WEIGHT` | `3` | `src/server/planner/solve.ts` | a crafting-table step weighs 3 steps in rate mode with `automateCrafting: false`; 1 otherwise |
 | `STEP_BIG_M` | `100` | `src/server/planner/solve.ts` | runs ≤ 100 × the largest S1 run × binary |
 | `STEP_MIP_MAX_NODES` | `1` | `src/server/planner/solve.ts` | the step-charge MIP stops after its root node (deterministic) |
+| `LEAST_RAW_STEP` | `0.01` | `src/server/planner/solve.ts` | at step charge 0 (raw material held at the least, R3), the weight of each step recipe in the step-charge MIP |
 | `CANON_RANK_S3` / `CANON_RANK_S4` | `1e-6` / `1e-3` | `src/server/planner/solve.ts` | tie-break weight per unit of a non-canonical purchase or option |
 | `SIGNIFICANT_DIGITS` | `9` | `src/server/planner/round.ts` | every per-second value in `Solution` and `Plan` |
 | `RESIDUAL_REL`, `RESIDUAL_ABS` | `1e-6`, `1e-9` (unit demand) | `src/server/planner/solve.ts` | residual check |
@@ -427,9 +428,11 @@ Stages at unit demand (replacing `simplest()` when `stepCharge > 0` and `S1 > 1e
 1. **S1** as today → `x¹`, `S1* = objective`.
 2. **Charge MIP.** Columns: the main LP's + one binary `y_r` per step recipe (`kind === 'recipe'`) + one binary per
    bought derived leaf (as today's `fewestRecipesMip`). Objective:
-   `Σ_j (rawCost_j / S1* + tb_j + CANON_RANK_S3 × rank(j) × rawCost_j / S1*) · x_j + stepCharge × Σ_r w_r · y_r + Σ_d S3_DERIVED_STEP × n_d · y_d`,
+   `Σ_j (rawCost_j / S1* + tb_j + CANON_RANK_S3 × rank(j) × u_j / S1*) · x_j + stepCharge × Σ_r w_r · y_r + Σ_d S3_DERIVED_STEP × n_d · y_d`,
    where `tb` = `tieBreaks(lp, x¹)` (free input, power), `w_r` = `handWeight` for `mapId === 'crafting'` else 1,
-   `rank` per R10. Rows: main rows; `Σ rawCost·x ≤ (1 + STEP_CHARGE_CAP) × S1*`; `x_r ≤ STEP_BIG_M × max_j x¹_j × y_r`;
+   `rank` per R10, and `u_j` = `rawCost_j` for a purchase and 1 for an ore-dictionary conversion (one slot filled counts
+   as one unit of raw material: a conversion costs no raw material, and R10 weighs a rank-1 convert option; S4 also
+   weighs a conversion per run). Rows: main rows; `Σ rawCost·x ≤ (1 + STEP_CHARGE_CAP) × S1*`; `x_r ≤ STEP_BIG_M × max_j x¹_j × y_r`;
    derived purchase links as today. `integer` on the binaries, `maxNodes: STEP_MIP_MAX_NODES`, MIP start (`LpModel.start`,
    passed to HiGHS `setSolution`) = `x¹` with `y = 1` where `x¹ > TINY`, else 0. A `feasible` (node-limited) result is
    accepted.
@@ -440,9 +443,17 @@ Stages at unit demand (replacing `simplest()` when `stepCharge > 0` and `S1 > 1e
 5. **Base and later stages.** `off` = every step recipe not in the support; base = S1 over the support; lock raw ≤ base;
    S2 (power) and S4 (canonical, R10) within the support, as `finish()` does now.
 
-`stepCharge === 0` keeps today's S3 (fewest recipes among the least-raw plans), now numerically sound. `solveLine`
-without `opts.stepCharge` behaves as 0, so direct callers (unit tests, `standaloneCosts`) keep today's results; `planLine`
-passes the setting to every `solveLine` call it makes.
+`stepCharge === 0` ("Least raw material") keeps S3's aim, fewest recipes among the least-raw plans and its free-input
+and power tie-breaks, but solves it with steps 2–5 held at the least raw material (Task 4 review): cap 0
+(`Σ rawCost·x ≤ S1*`, so the base and consolidation stay within `S3_TOLERANCE` of S1), every step recipe weighing
+`LEAST_RAW_STEP` (0.01) whether crafted by hand or not, and today's fewest-recipes S3 as the fallback. A recipe then
+weighs ten times the least-raw plan's free-input tie-break (`S3_FREE_SHARE`): one more recipe wins only where the fewer
+would take over ten times that free input. A line whose S1 needs no raw material keeps today's S3. The reason is
+time: over the larger graphs of R4's pruning, S3's two fewest-recipes MIPs (5,000 nodes each) took up to 14 s on the
+§7.2 corpus at 0 % and 181 s on the user's settings at Advanced Circuit HV, where the root-node MIP from S1 plans every
+one in under 3 s within 2 steps of S3's count (34 corpus lines: 32 the same, 2 one or two fewer); a weight of 0.05–1
+made HiGHS's root node take 5–14 s on one of those lines. `solveLine` without `opts.stepCharge` behaves as 0;
+`planLine` passes the setting to every `solveLine` call it makes.
 
 **Avoid lists (§11.25, plan 08, merged after this audit).** The charge MIP makes one full solve cost ≈ 1.4 s on an HV
 circuit line (prototype, Good Electronic Circuit HV 2/min, warm pack, load ≈ 6: 1.85 s per plan of which 1.37 s MIP; the
@@ -450,9 +461,14 @@ old rules took 0.66 s), and plan 08's `avoidingLine` solves the line again for e
 `SolveOptions.probe?: boolean` solves S1 only (status, runs, buys, sinks, `rawCost`; no later stage, no MIP), and:
 - when the settings avoid any good, `planLine`'s plain solve is a probe; `avoidingLine` runs every trial as a probe and
   fully solves only the graph it returns (the open graph when the probe used no avoided good);
-- when that full plain line uses an avoided good after all (a tie the probe broke the other way), `avoidingLine`
-  continues from the full line as if the plain line had used it.
-A plan with an avoid list then costs one full solve plus cheap probes, like a plan without one.
+- whenever the graph it returns is the open graph (the probe used no avoided good, or nothing at the tier does without
+  what the probe used) and that full plain line uses an avoided good, or buys a derived leaf made from one, that the
+  search did not count (a tie the probe broke the other way, or the charge buying a derived leaf made from a good whose
+  own chain the probe ran), `avoidingLine` continues from the full line as if the plain line had used it, so every use
+  is listed in `Plan.avoided` and flagged (§11.25). A trial's graph holds only what it allowed back, so only the open
+  graph needs this check.
+A plan with an avoid list then costs one full solve plus cheap probes, like a plan without one (two full solves when
+the search goes on from the full line).
 `Solution.leastRawCost` (S1*, scaled back) and `Plan.rawCost?: { perSecond: number; leastPerSecond: number }` report the
 trade-off.
 
@@ -460,13 +476,21 @@ trade-off.
 
 In `candidates.ts`:
 - A consumed slot whose every option is **carried** (an empty container `E` such that the recipe outputs a filled
-  container whose `fluidContainers.empty` is `E`) costs 0 in `recipeInputCost` and is not counted in `estimateCosts`'
-  `open` slots (it never blocks the recipe).
-- A second settle pass over the same reached recipes computes `stepsTo(good)` (leaves 0; a recipe = 1 + Σ over consumed
-  non-carried slots of the cheapest option's `stepsTo`; minimum over producers; integers, same heap order rules).
+  container `F` whose `fluidContainers.empty` is `E`, and the line can empty `F` back into `E`: D14's emptier of `F` is
+  accepted here and uses no avoided good) costs 0 in `recipeInputCost`, is not counted in `estimateCosts`' `open` slots
+  (it never blocks the recipe) and does not count against the recipe in `grounded`. A filled container nothing here
+  empties leaves the line with its container, so its slot is charged like any other (Task 4 ruling: priced at 0, the
+  estimate pruned every priced producer of the good that was not the simplest, and a steel line made new cells from tin
+  at 31 raw where 13.5 was possible).
+- A second settle pass over the same reached recipes computes `stepsTo(good)` (leaves 0; a recipe = 1 + Σ of `stepsTo`
+  over the goods its consumed non-carried slots take at their cheapest option, each good once: a crafting recipe lists
+  each grid slot on its own, and 8 plate slots would count the plate's chain 8 times; minimum over producers; integers,
+  same heap order rules; a recipe with a slot that has no priced option never runs in this pass).
 - `expand(key)`: after `cheapest(...)`, also keep the accepted producer with the fewest steps (ties: estimate, then
   canonical rank of its inputs, then id); then drop any kept producer whose steps exceed the simplest producer's by more
-  than `MAX_EXTRA_PRODUCER_STEPS`, unless it is the cheapest by estimate.
+  than `MAX_EXTRA_PRODUCER_STEPS`, unless it is the cheapest by estimate. A producer whose steps are unknown (the steps
+  pass never settles its chain, as where the cheapest options of a loop wait on each other) is never the simplest and is
+  not dropped for its steps: they are not known to be longer.
 - `cheapest()` breaks equal costs by canonical rank (R10) before id (also for ore-dictionary options in `addVirtual`), so
   `minecraft:log@0` is not pruned in favour of a modded log that sorts first.
 
@@ -545,7 +569,7 @@ export interface StepOption {
 
 `canonicalRank(key)` (exported from `candidates.ts`; `rank` below) = 0 when the key has no `#` and its mod id is `minecraft` with meta 0, or `gregtech` or `IC2` (any meta), or it
 is a fluid; else 1. Used by `cheapest()` (R4), by the charge MIP (`CANON_RANK_S3` per unit of a rank-1 purchase or
-convert option, relative to raw cost) and by S4 (`canonical[j] += CANON_RANK_S4 × rank`). Effect: Oak Wood over "Sacred
+convert option, relative to raw cost: a purchase's raw cost, one unit per run of a conversion, R3) and by S4 (`canonical[j] += CANON_RANK_S4 × rank`). Effect: Oak Wood over "Sacred
 Oak Log"/"Bloodwood", Sand over Red Sand.
 
 ### R11 Integrity warnings from one shared index (D16, D20) — architecture §11.33
@@ -699,7 +723,7 @@ All commands from the repository root. Real-data tests: `GTNH_LOCAL=1`, skipped 
 | `tests/unit/pack/supply.test.ts` | `deriveSupply` un-fakes the display-item rock breaker recipe (cobblestone), leaves the redstone→obsidian one fake, adds pump map/machines/recipes for an `MTEPump` machine, flags the empty-cell→air-cell compressor; ids are stable across two calls |
 | `tests/unit/planner/supply.test.ts` | A line consuming 2.5 cobblestone/s at LV has a rock-breaker step with `supply: 'minecraft:cobblestone@0'`, `count = 2` (1.25/s per LV machine) and a configure build step; with `haveSupply: ['minecraft:cobblestone@0']` the step is gone and cobblestone is a `free` raw input; water via pump (count from 12.5 L/tick at LV); air via compressor + canner; tier 0 → free raw input, no supply step; Make N → no supply step; target nitrogen from air is `ok` (loop guard) |
 | `tests/unit/planner/step-charge.test.ts` | A marginal chain (target via leaf A at cost 1 in 1 step, or via a 3-step chain costing 0.99) uses A at `stepCharge` 0.05 and the chain at 0; a 4-recipe chain at 0.85 is built (threshold 1/1.15); total raw never above 1.25 × least (a 10-recipe chain at 0.75 stays although its steps cost more than the saving, as the direct route would be 33 % above the least); a hand recipe and a machine recipe at equal raw → machine in rate mode, hand in Make N; a remaining hand step warns `hand-step`; two equal-cost producers of one good → one; Mini-GT plans keep their existing steps (`plan.test.ts` unchanged except :281) |
-| `tests/unit/planner/candidates.test.ts` (additions) | carried cells do not block or cost: oxygen from water electrolysis (cells handed on) is kept for an EBF steel line; the simplest producer is kept even when 2.5× the cheapest estimate; a producer 7 steps longer than the simplest is dropped unless cheapest; `minecraft:log@0` kept over a modded log at equal estimate |
+| `tests/unit/planner/candidates.test.ts` (additions) | carried cells do not block or cost: oxygen from water electrolysis (cells handed on, a canner empties them again) is kept for an EBF steel line; cells nothing here empties are charged, so the dust-oxygen route stays and the line plans 13.5 raw, not 31; the simplest producer is kept even when 2.5× the cheapest estimate; a producer 7 steps longer than the simplest is dropped unless cheapest; `minecraft:log@0` kept over a modded log at equal estimate |
 | `tests/unit/planner/options.test.ts` | A circuit-assembler-like slot (72 L solder | 144 L tin | 288 L lead) split 64/36 lists both options with shares and the right amounts; `options` gives `rawPerRun` 0.5/1/2 and `steps`; `optionChoice['<id>#100'] = 'fluid:molten.tin'` forces tin; a stale pin warns `stale-option` and plans |
 | `tests/unit/planner/lines.test.ts` | Red alloy (alloy smelter from copper + redstone) → molten red alloy (extractor) → wire: the smelter and extractor are in line `{ key: 'fluid:molten.redalloy', name: 'Red Alloy' }`, the wiremill in the main line; a 1-step molten fluid stays in the main line; `stopItems: [root]` removes the line |
 | `tests/unit/planner/bom-steps.test.ts` (additions) | Empty Cell is never broken down through a recipe that only hands it back; totals carry `neededFor`; free inputs are leaves of the breakdown |
@@ -768,8 +792,13 @@ which drops to ≤ 15 (the prototype's EBF plan has 12).
 
 ### 7.3 Timing
 
-Every real-data plan < 5 s (`PLAN_SECONDS`), measured with a warm pack on a host not running other planners. Prototype
-worst case under load average ≈ 11: 5.04 s (Robot Arm MV); median ≈ 3.3 s.
+Every real-data plan < 5 s (`PLAN_SECONDS`), measured with a warm pack on a host not running other planners, one test
+file at a time (`--no-file-parallelism`: the bound is wall-clock). Prototype worst case under load average ≈ 11: 5.04 s
+(Robot Arm MV); median ≈ 3.3 s. The 0 % preset ("Least raw material") is timed as well (R3, Task 4 review):
+`real-acceptance.test.ts` plans Advanced Circuit at HV 1/min with default settings and `stepCharge: 0` (13 s before the
+review fix), and `real-user-project.test.ts` the user's settings with target Advanced Circuit at HV (`tier 3`) and
+`stepCharge: 0` (181 s before it); each < 5 s with `rawCost.perSecond` within 1e-6 of `leastPerSecond` and no
+`simplify-skipped` or `numerics` warning.
 
 ---
 

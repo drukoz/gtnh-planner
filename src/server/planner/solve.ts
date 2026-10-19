@@ -411,13 +411,27 @@ const S3_TOLERANCE = 1e-6;
 interface Simplified { off: Set<number>; locks: LpRow[]; base: LpResult; skipped: boolean }
 
 /**
- * The simplification stage: with a step charge (fix spec R3: `opts.stepCharge` above 0 and a line that needs raw
- * material) the charge MIP, else today's fewest recipes among the least-raw plans (`fewestRecipesStage`).
+ * Step charge 0, "Least raw material" (fix spec R3): the step-charge stage with the raw material held at the least (a
+ * cap of 0) and every step recipe weighing this, crafted by hand or not. Among the plans of least raw material it
+ * looks for one of fewest recipes, then the least free input and power: a recipe weighs 10 times what the least-raw
+ * plan's free input weighs in S3's tie-breaks (S3_FREE_SHARE), so a plan of one more recipe wins only where the fewer
+ * would take over 10 times that free input. S3's fewest-recipes MIPs (`fewestRecipesMip`, S3_MAX_NODES each) took up to
+ * 14 s on the real-data corpus and 181 s on the user's settings at Advanced Circuit HV, on the larger graphs of the
+ * step-bounded pruning (R4); this root-node MIP, started from S1, plans them in under 3 s, within 2 steps of S3's
+ * count. A weight of 0.05 to 1 made HiGHS's root node take 5 to 14 s on one of those lines.
+ */
+const LEAST_RAW_STEP = 0.01;
+
+/**
+ * The simplification stage (fix spec R3), for a line that needs raw material: the step-charge stage, at
+ * `opts.stepCharge` when it is above 0, else held at the least raw material (`LEAST_RAW_STEP`). A line that needs
+ * none has nothing to weigh its steps against: today's fewest recipes (`fewestRecipesStage`).
  */
 function simplest(lp: MainLp, s1: LpResult, locks: LpRow[], opts: SolveOptions): Promise<Simplified> {
+  if (!(s1.objective > TINY)) return fewestRecipesStage(lp, s1, locks);
   const charge = opts.stepCharge ?? 0;
-  if (!(Number.isFinite(charge) && charge > 0) || !(s1.objective > TINY)) return fewestRecipesStage(lp, s1, locks);
-  return chargedStage(lp, s1, locks, charge, opts.handWeight ?? 1);
+  if (Number.isFinite(charge) && charge > 0) return chargedStage(lp, s1, locks, charge, opts.handWeight ?? 1, STEP_CHARGE_CAP);
+  return chargedStage(lp, s1, locks, LEAST_RAW_STEP, 1, 0);
 }
 
 /**
@@ -450,7 +464,7 @@ function stepWeight(r: LpRecipe, handWeight: number): number {
 }
 
 /**
- * The step-charge MIP (fix spec R3 step 2). Over the main rows and `Σ raw ≤ (1 + STEP_CHARGE_CAP) × S1` it minimizes the
+ * The step-charge MIP (fix spec R3 step 2). Over the main rows and `Σ raw ≤ (1 + cap) × S1` it minimizes the
  * raw material in units of S1's, with S3's free-input and power tie-breaks (`tieBreaks`) and the canonical rank
  * (CANON_RANK_S3), plus `charge` × `stepWeight` for each step recipe it runs and S3's small charge for each priced
  * derived leaf it buys. One binary per step recipe and per such purchase, `column ≤ M × binary` (M: STEP_BIG_M × the
@@ -459,13 +473,13 @@ function stepWeight(r: LpRecipe, handWeight: number): number {
  * start. Returns the counted columns it leaves out (binary off, or a step recipe it does not run), or null when it has
  * no whole solution or nothing to count.
  */
-async function chargeMip(lp: MainLp, s1: LpResult, charge: number, handWeight: number): Promise<Set<number> | null> {
+async function chargeMip(lp: MainLp, s1: LpResult, charge: number, handWeight: number, cap: number): Promise<Set<number> | null> {
   const least = s1.objective;
   let largest = 0;
   for (let j = 0; j < lp.firstBuy; j++) largest = Math.max(largest, s1.x[j] ?? 0);
   if (largest <= TINY || !(least > TINY)) return null;
   const width = lp.rawCost.length;
-  const capped = (1 + STEP_CHARGE_CAP) * least;
+  const capped = (1 + cap) * least;
   const counted: Array<{ j: number; weight: number; bigM: number; step: boolean }> = [];
   lp.recipes.forEach((r, j) => {
     if (r.kind === 'recipe') counted.push({ j, weight: charge * stepWeight(r, handWeight), bigM: STEP_BIG_M * largest, step: true });
@@ -548,15 +562,16 @@ async function consolidated(
 }
 
 /**
- * The step-charge stage (fix spec R3 steps 2–5): the charge MIP's support (`chargeMip`), its least raw material solved
- * again over that support (`base`, within the cap); when either fails, today's fewest recipes with the exact lock
- * (`fewestRecipesStage`, which says so when it fails too); then `consolidated`. The later stages run only the step
- * recipes the base runs, the derived purchases left out stay out, and they lock raw material at the base's.
+ * The step-charge stage (fix spec R3 steps 2–5), raw material at most (1 + `cap`) × S1: the charge MIP's support
+ * (`chargeMip`), its least raw material solved again over that support (`base`, within the cap); when either fails,
+ * today's fewest recipes with the exact lock (`fewestRecipesStage`, which says so when it fails too); then
+ * `consolidated`. The later stages run only the step recipes the base runs, the derived purchases left out stay out,
+ * and they lock raw material at the base's.
  */
-async function chargedStage(lp: MainLp, s1: LpResult, open: LpRow[], charge: number, handWeight: number): Promise<Simplified> {
-  const limit = (1 + STEP_CHARGE_CAP) * s1.objective * (1 + S3_TOLERANCE) + TINY;
+async function chargedStage(lp: MainLp, s1: LpResult, open: LpRow[], charge: number, handWeight: number, cap: number): Promise<Simplified> {
+  const limit = (1 + cap) * s1.objective * (1 + S3_TOLERANCE) + TINY;
   let start: { off: Set<number>; base: LpResult } | undefined;
-  const mipOff = await chargeMip(lp, s1, charge, handWeight);
+  const mipOff = await chargeMip(lp, s1, charge, handWeight, cap);
   if (mipOff !== null) {
     const base = await minimize(lp, lp.rawCost, [], Infinity, mipOff);
     if (base.status === 'optimal' && base.objective <= limit) start = { off: mipOff, base };
@@ -603,8 +618,8 @@ async function finish(lp: MainLp, s1: LpResult, warnings: PlanWarning[], opts: S
   // S3 (fewest recipes), S2 and S4 only break ties: a stage that does not solve (numerically, or S2 unbounded by a
   // recipe with negative EU) keeps the previous stage's plan, which already uses the least raw material (S3's: the
   // least raw material without the recipes it left out). With a step charge S3 instead trades raw material for steps, up
-  // to the cap. S3 runs before power, so power never picks a longer chain among equally cheap ones; the later stages
-  // keep to the recipes S3 left.
+  // to the cap (at 0 there is no room above S1). S3 runs before power, so power never picks a longer chain among equally
+  // cheap ones; the later stages keep to the recipes S3 left.
   const open = lockRow(lp.rawCost, s1.objective);
   const { off, locks, base, skipped } = await simplest(lp, s1, open, opts);
   const s2 = await minimize(lp, lp.power, locks, Infinity, off);
@@ -665,8 +680,9 @@ function cappedList(ids: readonly string[]): string {
  * The cheapest steady state that meets `demand` (per unit of time): S1 least raw material (spec §3.3), S3 as few recipes
  * as that allows (`simplest`), S2 least power among those, S4 the least total of runs, purchases and sinks (canonical).
  * With `opts.stepCharge` above 0 S3 is the step charge instead (fix spec R3): each step recipe must save that share of
- * S1 to be built (a crafting-table one `opts.handWeight` times it), never above STEP_CHARGE_CAP over S1; without it the
- * solve is as before, so direct callers keep their results. `opts.probe` stops after S1 (and the loop guard).
+ * S1 to be built (a crafting-table one `opts.handWeight` times it), never above STEP_CHARGE_CAP over S1; without it
+ * (0) the same stage keeps raw material at S1's and weighs every step recipe alike (`LEAST_RAW_STEP`), for as few
+ * recipes as the least raw material allows. `opts.probe` stops after S1 (and the loop guard).
  * After S1 the loop guard may ban recipes that make matter from nothing and start again, 5 times at most: then one
  * `free-loop` warning names what it left out (`banned`). When the solve after the fifth ban still finds such a loop, the
  * line is `infeasible` with one warning: there is no honest way to make the targets from these recipes, and the plan

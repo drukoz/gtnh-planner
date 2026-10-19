@@ -20,9 +20,9 @@
 - No new npm dependency. `src/shared/` stays pure: no `node:*`, no DOM.
 - Rates are per second inside the server; people read them through `src/shared/format.ts` (Task 1). Items in items, fluids in litres.
 - Every new field of `PlanSettings`, `Plan`, `PlanStep`, `RawInput`, `BomLine`, `PlanWarning`, `LpModel`, `LpRecipe`, `StepLine` is an optional addition (comment `// optional addition`); `defaultSettings()` and `normalizeSettings()` fill every new setting, and every new setting gets a `SETTING_CHECKS` entry in `src/shared/project/apply-op.ts`.
-- Constants exactly as spec §3: `DEFAULT_STEP_CHARGE = 0.05`, `MAX_STEP_CHARGE = 0.5`, `STEP_CHARGE_CAP = 0.25`, `HAND_STEP_WEIGHT = 3`, `STEP_BIG_M = 100`, `STEP_MIP_MAX_NODES = 1`, `CANON_RANK_S3 = 1e-6`, `CANON_RANK_S4 = 1e-3`, `SIGNIFICANT_DIGITS = 9`, `RESIDUAL_REL = 1e-6`, `RESIDUAL_ABS = 1e-9`, `FLOW_DROP_REL = 1e-9`, `DERIVED_LEAF_MAX_DEPTH = 4`, `MAX_EXTRA_PRODUCER_STEPS = 6`, `ORPHAN_REL = 1e-6`, `SHORT_INPUT_SHARE = 0.995`, `PIN_DOMINATED_SHARE = 1.01`; pump recipe 1,000 L / 80 ticks / 8 EU/t; `routeDerived` default `true`; `stepCharge` default `0.05`, `haveSupply` default `[]`, `optionChoice` default `{}`.
+- Constants exactly as spec §3: `DEFAULT_STEP_CHARGE = 0.05`, `MAX_STEP_CHARGE = 0.5`, `STEP_CHARGE_CAP = 0.25`, `HAND_STEP_WEIGHT = 3`, `STEP_BIG_M = 100`, `STEP_MIP_MAX_NODES = 1`, `LEAST_RAW_STEP = 0.01` (Task 4 review), `CANON_RANK_S3 = 1e-6`, `CANON_RANK_S4 = 1e-3`, `SIGNIFICANT_DIGITS = 9`, `RESIDUAL_REL = 1e-6`, `RESIDUAL_ABS = 1e-9`, `FLOW_DROP_REL = 1e-9`, `DERIVED_LEAF_MAX_DEPTH = 4`, `MAX_EXTRA_PRODUCER_STEPS = 6`, `ORPHAN_REL = 1e-6`, `SHORT_INPUT_SHARE = 0.995`, `PIN_DOMINATED_SHARE = 1.01`; pump recipe 1,000 L / 80 ticks / 8 EU/t; `routeDerived` default `true`; `stepCharge` default `0.05`, `haveSupply` default `[]`, `optionChoice` default `{}`.
 - Determinism: the same pack, settings and context give the same plan. MIPs use node limits, never time limits.
-- Performance: every real-data plan < 5 s with a warm pack (`PLAN_SECONDS`).
+- Performance: every real-data plan < 5 s with a warm pack (`PLAN_SECONDS`), timed on a host not running other planners, one real-data test file at a time (spec §7.3): the bound is wall-clock.
 - Nothing game-derived or private is committed; real-data tests run only with `GTNH_LOCAL=1`. Never write `data/config.json`, `data/export` or `data/assets` (symlinks to the real data), and never start, stop or write to the live Minecraft server or its folder.
 - Plan 08 (architecture §11.25): keep its avoid handling, `Plan.avoided` and the `avoid-unavoidable` warning working; Task 4 changes only how often `avoidingLine` solves fully.
 - `tests/unit/planner/real-acceptance.test.ts` and `real-pack.test.ts` pin old behaviour (cobblestone glass, `ORDINARY`); with `GTNH_LOCAL=1` they may fail from Task 2 until Task 8 rewrites them. Do not edit them before Task 8.
@@ -253,7 +253,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Produces:
   - `src/shared/types/plan.ts`: `DEFAULT_STEP_CHARGE`, `PlanSettings.stepCharge?: number`.
   - `apply-op.ts`: `MAX_STEP_CHARGE`; the `stepCharge` default and check.
-  - `solve.ts`: `export interface SolveOptions { stepCharge?: number; handWeight?: number; probe?: boolean }` (spec R3); `solveLine(graph: CandidateGraph, demand: ReadonlyMap<StuffKey, number>, opts?: SolveOptions): Promise<Solution>` (no `stepCharge` = 0 = today's stages); `STEP_CHARGE_CAP`, `HAND_STEP_WEIGHT`, `STEP_BIG_M`, `STEP_MIP_MAX_NODES`, `CANON_RANK_S3`, `CANON_RANK_S4`.
+  - `solve.ts`: `export interface SolveOptions { stepCharge?: number; handWeight?: number; probe?: boolean }` (spec R3); `solveLine(graph: CandidateGraph, demand: ReadonlyMap<StuffKey, number>, opts?: SolveOptions): Promise<Solution>` (no `stepCharge` = 0: the least raw material, then as few recipes as that allows); `STEP_CHARGE_CAP`, `HAND_STEP_WEIGHT`, `STEP_BIG_M`, `STEP_MIP_MAX_NODES`, `CANON_RANK_S3`, `CANON_RANK_S4`.
   - `lp.ts`: `LpModel.start?: number[]` (HiGHS `setSolution({ colValue })` after `passModel`).
   - `candidates.ts`: `canonicalRank(key: StuffKey): 0 | 1` (spec R10), `MAX_EXTRA_PRODUCER_STEPS`.
   - `plan.ts`: `solveOptions(settings: PlanSettings): SolveOptions`, `PIN_DOMINATED_SHARE`; warnings `hand-step` and `pin-dominated`.
@@ -293,7 +293,7 @@ Expected: FAIL — `solveOptions` and `SolveOptions` missing, the chain is built
 - [ ] **Step 3: Implement spec R3, R4, R10, D7, D14, D24**
 
 - `lp.ts`: `LpModel.start`.
-- `solve.ts`: when `stepCharge > 0` and S1 > `TINY`, `simplest()` runs the charge MIP of R3 (objective, cap row, links, `start` = S1's `x` with `y = 1` where it runs, `maxNodes: STEP_MIP_MAX_NODES`, a `feasible` result accepted), falls back to today's fewest-recipes S3 with the exact lock, then consolidates, and returns `{ off, locks, base }`; `stepCharge` 0 or absent keeps today's S3; S4 adds `CANON_RANK_S4 × canonicalRank` per purchase and convert column; `probe` returns after S1 (status, runs, buys, sinks, `rawCost`, `leastRawCost`).
+- `solve.ts`: when `stepCharge > 0` and S1 > `TINY`, `simplest()` runs the charge MIP of R3 (objective, cap row, links, `start` = S1's `x` with `y = 1` where it runs, `maxNodes: STEP_MIP_MAX_NODES`, a `feasible` result accepted), falls back to today's fewest-recipes S3 with the exact lock, then consolidates, and returns `{ off, locks, base }`; `stepCharge` 0 or absent runs the same stage held at the least raw material (cap 0, each step recipe weighing `LEAST_RAW_STEP` = 0.01; spec R3 as amended by the Task 4 review: today's S3 took up to 181 s on the larger graphs), today's S3 staying the fallback and the stage of a line that needs no raw material; S4 adds `CANON_RANK_S4 × canonicalRank` per purchase and convert column; `probe` returns after S1 (status, runs, buys, sinks, `rawCost`, `leastRawCost`).
 - `candidates.ts`: carried containers, `stepsTo`, the simplest producer, step-bounded pruning and canonical ties (R4, R10), keeping plan 08's avoid filters; the emptying recipe of a filled container (`docs/local/planner-audit/patches/E-containers.patch`).
 - `plan.ts`: `solveOptions(settings)` = `{ stepCharge: settings.stepCharge ?? DEFAULT_STEP_CHARGE, handWeight: settings.mode === 'rate' && !settings.automateCrafting ? HAND_STEP_WEIGHT : 1 }`, passed to every `solveLine` call; with goods to avoid, the plain solve and `avoidingLine`'s trials are probes and only the graph `avoidingLine` returns is solved fully (spec R3 "Avoid lists", including the tie case); `hand-step` and `pin-dominated` warnings with the spec D7 and D24 texts (the pin check after `addAlternatives`).
 - `apply-op.ts`: the `stepCharge` default and check (finite, `0 ≤ v ≤ MAX_STEP_CHARGE`).
@@ -483,19 +483,19 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 - [ ] **Step 1: Write the tests**
 
-`real-user-project.test.ts`: the user's settings verbatim from `audit/proj.json` (`target 'IC2:itemPartCircuit@0'`, `amount 1`, `per 'hour'`, `tier 2`, `routeDerived false`, `logistics 'routed'`, `recipeChoice { 'fluid:glue': '98f259e40a64e8b0', 'gregtech:gt.metaitem.01@32716': '0a074f4241a9e0f9' }`, the six default excluded categories, `automateCrafting false`) through `normalizeSettings`; plans `P`, `P1m` (`per: 'min'`) and `PR` (`routeDerived: true`), each < 5 s; one `it` per complaint with exactly the assertions of spec §7.2's table.
+`real-user-project.test.ts`: the user's settings verbatim from `audit/proj.json` (`target 'IC2:itemPartCircuit@0'`, `amount 1`, `per 'hour'`, `tier 2`, `routeDerived false`, `logistics 'routed'`, `recipeChoice { 'fluid:glue': '98f259e40a64e8b0', 'gregtech:gt.metaitem.01@32716': '0a074f4241a9e0f9' }`, the six default excluded categories, `automateCrafting false`) through `normalizeSettings`; plans `P`, `P1m` (`per: 'min'`) and `PR` (`routeDerived: true`), each < 5 s; one `it` per complaint with exactly the assertions of spec §7.2's table; and `PA0`, the same settings with target `IC2:itemPartCircuitAdv@0` at `tier 3` and `stepCharge: 0` (the "Least raw material" preset, spec §7.3: 181 s before the Task 4 review fix), < 5 s with `rawCost.perSecond` within 1e-6 of `rawCost.leastPerSecond` and no `simplify-skipped` or `numerics` warning.
 `real-corpus.test.ts`: the 16 targets × 3 variants of spec §7.2 with its per-plan assertions and the documented exceptions for kinds c and g, asserted per good; each plan < 5 s.
-`real-acceptance.test.ts` and `real-pack.test.ts`: the updates of spec §7.2; plan 08's avoid tests keep their assertions and the 5 s bound, and the Annealed Copper one ("still buy when avoiding Copper") passes `routeDerived: false`.
+`real-acceptance.test.ts` and `real-pack.test.ts`: the updates of spec §7.2; plan 08's avoid tests keep their assertions and the 5 s bound, and the Annealed Copper one ("still buy when avoiding Copper") passes `routeDerived: false`; `real-acceptance.test.ts` adds the 0 % case of spec §7.3: Advanced Circuit (`IC2:itemPartCircuitAdv@0`) at HV, 1/min, default settings with `stepCharge: 0`, < 5 s with `rawCost.perSecond` within 1e-6 of `leastPerSecond` and no `simplify-skipped` or `numerics` warning.
 
 - [ ] **Step 2: Run them**
 
-Run: `GTNH_LOCAL=1 npx vitest run tests/unit/planner/real-user-project.test.ts tests/unit/planner/real-corpus.test.ts tests/unit/planner/real-acceptance.test.ts tests/unit/planner/real-pack.test.ts tests/unit/planner/real-rate.test.ts`
-Expected: PASS. A failure is a defect of Tasks 1–5: fix it in the owning module (not by loosening a bound) and run again.
+Run, on a quiet host (no other planner, test run or build at the same time, spec §7.3), the files one at a time: `GTNH_LOCAL=1 npx vitest run --no-file-parallelism tests/unit/planner/real-user-project.test.ts tests/unit/planner/real-corpus.test.ts tests/unit/planner/real-acceptance.test.ts tests/unit/planner/real-pack.test.ts tests/unit/planner/real-rate.test.ts`
+Expected: PASS. A failure is a defect of Tasks 1–5: fix it in the owning module (not by loosening a bound) and run again. Each `< 5 s` is wall-clock around `planLine`, so files run in parallel (vitest's default) or a busy host slow every plan (GEC HV 2/min: 3.7 s alone, 4.4 s beside four other real-data runs): before calling a time over 5 s a defect, run its file alone on a quiet host.
 
 - [ ] **Step 3: Run the whole suite**
 
-Run: `npm run typecheck && npx vitest run && npm run e2e && GTNH_LOCAL=1 npx vitest run tests/unit/planner`
-Expected: PASS (the plain run skips the real-data files).
+Run: `npm run typecheck && npx vitest run && npm run e2e`, then on a quiet host the real-data planner files apart from the rest and one at a time: `GTNH_LOCAL=1 npx vitest run --no-file-parallelism tests/unit/planner/real-`
+Expected: PASS (the plain run skips the real-data files; the second run is every `tests/unit/planner/real-*.test.ts`).
 
 - [ ] **Step 4: Commit**
 

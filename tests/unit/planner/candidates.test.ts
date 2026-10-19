@@ -212,22 +212,46 @@ describe('pruning by steps, carried containers and canonical ties', () => {
 
   it('neither charges nor waits for cells a recipe hands on', () => {
     // Steel from iron dust and 1,000 L oxygen (an EBF), or from an iron ingot and 2 coal (a Bricked Blast Furnace, 3 raw).
-    // Oxygen comes from free water in an electrolyzer that hands its 2 Empty Cells on as Hydrogen Cells, or from 10
-    // quartz dust (12.5 raw). Charging the cells (15 tin each) and waiting for them to be priced made oxygen cost 12.5,
-    // so the EBF recipe (13.5) was pruned.
+    // Oxygen comes from free water in an electrolyzer that hands its 2 Empty Cells on as Hydrogen Cells, which a canner
+    // empties again, or from 10 quartz dust (12.5 raw). Charging the cells (15 tin each) and waiting for them to be
+    // priced made oxygen cost 12.5, so the EBF recipe (13.5) was pruned.
     const p = packFromSpec({
-      machines: [M(1, ['gt.recipe.blastfurnace']), M(2, ['gt.recipe.primitiveblastfurnace']), M(3, ['gt.recipe.electrolyzer']), M(4, ['gt.recipe.assembler'])],
+      machines: [
+        M(1, ['gt.recipe.blastfurnace']), M(2, ['gt.recipe.primitiveblastfurnace']), M(3, ['gt.recipe.electrolyzer']), M(4, ['gt.recipe.assembler']),
+        M(5, ['gt.recipe.canner']),
+      ],
       recipes: [
         { id: 'ebf-steel', map: 'gt.recipe.blastfurnace', in: [['t:iron_dust@0', 1], ['fluid:oxygen', 1000]], out: [['t:steel_ingot@0', 1]], eut: 30 },
         { id: 'bbf-steel', map: 'gt.recipe.primitiveblastfurnace', in: [['t:iron_ingot@0', 1], ['t:coal@0', 2]], out: [['t:steel_ingot@0', 1]] },
         { id: 'electrolyze', map: 'gt.recipe.electrolyzer', in: [['t:empty_cell@0', 2], ['fluid:water', 1000]], out: [['fluid:oxygen', 1000], ['t:h_cell@0', 2]], eut: 30 },
         { id: 'dust-oxygen', map: 'gt.recipe.electrolyzer', in: [['t:quartz_dust@0', 10]], out: [['fluid:oxygen', 1000]], eut: 30 },
         step('make-cell', 't:tin_ingot@0', 't:empty_cell@0', 15),
+        { id: 'empty-h', map: 'gt.recipe.canner', in: [['t:h_cell@0', 1]], out: [['fluid:hydrogen', 1000], ['t:empty_cell@0', 1]], eut: 4 },
       ],
       fluidContainers: [{ container: 't:h_cell@0', empty: 't:empty_cell@0', fluid: 'fluid:hydrogen', amount: 1000 }],
     });
     const leaf = priced({ 't:iron_dust@0': 1, 't:iron_ingot@0': 1, 't:coal@0': 1, 'fluid:water': 0, 't:quartz_dust@0': 1.25, 't:tin_ingot@0': 1 });
-    expect(ids(p, leaf, 't:steel_ingot@0')).toEqual(expect.arrayContaining(['ebf-steel', 'electrolyze']));
+    expect(ids(p, leaf, 't:steel_ingot@0')).toEqual(expect.arrayContaining(['ebf-steel', 'electrolyze', 'empty-h']));
+  });
+  it('charges the cells a recipe hands on when nothing here empties them again', async () => {
+    // Steel only from the EBF; its oxygen from the electrolyzer, whose 2 Empty Cells leave as Hydrogen Cells that no
+    // recipe empties (30 tin a run in new cells), or from 10 quartz dust (12.5 raw). The dust route stays in the graph,
+    // and the line plans 13.5 raw, not 31.
+    const p = packFromSpec({
+      machines: [M(1, ['gt.recipe.blastfurnace']), M(3, ['gt.recipe.electrolyzer']), M(4, ['gt.recipe.assembler'])],
+      recipes: [
+        { id: 'ebf-steel', map: 'gt.recipe.blastfurnace', in: [['t:iron_dust@0', 1], ['fluid:oxygen', 1000]], out: [['t:steel_ingot@0', 1]], eut: 30 },
+        { id: 'electrolyze', map: 'gt.recipe.electrolyzer', in: [['t:empty_cell@0', 2], ['fluid:water', 1000]], out: [['fluid:oxygen', 1000], ['t:h_cell@0', 2]], eut: 30 },
+        { id: 'dust-oxygen', map: 'gt.recipe.electrolyzer', in: [['t:quartz_dust@0', 10]], out: [['fluid:oxygen', 1000]], eut: 30 },
+        step('make-cell', 't:tin_ingot@0', 't:empty_cell@0', 15),
+      ],
+      fluidContainers: [{ container: 't:h_cell@0', empty: 't:empty_cell@0', fluid: 'fluid:hydrogen', amount: 1000 }],
+    });
+    const leaf = priced({ 't:iron_dust@0': 1, 'fluid:water': 0, 't:quartz_dust@0': 1.25, 't:tin_ingot@0': 1 });
+    const graph = buildCandidates(p, defaultSettings(), env(1), leaf, ['t:steel_ingot@0']);
+    expect(graph.recipes.map((r) => r.id)).toContain('dust-oxygen');
+    const sol = await solveLine(graph, new Map([['t:steel_ingot@0', 1]]));
+    expect(sol.rawCost).toBeCloseTo(13.5, 9);
   });
   it('keeps the simplest producer', () => {
     // One recipe from s (2.5), or four from r (1): the short route is 2.5× the cheapest and still kept.

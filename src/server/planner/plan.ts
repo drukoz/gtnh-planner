@@ -715,7 +715,8 @@ interface SolvedLine { graph: CandidateGraph; sol: Solution; avoid: ReadonlySet<
 
 /**
  * The line for an avoid list: `used` is what the plain line uses of it (`amountsUsed`), by key, and `reallowed` what
- * this one may use of that.
+ * this one may use of that. The plain line is the probe of the open graph, or its full solve where that is the plan and
+ * uses more (`avoidingLine`).
  */
 interface AvoidingLine extends SolvedLine { used: StuffKey[]; reallowed: ReadonlySet<StuffKey> }
 
@@ -738,9 +739,9 @@ const NOT_BOUGHT: LeafDecision = { buyable: false, cost: 0, leafClass: null };
  *
  * A full solve (the step charge, fix spec R3) costs far more than its least-raw stage, and only whether a line plans
  * and what it uses matter here: `plain` is a probe (`SolveOptions.probe`) and so is every trial; only the line found is
- * solved in full (`options`). When the probe of the plain line used no avoided good, that line in full is the plan,
- * unless it uses one after all (a tie the probe broke the other way): then the search goes on from it as if the plain
- * line had used it.
+ * solved in full (`options`). Where that is the plain line itself, its full solve can use what the probe did not: a tie
+ * the probe broke the other way, or the charge buying a derived leaf made from a good whose own chain the probe ran.
+ * Then the search goes on from the full line as if the plain line had used that, so every use is listed and flagged.
  */
 async function avoidingLine(
   pack: Pack, settings: PlanSettings, pricing: LinePricing, plain: Solution, demand: ReadonlyMap<StuffKey, number>, request: AvoidRequest,
@@ -748,59 +749,78 @@ async function avoidingLine(
 ): Promise<AvoidingLine> {
   const open = pricing.graph;
   const goods = request.goods;
-  let whole: Solution | undefined;
-  /** The plain line solved in full, at most once. */
-  const plainInFull = async (): Promise<Solution> => (whole ??= await solveLine(open, demand, options));
-  /** `line` with its graph solved in full. */
-  const inFull = async (line: AvoidingLine): Promise<AvoidingLine> => ({
-    ...line, sol: line.graph === open ? await plainInFull() : await solveLine(line.graph, demand, options),
-  });
-  let from = plain;
-  let amounts = amountsUsed(open, from, request);
-  if (amounts.size === 0) {
-    from = await plainInFull();
-    amounts = amountsUsed(open, from, request);
-    if (amounts.size === 0) return { graph: open, sol: from, avoid: goods, used: [], reallowed: new Set() };
-  }
-  const used = [...amounts.keys()].sort(byString);
   const without = (allowed: ReadonlySet<StuffKey>): Set<StuffKey> => new Set([...goods].filter((key) => !allowed.has(key)));
-  /** The derived leaves made from avoided goods the plain line buys. */
-  const bought = used.filter((key) => !goods.has(key));
-  const solve = async (allowed: ReadonlySet<StuffKey>): Promise<SolvedLine> => {
-    const avoid = without(allowed);
-    // The list's goods are all ones the plain line uses, allowed back with the derived leaves it buys: the plain line.
-    if (avoid.size === 0 && bought.every((key) => allowed.has(key))) return { graph: open, sol: from, avoid };
-    const leaf: LeafOracle = (key) => (!allowed.has(key) && request.madeFrom(key).length > 0 ? NOT_BOUGHT : pricing.leaf(key));
-    await yieldToEventLoop();
-    const graph = buildCandidates(pack, settings, pricing.basis.env, leaf, [pricing.target], { avoid });
-    return { graph, sol: await solveLine(graph, demand, { ...options, probe: true }), avoid };
-  };
-  const strict = await solve(new Set());
-  if (strict.sol.status === 'ok') return inFull({ ...strict, used, reallowed: new Set() });
-
   const unitCost = (key: StuffKey): number => {
     const cost = pricing.model.costs.cost(key);
     return Number.isFinite(cost) ? cost : pricing.basis.prices.price(key);
   };
-  const impact = (key: StuffKey): number => unitCost(key) * (amounts.get(key) ?? 0);
-  const reallowed = new Set<StuffKey>();
-  let best: SolvedLine | undefined;
-  for (const key of [...used].sort((a, b) => impact(a) - impact(b) || byString(a, b))) {
-    reallowed.add(key);
-    const tried = await solve(reallowed);
-    if (tried.sol.status === 'ok') {
-      best = tried;
-      break;
+  /** The probe of the line walked with `allowed` back, once per set: a second search starts as the first did. */
+  const trials = new Map<string, Promise<SolvedLine>>();
+  const trial = (allowed: ReadonlySet<StuffKey>): Promise<SolvedLine> => {
+    const back = new Set(allowed);
+    const id = [...back].sort(byString).join('\n');
+    let line = trials.get(id);
+    if (line === undefined) {
+      line = (async (): Promise<SolvedLine> => {
+        const avoid = without(back);
+        const leaf: LeafOracle = (key) => (!back.has(key) && request.madeFrom(key).length > 0 ? NOT_BOUGHT : pricing.leaf(key));
+        await yieldToEventLoop();
+        const graph = buildCandidates(pack, settings, pricing.basis.env, leaf, [pricing.target], { avoid });
+        return { graph, sol: await solveLine(graph, demand, { ...options, probe: true }), avoid };
+      })();
+      trials.set(id, line);
     }
-  }
-  if (best === undefined) return inFull({ graph: open, sol: from, avoid: without(new Set(used)), used, reallowed: new Set(used) });
-  for (const key of [...reallowed].slice(0, -1)) {
-    reallowed.delete(key);
-    const tried = await solve(reallowed);
-    if (tried.sol.status === 'ok') best = tried;
-    else reallowed.add(key);
-  }
-  return inFull({ ...best, used, reallowed });
+    return line;
+  };
+  /**
+   * The search from the plain line solved as `from`, which uses `amounts` of what the list avoids: the line found, with
+   * `from` where that is the plain line and a probe elsewhere.
+   */
+  const search = async (from: Solution, amounts: ReadonlyMap<StuffKey, number>): Promise<AvoidingLine> => {
+    const used = [...amounts.keys()].sort(byString);
+    if (used.length === 0) return { graph: open, sol: from, avoid: goods, used, reallowed: new Set() };
+    /** The derived leaves made from avoided goods the plain line buys. */
+    const bought = used.filter((key) => !goods.has(key));
+    const solve = async (allowed: ReadonlySet<StuffKey>): Promise<SolvedLine> => {
+      const avoid = without(allowed);
+      // The list's goods are all ones the plain line uses, allowed back with the derived leaves it buys: the plain line.
+      if (avoid.size === 0 && bought.every((key) => allowed.has(key))) return { graph: open, sol: from, avoid };
+      return trial(allowed);
+    };
+    const strict = await solve(new Set());
+    if (strict.sol.status === 'ok') return { ...strict, used, reallowed: new Set() };
+
+    const impact = (key: StuffKey): number => unitCost(key) * (amounts.get(key) ?? 0);
+    const reallowed = new Set<StuffKey>();
+    let best: SolvedLine | undefined;
+    for (const key of [...used].sort((a, b) => impact(a) - impact(b) || byString(a, b))) {
+      reallowed.add(key);
+      const tried = await solve(reallowed);
+      if (tried.sol.status === 'ok') {
+        best = tried;
+        break;
+      }
+    }
+    if (best === undefined) return { graph: open, sol: from, avoid: without(new Set(used)), used, reallowed: new Set(used) };
+    for (const key of [...reallowed].slice(0, -1)) {
+      reallowed.delete(key);
+      const tried = await solve(reallowed);
+      if (tried.sol.status === 'ok') best = tried;
+      else reallowed.add(key);
+    }
+    return { ...best, used, reallowed };
+  };
+  /** `line` with its graph solved in full. */
+  const inFull = async (line: AvoidingLine): Promise<AvoidingLine> => ({ ...line, sol: await solveLine(line.graph, demand, options) });
+
+  const found = await search(plain, amountsUsed(open, plain, request));
+  // A trial's graph holds only the avoided goods and derived leaves it allowed back; the open graph holds them all.
+  if (found.graph !== open) return inFull(found);
+  const whole = await solveLine(open, demand, options);
+  const amounts = amountsUsed(open, whole, request);
+  if ([...amounts.keys()].every((key) => found.used.includes(key))) return { ...found, sol: whole };
+  const again = await search(whole, amounts);
+  return again.graph === open ? again : inFull(again);
 }
 
 /** The flow end of what the line buys (machines.ts `buildFlows`). */
