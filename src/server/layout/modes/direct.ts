@@ -15,8 +15,8 @@ import type { HostConfig, HostCover, LocalBlock, Placement } from '../arrange.ts
 import { linkBits } from '../path.ts';
 import { machineRef, pickItemPipe } from '../parts.ts';
 import {
-  conveyorCover, finalItemOutputs, itemStacksPerSecond, nameList, placedStepIds, rawItemInputs, rawItemRate, spineConflicts, unitItemRate,
-  type ModeHookup, type ModeInput, type ModeResult, type StepDraft,
+  conveyorCover, finalItemOutputs, itemStacksPerSecond, nameList, outputSideInputs, placedStepIds, rawItemInputs, rawItemRate, spineConflicts,
+  unitItemRate, type ModeHookup, type ModeInput, type ModeResult, type StepDraft,
 } from './mode.ts';
 
 const NORTH = 2, SOUTH = 3;
@@ -26,11 +26,13 @@ function noLine(warnings: PlanWarning[]): ModeResult {
 }
 
 /**
- * Links every spine port to the unit cell behind it, and gives that cell its Input Filter: a singleblock's front is
- * both its output side and the spine side, a multiblock takes items only through its input bus. Sorted by pos.
+ * Links every spine port to the unit cell behind it, and gives that cell its Input Filter: a singleblock's spine face
+ * is its output side (it takes items there with "allow input from the output side" when it has item inputs, as in
+ * every mode), a multiblock takes items only through its input bus. Sorted by pos.
  */
 function spineContacts(placement: Placement, spine: ReadonlySet<string>, links: Array<[Vec3, Vec3]>): HostConfig[] {
   const blockAt = new Map(placement.blocks.map((b) => [posKey(b.pos), b]));
+  const fromOutputSide = outputSideInputs(placement);
   const configs = new Map<string, HostConfig>();
   for (const u of placement.units) {
     const inputBuses = new Set(u.cells.filter((c) => c.hatch === 'input_bus').map((c) => c.block.mteId));
@@ -39,7 +41,7 @@ function spineContacts(placement: Placement, spine: ReadonlySet<string>, links: 
       const cell = step(port, OPPOSITE[u.facing]!);
       links.push([port, cell]);
       if (!u.multiblock) {
-        configs.set(posKey(cell), { pos: cell, config: { inputFilter: true, inputFromOutputSide: true } });
+        configs.set(posKey(cell), { pos: cell, config: { inputFilter: true, ...fromOutputSide.get(posKey(cell))?.config } });
         continue;
       }
       const b = blockAt.get(posKey(cell));

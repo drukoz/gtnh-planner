@@ -33,6 +33,11 @@ export interface LayoutBlock {
   hookup?: number;
   /** The id of the build step that places this block (§11.23, for the in-game projector). */
   buildStep?: string;
+  /**
+   * A GT basic machine's front (`mMainFacing`), which GT keeps apart from its output side: then `facing` is the output
+   * side (`mFacing`, where its output cover and inputs go). Only singleblock machines carry it.
+   */
+  mainFacing?: number;
 }
 
 export interface Hookup {
