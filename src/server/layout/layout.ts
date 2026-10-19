@@ -246,7 +246,7 @@ interface Hookups {
  * block's items onto the base's network whenever redstone power reaches it and that no build step names). Goal cells
  * are not exempt, so the hookup's last cell touches no line inventory but the port's chest.
  */
-function hookupKeepOff(lineBlocks: readonly LayoutBlock[], port: Vec3): Set<string> {
+export function hookupKeepOff(lineBlocks: readonly LayoutBlock[], port: Vec3): Set<string> {
   const cells = new Set<string>();
   const portKey = posKey(port);
   for (const b of lineBlocks) {

@@ -13,7 +13,7 @@ import { placeUnits, unitsFromPlan, type Placement } from '../../src/server/layo
 import type { LayoutDeps } from '../../src/server/layout/layout.ts';
 import { PORT_SPACING } from '../../src/server/layout/modes/mode.ts';
 import { resolveParts, type Parts } from '../../src/server/layout/parts.ts';
-import { areaReader, flatVoxels, IDS, layoutPack, makePlan, makeScan, type ScanSpec, type StepSpec } from './layout-fixtures.ts';
+import { areaReader, flatVoxels, IDS, layoutPack, makePlan, makeScan, STONE, type ScanSpec, type StepSpec } from './layout-fixtures.ts';
 
 /** The Item Conduit, Basic Item Filter and Ender Fluid Conduit of the fixture pack. */
 export const ITEM = 'EnderIO:itemItemConduit@0';
@@ -73,10 +73,14 @@ export function lineScan(extra: Pick<ScanSpec, 'logistics'> = {}): WorldScan {
   });
 }
 
-/** layout.test.ts's `ground()`: stone up to y 63 around the base, with the scanned macerator and the tap's cable on it. */
-export function lineGround(): LayoutDeps {
+/**
+ * layout.test.ts's `ground()`: stone up to y 63 around the base, with the scanned macerator and the tap's cable on it;
+ * plus a stone box from each `[from, to]` of `stone` (inclusive corners), to wall a hookup in.
+ */
+export function lineGround(stone: ReadonlyArray<readonly [Vec3, Vec3]> = []): LayoutDeps {
   return { readArea: areaReader(flatVoxels({
     origin: [-20, 50, -20], size: [90, 30, 90], groundY: 63,
-    boxes: [{ from: [18, 64, 18], to: [18, 64, 18], block: GT(IDS.MACERATOR) }, { from: [16, 64, 30], to: [16, 64, 30], block: GT(IDS.ANNEALED_1X) }],
+    boxes: [{ from: [18, 64, 18], to: [18, 64, 18], block: GT(IDS.MACERATOR) }, { from: [16, 64, 30], to: [16, 64, 30], block: GT(IDS.ANNEALED_1X) },
+      ...stone.map(([from, to]) => ({ from: [from[0], from[1], from[2]] as Vec3, to: [to[0], to[1], to[2]] as Vec3, block: STONE }))],
   })) };
 }

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { hookupPath, logisticsHookup } from '../../../src/server/layout/hookups.ts';
-import { layoutLine } from '../../../src/server/layout/layout.ts';
+import { hookupKeepOff, layoutLine } from '../../../src/server/layout/layout.ts';
 import { buildMode, PORT_SPACING } from '../../../src/server/layout/modes/mode.ts';
 import { resolveParts } from '../../../src/server/layout/parts.ts';
 import { makePins } from '../../../src/server/layout/pins.ts';
@@ -8,7 +8,7 @@ import { assignBuildSteps, bomFromBlocks, layoutSteps, type StepsInput } from '.
 import { faceName } from '../../../src/shared/layout/configure-text.ts';
 import { DIRS, manhattan, posKey, rotateConnections, rotateFace, sideToward, step, type Vec3 } from '../../../src/shared/layout/geometry.ts';
 import { conduitBlockRef, FACES, type Face } from '../../../src/shared/types/assets.ts';
-import type { ConduitFace, Layout, LayoutBlock } from '../../../src/shared/types/layout.ts';
+import type { ConduitFace, ConduitSpec, Layout, LayoutBlock } from '../../../src/shared/types/layout.ts';
 import type { BuildStep } from '../../../src/shared/types/plan.ts';
 import { flatVoxels, IDS, layoutPack, makePlan, makeProject } from '../../helpers/layout-fixtures.ts';
 import { BASIC, ENDER, ITEM, basic, fluidPlan, lineGround, lineScan, setup, twoStep } from '../../helpers/enderio-fixtures.ts';
@@ -217,6 +217,51 @@ describe('EnderIO conduits in the steps, the parts list and the hookup', () => {
     expect(cases).toEqual([
       { tap: '26,64,12', rotation: 0, found: true, touching: [] }, { tap: '26,64,12', rotation: 90, found: true, touching: [] },
       { tap: '20,64,40', rotation: 0, found: true, touching: [] }, { tap: '20,64,40', rotation: 90, found: true, touching: [] }]);
+  });
+
+  it("keeps off the cells next to a line block with an Item Conduit, a machine, a hatch such as a multiblock's bus, or a chest other than the port", () => {
+    // blocks 10 apart, so their neighbours never meet; a fluid-only conduit, a GT pipe, a cable, a casing and a
+    // transformer join no item conduit, and the port's own chest is where the hookup ends
+    const at = (x: number, role: LayoutBlock['role'], label: string, more: Partial<LayoutBlock> = {}): LayoutBlock =>
+      ({ pos: [x, 64, 0], block: { id: 'minecraft:stone', meta: 0 }, role, label, ...more });
+    const item: ConduitSpec = { kind: 'item', item: ITEM, connections: 0, faces: [] };
+    const fluid: ConduitSpec = { kind: 'liquid_ender', item: ENDER, connections: 0, faces: [] };
+    const blocks = [
+      at(0, 'chest', 'Chest (input)', { tail: { side: 'input', keys: ['t:in@0'] } }), at(10, 'chest', 'Chest (output)', { tail: { side: 'output', keys: [] } }),
+      at(20, 'machine', 'Basic Macerator'), at(30, 'hatch', 'Input Bus (ULV)'), at(40, 'pipe', 'Item Conduit', { conduits: [item] }),
+      at(50, 'pipe', 'Conduit bundle (Item Conduit + Ender Fluid Conduit)', { conduits: [item, fluid] }),
+      at(60, 'pipe', 'Ender Fluid Conduit', { conduits: [fluid] }), at(70, 'pipe', 'Tin Item Pipe'), at(80, 'cable', '1x Tin Cable'),
+      at(90, 'casing', 'Heat Proof Machine Casing'), at(100, 'transformer', 'Low Voltage Transformer'),
+    ];
+    const around = (x: number) => DIRS.map((_, side) => posKey(step([x, 64, 0], side)));
+    expect([...hookupKeepOff(blocks, [0, 64, 0])].sort()).toEqual([10, 20, 30, 40, 50].flatMap(around).sort());
+  });
+
+  it('routes an EnderIO hookup from a tap beside the output chest round it and round the end of the Item Conduit', async () => {
+    // the tap is two cells south of the cell east of the output chest, and stone east of the tail column and above the
+    // cell between leaves the shortest way north along the tail, past the output chest and the conduit's end; kept off
+    // both, the hookup goes round the stone instead
+    const plain = await layoutLine(layoutPack(), twoStep(), lineScan(), placed(0), lineGround());
+    const input = plain.blocks.find((b) => b.tail?.side === 'input')!;
+    const [x, , z] = plain.blocks.find((b) => b.tail?.side === 'output')!.pos;
+    const ground = lineGround([[[x + 2, 64, z - 1], [x + 2, 66, z + 2]], [[x + 1, 65, z + 1], [x + 1, 65, z + 1]]]);
+    const layout = await layoutLine(layoutPack(), twoStep(), lineScan({ logistics: [{ kind: 'enderio', taps: [[x + 1, 64, z + 2]] }] }), placed(0), ground);
+    const index = layout.hookups.findIndex((h) => h.kind === 'logistics');
+    const keptFrom = layout.blocks.filter((b) => b.hookup === undefined && posKey(b.pos) !== posKey(input.pos)
+      && (b.role === 'machine' || b.role === 'hatch' || b.role === 'chest' || b.conduits?.some((c) => c.kind === 'item') === true));
+    const cells = layout.blocks.filter((b) => b.hookup === index);
+    expect([layout.hookups[index]!.found, layout.hookups[index]!.path.at(-1)]).toEqual([true, [x + 1, 64, input.pos[2]]]);
+    expect(cells.filter((c) => keptFrom.some((b) => manhattan(b.pos, c.pos) === 1)).map((c) => posKey(c.pos))).toEqual([]);
+  });
+
+  it('keeps every other hookup as Plan 5 routes it: a routed hookup of a machine-to-machine line runs straight past the output chest', async () => {
+    // the keep-off is only for a hookup that ends on an EnderIO conduit face (plan 11, ruling R14)
+    const project = makeProject({ logistics: 'direct', placement: { origin: [30, 64, 10], rotation: 0 } });
+    const plain = await layoutLine(layoutPack(), twoStep(), lineScan(), project, lineGround());
+    const [x, , z] = plain.blocks.find((b) => b.tail?.side === 'output')!.pos;
+    const layout = await layoutLine(layoutPack(), twoStep(), lineScan({ logistics: [{ kind: 'routed', taps: [[x + 1, 64, z + 2]] }] }), project, lineGround());
+    const hookup = layout.hookups.find((h) => h.kind === 'logistics')!;
+    expect([hookup.found, hookup.path]).toEqual([true, [[x + 1, 64, z + 1], [x + 1, 64, z], [x + 1, 64, z - 1], [x + 1, 64, z - 2]]]);
   });
 
   it("names each open fluid end's turned face in its own step and counts the fluid conduits of the bundles", async () => {
