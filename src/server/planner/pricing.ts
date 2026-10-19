@@ -24,8 +24,12 @@ export interface CostModel { graph: CandidateGraph; costs: CostAnalysis; stopIte
 /**
  * A line's prices: its basis, the cost model, the leaf oracle with stop items at their cost-model price and derived
  * leaves at their own chain's cost, and the line's candidate graph over that oracle (the graph `planLine` solves).
+ * `chains` holds what making each priced derived material and each stop item of that graph on its own runs
+ * (`Standalone`, fix spec R7): the chain a bought one stands for (`RawInput.pricedVia`).
  */
-export interface LinePricing { target: StuffKey; basis: PlanBasis; model: CostModel; leaf: LeafOracle; graph: CandidateGraph }
+export interface LinePricing {
+  target: StuffKey; basis: PlanBasis; model: CostModel; leaf: LeafOracle; graph: CandidateGraph; chains: ReadonlyMap<StuffKey, Standalone>;
+}
 
 /**
  * Raw-material costs over a candidate graph built without pins and stop items and with derived base materials routed,
@@ -51,27 +55,28 @@ async function costModel(pack: Pack, settings: PlanSettings, basis: PlanBasis, t
 
 /**
  * What making each derived material of `keys` on its own costs, never consuming the line's target (`standaloneCosts`
- * over the cost model's graph, where derived materials are routed). One that graph never walked (its pruning found no
- * cheap way to make it along the target's chain) is priced over a graph walked from it alone, but never below its
- * plain price: at the flat 1 Magnetic Steel was the cheapest way to the LV Machine Hull's plates, while its own chain
- * costs what the steel costs; and a graph walked from it alone is not the line's, so it may count ore-processing yields
- * the flat price of mined items over-rewards (an end-stone iron ore smelted into 40 nuggets) as savings the line never
- * makes. Infinity = only a chain through the target makes it; no entry = its plain price.
+ * over the cost model's graph, where derived materials are routed), and never below its plain price (fix spec R7). One
+ * that graph never walked (its pruning found no cheap way to make it along the target's chain) is priced over a graph
+ * walked from it alone. Without the floor a bought material undercut what it is made from (molten copper at 0.826 an
+ * ingot, Glass Dust at 0): at the flat 1 Magnetic Steel was the cheapest way to the LV Machine Hull's plates, while its
+ * own chain costs what the steel costs; and a graph walked from it alone is not the line's, so it may count
+ * ore-processing yields the flat price of mined items over-rewards (an end-stone iron ore smelted into 40 nuggets) as
+ * savings the line never makes. Infinity = only a chain through the target makes it; no entry = its plain price.
  */
 async function derivedCosts(
   pack: Pack, settings: PlanSettings, basis: PlanBasis, model: CostModel, target: StuffKey, keys: readonly StuffKey[],
 ): Promise<Map<StuffKey, Standalone>> {
   const out = new Map<StuffKey, Standalone>();
+  const containers = pack.fluidContainers ?? [];
+  const floored = (key: StuffKey, made: Standalone): Standalone => ({ ...made, cost: Math.max(made.cost, basis.prices.price(key)) });
   const inModel = keys.filter((key) => model.graph.goods.has(key));
   const own = keys.filter((key) => !model.graph.goods.has(key));
-  for (const [key, made] of await standaloneCosts(model.graph, inModel, [target])) if (made !== undefined) out.set(key, made);
+  for (const [key, made] of await standaloneCosts(model.graph, inModel, [target], containers)) if (made !== undefined) out.set(key, floored(key, made));
   if (own.length > 0) {
     await yieldToEventLoop();
     const s: PlanSettings = { ...settings, recipeChoice: {}, stopItems: model.stopItems, routeDerived: true };
     const alone = buildCandidates(pack, s, basis.env, makeLeafOracle(pack, s, basis.avail, basis.prices), own);
-    for (const [key, made] of await standaloneCosts(alone, own, [target])) {
-      if (made !== undefined) out.set(key, { ...made, cost: Math.max(made.cost, basis.prices.price(key)) });
-    }
+    for (const [key, made] of await standaloneCosts(alone, own, [target], containers)) if (made !== undefined) out.set(key, floored(key, made));
   }
   return out;
 }
@@ -109,7 +114,12 @@ async function computePricing(pack: Pack, settings: PlanSettings, ctx: PlanConte
     await yieldToEventLoop();
     graph = buildCandidates(pack, settings, basis.env, leaf, [target]);
   }
-  return { target, basis, model, leaf, graph };
+  // The chains behind the stop items the line may buy, as the derived leaves' (`priced`): only what they stand for
+  // (`RawInput.pricedVia`) is read; a stop item keeps its own price.
+  const stops = [...graph.goods.values()].filter((g) => g.leafClass === 'stop' && g.buyable).map((g) => g.key);
+  const chains = new Map(priced);
+  for (const [key, made] of await derivedCosts(pack, settings, basis, model, target, stops)) chains.set(key, made);
+  return { target, basis, model, leaf, graph, chains };
 }
 
 const MEMOS = new WeakMap<Pack, Map<string, Promise<LinePricing>>>();

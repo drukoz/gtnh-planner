@@ -199,6 +199,28 @@ describe('app.pack()', () => {
   });
 });
 
+describe('createApp', () => {
+  it('switches projects stored before supporting lines were the default to them at start, once (ruling P10)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gp-app-'));
+    const config = { ...DEFAULT_CONFIG, dataDir: dir };
+    const first = createApp(config);
+    const id = first.projects.create('Old line', 'Ann').id;
+    const row = first.db.getProject(id)!;
+    const state = JSON.parse(row.state);
+    delete state.settings.settingsVersion;
+    state.settings.routeDerived = false;
+    first.db.updateProject({ ...row, state: JSON.stringify(state) });
+    first.db.close();
+    const again = createApp(config);
+    expect(again.projects.get(id)).toMatchObject({ rev: 1, settings: { routeDerived: true, settingsVersion: 2 } });
+    again.db.close();
+    const third = createApp(config);
+    expect(third.projects.get(id)?.rev).toBe(1);
+    third.db.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe('static files: details', () => {
   it('HEAD sends headers only; other methods, missing files, NUL and backslashes are 404', async () => {
     const head = await fetch(`${s.url}/assets/app-1.js`, { method: 'HEAD' });

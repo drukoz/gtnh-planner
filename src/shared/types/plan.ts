@@ -30,7 +30,7 @@ export interface PlanSettings {
   target: StuffKey | null; mode: 'rate' | 'makeN'; amount: number; per: 'min' | 'hour';   // per ignored for makeN
   tier: number | null;                     // null = from world scan (fallback LV = 1)
   dims: { policy: 'progression' | 'visited'; overrides: Record<string, 'on' | 'off'> };   // keys: DimensionInfo.key or Capability.key; absent = auto
-  routeDerived: boolean;                   // false = base-form items of non-mined materials are flagged leaves; true = planner makes them
+  routeDerived: boolean;                   // true (default) = the planner makes derived materials (supporting lines); false = it buys those within 4 recipe layers (DERIVED_LEAF_MAX_DEPTH) as flagged leaves
   logistics: LogisticsMode;
   costOverrides: Record<string, number>;   // key = material name ("Silver") or StuffKey
   stopItems: StuffKey[];                   // "we already make this"
@@ -51,6 +51,13 @@ export interface PlanSettings {
    * The group decides."). `defaultSettings()` and `normalizeSettings()` always fill it; readers use `?? []`.
    */
   declineReuse?: number[];
+  // optional addition
+  /**
+   * Which defaults the settings were made under (`SETTINGS_VERSION` in apply-op.ts; architecture §11.32): 2 from plan 09,
+   * when supporting lines (`routeDerived: true`) became the default. `defaultSettings()` sets the current version and
+   * `normalizeSettings()` fills a missing one with 1 (a project stored before it), which the server switches once.
+   */
+  settingsVersion?: number;
 }
 
 /** One storage block holding some of a good (§11.20). */
@@ -64,6 +71,16 @@ export interface RawInput {
   have?: { total: number; reachable: number; where?: StorageWhere[] };
   // optional addition
   leafClass?: LeafClass;
+  // optional addition
+  /**
+   * For a bought derived material or a stop item (fix spec R7): the chain buying it stands for, from making it on its
+   * own: the recipe that makes most of it (container moves skipped), the map it runs on, the first option of each of
+   * that recipe's consumed slots, and the recipes the whole chain runs. Absent when nothing makes it on its own.
+   */
+  pricedVia?: { recipeId: string; mapId: string; inputs: StuffKey[]; steps: number };
+  // optional addition
+  /** Some recipe the group can run at this tier makes it (fix spec R7); false for free and gathered goods. */
+  canMake?: boolean;
 }
 
 export interface PlanStep {

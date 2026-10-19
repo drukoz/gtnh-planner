@@ -7,16 +7,16 @@
 import { V, tierName } from '../../shared/gt/tiers.ts';
 import type { StuffKey } from '../../shared/keys.ts';
 import { indexPlan, issueText, type PlanIssue } from '../../shared/plan/balance.ts';
-import type { DimensionInfo, Pack, Product } from '../../shared/types/pack.ts';
+import type { DimensionInfo, Pack, Product, Recipe } from '../../shared/types/pack.ts';
 import type {
-  BomLine, Plan, PlanContext, PlanFlow, PlanSettings, PlanStep, PlanWarning, PowerSummary, RawInput, SourceInfo,
+  BomLine, LeafClass, Plan, PlanContext, PlanFlow, PlanSettings, PlanStep, PlanWarning, PowerSummary, RawInput, SourceInfo,
 } from '../../shared/types/plan.ts';
 import { isBaseItem, unlockText, type Availability } from './availability.ts';
 import { planBasis, resolveAvoid, settingsHash, type PlanBasis } from './basis.ts';
 import { buildBom } from './bom.ts';
 import {
-  buildCandidates, heldOption, keptOptions, usesAvoided, type CandidateGraph, type HeldAvoid, type LeafDecision, type LeafOracle,
-  type LpRecipe,
+  acceptRecipe, buildCandidates, heldOption, keptOptions, usesAvoided, type CandidateGraph, type HeldAvoid, type LeafDecision,
+  type LeafOracle, type LpRecipe, type PlanEnv,
 } from './candidates.ts';
 import { analyzeCosts, type CostAnalysis } from './costs.ts';
 import { buildFlows, emptyContainers, planSteps, type StepLine } from './machines.ts';
@@ -24,7 +24,7 @@ import { makeN, wholeRuns } from './make-n.ts';
 import { yieldToEventLoop } from './lp.ts';
 import { linePricing, type CostModel, type LinePricing } from './pricing.ts';
 import { sig9 } from './round.ts';
-import { MAX_NAMED_LOOP_RECIPES, solveLine, type Solution } from './solve.ts';
+import { MAX_NAMED_LOOP_RECIPES, solveLine, type Solution, type Standalone } from './solve.ts';
 import { buildSteps } from './steps.ts';
 
 export { effectiveTier, settingsHash } from './basis.ts';
@@ -318,43 +318,72 @@ function haveOf(ctx: PlanContext, key: StuffKey): RawInput['have'] {
   return have;
 }
 
-/** Derived leaves a grouped `derived-leaf` warning names before it counts the rest. */
-const MAX_NAMED_DERIVED = 5;
-
 /** "a", "a and b", "a, b and c". */
 function listed(names: readonly string[]): string {
   return names.length <= 1 ? (names[0] ?? '') : `${names.slice(0, -1).join(', ')} and ${names.at(-1) as string}`;
 }
 
+/** How the `derived-leaf` warning ends (fix spec R7): the banner's "Plan them as supporting lines" turns `routeDerived` on. */
+const PLAN_SUPPORTING_LINES = 'Plan them as supporting lines to include their chains.';
+
 /**
- * The one `derived-leaf` warning for the derived leaves a line buys (by key), keyed to the first: for one, where it
- * comes from; for several, their names (at most MAX_NAMED_DERIVED, then a count), as their sources say the rest.
+ * The one `derived-leaf` warning for the derived leaves a line buys (by key), keyed to the first: for one, what it is
+ * made from; for several, every name (no cut-off: the client shows each as a chip), as their sources say the rest.
  */
 function derivedLeafWarning(pack: Pack, derived: ReadonlyArray<{ key: StuffKey; detail: string }>): PlanWarning[] {
   const first = derived[0];
   if (first === undefined) return [];
-  if (derived.length === 1) {
-    return [{
-      code: 'derived-leaf', key: first.key,
-      text: `${pack.nameOf(first.key)} is not mined anywhere you can reach; it is ${first.detail}. Turn on "plan derived materials" to include that chain.`,
-    }];
-  }
-  const names = derived.slice(0, MAX_NAMED_DERIVED).map((d) => pack.nameOf(d.key));
-  const rest = derived.length - names.length;
-  const who = rest > 0 ? `${names.join(', ')} and ${rest} more` : listed(names);
-  return [{
-    code: 'derived-leaf', key: first.key,
-    text: `${who} are not mined anywhere you can reach; the line buys them made from other materials (see their sources). Turn on "plan derived materials" to include their chains.`,
-  }];
+  const lead = derived.length === 1
+    ? `${pack.nameOf(first.key)} is not mined anywhere you can reach; it is ${first.detail}.`
+    : `${listed(derived.map((d) => pack.nameOf(d.key)))} are not mined anywhere you can reach; the line buys them made from other materials (see their sources).`;
+  return [{ code: 'derived-leaf', key: first.key, text: `${lead} ${PLAN_SUPPORTING_LINES}` }];
+}
+
+/**
+ * The chain a bought derived material or stop item stands for (`RawInput.pricedVia`, fix spec R7), from what making it
+ * on its own runs (`LinePricing.chains`): the recipe that makes most of it, the map the group runs that on, the first
+ * option of each of its consumed slots, and the recipes of the whole chain. None when nothing else makes it.
+ */
+function pricedViaOf(pack: Pack, env: PlanEnv, chain: Standalone | undefined): RawInput['pricedVia'] {
+  const r = chain?.top === undefined ? undefined : pack.recipeById.get(chain.top);
+  if (chain === undefined || r === undefined) return undefined;
+  const accepted = acceptRecipe(pack, r, env);
+  const inputs = r.inputs.flatMap((ing) => {
+    const first = ing.consumed ? ing.options[0] : undefined;
+    return first === undefined ? [] : [first.key];
+  });
+  return { recipeId: r.id, mapId: accepted.ok ? accepted.mapId : (r.maps[0] ?? ''), inputs, steps: chain.steps };
+}
+
+/** "made by Alloy Smelter from Copper Dust, Redstone (2 recipes in all)": the source of a bought derived material. */
+function pricedViaText(pack: Pack, via: NonNullable<RawInput['pricedVia']>): string {
+  const by = `made by ${pack.maps.get(via.mapId)?.name ?? via.mapId}`;
+  const what = via.inputs.length > 0 ? `${by} from ${via.inputs.map((key) => pack.nameOf(key)).join(', ')}` : by;
+  return `${what} (${via.steps} ${via.steps === 1 ? 'recipe' : 'recipes'} in all)`;
+}
+
+/**
+ * Whether some recipe the group can run at its tier makes `key` (`RawInput.canMake`, fix spec R7), so "Make it here
+ * instead" can work; never for a free or gathered good, which the line takes as it is.
+ */
+function canMakeHere(pack: Pack, env: PlanEnv, key: StuffKey, leafClass: LeafClass | undefined): boolean {
+  if (leafClass === 'free' || leafClass === 'natural') return false;
+  return (pack.producers.get(key) ?? []).some((i) => {
+    const r = pack.recipes[i] as Recipe;
+    return r.outputs.some((p) => p.key === key && p.amount > 0 && p.chance > 0) && acceptRecipe(pack, r, env).ok;
+  });
 }
 
 /**
  * One raw input per purchase, sorted by key: per second (in Make N the batch's total spread over its time, plus the
- * total), its cost (leaf cost × the amount: per second, or the batch's), sources, stock and leaf class; the `derived`
- * leaves also get one warning that says how to plan their chains (`derivedLeafWarning`).
+ * total), its cost (leaf cost × the amount: per second, or the batch's), sources, stock, leaf class, the chain a bought
+ * derived material or stop item stands for (`chains`: its `pricedVia`; a derived one's source then names that chain) and
+ * whether the group could make it here; the `derived` leaves also get one warning that says how to plan their chains
+ * (`derivedLeafWarning`).
  */
 function rawInputsOf(
-  pack: Pack, graph: CandidateGraph, basis: PlanBasis, ctx: PlanContext, buys: ReadonlyMap<StuffKey, number>, batchSeconds: number | null,
+  pack: Pack, graph: CandidateGraph, basis: PlanBasis, chains: ReadonlyMap<StuffKey, Standalone>, ctx: PlanContext,
+  buys: ReadonlyMap<StuffKey, number>, batchSeconds: number | null,
 ): { rawInputs: RawInput[]; warnings: PlanWarning[] } {
   const rawInputs: RawInput[] = [];
   const derived: Array<{ key: StuffKey; detail: string }> = [];
@@ -369,6 +398,13 @@ function rawInputsOf(
     const have = haveOf(ctx, key);
     if (have !== undefined) input.have = have;
     if (leafClass !== undefined) input.leafClass = leafClass;
+    const via = leafClass === 'derived' || leafClass === 'stop' ? pricedViaOf(pack, basis.env, chains.get(key)) : undefined;
+    if (via !== undefined) {
+      input.pricedVia = via;
+      // What buying it stands for, not availability's first find (a canner emptying a cell of it).
+      if (leafClass === 'derived') input.sources = [{ kind: 'derived', dims: [], detail: pricedViaText(pack, via) }];
+    }
+    input.canMake = canMakeHere(pack, basis.env, key, leafClass);
     rawInputs.push(input);
     if (leafClass === 'derived') derived.push({ key, detail: input.sources.find((s) => s.kind === 'derived')?.detail ?? 'made from other materials' });
   }
@@ -870,7 +906,7 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
   }
   await addAlternatives(pack, steps, model, graph, line.avoid);
 
-  const raw = rawInputsOf(pack, graph, basis, ctx, buys, made?.totalSeconds ?? null);
+  const raw = rawInputsOf(pack, graph, basis, priced.chains, ctx, buys, made?.totalSeconds ?? null);
   // Make N steps of one machine type share that type's machines (makeN), so they draw at most once per type.
   const power = powerSummary(steps, { sharedByType: batch });
   // The parts the machines hold are ones the line may use (ruling R7): never an option it still avoids.

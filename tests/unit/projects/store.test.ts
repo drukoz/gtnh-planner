@@ -2,8 +2,9 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { openDb, backupDaily, type Db } from '../../../src/server/db/db.ts';
-import { ProjectStore, OpError } from '../../../src/server/projects/store.ts';
+import { ProjectStore, OpError, PLANNER_UPDATE } from '../../../src/server/projects/store.ts';
 
 let dir: string; let db: Db; let store: ProjectStore; let t = 0;
 const now = () => new Date(Date.UTC(2026, 9, 17, 12, 0, t++));
@@ -54,6 +55,57 @@ describe('ProjectStore', () => {
     const state = JSON.parse(row.state); delete state.settings.automateCrafting;
     db.updateProject({ ...row, state: JSON.stringify(state) });
     expect(store.get(p.id)?.settings.automateCrafting).toBe(false);
+  });
+});
+
+// Controller ruling 3 (ruling P10): projects stored before supporting lines were the default are switched to them once.
+describe('ProjectStore.migrateSettings', () => {
+  /** A project as plan 09 found it: no settings version, and the old default routeDerived false. */
+  function storedBeforePlan09(name: string): string {
+    const p = store.create(name, 'Ann');
+    const row = db.getProject(p.id)!;
+    const state = JSON.parse(row.state);
+    delete state.settings.settingsVersion;
+    state.settings.routeDerived = false;
+    db.updateProject({ ...row, state: JSON.stringify(state) });
+    return p.id;
+  }
+  /** The ops recorded for `id`, read straight from the database file. */
+  function opsOf(id: string): Array<{ rev: number; op: unknown; by: string }> {
+    const sql = new DatabaseSync(db.file, { readOnly: true });
+    try {
+      const rows = sql.prepare('SELECT rev, op, by FROM project_op WHERE project_id = ? ORDER BY rev').all(id) as Array<{ rev: number; op: string; by: string }>;
+      return rows.map((r) => ({ rev: Number(r.rev), op: JSON.parse(r.op), by: r.by }));
+    } finally {
+      sql.close();
+    }
+  }
+  it('switches an old project to supporting lines once, as a recorded settings op by the planner', () => {
+    const id = storedBeforePlan09('Old');
+    expect(store.get(id)?.settings).toMatchObject({ routeDerived: false, settingsVersion: 1 });
+    expect(store.migrateSettings(PLANNER_UPDATE)).toEqual([id]);
+    expect(store.get(id)).toMatchObject({ rev: 1, settings: { routeDerived: true, settingsVersion: 2 } });
+    expect(opsOf(id)).toEqual([{ rev: 1, op: { op: 'settings', patch: { routeDerived: true, settingsVersion: 2 } }, by: 'Planner update' }]);
+    // Run again (the next start): nothing left to switch.
+    expect(store.migrateSettings(PLANNER_UPDATE)).toEqual([]);
+    expect(store.get(id)?.rev).toBe(1);
+    expect(db.countOps(id)).toBe(1);
+  });
+  it('never touches a project whose settings are of this version, so a later "off" sticks', () => {
+    const p = store.create('New', 'Ann', { routeDerived: false });
+    const migratedOld = storedBeforePlan09('Old');
+    expect(store.migrateSettings(PLANNER_UPDATE)).toEqual([migratedOld]);
+    expect(store.get(p.id)).toMatchObject({ rev: 0, settings: { routeDerived: false, settingsVersion: 2 } });
+    expect(db.countOps(p.id)).toBe(0);
+  });
+  it('leaves deleted projects for the start after they are restored', () => {
+    const id = storedBeforePlan09('Old');
+    store.delete(id, 'Ann');
+    expect(store.migrateSettings(PLANNER_UPDATE)).toEqual([]);
+    store.restore(id);
+    expect(store.get(id)?.settings.routeDerived).toBe(false);
+    expect(store.migrateSettings(PLANNER_UPDATE)).toEqual([id]);
+    expect(store.get(id)?.settings.routeDerived).toBe(true);
   });
 });
 

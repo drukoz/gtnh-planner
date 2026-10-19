@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { applyOp, defaultSettings, normalizeSettings, validateOp } from '../../../src/shared/project/apply-op.ts';
+import { applyOp, defaultSettings, normalizeSettings, SETTINGS_VERSION, validateOp } from '../../../src/shared/project/apply-op.ts';
 import type { Project } from '../../../src/shared/types/project.ts';
 
 const AT = '2026-10-17T12:00:00.000Z';
@@ -54,10 +54,11 @@ describe('applyOp', () => {
 describe('defaultSettings / normalizeSettings', () => {
   it('has the decided defaults', () => {
     const s = defaultSettings();
-    expect(s).toMatchObject({ target: null, mode: 'rate', amount: 1, per: 'min', tier: null, routeDerived: false,
-      logistics: 'direct', coilHeat: null, automateCrafting: false, dims: { policy: 'progression', overrides: {} } });
+    expect(s).toMatchObject({ target: null, mode: 'rate', amount: 1, per: 'min', tier: null, routeDerived: true,
+      logistics: 'direct', coilHeat: null, automateCrafting: false, dims: { policy: 'progression', overrides: {} }, settingsVersion: 2 });
     expect(s.excludedCategories).toEqual(['recycling', 'massfab', 'replicator', 'scrap', 'lava-centrifuge', 'programmed-circuit-conversion']);
     expect(s.declineReuse).toEqual([]);
+    expect(SETTINGS_VERSION).toBe(2);
   });
   it('fills fields missing from an older stored project', () => {
     const s = normalizeSettings({ target: 'fluid:steam', amount: 5 } as never);
@@ -65,6 +66,11 @@ describe('defaultSettings / normalizeSettings', () => {
     expect(s.stopItems).toEqual([]);
     expect(s.declineReuse).toEqual([]);
     expect(s.dims).toEqual({ policy: 'progression', overrides: {} });
+    // Ruling P10: a project stored before plan 09 reads as settings version 1 (so the server switches it once), and
+    // normalizing alone keeps the routeDerived it stored.
+    expect(s.settingsVersion).toBe(1);
+    expect(normalizeSettings({ routeDerived: false } as never)).toMatchObject({ routeDerived: false, settingsVersion: 1 });
+    expect(normalizeSettings({ routeDerived: false, settingsVersion: 2 } as never)).toMatchObject({ routeDerived: false, settingsVersion: 2 });
   });
 });
 
@@ -80,6 +86,9 @@ describe('validateOp', () => {
     [{ op: 'settings', patch: { bogus: 1 } }],
     [{ op: 'settings', patch: { declineReuse: ['121'] } }],
     [{ op: 'settings', patch: { declineReuse: [1.5] } }],
+    [{ op: 'settings', patch: { settingsVersion: 1 } }],
+    [{ op: 'settings', patch: { settingsVersion: 1.5 } }],
+    [{ op: 'settings', patch: { settingsVersion: 'x' } }],
     [{ op: 'mark', row: 'foo', on: true }],
     [{ op: 'addNote', note: { id: 'n', text: 'x'.repeat(4001) } }],
     [{ op: 'rename', name: '   ' }],
@@ -90,6 +99,7 @@ describe('validateOp', () => {
   it('accepts a normal settings patch and a tick', () => {
     expect(validateOp({ op: 'settings', patch: { mode: 'makeN', amount: 64, tier: 2 } })).toBeNull();
     expect(validateOp({ op: 'settings', patch: { declineReuse: [121, 1000] } })).toBeNull();
+    expect(validateOp({ op: 'settings', patch: { routeDerived: true, settingsVersion: 2 } })).toBeNull();
     expect(validateOp({ op: 'mark', row: 'build:gregtech:gt.metaitem.01@2032', on: true })).toBeNull();
   });
 });
@@ -125,7 +135,8 @@ describe('applyOp (more)', () => {
 describe('normalizeSettings (more)', () => {
   it('fills a partial dims and an absent settings object', () => {
     expect(normalizeSettings({ dims: { policy: 'visited' } } as never).dims).toEqual({ policy: 'visited', overrides: {} });
-    expect(normalizeSettings(undefined)).toEqual(defaultSettings());
+    // A missing settings object is an old project's: version 1 (ruling P10), every other field the default.
+    expect(normalizeSettings(undefined)).toEqual({ ...defaultSettings(), settingsVersion: 1 });
   });
 });
 

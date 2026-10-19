@@ -2,7 +2,7 @@
 // stages (least raw material, then power as a tie-break only, then a canonical form), a guard against recipe data loops
 // that make matter from nothing, and the goods that block a target nothing reachable can make, for plain-words warnings.
 
-import type { StuffKey } from '../../shared/keys.ts';
+import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import type { PlanWarning } from '../../shared/types/plan.ts';
 import type { CandidateGraph, LpRecipe } from './candidates.ts';
 import { solveLp, type LpResult, type LpRow } from './lp.ts';
@@ -520,9 +520,35 @@ async function solveUnit(graph: CandidateGraph, demand: ReadonlyMap<StuffKey, nu
 /**
  * What making one unit of a good on its own costs: `cost` in raw material (Infinity: only a chain through the line's
  * target makes it), `steps`, the recipes that chain runs (ore-dictionary conversions are not recipes), and `free`, the
- * free input it takes (`MainLp.free`).
+ * free input it takes (`MainLp.free`); `recipes` and `top` say which recipes those are (fix spec R7).
  */
-export interface Standalone { cost: number; steps: number; free: number }
+export interface Standalone {
+  cost: number; steps: number; free: number;
+  /** The step recipes the chain runs (`steps` of them), the most runs first, equal runs by id. */
+  recipes: string[];
+  /**
+   * The recipe of the chain that makes most of the good, container moves left out (`isContainerMove`); for a fluid, the
+   * filled containers of it a recipe makes count as that fluid. None when no other recipe of the chain makes it.
+   */
+  top?: string;
+}
+
+/** A filled container and the litres of its fluid (`Pack.fluidContainers`). */
+export interface FluidContainer { container: StuffKey; fluid: StuffKey; amount: number }
+
+/**
+ * A recipe that only moves `fluid` between a container and its bulk form: one whose only consumed good is a filled
+ * container of it (a canner emptying an Ethylene Cell), or one that only makes filled containers of it, from it (a
+ * canner filling cells). `holds` gives a filled container's fluid.
+ */
+function isContainerMove(r: LpRecipe, fluid: StuffKey | undefined, holds: ReadonlyMap<StuffKey, FluidContainer>): boolean {
+  if (fluid === undefined) return false;
+  const inputs = r.coeffs.filter(([, c]) => c < 0).map(([key]) => key);
+  const outputs = r.coeffs.filter(([, c]) => c > 0).map(([key]) => key);
+  const holdsFluid = (key: StuffKey): boolean => holds.get(key)?.fluid === fluid;
+  if (inputs.length === 1 && holdsFluid(inputs[0] as StuffKey)) return true;
+  return inputs.includes(fluid) && outputs.length > 0 && outputs.every(holdsFluid);
+}
 
 /**
  * The least raw material that makes one unit of each of `keys` on its own in `graph`: S1 of the main LP with that one
@@ -530,13 +556,26 @@ export interface Standalone { cost: number; steps: number; free: number }
  * good instead of making it should cost, without the arbitrary split of a recipe's cost between its co-products that
  * the cost analysis (costs.ts) makes (pyrolysis there priced charcoal at 0 and gave the whole log to its wood gas).
  * Infinity when only a chain through `notInputs` makes the good (Magnetic Steel from the Steel target); undefined when
- * the graph cannot make it at all.
+ * the graph cannot make it at all. `containers` (the pack's filled containers) tell the recipes that only fill or empty
+ * one from the chemistry `Standalone.top` names.
  */
 export async function standaloneCosts(
-  graph: CandidateGraph, keys: readonly StuffKey[], notInputs: readonly StuffKey[] = [],
+  graph: CandidateGraph, keys: readonly StuffKey[], notInputs: readonly StuffKey[] = [], containers: readonly FluidContainer[] = [],
 ): Promise<Map<StuffKey, Standalone | undefined>> {
   const out = new Map<StuffKey, Standalone | undefined>();
   if (keys.length === 0) return out;
+  const holds = new Map<StuffKey, FluidContainer>();
+  for (const c of containers) if (!holds.has(c.container)) holds.set(c.container, c);
+  /** What one run of `r` makes of `key`: its own output, and for a fluid each filled container of it at its litres. */
+  const madeOf = (r: LpRecipe, key: StuffKey): number => {
+    let made = 0;
+    for (const [k, c] of r.coeffs) {
+      if (c <= 0) continue;
+      if (k === key) made += c;
+      else if (holds.get(k)?.fluid === key) made += c * (holds.get(k) as FluidContainer).amount;
+    }
+    return made;
+  };
   const lp = mainLp(graph, graph.recipes, new Map());
   const rowOf = new Map(lp.goods.map((key, g) => [key, g]));
   const width = lp.rawCost.length;
@@ -559,14 +598,26 @@ export async function standaloneCosts(
     }
     const result = await solve(g, barred);
     if (result.status === 'optimal') {
-      const steps = lp.recipes.filter((r, j) => r.kind === 'recipe' && (result.x[j] ?? 0) > TINY).length;
+      const ran = lp.recipes.flatMap((r, j) => {
+        const runs = result.x[j] ?? 0;
+        return r.kind === 'recipe' && runs > TINY ? [{ r, runs: sig9(runs) }] : [];
+      }).sort((a, b) => b.runs - a.runs || byString(a.r.id, b.r.id));
       let free = 0;
       lp.free.forEach((f, j) => {
         free += f * (result.x[j] ?? 0);
       });
-      out.set(key, { cost: Math.max(0, result.objective), steps, free: sig9(free) });
+      const fluid = isFluidKey(key) ? key : holds.get(key)?.fluid;
+      let top: { id: string; made: number } | undefined;
+      for (const { r, runs } of ran) {
+        if (isContainerMove(r, fluid, holds)) continue;
+        const made = sig9(runs * madeOf(r, key));
+        if (made > TINY && (top === undefined || made > top.made || (made === top.made && r.id < top.id))) top = { id: r.id, made };
+      }
+      const made: Standalone = { cost: Math.max(0, result.objective), steps: ran.length, free: sig9(free), recipes: ran.map(({ r }) => r.id) };
+      if (top !== undefined) made.top = top.id;
+      out.set(key, made);
     } else if (barred.size > 0 && (await solve(g, new Set())).status === 'optimal') {
-      out.set(key, { cost: Infinity, steps: 0, free: 0 });
+      out.set(key, { cost: Infinity, steps: 0, free: 0, recipes: [] });
     } else {
       out.set(key, undefined);
     }

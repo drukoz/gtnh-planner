@@ -8,7 +8,8 @@ import type { OreVein } from '../../../src/shared/types/pack.ts';
 import type { Plan, PlanSettings, PlanStep } from '../../../src/shared/types/plan.ts';
 
 const pack = miniGt();
-const S = (p: Partial<PlanSettings>): PlanSettings => ({ ...defaultSettings(), ...p });
+/** Supporting lines off (the default before plan 09): these cases buy derived materials. */
+const S = (p: Partial<PlanSettings>): PlanSettings => ({ ...defaultSettings(), routeDerived: false, ...p });
 /** An overworld vein of one material. */
 const vein = (name: string, material: string): OreVein => ({ name, dims: ['overworld'], kind: 'vein', weight: 1, minY: 0, maxY: 255, size: 1, density: 1,
   materials: { primary: material, secondary: material, between: material, sporadic: material } });
@@ -128,8 +129,9 @@ describe('planLine', () => {
     });
     const p = await planLine(steel, S({ target: 'steel_plate@0', tier: 1 }), emptyContext());
     expect(p.rawInputs.map((r) => [r.key, r.leafClass])).toEqual([['steel@0', 'derived']]);
+    // Fix spec R7: the source names the chain the purchase stands for, and the warning points at supporting lines.
     expect(p.warnings).toContainEqual({ code: 'derived-leaf', key: 'steel@0',
-      text: 'Steel Ingot is not mined anywhere you can reach; it is made by Alloy Smelter from Iron Ingot. Turn on "plan derived materials" to include that chain.' });
+      text: 'Steel Ingot is not mined anywhere you can reach; it is made by Alloy Smelter from Iron Ingot (1 recipe in all). Plan them as supporting lines to include their chains.' });
     const routed = await planLine(steel, S({ target: 'steel_plate@0', tier: 1, routeDerived: true }), emptyContext());
     expect(routed.rawInputs.map((r) => [r.key, r.leafClass])).toEqual([['iron@0', 'direct']]);
     expect(routed.warnings.map((w) => w.code)).not.toContain('derived-leaf');
@@ -207,7 +209,7 @@ describe('planLine', () => {
     const plan = await planLine(p, S({ target: 'widget@0', tier: 1 }), emptyContext());
     expect(plan.rawInputs.map((r) => [r.key, r.leafClass])).toEqual([['redalloy@0', 'derived'], ['steel@0', 'derived']]);
     expect(plan.warnings.filter((w) => w.code === 'derived-leaf')).toEqual([{ code: 'derived-leaf', key: 'redalloy@0',
-      text: 'Red Alloy Ingot and Steel Ingot are not mined anywhere you can reach; the line buys them made from other materials (see their sources). Turn on "plan derived materials" to include their chains.' }]);
+      text: 'Red Alloy Ingot and Steel Ingot are not mined anywhere you can reach; the line buys them made from other materials (see their sources). Plan them as supporting lines to include their chains.' }]);
   });
   it('never prices a derived material the cost model did not walk below what its own chain costs', async () => {
     // Plates bend from steel (made from iron and coal), press from iron, or alloy-smelt from Magnetic Steel (2 steel per

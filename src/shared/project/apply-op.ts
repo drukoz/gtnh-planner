@@ -23,24 +23,35 @@ const MARK_ROW = /^(build|run|step):.{1,300}$/;
 const ROTATIONS: readonly unknown[] = [0, 90, 180, 270];
 const LOGISTICS_MODES: readonly unknown[] = Object.values(LogisticsMode);
 
+/**
+ * The version of the defaults new settings are made under (`PlanSettings.settingsVersion`, architecture §11.32): 2 since
+ * supporting lines (`routeDerived: true`) became the default (plan 09). Settings stored before it read as version 1.
+ */
+export const SETTINGS_VERSION = 2;
+/** What `normalizeSettings` gives settings stored before `settingsVersion` existed. */
+const FIRST_SETTINGS_VERSION = 1;
+
 export function defaultSettings(): PlanSettings {
   return {
     target: null, mode: 'rate', amount: 1, per: 'min', tier: null, dims: { policy: 'progression', overrides: {} },
-    routeDerived: false, logistics: 'direct', costOverrides: {}, stopItems: [], expandItems: [], recipeChoice: {},
+    routeDerived: true, logistics: 'direct', costOverrides: {}, stopItems: [], expandItems: [], recipeChoice: {},
     machineTier: {}, excludedCategories: [...DEFAULT_EXCLUDED_CATEGORIES], coilHeat: null, automateCrafting: false,
-    avoid: [], declineReuse: [],
+    avoid: [], declineReuse: [], settingsVersion: SETTINGS_VERSION,
   };
 }
 
 /**
  * Fills the fields an older stored project lacks (later plans add settings), `dims` field by field, and drops repeated
- * avoid entries.
+ * avoid entries. A missing `settingsVersion` is 1, not the default: the project was stored before it, and the server
+ * switches such projects to the new defaults once (`ProjectStore.migrateSettings`); every stored value, a stored
+ * `routeDerived: false` among them, is kept.
  */
 export function normalizeSettings(s: Partial<PlanSettings> | undefined): PlanSettings {
   const defaults = defaultSettings();
   const merged = { ...defaults, ...definedOnly(s ?? {}) };
   merged.dims = { ...defaults.dims, ...definedOnly(s?.dims ?? {}) };
   merged.avoid = withoutRepeats(merged.avoid);
+  if (s?.settingsVersion === undefined) merged.settingsVersion = FIRST_SETTINGS_VERSION;
   return merged;
 }
 
@@ -152,6 +163,9 @@ const SETTING_CHECKS: { readonly [K in keyof PlanSettings]-?: Check } = {
   avoid: (v) => (Array.isArray(v) && v.length <= MAX_AVOID_ENTRIES && v.every((x) => isStringOfLength(x, 1, MAX_AVOID_ENTRY_LENGTH))
     ? null : `avoid must be a list of at most ${MAX_AVOID_ENTRIES} entries of 1 to ${MAX_AVOID_ENTRY_LENGTH} characters`),
   declineReuse: (v) => (Array.isArray(v) && v.every((x) => Number.isSafeInteger(x)) ? null : 'declineReuse must be a list of whole numbers'),
+  // Never back below the current version: a project switched to the new defaults stays switched.
+  settingsVersion: (v) => (Number.isSafeInteger(v) && (v as number) >= SETTINGS_VERSION
+    ? null : `settingsVersion must be a whole number of at least ${SETTINGS_VERSION}`),
 };
 
 const SETTING_KEYS: ReadonlySet<string> = new Set(Object.keys(defaultSettings()));

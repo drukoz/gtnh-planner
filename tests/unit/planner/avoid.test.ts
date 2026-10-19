@@ -13,7 +13,8 @@ import type { Pack } from '../../../src/shared/types/pack.ts';
 import type { Plan, PlanSettings } from '../../../src/shared/types/plan.ts';
 
 const pack = miniGt();
-const S = (p: Partial<PlanSettings>): PlanSettings => ({ ...defaultSettings(), ...p });
+/** Supporting lines off (the default before plan 09): these cases buy derived materials. */
+const S = (p: Partial<PlanSettings>): PlanSettings => ({ ...defaultSettings(), routeDerived: false, ...p });
 /** Half a dust or ingot in GT's material units: 1x wires and cables. */
 const HALF = 1_814_400;
 

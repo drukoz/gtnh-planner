@@ -136,7 +136,7 @@ describe('buildBom', () => {
                 { id: 'bender-q', map: 'crafting', in: [['q@0', 2]], out: [['machine:2@0', 1]] }],
       worldgen: { veins: ['X', 'Y', 'P', 'Q'].map(vein) },
     });
-    const settings = { ...defaultSettings(), tier: 1, target: 't@0', stopItems: ['s@0'] };
+    const settings = { ...defaultSettings(), tier: 1, target: 't@0', stopItems: ['s@0'], routeDerived: false };
     const plan = await planLine(p, settings, emptyContextForTest());
     expect(plan.status).toBe('ok');
     expect(plan.rawInputs.map((r) => [r.key, r.leafClass])).toEqual([['d@0', 'derived'], ['s@0', 'stop']]);
