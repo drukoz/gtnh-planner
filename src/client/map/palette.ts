@@ -42,12 +42,15 @@ const NAME_RULES: ReadonlyArray<{ test: (name: string, id: string) => boolean; c
   { test: (name) => /casing/.test(name), color: [158, 158, 158] },
 ];
 
+/** The colour of the first name rule `ref` matches ("chisel:cobblestone" is stone grey), or null. */
+export function nameRuleColor(ref: BlockRef): Rgb | null {
+  const name = ref.id.slice(ref.id.indexOf(':') + 1).toLowerCase();
+  return NAME_RULES.find((rule) => rule.test(name, ref.id))?.color ?? null;
+}
+
 /** A colour for `ref` without any texture: its override, a name rule, else a stable hash colour of `id@meta`. */
 export function fallbackColor(ref: BlockRef): Rgb {
-  const override = OVERRIDE_COLORS[ref.id];
-  if (override !== undefined) return override;
-  const name = ref.id.slice(ref.id.indexOf(':') + 1).toLowerCase();
-  return NAME_RULES.find((rule) => rule.test(name, ref.id))?.color ?? hashColor(`${ref.id}@${ref.meta}`);
+  return OVERRIDE_COLORS[ref.id] ?? nameRuleColor(ref) ?? hashColor(`${ref.id}@${ref.meta}`);
 }
 
 export function packRgb(c: Rgb): number {
@@ -97,7 +100,12 @@ export async function layerPixels(layer: TextureLayer): Promise<LayerPixels | nu
 
 export interface PaletteDeps { faces(blocks: BlockRef[]): Promise<BlockFaces[]>; image(layer: TextureLayer): Promise<LayerPixels | null> }
 
-/** Override > average of the `up` face layers > the server's fallback when unresolved > the local fallback. */
+/**
+ * Override > average of the `up` face layers > the local fallback when resolved. Unresolved, a GT machine keeps the
+ * server's colour, its machine kind's (spec §3.8); any other block takes its name rule's colour before the server's
+ * (a hash colour, or the casing colour): chisel's cobblestone variants and the legacy `gregtech:gt.blockores` metas
+ * (RC15) are stone grey, not violet or teal.
+ */
 async function entryColor(ref: BlockRef, faces: BlockFaces | undefined, image: PaletteDeps['image']): Promise<Rgb> {
   const override = OVERRIDE_COLORS[ref.id];
   if (override !== undefined) return override;
@@ -109,7 +117,9 @@ async function entryColor(ref: BlockRef, faces: BlockFaces | undefined, image: P
   } catch {
     // a texture that failed to load, or layers of different sizes: no average
   }
-  return faces.resolved ? fallbackColor(ref) : faces.fallbackColor;
+  if (faces.resolved) return fallbackColor(ref);
+  if (ref.mteId !== undefined) return faces.fallbackColor;
+  return nameRuleColor(ref) ?? faces.fallbackColor;
 }
 
 /**
