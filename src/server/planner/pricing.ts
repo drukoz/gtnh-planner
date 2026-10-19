@@ -32,17 +32,17 @@ export interface LinePricing {
 }
 
 /**
- * Raw-material costs over a candidate graph built without pins and stop items and with derived base materials routed,
- * so every recipe of a good is an alternative, costs count raw material (not stop prices), and every derived material
- * the line may buy has the cost of making it (`makeLeafOracle`'s `derivedCost`). A stop item or derived material that
- * graph cannot make (nothing at the tier makes it, but the group already does, or gets it some other way) would cost
- * Infinity there and hide every recipe that uses it, the one the plan chose among them; such goods are leaves at their
- * stop price (key override, else price) instead.
+ * Raw-material costs over a candidate graph built without pins (of recipes or ingredient options) and stop items and
+ * with derived base materials routed, so every recipe of a good and every option of a slot is an alternative, costs
+ * count raw material (not stop prices), and every derived material the line may buy has the cost of making it
+ * (`makeLeafOracle`'s `derivedCost`). A stop item or derived material that graph cannot make (nothing at the tier makes
+ * it, but the group already does, or gets it some other way) would cost Infinity there and hide every recipe that uses
+ * it, the one the plan chose among them; such goods are leaves at their stop price (key override, else price) instead.
  */
 async function costModel(pack: Pack, settings: PlanSettings, basis: PlanBasis, target: StuffKey): Promise<CostModel> {
   const analyze = async (stopItems: StuffKey[]): Promise<CostModel> => {
     await yieldToEventLoop();
-    const s: PlanSettings = { ...settings, recipeChoice: {}, stopItems, routeDerived: true };
+    const s: PlanSettings = { ...settings, recipeChoice: {}, optionChoice: {}, stopItems, routeDerived: true };
     const graph = buildCandidates(pack, s, basis.env, makeLeafOracle(pack, s, basis.avail, basis.prices), [target]);
     return { graph, costs: await analyzeCosts(graph), stopItems };
   };
@@ -74,11 +74,19 @@ async function derivedCosts(
   for (const [key, made] of await standaloneCosts(model.graph, inModel, [target], containers)) if (made !== undefined) out.set(key, floored(key, made));
   if (own.length > 0) {
     await yieldToEventLoop();
-    const s: PlanSettings = { ...settings, recipeChoice: {}, stopItems: model.stopItems, routeDerived: true };
-    const alone = buildCandidates(pack, s, basis.env, makeLeafOracle(pack, s, basis.avail, basis.prices), own);
+    const alone = aloneGraph(pack, settings, basis, model, own);
     for (const [key, made] of await standaloneCosts(alone, own, [target], containers)) if (made !== undefined) out.set(key, floored(key, made));
   }
   return out;
+}
+
+/**
+ * The graph `keys` alone walk to, as the cost model walks (no pins, its stop items, derived materials routed): where goods
+ * the cost model's graph never reached are priced (`derivedCosts`; plan.ts prices ingredient options there).
+ */
+export function aloneGraph(pack: Pack, settings: PlanSettings, basis: PlanBasis, model: CostModel, keys: StuffKey[]): CandidateGraph {
+  const s: PlanSettings = { ...settings, recipeChoice: {}, optionChoice: {}, stopItems: model.stopItems, routeDerived: true };
+  return buildCandidates(pack, s, basis.env, makeLeafOracle(pack, s, basis.avail, basis.prices), keys);
 }
 
 /** The line's target when it has one the export knows (an item or a fluid), else null. */

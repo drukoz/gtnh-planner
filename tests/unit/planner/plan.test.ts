@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { miniGt } from '../../helpers/mini-gt.ts';
+import { MINI_GT, miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec } from '../../helpers/pack-spec.ts';
 import { planLine, emptyContext, settingsHash, planCacheKey, PlanCache, powerSummary, batchShortWarning } from '../../../src/server/planner/plan.ts';
 import { linePricing } from '../../../src/server/planner/pricing.ts';
@@ -262,12 +262,71 @@ describe('planLine', () => {
     const plan = await planLine(p, S({ target: 'thing@0', tier: 1, amount: 60, per: 'min' }), emptyContext());
     expect(plan.steps.map((s) => s.id)).toEqual(['bend', 'from-part']);
     expect(plan.rawInputs.map((r) => [r.key, r.leafClass])).toEqual([['alloy@0', 'derived']]);
-    expect(swaps(plan, 'from-part')).toEqual([['from-part', 1], ['from-p', 1.3], ['from-q', 1.5], ['from-r', 1.7]]);
+    // Controller ruling (every recipe that makes the product is listed): the fourth dust recipe, which the cost model
+    // pruned, too, at its estimate (19 S dust at 1 each per 10).
+    expect(swaps(plan, 'from-part')).toEqual([['from-part', 1], ['from-p', 1.3], ['from-q', 1.5], ['from-r', 1.7], ['from-s', 1.9]]);
     expect(swaps(plan, 'bend')).toEqual([['bend', 1]]);
-    // A pinned recipe the cost model pruned (the fourth dust recipe) is the one in use, so it is listed too.
+    expect(plan.steps.find((s) => s.id === 'from-part')?.ways).toEqual({ total: 5, usable: 5 });
+    // A pinned recipe the cost model pruned (the fourth dust recipe) is the one in use; Part, which neither graph walks
+    // now, is listed at its estimate (one Part at its price).
     const pinned = await planLine(p, S({ target: 'thing@0', tier: 1, amount: 60, per: 'min', recipeChoice: { 'thing@0': 'from-s' } }), emptyContext());
     expect(pinned.steps.map((s) => s.id)).toEqual(['from-s']);
-    expect(swaps(pinned, 'from-s')).toEqual([['from-p', 1.3], ['from-q', 1.5], ['from-r', 1.7], ['from-s', 1.9]]);
+    expect(swaps(pinned, 'from-s')).toEqual([['from-part', 1], ['from-p', 1.3], ['from-q', 1.5], ['from-r', 1.7], ['from-s', 1.9]]);
+  });
+  it('lists every way to make the product, saying why the group cannot use the others', async () => {
+    // Controller rulings (plan 09, "show all ways to make the output"): a Widget assembled at LV, MV or HV, in a
+    // recycling recipe (excluded by default), or from Titanium Dust, which only the Moon has. At LV one is usable and
+    // four are greyed, each with its reason; usable first, then the rest, each group by raw cost per unit, then id.
+    const p = packFromSpec({
+      ...MINI_GT,
+      items: [...MINI_GT.items!, { key: 't:widget@0', name: 'Widget' }],
+      recipes: [...MINI_GT.recipes!,
+        { id: 'widget-lv', map: 'gt.recipe.assembler', in: [['t:iron_plate@0', 2]], out: [['t:widget@0', 1]], eut: 16 },
+        { id: 'widget-mv', map: 'gt.recipe.assembler', in: [['t:iron_plate@0', 3]], out: [['t:widget@0', 1]], eut: 120 },
+        { id: 'widget-hv', map: 'gt.recipe.assembler', in: [['t:copper_ingot@0', 2]], out: [['t:widget@0', 1]], eut: 480 },
+        { id: 'widget-recycled', map: 'gt.recipe.assembler', in: [['t:iron_dust@0', 4]], out: [['t:widget@0', 1]], eut: 16, flags: { recycling: true } },
+        { id: 'widget-ti', map: 'gt.recipe.assembler', in: [['t:titanium_dust@0', 1]], out: [['t:widget@0', 1]], eut: 16 }],
+    });
+    const plan = await planLine(p, S({ target: 't:widget@0', tier: 1 }), emptyContext());
+    const step = plan.steps.find((s) => s.mainOutput === 't:widget@0')!;
+    expect(step.recipeId).toBe('widget-lv');
+    expect(step.ways).toEqual({ total: 5, usable: 1 });
+    expect(step.alternatives.map((a) => [a.recipeId, a.rawCost, a.unusable])).toEqual([
+      ['widget-lv', 2, undefined],
+      ['widget-ti', 1, ['needs Moon (T1 rocket)']],
+      ['widget-hv', 2, ['needs HV (your tier is LV)']],
+      ['widget-mv', 3, ['needs MV (your tier is LV)']],
+      ['widget-recycled', 4, ['excluded: recycling (see Settings)']],
+    ]);
+    // Every row says what it takes, named in the plan.
+    expect(step.alternatives.find((a) => a.recipeId === 'widget-ti')?.inputs).toEqual([{ key: 't:titanium_dust@0', amount: 1 }]);
+    expect(plan.names?.['t:titanium_dust@0']).toBe('Titanium Dust');
+    // At MV the MV recipe is usable too.
+    const mv = (await planLine(p, S({ target: 't:widget@0', tier: 2 }), emptyContext())).steps.find((s) => s.mainOutput === 't:widget@0')!;
+    expect(mv.ways).toEqual({ total: 5, usable: 2 });
+    expect(mv.alternatives.filter((a) => a.unusable === undefined).map((a) => a.recipeId).sort()).toEqual(['widget-lv', 'widget-mv']);
+  });
+  it('leaves display-only and duplicate recipes out of the swap list and names a machine nothing builds', async () => {
+    // A fake (display-only) recipe and the vanilla furnace's copy of a smelting recipe the electric furnace runs are no
+    // ways of their own; a recipe of a multiblock whose controller nothing makes needs a machine nothing can build; one
+    // whose ingredient only an MV recipe makes (Titanium Plate, bent at 120 EU/t) needs MV.
+    const p = packFromSpec({
+      ...MINI_GT,
+      items: [...MINI_GT.items!, { key: 't:widget@0', name: 'Widget' }],
+      recipes: [...MINI_GT.recipes!,
+        { id: 'widget-lv', map: 'gt.recipe.assembler', in: [['t:iron_plate@0', 2]], out: [['t:widget@0', 1]], eut: 16 },
+        { id: 'widget-shown', map: 'gt.recipe.assembler', in: [['t:redstone@0', 1]], out: [['t:widget@0', 1]], eut: 16, flags: { fake: true } },
+        { id: 'widget-ebf', map: 'gt.recipe.blastfurnace', in: [['t:iron_dust@0', 1]], out: [['t:widget@0', 1]], eut: 30 },
+        { id: 'widget-smelt', map: 'gt.recipe.furnace', source: 'derived', in: [['t:copper_ingot@0', 3]], out: [['t:widget@0', 1]], eut: 4, dur: 128 },
+        { id: 'widget-furnace', map: 'furnace', in: [['t:copper_ingot@0', 3]], out: [['t:widget@0', 1]], dur: 200 },
+        { id: 'widget-plate', map: 'gt.recipe.assembler', in: [['t:titanium_plate@0', 1]], out: [['t:widget@0', 1]], eut: 16 }],
+    });
+    const plan = await planLine(p, S({ target: 't:widget@0', tier: 1 }), emptyContext());
+    const step = plan.steps.find((s) => s.mainOutput === 't:widget@0')!;
+    expect(step.ways).toEqual({ total: 4, usable: 2 });
+    expect(step.alternatives.map((a) => [a.recipeId, a.unusable])).toEqual([
+      ['widget-lv', undefined], ['widget-smelt', undefined], ['widget-ebf', ['needs a machine nothing can build here']],
+      ['widget-plate', ['needs MV (your tier is LV)']]]);
   });
   it('says when whole crafts leave a Make N batch short', () => {
     expect(batchShortWarning(pack, [], 't:circuit@0', 10)).toEqual([]);

@@ -140,7 +140,7 @@ describe('pack routes: details', () => {
     expect(await (await s.request('/api/pack/search?q=iron&limit=0')).json()).toHaveLength(1);
     expect(await (await s.request('/api/pack/search?q=iron&limit=abc')).json()).toHaveLength(2);
   });
-  it('summarizes recipes: crafting, furnace, a map without machines, the first ore-dict option, fake recipes', () => {
+  it('summarizes recipes: crafting, furnace, a map without machines, every ore-dict option, fake recipes', () => {
     const p = packFromSpec({
       items: [{ key: 't:plank@0', name: 'Plank' }, { key: 't:plank@1', name: 'Birch Plank' }],
       maps: [{ id: 'gt.recipe.lathe', name: 'Lathe' }],
@@ -151,11 +151,14 @@ describe('pack routes: details', () => {
       ],
     });
     const sum = (id: string) => summarizeRecipe(p, p.recipeById.get(id)!);
+    // An ore-dictionary slot shows its first option and lists all of them (controller ruling: every option stays visible).
     expect(sum('stick')).toEqual({
       id: 'stick', source: 'crafting', maps: ['crafting'], machineName: 'Crafting table', tier: 1, euPerTick: 0, durationTicks: 0,
-      inputs: [{ key: 't:plank@0', name: 'Plank', amount: 2, consumed: true }],
+      inputs: [{ key: 't:plank@0', name: 'Plank', amount: 2, consumed: true,
+        options: [{ key: 't:plank@0', name: 'Plank', amount: 2 }, { key: 't:plank@1', name: 'Birch Plank', amount: 2 }] }],
       outputs: [{ key: 't:stick@0', name: 't:stick@0', amount: 4, chance: 1 }],
     });
+    expect(sum('char').inputs).toEqual([{ key: 't:plank@0', name: 'Plank', amount: 1, consumed: true }]);
     expect(sum('char').machineName).toBe('Furnace');
     expect(sum('lathe')).toMatchObject({ machineName: 'Lathe', tier: 2, fake: true, outputs: [{ chance: 0.5 }] });
   });

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { miniGt } from '../../helpers/mini-gt.ts';
-import { pickMachine, planSteps, buildFlows, ownedMachineMap, recipeCircuit, emptyContainers, type StepLine } from '../../../src/server/planner/machines.ts';
-import { buildCandidates, type LeafOracle, type PlanEnv } from '../../../src/server/planner/candidates.ts';
+import { pickMachine, planSteps, buildFlows, ownedMachineMap, recipeCircuit, emptyContainers, stepInputs, type StepLine } from '../../../src/server/planner/machines.ts';
+import { buildCandidates, virtualKey, type LeafOracle, type PlanEnv } from '../../../src/server/planner/candidates.ts';
 import { computeAvailability, reachableDims } from '../../../src/server/planner/availability.ts';
 import { makeLeafOracle, makePrices } from '../../../src/server/planner/costs.ts';
 import { solveLine } from '../../../src/server/planner/solve.ts';
@@ -142,6 +142,29 @@ describe('more machine and flow cases', () => {
     expect(cells.steps.map((s) => [s.id, s.mainOutput])).toEqual([['make-cell', 't:empty_cell@0'], ['pack', 'u@0']]);
     const target = await planned(spec, 't:empty_cell@0', 1, 1, {}, value);
     expect(target.steps.map((s) => [s.id, s.mainOutput])).toEqual([['make-cell', 't:empty_cell@0']]);
+  });
+  it('lists every option a slot used', () => {
+    // Fix spec R9: the solder slot of a circuit recipe split 36/64 between soldering alloy and tin lists both, each with
+    // its share of the slot's amount; lead, which no conversion ran, is not listed.
+    const options: Array<[string, number]> = [['fluid:molten.solder', 72], ['fluid:molten.tin', 144], ['fluid:molten.lead', 288]];
+    const p = packFromSpec({ recipes: [{ id: 'ca', map: 'm', in: [['t:part@0', 1], { any: options }], out: [['t:ec@0', 1]] }] });
+    const r = p.recipeById.get('ca')!;
+    const slot = r.inputs.find((ing) => ing.options.length > 1)!;
+    const line: StepLine = {
+      targets: new Set(['t:ec@0']), used: new Map(), valueOf: undefined,
+      conversions: new Map([[virtualKey(slot.options), new Map([['fluid:molten.solder', 0.36], ['fluid:molten.tin', 0.64]])]]),
+    };
+    expect(stepInputs(r, line)).toEqual([
+      { key: 't:part@0', amount: 1, chance: 1 },
+      { key: 'fluid:molten.solder', amount: 25.92, chance: 0.36 },
+      { key: 'fluid:molten.tin', amount: 92.16, chance: 0.64 },
+    ]);
+    // One option used: that option at the slot's own amount and chance; none at all: the first by key, whole.
+    const tinOnly = { ...line, conversions: new Map([[virtualKey(slot.options), new Map([['fluid:molten.tin', 2], ['fluid:molten.lead', 0]])]]) };
+    expect(stepInputs(r, tinOnly).slice(1)).toEqual([{ key: 'fluid:molten.tin', amount: 144, chance: 1 }]);
+    expect(stepInputs(r, { ...line, conversions: new Map() }).slice(1)).toEqual([{ key: 'fluid:molten.lead', amount: 288, chance: 1 }]);
+    // A slot the line pins (`optionPins`) is that option, whatever ran.
+    expect(stepInputs(r, { ...line, optionPins: new Map([['ca#100', 'fluid:molten.lead']]) }).slice(1)).toEqual([{ key: 'fluid:molten.lead', amount: 288, chance: 1 }]);
   });
   it('lists a good that fills several slots of a recipe once, with the amounts added up', async () => {
     // A real export gives each crafting-grid slot its own ingredient of amount 1 (recipes.ts craftingRecipe).

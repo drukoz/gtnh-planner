@@ -199,13 +199,27 @@ function convertEnds(r: LpRecipe): { virtual: StuffKey; option: StuffKey } | nul
   return virtual === undefined || option === undefined ? null : { virtual, option };
 }
 
-/** For an ore-dictionary slot, the option its conversions used most (ties: the smallest key). */
-function busiestOption(options: readonly Option[], conversions: ReadonlyMap<StuffKey, number> | undefined): Option {
-  const runs = (o: Option): number => conversions?.get(o.key) ?? 0;
-  const sorted = [...options].sort((a, b) => byString(a.key, b.key));
-  let best = sorted[0] as Option;
-  for (const option of sorted) if (runs(option) > runs(best)) best = option;
-  return best;
+/** One option of a consumed slot and its share of the slot in the line (0..1). */
+export interface OptionShare { option: Option; share: number }
+
+/**
+ * Every option of consumed slot `ing` of `r` the line may take (`keptOptions`: none the graph avoids), by key, each with
+ * its share of the slot (fix spec R9): the runs of the convert recipe that filled the slot's virtual good from it over
+ * those of all of them. A slot the graph pins (`StepLine.optionPins`) is its pin alone, the others at 0; a slot of one
+ * option is that option. When no conversion of the slot ran, the first option by key takes it whole.
+ */
+export function optionShares(r: Recipe, ing: Ingredient, line: StepLine): OptionShare[] {
+  const kept = keptOptions(ing.options, line.avoid);
+  const sorted = [...kept].sort((a, b) => byString(a.key, b.key));
+  const pin = line.optionPins?.get(`${r.id}#${ing.slot}`);
+  if (pin !== undefined && sorted.some((o) => o.key === pin)) return sorted.map((option) => ({ option, share: option.key === pin ? 1 : 0 }));
+  if (sorted.length <= 1) return sorted.map((option) => ({ option, share: 1 }));
+  // A slot with several options is the virtual good candidates.ts made for it.
+  const runs = line.conversions.get(virtualKey(kept));
+  const ran = (o: Option): number => Math.max(0, runs?.get(o.key) ?? 0);
+  let total = 0;
+  for (const option of sorted) total += ran(option);
+  return sorted.map((option, i) => ({ option, share: total > 0 ? sig9(ran(option) / total) : i === 0 ? 1 : 0 }));
 }
 
 /** Virtual good → option → runs of the convert recipe that fills it from that option. */
@@ -226,26 +240,27 @@ interface InputTotal { expected: number; nominal: number; chance: number; sameCh
  * it first fills: a good in several slots (a real crafting recipe has one ingredient of amount 1 per grid slot,
  * recipes.ts) is added up. Its `chance` is the slots' chance when they share one, else the expected amount over the
  * nominal one. Not-consumed inputs are one-off items of the machine (Task 13). A slot is read as the graph has it, so
- * without the options the line avoids (`keptOptions`, ruling R7).
+ * without the options the line avoids (`keptOptions`, ruling R7) and with its pin (`optionPins`). An ore-dictionary slot
+ * lists every option it took (fix spec R9, `optionShares`), each at its share of the slot: `amount × chance × share`,
+ * with chance `chance × share` when the slot is split.
  */
-function stepInputs(r: Recipe, line: StepLine): Product[] {
+export function stepInputs(r: Recipe, line: StepLine): Product[] {
   const totals = new Map<StuffKey, InputTotal>();
   for (const ing of r.inputs) {
     if (!ing.consumed) continue;
-    const options = keptOptions(ing.options, line.avoid);
-    if (options.length === 0) continue;
-    // A slot with one option is that good itself; a longer one is the virtual good candidates.ts made for it.
-    const option = options.length === 1
-      ? (options[0] as Option)
-      : busiestOption(options, line.conversions.get(virtualKey(options)));
-    const expected = option.amount * ing.chance;
-    const total = totals.get(option.key);
-    if (total === undefined) {
-      totals.set(option.key, { expected, nominal: option.amount, chance: ing.chance, sameChance: true });
-    } else {
-      total.expected += expected;
-      total.nominal += option.amount;
-      total.sameChance &&= total.chance === ing.chance;
+    for (const { option, share } of optionShares(r, ing, line)) {
+      if (share <= 0) continue;
+      const whole = share === 1;
+      const expected = whole ? option.amount * ing.chance : sig9(option.amount * ing.chance * share);
+      const chance = whole ? ing.chance : sig9(ing.chance * share);
+      const total = totals.get(option.key);
+      if (total === undefined) {
+        totals.set(option.key, { expected, nominal: option.amount, chance, sameChance: true });
+      } else {
+        total.expected += expected;
+        total.nominal += option.amount;
+        total.sameChance &&= total.chance === chance;
+      }
     }
   }
   return [...totals].map(([key, t]) => ({
@@ -335,6 +350,9 @@ export interface StepLine {
   valueOf?: (key: StuffKey) => number;
   /** The empty containers of the pack (`emptyContainers`): a recipe handing one back is not there for it. */
   empties?: ReadonlySet<StuffKey>;
+  // optional addition (fix spec R9)
+  /** The ingredient options the graph pins (`CandidateGraph.optionPins`): `<recipe id>#<slot>` → the option it takes. */
+  optionPins?: ReadonlyMap<string, StuffKey>;
 }
 
 /**
@@ -348,6 +366,7 @@ export function stepLine(graph: CandidateGraph, runs: ReadonlyMap<string, number
   };
   if (graph.avoid !== undefined) line.avoid = graph.avoid;
   if (value?.empties !== undefined) line.empties = value.empties;
+  if (graph.optionPins !== undefined) line.optionPins = graph.optionPins;
   return line;
 }
 

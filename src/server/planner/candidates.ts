@@ -72,6 +72,11 @@ export interface CandidateGraph {
    * ore-dictionary slots) and the not-consumed ones its recipes hold (`LpRecipe.nonConsumed`) alike.
    */
   avoid?: ReadonlySet<StuffKey>;
+  /**
+   * The ingredient options the graph pins (`PlanSettings.optionChoice`, fix spec R9), when there are any:
+   * `<recipe id>#<slot>` → the option that slot takes, the only one the graph has for it.
+   */
+  optionPins?: ReadonlyMap<string, StuffKey>;
 }
 
 const MAX_TIER = V.length - 1;
@@ -667,6 +672,60 @@ function settleSteps(
   return steps;
 }
 
+/** The digits of `Ingredient.slot` in a key of `PlanSettings.optionChoice` (`<recipe id>#<slot>`). */
+const PIN_SLOT = /^\d{1,4}$/;
+
+/** The option pins of a graph (`optionPinsOf`). */
+interface OptionPinning {
+  /** Each consumed slot a pin holds, by its ingredient: the one option the graph takes for it. */
+  slots: ReadonlyMap<Ingredient, Option>;
+  /** The pins honoured, by `<recipe id>#<slot>` (`CandidateGraph.optionPins`). */
+  pins: ReadonlyMap<string, StuffKey>;
+  warnings: PlanWarning[];
+}
+
+/**
+ * The pins of `settings.optionChoice` a graph honours (fix spec R9, ruling P28), in key order: each names a consumed slot
+ * of a recipe (`<recipe id>#<Ingredient.slot>`) and an option it holds, so that slot takes that option and no other. A
+ * pin is ignored, with one `stale-option` warning (`key` = the pin's key), when its recipe is gone, the recipe has no
+ * consumed slot of that number, the slot no such option (a re-export changed it), or the avoid list matches the option
+ * (the avoid list wins over a pin, as over a pinned recipe). A pin of a recipe the line never runs costs nothing.
+ */
+function optionPinsOf(pack: Pack, settings: PlanSettings, avoid: ReadonlySet<StuffKey> | undefined): OptionPinning {
+  const slots = new Map<Ingredient, Option>();
+  const pins = new Map<string, StuffKey>();
+  const warnings: PlanWarning[] = [];
+  const choice = settings.optionChoice ?? {};
+  for (const pin of Object.keys(choice).sort(byString)) {
+    const key = choice[pin] as StuffKey;
+    const at = pin.lastIndexOf('#');
+    const r = at < 0 ? undefined : pack.recipeById.get(pin.slice(0, at));
+    const digits = pin.slice(at + 1);
+    const slot = PIN_SLOT.test(digits) ? Number(digits) : Number.NaN;
+    const stale = (text: string): void => {
+      warnings.push({ code: 'stale-option', key: pin, text });
+    };
+    if (r === undefined) {
+      stale(`${pack.nameOf(key)} was pinned for an ingredient of a recipe this pack no longer has; nothing is pinned there`);
+      continue;
+    }
+    const product = pack.nameOf(r.outputs[0]?.key ?? r.id);
+    const held = r.inputs.flatMap((ing): Array<[Ingredient, Option]> => {
+      const option = ing.consumed && ing.slot === slot ? ing.options.find((o) => o.key === key) : undefined;
+      return option === undefined ? [] : [[ing, option]];
+    });
+    if (held.length === 0) {
+      stale(`${product}: ${pack.nameOf(key)} is no longer an option of the pinned ingredient; the planner chooses one`);
+    } else if (avoid?.has(key) === true) {
+      stale(`${product}: the pinned ingredient ${pack.nameOf(key)} is on the avoid list; using another option that avoids it`);
+    } else {
+      for (const [ing, option] of held) slots.set(ing, option);
+      pins.set(pin, key);
+    }
+  }
+  return { slots, pins, warnings };
+}
+
 /** Optional parts of `buildCandidates`. */
 export interface CandidateOptions {
   /** The recipe cap (default `MAX_RECIPES`). */
@@ -692,7 +751,9 @@ export interface CandidateOptions {
  * of fewest steps and drops one far longer than that (`MAX_EXTRA_PRODUCER_STEPS`) unless it is the cheapest; equal
  * estimates go to canonical goods (`canonicalRank`). D14: a filled container a kept recipe makes brings the recipe that
  * empties it. Goods of `opts.avoid` are never bought, consumed or held (`CandidateOptions.avoid`), in the estimate as in
- * the graph.
+ * the graph. Fix spec R9: an ore-dictionary slot `settings.optionChoice` pins takes only its pinned option, in the
+ * estimate as in the graph, so the walk plans that option's chain however dear it is (`optionPinsOf`; the pins it
+ * ignores warn `stale-option`).
  */
 export function buildCandidates(
   pack: Pack, settings: PlanSettings, env: PlanEnv, leaf: LeafOracle, targets: StuffKey[], opts: CandidateOptions = {},
@@ -704,7 +765,8 @@ export function buildCandidates(
   const goods = new Map<StuffKey, GoodInfo>();
   const recipes = new Map<string, LpRecipe>();
   const blocked: CandidateGraph['blocked'] = new Map();
-  const warnings: PlanWarning[] = [];
+  const pinning = optionPinsOf(pack, settings, avoid);
+  const warnings: PlanWarning[] = [...pinning.warnings];
   const acceptance = new Map<string, Acceptance>();
   const queue: StuffKey[] = [];
   const queued = new Set<StuffKey>();
@@ -750,7 +812,10 @@ export function buildCandidates(
     if (recipes.size >= maxRecipes) full = true;
     return !full;
   };
-  const optionsOf: SlotOptions = (ing) => keptOptions(ing.options, avoid);
+  const optionsOf: SlotOptions = (ing) => {
+    const pinned = pinning.slots.get(ing);
+    return pinned === undefined ? keptOptions(ing.options, avoid) : [pinned];
+  };
   /** An accepted recipe and the map it runs on here. */
   type Producer = { r: Recipe; mapId: string };
   const emptiers = new Map<StuffKey, Producer | null>();
@@ -975,5 +1040,6 @@ export function buildCandidates(
     targets: [...targets], recipes: [...recipes.values()].sort((a, b) => byString(a.id, b.id)), goods, blocked, warnings, truncated: full,
   };
   if (avoid !== undefined) graph.avoid = avoid;
+  if (pinning.pins.size > 0) graph.optionPins = pinning.pins;
   return graph;
 }

@@ -81,8 +81,28 @@ describe('defaultSettings / normalizeSettings', () => {
     // A project stored before plan 09: no stepCharge, haveSupply or settingsVersion, supporting lines off. Normalizing
     // fills the new defaults and keeps its own choice (the server switches routeDerived once, ruling P10).
     const s = normalizeSettings({ target: 't:x@0', routeDerived: false } as never);
-    expect(s).toMatchObject({ stepCharge: 0.02, haveSupply: [], routeDerived: false, settingsVersion: 1 });
+    expect(s).toMatchObject({ stepCharge: 0.02, haveSupply: [], optionChoice: {}, routeDerived: false, settingsVersion: 1 });
     expect(normalizeSettings({ stepCharge: 0.15 } as never).stepCharge).toBe(0.15);
+  });
+});
+
+// Pinned ingredient options (plan 09 Task 5; fix spec R9, §3).
+describe('optionChoice', () => {
+  const optionOp = (optionChoice: unknown) => ({ op: 'settings', patch: { optionChoice } });
+  it('is empty by default and for an older stored project', () => {
+    expect(defaultSettings().optionChoice).toEqual({});
+    expect(normalizeSettings({ target: 't:x@0' } as never).optionChoice).toEqual({});
+    expect(normalizeSettings({ optionChoice: { 'r1#100': 'fluid:molten.tin' } } as never).optionChoice).toEqual({ 'r1#100': 'fluid:molten.tin' });
+  });
+  it('takes <recipe id>#<slot> keys and option keys of 1 to 300 characters', () => {
+    expect(validateOp(optionOp({ 'r1#100': 'fluid:molten.tin' }))).toBeNull();
+    expect(validateOp(optionOp({}))).toBeNull();
+    expect(validateOp(optionOp({ [`${'r'.repeat(100)}#9999`]: 'x'.repeat(300) }))).toBeNull();
+    for (const key of ['nohash', 'r#x', '#1', 'r#12345', `${'r'.repeat(101)}#1`, 'a#b#1']) {
+      expect(validateOp(optionOp({ [key]: 'fluid:molten.tin' })), key).toEqual(expect.any(String));
+    }
+    for (const value of ['x'.repeat(301), '', 5, null]) expect(validateOp(optionOp({ 'r1#100': value })), String(value)).toEqual(expect.any(String));
+    for (const v of [null, 'r1#100', ['r1#100']]) expect(validateOp(optionOp(v)), JSON.stringify(v)).toEqual(expect.any(String));
   });
 });
 

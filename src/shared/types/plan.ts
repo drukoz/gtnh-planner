@@ -78,6 +78,33 @@ export interface PlanSettings {
    * `normalizeSettings()` always fill it; readers use `?? DEFAULT_STEP_CHARGE`.
    */
   stepCharge?: number;
+  // optional addition
+  /**
+   * Pinned ingredient options (fix spec R9, architecture §11.35): `<recipe id>#<Ingredient.slot>` → the option that slot
+   * takes, so the line plans that option (and its chain) for it and no other. A pin whose recipe, slot or option is gone,
+   * or whose option the avoid list matches, is ignored with a `stale-option` warning. `defaultSettings()` and
+   * `normalizeSettings()` always fill it; readers use `?? {}`.
+   */
+  optionChoice?: Record<string, StuffKey>;
+}
+
+/**
+ * One multi-option ingredient slot of a step's recipe (fix spec R9, architecture §11.35): every option the line may take
+ * (the avoid list's aside), those the planner's walk left out too, each with what one run would take of it, its share of
+ * the slot in this plan (0: not used by this plan), its raw material per run and the recipe steps of its own chain.
+ */
+export interface StepOption {
+  /** `Ingredient.slot`: with the recipe id, the key of `PlanSettings.optionChoice`. */
+  slot: number;
+  /** The option `PlanSettings.optionChoice` pins for this slot, when the plan honours that pin. */
+  pinned?: StuffKey;
+  choices: Array<{
+    key: StuffKey; amount: number /* per run, expected */; share: number /* 0..1 in this plan */;
+    rawPerRun: number /* amount × its raw cost per unit */; steps: number /* its standalone chain's recipes; 0 for a leaf */;
+    via?: string[] /* map names of that chain, at most 3 */;
+    /** Why the group cannot get this option here ("needs MV (your tier is LV)"), as a swap list says it; absent: it can. */
+    unusable?: string[];
+  }>;
 }
 
 /** One storage block holding some of a good (§11.20). */
@@ -109,9 +136,18 @@ export interface PlanStep {
   inputs: Product[]; outputs: Product[];   // per run, after chances (expected)
   alternatives: Array<{
     recipeId: string; rawCost: number; mapId: string;
-    // optional additions: what one run of the alternative takes and makes (first option per slot, summed per key, at
-    // most 4 each), named in `Plan.names`, so the swap list can tell recipes of one map apart
-    inputs?: Array<{ key: StuffKey; amount: number }>; outputs?: Array<{ key: StuffKey; amount: number }>;
+    // optional additions: what one run of the alternative takes and makes, named in `Plan.names`, so the swap list can
+    // tell recipes of one map apart: every consumed input (one-option slots summed per key; items before fluids, each
+    // largest first) and every output. An input that is an ore-dictionary slot of several options lists them all in
+    // `options` (its own key and amount are the first of them), shown as "72 L Molten Soldering Alloy / 144 L Molten Tin".
+    inputs?: Array<{ key: StuffKey; amount: number; options?: Array<{ key: StuffKey; amount: number }> }>;
+    outputs?: Array<{ key: StuffKey; amount: number }>;
+    /**
+     * Why the group cannot pick this recipe here, in plain words ("needs MV (your tier is LV)", "needs Moon (T1
+     * rocket)", "excluded: recycling (see Settings)", "needs a machine nothing can build here"); absent when it can.
+     * Usable recipes come first, then these, each group by raw cost per unit, then id (controller rulings, plan 09).
+     */
+    unusable?: string[];
   }>;
   handCraft: boolean; warnings: string[];
   // optional additions
@@ -130,6 +166,22 @@ export interface PlanStep {
    * water or lava, the fluid of the cells a compressor fills); absent for every other step.
    */
   supply?: StuffKey;
+  // optional addition
+  /** The multi-option ingredient slots of the step's recipe and what each option would cost (fix spec R9). */
+  options?: StepOption[];
+  // optional addition
+  /**
+   * The supporting line the step belongs to (fix spec R6, architecture §11.27): the derived material it ultimately serves
+   * and that material's name ("Red Alloy"); absent for a step of the main line.
+   */
+  line?: { key: StuffKey; name: string };
+  // optional addition
+  /**
+   * How many ways the export knows to make the main output (`total`: recipes that make it, less display-only and duplicate
+   * ones and those using a good the project avoids) and how many of them the group can pick here (`usable`);
+   * `alternatives` lists at most a few dozen of each: "14 ways to make Electronic Circuit: 2 you can use now".
+   */
+  ways?: { total: number; usable: number };
 }
 
 export interface PlanFlow { from: string /* step id | 'raw' */; to: string /* step id | 'out' | 'sink' */; key: StuffKey; perSecond: number }
@@ -142,6 +194,12 @@ export interface BomLine {
   children?: BomLine[];
   /** The "to build" list is shown in these groups (§11.13); a missing group counts as `machines`. */
   group?: 'machines' | 'power' | 'logistics' | 'one-off';
+  // optional addition
+  /**
+   * On a total of base materials (fix spec D15, architecture §11.36): the top-level build lines that need it, by key in
+   * the order of the lines, and how much each needs; the amounts add up to the total's `amount`.
+   */
+  neededFor?: Array<{ key: StuffKey; amount: number }>;
 }
 
 export interface BuildStep { id: string; order: number; text: string; pin?: number; kind: 'gather' | 'craft' | 'handcraft' | 'place' | 'power' | 'logistics' | 'configure' | 'test' }

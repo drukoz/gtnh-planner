@@ -13,6 +13,10 @@ export const MAX_AVOID_ENTRIES = 50;
 export const MAX_AVOID_ENTRY_LENGTH = 300;
 /** The largest `PlanSettings.stepCharge` (fix spec §3): a step must then save half the line's least raw material. */
 export const MAX_STEP_CHARGE = 0.5;
+/** Characters of a pinned option (`PlanSettings.optionChoice` values, fix spec §3). */
+export const MAX_OPTION_KEY_LENGTH = 300;
+/** `<recipe id>#<Ingredient.slot>`: the keys of `PlanSettings.optionChoice` (fix spec §3). */
+const OPTION_SLOT = /^[^#]{1,100}#\d{1,4}$/;
 
 const MAX_TIER = 14;
 const MAX_AMOUNT = 1e9;
@@ -39,6 +43,7 @@ export function defaultSettings(): PlanSettings {
     routeDerived: true, logistics: 'direct', costOverrides: {}, stopItems: [], expandItems: [], recipeChoice: {},
     machineTier: {}, excludedCategories: [...DEFAULT_EXCLUDED_CATEGORIES], coilHeat: null, automateCrafting: false,
     avoid: [], declineReuse: [], settingsVersion: SETTINGS_VERSION, haveSupply: [], stepCharge: DEFAULT_STEP_CHARGE,
+    optionChoice: {},
   };
 }
 
@@ -172,6 +177,9 @@ const SETTING_CHECKS: { readonly [K in keyof PlanSettings]-?: Check } = {
   haveSupply: stringList('haveSupply'),
   stepCharge: (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= MAX_STEP_CHARGE
     ? null : `stepCharge must be a number from 0 to ${MAX_STEP_CHARGE}`),
+  // A pin the pack no longer fits is kept and ignored with a warning (fix spec R9); only its shape is checked here.
+  optionChoice: (v) => (isRecord(v) && Object.entries(v).every(([slot, key]) => OPTION_SLOT.test(slot) && isStringOfLength(key, 1, MAX_OPTION_KEY_LENGTH))
+    ? null : `optionChoice keys must look like <recipe id>#<slot>, with options of 1 to ${MAX_OPTION_KEY_LENGTH} characters`),
 };
 
 const SETTING_KEYS: ReadonlySet<string> = new Set(Object.keys(defaultSettings()));

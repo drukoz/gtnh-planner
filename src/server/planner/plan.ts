@@ -8,25 +8,28 @@ import { formatNumber, formatRate } from '../../shared/format.ts';
 import { V, tierName } from '../../shared/gt/tiers.ts';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import { indexPlan, issueText, type PlanIssue } from '../../shared/plan/balance.ts';
-import type { DimensionInfo, Pack, Product, Recipe } from '../../shared/types/pack.ts';
+import type { DimensionInfo, Ingredient, Pack, Product, Recipe } from '../../shared/types/pack.ts';
 import {
   DEFAULT_STEP_CHARGE, type BomLine, type LeafClass, type Plan, type PlanContext, type PlanFlow, type PlanSettings, type PlanStep,
-  type PlanWarning, type PowerSummary, type RawInput, type SourceInfo,
+  type PlanWarning, type PowerSummary, type RawInput, type SourceInfo, type StepOption,
 } from '../../shared/types/plan.ts';
 import { isBaseItem, unlockText, type Availability } from './availability.ts';
 import { planBasis, resolveAvoid, settingsHash, type PlanBasis } from './basis.ts';
 import { buildBom } from './bom.ts';
 import {
-  acceptRecipe, buildCandidates, heldOption, keptOptions, usesAvoided, type CandidateGraph, type HeldAvoid, type LeafDecision,
-  type LeafOracle, type LpRecipe, type PlanEnv,
+  EXCLUSION_RULES, acceptRecipe, buildCandidates, heldOption, keptOptions, usesAvoided, type Acceptance, type CandidateGraph, type HeldAvoid,
+  type LeafDecision, type LeafOracle, type LpRecipe, type PlanEnv,
 } from './candidates.ts';
 import { analyzeCosts, type CostAnalysis } from './costs.ts';
-import { buildFlows, emptyContainers, planSteps, type StepLine } from './machines.ts';
+import { supportingLines } from './lines.ts';
+import { buildFlows, emptyContainers, optionShares, planSteps, stepLine, type OptionShare, type StepLine } from './machines.ts';
 import { makeN, wholeRuns } from './make-n.ts';
 import { yieldToEventLoop } from './lp.ts';
-import { linePricing, type CostModel, type LinePricing } from './pricing.ts';
+import { aloneGraph, linePricing, type CostModel, type LinePricing } from './pricing.ts';
 import { sig9 } from './round.ts';
-import { HAND_STEP_WEIGHT, MAX_NAMED_LOOP_RECIPES, solveLine, type Solution, type SolveOptions, type Standalone } from './solve.ts';
+import {
+  HAND_STEP_WEIGHT, MAX_NAMED_LOOP_RECIPES, solveLine, standaloneCosts, type Solution, type SolveOptions, type Standalone,
+} from './solve.ts';
 import { buildSteps } from './steps.ts';
 
 export { effectiveTier, settingsHash } from './basis.ts';
@@ -145,39 +148,173 @@ export class PlanCache {
   }
 }
 
-/** A swap list holds at most this many recipes (the one in use always among them). */
-const MAX_ALTERNATIVES = 20;
-/** Inputs and outputs listed per alternative. */
-const MAX_ALTERNATIVE_PARTS = 4;
+/**
+ * A swap list holds at most this many recipes the group can pick (the one in use always among them) and at most
+ * `MAX_UNUSABLE_ALTERNATIVES` it cannot (a pinned one always among them); `PlanStep.ways` counts them all. Controller
+ * rulings (plan 09): every way the export knows is listed, but on the 2.9 export a Wood Pulp step has 1,402 producers
+ * (674 usable at MV) and Copper Ingot 778, while an Electronic Circuit has 14, all of which fit.
+ */
+const MAX_ALTERNATIVES = 30;
+const MAX_UNUSABLE_ALTERNATIVES = 15;
+
+type Alternative = PlanStep['alternatives'][number];
+type AlternativeInput = NonNullable<Alternative['inputs']>[number];
+
+/** Items before fluids, each largest amount first, then by key: the order a swap-list row lists goods in. */
+function byPartOrder(a: { key: StuffKey; amount: number }, b: { key: StuffKey; amount: number }): number {
+  return Number(isFluidKey(a.key)) - Number(isFluidKey(b.key)) || b.amount - a.amount || byString(a.key, b.key);
+}
 
 /**
- * What one run of a recipe takes (first option of each consumed slot the line may take, `keptOptions`) and makes, summed
- * per key, largest first, at most 4.
+ * What one run of a recipe takes and makes, as its swap-list row shows it (controller rulings, plan 09): every consumed
+ * slot the line may take (`keptOptions`), a slot of one option summed with the others of that good, a slot of several
+ * as one entry that lists them all in its `options` (its key and amount are the first); and every output, summed per
+ * key. Items before fluids, each largest first (`byPartOrder`).
  */
 function recipeParts(
   pack: Pack, recipeId: string, avoid: ReadonlySet<StuffKey>,
-): { inputs: Array<{ key: StuffKey; amount: number }>; outputs: Array<{ key: StuffKey; amount: number }> } {
+): { inputs: AlternativeInput[]; outputs: Array<{ key: StuffKey; amount: number }> } {
   const r = pack.recipeById.get(recipeId);
-  const sum = (entries: Array<[StuffKey, number]>): Array<{ key: StuffKey; amount: number }> => {
+  if (r === undefined) return { inputs: [], outputs: [] };
+  const summed = (entries: ReadonlyArray<[StuffKey, number]>): Array<{ key: StuffKey; amount: number }> => {
     const totals = new Map<StuffKey, number>();
     for (const [key, amount] of entries) totals.set(key, (totals.get(key) ?? 0) + amount);
-    return [...totals].map(([key, amount]) => ({ key, amount: round6(amount) }))
-      .sort((a, b) => b.amount - a.amount || byString(a.key, b.key)).slice(0, MAX_ALTERNATIVE_PARTS);
+    return [...totals].map(([key, amount]) => ({ key, amount: round6(amount) }));
   };
-  if (r === undefined) return { inputs: [], outputs: [] };
+  const single: Array<[StuffKey, number]> = [];
+  const several: AlternativeInput[] = [];
+  for (const ing of r.inputs) {
+    const options = ing.consumed ? keptOptions(ing.options, avoid) : [];
+    const first = options[0];
+    if (first === undefined) continue;
+    if (options.length === 1) single.push([first.key, first.amount]);
+    else several.push({ key: first.key, amount: round6(first.amount), options: options.map((o) => ({ key: o.key, amount: round6(o.amount) })) });
+  }
   return {
-    inputs: sum(r.inputs.flatMap((ing): Array<[StuffKey, number]> => {
-      const first = keptOptions(ing.options, avoid)[0];
-      return ing.consumed && first !== undefined ? [[first.key, first.amount]] : [];
-    })),
-    outputs: sum(r.outputs.map((p): [StuffKey, number] => [p.key, p.amount])),
+    inputs: [...summed(single), ...several].sort(byPartOrder),
+    outputs: summed(r.outputs.map((p): [StuffKey, number] => [p.key, p.amount])).sort(byPartOrder),
   };
 }
 
-type Alternative = PlanStep['alternatives'][number];
-
 function byRawCostThenId(a: Alternative, b: Alternative): number {
   return a.rawCost - b.rawCost || byString(a.recipeId, b.recipeId);
+}
+
+/** The recipes of the pack that make a net amount of `key` (more than they consume of it alone), each once, in pack order. */
+function makersOf(pack: Pack, key: StuffKey): Recipe[] {
+  const seen = new Set<string>();
+  const makers: Recipe[] = [];
+  for (const i of pack.producers.get(key) ?? []) {
+    const r = pack.recipes[i];
+    if (r === undefined || seen.has(r.id)) continue;
+    seen.add(r.id);
+    let net = 0;
+    for (const p of r.outputs) if (p.key === key) net += p.amount * p.chance;
+    for (const ing of r.inputs) {
+      const only = ing.consumed && ing.options.length === 1 ? ing.options[0] : undefined;
+      if (only?.key === key) net -= only.amount * ing.chance;
+    }
+    if (net > 0) makers.push(r);
+  }
+  return makers;
+}
+
+/** A recipe's rejections that are no way of making anything of its own (display-only, unreadable, fuel, a duplicate). */
+const NO_WAY: ReadonlySet<string> = new Set(['fake', 'opaque', 'fuel', 'vanilla-furnace']);
+
+/**
+ * The places out of the group's reach (`reachable`) that would give it `key`, by name in the pack's order: for a GT base
+ * item, the dimensions whose veins or small ores hold its material and the capabilities that yield it; for a fluid, the
+ * dimensions that pump it. "Moon (T1 rocket)", as unlock hints name them.
+ */
+function placesFor(pack: Pack, key: StuffKey, reachable: ReadonlySet<string>): string[] {
+  const places = new Set<string>();
+  if (isFluidKey(key)) {
+    for (const source of pack.worldgen.fluidSources) if (source.fluid === key) for (const dim of source.dims) places.add(dim);
+  } else {
+    const material = isBaseItem(pack, key) ? pack.items.get(key)?.gt?.material : undefined;
+    if (material !== undefined) {
+      for (const vein of pack.worldgen.veins) if (Object.values(vein.materials).includes(material)) for (const dim of vein.dims) places.add(dim);
+      for (const capability of pack.worldgen.capabilities) if (capability.yields.includes(material)) places.add(capability.key);
+    }
+  }
+  const names: string[] = [];
+  for (const dim of pack.worldgen.dimensions) {
+    if (places.has(dim.key) && !reachable.has(dim.key)) names.push(dim.rocketTier === undefined ? dim.name : `${dim.name} (T${dim.rocketTier} rocket)`);
+  }
+  for (const capability of pack.worldgen.capabilities) if (places.has(capability.key) && !reachable.has(capability.key)) names.push(capability.name);
+  return [...new Set(names)];
+}
+
+/**
+ * Why the group cannot get `key` here, which availability does not reach, when the pack says: the places out of reach
+ * that have it ("needs Moon (T1 rocket)", `placesFor`), else the lowest tier a recipe making it needs ("needs MV (your
+ * tier is LV)": one level down, as the first thing in the way). Null when neither tells.
+ */
+function unobtainableReason(pack: Pack, key: StuffKey, env: PlanEnv): string | null {
+  const places = placesFor(pack, key, env.reachable);
+  if (places.length > 0) return `needs ${places.join(' or ')}`;
+  let need = Infinity;
+  for (const i of pack.producers.get(key) ?? []) {
+    const a = acceptRecipe(pack, pack.recipes[i] as Recipe, env);
+    if (!a.ok && a.why === 'tier' && a.needTier !== undefined) need = Math.min(need, a.needTier);
+  }
+  return Number.isFinite(need) ? `needs ${tierName(need)} (your tier is ${tierName(env.tier)})` : null;
+}
+
+/** Why the machine side of a recipe rules it out (`acceptRecipe`'s rejection), in a swap list's words. */
+function machineReason(r: Recipe, a: Extract<Acceptance, { ok: false }>, tier: number): string {
+  if (a.why === 'low-gravity') return 'needs low gravity (a space station or the asteroids)';
+  if (a.why === 'heat') return `needs hotter coils (${formatNumber(r.meta.coilHeat ?? r.specialValue)} K)`;
+  if (a.why === 'tier' && a.needTier !== undefined) return `needs ${tierName(a.needTier)} (your tier is ${tierName(tier)})`;
+  return 'needs a machine nothing can build here';
+}
+
+/**
+ * Whether the group can pick recipe `r` here (controller rulings, plan 09), and the map it would run on: `reasons` is
+ * empty when it can, else says in plain words why not: every excluded category it falls in ("excluded: recycling (see
+ * Settings)"), the machine it needs ("needs MV (your tier is LV)", "needs a machine nothing can build here"), or, for one
+ * it could run, what is in the way of each ingredient it could not get (`obtainable`, `unobtainableReason`: "needs Moon
+ * (T1 rocket)"), else that ingredient by name. Null for a recipe that is no way of its own (`NO_WAY`).
+ */
+function judgeWay(
+  pack: Pack, r: Recipe, env: PlanEnv, obtainable: (key: StuffKey) => boolean, avoid: ReadonlySet<StuffKey>,
+): { mapId: string; reasons: string[] } | null {
+  const accepted = acceptRecipe(pack, r, env);
+  const firstMap = [...r.maps].sort(byString)[0] ?? '';
+  if (accepted.ok) {
+    const reasons = new Set<string>();
+    for (const ing of r.inputs) {
+      const options = keptOptions(ing.options, avoid);
+      const first = options[0];
+      if (first === undefined || options.some((o) => obtainable(o.key))) continue;
+      reasons.add(unobtainableReason(pack, first.key, env) ?? `needs ${pack.nameOf(first.key)}, which you cannot get here`);
+    }
+    return { mapId: accepted.mapId, reasons: [...reasons] };
+  }
+  if (NO_WAY.has(accepted.why)) return null;
+  if (accepted.why !== 'excluded') return { mapId: firstMap, reasons: [machineReason(r, accepted, env.tier)] };
+  const categories = Object.entries(EXCLUSION_RULES).filter(([name, rule]) => env.excluded.has(name) && rule(r, pack)).map(([name]) => name);
+  // `fromNothing` recipes are left out with the `lava-centrifuge` category (PlanEnv.fromNothing).
+  const reasons = (categories.length > 0 ? categories : ['lava-centrifuge']).map((name) => `excluded: ${name.replaceAll('-', ' ')} (see Settings)`);
+  const machine = acceptRecipe(pack, r, { ...env, excluded: new Set(), fromNothing: undefined });
+  if (machine.ok) return { mapId: machine.mapId, reasons };
+  if (NO_WAY.has(machine.why)) return null;
+  return { mapId: firstMap, reasons: [...reasons, machineReason(r, machine, env.tier)] };
+}
+
+/** Whether the group can get a good here: availability reaches it, or the project says it already makes it. */
+function obtainableIn(basis: PlanBasis, settings: PlanSettings): (key: StuffKey) => boolean {
+  const stops = new Set(settings.stopItems);
+  return (key) => basis.avail.available.has(key) || stops.has(key);
+}
+
+/** `list` cut to `max`, with `keep` (when listed) in the last place if the cut would drop it. */
+function capped(list: readonly Alternative[], max: number, keep: string | undefined): Alternative[] {
+  const kept = list.slice(0, max);
+  const must = keep === undefined ? undefined : list.find((a) => a.recipeId === keep);
+  if (must !== undefined && !kept.includes(must)) kept[kept.length - 1] = must;
+  return kept;
 }
 
 /** Producers of each wanted good in the cost graph, ranked by raw cost per unit then id; finite costs only. */
@@ -204,23 +341,26 @@ function alternativesFor(model: CostModel, wanted: ReadonlySet<StuffKey>): Map<S
 }
 
 /**
- * Each step's swap list (spec §3.9, alternatives by raw material use): the cheapest MAX_ALTERNATIVES producers of its
- * main output in the cost graph, each with what it takes and makes, and always the step's own recipe (Plan 2 Task 14:
- * "the one in use kept"), in the last place when it is not among the cheapest. The cost graph prunes by its own
- * estimates and the line's graph prices derived leaves and stop items differently, so the line can run a producer the
- * cost graph dropped (or a pinned one), even make a good the cost graph never walked: its recipe is listed anyway, at
- * its raw cost in the cost graph when it can run there, else at its raw cost in the line's own graph (`analyzeCosts`
- * of `graph`, run only then), else at what the good costs there. A step without a main output has nothing to swap.
- * A recipe that consumes or holds a good the line avoids (`avoid`, `usesAvoided`) is no alternative (ruling R6), except
- * the step's own.
+ * Each step's swap list (spec §3.9, alternatives by raw material use; controller rulings of plan 09, "every way to make
+ * the output"): every recipe of the pack that makes its main output (`makersOf`, less those `judgeWay` finds no way of
+ * their own), first the ones the group can pick here, then the others with why it cannot (`unusable`), each group by raw
+ * cost per unit, then id, and each row with what one run takes and makes (`recipeParts`). At most MAX_ALTERNATIVES of
+ * the first and MAX_UNUSABLE_ALTERNATIVES of the others, always with the step's own recipe (Plan 2 Task 14: "the one in
+ * use kept") and the one `recipeChoice` pins, in the last place when the cut would drop them; `PlanStep.ways` counts all
+ * of each. Raw costs: a producer of the cost graph at its cost there; the step's own recipe, which the line may run
+ * although the cost graph dropped it (or never walked its good), at its raw cost in the line's own graph (`analyzeCosts`
+ * of `graph`, run only then), else at what the good costs there; any other recipe at an estimate (`estimate`: its inputs
+ * at their cost-model cost, else their price, less its other outputs at theirs). A step without a main output has
+ * nothing to swap. A recipe that consumes or holds a good the line avoids (`avoid`, `usesAvoided`) is no alternative
+ * (ruling R6), except the step's own. Returns, per step id, the recipes of its list whose raw cost is no estimate (what
+ * `pinDominatedWarnings` compares).
  */
-async function addAlternatives(pack: Pack, steps: PlanStep[], model: CostModel, graph: CandidateGraph, avoid: ReadonlySet<StuffKey>): Promise<void> {
+async function addAlternatives(
+  pack: Pack, settings: PlanSettings, basis: PlanBasis, steps: PlanStep[], model: CostModel, graph: CandidateGraph, avoid: ReadonlySet<StuffKey>,
+): Promise<Map<string, ReadonlySet<string>>> {
   const wanted = new Set(steps.flatMap((s) => (s.mainOutput === undefined ? [] : [s.mainOutput])));
-  const alternatives = alternativesFor(model, wanted);
-  const avoids = (recipeId: string): boolean => {
-    const r = pack.recipeById.get(recipeId);
-    return r !== undefined && usesAvoided(r, avoid);
-  };
+  const priced = alternativesFor(model, wanted);
+  const obtainable = obtainableIn(basis, settings);
   let lineCosts: CostAnalysis | undefined;
   const ownCost = async (recipeId: string, main: StuffKey): Promise<number> => {
     const inModel = model.costs.recipeCost(recipeId, main);
@@ -231,19 +371,176 @@ async function addAlternatives(pack: Pack, steps: PlanStep[], model: CostModel, 
     const good = lineCosts.cost(main);   // the recipe makes no net amount of it (it also consumes it)
     return Number.isFinite(good) ? good : 0;
   };
+  const costOf = (key: StuffKey): number => {
+    const cost = model.costs.cost(key);
+    return Number.isFinite(cost) ? cost : basis.prices.price(key);
+  };
+  /** Raw material per unit of `key` made by `r`, roughly: each consumed slot at its cheapest option, credits at cost. */
+  const estimate = (r: Recipe, key: StuffKey): number => {
+    let made = 0;
+    let net = 0;
+    for (const p of r.outputs) {
+      const amount = p.amount * p.chance;
+      if (p.key === key) {
+        made += amount;
+        continue;
+      }
+      const credit = model.costs.cost(p.key);   // a co-product without a finite cost earns no credit
+      if (Number.isFinite(credit)) net -= amount * credit;
+    }
+    for (const ing of r.inputs) {
+      let best = Infinity;
+      for (const o of ing.consumed ? keptOptions(ing.options, avoid) : []) best = Math.min(best, o.amount * costOf(o.key));
+      if (Number.isFinite(best)) net += ing.chance * best;
+    }
+    return made > 0 ? Math.max(0, net / made) : 0;
+  };
+  const exact = new Map<string, ReadonlySet<string>>();
   for (const step of steps) {
     const main = step.mainOutput;
-    const all = (main === undefined ? [] : (alternatives.get(main) ?? [])).filter((a) => a.recipeId === step.recipeId || !avoids(a.recipeId));
-    let own = all.find((a) => a.recipeId === step.recipeId);
-    let ranked = all;
-    if (own === undefined && main !== undefined) {
-      own = { recipeId: step.recipeId, rawCost: round6(await ownCost(step.recipeId, main)), mapId: step.mapId };
-      ranked = [...all, own].sort(byRawCostThenId);
+    if (main === undefined) continue;
+    const known = new Map((priced.get(main) ?? []).map((a) => [a.recipeId, a]));
+    const usable: Alternative[] = [];
+    const unusable: Alternative[] = [];
+    const makers = makersOf(pack, main);
+    const ownRecipe = pack.recipeById.get(step.recipeId);
+    // The step's own recipe is listed even where it makes no net amount of its main output (it also consumes some).
+    if (ownRecipe !== undefined && !makers.includes(ownRecipe)) makers.push(ownRecipe);
+    for (const r of makers) {
+      const own = r.id === step.recipeId;
+      if (!own && usesAvoided(r, avoid)) continue;
+      const way = own ? { mapId: step.mapId, reasons: [] } : judgeWay(pack, r, basis.env, obtainable, avoid);
+      if (way === null) continue;
+      const inCostGraph = known.get(r.id);
+      const rawCost = inCostGraph?.rawCost ?? round6(own ? await ownCost(r.id, main) : estimate(r, main));
+      const row: Alternative = { recipeId: r.id, rawCost, mapId: inCostGraph?.mapId ?? way.mapId };
+      if (way.reasons.length > 0) unusable.push({ ...row, unusable: way.reasons });
+      else usable.push(row);
     }
-    const kept = ranked.slice(0, MAX_ALTERNATIVES);
-    if (own !== undefined && !kept.includes(own)) kept[kept.length - 1] = own;
-    step.alternatives = kept.map((a) => ({ ...a, ...recipeParts(pack, a.recipeId, avoid) }));
+    exact.set(step.id, new Set([step.recipeId, ...known.keys()]));
+    step.ways = { total: usable.length + unusable.length, usable: usable.length };
+    const pin = Object.hasOwn(settings.recipeChoice, main) ? settings.recipeChoice[main] : undefined;
+    const listed = [...capped(usable.sort(byRawCostThenId), MAX_ALTERNATIVES, step.recipeId), ...capped(unusable.sort(byRawCostThenId), MAX_UNUSABLE_ALTERNATIVES, pin)];
+    step.alternatives = listed.map((a) => ({ ...a, ...recipeParts(pack, a.recipeId, avoid) }));
   }
+  return exact;
+}
+
+/** At most this many map names in a `StepOption` choice's `via`. */
+const MAX_VIA = 3;
+
+/**
+ * What one unit of an ingredient option costs, the recipes making it on its own runs, their maps by name, and why the
+ * group cannot get it here, when it cannot.
+ */
+interface OptionPrice { cost: number; steps: number; via: string[]; unusable?: string[] }
+
+/** The map names of a chain's recipes (`Standalone.recipes`, the most runs first) in `graph`, each once, at most MAX_VIA. */
+function viaOf(pack: Pack, graph: CandidateGraph, chain: Standalone | undefined): string[] {
+  const mapOf = new Map(graph.recipes.map((r) => [r.id, r.mapId]));
+  const names: string[] = [];
+  for (const id of chain?.recipes ?? []) {
+    const mapId = mapOf.get(id);
+    const name = mapId === undefined || mapId === null ? undefined : (pack.maps.get(mapId)?.name ?? mapId);
+    if (name !== undefined && !names.includes(name)) names.push(name);
+    if (names.length === MAX_VIA) break;
+  }
+  return names;
+}
+
+/**
+ * What one unit of each option of `keys` costs (fix spec R9; controller ruling: every option, also those the line's walk
+ * left out): one the group cannot get here (`obtainableIn`) at its plain price, with why (`unobtainableReason`); an
+ * option the line would buy (its leaf oracle) at its cost-model cost, else its leaf cost, in 0 steps; one the cost
+ * model's graph prices at that cost, with the recipes of making it on its own there (`standaloneCosts`, never through
+ * the target); one that graph never reached (the walk found it far dearer) priced the same way over the graph walked
+ * from those options alone (`aloneGraph`), else at its plain price.
+ */
+async function optionPrices(pack: Pack, settings: PlanSettings, pricing: LinePricing, keys: readonly StuffKey[]): Promise<Map<StuffKey, OptionPrice>> {
+  const { model, basis, target, leaf } = pricing;
+  const containers = pack.fluidContainers ?? [];
+  const obtainable = obtainableIn(basis, settings);
+  const prices = new Map<StuffKey, OptionPrice>();
+  const inModel: StuffKey[] = [];
+  const unreached: StuffKey[] = [];
+  for (const key of keys) {
+    const d = leaf(key);
+    const cost = model.costs.cost(key);
+    if (!obtainable(key)) {
+      prices.set(key, { cost: basis.prices.price(key), steps: 0, via: [], unusable: [unobtainableReason(pack, key, basis.env) ?? 'you cannot get it here'] });
+    } else if (d.buyable) {
+      prices.set(key, { cost: Number.isFinite(cost) ? cost : d.cost, steps: 0, via: [] });
+    } else if (Number.isFinite(cost)) {
+      inModel.push(key);
+    } else {
+      unreached.push(key);
+    }
+  }
+  const chained = async (graph: CandidateGraph, costs: CostAnalysis, list: StuffKey[]): Promise<void> => {
+    for (const [key, chain] of await standaloneCosts(graph, list, [target], containers)) {
+      const cost = costs.cost(key);
+      const madeAlone = chain !== undefined && Number.isFinite(chain.cost);
+      prices.set(key, {
+        cost: Number.isFinite(cost) ? cost : basis.prices.price(key), steps: madeAlone ? chain.steps : 0, via: madeAlone ? viaOf(pack, graph, chain) : [],
+      });
+    }
+  };
+  if (inModel.length > 0) await chained(model.graph, model.costs, inModel);
+  if (unreached.length > 0) {
+    await yieldToEventLoop();
+    const alone = aloneGraph(pack, settings, basis, model, unreached);
+    await chained(alone, await analyzeCosts(alone), unreached);
+  }
+  return prices;
+}
+
+/**
+ * Each step's ingredient options (`PlanStep.options`, fix spec R9 and D12): per consumed slot of its recipe with two or
+ * more options the line may take (`keptOptions`), every one of them, those the walk left out too (controller ruling),
+ * with what one run would take of it, its share of the slot in this plan (`optionShares` over `line`, the plan's own
+ * runs), its raw material per run (amount × `optionPrices`' cost) and the steps and maps of its own chain, or why the
+ * group cannot get it here (`unusable`); cheapest first, then by key. `pinned` names the option `optionChoice` pins when
+ * the graph honours it. Priced once per plan.
+ */
+async function addOptions(pack: Pack, settings: PlanSettings, steps: readonly PlanStep[], line: StepLine, pricing: LinePricing): Promise<void> {
+  const slotsOf = new Map<PlanStep, Array<{ ing: Ingredient; shares: OptionShare[] }>>();
+  const keys = new Set<StuffKey>();
+  for (const step of steps) {
+    const r = pack.recipeById.get(step.recipeId);
+    const slots = (r?.inputs ?? []).filter((ing) => ing.consumed && keptOptions(ing.options, line.avoid).length > 1)
+      .map((ing) => ({ ing, shares: optionShares(r as Recipe, ing, line) }));
+    if (slots.length === 0) continue;
+    slotsOf.set(step, slots);
+    for (const { shares } of slots) for (const { option } of shares) keys.add(option.key);
+  }
+  if (keys.size === 0) return;
+  const prices = await optionPrices(pack, settings, pricing, [...keys].sort(byString));
+  for (const [step, slots] of slotsOf) {
+    step.options = slots.map(({ ing, shares }): StepOption => {
+      const choices = shares.map(({ option, share }): StepOption['choices'][number] => {
+        const price = prices.get(option.key);
+        const amount = sig9(option.amount * ing.chance);
+        const choice: StepOption['choices'][number] = { key: option.key, amount, share, rawPerRun: round6(amount * (price?.cost ?? 0)), steps: price?.steps ?? 0 };
+        if (price !== undefined && price.via.length > 0) choice.via = price.via;
+        if (price?.unusable !== undefined) choice.unusable = [...price.unusable];
+        return choice;
+      }).sort((a, b) => a.rawPerRun - b.rawPerRun || byString(a.key, b.key));
+      const slot: StepOption = { slot: ing.slot, choices };
+      const pinned = line.optionPins?.get(`${step.recipeId}#${ing.slot}`);
+      if (pinned !== undefined) slot.pinned = pinned;
+      return slot;
+    });
+  }
+}
+
+/** `plan` with each step's supporting line (`PlanStep.line`, `supportingLines`), from its steps and flows. */
+function withLines(pack: Pack, basis: PlanBasis, plan: Plan): Plan {
+  const lines = supportingLines(pack, plan, basis);
+  for (const step of plan.steps) {
+    const line = lines.get(step.id);
+    if (line !== undefined) step.line = line;
+  }
+  return plan;
 }
 
 /** "<machine> making <product>" for a recipe of the graph (a convert recipe: "any of <product>"). */
@@ -492,11 +789,11 @@ function dimensionOfId(byKey: ReadonlyMap<string, DimensionInfo>, sortedDims: re
 }
 
 /**
- * The English name of every key the plan uses (target, steps with what they supply and their swap lists, flows, raw
- * inputs, byproducts, build list with its breakdown, totals, unlocks, warnings, the avoided goods with what they are
- * made from and the item and fluid entries of the avoid list, ruling R11), `map:<id>` for every recipe map of a step or
- * alternative, `dim:<key>` for every dimension it reaches or a source names, and `dimId:<n>` for every dimension id a
- * found spot names; keys in sorted order.
+ * The English name of every key the plan uses (target, steps with what they supply, their ingredient options and their
+ * swap lists with every option of a slot, flows, raw inputs, byproducts, build list with its breakdown, totals, unlocks,
+ * warnings, the avoided goods with what they are made from and the item and fluid entries of the avoid list, ruling
+ * R11), `map:<id>` for every recipe map of a step or alternative, `dim:<key>` for every dimension it reaches or a source
+ * names, and `dimId:<n>` for every dimension id a found spot names; keys in sorted order.
  */
 function planNames(pack: Pack, plan: Plan, settings: PlanSettings): Record<string, string> {
   const target = settings.target;
@@ -518,10 +815,12 @@ function planNames(pack: Pack, plan: Plan, settings: PlanSettings): Record<strin
     add(step.mainOutput);
     add(step.supply);
     for (const p of [...step.inputs, ...step.outputs]) add(p.key);
+    for (const slot of step.options ?? []) for (const choice of slot.choices) add(choice.key);
     addMap(step.mapId);
     for (const a of step.alternatives) {
       addMap(a.mapId);
-      for (const p of [...(a.inputs ?? []), ...(a.outputs ?? [])]) add(p.key);
+      for (const p of a.inputs ?? []) for (const o of p.options ?? [p]) add(o.key);
+      for (const p of a.outputs ?? []) add(p.key);
     }
   }
   for (const flow of plan.flows) add(flow.key);
@@ -843,15 +1142,18 @@ function handStepWarnings(pack: Pack, steps: readonly PlanStep[]): PlanWarning[]
 /**
  * One `pin-dominated` warning per step whose recipe the project pins for its main output (`recipeChoice`) while its
  * cheapest alternative uses less than the pinned recipe's raw material per unit divided by PIN_DOMINATED_SHARE (fix spec
- * D24): the swap list's raw costs (`addAlternatives`, which leaves out recipes using an avoided good).
+ * D24): the swap list's raw costs (`addAlternatives`, which leaves out recipes using an avoided good), among the recipes
+ * the group can pick whose cost is no estimate (`exact`, by step id: the cost graph's and the step's own).
  */
-function pinDominatedWarnings(pack: Pack, settings: PlanSettings, steps: readonly PlanStep[]): PlanWarning[] {
+function pinDominatedWarnings(pack: Pack, settings: PlanSettings, steps: readonly PlanStep[], exact: ReadonlyMap<string, ReadonlySet<string>>): PlanWarning[] {
   const warnings: PlanWarning[] = [];
   for (const step of steps) {
     const key = step.mainOutput;
     if (key === undefined || !Object.hasOwn(settings.recipeChoice, key) || settings.recipeChoice[key] !== step.recipeId) continue;
+    const priced = exact.get(step.id);
     const pinned = step.alternatives.find((a) => a.recipeId === step.recipeId);
-    const cheapest = step.alternatives.find((a) => a.recipeId !== step.recipeId);   // sorted by raw cost, then id
+    // Sorted by raw cost, then id, usable ones first.
+    const cheapest = step.alternatives.find((a) => a.recipeId !== step.recipeId && a.unusable === undefined && priced?.has(a.recipeId) === true);
     if (pinned === undefined || cheapest === undefined || !(cheapest.rawCost < pinned.rawCost / PIN_DOMINATED_SHARE)) continue;
     const machine = pack.maps.get(cheapest.mapId)?.name ?? cheapest.mapId;
     warnings.push({
@@ -986,6 +1288,8 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
   let buys: ReadonlyMap<StuffKey, number>;
   let sinks: ReadonlyMap<StuffKey, number>;
   let made: Plan['makeN'];
+  /** The runs the steps were sized from: per second, or the batch's whole runs (what their ingredient shares follow). */
+  let stepRuns: ReadonlyMap<string, number>;
   let batchWarnings: PlanWarning[] = [];
   if (batch) {
     const run = await makeN(pack, graph, sol, demand, opts);
@@ -1000,15 +1304,19 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
     steps = run.steps;
     buys = run.buys;
     made = { totalSeconds: run.totalSeconds, leftovers: run.leftovers };
+    stepRuns = whole.runs;
   } else {
     steps = planSteps(pack, graph, sol, { ...opts, perSecondScale: 1 });
     flows = buildFlows(graph, sol, [target]);
     buys = sol.buys;
     sinks = sol.sinks;
+    stepRuns = sol.runs;
   }
-  await addAlternatives(pack, steps, model, graph, line.avoid);
+  const exact = await addAlternatives(pack, settings, basis, steps, model, graph, line.avoid);
+  // Every option of each ore-dictionary slot, with its share in this plan and what it would cost (fix spec R9).
+  await addOptions(pack, settings, steps, stepLine(graph, stepRuns), priced);
   // A batch may be crafted by hand (fix spec D7); a pin is judged against the swap list just made (D24).
-  const stepWarnings = [...(batch ? [] : handStepWarnings(pack, steps)), ...pinDominatedWarnings(pack, settings, steps)];
+  const stepWarnings = [...(batch ? [] : handStepWarnings(pack, steps)), ...pinDominatedWarnings(pack, settings, steps, exact)];
 
   const raw = rawInputsOf(pack, graph, basis, priced.chains, ctx, buys, made?.totalSeconds ?? null);
   // Make N steps of one machine type share that type's machines (makeN), so they draw at most once per type.
@@ -1029,5 +1337,6 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
   if (made !== undefined) body.makeN = made;
   // The raw material the plan uses against the least any plan of its graph needs (fix spec R3): a rate's trade-off.
   if (!batch) body.rawCost = { perSecond: sol.rawCost, leastPerSecond: sol.leastRawCost };
-  return assemble(pack, settings, basis, withAvoided(body, avoid, uses.avoided));
+  // Supporting lines come from the finished steps and flows (fix spec R6).
+  return withLines(pack, basis, assemble(pack, settings, basis, withAvoided(body, avoid, uses.avoided)));
 }

@@ -186,6 +186,75 @@ describe('buildBom', () => {
     const r = await expandBomLines(p, [{ key: 'machine:171@0', amount: 1, why: '1× Basic Chemical Bath', group: 'machines' }], settings, emptyContextForTest());
     expect(r.totals).toEqual(bom.totals);
   });
+  it('never makes an Empty Cell from a recipe that only hands it back', async () => {
+    // Fix spec D15 (audit patch G-bom-containers): a reaction takes 3 Acid Cells and hands their Empty Cells back beside
+    // a Gold Dust. Crediting the dust, the cost analysis prices that the cheapest Empty Cell (1 against 2 from tin), so
+    // the assembler's breakdown asked for Acid Cells; an empty container is made from its own parts instead. (The Acid
+    // Cell is made without a cell here, so the breakdown's loop guard cannot catch it.)
+    const vein = (material: string) => ({ name: `ore.mix.${material}`, dims: ['overworld'], kind: 'vein' as const, weight: 1, minY: 0, maxY: 255, size: 1, density: 1,
+      materials: { primary: material, secondary: material, between: material, sporadic: material } });
+    const p = packFromSpec({
+      items: [
+        { key: 't:empty_cell@0', name: 'Empty Cell' }, { key: 't:acid_cell@0', name: 'Acid Cell' }, { key: 'machine:8@0', name: 'Basic Assembler' },
+        { key: 't:tin_ingot@0', name: 'Tin Ingot', gt: { prefix: 'ingot', material: 'Tin' } },
+        { key: 't:raw@0', name: 'Raw Dust', gt: { prefix: 'dust', material: 'Raw' } },
+        { key: 't:gold_dust@0', name: 'Gold Dust', gt: { prefix: 'dust', material: 'Gold' } },
+      ],
+      maps: [{ id: 'gt.recipe.chemicalreactor', name: 'Chemical Reactor' }, { id: 'gt.recipe.assembler', name: 'Assembler' }, { id: 'crafting' }],
+      machines: [{ mteId: 7, name: 'Basic Chemical Reactor', maps: ['gt.recipe.chemicalreactor'], tier: 1 }, { mteId: 8, name: 'Basic Assembler', maps: ['gt.recipe.assembler'], tier: 1 }],
+      recipes: [
+        { id: 'react-acid', map: 'gt.recipe.chemicalreactor', in: [['t:acid_cell@0', 3], ['t:raw@0', 1]], out: [['t:gold_dust@0', 1], ['t:empty_cell@0', 3]], eut: 16 },
+        { id: 'make-acid-cell', map: 'gt.recipe.chemicalreactor', in: [['t:raw@0', 1]], out: [['t:acid_cell@0', 1]], eut: 16 },
+        { id: 'make-cell', map: 'gt.recipe.assembler', in: [['t:tin_ingot@0', 2]], out: [['t:empty_cell@0', 1]], eut: 16 },
+        { id: 'craft-assembler', map: 'crafting', in: [['t:empty_cell@0', 1]], out: [['machine:8@0', 1]] },
+      ],
+      fluidContainers: [{ container: 't:acid_cell@0', empty: 't:empty_cell@0', fluid: 'fluid:acid', amount: 1000 }],
+      worldgen: { veins: ['Tin', 'Raw', 'Gold'].map(vein) },
+    });
+    const settings = { ...defaultSettings(), tier: 1 };
+    const b = planBasis(p, settings, emptyContextForTest());
+    const steps = [step({ id: 'make-acid-cell', recipeId: 'make-acid-cell', machine: { mteId: 8, name: 'Basic Assembler', tier: 1 } })];
+    const bom = await buildBom(p, steps, { settings, env: b.env, leaf: b.leaf, ctx: emptyContextForTest() });
+    expect(bom.lines.map((l) => [l.key, l.children?.map((c) => [c.key, c.amount, c.children?.map((g) => [g.key, g.amount])])])).toEqual([
+      ['machine:8@0', [['t:empty_cell@0', 1, [['t:tin_ingot@0', 2]]]]]]);
+    expect(bom.totals.map((l) => [l.key, l.amount])).toEqual([['t:tin_ingot@0', 2]]);
+  });
+  it('says which build lines need each total', async () => {
+    // Fix spec D15 and ruling P18: each total names the top-level lines it is for, and their amounts add up to it.
+    const named = packFromSpec({ ...MINI_GT, items: [...MINI_GT.items!, { key: 'machine:111@0', name: 'Basic Wiremill' }, { key: 'machine:121@0', name: 'Basic Assembler' }] });
+    const steps = [step({ id: 'wire', recipeId: 'wire', machine: { mteId: 111, name: 'Basic Wiremill', tier: 1 } }),
+                   step({ id: 'circuit-lv', recipeId: 'circuit-lv', machine: { mteId: 121, name: 'Basic Assembler', tier: 1 } })];
+    const b = planBasis(named, { ...defaultSettings(), tier: 1 }, emptyContextForTest());
+    const bom = await buildBom(named, steps, { settings: defaultSettings(), env: b.env, leaf: b.leaf, ctx: emptyContextForTest() });
+    // Top-level lines keep their own why.
+    expect(bom.lines.map((l) => [l.key, l.why])).toEqual([
+      ['machine:111@0', '1× Basic Wiremill'], ['machine:121@0', '1× Basic Assembler'], [PC, '1× Programmed Circuit (stays in the machine)']]);
+    expect(bom.totals.length).toBeGreaterThan(0);
+    for (const total of bom.totals) {
+      const needs = total.neededFor ?? [];
+      expect(needs.length, total.key).toBeGreaterThan(0);
+      expect(needs.reduce((sum, n) => sum + n.amount, 0)).toBeCloseTo(total.amount, 9);
+      expect(total.why).toBe(`for ${[...new Set(needs.map((n) => named.nameOf(n.key)))].join(', ')}`);
+    }
+    expect(bom.totals.find((t) => t.key === 't:copper_ingot@0')).toMatchObject({
+      amount: 6, why: 'for Basic Wiremill, Basic Assembler', neededFor: [{ key: 'machine:111@0', amount: 4 }, { key: 'machine:121@0', amount: 2 }] });
+    expect(bom.totals.find((t) => t.key === PC)).toMatchObject({ amount: 1, why: 'for Programmed Circuit', neededFor: [{ key: PC, amount: 1 }] });
+    // expandBomLines gives Plan 5's parts the same totals (architecture §11.15).
+    const r = await expandBomLines(named, bom.lines.map(({ key, amount, why, group }) => ({ key, amount, why, ...(group === undefined ? {} : { group }) })), { ...defaultSettings(), tier: 1 }, emptyContextForTest());
+    expect(r.totals).toEqual(bom.totals);
+  });
+  it('names each line a total is for once, keeping every one in neededFor', async () => {
+    // Two parts of one name (as programmed circuits of two configurations are) crafted from the same ingot.
+    const vein = { name: 'ore.mix.iron', dims: ['overworld'], kind: 'vein' as const, weight: 1, minY: 0, maxY: 255, size: 1, density: 1,
+      materials: { primary: 'Iron', secondary: 'Iron', between: 'Iron', sporadic: 'Iron' } };
+    const p = packFromSpec({ maps: [{ id: 'crafting' }],
+      items: [{ key: 't:gear@0', name: 'Gear' }, { key: 't:gear@1', name: 'Gear' }, { key: 't:iron_ingot@0', name: 'Iron Ingot', gt: { prefix: 'ingot', material: 'Iron' } }],
+      recipes: [{ id: 'gear-0', map: 'crafting', in: [['t:iron_ingot@0', 1]], out: [['t:gear@0', 1]] },
+                { id: 'gear-1', map: 'crafting', in: [['t:iron_ingot@0', 1]], out: [['t:gear@1', 1]] }],
+      worldgen: { veins: [vein] } });
+    const r = await expandBomLines(p, [{ key: 't:gear@0', amount: 1, why: 'a' }, { key: 't:gear@1', amount: 2, why: 'b' }], { ...defaultSettings(), tier: 1 }, emptyContextForTest());
+    expect(r.totals).toEqual([{ key: 't:iron_ingot@0', amount: 3, why: 'for Gear', neededFor: [{ key: 't:gear@0', amount: 1 }, { key: 't:gear@1', amount: 2 }] }]);
+  });
   it('merges a hand-crafting tool with the same part an automated step keeps in its machine', async () => {
     const p = packFromSpec({ maps: [{ id: 'crafting' }],
       items: [{ key: 't:hammer@0', name: 'Hammer' }, { key: 't:iron_plate@0', name: 'Iron Plate' }],

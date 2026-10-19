@@ -56,6 +56,11 @@ function moltenMaterials(pack: Pack): Map<string, string> {
   return byId;
 }
 
+/** The material a molten fluid (`fluid:molten.<id>`) is of: `fluid:molten.redalloy` → `RedAlloy`; none for other keys. */
+export function moltenMaterial(pack: Pack, key: StuffKey): string | undefined {
+  return key.startsWith(MOLTEN_PREFIX) ? moltenMaterials(pack).get(key.slice(MOLTEN_PREFIX.length)) : undefined;
+}
+
 /**
  * Prices in ingot-equivalents (architecture §5). `overrides` holds per-project costs by key (which win over every rule)
  * and costs per ingot by material name. A molten fluid whose material the pack does not list still counts 144 L per ingot.
@@ -68,7 +73,7 @@ export function makePrices(pack: Pack, overrides: Record<string, number>): Price
     if (FREE.has(key)) return 0;
     if (isFluidKey(key)) {
       if (pack.fluids.get(key)?.molten !== true) return 1 / LITRES_PER_UNIT;
-      const material = key.startsWith(MOLTEN_PREFIX) ? moltenMaterials(pack).get(key.slice(MOLTEN_PREFIX.length)) : undefined;
+      const material = moltenMaterial(pack, key);
       return (material === undefined ? 1 : costPerIngot(material)) / LITRES_PER_INGOT;
     }
     const gt = pack.items.get(key)?.gt;
@@ -86,8 +91,7 @@ const NO_KEYS: ReadonlySet<StuffKey> = new Set();
 /** A cost override for `key` itself, its GT material, or the material of its molten fluid (the rules of `makePrices`). */
 export function hasCostOverride(pack: Pack, overrides: Record<string, number>, key: StuffKey): boolean {
   if (Object.hasOwn(overrides, key)) return true;
-  const material = pack.items.get(key)?.gt?.material
-    ?? (key.startsWith(MOLTEN_PREFIX) ? moltenMaterials(pack).get(key.slice(MOLTEN_PREFIX.length)) : undefined);
+  const material = pack.items.get(key)?.gt?.material ?? moltenMaterial(pack, key);
   return material !== undefined && Object.hasOwn(overrides, material);
 }
 
