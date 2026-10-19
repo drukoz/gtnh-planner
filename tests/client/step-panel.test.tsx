@@ -284,3 +284,25 @@ describe('patch builders', () => {
     expect(s).toEqual(S({ recipeChoice: { 't:x@0': 'r0' }, stopItems: ['t:b@0'], expandItems: ['t:b@0'], haveSupply: ['fluid:water'], optionChoice: { 'r0#1': 't:y@0' } }));
   });
 });
+
+// Where reused machines stand (plan 09 Task 9; architecture §11.29): scan positions first, the "Machines we have" list after.
+describe('step panel: reused machines', () => {
+  const pos = (x: number) => ({ dim: 0, pos: [x, 64, 2] as [number, number, number] });
+  const reusing = (count: number, owned: number, where: ReturnType<typeof pos>[]) =>
+    step({ id: 'asm', count, owned, reused: { count: owned, where }, mainOutput: 't:circuit@0' });
+  it('says how many machines the step reuses and where they stand', () => {
+    expect(panel(reusing(3, 2, [pos(1), pos(3)]), wires)).toContain('2× Basic Assembler (LV) reused — at your base 1 64 2, 3 64 2');
+    expect(panel(reusing(3, 2, []), wires)).toContain('2× Basic Assembler (LV) reused — from your list');
+    expect(panel(reusing(3, 3, [pos(1)]), wires)).toContain('3× Basic Assembler (LV) reused — 1 at your base 1 64 2; 2 from your list');
+    expect(panel(reusing(5, 5, [1, 2, 3, 4, 5].map(pos)), wires)).toContain('5× Basic Assembler (LV) reused — at your base 1 64 2, 2 64 2, 3 64 2 and 2 more');
+    expect(panel(step({ id: 'asm', count: 3, owned: 2, mainOutput: 't:circuit@0' }), wires)).toContain('2× Basic Assembler (LV) reused');   // a plan without where
+    expect(panel(step({ id: 'asm', count: 3, owned: 0 }), wires)).not.toContain('reused');
+  });
+  it('keeps the per-machine switch beside it, and shows neither with "Reuse machines we have" off', () => {
+    const html = panel(reusing(3, 2, [pos(1), pos(3)]), wires);
+    expect(html).toContain('Reuse your 2× Basic Assembler');
+    const off = panel(step({ id: 'asm', count: 3, owned: 0 }), wires, S({ reuseOwned: false, declineReuse: [121] }));
+    expect(off).not.toContain('Reuse your');
+    expect(off).not.toContain('reused');
+  });
+});

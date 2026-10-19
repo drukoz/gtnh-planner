@@ -245,9 +245,10 @@ details.settings-section > summary h3 { display: inline; margin-right: 8px; }
 .cost-table td { padding: 3px 4px; vertical-align: middle; }
 .cost-name { display: inline-flex; align-items: center; gap: 6px; overflow-wrap: anywhere; }
 .cost-input { width: 6em; padding: 3px 6px; }
-.cost-add { display: flex; flex-direction: column; gap: 8px; }
-.cost-add .row { align-items: flex-end; }
+.cost-add, .owned-machines, .owned-add { display: flex; flex-direction: column; gap: 8px; }
+.cost-add .row, .owned-add .row { align-items: flex-end; }
 .cost-field input { width: 7em; }
+.owned-add select { width: 100%; }
 .key-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .key-list li { display: flex; align-items: center; gap: 8px; }
 .key-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }

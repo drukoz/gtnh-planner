@@ -68,6 +68,28 @@ describe('pack routes', () => {
       { name: 'Ash', label: 'Ash' }, { name: 'Copper', label: 'Copper' }, { name: 'StainlessSteel', label: 'Stainless Steel' }]);
     await t.close();
   });
+  it('GET /api/pack lists the machines the "Machines we have" list can name, by name, tier and id (ruling P21)', async () => {
+    const machined = packFromSpec({
+      maps: [{ id: 'gt.recipe.assembler' }, { id: 'gt.recipe.blastfurnace' }, { id: 'gt.recipe.steamturbinefuel' }],
+      machines: [
+        { mteId: 402, name: 'Boxinator', maps: ['gt.recipe.assembler'], tier: 2 },
+        { mteId: 401, name: 'Boxinator', maps: ['gt.recipe.assembler'], tier: 1 },
+        { mteId: 121, name: 'Basic Assembler', maps: ['gt.recipe.assembler'], tier: 1 },
+        { mteId: 15512, name: 'Industrial Centrifuge', maps: ['gt.recipe.blastfurnace'], kind: 'multiblock' },
+        { mteId: 790, name: 'Industrial Centrifuge', maps: ['gt.recipe.blastfurnace'], kind: 'multiblock' },
+        // Never on a step (pickMachine runs singleblocks and multiblocks only), or running no recipe map: not offered.
+        { mteId: 1120, name: 'Basic Steam Turbine', maps: ['gt.recipe.steamturbinefuel'], kind: 'generator', tier: 1 },
+        { mteId: 1246, name: '1x Tin Cable', maps: [], kind: 'cable', tier: 1 },
+        { mteId: 130, name: 'Assembler Without Recipes', maps: [], tier: 1 },
+      ],
+    });
+    const t = await startTestServer({ pack: machined });
+    // A multiblock has no tier of its own (it runs at its energy hatch's), so it has none here.
+    expect((await (await t.request('/api/pack')).json()).machines).toEqual([
+      { mteId: 121, name: 'Basic Assembler', tier: 1 }, { mteId: 401, name: 'Boxinator', tier: 1 }, { mteId: 402, name: 'Boxinator', tier: 2 },
+      { mteId: 790, name: 'Industrial Centrifuge' }, { mteId: 15512, name: 'Industrial Centrifuge' }]);
+    await t.close();
+  });
   it('search and stuff', async () => {
     const hits = await (await s.request('/api/pack/search?q=iron%20pl')).json();
     expect(hits[0]).toMatchObject({ key: 't:iron_plate@0', name: 'Iron Plate' });

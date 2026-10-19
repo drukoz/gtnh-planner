@@ -160,7 +160,7 @@ function trimZeros(text: string): string {
 }
 
 /** A tier's name; a tier outside 0..14 shows as its number instead of breaking the diagram. */
-function tierText(t: number): string {
+export function tierText(t: number): string {
   return TIER_NAMES[t] ?? `tier ${t}`;
 }
 

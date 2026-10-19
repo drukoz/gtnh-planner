@@ -17,6 +17,9 @@ export const MAX_STEP_CHARGE = 0.5;
 export const MAX_OPTION_KEY_LENGTH = 300;
 /** `<recipe id>#<Ingredient.slot>`: the keys of `PlanSettings.optionChoice` (fix spec §3). */
 const OPTION_SLOT = /^[^#]{1,100}#\d{1,4}$/;
+/** Entries of `PlanSettings.ownedManual` ("Machines we have", architecture §11.29), and the machines one may count. */
+export const MAX_OWNED_MANUAL_ENTRIES = 200;
+export const MAX_OWNED_MANUAL_COUNT = 10_000;
 
 const MAX_TIER = 14;
 const MAX_AMOUNT = 1e9;
@@ -43,21 +46,22 @@ export function defaultSettings(): PlanSettings {
     routeDerived: true, logistics: 'direct', costOverrides: {}, stopItems: [], expandItems: [], recipeChoice: {},
     machineTier: {}, excludedCategories: [...DEFAULT_EXCLUDED_CATEGORIES], coilHeat: null, automateCrafting: false,
     avoid: [], declineReuse: [], settingsVersion: SETTINGS_VERSION, haveSupply: [], stepCharge: DEFAULT_STEP_CHARGE,
-    optionChoice: {},
+    optionChoice: {}, reuseOwned: true, ownedManual: [],
   };
 }
 
 /**
  * Fills the fields an older stored project lacks (later plans add settings), `dims` field by field, and drops repeated
- * avoid entries. A missing `settingsVersion` is 1, not the default: the project was stored before it, and the server
- * switches such projects to the new defaults once (`ProjectStore.migrateSettings`); every stored value, a stored
- * `routeDerived: false` among them, is kept.
+ * avoid entries and sums repeated machines of the "Machines we have" list. A missing `settingsVersion` is 1, not the
+ * default: the project was stored before it, and the server switches such projects to the new defaults once
+ * (`ProjectStore.migrateSettings`); every stored value, a stored `routeDerived: false` among them, is kept.
  */
 export function normalizeSettings(s: Partial<PlanSettings> | undefined): PlanSettings {
   const defaults = defaultSettings();
   const merged = { ...defaults, ...definedOnly(s ?? {}) };
   merged.dims = { ...defaults.dims, ...definedOnly(s?.dims ?? {}) };
   merged.avoid = withoutRepeats(merged.avoid);
+  merged.ownedManual = summedOwned(merged.ownedManual ?? []);
   if (s?.settingsVersion === undefined) merged.settingsVersion = FIRST_SETTINGS_VERSION;
   return merged;
 }
@@ -65,6 +69,16 @@ export function normalizeSettings(s: Partial<PlanSettings> | undefined): PlanSet
 /** `list` with each value only where it first appears. */
 function withoutRepeats(list: readonly string[]): string[] {
   return [...new Set(list)];
+}
+
+/**
+ * A "Machines we have" list with one entry per mteId, where it first appears, holding the counts of its repeats added up
+ * (at most `MAX_OWNED_MANUAL_COUNT`, ruling P22); each entry keeps only its id and count.
+ */
+function summedOwned(list: NonNullable<PlanSettings['ownedManual']>): NonNullable<PlanSettings['ownedManual']> {
+  const counts = new Map<number, number>();
+  for (const { mteId, count } of list) counts.set(mteId, Math.min(MAX_OWNED_MANUAL_COUNT, (counts.get(mteId) ?? 0) + count));
+  return [...counts].map(([mteId, count]) => ({ mteId, count }));
 }
 
 /** A copy without the keys whose value is `undefined`, so spreading it never blanks a default. */
@@ -79,9 +93,11 @@ export function applyOp(p: Project, op: ProjectOp, by: string, at: string): Proj
     case 'rename':
       return { ...next, name: op.name.trim() };
     case 'settings': {
-      // Records and arrays in the patch replace the old value whole; an avoid list keeps the first of repeated entries.
+      // Records and arrays in the patch replace the old value whole; an avoid list keeps the first of repeated entries,
+      // and the "Machines we have" list sums the counts of a repeated machine.
       const settings = { ...p.settings, ...op.patch };
       if (op.patch.avoid !== undefined) settings.avoid = withoutRepeats(op.patch.avoid);
+      if (op.patch.ownedManual !== undefined) settings.ownedManual = summedOwned(op.patch.ownedManual);
       return { ...next, settings };
     }
     case 'mark': {
@@ -141,6 +157,12 @@ function recordOf(field: string, ok: (v: unknown) => boolean, what: string): Che
   return (v) => (isRecord(v) && Object.values(v).every(ok) ? null : `${field} values must be ${what}`);
 }
 
+/** One entry of the "Machines we have" list: a machine id of 0 or more and a whole count from 1 to the most one may count. */
+function isOwnedEntry(v: unknown): boolean {
+  return isRecord(v) && Number.isSafeInteger(v.mteId) && (v.mteId as number) >= 0
+    && Number.isInteger(v.count) && (v.count as number) >= 1 && (v.count as number) <= MAX_OWNED_MANUAL_COUNT;
+}
+
 /** One check per setting; a setting added to `PlanSettings` must get its check here (and its default above). */
 const SETTING_CHECKS: { readonly [K in keyof PlanSettings]-?: Check } = {
   target: (v) => (v === null || isStringOfLength(v, 1, MAX_TARGET_LENGTH) ? null : `target must be empty or 1 to ${MAX_TARGET_LENGTH} characters`),
@@ -180,6 +202,10 @@ const SETTING_CHECKS: { readonly [K in keyof PlanSettings]-?: Check } = {
   // A pin the pack no longer fits is kept and ignored with a warning (fix spec R9); only its shape is checked here.
   optionChoice: (v) => (isRecord(v) && Object.entries(v).every(([slot, key]) => OPTION_SLOT.test(slot) && isStringOfLength(key, 1, MAX_OPTION_KEY_LENGTH))
     ? null : `optionChoice keys must look like <recipe id>#<slot>, with options of 1 to ${MAX_OPTION_KEY_LENGTH} characters`),
+  reuseOwned: booleanField('reuseOwned'),
+  // Counted as sent, repeats included: applyOp sums the counts of a repeated machine.
+  ownedManual: (v) => (Array.isArray(v) && v.length <= MAX_OWNED_MANUAL_ENTRIES && v.every(isOwnedEntry)
+    ? null : `ownedManual must be a list of at most ${MAX_OWNED_MANUAL_ENTRIES} machines, each an mteId of 0 or more with a whole count from 1 to ${MAX_OWNED_MANUAL_COUNT}`),
 };
 
 const SETTING_KEYS: ReadonlySet<string> = new Set(Object.keys(defaultSettings()));

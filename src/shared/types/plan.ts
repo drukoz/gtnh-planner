@@ -86,7 +86,25 @@ export interface PlanSettings {
    * `normalizeSettings()` always fill it; readers use `?? {}`.
    */
   optionChoice?: Record<string, StuffKey>;
+  // optional addition
+  /**
+   * "Reuse machines we have" (design spec §3.3, architecture §11.29): true = a step runs first on the machines the group
+   * owns (the linked world scan's base and `ownedManual`) and the build list adds only the rest; false = every machine is
+   * planned new, as if the group owned none (`declineReuse` leaves out one machine type instead). `defaultSettings()` and
+   * `normalizeSettings()` always fill it (true); readers treat only `false` as off.
+   */
+  reuseOwned?: boolean;
+  // optional addition
+  /**
+   * "Machines we have" (architecture §11.28–§11.29): machines the group owns that no linked scan shows (they stand
+   * elsewhere, or no world is linked), by mteId, reused like the scan's; at most 200 entries of 1 to 10,000 machines, one
+   * per mteId (repeats are summed). `defaultSettings()` and `normalizeSettings()` always fill it; readers use `?? []`.
+   */
+  ownedManual?: Array<{ mteId: number; count: number }>;
 }
+
+/** Where one of the group's machines stands (a world scan's `PlacedMachine`): its dimension id and block position. */
+export interface MachineWhere { dim: number; pos: [number, number, number] }
 
 /**
  * One multi-option ingredient slot of a step's recipe (fix spec R9, architecture §11.35): every option the line may take
@@ -182,6 +200,13 @@ export interface PlanStep {
    * count line "14 ways to make Electronic Circuit: 2 you can use now"; `alternatives` lists every one of them.
    */
   ways?: { total: number; usable: number };
+  // optional addition
+  /**
+   * The owned machines the step runs on (architecture §11.29): as many as `owned`, and where those a world scan found
+   * stand, scan positions first (a machine of the "Machines we have" list counts without one). Absent when the step
+   * reuses none, as with "Reuse machines we have" off.
+   */
+  reused?: { count: number; where: MachineWhere[] };
 }
 
 export interface PlanFlow { from: string /* step id | 'raw' */; to: string /* step id | 'out' | 'sink' */; key: StuffKey; perSecond: number }
@@ -241,7 +266,11 @@ export interface Plan {
 }
 
 export interface PlanContext {           // filled from a world scan by Plan 4; Plan 2 works with an empty one
-  ownedMachines: Array<{ mteId: number; count: number }>;
+  ownedMachines: Array<{
+    mteId: number; count: number;
+    // optional addition (plan 09 Task 9, ruling P22): where those machines stand, in the scan's order
+    where?: MachineWhere[];
+  }>;
   storage: Map<StuffKey, { total: number; reachable: number; where?: StorageWhere[] }>;
   visitedDims: string[] /* DimensionInfo.key */; topTier: number | null; coilHeat: number | null;
   prospected: Array<{ dim: number; x: number; z: number; vein: string }>;   // team discoveries joined to vein types
