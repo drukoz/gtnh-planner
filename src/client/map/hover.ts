@@ -1,9 +1,11 @@
 // What the map says about the block under the pointer (spec §3.7; architecture §11, Map hover): the scan's records of
-// one dimension by column, the hover tooltip's lines for a column, the top block of a column in a map tile, and the
-// short rest before a column is described. Pure TypeScript without the DOM, so all of it runs in tests as it is.
+// one dimension by column, the hover tooltip's lines for a column, the top block of a column in a map tile, the names
+// of GT tile entities in the palette names, and the short rest before a column is described. Pure TypeScript without
+// the DOM, so all of it runs in tests as it is.
 
 import type { StuffKey } from '../../shared/keys.ts';
 import { TIER_NAMES, tierName } from '../../shared/gt/tiers.ts';
+import type { PaletteName } from '../../shared/types/api.ts';
 import { FACES } from '../../shared/types/assets.ts';
 import {
   AIR_INDEX, TILE_SIZE, tileOf, UNKNOWN_INDEX, type LogisticsBlock, type MapTile, type PlacedMachine, type PlacedPipe, type StorageBlock, type WorldScan,
@@ -15,6 +17,11 @@ export const HOVER_DELAY_MS = 150;
 
 /** A storage line names this many of the block's contents, the largest first. */
 const CONTENTS_SHOWN = 3;
+/**
+ * A column lists this many of its scan records, top-most first, and counts the rest ("+N more below"): a riser, a
+ * stacked wall or a multi-floor base would otherwise push the base and overlay lines out of the map box.
+ */
+const RECORDS_SHOWN = 5;
 const SEP = ' · ';
 
 const STORAGE_LABELS: Readonly<Record<StorageBlock['kind'], string>> = {
@@ -28,7 +35,8 @@ const LOGISTICS_LABELS: Readonly<Partial<Record<LogisticsBlock['kind'], string>>
 type ColumnRecord =
   | { kind: 'machine'; y: number; machine: PlacedMachine }
   | { kind: 'pipe'; y: number; pipe: PlacedPipe }
-  | { kind: 'storage'; y: number; storage: StorageBlock }
+  /** `drawers`: for a drawer controller, the drawers the scan joined to it (`StorageBlock.controller`); else 0. */
+  | { kind: 'storage'; y: number; storage: StorageBlock; drawers: number }
   | { kind: 'logistics'; y: number; block: LogisticsBlock; label: string };
 
 /** Records at the same height: machine, pipe, storage, logistics. */
@@ -39,6 +47,9 @@ export interface ColumnIndex { readonly dim: number; readonly columns: ReadonlyM
 
 const columnKey = (x: number, z: number): string => `${x},${z}`;
 const int = (n: number): string => n.toLocaleString('en-US', { maximumFractionDigits: 0 });
+const plural = (n: number, word: string): string => `${int(n)} ${word}${n === 1 ? '' : 's'}`;
+/** The names route's word for a GT tile entity id the export does not know (architecture §11, Map hover), as the Found panel says it. */
+const unknownMachine = (mteId: number): string => `Unknown machine #${mteId}`;
 
 /** Code-point order, the same in every browser. */
 function compareText(a: string, b: string): number {
@@ -54,9 +65,20 @@ export function buildColumnIndex(scan: Pick<WorldScan, 'machines' | 'pipes' | 's
     if (list === undefined) columns.set(key, [record]);
     else list.push(record);
   };
+  // A drawer controller holds nothing of its own (the scan writes []): its network is the drawers that name it.
+  const drawersOf = new Map<string, number>();
+  for (const s of scan.storage) {
+    if (s.dim !== dim || s.controller === undefined) continue;
+    const at = s.controller.join(',');
+    drawersOf.set(at, (drawersOf.get(at) ?? 0) + 1);
+  }
   for (const machine of scan.machines) if (machine.dim === dim) add(machine.pos, { kind: 'machine', y: machine.pos[1], machine });
   for (const pipe of scan.pipes) if (pipe.dim === dim) add(pipe.pos, { kind: 'pipe', y: pipe.pos[1], pipe });
-  for (const s of scan.storage) if (s.dim === dim) add(s.pos, { kind: 'storage', y: s.pos[1], storage: s });
+  for (const s of scan.storage) {
+    if (s.dim !== dim) continue;
+    const drawers = s.kind === 'drawer_controller' ? drawersOf.get(s.pos.join(',')) ?? 0 : 0;
+    add(s.pos, { kind: 'storage', y: s.pos[1], storage: s, drawers });
+  }
   for (const block of scan.logisticsBlocks ?? []) {
     const label = LOGISTICS_LABELS[block.kind];
     if (block.dim === dim && label !== undefined) add(block.pos, { kind: 'logistics', y: block.pos[1], block, label });
@@ -65,10 +87,16 @@ export function buildColumnIndex(scan: Pick<WorldScan, 'machines' | 'pipes' | 's
   return { dim, columns };
 }
 
-/** The records of column (x, z) at or below its top block, top-most first; none without a top block. */
-function recordsAt(index: ColumnIndex, x: number, z: number, topY: number | null): readonly ColumnRecord[] {
-  if (topY === null) return [];
-  return (index.columns.get(columnKey(x, z)) ?? []).filter((r) => r.y <= topY);
+const NO_RECORDS: { shown: readonly ColumnRecord[]; more: number } = { shown: [], more: 0 };
+
+/**
+ * The records of column (x, z) at or below its top block, top-most first: the RECORDS_SHOWN the tooltip lists, and how
+ * many more lie below them. None without a top block.
+ */
+function shownRecords(index: ColumnIndex, x: number, z: number, topY: number | null): { shown: readonly ColumnRecord[]; more: number } {
+  if (topY === null) return NO_RECORDS;
+  const below = (index.columns.get(columnKey(x, z)) ?? []).filter((r) => r.y <= topY);
+  return below.length === 0 ? NO_RECORDS : { shown: below.slice(0, RECORDS_SHOWN), more: Math.max(0, below.length - RECORDS_SHOWN) };
 }
 
 /** The CONTENTS_SHOWN largest contents, ties by key. */
@@ -87,20 +115,35 @@ function connectedText(connections: number): string {
   return sides.length === 0 ? 'not connected' : `connected ${sides.join(', ')}`;
 }
 
+/** North, south, west or east: a ForgeDirection ordinal 2–5. */
+const isSide = (face: number): boolean => Number.isInteger(face) && face >= 2 && face <= 5;
+
+/**
+ * `<name> (<TIER>) · facing <front>[ · output <side>][ · stored <n> EU]`. The front is the face GT draws it on: a basic
+ * machine's `mainFacing` (`mMainFacing`), except when that is up or down (GT then draws the front on `facing`), and
+ * `facing` (`mFacing`) for every other machine, which has no `mainFacing`. A basic machine's `facing` is its output
+ * side, named when the front is another face (research textures-icons "Which face gets what", world-format §6.1).
+ */
 function machineLine(m: PlacedMachine): string {
-  const tier = tierText(m.tier), facing = FACES[m.facing];
-  let line = m.name ?? `Unknown machine #${m.mteId}`;
+  const tier = tierText(m.tier);
+  const front = m.mainFacing !== undefined && isSide(m.mainFacing) ? m.mainFacing : m.facing;
+  const frontFace = FACES[front], outputFace = FACES[m.facing];
+  let line = m.name ?? unknownMachine(m.mteId);
   if (tier !== null) line += ` (${tier})`;
-  if (facing !== undefined) line += `${SEP}facing ${facing}`;
+  if (frontFace !== undefined) line += `${SEP}facing ${frontFace}`;
+  if (front !== m.facing && outputFace !== undefined) line += `${SEP}output ${outputFace}`;
   // The scan writes 0 when a machine holds no energy (or says nothing), so only a positive buffer is worth a word.
   if (m.storedEU !== undefined && m.storedEU > 0) line += `${SEP}stored ${int(m.storedEU)} EU`;
   return line;
 }
 
-/** A GT pipe's material is in its block name (line 1); a cable adds its voltage tier and amps. */
-function pipeLine(p: PlacedPipe): string {
-  if (p.kind === undefined) return 'GT pipe';
-  const parts = [PIPE_LABELS[p.kind]];
+/**
+ * A GT cable or pipe by its own English name, which carries its material ("1x Tin Cable", "Bronze Fluid Pipe"), else
+ * by its kind; a cable adds its voltage tier and amps. The scan record has no name: it comes from the palette names by
+ * `mteId`, so a pipe under a floor or a machine is named as well as one on top.
+ */
+function pipeLine(p: PlacedPipe, mteName: (mteId: number) => string | undefined): string {
+  const parts = [mteName(p.mteId) ?? (p.kind === undefined ? 'GT pipe' : PIPE_LABELS[p.kind])];
   if (p.kind === 'cable') {
     const tier = tierText(p.voltageTier);
     if (tier !== null) parts.push(tier);
@@ -109,9 +152,16 @@ function pipeLine(p: PlacedPipe): string {
   return parts.join(SEP);
 }
 
-function storageLine(s: StorageBlock, itemName: (key: StuffKey) => string): string {
+/**
+ * The block's kind and what it holds itself: its 3 largest contents and how many more, "empty" or "contents unknown".
+ * A drawer controller holds nothing itself (its `[]` is not "empty"): it says how many drawers are joined to it.
+ */
+function storageLine(r: { storage: StorageBlock; drawers: number }, itemName: (key: StuffKey) => string): string {
+  const s = r.storage;
   const parts = [STORAGE_LABELS[s.kind]];
-  if (s.contents === null) parts.push('contents unknown');
+  if (s.kind === 'drawer_controller') {
+    if (r.drawers > 0) parts.push(plural(r.drawers, 'drawer'));
+  } else if (s.contents === null) parts.push('contents unknown');
   else if (s.contents.length === 0) parts.push('empty');
   else {
     for (const c of largest(s.contents)) parts.push(`${int(c.count)}× ${itemName(c.key)}`);
@@ -120,11 +170,14 @@ function storageLine(s: StorageBlock, itemName: (key: StuffKey) => string): stri
   return parts.join(SEP);
 }
 
-function recordLine(r: ColumnRecord, itemName: (key: StuffKey) => string): string {
+/** Where a record line gets the names the scan does not hold. */
+interface LineNames { itemName: (key: StuffKey) => string; mteName: (mteId: number) => string | undefined }
+
+function recordLine(r: ColumnRecord, names: LineNames): string {
   switch (r.kind) {
     case 'machine': return machineLine(r.machine);
-    case 'pipe': return pipeLine(r.pipe);
-    case 'storage': return storageLine(r.storage, itemName);
+    case 'pipe': return pipeLine(r.pipe, names.mteName);
+    case 'storage': return storageLine(r, names.itemName);
     case 'logistics': return `${r.label}${SEP}${connectedText(r.block.connections)}`;
   }
 }
@@ -138,17 +191,22 @@ export interface DescribeColumnInput {
   index: ColumnIndex; scan: Pick<WorldScan, 'bases'>; overlays: readonly MapOverlay[];
   /** The name of an item (or fluid) a storage block holds; the key itself when absent. */
   itemName?: (key: StuffKey) => string;
+  /** The English name of the GT tile entity `mteId` (`mteNamesOf` the palette names), for cables and pipes; undefined when unknown. */
+  mteName?: (mteId: number) => string | undefined;
 }
+
+const NO_MTE_NAME = (): undefined => undefined;
 
 /**
  * The hover tooltip's lines for column (x, z), in this order and none of them empty: (1) the top block's name, (2) its
- * position, (3) a line for each scan record of the column at or below it, top-most first, (4) the base the column lies
- * in (the first of `index.dim` whose box holds it), (5) every overlay's own lines, in overlay order. Without a top
- * block (1)–(3) are left out; without its name, (1).
+ * position, (3) a line for each scan record of the column at or below it, top-most first — one below the top block
+ * starts with its own height, "y <y>" — at most RECORDS_SHOWN of them, then "+N more below" for the rest, (4) the base
+ * the column lies in (the first of `index.dim` whose box holds it), (5) every overlay's own lines, in overlay order.
+ * Without a top block (1)–(3) are left out; without its name, (1).
  */
 export function describeColumn(input: DescribeColumnInput): string[] {
   const { x, z, topY, blockName, index, scan, overlays } = input;
-  const itemName = input.itemName ?? ((key: StuffKey) => key);
+  const names: LineNames = { itemName: input.itemName ?? ((key: StuffKey) => key), mteName: input.mteName ?? NO_MTE_NAME };
   const lines: string[] = [];
   const add = (line: string): void => {
     if (line !== '') lines.push(line);
@@ -156,7 +214,9 @@ export function describeColumn(input: DescribeColumnInput): string[] {
   if (topY !== null) {
     if (blockName !== null) add(blockName);
     add(`${x} ${topY} ${z}`);
-    for (const r of recordsAt(index, x, z, topY)) add(recordLine(r, itemName));
+    const { shown, more } = shownRecords(index, x, z, topY);
+    for (const r of shown) add(r.y < topY ? `y ${r.y}${SEP}${recordLine(r, names)}` : recordLine(r, names));
+    if (more > 0) add(`+${int(more)} more below`);
   }
   const base = scan.bases.find((b) => b.dim === index.dim && b.bbox.minX <= x && x <= b.bbox.maxX && b.bbox.minZ <= z && z <= b.bbox.maxZ);
   if (base !== undefined) add(`Base: ${base.name}`);
@@ -164,9 +224,24 @@ export function describeColumn(input: DescribeColumnInput): string[] {
   return lines;
 }
 
-/** The item keys the storage lines of column (x, z) name (`describeColumn`): the largest contents of each block shown. */
+/** The item keys the storage lines of column (x, z) name (`describeColumn`): the largest contents of each block listed. */
 export function columnItemKeys(index: ColumnIndex, x: number, z: number, topY: number | null): StuffKey[] {
-  return recordsAt(index, x, z, topY).flatMap((r) => (r.kind === 'storage' && r.storage.contents !== null ? largest(r.storage.contents).map((c) => c.key) : []));
+  return shownRecords(index, x, z, topY).shown.flatMap((r) => (
+    r.kind === 'storage' && r.storage.contents !== null ? largest(r.storage.contents).map((c) => c.key) : []
+  ));
+}
+
+/**
+ * The English name of each GT tile entity in the palette names (`GET …/palette?names=1`), by `mteId`: every GT block
+ * state of the scan is a palette entry carrying its `mteId`, wherever it stands. The route's "Unknown machine #<id>"
+ * for an id the export does not know is not a name and is left out, so such a pipe keeps its kind.
+ */
+export function mteNamesOf(entries: readonly PaletteName[]): ReadonlyMap<number, string> {
+  const names = new Map<number, string>();
+  for (const { block, name } of entries) {
+    if (block.mteId !== undefined && name !== unknownMachine(block.mteId) && !names.has(block.mteId)) names.set(block.mteId, name);
+  }
+  return names;
 }
 
 const NO_BLOCK: { topY: null; blockName: null } = { topY: null, blockName: null };

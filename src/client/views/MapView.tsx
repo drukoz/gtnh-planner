@@ -8,7 +8,7 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type Poin
 import { messageOf } from '../api/client.ts';
 import { worldApi } from '../map/api.ts';
 import { useItemNames } from '../map/FoundPanel.tsx';
-import { buildColumnIndex, columnItemKeys, createHoverTimer, describeColumn, topBlockAt, type HoverTimer } from '../map/hover.ts';
+import { buildColumnIndex, columnItemKeys, createHoverTimer, describeColumn, mteNamesOf, topBlockAt, type HoverTimer } from '../map/hover.ts';
 import { MapTooltip, tooltipPosition } from '../map/MapTooltip.tsx';
 import { layerPixels, resolvePaletteColors } from '../map/palette.ts';
 import { chunkGridLines, dimLabel, panBy, screenToWorld, shadeTile, visibleTiles, worldToScreen, zoomAt } from '../map/render.ts';
@@ -272,18 +272,21 @@ class MapRenderer {
 /** A press on the canvas: where it started, whether an overlay took it, whether it has become a drag and panned the map. */
 interface Press { pointerId: number; startX: number; startY: number; lastX: number; lastY: number; consumed: boolean; dragging: boolean; panned: boolean }
 
+/** A scan's palette names: each entry's English name in palette order, and every GT tile entity's name by mteId. */
+interface PaletteNames { blocks: readonly string[]; mte: ReadonlyMap<number, string> }
+
 /**
- * The English name of each palette entry of scan `scanId` (`GET …/palette?names=1`), asked once per scan apart from the
- * colours' palette; null while it loads or when it cannot be had (no recipe export), and the tooltip then goes
- * without block names.
+ * The English names of the palette entries of scan `scanId` (`GET …/palette?names=1`), asked once per scan apart from
+ * the colours' palette; null while they load or when they cannot be had (no recipe export), and the tooltip then goes
+ * without block, cable and pipe names.
  */
-function usePaletteNames(scanId: string): readonly string[] | null {
-  const [loaded, setLoaded] = useState<{ scanId: string; names: string[] } | null>(null);
+function usePaletteNames(scanId: string): PaletteNames | null {
+  const [loaded, setLoaded] = useState<{ scanId: string; names: PaletteNames } | null>(null);
   useEffect(() => {
     let current = true;
     worldApi.paletteNames(scanId).then(
       (entries) => {
-        if (current) setLoaded({ scanId, names: entries.map((e) => e.name) });
+        if (current) setLoaded({ scanId, names: { blocks: entries.map((e) => e.name), mte: mteNamesOf(entries) } });
       },
       () => {},   // no names: positions and what the scan found still show
     );
@@ -376,16 +379,35 @@ export function MapView(props: MapViewProps): ReactElement {
   const timerRef = useRef<HoverTimer | null>(null);
   timerRef.current ??= createHoverTimer(setHover);
   const hoverTimer = timerRef.current;
-  const blockNames = usePaletteNames(scanId);
+  const paletteNames = usePaletteNames(scanId);
   const scan = props.scan ?? NO_SCAN;
   const columns = useMemo(() => buildColumnIndex(scan, view.dim), [scan, view.dim]);
-  // The column's top block comes from the tile drawn for this Y level; a tile not loaded yet gives none.
-  const hovered = hover === null ? null : {
-    ...hover, ...topBlockAt(tileCache.get({ scanId, dim: view.dim, tx: tileOf(hover.x), tz: tileOf(hover.z), y: view.y }), hover.x, hover.z, blockNames),
-  };
+  // The column's top block comes from the tile drawn for this Y level. A tile not loaded yet gives none, and the tooltip
+  // is drawn again once it lands: a tile's arrival only redraws the canvas. load() joins the renderer's request in flight.
+  const hoverTileKey: TileKey | null = hover === null ? null : { scanId, dim: view.dim, tx: tileOf(hover.x), tz: tileOf(hover.z), y: view.y };
+  const hoverTile = hoverTileKey === null ? undefined : tileCache.get(hoverTileKey);
+  const awaitedTile = hoverTileKey !== null && hoverTile === undefined ? hoverTileKey : null;
+  const awaitedTileId = awaitedTile === null ? null : tileKeyId(awaitedTile);
+  const [, setTilesLanded] = useState(0);
+  useEffect(() => {
+    if (awaitedTile === null) return;
+    let current = true;
+    tileCache.load(awaitedTile).then(
+      () => {
+        if (current) setTilesLanded((n) => n + 1);
+      },
+      () => {},   // a failed tile: the renderer asks again later, and the next column the pointer rests on reads it
+    );
+    return () => {
+      current = false;
+    };
+  }, [awaitedTileId]);   // the id names awaitedTile
+  const hovered = hover === null ? null : { ...hover, ...topBlockAt(hoverTile, hover.x, hover.z, paletteNames?.blocks ?? null) };
   // The Found panel's page-wide item names: asked for (after render) only for the contents the tooltip shows.
   const itemNames = useItemNames(hovered === null ? NO_KEYS : columnItemKeys(columns, hovered.x, hovered.z, hovered.topY));
-  const tipLines = hovered === null ? NO_LINES : describeColumn({ ...hovered, index: columns, scan, overlays, itemName: (key) => itemNames.get(key) ?? key });
+  const tipLines = hovered === null ? NO_LINES : describeColumn({
+    ...hovered, index: columns, scan, overlays, itemName: (key) => itemNames.get(key) ?? key, mteName: (mteId) => paletteNames?.mte.get(mteId),
+  });
   /** Puts the tooltip beside the pointer (it needs its own size, so once it is rendered). */
   const placeTip = (): void => {
     const el = tipRef.current;

@@ -4,11 +4,12 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { buildColumnIndex, columnItemKeys, createHoverTimer, describeColumn, HOVER_DELAY_MS, topBlockAt } from '../../src/client/map/hover.ts';
+import { buildColumnIndex, columnItemKeys, createHoverTimer, describeColumn, HOVER_DELAY_MS, mteNamesOf, topBlockAt } from '../../src/client/map/hover.ts';
 import { MapTooltip, TOOLTIP_OFFSET, tooltipPosition } from '../../src/client/map/MapTooltip.tsx';
 import type { MapOverlay, MapViewport } from '../../src/client/map/types.ts';
 import { MapView } from '../../src/client/views/MapView.tsx';
 import type { StuffKey } from '../../src/shared/keys.ts';
+import type { PaletteName } from '../../src/shared/types/api.ts';
 import {
   TILE_SIZE, UNKNOWN_INDEX, type LogisticsBlock, type MapTile, type PlacedMachine, type PlacedPipe, type StorageBlock, type WorldScan,
 } from '../../src/shared/types/world.ts';
@@ -21,14 +22,19 @@ const IRON = 'minecraft:iron_ingot@0';
 /** `describeColumn` over the Overworld of `scan` (SCAN_FIXTURE unless given). */
 function linesAt(
   x: number, z: number, topY: number | null, blockName: string | null,
-  more: { scan?: WorldScan; dim?: number; overlays?: MapOverlay[]; itemName?: (key: StuffKey) => string } = {},
+  more: { scan?: WorldScan; dim?: number; overlays?: MapOverlay[]; itemName?: (key: StuffKey) => string; mteName?: (mteId: number) => string | undefined } = {},
 ): string[] {
   const scan = more.scan ?? SCAN_FIXTURE;
   return describeColumn({
     x, z, topY, blockName, index: buildColumnIndex(scan, more.dim ?? 0), scan, overlays: more.overlays ?? [],
     ...(more.itemName === undefined ? {} : { itemName: more.itemName }),
+    ...(more.mteName === undefined ? {} : { mteName: more.mteName }),
   });
 }
+
+/** The palette names of the GT cables and pipes the tests name: the SCAN_FIXTURE cable and a tin item pipe. */
+const GT_NAMES: ReadonlyMap<number, string> = new Map([[1240, '1x Tin Cable'], [5600, 'Tin Item Pipe']]);
+const mteName = (mteId: number): string | undefined => GT_NAMES.get(mteId);
 
 /** SCAN_FIXTURE plus more records. */
 function withRecords(more: { machines?: PlacedMachine[]; pipes?: PlacedPipe[]; storage?: StorageBlock[]; logisticsBlocks?: LogisticsBlock[] }): WorldScan {
@@ -65,6 +71,25 @@ describe('describeColumn', () => {
     expect(linesAt(1, 0, 64, null)[1]).toBe('Basic Steam Turbine (LV) · facing east');
   });
 
+  it("faces a basic machine where GT draws its front (mainFacing), and names its output side when that is another one", () => {
+    const basic = (pos: [number, number, number], facing: number, mainFacing: number): PlacedMachine =>
+      machine(pos, { mteId: 2001, kind: 'basic', tier: 1, name: 'Basic Macerator', facing, mainFacing });
+    const scan = withRecords({
+      machines: [
+        basic([9, 64, 0], 2, 3),   // as placed: the front toward the player (south), the output behind it (north)
+        basic([9, 64, 1], 1, 2),   // the output wrenched to the top: the front still faces north
+        basic([9, 64, 2], 4, 1),   // mainFacing up: GT draws the front on facing instead, and there is no other output side
+        basic([9, 64, 3], 5, 5),   // front and output on one side
+      ],
+    });
+    expect(linesAt(9, 0, 64, null, { scan })[1]).toBe('Basic Macerator (LV) · facing south · output north');
+    expect(linesAt(9, 1, 64, null, { scan })[1]).toBe('Basic Macerator (LV) · facing north · output up');
+    expect(linesAt(9, 2, 64, null, { scan })[1]).toBe('Basic Macerator (LV) · facing west');
+    expect(linesAt(9, 3, 64, null, { scan })[1]).toBe('Basic Macerator (LV) · facing east');
+    // without mainFacing (every machine but a basic one) the front is facing, as before
+    expect(linesAt(3, 3, 64, null)[1]).toBe('Basic Macerator (LV) · facing south');
+  });
+
   it('gives a plain column outside every base exactly its block name and position', () => {
     expect(linesAt(20, 20, 64, 'Grass Block')).toEqual(['Grass Block', '20 64 20']);
   });
@@ -91,23 +116,76 @@ describe('describeColumn', () => {
   it('says when a storage block is empty or its contents are unknown', () => {
     expect(linesAt(3, 10, 64, null)[1]).toBe('Drawer · contents unknown');   // the compacting drawer
     expect(linesAt(6, 10, 64, null)[1]).toBe(`Chest · 30× ${IRON}`);        // no name source: the key itself
+    expect(linesAt(5, 10, 64, null)[1]).toBe('JABBA barrel · empty');       // nothing in it
   });
 
-  it('lists the records of a column top-most first, only those at or below the top block', () => {
+  it('counts the drawers joined to a drawer controller instead of calling it empty', () => {
+    // A controller holds nothing of its own (the scan writes []): the drawers that name it as their controller are its network.
+    const controller = (pos: [number, number, number]): StorageBlock => storage(pos, 'drawer_controller', []);
+    const joinedTo = (c: [number, number, number], pos: [number, number, number], dim = 0): StorageBlock => (
+      { ...storage(pos, 'drawer', [{ key: IRON, count: 1 }]), id: `s:${dim}:${pos.join(':')}`, dim, controller: c }
+    );
+    const scan = withRecords({
+      storage: [
+        controller([9, 64, 9]), joinedTo([9, 64, 9], [9, 64, 8]), joinedTo([9, 64, 9], [8, 64, 9]),
+        joinedTo([9, 64, 9], [9, 64, 7], -1),                       // the Nether drawer at the same coordinates is not this controller's
+        controller([9, 64, 3]), joinedTo([9, 64, 3], [9, 65, 3]),   // one drawer, on top of its controller
+        controller([9, 64, 1]),                                     // none joined
+      ],
+    });
+    expect(linesAt(9, 9, 64, 'Controller', { scan })[2]).toBe('Drawer controller · 2 drawers');
+    expect(linesAt(9, 3, 65, 'Drawer', { scan })).toEqual(['Drawer', '9 65 3', `Drawer · 1× ${IRON}`, 'y 64 · Drawer controller · 1 drawer', BASE_LINE]);
+    expect(linesAt(9, 1, 64, 'Controller', { scan })[2]).toBe('Drawer controller');
+  });
+
+  it('lists the records of a column top-most first, only those at or below the top block, each lower one with its height', () => {
     // the routed pipe at (1, 65, 10) joins west, above the drawer at (1, 64, 10)
     expect(linesAt(1, 10, 65, 'Block', { itemName: (key) => (key === IRON ? 'Iron Ingot' : key) }))
-      .toEqual(['Block', '1 65 10', 'Routed pipe · connected west', 'Drawer · 1,000× Iron Ingot', BASE_LINE]);
+      .toEqual(['Block', '1 65 10', 'Routed pipe · connected west', 'y 64 · Drawer · 1,000× Iron Ingot', BASE_LINE]);
     expect(linesAt(1, 10, 64, 'Drawer', { itemName: () => 'Iron Ingot' })).toEqual(['Drawer', '1 64 10', 'Drawer · 1,000× Iron Ingot', BASE_LINE]);   // Y ≤ 64
     // two empty JABBA barrels stacked at (5, 64..65, 10)
-    expect(linesAt(5, 10, 65, 'JABBA Barrel')).toEqual(['JABBA Barrel', '5 65 10', 'JABBA barrel · empty', 'JABBA barrel · empty', BASE_LINE]);
+    expect(linesAt(5, 10, 65, 'JABBA Barrel')).toEqual(['JABBA Barrel', '5 65 10', 'JABBA barrel · empty', 'y 64 · JABBA barrel · empty', BASE_LINE]);
     // at one height a machine comes before its storage (a GT chest is both)
     const quantum = machine([7, 64, 10], { mteId: 125, name: 'Quantum Chest LV', kind: 'other' });
     const scan = withRecords({ machines: [quantum], storage: [storage([7, 64, 10], 'gt_chest', [{ key: IRON, count: 500 }])] });
     expect(linesAt(7, 10, 64, 'Quantum Chest LV', { scan }).slice(2, 4)).toEqual(['Quantum Chest LV · facing north', `GT chest · 500× ${IRON}`]);
+    // under a roof: the EBF controller at (8, 64, 8) below its coil ring, whose top coil is the column's top block
+    const ebf = machine([8, 64, 8], { mteId: 1000, name: 'Electric Blast Furnace', kind: 'multiblock' });
+    expect(linesAt(8, 8, 66, 'Kanthal Coil Block', { scan: withRecords({ machines: [ebf] }) }))
+      .toEqual(['Kanthal Coil Block', '8 66 8', 'y 64 · Electric Blast Furnace · facing north', BASE_LINE]);
   });
 
-  it('describes GT cables and pipes once each, and other logistics blocks with their connected sides', () => {
-    expect(linesAt(2, 0, 64, '1x Tin Cable')).toEqual(['1x Tin Cable', '2 64 0', 'Cable · LV · 1 A', BASE_LINE]);
+  it('lists five records at most and counts the rest, so the base and overlay lines always show', () => {
+    // a riser of eight LV cables at (9, 57..64, 4), and a planned line that says something about the column
+    const riser = Array.from({ length: 8 }, (_, i): PlacedPipe => ({ dim: 0, pos: [9, 57 + i, 4], mteId: 1240, connections: 1 | 2, kind: 'cable', voltageTier: 1, amps: 1 }));
+    const planned: MapOverlay = { id: 'plan', draw() {}, describe: () => ['Planned: Wiremill (MV)'] };
+    const scan = withRecords({ pipes: riser });
+    expect(linesAt(9, 4, 64, '1x Tin Cable', { scan, overlays: [planned], mteName })).toEqual([
+      '1x Tin Cable', '9 64 4', '1x Tin Cable · LV · 1 A', 'y 63 · 1x Tin Cable · LV · 1 A', 'y 62 · 1x Tin Cable · LV · 1 A',
+      'y 61 · 1x Tin Cable · LV · 1 A', 'y 60 · 1x Tin Cable · LV · 1 A', '+3 more below', BASE_LINE, 'Planned: Wiremill (MV)',
+    ]);
+    // at Y ≤ 61 five are left: all of them, with nothing more to count
+    expect(linesAt(9, 4, 61, '1x Tin Cable', { scan })).toEqual([
+      '1x Tin Cable', '9 61 4', 'Cable · LV · 1 A', 'y 60 · Cable · LV · 1 A', 'y 59 · Cable · LV · 1 A', 'y 58 · Cable · LV · 1 A',
+      'y 57 · Cable · LV · 1 A', BASE_LINE,
+    ]);
+    // a wall of six chests at (9, 59..64, 5): only the five shown have their item names asked for
+    const wall = Array.from({ length: 6 }, (_, i) => storage([9, 64 - i, 5], 'chest', [{ key: `test:item@${i}`, count: 1 }]));
+    const walled = withRecords({ storage: wall });
+    expect(linesAt(9, 5, 64, 'Chest', { scan: walled }).slice(2)).toEqual([
+      'Chest · 1× test:item@0', 'y 63 · Chest · 1× test:item@1', 'y 62 · Chest · 1× test:item@2', 'y 61 · Chest · 1× test:item@3',
+      'y 60 · Chest · 1× test:item@4', '+1 more below', BASE_LINE,
+    ]);
+    expect(columnItemKeys(buildColumnIndex(walled, 0), 9, 5, 64)).toEqual(['test:item@0', 'test:item@1', 'test:item@2', 'test:item@3', 'test:item@4']);
+  });
+
+  it('describes GT cables and pipes once each by their palette names, and other logistics blocks with their connected sides', () => {
+    expect(linesAt(2, 0, 64, '1x Tin Cable', { mteName })).toEqual(['1x Tin Cable', '2 64 0', '1x Tin Cable · LV · 1 A', BASE_LINE]);
+    expect(linesAt(2, 0, 64, null)).toEqual(['2 64 0', 'Cable · LV · 1 A', BASE_LINE]);   // palette names not loaded (yet): the kind
+    // the cable under a battery buffer is named by its own palette entry, not by the column's top block
+    const buffer = machine([2, 65, 0], { mteId: 161, tier: 1, name: 'Battery Buffer', kind: 'other', facing: 1 });
+    expect(linesAt(2, 0, 65, 'Battery Buffer', { scan: withRecords({ machines: [buffer] }), mteName }))
+      .toEqual(['Battery Buffer', '2 65 0', 'Battery Buffer (LV) · facing up', 'y 64 · 1x Tin Cable · LV · 1 A', BASE_LINE]);
     const gtpipe = (pos: [number, number, number]): LogisticsBlock => ({ dim: 0, pos, kind: 'gtpipe', networkId: 'g:1', connections: 3 });
     const scan = withRecords({
       pipes: [
@@ -120,8 +198,9 @@ describe('describeColumn', () => {
         { dim: 0, pos: [8, 64, 3], kind: 'ae2', networkId: null, connections: 1 | 2 | 8 },
       ],
     });
-    expect(linesAt(8, 0, 64, 'Tin Item Pipe', { scan })).toEqual(['Tin Item Pipe', '8 64 0', 'Item pipe', 'Fluid pipe', BASE_LINE]);
-    expect(linesAt(8, 1, 64, null, { scan })[1]).toBe('GT pipe');   // a pipe the export does not know
+    // the fluid pipe (5120) has no palette name: its kind
+    expect(linesAt(8, 0, 64, 'Tin Item Pipe', { scan, mteName })).toEqual(['Tin Item Pipe', '8 64 0', 'Tin Item Pipe', 'y 63 · Fluid pipe', BASE_LINE]);
+    expect(linesAt(8, 1, 64, null, { scan, mteName })[1]).toBe('GT pipe');   // a pipe the export does not know
     expect(linesAt(8, 2, 64, null, { scan })[1]).toBe('EnderIO conduit · not connected');
     expect(linesAt(8, 3, 64, null, { scan })[1]).toBe('AE2 part · connected down, up, south');
     expect(linesAt(0, 10, 65, null)[1]).toBe('Routed pipe · connected east');
@@ -149,6 +228,23 @@ describe('describeColumn', () => {
     expect(linesAt(3, 3, 64, 'Basic Macerator', { overlays }))
       .toEqual(['Basic Macerator', '3 64 3', 'Basic Macerator (LV) · facing south', BASE_LINE, 'Planned: Wiremill (MV)', 'Tap power here']);
     expect(linesAt(20, 20, null, null, { overlays })).toEqual(['Tap power here']);
+  });
+});
+
+describe('mteNamesOf', () => {
+  it('names each GT tile entity of the palette names by its mteId, leaving out ids the export does not know', () => {
+    const GT = 'gregtech:gt.blockmachines';
+    const entries: PaletteName[] = [
+      { block: { id: 'minecraft:air', meta: 0 }, name: 'Air' },
+      { block: { id: GT, meta: 0, mteId: 1246 }, name: '1x Tin Cable' },
+      { block: { id: GT, meta: 4, mteId: 1246 }, name: '1x Tin Cable' },                 // one tile entity in several block states
+      { block: { id: GT, meta: 2, mteId: 31999 }, name: 'Unknown machine #31999' },      // the route's word for an id it cannot name
+      { block: { id: GT, meta: 1 }, name: GT },                                          // no tile id
+      { block: { id: 'minecraft:stone', meta: 0 }, name: 'Stone' },
+      { block: { id: GT, meta: 3, mteId: 2001 }, name: 'Basic Macerator' },
+    ];
+    expect([...mteNamesOf(entries)]).toEqual([[1246, '1x Tin Cable'], [2001, 'Basic Macerator']]);
+    expect(mteNamesOf([]).size).toBe(0);
   });
 });
 
