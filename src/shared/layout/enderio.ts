@@ -1,6 +1,6 @@
 // EnderIO facts and names for the EnderIO conduit mode (spec §3.6 mode 4; architecture §11.30 and "EnderIO conduits,
-// granted change requests (add-on 11)"), pinned in the pack's EnderIO 2.10.46 jar and its `config/enderio/EnderIO.cfg`
-// (read once; nothing from either is committed):
+// granted change requests (add-on 11)"), pinned in the pack's EnderIO 2.10.46 and EnderCore 0.5.15 jars and its
+// `config/enderio/EnderIO.cfg` (read only; nothing from them is committed):
 // - An item conduit face extracts `SpeedUpgrade.BASE_MAX_EXTRACTED` = 4 items plus 4 per Item Conduit Speed Upgrade (at
 //   most the upgrade's `maxStackSize` of 15) at a time, then waits `round(n × 10 / max)` ticks
 //   (`ItemConduit.getTickTimePerItem` = 10 / max, `NetworkedInventory.itemExtracted`).
@@ -12,7 +12,13 @@
 //   `getOutputColor` fall back to `GREEN`) and extracts only with a redstone signal, ON (`getExtractionRedstoneMode`),
 //   so the line never hands out Green and sets every extract face's redstone.
 // - Insert targets fill sticky ones first, then by priority, highest first, then by distance
-//   (`NetworkedInventory$Target.compareTo`).
+//   (`NetworkedInventory$Target.compareTo`): each extraction goes to the first that takes it. With round robin on, a
+//   face starts each extraction at the target after the one served last, over all of its targets whatever their
+//   priority (`NetworkedInventory.getTargetIterator` hands out the pack's EnderCore 0.5.15 `RoundRobinIterator`, whose
+//   index only moves on), so a chest takes its turn with the machines.
+// - Ender fluid conduits have no priority. Without round robin a face tries the target that took fluid last first
+//   (`EnderLiquidConduitNetwork$TankIterator.rewind`), so a tank that always takes fluid keeps it all; with it, the
+//   targets take turns.
 // - Item filters hold 5 (Basic), 10 (Advanced) or 24 (Big) items and match meta and NBT by default
 //   (`ItemFilter.DEFAULT_MBT`); an ender fluid conduit's own `FluidFilter` holds 5 fluids.
 // - `ConnectionMode`, `DyeColor` and `RedstoneControlMode` are the enums behind the face types in `../types/layout.ts`;

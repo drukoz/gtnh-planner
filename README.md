@@ -64,7 +64,7 @@ Choose **EnderIO conduits** under **Logistics** in a project's settings. The lin
 
 - Every conduit face that touches a machine or chest is set to **Extract**, **Insert** or **In / Out** (**Disabled** where it must not connect).
 - Each face has its own extract filter and insert filter (a Basic, Advanced or Big Item Filter with the exact items, matching meta, and NBT only when the item has it) and its own extract and insert channel colours, so each machine's outputs reach only the machines that take them.
-- Machines that use an item are filled first (priority 1) and the surplus goes to the output chest (priority 0). A face that feeds several machines is set to round robin, and a face that must move more than 8 items/s gets speed upgrades.
+- Machines that use an item are filled first (priority 1) and the surplus goes to the output chest (priority 0). A face that feeds several machines and no chest is set to round robin (EnderIO's round robin takes turns whatever the priority, so a face that also feeds a chest leaves it off), and a face that must move more than 8 items/s gets speed upgrades.
 - Every extract face is set to **Always active**, because a conduit left at its default waits for a redstone signal.
 - Green is left to your base's own network. When the scan found an EnderIO network at the base, the line joins it at the input chest; otherwise a build step says to fill the input chest by hand.
 - Power still runs over GT cables.
@@ -72,4 +72,4 @@ Choose **EnderIO conduits** under **Logistics** in a project's settings. The lin
 
 The **Connections** tab of a project draws any line, in all four logistics modes, as boxes and links that show every face's settings. Click a box, a face or a link for the details.
 
-Limits: rates follow EnderIO's default conduit config, so a server that changes the conduit rates in `EnderIO.cfg` may need more speed upgrades or a bigger fluid conduit. A face holds at most 24 filtered items, and more are flagged. The line plans no redstone signal control (every extract face is simply set to Always active).
+Limits: rates follow EnderIO's default conduit config, so a server that changes the conduit rates in `EnderIO.cfg` may need more speed upgrades or a bigger fluid conduit. A face holds at most 24 filtered items, and more are flagged. Ender fluid conduits have no priority, so when machines take a fluid whose surplus also leaves through an open end, the tank takes its turn with them; the line warns about it. The line plans no redstone signal control (every extract face is simply set to Always active).

@@ -62,8 +62,37 @@ describe('EnderIO mode — items', () => {
     const at = (target: string) => faces(r).find((f) => f.target === target)!;
     const [a, b, c, out] = [at('Basic Macerator'), at('Advanced Assembler'), at('Advanced Chemical Reactor'), at('Chest (output)')];
     expect([a.extract!.color, b.insert!.color, c.insert!.color, out.insert!.color]).toEqual(['red', 'red', 'red', 'red']);
-    expect([a.extract!.roundRobin, a.extract!.rate, b.insert!.priority, c.insert!.priority, out.insert!.priority]).toEqual([true, 3, 1, 1, 0]);
+    // round robin would hand the chest its turn whatever its priority, so it is off: each extraction goes to the first
+    // face that takes it, the machines (priority 1) before the chest (0)
+    expect([a.extract!.roundRobin, a.extract!.rate, b.insert!.priority, c.insert!.priority, out.insert!.priority]).toEqual([false, 3, 1, 1, 0]);
     expect(out.insert!.filter!.keys).toEqual(['t:dust@0', 't:ingot@0', 't:out_c@0']);
+  });
+
+  it('round robins only between machine faces, so a surplus for the output chest never takes a machine\'s share', () => {
+    // a makes 2.5 dust/s: b needs 2 and the output chest gets the 0.5 left. EnderIO's round robin rotates over every
+    // face a side feeds, whatever its priority, so with it on the chest would take every other extraction (half the
+    // dust, b getting 1.25 of its 2); with it off each extraction goes to b (priority 1) first and the chest takes the rest
+    const surplus = makePlan([
+      { id: 'a', mteId: IDS.MACERATOR, count: 1, outputs: [['t:dust@0', 5]] },
+      { id: 'b', mteId: IDS.ASSEMBLER, count: 1, tier: 2, inputs: [['t:dust@0', 4]], outputs: [['t:ingot@0', 1]] },
+    ], { flows: [{ from: 'raw', to: 'a', key: 't:in@0', perSecond: 2.5 }, { from: 'a', to: 'b', key: 't:dust@0', perSecond: 2 },
+      { from: 'a', to: 'out', key: 't:dust@0', perSecond: 0.5 }, { from: 'b', to: 'out', key: 't:ingot@0', perSecond: 0.5 }] });
+    const r = buildMode('enderio', { ...setup(surplus), network: null });
+    const at = (target: string) => faces(r).find((f) => f.target === target)!;
+    const [a, b, out] = [at('Basic Macerator'), at('Advanced Assembler'), at('Chest (output)')];
+    expect([a.extract!.color, b.insert!.color, out.insert!.color]).toEqual(['red', 'red', 'red']);
+    expect([a.extract!.roundRobin, a.extract!.rate, b.insert!.priority, b.insert!.rate, out.insert!.priority, out.insert!.rate])
+      .toEqual([false, 2.5, 1, 2, 0, 1]);
+    // two machines and no chest, one taking twice the other's share: round robin, each machine skipped once it is full
+    const machines = makePlan([
+      { id: 'a', mteId: IDS.MACERATOR, count: 1, outputs: [['t:dust@0', 3]] },
+      { id: 'b', mteId: IDS.ASSEMBLER, count: 1, tier: 2, inputs: [['t:dust@0', 1]], outputs: [['t:ingot@0', 1]] },
+      { id: 'c', mteId: IDS.CHEM_HV, count: 1, tier: 3, inputs: [['t:dust@0', 2]], outputs: [['t:out_c@0', 1]] },
+    ], { flows: [{ from: 'raw', to: 'a', key: 't:in@0', perSecond: 3 }, { from: 'a', to: 'b', key: 't:dust@0', perSecond: 1 },
+      { from: 'a', to: 'c', key: 't:dust@0', perSecond: 2 }, { from: 'b', to: 'out', key: 't:ingot@0', perSecond: 1 },
+      { from: 'c', to: 'out', key: 't:out_c@0', perSecond: 1 }] });
+    const m = buildMode('enderio', { ...setup(machines), network: null });
+    expect(faces(m).find((f) => f.target === 'Basic Macerator')!.extract!.roundRobin).toBe(true);
   });
 
   it('sends items for owned machines and unplanned byproducts through the chests', () => {
@@ -155,9 +184,10 @@ describe('EnderIO mode — tail chests, the storage tap and warnings', () => {
     expect([riser.label, riser.connections, riser.conduits]).toEqual(['Item Conduit', 1 | 8, [{ kind: 'item', item: ITEM, connections: 1, faces: [
       { face: 'south', mode: 'insert', target: 'Chest (output)', insert: { color: 'red', filter: basic(['t:i24@0', 't:i25@0']), rate: 2, priority: 0 } }] }]]);
     expect(r.blocks.find((b) => posKey(b.pos) === '2,0,2')!.connections).toBe(2 | 4 | 8 | 16);
-    // the assembler's outputs go into both output chests, the macerator's into the first only
+    // the assembler's outputs go into both output chests, the macerator's into the first only; round robin stays off
+    // toward chests, each of which takes only its own items
     expect([faces(r).find((f) => f.target === 'Advanced Assembler')!.extract!.roundRobin, faces(r).find((f) => f.target === 'Basic Macerator')!.extract!.roundRobin])
-      .toEqual([true, false]);
+      .toEqual([false, false]);
     expect([r.tailFluidY, r.warnings, r.drafts[0]!.text]).toEqual([2, [],
       "Lay 3× Item Conduit along the middle row so it touches every machine's front, with an input chest and 2 output chests at the end"]);
   });
@@ -224,7 +254,7 @@ describe('EnderIO mode — tail chests, the storage tap and warnings', () => {
       { from: 'r', to: 'out', key: 't:out_r@0', perSecond: 1 }] });
     const r = buildMode('enderio', { ...setup(plan), network: null });
     const [q, out] = [faces(r).find((f) => f.target === 'Basic Macerator')!, faces(r).find((f) => f.target === 'Chest (output)')!];
-    expect([q.extract!.color, q.extract!.roundRobin, out.insert!.color, out.insert!.filter!.keys]).toEqual(['red', true, 'red', ['t:by@0', 't:out_r@0']]);
+    expect([q.extract!.color, q.extract!.roundRobin, out.insert!.color, out.insert!.filter!.keys]).toEqual(['red', false, 'red', ['t:by@0', 't:out_r@0']]);
   });
 
   it('rates each tail chest face by what crosses the line there', () => {

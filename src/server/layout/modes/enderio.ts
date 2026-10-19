@@ -3,9 +3,12 @@
 // machine's fluid port, the two sharing cells as conduit bundles. Each face toward a machine, a tail chest or a tank is
 // set on its own: Extract (EnderIO INPUT) what the machine makes, Insert (OUTPUT) what it takes, or In / Out for both,
 // each side with its own channel colour and a whitelist of its exact items or fluids; faces toward anything else they
-// could trade with are Disabled. Extract sides get round robin when they feed several faces and redstone Always active
-// (an unset face extracts only with a signal); item extract sides also get the speed upgrades their rate needs and self
-// feed off, and item insert sides fill machines before chests. The plan's flows link what makes an item or fluid to what
+// could trade with are Disabled. Extract sides get redstone Always active (an unset face extracts only with a signal);
+// item extract sides also get the speed upgrades their rate needs and self feed off, and item insert sides fill
+// machines (priority 1) before chests (0). EnderIO's round robin rotates over every target of a face whatever its
+// priority, so an item extract side gets it only when it feeds two or more machine faces and no chest; a fluid extract
+// side (ender fluid conduits have no priority) gets it when it feeds two or more faces, and a fluid whose surplus leaves
+// through an open end while machines take it is warned about. The plan's flows link what makes an item or fluid to what
 // takes it, and linked sides share a channel; items and fluids are separate networks with their own channels. Only raw
 // inputs and final outputs touch storage, at the tail: an input chest the line extracts from, which an EnderIO network
 // at the base keeps stocked on Green (a colour the line never uses), output chests of 24 items each, and one open fluid
@@ -206,9 +209,22 @@ function planChannels(plans: readonly FacePlan[], flows: readonly PlanFlow[], pl
   return { ...assignChannels(ends, links), fed };
 }
 
-/** Round robin is on for an extract end that feeds two or more insert ends. */
-function roundRobin(channels: Channels, extractEnd: string): boolean {
-  return (channels.fed.get(extractEnd)?.size ?? 0) >= 2;
+/**
+ * Round robin for an extract end: on when it feeds two or more insert ends and `even(those ends)` holds. With it on,
+ * EnderIO starts each extraction at the target after the one served last, over every target of the face
+ * (`NetworkedInventory.getTargetIterator` hands out EnderCore's `RoundRobinIterator` over the priority-sorted targets,
+ * and its index only moves on), so priority no longer decides who is served first; with it off, an item goes to the
+ * first target that takes it (sticky, then priority, then distance) and a fluid to the one that took fluid last
+ * (`EnderLiquidConduitNetwork$TankIterator.rewind`).
+ */
+function roundRobin(channels: Channels, extractEnd: string, even: (insertEnds: ReadonlySet<string>) => boolean): boolean {
+  const fed = channels.fed.get(extractEnd);
+  return fed !== undefined && fed.size >= 2 && even(fed);
+}
+
+/** An item insert side's priority (higher is filled first): 1 toward a machine, 0 toward a tail chest. */
+function insertPriority(face: FacePlan): number {
+  return face.stepId === null ? 0 : 1;
 }
 
 /** Each face's mode and sides from the side builders, called face by face, extract first. */
@@ -305,6 +321,32 @@ function filterFullWarning(input: ModeInput, face: FacePlan, side: SideName, fil
   return face.stepId === null ? { code: 'filter_full', text } : { code: 'filter_full', stepId: face.stepId, text };
 }
 
+/**
+ * `conduit_share`, one per fluid (in key order) that a face extracts into both an open end (the surplus, for your tank)
+ * and machines that take it: ender fluid conduits have no priority, so the tank takes its turn with those machines
+ * however much they need. Without the tank the fluid has nowhere else to go, so the maker waits for the machines.
+ */
+function fluidShareWarnings(input: ModeInput, plans: readonly FacePlan[], channels: Channels): PlanWarning[] {
+  const inserts = new Map(plans.filter((f) => f.insert !== null).map((f) => [endId(f, 'insert'), f]));
+  const sharing = new Map<StuffKey, string[]>();
+  for (const f of plans) {
+    if (f.extract === null) continue;
+    const fed = [...(channels.fed.get(endId(f, 'extract')) ?? [])].map((e) => inserts.get(e)!);
+    for (const key of f.extract.keys) {
+      const takes = fed.filter((g) => g.insert!.keys.includes(key));
+      const machines = takes.filter((g) => g.stepId !== null).map((g) => g.target);
+      if (machines.length > 0 && takes.some((g) => g.stepId === null)) sharing.set(key, [...(sharing.get(key) ?? []), ...machines]);
+    }
+  }
+  return [...sharing].sort(([a], [b]) => compareText(a, b)).map(([key, targets]): PlanWarning => {
+    const names = [...new Set(targets)];
+    const one = names.length === 1;
+    return { code: 'conduit_share', text: `${joinNames(names)} ${one ? 'shares' : 'share'} ${nameList(input.plan, input.pack, [key])} with the open end `
+      + `for your tank turn by turn (ender fluid conduits have no priority), so ${one ? 'it' : 'they'} can run short: if ${one ? 'it does' : 'they do'}, `
+      + 'take the tank off that end' };
+  });
+}
+
 /** `conduit_channels`, one per colour a channel had to share past the palette. */
 function channelWarnings(input: ModeInput, channels: ChannelPlan): PlanWarning[] {
   return channels.shared.map(({ color, keys }): PlanWarning => ({ code: 'conduit_channels',
@@ -372,11 +414,19 @@ function crossing(plan: Plan, items: readonly PlanFlow[], placed: ReadonlySet<st
 
 /**
  * Each item side's colour, filter, speed upgrades, priority and round robin, by face, with the `conduit_rate` warnings
- * (once per step, and for the input chest's face) and then the `filter_full` ones.
+ * (once per step, and for the input chest's face) and then the `filter_full` ones. Round robin is on only for a side
+ * that feeds two or more insert sides of one priority, none of them a tail chest's: round robin would hand a chest its
+ * turn before the machines are full, while without it the machines (priority 1) are filled first and the chest takes
+ * what is left.
  */
 function itemSettings(input: ModeInput, plans: readonly FacePlan[], channels: Channels): { configured: FaceSettings; warnings: PlanWarning[] } {
   const { parts } = input;
   const rateWarnings = new WarningList(), filterWarnings = new WarningList();
+  const inserts = new Map(plans.filter((f) => f.insert !== null).map((f) => [endId(f, 'insert'), f]));
+  const even = (ends: ReadonlySet<string>): boolean => {
+    const faces = [...ends].map((e) => inserts.get(e)!);
+    return faces.every((f) => f.stepId !== null) && new Set(faces.map(insertPriority)).size === 1;
+  };
   const filterOf = (f: FacePlan, side: SideName, keys: readonly StuffKey[]): ConduitFilter => {
     const { filter, dropped } = itemFilterFor(parts, keys);
     if (dropped.length > 0) filterWarnings.add(filterFullWarning(input, f, side, filter, dropped));
@@ -387,12 +437,12 @@ function itemSettings(input: ModeInput, plans: readonly FacePlan[], channels: Ch
     const speed = speedUpgradesFor(s.rate);
     if (speed.short) rateWarnings.add(itemRateWarning(parts, s.rate, f.stepId === null ? 'the input chest' : f.target, f.stepId));
     return {
-      color: channels.colors.get(id)!, filter: filterOf(f, 'extract', s.keys), rate: s.rate, roundRobin: roundRobin(channels, id),
+      color: channels.colors.get(id)!, filter: filterOf(f, 'extract', s.keys), rate: s.rate, roundRobin: roundRobin(channels, id, even),
       selfFeed: false, redstone: 'ignore', ...(speed.count > 0 ? { speed: { item: parts.eio_speed_upgrade.key, count: speed.count } } : {}),
     };
   };
   const insertOf = (f: FacePlan, s: Side): ConduitInsert => ({
-    color: channels.colors.get(endId(f, 'insert'))!, filter: filterOf(f, 'insert', s.keys), rate: s.rate, priority: f.stepId === null ? 0 : 1,
+    color: channels.colors.get(endId(f, 'insert'))!, filter: filterOf(f, 'insert', s.keys), rate: s.rate, priority: insertPriority(f),
   });
   return { configured: configureFaces(plans, extractOf, insertOf), warnings: [...rateWarnings.list, ...filterWarnings.list] };
 }
@@ -611,7 +661,8 @@ function fluidNetwork(placement: Placement, ports: readonly Vec3[], ends: number
 
 /**
  * Each fluid side's colour, filter and round robin, by face (fluid conduits have no self feed, speed upgrades or
- * priority), with the `filter_full` warnings.
+ * priority), with the `filter_full` warnings. Round robin is on for a side that feeds two or more insert sides, open
+ * ends among them: without it, a tank that took fluid once would be tried first from then on and take it all.
  */
 function fluidSettings(input: ModeInput, plans: readonly FacePlan[], channels: Channels): { configured: FaceSettings; warnings: PlanWarning[] } {
   const filterWarnings = new WarningList();
@@ -622,7 +673,7 @@ function fluidSettings(input: ModeInput, plans: readonly FacePlan[], channels: C
   };
   const extractOf = (f: FacePlan, s: Side): ConduitExtract => {
     const id = endId(f, 'extract');
-    return { color: channels.colors.get(id)!, filter: filterOf(f, 'extract', s.keys), rate: s.rate, roundRobin: roundRobin(channels, id), redstone: 'ignore' };
+    return { color: channels.colors.get(id)!, filter: filterOf(f, 'extract', s.keys), rate: s.rate, roundRobin: roundRobin(channels, id, () => true), redstone: 'ignore' };
   };
   const insertOf = (f: FacePlan, s: Side): ConduitInsert => ({
     color: channels.colors.get(endId(f, 'insert'))!, filter: filterOf(f, 'insert', s.keys), rate: s.rate,
@@ -702,7 +753,10 @@ function fluidLine(input: ModeInput, nets: readonly FluidNet[], items: ItemLine 
   return {
     conduits,
     drafts: fluidDrafts(input, CONDUIT_NAMES[kind], network.cells, ends, itemCells),
-    warnings: [...(short ? [fluidRateWarning(kind, need)] : []), ...filterWarnings, ...channelWarnings(input, channels), ...unreached.list],
+    warnings: [
+      ...(short ? [fluidRateWarning(kind, need)] : []), ...filterWarnings, ...channelWarnings(input, channels), ...fluidShareWarnings(input, laid, channels),
+      ...unreached.list,
+    ],
   };
 }
 
