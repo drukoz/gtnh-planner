@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { MINI_GT, miniGt } from '../../helpers/mini-gt.ts';
-import { packFromSpec } from '../../helpers/pack-spec.ts';
+import { packFromSpec, type RecipeSpec } from '../../helpers/pack-spec.ts';
 import { planLine, emptyContext, settingsHash, planCacheKey, PlanCache, powerSummary, batchShortWarning } from '../../../src/server/planner/plan.ts';
 import { linePricing } from '../../../src/server/planner/pricing.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
@@ -305,6 +305,20 @@ describe('planLine', () => {
     const mv = (await planLine(p, S({ target: 't:widget@0', tier: 2 }), emptyContext())).steps.find((s) => s.mainOutput === 't:widget@0')!;
     expect(mv.ways).toEqual({ total: 5, usable: 2 });
     expect(mv.alternatives.filter((a) => a.unusable === undefined).map((a) => a.recipeId).sort()).toEqual(['widget-lv', 'widget-mv']);
+  });
+  it('lists every way to make the product, however many there are', async () => {
+    // Controller rulings (plan 09, "ALL ways the export knows"): no cut of the cheapest. 40 Widget recipes run at LV and
+    // 20 more need MV; at LV all 60 are listed, the 40 usable ones first, each group by raw cost per unit, then id.
+    const widget = (id: string, plates: number, eut: number): RecipeSpec => ({ id, map: 'gt.recipe.assembler', in: [['t:iron_plate@0', plates]], out: [['t:widget@0', 1]], eut });
+    const lv = Array.from({ length: 40 }, (_, i) => widget(`widget-lv-${String(i).padStart(2, '0')}`, i + 2, 16));
+    const mv = Array.from({ length: 20 }, (_, i) => widget(`widget-mv-${String(i).padStart(2, '0')}`, i + 2, 120));
+    const p = packFromSpec({ ...MINI_GT, items: [...MINI_GT.items!, { key: 't:widget@0', name: 'Widget' }], recipes: [...MINI_GT.recipes!, ...lv, ...mv] });
+    const step = (await planLine(p, S({ target: 't:widget@0', tier: 1 }), emptyContext())).steps.find((s) => s.mainOutput === 't:widget@0')!;
+    expect(step.recipeId).toBe('widget-lv-00');
+    expect(step.ways).toEqual({ total: 60, usable: 40 });
+    expect(step.alternatives.map((a) => a.recipeId)).toEqual([...lv, ...mv].map((r) => r.id));
+    expect(step.alternatives.map((a) => a.rawCost)).toEqual([...lv.map((_, i) => i + 2), ...mv.map((_, i) => i + 2)]);
+    expect(step.alternatives.filter((a) => a.unusable !== undefined).map((a) => a.unusable)).toEqual(mv.map(() => ['needs MV (your tier is LV)']));
   });
   it('leaves display-only and duplicate recipes out of the swap list and names a machine nothing builds', async () => {
     // A fake (display-only) recipe and the vanilla furnace's copy of a smelting recipe the electric furnace runs are no

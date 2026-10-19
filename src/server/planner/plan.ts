@@ -148,15 +148,6 @@ export class PlanCache {
   }
 }
 
-/**
- * A swap list holds at most this many recipes the group can pick (the one in use always among them) and at most
- * `MAX_UNUSABLE_ALTERNATIVES` it cannot (a pinned one always among them); `PlanStep.ways` counts them all. Controller
- * rulings (plan 09): every way the export knows is listed, but on the 2.9 export a Wood Pulp step has 1,402 producers
- * (674 usable at MV) and Copper Ingot 778, while an Electronic Circuit has 14, all of which fit.
- */
-const MAX_ALTERNATIVES = 30;
-const MAX_UNUSABLE_ALTERNATIVES = 15;
-
 type Alternative = PlanStep['alternatives'][number];
 type AlternativeInput = NonNullable<Alternative['inputs']>[number];
 
@@ -309,14 +300,6 @@ function obtainableIn(basis: PlanBasis, settings: PlanSettings): (key: StuffKey)
   return (key) => basis.avail.available.has(key) || stops.has(key);
 }
 
-/** `list` cut to `max`, with `keep` (when listed) in the last place if the cut would drop it. */
-function capped(list: readonly Alternative[], max: number, keep: string | undefined): Alternative[] {
-  const kept = list.slice(0, max);
-  const must = keep === undefined ? undefined : list.find((a) => a.recipeId === keep);
-  if (must !== undefined && !kept.includes(must)) kept[kept.length - 1] = must;
-  return kept;
-}
-
 /** Producers of each wanted good in the cost graph, ranked by raw cost per unit then id; finite costs only. */
 function alternativesFor(model: CostModel, wanted: ReadonlySet<StuffKey>): Map<StuffKey, Alternative[]> {
   const producers = new Map<StuffKey, LpRecipe[]>();
@@ -344,10 +327,10 @@ function alternativesFor(model: CostModel, wanted: ReadonlySet<StuffKey>): Map<S
  * Each step's swap list (spec §3.9, alternatives by raw material use; controller rulings of plan 09, "every way to make
  * the output"): every recipe of the pack that makes its main output (`makersOf`, less those `judgeWay` finds no way of
  * their own), first the ones the group can pick here, then the others with why it cannot (`unusable`), each group by raw
- * cost per unit, then id, and each row with what one run takes and makes (`recipeParts`). At most MAX_ALTERNATIVES of
- * the first and MAX_UNUSABLE_ALTERNATIVES of the others, always with the step's own recipe (Plan 2 Task 14: "the one in
- * use kept") and the one `recipeChoice` pins, in the last place when the cut would drop them; `PlanStep.ways` counts all
- * of each. Raw costs: a producer of the cost graph at its cost there; the step's own recipe, which the line may run
+ * cost per unit, then id, and each row with what one run takes and makes (`recipeParts`). All of them, however many
+ * ("ALL ways the export knows": on the 2.9 export a Wood Pulp step lists 1,072, a Copper Ingot one 564), the step's own
+ * recipe always among them (Plan 2 Task 14: "the one in use kept"); `PlanStep.ways` counts each group for the count
+ * line. Raw costs: a producer of the cost graph at its cost there; the step's own recipe, which the line may run
  * although the cost graph dropped it (or never walked its good), at its raw cost in the line's own graph (`analyzeCosts`
  * of `graph`, run only then), else at what the good costs there; any other recipe at an estimate (`estimate`: its inputs
  * at their cost-model cost, else their price, less its other outputs at theirs). A step without a main output has
@@ -419,8 +402,7 @@ async function addAlternatives(
     }
     exact.set(step.id, new Set([step.recipeId, ...known.keys()]));
     step.ways = { total: usable.length + unusable.length, usable: usable.length };
-    const pin = Object.hasOwn(settings.recipeChoice, main) ? settings.recipeChoice[main] : undefined;
-    const listed = [...capped(usable.sort(byRawCostThenId), MAX_ALTERNATIVES, step.recipeId), ...capped(unusable.sort(byRawCostThenId), MAX_UNUSABLE_ALTERNATIVES, pin)];
+    const listed = [...usable.sort(byRawCostThenId), ...unusable.sort(byRawCostThenId)];
     step.alternatives = listed.map((a) => ({ ...a, ...recipeParts(pack, a.recipeId, avoid) }));
   }
   return exact;
@@ -1053,7 +1035,10 @@ async function avoidingLine(
     const cost = pricing.model.costs.cost(key);
     return Number.isFinite(cost) ? cost : pricing.basis.prices.price(key);
   };
-  /** The probe of the line walked with `allowed` back, once per set: a second search starts as the first did. */
+  /**
+   * The probe of the line walked with `allowed` back, once per set: a second search starts as the first did. A pin of an
+   * option on the list stays ignored where it is allowed back (`CandidateOptions.pinAvoid`, ruling P28), as in `open`.
+   */
   const trials = new Map<string, Promise<SolvedLine>>();
   const trial = (allowed: ReadonlySet<StuffKey>): Promise<SolvedLine> => {
     const back = new Set(allowed);
@@ -1064,7 +1049,7 @@ async function avoidingLine(
         const avoid = without(back);
         const leaf: LeafOracle = (key) => (!back.has(key) && request.madeFrom(key).length > 0 ? NOT_BOUGHT : pricing.leaf(key));
         await yieldToEventLoop();
-        const graph = buildCandidates(pack, settings, pricing.basis.env, leaf, [pricing.target], { avoid });
+        const graph = buildCandidates(pack, settings, pricing.basis.env, leaf, [pricing.target], { avoid, pinAvoid: goods });
         return { graph, sol: await solveLine(graph, demand, { ...options, probe: true }), avoid };
       })();
       trials.set(id, line);

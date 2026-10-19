@@ -688,10 +688,11 @@ interface OptionPinning {
  * The pins of `settings.optionChoice` a graph honours (fix spec R9, ruling P28), in key order: each names a consumed slot
  * of a recipe (`<recipe id>#<Ingredient.slot>`) and an option it holds, so that slot takes that option and no other. A
  * pin is ignored, with one `stale-option` warning (`key` = the pin's key), when its recipe is gone, the recipe has no
- * consumed slot of that number, the slot no such option (a re-export changed it), or the avoid list matches the option
- * (the avoid list wins over a pin, as over a pinned recipe). A pin of a recipe the line never runs costs nothing.
+ * consumed slot of that number, the slot no such option (a re-export changed it), or the option is on the avoid list
+ * (`onAvoidList`: the avoid list wins over a pin, as over a pinned recipe). A pin of a recipe the line never runs costs
+ * nothing.
  */
-function optionPinsOf(pack: Pack, settings: PlanSettings, avoid: ReadonlySet<StuffKey> | undefined): OptionPinning {
+function optionPinsOf(pack: Pack, settings: PlanSettings, onAvoidList: (key: StuffKey) => boolean): OptionPinning {
   const slots = new Map<Ingredient, Option>();
   const pins = new Map<string, StuffKey>();
   const warnings: PlanWarning[] = [];
@@ -716,7 +717,7 @@ function optionPinsOf(pack: Pack, settings: PlanSettings, avoid: ReadonlySet<Stu
     });
     if (held.length === 0) {
       stale(`${product}: ${pack.nameOf(key)} is no longer an option of the pinned ingredient; the planner chooses one`);
-    } else if (avoid?.has(key) === true) {
+    } else if (onAvoidList(key)) {
       stale(`${product}: the pinned ingredient ${pack.nameOf(key)} is on the avoid list; using another option that avoids it`);
     } else {
       for (const [ing, option] of held) slots.set(ing, option);
@@ -736,6 +737,13 @@ export interface CandidateOptions {
    * slot with others keeps only those (`keptOptions`). Absent or empty = none.
    */
   avoid?: ReadonlySet<StuffKey>;
+  /**
+   * The goods of the project's avoid list, for its option pins (ruling P28: the avoid list wins over a pin): a pin of
+   * one of them is ignored, with the avoid list's `stale-option`, also where the graph does not avoid it. `linePricing`'s
+   * graph walks without the avoid list (ruling R6) and an `avoidingLine` trial may allow some of it back (ruling R10);
+   * neither plans a pinned option the list covers. Absent or empty = only `avoid`.
+   */
+  pinAvoid?: ReadonlySet<StuffKey>;
 }
 
 /**
@@ -753,7 +761,7 @@ export interface CandidateOptions {
  * empties it. Goods of `opts.avoid` are never bought, consumed or held (`CandidateOptions.avoid`), in the estimate as in
  * the graph. Fix spec R9: an ore-dictionary slot `settings.optionChoice` pins takes only its pinned option, in the
  * estimate as in the graph, so the walk plans that option's chain however dear it is (`optionPinsOf`; the pins it
- * ignores warn `stale-option`).
+ * ignores warn `stale-option`, among them every pin of an option of `opts.avoid` or `opts.pinAvoid`).
  */
 export function buildCandidates(
   pack: Pack, settings: PlanSettings, env: PlanEnv, leaf: LeafOracle, targets: StuffKey[], opts: CandidateOptions = {},
@@ -765,7 +773,8 @@ export function buildCandidates(
   const goods = new Map<StuffKey, GoodInfo>();
   const recipes = new Map<string, LpRecipe>();
   const blocked: CandidateGraph['blocked'] = new Map();
-  const pinning = optionPinsOf(pack, settings, avoid);
+  const pinAvoid = opts.pinAvoid;
+  const pinning = optionPinsOf(pack, settings, (key) => avoid?.has(key) === true || pinAvoid?.has(key) === true);
   const warnings: PlanWarning[] = [...pinning.warnings];
   const acceptance = new Map<string, Acceptance>();
   const queue: StuffKey[] = [];

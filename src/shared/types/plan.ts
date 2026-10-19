@@ -178,8 +178,8 @@ export interface PlanStep {
   // optional addition
   /**
    * How many ways the export knows to make the main output (`total`: recipes that make it, less display-only and duplicate
-   * ones and those using a good the project avoids) and how many of them the group can pick here (`usable`);
-   * `alternatives` lists at most a few dozen of each: "14 ways to make Electronic Circuit: 2 you can use now".
+   * ones and those using a good the project avoids) and how many of them the group can pick here (`usable`), for the
+   * count line "14 ways to make Electronic Circuit: 2 you can use now"; `alternatives` lists every one of them.
    */
   ways?: { total: number; usable: number };
 }

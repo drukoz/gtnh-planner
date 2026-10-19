@@ -7,7 +7,7 @@ import type { StuffKey } from '../../shared/keys.ts';
 import type { Pack } from '../../shared/types/pack.ts';
 import type { PlanContext, PlanSettings } from '../../shared/types/plan.ts';
 import { isBaseItem } from './availability.ts';
-import { basisContextKey, planBasis, settingsHash, type PlanBasis } from './basis.ts';
+import { basisContextKey, planBasis, resolveAvoid, settingsHash, type PlanBasis } from './basis.ts';
 import { buildCandidates, type CandidateGraph, type LeafOracle } from './candidates.ts';
 import { analyzeCosts, makeLeafOracle, type CostAnalysis } from './costs.ts';
 import { yieldToEventLoop } from './lp.ts';
@@ -95,7 +95,23 @@ export function plannableTarget(pack: Pack, settings: PlanSettings): StuffKey | 
   return target !== null && (pack.items.has(target) || pack.fluids.has(target)) ? target : null;
 }
 
-async function computePricing(pack: Pack, settings: PlanSettings, ctx: PlanContext, target: StuffKey): Promise<LinePricing> {
+/**
+ * The options `settings.optionChoice` pins that its avoid list covers (`resolveAvoid`; never the target, which a line
+ * plans whatever the list says), sorted: ruling P28 lets the avoid list win over such a pin, also in the line's graph,
+ * which is walked without the list (ruling R6), so that graph is told them (`CandidateOptions.pinAvoid`).
+ */
+function avoidedPins(pack: Pack, settings: PlanSettings, target: StuffKey): StuffKey[] {
+  const entries = settings.avoid ?? [];
+  const pinned = Object.values(settings.optionChoice ?? {});
+  if (entries.length === 0 || pinned.length === 0) return [];
+  const { goods } = resolveAvoid(pack, entries);
+  goods.delete(target);
+  return [...new Set(pinned.filter((key) => goods.has(key)))].sort();
+}
+
+async function computePricing(
+  pack: Pack, settings: PlanSettings, ctx: PlanContext, target: StuffKey, pinAvoid: ReadonlySet<StuffKey>,
+): Promise<LinePricing> {
   await yieldToEventLoop();
   const basis = planBasis(pack, settings, ctx);
   const model = await costModel(pack, settings, basis, target);
@@ -116,7 +132,7 @@ async function computePricing(pack: Pack, settings: PlanSettings, ctx: PlanConte
     makeLeafOracle(pack, settings, basis.avail, basis.prices, stopCost, (key) => priced.get(key), { supplied: basis.supplied });
   let leaf = leafWith();
   await yieldToEventLoop();
-  let graph = buildCandidates(pack, settings, basis.env, leaf, [target]);
+  let graph = buildCandidates(pack, settings, basis.env, leaf, [target], { pinAvoid });
   for (let round = 0; round < MAX_PRICING_ROUNDS; round++) {
     const unpriced = [...graph.goods.values()].filter((g) => g.leafClass === 'derived' && g.buyable && !tried.has(g.key)).map((g) => g.key);
     if (unpriced.length === 0) break;
@@ -124,7 +140,7 @@ async function computePricing(pack: Pack, settings: PlanSettings, ctx: PlanConte
     for (const [key, cost] of await derivedCosts(pack, settings, basis, model, target, unpriced)) priced.set(key, cost);
     leaf = leafWith();
     await yieldToEventLoop();
-    graph = buildCandidates(pack, settings, basis.env, leaf, [target]);
+    graph = buildCandidates(pack, settings, basis.env, leaf, [target], { pinAvoid });
   }
   // The chains behind the stop items the line may buy, as the derived leaves' (`priced`): only what they stand for
   // (`RawInput.pricedVia`) is read; a stop item keeps its own price.
@@ -141,7 +157,9 @@ const MEMOS = new WeakMap<Pack, Map<string, Promise<LinePricing>>>();
  * settings hash and the context fields its basis reads (`basisContextKey`), for at most MEMO_SIZE such keys per pack:
  * the plan and every later `expandBomLines` of the same project share one pricing. Callers asking while it is computed
  * share that computation; one that fails is not kept. The avoid list plays no part (ruling R6: only `planLine`'s own
- * graphs honor it), so projects that differ only in it share one pricing, priced and walked without it.
+ * graphs honor it) beyond the option pins it overrides (`avoidedPins`, ruling P28: the line's graph ignores them, with
+ * a `stale-option` each), so projects that differ only in it share one pricing, priced and walked without it, unless it
+ * covers an option they pin.
  */
 export function linePricing(pack: Pack, settings: PlanSettings, ctx: PlanContext): Promise<LinePricing> | null {
   const target = plannableTarget(pack, settings);
@@ -152,14 +170,15 @@ export function linePricing(pack: Pack, settings: PlanSettings, ctx: PlanContext
     MEMOS.set(pack, memo);
   }
   const open: PlanSettings = { ...settings, avoid: [] };
-  const key = `${settingsHash(open)}|${basisContextKey(ctx)}`;
+  const pinAvoid = avoidedPins(pack, settings, target);
+  const key = `${settingsHash(open)}|${basisContextKey(ctx)}${pinAvoid.length === 0 ? '' : `|${JSON.stringify(pinAvoid)}`}`;
   const hit = memo.get(key);
   if (hit !== undefined) {
     memo.delete(key);
     memo.set(key, hit);
     return hit;
   }
-  const pricing = computePricing(pack, open, ctx, target);
+  const pricing = computePricing(pack, open, ctx, target, new Set(pinAvoid));
   memo.set(key, pricing);
   if (memo.size > MEMO_SIZE) memo.delete(memo.keys().next().value as string);
   const kept = memo;

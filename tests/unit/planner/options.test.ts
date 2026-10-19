@@ -124,12 +124,53 @@ describe('ingredient options', () => {
     expect(choices.filter((c) => c.unusable !== undefined).map((c) => c.key)).toEqual([LEAD]);
   });
   it('ignores a pinned option on the avoid list, saying so', async () => {
-    // Ruling P28: the avoid list wins over a pin, as it does over a pinned recipe (stale-choice).
+    // Ruling P28: the avoid list wins over a pin, as it does over a pinned recipe (stale-choice). The pin is ignored in
+    // every graph of the line, so the line is the one without it, which uses nothing the list covers.
     const plan = await planLine(pack, S({ optionChoice: { 'ca#100': LEAD }, avoid: ['Lead'] }), emptyContext());
     expect(plan.status).toBe('ok');
     expect(ids(plan)).toEqual(['alloy-solder', 'ca', 'x-solder']);
     expect(staleOptions(plan)).toEqual([{ code: 'stale-option', key: 'ca#100', text: expect.stringContaining('avoid list') }]);
-    expect(plan.avoided?.map((a) => [a.key, a.unavoidable])).toEqual([[LEAD, false], ['t:lead_ingot@0', false]]);
+    expect(circuitStep(plan).options?.[0]?.pinned).toBeUndefined();
+    expect(plan.avoided).toEqual([]);
+  });
+  it('ignores a pinned option on the avoid list even where nothing at the tier makes it', async () => {
+    // At LV nothing extracts lead (34 EU/t, an MV machine): a line that honoured the pin would plan nothing, though the
+    // same settings without the pin plan fine. The avoid list wins before the line is first solved.
+    const spec = structuredClone(CIRCUIT);
+    spec.recipes!.find((r) => r.id === 'x-lead')!.eut = 34;
+    const mvLead = packFromSpec(spec);
+    const plan = await planLine(mvLead, S({ optionChoice: { 'ca#100': LEAD }, avoid: ['Lead'] }), emptyContext());
+    expect(plan.status).toBe('ok');
+    expect(ids(plan)).toEqual(['alloy-solder', 'ca', 'x-solder']);
+    expect(staleOptions(plan)).toEqual([{ code: 'stale-option', key: 'ca#100', text: expect.stringContaining('avoid list') }]);
+    expect(plan.warnings.map((w) => w.code)).not.toContain('no-recipe');
+    const unpinned = await planLine(mvLead, S({ avoid: ['Lead'] }), emptyContext());
+    expect(plan.steps).toEqual(unpinned.steps);
+    // Without the avoid list the pin holds (the line's pricing is not shared with the avoiding one): nothing makes lead.
+    const pinned = await planLine(mvLead, S({ optionChoice: { 'ca#100': LEAD } }), emptyContext());
+    expect(pinned.status).toBe('infeasible');
+    expect(pinned.warnings).toContainEqual({ code: 'no-recipe', key: LEAD, text: 'Nothing at ≤ LV makes Molten Lead (needs MV)' });
+    expect(staleOptions(pinned)).toEqual([]);
+  });
+  it('keeps ignoring a pinned option on the avoid list where the line has to allow it back', async () => {
+    // A Lead Weight is cast from molten lead only, so the line cannot avoid lead; it avoids antimony, and with it
+    // soldering alloy. Lead is allowed back for the weight, yet the slot takes tin, not the pinned lead: the avoid list
+    // still wins over the pin, and only the weight's chain is flagged.
+    const spec = structuredClone(CIRCUIT);
+    spec.items!.push({ key: 't:weight@0', name: 'Lead Weight' });
+    spec.maps!.push({ id: 'gt.recipe.fluidsolidifier', name: 'Fluid Solidifier' });
+    spec.machines!.push({ mteId: 4, name: 'Basic Fluid Solidifier', maps: ['gt.recipe.fluidsolidifier'], tier: 1 });
+    spec.recipes!.find((r) => r.id === 'ca')!.in!.push(['t:weight@0', 1]);
+    spec.recipes!.push({ id: 'cast-weight', map: 'gt.recipe.fluidsolidifier', in: [[LEAD, 144]], out: [['t:weight@0', 1]], eut: 16 });
+    const plan = await planLine(packFromSpec(spec), S({ optionChoice: { 'ca#100': LEAD }, avoid: ['Lead', 'Antimony'] }), emptyContext());
+    expect(plan.status).toBe('ok');
+    expect(ids(plan)).toEqual(['ca', 'cast-weight', 'x-lead', 'x-tin']);
+    expect(circuitStep(plan).inputs).toContainEqual({ key: TIN, amount: 144, chance: 1 });
+    expect(circuitStep(plan).options?.[0]?.pinned).toBeUndefined();
+    expect(staleOptions(plan)).toEqual([{ code: 'stale-option', key: 'ca#100', text: expect.stringContaining('avoid list') }]);
+    const flagged = plan.warnings.filter((w) => w.code === 'avoid-unavoidable').map((w) => [w.stepId, w.key]);
+    expect(flagged).toEqual([['cast-weight', LEAD], ['x-lead', 't:lead_ingot@0']]);
+    expect(plan.avoided?.map((a) => [a.key, a.unavoidable])).toEqual([[LEAD, true], ['t:antimony_dust@0', false], ['t:lead_ingot@0', true]]);
   });
 });
 
