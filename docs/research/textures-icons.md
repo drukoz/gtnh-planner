@@ -554,6 +554,19 @@ $ unzip -l $GT | grep 'blocks/materialicons/METALLIC/'   → ore.png oreSmall.pn
 
 So in practice cables, pipes and frames almost always draw the `NONE` templates tinted with the material colour; the per-set block folders mostly differ in ore textures.
 
+**Export (exporter 0.4.0).** A pipe's `mte` row also carries `unconnected`: each side as GT draws it while every other side is connected (`mConnections = 63 & ~(1 << side)`), left out when it equals `inactive` (bare wires, frames). A pipe with no connection at all would not do: `BaseMetaPipeEntity.getTextureUncovered` passes `connected = connections == 0 || (connections & side.flag) != 0` (and widens a single connection to its whole axis), so a lone pipe is drawn connected on every side, and `MTECable`, `MTEFluidPipe`, `MTEItemPipe` and `MTEFrame` read only that flag, never `aConnections`. In the 2.9.0-RC-1 export 664 pipe types get it, 312 insulated cables (`INSULATION_FULL` in the insulation colour) and 352 fluid and item pipes (`pipeSide` in the material colour), each equal to what the planner derives from the connected faces of an older export. `blocks` also gets rows for the frame boxes (`gt.blockframes`, meta = material id, for every material `LoaderMetaPipeEntities.registerFrames` makes a frame of: one with metal items, or Wood; its set's `frameGt` icon in the material colour on every face; 251 metas, the pack's 251 frame items), the storage blocks (`gt.blockmetal1…10`, `gt.blockgem1…3`: `BlockMetal.mBlockIcons[meta]` untinted, for the metas `getIcon` draws, below 16 and below `mMats.length`) and the sheetmetal blocks (`gt.sheetmetal`, `bw.sheetmetal`: `getTextures(meta)` for every meta below `maxMeta` that the block's `materials` function names), and the top-level `prefixTextures` maps every `OrePrefixes.VALUES` name to `getTextureIndex()` (`OrePrefixes` is a class without `values()` in 5.09.54.183), so `frameGt` 83, `sheetmetal` 86 and `cellMolten` 31 come from the export instead of a hand-written supplement.
+
+```
+$ J -p -c -constants -cp X gregtech.api.metatileentity.BaseMetaPipeEntity | sed -n '/getTextureUncovered(/,/areturn/p'
+  getfield mConnections ... lookupswitch { 1, 2: 3; 4, 8: 12; 16, 32: 48 } ... 103: iload_2 104: ifeq 116 ... ForgeDirection.flag iand 113: ifeq 120 116: iconst_1 ... MetaPipeEntity.getTexture:(...;IIZZ)
+$ J -p -c -cp X gregtech.api.metatileentity.implementations.MTECable | sed -n '/getTexture(.*int, int, boolean, boolean)/,/^$/p' | grep -c iload_3   → 0 (MTEFluidPipe, MTEItemPipe, MTEFrame: 0)
+$ J -p -c -constants -cp X gregtech.loaders.preload.LoaderMetaPipeEntities | sed -n '/void registerFrames()/,/return/p'
+  sGeneratedMaterials aaload ... ifnonnull ... Materials.hasMetalItems ifne 37 ... Materials.Wood if_acmpne ... 37: new MTEFrame ... OrePrefixes.frameGt ... BlockFrameBox.getStackForm ... GTOreDictUnificator.registerOre
+$ J -p -c -constants -cp X gregtech.common.blocks.BlockMetal | sed -n '/getIcon(int, int)/,/areturn/p'   → iload_2 bipush 16 if_icmpge ... mMats arraylength if_icmpge ... mBlockIcons aaload IIconContainer.getIcon
+$ J -p -c -constants -cp X gregtech.common.blocks.BlockSheetMetal | sed -n '/getTextures(int)/,/areturn/p'
+  materials Int2ObjectFunction.get ... IOreMaterial.getTextureSet ... OrePrefixes.sheetmetal getTextureIndex ... IOreMaterial.getRGBA ... (no material: TextureSet.SET_NONE, untinted) ... the same texture on all six sides
+```
+
 ---
 
 ## 5. Other blocks the map and 3D view need
@@ -824,6 +837,14 @@ Some of these paths also exist in `GTNewHorizonsCoreMod-2.9.76.jar` with differe
   $ J -p -v -cp X gregtech.common.fluid.GTFluid | grep -c SideOnly → 0
   ```
 - **Other fluids**: `Fluid.getColor()` is common code; the still/flowing icons are assigned client-side (texture-stitch events), so their names are not available on a dedicated server. Use the NEI dump (its item panel shows fluids through NEI's own display item, below) or draw a colour swatch.
+
+**Export (exporter 0.4.0).** `fluids[].still` is the `stillIconResourceLocation` of the fluid the `iconsFrom` chain ends on, followed while `iconsFrom` is a `GTFluid` (at most four steps; a chain that loops back ends on the starting fluid), because `GTFluid.run()` runs a `GTFluid` `iconsFrom` and takes its icons, and registers its own locations only otherwise. Exporter 0.3.0 read the fluid's own location first, so the 82 cracked and entangled fluids named a `fluid.<their own name>` file that does not exist; in the 0.4.0 export of 2.9.0-RC-1 every `still` names an extracted file (the 66 cracked fluids name their source's, e.g. `lightlysteamcracked.naphtha` → `fluid.liquid_naphtha.png`). `fluids[].block` is the registry name of `Fluid.getBlock()` when the fluid has a block the registry names (114 fluids, each in `blockIds`), so a non-GT fluid, whose still only the client knows, can be drawn with its block's texture.
+
+```
+$ J -p -c -constants -cp X gregtech.common.fluid.GTFluid | sed -n '/public void run()/,/return/p'
+  getfield iconsFrom instanceof GTFluid ifeq 45 ... checkcast GTFluid invokevirtual run ... Fluid.getStillIcon putfield stillIcon ... Fluid.getFlowingIcon ... goto 97
+  45: getfield stillIconResourceLocation ifnull 71 ... GregTechAPI.sBlockIcons ... IIconRegister.registerIcon putfield stillIcon ...
+```
 
 ### 6.4 Non-GT items and blocks on the server
 
