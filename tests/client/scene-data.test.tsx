@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildScene, canonicalFaceFor, visible, blockList, pickInfo, hoverText, blockKey, ROLE_FALLBACK, type SceneInstance } from '../../src/client/three/scene-data.ts';
+import { buildScene, canonicalFaceFor, visible, blockList, pickInfo, hoverText, blockKey, frontOf, ROLE_FALLBACK, type SceneInstance } from '../../src/client/three/scene-data.ts';
 import { compositeTile, solidTile, packTiles, shadeFor, TILE } from '../../src/client/three/textures.ts';
 import type { CoverLayers, IconDescriptor } from '../../src/shared/types/assets.ts';
 import type { Layout, LayoutBlock } from '../../src/shared/types/layout.ts';
@@ -218,5 +218,24 @@ describe('3D scene data: texture tiles', () => {
     expect(packTiles([])).toHaveLength(0);
     expect(() => packTiles([new Uint8ClampedArray(10)])).toThrow(RangeError);
     expect(() => shadeFor(6)).toThrow(RangeError);
+  });
+});
+
+// Final review: a GT basic machine's front (mMainFacing) and output side (mFacing) are two faces.
+describe('3D scene data: a basic machine with a front of its own', () => {
+  it('draws the front on the output side when the front faces up or down, else on the front', () => {
+    expect([frontOf({ facing: 3 }), frontOf({ facing: 3, mainFacing: 1 }), frontOf({ facing: 3, mainFacing: 0 }), frontOf({ facing: 3, mainFacing: 4 }), frontOf({})])
+      .toEqual([3, 3, 3, 4, 2]);
+    const up: Layout = { ...layout, blocks: layout.blocks.map((b, i) => (i === 0 ? { ...b, mainFacing: 1 } : b)) };
+    const west: Layout = { ...layout, blocks: layout.blocks.map((b, i) => (i === 0 ? { ...b, mainFacing: 4 } : b)) };
+    const frontTile = (l: Layout, side: number) => { const s = buildScene(l, faces, icons, covers); return s.tiles[s.instances[0]!.tiles[side]]!.layers; };
+    expect(frontTile(up, 3)).toEqual([L('front')]);                    // GT shows the front overlay on the output side
+    expect(frontTile(west, 4)).toEqual([L('front')]);
+    expect(frontTile(west, 3)).not.toEqual([L('front')]);
+  });
+
+  it('names the front and the output side on click', () => {
+    const up: Layout = { ...layout, blocks: layout.blocks.map((b, i) => (i === 0 ? { ...b, mainFacing: 1 } : b)) };
+    expect(pickInfo(up, null, 0).lines.slice(0, 2)).toEqual(['Front facing up', 'Output side south']);
   });
 });
