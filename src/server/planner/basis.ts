@@ -69,32 +69,41 @@ function materialGoods(pack: Pack): Map<string, StuffKey[]> {
 /**
  * The goods an avoid list covers (architecture §11.25, ruling R5): an entry that is a material name of the pack, exactly
  * (case as exported), stands for every good of that material (`materialGoods`); else one that is an item or fluid key
- * for that good; any other entry matches nothing and is `unknown` (once, in list order). A material with no goods is
- * known but matches nothing.
+ * for that good; any other entry matches nothing and is `unknown` (once, in list order). A material of the pack with no
+ * goods (the export's `AnyCopper`, `Nano`, …) is no unknown entry, but matches nothing either: it is `empty` (once, in
+ * list order), so the plan can say so.
  */
-export function resolveAvoid(pack: Pack, avoid: readonly string[]): { goods: Set<StuffKey>; unknown: string[] } {
+export function resolveAvoid(pack: Pack, avoid: readonly string[]): { goods: Set<StuffKey>; unknown: string[]; empty: string[] } {
   const byName = materialGoods(pack);
   const goods = new Set<StuffKey>();
   const unknown: string[] = [];
+  const empty: string[] = [];
   for (const entry of new Set(avoid)) {
     const material = byName.get(entry);
-    if (material !== undefined) for (const key of material) goods.add(key);
-    else if (pack.items.has(entry) || pack.fluids.has(entry)) goods.add(entry);
-    else unknown.push(entry);
+    if (material !== undefined) {
+      for (const key of material) goods.add(key);
+      if (material.length === 0) empty.push(entry);
+    } else if (pack.items.has(entry) || pack.fluids.has(entry)) {
+      goods.add(entry);
+    } else {
+      unknown.push(entry);
+    }
   }
-  return { goods, unknown };
+  return { goods, unknown, empty };
 }
 
 const MATERIAL_LIST = new WeakMap<Pack, ReadonlyArray<{ name: string; label: string }>>();
 
 /**
- * The material names an avoid entry can be (`resolveAvoid`), each with its display name (`GtMaterial.displayName`, else
- * the name), sorted by display name then name; once per pack. The settings panel suggests them (ruling R12).
+ * The material names an avoid entry can usefully be (`resolveAvoid`): those with at least one good, so the picker never
+ * offers one that avoids nothing (the real export has 80 such materials of 1,355: `AnyCopper`, `AnyIron`, `Nano`, …).
+ * Each comes with its display name (`GtMaterial.displayName`, else the name), sorted by display name then name; once per
+ * pack. The settings panel suggests them (ruling R12).
  */
 export function avoidableMaterials(pack: Pack): ReadonlyArray<{ name: string; label: string }> {
   let list = MATERIAL_LIST.get(pack);
   if (list === undefined) {
-    list = [...materialGoods(pack).keys()]
+    list = [...materialGoods(pack)].filter(([, goods]) => goods.length > 0).map(([name]) => name)
       .map((name) => ({ name, label: pack.materials.get(name)?.displayName ?? name }))
       .sort((a, b) => byString(a.label, b.label) || byString(a.name, b.name));
     MATERIAL_LIST.set(pack, list);

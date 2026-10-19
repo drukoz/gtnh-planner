@@ -121,9 +121,11 @@ export interface Plan {
   names?: Record<string, string>;
   /**
    * The goods the avoid list matched that the plan without it uses (§11.25), sorted by key: `unavoidable` when this plan
-   * still uses one because nothing at the tier avoids it. Absent when the settings avoid nothing.
+   * still uses one because nothing at the tier avoids it. Absent when the settings avoid nothing. A good it uses in a
+   * not-consumed slot (a lens, mold or catalyst its machine holds) counts. So does a derived material it would buy that
+   * is made from goods the list matched (`madeFrom`, those goods): buying it would use them outside the plan.
    */
-  avoided?: Array<{ key: StuffKey; name: string; unavoidable: boolean }>;
+  avoided?: Array<{ key: StuffKey; name: string; unavoidable: boolean; madeFrom?: StuffKey[] }>;
 }
 
 export interface PlanContext {           // filled from a world scan by Plan 4; Plan 2 works with an empty one

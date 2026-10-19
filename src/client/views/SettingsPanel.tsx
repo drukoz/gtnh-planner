@@ -362,7 +362,10 @@ function AvoidSection(props: {
   return (
     <section className="settings-section">
       <h3>Avoid materials</h3>
-      <p className="muted small">Kept out of the whole chain; a step that cannot do without one at this tier is flagged.</p>
+      <p className="muted small">
+        Kept out of every step of the line; a step that cannot do without one at this tier is flagged. The machines you
+        build may still contain them.
+      </p>
       <AvoidPicker avoid={settings.avoid ?? []} materials={info?.materials ?? []} nameOf={nameOf} send={send} remember={remember} />
     </section>
   );

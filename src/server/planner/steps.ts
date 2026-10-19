@@ -8,6 +8,7 @@ import type { Pack } from '../../shared/types/pack.ts';
 import type { BuildStep, LogisticsMode, PlanSettings, PlanStep, PowerSummary } from '../../shared/types/plan.ts';
 import { PROGRAMMED_CIRCUIT_ID } from '../pack/recipes.ts';
 import { cleanroomMachine, stepOneOffs, stepProductName, stepTools, type Bom } from './bom.ts';
+import type { HeldAvoid } from './candidates.ts';
 
 /** The gather step names this many base materials. */
 const GATHER_SHOWN = 8;
@@ -61,9 +62,12 @@ function placeText(steps: readonly PlanStep[], makeN: boolean): string | null {
   return parts.length > 0 ? `Place the machines: ${parts.join('; ')}` : null;
 }
 
-/** The exact setting of a step's configured parts (architecture §11.14), or null when it has none. */
-function configureText(pack: Pack, step: PlanStep): string | null {
-  const others = [...new Set(stepOneOffs(pack, step).map((o) => o.key))]
+/**
+ * The exact setting of a step's configured parts (architecture §11.14), or null when it has none; each slot holds an
+ * option a line that avoids `avoid` may use (`stepOneOffs`).
+ */
+function configureText(pack: Pack, step: PlanStep, avoid: HeldAvoid | undefined): string | null {
+  const others = [...new Set(stepOneOffs(pack, step, avoid).map((o) => o.key))]
     .filter((key) => step.circuit === undefined || !isProgrammedCircuit(key))
     .map((key) => pack.nameOf(key));
   const where = `in the ${step.machine.name} that makes ${stepProductName(pack, step)}`;
@@ -73,11 +77,13 @@ function configureText(pack: Pack, step: PlanStep): string | null {
   return others.length > 0 ? `Put ${others.join(', ')} ${where}` : null;
 }
 
-function handCraftText(pack: Pack, step: PlanStep, settings: PlanSettings, totalSeconds: number | undefined): string {
+function handCraftText(
+  pack: Pack, step: PlanStep, settings: PlanSettings, totalSeconds: number | undefined, avoid: HeldAvoid | undefined,
+): string {
   const rate = settings.mode === 'makeN'
     ? `${amountText(step.runs ?? Math.ceil(step.runsPerSecond * (totalSeconds ?? 0)))}×`
     : `${amountText(step.runsPerSecond * SECONDS_PER[settings.per])}/${RATE_UNIT[settings.per]}`;
-  const tools = stepTools(pack, step).map((key) => pack.nameOf(key));
+  const tools = stepTools(pack, step, avoid).map((key) => pack.nameOf(key));
   return `Hand-craft ${rate} ${stepProductName(pack, step)} at a crafting table` + (tools.length > 0 ? ` (tools: ${tools.join(', ')})` : '');
 }
 
@@ -95,13 +101,17 @@ function testText(pack: Pack, settings: PlanSettings, target: StuffKey, totalSec
  * line in build-list order; place the machines; connect power; hook up logistics for the project's mode; configure
  * each step with a programmed circuit or other parts that stay in the machine (hand-crafting tools are none of these,
  * Task 13 ruling); hand-craft each hand-crafting step, naming its tools; test the line. Gather is left out when the
- * build needs no base materials, place when the line has no real machine, and power when it draws no EU.
+ * build needs no base materials, place when the line has no real machine, and power when it draws no EU. `avoid` is
+ * what the line avoids, as for `buildBom`: the parts and tools named are the ones the line may use.
  */
 export function buildSteps(
   pack: Pack,
-  input: { steps: PlanStep[]; bom: Bom; power: PowerSummary; settings: PlanSettings; tier: number; target: StuffKey; totalSeconds?: number },
+  input: {
+    steps: PlanStep[]; bom: Bom; power: PowerSummary; settings: PlanSettings; tier: number; target: StuffKey; totalSeconds?: number;
+    avoid?: HeldAvoid;
+  },
 ): BuildStep[] {
-  const { steps, bom, power, settings, target, totalSeconds } = input;
+  const { steps, bom, power, settings, target, totalSeconds, avoid } = input;
   const makeN = settings.mode === 'makeN';
   const out: Array<Omit<BuildStep, 'order'>> = [];
   const ids = new Set<string>();
@@ -118,8 +128,8 @@ export function buildSteps(
 
   const roomKey = cleanroomMachine(pack)?.itemKey;
   // Task 13 ruling: a one-off that is only a hand-crafting tool (no step keeps it in a machine) is worded as a tool.
-  const machineParts = new Set(steps.flatMap((s) => stepOneOffs(pack, s).map((o) => o.key)));
-  const toolsOnly = new Set(steps.flatMap((s) => stepTools(pack, s)).filter((key) => !machineParts.has(key)));
+  const machineParts = new Set(steps.flatMap((s) => stepOneOffs(pack, s, avoid).map((o) => o.key)));
+  const toolsOnly = new Set(steps.flatMap((s) => stepTools(pack, s, avoid)).filter((key) => !machineParts.has(key)));
   for (const line of bom.lines) {
     const group = line.group ?? 'machines';
     const name = pack.nameOf(line.key);
@@ -139,11 +149,11 @@ export function buildSteps(
   }
   add(`logistics:${settings.logistics}`, 'logistics', LOGISTICS_TEXT[settings.logistics]);
   for (const step of steps) {
-    const text = configureText(pack, step);
+    const text = configureText(pack, step, avoid);
     if (text !== null) add(`configure:${step.id}`, 'configure', text);
   }
   for (const step of steps) {
-    if (step.handCraft) add(`handcraft:${step.id}`, 'handcraft', handCraftText(pack, step, settings, totalSeconds));
+    if (step.handCraft) add(`handcraft:${step.id}`, 'handcraft', handCraftText(pack, step, settings, totalSeconds, avoid));
   }
   add('test', 'test', testText(pack, settings, target, totalSeconds));
 

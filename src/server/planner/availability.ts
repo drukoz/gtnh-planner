@@ -223,6 +223,12 @@ export function isNatural(pack: Pack, key: StuffKey): boolean {
 export interface Availability {
   tier: number; available: ReadonlySet<StuffKey>; classOf(key: StuffKey): LeafClass; sources(key: StuffKey): SourceInfo[];
   why: ReadonlyMap<StuffKey, string /* recipe id */>;
+  /**
+   * What `key` was first made from: the consumed input of each slot of its `why` recipe that became available first (the
+   * goods a derived source names, without what the machine only holds); none for a good no recipe made available. Each
+   * of them became available before `key`, so following them back always ends.
+   */
+  derivedFrom(key: StuffKey): StuffKey[];
   /** The multiblocks the group can build: their controller item is available (`PlanEnv.multiblocks`). */
   multiblocks: ReadonlySet<number>;
   /** Ids of the recipes that make an ore material from free inputs alone (`fromNothingRecipes`, `PlanEnv.fromNothing`). */
@@ -279,10 +285,14 @@ function reachedSources(worldgen: Worldgen, env: PlanEnv): { materials: Map<stri
   return { materials, fluids };
 }
 
-/** The input option of each slot of `r` that became available first: the ones that let it fire. */
-function firstOptions(r: Recipe, rank: ReadonlyMap<StuffKey, number>): StuffKey[] {
+/**
+ * The input option of each slot of `r` (each consumed slot, with `consumedOnly`) that became available first: the ones
+ * that let it fire.
+ */
+function firstOptions(r: Recipe, rank: ReadonlyMap<StuffKey, number>, consumedOnly = false): StuffKey[] {
   const keys: StuffKey[] = [];
   for (const ing of r.inputs) {
+    if (consumedOnly && !ing.consumed) continue;
     let best: StuffKey | undefined;
     let bestRank = Infinity;
     for (const { key } of ing.options) {
@@ -566,9 +576,14 @@ function computeState(pack: Pack, env: PlanEnv): State {
     }
   };
 
+  const derivedFrom = (key: StuffKey): StuffKey[] => {
+    const r = pack.recipeById.get(why.get(key) ?? '');
+    return r === undefined ? [] : firstOptions(r, rank, true);
+  };
+
   const fromNothingIds = new Set([...fromNothing].map((i) => (pack.recipes[i] as Recipe).id));
   return {
-    avail: { tier: env.tier, available, classOf, sources, why, multiblocks: built, fromNothing: fromNothingIds }, rank, materialSources, fluidSources,
+    avail: { tier: env.tier, available, classOf, sources, why, derivedFrom, multiblocks: built, fromNothing: fromNothingIds }, rank, materialSources, fluidSources,
   };
 }
 

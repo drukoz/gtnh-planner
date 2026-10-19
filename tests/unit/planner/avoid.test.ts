@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { MINI_GT, miniGt } from '../../helpers/mini-gt.ts';
-import { packFromSpec, type PackSpec } from '../../helpers/pack-spec.ts';
+import { packFromSpec, type PackSpec, type RecipeSpec } from '../../helpers/pack-spec.ts';
 import { resolveAvoid } from '../../../src/server/planner/basis.ts';
 import { emptyContext, planLine, settingsHash } from '../../../src/server/planner/plan.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
@@ -17,13 +17,22 @@ const S = (p: Partial<PlanSettings>): PlanSettings => ({ ...defaultSettings(), .
 /** Half a dust or ingot in GT's material units: 1x wires and cables. */
 const HALF = 1_814_400;
 
-/** Mini-GT with more items and recipes. */
-function extended(extra: Pick<PackSpec, 'items' | 'recipes'>): Pack {
+/** Mini-GT with more items, recipes, maps, machines and materials. */
+function extended(extra: Pick<PackSpec, 'items' | 'recipes' | 'maps' | 'machines' | 'materials'>): Pack {
   const spec = structuredClone(MINI_GT);
   spec.items = [...(spec.items ?? []), ...(extra.items ?? [])];
   spec.recipes = [...(spec.recipes ?? []), ...(extra.recipes ?? [])];
+  spec.maps = [...(spec.maps ?? []), ...(extra.maps ?? [])];
+  spec.machines = [...(spec.machines ?? []), ...(extra.machines ?? [])];
+  spec.materials = [...(spec.materials ?? []), ...(extra.materials ?? [])];
   return packFromSpec(spec);
 }
+
+/** An LV alloy smelter, which Mini-GT lacks. */
+const ALLOY_SMELTER: Pick<PackSpec, 'maps' | 'machines'> = {
+  maps: [{ id: 'gt.recipe.alloysmelter', name: 'Alloy Smelter' }],
+  machines: [{ mteId: 171, name: 'Basic Alloy Smelter', maps: ['gt.recipe.alloysmelter'], tier: 1 }],
+};
 
 /** The goods of `material` the plan buys, feeds into a step or lists among a step's inputs, sorted. */
 function usesOf(p: Pack, plan: Plan, material: string): string[] {
@@ -55,11 +64,12 @@ const copperCable = extended({
 
 describe('resolveAvoid', () => {
   it('turns a material name into every form of it and a key into itself, case-sensitively, and names what it does not know', () => {
-    const { goods, unknown } = resolveAvoid(pack, ['Iron', 't:redstone@0', 'fluid:oil', 'tin', 'Unobtainium']);
+    const { goods, unknown, empty } = resolveAvoid(pack, ['Iron', 't:redstone@0', 'fluid:oil', 'tin', 'Unobtainium']);
     expect([...goods].sort()).toEqual(['fluid:molten.iron', 'fluid:oil', 't:iron_dust@0', 't:iron_ingot@0', 't:iron_ore@0', 't:iron_plate@0', 't:redstone@0']);
     expect(unknown).toEqual(['tin', 'Unobtainium']);
+    expect(empty).toEqual([]);
   });
-  it("takes in a material's ore parts and its molten, plasma and plain fluids; a material with no goods is known but matches nothing", () => {
+  it("takes in a material's ore parts and its molten, plasma and plain fluids; a material with no goods is known but matches nothing (empty)", () => {
     const p = packFromSpec({
       items: [
         { key: 't:silver_ingot@0', name: 'Silver Ingot', gt: { prefix: 'ingot', material: 'Silver' } }, { key: 't:crushed_silver@0', name: 'Crushed Silver Ore' },
@@ -71,7 +81,7 @@ describe('resolveAvoid', () => {
     p.materials.get('Silver')!.parts = { crushed: 't:crushed_silver@0' };
     expect([...resolveAvoid(p, ['Silver']).goods].sort()).toEqual(['fluid:molten.silver', 'fluid:plasma.silver', 'fluid:silver', 't:crushed_silver@0', 't:silver_ingot@0']);
     expect([...resolveAvoid(p, ['Red Alloy']).goods].sort()).toEqual(['fluid:molten.redalloy', 't:red_alloy@0']);
-    expect(resolveAvoid(p, ['Unused'])).toEqual({ goods: new Set(), unknown: [] });
+    expect(resolveAvoid(p, ['Unused'])).toEqual({ goods: new Set(), unknown: [], empty: ['Unused'] });
   });
 });
 
@@ -156,6 +166,15 @@ describe('planLine with materials to avoid', () => {
     expect(p.names?.['t:titanium_plate@0']).toBe('Titanium Plate');
     expect(p.names?.Tin).toBeUndefined();
   });
+  it('(d) also says so of a material of the pack that nothing is made of, in list order (final review)', async () => {
+    // The real export has 80 such materials (AnyCopper, AnyIron, Nano, …): picking one used to avoid nothing silently.
+    const p = extended({ materials: ['AnyCopper'] });
+    const plan = await planLine(p, S({ target: 't:circuit@0', amount: 30, tier: 1, avoid: ['AnyCopper', 'Unobtainium'] }), emptyContext());
+    expect(avoidWarnings(plan)).toEqual([
+      { code: 'avoid-unknown', text: '"AnyCopper" matches nothing in this pack: no item or fluid is made of it, so nothing is avoided for it' },
+      { code: 'avoid-unknown', text: '"Unobtainium" is no material, item or fluid of this pack, so nothing is avoided for it' }]);
+    expect(plan.avoided).toEqual([]);
+  });
   it('(e) plans an avoided target normally, with one avoid-target warning (ruling R9)', async () => {
     const settings = S({ target: 't:tin_cable@0', tier: 1 });
     const open = await planLine(pack, settings, emptyContext());
@@ -192,5 +211,150 @@ describe('planLine with materials to avoid', () => {
     expect(p.warnings).toContainEqual({
       code: 'stale-choice', key: 't:hull_lv@0', text: 'LV Machine Hull: the chosen recipe uses a material on the avoid list; using the best one that avoids it',
     });
+  });
+});
+
+describe('planLine with an avoided good a machine holds (final review: lenses, molds, catalysts)', () => {
+  /**
+   * An Iron Gear is cast from 4 iron ingots by an alloy smelter that holds a Tin Mold; with `byHand` it can also be
+   * crafted from 6 iron plates, which costs more.
+   */
+  const gears = (byHand: boolean): Pack => extended({
+    items: [
+      { key: 't:tin_mold@0', name: 'Tin Mold', gt: { prefix: 'toolHeadMold', material: 'Tin' } },
+      { key: 't:iron_mold@0', name: 'Iron Mold', gt: { prefix: 'toolHeadMold', material: 'Iron' } },
+      { key: 't:iron_gear@0', name: 'Iron Gear' },
+    ],
+    ...ALLOY_SMELTER,
+    recipes: [
+      { id: 'cast-gear', map: 'gt.recipe.alloysmelter', in: [['t:iron_ingot@0', 4], { nc: 't:tin_mold@0' }], out: [['t:iron_gear@0', 1]], eut: 16, dur: 100 },
+      ...(byHand ? [CRAFT_GEAR] : []),
+    ],
+  });
+  const settings = S({ target: 't:iron_gear@0', tier: 1 });
+  const oneOffs = (plan: Plan): string[] => plan.buildList.filter((l) => l.group === 'one-off').map((l) => l.key);
+
+  it('re-allows a mold the machine holds when nothing else makes the part, and flags the step that needs it', async () => {
+    const p = gears(false);
+    expect(oneOffs(await planLine(p, settings, emptyContext()))).toEqual(['t:tin_mold@0']);
+    const plan = await planLine(p, { ...settings, avoid: ['Tin'] }, emptyContext());
+    expect(plan.status).toBe('ok');
+    expect(plan.steps.map((s) => s.id)).toEqual(['cast-gear']);
+    expect(plan.avoided).toEqual([{ key: 't:tin_mold@0', name: 'Tin Mold', unavoidable: true }]);
+    expect(avoidWarnings(plan)).toEqual([
+      { code: 'avoid-unavoidable', key: 't:tin_mold@0', stepId: 'cast-gear', text: 'Basic Alloy Smelter needs Tin Mold — no recipe at LV avoids it' }]);
+    expect(oneOffs(plan)).toEqual(['t:tin_mold@0']);   // the materials view marks it: unavoidable in `avoided`
+    // A batch is flagged the same way.
+    const batch = await planLine(p, { ...settings, mode: 'makeN', amount: 2, avoid: ['Tin'] }, emptyContext());
+    expect(batch.avoided).toEqual(plan.avoided);
+    expect(avoidWarnings(batch)).toEqual(avoidWarnings(plan));
+  });
+  it('takes the way round a held mold, also in the swap lists, and builds no such mold', async () => {
+    const p = gears(true);
+    expect((await planLine(p, settings, emptyContext())).steps.map((s) => s.id)).toEqual(['cast-gear']);   // 4 ingots, not 6
+    const plan = await planLine(p, { ...settings, avoid: ['Tin'] }, emptyContext());
+    expect(plan.steps.map((s) => s.id)).toEqual(['bend-plate', 'craft-gear']);
+    expect(plan.avoided).toEqual([{ key: 't:tin_mold@0', name: 'Tin Mold', unavoidable: false }]);
+    expect(avoidWarnings(plan)).toEqual([]);
+    expect(plan.buildList.map((l) => l.key)).not.toContain('t:tin_mold@0');
+    expect(plan.steps.find((s) => s.id === 'craft-gear')?.alternatives.map((a) => a.recipeId)).toEqual(['craft-gear']);
+  });
+  it('holds the allowed option of a slot that also takes the avoided one, and has that one built', async () => {
+    const p = gears(false);
+    // Either mold casts the gear, the tin one listed first.
+    p.recipeById.get('cast-gear')!.inputs.find((ing) => !ing.consumed)!.options.push({ key: 't:iron_mold@0', amount: 1 });
+    expect(oneOffs(await planLine(p, settings, emptyContext()))).toEqual(['t:tin_mold@0']);
+    const plan = await planLine(p, { ...settings, avoid: ['Tin'] }, emptyContext());
+    expect(plan.steps.map((s) => s.id)).toEqual(['cast-gear']);
+    expect(plan.avoided).toEqual([{ key: 't:tin_mold@0', name: 'Tin Mold', unavoidable: false }]);
+    expect(avoidWarnings(plan)).toEqual([]);
+    expect(oneOffs(plan)).toEqual(['t:iron_mold@0']);
+    expect(plan.buildSteps.find((s) => s.id === 'configure:cast-gear')?.text).toBe('Put Iron Mold in the Basic Alloy Smelter that makes Iron Gear');
+  });
+  it('holds an option off the list where it can, even with the avoided mold allowed back for another step', async () => {
+    // A Gear Kit is a gear and a ring. Only the Tin Mold casts the gear; the ring takes it or an Iron Mold.
+    const p = extended({
+      items: [
+        { key: 't:tin_mold@0', name: 'Tin Mold', gt: { prefix: 'toolHeadMold', material: 'Tin' } },
+        { key: 't:iron_mold@0', name: 'Iron Mold', gt: { prefix: 'toolHeadMold', material: 'Iron' } },
+        { key: 't:iron_gear@0', name: 'Iron Gear' }, { key: 't:iron_ring@0', name: 'Iron Ring' }, { key: 't:gear_kit@0', name: 'Gear Kit' },
+      ],
+      ...ALLOY_SMELTER,
+      recipes: [
+        { id: 'cast-gear', map: 'gt.recipe.alloysmelter', in: [['t:iron_ingot@0', 4], { nc: 't:tin_mold@0' }], out: [['t:iron_gear@0', 1]], eut: 16, dur: 100 },
+        { id: 'cast-ring', map: 'gt.recipe.alloysmelter', in: [['t:iron_ingot@0', 1], { nc: 't:tin_mold@0' }], out: [['t:iron_ring@0', 1]], eut: 16, dur: 100 },
+        { id: 'kit', map: 'crafting', in: [['t:iron_gear@0', 1], ['t:iron_ring@0', 1]], out: [['t:gear_kit@0', 1]] },
+      ],
+    });
+    p.recipeById.get('cast-ring')!.inputs.find((ing) => !ing.consumed)!.options.push({ key: 't:iron_mold@0', amount: 1 });
+    const plan = await planLine(p, S({ target: 't:gear_kit@0', tier: 1, avoid: ['Tin'] }), emptyContext());
+    expect(plan.steps.map((s) => s.id)).toEqual(['cast-gear', 'cast-ring', 'kit']);
+    expect(plan.avoided).toEqual([{ key: 't:tin_mold@0', name: 'Tin Mold', unavoidable: true }]);
+    expect(avoidWarnings(plan)).toEqual([
+      { code: 'avoid-unavoidable', key: 't:tin_mold@0', stepId: 'cast-gear', text: 'Basic Alloy Smelter needs Tin Mold — no recipe at LV avoids it' }]);
+    expect(oneOffs(plan)).toEqual(['t:iron_mold@0', 't:tin_mold@0']);
+    expect(plan.buildSteps.find((s) => s.id === 'configure:cast-ring')?.text).toBe('Put Iron Mold in the Basic Alloy Smelter that makes Iron Ring');
+  });
+});
+
+/** The dearer way to an Iron Gear: crafted from 6 iron plates. */
+const CRAFT_GEAR: RecipeSpec = { id: 'craft-gear', map: 'crafting', in: [['t:iron_plate@0', 6]], out: [['t:iron_gear@0', 1]] };
+/** Bronze from copper and an iron plate: no tin, but dearer, and only once iron plates are made. */
+const TIN_FREE_BRONZE: RecipeSpec = {
+  id: 'alloy-bronze-b', map: 'gt.recipe.alloysmelter', in: [['t:copper_ingot@0', 1], ['t:iron_plate@0', 1]], out: [['t:bronze_ingot@0', 1]], eut: 16, dur: 200,
+};
+
+describe('planLine with a derived material made from an avoided one (final review)', () => {
+  /**
+   * Bronze is mined nowhere: an alloy smelter makes 4 ingots from 3 copper and 1 tin, a macerator grinds an ingot into
+   * Bronze Dust, and the line buys either as a derived material. A Bronze Gear takes 4 ingots, a Bronze Rotor 2 dusts.
+   * With `tinFree`, bronze can also be alloyed from copper and an iron plate; as iron plates are made, not mined, tin
+   * stays what bronze was first made from.
+   */
+  const bronze = (tinFree: boolean): Pack => extended({
+    items: [
+      { key: 't:bronze_ingot@0', name: 'Bronze Ingot', gt: { prefix: 'ingot', material: 'Bronze' } },
+      { key: 't:bronze_dust@0', name: 'Bronze Dust', gt: { prefix: 'dust', material: 'Bronze' } },
+      { key: 't:bronze_gear@0', name: 'Bronze Gear' }, { key: 't:bronze_rotor@0', name: 'Bronze Rotor' },
+    ],
+    ...ALLOY_SMELTER,
+    recipes: [
+      { id: 'alloy-bronze', map: 'gt.recipe.alloysmelter', in: [['t:copper_ingot@0', 3], ['t:tin_ingot@0', 1]], out: [['t:bronze_ingot@0', 4]], eut: 16, dur: 200 },
+      { id: 'mace-bronze', map: 'gt.recipe.macerator', in: [['t:bronze_ingot@0', 1]], out: [['t:bronze_dust@0', 1]], eut: 2, dur: 100 },
+      { id: 'bronze-gear', map: 'crafting', in: [['t:bronze_ingot@0', 4]], out: [['t:bronze_gear@0', 1]] },
+      { id: 'bronze-rotor', map: 'crafting', in: [['t:bronze_dust@0', 2]], out: [['t:bronze_rotor@0', 1]] },
+      ...(tinFree ? [TIN_FREE_BRONZE] : []),
+    ],
+  });
+
+  it('buys it only when nothing at the tier avoids it, flagging each use with what it is made from', async () => {
+    const p = bronze(false);
+    const settings = S({ target: 't:bronze_gear@0', tier: 1 });
+    const open = await planLine(p, settings, emptyContext());
+    expect(open.rawInputs.map((r) => [r.key, r.leafClass])).toEqual([['t:bronze_ingot@0', 'derived']]);   // no tin in sight
+    const plan = await planLine(p, { ...settings, avoid: ['Tin'] }, emptyContext());
+    expect(plan.status).toBe('ok');
+    expect(plan.avoided).toEqual([{ key: 't:bronze_ingot@0', name: 'Bronze Ingot', unavoidable: true, madeFrom: ['t:tin_ingot@0'] }]);
+    expect(avoidWarnings(plan)).toEqual([{
+      code: 'avoid-unavoidable', key: 't:bronze_ingot@0', stepId: 'bronze-gear',
+      text: 'Crafting table (by hand) uses Bronze Ingot (made from Tin Ingot) — no recipe at LV avoids it',
+    }]);
+    expect(plan.names?.['t:tin_ingot@0']).toBe('Tin Ingot');
+    // Bronze Dust is ground from the ingot, so what the ingot is made from counts for it too.
+    const rotor = await planLine(p, S({ target: 't:bronze_rotor@0', tier: 1, avoid: ['Tin'] }), emptyContext());
+    expect(rotor.avoided).toEqual([{ key: 't:bronze_dust@0', name: 'Bronze Dust', unavoidable: true, madeFrom: ['t:tin_ingot@0'] }]);
+    expect(avoidWarnings(rotor).map((w) => [w.key, w.stepId, w.text])).toEqual([
+      ['t:bronze_dust@0', 'bronze-rotor', 'Crafting table (by hand) uses Bronze Dust (made from Tin Ingot) — no recipe at LV avoids it']]);
+  });
+  it('makes it in the line instead where that keeps the avoided material out', async () => {
+    const p = bronze(true);
+    const settings = S({ target: 't:bronze_gear@0', tier: 1 });
+    expect((await planLine(p, settings, emptyContext())).rawInputs.map((r) => r.key)).toEqual(['t:bronze_ingot@0']);
+    const plan = await planLine(p, { ...settings, avoid: ['Tin'] }, emptyContext());
+    expect(plan.steps.map((s) => s.id)).toEqual(['alloy-bronze-b', 'bend-plate', 'bronze-gear']);
+    expect(plan.rawInputs.map((r) => r.key)).toEqual(['t:copper_ingot@0', 't:iron_ingot@0']);
+    expect(usesOf(p, plan, 'Tin')).toEqual([]);
+    expect(plan.avoided).toEqual([{ key: 't:bronze_ingot@0', name: 'Bronze Ingot', unavoidable: false, madeFrom: ['t:tin_ingot@0'] }]);
+    expect(avoidWarnings(plan)).toEqual([]);
   });
 });

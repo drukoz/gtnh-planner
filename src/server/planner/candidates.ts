@@ -1,7 +1,7 @@
 // Candidate recipes (spec §3.3 and §5, gt-mechanics §1.2(b) and §6.4): which recipes the group can run at its tier, and
 // the recipe graph the LP plans over, walked back from the targets to buyable leaves. Ore-dictionary slots become
 // virtual `alt:` goods that free `convert` recipes fill from each kept option. A graph can avoid goods (§11.25): it
-// never buys or consumes one.
+// never buys one, consumes one or holds one in a machine (a lens, mold or catalyst slot).
 
 import { ebfHeat, voltageTier } from '../../shared/gt/overclock.ts';
 import { V, tierName } from '../../shared/gt/tiers.ts';
@@ -61,7 +61,10 @@ export interface CandidateGraph {
   // optional additions
   /** The walk stopped at its recipe cap: goods it never expanded look unmakeable, so blockers would name the wrong goods. */
   truncated?: boolean;
-  /** The goods the graph avoids (`CandidateOptions.avoid`), when there are any: its ore-dictionary slots lack them. */
+  /**
+   * The goods the graph avoids (`CandidateOptions.avoid`), when there are any: its slots lack them, consumed ones (its
+   * ore-dictionary slots) and the not-consumed ones its recipes hold (`LpRecipe.nonConsumed`) alike.
+   */
   avoid?: ReadonlySet<StuffKey>;
 }
 
@@ -334,17 +337,38 @@ export function virtualKey(options: Ingredient['options']): StuffKey {
 }
 
 /**
- * The options of a consumed slot a line that avoids `avoid` may take (ruling R7): the ones not avoided; `options` itself
- * when none is avoided, so its virtual key stays; none when all are.
+ * The options of a slot a line that avoids `avoid` may take (ruling R7), consumed or not (a lens, mold or catalyst the
+ * machine holds): the ones not avoided; `options` itself when none is avoided, so its virtual key stays; none when all
+ * are.
  */
 export function keptOptions(options: Ingredient['options'], avoid: ReadonlySet<StuffKey> | undefined): Ingredient['options'] {
   if (avoid === undefined || !options.some((o) => avoid.has(o.key))) return options;
   return options.filter((o) => !avoid.has(o.key));
 }
 
-/** Whether `r` consumes an avoided good: some consumed slot has options and every one of them is avoided. */
-export function consumesAvoided(r: Recipe, avoid: ReadonlySet<StuffKey> | undefined): boolean {
-  return avoid !== undefined && r.inputs.some((ing) => ing.consumed && ing.options.length > 0 && keptOptions(ing.options, avoid).length === 0);
+/**
+ * What a line avoids, as what its machines hold reads it (`heldOption`): every good its avoid list covers (`listed`),
+ * and those of them it still avoids (`avoid`: without the ones it had to allow back).
+ */
+export interface HeldAvoid { listed: ReadonlySet<StuffKey>; avoid: ReadonlySet<StuffKey> }
+
+/**
+ * The option a not-consumed slot holds (a lens, mold or catalyst; ruling R7): its first one, or for a line that avoids
+ * `line` its first one on no avoid list, else its first one the line had to allow back, else its first. So a lens slot
+ * that also takes a lens off the list holds that one, even where the line allows the avoided lens back for another
+ * step.
+ */
+export function heldOption(options: Ingredient['options'], line?: HeldAvoid): Ingredient['options'][number] | undefined {
+  if (line === undefined) return options[0];
+  return keptOptions(options, line.listed)[0] ?? keptOptions(options, line.avoid)[0] ?? options[0];
+}
+
+/**
+ * Whether `r` uses an avoided good: some slot, consumed or held in the machine (not consumed), has options and every
+ * one of them is avoided. Such a recipe is no candidate of a line that avoids `avoid`.
+ */
+export function usesAvoided(r: Recipe, avoid: ReadonlySet<StuffKey> | undefined): boolean {
+  return avoid !== undefined && r.inputs.some((ing) => ing.options.length > 0 && keptOptions(ing.options, avoid).length === 0);
 }
 
 function byString(a: string, b: string): number {
@@ -466,9 +490,9 @@ export interface CandidateOptions {
   /** The recipe cap (default `MAX_RECIPES`). */
   maxRecipes?: number;
   /**
-   * Goods the line avoids (§11.25, rulings R6–R8): never bought, and no candidate consumes one. A recipe with a consumed
-   * slot of avoided options only is left out (a pinned one too), and a slot with others keeps only those
-   * (`keptOptions`). Absent or empty = none.
+   * Goods the line avoids (§11.25, rulings R6–R8): never bought, and no candidate consumes one or holds one in a
+   * not-consumed slot. A recipe with a slot of avoided options only is left out (`usesAvoided`; a pinned one too), and a
+   * slot with others keeps only those (`keptOptions`). Absent or empty = none.
    */
   avoid?: ReadonlySet<StuffKey>;
 }
@@ -481,7 +505,7 @@ export interface CandidateOptions {
  * cost, a recipe's consumed inputs (each ore-dictionary slot at its cheapest option) charged in full to each output,
  * settled cheapest first. It ignores byproduct credit, so it only prunes; the LP over the kept recipes still credits
  * byproducts. A good nothing reachable makes keeps a few producers anyway, so `findBlockers` can name what is missing.
- * Goods of `opts.avoid` are never bought and never consumed (`CandidateOptions.avoid`), in the estimate as in the graph.
+ * Goods of `opts.avoid` are never bought, consumed or held (`CandidateOptions.avoid`), in the estimate as in the graph.
  */
 export function buildCandidates(
   pack: Pack, settings: PlanSettings, env: PlanEnv, leaf: LeafOracle, targets: StuffKey[], opts: CandidateOptions = {},
@@ -540,7 +564,7 @@ export function buildCandidates(
     return !full;
   };
   const optionsOf: SlotOptions = (ing) => keptOptions(ing.options, avoid);
-  const { estimate, settledAt } = estimateCosts(pack, targets, decide, (r) => accept(r).ok && !consumesAvoided(r, avoid), optionsOf);
+  const { estimate, settledAt } = estimateCosts(pack, targets, decide, (r) => accept(r).ok && !usesAvoided(r, avoid), optionsOf);
   const estimateOf = (key: StuffKey): number => estimate.get(key) ?? Infinity;
   const inputCost = (r: Recipe): number => recipeInputCost(r, estimateOf, optionsOf);
   /**
@@ -595,14 +619,15 @@ export function buildCandidates(
     const slots = new Map<StuffKey, Ingredient['options']>();
     const nonConsumed: StuffKey[] = [];
     for (const ing of r.inputs) {
-      const first = ing.options[0];
-      if (first === undefined) continue;
+      if (ing.options.length === 0) continue;
+      // Never every option avoided: such a recipe is no candidate (`usesAvoided`).
+      const options = optionsOf(ing);
       if (!ing.consumed) {
-        nonConsumed.push(first.key);
+        // What the machine holds, for the walk: the first option it may take (a plan names `heldOption`'s pick).
+        const held = options[0];
+        if (held !== undefined) nonConsumed.push(held.key);
         continue;
       }
-      // Never every option avoided: such a recipe is no candidate.
-      const options = optionsOf(ing);
       const only = options.length === 1 ? options[0] : undefined;
       if (only !== undefined) {
         addTo(coeffs, only.key, -only.amount * ing.chance);
@@ -640,7 +665,7 @@ export function buildCandidates(
     const pin = Object.hasOwn(settings.recipeChoice, key) ? settings.recipeChoice[key] : undefined;
     if (pin !== undefined) {
       const pinned = pinnedFor(key, pin);
-      if (pinned !== null && !consumesAvoided(pinned.r, avoid)) {
+      if (pinned !== null && !usesAvoided(pinned.r, avoid)) {
         addRecipe(pinned.r, pinned.mapId);
         return;
       }
@@ -655,8 +680,8 @@ export function buildCandidates(
     const accepted: Array<{ r: Recipe; mapId: string }> = [];
     for (const i of pack.producers.get(key) ?? []) {
       const r = pack.recipes[i];
-      // One that consumes an avoided good is no producer here at all: the line re-allows the good when it needs it.
-      if (r === undefined || consumesAvoided(r, avoid)) continue;
+      // One that consumes or holds an avoided good is no producer here at all: the line re-allows the good when it needs it.
+      if (r === undefined || usesAvoided(r, avoid)) continue;
       const a = accept(r);
       if (a.ok) accepted.push({ r, mapId: a.mapId });
       else rejected.push(a.needTier === undefined ? { recipeId: r.id, why: a.why } : { recipeId: r.id, why: a.why, needTier: a.needTier });

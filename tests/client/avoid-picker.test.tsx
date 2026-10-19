@@ -97,6 +97,8 @@ describe('AvoidPicker', () => {
       world: { scanId: null, baseId: null }, placement: null, marks: {}, notes: [] };
     const html = renderToStaticMarkup(<SettingsPanel info={info} project={project} plan={null} send={() => {}} me="Ann" />);
     expect(html).toContain('<h3>Avoid materials</h3>');
+    // What the list covers, and what it does not (final review): the line's steps, not the machines' own build.
+    expect(html).toContain('Kept out of every step of the line; a step that cannot do without one at this tier is flagged. The machines you build may still contain them.');
     expect(html).toContain('aria-label="Remove Stainless Steel"');
     expect(html).toContain('aria-label="Avoid a material"');
   });

@@ -39,6 +39,13 @@ describe('computeAvailability', () => {
     expect(a.sources('fluid:molten.iron')).toEqual([{ kind: 'derived', dims: [], detail: 'made by Fluid Extractor from Iron Ingot' }]);
     expect(a.why.get('fluid:molten.iron')).toBe('extract-iron');
   });
+  it('says what a good was first made from: the consumed inputs of its recipe, not what the machine holds (plan 08)', () => {
+    const a = computeAvailability(pack, envAt(1));
+    expect(a.derivedFrom('fluid:molten.iron')).toEqual(['t:iron_ingot@0']);
+    // circuit-lv also holds a Programmed Circuit, which it does not consume.
+    expect(a.derivedFrom('t:circuit@0')).toEqual(['t:iron_plate@0', 't:copper_wire@0', 't:redstone@0']);
+    expect(a.derivedFrom('t:iron_ingot@0')).toEqual([]);   // mined: no recipe made it available
+  });
   it('marks byproducts of reachable ores', () => {
     const p = packFromSpec({
       items: [{ key: 'ore@0', name: 'Iron Ore', gt: { prefix: 'ore', material: 'Iron' } }, { key: 'gold@0', name: 'Gold Dust', gt: { prefix: 'dust', material: 'Gold' } }],

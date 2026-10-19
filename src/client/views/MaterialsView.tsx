@@ -37,9 +37,12 @@ function marker(send: Send, row: string): (on: boolean) => void {
   return (on) => send([{ op: 'mark', row, on }]);
 }
 
-/** The marker of a good on the avoid list that the line still uses (`BuildRow.avoid`, `RunRow.avoid`). */
+/**
+ * The marker of a good on the avoid list, or a derived material made from one (`Plan.avoided` `madeFrom`), that the
+ * line still uses (`BuildRow.avoid`, `RunRow.avoid`).
+ */
 function AvoidMarker(): ReactElement {
-  return <span className="badge avoid-badge" title="On the avoid list, but no recipe at this tier avoids it">avoid</span>;
+  return <span className="badge avoid-badge" title="On the avoid list or made from it, but no recipe at this tier avoids it">avoid</span>;
 }
 
 /** The have-count; when the scan says where the stock sits, it opens to one line per storage block. */
