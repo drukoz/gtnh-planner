@@ -1,9 +1,10 @@
 // `npm run import-nei-icons -- --csv <itempanel.csv> --png <itempanel_icons>`: joins a one-time NEI item-panel dump,
 // taken by hand in a copy of the client instance, to item and fluid keys and installs its icons under
 // `<dataDir>/assets/nei/` (Task 11). Fluid rows are matched by name against the active export's fluids (Ruling R17);
-// without an export that loads they are skipped. Exit 0 imported; 1 the dump was refused or could not be copied (the
-// previous import stays in place); 2 bad arguments or settings. Every path is resolved from the working directory,
-// which is the repo root under npm.
+// without an export that loads they are skipped. The few rows whose item changed its name between the CSV and the PNG
+// dump get no icon and are listed after the summary. Exit 0 imported; 1 the dump was refused or could not be copied
+// (the previous import stays in place); 2 bad arguments or settings. Every path is resolved from the working
+// directory, which is the repo root under npm.
 
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -58,6 +59,16 @@ function summaryLine(r: NeiImportResult): string {
     + `file names matched ${r.caseInsensitive ? 'case-insensitively' : 'case-sensitively'}`;
 }
 
+/** The rows left without an icon, after one line that says why; nothing when every row matched. */
+function unmatchedLines(r: NeiImportResult): string[] {
+  if (r.unmatched.length === 0) return [];
+  return [
+    `${r.unmatched.length} rows were left without an icon because their name changed between the CSV and PNG dumps `
+      + '(some items change their name at random):',
+    ...r.unmatched.map(({ key, display }) => `  ${key} "${display}"`),
+  ];
+}
+
 export async function main(
   argv: string[],
   deps: { config?: AppConfig; fluids?: NeiFluids; out?: (line: string) => void; err?: (line: string) => void } = {},
@@ -110,6 +121,7 @@ export async function main(
     throw e;
   }
   out(summaryLine(result));
+  for (const line of unmatchedLines(result)) out(line);
   return 0;
 }
 
