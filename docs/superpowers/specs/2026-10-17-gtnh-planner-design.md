@@ -40,6 +40,7 @@ drukoz and friends on the server (a handful of people). drukoz runs the server a
 - GT overclocking rules decide how fast a recipe runs on the tier of machine used, and so how many machines are needed.
 - "Base material" by default = ores, ingots, dusts and basic fluids.
 - When the group already owns machines that make a part (found in the world), the planner suggests reusing them. The group decides.
+- **Reusing machines we have** (strengthened 2026-10-18 at the user's request): a project switch "Reuse machines we have" (default on) makes the planner count owned machines as free to use (no build cost) and prefer routes that run on them. Owned machines come from the linked world scan's base and from a manual "Machines we have" list (machine + tier + count) for machines elsewhere or when no world is linked. In networked logistics modes (Project Red, AE2) one owned machine may serve several steps of the same machine type while their combined busy time fits; in machine-to-machine mode each step gets its own. Each step shows which of its machines are reused and where they stand ("2× Assembler (MV) at your base"), with a per-step "don't reuse" switch.
 - Steps that need a crafting table are listed as hand-crafting steps by default (my call); they can be marked as automated if the group has a block for it.
 
 ### 3.3b Where materials come from (planets and dimensions) — added after approval at the user's request
