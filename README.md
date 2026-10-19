@@ -103,7 +103,7 @@ Get `gtnhplannerprojector-<version>.jar` from the person who runs the planner, o
 
 ### Colours
 
-Faint is a block not placed yet, green is the right block (with the right front), red is a wrong block or a wrong front, and bluish is a block the mod cannot check (its step is never ticked automatically). Blocks in chunks your game has not loaded stay faint, neither right nor wrong. Covers show as their item's icon on the face they go on; covers and settings (the **configure** steps) are ticked by hand. The top left of the screen shows how far the build has got (`Planner: Steel line — 12/40 placed, 1 wrong`) and, when you look at a planned block, what it needs.
+Faint is a block not placed yet, green is the right block (with the right front), red is a wrong block or a wrong front, and bluish is a block the mod cannot check (its step is never ticked automatically). A GT machine's front is the side GT calls its front, the one a plain wrench sets: the face of a hatch or a multiblock controller, but on a single-block machine such as a Basic Macerator its **output side** (the screen then says "its output side should face …"). A single-block machine shows its face on another side, which is not checked: placed, it faces you with its output side at the back. Its ghost shows the output overlay on the side the output must face. Blocks in chunks your game has not loaded stay faint, neither right nor wrong. Covers show as their item's icon on the face they go on; covers and settings (the **configure** steps) are ticked by hand. The top left of the screen shows how far the build has got (`Planner: Steel line — 12/40 placed, 1 wrong`) and, when you look at a planned block, what it needs.
 
 ### Troubleshooting
 

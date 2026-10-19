@@ -29,6 +29,9 @@ public interface WorldProbe {
      */
     int mteIdAt(int x, int y, int z);
 
-    /** The GT front there, as ForgeDirection 0…5; −1 when it is unknown. */
+    /**
+     * GT's front facing there, as ForgeDirection 0…5 (on a single-block machine its output side, not the side with its
+     * face overlay); −1 when it is unknown.
+     */
     int facingAt(int x, int y, int z);
 }

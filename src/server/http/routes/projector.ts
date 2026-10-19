@@ -90,7 +90,7 @@ export function projectorRoutes(app: AppContext): Route[] {
         try {
           const pack = await app.pack();
           // looked up per request, so a layout service registered or replaced after start is the one used
-          payload = projectorPayload(project, await layoutService(app).layoutFor(project), (key) => pack.nameOf(key));
+          payload = projectorPayload(project, await layoutService(app).layoutFor(project), pack);
         } catch (err) {
           if (err instanceof HttpError) throw err;
           console.error(`Building the projector payload of project ${project.id} failed:`, err);

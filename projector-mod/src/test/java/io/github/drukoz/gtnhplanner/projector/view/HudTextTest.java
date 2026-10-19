@@ -26,7 +26,8 @@ class HudTextTest {
         PlannedBlock plain = d.blocks.get(4), covered = d.blocks.get(3);
         assertEquals("Basic Macerator: placed correctly", HudText.lookingAt(plain, CORRECT));
         assertEquals("Basic Macerator: wrong block here", HudText.lookingAt(plain, WRONG_BLOCK));
-        assertEquals("Basic Macerator: wrong facing, its front should face south", HudText.lookingAt(plain, WRONG_FACING));
+        assertEquals("Basic Macerator: wrong facing, its output side should face south", HudText.lookingAt(plain, WRONG_FACING));
+        assertEquals("Low Voltage Transformer: wrong facing, its front should face west", HudText.lookingAt(d.blocks.get(2), WRONG_FACING));
         assertEquals("Basic Macerator: can't be checked by the mod", HudText.lookingAt(plain, UNCHECKED));
         assertNull(HudText.lookingAt(plain, UNLOADED));
         assertEquals("Basic Macerator: not placed yet; cover: Conveyor Module (LV) on the south face", HudText.lookingAt(covered, MISSING));
@@ -52,7 +53,7 @@ class HudTextTest {
             up.addProperty("face", 1); up.addProperty("item", "gregtech:gt.metaitem.01@32749"); up.addProperty("label", "Shutter Module");
             PayloadParserTest.block(o, 3).getAsJsonArray("covers").add(up);
         })));
-        assertEquals("Basic Macerator: wrong facing, its front should face south; cover: Conveyor Module (LV) on the south face; cover: Shutter Module on the up face",
+        assertEquals("Basic Macerator: wrong facing, its output side should face south; cover: Conveyor Module (LV) on the south face; cover: Shutter Module on the up face",
             HudText.lookingAt(d.blocks.get(3), WRONG_FACING));
         assertEquals("Planner: Steel line — 1/2 placed, 1 wrong · showing layer y=64, step 2: Place 2× Basic Macerator facing the mid…",
             HudText.summary(d, STATES, ViewFilter.ALL.withLayer(64).withStep(1)));

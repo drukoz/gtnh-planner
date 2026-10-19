@@ -1,9 +1,17 @@
+import type { PayloadPack } from '../../src/server/projector/payload.ts';
 import type { Layout } from '../../src/shared/types/layout.ts';
+import type { MachineKind } from '../../src/shared/types/pack.ts';
 import type { Project } from '../../src/shared/types/project.ts';
 import { defaultSettings } from '../../src/shared/project/apply-op.ts';
 
 export const CONVEYOR = 'gregtech:gt.metaitem.01@32630';
 const GT = (mteId: number) => ({ id: 'gregtech:gt.blockmachines', meta: 0, mteId });
+
+/** What the payload reads from the pack for `projectorLayout()`: the conveyor's name and the kind of each GT machine. */
+export function projectorPack(): PayloadPack {
+  const kinds: Array<[number, MachineKind]> = [[1180, 'cable'], [21, 'transformer'], [201, 'basic'], [5110, 'item_pipe'], [5131, 'fluid_pipe']];
+  return { nameOf: (k) => (k === CONVEYOR ? 'Conveyor Module (LV)' : k), machines: new Map(kinds.map(([mteId, kind]) => [mteId, { kind }])) };
+}
 
 // One block per membership rule; texts follow Plan 5 Task 10, labels Plan 5 Tasks 5-8. Coordinates are synthetic.
 export function projectorLayout(): Layout {
