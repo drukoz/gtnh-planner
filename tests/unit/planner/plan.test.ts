@@ -278,8 +278,41 @@ describe('planLine', () => {
     // At MV nothing reachable makes titanium ingots; the group says it already makes them.
     const p = await planLine(pack, S({ target: 't:titanium_plate@0', tier: 2, stopItems: ['t:titanium_ingot@0'] }), emptyContext());
     expect(p.status).toBe('ok');
-    expect(p.rawInputs.map((r) => [r.key, r.leafClass, r.cost])).toEqual([['t:titanium_ingot@0', 'stop', 0.016666667]]);
+    expect(p.rawInputs.map((r) => [r.key, r.leafClass, r.cost])).toEqual([['t:titanium_ingot@0', 'stop', 0.0166666667]]);
     expect(p.steps[0]?.alternatives.map((a) => [a.recipeId, a.rawCost, a.mapId])).toEqual([['bend-ti', 1, 'gt.recipe.metalbender']]);
+  });
+  it('names the target and the raw-cost trade-off', async () => {
+    // Spec R3/R11: the client reads the target and its rate from the plan, and how much raw material the plan uses
+    // against the least possible (one MV circuit takes 2.5 raw: 1 copper, 1 redstone, half an iron ingot).
+    const rate = await planLine(pack, S({ target: 't:circuit@0', tier: 2, amount: 30, per: 'min' }), emptyContext());
+    expect(rate.target).toBe('t:circuit@0');
+    expect(rate.targetPerSecond).toBe(0.5);
+    expect(rate.rawCost?.perSecond).toBeCloseTo(1.25, 9);
+    expect(rate.rawCost?.leastPerSecond).toBeCloseTo(1.25, 9);
+    expect(rate.rawCost!.leastPerSecond).toBeLessThanOrEqual(rate.rawCost!.perSecond);
+    const batch = await planLine(pack, S({ target: 't:circuit@0', tier: 2, mode: 'makeN', amount: 10 }), emptyContext());
+    expect(batch.status).toBe('ok');
+    expect(batch.target).toBe('t:circuit@0');
+    expect(batch.targetPerSecond).toBeUndefined();
+    expect(batch.rawCost).toBeUndefined();
+  });
+  it('says in a warning what the plan does not add up on', async () => {
+    // A macerator splits raw dust into X and Y; a thing takes 2 X and 1 Y. X is also mined, so the line runs the
+    // macerator once and buys the other X: X is both bought and made (spec R11), and the plan says so.
+    const p = packFromSpec({
+      items: [{ key: 'raw@0', name: 'Raw Dust', gt: { prefix: 'dust', material: 'Raw' } }, { key: 'x@0', name: 'X Dust', gt: { prefix: 'dust', material: 'X' } },
+              { key: 'y@0', name: 'Y Part' }, { key: 't@0', name: 'Thing' }],
+      maps: [{ id: 'gt.recipe.macerator', name: 'Macerator' }, { id: 'gt.recipe.assembler', name: 'Assembler' }],
+      machines: [{ mteId: 1, name: 'Basic Macerator', maps: ['gt.recipe.macerator'], tier: 1 }, { mteId: 2, name: 'Basic Assembler', maps: ['gt.recipe.assembler'], tier: 1 }],
+      recipes: [{ id: 'split', map: 'gt.recipe.macerator', in: [['raw@0', 1]], out: [['x@0', 1], ['y@0', 1]], eut: 2 },
+                { id: 'make-t', map: 'gt.recipe.assembler', in: [['x@0', 2], ['y@0', 1]], out: [['t@0', 1]], eut: 2 }],
+      worldgen: { veins: [vein('ore.mix.raw', 'Raw'), vein('ore.mix.x', 'X')] },
+    });
+    const plan = await planLine(p, S({ target: 't@0', tier: 1, amount: 60, per: 'min' }), emptyContext());
+    expect(plan.steps.map((s) => [s.id, s.mainOutput])).toEqual([['make-t', 't@0'], ['split', 'x@0']]);
+    expect(plan.rawInputs.map((r) => [r.key, r.perSecond])).toEqual([['raw@0', 1], ['x@0', 1]]);
+    expect(plan.warnings).toEqual([{ code: 'bought-and-made', key: 'x@0', text: 'X Dust is both bought (50%) and made by Basic Macerator.',
+      stepId: 'split', stepIds: ['split'], share: [0.5] }]);
   });
   it('gives Make N flows and leftovers per second over the batch', async () => {
     const p = await planLine(pack, S({ target: 't:circuit@0', mode: 'makeN', amount: 10, tier: 1 }), emptyContext());

@@ -6,6 +6,7 @@
 
 import { V, tierName } from '../../shared/gt/tiers.ts';
 import type { StuffKey } from '../../shared/keys.ts';
+import { indexPlan, issueText, type PlanIssue } from '../../shared/plan/balance.ts';
 import type { DimensionInfo, Pack, Product } from '../../shared/types/pack.ts';
 import type {
   BomLine, Plan, PlanContext, PlanFlow, PlanSettings, PlanStep, PlanWarning, PowerSummary, RawInput, SourceInfo,
@@ -18,10 +19,11 @@ import {
   type LpRecipe,
 } from './candidates.ts';
 import { analyzeCosts, type CostAnalysis } from './costs.ts';
-import { buildFlows, planSteps } from './machines.ts';
+import { buildFlows, emptyContainers, planSteps, type StepLine } from './machines.ts';
 import { makeN, wholeRuns } from './make-n.ts';
 import { yieldToEventLoop } from './lp.ts';
 import { linePricing, type CostModel, type LinePricing } from './pricing.ts';
+import { sig9 } from './round.ts';
 import { MAX_NAMED_LOOP_RECIPES, solveLine, type Solution } from './solve.ts';
 import { buildSteps } from './steps.ts';
 
@@ -36,7 +38,7 @@ function byString(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-/** 9 decimal places; −0 reads 0 (the rounding of `Solution`). */
+/** 9 decimal places; −0 reads 0: the power summary (EU/t keep their rounding; rates use `sig9`). */
 function round9(x: number): number {
   return Math.round(x * 1e9) / 1e9 || 0;
 }
@@ -235,10 +237,14 @@ function recipeLabel(pack: Pack, recipe: LpRecipe | undefined, id: string): stri
 }
 
 /**
- * A `free-loop` warning in names (solve.ts has no pack): the targets by name and the recipes the loop guard left out
- * as "<machine> making <product>", the same label once, at most MAX_NAMED_LOOP_RECIPES and a count of the rest.
+ * A solver warning in names (solve.ts has no pack). `free-loop`: the targets by name and the recipes the loop guard
+ * left out as "<machine> making <product>", the same label once, at most MAX_NAMED_LOOP_RECIPES and a count of the
+ * rest. `numerics`: the good it could not balance by name.
  */
 function namedSolverWarning(pack: Pack, graph: CandidateGraph, sol: Solution, w: PlanWarning): PlanWarning {
+  if (w.code === 'numerics' && w.key !== undefined) {
+    return { ...w, text: `The solver could not balance ${pack.nameOf(w.key)} exactly; the plan uses an earlier stage` };
+  }
   if (w.code !== 'free-loop') return w;
   const byId = new Map(graph.recipes.map((r) => [r.id, r]));
   const labels = [...new Set((sol.banned ?? []).map((id) => recipeLabel(pack, byId.get(id), id)))];
@@ -357,7 +363,7 @@ function rawInputsOf(
     const leafClass = good?.leafClass ?? undefined;
     const perSecond = batchSeconds === null ? amount : batchSeconds > 0 ? amount / batchSeconds : 0;
     const input: RawInput = {
-      key, perSecond: round9(perSecond), ...(batchSeconds === null ? {} : { total: amount }), cost: round9((good?.cost ?? 0) * amount),
+      key, perSecond: sig9(perSecond), ...(batchSeconds === null ? {} : { total: amount }), cost: sig9((good?.cost ?? 0) * amount),
       available: leafClass !== 'unavailable', sources: sourcesOf(basis, ctx, key),
     };
     const have = haveOf(ctx, key);
@@ -374,7 +380,7 @@ function byproductsOf(graph: CandidateGraph, sinks: ReadonlyMap<StuffKey, number
   return [...sinks]
     .filter(([key]) => key !== target && graph.goods.get(key)?.virtual !== true)
     .sort(([a], [b]) => byString(a, b))
-    .map(([key, amount]) => ({ key, amount: round9(amount), chance: 1 }));
+    .map(([key, amount]) => ({ key, amount: sig9(amount), chance: 1 }));
 }
 
 /** "3× Empty Cell", "1,000 L Oxygen": an amount of a good in words, at most 2 decimal places. */
@@ -412,6 +418,10 @@ interface PlanBody {
   power: PowerSummary; buildList: BomLine[]; buildTotals: BomLine[]; buildSteps: Plan['buildSteps']; warnings: PlanWarning[];
   makeN?: Plan['makeN'];
   avoided?: Plan['avoided'];
+  /** `Plan.target`, `Plan.targetPerSecond` (rate mode) and `Plan.rawCost` (rate mode, a line that plans). */
+  target?: StuffKey;
+  targetPerSecond?: number;
+  rawCost?: Plan['rawCost'];
 }
 
 function bodyWithout(status: PlanBody['status'], warnings: PlanWarning[], unlocks: Plan['unlocks'] = []): PlanBody {
@@ -488,6 +498,20 @@ function planNames(pack: Pack, plan: Plan, settings: PlanSettings): Record<strin
   return Object.fromEntries([...names].sort(([a], [b]) => byString(a, b)));
 }
 
+/** The warning of an integrity issue (fix spec R11): its code, its §6.4 text, the good and the steps it is about. */
+function integrityWarning(issue: PlanIssue, plan: Plan): PlanWarning {
+  const w: PlanWarning = { code: issue.code, key: issue.key, text: issueText(issue, plan) };
+  if (issue.stepId !== undefined) w.stepId = issue.stepId;
+  if (issue.stepIds !== undefined) w.stepIds = [...issue.stepIds];
+  if (issue.share !== undefined) w.share = [...issue.share];
+  return w;
+}
+
+/**
+ * The plan of `body`, named (`planNames`), with one warning per integrity issue of its flows (`indexPlan`: an input
+ * nothing supplies or supplies short, a good made two ways, a good both bought and made). A correct plan has none; a
+ * plan that has one says so instead of reading as if it added up.
+ */
 function assemble(pack: Pack, settings: PlanSettings, basis: PlanBasis, body: PlanBody): Plan {
   const plan: Plan = {
     settingsHash: settingsHash(settings), exportId: pack.manifest.exportId, tier: basis.tier, reachable: basis.reach.reachable,
@@ -498,7 +522,12 @@ function assemble(pack: Pack, settings: PlanSettings, basis: PlanBasis, body: Pl
   plan.status = body.status;
   plan.buildTotals = body.buildTotals;
   if (body.avoided !== undefined) plan.avoided = body.avoided;
+  if (body.target !== undefined) plan.target = body.target;
+  if (body.targetPerSecond !== undefined) plan.targetPerSecond = body.targetPerSecond;
+  if (body.rawCost !== undefined) plan.rawCost = body.rawCost;
   plan.names = planNames(pack, plan, settings);
+  const issues = indexPlan(plan).issues;
+  if (issues.length > 0) plan.warnings = [...plan.warnings, ...issues.map((issue) => integrityWarning(issue, plan))];
   return plan;
 }
 
@@ -785,6 +814,9 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
   const avoid = avoidRequest(pack, settings, target, priced);
   const batch = settings.mode === 'makeN';
   const demand = new Map([[target, batch ? settings.amount : settings.amount / SECONDS_PER[settings.per]]]);
+  // What the plan is for (fix spec R11): the client reads the target and its rate instead of guessing them from flows.
+  const aim: Pick<PlanBody, 'target' | 'targetPerSecond'> = batch
+    ? { target } : { target, targetPerSecond: sig9(settings.amount / SECONDS_PER[settings.per]) };
   const plain = await solveLine(priced.graph, demand);
 
   if (plain.status === 'infeasible') {
@@ -792,13 +824,25 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
     const solverWarnings = plain.warnings.map((w) => namedSolverWarning(pack, priced.graph, plain, w));
     const blocked = blockerWarnings(pack, plain, basis, settings, ctx);
     const warnings = [...priced.graph.warnings, ...solverWarnings, ...blocked.warnings, ...avoid.warnings];
-    return assemble(pack, settings, basis, withAvoided(bodyWithout('infeasible', warnings, blocked.unlocks), avoid, []));
+    return assemble(pack, settings, basis, { ...withAvoided(bodyWithout('infeasible', warnings, blocked.unlocks), avoid, []), ...aim });
   }
   const line = await avoidingLine(pack, settings, priced, plain, demand, avoid);
   const { graph, sol } = line;
   const solverWarnings = sol.warnings.map((w) => namedSolverWarning(pack, graph, sol, w));
 
-  const opts = { settings, groupTier: basis.tier, coilHeat: basis.coilHeat, ctx, multiblocks: basis.env.multiblocks };
+  // A step's main output is its most valuable output the line uses (fix spec D13): its raw cost × what the other steps
+  // take, never an empty container it hands back. The cost model's cost, but never below the good's plain price (as
+  // R7 floors derived leaves): the cost model splits a recipe's cost between its co-products arbitrarily and prices many
+  // intermediates 0 (Sulfuric Acid beside Water, Steel beside Ashes) or not at all (a Methyl Acetate Cell the model never
+  // walked), and at 0 against free Water the litres won again ("makes Water").
+  const value: Pick<StepLine, 'valueOf' | 'empties'> = {
+    valueOf: (key) => {
+      const cost = model.costs.cost(key);
+      return Math.max(Number.isFinite(cost) ? cost : 0, basis.prices.price(key));
+    },
+    empties: emptyContainers(pack),
+  };
+  const opts = { settings, groupTier: basis.tier, coilHeat: basis.coilHeat, ctx, multiblocks: basis.env.multiblocks, value };
   let steps: PlanStep[];
   let flows: PlanFlow[];
   let buys: ReadonlyMap<StuffKey, number>;
@@ -838,7 +882,10 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
     buildList: bom.lines, buildTotals: bom.totals,
     buildSteps: buildSteps(pack, { steps, bom, power, settings, tier: basis.tier, target, totalSeconds: made?.totalSeconds, avoid: held }),
     warnings: [...graph.warnings, ...solverWarnings, ...batchWarnings, ...raw.warnings, ...bom.warnings, ...avoid.warnings, ...uses.warnings],
+    ...aim,
   };
   if (made !== undefined) body.makeN = made;
+  // The raw material the plan uses against the least any plan of its graph needs (fix spec R3): a rate's trade-off.
+  if (!batch) body.rawCost = { perSecond: sol.rawCost, leastPerSecond: sol.leastRawCost };
   return assemble(pack, settings, basis, withAvoided(body, avoid, uses.avoided));
 }

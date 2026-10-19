@@ -12,7 +12,11 @@ import type {
 import { buildIndices, buildMachinesByMap } from '../../src/server/pack/indices.ts';
 import { PSEUDO_MAPS } from '../../src/server/pack/load.ts';
 
-export interface PackSpec { exportId?: string; items?: ItemSpec[]; fluids?: FluidSpec[]; maps?: MapSpec[]; machines?: MachineSpec[]; recipes?: RecipeSpec[]; materials?: string[]; worldgen?: Partial<Worldgen> }
+export interface PackSpec {
+  exportId?: string; items?: ItemSpec[]; fluids?: FluidSpec[]; maps?: MapSpec[]; machines?: MachineSpec[]; recipes?: RecipeSpec[]; materials?: string[]; worldgen?: Partial<Worldgen>;
+  /** Filled containers and the fluid each holds (`Pack.fluidContainers`), copied into the pack; their keys become items. */
+  fluidContainers?: Pack['fluidContainers'];
+}
 export interface ItemSpec { key: ItemKey; name?: string; oreDict?: string[]; gt?: { prefix: string; material: string; amount?: number /* M units, default 3628800 */ } }
 export interface FluidSpec { key: FluidKey; name?: string; gas?: boolean }
 export interface MapSpec { id: string; name?: string; amps?: number; specialValue?: RecipeMapInfo['specialValue'] }
@@ -137,6 +141,11 @@ export function packFromSpec(spec: PackSpec): Pack {
   for (const s of spec.fluids ?? []) addOnce(fluids, s.key, fluidFor(s.key, s), 'fluid');
 
   const recipes = (spec.recipes ?? []).map(recipeFrom);
+  const fluidContainers = (spec.fluidContainers ?? []).map((c) => ({ ...c }));
+  for (const c of fluidContainers) {
+    for (const key of c.empty === null ? [c.container] : [c.container, c.empty]) if (!items.has(key)) items.set(key, itemFor(key));
+    if (!fluids.has(c.fluid)) fluids.set(c.fluid, fluidFor(c.fluid));
+  }
   const recipeById = new Map<string, Recipe>();
   for (const r of recipes) {
     addOnce(recipeById, r.id, r, 'recipe');
@@ -173,9 +182,11 @@ export function packFromSpec(spec: PackSpec): Pack {
   }
 
   const { producers, consumers } = buildIndices(recipes);
-  return {
+  const pack: Pack = {
     manifest, items, fluids, oreDict, maps, recipes, recipeById, producers, consumers,
     machines, machinesByMap: buildMachinesByMap(machines), materials, worldgen,
     nameOf: (key) => items.get(key)?.name ?? fluids.get(key)?.name ?? key,
   };
+  if (spec.fluidContainers !== undefined) pack.fluidContainers = fluidContainers;
+  return pack;
 }

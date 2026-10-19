@@ -6,11 +6,13 @@ import type { StuffKey } from '../../shared/keys.ts';
 import type { PlanWarning } from '../../shared/types/plan.ts';
 import type { CandidateGraph, LpRecipe } from './candidates.ts';
 import { solveLp, type LpResult, type LpRow } from './lp.ts';
+import { sig9 } from './round.ts';
 
 export interface Blocker { key: StuffKey; reason: 'unavailable' | 'rejected' | 'no-recipe'; needTier?: number }
 /**
- * The maps hold only values above 1e-9, rounded to 9 decimal places (so an exact 1 stays 1 and equal plans compare
- * equal), inserted in sorted key order; `rawCost` is rounded the same way. An infeasible solution has empty maps.
+ * The maps hold only values above 1e-9 per unit of the largest demand (the stages solve at unit demand, `solveLine`),
+ * scaled to the demand and kept to 9 significant digits (`sig9`: an exact 1 stays 1 and equal plans compare equal),
+ * inserted in sorted key order; `rawCost` and `leastRawCost` likewise. An infeasible solution has empty maps and costs 0.
  */
 export interface Solution {
   status: 'ok' | 'infeasible';
@@ -20,6 +22,8 @@ export interface Solution {
   sinks: Map<StuffKey, number>;
   /** Σ cost × buy. */
   rawCost: number;
+  /** The least raw material any plan of this graph needs (S1), never above `rawCost`: what the later stages trade. */
+  leastRawCost: number;
   blockers: Blocker[];
   warnings: PlanWarning[];
   // optional addition
@@ -27,8 +31,17 @@ export interface Solution {
   banned?: string[];
 }
 
-/** Values up to this count as zero: they never reach the maps, and a loop-guard run below it uses no recipe. */
+/**
+ * Values up to this count as zero (at unit demand: per unit of the largest demand): they never reach the maps, and a
+ * loop-guard run below it uses no recipe.
+ */
 const TINY = 1e-9;
+/**
+ * A stage balances a good when `|Σ a·x − d| ≤ RESIDUAL_ABS + RESIDUAL_REL × max(|d|, max |a·x|)` at unit demand
+ * (`residualViolations`); HiGHS's absolute tolerances can leave more, and a stage that does not balance is not used.
+ */
+export const RESIDUAL_REL = 1e-6;
+export const RESIDUAL_ABS = 1e-9;
 const MAX_LOOP_ROUNDS = 5;
 const MAX_BLOCKERS = 5;
 /** A free-loop warning names this many recipes, then counts the rest. */
@@ -38,11 +51,6 @@ const ZERO_RAW = 1e-6;
 
 function byString(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
-}
-
-/** 9 decimal places; −0 reads 0. */
-function round9(x: number): number {
-  return Math.round(x * 1e9) / 1e9 || 0;
 }
 
 function pushTo<K, V>(map: Map<K, V[]>, key: K, value: V): void {
@@ -270,14 +278,43 @@ function lockRow(cost: readonly number[], value: number): LpRow[] {
   return entries.length === 0 ? [] : [{ lower: -Infinity, upper: value, entries }];
 }
 
-/** The values of `keys` (columns from `first` on) above TINY once rounded; the keys are already in sorted order. */
+/** The values of `keys` (columns from `first` on) above TINY, to 9 significant digits; the keys are already in sorted order. */
 function kept(keys: readonly string[], x: readonly number[], first: number): Map<string, number> {
   const out = new Map<string, number>();
   keys.forEach((key, i) => {
-    const value = round9(x[first + i] ?? 0);
-    if (value > TINY) out.set(key, value);
+    const value = x[first + i] ?? 0;
+    if (value > TINY) out.set(key, sig9(value));
   });
   return out;
+}
+
+/**
+ * The rows `x` does not balance: per row, `residual` = activity − the nearest bound (`Σ a·x − d` for a row of demand
+ * `d`, purchases and sinks included) and `scale` = max(|that bound|, max |a·x|); a row fails when
+ * `|residual| > RESIDUAL_ABS + RESIDUAL_REL × scale`, or when its activity is not a number.
+ */
+export function residualViolations(rows: readonly LpRow[], x: readonly number[]): Array<{ row: number; residual: number; scale: number }> {
+  const out: Array<{ row: number; residual: number; scale: number }> = [];
+  rows.forEach((r, row) => {
+    let activity = 0;
+    let largest = 0;
+    for (const [j, a] of r.entries) {
+      const term = a * (x[j] ?? 0);
+      activity += term;
+      largest = Math.max(largest, Math.abs(term));
+    }
+    const bound = activity < r.lower ? r.lower : activity > r.upper ? r.upper : activity;
+    const residual = activity - bound;
+    const scale = Math.max(Number.isFinite(bound) ? Math.abs(bound) : 0, largest);
+    if (!Number.isFinite(residual) || Math.abs(residual) > RESIDUAL_ABS + RESIDUAL_REL * scale) out.push({ row, residual, scale });
+  });
+  return out;
+}
+
+/** The first of `stages` whose solution balances every row (`residualViolations`), or null when none does. */
+export function firstBalanced<T extends { x: readonly number[] }>(stages: readonly T[], rows: readonly LpRow[]): T | null {
+  for (const stage of stages) if (residualViolations(rows, stage.x).length === 0) return stage;
+  return null;
 }
 
 /** Recipe columns that consume nothing: sources (rock breakers, ponds, farms), never part of a loop. */
@@ -323,36 +360,73 @@ const S3_TOLERANCE = 1e-6;
 /**
  * S3 and the lock the later stages keep. The MIP's big-M lets a recipe it leaves out still run a tiny amount (its
  * binary sits just above 0), so the least raw material is solved again without the left-out recipes: within
- * `S3_TOLERANCE` of S1 the stages lock that instead, else S3 is dropped (and approximated without a MIP).
+ * `S3_TOLERANCE` of S1 the stages lock that instead, else S3 is dropped (and approximated without a MIP). `skipped`:
+ * neither stage came back, or each that left recipes out failed that check (fix spec D2: never skip silently); one that
+ * leaves nothing out (every recipe of the graph is needed) is a plan as simple as it gets, so nothing was skipped.
  */
-async function simplest(lp: MainLp, s1: LpResult, locks: LpRow[]): Promise<{ off: Set<number>; locks: LpRow[]; base: LpResult }> {
+async function simplest(lp: MainLp, s1: LpResult, locks: LpRow[]): Promise<{ off: Set<number>; locks: LpRow[]; base: LpResult; skipped: boolean }> {
   const candidates = [await fewestRecipesMip(lp, s1, locks), await fewestRecipes(lp, locks)];
+  let simple = false;
   for (const off of candidates) {
-    if (off === null || off.size === 0) continue;
+    if (off === null) continue;
+    if (off.size === 0) {
+      simple = true;
+      continue;
+    }
     const again = await minimize(lp, lp.rawCost, [], Infinity, off);
     if (again.status === 'optimal' && again.objective <= s1.objective * (1 + S3_TOLERANCE) + TINY) {
-      return { off, locks: lockRow(lp.rawCost, Math.max(again.objective, s1.objective)), base: again };
+      return { off, locks: lockRow(lp.rawCost, Math.max(again.objective, s1.objective)), base: again, skipped: false };
     }
   }
-  return { off: new Set(), locks, base: s1 };
+  return { off: new Set(), locks, base: s1, skipped: !simple };
 }
 
-/** S3, S2 and S4 on top of an optimal S1, then the rounded maps. */
+/** The `simplify-skipped` warning (fix spec D2), a fresh object per plan. */
+function simplifySkipped(): PlanWarning {
+  return { code: 'simplify-skipped', text: 'Could not simplify this plan; it may use more machines than it needs' };
+}
+
+/**
+ * The `numerics` warning (fix spec D2) for the stage solution `x` that does not balance: it names the good of its worst
+ * row (the most times over its allowance) by key; planLine names it in words.
+ */
+function numericsWarning(lp: MainLp, x: readonly number[]): PlanWarning {
+  let worst: { row: number; over: number } | undefined;
+  for (const v of residualViolations(lp.rows, x)) {
+    const over = Number.isFinite(v.residual) ? Math.abs(v.residual) / (RESIDUAL_ABS + RESIDUAL_REL * v.scale) : Infinity;
+    if (worst === undefined || over > worst.over) worst = { row: v.row, over };
+  }
+  const key = lp.goods[worst?.row ?? -1];
+  return key === undefined
+    ? { code: 'numerics', text: 'The solver could not balance this plan exactly; the plan uses an earlier stage' }
+    : { code: 'numerics', key, text: `The solver could not balance ${key} exactly; the plan uses an earlier stage` };
+}
+
+/** S3, S2 and S4 on top of an optimal S1, the latest of them that balances (`firstBalanced`), then the rounded maps. */
 async function finish(lp: MainLp, s1: LpResult, warnings: PlanWarning[]): Promise<Solution> {
   // S3, S2 and S4 only break ties: a stage that does not solve (numerically, or S2 unbounded by a recipe with negative
   // EU) keeps the previous stage's plan, which already uses the least raw material (S3's: the least raw material
   // without the recipes it left out). S3 runs before power, so power never picks a longer chain among equally cheap
   // ones; the later stages keep to the recipes S3 left.
   const open = lockRow(lp.rawCost, s1.objective);
-  const { off, locks, base } = await simplest(lp, s1, open);
-  let best = base;
+  const { off, locks, base, skipped } = await simplest(lp, s1, open);
   const s2 = await minimize(lp, lp.power, locks, Infinity, off);
-  if (s2.status === 'optimal') {
-    best = s2;
-    locks.push(...lockRow(lp.power, s2.objective));
-  }
+  if (s2.status === 'optimal') locks.push(...lockRow(lp.power, s2.objective));
   const s4 = await minimize(lp, lp.canonical, locks, Infinity, off);
-  if (s4.status === 'optimal') best = s4;
+  // Latest first: S4, S2, the simplified base, S1. A stage whose solution leaves a good unbalanced beyond the residual
+  // allowance (HiGHS's absolute tolerances) gives way to an earlier one, and the plan says so; when none balances, the
+  // latest stays and the warning names its worst good.
+  const stages: LpResult[] = [];
+  if (s4.status === 'optimal') stages.push(s4);
+  if (s2.status === 'optimal') stages.push(s2);
+  stages.push(base);
+  if (base !== s1) stages.push(s1);
+  const latest = stages[0] as LpResult;
+  const balanced = firstBalanced(stages, lp.rows);
+  const best = balanced ?? latest;
+  const notes = [...warnings];
+  if (skipped) notes.push(simplifySkipped());
+  if (best !== latest || balanced === null) notes.push(numericsWarning(lp, latest.x));
 
   let rawCost = 0;
   lp.rawCost.forEach((c, j) => {
@@ -363,7 +437,8 @@ async function finish(lp: MainLp, s1: LpResult, warnings: PlanWarning[]): Promis
     runs: kept(lp.recipes.map((r) => r.id), best.x, 0),
     buys: kept(lp.buyKeys, best.x, lp.firstBuy),
     sinks: kept(lp.goods, best.x, lp.firstSink),
-    rawCost: round9(rawCost), blockers: [], warnings,
+    // Within tolerance a later stage may read a hair under S1's objective; the least is never more than the plan's.
+    rawCost: sig9(rawCost), leastRawCost: sig9(Math.min(s1.objective, rawCost)), blockers: [], warnings: notes,
   };
 }
 
@@ -381,8 +456,29 @@ function cappedList(ids: readonly string[]): string {
  * line is `infeasible` with one warning: there is no honest way to make the targets from these recipes, and the plan
  * never shows one that makes something from nothing (Review Focus #4). Infeasible → the goods that block it, unless the
  * graph was cut short (`truncated`): goods it never walked look unmakeable there, so it names none.
+ *
+ * The LP is homogeneous in the demand (no fixed costs), so every stage solves the demand divided by its largest amount
+ * and the result is scaled back (fix spec D1): the stages see the same numbers at 1 per hour as at 1 per second.
+ * HiGHS's feasibility tolerances are absolute (1e-7 on rows lp.ts divides by their largest coefficient), so at
+ * 1 Electronic Circuit per hour (flows of 1e-8..1e-4 per second) S1 took cells from nothing, the fewest-recipes MIP
+ * found its raw lock infeasible, and S2/S4 dropped whole chains (Polyvinyl Acetate) inside the tolerance. Every
+ * absolute threshold (`TINY`, `ZERO_RAW`, the S3 big-M, the tie-break scalings) is thereby per unit of target.
  */
 export async function solveLine(graph: CandidateGraph, demand: ReadonlyMap<StuffKey, number>): Promise<Solution> {
+  let scale = 0;
+  for (const amount of demand.values()) scale = Math.max(scale, Math.abs(amount));
+  if (!(scale > 0) || !Number.isFinite(scale) || scale === 1) return solveUnit(graph, demand);
+  const unit = new Map([...demand].map(([key, amount]): [StuffKey, number] => [key, amount / scale]));
+  const sol = await solveUnit(graph, unit);
+  const times = <K>(values: ReadonlyMap<K, number>): Map<K, number> => new Map([...values].map(([key, v]): [K, number] => [key, sig9(v * scale)]));
+  return {
+    ...sol, runs: times(sol.runs), buys: times(sol.buys), sinks: times(sol.sinks),
+    rawCost: sig9(sol.rawCost * scale), leastRawCost: sig9(sol.leastRawCost * scale),
+  };
+}
+
+/** `solveLine` at the demand given (unit demand, or a demand that cannot be scaled). */
+async function solveUnit(graph: CandidateGraph, demand: ReadonlyMap<StuffKey, number>): Promise<Solution> {
   const banned: string[] = [];
   const bannedSet = new Set<string>();
   const loopWarnings = (): PlanWarning[] => (banned.length === 0 ? [] : [{
@@ -390,7 +486,7 @@ export async function solveLine(graph: CandidateGraph, demand: ReadonlyMap<Stuff
     text: `Ignored ${banned.length === 1 ? '1 recipe' : `${banned.length} recipes`} that make ${graph.targets.join(', ')} from nothing (likely a recipe data loop): ${cappedList(banned)}`,
   }]);
   const infeasible = (blockers: Blocker[], warnings: PlanWarning[]): Solution => ({
-    status: 'infeasible', runs: new Map(), buys: new Map(), sinks: new Map(), rawCost: 0, blockers, warnings, banned: [...banned],
+    status: 'infeasible', runs: new Map(), buys: new Map(), sinks: new Map(), rawCost: 0, leastRawCost: 0, blockers, warnings, banned: [...banned],
   });
   for (let round = 0; ; round++) {
     const recipes = graph.recipes.filter((r) => !bannedSet.has(r.id));
@@ -468,7 +564,7 @@ export async function standaloneCosts(
       lp.free.forEach((f, j) => {
         free += f * (result.x[j] ?? 0);
       });
-      out.set(key, { cost: Math.max(0, result.objective), steps, free: round9(free) });
+      out.set(key, { cost: Math.max(0, result.objective), steps, free: sig9(free) });
     } else if (barred.size > 0 && (await solve(g, new Set())).status === 'optimal') {
       out.set(key, { cost: Infinity, steps: 0, free: 0 });
     } else {

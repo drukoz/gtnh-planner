@@ -103,7 +103,13 @@ export interface BomLine {
 
 export interface BuildStep { id: string; order: number; text: string; pin?: number; kind: 'gather' | 'craft' | 'handcraft' | 'place' | 'power' | 'logistics' | 'configure' | 'test' }
 export interface PowerSummary { peakEUt: number; averageEUt: number; voltageTier: number; amps: number; fits?: 'yes' | 'tight' | 'no'; detail?: string; suggestions?: string[] }
-export interface PlanWarning { code: string; text: string; stepId?: string; key?: StuffKey }
+export interface PlanWarning {
+  code: string; text: string; stepId?: string; key?: StuffKey;
+  // optional additions (fix spec R11): the steps of an integrity warning (`multi-producer`, `bought-and-made`), largest
+  // first, and their shares
+  stepIds?: string[];
+  share?: number[];
+}
 
 export interface Plan {
   settingsHash: string; exportId: string; scanId?: string; tier: number; reachable: ReachableDim[]; unlocks: Array<{ key: StuffKey; text: string /* cheapest unlock, e.g. "Tungstate: End asteroids (HV) or Mars (T2 rocket, EV)" */ }>;
@@ -126,6 +132,11 @@ export interface Plan {
    * is made from goods the list matched (`madeFrom`, those goods): buying it would use them outside the plan.
    */
   avoided?: Array<{ key: StuffKey; name: string; unavoidable: boolean; madeFrom?: StuffKey[] }>;
+  // optional additions (fix spec R3, R11): what the line makes, how much of it a second (rate mode), and the raw material
+  // it uses a second against the least any plan of its graph needs (rate mode)
+  target?: StuffKey;
+  targetPerSecond?: number;
+  rawCost?: { perSecond: number; leastPerSecond: number };
 }
 
 export interface PlanContext {           // filled from a world scan by Plan 4; Plan 2 works with an empty one
