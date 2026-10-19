@@ -11,7 +11,8 @@ import { fmtInt, fmtRate } from '../../shared/layout/format.ts';
 import {
   DIRS, posKey, rotateConnections, rotatedSize, rotateFace, rotateFacing, step, toWorld, type Rotation, type Vec3,
 } from '../../shared/layout/geometry.ts';
-import type { CoverSpec, Hookup, Layout, LayoutBlock, LayoutStatus, LayoutTap } from '../../shared/types/layout.ts';
+import { FACES } from '../../shared/types/assets.ts';
+import type { ConduitFace, ConduitSpec, CoverSpec, Hookup, Layout, LayoutBlock, LayoutStatus, LayoutTap } from '../../shared/types/layout.ts';
 import type { Pack } from '../../shared/types/pack.ts';
 import type { BomLine, LogisticsMode, Plan, PlanWarning, PowerSummary } from '../../shared/types/plan.ts';
 import type { Project } from '../../shared/types/project.ts';
@@ -98,9 +99,10 @@ function buildLocal(input: {
   const { pack, plan, parts, mode, units, stages, network } = input;
   const placement = placeUnits(units, { headWidth: headWidthFor(stages), portSpacing: PORT_SPACING[mode] });
   const modeResult = buildMode(mode, { pack, plan, parts, placement, network });
+  // a mode that lays its own fluid network (EnderIO's ender fluid conduits) gets no GT fluid pipes or pump covers
   const internal = routeInternal({
-    pack, parts, placement, occupied: [...placement.blocks, ...modeResult.blocks], stages, fluids: fluidNets(pack, plan, placement),
-    tailFluidY: modeResult.tailFluidY, groupTier: plan.tier,
+    pack, parts, placement, occupied: [...placement.blocks, ...modeResult.blocks], stages,
+    fluids: modeResult.ownsFluids === true ? [] : fluidNets(pack, plan, placement), tailFluidY: modeResult.tailFluidY, groupTier: plan.tier,
   });
   const blocks = attachCovers([...placement.blocks, ...modeResult.blocks, ...internal.blocks], [...modeResult.covers, ...internal.covers], modeResult.configs);
   const top = blocks.reduce((y, b) => Math.max(y, b.pos[1]), 0);
@@ -198,6 +200,16 @@ function worldCover(c: CoverSpec, r: Rotation): CoverSpec {
   return { face: rotateFace(c.face, r), item: c.item, settings: { ...c.settings }, ...(c.filter === undefined ? {} : { filter: [...c.filter] }) };
 }
 
+/**
+ * The conduit turned with its block (architecture "EnderIO conduits, granted change requests (add-on 11)"): its links by
+ * `rotateConnections`, each face by `rotateFace`, the faces back in FACES order; their settings unchanged.
+ */
+function worldConduit(c: ConduitSpec, r: Rotation): ConduitSpec {
+  const faces = c.faces.map((f): ConduitFace => ({ ...f, face: rotateFace(f.face, r) }))
+    .sort((a, b) => FACES.indexOf(a.face) - FACES.indexOf(b.face));
+  return { kind: c.kind, item: c.item, connections: rotateConnections(c.connections, r), faces };
+}
+
 function worldBlock(b: LocalBlock, f: Frame): LayoutBlock {
   const r = f.rotation;
   return {
@@ -207,6 +219,7 @@ function worldBlock(b: LocalBlock, f: Frame): LayoutBlock {
     ...(b.config === undefined ? {} : { config: { ...b.config } }),
     ...(b.item === undefined ? {} : { item: b.item }),
     ...(b.connections === undefined ? {} : { connections: rotateConnections(b.connections, r) }),
+    ...(b.conduits === undefined ? {} : { conduits: b.conduits.map((c) => worldConduit(c, r)) }),
   };
 }
 

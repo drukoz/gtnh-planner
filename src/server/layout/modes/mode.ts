@@ -58,6 +58,8 @@ export interface ModeResult {
   warnings: PlanWarning[];
   /** The lowest y the tail's fluid roots may use (above the mode's tail blocks). */
   tailFluidY: number;
+  /** The mode lays the line's fluid network itself: internal routing then gets no fluid nets (no GT fluid pipes, no pump covers). */
+  ownsFluids?: boolean;
 }
 
 // ---- Dispatch ----

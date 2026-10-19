@@ -180,8 +180,9 @@ describe('EnderIO mode — tail chests, the storage tap and warnings', () => {
 
   it('reuses the least-shared colour past 15 channels and says which items it carries', () => {
     const ids = Array.from({ length: 16 }, (_, i) => `e${String(i).padStart(2, '0')}`);
-    // sixteen machines that only take Raw Input, each its own channel: nothing feeds them, so nothing links their faces
-    const plan = makePlan(ids.map((id): StepSpec => ({ id, mteId: IDS.EXTRACTOR, count: 1, outputs: [['fluid:molten.iron', 144]] })), { flows: [] });
+    // sixteen machines that only take Raw Input (and make nothing, so no fluid conduit is laid), each its own channel:
+    // nothing feeds them, so nothing links their faces
+    const plan = makePlan(ids.map((id): StepSpec => ({ id, mteId: IDS.EXTRACTOR, count: 1, outputs: [] })), { flows: [] });
     const r = buildMode('enderio', { ...setup(plan), network: null });
     expect(faces(r).map((f) => [f.mode, f.insert!.color])).toEqual([...CHANNEL_PALETTE, 'red'].map((color) => ['insert', color]));
     expect(r.warnings).toEqual([{ code: 'conduit_channels',
