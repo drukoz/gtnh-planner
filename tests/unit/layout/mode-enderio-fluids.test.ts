@@ -46,7 +46,7 @@ describe('EnderIO mode — fluids', () => {
     expect(at.get('1,1,1')!.conduits![0]!.faces).toEqual([{ face: 'down', mode: 'insert', target: 'Basic Fluid Solidifier', insert: { color: 'red', filter: iron, rate: 1 } }]);
     expect(r.drafts.map((d) => d.id)).toEqual(['layout:logistics:line', 'layout:logistics:fluids', 'layout:logistics:tanks']);
     expect(r.drafts[1]!.text).toBe("Lay 4× Ender Fluid Conduit from every machine's fluid port, with an open end at the tail for your tanks; 2 of them go in the same bundle as the Item Conduit");
-    expect(r.drafts[2]!.text).toBe('Connect a tank to the east side of each open conduit end at the tail, from the bottom: Molten Iron');
+    expect(r.drafts[2]!.text).toBe('Connect a tank to the side of each open conduit end at the tail that faces out of the end of the line, from the bottom: Molten Iron');
   });
 
   it('sizes the fluid conduit to the busiest face and warns when none is big enough', () => {
@@ -100,7 +100,7 @@ describe('EnderIO mode — the fluid network in detail', () => {
       { id: 'layout:logistics:fluids', kind: 'logistics', pin: 'site',
         text: "Lay 4× Ender Fluid Conduit from every machine's fluid port, with 2 open ends at the tail for your tanks" },
       { id: 'layout:logistics:tanks', kind: 'logistics', pin: 'site',
-        text: 'Connect a tank to the east side of each open conduit end at the tail, from the bottom: Molten Iron and Oxygen' }]);
+        text: 'Connect a tank to the side of each open conduit end at the tail that faces out of the end of the line, from the bottom: Molten Iron and Oxygen' }]);
   });
 
   it('runs a multiblock riser down past its fluid hatch with that face Disabled, into a bundle on the spine', () => {
@@ -172,7 +172,7 @@ describe('EnderIO mode — the fluid network in detail', () => {
       [0, [['item', 16], ['liquid_ender', 2]]], [1, [['liquid_ender', 1 | 2 | 16]]], [2, [['liquid_ender', 1]]]]);
     expect(r.drafts.slice(1).map((d) => d.text)).toEqual([
       "Lay 5× Ender Fluid Conduit from every machine's fluid port, with 3 open ends at the tail for your tanks; 1 of them goes in the same bundle as the Item Conduit",
-      'Connect a tank to the east side of each open conduit end at the tail, from the bottom: fluid:a, fluid:b and fluid:c']);
+      'Connect a tank to the side of each open conduit end at the tail that faces out of the end of the line, from the bottom: fluid:a, fluid:b and fluid:c']);
   });
 
   it('leaves a fluid port no riser can reach for the player and says so', () => {
@@ -252,6 +252,10 @@ describe('EnderIO mode — the fluid network in detail', () => {
     const tail = turned.blocks.find((b) => b.conduits?.some((c) => c.faces.some((f) => f.target === 'your tank')))!;
     expect(tail.conduits!.map((c) => [c.kind, c.faces.map((f) => [f.face, f.target])])).toEqual([
       ['item', [['west', 'Chest (output)'], ['east', 'Chest (input)']]], ['liquid_ender', [['south', 'your tank']]]]);
+    // the tanks step names that side by the line's shape, not by compass, so it reads the same however the line is turned
+    const tanks = (l: Layout) => l.buildSteps.find((s) => s.id === 'layout:logistics:tanks')!.text;
+    expect(tanks(turned)).toBe(tanks(flat));
+    expect(tanks(turned)).not.toMatch(/\b(north|south|east|west)\b/);
     for (const b of turned.blocks) {
       for (const c of b.conduits ?? []) {
         const order = c.faces.map((f) => FACES.indexOf(f.face));

@@ -633,6 +633,9 @@ function fluidSettings(input: ModeInput, plans: readonly FacePlan[], channels: C
 /**
  * `layout:logistics:fluids`: lay the network[, with its open ends][, and how many of its cells share a bundle with the
  * Item Conduit]; with open ends, `layout:logistics:tanks`: a tank on each, from the bottom. Both pinned to the site.
+ * The tanks step names the open ends' side by the line's shape, never by compass: drafts are in the line's own frame
+ * and become build steps word for word, so a compass word would be wrong once the line is turned (each open end's
+ * turned face is named in its own `layout:conduit:…` configure step).
  */
 function fluidDrafts(input: ModeInput, conduit: string, cells: readonly Vec3[], ends: readonly OpenEnd[], itemCells: ReadonlySet<string>): StepDraft[] {
   if (cells.length === 0) return [];
@@ -643,8 +646,9 @@ function fluidDrafts(input: ModeInput, conduit: string, cells: readonly Vec3[], 
   const drafts: StepDraft[] = [{ id: 'layout:logistics:fluids', kind: 'logistics', pin: 'site',
     text: `Lay ${fmtInt(cells.length)}× ${conduit} from every machine's fluid port${endWords}${bundleWords}` }];
   if (ends.length > 0) {
-    drafts.push({ id: 'layout:logistics:tanks', kind: 'logistics', pin: 'site', text: 'Connect a tank to the east side of each open conduit end at the tail, '
-      + `from the bottom: ${nameList(input.plan, input.pack, ends.map((e) => e.key))}` });
+    drafts.push({ id: 'layout:logistics:tanks', kind: 'logistics', pin: 'site',
+      text: 'Connect a tank to the side of each open conduit end at the tail that faces out of the end of the line, '
+        + `from the bottom: ${nameList(input.plan, input.pack, ends.map((e) => e.key))}` });
   }
   return drafts;
 }
