@@ -367,10 +367,18 @@ span.mat-toggle { display: inline-block; }
 .conn-view.has-panel { grid-template-columns: minmax(0, 1fr) minmax(260px, 340px); }
 .conn-main { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
 .conn-main > p { margin: 0; }
+.conn-toolbar > span { flex: 1 1 16em; }   /* the hint wraps beside Fit rather than below it */
 .connections {
-  overflow: auto; max-height: 75vh; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  overflow: hidden; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
 }
-.connections > svg { display: block; transition: opacity 0.2s; }
+.connections > svg {
+  display: block; width: 100%; min-height: 240px; cursor: grab; touch-action: none; user-select: none; transition: opacity 0.2s;
+}
+/* a drag shows grabbing over the boxes and links too. A click focuses the area (for the arrow keys) without a ring, the
+   keyboard with one, inside it, as the box clips its outside. */
+.connections > svg.dragging, .connections > svg.dragging * { cursor: grabbing; }
+.connections > svg:focus { outline: none; }
+.connections > svg:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .connections[aria-busy='true'] > svg { opacity: 0.6; }
 .conn-node > rect, .conn-node > path { stroke-width: 1.5; fill: var(--flow-raw); stroke: var(--flow-raw-line); cursor: pointer; }
 .conn-node > path { fill: var(--surface); }

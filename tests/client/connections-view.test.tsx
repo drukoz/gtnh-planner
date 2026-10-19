@@ -31,6 +31,20 @@ describe('the Connections tab', () => {
     expect(html).toContain('Item Conduit (line colour = channel)');
     expect(html).not.toContain('data-testid="conn-panel"');
   });
+  // the user's request of 2026-10-19: the picture moves and zooms as one group, in an area of its own height (at most
+  // 75vh) that takes the arrow keys, under a Fit button; until the area is measured the view is the picture's own size,
+  // 16 px in
+  it('draws every link and box in one group the view moves and zooms, under a Fit button', () => {
+    const html = shell();
+    const svg = /<svg role="group" aria-label="Connections of the line"([^>]*)>(.*)<\/svg>/s.exec(html)!;
+    expect(svg[1]).toContain('tabindex="0"');
+    expect(svg[1]).toContain('style="height:min(332px, 75vh)"');   // the picture's 300 px and 16 px above and below
+    const pan = /^<defs>.*?<\/defs><g class="conn-pan" transform="translate\(16 16\) scale\(1\)">(.*)<\/g>$/s.exec(svg[2]!)?.[1];
+    expect(pan).toBeDefined();
+    for (const id of ['step:a', 'step:b', 'chest:2,64,0', 'chest:2,64,2']) expect(pan).toContain(`data-node="${id}"`);
+    expect(pan).toContain('data-edge="flow:step:a&gt;step:b:t:dust@0"');
+    expect(html).toMatch(/<button type="button" class="small">Fit<\/button>.*<div class="connections" data-testid="connections"/s);
+  });
   it('shows the picked face in the side panel', () => {
     const html = shell({ pick: { node: 'step:a', face: 'step:a#conduit:0,64,1:item:north' } });
     expect(html).toContain('data-testid="conn-panel"');
