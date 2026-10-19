@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { DIRS, OPPOSITE, posKey, step, type Vec3 } from '../../../src/server/world/model.ts';
-import { isWantedTe, readStack, scanChunk, scanRegionBuffer, TE_PREFIXES, TE_WHITELIST } from '../../../src/server/world/tile-entities.ts';
+import {
+  isWantedTe, RAILCRAFT_TANK_TES, readStack, scanChunk, scanRegionBuffer, TE_PREFIXES, TE_WHITELIST,
+} from '../../../src/server/world/tile-entities.ts';
 import { chunkNbt, DEFAULT_BLOCK_IDS, DEFAULT_ITEM_IDS } from '../../helpers/make-world.ts';
 import { byte, comp, double, int, list, parseTag, short, str, writeNbt, type Tag } from '../../helpers/nbt-write.ts';
 import { regionFile } from '../../helpers/region-write.ts';
-import { chest, gtMachine, oreTe, stack, stackFields } from '../../helpers/world-tes.ts';
+import { chest, gtMachine, oreTe, stack, stackFields, te } from '../../helpers/world-tes.ts';
 
 const ids = { ...DEFAULT_BLOCK_IDS };
 const itemNames = new Map(Object.entries(DEFAULT_ITEM_IDS).map(([name, id]) => [id, name]));
@@ -37,6 +39,19 @@ describe('scanChunk', () => {
     expect(r.tes.map((t) => [t.dim, t.id, t.x])).toEqual([[-1, 'StorageDrawers:tileDrawersStandard', 16], [-1, 'IronChest.DIAMOND', 17],
       [-1, 'savedMultipart', 18], [-1, 'BlockCableBus', 19], [-1, 'TileEntityBarrel', 20]]);
     expect(r.stat).toEqual({ dim: -1, cx: 1, cz: -1, inhabitedTime: 0, timestamp: 0, teCount: 5, oreTes: 0 });
+  });
+
+  it('keeps Railcraft tank parts by id and any other TE holding steam, and no other tank (plan 10, rulings R4, R5)', () => {
+    const fluid = (name: string): Record<string, Tag> => ({ tank: comp({ FluidName: str(name), Amount: int(8000) }) });
+    const at = (id: string, x: number, fields: Record<string, Tag> = {}): Tag => te(id, [x, 64, 3], fields);
+    const r = scanChunk(chunkNbt({ cx: 0, cz: 0, oreTes: 10, tileEntities: [
+      at('RCIronTankWallTile', 0), at('RCSteelTankValveTile', 1, fluid('water')), at('RCWaterTankTile', 2, fluid('water')),
+      at('TileIronTank', 3, fluid('steam')), at('TileTank', 4, { tanks: list('compound', [comp(fluid('ic2steam'))]) }),
+      at('TileIronTank', 5, fluid('water')), at('Furnace', 6),
+    ] }, ids), 0, 0);
+    expect(r.tes.map((t) => [t.id, t.x])).toEqual([['RCIronTankWallTile', 0], ['RCSteelTankValveTile', 1], ['TileIronTank', 3], ['TileTank', 4]]);
+    expect(r.stat).toMatchObject({ teCount: 17, oreTes: 10 });
+    expect(r.tes[3]!.nbt).toEqual({ id: 'TileTank', x: 4, y: 64, z: 3, tanks: [{ tank: { FluidName: 'ic2steam', Amount: 8000 } }] });
   });
 
   it('throws for NBT that is not a chunk', () => {
@@ -76,6 +91,13 @@ describe('isWantedTe', () => {
     expect(['IronChest.DIAMOND', 'StorageDrawers:tileController', 'StorageDrawers:trim'].map(isWantedTe)).toEqual([true, true, true]);
     expect(['GT_TileEntity_Ores', 'Furnace', 'BlockSkyChest', 'ironchest.IRON', 'StorageDrawersBop:x', ''].map(isWantedTe))
       .toEqual([false, false, false, false, false, false]);
+  });
+
+  it('takes the Railcraft iron and steel tank parts, not the wooden water tank (plan 10, ruling R4)', () => {
+    expect([...RAILCRAFT_TANK_TES]).toEqual([
+      'RCIronTankWallTile', 'RCIronTankGaugeTile', 'RCIronTankValveTile', 'RCSteelTankWallTile', 'RCSteelTankGaugeTile', 'RCSteelTankValveTile']);
+    expect([...RAILCRAFT_TANK_TES].every((id) => TE_WHITELIST.has(id))).toBe(true);
+    expect(['RCWaterTankTile', 'RCIronTankTile', 'RCBoilerTankHighPressureTile'].map(isWantedTe)).toEqual([false, false, false]);
   });
 });
 
