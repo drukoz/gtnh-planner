@@ -7,7 +7,8 @@
 // Tiers never touch, because GT joins a cable to the block it is placed against: a cable keeps off every cell beside
 // another tier's run, cable or power port and beside a machine of a lower tier, never lies in a bank column or on top
 // of a bank that sends another tier, and crosses the lower runs two blocks up. So no machine receives more than
-// `V[its tier]` and no two tiers can be joined by a natural click.
+// `V[its tier]` and no two tiers can be joined by a natural click. The lowest tier is wired first, its machines next to
+// the head, and each higher tier's tree goes over the trees below it, so no tier walls another's machines off.
 // Cables and banks are sized for the volts each machine really gets (gt-mechanics §3.1, §3.3): `V[tier]` less the
 // loss from where the power enters its run — a bank, or for the supply run its far end after the hookup's allowance —
 // to the machine; a bank likewise for what it takes from the run above. Every network keeps off the cells other
@@ -247,12 +248,14 @@ function warnUnderVoltage(units: readonly PlacedUnit[], supply: number, warnings
 }
 
 /**
- * One cable tree per feed tier, highest first: from the tier's run to the power port of every electric unit fed at
- * that tier (`min(unit tier, supply)`). Its cells keep off `keepOff`, the bank columns, the ports of other feed tiers and
- * the cells on top of a bank that sends another tier, and never touch another tier's run, tree or port or a machine of
- * a lower tier; the box reaches H + 1 high, so a tree crosses a lower run two blocks up. The cells are taken but not
- * yet laid: the cables are chosen once the trees give the lengths. Units that cannot be reached (or whose tier has no
- * run) get `route_failed`.
+ * One cable tree per feed tier, lowest first: from the tier's run to the power port of every electric unit fed at that
+ * tier (`min(unit tier, supply)`). The lowest tier's machines stand next to the head (`layoutLine` places them so), and
+ * each higher tier's tree, grown after the trees below it, goes over them to its machines further along. Its cells keep
+ * off `keepOff`, the bank columns, the ports of other feed tiers and the cells on top of a bank that sends another tier,
+ * and never touch another tier's run, tree or port or a machine of a lower tier; the box reaches H + 1 high, so a tree
+ * crosses a lower run two blocks up, and two blocks higher for every run past the second, so it can also pass over the
+ * lower tiers' crossings. The cells are taken but not yet laid: the cables are chosen once the trees give the lengths.
+ * Units that cannot be reached (or whose tier has no run) get `route_failed`.
  */
 function growTrees(input: InternalInput, stages: Stages, head: { runs: readonly Run[]; banks: readonly Bank[] }, keepOff: ReadonlySet<string>,
   grid: Grid, warnings: WarningList): Tree[] {
@@ -278,11 +281,12 @@ function growTrees(input: InternalInput, stages: Stages, head: { runs: readonly 
       onBank.set(posKey([b.x, 1, z]), b.toTier);
     }
   }
-  const bounds: PathBounds = { min: [0, 0, 0], max: [w - 1, h + 1, l - 1] };
+  const bounds: PathBounds = { min: [0, 0, 0], max: [w - 1, h + 1 + 2 * Math.max(0, head.runs.length - 2), l - 1] };
   const unwired = (unit: PlacedUnit) =>
     warnings.add({ code: 'route_failed', stepId: unit.stepId, text: `Could not wire ${unit.name} inside the line — connect it by hand` });
   const trees: Tree[] = [];
-  for (const run of head.runs) {
+  // lowest first (the runs are listed supply first): a higher tier's tree grown first could wall a lower tier's machines off
+  for (const run of [...head.runs].sort((a, b) => a.tier - b.tier)) {
     if (!run.rated) continue;                                                          // its machines are reported below
     const ports = (portsByTier.get(run.tier) ?? []).sort((a, b) => comparePos(a.pos, b.pos));
     portsByTier.delete(run.tier);

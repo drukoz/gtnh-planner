@@ -324,11 +324,11 @@ describe('internal routing edge cases', () => {
 
 // Final review C2 and I4: tiers never touch, and every cable is sized for the volts its machines really get.
 describe('internal routing: tiers apart, sized for the loss', () => {
-  const route = (plan: ReturnType<typeof makePlan>, supply: number, supplyLossVolts = 0) => {
+  const route = (plan: ReturnType<typeof makePlan>, supply: number, supplyLossVolts = 0, portSpacing: 0 | 1 | 2 = 0) => {
     const pack = layoutPack();
     const { units } = unitsFromPlan(pack, plan);
     const stages = transformerStages(groupsOf(units), supply);
-    const placement = placeUnits(units, { headWidth: headWidthFor(stages), portSpacing: 0, supplyTier: supply });
+    const placement = placeUnits(units, { headWidth: headWidthFor(stages), portSpacing, supplyTier: supply });
     return { placement, r: routeInternal({ pack, parts: resolveParts(pack), placement, occupied: placement.blocks, stages, fluids: [], tailFluidY: 1,
       groupTier: 3, supplyLossVolts }) };
   };
@@ -354,6 +354,22 @@ describe('internal routing: tiers apart, sized for the loss', () => {
     expect(r.warnings.map((w) => w.code)).not.toContain('route_failed');
     expect(placement.units.map((u) => reachesRun(r.blocks, u.ports.power!, runX(3, u.tier)))).toEqual([true, true, true]);
     expect(tierContacts(r.blocks, r.cables, placement)).toEqual([]);
+  });
+
+  it('wires the lowest tier first and lets each higher tier climb over the trees below it', () => {
+    // two machines per tier, one in each row, lowest next to the head as `layoutLine` places them: the MV tree crosses
+    // the LV run two blocks up, and the HV tree must cross both runs and keep off the MV crossing, so it goes higher
+    const plan = makePlan([
+      { id: 'l', mteId: IDS.MACERATOR, count: 2, euPerTick: 16 },
+      { id: 'm', mteId: IDS.ASSEMBLER, count: 2, tier: 2, euPerTick: 64 },
+      { id: 'h', mteId: IDS.CHEM_HV, count: 2, tier: 3, euPerTick: 256 },
+    ]);
+    for (const portSpacing of [0, 1, 2] as const) {
+      const { placement, r } = route(plan, 3, 0, portSpacing);
+      expect(placement.units.map((u) => [u.stepId, u.row])).toEqual([['l', 'N'], ['l', 'S'], ['m', 'N'], ['m', 'S'], ['h', 'N'], ['h', 'S']]);
+      expect([portSpacing, r.warnings.filter((w) => w.code === 'route_failed'), tierContacts(r.blocks, r.cables, placement)]).toEqual([portSpacing, [], []]);
+      expect(placement.units.map((u) => reachesRun(r.blocks, u.ports.power!, runX(3, u.tier)))).toEqual(Array(6).fill(true));
+    }
   });
 
   it('prices the supply run from where the hookup lands', () => {

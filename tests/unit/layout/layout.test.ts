@@ -2,7 +2,12 @@ import { describe, it, expect } from 'vitest';
 import { layoutLine, emptyScan } from '../../../src/server/layout/layout.ts';
 import { overlaps } from '../../../src/server/layout/arrange.ts';
 import { ae2IdleEUt, resolveParts } from '../../../src/server/layout/parts.ts';
-import { layoutPack, makePlan, makeProject, makeScan, flatVoxels, areaReader, IDS, STONE } from '../../helpers/layout-fixtures.ts';
+import { tierName } from '../../../src/shared/gt/tiers.ts';
+import { OPPOSITE, step } from '../../../src/shared/layout/geometry.ts';
+import type { Layout, LayoutBlock } from '../../../src/shared/types/layout.ts';
+import type { Pack } from '../../../src/shared/types/pack.ts';
+import type { Plan } from '../../../src/shared/types/plan.ts';
+import { layoutPack, makePlan, makeProject, makeScan, flatVoxels, areaReader, IDS, STONE, type StepSpec } from '../../helpers/layout-fixtures.ts';
 
 const twoStep = () => makePlan([
   { id: 's1', mteId: IDS.MACERATOR, count: 2, euPerTick: 30 },
@@ -223,6 +228,129 @@ describe('layoutLine: the final review', () => {
     expect(machines.every((b) => b.mainFacing === 1)).toBe(true);                    // front up: the output side keeps the spine face
     expect(new Set(machines.map((b) => b.facing))).toEqual(new Set([4, 5]));         // the two rows face the spine, turned 90°
     expect(machines.every((b) => b.config?.inputFromOutputSide === true)).toBe(true);
+  });
+});
+
+/** A deterministic PRNG (mulberry32): the same seed gives the same numbers in [0, 1). */
+function seeded(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), a | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Plan 5's final ruling on the C2 fix: a higher tier's tree that serves both rows crossed the spine and walled off the
+// lower tier's machines beyond it. Every machine of a mixed-tier line is wired, whatever the flow order, and still no two
+// tiers touch.
+describe('layoutLine: mixed-tier lines', () => {
+  const MODES = ['direct', 'routed', 'ae2'] as const;
+  const key = (p: readonly number[]) => p.join();
+  /** A network of `tier` at the shared base, with one tap rated for every line here. */
+  const netScan = (tier: number) => makeScan({ base: scan().bases[0], power: [{ voltageTier: tier, average: 100_000, loadEUt: 0, storedEU: 10_000_000,
+    taps: [{ pos: [16, 64, 30], freeAmps: 64, cableAmps: 64 }] }] });
+  /** A cable's tier: its wire step's, or for a hookup cable its tap's. */
+  const tierOf = (layout: Layout, b: LayoutBlock): number | undefined => (b.hookup !== undefined ? layout.hookups[b.hookup]?.from.voltageTier
+    : b.buildStep?.startsWith('layout:power:wire:') ? Number(b.buildStep.split(':').at(-1)) : undefined);
+
+  /**
+   * What is wrong with the line's power, as text: every "Could not wire" warning; every singleblock machine without a cable
+   * of its feed tier (`min(tier, supply)`) joined to the power input behind it; every cable beside a cable of another tier,
+   * a machine or energy hatch of a lower tier, or a transformer it does not belong to (one joins its own tier and the next).
+   */
+  function powerProblems(layout: Layout, plan: Plan, pack: Pack, supply: number): string[] {
+    const placed = layout.blocks.filter((b) => b.role !== 'ghost');
+    const at = new Map(placed.map((b) => [key(b.pos), b]));
+    const stepTier = new Map(plan.steps.map((s) => [s.id, s.machine.tier]));
+    const out = layout.warnings.filter((w) => w.code === 'route_failed' && w.text.startsWith('Could not wire')).map((w) => w.text);
+    for (const m of placed) {
+      if (m.role !== 'machine' || m.mainFacing === undefined) continue;
+      const port = at.get(key(step(m.pos, OPPOSITE[m.facing!]!)));
+      const feed = Math.min(stepTier.get(m.stepId!)!, supply);
+      if (port?.role !== 'cable' || tierOf(layout, port) !== feed || ((port.connections ?? 0) & (1 << m.facing!)) === 0) {
+        out.push(`${m.label} at ${key(m.pos)} has no ${tierName(feed)} cable at its power input`);
+      }
+    }
+    for (const b of placed) {
+      if (b.role !== 'cable') continue;
+      const tier = tierOf(layout, b);
+      for (let side = 0; side < 6; side++) {
+        const other = at.get(key(step(b.pos, side)));
+        if (other === undefined) continue;
+        const energy = other.role === 'machine' || (other.role === 'hatch' && pack.machines.get(other.block.mteId!)?.cls.endsWith('MTEHatchEnergy') === true);
+        const transformer = other.role === 'transformer' ? pack.machines.get(other.block.mteId!)?.tier : undefined;
+        if (tier === undefined || (other.role === 'cable' && tierOf(layout, other) !== tier)
+          || (energy && other.stepId !== undefined && stepTier.get(other.stepId)! < tier)
+          || (transformer !== undefined && tier !== transformer && tier !== transformer + 1)) {
+          out.push(`${b.label} at ${key(b.pos)} touches ${other.label} at ${key(other.pos)}`);
+        }
+      }
+    }
+    return out;
+  }
+
+  it('wires a lower-tier machine behind a higher-tier step that fills both rows, in every mode', async () => {
+    // two MV assemblers (one per row) ahead of an LV macerator in flow order: the MV tree to the second row ran over the
+    // spine and left the macerator unwired in every mode
+    const plan = makePlan([
+      { id: 'a', mteId: IDS.ASSEMBLER, count: 2, tier: 2, euPerTick: 120 },
+      { id: 'm', mteId: IDS.MACERATOR, count: 1, euPerTick: 30 },
+    ]);
+    for (const mode of MODES) {
+      const pack = layoutPack();
+      const layout = await layoutLine(pack, plan, scan(), makeProject({ logistics: mode }), ground());
+      expect([mode, layout.blocks.filter((b) => b.role === 'machine').length, powerProblems(layout, plan, pack, 2)]).toEqual([mode, 3, []]);
+    }
+  });
+
+  it('wires a three-tier line with two machines per tier, in every mode', async () => {
+    // HV ahead of MV ahead of LV in flow order, a machine of each tier in each row: each tier's tree has to get past the
+    // runs and trees of the tiers below it
+    const plan = makePlan([
+      { id: 'h', mteId: IDS.CHEM_HV, count: 2, tier: 3, euPerTick: 256 },
+      { id: 'm', mteId: IDS.ASSEMBLER, count: 2, tier: 2, euPerTick: 64 },
+      { id: 'l', mteId: IDS.MACERATOR, count: 2, euPerTick: 16 },
+    ]);
+    for (const mode of MODES) {
+      const pack = layoutPack();
+      const layout = await layoutLine(pack, plan, netScan(3), makeProject({ logistics: mode }), ground());
+      expect([mode, layout.buildSteps.filter((s) => s.id.startsWith('layout:power:wire:')).map((s) => s.id), powerProblems(layout, plan, pack, 3)])
+        .toEqual([mode, ['layout:power:wire:3', 'layout:power:wire:2', 'layout:power:wire:1'], []]);
+    }
+  });
+
+  it('wires every machine of random LV, MV and HV lines in every mode, and no two tiers touch', async () => {
+    // 200 chained plans of 2–4 steps, each step 1–3 machines of a random tier (now and then 1–2 MV blast furnaces), on an
+    // MV or HV network, each laid out in all three modes without voxels; the fixed seed lays out the same 600 lines every run
+    const random = seeded(20261019);
+    const pick = <T>(xs: readonly T[]): T => xs[Math.floor(random() * xs.length)]!;
+    const singleblocks: Record<number, { mteId: number; euPerTick: number[] }> = {
+      1: { mteId: IDS.MACERATOR, euPerTick: [8, 16, 30] }, 2: { mteId: IDS.ASSEMBLER, euPerTick: [64, 120] }, 3: { mteId: IDS.CHEM_HV, euPerTick: [256, 480] },
+    };
+    const pack = layoutPack();
+    const fedAt = [0, 0, 0];                                                          // plans fed at one, two and three tiers
+    const failed: string[] = [];
+    for (let i = 0; i < 200; i++) {
+      const steps = Array.from({ length: pick([2, 3, 4]) }, (_, j): StepSpec => {
+        if (random() < 1 / 8) return { id: `s${j + 1}`, mteId: IDS.EBF, count: pick([1, 2]), tier: 2, euPerTick: 120 };
+        const tier = pick([1, 2, 3]);
+        return { id: `s${j + 1}`, mteId: singleblocks[tier]!.mteId, count: pick([1, 2, 3]), tier, euPerTick: pick(singleblocks[tier]!.euPerTick) };
+      });
+      const supply = pick([2, 3]);
+      const plan = makePlan(steps);
+      fedAt[new Set(steps.map((s) => Math.min(s.tier!, supply))).size - 1]! += 1;
+      for (const mode of MODES) {
+        const problems = powerProblems(await layoutLine(pack, plan, netScan(supply), makeProject({ logistics: mode })), plan, pack, supply);
+        if (problems.length > 0) {
+          failed.push(`${mode} on ${tierName(supply)}, ${steps.map((s) => `${s.count}× ${s.id} ${tierName(s.tier!)}`).join(' → ')}: ${problems[0]!}`);
+        }
+      }
+    }
+    // mostly mixed-tier lines (the seed fixes these counts)
+    expect(fedAt).toEqual([55, 124, 21]);
+    expect({ failed: failed.length, first: failed.slice(0, 5) }).toEqual({ failed: 0, first: [] });
   });
 });
 
