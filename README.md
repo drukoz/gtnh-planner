@@ -84,7 +84,7 @@ Get `gtnhplannerprojector-<version>.jar` from the person who runs the planner, o
 ### Connect
 
 1. On the project page open **In-game projector**, type who the token is for (for example `Steve`) and press **Create token**.
-2. Press **Copy** next to the `/planner load …` line and paste it into Minecraft chat. The token is shown only now; the mod saves it for that project, so afterwards `/planner load <project>` is enough.
+2. Press **Copy** next to the `/planner load …` line (the button says **Copied**) and paste it into Minecraft chat. If the browser will not copy it, which can happen when the planner is opened over plain `http://`, the line is selected instead and the panel says so under it: press Ctrl+C (Cmd+C on a Mac). The token is shown only now; the mod saves it for that project, so afterwards `/planner load <project>` is enough.
 3. The mod looks for the planner at the Minecraft server's address on port 8765: for a server at `mc.example.org` that is `http://mc.example.org:8765` (in single player, `http://127.0.0.1:8765`). If yours is elsewhere, also run the `/planner url …` line the panel shows, once.
 
 ### Commands

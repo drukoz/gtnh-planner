@@ -1,7 +1,7 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ProjectorPanelView, type ProjectorPanelViewProps } from '../../src/client/views/ProjectorPanel.tsx';
-import { loadCommand, urlCommand, lastUsedText, PROJECTOR_COMMANDS, COPY_HINT, revokeQuestion } from '../../src/client/views/projector-model.ts';
+import { loadCommand, urlCommand, lastUsedText, PROJECTOR_COMMANDS, COPY_HINT, revokeQuestion, copyCommand, type CopyTools } from '../../src/client/views/projector-model.ts';
 import { createToken, listTokens, revokeToken } from '../../src/client/api/projector.ts';
 import type { TokenInfo } from '../../src/shared/types/projector.ts';
 
@@ -44,12 +44,63 @@ describe('projector panel', () => {
     expect(renderToStaticMarkup(<ProjectorPanelView {...props({ error: 'A project can have at most 20 projector tokens — revoke one first' })} />))
       .toContain('<p role="alert">A project can have at most 20 projector tokens — revoke one first</p>');
   });
+
+  it('shows an error right under the Create form, above the commands and the token list', () => {
+    const html = renderToStaticMarkup(<ProjectorPanelView {...props({ error: 'boom', created: { token: 'gpt_SECRET', tokenId: 'T1aaaaaaaa', info: tok() }, tokens: [tok()] })} />);
+    const at = (s: string) => html.indexOf(s);
+    expect(at('<p role="alert">boom</p>')).toBeGreaterThan(at('Create token'));
+    expect(at('<p role="alert">boom</p>')).toBeLessThan(at('<code>/planner load P1 gpt_SECRET</code>'));
+    expect(at('<p role="alert">boom</p>')).toBeLessThan(at('<h4>Tokens</h4>'));
+  });
+
+  it('says at the clicked command what Copy did', () => {
+    const created = { token: 'gpt_SECRET', tokenId: 'T1aaaaaaaa', info: tok() };
+    const load = loadCommand('P1', 'gpt_SECRET'), url = urlCommand('http://mc.example.org:8765');
+    const lineOf = (html: string, text: string) => html.slice(html.indexOf(`<code>${text}</code>`)).split('<div class="command-line">')[0]!;
+    const copied = renderToStaticMarkup(<ProjectorPanelView {...props({ created, copied: { text: load, copied: true } })} />);
+    expect(lineOf(copied, load)).toContain('>Copied</button>');
+    expect(lineOf(copied, url)).toContain('>Copy</button>');
+    expect(copied).not.toContain(COPY_HINT);
+    const byHand = renderToStaticMarkup(<ProjectorPanelView {...props({ created, copied: { text: url, copied: false } })} />);
+    expect(lineOf(byHand, url)).toContain(`<p class="small" role="status" style="margin-top:4px">${COPY_HINT}</p>`);
+    expect(lineOf(byHand, load)).not.toContain(COPY_HINT);
+    expect(byHand).not.toContain('>Copied</button>');
+    expect(renderToStaticMarkup(<ProjectorPanelView {...props({ created })} />).match(/>Copy<\/button>/g)).toHaveLength(2);
+  });
+});
+
+describe('copying a command', () => {
+  const tools = (writeText: CopyTools['writeText'], copies: boolean) => {
+    const copySelected = vi.fn((_text: string) => copies);
+    return { writeText, copySelected };
+  };
+
+  it('copies the selection inside the click when the page has no clipboard API (plain http)', async () => {
+    const t = tools(null, true);
+    const done = copyCommand('/planner load P1 gpt_x', t);
+    expect(t.copySelected).toHaveBeenCalledWith('/planner load P1 gpt_x');   // before anything is awaited
+    await expect(done).resolves.toBe(true);
+    const refused = tools(null, false);
+    await expect(copyCommand('/planner url http://x', refused)).resolves.toBe(false);
+  });
+
+  it('uses the clipboard API where there is one, and the selection when it refuses', async () => {
+    const writeText = vi.fn(async (_text: string) => {});
+    const ok = tools(writeText, true);
+    await expect(copyCommand('/planner load P1 gpt_x', ok)).resolves.toBe(true);
+    expect(writeText).toHaveBeenCalledWith('/planner load P1 gpt_x');
+    expect(ok.copySelected).not.toHaveBeenCalled();
+    const denied = tools(async () => { throw new DOMException('denied', 'NotAllowedError'); }, false);
+    await expect(copyCommand('/planner load P1 gpt_x', denied)).resolves.toBe(false);
+    expect(denied.copySelected).toHaveBeenCalledWith('/planner load P1 gpt_x');
+    await expect(copyCommand('/planner load P1 gpt_x', tools(async () => { throw new Error('no'); }, true))).resolves.toBe(true);
+  });
 });
 
 describe('projector panel container', () => {
   afterEach(() => { vi.unstubAllGlobals(); });
 
-  it('asks before revoking, and says how to copy by hand', () => {
+  it('pins the revoke question and the copy hint', () => {
     expect(revokeQuestion('Steve')).toBe('Revoke "Steve"? Anyone using it loses the ghosts until they get a new token.');
     expect(COPY_HINT).toBe('Press Ctrl+C (Cmd+C on a Mac) to copy');
   });

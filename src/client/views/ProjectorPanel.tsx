@@ -1,17 +1,22 @@
 // The project page's "In-game projector" panel under the settings (spec §3.13, architecture §11.23): a token for one
 // player with the chat command that loads this line in their game (shown once, right after it is made: the planner keeps
 // only its hash), the command that points the mod at this planner, the project's tokens with Revoke, and the mod's other
-// commands. The token list loads when the panel is first opened.
+// commands. The token list loads when the panel is first opened. Copy works over plain http too, where browsers have no
+// clipboard API, and says at the command what it did.
 
-import { useRef, useState, type CSSProperties, type ReactElement } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type ReactElement } from 'react';
 import { messageOf } from '../api/client.ts';
 import { createToken, listTokens, revokeToken } from '../api/projector.ts';
 import { TOKEN_LABEL_MAX, type CreateTokenResult, type TokenInfo } from '../../shared/types/projector.ts';
-import { COPY_HINT, PROJECTOR_COMMANDS, lastUsedText, loadCommand, revokeQuestion, urlCommand } from './projector-model.ts';
+import {
+  COPY_HINT, PROJECTOR_COMMANDS, copyCommand, lastUsedText, loadCommand, revokeQuestion, urlCommand, type CopyOutcome, type CopyTools,
+} from './projector-model.ts';
 
 export interface ProjectorPanelViewProps {
   projectId: string; origin: string; now: Date; tokens: TokenInfo[] | null; created: CreateTokenResult | null;
   label: string; busy: boolean; error: string | null; onLabel(v: string): void; onCreate(): void; onRevoke(t: TokenInfo): void; onCopy(text: string): void;
+  /** What the last Copy click did, shown at its command: "Copied" on its button, or how to copy by hand under it. */
+  copied?: CopyOutcome | null;
   /** The panel was opened (true) or closed. */
   onToggle?(open: boolean): void;
 }
@@ -25,14 +30,21 @@ const COMMAND_STYLE: CSSProperties = {
   background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 6,
 };
 const LIST_STYLE: CSSProperties = { margin: 0, paddingLeft: 18 };
+const HINT_STYLE: CSSProperties = { marginTop: 4 };
+/** How long a copied command's button says "Copied". */
+const COPIED_MS = 2000;
 
-/** A chat command and its Copy button. */
-function CommandLine(props: { text: string; onCopy(text: string): void }): ReactElement {
-  const { text, onCopy } = props;
+/** A chat command and its Copy button, with what the last click on that button did. */
+function CommandLine(props: { text: string; copied: CopyOutcome | null; onCopy(text: string): void }): ReactElement {
+  const { text, copied, onCopy } = props;
+  const outcome = copied?.text === text ? copied : null;
   return (
-    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-      <span style={COMMAND_STYLE}><code>{text}</code></span>
-      <button type="button" className="small" onClick={() => onCopy(text)}>Copy</button>
+    <div className="command-line">
+      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+        <span style={COMMAND_STYLE}><code>{text}</code></span>
+        <button type="button" className="small" onClick={() => onCopy(text)}>{outcome?.copied === true ? 'Copied' : 'Copy'}</button>
+      </div>
+      {outcome?.copied === false && <p className="small" role="status" style={HINT_STYLE}>{COPY_HINT}</p>}
     </div>
   );
 }
@@ -56,6 +68,7 @@ function TokenList(props: { tokens: TokenInfo[] | null; now: Date; busy: boolean
 
 export function ProjectorPanelView(props: ProjectorPanelViewProps): ReactElement {
   const { projectId, origin, now, tokens, created, label, busy, error, onLabel, onCreate, onRevoke, onCopy, onToggle } = props;
+  const copied = props.copied ?? null;
   return (
     <details className="settings-section" style={PANEL_STYLE} onToggle={(e) => onToggle?.(e.currentTarget.open)}>
       <summary>In-game projector</summary>
@@ -71,15 +84,17 @@ export function ProjectorPanelView(props: ProjectorPanelViewProps): ReactElement
           </label>
           <button type="submit" className="primary" disabled={busy}>Create token</button>
         </form>
+        {/* right under the form, not below the token list: the panel scrolls inside the settings column */}
+        {error !== null && <div className="error small"><p role="alert">{error}</p></div>}
         {created !== null && (
           <div>
             <p>Paste this into Minecraft chat. The token is shown only now.</p>
-            <CommandLine text={loadCommand(projectId, created.token)} onCopy={onCopy} />
+            <CommandLine text={loadCommand(projectId, created.token)} copied={copied} onCopy={onCopy} />
           </div>
         )}
         <div>
           <p className="muted small">If the planner is not at the Minecraft server's address on port 8765, also run this once:</p>
-          <CommandLine text={urlCommand(origin)} onCopy={onCopy} />
+          <CommandLine text={urlCommand(origin)} copied={copied} onCopy={onCopy} />
         </div>
         <div>
           <h4>Tokens</h4>
@@ -91,26 +106,40 @@ export function ProjectorPanelView(props: ProjectorPanelViewProps): ReactElement
             {PROJECTOR_COMMANDS.map(([command, what]) => <li key={command}><code>{command}</code>{` — ${what}`}</li>)}
           </ul>
         </div>
-        {error !== null && <div className="error small"><p role="alert">{error}</p></div>}
       </div>
     </details>
   );
 }
 
-/** Selects the shown command `text` inside `panel`, so Ctrl+C copies it. */
-function selectCommand(panel: HTMLElement | null, text: string): void {
+/** Selects the shown command `text` inside `panel`, so Ctrl+C copies it; false when it is not shown. */
+function selectCommand(panel: HTMLElement | null, text: string): boolean {
   const code = Array.from(panel?.querySelectorAll('code') ?? []).find((c) => c.textContent === text);
   const selection = getSelection();
-  if (code === undefined || selection === null) return;
+  if (code === undefined || selection === null) return false;
   const range = document.createRange();
   range.selectNodeContents(code);
   selection.removeAllRanges();
   selection.addRange(range);
+  return true;
 }
 
-/** Rejects where the page may not write the clipboard: refused, or no `navigator.clipboard` at all (plain http:// away from localhost). */
-async function writeClipboard(text: string): Promise<void> {
-  await navigator.clipboard.writeText(text);
+/**
+ * The browser's copy tools for the commands in `panel`: the clipboard API only in a secure context (elsewhere
+ * `navigator.clipboard` is missing), and the old copy of the selected command, which works on plain http too.
+ */
+function browserCopyTools(panel: HTMLElement | null): CopyTools {
+  const clipboard: Clipboard | undefined = window.isSecureContext ? navigator.clipboard : undefined;
+  return {
+    writeText: clipboard === undefined ? null : (text) => clipboard.writeText(text),
+    copySelected: (text) => {
+      if (!selectCommand(panel, text)) return false;
+      try {
+        return document.execCommand('copy');
+      } catch {
+        return false;
+      }
+    },
+  };
 }
 
 export function ProjectorPanel(props: { projectId: string }): ReactElement {
@@ -121,8 +150,19 @@ export function ProjectorPanel(props: { projectId: string }): ReactElement {
   const [label, setLabel] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState<CopyOutcome | null>(null);
   const listRequest = useRef(0);        // number of the newest list request: an older answer that comes late is dropped
   const loadingOnOpen = useRef(false);  // the list asked for on opening is on its way
+  const copyClick = useRef(0);          // number of the newest Copy click: only its outcome is shown
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (copiedTimer.current !== null) clearTimeout(copiedTimer.current);
+  }, []);
+  // A failed Create or Revoke can come while the panel is scrolled to the token list: bring the alert into view.
+  useEffect(() => {
+    if (error !== null) panel.current?.querySelector('[role="alert"]')?.scrollIntoView({ block: 'nearest' });
+  }, [error]);
 
   const failed = (err: unknown): void => setError(messageOf(err));
   const refresh = (): Promise<void> => {
@@ -161,17 +201,22 @@ export function ProjectorPanel(props: { projectId: string }): ReactElement {
       .finally(() => setBusy(false));
   };
   const copy = (text: string): void => {
-    setError(null);
-    writeClipboard(text).catch(() => {
-      selectCommand(panel.current, text);
-      setError(COPY_HINT);
+    const click = ++copyClick.current;
+    if (copiedTimer.current !== null) clearTimeout(copiedTimer.current);
+    copiedTimer.current = null;
+    // called right here in the click: without a clipboard API the selection must be copied before the click ends
+    void copyCommand(text, browserCopyTools(panel.current)).then((done) => {
+      if (click !== copyClick.current) return;
+      setCopied({ text, copied: done });
+      // "Copied" turns back into "Copy" after a moment; the hint to copy by hand stays until the next click
+      if (done) copiedTimer.current = setTimeout(() => setCopied(null), COPIED_MS);
     });
   };
   return (
     <div ref={panel}>
       <ProjectorPanelView
         projectId={projectId} origin={location.origin} now={new Date()} tokens={tokens} created={created} label={label} busy={busy}
-        error={error} onLabel={setLabel} onCreate={create} onRevoke={revoke} onCopy={copy} onToggle={toggled}
+        error={error} copied={copied} onLabel={setLabel} onCreate={create} onRevoke={revoke} onCopy={copy} onToggle={toggled}
       />
     </div>
   );
