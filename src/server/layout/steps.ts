@@ -74,11 +74,20 @@ function hatchLabels(u: PlacedUnit): string[] {
   return [...chosen, ...exported].map((c) => c.label);
 }
 
-const UP = 1;
+/**
+ * How a singleblock gets its two faces (`PlacedUnit.mainFacing`, toward the power head, and its output side toward the
+ * middle row) in GT 5.09.54: a sneaking Wrench click makes the side the wrench grid picks the front
+ * (`MTEBasicMachine.setMainFacing`, which turns the output side away when it was there), a plain one makes it the output
+ * side (anywhere but the front), and a click on an edge of the grid picks the side beyond that edge
+ * (`GTUtility.determineWrenchingSide`), so a side a neighbour covers can be picked too.
+ */
+const SINGLEBLOCK_FACES = 'with its output side facing the middle row and its front facing the power head: with a Wrench, sneak-right-click '
+  + 'its power-head side to make that the front (where a neighbour covers that side, click the edge of the wrench grid toward it), '
+  + 'then right-click its middle-row side to make that the output side';
 
 /**
  * One step per placed plan step, in unit order: how many to place and which way they face — a singleblock's output
- * side and its front, which GT keeps apart (`PlacedUnit.mainFacing`); a multiblock's size, controller and hatches.
+ * side and its front, which GT keeps apart, and how to set both; a multiblock's size, controller and hatches.
  */
 function placeSteps(units: readonly PlacedUnit[], sitePin: number | undefined): Draft[] {
   const byStep = new Map<string, { first: PlacedUnit; n: number }>();
@@ -88,10 +97,7 @@ function placeSteps(units: readonly PlacedUnit[], sitePin: number | undefined): 
     else seen.n += 1;
   }
   return [...byStep].map(([stepId, { first: u, n }]) => {
-    if (!u.multiblock) {
-      const front = u.mainFacing === UP ? 'facing up' : 'facing the power head';
-      return draft(`layout:place:${stepId}`, 'place', sitePin, `Place ${fmtInt(n)}× ${u.name} with its output side facing the middle row and its front ${front}`);
-    }
+    if (!u.multiblock) return draft(`layout:place:${stepId}`, 'place', sitePin, `Place ${fmtInt(n)}× ${u.name} ${SINGLEBLOCK_FACES}`);
     const labels = hatchLabels(u);
     const hatches = labels.length === 0 ? '' : `; hatches: ${labels.join(', ')}`;
     return draft(`layout:place:${stepId}`, 'place', sitePin,

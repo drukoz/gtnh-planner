@@ -45,7 +45,14 @@ export interface ConduitExtract {
   /** Item conduits only; `speed` is absent when no upgrade is needed. */
   selfFeed?: boolean; speed?: { item: StuffKey; count: number };
 }
-export interface ConduitInsert { color: DyeColor; filter: ConduitFilter | null; rate: number; /** item conduits only; higher is filled first */ priority?: number }
+export interface ConduitInsert {
+  color: DyeColor; filter: ConduitFilter | null; rate: number; /** item conduits only; higher is filled first */ priority?: number;
+  /**
+   * True when the side inserts into a GT basic machine through that machine's output side, which takes items there only
+   * while its Input from Output Side is allowed (`MTEBasicMachine.allowPutStack`); absent otherwise.
+   */
+  outputSide?: boolean;
+}
 /** `extract` iff mode is extract or in_out, `insert` iff insert or in_out; `target` names what is on that side. */
 export interface ConduitFace { face: Face; mode: ConduitMode; target: string; extract?: ConduitExtract; insert?: ConduitInsert }
 /** `connections`: links to the same kind in neighbouring cells, bits `1 << side`; `faces` in `FACES` order. */

@@ -159,11 +159,13 @@ describe('placement: tiers apart, front and output side apart', () => {
     expect(placeUnits(units, { headWidth: 5, portSpacing: 0 }).units.map((u) => u.stepId)).toEqual(['h', 'm', 'm', 's', 'l']);
   });
 
-  it("gives a singleblock its front up (toward the power head when its top is a fluid port) and its output side toward the spine", () => {
+  it("gives every singleblock its front toward the power head and its output side toward the spine", () => {
+    // GT 5.09.54 never lets a basic machine's front face up or down (MTEBasicMachine.isValidMainFacing), so a machine
+    // without a fluid port gets the power-head side as well, never its top
     const plan = makePlan([{ id: 'm', mteId: IDS.MACERATOR, count: 1 }, { id: 'x', mteId: IDS.EXTRACTOR, count: 1, outputs: [['fluid:molten.iron', 144]] }]);
     const p = placeUnits(unitsFromPlan(layoutPack(), plan).units, { headWidth: 1, portSpacing: 0 });
-    expect(p.units.map((u) => [u.stepId, u.facing, u.mainFacing])).toEqual([['m', 3, 1], ['x', 2, 4]]);
-    expect(p.blocks.filter((b) => b.role === 'machine').map((b) => [b.facing, b.mainFacing])).toEqual([[3, 1], [2, 4]]);
+    expect(p.units.map((u) => [u.stepId, u.facing, u.mainFacing])).toEqual([['m', 3, 4], ['x', 2, 4]]);
+    expect(p.blocks.filter((b) => b.role === 'machine').map((b) => [b.facing, b.mainFacing])).toEqual([[3, 4], [2, 4]]);
     const ebf = placeUnits(unitsFromPlan(layoutPack(), makePlan([ebfStep])).units, { headWidth: 1, portSpacing: 0 });
     expect(ebf.units[0]!.mainFacing).toBeUndefined();
     expect(ebf.blocks.some((b) => b.mainFacing !== undefined)).toBe(false);

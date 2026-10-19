@@ -5,7 +5,7 @@
 // facing a one-block spine, row N turned 180° so every front faces the spine, with the ports the routing, logistics
 // and hookup stages connect to. Covers and settings from those stages are attached to their host blocks here too.
 // A singleblock's output side faces the spine and its front (GT's `mMainFacing`, kept apart from the output side) faces
-// up, or toward the power head when its top is a fluid port. With the supply tier given, the lowest feed tier stands
+// the power head: GT never lets it face up or down. With the supply tier given, the lowest feed tier stands
 // next to the power head and machines fed at different tiers stand a column apart, so their power ports never touch.
 // Every order and tie-break is fixed, so the same plan gives the same placement.
 
@@ -76,8 +76,8 @@ export interface PlacedUnit extends Unit {
   /** 3 in row N, 2 in row S: toward the spine (a singleblock's output side, a multiblock's controller front). */
   facing: number;
   /**
-   * A singleblock's front (GT's `mMainFacing`, kept apart from its output side `facing`): up, or toward the power head
-   * (local west) when its top is a fluid port. Undefined for a multiblock.
+   * A singleblock's front (GT's `mMainFacing`, kept apart from its output side `facing`): toward the power head (local
+   * west), as GT allows no front up or down. Undefined for a multiblock.
    */
   mainFacing?: number;
   ports: UnitPorts;
@@ -445,9 +445,14 @@ function unitPorts(u: Unit, row: Row, x: number, spineZ: number): UnitPorts {
   };
 }
 
-/** A singleblock's front: up, unless its top is the cell its fluids use; then toward the power head (local west). */
-function singleblockMainFacing(u: Unit): number {
-  return u.io.fluidIn.length > 0 || u.io.fluidOut.length > 0 ? WEST : UP;
+/**
+ * A singleblock's front: toward the power head (local west). GT 5.09.54 never lets a basic machine's front face up or
+ * down (`MTEBasicMachine.isValidMainFacing`; `setMainFacing` refuses such a side), the spine side is its output side, the
+ * side away from the spine its power port (energy never enters the front: `isInputFacing`), and its top may be the cell
+ * its fluids use; so a side along the row is left, which GT moves neither items nor fluids through.
+ */
+function singleblockMainFacing(): number {
+  return WEST;
 }
 
 /**
@@ -517,7 +522,7 @@ export function placeUnits(units: readonly Unit[], opts: { headWidth: number; po
   for (const { u, row, x } of slots) {
     const toSpine = towardSpine(row);
     // a singleblock's output side faces the spine (its covers and inputs go there), its front elsewhere (GT keeps the two apart)
-    const mainFacing = u.multiblock ? undefined : singleblockMainFacing(u);
+    const mainFacing = u.multiblock ? undefined : singleblockMainFacing();
     for (const c of u.cells) {
       const facing = c.role === 'machine' ? toSpine : c.role === 'hatch' ? hatchFacing(c.hatch, row) : undefined;
       blocks.push({

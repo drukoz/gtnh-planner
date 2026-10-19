@@ -14,6 +14,15 @@ import { flatVoxels, IDS, layoutPack, makePlan, makeProject } from '../../helper
 import { BASIC, ENDER, ITEM, basic, fluidPlan, lineGround, lineScan, setup, twoStep } from '../../helpers/enderio-fixtures.ts';
 
 const placed = (rotation: 0 | 90 | 180 | 270) => makeProject({ logistics: 'enderio', placement: { origin: [30, 64, 10], rotation } });
+/**
+ * A singleblock's Input from Output Side in a builder's words (GT 5.09.54 `MTEBasicMachine`): every constructor turns it
+ * on, so a machine placed from a newly crafted item has it; a Screwdriver right-click on the front or the output side
+ * switches it and says the new state in chat (a sneaking one switches the Input Filter), and a click on a side also
+ * works that side's cover.
+ */
+const FROM_OUTPUT_SIDE = 'Input from Output Side allowed: a newly crafted machine starts with it on, and a Screwdriver right-click on its front, '
+  + 'or on its output side where no cover sits, switches it, so leave it where the chat says "Input from Output Side allowed" '
+  + '(a sneak-click switches the Input Filter instead)';
 const faceList = (l: Layout, turn: (f: Face) => Face) =>
   l.blocks.flatMap((b) => (b.conduits ?? []).flatMap((c) => c.faces.map((f) => `${c.kind} ${turn(f.face)} ${f.mode} ${f.target}`))).sort();
 const linkList = (l: Layout, turn: (n: number) => number) => l.blocks.flatMap((b) => (b.conduits ?? []).map((c) => `${c.kind} ${turn(c.connections)}`)).sort();
@@ -32,7 +41,9 @@ describe('an EnderIO line in the layout', () => {
     expect(steps.every((s) => s.kind === 'configure' && s.pin === layout.pins.find((p) => p.kind === 'site')!.n)).toBe(true);
     expect(steps[3]!.text).toBe('Item Conduit, north face to Chest (input): Extract; extract on Blue with a Basic Item Filter '
       + '(whitelist: Raw Input; match meta, ignore NBT), round robin on, self feed off, redstone Always active');
-    expect(layout.buildSteps.find((s) => s.id === 'layout:configure:s1')!.text).toContain('allow input from the output side');
+    expect(layout.buildSteps.find((s) => s.id === 'layout:configure:s1')!.text).toBe(`Basic Macerator ×2: ${FROM_OUTPUT_SIDE}`);
+    // the machines' In / Out faces remind the builder of it: they insert through the output side
+    expect(steps[0]!.text.endsWith('priority 1, into its output side: keep its Input from Output Side allowed (a newly crafted machine has it on)')).toBe(true);
     expect(layout.blocks.filter((b) => b.conduits !== undefined).every((b) => b.buildStep === 'layout:logistics:line')).toBe(true);
   });
 
@@ -107,7 +118,7 @@ function conduitBlocks(): LayoutBlock[] {
         { kind: 'item', item: ITEM, connections: 0, faces: [
           { face: 'north', mode: 'in_out', target: 'Basic Macerator',
             extract: { color: 'red', filter: basic(['t:dust@0']), rate: 20, roundRobin: false, selfFeed: false, redstone: 'ignore', speed: { item: SPEED, count: 2 } },
-            insert: { color: 'blue', filter: { ...basic(['t:in@0']), item: ADVANCED }, rate: 1, priority: 1 } },
+            insert: { color: 'blue', filter: { ...basic(['t:in@0']), item: ADVANCED }, rate: 1, priority: 1, outputSide: true } },
           { face: 'south', mode: 'disabled', target: 'Basic Macerator' }] },
         { kind: 'liquid_ender', item: ENDER, connections: 0, faces: [{ face: 'up', mode: 'extract', target: 'your tank',
           extract: { color: 'red', filter: { whitelist: true, keys: ['fluid:molten.iron'] }, rate: 1, roundRobin: false, redstone: 'ignore' } }] },
@@ -125,10 +136,11 @@ describe('EnderIO conduits in the steps, the parts list and the hookup', () => {
     const steps = layoutSteps(stepsInput({ pins, blocks: conduitBlocks(),
       drafts: [{ id: 'layout:configure:conduit-tap', kind: 'configure', pin: 'logistics', text: 'At the storage tap set the conduit face to Extract' }] }));
     expect(steps.filter((s) => s.kind === 'configure').map((s) => [s.id, s.pin, s.text])).toEqual([
-      ['layout:configure:s1', 1, 'Basic Macerator: allow input from the output side'],
+      ['layout:configure:s1', 1, `Basic Macerator: ${FROM_OUTPUT_SIDE}`],
       ['layout:conduit:1,0,2:item:north', 1, 'Item Conduit, north face to Basic Macerator: In / Out; extract on Red with a Basic Item Filter (whitelist: '
         + 'Titanium Dust; match meta, ignore NBT), 2× Item Conduit Speed Upgrade, round robin off, self feed off, redstone Always active; insert on Blue '
-        + 'with an Advanced Item Filter (whitelist: Raw Input; match meta, ignore NBT), priority 1'],
+        + 'with an Advanced Item Filter (whitelist: Raw Input; match meta, ignore NBT), priority 1, into its output side: keep its Input from Output Side '
+        + 'allowed (a newly crafted machine has it on)'],
       ['layout:conduit:1,0,2:item:south', 1, 'Item Conduit, south face to Basic Macerator: Disabled'],
       ['layout:conduit:1,0,2:liquid_ender:up', 1, 'Ender Fluid Conduit, top face to your tank: Extract; extract on Red with a fluid filter (whitelist: '
         + 'Molten Iron), round robin off, redstone Always active'],

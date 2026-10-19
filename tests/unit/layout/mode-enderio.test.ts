@@ -24,13 +24,14 @@ describe('EnderIO mode — items', () => {
       [[3, 0, 2], 'pipe', 'conduit:item', 'Item Conduit', ITEM, 4 | 8 | 16]]);
     const s1 = { mode: 'in_out', target: 'Basic Macerator',
       extract: { color: 'red', filter: basic(['t:out_s1@0']), rate: 0.5, roundRobin: false, selfFeed: false, redstone: 'ignore' },
-      insert: { color: 'blue', filter: basic(['t:in@0']), rate: 0.5, priority: 1 } };
+      // a singleblock takes the face's items through its output side (GT's Input from Output Side, plan 11 Task 3's configs)
+      insert: { color: 'blue', filter: basic(['t:in@0']), rate: 0.5, priority: 1, outputSide: true } };
     expect(r.blocks.find((b) => posKey(b.pos) === '1,0,2')!.conduits).toEqual([
       { kind: 'item', item: ITEM, connections: 32, faces: [{ face: 'north', ...s1 }, { face: 'south', ...s1 }] }]);
     expect(faces(r).filter((f) => posKey(f.pos) !== '1,0,2').map(({ pos: _pos, kind: _kind, ...f }) => f)).toEqual([
       { face: 'north', mode: 'in_out', target: 'Advanced Assembler',
         extract: { color: 'yellow', filter: basic(['t:out_s2@0']), rate: 1, roundRobin: false, selfFeed: false, redstone: 'ignore' },
-        insert: { color: 'red', filter: basic(['t:out_s1@0']), rate: 1, priority: 1 } },
+        insert: { color: 'red', filter: basic(['t:out_s1@0']), rate: 1, priority: 1, outputSide: true } },
       { face: 'north', mode: 'extract', target: 'Chest (input)',
         extract: { color: 'blue', filter: basic(['t:in@0']), rate: 1, roundRobin: true, selfFeed: false, redstone: 'ignore' } },
       { face: 'south', mode: 'insert', target: 'Chest (output)', insert: { color: 'yellow', filter: basic(['t:out_s2@0']), rate: 1, priority: 0 } }]);
@@ -41,7 +42,7 @@ describe('EnderIO mode — items', () => {
     expect([r.covers, r.logisticsPort, r.hookup, r.tailFluidY, r.warnings, r.extraParts]).toEqual([[], null, null, 1, [], []]);
     expect(r.drafts).toEqual([
       { id: 'layout:logistics:line', kind: 'logistics', pin: 'site',
-        text: "Lay 3× Item Conduit along the middle row so it touches every machine's front, with an input chest and an output chest at the end" },
+        text: "Lay 3× Item Conduit along the middle row so it touches every machine's output side or bus, with an input chest and an output chest at the end" },
       { id: 'layout:logistics:inputs', kind: 'logistics', pin: 'site', text: 'Put the raw inputs in the input chest: Raw Input' }]);
   });
 
@@ -161,6 +162,7 @@ describe('EnderIO mode — items', () => {
       const hatch = busKind(s.placement.blocks.find((b) => posKey(b.pos) === posKey(behind))!.block.mteId);
       const face = faces(r).find((f) => posKey(f.pos) === posKey(port) && f.mode !== 'disabled')!;
       expect(face.mode).toBe(hatch === 'input_bus' ? 'insert' : 'extract');
+      expect(face.insert?.outputSide).toBeUndefined();                              // a bus takes items whatever its side
     }
     expect(r.configs).toEqual([]);
   });
@@ -213,7 +215,7 @@ describe('EnderIO mode — tail chests, the storage tap and warnings', () => {
     expect([faces(r).find((f) => f.target === 'Advanced Assembler')!.extract!.roundRobin, faces(r).find((f) => f.target === 'Basic Macerator')!.extract!.roundRobin])
       .toEqual([false, false]);
     expect([r.tailFluidY, r.warnings, r.drafts[0]!.text]).toEqual([2, [],
-      "Lay 3× Item Conduit along the middle row so it touches every machine's front, with an input chest and 2 output chests at the end"]);
+      "Lay 3× Item Conduit along the middle row so it touches every machine's output side or bus, with an input chest and 2 output chests at the end"]);
   });
 
   it('warns once for a machine and once for the input chest when a face cannot move its rate (plan 11, ruling R9)', () => {
@@ -242,7 +244,7 @@ describe('EnderIO mode — tail chests, the storage tap and warnings', () => {
     expect(r.warnings).toEqual([{ code: 'conduit_channels',
       text: 'More than 15 conduit channels are needed: Red also carries Raw Input, so they can reach a machine that does not take them' }]);
     expect(r.drafts).toEqual([{ id: 'layout:logistics:line', kind: 'logistics', pin: 'site',
-      text: "Lay 9× Item Conduit along the middle row so it touches every machine's front" }]);
+      text: "Lay 9× Item Conduit along the middle row so it touches every machine's output side or bus" }]);
   });
 
   it('sizes the storage tap face to the input rate and lists its filter and speed upgrades', () => {

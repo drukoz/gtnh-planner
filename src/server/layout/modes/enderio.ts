@@ -1,9 +1,10 @@
 // EnderIO conduits (plan 11 Tasks 3–4; spec §3.6 mode 4, architecture "EnderIO conduits, granted change requests (add-on
-// 11)"): one Item Conduit along the spine, touching every machine's front, and one ender fluid conduit network from every
-// machine's fluid port, the two sharing cells as conduit bundles. Each face toward a machine, a tail chest or a tank is
-// set on its own: Extract (EnderIO INPUT) what the machine makes, Insert (OUTPUT) what it takes, or In / Out for both,
-// each side with its own channel colour and a whitelist of its exact items or fluids; faces toward anything else they
-// could trade with are Disabled. Extract sides get redstone Always active (an unset face extracts only with a signal);
+// 11)"): one Item Conduit along the spine, touching every machine's output side or bus, and one ender fluid conduit
+// network from every machine's fluid port, the two sharing cells as conduit bundles. Each face toward a machine, a tail
+// chest or a tank is set on its own: Extract (EnderIO INPUT) what the machine makes, Insert (OUTPUT) what it takes, or
+// In / Out for both, each side with its own channel colour and a whitelist of its exact items or fluids (an insert side
+// into a singleblock's output side needs the machine's Input from Output Side, and says so); faces toward anything else
+// they could trade with are Disabled. Extract sides get redstone Always active (an unset face extracts only with a signal);
 // item extract sides also get the speed upgrades their rate needs and self feed off, and item insert sides fill
 // machines (priority 1) before chests (0). A side's targets are the insert sides of its colour that pass one of its
 // keys, and EnderIO's round robin rotates over them whatever their priority, so an item extract side gets it only when
@@ -55,9 +56,12 @@ interface Side { keys: StuffKey[]; rate: number }
 /**
  * A face of a conduit cell that trades with what it touches: a machine's item or fluid port (`stepId` its step), or a
  * tail chest or open fluid end (`stepId` null, where the line meets its storage). It has an extract side, an insert side
- * or both.
+ * or both. `outputSide`: the face touches a singleblock's output side, so its insert side needs the machine's Input
+ * from Output Side.
  */
-interface FacePlan { pos: Vec3; side: number; target: string; stepId: string | null; extract: Side | null; insert: Side | null }
+interface FacePlan {
+  pos: Vec3; side: number; target: string; stepId: string | null; extract: Side | null; insert: Side | null; outputSide?: true;
+}
 
 /** Each face's mode and sides, by `faceKey`. */
 type FaceSettings = ReadonlyMap<string, Omit<ConduitFace, 'face'>>;
@@ -374,8 +378,8 @@ interface Crossing { entering: PlanFlow[]; leaving: PlanFlow[]; strays: Array<{ 
  * The face of every item port toward its unit, in unit then port order: a singleblock's extracts every item it makes and
  * inserts every item it takes; a multiblock's extracts toward an output bus and inserts toward an input bus, with all of
  * the step's items on every bus (plan 11, ruling R10). A unit's rates are split evenly over its extract faces and over
- * its insert faces. With them, `inputFromOutputSide` on every singleblock that takes items (its front, the face, is its
- * output side), sorted by pos.
+ * its insert faces. With them, `inputFromOutputSide` on every singleblock that takes items (the face is on its output
+ * side, GT's `getFrontFacing()`, which takes items only with that setting), sorted by pos; such a face is `outputSide`.
  */
 function machineFaces(plan: Plan, items: readonly PlanFlow[], placement: Placement): { faces: FacePlan[]; configs: HostConfig[] } {
   const blockAt = new Map(placement.blocks.map((b) => [posKey(b.pos), b]));
@@ -399,11 +403,13 @@ function machineFaces(plan: Plan, items: readonly PlanFlow[], placement: Placeme
     const insertRate = unitIntake(plan, items, u.stepId) / Math.max(1, roles.filter((r) => r.inserts).length);
     for (const { port, extracts, inserts } of roles) {
       if (!extracts && !inserts) continue;
+      const outputSide = !u.multiblock && inserts;
       faces.push({
         pos: port.pos, side: sideToward(port.pos, port.behind), target: u.name, stepId: u.stepId,
         extract: extracts ? { keys: makes, rate: extractRate } : null, insert: inserts ? { keys: takes, rate: insertRate } : null,
+        ...(outputSide ? { outputSide: true as const } : {}),
       });
-      if (!u.multiblock && inserts) configs.push({ pos: [...port.behind], config: { inputFromOutputSide: true } });
+      if (outputSide) configs.push({ pos: [...port.behind], config: { inputFromOutputSide: true } });
     }
   }
   return { faces, configs: configs.sort((a, b) => comparePos(a.pos, b.pos)) };
@@ -449,6 +455,7 @@ function itemSettings(input: ModeInput, plans: readonly FacePlan[], channels: Ch
   };
   const insertOf = (f: FacePlan, s: Side): ConduitInsert => ({
     color: channels.colors.get(endId(f, 'insert'))!, filter: filterOf(f, 'insert', s.keys), rate: s.rate, priority: insertPriority(f),
+    ...(f.outputSide === true ? { outputSide: true } : {}),
   });
   return { configured: configureFaces(plans, extractOf, insertOf), warnings: [...rateWarnings.list, ...filterWarnings.list] };
 }
@@ -558,12 +565,13 @@ function itemLine(input: ModeInput): ItemLine {
     return { pos, spec: { kind: 'item', item, connections, faces: conduitFaces(pos, connections, configured, touching) } };
   });
 
-  // drafts: lay the line; then stock the input chest through the storage tap, or by hand
+  // drafts: lay the line (against a singleblock's output side, which GT keeps apart from its front, and a multiblock's
+  // buses); then stock the input chest through the storage tap, or by hand
   const hooked = network?.kind === 'enderio' && inputChest !== null ? storageHookup(input, inputKeys, inputRate) : null;
   const chestWords = [...(inputChest === null ? [] : ['an input chest']),
     ...(outputSlices.length === 0 ? [] : [outputSlices.length === 1 ? 'an output chest' : `${fmtInt(outputSlices.length)} output chests`])];
   const lineDraft: StepDraft = { id: 'layout:logistics:line', kind: 'logistics', pin: 'site',
-    text: `Lay ${fmtInt(cells.length)}× ${CONDUIT_NAMES.item} along the middle row so it touches every machine's front`
+    text: `Lay ${fmtInt(cells.length)}× ${CONDUIT_NAMES.item} along the middle row so it touches every machine's output side or bus`
       + `${chestWords.length > 0 ? `, with ${joinNames(chestWords)} at the end` : ''}` };
   const stockDraft: StepDraft | null = hooked !== null ? hooked.draft : inputChest === null ? null
     : { id: 'layout:logistics:inputs', kind: 'logistics', pin: 'site', text: `Put the raw inputs in the input chest: ${nameList(plan, pack, inputKeys)}` };

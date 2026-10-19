@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
-  CHANNEL_PALETTE, CONDUIT_MODE_NAMES, CONDUIT_NAMES, DEFAULT_CHANNEL, DYE_COLORS, DYE_NAMES, FLUID_CONDUITS, FLUID_FILTER_SLOTS,
-  ITEM_FILTER_SLOTS, REDSTONE_NAMES, itemFaceRate,
+  CHANNEL_PALETTE, CONDUIT_MODE_NAMES, CONDUIT_NAMES, DEFAULT_CHANNEL, DYE_COLORS, DYE_HEX, DYE_NAMES, FLUID_CONDUITS, FLUID_FILTER_SLOTS,
+  ITEM_FILTER_SLOTS, REDSTONE_NAMES, dyeRgb, itemFaceRate,
 } from '../../../src/shared/layout/enderio.ts';
 import { LogisticsMode } from '../../../src/shared/types/plan.ts';
 import { validateOp } from '../../../src/shared/project/apply-op.ts';
@@ -20,6 +20,13 @@ describe('EnderIO 2.10.46 facts', () => {
     expect(CHANNEL_PALETTE).toEqual(['red', 'blue', 'yellow', 'orange', 'purple', 'cyan', 'magenta', 'lime', 'pink', 'light_blue', 'brown', 'white', 'black', 'gray', 'silver']);
     expect(DEFAULT_CHANNEL).toBe('green');
     expect([DYE_NAMES.silver, DYE_NAMES.light_blue]).toEqual(['Light Gray', 'Light Blue']);
+  });
+  it('tints with each colour\'s swatch, as three bytes', () => {
+    expect([dyeRgb('red'), dyeRgb('blue'), dyeRgb('white')]).toEqual([[176, 46, 38], [60, 68, 170], [249, 255, 254]]);
+    for (const color of DYE_COLORS) expect(`#${dyeRgb(color).map((v) => v.toString(16).padStart(2, '0')).join('')}`).toBe(DYE_HEX[color]);
+    const red = dyeRgb('red');
+    red[0] = 0;
+    expect(dyeRgb('red')[0]).toBe(176);                                                  // a fresh triple each time
   });
   it('names modes and redstone settings as the EnderIO GUI does', () => {
     expect(CONDUIT_MODE_NAMES).toEqual({ extract: 'Extract', insert: 'Insert', in_out: 'In / Out', disabled: 'Disabled' });

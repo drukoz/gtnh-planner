@@ -49,12 +49,25 @@ export function coverText(cover: CoverSpec, nameOf: (k: StuffKey) => string): st
   return parts.length === 0 ? head : `${head}: ${parts.join(', ')}`;
 }
 
+/**
+ * A GT basic machine's Input from Output Side in a builder's words, as the state to leave it in (GT 5.09.54
+ * `MTEBasicMachine`): every constructor turns it on, and the GUI has no button for it; a Screwdriver right-click on the
+ * front or the output side switches it whatever it was and names the new state in chat (`gt.interact.desc.
+ * input_from_output_on`/`_off`), a sneaking one switches the Input Filter instead, and the click also works the cover
+ * on the side clicked (`BaseMetaTileEntity.onRightclick`), so a covered output side is no place for it.
+ */
+function inputFromOutputSideText(allowed: boolean): string {
+  const state = `Input from Output Side ${allowed ? 'allowed' : 'forbidden'}`;
+  return `${state}: a newly crafted machine starts with it on, and a Screwdriver right-click on its front, or on its output side where no cover `
+    + `sits, switches it, so leave it where the chat says "${state}" (a sneak-click switches the Input Filter instead)`;
+}
+
 /** One setting of a block in a builder's words. */
 function configText(key: string, v: Value): string {
   switch (key) {
     case 'circuit': return `programmed circuit ${valueText(v)}`;
     case 'inputFilter': return v === true ? 'Input Filter on' : 'Input Filter off';
-    case 'inputFromOutputSide': return v === true ? 'allow input from the output side' : 'no input from the output side';
+    case 'inputFromOutputSide': return inputFromOutputSideText(v === true);
     case 'chips': return `chips: ${valueText(v)}`;
     case 'patterns': return typeof v === 'number' ? `${fmtInt(v)} processing pattern${v === 1 ? '' : 's'}` : `${v} processing patterns`;
     case 'pattern': return `pattern ${valueText(v)}`;
@@ -106,14 +119,25 @@ function extractText(s: ConduitExtract, nameOf: (k: StuffKey) => string): string
   return text.join(', ');
 }
 
+/**
+ * What an insert side into a GT basic machine's output side reminds the builder of: the machine takes the items there
+ * only while its Input from Output Side is allowed, which one Screwdriver click too many switches off (see
+ * `inputFromOutputSideText`).
+ */
+const INTO_OUTPUT_SIDE = 'into its output side: keep its Input from Output Side allowed (a newly crafted machine has it on)';
+
 function insertText(s: ConduitInsert, nameOf: (k: StuffKey) => string): string {
-  const head = `insert on ${DYE_NAMES[s.color]}${filterClause(s.filter, nameOf)}`;
-  return s.priority === undefined ? head : `${head}, priority ${fmtInt(s.priority)}`;
+  const text = [`insert on ${DYE_NAMES[s.color]}${filterClause(s.filter, nameOf)}`];
+  if (s.priority !== undefined) text.push(`priority ${fmtInt(s.priority)}`);
+  if (s.outputSide === true) text.push(INTO_OUTPUT_SIDE);
+  return text.join(', ');
 }
 
 /**
  * One side of a conduit face: `extract on <colour>[ with a <filter>][, <n>× <upgrade name>], round robin <on|off>[, self
- * feed <on|off>], redstone <redstone name>` (self feed only when set), or `insert on <colour>[ with a <filter>][, priority <n>]`.
+ * feed <on|off>], redstone <redstone name>` (self feed only when set), or `insert on <colour>[ with a <filter>][, priority
+ * <n>][, into its output side: keep its Input from Output Side allowed (…)]` (the last for a side into a GT basic
+ * machine's output side).
  */
 export function conduitSideText(side: 'extract', s: ConduitExtract, nameOf: (k: StuffKey) => string): string;
 export function conduitSideText(side: 'insert', s: ConduitInsert, nameOf: (k: StuffKey) => string): string;

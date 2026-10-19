@@ -27,6 +27,7 @@
 //   network's, so `hookupNetworkKind` tells the two apart by the network id.
 // Pure TypeScript shared by server and browser: nothing from node:* may be imported here.
 
+import type { Rgb } from '../types/assets.ts';
 import type { ConduitKind, ConduitMode, DyeColor, Hookup, RedstoneMode } from '../types/layout.ts';
 import type { LogisticsMode } from '../types/plan.ts';
 import type { LogisticsNetwork } from '../types/world.ts';
@@ -51,6 +52,12 @@ export const DYE_HEX: Readonly<Record<DyeColor, string>> = Object.freeze({
   black: '#1d1d21', red: '#b02e26', green: '#5e7c16', brown: '#835432', blue: '#3c44aa', purple: '#8932b8', cyan: '#169c9c', silver: '#9d9d97',
   gray: '#474f52', pink: '#f38baa', lime: '#80c71f', yellow: '#fed83d', light_blue: '#3ab3da', magenta: '#c74ebd', orange: '#f9801d', white: '#f9fffe',
 });
+
+/** A colour's swatch (`DYE_HEX`) as a fresh RGB triple, to tint a texture with. */
+export function dyeRgb(color: DyeColor): Rgb {
+  const hex = DYE_HEX[color];
+  return [Number.parseInt(hex.slice(1, 3), 16), Number.parseInt(hex.slice(3, 5), 16), Number.parseInt(hex.slice(5, 7), 16)];
+}
 
 /** The channel of a face nobody set (`ItemConduit.getInputColor` falls back to GREEN). */
 export const DEFAULT_CHANNEL: DyeColor = 'green';

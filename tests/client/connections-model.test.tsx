@@ -5,7 +5,8 @@ import { connLayout, connPlan } from './connections-fixture.ts';
 import { ITEM, basic } from './enderio-fixture.ts';
 
 const MACERATOR_FACE = 'Item Conduit, north face to Basic Macerator: In / Out; extract on Red with a Basic Item Filter (whitelist: Titanium Dust; match meta, ignore NBT), '
-  + 'round robin off, self feed off, redstone Always active; insert on Blue with a Basic Item Filter (whitelist: Raw Input; match meta, ignore NBT), priority 1';
+  + 'round robin off, self feed off, redstone Always active; insert on Blue with a Basic Item Filter (whitelist: Raw Input; match meta, ignore NBT), priority 1, '
+  + 'into its output side: keep its Input from Output Side allowed (a newly crafted machine has it on)';
 
 describe('the Connections graph', () => {
   it('draws an EnderIO line: machines and chests with their conduit faces, flows on their channels', () => {
@@ -26,7 +27,9 @@ describe('the Connections graph', () => {
     const g = connectionsGraph(connLayout('direct'), connPlan, 'hour');
     expect(g.nodes.find((n) => n.id === 'step:a')!.faces).toEqual([
       { id: 'step:a#cover:0,64,0:south', title: 'Basic Macerator, south face', lines: ['Conveyor Module (LV) on the south face: Export, allow input, 1 items/s'] },
-      { id: 'step:a#config:0,64,0', title: 'Basic Macerator settings', lines: ['Input Filter on', 'allow input from the output side'] }]);
+      { id: 'step:a#config:0,64,0', title: 'Basic Macerator settings', lines: ['Input Filter on', 'Input from Output Side allowed: a newly crafted '
+        + 'machine starts with it on, and a Screwdriver right-click on its front, or on its output side where no cover sits, switches it, so leave '
+        + 'it where the chat says "Input from Output Side allowed" (a sneak-click switches the Input Filter instead)'] }]);
     expect(g.nodes.find((n) => n.id === 'chest:2,64,2')!.faces).toEqual([
       { id: 'chest:2,64,2#cover:2,64,1:south', title: 'Tin Item Pipe, south face', lines: ['Filtered Conveyor Cover (Export) on the south face: whitelist Titanium Ingot'] }]);
     expect(g.edges.map((e) => [e.from, e.to, e.via, e.label, e.color])).toEqual([

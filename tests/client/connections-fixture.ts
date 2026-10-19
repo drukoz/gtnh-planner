@@ -65,7 +65,9 @@ const exportCover = (): CoverSpec[] => [{ face: 'south', item: CONV, settings: {
 // ---- EnderIO: one Item Conduit per middle-row cell, Basic filters, 1 item/s, round robin and self feed off, Always active ----
 
 const extract = (color: DyeColor, keys: string[]): ConduitExtract => ({ color, filter: basic(keys), rate: 1, roundRobin: false, selfFeed: false, redstone: 'ignore' });
-const insert = (color: DyeColor, keys: string[], priority: number): ConduitInsert => ({ color, filter: basic(keys), rate: 1, priority });
+/** An insert side; `outputSide` when it goes into a singleblock machine, through that machine's output side. */
+const insert = (color: DyeColor, keys: string[], priority: number, outputSide?: true): ConduitInsert =>
+  ({ color, filter: basic(keys), rate: 1, priority, ...(outputSide === undefined ? {} : { outputSide }) });
 
 function conduit(pos: [number, number, number], links: number, faces: ConduitFace[]): LayoutBlock {
   const open = faces.reduce((bits, f) => bits | bit(FACES.indexOf(f.face)), 0);
@@ -75,9 +77,9 @@ function conduit(pos: [number, number, number], links: number, faces: ConduitFac
 
 function enderioBlocks(): LayoutBlock[] {
   return [...machines(),
-    conduit([0, 64, 1], bit(EAST), [{ face: 'north', mode: 'in_out', target: 'Basic Macerator', extract: extract('red', [DUST]), insert: insert('blue', [IN], 1) }]),
+    conduit([0, 64, 1], bit(EAST), [{ face: 'north', mode: 'in_out', target: 'Basic Macerator', extract: extract('red', [DUST]), insert: insert('blue', [IN], 1, true) }]),
     conduit([1, 64, 1], bit(WEST) | bit(EAST),
-      [{ face: 'north', mode: 'in_out', target: 'Advanced Assembler', extract: extract('yellow', [INGOT]), insert: insert('red', [DUST], 1) }]),
+      [{ face: 'north', mode: 'in_out', target: 'Advanced Assembler', extract: extract('yellow', [INGOT]), insert: insert('red', [DUST], 1, true) }]),
     conduit([2, 64, 1], bit(WEST), [
       { face: 'north', mode: 'extract', target: 'Chest (input)', extract: extract('blue', [IN]) },
       { face: 'south', mode: 'insert', target: 'Chest (output)', insert: insert('yellow', [INGOT], 0) }]),

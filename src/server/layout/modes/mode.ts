@@ -177,7 +177,7 @@ export function itemPorts(placement: Placement): ItemPort[] {
 
 /**
  * A singleblock takes its items through its spine face, which is its output side (GT keeps its front, `mainFacing`,
- * elsewhere): so in every mode each singleblock with item inputs gets "allow input from the output side" on its
+ * elsewhere): so in every mode each singleblock with item inputs gets "Input from Output Side" allowed on its
  * machine. Keyed by the machine cell's posKey, in unit order.
  */
 export function outputSideInputs(placement: Placement): Map<string, HostConfig> {

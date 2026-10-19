@@ -15,6 +15,14 @@ const nameOf = (k: string) => NAMES[k] ?? k;
 const base = (over: Partial<StepsInput>): StepsInput => ({ status: 'ok', pins: [], size: [6, 1, 5], site: null, units: [], stages: [],
   transformerName: () => 'Low Voltage Transformer', cables: [], power: null, supplyTier: null, drafts: [], fluids: [], logistics: null, reuse: [],
   blocks: [], origin: [0, 64, 0], nameOf, ...over });
+/**
+ * A singleblock's place step: GT 5.09.54 sets a basic machine's front with a sneaking Wrench click (only on a side, never
+ * the top or bottom: `MTEBasicMachine.isValidMainFacing`) and its output side with a plain one (anywhere but the front),
+ * each on the side the wrench grid picks (`GTUtility.determineWrenchingSide`: a grid edge picks the side beyond it).
+ */
+const PLACE_MACERATORS = 'Place 2× Basic Macerator with its output side facing the middle row and its front facing the power head: '
+  + 'with a Wrench, sneak-right-click its power-head side to make that the front (where a neighbour covers that side, click the edge of '
+  + 'the wrench grid toward it), then right-click its middle-row side to make that the output side';
 
 describe('pins', () => {
   it('numbers pins site, power, logistics, reuse, then warnings', () => {
@@ -58,8 +66,9 @@ describe('layout steps', () => {
       [8, 'layout:power:hookup', 'power', 2], [9, 'layout:logistics:line', 'logistics', 1], [10, 'layout:configure:s1', 'configure', undefined],
       [11, 'layout:test', 'test', 1]]);
     expect(steps[0]!.text).toBe('Clear a 6×5 spot at pin 1 (1 high) and keep a 1-block path around it; dig 2 and fill 0 blocks to level it');
-    // final review: a basic machine's front and output side are two faces (GT's mMainFacing and mFacing)
-    expect(steps[2]!.text).toBe('Place 2× Basic Macerator with its output side facing the middle row and its front facing up');
+    // final review: a basic machine's front and output side are two faces (GT's mMainFacing and mFacing); GT never lets
+    // the front face up or down, sets it with a sneaking wrench click and the output side with a plain one
+    expect(steps[2]!.text).toBe(PLACE_MACERATORS);
     expect(steps[4]!.text).toBe('Place 1× Low Voltage Transformer between the MV and LV cables, front (input) toward MV');
     // final review C2: GT joins a cable to the block it is placed against, so the wire steps say to keep tiers apart
     expect([steps[5]!.text, steps[6]!.text]).toEqual([
@@ -68,12 +77,11 @@ describe('layout steps', () => {
     expect(steps[7]!.text).toBe('Run 12× 2x Annealed Copper Cable from the tap at pin 2 to the line: up to 2 A at MV, arriving at 116 V');
   });
 
-  it('puts the front of a machine with a fluid port toward the power head, and a one-tier line has no tier rule', () => {
+  it('puts the front of a machine with a fluid port toward the power head too, and a one-tier line has no tier rule', () => {
     const plan = makePlan([{ id: 'x', mteId: IDS.EXTRACTOR, count: 1, outputs: [['fluid:molten.iron', 144]] }]);
     const placement = placeUnits(unitsFromPlan(layoutPack(), plan).units, { headWidth: 1, portSpacing: 0 });
     const steps = layoutSteps(base({ units: placement.units, cables: [{ tier: 1, cable: '1x Tin Cable', cells: 6 }], supplyTier: 1 }));
-    expect(steps.find((s) => s.id === 'layout:place:x')!.text)
-      .toBe('Place 1× Basic Fluid Extractor with its output side facing the middle row and its front facing the power head');
+    expect(steps.find((s) => s.id === 'layout:place:x')!.text).toBe(PLACE_MACERATORS.replace('2× Basic Macerator', '1× Basic Fluid Extractor'));
     expect(steps.find((s) => s.id === 'layout:power:wire:1')!.text).toBe('Wire the LV machines with 1x Tin Cable (6 blocks)');
   });
 
@@ -122,10 +130,17 @@ describe('layout steps', () => {
     expect(steps.map((s) => [s.id, s.pin, s.text])).toEqual([
       ['layout:configure:x', 1, 'Basic Fluid Extractor: Electric Pump (LV) on the top face: Export, 1 L/s'],
       ['layout:configure:s1', 1, 'Basic Macerator ×2: Conveyor Module (LV) on the south face: Export, allow input, 0.5 items/s; '
-        + 'programmed circuit 3; Input Filter on; allow input from the output side'],
+        + 'programmed circuit 3; Input Filter on; Input from Output Side allowed: a newly crafted machine starts with it on, and a Screwdriver '
+        + 'right-click on its front, or on its output side where no cover sits, switches it, so leave it where the chat says "Input from Output '
+        + 'Side allowed" (a sneak-click switches the Input Filter instead)'],
       ['layout:configure:3,0,2', 1, 'Tin Item Pipe: Filtered Conveyor Cover (Export) on the south face: whitelist Titanium Ingot']]);
     expect(coverText({ face: 'north', item: CONV, settings: { mode: 'import', rate: 1000, unit: 'items/s' } }, nameOf))
       .toBe('Conveyor Module (LV) on the north face: Import, 1,000 items/s');
+    // GT 5.09.54: no GUI button, only the Screwdriver, which switches it whatever its state, so the words name the state
+    // to leave it in, never a click to make
+    expect(configTexts({ inputFromOutputSide: false })).toEqual(['Input from Output Side forbidden: a newly crafted machine starts with it on, '
+      + 'and a Screwdriver right-click on its front, or on its output side where no cover sits, switches it, so leave it where the chat says '
+      + '"Input from Output Side forbidden" (a sneak-click switches the Input Filter instead)']);
     expect(configTexts({ patterns: 1, pattern: '1× A → 1× B', blockingMode: false, chips: 'Item Extractor Chip' }))
       .toEqual(['1 processing pattern', 'pattern 1× A → 1× B', 'blocking mode off', 'chips: Item Extractor Chip']);
   });

@@ -455,7 +455,20 @@ These are the parts the line layout sizes besides machines, cables and transform
 **Machine input filter.**
 - `MTEBasicMachine.mDisableFilter` starts `true`. The GUI shows "Input Filter Off" (lang key `GT5U.hatch.disableFilter.true`).
 - `allowPutStack` calls `allowPutStackValidated` (the recipe-map check) only when the filter is on.
-- So by default a basic machine takes any item a pipe offers. It takes items through its output side only when "allow input from output side" is set.
+- So by default a basic machine takes any item a pipe offers. It takes items through its output side only while its "Input from Output Side" is allowed.
+
+**Input from Output Side (`mAllowInputFromOutputSide`, GT 5.09.54).**
+- It starts **on**: every `MTEBasicMachine` constructor does `iconst_1; putfield mAllowInputFromOutputSide`. `ItemMachines.placeBlockAt` hands the item's NBT to `setInitialValuesAsNBT`, and a newly crafted item has none, so a newly placed machine keeps it on.
+- It is saved as the NBT key `mAllowInputFromOutputSide`, and `loadNBTData` reads a missing key as false. An item that carries other NBT (a machine broken with a cover or paint on it: `BaseMetaTileEntity` writes `mColor`, the covers and the upgrades into the drop) therefore places a machine with it **off**.
+- `allowPutStack` refuses items on the output side (`getFrontFacing()`) while it is off; `isLiquidInput` does the same for fluids. The front (`mMainFacing`) takes nothing either way.
+- The GUI has no button for it. The only control is a **Screwdriver** right-click on the machine's output side or its front (`onScrewdriverRightClick`, on the side clicked, not the wrench grid's side). Each click switches it and says the new state in chat: "Input from Output Side allowed" / "Input from Output Side forbidden" (`gt.interact.desc.input_from_output_on`/`_off`). A sneaking click switches the Input Filter instead. The same click also works the cover on the side clicked (`Cover.onCoverScrewdriverClick`; a conveyor cover changes its mode), so a covered output side is the wrong place to click.
+- Planner use: a step that needs it says "Input from Output Side allowed" and that a click switches it, so a builder who clicks once to "set" it does not switch it off.
+
+**Front and output side (`mMainFacing`, `mFacing`).**
+- `isValidMainFacing` allows only the four sides, never up or down, and `setMainFacing` refuses any other. `initDefaultModes` makes the side the machine was placed facing (toward the player) the front, else west, and `setMainFacing` turns the output side to the opposite side when it was on the new front.
+- A sneaking Wrench click calls `setMainFacing` on the side the wrench grid picks (`GTUtility.determineWrenchingSide`: the centre of a face picks that face, an edge picks the side beyond it, a corner the back). A plain Wrench click makes that side the output side (`MetaTileEntity.onWrenchRightClick`), allowed anywhere but the front.
+- Items, fluids and energy never pass the front (`allowPullStack`, `allowPutStack`, `isLiquidInput`, `isLiquidOutput`, `isInputFacing`).
+- Planner use: a singleblock's front faces the power head, its output side the middle row, and its place step says which wrench click sets each.
 
 **AE2 idle draw (rv3-beta-1073-GTNH).**
 - `AENetworkProxy.idleDraw` defaults to 1.0 AE/t.

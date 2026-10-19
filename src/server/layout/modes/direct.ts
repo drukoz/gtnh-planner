@@ -28,7 +28,7 @@ function noLine(warnings: PlanWarning[]): ModeResult {
 
 /**
  * Links every spine port to the unit cell behind it, and gives that cell its Input Filter: a singleblock's spine face
- * is its output side (it takes items there with "allow input from the output side" when it has item inputs, as in
+ * is its output side (it takes items there with "Input from Output Side" allowed when it has item inputs, as in
  * every mode), a multiblock takes items only through its input bus. Sorted by pos.
  */
 function spineContacts(placement: Placement, spine: ReadonlySet<string>, links: Array<[Vec3, Vec3]>): HostConfig[] {
