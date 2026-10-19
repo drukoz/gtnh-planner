@@ -238,14 +238,21 @@ interface Hookups {
 }
 
 /**
- * The world posKeys of every cell face-adjacent to a line block holding an Item Conduit (plan 11, ruling R14): EnderIO
- * joins touching item conduits into one network, so a hookup of item conduits routes around these cells and the base
- * network's channels never trade with the line's.
+ * The world posKeys a hookup of item conduits that ends on a conduit face routes around: every cell face-adjacent to
+ * a line block holding an Item Conduit (plan 11, ruling R14: EnderIO joins touching item conduits into one network, so
+ * the base network's channels would trade with the line's), or to a line machine, hatch or chest other than the
+ * port's own block (R14 as widened in the Task 5 review: an item conduit joins any inventory it touches, and only the
+ * hookup's last cell sets a face, so a run cell there would get an unset face, Extract on Green, that pulls the
+ * block's items onto the base's network whenever redstone power reaches it and that no build step names). Goal cells
+ * are not exempt, so the hookup's last cell touches no line inventory but the port's chest.
  */
-function itemConduitNeighbours(lineBlocks: readonly LayoutBlock[]): Set<string> {
+function hookupKeepOff(lineBlocks: readonly LayoutBlock[], port: Vec3): Set<string> {
   const cells = new Set<string>();
+  const portKey = posKey(port);
   for (const b of lineBlocks) {
-    if (b.conduits?.some((c) => c.kind === 'item') !== true) continue;
+    const conduit = b.conduits?.some((c) => c.kind === 'item') === true;
+    const inventory = (b.role === 'machine' || b.role === 'hatch' || b.role === 'chest') && posKey(b.pos) !== portKey;
+    if (!conduit && !inventory) continue;
     DIRS.forEach((_, side) => cells.add(posKey(step(b.pos, side))));
   }
   return cells;
@@ -299,8 +306,9 @@ function buildHookups(input: {
     const port = worldPos(logisticsPort, frame);
     const tap = nearestTap(logisticsNet.taps, port);
     if (tap !== null) {
-      // a hookup that ends on a conduit face keeps off the line's Item Conduits (plan 11, ruling R14)
-      const world = { vox, line: routeLine, ...(hookup.endConduit === undefined ? {} : { keepOff: itemConduitNeighbours(lineBlocks) }) };
+      // a hookup that ends on a conduit face keeps off the line's Item Conduits, machines, hatches and chests, all but
+      // the port's chest (plan 11, ruling R14 as widened in the Task 5 review)
+      const world = { vox, line: routeLine, ...(hookup.endConduit === undefined ? {} : { keepOff: hookupKeepOff(lineBlocks, port) }) };
       const build = logisticsHookup({
         pack, parts, tap, ports: [port], world, part: hookup.part, end: hookup.end,
         ...(hookup.endConfig === undefined ? {} : { endConfig: hookup.endConfig }),

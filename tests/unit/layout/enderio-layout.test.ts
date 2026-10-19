@@ -201,6 +201,23 @@ describe('EnderIO conduits in the steps, the parts list and the hookup', () => {
     expect(JSON.stringify(await run())).toBe(JSON.stringify(layout));
   });
 
+  it('keeps an EnderIO hookup off every cell next to a line machine, hatch or chest but the input chest (plan 11, ruling R14 as widened in the Task 5 review)', async () => {
+    // an item conduit joins any inventory it touches, and a hookup cell other than the last sets no face there
+    const contacts = async (tap: Vec3, rotation: 0 | 90) => {
+      const layout = await layoutLine(layoutPack(), twoStep(), lineScan({ logistics: [{ kind: 'enderio', taps: [tap] }] }), placed(rotation), lineGround());
+      const hookup = layout.hookups.findIndex((h) => h.kind === 'logistics');
+      const inventories = layout.blocks.filter((b) => b.hookup === undefined && (b.role === 'machine' || b.role === 'hatch' || b.role === 'chest')
+        && b.tail?.side !== 'input');
+      const touching = layout.blocks.filter((b) => b.hookup === hookup && inventories.some((m) => manhattan(m.pos, b.pos) === 1)).map((b) => posKey(b.pos));
+      return { tap: posKey(tap), rotation, found: layout.hookups[hookup]?.found, touching };
+    };
+    const cases = [];
+    for (const tap of [[26, 64, 12], [20, 64, 40]] as Vec3[]) for (const rotation of [0, 90] as const) cases.push(await contacts(tap, rotation));
+    expect(cases).toEqual([
+      { tap: '26,64,12', rotation: 0, found: true, touching: [] }, { tap: '26,64,12', rotation: 90, found: true, touching: [] },
+      { tap: '20,64,40', rotation: 0, found: true, touching: [] }, { tap: '20,64,40', rotation: 90, found: true, touching: [] }]);
+  });
+
   it("names each open fluid end's turned face in its own step and counts the fluid conduits of the bundles", async () => {
     const plan = () => makePlan([{ id: 's1', mteId: IDS.SOLIDIFIER, count: 1, inputs: [['fluid:molten.iron', 144], ['t:in@0', 1]] }],
       { flows: [{ from: 'raw', to: 's1', key: 'fluid:molten.iron', perSecond: 1 }, { from: 'raw', to: 's1', key: 't:in@0', perSecond: 1 },
