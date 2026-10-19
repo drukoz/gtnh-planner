@@ -72,3 +72,46 @@ Once a project has a scan and a base, the planner lays the line out block by blo
 - **On the Map tab** the line is solid and everything still to build to hook it up is dashed. Numbered pins mark the site, the power tap, the logistics tap, machines you can reuse and problems, and a build step that names a pin links to it on the map. **Move line** (then drag it), **Rotate 90°** and **Auto place** change where the line goes, for everyone on the project.
 - **The 3D tab** shows the line in your pack's textures: drag to turn, right-drag to pan, scroll to zoom and step through the layers with the slider. Hover a block for its name and settings; click it for its facing and recipe. Blocks already in your base show as faint ghosts. Textures need `npm run extract-assets`; without them blocks are plain colours.
 - **Limits:** pipe heat ratings and Project Red crafting chips are not planned, and a GregTech filter cover holds one item, so a machine whose recipes also take another step's item is flagged instead of fixed. Check those in game.
+
+## In-game ghost projector
+
+The **GTNH Planner Projector** is a small mod for your own Minecraft client (GTNH 2.9, Minecraft 1.7.10). It draws the planned line in your game as translucent ghost blocks exactly where the layout puts them: faint where nothing is placed yet, green where the right block stands, red where a block or its front is wrong. When every block of a build step is placed correctly, it ticks that step in the project's checklist, in your name. It is a client-side mod: nothing is installed on the Minecraft server, so only the players who want ghosts need it, and if only you want them, only you install it.
+
+### Install
+
+Get `gtnhplannerprojector-<version>.jar` from the person who runs the planner, or build it yourself with `cd projector-mod && VERSION=0.1.0 ./gradlew assemble`; the jar lands in `projector-mod/build/libs/`. Put it into **your client's** `mods` folder (in Prism Launcher: right-click the instance, choose **Folder**, then open `.minecraft/mods`) and start the game. Never put it into the server's `mods` folder.
+
+### Connect
+
+1. On the project page open **In-game projector**, type who the token is for (for example `Steve`) and press **Create token**.
+2. Press **Copy** next to the `/planner load …` line and paste it into Minecraft chat. The token is shown only now; the mod saves it for that project, so afterwards `/planner load <project>` is enough.
+3. The mod looks for the planner at the Minecraft server's address on port 8765: for a server at `mc.example.org` that is `http://mc.example.org:8765` (in single player, `http://127.0.0.1:8765`). If yours is elsewhere, also run the `/planner url …` line the panel shows, once.
+
+### Commands
+
+```
+/planner load <project> [token] | clear | layer <y|all> | step <n|all|next> | reload | url <url|auto> | xray [on|off]
+```
+
+- `/planner load <project> [token]` fetches the project's line and shows all of it. A token is saved for that project; without one, the saved token is used.
+- `/planner layer <y|all>` shows only the blocks at height `y` (0 to 255), or every layer.
+- `/planner step <n|all|next>` shows only the blocks of build step `n`, or of every step; `next` is the first build step with blocks that is not ticked yet.
+- `/planner reload` fetches the latest layout now. The mod also checks about once a minute, so a line you move or rotate in the planner follows by itself.
+- `/planner url <url|auto>` sets where the planner is, for example `/planner url http://mc.example.org:9000`; `auto` goes back to the Minecraft server's address on port 8765.
+- `/planner xray [on|off]` shows the ghosts through walls and terrain; without `on` or `off` it switches.
+- `/planner clear` hides the ghosts until you load a project again.
+
+### Colours
+
+Faint is a block not placed yet, green is the right block (with the right front), red is a wrong block or a wrong front, and bluish is a block the mod cannot check (its step is never ticked automatically). Blocks in chunks your game has not loaded stay faint, neither right nor wrong. Covers show as their item's icon on the face they go on; covers and settings (the **configure** steps) are ticked by hand. The top left of the screen shows how far the build has got (`Planner: Steel line — 12/40 placed, 1 wrong`) and, when you look at a planned block, what it needs.
+
+### Troubleshooting
+
+- **"Cannot reach the planner …":** is the planner running, and is its port forwarded to you? Set its address with `/planner url <url>`.
+- **"The planner refused this token …":** the token was revoked. Create a new one in the project's **In-game projector** panel and run its `/planner load` line.
+- **Nothing is drawn:** you may be in another dimension than the line (the top-left line names the line's dimension), a filter may be on (`/planner layer all`, `/planner step all`), or you may be farther from the ghosts than `maxDistance` (96 blocks by default; raise it in `config/gtnhplannerprojector.properties` in your instance's Minecraft folder and restart the game). If the top-left line says the project is not placed in the world yet, pick a world scan and base on its Map tab.
+- **The top-left lines show but the ghosts are invisible:** set `useDisplayLists=false` in `config/gtnhplannerprojector.properties` and restart the game.
+
+### Privacy
+
+A token lets whoever holds it read that one project and tick its build steps, nothing else: it cannot open another project, tick materials or change settings. The mod keeps it in your `config/gtnhplannerprojector.properties`, so keep that file private, and revoke tokens you no longer use (**Revoke** in the panel). Tokens travel over plain HTTP unless the planner is behind HTTPS.
