@@ -1,6 +1,7 @@
 // The world routes (architecture §7, §11.11, §11.17; spec §3.4, §5): the sources a scan can read, scans and their
-// status, palette and map tiles, cancel, and uploads of level.dat plus region files. They also register the world
-// service (`app.services.world`) and the planner hook that turns a project's scan and base into its `PlanContext`.
+// status, palette (with English names on request: architecture §11, Map hover) and map tiles, cancel, and uploads of
+// level.dat plus region files. They also register the world service (`app.services.world`) and the planner hook that
+// turns a project's scan and base into its `PlanContext`.
 // Every route needs the session cookie. Errors are `HttpError`s (ledger ruling D-R5): a `SourceError` keeps its
 // status, a `RangeError` is a 400, anything else goes to server.ts, which logs it and answers a generic 500.
 
@@ -11,11 +12,13 @@ import { contextFromScan } from '../../world/context.ts';
 import { emptyFacts, packFacts } from '../../world/facts.ts';
 import { createWorldService, isScanId, type WorldService } from '../../world/scan.ts';
 import { completeUpload, createUpload, isUploadId, SourceError, storeUploadFile } from '../../world/sources.ts';
+import { GT_MACHINE_BLOCK } from '../../world/tiles.ts';
 import { HttpError, readJson, sendJson, type Handler, type Route } from '../router.ts';
-import type { CreateUploadResponse, StartScanResponse } from '../../../shared/types/api.ts';
+import type { CreateUploadResponse, PaletteName, StartScanResponse } from '../../../shared/types/api.ts';
+import type { BlockRef, Pack } from '../../../shared/types/pack.ts';
 import type { PlanContext } from '../../../shared/types/plan.ts';
 import type { Project } from '../../../shared/types/project.ts';
-import type { WorldSource } from '../../../shared/types/world.ts';
+import { UNKNOWN_BLOCK, type WorldSource } from '../../../shared/types/world.ts';
 
 /** Tile coordinates, dimension ids and `y`: whole numbers of at most 8 digits. */
 const TILE_NUMBER_RE = /^-?\d{1,8}$/;
@@ -67,6 +70,21 @@ function tileNumber(name: string, text: string, min = -Infinity, max = Infinity)
   const n = TILE_NUMBER_RE.test(text) ? Number(text) : NaN;
   if (!(n >= min && n <= max)) throw badRequest(`${name} must be a whole number${Number.isFinite(min) ? ` from ${min} to ${max}` : ''}`);
   return n;
+}
+
+/**
+ * The English name of palette entry `ref` (architecture §11, Map hover). A GT machine block is the machine its tile id
+ * names, never the pack item of its block meta, which is not that id; air and the unknown block get those words; any
+ * other block is the pack item of its meta (`<id>@<meta>`, §5), else of meta 0 (the meta can be a facing), else its
+ * registry name. `pack.items` is read directly: `pack.nameOf` answers an unknown key with the key itself.
+ */
+function blockName(pack: Pack, ref: BlockRef): string {
+  if (ref.id === 'minecraft:air') return 'Air';
+  if (ref.id === UNKNOWN_BLOCK.id) return 'Unknown block';
+  if (ref.id === GT_MACHINE_BLOCK) {
+    return ref.mteId === undefined ? ref.id : pack.machines.get(ref.mteId)?.name ?? `Unknown machine #${ref.mteId}`;
+  }
+  return pack.items.get(`${ref.id}@${ref.meta}`)?.name ?? pack.items.get(`${ref.id}@0`)?.name ?? ref.id;
 }
 
 /** The `Content-Length` the client declared; null when it sent none (a chunked body). */
@@ -162,10 +180,18 @@ export function worldRoutes(app: AppContext): Route[] {
     },
     {
       method: 'GET', path: '/api/world/scans/:id/palette',
-      handler: async (_req, res, params) => {
+      handler: async (req, res, params) => {
         const palette = await world.palette(knownScan(params.id!));
         if (palette === null) throw notFinished();
-        sendJson(res, 200, palette);
+        // Only names=1 adds the names (architecture §11, Map hover); without it, or with any other value, the answer is
+        // the plain palette as before. The pack's 503 no-export goes out like on the other pack routes.
+        if (new URL(req.url ?? '/', 'http://localhost').searchParams.get('names') !== '1') {
+          sendJson(res, 200, palette);
+          return;
+        }
+        const pack = await app.pack();
+        const named: PaletteName[] = palette.map((block) => ({ block, name: blockName(pack, block) }));
+        sendJson(res, 200, named);
       },
     },
     {

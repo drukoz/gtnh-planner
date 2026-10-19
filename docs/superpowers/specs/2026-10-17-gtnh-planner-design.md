@@ -83,6 +83,7 @@ drukoz and friends on the server (a handful of people). drukoz runs the server a
 - **The new line drawn in place**: every machine block, cable and pipe runs, arrows for item flow; dashed = things still to build to hook it up.
 - **Numbered notes pinned to the map**: automatic ones (build here, tap power here, hook logistics here, reuse these machines) and pins anyone in the group can add.
 - Side panel: what was found (machines, top tier, power estimate, logistics, storage), line summary (machines new/reused, footprint W×L×H, peak EU/t, fits or not), notes list.
+- **Hover a block to see what it is** (added 2026-10-18 at the user's request): hovering any block on the map shows its name and position, what the scan found there (machine and tier, cable, pipe, storage contents, logistics) and the base it is in, and what the planned line puts there.
 - (The mockups used AE2 as example data; the real base has Project Red routed pipes instead — the map shows whatever is actually there.)
 
 ### 3.8 3D view of the line (approved)
