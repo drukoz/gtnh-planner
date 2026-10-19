@@ -1,13 +1,16 @@
 // The projector payload (spec §3.13, architecture §11.22–§11.23): a project's cached line layout boiled down to what the
 // in-game mod draws and checks. Everything that needs the planner's knowledge is decided here, once, in tested
 // TypeScript, so the Java side only parses and compares: the real registry name of pseudo part ids (§11.17), whether
-// meta or facing mean anything for a block, the covers on each face, and which build step each block belongs to.
-// Ghosts (blocks that already exist in the world) are not sent; the mod has nothing to draw or check for them.
+// meta or facing mean anything for a block, the covers on each face, which build step each block belongs to, and the
+// checklist's numbering of the steps. Ghosts (blocks that already exist in the world) are not sent; the mod has nothing
+// to draw or check for them.
 
 import { createHash } from 'node:crypto';
+import { mergeBuildSteps } from '../layout/merge.ts';
 import { FACES } from '../../shared/types/assets.ts';
 import type { BlockRole, Layout, LayoutBlock } from '../../shared/types/layout.ts';
 import type { BlockRef, Machine, MachineKind, Pack } from '../../shared/types/pack.ts';
+import type { BuildStep } from '../../shared/types/plan.ts';
 import type { Project } from '../../shared/types/project.ts';
 import { PROJECTOR_FORMAT, type ProjectorBlock, type ProjectorPayload, type ProjectorStep } from '../../shared/types/projector.ts';
 
@@ -138,7 +141,7 @@ function payloadBlocks(layout: Layout, pack: PayloadPack): ProjectorBlock[] {
   return out;
 }
 
-function payloadSteps(project: Project, layout: Layout, blocks: readonly ProjectorBlock[]): ProjectorStep[] {
+function payloadSteps(project: Project, checklist: readonly BuildStep[], blocks: readonly ProjectorBlock[]): ProjectorStep[] {
   const members = new Map<string, number[]>();
   blocks.forEach((b, i) => {
     if (b.step === null) return;
@@ -146,7 +149,7 @@ function payloadSteps(project: Project, layout: Layout, blocks: readonly Project
     if (list === undefined) members.set(b.step, [i]);
     else list.push(i);
   });
-  return [...layout.buildSteps].sort((a, b) => a.order - b.order).map((s): ProjectorStep => ({
+  return [...checklist].sort((a, b) => a.order - b.order).map((s): ProjectorStep => ({
     id: s.id, order: s.order, kind: s.kind, text: s.text, blocks: members.get(s.id) ?? [],
     done: project.marks[`step:${s.id}`] !== undefined,
   }));
@@ -154,14 +157,18 @@ function payloadSteps(project: Project, layout: Layout, blocks: readonly Project
 
 /**
  * What `GET /api/projects/:id/projector` sends (spec §3.13): the project's identity, the layout's frame, the non-ghost
- * blocks in layout order and every build step with the indices of its blocks and whether the checklist shows it done.
- * A layout that is not `ok` (`empty`, `no-world`) sends no blocks and no steps, only a `message` for the player.
- * `pack` names the cover items and says which GT machines are single-block ones (`facingIsOutput`).
+ * blocks in layout order, and every step of the project's checklist with the indices of its blocks (none for a step
+ * that places nothing, such as gather and craft) and whether the checklist shows it done. The steps are numbered as
+ * the Steps view numbers them: the plan route's `planFinish` merges `planSteps` (the plan's own steps, before the
+ * layout is merged in) with the layout's through `mergeBuildSteps`, so `/planner step <n>` and "Step <n> done" name
+ * the number the group's checklist shows. A layout that is not `ok` (`empty`, `no-world`) sends no blocks and no
+ * steps, only a `message` for the player. `pack` names the cover items and says which GT machines are single-block
+ * ones (`facingIsOutput`).
  */
-export function projectorPayload(project: Project, layout: Layout, pack: PayloadPack): ProjectorPayload {
+export function projectorPayload(project: Project, layout: Layout, pack: PayloadPack, planSteps: readonly BuildStep[] = []): ProjectorPayload {
   const status = layout.status ?? 'ok';
   const blocks = status === 'ok' ? payloadBlocks(layout, pack) : [];
-  const steps = status === 'ok' ? payloadSteps(project, layout, blocks) : [];
+  const steps = status === 'ok' ? payloadSteps(project, mergeBuildSteps(planSteps, layout.buildSteps), blocks) : [];
   return {
     format: PROJECTOR_FORMAT, projectId: project.id, name: project.name, rev: project.rev,
     version: payloadVersion({ dim: layout.dim, blocks, steps }), status,

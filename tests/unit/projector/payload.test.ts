@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { containerBlock, stepMembership, projectorPayload, payloadVersion } from '../../../src/server/projector/payload.ts';
 import { projectorLayout, projectorPack, projectorProject, CONVEYOR } from '../../helpers/projector-fixtures.ts';
 import type { MachineKind } from '../../../src/shared/types/pack.ts';
+import type { BuildStep } from '../../../src/shared/types/plan.ts';
 
 const pack = projectorPack();
 const SAMPLE = 'projector-mod/src/test/resources/projector-sample.json';
@@ -84,6 +85,30 @@ describe('projector payload', () => {
       [9, 'layout:configure:s1', [], false], [10, 'layout:test', [], false]]);
     expect([p.format, p.projectId, p.name, p.rev, p.status, p.message, p.dim, p.origin, p.size])
       .toEqual(['gtnh-planner-projector/1', 'Pr0jectAb1', 'Steel line', 7, 'ok', null, 0, [99, 64, 200], [7, 2, 4]]);
+  });
+
+  it("numbers the steps as the checklist does, with the plan's own steps around the layout's", () => {
+    const planSteps: BuildStep[] = [
+      { id: 'gather', order: 1, kind: 'gather', text: 'Gather the base materials: 24× Iron Ingot' },
+      { id: 'craft:machine:201@0', order: 2, kind: 'craft', text: 'Craft 2× Basic Macerator' },
+      { id: 'place', order: 3, kind: 'place', text: 'Place the machines' },
+      { id: 'power', order: 4, kind: 'power', text: 'Connect power' },
+      { id: 'logistics:direct', order: 5, kind: 'logistics', text: 'Connect the machines' },
+      { id: 'configure:s1', order: 6, kind: 'configure', text: 'Put a Programmed Circuit (1) in the Basic Macerator' },
+      { id: 'test', order: 7, kind: 'test', text: 'Run the line' },
+    ];
+    const p = projectorPayload({ ...projectorProject(), marks: { 'step:gather': { by: 'Ann', at: '2026-10-18T10:00:00.000Z' } } }, projectorLayout(), pack, planSteps);
+    // gather and craft first, then the layout's steps (Plan 2's generic place, power and logistics steps are left out),
+    // then configure and test, numbered from 1; steps that place nothing come with no blocks
+    expect(p.steps.map((s) => [s.order, s.id, s.blocks, s.done])).toEqual([
+      [1, 'gather', [], true], [2, 'craft:machine:201@0', [], false], [3, 'layout:site', [], false], [4, 'layout:place:s1', [3, 4], false],
+      [5, 'layout:place:s2', [9], false], [6, 'layout:power:stage:1', [2], false], [7, 'layout:power:wire:1', [1], false], [8, 'layout:power:hookup', [0], false],
+      [9, 'layout:logistics:line', [5, 6, 8], false], [10, 'layout:logistics:fluid:fluid:water', [7], false], [11, 'layout:configure:s1', [], false],
+      [12, 'layout:test', [], false], [13, 'configure:s1', [], false], [14, 'test', [], false]]);
+    expect(p.steps[1]).toMatchObject({ kind: 'craft', text: 'Craft 2× Basic Macerator' });
+    expect(p.blocks[3]!.step).toBe('layout:place:s1');
+    // other numbers are another version: the mod reloads its steps
+    expect(p.version).not.toBe(projectorPayload(projectorProject(), projectorLayout(), pack).version);
   });
 
   it('sends no blocks for an unplaced or empty layout', () => {

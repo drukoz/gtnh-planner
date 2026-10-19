@@ -95,7 +95,7 @@ Get `gtnhplannerprojector-<version>.jar` from the person who runs the planner, o
 
 - `/planner load <project> [token]` fetches the project's line and shows all of it. A token is saved for that project; without one, the saved token is used.
 - `/planner layer <y|all>` shows only the blocks at height `y` (0 to 255), or every layer.
-- `/planner step <n|all|next>` shows only the blocks of build step `n`, or of every step; `next` is the first build step with blocks that is not ticked yet.
+- `/planner step <n|all|next>` shows only the blocks of build step `n`, numbered as in the project's **Build steps** list (a step that places nothing, such as gathering or crafting, has none to show), or of every step; `next` is the first build step with blocks that is not ticked yet.
 - `/planner reload` fetches the latest layout now. The mod also checks about once a minute, so a line you move or rotate in the planner follows by itself.
 - `/planner url <url|auto>` sets where the planner is, for example `/planner url http://mc.example.org:9000`; `auto` goes back to the Minecraft server's address on port 8765.
 - `/planner xray [on|off]` shows the ghosts through walls and terrain; without `on` or `off` it switches.

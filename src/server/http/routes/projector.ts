@@ -9,6 +9,7 @@ import { layoutService } from '../../layout/service.ts';
 import { projectorPayload } from '../../projector/payload.ts';
 import { TokenLimitError, TokenStore } from '../../projector/tokens.ts';
 import { HttpError, readJson, sendJson, type RequestContext, type Route, type TokenVerifier } from '../router.ts';
+import { planForProject } from './projects.ts';
 import type { Project } from '../../../shared/types/project.ts';
 import type { CreateTokenResult, ProjectorPayload } from '../../../shared/types/projector.ts';
 
@@ -90,7 +91,11 @@ export function projectorRoutes(app: AppContext): Route[] {
         try {
           const pack = await app.pack();
           // looked up per request, so a layout service registered or replaced after start is the one used
-          payload = projectorPayload(project, await layoutService(app).layoutFor(project), pack);
+          const layout = await layoutService(app).layoutFor(project);
+          // the plan's own steps (cached: the layout was planned from the same plan), which the checklist shows merged
+          // with the layout's, so the mod numbers the steps as the Steps view does
+          const plan = await planForProject(app, project);
+          payload = projectorPayload(project, layout, pack, plan.buildSteps);
         } catch (err) {
           if (err instanceof HttpError) throw err;
           console.error(`Building the projector payload of project ${project.id} failed:`, err);
