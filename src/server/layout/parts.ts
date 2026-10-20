@@ -20,7 +20,8 @@ import { GT_MACHINE_BLOCK } from '../world/tiles.ts';
 export type PartId = 'conveyor_cover' | 'pump_cover' | 'item_filter_cover' | 'chest' | 'pr_junction' | 'pr_interface' | 'pr_request'
   | 'chip_responder' | 'chip_extractor' | 'chip_stock_keeper' | 'me_interface' | 'me_cable' | 'me_export_bus' | 'blank_pattern'
   | 'eio_item_conduit' | 'eio_basic_filter' | 'eio_advanced_filter' | 'eio_big_filter' | 'eio_speed_upgrade'
-  | 'eio_fluid_ender' | 'eio_fluid_crystalline' | 'eio_fluid_pink_slime' | 'eio_fluid_melodic' | 'eio_fluid_stellar';
+  | 'eio_fluid_ender' | 'eio_fluid_crystalline' | 'eio_fluid_pink_slime' | 'eio_fluid_melodic' | 'eio_fluid_stellar'
+  | 'chip_terminator';
 
 /**
  * `keys` are tried in order against the pack, then `names` (English, ignoring case). `block` is what a placed part
@@ -72,6 +73,8 @@ export const PART_DEFS: Readonly<Record<PartId, PartDef>> = Object.freeze({
   eio_fluid_pink_slime: fluidConduitDef('liquid_pink_slime'),
   eio_fluid_melodic: fluidConduitDef('liquid_melodic'),
   eio_fluid_stellar: fluidConduitDef('liquid_stellar'),
+  // the feeding fix (architecture §11 entry 51): the routed output chest's chip
+  chip_terminator: partDef('Item Terminator Chip', `${PR_TRANSPORT}.routingchip@3`, 'item'),
 });
 
 const PART_IDS = Object.keys(PART_DEFS) as PartId[];

@@ -30,12 +30,16 @@ describe('routed mode', () => {
       [3, 'Routed Interface Pipe (Advanced Assembler)', 4 | 16 | 32], [4, 'Routed Request Pipe', 2 | 4 | 16]]);
     expect(r.blocks.filter((b) => b.pos[0] === 4 && b.pos[1] === 1).map((b) => [b.pos, b.label])).toEqual([
       [[4, 1, 1], 'Routed Interface Pipe (input chest)'], [[4, 1, 2], 'Routed Junction Pipe'], [[4, 1, 3], 'Routed Interface Pipe (output chest)']]);
+    // the feeding fix (architecture §11 entry 51): the output chest takes what leaves the line on an Item Terminator Chip
     expect(r.extraParts).toEqual([
-      { key: 'ProjRed|Transportation:projectred.transportation.routingchip@0', amount: 4, why: 'interface pipe chips', group: 'logistics' },
-      { key: 'ProjRed|Transportation:projectred.transportation.routingchip@4', amount: 4, why: 'interface pipe chips', group: 'logistics' }]);
+      { key: 'ProjRed|Transportation:projectred.transportation.routingchip@0', amount: 3, why: 'interface pipe chips', group: 'logistics' },
+      { key: 'ProjRed|Transportation:projectred.transportation.routingchip@4', amount: 4, why: 'interface pipe chips', group: 'logistics' },
+      { key: 'ProjRed|Transportation:projectred.transportation.routingchip@3', amount: 1, why: 'interface pipe chips', group: 'logistics' }]);
     expect([r.logisticsPort, r.hookup, r.tailFluidY, r.warnings]).toEqual([[4, 0, 2], { part: 'pr_junction', end: null }, 2, []]);
-    expect(spine[0]!.config).toEqual({ chips: 'Item Responder Chip (whitelist: Raw Input) + Item Extractor Chip' });
-    expect(r.blocks.find((b) => b.label === 'Routed Interface Pipe (output chest)')!.config).toEqual({ chips: 'Item Responder Chip (whitelist: t:out_s2@0)' });
+    expect(spine[0]!.feed).toEqual({ chips: [{ kind: 'responder', filter: { mode: 'whitelist', keys: ['t:in@0'] } },
+      { kind: 'extractor', filter: { mode: 'whitelist', keys: ['t:out_s1@0'] } }] });
+    expect(r.blocks.find((b) => b.label === 'Routed Interface Pipe (output chest)')!.feed).toEqual({
+      chips: [{ kind: 'terminator', filter: { mode: 'whitelist', keys: ['t:out_s2@0'] } }] });
     expect([r.covers, r.drafts.map((d) => d.kind)]).toEqual([[], ['logistics', 'logistics']]);
     // "in front of" would read as GT's front, which faces along the row (the review of the EnderIO In / Out fix)
     expect(r.drafts[0]!.text).toBe("Lay routed pipes along the middle row: an interface pipe at every machine's output side or bus, a request pipe "
@@ -53,12 +57,14 @@ describe('routed mode', () => {
 
   it('gives each interface pipe only the chips it needs, and none to a machine that moves only fluids', () => {
     const r = buildMode('routed', { ...setup('routed', mixed()), network: routedNet() });
-    expect(r.blocks.filter((b) => b.pos[1] === 0 && b.pos[2] === 2).map((b) => [b.pos[0], b.role, b.label, b.config])).toEqual([
-      [1, 'chip_pipe', 'Routed Interface Pipe (Basic Macerator)', { chips: 'Item Responder Chip (whitelist: Raw Input) + Item Extractor Chip' }],
+    const responder = { kind: 'responder', filter: { mode: 'whitelist', keys: ['t:in@0'] } };
+    expect(r.blocks.filter((b) => b.pos[1] === 0 && b.pos[2] === 2).map((b) => [b.pos[0], b.role, b.label, b.feed])).toEqual([
+      [1, 'chip_pipe', 'Routed Interface Pipe (Basic Macerator)', { chips: [responder, { kind: 'extractor', filter: { mode: 'whitelist', keys: ['t:out_s1@0'] } }] }],
       [2, 'pipe', 'Routed Junction Pipe', undefined],
-      [3, 'chip_pipe', 'Routed Interface Pipe (Basic Fluid Extractor)', { chips: 'Item Responder Chip (whitelist: Raw Input)' }],
+      [3, 'chip_pipe', 'Routed Interface Pipe (Basic Fluid Extractor)', { chips: [responder] }],
       [4, 'pipe', 'Routed Request Pipe', undefined]]);
-    expect(r.extraParts.map((p) => p.amount)).toEqual([3, 2]);
+    // responders, extractors (one on the input chest) and the output chest's terminator
+    expect(r.extraParts.map((p) => p.amount)).toEqual([2, 2, 1]);
   });
 });
 

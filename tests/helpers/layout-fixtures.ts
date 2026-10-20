@@ -173,6 +173,7 @@ const PART_ITEMS: ReadonlyArray<readonly [ItemKey, string]> = [
   ['ProjRed|Transportation:projectred.transportation.routingchip@0', 'Item Responder Chip'],
   ['ProjRed|Transportation:projectred.transportation.routingchip@4', 'Item Extractor Chip'],
   ['ProjRed|Transportation:projectred.transportation.routingchip@6', 'Item Stock Keeper Chip'],
+  ['ProjRed|Transportation:projectred.transportation.routingchip@3', 'Item Terminator Chip'],
   ['appliedenergistics2:tile.BlockInterface@0', 'ME Interface'],
   ['appliedenergistics2:item.ItemMultiPart@16', 'ME Glass Cable - Fluix'],
   ['appliedenergistics2:item.ItemMultiPart@260', 'ME Export Bus'],

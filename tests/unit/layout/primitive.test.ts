@@ -218,11 +218,13 @@ describe('primitive machines, mode by mode', () => {
     const layout = await laid('routed');
     const s = layout.blocks.find((b) => b.role === 'machine' && b.block.mteId === STEAM)!;
     const pipe = layout.blocks.find((b) => b.label === 'Routed Interface Pipe (Steam Macerator)')!;
-    expect([adjacent(pipe.pos, s.pos), pipe.config]).toEqual([true, { chips: 'Item Responder Chip (whitelist: Steel Ingot) + Item Extractor Chip' }]);
+    // the feeding fix (architecture §11 entry 51): its Item Extractor Chip whitelists what it makes
+    expect([adjacent(pipe.pos, s.pos), pipe.feed]).toEqual([true, { chips: [{ kind: 'responder', filter: { mode: 'whitelist', keys: ['t:steel@0'] } },
+      { kind: 'extractor', filter: { mode: 'whitelist', keys: ['t:out_s@0'] } }] }]);
     expect(layout.blocks.filter((b) => b.tail !== undefined).map((b) => b.tail)).toEqual([
       { side: 'input', keys: ['t:in@0', 't:steel@0'] }, { side: 'output', keys: ['t:iron@0', 't:out_s@0'] }]);
-    expect(layout.blocks.find((b) => b.label === 'Routed Interface Pipe (output chest)')?.config).toEqual({
-      chips: 'Item Responder Chip (whitelist: Iron Ingot and Steel Dust)' });
+    expect(layout.blocks.find((b) => b.label === 'Routed Interface Pipe (output chest)')?.feed).toEqual({
+      chips: [{ kind: 'terminator', filter: { mode: 'whitelist', keys: ['t:iron@0', 't:out_s@0'] } }] });
   });
 
   it('ae2: the steam machine gets its interface but no cover, and what it makes is taken out by hand', async () => {
