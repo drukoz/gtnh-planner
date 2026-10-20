@@ -78,13 +78,19 @@ class HudTextTest {
 
     @Test void tagLinesSayWhatTheBlockIsAndWhichWayItGoes() throws Exception {
         ProjectorData d = PayloadParserTest.sample();
-        assertEquals(Arrays.asList("Basic Macerator", "not placed yet", "output side should face south", "cover: Conveyor Module (LV) on the south face"), HudText.blockLines(d.blocks.get(3), MISSING));
+        assertEquals(Arrays.asList("Basic Macerator", "not placed yet", "front should face west, output side south", "cover: Conveyor Module (LV) on the south face"), HudText.blockLines(d.blocks.get(3), MISSING));
         assertEquals(Arrays.asList("Basic Macerator", "placed correctly"), HudText.blockLines(d.blocks.get(4), CORRECT));
-        assertEquals(Arrays.asList("Basic Macerator", "wrong facing, its output side should face south"), HudText.blockLines(d.blocks.get(4), WRONG_FACING));
-        assertEquals(Arrays.asList("Basic Macerator", "wrong block here", "output side should face south"), HudText.blockLines(d.blocks.get(4), WRONG_BLOCK));
-        assertEquals(Arrays.asList("Basic Macerator", "can't be checked by the mod", "output side should face south"), HudText.blockLines(d.blocks.get(4), UNCHECKED));
+        assertEquals(Arrays.asList("Basic Macerator", "wrong facing, its front should face west and its output side south"), HudText.blockLines(d.blocks.get(4), WRONG_FACING));
+        assertEquals(Arrays.asList("Basic Macerator", "wrong block here", "front should face west, output side south"), HudText.blockLines(d.blocks.get(4), WRONG_BLOCK));
+        assertEquals(Arrays.asList("Basic Macerator", "can't be checked by the mod", "front should face west, output side south"), HudText.blockLines(d.blocks.get(4), UNCHECKED));
         assertEquals(Arrays.asList("Low Voltage Transformer", "not placed yet", "front should face west"), HudText.blockLines(d.blocks.get(2), MISSING));
         assertEquals(Arrays.asList("1x Tin Cable", "not checked yet"), HudText.blockLines(d.blocks.get(0), UNLOADED));
+    }
+
+    @Test void tagLinesNameOnlyTheOutputSideWhenThereIsNoFront() throws Exception {
+        ProjectorData d = PayloadParser.parse(new java.io.StringReader(PayloadParserTest.mutate(o -> PayloadParserTest.block(o, 4).remove("mainFacing"))));
+        assertEquals(Arrays.asList("Basic Macerator", "wrong facing, its output side should face south"), HudText.blockLines(d.blocks.get(4), WRONG_FACING));
+        assertEquals(Arrays.asList("Basic Macerator", "not placed yet", "output side should face south"), HudText.blockLines(d.blocks.get(4), MISSING));
     }
 
     @Test void listsStackedGhostsNearestFirst() throws Exception {
@@ -121,6 +127,13 @@ class HudTextTest {
         List<String> lines = HudText.needs(d, missing, 1);
         assertEquals(10, lines.size()); assertEquals("Still needed for step 2:", lines.get(0)); assertEquals("1× Block 0", lines.get(1));
         assertEquals("1× Block 7", lines.get(8)); assertEquals("… and 2 more kinds", lines.get(9));
+    }
+
+    @Test void needsCountsABundleForTheStepThatLaysItsOtherConduit() throws Exception {
+        ProjectorData d = PayloadParserTest.bundleSample();
+        BlockState[] s = new BlockState[12]; Arrays.fill(s, CORRECT); s[10] = INCOMPLETE; s[11] = CORRECT;
+        assertTrue(HudText.needs(d, s, PayloadParserTest.LINE).isEmpty());
+        assertEquals(Arrays.asList("Still needed for step 11:", "1× " + PayloadParserTest.BUNDLE_LABEL), HudText.needs(d, s, PayloadParserTest.FLUIDS));
     }
 
     @Test void saysWhereABlockIs() {

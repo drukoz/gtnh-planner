@@ -73,13 +73,7 @@ public final class HudText {
                 found = "wrong block here";
                 break;
             case WRONG_FACING:
-                if (b.facingIsOutput && b.mainFacing >= 0) {
-                    found = "wrong facing, its front should face " + Facing.name(b.mainFacing) + " and its output side "
-                        + Facing.name(b.facing);
-                } else {
-                    found = "wrong facing, its " + (b.facingIsOutput ? "output side" : "front") + " should face "
-                        + Facing.name(b.facing);
-                }
+                found = wrongFacing(b);
                 break;
             case MISSING:
                 found = "not placed yet";
@@ -126,7 +120,7 @@ public final class HudText {
                 facingLine = true;
                 break;
             case WRONG_FACING:
-                found = "wrong facing, its " + side(b) + " should face " + Facing.name(b.facing);
+                found = wrongFacing(b);
                 break;
             case MISSING:
                 found = "not placed yet";
@@ -149,13 +143,26 @@ public final class HudText {
         List<String> lines = new ArrayList<>();
         lines.add(b.label);
         lines.add(found);
-        if (facingLine && b.facing >= 0) lines.add(side(b) + " should face " + Facing.name(b.facing));
+        if (facingLine && b.facing >= 0) lines.add(facingText(b));
         for (PlannedCover c : b.covers) lines.add("cover: " + c.label + " on the " + Facing.name(c.face) + " face");
         return lines;
     }
 
-    private static String side(PlannedBlock b) {
-        return b.facingIsOutput ? "output side" : "front";
+    /** {@code wrong facing, its front should face <side> and its output side <side>}, or the one side that is checked. */
+    private static String wrongFacing(PlannedBlock b) {
+        if (b.facingIsOutput && b.mainFacing >= 0) {
+            return "wrong facing, its front should face " + Facing.name(b.mainFacing) + " and its output side "
+                + Facing.name(b.facing);
+        }
+        return "wrong facing, its " + (b.facingIsOutput ? "output side" : "front") + " should face " + Facing.name(b.facing);
+    }
+
+    /** The side(s) the block should face, for a block with a facing. */
+    private static String facingText(PlannedBlock b) {
+        if (b.facingIsOutput && b.mainFacing >= 0) {
+            return "front should face " + Facing.name(b.mainFacing) + ", output side " + Facing.name(b.facing);
+        }
+        return (b.facingIsOutput ? "output side" : "front") + " should face " + Facing.name(b.facing);
     }
 
     /** Ghost blocks listed behind the header of {@link #stacked} before {@code … and <n> more}. */
@@ -182,7 +189,8 @@ public final class HudText {
 
     /**
      * What a step still needs: {@code Still needed for step <order>:}, then {@code <n>× <label>} for the step's blocks
-     * that are not {@link BlockState#CORRECT}, most first then by label, and after those
+     * that the step builds (places or lays a part in) and that are not placed for it
+     * ({@link BlockState#placedFor}), most first then by label, and after those
      * {@code <n>× <label> (can't check)} for the ones the mod cannot check; at most eight names, then
      * {@code … and <n> more kinds}. Empty for {@code stepIndex < 0} and when nothing is needed.
      */
@@ -190,8 +198,9 @@ public final class HudText {
         if (stepIndex < 0) return Collections.emptyList();
         PlannedStep step = d.steps.get(stepIndex);
         Map<String, Integer> open = new TreeMap<>(), unchecked = new TreeMap<>();
-        for (int i : step.blocks) {
-            if (states[i] == BlockState.CORRECT) continue;
+        for (int i = 0; i < d.blocks.size(); i++) {
+            PlannedBlock b = d.blocks.get(i);
+            if (!b.inStep(stepIndex) || states[i].placedFor(b, stepIndex)) continue;
             (states[i] == BlockState.UNCHECKED ? unchecked : open).merge(d.blocks.get(i).label, 1, Integer::sum);
         }
         List<String> names = new ArrayList<>();
