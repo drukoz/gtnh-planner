@@ -567,12 +567,11 @@ describe('planLine', () => {
       items: [...MINI_GT.items!, { key: 't:widget@0', name: 'Widget' }],
       fluids: [...MINI_GT.fluids!, { key: 'fluid:molten.titanium', name: 'Molten Titanium' }],
       recipes: [...MINI_GT.recipes!,
-        { id: 'widget-lv', map: 'gt.recipe.assembler', in: [['t:iron_plate@0', 2]], out: [['t:widget@0', 1]], eut: 16 },
         { id: 'widget-ti', map: 'gt.recipe.assembler', in: [['fluid:molten.titanium', 144]], out: [['t:widget@0', 1]], eut: 16 },
-        { id: 'widget-mix', map: 'gt.recipe.assembler', in: [{ any: [['fluid:molten.titanium', 72], ['fluid:molten.iron', 288]] }], out: [['t:widget@0', 1]], eut: 16 },
+        { id: 'widget-mix', map: 'gt.recipe.assembler', in: [['t:iron_plate@0', 1], { any: [['fluid:molten.titanium', 72], ['fluid:water', 1000]] }], out: [['t:widget@0', 1]], eut: 16 },
         { id: 'extract-ti', map: 'gt.recipe.fluidextractor', in: [['t:titanium_ingot@0', 1]], out: [['fluid:molten.titanium', 144]], eut: 30, dur: 40 }],
     });
-    const plan = await planLine(p, S({ target: 't:widget@0', tier: 1, recipeChoice: { 't:widget@0': 'widget-mix' } }), emptyContext());
+    const plan = await planLine(p, S({ target: 't:widget@0', tier: 1 }), emptyContext());
     const step = plan.steps.find((s) => s.mainOutput === 't:widget@0')!;
     expect(step.recipeId).toBe('widget-mix');
     expect(step.alternatives.find((a) => a.recipeId === 'widget-ti')?.unusable).toEqual(['needs Moon (T1 rocket)']);
