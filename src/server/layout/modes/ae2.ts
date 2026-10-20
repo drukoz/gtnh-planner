@@ -152,27 +152,31 @@ interface RunAsk { perSecond: number; to: number; scale: number }
 
 /**
  * The share of its planned runs AE2 gives each step with a pattern at most, 0 to 1 (fewer where a job finds the items
- * in your storage, which it takes before it crafts any), as the pack's crafting calculator plans its jobs (`CraftingJobV2`,
- * which `CraftingGridCache.beginCraftingJob` starts unless lite crafting is on; AE2 rv3-beta-1073-GTNH, read with javap).
- * A crafting CPU pushes a pattern only for a job, never for a fluid the line pipes on. A job crafts what it is asked for:
- * the line's product (`out`), or what something AE2 does not run itself takes (a step without a pattern, a step the line
- * places no machine for, a machine run by hand: you keep those going), all of it. Each run of a pattern asks for the
- * pattern's inputs at the pattern's amounts (none for an item the plan sends it that its pattern does not take), which
- * the plan's flows into it split among its suppliers (raw inputs and what a step without a pattern makes come from
- * storage; AE2 itself gives a request to the first pattern that makes it, by priority and then the network's order, which
- * the layout cannot know, so the plan's split stands for it). A request is crafted by a pattern that makes it, but never
- * by one already above it in the job: `CraftFromPatternTask` adds its pattern to its request's `patternParents` before it
- * asks for its inputs, `CraftingContext.doWork` copies them into each input's request, and `CraftableItemResolver` drops
- * them from that request's patterns (patterns compare by what they encode, `PatternHelper.equals`). So a loop of patterns
- * (cells emptied and filled again) is planned until it would come back to a pattern above, and that item comes from
- * storage. A step runs as often as its most-asked-for pattern output needs (its other outputs go to the job's byproducts,
- * which `ExtractItemTask` takes before anything is crafted again), and nothing of what goes to your storage (`sink`) asks.
- * The sets of patterns above a step are counted breadth first from every step, at most `setsMax` in one loop of patterns
- * (`AE_SHARE_SETS_MAX`), so the sets nearest the jobs' requests come first; a set past them counts as asking for nothing
- * at least (`RunShare.low`) and at most for a cheap upper bound (`RunShare.share`): its share counted along every chain
- * of requests no longer than the patterns it could still be asked through, even a chain that comes back to a pattern
- * above (which AE2 never plans), so never below what the jobs ask for. `ae2_fluid_short` says "at most" where the two
- * give different percentages.
+ * in your storage, which it takes before it crafts any; but see the byproducts below), as the pack's crafting
+ * calculator plans its jobs (`CraftingJobV2`, which `CraftingGridCache.beginCraftingJob` starts unless lite crafting is
+ * on; AE2 rv3-beta-1073-GTNH, read with javap). A crafting CPU pushes a pattern only for a job, never for a fluid the
+ * line pipes on. A job crafts what it is asked for: the line's product (`out`), or what something AE2 does not run
+ * itself takes (a step without a pattern, a step the line places no machine for, a machine run by hand: you keep those
+ * going), all of it. Each run of a pattern asks for the pattern's inputs at the pattern's amounts (none for an item the
+ * plan sends it that its pattern does not take), which the plan's flows into it split among its suppliers (raw inputs
+ * and what a step without a pattern makes come from storage; AE2 itself gives a request to the first pattern that makes
+ * it, by priority and then the network's order, which the layout cannot know, so the plan's split stands for it). A
+ * request is crafted by a pattern that makes it, but never by one already above it in the job: `CraftFromPatternTask`
+ * adds its pattern to its request's `patternParents` before it asks for its inputs, `CraftingContext.doWork` copies
+ * them into each input's request, and `CraftableItemResolver` drops them from that request's patterns (patterns compare
+ * by what they encode, `PatternHelper.equals`). So a loop of patterns (cells emptied and filled again) is planned until
+ * it would come back to a pattern above, and that item comes from storage. A step runs as often as its most-asked-for
+ * pattern output needs (its other outputs go to the job's byproducts, which `ExtractItemTask` takes before anything is
+ * crafted again), and nothing of what goes to your storage (`sink`) asks. That is a second approximation where other
+ * steps also make such a byproduct: the job's byproducts (`context.byproductsInventory`) go to whichever of its
+ * requests for the item `ExtractItemTask` meets first, not to the one the plan's flows send them to, so a request the
+ * plan meets with a byproduct can be crafted after all, and a step whose pattern makes that item can run more often
+ * than its share says (its share is then no upper bound). The sets of patterns above a step are counted breadth first
+ * from every step, at most `setsMax` in one loop of patterns (`AE_SHARE_SETS_MAX`), so the sets nearest the jobs'
+ * requests come first; a set past them counts as asking for nothing at least (`RunShare.low`) and at most for a cheap
+ * upper bound (`RunShare.share`): its share counted along every chain of requests no longer than the patterns it could
+ * still be asked through, even a chain that comes back to a pattern above (which AE2 never plans), so never below what
+ * the jobs ask for. `ae2_fluid_short` says "at most" where the two give different percentages.
  */
 export function aeRunShares(plan: Plan, patterns: ReadonlyMap<string, PatternSpec>, setsMax = AE_SHARE_SETS_MAX): Map<string, RunShare> {
   const ids = [...patterns.keys()];
