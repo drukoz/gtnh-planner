@@ -884,11 +884,13 @@ function ownedOnlyRuns(bounded: readonly number[], x: readonly number[]): number
  * step short; without S1's the MIP has no derived-purchase binaries, whose bound comes from that start: `buildMip`), which
  * its node and simplex-iteration limits decide (BUILD_MIP_MAX_NODES, BUILD_MIP_MAX_LP_ITERATIONS) and a far time guard
  * only backs up. A
- * MIP that ends without a whole solution, or that the guard stops (or `buildTimeLimit ≤ 0`), gives way to its LP
- * relaxation rounded up (`roundUp` with the relaxation's option of most new capacity) — `roundUp` of S1 when the
- * relaxation does not solve, or its rounding leaves a step short and S1's does not — with the `build-cost-approx`
- * warning. A decision that leaves a step short (the owned machines of one type cannot cover the steps that can only use
- * them) ends the line, with the `owned-only` warnings of the bounded steps S1 runs. Then R3's stage 5 inside the
+ * MIP that ends without a whole solution, or that the guard stops (or `buildTimeLimit ≤ 0`), gives way to the cheapest
+ * by the MIP's objective (`rounded`) of plan 09's plan of the line ("Ignore build cost", `finish`), its LP relaxation
+ * and S1, each rounded up to whole machines (the relaxation's at its options of most new capacity, the others at each
+ * step's cheapest; fix wave 2 (b)) and covering the steps that can only use owned machines, with the
+ * `build-cost-approx` warning. A decision that leaves a step short (the owned machines of one type cannot cover the
+ * steps that can only use them) ends the line, with the `owned-only` warnings of the bounded steps S1 runs. Then R3's
+ * stage 5 inside the
  * decision: the step recipes outside its support off, its machines in every stage (`laterRoom`: a sharing pool's steps
  * share all of its room), the least raw material over that, each purchase of a good a step of it makes shut where the
  * line does as well without it within those machines and the owned ones the decision leaves idle
@@ -903,7 +905,6 @@ async function buildStage(
 ): Promise<Solution> {
   const input = buildInput(lp, s1, await leastDug(graph, lp, s1), demandScale, model, opts);
   const mip = buildMip(input);
-  const first = roundUp(input, s1.x);
   // The MIP's start: S1 rounded up, or plan 09's sparse plan within the step charge's cap (`sparseWithin`) rounded up
   // when that costs less in the MIP's own objective — S1 runs every step of the least raw material, the most a plan of
   // the line has, so the sparse one is far closer to what the MIP plans.
@@ -934,15 +935,23 @@ async function buildStage(
     const m = mip.model;
     const relaxation: LpModel = { sense: m.sense, colCost: m.colCost, colLower: m.colLower, colUpper: m.colUpper, rows: m.rows };
     const relaxed = await solveLp(relaxation);
-    const rounded = relaxed.status === 'optimal' ? roundUp(input, relaxed.x, mip.prefer(relaxed.x)) : undefined;
-    // S1's rounding when the relaxation has none, or none that covers the steps on owned machines S1's rounding covers.
-    if (rounded !== undefined && (rounded.short === undefined || first.short !== undefined)) {
-      decision = rounded;
-      from = relaxed.x;
-    } else {
-      decision = first;
-      from = s1.x;
-    }
+    // Fix wave 2 (b): beside the relaxation and S1, plan 09's plan of the same graph ("Ignore build cost": its charged
+    // stage, with the owned-only bounds), each rounded up to whole machines — the relaxation's at its options of most new
+    // capacity, the others at each step's cheapest option — and the one the build MIP's objective rates lowest kept (ties:
+    // plan 09's, which has the fewest steps, then the relaxation's, then S1's). The relaxation spreads a step's fixed
+    // costs over runs far below one machine's, so its rounding can build machines a plan of fewer steps does without.
+    const ignored = await finish(lp, s1, [], opts);
+    const candidates: Array<{ decision: BuildDecision; cost: number; from: readonly number[] }> = [
+      { ...mip.rounded(ignored.x), from: ignored.x },
+      ...(relaxed.status === 'optimal' ? [{ ...mip.rounded(relaxed.x, mip.prefer(relaxed.x)), from: relaxed.x }] : []),
+      { ...mip.rounded(s1.x), from: s1.x },
+    ];
+    let kept: (typeof candidates)[number] | undefined;
+    for (const c of candidates) if (c.decision.short === undefined && (kept === undefined || c.cost < kept.cost)) kept = c;
+    // When none covers the steps on owned machines, any of them ends the line below the same way: S1's.
+    kept ??= candidates[candidates.length - 1] as (typeof candidates)[number];
+    decision = kept.decision;
+    from = kept.from;
   }
   const buildStats: NonNullable<Solution['buildStats']> = { seconds, nodes: result?.nodes ?? 0, status: result?.status ?? 'skipped', approx };
   if (result?.stop !== undefined) buildStats.stop = result.stop;

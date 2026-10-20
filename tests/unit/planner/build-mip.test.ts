@@ -1,8 +1,9 @@
 // The build-cost MIP inside `solveLine` (plan 12 Task 4, spec §3.3 Objective and "Reusing machines we have"): whole new
 // machines weighed against the raw material they save over the horizon, the tier that is cheaper to build, sharing pools
 // of new and owned machines on a network, owned machines of another tier beside new ones, steps bounded by owned machines
-// that cannot be built, Make N against the batch, the step charge against the raw material with gathered blocks dug, the
-// cleanroom, the relaxation rounded up when the time guard stops the MIP, and with build cost ignored plan 09's stages
+// that cannot be built, Make N against the batch, the step charge against the raw material with gathered blocks dug and
+// paid per new machine block, the cleanroom, the cheapest of plan 09's plan, the relaxation and S1 rounded up when the
+// time guard stops the MIP, and with build cost ignored plan 09's stages
 // within the owned-only bounds, their machines sized by plan 09's pick (ruling P2).
 
 import { describe, it, expect } from 'vitest';
@@ -418,6 +419,33 @@ describe('the build-cost MIP', () => {
     expect(sol.warnings).toContainEqual(expect.objectContaining({ code: 'build-cost-approx' }));
     expect(sol.buildStats).toMatchObject({ status: 'skipped', approx: true });
     expect(sol.machines?.get('press')).toMatchObject({ option: { mteId: 102 }, added: 3 });
+  });
+
+  it('falls back to plan 09\'s plan rounded up where that costs the build MIP less than the relaxation rounded up', async () => {
+    // Fix wave 2 (b): `final` (g → t, LV bender) must run; g is bought at 1.2 or made by `make-g` from a at 1 on an LV
+    // wiremill (`alsoMade`: the line may make what it can buy). At 0.02 t a second each step needs 0.1 of a machine; σ =
+    // 1.2 × 0.02 × 86,400 = 2,073.6 raw (g bought) and a new machine block costs 0.5 + 10 / 2,073.6 = 0.5048 of it, raw
+    // 0.8333 a unit made and 1 bought. The relaxation charges make-g a tenth of its block (0.8333 + 0.5048 + 0.0505 =
+    // 1.389 < buying g 1 + 0.5048 = 1.505), so its rounding builds it a machine: 0.8333 + 2 × 0.5048 = 1.843, as does S1's.
+    // Plan 09's charged stage (0.5 a step, within +25 %) buys g: 1.505, which the MIP plans too.
+    const spec: Parameters<typeof solvedWithBuild>[0] = {
+      maps: [{ id: 'gt.recipe.metalbender', name: 'Bending Machine' }, { id: 'gt.recipe.wiremill', name: 'Wiremill' }],
+      machines: [{ mteId: 101, name: 'Basic Bending Machine', tier: 1, maps: ['gt.recipe.metalbender'] },
+        { mteId: 111, name: 'Basic Wiremill', tier: 1, maps: ['gt.recipe.wiremill'] }],
+      recipes: [
+        { id: 'final', map: 'gt.recipe.metalbender', in: [['t:g@0', 1]], out: [['t:t@0', 1]], eut: 24, dur: 100 },
+        { id: 'make-g', map: 'gt.recipe.wiremill', in: [['t:a@0', 1]], out: [['t:g@0', 1]], eut: 24, dur: 100 },
+      ],
+    };
+    const build = { options: { final: [opt(101, 1, 0.2, 10)], 'make-g': [opt(111, 1, 0.2, 10)] }, alsoMade: ['t:g@0'] };
+    const line = (opts: SolveOptions) => solvedWithBuild(spec, { 't:a@0': 1, 't:g@0': 1.2 }, [['t:t@0', 0.02]], build, { stepCharge: 0.5, ...opts });
+    const guarded = await line({ buildTimeLimit: 0 });
+    expect(guarded.sol.buildStats).toMatchObject({ status: 'skipped', approx: true });
+    expect(guarded.sol.warnings).toContainEqual(expect.objectContaining({ code: 'build-cost-approx' }));
+    expect(guarded.runs).toEqual(['final']);
+    expect(guarded.sol.machines?.get('final')).toMatchObject({ option: { mteId: 101 }, added: 1 });
+    expect([...guarded.sol.buys.keys()]).toEqual(['t:g@0']);
+    expect((await line({})).runs).toEqual(['final']);
   });
 
   it('keeps plan 09 stages when build cost is ignored', async () => {

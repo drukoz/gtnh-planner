@@ -1049,7 +1049,9 @@ function decodeMakeN(input: BuildMipInput, layout: Layout, x: readonly number[])
  * with its objective; `decode` reads a whole solution's decision; `prefer` gives, per step column, the option with the
  * most new capacity in `x` (the relaxation's), for `roundUp`; `exactCost` is the objective of a whole solution with its
  * light steps (`Light`) at the build and charge of the machines `decode` gives them, from which the model's own objective
- * may be off by less than a machine each. When `roundUp(input, x1)` leaves a step short, that start
+ * may be off by less than a machine each; `rounded(x, prefer)` is `roundUp(input, x, prefer)` with its objective so (its
+ * columns filled as a start's; Infinity for a decision that leaves a step short), so the time guard's fallback can keep
+ * the cheapest of several roundings. When `roundUp(input, x1)` leaves a step short, that start
  * is no plan (`start` is undefined), so its objective bounds no purchase, and nothing else does soundly (a step with no
  * machine options and no step charge has no bound of its own): the MIP, and so its relaxation, then has no
  * derived-purchase binaries, which only break ties among equally cheap plans.
@@ -1058,6 +1060,7 @@ export function buildMip(input: BuildMipInput): {
   model: LpModel; start: number[] | undefined; startCost: number; startAt(x: readonly number[]): { start: number[]; cost: number } | undefined;
   decode(x: readonly number[]): BuildDecision; prefer(x: readonly number[]): (j: number) => number | undefined;
   exactCost(x: readonly number[]): number;
+  rounded(x: readonly number[], prefer?: (j: number) => number | undefined): { decision: BuildDecision; cost: number };
 } {
   const width = input.lp.rawCost.length;
   const first = allocate(input, input.x1, undefined, 0);
@@ -1083,6 +1086,16 @@ export function buildMip(input: BuildMipInput): {
     sense: 'min', colCost: layout.colCost, colLower: new Array<number>(layout.colCost.length).fill(0), colUpper: layout.colUpper, rows: layout.rows,
     integer: layout.integer,
   };
+  const exactCost = (x: readonly number[]): number => {
+    let cost = costOf(x);
+    for (const [j, l] of layout.light) {
+      const runs = x[j] ?? 0;
+      const pick = runs > TINY ? cheapestAdd(l.step, runs * input.demandScale, layout.charge) : undefined;
+      const truth = pick === undefined ? 0 : blockCost(pick.u.o, layout.charge) * pick.added;
+      cost += (truth - l.first * (x[layout.y.get(j) as number] ?? 0) - (x[l.e] ?? 0)) / layout.sigma;
+    }
+    return cost;
+  };
   return {
     model, start, startCost,
     startAt: (x) => {
@@ -1091,15 +1104,14 @@ export function buildMip(input: BuildMipInput): {
       return at === undefined ? undefined : { start: at, cost: costOf(at) };
     },
     decode: (x) => (input.model.mode === 'rate' ? decodeRate(input, layout, x) : decodeMakeN(input, layout, x)),
-    exactCost: (x) => {
-      let cost = costOf(x);
-      for (const [j, l] of layout.light) {
-        const runs = x[j] ?? 0;
-        const pick = runs > TINY ? cheapestAdd(l.step, runs * input.demandScale, layout.charge) : undefined;
-        const truth = pick === undefined ? 0 : blockCost(pick.u.o, layout.charge) * pick.added;
-        cost += (truth - l.first * (x[layout.y.get(j) as number] ?? 0) - (x[l.e] ?? 0)) / layout.sigma;
-      }
-      return cost;
+    exactCost,
+    rounded: (x, prefer) => {
+      const alloc = allocate(input, x, prefer);
+      if (alloc.decision.short !== undefined) return { decision: alloc.decision, cost: Infinity };
+      // Its runs as the decision keeps them (a step at most 1e-9 a unit of demand runs none), in the MIP's columns.
+      const runs = x.map((v, j) => (j < input.lp.firstBuy && input.lp.recipes[j]?.kind === 'recipe' && !(v > TINY) ? 0 : v));
+      const at = startOf(layout, width, runs, alloc, input.demandScale);
+      return { decision: alloc.decision, cost: at === undefined ? Infinity : exactCost(at) };
     },
     prefer: (x) => (j) => {
       let best: { index: number; capacity: number } | undefined;

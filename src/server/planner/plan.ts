@@ -1475,15 +1475,22 @@ async function plannedLine(
 }
 
 /**
+ * The build MIP's limits a test or a calibration run may set for every solve of a line (`SolveOptions`: the time guard,
+ * nodes and simplex iterations); planning a project never sets them (plan 12 fix wave 2: the real-data fallback test).
+ */
+export type SolveTuning = Pick<SolveOptions, 'buildTimeLimit' | 'buildMaxNodes' | 'buildMaxIterations'>;
+
+/**
  * Plans one line (spec §3.2–§3.11): least raw material at the project's tier where the group can reach — with the raw
  * material to build the machines it adds weighed against the build horizon (Make N: the batch; plan 12) — each recipe
  * step paying for itself in raw material (the project's step charge, `solveOptions`), as a steady rate or as a batch of N
  * on the machines the group owns, keeping out of the materials the project avoids where any plan can (`avoidingLine`),
  * and around the steps no machine that can be built here or is owned can run (`plannedLine`). A missing or unknown
  * target gives an `empty` plan; a target nothing reachable makes gives an `infeasible` plan whose warnings say what
- * blocks it and what unlocks it. Every plan that plans has its `cost` (`planCost`).
+ * blocks it and what unlocks it. Every plan that plans has its `cost` (`planCost`). `tuning` (tests and calibration
+ * only) overrides the build MIP's limits.
  */
-export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanContext): Promise<Plan> {
+export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanContext, tuning?: SolveTuning): Promise<Plan> {
   // Each synchronous stretch (availability, each candidate walk, each LP solve) yields first, so other
   // requests and live events go on between them (ledger 200).
   await yieldToEventLoop();
@@ -1504,7 +1511,7 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
   const aim: Pick<PlanBody, 'target' | 'targetPerSecond'> = batch
     ? { target } : { target, targetPerSecond: sig9(settings.amount / SECONDS_PER[settings.per]) };
   // Steps vs raw material (fix spec R3) for every solve of the line, and the build model of each graph solved in full.
-  const options = solveOptions(settings);
+  const options = { ...solveOptions(settings), ...tuning };
   const planned = await plannedLine(pack, settings, ctx, first, demand, options);
   const { priced, avoid, line, model: buildModel, unbuildable } = planned;
   const { graph, sol } = line;
