@@ -692,7 +692,7 @@ export interface LinksSummary {
   unplaced: string[];
   /**
    * Of those, the raw inputs and final outputs of an AE2 line whose base has no ME network to hook into (the line has
-   * no logistics hookup): they have nowhere to come in from or go to.
+   * no logistics hookup): they have nowhere to come in from or go to. A flow carried by hand stays in `unplaced`.
    */
   noNetwork: string[];
 }
@@ -714,7 +714,8 @@ export function linksSummary(g: ConnGraph, all: ConnPieces, drawn: readonly Draw
   for (const e of g.edges) {
     if (placed.has(e.id) || all.joined.has(e.id) || (!hookups && e.via === 'hookup')) continue;
     const text = `${e.key === null ? '' : `${e.label}: `}${title.get(e.from) ?? e.from} → ${title.get(e.to) ?? e.to}`;
-    (noNet && (e.from === 'raw' || e.to === 'out') ? noNetwork : unplaced).push(text);
+    // a flow carried by hand from or to your storage is not drawn whatever network the base has
+    (noNet && e.via !== 'hand' && (e.from === 'raw' || e.to === 'out') ? noNetwork : unplaced).push(text);
   }
   return {
     pieces: drawn.length, links: shown.size, more: [...all.more].reduce((n, [edge, k]) => n + (shown.has(edge) ? k : 0), 0),

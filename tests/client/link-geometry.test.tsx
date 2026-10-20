@@ -73,6 +73,17 @@ describe("the 3D view's connections of a machine run by hand", () => {
     expect(color(g.edges.find((e) => e.key === 't:dust@0')!)).toEqual(VIA_RGB.hand);
     expect(VIA_RGB.hand).not.toEqual(VIA_RGB.routed);
   });
+
+  it('names a flow carried by hand from your storage among the links it has nowhere to draw, not among those an ME network would carry', () => {
+    // an AE2 line whose base has no ME network (no logistics hookup), whose first machine you fill by hand
+    const layout: Layout = { ...connLayout('ae2'), hookups: [], blocks: connLayout('ae2').blocks.filter((b) => b.hookup === undefined),
+      buildSteps: [{ id: 'layout:hand:a:fill', order: 1, kind: 'logistics', text: 'Fill the Basic Macerator by hand: 1× Raw Input a run (from your storage)' }] };
+    const g = connectionsGraph(layout, connPlan, 'min');
+    const all = connectionPieces(layout, g);
+    const summary = linksSummary(g, all, linkGeometry(all.spans, new Map(g.edges.map((e) => [e.id, e])), layout.origin).links, true, layout);
+    expect(summary.unplaced).toEqual(['Raw Input 60/min · by hand: Raw inputs → 1× Basic Macerator']);
+    expect(summary.noNetwork).toEqual(['Titanium Ingot 60/min: 1× Advanced Assembler → Final outputs']);
+  });
 });
 
 describe("the 3D view's connections", () => {
