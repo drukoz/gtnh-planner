@@ -127,13 +127,54 @@ Get `gtnhplannerprojector-<version>.jar` from the person who runs the planner, o
 
 ### Colours
 
-Faint is a block not placed yet, green is the right block (with the right front), red is a wrong block or a wrong front, and bluish is a block the mod cannot check (its step is never ticked automatically). A GT machine's front is the side GT calls its front, the one a plain wrench sets: the face of a hatch or a multiblock controller, but on a single-block machine such as a Basic Macerator its **output side**. A single-block machine also has its own front, where it shows its face, which a sneaking wrench sets; the mod checks both (look at one that is turned wrong and the top left says "its front should face … and its output side …"). Its ghost shows the face on the side the front must face and the output overlay on the side the output must face, as the 3D tab and the place step have them. The mod also sees which conduits a conduit bundle holds, and `/planner step` shows a bundle under the step of each conduit it holds: a bundle is green and placed correctly once it holds every conduit the plan puts in it, or, shown for the Item Conduit's step, once it holds that one; otherwise looking at it says "not all its conduits placed yet". The step that lays the Item Conduit is ticked once the bundles hold their Item Conduits, and the step that lays the fluid conduit only once they hold that too. Update a projector mod older than 0.2.0: it cannot see a bundle's conduits, so it ticks the fluid conduit step by the fluid conduits outside the bundles alone, and never when all of them are in bundles. Blocks in chunks your game has not loaded stay faint, neither right nor wrong. Covers show as their item's icon on the face they go on; covers and settings (the **configure** steps) are ticked by hand. The top left of the screen shows how far the build has got (`Planner: Steel line — 12/40 placed, 1 wrong`) and, when you look at a planned block, what it needs.
+Faint is a block not placed yet, green is the right block (with the right front), red is a wrong block or a wrong front, and bluish is a block the mod cannot check (its step is never ticked automatically). A GT machine's front is the side GT calls its front, the one a plain wrench sets: the face of a hatch or a multiblock controller, but on a single-block machine such as a Basic Macerator its **output side**. A single-block machine also has its own front, where it shows its face, which a sneaking wrench sets; the mod checks both (aim at one that is turned wrong and its name tag says "wrong facing, its front should face … and its output side …"). Its ghost shows the face on the side the front must face and the output overlay on the side the output must face, as the 3D tab and the place step have them. The mod also sees which conduits a conduit bundle holds, and `/planner step` shows a bundle under the step of each conduit it holds: a bundle is green and placed correctly once it holds every conduit the plan puts in it, or, shown for the Item Conduit's step, once it holds that one; otherwise aiming at it says "not all its conduits placed yet". The step that lays the Item Conduit is ticked once the bundles hold their Item Conduits, and the step that lays the fluid conduit only once they hold that too. Update a projector mod older than 0.2.0: it cannot see a bundle's conduits, so it ticks the fluid conduit step by the fluid conduits outside the bundles alone, and never when all of them are in bundles. Blocks in chunks your game has not loaded stay faint, neither right nor wrong. Covers show as their item's icon on the face they go on; covers and settings (the **configure** steps) are ticked by hand. The top left of the screen shows how far the build has got (`Planner: Steel line — 12/40 placed, 1 wrong`); what a ghost is and which way it goes is on its name tag, see **Aiming at ghosts**.
+
+### Aiming at ghosts
+
+Point your crosshair at any ghost, as far away as `maxDistance` (96 blocks by default), even one floating in the air with nothing real next to it. The ghost you aim at gets a **yellow outline** and a **name tag** above it, like a player's name. The tag shows:
+
+- the block's name;
+- its state: `not placed yet`, `placed correctly`, `wrong block here`, `wrong facing, its output side should face north` or `can't be checked by the mod`;
+- which way it goes, while it is not placed correctly: `front should face west`, or `front should face west, output side south` for a single-block machine;
+- one line per cover: `cover: <name> on the <side> face`.
+
+A real block in the way stops the aim, just as it blocks your view, but the ghost at that real block's own spot still counts, so aiming at a placed block tells you whether it is right. With x-ray on (`/planner xray on` or the screen's **X-ray** button), real blocks do not stop it. Aiming changes nothing else: right-click still places on the real block your crosshair is on.
+
+When your crosshair passes through two or more ghosts, the top left lists them, nearest first with their distance, and `>` marks the one with the tag:
+
+```
+Behind the crosshair (2):
+> Steel Pipe Casing 5 m
+  LV Input Bus 6 m
+```
+
+Under it the top left says what the current step still needs, with counts that drop as you place blocks correctly:
+
+```
+Still needed for step 2:
+3× Steel Pipe Casing
+1× LV Input Bus
+```
+
+The current step is the one you picked with `/planner step` or in the planner screen. While every step is shown, it is the first step with blocks that is not ticked yet. A block the mod cannot check is listed last, as `2× Item Conduit (can't check)`.
+
+### The planner screen
+
+The planner screen is a 3D model of the line, with buttons for what the commands do. Open it with the small **P** button above the top-right corner of your inventory (the `E` screen), or bind a key: in **Controls**, under the **GTNH Planner** heading, **Open the planner screen** has no key until you pick one.
+
+- **The model** is on the left, coloured like the ghosts. Drag to turn it, right-drag to move it, scroll to zoom. Hover a block to see the same lines as its name tag. Blocks outside the step or layer you picked are drawn very faint, but you can still hover and click them.
+- **Click a block** to close the screen and find it in the world: it gets a cyan outline and its name tag, through walls and at any distance, and the top left says `Finding: LV Input Bus — 23 blocks NE, 2 up`. Finding stops when you aim at that block, open the screen again, run `/planner clear`, or after a minute.
+- **The step list** is on the right: **All steps**, then every build step, with done steps ticked. Click a step to show only its blocks, like `/planner step <n>`. Steps that place nothing (gathering, configuring) are listed but cannot be picked. The blocks the picked step still needs are listed under it.
+- **The bottom row** has a layer slider (like `/planner layer`), **All layers**, **X-ray** (like `/planner xray`), **Reload** (like `/planner reload`) and **Hide ghosts** / **Show ghosts**. Hide ghosts hides the ghosts, the outline and the tag in the world, but keeps the line loaded and the top-left lines; it is not saved, so the ghosts are back after a restart. `/planner clear` is different: it forgets the line.
+- **Nothing loaded:** the screen says to paste the `/planner load …` line from the project's **In-game projector** panel, and shows one button for each project you have already connected. Press one to load it. The first connection still needs the pasted line, since it carries the token.
+
+The screen works from the same settings as the commands: pick a step in the screen, then type `/planner step all`, and it follows. The line is still re-fetched about once a minute, and an open screen follows what changed. The game does not pause while the screen is open.
 
 ### Troubleshooting
 
 - **"Cannot reach the planner …":** is the planner running, and is its port forwarded to you? Set its address with `/planner url <url>`.
 - **"The planner refused this token …":** the token was revoked. Create a new one in the project's **In-game projector** panel and run its `/planner load` line.
-- **Nothing is drawn:** you may be in another dimension than the line (the top-left line names the line's dimension), a filter may be on (`/planner layer all`, `/planner step all`), or you may be farther from the ghosts than `maxDistance` (96 blocks by default; raise it in `config/gtnhplannerprojector.properties` in your instance's Minecraft folder and restart the game). If the top-left line says the project is not placed in the world yet, pick a world scan and base on its Map tab.
+- **Nothing is drawn:** you may be in another dimension than the line (the top-left line names the line's dimension), a filter may be on (`/planner layer all`, `/planner step all`), you may have pressed **Hide ghosts** in the planner screen (press **Show ghosts**), or you may be farther from the ghosts than `maxDistance` (96 blocks by default; raise it in `config/gtnhplannerprojector.properties` in your instance's Minecraft folder and restart the game). If the top-left line says the project is not placed in the world yet, pick a world scan and base on its Map tab.
 - **The top-left lines show but the ghosts are invisible:** set `useDisplayLists=false` in `config/gtnhplannerprojector.properties` and restart the game.
 
 ### Privacy
