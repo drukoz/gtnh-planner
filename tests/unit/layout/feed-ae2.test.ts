@@ -6,7 +6,9 @@
 // your hands). Blocking mode is on unless the machine holds an item AE2's blocking-ignore list (GT's
 // `AE2Compat.registerBlockingModeIgnoreItems`) leaves out, which blocking mode would never push past. A crafting CPU runs a
 // pattern only as often as a job needs what it makes, so a machine whose piped fluid another machine waits for, and whose
-// items no job needs as often, is warned about (`ae2_fluid_short`).
+// items no job needs as often, is warned about (`ae2_fluid_short`); a job plans a loop of patterns until it would come
+// back to a pattern above the request (AE2 rv3-beta-1073-GTNH `CraftingRequest.patternParents`), as the pack's
+// calculator does.
 
 import { describe, expect, it } from 'vitest';
 import { placeUnits, unitsFromPlan } from '../../../src/server/layout/arrange.ts';
@@ -159,6 +161,8 @@ describe('AE2 feeding', () => {
         ...to.map(([id, product]) => ({ id, mteId: IDS.ASSEMBLER, count: 1, tier: 2, outputs: [[product, 1]] as Array<[StuffKey, number]>,
           inputs: [['t:dust@0', 1], ...(takesEx.has(id) ? [['t:x@0', 1]] : []), ['fluid:oxygen', 1000]] as Array<[StuffKey, number]> })),
       ], { flows: [{ from: 'raw', to: 'c', key: 't:in@0', perSecond: 1 }, ...exTo.map(([id, perSecond]) => ({ from: 'c', to: id, key: 't:x@0', perSecond })),
+        // an assembler that takes Ex takes one a run: what c does not send it comes from storage
+        ...exTo.filter(([id, perSecond]) => to.some(([t]) => t === id) && perSecond < 1).map(([id, perSecond]) => ({ from: 'raw', to: id, key: 't:x@0', perSecond: 1 - perSecond })),
         ...to.flatMap(([id, product]) => [{ from: 'c', to: id, key: 'fluid:oxygen', perSecond: 1000 / to.length },
           { from: 'raw', to: id, key: 't:dust@0', perSecond: 1 }, { from: id, to: 'out', key: product, perSecond: 1 }])] });
     };
@@ -189,22 +193,93 @@ describe('AE2 feeding', () => {
       expect(short(fluidLine([['n', 1]]))).toEqual([]);
     });
 
-    it('counts runs only along what a job asks for: the product, patterns at their own share, and what you keep going', () => {
-      const pattern = (out: StuffKey) => ({ inputs: [{ key: 't:in@0', amount: 1 }], outputs: [{ key: out, amount: 1 }] });
+    describe('the runs a job asks for (AE2 rv3-beta-1073-GTNH CraftingJobV2)', () => {
       const flow = (from: string, to: string, key: StuffKey, perSecond = 1) => ({ from, to, key, perSecond });
-      const shares = (flows: Plan['flows'], ids: readonly string[]) => {
-        const plan = makePlan(ids.map((id) => ({ id, mteId: IDS.MACERATOR, count: 1 })), { flows });
-        return Object.fromEntries(aeRunShares(plan, new Map(ids.map((id, i) => [id, pattern(`t:o${i}@0`)]))));
+      type Side = ReadonlyArray<StuffKey | readonly [StuffKey, number]>;
+      /** aeRunShares of one run a second of each step of `patterns` (its inputs, its outputs; one of each but where an amount is given). */
+      const shares = (flows: Plan['flows'], patterns: Readonly<Record<string, readonly [Side, Side]>>) => {
+        const plan = makePlan(Object.keys(patterns).map((id) => ({ id, mteId: IDS.MACERATOR, count: 1 })), { flows });
+        const side = (list: Side) => list.map((x) => (typeof x === 'string' ? { key: x, amount: 1 } : { key: x[0], amount: x[1] }));
+        return Object.fromEntries(aeRunShares(plan, new Map(Object.entries(patterns).map(([id, [ins, outs]]) => [id, { inputs: side(ins), outputs: side(outs) }]))));
       };
-      // a chain to the product; a byproduct; half to a pattern, half to storage; to a step without a pattern
-      expect(shares([flow('a', 'b', 't:o0@0'), flow('b', 'out', 't:o1@0')], ['a', 'b'])).toEqual({ a: 1, b: 1 });
-      expect(shares([flow('a', 'sink', 't:o0@0')], ['a'])).toEqual({ a: 0 });
-      expect(shares([flow('a', 'b', 't:o0@0', 0.5), flow('a', 'sink', 't:o0@0', 0.5), flow('b', 'out', 't:o1@0')], ['a', 'b'])).toEqual({ a: 0.5, b: 1 });
-      expect(shares([flow('a', 'hand', 't:o0@0')], ['a'])).toEqual({ a: 1 });
-      // a loop of cells (b empties what a fills): AE2 cannot plan a craft that needs its own output, so the loop asks
-      // for nothing, and what leaves it for the product asks only for its own share
-      expect(shares([flow('a', 'b', 't:o0@0'), flow('b', 'a', 't:o1@0')], ['a', 'b'])).toEqual({ a: 0, b: 0 });
-      expect(shares([flow('a', 'b', 't:o0@0'), flow('b', 'a', 't:o1@0'), flow('b', 'out', 't:o1@0')], ['a', 'b'])).toEqual({ a: 0, b: 0.5 });
+      const O0 = 't:o0@0', O1 = 't:o1@0', O2 = 't:o2@0', IN = 't:in@0';
+
+      it('counts runs only along what a job asks for: the product, patterns at their own share, and what you keep going', () => {
+        // a chain to the product; a byproduct; half to a pattern (whose other half comes from storage), half to storage; to
+        // a step without a pattern
+        expect(shares([flow('raw', 'a', IN), flow('a', 'b', O0), flow('b', 'out', O1)], { a: [[IN], [O0]], b: [[O0], [O1]] })).toEqual({ a: 1, b: 1 });
+        expect(shares([flow('raw', 'a', IN), flow('a', 'sink', O0)], { a: [[IN], [O0]] })).toEqual({ a: 0 });
+        expect(shares([flow('raw', 'a', IN), flow('a', 'b', O0, 0.5), flow('a', 'sink', O0, 0.5), flow('raw', 'b', O0, 0.5), flow('b', 'out', O1)],
+          { a: [[IN], [O0]], b: [[O0], [O1]] })).toEqual({ a: 0.5, b: 1 });
+        expect(shares([flow('raw', 'a', IN), flow('a', 'hand', O0)], { a: [[IN], [O0]] })).toEqual({ a: 1 });
+      });
+
+      it("asks for what a pattern takes, at the pattern's amounts", () => {
+        // b's pattern does not take the O0 the plan sends it (it holds it, or its slot takes another option): no job asks a for it
+        expect(shares([flow('raw', 'a', IN), flow('a', 'b', O0), flow('raw', 'b', IN), flow('b', 'out', O1)], { a: [[IN], [O0]], b: [[IN], [O1]] }))
+          .toEqual({ a: 0, b: 1 });
+        // b's pattern takes 2 O0 a run where the plan feeds it 1 (an input used up one run in two): each run of b asks a for 2
+        expect(shares([flow('raw', 'a', IN), flow('a', 'b', O0, 0.5), flow('a', 'sink', O0, 0.5), flow('raw', 'b', O0, 0.5), flow('b', 'out', O1)],
+          { a: [[IN], [O0]], b: [[[O0, 2]], [O1]] })).toEqual({ a: 1, b: 1 });
+      });
+
+      it('plans a loop until it comes back to a pattern the request descends from, which takes that item from storage', () => {
+        // cells b empties and a fills: a job for b's product runs b, b's filled cells run a, and a's empty cells cannot run b
+        // again (b's pattern is above them), so they come from storage, where b puts them back
+        expect(shares([flow('a', 'b', O0), flow('b', 'a', O1), flow('b', 'out', O2)], { a: [[O1], [O0]], b: [[O0], [O2, O1]] })).toEqual({ a: 1, b: 1 });
+        // three patterns round: t's product runs t, t runs s, s runs u, and u's input, made by t, comes from storage
+        expect(shares([flow('s', 't', O0), flow('u', 's', O1), flow('t', 'u', O2), flow('t', 'out', 't:p@0')],
+          { t: [[O0], ['t:p@0', O2]], s: [[O1], [O0]], u: [[O2], [O1]] })).toEqual({ t: 1, s: 1, u: 1 });
+      });
+
+      it('never plans what goes round a loop back to a pattern above it, nor a loop no job enters', () => {
+        // b makes O1 for the product and for a, a makes b's O0 from it: a job runs b for the product only, and a as often as
+        // that b asks; the O1 a asks for cannot run b (b's pattern is above it), so it comes from storage, and neither runs
+        // as often as the plan has them
+        expect(shares([flow('a', 'b', O0), flow('b', 'a', O1, 0.5), flow('raw', 'a', O1, 0.5), flow('b', 'out', O1, 0.5)],
+          { a: [[O1], [O0]], b: [[O0], [O1]] })).toEqual({ a: 0.5, b: 0.5 });
+        // what goes only round the loop: no job ever asks for it
+        expect(shares([flow('a', 'b', O0), flow('b', 'a', O1)], { a: [[O1], [O0]], b: [[O0], [O1]] })).toEqual({ a: 0, b: 0 });
+        // a pattern that takes what it makes (a catalyst) never runs itself for it
+        expect(shares([flow('a', 'a', O0), flow('raw', 'a', IN), flow('a', 'sink', O0)], { a: [[O0, IN], [O0]] })).toEqual({ a: 0 });
+      });
+    });
+
+    describe('in a loop of cells one machine fills and another empties', () => {
+      /**
+       * f (a chemical reactor) fills Ex into Why and pipes Oxygen to e (an assembler); b (an assembler) takes Why and gives
+       * `bMakes` (Zed, the product, with Ex back to f; or Ex alone, half to f and half to the product, f's other half
+       * coming from storage).
+       */
+      const cellLine = (bMakes: 'zed' | 'ex'): Plan => makePlan([
+        { id: 'f', mteId: IDS.CHEM_HV, count: 1, tier: 3, inputs: [['t:x@0', 1]], outputs: [['t:y@0', 1], ['fluid:oxygen', 1000]] },
+        { id: 'b', mteId: IDS.ASSEMBLER, count: 1, tier: 2, inputs: [['t:y@0', 1], ['t:dust@0', 1]], outputs: bMakes === 'zed' ? [['t:z@0', 1], ['t:x@0', 1]] : [['t:x@0', 1]] },
+        { id: 'e', mteId: IDS.ASSEMBLER, count: 1, tier: 2, inputs: [['t:dust@0', 1], ['fluid:oxygen', 1000]] },
+      ], { flows: [
+        { from: 'f', to: 'b', key: 't:y@0', perSecond: 1 }, { from: 'raw', to: 'b', key: 't:dust@0', perSecond: 1 },
+        ...(bMakes === 'zed'
+          ? [{ from: 'b', to: 'f', key: 't:x@0', perSecond: 1 }, { from: 'b', to: 'out', key: 't:z@0', perSecond: 1 }]
+          : [{ from: 'b', to: 'f', key: 't:x@0', perSecond: 0.5 }, { from: 'raw', to: 'f', key: 't:x@0', perSecond: 0.5 }, { from: 'b', to: 'out', key: 't:x@0', perSecond: 0.5 }]),
+        { from: 'f', to: 'e', key: 'fluid:oxygen', perSecond: 1000 }, { from: 'raw', to: 'e', key: 't:dust@0', perSecond: 1 },
+        { from: 'e', to: 'out', key: 't:out_e@0', perSecond: 1 },
+      ] });
+      const short = (plan: Plan) => {
+        const p = pack();
+        p.items.set('t:z@0', { key: 't:z@0', id: 't:z', meta: 0, name: 'Zed', oreDict: [] });
+        return ae2(p, plan).r.warnings.filter((w) => w.code === 'ae2_fluid_short');
+      };
+
+      it('says nothing where a job runs the machine that fills them', () => {
+        // a job for Zed runs b, b's Why runs f, and f's Ex comes from storage, where b puts it back
+        expect(short(cellLine('zed'))).toEqual([]);
+      });
+
+      it('says how short it runs where what goes round the loop comes back to a pattern above it', () => {
+        expect(short(cellLine('ex')).map((w) => [w.stepId, w.key, w.text])).toEqual([['f', 'fluid:oxygen', 'AE2 runs the Advanced Chemical '
+          + 'Reactor only as often as a job needs what its pattern makes (Why), about 50 % of the runs the Oxygen it pipes to the Advanced Assembler '
+          + 'needs: so it runs out of Oxygen and waits for ever, and so does a job that needs what it makes. Keep the Advanced Chemical Reactor '
+          + 'running yourself: feed it Ex from stock, keep a request for Why standing, or fill it by hand']]);
+      });
     });
   });
 

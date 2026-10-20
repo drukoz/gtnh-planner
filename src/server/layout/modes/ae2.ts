@@ -11,7 +11,8 @@
 // with an `ae2_no_pattern` warning that the line then relies on stock or your hands. A crafting CPU pushes a pattern
 // only as often as a job needs what the pattern makes, never for a fluid the line pipes from it to another machine, so a
 // machine with a pattern whose fluid another machine waits for, and whose items no job of the line needs as often as
-// that fluid is needed, gets an `ae2_fluid_short` warning: that machine must be kept running by you (`aeRunShares`).
+// that fluid is needed, gets an `ae2_fluid_short` warning: that machine must be kept running by you (`aeRunShares`, as
+// the pack's crafting calculator plans a job: a loop of patterns until it would come back to a pattern above).
 // Blocking mode is on (the next set goes in once a run has taken the last) unless the machine holds an item AE2's
 // blocking-ignore list leaves out, which blocking mode would wait on for ever (GT's
 // `AE2Compat.registerBlockingModeIgnoreItems`: the programmed circuit, its molds, extruder shapes, slicer blades and
@@ -112,63 +113,84 @@ function stepFeed(pack: Pack, step: PlanStep): StepFeed {
   return { kind: 'none', why: inputs.length > 0 ? 'chanced' : 'fluid_in' };
 }
 
-// ---- What AE2 runs (research machine-feeding §2.3 "Jobs", §4.2 item 2) ----
+// ---- What AE2 runs (research machine-feeding §2.3 "Jobs", §4.2 item 2; AE2 rv3-beta-1073-GTNH's crafting calculator) ----
 
 /** A run share this far below 1 still counts as every planned run: the plan's flows are sums of floating rates. */
 const SHARE_EPSILON = 1e-6;
 
 /**
- * The strongly connected groups of the steps with a pattern, joined where one's pattern output flows into another's
- * pattern, each group listed after every group its steps' outputs flow into (Tarjan's order), so the steps a step
- * feeds come first. Steps, edges and members in plan order.
+ * A flow of a pattern output that a request answers: what it carries, the step with a pattern that asks for it (null: a
+ * job's own request, for all of it), and how much that step's pattern asks for each unit of it the plan feeds the step
+ * (its amount a run over the plan's: 1 but for an input used up by chance or a slot whose options the plan splits).
  */
-function patternGroups(plan: Plan, patterns: ReadonlyMap<string, PatternSpec>): string[][] {
-  const ids = plan.steps.map((s) => s.id).filter((id) => patterns.has(id));
-  const feeds = new Map(ids.map((id) => {
-    const made = new Set(patterns.get(id)!.outputs.map((o) => o.key));
-    return [id, [...new Set(plan.flows.filter((f) => f.from === id && made.has(f.key) && patterns.has(f.to)).map((f) => f.to))]];
-  }));
-  const index = new Map<string, number>(), low = new Map<string, number>(), stack: string[] = [], on = new Set<string>();
-  const groups: string[][] = [];
-  const visit = (id: string): void => {
-    index.set(id, index.size); low.set(id, index.get(id)!); stack.push(id); on.add(id);
-    for (const to of feeds.get(id)!) {
-      if (!index.has(to)) { visit(to); low.set(id, Math.min(low.get(id)!, low.get(to)!)); } else if (on.has(to)) low.set(id, Math.min(low.get(id)!, index.get(to)!));
-    }
-    if (low.get(id) !== index.get(id)) return;
-    const group: string[] = [];
-    for (let top = stack.pop()!; ; top = stack.pop()!) { on.delete(top); group.push(top); if (top === id) break; }
-    groups.push(group.sort((a, b) => ids.indexOf(a) - ids.indexOf(b)));
-  };
-  for (const id of ids) if (!index.has(id)) visit(id);
-  return groups;
-}
+interface RunAsk { perSecond: number; to: string | null; scale: number }
 
 /**
  * The share of its planned runs AE2 gives each step with a pattern at most, 0 to 1 (fewer where a job finds the items
- * in your storage, which it takes before it crafts any). A crafting CPU pushes a pattern only as often as a job needs
- * an item the pattern makes, never for a fluid the line pipes on, so a step runs as often as its most-asked-for pattern
- * output needs: of what it makes of that item, the part that goes to the line's product (`out`), to a step with a
- * pattern at that step's own share, or to anything AE2 does not run itself and you keep going (a step without a
- * pattern, a step the line places no machine for, a machine run by hand), which asks for all it takes; none of what
- * goes to your storage as a byproduct (`sink`), and none of what goes round a loop of patterns back to the step (cells
- * emptied and filled again): AE2 cannot plan a craft that needs its own output, so such items come from stock.
+ * in your storage, which it takes before it crafts any), as the pack's crafting calculator plans its jobs (`CraftingJobV2`,
+ * which `CraftingGridCache.beginCraftingJob` starts unless lite crafting is on; AE2 rv3-beta-1073-GTNH, read with javap).
+ * A crafting CPU pushes a pattern only for a job, never for a fluid the line pipes on. A job crafts what it is asked for:
+ * the line's product (`out`), or what something AE2 does not run itself takes (a step without a pattern, a step the line
+ * places no machine for, a machine run by hand: you keep those going), all of it. Each run of a pattern asks for the
+ * pattern's inputs at the pattern's amounts (none for an item the plan sends it that its pattern does not take), which
+ * the plan's flows into it split among its suppliers (raw inputs and what a step without a pattern makes come from
+ * storage). A request is crafted by a pattern that makes it, but never by one already above it in the job:
+ * `CraftFromPatternTask` adds its pattern to its request's `patternParents` before it asks for its inputs,
+ * `CraftingContext.doWork` copies them into each input's request, and `CraftableItemResolver` drops them from that
+ * request's patterns (patterns compare by what they encode, `PatternHelper.equals`). So a loop of patterns (cells emptied
+ * and filled again) is planned until it would come back to a pattern above, and that item comes from storage. A step
+ * runs as often as its most-asked-for pattern output needs (its other outputs go to the job's byproducts, which
+ * `ExtractItemTask` takes before anything is crafted again), and nothing of what goes to your storage (`sink`) asks.
  */
 export function aeRunShares(plan: Plan, patterns: ReadonlyMap<string, PatternSpec>): Map<string, number> {
-  const shares = new Map<string, number>();
-  for (const group of patternGroups(plan, patterns)) {
-    const inGroup = new Set(group);
-    const asked = (to: string): number => (to === 'sink' || inGroup.has(to) ? 0 : shares.get(to) ?? (patterns.has(to) ? 0 : 1));
-    for (const id of group) {
-      const share = Math.max(0, ...patterns.get(id)!.outputs.map(({ key }) => {
-        const flows = plan.flows.filter((f) => f.from === id && f.key === key);
-        const made = flows.reduce((sum, f) => sum + f.perSecond, 0);
-        return made > 0 ? flows.reduce((sum, f) => sum + f.perSecond * asked(f.to), 0) / made : 0;
-      }));
-      shares.set(id, Math.min(1, share));
+  // each distinct pattern by number, as AE2 tells patterns apart
+  const kinds = new Map<string, number>();
+  const kindOf = new Map([...patterns].map(([id, p]) => {
+    const text = JSON.stringify(p);
+    if (!kinds.has(text)) kinds.set(text, kinds.size);
+    return [id, kinds.get(text)!];
+  }));
+  const runsOf = new Map(plan.steps.map((s) => [s.id, s.runsPerSecond]));
+  const fed = (to: string, key: StuffKey): number => plan.flows.reduce((n, f) => (f.to === to && f.key === key ? n + f.perSecond : n), 0);
+  // per step, per pattern output it makes: what it makes of it and the flows of it a request answers
+  const outputs = new Map([...patterns].map(([id, pattern]) => [id, pattern.outputs.flatMap(({ key }) => {
+    const flows = plan.flows.filter((f) => f.from === id && f.key === key && f.perSecond > 0);
+    const made = flows.reduce((n, f) => n + f.perSecond, 0);
+    const asks = flows.flatMap((f): RunAsk[] => {
+      if (f.to === 'sink') return [];
+      const consumer = patterns.get(f.to);
+      if (consumer === undefined) return [{ perSecond: f.perSecond, to: null, scale: 1 }];
+      const scale = (consumer.inputs.find((i) => i.key === key)?.amount ?? 0) * (runsOf.get(f.to) ?? 0) / fed(f.to, key);
+      return scale > 0 ? [{ perSecond: f.perSecond, to: f.to, scale }] : [];
+    });
+    return made > 0 ? [{ made, asks }] : [];
+  })]));
+  // the patterns a step's runs can be asked for through (its own among them): only these of the ones above it matter
+  const through = new Map([...patterns.keys()].map((id) => {
+    const seen = new Set([id]);
+    for (const at of seen) for (const o of outputs.get(at)!) for (const a of o.asks) if (a.to !== null) seen.add(a.to);
+    return [id, new Set([...seen].map((s) => kindOf.get(s)!))];
+  }));
+  const memo = new Map<string, number>();
+  /**
+   * The share of `id`'s planned runs asked for by the requests whose job reaches them through none of the patterns
+   * `above` (none at all where the step's own pattern is one of them): what goes to a job's own request in full, and
+   * what goes to a step with a pattern at that step's share through none of `above` nor the step's own pattern.
+   */
+  const share = (id: string, above: ReadonlySet<number>): number => {
+    const kind = kindOf.get(id)!;
+    if (above.has(kind)) return 0;
+    const key = `${id}|${[...above].filter((k) => through.get(id)!.has(k)).sort((a, b) => a - b).join(',')}`;
+    let value = memo.get(key);
+    if (value === undefined) {
+      const next = new Set(above).add(kind);
+      value = Math.min(1, Math.max(0, ...outputs.get(id)!.map(({ made, asks }) =>
+        asks.reduce((n, a) => n + a.perSecond * (a.to === null ? 1 : a.scale * share(a.to, next)), 0) / made)));
+      memo.set(key, value);
     }
-  }
-  return shares;
+    return value;
+  };
+  return new Map([...patterns.keys()].map((id) => [id, share(id, new Set())]));
 }
 
 // ---- The ME Export Bus ----
