@@ -4,6 +4,7 @@ import { connectionsElk, connectionsFromElk, connectionsGraph, faceModeText, pic
 // for the tests after the plan's own: the links in the world (the user's requirements of 2026-10-19, item 3 (b))
 import { connectionSpans, spanDetails } from '../../src/client/connections/model.ts';
 // for the tests after the commit's own (the review of f82c98c)
+import { SPANS_PER_LINK, connectionPieces, type ConnSpot } from '../../src/client/connections/model.ts';
 import { DIRS, posKey, step } from '../../src/shared/layout/geometry.ts';
 import type { ConduitFace, Layout, LayoutBlock } from '../../src/shared/types/layout.ts';
 import type { Plan } from '../../src/shared/types/plan.ts';
@@ -204,9 +205,10 @@ describe('the Connections links in the world', () => {
     expect(spanDetails(g, { edge: 'nope', from: dust[0]!.from, to: dust[0]!.to })).toBeNull();
   });
 
-  it('joins two big boxes face by face in turn once every pair would make more than 32 pieces', () => {
-    // two steps of a and b machines, machine to machine: a × b pieces up to 32, else one per machine of the bigger box
-    // (the review of f9fe23e: 16 × 16 each with each made 256 tubes no one could read, and a slow line)
+  it('joins two big boxes face by face in turn, at most 8 pieces a link, and counts the pieces it leaves out', () => {
+    // two steps of a and b machines, machine to machine: a × b pieces up to 8, else one per machine of the bigger box,
+    // at most 8 of them spread over it (the review of f82c98c: a 41-machine step drew a fan of 41 arcs no one could
+    // read)
     const big = (a: number, b: number): Layout => ({ ...connLayout('direct'), blocks: [
       ...Array.from({ length: a }, (_, i): LayoutBlock => ({ pos: [i, 64, 0], block: { id: 'gregtech:gt.blockmachines', meta: 0, mteId: 2001 }, role: 'machine',
         facing: 3, stepId: 'a', label: 'Basic Macerator' })),
@@ -214,14 +216,23 @@ describe('the Connections links in the world', () => {
         facing: 2, stepId: 'b', label: 'Advanced Assembler' }))] });
     const pieces = (a: number, b: number) => {
       const layout = big(a, b);
-      return connectionSpans(layout, connectionsGraph(layout, connPlan, 'min')).filter((s) => s.edge === 'flow:step:a>step:b:t:dust@0');
+      const all = connectionPieces(layout, connectionsGraph(layout, connPlan, 'min'));
+      return { spans: all.spans.filter((s) => s.edge === 'flow:step:a>step:b:t:dust@0'), more: all.more.get('flow:step:a>step:b:t:dust@0') ?? 0 };
     };
-    expect(pieces(4, 8)).toHaveLength(32);
-    const many = pieces(6, 6);
-    expect(many).toHaveLength(6);
-    expect(new Set(many.map((s) => s.from.cell.join()))).toEqual(new Set(Array.from({ length: 6 }, (_, i) => `${i},64,0`)));
-    expect(new Set(many.map((s) => s.to.cell.join()))).toEqual(new Set(Array.from({ length: 6 }, (_, i) => `${i},64,2`)));
-    expect(pieces(16, 16)).toHaveLength(16);
+    expect(SPANS_PER_LINK).toBe(8);
+    expect([pieces(2, 4).spans.length, pieces(2, 4).more]).toEqual([8, 0]);
+    const cells = (spans: ReadonlyArray<{ from: ConnSpot; to: ConnSpot }>, end: 'from' | 'to') => new Set(spans.map((s) => s[end].cell.join()));
+    // past 8 pairs, each machine of the bigger box once while there are at most 8
+    const some = pieces(6, 6);
+    expect([some.spans.length, some.more]).toEqual([6, 0]);
+    expect(cells(some.spans, 'from')).toEqual(new Set(Array.from({ length: 6 }, (_, i) => `${i},64,0`)));
+    expect(cells(some.spans, 'to')).toEqual(new Set(Array.from({ length: 6 }, (_, i) => `${i},64,2`)));
+    expect([pieces(4, 8).spans.length, pieces(4, 8).more]).toEqual([8, 0]);
+    // more: 8 spread over the bigger box, and the rest counted
+    const many = pieces(16, 16);
+    expect([many.spans.length, many.more]).toEqual([8, 8]);
+    expect(cells(many.spans, 'from')).toEqual(new Set(Array.from({ length: 8 }, (_, i) => `${2 * i},64,0`)));
+    expect([pieces(41, 1).spans.length, pieces(41, 1).more]).toEqual([8, 33]);
   });
 
   // the review of f9fe23e: a link's end never hides under another block; the review of f82c98c: when every face is
@@ -294,6 +305,15 @@ describe('the Connections links in the world', () => {
       // on a side never below its middle, out of which an arc would rise through the arm into the face
       if (end.side > 1) expect(off[1]!).toBeGreaterThanOrEqual(0);
     }
+  });
+
+  it("leaves an AE2 hookup's own link out, as its cable shows it: both its ends are where the base's network comes in", () => {
+    const layout = connLayout('ae2');
+    const g = connectionsGraph(layout, connPlan, 'min');
+    const all = connectionPieces(layout, g);
+    expect(g.edges.map((e) => e.id)).toContain('hookup:0>raw');
+    expect([all.spans.some((s) => s.edge === 'hookup:0>raw'), [...all.joined]]).toEqual([false, ['hookup:0>raw']]);
+    expect(all.spans).toEqual(connectionSpans(layout, g));
   });
 
   it('tells a piece of a link without faces what the link tells', () => {

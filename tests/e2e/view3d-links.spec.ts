@@ -1,7 +1,8 @@
 // The 3D tab's Show connections end to end (the user's requirements of 2026-10-19, item 3 (b)): on the sample world's
 // EnderIO line the toggle starts off; turned on, the Connections tab's links are drawn over the line (new pixels in the
-// links' own flat colours) and the tab says how many; hovering one names it as the Connections tab does; a click shows
-// its details and marks it and both its faces in white; and the toggle is still on after a reload.
+// links' own flat colours) and the tab says how many; hovering one names it as the Connections tab does and redraws it
+// thicker while the others fade (the review of f82c98c); a click shows its details and marks it and both its faces in
+// white; Focus shows beside the toggle and the note says what it does; and both are still on after a reload.
 
 import { test, expect, type Page } from '@playwright/test';
 import { createProject, login, setName } from './helpers.ts';
@@ -92,9 +93,12 @@ test('show the Connections links in 3D, name one by hovering it and mark its fac
   expect(point, 'a pixel inside a drawn link').not.toBeNull();
   expect(rgb).not.toBeNull();
 
-  // hovering it names it as the Connections tab writes it on the link: the good, its rate and its channel
+  // hovering it names it as the Connections tab writes it on the link: the good, its rate and its channel; it is drawn
+  // thicker and lighter, and the other links fade
+  await page.evaluate(keepPixels);
   await page.mouse.move(point![0], point![1]);
   await expect(page.getByTestId('view3d-hover')).toContainText(/\/min/);
+  await expect.poll(async () => (await page.evaluate(changedPixels)).changed, { timeout: 10_000 }).toBeGreaterThan(50);
 
   // a click shows its details and marks it and both its faces in white
   const white = (await page.evaluate(changedPixels)).white;
@@ -106,9 +110,17 @@ test('show the Connections links in 3D, name one by hovering it and mark its fac
   await expect(info).toContainText('To ');
   await expect.poll(async () => (await page.evaluate(changedPixels)).white).toBeGreaterThan(white + 20);
 
-  // kept in this browser: still on after a reload
+  // Focus: beside the toggle while the links show, off at first; on, the note says what it does
+  const focus = page.getByRole('checkbox', { name: 'Focus' });
+  await expect(focus).not.toBeChecked();
+  await expect(page.getByTestId('view3d-links')).not.toContainText('Focus');
+  await focus.check();
+  await expect(page.getByTestId('view3d-links')).toContainText('Focus shows only the links of the block under the pointer');
+
+  // kept in this browser: both still on after a reload
   await page.reload();
   await open3d(page);
   await expect(page.getByRole('checkbox', { name: 'Show connections' })).toBeChecked();
+  await expect(page.getByRole('checkbox', { name: 'Focus' })).toBeChecked();
   await expect(page.getByTestId('view3d-links')).toContainText(/\d+ connections? drawn/);
 });

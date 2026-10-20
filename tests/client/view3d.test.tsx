@@ -17,6 +17,8 @@ import { CONV } from './layout-fixture.ts';
 // the user's requirements of 2026-10-19, item 3 (b): Show connections, remembered in this browser
 import { LINKS_STORAGE_KEY, loadShowLinks, saveShowLinks } from '../../src/client/views/View3D.tsx';
 import { linksNoteText } from '../../src/client/views/View3D.tsx';
+// the review of f82c98c: Focus, the colour legend and the note in each mode's words
+import { FOCUS_STORAGE_KEY } from '../../src/client/views/View3D.tsx';
 
 const shell = (over: Partial<View3DShellProps> = {}) => renderToStaticMarkup(<View3DShell layout={sampleLayout} loading={false} error={null} webgl
   maxLayer={null} onLayer={() => {}} show={{ ghosts: true, hookups: true }} onShow={() => {}} hover={null} info={null} canvas={<canvas />}
@@ -273,16 +275,63 @@ describe('3D tab: Show connections', () => {
     expect(LINKS_STORAGE_KEY).toBe('gtnh-planner:3d-connections');
   });
 
-  // the review of f9fe23e: the note counts links, not only the pieces they are drawn in, and names what it leaves out
+  // the review of f9fe23e: the note counts links, not only the pieces they are drawn in, and names what it leaves out;
+  // the review of f82c98c: in each mode's words, with what it hides with the hookups or leaves out of big steps
   it('says how many pieces of how many links it draws, and names the links it has nowhere to draw', () => {
+    const none = { more: 0, hidden: 0, unplaced: [], noNetwork: [] };
     expect(linksNoteText(null)).toBe('Nothing to connect yet: the plan has no line to lay out');
-    expect(linksNoteText({ pieces: 0, links: 0, unplaced: [] })).toBe('No connections to draw');
-    expect(linksNoteText({ pieces: 4, links: 4, unplaced: [] })).toMatch(/^4 connections drawn, each from the face that gives to the face that takes/);
-    expect(linksNoteText({ pieces: 1, links: 1, unplaced: [] })).toMatch(/^1 connection drawn, /);
-    expect(linksNoteText({ pieces: 6, links: 4, unplaced: [] })).toMatch(/^6 pieces of 4 connections drawn, .*click it to mark its two faces\.$/);
-    expect(linksNoteText({ pieces: 5, links: 5, unplaced: ['AE2 tap at 3 64 1 → Raw inputs'] }))
-      .toMatch(/^5 connections drawn, .*\. Not drawn, with nowhere in the line to draw it: AE2 tap at 3 64 1 → Raw inputs\.$/);
-    expect(linksNoteText({ pieces: 0, links: 0, unplaced: ['A → B', 'C → D', 'E → F', 'G → H', 'I → J'] }))
+    expect(linksNoteText({ ...none, pieces: 0, links: 0 })).toBe('No connections to draw');
+    expect(linksNoteText({ ...none, pieces: 4, links: 4 })).toMatch(/^4 connections drawn, each from the face that gives to the face that takes/);
+    expect(linksNoteText({ ...none, pieces: 1, links: 1 })).toMatch(/^1 connection drawn, /);
+    expect(linksNoteText({ ...none, pieces: 6, links: 4 })).toMatch(/^6 pieces of 4 connections drawn, .*click it to mark its two faces\.$/);
+    expect(linksNoteText({ ...none, pieces: 5, links: 5, unplaced: ['A → B'] }))
+      .toMatch(/^5 connections drawn, .*\. Not drawn, with nowhere in the line to draw it: A → B\.$/);
+    expect(linksNoteText({ ...none, pieces: 0, links: 0, unplaced: ['A → B', 'C → D', 'E → F', 'G → H', 'I → J'] }))
       .toBe('No connections to draw. Not drawn, with nowhere in the line to draw them: A → B; C → D; E → F; and 2 more.');
+  });
+
+  it("says what the links' colours mean in each mode's words, and what it hides, leaves out or cannot draw", () => {
+    const none = { pieces: 4, links: 3, more: 0, hidden: 0, unplaced: [], noNetwork: [] };
+    const how = (mode: 'enderio' | 'direct' | 'routed' | 'ae2', byGood: 'red' | null = null, focus = false) => ({ mode, byGood, focus });
+    expect(linksNoteText(none, how('enderio'))).toContain("Each is in its EnderIO channel's colour, as on the Connections tab.");
+    expect(linksNoteText(none, how('enderio', 'red'))).toContain('Every flow rides the Red channel, so each good has a colour of its own; hovering a link names its good and channel.');
+    for (const mode of ['direct', 'routed', 'ae2'] as const) {
+      expect(linksNoteText(none, how(mode))).toContain('Each is in the colour of what carries it, as on the Connections tab.');
+      expect(linksNoteText(none, how(mode))).not.toContain('EnderIO');
+    }
+    expect(linksNoteText(none, how('direct'))).not.toContain('Focus');
+    expect(linksNoteText(none, how('direct', null, true))).toContain('Focus shows only the links of the block under the pointer, or of the block you click.');
+    // the pieces of links between big steps left out, the links hidden with the hookups
+    expect(linksNoteText({ ...none, more: 33 }, how('direct'))).toMatch(/ Links between big steps are drawn with at most 8 pieces each: 33 more pieces are not drawn\.$/);
+    expect(linksNoteText({ ...none, hidden: 28 }, how('ae2'))).toMatch(/ 28 more connections are hidden with the hookups\.$/);
+    expect(linksNoteText({ ...none, hidden: 1 }, how('ae2'))).toMatch(/ 1 more connection is hidden with the hookups\.$/);
+    // an AE2 line whose base has no ME network: its raw inputs and final outputs, with the reason
+    expect(linksNoteText({ ...none, noNetwork: ['Iron 1/min: Raw inputs → 1× Macerator'] }, how('ae2')))
+      .toMatch(/ Raw inputs and final outputs are not drawn, as the base has no ME network to hook into: Iron 1\/min: Raw inputs → 1× Macerator\.$/);
+  });
+
+  it('offers Focus beside Show connections while the links show, remembered like it, and shows their colour legend', () => {
+    const legend = [{ rgb: [156, 204, 101] as [number, number, number], label: 'Shared GT item pipe' }, { rgb: [30, 136, 229] as [number, number, number], label: 'GT fluid pipe' }];
+    const on = shell({ showLinks: true, linksNote: '3 connections drawn', linksLegend: legend, focus: false, onFocus: () => {} });
+    expect(on).toMatch(/Show connections<\/label><label class="check" title="[^"]+"><input type="checkbox"\/>Focus<\/label>/);
+    expect(on).toContain('data-testid="view3d-links-legend"');
+    expect(on).toMatch(/<li><span aria-hidden="true" style="[^"]*background:rgb\(156, 204, 101\)[^"]*"><\/span>Shared GT item pipe<\/li>/);
+    expect(on).toContain('GT fluid pipe');
+    expect(shell({ showLinks: true, linksNote: 'x', linksLegend: legend, focus: true, onFocus: () => {} })).toMatch(/<input type="checkbox" checked=""\/>Focus/);
+    // neither while the links are off
+    const off = shell({ showLinks: false, linksLegend: legend, focus: true, onFocus: () => {} });
+    expect([off.includes('Focus'), off.includes('view3d-links-legend')]).toEqual([false, false]);
+    expect(FOCUS_STORAGE_KEY).toBe('gtnh-planner:3d-connections-focus');
+    const store = new Map<string, string>();
+    const was = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+    Object.defineProperty(globalThis, 'localStorage', { value: { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => { store.set(k, v); } },
+      configurable: true, writable: true });
+    try {
+      saveShowLinks(true, FOCUS_STORAGE_KEY);
+      expect([store.get(FOCUS_STORAGE_KEY), loadShowLinks(FOCUS_STORAGE_KEY), loadShowLinks()]).toEqual(['1', true, false]);
+    } finally {
+      if (was === undefined) delete (globalThis as { localStorage?: unknown }).localStorage;
+      else Object.defineProperty(globalThis, 'localStorage', was);
+    }
   });
 });

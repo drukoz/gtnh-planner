@@ -516,7 +516,7 @@ export function pickDetails(g: ConnGraph, pick: ConnPick): { title: string; line
  * (b)): face `side` (ForgeDirection) of the block cell `cell` (world coordinates), at its centre or `at` off it, and
  * the id of the face row it stands for when it is one. A conduit face's end is on the face of what the conduit face
  * points at, toward the conduit (an open fluid end's on the cell where your tank goes); any other end is on the face of
- * a block that stands for its box that shows best (`connectionSpans`).
+ * a block that stands for its box that shows best (`connectionPieces`).
  */
 export interface ConnSpot {
   cell: Vec3; side: number; face: string | null;
@@ -530,6 +530,15 @@ export interface ConnSpot {
 /** One piece of a link in the world, from one end to the other. */
 export interface ConnSpan { edge: string; from: ConnSpot; to: ConnSpot }
 
+/** Every piece of every link (`connectionPieces`), and what the 3D view's note says of the links it does not draw in full. */
+export interface ConnPieces {
+  spans: ConnSpan[];
+  /** Per link between big steps, how many more pieces it would have than the SPANS_PER_LINK it is drawn with. */
+  more: Map<string, number>;
+  /** The links whose two ends are one spot, which its blocks already show (an AE2 hookup joining the base's network). */
+  joined: Set<string>;
+}
+
 /** A block's bottom face, and its top: the first face a link that stands for a whole box tries to start or end on. */
 const BOTTOM = 0, TOP = 1;
 /** The build step that lays a fluid's GT pipe run (`layout:logistics:fluid:<key>`, server layout steps), which every pipe of the run names. */
@@ -537,10 +546,11 @@ const FLUID_PIPE_STEP = 'layout:logistics:fluid:';
 /** The roles the 3D view draws as a core with arms (a cable, a pipe or conduit, a chip pipe) rather than a whole block. */
 const THIN_ROLES: ReadonlySet<BlockRole> = new Set<BlockRole>(['cable', 'pipe', 'chip_pipe']);
 /**
- * At most this many pieces join one set of ends to another (4 × 8), so a line of big steps stays readable and light to
- * draw and to pick from: past it, a link is as many pieces as its bigger box has ends.
+ * At most this many pieces join one set of ends to another, so a line of big steps stays readable and light to draw
+ * and to pick from: past it, a link is drawn with this many pieces spread over its bigger box, and the note under the
+ * view counts the rest.
  */
-const SPANS_PER_LINK = 32;
+export const SPANS_PER_LINK = 8;
 /**
  * How a face shows to a link that ends on it, best first: OPEN, nothing of the line against it (a ghost lets it show);
  * OWN, a cable, pipe or chip pipe of what carries the link stands against it (its fluid's own pipe for a fluid, the
@@ -566,12 +576,20 @@ const BESIDE_BUNDLE = 6.5 / 16;
 
 /**
  * Each of `a` with each of `b`; past SPANS_PER_LINK pairs, the two in turn instead (the k-th of each, round), as many
- * pairs as the longer has, so every one of either is in a pair.
+ * pairs as the longer has (each of either in a pair) but at most SPANS_PER_LINK, spread over the longer. `of`: how many
+ * pairs there would be without that limit.
  */
-function pairUp<A, B>(a: readonly A[], b: readonly B[]): Array<[A, B]> {
-  if (a.length === 0 || b.length === 0) return [];
-  if (a.length * b.length <= SPANS_PER_LINK) return a.flatMap((x) => b.map((y): [A, B] => [x, y]));
-  return Array.from({ length: Math.max(a.length, b.length) }, (_, k): [A, B] => [a[k % a.length]!, b[k % b.length]!]);
+function pairUp<A, B>(a: readonly A[], b: readonly B[]): { pairs: Array<[A, B]>; of: number } {
+  if (a.length === 0 || b.length === 0) return { pairs: [], of: 0 };
+  if (a.length * b.length <= SPANS_PER_LINK) return { pairs: a.flatMap((x) => b.map((y): [A, B] => [x, y])), of: a.length * b.length };
+  const n = Math.max(a.length, b.length), k = Math.min(n, SPANS_PER_LINK);
+  return {
+    pairs: Array.from({ length: k }, (_, j): [A, B] => {
+      const m = Math.floor((j * n) / k);
+      return [a[m % a.length]!, b[m % b.length]!];
+    }),
+    of: n,
+  };
 }
 
 /**
@@ -589,11 +607,11 @@ function pairUp<A, B>(a: readonly A[], b: readonly B[]): Array<[A, B]> {
  * block that shows best (`placed`): one nothing covers, the top first, else the side most toward the other end; else
  * one a cable or pipe stands against, beside its core; never the bottom, and a multiblock's on its own outside, an
  * item's on the bus it goes through and a fluid's on the hatch. Where each with each would make more than
- * SPANS_PER_LINK pieces (two big steps), the ends are joined in turn instead, each at least once (`pairUp`). Each piece
- * once; a piece whose two ends are one spot is left out (an AE2 hookup's link to the base's network, which comes in at
- * the hookup's end).
+ * SPANS_PER_LINK pieces (two big steps), the ends are joined in turn instead, at most SPANS_PER_LINK of them (`pairUp`;
+ * `more` counts the rest). Each piece once; a piece whose two ends are one spot is left out (an AE2 hookup's link to
+ * the base's network, which comes in at the hookup's end: `joined`).
  */
-export function connectionSpans(layout: Layout, g: ConnGraph): ConnSpan[] {
+export function connectionPieces(layout: Layout, g: ConnGraph): ConnPieces {
   const blocks = layout.blocks;
   const at = new Map<string, number>();
   blocks.forEach((b, i) => {
@@ -846,13 +864,22 @@ export function connectionSpans(layout: Layout, g: ConnGraph): ConnSpan[] {
   };
 
   const spans: ConnSpan[] = [];
+  const more = new Map<string, number>();
+  const joined = new Set<string>();
   const seen = new Set<string>();
   const spotKey = (s: ConnSpot): string => `${posKey(s.cell)}:${s.side}`;
-  const push = (edge: string, from: ConnSpot, to: ConnSpot): void => {
+  /** Adds a piece once; false when its two ends are one spot. */
+  const push = (edge: string, from: ConnSpot, to: ConnSpot): boolean => {
+    if (spotKey(from) === spotKey(to)) return false;
     const key = `${edge}|${spotKey(from)}|${spotKey(to)}`;
-    if (spotKey(from) === spotKey(to) || seen.has(key)) return;
-    seen.add(key);
-    spans.push({ edge, from, to });
+    if (!seen.has(key)) {
+      seen.add(key);
+      spans.push({ edge, from, to });
+    }
+    return true;
+  };
+  const left = (edge: string, pairs: { pairs: unknown[]; of: number }): void => {
+    if (pairs.of > pairs.pairs.length) more.set(edge, (more.get(edge) ?? 0) + pairs.of - pairs.pairs.length);
   };
   const byId = new Map(g.nodes.map((n) => [n.id, n]));
   for (const e of g.edges) {
@@ -866,11 +893,14 @@ export function connectionSpans(layout: Layout, g: ConnGraph): ConnSpan[] {
       const before = spans.length;
       for (const color of new Set(outs.map((o) => o.ref.face.extract!.color))) {
         const reached = ins.filter((i) => i.ref.face.insert!.color === color);
-        for (const [o, i] of pairUp(outs.filter((x) => x.ref.face.extract!.color === color), reached)) {
+        const pairs = pairUp(outs.filter((x) => x.ref.face.extract!.color === color), reached);
+        left(e.id, pairs);
+        for (const [o, i] of pairs.pairs) {
           if (i.ref.face !== o.ref.face) push(e.id, faceSpot(o.id, o.ref), faceSpot(i.id, i.ref));
         }
       }
       if (spans.length > before) continue;
+      more.delete(e.id);
     }
     const starts = ownEnds(e.fromFace, from, e);
     let ends = ownEnds(e.toFace, to, e);
@@ -879,9 +909,21 @@ export function connectionSpans(layout: Layout, g: ConnGraph): ConnSpan[] {
       if (near.length > 0) ends = near;
     }
     const spot = (end: End, node: ConnNode, other: End): ConnSpot => (typeof end === 'number' ? placed(end, node, e, cellOf(other)) : end);
-    for (const [a, b] of pairUp(starts, ends)) push(e.id, spot(a, from, b), spot(b, to, a));
+    const pairs = pairUp(starts, ends);
+    left(e.id, pairs);
+    let drawn = false, oneSpot = false;
+    for (const [a, b] of pairs.pairs) {
+      if (push(e.id, spot(a, from, b), spot(b, to, a))) drawn = true;
+      else oneSpot = true;
+    }
+    if (oneSpot && !drawn) joined.add(e.id);
   }
-  return spans;
+  return { spans, more, joined };
+}
+
+/** Every piece of every link of `g` (`connectionPieces`). */
+export function connectionSpans(layout: Layout, g: ConnGraph): ConnSpan[] {
+  return connectionPieces(layout, g).spans;
 }
 
 /**

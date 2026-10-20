@@ -12,7 +12,10 @@ import {
 // for the tests after the commit's own (the review of f9fe23e)
 import { LINK_RADIUS, linksSummary } from '../../src/client/three/link-geometry.ts';
 // for the tests after the commit's own (the review of f82c98c)
-import { linkTriangles, linkVertices, solidColumns } from '../../src/client/three/link-geometry.ts';
+import { connectionPieces } from '../../src/client/connections/model.ts';
+import {
+  LINK_DIMMED, LINK_HIDDEN, LINK_SHOWN, goodRgb, hoverGeometry, linkColors, linkStates, linkTriangles, linkVertices, linksLegend, linksOfBlock, solidColumns,
+} from '../../src/client/three/link-geometry.ts';
 import { dyeRgb } from '../../src/shared/layout/enderio.ts';
 import type { Vec3 } from '../../src/shared/layout/geometry.ts';
 import type { Layout, LayoutBlock } from '../../src/shared/types/layout.ts';
@@ -182,7 +185,7 @@ describe("the 3D view's connections", () => {
     const geo = linkGeometry(spans, new Map(g.edges.map((e) => [e.id, e])), layout.origin);
     const ms = performance.now() - started;
     expect(layout.blocks.length).toBeGreaterThan(1000);
-    expect(spans).toHaveLength((steps - 1) * per);                    // 20 × 20 is past the cap: each machine once each way
+    expect(spans).toHaveLength((steps - 1) * 8);                      // 20 × 20 is past the cap: 8 pieces a link
     expect(geo.positions).toHaveLength(geo.links.at(-1)!.end * 3);
     expect(geo.index.length / 3).toBe(geo.links.reduce((n, l) => n + linkTriangles(l.path.length - 1), 0));
     expect(ms).toBeLessThan(1000);
@@ -197,9 +200,9 @@ describe("the 3D view's connections", () => {
     const spans = connectionSpans(layout, g);
     const geo = linkGeometry(spans, edges, layout.origin);
     expect(layout.blocks).toHaveLength(1920);
-    expect(spans).toHaveLength((steps - 1) * per);                    // 16 × 16 is past the cap: each machine once each way
-    expect(geo.positions.length / 3).toBeLessThan(80_000);            // 944 pieces of 57 vertices or more
-    expect(geo.index.length / 3).toBeLessThan(150_000);               // and of 106 triangles or more
+    expect(spans).toHaveLength((steps - 1) * 8);                      // 16 × 16 is past the cap: 8 pieces a link
+    expect(geo.positions.length / 3).toBeLessThan(60_000);            // 472 pieces of 57 vertices or more
+    expect(geo.index.length / 3).toBeLessThan(110_000);               // and of 106 triangles or more
     // each machine with each, as a denser drawing would be: 15,104 pieces, yet a pick stays far under a frame
     const top = (x: number) => ({ cell: [x, 64, 0] as Vec3, side: 1, face: null });
     const dense = g.edges.flatMap((e, s) => Array.from({ length: per * per }, (_, k): ConnSpan =>
@@ -220,18 +223,27 @@ describe("the 3D view's connections", () => {
     expect(spansShown(spans, g, layout, false).map((s) => s.edge)).toEqual(['flow:step:a>step:b:t:dust@0', 'attach:iface:0,64,1>step:a', 'attach:iface:1,64,1>step:b']);
   });
 
-  // the review of f9fe23e: what the note under the view counts and names
-  it('counts the pieces and the links drawn, and names each link that has nowhere in the line to be drawn', () => {
-    const { layout, g, spans } = line('ae2');
+  // the review of f9fe23e: what the note under the view counts and names; the review of f82c98c: and what it does not
+  it('counts the pieces and the links drawn, those hidden with the hookups, and names each link that has nowhere in the line to be drawn', () => {
+    const { layout, g } = line('ae2');
+    const all = connectionPieces(layout, g);
     const drawn = (shown: ConnSpan[]) => linkGeometry(shown, new Map(g.edges.map((e) => [e.id, e])), layout.origin).links;
-    // the hookup joins the base's ME network where that comes in, so both its ends are the hookup's cable
-    expect(linksSummary(g, spans, drawn(spans), true)).toEqual({ pieces: 5, links: 5, unplaced: ['AE2 tap at 3 64 1 → Raw inputs'] });
-    // while hookups are hidden, so are it and the links to the hookup's cable
-    expect(linksSummary(g, spans, drawn(spansShown(spans, g, layout, false)), false)).toEqual({ pieces: 3, links: 3, unplaced: [] });
+    const none = { more: 0, hidden: 0, unplaced: [], noNetwork: [] };
+    // the hookup joins the base's ME network where that comes in: its cable shows it, so it is no link left undrawn
+    expect(linksSummary(g, all, drawn(all.spans), true, layout)).toEqual({ ...none, pieces: 5, links: 5 });
+    // while hookups are hidden, so are the links to the hookup's cable, and the note counts them
+    expect(linksSummary(g, all, drawn(spansShown(all.spans, g, layout, false)), false, layout)).toEqual({ ...none, pieces: 3, links: 3, hidden: 2 });
     // a link drawn in two pieces counts once; a flow without a piece names its good and rate too, links in graph order
-    const some = [...spans.slice(1), { ...spans[1]!, to: { cell: [4, 64, 0], side: 1, face: null } }];
-    expect(linksSummary(g, some, drawn(some), true))
-      .toEqual({ pieces: 5, links: 4, unplaced: ['Raw Input 60/min: Raw inputs → 1× Basic Macerator', 'AE2 tap at 3 64 1 → Raw inputs'] });
+    const some = { ...all, spans: [...all.spans.slice(1), { ...all.spans[1]!, to: { cell: [4, 64, 0] as Vec3, side: 1, face: null } }] };
+    expect(linksSummary(g, some, drawn(some.spans), true, layout)).toEqual({ ...none, pieces: 5, links: 4, unplaced: ['Raw Input 60/min: Raw inputs → 1× Basic Macerator'] });
+    // pieces left out of links between big steps count when their link is drawn
+    expect(linksSummary(g, { ...all, more: new Map([[all.spans[1]!.edge, 7], ['nope', 3]]) }, drawn(all.spans), true, layout).more).toBe(7);
+    // an AE2 line with no ME network to hook into: its raw inputs and final outputs have nowhere to come in or go
+    const alone: Layout = { ...layout, hookups: [], blocks: layout.blocks.filter((b) => b.hookup === undefined) };
+    const lone = connectionsGraph(alone, connPlan, 'min');
+    const pieces = connectionPieces(alone, lone);
+    expect(linksSummary(lone, pieces, drawn(pieces.spans), true, alone)).toEqual({ ...none, pieces: 3, links: 3,
+      noNetwork: ['Raw Input 60/min: Raw inputs → 1× Basic Macerator', 'Titanium Ingot 60/min: 1× Advanced Assembler → Final outputs'] });
   });
 });
 
@@ -299,8 +311,8 @@ describe("the 3D view's connections between the same two faces", () => {
   });
 });
 
-// The review of f82c98c: fans that stay out of the blocks they join, arcs that clear the line's solid blocks, and long
-// arcs drawn smooth.
+// The review of f82c98c: fans that stay out of the blocks they join, arcs that clear the line's solid blocks, long
+// arcs drawn smooth, and what the 3D view uses to keep a busy line readable.
 describe("the 3D view's connections, readable on real lines", () => {
   const GT = (mteId: number) => ({ id: 'gregtech:gt.blockmachines', meta: 0, mteId });
   const machine = (pos: Vec3): LayoutBlock => ({ pos, block: GT(2001), role: 'machine', facing: 3, stepId: 'a', label: 'Machine' });
@@ -412,5 +424,58 @@ describe("the 3D view's connections, readable on real lines", () => {
       close(mean([at(geo.positions, l.end - 1), base]), middle(l.path), 3);
     });
     expect(triangle * 3).toBe(geo.index.length);
+  });
+
+  it('marks the link under the pointer thicker and lighter, and fades or hides the others', () => {
+    const { layout, g, spans, edges: all } = line('enderio');
+    const geo = linkGeometry(spans, all, layout.origin);
+    const link = geo.links[1]!;
+    const hover = hoverGeometry(link);
+    expect(hover.positions.length / 3).toBe(linkVertices(link.path.length - 1));
+    const ring = [0, 1, 2, 3].map((i) => at(hover.positions, i));
+    expect(Math.hypot(...minus(ring[0]!, link.path[0]!))).toBeCloseTo(0.075, 6);
+    const rgb = at(hover.colors, 0);
+    rgb.forEach((c, k) => expect(c * 255).toBeGreaterThan(link.color[k]!));
+    // the others fade while one is hovered; Focus hides what it leaves out, faded or not
+    const states = linkStates(geo.links, 1, null);
+    expect(states).toHaveLength(geo.links.at(-1)!.end);
+    expect(geo.links.map((l) => states[l.start])).toEqual([LINK_DIMMED, LINK_SHOWN, LINK_DIMMED]);
+    expect([...new Set(states.slice(link.start, link.end))]).toEqual([LINK_SHOWN]);
+    const focus = linkStates(geo.links, 0, (l) => l !== geo.links[2]);
+    expect(geo.links.map((l) => focus[l.start])).toEqual([LINK_SHOWN, LINK_DIMMED, LINK_HIDDEN]);
+    expect([...new Set(linkStates(geo.links, null, null))]).toEqual([0]);
+    // Focus on machine a: the links of its box (the raw input and the dust); on the chests' conduit: what ends beside
+    // it
+    const of = (block: number) => geo.links.filter(linksOfBlock(g, layout, block)).map((l) => l.span.edge);
+    const a = layout.blocks.findIndex((b) => b.stepId === 'a');
+    expect(of(a)).toEqual(['flow:chest:2,64,0>step:a:t:in@0', 'flow:step:a>step:b:t:dust@0']);
+    const conduit = layout.blocks.findIndex((b) => b.pos.join() === '2,64,1');
+    expect(of(conduit)).toEqual(['flow:chest:2,64,0>step:a:t:in@0', 'flow:step:b>chest:2,64,2:t:ingot@0']);
+  });
+
+  it('colours each good its own colour on an EnderIO line whose flows all ride one channel, else as the Connections tab', () => {
+    const { g } = line('enderio');
+    // three channels: as the Connections tab draws them
+    expect(linkColors(g).byGood).toBeNull();
+    expect(g.edges.map((e) => linkColors(g).color(e))).toEqual(g.edges.map((e) => linkColor(e)));
+    // one channel: a colour per good, the same for the same good, and links that carry nothing as before
+    const reds = g.edges.map((e) => ({ ...e, color: 'red' as const }));
+    const red = { ...g, edges: [...reds, { ...reds[0]!, id: 'again' }, { ...reds[0]!, id: 'attach', key: null, color: null, via: 'attached' as const }] };
+    const { color, byGood } = linkColors(red);
+    expect(byGood).toBe('red');
+    const colours = red.edges.map((e) => color(e).join());
+    expect(colours.slice(0, 3)).toEqual([goodRgb(0), goodRgb(1), goodRgb(2)].map((c) => c.join()));
+    expect(new Set(colours.slice(0, 3)).size).toBe(3);
+    expect(colours[3]).toBe(colours[0]);
+    expect(colours[4]).toBe(VIA_RGB.attached.join());
+    // the routed line keeps the colours of what carries each link: none is a channel
+    expect(linkColors(line('routed').g).byGood).toBeNull();
+    // the legend: each colour once with what it means, or only what carries nothing while goods have their own colours
+    const routed = line('routed');
+    const drawn = linkGeometry(routed.spans, routed.edges, routed.layout.origin).links;
+    expect(linksLegend(routed.g, drawn, false)).toEqual([{ rgb: VIA_RGB.routed, label: 'Routed network' }, { rgb: VIA_RGB.attached, label: 'Interface or hookup' }]);
+    expect(linksLegend(routed.g, drawn, true)).toEqual([{ rgb: VIA_RGB.attached, label: 'Interface or hookup' }]);
+    const eio = line('enderio');
+    expect(linksLegend(eio.g, linkGeometry(eio.spans, eio.edges, eio.layout.origin).links, false).map((r) => r.label)).toEqual(['Blue channel', 'Red channel', 'Yellow channel']);
   });
 });

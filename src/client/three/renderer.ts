@@ -3,9 +3,10 @@
 // from per-instance attributes (never `glslVersion: GLSL3`: three already compiles a ShaderMaterial as GLSL ES 3.00
 // under WebGL2), orbit controls around the line's box, the layer slider as a uniform and picking by raycast. Show
 // connections (the user's requirements of 2026-10-19, item 3 (b)) adds the Connections links as one more mesh, all of
-// them in one geometry, drawn a little toward the camera so a link that touches a face stays over it, and a picked link
-// as a white tube with a frame on each of its faces. It draws only when something changes — the camera, a toggle, the
-// slider, the size — because the host also runs the game.
+// them in one geometry, drawn a little toward the camera so a link that touches a face stays over it, a picked link as a
+// white tube with a frame on each of its faces, and the link under the pointer as a thicker, lighter tube while the
+// others fade (Focus leaves some out). It draws only when something changes — the camera, a toggle, the slider, the
+// size — because the host also runs the game.
 //
 // The texture is sRGB, so sampling it gives linear colour; the fragment shader ends with three's colorspace_fragment,
 // which writes it back as sRGB as web-stack §8's probe did — without it every texture shows far too dark (a tile of
@@ -17,7 +18,7 @@ import {
 } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import type { Layout } from '../../shared/types/layout.ts';
-import { LINK_RADIUS, pickLink, selectionGeometry, type DrawnLink, type LinkGeometry, type LinkMesh } from './link-geometry.ts';
+import { LINK_HIDDEN, LINK_RADIUS, hoverGeometry, pickLink, selectionGeometry, type DrawnLink, type LinkGeometry, type LinkMesh } from './link-geometry.ts';
 import { instanceTranslation, visible, type SceneData, type SceneInstance, type ShapeKind } from './scene-data.ts';
 import { packTiles, solidTile, TILE } from './textures.ts';
 
@@ -45,21 +46,23 @@ void main() {
 }`;
 /**
  * The links' shaders: each vertex's colour as it is (already sRGB, as the canvas is, so no colour-space step), cut by
- * the layer slider as the blocks are. `aColor`, not `color`, which three declares itself for vertex colours.
+ * the layer slider as the blocks are; `aState` (`linkStates`) fades a link toward grey while another is under the
+ * pointer (1) and leaves out one Focus hides (2). `aColor`, not `color`, which three declares itself for vertex
+ * colours.
  */
 export const LINK_VERTEX_SHADER = `
-attribute vec3 aColor; attribute float aLayer;
-varying vec3 vColor; varying float vLayer;
+attribute vec3 aColor; attribute float aLayer; attribute float aState;
+varying vec3 vColor; varying float vLayer; varying float vState;
 void main() {
-  vColor = aColor; vLayer = aLayer;
+  vColor = aColor; vLayer = aLayer; vState = aState;
   gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
 }`;
 export const LINK_FRAGMENT_SHADER = `
 uniform float uMaxLayer;
-varying vec3 vColor; varying float vLayer;
+varying vec3 vColor; varying float vLayer; varying float vState;
 void main() {
-  if (vLayer > uMaxLayer + 0.5) discard;
-  gl_FragColor = vec4(vColor, 1.0);
+  if (vLayer > uMaxLayer + 0.5 || vState > 1.5) discard;
+  gl_FragColor = vec4(vState > 0.5 ? mix(vColor, vec3(0.6), 0.75) : vColor, 1.0);
 }`;
 
 /** What is drawn under the pointer: a block (its index into `layout.blocks`; a cover plate names its host) or a link. */
@@ -73,6 +76,10 @@ export interface Viewer {
   setLinks(links: LinkGeometry | null): void;
   /** Marks link `index` of the drawn links (a white tube, a frame on each of its faces), or none. */
   setSelectedLink(index: number | null): void;
+  /** Draws link `index` thicker and lighter (the one under the pointer), or none. */
+  setHoveredLink(index: number | null): void;
+  /** How each vertex of the drawn links is drawn (`linkStates`: dimmed, hidden), or all as they are; a hidden link is never picked. */
+  setLinkStates(states: Float32Array | null): void;
   /** The block or link drawn under the pointer, the nearer if both are, else null. */
   pick(clientX: number, clientY: number): ViewerPick | null;
   /** Fits the drawing buffer and the camera to the canvas's CSS size, and draws. */
@@ -177,13 +184,14 @@ function meshOf(group: Group, material: ShaderMaterial, layerCount: number): Ins
   return mesh;
 }
 
-/** One mesh of link geometry; null for one without vertices (three warns about a geometry it cannot bound). */
+/** One mesh of link geometry, every vertex drawn as it is; null for one without vertices (three warns about a geometry it cannot bound). */
 function linkMeshOf(data: LinkMesh, material: ShaderMaterial): Mesh | null {
   if (data.positions.length === 0) return null;
   const geometry = new BufferGeometry();
   geometry.setAttribute('position', new BufferAttribute(data.positions, 3));
   geometry.setAttribute('aColor', new BufferAttribute(data.colors, 3));
   geometry.setAttribute('aLayer', new BufferAttribute(data.layers, 1));
+  geometry.setAttribute('aState', new BufferAttribute(new Float32Array(data.layers.length), 1));
   geometry.setIndex(new BufferAttribute(data.index, 1));
   geometry.computeBoundingSphere();
   return new Mesh(geometry, material);
@@ -247,10 +255,14 @@ export function createViewer(
   let disposed = false;
   const raycaster = new Raycaster();
   const pointer = new Vector2();
-  /** The drawn links and their mesh, and the mesh that marks the picked one. */
+  /** The drawn links and their mesh, the meshes that mark the picked one and the one under the pointer, and how each vertex is drawn. */
   let links: LinkGeometry | null = null;
   let linkMesh: Mesh | null = null;
   let selectedMesh: Mesh | null = null;
+  let hoveredMesh: Mesh | null = null;
+  let selected: number | null = null;
+  let hovered: number | null = null;
+  let states: Float32Array | null = null;
   const drop = (mesh: Mesh | null): null => {
     if (mesh !== null) {
       scene3.remove(mesh);
@@ -260,11 +272,32 @@ export function createViewer(
   };
   const select = (index: number | null): void => {
     selectedMesh = drop(selectedMesh);
+    selected = index;
     const link = index === null ? undefined : links?.links[index];
     if (link === undefined) return;
     selectedMesh = linkMeshOf(selectionGeometry(link, layout.origin), linkMaterial);
     if (selectedMesh !== null) scene3.add(selectedMesh);
+    hover(hovered);
   };
+  // the link under the pointer, unless it is the picked one, which its own mark covers
+  const hover = (index: number | null): void => {
+    hoveredMesh = drop(hoveredMesh);
+    hovered = index;
+    const link = index === null || index === selected ? undefined : links?.links[index];
+    if (link === undefined) return;
+    hoveredMesh = linkMeshOf(hoverGeometry(link), linkMaterial);
+    if (hoveredMesh !== null) scene3.add(hoveredMesh);
+  };
+  const applyStates = (): void => {
+    const attribute = linkMesh?.geometry.getAttribute('aState');
+    if (attribute === undefined || !(attribute instanceof BufferAttribute)) return;
+    const array = attribute.array as Float32Array;
+    if (states !== null && states.length === array.length) array.set(states);
+    else array.fill(0);
+    attribute.needsUpdate = true;
+  };
+  /** Whether `link` is drawn at all (Focus hides some). */
+  const drawn = (link: DrawnLink): boolean => states === null || (states[link.start] ?? 0) !== LINK_HIDDEN;
 
   const render = (): void => {
     if (!disposed) renderer.render(scene3, camera);
@@ -285,6 +318,10 @@ export function createViewer(
     setLinks(next) {
       if (disposed) return;
       selectedMesh = drop(selectedMesh);
+      hoveredMesh = drop(hoveredMesh);
+      selected = null;
+      hovered = null;
+      states = null;
       linkMesh = drop(linkMesh);
       links = next;
       linkMesh = next === null ? null : linkMeshOf(next, linkMaterial);
@@ -294,6 +331,17 @@ export function createViewer(
     setSelectedLink(index) {
       if (disposed) return;
       select(index);
+      render();
+    },
+    setHoveredLink(index) {
+      if (disposed || index === hovered) return;
+      hover(index);
+      render();
+    },
+    setLinkStates(next) {
+      if (disposed) return;
+      states = next;
+      applyStates();
       render();
     },
     pick(clientX, clientY) {
@@ -316,13 +364,13 @@ export function createViewer(
         }
       }
       if (links !== null && links.links.length > 0) {
-        // a link counts within LINK_PICK_PX of the pointer at its distance, and only in front of the first solid block, or
-        // so little behind its face that the links' polygon offset still draws it over the block
+        // a link counts within LINK_PICK_PX of the pointer at its distance, and only in front of the first solid block,
+        // or so little behind its face that the links' polygon offset still draws it over the block
         const { origin, direction } = raycaster.ray;
         const perPixel = (2 * Math.tan((camera.fov * Math.PI) / 360)) / rect.height;
         const within = (t: number): number => LINK_PICK_PX * perPixel * t;
         const hit = pickLink(links.links, [origin.x, origin.y, origin.z], [direction.x, direction.y, direction.z], within,
-          (link) => maxLayer === null || link.layer <= maxLayer, wall + LINK_RADIUS + within(wall));
+          (link) => (maxLayer === null || link.layer <= maxLayer) && drawn(link), wall + LINK_RADIUS + within(wall));
         if (hit !== null) return { kind: 'link', index: hit.link, link: links.links[hit.link]! };
       }
       return block === null ? null : { kind: 'block', block };
@@ -348,6 +396,7 @@ export function createViewer(
         mesh.geometry.dispose();
       }
       selectedMesh = drop(selectedMesh);
+      hoveredMesh = drop(hoveredMesh);
       linkMesh = drop(linkMesh);
       links = null;
       solid.dispose();

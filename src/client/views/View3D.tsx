@@ -3,18 +3,24 @@
 // the wheel zooms, the layer slider cuts it from the top, hovering names a block with its covers and settings, and a
 // click shows a machine's recipe and facing. Show connections (the user's requirements of 2026-10-19, item 3 (b);
 // off until this browser turns it on, and remembered in it) draws the Connections tab's links over the line, from
-// the shared model: hovering one names it as the Connections tab does, and a click marks its two faces and shows its
-// details. Beside it the side list — blocks to place, hookups, overall size — and the layout's warnings, drawn from
-// the same layout as the map, so the two always agree. The tab's code, three.js included, is its own chunk
-// (View3DTab.tsx).
+// the shared model: hovering one names it as the Connections tab does, draws it thicker and fades the others, and a
+// click marks its two faces and shows its details; Focus (remembered too) shows only the links of the block under
+// the pointer, or of the block clicked. The note under the view says what the links' colours mean, with a legend.
+// Beside it the side list — blocks to place, hookups, overall size — and the layout's warnings, drawn from the same
+// layout as the map, so the two always agree. The tab's code, three.js included, is its own chunk (View3DTab.tsx).
 
 import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactElement, type ReactNode } from 'react';
+import { DYE_NAMES } from '../../shared/layout/enderio.ts';
 import { fmtInt } from '../../shared/layout/format.ts';
-import type { Layout } from '../../shared/types/layout.ts';
+import type { Rgb } from '../../shared/types/assets.ts';
+import type { DyeColor, Layout } from '../../shared/types/layout.ts';
+import type { LogisticsMode } from '../../shared/types/plan.ts';
 import { messageOf } from '../api/client.ts';
-import { connectionSpans, connectionsGraph, hasLine, pickDetails, spanDetails } from '../connections/model.ts';
+import { SPANS_PER_LINK, connectionPieces, connectionsGraph, hasLine, pickDetails, spanDetails } from '../connections/model.ts';
 import { useLayout } from '../state/use-layout.ts';
-import { linkGeometry, linksSummary, solidColumns, spansShown, type LinkGeometry, type LinksSummary } from '../three/link-geometry.ts';
+import {
+  linkColors, linkGeometry, linkStates, linksLegend, linksOfBlock, linksSummary, solidColumns, spansShown, type LinkGeometry, type LinksSummary,
+} from '../three/link-geometry.ts';
 import { loadSceneInputs, realTextureDeps, tilesFor } from '../three/load-textures.ts';
 import { createViewer, type Viewer } from '../three/renderer.ts';
 import { blockList, buildScene, hoverText, pickInfo } from '../three/scene-data.ts';
@@ -40,6 +46,11 @@ export interface View3DShellProps {
   showLinks: boolean; onShowLinks(on: boolean): void;
   /** What the drawn links are, under the view while they show. */
   linksNote?: string | null;
+  // optional additions (the review of f82c98c)
+  /** What each colour of the drawn links means, shown as swatches under the note. */
+  linksLegend?: ReadonlyArray<{ rgb: Rgb; label: string }>;
+  /** Whether Focus shows only the links of the block under the pointer or clicked; its toggle shows while the links do. */
+  focus?: boolean; onFocus?(on: boolean): void;
   /** Item names (the plan's), for the side list's cover rows. */
   names?: Readonly<Record<string, string>>;
   /**
@@ -59,6 +70,8 @@ const PRESERVE_BUFFER_KEY = 'gp.test.preserveDrawingBuffer';
 const CLICK_SLOP_PX = 4;
 /** Whether this browser draws the Connections links in the 3D view: kept in this browser only, off until turned on. */
 export const LINKS_STORAGE_KEY = 'gtnh-planner:3d-connections';
+/** Whether this browser's Show connections shows only the links of one block (Focus): kept like the toggle above. */
+export const FOCUS_STORAGE_KEY = 'gtnh-planner:3d-connections-focus';
 
 // The view sits beside the side list while both fit, and above it on a narrow screen (like the Map tab).
 const MAIN_STYLE: CSSProperties = { flex: '3 1 420px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 };
@@ -97,24 +110,24 @@ function layerText(maxLayer: number | null, height: number): string {
   return maxLayer === null ? 'All layers' : `Layers 1–${maxLayer + 1} of ${height}`;
 }
 
-/** Whether this browser asked for Show connections; off when storage is refused or holds anything else. */
-export function loadShowLinks(): boolean {
+/** Whether this browser asked for Show connections (or, with `key`, for Focus); off when storage is refused or holds anything else. */
+export function loadShowLinks(key: string = LINKS_STORAGE_KEY): boolean {
   try {
-    return globalThis.localStorage?.getItem(LINKS_STORAGE_KEY) === '1';
+    return globalThis.localStorage?.getItem(key) === '1';
   } catch {
     return false;
   }
 }
 
-export function saveShowLinks(on: boolean): void {
+export function saveShowLinks(on: boolean, key: string = LINKS_STORAGE_KEY): void {
   try {
-    globalThis.localStorage?.setItem(LINKS_STORAGE_KEY, on ? '1' : '0');
+    globalThis.localStorage?.setItem(key, on ? '1' : '0');
   } catch {
     // kept for this page only
   }
 }
 
-function Controls(props: Pick<View3DShellProps, 'maxLayer' | 'onLayer' | 'show' | 'onShow' | 'showLinks' | 'onShowLinks'> & { height: number }): ReactElement {
+function Controls(props: Pick<View3DShellProps, 'maxLayer' | 'onLayer' | 'show' | 'onShow' | 'showLinks' | 'onShowLinks' | 'focus' | 'onFocus'> & { height: number }): ReactElement {
   const { maxLayer, onLayer, show, onShow, showLinks, onShowLinks, height } = props;
   return (
     <div className="row" style={{ gap: 16 }}>
@@ -145,7 +158,29 @@ function Controls(props: Pick<View3DShellProps, 'maxLayer' | 'onLayer' | 'show' 
         <input type="checkbox" checked={showLinks} onChange={(e) => onShowLinks(e.currentTarget.checked)} />
         Show connections
       </label>
+      {showLinks && props.onFocus !== undefined && (
+        <label className="check" title="Only the links of the block under the pointer, or of the block you click">
+          <input type="checkbox" checked={props.focus === true} onChange={(e) => props.onFocus?.(e.currentTarget.checked)} />
+          Focus
+        </label>
+      )}
     </div>
+  );
+}
+
+const SWATCH_STYLE: CSSProperties = { display: 'inline-block', width: 10, height: 10, borderRadius: 2, marginRight: 4, verticalAlign: 'middle' };
+
+/** The drawn links' colours, each a swatch with what it means. */
+function LinksLegend(props: { legend: ReadonlyArray<{ rgb: Rgb; label: string }> }): ReactElement {
+  return (
+    <ul data-testid="view3d-links-legend" className="muted small" style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexWrap: 'wrap', gap: '2px 12px' }}>
+      {props.legend.map(({ rgb, label }) => (
+        <li key={`${rgb.join()}|${label}`}>
+          <span aria-hidden="true" style={{ ...SWATCH_STYLE, background: `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})` }} />
+          {label}
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -224,11 +259,12 @@ export function View3DShell(props: View3DShellProps): ReactElement {
                 {hover !== null && <p data-testid="view3d-hover" className="small" style={HOVER_STYLE}>{hover}</p>}
               </div>
               <Controls maxLayer={props.maxLayer} onLayer={props.onLayer} show={props.show} onShow={props.onShow} showLinks={props.showLinks}
-                onShowLinks={props.onShowLinks} height={layout.size[1]} />
+                onShowLinks={props.onShowLinks} height={layout.size[1]} {...(props.onFocus === undefined ? {} : { focus: props.focus === true, onFocus: props.onFocus })} />
               <p className="muted small" style={{ margin: 0 }}>Drag to turn, right-drag to pan, scroll to zoom; click a block for its details.</p>
               {props.showLinks && props.linksNote != null && (
                 <p data-testid="view3d-links" className="muted small" style={{ margin: 0 }}>{props.linksNote}</p>
               )}
+              {props.showLinks && props.linksLegend !== undefined && props.linksLegend.length > 0 && <LinksLegend legend={props.linksLegend} />}
             </div>
           )}
           <div style={SIDE_STYLE}>
@@ -245,22 +281,44 @@ export function View3DShell(props: View3DShellProps): ReactElement {
 /** How many of the links the note names one by one before it counts the rest. */
 const UNPLACED_NAMED = 3;
 
+/** How the drawn links are coloured and shown: the line's logistics mode, the one channel every flow rides when goods get colours of their own, and Focus. */
+export interface LinksNoteHow { mode: LogisticsMode; byGood: DyeColor | null; focus: boolean }
+
+/** What the colours of the drawn links mean, in a mode's words (the legend under the note shows each colour). */
+function coloursText(how: LinksNoteHow): string {
+  if (how.byGood !== null) return `Every flow rides the ${DYE_NAMES[how.byGood]} channel, so each good has a colour of its own; hovering a link names its good and channel.`;
+  return how.mode === 'enderio' ? "Each is in its EnderIO channel's colour, as on the Connections tab."
+    : 'Each is in the colour of what carries it, as on the Connections tab.';
+}
+
+/** The first few of `names`, then how many more. */
+function someOf(names: readonly string[]): string {
+  const more = names.length - UNPLACED_NAMED;
+  return [...names.slice(0, UNPLACED_NAMED), ...(more > 0 ? [`and ${fmtInt(more)} more`] : [])].join('; ');
+}
+
 /**
  * What the drawn links are, under the view: how many links, and in how many pieces when that is more (a flow drawn from
- * each face that gives to each that takes), what their colours and arrows say and what hovering and clicking do; then
- * the links of the Connections tab it has nowhere in the line to draw, the first few by name.
+ * each face that gives to each that takes), what their arrows and colours say (in the line's logistics mode's words,
+ * the legend beside it) and what hovering, clicking and Focus do; then how many pieces of links between big steps are
+ * left out, how many links hide with the hookups, an AE2 line's raw inputs and final outputs that have no ME network to
+ * come from or go to, and the links of the Connections tab it has nowhere in the line to draw, the first few by name.
  */
-export function linksNoteText(drawn: LinksSummary | null): string {
+export function linksNoteText(drawn: LinksSummary | null, how: LinksNoteHow = { mode: 'enderio', byGood: null, focus: false }): string {
   if (drawn === null) return 'Nothing to connect yet: the plan has no line to lay out';
-  const { pieces, links, unplaced } = drawn;
+  const { pieces, links, unplaced, noNetwork, more, hidden } = drawn;
   const what = `${pieces === links ? '' : `${fmtInt(pieces)} pieces of `}${fmtInt(links)} connection${links === 1 ? '' : 's'}`;
-  const told = links === 0 ? 'No connections to draw'
-    : `${what} drawn, each from the face that gives to the face that takes, the arrow pointing the way, in its EnderIO channel's `
-      + 'colour or else the colour of what carries it, as on the Connections tab. Hover one for what it carries; click it to mark its two faces.';
-  if (unplaced.length === 0) return told;
-  const more = unplaced.length - UNPLACED_NAMED;
-  const names = [...unplaced.slice(0, UNPLACED_NAMED), ...(more > 0 ? [`and ${fmtInt(more)} more`] : [])].join('; ');
-  return `${told}${links === 0 ? '.' : ''} Not drawn, with nowhere in the line to draw ${unplaced.length === 1 ? 'it' : 'them'}: ${names}.`;
+  const told = links === 0 ? ['No connections to draw'] : [
+    `${what} drawn, each from the face that gives to the face that takes, the arrow pointing the way. ${coloursText(how)}`,
+    `Hover one for what it carries; click it to mark its two faces.${how.focus ? ' Focus shows only the links of the block under the pointer, or of the block you click.' : ''}`,
+  ];
+  const rest = [
+    ...(more > 0 ? [`Links between big steps are drawn with at most ${SPANS_PER_LINK} pieces each: ${fmtInt(more)} more piece${more === 1 ? ' is' : 's are'} not drawn`] : []),
+    ...(hidden > 0 ? [`${fmtInt(hidden)} more connection${hidden === 1 ? ' is' : 's are'} hidden with the hookups`] : []),
+    ...(noNetwork.length > 0 ? [`Raw inputs and final outputs are not drawn, as the base has no ME network to hook into: ${someOf(noNetwork)}`] : []),
+    ...(unplaced.length > 0 ? [`Not drawn, with nowhere in the line to draw ${unplaced.length === 1 ? 'it' : 'them'}: ${someOf(unplaced)}`] : []),
+  ];
+  return rest.length === 0 && links === 0 ? told[0]! : [...told, ...rest].map((t) => (t.endsWith('.') ? t : `${t}.`)).join(' ');
 }
 
 /** Whether the end-to-end test asked for a canvas it can read back; false when storage is refused. */
@@ -277,9 +335,10 @@ function preserveDrawingBuffer(): boolean {
  * made on the canvas, then kept in step with the slider, the toggles and the canvas's size. A new layout disposes the
  * previous viewer first, and clears the hover label and the details, which named its blocks. While Show connections is
  * on, the Connections tab's graph of the layout (rates per hour in Make N mode, else per the settings' unit) gives the
- * links the viewer draws (clear of the line's solid blocks), a hookup's left out while hookups are hidden, and the note
- * under the view (`linksSummary`);
- * new links let a picked one go.
+ * links the viewer draws (clear of the line's solid blocks, a single-channel EnderIO line's coloured by good), a
+ * hookup's left out while hookups are hidden, and the note and legend under the view (`linksSummary`); new links let a
+ * picked one go. The link under the pointer is drawn thicker and the others fade; with Focus on, only the links of the
+ * block under the pointer show, or of the block last clicked until a click elsewhere.
  */
 export default function View3D(props: ProjectViewProps): ReactElement {
   const { project, plan } = props;
@@ -288,8 +347,13 @@ export default function View3D(props: ProjectViewProps): ReactElement {
   const [webgl] = useState(webgl2Available);
   const [maxLayer, setMaxLayer] = useState<number | null>(null);
   const [show, setShow] = useState<Show>({ ghosts: true, hookups: true });
-  const [showLinks, setShowLinks] = useState(loadShowLinks);
+  const [showLinks, setShowLinks] = useState(() => loadShowLinks());
+  const [focus, setFocus] = useState(() => loadShowLinks(FOCUS_STORAGE_KEY));
   const [hover, setHover] = useState<string | null>(null);
+  /** The drawn link under the pointer, the block under it, and the block Focus keeps after a click. */
+  const [hoverLink, setHoverLink] = useState<number | null>(null);
+  const [hoverBlock, setHoverBlock] = useState<number | null>(null);
+  const [pinned, setPinned] = useState<number | null>(null);
   /** The clicked block's or link's details; `link` when they are a link's. */
   const [info, setInfo] = useState<(Info & { link?: true }) | null>(null);
   const [pickedLink, setPickedLink] = useState<number | null>(null);
@@ -305,15 +369,25 @@ export default function View3D(props: ProjectViewProps): ReactElement {
     () => (showLinks && plan !== null && layout !== null && hasLine(plan, layout) ? connectionsGraph(layout, plan, per) : null),
     [showLinks, plan, layout, per],
   );
-  const drawnLinks = useMemo((): { geometry: LinkGeometry; summary: LinksSummary } | null => {
+  const drawnLinks = useMemo((): { geometry: LinkGeometry; summary: LinksSummary; legend: Array<{ rgb: Rgb; label: string }>; byGood: DyeColor | null } | null => {
     if (graph === null || layout === null) return null;
-    const all = connectionSpans(layout, graph);
-    const geometry = linkGeometry(spansShown(all, graph, layout, show.hookups), new Map(graph.edges.map((e) => [e.id, e])), layout.origin,
-      { solid: solidColumns(layout) });
-    return { geometry, summary: linksSummary(graph, all, geometry.links, show.hookups) };
+    const all = connectionPieces(layout, graph);
+    const colours = linkColors(graph);
+    const geometry = linkGeometry(spansShown(all.spans, graph, layout, show.hookups), new Map(graph.edges.map((e) => [e.id, e])), layout.origin,
+      { solid: solidColumns(layout), color: colours.color });
+    return { geometry, summary: linksSummary(graph, all, geometry.links, show.hookups, layout), legend: linksLegend(graph, geometry.links, colours.byGood !== null),
+      byGood: colours.byGood };
   }, [graph, layout, show.hookups]);
   const links = drawnLinks?.geometry ?? null;
-  const latest = useRef<{ shownLayer: number | null; show: Show; links: LinkGeometry | null }>({ shownLayer, show, links });
+  // Focus: the links of the block clicked last, else of the block under the pointer
+  const focusBlock = focus ? pinned ?? hoverBlock : null;
+  const states = useMemo(() => {
+    const hovered = hoverLink !== null && hoverLink < (links?.links.length ?? 0) ? hoverLink : null;   // not one of links before these
+    if (links === null || graph === null || layout === null || (hovered === null && focusBlock === null)) return null;
+    return linkStates(links.links, hovered, focusBlock === null ? null : linksOfBlock(graph, layout, focusBlock));
+  }, [links, graph, layout, hoverLink, focusBlock]);
+  const latest = useRef<{ shownLayer: number | null; show: Show; links: LinkGeometry | null; states: Float32Array | null; hoverLink: number | null }>(
+    { shownLayer, show, links, states, hoverLink });
 
   useEffect(() => {
     setHover(null);
@@ -335,6 +409,8 @@ export default function View3D(props: ProjectViewProps): ReactElement {
         viewer.setShow(latest.current.show);
         viewer.setMaxLayer(latest.current.shownLayer);
         viewer.setLinks(latest.current.links);
+        viewer.setLinkStates(latest.current.states);
+        viewer.setHoveredLink(latest.current.hoverLink);
         built.current = { viewer, layout };
         resizes?.observe(canvas);
       } catch (err) {
@@ -361,14 +437,26 @@ export default function View3D(props: ProjectViewProps): ReactElement {
     latest.current.links = links;
     built.current?.viewer.setLinks(links);
     setPickedLink(null);
+    setHoverLink(null);
     setInfo((was) => (was?.link === true ? null : was));
   }, [links]);
   useEffect(() => {
     built.current?.viewer.setSelectedLink(pickedLink);
   }, [pickedLink]);
+  useEffect(() => {
+    latest.current.hoverLink = hoverLink;
+    latest.current.states = states;
+    built.current?.viewer.setLinkStates(states);
+    built.current?.viewer.setHoveredLink(hoverLink);
+  }, [states, hoverLink]);
+  useEffect(() => setPinned(null), [layout, focus]);
   const onShowLinks = (on: boolean): void => {
     saveShowLinks(on);
     setShowLinks(on);
+  };
+  const onFocus = (on: boolean): void => {
+    saveShowLinks(on, FOCUS_STORAGE_KEY);
+    setFocus(on);
   };
 
   const canvas = (
@@ -387,8 +475,15 @@ export default function View3D(props: ProjectViewProps): ReactElement {
         // a link says what the Connections tab writes on it
         if (hit?.kind === 'link') setHover(graph === null ? null : pickDetails(graph, { edge: hit.link.span.edge })?.title ?? null);
         else setHover(hit === null ? null : hoverText(view.layout, plan, hit.block));
+        setHoverLink(hit?.kind === 'link' ? hit.index : null);
+        // Focus follows the block under the pointer; over a link or nothing it stays on the last one
+        if (hit?.kind === 'block') setHoverBlock(hit.block);
       }}
-      onPointerLeave={() => setHover(null)}
+      onPointerLeave={() => {
+        setHover(null);
+        setHoverLink(null);
+        setHoverBlock(null);
+      }}
       onClick={(e) => {
         const from = pressedAt.current;
         pressedAt.current = null;
@@ -400,6 +495,8 @@ export default function View3D(props: ProjectViewProps): ReactElement {
         setPickedLink(hit?.kind === 'link' && details !== null ? hit.index : null);
         if (hit?.kind === 'link') setInfo(details === null ? null : { ...details, link: true });
         else setInfo(hit === null ? null : pickInfo(view.layout, plan, hit.block));
+        // Focus keeps the block clicked; a click on nothing lets it go
+        if (hit?.kind !== 'link') setPinned(hit === null ? null : hit.block);
       }}
     />
   );
@@ -421,7 +518,10 @@ export default function View3D(props: ProjectViewProps): ReactElement {
       noSteps={plan !== null && plan.steps.length === 0}
       showLinks={showLinks}
       onShowLinks={onShowLinks}
-      linksNote={showLinks ? linksNoteText(drawnLinks === null ? null : drawnLinks.summary) : null}
+      linksNote={showLinks ? linksNoteText(drawnLinks === null ? null : drawnLinks.summary, { mode: layout?.mode ?? 'direct', byGood: drawnLinks?.byGood ?? null, focus }) : null}
+      linksLegend={drawnLinks?.legend ?? []}
+      focus={focus}
+      onFocus={onFocus}
     />
   );
 }

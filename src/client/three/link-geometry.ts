@@ -1,19 +1,21 @@
 // The Connections tab's links in the 3D view (the user's requirements of 2026-10-19, item 3 (b)): every piece of a link
-// (../connections/model.ts `connectionSpans`, so every logistics mode draws what its Connections tab draws) as a thin
+// (../connections/model.ts `connectionPieces`, so every logistics mode draws what its Connections tab draws) as a thin
 // tube that leaves its source face, arcs over the line clear of its solid blocks and comes down into the face it
 // reaches, drawn smoother the longer it is, with an arrowhead halfway along that points the way, in its EnderIO
-// channel's colour, else the colour of what carries it, as the Connections tab draws it. All of them are one batched
-// geometry, so the viewer draws them in one call however many blocks the line has; each starts and ends a little off
-// its faces so it never shares a plane with a block, and links between the same two faces fan out side by side, never
-// toward a face. Also the white tube and face frames that mark a picked link, which link a ray from the pointer meets,
-// which links show while hookups are hidden, and what the note under the view counts and names. Pure TypeScript — no
-// DOM, no three.js — so it is tested without a browser; the viewer turns these arrays into meshes.
+// channel's colour, else the colour of what carries it, as the Connections tab draws it (on an EnderIO line whose flows
+// all ride one channel, a colour per good). All of them are one batched geometry, so the viewer draws them in one call
+// however many blocks the line has; each starts and ends a little off its faces so it never shares a plane with a
+// block, and links between the same two faces fan out side by side, never toward a face. Also the white tube and face
+// frames that mark a picked link and the lighter, thicker tube of the one under the pointer, how each link is drawn
+// while one is hovered or Focus is on, which link a ray from the pointer meets, which links show while hookups are
+// hidden, and what the note under the view counts, names and shows in its legend. Pure TypeScript — no DOM, no three.js
+// — so it is tested without a browser; the viewer turns these arrays into meshes.
 
-import { dyeRgb } from '../../shared/layout/enderio.ts';
-import { DIRS, posKey, type Vec3 } from '../../shared/layout/geometry.ts';
+import { DYE_NAMES, dyeRgb } from '../../shared/layout/enderio.ts';
+import { DIRS, posKey, step, type Vec3 } from '../../shared/layout/geometry.ts';
 import type { Rgb } from '../../shared/types/assets.ts';
-import type { BlockRole, Layout } from '../../shared/types/layout.ts';
-import type { ConnEdge, ConnGraph, ConnSpan, ConnSpot, ConnVia } from '../connections/model.ts';
+import type { BlockRole, DyeColor, Layout } from '../../shared/types/layout.ts';
+import type { ConnEdge, ConnGraph, ConnPieces, ConnSpan, ConnSpot, ConnVia } from '../connections/model.ts';
 
 /**
  * The colour of what carries a link that has no channel, as the Connections tab draws it (styles.css `.conn-via-*`,
@@ -86,6 +88,10 @@ export const LINK_TRIANGLES = linkTriangles(LINK_SEGMENTS);
 const PICKED_RGB: Rgb = [255, 255, 255];
 const PICKED_TUBE = 1.8;
 const PICKED_ARROW = 1.3;
+/** The link under the pointer: a tube and arrowhead this much bigger than its own, in its colour this much lighter. */
+const HOVER_TUBE = 1.5;
+const HOVER_ARROW = 1.2;
+const HOVER_LIGHT = 0.3;
 /** A face frame's outer and inner half-widths (blocks): a band 1.5 px wide round the face's edge. */
 const FRAME_OUTER = 8 / 16;
 const FRAME_INNER = 6.5 / 16;
@@ -111,8 +117,8 @@ export interface DrawnLink {
 /** Every piece of every link, one after the other (each link's vertices from its `start` to its `end`, its triangles in the same order). */
 export interface LinkGeometry extends LinkMesh { links: DrawnLink[] }
 
-/** How `linkGeometry` draws: the line's solid blocks its arcs rise clear of. */
-export interface LinkOptions { solid?: SolidColumns }
+/** How `linkGeometry` draws: the line's solid blocks its arcs rise clear of, and the colour of each link. */
+export interface LinkOptions { solid?: SolidColumns; color?: (edge: ConnEdge) => Rgb }
 
 function sub(a: Vec3, b: Vec3): Vec3 {
   return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
@@ -418,11 +424,11 @@ function arrowhead(out: MeshWriter, path: readonly Vec3[], scale: number, color:
 /**
  * The geometry of `spans` (in order; a span whose link is not in `edges` is left out): per piece a tube of LINK_RADIUS
  * round its arc, drawn with more straight pieces the longer it is (`segmentsFor`), and an arrowhead halfway along, in
- * `linkColor` of its link, every vertex with the piece's `layer`. The pieces that join the same two faces, either way
- * round (two goods from one step to the next, a link and the one coming back), fan out side by side (`fanShifts`), so
- * each shows and each can be picked. Given the line's solid blocks (`opts.solid`), every arc rises clear of those it
- * passes over (`riseOver`), the pieces of a fan all as high as the one that has to rise most, so they stay side by
- * side; a higher arc only clears them more.
+ * its link's colour (`opts.color`, else `linkColor`), every vertex with the piece's `layer`. The pieces that join the
+ * same two faces, either way round (two goods from one step to the next, a link and the one coming back), fan out side
+ * by side (`fanShifts`), so each shows and each can be picked. Given the line's solid blocks (`opts.solid`), every arc
+ * rises clear of those it passes over (`riseOver`), the pieces of a fan all as high as the one that has to rise most,
+ * so they stay side by side; a higher arc only clears them more.
  */
 export function linkGeometry(spans: readonly ConnSpan[], edges: ReadonlyMap<string, ConnEdge>, origin: Vec3, opts: LinkOptions = {}): LinkGeometry {
   const known = spans.filter((s) => edges.has(s.edge));
@@ -439,10 +445,11 @@ export function linkGeometry(spans: readonly ConnSpan[], edges: ReadonlyMap<stri
     rises.set(group, [Math.max(was[0], own[0]), Math.max(was[1], own[1])]);
   });
   const paths = controls.map((c, i) => arc(c, turned(rises.get(shifts[i]!.group)!, shifts[i]!.flip), segments[i]!));
+  const colorOf = opts.color ?? linkColor;
   const out = new MeshWriter(meshFor(segments.reduce((n, k) => n + linkVertices(k), 0), segments.reduce((n, k) => n + linkTriangles(k), 0)));
   const links = known.map((span, i): DrawnLink => {
     const path = paths[i]!;
-    const color = linkColor(edges.get(span.edge)!);
+    const color = colorOf(edges.get(span.edge)!);
     const layer = Math.max(span.from.cell[1], span.to.cell[1]) - origin[1];
     const start = out.vertices;
     tube(out, path, LINK_RADIUS, color, layer);
@@ -483,6 +490,108 @@ export function selectionGeometry(link: DrawnLink, origin: Vec3): LinkMesh {
   frame(out, link.span.from, origin, link.layer);
   frame(out, link.span.to, origin, link.layer);
   return out.mesh;
+}
+
+/**
+ * What marks the link under the pointer: its arc as a tube HOVER_TUBE times as thick in its own colour lightened toward
+ * white by HOVER_LIGHT, with an arrowhead HOVER_ARROW times the size; the other links are dimmed meanwhile
+ * (`linkStates`).
+ */
+export function hoverGeometry(link: DrawnLink): LinkMesh {
+  const segments = link.path.length - 1;
+  const out = new MeshWriter(meshFor(linkVertices(segments), linkTriangles(segments)));
+  const color = link.color.map((c) => Math.round(c + (255 - c) * HOVER_LIGHT)) as unknown as Rgb;
+  tube(out, link.path, LINK_RADIUS * HOVER_TUBE, color, link.layer);
+  arrowhead(out, link.path, HOVER_ARROW, color, link.layer);
+  return out.mesh;
+}
+
+/** How a link is drawn: as it is, dimmed while another is under the pointer, or not at all (Focus, on another block). */
+export const LINK_SHOWN = 0, LINK_DIMMED = 1, LINK_HIDDEN = 2;
+
+/**
+ * Per vertex of `links` (their geometry), how each is drawn: LINK_HIDDEN when `shown` leaves it out, else LINK_DIMMED
+ * while another one is `hovered`, else LINK_SHOWN.
+ */
+export function linkStates(links: readonly DrawnLink[], hovered: number | null, shown: ((link: DrawnLink) => boolean) | null): Float32Array {
+  const states = new Float32Array(links.at(-1)?.end ?? 0);
+  links.forEach((l, k) => {
+    const state = shown !== null && !shown(l) ? LINK_HIDDEN : hovered !== null && hovered !== k ? LINK_DIMMED : LINK_SHOWN;
+    if (state !== LINK_SHOWN) states.fill(state, l.start, l.end);
+  });
+  return states;
+}
+
+/**
+ * Which links Focus shows for block `block` of `layout` (`g` its Connections graph): every piece of the links of the
+ * box the block belongs to; for a block in no box (a pipe, cable or conduit), the pieces that end on it or on a face it
+ * stands against.
+ */
+export function linksOfBlock(g: ConnGraph, layout: Layout, block: number): (link: DrawnLink) => boolean {
+  const box = g.nodes.find((n) => n.blocks.includes(block))?.id;
+  const edges = new Map(g.edges.map((e) => [e.id, e]));
+  const cell = layout.blocks[block]?.pos;
+  const at = cell === undefined ? '' : posKey(cell);
+  return (link) => {
+    const e = edges.get(link.span.edge);
+    if (box !== undefined) return e !== undefined && (e.from === box || e.to === box);
+    return cell !== undefined && [link.span.from, link.span.to].some((s) => posKey(s.cell) === at || posKey(step(s.cell, s.side)) === at);
+  };
+}
+
+/** How far apart (degrees) the hues of goods are (the golden angle), and their saturation and two lightnesses. */
+const GOOD_HUE_STEP = 137.508;
+const GOOD_SATURATION = 0.65;
+const GOOD_LIGHTNESS = [0.56, 0.44] as const;
+
+/** An sRGB colour from a hue (degrees), saturation and lightness (0..1). */
+function hsl(h: number, sat: number, light: number): Rgb {
+  const c = (1 - Math.abs(2 * light - 1)) * sat, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = light - c / 2;
+  const [r, g, b] = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
+  return [r, g, b].map((v) => Math.round((v + m) * 255)) as unknown as Rgb;
+}
+
+/** The colour of the `index`-th good: hues the golden angle apart, every other one a little darker. */
+export function goodRgb(index: number): Rgb {
+  return hsl((index * GOOD_HUE_STEP) % 360, GOOD_SATURATION, GOOD_LIGHTNESS[index % 2]!);
+}
+
+/**
+ * How the links of `g` are coloured: an EnderIO line whose flows all ride one channel (`byGood`, that channel) colours
+ * each good its own colour (`goodRgb`, in the order the goods first appear), so its links can be told apart, and the
+ * channel stays in what hovering says; any other line, and every link that carries nothing, as `linkColor`.
+ */
+export function linkColors(g: ConnGraph): { color: (edge: ConnEdge) => Rgb; byGood: DyeColor | null } {
+  const flows = g.edges.filter((e) => e.key !== null);
+  const channels = new Set(flows.map((e) => e.color));
+  const only = channels.size === 1 ? [...channels][0]! : null;
+  if (only === null || flows.length === 0) return { color: linkColor, byGood: null };
+  const goods = new Map<string, number>();
+  for (const e of flows) if (!goods.has(e.key!)) goods.set(e.key!, goods.size);
+  return { color: (e) => (e.key === null ? linkColor(e) : goodRgb(goods.get(e.key)!)), byGood: only };
+}
+
+/** What carries a link, for the note's colour legend. */
+const VIA_LEGEND: Readonly<Record<ConnVia, string>> = {
+  gt_pipe: 'Shared GT item pipe', fluid_pipe: 'GT fluid pipe', routed: 'Routed network', ae2: 'ME network',
+  item_conduit: 'Item Conduit', fluid_conduit: 'Ender fluid conduit', attached: 'Interface or hookup', hookup: 'Interface or hookup',
+};
+
+/**
+ * The colour legend of the drawn links: each colour once, in the order the links are drawn, with what it means — a
+ * channel's name, else what carries the link; while goods have colours of their own (`byGood`), only the colours of
+ * links that carry nothing.
+ */
+export function linksLegend(g: ConnGraph, drawn: readonly DrawnLink[], byGood: boolean): Array<{ rgb: Rgb; label: string }> {
+  const edges = new Map(g.edges.map((e) => [e.id, e]));
+  const legend = new Map<string, { rgb: Rgb; label: string }>();
+  for (const l of drawn) {
+    const e = edges.get(l.span.edge);
+    if (e === undefined || (byGood && e.key !== null)) continue;
+    const key = l.color.join();
+    if (!legend.has(key)) legend.set(key, { rgb: [...l.color], label: e.color === null ? VIA_LEGEND[e.via] : `${DYE_NAMES[e.color]} channel` });
+  }
+  return [...legend.values()];
 }
 
 /**
@@ -568,22 +677,42 @@ export function pickLink(links: readonly DrawnLink[], start: Vec3, dir: Vec3, wi
 export interface LinksSummary {
   /** The pieces drawn, and how many links of the Connections graph they are pieces of. */
   pieces: number; links: number;
+  /** How many more pieces the drawn links between big steps have than they are drawn with (`ConnPieces.more`). */
+  more: number;
+  /** How many links are hidden with the hookups (Hookups off): a hookup's own, and those to or from a hookup's blocks. */
+  hidden: number;
   /** Each link of the graph that has no piece anywhere in the line, in graph order: `[<label>: ]<from box> → <to box>`. */
   unplaced: string[];
+  /**
+   * Of those, the raw inputs and final outputs of an AE2 line whose base has no ME network to hook into (the line has
+   * no logistics hookup): they have nowhere to come in from or go to.
+   */
+  noNetwork: string[];
 }
 
 /**
- * How many pieces of how many links `drawn` shows, and each link of `g` that `all` (every piece of every link, before
- * any is hidden) has no piece for — one whose two ends are one spot (an AE2 hookup joining the base's network where that
- * comes in), or one with an end that stands for nothing laid — a flow by its label, every one by its two boxes; a
- * hookup's own is left out while hookups are hidden, as it would be anyway.
+ * How many pieces of how many links `drawn` shows, how many more pieces the links between big steps have, how many
+ * links hide with the hookups, and each link of `g` that `all` (every piece of every link, before any is hidden) has no
+ * piece for — one with an end that stands for nothing laid — a flow by its label, every one by its two boxes. Left
+ * out: a link whose two ends are one spot (`all.joined`: an AE2 hookup joining the base's network where that comes in,
+ * which its cable already shows), and a hookup's own while hookups are hidden, as it would be anyway. On an AE2 line
+ * without a logistics hookup the raw inputs and final outputs go in `noNetwork` instead.
  */
-export function linksSummary(g: ConnGraph, all: readonly ConnSpan[], drawn: readonly DrawnLink[], hookups: boolean): LinksSummary {
-  const placed = new Set(all.map((s) => s.edge));
+export function linksSummary(g: ConnGraph, all: ConnPieces, drawn: readonly DrawnLink[], hookups: boolean, layout?: Layout): LinksSummary {
+  const placed = new Set(all.spans.map((s) => s.edge));
+  const shown = new Set(drawn.map((l) => l.span.edge));
   const title = new Map(g.nodes.map((n) => [n.id, n.title]));
-  const unplaced = g.edges.filter((e) => !placed.has(e.id) && (hookups || e.via !== 'hookup'))
-    .map((e) => `${e.key === null ? '' : `${e.label}: `}${title.get(e.from) ?? e.from} → ${title.get(e.to) ?? e.to}`);
-  return { pieces: drawn.length, links: new Set(drawn.map((l) => l.span.edge)).size, unplaced };
+  const noNet = layout?.mode === 'ae2' && !layout.hookups.some((h) => h.kind === 'logistics');
+  const unplaced: string[] = [], noNetwork: string[] = [];
+  for (const e of g.edges) {
+    if (placed.has(e.id) || all.joined.has(e.id) || (!hookups && e.via === 'hookup')) continue;
+    const text = `${e.key === null ? '' : `${e.label}: `}${title.get(e.from) ?? e.from} → ${title.get(e.to) ?? e.to}`;
+    (noNet && (e.from === 'raw' || e.to === 'out') ? noNetwork : unplaced).push(text);
+  }
+  return {
+    pieces: drawn.length, links: shown.size, more: [...all.more].reduce((n, [edge, k]) => n + (shown.has(edge) ? k : 0), 0),
+    hidden: hookups ? 0 : [...placed].filter((edge) => !shown.has(edge)).length, unplaced, noNetwork,
+  };
 }
 
 /**
