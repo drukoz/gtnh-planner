@@ -11,8 +11,9 @@
 // next to the power head and machines fed at different tiers stand a column apart, so their power ports never touch.
 // With the `primitive` option (the routed, AE2 and EnderIO modes; architecture §11 entry 48) GT's primitive machines
 // follow their own rules: a steam singleblock vents through its output side, which turns up over an empty cell, and a
-// Bricked Blast Furnace or a Coke Oven, which GT lets nothing automated fill, is run by hand at the end of its row,
-// one block back from the spine with nothing of the line touching it.
+// Bricked Blast Furnace, which GT lets nothing automated fill, or a Coke Oven, which GT fills only through its own Coke
+// Oven Hatch (one the layout does not lay), is run by hand at the end of its row, one block back from the spine with
+// nothing of the line touching it.
 // Every order and tie-break is fixed, so the same plan gives the same placement.
 
 import { isFluidKey, itemKey, type ItemKey, type StuffKey } from '../../shared/keys.ts';

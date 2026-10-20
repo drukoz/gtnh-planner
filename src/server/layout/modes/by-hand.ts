@@ -1,15 +1,16 @@
-// What the routed, AE2 and EnderIO lines leave to your hands (architecture §11 entry 48; Plan 5 follow-ups 7 and 8):
-// a Bricked Blast Furnace or a Coke Oven, which GT lets nothing automated fill (`Unit.manual`, multiblock-rules.ts),
-// gets a step that says what to fill it with and from where, and one that says where what it makes goes. In AE2 mode a
-// steam machine's output is taken out by hand too: no ME interface gets it back, as GT lets no conveyor cover onto a
-// steam machine and it never pushes out what it makes (`MTEBasicMachineBronze.allowCoverOnSide` takes only covers
-// allowed on primitive blocks, and its `doesAutoOutput` is false), so it gets that second step and a `steam_items`
-// warning. In the other two modes the Item Extractor Chip and the item conduit pull it out of the steam machine's
-// middle-row side, which GT lets give its output (`MTEBasicMachine.allowPullStack`: any side but the front, through
-// `ISidedInventory.canExtractItem`, which Project Red's `InvWrapper` and EnderIO's `NetworkedInventory` ask). A good
-// comes from or goes to your storage (raw inputs, final outputs, byproducts), the line (its output or input chest, in
-// AE2 mode your ME system; a fluid at the end of the line), another machine run by hand, or one of your machines the
-// line does not place. Every order is fixed: steps in unit order, goods in the order the step lists them.
+// What the routed, AE2 and EnderIO lines leave to your hands (architecture §11 entry 48; Plan 5 follow-ups 7 and 8): a
+// Bricked Blast Furnace, which GT lets nothing automated fill, or a Coke Oven, which GT fills only through its own Coke
+// Oven Hatch, one the layout does not lay (`Unit.manual`, multiblock-rules.ts), gets a step that says what to fill it
+// with and from where, and one that says where what it makes goes. In AE2 mode a steam machine's output is taken out by
+// hand too: no ME interface gets it back, as GT lets no conveyor cover onto a steam machine and it never pushes out
+// what it makes (`MTEBasicMachineBronze.allowCoverOnSide` takes only covers allowed on primitive blocks, and its
+// `doesAutoOutput` is false), so it gets that second step and a `steam_items` warning. In the other two modes the Item
+// Extractor Chip and the item conduit pull it out of the steam machine's middle-row side, which GT lets give its output
+// (`MTEBasicMachine.allowPullStack`: any side but the front, through `ISidedInventory.canExtractItem`, which Project
+// Red's `InvWrapper` and EnderIO's `NetworkedInventory` ask). A good comes from or goes to your storage (raw inputs,
+// final outputs, byproducts), the line (its output or input chest, in AE2 mode your ME system; a fluid at the end of
+// the line), another machine run by hand, or one of your machines the line does not place. Every order is fixed: steps
+// in unit order, goods in the order the step lists them.
 
 import { isFluidKey, type StuffKey } from '../../../shared/keys.ts';
 import { fmtInt, joinNames } from '../../../shared/layout/format.ts';

@@ -1,5 +1,6 @@
-// The multiblocks GregTech lets nothing automated fill (architecture §11 entry 48; Plan 5 follow-up 8; add-on 15
-// rulings R7). Read with javap from the pack's GT 5.09.54.183 jar: of every multiblock controller in it (GT, GT++,
+// The multiblocks the line runs by hand: the one GregTech lets nothing automated fill, and the one it fills only through
+// a hatch of its own, which the layout does not lay (architecture §11 entry 48; Plan 5 follow-up 8; add-on 15 rulings
+// R7). Read with javap from the pack's GT 5.09.54.183 jar: of every multiblock controller in it (GT, GT++,
 // BartWorks, GoodGenerator, TecTech and KekzTech classes that are structure-checked `MetaTileEntity`s) only these two
 // and BartWorks' `MTEWindmill` override `allowPullStack`, `allowPutStack` or `allowCoverOnSide`. The routed, AE2 and
 // EnderIO modes run these two by hand (`unitsFromPlan`'s `primitive` option); add-on 15 gives machine-to-machine mode
