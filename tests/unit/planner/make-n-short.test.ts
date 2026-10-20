@@ -8,9 +8,10 @@ import type { LpModel, LpResult } from '../../../src/server/planner/lp.ts';
 
 vi.mock('../../../src/server/planner/lp.ts', async (importOriginal) => {
   const lp = await importOriginal<typeof import('../../../src/server/planner/lp.ts')>();
-  // Only the whole-runs program has a time limit (make-n.ts); every other solve runs as it is.
+  // The whole-runs program (make-n.ts) is the solve with a time limit and no node limit; every other runs as it is.
   const unfinished: LpResult = { status: 'error', objective: NaN, x: [] };
-  return { ...lp, solveLp: (model: LpModel) => (model.timeLimit !== undefined ? Promise.resolve(unfinished) : lp.solveLp(model)) };
+  const wholeRuns = (model: LpModel): boolean => model.timeLimit !== undefined && model.maxNodes === undefined;
+  return { ...lp, solveLp: (model: LpModel) => (wholeRuns(model) ? Promise.resolve(unfinished) : lp.solveLp(model)) };
 });
 
 import { packFromSpec } from '../../helpers/pack-spec.ts';
@@ -23,14 +24,18 @@ const FULL = 't:cell_full@0';
 /**
  * A widget run takes 2 full cells and hands 1 empty cell back, a canner fills an empty cell from raw dust, and a
  * centrifuge yields an empty cell 1 time in 10. The LP balances that in fractions; whole runs top the cells up through
- * the widget's assembler, which only digs the loop deeper, so the batch comes out short of full cells.
+ * the widget's assembler, which only digs the loop deeper, so the batch comes out short of full cells. Each machine has a
+ * crafting recipe from nothing, so it can be built and costs nothing to build (plan 12 plans no machine without one).
  */
 const pack = packFromSpec({
   items: [
     { key: 't:widget@0', name: 'Widget' }, { key: FULL, name: 'Full Cell' }, { key: 't:cell@0', name: 'Empty Cell' },
     { key: 't:slag@0', name: 'Slag' }, { key: 't:raw@0', name: 'Raw Dust', gt: { prefix: 'dust', material: 'Raw' } },
   ],
-  maps: [{ id: 'gt.recipe.assembler', name: 'Assembler' }, { id: 'gt.recipe.canner', name: 'Canner' }, { id: 'gt.recipe.centrifuge', name: 'Centrifuge' }],
+  maps: [
+    { id: 'gt.recipe.assembler', name: 'Assembler' }, { id: 'gt.recipe.canner', name: 'Canner' }, { id: 'gt.recipe.centrifuge', name: 'Centrifuge' },
+    { id: 'crafting', name: 'Crafting' },
+  ],
   machines: [
     { mteId: 1, name: 'Basic Assembler', maps: ['gt.recipe.assembler'], tier: 1 }, { mteId: 2, name: 'Basic Canner', maps: ['gt.recipe.canner'], tier: 1 },
     { mteId: 3, name: 'Basic Centrifuge', maps: ['gt.recipe.centrifuge'], tier: 1 },
@@ -39,6 +44,7 @@ const pack = packFromSpec({
     { id: 'use', map: 'gt.recipe.assembler', in: [[FULL, 2]], out: [['t:widget@0', 2], ['t:cell@0', 1]], eut: 16 },
     { id: 'fill', map: 'gt.recipe.canner', in: [['t:cell@0', 1], ['t:raw@0', 1]], out: [[FULL, 1]], eut: 2 },
     { id: 'side', map: 'gt.recipe.centrifuge', in: [['t:raw@0', 1]], out: [['t:slag@0', 1], ['t:cell@0', 1, 0.1]], eut: 2 },
+    ...[1, 2, 3].map((mteId) => ({ id: `make-${mteId}`, map: 'crafting', in: [], out: [[`machine:${mteId}@0`, 1] as [string, number]] })),
   ],
   worldgen: {
     veins: [{ name: 'ore.mix.raw', dims: ['overworld'], kind: 'vein', weight: 1, minY: 0, maxY: 255, size: 1, density: 1,
