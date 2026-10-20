@@ -6,7 +6,7 @@
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import type { Pack } from '../../shared/types/pack.ts';
 import { FREE_KEYS, type PlanSettings } from '../../shared/types/plan.ts';
-import { isBaseItem, isOrePrefix, type Availability } from './availability.ts';
+import { GATHERED_BLOCKS, isBaseItem, isOrePrefix, type Availability } from './availability.ts';
 import type { CandidateGraph, LeafDecision, LeafOracle } from './candidates.ts';
 import type { Standalone } from './solve.ts';
 import { solveLp, type LpRow } from './lp.ts';
@@ -136,6 +136,14 @@ function isMaterialLine(pack: Pack, target: StuffKey | null): boolean {
  *   (`isMaterialLine`): any other line bought Chalcopyrite Ore to run ore processing for its sulfuric acid and copper.
  * Base items it cannot get are never buyable.
  *
+ * With `opts.gatheredRecipes` (plan 12, change request 13: for the line's own graph where basis.ts `gatheredRecipesOn`
+ * says so, build cost counted on an AE2 or Project Red line; Task 5 passes it), a gathered world block
+ * (`GATHERED_BLOCKS`) that availability classes `natural` (its dimension is reachable) is that same leaf, at its price
+ * and with its "gathered (dig it)" source, and `alsoMade` too, so the candidate walk also offers its recipes and the LP
+ * weighs digging it against making it (rock-breaker cobblestone → gravel → sand), machines and step charges counted.
+ * Logs, crops and other natural items get no `alsoMade`, and expand and stop items keep their decisions. The cost model,
+ * machine prices and build-material breakdowns never pass it: there gathered blocks are dug.
+ *
  * `derivedCost` is what making the derived item on its own costs (pricing.ts: `standaloneCosts` over the cost model's
  * graph, where derived materials are routed, never below its price), undefined when that is not known. A flat price of
  * 1 made exotic derived dusts the cheapest way to make ordinary parts (Poly-Si and gallium arsenide wafers for an
@@ -145,9 +153,10 @@ function isMaterialLine(pack: Pack, target: StuffKey | null): boolean {
  */
 export function makeLeafOracle(
   pack: Pack, settings: PlanSettings, avail: Availability, prices: PriceTable, stopCost?: (key: StuffKey) => number,
-  derivedCost?: (key: StuffKey) => Standalone | undefined, opts?: { supplied?: ReadonlySet<StuffKey> },
+  derivedCost?: (key: StuffKey) => Standalone | undefined, opts?: { supplied?: ReadonlySet<StuffKey>; gatheredRecipes?: boolean },
 ): LeafOracle {
   const supplied = opts?.supplied ?? NO_KEYS;
+  const gatheredRecipes = opts?.gatheredRecipes === true;
   /** A derived leaf: its price under a cost override, else what making it costs, else its price. */
   const derived = (key: StuffKey): LeafDecision => {
     const made = hasCostOverride(pack, settings.costOverrides, key) ? undefined : derivedCost?.(key);
@@ -165,6 +174,9 @@ export function makeLeafOracle(
     }
     const leafClass = avail.classOf(key);
     if (leafClass === 'free' && supplied.has(key)) return NOT_A_LEAF;
+    if (leafClass === 'natural' && gatheredRecipes && Object.hasOwn(GATHERED_BLOCKS, key)) {
+      return { buyable: true, cost: prices.price(key), leafClass, alsoMade: true };
+    }
     if (leafClass === 'free' || leafClass === 'natural') return { buyable: true, cost: prices.price(key), leafClass };
     if (!isBaseItem(pack, key)) return NOT_A_LEAF;
     switch (leafClass) {

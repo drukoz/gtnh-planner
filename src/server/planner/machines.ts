@@ -163,9 +163,38 @@ export function ownedCounts(types: ReadonlyMap<number, OwnedType>): Map<number, 
   return new Map([...types].map(([mteId, type]) => [mteId, type.count]));
 }
 
-/** How many machines of each type the line may run on (`ownedMachineTypes`): a declined type counts as not owned everywhere. */
+/**
+ * The owned machines the line may run on, one entry each, per mteId (plan 12, architecture §11.39): none when the project
+ * turned "Reuse machines we have" off (`settings.reuseOwned === false`); else, leaving out the types the group declined
+ * to reuse for this line (`settings.declineReuse`), per world-scan entry (`ctx.ownedMachines`) in context order its
+ * machines with where they stand (`where`, padded with null up to `count`), then per "Machines we have" entry
+ * (`settings.ownedManual`) `count` machines without a position. A machine's index in its type's list is the unit number
+ * `PlanStep.reused.units` names; the entries are machine-options.ts's `OwnedUnit` (that is, `MachineWhere`) or null.
+ */
+export function ownedPools(ctx: PlanContext, settings: PlanSettings): Map<number, Array<MachineWhere | null>> {
+  const pools = new Map<number, Array<MachineWhere | null>>();
+  if (settings.reuseOwned === false) return pools;
+  const declined = new Set(settings.declineReuse ?? []);
+  const add = (mteId: number, count: number, where: readonly MachineWhere[]): void => {
+    if (declined.has(mteId) || !(count > 0)) return;
+    let units = pools.get(mteId);
+    if (units === undefined) pools.set(mteId, (units = []));
+    for (let i = 0; i < count; i++) {
+      const at = where[i];
+      units.push(at === undefined ? null : { dim: at.dim, pos: [at.pos[0], at.pos[1], at.pos[2]] });
+    }
+  };
+  for (const m of ctx.ownedMachines) add(m.mteId, m.count, m.where ?? []);
+  for (const m of settings.ownedManual ?? []) add(m.mteId, m.count, []);
+  return pools;
+}
+
+/**
+ * How many machines of each type the line may run on: the sizes of its owned pools (`ownedPools`), so a declined type
+ * counts as not owned everywhere.
+ */
 export function ownedMachineMap(ctx: PlanContext, settings: PlanSettings): Map<number, number> {
-  return ownedCounts(ownedMachineTypes(ctx, settings));
+  return new Map([...ownedPools(ctx, settings)].map(([mteId, units]) => [mteId, units.length]));
 }
 
 /** `PlanStep.reused` of a step running on `count` owned machines, with where those a scan found stand (copies). */

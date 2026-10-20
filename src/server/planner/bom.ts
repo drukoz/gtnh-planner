@@ -285,13 +285,20 @@ async function recipeBook(pack: Pack, x: Expansion, targets: StuffKey[]): Promis
 /**
  * The breakdown's leaf oracle: the line's, except that every free input (`FREE_KEYS`) is a leaf at its price (fix spec
  * R2): a running line makes its own with a generator (`PlanBasis.supplied`), but the one-off materials of its machines
- * get none.
+ * get none. And a leaf the line may also make (`LeafDecision.alsoMade`, plan 12: a gathered world block) is a plain one
+ * here: one-off build materials are dug, so the breakdown never walks a gathered block's producers, nor prices it at
+ * what free cobblestone and hammers would make it for.
  */
 function freeLeaves(pack: Pack, x: Expansion): LeafOracle {
   const prices = makePrices(pack, x.settings.costOverrides);
   return (key) => {
     const d = x.leaf(key);
-    return d.buyable || !FREE.has(key) ? d : { buyable: true, cost: prices.price(key), leafClass: 'free' };
+    if (d.buyable) {
+      if (d.alsoMade !== true) return d;
+      const { alsoMade: _made, ...dug } = d;
+      return dug;
+    }
+    return FREE.has(key) ? { buyable: true, cost: prices.price(key), leafClass: 'free' } : d;
   };
 }
 

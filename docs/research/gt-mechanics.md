@@ -30,6 +30,7 @@ This page collects the exact GregTech numbers and rules the planner computes wit
 | HP ("Advanced") solar boiler | 360 L/s whenever above 100 °C. In clear weather that is ≈94–95 % of every Minecraft day (≈58–71 s per day with no steam, depending on the boiler's own tick phase; *refined by reviewer*, §4.2), so "no steam at night" is wrong for this boiler. Rain stops it in ≈7 min, thunder in ≈5.3 min. Calcification on plain water: full output for 1,080,000 producing ticks, then linear down to 120 L/s at 1,800,000. Distilled water never calcifies; breaking and replacing the boiler descales it. | §4.2 |
 | Battery buffer | Amps out = number of batteries **of exactly the buffer's tier** that can provide energy (no matching battery: 0 A). Capacity = the batteries' charge plus an internal `64·V·slots`. The chargers, battery-buffer subclasses with 4 slots each, store more and send other amps: `MTECharger` `256·V·slots` and `max(4 × batteries, 2)` A, `MTETurboCharger` `6,144·V·slots` and `4·slots` A. | §4.3 |
 | Footprints | Computable at export time from StructureLib (`StructureDefinition.occupiedSpaces`) or by building each multiblock in a void world, as the in-pack NEI preview does. Tooltip dimensions are not reliable. | §5 |
+| Auto Workbench (GT++) | Crafting-table recipes as a tiered machine (mteIds 31091–31098, LV–UV). Normal mode crafts the 3×3 ghost pattern set in its GUI and never switches recipes by itself. Every craft takes 2,048 EU at 1 A of the tier's voltage, at most one a tick: 64 ticks at LV, 16 at MV, 4 at HV, 1 from EV on. No overclock. | §8 |
 
 ## 1. Voltage tiers and recipe tier
 
@@ -813,6 +814,31 @@ Perfect OC, 1 parallel, normal hatch rules: 30 EU/t × 200 t with one MV hatch �
 - Which multiblocks in §5.4 can actually be built at or below IV in this pack's recipes.
 - Vanilla weather timing (how often rain and thunder occur): not checked in the jar. The rain/thunder rows in §4.2 assume the weather lasts the whole simulated period.
 - Forge's `WorldProvider.isDaytime` route and possible day-cycle changes by pack mods (§4.2). The solar simulation assumes the vanilla Overworld cycle.
+
+## 8. GT++ Electric Auto Workbench (crafting-table recipes as a machine)
+
+Added 2026-10-19 for plan 12 Task 3. The controller ruled, on the user's request, that crafting-table recipes in a running line and in Make N run on this machine. All claims are **[jar]**: `javap --multi-release 17 -c -p -constants` of `gtPlusPlus.xmod.gregtech.common.tileentities.automation.MTEElectricAutoWorkbench` (it extends `MTEBasicTank`), its GUI `gregtech.common.gui.modularui.singleblock.MTEElectricAutoWorkbenchGui`, and `GTUtility.getContainerItem` and `MetaGeneratedTool.getContainerItem` in `$GT`. The names are from `assets/gregtech/lang/en_US.lang` in `$GT`; the ids and tiers are from the 2.9 export.
+
+- **Machines.** `gregtech:gt.blockmachines` mteIds 31091–31098 (`basicmachine.automation.autoworkbench.01` … `.08`), named "Auto Workbench (LV)" … "Auto Workbench (UV)", tiers 1–8. The export lists them as kind `other` with no recipe map. Their tooltip reads "Automatic Crafting Table Mk-III".
+- **Slots** (30 in all). Slots 0–8 are the input buffer and 9–17 the output buffer. Slot 18 takes the result of a craft. Slots 19–27 are the 3×3 crafting grid: ghost (phantom) slots that hold one item each and are never consumed (`isPhantomSlot`, `getSlotLimit` 1). Slot 28 previews the result. Automation can reach slots 0–18 only (`isValidSlot`).
+- **Modes.** A GUI button cycles `mMode` through 10 modes, and `switchMode` clears the preview:
+  - 0 "Normal Crafting Table" crafts the grid's pattern, one of each ghost item (`buildModeZeroRecipe`). The planner uses this mode.
+  - 1 "???" crafts the current input item alone, else as 2×2, else as 3×3. Modes 2 "1x1", 3 "2x2" and 4 "3x3" each craft it in one of those shapes.
+  - 5 "Unifier" unifies one item through the ore dictionary. 6 "Dust" crafts small dusts as 2×2 and tiny dusts as 3×3. 7 "???" crafts nuggets as 3×3.
+  - 8 "Hammer?" combines two damaged repairable tools of one kind. 9 "Circle" uses the input slots as the grid.
+- **No recipe switching.** In mode 0 the recipe is the ghost grid, which only the GUI changes. An input item that is neither in the grid nor the empty container of a filled item in it is pushed out as a stray (`isStrayBeingEjectedInModeZero`). Only modes 1–4, 6 and 7 craft whatever single item sits in the current input slot. So one Auto Workbench runs one crafting recipe: the planner puts the recipe into a crafting step's sharing key (`machine-options.ts` `sharingKey`), and two crafting recipes never share one.
+- **Energy and speed.**
+  - It takes 1 A at V[tier] (`maxEUInput` V[tier]; `maxAmperesIn` is `MetaTileEntity`'s 1). Its buffer holds `max(2048, V·V·tier)` EU: 2,048 at LV, 32,768 at MV.
+  - An update runs only with at least 2,048 EU stored (128 in modes 5 and 6), and crafts at most once. A successful craft draws 2,048 EU (128 in modes 5, 6 and 7) and schedules the next update for the next tick; otherwise updates come every 32 ticks.
+  - So in mode 0 a craft takes 2,048 / V[tier] ticks below EV and one tick from EV on, with no overclock: LV 64 ticks (0.3125 crafts/s), MV 16 (1.25/s), HV 4 (5/s), EV to UV 1 (20/s). It draws V[tier] EU/t below EV and 2,048 EU/t from EV on, plus 10 EU per item it pushes out.
+- **Faces and throughput.**
+  - Results leave through the **back** face (`isOutputFacing`). A button cycles the throughput setting `mThroughPut` through 4 states. At 0 and 1, every update ends by pushing what may be taken out into whatever stands behind the machine; at 2 and 3 nothing is pushed.
+  - In mode 0, automation inserts into slots 0–8 and extracts from slots 9–18, from any side (`allowPutStack`, `allowPullStack`; in the other modes slots 0–17 and slot 18). So in mode 0 the push takes the output buffer with the result.
+  - At throughput 0 and 2 the machine also sends V[tier] EU/t at 1 A out of its back face (`maxEUOutput`, `isEnetOutput`), so a cable behind it drains its buffer. Covers fit on every face but the front and the back.
+- **Container items.** A craft takes each grid ingredient from the bench: slots 0–17, the highest slot first.
+  - An ingredient with a container item (`GTUtility.getContainerItem(stack, true)`) leaves that item in the output buffer (slots 9–17). For a water bucket that is an empty bucket; for a filled cell, an empty cell. A GT tool comes back with `getToolDamagePerContainerCraft` damage applied, and not at all once that breaks it (`MetaGeneratedTool.getContainerItem`).
+  - Items in the output buffer count as bench stock, so a returned tool serves the next craft until the back-face push takes it out. A vanilla-damageable container at its maximum damage is destroyed.
+  - The 16,000 L tank fills the empty fluid containers it finds in the bench and puts the filled ones into the input slots (`fillFluidContainer`), so a recipe that takes a water bucket can run on piped-in water.
 
 ## Appendix: script runs behind the [script] numbers
 

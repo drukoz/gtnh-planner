@@ -24,8 +24,12 @@ export interface PlanEnv {
    */
   fromNothing?: ReadonlySet<string>;
 }
-/** `fuel`: the recipe only burns its inputs in a generator (a fuel map, or one run by generators, boilers or turbines). */
-export type Rejection = 'fake' | 'opaque' | 'excluded' | 'vanilla-furnace' | 'low-gravity' | 'heat' | 'tier' | 'no-machine' | 'multiblock' | 'fuel';
+/**
+ * `fuel`: the recipe only burns its inputs in a generator (a fuel map, or one run by generators, boilers or turbines).
+ * `machine` (plan 12, controller ruling OQ5 a): no machine that can run it can be built here and none is owned
+ * (`CandidateOptions.unbuildable`); only `buildCandidates` gives it, never `acceptRecipe`.
+ */
+export type Rejection = 'fake' | 'opaque' | 'excluded' | 'vanilla-furnace' | 'low-gravity' | 'heat' | 'tier' | 'no-machine' | 'multiblock' | 'fuel' | 'machine';
 export type Acceptance = { ok: true; mapId: string } | { ok: false; why: Rejection; needTier?: number };
 
 export interface LpRecipe {
@@ -52,6 +56,12 @@ export interface LeafDecision {
   steps?: number;
   /** The free input (water, air, cobblestone, lava) that chain takes per unit. */
   free?: number;
+  // optional addition (plan 12, change request 13)
+  /**
+   * A buyable leaf the line may also make (a gathered world block, `makeLeafOracle`'s `gatheredRecipes`): the walk keeps
+   * its purchase and also adds its producers, so the LP weighs digging it against making it.
+   */
+  alsoMade?: true;
 }
 export type LeafOracle = (key: StuffKey) => LeafDecision;
 export interface GoodInfo {
@@ -60,10 +70,18 @@ export interface GoodInfo {
   /** `LeafDecision.steps` and `free` of a bought derived leaf. */
   steps?: number;
   free?: number;
+  // optional addition (plan 12, change request 13)
+  /** `LeafDecision.alsoMade`: a leaf the graph also makes (its producers are in `recipes`). */
+  alsoMade?: true;
 }
 export interface CandidateGraph {
   targets: StuffKey[]; recipes: LpRecipe[] /* sorted by id */; goods: Map<StuffKey, GoodInfo>;
-  blocked: Map<StuffKey, Array<{ recipeId: string; why: Rejection; needTier?: number }>>; warnings: PlanWarning[];
+  blocked: Map<StuffKey, Array<{
+    recipeId: string; why: Rejection; needTier?: number;
+    // optional addition (plan 12): with `why` 'machine', why its machine cannot be built here (`CandidateOptions.unbuildable`)
+    machine?: string;
+  }>>;
+  warnings: PlanWarning[];
   // optional additions
   /** The walk stopped at its recipe cap: goods it never expanded look unmakeable, so blockers would name the wrong goods. */
   truncated?: boolean;
@@ -517,6 +535,25 @@ interface Estimates {
    * each consumed slot it does not hand on, each good once; null when some such slot has no priced option.
    */
   inputsOf: (r: Recipe) => readonly StuffKey[] | null;
+  /** The walk met a leaf the line may also make (`LeafDecision.alsoMade`). */
+  metAlsoMade: boolean;
+}
+
+/** What `buildCandidates` ranks a good's producers and a slot's options by, from one estimate pass (`estimateCosts`). */
+interface EstimatePass {
+  estimateOf(key: StuffKey): number;
+  /**
+   * Whether `r` makes `key` from goods the estimate settled before `key` (the slots it hands on aside). A producer that is
+   * not (sand from sandstone when sandstone is made from sand) can tie with the real one at the same estimate, and a
+   * graph of only such producers is a closed loop the LP cannot enter, so grounded producers rank first.
+   */
+  grounded(r: Recipe, key: StuffKey): boolean;
+  /** Estimated raw cost per unit of `key` made by `r`. */
+  unitCost(r: Recipe, key: StuffKey): number;
+  /** Fix spec R4: the recipe steps of the simplest chain through `r` (1 + the steps of what it takes), else Infinity. */
+  stepsOf(r: Recipe): number;
+  /** Fix spec R10: the canonical rank of what `r` takes (one option per slot, as `stepsOf` counts them), added up. */
+  inputRank(r: Recipe): number;
 }
 
 /**
@@ -525,10 +562,13 @@ interface Estimates {
  * its cheapest option, charged in full to each output, except the slots it hands on (`carried`: never charged, never
  * waited for). Goods settle cheapest first and once each (a generalized Dijkstra), so a gain loop in the data (x → 2 y,
  * y → x) cannot drive its goods' estimates to 0. A second pass over the same recipes counts the steps to each good.
+ * A leaf the line may also make (`alsoMade`, plan 12) is a plain leaf at its cost, unless `walkMade`: then it is seeded
+ * at its cost but its producers are walked too and offer what making it costs, so its estimate is the cheaper of
+ * digging and making it (any other leaf keeps its own cost).
  */
 function estimateCosts(
   pack: Pack, targets: readonly StuffKey[], decide: (key: StuffKey) => LeafDecision, usable: (r: Recipe) => boolean, optionsOf: SlotOptions,
-  carried: CarriedSlots,
+  carried: CarriedSlots, walkMade: boolean,
 ): Estimates {
   const estimate = new Map<StuffKey, number>();
   const settledAt = new Map<StuffKey, number>();
@@ -538,12 +578,19 @@ function estimateCosts(
   const seen = new Set<StuffKey>(targets);
   const walk = [...targets];
   const taken = new Set<string>();
+  let metAlsoMade = false;
+  /** Whether a run of a recipe offers its cost to `key`: any good not bought, and with `walkMade` one also made. */
+  const offersTo = (key: StuffKey): boolean => {
+    const d = decide(key);
+    return !d.buyable || (walkMade && d.alsoMade === true);
+  };
   for (let i = 0; i < walk.length; i++) {
     const key = walk[i] as StuffKey;
     const d = decide(key);
     if (d.buyable) {
       leaves.push([key, d.cost]);
-      continue;
+      if (d.alsoMade === true) metAlsoMade = true;
+      if (!walkMade || d.alsoMade !== true) continue;
     }
     for (const index of pack.producers.get(key) ?? []) {
       const r = pack.recipes[index];
@@ -582,7 +629,7 @@ function estimateCosts(
     if (!Number.isFinite(total)) return;
     for (const p of r.outputs) {
       const made = p.amount * p.chance;
-      if (made > 0 && !decide(p.key).buyable) offer(p.key, total / made);   // a leaf keeps its own cost
+      if (made > 0 && offersTo(p.key)) offer(p.key, total / made);   // a plain leaf keeps its own cost
     }
   };
   for (const r of reached) if (open.get(r) === 0) run(r);
@@ -623,7 +670,7 @@ function estimateCosts(
     return keys;
   };
   const steps = settleSteps(reached, leaves.map(([key]) => key), (key) => decide(key).buyable, inputsOf);
-  return { estimate, settledAt, steps, inputsOf };
+  return { estimate, settledAt, steps, inputsOf, metAlsoMade };
 }
 
 /**
@@ -744,6 +791,13 @@ export interface CandidateOptions {
    * neither plans a pinned option the list covers. Absent or empty = only `avoid`.
    */
   pinAvoid?: ReadonlySet<StuffKey>;
+  // optional addition (plan 12, controller ruling OQ5 a)
+  /**
+   * Step recipes no machine can run here (`BuildModel.blocked`: recipe id → `<machine> cannot be built here (<why>)`):
+   * rejected as `machine` before any pruning, in the estimate as in the walk, so a producer that can run takes their
+   * place; a good left with none names that reason in its `blocked` entry (`machine`). Absent = none.
+   */
+  unbuildable?: ReadonlyMap<string, string>;
 }
 
 /**
@@ -762,6 +816,13 @@ export interface CandidateOptions {
  * the graph. Fix spec R9: an ore-dictionary slot `settings.optionChoice` pins takes only its pinned option, in the
  * estimate as in the graph, so the walk plans that option's chain however dear it is (`optionPinsOf`; the pins it
  * ignores warn `stale-option`, among them every pin of an option of `opts.avoid` or `opts.pinAvoid`).
+ * Plan 12: the recipes of `opts.unbuildable` are rejected as `machine` (`CandidateOptions.unbuildable`). A leaf the line
+ * may also make (`LeafDecision.alsoMade`: a gathered world block) is bought and walked: the graph keeps its purchase
+ * and adds its producers. Such a leaf makes the pruning run on two estimates — one with it a plain leaf at its price
+ * (as without it), one at the cheaper of digging and making it — and keep every producer and option either keeps
+ * (`cheapest`, R4's `simplestAndNotFar` and an ore-dictionary slot's options each take the union of the two passes'
+ * picks, in id order): made sand from free cobblestone estimates 0, and `KEEP_WITHIN` × 0 alone would cut every route
+ * dug sand makes worth keeping. Without such a leaf, one estimate as before.
  */
 export function buildCandidates(
   pack: Pack, settings: PlanSettings, env: PlanEnv, leaf: LeafOracle, targets: StuffKey[], opts: CandidateOptions = {},
@@ -794,25 +855,28 @@ export function buildCandidates(
   const register = (key: StuffKey): GoodInfo => {
     let good = goods.get(key);
     if (good === undefined) {
-      const { buyable, cost, leafClass, steps, free } = decide(key);
+      const { buyable, cost, leafClass, steps, free, alsoMade } = decide(key);
       good = { key, buyable, cost, leafClass, virtual: false };
       if (steps !== undefined) good.steps = steps;
       if (free !== undefined) good.free = free;
+      if (alsoMade === true) good.alsoMade = true;
       goods.set(key, good);
     }
     return good;
   };
-  /** A good some recipe consumes: walked unless it is a leaf. */
+  /** A good some recipe consumes: walked unless it is a leaf the line only buys. */
   const need = (key: StuffKey): void => {
-    if (!register(key).buyable && !queued.has(key)) {
+    const good = register(key);
+    if ((!good.buyable || good.alsoMade === true) && !queued.has(key)) {
       queued.add(key);
       queue.push(key);
     }
   };
+  const unbuildable = opts.unbuildable;
   const accept = (r: Recipe): Acceptance => {
     let a = acceptance.get(r.id);
     if (a === undefined) {
-      a = acceptRecipe(pack, r, env);
+      a = unbuildable?.has(r.id) === true ? { ok: false, why: 'machine' } : acceptRecipe(pack, r, env);
       acceptance.set(r.id, a);
     }
     return a;
@@ -863,38 +927,41 @@ export function buildCandidates(
     }
     return slots;
   };
-  const { estimate, settledAt, steps, inputsOf } = estimateCosts(pack, targets, decide, (r) => accept(r).ok && !usesAvoided(r, avoid), optionsOf, carried);
-  const estimateOf = (key: StuffKey): number => estimate.get(key) ?? Infinity;
-  const inputCost = (r: Recipe): number => recipeInputCost(r, estimateOf, optionsOf, carried(r));
-  /**
-   * Whether `r` makes `key` from goods the estimate settled before `key` (the slots it hands on aside). A producer that is
-   * not (sand from sandstone when sandstone is made from sand) can tie with the real one at the same estimate, and a
-   * graph of only such producers is a closed loop the LP cannot enter, so grounded producers rank first.
-   */
-  const grounded = (r: Recipe, key: StuffKey): boolean => {
-    const at = settledAt.get(key) ?? Infinity;
-    return r.inputs.every((ing) => !ing.consumed || carried(r).has(ing) || optionsOf(ing).some((o) => (settledAt.get(o.key) ?? Infinity) < at));
+  const usable = (r: Recipe): boolean => accept(r).ok && !usesAvoided(r, avoid);
+  /** What one estimate pass ranks producers and options by. */
+  const passOf = ({ estimate, settledAt, steps, inputsOf }: Estimates): EstimatePass => {
+    const estimateOf = (key: StuffKey): number => estimate.get(key) ?? Infinity;
+    const inputCost = (r: Recipe): number => recipeInputCost(r, estimateOf, optionsOf, carried(r));
+    return {
+      estimateOf,
+      grounded(r, key) {
+        const at = settledAt.get(key) ?? Infinity;
+        return r.inputs.every((ing) => !ing.consumed || carried(r).has(ing) || optionsOf(ing).some((o) => (settledAt.get(o.key) ?? Infinity) < at));
+      },
+      unitCost(r, key) {
+        let made = 0;
+        for (const p of r.outputs) if (p.key === key) made += p.amount * p.chance;
+        return made > 0 ? inputCost(r) / made : Infinity;
+      },
+      stepsOf(r) {
+        const keys = inputsOf(r);
+        if (keys === null) return Infinity;
+        let n = 1;
+        for (const key of keys) n += steps.get(key) ?? Infinity;
+        return n;
+      },
+      inputRank(r) {
+        let rank = 0;
+        for (const key of inputsOf(r) ?? []) rank += canonicalRank(key);
+        return rank;
+      },
+    };
   };
-  /** Estimated raw cost per unit of `key` made by `r`. */
-  const unitCost = (r: Recipe, key: StuffKey): number => {
-    let made = 0;
-    for (const p of r.outputs) if (p.key === key) made += p.amount * p.chance;
-    return made > 0 ? inputCost(r) / made : Infinity;
-  };
-  /** Fix spec R4: the recipe steps of the simplest chain through `r` (1 + the steps of what it takes), else Infinity. */
-  const stepsOf = (r: Recipe): number => {
-    const keys = inputsOf(r);
-    if (keys === null) return Infinity;
-    let n = 1;
-    for (const key of keys) n += steps.get(key) ?? Infinity;
-    return n;
-  };
-  /** Fix spec R10: the canonical rank of what `r` takes (one option per slot, as `stepsOf` counts them), added up. */
-  const inputRank = (r: Recipe): number => {
-    let rank = 0;
-    for (const key of inputsOf(r) ?? []) rank += canonicalRank(key);
-    return rank;
-  };
+  // Plan 09's estimate, with a leaf the line may also make at its price; and when the walk meets such a leaf, the
+  // estimate at the cheaper of digging and making it as well.
+  const dug = estimateCosts(pack, targets, decide, usable, optionsOf, carried, false);
+  const passes: EstimatePass[] = [passOf(dug)];
+  if (dug.metAlsoMade) passes.push(passOf(estimateCosts(pack, targets, decide, usable, optionsOf, carried, true)));
   /**
    * The cheapest of `items` by `cost`, those `first` holds before the others, equal costs by canonical rank (`canon`, fix
    * spec R10), then by `id`: at most `max`, within `KEEP_WITHIN` of the best; when none has a finite cost, the first
@@ -914,36 +981,40 @@ export function buildCandidates(
   /**
    * Fix spec R4: `kept` (the cheapest producers of `key`) with the accepted producer of fewest steps (`stepsOf`; equal
    * ones by estimate, the canonical rank of what they take, then id) added, less every producer more than
-   * MAX_EXTRA_PRODUCER_STEPS steps longer than that one, unless it is the cheapest of them by estimate. A producer whose
-   * steps are not known (the steps pass never reached its chain) is not dropped for them.
+   * MAX_EXTRA_PRODUCER_STEPS steps longer than that one, unless it is the cheapest of them by estimate, all by `pass`. A
+   * producer whose steps are not known (the steps pass never reached its chain) is not dropped for them.
    */
-  const simplestAndNotFar = (key: StuffKey, accepted: readonly Producer[], kept: readonly Producer[]): Producer[] => {
+  const simplestAndNotFar = (pass: EstimatePass, key: StuffKey, accepted: readonly Producer[], kept: readonly Producer[]): Producer[] => {
     let simplest: { x: Producer; steps: number; cost: number; rank: number } | undefined;
     for (const x of accepted) {
-      const n = stepsOf(x.r);
+      const n = pass.stepsOf(x.r);
       if (!Number.isFinite(n)) continue;
-      const cost = unitCost(x.r, key);
-      const rank = inputRank(x.r);
+      const cost = pass.unitCost(x.r, key);
+      const rank = pass.inputRank(x.r);
       const better = simplest === undefined || n < simplest.steps || (n === simplest.steps
         && (cost < simplest.cost || (cost === simplest.cost && (rank < simplest.rank || (rank === simplest.rank && x.r.id < simplest.x.r.id)))));
       if (better) simplest = { x, steps: n, cost, rank };
     }
     if (simplest === undefined) return [...kept];
     const all = kept.includes(simplest.x) ? [...kept] : [...kept, simplest.x];
-    const least = Math.min(...all.map((x) => unitCost(x.r, key)));
+    const least = Math.min(...all.map((x) => pass.unitCost(x.r, key)));
     const limit = simplest.steps + MAX_EXTRA_PRODUCER_STEPS;
     return all.filter((x) => {
-      const n = stepsOf(x.r);
-      return !(Number.isFinite(n) && n > limit) || unitCost(x.r, key) <= least + ESTIMATE_TOLERANCE;
+      const n = pass.stepsOf(x.r);
+      return !(Number.isFinite(n) && n > limit) || pass.unitCost(x.r, key) <= least + ESTIMATE_TOLERANCE;
     });
   };
+  /** The producers of `key` one pass keeps: its cheapest (grounded ones first, `grounded`), with R4's simplest. */
+  const keptBy = (pass: EstimatePass, key: StuffKey, accepted: readonly Producer[]): Producer[] => simplestAndNotFar(pass, key, accepted,
+    cheapest(accepted, (x) => pass.unitCost(x.r, key), (x) => x.r.id, KEEP_PRODUCERS, KEEP_PRODUCERS, (x) => pass.grounded(x.r, key), (x) => pass.inputRank(x.r)));
 
   /** Ruling R6: a virtual good never asks the oracle and is never bought; its kept options are made or bought. */
   const addVirtual = (vkey: StuffKey, options: Ingredient['options']): void => {
     if (goods.has(vkey)) return;
     goods.set(vkey, { key: vkey, buyable: false, cost: 0, leafClass: null, virtual: true });
-    const kept = cheapest(options, (o) => o.amount * estimateOf(o.key), (o) => o.key, KEEP_PRODUCERS, MAX_UNBUYABLE_OPTIONS, undefined, (o) => canonicalRank(o.key))
-      .sort((a, b) => byString(a.key, b.key));
+    const kept = [...new Set(passes.flatMap((pass) => cheapest(
+      options, (o) => o.amount * pass.estimateOf(o.key), (o) => o.key, KEEP_PRODUCERS, MAX_UNBUYABLE_OPTIONS, undefined, (o) => canonicalRank(o.key),
+    )))].sort((a, b) => byString(a.key, b.key));
     for (const option of kept) {
       const id = `convert:${vkey}:${option.key}`;
       if (recipes.has(id)) continue;
@@ -1024,18 +1095,27 @@ export function buildCandidates(
           : `${pack.nameOf(key)}: the chosen recipe uses a material on the avoid list; using the best one that avoids it`,
       });
     }
-    const rejected: Array<{ recipeId: string; why: Rejection; needTier?: number }> = [];
+    const rejected: Array<{ recipeId: string; why: Rejection; needTier?: number; machine?: string }> = [];
     const accepted: Producer[] = [];
     for (const i of pack.producers.get(key) ?? []) {
       const r = pack.recipes[i];
       // One that consumes or holds an avoided good is no producer here at all: the line re-allows the good when it needs it.
       if (r === undefined || usesAvoided(r, avoid)) continue;
       const a = accept(r);
-      if (a.ok) accepted.push({ r, mapId: a.mapId });
-      else rejected.push(a.needTier === undefined ? { recipeId: r.id, why: a.why } : { recipeId: r.id, why: a.why, needTier: a.needTier });
+      if (a.ok) {
+        accepted.push({ r, mapId: a.mapId });
+        continue;
+      }
+      const entry: { recipeId: string; why: Rejection; needTier?: number; machine?: string } = { recipeId: r.id, why: a.why };
+      if (a.needTier !== undefined) entry.needTier = a.needTier;
+      const machine = a.why === 'machine' ? unbuildable?.get(r.id) : undefined;
+      if (machine !== undefined) entry.machine = machine;
+      rejected.push(entry);
     }
-    const kept = cheapest(accepted, (x) => unitCost(x.r, key), (x) => x.r.id, KEEP_PRODUCERS, KEEP_PRODUCERS, (x) => grounded(x.r, key), (x) => inputRank(x.r));
-    for (const { r, mapId } of simplestAndNotFar(key, accepted, kept)) addRecipe(r, mapId);
+    // One pass keeps its picks in its own order; two keep every producer either keeps, in id order.
+    const picks = passes.map((pass) => keptBy(pass, key, accepted));
+    const kept = picks.length === 1 ? (picks[0] as Producer[]) : [...new Set(picks.flat())].sort((a, b) => byString(a.r.id, b.r.id));
+    for (const { r, mapId } of kept) addRecipe(r, mapId);
     if (accepted.length === 0 && rejected.length > 0) blocked.set(key, rejected.sort((a, b) => byString(a.recipeId, b.recipeId)));
   };
 

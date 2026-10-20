@@ -2,14 +2,16 @@
 // reachable dimensions, the environment the candidate recipes are judged in, material availability, prices, the free
 // inputs the line makes itself and the leaf oracle, so `planLine` and `expandBomLines` always derive them the same way.
 // Also the settings hash, and the part of the world context the basis reads (`basisContextKey`), which together key
-// what is derived from them (pricing.ts); and the goods an avoid list covers (`resolveAvoid`), which only `planLine`'s
-// own graphs honor (plan.ts).
+// what is derived from them (pricing.ts); the goods an avoid list covers (`resolveAvoid`), which only `planLine`'s own
+// graphs honor (plan.ts); and whether the settings count the build cost of new machines and let the line make gathered
+// world blocks (`buildCostCounts`, `gatheredRecipesOn`: plan 12, here because pricing.ts reads them and importing
+// machine-options.ts there would close a cycle through bom.ts).
 
 import { createHash } from 'node:crypto';
 import { defaultCoilHeat } from '../../shared/gt/overclock.ts';
 import type { StuffKey } from '../../shared/keys.ts';
 import type { Pack, Recipe } from '../../shared/types/pack.ts';
-import { FREE_KEYS, type PlanContext, type PlanSettings } from '../../shared/types/plan.ts';
+import { FREE_KEYS, NETWORKED_LOGISTICS, type PlanContext, type PlanSettings } from '../../shared/types/plan.ts';
 import { suppliedKey } from '../pack/supply.ts';
 import { computeAvailability, reachableDims, type Availability, type Reachability } from './availability.ts';
 import { acceptRecipe, type LeafOracle, type PlanEnv } from './candidates.ts';
@@ -116,6 +118,25 @@ export function avoidableMaterials(pack: Pack): ReadonlyArray<{ name: string; la
 /** The tier the line is planned at: the project's own, else the world's top tier, else LV. */
 export function effectiveTier(s: PlanSettings, ctx: PlanContext): number {
   return s.tier ?? ctx.topTier ?? 1;
+}
+
+/**
+ * Whether the settings count the build cost of the machines a line adds (architecture §11.39): Make N (against the
+ * batch), or rate mode whose `buildHorizonHours` is not null ("Ignore build cost"; absent = 24 h). The settings' side of
+ * machine-options.ts's `buildCounts`, which says the same of the model `lineBuildModel` builds from them.
+ */
+export function buildCostCounts(settings: PlanSettings): boolean {
+  return settings.mode === 'makeN' || settings.buildHorizonHours !== null;
+}
+
+/**
+ * Whether the line's own graph offers the recipes of gathered world blocks (sand from cobblestone; change request 13 as
+ * controller Amendment OQ4 limits it, ruling P1): only where build cost counts — nothing would bound a chain of free
+ * inputs otherwise — and only on AE2 and Project Red lines (`NETWORKED_LOGISTICS`); machine-to-machine and EnderIO lines
+ * dig them until add-on 15 redesigns the direct line's tail.
+ */
+export function gatheredRecipesOn(settings: PlanSettings): boolean {
+  return buildCostCounts(settings) && NETWORKED_LOGISTICS.has(settings.logistics);
 }
 
 /**
