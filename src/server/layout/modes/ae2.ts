@@ -160,7 +160,9 @@ export function aeRunShares(plan: Plan, patterns: ReadonlyMap<string, PatternSpe
       if (f.to === 'sink') return [];
       const consumer = patterns.get(f.to);
       if (consumer === undefined) return [{ perSecond: f.perSecond, to: null, scale: 1 }];
-      const scale = (consumer.inputs.find((i) => i.key === key)?.amount ?? 0) * (runsOf.get(f.to) ?? 0) / fed(f.to, key);
+      const ratio = (consumer.inputs.find((i) => i.key === key)?.amount ?? 0) * (runsOf.get(f.to) ?? 0) / fed(f.to, key);
+      // the plan's rates are floating sums: a pattern that asks what the plan feeds asks exactly that
+      const scale = Math.abs(ratio - 1) < SHARE_EPSILON ? 1 : ratio;
       return scale > 0 ? [{ perSecond: f.perSecond, to: f.to, scale }] : [];
     });
     return made > 0 ? [{ made, asks }] : [];

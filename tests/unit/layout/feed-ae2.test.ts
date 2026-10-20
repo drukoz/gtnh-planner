@@ -212,6 +212,9 @@ describe('AE2 feeding', () => {
         expect(shares([flow('raw', 'a', IN), flow('a', 'b', O0, 0.5), flow('a', 'sink', O0, 0.5), flow('raw', 'b', O0, 0.5), flow('b', 'out', O1)],
           { a: [[IN], [O0]], b: [[O0], [O1]] })).toEqual({ a: 0.5, b: 1 });
         expect(shares([flow('raw', 'a', IN), flow('a', 'hand', O0)], { a: [[IN], [O0]] })).toEqual({ a: 1 });
+        // the plan's rates are floating sums: a pattern that asks for what the plan feeds it a run asks for just that
+        expect(shares([flow('raw', 'a', IN), flow('a', 'b', O0, 0.5), flow('a', 'sink', O0, 0.5), flow('raw', 'b', O0, 0.5 + 1e-10), flow('b', 'out', O1)],
+          { a: [[IN], [O0]], b: [[O0], [O1]] })).toEqual({ a: 0.5, b: 1 });
       });
 
       it("asks for what a pattern takes, at the pattern's amounts", () => {
