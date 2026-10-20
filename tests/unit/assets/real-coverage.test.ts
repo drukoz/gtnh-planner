@@ -42,9 +42,6 @@ import { makeProject } from '../../helpers/layout-fixtures.ts';
 
 /** The two live projects' targets and modes, re-planned with `defaultSettings()`. */
 const TARGETS: ReadonlyArray<readonly [StuffKey, LogisticsMode]> = [['IC2:itemPartCircuit@0', 'routed'], ['fluid:ethylene', 'direct']];
-/** The Electronic Circuit page's icons no rule of this plan draws: IC2 meta items and GT++ Tumbaga parts (plan, Later). */
-const CIRCUIT_LEFT = ['IC2:itemDust@13', 'IC2:itemDust@2', 'IC2:itemPlates@0', 'miscutils:blockFrameGtTumbaga@0',
-  'miscutils:itemPlateTumbaga@0', 'miscutils:itemRingTumbaga@0', 'miscutils:itemRodTumbaga@0', 'miscutils:itemRotorTumbaga@0'];
 // Reviewed: none. The plan's 11 block items whose registry name names their item icon in items/ (vanilla's
 // items/hopper.png, etfuturum's modern lanterns, chain, brewing stand, ...) are all block ids, which never take an
 // items/ file by name (architecture §11.43 (a)), so they keep their block face like every other block item.
@@ -284,14 +281,16 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('real coverage', { timeout: 300_
 
   it('plan pages', () => {
     // before: the plan's baseline at 340dad8 (288 and 269 icons), which counted every name but recipe maps and
-    // dimensions, the swap lists' goods included
+    // dimensions, the swap lists' goods included. The 8 keys the prototype left on the circuit page (IC2 meta items,
+    // GT++ Tumbaga parts: plan, Later) still fall back, but neither page draws one with an icon (the circuit page names
+    // two, in words only), so no icon on either page may fall back with NEI.
     const before: Record<StuffKey, string> = { 'IC2:itemPartCircuit@0': '46 / 27', 'fluid:ethylene': '30 / 19' };
     show('plan page icons falling back (no NEI / NEI)', TARGETS.map(([target, logistics]) => {
       const left = pageFallbacks(target, src);
       return `${target} ${logistics} (${fmt(pageKeys(target).length)} icons): ${before[target]} → `
         + `${fmt(pageFallbacks(target, srcNoNei).length)} / ${fmt(left.length)}${listed(left)}`;
     }));
-    expect(pageFallbacks('IC2:itemPartCircuit@0', src).filter((k) => !CIRCUIT_LEFT.includes(k))).toEqual([]);
+    expect(pageFallbacks('IC2:itemPartCircuit@0', src)).toEqual([]);
     expect(pageFallbacks('fluid:ethylene', src)).toEqual([]);
   });
 
