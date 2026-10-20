@@ -5,13 +5,16 @@
 // facing north (StructureLib's NORTH_NORMAL_NONE), where a shape cell (a, b, c) of a piece whose controller offset is
 // (a0, b0, c0) lands on the export cell controller + (−(a − a0), −(b − b0), c − c0): a runs west, b down and c south.
 // Rows are keyed by the simple class name the export gives (architecture §11.19); a structure the row does not fit
-// gets no row, so the layout warns instead of guessing.
+// gets no row, so the layout warns instead of guessing. An export of exporter 0.6.0 also holds GT's own rules, cell by
+// cell (hatch-export.ts, architecture §11.49): `hatchRulesOf` narrows a fitting row by them, as the row adds what GT
+// checks in the controller after its walk (layers, sides, casing minimums), and takes them alone where no row fits.
 
 import type { StuffKey } from '../../shared/keys.ts';
 import { posKey, type Vec3 } from '../../shared/layout/geometry.ts';
 import type { HatchKind } from '../../shared/types/layout.ts';
-import type { Machine } from '../../shared/types/pack.ts';
+import type { Machine, StructureInfo } from '../../shared/types/pack.ts';
 import { simpleClassName } from '../world/facts.ts';
+import { exportedCells, exportedPower, grownCells, type ExportedCells } from './hatch-export.ts';
 
 /**
  * The hatches the layout puts on a multiblock: the planner's six (buses, fluid hatches, energy, maintenance), the
@@ -87,6 +90,9 @@ export interface HatchRule {
   classes?: Partial<Readonly<Record<HatchKind, string>>>;
   /** What the group does with what the multiblock takes no hatch for. */
   byHand?: string;
+  // optional addition (add-on 20): the export's hatch rules this rule was made with (`hatchRulesOf`); `elementMap` then
+  // gives only the cells they cover and `ruleFits` holds
+  exported?: ExportedCells;
 }
 
 // ---- The rows ----
@@ -291,8 +297,22 @@ export function ruleNeeds(rule: HatchRule): HatchNeed[] {
 
 // ---- The rows on an exported structure ----
 
-/** Every cell of `rule`'s pieces on a structure of `size` whose controller is at `controller`: posKey → element character. */
+/**
+ * Every cell of `rule`'s pieces on a structure of `size` whose controller is at `controller`: posKey → element character.
+ * A rule made with the export's hatch rules (`exported`) gives only the cells the export covers, grown with a taller
+ * structure as `grownCells` grows them: a row narrowed by them keeps its pieces' characters there, and its controller's
+ * `~` and air `-`; the export's rules alone (no pieces) give the export's characters. A cell the export does not cover
+ * takes no hatch.
+ */
 export function elementMap(rule: HatchRule, controller: Vec3, size: Vec3): Map<string, string> {
+  if (rule.exported === undefined) return pieceMap(rule, controller, size);
+  const covered = grownCells(rule.exported, size[1] - rule.exported.height).charOf;
+  if (rule.pieces.length === 0) return new Map(covered);
+  return new Map([...pieceMap(rule, controller, size)].filter(([key, ch]) => ch === '~' || ch === '-' || covered.has(key)));
+}
+
+/** `elementMap` from the pieces alone. */
+function pieceMap(rule: HatchRule, controller: Vec3, size: Vec3): Map<string, string> {
   const map = new Map<string, string>();
   for (const piece of rule.pieces) {
     const width = Math.max(rule.width ?? 0, ...piece.shape.flat().map((row) => row.length));
@@ -316,9 +336,11 @@ export function elementMap(rule: HatchRule, controller: Vec3, size: Vec3): Map<s
 /**
  * Whether `rule` describes a structure of `size` with its controller at `controller` and its blocks at `blocks`: GT's
  * controller character lands on the controller, and every block of the structure on a cell of the pieces (so a variant
- * the row was not read from gets no row).
+ * the row was not read from gets no row). A rule made with the export's hatch rules was made for the exported
+ * structure (`hatchRulesOf`), so it fits.
  */
 export function ruleFits(rule: HatchRule, controller: Vec3, size: Vec3, blocks: readonly Vec3[]): boolean {
+  if (rule.exported !== undefined) return true;
   const map = elementMap(rule, controller, size);
   if (map.get(posKey(controller)) !== '~') return false;
   return blocks.every((p) => map.has(posKey(p)));
@@ -332,4 +354,56 @@ export function elementTakes(rule: HatchRule, char: string | undefined, kind: Ha
 /** Whether `rule` takes `kind` anywhere. */
 export function ruleTakes(rule: HatchRule, kind: HatchKind): boolean {
   return Object.values(rule.elements).some((kinds) => kinds.includes(kind));
+}
+
+// ---- The rules of a multiblock: the export's, the table's, or both (architecture §11.49) ----
+
+/** Where a multiblock's hatch rules come from: the export's narrowed by a fitting row, the export's alone, the row alone. */
+export type HatchSource = 'both' | 'export' | 'table';
+
+/**
+ * The hatch rules of `m`. With the export's (`exportedCells`) and a row that fits the exported structure, the row
+ * narrowed by the export (`'both'`): each of its characters keeps, in the row's order, the kinds the export gives on
+ * every covered cell of it (a character without a covered cell keeps none), and its pieces and notes stay as they are.
+ * Where the export takes more than the row (a cracker's sides, a tower's top centre) the row wins, as it holds what GT
+ * checks in the controller after its walk; the layout then stays inside both. With the export's and no fitting row,
+ * the export's alone (`'export'`; `rowUnfit` when there is a row and it does not fit): no needs, notes or casing
+ * minimums. Without the export's, a fitting row (`'table'`); else null.
+ */
+export function hatchRulesOf(m: Machine): { rule: HatchRule; source: HatchSource; rowUnfit: boolean } | null {
+  const st = m.structure;
+  if (st === undefined) return null;
+  const cells = exportedCells(m);
+  const row = hatchRuleFor(m);
+  const fitting = row !== null && ruleFits(row, st.controller, st.size, st.blocks.map((b) => b.pos)) ? row : null;
+  if (cells === null) return fitting === null ? null : { rule: fitting, source: 'table', rowUnfit: false };
+  if (fitting === null) return { rule: exportRule(m, cells), source: 'export', rowUnfit: row !== null };
+  return { rule: { ...fitting, elements: narrowedElements(fitting, cells, st), exported: cells }, source: 'both', rowUnfit: false };
+}
+
+/**
+ * `row`'s element lists, each narrowed to the layout kinds the export gives on every covered cell of its character:
+ * one character is one element of GT's definition, so a character whose cells the export treats differently is a row
+ * error (add-on 20's real-data acceptance reports it), and the layout keeps to what all of them take.
+ */
+function narrowedElements(row: HatchRule, cells: ExportedCells, st: StructureInfo): Record<string, HatchKind[]> {
+  const map = elementMap(row, st.controller, st.size);
+  const given = new Map<string, ReadonlySet<HatchKind>>();
+  for (const [key, exportedChar] of cells.charOf) {
+    const ch = map.get(key);
+    if (ch === undefined) continue;
+    const kinds = cells.takes.get(exportedChar) ?? new Set<HatchKind>();
+    const before = given.get(ch);
+    given.set(ch, before === undefined ? kinds : new Set([...before].filter((kind) => kinds.has(kind))));
+  }
+  return Object.fromEntries(Object.entries(row.elements).map(([ch, kinds]) => [ch, kinds.filter((kind) => given.get(ch)?.has(kind) === true)]));
+}
+
+/** The export's rules alone: its characters with their layout kinds, the steam buses' classes and the power it implies. */
+function exportRule(m: Machine, cells: ExportedCells): HatchRule {
+  return {
+    cls: simpleClassName(m.cls) ?? m.cls, evidence: 'exporter 0.6.0 structure elements', pieces: [],
+    elements: Object.fromEntries([...cells.takes].map(([ch, kinds]) => [ch, [...kinds]])),
+    classes: cells.classes, power: exportedPower(cells), exported: cells,
+  };
 }
