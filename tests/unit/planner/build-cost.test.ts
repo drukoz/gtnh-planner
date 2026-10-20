@@ -236,6 +236,41 @@ describe('structure cells that need nothing placed', () => {
     // Its controller (4 Firebricks) and the 4 Firebricks of its structure, each an iron ingot.
     expect(machineBuildCost(pack, prices, m1200)).toBe(8);
   });
+
+  it('builds a structure\'s debug hatches as the hatches they stand for, and an anvil as an Anvil whichever way it faces', async () => {
+    // The 2.9 export's Assembly Line holds a Debug Input Bus (MTEHatchInputBusDebug), its Large Heat Exchanger a Debug Input
+    // Hatch (MTEHatchInputDebug), and its Industrial Sledgehammer an anvil block at meta 1 (vanilla keeps an anvil's facing
+    // in the meta's low two bits, its damage above them): nothing makes the debug hatches or a Slightly Damaged Anvil
+    // (minecraft:anvil@1), so each made its multiblock one that cannot be built here, at any tier.
+    const spec = largeBenderSpec();
+    const structure = spec.machines?.find((m) => m.mteId === 1100)?.structure;
+    if (structure === undefined) throw new Error('no Large Bender structure');
+    const cell = (x: number, z: number): (typeof structure.blocks)[number] => structure.blocks.find((b) => b.pos[0] === x && b.pos[2] === z)!;
+    cell(1, 2).block = { id: 'gregtech:gt.blockmachines', meta: 9001, mteId: 9001 };
+    cell(0, 0).block = { id: 'gregtech:gt.blockmachines', meta: 9002, mteId: 9002 };
+    cell(2, 0).block = { id: 'minecraft:anvil', meta: 1 };
+    spec.items?.push({ key: 'minecraft:anvil@0', name: 'Anvil' }, { key: 'minecraft:anvil@1', name: 'Slightly Damaged Anvil' });
+    spec.machines?.push(
+      { mteId: 9001, name: 'Debug Input Bus', kind: 'hatch', tier: 9, maps: [], cls: `${HATCHES}MTEHatchInputBusDebug` },
+      { mteId: 9002, name: 'Debug Input Hatch', kind: 'hatch', tier: 14, maps: [], cls: `${HATCHES}MTEHatchInputDebug` },
+      { mteId: 41, name: 'Input Hatch (LV)', kind: 'hatch', tier: 1, maps: [], cls: `${HATCHES}MTEHatchInput` },
+    );
+    spec.recipes?.push(
+      { id: 'make-41', map: 'crafting', in: [['t:hull_lv@0', 1], ['t:iron_plate@0', 1]], out: [['machine:41@0', 1]] },
+      { id: 'make-anvil', map: 'crafting', in: [['t:iron_ingot@0', 3]], out: [['minecraft:anvil@0', 1]] },
+    );
+    const pack = packFromSpec(spec);
+    const m1100 = machine(pack, 1100);
+    expect([...structureParts(pack, m1100)].sort())
+      .toEqual([['machine:41@0', 1], ['machine:51@0', 1], ['minecraft:anvil@0', 1], ['t:casing@0', 5]]);
+    const prices = await pricesOf(pack, lv);
+    expect(machineGap(pack, prices, m1100)).toBeNull();
+    // Controller 3 × 3 + 6 = 15, 5 casings of 6, the LV input bus and input hatch 10 each, the anvil 3 iron ingots.
+    expect(machineBuildCost(pack, prices, m1100)).toBe(68);
+    // Run with: the hatches it needs come from the production classes, never a debug hatch.
+    expect([...hatchSet(pack, m1100, pack.recipeById.get('bend-plate')!, 1)].sort())
+      .toEqual([['machine:51@0', 1], ['machine:61@0', 1], ['machine:71@0', 1], ['machine:81@0', 1]]);
+  });
 });
 
 describe('itemPrices', () => {

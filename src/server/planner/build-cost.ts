@@ -198,22 +198,47 @@ function hatchesByClass(pack: Pack): ReadonlyMap<string, readonly Machine[]> {
 }
 
 /**
- * The hatch a multiblock is built with for a structure hatch: the hatch of the same simple class name with the lowest
- * tier (no tier sorts last), ties by lowest mteId. An exported structure holds whatever hatch its exporter placed (the
- * real EBF's is a UV muffler hatch, which would price every EBF out of reach below UV), and any tier of the class does
- * the job. A machine that is no hatch is its own.
+ * The hatch class a structure hatch of class `cls` is built as: GT's creative debug hatches stand for the ordinary class
+ * of their name without "Debug" (`MTEHatchInputBusDebug` for `MTEHatchInputBus`, `MTEHatchInputDebug` for
+ * `MTEHatchInput`), where the pack has that class. The 2.9 export's structures hold them where the multiblock takes the
+ * ordinary hatch (a Debug Input Bus in the Assembly Line and the Circuit Assembly Line, a Debug Input Hatch in the Large
+ * Heat Exchanger), and nothing makes one, so each made its multiblock one that cannot be built here.
+ */
+function builtClass(byClass: ReadonlyMap<string, readonly Machine[]>, cls: string): string {
+  const plain = cls.replace('Debug', '');
+  return plain !== cls && byClass.has(plain) ? plain : cls;
+}
+
+/**
+ * The hatch a multiblock is built with for a structure hatch: the hatch of the same simple class name (a debug hatch's,
+ * that of the hatch it stands for: `builtClass`) with the lowest tier (no tier sorts last), ties by lowest mteId. An
+ * exported structure holds whatever hatch its exporter placed (the real EBF's is a UV muffler hatch, which would price
+ * every EBF out of reach below UV), and any tier of the class does the job. A machine that is no hatch is its own.
  */
 export function minimalHatch(pack: Pack, hatch: Machine): Machine {
   if (hatch.kind !== 'hatch') return hatch;
-  return hatchesByClass(pack).get(simpleName(hatch))?.[0] ?? hatch;
+  const byClass = hatchesByClass(pack);
+  return byClass.get(builtClass(byClass, simpleName(hatch)))?.[0] ?? hatch;
+}
+
+/**
+ * Blocks whose block meta holds more than their item's damage, and that damage (vanilla 1.7.10's `damageDropped`): an
+ * anvil keeps its facing in the meta's low two bits and its damage above them, so the 2.9 export's Industrial
+ * Sledgehammer, whose structure holds an anvil block at meta 1, is built with an Anvil (minecraft:anvil@0), not a
+ * Slightly Damaged Anvil, which nothing makes.
+ */
+const ITEM_DAMAGE: Readonly<Record<string, (meta: number) => number>> = { 'minecraft:anvil': (meta) => meta >> 2 };
+
+/** The item a structure cell of block `id` at `meta` is built from (`ITEM_DAMAGE`, else `itemKey(id, meta)`). */
+export function cellItem(id: string, meta: number): StuffKey {
+  return itemKey(id, Object.hasOwn(ITEM_DAMAGE, id) ? (ITEM_DAMAGE[id] as (meta: number) => number)(meta) : meta);
 }
 
 /**
  * The cells of a multiblock's exported structure other than the controller (its cell, and blocks of its own mteId) and
  * the cells that need nothing placed (`NOTHING_TO_PLACE`: air and fluids), in export order: the item each is built from —
- * a GT tile block's machine item, a hatch at the lowest tier of its class (`minimalHatch`), any other block
- * `itemKey(id, meta)` — and whether it is a hatch. None for a singleblock and for a multiblock without an exported
- * structure.
+ * a GT tile block's machine item, a hatch at the lowest tier of its class (`minimalHatch`), any other block its item
+ * (`cellItem`) — and whether it is a hatch. None for a singleblock and for a multiblock without an exported structure.
  */
 function structureBlocks(pack: Pack, m: Machine): Array<{ key: StuffKey; hatch: boolean }> {
   const s = m.structure;
@@ -224,7 +249,7 @@ function structureBlocks(pack: Pack, m: Machine): Array<{ key: StuffKey; hatch: 
     if ((pos[0] === cx && pos[1] === cy && pos[2] === cz) || block.mteId === m.mteId || NOTHING_TO_PLACE.has(block.id)) continue;
     const tile = block.mteId === undefined ? undefined : pack.machines.get(block.mteId);
     cells.push(tile === undefined
-      ? { key: itemKey(block.id, block.meta), hatch: false }
+      ? { key: cellItem(block.id, block.meta), hatch: false }
       : { key: minimalHatch(pack, tile).itemKey, hatch: tile.kind === 'hatch' });
   }
   return cells;
