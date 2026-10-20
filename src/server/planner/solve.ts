@@ -1,7 +1,7 @@
 // The rate solver (spec §3.3, prior-art §3.4 steps 3, 4 and 7): the main LP in extent form, solved in lexicographic
 // stages (least raw material, then a step charge or fewest recipes, then power as a tie-break only, then a canonical
 // form), a guard against recipe data loops that make matter from nothing, and the goods that block a target nothing
-// reachable can make, for plain-words warnings.
+// reachable can make, for plain-words warnings (and the dead ends of one good's chain, for machine prices).
 
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import type { PlanWarning } from '../../shared/types/plan.ts';
@@ -899,38 +899,68 @@ function blockerFor(graph: CandidateGraph, key: StuffKey): Blocker {
   return tiers.length > 0 ? { key, reason: 'rejected', needTier: Math.min(...tiers) } : { key, reason: 'rejected' };
 }
 
+/** The recipes of `graph` that make each good (a positive coefficient), in graph order. */
+function producersIn(graph: CandidateGraph): Map<StuffKey, LpRecipe[]> {
+  const producers = new Map<StuffKey, LpRecipe[]>();
+  for (const r of graph.recipes) for (const [key, c] of r.coeffs) if (c > 0) pushTo(producers, key, r);
+  return producers;
+}
+
 /**
- * Why the targets cannot be made. Each target the makeable fixpoint misses is walked on its own, through the producers of
- * the goods the fixpoint misses. A good it misses is a blocker when it has no producer in the graph or is a base
- * material out of reach (`leafClass` 'unavailable'); the walk does not go past a blocker. A walk that finds none only
- * met goods on no-gain cycles (ingot <-> block, nugget or molten), so its blockers are the goods it visited that have a
- * `blocked` entry, or else the target itself. Reasons: `unavailable`, else `rejected` (its recipes cannot run here;
- * `needTier` is the lowest tier one of them names), else `no-recipe`. All targets together, sorted by key, at most 5.
+ * The walk back from a good the makeable fixpoint misses, through the producers of the goods it misses: `found` holds
+ * each good it meets that has no producer in the graph or is a base material out of reach (`leafClass` 'unavailable'),
+ * in the order met, and it does not go past one; `seen` every good it visited, in that order.
+ */
+function walkBack(
+  graph: CandidateGraph, from: StuffKey, makeable: ReadonlySet<StuffKey>, producers: ReadonlyMap<StuffKey, readonly LpRecipe[]>,
+): { found: StuffKey[]; seen: Set<StuffKey> } {
+  const seen = new Set<StuffKey>();
+  const found: StuffKey[] = [];
+  const stack = [from];
+  while (stack.length > 0) {
+    const key = stack.pop() as StuffKey;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const made = producers.get(key) ?? [];
+    if (made.length === 0 || graph.goods.get(key)?.leafClass === 'unavailable') {
+      found.push(key);
+      continue;
+    }
+    for (const r of made) {
+      for (const [input, c] of r.coeffs) if (c < 0 && !makeable.has(input) && !seen.has(input)) stack.push(input);
+    }
+  }
+  return { found, seen };
+}
+
+/**
+ * What stops `from` being made: `findBlockers`' walk from it, without its fallback — the goods the walk meets that
+ * nothing in the graph makes or that are base materials out of reach (`leafClass` 'unavailable'), sorted by key. `[]`
+ * when `from` is makeable, and when the walk meets only goods on loops with no way in (made, and nothing out of reach,
+ * yet nothing grounds them). Machine prices tell a machine that cannot be built from a pricing gap by it (build-cost.ts).
+ */
+export function deadEnds(graph: CandidateGraph, from: StuffKey): StuffKey[] {
+  const makeable = makeableGoods(graph);
+  if (makeable.has(from)) return [];
+  return walkBack(graph, from, makeable, producersIn(graph)).found.sort(byString);
+}
+
+/**
+ * Why the targets cannot be made. Each target the makeable fixpoint misses is walked on its own (`deadEnds`' walk, over
+ * one fixpoint for all targets), through the producers of the goods the fixpoint misses. A good it misses is a blocker
+ * when it has no producer in the graph or is a base material out of reach (`leafClass` 'unavailable'); the walk does not
+ * go past a blocker. A walk that finds none only met goods on no-gain cycles (ingot <-> block, nugget or molten), so its
+ * blockers are the goods it visited that have a `blocked` entry, or else the target itself. Reasons: `unavailable`, else
+ * `rejected` (its recipes cannot run here; `needTier` is the lowest tier one of them names), else `no-recipe`. All
+ * targets together, sorted by key, at most 5.
  */
 export function findBlockers(graph: CandidateGraph): Blocker[] {
   const makeable = makeableGoods(graph);
-  const producers = new Map<StuffKey, LpRecipe[]>();
-  for (const r of graph.recipes) for (const [key, c] of r.coeffs) if (c > 0) pushTo(producers, key, r);
-
+  const producers = producersIn(graph);
   const blockers = new Map<StuffKey, Blocker>();
   for (const target of new Set(graph.targets)) {
     if (makeable.has(target)) continue;
-    const seen = new Set<StuffKey>();
-    const found: StuffKey[] = [];
-    const stack = [target];
-    while (stack.length > 0) {
-      const key = stack.pop() as StuffKey;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const made = producers.get(key) ?? [];
-      if (made.length === 0 || graph.goods.get(key)?.leafClass === 'unavailable') {
-        found.push(key);
-        continue;
-      }
-      for (const r of made) {
-        for (const [input, c] of r.coeffs) if (c < 0 && !makeable.has(input) && !seen.has(input)) stack.push(input);
-      }
-    }
+    const { found, seen } = walkBack(graph, target, makeable, producers);
     const named = found.length > 0 ? found : [...seen].filter((key) => graph.blocked.has(key));
     for (const key of named.length > 0 ? named : [target]) blockers.set(key, blockerFor(graph, key));
   }

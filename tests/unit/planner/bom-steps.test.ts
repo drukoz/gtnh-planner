@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { MINI_GT, miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec, type IngredientSpec } from '../../helpers/pack-spec.ts';
+import { largeBenderSpec } from '../../helpers/build-fixtures.ts';
 import { buildBom, expandBomLines } from '../../../src/server/planner/bom.ts';
 import { buildSteps } from '../../../src/server/planner/steps.ts';
 import { planLine } from '../../../src/server/planner/plan.ts';
@@ -58,6 +59,17 @@ describe('buildBom', () => {
     const bom = await buildBom(p, [step({ id: 'ebf', recipeId: 'ebf', machine: { mteId: 1000, name: 'Electric Blast Furnace', tier: 1 } })], { settings, env: b.env, leaf: b.leaf, ctx: emptyContextForTest() });
     expect(bom.lines.map((l) => [l.key, l.amount, l.group])).toEqual([['machine:1000@0', 1, 'machines'], ['machine:50@0', 1, 'machines'], ['t:casing@11', 1, 'machines']]);
     expect(bom.lines.find((l) => l.key === 'machine:1000@0')?.why).toBe('1× Electric Blast Furnace');
+  });
+  it('lists a structure hatch at the lowest tier of its class', async () => {
+    // The Large Bender's exported structure holds an HV muffler hatch; the LV one does the same job.
+    const p = packFromSpec(largeBenderSpec());
+    const settings = { ...defaultSettings(), tier: 1 };
+    const b = planBasis(p, settings, emptyContextForTest());
+    const bom = await buildBom(p, [step({ id: 'bend-plate', recipeId: 'bend-plate', machine: { mteId: 1100, name: 'Large Bender', tier: 1 } })],
+      { settings, env: b.env, leaf: b.leaf, ctx: emptyContextForTest() });
+    const lines = bom.lines.map((l) => [l.key, l.amount, l.why, l.group]);
+    expect(lines).toContainEqual(['machine:91@0', 1, 'structure of 1× Large Bender', 'machines']);
+    expect(lines.map(([key]) => key)).not.toContain('machine:93@0');
   });
   it('adds one cleanroom for the steps that need it, and warns when the pack has none', async () => {
     const spec = (cls: string) => packFromSpec({ maps: [{ id: 'gt.recipe.assembler' }],

@@ -4,9 +4,10 @@
 // parts the same breakdown.
 
 import { PSEUDO_MACHINES } from '../../shared/gt/tiers.ts';
-import { itemKey, type StuffKey } from '../../shared/keys.ts';
+import type { StuffKey } from '../../shared/keys.ts';
 import type { Machine, Pack } from '../../shared/types/pack.ts';
 import { FREE_KEYS, type BomLine, type PlanContext, type PlanSettings, type PlanStep, type PlanWarning } from '../../shared/types/plan.ts';
+import { structureParts } from './build-cost.ts';
 import { buildCandidates, heldOption, type HeldAvoid, type LeafOracle, type LpRecipe, type PlanEnv } from './candidates.ts';
 import { analyzeCosts, makePrices, type CostAnalysis } from './costs.ts';
 import { yieldToEventLoop } from './lp.ts';
@@ -77,30 +78,15 @@ export function stepProductName(pack: Pack, step: PlanStep): string {
   return pack.nameOf(step.mainOutput ?? step.outputs[0]?.key ?? step.recipeId);
 }
 
-/** The blocks of a multiblock's exported structure per item, without the controller cell (the machine line itself). */
-function structureParts(pack: Pack, m: Machine): Map<StuffKey, number> {
-  const parts = new Map<StuffKey, number>();
-  const s = m.structure;
-  if (m.kind !== 'multiblock' || s === undefined) return parts;
-  const [cx, cy, cz] = s.controller;
-  for (const { pos, block } of s.blocks) {
-    if ((pos[0] === cx && pos[1] === cy && pos[2] === cz) || block.mteId === m.mteId) continue;
-    const hatch = block.mteId === undefined ? undefined : pack.machines.get(block.mteId);
-    const key = hatch?.itemKey ?? itemKey(block.id, block.meta);
-    parts.set(key, (parts.get(key) ?? 0) + 1);
-  }
-  return parts;
-}
-
 /**
  * The build list of a line's steps: per step its new machines (`count − owned`; pseudo machines skipped) and, for a
- * multiblock, the blocks of their structures; the not-consumed inputs of every machine step's recipe for all `count`
- * machines (owned ones need them too); each hand-crafting tool once, however many steps use it (Task 13 ruling); one
- * cleanroom when any step needs one. In Make N the steps of one machine type share its machines (make-n.ts), so only
- * the first step of a type adds machines. Lines with the same key and group are merged, sorted by group then key, and
- * broken down to base materials. The warnings are `no-cleanroom` and the breakdown's own `graph-too-big`. With `avoid`
- * (what the line avoids) each not-consumed slot holds an option the line may use (`heldOption`); the breakdown itself
- * avoids nothing (ruling R6).
+ * multiblock, the blocks of their structures (`structureParts`: each structure hatch at the lowest tier of its class);
+ * the not-consumed inputs of every machine step's recipe for all `count` machines (owned ones need them too); each
+ * hand-crafting tool once, however many steps use it (Task 13 ruling); one cleanroom when any step needs one. In Make N
+ * the steps of one machine type share its machines (make-n.ts), so only the first step of a type adds machines. Lines
+ * with the same key and group are merged, sorted by group then key, and broken down to base materials. The warnings are
+ * `no-cleanroom` and the breakdown's own `graph-too-big`. With `avoid` (what the line avoids) each not-consumed slot
+ * holds an option the line may use (`heldOption`); the breakdown itself avoids nothing (ruling R6).
  */
 export async function buildBom(
   pack: Pack, steps: PlanStep[],
