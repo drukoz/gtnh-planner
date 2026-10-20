@@ -728,7 +728,8 @@ const MAX_LISTED = 5;
 
 /**
  * The Make N warning for goods whole crafts could not balance (make-n.ts `short`): the batch under-delivers them, so
- * the plan says so instead of reading as if it worked out (spec §3.2 "shows how long it will take").
+ * the plan says so instead of reading as if it worked out (spec §3.2 "shows how long it will take"). Its `keys` are
+ * every good it covers, the target first, so the plan index adds no short input for them at each step that takes one.
  */
 export function batchShortWarning(pack: Pack, short: readonly Product[], target: StuffKey, amount: number): PlanWarning[] {
   if (short.length === 0) return [];
@@ -738,7 +739,8 @@ export function batchShortWarning(pack: Pack, short: readonly Product[], target:
   const more = others.length > MAX_LISTED ? ` and ${others.length - MAX_LISTED} more` : '';
   const head = missingTarget === undefined ? '' : `The batch makes only ${Math.max(0, Math.round((amount - missingTarget.amount) * 100) / 100)} of ${amount} ${pack.nameOf(target)}. `;
   const tail = others.length === 0 ? '' : `Whole crafts do not balance: have ${listed}${more} ready before you start (cells or catalysts the chain hands round), or the batch comes out short.`;
-  return [{ code: 'batch-short', key: missingTarget?.key ?? others[0]?.key, text: `${head}${tail}`.trim() }];
+  const keys = [...(missingTarget === undefined ? [] : [target]), ...others.map((p) => p.key)];
+  return [{ code: 'batch-short', key: keys[0], keys, text: `${head}${tail}`.trim() }];
 }
 
 function scaled(values: ReadonlyMap<string, number>, factor: number): Map<string, number> {

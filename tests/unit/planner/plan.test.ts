@@ -346,10 +346,13 @@ describe('planLine', () => {
   it('says when whole crafts leave a Make N batch short', () => {
     expect(batchShortWarning(pack, [], 't:circuit@0', 10)).toEqual([]);
     expect(batchShortWarning(pack, [{ key: 'fluid:oil', amount: 1000, chance: 1 }, { key: 't:copper_wire@0', amount: 2, chance: 1 }], 't:circuit@0', 10)).toEqual([{
-      code: 'batch-short', key: 'fluid:oil',
+      code: 'batch-short', key: 'fluid:oil', keys: ['fluid:oil', 't:copper_wire@0'],
       text: 'Whole crafts do not balance: have 1,000 L Oil, 2× 1x Copper Wire ready before you start (cells or catalysts the chain hands round), or the batch comes out short.',
     }]);
     expect(batchShortWarning(pack, [{ key: 't:circuit@0', amount: 3, chance: 1 }], 't:circuit@0', 10)[0]?.text).toBe('The batch makes only 7 of 10 Basic Circuit.');
+    // Every good it covers, the target first, so the plan index leaves them to it (no short input at each consumer).
+    const both = [{ key: 't:copper_wire@0', amount: 2, chance: 1 }, { key: 't:circuit@0', amount: 3, chance: 1 }];
+    expect(batchShortWarning(pack, both, 't:circuit@0', 10)[0]).toMatchObject({ key: 't:circuit@0', keys: ['t:circuit@0', 't:copper_wire@0'] });
   });
   it('keeps a stop item the line cannot make at its stop price, so its recipe stays an alternative', async () => {
     // At MV nothing reachable makes titanium ingots; the group says it already makes them.

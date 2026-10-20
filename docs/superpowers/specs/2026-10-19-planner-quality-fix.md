@@ -641,7 +641,10 @@ export function issueText(issue: PlanIssue, plan: Plan): string;
 ```
 - `orphan-input`: a step input with `need > 0` and `got ≤ ORPHAN_REL × need`; `short-input`: `got < SHORT_INPUT_SHARE × need`;
   `multi-producer`: a good that is the `mainOutput` of 2+ steps (shares by produced amount); `bought-and-made`: a good with
-  a `raw` flow that is some step's `mainOutput`. A good several steps make only as a by-product is not an issue.
+  a `raw` flow that is some step's `mainOutput`. A good several steps make only as a by-product is not an issue. Nor is
+  the shortfall of a good a Make N batch comes out short of (plan 09 follow-up): its `batch-short` warning lists every
+  such good in `PlanWarning.keys?` (the target first) and already says what to have ready, so no step that takes one gets
+  an `orphan-input` or `short-input` for it.
 - `planLine` runs `indexPlan` on the finished plan (in `assemble`, after `plan.names`) and adds one `PlanWarning` per
   issue (`code` as above, `key`, `stepId` of the consumer or the largest producer, optional `stepIds`, `share`;
   `text = issueText(issue, plan)`). `PlanWarning` gains optional `stepIds?: string[]` and `share?: number[]`. The client

@@ -236,6 +236,9 @@ export interface PlanWarning {
   // first, and their shares
   stepIds?: string[];
   share?: number[];
+  // optional addition (fix spec R11, plan 09 follow-up): every good a `batch-short` warning covers (`key` is the first),
+  // which the plan index then leaves to it
+  keys?: StuffKey[];
 }
 
 export interface Plan {
