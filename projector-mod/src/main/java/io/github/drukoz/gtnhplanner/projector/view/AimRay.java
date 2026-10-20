@@ -37,10 +37,15 @@ public final class AimRay {
      * The ghosts along the ray from {@code eye} in direction {@code look}, nearest first. {@code distance} is how far
      * along the (normalised) look the ray enters the ghost's cell. The eye's own cell is skipped. The walk ends after
      * the first cell where {@code stops} is true (that cell's ghost still counts) and never goes past
-     * {@code maxDistance}. A look of all zeros gives an empty list.
+     * {@code maxDistance}. A look of all zeros, or an eye, look or {@code maxDistance} that is not a finite number,
+     * gives an empty list.
      */
     public static List<Hit> walk(double[] eye, double[] look, double maxDistance, Ghosts ghosts, Stops stops) {
         List<Hit> hits = new ArrayList<>();
+        for (int a = 0; a < 3; a++) {
+            if (!Double.isFinite(eye[a]) || !Double.isFinite(look[a])) return hits;
+        }
+        if (!Double.isFinite(maxDistance)) return hits;
         double len = Math.sqrt(look[0] * look[0] + look[1] * look[1] + look[2] * look[2]);
         if (len == 0) return hits;
         int[] cell = new int[3];
@@ -66,7 +71,7 @@ public final class AimRay {
         while (true) {
             int a = tMax[0] <= tMax[1] ? (tMax[0] <= tMax[2] ? 0 : 2) : (tMax[1] <= tMax[2] ? 1 : 2);
             double t = tMax[a];
-            if (t > maxDistance) break;
+            if (!(t <= maxDistance)) break;
             cell[a] += step[a];
             tMax[a] += tDelta[a];
             int block = ghosts.at(cell[0], cell[1], cell[2]);

@@ -426,6 +426,48 @@ class ProjectorSessionTest {
         s.find(9); s.run(Command.clear()); assertEquals(-1, s.found());
     }
 
+    @Test void aimingAtAFoundBlockOutsideTheFilterEndsTheFinding() throws Exception {
+        loadSample();
+        s.run(Command.step("2"));                                               // shows blocks 3 and 4 only
+        s.find(0);
+        s.aim(new double[] {99.5, 64.5, 201.5}, new double[] {1, 0, 0}, none);  // block 0 is the nearest on the ray, but filtered out
+        assertEquals(Arrays.asList(3, 4), blocks(s.aimHits()));
+        assertEquals(-1, s.found());
+    }
+
+    @Test void aimingAtAFoundBlockWhileGhostsAreHiddenEndsTheFinding() throws Exception {
+        loadSample();
+        s.setGhostsHidden(true);
+        s.find(1);
+        s.aim(new double[] {99.5, 64.5, 190.5}, new double[] {0, 0, 1}, none);  // nothing on this ray
+        assertEquals(1, s.found());
+        s.aim(new double[] {99.5, 64.5, 201.5}, new double[] {1, 0, 0}, none);
+        assertTrue(s.aimHits().isEmpty());
+        assertEquals(-1, s.found());
+    }
+
+    @Test void aFoundBlockBehindARealBlockStaysFound() throws Exception {
+        loadSample();
+        AimRay.Stops wall = (x, y, z) -> x == 101 && y == 64 && z == 201;
+        s.find(3);
+        s.aim(new double[] {99.5, 64.5, 201.5}, new double[] {1, 0, 0}, wall);
+        assertEquals(3, s.found());
+        s.run(Command.xray(true));
+        s.aim(new double[] {99.5, 64.5, 201.5}, new double[] {1, 0, 0}, wall);
+        assertEquals(3, s.found());                                             // seen through the wall, but drawn ghosts are nearer
+        s.find(0);
+        s.aim(new double[] {99.5, 64.5, 201.5}, new double[] {1, 0, 0}, wall);
+        assertEquals(-1, s.found());
+    }
+
+    @Test void theHudSaysWhenGhostsAreHidden() throws Exception {
+        loadSample();
+        s.setGhostsHidden(true);
+        assertEquals("Planner: Steel line — 0/10 placed, 0 wrong · ghosts hidden", s.hudLines().get(0));
+        s.setGhostsHidden(false);
+        assertEquals("Planner: Steel line — 0/10 placed, 0 wrong", s.hudLines().get(0));
+    }
+
     @Test void refreshDropsTheAimAndRefindsByPosition() throws Exception {
         loadSample();
         s.aim(new double[] {99.5, 64.5, 201.5}, new double[] {1, 0, 0}, none);

@@ -58,4 +58,31 @@ class AimRayTest {
     @Test void aZeroLookHitsNothing() {
         assertTrue(AimRay.walk(EYE, new double[] {0, 0, 0}, 96, ghosts("1,65,0", 1), NONE).isEmpty());
     }
+
+    @Test void aNaNEyeHitsNothingAndReturnsPromptly() {
+        List<AimRay.Hit> h = assertTimeoutPreemptively(java.time.Duration.ofSeconds(2),
+            () -> AimRay.walk(new double[] {Double.NaN, 65, 0}, PLUS_X, 96, (x, y, z) -> 1, NONE));
+        assertTrue(h.isEmpty());
+    }
+
+    @Test void aNonFiniteLookOrMaxDistanceHitsNothingAndReturnsPromptly() {
+        assertTimeoutPreemptively(java.time.Duration.ofSeconds(2), () -> {
+            assertTrue(AimRay.walk(EYE, PLUS_X, Double.NaN, (x, y, z) -> 1, NONE).isEmpty());
+            assertTrue(AimRay.walk(EYE, PLUS_X, Double.POSITIVE_INFINITY, (x, y, z) -> 1, NONE).isEmpty());
+            assertTrue(AimRay.walk(EYE, new double[] {Double.NaN, 0, 0}, 96, (x, y, z) -> 1, NONE).isEmpty());
+            assertTrue(AimRay.walk(new double[] {0.5, Double.POSITIVE_INFINITY, 0.5}, PLUS_X, 96, (x, y, z) -> 1, NONE).isEmpty());
+        });
+    }
+
+    @Test void walksTheNegativeDirection() {
+        List<AimRay.Hit> h = AimRay.walk(EYE, new double[] {-1, 0, 0}, 96, ghosts("-4,65,0", 6), NONE);
+        assertEquals(Arrays.asList(6), blocks(h)); assertEquals(3.5, h.get(0).distance, 1e-9);
+    }
+
+    @Test void walksANonAxisSlope() {
+        // look (2, 1, 2) normalised by 3; from (0.5, 65.5, 0.5) the cell (2, 65, 2) is entered where the x and z planes both reach 2
+        List<AimRay.Hit> h = AimRay.walk(new double[] {0.5, 65.5, 0.5}, new double[] {2, 1, 2}, 96, ghosts("2,66,2", 8), NONE);
+        assertEquals(Arrays.asList(8), blocks(h));
+        assertEquals(1.5 * 1.5, h.get(0).distance, 1e-9);
+    }
 }

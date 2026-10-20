@@ -13,6 +13,7 @@ import java.util.Objects;
 import net.minecraft.client.audio.PositionedSoundRecord;
 import net.minecraft.client.gui.GuiButton;
 import net.minecraft.client.gui.GuiScreen;
+import net.minecraft.client.settings.KeyBinding;
 import net.minecraft.util.ResourceLocation;
 import org.lwjgl.input.Mouse;
 import org.lwjgl.opengl.GL11;
@@ -43,6 +44,8 @@ public final class PlannerScreen extends GuiScreen {
 
     /** The model's area: under the title row, above the bottom row, left of the right column (this fraction). */
     private static final int MARGIN = 6, TITLE_HEIGHT = 20, BOTTOM_HEIGHT = 30;
+    /** The key code of a key binding that has no key. */
+    private static final int UNBOUND = 0;
     private static final double RIGHT_COLUMN = 0.34;
     /** Padding inside a panel, a step row's height, a needs line's height, the space between buttons. */
     private static final int PAD = 3, ROW = 11, LINE = 10, GAP = 4, BUTTON_HEIGHT = 20;
@@ -73,6 +76,8 @@ public final class PlannerScreen extends GuiScreen {
 
     private final ProjectorSession session;
     private final ScreenModel model;
+    /** The key binding that opened the screen; its key closes it too. */
+    private final KeyBinding openKey;
 
     private LayerSlider slider;
     private GuiButton allLayers, xRay, reload, ghosts;
@@ -91,8 +96,9 @@ public final class PlannerScreen extends GuiScreen {
     /** The row at the top of the step list (0 is {@code All steps}). */
     private int scroll;
 
-    public PlannerScreen(ProjectorSession session, ProjectorConfig config, BlockIcons icons) {
+    public PlannerScreen(ProjectorSession session, ProjectorConfig config, BlockIcons icons, KeyBinding openKey) {
         this.session = session;
+        this.openKey = openKey;
         this.model = new ScreenModel(session, config, icons);
     }
 
@@ -186,6 +192,17 @@ public final class PlannerScreen extends GuiScreen {
                 model.fail(failure);
             }
         }
+    }
+
+    /** Esc (as usual), the planner key when it is bound, or the inventory key closes the screen. */
+    @Override
+    protected void keyTyped(char typed, int keyCode) {
+        int opener = openKey.getKeyCode();
+        if (keyCode == mc.gameSettings.keyBindInventory.getKeyCode() || (opener != UNBOUND && keyCode == opener)) {
+            mc.displayGuiScreen(null);
+            return;
+        }
+        super.keyTyped(typed, keyCode);
     }
 
     /** A click on a step picks it, a press on the model starts a drag, and the buttons work as usual. */

@@ -15,6 +15,8 @@ class HudTextTest {
     @Test void summarizesWhatIsShown() throws Exception {
         ProjectorData d = PayloadParserTest.sample();
         assertEquals("Planner: Steel line — 3/10 placed, 2 wrong, 1 can't be checked", HudText.summary(d, STATES, ViewFilter.ALL));
+        assertEquals("Planner: Steel line — 3/10 placed, 2 wrong, 1 can't be checked · ghosts hidden", HudText.summary(d, STATES, ViewFilter.ALL, true));
+        assertEquals("Planner: Steel line — 0/2 placed, 0 wrong · showing layer y=65 · ghosts hidden", HudText.summary(d, STATES, ViewFilter.ALL.withLayer(65), true));
         assertEquals("Planner: Steel line — 1/2 placed, 1 wrong · showing step 2: Place 2× Basic Macerator facing the mid…", HudText.summary(d, STATES, ViewFilter.ALL.withStep(1)));
         assertEquals("Planner: Steel line — 0/2 placed, 0 wrong · showing layer y=65", HudText.summary(d, STATES, ViewFilter.ALL.withLayer(65)));
         assertEquals("Planner: Steel line — the line is in dimension 0", HudText.otherDimension(d));

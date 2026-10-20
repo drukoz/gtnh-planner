@@ -99,7 +99,7 @@ public final class ProjectorSession {
     /** The ghosts under the crosshair, nearest first, and where the eye was; not saved. */
     private List<AimRay.Hit> hits = Collections.emptyList();
     private double[] eye;
-    /** Whether {@code G} hid every ghost; lasts the game run and survives {@code /planner clear}. */
+    /** Whether the planner screen's Hide ghosts hid every ghost; lasts the game run and survives {@code /planner clear}. */
     private boolean ghostsHidden;
     /** The block being found (index in {@link ProjectorData#blocks}), −1 for none, and when it ends. */
     private int foundIndex = -1;
@@ -215,7 +215,7 @@ public final class ProjectorSession {
         if (data == null) return lines;
         if (!data.placed()) lines.add("Planner: " + data.name + " — " + whyNotPlaced(data));
         else if (data.dim != env.dimension()) lines.add(HudText.otherDimension(data));
-        else lines.add(HudText.summary(data, check.states(), filter));
+        else lines.add(HudText.summary(data, check.states(), filter, ghostsHidden));
         if (lastError != null) lines.add("Planner: " + HudText.shorten(lastError, ERROR_TEXT_LENGTH));
         if (renderError != null) lines.add("Planner: " + renderError);
         if (!visibleHere()) return lines;
@@ -246,22 +246,37 @@ public final class ProjectorSession {
      * Takes where the player looks: the drawn ghosts on the ray from {@code eye} along {@code look}, up to
      * {@code maxDistance}, nearest first. A ghost is drawn when the line is {@link #visibleHere}, the ghosts are not
      * hidden, the filter shows it and it is within {@code maxDistance} of the eye. {@code stops} (a real block in the
-     * way) is ignored while {@link #seeThrough}. Aiming at the block being found ends the finding.
+     * way) is ignored while {@link #seeThrough}. Aiming at the block being found ends the finding, whatever the filter or Hide
+     * ghosts say: its own cell is walked on its own, within {@code maxDistance}, and counts when no drawn ghost is nearer.
      */
     public void aim(double[] eye, double[] look, AimRay.Stops stops) {
         this.eye = eye.clone();
         hits = Collections.emptyList();
-        if (!visibleHere() || ghostsHidden) return;
+        if (!visibleHere()) return;
         final double[] from = this.eye;
         final double max = config.maxDistance();
+        final AimRay.Stops reach = seeThrough() ? (x, y, z) -> false : stops;
+        // the block being found is reached whatever the filter or Hide says, so the finding ends when it is aimed at
+        final int finding = found();
+        double foundDistance = Double.POSITIVE_INFINITY;
+        if (finding >= 0) {
+            PlannedBlock f = data.blocks.get(finding);
+            AimRay.Ghosts only = (x, y, z) -> x == f.x && y == f.y && z == f.z ? finding : -1;
+            List<AimRay.Hit> reached = AimRay.walk(from, look, max, only, reach);
+            if (!reached.isEmpty()) foundDistance = reached.get(0).distance;
+        }
+        if (ghostsHidden) {
+            if (foundDistance < Double.POSITIVE_INFINITY) foundIndex = -1;
+            return;
+        }
         AimRay.Ghosts ghosts = (x, y, z) -> {
             Integer i = blockAt.get(key(x, y, z));
             if (i == null) return -1;
             PlannedBlock b = data.blocks.get(i);
             return filter.shows(b) && ViewFilter.within(b, from[0], from[1], from[2], max) ? i : -1;
         };
-        hits = Collections.unmodifiableList(AimRay.walk(from, look, max, ghosts, seeThrough() ? (x, y, z) -> false : stops));
-        if (!hits.isEmpty() && hits.get(0).block == foundIndex) foundIndex = -1;
+        hits = Collections.unmodifiableList(AimRay.walk(from, look, max, ghosts, reach));
+        if (foundDistance < Double.POSITIVE_INFINITY && (hits.isEmpty() || foundDistance <= hits.get(0).distance)) foundIndex = -1;
     }
 
     /** The ghosts under the crosshair, nearest first; unmodifiable. */
@@ -292,7 +307,7 @@ public final class ProjectorSession {
         foundIndex = -1;
     }
 
-    /** Whether every ghost is hidden ({@code G}); not saved. */
+    /** Whether every ghost is hidden (the planner screen's Hide ghosts button); not saved. */
     public boolean ghostsHidden() {
         return ghostsHidden;
     }

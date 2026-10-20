@@ -38,7 +38,8 @@ public final class AimRenderer {
     /** The tag's pixels per text line, and the space around the text. */
     private static final int LINE_HEIGHT = 10, PADDING = 2;
     /** A block farther than this many blocks is drawn at this distance, scaled down, so the far clipping plane cannot cut it. */
-    private static final double DRAW_CAP = 64;
+    private static final double DRAW_CAP = 16;
+    private static final String AIM_FAILED = "Aiming failed: %s";
     private static final String FAILED = "Aim outline drawing failed: %s";
 
     private final ProjectorSession session;
@@ -66,6 +67,8 @@ public final class AimRenderer {
         } catch (Throwable failure) {
             if (!aimFailed) ClientProxy.LOG.error("Aiming failed", failure);
             aimFailed = true;
+            String why = failure.getMessage() == null ? failure.toString() : failure.getMessage();
+            session.setRenderError(String.format(AIM_FAILED, why));
             return;
         }
         if (failed) return;
@@ -197,7 +200,7 @@ public final class AimRenderer {
             GL11.glRotatef(-RenderManager.instance.playerViewY, 0f, 1f, 0f);
             GL11.glRotatef(RenderManager.instance.playerViewX, 1f, 0f, 0f);
             GL11.glScalef(-scale, -scale, scale);
-            // text space: x right, y down; the tag's bottom edge is y = PADDING - 1 below the origin line
+            // text space: x right, y down; the background quad ends at y = 0, which is the tag's bottom edge
             int left = -width / 2;
             int top = -height - PADDING;
             GL11.glDisable(GL11.GL_TEXTURE_2D);

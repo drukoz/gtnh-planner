@@ -115,7 +115,7 @@ public final class ScreenOpener {
 
     /** Shows a new planner screen. */
     void open() {
-        mc.displayGuiScreen(new PlannerScreen(session, config, icons));
+        mc.displayGuiScreen(new PlannerScreen(session, config, icons, key));
     }
 
     /** No more inventory buttons from now on; the first failure is logged. */

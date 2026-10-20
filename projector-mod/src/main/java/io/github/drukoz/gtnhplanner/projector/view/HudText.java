@@ -38,8 +38,14 @@ public final class HudText {
      * not loaded counts only among the shown ones. {@code states[i]} is the state of {@code d.blocks.get(i)}.
      */
     public static String summary(ProjectorData d, BlockState[] states, ViewFilter f) {
+        return summary(d, states, f, false);
+    }
+
+    /** {@link #summary(ProjectorData, BlockState[], ViewFilter)}, then {@code  · ghosts hidden} when {@code hidden}. */
+    public static String summary(ProjectorData d, BlockState[] states, ViewFilter f, boolean hidden) {
         StringBuilder text = new StringBuilder("Planner: ").append(d.name).append(" — ").append(counts(d, states, f));
         if (!f.isAll()) text.append(" · showing ").append(f.describe(d));
+        if (hidden) text.append(" · ghosts hidden");
         return text.toString();
     }
 
