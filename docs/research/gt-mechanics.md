@@ -774,6 +774,8 @@ Read on 2026-10-20 with `javap` on copies of `$SL`, `$GT`, the server's `forge-1
 
 Per-cell acceptance is wider than what forms (bullet 11), so the layout narrows it by the hatch-rules table where a row fits.
 
+As measured (2026-10-20, the first 0.6.0 export of this pack): `hatchRules` 304 of 326 structures; structures section 4,656 → 4,310 ms against the 0.5.1 export before it (the probe included: earlier exports took 4,199–5,072 ms, so its cost is inside the section's run-to-run spread); 23,398 probe checks on 321 multiblocks in 812 ms; `structures.jsonl.gz` 349,660 bytes (299,023 before).
+
 ## 6. Parallels, batch mode and heat
 
 ### 6.1 How parallels are decided (`ParallelHelper.determineParallel`)
