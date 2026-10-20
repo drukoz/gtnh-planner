@@ -42,7 +42,7 @@ drukoz and friends on the server (a handful of people). drukoz runs the server a
 - "Base material" by default = mined ingots, dusts and gems, gathered items, and fluids pumpable where the group can reach; ore blocks only for lines that make a material.
 - When the group already owns machines that make a part (found in the world), the planner suggests reusing them. The group decides.
 - **Reusing machines we have** (strengthened 2026-10-18 at the user's request): a project switch "Reuse machines we have" (default on) makes the planner count owned machines as free to use (no build cost) and prefer routes that run on them. Owned machines come from the linked world scan's base and from a manual "Machines we have" list (machine + tier + count) for machines elsewhere or when no world is linked. In networked logistics modes (Project Red, AE2) machines are shared, owned and new alike: steps that run on the same machine type and tier with the same programmed circuit, the same held items (molds, shapes, lenses, catalysts) and the same fluids share machines while their combined busy time fits — on AE2 cobblestone → gravel → sand runs on one forge hammer — and only the shared machines the group lacks count as build cost. One AE2 machine runs at most nine recipes, the patterns one ME Interface holds; more take another machine. Project Red never sends an item back into the machine it came from, so there steps where one takes what another makes, or whose inputs would crowd a machine's few input slots, keep their own machines; in machine-to-machine mode, and on EnderIO lines until their layout can share, each step gets its own. A step may also run on owned machines of another tier beside the new ones it needs. A machine that no recipe in the pack makes, or whose parts are out of reach, cannot be built: the plan uses the ones the group owns and no more. Each step shows which of its machines are reused and where they stand ("2× Assembler (MV) at your base"), with a per-step "don't reuse" switch.
-- Steps that need a crafting table are listed as hand-crafting steps by default (my call); they can be marked as automated if the group has a block for it.
+- Steps that need a crafting table run on a GT++ Auto Workbench by default (setting: by hand, which lists them as hand-crafting steps). (Changed 2026-10-19 at the user's request; this replaces "listed as hand-crafting steps by default".)
 
 ### 3.3b Where materials come from (planets and dimensions) — added after approval at the user's request
 - Base-material decisions depend on **which planets and dimensions the group can reach at their current tier**.
@@ -182,7 +182,7 @@ My calls (open to change):
 - Auto-detect tier from the highest-tier machine at the base.
 - Suggest (not force) reusing machines the group already owns.
 - "We already make this" inputs keep their normal cost (not free).
-- Crafting-table steps default to hand-crafting.
+- Crafting-table steps run on a GT++ Auto Workbench by default (setting: by hand, which lists them as hand-crafting steps). (Changed 2026-10-19 at the user's request; this replaces "default to hand-crafting".)
 - Power "fits" rule: the average covers the line and buffers cover a rain outage.
 - Item/fluid icons from the game, same as block textures.
 
