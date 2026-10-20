@@ -7,7 +7,7 @@ import type { StuffKey } from '../../shared/keys.ts';
 import type { Pack } from '../../shared/types/pack.ts';
 import type { PlanContext, PlanSettings } from '../../shared/types/plan.ts';
 import { isBaseItem } from './availability.ts';
-import { basisContextKey, planBasis, resolveAvoid, settingsHash, type PlanBasis } from './basis.ts';
+import { basisContextKey, gatheredRecipesOn, planBasis, resolveAvoid, settingsHash, type PlanBasis } from './basis.ts';
 import { buildCandidates, type CandidateGraph, type LeafOracle } from './candidates.ts';
 import { analyzeCosts, makeLeafOracle, type CostAnalysis } from './costs.ts';
 import { yieldToEventLoop } from './lp.ts';
@@ -25,10 +25,13 @@ export interface CostModel { graph: CandidateGraph; costs: CostAnalysis; stopIte
  * A line's prices: its basis, the cost model, the leaf oracle with stop items at their cost-model price and derived
  * leaves at their own chain's cost, and the line's candidate graph over that oracle (the graph `planLine` solves).
  * `chains` holds what making each priced derived material and each stop item of that graph on its own runs
- * (`Standalone`, fix spec R7): the chain a bought one stands for (`RawInput.pricedVia`).
+ * (`Standalone`, fix spec R7): the chain a bought one stands for (`RawInput.pricedVia`). `unbuildable` (plan 12) holds
+ * the step recipes the graph was walked without (`linePricing`'s `opts`), which every other walk of the line leaves out
+ * too.
  */
 export interface LinePricing {
   target: StuffKey; basis: PlanBasis; model: CostModel; leaf: LeafOracle; graph: CandidateGraph; chains: ReadonlyMap<StuffKey, Standalone>;
+  unbuildable?: ReadonlyMap<string, string>;
 }
 
 /**
@@ -111,6 +114,7 @@ function avoidedPins(pack: Pack, settings: PlanSettings, target: StuffKey): Stuf
 
 async function computePricing(
   pack: Pack, settings: PlanSettings, ctx: PlanContext, target: StuffKey, pinAvoid: ReadonlySet<StuffKey>,
+  unbuildable: ReadonlyMap<string, string> | undefined,
 ): Promise<LinePricing> {
   await yieldToEventLoop();
   const basis = planBasis(pack, settings, ctx);
@@ -127,12 +131,18 @@ async function computePricing(
   const tried = new Set<StuffKey>();
   // The line makes the free inputs of `basis.supplied` with their generators (fix spec R2). The cost model above buys
   // them, at 0 like their generators' runs: its costs and the free input of a derived chain (`Standalone.free`, a
-  // tie-break) stay what they were.
+  // tie-break) stay what they were. Plan 12 (change request 13, Amendment OQ4): where build cost counts on an AE2 or
+  // Project Red line (`gatheredRecipesOn`), the line's own graph also offers the recipes of the gathered world blocks it
+  // uses (sand from rock-breaker cobblestone), beside digging them; the cost model, machine prices and build-material
+  // breakdowns keep them plain leaves.
+  const gatheredRecipes = gatheredRecipesOn(settings);
   const leafWith = (): LeafOracle =>
-    makeLeafOracle(pack, settings, basis.avail, basis.prices, stopCost, (key) => priced.get(key), { supplied: basis.supplied });
+    makeLeafOracle(pack, settings, basis.avail, basis.prices, stopCost, (key) => priced.get(key), { supplied: basis.supplied, gatheredRecipes });
+  // Plan 12 (controller ruling OQ5 a): the step recipes no machine can run here are left out of every walk of the line.
+  const walk = unbuildable === undefined ? { pinAvoid } : { pinAvoid, unbuildable };
   let leaf = leafWith();
   await yieldToEventLoop();
-  let graph = buildCandidates(pack, settings, basis.env, leaf, [target], { pinAvoid });
+  let graph = buildCandidates(pack, settings, basis.env, leaf, [target], walk);
   for (let round = 0; round < MAX_PRICING_ROUNDS; round++) {
     const unpriced = [...graph.goods.values()].filter((g) => g.leafClass === 'derived' && g.buyable && !tried.has(g.key)).map((g) => g.key);
     if (unpriced.length === 0) break;
@@ -140,28 +150,34 @@ async function computePricing(
     for (const [key, cost] of await derivedCosts(pack, settings, basis, model, target, unpriced)) priced.set(key, cost);
     leaf = leafWith();
     await yieldToEventLoop();
-    graph = buildCandidates(pack, settings, basis.env, leaf, [target], { pinAvoid });
+    graph = buildCandidates(pack, settings, basis.env, leaf, [target], walk);
   }
   // The chains behind the stop items the line may buy, as the derived leaves' (`priced`): only what they stand for
   // (`RawInput.pricedVia`) is read; a stop item keeps its own price.
   const stops = [...graph.goods.values()].filter((g) => g.leafClass === 'stop' && g.buyable).map((g) => g.key);
   const chains = new Map(priced);
   for (const [key, made] of await derivedCosts(pack, settings, basis, model, target, stops)) chains.set(key, made);
-  return { target, basis, model, leaf, graph, chains };
+  const pricing: LinePricing = { target, basis, model, leaf, graph, chains };
+  if (unbuildable !== undefined) pricing.unbuildable = unbuildable;
+  return pricing;
 }
 
 const MEMOS = new WeakMap<Pack, Map<string, Promise<LinePricing>>>();
 
 /**
  * The line's prices for `settings` in `ctx` (null when it has no target the export knows), computed once per pack,
- * settings hash and the context fields its basis reads (`basisContextKey`), for at most MEMO_SIZE such keys per pack:
- * the plan and every later `expandBomLines` of the same project share one pricing. Callers asking while it is computed
- * share that computation; one that fails is not kept. The avoid list plays no part (ruling R6: only `planLine`'s own
- * graphs honor it) beyond the option pins it overrides (`avoidedPins`, ruling P28: the line's graph ignores them, with
- * a `stale-option` each), so projects that differ only in it share one pricing, priced and walked without it, unless it
- * covers an option they pin.
+ * settings hash, the context fields its basis reads (`basisContextKey`) and the sorted ids of `opts.unbuildable`, for at
+ * most MEMO_SIZE such keys per pack: the plan and every later `expandBomLines` of the same project share one pricing.
+ * Callers asking while it is computed share that computation; one that fails is not kept. The avoid list plays no part
+ * (ruling R6: only `planLine`'s own graphs honor it) beyond the option pins it overrides (`avoidedPins`, ruling P28: the
+ * line's graph ignores them, with a `stale-option` each), so projects that differ only in it share one pricing, priced
+ * and walked without it, unless it covers an option they pin. `opts.unbuildable` (plan 12, controller ruling OQ5 a):
+ * step recipes no machine can run here, with why (`BuildModel.blocked`), which the line's graph is walked without
+ * (`CandidateOptions.unbuildable`), so producers that can run take their place.
  */
-export function linePricing(pack: Pack, settings: PlanSettings, ctx: PlanContext): Promise<LinePricing> | null {
+export function linePricing(
+  pack: Pack, settings: PlanSettings, ctx: PlanContext, opts?: { unbuildable?: ReadonlyMap<string, string> },
+): Promise<LinePricing> | null {
   const target = plannableTarget(pack, settings);
   if (target === null) return null;
   let memo = MEMOS.get(pack);
@@ -171,14 +187,16 @@ export function linePricing(pack: Pack, settings: PlanSettings, ctx: PlanContext
   }
   const open: PlanSettings = { ...settings, avoid: [] };
   const pinAvoid = avoidedPins(pack, settings, target);
-  const key = `${settingsHash(open)}|${basisContextKey(ctx)}${pinAvoid.length === 0 ? '' : `|${JSON.stringify(pinAvoid)}`}`;
+  const unbuildable = opts?.unbuildable !== undefined && opts.unbuildable.size > 0 ? opts.unbuildable : undefined;
+  const blockedIds = unbuildable === undefined ? '' : `|unbuildable:${JSON.stringify([...unbuildable.keys()].sort())}`;
+  const key = `${settingsHash(open)}|${basisContextKey(ctx)}${pinAvoid.length === 0 ? '' : `|${JSON.stringify(pinAvoid)}`}${blockedIds}`;
   const hit = memo.get(key);
   if (hit !== undefined) {
     memo.delete(key);
     memo.set(key, hit);
     return hit;
   }
-  const pricing = computePricing(pack, open, ctx, target, new Set(pinAvoid));
+  const pricing = computePricing(pack, open, ctx, target, new Set(pinAvoid), unbuildable === undefined ? undefined : new Map(unbuildable));
   memo.set(key, pricing);
   if (memo.size > MEMO_SIZE) memo.delete(memo.keys().next().value as string);
   const kept = memo;

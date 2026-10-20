@@ -191,7 +191,8 @@ describe('more machine and flow cases', () => {
   });
   it('warns about fast hand-crafting unless crafting is automated', async () => {
     const spec: PackSpec = { recipes: [{ id: 'craft', map: 'crafting', in: [['raw@0', 1]], out: [['t@0', 1]] }] };
-    const hand = (await planned(spec, 't@0', 2, 1)).steps[0];
+    // By hand is no longer the default (plan 12's Auto Workbench ruling): this case asks for it.
+    const hand = (await planned(spec, 't@0', 2, 1, { automateCrafting: false })).steps[0];
     expect(hand).toMatchObject({ machine: { mteId: -3, name: 'Crafting table (by hand)', tier: 0 }, count: 2, utilization: 1, handCraft: true,
       durationTicks: 20, euPerTick: 0, warnings: ['More than one craft per second by hand — consider automating it'] });
     const automated = (await planned(spec, 't@0', 2, 1, { automateCrafting: true })).steps[0];

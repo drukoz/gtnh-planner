@@ -1,18 +1,17 @@
 // Make N (spec §3.2, prior-art §3.6): a one-off batch of N on the machines the group already owns. The LP's runs are
 // rounded up to whole crafts (a good the rounding leaves short gets more runs, a buyable one is bought, a surplus is a
-// leftover); each step runs on every owned machine of its type, or on one added machine when nothing owned can run
-// it; and the batch takes as long as the busiest machine type plus the time one run needs to pass down the chain.
+// leftover); each step runs on every owned machine of its type, or on one added machine when nothing owned can run it
+// or a new one pays for itself against the batch (plan 12: the build-cost solve decides which); and the batch takes as
+// long as the busiest machine type plus the time one run needs to pass down the chain.
 
 import { PSEUDO_MACHINES } from '../../shared/gt/tiers.ts';
 import type { StuffKey } from '../../shared/keys.ts';
 import type { Pack, Product } from '../../shared/types/pack.ts';
 import type { PlanContext, PlanSettings, PlanStep } from '../../shared/types/plan.ts';
 import type { CandidateGraph, LpRecipe } from './candidates.ts';
-import {
-  describeStep, machineWarnings, ownedCounts, ownedMachineTypes, pickStepMachines, reusedMachines, stepLine, type PickedRecipe, type StepLine,
-  type StepSize,
-} from './machines.ts';
+import { describeStep, machineWarnings, ownedPools, pickStepMachines, reusedOf, stepLine, type PickedRecipe, type StepLine, type StepSize } from './machines.ts';
 import { solveLp, type LpRow } from './lp.ts';
+import type { BuildModel } from './machine-options.ts';
 import type { Solution } from './solve.ts';
 
 export interface MakeNResult {
@@ -303,13 +302,16 @@ function fillSeconds(graph: CandidateGraph, runs: ReadonlyMap<string, number>, p
 }
 
 /**
- * Make N on the group's machines (spec §3.2, prior-art §3.6). Each step runs on the machine `pickMachine` chooses with
- * the group's owned machines (`ownedMachineTypes`: the scan's and the "Machines we have" list's, none with "Reuse
- * machines we have" off, and a type in `settings.declineReuse` counts as not owned): an owned type gives the step all
- * the owned machines of that type (`count = owned`, `reused` saying where they stand), shared with the other steps of
- * that type; any other type gets one new machine (`count 1, owned 0`, in `addedMachines`), likewise shared. Pseudo
- * machines (hand-crafting, crafting table, furnace) are never added. `totalSeconds` = the busiest machine type (Σ work
- * ÷ its machines) plus the fill time.
+ * Make N on the group's machines (spec §3.2, prior-art §3.6). Each step runs on the machine the build-cost solve decided
+ * for it (`Solution.machines`, plan 12: an owned option, else the one whose one new machine pays for itself against the
+ * batch), else on the one `pickMachine` chooses with the group's owned machines (pseudo steps); owned machines are the
+ * owned pools (`opts.build`'s, else `ownedPools`: the scan's and the "Machines we have" list's, none with "Reuse machines
+ * we have" off, and a type in `settings.declineReuse` counts as not owned). An owned type gives the step all the owned
+ * machines of that type (`count = owned`, `reused` with all its units, where they stand and the other steps of the type
+ * in `sharedWith`), shared with the other steps of that type; any other type gets one new machine (`count 1, owned 0`, in
+ * `addedMachines`), likewise shared — no sharing pool (`PlanStep.pool`): a batch already shares one machine per type.
+ * Pseudo machines (hand-crafting, crafting table, furnace) are never added. `totalSeconds` = the busiest machine type
+ * (Σ work ÷ its machines) plus the fill time.
  */
 export async function makeN(
   pack: Pack, graph: CandidateGraph, sol: Solution, demand: ReadonlyMap<StuffKey, number>,
@@ -317,13 +319,15 @@ export async function makeN(
     settings: PlanSettings; groupTier: number; coilHeat: number; ctx: PlanContext; multiblocks?: ReadonlySet<number>;
     /** What the line's goods are worth and the pack's empty containers, for each step's main output (`StepLine`). */
     value?: Pick<StepLine, 'valueOf' | 'empties'>;
+    /** The line's build model (plan 12): its owned pools. */
+    build?: BuildModel;
   },
 ): Promise<MakeNResult> {
   const { settings, groupTier, coilHeat, ctx, multiblocks } = opts;
   const whole = await wholeRuns(graph, sol, demand);
-  const types = ownedMachineTypes(ctx, settings);
-  const owned = ownedCounts(types);
-  const picked = pickStepMachines(pack, graph, whole.runs, { settings, groupTier, coilHeat, owned, multiblocks });
+  const pools = opts.build?.pools ?? ownedPools(ctx, settings);
+  const owned = new Map([...pools].map(([mteId, units]) => [mteId, units.length]));
+  const picked = pickStepMachines(pack, graph, whole.runs, { settings, groupTier, coilHeat, owned, multiblocks, machines: sol.machines });
 
   const ownedOf = (mteId: number): number => Math.max(0, owned.get(mteId) ?? 0);
   const machinesOf = (mteId: number): number => ownedOf(mteId) || 1;
@@ -355,8 +359,11 @@ export async function makeN(
     }
     if (p.recipe.outputs.some((o) => o.chance < 1)) warnings.push(CHANCED_WARNING);
     const size: StepSize = { count, owned: ownedOf(mteId), runsPerSecond, utilization, warnings };
-    const type = types.get(mteId);
-    if (type !== undefined && size.owned > 0) size.reused = reusedMachines(size.owned, type.where);
+    if (size.owned > 0) {
+      const reused = reusedOf(pools, mteId, Array.from({ length: size.owned }, (_, u) => u));
+      if (others.length > 0) reused.sharedWith = [...others].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+      size.reused = reused;
+    }
     const step = describeStep(pack, p, line, size);
     step.runs = p.runs;
     return step;

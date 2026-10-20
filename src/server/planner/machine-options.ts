@@ -252,6 +252,15 @@ function meets(a: ReadonlySet<StuffKey>, b: ReadonlySet<StuffKey>): boolean {
 }
 
 /**
+ * Whether one of two recipes takes an item the other makes (any option of a consumed item slot; item products): the
+ * Project Red split's rule (i), which keeps them apart (`routedParts`); machines.ts `planSteps` says so on their steps
+ * (ruling P7).
+ */
+export function feedsEither(a: Recipe, b: Recipe): boolean {
+  return meets(madeItems(a), consumedItems(b)) || meets(madeItems(b), consumedItems(a));
+}
+
+/**
  * The Project Red split (Global Constraints: ProjRed-4.12.44-GTNH's Item Extractor Chip never routes an item back to the
  * machine it took it from, and its network pushes items into whatever accepts them): each step recipe of the graph →
  * its part, 0 for the first. Per map and base sharing key, in id order, a recipe joins the first part where (i) no

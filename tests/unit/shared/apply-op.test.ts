@@ -59,7 +59,7 @@ describe('defaultSettings / normalizeSettings', () => {
   it('has the decided defaults', () => {
     const s = defaultSettings();
     expect(s).toMatchObject({ target: null, mode: 'rate', amount: 1, per: 'min', tier: null, routeDerived: true,
-      logistics: 'direct', coilHeat: null, automateCrafting: false, dims: { policy: 'progression', overrides: {} }, settingsVersion: 2,
+      logistics: 'direct', coilHeat: null, automateCrafting: true, dims: { policy: 'progression', overrides: {} }, settingsVersion: 2,
       stepCharge: 0.02, reuseOwned: true });
     expect(s.excludedCategories).toEqual(['recycling', 'massfab', 'replicator', 'scrap', 'lava-centrifuge', 'programmed-circuit-conversion']);
     expect(s.declineReuse).toEqual([]);

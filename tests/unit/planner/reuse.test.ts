@@ -3,7 +3,8 @@
 // machine assignment and the build list, in rate mode and in Make N.
 
 import { describe, it, expect } from 'vitest';
-import { miniGt } from '../../helpers/mini-gt.ts';
+import { LV_MACHINE_PARTS, withBuildRecipes } from '../../helpers/build-fixtures.ts';
+import { MINI_GT, miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec, type PackSpec } from '../../helpers/pack-spec.ts';
 import { emptyContextForTest } from '../../helpers/plan-context.ts';
 import { buildCandidates, type LeafOracle, type PlanEnv } from '../../../src/server/planner/candidates.ts';
@@ -20,7 +21,7 @@ const at = (x: number, z: number): MachineWhere => ({ dim: 0, pos: [x, 64, z] })
 const A1 = at(1, 2), A2 = at(3, 2), B1 = at(5, 2);
 
 /** 18 Basic Circuits a minute at LV: circuit-lv runs 0.3 times a second, which takes 3 Basic Assemblers. */
-const S = (p: Partial<PlanSettings> = {}): PlanSettings => ({ ...defaultSettings(), target: 't:circuit@0', amount: 18, per: 'min', tier: 1, ...p });
+const S = (p: Partial<PlanSettings> = {}): PlanSettings => ({ ...defaultSettings(), target: 't:circuit@0', amount: 18, per: 'min', tier: 1, buildHorizonHours: null, ...p });
 /** A world scan's base with these machines (`where`: where each stands). */
 const scanned = (...owned: PlanContext['ownedMachines']): PlanContext => ({ ...emptyContext(), ownedMachines: owned });
 const TWO_ASSEMBLERS = scanned({ mteId: ASSEMBLER, count: 2, where: [A1, A2] });
@@ -43,12 +44,14 @@ describe('reusing machines we have (rate)', () => {
     expect(p.buildSteps.map((b) => b.text).join('\n')).not.toContain('reuse your');
   });
   it('with the switch off, an owned machine no longer decides which machine a step runs on', async () => {
-    // At MV a plate is bent on the owned LV bender while reuse is on, else on the MV one (the highest tier).
+    // At MV a plate is bent on the owned LV bender while reuse is on, else on the MV one (the highest tier). Mini-GT's MV
+    // bender gets a build recipe (ruling P3): plan 12 never plans one no recipe makes as a new machine.
+    const mv = packFromSpec(withBuildRecipes(MINI_GT, [102], LV_MACHINE_PARTS));
     const ctx = scanned({ mteId: BENDER, count: 1, where: [B1] });
     const plate = { target: 't:iron_plate@0', tier: 2 };
-    const on = await planLine(pack, S(plate), ctx);
+    const on = await planLine(mv, S(plate), ctx);
     expect(stepOf(on, 'bend-plate')).toMatchObject({ machine: { mteId: BENDER }, owned: 1, reused: { count: 1, where: [B1] } });
-    const off = await planLine(pack, S({ ...plate, reuseOwned: false }), ctx);
+    const off = await planLine(mv, S({ ...plate, reuseOwned: false }), ctx);
     expect(stepOf(off, 'bend-plate')).toMatchObject({ machine: { mteId: 102 }, owned: 0 });
     expect(stepOf(off, 'bend-plate').reused).toBeUndefined();
   });
@@ -71,7 +74,8 @@ describe('reusing machines we have (rate)', () => {
     expect(built(p, ASSEMBLER)).toBe(3);
   });
   it('gives the owned machines of one type to the steps in order, positions first, the list after', async () => {
-    // Two LV assembler steps of two machines each; three owned: two the scan found, one on the list.
+    // Two LV assembler steps of two machines each; three owned: two the scan found, one on the list. Plan 12: `units`
+    // says which of the type's owned machines a step runs on (0-based, the scan's first).
     const spec: PackSpec = {
       maps: [{ id: 'gt.recipe.assembler' }],
       machines: [{ mteId: 1, name: 'Basic Assembler', maps: ['gt.recipe.assembler'], tier: 1 }],
@@ -89,7 +93,7 @@ describe('reusing machines we have (rate)', () => {
     const ctx = { ...emptyContextForTest(), ownedMachines: [{ mteId: 1, count: 2, where: [A1, A2] }] };
     const steps = planSteps(p, graph, sol, { settings, groupTier: 1, coilHeat: 1801, ctx, perSecondScale: 1 });
     expect(steps.map((s) => [s.id, s.count, s.owned, s.reused])).toEqual([
-      ['make-a', 2, 2, { count: 2, where: [A1, A2] }], ['make-t', 2, 1, { count: 1, where: [] }]]);
+      ['make-a', 2, 2, { count: 2, where: [A1, A2], units: [0, 1] }], ['make-t', 2, 1, { count: 1, where: [], units: [2] }]]);
   });
   it('copies where the machines stand, sharing nothing with the context', async () => {
     const ctx = scanned({ mteId: ASSEMBLER, count: 2, where: [at(1, 2), at(3, 2)] });
@@ -107,10 +111,12 @@ describe('reusing machines we have (Make N)', () => {
     expect(stepOf(p, 'circuit-lv')).toMatchObject({ count: 2, owned: 2, reused: { count: 2, where: [A1, A2] } });
     expect(built(p, ASSEMBLER)).toBeUndefined();
   });
-  it('with the switch off, adds one new machine per type and reuses none', async () => {
+  it('with the switch off, adds one new machine per type and reuses none, hammering the plates a new bender would not pay for', async () => {
+    // Plan 12: a batch always weighs build cost, and for 10 circuits a new Basic Bending Machine (17 raw) costs more than
+    // the 10 extra iron ingots that hammering the plates takes.
     const p = await planLine(pack, N({ reuseOwned: false }), TWO_ASSEMBLERS);
     expect(p.steps.map((s) => [s.id, s.count, s.owned, s.reused])).toEqual([
-      ['bend-plate', 1, 0, undefined], ['circuit-lv', 1, 0, undefined], ['wire', 1, 0, undefined]]);
+      ['circuit-lv', 1, 0, undefined], ['hammer-plate', 1, 0, undefined], ['wire', 1, 0, undefined]]);
     expect(built(p, ASSEMBLER)).toBe(1);
   });
   it('reuses the list without a world, and leaves out a declined type', async () => {

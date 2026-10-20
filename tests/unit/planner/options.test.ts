@@ -3,6 +3,7 @@
 // re-export broke is ignored with a warning.
 
 import { describe, expect, it } from 'vitest';
+import { withBuildRecipes } from '../../helpers/build-fixtures.ts';
 import { packFromSpec, type PackSpec } from '../../helpers/pack-spec.ts';
 import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
@@ -21,9 +22,10 @@ const LEAD = 'fluid:molten.lead';
  * A circuit assembler takes a mined part and 72 L of soldering alloy, 144 L of tin or 288 L of lead. Soldering alloy
  * ingots are alloyed from 9 tin ingots and 1 antimony dust into 10, so 72 L costs 0.5 raw in two steps; tin costs 1 and
  * lead 2, each one extraction from a mined ingot. Lead is priced above KEEP_WITHIN (2 × the cheapest), so the walk
- * leaves it out of the line's graph.
+ * leaves it out of the line's graph. Every machine can be built (ruling P3: plan 12 never plans one no recipe makes as a
+ * new one).
  */
-const CIRCUIT: PackSpec = {
+const CIRCUIT: PackSpec = withBuildRecipes({
   items: [
     { key: 't:ec@0', name: 'Electronic Circuit' },
     { key: 't:part@0', name: 'Circuit Part', gt: { prefix: 'dust', material: 'Part' } },
@@ -50,10 +52,10 @@ const CIRCUIT: PackSpec = {
     { id: 'alloy-solder', map: 'gt.recipe.alloysmelter', in: [['t:tin_ingot@0', 9], ['t:antimony_dust@0', 1]], out: [['t:solder_ingot@0', 10]], eut: 16 },
   ],
   worldgen: { veins: ['Part', 'Tin', 'Lead', 'Antimony'].map(vein) },
-};
+});
 
 const pack = packFromSpec(CIRCUIT);
-const S = (p: Partial<PlanSettings> = {}): PlanSettings => ({ ...defaultSettings(), target: 't:ec@0', tier: 1, ...p });
+const S = (p: Partial<PlanSettings> = {}): PlanSettings => ({ ...defaultSettings(), target: 't:ec@0', tier: 1, buildHorizonHours: null, ...p });
 const circuitStep = (plan: Plan): PlanStep => plan.steps.find((s) => s.id === 'ca')!;
 const ids = (plan: Plan): string[] => plan.steps.map((s) => s.id);
 const staleOptions = (plan: Plan) => plan.warnings.filter((w) => w.code === 'stale-option');
@@ -162,7 +164,7 @@ describe('ingredient options', () => {
     spec.machines!.push({ mteId: 4, name: 'Basic Fluid Solidifier', maps: ['gt.recipe.fluidsolidifier'], tier: 1 });
     spec.recipes!.find((r) => r.id === 'ca')!.in!.push(['t:weight@0', 1]);
     spec.recipes!.push({ id: 'cast-weight', map: 'gt.recipe.fluidsolidifier', in: [[LEAD, 144]], out: [['t:weight@0', 1]], eut: 16 });
-    const plan = await planLine(packFromSpec(spec), S({ optionChoice: { 'ca#100': LEAD }, avoid: ['Lead', 'Antimony'] }), emptyContext());
+    const plan = await planLine(packFromSpec(withBuildRecipes(spec)), S({ optionChoice: { 'ca#100': LEAD }, avoid: ['Lead', 'Antimony'] }), emptyContext());
     expect(plan.status).toBe('ok');
     expect(ids(plan)).toEqual(['ca', 'cast-weight', 'x-lead', 'x-tin']);
     expect(circuitStep(plan).inputs).toContainEqual({ key: TIN, amount: 144, chance: 1 });
@@ -178,7 +180,7 @@ describe('a slot split between two options', () => {
   // The line makes A as a by-product of X (half a dust a run) and takes the rest of the slot as mined B: 1.5 raw per
   // Thing, where B alone would cost 2. Task 1's deferred minor: the step listed only the busiest option with the whole
   // slot amount, so the flows looked short.
-  const split = packFromSpec({
+  const split = packFromSpec(withBuildRecipes({
     items: [
       { key: 't:thing@0', name: 'Thing' }, { key: 't:x@0', name: 'X' },
       { key: 't:a@0', name: 'A Dust', gt: { prefix: 'dust', material: 'A' } },
@@ -193,9 +195,9 @@ describe('a slot split between two options', () => {
       { id: 'make-a', map: 'gt.recipe.macerator', in: [['t:raw@0', 3]], out: [['t:a@0', 1]], eut: 16 },
     ],
     worldgen: { veins: ['B', 'Raw'].map(vein) },
-  });
+  }));
   it('lists both options with their shares, and the flows feed the step in full', async () => {
-    const plan = await planLine(split, { ...defaultSettings(), target: 't:thing@0', tier: 1 }, emptyContext());
+    const plan = await planLine(split, { ...defaultSettings(), target: 't:thing@0', tier: 1, buildHorizonHours: null }, emptyContext());
     expect(plan.status).toBe('ok');
     const use = plan.steps.find((s) => s.id === 'use')!;
     expect(use.inputs).toEqual([{ key: 't:x@0', amount: 1, chance: 1 }, { key: 't:a@0', amount: 0.5, chance: 0.5 }, { key: 't:b@0', amount: 0.5, chance: 0.5 }]);

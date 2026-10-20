@@ -101,6 +101,22 @@ export function withPriceGap(spec: PackSpec, mteIds: readonly number[]): PackSpe
   });
 }
 
+/** Mini-GT's parts of an LV machine, as Task 3's `make-102` takes them: an LV hull and 4 circuits (19 raw at MV). */
+export const LV_MACHINE_PARTS: ReadonlyArray<[StuffKey, number]> = [['t:hull_lv@0', 1], ['t:circuit@0', 4]];
+
+/**
+ * `spec` plus a crafting recipe `make-<mteId>` for each machine of `mteIds` (default: every machine of the spec that no
+ * recipe of it makes yet), taking `from` (default: nothing, so it costs nothing to build). Controller Amendment OQ3
+ * never plans a machine no recipe makes as a new one, also with build cost ignored; a test written before it whose
+ * subject is a route or tier on such a machine keeps that subject with one (ruling P3).
+ */
+export function withBuildRecipes(spec: PackSpec, mteIds?: readonly number[], from: ReadonlyArray<[StuffKey, number]> = []): PackSpec {
+  const made = new Set((spec.recipes ?? []).flatMap((r) => (r.out ?? []).map(([key]) => key)));
+  const machines = mteIds ?? (spec.machines ?? []).filter((m) => !made.has(m.itemKey ?? `machine:${m.mteId}@0`)).map((m) => m.mteId);
+  const itemOf = (mteId: number): string => spec.machines?.find((m) => m.mteId === mteId)?.itemKey ?? `machine:${mteId}@0`;
+  return extended(spec, { recipes: machines.map((mteId) => craft(`make-${mteId}`, [...from], itemOf(mteId))) });
+}
+
 /** GT's display item the rock breaker's recipes list as their input (plan 09 R2: the loader drops it). */
 const ROCK_BREAKER_DISPLAY = 'gregtech:gt.metaitem.02@32765#abcdefabcdef';
 const COBBLE = 'minecraft:cobblestone@0';

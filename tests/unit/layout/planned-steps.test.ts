@@ -14,6 +14,7 @@ import type { Layout } from '../../../src/shared/types/layout.ts';
 import type { OreVein } from '../../../src/shared/types/pack.ts';
 import type { Plan, PlanSettings } from '../../../src/shared/types/plan.ts';
 import { addLineParts, areaReader, flatVoxels, makeProject, makeScan } from '../../helpers/layout-fixtures.ts';
+import { withBuildRecipes } from '../../helpers/build-fixtures.ts';
 import { MINI_GT } from '../../helpers/mini-gt.ts';
 import { packFromSpec, type PackSpec } from '../../helpers/pack-spec.ts';
 
@@ -21,8 +22,11 @@ const COBBLE = 'minecraft:cobblestone@0';
 const DISPLAY = 'gregtech:gt.metaitem.02@32765#abcdefabcdef';
 const RED_ALLOY = 'fluid:molten.redalloy';
 
-/** Mini-GT with a rock breaker, a pump and a chemical bath: stone dust takes cobblestone, washed iron dust water. */
-const SUPPLY: PackSpec = {
+/**
+ * Mini-GT with a rock breaker, a pump and a chemical bath: stone dust takes cobblestone, washed iron dust water. Its
+ * machines can all be built (ruling P3: plan 12 never plans a machine no recipe makes as a new one), as can WIRE's.
+ */
+const SUPPLY: PackSpec = withBuildRecipes({
   ...MINI_GT,
   items: [
     ...MINI_GT.items!, { key: DISPLAY, name: 'IT\'S FREE! Place Lava on Side' }, { key: 't:stone_dust@0', name: 'Stone Dust' },
@@ -41,13 +45,13 @@ const SUPPLY: PackSpec = {
     { id: 'mace-cobble', map: 'gt.recipe.macerator', in: [[COBBLE, 1]], out: [['t:stone_dust@0', 1]], eut: 2, dur: 40 },
     { id: 'wash', map: 'gt.recipe.chemicalbath', in: [['t:iron_dust@0', 1], ['fluid:water', 1000]], out: [['t:washed@0', 1]], eut: 8, dur: 20 },
   ],
-};
+});
 
 const vein = (material: string): OreVein => ({ name: `ore.mix.${material}`, dims: ['overworld'], kind: 'vein', weight: 1, minY: 0, maxY: 255, size: 1, density: 1,
   materials: { primary: material, secondary: material, between: material, sporadic: material } });
 
 /** A wire assembled from molten red alloy (alloyed from mined copper and redstone, then melted: its supporting line). */
-const WIRE: PackSpec = {
+const WIRE: PackSpec = withBuildRecipes({
   items: [
     { key: 't:copper_ingot@0', name: 'Copper Ingot', gt: { prefix: 'ingot', material: 'Copper' } },
     { key: 't:redstone@0', name: 'Redstone', gt: { prefix: 'dust', material: 'Redstone' } },
@@ -73,9 +77,9 @@ const WIRE: PackSpec = {
     { id: 'glue', map: 'gt.recipe.centrifuge', in: [['t:resin@0', 1]], out: [['fluid:glue', 100]], eut: 16 },
   ],
   worldgen: { veins: ['Copper', 'Redstone', 'Resin'].map(vein) },
-};
+});
 
-const S = (p: Partial<PlanSettings>): PlanSettings => ({ ...defaultSettings(), tier: 1, logistics: 'direct', ...p });
+const S = (p: Partial<PlanSettings>): PlanSettings => ({ ...defaultSettings(), tier: 1, logistics: 'direct', buildHorizonHours: null, ...p });
 
 /** The line planned on `spec`'s pack, and laid out (no world scan yet) on the same pack with the fixture line parts. */
 async function planAndLayOut(spec: PackSpec, settings: PlanSettings): Promise<{ plan: Plan; layout: Layout; nameOf: (k: string) => string }> {

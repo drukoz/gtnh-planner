@@ -3,14 +3,20 @@
 // surplus, a raw input without a source) is reported under its own kind.
 
 import { describe, expect, it } from 'vitest';
-import { miniGt } from '../../helpers/mini-gt.ts';
+import { LV_MACHINE_PARTS, withBuildRecipes } from '../../helpers/build-fixtures.ts';
+import { MINI_GT } from '../../helpers/mini-gt.ts';
+import { packFromSpec } from '../../helpers/pack-spec.ts';
 import { checkPlanInvariants, checkPlanInvariantsDeep, countByKind, type Violation } from '../../helpers/plan-invariants.ts';
 import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import type { Plan, PlanSettings } from '../../../src/shared/types/plan.ts';
 
-const pack = miniGt();
-const S = (p: Partial<PlanSettings>): PlanSettings => ({ ...defaultSettings(), ...p });
+/**
+ * Mini-GT whose MV bender, MV assembler and fluid extractor can be built, with build cost ignored (plan 12; ruling P3):
+ * the plans plan 09's checker was written for, as controller Amendment OQ3 never plans a machine no recipe makes.
+ */
+const pack = packFromSpec(withBuildRecipes(MINI_GT, [102, 122, 131], LV_MACHINE_PARTS));
+const S = (p: Partial<PlanSettings>): PlanSettings => ({ ...defaultSettings(), buildHorizonHours: null, ...p });
 const errors = (v: readonly Violation[]): Violation[] => v.filter((x) => x.severity === 'error');
 const kinds = (v: readonly Violation[]): string[] => [...new Set(errors(v).map((x) => x.kind))].sort();
 const copy = (p: Plan): Plan => structuredClone(p);

@@ -54,7 +54,13 @@ describe('ProjectStore', () => {
     const row = db.getProject(p.id)!;
     const state = JSON.parse(row.state); delete state.settings.automateCrafting;
     db.updateProject({ ...row, state: JSON.stringify(state) });
-    expect(store.get(p.id)?.settings.automateCrafting).toBe(false);
+    // The Auto Workbench default (plan 12's ruling) for the missing field; a stored choice stays as it was.
+    expect(store.get(p.id)?.settings.automateCrafting).toBe(true);
+    const byHand = store.create('By hand', 'Ann');
+    const stored = db.getProject(byHand.id)!;
+    const hand = JSON.parse(stored.state); hand.settings.automateCrafting = false;
+    db.updateProject({ ...stored, state: JSON.stringify(hand) });
+    expect(store.get(byHand.id)?.settings.automateCrafting).toBe(false);
   });
 });
 

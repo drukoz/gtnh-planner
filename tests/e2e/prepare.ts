@@ -292,11 +292,27 @@ function worldgenLines(pack: Pack): WorldgenFiles {
   };
 }
 
-/** Removes and recreates data/e2e: the Mini-GT export `e2e` with the line parts, and the config the e2e server starts with. */
+/**
+ * The pack the e2e server plans with: Mini-GT plus crafting recipes for its Advanced Bending Machine (102: an LV hull and
+ * 4 circuits, as plan 12's Task 3 tests make it) and its Basic Electric Furnace (151: an LV hull, 2 circuits and 2 tin
+ * cables, as the sand fixture makes it). Plan 12 never plans a machine no recipe makes as a new one (controller Amendment
+ * OQ3): plan.spec.ts's impossible target (Titanium Plate at MV) is about the titanium the Moon holds, not about the
+ * bender, and flow-focus.spec.ts's "Make it here instead" on Iron Ingot is about the furnace step it adds (ruling P4).
+ */
+const E2E_PACK: PackSpec = {
+  ...MINI_GT,
+  recipes: [
+    ...(MINI_GT.recipes ?? []),
+    { id: 'make-102', map: 'crafting', in: [['t:hull_lv@0', 1], ['t:circuit@0', 4]], out: [['machine:102@0', 1]] },
+    { id: 'make-151', map: 'crafting', in: [['t:hull_lv@0', 1], ['t:circuit@0', 2], ['t:tin_cable@0', 2]], out: [['machine:151@0', 1]] },
+  ],
+};
+
+/** Removes and recreates data/e2e: the e2e pack's export `e2e` with the line parts, and the config the e2e server starts with. */
 async function main(): Promise<void> {
   await rm('data/e2e', { recursive: true, force: true });
   await mkdir('data/e2e', { recursive: true });
-  await makeExport('data/e2e/export/e2e', withLineParts(toExportSpec(MINI_GT)));
+  await makeExport('data/e2e/export/e2e', withLineParts(toExportSpec(E2E_PACK)));
   saveConfig({
     port: 18787, host: '127.0.0.1', dataDir: 'data/e2e', serverFolder: null, activeExportId: 'e2e',
     passwordHash: hashPassword(E2E_PASSWORD), sessionSecret: newSessionSecret(),

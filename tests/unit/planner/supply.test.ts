@@ -3,6 +3,7 @@
 // unless the group already has a supply; a Make N batch, and a tier with no supply machine, take them free.
 
 import { describe, it, expect } from 'vitest';
+import { withBuildRecipes } from '../../helpers/build-fixtures.ts';
 import { MINI_GT } from '../../helpers/mini-gt.ts';
 import { packFromSpec, type PackSpec } from '../../helpers/pack-spec.ts';
 import { checkPlanInvariants, freeDetours } from '../../helpers/plan-invariants.ts';
@@ -13,7 +14,7 @@ import type { Plan, PlanSettings, PlanStep } from '../../../src/shared/types/pla
 
 const COBBLE = 'minecraft:cobblestone@0';
 const DISPLAY = 'gregtech:gt.metaitem.02@32765#abcdefabcdef';
-const S = (p: Partial<PlanSettings>): PlanSettings => ({ ...defaultSettings(), ...p });
+const S = (p: Partial<PlanSettings>): PlanSettings => ({ ...defaultSettings(), buildHorizonHours: null, ...p });
 
 /** Mini-GT with a rock breaker, a pump, a compressor and canner, and lines that take cobblestone, water and air. */
 const SPEC: PackSpec = {
@@ -50,7 +51,8 @@ const SPEC: PackSpec = {
   ],
   fluidContainers: [{ container: 't:air_cell@0', empty: 't:empty_cell@0', fluid: 'fluid:air', amount: 2000 }],
 };
-const pack = packFromSpec(structuredClone(SPEC));
+/** Every machine of it can be built (ruling P3: plan 12 never plans a machine no recipe makes as a new one). */
+const pack = packFromSpec(withBuildRecipes(SPEC));
 
 /** The plan's steps that run a supply recipe, as [supplied good, machine, count]. */
 const supplySteps = (plan: Plan) => plan.steps.filter((s) => s.supply !== undefined).map((s) => [s.supply, s.machine.name, s.count]);

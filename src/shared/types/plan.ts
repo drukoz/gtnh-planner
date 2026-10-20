@@ -60,7 +60,7 @@ export interface PlanSettings {
   machineTier: Record<string, number>;     // per recipe id
   excludedCategories: string[];            // default: DEFAULT_EXCLUDED_CATEGORIES
   coilHeat: number | null;                 // EBF coil heat (K); null = default for tier or from world
-  automateCrafting: boolean;               // false = crafting-table steps are hand-crafting
+  automateCrafting: boolean;               // true (default, plan 12's Auto Workbench ruling) = crafting-table steps run on the GT++ Auto Workbench; false = by hand
   /**
    * Materials to avoid (§11.25): GT material names ("Silver": every form of it) or StuffKeys, at most 50, no repeats.
    * `defaultSettings()` and `normalizeSettings()` always fill it; readers still use `?? []` (projects stored before it).

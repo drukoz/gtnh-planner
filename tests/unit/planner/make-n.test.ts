@@ -186,7 +186,8 @@ describe('more Make N cases', () => {
       { id: 'c1', map: 'crafting', in: [['raw@0', 1]], out: [['a@0', 1]] },
       { id: 'c2', map: 'crafting', in: [['a@0', 1]], out: [['t@0', 1]] },
     ] };
-    const r = await (await planned(spec, 't@0', 3)).run();
+    // By hand is no longer the default (plan 12's Auto Workbench ruling): this case asks for it.
+    const r = await (await planned(spec, 't@0', 3, { automateCrafting: false })).run();
     expect(r.addedMachines).toEqual([]);
     expect(r.totalSeconds).toBeCloseTo(8, 9);   // 6 crafts at one per second, plus 2 s to fill (20 t + 20 t)
     expect(r.steps.map((s) => [s.id, s.machine.mteId, s.count, s.owned, s.handCraft, s.warnings])).toEqual([

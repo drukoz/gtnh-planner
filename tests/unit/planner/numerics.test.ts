@@ -3,18 +3,24 @@
 // finds the rows a stage does not balance. On 46067df the 1e-6-per-hour plan came back `ok` with no steps at all.
 
 import { beforeAll, describe, expect, it } from 'vitest';
-import { miniGt } from '../../helpers/mini-gt.ts';
+import { LV_MACHINE_PARTS, withBuildRecipes } from '../../helpers/build-fixtures.ts';
+import { MINI_GT } from '../../helpers/mini-gt.ts';
+import { packFromSpec } from '../../helpers/pack-spec.ts';
 import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
 import { firstBalanced, residualViolations } from '../../../src/server/planner/solve.ts';
 import type { LpRow } from '../../../src/server/planner/lp.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import type { Plan, PlanSettings } from '../../../src/shared/types/plan.ts';
 
-const pack = miniGt();
+/**
+ * Mini-GT whose Advanced Assembler and Basic Fluid Extractor can be built (ruling P3): the MV circuit line on molten iron
+ * these cases were written for, with build cost ignored (plan 12; Amendment OQ3 never plans a machine no recipe makes).
+ */
+const pack = packFromSpec(withBuildRecipes(MINI_GT, [122, 131], LV_MACHINE_PARTS));
 const TARGET = 't:circuit@0';
 /** Circuits per hour. */
 const AMOUNTS = [30, 1, 1e-6] as const;
-const settingsFor = (amount: number): PlanSettings => ({ ...defaultSettings(), target: TARGET, tier: 2, per: 'hour', amount });
+const settingsFor = (amount: number): PlanSettings => ({ ...defaultSettings(), target: TARGET, tier: 2, per: 'hour', amount, buildHorizonHours: null });
 
 const plans = new Map<number, Plan>();
 beforeAll(async () => {

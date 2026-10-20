@@ -4,6 +4,7 @@
 
 import { PSEUDO_MACHINES, tierName } from '../../shared/gt/tiers.ts';
 import { isFluidKey, parseItemKey, type StuffKey } from '../../shared/keys.ts';
+import { machineGroups } from '../../shared/plan/pools.ts';
 import type { Pack } from '../../shared/types/pack.ts';
 import type { BuildStep, LogisticsMode, PlanSettings, PlanStep, PowerSummary } from '../../shared/types/plan.ts';
 import { PROGRAMMED_CIRCUIT_ID } from '../pack/recipes.ts';
@@ -42,22 +43,39 @@ function isProgrammedCircuit(key: StuffKey): boolean {
   return !isFluidKey(key) && parseItemKey(key).id === PROGRAMMED_CIRCUIT_ID;
 }
 
-/** The real machines of the steps per type, in step order: how many are new and how many the group already owns. */
+/**
+ * The real machines of the steps per type, in step order: how many are new and how many the group already owns. New
+ * machines: rate steps each have their own, a sharing pool's once (`machineGroups`, from its first step); Make N steps
+ * of one type share theirs (make-n.ts), counted at its first step. Owned ones (plan 12): a type's distinct owned units
+ * (`reused.units`, and those of `reused.others`, so an owned machine of another tier is named too), plus `owned` of the
+ * steps that list no units (rate: each such step's; Make N: the type's first step's).
+ */
 function machinesToPlace(steps: readonly PlanStep[], makeN: boolean): Array<{ name: string; added: number; reused: number }> {
-  const types = new Map<number, { name: string; added: number; reused: number }>();
+  const types = new Map<number, { name: string; added: number; owned: number; units: Set<number> }>();
+  const typeOf = (mteId: number, name: string): { name: string; added: number; owned: number; units: Set<number> } => {
+    let type = types.get(mteId);
+    if (type === undefined) types.set(mteId, (type = { name, added: 0, owned: 0, units: new Set() }));
+    return type;
+  };
+  const counting = new Set(machineGroups(steps).map((group) => group[0]));
+  const seen = new Set<number>();
   for (const step of steps) {
     const { mteId, name } = step.machine;
     if (step.handCraft || PSEUDO_IDS.has(mteId)) continue;
-    const added = Math.max(0, step.count - step.owned);
-    const type = types.get(mteId);
-    if (type === undefined) types.set(mteId, { name, added, reused: step.owned });
-    else if (!makeN) {
-      // Rate steps each have their own machines; Make N steps of one type share theirs (make-n.ts).
-      type.added += added;
-      type.reused += step.owned;
+    const first = !seen.has(mteId);
+    seen.add(mteId);
+    const type = typeOf(mteId, name);
+    if (makeN ? first : counting.has(step)) type.added += Math.max(0, step.count - step.owned);
+    const units = step.reused?.units;
+    if (units !== undefined) for (const u of units) type.units.add(u);
+    else if (!makeN || first) type.owned += step.owned;
+    for (const o of step.reused?.others ?? []) {
+      const other = typeOf(o.mteId, o.name);
+      if (o.units !== undefined) for (const u of o.units) other.units.add(u);
+      else other.owned += o.count;
     }
   }
-  return [...types.values()];
+  return [...types.values()].map((t) => ({ name: t.name, added: t.added, reused: t.units.size + t.owned }));
 }
 
 /** `Place the machines: <new ones>; reuse your <owned ones>`, or null when the line has no real machine. */
@@ -70,14 +88,16 @@ function placeText(steps: readonly PlanStep[], makeN: boolean): string | null {
 }
 
 /**
- * The exact setting of a step's configured parts (architecture §11.14), or null when it has none; each slot holds an
- * option a line that avoids `avoid` may use (`stepOneOffs`).
+ * The exact setting of a group's configured parts (architecture §11.14), or null when it has none; each slot holds an
+ * option a line that avoids `avoid` may use (`stepOneOffs`). `group` is a step, or a sharing pool's steps (plan 12:
+ * `machineGroups`), whose circuit and held parts are the same (its sharing key) and whose products it names.
  */
-function configureText(pack: Pack, step: PlanStep, avoid: HeldAvoid | undefined): string | null {
+function configureText(pack: Pack, group: readonly PlanStep[], avoid: HeldAvoid | undefined): string | null {
+  const step = group[0] as PlanStep;
   const others = [...new Set(stepOneOffs(pack, step, avoid).map((o) => o.key))]
     .filter((key) => step.circuit === undefined || !isProgrammedCircuit(key))
     .map((key) => pack.nameOf(key));
-  const where = `in the ${step.machine.name} that makes ${stepProductName(pack, step)}`;
+  const where = `in the ${step.machine.name} that makes ${group.map((s) => stepProductName(pack, s)).join(', ')}`;
   if (step.circuit !== undefined) {
     return `Put a Programmed Circuit set to ${step.circuit} ${where}` + (others.length > 0 ? `; also put ${others.join(', ')} in it` : '');
   }
@@ -86,21 +106,24 @@ function configureText(pack: Pack, step: PlanStep, avoid: HeldAvoid | undefined)
 
 /**
  * Where a supply step's machine must stand to make its free input (fix spec R2), or null: a rock breaker needs water
- * and lava beside it, a pump an infinite water source or a lava pool under it; the compressor needs nothing.
+ * and lava beside it, a pump an infinite water source or a lava pool under it; the compressor needs nothing. A sharing
+ * pool's machine names what each of its supply steps makes.
  */
-function supplyText(pack: Pack, step: PlanStep): string | null {
+function supplyText(pack: Pack, group: readonly PlanStep[]): string | null {
+  const step = group[0] as PlanStep;
   const supply = step.supply;
   if (supply === undefined) return null;
   const kind = pack.recipeById.get(step.recipeId)?.meta.supply;
   const machine = step.machine.name;
-  if (kind === 'rock-breaker') return `Place water and lava next to the ${machine} that makes ${pack.nameOf(supply)}`;
+  const made = [...new Set(group.flatMap((s) => (s.supply === undefined ? [] : [pack.nameOf(s.supply)])))].join(', ');
+  if (kind === 'rock-breaker') return `Place water and lava next to the ${machine} that makes ${made}`;
   if (kind === 'pump') return supply === LAVA ? `Put the ${machine} over a lava pool` : `Put the ${machine} over an infinite water source (a 2×2 pool)`;
   return null;
 }
 
-/** The `configure` text of a step: its supply setting-up, then the parts it holds, as one instruction; null for none. */
-function configureStepText(pack: Pack, step: PlanStep, avoid: HeldAvoid | undefined): string | null {
-  const parts = [supplyText(pack, step), configureText(pack, step, avoid)].filter((t): t is string => t !== null);
+/** The `configure` text of a step or sharing pool: its supply setting-up, then the parts it holds, as one instruction; null for none. */
+function configureStepText(pack: Pack, group: readonly PlanStep[], avoid: HeldAvoid | undefined): string | null {
+  const parts = [supplyText(pack, group), configureText(pack, group, avoid)].filter((t): t is string => t !== null);
   return parts.length === 0 ? null : parts.map((t, i) => (i === 0 ? t : t[0]!.toLowerCase() + t.slice(1))).join('; ');
 }
 
@@ -127,7 +150,8 @@ function testText(pack: Pack, settings: PlanSettings, target: StuffKey, totalSec
  * The build steps in order (`order` = position + 1): gather the build's base materials; craft each top-level build
  * line in build-list order; place the machines; connect power; hook up logistics for the project's mode; configure
  * each step with a programmed circuit or other parts that stay in the machine (hand-crafting tools are none of these,
- * Task 13 ruling), and each supply step where its machine must stand (`supplyText`); hand-craft each hand-crafting step,
+ * Task 13 ruling), and each supply step where its machine must stand (`supplyText`) — a sharing pool once, by its first
+ * step, naming every product of the pool (plan 12); hand-craft each hand-crafting step,
  * naming its tools; test the line. Amounts count items ("3×") and give fluids in litres ("1,000 L"). Gather is left
  * out when the build needs no base materials, place when the line has no real machine, and power when it draws no EU.
  * `avoid` is what the line avoids, as for `buildBom`: the parts and tools named are the ones the line may use.
@@ -175,9 +199,10 @@ export function buildSteps(
     add('power', 'power', `Connect power: up to ${amountText(power.peakEUt)} EU/t at ${tierName(power.voltageTier)} — never feed a machine more than its tier's voltage`);
   }
   add(`logistics:${settings.logistics}`, 'logistics', LOGISTICS_TEXT[settings.logistics]);
-  for (const step of steps) {
-    const text = configureStepText(pack, step, avoid);
-    if (text !== null) add(`configure:${step.id}`, 'configure', text);
+  // A sharing pool's machines are set up once, by its first step (plan 12).
+  for (const group of machineGroups(steps)) {
+    const text = configureStepText(pack, group, avoid);
+    if (text !== null) add(`configure:${(group[0] as PlanStep).id}`, 'configure', text);
   }
   for (const step of steps) {
     if (step.handCraft) add(`handcraft:${step.id}`, 'handcraft', handCraftText(pack, step, settings, totalSeconds, avoid));
