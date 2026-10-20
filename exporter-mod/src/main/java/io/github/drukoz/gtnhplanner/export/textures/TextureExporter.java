@@ -42,6 +42,7 @@ import com.gtnewhorizon.gtnhlib.util.data.ImmutableBlockMeta;
 
 import cpw.mods.fml.common.registry.GameData;
 import cpw.mods.fml.relauncher.ReflectionHelper;
+import ggfab.items.GGMetaItemDumbItems;
 import gregtech.api.GregTechAPI;
 import gregtech.api.covers.CoverRegistry;
 import gregtech.api.enums.MaterialIconRegistry;
@@ -66,19 +67,24 @@ import gregtech.api.metatileentity.implementations.MTEBasicMachineWithRecipe;
 import gregtech.api.metatileentity.implementations.MTETieredMachineBlock;
 import gregtech.api.objects.GTItemStack;
 import gregtech.api.render.TextureFactory;
+import gregtech.common.blocks.BlockFrameBox;
+import gregtech.common.blocks.BlockMetal;
+import gregtech.common.blocks.BlockSheetMetal;
 import gregtech.common.blocks.GTBlockOre;
 import gregtech.common.fluid.GTFluid;
+import gregtech.common.items.ItemIntegratedCircuit;
 import gregtech.common.tileentities.machines.basic.MTEBasicMachineWithRecipeBuilder;
 import io.github.drukoz.gtnhplanner.export.ExportContext;
 import io.github.drukoz.gtnhplanner.export.ExportSection;
 import io.github.drukoz.gtnhplanner.export.Tags;
+import it.unimi.dsi.fastutil.ints.Int2ObjectFunction;
 
 /**
  * {@code textures.json.gz}: GregTech's own texture data, one gzip'd JSON document in the format {@value #FORMAT}
  * (the loader is {@code src/server/assets/textures-dump.ts}). Parts, in file order: {@code sets} and
- * {@code materials} (research §6.1), {@code metaItems} (§6.1–§6.2), {@code mte} (§3.5 A), {@code casingPages}
- * (§3.6), {@code blocks} (§3.7), {@code ores} (GT ore blocks), {@code covers} (§3.8), {@code fluids} (§6.3),
- * {@code textureNames} (§6.4), {@code blockIds} and {@code stats}.
+ * {@code materials} (research §6.1), {@code metaItems} (§6.1–§6.2), {@code prefixTextures} (§6.1), {@code mte}
+ * (§3.5 A, §4), {@code casingPages} (§3.6), {@code blocks} (§3.7, §4), {@code ores} (GT ore blocks), {@code covers}
+ * (§3.8), {@code fluids} (§6.3), {@code textureNames} (§6.4), {@code blockIds} and {@code stats}.
  *
  * <p>
  * Every element is computed fully before it is written, inside its own catch: a failed element is left out (a
@@ -101,6 +107,8 @@ public final class TextureExporter implements ExportSection {
     private static final byte ALL_SIDES = 63;
     /** Covers are drawn on a machine's north face. */
     private static final int COVER_SIDE = 2;
+    /** {@code BlockMetal.getIcon} draws the metas below this one (javap of GT 5.09.54.183). */
+    private static final int STORAGE_METAS = 16;
 
     /** {@link #iconTables} value of a class that declares no {@code getIcon}. */
     private static final IconRef[][] NO_TABLE = new IconRef[0][];
@@ -136,6 +144,10 @@ public final class TextureExporter implements ExportSection {
     private Method coverTexture;
     /** The final {@code MTETieredMachineBlock.mTextures}, looked up on first use. */
     private Field tieredTextures;
+    /**
+     * {@code BlockSheetMetal}'s package-private {@code materials} and private {@code maxMeta}, looked up on first use.
+     */
+    private Field sheetMaterials, sheetMaxMeta;
     /** Builder machine id → its overlay folder name ({@link #builderOverlays()}). */
     private Map<Integer, String> builderOverlays;
     /** Machines whose texture set {@link #buildTextureSet} built. */
@@ -190,6 +202,7 @@ public final class TextureExporter implements ExportSection {
             .value(Tags.VERSION);
         setsAndMaterials();
         metaItems();
+        prefixTextures();
         mte();
         casingPages();
         blocks();
@@ -306,16 +319,29 @@ public final class TextureExporter implements ExportSection {
         w.beginArray();
         for (Item item : GameData.getItemRegistry()
             .typeSafeIterable()) {
-            if (item instanceof MetaGeneratedItem) element(part, describe(item), () -> metaItem(item));
+            if (isMetaItem(item)) element(part, describe(item), () -> metaItem(item));
         }
         w.endArray();
         part.done();
     }
 
-    /** {@code {id, offset, unlocalized, prefixes}}; {@code prefixes} lists the X32 prefix slots, else empty. */
+    /**
+     * GT's items whose icon is {@code <unlocalized name>/<meta − offset>}: every {@code MetaGeneratedItem}, the
+     * Programmed Circuit ({@code ItemIntegratedCircuit}) and GGFab's tool parts ({@code GGMetaItemDumbItems},
+     * {@code gt.ggfab.d1}), which are not {@code MetaGeneratedItem}s.
+     */
+    private static boolean isMetaItem(Item item) {
+        return item instanceof MetaGeneratedItem || item instanceof ItemIntegratedCircuit
+            || item instanceof GGMetaItemDumbItems;
+    }
+
+    /**
+     * {@code {id, offset, unlocalized, prefixes}}; {@code offset} is 0 for an item that is not a
+     * {@code MetaGeneratedItem}, {@code prefixes} lists the X32 prefix slots, else empty.
+     */
     private Element metaItem(Item item) throws IllegalAccessException, NoSuchFieldException {
         String id = itemId(item);
-        int offset = ((MetaGeneratedItem) item).mOffset;
+        int offset = item instanceof MetaGeneratedItem ? ((MetaGeneratedItem) item).mOffset : 0;
         String unlocalized = item.getUnlocalizedName();
         List<Element> prefixes = new ArrayList<>();
         if (item instanceof MetaGeneratedItemX32) {
@@ -361,13 +387,39 @@ public final class TextureExporter implements ExportSection {
         return prefixList;
     }
 
+    // --- prefix textures (research §6.1) ---
+
+    /**
+     * {@code {<prefix name>: <texture index>}} for every prefix, so the material templates of prefixes no X32 list
+     * carries ({@code frameGt}, {@code sheetmetal}, {@code cellMolten}, …) are known too. {@code OrePrefixes} is a
+     * class in GT 5.09.54.183 (javap), so its prefixes are {@code OrePrefixes.VALUES}, not {@code values()}.
+     */
+    private void prefixTextures() throws IOException {
+        Part part = new Part("prefixTextures");
+        w.name("prefixTextures");
+        w.beginObject();
+        for (OrePrefixes prefix : OrePrefixes.VALUES) {
+            if (prefix == null) continue;
+            element(part, prefix, () -> {
+                String name = prefix.getName(); // what the deprecated name() returns
+                if (name == null) throw new IllegalStateException("prefix without a name");
+                int texture = prefix.getTextureIndex();
+                return () -> w.name(name)
+                    .value(texture);
+            });
+        }
+        w.endObject();
+        part.done();
+    }
+
     // --- machines (research §3.5 A) ---
 
     /**
      * Every machine id ≥ 1 in a tile entity of its own, outside any world: front on north, inactive and active
-     * ({@code active} left out when it equals {@code inactive}); a pipe connected on all sides, inactive only.
-     * A machine that fails is written as {@code {id, cls, error}}. A tiered machine gets its texture set first
-     * ({@link #buildTextureSet}).
+     * ({@code active} left out when it equals {@code inactive}); a pipe inactive only, connected on all sides, and
+     * {@code unconnected} ({@link #unconnectedFaces}; left out when it equals {@code inactive}, as for bare wires and
+     * frames). A machine that fails is written as {@code {id, cls, error}}. A tiered machine gets its texture set
+     * first ({@link #buildTextureSet}).
      */
     private void mte() throws IOException {
         Part part = new Part("mte");
@@ -381,7 +433,7 @@ public final class TextureExporter implements ExportSection {
             String cls = m.getClass()
                 .getName();
             boolean pipe = m instanceof MetaPipeEntity;
-            List<List<LayerRec>> inactive = null, active = null;
+            List<List<LayerRec>> inactive = null, active = null, unconnected = null;
             String error = null;
             try {
                 if (pipe) {
@@ -390,6 +442,7 @@ public final class TextureExporter implements ExportSection {
                     te.mConnections = ALL_SIDES;
                     te.setActive(false);
                     inactive = machineFaces(te);
+                    unconnected = unconnectedFaces(te);
                 } else {
                     BaseMetaTileEntity te = machine(id);
                     buildTextureSet(te.getMetaTileEntity(), id);
@@ -420,6 +473,10 @@ public final class TextureExporter implements ExportSection {
                 if (active != null && !active.equals(inactive)) {
                     w.name("active");
                     writeFaces(active);
+                }
+                if (unconnected != null && !unconnected.equals(inactive)) {
+                    w.name("unconnected");
+                    writeFaces(unconnected);
                 }
                 part.wrote();
             }
@@ -610,11 +667,29 @@ public final class TextureExporter implements ExportSection {
     /** The six faces of a GT tile entity, as {@code BaseMetaTileEntity.getTexture} draws them. */
     private List<List<LayerRec>> machineFaces(ITexturedTileEntity te) {
         List<List<LayerRec>> faces = new ArrayList<>(SIDES);
+        for (int side = 0; side < SIDES; side++) faces.add(face(te, side));
+        return faces;
+    }
+
+    /**
+     * The six faces of a pipe with nothing connected on them: each side as GT draws it while every other side is
+     * connected. {@code mConnections = 0} would not do: {@code BaseMetaPipeEntity.getTextureUncovered} draws a pipe
+     * without any connection as connected on every side (javap of GT 5.09.54.183). GT's pipe classes ({@code MTECable},
+     * {@code MTEFluidPipe}, {@code MTEItemPipe}, {@code MTEFrame}) draw a side only by whether that side is connected.
+     */
+    private List<List<LayerRec>> unconnectedFaces(BaseMetaPipeEntity te) {
+        List<List<LayerRec>> faces = new ArrayList<>(SIDES);
         for (int side = 0; side < SIDES; side++) {
-            ITexture[] texture = te.getTexture(GregTechAPI.sBlockMachines, ForgeDirection.getOrientation(side));
-            faces.add(flattener.flatten(texture, side));
+            te.mConnections = (byte) (ALL_SIDES & ~(1 << side));
+            faces.add(face(te, side));
         }
         return faces;
+    }
+
+    /** One face of a GT tile entity: its {@code getTexture} on {@code side}, flattened. */
+    private List<LayerRec> face(ITexturedTileEntity te, int side) {
+        ITexture[] texture = te.getTexture(GregTechAPI.sBlockMachines, ForgeDirection.getOrientation(side));
+        return flattener.flatten(texture, side);
     }
 
     // --- casing pages (research §3.6) ---
@@ -649,8 +724,12 @@ public final class TextureExporter implements ExportSection {
         part.done();
     }
 
-    // --- casing blocks (research §3.7) ---
+    // --- casing, storage, frame and sheetmetal blocks (research §3.7, §4) ---
 
+    /**
+     * One row per block: GT's storage, frame and sheetmetal blocks from their own texture data (their textures are
+     * instance fields, which no {@code getIcon} table names), every other block from its {@code getIcon} table.
+     */
     private void blocks() throws IOException {
         Part part = new Part("blocks");
         iconRefs = new Part("blockIconRefs");
@@ -658,7 +737,12 @@ public final class TextureExporter implements ExportSection {
         w.beginArray();
         for (Block block : GameData.getBlockRegistry()
             .typeSafeIterable()) {
-            element(part, describe(block), () -> block(block));
+            element(part, describe(block), () -> {
+                if (block instanceof BlockMetal) return storageBlock((BlockMetal) block);
+                if (block instanceof BlockFrameBox) return frameBlock((BlockFrameBox) block);
+                if (block instanceof BlockSheetMetal) return sheetMetalBlock((BlockSheetMetal) block);
+                return block(block);
+            });
         }
         w.endArray();
         part.done();
@@ -676,16 +760,83 @@ public final class TextureExporter implements ExportSection {
         Map<Integer, List<List<LayerRec>>> metas = new TreeMap<>();
         for (int meta = 0; meta < table.length; meta++) {
             List<List<LayerRec>> faces = new ArrayList<>(SIDES);
-            boolean drawn = false;
             for (int side = 0; side < SIDES; side++) {
                 IconRef ref = table[meta][side];
-                List<LayerRec> layers = ref == null ? Collections.<LayerRec>emptyList()
-                    : iconLayers(ref, cls.getClassLoader());
-                drawn |= !layers.isEmpty();
-                faces.add(layers);
+                faces.add(ref == null ? Collections.<LayerRec>emptyList() : iconLayers(ref, cls.getClassLoader()));
             }
-            if (drawn) metas.put(meta, faces);
+            putDrawn(metas, meta, faces);
         }
+        return blockRow(block, metas);
+    }
+
+    /**
+     * A GT storage block ({@code BlockMetal}: {@code gt.blockmetal1…10}, {@code gt.blockgem1…3}): meta i draws
+     * {@code mBlockIcons[i]} untinted on every face, for the metas its {@code getIcon} draws (javap of GT
+     * 5.09.54.183: below {@value #STORAGE_METAS} and below the number of its materials).
+     */
+    private Element storageBlock(BlockMetal block) {
+        IIconContainer[] icons = block.mBlockIcons;
+        int count = Math.min(STORAGE_METAS, Math.min(block.mMats.length, icons.length));
+        Map<Integer, List<List<LayerRec>>> metas = new TreeMap<>();
+        for (int meta = 0; meta < count; meta++) {
+            putDrawn(metas, meta, Collections.nCopies(SIDES, flattener.container(icons[meta], null, false)));
+        }
+        return blockRow(block, metas);
+    }
+
+    /**
+     * GT's frame boxes ({@code gt.blockframes}, meta = material id): every material GT makes a frame of
+     * ({@code LoaderMetaPipeEntities.registerFrames}, javap of GT 5.09.54.183: one with metal items, or Wood), drawn
+     * on every face with its set's {@code frameGt} icon in its colour, as the block's {@code getIcon} and the textures
+     * its constructor builds draw it.
+     */
+    private Element frameBlock(BlockFrameBox block) {
+        Materials[] materials = GregTechAPI.sGeneratedMaterials;
+        int frameGt = OrePrefixes.frameGt.getTextureIndex();
+        Map<Integer, List<List<LayerRec>>> metas = new TreeMap<>();
+        for (int m = 0; m < materials.length; m++) {
+            Materials material = materials[m];
+            if (material == null || !(material.hasMetalItems() || material == Materials.Wood)) continue;
+            List<LayerRec> layers = flattener
+                .container(material.mIconSet.mTextures[frameGt], tint(material.mRGBa), false);
+            putDrawn(metas, m, Collections.nCopies(SIDES, layers));
+        }
+        return blockRow(block, metas);
+    }
+
+    /**
+     * GT's sheetmetal blocks ({@code gt.sheetmetal} by GT material id, {@code bw.sheetmetal} by BartWorks material
+     * id): every meta below the block's {@code maxMeta} its {@code materials} function names a material for, with
+     * the faces {@code getTextures(meta)} draws (the material's {@code sheetmetal} icon in its colour).
+     */
+    private Element sheetMetalBlock(BlockSheetMetal block) throws ReflectiveOperationException {
+        if (sheetMaterials == null) sheetMaterials = accessible(BlockSheetMetal.class, "materials");
+        if (sheetMaxMeta == null) sheetMaxMeta = accessible(BlockSheetMetal.class, "maxMeta");
+        Int2ObjectFunction<?> materials = (Int2ObjectFunction<?>) sheetMaterials.get(block);
+        int maxMeta = sheetMaxMeta.getInt(block);
+        Map<Integer, List<List<LayerRec>>> metas = new TreeMap<>();
+        for (int meta = 0; meta < maxMeta; meta++) {
+            if (materials.get(meta) == null) continue;
+            ITexture[][] textures = block.getTextures(meta);
+            List<List<LayerRec>> faces = new ArrayList<>(SIDES);
+            for (int side = 0; side < SIDES; side++) faces.add(flattener.flatten(textures[side], side));
+            putDrawn(metas, meta, faces);
+        }
+        return blockRow(block, metas);
+    }
+
+    /** Puts {@code faces} under {@code meta} when one of them is not empty. */
+    private static void putDrawn(Map<Integer, List<List<LayerRec>>> metas, int meta, List<List<LayerRec>> faces) {
+        for (List<LayerRec> face : faces) {
+            if (!face.isEmpty()) {
+                metas.put(meta, faces);
+                return;
+            }
+        }
+    }
+
+    /** {@code {id, metas}}: meta → its six faces; null when there is no meta. */
+    private Element blockRow(Block block, Map<Integer, List<List<LayerRec>>> metas) {
         if (metas.isEmpty()) return null;
         String id = blockId(block);
         return () -> {
@@ -863,8 +1014,8 @@ public final class TextureExporter implements ExportSection {
     // --- fluids (research §6.3) ---
 
     /**
-     * {@code {name, color}} for every fluid, plus {@code still} for a {@code GTFluid}: its own still icon, or
-     * that of the {@code GTFluid} it borrows its icons from.
+     * {@code {name, color}} for every fluid, plus {@code still} for a {@code GTFluid} ({@link #stillPath}) and
+     * {@code block}, the registry name of the fluid's block, when it has one.
      */
     private void fluids() throws IOException {
         Part part = new Part("fluids");
@@ -890,10 +1041,11 @@ public final class TextureExporter implements ExportSection {
         }
     }
 
-    private Element fluid(Fluid fluid, Field still, Field iconsFrom) throws IllegalAccessException {
+    private Element fluid(Fluid fluid, Field still, Field iconsFrom) {
         String name = fluid.getName();
         int color = fluid.getColor();
         String path = stillPath(fluid, still, iconsFrom);
+        String block = fluidBlock(fluid);
         return () -> {
             w.beginObject();
             w.name("name")
@@ -904,20 +1056,41 @@ public final class TextureExporter implements ExportSection {
                 w.name("still")
                     .value(path);
             }
+            if (block != null) {
+                w.name("block")
+                    .value(block);
+            }
             w.endObject();
         };
     }
 
-    /** The data/assets path of a {@code GTFluid}'s still icon (block atlas); null for other fluids. */
-    private String stillPath(Fluid fluid, Field still, Field iconsFrom) throws IllegalAccessException {
+    /**
+     * The data/assets path of a {@code GTFluid}'s still icon (block atlas): the still location of the fluid its
+     * {@code iconsFrom} chain ends on ({@link FluidStill}), as {@code GTFluid.run()} takes it; null for other fluids.
+     */
+    private String stillPath(Fluid fluid, Field still, Field iconsFrom) {
         if (!(fluid instanceof GTFluid) || still == null) return null;
-        Object location = still.get(fluid);
-        if (location == null && iconsFrom != null) {
-            Object from = iconsFrom.get(fluid);
-            if (from instanceof GTFluid) location = still.get(from);
-        }
+        Object location = FluidStill.location(fluid, f -> fieldValue(still, f), f -> borrowsFrom(f, iconsFrom));
         String[] r = env.resource(location);
         return r == null ? null : TexturePaths.fromResource(r[0], r[1], ATLAS);
+    }
+
+    /** The {@code GTFluid} whose icons {@code fluid} takes (its {@code iconsFrom}), else null. */
+    private static Object borrowsFrom(Object fluid, Field iconsFrom) {
+        if (iconsFrom == null) return null;
+        Object from = fieldValue(iconsFrom, fluid);
+        return from instanceof GTFluid ? from : null;
+    }
+
+    /**
+     * The registry name of the fluid's block; null when it has none or the block registry does not name it, so a
+     * fluid is never left out for its block.
+     */
+    private static String fluidBlock(Fluid fluid) {
+        Block block = fluid.getBlock();
+        return block == null ? null
+            : GameData.getBlockRegistry()
+                .getNameForObject(block);
     }
 
     private static String describeFluid(Fluid fluid) {
@@ -1073,6 +1246,24 @@ public final class TextureExporter implements ExportSection {
         Field f = c.getDeclaredField(name);
         f.setAccessible(true);
         return f;
+    }
+
+    /** The value of {@code field} (made {@link #accessible}) on {@code o}. */
+    private static Object fieldValue(Field field, Object o) {
+        try {
+            return field.get(o);
+        } catch (IllegalAccessException e) {
+            throw new IllegalStateException(e); // accessible fields are always readable
+        }
+    }
+
+    /**
+     * A GT {@code short[] mRGBa} as a layer tint {r, g, b}; null (untinted) when absent or white, as the flattener
+     * reads a rendered texture's colour (GT ignores alpha).
+     */
+    private static int[] tint(short[] rgba) {
+        if (rgba == null || rgba.length < 3 || (rgba[0] == 255 && rgba[1] == 255 && rgba[2] == 255)) return null;
+        return new int[] { rgba[0], rgba[1], rgba[2] };
     }
 
 

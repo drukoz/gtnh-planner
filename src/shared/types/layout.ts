@@ -39,13 +39,26 @@ export interface ConduitFilter {
   whitelist: boolean; keys: StuffKey[];
   /** Item filters only. */
   matchMeta?: boolean; matchNbt?: boolean; oreDict?: boolean; sticky?: boolean;
+  /**
+   * How many items or fluids the filter holds: a Basic Item Filter 5, an Advanced 10, a Big 24, an ender fluid conduit's
+   * own fluid filter 5. Optional addition (the EnderIO single-pipe change), so the words can say which filter a list needs.
+   */
+  slots?: number;
 }
 export interface ConduitExtract {
   color: DyeColor; filter: ConduitFilter | null; /** items/s or L/s the face must move */ rate: number; roundRobin: boolean; redstone: RedstoneMode;
   /** Item conduits only; `speed` is absent when no upgrade is needed. */
   selfFeed?: boolean; speed?: { item: StuffKey; count: number };
 }
-export interface ConduitInsert { color: DyeColor; filter: ConduitFilter | null; rate: number; /** item conduits only; higher is filled first */ priority?: number }
+export interface ConduitInsert {
+  color: DyeColor; filter: ConduitFilter | null; rate: number; /** item conduits only; higher is filled first */ priority?: number;
+  /**
+   * True when the side inserts into a GT basic machine through that machine's output side, which takes items and fluids
+   * there only while its Input from Output Side is allowed (`MTEBasicMachine.allowPutStack`, `isLiquidInput`); absent
+   * otherwise.
+   */
+  outputSide?: boolean;
+}
 /** `extract` iff mode is extract or in_out, `insert` iff insert or in_out; `target` names what is on that side. */
 export interface ConduitFace { face: Face; mode: ConduitMode; target: string; extract?: ConduitExtract; insert?: ConduitInsert }
 /** `connections`: links to the same kind in neighbouring cells, bits `1 << side`; `faces` in `FACES` order. */

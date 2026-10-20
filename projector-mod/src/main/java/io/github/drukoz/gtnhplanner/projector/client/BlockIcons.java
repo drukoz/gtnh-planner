@@ -11,10 +11,11 @@ import net.minecraft.util.IIcon;
 /**
  * How each planned block looks as a ghost (spec §3.13: real textures, plain colour by kind only where a texture
  * cannot be resolved, as §3.8 says for the 3D view). A GT machine shows the faces GT draws for it with its front
- * facing (a single-block machine's output side) where the planner puts it; any other block the client knows shows its
- * own face icons; a multipart, conduit or ME cable part (only its container block is known), a block the client does
- * not know, and anything whose icons are missing show white stained clay tinted by the block's role. Used on the game
- * thread only.
+ * facing (a single-block machine's output side, with its output overlay) where the planner puts it, and a single-block
+ * machine its face overlay on its own front, the planner's {@code mainFacing}, as the 3D view and the place step put it;
+ * any other block the client knows shows its own face icons; a multipart, conduit or ME cable part (only its container
+ * block is known), a block the client does not know, and anything whose icons are missing show white stained clay
+ * tinted by the block's role. Used on the game thread only.
  */
 public final class BlockIcons {
 
@@ -23,8 +24,8 @@ public final class BlockIcons {
     private static final int DEFAULT_FRONT = 3;
 
     /**
-     * The icons found for each {@code id@meta@mteId@facing}; null when there are none, so the block shows its role's
-     * colour. The colour is not part of the key: blocks with the same key may have different roles.
+     * The icons found for each {@code id@meta@mteId@facing@mainFacing}; null when there are none, so the block shows its
+     * role's colour. The colour is not part of the key: blocks with the same key may have different roles.
      */
     private final Map<String, FaceIcons> found = new HashMap<>();
     /** The plain-colour look of each role. */
@@ -33,7 +34,7 @@ public final class BlockIcons {
     /** How {@code b} looks: its own icons where the game gives them, else its role's colour on every face. */
     public FaceIcons forBlock(PlannedBlock b) {
         if (b.part != null) return fallback(b.role);
-        String key = b.id + "@" + b.meta + "@" + b.mteId + "@" + b.facing;
+        String key = b.id + "@" + b.meta + "@" + b.mteId + "@" + b.facing + "@" + b.mainFacing;
         FaceIcons icons = found.get(key);
         if (icons == null && !found.containsKey(key)) {
             icons = lookUp(b);
@@ -61,7 +62,7 @@ public final class BlockIcons {
         IIcon[][] faces;
         try {
             if (b.mteId >= 0) {
-                faces = GtMachineIcons.faces(b.mteId, b.facing < 0 ? DEFAULT_FRONT : b.facing);
+                faces = GtMachineIcons.faces(b.mteId, b.facing < 0 ? DEFAULT_FRONT : b.facing, b.mainFacing);
             } else if (GameData.getBlockRegistry().containsKey(b.id)) {
                 faces = blockFaces(GameData.getBlockRegistry().getObject(b.id), Math.max(b.meta, 0));
             } else {

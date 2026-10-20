@@ -11,15 +11,16 @@ export function pngSize(bytes: Uint8Array): PngSize | null {
   return { width: view.getUint32(16), height: view.getUint32(20) };
 }
 
-/** Number of animation frames described by a .mcmeta (1 when not animated or unreadable). */
+/**
+ * Number of animation frames of a texture whose .mcmeta has an `animation` object (1 when not animated or unreadable):
+ * Minecraft 1.7.10 cuts a strip into square frames, `floor(height / width)`, whatever the .mcmeta's `height` says
+ * (architecture §11.43 (d)).
+ */
 export function animationFrames(mcmeta: string, size: PngSize): number {
   let meta: unknown;
   try { meta = JSON.parse(mcmeta); } catch { return 1; }
   if (typeof meta !== 'object' || meta === null) return 1;
   const animation = (meta as { animation?: unknown }).animation;
   if (typeof animation !== 'object' || animation === null || Array.isArray(animation)) return 1;
-  const h = (animation as { height?: unknown }).height;
-  const frameHeight = typeof h === 'number' && Number.isInteger(h) && h > 0 ? h : size.width;
-  if (frameHeight <= 0) return 1;
-  return Math.max(1, Math.floor(size.height / frameHeight));
+  return size.width > 0 ? Math.max(1, Math.floor(size.height / size.width)) : 1;
 }

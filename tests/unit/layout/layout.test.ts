@@ -3,7 +3,7 @@ import { layoutLine, emptyScan } from '../../../src/server/layout/layout.ts';
 import { overlaps } from '../../../src/server/layout/arrange.ts';
 import { ae2IdleEUt, resolveParts } from '../../../src/server/layout/parts.ts';
 import { tierName } from '../../../src/shared/gt/tiers.ts';
-import { OPPOSITE, step } from '../../../src/shared/layout/geometry.ts';
+import { OPPOSITE, rotateFacing, step } from '../../../src/shared/layout/geometry.ts';
 import type { Layout, LayoutBlock } from '../../../src/shared/types/layout.ts';
 import type { Pack } from '../../../src/shared/types/pack.ts';
 import type { Plan, PlanFlow } from '../../../src/shared/types/plan.ts';
@@ -226,9 +226,14 @@ describe('layoutLine: the final review', () => {
   it('gives a singleblock its front and output side apart, turned with the line', async () => {
     const layout = await layoutLine(layoutPack(), twoStep(), scan(), makeProject({ placement: { origin: [30, 64, 30], rotation: 90 } }), ground());
     const machines = layout.blocks.filter((b) => b.role === 'machine');
-    expect(machines.every((b) => b.mainFacing === 1)).toBe(true);                    // front up: the output side keeps the spine face
+    // the front toward the power head (local west, GT allows no front up or down): the output side keeps the spine face
+    expect(machines.every((b) => b.mainFacing === rotateFacing(4, 90))).toBe(true);
     expect(new Set(machines.map((b) => b.facing))).toEqual(new Set([4, 5]));         // the two rows face the spine, turned 90°
     expect(machines.every((b) => b.config?.inputFromOutputSide === true)).toBe(true);
+    // the place steps name that front by the compass, turned with the line (local west → north at 90°)
+    const place = layout.buildSteps.filter((s) => s.id.startsWith('layout:place:'));
+    expect(place.length).toBeGreaterThan(0);
+    expect(place.every((s) => s.text.includes('its front facing north: with a Wrench, sneak-right-click its north side'))).toBe(true);
   });
 });
 

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { buildScene, canonicalFaceFor, visible, blockList, pickInfo, hoverText, blockKey, frontOf, ROLE_FALLBACK, type SceneInstance } from '../../src/client/three/scene-data.ts';
 import { compositeTile, solidTile, packTiles, shadeFor, TILE } from '../../src/client/three/textures.ts';
-import type { CoverLayers, IconDescriptor } from '../../src/shared/types/assets.ts';
+import type { BlockFaces, CoverLayers, IconDescriptor, Rect, TextureLayer } from '../../src/shared/types/assets.ts';
 import type { Layout, LayoutBlock } from '../../src/shared/types/layout.ts';
 import type { Plan } from '../../src/shared/types/plan.ts';
 import { sampleLayout as layout, sampleFaces as faces, sampleIcons as icons, sampleCovers as covers, sampleNames as names, CONV, GT, L } from './layout-fixture.ts';
@@ -105,7 +105,7 @@ describe('3D scene data: tiles', () => {
     const pipe = scene.instances.filter((i) => i.block === 1);
     expect(pipe.map((i) => i.shape)).toEqual(['core', 'arm', 'arm']);
     expect([...new Set(pipe.flatMap((i) => i.tiles))]).toHaveLength(1);
-    expect(scene.tiles[pipe[0]!.tiles[0]]).toEqual({ key: JSON.stringify([L('pn')]), layers: [L('pn')], color: [4, 5, 6] });
+    expect(scene.tiles[pipe[0]!.tiles[0]]).toEqual({ key: `under:255,179,0|${JSON.stringify([L('pn')])}`, layers: [L('pn')], color: [4, 5, 6], under: [255, 179, 0] });
   });
 
   it('falls back from the cover overlay to the item icon to a plain colour on a cover plate', () => {
@@ -237,5 +237,96 @@ describe('3D scene data: a basic machine with a front of its own', () => {
   it('names the front and the output side on click', () => {
     const up: Layout = { ...layout, blocks: layout.blocks.map((b, i) => (i === 0 ? { ...b, mainFacing: 1 } : b)) };
     expect(pickInfo(up, null, 0).lines.slice(0, 2)).toEqual(['Front facing up', 'Output side south']);
+  });
+});
+
+// Plan 16 Task 9 (architecture §11.43 (c)): a pipe drawn from its core, arm and end layers, over its role's colour.
+describe('3D scene data: pipes', () => {
+  const J = 'projectred/textures/blocks/mechanical/pipes/routedjunc.png';
+  const crop = (src: Rect): TextureLayer => ({ path: J, region: { sheet: 16, src } });
+  const piped: BlockFaces = { block: { id: 'fmp:pr_rbasic', meta: 0 }, resolved: true, fallbackColor: [7, 7, 7],
+    faces: { down: [{ path: J }], up: [{ path: J }], north: [{ path: J }], south: [{ path: J }], west: [{ path: J }], east: [{ path: J }] },
+    pipe: { core: [crop([4, 0, 8, 8])], arm: [crop([0, 0, 4, 8])], end: [crop([8, 8, 8, 8])] } };
+
+  it("draws a pipe's core, arms and tips from its pipe layers, over the role colour", () => {
+    const one: Layout = { ...layout, blocks: [{ pos: [10, 64, 20], block: { id: 'fmp:pr_rbasic', meta: 0 }, role: 'pipe', label: 'Routed Junction Pipe', connections: 1 << 5 }], hookups: [], pins: [] };
+    const scene = buildScene(one, new Map([[blockKey({ id: 'fmp:pr_rbasic', meta: 0 }), piped]]), icons, covers);
+    const [core, arm] = scene.instances;
+    const t = (i: number) => scene.tiles[i]!;
+    expect(t(core!.tiles[0])).toEqual({ key: `under:255,179,0|${JSON.stringify([crop([4, 0, 8, 8])])}`, layers: [crop([4, 0, 8, 8])], color: [7, 7, 7], under: [255, 179, 0] });
+    expect(new Set(core!.tiles).size).toBe(1);
+    expect([arm!.shape, arm!.side]).toEqual(['arm', 5]);
+    expect(t(arm!.tiles[5]).layers).toEqual([crop([8, 8, 8, 8])]);
+    expect([0, 1, 2, 3, 4].map((s) => t(arm!.tiles[s]!).layers)).toEqual(Array(5).fill([crop([0, 0, 4, 8])]));
+  });
+
+  it('draws a ghost with pipe layers as a core with arms toward the pipes of the line', () => {
+    const ghostCable = { ...piped, block: GT(1391) };
+    const g: Layout = { ...layout, blocks: [
+      { pos: [9, 64, 21], block: GT(1391), role: 'ghost', label: 'existing cable' },
+      { pos: [9, 65, 21], block: GT(1246), role: 'cable', label: '1x Tin Cable', hookup: 0, connections: 1 },
+      { pos: [10, 64, 21], block: { id: 'minecraft:stone', meta: 0 }, role: 'ghost', label: 'existing Stone' }] };
+    const scene = buildScene(g, new Map([[blockKey(GT(1391)), ghostCable]]), icons, covers);
+    expect(scene.instances.filter((i) => i.block === 0).map((i) => [i.shape, i.side, i.ghost])).toEqual([['core', -1, true], ['arm', 1, true]]);
+    expect(scene.tiles[scene.instances[0]!.tiles[0]]!.under).toEqual([200, 200, 200]);
+    expect(scene.instances.filter((i) => i.block === 2).map((i) => i.shape)).toEqual(['cube']);   // no pipe layers: a cube, as today
+  });
+
+  // ---- after the plan's own tests: the edges the plan leaves open ----
+
+  it('gives a ghost an arm only toward a pipe of the line, never toward another ghost or a machine', () => {
+    const ghost = (x: number): LayoutBlock => ({ pos: [x, 64, 21], block: GT(1391), role: 'ghost', label: 'existing cable' });
+    const g: Layout = { ...layout, blocks: [ghost(9), ghost(10), { pos: [9, 64, 20], block: GT(2001), role: 'machine', label: 'Basic Macerator' },
+      { pos: [9, 64, 22], block: GT(5600), role: 'pipe', label: 'Tin Item Pipe', connections: 0 }] };
+    const scene = buildScene(g, new Map([[blockKey(GT(1391)), { ...piped, block: GT(1391) }]]), icons, covers);
+    const shapes = (block: number) => scene.instances.filter((i) => i.block === block).map((i) => [i.shape, i.side]);
+    expect([shapes(0), shapes(1)]).toEqual([[['core', -1], ['arm', 3]], [['core', -1]]]);   // south to the pipe; the other ghost is a lone core
+  });
+
+  it('keys a tile by the colour under it as well, and copies that colour', () => {
+    const ref = { id: 'fmp:pr_rbasic', meta: 0 };
+    const two: Layout = { ...layout, blocks: [{ pos: [10, 64, 20], block: ref, role: 'pipe', label: 'Routed Junction Pipe', connections: 0 },
+      { pos: [11, 64, 20], block: ref, role: 'chip_pipe', label: 'Routed Junction Pipe', connections: 0 }], hookups: [], pins: [] };
+    const scene = buildScene(two, new Map([[blockKey(ref), piped]]), icons, covers);
+    const [pipe, chip] = scene.instances.map((i) => scene.tiles[i.tiles[0]]!);
+    expect([pipe!.under, chip!.under, chip!.layers]).toEqual([[255, 179, 0], [255, 112, 67], pipe!.layers]);   // the same layers over two colours: two tiles
+    expect(pipe!.key).not.toBe(chip!.key);
+    pipe!.under![0] = 0;
+    expect(ROLE_FALLBACK.pipe).toEqual([255, 179, 0]);
+  });
+});
+
+// Plan 16 Task 10 (architecture §11.43 (j)): a block facing up or down keeps its hull by world side; only its front turns.
+describe('3D scene data: vertical facings', () => {
+  const l = (n: string): TextureLayer => ({ path: `gregtech/textures/blocks/iconsets/${n}.png` });
+  const hatchFaces: BlockFaces = { block: GT(60), resolved: true, fallbackColor: [121, 85, 72],
+    faces: { down: [l('B')], up: [l('T')], north: [l('S'), l('OUT')], south: [l('S')], west: [l('S')], east: [l('S')] } };
+  const hatchFacing = (facing: number): Layout => ({ ...layout, blocks: [{ pos: [10, 64, 20], block: GT(60), role: 'hatch', label: 'Output Hatch (ULV)', facing }], hookups: [], pins: [] });
+  /** The layers the hatch's cube shows on each world side, down to east. */
+  const sides = (facing: number): TextureLayer[][] => {
+    const scene = buildScene(hatchFacing(facing), new Map([[blockKey(GT(60)), hatchFaces]]), icons, covers);
+    return scene.instances[0]!.tiles.map((t) => scene.tiles[t]!.layers);
+  };
+
+  it('keeps the hull of a hatch facing up on every world side, its overlay on top', () => {
+    const shown = sides(1);
+    expect([shown[1], shown[2], shown[0]]).toEqual([[l('T'), l('OUT')], [l('S')], [l('B')]]);
+  });
+
+  // ---- after the plan's own tests: the edges the plan leaves open ----
+
+  it('draws a hatch facing down with its overlay on the bottom, and its four sides with one tile', () => {
+    expect(sides(0)).toEqual([[l('B'), l('OUT')], [l('T')], [l('S')], [l('S')], [l('S')], [l('S')]]);
+    const scene = buildScene(hatchFacing(0), new Map([[blockKey(GT(60)), hatchFaces]]), icons, covers);
+    expect(new Set(scene.instances[0]!.tiles.slice(2)).size).toBe(1);   // world north shows the hull alone: the sides' tile
+  });
+
+  it('turns a hatch facing a side whole, its overlay onto that side', () => {
+    expect(sides(5)).toEqual([[l('B')], [l('T')], [l('S')], [l('S')], [l('S')], [l('S'), l('OUT')]]);
+  });
+
+  it('draws a block facing up without faces in its plain colour on every side', () => {
+    const scene = buildScene(hatchFacing(1), new Map(), icons, covers);
+    expect(scene.instances[0]!.tiles.map((t) => scene.tiles[t]!.key)).toEqual(Array(6).fill('color:121,85,72'));
   });
 });

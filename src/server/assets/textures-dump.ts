@@ -32,7 +32,12 @@ export interface TexturesDumpFile {
   sets: Array<{ name: string; icons: Record<string /* texture index */, DumpLayer[]> }>;
   materials: Array<{ name: string; id: number /* mMetaItemSubID */; rgba: [number, number, number, number]; set: number /* index into sets */; oreGlow?: 1 /* hasGlowingOre() */ }>;
   metaItems: Array<{ id: string /* registry name */; offset: number; unlocalized: string; prefixes: Array<{ i: number /* meta / 1000 */; prefix: string; texture: number }> }>;
-  mte: Array<{ id: number; cls: string; pipe?: true; inactive?: DumpFaces; active?: DumpFaces /* omitted when equal to inactive */; error?: string }>;
+  /** 0.4.0: every `OrePrefixes` name → its texture index (`getTextureIndex()`). */
+  prefixTextures?: Record<string, number>;
+  mte: Array<{
+    id: number; cls: string; pipe?: true; inactive?: DumpFaces; active?: DumpFaces /* omitted when equal to inactive */;
+    unconnected?: DumpFaces /* 0.4.0, pipes: the faces with nothing connected, omitted when equal to inactive */; error?: string;
+  }>;
   casingPages: Array<{ id: number /* page << 7 | index */; faces: DumpFaces }>;
   blocks: Array<{ id: string; metas: Record<string /* meta */, DumpFaces> }>;
   /** GT ore blocks (`GTBlockOre`); absent from dumps written before the exporter had this part. */
@@ -42,7 +47,7 @@ export interface TexturesDumpFile {
     blocks: Array<{ id: string; stones: DumpLayer[][] /* per stone index (stoneTypes order): the stone drawn under the ore */ }>;
   };
   covers: Array<{ item: string /* registry@meta */; layers: DumpLayer[] }>;
-  fluids: Array<{ name: string; color: number /* Fluid.getColor(), 0xAARRGGBB as a signed int */; still?: string }>;
+  fluids: Array<{ name: string; color: number /* Fluid.getColor(), 0xAARRGGBB as a signed int */; still?: string; block?: string /* 0.4.0: the fluid's block, by registry name */ }>;
   textureNames: { blocks: Record<string, string>; items: Record<string, string> };   // registry name → Block.textureName / Item.iconString
   blockIds: string[];                                                            // every block registry name, sorted
   stats: Record<string, number>;                                                 // counts per part, '<part>Failed', 'unknown:<class>'
@@ -53,19 +58,29 @@ export interface TexturesDumpFile {
 export interface CopyRef { copy: [string, number, number] }               // block registry name, meta, side
 export type FaceLayer = TextureLayer | CopyRef;
 export type ResolvedFaces = FaceLayer[][];                                 // 6 lists, ForgeDirection order
-export interface DumpMte { cls: string; pipe: boolean; inactive: ResolvedFaces | null; active: ResolvedFaces | null; error?: string }
+/**
+ * A pipe's `inactive` faces are drawn connected on every side, as the exporter reads it; `unconnected` is its look with
+ * nothing connected (0.4.0's own, else derived from `inactive`), null for every other MTE and for a pipe that looks
+ * the same either way (a bare wire).
+ */
+export interface DumpMte { cls: string; pipe: boolean; inactive: ResolvedFaces | null; active: ResolvedFaces | null; unconnected: ResolvedFaces | null; error?: string }
 export interface DumpMaterial { name: string; id: number; rgb: Rgb; set: number; oreGlow?: true }
 /** GT ore blocks: meta = stone index · 1000 + material id, plus `naturalOffset` (world-generated) and `smallOffset` (small ore). */
 export interface DumpOres { ore: number; oreSmall: number; smallOffset: number; naturalOffset: number; blocks: Map<string, FaceLayer[][]> }
-export interface DumpStats { droppedLayers: number; errorLayers: number }
+/** `still` is null when the fluid has none or its file was not extracted; `block` only from exporter 0.4.0 on. */
+export interface DumpFluid { color: Rgb; still: TextureLayer | null; block?: string }
+/** `missingStill`: fluids whose `still` names a file the index lacks. */
+export interface DumpStats { droppedLayers: number; errorLayers: number; missingStill: number }
 export interface TexturesDump {
   exporterVersion: string;
   sets: Array<Map<number, DumpLayer[]>>;                                  // raw: the tint comes from the material at lookup time (Task 8)
+  setNames: string[];                                                      // the names of `sets`, same order
   materialsById: Map<number, DumpMaterial>; materialsByName: Map<string, DumpMaterial>;
   metaItems: Map<string, { offset: number; unlocalized: string; prefixes: Map<number, { prefix: string; texture: number }> }>;
+  prefixTextures: Map<string, number>;                                     // `OrePrefixes` name → texture index (`prefixTable`)
   mte: Map<number, DumpMte>; casingPages: Map<number, ResolvedFaces>; blocks: Map<string, Map<number, ResolvedFaces>>;
   ores: DumpOres | null;                                                   // null: the dump has no ore part
-  covers: Map<string, FaceLayer[]>; fluids: Map<string, { color: Rgb; still: TextureLayer | null }>;
+  covers: Map<string, FaceLayer[]>; fluids: Map<string, DumpFluid>;
   textureNames: { blocks: Map<string, string>; items: Map<string, string> }; blockIds: Set<string>; stats: DumpStats;
 }
 
@@ -147,13 +162,96 @@ export function resolveDumpLayers(layers: readonly DumpLayer[], index: AssetInde
   return out;
 }
 
+/**
+ * The texture index (`OrePrefixes.mTextureIndex`, by javap of `OrePrefixes.<clinit>` in gregtech-5.09.54.183) of the
+ * prefixes no X32 meta item lists, for a dump without its own `prefixTextures` (exporter 0.3.0).
+ */
+export const PREFIX_SUPPLEMENT: Readonly<Record<string, number>> = {
+  cellMolten: 31, cellSteamCracked1: 30, cellSteamCracked2: 30, cellSteamCracked3: 30,
+  cellHydroCracked1: 30, cellHydroCracked2: 30, cellHydroCracked3: 30,
+  frameGt: 83, sheetmetal: 86, ore: 68, oreSmall: 67,
+};
+
+/**
+ * Prefix → texture index: the file's `prefixTextures` when it has them (0.4.0), as the whole table; else every X32
+ * list's own `prefix → texture` (each equal to `OrePrefixes.mTextureIndex`), then `PREFIX_SUPPLEMENT` for the prefixes
+ * none of them lists.
+ */
+function prefixTable(file: TexturesDumpFile): Map<string, number> {
+  if (isPlainObject(file.prefixTextures)) {
+    return new Map(Object.entries(file.prefixTextures).filter(([, texture]) => Number.isInteger(texture)));
+  }
+  const table = new Map<string, number>();
+  const add = (prefix: string, texture: number): void => {
+    if (!table.has(prefix)) table.set(prefix, texture);
+  };
+  for (const item of file.metaItems) for (const p of item.prefixes) add(p.prefix, p.texture);
+  for (const [prefix, texture] of Object.entries(PREFIX_SUPPLEMENT)) add(prefix, texture);
+  return table;
+}
+
+/** GT's six insulation rings: what an insulated cable draws over its wire on a connected side (`MTECable.getTexture`). */
+const INSULATION_RING = /^gregtech\/textures\/blocks\/iconsets\/INSULATION_(?:TINY|SMALL|MEDIUM|MEDIUM_PLUS|LARGE|HUGE)\.png$/;
+/** What an insulated cable draws on a side with nothing connected. */
+const INSULATION_FULL = 'gregtech/textures/blocks/iconsets/INSULATION_FULL.png';
+/** A pipe's connected-side template (`OrePrefixes.pipe<Size>`), as its texture set's fallback base names it. */
+const PIPE_TEMPLATE = /\/pipe(?:Tiny|Small|Medium|Large|Huge|Quadruple|Nonuple)?\.png$/;
+/** Any of a pipe template's four files, its overlay suffix in `$1`; `PIPE_SIDE` is `OrePrefixes.pipe` (texture 77). */
+const PIPE_FILE = /\/pipe(?:Tiny|Small|Medium|Large|Huge|Quadruple|Nonuple)?(_OVERLAY)?\.png$/;
+const PIPE_SIDE = '/pipeSide$1.png';
+
+/**
+ * One side of a pipe with nothing connected, from that side drawn connected: an insulation ring → the full insulation
+ * in the ring's colour (insulated cable); else every pipe template layer → `pipeSide` in its colour, the other layers
+ * kept; null when the side has neither.
+ */
+function unconnectedSide(list: readonly unknown[]): DumpLayer[] | null {
+  for (const layer of list) {
+    if (isPlainObject(layer) && isStrings(layer.p) && isRgbOrAbsent(layer.rgb) && layer.p.some((path) => INSULATION_RING.test(path))) {
+      return [layer.rgb === undefined ? { p: [INSULATION_FULL] } : { p: [INSULATION_FULL], rgb: layer.rgb }];
+    }
+  }
+  let changed = false;
+  const out = list.map((layer) => {
+    if (!isPlainObject(layer) || !isStrings(layer.ts, 4) || !isRgbOrAbsent(layer.rgb) || !PIPE_TEMPLATE.test(layer.ts[1]!)) return layer;
+    changed = true;
+    const ts = layer.ts.map((path) => path.replace(PIPE_FILE, PIPE_SIDE)) as [string, string, string, string];
+    return layer.rgb === undefined ? { ts } : { ts, rgb: layer.rgb };
+  });
+  return changed ? (out as DumpLayer[]) : null;
+}
+
+/**
+ * A pipe MTE's faces with nothing connected, derived side by side from the faces the exporter wrote with every side
+ * connected (`unconnectedSide`; a side without a rule stays as it is), for exports without 0.4.0's `unconnected`.
+ * Null when no side changes: a bare wire or a frame looks the same either way.
+ */
+export function derivedUnconnected(raw: DumpFaces): DumpFaces | null {
+  let changed = false;
+  const out = Array.from({ length: 6 }, (_, side): DumpLayer[] => {
+    const list = raw[side];
+    if (!Array.isArray(list)) return [];
+    const derived = unconnectedSide(list);
+    if (derived === null) return list;
+    changed = true;
+    return derived;
+  });
+  return changed ? out : null;
+}
+
 /** Joins a whole dump to the asset index; every face, cover and ore stone list is resolved exactly once. */
 export function buildTexturesDump(file: TexturesDumpFile, index: AssetIndex): TexturesDump {
-  const stats: DumpStats = { droppedLayers: 0, errorLayers: 0 };
+  const stats: DumpStats = { droppedLayers: 0, errorLayers: 0, missingStill: 0 };
   const layers = (list: unknown): FaceLayer[] => (Array.isArray(list) ? resolveDumpLayers(list as DumpLayer[], index, stats) : []);
   const faces = (raw: unknown): ResolvedFaces => {
     const lists = Array.isArray(raw) ? raw : [];
     return Array.from({ length: 6 }, (_, side) => layers(lists[side]));
+  };
+  /** The file's own faces with nothing connected (0.4.0), else a pipe's, derived from its raw connected faces. */
+  const unconnectedFaces = (m: TexturesDumpFile['mte'][number]): ResolvedFaces | null => {
+    if (m.unconnected !== undefined) return faces(m.unconnected);
+    const derived = m.pipe === true && Array.isArray(m.inactive) ? derivedUnconnected(m.inactive) : null;
+    return derived === null ? null : faces(derived);
   };
 
   const materialsById = new Map<number, DumpMaterial>();
@@ -169,29 +267,35 @@ export function buildTexturesDump(file: TexturesDumpFile, index: AssetIndex): Te
   for (const m of file.mte) {
     const pipe = m.pipe === true;
     if (m.error !== undefined) {
-      mte.set(m.id, { cls: m.cls, pipe, inactive: null, active: null, error: m.error });
+      mte.set(m.id, { cls: m.cls, pipe, inactive: null, active: null, unconnected: null, error: m.error });
       continue;
     }
     const inactive = m.inactive === undefined ? null : faces(m.inactive);
-    mte.set(m.id, { cls: m.cls, pipe, inactive, active: m.active === undefined ? inactive : faces(m.active) });
+    mte.set(m.id, { cls: m.cls, pipe, inactive, active: m.active === undefined ? inactive : faces(m.active), unconnected: unconnectedFaces(m) });
   }
 
-  const fluids = new Map<string, { color: Rgb; still: TextureLayer | null }>();
+  const fluids = new Map<string, DumpFluid>();
   for (const f of file.fluids) {
     const c = f.color;
     const color: Rgb = [(c >> 16) & 255, (c >> 8) & 255, c & 255];
-    fluids.set(f.name, { color, still: typeof f.still === 'string' ? index.layer(f.still, { tint: color }) : null });
+    const still = typeof f.still === 'string' ? index.layer(f.still, { tint: color }) : null;
+    if (typeof f.still === 'string' && still === null) stats.missingStill++;
+    const fluid: DumpFluid = { color, still };
+    if (typeof f.block === 'string' && f.block !== '') fluid.block = f.block;
+    fluids.set(f.name, fluid);
   }
 
   return {
     exporterVersion: file.exporterVersion,
     sets: file.sets.map((s) => new Map(Object.entries(s.icons).map(([i, list]) => [Number(i), list]))),
+    setNames: file.sets.map((s) => s.name),
     materialsById,
     materialsByName,
     metaItems: new Map(file.metaItems.map((m) => [m.id, {
       offset: m.offset, unlocalized: m.unlocalized,
       prefixes: new Map(m.prefixes.map((p) => [p.i, { prefix: p.prefix, texture: p.texture }])),
     }])),
+    prefixTextures: prefixTable(file),
     mte,
     casingPages: new Map(file.casingPages.map((c) => [c.id, faces(c.faces)])),
     blocks: new Map(file.blocks.map((b) => [b.id, new Map(Object.entries(b.metas).map(([meta, f]) => [Number(meta), faces(f)]))])),

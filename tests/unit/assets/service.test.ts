@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { writeAssetsDir } from '../../helpers/assets-dir.ts';
-import { writeTexturesDump } from '../../helpers/textures-dump.ts';
+import { dumpFile, writeTexturesDump } from '../../helpers/textures-dump.ts';
 import { gtSampleFile, GT_SAMPLE_ASSETS } from '../../helpers/gt-sample.ts';
 import { AssetService } from '../../../src/server/assets/service.ts';
 
@@ -38,6 +38,23 @@ describe('AssetService', () => {
     await writeAssetsDir(dir, GT_SAMPLE_ASSETS);
     expect((await svc.sources()).index.size).toBe(1);
     expect(packCalls).toBe(1);
+  });
+
+  it('says once per dump load how many fluids name a still texture that was not extracted', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'gp-svc-'));
+    const exportDir = join(dir, 'export', 'e1');
+    const still = (name: string) => ({ name, color: 0, still: `gregtech/textures/blocks/fluids/fluid.${name}.png` });
+    await writeTexturesDump(exportDir, dumpFile({ fluids: [still('a')] }));
+    const logs: string[] = [];
+    const svc = new AssetService({ dataDir: dir, exportDir: () => exportDir, pack: async () => null, checkEveryMs: 0, log: (l) => logs.push(l) });
+    await svc.sources();
+    await svc.sources();
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain('1 fluid of the texture dump');
+    await writeTexturesDump(exportDir, dumpFile({ fluids: [still('a'), still('b'), { name: 'c', color: 0 }] }));
+    await svc.sources();
+    expect(logs).toEqual([logs[0], 'Assets: 2 fluids of the texture dump name a still texture that was not extracted; they are drawn by name or '
+      + 'as GT\'s generic fluid (exporter 0.4.0 fixes the GT ones).']);
   });
 
   it('works with no assets, no export and no pack', async () => {

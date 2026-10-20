@@ -48,20 +48,22 @@ final class GtMachineIcons {
 
     /**
      * The icons of each side ({@code [side][layer]}, ForgeDirection order) of GT machine {@code mteId} with its
-     * front facing on side {@code facing} (0…5); null when GT cannot draw it this way (no such machine, or anything
-     * fails).
+     * front facing on side {@code facing} (0…5) and, for a basic machine, its own front on side {@code mainFacing}
+     * (−1 when the planner sent none); null when GT cannot draw it this way (no such machine, or anything fails).
      *
      * <p>{@code facing} is GT's front facing, which {@code getTexture} is given as its facing. On a basic (single-block)
      * machine that is its output side, where GT draws the output overlay; the face overlay goes on the machine's own
      * main facing, which a prototype has unknown (the constructor {@code newMetaEntity} copies through ends with
-     * {@code mMainFacing = UNKNOWN}), so it would draw no face overlay at all. The prototype gets the main facing a
-     * placed machine has with that output side: the opposite side, where GT puts it when the machine is placed (it
-     * sets the main facing to the side the front was put on and moves the front facing, the output side, opposite),
-     * and never the output side itself. GT allows only north, south, west and east as a main facing, so with an
-     * output side up or down it stays unknown. A pipe or cable is drawn by GT through its own pipe base with every
-     * side connected: a plain machine base refuses it, and its machine-style {@code getTexture} is GT's error texture.
+     * {@code mMainFacing = UNKNOWN}), so it would draw no face overlay at all. The prototype gets the planner's
+     * {@code mainFacing}, where the layout turns the machine's front (along the row: the place step sets it there, and
+     * the 3D view draws it there), when GT allows that side as a main facing (north, south, west or east) and it is not
+     * the output side; else the main facing a machine placed facing you has with that output side: the opposite side
+     * (GT sets the main facing to the side the front was put on and moves the front facing, the output side, opposite),
+     * and with an output side up or down it stays unknown. A pipe or cable is drawn by GT through its own pipe base with
+     * every side connected: a plain machine base refuses it, and its machine-style {@code getTexture} is GT's error
+     * texture.
      */
-    static IIcon[][] faces(int mteId, int facing) {
+    static IIcon[][] faces(int mteId, int facing, int mainFacing) {
         try {
             IMetaTileEntity proto = GregTechAPI.METATILEENTITIES[mteId];
             if (proto == null) return null;
@@ -80,7 +82,7 @@ final class GtMachineIcons {
                 BaseMetaTileEntity te = new BaseMetaTileEntity();
                 te.setInitialValuesAsNBT(null, (short) mteId);
                 IMetaTileEntity mte = te.getMetaTileEntity();
-                if (mte instanceof MTEBasicMachine) ((MTEBasicMachine) mte).mMainFacing = mainFacing(front);
+                if (mte instanceof MTEBasicMachine) ((MTEBasicMachine) mte).mMainFacing = mainFacing(front, mainFacing);
                 for (int s = 0; s < SIDES; s++) {
                     ForgeDirection side = ForgeDirection.getOrientation(s);
                     faces[s] = icons(mte.getTexture(te, side, front, -1, false, false), s);
@@ -94,12 +96,20 @@ final class GtMachineIcons {
     }
 
     /**
-     * The main facing (face overlay) of a basic machine whose output side is {@code output}: the opposite side when
-     * GT allows it as a main facing (north, south, west or east), else unknown.
+     * The main facing (face overlay) of a basic machine whose output side is {@code output}: the planner's
+     * {@code planned} side when GT allows it as a main facing (north, south, west or east) and it is not the output
+     * side; else the opposite of the output side when GT allows that; else unknown.
      */
-    private static ForgeDirection mainFacing(ForgeDirection output) {
-        ForgeDirection main = output.getOpposite();
-        return main != ForgeDirection.UNKNOWN && main.offsetY == 0 ? main : ForgeDirection.UNKNOWN;
+    private static ForgeDirection mainFacing(ForgeDirection output, int planned) {
+        ForgeDirection main = ForgeDirection.getOrientation(planned);
+        if (isMainFacing(main) && main != output) return main;
+        main = output.getOpposite();
+        return isMainFacing(main) ? main : ForgeDirection.UNKNOWN;
+    }
+
+    /** Whether GT lets a basic machine's main facing be {@code side}: one of the four sides, never up, down or unknown. */
+    private static boolean isMainFacing(ForgeDirection side) {
+        return side != ForgeDirection.UNKNOWN && side.offsetY == 0;
     }
 
     /** The icons of one side's texture tree, in drawing order. */

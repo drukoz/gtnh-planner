@@ -290,6 +290,30 @@ class ProjectorSessionTest {
         assertEquals("[Planner] \"Steel line\": Not placed", last());          // not "Updated …: 0 blocks in 0 build steps."
     }
 
+    // The review of the EnderIO single pipe: a fluids step that lays its conduits in the line's bundles only places no block
+    // of its own, and is still a step with blocks to show, and to tick once its fluid conduits are in.
+    @Test void showsAndTicksAStepThatOnlyLaysConduitsInBundles() throws Exception {
+        s.run(Command.load("Pr0jectAb1", "gpt_abc")); api.fetches.poll().done(PayloadParserTest.bundleSample());
+        assertEquals("[Planner] Loaded \"Steel line\": 12 blocks in 8 build steps. Showing all layers.", last());
+        s.run(Command.step("11"));
+        assertEquals("[Planner] Showing step 11: " + PayloadParserTest.bundleSample().steps.get(PayloadParserTest.FLUIDS).text, last());
+        FakeWorld w = new FakeWorld().placeLine("item");
+        placeAndCheck(w);
+        assertEquals(Collections.singletonList("mark Pr0jectAb1 layout:logistics:line Steve"), marks());   // not the fluids step
+        assertEquals(PayloadParserTest.BUNDLE_LABEL + ": not all its conduits placed yet", s.lookingAt(106, 64, 202));
+        assertTrue(s.hudLines().get(0).startsWith("Planner: Steel line — 0/2 placed, 0 wrong · showing step 11"), s.hudLines().get(0));
+        s.run(Command.step("7"));                                              // the line step, whose conduit the bundle holds
+        assertEquals(PayloadParserTest.BUNDLE_LABEL + ": placed correctly", s.lookingAt(106, 64, 202));
+        assertTrue(s.hudLines().get(0).startsWith("Planner: Steel line — 5/5 placed, 0 wrong · showing step 7"), s.hudLines().get(0));
+        s.run(Command.step("all"));
+        assertEquals(PayloadParserTest.BUNDLE_LABEL + ": not all its conduits placed yet", s.lookingAt(106, 64, 202));
+        api.marks.poll().done(8);
+        placeAndCheck(w.placeLine("item", "liquid_ender"));
+        assertEquals(Arrays.asList("mark Pr0jectAb1 layout:logistics:line Steve", "mark Pr0jectAb1 layout:logistics:fluids Steve"), marks());
+        assertEquals(PayloadParserTest.BUNDLE_LABEL + ": placed correctly", s.lookingAt(106, 64, 202));
+    }
+    private List<String> marks() { List<String> m = new ArrayList<>(); for (String c : api.calls) if (c.startsWith("mark ")) m.add(c); return m; }
+
     @Test void describesOnlyAShownBlockUnderTheCrosshair() throws Exception {
         loadSample();
         placeAndCheck(new FakeWorld().placeStepS1());

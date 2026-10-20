@@ -1,7 +1,8 @@
-// Copies the block and item textures (PNG + `.png.mcmeta`) out of the pack's jars into `<dataDir>/assets/` and writes
-// `index.json` (Task 2). Jars are only read (yauzl opens them with flag 'r'). Everything is first written to a staging
-// folder next to `assets/`, which replaces the old folder only once it is complete, so a failed run leaves the
-// previous textures in place. No other module writes extracted textures or `assets/index.json`.
+// Copies the block and item textures (PNG + `.png.mcmeta`) and the chests' model sheets (PNG) out of the pack's jars
+// into `<dataDir>/assets/` and writes `index.json` (Task 2). Jars are only read (yauzl opens them with flag 'r').
+// Everything is first written to a staging folder next to `assets/`, which replaces the old folder only once it is
+// complete, so a failed run leaves the previous textures in place. No other module writes extracted textures or
+// `assets/index.json`.
 
 import { lstat, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
@@ -17,7 +18,7 @@ export interface ExtractOptions { jars: JarSource[]; dataDir: string; clientSha1
 export interface ExtractSummary {
   files: number /* PNGs indexed */; bytes: number /* bytes copied */; jars: number /* jars opened */; conflicts: AssetConflict[];
   identicalDuplicates: number; skippedJars: Array<{ jar: string; error: string }>;
-  ignoredEntries: number /* entries that are not block/item textures */;
+  ignoredEntries: number /* entries that are not block/item textures or chest model sheets */;
 }
 
 /** The copy failed; `<dataDir>/assets` was left as it was. */
@@ -37,6 +38,11 @@ interface Candidate { jar: string; kind: 'client' | 'mod' }
  */
 const OPEN_OPTIONS: ZipOptions = { lazyEntries: true, autoClose: false, decodeStrings: false };
 const TEXTURE_ENTRY = /^assets\/([a-z0-9_.-]+)\/textures\/(blocks|items)\/(.+)$/;
+/**
+ * The model sheets the chests are cut from (architecture §11.43 (e)): the client jar's `entity/chest/<name>.png` and
+ * IronChest's `model/<name>.png`, drawn by a tile-entity renderer rather than from an atlas. Only these two folders.
+ */
+const MODEL_SHEET = /^assets\/(minecraft\/textures\/entity\/chest|ironchest\/textures\/model)\/([a-z_]+\.png)$/;
 const UNSAFE_CHAR = /[\\\p{Cc}]/u;
 const MCMETA = '.mcmeta';
 /** `<dataDir>/assets/nei/` belongs to the NEI icon import (Task 11), so no jar domain is extracted there. */
@@ -68,9 +74,13 @@ function domainOf(rel: string): string {
  * `<domain>/textures/<blocks|items>/<rest>` (the `data/assets`-relative path) for a jar entry
  * `assets/<domain>/textures/<blocks|items>/<rest>` whose domain is lower case (the game lower-cases domains before
  * it looks a file up) and whose rest is a `.png` or `.png.mcmeta` path without empty, `.` or `..` segments, `\` or
- * control characters; else null. The result never leads outside the folder it is joined to.
+ * control characters; else null. Also a chest model sheet, `assets/minecraft/textures/entity/chest/<name>.png` or
+ * `assets/ironchest/textures/model/<name>.png` (`[a-z_]+`, no `.mcmeta`), under its own path. The result never leads
+ * outside the folder it is joined to.
  */
 export function textureEntry(name: string): string | null {
+  const sheet = MODEL_SHEET.exec(name);
+  if (sheet !== null) return `${sheet[1]}/${sheet[2]}`;
   const m = TEXTURE_ENTRY.exec(name);
   if (m === null) return null;
   const domain = m[1]!;

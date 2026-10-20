@@ -46,6 +46,18 @@ describe('textureEntry and pickWinner', () => {
       expect(textureEntry(bad)).toBeNull();
   });
 
+  it('accepts the chest model sheets and no other entity or model texture', () => {
+    expect(textureEntry('assets/minecraft/textures/entity/chest/normal.png')).toBe('minecraft/textures/entity/chest/normal.png');
+    expect(textureEntry('assets/ironchest/textures/model/ironchest.png')).toBe('ironchest/textures/model/ironchest.png');
+    expect(textureEntry('assets/minecraft/textures/entity/chest/christmas_double.png')).toBe('minecraft/textures/entity/chest/christmas_double.png');
+    for (const bad of ['assets/minecraft/textures/entity/pig/pig.png', 'assets/minecraft/textures/entity/chest/normal.png.mcmeta',
+      'assets/othermod/textures/model/x.png', 'assets/ironchest/textures/gui/ironcontainer.png',
+      'assets/ironchest/textures/model/ironchest.png.mcmeta', 'assets/minecraft/textures/model/normal.png', 'assets/ironchest/textures/entity/chest/normal.png',
+      'assets/minecraft/textures/entity/chest/Normal.png', 'assets/minecraft/textures/entity/chest/normal2.png', 'assets/minecraft/textures/entity/chest/.png',
+      'assets/minecraft/textures/entity/chest/sub/normal.png', 'assets/minecraft/textures/entity/chest/../pig/pig.png', 'assets/minecraft/textures/entity/chest/normal.txt'])
+      expect(textureEntry(bad)).toBeNull();
+  });
+
   it('applies the winner rule', () => {
     expect(pickWinner([{ jar: 'minecraft-1.7.10-client.jar', kind: 'client' }, { jar: 'VillageNames-4.jar', kind: 'mod' }], undefined))
       .toEqual({ winner: 'VillageNames-4.jar', rule: 'mod-over-client' });
@@ -80,6 +92,26 @@ describe('extractAssets', () => {
     expect(ix.sources.find((x: { kind: string }) => x.kind === 'client').sha1).toBe('e80d9b3bf5085002218d4be59e668bac718abbc6');
     const after = await Promise.all(jars.map((j) => stat(j.path)));
     expect(after.map((a) => a.mtimeMs)).toEqual(before.map((b) => b.mtimeMs));
+  });
+
+  it('copies the chest model sheets, and no other texture outside blocks and items', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'gp-ex-'));
+    const sheet = makePng(64, 64, [150, 100, 50, 255]);
+    const client = await makeJar(join(dir, 'jars', 'minecraft-1.7.10-client.jar'), {
+      'assets/minecraft/textures/entity/chest/normal.png': sheet, 'assets/minecraft/textures/entity/pig/pig.png': RED });
+    const iron = await makeJar(join(dir, 'jars', 'ironchest-6.1.13.jar'), {
+      'assets/ironchest/textures/model/ironchest.png': sheet, 'assets/ironchest/textures/gui/ironcontainer.png': GREY });
+    const s = await extractAssets({ jars: [{ path: client, kind: 'client' }, { path: iron, kind: 'mod' }], dataDir: dir });
+    expect(s).toMatchObject({ files: 2, ignoredEntries: 2 });
+    const ix = JSON.parse(await readFile(P(dir, 'index.json'), 'utf8'));
+    expect(ix.files).toEqual({
+      'ironchest/textures/model/ironchest.png': { w: 64, h: 64, jar: 'ironchest-6.1.13.jar' },
+      'minecraft/textures/entity/chest/normal.png': { w: 64, h: 64, jar: 'minecraft-1.7.10-client.jar' },
+    });
+    expect(await readFile(P(dir, 'minecraft/textures/entity/chest/normal.png'))).toEqual(sheet);
+    expect(await readFile(P(dir, 'ironchest/textures/model/ironchest.png'))).toEqual(sheet);
+    expect(existsSync(P(dir, 'ironchest/textures/gui/ironcontainer.png'))).toBe(false);
+    expect(existsSync(P(dir, 'minecraft/textures/entity/pig/pig.png'))).toBe(false);
   });
 
   it('replaces old files but keeps the NEI import', async () => {

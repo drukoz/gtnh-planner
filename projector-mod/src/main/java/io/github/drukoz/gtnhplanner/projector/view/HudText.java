@@ -25,21 +25,24 @@ public final class HudText {
 
     /**
      * How far the build has got among the blocks the filter shows (wherever the player stands):
-     * {@code Planner: <name> — <correct>/<shown> placed, <wrong> wrong}, then {@code , <n> can't be checked} when there
-     * are such blocks, then {@code  · showing <f.describe(d)>} unless the filter shows every block. A block that is not
-     * loaded counts only among the shown ones. {@code states[i]} is the state of {@code d.blocks.get(i)}.
+     * {@code Planner: <name> — <placed>/<shown> placed, <wrong> wrong}, then {@code , <n> can't be checked} when there
+     * are such blocks, then {@code  · showing <f.describe(d)>} unless the filter shows every block. A block counts as
+     * placed when it is placed for the filter's step, or for the whole line without one ({@link BlockState#placedFor}: a
+     * conduit bundle without the fluid conduit the fluids step lays is placed for the line step only). A block that is
+     * not loaded counts only among the shown ones. {@code states[i]} is the state of {@code d.blocks.get(i)}.
      */
     public static String summary(ProjectorData d, BlockState[] states, ViewFilter f) {
-        int shown = 0, correct = 0, wrong = 0, unchecked = 0;
+        int shown = 0, placed = 0, wrong = 0, unchecked = 0;
         for (int i = 0; i < d.blocks.size(); i++) {
-            if (!f.shows(d.blocks.get(i))) continue;
+            PlannedBlock b = d.blocks.get(i);
+            if (!f.shows(b)) continue;
             shown++;
             BlockState s = states[i];
-            if (s == BlockState.CORRECT) correct++;
+            if (s.placedFor(b, f.stepIndex)) placed++;
             else if (s.wrong()) wrong++;
             else if (s == BlockState.UNCHECKED) unchecked++;
         }
-        StringBuilder text = new StringBuilder("Planner: ").append(d.name).append(" — ").append(correct).append('/')
+        StringBuilder text = new StringBuilder("Planner: ").append(d.name).append(" — ").append(placed).append('/')
             .append(shown).append(" placed, ").append(wrong).append(" wrong");
         if (unchecked > 0) text.append(", ").append(unchecked).append(" can't be checked");
         if (!f.isAll()) text.append(" · showing ").append(f.describe(d));
@@ -47,9 +50,12 @@ public final class HudText {
     }
 
     /**
-     * What the player is looking at: {@code <label>: <what the check found>}, then
+     * What the player is looking at: {@code <label>: <what the check found>} (a conduit bundle that lacks a conduit
+     * another step lays: {@code not all its conduits placed yet}), then
      * {@code ; cover: <label> on the <side> face} for each cover; null for a block that is not loaded, which is neither
-     * right nor wrong. A wrong facing names the side to turn: a single-block machine's output side, else the front.
+     * right nor wrong. A wrong facing names the side to turn: a single-block machine's own front and output side, both
+     * checked ({@code its front should face <side> and its output side <side>}), or its output side alone when the
+     * planner sent no front; else the front.
      */
     public static String lookingAt(PlannedBlock b, BlockState s) {
         String found;
@@ -61,11 +67,19 @@ public final class HudText {
                 found = "wrong block here";
                 break;
             case WRONG_FACING:
-                found = "wrong facing, its " + (b.facingIsOutput ? "output side" : "front") + " should face "
-                    + Facing.name(b.facing);
+                if (b.facingIsOutput && b.mainFacing >= 0) {
+                    found = "wrong facing, its front should face " + Facing.name(b.mainFacing) + " and its output side "
+                        + Facing.name(b.facing);
+                } else {
+                    found = "wrong facing, its " + (b.facingIsOutput ? "output side" : "front") + " should face "
+                        + Facing.name(b.facing);
+                }
                 break;
             case MISSING:
                 found = "not placed yet";
+                break;
+            case INCOMPLETE:
+                found = "not all its conduits placed yet";
                 break;
             case UNCHECKED:
                 found = "can't be checked by the mod";

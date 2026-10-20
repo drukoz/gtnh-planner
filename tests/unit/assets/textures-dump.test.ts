@@ -6,7 +6,8 @@ import { gzipSync } from 'node:zlib';
 import { indexOf } from '../../helpers/assets-dir.ts';
 import { dumpFile, writeTexturesDump } from '../../helpers/textures-dump.ts';
 import {
-  buildTexturesDump, loadTexturesDump, resolveDumpLayers, textureSetLayers, TexturesDumpError, type DumpLayer, type DumpStats,
+  buildTexturesDump, derivedUnconnected, loadTexturesDump, PREFIX_SUPPLEMENT, resolveDumpLayers, textureSetLayers, TexturesDumpError,
+  type DumpFaces, type DumpLayer, type DumpStats,
 } from '../../../src/server/assets/textures-dump.ts';
 
 const I = 'gregtech/textures/blocks/iconsets/';
@@ -45,8 +46,8 @@ describe('buildTexturesDump', () => {
     expect(m.inactive![2]).toEqual([{ path: I + 'MACHINE_LV_SIDE.png' }]);
     expect(m.inactive![5]).toEqual([{ copy: ['gregtech:gt.blockcasings2', 0, 5] }]);
     expect(m.active).toEqual(m.inactive);
-    expect(d.mte.get(999)).toEqual({ cls: 'Broken', pipe: false, inactive: null, active: null, error: 'java.lang.NullPointerException' });
-    expect(d.stats).toEqual({ droppedLayers: 2, errorLayers: 1 });
+    expect(d.mte.get(999)).toEqual({ cls: 'Broken', pipe: false, inactive: null, active: null, unconnected: null, error: 'java.lang.NullPointerException' });
+    expect(d.stats).toEqual({ droppedLayers: 2, errorLayers: 1, missingStill: 0 });
   });
 
   it('turns fluid colours into RGB and tints the still texture', () => {
@@ -54,24 +55,32 @@ describe('buildTexturesDump', () => {
     expect(d.fluids.get('water')).toEqual({ color: [0, 0, 255], still: { path: FLUID, tint: [0, 0, 255], frames: 4 } });
     expect(d.fluids.get('oil')).toEqual({ color: [34, 34, 34], still: null });
   });
+
+  it('keeps the fluid\'s block (0.4.0) and counts stills that were not extracted', () => {
+    const d = buildTexturesDump(dumpFile({ fluids: [{ name: 'a', color: 0, still: 'gregtech/textures/blocks/fluids/fluid.a.png' },
+      { name: 'p', color: -1, block: 'IC2:fluidPahoehoeLava' }] }), indexOf({}));
+    expect(d.stats.missingStill).toBe(1);
+    expect(d.fluids.get('a')).toStrictEqual({ color: [0, 0, 0], still: null });   // no block key without one
+    expect(d.fluids.get('p')).toStrictEqual({ color: [255, 255, 255], still: null, block: 'IC2:fluidPahoehoeLava' });
+  });
 });
 
 describe('resolveDumpLayers', () => {
   it('tints and lights path layers and splits texture sets', () => {
-    const stats: DumpStats = { droppedLayers: 0, errorLayers: 0 };
+    const stats: DumpStats = { droppedLayers: 0, errorLayers: 0, missingStill: 0 };
     expect(resolveDumpLayers([{ p: [I + 'NOPE.png', I + 'MACHINE_LV_SIDE.png'], rgb: [10, 20, 30], glow: 1 }, { ts: ts('DULL', 'ingot'), rgb: [1, 2, 3] },
       { ts: ts('DULL', 'plate') }, { p: [I + 'MACHINE_LV_TOP.png'], rgb: [255, 255, 255] }], ix, stats)).toEqual([
       { path: I + 'MACHINE_LV_SIDE.png', tint: [10, 20, 30], glow: true }, { path: M + 'NONE/ingot.png', tint: [1, 2, 3] }, { path: M + 'NONE/ingot_OVERLAY.png' },
       { path: I + 'MACHINE_LV_TOP.png' }]);
-    expect(stats).toEqual({ droppedLayers: 1, errorLayers: 0 });
+    expect(stats).toEqual({ droppedLayers: 1, errorLayers: 0, missingStill: 0 });
   });
 
   it('counts layers it cannot read as errors (Ruling R7)', () => {
-    const stats: DumpStats = { droppedLayers: 0, errorLayers: 0 };
+    const stats: DumpStats = { droppedLayers: 0, errorLayers: 0, missingStill: 0 };
     const odd = [{ copy: [null, 0, 2] }, { copy: ['b', 0, 6] }, { x: 1 }, null, { p: I + 'MACHINE_LV_SIDE.png' }, { ts: ['a', 'b'] },
       { p: [I + 'MACHINE_LV_SIDE.png'], rgb: [1, 2] }] as unknown as DumpLayer[];
     expect(resolveDumpLayers(odd, ix, stats)).toEqual([]);
-    expect(stats).toEqual({ droppedLayers: 0, errorLayers: 7 });
+    expect(stats).toEqual({ droppedLayers: 0, errorLayers: 7, missingStill: 0 });
   });
 });
 
@@ -102,7 +111,7 @@ describe('buildTexturesDump tables', () => {
     expect(d.covers.get('gregtech:gt.metaitem.01@32630')).toEqual([{ path: I + 'MACHINE_LV_SIDE.png' }]);
     expect([d.textureNames.blocks.get('minecraft:stone'), d.textureNames.items.get('minecraft:apple')]).toEqual(['stone', 'apple']);
     expect([...d.blockIds]).toEqual(['minecraft:stone']);
-    expect(d.stats).toEqual({ droppedLayers: 0, errorLayers: 0 });
+    expect(d.stats).toEqual({ droppedLayers: 0, errorLayers: 0, missingStill: 0 });
   });
 });
 
@@ -117,8 +126,74 @@ describe('buildTexturesDump ores', () => {
     expect(d.materialsById.get(32)!.oreGlow).toBeUndefined();
     expect(d.ores).toEqual({ ore: 68, oreSmall: 67, smallOffset: 16000, naturalOffset: 8000, blocks: new Map([['gregtech:gt.blockores2',
       [[{ copy: ['minecraft:stone', 0, 0] }], [], [{ path: I + 'MACHINE_LV_SIDE.png' }]]]]) });
-    expect(d.stats).toEqual({ droppedLayers: 1, errorLayers: 0 });
+    expect(d.stats).toEqual({ droppedLayers: 1, errorLayers: 0, missingStill: 0 });
     expect(buildTexturesDump(dumpFile(), ix).ores).toBeNull();
+  });
+});
+
+describe('pipe sides with nothing connected (RC9)', () => {
+  const MB = 'gregtech/textures/blocks/materialicons/';
+  const tsOf = (root: string, set: string, n: string): { ts: [string, string, string, string] } =>
+    ({ ts: [`${root}${set}/${n}.png`, `${root}NONE/${n}.png`, `${root}${set}/${n}_OVERLAY.png`, `${root}NONE/${n}_OVERLAY.png`] });
+  const wire: DumpLayer = { ...tsOf(MB, 'SHINY', 'wire'), rgb: [255, 120, 20] };
+  const pipeTiny: DumpLayer = { ...tsOf(MB, 'DULL', 'pipeTiny'), rgb: [220, 220, 220] };
+
+  it('derives full insulation for insulated cables and pipeSide for pipes; bare wires already match the game', () => {
+    const insulated: DumpLayer[] = [wire, { p: ['gregtech/textures/blocks/iconsets/INSULATION_HUGE.png'], rgb: [64, 64, 64] }];
+    expect(derivedUnconnected([0, 1, 2, 3, 4, 5].map(() => insulated) as DumpFaces)![2])
+      .toEqual([{ p: ['gregtech/textures/blocks/iconsets/INSULATION_FULL.png'], rgb: [64, 64, 64] }]);
+    const eightX: DumpLayer[] = [wire, { p: ['gregtech/textures/blocks/iconsets/INSULATION_MEDIUM_PLUS.png'], rgb: [70, 60, 50] }];   // every 8x cable (1209, 1249, …)
+    expect(derivedUnconnected([0, 1, 2, 3, 4, 5].map(() => eightX) as DumpFaces)![3])
+      .toEqual([{ p: ['gregtech/textures/blocks/iconsets/INSULATION_FULL.png'], rgb: [70, 60, 50] }]);
+    expect(derivedUnconnected([0, 1, 2, 3, 4, 5].map((): DumpLayer[] => [{ ...tsOf(MB, 'SHINY', 'pipeTiny'), rgb: [255, 233, 0] }]) as DumpFaces)![0])
+      .toEqual([{ ...tsOf(MB, 'SHINY', 'pipeSide'), rgb: [255, 233, 0] }]);
+    expect(derivedUnconnected([0, 1, 2, 3, 4, 5].map(() => [wire]) as DumpFaces)).toBeNull();
+  });
+
+  it('rewrites only the pipe template; other layers, sides without a rule, frames and fully insulated cables stay', () => {
+    const restrictor: DumpLayer = { p: ['gregtech/textures/blocks/iconsets/PIPE_RESTRICTOR.png'] };
+    expect(derivedUnconnected([[pipeTiny, restrictor], [wire], [], [{ ...tsOf(MB, 'NONE', 'pipeQuadruple'), rgb: [1, 2, 3] }],
+      [tsOf(MB, 'NONE', 'pipeNonuple')], [{ err: 'x.Unknown' }]])).toEqual([
+      [{ ...tsOf(MB, 'DULL', 'pipeSide'), rgb: [220, 220, 220] }, restrictor], [wire], [], [{ ...tsOf(MB, 'NONE', 'pipeSide'), rgb: [1, 2, 3] }],
+      [tsOf(MB, 'NONE', 'pipeSide')], [{ err: 'x.Unknown' }]]);
+    expect(derivedUnconnected([0, 1, 2, 3, 4, 5].map((): DumpLayer[] => [{ ...tsOf(MB, 'SHINY', 'frameGt'), rgb: [9, 9, 9] }]))).toBeNull();
+    expect(derivedUnconnected([0, 1, 2, 3, 4, 5].map((): DumpLayer[] => [{ p: ['gregtech/textures/blocks/iconsets/INSULATION_FULL.png'], rgb: [64, 64, 64] }])))
+      .toBeNull();
+    expect(derivedUnconnected([null, [null], [{ p: 'x' }], [{ ts: ['a'] }]] as unknown as DumpFaces)).toBeNull();
+  });
+
+  it('a 0.3.0 dump derives pipe sides', () => {
+    const pipeIx = indexOf({ [MB + 'NONE/pipeTiny.png']: {}, [MB + 'NONE/pipeSide.png']: {}, 'x/textures/blocks/given.png': {} });
+    const inactive: DumpFaces = [0, 1, 2, 3, 4, 5].map(() => [pipeTiny]);
+    const d = buildTexturesDump(dumpFile({ mte: [{ id: 5589, cls: 'MTEItemPipe', pipe: true, inactive },
+      { id: 1240, cls: 'MTECable', pipe: true, inactive: [0, 1, 2, 3, 4, 5].map(() => [wire]) },
+      { id: 301, cls: 'MTEBasicMachine', inactive }] }), pipeIx);   // the same faces on a machine that is no pipe
+    expect(d.mte.get(5589)!.unconnected![2]).toEqual([{ path: MB + 'NONE/pipeSide.png', tint: [220, 220, 220] }]);
+    expect(d.mte.get(5589)!.inactive![2]).toEqual([{ path: MB + 'NONE/pipeTiny.png', tint: [220, 220, 220] }]);
+    expect([d.mte.get(1240)!.unconnected, d.mte.get(301)!.unconnected]).toEqual([null, null]);
+    const given = buildTexturesDump(dumpFile({ mte: [{ id: 5589, cls: 'MTEItemPipe', pipe: true, inactive,
+      unconnected: [0, 1, 2, 3, 4, 5].map(() => [{ p: ['x/textures/blocks/given.png'] }]) }] }), pipeIx);
+    expect(given.mte.get(5589)!.unconnected![2]).toEqual([{ path: 'x/textures/blocks/given.png' }]);   // 0.4.0's own faces win
+  });
+});
+
+describe('prefix table (RC4)', () => {
+  const metaItems = [{ id: 'gregtech:gt.metaitem.01', offset: 32000, unlocalized: 'gt.metaitem.01', prefixes: [{ i: 2, prefix: 'dust', texture: 2 }] }];
+
+  it('takes the X32 lists, then the supplement; a 0.4.0 table is the whole table', () => {
+    const derived = buildTexturesDump(dumpFile({ metaItems }), ix).prefixTextures;
+    expect([derived.get('dust'), derived.get('frameGt'), derived.get('cellMolten')]).toEqual([2, 83, 31]);
+    const given = buildTexturesDump(dumpFile({ metaItems, prefixTextures: { frameGt: 99 } }), ix).prefixTextures;
+    expect(given.get('frameGt')).toBe(99);
+    expect(given.get('dust')).toBeUndefined();   // the file's table is the whole table
+  });
+
+  it('keeps an X32 list\'s own index over the supplement, and names the sets in order', () => {
+    expect(PREFIX_SUPPLEMENT).toEqual({ cellMolten: 31, cellSteamCracked1: 30, cellSteamCracked2: 30, cellSteamCracked3: 30, cellHydroCracked1: 30,
+      cellHydroCracked2: 30, cellHydroCracked3: 30, frameGt: 83, sheetmetal: 86, ore: 68, oreSmall: 67 });
+    const own = buildTexturesDump(dumpFile({ metaItems: [{ ...metaItems[0]!, prefixes: [{ i: 30, prefix: 'ore', texture: 70 }] }] }), ix);
+    expect(own.prefixTextures.get('ore')).toBe(70);
+    expect(buildTexturesDump(dumpFile({ sets: [{ name: 'METALLIC', icons: {} }, { name: 'FLUID', icons: {} }] }), ix).setNames).toEqual(['METALLIC', 'FLUID']);
   });
 });
 
