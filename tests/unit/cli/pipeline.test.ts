@@ -2,6 +2,7 @@ import { mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
+import { tableItemCount } from '../../../src/server/pack/crops.ts';
 import { loadPack } from '../../../src/server/pack/load.ts';
 import { makeExport } from '../../helpers/make-export.ts';
 import { makeFakeJava } from '../../helpers/fake-java.ts';
@@ -27,7 +28,7 @@ it('exports from a server folder and answers pack:info from the new active expor
   const info = await runCli('pack-info', [], { cwd: root, env });
   expect(info.code).toBe(0);
   expect(info.stdout).toContain(`Export:     ${activeExportId}`);
-  expect(info.stdout).toContain(`Items:      ${pack.items.size} · Fluids: ${pack.fluids.size}`);
+  expect(info.stdout).toContain(`Items:      ${tableItemCount(pack.items)} · Fluids: ${pack.fluids.size}`);
 
   const find = await runCli('pack-info', ['--find', 'Iron Dust'], { cwd: root, env });
   expect(find.stdout).toContain('  - Pulverization · Basic Macerator · 2 EU/t · 400 t (20.0 s) · LV');

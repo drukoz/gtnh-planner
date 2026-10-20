@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { itemKey } from '../../../src/shared/keys.ts';
 import type { Item, Pack } from '../../../src/shared/types/pack.ts';
+import { tableItemCount } from '../../../src/server/pack/crops.ts';
 import { EXPORT_FILES, type CropLine } from '../../../src/server/pack/format.ts';
 import { loadPack } from '../../../src/server/pack/load.ts';
 import { nbtHash } from '../../../src/server/pack/recipe-id.ts';
@@ -192,6 +193,7 @@ describe('the items of the crop table', () => {
     const crafted = withCrops.recipes.filter((r) => r.source === 'crafting' && r.inputs.some((i) => i.options.some((o) => o.key === SAMPLE.oakPlanks)));
     expect(crafted.map((r) => r.inputs[0]!.options.map((o) => o.key))).toEqual([[SAMPLE.oakPlanks, SAMPLE.sprucePlanks], [SAMPLE.oakPlanks, SAMPLE.sprucePlanks]]);
     expect(tableItems(withCrops)).toEqual([...without.items]);   // the same keys, in the same order, with the same values
+    expect(tableItemCount(withCrops.items)).toBe(without.items.size);   // the item count pack:info and GET /api/pack report
     expect(cropItems(withCrops).map((item) => item.key)).toEqual(['minecraft:planks@2', 'minecraft:dirt@0', itemKey('examplemod:seed', 0, nbtHash('{crop:"cropsnh:testTree"}'))]);
     expect([...withCrops.producers]).toEqual([...without.producers]);
     expect([...withCrops.consumers]).toEqual([...without.consumers]);

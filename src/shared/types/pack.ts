@@ -20,7 +20,10 @@ export interface Item {
   // optional addition (§11.5): only for IC2 electric items (batteries, tools) with a capacity
   electric?: { maxCharge: number; tier: number; canProvideEnergy: boolean };
   // optional addition (add-on 17): an item that only the crop table names (a drop, soil or seed the item table lacks)
-  /** Never in the ore dictionary or a wildcard's options, and listed in search only when a recipe makes it. */
+  /**
+   * Never in the ore dictionary or a wildcard's options, listed in search only when a recipe makes it, and left out of
+   * the item counts a summary reports (`tableItemCount`).
+   */
   cropOnly?: true;
 }
 export interface Fluid { key: FluidKey; id: string; name: string; temperature: number; gas: boolean; molten: boolean }

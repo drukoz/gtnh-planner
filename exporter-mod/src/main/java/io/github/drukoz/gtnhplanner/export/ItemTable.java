@@ -65,12 +65,11 @@ public final class ItemTable {
 
     /**
      * The variant's table key, {@code registryName@damage} plus {@code #SNBT} for a stack with NBT, without adding
-     * it: the same for every export of one pack, unlike an index. Throws like {@link #intern(ItemStack)}.
+     * it: the same for every export of one pack, unlike an index. The NBT is read before the damage, whose read may
+     * add NBT ({@link ItemKeys#keyOf}). Throws like {@link #intern(ItemStack)}.
      */
     public static String keyOf(ItemStack s) {
-        String key = plainKeyOf(s);
-        String nbt = nbtOf(s);
-        return nbt != null ? key + "#" + nbt : key;
+        return ItemKeys.keyOf(idOf(s), s);
     }
 
     /**
@@ -78,15 +77,20 @@ public final class ItemTable {
      * variant. Throws like {@link #intern(ItemStack)}.
      */
     public static String plainKeyOf(ItemStack s) {
-        if (s == null || s.getItem() == null) throw new IllegalArgumentException("empty item stack");
-        String id = registryName(s);
-        if (id == null) throw new IllegalArgumentException("item not in the item registry: " + s);
-        return id + "@" + s.getItemDamage();
+        return ItemKeys.plainKeyOf(idOf(s), s);
     }
 
     /** The stack's NBT as {@code items.jsonl.gz} writes it ({@code nbt}: the compound's SNBT), or {@code null}. */
     public static String nbtOf(ItemStack s) {
-        return s.hasTagCompound() ? s.getTagCompound().toString() : null;
+        return ItemKeys.nbtOf(s);
+    }
+
+    /** The registry name of the stack's item. Throws like {@link #intern(ItemStack)}. */
+    private static String idOf(ItemStack s) {
+        if (s == null || s.getItem() == null) throw new IllegalArgumentException("empty item stack");
+        String id = registryName(s);
+        if (id == null) throw new IllegalArgumentException("item not in the item registry: " + s);
+        return id;
     }
 
     /**

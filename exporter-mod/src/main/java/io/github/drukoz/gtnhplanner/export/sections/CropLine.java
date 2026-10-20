@@ -7,6 +7,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.function.IntUnaryOperator;
 
 import net.minecraftforge.oredict.OreDictionary;
 
@@ -135,6 +136,19 @@ final class CropLine {
     static int soilMeta(int meta, int dropped) {
         if (meta == OreDictionary.WILDCARD_VALUE) return 0;
         return dropped < 0 ? meta : dropped;
+    }
+
+    /**
+     * What a soil's block drops for {@code meta} ({@code damageDropped}: {@code Block.damageDropped} of that block), or
+     * {@link #NOT_A_BLOCK} when the block's method throws anything (a mod's array lookup by meta, a class the dedicated
+     * server lacks), so that {@link #soilMeta} keeps the soil's own.
+     */
+    static int droppedMeta(IntUnaryOperator damageDropped, int meta) {
+        try {
+            return damageDropped.applyAsInt(meta);
+        } catch (Throwable t) {
+            return NOT_A_BLOCK;
+        }
     }
 
     /**

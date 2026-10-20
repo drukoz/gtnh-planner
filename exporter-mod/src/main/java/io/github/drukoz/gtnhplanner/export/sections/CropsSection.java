@@ -216,24 +216,20 @@ public final class CropsSection implements ExportSection {
         int index = items.find(stack);
         if (index != ItemTable.ABSENT) return CropLine.ItemRef.indexed(ItemTable.keyOf(stack), index);
         int meta = stack.getItemDamage();
-        int dropped = meta == OreDictionary.WILDCARD_VALUE ? CropLine.NOT_A_BLOCK : droppedMeta(stack);
+        int dropped = meta == OreDictionary.WILDCARD_VALUE ? CropLine.NOT_A_BLOCK : droppedMeta(stack, meta);
         ItemStack variant = stack.copy();
         variant.setItemDamage(CropLine.soilMeta(meta, dropped));
         return item(variant, items, names);
     }
 
     /**
-     * {@code Block.damageDropped} of the stack's damage on the block its item places, or {@link CropLine#NOT_A_BLOCK}
-     * when it places none or the block's method throws (a mod's array lookup by meta): the soil then keeps its own.
+     * {@code Block.damageDropped(meta)} on the block the stack's item places ({@link CropLine#droppedMeta}), or
+     * {@link CropLine#NOT_A_BLOCK} when it places none or the block's method throws: the soil then keeps its own.
      */
-    private static int droppedMeta(ItemStack stack) {
+    private static int droppedMeta(ItemStack stack, int meta) {
         Block block = Block.getBlockFromItem(stack.getItem());
         if (block == null || block == Blocks.air) return CropLine.NOT_A_BLOCK;
-        try {
-            return block.damageDropped(stack.getItemDamage());
-        } catch (RuntimeException e) {
-            return CropLine.NOT_A_BLOCK;
-        }
+        return CropLine.droppedMeta(m -> block.damageDropped(m), meta);
     }
 
     /** The seed: by its index when the item table has it, else inline and named after its crop. */

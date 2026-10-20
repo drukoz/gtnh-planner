@@ -24,6 +24,17 @@ export interface CropTable {
   items: Item[];
 }
 
+/**
+ * How many of `items` came from the export's item table: every item but the crop items (`Item.cropOnly`), which only
+ * the crop table names. The item count a summary reports (pack:info, `GET /api/pack`, the export check and its share
+ * of name failures), as it is for the export without the crop table.
+ */
+export function tableItemCount(items: ReadonlyMap<ItemKey, Item>): number {
+  let count = 0;
+  for (const item of items.values()) if (item.cropOnly !== true) count++;
+  return count;
+}
+
 /** The cards of the crop table's lines and the items they name inline (see the header). */
 export function cropTable(lines: readonly CropLine[], ctx: LoadContext): CropTable {
   const items = new Map<ItemKey, Item>();

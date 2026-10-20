@@ -126,6 +126,21 @@ class CropLineTest {
     }
 
     @Test
+    void keepsTheMetaOfASoilWhoseBlockCannotSayWhatItDrops() {
+        IntUnaryOperator logDrops = meta -> (meta & 3) == 2 ? 1 : meta & 3;
+        assertEquals(1, CropLine.droppedMeta(logDrops, 9));
+        // a mod's array lookup by meta, and a method that needs a class the dedicated server lacks (a LinkageError)
+        IntUnaryOperator twoVariants = meta -> new int[] { 0, 1 }[meta];
+        IntUnaryOperator clientClass = meta -> {
+            throw new NoClassDefFoundError("net/minecraft/client/renderer/texture/IIconRegister");
+        };
+        for (IntUnaryOperator broken : Arrays.asList(twoVariants, clientClass)) {
+            assertEquals(CropLine.NOT_A_BLOCK, CropLine.droppedMeta(broken, 6));
+            assertEquals(6, CropLine.soilMeta(6, CropLine.droppedMeta(broken, 6)));
+        }
+    }
+
+    @Test
     void namesEachSoilOnceInTheOrderOfItsKey() throws IOException {
         CropLine.ItemRef log0 = indexed("t:log@0", 10);
         CropLine.ItemRef log1 = indexed("t:log@1", 11);
