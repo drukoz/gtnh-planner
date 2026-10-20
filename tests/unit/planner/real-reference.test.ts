@@ -19,6 +19,30 @@ import type { Plan, PlanSettings } from '../../../src/shared/types/plan.ts';
 const REFERENCE = join('docs', 'local', 'circuit-reference', 'reference.json');
 const GLASS_TUBE = 'gregtech:gt.metaitem.03@32012';
 const SECONDS_PER_HOUR = 3600;
+/** Plan 09's bound on a real-data plan with a warm pack (an MV line; ruling 187). */
+const PLAN_SECONDS = 5;
+
+/** The reference's 16 step recipes (the acceptance spec's REF_IDS). */
+const REF_IDS: readonly string[] = [
+  '0808d860600af273', '1197004ce4210fc5', '391f33f5fad58a0e', '3b34f87f2984fe95', '551a7e121b83f8a5', '5e6fc6d8b7780920', '81809934c9e573da',
+  '85e9bdddf3f2bced', '85eaebd6c5132556', '922523df6bc22ca3', '960dc3ce801a4e96', 'c0106c4cb6b4b041', 'c19837cccfcebc98', 'd25f29069b92783e',
+  'd528af67b884c660', 'fd5543a5f831c58b',
+];
+/** Its Steel Rod on the Lathe, and on the Extruder (2 rods an ingot), which the spec allows in its place. */
+const ROD_LATHE = '3b34f87f2984fe95';
+const ROD_EXTRUDER = '31693ed806ba0a95';
+/** Its Molten Tin from Tin Dust, and the same recipe on a Tin Ingot, at the same raw material: an exact tie. */
+const TIN_FROM_DUST = '1197004ce4210fc5';
+const TIN_FROM_INGOT = 'd4bfdccc8c512446';
+/** Its centrifuge step: Rubber Wood on circuit 2, 3 Centrifuges at MV. */
+const RUBBER_WOOD_CENTRIFUGE = '85e9bdddf3f2bced';
+const TIN_DUST = 'gregtech:gt.metaitem.01@2057';
+const TIN_INGOT = 'gregtech:gt.metaitem.01@11057';
+const STEEL_INGOT = 'gregtech:gt.metaitem.01@11305';
+/** Its raw material per minute (the acceptance spec's REF_RAW): tin as dust or ingot. */
+const REF_RAW: Readonly<Record<string, number>> = {
+  'IC2:blockRubWood@0': 32, 'gregtech:gt.metaitem.01@11035': 11.25, [STEEL_INGOT]: 4, tin: 1, 'minecraft:redstone@0': 5, 'minecraft:sand@0': 2,
+};
 
 /**
  * The reference file: `GTNH_REFERENCE` when set, else REFERENCE in this checkout, else in the main checkout (the parent
@@ -56,6 +80,50 @@ function buildObjective(plan: Plan, s: PlanSettings): number {
   return (plan.rawCost?.perSecond ?? 0) * horizon + (plan.cost?.build ?? 0) + charge * blocks;
 }
 
+/** The acceptance spec's machine blocks: the machines of every step not crafted by hand, a sharing pool once (Auto Workbenches count). */
+function machineBlocks(plan: Plan): number {
+  let blocks = 0;
+  for (const step of plan.steps) if (!step.handCraft && (step.pool === undefined || step.pool.steps[0] === step.id)) blocks += step.count;
+  return blocks;
+}
+
+/** The plan's raw material per minute by key, tin dust and tin ingot as one `tin`. */
+function rawPerMinute(plan: Plan): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const r of plan.rawInputs) {
+    const key = r.key === TIN_DUST || r.key === TIN_INGOT ? 'tin' : r.key;
+    out[key] = (out[key] ?? 0) + r.perSecond * 60;
+  }
+  return out;
+}
+
+/** The plan's step recipes, sorted, with the Extruder's rods read as the Lathe's and the tin-ingot extractor as the dust's. */
+function referenceIds(plan: Plan): string[] {
+  const same: Readonly<Record<string, string>> = { [ROD_EXTRUDER]: ROD_LATHE, [TIN_FROM_INGOT]: TIN_FROM_DUST };
+  return plan.steps.map((s) => same[s.recipeId] ?? s.recipeId).sort();
+}
+
+/** Its raw material is the reference's: every key to 1e-6, steel at most 4 a minute (2 with the Extruder), nothing else. */
+function expectReferenceRaw(plan: Plan, name: string): void {
+  const raw = rawPerMinute(plan);
+  expect(Object.keys(raw).sort(), name).toEqual(Object.keys(REF_RAW).sort());
+  for (const [key, want] of Object.entries(REF_RAW)) {
+    if (key === STEEL_INGOT) {
+      const most = plan.steps.some((s) => s.recipeId === ROD_EXTRUDER) ? 2 : 4;
+      expect(raw[key] as number, `${name} ${key}`).toBeLessThanOrEqual(most + 1e-6);
+    } else {
+      expect(Math.abs((raw[key] as number) - want), `${name} ${key}`).toBeLessThanOrEqual(1e-6);
+    }
+  }
+}
+
+/** One log line of a plan: counts, keys and its time only. */
+function logPlan(name: string, plan: Plan, seconds: number): void {
+  const raw = Object.entries(rawPerMinute(plan)).map(([key, n]) => `${key} ${n.toFixed(4)}`).join(', ');
+  console.log(`real-reference ${name}: ${plan.status}, ${plan.steps.length} steps, ${machineBlocks(plan)} machine blocks, `
+    + `${plan.steps.filter((s) => s.handCraft).length} by hand, build ${plan.cost?.build ?? 0}, ${seconds.toFixed(2)} s; raw a minute: ${raw}`);
+}
+
 describe.skipIf(path === undefined)("the user's reference Electronic Circuit flow on the real 2.9 export", () => {
   let pack: Pack;
   /** The reference's settings as the planner reads them (`normalizeSettings`: no migration). */
@@ -71,6 +139,49 @@ describe.skipIf(path === undefined)("the user's reference Electronic Circuit flo
     pack = await loadPack(activeExportDir(loadConfig()));
     await planLine(pack, { ...stored, target: GLASS_TUBE, recipeChoice: {}, per: 'min', tier: 1 }, emptyContext());   // warm the pack
   }, 300_000);
+
+  it('R0: plans the reference as stored, with its 16 recipes, raw material, 14 machine blocks, 3 Centrifuges and 4 hand steps', async () => {
+    // The acceptance spec's R0 (its pins, stops and crafting by hand, its stored 2 % step charge: normalizeSettings
+    // applies no migration). On 93e508e: 17 blocks, 6 Basic Centrifuges for 3 Advanced (the step charge was per step).
+    const { plan, seconds } = await timed(stored);
+    logPlan('R0', plan, seconds);
+    expect(plan.status, JSON.stringify(plan.warnings)).toBe('ok');
+    expect(seconds).toBeLessThan(PLAN_SECONDS);
+    expect(plan.warnings.map((w) => w.code)).not.toContain('build-cost-approx');
+    expect(referenceIds(plan)).toEqual([...REF_IDS].sort());
+    expect(plan.steps.map((s) => s.recipeId)).toContain(TIN_FROM_DUST);
+    expectReferenceRaw(plan, 'R0');
+    expect(machineBlocks(plan)).toBe(14);
+    const centrifuges = plan.steps.find((s) => s.recipeId === RUBBER_WOOD_CENTRIFUGE);
+    expect(centrifuges?.machine.name).toMatch(/Centrifuge/);
+    expect(centrifuges?.count).toBe(3);
+    expect(plan.steps.filter((s) => s.handCraft)).toHaveLength(4);
+    // A Project Red copy shares no machine (fix wave 2 (d)): the two circuit-1 Wiremills keep their own, 14 blocks still.
+    const routed = await timed({ ...stored, logistics: 'routed' });
+    logPlan('R0 on Project Red', routed.plan, routed.seconds);
+    expect(routed.plan.status).toBe('ok');
+    expect(routed.plan.steps.filter((s) => s.pool !== undefined)).toEqual([]);
+    expect(machineBlocks(routed.plan)).toBe(14);
+    const ae2 = await timed({ ...stored, logistics: 'ae2' });
+    logPlan('R0 on AE2 (logged only: its parts need HV and EV)', ae2.plan, ae2.seconds);
+  }, 120_000);
+
+  it('R1: plans R0 with its crafting on 4 Auto Workbenches, no hand step and 18 machine blocks', async () => {
+    // The acceptance spec's R1. Its Molten Tin may come from the Tin Ingot recipe, the dust's exact twin at the same raw
+    // material (R1 takes it, R0 the dust).
+    const { plan, seconds } = await timed({ ...stored, automateCrafting: true });
+    logPlan('R1', plan, seconds);
+    expect(plan.status, JSON.stringify(plan.warnings)).toBe('ok');
+    expect(seconds).toBeLessThan(PLAN_SECONDS);
+    expect(plan.warnings.map((w) => w.code)).not.toContain('build-cost-approx');
+    expect(referenceIds(plan)).toEqual([...REF_IDS].sort());
+    expectReferenceRaw(plan, 'R1');
+    const crafting = plan.steps.filter((s) => /Auto Workbench/.test(s.machine.name));
+    expect(crafting.map((s) => s.recipeId).sort()).toEqual(['551a7e121b83f8a5', '81809934c9e573da', '922523df6bc22ca3', 'd25f29069b92783e']);
+    for (const s of crafting) expect(s.count, s.recipeId).toBe(1);
+    expect(plan.steps.filter((s) => s.handCraft)).toEqual([]);
+    expect(machineBlocks(plan)).toBe(18);
+  }, 120_000);
 
   it('falls back to no more steps than the plan that ignores build cost when the time guard stops the build MIP', async () => {
     // Fix wave 2 (b): with the guard forced to 0 the line comes from the cheapest by the build MIP's objective of plan
