@@ -19,7 +19,11 @@ import { PSEUDO_IDS, tierName } from '../../shared/gt/tiers.ts';
 import { isFluidKey, itemKey, type StuffKey } from '../../shared/keys.ts';
 import { defaultSettings } from '../../shared/project/apply-op.ts';
 import type { Machine, Pack, Recipe } from '../../shared/types/pack.ts';
+import type { HatchKind } from '../../shared/types/layout.ts';
 import type { BomLine, PlanContext, PlanSettings } from '../../shared/types/plan.ts';
+// GT's structure rules of Plan 5's layout (entry 47): a leaf module of shared types, read here so a multiblock's build
+// holds the hatches its layout lays
+import { hatchRuleFor, KIND_CLASS, ruleFits, ruleNeeds } from '../layout/hatch-rules.ts';
 import { basisContextKey, effectiveTier, planBasis, settingsHash } from './basis.ts';
 import { buildCandidates, type CandidateGraph, type LeafOracle } from './candidates.ts';
 import { analyzeCosts, isOreBlock, makeLeafOracle } from './costs.ts';
@@ -324,9 +328,13 @@ export function structureParts(pack: Pack, m: Machine): Map<StuffKey, number> {
  * item: an input bus when `r` takes an item, consumed or not (a programmed circuit included), an output bus when it
  * makes an item, an energy hatch of exactly `tier` (the lowest mteId of that tier), a maintenance hatch, an input hatch
  * per distinct fluid it takes (a slot of several fluid options counts once) and an output hatch per distinct fluid it
- * makes; the energy hatch aside, each at the lowest tier of its class (`minimalHatch`'s pick). A class the pack lacks (or
- * no energy hatch of `tier`) is left out: Plan 5 then warns `hatch_cells_short`. Empty for a machine that is no
- * multiblock.
+ * makes; and where GT's structure check needs a hatch whatever the recipe moves (the rule's `needs` of Plan 5's
+ * hatch-rules.ts, architecture §11 entry 47, on a structure the rule fits: an EBF's muffler, a tower's input hatch), one
+ * of each such kind that neither those hatches nor the exported structure hold (a fluid of the machine's own, a boiler's
+ * water and steam, always), as Plan 5's `ruledHatches` adds it on a casing, so the build and the layout agree (plan 12
+ * Task 6, the controller's note at the merge of main's hatch rules). The energy hatch aside, each at the lowest tier of
+ * its class (`minimalHatch`'s pick). A class the pack lacks (or no energy hatch of `tier`) is left out: Plan 5 then warns
+ * `hatch_cells_short`. Empty for a machine that is no multiblock.
  */
 export function hatchSet(pack: Pack, m: Machine, r: Recipe, tier: number): Map<StuffKey, number> {
   const set = new Map<StuffKey, number>();
@@ -337,21 +345,49 @@ export function hatchSet(pack: Pack, m: Machine, r: Recipe, tier: number): Map<S
   };
   const lowest = (cls: string): Machine | undefined => byClass.get(cls)?.[0];
   const itemIn = r.meta.circuit !== undefined || r.inputs.some((ing) => ing.options.some((o) => !isFluidKey(o.key)));
+  const itemOut = r.outputs.some((p) => !isFluidKey(p.key));
   const fluidsIn = new Set(r.inputs.filter((ing) => ing.options.length > 0 && ing.options.every((o) => isFluidKey(o.key)))
     .map((ing) => ing.options.map((o) => o.key).sort(byString).join('/')));
   const fluidsOut = new Set(r.outputs.filter((p) => isFluidKey(p.key)).map((p) => p.key));
   add(lowest('MTEHatchInputBus'), itemIn ? 1 : 0);
-  add(lowest('MTEHatchOutputBus'), r.outputs.some((p) => !isFluidKey(p.key)) ? 1 : 0);
+  add(lowest('MTEHatchOutputBus'), itemOut ? 1 : 0);
   add(byClass.get('MTEHatchEnergy')?.find((hatch) => hatch.tier === tier), 1);
   add(lowest('MTEHatchMaintenance'), 1);
   add(lowest('MTEHatchInput'), fluidsIn.size);
   add(lowest('MTEHatchOutput'), fluidsOut.size);
+  const rule = hatchRuleFor(m);
+  const st = m.structure;
+  if (rule !== null && st !== undefined && ruleFits(rule, st.controller, st.size, st.blocks.map((b) => b.pos))) {
+    const placed = new Set<HatchKind>(['energy', 'maintenance', ...(itemIn ? ['input_bus' as const] : []), ...(itemOut ? ['output_bus' as const] : []),
+      ...(fluidsIn.size > 0 ? ['input_hatch' as const] : []), ...(fluidsOut.size > 0 ? ['output_hatch' as const] : [])]);
+    const exported = new Set(st.blocks.flatMap((b) => {
+      const tile = b.block.mteId === undefined || b.block.mteId === m.mteId ? undefined : pack.machines.get(b.block.mteId);
+      return tile?.kind === 'hatch' ? [simpleName(minimalHatch(pack, tile))] : [];
+    }));
+    for (const need of ruleNeeds(rule)) {
+      const cls = rule.classes?.[need.kind] ?? KIND_CLASS[need.kind];
+      if (need.fluid === undefined && (placed.has(need.kind) || exported.has(cls))) continue;
+      add(lowest(cls), 1);
+    }
+  }
   return set;
 }
 
 /**
+ * The classes of the hatches GT's structure check needs on `m` whatever its recipe moves (`ruleNeeds` of its rule, on a
+ * structure the rule fits; a rule's own class for a kind first), each once; none for a multiblock without a fitting rule.
+ */
+function neededHatchClasses(m: Machine): string[] {
+  const rule = hatchRuleFor(m);
+  const st = m.structure;
+  if (rule === null || st === undefined || !ruleFits(rule, st.controller, st.size, st.blocks.map((b) => b.pos))) return [];
+  return [...new Set(ruleNeeds(rule).map((need) => rule.classes?.[need.kind] ?? KIND_CLASS[need.kind]))];
+}
+
+/**
  * The keys to price for building `machines` (`itemPrices`): each machine's item and, for a multiblock, its structure
- * parts (`structureParts`) and the item of every hatch of the `HATCH_CLASSES`; sorted, without repeats. A pseudo machine
+ * parts (`structureParts`), the item of every hatch of the `HATCH_CLASSES` and the lowest hatch of each class its
+ * structure check needs (`neededHatchClasses`, which `hatchSet` may add); sorted, without repeats. A pseudo machine
  * (crafting table, furnace) has no build cost, so its item is left out.
  */
 export function buildKeys(pack: Pack, machines: readonly Machine[]): StuffKey[] {
@@ -363,6 +399,10 @@ export function buildKeys(pack: Pack, machines: readonly Machine[]): StuffKey[] 
     if (m.kind !== 'multiblock') continue;
     multiblock = true;
     for (const { key } of structureBlocks(pack, m)) keys.add(key);
+    for (const cls of neededHatchClasses(m)) {
+      const hatch = hatchesByClass(pack).get(cls)?.[0];
+      if (hatch !== undefined) keys.add(hatch.itemKey);
+    }
   }
   if (multiblock) {
     const byClass = hatchesByClass(pack);

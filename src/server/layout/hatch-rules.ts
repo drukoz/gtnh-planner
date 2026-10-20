@@ -12,6 +12,7 @@ import { posKey, type Vec3 } from '../../shared/layout/geometry.ts';
 import type { HatchKind } from '../../shared/types/layout.ts';
 import type { Machine } from '../../shared/types/pack.ts';
 import { simpleClassName } from '../world/facts.ts';
+import type { HatchClass } from './parts.ts';
 
 /**
  * The hatches the layout puts on a multiblock: the planner's six (buses, fluid hatches, energy, maintenance), the
@@ -19,6 +20,15 @@ import { simpleClassName } from '../world/facts.ts';
  * hatch's kind from `LayoutBlock.hatch`.
  */
 export type { HatchKind } from '../../shared/types/layout.ts';
+
+/**
+ * GT's ordinary hatch class of each kind (a rule's `classes` may name another): what Plan 5 places for a kind, and what
+ * a multiblock's build counts for it (plan 12's `hatchSet`).
+ */
+export const KIND_CLASS: Readonly<Record<HatchKind, HatchClass>> = {
+  energy: 'MTEHatchEnergy', input_bus: 'MTEHatchInputBus', output_bus: 'MTEHatchOutputBus', input_hatch: 'MTEHatchInput',
+  output_hatch: 'MTEHatchOutput', maintenance: 'MTEHatchMaintenance', muffler: 'MTEHatchMuffler', steam: 'MTEHatchCustomFluidBase',
+};
 
 /** One StructureLib piece as GT checks it. */
 export interface RulePiece {

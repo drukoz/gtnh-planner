@@ -10,7 +10,8 @@ import { planBasis } from '../../../src/server/planner/basis.ts';
 import { emptyContext } from '../../../src/server/planner/plan.ts';
 import { PSEUDO_MACHINES } from '../../../src/shared/gt/tiers.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
-import type { Machine, Pack } from '../../../src/shared/types/pack.ts';
+import type { Machine, Pack, Recipe } from '../../../src/shared/types/pack.ts';
+import { EBF_STRUCTURE, IDS, layoutPack } from '../../helpers/layout-fixtures.ts';
 import type { PlanSettings } from '../../../src/shared/types/plan.ts';
 
 const lv: PlanSettings = { ...defaultSettings(), tier: 1 };
@@ -99,6 +100,47 @@ describe('machineBuildCost', () => {
     expect([...hatchSet(pack, m1100, pack.recipeById.get('bend-plate')!, 3)].sort())
       .toEqual([['machine:51@0', 1], ['machine:61@0', 1], ['machine:71@0', 1]]);
     expect(hatchSet(pack, machine(pack, 101), pack.recipeById.get('bend-plate')!, 1).size).toBe(0);
+  });
+
+  it("adds the hatch GT's structure check needs where neither the recipe nor the exported structure holds one", () => {
+    // the controller's note at the merge of main's hatch rules (architecture §11 entry 47): Plan 5's layout adds an EBF's
+    // muffler, empty, where its exported structure has none, so the EBF's build counts one too (plan 12 Task 6)
+    const pack = layoutPack();
+    const ebf = machine(pack, IDS.EBF);
+    const recipe: Recipe = { id: 'e', source: 'gt', maps: [], euPerTick: 120, durationTicks: 20, amps: 1, specialValue: 0, meta: {}, flags: {},
+      inputs: [{ slot: 0, consumed: true, chance: 1, options: [{ key: 't:dust@0', amount: 1 }] }, { slot: 100, consumed: true, chance: 1, options: [{ key: 'fluid:oxygen', amount: 1000 }] }],
+      outputs: [{ key: 't:ingot@0', amount: 1, chance: 1 }] };
+    const gt = (id: number) => `gregtech:gt.blockmachines@${id}`;
+    expect([...hatchSet(pack, ebf, recipe, 2)].sort()).toEqual([[gt(IDS.ENERGY_MV), 1], [gt(IDS.INPUT_HATCH), 1], [gt(IDS.INPUT_BUS_ULV), 1],
+      [gt(IDS.OUTPUT_BUS), 1], [gt(IDS.MAINTENANCE), 1], [gt(IDS.MUFFLER), 1]].sort());
+    // the export's own muffler (the real EBF's) is the one GT needs: its structure parts count it
+    const withMuffler = { ...ebf, structure: { ...ebf.structure!, blocks: ebf.structure!.blocks.map((b) => (b.pos.join() === '1,3,1'
+      ? { pos: b.pos, block: { id: 'gregtech:gt.blockmachines', meta: 0, mteId: IDS.MUFFLER } } : b)) } };
+    expect([...hatchSet(pack, withMuffler, recipe, 2)].map(([key]) => key)).not.toContain(gt(IDS.MUFFLER));
+    expect([...structureParts(pack, withMuffler)].find(([key]) => key === gt(IDS.MUFFLER))).toEqual([gt(IDS.MUFFLER), 1]);
+  });
+
+  it('prices an EBF with the muffler its structure check needs', async () => {
+    // GT's EBF needs a muffler on its top middle (its rule's `needs`), which this structure lacks: Plan 5's layout adds one
+    // on a casing, and so does its build, whose keys price that muffler too (no `HATCH_CLASSES` class holds it)
+    const spec = largeBenderSpec();
+    spec.machines = spec.machines!.map((m) => (m.mteId !== 1000 ? m : {
+      ...m, cls: 'gregtech.common.tileentities.machines.multi.MTEElectricBlastFurnace',
+      structure: { size: [3, 4, 3], controller: [1, 0, 0], air: EBF_STRUCTURE.air.map((p): [number, number, number] => [...p]),
+        blocks: EBF_STRUCTURE.blocks.map((b) => ({ pos: [...b.pos] as [number, number, number],
+          block: b.block.mteId === undefined ? { id: 't:casing', meta: 0 } : { id: 'gregtech:gt.blockmachines', meta: 1000, mteId: 1000 } })) },
+    }));
+    spec.recipes!.push({ id: 'make-1000', map: 'crafting', in: [['t:circuit@0', 3], ['t:casing@0', 1]], out: [['machine:1000@0', 1]] },
+      { id: 'smelt', map: 'gt.recipe.blastfurnace', in: [['t:iron_dust@0', 1]], out: [['t:iron_ingot@0', 1]], eut: 16 });
+    const pack = packFromSpec(spec);
+    const ebf = machine(pack, 1000);
+    const smelt = pack.recipeById.get('smelt')!;
+    expect([...hatchSet(pack, ebf, smelt, 1)].sort()).toEqual([['machine:51@0', 1], ['machine:61@0', 1], ['machine:71@0', 1], ['machine:81@0', 1],
+      ['machine:91@0', 1]]);
+    // controller 3 × 3 + 6 = 15, 33 casings × 6 = 198, the buses, energy, maintenance and the muffler 5 × 10, less the 5
+    // casings they stand on (30)
+    const prices = await itemPrices(pack, lv, ctx, buildKeys(pack, [ebf]));
+    expect(machineBuildCost(pack, prices, ebf, { recipe: smelt, tier: 1 })).toBe(233);
   });
 
   it('prices free inputs at 0 where a supply machine exists', async () => {

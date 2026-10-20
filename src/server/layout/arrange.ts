@@ -30,7 +30,7 @@ import { minimalHatch } from '../planner/build-cost.ts';
 import { isAutoWorkbench } from '../planner/machine-options.ts';
 import { simpleClassName } from '../world/facts.ts';
 import {
-  elementMap, elementTakes, hatchRuleFor, ruleFits, ruleNeeds, rulePower, ruleTakes, type HatchKind, type HatchRule,
+  elementMap, elementTakes, hatchRuleFor, KIND_CLASS, ruleFits, ruleNeeds, rulePower, ruleTakes, type HatchKind, type HatchRule,
 } from './hatch-rules.ts';
 import { benchPlan, type BenchPlan } from './bench.ts';
 import { manualReasonOf } from './multiblock-rules.ts';
@@ -343,12 +343,6 @@ function commonCasings(cells: readonly UnitCell[], y: number): number[] {
 const HATCH_TEXT: Readonly<Record<HatchKind, string>> = {
   energy: 'energy', input_bus: 'input bus', output_bus: 'output bus', input_hatch: 'input hatch', output_hatch: 'output hatch', maintenance: 'maintenance',
   muffler: 'muffler', steam: 'steam hatch',
-};
-
-/** GT's ordinary hatch class of each kind (a rule's `classes` may name another). */
-const KIND_CLASS: Readonly<Record<HatchKind, HatchClass>> = {
-  energy: 'MTEHatchEnergy', input_bus: 'MTEHatchInputBus', output_bus: 'MTEHatchOutputBus', input_hatch: 'MTEHatchInput',
-  output_hatch: 'MTEHatchOutput', maintenance: 'MTEHatchMaintenance', muffler: 'MTEHatchMuffler', steam: 'MTEHatchCustomFluidBase',
 };
 
 /** A pick that holds less than `need`. */
