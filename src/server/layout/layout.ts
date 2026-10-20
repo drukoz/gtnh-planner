@@ -164,7 +164,7 @@ interface LocalLine {
   stages: Stages | null;
   /** Units, mode and routing blocks with their covers and settings attached. */
   blocks: LocalBlock[];
-  /** W, H (1 + the highest block), L. */
+  /** W, H (1 + the highest block or air cell a multiblock needs kept empty, such as a muffler's front), L. */
   size: Vec3;
   /** Mode, then routing warnings. */
   warnings: PlanWarning[];
@@ -174,7 +174,8 @@ interface LocalLine {
  * Stages 3–5 in the line's own grid. Machines fed at different tiers stand apart (their cables never touch), the lowest
  * feed tier next to the power head, whose last run is that tier's (`placeUnits` with the supply tier): a tier's tree
  * then never has to get past a higher tier's machines and tree to reach its own. The supply run is sized for packets
- * that already lost up to the hookup's allowance (spec §3.5 never overload a cable).
+ * that already lost up to the hookup's allowance (spec §3.5 never overload a cable). The line's height counts the air
+ * cells its multiblocks need kept empty as well as its blocks.
  */
 function buildLocal(input: {
   pack: Pack; plan: Plan; parts: Parts; mode: LogisticsMode; units: readonly Unit[]; stages: Stages | null;
@@ -192,7 +193,10 @@ function buildLocal(input: {
     supplyLossVolts: stages === null ? 0 : hookupAllowanceVolts(stages.supplyTier),
   });
   const blocks = attachCovers([...placement.blocks, ...modeResult.blocks, ...internal.blocks], [...modeResult.covers, ...internal.covers], modeResult.configs);
-  const top = blocks.reduce((y, b) => Math.max(y, b.pos[1]), 0);
+  // the line is as tall as its highest block or reserved air cell (a muffler facing up from a multiblock's top), so the
+  // site, its clearance and obstruction checks and the steps' height keep that cell free too (GT stops a machine whose
+  // muffler has no air in front: MTEHatchMuffler.polluteEnvironment)
+  const top = [...blocks.map((b) => b.pos[1]), ...placement.reserved.map((p) => p[1])].reduce((y, v) => Math.max(y, v), 0);
   return {
     placement, mode: modeResult, internal, stages: internal.stages, blocks, size: [placement.size[0], 1 + top, placement.size[2]],
     warnings: [...modeResult.warnings, ...internal.warnings],

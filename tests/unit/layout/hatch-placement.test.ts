@@ -7,7 +7,7 @@ import { FACES } from '../../../src/shared/types/assets.ts';
 import type { Layout, LayoutBlock } from '../../../src/shared/types/layout.ts';
 import type { LogisticsMode } from '../../../src/shared/types/plan.ts';
 import { fluidRecipe, hatchPack, HATCH_IDS } from '../../helpers/hatch-fixtures.ts';
-import { IDS, layoutPack, makePlan, makeProject, type StepSpec } from '../../helpers/layout-fixtures.ts';
+import { areaReader, flatVoxels, IDS, layoutPack, makePlan, makeProject, makeScan, STONE, type StepSpec } from '../../helpers/layout-fixtures.ts';
 
 const MODES: readonly LogisticsMode[] = ['direct', 'routed', 'ae2', 'enderio'];
 const ORIGIN_Y = 64;
@@ -57,6 +57,35 @@ describe.each(MODES)('an EBF that takes oxygen, in %s mode', (mode) => {
     expect(layout.warnings.map((w) => w.code)).not.toContain('route_failed');
     expect(layout.warnings.map((w) => w.code)).not.toContain('hatch_rules_unknown');
     expect(layout.buildSteps.find((b) => b.id === 'layout:logistics:line')!.text).not.toContain('above it');
+  });
+});
+
+describe('a line whose tallest unit is an EBF', () => {
+  it("stands as tall as the air its muffler needs: the site, the check of a chosen spot and the steps keep that block free", async () => {
+    // MTEHatchMuffler.polluteEnvironment needs air in front of the muffler (getAirAtSide(front)); without it
+    // MTEMultiBlockBase stops the machine (POLLUTION_FAIL). The EBF is 4 high, its muffler faces up from its top.
+    const layout = await lay(layoutPack(), [ebfOxygen], ebfFlows, 'direct');
+    const [muffler] = byMte(layout, IDS.MUFFLER);
+    expect(layout.size[1]).toBe(5);
+    expect(step(muffler!.pos, muffler!.facing!)[1]).toBe(layout.origin[1] + layout.size[1] - 1);
+    const text = (l: Layout, id: string) => l.buildSteps.find((s) => s.id === id)!.text;
+    expect(text(layout, 'layout:site')).toContain('(5 high)');
+    expect(text(layout, 'layout:roof')).toBe('Roof the line over its 5-high space: GT machines left in the rain can catch fire or explode, '
+      + 'and a Muffler Hatch needs the block it faces kept empty');
+    expect(text(layout, 'layout:place:e')).toMatch(/; keep the block above its Muffler Hatch empty, or GregTech stops the machine \(a muffler needs air to vent\)$/);
+    // a block where the muffler's air goes, at a spot the group chose: the check finds it in the way
+    const scan = makeScan({ base: { center: [20, 64, 20], bbox: { minX: 16, minY: 64, minZ: 16, maxX: 24, maxY: 65, maxZ: 24 } } });
+    const project = makeProject({ placement: { origin: [30, 64, 30], rotation: 0 } });
+    const plan = makePlan([ebfOxygen], { flows: ebfFlows });
+    const ground = (boxes: Array<{ from: Vec3; to: Vec3; block: typeof STONE }>) => ({
+      readArea: areaReader(flatVoxels({ origin: [-20, 50, -20], size: [90, 30, 90], groundY: 63, boxes })) });
+    const clear = await layoutLine(layoutPack(), plan, scan, project, ground([]));
+    expect(clear.warnings.map((w) => w.code)).not.toContain('placement_blocked');
+    const [placed] = byMte(clear, IDS.MUFFLER);
+    const air = step(placed!.pos, placed!.facing!);
+    const covered = await layoutLine(layoutPack(), plan, scan, project, ground([{ from: air, to: air, block: STONE }]));
+    expect(covered.origin).toEqual(clear.origin);
+    expect(covered.warnings).toContainEqual({ code: 'placement_blocked', text: '1 block is in the way at the chosen spot' });
   });
 });
 
