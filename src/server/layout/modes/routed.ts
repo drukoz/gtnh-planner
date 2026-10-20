@@ -34,7 +34,7 @@ import type { Part, PartId } from '../parts.ts';
 import { crossing } from './enderio.ts';
 import {
   emptyModeResult, feedSettings, itemPorts, itemRisers, lineExceptions, mergeHostConfigs, nameList, outputSideInputs, placedStepIds, RISER_WORDS,
-  stepItemInputs, stepItemOutputs, type ModeInput, type ModeResult, type StepDraft,
+  unitItemInputs, unitItemOutputs, type ModeInput, type ModeResult, type StepDraft,
 } from './mode.ts';
 
 const UP = 1, SOUTH = 3, EAST = 5;
@@ -44,6 +44,9 @@ const PIPE_ROLES: ReadonlySet<BlockRole> = new Set<BlockRole>(['pipe', 'chip_pip
 export const CHIP_FILTER_SLOTS = 9;
 /** How many chips a Routed Interface Pipe holds (ProjRed `RoutedInterfacePipePart.chipSlots`: `SimpleInventory(4)`). */
 export const INTERFACE_CHIP_SLOTS = 4;
+
+/** The chips that take items out of the inventory their pipe meets (its Extractor, a Broadcaster filling orders). */
+const OUTGOING_CHIPS: ReadonlySet<ChipKind> = new Set<ChipKind>(['extractor', 'broadcaster']);
 
 /** The part of each chip kind the line lays, in the order the parts list names them. */
 const CHIP_PARTS: ReadonlyArray<readonly [ChipKind, PartId]> = [
@@ -89,12 +92,19 @@ export function routedMode(input: ModeInput): ModeResult {
     blocks.push({ pos, block: { ...parts.chest.block }, role: 'chest', label, item: parts.chest.key, tail });
   };
   /**
-   * An interface pipe on `pos` joined to the inventory `onto`, holding the first `INTERFACE_CHIP_SLOTS` of `chips`;
-   * `routed_chips_short` names the items of the chips left over (`whose`: the pipe's owner, `stepId` its step).
+   * An interface pipe on `pos` joined to the inventory `onto`, holding as many of `chips` as its `INTERFACE_CHIP_SLOTS`
+   * take, in their order: the chips that take items out of the inventory (`OUTGOING_CHIPS`) claim their slots first, as
+   * without them nothing it holds would leave, then the others in order (plan 12 Task 6: past three responders beside an
+   * extractor, a machine keeps the extractor); `routed_chips_short` names the items of the chips left over (`whose`: the
+   * pipe's owner, `stepId` its step).
    */
   const layInterface = (pos: Vec3, onto: Vec3, label: string, chips: readonly RoutedChipSpec[], whose: string, stepId?: string): void => {
-    const kept = chips.slice(0, INTERFACE_CHIP_SLOTS);
-    const left = chips.slice(INTERFACE_CHIP_SLOTS).flatMap((c) => c.filter?.keys ?? []);
+    const fits = new Set<RoutedChipSpec>();
+    for (const outgoing of [true, false]) {
+      for (const c of chips) if (OUTGOING_CHIPS.has(c.kind) === outgoing && fits.size < INTERFACE_CHIP_SLOTS) fits.add(c);
+    }
+    const kept = chips.filter((c) => fits.has(c));
+    const left = chips.filter((c) => !fits.has(c)).flatMap((c) => [...(c.filter?.keys ?? []), ...(c.stock ?? []).map((s) => s.key)]);
     if (left.length > 0) {
       const one = left.length === 1;
       warnings.push({ code: 'routed_chips_short', ...(stepId === undefined ? {} : { stepId }),
@@ -106,14 +116,14 @@ export function routedMode(input: ModeInput): ModeResult {
     links.push([pos, onto]);
   };
 
-  // every machine: a responder for what it takes and an extractor for what it makes; a multiblock's input bus only the
-  // responder, its output bus only the extractor
+  // every machine: a responder for what it takes and an extractor for what it makes, for every step it runs
+  // (`unitItemInputs`); a multiblock's input bus only the responder, its output bus only the extractor
   const blockAt = new Map(placement.blocks.map((b) => [posKey(b.pos), b]));
   const portCells = new Set<string>();
   for (const { pos, behind, unit } of ports) {
     const bus = unit.multiblock ? blockAt.get(posKey(behind))?.hatch : undefined;
-    const takes = !unit.multiblock || bus === 'input_bus' ? stepItemInputs(plan, unit.stepId) : [];
-    const makes = unit.io.itemOut && (!unit.multiblock || bus === 'output_bus') ? stepItemOutputs(plan, unit.stepId) : [];
+    const takes = !unit.multiblock || bus === 'input_bus' ? unitItemInputs(plan, unit) : [];
+    const makes = unit.io.itemOut && (!unit.multiblock || bus === 'output_bus') ? unitItemOutputs(plan, unit) : [];
     layInterface(pos, behind, unit.name, [...chipsFor('responder', takes), ...chipsFor('extractor', makes)], `the ${unit.name}`, unit.stepId);
     portCells.add(posKey(pos));
   }

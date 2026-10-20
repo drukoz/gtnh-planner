@@ -105,13 +105,15 @@ describe('routed feeding', () => {
     const forty = routed(makePlan([{ id: 'a', mteId: IDS.ASSEMBLER, count: 1, tier: 2, inputs: many(40) }],
       { flows: [...many(40).map(([key]) => ({ from: 'raw', to: 'a', key, perSecond: 1 })), { from: 'a', to: 'out', key: 't:out_a@0', perSecond: 1 }] }));
     const pipe = forty.blocks.find((b) => b.label === 'Routed Interface Pipe (Advanced Assembler)')!;
-    expect(pipe.feed?.chips?.map((c) => [c.kind, c.filter?.keys.length])).toEqual([['responder', 9], ['responder', 9], ['responder', 9], ['responder', 9]]);
-    const left = many(40).map(([k]) => k).sort().slice(36);
+    // the extractor keeps its chip slot (plan 12 Task 6): without it nothing the assembler makes would leave
+    expect(pipe.feed?.chips?.map((c) => [c.kind, c.filter?.keys.length])).toEqual([['responder', 9], ['responder', 9], ['responder', 9], ['extractor', 1]]);
+    const sorted = many(40).map(([k]) => k).sort();
+    const left = sorted.slice(27), leftChest = sorted.slice(36);
     expect(forty.warnings.filter((w) => w.code === 'routed_chips_short')).toEqual([
       { code: 'routed_chips_short', stepId: 'a', text: `The interface pipe of the Advanced Assembler holds 4 chips of 9 items each, too few for `
-        + `${left.join(', ')} and t:out_a@0: move them by hand` },
+        + `${left.slice(0, -1).join(', ')} and ${left.at(-1)!}: move them by hand` },
       { code: 'routed_chips_short', text: 'The interface pipe of the input chest holds 4 chips of 9 items each, too few for '
-        + `${left.slice(0, -1).join(', ')} and ${left.at(-1)!}: move them by hand` }]);
+        + `${leftChest.slice(0, -1).join(', ')} and ${leftChest.at(-1)!}: move them by hand` }]);
   });
 
   it('words every chip in the configure steps and keeps the chips on the laid-out line', async () => {

@@ -81,6 +81,20 @@ describe('static feeding rules', () => {
       + 'free (1 held: Schematic (Dusts)): one kind always waits']);
   });
 
+  it('counts the kinds of every recipe a shared machine runs (R1, plan 12)', async () => {
+    // an AE2 sharing pool on the 1-slot macerator: s1 takes one kind, s2 two, which one input slot never holds at once
+    const pack = namedPack();
+    const pool = { id: 'pool:s1', steps: ['s1', 's2'] };
+    const plan = makePlan([{ id: 's1', mteId: IDS.MACERATOR, count: 1, pool },
+      { id: 's2', mteId: IDS.MACERATOR, count: 1, pool, inputs: [['t:out_s1@0', 1], ['t:dust@0', 1]] }], { flows: [
+      { from: 'raw', to: 's1', key: 't:in@0', perSecond: 1 }, { from: 's1', to: 's2', key: 't:out_s1@0', perSecond: 1 },
+      { from: 'raw', to: 's2', key: 't:dust@0', perSecond: 1 }, { from: 's2', to: 'out', key: 't:out_s2@0', perSecond: 1 }] });
+    const layout = await lay(pack, plan, 'ae2');
+    const m = layout.blocks.find((b) => b.role === 'machine')!;
+    expect(m.stepIds).toEqual(['s1', 's2']);
+    expect(feedCodes(layout)).toEqual([{ code: 'feed_crowded', stepId: 's1', text: `${at(m)} takes 2 kinds of item but has 1 input slot free: one kind always waits` }]);
+  });
+
   it('flags Multi Stack Input left unset or set On on a machine fed two kinds, in a line that pushes (R2)', async () => {
     const pack = namedPack();
     const layout = await lay(pack, twoKinds(), 'enderio');

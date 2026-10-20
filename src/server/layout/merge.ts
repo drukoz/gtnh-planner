@@ -163,10 +163,12 @@ function keysOf(lines: readonly BomLine[]): StuffKey[] {
  * list — `expanded` is `expandBomLines` of the layout's required (non-optional) parts, or null to take those parts as
  * they are — with the replaced casings taken off and the optional generator lines appended, the base materials of the
  * expanded parts in `buildTotals`, the layout's build steps, its warnings not already there (code + text) and a name
- * (`nameOf`) for every key it adds. A plan whose status is not `ok` is returned unchanged.
+ * (`nameOf`) for every key it adds; and with `layoutCost` (plan 12, architecture §11 entry 39: the raw material of the
+ * layout's parts other than its hatches) a plan that has a `cost` gets it as `cost.layout`. A plan whose status is not
+ * `ok` is returned unchanged.
  */
 export function mergeLayoutIntoPlan(plan: Plan, layout: Layout, expanded: { lines: BomLine[]; totals: BomLine[] } | null,
-  nameOf: (k: StuffKey) => string): Plan {
+  nameOf: (k: StuffKey) => string, layoutCost?: number): Plan {
   if ((plan.status ?? 'ok') !== 'ok') return plan;
   const required = layout.bom.filter((l) => !isOptional(l));
   const optional = layout.bom.filter(isOptional);
@@ -183,5 +185,6 @@ export function mergeLayoutIntoPlan(plan: Plan, layout: Layout, expanded: { line
   for (const key of [...keysOf(buildList), ...keysOf(buildTotals)]) if (!Object.hasOwn(names, key)) names[key] = nameOf(key);
   return {
     ...plan, power: layout.power ?? plan.power, buildList, buildTotals, buildSteps: mergeBuildSteps(plan.buildSteps, layout.buildSteps), warnings, names,
+    ...(plan.cost === undefined || layoutCost === undefined ? {} : { cost: { ...plan.cost, layout: layoutCost } }),
   };
 }

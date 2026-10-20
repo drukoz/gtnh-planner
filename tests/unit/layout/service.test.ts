@@ -96,6 +96,23 @@ describe('layout service', () => {
     for (const total of done.buildTotals!) expect(total.neededFor!.reduce((sum, n) => sum + n.amount, 0)).toBe(total.amount);
   });
 
+  it('prices the layout parts of a finished plan', async () => {
+    // plan 12 Task 6: `cost.layout` is the layout's required parts other than its hatches (each new multiblock's build
+    // already holds its hatch set less the casings it stands on); without the dep a finished plan gets none
+    const recorded: string[][] = [];
+    const plan = { ...makePlan([{ id: 's1', mteId: IDS.MACERATOR, count: 2 }, { id: 'e', mteId: IDS.EBF, count: 1, tier: 2, euPerTick: 120,
+      inputs: [['t:dust@0', 1]], outputs: [['t:ingot@0', 1]] }]), cost: { runPerHour: 1, build: 10, horizonHours: 24 } };
+    const svc = createLayoutService(deps({ plan: async () => plan, layoutCost: async (_pack, lines) => { recorded.push(lines.map((l) => l.key)); return 7; } }));
+    const done = await svc.finishPlan(plan, makeProject());
+    expect(done.cost).toEqual({ runPerHour: 1, build: 10, horizonHours: 24, layout: 7 });
+    const layout = await svc.layoutFor(makeProject());
+    const hatches = layout.bom.filter((l) => l.group === 'machines' && l.why.includes('hatches')).map((l) => l.key);
+    expect(hatches.length).toBeGreaterThan(0);
+    expect(recorded).toEqual([layout.bom.filter((l) => !l.why.startsWith('optional:') && !hatches.includes(l.key)).map((l) => l.key)]);
+    const unpriced = await createLayoutService(deps({ plan: async () => plan })).finishPlan(plan, makeProject());
+    expect(unpriced.cost).toEqual({ runPerHour: 1, build: 10, horizonHours: 24 });
+  });
+
   it('does not keep a failed parts breakdown', async () => {
     let fail = true;
     const svc = createLayoutService(deps({ expand: async (_pack, lines) => { if (fail) throw new Error('no prices'); return { lines, totals: [] }; } }));

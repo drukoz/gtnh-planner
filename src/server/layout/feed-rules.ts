@@ -76,9 +76,12 @@ function extractorFault(extractors: readonly RoutedChipSpec[]): string {
 
 const CIRCUIT_ID = 'gregtech:gt.integrated_circuit';
 
-/** A machine of a placed step: its block, step, pack machine and words, and for a multiblock its item buses. */
+/**
+ * A machine of a placed step: its block, step (the first of a shared machine's, `LayoutBlock.stepIds`: plan 12), every
+ * step it runs, pack machine and words, and for a multiblock its item buses.
+ */
 interface Node {
-  block: LayoutBlock; step: PlanStep; machine: Machine | undefined; label: string; multiblock: boolean;
+  block: LayoutBlock; step: PlanStep; steps: PlanStep[]; machine: Machine | undefined; label: string; multiblock: boolean;
   inBuses: LayoutBlock[]; outBuses: LayoutBlock[];
 }
 
@@ -121,7 +124,8 @@ function lineNodes(pack: Pack, plan: Plan, live: readonly LayoutBlock[]): Node[]
     const step = plan.steps.find((s) => s.id === b.stepId);
     const machine = b.block.mteId === undefined ? undefined : pack.machines.get(b.block.mteId);
     if (step === undefined || (machine !== undefined && manualReasonOf(machine) !== null)) continue;
-    nodes.push({ block: b, step, machine, label: where(b), multiblock: machine?.kind === 'multiblock', inBuses: [], outBuses: [] });
+    const steps = (b.stepIds ?? [b.stepId]).flatMap((id) => plan.steps.find((s) => s.id === id) ?? []);
+    nodes.push({ block: b, step, steps, machine, label: where(b), multiblock: machine?.kind === 'multiblock', inBuses: [], outBuses: [] });
   }
   for (const b of live) {
     if (b.role !== 'hatch' || (b.hatch !== 'input_bus' && b.hatch !== 'output_bus')) continue;
@@ -171,16 +175,20 @@ function stepName(line: Line, s: PlanStep): string {
 /** R1–R4: a machine's kinds against its input slots, and the settings that keep one kind from crowding the others. */
 function slotRules(line: Line, n: Node, pushes: boolean, raise: Raise): void {
   const { pack, plan, nameOf } = line;
-  const s = n.step;
-  const takes = stepItemInputs(plan, s.id);
+  // what the machine is fed for every step it runs (a shared machine, plan 12)
+  const takes = sorted(n.steps.flatMap((s) => stepItemInputs(plan, s.id)));
   const basic = !n.multiblock && (n.machine?.kind === 'basic' || n.machine?.kind === 'steam');
-  // R1: the kinds one run uses up against the input slots its held items leave (a programmed circuit has its own slot)
+  // R1: the kinds one run uses up against the input slots its held items leave (a programmed circuit has its own slot),
+  // for each recipe the machine runs, once per machine
   const slots = basic && n.machine !== undefined ? basicInputSlots(n.machine) : null;
   if (slots !== null) {
-    const kinds = new Set(s.inputs.filter((p) => !isFluidKey(p.key)).map((p) => p.key)).size;
-    const held = stepOneOffs(pack, s).map((h) => h.key).filter((k) => parseItemKey(k).id !== CIRCUIT_ID);
-    const free = Math.max(0, slots - held.length);
-    if (kinds > free) {
+    const crowded = n.steps.map((s) => {
+      const kinds = new Set(s.inputs.filter((p) => !isFluidKey(p.key)).map((p) => p.key)).size;
+      const held = stepOneOffs(pack, s).map((h) => h.key).filter((k) => parseItemKey(k).id !== CIRCUIT_ID);
+      return { kinds, held, free: Math.max(0, slots - held.length) };
+    }).find((r) => r.kinds > r.free);
+    if (crowded !== undefined) {
+      const { kinds, held, free } = crowded;
       raise('feed_crowded', `${n.label} takes ${kindWord(kinds)} but has ${slotWord(free)} free`
         + `${held.length > 0 ? ` (${fmtInt(held.length)} held: ${joinNames(held.map(nameOf))})` : ''}: one kind always waits`);
     }
@@ -268,7 +276,8 @@ function routedRules(line: Line, n: Node, raise: Raise): void {
 /** R8, R9, R12: the patterns of the ME interfaces that serve a machine, their blocking mode, and what else they touch. */
 function ae2Rules(line: Line, n: Node, raise: Raise): void {
   const { pack, nameOf } = line;
-  const held = stepOneOffs(pack, n.step).map((h) => h.key);
+  // what the machine holds for every step it runs (a shared machine's steps hold the same: their sharing key holds them)
+  const held = sorted(n.steps.flatMap((s) => stepOneOffs(pack, s).map((h) => h.key)));
   const unencodable = (key: StuffKey, text: string): void => raise('feed_pattern_unencodable', `The pattern for ${n.label} ${text}`, key);
   for (const iface of line.interfaces.filter((i) => i.targets.some((t) => nodeOf(line, t) === n))) {
     const name = where(iface.block);
@@ -325,7 +334,7 @@ export function feedingWarnings(input: FeedRulesInput): PlanWarning[] {
   const nodes = lineNodes(pack, plan, live);
   const linked = (b: LayoutBlock) => (side: number): boolean => ((b.connections ?? 0) & (1 << side)) !== 0;
   const line: Line = {
-    pack, plan, nameOf: (k) => plan.names?.[k] ?? pack.nameOf(k), nodes, laid: new Set(nodes.map((n) => n.step.id)),
+    pack, plan, nameOf: (k) => plan.names?.[k] ?? pack.nameOf(k), nodes, laid: new Set(nodes.flatMap((n) => n.steps.map((s) => s.id))),
     items: plan.flows.filter((f) => !isFluidKey(f.key)),
     pipes: layout.mode !== 'routed' ? [] : live.filter((b) => b.role === 'chip_pipe' && b.feed?.chips !== undefined)
       .map((b) => ({ block: b, chips: b.feed!.chips!, targets: inventoriesBeside(b, byPos, linked(b)) })),

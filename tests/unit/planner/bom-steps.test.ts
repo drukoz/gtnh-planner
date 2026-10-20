@@ -9,7 +9,7 @@ import { planBasis, effectiveTier } from '../../../src/server/planner/basis.ts';
 import { computeAvailability, reachableDims } from '../../../src/server/planner/availability.ts';
 import { makeLeafOracle, makePrices } from '../../../src/server/planner/costs.ts';
 import { MAX_RECIPES, type PlanEnv } from '../../../src/server/planner/candidates.ts';
-import type { PlanStep } from '../../../src/shared/types/plan.ts';
+import type { PlanContext, PlanStep } from '../../../src/shared/types/plan.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import { emptyContextForTest } from '../../helpers/plan-context.ts';
 
@@ -89,6 +89,23 @@ describe('buildBom', () => {
     const none = await buildBom(without, steps, { settings, env: nb.env, leaf: nb.leaf, ctx: emptyContextForTest() });
     expect(none.lines.map((l) => l.key)).toEqual(['machine:121@0']);
     expect(none.warnings.map((w) => w.code)).toEqual(['no-cleanroom']);
+  });
+  it('leaves out a cleanroom the group owns', async () => {
+    // Plan 12 Task 6: the group's own cleanroom (a world scan's, or the "Machines we have" list's) needs no building.
+    const p = packFromSpec({ ...MINI_GT, machines: [...(MINI_GT.machines ?? []),
+      { mteId: 1200, name: 'Cleanroom', kind: 'multiblock', maps: [], cls: 'gregtech.common.tileentities.machines.multi.MTECleanroom' }] });
+    const settings = { ...defaultSettings(), tier: 1 };
+    const b = planBasis(p, settings, emptyContextForTest());
+    const steps = [step({ id: 'x', recipeId: 'x', needsCleanroom: true, mainOutput: 't:circuit@0' })];
+    const rooms = async (ctx: PlanContext) => (await buildBom(p, steps, { settings, env: b.env, leaf: b.leaf, ctx })).lines.filter((l) => l.key === 'machine:1200@0');
+    expect(await rooms(emptyContextForTest())).toEqual([expect.objectContaining({ amount: 1, why: expect.stringMatching(/^cleanroom for /), group: 'machines' })]);
+    expect(await rooms({ ...emptyContextForTest(), ownedMachines: [{ mteId: 1200, count: 1 }] })).toEqual([]);
+    // the list's own one counts the same; a declined one does not
+    const listed = await buildBom(p, steps, { settings: { ...settings, ownedManual: [{ mteId: 1200, count: 1 }] }, env: b.env, leaf: b.leaf, ctx: emptyContextForTest() });
+    expect(listed.lines.map((l) => l.key)).not.toContain('machine:1200@0');
+    const declined = await buildBom(p, steps, { settings: { ...settings, declineReuse: [1200] }, env: b.env, leaf: b.leaf,
+      ctx: { ...emptyContextForTest(), ownedMachines: [{ mteId: 1200, count: 1 }] } });
+    expect(declined.lines.map((l) => l.key)).toContain('machine:1200@0');
   });
   it('counts a machine that Make N steps share once', async () => {
     const steps = [step({ id: 'bend-plate', recipeId: 'bend-plate', count: 1, owned: 0, machine: { mteId: 101, name: 'Basic Bending Machine', tier: 1 } }),

@@ -9,6 +9,13 @@ import type { Pack } from '../../../src/shared/types/pack.ts';
 import type { Plan, PlanFlow } from '../../../src/shared/types/plan.ts';
 import type { StuffKey } from '../../../src/shared/keys.ts';
 import { layoutPack, makePlan, makeProject, makeScan, flatVoxels, areaReader, IDS, STONE, type StepSpec } from '../../helpers/layout-fixtures.ts';
+import { mergeLayoutIntoPlan } from '../../../src/server/layout/merge.ts';
+import { planBasis } from '../../../src/server/planner/basis.ts';
+import { buildBom } from '../../../src/server/planner/bom.ts';
+import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
+import { largeBenderSpec } from '../../helpers/build-fixtures.ts';
+import { packFromSpec } from '../../helpers/pack-spec.ts';
+import { emptyContextForTest } from '../../helpers/plan-context.ts';
 
 const twoStep = () => makePlan([
   { id: 's1', mteId: IDS.MACERATOR, count: 2, euPerTick: 30 },
@@ -473,3 +480,35 @@ describe('layoutLine: mixed-tier lines', () => {
   });
 });
 
+
+// Plan 12 Task 6: a shared machine laid out once, and an exported structure hatch counted once.
+describe('layoutLine: shared machines and structure hatches', () => {
+  it('places a shared machine once and names the steps it runs', async () => {
+    // s1 and s2 of one sharing pool run on one macerator (an AE2 line: the macerator feeds itself)
+    const pool = { id: 'pool:s1', steps: ['s1', 's2'] };
+    const pooled = makePlan([{ id: 's1', mteId: IDS.MACERATOR, count: 1, pool }, { id: 's2', mteId: IDS.MACERATOR, count: 1, pool, inputs: [['t:out_s1@0', 1]] }]);
+    const layout = await layoutLine(layoutPack(), pooled, emptyScan(), makeProject({ logistics: 'ae2', scanId: null, baseId: null }));
+    expect(layout.blocks.filter((b) => b.role === 'machine').map((b) => [b.stepId, b.stepIds])).toEqual([['s1', ['s1', 's2']]]);
+    const place = layout.buildSteps.filter((s) => s.id.startsWith('layout:place:'));
+    expect(place.map((s) => s.id)).toEqual(['layout:place:s1']);
+    expect(place[0]!.text).toMatch(/^Place 1× Basic Macerator .*; it runs t:out_s1@0 and t:out_s2@0$/);
+  });
+
+  it('builds an exported structure hatch at the lowest tier of its class, counted once', async () => {
+    // Task 2: the Large Bender's exported structure holds an HV muffler, which Plan 2's build list lists at the lowest tier
+    // of its class (the LV one); the layout lays that one and leaves it off its own parts, so it is counted once
+    const pack = packFromSpec(largeBenderSpec());
+    const settings = { ...defaultSettings(), tier: 1 };
+    const plan = makePlan([{ id: 'bend-plate', mteId: 1100, count: 1, tier: 1, inputs: [['t:iron_ingot@0', 1]], outputs: [['t:iron_plate@0', 1]] }]);
+    const basis = planBasis(pack, settings, emptyContextForTest());
+    plan.buildList = (await buildBom(pack, plan.steps, { settings, env: basis.env, leaf: basis.leaf, ctx: emptyContextForTest() })).lines;
+    const layout = await layoutLine(pack, plan, emptyScan(), makeProject({ scanId: null, baseId: null }));
+    const mufflers = layout.blocks.filter((b) => b.block.mteId === 91 || b.block.mteId === 93);
+    expect(mufflers.map((b) => [b.role, b.block.mteId, b.item, b.label])).toEqual([['hatch', 91, 'machine:91@0', 'Muffler Hatch (LV)']]);
+    expect(layout.bom.map((l) => l.key)).not.toContain('machine:91@0');
+    expect(layout.bom.map((l) => l.key)).not.toContain('machine:93@0');
+    const merged = mergeLayoutIntoPlan(plan, layout, null, (k) => pack.nameOf(k));
+    expect(merged.buildList.filter((l) => l.key === 'machine:91@0' || l.key === 'machine:93@0').map((l) => [l.key, l.amount])).toEqual([['machine:91@0', 1]]);
+    expect(layout.buildSteps.find((s) => s.id === 'layout:place:bend-plate')!.text).toContain('Muffler Hatch (LV)');
+  });
+});

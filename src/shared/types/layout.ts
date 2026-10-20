@@ -103,6 +103,11 @@ export interface LayoutBlock {
    * the 3D view and the Connections view word it with `configuredLines`; the feeding checker reads it.
    */
   feed?: FeedSpec;
+  /**
+   * Every plan step a shared machine runs (plan 12, architecture §11 entry 39: the steps of a sharing pool, `PlanStep.pool`),
+   * on each block of its unit, the first being `stepId`. Set only for a machine of two or more steps.
+   */
+  stepIds?: string[];
 }
 
 export interface Hookup {

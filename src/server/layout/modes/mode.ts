@@ -14,7 +14,7 @@ import type { MachineKind, Pack } from '../../../shared/types/pack.ts';
 import type { BomLine, BuildStep, LogisticsMode, Plan, PlanFlow, PlanWarning } from '../../../shared/types/plan.ts';
 import type { LogisticsNetwork } from '../../../shared/types/world.ts';
 import { comparePos } from '../../world/graph.ts';
-import type { BlockConfig, HostConfig, HostCover, LocalBlock, PlacedUnit, Placement } from '../arrange.ts';
+import { placedStepIds, unitSteps, type BlockConfig, type HostConfig, type HostCover, type LocalBlock, type PlacedUnit, type Placement, type Unit } from '../arrange.ts';
 import { hasInputSeparation } from '../multiblock-rules.ts';
 import { coverRateWarning, pickConveyor, type PartId, type Parts } from '../parts.ts';
 import { ae2Mode } from './ae2.ts';
@@ -113,13 +113,8 @@ export function emptyModeResult(warnings: PlanWarning[] = []): ModeResult {
   return { blocks: [], covers: [], configs: [], logisticsPort: null, hookup: null, extraParts: [], drafts: [], warnings, tailFluidY: 1 };
 }
 
-/**
- * The step ids whose units the line's logistics serve, in unit order: every unit in the placement but those run by hand
- * (`Unit.manual`), whose goods cross the line's edge like those of a step it does not place.
- */
-export function placedStepIds(placement: Placement): Set<string> {
-  return new Set(placement.units.filter((u) => u.manual === undefined).map((u) => u.stepId));
-}
+// `unitSteps` and `placedStepIds` live beside the placement (arrange.ts), which internal.ts reads too.
+export { placedStepIds, unitSteps };
 
 /**
  * The item keys the line hands to the steps it runs by hand (`toHand`: flows from a placed step into one of them, which
@@ -127,7 +122,7 @@ export function placedStepIds(placement: Placement): Set<string> {
  * in its input chest), each sorted.
  */
 export function handItemFlows(plan: Plan, placement: Placement): { toHand: StuffKey[]; fromHand: StuffKey[] } {
-  const hand = new Set(placement.units.filter((u) => u.manual !== undefined).map((u) => u.stepId));
+  const hand = new Set(placement.units.filter((u) => u.manual !== undefined).flatMap(unitSteps));
   const placed = placedStepIds(placement);
   const flows = itemFlows(plan);
   return {
@@ -142,10 +137,15 @@ export function itemStacksPerSecond(plan: Plan, placed: ReadonlySet<string>): nu
   return items / ITEMS_PER_STACK;
 }
 
-/** Σ item flows out of the step ÷ step.count: the items/s each of its machines pushes out. */
-export function unitItemRate(plan: Plan, stepId: string): number {
-  const count = plan.steps.find((s) => s.id === stepId)?.count ?? 1;
-  const items = itemFlows(plan).reduce((sum, f) => (f.from === stepId ? sum + f.perSecond : sum), 0);
+/**
+ * The items/s each machine pushes out: of a step (by id), Σ item flows out of it ÷ its `count`; of a unit, Σ item flows
+ * out of every step it runs (`unitSteps`) ÷ the `count` of its first step, which a sharing pool's steps share (the pool's
+ * machines).
+ */
+export function unitItemRate(plan: Plan, of: string | Pick<Unit, 'stepId' | 'stepIds'>): number {
+  const steps = typeof of === 'string' ? [of] : unitSteps(of);
+  const count = plan.steps.find((s) => s.id === steps[0])?.count ?? 1;
+  const items = itemFlows(plan).reduce((sum, f) => (steps.includes(f.from) ? sum + f.perSecond : sum), 0);
   return items / Math.max(1, count);
 }
 
@@ -166,6 +166,16 @@ export function rawItemRate(plan: Plan, placed: ReadonlySet<string>): number {
 /** The item keys flowing placed step → out | sink, sorted. */
 export function finalItemOutputs(plan: Plan, placed: ReadonlySet<string>): StuffKey[] {
   return distinctKeys(itemFlows(plan).filter((f) => placed.has(f.from) && isFinal(f.to)));
+}
+
+/** The items a unit's machine takes for every step it runs (`stepItemInputs` of each, `unitSteps`), sorted, each once. */
+export function unitItemInputs(plan: Plan, u: Pick<Unit, 'stepId' | 'stepIds'>): StuffKey[] {
+  return [...new Set(unitSteps(u).flatMap((id) => stepItemInputs(plan, id)))].sort(compareText);
+}
+
+/** The items a unit's machine makes for every step it runs (`stepItemOutputs` of each, `unitSteps`), sorted, each once. */
+export function unitItemOutputs(plan: Plan, u: Pick<Unit, 'stepId' | 'stepIds'>): StuffKey[] {
+  return [...new Set(unitSteps(u).flatMap((id) => stepItemOutputs(plan, id)))].sort(compareText);
 }
 
 /**
@@ -266,14 +276,15 @@ function inBox(p: Vec3, at: Vec3, size: Vec3): boolean {
  * mode on on each input bus of a multiblock fed two or more kinds (off on a new bus, so one kind can fill every slot), and
  * Input Separation off on a multiblock with two or more input buses whose controller has that setting, on when built
  * (`hasInputSeparation`: with it on, each bus is checked alone, so a recipe whose items arrive on different buses never
- * starts; a controller without it has nothing to set and reads all its buses together). The kinds are the items the step
- * takes (`stepItemInputs`); a unit run by hand gets nothing. One entry per block, sorted by pos.
+ * starts; a controller without it has nothing to set and reads all its buses together). The kinds are the items the
+ * machine takes for every step it runs (`unitItemInputs`: a shared machine is fed each of its steps' items); a unit run
+ * by hand gets nothing. One entry per block, sorted by pos.
  */
 export function feedSettings(pack: Pack, plan: Plan, placement: Placement): HostConfig[] {
   const out: HostConfig[] = [];
   for (const u of placement.units) {
     if (u.manual !== undefined || !u.io.itemIn) continue;
-    const kinds = stepItemInputs(plan, u.stepId).length;
+    const kinds = unitItemInputs(plan, u).length;
     const own = placement.blocks.filter((b) => b.stepId === u.stepId && inBox(b.pos, u.at, u.size));
     if (!u.multiblock) {
       const machine = own.find((b) => b.role === 'machine');

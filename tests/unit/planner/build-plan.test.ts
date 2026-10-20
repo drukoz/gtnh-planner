@@ -619,6 +619,39 @@ describe('twin recipes', () => {
   });
 });
 
+describe('the build list', () => {
+  /** The machines group of a plan's build list, by key: the machines it adds. */
+  const machines = (plan: Plan): Array<[string, number]> => plan.buildList.filter((l) => l.group === 'machines').map((l) => [l.key, l.amount]);
+  const PROGRAMMED_2 = 'gregtech:gt.integrated_circuit@2';
+
+  it('builds only the machines the plan adds', async () => {
+    // Task 5's kit plans on one owned assembler: AE2 runs circuit-lv, gear and kit on it as one sharing pool, so only the
+    // bender and the wiremill are built and the pool's programmed circuit is listed once; Project Red, which shares no
+    // machine (fix wave 2 (d)), and machine to machine give gear and kit an assembler each.
+    const kitPack = packFromSpec(kitSpec());
+    const oneAssembler = owning({ mteId: 121, count: 1, where: [{ dim: 0, pos: [10, 64, 10] }] });
+    const kit = (logistics: LogisticsMode): Promise<Plan> => planLine(kitPack, S({ target: 't:kit@0', logistics }), oneAssembler);
+    const ae2 = await kit('ae2');
+    expect(machines(ae2)).toEqual([['machine:101@0', 1], ['machine:111@0', 1]]);
+    expect(ae2.buildList.find((l) => l.key === PROGRAMMED_2)?.amount).toBe(1);
+    for (const logistics of ['routed', 'direct'] as const) {
+      const plan = await kit(logistics);
+      expect(machines(plan), logistics).toEqual([['machine:101@0', 1], ['machine:111@0', 1], ['machine:121@0', 2]]);
+      expect(plan.buildList.find((l) => l.key === PROGRAMMED_2)?.amount, logistics).toBe(3);
+    }
+    // Task 5's sand plans at 1 a minute: AE2's one forge hammer, run by gravel and sand, is built once; Project Red builds
+    // one per step; machine to machine digs its sand (ruling P1).
+    const sand = packFromSpec(sandSpec());
+    const glass = (logistics: LogisticsMode): Promise<Plan> => planLine(sand, G({ logistics }), emptyContext());
+    expect(machines(await glass('ae2'))).toEqual([['machine:151@0', 1], ['machine:441@0', 1], ['machine:481@0', 1]]);
+    expect(machines(await glass('routed'))).toEqual([['machine:151@0', 1], ['machine:441@0', 1], ['machine:481@0', 2]]);
+    expect(machines(await glass('direct'))).toEqual([['machine:151@0', 1]]);
+    // Make N's one added machine per type
+    expect(machines(await planLine(miniGt(), S({ mode: 'makeN', amount: 64 }), emptyContext())))
+      .toEqual([['machine:101@0', 1], ['machine:111@0', 1], ['machine:121@0', 1]]);
+  });
+});
+
 describe('assignOwned', () => {
   const units = (n: number): Map<number, null[]> => new Map([[1, new Array<null>(n).fill(null)]]);
 

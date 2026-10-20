@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { unitsFromPlan, placeUnits, stepDepths, stepIo, overlaps, compactness, replacedCasings, attachCovers, type LocalBlock } from '../../../src/server/layout/arrange.ts';
-import { layoutPack, makePlan, IDS } from '../../helpers/layout-fixtures.ts';
+import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
+import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
+import { kitSpec } from '../../helpers/build-fixtures.ts';
+import { layoutPack, makePlan, IDS, type StepSpec } from '../../helpers/layout-fixtures.ts';
+import { packFromSpec } from '../../helpers/pack-spec.ts';
 import type { Recipe } from '../../../src/shared/types/pack.ts';
 
 const withCircuit = (id: string, circuit: number): Recipe => ({ id, source: 'gt', maps: [], inputs: [], outputs: [], euPerTick: 30, durationTicks: 100,
@@ -73,6 +77,46 @@ describe('units', () => {
     expect(attachCovers(blocks, [{ pos: [1, 0, 1], cover }], [{ pos: [1, 0, 1], config: { inputFilter: true } }])).toEqual([
       { ...blocks[0], covers: [cover], config: { circuit: 1, inputFilter: true } }, blocks[1]]);
     expect(() => attachCovers(blocks, [{ pos: [9, 9, 9], cover }], [])).toThrow('no host block at 9,9,9');
+  });
+
+  it('lays out no unit for a shared owned machine', async () => {
+    // Task 5's AE2 kit plan: circuit-lv, gear and kit share the group's own assembler (one sharing pool), so only the new
+    // bender and wiremill are laid out
+    const pack = packFromSpec(kitSpec());
+    const owned = { ...emptyContext(), ownedMachines: [{ mteId: 121, count: 1, where: [{ dim: 0, pos: [10, 64, 10] as [number, number, number] }] }] };
+    const plan = await planLine(pack, { ...defaultSettings(), target: 't:kit@0', tier: 1, automateCrafting: false, logistics: 'ae2' }, owned);
+    expect(plan.steps.filter((s) => s.pool !== undefined).map((s) => s.id)).toEqual(['circuit-lv', 'gear', 'kit']);
+    expect(unitsFromPlan(pack, plan).units.map((u) => [u.mteId, u.stepIds])).toEqual([[101, undefined], [111, undefined]]);
+  });
+
+  it('lays out one unit for a shared machine', () => {
+    // s1 makes t:out_s1@0 from Raw Input and s2 makes t:out_s2@0 from it, on one macerator: an AE2 sharing pool (the
+    // planner never pools a machine that feeds itself on a Project Red line, Task 3)
+    const pool = { id: 'pool:s1', steps: ['s1', 's2'] };
+    const steps: StepSpec[] = [{ id: 's1', mteId: IDS.MACERATOR, count: 1, pool }, { id: 's2', mteId: IDS.MACERATOR, count: 1, pool, inputs: [['t:out_s1@0', 1]] }];
+    const pooled = makePlan(steps);
+    const { units } = unitsFromPlan(layoutPack(), pooled);
+    expect(units).toHaveLength(1);
+    expect(units[0]).toMatchObject({ stepId: 's1', stepIds: ['s1', 's2'], mteId: IDS.MACERATOR, io: { itemIn: true, itemOut: true, fluidIn: [], fluidOut: [] } });
+    // the same steps without the pool: a machine each
+    const apart = unitsFromPlan(layoutPack(), makePlan(steps.map(({ pool: _pool, ...s }) => s))).units;
+    expect(apart.map((u) => [u.stepId, u.stepIds])).toEqual([['s1', undefined], ['s2', undefined]]);
+    // every cell of the shared machine names the steps it runs
+    const machine = placeUnits(units, { headWidth: 1, portSpacing: 2 }).blocks.find((b) => b.role === 'machine');
+    expect(machine).toMatchObject({ stepId: 's1', stepIds: ['s1', 's2'] });
+  });
+
+  it('sizes a shared multiblock for the largest need of its steps and runs it at the largest EU/t', () => {
+    // two EBF steps of one pool: e1 takes 1 kind of item, e2 three; e2 draws more
+    const pool = { id: 'pool:e1', steps: ['e1', 'e2'] };
+    const plan = makePlan([
+      { ...ebfStep, id: 'e1', pool, euPerTick: 120, inputs: [['t:dust@0', 1], ['fluid:oxygen', 1000]] },
+      { ...ebfStep, id: 'e2', pool, euPerTick: 480, inputs: [['t:dust@0', 1], ['t:in@0', 1], ['t:ingot@0', 1], ['fluid:oxygen', 2000]] }], { flows: [] });
+    const [ebf, ...more] = unitsFromPlan(layoutPack(), plan).units;
+    expect(more).toEqual([]);
+    expect(ebf).toMatchObject({ stepId: 'e1', stepIds: ['e1', 'e2'], euPerTick: 480 });
+    // 3 kinds take the LV bus (4 slots), not the ULV one (1); 2,000 L of oxygen fit the LV input hatch
+    expect(ebf!.cells.find((c) => c.hatch === 'input_bus')!.block.mteId).toBe(IDS.INPUT_BUS_LV);
   });
 
   it('draws a multiblock without an exported structure as a 3×3×3 box and says so', () => {

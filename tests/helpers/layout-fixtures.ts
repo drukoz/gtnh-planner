@@ -280,6 +280,8 @@ export interface StepSpec {
   id: string; mteId: number; count: number; owned?: number; tier?: number /* 1 */; euPerTick?: number /* 30 */; utilization?: number /* 1 */;
   name?: string; inputs?: Array<[StuffKey, number]> /* [['t:in@0', 1]] */; outputs?: Array<[StuffKey, number]> /* [[`t:out_${id}@0`, 1]] */;
   handCraft?: boolean;
+  /** The step's sharing pool (plan 12: `PlanStep.pool`); none by default. */
+  pool?: PlanStep['pool'];
 }
 
 const DEFAULT_INPUT: StuffKey = 't:in@0';
@@ -297,6 +299,7 @@ function planStep(s: StepSpec): PlanStep {
     durationTicks: 20, overclocks: 0,
     inputs: products(s.inputs ?? [[DEFAULT_INPUT, 1]]), outputs: products(s.outputs ?? [[defaultOutput(s.id), 1]]),
     alternatives: [], handCraft: s.handCraft ?? false, warnings: [],
+    ...(s.pool === undefined ? {} : { pool: { id: s.pool.id, steps: [...s.pool.steps] } }),
   };
 }
 

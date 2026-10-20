@@ -119,6 +119,17 @@ describe('internal routing', () => {
     expect(r.fluidPipes.map((f) => [f.key, f.pipe.mteId, f.cells])).toEqual([['fluid:molten.iron', IDS.SMALL_BRONZE_PIPE, 3]]);
   });
 
+  it('counts the fluid of a shared machine once', () => {
+    // two extractor steps of one sharing pool run on one machine: one producing face, moving what both steps make
+    const pack = layoutPack();
+    const pool = { id: 'pool:x1', steps: ['x1', 'x2'] };
+    const plan = makePlan(['x1', 'x2'].map((id) => ({ id, mteId: IDS.EXTRACTOR, count: 1, pool, outputs: [['fluid:molten.iron', 144]] as Array<[string, number]> })),
+      { flows: ['x1', 'x2'].flatMap((id) => [{ from: 'raw', to: id, key: 't:in@0', perSecond: 1 }, { from: id, to: 'out', key: 'fluid:molten.iron', perSecond: 144 }]) });
+    const placement = placeUnits(unitsFromPlan(pack, plan).units, { headWidth: 1, portSpacing: 0 });
+    const nets = fluidNets(pack, plan, placement);
+    expect(nets.map((n) => [n.key, n.atTail, n.faces.map((f) => [f.stepId, f.rate])])).toEqual([['fluid:molten.iron', true, [['x1', 288]]]]);
+  });
+
   it('warns cover_rate when no cover at the group tier carries the flow', () => {
     const pack = layoutPack();
     const plan = makePlan([

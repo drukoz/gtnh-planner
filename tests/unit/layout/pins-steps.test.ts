@@ -64,6 +64,51 @@ describe('pins', () => {
     expect(findReuse(layoutPack(), plan, scan, scan.bases[0]!, [0, 64, 0])).toEqual([
       { stepId: 's1', name: 'Basic Macerator', count: 2, positions: [[2, 64, 2], [30, 64, 30]] }]);
   });
+
+  /** The scan of the case above: Basic Macerators at [30, 64, 30] and [2, 64, 2], an Advanced Assembler at [5, 64, 5]. */
+  const twoMacerators = () => makeScan({ machines: [{ pos: [30, 64, 30], mteId: IDS.MACERATOR }, { pos: [2, 64, 2], mteId: IDS.MACERATOR },
+    { pos: [5, 64, 5], mteId: IDS.ASSEMBLER }] });
+  /** Steps on owned Basic Macerators, one owned each, on the planner's units `units[i]`. */
+  const onUnits = (units: readonly number[][]) => {
+    const plan = makePlan(units.map((_, i) => ({ id: `s${i + 1}`, mteId: IDS.MACERATOR, count: 1, owned: 1 })));
+    plan.steps.forEach((s, i) => { s.reused = { count: 1, where: [], units: [...units[i]!] }; });
+    return plan;
+  };
+
+  it('gives a shared owned machine one pin and one hook step', () => {
+    // plan 12 Task 6: s1 and s2 run on the planner's unit 0, one machine: the macerator nearest the site
+    const scan = twoMacerators();
+    const finds = findReuse(layoutPack(), onUnits([[0], [0]]), scan, scan.bases[0]!, [0, 64, 0]);
+    expect(finds).toEqual([
+      { stepId: 's1', name: 'Basic Macerator', count: 1, positions: [[2, 64, 2]], product: 't:out_s1@0' },
+      { stepId: 's2', name: 'Basic Macerator', count: 1, positions: [[2, 64, 2]], product: 't:out_s2@0' }]);
+    const pins = makePins({ dim: 0, site: null, power: null, logistics: null, reuse: finds, warnings: [] });
+    expect(pins).toEqual([{ n: 1, dim: 0, pos: [2, 64, 2], kind: 'reuse', text: 'Reuse your 1× Basic Macerator (shared by 2 steps)' }]);
+    const hooks = layoutSteps(base({ status: 'empty', pins, reuse: finds }));
+    expect(hooks).toEqual([{ id: 'layout:reuse:s1', order: 1, pin: 1, kind: 'logistics',
+      text: "Hook your 1× Basic Macerator at pin 1 into the line's logistics; it serves 2 steps: t:out_s1@0, t:out_s2@0" }]);
+  });
+
+  it('maps planner units onto the machines nearest the site', () => {
+    // one index is one machine, the first one used the nearest; a third has no machine in this base (one elsewhere or
+    // from the "Machines we have" list), and a step on it never takes the machine another step has
+    const scan = twoMacerators();
+    expect(findReuse(layoutPack(), onUnits([[0], [1], [2]]), scan, scan.bases[0]!, [0, 64, 0]).map((f) => [f.stepId, f.positions])).toEqual([
+      ['s1', [[2, 64, 2]]], ['s2', [[30, 64, 30]]]]);
+    // the order of first use decides, not the planner's index: unit 1 used first stands nearest
+    expect(findReuse(layoutPack(), onUnits([[1], [0]]), scan, scan.bases[0]!, [0, 64, 0]).map((f) => [f.stepId, f.positions])).toEqual([
+      ['s1', [[2, 64, 2]]], ['s2', [[30, 64, 30]]]]);
+    // an owned macerator beside a step's own new assemblers (`reused.others`): a find of its own, and a hook step whose id
+    // names its type
+    const beside = makePlan([{ id: 'a', mteId: IDS.ASSEMBLER, count: 1, tier: 2 }]);
+    beside.steps[0]!.reused = { count: 0, where: [], units: [], others: [{ mteId: IDS.MACERATOR, name: 'Basic Macerator', tier: 1, count: 1, units: [0],
+      where: [], euPerTick: 30, runsPerSecondPerMachine: 1 }] };
+    const finds = findReuse(layoutPack(), beside, scan, scan.bases[0]!, [0, 64, 0]);
+    expect(finds).toEqual([{ stepId: 'a', name: 'Basic Macerator', count: 1, positions: [[2, 64, 2]], product: 't:out_a@0', otherMteId: IDS.MACERATOR }]);
+    const pins = makePins({ dim: 0, site: null, power: null, logistics: null, reuse: finds, warnings: [] });
+    expect(layoutSteps(base({ status: 'empty', pins, reuse: finds })).map((s) => [s.id, s.pin, s.text])).toEqual([
+      [`layout:reuse:a:${IDS.MACERATOR}`, 1, "Hook your 1× Basic Macerator at pin 1 into the line's logistics"]]);
+  });
 });
 
 describe('layout steps', () => {
@@ -180,7 +225,9 @@ describe('layout steps', () => {
       { pos: [2, 0, 0], block: GT(IDS.MACERATOR), role: 'machine', label: 'Basic Macerator', item: 'gregtech:gt.blockmachines@2001', covers: [cover] },
       { pos: [3, 0, 0], block: { id: 'minecraft:chest', meta: 0 }, role: 'chest', label: 'Chest (input)', item: 'minecraft:chest@0' },
       { pos: [4, 0, 0], block: STONE, role: 'ghost', label: 'existing Stone', covers: [cover] },
-      { pos: [5, 0, 0], block: GT(IDS.ENERGY_MV), role: 'hatch', label: 'MV Energy Hatch', item: 'gregtech:gt.blockmachines@42' },
+      { pos: [5, 0, 0], block: GT(IDS.ENERGY_MV), role: 'hatch', label: 'MV Energy Hatch', item: 'gregtech:gt.blockmachines@42', hatch: 'energy' },
+      // a hatch the exported structure holds (no kind the layout chose): Plan 2's build list counts it (plan 12 Task 6)
+      { pos: [6, 0, 0], block: GT(IDS.MUFFLER), role: 'hatch', label: 'Muffler Hatch (LV)', item: 'gregtech:gt.blockmachines@91' },
     ];
     expect(bomFromBlocks(blocks, [{ key: 'minecraft:chest@0', amount: 1, why: 'spare' }])).toEqual([
       { key: 'gregtech:gt.blockmachines@1247', amount: 2, why: 'line wiring; power hookup', group: 'power' },

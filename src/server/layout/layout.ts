@@ -351,7 +351,7 @@ function worldBlock(b: LocalBlock, f: Frame): LayoutBlock {
   return {
     pos: worldPos(b.pos, f), block: { ...b.block }, role: b.role, ...(b.facing === undefined ? {} : { facing: rotateFacing(b.facing, r) }),
     ...(b.mainFacing === undefined ? {} : { mainFacing: rotateFacing(b.mainFacing, r) }),
-    ...(b.stepId === undefined ? {} : { stepId: b.stepId }), label: b.label,
+    ...(b.stepId === undefined ? {} : { stepId: b.stepId }), ...(b.stepIds === undefined ? {} : { stepIds: [...b.stepIds] }), label: b.label,
     ...(b.covers === undefined ? {} : { covers: b.covers.map((c) => worldCover(c, r)) }),
     ...(b.config === undefined ? {} : { config: { ...b.config } }),
     ...(b.item === undefined ? {} : { item: b.item }),
@@ -553,6 +553,12 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
   }
   const nameOf = (k: StuffKey): string => plan.names?.[k] ?? pack.nameOf(k);
   const transformerName = (toTier: number): string => pickTransformer(pack, toTier)?.name ?? `${tierName(toTier)} transformer`;
+  /** A plan step by what it makes: its main output's name, else its first output's (plan 12: a shared machine's steps). */
+  const stepName = (stepId: string): string => {
+    const s = plan.steps.find((x) => x.id === stepId);
+    const key = s?.mainOutput ?? s?.outputs[0]?.key;
+    return key === undefined ? stepId : nameOf(key);
+  };
 
   // stage 2
   const base = findBase(scan, project.world.baseId);
@@ -670,7 +676,7 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
     cables: line.internal.cables.map((c) => ({ tier: c.tier, cable: c.cable.name, cells: c.cells })),
     power: finish.power, supplyTier: finish.supplyTier, drafts: line.mode.drafts,
     fluids: line.internal.fluidPipes.map((f) => ({ key: f.key, name: f.name, pipe: f.pipe.name, cells: f.cells })),
-    logistics: finish.logistics, reuse: finish.reuse, blocks, origin: [...frame.origin], rotation: frame.rotation, nameOf,
+    logistics: finish.logistics, reuse: finish.reuse, blocks, origin: [...frame.origin], rotation: frame.rotation, nameOf, stepName,
   };
   const buildSteps = layoutSteps(stepsInput);
   const hookups = hooked?.hookups ?? [];
