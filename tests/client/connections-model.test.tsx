@@ -201,22 +201,42 @@ describe('the Connections links in the world', () => {
     expect(spanDetails(g, { edge: 'nope', from: dust[0]!.from, to: dust[0]!.to })).toBeNull();
   });
 
-  it('joins two big boxes face by face in turn once every pair would make more than 256 pieces', () => {
-    // two steps of n machines each, machine to machine: n × n pieces up to 16 × 16, else one per machine of the bigger box
-    const big = (n: number): Layout => ({ ...connLayout('direct'), blocks: [
-      ...Array.from({ length: n }, (_, i): LayoutBlock => ({ pos: [i, 64, 0], block: { id: 'gregtech:gt.blockmachines', meta: 0, mteId: 2001 }, role: 'machine',
+  it('joins two big boxes face by face in turn once every pair would make more than 32 pieces', () => {
+    // two steps of a and b machines, machine to machine: a × b pieces up to 32, else one per machine of the bigger box
+    // (the review of f9fe23e: 16 × 16 each with each made 256 tubes no one could read, and a slow line)
+    const big = (a: number, b: number): Layout => ({ ...connLayout('direct'), blocks: [
+      ...Array.from({ length: a }, (_, i): LayoutBlock => ({ pos: [i, 64, 0], block: { id: 'gregtech:gt.blockmachines', meta: 0, mteId: 2001 }, role: 'machine',
         facing: 3, stepId: 'a', label: 'Basic Macerator' })),
-      ...Array.from({ length: n }, (_, i): LayoutBlock => ({ pos: [i, 64, 2], block: { id: 'gregtech:gt.blockmachines', meta: 0, mteId: 2002 }, role: 'machine',
+      ...Array.from({ length: b }, (_, i): LayoutBlock => ({ pos: [i, 64, 2], block: { id: 'gregtech:gt.blockmachines', meta: 0, mteId: 2002 }, role: 'machine',
         facing: 2, stepId: 'b', label: 'Advanced Assembler' }))] });
-    const pieces = (n: number) => {
-      const layout = big(n);
+    const pieces = (a: number, b: number) => {
+      const layout = big(a, b);
       return connectionSpans(layout, connectionsGraph(layout, connPlan, 'min')).filter((s) => s.edge === 'flow:step:a>step:b:t:dust@0');
     };
-    expect(pieces(16)).toHaveLength(256);
-    const many = pieces(20);
-    expect(many).toHaveLength(20);
-    expect(new Set(many.map((s) => s.from.cell.join()))).toEqual(new Set(Array.from({ length: 20 }, (_, i) => `${i},64,0`)));
-    expect(new Set(many.map((s) => s.to.cell.join()))).toEqual(new Set(Array.from({ length: 20 }, (_, i) => `${i},64,2`)));
+    expect(pieces(4, 8)).toHaveLength(32);
+    const many = pieces(6, 6);
+    expect(many).toHaveLength(6);
+    expect(new Set(many.map((s) => s.from.cell.join()))).toEqual(new Set(Array.from({ length: 6 }, (_, i) => `${i},64,0`)));
+    expect(new Set(many.map((s) => s.to.cell.join()))).toEqual(new Set(Array.from({ length: 6 }, (_, i) => `${i},64,2`)));
+    expect(pieces(16, 16)).toHaveLength(16);
+  });
+
+  // the review of f9fe23e: a link's end never hides under another block
+  it('ends a link on the first free face of its block: the top, else the side most toward the other end, else another side', () => {
+    const stone = (pos: [number, number, number]): LayoutBlock => ({ pos, block: { id: 'minecraft:stone', meta: 0 }, role: 'casing', label: 'Stone' });
+    const ends = (...covers: Array<[number, number, number]>) => {
+      const layout = connLayout('direct');
+      layout.blocks.push(...covers.map(stone));
+      return connectionSpans(layout, connectionsGraph(layout, connPlan, 'min')).map((s) => `${s.from.cell.join(' ')} ${s.from.side} > ${s.to.cell.join(' ')} ${s.to.side}`);
+    };
+    // the input chest's top covered: toward the macerator (west) stands the assembler, so the raw input leaves north
+    expect(ends([2, 65, 0])[0]).toBe('2 64 0 2 > 0 64 0 1');
+    // north covered too: south is the pipe, so east, though it faces away
+    expect(ends([2, 65, 0], [2, 64, -1])[0]).toBe('2 64 0 5 > 0 64 0 1');
+    // nothing free but the bottom: the top after all
+    expect(ends([2, 65, 0], [2, 64, -1], [3, 64, 0])[0]).toBe('2 64 0 1 > 0 64 0 1');
+    // the output chest's top covered: north is the pipe, so west, the next most toward the assembler
+    expect(ends([2, 65, 2])[2]).toBe('1 64 0 1 > 2 64 2 4');
   });
 
   it('tells a piece of a link without faces what the link tells', () => {

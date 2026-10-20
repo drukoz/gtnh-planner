@@ -320,8 +320,8 @@ export function createViewer(
         const { origin, direction } = raycaster.ray;
         const perPixel = (2 * Math.tan((camera.fov * Math.PI) / 360)) / rect.height;
         const hit = pickLink(links.links, [origin.x, origin.y, origin.z], [direction.x, direction.y, direction.z], (t) => LINK_PICK_PX * perPixel * t,
-          (link) => maxLayer === null || link.layer <= maxLayer);
-        if (hit !== null && hit.t <= wall + LINK_RADIUS) return { kind: 'link', index: hit.link, link: links.links[hit.link]! };
+          (link) => maxLayer === null || link.layer <= maxLayer, wall + LINK_RADIUS);
+        if (hit !== null) return { kind: 'link', index: hit.link, link: links.links[hit.link]! };
       }
       return block === null ? null : { kind: 'block', block };
     },

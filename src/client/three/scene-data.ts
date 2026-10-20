@@ -3,12 +3,13 @@
 // instances the layer slider and the ghost and hookup toggles show, the side list of blocks to place, and the texts
 // for hover and click. An EnderIO conduit bundle (architecture "EnderIO conduits, granted change requests (add-on
 // 11)") draws every connection of its conduits as EnderIO draws it (the user's requirements of 2026-10-19, item 3
-// (a)): an arm toward each linked neighbour, the conduits that go one way side by side, and a connector arm on every
-// face that is set: the plate, then the mode's arrows in the face's channel colours (an In / Out face shows both);
-// where its conduits part, they meet in EnderIO's connector box. A pipe with pipe layers (architecture §11.43 (c))
-// draws its core, arms and arm tips from them, over its role's colour; a machine facing up or down keeps its hull's
-// top, bottom and sides where GT draws them (§11.43 (j)). Pure TypeScript — no DOM, no three.js — so it is tested
-// without a browser; the viewer turns these lists into meshes and the loader turns the tile sources into pixels.
+// (a)): an arm toward each linked neighbour, the conduits that go one way side by side where EnderIO puts each kind,
+// and a connector arm on every face that is set: the plate, then the mode's arrows in the face's channel colours (an
+// In / Out face shows both); where a conduit turns beside another, or its conduits part, they meet in EnderIO's
+// connector box. A pipe with pipe layers (architecture §11.43 (c)) draws its core, arms and arm tips from them, over
+// its role's colour; a machine facing up or down keeps its hull's top, bottom and sides where GT draws them (§11.43
+// (j)). Pure TypeScript — no DOM, no three.js — so it is tested without a browser; the viewer turns these lists into
+// meshes and the loader turns the tile sources into pixels.
 
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import { TIER_NAMES } from '../../shared/gt/tiers.ts';
@@ -20,7 +21,7 @@ import {
   FACES, KIND_COLORS, conduitBlockRef, orientFaces, rotateFaces,
   type BlockFaces, type CoverLayers, type Face, type IconDescriptor, type Rgb, type TextureLayer,
 } from '../../shared/types/assets.ts';
-import type { BlockRole, ConduitFace, ConduitMode, ConduitSpec, Layout, LayoutBlock } from '../../shared/types/layout.ts';
+import type { BlockRole, ConduitFace, ConduitKind, ConduitMode, ConduitSpec, Layout, LayoutBlock } from '../../shared/types/layout.ts';
 import type { BlockRef, Product } from '../../shared/types/pack.ts';
 import type { Plan, PlanStep } from '../../shared/types/plan.ts';
 
@@ -154,14 +155,26 @@ interface ArmPlan { side: number; offset: Vec3; face: (ConduitFace & { mode: Set
 interface BundlePlan { cores: Vec3[][]; arms: ArmPlan[][]; hub: { offset: Vec3; size: Vec3 } | null }
 
 /**
- * How EnderIO 2.10.46 lays a bundle's conduits out (`TileConduitBundle.getOffset`, `getConnectionCount`, `addConnectors`):
- * each conduit has an arm toward each side it is linked or has a set face on (the face wins); toward a side that two or
- * more of the bundle's conduits go, their arms are drawn side by side in bundle order, BUNDLE_SPACING apart across the
- * arm (along y for the four sides, along x up and down), and toward a side a conduit goes alone, on the cell's centre
- * line. Linked neighbours have the same conduits going between them, so their arms meet, and every arm reaches its face.
- * A conduit's core is at each place its arms leave from, or at its place in the bundle (along y) when it has none.
- * Where a conduit has cores in two places, or two conduits' cores overlap, EnderIO draws its connector box around all
- * of the bundle's cores, 1.05 times their size, and they are not drawn inside it.
+ * Where EnderIO 2.10.46 puts a conduit of `kind` beside the others of its bundle (`Offsets`: an arm's axis by its side,
+ * `getAxisForDir`, then a fixed offset per conduit type and axis), half of BUNDLE_SPACING off the centre line: on an arm
+ * east or west (`side` 4 or 5) the Item Conduit south (+z) and a fluid conduit north (−z); on an arm up, down, north or
+ * south, and for a core with no arm (`side` null), the Item Conduit east (+x) and a fluid conduit west (−x). A bundle
+ * holds one fluid conduit at most, as EnderIO's do, so two never share a place.
+ */
+function laneOf(kind: ConduitKind, side: number | null): Vec3 {
+  const d = ((kind === 'item' ? 1 : -1) * BUNDLE_SPACING) / 2;
+  return side === 4 || side === 5 ? [0, 0, d] : [d, 0, 0];
+}
+
+/**
+ * How EnderIO 2.10.46 lays a bundle's conduits out (`TileConduitBundle.getOffset`, `getConnectionCount`, `addConnectors`,
+ * `addConduitCores`): each conduit has an arm toward each side it is linked or has a set face on (the face wins); toward
+ * a side that two or more of the bundle's conduits go, each arm runs where EnderIO puts its kind for that side's axis
+ * (`laneOf`), and toward a side a conduit goes alone, on the cell's centre line. Linked neighbours have the same
+ * conduits going between them, on the same axis, so their arms meet, and every arm reaches its face. A conduit's core
+ * is at each place its arms leave from, or, in a bundle of two or more, at its kind's place for no axis when it has
+ * none. Where a conduit has cores in two places, or two conduits' cores overlap, EnderIO draws its connector box around
+ * all of the bundle's cores, 1.05 times their size, and they are not drawn inside it.
  */
 function bundlePlan(conduits: readonly ConduitSpec[]): BundlePlan {
   const n = conduits.length;
@@ -174,15 +187,12 @@ function bundlePlan(conduits: readonly ConduitSpec[]): BundlePlan {
     }
     return out;
   });
-  const going = FACES.map((_, side) => ends.flatMap((list, i) => (list.some((e) => e.side === side) ? [i] : [])));
-  const arms = ends.map((list, i) => list.map(({ side, face }): ArmPlan => {
-    const together = going[side]!;
-    const lane = together.length < 2 ? 0 : (together.indexOf(i) - (together.length - 1) / 2) * BUNDLE_SPACING;
-    return { side, offset: side < 2 ? [lane, 0, 0] : [0, lane, 0], face };
-  }));
+  const going = FACES.map((_, side) => ends.filter((list) => list.some((e) => e.side === side)).length);
+  const arms = ends.map((list, i) => list.map(({ side, face }): ArmPlan =>
+    ({ side, offset: going[side]! < 2 ? [0, 0, 0] : laneOf(conduits[i]!.kind, side), face })));
   const cores = arms.map((list, i): Vec3[] => {
     const places = new Map(list.map((a) => [posKey(a.offset), a.offset]));
-    return places.size > 0 ? [...places.values()] : [[0, n < 2 ? 0 : (i - (n - 1) / 2) * BUNDLE_SPACING, 0]];
+    return places.size > 0 ? [...places.values()] : [n < 2 ? [0, 0, 0] : laneOf(conduits[i]!.kind, null)];
   });
   const all = cores.flatMap((list, i) => list.map((p) => ({ i, p })));
   const overlap = (a: Vec3, b: Vec3): boolean => a.every((v, k) => Math.abs(v - b[k]!) < 2 * CORE_HALF - 1e-9);

@@ -16,6 +16,7 @@ import type { Layout, LayoutBlock } from '../../src/shared/types/layout.ts';
 import { CONV } from './layout-fixture.ts';
 // the user's requirements of 2026-10-19, item 3 (b): Show connections, remembered in this browser
 import { LINKS_STORAGE_KEY, loadShowLinks, saveShowLinks } from '../../src/client/views/View3D.tsx';
+import { linksNoteText } from '../../src/client/views/View3D.tsx';
 
 const shell = (over: Partial<View3DShellProps> = {}) => renderToStaticMarkup(<View3DShell layout={sampleLayout} loading={false} error={null} webgl
   maxLayer={null} onLayer={() => {}} show={{ ghosts: true, hookups: true }} onShow={() => {}} hover={null} info={null} canvas={<canvas />}
@@ -270,5 +271,18 @@ describe('3D tab: Show connections', () => {
       else Object.defineProperty(globalThis, 'localStorage', was);
     }
     expect(LINKS_STORAGE_KEY).toBe('gtnh-planner:3d-connections');
+  });
+
+  // the review of f9fe23e: the note counts links, not only the pieces they are drawn in, and names what it leaves out
+  it('says how many pieces of how many links it draws, and names the links it has nowhere to draw', () => {
+    expect(linksNoteText(null)).toBe('Nothing to connect yet: the plan has no line to lay out');
+    expect(linksNoteText({ pieces: 0, links: 0, unplaced: [] })).toBe('No connections to draw');
+    expect(linksNoteText({ pieces: 4, links: 4, unplaced: [] })).toMatch(/^4 connections drawn, each from the face that gives to the face that takes/);
+    expect(linksNoteText({ pieces: 1, links: 1, unplaced: [] })).toMatch(/^1 connection drawn, /);
+    expect(linksNoteText({ pieces: 6, links: 4, unplaced: [] })).toMatch(/^6 pieces of 4 connections drawn, .*click it to mark its two faces\.$/);
+    expect(linksNoteText({ pieces: 5, links: 5, unplaced: ['AE2 tap at 3 64 1 → Raw inputs'] }))
+      .toMatch(/^5 connections drawn, .*\. Not drawn, with nowhere in the line to draw it: AE2 tap at 3 64 1 → Raw inputs\.$/);
+    expect(linksNoteText({ pieces: 0, links: 0, unplaced: ['A → B', 'C → D', 'E → F', 'G → H', 'I → J'] }))
+      .toBe('No connections to draw. Not drawn, with nowhere in the line to draw them: A → B; C → D; E → F; and 2 more.');
   });
 });

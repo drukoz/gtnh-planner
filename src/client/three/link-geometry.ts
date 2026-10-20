@@ -3,10 +3,11 @@
 // tube that leaves its source face, arcs over the line and comes down into the face it reaches, with an arrowhead
 // halfway along that points the way, in its EnderIO channel's colour, else the colour of what carries it, as the
 // Connections tab draws it. All of them are one batched geometry, so the viewer draws them in one call however many
-// blocks the line has; each starts and ends a little off its faces so it never shares a plane with a block. Also the
-// white tube and face frames that mark a picked link, which link a ray from the pointer meets, and which links show
-// while hookups are hidden. Pure TypeScript — no DOM, no three.js — so it is tested without a browser; the viewer turns
-// these arrays into meshes.
+// blocks the line has; each starts and ends a little off its faces so it never shares a plane with a block, and links
+// between the same two faces fan out side by side. Also the white tube and face frames that mark a picked link, which
+// link a ray from the pointer meets, which links show while hookups are hidden, and what the note under the view counts
+// and names. Pure TypeScript — no DOM, no three.js — so it is tested without a browser; the viewer turns these arrays
+// into meshes.
 
 import { dyeRgb } from '../../shared/layout/enderio.ts';
 import { DIRS, posKey, type Vec3 } from '../../shared/layout/geometry.ts';
@@ -38,6 +39,12 @@ export const LINK_LIFT = 0.03;
 const LEAVE = 0.45;
 const RISE = 0.8;
 const RISE_PER_BLOCK = 0.15;
+/**
+ * How far apart (blocks) the middles of the links that join the same two faces are drawn, side by side: a little more
+ * than an arrowhead is wide. A cubic Bézier's middle moves 3/4 as far as its two inner control points.
+ */
+const FAN = 0.3;
+const MIDDLE_PER_CONTROL = 0.75;
 /** One link's vertices: its tube's rings, then its arrowhead's base ring and tip. */
 export const LINK_VERTICES = (LINK_SEGMENTS + 1) * SIDES + SIDES + 1;
 /** One link's triangles: two per side of each straight piece, then the arrowhead's sides and its base. */
@@ -101,18 +108,66 @@ export function spotPoint(spot: ConnSpot, origin: Vec3): Vec3 {
 
 /**
  * A link's centre line: a cubic Bézier from one face to the other that heads LEAVE out of each face and rises RISE plus
- * RISE_PER_BLOCK per block between its ends over them, sampled at LINK_SEGMENTS + 1 points.
+ * RISE_PER_BLOCK per block between its ends over them, its two inner control points moved by `shift` (a link beside
+ * others between the same two faces), sampled at LINK_SEGMENTS + 1 points.
  */
-function arc(from: ConnSpot, to: ConnSpot, origin: Vec3): Vec3[] {
+function arc(from: ConnSpot, to: ConnSpot, origin: Vec3, shift: Vec3): Vec3[] {
   const p0 = spotPoint(from, origin), p3 = spotPoint(to, origin);
   const rise = RISE + RISE_PER_BLOCK * Math.hypot(...sub(p3, p0));
-  const p1 = along(along(p0, DIRS[from.side]!, LEAVE), [0, 1, 0], rise);
-  const p2 = along(along(p3, DIRS[to.side]!, LEAVE), [0, 1, 0], rise);
+  const p1 = along(along(p0, DIRS[from.side]!, LEAVE, [0, 1, 0], rise), shift, 1);
+  const p2 = along(along(p3, DIRS[to.side]!, LEAVE, [0, 1, 0], rise), shift, 1);
   return Array.from({ length: LINK_SEGMENTS + 1 }, (_, i): Vec3 => {
     const t = i / LINK_SEGMENTS, u = 1 - t;
     const w = [u * u * u, 3 * u * u * t, 3 * u * t * t, t * t * t] as const;
     return [0, 1, 2].map((k) => w[0] * p0[k]! + w[1] * p1[k]! + w[2] * p2[k]! + w[3] * p3[k]!) as Vec3;
   });
+}
+
+function spotKey(spot: ConnSpot): string {
+  return `${posKey(spot.cell)}:${spot.side}`;
+}
+
+/** A piece's two ends, the same either way round: the first is the one whose key sorts first. */
+function endsOf(span: ConnSpan): [ConnSpot, ConnSpot] {
+  return spotKey(span.from) <= spotKey(span.to) ? [span.from, span.to] : [span.to, span.from];
+}
+
+/**
+ * The way the links that join two faces fan out: level and square to the line from the first end to the other (so a
+ * link and the one coming back, which share their ends, fan out along one line), else, for ends one above the other,
+ * square to the first end's facing, or along x.
+ */
+function fanAxis(span: ConnSpan, origin: Vec3): Vec3 {
+  const [first, second] = endsOf(span);
+  const a = spotPoint(first, origin), b = spotPoint(second, origin);
+  if (Math.hypot(b[0] - a[0], b[2] - a[2]) > 1e-6) return unit([a[2] - b[2], 0, b[0] - a[0]]);
+  const n = DIRS[first.side]!;
+  return n[1] === 0 ? unit([-n[2], 0, n[0]]) : [1, 0, 0];
+}
+
+/**
+ * How far each piece's inner control points move: the pieces that join the same two faces, either way round, side by
+ * side along their `fanAxis`, in order and centred on where one alone goes, FAN apart in the middle; a piece alone
+ * not at all.
+ */
+function fanShifts(spans: readonly ConnSpan[], origin: Vec3): Vec3[] {
+  const together = new Map<string, number[]>();
+  spans.forEach((s, i) => {
+    const [a, b] = endsOf(s);
+    const key = `${spotKey(a)}|${spotKey(b)}`;
+    const list = together.get(key);
+    if (list === undefined) together.set(key, [i]);
+    else list.push(i);
+  });
+  const shifts = spans.map((): Vec3 => [0, 0, 0]);
+  for (const list of together.values()) {
+    if (list.length < 2) continue;
+    const axis = fanAxis(spans[list[0]!]!, origin);
+    list.forEach((i, k) => {
+      shifts[i] = along([0, 0, 0], axis, ((k - (list.length - 1) / 2) * FAN) / MIDDLE_PER_CONTROL);
+    });
+  }
+  return shifts;
 }
 
 /** A unit vector across the unit `t`: `prev` turned onto the plane across `t` (so a tube's rings never twist), else any. */
@@ -194,13 +249,16 @@ function arrowhead(out: MeshWriter, path: readonly Vec3[], scale: number, color:
 
 /**
  * The geometry of `spans` (in order; a span whose link is not in `edges` is left out): per piece a tube of LINK_RADIUS
- * round its arc and an arrowhead halfway along, in `linkColor` of its link, every vertex with the piece's `layer`.
+ * round its arc and an arrowhead halfway along, in `linkColor` of its link, every vertex with the piece's `layer`. The
+ * pieces that join the same two faces, either way round (two goods from one step to the next, a link and the one
+ * coming back), fan out side by side (`fanShifts`), so each shows and each can be picked.
  */
 export function linkGeometry(spans: readonly ConnSpan[], edges: ReadonlyMap<string, ConnEdge>, origin: Vec3): LinkGeometry {
   const known = spans.filter((s) => edges.has(s.edge));
+  const shifts = fanShifts(known, origin);
   const out = new MeshWriter(meshFor(known.length * LINK_VERTICES, known.length * LINK_TRIANGLES));
-  const links = known.map((span): DrawnLink => {
-    const path = arc(span.from, span.to, origin);
+  const links = known.map((span, i): DrawnLink => {
+    const path = arc(span.from, span.to, origin, shifts[i]!);
     const color = linkColor(edges.get(span.edge)!);
     const layer = Math.max(span.from.cell[1], span.to.cell[1]) - origin[1];
     tube(out, path, LINK_RADIUS, color, layer);
@@ -259,22 +317,70 @@ function raySegment(start: Vec3, dir: Vec3, a: Vec3, b: Vec3): { t: number; dist
   return { t, distance: Math.hypot(gap[0], gap[1], gap[2]) };
 }
 
+/** A ball round a centre line: its centre (the middle of the line's box) and the distance to its furthest point. */
+interface Ball { centre: Vec3; radius: number }
+/** Each drawn centre line's ball, made the first time a ray is tested against it (a drawn path never changes). */
+const balls = new WeakMap<readonly Vec3[], Ball>();
+
+function ballOf(path: readonly Vec3[]): Ball {
+  const known = balls.get(path);
+  if (known !== undefined) return known;
+  const centre = [0, 1, 2].map((k) => (Math.min(...path.map((p) => p[k]!)) + Math.max(...path.map((p) => p[k]!))) / 2) as Vec3;
+  const ball = { centre, radius: Math.max(...path.map((p) => Math.hypot(...sub(p, centre)))) };
+  balls.set(path, ball);
+  return ball;
+}
+
 /**
  * The link a ray (from `start` along the unit `dir`, scene coordinates) passes: among those `shown` lets through whose
- * centre line comes within LINK_RADIUS plus `within(t)` of it, t being how far along the ray, the one it passes first;
- * that link's index and t, else null.
+ * centre line comes within LINK_RADIUS plus `within(t)` of it, t being how far along the ray, one the ray meets (within
+ * LINK_RADIUS: the pointer is on it), the nearest along the ray first; else the one it passes closest to, as a share of
+ * the allowance there, so of links side by side the one the pointer is nearest wins over one nearer the camera; never
+ * where the ray is further on than `limit` (behind the first solid block). That link's index and t, else null. A link
+ * whose ball the ray misses by more than that is never looked at piece by piece, so a pick stays quick among
+ * thousands; `within` must not shrink as t grows.
  */
 export function pickLink(links: readonly DrawnLink[], start: Vec3, dir: Vec3, within: (t: number) => number,
-  shown: (link: DrawnLink) => boolean = () => true): { link: number; t: number } | null {
-  let best: { link: number; t: number } | null = null;
+  shown: (link: DrawnLink) => boolean = () => true, limit = Infinity): { link: number; t: number } | null {
+  let best: { link: number; t: number; miss: number } | null = null;
   for (const [k, link] of links.entries()) {
     if (!shown(link)) continue;
+    const { centre, radius } = ballOf(link.path);
+    const toCentre = sub(centre, start);
+    const tc = dot(toCentre, dir);
+    const far = Math.max(0, tc + radius);   // no point of the ball is further along the ray than this
+    if (tc + radius < 0 || Math.hypot(...along(toCentre, dir, -tc)) > radius + LINK_RADIUS + within(far)) continue;
     for (let i = 0; i + 1 < link.path.length; i++) {
       const hit = raySegment(start, dir, link.path[i]!, link.path[i + 1]!);
-      if (hit.distance <= LINK_RADIUS + within(hit.t) && (best === null || hit.t < best.t)) best = { link: k, t: hit.t };
+      const allowance = within(hit.t);
+      if (hit.t > limit || hit.distance > LINK_RADIUS + allowance) continue;
+      const miss = hit.distance <= LINK_RADIUS ? 0 : (hit.distance - LINK_RADIUS) / allowance;
+      if (best === null || miss < best.miss || (miss === best.miss && hit.t < best.t)) best = { link: k, t: hit.t, miss };
     }
   }
-  return best;
+  return best === null ? null : { link: best.link, t: best.t };
+}
+
+/** What the note under the view says of the drawn links. */
+export interface LinksSummary {
+  /** The pieces drawn, and how many links of the Connections graph they are pieces of. */
+  pieces: number; links: number;
+  /** Each link of the graph that has no piece anywhere in the line, in graph order: `[<label>: ]<from box> → <to box>`. */
+  unplaced: string[];
+}
+
+/**
+ * How many pieces of how many links `drawn` shows, and each link of `g` that `all` (every piece of every link, before
+ * any is hidden) has no piece for — one whose two ends are one spot (an AE2 hookup joining the base's network where that
+ * comes in), or one with an end that stands for nothing laid — a flow by its label, every one by its two boxes; a
+ * hookup's own is left out while hookups are hidden, as it would be anyway.
+ */
+export function linksSummary(g: ConnGraph, all: readonly ConnSpan[], drawn: readonly DrawnLink[], hookups: boolean): LinksSummary {
+  const placed = new Set(all.map((s) => s.edge));
+  const title = new Map(g.nodes.map((n) => [n.id, n.title]));
+  const unplaced = g.edges.filter((e) => !placed.has(e.id) && (hookups || e.via !== 'hookup'))
+    .map((e) => `${e.key === null ? '' : `${e.label}: `}${title.get(e.from) ?? e.from} → ${title.get(e.to) ?? e.to}`);
+  return { pieces: drawn.length, links: new Set(drawn.map((l) => l.span.edge)).size, unplaced };
 }
 
 /**

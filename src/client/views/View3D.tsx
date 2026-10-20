@@ -14,7 +14,7 @@ import type { Layout } from '../../shared/types/layout.ts';
 import { messageOf } from '../api/client.ts';
 import { connectionSpans, connectionsGraph, hasLine, pickDetails, spanDetails } from '../connections/model.ts';
 import { useLayout } from '../state/use-layout.ts';
-import { linkGeometry, spansShown, type LinkGeometry } from '../three/link-geometry.ts';
+import { linkGeometry, linksSummary, spansShown, type LinkGeometry, type LinksSummary } from '../three/link-geometry.ts';
 import { loadSceneInputs, realTextureDeps, tilesFor } from '../three/load-textures.ts';
 import { createViewer, type Viewer } from '../three/renderer.ts';
 import { blockList, buildScene, hoverText, pickInfo } from '../three/scene-data.ts';
@@ -242,13 +242,25 @@ export function View3DShell(props: View3DShellProps): ReactElement {
   );
 }
 
-/** What the drawn links are, under the view: how many, what their colours and arrows say, and what hovering and clicking do. */
-export function linksNoteText(count: number | null): string {
-  if (count === null) return 'Nothing to connect yet: the plan has no line to lay out';
-  if (count === 0) return 'No connections to draw';
-  return `${fmtInt(count)} connection${count === 1 ? '' : 's'} drawn, each from the face that gives to the face that takes, the arrow `
-    + 'pointing the way, in its EnderIO channel\'s colour or else the colour of what carries it, as on the Connections tab. Hover one for '
-    + 'what it carries; click it to mark its two faces.';
+/** How many of the links the note names one by one before it counts the rest. */
+const UNPLACED_NAMED = 3;
+
+/**
+ * What the drawn links are, under the view: how many links, and in how many pieces when that is more (a flow drawn from
+ * each face that gives to each that takes), what their colours and arrows say and what hovering and clicking do; then
+ * the links of the Connections tab it has nowhere in the line to draw, the first few by name.
+ */
+export function linksNoteText(drawn: LinksSummary | null): string {
+  if (drawn === null) return 'Nothing to connect yet: the plan has no line to lay out';
+  const { pieces, links, unplaced } = drawn;
+  const what = `${pieces === links ? '' : `${fmtInt(pieces)} pieces of `}${fmtInt(links)} connection${links === 1 ? '' : 's'}`;
+  const told = links === 0 ? 'No connections to draw'
+    : `${what} drawn, each from the face that gives to the face that takes, the arrow pointing the way, in its EnderIO channel's `
+      + 'colour or else the colour of what carries it, as on the Connections tab. Hover one for what it carries; click it to mark its two faces.';
+  if (unplaced.length === 0) return told;
+  const more = unplaced.length - UNPLACED_NAMED;
+  const names = [...unplaced.slice(0, UNPLACED_NAMED), ...(more > 0 ? [`and ${fmtInt(more)} more`] : [])].join('; ');
+  return `${told}${links === 0 ? '.' : ''} Not drawn, with nowhere in the line to draw ${unplaced.length === 1 ? 'it' : 'them'}: ${names}.`;
 }
 
 /** Whether the end-to-end test asked for a canvas it can read back; false when storage is refused. */
@@ -265,7 +277,8 @@ function preserveDrawingBuffer(): boolean {
  * made on the canvas, then kept in step with the slider, the toggles and the canvas's size. A new layout disposes the
  * previous viewer first, and clears the hover label and the details, which named its blocks. While Show connections is
  * on, the Connections tab's graph of the layout (rates per hour in Make N mode, else per the settings' unit) gives the
- * links the viewer draws, a hookup's left out while hookups are hidden; new links let a picked one go.
+ * links the viewer draws, a hookup's left out while hookups are hidden, and the note under the view (`linksSummary`);
+ * new links let a picked one go.
  */
 export default function View3D(props: ProjectViewProps): ReactElement {
   const { project, plan } = props;
@@ -291,11 +304,13 @@ export default function View3D(props: ProjectViewProps): ReactElement {
     () => (showLinks && plan !== null && layout !== null && hasLine(plan, layout) ? connectionsGraph(layout, plan, per) : null),
     [showLinks, plan, layout, per],
   );
-  const links = useMemo((): LinkGeometry | null => {
+  const drawnLinks = useMemo((): { geometry: LinkGeometry; summary: LinksSummary } | null => {
     if (graph === null || layout === null) return null;
-    const spans = spansShown(connectionSpans(layout, graph), graph, layout, show.hookups);
-    return linkGeometry(spans, new Map(graph.edges.map((e) => [e.id, e])), layout.origin);
+    const all = connectionSpans(layout, graph);
+    const geometry = linkGeometry(spansShown(all, graph, layout, show.hookups), new Map(graph.edges.map((e) => [e.id, e])), layout.origin);
+    return { geometry, summary: linksSummary(graph, all, geometry.links, show.hookups) };
   }, [graph, layout, show.hookups]);
+  const links = drawnLinks?.geometry ?? null;
   const latest = useRef<{ shownLayer: number | null; show: Show; links: LinkGeometry | null }>({ shownLayer, show, links });
 
   useEffect(() => {
@@ -404,7 +419,7 @@ export default function View3D(props: ProjectViewProps): ReactElement {
       noSteps={plan !== null && plan.steps.length === 0}
       showLinks={showLinks}
       onShowLinks={onShowLinks}
-      linksNote={showLinks ? linksNoteText(links === null ? null : links.links.length) : null}
+      linksNote={showLinks ? linksNoteText(drawnLinks === null ? null : drawnLinks.summary) : null}
     />
   );
 }

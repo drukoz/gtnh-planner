@@ -17,7 +17,7 @@ import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import { configTexts, conduitFaceText, coverText, faceName } from '../../shared/layout/configure-text.ts';
 import { CONDUIT_MODE_NAMES, CONDUIT_NAMES, DYE_NAMES, hookupNetworkKind } from '../../shared/layout/enderio.ts';
 import { fmtInt, fmtRate, joinNames, NETWORK_NAMES } from '../../shared/layout/format.ts';
-import { OPPOSITE, posKey, sideToward, step, type Vec3 } from '../../shared/layout/geometry.ts';
+import { DIRS, OPPOSITE, posKey, sideToward, step, type Vec3 } from '../../shared/layout/geometry.ts';
 import { FACES, type Face } from '../../shared/types/assets.ts';
 import type {
   BlockRole, ConduitFace, ConduitFilter, ConduitKind, ConduitMode, CoverSpec, DyeColor, Layout, LayoutBlock, TailChest,
@@ -515,17 +515,24 @@ export function pickDetails(g: ConnGraph, pick: ConnPick): { title: string; line
  * One end of a link in the world, for the 3D view's Show connections (the user's requirements of 2026-10-19, item 3
  * (b)): the centre of face `side` (ForgeDirection) of the block cell `cell` (world coordinates), and the id of the face
  * row it stands for when it is one. A conduit face's end is on the face of what the conduit face points at, toward the
- * conduit (an open fluid end's on the cell where your tank goes); any other end is the top of a block that stands for
- * its box.
+ * conduit (an open fluid end's on the cell where your tank goes); any other end is on a face of a block that stands for
+ * its box, one that nothing covers when it has one (`connectionSpans`).
  */
 export interface ConnSpot { cell: Vec3; side: number; face: string | null }
 /** One piece of a link in the world, from one end to the other. */
 export interface ConnSpan { edge: string; from: ConnSpot; to: ConnSpot }
 
-/** A block's top face, where a link that stands for a whole box starts or ends. */
-const TOP = 1;
-/** At most this many pieces join one set of ends to another (16 × 16), so a line of big steps stays light to draw. */
-const SPANS_PER_LINK = 256;
+/** A block's bottom face, and its top: the first face a link that stands for a whole box tries to start or end on. */
+const BOTTOM = 0, TOP = 1;
+/** The build step that lays a fluid's GT pipe run (`layout:logistics:fluid:<key>`, server layout steps), which every pipe of the run names. */
+const FLUID_PIPE_STEP = 'layout:logistics:fluid:';
+/** The roles the 3D view draws as a core with arms (a cable, a pipe or conduit, a chip pipe) rather than a whole block. */
+const THIN_ROLES: ReadonlySet<BlockRole> = new Set<BlockRole>(['cable', 'pipe', 'chip_pipe']);
+/**
+ * At most this many pieces join one set of ends to another (4 × 8), so a line of big steps stays readable and light to
+ * draw and to pick from: past it, a link is as many pieces as its bigger box has ends.
+ */
+const SPANS_PER_LINK = 32;
 
 /**
  * Each of `a` with each of `b`; past SPANS_PER_LINK pairs, the two in turn instead (the k-th of each, round), as many
@@ -545,11 +552,14 @@ function pairUp<A, B>(a: readonly A[], b: readonly B[]): Array<[A, B]> {
  * extraction to each of them. Without such a pair it goes from the link's own faces (`fromFace`, `toFace`), and an end
  * without one is drawn as any other link's. Any other link joins the blocks that stand for its boxes, each with each: a
  * step's machines (a multiblock by its controller), a chest, an interface, a hookup by the block at the end of its path,
- * and the raw inputs and final outputs by the end of the line's logistics hookup, where the base's network comes in (no
+ * a fluid on GT pipes that enters or leaves the line by the free end of its pipe run (where your tank goes), and the
+ * other raw inputs and final outputs by the end of the line's logistics hookup, where the base's network comes in (no
  * piece without one); an interface's link goes to the blocks of what it serves that it touches, and a hookup's to the
- * blocks of the box it joins that its end touches, when there are any. Where each with each would make more than
- * SPANS_PER_LINK pieces (two big steps), the ends are joined in turn instead, each at least once (`pairUp`). Each piece
- * once; a piece whose two ends are one spot is left out.
+ * blocks of the box it joins that its end touches, when there are any. Each of those ends is on the face of its block
+ * that nothing covers, the top first, else the side most toward the other end (`placed`; a multiblock's on its own
+ * outside). Where each with each would make more than SPANS_PER_LINK pieces (two big steps), the ends are joined in
+ * turn instead, each at least once (`pairUp`). Each piece once; a piece whose two ends are one spot is left out (an
+ * AE2 hookup's link to the base's network, which comes in at the hookup's end).
  */
 export function connectionSpans(layout: Layout, g: ConnGraph): ConnSpan[] {
   const blocks = layout.blocks;
@@ -580,20 +590,132 @@ export function connectionSpans(layout: Layout, g: ConnGraph): ConnSpan[] {
     return i !== undefined && blocks[i]!.hookup === n ? [i] : [];
   };
   const logistics = layout.hookups.findIndex((h) => h.kind === 'logistics');
-  const standFor = (node: ConnNode): number[] => {
+  /**
+   * The free end of fluid `key`'s GT pipe run, where the fluid enters or leaves the line (your tank goes there): the
+   * pipe of the run whose links, one at most, all go to pipes of the run (every other one links into its machine or
+   * hatch, or to two of the run); none when the run has no such pipe.
+   */
+  const fluidEnds = new Map<StuffKey, number[]>();
+  const fluidEnd = (key: StuffKey): number[] => {
+    const known = fluidEnds.get(key);
+    if (known !== undefined) return known;
+    const run = blocks.flatMap((b, i) => (b.role === 'pipe' && b.buildStep === `${FLUID_PIPE_STEP}${key}` ? [i] : []));
+    const cells = new Set(run.map((i) => posKey(blocks[i]!.pos)));
+    const end = run.find((i) => {
+      const linked = FACES.flatMap((_, side) => (((blocks[i]!.connections ?? 0) & (1 << side)) === 0 ? [] : [side]));
+      return linked.length <= 1 && linked.every((side) => cells.has(posKey(step(blocks[i]!.pos, side))));
+    });
+    const found = end === undefined ? [] : [end];
+    fluidEnds.set(key, found);
+    return found;
+  };
+  const standFor = (node: ConnNode, e: ConnEdge): number[] => {
     if (node.kind === 'machine') {
       const machines = node.blocks.filter((i) => blocks[i]!.role === 'machine');
       return machines.length > 0 ? machines : node.blocks.slice(0, 1);
     }
     if (node.kind === 'hookup') return hookupEnd(Number(node.id.slice('hookup:'.length)));
-    if (node.kind === 'source' || node.kind === 'sink') return logistics === -1 ? [] : hookupEnd(logistics);
+    if (node.kind === 'source' || node.kind === 'sink') {
+      const pipeEnd = e.via === 'fluid_pipe' && e.key !== null ? fluidEnd(e.key) : [];
+      return pipeEnd.length > 0 || logistics === -1 ? pipeEnd : hookupEnd(logistics);
+    }
     return node.blocks;
   };
   const touching = (from: readonly number[], node: ConnNode): number[] =>
     node.blocks.filter((i) => from.some((j) => sideToward(blocks[j]!.pos, blocks[i]!.pos) !== -1));
-  const ownEnds = (face: string | null, node: ConnNode): ConnSpot[] => {
+  /** An end: a conduit face's spot, or a block that stands for its box, whose face `placed` picks once the other end is known. */
+  type End = ConnSpot | number;
+  const ownEnds = (face: string | null, node: ConnNode, e: ConnEdge): End[] => {
     const ref = face === null ? undefined : refOf.get(face);
-    return face !== null && ref !== undefined ? [faceSpot(face, ref)] : standFor(node).map(top);
+    return face !== null && ref !== undefined ? [faceSpot(face, ref)] : standFor(node, e);
+  };
+  const cellOf = (end: End): Vec3 => (typeof end === 'number' ? blocks[end]!.pos : end.cell);
+  /**
+   * How face `side` of the cell `pos` shows: 0, open, when no block of the line stands against it (a ghost lets it
+   * show); 1 on one of the four sides when only a cable, pipe or chip pipe passes beside it without linking to it (an
+   * arc rises steeply off a side, clear of its core); else 2, hidden (anything on a top hides it, as an arc rises
+   * straight up through that).
+   */
+  const shows = (pos: Vec3, side: number): number => {
+    const i = at.get(posKey(step(pos, side)));
+    if (i === undefined) return 0;
+    const b = blocks[i]!;
+    return side !== TOP && THIN_ROLES.has(b.role) && ((b.connections ?? 0) & (1 << OPPOSITE[side]!)) === 0 ? 1 : 2;
+  };
+  /**
+   * The face of block `i` that shows best (`shows`), where a link to the cell `toward` (its other end) ends: of the
+   * top, then the four sides, the one most toward `toward` first (in side order among equals), the first that shows
+   * best; never the bottom, out of which an arc would rise back through its block; and only one whose neighbour cell
+   * `open` lets it face. None when every one is hidden.
+   */
+  const bestSide = (i: number, toward: Vec3, open: (cell: Vec3) => boolean = () => true): number | undefined => {
+    const p = blocks[i]!.pos;
+    const d: Vec3 = [toward[0] - p[0], toward[1] - p[1], toward[2] - p[2]];
+    const along = (side: number): number => DIRS[side]![0] * d[0] + DIRS[side]![1] * d[1] + DIRS[side]![2] * d[2];
+    let best: { side: number; rank: number } | undefined;
+    for (const side of [TOP, ...[2, 3, 4, 5].sort((a, b) => along(b) - along(a) || a - b)]) {
+      const rank = open(step(p, side)) ? shows(p, side) : 2;
+      if (rank < 2 && (best === undefined || rank < best.rank)) best = { side, rank };
+    }
+    return best?.side;
+  };
+  /** Block `i`'s spot on face `side`, or none. */
+  const on = (i: number, side: number | undefined): ConnSpot | undefined => (side === undefined ? undefined : { cell: [...blocks[i]!.pos], side, face: null });
+  /** A multiblock's structure that block `i` is part of: the blocks of `among` joined to it face to face, and the box round them. */
+  const structures = new Map<number, { blocks: number[]; outside: (cell: Vec3) => boolean }>();
+  const structureOf = (i: number, among: readonly number[]): { blocks: number[]; outside: (cell: Vec3) => boolean } => {
+    const known = structures.get(i);
+    if (known !== undefined) return known;
+    const cells = new Map(among.map((j) => [posKey(blocks[j]!.pos), j]));
+    const joined = new Set([i]);
+    for (const todo = [i]; todo.length > 0;) {
+      const j = todo.pop()!;
+      for (let side = 0; side < 6; side++) {
+        const k = cells.get(posKey(step(blocks[j]!.pos, side)));
+        if (k !== undefined && !joined.has(k)) {
+          joined.add(k);
+          todo.push(k);
+        }
+      }
+    }
+    const own = among.filter((j) => joined.has(j));
+    const low = [0, 1, 2].map((k) => Math.min(...own.map((j) => blocks[j]!.pos[k]!)));
+    const high = [0, 1, 2].map((k) => Math.max(...own.map((j) => blocks[j]!.pos[k]!)));
+    const found = { blocks: own, outside: (c: Vec3): boolean => c.some((v, k) => v < low[k]! || v > high[k]!) };
+    for (const j of own) structures.set(j, found);
+    return found;
+  };
+  /**
+   * Where block `i` of box `node` ends link `e`, whose other end is at `toward`: on its face that shows best
+   * (`bestSide`). A multiblock (a machine box with casings or hatches) ends on its own structure, only on a face that
+   * looks out of the box round it (never into its hollow): a fluid on GT pipes on the hatch it goes through (under a
+   * pipe of the fluid's run that links down into it, the nearest to `i` first), else on block `i`, else on the open top
+   * of its highest block nearest to `i` (its top layer). With nothing showing, the top of block `i`.
+   */
+  const placed = (i: number, node: ConnNode, e: ConnEdge, toward: Vec3): ConnSpot => {
+    if (node.kind !== 'machine' || node.blocks.every((j) => blocks[j]!.role === 'machine')) return on(i, bestSide(i, toward)) ?? top(i);
+    const p = blocks[i]!.pos;
+    const { blocks: own, outside } = structureOf(i, node.blocks);
+    const level = (j: number): number => Math.hypot(blocks[j]!.pos[0] - p[0], blocks[j]!.pos[2] - p[2]);
+    const nearest = (a: number, b: number): number => level(a) - level(b) || Math.abs(blocks[a]!.pos[1] - p[1]) - Math.abs(blocks[b]!.pos[1] - p[1]) || a - b;
+    if (e.via === 'fluid_pipe' && e.key !== null) {
+      const run = `${FLUID_PIPE_STEP}${e.key}`;
+      const hatches = own.filter((j) => {
+        const above = at.get(posKey(step(blocks[j]!.pos, TOP)));
+        const pipe = above === undefined ? undefined : blocks[above]!;
+        return blocks[j]!.role === 'hatch' && pipe?.role === 'pipe' && pipe.buildStep === run && ((pipe.connections ?? 0) & (1 << BOTTOM)) !== 0;
+      }).sort(nearest);
+      for (const h of hatches) {
+        const spot = on(h, bestSide(h, toward, outside));
+        if (spot !== undefined) return spot;
+      }
+    }
+    const spot = on(i, bestSide(i, toward, outside));
+    if (spot !== undefined) return spot;
+    const tops = own.filter((j) => outside(step(blocks[j]!.pos, TOP)) && shows(blocks[j]!.pos, TOP) === 0);
+    const highest = Math.max(...tops.map((j) => blocks[j]!.pos[1]));
+    const roof = tops.filter((j) => blocks[j]!.pos[1] === highest).sort(nearest)[0];
+    return roof === undefined ? top(i) : top(roof);
   };
 
   const spans: ConnSpan[] = [];
@@ -623,13 +745,14 @@ export function connectionSpans(layout: Layout, g: ConnGraph): ConnSpan[] {
       }
       if (spans.length > before) continue;
     }
-    const starts = ownEnds(e.fromFace, from);
-    let ends = ownEnds(e.toFace, to);
+    const starts = ownEnds(e.fromFace, from, e);
+    let ends = ownEnds(e.toFace, to, e);
     if (e.via === 'attached' || e.via === 'hookup') {
-      const near = touching(e.via === 'attached' ? from.blocks : standFor(from), to);
-      if (near.length > 0) ends = near.map(top);
+      const near = touching(e.via === 'attached' ? from.blocks : standFor(from, e), to);
+      if (near.length > 0) ends = near;
     }
-    for (const [a, b] of pairUp(starts, ends)) push(e.id, a, b);
+    const spot = (end: End, node: ConnNode, other: End): ConnSpot => (typeof end === 'number' ? placed(end, node, e, cellOf(other)) : end);
+    for (const [a, b] of pairUp(starts, ends)) push(e.id, spot(a, from, b), spot(b, to, a));
   }
   return spans;
 }
