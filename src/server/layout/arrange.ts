@@ -745,9 +745,10 @@ function plainShape(pack: Pack, m: Machine, s: PlanStep, warnings: PlanWarning[]
 /**
  * One unit per machine still to build (`count − owned`) of every step that is not hand-crafted and runs on a real
  * machine, sorted by (depth, step id, index). Machines missing from the pack are left out with a warning. With
- * `primitive` (the default), a steam singleblock vents (`vent`: `steam_machine` says where its steam goes, `steam_fluids` that its
- * top takes no pipe) and a Bricked Blast Furnace or a Coke Oven is run by hand (`manual`, with `manual_machine`): GT's
- * steam machines take no EU (`MTEBasicMachineBronze.isElectric` is false) and the furnace and the oven draw none.
+ * `primitive` (the default), a steam singleblock vents (`vent`: `steam_machine` says where its steam goes,
+ * `steam_fluids` that its top takes no pipe) and a Bricked Blast Furnace or a Coke Oven is run by hand (`manual`, with
+ * `manual_machine`): GT's steam machines take no EU (`MTEBasicMachineBronze.isElectric` is false) and the furnace and
+ * the oven draw none.
  */
 export function unitsFromPlan(pack: Pack, plan: Plan, opts: UnitOptions = {}): { units: Unit[]; warnings: PlanWarning[] } {
   const depths = stepDepths(plan);
@@ -755,6 +756,7 @@ export function unitsFromPlan(pack: Pack, plan: Plan, opts: UnitOptions = {}): {
   const units: Unit[] = [];
   const warnings: PlanWarning[] = [];
   const nameOf = (k: StuffKey): string => plan.names?.[k] ?? pack.nameOf(k);
+  const primitive = opts.primitive !== false;
   for (const s of steps) {
     const count = s.count - s.owned;
     if (s.handCraft || s.machine.mteId < 0 || count <= 0) continue;
@@ -763,7 +765,6 @@ export function unitsFromPlan(pack: Pack, plan: Plan, opts: UnitOptions = {}): {
       warnings.push({ code: 'unknown_machine', stepId: s.id, text: `${s.machine.name} (#${s.machine.mteId}) is not in this recipe export` });
       continue;
     }
-    const primitive = opts.primitive !== false;
     const manual = primitive ? manualReasonOf(m) : null;
     const vent = primitive && m.kind === 'steam';
     const stepped = stepIo(s);
