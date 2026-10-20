@@ -3,8 +3,9 @@
 // line as a box whose rows are its faces with their exact configuration (the covers on it and its own settings, the
 // covers of pipes and the conduit faces that point at it), and the plan's flows as links between the boxes, each saying
 // what carries it (the shared GT item pipe, a GT fluid pipe, the routed network, the ME network, an item or ender fluid
-// conduit on its channel colour) and through which faces, each conduit face's row naming its mode and the channel of
-// each of its sides; then each interface attached to what it serves and each
+// conduit on its channel colour, or your hands for a machine the layout leaves to them, as its layout:hand:* build
+// steps say) and through which faces, each conduit face's row naming its mode and the channel of each of its sides;
+// then each interface attached to what it serves and each
 // logistics hookup joining the line. Also the ELK graph that lays the boxes out (inputs on the left, outputs on the
 // right), the picture read back from ELK, and what a picked box, face or link tells; and where each link starts and
 // ends in the world, which the 3D view's Show connections draws (the user's requirements of 2026-10-19, item 3 (b)).
@@ -48,7 +49,11 @@ export interface ConnNode {
 }
 
 /** What carries a link: a flow's network, an interface on what it serves, or a hookup joining the line. */
-export type ConnVia = 'gt_pipe' | 'fluid_pipe' | 'routed' | 'ae2' | 'item_conduit' | 'fluid_conduit' | 'attached' | 'hookup';
+/**
+ * What carries a link: a flow's network, your hands (`hand`: a flow into or out of a machine the line runs by hand, as
+ * its layout:hand:* build steps say), an interface on what it serves, or a hookup joining the line.
+ */
+export type ConnVia = 'gt_pipe' | 'fluid_pipe' | 'routed' | 'ae2' | 'item_conduit' | 'fluid_conduit' | 'hand' | 'attached' | 'hookup';
 
 /**
  * A link between two boxes. A flow carries `key` at `perSecond` and, on conduits, leaves and enters through the faces
@@ -106,8 +111,25 @@ type FlowVia = Exclude<ConnVia, 'attached' | 'hookup'>;
 const ITEM_VIA: Readonly<Record<LogisticsMode, FlowVia>> = { direct: 'gt_pipe', routed: 'routed', ae2: 'ae2', enderio: 'item_conduit' };
 const VIA_TEXT: Readonly<Record<FlowVia, string>> = {
   gt_pipe: 'Shared GT item pipe', fluid_pipe: 'GT fluid pipe', routed: 'Project Red routed network', ae2: 'ME network',
-  item_conduit: 'Item Conduit', fluid_conduit: 'Ender fluid conduit',
+  item_conduit: 'Item Conduit', fluid_conduit: 'Ender fluid conduit', hand: 'By hand',
 };
+
+/** The id of a build step the layout leaves to your hands (server modes/by-hand.ts): `layout:hand:<plan step>:<fill|empty>`. */
+const HAND_STEP = /^layout:hand:(.+):(fill|empty)$/;
+
+/**
+ * The plan steps the layout leaves to your hands, by its build steps (`HAND_STEP`), each with that step's text: those
+ * you fill by hand (a Bricked Blast Furnace or a Coke Oven the line runs by hand) and those you empty by hand (those,
+ * and in AE2 mode a steam machine nothing takes its output back from).
+ */
+function handSteps(layout: Layout): { fill: Map<string, string>; empty: Map<string, string> } {
+  const fill = new Map<string, string>(), empty = new Map<string, string>();
+  for (const s of layout.buildSteps) {
+    const m = HAND_STEP.exec(s.id);
+    if (m !== null) (m[2] === 'fill' ? fill : empty).set(m[1]!, s.text);
+  }
+  return { fill, empty };
+}
 
 /** A tier's name; a tier outside 0..14 shows as its number instead of breaking the view (as the flow diagram does). */
 function tierText(t: number): string {
@@ -296,10 +318,20 @@ function flowLinks(plan: Plan, placed: ReadonlySet<string>, tails: ReadonlyMap<s
 /**
  * A flow's link: over the mode's network; through the first conduit face of its source box whose extract side passes
  * the key and the first of its target box whose insert side does, on the extract side's colour (else the insert
- * side's); labelled with the good, its rate and the channel, and told in full: the network, each end and its face.
+ * side's); labelled with the good, its rate and the channel, and told in full: the network, each end and its face. A
+ * flow `hand` covers (the texts of the hand steps that fill its target or empty its source) is carried by hand
+ * instead: no face, no channel, "by hand" in its label, and those steps' words after its ends.
  */
 function flowEdge(link: FlowLink, ends: { from: ConnNode; to: ConnNode }, conduitOf: ReadonlyMap<string, ConduitFace>, mode: LogisticsMode,
-  per: 'min' | 'hour', nameOf: (k: StuffKey) => string): ConnEdge {
+  per: 'min' | 'hour', nameOf: (k: StuffKey) => string, hand: readonly string[]): ConnEdge {
+  const rate = `${nameOf(link.key)} ${fmtRate(link.perSecond * (per === 'min' ? 60 : 3600))}/${per === 'min' ? 'min' : 'h'}`;
+  if (hand.length > 0) {
+    return {
+      id: link.id, from: link.from, to: link.to, via: 'hand', key: link.key, perSecond: link.perSecond, label: `${rate} · by hand`,
+      lines: [VIA_TEXT.hand, ...endLines('From', ends.from, undefined), ...endLines('To', ends.to, undefined), ...hand],
+      color: null, fromFace: null, toFace: null,
+    };
+  }
   const via: FlowVia = isFluidKey(link.key) ? (mode === 'enderio' ? 'fluid_conduit' : 'fluid_pipe') : ITEM_VIA[mode];
   const through = (node: ConnNode, side: 'extract' | 'insert'): ConnFace | undefined => node.faces.find((f) => {
     const s = conduitOf.get(f.id)?.[side];
@@ -311,7 +343,7 @@ function flowEdge(link: FlowLink, ends: { from: ConnNode; to: ConnNode }, condui
   const channel = color === null ? '' : DYE_NAMES[color];
   return {
     id: link.id, from: link.from, to: link.to, via, key: link.key, perSecond: link.perSecond,
-    label: `${nameOf(link.key)} ${fmtRate(link.perSecond * (per === 'min' ? 60 : 3600))}/${per === 'min' ? 'min' : 'h'}${channel === '' ? '' : ` · ${channel}`}`,
+    label: `${rate}${channel === '' ? '' : ` · ${channel}`}`,
     lines: [`${VIA_TEXT[via]}${channel === '' ? '' : `, channel ${channel}`}`, ...endLines('From', ends.from, fromFace), ...endLines('To', ends.to, toFace)],
     color, fromFace: fromFace?.id ?? null, toFace: toFace?.id ?? null,
   };
@@ -419,7 +451,14 @@ export function connectionsGraph(layout: Layout, plan: Plan, per: 'min' | 'hour'
   }
 
   const byId = new Map(nodes.map((n) => [n.id, n]));
-  const flows = links.map((l) => flowEdge(l, { from: byId.get(l.from)!, to: byId.get(l.to)! }, conduitOf, layout.mode, per, nameOf));
+  // a flow into a step you fill by hand, or out of one you empty by hand, is carried by hand (its hand steps say how)
+  const hands = handSteps(layout);
+  const stepOf = (box: string): string | null => (box.startsWith('step:') ? box.slice('step:'.length) : null);
+  const handOf = (l: FlowLink): string[] => {
+    const into = stepOf(l.to), out = stepOf(l.from);
+    return [into === null ? undefined : hands.fill.get(into), out === null ? undefined : hands.empty.get(out)].filter(defined);
+  };
+  const flows = links.map((l) => flowEdge(l, { from: byId.get(l.from)!, to: byId.get(l.to)! }, conduitOf, layout.mode, per, nameOf, handOf(l)));
   return { nodes, edges: [...flows, ...attachedEdges(nodes, grid), ...hookupEdges(layout, nodes, grid)] };
 }
 
@@ -666,6 +705,8 @@ export function connectionPieces(layout: Layout, g: ConnGraph): ConnPieces {
     }
     if (node.kind === 'hookup') return hookupEnd(Number(node.id.slice('hookup:'.length)));
     if (node.kind === 'source' || node.kind === 'sink') {
+      // what you carry by hand from or to your storage starts or ends nowhere in the line
+      if (e.via === 'hand') return [];
       const pipeEnd = e.via === 'fluid_pipe' && e.key !== null ? fluidEnd(e.key) : [];
       return pipeEnd.length > 0 || logistics === -1 ? pipeEnd : hookupEnd(logistics);
     }

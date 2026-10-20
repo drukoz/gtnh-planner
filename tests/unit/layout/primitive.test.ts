@@ -6,6 +6,7 @@
 // touching them. Machine-to-machine mode is add-on 15's and keeps its layout.
 
 import { describe, it, expect } from 'vitest';
+import { connectionSpans, connectionsGraph } from '../../../src/client/connections/model.ts';
 import { placeUnits, unitsFromPlan } from '../../../src/server/layout/arrange.ts';
 import { layoutLine } from '../../../src/server/layout/layout.ts';
 import { projectorPayload } from '../../../src/server/projector/payload.ts';
@@ -136,6 +137,28 @@ describe.each(MODES)('primitive machines in %s mode', (mode) => {
     }
     const placed = layout.blocks.filter((b) => b.role !== 'ghost');
     expect(new Set(placed.map((b) => key(b.pos))).size).toBe(placed.length);
+  });
+
+  it('shows the flows of the furnace and the oven as carried by hand in the Connections view, as their hand steps say', async () => {
+    const layout = await laid(mode);
+    const g = connectionsGraph(layout, steelLine(), 'min');
+    const flows = g.edges.filter((e) => e.key !== null);
+    const by = (hand: boolean) => flows.filter((e) => (e.via === 'hand') === hand).map((e) => `${e.from} > ${e.to} ${e.key}`);
+    // every flow into a machine with a layout:hand:<step>:fill step and out of one with a :empty step; in AE2 mode the
+    // steam macerator's output too, which its own empty step takes out by hand
+    expect(by(true)).toEqual(['raw > step:k t:coal@0', 'step:k > step:b t:coke@0', 'step:k > out fluid:creosote', 'step:m > step:b t:iron@0',
+      'step:b > step:s t:steel@0', 'step:b > out t:ash@0', ...(mode === 'ae2' ? ['step:s > out t:out_s@0'] : [])]);
+    expect(by(false)).toHaveLength(mode === 'ae2' ? 1 : 2);
+    expect(flows.filter((e) => e.via !== 'hand').every((e) => e.via === { routed: 'routed', ae2: 'ae2', enderio: 'item_conduit' }[mode])).toBe(true);
+    // a hand link names no conduit face or channel, says so, and gives the hand steps' words
+    const iron = flows.find((e) => e.to === 'step:b' && e.key === 't:iron@0')!;
+    // (the fixture's plan names no goods, so the label shows the key)
+    expect([iron.label, iron.color, iron.fromFace, iron.toFace, iron.lines[0]]).toEqual(['t:iron@0 60/min · by hand', null, null, null, 'By hand']);
+    expect(iron.lines.at(-1)).toBe(layout.buildSteps.find((s) => s.id === 'layout:hand:b:fill')!.text);
+    // in the 3D view a hand link from your storage has nothing in the line to start from
+    const spans = connectionSpans(layout, g);
+    expect(spans.some((s) => s.edge === flows.find((e) => e.key === 't:coal@0')!.id)).toBe(false);
+    expect(spans.some((s) => s.edge === iron.id)).toBe(true);
   });
 
   it('fills and empties the furnace and the oven by hand and says why', async () => {

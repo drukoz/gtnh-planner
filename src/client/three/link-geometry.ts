@@ -19,11 +19,12 @@ import type { ConnEdge, ConnGraph, ConnPieces, ConnSpan, ConnSpot, ConnVia } fro
 
 /**
  * The colour of what carries a link that has no channel, as the Connections tab draws it (styles.css `.conn-via-*`,
- * the map's LOGISTICS_COLORS; an interface on what it serves and a hookup in the flow diagram's link grey).
+ * the map's LOGISTICS_COLORS; a flow carried by hand in amber; an interface on what it serves and a hookup in the flow
+ * diagram's link grey).
  */
 export const VIA_RGB: Readonly<Record<ConnVia, Rgb>> = Object.freeze({
   gt_pipe: [156, 204, 101], fluid_pipe: [30, 136, 229], routed: [255, 112, 67], ae2: [126, 87, 194],
-  item_conduit: [38, 198, 218], fluid_conduit: [38, 198, 218], attached: [138, 146, 160], hookup: [138, 146, 160],
+  item_conduit: [38, 198, 218], fluid_conduit: [38, 198, 218], hand: [255, 202, 40], attached: [138, 146, 160], hookup: [138, 146, 160],
 });
 
 /** A link tube's radius (blocks). */
@@ -556,38 +557,44 @@ export function goodRgb(index: number): Rgb {
   return hsl((index * GOOD_HUE_STEP) % 360, GOOD_SATURATION, GOOD_LIGHTNESS[index % 2]!);
 }
 
+/** A link `linkColors` may give its good's own colour: a flow the line's network carries, not one carried by hand. */
+function byGoodColour(e: ConnEdge): boolean {
+  return e.key !== null && e.via !== 'hand';
+}
+
 /**
  * How the links of `g` are coloured: an EnderIO line whose flows all ride one channel (`byGood`, that channel) colours
  * each good its own colour (`goodRgb`, in the order the goods first appear), so its links can be told apart, and the
- * channel stays in what hovering says; any other line, and every link that carries nothing, as `linkColor`.
+ * channel stays in what hovering says; any other line, every link that carries nothing and every flow carried by hand
+ * (which rides no channel), as `linkColor`.
  */
 export function linkColors(g: ConnGraph): { color: (edge: ConnEdge) => Rgb; byGood: DyeColor | null } {
-  const flows = g.edges.filter((e) => e.key !== null);
+  const flows = g.edges.filter(byGoodColour);
   const channels = new Set(flows.map((e) => e.color));
   const only = channels.size === 1 ? [...channels][0]! : null;
   if (only === null || flows.length === 0) return { color: linkColor, byGood: null };
   const goods = new Map<string, number>();
   for (const e of flows) if (!goods.has(e.key!)) goods.set(e.key!, goods.size);
-  return { color: (e) => (e.key === null ? linkColor(e) : goodRgb(goods.get(e.key)!)), byGood: only };
+  return { color: (e) => (byGoodColour(e) ? goodRgb(goods.get(e.key!)!) : linkColor(e)), byGood: only };
 }
 
 /** What carries a link, for the note's colour legend. */
 const VIA_LEGEND: Readonly<Record<ConnVia, string>> = {
   gt_pipe: 'Shared GT item pipe', fluid_pipe: 'GT fluid pipe', routed: 'Routed network', ae2: 'ME network',
-  item_conduit: 'Item Conduit', fluid_conduit: 'Ender fluid conduit', attached: 'Interface or hookup', hookup: 'Interface or hookup',
+  item_conduit: 'Item Conduit', fluid_conduit: 'Ender fluid conduit', hand: 'By hand', attached: 'Interface or hookup', hookup: 'Interface or hookup',
 };
 
 /**
  * The colour legend of the drawn links: each colour once, in the order the links are drawn, with what it means — a
  * channel's name, else what carries the link; while goods have colours of their own (`byGood`), only the colours of
- * links that carry nothing.
+ * links that carry nothing or are carried by hand.
  */
 export function linksLegend(g: ConnGraph, drawn: readonly DrawnLink[], byGood: boolean): Array<{ rgb: Rgb; label: string }> {
   const edges = new Map(g.edges.map((e) => [e.id, e]));
   const legend = new Map<string, { rgb: Rgb; label: string }>();
   for (const l of drawn) {
     const e = edges.get(l.span.edge);
-    if (e === undefined || (byGood && e.key !== null)) continue;
+    if (e === undefined || (byGood && byGoodColour(e))) continue;
     const key = l.color.join();
     if (!legend.has(key)) legend.set(key, { rgb: [...l.color], label: e.color === null ? VIA_LEGEND[e.via] : `${DYE_NAMES[e.color]} channel` });
   }

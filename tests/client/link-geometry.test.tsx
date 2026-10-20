@@ -50,6 +50,31 @@ const bigLine = (steps: number, per: number): { layout: Layout; plan: Plan } => 
   return { layout: { ...connLayout('direct'), size: [steps * per, 1, 2], blocks }, plan };
 };
 
+describe("the 3D view's connections of a machine run by hand", () => {
+  // the line's layout:hand:b:fill step: the Advanced Assembler is filled by hand (server modes/by-hand.ts)
+  const handLine = (mode: LogisticsMode) => {
+    const layout: Layout = { ...connLayout(mode), buildSteps: [{ id: 'layout:hand:b:fill', order: 1, kind: 'logistics',
+      text: 'Fill the Advanced Assembler by hand: 1× Titanium Dust a run (from the output chest)' }] };
+    const g = connectionsGraph(layout, connPlan, 'min');
+    return { layout, g, spans: connectionSpans(layout, g), edges: new Map(g.edges.map((e) => [e.id, e])) };
+  };
+
+  it('draws a flow carried by hand in its own colour and names it so in the legend', () => {
+    for (const mode of ['routed', 'enderio'] as const) {
+      const { layout, g, spans, edges } = handLine(mode);
+      const dust = g.edges.find((e) => e.key === 't:dust@0')!;
+      expect([dust.via, linkColor(dust)], mode).toEqual(['hand', VIA_RGB.hand]);
+      const drawn = linkGeometry(spans, edges, layout.origin).links;
+      expect(linksLegend(g, drawn, false).find((r) => r.rgb.join() === VIA_RGB.hand.join())?.label, mode).toBe('By hand');
+    }
+    // an EnderIO line whose other flows ride one channel still colours each of its goods, and the hand link by hand
+    const { g } = handLine('enderio');
+    const { color } = linkColors(g);
+    expect(color(g.edges.find((e) => e.key === 't:dust@0')!)).toEqual(VIA_RGB.hand);
+    expect(VIA_RGB.hand).not.toEqual(VIA_RGB.routed);
+  });
+});
+
 describe("the 3D view's connections", () => {
   it('puts every piece of every link of a line in one geometry', () => {
     const { layout, spans, edges } = line('enderio');

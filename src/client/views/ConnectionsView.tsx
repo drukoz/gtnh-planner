@@ -44,7 +44,7 @@ const drawFailed = (error: string): string => `Could not lay out the connections
 const LEGEND: ReadonlyArray<readonly [Exclude<ConnVia, 'attached'>, string]> = [
   ['gt_pipe', 'Shared GT item pipe'], ['fluid_pipe', 'GT fluid pipe'], ['routed', 'Project Red routed network'], ['ae2', 'ME network'],
   ['item_conduit', 'Item Conduit (line colour = channel)'], ['fluid_conduit', 'Ender fluid conduit (line colour = channel)'],
-  ['hookup', 'Hookup to the base'],
+  ['hand', 'By hand (a machine the line runs by hand)'], ['hookup', 'Hookup to the base'],
 ];
 
 /** Box text: its inset from the left, the title's baseline, and a line's or face row's baseline below the top of its row. */
