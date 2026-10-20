@@ -17,7 +17,7 @@
 import type { StuffKey } from '../../../../shared/keys.ts';
 import { OPPOSITE } from '../../../../shared/layout/geometry.ts';
 import { FAST_FACTOR, type ScenarioName } from '../contract.ts';
-import type { BasicNode, FeedModel, NodeId } from '../model.ts';
+import type { BasicNode, FeedModel, NodeId, SimRecipe } from '../model.ts';
 import {
   blockingIgnoredKey, gtTransfer, nodeOrder, PHASE, type FluidPools, type FluidWaiter, type KeyTable, type Preloadable, type PushTarget, type Sim,
   type SimEntity, type SimInv, type Stack,
@@ -57,14 +57,41 @@ export function aTick(env: SimEnv, t: number): number {
 /** Results within this of a whole number count as that number: chances summed in floating point (0.1 ten times) stay exact. */
 const EPSILON = 1e-9;
 
-/** A recipe compiled to key ids. */
-interface Compiled {
+/** A recipe compiled to key ids, as the machine models run it (the basic machine here, the multiblock controller in multi.ts). */
+export interface CompiledRecipe {
   stepId: string; ticks: number;
   need: Array<{ key: number; amount: number }>;              // what must be in the input slots to start: consumed amounts plus one per held item, per key
   inputs: Array<{ key: number; amount: number; chance: number }>;
   outputs: Array<{ key: number; amount: number; chance: number }>;
   outputKeys: StuffKey[];
   fluidsIn: Array<{ key: number; amount: number }>; fluidsOut: Array<{ key: number; amount: number }>;
+}
+
+/** Recipe `r` with its keys as `keys` ids; `need` sums each key's consumed amounts and one per held item, in key order. */
+export function compileRecipe(r: SimRecipe, keys: KeyTable): CompiledRecipe {
+  const need = new Map<number, number>();
+  for (const i of r.inputs) need.set(keys.id(i.key), (need.get(keys.id(i.key)) ?? 0) + i.amount);
+  for (const h of r.held) need.set(keys.id(h), (need.get(keys.id(h)) ?? 0) + 1);
+  return {
+    stepId: r.stepId, ticks: Math.max(1, r.ticks),
+    need: [...need].sort((a, b) => a[0] - b[0]).map(([key, amount]) => ({ key, amount })),
+    inputs: r.inputs.map((i) => ({ key: keys.id(i.key), amount: i.amount, chance: i.chance })),
+    outputs: r.outputs.map((o) => ({ key: keys.id(o.key), amount: o.amount, chance: o.chance })),
+    outputKeys: r.outputs.map((o) => o.key),
+    fluidsIn: r.fluidsIn.map((f) => ({ key: keys.id(f.key), amount: f.amount })),
+    fluidsOut: r.fluidsOut.map((f) => ({ key: keys.id(f.key), amount: f.amount })),
+  };
+}
+
+/**
+ * A deterministic accumulator per machine and item (Review Focus 5): adds `x` (an amount times its chance) to `acc`'s total
+ * for `key` and returns `⌊total⌋ − ⌊total before⌋`, so nothing fractional ever enters a slot.
+ */
+export function rollShare(acc: Map<number, number>, key: number, x: number): number {
+  const before = acc.get(key) ?? 0;
+  const total = before + x;
+  acc.set(key, total);
+  return Math.floor(total + EPSILON) - Math.floor(before + EPSILON);
 }
 
 /** GT's basic machine (rules 5–8), an inventory and an entity of the tile phase. */
@@ -87,7 +114,7 @@ export class BasicMachine implements SimInv, SimEntity, Preloadable, FluidWaiter
   private readonly circuits: boolean;
   private readonly gates: ReturnType<typeof coverGates>;
   private readonly covers: CoverTicks;
-  private readonly recipes: Compiled[];
+  private readonly recipes: CompiledRecipe[];
   private readonly rolled: number[];
   private readonly made = new Map<number, number>();         // chanced outputs rolled so far, by key
   private readonly used = new Map<number, number>();         // chanced inputs used up so far, by key
@@ -118,28 +145,12 @@ export class BasicMachine implements SimInv, SimEntity, Preloadable, FluidWaiter
     const covers = node.steam ? [] : env.model.covers.filter((c) => c.host === node.id);
     this.gates = coverGates(covers);
     this.covers = coverTicks(this, covers, env);
-    this.recipes = node.recipes.map((r) => this.compile(r));
+    this.recipes = node.recipes.map((r) => compileRecipe(r, env.keys));
     this.rolled = Array.from({ length: Math.max(0, ...this.recipes.map((r) => r.outputs.length)) }, () => 0);
     env.stats.register(node.id);
     // held items stand in input slots 0, 1, … at tick 0, one each (rule 6)
     const held = [...new Set(node.recipes.flatMap((r) => r.held))].slice(0, this.inSlots);
     held.forEach((key, slot) => this.preload(slot, env.keys.id(key), 1));
-  }
-
-  private compile(r: BasicNode['recipes'][number]): Compiled {
-    const keys = this.env.keys;
-    const need = new Map<number, number>();
-    for (const i of r.inputs) need.set(keys.id(i.key), (need.get(keys.id(i.key)) ?? 0) + i.amount);
-    for (const h of r.held) need.set(keys.id(h), (need.get(keys.id(h)) ?? 0) + 1);
-    return {
-      stepId: r.stepId, ticks: Math.max(1, r.ticks),
-      need: [...need].sort((a, b) => a[0] - b[0]).map(([key, amount]) => ({ key, amount })),
-      inputs: r.inputs.map((i) => ({ key: keys.id(i.key), amount: i.amount, chance: i.chance })),
-      outputs: r.outputs.map((o) => ({ key: keys.id(o.key), amount: o.amount, chance: o.chance })),
-      outputKeys: r.outputs.map((o) => o.key),
-      fluidsIn: r.fluidsIn.map((f) => ({ key: keys.id(f.key), amount: f.amount })),
-      fluidsOut: r.fluidsOut.map((f) => ({ key: keys.id(f.key), amount: f.amount })),
-    };
   }
 
   // ---- The inventory ----
@@ -319,14 +330,14 @@ export class BasicMachine implements SimInv, SimEntity, Preloadable, FluidWaiter
   }
 
   /** Whether recipe `r`'s inputs, held items and fluids are there. */
-  private ready(r: Compiled): boolean {
+  private ready(r: CompiledRecipe): boolean {
     for (const need of r.need) if (this.inputTotal(need.key) < need.amount) return false;
     for (const f of r.fluidsIn) if (!this.env.fluids.has(f.key, f.amount)) return false;
     return true;
   }
 
   /** The item in the first output slot that blocks recipe `r`'s outputs (`canOutput`, E1: chance ignored), or −1. */
-  private blocking(r: Compiled): number {
+  private blocking(r: CompiledRecipe): number {
     for (let i = 0; i < r.outputs.length && i < this.outSlots; i++) {
       const s = this.slots[this.inSlots + i];
       const o = r.outputs[i]!;
@@ -368,7 +379,7 @@ export class BasicMachine implements SimInv, SimEntity, Preloadable, FluidWaiter
   }
 
   /** Recipe `r`'s missing keys, in key order: items short in the input slots (held ones too) and pooled fluids short in their pool. */
-  private missing(r: Compiled): number[] {
+  private missing(r: CompiledRecipe): number[] {
     const out: number[] = [];
     for (const need of r.need) if (this.inputTotal(need.key) < need.amount) out.push(need.key);
     for (const f of r.fluidsIn) if (!this.env.fluids.has(f.key, f.amount) && !out.includes(f.key)) out.push(f.key);
@@ -401,20 +412,12 @@ export class BasicMachine implements SimInv, SimEntity, Preloadable, FluidWaiter
     return false;
   }
 
-  /** `⌊total⌋ − ⌊total before⌋` of an accumulator per machine and item (Review Focus 5). */
-  private roll(acc: Map<number, number>, key: number, x: number): number {
-    const before = acc.get(key) ?? 0;
-    const total = before + x;
-    acc.set(key, total);
-    return Math.floor(total + EPSILON) - Math.floor(before + EPSILON);
-  }
-
   private start(r: number, t: number): void {
     const env = this.env;
     const recipe = this.recipes[r]!;
     // inputs, each from the input slots in slot order, lowest first (GTRecipe.consumeInput)
     for (const input of recipe.inputs) {
-      let n = input.chance >= 1 ? input.amount : this.roll(this.used, input.key, input.amount * input.chance);
+      let n = input.chance >= 1 ? input.amount : rollShare(this.used, input.key, input.amount * input.chance);
       for (let i = 0; i < this.inSlots && n > 0; i++) {
         const s = this.slots[i];
         if (s === null || s === undefined || s.key !== input.key) continue;
@@ -425,7 +428,7 @@ export class BasicMachine implements SimInv, SimEntity, Preloadable, FluidWaiter
       }
     }
     for (const f of recipe.fluidsIn) env.fluids.take(f.key, f.amount);
-    recipe.outputs.forEach((o, i) => { this.rolled[i] = o.chance >= 1 ? o.amount : this.roll(this.made, o.key, o.amount * o.chance); });
+    recipe.outputs.forEach((o, i) => { this.rolled[i] = o.chance >= 1 ? o.amount : rollShare(this.made, o.key, o.amount * o.chance); });
     const fast = env.fastSteps.has(recipe.stepId);
     this.running = r;
     this.endAt = t + (fast ? Math.max(1, Math.ceil(recipe.ticks / FAST_FACTOR)) : recipe.ticks);

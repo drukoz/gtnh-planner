@@ -11,7 +11,9 @@
 // Pure TypeScript: nothing from node:* may be imported here.
 
 import { isFluidKey, type StuffKey } from '../../../../shared/keys.ts';
+import type { Vec3 } from '../../../../shared/layout/geometry.ts';
 import { BLOCKING_IGNORED, stackLimit } from '../facts.ts';
+import { compareLocal } from '../frame.ts';
 import type { FeedModel, NodeId } from '../model.ts';
 
 function compareText(a: string, b: string): number {
@@ -74,9 +76,27 @@ export function blockingIgnoredKey(key: StuffKey): boolean {
   return BLOCKING_IGNORED.ids.has(idOf(key)) || BLOCKING_IGNORED.keys.has(key);
 }
 
-/** The order of node `id` in the model's local order (its index among the nodes): an entity's `order`; 0 when the model does not have it. */
+/** Every cell of the model that is a tile entity of its own: its nodes, and each multiblock's input and output buses. */
+function tileCells(model: FeedModel): Array<{ id: NodeId; local: Vec3 }> {
+  const cells: Array<{ id: NodeId; local: Vec3 }> = [];
+  for (const n of model.nodes) {
+    cells.push(n);
+    if (n.kind === 'multi') cells.push(...n.inBuses, ...n.outBuses);
+  }
+  return cells;
+}
+
+/**
+ * The order of node or bus `id` in the model's local order (its rank among the nodes and the multiblocks' buses, by local
+ * cell): an entity's `order`; 0 when the model does not have it.
+ */
 export function nodeOrder(model: FeedModel, id: NodeId): number {
-  return Math.max(0, model.nodes.findIndex((n) => n.id === id));
+  const cells = tileCells(model);
+  const at = cells.find((c) => c.id === id);
+  if (at === undefined) return 0;
+  let rank = 0;
+  for (const c of cells) if (compareLocal(c.local, at.local) < 0) rank++;
+  return rank;
 }
 
 // ---- Inventories ----

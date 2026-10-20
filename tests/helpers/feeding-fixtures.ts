@@ -1,6 +1,6 @@
 // Fixtures for the feeding checker's tests (plan 21): the fixture pack with recipe maps and the machines and items the
 // feeding tests need, plans whose steps carry pack recipes (chances, held items, crafting grids), lines laid out by
-// main's `layoutLine` with or without a world, and hand-built models with test entities for the simulation (Task 4).
+// main's `layoutLine` with or without a world, and hand-built models with test entities for the simulation (Tasks 4 and 5).
 // Every call returns fresh objects, so a test that changes its pack, plan, layout or model changes no other. Synthetic
 // only: invented names, apart from the GT class names, mteIds and item ids the code names; no real export or world is read.
 
@@ -11,7 +11,9 @@ import type { Ingredient, Item, Machine, MachineKind, Pack, Product, Recipe, Str
 import type { LogisticsMode, Plan, PlanFlow } from '../../src/shared/types/plan.ts';
 import { PART_KEYS } from '../../src/server/layout/feeding/facts.ts';
 import { compareLocal } from '../../src/server/layout/feeding/frame.ts';
-import type { BasicNode, ChestNode, FeedModel, FeedNode, GtCover, MachineSettings, NodeId, SimRecipe } from '../../src/server/layout/feeding/model.ts';
+import type {
+  BasicNode, BusNode, ChestNode, FeedModel, FeedNode, GtCover, MachineSettings, MultiNode, NodeId, OutBusNode, SimRecipe,
+} from '../../src/server/layout/feeding/model.ts';
 import { insertEmpties, NEVER, PHASE, type SimEntity } from '../../src/server/layout/feeding/sim/core.ts';
 import type { SimEnv } from '../../src/server/layout/feeding/sim/machine.ts';
 import { emptyScan, layoutLine } from '../../src/server/layout/layout.ts';
@@ -203,7 +205,7 @@ export async function layFeed(pack: Pack, plan: Plan, mode: LogisticsMode, at?: 
   return layoutLine(pack, plan, lineScan(), makeProject({ logistics: mode, placement: { origin: [...at.origin], rotation: at.rotation } }), lineGround());
 }
 
-// ---- Hand-built models and test entities for the simulation (plan Task 4) ----
+// ---- Hand-built models and test entities for the simulation (plan Tasks 4 and 5) ----
 
 /** A local cell `x,y,z` as numbers. */
 function cellOf(id: NodeId): Vec3 {
@@ -299,6 +301,43 @@ export function sinkNode(id: NodeId, inSlots: number, side = 2): BasicNode {
   }, {});
 }
 
+/** A cell's world position in a hand-built model (its local cell) and its label `${name} at x y z`. */
+function placed(id: NodeId, name: string, over: { local?: Vec3; pos?: Vec3 }): { id: NodeId; local: Vec3; pos: Vec3; label: string } {
+  const local = over.local ?? cellOf(id);
+  const pos = over.pos ?? ([...local] as Vec3);
+  return { id, local, pos, label: `${name} at ${pos.join(' ')}` };
+}
+
+/** An LV Input Bus at `id` (4 slots, front 3) on the fixture EBF's recipe map, its Limiting mode and Input Filter unset. */
+export function busNode(id: NodeId, over: Partial<BusNode> = {}): BusNode {
+  return { ...placed(id, 'Input Bus (LV)', over), front: 3, slots: 4, limited: null, inputFilter: null, maps: ['gt.recipe.blastfurnace'], ...over };
+}
+
+/** An LV Output Bus at `id` (4 slots, front 3), locked to no item. */
+export function outBusNode(id: NodeId, over: Partial<OutBusNode> = {}): OutBusNode {
+  return { ...placed(id, 'Output Bus (LV)', over), front: 3, slots: 4, lock: null, ...over };
+}
+
+/**
+ * The Electric Blast Furnace (`IDS.EBF`, a controller GT starts with Input Separation on) at local `1,0,0`, with an input
+ * bus at `0,0,0` and an output bus at `2,0,0` (`busNode`, `outBusNode`), recipe `e`: 1 `t:a@0` + 1 `t:b@0` → 1 `t:x@0` in
+ * 100 ticks. Its steps and kinds come from its recipes unless `over` gives them.
+ */
+export function ebfNode(over: Partial<MultiNode> = {}): MultiNode {
+  const name = over.name ?? 'Electric Blast Furnace';
+  const recipes = over.recipes ?? [simRecipe('e', 100, [['t:a@0', 1], ['t:b@0', 1]], [['t:x@0', 1]])];
+  return {
+    kind: 'multi', ...placed(over.id ?? '1,0,0', name, over), name, mteId: IDS.EBF, recipes, stepIds: [...new Set(recipes.map((r) => r.stepId))],
+    kinds: distinctKeys(recipes.flatMap((r) => r.inputs.map((i) => i.key))), inBuses: [busNode('0,0,0')], outBuses: [outBusNode('2,0,0')],
+    inputSeparation: null, separationDefault: true, ...over,
+  };
+}
+
+/** `ebfNode()` with a second input bus at `0,1,0`, front 3. */
+export function twoBusNode(): MultiNode {
+  return ebfNode({ inBuses: [busNode('0,0,0'), busNode('0,1,0')] });
+}
+
 function chestNode(id: NodeId, side: ChestNode['side'], keys: StuffKey[]): ChestNode {
   const local = cellOf(id);
   return { kind: 'chest', id, pos: [...local], local, label: `Chest (${side}) at ${local.join(' ')}`, side, keys: distinctKeys(keys) };
@@ -328,7 +367,7 @@ function itemKeys(r: SimRecipe): StuffKey[] {
  * A model of `nodes` without networks (mode `direct`), as `readLine` would give it for a line of only these blocks:
  * nodes in local order, the input chests' keys in `supply`, no sinks, plan rates or makers unless `more` gives them.
  * Names are the fixture pack's; a step's name is its first item output's (else its first fluid output's, else its id);
- * a recipe map takes what the recipes of the nodes on it take.
+ * a recipe map takes what the recipes of the nodes on it take (a basic machine's maps, a multiblock's input buses' maps).
  */
 export function handModel(nodes: FeedNode[], more: Partial<FeedModel> = {}): FeedModel {
   const sorted = [...nodes].sort((a, b) => compareLocal(a.local, b.local));
@@ -338,8 +377,8 @@ export function handModel(nodes: FeedNode[], more: Partial<FeedModel> = {}): Fee
   for (const r of recipes) if (!steps.has(r.stepId)) steps.set(r.stepId, r);
   const onMap = new Map<string, SimRecipe[]>();
   for (const n of machines) {
-    if (n.kind !== 'basic') continue;
-    for (const map of n.maps) onMap.set(map, [...(onMap.get(map) ?? []), ...n.recipes]);
+    const maps = n.kind === 'basic' ? n.maps : n.kind === 'multi' ? n.inBuses.flatMap((b) => b.maps) : [];
+    for (const map of new Set(maps)) onMap.set(map, [...(onMap.get(map) ?? []), ...n.recipes]);
   }
   const chestKeys = sorted.flatMap((n) => (n.kind === 'chest' && n.side === 'input' ? n.keys : []));
   return {

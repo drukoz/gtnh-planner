@@ -1,12 +1,14 @@
-// One scenario run of the feeding simulation (plan `docs/superpowers/plans/2026-10-20-21-feeding-checker.md` Task 4):
-// `runScenario` builds the entities of a model for a scenario — one per node (GT basic machines and chests here; later
-// tasks add multiblocks and benches), the networks' entities from `NETWORK_MODELS` (filled by Tasks 7–10) and a test's
-// extra ones — runs them tick by tick and turns what they recorded into findings (`detect`).
+// One scenario run of the feeding simulation (plan `docs/superpowers/plans/2026-10-20-21-feeding-checker.md` Tasks 4
+// and 5): `runScenario` builds the entities of a model for a scenario — one per node (GT basic machines and chests; a
+// multiblock's controller and each of its buses, Task 5; Task 6 adds benches), the networks' entities from
+// `NETWORK_MODELS` (filled by Tasks 7–10) and a test's extra ones — runs them tick by tick and turns what they recorded
+// into findings (`detect`).
 // - A node kind or a network kind without a model is left out, with the unknown `not_simulated`.
 // - `env.push(from, side)` is what a GT transfer out of that side meets: the receiver a network registered at the
 //   neighbouring cell for that side, else the inventory of the node (or bus) there, else nothing.
 // - In `restart` the line's chunk loads again at the start of tick `restartAt` (rule 3a): every tile's timer and the
-//   covers' counter start again from there, and every network's `restart()` runs.
+//   covers' counter start again from there, every multiblock controller looks for a recipe (ruling R-17), and every
+//   network's `restart()` runs.
 // Pure TypeScript: nothing from node:* may be imported here.
 
 import { isFluidKey, type StuffKey } from '../../../../shared/keys.ts';
@@ -18,6 +20,7 @@ import type { FeedModel, FeedNetwork, FeedNode, NodeId } from '../model.ts';
 import { FluidPools, KeyTable, Sim, type Preloadable, type PushTarget, type SimEntity, type SimInv } from './core.ts';
 import { detect, SimStats, type Explain } from './detect.ts';
 import { basicMachine, type SimEnv } from './machine.ts';
+import { multiblock } from './multi.ts';
 import { inputChest, outputChest } from './storage.ts';
 
 /** What a network kind's model gives a run: its entities, its reasons, the push targets it registers at cells, and what a restart resets. */
@@ -145,6 +148,16 @@ export function runScenario(model: FeedModel, scenario: ScenarioName, opts: Scen
       case 'basic':
         inv = basicMachine(node, env);
         break;
+      case 'multi': {
+        // the controller has no inventory the line uses; its buses are inventories, each at its own cell
+        const parts = multiblock(node, env);
+        for (const bus of [...parts.buses, ...parts.outBuses]) {
+          invs.set(bus.id, bus);
+          entities.push(bus);
+        }
+        entities.push(parts.controller);
+        break;
+      }
       case 'chest':
         inv = node.side === 'input' ? inputChest(node, env) : outputChest(node, env);
         if (node.side === 'input' && node.keys.length > CHEST_SLOTS) {
@@ -153,7 +166,7 @@ export function runScenario(model: FeedModel, scenario: ScenarioName, opts: Scen
         }
         break;
       default:
-        unknowns.push({ code: 'not_simulated', text: `${node.label} is not simulated: the checker has no model of ${node.kind === 'multi' ? 'a multiblock' : 'an Auto Workbench'} `
+        unknowns.push({ code: 'not_simulated', text: `${node.label} is not simulated: the checker has no model of an Auto Workbench `
           + 'yet, so nothing it takes or makes is checked', ...at(node) });
         break;
     }

@@ -1,13 +1,17 @@
 // What a scenario run records and the findings it gives (plan `docs/superpowers/plans/2026-10-20-21-feeding-checker.md`
-// Task 4, detector rules 10–16). The models record as they run (`SimStats`): what each machine was handed and gave up,
-// every recipe check it made and what came of it, how many input slots each kind filled, what reached each chest and what
-// was dropped into the world. `detect` reads that once the run is over:
-// - `feed_crowded`: a recipe waits for a kind that cannot get in, for `STALL_TICKS` in a row;
-// - `feed_overfill`: one kind in two or more input slots of a machine that takes two or more kinds;
+// Task 4, detector rules 10–16, and Task 5 rule 4). The models record as they run (`SimStats`): what each machine was
+// handed and gave up, every recipe check it made and what came of it, how many input slots each kind filled, what reached
+// each chest and what was dropped into the world. `detect` reads that once the run is over:
+// - `feed_crowded`: a recipe waits for a kind that cannot get in, for `STALL_TICKS` in a row; or a multiblock has every
+//   input of its recipe on its input buses but no one bus holds them all while Input Separation is on, as long;
+// - `feed_overfill`: one kind in two or more input slots of a machine (or slots of a multiblock's input bus) that takes two
+//   or more kinds;
 // - `feed_no_route`: an output blocked for `STALL_TICKS` in a row while nothing is taken out of the machine;
 // - `feed_pool_starve`: a recipe of a shared machine that never ran while its inputs were there for `STALL_TICKS`;
 // - `feed_starved`, `feed_slow`: a planned input never handed over, or handed over too slowly while the recipe waited;
 // - `feed_leak`: an item planned for a machine that reached a chest instead.
+// A multiblock's buses stand in for a basic machine's slots: what its input buses were handed counts as handed to it, and
+// what left its output buses as taken out of it.
 // Each finding is `phase: 'sim'` and `certain` for its scenario, with the first tick of its condition; findings come by node
 // (the model's local order), then the Codes table's order, then item key.
 // Pure TypeScript: nothing from node:* may be imported here.
@@ -15,7 +19,7 @@
 import type { StuffKey } from '../../../../shared/keys.ts';
 import { fmtRate } from '../../../../shared/layout/format.ts';
 import { FEED_KINDS, STALL_TICKS, TICKS_PER_SECOND, SLOW_TOLERANCE, type FeedCode, type FeedFinding, type ScenarioName } from '../contract.ts';
-import type { ChestNode, FeedModel, FeedNode, NodeId } from '../model.ts';
+import type { ChestNode, FeedModel, FeedNode, MultiNode, NodeId } from '../model.ts';
 import { listText } from '../text.ts';
 import type { KeyTable, SimInv } from './core.ts';
 
@@ -25,11 +29,11 @@ export type Explain = (kind: 'in' | 'out', node: NodeId, key: StuffKey) => strin
 /** A missing kind that cannot get into a machine (rule 6d): `key`, while `by` fills `slots` of its `of` input slots. */
 export interface Crowd { key: number; by: number; slots: number; of: number }
 
-const START = 0, WAIT = 1, BLOCK = 2;
+const START = 0, WAIT = 1, BLOCK = 2, SPLIT = 3;
 
-/** One recipe check of a machine (rule 6d) and what came of it. */
+/** One recipe check of a machine (rule 6d) and what came of it; `SPLIT`: a multiblock's set on separated buses (Task 5 rule 4). */
 interface Check {
-  t: number; kind: typeof START | typeof WAIT | typeof BLOCK; recipe: number;
+  t: number; kind: typeof START | typeof WAIT | typeof BLOCK | typeof SPLIT; recipe: number;
   missing: number[]; crowd: Crowd | null;                     // a wait: what is missing, and what keeps a missing kind out
   key: number; ready: number[];                               // a block: the item in the output slot that blocks, the other recipes whose inputs are there
 }
@@ -120,6 +124,14 @@ export class SimStats {
    */
   blocked(node: NodeId, recipe: number, t: number, key: number, ready: readonly number[] = []): void {
     this.of(node).checks.push({ t, kind: BLOCK, recipe, missing: [], crowd: null, key, ready: [...ready] });
+  }
+
+  /**
+   * A multiblock's recipe check found every input of recipe `recipe` on its input buses, but no one bus holds them all
+   * while Input Separation checks each bus alone (Task 5 rule 4).
+   */
+  separated(node: NodeId, recipe: number, t: number): void {
+    this.of(node).checks.push({ t, kind: SPLIT, recipe, missing: [], crowd: null, key: -1, ready: [] });
   }
 
   /** `key` now fills `slots` input slots of `node`. */
@@ -230,8 +242,29 @@ function stretches<T>(checks: readonly Check[], ticks: number, same: (c: Check) 
 }
 
 /**
- * The findings of a scenario run (rules 10–16) on the nodes the run simulated. `explain` gives the networks' reasons
- * for an item that never arrives or never leaves; `slowTolerance` is `feed_slow`'s (default `SLOW_TOLERANCE`).
+ * A multiblock's record as the detectors read it: its controller's checks and runs, with what its input buses were handed
+ * (`given`) and the ticks something left its output buses (`taken`), the buses standing in for a machine's slots.
+ */
+function withBuses(stats: SimStats, node: MultiNode, own: Readonly<NodeRecord>): Readonly<NodeRecord> {
+  const given = { t: [...own.given.t], key: [...own.given.key], n: [...own.given.n] };
+  for (const bus of node.inBuses) {
+    const g = stats.recordOf(bus.id)?.given;
+    if (g === undefined) continue;
+    for (let i = 0; i < g.t.length; i++) {
+      given.t.push(g.t[i]!);
+      given.key.push(g.key[i]!);
+      given.n.push(g.n[i]!);
+    }
+  }
+  const taken = new Set(own.taken);
+  for (const bus of node.outBuses) for (const t of stats.recordOf(bus.id)?.taken ?? []) taken.add(t);
+  return { ...own, given, taken: [...taken].sort((a, b) => a - b) };
+}
+
+/**
+ * The findings of a scenario run (rules 10–16, Task 5 rule 4) on the nodes the run simulated. `explain` gives the
+ * networks' reasons for an item that never arrives or never leaves; `slowTolerance` is `feed_slow`'s (default
+ * `SLOW_TOLERANCE`).
  */
 export function detect(model: FeedModel, stats: SimStats, run: { scenario: ScenarioName; ticks: number; explain: Explain; slowTolerance?: number }): FeedFinding[] {
   const { ticks, scenario } = run;
@@ -262,12 +295,13 @@ export function detect(model: FeedModel, stats: SimStats, run: { scenario: Scena
 
   model.nodes.forEach((node, at) => {
     if (!stats.isSimulated(node.id)) return;
-    const rec = stats.recordOf(node.id);
-    if (rec === undefined) return;
+    const own = stats.recordOf(node.id);
+    if (own === undefined) return;
     if (node.kind === 'chest') {
-      leaks(at, node, rec);
+      leaks(at, node, own);
       return;
     }
+    const rec = node.kind === 'multi' ? withBuses(stats, node, own) : own;
     const recipeStep = (r: number) => node.recipes[r]?.stepId ?? node.stepIds[0];
 
     // rule 10: feed_crowded, one per kind that cannot get in
@@ -283,13 +317,28 @@ export function detect(model: FeedModel, stats: SimStats, run: { scenario: Scena
       { key: keyOf(key), stepId: recipeStep(first.first.recipe), tick: first.from, count: Math.max(...mine.map((s) => s.to - s.from)) });
     }
 
-    // rule 11: feed_overfill
+    // Task 5 rule 4: feed_crowded, a multiblock's set split over input buses that Input Separation checks alone, one per recipe
+    const split = stretches(rec.checks, ticks, (c) => (c.kind === SPLIT ? c.recipe : null));
+    for (const recipe of [...new Set(split.map((s) => s.value))].sort((a, b) => a - b)) {
+      const mine = split.filter((s) => s.value === recipe);
+      const first = mine.find((s) => s.to - s.from >= STALL_TICKS);
+      if (first === undefined) continue;
+      emit(at, node, 'feed_crowded', `${node.label} has every input of its recipe but on different input buses, and Input Separation checks each bus alone`,
+        { stepId: recipeStep(recipe), tick: first.from, count: Math.max(...mine.map((s) => s.to - s.from)) });
+    }
+
+    // rule 11 (Task 5 rule 4 on a multiblock's input buses): feed_overfill
     if (node.kinds.length >= 2) {
-      for (const [key, s] of [...rec.slots].sort((a, b) => a[0] - b[0])) {
-        if (s.most < 2) continue;
-        const k = keyOf(key);
-        emit(at, node, 'feed_overfill', `${name(key)} fills ${s.most} input slots of ${node.label}, which takes ${node.kinds.length} kinds of item`,
-          { key: k, stepId: node.recipes.find((r) => r.inputs.some((i) => i.key === k))?.stepId, tick: s.first });
+      const filled = node.kind === 'multi'
+        ? node.inBuses.map((bus) => ({ slots: stats.recordOf(bus.id)?.slots, where: (n: number) => `${n} slots of ${bus.label} of ${node.label}` }))
+        : [{ slots: rec.slots, where: (n: number) => `${n} input slots of ${node.label}` }];
+      for (const { slots, where } of filled) {
+        for (const [key, s] of [...(slots ?? [])].sort((a, b) => a[0] - b[0])) {
+          if (s.most < 2) continue;
+          const k = keyOf(key);
+          emit(at, node, 'feed_overfill', `${name(key)} fills ${where(s.most)}, which takes ${node.kinds.length} kinds of item`,
+            { key: k, stepId: node.recipes.find((r) => r.inputs.some((i) => i.key === k))?.stepId, tick: s.first });
+        }
       }
     }
 
