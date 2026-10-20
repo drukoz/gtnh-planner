@@ -10,7 +10,7 @@ import {
   cleanSpec, fastSlowSpec, freeSpec, hammerSpec, handSpec, opt, pressSpec, solderSpec, solvedWithBuild, twoFreeSpec, twoPressSpec,
 } from '../../helpers/build-fixtures.ts';
 import type { StuffKey } from '../../../src/shared/keys.ts';
-import { BUILD_MIP_MAX_LP_ITERATIONS, BUILD_MIP_MAX_NODES, BUILD_MIP_TIME_LIMIT_SECONDS } from '../../../src/server/planner/build-mip.ts';
+import { BUILD_MIP_MAX_LP_ITERATIONS, BUILD_MIP_MAX_NODES, BUILD_MIP_TIME_LIMIT_SECONDS, type StepMachines } from '../../../src/server/planner/build-mip.ts';
 import type { MachineOption } from '../../../src/server/planner/machine-options.ts';
 import type { Solution, SolveOptions } from '../../../src/server/planner/solve.ts';
 
@@ -50,6 +50,35 @@ describe('the build-cost MIP', () => {
     expect(slow.sol.machines?.get('press')).toMatchObject({ option: { mteId: 101 }, added: 1 });
   });
 
+  it('pays the step charge once per new machine block, owned machines free', async () => {
+    // Fix wave 2 (a): σ = 100 raw (1 raw a run at 0.5 runs a second over 200 s, or 0.4 over 250 s), so a charge of 0.06
+    // is 6 raw a new machine and one of 0.04 is 4. The work of 2.5 Basic presses (3 × 10) or one Advanced (40): 3 × 16 =
+    // 48 > 46 at 6, 3 × 14 = 42 < 44 at 4. Two LV presses (2 × 10) or one MV that does both (25): 2 × 16 = 32 > 31 at 6,
+    // 28 < 29 at 4 (with no charge two LV presses always build for less, and the MIP gives the MV no columns).
+    const built = (sol: Solution): [number, number] => {
+      const m = sol.machines?.get('press') as StepMachines;
+      return [m.option.mteId, m.pool === undefined ? m.added : (sol.pools?.get(m.pool)?.added ?? 0)];
+    };
+    const press = async (options: MachineOption[], runs: number, horizonSeconds: number, stepCharge: number, share: boolean): Promise<Solution> =>
+      (await solvedWithBuild(pressSpec(), COSTS, [['t:t@0', runs]], { options: { press: options }, horizonSeconds, share }, { stepCharge })).sol;
+    for (const share of [false, true]) {
+      const advanced = [opt(101, 1, 0.2, 10), opt(102, 2, 0.5, 40)];
+      expect(built(await press(advanced, 0.5, 200, 0.06, share)), `share ${share}`).toEqual([102, 1]);
+      expect(built(await press(advanced, 0.5, 200, 0.04, share)), `share ${share}`).toEqual([101, 3]);
+      const doubled = [opt(101, 1, 0.2, 10), opt(102, 2, 0.4, 25)];
+      expect(built(await press(doubled, 0.4, 250, 0.06, share)), `share ${share}`).toEqual([102, 1]);
+      expect(built(await press(doubled, 0.4, 250, 0.04, share)), `share ${share}`).toEqual([101, 2]);
+      // Three owned Basic presses cost no build and no charge: they do the work rather than one new Advanced (46).
+      const owned = await press([opt(101, 1, 0.2, 10, 3), opt(102, 2, 0.5, 40)], 0.5, 200, 0.06, share);
+      expect(owned.machines?.get('press')).toMatchObject({ option: { mteId: 101 }, added: 0, newLoad: 0, ownedLoad: share ? 2.5 : 3 });
+    }
+    // Make N pays it once per type it adds: 100 fast runs take 100 raw, 50 to build and the charge on σ = 100 against the
+    // owned slow press's 200 raw: 190 < 200 at 0.4, 210 > 200 at 0.6.
+    const batch = { options: { fast: [opt(301, 1, 0.2, 50)], slow: [opt(302, 1, 0.2, 30, 1)] }, mode: 'makeN' as const, horizonSeconds: null };
+    expect((await solvedWithBuild(fastSlowSpec(), COSTS, [['t:t@0', 100]], batch, { stepCharge: 0.4 })).runs).toEqual(['fast']);
+    expect((await solvedWithBuild(fastSlowSpec(), COSTS, [['t:t@0', 100]], batch, { stepCharge: 0.6 })).runs).toEqual(['slow']);
+  });
+
   it('reuses owned machines for free and shares them only on a network', async () => {
     const options = { 'press-a': [opt(101, 1, 0.2, 10, 1)], 'press-b': [opt(101, 1, 0.2, 10, 1)] };
     const demand: Array<[StuffKey, number]> = [['t:t1@0', 0.1], ['t:t2@0', 0.1]];
@@ -64,8 +93,9 @@ describe('the build-cost MIP', () => {
   });
 
   it('shares one new forge hammer between gravel and sand on a network', async () => {
-    // σ = 1,440 (1 raw a glass with sand dug, 24 h at 1/min), a step 28.8: one shared hammer 17 + 16 + 3 × 28.8 = 119.4 <
-    // a hammer per step 50 + 86.4 = 136.4 < gravel by hand 33 + 28.8 × 5 = 177 < digging the sand 1,440 + 16 + 28.8.
+    // σ = 1,440 (1 raw a glass with sand dug, 24 h at 1/min), a new machine block's charge 28.8 (a hand step 3 of them):
+    // one shared hammer 17 + 16 + 2 × 28.8 = 90.6 < a hammer per step 50 + 3 × 28.8 = 136.4 < gravel by hand 33 + 28.8 × 5
+    // = 177 < digging the sand 1,440 + 16 + 28.8.
     const demand: Array<[StuffKey, number]> = [['t:glass@0', 1 / 60]];
     const shared = await solvedWithBuild(hammerSpec(), GLASS, demand, { options: HAMMERS, alsoMade: GATHERED, share: true }, CHARGED);
     expect(shared.runs).toEqual(['h-gravel', 'h-sand', 'smelt']);
@@ -89,7 +119,8 @@ describe('the build-cost MIP', () => {
   });
 
   it('counts a pool\'s machines from its combined load', async () => {
-    // 0.6 glass a second: 1.2 machines of each hammer step and 1.2 of the furnace; digging would cost 51,840 raw a day.
+    // 0.6 glass a second: 1.2 machines of each hammer step and 1.2 of the furnace; digging would cost 51,840 raw a day, and
+    // each new machine block 1,036.8 (2 % of it): 3 shared hammers 3 × 1,053.8 < gravel by hand 3 × 1,036.8 + 2 × 1,053.8.
     const demand: Array<[StuffKey, number]> = [['t:glass@0', 0.6]];
     const shared = await solvedWithBuild(hammerSpec(), GLASS, demand, { options: HAMMERS, alsoMade: GATHERED, share: true }, CHARGED);
     const pools = new Map([...(shared.sol.pools?.values() ?? [])].map((p) => [p.option.mteId, p.added]));
@@ -99,10 +130,10 @@ describe('the build-cost MIP', () => {
   });
 
   it('charges steps against the raw material with gathered blocks dug', async () => {
-    // 1 glass an hour: σ = 24, a step 0.48, a hand step 1.44. Shared: one hammer 33 + 1.44 = 34.44 < gravel by hand
-    // 33 + 0.48 × 5 = 35.4 < digging 24 + 16 + 0.48 = 40.48; per step: 35.4 < 40.48 < a hammer per step 50 + 1.44. Over one
-    // hour (σ = 1): digging 1 + 16 + 0.02 = 17.02 < 33.06. Measured against S1 (0 here) the shared hammer and the hand step
-    // would tie at 33.
+    // 1 glass an hour: σ = 24, a new machine block 0.48, a hand step 1.44. Shared: one hammer 33 + 2 × 0.48 = 33.96 < gravel
+    // by hand 33 + 0.48 × 2 + 1.44 = 35.4 < digging 24 + 16 + 0.48 = 40.48; per step: 35.4 < 40.48 < a hammer per step
+    // 50 + 1.44. Over one hour (σ = 1): digging 1 + 16 + 0.02 = 17.02 < 33.04. Measured against S1 (0 here) the shared
+    // hammer and the hand step would tie at 33.
     const demand: Array<[StuffKey, number]> = [['t:glass@0', 1 / 3600]];
     const build = { options: HAMMERS, alsoMade: GATHERED };
     expect((await solvedWithBuild(hammerSpec(), GLASS, demand, { ...build, share: true }, CHARGED)).runs).toEqual(['h-gravel', 'h-sand', 'smelt']);
@@ -114,7 +145,8 @@ describe('the build-cost MIP', () => {
   });
 
   it('drops a second free route on a shared machine', async () => {
-    // S1 = S1g = 0, so σ = 1 and a step costs 0.02 raw: one bender and one step 10.02 < one bender and two steps 10.04.
+    // S1 = S1g = 0, so σ = 1 and the bender's block costs 0.02 raw beside its 10: one bender either way, and of two plans
+    // that tie on raw material, builds and machine blocks the MIP's fewest-recipes tie-break runs one route.
     const options = { 'p-a': [opt(101, 1, 0.2, 10)], 'p-b': [opt(101, 1, 0.2, 10)] };
     const { runs, sol } = await solvedWithBuild(twoFreeSpec(), { 't:a@0': 0, 't:b@0': 0 }, [['t:t@0', 0.1]], { options, share: true }, { stepCharge: 0.02 });
     expect(runs).toHaveLength(1);
@@ -272,7 +304,8 @@ describe('the build-cost MIP', () => {
   });
 
   it('charges a hand step in a running line', async () => {
-    // F = 1,440: machine 1 + 0.02 + 10 / 1,440 = 1.027 < hand 1 + 0.06; F = 24: machine 1.02 + 10 / 24 = 1.437 > 1.06.
+    // A hand step pays HAND_STEP_WEIGHT charges, a machine one per new block. F = 1,440: machine 1 + 0.02 + 10 / 1,440 =
+    // 1.027 < hand 1 + 0.06; F = 24: machine 1.02 + 10 / 24 = 1.437 > 1.06.
     const build = { options: { 'p-machine': [opt(101, 1, 0.2, 10)] } };
     expect((await solvedWithBuild(handSpec(), COSTS, [['t:t@0', 1 / 60]], build, CHARGED)).runs).toEqual(['p-machine']);
     expect((await solvedWithBuild(handSpec(), COSTS, [['t:t@0', 1 / 3600]], build, CHARGED)).runs).toEqual(['p-hand']);

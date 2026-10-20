@@ -17,7 +17,11 @@ import { sig9 } from './round.ts';
 
 /** How `solveLine` trades steps against raw material, and whether it only probes (fix spec R3, architecture §11.34). */
 export interface SolveOptions {
-  /** Share of the least raw material (S1) one recipe step must save to be built; 0 = least raw material, fewest recipes as tie-break. */
+  /**
+   * Share of the least raw material (S1) one recipe step must save to be built; 0 = least raw material, fewest recipes as
+   * tie-break. When build cost counts, the build MIP pays it per new machine block instead, measured against S1g over the
+   * horizon (build-mip.ts, fix wave 2 (a)).
+   */
   stepCharge?: number;
   /** Weight of a crafting-table step: HAND_STEP_WEIGHT in rate mode with automateCrafting off, else 1. */
   handWeight?: number;
@@ -664,10 +668,11 @@ async function consolidated(
  * one it uses, when an LP without it is not dearer. Goods in key order; free goods (no raw cost) are left alone.
  *
  * In the build stage (`room`: plan 12, `laterRoom`) every LP stays within the machines the decision bought, and a step
- * that makes the good may also run on machines that cost nothing more — owned ones the decision leaves idle, or more of
- * an option that builds for nothing — taking whole machines of them (`LaterRoom.widen`, then `trim` to what it uses):
- * making the rest there costs no more raw material, no machine to build and no step, so buying it beside the step is
- * only the power or canonical tie-break's choice. `locks` are the rows the later stages keep (none without `room`).
+ * that makes the good may also run on machines that cost nothing more — owned ones the decision leaves idle — taking
+ * whole machines of them (`LaterRoom.widen`, then `trim` to what it uses): making the rest there costs no more raw
+ * material, no machine to build and no machine block, so buying it beside the step is only the power or canonical
+ * tie-break's choice. A new machine always costs a block's step charge (fix wave 2 (a)), so a tie that needs one is the
+ * build MIP's to weigh. `locks` are the rows the later stages keep (none without `room`).
  */
 async function withoutTiedPurchases(
   lp: MainLp, start: Set<number>, from: LpResult, room?: LaterRoom,
@@ -886,11 +891,11 @@ function ownedOnlyRuns(bounded: readonly number[], x: readonly number[]): number
  * them) ends the line, with the `owned-only` warnings of the bounded steps S1 runs. Then R3's stage 5 inside the
  * decision: the step recipes outside its support off, its machines in every stage (`laterRoom`: a sharing pool's steps
  * share all of its room), the least raw material over that, each purchase of a good a step of it makes shut where the
- * line does as well without it within those machines and the ones that cost nothing more (`withoutTiedPurchases`, plan
- * 09's one source at a tie: the `base`; owned machines the decision leaves idle, more of an option that builds for
- * nothing), power and the canonical form with the raw material locked at the base's, the latest that balances — the
- * decision's own columns last, never S1 (which may run steps past the machines it bought). A tie that needs a machine
- * that costs something more is the build MIP's to weigh.
+ * line does as well without it within those machines and the owned ones the decision leaves idle
+ * (`withoutTiedPurchases`, plan 09's one source at a tie: the `base`), power and the canonical form with the raw material
+ * locked at the base's, the latest that balances — the decision's own columns last, never S1 (which may run steps past
+ * the machines it bought). A tie that needs a new machine (its build and the step charge on its block) is the build
+ * MIP's to weigh.
  */
 async function buildStage(
   graph: CandidateGraph, lp: MainLp, s1: LpResult, warnings: PlanWarning[], opts: SolveOptions, model: BuildModel, demandScale: number,

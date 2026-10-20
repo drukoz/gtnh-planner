@@ -524,23 +524,29 @@ describe('one source at a tie', () => {
     }
   });
 
-  it('makes the rest on more machines that cost nothing to build', async () => {
-    // Centrifuges built from nothing: all of the copper takes 4 of them instead of 2, which costs nothing more, so the line
-    // makes it rather than buy half of it (with build cost ignored too).
+  it('buys the rest rather than add machines, even ones that build for nothing', async () => {
+    // Centrifuges built from nothing: all of the copper takes 4 of them instead of 2. Both use the same raw material, and
+    // each new machine block pays the step charge (fix wave 2 (a)), so the build MIP buys the other ingot and the tie
+    // stage no longer grows the step by machines that build for nothing (1c794df's grant). With build cost ignored there
+    // are no machines to weigh, and plan 09's one source makes all of it.
     for (const logistics of ['direct', 'ae2'] as const) {
-      for (const buildHorizonHours of [1, 24, 168, null]) {
+      for (const buildHorizonHours of [1, 24, 168]) {
         const plan = await planLine(packFromSpec(gasSpec(400)), thing({ logistics, buildHorizonHours }), emptyContext());
         expect(plan.status).toBe('ok');
-        expect(plan.steps.map((s) => [s.id, s.runsPerSecond, s.count])).toEqual([['burn', 0.2, 4], ['make-thing', 0.1, 1]]);
-        expect(plan.rawInputs.map((r) => [r.key, r.perSecond])).toEqual([['t:raw_dust@0', 0.2]]);
+        expect(plan.steps.map((s) => [s.id, s.runsPerSecond, s.count])).toEqual([['burn', 0.1, 2], ['make-thing', 0.1, 1]]);
+        expect(plan.rawInputs.map((r) => [r.key, r.perSecond])).toEqual([['t:copper_ingot@0', 0.1], ['t:raw_dust@0', 0.1]]);
       }
+      const ignored = await planLine(packFromSpec(gasSpec(400)), thing({ logistics, buildHorizonHours: null }), emptyContext());
+      expect(ignored.steps.map((s) => [s.id, s.runsPerSecond, s.count])).toEqual([['burn', 0.2, 4], ['make-thing', 0.1, 1]]);
+      expect(ignored.rawInputs.map((r) => [r.key, r.perSecond])).toEqual([['t:raw_dust@0', 0.2]]);
     }
   });
 
-  it('splits a raw dust for both of its products rather than buy one of them, with machines free to build', async () => {
+  it('splits a raw dust for both of its products only where that adds no machine block', async () => {
     // The merge's probe: `split` (Basic Macerator, 1 run a second) turns a Raw Dust into an X Dust and a Y Part, `make-t`
     // takes 2 X and 1 Y. X is also mined, so splitting a second dust (its Y left over) and buying the X tie in raw material;
-    // every machine builds from nothing, so the second macerator costs nothing either.
+    // every machine builds from nothing, but the second macerator's block pays the step charge (fix wave 2 (a)), so with
+    // build cost counted the line buys the X, and with it ignored plan 09's one source splits both.
     const vein = (name: string, material: string): OreVein => ({
       name, dims: ['overworld'], kind: 'vein', weight: 1, minY: 0, maxY: 255, size: 1, density: 1,
       materials: { primary: material, secondary: material, between: material, sporadic: material },
@@ -558,8 +564,9 @@ describe('one source at a tie', () => {
       for (const buildHorizonHours of [1, 24, 168, null]) {
         const plan = await planLine(pack, { ...defaultSettings(), routeDerived: false, buildHorizonHours, target: 't:t@0', tier: 1, amount: 60, per: 'min', logistics }, emptyContext());
         expect(plan.status).toBe('ok');
-        expect(plan.steps.map((s) => [s.id, s.runsPerSecond, s.count])).toEqual([['make-t', 1, 1], ['split', 2, 2]]);
-        expect(plan.rawInputs.map((r) => [r.key, r.perSecond])).toEqual([['t:raw@0', 2]]);
+        const splits = buildHorizonHours === null ? 2 : 1;
+        expect(plan.steps.map((s) => [s.id, s.runsPerSecond, s.count])).toEqual([['make-t', 1, 1], ['split', splits, splits]]);
+        expect(plan.rawInputs.map((r) => [r.key, r.perSecond])).toEqual(buildHorizonHours === null ? [['t:raw@0', 2]] : [['t:raw@0', 1], ['t:x@0', 1]]);
       }
     }
   });

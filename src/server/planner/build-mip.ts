@@ -4,7 +4,9 @@
 // sharing pool (with `BuildModel.share`, the steps of one machine option and sharing key share them; else every step has
 // its own), all of one option per step, owned machines of every eligible option free beside them (an owned machine
 // serves one sharing key), Make N's one added machine per type, the cleanroom as one more machine, and plan 09's step
-// charge measured against the raw material with gathered world blocks dug, never below the charge on one raw unit. Its
+// charge measured against the raw material with gathered world blocks dug, never below the charge on one raw unit, paid
+// per new machine block (fix wave 2 (a): each new machine of a step or a sharing pool, an Auto Workbench included, once;
+// owned machines none; a step by hand or on another pseudo machine once, a crafting-table one HAND_STEP_WEIGHT times). Its
 // decision (`decode`, or `roundUp` of the LP relaxation or of S1 when the far time guard stops it) keeps the later stages
 // within the machines it bought (`laterRoom`). The plan fix wave (controller ruling 183 (2)) made its node limit the
 // one thing that decides it — no plan depends on time or load — and its model strong and small enough that its root node
@@ -110,6 +112,13 @@ function pushTo<K, V>(map: Map<K, V[]>, key: K, value: V): void {
   else list.push(value);
 }
 
+/**
+ * What a step recipe weighs beside its machines, in units of σ, so that among plans of equal raw material, builds and
+ * machine blocks the one of fewest step recipes wins (two free routes on one shared machine run as one, plan 09's
+ * fewest recipes as a tie-break): far below one raw unit over any horizon a line is planned for.
+ */
+const STEP_TIE_BREAK = 1e-6;
+
 /** Whole machines for `load` machines' worth: none for none, else at least one (a running step needs a machine). */
 function machinesFor(load: number): number {
   return load > 0 ? Math.max(1, Math.ceil(load - WHOLE)) : 0;
@@ -118,6 +127,25 @@ function machinesFor(load: number): number {
 /** Whether new machines of `o` may be planned (and weighed). */
 function adds(o: MachineOption): boolean {
   return o.canAdd && Number.isFinite(o.solveBuild);
+}
+
+/**
+ * The build MIP's scale (`buildMip`): F = D × horizon (rate) or D (Make N), σ = max(s1g × F, 1) — the raw material one
+ * unit of the objective stands for — k = s1 × F / σ (0 when s1 ≤ 1e-9), and `charge`, the step charge on one new machine
+ * block in raw material, `stepCharge × σ` (fix wave 2 (a): the charge is paid per new machine block, not per step).
+ */
+interface Scale { F: number; sigma: number; k: number; charge: number }
+
+function scaleOf(input: BuildMipInput): Scale {
+  const D = input.demandScale;
+  const F = input.model.mode === 'rate' ? D * (input.model.horizonSeconds ?? 0) : D;
+  const sigma = Math.max(input.s1g * F, 1);
+  return { F, sigma, k: input.s1 > TINY ? (input.s1 * F) / sigma : 0, charge: input.stepCharge * sigma };
+}
+
+/** What one new machine of `o` costs the MIP, in raw material: its build and the step charge on one machine block. */
+function blockCost(o: MachineOption, charge: number): number {
+  return o.solveBuild + charge;
 }
 
 /** One option of a step that can run it (`perMachine` above 0), its index in `model.options(id)` and its pool. */
@@ -257,6 +285,7 @@ interface Allocation {
 function allocate(input: BuildMipInput, x: readonly number[], prefer?: (j: number) => number | undefined, floor = TINY): Allocation {
   const { model } = input;
   const D = input.demandScale;
+  const { charge } = scaleOf(input);
   const steps = stepsOf(input);
   const kept = (j: number): boolean => (x[j] ?? 0) > floor;
   const support = new Set(steps.filter((s) => kept(s.j)).map((s) => s.j));
@@ -340,7 +369,7 @@ function allocate(input: BuildMipInput, x: readonly number[], prefer?: (j: numbe
       const want = preferred(step, choices.map((u) => u.o));
       const cost = (u: Usable): number => {
         const before = load.get(u.pool) ?? 0;
-        return u.o.solveBuild * (machinesFor(before + r / u.o.perMachine) - machinesFor(before));
+        return blockCost(u.o, charge) * (machinesFor(before + r / u.o.perMachine) - machinesFor(before));
       };
       const pick = want !== undefined ? choices.find((u) => u.o === want)
         : [...choices].sort((a, b) => cost(a) - cost(b) || b.o.perMachine - a.o.perMachine || a.o.mteId - b.o.mteId || a.o.tier - b.o.tier || a.index - b.index)[0];
@@ -383,7 +412,8 @@ function allocate(input: BuildMipInput, x: readonly number[], prefer?: (j: numbe
  * `min(left, r/ρ)` machines' worth (with `model.share`: `left` = the room in the owned machines its pool holds plus the
  * machines of its type no pool holds yet, which then join its pool) or that many whole machines (without), then the rest
  * as new capacity of one option — `prefer(j)` (an index in `model.options(id)`) when it can add, else the one that adds
- * the least build to its pool (ties: more runs a second, lower mteId) — whose pool then has the whole machines its
+ * the least to its pool, each new machine at its build and the step charge on its block (`blockCost`; ties: more runs
+ * a second, lower mteId) — whose pool then has the whole machines its
  * steps' load needs (at least one for any load). A step with runs left and no option that can add is `short`;
  * `machines` lists the steps in id order. Make N: an owned option (highest tier, then lowest mteId), else a type an
  * earlier step added, else the option with the lowest build (then most runs a second, lowest mteId). Runs per second up
@@ -399,15 +429,16 @@ export function roundUp(input: BuildMipInput, x: readonly number[], prefer?: (j:
  */
 export interface LaterRoom {
   /**
-   * The rows: per holder of machines its steps' runs within its machines plus `grants` (whole machines more; Infinity:
-   * no bound), `Σ_j D·x_j / ρ_j ≤ machines + grant − what steps on several holders take of it` over the steps that run on
-   * it alone; per step on several holders its runs within what its machines do, unrounded (`BuildDecision.capacity`).
+   * The rows: per holder of machines its steps' runs within its machines plus `grants` (whole owned machines more),
+   * `Σ_j D·x_j / ρ_j ≤ machines + grant − what steps on several holders take of it` over the steps that run on it alone;
+   * per step on several holders its runs within what its machines do, unrounded (`BuildDecision.capacity`).
    */
   rows(grants?: ReadonlyMap<string, number>): LpRow[];
   /**
    * `grants`, and for the holder of each step column of `makers` that runs on one holder and may grow for nothing what it
-   * may take more: Infinity for an option that builds for nothing (`solveBuild` 0, `canAdd`), else the owned machines of
-   * its type that neither the decision nor `grants` uses, whole. Steps by column; the first takes all of a type's.
+   * may take more: the owned machines of its type that neither the decision nor `grants` uses, whole. Steps by column; the
+   * first takes all of a type's. A new machine never comes for nothing (fix wave 2 (a): its block pays the step charge,
+   * whatever it costs to build), so only owned ones grow a holder here.
    */
   widen(makers: readonly number[], grants: ReadonlyMap<string, number>): Map<string, number>;
   /** `grants` cut to the whole machines `x` uses beyond each holder's own (left out where it uses no more). */
@@ -427,9 +458,9 @@ interface Holder {
  * (each step's own share of it held the base and the tie stage to the decision's split, and a tie its pool had room for
  * went to buying); without, each step's own machines of one option. A step on several holders (owned machines of another
  * option beside its own, `others`) keeps what its machines do. In the tie stage a holder may grow for nothing (`widen`):
- * by any number of machines of an option that builds for nothing, or by the owned machines of its type the decision
- * leaves idle; whichever it takes is a whole number of machines (`trim`), so the plan's own machine assignment
- * (machines.ts `assignOwned`) adds no machine that costs anything.
+ * by the owned machines of its type the decision leaves idle, a whole number of them (`trim`), so the plan's own machine
+ * assignment (machines.ts `assignOwned`) adds no new machine — every new one pays the step charge on its block (fix
+ * wave 2 (a); 1c794df also let it grow by machines that build for nothing).
  */
 export function laterRoom(input: BuildMipInput, decision: BuildDecision): LaterRoom {
   const { lp, model } = input;
@@ -470,11 +501,10 @@ export function laterRoom(input: BuildMipInput, decision: BuildDecision): LaterR
     h.machines = (model.share ? (decision.pools.get(h.key)?.added ?? 0) : h.fresh) + machinesFor(h.owned);
     held.set(h.option.mteId, (held.get(h.option.mteId) ?? 0) + machinesFor(h.owned));
   }
-  /** What `h` may take more for nothing beside `grants`. */
+  /** What `h` may take more for nothing beside `grants`: the owned machines of its type nobody uses. */
   const freeFor = (h: Holder, grants: ReadonlyMap<string, number>): number => {
-    if (adds(h.option) && h.option.solveBuild === 0) return Infinity;
     let given = held.get(h.option.mteId) ?? 0;
-    for (const [key, g] of grants) if (Number.isFinite(g) && holders.get(key)?.option.mteId === h.option.mteId) given += g;
+    for (const [key, g] of grants) if (holders.get(key)?.option.mteId === h.option.mteId) given += g;
     return Math.max(0, ownedOf(model, h.option) - given);
   };
   return {
@@ -482,9 +512,8 @@ export function laterRoom(input: BuildMipInput, decision: BuildDecision): LaterR
       const rows: LpRow[] = [];
       for (const key of [...holders.keys()].sort(byString)) {
         const h = holders.get(key) as Holder;
-        const grant = grants.get(key) ?? 0;
-        if (h.simple.length === 0 || grant === Infinity) continue;
-        const room = h.machines + grant - h.fixed;
+        if (h.simple.length === 0) continue;
+        const room = h.machines + (grants.get(key) ?? 0) - h.fixed;
         const one = h.simple.length === 1 ? (h.simple[0] as { j: number; perMachine: number }) : undefined;
         rows.push(one !== undefined
           ? { lower: -Infinity, upper: one.perMachine * room, entries: [[one.j, D]] }
@@ -497,10 +526,9 @@ export function laterRoom(input: BuildMipInput, decision: BuildDecision): LaterR
       const out = new Map(grants);
       for (const j of [...makers].sort((a, b) => a - b)) {
         const h = holderOf.get(j);
-        if (h === undefined || out.get(h.key) === Infinity) continue;
+        if (h === undefined) continue;
         const more = freeFor(h, out);
-        if (more === Infinity) out.set(h.key, Infinity);
-        else if (more >= 1) out.set(h.key, (out.get(h.key) ?? 0) + Math.floor(more));
+        if (more >= 1) out.set(h.key, (out.get(h.key) ?? 0) + Math.floor(more));
       }
       return out;
     },
@@ -525,7 +553,8 @@ interface Pool { key: string; option: MachineOption; members: Member[]; n?: numb
 
 /**
  * A step whose machines the MIP prices from their builds alone (`layoutOf`: rate mode without sharing, no owned option,
- * S1's runs within one machine of its fastest option): its first machine at the build S1's runs need (`first`, on its
+ * S1's runs within one machine of its fastest option), each machine at its build and the step charge on its block
+ * (`blockCost`, called its build here): its first machine at the build S1's runs need (`first`, on its
  * step binary: `cheapestAdd`'s machines for them; the least build of its options where S1 runs it not at all), more runs
  * at the least build per run a second of its options (`perRun`) on a continuous column `e`, so `max(first, perRun ×
  * runs)`. That is what its machines cost at S1's runs and, where S1's runs fit one machine of its option that builds
@@ -540,6 +569,7 @@ interface Light { first: number; perRun: number; e: number; step: Step }
 /** The MIP's columns and rows, and where each part of the model sits. */
 interface Layout {
   sigma: number /* σ: the raw material one unit of the objective stands for */;
+  charge: number /* the step charge on one new machine block, in raw material (`Scale`) */;
   steps: Step[]; members: Map<number, Member[]>; light: Map<number, Light>; pools: Map<string, Pool>;
   z: Map<number, number> /* Make N: mteId → column */; y: Map<number, number> /* step column → column */; c?: number;
   derived: Array<{ j: number; col: number; weight: number }>;
@@ -550,25 +580,27 @@ interface Layout {
  * Whether new machines of `o` always cost no more than those of `other`, whatever runs a step gives them, so a MIP whose
  * steps have their own new machines (rate mode without sharing) never needs `other`'s: `o` is at least as fast and no
  * dearer, one of the two strictly; or `other` is a whole number r ≥ 2 of times as fast and dearer than r of `o` (r of
- * `o` then do the work of one of `other` for less). `roundUp` never picks such an `other` either: it takes the option
- * that adds the least build to the step, then the faster.
+ * `o` then do the work of one of `other` for less) — a machine's cost being its build and the step charge on its block
+ * (`blockCost`), so r machines pay r charges. `roundUp` never picks such an `other` either: it takes the option that
+ * adds the least of that cost to the step, then the faster.
  */
-function cheaperToAdd(o: MachineOption, other: MachineOption): boolean {
+function cheaperToAdd(o: MachineOption, other: MachineOption, charge: number): boolean {
   if (o.perMachine >= other.perMachine && o.solveBuild <= other.solveBuild) return o.perMachine > other.perMachine || o.solveBuild < other.solveBuild;
   const ratio = other.perMachine / o.perMachine;
   const whole = Math.round(ratio);
-  return whole >= 2 && Math.abs(ratio - whole) <= WHOLE * ratio && o.solveBuild * whole < other.solveBuild;
+  return whole >= 2 && Math.abs(ratio - whole) <= WHOLE * ratio && blockCost(o, charge) * whole < blockCost(other, charge);
 }
 
 /**
  * With sharing, the pools whose new machines another pool always builds for less (`cheaperToAdd`'s rule for whole
- * pools): every step that could add machines to the pool could add them to that other pool too, a whole number r ≥ 1
- * of the other's machines do the work of one of its own for each of them, and r of the other cost less than one of its
- * own (with r = 1: no dearer and slower for none, one of the two strictly). Moving a solution's new loads from such a
- * pool to the other never costs more (ceil(a + b) ≤ ceil(a) + ceil(b)), so the MIP gives it no new-machine columns, and
- * `roundUp`, which takes the option that adds the least build, never puts load there either.
+ * pools, each machine at its build and the step charge on its block): every step that could add machines to the pool
+ * could add them to that other pool too, a whole number r ≥ 1 of the other's machines do the work of one of its own for
+ * each of them, and r of the other cost less than one of its own (with r = 1: no dearer and slower for none, one of the
+ * two strictly). Moving a solution's new loads from such a pool to the other never costs more (ceil(a + b) ≤ ceil(a) +
+ * ceil(b)), so the MIP gives it no new-machine columns, and `roundUp`, which takes the option that adds the least of
+ * that cost, never puts load there either.
  */
-function outdonePools(steps: readonly Step[]): Set<string> {
+function outdonePools(steps: readonly Step[], charge: number): Set<string> {
   const byPool = new Map<string, Array<{ step: Step; u: Usable }>>();
   for (const step of steps) for (const u of step.usable) if (adds(u.o)) pushTo(byPool, u.pool, { step, u });
   /** A pool's build per machine in the MIP: the dearest of its members' options. */
@@ -593,7 +625,7 @@ function outdonePools(steps: readonly Step[]): Set<string> {
       if (!covered) continue;
       const dearest = buildOf.get(other) ?? Infinity;
       const whole = Math.max(1, Math.ceil(ratio - WHOLE * ratio));
-      if (whole === 1 ? dearest < cheapest || (dearest <= cheapest && strict) : dearest * whole < cheapest) {
+      if (whole === 1 ? dearest < cheapest || (dearest <= cheapest && strict) : (dearest + charge) * whole < cheapest + charge) {
         outdone.add(key);
         break;
       }
@@ -608,15 +640,16 @@ function before(u: Usable, best: Usable): boolean {
 }
 
 /**
- * The new machines `r` runs a second of a step take when they are all of one option and none is owned: the option that
- * builds them for least, then the fastest, the lower mteId, tier and index (`roundUp`'s choice), and how many.
+ * The new machines `r` runs a second of a step take when they are all of one option and none is owned: the option whose
+ * machines cost least, each at its build and the step charge on its block (`blockCost`), then the fastest, the lower
+ * mteId, tier and index (`roundUp`'s choice), and how many.
  */
-function cheapestAdd(step: Step, r: number): { u: Usable; added: number } | undefined {
+function cheapestAdd(step: Step, r: number, charge: number): { u: Usable; added: number } | undefined {
   let best: { u: Usable; added: number; cost: number } | undefined;
   for (const u of step.usable) {
     if (!adds(u.o)) continue;
     const added = machinesFor(r / u.o.perMachine);
-    const cost = u.o.solveBuild * added;
+    const cost = blockCost(u.o, charge) * added;
     if (best === undefined || cost < best.cost || (cost === best.cost && before(u, best.u))) best = { u, added, cost };
   }
   return best === undefined ? undefined : { u: best.u, added: best.added };
@@ -673,9 +706,7 @@ function layoutOf(input: BuildMipInput, withDerived: boolean): Layout {
   const D = input.demandScale;
   const width = lp.rawCost.length;
   const rate = model.mode === 'rate';
-  const F = rate ? D * (model.horizonSeconds ?? 0) : D;
-  const sigma = Math.max(input.s1g * F, 1);
-  const k = input.s1 > TINY ? (input.s1 * F) / sigma : 0;
+  const { F, sigma, k, charge } = scaleOf(input);
   let largest = 0;
   for (let j = 0; j < lp.firstBuy; j++) largest = Math.max(largest, input.x1[j] ?? 0);
   const X = STEP_BIG_M * largest;
@@ -709,25 +740,25 @@ function layoutOf(input: BuildMipInput, withDerived: boolean): Layout {
   };
   if (rate) {
     const byPool = new Map<string, Member[]>();
-    const outdone = model.share ? outdonePools(steps) : new Set<string>();
+    const outdone = model.share ? outdonePools(steps, charge) : new Set<string>();
     for (const step of steps) {
       if (isLight(step)) {
         let first = Infinity;
         let perRun = Infinity;
         for (const u of step.usable) {
           if (!adds(u.o)) continue;
-          first = Math.min(first, u.o.solveBuild);
-          perRun = Math.min(perRun, u.o.solveBuild / u.o.perMachine);
+          first = Math.min(first, blockCost(u.o, charge));
+          perRun = Math.min(perRun, blockCost(u.o, charge) / u.o.perMachine);
         }
-        const atS1 = (input.x1[step.j] ?? 0) > TINY ? cheapestAdd(step, (input.x1[step.j] ?? 0) * D) : undefined;
-        if (atS1 !== undefined) first = atS1.u.o.solveBuild * atS1.added;
+        const atS1 = (input.x1[step.j] ?? 0) > TINY ? cheapestAdd(step, (input.x1[step.j] ?? 0) * D, charge) : undefined;
+        if (atS1 !== undefined) first = blockCost(atS1.u.o, charge) * atS1.added;
         light.set(step.j, { first, perRun, e: column(1 / sigma, Infinity, false), step });
         continue;
       }
       const list: Member[] = [];
       for (const u of step.usable) {
         const member: Member = { u, cap: (X * D) / u.o.perMachine };
-        const beaten = model.share ? outdone.has(u.pool) : step.usable.some((v) => v !== u && adds(v.o) && cheaperToAdd(v.o, u.o));
+        const beaten = model.share ? outdone.has(u.pool) : step.usable.some((v) => v !== u && adds(v.o) && cheaperToAdd(v.o, u.o, charge));
         if (adds(u.o) && !beaten) member.a = column(0, member.cap, false);
         if (u.o.owned > 0) member.q = column(0, u.o.owned, !model.share);
         if (member.a === undefined && member.q === undefined) continue;
@@ -753,7 +784,7 @@ function layoutOf(input: BuildMipInput, withDerived: boolean): Layout {
           most += Math.ceil(m.cap);
           build = Math.max(build, m.u.o.solveBuild);
         }
-        pool.n = column(build / sigma, most, true);
+        pool.n = column((build + charge) / sigma, most, true);
         rows.push({ lower: -Infinity, upper: 0, entries: [...adders.map((m): [number, number] => [m.a as number, 1]), [pool.n, -1]] });
       }
       pools.set(key, pool);
@@ -791,12 +822,15 @@ function layoutOf(input: BuildMipInput, withDerived: boolean): Layout {
     }
   }
 
-  // One binary per step recipe, 1 where it runs, with the step charge as its cost (a crafting-table one weighing
-  // `handWeight`; none with a charge of 0).
+  // One binary per step recipe, 1 where it runs. The step charge is paid per new machine block (fix wave 2 (a): on a
+  // pool's new machines, a light step's machines and Make N's added types above; owned machines pay none), so a step's
+  // binary carries it only where the step runs on no machine the MIP counts — by hand or on another pseudo machine —
+  // once, a crafting-table step `handWeight` times; every one carries the fewest-recipes tie-break.
   const y = new Map<number, number>();
   for (const s of steps) {
     const first = light.get(s.j)?.first ?? 0;
-    const col = column(input.stepCharge * (s.r.mapId === 'crafting' ? input.handWeight : 1) + first / sigma, 1, true);
+    const pseudo = s.usable.length === 0 ? input.stepCharge * (s.r.mapId === 'crafting' ? input.handWeight : 1) : 0;
+    const col = column(pseudo + STEP_TIE_BREAK + first / sigma, 1, true);
     y.set(s.j, col);
     rows.push({ lower: -Infinity, upper: 0, entries: [[s.j, 1], [col, -X]] });
   }
@@ -806,14 +840,14 @@ function layoutOf(input: BuildMipInput, withDerived: boolean): Layout {
     if (l.perRun > 0) rows.push({ lower: -Infinity, upper: 0, entries: [[j, l.perRun * D], [y.get(j) as number, -l.first], [l.e, -1]] });
   }
 
-  // Make N: one binary per type a step without an owned option could add, shared by every step that can use it; a step
-  // that runs has one of its types.
+  // Make N: one binary per type a step without an owned option could add, shared by every step that can use it, at its
+  // build and the step charge on one machine block; a step that runs has one of its types.
   const z = new Map<number, number>();
   if (!rate) {
     const builds = new Map<number, number>();
     const addable = steps.filter((s) => s.options.length > 0 && ownedPick(s.options) === undefined);
     for (const s of addable) for (const o of s.options) if (adds(o)) builds.set(o.mteId, Math.max(builds.get(o.mteId) ?? 0, o.solveBuild));
-    for (const mteId of [...builds.keys()].sort((a, b) => a - b)) z.set(mteId, column((builds.get(mteId) as number) / sigma, 1, true));
+    for (const mteId of [...builds.keys()].sort((a, b) => a - b)) z.set(mteId, column(((builds.get(mteId) as number) + charge) / sigma, 1, true));
     for (const s of addable) {
       const types = [...new Set(s.options.filter(adds).map((o) => o.mteId))];
       if (types.length > 0) rows.push({ lower: -Infinity, upper: 0, entries: [[y.get(s.j) as number, 1], ...types.map((m): [number, number] => [z.get(m) as number, -1])] });
@@ -873,7 +907,7 @@ function layoutOf(input: BuildMipInput, withDerived: boolean): Layout {
   const derived = !withDerived ? []
     : input.derived.filter((d) => (colCost[d.j] ?? 0) > 0).map((d) => ({ j: d.j, col: column(d.weight, 1, true), weight: d.weight }));
 
-  const layout: Layout = { sigma, steps, members, light, pools, z, y, derived, colCost, colUpper, integer, rows };
+  const layout: Layout = { sigma, charge, steps, members, light, pools, z, y, derived, colCost, colUpper, integer, rows };
   if (c !== undefined) layout.c = c;
   return layout;
 }
@@ -923,9 +957,9 @@ function decodeRate(input: BuildMipInput, layout: Layout, x: readonly number[]):
   const uses: Array<{ use: StepUse; pool: Pool | undefined; added?: number }> = [];
   for (const step of layout.steps) {
     if (layout.light.has(step.j)) {
-      // Its machines from its runs: as many of the option that builds them for least as they need.
+      // Its machines from its runs: as many of the option whose machines cost least as they need.
       const r = (x[step.j] ?? 0) * D;
-      const pick = kept(step.j) ? cheapestAdd(step, r) : undefined;
+      const pick = kept(step.j) ? cheapestAdd(step, r, layout.charge) : undefined;
       if (pick !== undefined) uses.push({ use: { step, option: pick.u.o, fresh: pick.added, owned: new Map() }, pool: undefined, added: pick.added });
       continue;
     }
@@ -1003,17 +1037,19 @@ function decodeMakeN(input: BuildMipInput, layout: Layout, x: readonly number[])
  * The build-cost MIP over the main LP (main columns first, as in `MainLp`; the plan's model, `BuildMipInput` and the
  * spec's Objective). With D the demand scale, F = D × horizon (rate) or D (Make N), σ = max(s1g × F, 1) and
  * k = s1 × F / σ, it minimizes `k × columnCost` on the main columns (with s1 ≤ 1e-9: F × rawCost / σ, the raw over the
- * horizon) plus each new machine's build / σ, per pool whole new machines over the steps' new loads, owned machines free
+ * horizon) plus each new machine's build and step charge (`blockCost`) / σ — so a new machine block costs
+ * `stepCharge × σ` raw beside its build — per pool whole new machines over the steps' new loads, owned machines free
  * (whole per step without sharing; with it per pool, one sharing key per owned machine), one load row per step, one
- * option for a step's new machines, Make N's one machine per type, one binary per step where it runs with the step
- * charge as its cost (`stepCharge` × its weight, so a step costs `stepCharge × σ` raw), the cleanroom and R3's
+ * option for a step's new machines, Make N's one machine per type, one binary per step where it runs (with the step
+ * charge × its weight as its cost only for a step on no machine the MIP counts, by hand or on another pseudo machine,
+ * and the fewest-recipes tie-break `STEP_TIE_BREAK` on every one), the cleanroom and R3's
  * derived-purchase binaries (`M_d` = what a plan no dearer than the start can buy of it), and the valid rows of
  * `layoutOf` that tie the steps' binaries to their machines and to the steps that supply what they take. `start` =
  * `roundUp(input, x1)` in the columns (every step S1 runs at all with machines); `startAt(x)` the same for other runs,
  * with its objective; `decode` reads a whole solution's decision; `prefer` gives, per step column, the option with the
  * most new capacity in `x` (the relaxation's), for `roundUp`; `exactCost` is the objective of a whole solution with its
- * light steps (`Light`) at the build of the machines `decode` gives them, from which the model's own objective may be off
- * by less than a machine each. When `roundUp(input, x1)` leaves a step short, that start
+ * light steps (`Light`) at the build and charge of the machines `decode` gives them, from which the model's own objective
+ * may be off by less than a machine each. When `roundUp(input, x1)` leaves a step short, that start
  * is no plan (`start` is undefined), so its objective bounds no purchase, and nothing else does soundly (a step with no
  * machine options and no step charge has no bound of its own): the MIP, and so its relaxation, then has no
  * derived-purchase binaries, which only break ties among equally cheap plans.
@@ -1059,8 +1095,8 @@ export function buildMip(input: BuildMipInput): {
       let cost = costOf(x);
       for (const [j, l] of layout.light) {
         const runs = x[j] ?? 0;
-        const pick = runs > TINY ? cheapestAdd(l.step, runs * input.demandScale) : undefined;
-        const truth = pick === undefined ? 0 : pick.u.o.solveBuild * pick.added;
+        const pick = runs > TINY ? cheapestAdd(l.step, runs * input.demandScale, layout.charge) : undefined;
+        const truth = pick === undefined ? 0 : blockCost(pick.u.o, layout.charge) * pick.added;
         cost += (truth - l.first * (x[layout.y.get(j) as number] ?? 0) - (x[l.e] ?? 0)) / layout.sigma;
       }
       return cost;
