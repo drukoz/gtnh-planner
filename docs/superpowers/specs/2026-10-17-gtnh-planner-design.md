@@ -128,6 +128,7 @@ drukoz and friends on the server (a handful of people). drukoz runs the server a
 - Draws **translucent ghost blocks exactly where the layout places them**, with real textures (GT machines with casing + front overlay, cables, pipes, covers on their faces). Options: all layers, one Y layer, or only the current build step.
 - **Checks the build:** correct block = green, wrong block or wrong facing = red, not yet placed = faint ghost. When every block of a build step is placed correctly, the mod marks that step done in the shared checklist (with the player's name).
 - Works offline from the server's point of view: it only reads the world the client already sees.
+- **Aim, name tag and planner screen (added 2026-10-19 at the user's request; Plan 18):** the crosshair names any ghost up to `maxDistance`, the aimed ghost gets an outline and a name tag, the top left lists stacked ghosts and what the current step still needs, and a planner screen with a 3D model opens from the inventory. See `2026-10-19-projector-aim-and-screen-design.md`.
 
 ## 4. Non-goals
 - Not a recipe tutorial or NEI replacement.
