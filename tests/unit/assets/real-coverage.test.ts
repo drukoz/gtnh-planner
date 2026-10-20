@@ -36,7 +36,7 @@ import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import type { BlockFaces, TextureLayer } from '../../../src/shared/types/assets.ts';
 import type { BlockRole, Layout, LayoutBlock } from '../../../src/shared/types/layout.ts';
 import type { BlockRef, Pack } from '../../../src/shared/types/pack.ts';
-import type { LogisticsMode, Plan } from '../../../src/shared/types/plan.ts';
+import type { BomLine, LogisticsMode, Plan } from '../../../src/shared/types/plan.ts';
 import type { Base, BBox, Voxels, WorldScan } from '../../../src/shared/types/world.ts';
 import { makeProject } from '../../helpers/layout-fixtures.ts';
 
@@ -53,8 +53,6 @@ const ITEM_NAME_OVER_BLOCK: string[] = [];
 const GT_MACHINES = 'gregtech:gt.blockmachines';   // its item meta is the MTE id
 /** A scan folder's name, as the world service makes it. */
 const SCAN_ID = /^\d{8}T\d{6}Z-[0-9a-f]{6}$/;
-/** Plan names that are recipe maps and dimensions: text on the page, no icon. */
-const PAGE_TEXT = /^(map|dim|dimId):/;
 /** GT's insulation rings, all six sizes (MEDIUM_PLUS is every 8x cable): an insulated cable's connected side. */
 const INSULATION_RING = /\/INSULATION_(TINY|SMALL|MEDIUM|MEDIUM_PLUS|LARGE|HUGE)\.png$/;
 /** A pipe's connected-side template file, the base of its texture set. */
@@ -106,6 +104,40 @@ function fallbacks(src: AssetSources, keys: readonly StuffKey[]): StuffKey[] {
 /** The block an item key places (a GT machine item: its MTE). */
 function blockRefOf(id: string, meta: number): BlockRef {
   return id === GT_MACHINES ? { id, meta, mteId: meta } : { id, meta };
+}
+
+/**
+ * A plan page's icons: the goods the plan names (`planNames`, src/server/planner/plan.ts), less those the page only
+ * writes out in words (StepPanel.tsx, flow-model.ts). Since plan 09 those are the goods of each step's swap list (every
+ * way the export knows to make its product, a slot with all its options) and of its ingredient options (an option gets
+ * an icon only once pinned, in Settings), what a step supplies and what a bought material stands for; recipe maps and
+ * dimensions are words too. What is left: the target, each step's product and the goods it takes and makes, the flows,
+ * raw inputs, byproducts, build list and totals, unlocks, warnings and avoided goods (the default settings avoid nothing).
+ */
+function pageIcons(plan: Plan, target: StuffKey): StuffKey[] {
+  const keys = new Set<StuffKey>([target]);
+  const add = (key: StuffKey | undefined): void => {
+    if (key !== undefined) keys.add(key);
+  };
+  const addLines = (lines: readonly BomLine[]): void => {
+    for (const line of lines) {
+      keys.add(line.key);
+      addLines(line.children ?? []);
+    }
+  };
+  for (const step of plan.steps) {
+    add(step.mainOutput);
+    for (const p of [...step.inputs, ...step.outputs]) keys.add(p.key);
+  }
+  for (const flow of plan.flows) keys.add(flow.key);
+  for (const input of plan.rawInputs) keys.add(input.key);
+  for (const p of plan.byproducts) keys.add(p.key);
+  addLines(plan.buildList);
+  addLines(plan.buildTotals ?? []);
+  for (const u of plan.unlocks) keys.add(u.key);
+  for (const w of plan.warnings) add(w.key);
+  for (const a of plan.avoided ?? []) for (const key of [a.key, ...(a.madeFrom ?? [])]) keys.add(key);
+  return [...keys].sort();
 }
 
 describe.skipIf(process.env.GTNH_LOCAL !== '1')('real coverage', { timeout: 300_000 }, () => {
@@ -186,8 +218,8 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('real coverage', { timeout: 300_
     ]);
   }, 300_000);
 
-  /** A plan page's icons: the plan's names minus recipe maps and dimensions. */
-  const pageKeys = (target: StuffKey): StuffKey[] => Object.keys(plans.get(target)!.names ?? {}).filter((key) => !PAGE_TEXT.test(key));
+  /** A plan page's icons (`pageIcons`). */
+  const pageKeys = (target: StuffKey): StuffKey[] => pageIcons(plans.get(target)!, target);
   const pageFallbacks = (target: StuffKey, s: AssetSources): StuffKey[] => fallbacks(s, pageKeys(target));
 
   const blocksOf = (target: StuffKey): LayoutBlock[] => layouts.get(target)!.layout.blocks;
@@ -241,6 +273,8 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('real coverage', { timeout: 300_
   });
 
   it('plan pages', () => {
+    // before: the plan's baseline at 340dad8 (288 and 269 icons), which counted every name but recipe maps and
+    // dimensions, the swap lists' goods included
     const before: Record<StuffKey, string> = { 'IC2:itemPartCircuit@0': '46 / 27', 'fluid:ethylene': '30 / 19' };
     show('plan page icons falling back (no NEI / NEI)', TARGETS.map(([target, logistics]) => {
       const left = pageFallbacks(target, src);
