@@ -134,7 +134,7 @@ Faint is a block not placed yet, green is the right block (with the right front)
 Point your crosshair at any ghost, as far away as `maxDistance` (96 blocks by default), even one floating in the air with nothing real next to it. The ghost you aim at gets a **yellow outline** and a **name tag** above it, like a player's name. The tag shows:
 
 - the block's name;
-- its state: `not placed yet`, `placed correctly`, `wrong block here`, `wrong facing, its output side should face north` or `can't be checked by the mod`;
+- its state: `not placed yet`, `placed correctly`, `wrong block here`, `wrong facing, its output side should face north`, `can't be checked by the mod` or `not checked yet` (the chunk is not loaded, or the first check has not run);
 - which way it goes, while it is not placed correctly: `front should face west`, or `front should face west, output side south` for a single-block machine;
 - one line per cover: `cover: <name> on the <side> face`.
 
@@ -156,7 +156,7 @@ Still needed for step 2:
 1× LV Input Bus
 ```
 
-The current step is the one you picked with `/planner step` or in the planner screen. While every step is shown, it is the first step with blocks that is not ticked yet. A block the mod cannot check is listed last, as `2× Item Conduit (can't check)`.
+The list is for the step you picked with `/planner step` or in the planner screen. With **All steps** it is for the first step with blocks that is not ticked yet. A block the mod cannot check is listed last, as `2× Item Conduit (can't check)`.
 
 ### The planner screen
 
@@ -165,10 +165,10 @@ The planner screen is a 3D model of the line, with buttons for what the commands
 - **The model** is on the left, coloured like the ghosts. Drag to turn it, right-drag to move it, scroll to zoom. Hover a block to see the same lines as its name tag. Blocks outside the step or layer you picked are drawn very faint, but you can still hover and click them.
 - **Click a block** to close the screen and find it in the world: it gets a cyan outline and its name tag, through walls and at any distance, and the top left says `Finding: LV Input Bus — 23 blocks NE, 2 up`. Finding stops when you aim at that block, open the screen again, run `/planner clear`, or after a minute.
 - **The step list** is on the right: **All steps**, then every build step, with done steps ticked. Click a step to show only its blocks, like `/planner step <n>`. Steps that place nothing (gathering, configuring) are listed but cannot be picked. The blocks the picked step still needs are listed under it.
-- **The bottom row** has a layer slider (like `/planner layer`), **All layers**, **X-ray** (like `/planner xray`), **Reload** (like `/planner reload`) and **Hide ghosts** / **Show ghosts**. Hide ghosts hides the ghosts, the outline and the tag in the world, but keeps the line loaded and the top-left lines; it is not saved, so the ghosts are back after a restart. `/planner clear` is different: it forgets the line.
+- **The bottom row** has a layer slider (like `/planner layer`), **All layers**, **X-ray** (like `/planner xray`), **Reload** (like `/planner reload`) and **Hide ghosts** / **Show ghosts**. Hide ghosts hides the ghosts, the yellow outline and tag, and the **Behind the crosshair** list. It keeps the line loaded, the progress line and the needs list, and the top-left progress line ends with `· ghosts hidden`. A block you are finding stays outlined with its tag, and aiming at it still ends the finding. Hide is not saved, so the ghosts are back after a restart. `/planner clear` is different: it forgets the line.
 - **Nothing loaded:** the screen says to paste the `/planner load …` line from the project's **In-game projector** panel, and shows one button for each project you have already connected. Press one to load it. The first connection still needs the pasted line, since it carries the token.
 
-The screen works from the same settings as the commands: pick a step in the screen, then type `/planner step all`, and it follows. The line is still re-fetched about once a minute, and an open screen follows what changed. The game does not pause while the screen is open.
+The screen works from the same settings as the commands: pick a step in the screen, then type `/planner step all`, and it follows. The line is still re-fetched about once a minute, and an open screen follows what changed. The game does not pause while the screen is open. Press `E`, the planner key (if you bound one) or Esc to close it.
 
 ### Troubleshooting
 
