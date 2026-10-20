@@ -13,6 +13,7 @@ import {
   DIRS, posKey, rotateConnections, rotatedSize, rotateFace, rotateFacing, sideToward, step, toWorld, type Rotation, type Vec3,
 } from '../../shared/layout/geometry.ts';
 import { FACES } from '../../shared/types/assets.ts';
+import type { FeedSpec } from '../../shared/types/feed.ts';
 import type {
   ConduitFace, ConduitSpec, CoverSpec, Hookup, Layout, LayoutBlock, LayoutPowerContext, LayoutStatus, LayoutTap,
 } from '../../shared/types/layout.ts';
@@ -357,7 +358,15 @@ function worldBlock(b: LocalBlock, f: Frame): LayoutBlock {
     ...(b.conduits === undefined ? {} : { conduits: b.conduits.map((c) => worldConduit(c, r)) }),
     ...(b.tail === undefined ? {} : { tail: { side: b.tail.side, keys: [...b.tail.keys] } }),
     ...(b.hatch === undefined ? {} : { hatch: b.hatch }),
+    ...(b.feed === undefined ? {} : { feed: worldFeed(b.feed, r) }),
   };
+}
+
+/** The feeding configuration copied, an ME interface's wrench targets (the only faces it names) turned with its block. */
+function worldFeed(feed: FeedSpec, r: Rotation): FeedSpec {
+  const copy = structuredClone(feed);
+  if (copy.interface?.targets !== undefined) copy.interface.targets = copy.interface.targets.map((f) => rotateFace(f, r));
+  return copy;
 }
 
 // ---- Hookups (stage 8) ----

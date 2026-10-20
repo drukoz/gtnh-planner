@@ -19,6 +19,7 @@
 import { isFluidKey, itemKey, type ItemKey, type StuffKey } from '../../shared/keys.ts';
 import { joinNames } from '../../shared/layout/format.ts';
 import { DIRS, OPPOSITE, posKey, step, type Vec3 } from '../../shared/layout/geometry.ts';
+import type { FeedSpec } from '../../shared/types/feed.ts';
 import type { BlockRole, ConduitSpec, CoverSpec, TailChest } from '../../shared/types/layout.ts';
 import type { BlockRef, Machine, Pack, Product, Recipe } from '../../shared/types/pack.ts';
 import type { BomLine, Plan, PlanStep, PlanWarning } from '../../shared/types/plan.ts';
@@ -49,6 +50,8 @@ export interface LocalBlock {
   tail?: TailChest;
   /** What a hatch the line chose for a multiblock is for (`LayoutBlock.hatch`). */
   hatch?: HatchKind;
+  /** The structured feeding configuration of a mode's own block (`LayoutBlock.feed`, architecture §11 entry 51). */
+  feed?: FeedSpec;
 }
 /** A cover for the block at `pos` (Tasks 6–8). */
 export interface HostCover { pos: Vec3; cover: CoverSpec }
