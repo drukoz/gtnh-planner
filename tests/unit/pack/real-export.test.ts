@@ -3,6 +3,7 @@ import { basename, dirname, join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { Pack, Recipe } from '../../../src/shared/types/pack.ts';
 import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
+import { tableItemCount } from '../../../src/server/pack/crops.ts';
 import { loadPack } from '../../../src/server/pack/load.ts';
 import { canonicalRecipe, recipeId } from '../../../src/server/pack/recipe-id.ts';
 import { searchPack } from '../../../src/server/pack/search.ts';
@@ -23,7 +24,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('real export (GTNH 2.9.0-RC-1)',
     expect(pack.manifest.counts.recipeMaps).toBeGreaterThanOrEqual(140);
     expect(pack.recipes.filter((r) => r.source === 'gt').length).toBeGreaterThan(10_000);
     expect(pack.recipes.filter((r) => r.source === 'crafting').length).toBeGreaterThan(50_000);
-    expect(pack.manifest.nameFailures!).toBeLessThan(pack.items.size / 100);
+    expect(pack.manifest.nameFailures!).toBeLessThan(tableItemCount(pack.items) / 100);
     expect(loadMs).toBeLessThan(60_000);
   });
 

@@ -44,7 +44,7 @@ import type {
 import type { Pack } from '../../../shared/types/pack.ts';
 import type { BomLine, Plan, PlanFlow, PlanWarning } from '../../../shared/types/plan.ts';
 import { comparePos } from '../../world/graph.ts';
-import type { HatchKind, HostConfig, LocalBlock, PlacedUnit, Placement } from '../arrange.ts';
+import { handRunSurroundings, type HatchKind, type HostConfig, type LocalBlock, type PlacedUnit, type Placement } from '../arrange.ts';
 import {
   assignChannels, fluidFilterFor, itemFilterFor, pickFluidConduit, speedUpgradesFor, type ChannelEnd, type ChannelLink, type ChannelPlan,
 } from '../conduits.ts';
@@ -52,7 +52,7 @@ import { fluidNets, type FluidNet } from '../internal.ts';
 import type { Parts } from '../parts.ts';
 import { growTree, linkBits, type PathBounds } from '../path.ts';
 import {
-  emptyModeResult, itemPorts, nameList, placedStepIds, stepItemInputs, stepItemOutputs, unitItemRate,
+  emptyModeResult, itemPorts, itemRisers, lineExceptions, nameList, placedStepIds, RISER_WORDS, stepItemInputs, stepItemOutputs, unitItemRate,
   type ItemPort, type ModeHookup, type ModeInput, type ModeResult, type StepDraft,
 } from './mode.ts';
 
@@ -408,6 +408,8 @@ interface Crossing { entering: PlanFlow[]; leaving: PlanFlow[]; strays: Array<{ 
  * the step's items on every bus (plan 11, ruling R10). A unit's rates are split evenly over its extract faces and over
  * its insert faces. With them, `inputFromOutputSide` on every singleblock that takes items (the face is on its output
  * side, GT's `getFrontFacing()`, which takes items only with that setting), sorted by pos; such a face is `outputSide`.
+ * A venting steam machine's output side faces up (`PlacedUnit.outputSide`), so its face needs neither (architecture §11
+ * entry 48): GT lets its items in and out on any side but its front and its output side.
  */
 function machineFaces(plan: Plan, items: readonly PlanFlow[], placement: Placement): { faces: FacePlan[]; configs: HostConfig[] } {
   const blockAt = new Map(placement.blocks.map((b) => [posKey(b.pos), b]));
@@ -431,7 +433,7 @@ function machineFaces(plan: Plan, items: readonly PlanFlow[], placement: Placeme
     const insertRate = unitIntake(plan, items, u.stepId) / Math.max(1, roles.filter((r) => r.inserts).length);
     for (const { port, extracts, inserts } of roles) {
       if (!extracts && !inserts) continue;
-      const outputSide = !u.multiblock && inserts;
+      const outputSide = !u.multiblock && u.outputSide === undefined && inserts;
       faces.push({
         pos: port.pos, side: sideToward(port.pos, port.behind), target: u.name, stepId: u.stepId,
         extract: extracts ? { keys: makes, rate: extractRate } : null, insert: inserts ? { keys: takes, rate: insertRate } : null,
@@ -536,9 +538,10 @@ interface ItemLine {
 }
 
 /**
- * The Item Conduit spine `[firstX … tailX] × (y 0, z spineZ)`, one more cell above the tail cell per further output chest,
- * every face toward a machine or tail chest set, the faces toward other machines, buses and chests disabled, the tail
- * chests, and the hookup's end face when an EnderIO item network can stock the input chest.
+ * The Item Conduit spine `[firstX … tailX] × (y 0, z spineZ)`, one more cell above the tail cell per further output chest
+ * and up the spine's column to any bus above it (`itemRisers`), every face toward a machine or tail chest set, the faces
+ * toward other machines, hatches and chests disabled, the tail chests, and the hookup's end face when an EnderIO item
+ * network can stock the input chest.
  */
 function itemLine(input: ModeInput): ItemLine {
   const { pack, plan, parts, placement, network } = input;
@@ -579,6 +582,10 @@ function itemLine(input: ModeInput): ItemLine {
     cells.push([tailX, j, spineZ]);
     runs.push([[tailX, j - 1, spineZ], [tailX, j, spineZ]]);
   }
+  // up the spine's column to a bus GT takes only higher up
+  const risers = itemRisers(placement);
+  cells.push(...risers.cells, ...risers.ports);
+  runs.push(...risers.links);
   const bits = linkBits(runs);
 
   const chests: LocalBlock[] = [];
@@ -588,8 +595,9 @@ function itemLine(input: ModeInput): ItemLine {
   if (inputChest !== null) layChest([...inputChest], INPUT_CHEST, { side: 'input', keys: [...inputKeys] });
   outputSlices.forEach((keys, j) => layChest([tailX, j, spineZ + 1], OUTPUT_CHEST, { side: 'output', keys: [...keys] }));
 
-  // every side of a cell: its configured face, a link, Disabled toward any other machine, bus or chest, or nothing
-  const touching = unitTraders(placement, (u, b) => b.role === 'machine' || busOf(u, b) !== null);
+  // every side of a cell: its configured face, a link, Disabled toward any other machine, hatch or chest, or nothing (a
+  // GT hatch is an inventory too: a fluid hatch's container slots would take items)
+  const touching = unitTraders(placement, (_u, b) => b.role === 'machine' || b.role === 'hatch');
   for (const c of chests) touching.set(posKey(c.pos), c.label);
   const item = parts.eio_item_conduit.key;
   const conduits = cells.map((pos): CellConduit => {
@@ -603,8 +611,8 @@ function itemLine(input: ModeInput): ItemLine {
   const chestWords = [...(inputChest === null ? [] : ['an input chest']),
     ...(outputSlices.length === 0 ? [] : [outputSlices.length === 1 ? 'an output chest' : `${fmtInt(outputSlices.length)} output chests`])];
   const lineDraft: StepDraft = { id: 'layout:logistics:line', kind: 'logistics', pin: 'site',
-    text: `Lay ${fmtInt(cells.length)}× ${CONDUIT_NAMES.item} along the middle row so it touches every machine's output side or bus`
-      + `${chestWords.length > 0 ? `, with ${joinNames(chestWords)} at the end` : ''}` };
+    text: `Lay ${fmtInt(cells.length)}× ${CONDUIT_NAMES.item} along the middle row so it touches every machine's output side or bus${lineExceptions(placement)}`
+      + `${risers.links.length > 0 ? RISER_WORDS : ''}${chestWords.length > 0 ? `, with ${joinNames(chestWords)} at the end` : ''}` };
   const stockDraft: StepDraft | null = hooked !== null ? hooked.draft : inputChest === null ? null
     : { id: 'layout:logistics:inputs', kind: 'logistics', pin: 'site', text: `Put the raw inputs in the input chest: ${nameList(plan, pack, inputKeys)}` };
 
@@ -631,17 +639,19 @@ interface FluidPortPlan { pos: Vec3; side: number; port: FluidPort; makes: reado
  * && (mAllowInputFromOutputSide || side ≠ getFrontFacing())`, the rule `allowPullStack` and `allowPutStack` give its
  * items, and `BaseMetaTileEntity.fill` and `drain` ask exactly these; EnderIO's fluid conduit joins any GT tile whose
  * tank holds anything, `AbstractLiquidConduit.canConnectToExternal` asking `getCapacity() > 0`, which every machine whose
- * recipes use fluids has, and each conduit of a bundle connects on its own). A multiblock: the cell above each fluid
- * hatch, one fluid each (`hatch`). Any other single-block machine keeps the cell above it for all its fluids (`top`):
- * a steam machine (`MTEBasicMachineBronze`) holds only steam in its tank and must keep its output side clear to vent
- * (`allowToCheckRecipe`), and the other kinds follow rules of their own. A port above faces down.
+ * recipes use fluids has, and each conduit of a bundle connects on its own). A multiblock: the cell each fluid hatch
+ * faces, one fluid each (`hatch`: above it, or beside it where GT takes the hatch only lower down). Any other
+ * single-block machine that is no steam machine keeps the cell above it for all its fluids (`top`). A steam machine
+ * (`MTEBasicMachineBronze`) vents through its top (`allowToCheckRecipe`), so it gets no fluid port here and its fluids
+ * are moved by hand (`steam_fluids`); the other kinds follow rules of their own. A port's face looks at its hatch or
+ * machine.
  */
 function unitFluidPorts(pack: Pack, u: PlacedUnit): FluidPortPlan[] {
   if (u.io.fluidIn.length === 0 && u.io.fluidOut.length === 0) return [];
   if (u.multiblock) {
     return [
-      ...u.ports.fluidIn.map((pos, i): FluidPortPlan => ({ pos, side: DOWN, port: 'hatch', makes: [], takes: [u.io.fluidIn[i]!] })),
-      ...u.ports.fluidOut.map((pos, i): FluidPortPlan => ({ pos, side: DOWN, port: 'hatch', makes: [u.io.fluidOut[i]!], takes: [] })),
+      ...u.ports.fluidIn.map((pos, i): FluidPortPlan => ({ pos, side: u.ports.fluidInSides[i] ?? DOWN, port: 'hatch', makes: [], takes: [u.io.fluidIn[i]!] })),
+      ...u.ports.fluidOut.map((pos, i): FluidPortPlan => ({ pos, side: u.ports.fluidOutSides[i] ?? DOWN, port: 'hatch', makes: [u.io.fluidOut[i]!], takes: [] })),
     ];
   }
   const spine = u.ports.items[0];
@@ -769,7 +779,7 @@ function portNames(faces: readonly FacePlan[], port: FluidPort): string[] {
 
 /**
  * `layout:logistics:fluids`: lay the network along the middle row[ to the output side of each GT basic machine whose
- * fluids it meets there][ and up to the fluid hatches of each multiblock][ and up to the top of each other machine][,
+ * fluids it meets there][ and to the fluid hatches of each multiblock][ and up to the top of each other machine][,
  * with its open ends][; and how many of its cells share a bundle with the Item Conduit], from the laid faces `laid`;
  * with open ends, `layout:logistics:tanks`: a tank on each, from the bottom. Both pinned to the site. The tanks step
  * names the open ends' side by the line's shape, never by compass: drafts are in the line's own frame and become build
@@ -782,7 +792,7 @@ function fluidDrafts(input: ModeInput, conduit: string, cells: readonly Vec3[], 
   const bundled = cells.filter((c) => itemCells.has(posKey(c))).length;
   const hatches = portNames(laid, 'hatch'), tops = portNames(laid, 'top');
   const reach = `${laid.some((f) => f.port === 'spine') ? ' to the output side of each electric single-block machine that moves fluids' : ''}`
-    + `${hatches.length === 0 ? '' : ` and up to the fluid hatches of each ${joinNames(hatches)}`}`
+    + `${hatches.length === 0 ? '' : ` and to the fluid hatches of each ${joinNames(hatches)}`}`
     + `${tops.length === 0 ? '' : ` and up to the top of each ${joinNames(tops)}`}`;
   const endWords = ends.length === 0 ? '' : `, with ${ends.length === 1 ? 'an open end' : `${fmtInt(ends.length)} open ends`} at the tail for your tanks`;
   const bundleWords = bundled === 0 ? ''
@@ -820,11 +830,12 @@ function fluidLine(input: ModeInput, nets: readonly FluidNet[], items: ItemLine 
   const need: Record<SideName, number> = { extract: busiest(planned, 'extract'), insert: busiest(planned, 'insert') };
   const { part, kind, short } = pickFluidConduit(parts, need);
 
-  // a riser may cross a free cell or an Item Conduit cell, never a unit, reserved air, a power port or a chest
+  // a riser may cross a free cell or an Item Conduit cell, never a unit, reserved air, a power port, a chest or a cell
+  // beside a unit run by hand, which nothing of the line touches
   const blocked = new Set([
     ...placement.blocks.map((b) => posKey(b.pos)), ...placement.reserved.map(posKey),
     ...placement.units.flatMap((u) => (u.ports.power === null ? [] : [posKey(u.ports.power)])),
-    ...(items?.chests ?? []).map((c) => posKey(c.pos)),
+    ...(items?.chests ?? []).map((c) => posKey(c.pos)), ...handRunSurroundings(placement).map(posKey),
   ]);
   const network = fluidNetwork(placement, ports.map((f) => f.pos), ends.length, blocked);
   const laidCells = new Set(network.cells.map(posKey));

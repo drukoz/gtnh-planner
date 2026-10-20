@@ -7,6 +7,7 @@ import { parseArgs } from 'node:util';
 import { recipeTier, tierName } from '../../shared/gt/tiers.ts';
 import type { Ingredient, Pack, Product, Recipe, RecipeSource, SearchHit } from '../../shared/types/pack.ts';
 import { activeExportDir, ConfigError, loadConfig, NoActiveExportError } from '../config.ts';
+import { tableItemCount } from '../pack/crops.ts';
 import { ExportFormatError, loadPack } from '../pack/load.ts';
 import { searchPack } from '../pack/search.ts';
 
@@ -51,7 +52,7 @@ function summary(exportId: string, pack: Pack): string[] {
   const lines = [
     `Export:     ${exportId}`,
     `Pack:       ${m.packVersion} · GregTech ${m.gtVersion} · exporter ${m.exporterVersion} · exported ${m.exportedAt}`,
-    `Items:      ${pack.items.size} · Fluids: ${pack.fluids.size} · Ore names: ${pack.oreDict.size}`,
+    `Items:      ${tableItemCount(pack.items)} · Fluids: ${pack.fluids.size} · Ore names: ${pack.oreDict.size}`,
     `Recipes:    ${pack.recipes.length} (${SOURCES.map((s) => `${s} ${bySource(s)}`).join(', ')}) in ${pack.maps.size} maps`,
     `Machines:   ${machines.length} (${machines.filter((x) => x.kind === 'multiblock').length} multiblocks, ${machines.filter((x) => x.structure !== undefined).length} with structure)`,
     `Materials:  ${pack.materials.size} · Dimensions: ${dimensions.length} · Veins: ${veins.filter((v) => v.kind === 'vein').length} (+${veins.filter((v) => v.kind === 'small').length} small ores) · Capabilities: ${capabilities.length}`,

@@ -102,6 +102,25 @@ describe('plan banner', () => {
     (plan!.props.onClick as () => void)();
     expect(send).toHaveBeenCalledWith([{ op: 'settings', patch: { routeDerived: true } }]);
   });
+  it('leaves what a Make N batch comes out short of to its batch-short warning', () => {
+    // Plan 09's final review: whole crafts that leave a good short gave a short input at each step that takes it under
+    // the red heading, beside the warning that already says what to have ready.
+    const shortText = 'Whole crafts do not balance: have 2× Empty Cell ready before you start (cells or catalysts the chain hands round), or the batch comes out short.';
+    const batch = planOf({
+      steps: [
+        step({ id: 'use', mainOutput: 't:thing@0', runsPerSecond: 0.01, inputs: [{ key: 't:cell@0', amount: 2, chance: 1 }], outputs: [{ key: 't:thing@0', amount: 1, chance: 1 }] }),
+        step({ id: 'can', mainOutput: 't:cell@0', runsPerSecond: 0.01, outputs: [{ key: 't:cell@0', amount: 1, chance: 1 }] }),
+      ],
+      flows: [{ from: 'can', to: 'use', key: 't:cell@0', perSecond: 0.01 }, { from: 'use', to: 'out', key: 't:thing@0', perSecond: 0.01 }],
+      names: { 't:cell@0': 'Empty Cell', 't:thing@0': 'Thing' },
+      makeN: { totalSeconds: 100, leftovers: [] },
+      warnings: [{ code: 'batch-short', key: 't:cell@0', keys: ['t:cell@0'], text: shortText }],
+    });
+    const out = text(html(batch));
+    expect(out).toContain(shortText);
+    expect(out).not.toContain('does not add up');
+    expect(out).not.toContain('gets only');
+  });
   it('says how much more raw material the plan uses than the least, and why', () => {
     const costly = planOf({ rawCost: { perSecond: 1.21, leastPerSecond: 1 } });
     expect(text(html(costly))).toContain('Uses 21% more raw material than the least possible to save machines (Steps vs raw material: Some steps)');

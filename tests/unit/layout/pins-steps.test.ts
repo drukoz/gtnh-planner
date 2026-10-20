@@ -4,6 +4,7 @@ import { layoutSteps, bomFromBlocks, assignBuildSteps, type StepsInput } from '.
 import { coverText, configTexts } from '../../../src/shared/layout/configure-text.ts';
 import { unitsFromPlan, placeUnits } from '../../../src/server/layout/arrange.ts';
 import { layoutPack, makePlan, makeScan, IDS, STONE } from '../../helpers/layout-fixtures.ts';
+import { primitivePack, STEAM } from '../../helpers/primitive-fixtures.ts';
 import type { Hookup, LayoutBlock } from '../../../src/shared/types/layout.ts';
 
 const GT = (mteId: number) => ({ id: 'gregtech:gt.blockmachines', meta: 0, mteId });
@@ -142,14 +143,33 @@ describe('layout steps', () => {
     const plan = makePlan([{ id: 'e', mteId: IDS.EBF, count: 1, tier: 2, euPerTick: 120,
       inputs: [['t:dust@0', 1], ['fluid:oxygen', 1000]], outputs: [['t:ingot@0', 1]] }]);
     const placement = placeUnits(unitsFromPlan(layoutPack(), plan).units, { headWidth: 1, portSpacing: 0 });
-    const steps = layoutSteps(base({ status: 'no-world', size: [5, 4, 7], units: placement.units, supplyTier: 2 }));
+    // the line's height counts the air above the EBF's muffler (layoutLine gives 5 for this line)
+    const steps = layoutSteps(base({ status: 'no-world', size: [5, 5, 7], units: placement.units, supplyTier: 2 }));
+    // GT's EBF needs a muffler on its top (the 'm' element), which the fixture's structure does not hold, and the
+    // muffler needs the block it faces empty (MTEHatchMuffler.polluteEnvironment)
     expect(steps.find((s) => s.id === 'layout:place:e')!.text).toBe('Build 1× Electric Blast Furnace (3×4×3) with the controller facing the middle row; '
-      + 'hatches: Input Bus (ULV), Output Bus (LV), MV Energy Hatch, Maintenance Hatch, Input Hatch (LV)');
-    expect(steps[0]!.text).toBe('Clear a 5×7 spot (4 high) and keep a 1-block path around it');
+      + 'hatches: Input Bus (ULV), Output Bus (LV), MV Energy Hatch, Maintenance Hatch, Input Hatch (LV), Muffler Hatch (LV); '
+      + 'keep the block above its Muffler Hatch empty, or GregTech stops the machine (a muffler needs air to vent)');
+    expect(steps[0]!.text).toBe('Clear a 5×7 spot (5 high) and keep a 1-block path around it');
+    expect(steps[1]!.text).toBe('Roof the line over its 5-high space: GT machines left in the rain can catch fire or explode, and a Muffler Hatch '
+      + 'needs the block it faces kept empty');
     expect(steps.every((s) => s.pin === undefined)).toBe(true);
     expect(steps.find((s) => s.id === 'layout:power:hookup')!.text).toBe('No power network found: feed the line from your own MV supply (see the power suggestions)');
     expect(layoutSteps(base({ status: 'empty', reuse: [{ stepId: 's1', name: 'Basic Macerator', count: 1, positions: [[1, 64, 1]] }] })).map((s) => s.id))
       .toEqual(['layout:reuse:s1']);
+  });
+
+  it("roofs the line above the blocks its mufflers and its steam machines' vents need open", () => {
+    // an EBF (its muffler faces up from its top) and a venting Steam Macerator (its output side up, under an empty block)
+    const plan = makePlan([{ id: 'e', mteId: IDS.EBF, count: 1, tier: 2, euPerTick: 120, inputs: [['t:dust@0', 1]], outputs: [['t:ingot@0', 1]] },
+      { id: 's', mteId: STEAM, count: 1, euPerTick: 4, inputs: [['t:ingot@0', 1]], outputs: [['t:out_s@0', 1]] }]);
+    const { units } = placeUnits(unitsFromPlan(primitivePack(), plan, { primitive: true }).units, { headWidth: 1, portSpacing: 0 });
+    const roof = (only: readonly string[]) => layoutSteps(base({ status: 'no-world', size: [6, 5, 7], supplyTier: 2,
+      units: units.filter((u) => only.includes(u.stepId)) })).find((s) => s.id === 'layout:roof')!.text;
+    const STEAM_ROOF = 'each steam machine vents its steam through its top: keep the block above it open and roof above it';
+    expect(roof(['e', 's'])).toBe('Roof the line over its 5-high space: GT machines left in the rain can catch fire or explode, a Muffler Hatch '
+      + `needs the block it faces kept empty, and ${STEAM_ROOF}`);
+    expect(roof(['s'])).toBe(`Roof the line over its 5-high space: GT machines left in the rain can catch fire or explode, and ${STEAM_ROOF}`);
   });
 
   it('bomFromBlocks groups cables as power and covers as logistics', () => {

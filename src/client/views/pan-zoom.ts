@@ -1,7 +1,7 @@
 // Pan and zoom for a picture drawn in an svg, with the flow diagram's limits and feel (the Connections tab uses it; a
 // later cleanup can move FlowView onto it). A view puts the picture's top left at (x, y) in the svg's screen pixels and
 // zooms it by k: the picture's group has the transform `translate(x y) scale(k)`, so a drag adds what the pointer moved
-// to x and y at any zoom.
+// to x and y at any zoom. When the svg changes size the view is fitted again or keeps its middle (`resizeView`).
 
 /** Where the picture's top left is (screen px) and its zoom. */
 export interface View { x: number; y: number; k: number }
@@ -45,4 +45,21 @@ export function fitView(picture: Size, area: Size, pad = 0): View {
   if (area.width <= 0 || area.height <= 0 || picture.width <= 0 || picture.height <= 0) return { x: pad, y: pad, k: 1 };
   const k = Math.min(1, clampZoom(Math.min((area.width - 2 * pad) / picture.width, (area.height - 2 * pad) / picture.height)));
   return { k, x: Math.max(pad, (area.width - picture.width * k) / 2), y: Math.max(pad, (area.height - picture.height * k) / 2) };
+}
+
+/** Whether two views are the same, within what rounding leaves. */
+export function sameView(a: View, b: View): boolean {
+  const EPS = 1e-6;
+  return Math.abs(a.x - b.x) < EPS && Math.abs(a.y - b.y) < EPS && Math.abs(a.k - b.k) < EPS;
+}
+
+/**
+ * The view once the area that shows `picture` changed size from `before` to `after` (the Connections view's side panel
+ * opening or closing beside it; the review of 401d0ca): fitted again (`fitView`) while it is still `fitted`, the view
+ * last fitted, so nothing of the picture is cut off; else moved by half the change, so the spot in the middle of the
+ * area stays in the middle, at the same zoom.
+ */
+export function resizeView(v: View, fitted: View | null, picture: Size, before: Size, after: Size, pad = 0): View {
+  if (fitted !== null && sameView(v, fitted)) return fitView(picture, after, pad);
+  return { k: v.k, x: v.x + (after.width - before.width) / 2, y: v.y + (after.height - before.height) / 2 };
 }

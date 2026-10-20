@@ -37,7 +37,7 @@ describe('layout fixtures', () => {
     const want = addLineParts(emptyPack());
     const pack = await makePack(withLineParts({}));
     expect(pack.warnings ?? []).toEqual([]);
-    expect(want.machines.size).toBe(30);
+    expect(want.machines.size).toBe(31);
     // toEqual takes an undefined field as missing: a field the fixture leaves out must be missing after loading too
     const fields = (m: Machine | undefined) => Object.fromEntries(LOADED_FIELDS.map((f) => [f, m?.[f]]));
     for (const m of want.machines.values()) expect(fields(pack.machines.get(m.mteId)), `machine ${m.mteId}`).toEqual(fields(m));
