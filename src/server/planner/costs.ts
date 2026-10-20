@@ -98,7 +98,7 @@ export function hasCostOverride(pack: Pack, overrides: Record<string, number>, k
 const ORE_PARTS = new WeakMap<Pack, ReadonlySet<StuffKey>>();
 
 /** An ore block or raw ore: its GT prefix is an ore prefix (`isOrePrefix`), or some material lists it as its ore part. */
-function isOreBlock(pack: Pack, key: StuffKey): boolean {
+export function isOreBlock(pack: Pack, key: StuffKey): boolean {
   const prefix = pack.items.get(key)?.gt?.prefix;
   if (prefix !== undefined && isOrePrefix(prefix)) return true;
   let parts = ORE_PARTS.get(pack);

@@ -152,6 +152,40 @@ describe('machineGap', () => {
     expect(gapText(seed, machine(seed, 122), gap!, 1)).toBeNull();
   });
 
+  it('calls a machine whose chain needs ore the group can mine a pricing gap, not one that cannot be built', async () => {
+    // The Advanced Bending Machine is crafted from a Flawless Gem, which only sifting a Purified Gem Ore makes, from a Gem
+    // Ore. Machine prices buy no ore blocks (plan 09's R8: only a material line does), so nothing in the price graph makes
+    // the ore; on the 2.9 export the Advanced Lathe and Advanced Macerator (a Flawless Diamond) read "needs Native Diamond
+    // Cluster, not available at MV" for it, a mod item that sorted first among such dead ends. Where a vein of the ore is
+    // in reach the chain is available and only its price is missing (controller ruling OQ5 b); where none is, the machine
+    // cannot be built (OQ5 a).
+    const gemSpec = (dims: string[]): PackSpec => {
+      const spec = structuredClone(MINI_GT);
+      return {
+        ...spec,
+        items: [...(spec.items ?? []), { key: 't:gem_ore@0', name: 'Gem Ore', gt: { prefix: 'ore', material: 'Gem' } },
+          { key: 't:gem_purified@0', name: 'Purified Gem Ore', gt: { prefix: 'crushedPurified', material: 'Gem' } },
+          { key: 't:gem_flawless@0', name: 'Flawless Gem', gt: { prefix: 'gemFlawless', material: 'Gem' } }],
+        recipes: [...(spec.recipes ?? []),
+          { id: 'wash-gem', map: 'gt.recipe.macerator', in: [['t:gem_ore@0', 1]], out: [['t:gem_purified@0', 1]], eut: 2, dur: 100 },
+          { id: 'sift-gem', map: 'gt.recipe.centrifuge', in: [['t:gem_purified@0', 1]], out: [['t:gem_flawless@0', 1]], eut: 15, dur: 100 },
+          { id: 'make-102', map: 'crafting', in: [['t:hull_lv@0', 1], ['t:gem_flawless@0', 1]], out: [['machine:102@0', 1]] }],
+        worldgen: { ...spec.worldgen, veins: [...(spec.worldgen?.veins ?? []), { name: 'ore.mix.gem', dims, kind: 'vein', weight: 1, minY: 0, maxY: 255,
+          size: 1, density: 1, materials: { primary: 'Gem', secondary: 'Gem', between: 'Gem', sporadic: 'Gem' } }] },
+      };
+    };
+    const mined = packFromSpec(gemSpec(['overworld']));
+    const minedPrices = await pricesOf(mined, lv);
+    expect(machineBuildCost(mined, minedPrices, machine(mined, 102))).toBeNull();
+    expect(machineGap(mined, minedPrices, machine(mined, 102))).toEqual({ kind: 'gap' });
+    // On the Moon, which LV cannot reach, the ore is out of reach.
+    const moon = packFromSpec(gemSpec(['moon']));
+    const moonPrices = await pricesOf(moon, lv);
+    const out = machineGap(moon, moonPrices, machine(moon, 102));
+    expect(out).toEqual({ kind: 'unavailable', item: 't:gem_ore@0' });
+    expect(gapText(moon, machine(moon, 102), out!, 1)).toBe('needs Gem Ore, not available at LV');
+  });
+
   it('names the part a multiblock cannot get', async () => {
     // The controller is made from circuits alone, and nothing makes the casings of its structure.
     const spec = largeBenderSpec();

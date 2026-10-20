@@ -22,10 +22,10 @@ import type { Machine, Pack, Recipe } from '../../shared/types/pack.ts';
 import type { BomLine, PlanContext, PlanSettings } from '../../shared/types/plan.ts';
 import { basisContextKey, effectiveTier, planBasis, settingsHash } from './basis.ts';
 import { buildCandidates, type CandidateGraph } from './candidates.ts';
-import { analyzeCosts, makeLeafOracle } from './costs.ts';
+import { analyzeCosts, isOreBlock, makeLeafOracle } from './costs.ts';
 import { yieldToEventLoop } from './lp.ts';
 import { sig9 } from './round.ts';
-import { deadEnds, deadEndsAlone } from './solve.ts';
+import { deadEnds, deadEndsAlone, makeableWith } from './solve.ts';
 
 /** Machine pricings kept per pack (`itemPrices`), the least recently used dropped first. */
 export const MACHINE_PRICE_MEMO_SIZE = 8;
@@ -91,22 +91,28 @@ export function machinePricingKey(settings: PlanSettings, ctx: PlanContext): str
 
 /**
  * Why `key`, priced Infinity in `graph` (null: no graph was walked), has no price: `no-recipe` when no recipe of the pack
- * makes it, else a good `deadEnds` names, else a pricing gap. The good named is one that alone, made available, would let
- * `key` be made (`deadEndsAlone`), else any dead end; among those a base material out of reach first, then a good whose
- * recipes cannot run here (it has a `blocked` entry), then any other (a good nothing makes), each by key. Of the dead
- * ends of every route sorted by key, the first was often one route's oddity — on the 2.9 export the reactor sensor
- * location cards nothing makes, behind the "Any MV Circuit" stand-in that one recipe of an Emitter (MV) takes, or that
- * an MV-circuit slot lists beside the real circuits — while what kept the machine from being built was another good. A
- * walk stopped at its recipe cap left goods unexpanded that would look out of reach, so there every such key is a pricing
- * gap, never a machine that cannot be built.
+ * makes it, else a pricing gap when the ore blocks among its dead ends that the group can mine (`mined`: machine prices
+ * buy none, plan 09's R8, though a material line would) would let it be made — its chain is available, only its price is
+ * missing (controller ruling OQ5 b: on the 2.9 export the Advanced Lathe and Advanced Macerator, whose Flawless Diamond
+ * only sifting purified Diamond Ore makes, read "needs Native Diamond Cluster, not available at MV", a mod item that
+ * sorted first among such dead ends) — else a good `deadEnds` names, else a pricing gap. The good named is one that alone,
+ * made available, would let `key` be made (`deadEndsAlone`), else any dead end; among those a base material out of reach
+ * first, then a good whose recipes cannot run here (it has a `blocked` entry), then any other (a good nothing makes),
+ * each by key. Of the dead ends of every route sorted by key, the first was often one route's oddity — on the 2.9 export
+ * the reactor sensor location cards nothing makes, behind the "Any MV Circuit" stand-in that one recipe of an Emitter
+ * (MV) takes, or that an MV-circuit slot lists beside the real circuits — while what kept the machine from being built
+ * was another good. A walk stopped at its recipe cap left goods unexpanded that would look out of reach, so there every
+ * such key is a pricing gap, never a machine that cannot be built.
  */
-function gapOf(pack: Pack, graph: CandidateGraph | null, key: StuffKey): PriceGap {
+function gapOf(pack: Pack, graph: CandidateGraph | null, key: StuffKey, mined: (key: StuffKey) => boolean): PriceGap {
   if ((pack.producers.get(key) ?? []).length === 0) return { kind: 'no-recipe' };
   if (graph?.truncated === true) return { kind: 'gap' };
   if (graph === null) return { kind: 'unavailable', item: key };
   const rank = (end: StuffKey): number => (graph.goods.get(end)?.leafClass === 'unavailable' ? 0 : graph.blocked.has(end) ? 1 : 2);
   const first = (ends: readonly StuffKey[]): StuffKey | undefined => [...ends].sort((a, b) => rank(a) - rank(b) || byString(a, b))[0];
   const ends = deadEnds(graph, key);
+  const ores = ends.filter(mined);
+  if (ores.length > 0 && makeableWith(graph, key, ores)) return { kind: 'gap' };
   const item = first(deadEndsAlone(graph, key, ends)) ?? first(ends);
   return item === undefined ? { kind: 'gap' } : { kind: 'unavailable', item };
 }
@@ -130,10 +136,15 @@ async function computePrices(pack: Pack, s: PlanSettings, ctx: PlanContext, keys
     return decision.buyable ? decision.cost : (costs?.cost(key) ?? Infinity);
   };
   const gaps = new Map<StuffKey, PriceGap | undefined>();
+  // An ore block a material line would buy here (makeLeafOracle's direct and byproduct ores).
+  const mined = (key: StuffKey): boolean => {
+    const reach = basis.avail.classOf(key);
+    return (reach === 'direct' || reach === 'byproduct') && isOreBlock(pack, key);
+  };
   return {
     cost,
     gap(key) {
-      if (!gaps.has(key)) gaps.set(key, Number.isFinite(cost(key)) ? undefined : gapOf(pack, graph, key));
+      if (!gaps.has(key)) gaps.set(key, Number.isFinite(cost(key)) ? undefined : gapOf(pack, graph, key, mined));
       return gaps.get(key);
     },
   };

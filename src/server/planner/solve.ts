@@ -1357,6 +1357,11 @@ export function deadEndsAlone(graph: CandidateGraph, from: StuffKey, ends: reado
   return ends.filter((key) => makeableGoods(graph, [key]).has(from)).sort(byString);
 }
 
+/** Whether `from` is makeable in `graph` with the goods of `given` made available (the makeable fixpoint with them). */
+export function makeableWith(graph: CandidateGraph, from: StuffKey, given: readonly StuffKey[]): boolean {
+  return makeableGoods(graph, given).has(from);
+}
+
 /**
  * Why the targets cannot be made. Each target the makeable fixpoint misses is walked on its own (`deadEnds`' walk, over
  * one fixpoint for all targets), through the producers of the goods the fixpoint misses. A good it misses is a blocker
