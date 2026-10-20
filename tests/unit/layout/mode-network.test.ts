@@ -82,8 +82,11 @@ describe('AE2 mode', () => {
     expect(r.extraParts).toEqual([{ key: 'appliedenergistics2:item.ItemMultiMaterial@52', amount: 3, why: 'one processing pattern per machine', group: 'logistics' }]);
     expect(r.warnings).toEqual([{ code: 'ae2_channels', text: 'The line needs 3 channels; the AE2 network has 2 free' }]);
     expect([r.logisticsPort, r.hookup]).toEqual([[6, 0, 2], { part: 'me_cable', end: null }]);
-    expect(r.blocks.find((b) => b.pos[0] === 1 && b.role === 'interface')!.config)
-      .toEqual({ patterns: 1, pattern: '1× Raw Input → 1× t:out_s1@0', blockingMode: false });
+    // the feeding fix (architecture §11 entry 51): the pattern is the interface's structured feed, blocking when nothing it
+    // holds is off AE2's ignore list
+    const iface = r.blocks.find((b) => b.pos[0] === 1 && b.role === 'interface')!;
+    expect([iface.config, iface.feed]).toEqual([undefined, { interface: { patterns: [{ inputs: [{ key: 't:in@0', amount: 1 }],
+      outputs: [{ key: 't:out_s1@0', amount: 1 }] }], blocking: true } }]);
     expect(r.drafts.map((d) => d.id)).toEqual(['layout:logistics:line']);
     expect(r.drafts[0]!.text).toBe("Lay ME glass cable along the middle row with an ME interface at every machine's output side or bus");
     // final review: the interface pushes the pattern's inputs through each machine's output side
@@ -97,13 +100,15 @@ describe('AE2 mode', () => {
     expect(r.warnings.map((w) => w.code)).toEqual(['ae2_missing']);
   });
 
-  it('puts no interface in front of a machine that moves only fluids', () => {
+  it('puts no interface in front of a machine that moves only fluids, and an ME Export Bus in front of one that makes only fluids', () => {
     const network = makeScan({ logistics: [{ kind: 'ae2', taps: [[0, 64, 0]] }] }).logistics[0]!;
     const r = buildMode('ae2', { ...setup('ae2', mixed()), network });
+    // s3 makes only Molten Iron: no pattern could count it, so cable with an export bus on its face toward the machine
     expect(r.blocks.map((b) => [b.pos[0], b.role, b.connections])).toEqual([
-      [1, 'interface', undefined], [2, 'pipe', 16 | 32], [3, 'pipe', 16 | 32], [4, 'pipe', 16 | 32], [5, 'interface', undefined], [6, 'pipe', 16]]);
-    expect(r.blocks[4]!.config).toEqual({ patterns: 1, pattern: '1× Raw Input → 144× Molten Iron', blockingMode: false });
-    expect([r.extraParts[0]!.amount, r.covers.map((c) => c.pos), r.warnings]).toEqual([2, [[1, 0, 1]], []]);
+      [1, 'interface', undefined], [2, 'pipe', 16 | 32], [3, 'pipe', 16 | 32], [4, 'pipe', 16 | 32], [5, 'pipe', 16 | 32], [6, 'pipe', 16]]);
+    expect([r.blocks[4]!.config, r.blocks[4]!.feed]).toEqual([undefined, undefined]);
+    expect([r.extraParts[0]!.amount, r.covers.map((c) => [c.pos, c.cover.item]), r.warnings.map((w) => [w.code, w.stepId])]).toEqual([1,
+      [[[1, 0, 1], 'gregtech:gt.metaitem.01@32630'], [[5, 0, 2], 'appliedenergistics2:item.ItemMultiPart@260']], [['ae2_no_pattern', 's3']]]);
     // only the machines that take items get input from their output side: the chemical reactor takes only oxygen
     expect(r.configs.map((c) => c.pos)).toEqual([[1, 0, 1], [5, 0, 1]]);
   });

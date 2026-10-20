@@ -178,6 +178,8 @@ const PART_ITEMS: ReadonlyArray<readonly [ItemKey, string]> = [
   ['appliedenergistics2:item.ItemMultiPart@16', 'ME Glass Cable - Fluix'],
   ['appliedenergistics2:item.ItemMultiPart@260', 'ME Export Bus'],
   ['appliedenergistics2:item.ItemMultiMaterial@52', 'Blank Pattern'],
+  ['appliedenergistics2:item.ItemMultiMaterial@27', 'Capacity Card'],
+  ['appliedenergistics2:item.ItemMultiMaterial@30', 'Acceleration Card'],
 ];
 
 /** Plain items `layoutPack` adds for plans to flow. */

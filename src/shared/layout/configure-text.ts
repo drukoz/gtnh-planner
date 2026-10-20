@@ -37,11 +37,30 @@ function modeText(mode: Value, filter: readonly string[]): string {
   }
 }
 
+/** `<n> <thing>` or `<n> <thing>s`. */
+function counted(n: number, thing: string): string {
+  return `${fmtInt(n)} ${thing}${n === 1 ? '' : 's'}`;
+}
+
+/**
+ * An ME Export Bus on a cable's face (architecture §11 entry 51: the AE2 mode feeds a machine that makes only fluids
+ * with one, `settings.mode` 'me_export'): the items to put in its filter slots, then its Capacity and Acceleration Cards.
+ */
+function meExportText(cover: CoverSpec, nameOf: (k: StuffKey) => string): string {
+  const { capacityCards, accelerationCards } = cover.settings;
+  const cards = [...(typeof capacityCards === 'number' && capacityCards > 0 ? [counted(capacityCards, 'Capacity Card')] : []),
+    ...(typeof accelerationCards === 'number' && accelerationCards > 0 ? [counted(accelerationCards, 'Acceleration Card')] : [])];
+  return `${nameOf(cover.item)} on the ${faceName(cover.face)} face: put ${joinNames((cover.filter ?? []).map(nameOf))} in its filter slots`
+    + `${cards.length === 0 ? '' : `; ${cards.join(', ')}`}`;
+}
+
 /**
  * `<cover name> on the <face> face: <settings>`: the mode first, then `allow input` (only when true), then the rate
- * with its unit, then any other setting as `<key> <value>` in insertion order (`unit` goes with the rate).
+ * with its unit, then any other setting as `<key> <value>` in insertion order (`unit` goes with the rate). An ME Export
+ * Bus says what goes in its filter and its cards (`meExportText`).
  */
 export function coverText(cover: CoverSpec, nameOf: (k: StuffKey) => string): string {
+  if (cover.settings.mode === 'me_export') return meExportText(cover, nameOf);
   const { mode, allowInput, rate, unit, ...rest } = cover.settings;
   const parts: string[] = [];
   if (mode !== undefined) parts.push(modeText(mode, (cover.filter ?? []).map(nameOf)));

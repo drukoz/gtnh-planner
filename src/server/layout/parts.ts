@@ -21,7 +21,7 @@ export type PartId = 'conveyor_cover' | 'pump_cover' | 'item_filter_cover' | 'ch
   | 'chip_responder' | 'chip_extractor' | 'chip_stock_keeper' | 'me_interface' | 'me_cable' | 'me_export_bus' | 'blank_pattern'
   | 'eio_item_conduit' | 'eio_basic_filter' | 'eio_advanced_filter' | 'eio_big_filter' | 'eio_speed_upgrade'
   | 'eio_fluid_ender' | 'eio_fluid_crystalline' | 'eio_fluid_pink_slime' | 'eio_fluid_melodic' | 'eio_fluid_stellar'
-  | 'chip_terminator';
+  | 'chip_terminator' | 'ae2_capacity_card' | 'ae2_acceleration_card';
 
 /**
  * `keys` are tried in order against the pack, then `names` (English, ignoring case). `block` is what a placed part
@@ -73,8 +73,11 @@ export const PART_DEFS: Readonly<Record<PartId, PartDef>> = Object.freeze({
   eio_fluid_pink_slime: fluidConduitDef('liquid_pink_slime'),
   eio_fluid_melodic: fluidConduitDef('liquid_melodic'),
   eio_fluid_stellar: fluidConduitDef('liquid_stellar'),
-  // the feeding fix (architecture §11 entry 51): the routed output chest's chip
+  // the feeding fix (architecture §11 entry 51): the routed output chest's chip, and an ME Export Bus's upgrades (its
+  // filter holds 1 item, 4 more per Capacity Card; it moves 1 item an operation, 8, 32, 64 or 96 with Acceleration Cards)
   chip_terminator: partDef('Item Terminator Chip', `${PR_TRANSPORT}.routingchip@3`, 'item'),
+  ae2_capacity_card: partDef('Capacity Card', 'appliedenergistics2:item.ItemMultiMaterial@27', 'item'),
+  ae2_acceleration_card: partDef('Acceleration Card', 'appliedenergistics2:item.ItemMultiMaterial@30', 'item'),
 });
 
 const PART_IDS = Object.keys(PART_DEFS) as PartId[];
@@ -321,13 +324,20 @@ export const AE2_IDLE_AE_PER_TICK: Readonly<Record<'me_interface' | 'me_cable' |
 /** AE per EU: `PowerRatios.IC2 = 2.0`, so 1 EU = 2 AE. */
 export const AE_PER_EU = 2;
 
-/** EU/t the line's ME parts draw while idle: Σ idle AE/t of non-ghost blocks whose item is one of those parts, ÷ `AE_PER_EU`. */
+/**
+ * EU/t the line's ME parts draw while idle: Σ idle AE/t of non-ghost blocks whose item is one of those parts, and of the
+ * covers on them that are (an ME Export Bus on a cable's face: architecture §11 entry 51), ÷ `AE_PER_EU`.
+ */
 export function ae2IdleEUt(blocks: readonly LayoutBlock[], parts: Parts): number {
   const idleByKey = new Map<StuffKey, number>();
   for (const id of Object.keys(AE2_IDLE_AE_PER_TICK) as Array<keyof typeof AE2_IDLE_AE_PER_TICK>) {
     if (!idleByKey.has(parts[id].key)) idleByKey.set(parts[id].key, AE2_IDLE_AE_PER_TICK[id]);
   }
   let ae = 0;
-  for (const b of blocks) if (b.role !== 'ghost' && b.item !== undefined) ae += idleByKey.get(b.item) ?? 0;
+  for (const b of blocks) {
+    if (b.role === 'ghost') continue;
+    if (b.item !== undefined) ae += idleByKey.get(b.item) ?? 0;
+    for (const c of b.covers ?? []) ae += idleByKey.get(c.item) ?? 0;
+  }
   return ae / AE_PER_EU;
 }
