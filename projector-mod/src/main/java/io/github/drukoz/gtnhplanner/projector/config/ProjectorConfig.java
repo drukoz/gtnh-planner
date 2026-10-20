@@ -9,6 +9,9 @@ import java.io.OutputStream;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.Properties;
 
 /**
@@ -114,6 +117,18 @@ public final class ProjectorConfig {
         String t = trimmed(token);
         if (t.isEmpty()) others.remove(TOKEN_PREFIX + projectId);
         else others.setProperty(TOKEN_PREFIX + projectId, t);
+    }
+
+    /** The ids of the projects with a saved token, sorted. */
+    public List<String> projectIds() {
+        List<String> ids = new ArrayList<>();
+        for (String key : others.stringPropertyNames()) {
+            if (key.startsWith(TOKEN_PREFIX) && token(key.substring(TOKEN_PREFIX.length())) != null) {
+                ids.add(key.substring(TOKEN_PREFIX.length()));
+            }
+        }
+        Collections.sort(ids);
+        return ids;
     }
 
     /** Blocks farther than this from the camera are not drawn: 16 to 512, default 96. */
