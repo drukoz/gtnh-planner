@@ -1,16 +1,19 @@
 // The structured feeding configuration of a laid-out line (architecture §11 entry 51; research
 // docs/research/machine-feeding.md §6.4 and §7): the chips of each Project Red routed interface pipe with their filter
 // mode and items, the patterns and blocking mode of each AE2 interface, the filter and cards of an ME Export Bus, and
-// an Auto Workbench's grid (add-on 12). These are add-on 21's feeding-checker contract
-// (`src/server/layout/feeding/contract.ts` in its plan, its architecture request 2), moved here unchanged so the build
+// an Auto Workbench's grid (add-on 12). These are the `FeedSpec` types of add-on 21's feeding-checker contract: its Task 1
+// block of `src/server/layout/feeding/contract.ts` from `ItemFilterSpec` to `FeedSpec`, character for character (doc
+// comments included), which its architecture request 2 has the lane that adds `LayoutBlock.feed` move here, so the build
 // steps, the 3D view, the Connections view and the checker read one structure (its open question 1); its `contract.ts`
-// then re-exports them. One thing differs from what add-on 21's reader expects: fix/feeding lays an ME Export Bus as an
-// AE2 part on the ME glass cable in front of the machine (the cable block's `CoverSpec` with the `me_export_bus` part,
-// facing the machine or its input bus, so the spine's cable runs on through that cell) and writes `exportBus` on that
-// cable block, while add-on 21's reading rule 13 looks for a block whose `block` is the bus (as main lays the hookup's
-// end). Its reader must also take a block with `feed.exportBus` as an ME Export Bus, its target the neighbour on the
-// face of that block's `me_export_bus` cover. Pure TypeScript shared by server and browser: nothing from node:* may be
-// imported here.
+// then re-exports them and keeps the rest of its contract (`FeedConduitFilter`, `FeedBlock`, `CONFIG_KEYS`, the report).
+// Only where one is written differs from its request 2, which has fix/feeding write `feed` on the ME Export Buses it lays:
+// fix/feeding lays an ME Export Bus as an AE2 part on the ME glass cable in front of the machine (the cable block's
+// `CoverSpec` with the `me_export_bus` part, facing the machine or its input bus, so the spine's cable runs on through
+// that cell) and writes `exportBus` on that cable block (role `pipe`), while add-on 21's reading rule 13 takes as a bus
+// only a block whose `block` is the bus (as main lays the hookup's end). Its reader must also take a block with
+// `feed.exportBus` as an ME Export Bus, its target the neighbour on the face of that block's `me_export_bus` cover (a world
+// face, as `CoverSpec.face` is, so turned back with the line's rotation like an interface's `targets`). Pure TypeScript
+// shared by server and browser: nothing from node:* may be imported here.
 
 import type { StuffKey } from '../keys.ts';
 import type { Face } from './assets.ts';
