@@ -410,10 +410,12 @@ const FACE_PLAN: Readonly<Record<HatchKind, FacePlan>> = {
  * The order of the spots a hatch may take (smaller first): a bus faces the spine from the lowest layer, nearest the
  * controller; an energy, maintenance or steam hatch faces the back from the lowest layer, nearest the middle, else a
  * side, else up; a fluid hatch or muffler faces up (front row first, as the generic placement), else a side, else the
- * back. A face toward the spine's side of the box (z = −1) is a bus's only: elsewhere it is the spine, or the cells
- * above it that both rows' hatches would share.
+ * back, and among those first onto a column (x, z) that holds no other port of the unit (`stacked`): ports stacked in
+ * one column wall each other in, so each pipe could only come from the side (a distillation tower's layer outputs, one
+ * per layer, would all take its front corner). A face toward the spine's side of the box (z = −1) is a bus's only:
+ * elsewhere it is the spine, or the cells above it that both rows' hatches would share.
  */
-function spotRank(plan: FacePlan, p: Vec3, side: number, cx: number, middle: number): number[] | null {
+function spotRank(plan: FacePlan, p: Vec3, side: number, cx: number, middle: number, stacked: boolean): number[] | null {
   const [x, y, z] = p;
   const front = side === NORTH && z === 0;
   if (plan === 'front') return front ? [0, y, Math.abs(x - cx), x, z] : null;
@@ -424,9 +426,15 @@ function spotRank(plan: FacePlan, p: Vec3, side: number, cx: number, middle: num
     if (sideways) return [1, y, -z, x, side];
     return side === UP ? [2, z, x, y] : [3, y, z, x];
   }
-  if (side === UP) return [0, z, x, y];
-  if (sideways) return [1, y, z, x, side];
-  return side === SOUTH ? [2, y, Math.abs(x - middle), x] : [3, y, z, x];
+  if (side === UP) return [0, 0, z, x, y];
+  const below = stacked ? 1 : 0;
+  if (sideways) return [1, below, 0, y, z, x, side];
+  return side === SOUTH ? [1, below, 1, y, Math.abs(x - middle), x] : [1, below, 2, y, z, x];
+}
+
+/** The column a port cell stands in. */
+function columnKey(p: Vec3): string {
+  return `${p[0]},${p[2]}`;
 }
 
 function compareRanks(a: readonly number[], b: readonly number[]): number {
@@ -513,6 +521,12 @@ function ruledHatches(pack: Pack, m: Machine, s: PlanStep, io: StepIo, electric:
   }
   const open = openCells(shape);
   const claimed = new Set<string>();
+  /** The columns (x, z) of the claimed ports. */
+  const columns = new Set<string>();
+  const claim = (port: Vec3): void => {
+    claimed.add(posKey(port));
+    columns.add(columnKey(port));
+  };
   const casingsLeft = (rule.casingMin ?? []).map((c) => ({
     chars: c.chars, min: typeof c.min === 'number' ? c.min : c.min(size[1]),
     left: cells.filter((cell, i) => cell.role === 'casing' && c.chars.includes(charOf(i) ?? '\0')).length,
@@ -533,14 +547,14 @@ function ruledHatches(pack: Pack, m: Machine, s: PlanStep, io: StepIo, electric:
       for (let side = 0; side < DIRS.length; side++) {
         const port = step(c.pos, side);
         if (!open.has(posKey(port)) || claimed.has(posKey(port))) continue;
-        const rank = spotRank(plan, c.pos, side, controller[0], middle);
+        const rank = spotRank(plan, c.pos, side, controller[0], middle, columns.has(columnKey(port)));
         if (rank !== null && (best === null || compareRanks(rank, best.rank) < 0)) best = { i, side, port, rank };
       }
     });
     return best;
   };
   const take = (spot: Spot): void => {
-    claimed.add(posKey(spot.port));
+    claim(spot.port);
     const ch = charOf(spot.i) ?? '';
     for (const c of casingsLeft) if (c.chars.includes(ch)) c.left -= 1;
   };
@@ -577,7 +591,7 @@ function ruledHatches(pack: Pack, m: Machine, s: PlanStep, io: StepIo, electric:
     cells[i] = { pos: c.pos, block: machineRef(hatch), role: 'hatch', label: hatch.name, item: hatch.itemKey, hatch: 'muffler', face: spot?.side ?? UP,
       ...(swapped ? { replaces: c.item! } : {}) };
     if (spot !== undefined) {
-      claimed.add(posKey(spot.port));
+      claim(spot.port);
       shape.air.push([...spot.port]);
     }
   });

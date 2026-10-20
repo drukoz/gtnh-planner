@@ -144,9 +144,33 @@ describe('hatches by GregTech\'s rules', () => {
     const { units, warnings } = unitsFromPlan(pack, plan);
     const dt = units[0]!;
     expect(dt.size).toEqual([3, 3, 3]);
-    expect(dt.cells.filter((c) => c.hatch === 'output_hatch').map((c) => [c.pos[1], c.fluid, c.face]).sort()).toEqual([[1, 'fluid:zzz', 4], [2, 'fluid:aaa', 1]]);
+    // the input hatch faces west from the front corner; layer 1's port takes a column of its own, on the east
+    expect(dt.cells.filter((c) => c.hatch === 'output_hatch').map((c) => [c.pos[1], c.fluid, c.face]).sort()).toEqual([[1, 'fluid:zzz', 5], [2, 'fluid:aaa', 1]]);
     expect(dt.cells.find((c) => c.hatch === 'input_hatch')).toMatchObject({ pos: [0, 0, 0], face: 4, fluid: 'fluid:oil' });
     expect(warnings).toEqual([]);
+  });
+
+  it("spreads a distillation tower's side ports over columns of their own, so every pipe reaches its port", async () => {
+    // one output hatch per layer: stacked in one column (the front corner, facing west), each port can only be reached
+    // from the side, and in the busy lines of the real corpus the pipes of tall towers failed
+    const pack = hatchPack();
+    const outs: Array<[string, number]> = [['fluid:zzz', 10], ['fluid:mmm', 10], ['fluid:aaa', 10], ['fluid:nnn', 10], ['fluid:woodtar', 10]];
+    pack.recipeById.set('d', fluidRecipe('d', ['fluid:oil'], outs));
+    const dtStep: StepSpec = { id: 'd', mteId: HATCH_IDS.DT, count: 1, tier: 2, inputs: [['fluid:oil', 100]], outputs: outs };
+    const flows = [{ from: 'raw', to: 'd', key: 'fluid:oil', perSecond: 1 }, ...outs.map(([key]) => ({ from: 'd', to: 'out', key, perSecond: 1 }))];
+    const dt = unitsFromPlan(pack, makePlan([dtStep], { flows })).units[0]!;
+    expect(dt.size).toEqual([3, 6, 3]);
+    const sidePorts = dt.cells.filter((c) => c.fluid !== undefined && c.face !== 1).map((c) => step(c.pos, c.face!));
+    expect(sidePorts).toHaveLength(5);                                                  // the input and layers 1–4
+    expect(new Set(sidePorts.map((p) => `${p[0]},${p[2]}`)).size).toBe(sidePorts.length);
+    for (const mode of ['direct', 'routed', 'ae2', 'enderio'] as const) {
+      const layout = await lay(pack, [dtStep], flows, mode);
+      expect(layout.warnings.filter((w) => w.code === 'route_failed'), mode).toEqual([]);
+      for (const b of byMte(layout, IDS.OUTPUT_HATCH).filter((x) => x.facing !== 1)) {
+        const name = layout.blocks.find((x) => posKey(x.pos) === posKey(step(b.pos, b.facing!)) && x.role === 'pipe')?.label ?? '';
+        if (mode !== 'enderio') expect(name, `${mode}: the pipe on the port of the hatch at ${b.pos}`).toMatch(/Fluid Pipe/);
+      }
+    }
   });
 
   it('builds a distillation tower taller for a recipe with more fluids than it has layers', () => {
