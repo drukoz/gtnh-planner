@@ -92,9 +92,12 @@ export interface Solution {
   /** Whether the plan builds a cleanroom (the model's, which the group does not own). */
   cleanroom?: boolean;
   /**
-   * The build MIP's wall time, nodes and end; `approx` when the plan comes from the fallback; with a whole solution its
-   * objective and HiGHS's proven bound (their gap: how far from the optimum the node limit may have left it; optional
-   * additions of the plan fix wave). Absent with build cost ignored.
+   * The build MIP's wall time, nodes and end — `status` HiGHS's, of the model: `optimal` is the model's optimum, whose
+   * light steps' builds (build-mip.ts `Light`) are exact at S1's runs and may be off by less than a machine each at
+   * others — `approx` when the plan comes from the fallback; with a whole solution the decision's objective with every
+   * machine at its true build (`exactCost`) and HiGHS's proven bound on the model (their gap: how far the node limit and
+   * that pricing may have left the plan from the model's optimum; optional additions of the plan fix wave). Absent with
+   * build cost ignored.
    */
   buildStats?: {
     seconds: number; nodes: number; status: LpResult['status'] | 'skipped'; stop?: 'time' | 'limit'; approx: boolean; objective?: number; bound?: number;
@@ -939,7 +942,7 @@ async function buildStage(
   const buildStats: NonNullable<Solution['buildStats']> = { seconds, nodes: result?.nodes ?? 0, status: result?.status ?? 'skipped', approx };
   if (result?.stop !== undefined) buildStats.stop = result.stop;
   if (result !== undefined && result.x.length > 0) {
-    buildStats.objective = result.objective;
+    buildStats.objective = mip.exactCost(result.x);
     if (result.bound !== undefined) buildStats.bound = result.bound;
   }
   if (decision.short !== undefined) {

@@ -351,6 +351,32 @@ describe('the build-cost MIP', () => {
     expect(runs).toEqual(['slow']);
     expect(sol.machines?.get('slow')).toMatchObject({ option: { mteId: 304 }, added: 3, ownedLoad: 0 });
     expect(sol.runs.get('slow') as number).toBeLessThanOrEqual(3 * 0.4 + 1e-9);
+    // The model priced those machines at max(10, 40 × 1) = 40 and proved that optimal; the objective it reports is the
+    // decision's, with the 48 its machines cost (σ = 1 raw a second over 24 h).
+    expect(sol.buildStats).toMatchObject({ status: 'optimal', approx: false });
+    const { objective, bound } = sol.buildStats as { objective: number; bound: number };
+    expect(objective - bound).toBeCloseTo(8 / 86400, 12);
+  });
+
+  it('prices a step\'s first machine at what its S1 runs need', async () => {
+    // pa runs on an LV press (0.2 runs a second, 10 to build) or an MV one (0.4, 16): at 0.3 runs a second one MV press, 16.
+    // pb runs on a mill (1 run a second, 14.5), its input a hair dearer, so S1 runs pa. Priced from its least build, pa
+    // read max(10, 40 × 0.3) = 12 and won; its first machine now costs what S1's 0.3 runs a second need, 16.
+    const BENDER = 'gt.recipe.metalbender';
+    const WIREMILL = 'gt.recipe.wiremill';
+    const spec = {
+      maps: [{ id: BENDER, name: 'Bending Machine' }, { id: WIREMILL, name: 'Wiremill' }],
+      machines: [{ mteId: 401, name: 'LV Press', tier: 1, maps: [BENDER] }, { mteId: 402, name: 'MV Press', tier: 2, maps: [BENDER] },
+        { mteId: 403, name: 'Mill', tier: 1, maps: [WIREMILL] }],
+      recipes: [
+        { id: 'pa', map: BENDER, in: [['t:a@0', 1]], out: [['t:t@0', 1]], eut: 16, dur: 100 },
+        { id: 'pb', map: WIREMILL, in: [['t:b@0', 1]], out: [['t:t@0', 1]], eut: 16, dur: 100 },
+      ],
+    } satisfies Parameters<typeof solvedWithBuild>[0];
+    const options = { pa: [opt(401, 1, 0.2, 10), opt(402, 2, 0.4, 16)], pb: [opt(403, 1, 1, 14.5)] };
+    const { runs, sol } = await solvedWithBuild(spec, { 't:a@0': 1, 't:b@0': 1.000001 }, [['t:t@0', 0.3]], { options });
+    expect(runs).toEqual(['pb']);
+    expect(sol.machines?.get('pb')).toMatchObject({ option: { mteId: 403 }, added: 1 });
   });
 
   it('falls back to the relaxation rounded up when the time guard stops the MIP', async () => {

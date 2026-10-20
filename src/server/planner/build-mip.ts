@@ -21,10 +21,11 @@ import { STEP_BIG_M, type MainLp } from './solve.ts';
 /**
  * The build MIP stops after its root node (deterministic, as plan 09's STEP_MIP_MAX_NODES), with its best whole solution,
  * which may be the start. Measured on 26 lines of the 2.9 export (plan fix wave, load 3–6 of 16 cores): the root takes
- * 0.04–4 s and plans 15 of them at their proven optimum (Electronic Circuit MV, the user's line, Robot Arm MV among
- * them), the others within 1.3–6.9 % of the optimum or best known by the MIP's objective (the most on Microprocessor HV
- * and the routed Electronic Circuit MV); 10 nodes cost up to 7 s more on Good Electronic Circuit HV (strong branching),
- * and 100 cheap ones found nothing better on the five largest lines.
+ * 0.04–4 s and plans 15 of them at the model's proven optimum (Electronic Circuit MV, the user's line, Robot Arm MV among
+ * them; the model prices a light step's machines as `Light` says), the others within 1.3–6.9 % of the optimum or best
+ * known by the MIP's objective (the most on Microprocessor HV and the routed Electronic Circuit MV); 10 nodes cost up to
+ * 7 s more on Good Electronic Circuit HV (strong branching), and 100 cheap ones found nothing better on the five largest
+ * lines.
  */
 export const BUILD_MIP_MAX_NODES = 1;
 /**
@@ -524,14 +525,21 @@ interface Pool { key: string; option: MachineOption; members: Member[]; n?: numb
 
 /**
  * A step whose machines the MIP prices from their builds alone (`layoutOf`: rate mode without sharing, no owned option,
- * S1's runs within one machine of its cheapest option): its first machine at the least build of its options (`first`,
- * on its step binary), more runs at the least build per run a second (`perRun`) on a continuous column `e`. Exact up to
- * one machine of its cheapest option, and below its decision's machines by less than one machine beyond that.
+ * S1's runs within one machine of its fastest option): its first machine at the build S1's runs need (`first`, on its
+ * step binary: `cheapestAdd`'s machines for them; the least build of its options where S1 runs it not at all), more runs
+ * at the least build per run a second of its options (`perRun`) on a continuous column `e`, so `max(first, perRun ×
+ * runs)`. That is what its machines cost at S1's runs, and at any runs where those fit one machine of the option that
+ * builds one for least; elsewhere it is off by less than one machine's build (above at fewer runs than S1's, below at
+ * more), so the model, its optimum and its bound hold for this pricing, and `buildMip`'s `exactCost` re-prices a
+ * decision. Pricing such a step at the least build alone made one that needs a dearer, faster machine look cheaper than
+ * a rival it is not; giving every step whose S1 runs pass one machine of its least-build option per-option columns
+ * instead left the root node a harder model and worse plans (Microprocessor HV avoiding Diamond 16 % dearer).
  */
-interface Light { first: number; perRun: number; e: number }
+interface Light { first: number; perRun: number; e: number; step: Step }
 
 /** The MIP's columns and rows, and where each part of the model sits. */
 interface Layout {
+  sigma: number /* σ: the raw material one unit of the objective stands for */;
   steps: Step[]; members: Map<number, Member[]>; light: Map<number, Light>; pools: Map<string, Pool>;
   z: Map<number, number> /* Make N: mteId → column */; y: Map<number, number> /* step column → column */; c?: number;
   derived: Array<{ j: number; col: number; weight: number }>;
@@ -594,6 +602,11 @@ function outdonePools(steps: readonly Step[]): Set<string> {
   return outdone;
 }
 
+/** Of two options at one build, whether `u` comes before `best`: the faster, then the lower mteId, tier and index. */
+function before(u: Usable, best: Usable): boolean {
+  return (u.o.perMachine - best.o.perMachine || best.o.mteId - u.o.mteId || best.o.tier - u.o.tier || best.index - u.index) > 0;
+}
+
 /**
  * The new machines `r` runs a second of a step take when they are all of one option and none is owned: the option that
  * builds them for least, then the fastest, the lower mteId, tier and index (`roundUp`'s choice), and how many.
@@ -604,10 +617,7 @@ function cheapestAdd(step: Step, r: number): { u: Usable; added: number } | unde
     if (!adds(u.o)) continue;
     const added = machinesFor(r / u.o.perMachine);
     const cost = u.o.solveBuild * added;
-    const b = best?.u.o;
-    const better = best === undefined || b === undefined || cost < best.cost || (cost === best.cost
-      && (u.o.perMachine - b.perMachine || b.mteId - u.o.mteId || b.tier - u.o.tier || (best.u.index - u.index)) > 0);
-    if (better) best = { u, added, cost };
+    if (best === undefined || cost < best.cost || (cost === best.cost && before(u, best.u))) best = { u, added, cost };
   }
   return best === undefined ? undefined : { u: best.u, added: best.added };
 }
@@ -690,11 +700,12 @@ function layoutOf(input: BuildMipInput, withDerived: boolean): Layout {
   const members = new Map<number, Member[]>();
   const light = new Map<number, Light>();
   const pools = new Map<string, Pool>();
-  /** Without sharing, a step none of whose options is owned and whose S1 runs fit one machine of its cheapest one. */
+  /** Without sharing, a step none of whose options is owned and whose S1 runs fit one machine of its fastest option. */
   const isLight = (step: Step): boolean => {
     if (model.share || step.usable.some((u) => u.o.owned > 0)) return false;
-    const pick = cheapestAdd(step, 0);
-    return pick !== undefined && (input.x1[step.j] ?? 0) * D <= pick.u.o.perMachine * (1 + WHOLE);
+    let fastest = 0;
+    for (const u of step.usable) if (adds(u.o)) fastest = Math.max(fastest, u.o.perMachine);
+    return fastest > 0 && (input.x1[step.j] ?? 0) * D <= fastest * (1 + WHOLE);
   };
   if (rate) {
     const byPool = new Map<string, Member[]>();
@@ -708,7 +719,9 @@ function layoutOf(input: BuildMipInput, withDerived: boolean): Layout {
           first = Math.min(first, u.o.solveBuild);
           perRun = Math.min(perRun, u.o.solveBuild / u.o.perMachine);
         }
-        light.set(step.j, { first, perRun, e: column(1 / sigma, Infinity, false) });
+        const atS1 = (input.x1[step.j] ?? 0) > TINY ? cheapestAdd(step, (input.x1[step.j] ?? 0) * D) : undefined;
+        if (atS1 !== undefined) first = atS1.u.o.solveBuild * atS1.added;
+        light.set(step.j, { first, perRun, e: column(1 / sigma, Infinity, false), step });
         continue;
       }
       const list: Member[] = [];
@@ -860,7 +873,7 @@ function layoutOf(input: BuildMipInput, withDerived: boolean): Layout {
   const derived = !withDerived ? []
     : input.derived.filter((d) => (colCost[d.j] ?? 0) > 0).map((d) => ({ j: d.j, col: column(d.weight, 1, true), weight: d.weight }));
 
-  const layout: Layout = { steps, members, light, pools, z, y, derived, colCost, colUpper, integer, rows };
+  const layout: Layout = { sigma, steps, members, light, pools, z, y, derived, colCost, colUpper, integer, rows };
   if (c !== undefined) layout.c = c;
   return layout;
 }
@@ -998,7 +1011,9 @@ function decodeMakeN(input: BuildMipInput, layout: Layout, x: readonly number[])
  * `layoutOf` that tie the steps' binaries to their machines and to the steps that supply what they take. `start` =
  * `roundUp(input, x1)` in the columns (every step S1 runs at all with machines); `startAt(x)` the same for other runs,
  * with its objective; `decode` reads a whole solution's decision; `prefer` gives, per step column, the option with the
- * most new capacity in `x` (the relaxation's), for `roundUp`. When `roundUp(input, x1)` leaves a step short, that start
+ * most new capacity in `x` (the relaxation's), for `roundUp`; `exactCost` is the objective of a whole solution with its
+ * light steps (`Light`) at the build of the machines `decode` gives them, from which the model's own objective may be off
+ * by less than a machine each. When `roundUp(input, x1)` leaves a step short, that start
  * is no plan (`start` is undefined), so its objective bounds no purchase, and nothing else does soundly (a step with no
  * machine options and no step charge has no bound of its own): the MIP, and so its relaxation, then has no
  * derived-purchase binaries, which only break ties among equally cheap plans.
@@ -1006,6 +1021,7 @@ function decodeMakeN(input: BuildMipInput, layout: Layout, x: readonly number[])
 export function buildMip(input: BuildMipInput): {
   model: LpModel; start: number[] | undefined; startCost: number; startAt(x: readonly number[]): { start: number[]; cost: number } | undefined;
   decode(x: readonly number[]): BuildDecision; prefer(x: readonly number[]): (j: number) => number | undefined;
+  exactCost(x: readonly number[]): number;
 } {
   const width = input.lp.rawCost.length;
   const first = allocate(input, input.x1, undefined, 0);
@@ -1039,6 +1055,16 @@ export function buildMip(input: BuildMipInput): {
       return at === undefined ? undefined : { start: at, cost: costOf(at) };
     },
     decode: (x) => (input.model.mode === 'rate' ? decodeRate(input, layout, x) : decodeMakeN(input, layout, x)),
+    exactCost: (x) => {
+      let cost = costOf(x);
+      for (const [j, l] of layout.light) {
+        const runs = x[j] ?? 0;
+        const pick = runs > TINY ? cheapestAdd(l.step, runs * input.demandScale) : undefined;
+        const truth = pick === undefined ? 0 : pick.u.o.solveBuild * pick.added;
+        cost += (truth - l.first * (x[layout.y.get(j) as number] ?? 0) - (x[l.e] ?? 0)) / layout.sigma;
+      }
+      return cost;
+    },
     prefer: (x) => (j) => {
       let best: { index: number; capacity: number } | undefined;
       for (const m of layout.members.get(j) ?? []) {
