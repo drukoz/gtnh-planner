@@ -18,6 +18,13 @@ export interface LpModel {
   integer?: readonly boolean[];
   /** A MIP stops after this many branch-and-bound nodes (deterministic, unlike a time limit) with its best solution. */
   maxNodes?: number;
+  // optional addition (the plan 12 fix wave: the build MIP's work bound)
+  /**
+   * A MIP stops at the first of HiGHS's interrupt checkpoints where its simplex iterations (`mip_total_lp_iterations`, its
+   * root node's cuts and heuristics included) reach this, with its best whole solution: like `maxNodes` a deterministic
+   * bound, and one that also bounds the work inside a node (`stop: 'limit'`).
+   */
+  maxIterations?: number;
   /** Seconds the solve may take; a MIP that runs out keeps its best whole solution (`feasible`), if it found one. */
   timeLimit?: number;
   // optional addition (the step-charge MIP, solve.ts; fix spec R3)
@@ -38,6 +45,9 @@ export interface LpResult {
   stop?: 'time' | 'limit';
   /** The branch-and-bound nodes a MIP used (HiGHS's `mip_node_count`), on every result of a model with `integer`. */
   nodes?: number;
+  // optional addition (the plan 12 fix wave: the build MIP's gap, for its stats)
+  /** A MIP's best proven bound on the objective (HiGHS's `mip_dual_bound`), on an `optimal` or `feasible` result. */
+  bound?: number;
 }
 
 let loading: Promise<Highs> | null = null;
@@ -152,17 +162,28 @@ export async function solveLp(model: LpModel): Promise<LpResult> {
         // A start HiGHS refuses (its shape was checked above) only loses the head start: the model solves without it.
       }
     }
-    /** A MIP's result carries the nodes it used, when HiGHS can say. */
+    /** A MIP's result carries the nodes it used and, with a solution, its bound, when HiGHS can say. */
     const withNodes = (result: LpResult): LpResult => {
       if (model.integer === undefined) return result;
+      let out = result;
       try {
-        return { ...result, nodes: Number(m.info.get('mip_node_count')) };
+        out = { ...out, nodes: Number(m.info.get('mip_node_count')) };
+        const bound = Number(m.info.get('mip_dual_bound'));
+        if (result.x.length > 0 && Number.isFinite(bound)) out = { ...out, bound };
       } catch {
-        return result;
+        // the counts are only stats
       }
+      return out;
     };
+    const most = model.maxIterations;
     try {
-      m.run();
+      if (most === undefined) {
+        m.run();
+      } else {
+        m.run({ [highs.constants.callbackType.mipInterrupt]: (event) => {
+          if (Number(event.data.mip_total_lp_iterations ?? 0) >= most) event.interrupt();
+        } });
+      }
     } catch {
       return withNodes(notOptimal('error'));   // a native solver failure; malformed input already threw in passModel
     }

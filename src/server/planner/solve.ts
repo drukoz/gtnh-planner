@@ -7,7 +7,8 @@
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import type { PlanWarning } from '../../shared/types/plan.ts';
 import {
-  BUILD_MIP_MAX_NODES, BUILD_MIP_TIME_LIMIT_SECONDS, buildMip, capacityRows, roundUp, type BuildDecision, type BuildMipInput, type StepMachines,
+  BUILD_MIP_MAX_LP_ITERATIONS, BUILD_MIP_MAX_NODES, BUILD_MIP_TIME_LIMIT_SECONDS, buildMip, capacityRows, roundUp, type BuildDecision, type BuildMipInput,
+  type StepMachines,
 } from './build-mip.ts';
 import { canonicalRank, type CandidateGraph, type LpRecipe } from './candidates.ts';
 import { solveLp, type LpModel, type LpResult, type LpRow } from './lp.ts';
@@ -33,6 +34,9 @@ export interface SolveOptions {
   buildTimeLimit?: number;
   /** Nodes the build MIP may use (default BUILD_MIP_MAX_NODES; Task 8's calibration). */
   buildMaxNodes?: number;
+  // optional addition (the plan 12 fix wave)
+  /** Simplex iterations the build MIP may use (default BUILD_MIP_MAX_LP_ITERATIONS; calibration and tests). */
+  buildMaxIterations?: number;
 }
 
 /** The step charge never lets total raw material go above (1 + this) × the least (S1) (fix spec §3). */
@@ -87,8 +91,14 @@ export interface Solution {
   pools?: BuildDecision['pools'];
   /** Whether the plan builds a cleanroom (the model's, which the group does not own). */
   cleanroom?: boolean;
-  /** The build MIP's wall time, nodes and end; `approx` when the plan comes from the fallback. Absent with build cost ignored. */
-  buildStats?: { seconds: number; nodes: number; status: LpResult['status'] | 'skipped'; stop?: 'time' | 'limit'; approx: boolean };
+  /**
+   * The build MIP's wall time, nodes and end; `approx` when the plan comes from the fallback; with a whole solution its
+   * objective and HiGHS's proven bound (their gap: how far from the optimum the node limit may have left it; optional
+   * additions of the plan fix wave). Absent with build cost ignored.
+   */
+  buildStats?: {
+    seconds: number; nodes: number; status: LpResult['status'] | 'skipped'; stop?: 'time' | 'limit'; approx: boolean; objective?: number; bound?: number;
+  };
 }
 
 /**
@@ -850,8 +860,10 @@ function ownedOnlyRuns(bounded: readonly number[], x: readonly number[]): number
 /**
  * The build stage (plan 12 Task 4), when the model counts build cost, in place of R3's stages 2–4 (the charge MIP, its
  * fallback and consolidation; or plan 09's fewest recipes when S1 needs no raw material): S1g, then the build-cost MIP
- * started from `roundUp` of S1 (not passed when that leaves a step short, and the MIP then has no derived-purchase
- * binaries, whose bound comes from the start: `buildMip`) under the node limit and the time guard. A
+ * started from the cheaper by its own objective of `roundUp` of S1 and of plan 09's sparse plan (none when both leave a
+ * step short; without S1's the MIP has no derived-purchase binaries, whose bound comes from that start: `buildMip`), which
+ * its node and simplex-iteration limits decide (BUILD_MIP_MAX_NODES, BUILD_MIP_MAX_LP_ITERATIONS) and a far time guard
+ * only backs up. A
  * MIP that ends without a whole solution, or that the guard stops (or `buildTimeLimit ≤ 0`), gives way to its LP
  * relaxation rounded up (`roundUp` with the relaxation's option of most new capacity) — `roundUp` of S1 when the
  * relaxation does not solve, or its rounding leaves a step short and S1's does not — with the `build-cost-approx`
@@ -871,6 +883,12 @@ async function buildStage(
   const input = buildInput(lp, s1, await leastDug(graph, lp, s1), demandScale, model, opts);
   const mip = buildMip(input);
   const first = roundUp(input, s1.x);
+  // The MIP's start: S1 rounded up, or plan 09's sparse plan within the step charge's cap (`sparseWithin`) rounded up
+  // when that costs less in the MIP's own objective — S1 runs every step of the least raw material, the most a plan of
+  // the line has, so the sparse one is far closer to what the MIP plans.
+  const sparse = await sparseWithin(lp, (1 + STEP_CHARGE_CAP) * s1.objective);
+  const alternative = sparse === null ? undefined : mip.startAt(sparse);
+  const start = alternative !== undefined && alternative.cost < mip.startCost ? alternative.start : mip.start;
   const notes = [...warnings];
   const limit = opts.buildTimeLimit ?? BUILD_MIP_TIME_LIMIT_SECONDS;
   let result: LpResult | undefined;
@@ -878,8 +896,8 @@ async function buildStage(
   if (limit > 0) {
     const began = performance.now();
     result = await solveLp({
-      ...mip.model, ...(first.short === undefined ? { start: mip.start } : {}),
-      maxNodes: opts.buildMaxNodes ?? BUILD_MIP_MAX_NODES, timeLimit: limit,
+      ...mip.model, ...(start === undefined ? {} : { start }),
+      maxNodes: opts.buildMaxNodes ?? BUILD_MIP_MAX_NODES, maxIterations: opts.buildMaxIterations ?? BUILD_MIP_MAX_LP_ITERATIONS, timeLimit: limit,
     });
     seconds = (performance.now() - began) / 1000;
   }
@@ -907,6 +925,10 @@ async function buildStage(
   }
   const buildStats: NonNullable<Solution['buildStats']> = { seconds, nodes: result?.nodes ?? 0, status: result?.status ?? 'skipped', approx };
   if (result?.stop !== undefined) buildStats.stop = result.stop;
+  if (result !== undefined && result.x.length > 0) {
+    buildStats.objective = result.objective;
+    if (result.bound !== undefined) buildStats.bound = result.bound;
+  }
   if (decision.short !== undefined) {
     const sol = infeasibleLine([...warnings, ...ownedOnlyWarnings(lp, model, ownedOnlyRuns(bounded, s1.x))]);
     sol.buildStats = buildStats;

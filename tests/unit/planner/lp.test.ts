@@ -47,6 +47,12 @@ describe('solveLp', () => {
     };
     expect(await solveLp({ ...knapsack, maxNodes: 1 })).toMatchObject({ status: 'feasible', stop: 'limit', nodes: 1 });
     expect(await solveLp({ ...knapsack, timeLimit: 0 })).toMatchObject({ status: 'feasible', stop: 'time' });
+    // The simplex-iteration bound (plan 12 fix wave) stops it deterministically, the same way twice, with a bound on
+    // the optimum no better than the solution it keeps.
+    const bounded = await solveLp({ ...knapsack, maxNodes: 100_000, maxIterations: 50 });
+    expect(bounded).toMatchObject({ status: 'feasible', stop: 'limit' });
+    expect(bounded.bound).toBeGreaterThanOrEqual(bounded.objective - 1e-9);
+    expect(await solveLp({ ...knapsack, maxNodes: 100_000, maxIterations: 50 })).toEqual(bounded);
   });
   it('accepts a start solution', async () => {
     const r = await solveLp({ sense: 'max', colCost: [1, 1], colLower: [0, 0], colUpper: [Infinity, Infinity],

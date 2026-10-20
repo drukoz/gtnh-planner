@@ -10,8 +10,9 @@ import {
   cleanSpec, fastSlowSpec, freeSpec, hammerSpec, handSpec, opt, pressSpec, solderSpec, solvedWithBuild, twoFreeSpec, twoPressSpec,
 } from '../../helpers/build-fixtures.ts';
 import type { StuffKey } from '../../../src/shared/keys.ts';
+import { BUILD_MIP_MAX_LP_ITERATIONS, BUILD_MIP_MAX_NODES, BUILD_MIP_TIME_LIMIT_SECONDS } from '../../../src/server/planner/build-mip.ts';
 import type { MachineOption } from '../../../src/server/planner/machine-options.ts';
-import type { SolveOptions } from '../../../src/server/planner/solve.ts';
+import type { Solution, SolveOptions } from '../../../src/server/planner/solve.ts';
 
 const COSTS: Record<StuffKey, number> = { 't:a@0': 1, 't:b@0': 1, 't:part@0': 1, 't:tin_ingot@0': 1, 't:antimony@0': 1 };
 /** Each board recipe on an assembler, each extractor recipe on an extractor, the alloy smelter (Task 4's solder line). */
@@ -289,6 +290,67 @@ describe('the build-cost MIP', () => {
       expect(idle.runs).toEqual(['dirty']);
       expect(idle.sol.cleanroom).toBe(false);
     }
+  });
+
+  it('stops at its root node, which its node limit decides, and keeps a far time guard', async () => {
+    // Controller ruling 183 (2): no plan depends on time or load. Plan 09's step-charge MIP stops at its root node too.
+    expect(BUILD_MIP_MAX_NODES).toBe(1);
+    expect(BUILD_MIP_MAX_LP_ITERATIONS).toBe(50_000);
+    expect(BUILD_MIP_TIME_LIMIT_SECONDS).toBe(30);
+    const { sol } = await solvedWithBuild(hammerSpec(), GLASS, [['t:glass@0', 1 / 60]], { options: HAMMERS, share: true, alsoMade: GATHERED }, CHARGED);
+    const stats = sol.buildStats;
+    expect(stats?.approx).toBe(false);
+    expect(stats?.nodes).toBeLessThanOrEqual(1);
+    expect(stats?.status === 'optimal' || (stats?.status === 'feasible' && stats.stop === 'limit')).toBe(true);
+    // Its objective and HiGHS's proven bound say how close to the optimum the node limit left it (here: at it).
+    expect(stats?.objective).toBeGreaterThan(0);
+    expect(stats?.bound).toBeLessThanOrEqual((stats?.objective as number) * (1 + 1e-9));
+  });
+
+  it('stops at its simplex-iteration limit with its best whole solution, deterministically', async () => {
+    // A bound of 1 stops the MIP at its first checkpoint: the start (S1 rounded up, or the sparse plan), a plan all the
+    // same, never the time guard's fallback; twice the same.
+    const solve = async (): Promise<Solution> => (await solvedWithBuild(
+      hammerSpec(), GLASS, [['t:glass@0', 0.6]], { options: HAMMERS, share: true, alsoMade: GATHERED }, { ...CHARGED, buildMaxIterations: 1 },
+    )).sol;
+    const first = await solve();
+    expect(first.status).toBe('ok');
+    expect(first.buildStats).toMatchObject({ approx: false });
+    expect(first.buildStats?.status === 'optimal' || first.buildStats?.stop === 'limit').toBe(true);
+    const again = await solve();
+    expect([...again.runs]).toEqual([...first.runs]);
+    expect([...(again.machines ?? [])].map(([id, m]) => [id, m.option.mteId, m.added])).toEqual([...(first.machines ?? [])].map(([id, m]) => [id, m.option.mteId, m.added]));
+  });
+
+  it('plans the same machines whatever the time guard, which never decides a plan', async () => {
+    // The node limit decides: a guard of 5 s, the default 30 s or 10 minutes gives the same runs, machines, pools and
+    // stats, on a line of one step per machine and on a network's sharing pools.
+    const decided = (sol: Solution): unknown => ({
+      runs: [...sol.runs], buys: [...sol.buys],
+      machines: [...(sol.machines ?? [])].map(([id, m]) => [id, m.option.mteId, m.option.tier, m.added, m.newLoad, m.ownedLoad]),
+      pools: [...(sol.pools ?? [])].map(([key, p]) => [key, p.added, p.steps]),
+      stats: { nodes: sol.buildStats?.nodes, status: sol.buildStats?.status, stop: sol.buildStats?.stop, approx: sol.buildStats?.approx },
+    });
+    const solder = async (opts: SolveOptions): Promise<Solution> =>
+      (await solvedWithBuild(solderSpec(), COSTS, [['t:board@0', 1 / 3600]], { options: SOLDER, horizonSeconds: 604800 }, opts)).sol;
+    const hammers = async (opts: SolveOptions): Promise<Solution> =>
+      (await solvedWithBuild(hammerSpec(), GLASS, [['t:glass@0', 0.6]], { options: HAMMERS, share: true, alsoMade: GATHERED }, { ...CHARGED, ...opts })).sol;
+    for (const line of [solder, hammers]) {
+      const base = decided(await line({}));
+      expect((base as { stats: { approx: boolean } }).stats.approx).toBe(false);
+      for (const buildTimeLimit of [5, 600]) expect(decided(await line({ buildTimeLimit }))).toEqual(base);
+    }
+  });
+
+  it('sizes a step its MIP prices from its builds alone by the machines its runs need', async () => {
+    // Fast's machine costs a million, so slow runs although S1 gives it no runs: the MIP prices its machines from their
+    // builds alone (a first one at 10, then 40 a run a second), and its decision builds what 1 run a second needs of the
+    // option that does it for least: 3 MV presses for 48, not 5 LV ones for 50.
+    const options = { fast: [opt(301, 1, 0.2, 1e6)], slow: [opt(302, 1, 0.2, 10), opt(304, 2, 0.4, 16)] };
+    const { runs, sol } = await solvedWithBuild(fastSlowSpec(), COSTS, [['t:t@0', 1]], { options });
+    expect(runs).toEqual(['slow']);
+    expect(sol.machines?.get('slow')).toMatchObject({ option: { mteId: 304 }, added: 3, ownedLoad: 0 });
+    expect(sol.runs.get('slow') as number).toBeLessThanOrEqual(3 * 0.4 + 1e-9);
   });
 
   it('falls back to the relaxation rounded up when the time guard stops the MIP', async () => {
