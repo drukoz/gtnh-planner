@@ -4,11 +4,14 @@
 // pattern — one that makes only fluids an ME Export Bus filtered to its inputs, one that takes only fluids nothing,
 // one whose item outputs all come by chance nothing that feeds it — and a warning that the line relies on stock (or
 // your hands). Blocking mode is on unless the machine holds an item AE2's blocking-ignore list (GT's
-// `AE2Compat.registerBlockingModeIgnoreItems`) leaves out, which blocking mode would never push past.
+// `AE2Compat.registerBlockingModeIgnoreItems`) leaves out, which blocking mode would never push past. A crafting CPU runs a
+// pattern only as often as a job needs what it makes, so a machine whose piped fluid another machine waits for, and whose
+// items no job needs as often, is warned about (`ae2_fluid_short`).
 
 import { describe, expect, it } from 'vitest';
 import { placeUnits, unitsFromPlan } from '../../../src/server/layout/arrange.ts';
 import { emptyScan, layoutLine } from '../../../src/server/layout/layout.ts';
+import { aeRunShares } from '../../../src/server/layout/modes/ae2.ts';
 import { buildMode, PORT_SPACING } from '../../../src/server/layout/modes/mode.ts';
 import { ae2IdleEUt, resolveParts } from '../../../src/server/layout/parts.ts';
 import { projectorPayload } from '../../../src/server/projector/payload.ts';
@@ -139,6 +142,67 @@ describe('AE2 feeding', () => {
     expect(r.warnings).toEqual([{ code: 'ae2_no_pattern', stepId: 'c', text: 'AE2 cannot plan the Basic Macerator: what it makes (Ex and Why) comes '
       + 'by chance, which no pattern can count, so it gets no pattern and nothing pushes Raw Input into it: put it in by hand; what it makes still '
       + 'goes back into your ME storage' }]);
+  });
+
+  describe('a fluid the line pipes on from a machine AE2 runs too seldom', () => {
+    /**
+     * c (a chemical reactor) makes Ex and Oxygen from Raw Input; the Oxygen goes by pipe to each assembler of `to`, which
+     * makes its product from Titanium Dust, the Oxygen and, where `exTo` sends it some, Ex; Ex goes where `exTo` says.
+     */
+    const fluidLine = (exTo: ReadonlyArray<readonly [string, number]>, to: ReadonlyArray<readonly [string, StuffKey]> = [['e', 't:y@0']]): Plan => {
+      const takesEx = new Set(exTo.map(([id]) => id));
+      return makePlan([
+        { id: 'c', mteId: IDS.CHEM_HV, count: 1, tier: 3, inputs: [['t:in@0', 1]], outputs: [['t:x@0', 1], ['fluid:oxygen', 1000]] },
+        ...to.map(([id, product]) => ({ id, mteId: IDS.ASSEMBLER, count: 1, tier: 2, outputs: [[product, 1]] as Array<[StuffKey, number]>,
+          inputs: [['t:dust@0', 1], ...(takesEx.has(id) ? [['t:x@0', 1]] : []), ['fluid:oxygen', 1000]] as Array<[StuffKey, number]> })),
+      ], { flows: [{ from: 'raw', to: 'c', key: 't:in@0', perSecond: 1 }, ...exTo.map(([id, perSecond]) => ({ from: 'c', to: id, key: 't:x@0', perSecond })),
+        ...to.flatMap(([id, product]) => [{ from: 'c', to: id, key: 'fluid:oxygen', perSecond: 1000 / to.length },
+          { from: 'raw', to: id, key: 't:dust@0', perSecond: 1 }, { from: id, to: 'out', key: product, perSecond: 1 }])] });
+    };
+    const short = (plan: Plan) => ae2(pack(), plan).r.warnings.filter((w) => w.code === 'ae2_fluid_short');
+
+    it('says so where no job of the line needs what its pattern makes', () => {
+      // Ex goes to your storage as a byproduct, so no job ever runs c, and e waits for the Oxygen for ever
+      expect(short(fluidLine([['sink', 1]]))).toEqual([{ code: 'ae2_fluid_short', stepId: 'c', key: 'fluid:oxygen', text: 'AE2 runs the Advanced '
+        + 'Chemical Reactor only for a job that needs what its pattern makes (Ex), and no job of this line does: so its Oxygen never reaches the '
+        + 'Advanced Assembler by pipe, which waits for it for ever, and so does a job that needs what it makes. Keep the Advanced Chemical Reactor '
+        + 'running yourself: feed it Raw Input from stock, keep a request for Ex standing, or fill it by hand' }]);
+    });
+
+    it('says how short it runs where a job needs only part of what its pattern makes', () => {
+      const p = pack();
+      p.items.set('t:z@0', { key: 't:z@0', id: 't:z', meta: 0, name: 'Zed', oreDict: [] });
+      // half the Ex goes to e, half to your storage: a job runs c half as often as the two assemblers need its Oxygen
+      const plan = fluidLine([['e', 0.5], ['sink', 0.5]], [['e', 't:y@0'], ['f', 't:z@0']]);
+      expect(ae2(p, plan).r.warnings.filter((w) => w.code === 'ae2_fluid_short').map((w) => w.text)).toEqual(['AE2 runs the Advanced Chemical '
+        + 'Reactor only as often as a job needs what its pattern makes (Ex), about 50 % of the runs the Oxygen it pipes to the Advanced Assembler '
+        + 'making Why and the Advanced Assembler making Zed needs: so they run out of Oxygen and wait for ever, and so does a job that needs what '
+        + 'they make. Keep the Advanced Chemical Reactor running yourself: feed it Raw Input from stock, keep a request for Ex standing, or fill it by hand']);
+    });
+
+    it('says nothing where a job needs all it makes', () => {
+      expect(short(fluidLine([['e', 1]]))).toEqual([]);
+      // a step the line places no machine for asks for all of the Ex it takes: you run that one, asking for Ex as you go
+      expect(short(fluidLine([['n', 1]]))).toEqual([]);
+    });
+
+    it('counts runs only along what a job asks for: the product, patterns at their own share, and what you keep going', () => {
+      const pattern = (out: StuffKey) => ({ inputs: [{ key: 't:in@0', amount: 1 }], outputs: [{ key: out, amount: 1 }] });
+      const flow = (from: string, to: string, key: StuffKey, perSecond = 1) => ({ from, to, key, perSecond });
+      const shares = (flows: Plan['flows'], ids: readonly string[]) => {
+        const plan = makePlan(ids.map((id) => ({ id, mteId: IDS.MACERATOR, count: 1 })), { flows });
+        return Object.fromEntries(aeRunShares(plan, new Map(ids.map((id, i) => [id, pattern(`t:o${i}@0`)]))));
+      };
+      // a chain to the product; a byproduct; half to a pattern, half to storage; to a step without a pattern
+      expect(shares([flow('a', 'b', 't:o0@0'), flow('b', 'out', 't:o1@0')], ['a', 'b'])).toEqual({ a: 1, b: 1 });
+      expect(shares([flow('a', 'sink', 't:o0@0')], ['a'])).toEqual({ a: 0 });
+      expect(shares([flow('a', 'b', 't:o0@0', 0.5), flow('a', 'sink', 't:o0@0', 0.5), flow('b', 'out', 't:o1@0')], ['a', 'b'])).toEqual({ a: 0.5, b: 1 });
+      expect(shares([flow('a', 'hand', 't:o0@0')], ['a'])).toEqual({ a: 1 });
+      // a loop of cells (b empties what a fills): AE2 cannot plan a craft that needs its own output, so the loop asks
+      // for nothing, and what leaves it for the product asks only for its own share
+      expect(shares([flow('a', 'b', 't:o0@0'), flow('b', 'a', 't:o1@0')], ['a', 'b'])).toEqual({ a: 0, b: 0 });
+      expect(shares([flow('a', 'b', 't:o0@0'), flow('b', 'a', 't:o1@0'), flow('b', 'out', 't:o1@0')], ['a', 'b'])).toEqual({ a: 0, b: 0.5 });
+    });
   });
 
   it("puts a multiblock's pattern on its input bus's interface", () => {

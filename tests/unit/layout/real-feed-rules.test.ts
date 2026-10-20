@@ -1,9 +1,9 @@
 // Real-data check of the feeding fix (architecture §11 entry 51; research docs/research/machine-feeding.md §4, §6.4): the
 // research's five probe lines — the Electronic Circuit at MV (1 a minute, by hand and with crafting automated), Red
-// Alloy Ingot (60 a minute), the LV Electric Motor (6 a minute) and the Vacuum Tube (30 a minute) — planned on the
-// active export and laid out with no world in the routed, AE2 and EnderIO modes, as the app does. It runs only with
-// GTNH_LOCAL=1 (and GTNH_PLANNER_CONFIG naming a config whose data folder holds the export) and is skipped everywhere
-// else. It prints counts and codes only.
+// Alloy Ingot (60 a minute), the LV Electric Motor (6 a minute) and the Vacuum Tube (30 a minute) — and Steel Plate (10
+// a minute, whose EBF takes its Oxygen from a Canning Machine), planned on the active export and laid out with no world
+// in the routed, AE2 and EnderIO modes, as the app does. It runs only with GTNH_LOCAL=1 (and GTNH_PLANNER_CONFIG naming
+// a config whose data folder holds the export) and is skipped everywhere else. It prints counts and codes only.
 
 import { beforeAll, describe, expect, it } from 'vitest';
 import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
@@ -27,8 +27,20 @@ const LINES: ReadonlyArray<{ name: string; settings: Partial<PlanSettings> }> = 
   { name: 'Red Alloy Ingot', settings: { target: 'gregtech:gt.metaitem.01@11308', amount: 60, per: 'min', tier: 2 } },
   { name: 'LV Electric Motor', settings: { target: 'gregtech:gt.metaitem.01@32600', amount: 6, per: 'min', tier: 2 } },
   { name: 'Vacuum Tube', settings: { target: 'gregtech:gt.metaitem.01@32700', amount: 30, per: 'min', tier: 2 } },
+  { name: 'Steel Plate', settings: { target: 'gregtech:gt.metaitem.01@17305', amount: 10, per: 'min', tier: 2 } },
 ];
 const MODES: readonly LogisticsMode[] = ['routed', 'ae2', 'enderio'];
+
+/**
+ * The machines (GT basic machine kind) AE2 runs too seldom for the fluid they pipe to another machine, per line: no job
+ * of the line needs what their patterns make (research §4.2 item 2: the Refined Glue the Resistor and Wood Plank
+ * assemblers wait for, the Polyethylene for the Circuit Board assembler, the EBF's Oxygen).
+ */
+const FLUID_SHORT: Readonly<Record<string, ReadonlyArray<readonly [string, string]>>> = {
+  'Electronic Circuit MV': [['centrifuge', 'fluid:refinedglue'], ['chemicalreactor', 'fluid:molten.plastic']],
+  'Electronic Circuit MV, crafting automated': [['centrifuge', 'fluid:refinedglue'], ['chemicalreactor', 'fluid:molten.plastic']],
+  'Steel Plate': [['canner', 'fluid:oxygen']],
+};
 
 /** The blocks beside `b` (all six sides), by the layout's own index of positions. */
 function beside(at: ReadonlyMap<string, LayoutBlock>, b: LayoutBlock, sides = 0b111111): LayoutBlock[] {
@@ -112,7 +124,13 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('the feeding fix on the research
         expect(spec.blocking, `${iface.label} blocking mode`).toBe(held.every((k) => ignoredByBlocking(pack, k)));
       }
       const buses = live.flatMap((b) => (b.covers ?? []).filter((c) => c.settings.mode === 'me_export'));
-      counts.push(`${interfaces.length} interfaces, ${patterns} patterns, ${buses.length} export buses`);
+      // a machine whose piped fluid another machine waits for, and whose pattern no job of the line runs, is warned about
+      const kindOf = (id: string | undefined) => /^basicmachine\.([a-z_]+)\.tier/.exec(pack.machines.get(stepOf(id)?.machine.mteId ?? -1)?.metaName ?? '')?.[1];
+      const short = layout.warnings.filter((w) => w.code === 'ae2_fluid_short').map((w) => [kindOf(w.stepId), w.key]);
+      const expected = FLUID_SHORT[name];
+      if (expected === undefined) expect(short, 'machines AE2 runs too seldom for their piped fluids').toEqual([]);
+      else expect(short, 'machines AE2 runs too seldom for their piped fluids').toEqual(expect.arrayContaining(expected.map((e) => [...e])));
+      counts.push(`${interfaces.length} interfaces, ${patterns} patterns, ${buses.length} export buses, ${short.length} fluid suppliers run too seldom`);
     }
     const codes = [...new Set(layout.warnings.map((w) => w.code))].sort().join(' ');
     console.log(`real-feed ${name} ${mode}: ${plan.steps.length} steps, ${live.filter((b) => b.role === 'machine').length} machines, `

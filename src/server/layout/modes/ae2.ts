@@ -8,15 +8,19 @@
 // Export Bus on the cable in front of it, filtered to its inputs (with a Capacity Card for every four items past the
 // first and Acceleration Cards for its rate; AE2 rv3-beta-1073-GTNH `PartExportBus`, `PartSharedItemBus`); one that takes
 // only fluids, or whose item outputs all come by chance, an interface for what it makes and nothing that feeds it; each
-// with an `ae2_no_pattern` warning that the line then relies on stock or your hands. Blocking mode is on (the next set
-// goes in once a run has taken the last) unless the machine holds an item AE2's blocking-ignore list leaves out, which
-// blocking mode would wait on for ever (GT's `AE2Compat.registerBlockingModeIgnoreItems`: the programmed circuit, its
-// molds, extruder shapes, slicer blades and lenses; not the Packager's schematics). ME glass cable fills the rest of the
-// spine, the tail included, where the base's ME network joins the line. Each interface or bus takes a channel, so the
-// line is checked against the channels the network has free. The patterns are the interfaces' structured `feed`
-// (architecture §11 entry 51). Without an AE2 network at the base the ME parts cannot work: the layout says so and never
-// assumes one. A machine run by hand gets no interface, and a venting steam machine gets its interface on its middle-row
-// side but no cover, as GT allows none on it (architecture §11 entry 48; by-hand.ts says what is then moved by hand).
+// with an `ae2_no_pattern` warning that the line then relies on stock or your hands. A crafting CPU pushes a pattern
+// only as often as a job needs what the pattern makes, never for a fluid the line pipes from it to another machine, so a
+// machine with a pattern whose fluid another machine waits for, and whose items no job of the line needs as often as
+// that fluid is needed, gets an `ae2_fluid_short` warning: that machine must be kept running by you (`aeRunShares`).
+// Blocking mode is on (the next set goes in once a run has taken the last) unless the machine holds an item AE2's
+// blocking-ignore list leaves out, which blocking mode would wait on for ever (GT's
+// `AE2Compat.registerBlockingModeIgnoreItems`: the programmed circuit, its molds, extruder shapes, slicer blades and
+// lenses; not the Packager's schematics). ME glass cable fills the rest of the spine, the tail included, where the
+// base's ME network joins the line. Each interface or bus takes a channel, so the line is checked against the channels
+// the network has free. The patterns are the interfaces' structured `feed` (architecture §11 entry 51). Without an AE2
+// network at the base the ME parts cannot work: the layout says so and never assumes one. A machine run by hand gets no
+// interface, and a venting steam machine gets its interface on its middle-row side but no cover, as GT allows none on it
+// (architecture §11 entry 48; by-hand.ts says what is then moved by hand).
 
 import { isFluidKey, parseItemKey, type StuffKey } from '../../../shared/keys.ts';
 import { fmtInt, joinNames } from '../../../shared/layout/format.ts';
@@ -30,8 +34,8 @@ import { comparePos } from '../../world/graph.ts';
 import type { HostCover, LocalBlock, PlacedUnit } from '../arrange.ts';
 import { linkBits } from '../path.ts';
 import {
-  conveyorCover, emptyModeResult, feedSettings, itemPorts, itemRisers, lineExceptions, mergeHostConfigs, nameList, outputSideInputs, RISER_WORDS,
-  unitItemRate, type ModeInput, type ModeResult, type StepDraft,
+  conveyorCover, emptyModeResult, feedSettings, itemPorts, itemRisers, lineExceptions, mergeHostConfigs, nameList, outputSideInputs, placedStepIds,
+  RISER_WORDS, unitItemRate, type ModeInput, type ModeResult, type StepDraft,
 } from './mode.ts';
 
 /** A network whose scan gives no channel figures is taken to have the 8 channels of a network without a controller. */
@@ -107,6 +111,64 @@ function stepFeed(pack: Pack, step: PlanStep): StepFeed {
   return { kind: 'none', why: inputs.length > 0 ? 'chanced' : 'fluid_in' };
 }
 
+// ---- What AE2 runs (research machine-feeding §2.3 "Jobs", §4.2 item 2) ----
+
+/** A run share this far below 1 still counts as every planned run: the plan's flows are sums of floating rates. */
+const SHARE_EPSILON = 1e-6;
+
+/**
+ * The strongly connected groups of the steps with a pattern, joined where one's pattern output flows into another's
+ * pattern, each group listed after every group its steps' outputs flow into (Tarjan's order), so the steps a step
+ * feeds come first. Steps, edges and members in plan order.
+ */
+function patternGroups(plan: Plan, patterns: ReadonlyMap<string, PatternSpec>): string[][] {
+  const ids = plan.steps.map((s) => s.id).filter((id) => patterns.has(id));
+  const feeds = new Map(ids.map((id) => {
+    const made = new Set(patterns.get(id)!.outputs.map((o) => o.key));
+    return [id, [...new Set(plan.flows.filter((f) => f.from === id && made.has(f.key) && patterns.has(f.to)).map((f) => f.to))]];
+  }));
+  const index = new Map<string, number>(), low = new Map<string, number>(), stack: string[] = [], on = new Set<string>();
+  const groups: string[][] = [];
+  const visit = (id: string): void => {
+    index.set(id, index.size); low.set(id, index.get(id)!); stack.push(id); on.add(id);
+    for (const to of feeds.get(id)!) {
+      if (!index.has(to)) { visit(to); low.set(id, Math.min(low.get(id)!, low.get(to)!)); } else if (on.has(to)) low.set(id, Math.min(low.get(id)!, index.get(to)!));
+    }
+    if (low.get(id) !== index.get(id)) return;
+    const group: string[] = [];
+    for (let top = stack.pop()!; ; top = stack.pop()!) { on.delete(top); group.push(top); if (top === id) break; }
+    groups.push(group.sort((a, b) => ids.indexOf(a) - ids.indexOf(b)));
+  };
+  for (const id of ids) if (!index.has(id)) visit(id);
+  return groups;
+}
+
+/**
+ * The share of its planned runs AE2 gives each step with a pattern, 0 to 1. A crafting CPU pushes a pattern only as
+ * often as a job needs an item the pattern makes, never for a fluid the line pipes on, so a step runs as often as its
+ * most-asked-for pattern output needs: of what it makes of that item, the part that goes to the line's product (`out`),
+ * to a step with a pattern at that step's own share, or to anything AE2 does not run itself and you keep going (a step
+ * without a pattern, a step the line places no machine for, a machine run by hand), which asks for all it takes; none
+ * of what goes to your storage as a byproduct (`sink`), and none of what goes round a loop of patterns back to the step
+ * (cells emptied and filled again): AE2 cannot plan a craft that needs its own output, so such items come from stock.
+ */
+export function aeRunShares(plan: Plan, patterns: ReadonlyMap<string, PatternSpec>): Map<string, number> {
+  const shares = new Map<string, number>();
+  for (const group of patternGroups(plan, patterns)) {
+    const inGroup = new Set(group);
+    const asked = (to: string): number => (to === 'sink' || inGroup.has(to) ? 0 : shares.get(to) ?? (patterns.has(to) ? 0 : 1));
+    for (const id of group) {
+      const share = Math.max(0, ...patterns.get(id)!.outputs.map(({ key }) => {
+        const flows = plan.flows.filter((f) => f.from === id && f.key === key);
+        const made = flows.reduce((sum, f) => sum + f.perSecond, 0);
+        return made > 0 ? flows.reduce((sum, f) => sum + f.perSecond * asked(f.to), 0) / made : 0;
+      }));
+      shares.set(id, Math.min(1, share));
+    }
+  }
+  return shares;
+}
+
 // ---- The ME Export Bus ----
 
 /** Items one operation of an ME Export Bus moves with 0–4 Acceleration Cards (AE2 rv3 `PartExportBus.calculateAmountToSend`). */
@@ -161,6 +223,36 @@ function noPatternText(input: ModeInput, step: PlanStep, unit: PlacedUnit, feed:
     + `${nameList(plan, pack, keysOf(step.outputs, false))} rely on stock`;
 }
 
+/**
+ * `ae2_fluid_short` for a step with a pattern whose fluid `fluid` the line pipes to `to` (its placed consumers, in flow
+ * order) while AE2 runs it for `share` of its planned runs: what its pattern makes, how much of the fluid that gives, and
+ * how to keep it running.
+ */
+function fluidShortText(input: ModeInput, unit: PlacedUnit, pattern: PatternSpec, fluid: StuffKey, to: readonly string[], share: number): string {
+  const { pack, plan, placement } = input;
+  const n = placement.units.filter((u) => u.stepId === unit.stepId).length;
+  const machine = `the ${unit.name}${n > 1 ? ` (${fmtInt(n)}×)` : ''}`;
+  // each consumer by its machine's name, with what it makes where two share a name
+  const names = to.map((id) => placement.units.find((u) => u.stepId === id)?.name ?? id);
+  const consumers = joinNames(to.map((id, i) => {
+    const s = plan.steps.find((x) => x.id === id);
+    const key = s?.mainOutput ?? s?.outputs[0]?.key;
+    return `the ${names[i]!}${names.filter((m) => m === names[i]).length > 1 && key !== undefined ? ` making ${nameList(plan, pack, [key])}` : ''}`;
+  }));
+  const made = nameList(plan, pack, pattern.outputs.map((o) => o.key));
+  const used = nameList(plan, pack, pattern.inputs.map((i) => i.key));
+  const fluidName = nameList(plan, pack, [fluid]);
+  const one = to.length === 1;
+  const andJobs = `and so does a job that needs what ${one ? 'it makes' : 'they make'}`;
+  const runs = share <= 0
+    ? `AE2 runs ${machine} only for a job that needs what its pattern makes (${made}), and no job of this line does: so its ${fluidName} never `
+      + `reaches ${consumers} by pipe, which ${one ? 'waits' : 'wait'} for it for ever, ${andJobs}`
+    : `AE2 runs ${machine} only as often as a job needs what its pattern makes (${made}), about ${share < 0.01 ? 'less than 1' : fmtInt(Math.floor(share * 100))} % `
+      + `of the runs the ${fluidName} it pipes to ${consumers} needs: so ${one ? 'it runs' : 'they run'} out of ${fluidName} and ${one ? 'waits' : 'wait'} `
+      + `for ever, ${andJobs}`;
+  return `${runs}. Keep the ${unit.name} running yourself: feed it ${used} from stock, keep a request for ${made} standing, or fill it by hand`;
+}
+
 // ---- The mode ----
 
 /**
@@ -192,6 +284,8 @@ export function ae2Mode(input: ModeInput): ModeResult {
   const portCells = new Set<string>();
   /** How many machines of each name get an export bus, in the order first met. */
   const exportBusFor = new Map<string, number>();
+  /** The pattern of each step whose machines get one. */
+  const patterned = new Map<string, PatternSpec>();
   let patterns = 0, capacityCards = 0, accelerationCards = 0;
   for (const { pos, behind, unit } of ports) {
     portCells.add(posKey(pos));
@@ -213,7 +307,10 @@ export function ae2Mode(input: ModeInput): ModeResult {
       continue;
     }
     const pattern = feed?.kind === 'pattern' ? feed : null;
-    if (pattern !== null) patterns += 1;
+    if (pattern !== null) {
+      patterns += 1;
+      patterned.set(unit.stepId, pattern.pattern);
+    }
     blocks.push({
       pos, block: { ...parts.me_interface.block }, role: 'interface', label: `${parts.me_interface.name} (${unit.name})`, item: parts.me_interface.key,
       ...(pattern === null ? {} : { feed: { interface: { patterns: [structuredClone(pattern.pattern)], blocking: pattern.blocking } } }),
@@ -229,6 +326,21 @@ export function ae2Mode(input: ModeInput): ModeResult {
     const feed = feedOf(u.stepId);
     if (step === undefined || feed === null || feed.kind === 'pattern') continue;
     warnings.push({ code: 'ae2_no_pattern', stepId: u.stepId, text: noPatternText(input, step, u, feed) });
+  }
+  // each step with a pattern that AE2 runs less often than the fluids it pipes to the line's other machines need, once
+  // per fluid (in key order), in unit order
+  const shares = aeRunShares(plan, patterned);
+  const placed = placedStepIds(placement);
+  const short = new Set<string>();
+  for (const u of units) {
+    const pattern = patterned.get(u.stepId);
+    if (pattern === undefined || short.has(u.stepId) || (shares.get(u.stepId) ?? 0) >= 1 - SHARE_EPSILON) continue;
+    short.add(u.stepId);
+    const piped = plan.flows.filter((f) => f.from === u.stepId && isFluidKey(f.key) && f.to !== u.stepId && placed.has(f.to));
+    for (const fluid of [...new Set(piped.map((f) => f.key))].sort()) {
+      const to = [...new Set(piped.filter((f) => f.key === fluid).map((f) => f.to))];
+      warnings.push({ code: 'ae2_fluid_short', stepId: u.stepId, key: fluid, text: fluidShortText(input, u, pattern, fluid, to, shares.get(u.stepId) ?? 0) });
+    }
   }
 
   const links: Array<[Vec3, Vec3]> = [];
