@@ -14,7 +14,7 @@ import { V } from '../../shared/gt/tiers.ts';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import type { Machine, Pack, Recipe } from '../../shared/types/pack.ts';
 import {
-  DEFAULT_BUILD_HORIZON_HOURS, NETWORKED_LOGISTICS, type MachineWhere, type PlanContext, type PlanSettings,
+  DEFAULT_BUILD_HORIZON_HOURS, type MachineWhere, type PlanContext, type PlanSettings,
 } from '../../shared/types/plan.ts';
 import { PROGRAMMED_CIRCUIT_ID } from '../pack/recipes.ts';
 import type { PlanBasis } from './basis.ts';
@@ -25,8 +25,6 @@ import { ownedPools, recipeCircuit } from './machines.ts';
 
 const TICKS_PER_SECOND = 20;
 const SECONDS_PER_HOUR = 3600;
-/** Item inputs a routed pool may take at most: three Item Responder Chips of nine filter slots beside the extractor (Task 6). */
-export const ROUTED_POOL_MAX_INPUTS = 27;
 /** Step recipes one AE2 pool runs at most (controller Amendment OQ6): the processing patterns of one ME Interface. */
 export const AE2_POOL_MAX_PATTERNS = 9;
 /** GT++'s Electric Auto Workbench, by its simple class name (architecture §11.19): mteIds 31091–31098, LV–UV, on 2.9. */
@@ -69,12 +67,11 @@ export interface BuildModel {
   mode: 'rate' | 'makeN';
   /** rate: buildHorizonHours × 3600, null = build cost ignored; makeN: null (the batch is the horizon). */
   horizonSeconds: number | null;
-  /** New and owned machines are shared by sharing pools (rate mode in NETWORKED_LOGISTICS: routed, ae2); else every step has its own. */
+  /** New and owned machines are shared by sharing pools (`sharesMachines`: rate mode on AE2 lines); else every step has its own. */
   share: boolean;
   /**
    * A step recipe's sharing key (`sharingKey` of the recipe and its graph recipe's `nonConsumed`; with `share`, `#<n>`
-   * appended for its Project Red part n ≥ 1 on a `routed` line, `routedParts`, and for its AE2 part n ≥ 1 on an `ae2`
-   * one, `ae2Parts`); '-|' for unknown ids.
+   * appended for its AE2 part n ≥ 1, `ae2Parts`); '-|' for unknown ids.
    */
   sharingKey(recipeId: string): string;
   /**
@@ -123,6 +120,18 @@ export interface MachineOptionEnv {
   standIn?: (kind: MachineOption['kind'], tier: number) => number;
   /** Rules 1–4 only. */
   eligibleOnly?: boolean;
+}
+
+/**
+ * Whether a line's steps share machines (`BuildModel.share`, `PlanStep.pool`): only a running line on AE2 (spec §3.3's
+ * networked modes, controller ruling 188 and fix wave 2 (d)). Project Red cannot: a GT basic machine reruns the recipe it
+ * cached while the responder chips top its inputs up, so a second recipe on the machine waits for ever
+ * (docs/research/machine-feeding.md), and its extractor never routes an item back to the machine it took it from;
+ * machine-to-machine and EnderIO lines give every step its own machines (Global Constraints); Make N has its own sharing
+ * (one added machine per type, make-n.ts).
+ */
+export function sharesMachines(settings: Pick<PlanSettings, 'mode' | 'logistics'>): boolean {
+  return settings.mode === 'rate' && settings.logistics === 'ae2';
 }
 
 /** Whether the model counts build cost: Make N, or rate mode with a horizon (basis.ts `buildCostCounts` says so of the settings). */
@@ -189,37 +198,6 @@ export function poolKey(o: MachineOption, key: string): string {
   return `${o.mteId}:${o.tier}:${o.hatches ?? ''}|${key}`;
 }
 
-/**
- * A recipe's item inputs as the Project Red split counts them: the first option of each consumed item slot and its held
- * items (`held`, else the first option of each not-consumed slot), programmed circuits aside, distinct.
- */
-function itemInputs(r: Recipe, held?: readonly StuffKey[]): Set<StuffKey> {
-  const keys = new Set<StuffKey>();
-  const add = (key: StuffKey | undefined): void => {
-    if (key !== undefined && !isFluidKey(key) && !isProgrammedCircuit(key)) keys.add(key);
-  };
-  for (const ing of r.inputs) if (ing.consumed || held === undefined) add(ing.options[0]?.key);
-  for (const key of held ?? []) add(key);
-  return keys;
-}
-
-const ITEM_SLOTS = new WeakMap<Pack, ReadonlyMap<string, number>>();
-
-/** The most item inputs (`routedParts`' count) any recipe of the map takes in the pack: no machine of the map holds fewer at once (the export has no slot counts). */
-export function itemSlots(pack: Pack, mapId: string): number {
-  let byMap = ITEM_SLOTS.get(pack);
-  if (byMap === undefined) {
-    const most = new Map<string, number>();
-    for (const r of pack.recipes) {
-      const n = itemInputs(r).size;
-      for (const map of r.maps) most.set(map, Math.max(most.get(map) ?? 0, n));
-    }
-    byMap = most;
-    ITEM_SLOTS.set(pack, byMap);
-  }
-  return byMap.get(mapId) ?? 0;
-}
-
 const RECIPES_OF_MAP = new WeakMap<Pack, ReadonlyMap<string, readonly Recipe[]>>();
 
 /** The pack's recipes that list `mapId` among their maps, in the pack's order; indexed once per pack. */
@@ -281,47 +259,12 @@ function meets(a: ReadonlySet<StuffKey>, b: ReadonlySet<StuffKey>): boolean {
 }
 
 /**
- * Whether one of two recipes takes an item the other makes (any option of a consumed item slot; item products): the
- * Project Red split's rule (i), which keeps them apart (`routedParts`); machines.ts `planSteps` says so on their steps
- * (ruling P7).
+ * Whether one of two recipes takes an item the other makes (any option of a consumed item slot; item products): Project
+ * Red's Item Extractor Chip never routes an item back to the machine it took it from, so on a Project Red line such
+ * steps could never share a machine; machines.ts `planSteps` says so on their steps (ruling P7).
  */
 export function feedsEither(a: Recipe, b: Recipe): boolean {
   return meets(madeItems(a), consumedItems(b)) || meets(madeItems(b), consumedItems(a));
-}
-
-/**
- * The Project Red split (Global Constraints: ProjRed-4.12.44-GTNH's Item Extractor Chip never routes an item back to the
- * machine it took it from, and its network pushes items into whatever accepts them): each step recipe of the graph →
- * its part, 0 for the first. Per map and base sharing key, in id order, a recipe joins the first part where (i) no
- * recipe makes an item it consumes, nor consumes an item it makes (any option of a consumed item slot; item products);
- * (ii) when the map has a singleblock machine, the part's distinct item inputs with it (`itemInputs`) are at most
- * `itemSlots(pack, mapId)`; and (iii) at most `ROUTED_POOL_MAX_INPUTS` — else it opens a new part. A crafting-table
- * recipe's key holds the recipe, so each is a part of its own.
- */
-export function routedParts(pack: Pack, graph: CandidateGraph): Map<string, number> {
-  const parts = new Map<string, number>();
-  for (const group of poolGroups(pack, graph)) {
-    const mapId = (group[0] as StepRecipe).mapId;
-    const basic = (pack.machinesByMap.get(mapId) ?? []).some((id) => pack.machines.get(id)?.kind === 'basic');
-    const room = Math.min(basic ? itemSlots(pack, mapId) : Infinity, ROUTED_POOL_MAX_INPUTS);
-    const open: Array<{ eats: Set<StuffKey>; makes: Set<StuffKey>; inputs: Set<StuffKey> }> = [];
-    for (const { lp, r } of group) {
-      const eats = consumedItems(r);
-      const makes = madeItems(r);
-      const inputs = itemInputs(r, lp.nonConsumed);
-      let n = open.findIndex((part) => !meets(part.makes, eats) && !meets(part.eats, makes) && new Set([...part.inputs, ...inputs]).size <= room);
-      if (n === -1) {
-        n = open.length;
-        open.push({ eats: new Set(), makes: new Set(), inputs: new Set() });
-      }
-      const part = open[n] as (typeof open)[number];
-      for (const key of eats) part.eats.add(key);
-      for (const key of makes) part.makes.add(key);
-      for (const key of inputs) part.inputs.add(key);
-      parts.set(lp.id, n);
-    }
-  }
-  return parts;
 }
 
 /**
@@ -625,9 +568,8 @@ export async function lineBuildModel(pack: Pack, graph: CandidateGraph, basis: P
     }
   }
 
-  const share = settings.mode === 'rate' && NETWORKED_LOGISTICS.has(settings.logistics);
-  const parts = !share ? undefined
-    : settings.logistics === 'routed' ? routedParts(pack, graph) : settings.logistics === 'ae2' ? ae2Parts(pack, graph) : undefined;
+  const share = sharesMachines(settings);
+  const parts = share ? ae2Parts(pack, graph) : undefined;
   const keys = new Map<string, string>();
   for (const { lp, r } of steps) {
     const part = parts?.get(lp.id) ?? 0;

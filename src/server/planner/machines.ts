@@ -8,7 +8,7 @@ import { PSEUDO_MACHINES, V, tierName } from '../../shared/gt/tiers.ts';
 import { isFluidKey, parseItemKey, type StuffKey } from '../../shared/keys.ts';
 import type { Ingredient, Machine, Pack, Product, Recipe } from '../../shared/types/pack.ts';
 import {
-  FREE_KEYS, NETWORKED_LOGISTICS, type MachineWhere, type PlanContext, type PlanFlow, type PlanSettings, type PlanStep, type StepTier,
+  FREE_KEYS, type MachineWhere, type PlanContext, type PlanFlow, type PlanSettings, type PlanStep, type StepTier,
 } from '../../shared/types/plan.ts';
 import { PROGRAMMED_CIRCUIT_ID } from '../pack/recipes.ts';
 import { suppliedKey } from '../pack/supply.ts';
@@ -16,7 +16,7 @@ import type { StepMachines } from './build-mip.ts';
 import { keptOptions, virtualKey, type CandidateGraph, type LpRecipe } from './candidates.ts';
 // A value cycle (machine-options.ts reads `ownedPools` and `recipeCircuit` from here): both sides only call each other's
 // function declarations from inside functions, never while the modules load.
-import { feedsEither, poolKey, sharingKey, type BuildModel, type MachineOption, type OwnedPools } from './machine-options.ts';
+import { feedsEither, poolKey, sharesMachines, sharingKey, type BuildModel, type MachineOption, type OwnedPools } from './machine-options.ts';
 import { sig9 } from './round.ts';
 import type { Solution } from './solve.ts';
 
@@ -809,19 +809,20 @@ function ownOutputWarning(machineName: string): string {
 }
 
 /**
- * Ruling P7: on a Project Red line, the steps that run on the same machine option (mteId, tier and hatch set) and base
- * sharing key (`sharingKey` without the Project Red part) as another step but in another pool, because one of the two
- * takes an item the other makes (`feedsEither`): the extractor never routes an item back to the machine it came from.
+ * Ruling P7: on a Project Red line, which shares no machine (`sharesMachines`), the steps that run on the same machine
+ * option (mteId, tier and hatch set) with the same sharing key as another step, so that an AE2 line would run both on
+ * one machine, where one of the two takes an item the other makes (`feedsEither`): Project Red's extractor never routes
+ * an item back to the machine it came from, so one machine for both needs AE2.
  */
-function keptApart(picked: readonly PickedRecipe[], model: BuildModel): Set<string> {
+function keptApart(picked: readonly PickedRecipe[]): Set<string> {
   const apart = new Set<string>();
-  const decided = picked.flatMap((p) => (p.decided === undefined ? [] : [{ p, o: p.decided.option, base: sharingKey(p.recipe, p.lp.nonConsumed) }]));
+  const decided = picked.flatMap((p) => (p.decided === undefined ? [] : [{ p, o: p.decided.option, key: sharingKey(p.recipe, p.lp.nonConsumed) }]));
   for (let i = 0; i < decided.length; i++) {
     const a = decided[i] as (typeof decided)[number];
     for (let j = i + 1; j < decided.length; j++) {
       const b = decided[j] as (typeof decided)[number];
-      if (a.o.mteId !== b.o.mteId || a.o.tier !== b.o.tier || (a.o.hatches ?? '') !== (b.o.hatches ?? '') || a.base !== b.base) continue;
-      if (model.sharingKey(a.p.id) === model.sharingKey(b.p.id) || !feedsEither(a.p.recipe, b.p.recipe)) continue;
+      if (a.o.mteId !== b.o.mteId || a.o.tier !== b.o.tier || (a.o.hatches ?? '') !== (b.o.hatches ?? '') || a.key !== b.key) continue;
+      if (!feedsEither(a.p.recipe, b.p.recipe)) continue;
       apart.add(a.p.id);
       apart.add(b.p.id);
     }
@@ -837,7 +838,7 @@ function keptApart(picked: readonly PickedRecipe[], model: BuildModel): Set<stri
  * owned ones of its type it runs on (`reused.units` in the owned pools — `opts.build`'s, else `ownedPools` — with where
  * they stand) and the new ones it adds (`count = added + owned`); the owned machines of its other options beside them
  * (`reused.others`); the other steps on any of those machines (`reused.sharedWith`); and its sharing pool (`pool`, with
- * the model's sharing, else in a networked rate line). `utilization` counts the others' capacity too, and a pooled step's
+ * the model's sharing, else on an AE2 rate line: `sharesMachines`). `utilization` counts the others' capacity too, and a pooled step's
  * is its own share of the pool. With a model, `tiers` lists the step's eligible tiers, and on a Project Red line a step
  * kept out of another's machine because one feeds the other says so (ruling P7).
  */
@@ -857,7 +858,7 @@ export function planSteps(
   const line = stepLine(graph, sol.runs, opts.value);
   line.bought = boughtGoods(sol.buys);
   const picked = pickStepMachines(pack, graph, sol.runs, { settings, groupTier, coilHeat, owned, multiblocks, machines: sol.machines });
-  const shared = model?.share ?? (settings.mode === 'rate' && NETWORKED_LOGISTICS.has(settings.logistics));
+  const shared = model?.share ?? sharesMachines(settings);
   const assigned = assignOwned(picked.flatMap((p) => ownedClaims(p, p.runs * perSecondScale, model)), pools, shared);
 
   // Every owned machine (type, unit) and the steps on it, for `sharedWith`; every pool and its steps.
@@ -876,7 +877,7 @@ export function planSteps(
     }
     if (a.pool !== undefined) poolSteps.set(a.pool, [...(poolSteps.get(a.pool) ?? []), p.id]);
   }
-  const apart = model !== undefined && model.share && settings.logistics === 'routed' ? keptApart(picked, model) : new Set<string>();
+  const apart = model !== undefined && settings.mode === 'rate' && settings.logistics === 'routed' ? keptApart(picked) : new Set<string>();
 
   return picked.map((p) => {
     const runsPerSecond = p.runs * perSecondScale;

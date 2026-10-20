@@ -1,6 +1,6 @@
 // Plan assembly with build cost (plan 12 Task 5; design spec §3.2 Make N, §3.3 Objective, "How materials are counted" and
 // "Reusing machines we have", architecture §11.39): the steps follow the build-cost solve — whole machine counts, the
-// tier it picked, sharing pools of new and owned machines on AE2 and Project Red lines, owned machines of another tier —
+// tier it picked, sharing pools of new and owned machines on AE2 lines (none on Project Red, fix wave 2 (d)), owned machines of another tier —
 // and the plan says what it costs to run and to build, which new machines it cannot price, and which machines cannot be
 // built here (their steps walked around, or the line blocked); sand is made from rock-breaker cobblestone where that pays.
 // `S` and the sand cases' `G` craft by hand: their numbers, hand steps and `hand-step` warnings were worked out with
@@ -131,39 +131,22 @@ describe('sharing pools', () => {
     expect(ae2.power.peakEUt).toBe(48);   // the owned assembler once (16), the bender 24 and the wiremill 8
     expect(placeText(ae2)).toContain('reuse your 1× Basic Assembler');
     expect(configureTexts(ae2)).toContain('Put a Programmed Circuit set to 2 in the Basic Assembler that makes Basic Circuit, Gear, Kit');
-    expect(codes(ae2)).not.toContain('routed-shared');
 
-    // Project Red never hands an item back to the machine that made it, so kit (which takes the circuit and the gear)
-    // leaves the pool; the larger pool (1/4 against 1/12) takes the owned machine and kit runs on a new one.
-    const routed = await planLine(kitPack, K('routed'), oneAssembler);
-    const shared = { id: 'pool:circuit-lv', steps: ['circuit-lv', 'gear'] };
-    for (const id of shared.steps) {
-      expect(stepOf(routed, id)).toMatchObject({ count: 1, owned: 1, reused: { units: [0] }, pool: shared });
-      expect(stepOf(routed, id).reused?.sharedWith).toEqual(shared.steps.filter((s) => s !== id));
+    // Project Red and machine to machine share no machine (fix wave 2 (d): a GT machine reruns its cached recipe while
+    // Project Red's responders top it up, so a second recipe would wait): every step has its own machines and the largest
+    // load keeps the owned one. On Project Red kit takes the circuit and the gear the other two make, so those steps say
+    // one machine for them needs AE2 (ruling P7).
+    for (const logistics of ['routed', 'direct'] as const) {
+      const plan = await planLine(kitPack, K(logistics), oneAssembler);
+      expect(stepOf(plan, 'circuit-lv'), logistics).toMatchObject({ count: 1, owned: 1 });
+      for (const id of ['gear', 'kit']) expect(stepOf(plan, id), logistics).toMatchObject({ count: 1, owned: 0 });
+      expect(plan.steps.filter((s) => s.pool !== undefined), logistics).toEqual([]);
+      expect(plan.cost?.build, logistics).toBe(66);   // 2 × 16 + 17 + 17
+      expect(plan.power.peakEUt, logistics).toBe(80);
+      for (const id of ['circuit-lv', 'gear', 'kit']) {
+        expect(stepOf(plan, id).warnings.includes(OWN_OUTPUT), `${logistics} ${id}`).toBe(logistics === 'routed');
+      }
     }
-    expect(stepOf(routed, 'kit')).toMatchObject({ count: 1, owned: 0 });
-    expect(stepOf(routed, 'kit').pool).toBeUndefined();
-    expect(routed.cost?.build).toBe(50);
-    expect(routed.power.peakEUt).toBe(64);
-    expect(configureTexts(routed)).toEqual(expect.arrayContaining([
-      'Put a Programmed Circuit set to 2 in the Basic Assembler that makes Basic Circuit, Gear',
-      'Put a Programmed Circuit set to 2 in the Basic Assembler that makes Kit',
-    ]));
-    // Rulings P7 and P8: the steps kept apart say why, and the shared machine is flagged to check in game.
-    for (const id of ['circuit-lv', 'gear', 'kit']) expect(stepOf(routed, id).warnings).toContain(OWN_OUTPUT);
-    expect(routed.warnings.filter((w) => w.code === 'routed-shared')).toEqual([{
-      code: 'routed-shared', stepId: 'circuit-lv',
-      text: '1× Basic Assembler (Basic Circuit, Gear): one machine runs several recipes over Project Red; if one recipe\'s inputs stay stocked, the other can wait — check it in game',
-    }]);
-
-    // Machine to machine: every step has its own machines; the largest load keeps the owned one.
-    const direct = await planLine(kitPack, K('direct'), oneAssembler);
-    expect(stepOf(direct, 'circuit-lv')).toMatchObject({ count: 1, owned: 1 });
-    for (const id of ['gear', 'kit']) expect(stepOf(direct, id)).toMatchObject({ count: 1, owned: 0 });
-    expect(direct.steps.filter((s) => s.pool !== undefined)).toEqual([]);
-    expect(direct.cost?.build).toBe(66);   // 2 × 16 + 17 + 17
-    expect(direct.power.peakEUt).toBe(80);
-    expect(codes(direct)).not.toContain('routed-shared');
   });
 
   it('never shares a machine between programmed circuits', async () => {
@@ -215,7 +198,6 @@ describe('sand from cobblestone', () => {
     expect(plan.cost?.build).toBe(54);   // 4 + 2 × 17 + 16
     expect(plan.power.peakEUt).toBe(78);
     expect(placeText(plan)).toContain('2× Basic Forge Hammer');
-    expect(codes(plan)).not.toContain('routed-shared');
   });
 
   it('digs sand on machine-to-machine and EnderIO lines', async () => {
@@ -295,7 +277,7 @@ describe('sand from cobblestone', () => {
       expect(stepOf(ae2, id).reused?.sharedWith).toEqual(HAMMER_POOL.steps.filter((s) => s !== id));
     }
     expect(ae2.cost?.build).toBe(20);   // 4 + 16
-    // Project Red: two pools, and the owned machine serves one; at equal loads the lower id keeps it.
+    // Project Red: each step its own hammer (no sharing, fix wave 2 (d)); at equal loads the lower id keeps the owned one.
     const routed = await planLine(sand, G({ logistics: 'routed' }), oneHammer);
     expect(stepOf(routed, 'hammer-gravel')).toMatchObject({ count: 1, owned: 1 });
     expect(stepOf(routed, 'hammer-sand')).toMatchObject({ count: 1, owned: 0 });
@@ -498,10 +480,11 @@ describe('one source at a tie', () => {
     }
   });
 
-  it('makes all of it on AE2 and Project Red lines too, where the sharing pool has room', async () => {
+  it('makes all of it on AE2 and Project Red lines too, where the sharing pool or the step\'s machines have room', async () => {
     // With sharing the later stages ran within each step's own share of its pool (burn: 0.1 of the one centrifuge), so the
     // tie stage could not raise burn although the centrifuge does 1 run a second: 0.1 burnt and 0.1 copper bought, with the
-    // centrifuge free to build, priced, or owned. They now run within the pool's machines.
+    // centrifuge free to build, priced, or owned. They now run within the pool's machines (AE2), or within the step's own
+    // machines (Project Red, which shares none: fix wave 2 (d)).
     const cases: Array<[ReadonlyArray<[string, number]>, PlanContext]> = [
       [[], emptyContext()], [[['t:iron_ingot@0', 1]], emptyContext()], [[['t:iron_ingot@0', 1]], owning({ mteId: 161, count: 4 })],
     ];

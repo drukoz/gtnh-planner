@@ -1,6 +1,7 @@
 // Machine options per step and the build model (plan 12 Task 3, architecture §11.39): every eligible machine tier of a
 // step with its overclocked rate, build cost and owned count; machines that cannot be built here (controller ruling OQ5
-// a) and pricing gaps (OQ5 b); tier pins (Amendment OQ5); sharing keys with the Project Red and AE2 splits; owned pools;
+// a) and pricing gaps (OQ5 b); tier pins (Amendment OQ5); sharing keys with the AE2 split, and none shared on Project Red
+// (fix wave 2 (d)); owned pools;
 // and crafting-table steps on GT++'s Auto Workbench (the controller's Auto Workbench ruling, gt-mechanics §8).
 
 import { describe, it, expect } from 'vitest';
@@ -245,7 +246,8 @@ describe('lineBuildModel', () => {
       [{}, { mode: 'rate', horizonSeconds: 86400, share: false }, true],
       [{ buildHorizonHours: 8 }, { mode: 'rate', horizonSeconds: 28800, share: false }, true],
       [{ buildHorizonHours: null }, { mode: 'rate', horizonSeconds: null, share: false }, false],
-      [{ logistics: 'routed' }, { mode: 'rate', horizonSeconds: 86400, share: true }, true],
+      // Project Red shares no machine (fix wave 2 (d)); AE2 does.
+      [{ logistics: 'routed' }, { mode: 'rate', horizonSeconds: 86400, share: false }, true],
       [{ logistics: 'ae2' }, { mode: 'rate', horizonSeconds: 86400, share: true }, true],
       // EnderIO stays per step (controller ruling).
       [{ logistics: 'enderio' }, { mode: 'rate', horizonSeconds: 86400, share: false }, true],
@@ -295,39 +297,23 @@ describe('lineBuildModel', () => {
     expect(poolKey(opt121!, '2|')).toBe('121:1:|2|');
   });
 
-  it('keeps apart on Project Red the steps that feed each other or crowd a basic machine', async () => {
-    // gathered.test.ts's setup: the glass line that may make its sand.
+  it('shares no machine on Project Red lines', async () => {
+    // Fix wave 2 (d), the controller's feeding ruling (docs/research/machine-feeding.md): a GT basic machine reruns the
+    // recipe it cached while Project Red's responder chips top its inputs up, so a second recipe on the machine waits for
+    // ever. On Project Red every step has its own machines, as on machine-to-machine lines; AE2 still pools them.
     const sand = packFromSpec(sandSpec());
     const glass = { ...lv, target: 't:glass@0' };
     const basis = planBasis(sand, glass, ctx);
     const leaf = makeLeafOracle(sand, glass, basis.avail, basis.prices, undefined, undefined, { supplied: basis.supplied, gatheredRecipes: true });
     const glassGraph = buildCandidates(sand, glass, basis.env, leaf, ['t:glass@0']);
-    // Sand takes the gravel the other makes, and the hammer's map holds one item input (itemSlots 1).
-    expect(await keysOn(sand, glassGraph, 'routed', ['hammer-gravel', 'hammer-sand'])).toEqual(['-|', '-|#1']);
+    const routed = { ...glass, logistics: 'routed' as const };
+    expect((await lineBuildModel(sand, glassGraph, planBasis(sand, routed, ctx), routed, ctx)).share).toBe(false);
+    expect(await keysOn(sand, glassGraph, 'routed', ['hammer-gravel', 'hammer-sand'])).toEqual(['-|', '-|']);
     expect(await keysOn(sand, glassGraph, 'ae2', ['hammer-gravel', 'hammer-sand'])).toEqual(['-|', '-|']);
-    // The kit takes the circuit and the gear the other two make; those two fit the assembler map's 3 item inputs.
     const kit = packFromSpec(kitSpec());
     const kitGraph = (await linePricing(kit, { ...lv, target: 't:kit@0' }, ctx))!.graph;
-    expect(await keysOn(kit, kitGraph, 'routed', ['circuit-lv', 'gear', 'kit'])).toEqual(['2|', '2|', '2|#1']);
+    expect(await keysOn(kit, kitGraph, 'routed', ['circuit-lv', 'gear', 'kit'])).toEqual(['2|', '2|', '2|']);
     expect(await keysOn(kit, kitGraph, 'ae2', ['circuit-lv', 'gear', 'kit'])).toEqual(['2|', '2|', '2|']);
-    // A chain on a map of three item inputs: the gear and the plate fit one machine, but the axle takes the gear.
-    const chain = packFromSpec({
-      maps: [{ id: 'gt.recipe.assembler', name: 'Assembler' }],
-      machines: [{ mteId: 121, name: 'Basic Assembler', tier: 1, maps: ['gt.recipe.assembler'] }],
-      recipes: [
-        { id: 'axle', map: 'gt.recipe.assembler', in: [['t:gear@0', 1]], out: [['t:axle@0', 1]], eut: 2, dur: 40 },
-        { id: 'gear', map: 'gt.recipe.assembler', in: [['t:plate@0', 1]], out: [['t:gear@0', 1]], eut: 2, dur: 40 },
-        { id: 'frame', map: 'gt.recipe.assembler', in: [['t:a@0', 1], ['t:b@0', 1], ['t:c@0', 1]], out: [['t:frame@0', 1]], eut: 2, dur: 40 },
-      ],
-    });
-    const chainGraph = buildCandidates(chain, lv, planBasis(chain, lv, ctx).env, buying(['t:plate@0']), ['t:axle@0']);
-    expect(await keysOn(chain, chainGraph, 'routed', ['axle', 'gear'])).toEqual(['-|', '-|#1']);
-    expect(await keysOn(chain, chainGraph, 'ae2', ['axle', 'gear'])).toEqual(['-|', '-|']);
-    // Two distinct item inputs crowd a macerator's one.
-    const mace = maceratorPack(['a', 'b']);
-    const maceGraph = buildCandidates(mace, lv, planBasis(mace, lv, ctx).env, buying(['t:a@0', 't:b@0']), ['t:da@0', 't:db@0']);
-    expect(await keysOn(mace, maceGraph, 'routed', ['mace-a', 'mace-b'])).toEqual(['-|', '-|#1']);
-    expect(await keysOn(mace, maceGraph, 'ae2', ['mace-a', 'mace-b'])).toEqual(['-|', '-|']);
   });
 
   it('splits a sharing key past the nine patterns of one ME Interface on AE2', async () => {

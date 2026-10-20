@@ -1394,23 +1394,6 @@ function tierFallbackWarnings(pack: Pack, model: BuildModel, steps: readonly Pla
   });
 }
 
-/**
- * Controller Amendment OQ2 (ruling P8): on a Project Red line, a `routed-shared` warning for each sharing pool of two or
- * more steps (`machineGroups`), at its first step: one machine runs several recipes there, and a recipe whose inputs
- * stay stocked can keep the other waiting.
- */
-function routedSharedWarnings(pack: Pack, settings: PlanSettings, steps: readonly PlanStep[]): PlanWarning[] {
-  if (settings.mode !== 'rate' || settings.logistics !== 'routed') return [];
-  return machineGroups(steps).filter((group) => group.length >= 2).map((group): PlanWarning => {
-    const first = group[0] as PlanStep;
-    const products = group.map((s) => stepProductName(pack, s)).join(', ');
-    return {
-      code: 'routed-shared', stepId: first.id,
-      text: `${first.count}× ${first.machine.name} (${products}): one machine runs several recipes over Project Red; if one recipe's inputs stay stocked, the other can wait — check it in game`,
-    };
-  });
-}
-
 /** The line `planLine` plans: its pricing and avoid list, its graph solved, and the build model it was solved with. */
 interface PlannedLine {
   priced: LinePricing; avoid: AvoidRequest; line: AvoidingLine;
@@ -1574,10 +1557,10 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
   // Every option of each ore-dictionary slot, with its share in this plan and what it would cost (fix spec R9).
   await addOptions(pack, settings, steps, stepLine(graph, stepRuns), priced);
   // A batch may be crafted by hand (fix spec D7); a pin is judged against the swap list just made (D24); a pinned tier
-  // that cannot be built and a machine Project Red shares between recipes say so (plan 12).
+  // that cannot be built says so (plan 12).
   const stepWarnings = [
     ...(batch ? [] : handStepWarnings(pack, steps)), ...pinDominatedWarnings(pack, settings, steps, exact),
-    ...tierFallbackWarnings(pack, buildModel, steps), ...routedSharedWarnings(pack, settings, steps),
+    ...tierFallbackWarnings(pack, buildModel, steps),
   ];
   const cost = planCost(pack, settings, buildModel, steps, spend);
 
