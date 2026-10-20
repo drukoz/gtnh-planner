@@ -1,14 +1,15 @@
 // The projector payload (spec §3.13, architecture §11.22–§11.23): a project's cached line layout boiled down to what the
 // in-game mod draws and checks. Everything that needs the planner's knowledge is decided here, once, in tested
-// TypeScript, so the Java side only parses and compares: the real registry name of pseudo part ids (§11.17), whether
-// meta or facing mean anything for a block, the covers on each face, which build step each block belongs to, and the
-// checklist's numbering of the steps. Ghosts (blocks that already exist in the world) are not sent; the mod has nothing
-// to draw or check for them.
+// TypeScript, so the Java side only parses and compares: the real registry name of pseudo part ids (§11.17), every
+// part of a conduit bundle and the build step that lays each, whether meta or facing mean anything for a block (a
+// single-block machine's output side and its own front), the covers on each face, which build step places each block,
+// and the checklist's numbering of the steps. Ghosts (blocks that already exist in the world) are not sent; the mod has
+// nothing to draw or check for them.
 
 import { createHash } from 'node:crypto';
 import { mergeBuildSteps } from '../layout/merge.ts';
 import { FACES } from '../../shared/types/assets.ts';
-import type { BlockRole, Layout, LayoutBlock } from '../../shared/types/layout.ts';
+import type { BlockRole, ConduitKind, Layout, LayoutBlock } from '../../shared/types/layout.ts';
 import type { BlockRef, Machine, MachineKind, Pack } from '../../shared/types/pack.ts';
 import type { BuildStep } from '../../shared/types/plan.ts';
 import type { Project } from '../../shared/types/project.ts';
@@ -35,8 +36,9 @@ export const FACING_ROLES: ReadonlySet<BlockRole> = new Set<BlockRole>(['machine
 
 /**
  * Single-block recipe machines (GT `MTEBasicMachine`, steam ones too). Their GT front facing, which the layout turns
- * to the spine and the mod checks, is their output side: GT draws the face overlay on another side (the main facing,
- * opposite the output side once placed), and moves no items or fluids through that one.
+ * to the spine and the mod checks, is their output side: GT draws the face overlay on another side, the main facing
+ * (`LayoutBlock.mainFacing`, which the layout turns along the row and the payload sends as `mainFacing`), and moves no
+ * items or fluids through that one.
  */
 export const OUTPUT_FACING_KINDS: ReadonlySet<MachineKind> = new Set<MachineKind>(['basic', 'steam']);
 
@@ -114,31 +116,62 @@ function isSingleBlockMachine(pack: PayloadPack, mteId: number): boolean {
   return kind !== undefined && OUTPUT_FACING_KINDS.has(kind);
 }
 
-function projectorBlock(b: LayoutBlock, step: string | null, pack: PayloadPack): ProjectorBlock {
+/**
+ * The block as the mod reads it. A single-block machine with a checked output side also sends its front
+ * (`mainFacing`); a block of two or more conduits names all of them in `parts` (its `part` is the first, the conduit its
+ * pseudo block shows: architecture "EnderIO conduits, granted change requests (add-on 11)") and the step that lays each
+ * in `partSteps` (`partStepsOf`).
+ */
+function projectorBlock(b: LayoutBlock, step: string | null, pack: PayloadPack, exists: (id: string) => boolean): ProjectorBlock {
   const { id, part } = containerBlock(b.block);
   const { mteId } = b.block;
   const facing = FACING_ROLES.has(b.role) && mteId !== undefined ? b.facing : undefined;
   const outputSide = facing !== undefined && mteId !== undefined && isSingleBlockMachine(pack, mteId);
   const covers = b.covers ?? [];
+  const parts = (b.conduits ?? []).map((c) => c.kind);
   return {
-    pos: [...b.pos], id, ...(part === undefined ? {} : { part }),
+    pos: [...b.pos], id, ...(part === undefined ? {} : { part }), ...(parts.length < 2 ? {} : { parts, partSteps: partStepsOf(b, step, exists) }),
     // a GT machine is identified by its tile's mte id, a part by its container block, a chest by its name
     meta: mteId !== undefined || part !== undefined || META_FREE_BLOCKS.has(id) ? null : b.block.meta,
     ...(mteId === undefined ? {} : { mteId }),
     ...(facing === undefined ? {} : { facing }),
     ...(outputSide ? { facingIsOutput: true as const } : {}),
+    ...(outputSide && b.mainFacing !== undefined ? { mainFacing: b.mainFacing } : {}),
     role: b.role, label: b.label, step,
     ...(covers.length === 0 ? {} : { covers: covers.map((c) => ({ face: FACES.indexOf(c.face), item: c.item, label: pack.nameOf(c.item) })) }),
   };
 }
 
+/** The step that lays each kind of conduit in the EnderIO mode: the Item Conduit with the line, ender fluid conduits with the fluids. */
+function conduitStep(kind: ConduitKind): string {
+  return kind === 'item' ? 'layout:logistics:line' : 'layout:logistics:fluids';
+}
+
+/**
+ * The step that lays each of a bundle's conduits, in bundle order: for a bundle of the line, the step that lays that
+ * kind where it exists, else the one that places the bundle (`owner`); a hookup's conduits all belong to their hookup.
+ * The review of the EnderIO single pipe: a bundle listed in the `blocks` of the fluids step as well let a mod that
+ * checks only the bundle block tick the fluids step once the Item Conduits stood, and since every GT basic machine's
+ * fluid conduit is in a bundle, a fluids step can hold nothing else; so a step lists only the blocks it places, and
+ * the mod finds the bundles another step lays a conduit in here, to show them under that step and to check that
+ * conduit.
+ */
+function partStepsOf(b: LayoutBlock, owner: string | null, exists: (id: string) => boolean): Array<string | null> {
+  return (b.conduits ?? []).map((c) => {
+    const id = conduitStep(c.kind);
+    return b.hookup === undefined && exists(id) ? id : owner;
+  });
+}
+
+/** The non-ghost blocks in layout order. */
 function payloadBlocks(layout: Layout, pack: PayloadPack): ProjectorBlock[] {
   const owners = stepMembership(layout);
-  const out: ProjectorBlock[] = [];
+  const ids = new Set(layout.buildSteps.map((s) => s.id));
+  const blocks: ProjectorBlock[] = [];
   layout.blocks.forEach((b, i) => {
-    if (b.role !== 'ghost') out.push(projectorBlock(b, owners[i] ?? null, pack));
+    if (b.role !== 'ghost') blocks.push(projectorBlock(b, owners[i] ?? null, pack, (id) => ids.has(id)));
   });
-  return out;
+  return blocks;
 }
 
 function payloadSteps(project: Project, checklist: readonly BuildStep[], blocks: readonly ProjectorBlock[]): ProjectorStep[] {
@@ -157,13 +190,14 @@ function payloadSteps(project: Project, checklist: readonly BuildStep[], blocks:
 
 /**
  * What `GET /api/projects/:id/projector` sends (spec §3.13): the project's identity, the layout's frame, the non-ghost
- * blocks in layout order, and every step of the project's checklist with the indices of its blocks (none for a step
- * that places nothing, such as gather and craft) and whether the checklist shows it done. The steps are numbered as
- * the Steps view numbers them: the plan route's `planFinish` merges `planSteps` (the plan's own steps, before the
- * layout is merged in) with the layout's through `mergeBuildSteps`, so `/planner step <n>` and "Step <n> done" name
- * the number the group's checklist shows. A layout that is not `ok` (`empty`, `no-world`) sends no blocks and no
- * steps, only a `message` for the player. `pack` names the cover items and says which GT machines are single-block
- * ones (`facingIsOutput`).
+ * blocks in layout order, and every step of the project's checklist with the indices of the blocks it places (none for
+ * a step that places nothing, such as gather and craft; a conduit bundle only under the step that places it, its
+ * `partSteps` naming the step that lays its fluid conduit) and whether the checklist shows it done. The steps are
+ * numbered as the Steps view numbers them: the plan route's `planFinish` merges `planSteps` (the plan's own steps,
+ * before the layout is merged in) with the layout's through `mergeBuildSteps`, so `/planner step <n>` and "Step <n>
+ * done" name the number the group's checklist shows. A layout that is not `ok` (`empty`, `no-world`) sends no blocks
+ * and no steps, only a `message` for the player. `pack` names the cover items and says which GT machines are
+ * single-block ones (`facingIsOutput`).
  */
 export function projectorPayload(project: Project, layout: Layout, pack: PayloadPack, planSteps: readonly BuildStep[] = []): ProjectorPayload {
   const status = layout.status ?? 'ok';

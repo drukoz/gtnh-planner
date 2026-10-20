@@ -78,7 +78,7 @@ export function ae2Mode(input: ModeInput): ModeResult {
 
   const extraParts: BomLine[] = [{ key: parts.blank_pattern.key, amount: patterns, why: 'one processing pattern per machine', group: 'logistics' }];
   const drafts: StepDraft[] = [{ id: 'layout:logistics:line', kind: 'logistics', pin: 'site',
-    text: 'Lay ME glass cable along the middle row with an ME interface in front of each machine' }];
+    text: "Lay ME glass cable along the middle row with an ME interface at every machine's output side or bus" }];
 
   // cable cells show their joins to the spine cells beside them; an interface is a full block
   const bits = linkBits(links);

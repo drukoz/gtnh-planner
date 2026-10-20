@@ -37,6 +37,9 @@ describe('routed mode', () => {
     expect(spine[0]!.config).toEqual({ chips: 'Item Responder Chip (whitelist: Raw Input) + Item Extractor Chip' });
     expect(r.blocks.find((b) => b.label === 'Routed Interface Pipe (output chest)')!.config).toEqual({ chips: 'Item Responder Chip (whitelist: t:out_s2@0)' });
     expect([r.covers, r.drafts.map((d) => d.kind)]).toEqual([[], ['logistics', 'logistics']]);
+    // "in front of" would read as GT's front, which faces along the row (the review of the EnderIO In / Out fix)
+    expect(r.drafts[0]!.text).toBe("Lay routed pipes along the middle row: an interface pipe at every machine's output side or bus, a request pipe "
+      + 'and two chests at the end');
     // final review: the interface pipe inserts through each machine's output side (its front is elsewhere), as in every mode
     const fromOutputSide = { inputFromOutputSide: true };
     expect(r.configs).toEqual([{ pos: [1, 0, 1], config: fromOutputSide }, { pos: [2, 0, 3], config: fromOutputSide }, { pos: [3, 0, 1], config: fromOutputSide }]);
@@ -76,6 +79,7 @@ describe('AE2 mode', () => {
     expect(r.blocks.find((b) => b.pos[0] === 1 && b.role === 'interface')!.config)
       .toEqual({ patterns: 1, pattern: '1× Raw Input → 1× t:out_s1@0', blockingMode: false });
     expect(r.drafts.map((d) => d.id)).toEqual(['layout:logistics:line']);
+    expect(r.drafts[0]!.text).toBe("Lay ME glass cable along the middle row with an ME interface at every machine's output side or bus");
     // final review: the interface pushes the pattern's inputs through each machine's output side
     expect(r.configs.map((c) => [c.pos, c.config])).toEqual([[[1, 0, 1], { inputFromOutputSide: true }], [[3, 0, 3], { inputFromOutputSide: true }],
       [[5, 0, 1], { inputFromOutputSide: true }]]);

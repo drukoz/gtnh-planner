@@ -2,23 +2,24 @@
 // layout as instances of four shapes, the face textures they share as tile sources for one array texture, which
 // instances the layer slider and the ghost and hookup toggles show, the side list of blocks to place, and the texts
 // for hover and click. An EnderIO conduit bundle (architecture "EnderIO conduits, granted change requests (add-on
-// 11)") draws each of its conduits side by side, with a connector arm on every face that is set. A pipe with pipe
+// 11)") draws each of its conduits side by side, with a connector arm on every face that is set, drawn as EnderIO draws
+// it: the plate, then the mode's arrows in the face's channel colours (an In / Out face shows both). A pipe with pipe
 // layers (architecture §11.43 (c)) draws its core, arms and arm tips from them, over its role's colour; a machine
-// facing up or down keeps its hull's top, bottom and sides where GT draws them (§11.43 (j)). Pure
-// TypeScript — no DOM, no three.js — so it is tested without a browser; the viewer turns these lists into meshes and
-// the loader turns the tile sources into pixels.
+// facing up or down keeps its hull's top, bottom and sides where GT draws them (§11.43 (j)). Pure TypeScript — no
+// DOM, no three.js — so it is tested without a browser; the viewer turns these lists into meshes and the loader turns
+// the tile sources into pixels.
 
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import { TIER_NAMES } from '../../shared/gt/tiers.ts';
 import { conduitLines, configuredLines } from '../../shared/layout/configure-text.ts';
-import { CONDUIT_NAMES } from '../../shared/layout/enderio.ts';
+import { CONDUIT_NAMES, dyeRgb } from '../../shared/layout/enderio.ts';
 import { fmtInt, fmtRate } from '../../shared/layout/format.ts';
 import { SIDE_NAMES, posKey, step, type Vec3 } from '../../shared/layout/geometry.ts';
 import {
   FACES, KIND_COLORS, conduitBlockRef, orientFaces, rotateFaces,
   type BlockFaces, type CoverLayers, type Face, type IconDescriptor, type Rgb, type TextureLayer,
 } from '../../shared/types/assets.ts';
-import type { BlockRole, ConduitMode, Layout, LayoutBlock } from '../../shared/types/layout.ts';
+import type { BlockRole, ConduitFace, ConduitMode, Layout, LayoutBlock } from '../../shared/types/layout.ts';
 import type { BlockRef, Product } from '../../shared/types/pack.ts';
 import type { Plan, PlanStep } from '../../shared/types/plan.ts';
 
@@ -105,14 +106,34 @@ export function instanceTranslation(inst: SceneInstance): Vec3 {
   return [inst.pos[0] + 0.5 + dx, inst.pos[1] + 0.5 + dy, inst.pos[2] + 0.5 + dz];
 }
 
-/** The pseudo block whose texture a conduit face set to `mode` shows on its arm (Plan 3's curated `conduit:connector_<mode>`). */
-function connectorRef(mode: Exclude<ConduitMode, 'disabled'>): BlockRef {
-  return conduitBlockRef(`connector_${mode}`);
+/** A face that is set: Extract, Insert or In / Out. */
+type SetMode = Exclude<ConduitMode, 'disabled'>;
+
+/**
+ * The connector a conduit face set to each mode shows on its arm, bottom first, as EnderIO 2.10.46 draws it
+ * (`ItemConduitRenderer` and `EnderLiquidConduitRenderer.renderEntity`): the plate (`itemConduitIoConnector`, a solid
+ * square) under every mode, then the mode's arrows, each tinted with the channel colour of the side named
+ * (`Tessellator.setColorOpaque_I(DyeColor.getColor())`): Extract's arrow in its extract colour, Insert's in its insert
+ * colour, In / Out's In half in the extract colour and its Out half in the insert colour. Each part is Plan 3's
+ * curated pseudo block `conduit:connector_<part>`.
+ */
+const CONNECTOR_PARTS: Readonly<Record<SetMode, ReadonlyArray<{ part: string; side: 'extract' | 'insert' | null }>>> = {
+  extract: [{ part: 'background', side: null }, { part: 'extract', side: 'extract' }],
+  insert: [{ part: 'background', side: null }, { part: 'insert', side: 'insert' }],
+  in_out: [{ part: 'background', side: null }, { part: 'in_out_in', side: 'extract' }, { part: 'in_out_out', side: 'insert' }],
+};
+
+function connectorRef(part: string): BlockRef {
+  return conduitBlockRef(`connector_${part}`);
+}
+
+function isSet(face: ConduitFace): face is ConduitFace & { mode: SetMode } {
+  return face.mode !== 'disabled';
 }
 
 /**
- * The refs a block is drawn with: its own, then per conduit `conduit:<kind>` and `conduit:connector_<mode>` for each
- * non-disabled face; each once, in that order.
+ * The refs a block is drawn with: its own, then per conduit `conduit:<kind>` and the connector parts of each
+ * non-disabled face (`CONNECTOR_PARTS`); each once, in that order.
  */
 export function sceneBlockRefs(b: LayoutBlock): BlockRef[] {
   const refs = new Map<string, BlockRef>();
@@ -123,7 +144,7 @@ export function sceneBlockRefs(b: LayoutBlock): BlockRef[] {
   add({ ...b.block });
   for (const conduit of b.conduits ?? []) {
     add(conduitBlockRef(conduit.kind));
-    for (const face of conduit.faces) if (face.mode !== 'disabled') add(connectorRef(face.mode));
+    for (const face of conduit.faces) if (isSet(face)) for (const { part } of CONNECTOR_PARTS[face.mode]) add(connectorRef(part));
   }
   return [...refs.values()];
 }
@@ -143,21 +164,23 @@ function onAllSides(tile: number): SceneInstance['tiles'] {
 /**
  * The scene of a layout, instances in block order. A block holding EnderIO conduits draws, per conduit in bundle order,
  * a `core` and an `arm` per side (ascending) that is one of its links (all faces the conduit's `north` texture) or one
- * of its faces that is not Disabled (the `north` texture of `conduit:connector_<mode>`); in a bundle of n ≥ 2 every
- * shape of conduit i carries `offset` [0, (i − (n − 1) / 2) × 6/16, 0], so the conduits sit side by side. Any other
+ * of its faces that is not Disabled (all faces that face's connector: the `north` textures of its `CONNECTOR_PARTS`,
+ * each arrow tinted with its side's channel colour); in a bundle of n ≥ 2 every shape of conduit i carries `offset`
+ * [0, (i − (n − 1) / 2) × 6/16, 0], so the conduits sit side by side. Any other
  * cable, pipe or chip pipe is a `core` plus an `arm` per connected side (ascending), and so is a ghost whose faces carry
  * `pipe`, its connected sides those whose neighbour is one of the line's cables or pipes (never a ghost): with `pipe`
  * (architecture §11.43 (c)) the core shows `pipe.core` on all six sides and an arm `pipe.end` on the side it points to,
  * its tip, and `pipe.arm` on the other five; without it every side is the `north` texture. The textured tiles of these
- * cores and arms, a conduit's included, are drawn over the block role's colour (`under`; a ghost's is the ghost grey),
- * so no pixel of a model sheet is see-through. Any other block is one `cube` whose world sides show its faces oriented
- * to its front (`frontOf`) by `orientFaces` (architecture §11.43 (j)): turned whole, except that a block facing up or
- * down whose four sides share their hull keeps each world side's own layers, as GT draws it, and only its front's
- * overlays move. After a block's own shapes come its covers, one `plate` per cover in `covers`
+ * cores and arms, a conduit's and its connectors' included, are drawn over the block role's colour (`under`; a ghost's
+ * is the ghost grey), so no pixel of a model sheet is see-through. Any other block is one `cube` whose world sides
+ * show its faces oriented to its front (`frontOf`) by `orientFaces` (architecture §11.43 (j)): turned whole, except
+ * that a block facing up or down whose four sides share their hull keeps each world side's own layers, as GT draws it,
+ * and only its front's overlays move. After a block's own shapes come its covers, one `plate` per cover in `covers`
  * order, on the cover's face and carrying the cover's in-world overlay — else its item icon, else a plain colour — on
  * all six tiles. A face with no layers, or a block with no faces, is a plain colour, and a tile is shared by
- * everything that draws the same layers over the same colour. Every tile's `color` is what it falls back to: the
- * block's own fallback colour (a conduit's or connector's own), the cover item's, or the role's.
+ * everything that draws the same layers (and tints) over the same colour. Every tile's `color` is what it falls back
+ * to: the block's own fallback colour (a conduit's own), a connector's channel colour (its extract side's, or an Insert
+ * face's insert side's), the cover item's, or the role's.
  */
 export function buildScene(
   layout: Layout, faces: ReadonlyMap<string, BlockFaces>, icons: ReadonlyMap<StuffKey, IconDescriptor>, covers: ReadonlyMap<StuffKey, CoverLayers>,
@@ -201,10 +224,24 @@ export function buildScene(
 
     if (b.conduits !== undefined && b.conduits.length > 0) {
       const n = b.conduits.length;
-      /** The `north` face of a conduit's or connector's pseudo block, else the block role's plain colour. */
+      /** The `north` face of a conduit's pseudo block, drawn over the role's colour, else the block role's plain colour. */
       const northTile = (ref: BlockRef): number => {
         const own = faces.get(blockKey(ref));
         return tile(own?.faces.north ?? [], own?.fallbackColor ?? ROLE_FALLBACK[b.role], under);
+      };
+      /**
+       * A set face's connector (`CONNECTOR_PARTS`): the `north` layers of each part's pseudo block, an arrow's tinted with
+       * its side's channel colour (`dyeRgb`), drawn over the role's colour like the conduit's own tiles; with no layers at
+       * all, the plain colour of the face's first side's channel.
+       */
+      const connectorTile = (face: ConduitFace & { mode: SetMode }): number => {
+        const layers = CONNECTOR_PARTS[face.mode].flatMap(({ part, side }): TextureLayer[] => {
+          const own = faces.get(blockKey(connectorRef(part)))?.faces.north ?? [];
+          const color = side === null ? undefined : face[side]?.color;
+          return own.map((l) => (color === undefined ? { ...l } : { ...l, tint: dyeRgb(color) }));
+        });
+        const first = face.mode === 'insert' ? face.insert : face.extract;
+        return tile(layers, first === undefined ? ROLE_FALLBACK[b.role] : dyeRgb(first.color), under);
       };
       b.conduits.forEach((conduit, i) => {
         const offset: Vec3 | undefined = n < 2 ? undefined : [0, (i - (n - 1) / 2) * BUNDLE_SPACING, 0];
@@ -212,7 +249,7 @@ export function buildScene(
         add('core', -1, onAllSides(t), offset);
         for (let side = 0; side < 6; side++) {
           const face = conduit.faces.find((f) => f.face === FACES[side]);
-          if (face !== undefined && face.mode !== 'disabled') add('arm', side, onAllSides(northTile(connectorRef(face.mode))), offset);
+          if (face !== undefined && isSet(face)) add('arm', side, onAllSides(connectorTile(face)), offset);
           else if (conduit.connections & (1 << side)) add('arm', side, onAllSides(t), offset);
         }
       });

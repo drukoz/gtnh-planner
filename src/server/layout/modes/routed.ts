@@ -103,7 +103,8 @@ export function routedMode(input: ModeInput): ModeResult {
     text: 'No Project Red routed network at this base: the line gets its own — put raw inputs in the input chest' }];
   const drafts: StepDraft[] = [
     { id: 'layout:logistics:line', kind: 'logistics', pin: 'site',
-      text: 'Lay routed pipes along the middle row: an interface pipe in front of each machine, a request pipe and two chests at the end' },
+      // at the side it touches: "in front of" would read as GT's front, which faces along the row
+      text: "Lay routed pipes along the middle row: an interface pipe at every machine's output side or bus, a request pipe and two chests at the end" },
     { id: 'layout:logistics:request', kind: 'logistics', pin: 'site', text: 'Request raw inputs at the request pipe — they arrive in the input chest' },
   ];
 

@@ -1,5 +1,6 @@
 package io.github.drukoz.gtnhplanner.projector.check;
 
+import io.github.drukoz.gtnhplanner.projector.model.PlannedBlock;
 import io.github.drukoz.gtnhplanner.projector.model.PlannedStep;
 import io.github.drukoz.gtnhplanner.projector.model.ProjectorData;
 import java.util.ArrayList;
@@ -11,8 +12,8 @@ import java.util.Set;
 
 /**
  * Decides when the projector ticks a build step in the planner's shared checklist (spec §3.13): a step is due once it
- * has at least one block, every one of them {@link BlockState#CORRECT} for {@link #STABLE_CHECKS} checks in a row, the
- * planner does not show it ticked and this session has not sent it. A failed send is tried again no sooner than
+ * builds at least one block, every one of them placed for it ({@link #complete}) for {@link #STABLE_CHECKS} checks in a
+ * row, the planner does not show it ticked and this session has not sent it. A failed send is tried again no sooner than
  * {@link #RETRY_MS} later. Nothing ever unticks: steps only ever become done.
  *
  * <p>One tracker per loaded {@link ProjectorData}. The set of steps sent this session belongs to the session (one set
@@ -28,6 +29,8 @@ public final class StepTracker {
     public static final long RETRY_MS = 60_000;
 
     private final List<PlannedStep> steps;
+    /** The planned blocks, by the indices the steps and the states use. */
+    private final List<PlannedBlock> blocks;
     /** The ids of {@link #steps}. */
     private final Set<String> stepIds = new HashSet<>();
     /** The session's set of steps it has sent; shared with the trackers of earlier and later layouts of the project. */
@@ -48,6 +51,7 @@ public final class StepTracker {
      */
     public StepTracker(ProjectorData data, Set<String> sentThisSession) {
         steps = data.steps;
+        blocks = data.blocks;
         for (PlannedStep s : steps) stepIds.add(s.id);
         this.sentThisSession = sentThisSession;
         plannerDone = data.doneStepIds();
@@ -55,30 +59,40 @@ public final class StepTracker {
     }
 
     /**
-     * Whether the step at {@code stepIndex} of {@link ProjectorData#steps} has at least one block and every one of them
-     * is {@link BlockState#CORRECT} in {@code states} (indexed like {@link ProjectorData#blocks}).
+     * Whether the step at {@code stepIndex} of {@link ProjectorData#steps} builds at least one block and every one of them
+     * is placed for it in {@code states} (indexed like {@link ProjectorData#blocks}; {@link BlockState#placedFor}): each
+     * block it places ({@link PlannedStep#blocks}), {@link BlockState#CORRECT} or, with the parts this step lays in it,
+     * {@link BlockState#INCOMPLETE}, and each block another step places that it lays a part in
+     * ({@link PlannedStep#partBlocks}) {@link BlockState#CORRECT}, which only a client that sees the block's parts finds
+     * (the review of the EnderIO single pipe: the fluids step, whose conduits sit in the line's bundles, was ticked once
+     * the Item Conduits stood).
      */
     public boolean complete(int stepIndex, BlockState[] states) {
-        int[] blocks = steps.get(stepIndex).blocks;
-        if (blocks.length == 0) return false;
-        for (int b : blocks) {
-            if (states[b] != BlockState.CORRECT) return false;
+        PlannedStep s = steps.get(stepIndex);
+        if (!s.hasBlocks()) return false;
+        return placed(s.blocks, stepIndex, states) && placed(s.partBlocks, stepIndex, states);
+    }
+
+    /** Whether every block at {@code indices} is placed for the step at {@code stepIndex}. */
+    private boolean placed(int[] indices, int stepIndex, BlockState[] states) {
+        for (int b : indices) {
+            if (!states[b].placedFor(blocks.get(b), stepIndex)) return false;
         }
         return true;
     }
 
     /**
      * Counts one check and returns the ids of the steps to send now, in step order; call it once per check. Steps that
-     * are done, in flight or without blocks are skipped. For every other step the count of checks in a row that found
-     * it {@link #complete} goes up by one, or back to 0 when this one did not, and the step is due once the count is
-     * at least {@link #STABLE_CHECKS} and its retry time, if any, has come. Returned ids are in flight until
-     * {@link #sent} or {@link #failed} answers them.
+     * are done, in flight or build no block ({@link PlannedStep#hasBlocks}) are skipped. For every other step the count
+     * of checks in a row that found it {@link #complete} goes up by one, or back to 0 when this one did not, and the step
+     * is due once the count is at least {@link #STABLE_CHECKS} and its retry time, if any, has come. Returned ids are in
+     * flight until {@link #sent} or {@link #failed} answers them.
      */
     public List<String> due(BlockState[] states, long nowMs) {
         List<String> ids = new ArrayList<>();
         for (int i = 0; i < steps.size(); i++) {
             PlannedStep s = steps.get(i);
-            if (isDone(s.id) || inFlight.contains(s.id) || s.blocks.length == 0) continue;
+            if (isDone(s.id) || inFlight.contains(s.id) || !s.hasBlocks()) continue;
             stable[i] = complete(i, states) ? stable[i] + 1 : 0;
             if (stable[i] < STABLE_CHECKS) continue;
             Long retry = retryAt.get(s.id);

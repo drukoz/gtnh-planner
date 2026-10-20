@@ -21,6 +21,39 @@ public class PayloadParserTest {
     private static String error(String json) { return assertThrows(PayloadException.class, () -> PayloadParser.parse(new StringReader(json))).getMessage(); }
     public static JsonObject block(JsonObject o, int i) { return o.getAsJsonArray("blocks").get(i).getAsJsonObject(); }
 
+    /** The step index and id of {@link #bundleSample}'s fluids step, and the positions x of its two bundles (y 64, z 202). */
+    public static final int FLUIDS = 10, LINE = 6, BUNDLE_A = 106, BUNDLE_B = 107;
+    public static final String FLUIDS_ID = "layout:logistics:fluids", BUNDLE_LABEL = "Conduit bundle (Item Conduit + Ender Fluid Conduit)";
+    private static JsonArray strings(String... values) { JsonArray a = new JsonArray(); for (String v : values) a.add(new JsonPrimitive(v)); return a; }
+    /**
+     * The sample with an all-bundle fluids step, as the planner sends an EnderIO line whose fluids all pass GT basic
+     * machines' output sides (the review of the EnderIO single pipe): blocks 10 and 11 are conduit bundles at 106 and 107
+     * 64 202 holding the Item Conduit, which the line step (6) places and lays, and the Ender Fluid Conduit, which step 10
+     * (layout:logistics:fluids, order 11) lays; that step places no block of its own.
+     */
+    public static String bundleText() throws IOException {
+        return mutate(o -> {
+            for (int x : new int[] {BUNDLE_A, BUNDLE_B}) {
+                JsonObject b = new JsonObject();
+                JsonArray pos = new JsonArray(); pos.add(new JsonPrimitive(x)); pos.add(new JsonPrimitive(64)); pos.add(new JsonPrimitive(202));
+                b.add("pos", pos); b.addProperty("id", "EnderIO:blockConduitBundle"); b.addProperty("part", "item"); b.add("meta", JsonNull.INSTANCE);
+                b.add("parts", strings("item", "liquid_ender")); b.add("partSteps", strings("layout:logistics:line", FLUIDS_ID));
+                b.addProperty("role", "pipe"); b.addProperty("label", BUNDLE_LABEL); b.addProperty("step", "layout:logistics:line");
+                o.getAsJsonArray("blocks").add(b);
+            }
+            JsonArray line = o.getAsJsonArray("steps").get(LINE).getAsJsonObject().getAsJsonArray("blocks");
+            line.add(new JsonPrimitive(10)); line.add(new JsonPrimitive(11));
+            JsonObject fluids = new JsonObject();
+            fluids.addProperty("id", FLUIDS_ID); fluids.addProperty("order", 11); fluids.addProperty("kind", "logistics");
+            fluids.addProperty("text", "Lay 2× Ender Fluid Conduit along the middle row to the output side of each electric single-block machine that moves "
+                + "fluids; 2 of them go in the same bundle as the Item Conduit");
+            fluids.add("blocks", new JsonArray()); fluids.addProperty("done", false);
+            o.getAsJsonArray("steps").add(fluids);
+        });
+    }
+    public static ProjectorData bundleSample() throws Exception { return PayloadParser.parse(new StringReader(bundleText())); }
+    public static String mutateBundles(Consumer<JsonObject> f) throws IOException { JsonObject o = new JsonParser().parse(bundleText()).getAsJsonObject(); f.accept(o); return o.toString(); }
+
     @Test void readsTheSharedSample() throws Exception {
         ProjectorData d = sample();
         assertEquals("Pr0jectAb1", d.projectId); assertEquals("Steel line", d.name); assertEquals(7, d.rev); assertEquals(0, d.dim);
@@ -31,6 +64,8 @@ public class PayloadParserTest {
         assertArrayEquals(new int[] {102, 64, 201}, new int[] {mac.x, mac.y, mac.z});
         assertEquals("gregtech:gt.blockmachines", mac.id); assertEquals(-1, mac.meta); assertEquals(201, mac.mteId); assertEquals(3, mac.facing);
         assertTrue(mac.facingIsOutput); assertFalse(d.blocks.get(2).facingIsOutput);   // a single-block machine; a transformer
+        assertEquals(4, mac.mainFacing); assertEquals(-1, d.blocks.get(2).mainFacing);   // its own front faces west; a transformer has none
+        assertTrue(mac.parts.isEmpty()); assertArrayEquals(new int[] {1}, mac.steps);
         assertEquals("machine", mac.role); assertEquals("Basic Macerator", mac.label); assertEquals("layout:place:s1", d.steps.get(mac.step).id);
         assertEquals(1, mac.covers.size()); assertEquals(3, mac.covers.get(0).face); assertEquals("Conveyor Module (LV)", mac.covers.get(0).label);
         assertEquals(-1, d.blocks.get(0).facing); assertEquals(11, d.blocks.get(9).meta);
@@ -70,8 +105,57 @@ public class PayloadParserTest {
         assertThrows(UnsupportedOperationException.class, () -> d.blocks.clear());
         assertThrows(UnsupportedOperationException.class, () -> d.steps.clear());
         assertThrows(UnsupportedOperationException.class, () -> d.blocks.get(3).covers.clear());
+        assertThrows(UnsupportedOperationException.class, () -> d.blocks.get(3).parts.add("item"));
         d.doneStepIds().add("layout:site");
         assertEquals(Collections.singleton("layout:place:s2"), d.doneStepIds());
+    }
+
+    // The review and audit of the EnderIO In / Out fix: a single-block machine's own front, every part of a bundle, and a
+    // block that more than one step builds (a conduit bundle: the line step and the fluids step).
+    @Test void readsAMachinesFrontEveryPartOfABundleAndEveryStepThatBuildsABlock() throws Exception {
+        ProjectorData d = PayloadParser.parse(new StringReader(mutate(o -> {
+            block(o, 4).remove("mainFacing");
+            JsonArray parts = new JsonArray(); parts.add(new JsonPrimitive("item")); parts.add(new JsonPrimitive("liquid_ender"));
+            block(o, 8).add("parts", parts);
+            o.getAsJsonArray("steps").get(7).getAsJsonObject().getAsJsonArray("blocks").add(new JsonPrimitive(8));
+        })));
+        assertEquals(4, d.blocks.get(3).mainFacing); assertEquals(-1, d.blocks.get(4).mainFacing);
+        PlannedBlock bundle = d.blocks.get(8);
+        assertEquals(java.util.Arrays.asList("item", "liquid_ender"), bundle.parts); assertEquals("pr_rinterface", bundle.part);
+        assertEquals(6, bundle.step); assertArrayEquals(new int[] {6, 7}, bundle.steps);   // its own step first, then by step order
+        assertTrue(bundle.inStep(6)); assertTrue(bundle.inStep(7)); assertFalse(bundle.inStep(5));
+        assertArrayEquals(new int[] {7}, d.blocks.get(7).steps);
+        // a block listed by no step keeps its own
+        ProjectorData unlisted = PayloadParser.parse(new StringReader(mutate(o -> o.getAsJsonArray("steps").get(1).getAsJsonObject().add("blocks", new JsonArray()))));
+        assertArrayEquals(new int[] {1}, unlisted.blocks.get(3).steps); assertTrue(unlisted.blocks.get(3).inStep(1));
+        assertEquals("Bad projector layout: mainFacing 6 at block 3", error(mutate(o -> block(o, 3).addProperty("mainFacing", 6))));
+        assertEquals("Bad projector layout: parts at block 8", error(mutate(o -> { JsonArray p = new JsonArray(); p.add(JsonNull.INSTANCE); block(o, 8).add("parts", p); })));
+    }
+
+    // The review of the EnderIO single pipe: a step lists only the blocks it places, so a mod that checks a bundle by its
+    // block alone (0.1) never ticks the fluids step for it; the steps that lay a bundle's conduits come with each part.
+    @Test void readsTheStepThatLaysEachPartAndListsTheBundlesAStepLaysAPartIn() throws Exception {
+        ProjectorData d = bundleSample();
+        PlannedBlock bundle = d.blocks.get(10);
+        assertEquals(java.util.Arrays.asList("item", "liquid_ender"), bundle.parts); assertArrayEquals(new int[] {LINE, FLUIDS}, bundle.partSteps);
+        assertEquals(LINE, bundle.step); assertArrayEquals(new int[] {LINE, FLUIDS}, bundle.steps); assertTrue(bundle.inStep(FLUIDS));
+        assertArrayEquals(new int[0], d.steps.get(FLUIDS).blocks); assertArrayEquals(new int[] {10, 11}, d.steps.get(FLUIDS).partBlocks);
+        assertTrue(d.steps.get(FLUIDS).hasBlocks()); assertFalse(d.steps.get(0).hasBlocks()); assertTrue(d.steps.get(1).hasBlocks());
+        assertArrayEquals(new int[0], d.steps.get(LINE).partBlocks);                  // the line step places its bundles
+        assertArrayEquals(new int[0], d.blocks.get(3).partSteps);                      // no parts, no part steps
+        assertThrows(UnsupportedOperationException.class, () -> d.blocks.get(10).parts.clear());
+        // a part no step lays; parts sent without their steps are all laid by the block's own step
+        ProjectorData loose = PayloadParser.parse(new StringReader(mutateBundles(o -> {
+            JsonArray steps = new JsonArray(); steps.add(new JsonPrimitive("layout:logistics:line")); steps.add(JsonNull.INSTANCE);
+            block(o, 10).add("partSteps", steps);
+            block(o, 11).remove("partSteps");
+        })));
+        assertArrayEquals(new int[] {LINE, -1}, loose.blocks.get(10).partSteps); assertArrayEquals(new int[] {LINE, LINE}, loose.blocks.get(11).partSteps);
+        assertArrayEquals(new int[0], loose.steps.get(FLUIDS).partBlocks); assertFalse(loose.steps.get(FLUIDS).hasBlocks());
+        assertArrayEquals(new int[] {LINE}, loose.blocks.get(10).steps);
+        assertEquals("Bad projector layout: partSteps at block 10", error(mutateBundles(o -> block(o, 10).add("partSteps", strings("layout:logistics:line")))));
+        assertEquals("Bad projector layout: unknown step layout:nope at block 11",
+            error(mutateBundles(o -> block(o, 11).add("partSteps", strings("layout:logistics:line", "layout:nope")))));
     }
 
     @Test void refusesWrongTypesMissingFieldsAndOutOfRangeFacesToo() throws Exception {

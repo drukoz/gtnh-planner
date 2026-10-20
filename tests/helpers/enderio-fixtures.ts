@@ -20,9 +20,14 @@ export const ITEM = 'EnderIO:itemItemConduit@0';
 export const BASIC = 'EnderIO:itemBasicFilterUpgrade@0';
 export const ENDER = 'EnderIO:itemLiquidConduit@2';
 
-/** A Basic Item Filter whitelisting `keys` as given: match meta, ignore NBT, no ore dictionary, not sticky. */
+/** A Basic Item Filter (5 slots) whitelisting `keys` as given: match meta, ignore NBT, no ore dictionary, not sticky. */
 export function basic(keys: string[]): ConduitFilter {
-  return { item: BASIC, whitelist: true, keys: [...keys], matchMeta: true, matchNbt: false, oreDict: false, sticky: false };
+  return { item: BASIC, whitelist: true, keys: [...keys], matchMeta: true, matchNbt: false, oreDict: false, sticky: false, slots: 5 };
+}
+
+/** An ender fluid conduit's own filter (5 slots) whitelisting `keys` as given. */
+export function fluidFilter(keys: string[]): ConduitFilter {
+  return { whitelist: true, keys: [...keys], slots: 5 };
 }
 
 /** `n` item keys `t:i00@0`, `t:i01@0`, … in order. */

@@ -185,12 +185,21 @@ describe('curated block tables', () => {
     expect(curatedBlock('JABBA:barrel', 0)!.pipe).toBeUndefined();
   });
 
-  it('draws the ender fluid conduits and the connector of each conduit mode', () => {
+  it('draws the ender fluid conduits and every texture of a set face\'s connector', () => {
     expect(curatedBlock('conduit:liquid_ender', 0)!.faces.north).toEqual(['enderio/textures/blocks/liquidConduitEnder.png']);
     expect(curatedBlock('conduit:liquid_stellar', 0)!.faces.up).toEqual(['enderio/textures/blocks/liquidConduitStellarEnder.png']);
-    expect(['connector_extract', 'connector_insert', 'connector_in_out'].map((k) => curatedBlock(`conduit:${k}`, 0)!.faces.north)).toEqual([
-      ['enderio/textures/blocks/itemConduitInput.png'], ['enderio/textures/blocks/itemConduitOutput.png'], ['enderio/textures/blocks/itemConduitInOut_Out.png']]);
-    expect(curatedIds()).toEqual(expect.arrayContaining(['conduit:liquid_crystalline', 'conduit:liquid_pink_slime', 'conduit:liquid_melodic']));
+    // EnderIO 2.10.46 ItemConduitRenderer and EnderLiquidConduitRenderer (AbstractEnderLiquidConduit names the same icons):
+    // the plate (getTextureForInOutBackground) under every set face, then Extract's arrow, Insert's, or In / Out's two halves
+    const parts = ['connector_background', 'connector_extract', 'connector_insert', 'connector_in_out_in', 'connector_in_out_out'];
+    expect(parts.map((k) => curatedBlock(`conduit:${k}`, 0)!.faces.north)).toEqual([
+      ['enderio/textures/blocks/itemConduitIoConnector.png'], ['enderio/textures/blocks/itemConduitInput.png'],
+      ['enderio/textures/blocks/itemConduitOutput.png'], ['enderio/textures/blocks/itemConduitInOut_In.png'],
+      ['enderio/textures/blocks/itemConduitInOut_Out.png']]);
+    // the connector is one picture on every side, and the channel colours come from the face (the 3D view tints them)
+    expect(parts.every((k) => curatedBlock(`conduit:${k}`, 0)!.tint === undefined)).toBe(true);
+    expect(curatedBlock('conduit:connector_in_out', 0)).toBeNull();
+    expect(curatedIds()).toEqual(expect.arrayContaining(['conduit:liquid_crystalline', 'conduit:liquid_pink_slime', 'conduit:liquid_melodic',
+      ...parts.map((k) => `conduit:${k}`)]));
   });
 
   // ---- after the plan's own tests: the edges the plan leaves open ----

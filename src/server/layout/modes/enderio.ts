@@ -1,32 +1,47 @@
 // EnderIO conduits (plan 11 Tasks 3–4; spec §3.6 mode 4, architecture "EnderIO conduits, granted change requests (add-on
-// 11)"): one Item Conduit along the spine, touching every machine's front, and one ender fluid conduit network from every
-// machine's fluid port, the two sharing cells as conduit bundles. Each face toward a machine, a tail chest or a tank is
-// set on its own: Extract (EnderIO INPUT) what the machine makes, Insert (OUTPUT) what it takes, or In / Out for both,
-// each side with its own channel colour and a whitelist of its exact items or fluids; faces toward anything else they
-// could trade with are Disabled. Extract sides get redstone Always active (an unset face extracts only with a signal);
-// item extract sides also get the speed upgrades their rate needs and self feed off, and item insert sides fill
-// machines (priority 1) before chests (0). A side's targets are the insert sides of its colour that pass one of its
-// keys, and EnderIO's round robin rotates over them whatever their priority, so an item extract side gets it only when
-// it can hand to two or more machine faces and no chest; a fluid extract side (ender fluid conduits have no priority)
-// gets it for any two or more, and a fluid it hands both to machines and to an open end is warned about. The plan's
-// flows link what makes an item or fluid to what takes it, and linked sides share a channel; items and fluids are
+// 11)"; the user's single-pipe requirements of 2026-10-19): one Item Conduit along the spine, touching every machine's
+// output side or bus, and one ender fluid conduit network in the same bundles along the spine, so a GT basic machine has
+// one connection, its output side, for its items and its fluids (GT 5.09.54 `MTEBasicMachine`: fluids pass the output
+// side as items do, in under Input from Output Side, `isLiquidInput`, and out anywhere but the front, `isLiquidOutput`);
+// only a multiblock's fluid hatches, and a single-block machine that is no basic machine, get a riser to a port on top.
+// Each face toward a machine, a tail chest or a tank is set on its own: Extract (EnderIO INPUT) what the machine makes,
+// Insert (OUTPUT) what it takes, or In / Out for both, each side with its own channel colour and a whitelist of its
+// exact items or fluids (an insert side into a singleblock's output side needs the machine's Input from Output Side, and
+// says so); faces toward anything else they could trade with are Disabled. Extract sides get redstone Always active (an
+// unset face extracts only with a signal); item extract sides also get the speed upgrades their rate needs and self feed
+// off, and item insert sides fill machines (priority 1) before chests (0).
+// The single pipe: every machine's outputs are extracted into the line's one network and the insert sides' whitelists
+// and priorities send each item or fluid on, so the whole line shares one channel, Red. The plan's flows link what
+// makes an item or fluid to what takes it, and linked sides share a channel (each side has one colour); a channel moves
+// to another colour only where a filter cannot keep a key away from a face that must not get it, because that face
+// takes the key from elsewhere: where one of its extract sides would hand a key to an insert side of another channel, a
+// route no flow plans (`assignChannels`). Whatever hands it out, the input chest's raw inputs, an open end bringing a
+// fluid in or a machine making an item that two machines take from two different makers, the face takes more than its
+// flows while it has room (machine counts round up), so the face the key is planned for runs short, its maker backs up
+// or a chest fills with it; and an open end that sends a fluid out has no priority, so it would take its turn with the
+// machines. Past 15 colours a channel shares the colour that leaks least, with a `conduit_channels` warning. A side's
+// targets are the insert sides of its colour that pass one of its keys, and EnderIO's round robin rotates over them
+// whatever their priority, so an item extract side gets it only when two or more machine faces take one of its items
+// and no chest takes an item a machine takes too; a fluid extract side (ender fluid conduits have no priority) gets it
+// for any two or more, and a fluid it hands both to machines and to an open end is warned about. Items and fluids are
 // separate networks with their own channels. Only raw inputs and final outputs touch storage, at the tail: an input
-// chest the line extracts from, which an EnderIO network at the base keeps stocked on Green (a colour the line never
-// uses), output chests of 24 items each, and one open fluid conduit end per fluid that enters or leaves the line, for a
-// tank. The fluid conduit is the slowest ender tier that moves the busiest face. Every order and tie-break is fixed, so
-// the same plan gives the same faces and colours.
+// chest the line extracts from, which an EnderIO network at the base keeps stocked from the storage tap on a channel of
+// that link's own (`TAP_CHANNEL`), output chests of 24 items each, and one open fluid conduit end per fluid that enters
+// or leaves the line, for a tank. The fluid conduit is the slowest ender tier that moves the busiest face. Every order
+// and tie-break is fixed, so the same plan gives the same faces and colours.
 
 import { isFluidKey, type StuffKey } from '../../../shared/keys.ts';
 import { conduitSideText } from '../../../shared/layout/configure-text.ts';
 import {
-  CHANNEL_PALETTE, CONDUIT_NAMES, DEFAULT_CHANNEL, DYE_NAMES, FLUID_CONDUITS, ITEM_CONDUIT, ITEM_FILTER_SLOTS, itemFaceRate,
+  CHANNEL_PALETTE, CONDUIT_NAMES, DYE_NAMES, FLUID_CONDUITS, ITEM_CONDUIT, ITEM_FILTER_SLOTS, TAP_CHANNEL, TAP_CHANNEL_NOTE, itemFaceRate,
 } from '../../../shared/layout/enderio.ts';
 import { fmtInt, fmtRate, joinNames } from '../../../shared/layout/format.ts';
-import { posKey, sideToward, step, type Vec3 } from '../../../shared/layout/geometry.ts';
+import { OPPOSITE, posKey, sideToward, step, type Vec3 } from '../../../shared/layout/geometry.ts';
 import { conduitBlockRef, FACES } from '../../../shared/types/assets.ts';
 import type {
   ConduitExtract, ConduitFace, ConduitFilter, ConduitInsert, ConduitKind, ConduitMode, ConduitSpec, TailChest,
 } from '../../../shared/types/layout.ts';
+import type { Pack } from '../../../shared/types/pack.ts';
 import type { BomLine, Plan, PlanFlow, PlanWarning } from '../../../shared/types/plan.ts';
 import { comparePos } from '../../world/graph.ts';
 import type { HatchKind, HostConfig, LocalBlock, PlacedUnit, Placement } from '../arrange.ts';
@@ -53,11 +68,20 @@ type SideName = 'extract' | 'insert';
 interface Side { keys: StuffKey[]; rate: number }
 
 /**
+ * Where a fluid face meets its unit (`unitFluidPorts`): on a GT basic machine's output side from the spine (`spine`),
+ * above a multiblock's fluid hatch (`hatch`), or above any other single-block machine (`top`).
+ */
+type FluidPort = 'spine' | 'hatch' | 'top';
+
+/**
  * A face of a conduit cell that trades with what it touches: a machine's item or fluid port (`stepId` its step), or a
  * tail chest or open fluid end (`stepId` null, where the line meets its storage). It has an extract side, an insert side
- * or both.
+ * or both. `outputSide`: the face touches a singleblock's output side and inserts, so the machine needs its Input from
+ * Output Side. `port`: where a machine's fluid face meets it.
  */
-interface FacePlan { pos: Vec3; side: number; target: string; stepId: string | null; extract: Side | null; insert: Side | null }
+interface FacePlan {
+  pos: Vec3; side: number; target: string; stepId: string | null; extract: Side | null; insert: Side | null; outputSide?: true; port?: FluidPort;
+}
 
 /** Each face's mode and sides, by `faceKey`. */
 type FaceSettings = ReadonlyMap<string, Omit<ConduitFace, 'face'>>;
@@ -76,13 +100,6 @@ function compareFaces(a: FacePlan, b: FacePlan): number {
 /** Each key once, sorted. */
 function distinctKeys(keys: Iterable<StuffKey>): StuffKey[] {
   return [...new Set(keys)].sort(compareText);
-}
-
-/** Each position once, sorted by x, y, z. */
-function distinctPositions(ps: readonly Vec3[]): Vec3[] {
-  const byKey = new Map<string, Vec3>();
-  for (const p of ps) if (!byKey.has(posKey(p))) byKey.set(posKey(p), [...p]);
-  return [...byKey.values()].sort(comparePos);
 }
 
 function sumRate(flows: readonly PlanFlow[]): number {
@@ -180,10 +197,12 @@ function unitTraders(placement: Placement, trades: (u: PlacedUnit, b: LocalBlock
 // ---- Channels, faces and blocks (items and fluids alike) ----
 
 /**
- * The channels of one conduit network's faces (items and fluids each get their own). Each flow links the extract sides
- * that give its key at its source to the insert sides that take it at its target, where the faces without a step (the
- * tail chests, the open fluid ends) stand for outside the line; a flow with both ends outside is skipped. A stray output
- * links its machine to the faces outside the line that take it. Ends in face order, extract before insert.
+ * The channels of one conduit network's faces (items and fluids each get their own network). Each flow links the
+ * extract sides that give its key at its source to the insert sides that take it at its target, where the faces without
+ * a step (the tail chests, the open fluid ends) stand for outside the line; a flow with both ends outside is skipped. A
+ * stray output links its machine to the faces outside the line that take it. Linked sides share a channel, and the
+ * channels share the line's one colour unless a side would then trade a key with a side its flows do not link it to
+ * (`assignChannels`). Ends in face order, extract before insert.
  */
 function planChannels(plans: readonly FacePlan[], flows: readonly PlanFlow[], placed: ReadonlySet<string>,
   strays: ReadonlyArray<{ stepId: string; key: StuffKey }>): ChannelPlan {
@@ -198,9 +217,10 @@ function planChannels(plans: readonly FacePlan[], flows: readonly PlanFlow[], pl
     if (from !== null || to !== null) link(from, to, f.key);
   }
   for (const s of strays) link(s.stepId, null, s.key);
+  const endOf = (f: FacePlan, side: SideName, s: Side): ChannelEnd => ({ id: endId(f, side), keys: s.keys, side, face: faceKey(f.pos, f.side) });
   const ends: ChannelEnd[] = plans.flatMap((f) => [
-    ...(f.extract === null ? [] : [{ id: endId(f, 'extract'), keys: f.extract.keys }]),
-    ...(f.insert === null ? [] : [{ id: endId(f, 'insert'), keys: f.insert.keys }]),
+    ...(f.extract === null ? [] : [endOf(f, 'extract', f.extract)]),
+    ...(f.insert === null ? [] : [endOf(f, 'insert', f.insert)]),
   ]);
   return assignChannels(ends, links);
 }
@@ -225,18 +245,23 @@ function insertPriority(face: FacePlan): number {
 }
 
 /**
- * Round robin for an extract side that can hand to `targets` (`targetsOf`). With it on, EnderIO starts each extraction
- * at the target after the one served last, over all of them whatever their priority (`NetworkedInventory.getTargetIterator`
- * hands out EnderCore's `RoundRobinIterator` over the priority-sorted targets, and its index only moves on); with it
- * off, an item goes to the first target that takes it (sticky, then priority, then distance) and a fluid first to the
- * face that took fluid last (`EnderLiquidConduitNetwork$TankIterator.rewind`). So an item side gets it only for two or
- * more targets that are machine faces of one priority, never with a tail chest among them (round robin would hand the
- * chest its turn before the machines are full); a fluid side, whose faces have no priority, for any two or more
- * (without it, a tank that took fluid once would be tried first from then on and take it all).
+ * Round robin for the extract side of `from`, which can hand to `targets` (`targetsOf`). With it on, EnderIO starts
+ * each extraction at the target after the one served last, over all of them whatever their priority
+ * (`NetworkedInventory.getTargetIterator` hands out EnderCore's `RoundRobinIterator` over the priority-sorted targets,
+ * and its index only moves on), passing on from a target whose filter refuses the item; with it off, an item goes to
+ * the first target that takes it (sticky, then priority, then distance) and a fluid first to the face that took fluid
+ * last (`EnderLiquidConduitNetwork$TankIterator.rewind`). So an item side gets it when two or more machine faces (all
+ * of priority 1) take one of its items and no tail chest takes an item a machine takes too (round robin would hand the
+ * chest its turn before the machines are full; a chest that only takes the side's other items never gets these); a
+ * fluid side, whose faces have no priority, for any two or more (without it, a tank that took fluid once would be tried
+ * first from then on and take it all).
  */
-function roundRobin(kind: 'item' | 'fluid', targets: readonly FacePlan[]): boolean {
+function roundRobin(kind: 'item' | 'fluid', from: FacePlan, targets: readonly FacePlan[]): boolean {
   if (targets.length < 2) return false;
-  return kind === 'fluid' || targets.every((g) => g.stepId !== null && insertPriority(g) === insertPriority(targets[0]!));
+  if (kind === 'fluid') return true;
+  const takers = (from.extract?.keys ?? []).map((k) => targets.filter((g) => g.insert!.keys.includes(k)));
+  const machines = (list: readonly FacePlan[]): number => list.filter((g) => g.stepId !== null).length;
+  return takers.some((list) => machines(list) >= 2) && takers.every((list) => machines(list) === 0 || machines(list) === list.length);
 }
 
 /** Each face's mode and sides from the side builders, called face by face, extract first. */
@@ -358,11 +383,18 @@ function fluidShareWarnings(input: ModeInput, plans: readonly FacePlan[], channe
   });
 }
 
-/** `conduit_channels`, one per colour a channel had to share past the palette. */
-function channelWarnings(input: ModeInput, channels: ChannelPlan): PlanWarning[] {
-  return channels.shared.map(({ color, keys }): PlanWarning => ({ code: 'conduit_channels',
-    text: `More than ${fmtInt(CHANNEL_PALETTE.length)} conduit channels are needed: ${DYE_NAMES[color]} also carries ${nameList(input.plan, input.pack, keys)}, `
-      + 'so they can reach a machine that does not take them' }));
+/**
+ * `conduit_channels`, one per colour a channel had to share past the palette, naming the items or fluids that a side can
+ * then hand to a side its flows do not link it to (`assignChannels`): a raw input or a machine's item reaching a machine
+ * the plan feeds it from another maker, or an output chest; a fluid reaching an open end in turn with the machines.
+ */
+export function channelWarnings(input: Pick<ModeInput, 'pack' | 'plan'>, channels: Pick<ChannelPlan, 'shared'>): PlanWarning[] {
+  return channels.shared.map(({ color, keys }): PlanWarning => {
+    const one = keys.length === 1;
+    return { code: 'conduit_channels',
+      text: `More than ${fmtInt(CHANNEL_PALETTE.length)} conduit channels are needed: ${DYE_NAMES[color]} also carries ${nameList(input.plan, input.pack, keys)}, `
+        + `so ${one ? 'it' : 'they'} can reach a face the plan does not send ${one ? 'it' : 'them'} to` };
+  });
 }
 
 // ---- Items ----
@@ -374,8 +406,8 @@ interface Crossing { entering: PlanFlow[]; leaving: PlanFlow[]; strays: Array<{ 
  * The face of every item port toward its unit, in unit then port order: a singleblock's extracts every item it makes and
  * inserts every item it takes; a multiblock's extracts toward an output bus and inserts toward an input bus, with all of
  * the step's items on every bus (plan 11, ruling R10). A unit's rates are split evenly over its extract faces and over
- * its insert faces. With them, `inputFromOutputSide` on every singleblock that takes items (its front, the face, is its
- * output side), sorted by pos.
+ * its insert faces. With them, `inputFromOutputSide` on every singleblock that takes items (the face is on its output
+ * side, GT's `getFrontFacing()`, which takes items only with that setting), sorted by pos; such a face is `outputSide`.
  */
 function machineFaces(plan: Plan, items: readonly PlanFlow[], placement: Placement): { faces: FacePlan[]; configs: HostConfig[] } {
   const blockAt = new Map(placement.blocks.map((b) => [posKey(b.pos), b]));
@@ -399,11 +431,13 @@ function machineFaces(plan: Plan, items: readonly PlanFlow[], placement: Placeme
     const insertRate = unitIntake(plan, items, u.stepId) / Math.max(1, roles.filter((r) => r.inserts).length);
     for (const { port, extracts, inserts } of roles) {
       if (!extracts && !inserts) continue;
+      const outputSide = !u.multiblock && inserts;
       faces.push({
         pos: port.pos, side: sideToward(port.pos, port.behind), target: u.name, stepId: u.stepId,
         extract: extracts ? { keys: makes, rate: extractRate } : null, insert: inserts ? { keys: takes, rate: insertRate } : null,
+        ...(outputSide ? { outputSide: true as const } : {}),
       });
-      if (!u.multiblock && inserts) configs.push({ pos: [...port.behind], config: { inputFromOutputSide: true } });
+      if (outputSide) configs.push({ pos: [...port.behind], config: { inputFromOutputSide: true } });
     }
   }
   return { faces, configs: configs.sort((a, b) => comparePos(a.pos, b.pos)) };
@@ -426,9 +460,9 @@ function crossing(plan: Plan, items: readonly PlanFlow[], placed: ReadonlySet<st
 /**
  * Each item side's colour, filter, speed upgrades, priority and round robin, by face, with the `conduit_rate` warnings
  * (once per step, and for the input chest's face) and then the `filter_full` ones. Round robin is on only for a side
- * that can hand to two or more insert sides, all machine faces of one priority (`roundRobin`): round robin would hand a
- * chest its turn before the machines are full, while without it the machines (priority 1) are filled first and the chest
- * takes what is left.
+ * one of whose items two or more machine faces take, and none of whose items both a chest and a machine take
+ * (`roundRobin`): round robin would hand a chest its turn before the machines are full, while without it the machines
+ * (priority 1) are filled first and the chest takes what is left.
  */
 function itemSettings(input: ModeInput, plans: readonly FacePlan[], channels: ChannelPlan): { configured: FaceSettings; warnings: PlanWarning[] } {
   const { parts } = input;
@@ -443,31 +477,35 @@ function itemSettings(input: ModeInput, plans: readonly FacePlan[], channels: Ch
     const speed = speedUpgradesFor(s.rate);
     if (speed.short) rateWarnings.add(itemRateWarning(parts, s.rate, f.stepId === null ? 'the input chest' : f.target, f.stepId));
     return {
-      color: channels.colors.get(id)!, filter: filterOf(f, 'extract', s.keys), rate: s.rate, roundRobin: roundRobin('item', targetsOf(plans, channels.colors, f)),
+      color: channels.colors.get(id)!, filter: filterOf(f, 'extract', s.keys), rate: s.rate, roundRobin: roundRobin('item', f, targetsOf(plans, channels.colors, f)),
       selfFeed: false, redstone: 'ignore', ...(speed.count > 0 ? { speed: { item: parts.eio_speed_upgrade.key, count: speed.count } } : {}),
     };
   };
   const insertOf = (f: FacePlan, s: Side): ConduitInsert => ({
     color: channels.colors.get(endId(f, 'insert'))!, filter: filterOf(f, 'insert', s.keys), rate: s.rate, priority: insertPriority(f),
+    ...(f.outputSide === true ? { outputSide: true } : {}),
   });
   return { configured: configureFaces(plans, extractOf, insertOf), warnings: [...rateWarnings.list, ...filterWarnings.list] };
 }
 
 /**
  * How an EnderIO item network at the base keeps the input chest stocked (spec §3.6 "hooked into whatever network
- * exists"): Plan 5's hookup lays Item Conduits from the storage tap, the last one inserting into the chest on Green with
- * the chest's whitelist at priority 1. Every Insert face already on the base's network is at EnderIO's default 0, and
- * an extraction goes to the first target that takes it (sticky, then priority, then distance; the tap's round robin
- * is off), so the raw inputs reach the line before any nearer storage on Green. The conduit face at the tap is the
- * base's own, so its settings are a drafted configure step: Extract, or In / Out when that face already inserts into
- * the storage (Extract alone would stop it storing), and its filter and speed upgrades are parts lines.
+ * exists"): Plan 5's hookup lays Item Conduits from the storage tap, the last one inserting into the chest with the
+ * chest's whitelist. Both ends of that link are on `TAP_CHANNEL`, a colour of its own on the base's network (the audit
+ * of the EnderIO In / Out fix): an extract side hands items only to Insert faces of its colour and moves nothing none of
+ * them takes, so the tap stops while the chest is full instead of handing the raw inputs on to the base's other
+ * storages, which are on Green by default (round robin off: there is one target). The end face keeps priority 1, above
+ * EnderIO's default 0, should another face of the base share the colour after all. The conduit face at the tap is the
+ * base's own, so its settings are a drafted configure step that says why the colour must stay free: Extract, or In / Out
+ * when that face already inserts into the storage (Extract alone would stop it storing; its insert side stays as it
+ * is), and its filter and speed upgrades are parts lines.
  */
 function storageHookup(input: ModeInput, keys: readonly StuffKey[], rate: number): { hookup: ModeHookup; extraParts: BomLine[]; draft: StepDraft } {
   const { pack, plan, parts } = input;
   const { filter } = itemFilterFor(parts, keys);
   const speed = speedUpgradesFor(rate);
   const tap: ConduitExtract = {
-    color: DEFAULT_CHANNEL, filter, rate, roundRobin: false, selfFeed: false, redstone: 'ignore',
+    color: TAP_CHANNEL, filter, rate, roundRobin: false, selfFeed: false, redstone: 'ignore',
     ...(speed.count > 0 ? { speed: { item: parts.eio_speed_upgrade.key, count: speed.count } } : {}),
   };
   const extraParts: BomLine[] = [];
@@ -475,13 +513,14 @@ function storageHookup(input: ModeInput, keys: readonly StuffKey[], rate: number
   if (speed.count > 0) extraParts.push({ key: parts.eio_speed_upgrade.key, amount: speed.count, why: 'speed upgrades at the storage tap', group: 'logistics' });
   // the end face holds a filter of its own: it is a second part, on a block the hookup places; its priority is above
   // the base network's own Insert faces (EnderIO's default 0), as the line's machine faces are
-  const end: ConduitInsert = { color: DEFAULT_CHANNEL, filter: itemFilterFor(parts, keys).filter, rate, priority: 1 };
+  const end: ConduitInsert = { color: TAP_CHANNEL, filter: itemFilterFor(parts, keys).filter, rate, priority: 1 };
   const tapText = conduitSideText('extract', tap, (k) => nameList(plan, pack, [k]));
   return {
     hookup: { part: 'eio_item_conduit', end: null, endConduit: { kind: 'item', face: { mode: 'insert', target: INPUT_CHEST, insert: end } } },
     extraParts,
     draft: { id: 'layout:configure:conduit-tap', kind: 'configure', pin: 'logistics',
-      text: `At the storage tap set the conduit face toward your storage to Extract (In / Out if it already inserts); ${tapText}` },
+      text: `At the storage tap set the conduit face toward your storage to Extract (In / Out if it already inserts, its insert side left as it is); `
+        + `${tapText}. ${TAP_CHANNEL_NOTE}` },
   };
 }
 
@@ -558,12 +597,13 @@ function itemLine(input: ModeInput): ItemLine {
     return { pos, spec: { kind: 'item', item, connections, faces: conduitFaces(pos, connections, configured, touching) } };
   });
 
-  // drafts: lay the line; then stock the input chest through the storage tap, or by hand
+  // drafts: lay the line (against a singleblock's output side, which GT keeps apart from its front, and a multiblock's
+  // buses); then stock the input chest through the storage tap, or by hand
   const hooked = network?.kind === 'enderio' && inputChest !== null ? storageHookup(input, inputKeys, inputRate) : null;
   const chestWords = [...(inputChest === null ? [] : ['an input chest']),
     ...(outputSlices.length === 0 ? [] : [outputSlices.length === 1 ? 'an output chest' : `${fmtInt(outputSlices.length)} output chests`])];
   const lineDraft: StepDraft = { id: 'layout:logistics:line', kind: 'logistics', pin: 'site',
-    text: `Lay ${fmtInt(cells.length)}× ${CONDUIT_NAMES.item} along the middle row so it touches every machine's front`
+    text: `Lay ${fmtInt(cells.length)}× ${CONDUIT_NAMES.item} along the middle row so it touches every machine's output side or bus`
       + `${chestWords.length > 0 ? `, with ${joinNames(chestWords)} at the end` : ''}` };
   const stockDraft: StepDraft | null = hooked !== null ? hooked.draft : inputChest === null ? null
     : { id: 'layout:logistics:inputs', kind: 'logistics', pin: 'site', text: `Put the raw inputs in the input chest: ${nameList(plan, pack, inputKeys)}` };
@@ -581,30 +621,55 @@ function itemLine(input: ModeInput): ItemLine {
 
 // ---- Fluids ----
 
+/** A unit's fluid port with the fluids it makes and takes there (each list sorted). */
+interface FluidPortPlan { pos: Vec3; side: number; port: FluidPort; makes: readonly StuffKey[]; takes: readonly StuffKey[] }
+
 /**
- * The face of every fluid port toward its unit (the side down), sorted by pos: Extract the fluids whose net has the port
- * as a producer, at Σ the rates of the producing faces that open onto it; Insert the fluids whose net has it as a
- * consumer, at Σ their flows into the step ÷ step.count.
+ * Where a unit's fluids are met. A GT basic machine (pack kind `basic`, an electric `MTEBasicMachine`): on its spine
+ * cell, the face on its output side (`spine`), the cell and face its items use, so one bundle face serves both (GT
+ * 5.09.54 `MTEBasicMachine.isLiquidOutput(side)` is `side ≠ mMainFacing` and `isLiquidInput(side)` is `side ≠ mMainFacing
+ * && (mAllowInputFromOutputSide || side ≠ getFrontFacing())`, the rule `allowPullStack` and `allowPutStack` give its
+ * items, and `BaseMetaTileEntity.fill` and `drain` ask exactly these; EnderIO's fluid conduit joins any GT tile whose
+ * tank holds anything, `AbstractLiquidConduit.canConnectToExternal` asking `getCapacity() > 0`, which every machine whose
+ * recipes use fluids has, and each conduit of a bundle connects on its own). A multiblock: the cell above each fluid
+ * hatch, one fluid each (`hatch`). Any other single-block machine keeps the cell above it for all its fluids (`top`):
+ * a steam machine (`MTEBasicMachineBronze`) holds only steam in its tank and must keep its output side clear to vent
+ * (`allowToCheckRecipe`), and the other kinds follow rules of their own. A port above faces down.
  */
-function portFaces(plan: Plan, nets: readonly FluidNet[], fluids: readonly PlanFlow[], placement: Placement): FacePlan[] {
-  const unitAt = new Map<string, PlacedUnit>();
-  for (const u of placement.units) {
-    for (const p of [...u.ports.fluidIn, ...u.ports.fluidOut]) if (!unitAt.has(posKey(p))) unitAt.set(posKey(p), u);
+function unitFluidPorts(pack: Pack, u: PlacedUnit): FluidPortPlan[] {
+  if (u.io.fluidIn.length === 0 && u.io.fluidOut.length === 0) return [];
+  if (u.multiblock) {
+    return [
+      ...u.ports.fluidIn.map((pos, i): FluidPortPlan => ({ pos, side: DOWN, port: 'hatch', makes: [], takes: [u.io.fluidIn[i]!] })),
+      ...u.ports.fluidOut.map((pos, i): FluidPortPlan => ({ pos, side: DOWN, port: 'hatch', makes: [u.io.fluidOut[i]!], takes: [] })),
+    ];
   }
-  const holds = (list: readonly Vec3[], key: string) => list.some((p) => posKey(p) === key);
-  return distinctPositions(nets.flatMap((n) => [...n.producers, ...n.consumers])).flatMap((pos): FacePlan[] => {
-    const key = posKey(pos);
-    const u = unitAt.get(key);
-    if (u === undefined) return [];
-    const makes = nets.filter((n) => holds(n.producers, key)), takes = nets.filter((n) => holds(n.consumers, key));
-    const extractRate = nets.reduce((sum, n) => sum + n.faces.reduce((s, f) => (posKey(step(f.pos, f.side)) === key ? s + f.rate : s), 0), 0);
-    const insertRate = unitIntake(plan, fluids.filter((f) => takes.some((n) => n.key === f.key)), u.stepId);
-    return [{
-      pos, side: DOWN, target: u.name, stepId: u.stepId,
-      extract: makes.length === 0 ? null : { keys: makes.map((n) => n.key), rate: extractRate },
-      insert: takes.length === 0 ? null : { keys: takes.map((n) => n.key), rate: insertRate },
-    }];
-  });
+  const spine = u.ports.items[0];
+  if (pack.machines.get(u.mteId)?.kind === 'basic' && spine !== undefined) {
+    return [{ pos: spine, side: OPPOSITE[u.facing]!, port: 'spine', makes: u.io.fluidOut, takes: u.io.fluidIn }];
+  }
+  const top = u.ports.fluidIn[0] ?? u.ports.fluidOut[0];
+  return top === undefined ? [] : [{ pos: top, side: DOWN, port: 'top', makes: u.io.fluidOut, takes: u.io.fluidIn }];
+}
+
+/**
+ * The face of every fluid port toward its unit (`unitFluidPorts`), in face order: Extract the fluids the unit makes
+ * there, at Σ the step's flows of them ÷ step.count; Insert the fluids it takes there, at Σ their flows into the step ÷
+ * step.count. A face on a basic machine's output side that inserts is `outputSide`.
+ */
+function portFaces(input: ModeInput, fluids: readonly PlanFlow[]): FacePlan[] {
+  const { pack, plan, placement } = input;
+  return placement.units.flatMap((u) => unitFluidPorts(pack, u).map((p): FacePlan => {
+    const count = plan.steps.find((s) => s.id === u.stepId)?.count ?? 1;
+    const extractRate = sumRate(fluids.filter((f) => f.from === u.stepId && p.makes.includes(f.key))) / Math.max(1, count);
+    const insertRate = unitIntake(plan, fluids.filter((f) => p.takes.includes(f.key)), u.stepId);
+    return {
+      pos: [...p.pos], side: p.side, target: u.name, stepId: u.stepId, port: p.port,
+      extract: p.makes.length === 0 ? null : { keys: [...p.makes], rate: extractRate },
+      insert: p.takes.length === 0 ? null : { keys: [...p.takes], rate: insertRate },
+      ...(p.port === 'spine' && p.takes.length > 0 ? { outputSide: true as const } : {}),
+    };
+  })).sort(compareFaces);
 }
 
 /** An open fluid conduit end at the tail and the fluid it passes. */
@@ -632,10 +697,11 @@ function openEnds(nets: readonly FluidNet[], fluids: readonly PlanFlow[], placed
 
 /**
  * The fluid conduit network's cells (sorted by x, y, z) and links: it starts as the spine cells linked along x and the
- * open-end column `[tailX, i, spineZ]` (i = 1 … ends − 1) linked up from the tail cell; Plan 5's `growTree` adds a riser
- * from every port (by posKey) to the nearest network cell, inside the box up to the higher of the units and the column,
- * at x ≥ firstX, on cells that are not `blocked`; then every cell with at most one link that is neither a port nor an
- * open end is dropped until none is left. `unreached`: the ports no riser reaches.
+ * open-end column `[tailX, i, spineZ]` (i = 1 … ends − 1) linked up from the tail cell, which already hold the ports on
+ * the spine; Plan 5's `growTree` adds a riser from every other port (by posKey) to the nearest network cell, inside the
+ * box up to the higher of the units and the column, at x ≥ firstX, on cells that are not `blocked`; then every cell with
+ * at most one link that is neither a port nor an open end is dropped until none is left. `unreached`: the ports no riser
+ * reaches.
  */
 function fluidNetwork(placement: Placement, ports: readonly Vec3[], ends: number, blocked: ReadonlySet<string>): {
   cells: Vec3[]; links: Array<[Vec3, Vec3]>; unreached: Vec3[];
@@ -685,31 +751,44 @@ function fluidSettings(input: ModeInput, plans: readonly FacePlan[], channels: C
   const extractOf = (f: FacePlan, s: Side): ConduitExtract => {
     const id = endId(f, 'extract');
     return {
-      color: channels.colors.get(id)!, filter: filterOf(f, 'extract', s.keys), rate: s.rate, roundRobin: roundRobin('fluid', targetsOf(plans, channels.colors, f)),
+      color: channels.colors.get(id)!, filter: filterOf(f, 'extract', s.keys), rate: s.rate, roundRobin: roundRobin('fluid', f, targetsOf(plans, channels.colors, f)),
       redstone: 'ignore',
     };
   };
   const insertOf = (f: FacePlan, s: Side): ConduitInsert => ({
     color: channels.colors.get(endId(f, 'insert'))!, filter: filterOf(f, 'insert', s.keys), rate: s.rate,
+    ...(f.outputSide === true ? { outputSide: true } : {}),
   });
   return { configured: configureFaces(plans, extractOf, insertOf), warnings: filterWarnings.list };
 }
 
+/** The distinct names of the faces' units whose fluid port is `port`, in face order. */
+function portNames(faces: readonly FacePlan[], port: FluidPort): string[] {
+  return [...new Set(faces.filter((f) => f.port === port).map((f) => f.target))];
+}
+
 /**
- * `layout:logistics:fluids`: lay the network[, with its open ends][, and how many of its cells share a bundle with the
- * Item Conduit]; with open ends, `layout:logistics:tanks`: a tank on each, from the bottom. Both pinned to the site.
- * The tanks step names the open ends' side by the line's shape, never by compass: drafts are in the line's own frame
- * and become build steps word for word, so a compass word would be wrong once the line is turned (each open end's
- * turned face is named in its own `layout:conduit:…` configure step).
+ * `layout:logistics:fluids`: lay the network along the middle row[ to the output side of each GT basic machine whose
+ * fluids it meets there][ and up to the fluid hatches of each multiblock][ and up to the top of each other machine][,
+ * with its open ends][; and how many of its cells share a bundle with the Item Conduit], from the laid faces `laid`;
+ * with open ends, `layout:logistics:tanks`: a tank on each, from the bottom. Both pinned to the site. The tanks step
+ * names the open ends' side by the line's shape, never by compass: drafts are in the line's own frame and become build
+ * steps word for word, so a compass word would be wrong once the line is turned (each open end's turned face is named
+ * in its own `layout:conduit:…` configure step).
  */
-function fluidDrafts(input: ModeInput, conduit: string, cells: readonly Vec3[], ends: readonly OpenEnd[], itemCells: ReadonlySet<string>): StepDraft[] {
+function fluidDrafts(input: ModeInput, conduit: string, cells: readonly Vec3[], laid: readonly FacePlan[], ends: readonly OpenEnd[],
+  itemCells: ReadonlySet<string>): StepDraft[] {
   if (cells.length === 0) return [];
   const bundled = cells.filter((c) => itemCells.has(posKey(c))).length;
+  const hatches = portNames(laid, 'hatch'), tops = portNames(laid, 'top');
+  const reach = `${laid.some((f) => f.port === 'spine') ? ' to the output side of each electric single-block machine that moves fluids' : ''}`
+    + `${hatches.length === 0 ? '' : ` and up to the fluid hatches of each ${joinNames(hatches)}`}`
+    + `${tops.length === 0 ? '' : ` and up to the top of each ${joinNames(tops)}`}`;
   const endWords = ends.length === 0 ? '' : `, with ${ends.length === 1 ? 'an open end' : `${fmtInt(ends.length)} open ends`} at the tail for your tanks`;
   const bundleWords = bundled === 0 ? ''
     : `; ${fmtInt(bundled)} of them ${bundled === 1 ? 'goes' : 'go'} in the same bundle as the ${CONDUIT_NAMES.item}`;
   const drafts: StepDraft[] = [{ id: 'layout:logistics:fluids', kind: 'logistics', pin: 'site',
-    text: `Lay ${fmtInt(cells.length)}× ${conduit} from every machine's fluid port${endWords}${bundleWords}` }];
+    text: `Lay ${fmtInt(cells.length)}× ${conduit} along the middle row${reach}${endWords}${bundleWords}` }];
   if (ends.length > 0) {
     drafts.push({ id: 'layout:logistics:tanks', kind: 'logistics', pin: 'site',
       text: 'Connect a tank to the side of each open conduit end at the tail that faces out of the end of the line, '
@@ -718,21 +797,24 @@ function fluidDrafts(input: ModeInput, conduit: string, cells: readonly Vec3[], 
   return drafts;
 }
 
-/** The fluid conduit network: its conduits, drafts and warnings. */
-interface FluidLine { conduits: CellConduit[]; drafts: StepDraft[]; warnings: PlanWarning[] }
+/** The fluid conduit network: its conduits, the machines' settings, drafts and warnings. */
+interface FluidLine { conduits: CellConduit[]; configs: HostConfig[]; drafts: StepDraft[]; warnings: PlanWarning[] }
 
 /**
  * One ender fluid conduit network for every fluid the units move (plan 11 "How the EnderIO mode works", Fluids): the
- * faces of the fluid ports and the open ends; the slowest ender tier that moves the busiest extract and the busiest
- * insert side of them (one tier for the whole network, since EnderIO joins only conduits of one kind, so a port left
- * for the player to connect counts too); the network through free cells and the Item Conduit's; the channels of its
- * faces by the plan's fluid flows; and Disabled toward the singleblock machines and fluid hatches it touches otherwise.
+ * faces of the fluid ports (a GT basic machine's on its output side, beside its item face, so it has one connection for
+ * both) and the open ends; the slowest ender tier that moves the busiest extract and the busiest insert side of them
+ * (one tier for the whole network, since EnderIO joins only conduits of one kind, so a port left for the player to
+ * connect counts too); the network along the spine, through the Item Conduit's cells, with risers through free cells to
+ * the ports above; the channels of its faces by the plan's fluid flows; Disabled toward the singleblock machines and
+ * fluid hatches it touches otherwise; and Input from Output Side on every machine a laid face inserts into through its
+ * output side, sorted by pos.
  */
 function fluidLine(input: ModeInput, nets: readonly FluidNet[], items: ItemLine | null): FluidLine {
   const { parts, plan, placement } = input;
   const placed = placedStepIds(placement);
   const fluids = plan.flows.filter((f) => isFluidKey(f.key));
-  const ports = portFaces(plan, nets, fluids, placement);
+  const ports = portFaces(input, fluids);
   const ends = openEnds(nets, fluids, placed, placement);
   const planned = [...ports, ...ends.map((e) => e.face)];
   const need: Record<SideName, number> = { extract: busiest(planned, 'extract'), insert: busiest(planned, 'insert') };
@@ -764,9 +846,11 @@ function fluidLine(input: ModeInput, nets: readonly FluidNet[], items: ItemLine 
     unreached.add({ code: 'route_failed', stepId: port.stepId, text: `Could not lay the ${CONDUIT_NAMES[kind]} to ${port.target} — connect it by hand` });
   }
   const itemCells = new Set((items?.conduits ?? []).map((c) => posKey(c.pos)));
+  const configs = laid.filter((f) => f.outputSide === true)
+    .map((f): HostConfig => ({ pos: step(f.pos, f.side), config: { inputFromOutputSide: true } })).sort((a, b) => comparePos(a.pos, b.pos));
   return {
-    conduits,
-    drafts: fluidDrafts(input, CONDUIT_NAMES[kind], network.cells, ends, itemCells),
+    conduits, configs,
+    drafts: fluidDrafts(input, CONDUIT_NAMES[kind], network.cells, laid, ends, itemCells),
     warnings: [
       ...(short ? [fluidRateWarning(kind, need)] : []), ...filterWarnings, ...channelWarnings(input, channels), ...fluidShareWarnings(input, laid, channels),
       ...unreached.list,
@@ -788,9 +872,11 @@ export function enderioMode(input: ModeInput): ModeResult {
   if (items === null && nets.length === 0) return emptyModeResult();
   const fluids = nets.length > 0 ? fluidLine(input, nets, items) : null;
   const stock = items?.stockDraft ?? null;
+  // a machine that takes items and fluids through its output side gets the setting once
+  const configs = new Map([...(items?.configs ?? []), ...(fluids?.configs ?? [])].map((c) => [posKey(c.pos), c]));
   return {
     blocks: [...conduitBlocks(items?.conduits ?? [], fluids?.conduits ?? []), ...(items?.chests ?? [])].sort((a, b) => comparePos(a.pos, b.pos)),
-    covers: [], configs: items?.configs ?? [],
+    covers: [], configs: [...configs.values()].sort((a, b) => comparePos(a.pos, b.pos)),
     logisticsPort: items?.logisticsPort ?? null,
     hookup: items?.hookup ?? null,
     extraParts: items?.extraParts ?? [],
