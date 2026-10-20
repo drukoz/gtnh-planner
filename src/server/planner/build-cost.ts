@@ -15,7 +15,7 @@
 // before (the keys asked are part of the key).
 
 import { createHash } from 'node:crypto';
-import { PSEUDO_MACHINES, tierName } from '../../shared/gt/tiers.ts';
+import { PSEUDO_IDS, tierName } from '../../shared/gt/tiers.ts';
 import { isFluidKey, itemKey, type StuffKey } from '../../shared/keys.ts';
 import { defaultSettings } from '../../shared/project/apply-op.ts';
 import type { Machine, Pack, Recipe } from '../../shared/types/pack.ts';
@@ -63,7 +63,6 @@ export interface ItemPrices {
   gap(key: StuffKey): PriceGap | undefined;
 }
 
-const PSEUDO_IDS: ReadonlySet<number> = new Set(Object.values(PSEUDO_MACHINES));
 
 function byString(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;

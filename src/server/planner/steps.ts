@@ -2,7 +2,7 @@
 // gather, craft, place, power, logistics, configure, hand-craft, test. Step ids name what a step is about (a build-list
 // key, a plan step id, the logistics mode), never its position, so the marks people tick survive a re-plan.
 
-import { PSEUDO_MACHINES, tierName } from '../../shared/gt/tiers.ts';
+import { PSEUDO_IDS, tierName } from '../../shared/gt/tiers.ts';
 import { isFluidKey, parseItemKey, type StuffKey } from '../../shared/keys.ts';
 import { machineGroups } from '../../shared/plan/pools.ts';
 import type { Pack } from '../../shared/types/pack.ts';
@@ -16,7 +16,6 @@ const GATHER_SHOWN = 8;
 const SECONDS_PER: Readonly<Record<PlanSettings['per'], number>> = { min: 60, hour: 3600 };
 const RATE_UNIT: Readonly<Record<PlanSettings['per'], string>> = { min: 'min', hour: 'h' };
 const PER_WORD: Readonly<Record<PlanSettings['per'], string>> = { min: 'minute', hour: 'hour' };
-const PSEUDO_IDS: ReadonlySet<number> = new Set(Object.values(PSEUDO_MACHINES));
 const LAVA: StuffKey = 'fluid:lava';
 
 const LOGISTICS_TEXT: Readonly<Record<LogisticsMode, string>> = {

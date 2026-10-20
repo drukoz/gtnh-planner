@@ -4,7 +4,7 @@
 // or a new one pays for itself against the batch (plan 12: the build-cost solve decides which); and the batch takes as
 // long as the busiest machine type plus the time one run needs to pass down the chain.
 
-import { PSEUDO_MACHINES } from '../../shared/gt/tiers.ts';
+import { PSEUDO_IDS } from '../../shared/gt/tiers.ts';
 import type { StuffKey } from '../../shared/keys.ts';
 import type { Pack, Product } from '../../shared/types/pack.ts';
 import type { PlanContext, PlanSettings, PlanStep } from '../../shared/types/plan.ts';
@@ -31,7 +31,6 @@ const LOOP_TOP_UPS = 8;
 /** A good of a loop short again by more than this times its last deficit: topping up only digs the loop deeper. */
 const GROWTH = 1.5;
 const TICKS_PER_SECOND = 20;
-const PSEUDO_IDS: ReadonlySet<number> = new Set(Object.values(PSEUDO_MACHINES));
 const CHANCED_WARNING = 'Chanced outputs: amounts are expected values; a small batch may come out short';
 
 /** 9 decimal places; −0 reads 0: whole-batch amounts (rates use `sig9`). */

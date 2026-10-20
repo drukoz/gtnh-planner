@@ -10,6 +10,7 @@ import { describe, it, expect } from 'vitest';
 import { centrifugeDustSpec, fluidCellsSpec, kitSpec, sandSpec, withBuildRecipes, withPriceGap } from '../../helpers/build-fixtures.ts';
 import { MINI_GT, miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec, type PackSpec } from '../../helpers/pack-spec.ts';
+import { expandBomLines } from '../../../src/server/planner/bom.ts';
 import { assignOwned } from '../../../src/server/planner/machines.ts';
 import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
 import { linePricing } from '../../../src/server/planner/pricing.ts';
@@ -77,6 +78,18 @@ describe('build cost in the plan', () => {
     // Ruling P19: the swap list says why the recipe on a machine that cannot be built cannot be picked.
     expect(stepOf(plan, 'circuit-lv').alternatives.find((a) => a.recipeId === 'circuit-mv')?.unusable)
       .toEqual(['Advanced Assembler cannot be built here (no recipe in this pack)']);
+  });
+
+  it('breaks its machines down at the prices the layout parts break down at, also after a walk around', async () => {
+    // Architecture §11.15: the build list breaks down at the plain pricing's prices (the one `expandBomLines` reads for
+    // the layout's parts), also after the walk around circuit-mv and extract-iron (the controller's ruling after Task 5,
+    // item (a)); the same top-level lines broken down again give the same list and totals.
+    const settings = S({ tier: 2, amount: 30 });
+    const plan = await planLine(miniGt(), settings, emptyContext());
+    const tops = plan.buildList.map(({ key, amount, why, group }) => ({ key, amount, why, ...(group === undefined ? {} : { group }) }));
+    const again = await expandBomLines(miniGt(), tops, settings, emptyContext());
+    expect(again.lines).toEqual(plan.buildList);
+    expect(again.totals).toEqual(plan.buildTotals);
   });
 
   it('walks around every recipe of a machine that cannot be built, not only the ones it met', async () => {

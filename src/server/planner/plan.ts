@@ -6,7 +6,7 @@
 // the plan cache the plan route keys on (architecture §7, §11.8).
 
 import { formatNumber, formatRate } from '../../shared/format.ts';
-import { PSEUDO_MACHINES, V, tierName } from '../../shared/gt/tiers.ts';
+import { PSEUDO_IDS, V, tierName } from '../../shared/gt/tiers.ts';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import { indexPlan, issueText, type PlanIssue } from '../../shared/plan/balance.ts';
 import { machineGroups } from '../../shared/plan/pools.ts';
@@ -43,7 +43,6 @@ const SECONDS_PER_HOUR = 3600;
 const DEFAULT_CACHE_SIZE = 32;
 /** A machine or amp count this little above a whole number stays whole. */
 const TINY = 1e-9;
-const PSEUDO_IDS: ReadonlySet<number> = new Set(Object.values(PSEUDO_MACHINES));
 /** A `build-cost-unknown` warning names at most this many machines, then counts the rest (plan 12). */
 export const MAX_UNPRICED_NAMED = 5;
 /**
@@ -1652,7 +1651,7 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
   const planned = await plannedLine(pack, settings, ctx, first, demand, options);
   const { priced, avoid, line, model: buildModel, unbuildable } = planned;
   const { graph, sol } = line;
-  const { model, leaf } = priced;
+  const { model } = priced;
   const solverWarnings = sol.warnings.map((w) => namedSolverWarning(pack, graph, sol, w));
 
   if (sol.status === 'infeasible' || buildModel === undefined) {
@@ -1723,7 +1722,10 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
   const power = powerSummary(steps, { sharedByType: batch });
   // The parts the machines hold are ones the line may use (ruling R7): never an option it still avoids.
   const held = heldAvoid(avoid, line);
-  const bom = await buildBom(pack, steps, { settings, env: basis.env, leaf, ctx, avoid: held });
+  // The build list breaks down at the plain pricing's prices (`first`, the one `expandBomLines` reads for the layout's
+  // parts), also after a walk around machines that cannot be built, so a line's machines and its layout parts break down
+  // alike (architecture §11.15; the controller's ruling after plan 12 Task 5, item (a)).
+  const bom = await buildBom(pack, steps, { settings, env: basis.env, leaf: first.leaf, ctx, avoid: held });
   const uses = unavoidableUses(pack, avoid, line, steps, flows, buys, basis.tier);
   const body: PlanBody = {
     status: 'ok', unlocks: [], steps, flows, rawInputs: raw.rawInputs, byproducts: byproductsOf(graph, sinks, target), power,

@@ -3,7 +3,7 @@
 // materials, plus those base materials summed, each saying which lines need it. `expandBomLines` gives Plan 5's layout
 // parts the same breakdown.
 
-import { PSEUDO_MACHINES } from '../../shared/gt/tiers.ts';
+import { PSEUDO_IDS } from '../../shared/gt/tiers.ts';
 import type { StuffKey } from '../../shared/keys.ts';
 import type { Machine, Pack } from '../../shared/types/pack.ts';
 import { FREE_KEYS, type BomLine, type PlanContext, type PlanSettings, type PlanStep, type PlanWarning } from '../../shared/types/plan.ts';
@@ -25,7 +25,6 @@ const MAX_DEPTH = 12;
 const TINY = 1e-9;
 /** Ruling R8 (architecture §11.19): the cleanroom is the machine with this simple class name. */
 const CLEANROOM_CLASS = 'MTECleanroom';
-const PSEUDO_IDS: ReadonlySet<number> = new Set(Object.values(PSEUDO_MACHINES));
 const FREE: ReadonlySet<StuffKey> = new Set(FREE_KEYS);
 
 function byString(a: string, b: string): number {

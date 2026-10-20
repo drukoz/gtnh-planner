@@ -21,7 +21,7 @@ import type { PlanBasis } from './basis.ts';
 import { cleanroomMachine } from './bom.ts';
 import { buildKeys, gapText, hatchSet, itemPrices, machineBuildCost, machineGap, type ItemPrices, type PriceGap } from './build-cost.ts';
 import { acceptRecipe, type CandidateGraph, type LpRecipe } from './candidates.ts';
-import { ownedPools, recipeCircuit } from './machines.ts';
+import { ownedPools, recipeCircuit } from './owned.ts';
 
 const TICKS_PER_SECOND = 20;
 const SECONDS_PER_HOUR = 3600;

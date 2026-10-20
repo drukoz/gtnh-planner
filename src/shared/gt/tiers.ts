@@ -29,3 +29,6 @@ export function recipeTier(euPerTick: number, amps: number): number {
 
 /** Ids of the "machines" that are not GT machines; real machines use their GT MTE id. */
 export const PSEUDO_MACHINES = { CRAFTING_TABLE: -1, FURNACE: -2, HAND: -3 } as const;
+
+/** The ids of `PSEUDO_MACHINES`: steps on them have no machine to build or place. */
+export const PSEUDO_IDS: ReadonlySet<number> = new Set(Object.values(PSEUDO_MACHINES));

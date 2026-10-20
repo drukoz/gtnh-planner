@@ -8,7 +8,7 @@ import { MINI_GT, miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec, type PackSpec } from '../../helpers/pack-spec.ts';
 import { emptyContextForTest } from '../../helpers/plan-context.ts';
 import { buildCandidates, type LeafOracle, type PlanEnv } from '../../../src/server/planner/candidates.ts';
-import { ownedMachineMap, ownedMachineTypes, planSteps } from '../../../src/server/planner/machines.ts';
+import { ownedMachineMap, ownedPools, planSteps } from '../../../src/server/planner/machines.ts';
 import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
 import { solveLine } from '../../../src/server/planner/solve.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
@@ -137,12 +137,12 @@ describe('reusing machines we have (Make N)', () => {
   });
 });
 
-describe('ownedMachineTypes / ownedMachineMap', () => {
+describe('ownedPools / ownedMachineMap', () => {
   const ctx = scanned({ mteId: ASSEMBLER, count: 2, where: [A1, A2] }, { mteId: BENDER, count: 1 });
   it('adds the list to the scan per type, positions only for what the scan found', () => {
     const settings = { ...defaultSettings(), ownedManual: [{ mteId: ASSEMBLER, count: 3 }, { mteId: 122, count: 1 }] };
-    expect([...ownedMachineTypes(ctx, settings)]).toEqual([
-      [ASSEMBLER, { count: 5, where: [A1, A2] }], [BENDER, { count: 1, where: [] }], [122, { count: 1, where: [] }]]);
+    // one entry per machine, in pool order: the scan's with where they stand, then the list's without a position
+    expect([...ownedPools(ctx, settings)]).toEqual([[ASSEMBLER, [A1, A2, null, null, null]], [BENDER, [null]], [122, [null]]]);
     expect([...ownedMachineMap(ctx, settings)]).toEqual([[ASSEMBLER, 5], [BENDER, 1], [122, 1]]);
   });
   it('is empty with "Reuse machines we have" off and leaves out declined types', () => {
