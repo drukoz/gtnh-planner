@@ -14,3 +14,4 @@ projector-mod/build/
 projector-mod/.gradle/
 projector-mod/run/
 *.tsbuildinfo
+.vitest/
