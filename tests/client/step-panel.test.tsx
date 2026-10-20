@@ -315,13 +315,28 @@ describe('step panel: reused machines', () => {
   const pos = (x: number) => ({ dim: 0, pos: [x, 64, 2] as [number, number, number] });
   const reusing = (count: number, owned: number, where: ReturnType<typeof pos>[]) =>
     step({ id: 'asm', count, owned, reused: { count: owned, where }, mainOutput: 't:circuit@0' });
+  /** The panel of a project that links a world base: the scan's machines there are the ones it owns. */
+  const atBase = (s: PlanStep, plan: Plan): string => text(renderToStaticMarkup(
+    <StepPanel step={s} plan={plan} settings={S()} send={() => {}} onClose={() => {}} per="min" base />));
   it('says how many machines the step reuses and where they stand', () => {
-    expect(panel(reusing(3, 2, [pos(1), pos(3)]), wires)).toContain('2× Basic Assembler (LV) reused — at your base 1 64 2, 3 64 2');
-    expect(panel(reusing(3, 2, []), wires)).toContain('2× Basic Assembler (LV) reused — from your list');
-    expect(panel(reusing(3, 3, [pos(1)]), wires)).toContain('3× Basic Assembler (LV) reused — 1 at your base 1 64 2; 2 from your list');
-    expect(panel(reusing(5, 5, [1, 2, 3, 4, 5].map(pos)), wires)).toContain('5× Basic Assembler (LV) reused — at your base 1 64 2, 2 64 2, 3 64 2 and 2 more');
+    expect(atBase(reusing(3, 2, [pos(1), pos(3)]), wires)).toContain('2× Basic Assembler (LV) reused — at your base 1 64 2, 3 64 2');
+    expect(atBase(reusing(3, 2, []), wires)).toContain('2× Basic Assembler (LV) reused — from your list');
+    expect(atBase(reusing(3, 3, [pos(1)]), wires)).toContain('3× Basic Assembler (LV) reused — 1 at your base 1 64 2; 2 from your list');
+    expect(atBase(reusing(5, 5, [1, 2, 3, 4, 5].map(pos)), wires)).toContain('5× Basic Assembler (LV) reused — at your base 1 64 2, 2 64 2, 3 64 2 and 2 more');
     expect(panel(step({ id: 'asm', count: 3, owned: 2, mainOutput: 't:circuit@0' }), wires)).toContain('2× Basic Assembler (LV) reused');   // a plan without where
     expect(panel(step({ id: 'asm', count: 3, owned: 0 }), wires)).not.toContain('reused');
+  });
+  it('says "your base" only for a project that links one, and names a dimension other than the overworld', () => {
+    // Plan 09's final review: a project linked to a scan with no base owns every machine of the world, which may stand
+    // in another dimension; "at your base" was said for every position.
+    const nether = { dim: -1, pos: [8, 40, 8] as [number, number, number] };
+    const named = { ...wires, names: { ...wires.names, 'dimId:-1': 'Nether' } };
+    expect(panel(reusing(3, 2, [pos(1), pos(3)]), wires)).toContain('2× Basic Assembler (LV) reused — at 1 64 2, 3 64 2');
+    expect(panel(reusing(3, 2, [pos(1), pos(3)]), wires)).not.toContain('your base');
+    expect(panel(reusing(3, 2, [pos(1), nether]), named)).toContain('2× Basic Assembler (LV) reused — at 1 64 2, 8 40 8 (Nether)');
+    expect(panel(reusing(3, 3, [nether]), named)).toContain('3× Basic Assembler (LV) reused — 1 at 8 40 8 (Nether); 2 from your list');
+    expect(atBase(reusing(3, 1, [nether]), named)).toContain('1× Basic Assembler (LV) reused — at your base 8 40 8 (Nether)');
+    expect(panel(reusing(3, 1, [{ dim: 7, pos: [1, 2, 3] }]), wires)).toContain('reused — at 1 2 3 (DIM7)');   // a dimension the plan does not name
   });
   it('keeps the per-machine switch beside it, and shows neither with "Reuse machines we have" off', () => {
     const html = panel(reusing(3, 2, [pos(1), pos(3)]), wires);

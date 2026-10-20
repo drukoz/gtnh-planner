@@ -5,6 +5,7 @@ import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Pack } from '../../shared/types/pack.ts';
+import { tableItemCount } from '../pack/crops.ts';
 import { MARKER_FAILED, MARKER_OK } from '../pack/format.ts';
 import { loadPack } from '../pack/load.ts';
 
@@ -44,7 +45,7 @@ function summarize(pack: Pack): string {
   const { veins, dimensions } = pack.worldgen;
   const hatchRules = machines.filter((m) => m.structure?.elements !== undefined).length;
   return [
-    `items ${pack.items.size}`, `fluids ${pack.fluids.size}`, `recipes ${pack.recipes.length}`, `maps ${pack.maps.size}`,
+    `items ${tableItemCount(pack.items)}`, `fluids ${pack.fluids.size}`, `recipes ${pack.recipes.length}`, `maps ${pack.maps.size}`,
     `machines ${machines.length}`, `structures ${machines.filter((m) => m.structure !== undefined).length}${hatchRules > 0 ? ` (${hatchRules} with hatch rules)` : ''}`,
     `veins ${veins.length}`, `dimensions ${dimensions.length}`,
   ].join(' · ');
@@ -60,7 +61,7 @@ function checkPack(pack: Pack, error: Report, warn: Report): void {
   const maps = m.counts.recipeMaps ?? 0;
   if (maps < MIN_RECIPE_MAPS) error('few-maps', `the export has ${maps} recipe maps, expected at least ${MIN_RECIPE_MAPS}`);
 
-  const items = pack.items.size;
+  const items = tableItemCount(pack.items);   // the exporter counts name failures over its item table only
   if (typeof m.nameFailures === 'number' && m.nameFailures > items / 100) {
     const samples = (m.nameFailureSamples ?? []).slice(0, QUOTED);
     warn('name-failures', `${m.nameFailures} of ${items} items have no English name (more than 1 %)`

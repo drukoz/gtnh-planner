@@ -337,10 +337,11 @@ Auditor ids: invariants INV-n, rootcause RCn, gtnh Gn, ui UI-n. "Decision" resol
   Hydrochloric Acid line and gains Nitrogen and Phosphorus Dust lines. This is intended, not a regression. The GEC HV
   2/min line keeps one co-product pair, and that is accepted: "Hydrogen Cell is made 2 ways" (water electrolysis 97 %,
   salt water electrolysis 2 %, a step the Chlorine walk pulls in). Keep only cannot remove a maker that another good
-  pulls in; real-acceptance asserts at most one `multi-producer` issue on that line, and a later change should make the
-  issues box's Keep only honest for such pairs. Make N names a step from the LP's `runsFor` (this keeps GEC HV × 4
-  clean), so a one-run step can carry the name of an output it partly leaves over (a reactor named Naphtha in Make N
-  GEC × 4).
+  pulls in; real-acceptance asserts at most one `multi-producer` issue on that line. The issues box says so (§6.2
+  Issues, plan 09 follow-ups): before the click as a guess from what the plan shows, and once the pin is in place and
+  the issue is still there as a fact, with no Keep only left to click. Make N names a step from the LP's `runsFor`
+  (this keeps GEC HV × 4 clean), so a one-run step can carry the name of an output it partly leaves over (a reactor
+  named Naphtha in Make N GEC × 4).
 
 ### D14 (minor) A thrown-away filled container makes the line extrude new cells — RC7
 
@@ -641,7 +642,10 @@ export function issueText(issue: PlanIssue, plan: Plan): string;
 ```
 - `orphan-input`: a step input with `need > 0` and `got ≤ ORPHAN_REL × need`; `short-input`: `got < SHORT_INPUT_SHARE × need`;
   `multi-producer`: a good that is the `mainOutput` of 2+ steps (shares by produced amount); `bought-and-made`: a good with
-  a `raw` flow that is some step's `mainOutput`. A good several steps make only as a by-product is not an issue.
+  a `raw` flow that is some step's `mainOutput`. A good several steps make only as a by-product is not an issue. Nor is
+  the shortfall of a good a Make N batch comes out short of (plan 09 follow-up): its `batch-short` warning lists every
+  such good in `PlanWarning.keys?` (the target first) and already says what to have ready, so no step that takes one gets
+  an `orphan-input` or `short-input` for it.
 - `planLine` runs `indexPlan` on the finished plan (in `assemble`, after `plan.names`) and adds one `PlanWarning` per
   issue (`code` as above, `key`, `stepId` of the consumer or the largest producer, optional `stepIds`, `share`;
   `text = issueText(issue, plan)`). `PlanWarning` gains optional `stepIds?: string[]` and `share?: number[]`. The client
@@ -705,7 +709,25 @@ issue texts. `MaterialsView.quantity()` loses its rate branch; counts of things 
 - **Find item.** Toolbar `<select aria-label="Find item">` of every good in the plan by name; choosing pins item focus and
   centres its first producer (`centreOn(node, view)`); shared with "Show" buttons.
 - **Issues.** A `FlowIssues` box above the canvas (red with any `orphan-input`, else amber), one line per issue with
-  **Show**; multi-producer lines also **Keep only <bigger producer>** (sends `recipeChoice[key] = recipeId`).
+  **Show**; multi-producer lines also **Keep only <bigger producer>** (sends `recipeChoice[key] = recipeId`). Plan 09
+  follow-ups: a pin of one maker cannot take out another the walk keeps for something else. Before the click the
+  client can only guess from the plan: for each other maker that the line runs for another good it takes from it that
+  another step makes as its main output, or that empties containers another step fills (D14), the box notes "Keep
+  only may not change this: the 2% comes from the Advanced Electrolyzer II on Salt Water, which the line runs for
+  Chlorine." ("Keep only may still leave …" when only some other makers are such) and still offers Keep only. Once
+  `recipeChoice` pins the recipe of one of the good's makers and the issue is still there, the pin is in place: the box
+  offers no Keep only (it would change nothing, or only move the pin) and says "Advanced Electrolyzer II on Water is
+  pinned for Hydrogen Cell: the 2% still comes from …". The pin applies to the settings at once, but the plan of the
+  settings before stays up until the replan arrives (1 to 5 s): from the moment `recipeChoice` pins a recipe for the
+  good the box offers no Keep only and says "Updating…" until the plan on screen is the plan of those settings (its
+  `settingsHash`, which the client works out as the server does: `shared/project/settings-hash.ts`), and only then
+  decides as above. Makers that share a machine are named by the input that sets them apart, else the output, in the
+  notes and on the button. Measured on the 2.9 export (15 LV–HV targets at their tier and one above, supporting lines on
+  and off, step charge 2 % and 0: 120 plans, 181 goods made two ways, each replanned with its pin): the guess named 67
+  and the issue stayed after the pin for 58 of them; 54 of the 114 it did not name stayed too; of the 112 that stayed,
+  the box says the pin is in place for 111 (in the other the pinned recipe left the replanned plan altogether, so Keep
+  only offers the new bigger maker). The review of the first follow-up found the guess right in 13 of 15 cases on a
+  sweep of its own and in 28 of 33 on the builder's.
 - **Initial view.** Zoom 0.9 centred on `out`; Fit unchanged. Legend: owned / partly owned / new, import (mined,
   gathered, bought, free), no source, left over, supporting line.
 

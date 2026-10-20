@@ -14,7 +14,7 @@ export interface ApiError { error: string; message: string }
 
 /** `GET /api/pack`: §7's fields plus the settings panel's checklists (§11.6). */
 export interface PackInfo {
-  manifest: PackManifest; mapCount: number; recipeCount: number; itemCount: number;
+  manifest: PackManifest; mapCount: number; recipeCount: number; itemCount: number /* the item table's, without crop items */;
   dimensions: DimensionInfo[]; capabilities: Capability[]; exclusionRules: string[];
   // optional addition
   /** The material names an avoid entry can be, with their display names, sorted by display name (§11.25). */

@@ -64,22 +64,48 @@ function draft(id: string, kind: BuildStep['kind'], pin: number | undefined, tex
 // ---- Placing ----
 
 /** The order a multiblock's hatches are listed in. */
-const HATCH_ORDER: readonly HatchKind[] = ['input_bus', 'output_bus', 'energy', 'maintenance', 'input_hatch', 'output_hatch'];
+const HATCH_ORDER: readonly HatchKind[] = ['input_bus', 'output_bus', 'energy', 'steam', 'maintenance', 'input_hatch', 'output_hatch', 'muffler'];
 
 /**
- * The unit's hatch labels: the hatches chosen for it in `HATCH_ORDER` (fluid hatches in the canonical z, x order they
- * were given their fluids), then any hatch the exported structure itself holds, in cell order.
+ * The unit's hatch labels: the hatches chosen for it in `HATCH_ORDER` (fluid hatches in the order of the step's fluids
+ * they take, one with no fluid of the step last; others in canonical z, x order), then any hatch the exported structure
+ * itself holds, in cell order.
  */
 function hatchLabels(u: PlacedUnit): string[] {
+  const fluids = [...u.io.fluidIn, ...u.io.fluidOut];
+  const fluidRank = (c: PlacedUnit['cells'][number]): number => {
+    const i = c.fluid === undefined ? -1 : fluids.indexOf(c.fluid);
+    return i === -1 ? fluids.length : i;
+  };
   const chosen = u.cells
     .filter((c) => c.hatch !== undefined)
-    .sort((a, b) => HATCH_ORDER.indexOf(a.hatch!) - HATCH_ORDER.indexOf(b.hatch!) || a.pos[2] - b.pos[2] || a.pos[0] - b.pos[0]);
+    .sort((a, b) => HATCH_ORDER.indexOf(a.hatch!) - HATCH_ORDER.indexOf(b.hatch!) || fluidRank(a) - fluidRank(b)
+      || a.pos[2] - b.pos[2] || a.pos[0] - b.pos[0] || a.pos[1] - b.pos[1]);
   const exported = u.cells.filter((c) => c.role === 'hatch' && c.hatch === undefined);
   return [...chosen, ...exported].map((c) => c.label);
 }
 
 /** A singleblock's front when its unit has none: local west, along the row (`singleblockMainFacing` in arrange.ts). */
 const WEST = 4;
+const UP = 1;
+
+/** Whether the unit holds a Muffler Hatch. */
+function hasMuffler(u: PlacedUnit): boolean {
+  return u.cells.some((c) => c.hatch === 'muffler');
+}
+
+/**
+ * What a multiblock's place step adds for its mufflers: GT stops the machine when a muffler finds no air in the cell
+ * its front faces (`MTEHatchMuffler.polluteEnvironment`, `POLLUTION_FAIL`). The layout keeps that cell free and counts
+ * it in the line's height, but the Layout does not carry it, so the step names it.
+ */
+function mufflerWords(u: PlacedUnit): string {
+  const mufflers = u.cells.filter((c) => c.hatch === 'muffler');
+  if (mufflers.length === 0) return '';
+  const each = mufflers.length === 1 ? 'its Muffler Hatch' : 'each Muffler Hatch';
+  const where = mufflers.every((c) => c.face === UP) ? `the block above ${each}` : `the block ${each} faces`;
+  return `; keep ${where} empty, or GregTech stops the machine (a muffler needs air to vent)`;
+}
 
 /**
  * How a singleblock gets its two faces (`PlacedUnit.mainFacing`, along the row, and its output side toward the middle
@@ -112,6 +138,47 @@ function checkInputSide(what: string): string {
     + 'Screwdriver, not sneaking (a sneak-click switches the Input Filter), and once more if the chat says "Input from Output Side forbidden"';
 }
 
+/** Up: a venting steam singleblock's output side (`PlacedUnit.outputSide`). */
+const OUTPUT_UP = 1;
+
+/**
+ * A venting steam singleblock's place step (architecture §11 entry 48; worded as add-on 15's machine-to-machine one):
+ * GT vents its steam through its output side after every run and starts the next only once it could
+ * (`MTEBasicMachineBronze.allowToCheckRecipe`: no cover there and no block with a hit box in front of it), so that side
+ * faces up over an empty block. A basic machine's wrench clicks set both sides; its steam goes in at its back, which
+ * the layout keeps free (GT takes steam on every side but the front: `MTEBasicMachineBronze.isLiquidInput`).
+ */
+function steamPlaceText(u: PlacedUnit, n: number, front: string): string {
+  return `Place ${fmtInt(n)}× ${u.name} with its output side facing up and nothing above it (GregTech vents its steam there after every run, `
+    + `and waits while that side is covered or blocked) and its front facing ${front}: with a Wrench, sneak-right-click its ${front} side to make `
+    + 'that the front (where a neighbour covers that side, click the edge of the wrench grid toward it), then right-click its top to make that the '
+    + 'output side; pipe its steam into its back, the side away from the middle row';
+}
+
+/**
+ * The roof step (gt-mechanics §3.4: GT machines left in the rain can catch fire or explode). The line's height `h`
+ * counts the cells a roof must leave open (layout.ts): the block a Muffler Hatch faces and the block above each venting
+ * steam machine (`PlacedUnit.outputSide` up), where GT vents its steam after every run and waits while it is blocked
+ * (`MTEBasicMachineBronze.allowToCheckRecipe`); so with either the step names that height and says to keep them open.
+ */
+function roofText(units: readonly PlacedUnit[], h: number): string {
+  const muffler = units.some(hasMuffler);
+  const vent = units.some((u) => u.outputSide === OUTPUT_UP);
+  if (!muffler && !vent) return 'Roof the line: GT machines left in the rain can catch fire or explode';
+  const why = [...(muffler ? ['a Muffler Hatch needs the block it faces kept empty'] : []),
+    ...(vent ? ['each steam machine vents its steam through its top: keep the block above it open and roof above it'] : [])];
+  return `Roof the line over its ${fmtInt(h)}-high space: GT machines left in the rain can catch fire or explode, `
+    + `${why.length === 1 ? `and ${why[0]!}` : `${why[0]!}, and ${why[1]!}`}`;
+}
+
+/**
+ * What a multiblock run by hand (`PlacedUnit.manual`: a Bricked Blast Furnace or a Coke Oven) adds to its place step:
+ * it stands one block back from the middle row, its front row kept free, so you reach its controller and nothing of
+ * the line touches it.
+ */
+const MANUAL_PLACE = ', one block back from it, and keep the blocks in front of it free: it gets no hatches, covers, pipes or power, as you '
+  + 'fill and empty it by hand through its controller';
+
 /**
  * The plan steps whose machines take fluids through their output side: those an ender fluid conduit face inserts into
  * with `outputSide` (the EnderIO mode meets a GT basic machine's fluids there; every other mode pipes them in on top).
@@ -135,8 +202,10 @@ function fluidsThroughOutputSide(blocks: readonly LayoutBlock[]): Set<string> {
 /**
  * One step per placed plan step, in unit order: how many to place and which way they face — a singleblock's output
  * side and its front, which GT keeps apart, how to set both and, when it takes items, or fluids through its output side
- * (`fluidSteps`), how to check Input from Output Side; a multiblock's size, controller and hatches. The front's compass
- * side is turned by `rotation`.
+ * (`fluidSteps`), how to check Input from Output Side (a venting steam machine's output side faces up instead:
+ * `steamPlaceText`); a multiblock's size, controller and hatches and the block each of its mufflers needs empty
+ * (`mufflerWords`), or for one run by hand where it stands (`MANUAL_PLACE`). The front's compass side is turned by
+ * `rotation`.
  */
 function placeSteps(units: readonly PlacedUnit[], sitePin: number | undefined, rotation: Rotation, fluidSteps: ReadonlySet<string>): Draft[] {
   const byStep = new Map<string, { first: PlacedUnit; n: number }>();
@@ -148,6 +217,7 @@ function placeSteps(units: readonly PlacedUnit[], sitePin: number | undefined, r
   return [...byStep].map(([stepId, { first: u, n }]) => {
     if (!u.multiblock) {
       const front = SIDE_NAMES[rotateFacing(u.mainFacing ?? WEST, rotation)]!;
+      if (u.outputSide === OUTPUT_UP) return draft(`layout:place:${stepId}`, 'place', sitePin, steamPlaceText(u, n, front));
       const fluids = fluidSteps.has(stepId);
       const what = u.io.itemIn && fluids ? 'items and fluids' : u.io.itemIn ? 'items' : fluids ? 'fluids' : null;
       return draft(`layout:place:${stepId}`, 'place', sitePin, `Place ${fmtInt(n)}× ${u.name} ${singleblockFaces(front)}${what === null ? '' : checkInputSide(what)}`);
@@ -155,7 +225,8 @@ function placeSteps(units: readonly PlacedUnit[], sitePin: number | undefined, r
     const labels = hatchLabels(u);
     const hatches = labels.length === 0 ? '' : `; hatches: ${labels.join(', ')}`;
     return draft(`layout:place:${stepId}`, 'place', sitePin,
-      `Build ${fmtInt(n)}× ${u.name} (${u.size.map(fmtInt).join('×')}) with the controller facing the middle row${hatches}`);
+      `Build ${fmtInt(n)}× ${u.name} (${u.size.map(fmtInt).join('×')}) with the controller facing the middle row`
+        + `${u.manual === undefined ? `${hatches}${mufflerWords(u)}` : MANUAL_PLACE}`);
   });
 }
 
@@ -271,8 +342,7 @@ export function layoutSteps(input: StepsInput): BuildStep[] {
       ? `; dig ${fmtInt(input.site.dig)} and fill ${fmtInt(input.site.fill)} blocks to level it` : '';
     steps.push(draft('layout:site', 'place', sitePin,
       `Clear a ${fmtInt(w)}×${fmtInt(l)} spot${atPin(sitePin)} (${fmtInt(h)} high) and keep a 1-block path around it${level}`));
-    // gt-mechanics §3.4
-    steps.push(draft('layout:roof', 'place', sitePin, 'Roof the line: GT machines left in the rain can catch fire or explode'));
+    steps.push(draft('layout:roof', 'place', sitePin, roofText(input.units, h)));
     steps.push(...placeSteps(input.units, sitePin, input.rotation, fluidsThroughOutputSide(input.blocks)));
     steps.push(...powerSteps(input, sitePin, powerPin));
     for (const d of input.drafts) if (d.kind === 'logistics') steps.push(draft(d.id, d.kind, kindPin(d.pin), d.text));

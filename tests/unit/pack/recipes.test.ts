@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Pack, Recipe } from '../../../src/shared/types/pack.ts';
 import { itemKey } from '../../../src/shared/keys.ts';
-import { nbtHash } from '../../../src/server/pack/recipe-id.ts';
+import { nbtHash, recipeId } from '../../../src/server/pack/recipe-id.ts';
 import type { GtRecipeLine } from '../../../src/server/pack/format.ts';
 import { RecipeCollector } from '../../../src/server/pack/recipes.ts';
 import { makePack } from '../../helpers/make-pack.ts';
@@ -100,6 +100,39 @@ describe('GT recipes', () => {
     });
     await expect(makePack({ ...sampleExportSpec(), recipesGt: [recipe({ deep: [{ a: { item: 99 } }] })] }))
       .rejects.toMatchObject({ name: 'ExportFormatError', file: 'recipes-gt.jsonl.gz', line: 1 });
+  });
+
+  it('records the mode of each tree farm output', async () => {
+    const pack = await makePack({
+      items: [
+        { id: 't:log', m: 0, dn: 'Log' }, { id: 't:sapling', m: 0, dn: 'Sapling' }, { id: 't:leaves', m: 0, dn: 'Leaves' },
+        { id: 't:fruit', m: 0, dn: 'Fruit' }, { id: 't:dust', m: 0, dn: 'Dust' },
+      ],
+      recipeMaps: [{ id: 'gt.recipe.treefarm', dn: 'Tree Growth Simulator', amps: 1 }, { id: 'gt.recipe.centrifuge', dn: 'Centrifuge', amps: 1 }],
+      recipesGt: [
+        { map: 0, in: [], out: [[0, 5], [1, 5], null, [3, 1]], fin: [], fout: [], eut: 0, dur: 100, fake: true, special: 1 },
+        { map: 1, in: [[0, 1]], out: [null, [4, 1]], fin: [], fout: [], eut: 5, dur: 100 },
+      ],
+    });
+    const [tree] = inMap(pack, 'gt.recipe.treefarm');
+    expect(tree!.outputs.map((o) => [o.key, o.amount])).toEqual([['t:log@0', 5], ['t:sapling@0', 5], ['t:fruit@0', 1]]);
+    expect(tree!.meta.tgsModes).toEqual(['log', 'sapling', 'fruit']);
+    expect(recipeId({ ...tree!, fake: tree!.flags.fake })).toBe(tree!.id);   // the modes are part of the recipe's id
+    const [centrifuge] = inMap(pack, 'gt.recipe.centrifuge');
+    expect(centrifuge!.outputs.map((o) => o.key)).toEqual(['t:dust@0']);
+    expect(centrifuge!.meta).not.toHaveProperty('tgsModes');
+  });
+
+  it('gives a tree farm output past the four modes none, and warns', async () => {
+    const pack = await makePack({
+      items: [0, 1, 2, 3, 4].map((m) => ({ id: 't:thing', m, dn: `Thing ${m}` })),
+      recipeMaps: [{ id: 'gt.recipe.treefarm', dn: 'Tree Growth Simulator', amps: 1 }],
+      recipesGt: [{ map: 0, in: [], out: [[0, 5], [1, 5], [2, 2], [3, 1], [4, 1]], fin: [], fout: [], eut: 0, dur: 100, fake: true }],
+    });
+    const [tree] = inMap(pack, 'gt.recipe.treefarm');
+    expect(tree!.outputs).toHaveLength(5);
+    expect(tree!.meta.tgsModes).toEqual(['log', 'sapling', 'leaves', 'fruit']);
+    expect(pack.warnings).toContain('gt.recipe.treefarm: item output 4 of a row is past the 4 Tree Growth Simulator modes, it has none');
   });
 
   it('reports a recipe that names an unknown map', async () => {

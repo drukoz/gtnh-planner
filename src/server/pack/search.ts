@@ -44,7 +44,10 @@ function entry(pack: Pack, key: StuffKey, name: string, kind: SearchHit['kind'],
   };
 }
 
-/** An item's ore names are those on its own line plus every ore-dictionary entry that lists it. */
+/**
+ * An item's ore names are those on its own line plus every ore-dictionary entry that lists it. A crop item (an item only
+ * the crop table names) is left out unless a recipe of the pack makes it, so it never shows as a raw item.
+ */
 function entriesOf(pack: Pack): readonly Entry[] {
   const cached = entriesByPack.get(pack);
   if (cached !== undefined) return cached;
@@ -58,6 +61,7 @@ function entriesOf(pack: Pack): readonly Entry[] {
   }
   const entries: Entry[] = [];
   for (const item of pack.items.values()) {
+    if (item.cropOnly === true && !pack.producers.has(item.key)) continue;
     const colon = item.id.indexOf(':');
     const namespace = (colon === -1 ? item.id : item.id.slice(0, colon)).toLowerCase();
     entries.push(entry(pack, item.key, item.name, 'item', [...item.oreDict, ...(oresByItem.get(item.key) ?? [])], namespace));

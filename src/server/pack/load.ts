@@ -1,13 +1,15 @@
 // The pack loader (architecture §6.2 server API): streams an export into the in-memory `Pack`.
 //
 // Files are read in this order, so every reference resolves: manifest → items → fluids → fluid containers → ore
-// dictionary → recipe maps → recipes (GT, assembly line, crafting, furnace) → machines → structures; then the electric
-// furnace and microwave recipes are derived from the smelting list, the supply recipes of the free inputs from the rock
-// breaker's display recipes, the pumps and the compressor (supply.ts), and the indices built; then GT materials and ore
-// materials; and last the nine worldgen files, because capability yields need the items' materials. Files are never
-// read into one string; `readJsonl` streams them line by line. Structural damage (bad gzip, bad JSON, a line count that
-// differs from the manifest, an index that points nowhere) fails with the file and line instead of returning a
-// half-loaded pack; recoverable oddities become `pack.warnings`.
+// dictionary → recipe maps → recipes (GT, assembly line, crafting, furnace) → machines → structures → the optional crop
+// table; then the electric furnace and microwave recipes are derived from the smelting list, the supply recipes of the
+// free inputs from the rock breaker's display recipes, the pumps and the compressor (supply.ts), and the indices built;
+// then GT materials and ore materials; and last the nine worldgen files, because capability yields need the items'
+// materials. Files are never read into one string; `readJsonl` streams them line by line. Structural damage (bad gzip,
+// bad JSON, a line count that differs from the manifest, an index that points nowhere) fails with the file and line
+// instead of returning a half-loaded pack; recoverable oddities become `pack.warnings`, and so does an item the crop
+// table names but the loader cannot resolve (crops.ts). The crop table's inline items join `pack.items` after every item
+// line, as crop items that no wildcard, ore name or recipe of the export ever sees (crops.ts).
 
 import { createReadStream } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
@@ -17,6 +19,7 @@ import { pipeline } from 'node:stream';
 import { createGunzip } from 'node:zlib';
 import { fluidKey, itemKey, type FluidKey, type ItemKey } from '../../shared/keys.ts';
 import type { Fluid, Item, Pack, PackManifest, RecipeMapInfo } from '../../shared/types/pack.ts';
+import { cropTable } from './crops.ts';
 import {
   EXPORT_FILES, EXPORT_FORMAT, OPTIONAL_EXPORT_FILES,
   type ExportFileKey, type ExportLineTypes, type ItemLine, type ManifestFile, type RecipeMapLine,
@@ -228,8 +231,13 @@ export class ItemRefs {
     return key;
   }
 
+  /** Whether `i` is the index of an item line. */
+  has(i: number): boolean {
+    return Number.isInteger(i) && i >= 0 && i < this.size;
+  }
+
   #check(i: number): number {
-    if (!Number.isInteger(i) || i < 0 || i >= this.size) throw new RangeError(`unknown item index ${i}`);
+    if (!this.has(i)) throw new RangeError(`unknown item index ${i}`);
     return i;
   }
 
@@ -494,6 +502,17 @@ async function readStructures({ src, pack, ctx }: LoadState): Promise<void> {
 }
 
 /**
+ * The crop table becomes `pack.crops` when the export has one (exporter 0.5.0 and later, with CropsNH), and the items
+ * it names inline that the item table lacks become crop items of `pack.items`, after every item line (crops.ts).
+ */
+async function readCrops({ src, pack, ctx }: LoadState): Promise<void> {
+  if (!src.has('crops')) return;
+  const { cards, items } = cropTable(await collectLines(src, 'crops'), ctx);
+  pack.crops = cards;
+  for (const item of items) if (!pack.items.has(item.key)) pack.items.set(item.key, item);
+}
+
+/**
  * The derived recipes, through the same collector as the others: the electric furnace and microwave recipes of the
  * smelting list, and the supply recipes (supply.ts, fix spec R2): the rock breaker's display-only recipes made real and
  * the pumps' water and lava on the pseudo map `pump`, which the pump machines get; the compressor recipe that fills an
@@ -582,6 +601,7 @@ export async function buildPack(src: ExportSource): Promise<Pack> {
   await readRecipes(state);
   await readMachines(state);
   await readStructures(state);
+  await readCrops(state);
   addDerivedRecipes(state);
   setRecipes(state);
   setIndices(state);

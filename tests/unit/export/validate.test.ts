@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { validateExport } from '../../../src/server/export/validate.ts';
 import { makeExport, type ExportSpec } from '../../helpers/make-export.ts';
-import { SAMPLE, sampleExportSpec } from '../../helpers/sample-export.ts';
+import { SAMPLE, sampleExportSpec, sampleInlineCrop } from '../../helpers/sample-export.ts';
 
 const exportOf = async (spec: ExportSpec) => makeExport(join(await mkdtemp(join(tmpdir(), 'gp-val-')), 'x'), spec);
 const codes = (r: { issues: Array<{ level: string; code: string }> }, level: string) => r.issues.filter((i) => i.level === level).map((i) => i.code);
@@ -34,6 +34,19 @@ describe('validateExport', () => {
     spec.recipesGt = spec.recipesGt!.map(({ meta, ...r }) => ({ ...r, in: r.in.filter((s) => s === null || s[0] !== 5) }));
     const warns = codes(await validateExport(await exportOf(spec)), 'warn');
     expect(warns).toEqual(expect.arrayContaining(['missing-names', 'no-cleanroom', 'no-circuit']));
+  });
+
+  it('counts the items of the item table, not the crop items, in its summary and in the share of name failures', async () => {
+    // 75 more items make 99 in the item table, of which the sample's one name failure is more than 1 %; with the three
+    // crop items of the crop table it would be one of 102, less than 1 %
+    const spec = { ...sampleExportSpec(), fillerMaps: 140, crops: [sampleInlineCrop()] };
+    spec.items = [...spec.items!, ...Array.from({ length: 75 }, (_, m) => ({ id: 'examplemod:filler', m, dn: `Filler ${m}` }))];
+    const r = await validateExport(await exportOf(spec));
+    expect(r.pack!.items.size).toBe(102);
+    expect(r.summary).toMatch(/^items 99 · /);
+    expect(r.issues).toContainEqual({
+      level: 'warn', code: 'name-failures', text: '1 of 99 items have no English name (more than 1 %), e.g. examplemod:broken@0',
+    });
   });
 
   it('names the structures with hatch rules in the summary', async () => {

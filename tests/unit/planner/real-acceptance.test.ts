@@ -13,8 +13,10 @@ import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
 import { loadPack } from '../../../src/server/pack/load.ts';
 import { planBasis, resolveAvoid } from '../../../src/server/planner/basis.ts';
 import { expandBomLines } from '../../../src/server/planner/bom.ts';
+import { moltenMaterial } from '../../../src/server/planner/costs.ts';
 import { emptyContainers } from '../../../src/server/planner/machines.ts';
-import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
+import { emptyContext, obtainableIn, planLine } from '../../../src/server/planner/plan.ts';
+import { tierName } from '../../../src/shared/gt/tiers.ts';
 import { indexPlan } from '../../../src/shared/plan/balance.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import type { Pack } from '../../../src/shared/types/pack.ts';
@@ -38,6 +40,7 @@ const IRON_III_CHLORIDE = 'fluid:ironiiichloride';
 const RAW_SILICON_DUST = 'gregtech:gt.metaitem.01@2020';
 const SAND = 'minecraft:sand@0';
 const GLASS_DUST = 'gregtech:gt.metaitem.01@2890';
+const ANTIMONY_INGOT = 'gregtech:gt.metaitem.01@11058';
 /**
  * The circuit assembler recipe of the Electronic Circuit: board, 2 resistors, 2 red alloy wires, 2 vacuum tubes, solder.
  * (Its id since the loader keeps recipe ids stable across re-exports, dcb0ce4; it was 9cbcefac6fe44dd1 before.)
@@ -214,6 +217,51 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
     expect(tin.plan.steps.some((s) => s.mainOutput === 'fluid:molten.tin')).toBe(true);
     expect(tin.plan.steps.filter((s) => s.mainOutput !== undefined && SOLDERING_ALLOY.includes(s.mainOutput)).map((s) => s.id)).toEqual([]);
   }, 60_000);
+
+  it('says what melts a molten metal whose dust or ingot the group gets, never the places of its ore, at LV, MV and HV', async () => {
+    // Review of the plan 09 follow-ups (2cd200b): at default settings 17 molten fluids at LV, 6 at MV and 1 at HV whose ore
+    // is out of reach but whose metal the group gets another way named places in swap lists and options: at LV an Antimony
+    // Ingot's fluid solidifier read "needs Mars (T2 rocket) or Phobos (T2 rocket) or Mercury (T4 rocket) or 15 more",
+    // though Antimony Dust is a byproduct of the Nether's stibnite ore and only the extractor that melts it needs MV. Each
+    // now names the tier at which a plan of the same settings gets it: Niobium, Palladium, Poly-Si, Tantalum, Vanadium and
+    // Yttrium dust melt from HV (smelted into ingots there; no Alloy Blast Smelter before IV). Runite, a 25th, has its
+    // dust only as its material's ore part.
+    const cases: ReadonlyArray<[number, Record<string, string>]> = [
+      [1, {
+        antimony: 'MV', arsenic: 'MV', barium: 'MV', chrome: 'MV', cobalt: 'MV', electrum: 'MV', magnesium: 'MV', manganese: 'MV', platinum: 'MV',
+        silicon: 'MV', uranium: 'MV', niobium: 'HV', palladium: 'HV', siliconsolargrade: 'HV', tantalum: 'HV', vanadium: 'HV', yttrium: 'HV',
+      }],
+      [2, { niobium: 'HV', palladium: 'HV', siliconsolargrade: 'HV', tantalum: 'HV', vanadium: 'HV', yttrium: 'HV' }],
+      [3, { tungsten: 'EV', runite: 'ZPM' }],
+    ];
+    // The dusts and ingots of each material: its GT items of those prefixes, and its ore parts.
+    const metals = new Map<string, string[]>();
+    const add = (material: string, key: string | undefined): void => {
+      if (key !== undefined) metals.set(material, [...(metals.get(material) ?? []), key]);
+    };
+    for (const item of pack.items.values()) if (item.gt?.prefix === 'dust' || item.gt?.prefix === 'ingot') add(item.gt.material, item.key);
+    for (const [name, m] of pack.materials) for (const key of [m.parts?.dust, m.parts?.ingot]) add(name, key);
+    for (const [tier, needs] of cases) {
+      const settings = { ...defaultSettings(), tier };
+      const obtainable = obtainableIn(pack, planBasis(pack, settings, emptyContext()), settings);
+      for (const [id, need] of Object.entries(needs)) expect(obtainable.why(`fluid:molten.${id}`), id).toBe(`needs ${need} (your tier is ${tierName(tier)})`);
+      // Every molten fluid the group cannot get whose metal it gets: a tier, or nothing to say, never places.
+      for (const key of pack.fluids.keys()) {
+        const material = moltenMaterial(pack, key);
+        if (material === undefined || obtainable.has(key) || !(metals.get(material) ?? []).some((k) => obtainable.has(k))) continue;
+        expect(obtainable.why(key) ?? 'nothing', key).toMatch(/^(needs \w+ \(your tier is \w+\)|nothing)$/);
+      }
+    }
+    // Where nothing reachable makes the metal, the nearest places still say where it is found.
+    const lv = { ...defaultSettings(), tier: 1 };
+    expect(obtainableIn(pack, planBasis(pack, lv, emptyContext()), lv).why('fluid:molten.titanium')).toMatch(/^needs Mars \(T2 rocket\) or [^,]+ or \d+ more$/);
+    // As a plan's swap list shows it.
+    const { plan: p } = await plan({ target: ANTIMONY_INGOT, amount: 1, tier: 1 });
+    expect(p.status, JSON.stringify(p.warnings)).toBe('ok');
+    const ways = p.steps.find((s) => s.mainOutput === ANTIMONY_INGOT)?.alternatives ?? [];
+    const cast = ways.filter((a) => (a.inputs ?? []).some((i) => i.key === 'fluid:molten.antimony'));
+    expect(cast.map((a) => [a.mapId, a.unusable])).toEqual([['gt.recipe.fluidsolidifier', ['needs MV (your tier is LV)']]]);
+  }, 120_000);
 
   it(`plans 2 Good Electronic Circuits a minute at HV from ordinary materials, in under ${GEC_HV_MAX_STEPS} steps and 5 s`, async () => {
     const settings = { target: GOOD_ELECTRONIC_CIRCUIT, amount: 2, tier: 3 };

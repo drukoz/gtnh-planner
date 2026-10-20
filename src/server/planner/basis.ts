@@ -131,6 +131,11 @@ export interface PlanBasis {
   tier: number; coilHeat: number; reach: Reachability; env: PlanEnv; avail: Availability; prices: PriceTable; leaf: LeafOracle;
   /** The free inputs the line makes with a supply recipe instead of buying them (`suppliedFreeKeys`, fix spec R2). */
   supplied: ReadonlySet<StuffKey>;
+  /**
+   * The basis of the same settings and world at another tier: what a plan at that tier would get and run (plan.ts names
+   * the tier at which the group could melt a metal it has). Its availability is cached per pack as every basis's is.
+   */
+  at(tier: number): PlanBasis;
 }
 
 const FREE: ReadonlySet<StuffKey> = new Set(FREE_KEYS);
@@ -189,5 +194,9 @@ export function planBasis(pack: Pack, settings: PlanSettings, ctx: PlanContext):
   const prices = makePrices(pack, settings.costOverrides);
   const supplied = suppliedFreeKeys(pack, settings, env);
   const leaf = makeLeafOracle(pack, settings, avail, prices, undefined, undefined, { supplied });
-  return { tier, coilHeat, reach, env, avail, prices, leaf, supplied };
+  const basis: PlanBasis = {
+    tier, coilHeat, reach, env, avail, prices, leaf, supplied,
+    at: (other) => (other === tier ? basis : planBasis(pack, { ...settings, tier: other }, ctx)),
+  };
+  return basis;
 }

@@ -4,7 +4,9 @@
 // glass cable fills the rest of the spine, the tail included, where the base's ME network joins the line. Each
 // interface takes a channel, so the line is checked against the channels the network has free. The pattern settings
 // are the interfaces' `config` (architecture §11.14). Without an AE2 network at the base the ME parts cannot work: the
-// layout says so and never assumes one.
+// layout says so and never assumes one. A machine run by hand gets no interface, and a venting steam machine gets its
+// interface on its middle-row side but no cover, as GT allows none on it (architecture §11 entry 48; by-hand.ts says
+// what is then moved by hand).
 
 import { posKey, type Vec3 } from '../../../shared/layout/geometry.ts';
 import { FACES } from '../../../shared/types/assets.ts';
@@ -13,15 +15,16 @@ import { comparePos } from '../../world/graph.ts';
 import type { HostCover, LocalBlock } from '../arrange.ts';
 import { linkBits } from '../path.ts';
 import {
-  amountList, conveyorCover, emptyModeResult, itemPorts, outputSideInputs, unitItemRate, type ModeInput, type ModeResult, type StepDraft,
+  amountList, conveyorCover, emptyModeResult, itemPorts, itemRisers, lineExceptions, outputSideInputs, RISER_WORDS, unitItemRate,
+  type ModeInput, type ModeResult, type StepDraft,
 } from './mode.ts';
 
 /** A network whose scan gives no channel figures is taken to have the 8 channels of a network without a controller. */
 const DEFAULT_CHANNELS_MAX = 8;
 
 /**
- * The ME spine `[firstX … tailX] × (y 0, z spineZ)`: interfaces with their patterns, cable between, output covers on
- * the machines. Nothing when no placed unit moves items.
+ * The ME spine `[firstX … tailX] × (y 0, z spineZ)`: interfaces with their patterns, cable between and up the spine's
+ * column to an interface above it (`itemRisers`), output covers on the machines. Nothing when no placed unit moves items.
  */
 export function ae2Mode(input: ModeInput): ModeResult {
   const { pack, plan, parts, placement, network } = input;
@@ -52,6 +55,10 @@ export function ae2Mode(input: ModeInput): ModeResult {
     }
     if (x > firstX) links.push([[x - 1, 0, spineZ], cell]);
   }
+  // cable climbs the spine's column to the interface of a bus GT takes only higher up
+  const risers = itemRisers(placement);
+  for (const cell of risers.cells) blocks.push({ pos: cell, block: { ...parts.me_cable.block }, role: 'pipe', label: parts.me_cable.name, item: parts.me_cable.key });
+  links.push(...risers.links);
 
   // every output face pushes its machine's share into the interface in front of it
   const covers: HostCover[] = [];
@@ -78,7 +85,8 @@ export function ae2Mode(input: ModeInput): ModeResult {
 
   const extraParts: BomLine[] = [{ key: parts.blank_pattern.key, amount: patterns, why: 'one processing pattern per machine', group: 'logistics' }];
   const drafts: StepDraft[] = [{ id: 'layout:logistics:line', kind: 'logistics', pin: 'site',
-    text: "Lay ME glass cable along the middle row with an ME interface at every machine's output side or bus" }];
+    text: `Lay ME glass cable along the middle row with an ME interface at every machine's output side or bus${lineExceptions(placement)}`
+      + `${risers.links.length > 0 ? RISER_WORDS : ''}` }];
 
   // cable cells show their joins to the spine cells beside them; an interface is a full block
   const bits = linkBits(links);

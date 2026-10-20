@@ -79,6 +79,10 @@ test('(5) a good made two ways says so, and Keep only pins the bigger maker', as
   const posted = page.waitForRequest((r) => r.method() === 'POST' && r.url().endsWith(`/api/projects/${id}/ops`));
   await page.getByRole('button', { name: 'Keep only Basic Bending Machine' }).click();
   expect((await posted).postDataJSON()).toEqual({ ops: [{ op: 'settings', patch: { recipeChoice: { 't:iron_plate@0': 'bend-plate' } } }] });
+  // The pin is in the settings at once, its plan not yet (here the fixture stays): the line says so, with no Keep only.
+  await expect(page.locator('.flow-issues')).toContainText('Iron Plate is made 2 ways');
+  await expect(page.locator('.flow-issues')).toContainText('Updating…');
+  await expect(page.getByRole('button', { name: 'Keep only Basic Bending Machine' })).toHaveCount(0);
 });
 
 test('(6) a line at 1 an hour never reads 0/h and gives fluids in litres', async ({ page }) => {

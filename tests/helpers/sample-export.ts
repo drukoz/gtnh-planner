@@ -1,6 +1,7 @@
 // The shared synthetic export of the pack, CLI and export tests: a few items, maps and recipes of every kind plus a
 // small worldgen. Tests that need special cases build their own small specs inline instead of changing this one.
 
+import type { CropLine } from '../../src/server/pack/format.ts';
 import type { ExportSpec } from './make-export.ts';
 
 /** Keys and MTE ids of the sample. The written book (item 17) needs nbtHash, so tests build its key themselves. */
@@ -26,6 +27,19 @@ export const SAMPLE = {
 
 const BASIC_MACHINE = 'gregtech.api.metatileentity.implementations.MTEBasicMachineWithRecipe';
 const M = 3628800;   // GT material units in one dust or ingot
+
+/**
+ * A crop line (exporter 0.5.1) that names only items the sample's item table lacks, inline: a drop, a soil and a seed
+ * with NBT, which the loader makes three crop items (`Item.cropOnly`).
+ */
+export function sampleInlineCrop(): CropLine {
+  return {
+    id: 'cropsnh:testBerry', name: 'Test Berry', tier: 2, duration: 500, dropChance: 0.9025,
+    drops: [{ item: { key: 'examplemod:berry@2', name: 'Big Berry' }, count: 1, chance: 2500 }],
+    liked: [], soils: [{ key: 'examplemod:soil@7', name: 'Mossy Soil' }], requirements: [],
+    seed: { key: 'examplemod:seed@0', name: 'Test Berry Seeds', nbt: '{crop:"cropsnh:testBerry"}' }, minSeedBedTier: 0,
+  };
+}
 
 /** A new spec on every call, so a test may change it freely. */
 export function sampleExportSpec(): ExportSpec {

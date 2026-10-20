@@ -16,12 +16,13 @@ const fluidKinds = (r: ModeResult) => [...new Set(r.blocks.flatMap((b) => (b.con
 const ALONG = 'along the middle row to the output side of each electric single-block machine that moves fluids';
 
 /**
- * `setup` with the fixture machines `mteIds` turned into steam machines (GT `MTEBasicMachineBronze`): no GT basic
- * machine, so their fluids keep the port on their top.
+ * `setup` with the fixture machines `mteIds` turned into single-block machines that are no GT basic machine and no steam
+ * machine (kind `other`), so their fluids keep the port on their top. A steam machine does not: it vents through its
+ * top (architecture §11 entry 48), so the line lays it no pipe or conduit (primitive.test.ts).
  */
-function steamSetup(plan: Plan, mteIds: readonly number[]): ReturnType<typeof setup> {
+function topPortSetup(plan: Plan, mteIds: readonly number[]): ReturnType<typeof setup> {
   const pack = layoutPack();
-  for (const id of mteIds) pack.machines.set(id, { ...pack.machines.get(id)!, kind: 'steam', cls: 'gregtech.api.metatileentity.implementations.MTEBasicMachineBronze' });
+  for (const id of mteIds) pack.machines.set(id, { ...pack.machines.get(id)!, kind: 'other', cls: 'gregtech.api.metatileentity.implementations.MTETestMachine' });
   return { pack, plan, placement: placeUnits(unitsFromPlan(pack, plan).units, { headWidth: 1, portSpacing: PORT_SPACING.enderio }), parts: resolveParts(pack) };
 }
 
@@ -67,9 +68,9 @@ describe('EnderIO mode — fluids', () => {
   });
 
   it('keeps the riser to a port on top for a single-block machine that is no GT basic machine', () => {
-    // a steam machine (MTEBasicMachineBronze) holds only steam in its tank and must keep its output side clear to vent,
-    // so its fluids are not met on its output side
-    const r = buildMode('enderio', { ...steamSetup(fluidPlan(), [IDS.SOLIDIFIER]), network: null });
+    // GT meets a basic machine's fluids on its output side; any other single-block machine follows rules of its own and
+    // keeps its port on top (a steam machine vents through its top instead, so it gets no conduit: primitive.test.ts)
+    const r = buildMode('enderio', { ...topPortSetup(fluidPlan(), [IDS.SOLIDIFIER]), network: null });
     expect(faces(r).filter((f) => f.kind !== 'item' && f.mode !== 'disabled').map((f) => [f.pos, f.face, f.mode, f.target, f.insert?.outputSide])).toEqual([
       [[1, 0, 2], 'north', 'extract', 'Basic Fluid Extractor', undefined], [[1, 1, 3], 'down', 'insert', 'Basic Fluid Solidifier', undefined]]);
     expect(r.blocks.filter((b) => b.conduits?.some((c) => c.kind !== 'item')).map((b) => b.pos)).toEqual([[1, 0, 2], [1, 1, 2], [1, 1, 3]]);
@@ -132,27 +133,26 @@ describe('EnderIO mode — the fluid network in detail', () => {
         text: 'Connect a tank to the side of each open conduit end at the tail that faces out of the end of the line, from the bottom: Molten Iron and Oxygen' }]);
   });
 
-  it('runs a multiblock riser down past its fluid hatch with that face Disabled, into a bundle on the spine', () => {
+  it("runs a multiblock's riser from the side its fluid hatch faces, along that side to a bundle on the spine", () => {
     const plan = makePlan([{ id: 'e', mteId: IDS.EBF, count: 1, tier: 2, inputs: [['t:dust@0', 1], ['fluid:oxygen', 10]], outputs: [['t:ingot@0', 1]] }],
       { flows: [{ from: 'raw', to: 'e', key: 't:dust@0', perSecond: 1 }, { from: 'raw', to: 'e', key: 'fluid:oxygen', perSecond: 10 },
         { from: 'e', to: 'out', key: 't:ingot@0', perSecond: 1 }] });
     const s = setup(plan);
     const r = buildMode('enderio', { ...s, network: null });
-    // the input hatch is on the top layer's front row, so the riser from the port above it comes down the furnace's front
-    expect(s.placement.blocks.filter((b) => b.block.mteId === IDS.INPUT_HATCH).map((b) => [b.pos, b.role])).toEqual([[[3, 3, 3], 'hatch']]);
+    // GT takes the EBF's input hatch only on its bottom layer: in row N it faces east, onto the column beside the furnace
+    expect(s.placement.blocks.filter((b) => b.block.mteId === IDS.INPUT_HATCH).map((b) => [b.pos, b.role, b.facing])).toEqual([[[3, 0, 2], 'hatch', 5]]);
+    expect(s.placement.units[0]!.ports).toMatchObject({ fluidIn: [[4, 0, 2]], fluidInSides: [4] });
     expect(r.blocks.filter((b) => b.conduits?.some((c) => c.kind === 'liquid_ender')).map((b) => [b.pos, b.label])).toEqual([
-      [[3, 0, 4], 'Conduit bundle (Item Conduit + Ender Fluid Conduit)'], [[3, 1, 4], 'Ender Fluid Conduit'], [[3, 2, 4], 'Ender Fluid Conduit'],
-      [[3, 3, 4], 'Ender Fluid Conduit'], [[3, 4, 3], 'Ender Fluid Conduit'], [[3, 4, 4], 'Ender Fluid Conduit'],
-      [[4, 0, 4], 'Conduit bundle (Item Conduit + Ender Fluid Conduit)']]);
+      [[4, 0, 2], 'Ender Fluid Conduit'], [[4, 0, 3], 'Ender Fluid Conduit'], [[4, 0, 4], 'Conduit bundle (Item Conduit + Ender Fluid Conduit)'],
+      [[5, 0, 4], 'Conduit bundle (Item Conduit + Ender Fluid Conduit)']]);
     expect(fluidFaces(r).map((f) => [f.pos, f.face, f.mode, f.target, f.extract ?? f.insert ?? null])).toEqual([
-      [[3, 3, 4], 'north', 'disabled', 'Electric Blast Furnace', null],
-      [[3, 4, 3], 'down', 'insert', 'Electric Blast Furnace', { color: 'red', filter: oxygen, rate: 10 }],
-      [[4, 0, 4], 'east', 'extract', 'your tank', { color: 'red', filter: oxygen, rate: 10, roundRobin: false, redstone: 'ignore' }]]);
-    const bundle = r.blocks.find((b) => posKey(b.pos) === '3,0,4')!;
+      [[4, 0, 2], 'west', 'insert', 'Electric Blast Furnace', { color: 'red', filter: oxygen, rate: 10 }],
+      [[5, 0, 4], 'east', 'extract', 'your tank', { color: 'red', filter: oxygen, rate: 10, roundRobin: false, redstone: 'ignore' }]]);
+    const bundle = r.blocks.find((b) => posKey(b.pos) === '4,0,4')!;
     expect([bundle.connections, bundle.block.id, bundle.item, bundle.conduits!.map((c) => [c.kind, c.connections, c.faces.map((f) => [f.face, f.mode])])]).toEqual([
-      16 | 32 | 4 | 2, 'conduit:item', ITEM, [['item', 16 | 32, [['north', 'insert']]], ['liquid_ender', 2 | 32, []]]]);
+      16 | 32 | 4, 'conduit:item', ITEM, [['item', 16 | 32, []], ['liquid_ender', 4 | 32, []]]]);
     expect(r.drafts.map((d) => d.id)).toEqual(['layout:logistics:line', 'layout:logistics:fluids', 'layout:logistics:tanks', 'layout:logistics:inputs']);
-    expect(r.drafts[1]!.text).toBe('Lay 7× Ender Fluid Conduit along the middle row and up to the fluid hatches of each Electric Blast Furnace, with an open '
+    expect(r.drafts[1]!.text).toBe('Lay 4× Ender Fluid Conduit along the middle row and to the fluid hatches of each Electric Blast Furnace, with an open '
       + 'end at the tail for your tanks; 2 of them go in the same bundle as the Item Conduit');
   });
 
@@ -262,10 +262,10 @@ describe('EnderIO mode — the fluid network in detail', () => {
   });
 
   it('leaves a fluid port no riser can reach for the player and says so', () => {
-    const s = steamSetup(fluidPlan(), [IDS.EXTRACTOR]);
+    const s = topPortSetup(fluidPlan(), [IDS.EXTRACTOR]);
     s.placement.reserved.push([1, 1, 0], [1, 1, 2], [2, 1, 1]);                       // walls the extractor's port in (west: the power head)
     const r = buildMode('enderio', { ...s, network: null });
-    // the spine cell the solidifier is met on touches the steam extractor's output side too, so that face is Disabled
+    // the spine cell the solidifier is met on touches the extractor's output side too, so that face is Disabled
     expect(fluidFaces(r).map((f) => [f.pos, f.mode, f.target])).toEqual([
       [[1, 0, 2], 'disabled', 'Basic Fluid Extractor'], [[1, 0, 2], 'insert', 'Basic Fluid Solidifier']]);
     expect(r.warnings).toEqual([{ code: 'route_failed', stepId: 'x', text: 'Could not lay the Ender Fluid Conduit to Basic Fluid Extractor — connect it by hand' }]);
@@ -282,7 +282,7 @@ describe('EnderIO mode — the fluid network in detail', () => {
   });
 
   it('keeps risers off the power ports', () => {
-    const s = steamSetup(fluidPlan(), [IDS.EXTRACTOR, IDS.SOLIDIFIER]);
+    const s = topPortSetup(fluidPlan(), [IDS.EXTRACTOR, IDS.SOLIDIFIER]);
     s.placement.units[1]!.ports.power = [1, 1, 2];                                       // a power port where both risers would meet
     const r = buildMode('enderio', { ...s, network: null });
     const cells = r.blocks.filter((b) => b.conduits?.some((c) => c.kind === 'liquid_ender')).map((b) => posKey(b.pos));
@@ -290,7 +290,7 @@ describe('EnderIO mode — the fluid network in detail', () => {
   });
 
   it('lets a riser climb above the units as high as the open-end column', () => {
-    const s = steamSetup(takesRaw(['fluid:a', 'fluid:b', 'fluid:c']), [IDS.SOLIDIFIER]);
+    const s = topPortSetup(takesRaw(['fluid:a', 'fluid:b', 'fluid:c']), [IDS.SOLIDIFIER]);
     s.placement.reserved.push([1, 1, 0], [1, 1, 2], [2, 1, 1]);                       // only the way up is left
     const r = buildMode('enderio', { ...s, network: null });
     expect(fluidFaces(r).find((f) => posKey(f.pos) === '1,1,1')?.mode).toBe('insert');
@@ -299,7 +299,7 @@ describe('EnderIO mode — the fluid network in detail', () => {
   });
 
   it('never runs a riser through a chest', () => {
-    const s = steamSetup(fluidPlan(), [IDS.EXTRACTOR, IDS.SOLIDIFIER]);
+    const s = topPortSetup(fluidPlan(), [IDS.EXTRACTOR, IDS.SOLIDIFIER]);
     // with these walled off, the extractor's port can only reach the spine through the input chest, the solidifier's
     // through the output chest
     s.placement.reserved.push([1, 1, 0], [1, 1, 2], [2, 1, 2]);
@@ -309,7 +309,7 @@ describe('EnderIO mode — the fluid network in detail', () => {
   });
 
   it('lays no fluid conduit at all when no riser reaches a port and nothing opens at the tail', () => {
-    const s = steamSetup(makePlan([...fluidSteps, { id: 'z', mteId: IDS.MACERATOR, count: 1 }]), [IDS.EXTRACTOR, IDS.SOLIDIFIER]);   // a spine of three cells
+    const s = topPortSetup(makePlan([...fluidSteps, { id: 'z', mteId: IDS.MACERATOR, count: 1 }]), [IDS.EXTRACTOR, IDS.SOLIDIFIER]);   // a spine of three cells
     s.placement.reserved.push([1, 1, 0], [1, 1, 2], [2, 1, 1], [2, 1, 3], [1, 1, 4]);           // around both fluid ports
     const r = buildMode('enderio', { ...s, network: null });
     expect([s.placement.firstX, s.placement.tailX]).toEqual([1, 3]);

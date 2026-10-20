@@ -6,10 +6,12 @@ import { solidTile, TILE } from '../../src/client/three/textures.ts';
 import {
   blockKey, blockList, buildScene, hoverText, instanceTranslation, pickInfo, sceneBlockRefs, type SceneData, type SceneInstance,
 } from '../../src/client/three/scene-data.ts';
-import type { BlockFaces } from '../../src/shared/types/assets.ts';
+import { FACES, type BlockFaces } from '../../src/shared/types/assets.ts';
 import type { ConduitFace, ConduitSpec, DyeColor, Layout, LayoutBlock } from '../../src/shared/types/layout.ts';
 import type { Plan } from '../../src/shared/types/plan.ts';
-import { BASIC, E, ITEM, basic, bundle, bundleLayout, enderioNames } from './enderio-fixture.ts';
+import { BASIC, E, ENDER, ITEM, basic, bundle, bundleLayout, enderioNames } from './enderio-fixture.ts';
+// for the tests after the plan's own: every connection drawn (the user's requirements of 2026-10-19, item 3 (a))
+import { armTip, conduitGaps } from '../helpers/scene-checks.ts';
 
 const faceSet = (id: string, name: string): [string, BlockFaces] => {
   const block = { id, meta: 0 };
@@ -18,7 +20,8 @@ const faceSet = (id: string, name: string): [string, BlockFaces] => {
 };
 const faces = new Map([faceSet('conduit:item', 'itemConduit'), faceSet('conduit:liquid_ender', 'liquidConduitEnder'),
   faceSet('conduit:connector_background', 'itemConduitIoConnector'), faceSet('conduit:connector_in_out_in', 'itemConduitInOut_In'),
-  faceSet('conduit:connector_in_out_out', 'itemConduitInOut_Out'), faceSet('conduit:connector_extract', 'itemConduitInput')]);
+  faceSet('conduit:connector_in_out_out', 'itemConduitInOut_Out'), faceSet('conduit:connector_extract', 'itemConduitInput'),
+  faceSet('conduit:other', 'conduitConnector')]);
 const plan = { names: enderioNames } as unknown as Plan;
 /** The channel colours of the fixtures as the 3D view tints them: Red and Blue as the game draws them (Minecraft 1.7.10's dye colours). */
 const RED = '179,49,44', BLUE = '37,49,146';
@@ -26,11 +29,18 @@ const RED = '179,49,44', BLUE = '37,49,146';
 const drawn = (scene: SceneData, tile: number): string[] =>
   scene.tiles[tile]!.layers.map((l) => `${l.path.replace(/^.*\/(\w+)\.png$/, '$1')}${l.tint === undefined ? '' : ` ${l.tint.join(',')}`}`);
 
+/** The bundle with both conduits going north (each with its face toward the macerator) and south. */
+const together: LayoutBlock = { ...bundle, connections: 4 | 8, conduits: [{ ...bundle.conduits![0]!, connections: 8 },
+  { ...bundle.conduits![1]!, connections: 8, faces: [{ face: 'north', mode: 'extract', target: 'Basic Macerator',
+    extract: { color: 'red', filter: { whitelist: true, keys: ['fluid:molten.iron'] }, rate: 1, roundRobin: false, redstone: 'ignore' } }] }] };
+
 describe('conduits in the 3D view', () => {
   it('names the conduit and connector textures a bundle needs', () => {
-    // EnderIO draws every set face's plate, then the mode's arrows: In / Out has two halves, Extract and Insert one arrow
+    // EnderIO draws every set face's plate, then the mode's arrows: In / Out has two halves, Extract and Insert one arrow;
+    // the bundle's conduits go different ways, so they meet in EnderIO's connector box (conduitConnector, `conduit:other`)
     expect(sceneBlockRefs(bundle).map((r) => r.id)).toEqual(['conduit:item', 'conduit:connector_background', 'conduit:connector_in_out_in',
-      'conduit:connector_in_out_out', 'conduit:liquid_ender', 'conduit:connector_extract']);
+      'conduit:connector_in_out_out', 'conduit:liquid_ender', 'conduit:connector_extract', 'conduit:other']);
+    expect(sceneBlockRefs(together).map((r) => r.id)).not.toContain('conduit:other');
   });
   it('asks the asset API for every conduit and connector texture of a bundle, each once', async () => {
     const asked: string[] = [];
@@ -38,25 +48,44 @@ describe('conduits in the 3D view', () => {
       icons: async () => [], covers: async (items) => items.map((item) => ({ item, layers: [] })), image: async () => null });
     expect(asked).toEqual(sceneBlockRefs(bundle).map(blockKey));
   });
-  it('draws each conduit of a bundle side by side, with connector arms on its configured faces', () => {
-    const scene = buildScene(bundleLayout, faces, new Map(), new Map());
+  it('draws the conduits of a bundle that go one way side by side, with connector arms on their configured faces', () => {
+    const scene = buildScene({ ...bundleLayout, blocks: [together] }, faces, new Map(), new Map());
     // as EnderIO 2.10.46 draws a set face (ItemConduitRenderer, EnderLiquidConduitRenderer): the plate, then In / Out's
-    // In half in the extract side's colour and its Out half in the insert side's, or Extract's arrow in its colour
-    expect(scene.instances.map((i) => [i.shape, i.side, i.offset, drawn(scene, i.tiles[2])])).toEqual([
-      ['core', -1, [0, -0.1875, 0], ['itemConduit']],
-      ['arm', 2, [0, -0.1875, 0], ['itemConduitIoConnector', `itemConduitInOut_In ${RED}`, `itemConduitInOut_Out ${BLUE}`]],
-      ['arm', 5, [0, -0.1875, 0], ['itemConduit']],
-      ['core', -1, [0, 0.1875, 0], ['liquidConduitEnder']],
-      ['arm', 1, [0, 0.1875, 0], ['itemConduitIoConnector', `itemConduitInput ${RED}`]],
-      ['arm', 4, [0, 0.1875, 0], ['liquidConduitEnder']]]);
+    // In half in the extract side's colour and its Out half in the insert side's, or Extract's arrow in its colour; both
+    // conduits go north and south, so each is drawn beside the other, 6 px apart, all the way: the Item Conduit on the
+    // east, as EnderIO places it on an arm north or south (Offsets: IItemConduit Z → EAST, ILiquidConduit Z → WEST)
+    expect(scene.instances.map((i) => [i.shape, i.side, i.conduit, i.offset, drawn(scene, i.tiles[2])])).toEqual([
+      ['core', -1, 0, [0.1875, 0, 0], ['itemConduit']],
+      ['arm', 2, 0, [0.1875, 0, 0], ['itemConduitIoConnector', `itemConduitInOut_In ${RED}`, `itemConduitInOut_Out ${BLUE}`]],
+      ['arm', 3, 0, [0.1875, 0, 0], ['itemConduit']],
+      ['core', -1, 1, [-0.1875, 0, 0], ['liquidConduitEnder']],
+      ['arm', 2, 1, [-0.1875, 0, 0], ['itemConduitIoConnector', `itemConduitInput ${RED}`]],
+      ['arm', 3, 1, [-0.1875, 0, 0], ['liquidConduitEnder']]]);
     expect(scene.instances.every((i) => i.tiles.every((t) => t === i.tiles[0]))).toBe(true);   // one picture on every side
-    // every conduit tile, a connector's included, is drawn over the pipe role's colour (plan 16 Task 9)
-    const UNDER = 'under:255,179,0|';
+    // every conduit tile, a connector's included, is drawn over a colour (plan 16 Task 9): EnderIO's dark conduit grey,
+    // so the Item Conduit's see-through window shows dark as in the game, not the pipe role's amber (the review of
+    // f82c98c)
+    const UNDER = 'under:48,48,48|';
     for (const i of scene.instances) {
       const { key, layers, under } = scene.tiles[i.tiles[2]]!;
       expect(key).toBe(`${UNDER}${JSON.stringify(layers)}`);
-      expect(under).toEqual([255, 179, 0]);
+      expect(under).toEqual([48, 48, 48]);
     }
+  });
+  it("draws a bundle whose conduits part around EnderIO's connector box, each arm on the cell's centre line", () => {
+    // the item conduit goes north (its In / Out face) and east, the fluid conduit up (its Extract face) and west: no
+    // side has two, so every arm is centred (TileConduitBundle.getOffset), both cores sit in the middle and EnderIO
+    // draws its internal connector around them, 1.05 times their size (TileConduitBundle.addConnectors), over the
+    // conduits' grey
+    const scene = buildScene(bundleLayout, faces, new Map(), new Map());
+    expect(scene.instances.map((i) => [i.shape, i.side, i.conduit, i.offset, drawn(scene, i.tiles[2])])).toEqual([
+      ['hub', -1, undefined, undefined, ['conduitConnector']],
+      ['arm', 2, 0, undefined, ['itemConduitIoConnector', `itemConduitInOut_In ${RED}`, `itemConduitInOut_Out ${BLUE}`]],
+      ['arm', 5, 0, undefined, ['itemConduit']],
+      ['arm', 1, 1, undefined, ['itemConduitIoConnector', `itemConduitInput ${RED}`]],
+      ['arm', 4, 1, undefined, ['liquidConduitEnder']]]);
+    expect(scene.instances[0]!.size!.map((v) => Number(v.toFixed(6)))).toEqual([0.39375, 0.39375, 0.39375]);
+    expect(scene.tiles[scene.instances[0]!.tiles[0]]!.under).toEqual([48, 48, 48]);
   });
   it('lists each conduit and every filter and upgrade in the block list', () => {
     expect(blockList(bundleLayout, enderioNames).place).toEqual([
@@ -104,10 +133,14 @@ describe('conduits in the 3D view: the edges', () => {
   });
 
   it('gives every shape of a bundle an offset of its own', () => {
-    const scene = buildScene(bundleLayout, faces, new Map(), new Map());
-    scene.instances[0]!.offset![1] = 9;
-    expect(scene.instances[1]!.offset).toEqual([0, -0.1875, 0]);
-    expect(buildScene(bundleLayout, faces, new Map(), new Map()).instances[0]!.offset).toEqual([0, -0.1875, 0]);
+    const one = { ...bundleLayout, blocks: [together] };
+    const scene = buildScene(one, faces, new Map(), new Map());
+    scene.instances[0]!.offset![0] = 9;
+    expect(scene.instances[1]!.offset).toEqual([0.1875, 0, 0]);
+    expect(buildScene(one, faces, new Map(), new Map()).instances[0]!.offset).toEqual([0.1875, 0, 0]);
+    const hub = buildScene(bundleLayout, faces, new Map(), new Map()).instances[0]!;
+    hub.size![0] = 9;
+    expect(buildScene(bundleLayout, faces, new Map(), new Map()).instances[0]!.size![0]).toBeCloseTo(0.39375, 9);
   });
 
   it("tints each arrow with its own side's channel, so two faces share an arm tile only when they draw the same", () => {
@@ -169,5 +202,98 @@ describe('conduits in the 3D view: the edges', () => {
     expect(pickInfo(hooked, plan, 2).lines).toEqual([
       'Item Conduit, north face to Chest (input): Insert (1 filter); insert on Green with a Basic Item Filter (whitelist: Raw Input; match meta, ignore NBT)',
       'Part of the logistics hookup']);
+  });
+});
+
+// The user's requirements of 2026-10-19, item 3 (a): every conduit connection drawn as EnderIO 2.10.46 draws it. A
+// conduit's arm toward a side two or more of the bundle's conduits go is drawn beside the others where EnderIO puts its
+// kind for that arm's axis (TileConduitBundle.getOffset, Offsets: the Item Conduit east of an ender fluid conduit on an
+// arm up, down, north or south, south of it on an arm east or west; as the review of f9fe23e found from EnderIO's
+// classes), and toward a side it goes alone on the cell's centre line, so linked neighbours' arms meet and every arm
+// reaches its face; where a conduit's arms leave from two places, or two conduits' cores would overlap, EnderIO's
+// connector box holds them (TileConduitBundle.addConnectors).
+describe('every conduit connection in the 3D view', () => {
+  const CONNECTOR = 'enderio/textures/blocks/itemConduitIoConnector.png';
+  const DOWN = 1, UP = 2, NORTH = 4, SOUTH = 8, WEST = 16, EAST = 32;
+  const extractSide = { color: 'red' as const, filter: null, rate: 1, roundRobin: false, selfFeed: false, redstone: 'ignore' as const };
+  const insertSide = { color: 'red' as const, filter: null, rate: 1, priority: 1 };
+  const face = (f: ConduitFace['face'], mode: 'extract' | 'insert' | 'in_out', target: string): ConduitFace => ({ face: f, mode, target,
+    ...(mode === 'insert' ? {} : { extract: { ...extractSide } }), ...(mode === 'extract' ? {} : { insert: { ...insertSide } }) });
+  const item = (connections: number, ...set: ConduitFace[]): ConduitSpec => ({ kind: 'item', item: ITEM, connections, faces: set });
+  const fluid = (connections: number, ...set: ConduitFace[]): ConduitSpec => ({ kind: 'liquid_ender', item: ENDER, connections, faces: set });
+  const cell = (pos: [number, number, number], ...conduits: ConduitSpec[]): LayoutBlock => ({ pos, block: { id: 'conduit:item', meta: 0 }, role: 'pipe',
+    label: conduits.length > 1 ? 'Conduit bundle' : 'Item Conduit', item: ITEM, conduits,
+    connections: conduits.reduce((bits, c) => c.faces.reduce((b, f) => b | (1 << FACES.indexOf(f.face)), bits | c.connections), 0) });
+  const lineOf = (blocks: LayoutBlock[]): Layout => ({ ...bundleLayout, origin: [0, 64, 0], blocks });
+  const sceneOf = (blocks: LayoutBlock[]) => buildScene(lineOf(blocks), faces, new Map(), new Map());
+  const gaps = (blocks: LayoutBlock[]) => conduitGaps(lineOf(blocks), sceneOf(blocks), CONNECTOR);
+  const arms = (blocks: LayoutBlock[], block: number, side: number) => sceneOf(blocks).instances
+    .filter((i) => i.block === block && i.shape === 'arm' && i.side === side).map((i) => [i.conduit, i.offset ?? [0, 0, 0]]);
+
+  // the spine where the fluid conduit ends: the macerators' bundles, then the Item Conduit alone toward the tail
+  const spine = [
+    cell([0, 64, 0], item(EAST, face('north', 'in_out', 'Basic Macerator')), fluid(EAST, face('north', 'extract', 'Basic Macerator'))),
+    cell([1, 64, 0], item(WEST | EAST, face('north', 'in_out', 'Basic Macerator')), fluid(WEST, face('north', 'insert', 'Basic Macerator'))),
+    cell([2, 64, 0], item(WEST, face('south', 'insert', 'Chest (output)')))];
+  // the tail column: both conduits climb to the next output chest and open end
+  const column = [
+    cell([0, 64, 0], item(UP, face('north', 'extract', 'Chest (input)')), fluid(UP, face('east', 'insert', 'your tank'))),
+    cell([0, 65, 0], item(DOWN, face('south', 'insert', 'Chest (output)')), fluid(DOWN, face('east', 'extract', 'your tank')))];
+  // a bundle over a multiblock's input hatch: the fluid conduit goes down into it, the Item Conduit north
+  const overHatch = [cell([0, 65, 0], item(0, face('north', 'in_out', 'Basic Macerator')), fluid(0, face('down', 'insert', 'Electric Blast Furnace')))];
+
+  it('joins a bundle to the conduit that goes on alone, without a step between them', () => {
+    expect(gaps(spine)).toEqual([]);
+    // both conduits go north and east from the first cell: side by side, 6 px apart, the Item Conduit south of the fluid
+    // conduit on the arm east and east of it on the arm north, so each turns the corner in a connector box; the Item
+    // Conduit goes on east alone
+    expect(arms(spine, 0, 5)).toEqual([[0, [0, 0, 0.1875]], [1, [0, 0, -0.1875]]]);
+    expect(arms(spine, 0, 2)).toEqual([[0, [0.1875, 0, 0]], [1, [-0.1875, 0, 0]]]);
+    expect(arms(spine, 1, 5)).toEqual([[0, [0, 0, 0]]]);
+    expect(arms(spine, 2, 4)).toEqual([[0, [0, 0, 0]]]);
+    const scene = sceneOf(spine);
+    expect(scene.instances.filter((i) => i.shape === 'hub').map((i) => i.block)).toEqual([0, 1]);
+    const tip = (block: number, side: number) => armTip(scene.instances.find((i) => i.block === block && i.shape === 'arm' && i.side === side && i.conduit === 0)!);
+    expect(tip(1, 5)).toEqual(tip(2, 4));
+  });
+
+  it('runs two conduits up a column side by side across their arms, each reaching the face it points at', () => {
+    expect(gaps(column)).toEqual([]);
+    // up and down, the Item Conduit east of the fluid conduit (Offsets: IItemConduit Y → EAST, ILiquidConduit Y → WEST)
+    expect([arms(column, 0, 1), arms(column, 1, 0)]).toEqual([[[0, [0.1875, 0, 0]], [1, [-0.1875, 0, 0]]], [[0, [0.1875, 0, 0]], [1, [-0.1875, 0, 0]]]]);
+    expect(arms(column, 0, 2)).toEqual([[0, [0, 0, 0]]]);
+  });
+
+  it("puts the cores of a bundle's conduits with no arms where EnderIO puts them, the Item Conduit east", () => {
+    // Offsets for no axis: IItemConduit EAST, ILiquidConduit WEST; apart, so no connector box
+    const idle = [cell([0, 64, 0], item(0), fluid(0))];
+    expect(gaps(idle)).toEqual([]);
+    expect(sceneOf(idle).instances.map((i) => [i.shape, i.conduit, i.offset])).toEqual([['core', 0, [0.1875, 0, 0]], ['core', 1, [-0.1875, 0, 0]]]);
+  });
+
+  it('takes a connector down into the block below all the way to its face', () => {
+    expect(gaps(overHatch)).toEqual([]);
+    expect(arms(overHatch, 0, 0)).toEqual([[1, [0, 0, 0]]]);
+  });
+
+  it('draws every link and set face of the shared fixtures with their neighbours, a ghost bundle and a hookup end too', () => {
+    // the fixtures' links go to cells of their own; a hookup's run ends at the tap, the base's conduit (a ghost)
+    const run: LayoutBlock = { pos: [9, 64, 20], block: { id: 'conduit:item', meta: 0 }, role: 'pipe', label: 'Item Conduit', item: ITEM, hookup: 0, connections: WEST | EAST };
+    const end: LayoutBlock = { pos: [8, 64, 20], block: { id: 'conduit:item', meta: 0 }, role: 'pipe', label: 'Item Conduit', item: ITEM, hookup: 0,
+      connections: NORTH | EAST, conduits: [item(EAST, face('north', 'insert', 'Chest (input)'))] };
+    const tap: LayoutBlock = { pos: [10, 64, 20], block: { id: 'EnderIO:blockConduitBundle', meta: 0 }, role: 'ghost', label: 'existing Conduit Bundle' };
+    const ghost = (b: LayoutBlock): LayoutBlock => ({ ...b, role: 'ghost', label: `existing ${b.label}` });
+    const bundleWithNeighbours = [bundle, cell([11, 64, 20], item(WEST)), cell([9, 64, 20], fluid(EAST))];
+    for (const blocks of [bundleWithNeighbours, [together, cell([10, 64, 21], item(NORTH), fluid(NORTH))],
+      [lone, cell([9, 64, 20], item(EAST)), cell([11, 64, 20], item(WEST))], bundleWithNeighbours.map(ghost), [run, end, tap],
+      [cell([10, 64, 20], item(SOUTH | WEST, face('north', 'insert', 'Basic Macerator')), fluid(WEST)), cell([10, 64, 21], item(NORTH)),
+        cell([9, 64, 20], item(EAST), fluid(EAST))]]) {
+      expect(conduitGaps({ ...bundleLayout, blocks }, buildScene({ ...bundleLayout, blocks }, faces, new Map(), new Map()), CONNECTOR)).toEqual([]);
+    }
+  });
+
+  it('names what is missing when a link has no arm on the other side', () => {
+    const oneSided = [cell([0, 64, 0], item(EAST)), cell([1, 64, 0], item(0))];
+    expect(gaps(oneSided)).toEqual(["Item Conduit at 0,64,0: item east's link meets 0 arms"]);
   });
 });

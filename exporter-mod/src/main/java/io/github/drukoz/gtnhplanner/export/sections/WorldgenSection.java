@@ -2,6 +2,7 @@ package io.github.drukoz.gtnhplanner.export.sections;
 
 import java.io.File;
 import java.io.IOException;
+import java.lang.invoke.MethodHandle;
 import java.net.URI;
 import java.net.URL;
 import java.net.URLDecoder;
@@ -58,13 +59,12 @@ import toxiceverglades.dimension.DimensionEverglades;
  * writes its own file inside its own catch, so a part that fails is a warning {@code worldgen <part>: <error>} and an
  * empty (or partial) file, never a missing one. Nothing here needs a loaded world: providers come from
  * {@link DimensionManager#createProviderFor(int)}, never {@code getProvider}. Galacticraft is reached only through
- * {@link Reflect}, by class names in strings.
+ * {@link Reflect}, by class names in strings, each member by its exact name and type ({@link Galacticraft}).
  */
 public final class WorldgenSection implements ExportSection {
 
-    private static final String WORLD_PROVIDER_SPACE =
-        "micdoodle8.mods.galacticraft.api.prefab.world.gen.WorldProviderSpace";
-    private static final String GALAXY_REGISTRY = "micdoodle8.mods.galacticraft.api.galaxies.GalaxyRegistry";
+    private static final String GALACTICRAFT_API = "micdoodle8.mods.galacticraft.api.";
+    private static final String WORLD_PROVIDER_SPACE = GALACTICRAFT_API + "prefab.world.gen.WorldProviderSpace";
 
     /** One part: writes the lines of one file. */
     private interface Part {
@@ -136,6 +136,7 @@ public final class WorldgenSection implements ExportSection {
         Map<File, List<ModContainer>> modsBySource = modsBySource(ctx);
         AirIntake air = new AirIntake(ctx);
         Set<String> written = new HashSet<>();
+        Galacticraft gc = null; // found at the first space dimension, so a pack without Galacticraft never needs it
         for (Map.Entry<Integer, WorldProvider> e : providers.entrySet()) {
             int id = e.getKey();
             WorldProvider p = e.getValue();
@@ -146,9 +147,10 @@ public final class WorldgenSection implements ExportSection {
                 String body = null;
                 if (Reflect.isInstance(p, WORLD_PROVIDER_SPACE)) {
                     // the same rule as GT's DimensionDef.getDimensionName(World)
-                    Object celestial = Reflect.call(p, "getCelestialBody");
-                    name = (String) Reflect.call(celestial, "getName");
-                    display = (String) Reflect.call(celestial, "getLocalizedName");
+                    if (gc == null) gc = new Galacticraft();
+                    Object celestial = Reflect.invoke(gc.celestialBody, p);
+                    name = (String) Reflect.invoke(gc.name, celestial);
+                    display = (String) Reflect.invoke(gc.localizedName, celestial);
                     body = name;
                 } else {
                     name = p.getDimensionName();
@@ -331,30 +333,87 @@ public final class WorldgenSection implements ExportSection {
 
     // ---- Galacticraft bodies -----------------------------------------------------------------------------------
 
-    private static void writeCelestial(JsonlWriter w, ExportContext ctx) throws IOException {
-        writeBodies(w, "getRegisteredPlanets", "planet", "getParentSolarSystem", ctx);
-        writeBodies(w, "getRegisteredMoons", "moon", "getParentPlanet", ctx);
-        writeBodies(w, "getRegisteredSatellites", "satellite", "getParentPlanet", ctx);
+    /**
+     * The Galacticraft members this section calls, each found once by its name and exact type as {@code javap -p -s}
+     * shows them in {@code Galacticraft-3.4.34-GTNH.jar}, on the public class or interface of
+     * {@code micdoodle8.mods.galacticraft.api} that declares it (see {@link Reflect} for why nothing asks a class for
+     * its members): {@code world.IGalacticraftWorldProvider}'s {@code CelestialBody getCelestialBody()};
+     * {@code galaxies.CelestialBody}'s {@code String getName()}, {@code String getLocalizedName()},
+     * {@code int getTierRequirement()}, {@code boolean getReachable()}, {@code Class<? extends WorldProvider>
+     * getWorldProvider()} and {@code int getDimensionID()}; {@code galaxies.Planet}'s
+     * {@code SolarSystem getParentSolarSystem()}; {@code galaxies.IChildBody}'s {@code Planet getParentPlanet()} (moons
+     * and satellites); {@code galaxies.SolarSystem}'s {@code String getName()}; and {@code galaxies.GalaxyRegistry}'s
+     * static {@code Map<String, Planet> getRegisteredPlanets()}, {@code Map<String, Moon> getRegisteredMoons()} and
+     * {@code Map<String, Satellite> getRegisteredSatellites()}.
+     */
+    private static final class Galacticraft {
+
+        final MethodHandle celestialBody;
+        final MethodHandle name;
+        final MethodHandle localizedName;
+        final MethodHandle tierRequirement;
+        final MethodHandle reachable;
+        final MethodHandle worldProvider;
+        final MethodHandle dimensionId;
+        final MethodHandle parentSolarSystem;
+        final MethodHandle parentPlanet;
+        final MethodHandle solarSystemName;
+        final MethodHandle planets;
+        final MethodHandle moons;
+        final MethodHandle satellites;
+
+        Galacticraft() {
+            Class<?> body = Reflect.load(GALACTICRAFT_API + "galaxies.CelestialBody");
+            Class<?> planet = Reflect.load(GALACTICRAFT_API + "galaxies.Planet");
+            Class<?> solarSystem = Reflect.load(GALACTICRAFT_API + "galaxies.SolarSystem");
+            Class<?> child = Reflect.load(GALACTICRAFT_API + "galaxies.IChildBody");
+            Class<?> registry = Reflect.load(GALACTICRAFT_API + "galaxies.GalaxyRegistry");
+            Class<?> provider = Reflect.load(GALACTICRAFT_API + "world.IGalacticraftWorldProvider");
+            celestialBody = Reflect.method(provider, "getCelestialBody", body);
+            name = Reflect.method(body, "getName", String.class);
+            localizedName = Reflect.method(body, "getLocalizedName", String.class);
+            tierRequirement = Reflect.method(body, "getTierRequirement", int.class);
+            reachable = Reflect.method(body, "getReachable", boolean.class);
+            worldProvider = Reflect.method(body, "getWorldProvider", Class.class);
+            dimensionId = Reflect.method(body, "getDimensionID", int.class);
+            parentSolarSystem = Reflect.method(planet, "getParentSolarSystem", solarSystem);
+            parentPlanet = Reflect.method(child, "getParentPlanet", planet);
+            solarSystemName = Reflect.method(solarSystem, "getName", String.class);
+            planets = Reflect.staticMethod(registry, "getRegisteredPlanets", Map.class);
+            moons = Reflect.staticMethod(registry, "getRegisteredMoons", Map.class);
+            satellites = Reflect.staticMethod(registry, "getRegisteredSatellites", Map.class);
+        }
     }
 
-    private static void writeBodies(JsonlWriter w, String registry, String kind, String parentGetter,
-        ExportContext ctx) throws IOException {
-        Map<?, ?> bodies = (Map<?, ?>) Reflect.callStatic(GALAXY_REGISTRY, registry);
+    private static void writeCelestial(JsonlWriter w, ExportContext ctx) throws IOException {
+        Galacticraft gc = new Galacticraft();
+        writeBodies(w, gc, gc.planets, "planet", gc.parentSolarSystem, gc.solarSystemName, ctx);
+        writeBodies(w, gc, gc.moons, "moon", gc.parentPlanet, gc.name, ctx);
+        writeBodies(w, gc, gc.satellites, "satellite", gc.parentPlanet, gc.name, ctx);
+    }
+
+    /**
+     * The bodies of one of {@code GalaxyRegistry}'s maps ({@code registry}); {@code parentOf} gives a body's parent and
+     * {@code parentName} that parent's name.
+     */
+    private static void writeBodies(JsonlWriter w, Galacticraft gc, MethodHandle registry, String kind,
+        MethodHandle parentOf, MethodHandle parentName, ExportContext ctx) throws IOException {
+        Map<?, ?> bodies = (Map<?, ?>) Reflect.invoke(registry);
         if (bodies == null) return;
         for (Map.Entry<?, ?> e : bodies.entrySet()) {
             Object body = e.getValue();
             try {
                 if (body == null) throw new IllegalStateException("null body");
-                Object parent = Reflect.call(body, parentGetter);
+                Object parent = Reflect.invoke(parentOf, body);
                 JsonWriter j = w.begin();
                 j.beginObject();
-                j.name("name").value((String) Reflect.call(body, "getName"));
-                j.name("display").value((String) Reflect.call(body, "getLocalizedName"));
+                j.name("name").value((String) Reflect.invoke(gc.name, body));
+                j.name("display").value((String) Reflect.invoke(gc.localizedName, body));
                 j.name("kind").value(kind);
-                j.name("parent").value(parent != null ? (String) Reflect.call(parent, "getName") : null);
-                j.name("tier").value((Integer) Reflect.call(body, "getTierRequirement"));
-                j.name("dim").value(dimensionOf(body));
-                j.name("reachable").value((Boolean) Reflect.call(body, "getReachable"));
+                j.name("parent").value(parent != null ? (String) Reflect.invoke(parentName, parent) : null);
+                j.name("tier").value((Integer) Reflect.invoke(gc.tierRequirement, body));
+                j.name("dim").value(dimensionOf(gc, body));
+                j.name("reachable").value((Boolean) Reflect.invoke(gc.reachable, body));
                 j.endObject();
                 w.end();
             } catch (Throwable t) {
@@ -368,9 +427,9 @@ public final class WorldgenSection implements ExportSection {
      * class ({@code setDimensionInfo}), so a body without a provider class has none (its id field is a meaningless
      * 0), and a satellite's id is a provider type rather than a registered dimension.
      */
-    private static Integer dimensionOf(Object body) {
-        if (Reflect.call(body, "getWorldProvider") == null) return null;
-        int id = (Integer) Reflect.call(body, "getDimensionID");
+    private static Integer dimensionOf(Galacticraft gc, Object body) {
+        if (Reflect.invoke(gc.worldProvider, body) == null) return null;
+        int id = (Integer) Reflect.invoke(gc.dimensionId, body);
         return DimensionManager.isDimensionRegistered(id) ? id : null;
     }
 
