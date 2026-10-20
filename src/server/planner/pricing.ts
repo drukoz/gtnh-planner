@@ -82,11 +82,14 @@ async function derivedCosts(
 
 /**
  * The graph `keys` alone walk to, as the cost model walks (no pins, its stop items, derived materials routed): where goods
- * the cost model's graph never reached are priced (`derivedCosts`; plan.ts prices ingredient options there).
+ * the cost model's graph never reached are priced (`derivedCosts`; plan.ts prices ingredient options there), with
+ * `avoid` around those goods (`CandidateOptions.avoid`, as a line that avoids them walks: plan.ts's options).
  */
-export function aloneGraph(pack: Pack, settings: PlanSettings, basis: PlanBasis, model: CostModel, keys: StuffKey[]): CandidateGraph {
+export function aloneGraph(
+  pack: Pack, settings: PlanSettings, basis: PlanBasis, model: CostModel, keys: StuffKey[], avoid?: ReadonlySet<StuffKey>,
+): CandidateGraph {
   const s: PlanSettings = { ...settings, recipeChoice: {}, optionChoice: {}, stopItems: model.stopItems, routeDerived: true };
-  return buildCandidates(pack, s, basis.env, makeLeafOracle(pack, s, basis.avail, basis.prices), keys);
+  return buildCandidates(pack, s, basis.env, makeLeafOracle(pack, s, basis.avail, basis.prices), keys, avoid === undefined ? {} : { avoid });
 }
 
 /** The line's target when it has one the export knows (an item or a fluid), else null. */

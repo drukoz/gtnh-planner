@@ -346,10 +346,13 @@ describe('planLine', () => {
   it('says when whole crafts leave a Make N batch short', () => {
     expect(batchShortWarning(pack, [], 't:circuit@0', 10)).toEqual([]);
     expect(batchShortWarning(pack, [{ key: 'fluid:oil', amount: 1000, chance: 1 }, { key: 't:copper_wire@0', amount: 2, chance: 1 }], 't:circuit@0', 10)).toEqual([{
-      code: 'batch-short', key: 'fluid:oil',
+      code: 'batch-short', key: 'fluid:oil', keys: ['fluid:oil', 't:copper_wire@0'],
       text: 'Whole crafts do not balance: have 1,000 L Oil, 2× 1x Copper Wire ready before you start (cells or catalysts the chain hands round), or the batch comes out short.',
     }]);
     expect(batchShortWarning(pack, [{ key: 't:circuit@0', amount: 3, chance: 1 }], 't:circuit@0', 10)[0]?.text).toBe('The batch makes only 7 of 10 Basic Circuit.');
+    // Every good it covers, the target first, so the plan index leaves them to it (no short input at each consumer).
+    const both = [{ key: 't:copper_wire@0', amount: 2, chance: 1 }, { key: 't:circuit@0', amount: 3, chance: 1 }];
+    expect(batchShortWarning(pack, both, 't:circuit@0', 10)[0]).toMatchObject({ key: 't:circuit@0', keys: ['t:circuit@0', 't:copper_wire@0'] });
   });
   it('keeps a stop item the line cannot make at its stop price, so its recipe stays an alternative', async () => {
     // At MV nothing reachable makes titanium ingots; the group says it already makes them.
@@ -554,6 +557,71 @@ describe('planLine', () => {
     expect(p.steps.map((s) => s.id)).toEqual(['honest', 'make-t']);
     // The left-out recipes by machine and product, not by their 16-hex ids.
     expect(p.warnings).toEqual([{ code: 'free-loop', text: 'Ignored 2 recipes that make Thing from nothing (likely a recipe data loop): Macerator making Widget, Macerator making Gizmo' }]);
+  });
+  it('says where a molten metal out of reach is found, as for its dust', async () => {
+    // Plan 09's final review: a swap list read only pumped fluids for where a fluid comes from, so a Widget cast from
+    // Molten Titanium (titanium only the Moon has) read "needs Molten Titanium, which you cannot get here". A molten
+    // fluid's material is found where its ores are, as a base item's is (and an option of a slot says the same).
+    const p = packFromSpec({
+      ...MINI_GT,
+      items: [...MINI_GT.items!, { key: 't:widget@0', name: 'Widget' }],
+      fluids: [...MINI_GT.fluids!, { key: 'fluid:molten.titanium', name: 'Molten Titanium' }],
+      recipes: [...MINI_GT.recipes!,
+        { id: 'widget-ti', map: 'gt.recipe.assembler', in: [['fluid:molten.titanium', 144]], out: [['t:widget@0', 1]], eut: 16 },
+        { id: 'widget-mix', map: 'gt.recipe.assembler', in: [['t:iron_plate@0', 1], { any: [['fluid:molten.titanium', 72], ['fluid:water', 1000]] }], out: [['t:widget@0', 1]], eut: 16 },
+        { id: 'extract-ti', map: 'gt.recipe.fluidextractor', in: [['t:titanium_ingot@0', 1]], out: [['fluid:molten.titanium', 144]], eut: 30, dur: 40 }],
+    });
+    const plan = await planLine(p, S({ target: 't:widget@0', tier: 1 }), emptyContext());
+    const step = plan.steps.find((s) => s.mainOutput === 't:widget@0')!;
+    expect(step.recipeId).toBe('widget-mix');
+    expect(step.alternatives.find((a) => a.recipeId === 'widget-ti')?.unusable).toEqual(['needs Moon (T1 rocket)']);
+    expect(step.options?.[0]?.choices.find((c) => c.key === 'fluid:molten.titanium')?.unusable).toEqual(['needs Moon (T1 rocket)']);
+  });
+  it('says a molten metal whose ore is in reach needs the tier that melts it, not the places beyond reach', async () => {
+    // Review of the plan 09 follow-up: at LV Molten Lead read "needs The End or Makemake (T7 rocket) or …", 41 places that
+    // hold lead, though lead ore is in reach and only the machines that melt it need MV (main named the two that pump
+    // it, Io and Venus). Here iron is in the overworld and on the Moon, the Moon pumps it, and its extractor needs MV.
+    const p = packFromSpec({
+      ...MINI_GT,
+      items: [...MINI_GT.items!, { key: 't:widget@0', name: 'Widget' }],
+      recipes: [...MINI_GT.recipes!.map((r) => (r.id === 'extract-iron' ? { ...r, eut: 34 } : r)),
+        { id: 'widget-fe', map: 'gt.recipe.assembler', in: [['fluid:molten.iron', 144]], out: [['t:widget@0', 1]], eut: 16 },
+        { id: 'widget-mix', map: 'gt.recipe.assembler', in: [['t:iron_plate@0', 1], { any: [['fluid:molten.iron', 72], ['fluid:water', 1000]] }], out: [['t:widget@0', 1]], eut: 16 }],
+      worldgen: {
+        ...MINI_GT.worldgen!,
+        fluidSources: [...MINI_GT.worldgen!.fluidSources!, { fluid: 'fluid:molten.iron', dims: ['moon'], kind: 'underground', minTier: 1 }],
+      },
+    });
+    const plan = await planLine(p, S({ target: 't:widget@0', tier: 1 }), emptyContext());
+    const step = plan.steps.find((s) => s.mainOutput === 't:widget@0')!;
+    expect(step.recipeId).toBe('widget-mix');
+    expect(step.alternatives.find((a) => a.recipeId === 'widget-fe')?.unusable).toEqual(['needs MV (your tier is LV)']);
+    expect(step.options?.[0]?.choices.find((c) => c.key === 'fluid:molten.iron')?.unusable).toEqual(['needs MV (your tier is LV)']);
+  });
+  it('names the nearest few places beyond reach, then how many more', async () => {
+    // Review of the plan 09 follow-up: Molten Titanium has 53 places at LV on the real export. Nearest first, by the tier at
+    // which progression reaches each place, whatever the pack's order.
+    const dims = [['venus', 'Venus', 4, 6], ['mars', 'Mars', 2, 4], ['asteroids', 'Asteroids', 3, 5]] as const;
+    const p = packFromSpec({
+      ...MINI_GT,
+      items: [...MINI_GT.items!, { key: 't:widget@0', name: 'Widget' }],
+      fluids: [...MINI_GT.fluids!, { key: 'fluid:molten.titanium', name: 'Molten Titanium' }],
+      recipes: [...MINI_GT.recipes!,
+        { id: 'widget-ti', map: 'gt.recipe.assembler', in: [['fluid:molten.titanium', 144]], out: [['t:widget@0', 1]], eut: 16 },
+        { id: 'widget-mix', map: 'gt.recipe.assembler', in: [['t:iron_plate@0', 1], { any: [['fluid:molten.titanium', 72], ['fluid:water', 1000]] }], out: [['t:widget@0', 1]], eut: 16 },
+        { id: 'extract-ti', map: 'gt.recipe.fluidextractor', in: [['t:titanium_ingot@0', 1]], out: [['fluid:molten.titanium', 144]], eut: 30, dur: 40 }],
+      worldgen: {
+        ...MINI_GT.worldgen!,
+        dimensions: [...MINI_GT.worldgen!.dimensions!, ...dims.map(([key, name, rocketTier, defaultTier]) => ({ key, id: null, name, mod: 'galacticraftcore', kind: 'planet' as const, rocketTier, defaultTier }))],
+        veins: [...MINI_GT.worldgen!.veins!, ...dims.map(([key]) => ({ ...vein(`ore.mix.ti.${key}`, 'Titanium'), dims: [key] }))],
+        capabilities: [{ key: 'void_miner:mars', name: 'Void miner on Mars', minTier: 6, dim: 'mars', yields: ['Titanium'] }],
+      },
+    });
+    const plan = await planLine(p, S({ target: 't:widget@0', tier: 1 }), emptyContext());
+    const step = plan.steps.find((s) => s.mainOutput === 't:widget@0')!;
+    const reason = 'needs Moon (T1 rocket) or Mars (T2 rocket) or Asteroids (T3 rocket) or 2 more';
+    expect(step.alternatives.find((a) => a.recipeId === 'widget-ti')?.unusable).toEqual([reason]);
+    expect(step.options?.[0]?.choices.find((c) => c.key === 'fluid:molten.titanium')?.unusable).toEqual([reason]);
   });
 });
 

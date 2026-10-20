@@ -10,7 +10,7 @@ import { useId, useState, type ReactElement, type ReactNode } from 'react';
 import { tierName } from '../../shared/gt/tiers.ts';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import { indexPlan, ORPHAN_REL, SHORT_INPUT_SHARE, type PlanIndex } from '../../shared/plan/balance.ts';
-import { FREE_KEYS, type LeafClass, type Plan, type PlanFlow, type PlanSettings, type PlanStep, type RawInput, type SourceInfo, type StepOption } from '../../shared/types/plan.ts';
+import { FREE_KEYS, type LeafClass, type MachineWhere, type Plan, type PlanFlow, type PlanSettings, type PlanStep, type RawInput, type SourceInfo, type StepOption } from '../../shared/types/plan.ts';
 import { ItemIcon } from '../components/ItemIcon.tsx';
 import { formatNumber, formatPercent, formatRate } from '../format.ts';
 import { endHoverFlowFocus, hoverFlowFocus } from '../state/flow-focus.ts';
@@ -28,6 +28,8 @@ type Patch = (p: Partial<PlanSettings>) => void;
 const MAX_FOUND_AT = 3;
 /** Where reused machines stand: the positions listed before the rest is summed up. */
 const MAX_REUSED_AT = 3;
+/** The overworld's Minecraft dimension id: a reused machine there is given by its position alone. */
+const OVERWORLD_ID = 0;
 /** Swap options shown before "more…" (the one in use and a pinned one always show). */
 const SWAP_SHOWN = 5;
 /** Swap options each "more…" adds: a product can have a thousand ways (Wood Pulp), too many to list at once. */
@@ -411,10 +413,12 @@ function LineSection(props: { step: PlanStep; settings: PlanSettings; patch: Pat
 
 /**
  * Which owned machines a step runs on and where they stand (architecture §11.29): "2× Basic Assembler (LV) reused — at
- * your base 1 64 2, 3 64 2" for machines a world scan found (the first few positions), "— from your list" for those of
- * the "Machines we have" list, both for a mix; just "… reused" for a plan that does not say where; null for none.
+ * your base 1 64 2, 3 64 2" for machines a world scan found (the first few positions; "at 1 64 2" when the project links
+ * no base, as the scan's whole world counts then, `base`), each in a dimension other than the overworld named ("8 40 8
+ * (Nether)", `dimId:<n>` in `names`, else `DIM<n>`), "— from your list" for those of the "Machines we have" list, both
+ * for a mix; just "… reused" for a plan that does not say where; null for none.
  */
-export function reusedText(step: PlanStep): string | null {
+export function reusedText(step: PlanStep, opts: { base?: boolean; names?: Plan['names'] } = {}): string | null {
   const count = step.reused?.count ?? step.owned;
   if (count <= 0) return null;
   const machines = `${formatNumber(count)}× ${step.machine.name} (${tierText(step.machine.tier)}) reused`;
@@ -422,18 +426,19 @@ export function reusedText(step: PlanStep): string | null {
   if (where === undefined) return machines;
   if (where.length === 0) return `${machines} — from your list`;
   const more = where.length > MAX_REUSED_AT ? ` and ${where.length - MAX_REUSED_AT} more` : '';
-  const spots = `at your base ${where.slice(0, MAX_REUSED_AT).map(({ pos }) => pos.join(' ')).join(', ')}${more}`;
+  const at = ({ dim, pos }: MachineWhere): string => (dim === OVERWORLD_ID ? pos.join(' ') : `${pos.join(' ')} (${opts.names?.[`dimId:${dim}`] ?? `DIM${dim}`})`);
+  const spots = `at ${opts.base === true ? 'your base ' : ''}${where.slice(0, MAX_REUSED_AT).map(at).join(', ')}${more}`;
   const listed = count - where.length;
   return listed > 0 ? `${machines} — ${formatNumber(where.length)} ${spots}; ${formatNumber(listed)} from your list` : `${machines} — ${spots}`;
 }
 
-function ReuseSection(props: { step: PlanStep; settings: PlanSettings; patch: Patch }): ReactElement | null {
+function ReuseSection(props: { step: PlanStep; plan: Plan; settings: PlanSettings; base: boolean; patch: Patch }): ReactElement | null {
   const { step, settings, patch } = props;
   const { mteId, name } = step.machine;
   const declined = (settings.declineReuse ?? []).includes(mteId);
   // With "Reuse machines we have" off nothing is reused, whatever a machine type's own switch says.
   if (settings.reuseOwned === false || (step.owned <= 0 && !declined)) return null;
-  const reused = reusedText(step);
+  const reused = reusedText(step, { base: props.base, names: props.plan.names });
   return (
     <section className="flow-panel-section">
       <h4 className="flow-panel-title">Reuse</h4>
@@ -563,6 +568,8 @@ export function StepPanel(props: {
   per?: Per;
   /** Selects another step of the diagram (a Takes/Makes peer). */
   onSelect?(stepId: string): void;
+  /** The project links a world base, so the machines a scan found and the step reuses stand in it (default: none). */
+  base?: boolean;
 }): ReactElement {
   const { step, plan, settings, send, onClose, onSelect } = props;
   const per = props.per ?? 'hour';
@@ -585,7 +592,7 @@ export function StepPanel(props: {
       <SupplySection step={step} plan={plan} settings={settings} nameOf={nameOf} patch={patch} />
       <LineSection step={step} settings={settings} patch={patch} />
       <OptionsSection step={step} settings={settings} nameOf={nameOf} patch={patch} />
-      <ReuseSection step={step} settings={settings} patch={patch} />
+      <ReuseSection step={step} plan={plan} settings={settings} base={props.base === true} patch={patch} />
       <section className="flow-panel-section">
         <h4 className="flow-panel-title">Overclock</h4>
         <ul className="oc-lines">

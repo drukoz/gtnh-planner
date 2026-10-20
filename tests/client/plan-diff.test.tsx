@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { changeLines, planChange } from '../../src/client/views/plan-diff.ts';
-import { WhatChanged } from '../../src/client/views/WhatChanged.tsx';
+import { dismissChange, WhatChanged } from '../../src/client/views/WhatChanged.tsx';
 import { FlowView } from '../../src/client/views/FlowView.tsx';
 import { MaterialsView } from '../../src/client/views/MaterialsView.tsx';
 import type { Plan, PlanStep } from '../../src/shared/types/plan.ts';
@@ -76,5 +76,29 @@ describe('what changed between two plans', () => {
     expect(text(renderToStaticMarkup(<FlowView project={project} plan={after} previousPlan={before} send={() => {}} me="Ann" />))).toContain('No longer imported: Ethylene');
     expect(text(renderToStaticMarkup(<MaterialsView project={project} plan={after} previousPlan={before} send={() => {}} me="Ann" />))).toContain('No longer imported: Ethylene');
     expect(text(renderToStaticMarkup(<MaterialsView project={project} plan={after} send={() => {}} me="Ann" />))).not.toContain('What changed');
+  });
+  it('says nothing for the first plan of a target', () => {
+    // Plan 09's final review: the project's first target pick replaced a plan of nothing, so every step read as new.
+    // Nor is a plan of a new target a change of the old one, or one that plans at last.
+    const target = { target: 't:board@0' };
+    const noTarget = planOf({ settingsHash: 'none', status: 'empty' });
+    expect(renderToStaticMarkup(<WhatChanged previous={noTarget} plan={{ ...after, ...target }} />)).toBe('');
+    const blocked = planOf({ settingsHash: 'lv', status: 'infeasible', ...target });
+    expect(renderToStaticMarkup(<WhatChanged previous={blocked} plan={{ ...after, ...target }} />)).toBe('');
+    expect(renderToStaticMarkup(<WhatChanged previous={{ ...before, target: 't:wire@0' }} plan={{ ...after, ...target }} />)).toBe('');
+    // The same target: what changed, as before.
+    expect(text(renderToStaticMarkup(<WhatChanged previous={{ ...before, ...target }} plan={{ ...after, ...target }} />))).toContain('New steps: Fluid Extractor');
+  });
+  it('hides a dismissed change until the next one, also when the same settings come round again', () => {
+    // Dismissals were keyed by "<old hash>><new hash>", so a setting switched on, off and on again (or the same change in
+    // another project) never showed its note again. They follow the plan a change replaced.
+    const shown = (previous: Plan, plan: Plan): boolean => text(renderToStaticMarkup(<WhatChanged previous={previous} plan={plan} />)).includes('What changed');
+    const [first, second] = [{ ...before }, { ...after }];
+    expect(shown(first, second)).toBe(true);
+    dismissChange(first);
+    expect(shown(first, second)).toBe(false);
+    expect(shown(first, { ...after })).toBe(false);                 // the same change, refetched: still dismissed
+    expect(shown(second, { ...before })).toBe(true);                // switched back: a new change
+    expect(shown({ ...before }, { ...after })).toBe(true);          // and on again, or the same change elsewhere
   });
 });

@@ -75,7 +75,8 @@ function portSide(peers: ReadonlyMap<string, number> | undefined): PortSide {
  * carry net amounts), times its runs per second, and gets what flows into it; a good that flows in without being one of
  * its inputs is a port it needs nothing of. Issues: `orphan-input` (need > 0, got ≤ ORPHAN_REL × need), `short-input`
  * (got < SHORT_INPUT_SHARE × need), `multi-producer` (the main output of 2+ steps), `bought-and-made` (a good the line
- * buys that is some step's main output). A good several steps make only beside their main output is no issue.
+ * buys that is some step's main output). A good several steps make only beside their main output is no issue, nor is
+ * the shortfall of a good a Make N batch's `batch-short` warning covers (its `keys`): it says what to have ready.
  */
 export function indexPlan(plan: Plan): PlanIndex {
   const into: FlowsByNode = new Map();
@@ -86,6 +87,7 @@ export function indexPlan(plan: Plan): PlanIndex {
     addFlow(outOf, f.from, f.key, f.to, f.perSecond);
     if (f.from === RAW) bought.set(f.key, (bought.get(f.key) ?? 0) + f.perSecond);
   }
+  const batchShort = new Set(plan.warnings.flatMap((w) => (w.code === 'batch-short' ? (w.keys ?? []) : [])));
 
   const inputs: PlanIndex['inputs'] = new Map();
   const outputs: PlanIndex['outputs'] = new Map();
@@ -100,7 +102,7 @@ export function indexPlan(plan: Plan): PlanIndex {
       const needPerSecond = Math.max(0, amount - (makes.get(key) ?? 0)) * step.runsPerSecond;
       const port = { ...portSide(flowsIn?.get(key)), needPerSecond };
       ins.set(key, port);
-      if (!(needPerSecond > 0)) continue;
+      if (!(needPerSecond > 0) || batchShort.has(key)) continue;
       const got = { needPerSecond, gotPerSecond: port.perSecond };
       if (port.perSecond <= ORPHAN_REL * needPerSecond) issues.push({ code: 'orphan-input', key, stepId: step.id, ...got });
       else if (port.perSecond < SHORT_INPUT_SHARE * needPerSecond) issues.push({ code: 'short-input', key, stepId: step.id, ...got });

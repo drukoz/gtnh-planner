@@ -139,4 +139,22 @@ describe('indexPlan', () => {
       ['short-input', 't:pa@0', 'b'],
     ]);
   });
+
+  it('leaves the goods a Make N batch comes out short of to its batch-short warning', () => {
+    // Plan 09's final review: whole runs that leave a good short (cells the chain hands round) gave an issue at every step
+    // that takes it, under the plan banner's red heading, beside the warning that says what to have ready before the
+    // batch starts. That warning covers its goods (`keys`); any other shortfall is still an issue.
+    const use = step('use', 'Assembler', 't:t@0', 1 / HOUR, [per('t:empty_cell@0', 2), per('fluid:pva', 1), per('t:glue@0', 1)], [per('t:t@0', 1)]);
+    const can = step('can', 'Canner', 't:empty_cell@0', 1 / HOUR, [], [per('t:empty_cell@0', 1)]);
+    const batch = planOf([use, can], [flow('can', 'use', 't:empty_cell@0', 1 / HOUR), flow('use', 'out', 't:t@0', 1 / HOUR)]);
+    const issues = (warnings: Plan['warnings']) => indexPlan({ ...batch, warnings }).issues.map((i) => [i.code, i.key]);
+    expect(issues([])).toEqual([['orphan-input', 'fluid:pva'], ['orphan-input', 't:glue@0'], ['short-input', 't:empty_cell@0']]);
+    const short = { code: 'batch-short', key: 't:empty_cell@0', text: 'Whole crafts do not balance: have 1× Empty Cell ready before you start …' };
+    expect(issues([{ ...short, keys: ['t:empty_cell@0', 'fluid:pva'] }])).toEqual([['orphan-input', 't:glue@0']]);
+    // The batch still needs the cells it is short of: the port says so.
+    expect(indexPlan({ ...batch, warnings: [{ ...short, keys: ['t:empty_cell@0'] }] }).inputs.get('use')?.get('t:empty_cell@0'))
+      .toMatchObject({ needPerSecond: 2 / HOUR, perSecond: 1 / HOUR });
+    // Only a batch-short warning's goods count.
+    expect(issues([{ code: 'avoid-unavoidable', key: 't:empty_cell@0', text: 'Assembler uses Empty Cell', keys: ['t:empty_cell@0'] }])).toHaveLength(3);
+  });
 });
