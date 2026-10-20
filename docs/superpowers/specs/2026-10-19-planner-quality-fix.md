@@ -769,7 +769,7 @@ Each `planLine` < 5 s.
 | 3 "two places, two processes" | no good is the `mainOutput` of two steps in `P` and `PR`; at most one step makes `fluid:molten.plastic` and at most one makes `gregtech:gt.metaitem.01@17035` (Copper Plate) |
 | 4 "where the wire is coming out" | `focusSets(flowGraph(P,'hour'), { kind: 'item', key: 'gregtech:gt.blockmachines@2000' })` (1x Red Alloy Wire) has exactly one producer (the wiremill step) and the circuit assembler `c0106c4cb6b4b041` among its consumers; every `PortSide` of `indexPlan(P)` has its peers |
 | 5 "cobble … molten glass from sand" | no raw input and no step input is `minecraft:cobblestone@0`; no step makes `minecraft:gravel@0` or `minecraft:sand@0`; no step `handCraft`; the glass tube comes from sand or glass dust within 2 steps of an import (`P`: Glass Dust → forming press/alloy smelter; `PR`: Sand gathered) |
-| 6 "recheck the planning step" | `P.steps.length ≤ 20` (prototype 15), `PR.steps.length ≤ 32` (27); `P.rawCost.perSecond ≤ 1.25 × P.rawCost.leastPerSecond`; sorted recipe ids of `P` equal `P1m`'s and every rate is 60× (1e-9 relative); `checkPlanInvariants(pack, settings, P)` has no violation of kinds a, b, d, e, f; warnings include `pin-dominated` for step `0a074f4241a9e0f9`; no `numerics`, `simplify-skipped`, `free-loop`, `graph-too-big` |
+| 6 "recheck the planning step" | `P.steps.length ≤ 20` (prototype 15), `PR.steps.length ≤ 32` (27); `P.rawCost.perSecond ≤ 1.25 × P.rawCost.leastPerSecond`; sorted recipe ids of `P` equal `P1m`'s and every rate is 60× (1e-8 relative: P and P1m each round their rates to 9 significant digits, D3); `checkPlanInvariants(pack, settings, P)` has no violation of kinds a, b, d, e, f; warnings include `pin-dominated` for step `0a074f4241a9e0f9`; no `numerics`, `simplify-skipped`, `free-loop`, `graph-too-big` |
 
 The step caps above and the real-acceptance "step caps from §2" come from the 5 % prototype. At the 2 % default (§10
 answer 3) plan 09 Task 8 measures them again and sets each cap to the measured count + 5 (the same headroom; `P ≤ 27`
@@ -798,12 +798,23 @@ reactor recipes); (iii) bought-and-made where the producing step is in the plan 
 **`tests/unit/planner/real-acceptance.test.ts`** (updated): `ORDINARY` drops `fluid:molten.copper`,
 `minecraft:cobblestone@0`, `fluid:ethylene`, `fluid:molten.polyethylene` and the derived fluids; adds
 `minecraft:sand@0`, `minecraft:sand@1`, `minecraft:iron_ingot@0`, `minecraft:coal@0`, the cast iron ingot
-`gregtech:gt.metaitem.01@11304`, `fluid:helium` (HV aluminium) and `fluid:sulfuricacid` where a reachable source exists;
+`gregtech:gt.metaitem.01@11304`, `fluid:helium` (HV aluminium) and `fluid:sulfuricacid` where a reachable source exists,
+plus (plan 09 Task 8: the list came from the 5 % prototype without supporting lines) the base materials the supporting
+lines start from — antimony, chalcopyrite, malachite, sodalite, realgar, sulfur and tin dust, raw oil and sugar beet —
+and the logs canonicalRank ranks 0 (oak, acacia, rubber wood; R10), any of which fills Wood Pulp's `logWood` slot;
 the pinned-EC test asserts Sand or Glass Dust > 0 and cobblestone = 0; the MV steel test allows the supply steps
 (`maxSteps` 5) and asserts the Electric Blast Furnace; step caps from §2. Plan 08's avoid tests in this file keep their
 assertions and the 5 s bound; the one about Annealed Copper "still bought when avoiding Copper" tests a bought derived
-material, so it passes `routeDerived: false`. `real-pack.test.ts` keeps its limits except the MV steel machine count,
-which drops to ≤ 15 (the prototype's EBF plan has 12).
+material, so it passes `routeDerived: false`. Plan 09 Task 8 turns supporting lines off in four more cases, for the
+same kind of reason. The MV steel tests of both files buy Cast Iron Dust: their "no Steel Dust" check is R7's rule for
+bought derived materials, and the 5-step cap holds only then (at default settings the line also makes its cast iron
+from ore, 9 steps, so real-acceptance plans it at default settings too and asserts `ok`, < 5 s, an Electric Blast
+Furnace step and ≤ 14 steps). `real-pack.test.ts`'s 10 LV hulls a minute and 64-hull Make N cases keep the limits set
+for lines that buy their steel: at LV supporting lines make steel only in Bricked Blast Furnaces, whose count the
+objective ignores until plan 10's build cost (§9); the corpus still plans the LV hull and LV steel lines at default
+settings for soundness and time. `real-pack.test.ts` keeps its limits except the MV steel machine count, which drops
+to ≤ 20 (16 measured: oxygen from compressed air, 7 compressors, 7 centrifuges and a canner beside the EBF; the
+prototype's 12 electrolysed water).
 
 ### 7.3 Timing
 
@@ -888,6 +899,7 @@ decisions):
 | Build cost of unowned machines in the objective, `buildHorizonHours`, integer machine counts, `Plan.cost` (clarification §11.28) | needs a trustworthy build list first (D15 only partly fixes it); a machine-count term broke rate invariance in the prototype; gtnh §5: at 1/hour a 24 h horizon makes each MV machine ≈ 29 % of the line's raw | plan 10 |
 | The rest of reusing owned machines (§11.29): owned machines in the objective (no build cost for what the group owns) and sharing one owned machine across steps. Plan 09 Task 9 ships `reuseOwned`, `ownedManual` and `PlanStep.reused` for machine assignment and the build list (§10 answer 1) | "owned machines cost nothing to build" steers the plan only once the build cost is in the objective, and sharing is the same trade-off as `shareGroup`; none of the six complaints needs it | plan 10 |
 | Pooling build-list demand before rounding; stopping breakdowns at stocked components (G9) | design change of `expandWith` | plan 10 |
+| The machine-count and Make N limits of the LV hull lines at default settings (plan 09 Task 8: 10 LV hulls a minute plan 646 machines, 360 of them Bricked Blast Furnaces; 64 hulls in Make N take 38.5 h), checked only with bought steel until then (§7.2) | at LV supporting lines make steel only in Bricked Blast Furnaces, and machine counts enter the objective only with the build cost | plan 10 |
 | Machine tier choice (lowest tier that meets the rate, G11) and machine sharing (`PlanStep.shareGroup`, UI-10) | build-cost trade-offs | plan 10 |
 | Mob drops as gathered items (ender pearl, blaze rod, ghast tear, G2) | changes availability broadly; not needed for the reported lines | later |
 | Stock list from the world scan (G3: "what the group already has in storage is importable") | needs Plan 4 data in the leaf oracle | later |

@@ -60,11 +60,9 @@ function raiseWithout(test: BanTest): number {
  * Why a finding of kind (c) is allowed (fix spec §7.2's documented exceptions), or null: (i) co-products — at most one
  * of the steps making the good has it as its main output; (ii) a justified pair — removing any one of its main producers
  * raises the raw material by more than the step charge × the least raw material (the deep check's ban test); (iii)
- * bought and made, where every step making it is in the plan for another main output: it names another, or the line
- * cannot do without it although it could buy all of the good (the deep check's ban of the makers is infeasible). The
- * second reading is needed because a step's main output is valued by all the line takes of it, bought or made (spec
- * D13), so a step run for its other output carries the name of a good it makes a share of beside the purchase
- * (Poly-Si dust and Salt Water in the circuit lines, Sulfur Dust for a robot arm).
+ * bought and made, where every step making it is in the plan for another main output: each names another (spec D13: a
+ * step making a good the line buys beside another output it uses is named after that one, as a cutting machine making
+ * Wafers beside bought Poly-Si dust or a centrifuge making Arsenic beside bought Sulfur Dust).
  */
 function excuse(v: Violation, plan: Plan, stepCharge: number, optimum: number): string | null {
   if (v.kind === 'multi-producer') {
@@ -79,9 +77,7 @@ function excuse(v: Violation, plan: Plan, stepCharge: number, optimum: number): 
   }
   if (v.kind === 'bought-and-made') {
     const makers = Object.keys((v.data?.producers ?? {}) as Record<string, number>);
-    if (makers.every((id) => plan.steps.find((s) => s.id === id)?.mainOutput !== v.key)) return 'made beside another main output';
-    const withoutMaking = v.data?.deltaWithoutMaking;
-    return typeof withoutMaking === 'number' && !Number.isFinite(withoutMaking) ? 'made by steps the line needs for another output' : null;
+    return makers.every((id) => plan.steps.find((s) => s.id === id)?.mainOutput !== v.key) ? 'made beside another main output' : null;
   }
   return null;
 }

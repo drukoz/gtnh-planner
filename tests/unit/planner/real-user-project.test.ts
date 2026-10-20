@@ -9,8 +9,10 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { flowGraph, focusSets } from '../../../src/client/views/flow-model.ts';
 import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
 import { loadPack } from '../../../src/server/pack/load.ts';
+import { isBaseItem } from '../../../src/server/planner/availability.ts';
+import { planBasis, type PlanBasis } from '../../../src/server/planner/basis.ts';
 import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
-import type { StuffKey } from '../../../src/shared/keys.ts';
+import { isFluidKey, type StuffKey } from '../../../src/shared/keys.ts';
 import { indexPlan } from '../../../src/shared/plan/balance.ts';
 import { normalizeSettings } from '../../../src/shared/project/apply-op.ts';
 import type { Pack } from '../../../src/shared/types/pack.ts';
@@ -49,8 +51,8 @@ const NEVER = ['numerics', 'simplify-skipped', 'free-loop', 'graph-too-big'];
 const EXACT_KINDS = ['balance', 'orphan-input', 'flow', 'machines', 'raw-source', 'byproduct'];
 /**
  * Two plans of one line at rates 60× apart: each value keeps 9 significant digits (fix spec D3, rounded at unit demand
- * and again when scaled back), so a ratio of two of them is 60 within up to 1e-8 (Task 1's ruling on numerics.test's
- * balance bound; measured worst 4.8e-9), not within the 1e-9 of spec §7.2.
+ * and again when scaled back), so a ratio of two of them is 60 within up to 1e-8 (spec §7.2's complaint 6, as Task 1's
+ * ruling on numerics.test's balance bound; measured worst 4.8e-9), no bound near 1e-9.
  */
 const RATIO_REL = 1e-8;
 
@@ -81,6 +83,32 @@ function worstImbalance(plan: Plan, target: StuffKey, perSecond: number): number
   let worst = 0;
   for (const [k, t] of taken) worst = Math.max(worst, Math.abs(sum.get(k) ?? 0) / t);
   return worst;
+}
+
+/**
+ * The derived materials of fix spec R6 (rule 1 of `supportingLines`): goods other than the target that availability
+ * calls derived and that are a base item (a GT dust, ingot or gem, or a material's base part) or a fluid — the alloys,
+ * plastics and chemicals supporting lines make.
+ */
+function derivedMaterials(pack: Pack, plan: Plan, basis: PlanBasis): (key: StuffKey | undefined) => boolean {
+  return (key) => key !== undefined && key !== plan.target && basis.avail.classOf(key) === 'derived' && (isFluidKey(key) || isBaseItem(pack, key));
+}
+
+/**
+ * Whether fix spec R6 itself keeps `step`, a step without a supporting line, in the main line: what it makes goes to the
+ * target, to a main-line step, to two lines or only to the sink (rule 3), and its main output roots no line (rule 2: no
+ * step sends it to the target or to a step whose main output is no derived material) unless it is a fluid made in a
+ * line of one step (rule 4: refined glue, glue).
+ */
+function keptInMainLine(plan: Plan, step: PlanStep, isMaterial: (key: StuffKey | undefined) => boolean): boolean {
+  const steps = new Map(plan.steps.map((s) => [s.id, s]));
+  const goesTo = (id: string): string[] => [...new Set(plan.flows.filter((f) => f.from === id && f.to !== 'sink').map((f) => f.to))];
+  const lines = goesTo(step.id).map((to) => (to === 'out' ? null : (steps.get(to)?.line?.key ?? null)));
+  const oneLine = lines.length > 0 && !lines.includes(null) && new Set(lines).size === 1;
+  const key = step.mainOutput;
+  const root = plan.flows.some((f) => f.key === key && steps.has(f.from) && (f.to === 'out' || (steps.has(f.to) && !isMaterial(steps.get(f.to)?.mainOutput))));
+  const alone = !plan.steps.some((s) => s.id !== step.id && goesTo(s.id).length > 0 && goesTo(s.id).every((to) => to === step.id));
+  return !oneLine && (!root || (key !== undefined && isFluidKey(key) && alone));
 }
 
 /** What one run of `step` nets of `key`: made less taken. */
@@ -192,19 +220,32 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')("the user's Electronic Circuit p
       expect(r.pricedVia?.mapId, r.key).not.toBe('gt.recipe.canner');
       expect(r.sources.filter((s) => s.kind === 'derived' && s.detail.startsWith('made by Canner')), r.key).toEqual([]);
     }
-    // With supporting lines the line buys nothing made elsewhere: each material P buys made is made in PR on a supporting
-    // line (fix spec R6), wherever PR takes it.
+    // With supporting lines the line buys nothing made elsewhere, and every step that makes a derived material has `line`:
+    // all of them but the ones fix spec R6 keeps in the main line by its own rules (keptInMainLine: oxygen and naphtha
+    // feeding several lines, glue made in one step, steam for a main-line reactor), and at least one.
     expect(PR.plan.rawInputs.filter((r) => r.leafClass === 'derived').map((r) => r.key)).toEqual([]);
+    const isMaterial = derivedMaterials(pack, PR.plan, planBasis(pack, { ...settings, routeDerived: true }, emptyContext()));
+    const materialSteps = PR.plan.steps.filter((s) => isMaterial(s.mainOutput));
+    expect(materialSteps.filter((s) => s.line !== undefined).length).toBeGreaterThan(0);
+    expect(materialSteps.filter((s) => s.line === undefined && !keptInMainLine(PR.plan, s, isMaterial)).map((s) => `${s.id} makes ${s.mainOutput}`)).toEqual([]);
+    // Each material P buys made is made in PR on a supporting line, wherever PR takes it (6 of P's 7: PR takes no
+    // Soldering Alloy Ingot).
+    let checked = 0;
     for (const { key } of derived) {
       if (!PR.plan.steps.some((s) => s.inputs.some((i) => i.key === key))) continue;
+      checked += 1;
       const makers = PR.plan.steps.filter((s) => s.mainOutput === key);
       expect(makers.length, key).toBeGreaterThan(0);
       for (const s of makers) expect(s.line, `${key} made by ${s.id}`).toBeDefined();
     }
+    expect(checked).toBeGreaterThan(0);
   });
 
   it('complaint 3, "two places, two processes": one step per product', () => {
     for (const [name, p] of [['P', P.plan], ['PR', PR.plan]] as const) {
+      // Nothing the plan does not add up on (fix spec R11): no good made two ways, none both bought and made (a Bricked
+      // Blast Furnace run for its Ferrosilite beside bought copper is named after the Ferrosilite, spec D13).
+      expect(indexPlan(p).issues, name).toEqual([]);
       const mains = p.steps.flatMap((s) => (s.mainOutput === undefined ? [] : [s.mainOutput]));
       expect(mains.filter((key, i) => mains.indexOf(key) !== i), name).toEqual([]);
       const makers = (key: StuffKey): string[] => p.steps.filter((s) => s.outputs.some((o) => o.key === key)).map((s) => s.id);

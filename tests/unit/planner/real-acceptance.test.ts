@@ -14,6 +14,7 @@ import { loadPack } from '../../../src/server/pack/load.ts';
 import { planBasis, resolveAvoid } from '../../../src/server/planner/basis.ts';
 import { expandBomLines } from '../../../src/server/planner/bom.ts';
 import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
+import { indexPlan } from '../../../src/shared/plan/balance.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import type { Pack } from '../../../src/shared/types/pack.ts';
 import type { BomLine, Plan, PlanSettings } from '../../../src/shared/types/plan.ts';
@@ -28,7 +29,6 @@ const STEEL_PLATE = 'gregtech:gt.metaitem.01@17305';
 const MICROPROCESSOR = 'gregtech:gt.metaitem.03@32078';
 const DIAMOND_LENS = 'gregtech:gt.metaitem.01@24500';
 const CALCITE_DUST = 'gregtech:gt.metaitem.01@2823';
-const ACETONE = 'fluid:acetone';
 const MAGNETIC_STEEL_INGOT = 'gregtech:gt.metaitem.01@11355';
 const ANNEALED_COPPER_INGOT = 'gregtech:gt.metaitem.01@11345';
 const ALUMINIUM_INGOT = 'gregtech:gt.metaitem.01@11019';
@@ -52,7 +52,8 @@ const SOLDER = ['gregtech:gt.metaitem.01@2314' /* soldering alloy dust */, 'greg
  * Ordinary base materials of GTNH's LV–HV circuit, hull and casing lines, by key. Fix spec §7.2 took cobblestone, Molten
  * Copper, Ethylene, Molten Polyethylene and the fluids made from others (Oxygen, Nitrogen, Hydrogen, Carbon Dioxide and
  * Monoxide, Distilled Water, Molten Tin) out and put sand, vanilla iron and coal, cast iron, Helium and Sulfuric Acid in;
- * the supporting lines (on by default) add the ores' dusts, wood, crops and raw oil their chains start from.
+ * the supporting lines (on by default) add the base materials their chains start from (the ores' dusts, tin dust, raw
+ * oil, sugar beet) and the logs canonicalRank ranks 0 (oak, acacia, rubber wood), any of which fills Wood Pulp's slot.
  */
 const ORDINARY: ReadonlySet<string> = new Set([
   // free
@@ -68,8 +69,8 @@ const ORDINARY: ReadonlySet<string> = new Set([
   'gregtech:gt.metaitem.01@2058' /* antimony dust */, 'gregtech:gt.metaitem.01@2855' /* chalcopyrite dust */, 'gregtech:gt.metaitem.01@2871' /* malachite dust */,
   'gregtech:gt.metaitem.01@2525' /* sodalite dust */, 'gregtech:gt.metaitem.01@2913' /* realgar dust */, 'gregtech:gt.metaitem.01@2022' /* sulfur dust */,
   // glass, wood, crops, rubber, carbon
-  SAND, 'minecraft:sand@1', GLASS_DUST, 'gregtech:gt.metaitem.01@2809' /* wood pulp */, 'minecraft:log2@0' /* acacia wood */,
-  'IC2:blockRubWood@0' /* rubber wood */, 'cropsnh:berry@1' /* sugar beet */, 'gregtech:gt.metaitem.01@11880' /* rubber bar */,
+  SAND, 'minecraft:sand@1', GLASS_DUST, 'gregtech:gt.metaitem.01@2809' /* wood pulp */, 'minecraft:log@0' /* oak wood */,
+  'minecraft:log2@0' /* acacia wood */, 'IC2:blockRubWood@0' /* rubber wood */, 'cropsnh:berry@1' /* sugar beet */, 'gregtech:gt.metaitem.01@11880' /* rubber bar */,
   'gregtech:gt.metaitem.01@2896' /* raw rubber dust */, 'IC2:itemHarz@0' /* sticky resin */, 'minecraft:slime_ball@0', 'IC2:itemDust@2' /* coal dust */,
   'gregtech:gt.metaitem.01@2535' /* coal dust */, 'gregtech:gt.metaitem.01@2010' /* carbon dust */, 'gregtech:gt.metaitem.01@2536' /* charcoal dust */,
   // plastics and the chemistry behind them: oil, and the fluids pumped where a source is in reach
@@ -91,6 +92,7 @@ const PLAN_SECONDS = 5;
  */
 const EC_MV_MAX_STEPS = 41;    // 36 steps
 const GEC_HV_MAX_STEPS = 56;   // 51 steps
+const STEEL_MV_MAX_STEPS = 14; // 9 steps at default settings, the cast iron made from ore too
 
 const perMinute = (plan: Plan, key: string): number => 60 * (plan.rawInputs.find((r) => r.key === key)?.perSecond ?? 0);
 /** What the line's steps take of `key` a minute, bought or made in the line. */
@@ -154,6 +156,8 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
     const { plan: p, seconds } = await plan(settings);
     expectSane(p, seconds, EC_MV_MAX_STEPS);
     await expectSameBreakdown(p, settings);
+    // It adds up (fix spec R11): its Bricked Blast Furnace, run for its Ferrosilite beside bought copper, is named so (D13).
+    expect(indexPlan(p).issues).toEqual([]);
     expect(p.rawInputs.some((r) => COPPER.includes(r.key))).toBe(true);
     expect(p.rawInputs.some((r) => SOLDER.includes(r.key))).toBe(true);
     // The last step makes the circuit in GT's circuit assembler: crafting a Programmed Circuit (any LV circuit) back into
@@ -203,6 +207,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
   it("follows GTNH's own Electronic Circuit recipe when the group pins it: red alloy, vacuum tubes from sand glass, steel", async () => {
     const { plan: p, seconds } = await plan({ target: ELECTRONIC_CIRCUIT, amount: 1, tier: 2, recipeChoice: { [ELECTRONIC_CIRCUIT]: EC_CIRCUIT_ASSEMBLER } });
     expectSane(p, seconds, 40);
+    expect(indexPlan(p).issues).toEqual([]);
     expect(p.steps.find((s) => s.mainOutput === ELECTRONIC_CIRCUIT)?.recipeId).toBe(EC_CIRCUIT_ASSEMBLER);
     // Its red alloy and steel come from supporting lines now (routeDerived on): what the line takes, bought or made.
     expect(takenPerMinute(p, RED_ALLOY_INGOT)).toBeCloseTo(1, 6);   // 2 × 1x red alloy wire = 1 ingot
@@ -226,16 +231,23 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
   }, 60_000);
 
   it('makes steel at MV in one Electric Blast Furnace step from a base material, its oxygen from free air', async () => {
-    // Bought Cast Iron Dust, a material made from others, so supporting lines off (as when this test was written; with them
-    // the line also makes the cast iron from iron ore). Steel Dust (made only from steel: macerated ingots, magnetic or
-    // electrical steel) is no way to make steel; the least raw material is then the blast furnace's cast iron recipe
-    // (1 Cast Iron Dust + 1,000 L Oxygen per ingot, against 1 Iron Dust + 1 Coal Dust + 1,000 L Oxygen), Cast Iron Dust
-    // being iron nuggets smelted into cast iron. Its oxygen is made, never bought (fix spec R5): the supply steps.
+    // Bought Cast Iron Dust, a material made from others, so supporting lines off (fix spec §7.2, as for the Annealed
+    // Copper test below; with them the line also makes the cast iron from iron ore). Steel Dust (made only from steel:
+    // macerated ingots, magnetic or electrical steel) is no way to make steel; the least raw material is then the blast
+    // furnace's cast iron recipe (1 Cast Iron Dust + 1,000 L Oxygen per ingot, against 1 Iron Dust + 1 Coal Dust + 1,000 L
+    // Oxygen), Cast Iron Dust being iron nuggets smelted into cast iron. Its oxygen is made, never bought (fix spec R5):
+    // the supply steps.
     const { plan: p, seconds } = await plan({ target: STEEL_INGOT, amount: 10, tier: 2, routeDerived: false });
     expectSane(p, seconds, 5, ['gregtech:gt.metaitem.01@2304' /* cast iron dust */]);
     expect(p.steps.map((s) => s.machine.name)).toContain('Electric Blast Furnace');
     expect(p.rawInputs.map((r) => r.key)).not.toContain('gregtech:gt.metaitem.01@2305' /* steel dust */);
     expect(p.rawInputs.map((r) => r.key)).not.toContain('fluid:oxygen');
+    // At default settings the steel still comes from the Electric Blast Furnace, its cast iron made from ore as well.
+    const routed = await plan({ target: STEEL_INGOT, amount: 10, tier: 2 });
+    expect(routed.plan.status, JSON.stringify(routed.plan.warnings)).toBe('ok');
+    expect(routed.seconds).toBeLessThan(PLAN_SECONDS);
+    expect(routed.plan.steps.map((s) => s.machine.name)).toContain('Electric Blast Furnace');
+    expect(routed.plan.steps.length).toBeLessThanOrEqual(STEEL_MV_MAX_STEPS);
   }, 60_000);
 
   it('makes aluminium, an EBF-only metal, at HV in one EBF step from mined dust; at LV it says MV unlocks it', async () => {
@@ -328,12 +340,13 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
     expect(p.buildList.some((l) => l.group === 'one-off' && pack.items.get(l.key)?.gt?.prefix === 'lens')).toBe(true);
   }, 60_000);
 
-  it("keeps the Large Chemical Reactor's Calcite catalyst out of 1,000 L of Acetone a minute at HV", async () => {
-    // The only recipe of the 2.9 export that holds Calcite (acetone from acetic acid, 480 EU/t) is no longer in the plain
-    // Good Electronic Circuit line plan 08 probed (plan 09's supporting lines make its chemicals another way); Acetone's
-    // own plain plan runs it.
+  it("keeps the Large Chemical Reactor's Calcite catalyst out of 2 Good Electronic Circuits a minute at HV", async () => {
+    // Plan 08 wrote this before there was a step charge, so it plans at the least raw material ("Least raw material", 0 %,
+    // fix spec R3): there the plain line makes its acetone in the only recipe of the 2.9 export that holds Calcite (from
+    // acetic acid, 480 EU/t). At the 2 % default (and at 5 %) the plain line makes no acetone and holds no Calcite, so
+    // there would be nothing to keep out.
     const avoid = ['Calcite'];
-    const { plan: p, seconds } = await plan({ target: ACETONE, amount: 1000, tier: 3, avoid });
+    const { plan: p, seconds } = await plan({ target: GOOD_ELECTRONIC_CIRCUIT, amount: 2, tier: 3, avoid, stepCharge: 0 });
     expectAvoided(p, seconds, avoid);
     expect(p.avoided?.map((a) => a.key)).toContain(CALCITE_DUST);   // the plain plan's catalyst
   }, 60_000);
