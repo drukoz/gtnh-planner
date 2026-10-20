@@ -143,13 +143,14 @@ describe.skipIf(path === undefined)("the user's reference Electronic Circuit flo
   it('R0: plans the reference as stored, with its 16 recipes, raw material, 14 machine blocks, 3 Centrifuges and 4 hand steps', async () => {
     // The acceptance spec's R0 (its pins, stops and crafting by hand, its stored 2 % step charge: normalizeSettings
     // applies no migration). On 93e508e: 17 blocks, 6 Basic Centrifuges for 3 Advanced (the step charge was per step).
+    // Its Molten Tin step may run the Tin Ingot twin of the dust's recipe: the two are the same recipe at the same raw
+    // price (1 a unit), an exact tie the build MIP's root node breaks either way, and REF_RAW takes tin as dust or ingot.
     const { plan, seconds } = await timed(stored);
     logPlan('R0', plan, seconds);
     expect(plan.status, JSON.stringify(plan.warnings)).toBe('ok');
     expect(seconds).toBeLessThan(PLAN_SECONDS);
     expect(plan.warnings.map((w) => w.code)).not.toContain('build-cost-approx');
     expect(referenceIds(plan)).toEqual([...REF_IDS].sort());
-    expect(plan.steps.map((s) => s.recipeId)).toContain(TIN_FROM_DUST);
     expectReferenceRaw(plan, 'R0');
     expect(machineBlocks(plan)).toBe(14);
     const centrifuges = plan.steps.find((s) => s.recipeId === RUBBER_WOOD_CENTRIFUGE);
@@ -167,8 +168,7 @@ describe.skipIf(path === undefined)("the user's reference Electronic Circuit flo
   }, 120_000);
 
   it('R1: plans R0 with its crafting on 4 Auto Workbenches, no hand step and 18 machine blocks', async () => {
-    // The acceptance spec's R1. Its Molten Tin may come from the Tin Ingot recipe, the dust's exact twin at the same raw
-    // material (R1 takes it, R0 the dust).
+    // The acceptance spec's R1 (its Molten Tin, as R0's, may come from the Tin Ingot twin of the dust's recipe).
     const { plan, seconds } = await timed({ ...stored, automateCrafting: true });
     logPlan('R1', plan, seconds);
     expect(plan.status, JSON.stringify(plan.warnings)).toBe('ok');
