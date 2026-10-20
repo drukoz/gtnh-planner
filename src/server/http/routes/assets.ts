@@ -109,8 +109,8 @@ function isInteger(value: unknown, min: number, max: number = Number.MAX_SAFE_IN
   return typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max;
 }
 
-/** `body[field]` as at most `ASSET_KEYS_MAX` strings of at most 300 characters each. */
-function keyList(body: unknown, field: string, what: string): StuffKey[] {
+/** `body[field]` as at most `ASSET_KEYS_MAX` strings of at most 300 characters each (also the pack names route's). */
+export function keyList(body: unknown, field: string, what: string): StuffKey[] {
   const list = isPlainObject(body) ? body[field] : undefined;
   if (!Array.isArray(list)) throw badRequest(`Send {"${field}": ["…"]}`);
   if (list.length > ASSET_KEYS_MAX) throw new HttpError(400, 'too-many', `At most ${ASSET_KEYS_MAX} ${what} per request`);

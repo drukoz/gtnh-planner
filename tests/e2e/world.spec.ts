@@ -54,6 +54,10 @@ test('smart upload of the sample world sends only trimmed regions; scan, pick th
   await expect(panel.getByTestId('machine-count')).toHaveText('6');
   await expect(panel.locator('[data-key="minecraft:iron_ingot@0"]')).toContainText('4,500');
   await expect(panel.locator('[data-key="minecraft:iron_ingot@0"]')).toContainText('1,000 reachable');
+  // Item names come from one batched POST /api/pack/names: the Mini-GT pack names the cobblestone; it has no
+  // minecraft:iron_ingot, which keeps showing its key once that same answer is in.
+  await expect(panel.locator('[data-key="minecraft:cobblestone@0"]')).toContainText('Cobblestone · 704');
+  await expect(panel.locator('[data-key="minecraft:iron_ingot@0"]')).toContainText('minecraft:iron_ingot@0 · 4,500');
   await expect(panel.getByText('Routed network')).toBeVisible();
 
   const canvas = page.locator('canvas[role=img]');

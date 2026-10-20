@@ -2,15 +2,16 @@ import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { View3DShell, type View3DShellProps } from '../../src/client/views/View3D.tsx';
 import { PROJECT_TABS } from '../../src/client/views/project-tabs.ts';
-import { VERTEX_SHADER, FRAGMENT_SHADER } from '../../src/client/three/renderer.ts';
+import { VERTEX_SHADER, FRAGMENT_SHADER, shapeGeometry } from '../../src/client/three/renderer.ts';
 import { loadSceneInputs, tilesFor } from '../../src/client/three/load-textures.ts';
-import { buildScene, blockKey } from '../../src/client/three/scene-data.ts';
-import { solidTile } from '../../src/client/three/textures.ts';
-import { sampleLayout, sampleFaces, sampleIcons, sampleCovers } from './layout-fixture.ts';
+import { buildScene, blockKey, type SceneData } from '../../src/client/three/scene-data.ts';
+import { solidTile, TILE } from '../../src/client/three/textures.ts';
+import { sampleLayout, sampleFaces, sampleIcons, sampleCovers, L } from './layout-fixture.ts';
 // for the tests after the plan's own
+import { BoxGeometry, type BufferGeometry } from 'three';
 import { webgl2Available } from '../../src/client/views/View3D.tsx';
 import type { TextureDeps } from '../../src/client/three/load-textures.ts';
-import type { BlockFaces } from '../../src/shared/types/assets.ts';
+import { layerKey, regionRect, type BlockFaces, type Rect, type Rgb, type TextureLayer } from '../../src/shared/types/assets.ts';
 import type { Layout, LayoutBlock } from '../../src/shared/types/layout.ts';
 import { CONV } from './layout-fixture.ts';
 
@@ -128,5 +129,106 @@ describe('3D tab: the rules in detail', () => {
     const tinted = { ...scene, tiles: [{ key: 'k', layers: [{ path: 'x/a.png', tint: [255, 0, 0] as [number, number, number] }], color: [0, 0, 0] as [number, number, number] }] };
     const [red] = await tilesFor(tinted, { ...noTextures, image: async () => ({ data: solidTile([200, 100, 50]) }) });
     expect([...red!.slice(0, 4)]).toEqual([200, 0, 0, 255]);
+  });
+
+  it('asks for each crop of a sheet once, and never shares one crop\'s image with another', async () => {
+    const crop = (side: number): TextureLayer => ({ path: 'ic2/textures/blocks/blockRubWood.png', region: { sheet: 96, src: [16 * side, 0, 16, 16] } });
+    const scene = buildScene(sampleLayout, sampleFaces, sampleIcons, sampleCovers);
+    const strip = { ...scene, tiles: [{ key: 'a', layers: [crop(0), crop(2)], color: [0, 0, 0] as [number, number, number] },
+      { key: 'b', layers: [crop(0)], color: [0, 0, 0] as [number, number, number] }] };
+    const asked: TextureLayer[] = [];
+    await tilesFor(strip, { ...noTextures, image: async (layer) => { asked.push(layer); return { data: solidTile([200, 100, 50]) }; } });
+    expect(asked).toEqual([crop(0), crop(2)]);
+  });
+
+  // Plan 16 Task 9 (architecture §11.43 (c)): pipe tiles over their role's colour, and u along an arm.
+  it('draws a tile over its under colour, and the plain colour when nothing loads', async () => {
+    const scene: SceneData = { tiles: [{ key: 'fallback', layers: [], color: [128, 128, 128] }, { key: 'k', layers: [L('x')], color: [1, 2, 3], under: [10, 20, 30] }], instances: [], size: [1, 1, 1] };
+    const dot = new Uint8ClampedArray(TILE * TILE * 4);
+    dot.set([200, 0, 0, 255], 0);
+    const [, drawn] = await tilesFor(scene, { ...noTextures, image: async () => ({ data: dot }) });
+    expect([...drawn!.slice(0, 8)]).toEqual([200, 0, 0, 255, 10, 20, 30, 255]);
+    const [, none] = await tilesFor(scene, { ...noTextures, image: async () => null });
+    expect(none).toEqual(solidTile([1, 2, 3]));
+  });
+
+  it("runs u along an arm on all four of its long faces", () => {
+    const g = shapeGeometry('arm');
+    const pos = g.getAttribute('position'), uv = g.getAttribute('uv');
+    for (const face of [0, 1, 2, 3]) {                     // +x, −x, +y, −y: the long faces of an arm built along −z
+      const uAtZ = new Map<number, number>();
+      for (let i = face * 4; i < face * 4 + 4; i++) {
+        const z = pos.getZ(i), u = uv.getX(i);
+        if (uAtZ.has(z)) expect(u).toBe(uAtZ.get(z)); else uAtZ.set(z, u);
+      }
+      expect(new Set(uAtZ.values()).size).toBe(2);
+    }
+  });
+
+  // Plan 16 Task 10, RC10's 3D check: a chest face is three crops of one model sheet (Task 4's table), drawn at their places.
+  describe('a chest', () => {
+    const N = 'minecraft/textures/entity/chest/normal.png';
+    const r = (src: Rect, dst: Rect): TextureLayer => ({ path: N, region: { sheet: 64, src, dst } });
+    const CHEST = { id: 'minecraft:chest', meta: 0 };
+    const chestFaces: BlockFaces = { block: CHEST, resolved: true, fallbackColor: [160, 110, 50], faces: {
+      down: [r([28, 19, 14, 14], [1, 1, 14, 14])],
+      up: [r([14, 0, 14, 14], [1, 1, 14, 14])],
+      north: [r([14, 33, 14, 10], [1, 6, 14, 10]), r([14, 14, 14, 5], [1, 2, 14, 5]), r([1, 1, 2, 4], [7, 5, 2, 4])],
+      south: [r([42, 33, 14, 10], [1, 6, 14, 10]), r([42, 14, 14, 5], [1, 2, 14, 5])],
+      west: [r([28, 33, 14, 10], [1, 6, 14, 10]), r([28, 14, 14, 5], [1, 2, 14, 5])],
+      east: [r([0, 33, 14, 10], [1, 6, 14, 10]), r([0, 14, 14, 5], [1, 2, 14, 5])],
+    } };
+    const chestLayout: Layout = { ...sampleLayout, size: [1, 1, 1], hookups: [], pins: [],
+      blocks: [{ pos: [10, 64, 20], block: CHEST, role: 'chest', label: 'Chest', facing: 2 }] };
+    const scene = buildScene(chestLayout, new Map([[blockKey(CHEST), chestFaces]]), new Map(), new Map());
+    /** A TILE × TILE image of `rgb` inside `rect` and transparent elsewhere: what `layerPixels` draws for a region layer. */
+    const rectImage = ([x, y, w, h]: Rect, rgb: Rgb): Uint8ClampedArray => {
+      const data = new Uint8ClampedArray(TILE * TILE * 4);
+      for (let row = y; row < y + h; row++) for (let col = x; col < x + w; col++) data.set([...rgb, 255], (row * TILE + col) * 4);
+      return data;
+    };
+
+    it('composes a chest face from its three crops of one sheet', async () => {
+      const color = (l: TextureLayer): Rgb => (l.region!.src[0] === 1 ? [255, 0, 0] : l.region!.src[1] < 19 ? [120, 80, 40] : [60, 40, 20]);   // knob, lid, base
+      const asked: string[] = [];
+      const tiles = await tilesFor(scene, { ...noTextures, image: async (l) => { asked.push(layerKey(l)); return { data: rectImage(regionRect(l, TILE), color(l)) }; } });
+      expect(new Set(asked).size).toBe(11);
+      expect(asked).toHaveLength(11);                                           // each crop loaded once
+      const north = tiles[scene.instances[0]!.tiles[2]]!;
+      const px = (x: number, y: number) => [...north.slice((y * TILE + x) * 4, (y * TILE + x) * 4 + 4)];
+      expect([px(7, 6), px(3, 3), px(3, 12)]).toEqual([[255, 0, 0, 255], [120, 80, 40, 255], [60, 40, 20, 255]]);   // knob over lid over base
+      expect(px(0, 0)[3]).toBe(0);                                              // outside the chest: transparent, so the shader drops it
+    });
+
+    // ---- after the plan's own tests: the edges the plan leaves open ----
+
+    it('draws each side of a chest facing north from that side\'s crops, with no colour under them', () => {
+      const [inst] = scene.instances;
+      expect([scene.instances.length, inst!.shape]).toEqual([1, 'cube']);
+      const { down, up, north, south, west, east } = chestFaces.faces;
+      expect(inst!.tiles.map((t) => scene.tiles[t]!.layers)).toEqual([down, up, north, south, west, east]);
+      expect(inst!.tiles.map((t) => scene.tiles[t]!.under)).toEqual(Array(6).fill(undefined));   // the border round the chest stays see-through
+    });
+  });
+
+  // ---- after the plan's own tests: the edges the plan leaves open ----
+
+  it('draws the layers that load over the under colour, and the plain colour for an image of another size', async () => {
+    const scene: SceneData = { tiles: [{ key: 'fallback', layers: [], color: [128, 128, 128] }, { key: 'k', layers: [L('a'), L('b')], color: [1, 2, 3], under: [10, 20, 30] }], instances: [], size: [1, 1, 1] };
+    const dot = new Uint8ClampedArray(TILE * TILE * 4);
+    dot.set([200, 0, 0, 255], 0);
+    const [, half] = await tilesFor(scene, { ...noTextures, image: async (l) => (l.path.endsWith('/a.png') ? { data: dot } : null) });
+    expect([...half!.slice(0, 8)]).toEqual([200, 0, 0, 255, 10, 20, 30, 255]);
+    const [, odd] = await tilesFor(scene, { ...noTextures, image: async () => ({ data: new Uint8ClampedArray(4) }) });
+    expect(odd).toEqual(solidTile([1, 2, 3]));
+  });
+
+  it("keeps three's UVs on the cube, the core, the plate and an arm's ±x faces and ends", () => {
+    const uvs = (g: BufferGeometry): number[] => [...g.getAttribute('uv').array];
+    const box = uvs(new BoxGeometry(1, 1, 1));               // 2 numbers per vertex, 4 vertices per face: faces 0–1 are 0–15, faces 4–5 are 32–47
+    for (const shape of ['cube', 'core', 'plate'] as const) expect(uvs(shapeGeometry(shape))).toEqual(box);
+    const arm = uvs(shapeGeometry('arm'));
+    expect([...arm.slice(0, 16), ...arm.slice(32)]).toEqual([...box.slice(0, 16), ...box.slice(32)]);
+    expect(arm.slice(16, 32)).not.toEqual(box.slice(16, 32));
   });
 });

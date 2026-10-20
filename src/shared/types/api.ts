@@ -77,3 +77,11 @@ export const ASSET_BLOCKS_MAX = 500;
 export interface DeletedProjectSummary { id: string; name: string; rev: number; target: StuffKey | null; updatedAt: string; deletedAt: string; deletedBy: string }
 /** SSE `deleted` (§11.24): the last event of every stream of a project someone deleted; the stream then ends. */
 export interface DeletedEvent { id: string; by: string; at: string }
+
+// --- pack names (Plan 16; architecture §11.43(f)) ---
+
+/**
+ * `POST /api/pack/names` → `Array<string | null>` in request order: the pack's name of each item or fluid, null for a
+ * key the pack does not hold; at most `ASSET_KEYS_MAX` keys of at most 300 characters each.
+ */
+export interface PackNamesRequest { keys: StuffKey[] }

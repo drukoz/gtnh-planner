@@ -13,9 +13,13 @@ describe('png', () => {
   it('counts animation frames from .mcmeta', () => {
     expect(animationFrames('{"animation":{"frametime":2}}', { width: 16, height: 512 })).toBe(32);
     expect(animationFrames('{"animation":{}}', { width: 16, height: 64 })).toBe(4);
-    expect(animationFrames('{"animation":{"height":8}}', { width: 16, height: 64 })).toBe(8);
     expect(animationFrames('{"animation":{"frametime":1}}', { width: 16, height: 16 })).toBe(1);
     expect(animationFrames('{"fullDrawers1":{"trimWidth":0.0625}}', { width: 16, height: 64 })).toBe(1);
     expect(animationFrames('{oops', { width: 16, height: 64 })).toBe(1);
+  });
+
+  it('frames are always square, whatever the .mcmeta says their height is', () => {
+    expect(animationFrames('{"animation":{"height":8}}', { width: 16, height: 64 })).toBe(4);
+    expect(animationFrames('{"animation":{"width":1,"height":32}}', { width: 16, height: 512 })).toBe(32);   // Forestry's liquids
   });
 });

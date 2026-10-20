@@ -1,12 +1,14 @@
-// The loaded pack for the browser (architecture §7, §11.6): what it holds (with the materials an avoid list can name and
-// the machines the "Machines we have" list can), item and fluid search, and the recipes that make or use one item or fluid.
+// The loaded pack for the browser (architecture §7, §11.6, §11.43(f)): what it holds (with the materials an avoid list
+// can name and the machines the "Machines we have" list can), item and fluid search, the recipes that make or use one
+// item or fluid, and the names of many at once.
 
 import type { IncomingMessage } from 'node:http';
 import type { AppContext } from '../../app.ts';
 import { searchPack } from '../../pack/search.ts';
 import { avoidableMaterials } from '../../planner/basis.ts';
 import { EXCLUSION_RULES } from '../../planner/candidates.ts';
-import { HttpError, sendJson, type Route } from '../router.ts';
+import { HttpError, readJson, sendJson, type Route } from '../router.ts';
+import { keyList } from './assets.ts';
 import { recipeTier } from '../../../shared/gt/tiers.ts';
 import type { PackInfo, RecipeSummary, StuffInfo } from '../../../shared/types/api.ts';
 import type { Pack, Recipe } from '../../../shared/types/pack.ts';
@@ -118,6 +120,15 @@ export function packRoutes(app: AppContext): Route[] {
           producers: summaries(pack, pack.producers.get(key)), consumers: summaries(pack, pack.consumers.get(key)),
         };
         sendJson(res, 200, info);
+      },
+    },
+    {
+      // The Map's storage list and hover tooltip name every key this way: one request per ASSET_KEYS_MAX keys.
+      method: 'POST', path: '/api/pack/names',
+      handler: async (req, res) => {
+        const pack = await app.pack();
+        const keys = keyList(await readJson<unknown>(req), 'keys', 'keys');
+        sendJson(res, 200, keys.map((key) => (pack.items.has(key) || pack.fluids.has(key) ? pack.nameOf(key) : null)));
       },
     },
   ];
