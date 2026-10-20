@@ -37,12 +37,16 @@ public final class AimRenderer {
     private static final double TAG_FULL_SIZE_DISTANCE = 12;
     /** The tag's pixels per text line, and the space around the text. */
     private static final int LINE_HEIGHT = 10, PADDING = 2;
+    /** A block farther than this many blocks is drawn at this distance, scaled down, so the far clipping plane cannot cut it. */
+    private static final double DRAW_CAP = 64;
     private static final String FAILED = "Aim outline drawing failed: %s";
 
     private final ProjectorSession session;
     private final Minecraft mc = Minecraft.getMinecraft();
     /** Set once anything failed: nothing is drawn any more. */
     private boolean failed;
+    /** Set once aiming threw, so it is logged once. */
+    private boolean aimFailed;
 
     public AimRenderer(ProjectorSession session) {
         this.session = session;
@@ -50,14 +54,22 @@ public final class AimRenderer {
 
     @SubscribeEvent(priority = EventPriority.LOW)
     public void onRenderLast(RenderWorldLastEvent e) {
-        if (failed || !session.visibleHere()) return;
+        if (!session.visibleHere()) return;
         EntityLivingBase camera = mc.renderViewEntity;
         if (camera == null || mc.theWorld == null) return;
+        // aiming goes on after a drawing failure, so the HUD's lists and the finding stay right
         try {
             Vec3 position = camera.getPosition(e.partialTicks);
             Vec3 look = camera.getLook(e.partialTicks);
             double[] eye = {position.xCoord, position.yCoord, position.zCoord};
             session.aim(eye, new double[] {look.xCoord, look.yCoord, look.zCoord}, new McAimStops(mc.theWorld));
+        } catch (Throwable failure) {
+            if (!aimFailed) ClientProxy.LOG.error("Aiming failed", failure);
+            aimFailed = true;
+            return;
+        }
+        if (failed) return;
+        try {
             ProjectorData data = session.data();
             if (data == null) return;
             int found = session.found();
@@ -116,21 +128,29 @@ public final class AimRenderer {
 
     private void drawBlock(ProjectorData data, int index, float[] colour, double[] cam) {
         PlannedBlock b = data.blocks.get(index);
-        // relative to the camera the way GhostRenderer places the ghosts
+        double dx = b.x - cam[0], dy = b.y - cam[1], dz = b.z - cam[2];
+        double distance = Math.sqrt((dx + 0.5) * (dx + 0.5) + (dy + 0.5) * (dy + 0.5) + (dz + 0.5) * (dz + 0.5));
         GL11.glPushMatrix();
         try {
-            GL11.glTranslated(-cam[0], -cam[1], -cam[2]);
-            outline(b, colour);
-            tag(b, session.tagLines(index), cam);
+            if (distance > DRAW_CAP) {
+                // pulled in along the line of sight and shrunk by the same factor: the same look, never clipped
+                double k = DRAW_CAP / distance;
+                GL11.glTranslated(dx * k, dy * k, dz * k);
+                GL11.glScaled(k, k, k);
+            } else {
+                GL11.glTranslated(dx, dy, dz);
+            }
+            outline(colour);
+            tag(session.tagLines(index), distance);
         } finally {
             GL11.glPopMatrix();
         }
     }
 
     /** The block's twelve edges, grown by {@link #GROW}. */
-    private static void outline(PlannedBlock b, float[] colour) {
-        double x0 = b.x - GROW, y0 = b.y - GROW, z0 = b.z - GROW;
-        double x1 = b.x + 1 + GROW, y1 = b.y + 1 + GROW, z1 = b.z + 1 + GROW;
+    private static void outline(float[] colour) {
+        double x0 = -GROW, y0 = -GROW, z0 = -GROW;
+        double x1 = 1 + GROW, y1 = 1 + GROW, z1 = 1 + GROW;
         GL11.glDisable(GL11.GL_TEXTURE_2D);
         GL11.glLineWidth(LINE_WIDTH);
         Tessellator t = Tessellator.instance;
@@ -160,22 +180,20 @@ public final class AimRenderer {
     }
 
     /**
-     * The lines centred above the block, the first at the top, turned to face the camera like a player's name tag, on a
+     * The lines centred above the block (in block-local coordinates, its corner at the origin), the first at the top, turned to face the camera like a player's name tag, on a
      * dark background. Its scale is {@link #TAG_SCALE} × max(1, distance / 12), so it stops shrinking beyond 12 blocks.
      */
-    private void tag(PlannedBlock b, List<String> lines, double[] cam) {
+    private void tag(List<String> lines, double distance) {
         if (lines.isEmpty()) return;
         FontRenderer font = mc.fontRenderer;
-        double cx = b.x + 0.5, cz = b.z + 0.5, bottom = b.y + 1 + TAG_RAISE;
-        double dx = cx - cam[0], dy = b.y + 0.5 - cam[1], dz = cz - cam[2];
-        double distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        double bottom = 1 + TAG_RAISE;
         float scale = (float) (TAG_SCALE * Math.max(1, distance / TAG_FULL_SIZE_DISTANCE));
         int width = 0;
         for (String line : lines) width = Math.max(width, font.getStringWidth(line));
         int height = lines.size() * LINE_HEIGHT;
         GL11.glPushMatrix();
         try {
-            GL11.glTranslated(cx, bottom, cz);
+            GL11.glTranslated(0.5, bottom, 0.5);
             GL11.glRotatef(-RenderManager.instance.playerViewY, 0f, 1f, 0f);
             GL11.glRotatef(RenderManager.instance.playerViewX, 1f, 0f, 0f);
             GL11.glScalef(-scale, -scale, scale);
