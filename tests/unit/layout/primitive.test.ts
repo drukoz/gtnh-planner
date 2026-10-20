@@ -7,8 +7,12 @@
 
 import { describe, it, expect } from 'vitest';
 import { connectionSpans, connectionsGraph } from '../../../src/client/connections/model.ts';
-import { placeUnits, unitsFromPlan } from '../../../src/server/layout/arrange.ts';
+import { handRunSurroundings, placeUnits, unitsFromPlan } from '../../../src/server/layout/arrange.ts';
+import { headWidthFor, routeInternal } from '../../../src/server/layout/internal.ts';
 import { layoutLine } from '../../../src/server/layout/layout.ts';
+import { buildMode } from '../../../src/server/layout/modes/mode.ts';
+import { resolveParts } from '../../../src/server/layout/parts.ts';
+import { tierGroups, transformerStages } from '../../../src/server/layout/power.ts';
 import { projectorPayload } from '../../../src/server/projector/payload.ts';
 import { OPPOSITE, step, type Rotation, type Vec3 } from '../../../src/shared/layout/geometry.ts';
 import type { Layout, LayoutBlock } from '../../../src/shared/types/layout.ts';
@@ -308,6 +312,72 @@ describe('primitive machines next to the power head', () => {
     const mine = new Set(own.map((b) => key(b.pos)));
     expect(layout.blocks.filter((b) => !mine.has(key(b.pos)) && own.some((c) => adjacent(c.pos, b.pos))).map((b) => `${b.role} ${b.label}`)).toEqual([]);
     expect(Math.min(...own.map((b) => b.pos[0])) - layout.origin[0]).toBe(4);
+  });
+});
+
+describe('primitive machines beside what the line lays', () => {
+  // two EBFs, one in each row, and a furnace after the one in row N. GT takes an EBF's input hatch only on its bottom
+  // layer, so its Oxygen hatch faces a side: in row N, east, toward the furnace that follows it there, and the Oxygen's
+  // pipe or conduit stands in front of that hatch
+  const plan = () => makePlan([
+    { id: 'e', mteId: IDS.EBF, count: 2, tier: 2, euPerTick: 120, inputs: [['t:dust@0', 1], ['fluid:oxygen', 10]], outputs: [['t:ingot@0', 1]] },
+    { id: 'b', mteId: BRICKED, count: 1, euPerTick: 0, name: 'Bricked Blast Furnace', inputs: [['t:ingot@0', 1]], outputs: [['t:steel@0', 1]] }],
+    { flows: [{ from: 'raw', to: 'e', key: 't:dust@0', perSecond: 1 }, { from: 'raw', to: 'e', key: 'fluid:oxygen', perSecond: 20 },
+      { from: 'e', to: 'b', key: 't:ingot@0', perSecond: 1 }, { from: 'b', to: 'out', key: 't:steel@0', perSecond: 1 }] });
+
+  it.each(MODES)('%s: nothing of the line touches the furnace, the pipe at its neighbour\'s side hatch included', async (mode) => {
+    const layout = await laid(mode, 0, plan());
+    expect(layout.status).toBe('ok');
+    const own = ownBlocks(layout, 'b');
+    const mine = new Set(own.map((b) => key(b.pos)));
+    expect(layout.blocks.filter((b) => !mine.has(key(b.pos)) && own.some((c) => adjacent(c.pos, b.pos))).map((b) => `${b.role} ${b.label}`)).toEqual([]);
+    expect(layout.warnings.filter((w) => w.code === 'route_failed')).toEqual([]);
+  });
+
+  // a macerator in row N and a furnace in row S (z 4–6, x 2–4, 4 high, its front row z 3 kept free); a port moved to
+  // the line's back corner past the furnace (5 0 7), whose shortest way runs along the furnace's back or side
+  const corner = () => {
+    const pack = primitivePack();
+    const units = unitsFromPlan(pack, makePlan([{ id: 'm', mteId: IDS.MACERATOR, count: 1, euPerTick: 30 },
+      { id: 'b', mteId: BRICKED, count: 1, euPerTick: 0, name: 'Bricked Blast Furnace', inputs: [['t:iron@0', 1]], outputs: [['t:steel@0', 1]] }])).units;
+    const stages = transformerStages(tierGroups(units.filter((u) => u.electric).map((u) => ({ tier: u.tier, euPerTick: u.euPerTick }))), 1);
+    const placement = placeUnits(units, { headWidth: headWidthFor(stages), portSpacing: 0, supplyTier: 1 });
+    const furnace = placement.blocks.filter((b) => b.stepId === 'b');
+    expect([Math.min(...furnace.map((b) => b.pos[0])), Math.max(...furnace.map((b) => b.pos[0])), Math.max(...furnace.map((b) => b.pos[2])), placement.size])
+      .toEqual([2, 4, 6, [6, 4, 8]]);
+    const touching = (cells: ReadonlyArray<{ pos: Vec3 }>) => cells.filter((c) => furnace.some((b) => adjacent(b.pos, c.pos))).map((c) => c.pos);
+    return { pack, stages, placement, furnace, touching };
+  };
+
+  it('keeps every cable off the cells around a furnace, even where its shortest way would pass there', () => {
+    const { pack, stages, placement, touching } = corner();
+    placement.units.find((u) => u.stepId === 'm')!.ports.power = [5, 0, 7];
+    const r = routeInternal({ pack, parts: resolveParts(pack), placement, occupied: [], stages, fluids: [], tailFluidY: 1, groupTier: 1 });
+    const cables = r.blocks.filter((b) => b.role === 'cable');
+    expect(cables.some((b) => key(b.pos) === '5,0,7')).toBe(true);
+    expect(touching(cables)).toEqual([]);
+    expect(r.warnings.filter((w) => w.code === 'route_failed')).toEqual([]);
+    // the cells it keeps off: every one face to face with the furnace, none of the furnace's own
+    const around = handRunSurroundings(placement);
+    expect([around.length, around.every((p) => touching([{ pos: p }]).length === 1), cables.some((b) => around.some((p) => key(p) === key(b.pos)))])
+      .toEqual([new Set(around.map(key)).size, true, false]);
+  });
+
+  it("keeps the EnderIO fluid conduit's risers off the cells around a furnace", () => {
+    const { pack, placement, touching } = corner();
+    // the macerator turned into a machine that takes Molten Iron through a port on its top, moved to the back corner
+    pack.machines.set(IDS.MACERATOR, { ...pack.machines.get(IDS.MACERATOR)!, kind: 'other' });
+    const m = placement.units.find((u) => u.stepId === 'm')!;
+    m.io = { ...m.io, fluidIn: ['fluid:molten.iron'] };
+    m.ports.fluidIn = [[5, 0, 7]];
+    m.ports.fluidInSides = [0];
+    const plan = makePlan([{ id: 'm', mteId: IDS.MACERATOR, count: 1, inputs: [['fluid:molten.iron', 144]] }],
+      { flows: [{ from: 'raw', to: 'm', key: 'fluid:molten.iron', perSecond: 1 }] });
+    const r = buildMode('enderio', { pack, plan, parts: resolveParts(pack), placement, network: null });
+    const fluid = r.blocks.filter((b) => b.conduits?.some((c) => c.kind !== 'item'));
+    expect(fluid.some((b) => key(b.pos) === '5,0,7')).toBe(true);
+    expect(touching(fluid)).toEqual([]);
+    expect(r.warnings.filter((w) => w.code === 'route_failed')).toEqual([]);
   });
 });
 

@@ -44,7 +44,7 @@ import type {
 import type { Pack } from '../../../shared/types/pack.ts';
 import type { BomLine, Plan, PlanFlow, PlanWarning } from '../../../shared/types/plan.ts';
 import { comparePos } from '../../world/graph.ts';
-import type { HatchKind, HostConfig, LocalBlock, PlacedUnit, Placement } from '../arrange.ts';
+import { handRunSurroundings, type HatchKind, type HostConfig, type LocalBlock, type PlacedUnit, type Placement } from '../arrange.ts';
 import {
   assignChannels, fluidFilterFor, itemFilterFor, pickFluidConduit, speedUpgradesFor, type ChannelEnd, type ChannelLink, type ChannelPlan,
 } from '../conduits.ts';
@@ -829,11 +829,12 @@ function fluidLine(input: ModeInput, nets: readonly FluidNet[], items: ItemLine 
   const need: Record<SideName, number> = { extract: busiest(planned, 'extract'), insert: busiest(planned, 'insert') };
   const { part, kind, short } = pickFluidConduit(parts, need);
 
-  // a riser may cross a free cell or an Item Conduit cell, never a unit, reserved air, a power port or a chest
+  // a riser may cross a free cell or an Item Conduit cell, never a unit, reserved air, a power port, a chest or a cell
+  // beside a unit run by hand, which nothing of the line touches
   const blocked = new Set([
     ...placement.blocks.map((b) => posKey(b.pos)), ...placement.reserved.map(posKey),
     ...placement.units.flatMap((u) => (u.ports.power === null ? [] : [posKey(u.ports.power)])),
-    ...(items?.chests ?? []).map((c) => posKey(c.pos)),
+    ...(items?.chests ?? []).map((c) => posKey(c.pos)), ...handRunSurroundings(placement).map(posKey),
   ]);
   const network = fluidNetwork(placement, ports.map((f) => f.pos), ends.length, blocked);
   const laidCells = new Set(network.cells.map(posKey));

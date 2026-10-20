@@ -23,7 +23,7 @@ import { DIRS, posKey, step, type Vec3 } from '../../shared/layout/geometry.ts';
 import { FACES } from '../../shared/types/assets.ts';
 import type { Machine, Pack } from '../../shared/types/pack.ts';
 import type { Plan, PlanWarning } from '../../shared/types/plan.ts';
-import type { HostCover, LocalBlock, Placement, PlacedUnit } from './arrange.ts';
+import { handRunSurroundings, type HostCover, type LocalBlock, type Placement, type PlacedUnit } from './arrange.ts';
 import { growTree, linkBits, type PathBounds, type PathOptions, type TreeResult } from './path.ts';
 import { coverRateWarning, machineRef, pickCable, pickFluidPipe, pickPump, pickTransformer, type Parts } from './parts.ts';
 import { bankLossEUt, deliveredVolts, LOSS_WARN_FRACTION, tierGroups, transformerStages, type Stage, type Stages } from './power.ts';
@@ -189,6 +189,8 @@ class Grid {
     for (const b of input.placement.blocks) this.taken.add(posKey(b.pos));
     for (const b of input.occupied) this.taken.add(posKey(b.pos));
     for (const p of input.placement.reserved) this.taken.add(posKey(p));
+    // nothing of the line touches a unit run by hand: no cable or pipe on a cell beside it
+    for (const p of handRunSurroundings(input.placement)) this.taken.add(posKey(p));
   }
 
   isTaken(p: Vec3): boolean {
@@ -787,7 +789,8 @@ function pumpCovers(input: InternalInput, plans: readonly FluidPlan[], pipeAt: R
 
 /**
  * The power head, the cable trees per feed tier and the fluid-pipe trees, on cells inside the line that no unit, mode
- * block, reserved air cell or earlier route uses. Without `stages` (no electric unit) nothing is wired.
+ * block, reserved air cell or earlier route uses and that touch no unit run by hand (`handRunSurroundings`). Without
+ * `stages` (no electric unit) nothing is wired.
  */
 export function routeInternal(input: InternalInput): InternalResult {
   const { placement, stages } = input;

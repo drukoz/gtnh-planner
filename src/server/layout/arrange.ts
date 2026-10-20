@@ -957,10 +957,12 @@ function lowestFeedFirst(units: readonly Unit[], feedTier: (u: Unit) => number |
  * unit fed at another tier than the head's last column keeps a column away from it, so cables of two tiers never have
  * to touch (spec §3.5): their power ports stay at least two cells apart.
  * A unit run by hand (`Unit.manual`) comes after all the others, so nothing of the line has to pass it and it stands
- * near the tail chests; it stands one block back from the spine, its front row kept empty (`reserved`), and a column
- * from the power head, so nothing of the line touches it and its controller is in reach. A venting steam unit (`Unit.vent`) faces the spine with its
- * output side up (`PlacedUnit.outputSide`), the cell above it (its vent: GT's `MTEBasicMachineBronze.allowToCheckRecipe`
- * waits while a cover or a block with a hit box is there) and the one behind it (its steam inlet) kept empty.
+ * near the tail chests; it stands one block back from the spine, its front row kept empty (`reserved`), a column from
+ * the power head and off every cell its neighbour keeps beside it (a side port, whose pipe would touch it), so nothing
+ * of the line touches it (the routing keeps off the cells around it: `handRunSurroundings`) and its controller is in
+ * reach. A venting steam unit (`Unit.vent`) faces the spine with its output side up (`PlacedUnit.outputSide`), the cell
+ * above it (its vent: GT's `MTEBasicMachineBronze.allowToCheckRecipe` waits while a cover or a block with a hit box is
+ * there) and the one behind it (its steam inlet) kept empty.
  */
 export function placeUnits(units: readonly Unit[], opts: { headWidth: number; portSpacing: 0 | 1 | 2; supplyTier?: number }): Placement {
   const { headWidth, portSpacing, supplyTier } = opts;
@@ -987,6 +989,9 @@ export function placeUnits(units: readonly Unit[], opts: { headWidth: number; po
   const kept: Record<Row, Set<string>> = { N: new Set(), S: new Set() };
   const reach: Record<Row, number> = { N: headWidth, S: headWidth };
   const fits = (u: Unit, row: Row, x: number) => beside(u, row, x).every((p) => p[0] >= headWidth && !kept[row].has(posKey(p)));
+  // nothing the neighbour keeps beside it may touch a unit run by hand: no cell beside one of its own is one of those
+  const clear = (u: Unit, row: Row, x: number) => u.manual === undefined
+    || !u.cells.some((c) => DIRS.some((_, side) => kept[row].has(posKey(step(localCell(u, row, x, 0, c.pos), side)))));
   const slots: Array<{ u: Unit; row: Row; x: number }> = [];
   for (const u of ordered) {
     const row: Row = cursor.N <= cursor.S ? 'N' : 'S';
@@ -997,7 +1002,7 @@ export function placeUnits(units: readonly Unit[], opts: { headWidth: number; po
     const besideHead = before === null && u.manual !== undefined && supplyTier !== undefined;
     let x = cursor[row] + ((before !== null && (u.multiblock || before.multiblock)) || otherTier || besideHead ? 1 : 0);
     // a port or air cell beside the unit stays off the power head and off the cells its neighbour keeps
-    while ((portSpacing > 0 && portXs(u, row, x).some(near)) || !fits(u, row, x)) x += 1;
+    while ((portSpacing > 0 && portXs(u, row, x).some(near)) || !fits(u, row, x) || !clear(u, row, x)) x += 1;
     for (const px of portXs(u, row, x)) claimed.add(px);
     cursor[row] = x + u.size[0];
     const own = beside(u, row, x);
@@ -1054,6 +1059,26 @@ export function placeUnits(units: readonly Unit[], opts: { headWidth: number; po
   const height = reserved.reduce((h, p) => Math.max(h, p[1] + 1), units.reduce((h, u) => Math.max(h, u.size[1]), 1));
   const size: Vec3 = [tailX + 1, height, dN + dS + 3];
   return { units: placed, size, spineZ, firstX: headWidth, tailX, blocks, reserved };
+}
+
+/**
+ * The cells face to face with a unit run by hand (`Unit.manual`) that are none of its own, sorted by x, y, z: nothing
+ * of the line takes them (the power trees and fluid pipes keep off them, and so does the EnderIO fluid conduit), so
+ * nothing of the line touches its casing.
+ */
+export function handRunSurroundings(placement: Placement): Vec3[] {
+  const hand = new Set(placement.units.filter((u) => u.manual !== undefined).map((u) => u.stepId));
+  if (hand.size === 0) return [];
+  const own = placement.blocks.filter((b) => b.stepId !== undefined && hand.has(b.stepId));
+  const mine = new Set(own.map((b) => posKey(b.pos)));
+  const around = new Map<string, Vec3>();
+  for (const b of own) {
+    for (let side = 0; side < DIRS.length; side++) {
+      const p = step(b.pos, side);
+      if (!mine.has(posKey(p)) && !around.has(posKey(p))) around.set(posKey(p), p);
+    }
+  }
+  return [...around.values()].sort(comparePos);
 }
 
 /** Positions used by two or more blocks, each once, sorted by x, y, z. */
