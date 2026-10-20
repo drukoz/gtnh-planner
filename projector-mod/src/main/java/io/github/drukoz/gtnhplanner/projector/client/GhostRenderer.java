@@ -79,7 +79,7 @@ public final class GhostRenderer {
 
     @SubscribeEvent
     public void onRenderLast(RenderWorldLastEvent e) {
-        if (failed || !session.visibleHere()) return;
+        if (failed || !session.visibleHere() || session.ghostsHidden()) return;
         EntityLivingBase camera = mc.renderViewEntity;
         if (camera == null) return;
         double t = e.partialTicks;

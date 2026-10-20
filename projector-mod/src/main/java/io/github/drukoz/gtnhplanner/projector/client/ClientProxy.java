@@ -32,7 +32,7 @@ public class ClientProxy extends CommonProxy {
 
     /**
      * Reads {@code config/gtnhplannerprojector.properties}, starts the HTTP thread, and registers the
-     * {@code /planner} command, the ghost renderer and the HUD lines on Forge's bus, and the tick and disconnect
+     * {@code /planner} command, the ghost renderer, the aim outline and name tag, and the HUD lines on Forge's bus, and the tick and disconnect
      * handler on FML's bus (which carries tick and network events).
      */
     @Override
@@ -50,6 +50,7 @@ public class ClientProxy extends CommonProxy {
         BlockIcons icons = new BlockIcons();
         ClientCommandHandler.instance.registerCommand(new PlannerCommand(session));
         MinecraftForge.EVENT_BUS.register(new GhostRenderer(session, config, icons));
+        MinecraftForge.EVENT_BUS.register(new AimRenderer(session));
         MinecraftForge.EVENT_BUS.register(new HudOverlay(session));
         FMLCommonHandler.instance().bus().register(new ClientEvents(queue, session, icons));
     }
