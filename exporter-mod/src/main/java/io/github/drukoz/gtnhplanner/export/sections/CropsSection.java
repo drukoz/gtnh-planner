@@ -1,10 +1,14 @@
 package io.github.drukoz.gtnhplanner.export.sections;
 
 import java.io.IOException;
+import java.lang.invoke.MethodHandle;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 
 import net.minecraft.item.ItemStack;
@@ -20,19 +24,24 @@ import io.github.drukoz.gtnhplanner.export.Reflect;
 /**
  * {@code crops}: one line per CropsNH crop card ({@link CropLine}), in the crop registry's registration order, for the
  * planner's crop farms (farms.md §2.7, §5.7). CropsNH is not on the compile classpath, so its own members are called
- * through {@link Reflect}, by the names {@code javap -c -p -constants} shows in {@code cropsnh-2.0.129.jar}:
+ * through {@link Reflect}, each found once by its name and exact type as {@code javap -p -s} shows them in
+ * {@code cropsnh-2.0.129.jar}, on the public class or interface that declares it:
  * <ul>
- * <li>{@code com.gtnewhorizon.cropsnh.farming.registries.CropRegistry}: the public static field {@code instance} and
- * its {@code LinkedList<ICropCard> getAllInRegistrationOrder()};</li>
- * <li>{@code com.gtnewhorizon.cropsnh.api.ICropCard}: {@code String getId()}, {@code String getUnlocalizedName()} (the
- * en_US key of its name), {@code int getTier()}, {@code int getGrowthDuration()}, {@code float getDropChance()},
- * {@code int getMinSeedBedTier()}, {@code Map<ItemStack, Integer> getDropTable()} (each stack with its chance out of
- * 10000), {@code Set<BiomeDictionary.Type> getLikedBiomeTags()}, {@code List<ItemStack> getSoilsForNEI(boolean)} (the
- * soil blocks as items; {@code true} takes the card's cached list), {@code Collection<IGrowthRequirement>
- * getGrowthRequirements()} and {@code ItemStack getSeedItem(ISeedStats)}, called with {@code null} stats: the seed
- * whose NBT names only its crop ({@code NHCropCard.writeNBT} leaves the stats out).</li>
+ * <li>{@code com.gtnewhorizon.cropsnh.farming.registries.CropRegistry}: the public static field
+ * {@code CropRegistry instance} and its {@code LinkedList<ICropCard> getAllInRegistrationOrder()};</li>
+ * <li>{@code com.gtnewhorizon.cropsnh.api.ICropCard}, whatever class a card has: {@code String getId()},
+ * {@code String getUnlocalizedName()} (the en_US key of its name), {@code int getTier()},
+ * {@code int getGrowthDuration()}, {@code float getDropChance()}, {@code int getMinSeedBedTier()},
+ * {@code Map<ItemStack, Integer> getDropTable()} (each stack with its chance out of 10000),
+ * {@code Set<BiomeDictionary.Type> getLikedBiomeTags()}, {@code List<ItemStack> getSoilsForNEI(boolean)} (the soil
+ * blocks as items; {@code true} takes the card's cached list), {@code Collection<IGrowthRequirement>
+ * getGrowthRequirements()} and {@code ItemStack getSeedItem(com.gtnewhorizon.cropsnh.api.ISeedStats)}, called with
+ * {@code null} stats: the seed whose NBT names only its crop ({@code NHCropCard.writeNBT} leaves the stats out).</li>
  * </ul>
- * Minecraft and Forge members (stack sizes, enum names, translations) are called directly. The drop table and the liked
+ * Both have public members without {@code @SideOnly} whose parameter is a client class
+ * ({@code CropRegistry.registerIcons(IIconRegister)}, {@code ICropCard.registerSprites(IIconRegister)}), so asking
+ * either for its methods throws {@link NoClassDefFoundError} on a dedicated server, while a handle resolves only its
+ * own member. Minecraft and Forge members (stack sizes, enum names, translations) are called directly. The drop table and the liked
  * tags are a {@code HashMap} and a {@code HashSet} whose keys have no hash of their own, and the soils come from a hash
  * map of blocks, so CropsNH hands them over in a different order on every run: the line has the drops in
  * {@link CropLine#sortDrops} order, the tags by name and the soils by item key, each soil once, so two exports of one
@@ -43,6 +52,8 @@ import io.github.drukoz.gtnhplanner.export.Reflect;
 public final class CropsSection implements ExportSection {
 
     private static final String CROP_REGISTRY = "com.gtnewhorizon.cropsnh.farming.registries.CropRegistry";
+    private static final String CROP_CARD = "com.gtnewhorizon.cropsnh.api.ICropCard";
+    private static final String SEED_STATS = "com.gtnewhorizon.cropsnh.api.ISeedStats";
 
     @Override
     public String name() {
@@ -61,45 +72,82 @@ public final class CropsSection implements ExportSection {
             ctx.warn("crops: CropsNH is not installed, so the export has no crop table");
             return;
         }
-        Object registry = Reflect.getStatic(CROP_REGISTRY, "instance");
-        Iterable<?> cards = (Iterable<?>) Reflect.call(registry, "getAllInRegistrationOrder");
+        CropsNh nh = new CropsNh();
+        Object registry = Reflect.invoke(nh.instance);
+        Iterable<?> cards = (Iterable<?>) Reflect.invoke(nh.allInRegistrationOrder, registry);
         try (JsonlWriter w = ctx.jsonl("crops")) {
             for (Object card : cards) {
                 try {
-                    writeCard(w, card, ctx);
+                    writeCard(w, nh, card, ctx);
                 } catch (Throwable t) {
-                    ctx.warn("crop " + describe(card) + ": " + t);
+                    ctx.warn("crop " + describe(nh, card) + ": " + t);
                 }
             }
         }
     }
 
+    /** The CropsNH members this section calls (see the class comment), each found once. */
+    private static final class CropsNh {
+
+        final MethodHandle instance;
+        final MethodHandle allInRegistrationOrder;
+        final MethodHandle id;
+        final MethodHandle unlocalizedName;
+        final MethodHandle tier;
+        final MethodHandle growthDuration;
+        final MethodHandle dropChance;
+        final MethodHandle minSeedBedTier;
+        final MethodHandle dropTable;
+        final MethodHandle likedBiomeTags;
+        final MethodHandle soilsForNei;
+        final MethodHandle growthRequirements;
+        final MethodHandle seedItem;
+
+        CropsNh() {
+            Class<?> registry = Reflect.load(CROP_REGISTRY);
+            Class<?> card = Reflect.load(CROP_CARD);
+            instance = Reflect.staticGetter(registry, "instance", registry);
+            allInRegistrationOrder = Reflect.method(registry, "getAllInRegistrationOrder", LinkedList.class);
+            id = Reflect.method(card, "getId", String.class);
+            unlocalizedName = Reflect.method(card, "getUnlocalizedName", String.class);
+            tier = Reflect.method(card, "getTier", int.class);
+            growthDuration = Reflect.method(card, "getGrowthDuration", int.class);
+            dropChance = Reflect.method(card, "getDropChance", float.class);
+            minSeedBedTier = Reflect.method(card, "getMinSeedBedTier", int.class);
+            dropTable = Reflect.method(card, "getDropTable", Map.class);
+            likedBiomeTags = Reflect.method(card, "getLikedBiomeTags", Set.class);
+            soilsForNei = Reflect.method(card, "getSoilsForNEI", List.class, boolean.class);
+            growthRequirements = Reflect.method(card, "getGrowthRequirements", Collection.class);
+            seedItem = Reflect.method(card, "getSeedItem", ItemStack.class, Reflect.load(SEED_STATS));
+        }
+    }
+
     /** Reads every value of the card, then writes its line; a call that throws leaves no line. */
-    private static void writeCard(JsonlWriter w, Object card, ExportContext ctx) throws IOException {
-        String id = (String) Reflect.call(card, "getId");
-        double dropChance = number(card, "getDropChance").doubleValue();
+    private static void writeCard(JsonlWriter w, CropsNh nh, Object card, ExportContext ctx) throws IOException {
+        String id = (String) Reflect.invoke(nh.id, card);
+        double dropChance = number(nh.dropChance, card).doubleValue();
         if (!CropLine.valid(id, dropChance)) {
             ctx.warn(
                 "crop " + id + ": left out, a card needs an id and a finite drop chance (it has " + dropChance + ")");
             return;
         }
-        String unlocalized = (String) Reflect.call(card, "getUnlocalizedName");
+        String unlocalized = (String) Reflect.invoke(nh.unlocalizedName, card);
         String name = ctx.names().translate(unlocalized);
         if (name == null) name = unlocalized != null ? unlocalized : id;
-        int tier = number(card, "getTier").intValue();
-        int duration = number(card, "getGrowthDuration").intValue();
-        int minSeedBedTier = number(card, "getMinSeedBedTier").intValue();
+        int tier = number(nh.tier, card).intValue();
+        int duration = number(nh.growthDuration, card).intValue();
+        int minSeedBedTier = number(nh.minSeedBedTier, card).intValue();
         ItemTable items = ctx.items();
-        List<CropLine.Drop> drops = drops((Map<?, ?>) Reflect.call(card, "getDropTable"), items);
+        List<CropLine.Drop> drops = drops((Map<?, ?>) Reflect.invoke(nh.dropTable, card), items);
         List<String> liked = new ArrayList<>();
-        for (Object tag : (Iterable<?>) Reflect.call(card, "getLikedBiomeTags")) liked.add(((Enum<?>) tag).name());
+        for (Object tag : (Iterable<?>) Reflect.invoke(nh.likedBiomeTags, card)) liked.add(((Enum<?>) tag).name());
         Collections.sort(liked);
-        List<Integer> soils = soils((Iterable<?>) Reflect.call(card, "getSoilsForNEI", true), items);
+        List<Integer> soils = soils((Iterable<?>) Reflect.invoke(nh.soilsForNei, card, true), items);
         List<String> requirements = new ArrayList<>();
-        for (Object r : (Iterable<?>) Reflect.call(card, "getGrowthRequirements")) {
+        for (Object r : (Iterable<?>) Reflect.invoke(nh.growthRequirements, card)) {
             requirements.add(r.getClass().getSimpleName());
         }
-        ItemStack seedStack = (ItemStack) Reflect.call(card, "getSeedItem", (Object) null);
+        ItemStack seedStack = (ItemStack) Reflect.invoke(nh.seedItem, card, null);
         int seed = seedStack != null ? items.intern(seedStack) : CropLine.NO_SEED;
 
         JsonWriter j = w.begin();
@@ -108,9 +156,9 @@ public final class CropsSection implements ExportSection {
         w.end();
     }
 
-    /** What a numeric getter of the card returns: CropsNH's return {@code int} or {@code float}. */
-    private static Number number(Object card, String method) {
-        return (Number) Reflect.call(card, method);
+    /** What a numeric getter of the card returns: CropsNH's {@code int} or {@code float}, boxed. */
+    private static Number number(MethodHandle getter, Object card) {
+        return (Number) Reflect.invoke(getter, card);
     }
 
     /** The drop table as drops in {@link CropLine#sortDrops} order; each stack's item is interned. */
@@ -135,9 +183,9 @@ public final class CropsSection implements ExportSection {
     }
 
     /** The card's id for a warning, or its class when even that call fails. */
-    private static String describe(Object card) {
+    private static String describe(CropsNh nh, Object card) {
         try {
-            return String.valueOf(Reflect.call(card, "getId"));
+            return String.valueOf(Reflect.invoke(nh.id, card));
         } catch (Throwable t) {
             return card == null ? "null" : card.getClass().getName();
         }
