@@ -1,0 +1,103 @@
+// The feeding checker's contract: the structured layout config it reads and the report it gives
+// (architecture §11 entry 50; research `docs/research/machine-feeding.md` §7, the design of a feeding checker; plan
+// `docs/superpowers/plans/2026-10-20-21-feeding-checker.md`).
+// - The first half is the config the checker reads from a layout. fix/feeding writes chips, interface patterns and the
+//   flat `CONFIG_KEYS` on main's routed and AE2 layouts, and add-on 12 Task 6 writes bench grids, Limited Item Filter
+//   counts and patterns. Until a lane adds `LayoutBlock.feed?` to `src/shared/types/layout.ts` the checker reads it
+//   structurally through `FeedBlock`; the lane that adds it moves these types unchanged to `src/shared/types/feed.ts`
+//   and leaves this file re-exporting them (plan open question 1).
+// - The second half is what the checker reports: the thirteen `feed_*` codes, their kinds and the gate (the plan's
+//   Codes table), the scenarios, the options and the time constants.
+// Pure TypeScript: nothing from node:* may be imported here.
+
+import type { StuffKey } from '../../../shared/keys.ts';
+import type { Vec3 } from '../../../shared/layout/geometry.ts';
+import type { Face } from '../../../shared/types/assets.ts';
+import type { ConduitFilter, LayoutBlock } from '../../../shared/types/layout.ts';
+
+// ---- The layout config the checker reads (architecture entry 50) ----
+export interface ItemFilterSpec { mode: 'whitelist' | 'blacklist'; keys: StuffKey[] }
+export type ChipKind = 'responder' | 'extractor' | 'broadcaster' | 'stock_keeper' | 'terminator' | 'overflow';
+/** One chip of a Routed Interface Pipe, in chip-slot order (at most 4). A new chip: responder and extractor whitelist [], broadcaster blacklist []. */
+export interface RoutedChipSpec {
+  kind: ChipKind;
+  filter?: ItemFilterSpec;                              // responder, extractor, broadcaster, terminator
+  stock?: Array<{ key: StuffKey; count: number }>;      // stock keeper: up to 9, counts 1–255
+  requestMode?: 'when_missing' | 'when_empty' | 'infinite';   // stock keeper; default 'when_missing'
+  priority?: number;                                    // the chip's own priority setting; default 0
+}
+/** A processing pattern: whole amounts per craft; item keys only once encodable. */
+export interface PatternSpec { inputs: Array<{ key: StuffKey; amount: number }>; outputs: Array<{ key: StuffKey; amount: number }> }
+export interface InterfaceSpec {
+  patterns: PatternSpec[]; blocking: boolean; smartBlocking?: boolean;
+  lock?: 'none' | 'until_result';                       // Locking Card on "Until crafting result is returned"
+  targets?: Face[];                                     // a wrench target, in world faces like CoverSpec.face; absent = every neighbour
+  dual?: boolean;                                       // ae2fc Dual Interface: fluids go in as fluids
+}
+/** Auto Workbench: mode 'normal' = GT++ mode 0; grid top row first, the planner's concrete items. */
+export interface BenchSpec { mode: 'normal'; grid: Array<StuffKey | null>; throughput: 0 | 1 | 2 | 3 }
+/** An ME Export Bus feeding a step without an encodable pattern (research §3.5): its config slots in order, its Acceleration Cards. */
+export interface ExportBusSpec { keys: StuffKey[]; cards?: 0 | 1 | 2 | 3 | 4 }
+export interface FeedSpec { chips?: RoutedChipSpec[]; interface?: InterfaceSpec; bench?: BenchSpec; exportBus?: ExportBusSpec }
+/** A conduit side's filter that may be a Limited Item Filter (`item` = PART_KEYS.limitedFilter). */
+export type FeedConduitFilter = ConduitFilter & { limits?: Array<{ key: StuffKey; count: number }> };
+/** A layout block that may carry the structured config and add-on 12's shared-machine steps. */
+export type FeedBlock = LayoutBlock & { feed?: FeedSpec; stepIds?: string[] };
+/** The flat `LayoutBlock.config` keys the checker reads (add-on 15's words, architecture entry 50 item 4). */
+export const CONFIG_KEYS = { multiStack: 'multiStack', inputFilter: 'inputFilter', inputFromOutputSide: 'inputFromOutputSide',
+  autoOutput: 'autoOutput', limited: 'limited', inputSeparation: 'inputSeparation', circuit: 'circuit',
+  lock: 'lock' /* output bus: the item's name, add-on 15 */, exportFilter: 'exportFilter' /* ME Export Bus: item names */ } as const;
+
+// ---- What the checker reports ----
+export type FeedKind = 'overfill' | 'deadlock' | 'livelock' | 'starvation' | 'deletion';
+export type FeedCode = 'feed_crowded' | 'feed_overfill' | 'feed_bench_eject' | 'feed_bench_delete' | 'feed_bench_stuck' | 'feed_no_route'
+  | 'feed_pool_starve' | 'feed_fluid_packet' | 'feed_pattern_unencodable' | 'feed_starved' | 'feed_slow' | 'feed_leak' | 'feed_churn';
+/** The kind of each code (the plan's Codes table, in table order). */
+export const FEED_KINDS: Readonly<Record<FeedCode, FeedKind>> = Object.freeze({
+  feed_crowded: 'deadlock', feed_overfill: 'overfill', feed_bench_eject: 'overfill', feed_bench_delete: 'deletion', feed_bench_stuck: 'deadlock',
+  feed_no_route: 'deadlock', feed_pool_starve: 'starvation', feed_fluid_packet: 'deadlock', feed_pattern_unencodable: 'deadlock',
+  feed_starved: 'starvation', feed_slow: 'starvation', feed_leak: 'starvation', feed_churn: 'livelock',
+});
+/**
+ * The codes that gate a layout: the Codes table's "yes" rows, in table order. `FeedingReport.ok` is true when no `certain`
+ * finding has one of them (research §7's acceptance list, plus `feed_no_route`, `feed_pattern_unencodable` and `feed_starved`).
+ */
+export const FEED_GATE_CODES: readonly FeedCode[] = Object.freeze([
+  'feed_crowded', 'feed_bench_eject', 'feed_bench_delete', 'feed_bench_stuck', 'feed_no_route', 'feed_pool_starve', 'feed_fluid_packet',
+  'feed_pattern_unencodable', 'feed_starved',
+] as const);
+export type ScenarioName = 'steady' | 'fast_supplier' | 'late_input' | 'restart' | 'multistack_on';
+/** The scenarios `checkFeeding` runs by default, in report order. */
+export const SCENARIOS: readonly ScenarioName[] = Object.freeze(['steady', 'fast_supplier', 'late_input', 'restart', 'multistack_on'] as const);
+/**
+ * One thing the checker found. `phase` `static`: a rule on the layout alone; `sim`: the tick simulation found it in `scenario`.
+ * `certainty` `certain`: it will happen; `risk`: it can, under a schedule or a setting the layout does not fix (a risk never gates).
+ */
+export interface FeedFinding {
+  code: FeedCode; kind: FeedKind; phase: 'static' | 'sim'; certainty: 'certain' | 'risk'; scenario?: ScenarioName;
+  stepId?: string; machine: string /* `${name} at ${x} ${y} ${z}`, world position */; pos: Vec3; key?: StuffKey;
+  text: string; tick?: number; count?: number;
+}
+export interface FeedUnknown { code: string; text: string; pos?: Vec3; stepId?: string }
+export interface InputReport {
+  stepId: string; machine: string; pos: Vec3; key: StuffKey; plannedPerSecond: number;
+  deliveredPerSecond: Partial<Record<ScenarioName, number>>; burst?: { before: number; after: number };
+}
+export interface ScenarioSummary {
+  name: ScenarioName; ticks: number; runs: Record<string, number> /* by stepId */; out: Record<StuffKey, number> /* reached output chests or ME */;
+}
+export interface FeedingOptions {
+  ticks?: number; scenarios?: readonly ScenarioName[]; restartAt?: number; ae2Coprocessors?: number /* 0 */;
+  ae2FluidStock?: boolean /* false: ME holds no fluid */; slowTolerance?: number; exhaustive?: boolean /* tests: every entity every tick */;
+}
+export interface FeedingReport { ok: boolean; findings: FeedFinding[]; inputs: InputReport[]; unknowns: FeedUnknown[]; scenarios: ScenarioSummary[] }
+
+// ---- Time (ticks of 1/20 s) ----
+// `DEFAULT_TICKS`: one scenario is 20 minutes. A restart is at `restartAt` (default `Math.floor(ticks / 2)`), and rates are
+// taken over the second half `[⌊ticks/2⌋, ticks)`. `STALL_TICKS`: how long a blocked output, a refused slot or a recipe
+// that never ran counts as stuck. `LATE_TICKS`: how long `late_input` holds an input back. `FAST_FACTOR`: how many times
+// faster `fast_supplier` runs its supplier. `SLOW_TOLERANCE`: `feed_slow` fires below `(1 − SLOW_TOLERANCE)` of the plan.
+// `CHURN_ITEMS`: `feed_churn` fires from this many items pulled back out of an input bus, bounced or wandering. `BURST_TICKS`: the
+// windows before and after `restartAt` over which `InputReport.burst` counts deliveries.
+export const TICKS_PER_SECOND = 20, DEFAULT_TICKS = 24_000, STALL_TICKS = 1_200, LATE_TICKS = 1_200, FAST_FACTOR = 10,
+  SLOW_TOLERANCE = 0.1, CHURN_ITEMS = 64, BURST_TICKS = 1_200;
