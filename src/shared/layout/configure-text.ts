@@ -3,11 +3,14 @@
 // `covers` and `config` by this one formatter, so the configure build steps, the 3D hover and the 3D click info say
 // the same thing. The same goes for an EnderIO conduit face (architecture "EnderIO conduits, granted change requests
 // (add-on 11)"): its mode, and for each side its channel colour, filter, speed upgrades, round robin, priority and
-// redstone setting, written from the block's `conduits`. Pure TypeScript shared by server and browser: nothing from
-// node:* may be imported here.
+// redstone setting, written from the block's `conduits`. And for the structured feeding configuration (architecture §11
+// entry 51): each routed interface pipe's chips with their filter mode and items, and each ME interface's patterns and
+// blocking mode, written from the block's `feed`. Pure TypeScript shared by server and browser: nothing from node:* may
+// be imported here.
 
 import type { StuffKey } from '../keys.ts';
 import type { Face } from '../types/assets.ts';
+import type { ChipKind, FeedSpec, InterfaceSpec, PatternSpec, RoutedChipSpec } from '../types/feed.ts';
 import type { ConduitExtract, ConduitFace, ConduitFilter, ConduitInsert, ConduitKind, CoverSpec, LayoutBlock } from '../types/layout.ts';
 import { CONDUIT_MODE_NAMES, CONDUIT_NAMES, DYE_NAMES, REDSTONE_NAMES } from './enderio.ts';
 import { fmtInt, fmtRate, joinNames } from './format.ts';
@@ -34,11 +37,30 @@ function modeText(mode: Value, filter: readonly string[]): string {
   }
 }
 
+/** `<n> <thing>` or `<n> <thing>s`. */
+function counted(n: number, thing: string): string {
+  return `${fmtInt(n)} ${thing}${n === 1 ? '' : 's'}`;
+}
+
+/**
+ * An ME Export Bus on a cable's face (architecture §11 entry 51: the AE2 mode feeds a machine that makes only fluids
+ * with one, `settings.mode` 'me_export'): the items to put in its filter slots, then its Capacity and Acceleration Cards.
+ */
+function meExportText(cover: CoverSpec, nameOf: (k: StuffKey) => string): string {
+  const { capacityCards, accelerationCards } = cover.settings;
+  const cards = [...(typeof capacityCards === 'number' && capacityCards > 0 ? [counted(capacityCards, 'Capacity Card')] : []),
+    ...(typeof accelerationCards === 'number' && accelerationCards > 0 ? [counted(accelerationCards, 'Acceleration Card')] : [])];
+  return `${nameOf(cover.item)} on the ${faceName(cover.face)} face: put ${joinNames((cover.filter ?? []).map(nameOf))} in its filter slots`
+    + `${cards.length === 0 ? '' : `; ${cards.join(', ')}`}`;
+}
+
 /**
  * `<cover name> on the <face> face: <settings>`: the mode first, then `allow input` (only when true), then the rate
- * with its unit, then any other setting as `<key> <value>` in insertion order (`unit` goes with the rate).
+ * with its unit, then any other setting as `<key> <value>` in insertion order (`unit` goes with the rate). An ME Export
+ * Bus says what goes in its filter and its cards (`meExportText`).
  */
 export function coverText(cover: CoverSpec, nameOf: (k: StuffKey) => string): string {
+  if (cover.settings.mode === 'me_export') return meExportText(cover, nameOf);
   const { mode, allowInput, rate, unit, ...rest } = cover.settings;
   const parts: string[] = [];
   if (mode !== undefined) parts.push(modeText(mode, (cover.filter ?? []).map(nameOf)));
@@ -65,6 +87,32 @@ function inputFromOutputSideText(allowed: boolean): string {
     + 'that side)';
 }
 
+/**
+ * A GT basic machine's Multi Stack Input off (GT 5.09.54 `MTEBasicMachine.mDisableMultiStack`): then an item already in
+ * an input slot goes only into that slot (`allowPutStack`), so one item cannot fill every input slot and keep the
+ * others out. A sneaking Soldering Iron click on the front switches it (`onSolderingToolRightClick` asks for the front
+ * as the wrench-grid side) and the chat names the new state.
+ */
+const MULTI_STACK_OFF = 'Multi Stack Input off: sneak-right-click its front with a Soldering Iron (where a neighbour covers the front, the edge '
+  + 'of the wrench grid toward it) until the chat says "Multi Stack Input Off"';
+
+/**
+ * An input bus's Limiting mode on (GT 5.09.54 `MTEHatchInputBus.disableLimited`, off when built): then an item already
+ * in a slot goes only into that slot (`limitedAllowPutStack`). A sneaking Screwdriver click steps through the bus's
+ * sorting and limiting modes and the chat names both.
+ */
+const LIMITING_ON = 'Limiting mode on: sneak-right-click it with a Screwdriver until the chat says "Limiting mode On"';
+
+/**
+ * A multiblock controller's Input Separation off (GT 5.09.54 `MTEMultiBlockBase.inputSeparation`, on when built for a
+ * controller that supports it, such as the EBF): then all its input buses are checked together, so a recipe whose items
+ * arrive on different buses can start. The controller window has the button; on the EBF a Screwdriver click on the
+ * controller switches it too, and the chat names the new state (`GT5U.machines.separatebus.false`). Research
+ * machine-feeding §1.2 and §3.7, whose words these are.
+ */
+const INPUT_SEPARATION_OFF = 'Input Separation off: the controller window\'s Input Separation button (on the EBF, a Screwdriver right-click on '
+  + 'the controller) until the chat says "Input buses aren\'t separated"';
+
 /** One setting of a block in a builder's words. */
 function configText(key: string, v: Value): string {
   switch (key) {
@@ -76,6 +124,9 @@ function configText(key: string, v: Value): string {
     case 'pattern': return `pattern ${valueText(v)}`;
     case 'blockingMode': return `blocking mode ${v === true ? 'on' : 'off'}`;
     case 'exportFilter': return `export ${valueText(v)}`;
+    case 'multiStack': return v === true ? 'Multi Stack Input on' : MULTI_STACK_OFF;
+    case 'limited': return v === true ? LIMITING_ON : 'Limiting mode off';
+    case 'inputSeparation': return v === false ? INPUT_SEPARATION_OFF : 'Input Separation on';
     default: return `${key}: ${valueText(v)}`;
   }
 }
@@ -85,9 +136,70 @@ export function configTexts(config: Readonly<Record<string, Value>>): string[] {
   return Object.entries(config).map(([key, value]) => configText(key, value));
 }
 
-/** Everything to set on a block: its covers' texts in order, then its settings' texts. */
-export function configuredLines(block: Pick<LayoutBlock, 'covers' | 'config'>, nameOf: (k: StuffKey) => string): string[] {
-  return [...(block.covers ?? []).map((c) => coverText(c, nameOf)), ...configTexts(block.config ?? {})];
+// ---- Chips and patterns (architecture §11 entry 51) ----
+
+/** Project Red's chip names (`item.projectred.transportation.routingchip|<n>.name` in ProjRed-4.12.44-GTNH). */
+const CHIP_NAMES: Readonly<Record<ChipKind, string>> = {
+  responder: 'Item Responder Chip', extractor: 'Item Extractor Chip', broadcaster: 'Item Broadcaster Chip', stock_keeper: 'Item Stock Keeper Chip',
+  terminator: 'Item Terminator Chip', overflow: 'Item Overflow Responder Chip',
+};
+const REQUEST_MODES: Readonly<Record<NonNullable<RoutedChipSpec['requestMode']>, string>> = {
+  when_missing: 'when missing', when_empty: 'when empty', infinite: 'infinite',
+};
+
+/**
+ * One chip in a builder's words (research machine-feeding §3.7): `<chip name> (<whitelist|blacklist>: <names>)`, an empty
+ * list read as nothing; a Broadcaster's whitelist adds that a new one is a blacklist (`TChipFilter`: a broadcaster
+ * starts with `filterExclude` on, every other chip off); a Stock Keeper names its request mode and each item's count;
+ * a preference other than 0 is named last.
+ */
+function chipText(chip: RoutedChipSpec, nameOf: (k: StuffKey) => string): string {
+  const name = CHIP_NAMES[chip.kind];
+  const preference = chip.priority === undefined || chip.priority === 0 ? '' : `, preference ${chip.priority}`;
+  if (chip.kind === 'stock_keeper') {
+    const stock = (chip.stock ?? []).map((s) => `${nameOf(s.key)} ${fmtInt(s.count)}`).join(', ');
+    return `${name} (${REQUEST_MODES[chip.requestMode ?? 'when_missing']}${preference}): ${stock}`;
+  }
+  if (chip.filter === undefined) return preference === '' ? name : `${name} (${preference.slice(2)})`;
+  const names = chip.filter.keys.length === 0 ? 'nothing' : joinNames(chip.filter.keys.map(nameOf));
+  const switchIt = chip.kind === 'broadcaster' && chip.filter.mode === 'whitelist' ? '; a new one is a blacklist, so switch its filter to whitelist' : '';
+  return `${name} (${chip.filter.mode}: ${names}${switchIt}${preference})`;
+}
+
+/** "1× A + 4× B → 1× C": a pattern's whole amounts. */
+function patternText(p: PatternSpec, nameOf: (k: StuffKey) => string): string {
+  const side = (list: PatternSpec['inputs']): string => list.map((s) => `${fmtInt(s.amount)}× ${nameOf(s.key)}`).join(' + ');
+  return `${side(p.inputs)} → ${side(p.outputs)}`;
+}
+
+/** An ME interface's patterns (numbered when there are two or more), blocking mode and Locking Card. */
+function interfaceTexts(spec: InterfaceSpec, nameOf: (k: StuffKey) => string): string[] {
+  const n = spec.patterns.length;
+  const lines = n === 0 ? [] : [`${fmtInt(n)} processing pattern${n === 1 ? '' : 's'}`];
+  spec.patterns.forEach((p, i) => lines.push(n === 1 ? `pattern ${patternText(p, nameOf)}` : `pattern ${fmtInt(i + 1)}: ${patternText(p, nameOf)}`));
+  lines.push(`blocking mode ${spec.blocking ? 'on' : 'off'}`);
+  if (spec.smartBlocking === true) lines.push('smart blocking on');
+  if (spec.lock === 'until_result') lines.push('Locking Card, Lock Crafting: Until crafting result is returned');
+  return lines;
+}
+
+/**
+ * The structured feeding configuration in a builder's words: a routed interface pipe's chips in chip-slot order as one
+ * line (`chips: <chip> + <chip>`), then an ME interface's patterns and settings. An ME Export Bus's filter and cards
+ * (`exportBus`) are worded once, by its cover on the same block (`coverText`), and an Auto Workbench's grid (add-on 12)
+ * has no words here yet.
+ */
+export function feedTexts(feed: FeedSpec | undefined, nameOf: (k: StuffKey) => string): string[] {
+  if (feed === undefined) return [];
+  const lines: string[] = [];
+  if (feed.chips !== undefined && feed.chips.length > 0) lines.push(`chips: ${feed.chips.map((c) => chipText(c, nameOf)).join(' + ')}`);
+  if (feed.interface !== undefined) lines.push(...interfaceTexts(feed.interface, nameOf));
+  return lines;
+}
+
+/** Everything to set on a block: its covers' texts in order, then its settings' texts, then its chips or patterns. */
+export function configuredLines(block: Pick<LayoutBlock, 'covers' | 'config' | 'feed'>, nameOf: (k: StuffKey) => string): string[] {
+  return [...(block.covers ?? []).map((c) => coverText(c, nameOf)), ...configTexts(block.config ?? {}), ...feedTexts(block.feed, nameOf)];
 }
 
 // ---- EnderIO conduit faces ----

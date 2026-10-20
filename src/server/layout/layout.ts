@@ -13,6 +13,7 @@ import {
   DIRS, posKey, rotateConnections, rotatedSize, rotateFace, rotateFacing, sideToward, step, toWorld, type Rotation, type Vec3,
 } from '../../shared/layout/geometry.ts';
 import { FACES } from '../../shared/types/assets.ts';
+import type { FeedSpec } from '../../shared/types/feed.ts';
 import type {
   ConduitFace, ConduitSpec, CoverSpec, Hookup, Layout, LayoutBlock, LayoutPowerContext, LayoutStatus, LayoutTap,
 } from '../../shared/types/layout.ts';
@@ -25,6 +26,7 @@ import { contextFromScan } from '../world/context.ts';
 import { ENERGY_HATCH_RE, simpleClassName } from '../world/facts.ts';
 import { RAIN_OUTAGE_SECONDS } from '../world/power.ts';
 import { addedBlocks, attachCovers, placeUnits, replacedCasings, unitsFromPlan, type LocalBlock, type Placement, type Unit } from './arrange.ts';
+import { feedingWarnings } from './feed-rules.ts';
 import {
   chooseLogisticsNetwork, choosePowerNetwork, choosePowerTap, ghostBlocks, logisticsHookup, nearestTap, powerHookup, tapCableAmps,
   type HookupBuild, type PowerHookupBuild, type RouteWorld,
@@ -357,7 +359,15 @@ function worldBlock(b: LocalBlock, f: Frame): LayoutBlock {
     ...(b.conduits === undefined ? {} : { conduits: b.conduits.map((c) => worldConduit(c, r)) }),
     ...(b.tail === undefined ? {} : { tail: { side: b.tail.side, keys: [...b.tail.keys] } }),
     ...(b.hatch === undefined ? {} : { hatch: b.hatch }),
+    ...(b.feed === undefined ? {} : { feed: worldFeed(b.feed, r) }),
   };
+}
+
+/** The feeding configuration copied, an ME interface's wrench targets (the only faces it names) turned with its block. */
+function worldFeed(feed: FeedSpec, r: Rotation): FeedSpec {
+  const copy = structuredClone(feed);
+  if (copy.interface?.targets !== undefined) copy.interface.targets = copy.interface.targets.map((f) => rotateFace(f, r));
+  return copy;
 }
 
 // ---- Hookups (stage 8) ----
@@ -615,9 +625,11 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
   // the casings of layers the layout added to an exported structure are parts too: Plan 2 lists the exported one
   const bom = bomFromBlocks(blocks, [...line.mode.extraParts, ...addedBlocks(units), ...(fit?.optional ?? [])]);
   // without a base the warning that says to pick one comes first (Review Focus 1)
+  // the static feeding rules read the line as laid out (architecture §11 entry 51)
   const warnings = dedupeWarnings([
     ...(base === null ? siteWarnings : []), ...unitWarnings, ...line.warnings, ...(supplyRun.warning === null ? [] : [supplyRun.warning]),
     ...(base === null ? [] : siteWarnings), ...supplyWarnings, ...(hooked?.warnings ?? []), ...unknownParts(pack, parts, blocks, bom, nameOf),
+    ...feedingWarnings({ pack, plan, layout: { mode, blocks } }),
   ]);
 
   // stage 9

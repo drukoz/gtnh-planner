@@ -10,10 +10,12 @@ import { joinNames } from '../../../shared/layout/format.ts';
 import { OPPOSITE, posKey, step, type Vec3 } from '../../../shared/layout/geometry.ts';
 import { FACES } from '../../../shared/types/assets.ts';
 import type { ConduitFace, ConduitKind } from '../../../shared/types/layout.ts';
-import type { Pack } from '../../../shared/types/pack.ts';
+import type { MachineKind, Pack } from '../../../shared/types/pack.ts';
 import type { BomLine, BuildStep, LogisticsMode, Plan, PlanFlow, PlanWarning } from '../../../shared/types/plan.ts';
 import type { LogisticsNetwork } from '../../../shared/types/world.ts';
+import { comparePos } from '../../world/graph.ts';
 import type { BlockConfig, HostConfig, HostCover, LocalBlock, PlacedUnit, Placement } from '../arrange.ts';
+import { hasInputSeparation } from '../multiblock-rules.ts';
 import { coverRateWarning, pickConveyor, type PartId, type Parts } from '../parts.ts';
 import { ae2Mode } from './ae2.ts';
 import { withHandSteps } from './by-hand.ts';
@@ -245,6 +247,61 @@ export function outputSideInputs(placement: Placement): Map<string, HostConfig> 
     configs.set(posKey(cell), { pos: cell, config: { inputFromOutputSide: true } });
   }
   return configs;
+}
+
+// ---- Feeding settings (architecture §11 entry 51) ----
+
+/** GT machine kinds whose input slots Multi Stack Input governs: `MTEBasicMachine` and its steam subclass. */
+const MULTI_STACK_KINDS: ReadonlySet<MachineKind> = new Set<MachineKind>(['basic', 'steam']);
+
+function inBox(p: Vec3, at: Vec3, size: Vec3): boolean {
+  return p.every((v, i) => v >= at[i]! && v < at[i]! + size[i]!);
+}
+
+/**
+ * The settings that keep the line's machines from crowding themselves (research machine-feeding §1.1.3, §1.2, §3.7; GT
+ * 5.09.54 `MTEBasicMachine.allowPutStack`, `MTEHatchInputBus.limitedAllowPutStack`, `MTEMultiBlockBase.inputSeparation`):
+ * Multi Stack Input off on a GT basic singleblock fed two or more kinds of item (with it on, the first kind to arrive
+ * fills every free input slot and the others never get in; a new machine takes its placer's client setting), Limiting
+ * mode on on each input bus of a multiblock fed two or more kinds (off on a new bus, so one kind can fill every slot), and
+ * Input Separation off on a multiblock with two or more input buses whose controller has that setting, on when built
+ * (`hasInputSeparation`: with it on, each bus is checked alone, so a recipe whose items arrive on different buses never
+ * starts; a controller without it has nothing to set and reads all its buses together). The kinds are the items the step
+ * takes (`stepItemInputs`); a unit run by hand gets nothing. One entry per block, sorted by pos.
+ */
+export function feedSettings(pack: Pack, plan: Plan, placement: Placement): HostConfig[] {
+  const out: HostConfig[] = [];
+  for (const u of placement.units) {
+    if (u.manual !== undefined || !u.io.itemIn) continue;
+    const kinds = stepItemInputs(plan, u.stepId).length;
+    const own = placement.blocks.filter((b) => b.stepId === u.stepId && inBox(b.pos, u.at, u.size));
+    if (!u.multiblock) {
+      const machine = own.find((b) => b.role === 'machine');
+      if (kinds >= 2 && machine !== undefined && MULTI_STACK_KINDS.has(pack.machines.get(u.mteId)?.kind ?? 'other')) {
+        out.push({ pos: [...machine.pos], config: { multiStack: false } });
+      }
+      continue;
+    }
+    // only a controller that has the setting (on when built); one without it reads all its buses together
+    const controller = own.find((b) => b.role === 'machine');
+    const buses = u.cells.filter((c) => c.hatch === 'input_bus').length;
+    if (controller !== undefined && buses >= 2 && hasInputSeparation(pack.machines.get(u.mteId))) {
+      out.push({ pos: [...controller.pos], config: { inputSeparation: false } });
+    }
+    if (kinds >= 2) for (const bus of own.filter((b) => b.hatch === 'input_bus')) out.push({ pos: [...bus.pos], config: { limited: true } });
+  }
+  return out.sort((a, b) => comparePos(a.pos, b.pos));
+}
+
+/** `configs` merged key by key per block, in order, one entry per block, sorted by pos. */
+export function mergeHostConfigs(configs: readonly HostConfig[]): HostConfig[] {
+  const byPos = new Map<string, HostConfig>();
+  for (const c of configs) {
+    const seen = byPos.get(posKey(c.pos));
+    if (seen === undefined) byPos.set(posKey(c.pos), { pos: [...c.pos], config: { ...c.config } });
+    else seen.config = { ...seen.config, ...c.config };
+  }
+  return [...byPos.values()].sort((a, b) => comparePos(a.pos, b.pos));
 }
 
 // ---- Line words ----

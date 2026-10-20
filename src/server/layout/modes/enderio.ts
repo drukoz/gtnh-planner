@@ -52,8 +52,8 @@ import { fluidNets, type FluidNet } from '../internal.ts';
 import type { Parts } from '../parts.ts';
 import { growTree, linkBits, type PathBounds } from '../path.ts';
 import {
-  emptyModeResult, itemPorts, itemRisers, lineExceptions, nameList, placedStepIds, RISER_WORDS, stepItemInputs, stepItemOutputs, unitItemRate,
-  type ItemPort, type ModeHookup, type ModeInput, type ModeResult, type StepDraft,
+  emptyModeResult, feedSettings, itemPorts, itemRisers, lineExceptions, mergeHostConfigs, nameList, placedStepIds, RISER_WORDS, stepItemInputs,
+  stepItemOutputs, unitItemRate, type ItemPort, type ModeHookup, type ModeInput, type ModeResult, type StepDraft,
 } from './mode.ts';
 
 const DOWN = 0, NORTH = 2, SOUTH = 3, EAST = 5;
@@ -142,7 +142,7 @@ function unitIntake(plan: Plan, flows: readonly PlanFlow[], stepId: string): num
  * The flows that cross the line's edge: entering, into a placed step from outside it (raw, or a step whose machines are
  * all owned); leaving, from a placed step to outside it (out, sink, or such a step).
  */
-function edgeFlows(flows: readonly PlanFlow[], placed: ReadonlySet<string>): { entering: PlanFlow[]; leaving: PlanFlow[] } {
+export function edgeFlows(flows: readonly PlanFlow[], placed: ReadonlySet<string>): { entering: PlanFlow[]; leaving: PlanFlow[] } {
   return {
     entering: flows.filter((f) => !placed.has(f.from) && placed.has(f.to)),
     leaving: flows.filter((f) => placed.has(f.from) && !placed.has(f.to)),
@@ -400,7 +400,7 @@ export function channelWarnings(input: Pick<ModeInput, 'pack' | 'plan'>, channel
 // ---- Items ----
 
 /** The item flows that cross the line's edge, and the items placed steps make that no flow carries. */
-interface Crossing { entering: PlanFlow[]; leaving: PlanFlow[]; strays: Array<{ stepId: string; key: StuffKey }> }
+export interface Crossing { entering: PlanFlow[]; leaving: PlanFlow[]; strays: Array<{ stepId: string; key: StuffKey }> }
 
 /**
  * The face of every item port toward its unit, in unit then port order: a singleblock's extracts every item it makes and
@@ -450,7 +450,7 @@ function machineFaces(plan: Plan, items: readonly PlanFlow[], placement: Placeme
  * leave it, and the strays, each item a placed step makes that no flow carries (a chance byproduct), so that it leaves
  * through an output chest and no machine clogs.
  */
-function crossing(plan: Plan, items: readonly PlanFlow[], placed: ReadonlySet<string>): Crossing {
+export function crossing(plan: Plan, items: readonly PlanFlow[], placed: ReadonlySet<string>): Crossing {
   return {
     ...edgeFlows(items, placed),
     strays: [...placed].flatMap((stepId) => stepItemOutputs(plan, stepId)
@@ -883,11 +883,12 @@ export function enderioMode(input: ModeInput): ModeResult {
   if (items === null && nets.length === 0) return emptyModeResult();
   const fluids = nets.length > 0 ? fluidLine(input, nets, items) : null;
   const stock = items?.stockDraft ?? null;
-  // a machine that takes items and fluids through its output side gets the setting once
-  const configs = new Map([...(items?.configs ?? []), ...(fluids?.configs ?? [])].map((c) => [posKey(c.pos), c]));
+  // a machine that takes items and fluids through its output side gets the setting once; then the machines' feeding
+  // settings (architecture §11 entry 51)
+  const configs = mergeHostConfigs([...(items?.configs ?? []), ...(fluids?.configs ?? []), ...feedSettings(pack, plan, placement)]);
   return {
     blocks: [...conduitBlocks(items?.conduits ?? [], fluids?.conduits ?? []), ...(items?.chests ?? [])].sort((a, b) => comparePos(a.pos, b.pos)),
-    covers: [], configs: [...configs.values()].sort((a, b) => comparePos(a.pos, b.pos)),
+    covers: [], configs,
     logisticsPort: items?.logisticsPort ?? null,
     hookup: items?.hookup ?? null,
     extraParts: items?.extraParts ?? [],
