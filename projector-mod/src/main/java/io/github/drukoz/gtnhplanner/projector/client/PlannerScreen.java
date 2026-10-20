@@ -69,6 +69,7 @@ public final class PlannerScreen extends GuiScreen {
     private final QuadBatch shown = new QuadBatch(), covers = new QuadBatch(), faint = new QuadBatch();
     private final FloatBuffer matrix = GLAllocation.createDirectFloatBuffer(16);
     private final IntBuffer ints = GLAllocation.createDirectIntBuffer(16);
+    private final FloatBuffer floats = GLAllocation.createDirectFloatBuffer(16);
     private final int[] savedViewport = new int[4], savedScissor = new int[4];
 
     /** The camera and the line it was framed for; null until a placed line in this dimension is first drawn. */
@@ -298,12 +299,13 @@ public final class PlannerScreen extends GuiScreen {
     }
 
     /**
-     * Draws the model in its area with a perspective of {@link #FOV}, without lighting, the lightmap, fog, face culling
-     * or the alpha test, with the depth test. Each set of blocks (the shown ones, then the faint ones) is drawn twice:
-     * first only into the depth buffer, then in colour where it is the nearest, so only its front surface is blended
-     * in, whatever order the blocks come in. The shown blocks' covers go between the two sets. The viewport, scissor
-     * box, both matrices and every GL setting it changes are put back, and the depth buffer in its area is cleared
-     * again, so the rest of the screen draws as before; the lightmap is turned back on only if it was on.
+     * Draws the model in its area with a perspective of {@link #FOV}, without lighting, the lightmap, fog or face
+     * culling, with the depth test. Each set of blocks (the shown ones, then the faint ones) is drawn twice: first only
+     * into the depth buffer, then in colour where it is the nearest, so only its front surface is blended in, whatever
+     * order the blocks come in. The shown blocks' covers go between the two sets. The viewport, scissor box, both
+     * matrices and every GL setting it changes (the alpha test's function and reference too) are put back, and the
+     * depth buffer in its area is cleared again, so the rest of the screen draws as before; the lightmap is turned back
+     * on only if it was on.
      */
     private void drawModel(ProjectorData data, float partialTicks) {
         int left = modelLeft(), top = modelTop(), right = modelRight(), bottom = modelBottom();
@@ -321,6 +323,8 @@ public final class PlannerScreen extends GuiScreen {
         boolean cull = GL11.glIsEnabled(GL11.GL_CULL_FACE);
         boolean depth = GL11.glIsEnabled(GL11.GL_DEPTH_TEST);
         boolean alphaTest = GL11.glIsEnabled(GL11.GL_ALPHA_TEST);
+        int alphaFunc = read(GL11.GL_ALPHA_TEST_FUNC);
+        float alphaRef = readFloat(GL11.GL_ALPHA_TEST_REF);
         boolean texture = GL11.glIsEnabled(GL11.GL_TEXTURE_2D);
         boolean fog = GL11.glIsEnabled(GL11.GL_FOG);
         OpenGlHelper.setActiveTexture(OpenGlHelper.lightmapTexUnit);
@@ -355,7 +359,10 @@ public final class PlannerScreen extends GuiScreen {
                     GL11.glDisable(GL11.GL_LIGHTING);
                     GL11.glDisable(GL11.GL_FOG);
                     GL11.glDisable(GL11.GL_CULL_FACE);
-                    GL11.glDisable(GL11.GL_ALPHA_TEST); // the alpha test would drop every texel of a faint block
+                    // off for the colour passes, where it would drop every texel of a faint block; the depth-only
+                    // passes turn it on with this function, so a fully clear texel writes no depth
+                    GL11.glDisable(GL11.GL_ALPHA_TEST);
+                    GL11.glAlphaFunc(GL11.GL_GREATER, 0f);
                     GL11.glEnable(GL11.GL_TEXTURE_2D);
                     GL11.glEnable(GL11.GL_DEPTH_TEST);
                     GL11.glDepthFunc(GL11.GL_LEQUAL);
@@ -380,6 +387,7 @@ public final class PlannerScreen extends GuiScreen {
             restore(GL11.GL_CULL_FACE, cull);
             restore(GL11.GL_DEPTH_TEST, depth);
             restore(GL11.GL_ALPHA_TEST, alphaTest);
+            GL11.glAlphaFunc(alphaFunc, alphaRef);
             restore(GL11.GL_TEXTURE_2D, texture);
             restore(GL11.GL_FOG, fog);
             GL11.glDepthFunc(depthFunc);
@@ -391,12 +399,18 @@ public final class PlannerScreen extends GuiScreen {
         }
     }
 
-    /** The batch's nearest faces only, blended: first into the depth buffer alone, then in colour where they match it. */
+    /**
+     * The batch's nearest faces only, blended: first into the depth buffer alone, then in colour where they match it.
+     * The depth-only pass skips fully clear texels (the alpha test, with {@code drawModel}'s function), so through a
+     * frame box, glass or the gaps of a cover the blocks behind still show, as in the world.
+     */
     private void drawSurface(QuadBatch batch, int list) {
         if (batch.isEmpty()) return;
         GL11.glColorMask(false, false, false, false);
         GL11.glDepthMask(true);
+        GL11.glEnable(GL11.GL_ALPHA_TEST);
         drawBatch(TextureMap.locationBlocksTexture, batch, list);
+        GL11.glDisable(GL11.GL_ALPHA_TEST);
         GL11.glColorMask(true, true, true, true);
         GL11.glDepthMask(false);
         drawBatch(TextureMap.locationBlocksTexture, batch, list);
@@ -478,6 +492,12 @@ public final class PlannerScreen extends GuiScreen {
         ints.clear();
         GL11.glGetInteger(name, ints);
         return ints.get(0);
+    }
+
+    private float readFloat(int name) {
+        floats.clear();
+        GL11.glGetFloat(name, floats);
+        return floats.get(0);
     }
 
     private static void restore(int flag, boolean enabled) {
