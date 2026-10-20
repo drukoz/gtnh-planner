@@ -36,10 +36,15 @@ export const FREE_KEYS: readonly StuffKey[] = ['fluid:water', 'fluid:lava', 'flu
 export type LeafClass = 'free' | 'direct' | 'byproduct' | 'derived' | 'natural' | 'stop' | 'unavailable';
 
 /**
- * The default `PlanSettings.stepCharge` (fix spec R3, architecture §11.34): a recipe step is built only when it saves
- * at least 2 % of the line's least raw material (the user chose 2 % over the 5 % first proposed).
+ * The default `PlanSettings.stepCharge` (fix spec R3, architecture §11.34 as entry 39 amends it): "Fewest machines", the
+ * user's answer of 2026-10-20 ("the fewer machines make a big difference where 3 % more raw material is negligible"):
+ * with build cost counted each new machine block costs half the line's least raw material over the horizon, with it
+ * ignored each recipe step must save half of it (within plan 09's +25 % cap). It was 0.02 from plan 09 to plan 12's fix
+ * wave 2, which switches stored projects still at that value once (`SETTINGS_VERSION` 3, apply-op.ts).
  */
-export const DEFAULT_STEP_CHARGE = 0.02;
+export const DEFAULT_STEP_CHARGE = 0.5;
+/** The default `PlanSettings.stepCharge` before `SETTINGS_VERSION` 3 (plan 09 to plan 12's fix wave 2). */
+export const STEP_CHARGE_BEFORE_V3 = 0.02;
 
 /**
  * The default `PlanSettings.buildHorizonHours` (design spec §3.3, architecture §11.28): in rate mode the raw material to
@@ -75,8 +80,9 @@ export interface PlanSettings {
   // optional addition
   /**
    * Which defaults the settings were made under (`SETTINGS_VERSION` in apply-op.ts; architecture §11.32): 2 from plan 09,
-   * when supporting lines (`routeDerived: true`) became the default. `defaultSettings()` sets the current version and
-   * `normalizeSettings()` fills a missing one with 1 (a project stored before it), which the server switches once.
+   * when supporting lines (`routeDerived: true`) became the default, 3 from plan 12's fix wave 2, when "Fewest machines"
+   * (`DEFAULT_STEP_CHARGE` 0.5) did. `defaultSettings()` sets the current version and `normalizeSettings()` fills a
+   * missing one with 1 (a project stored before it), which the server switches once.
    */
   settingsVersion?: number;
   // optional addition
@@ -88,9 +94,10 @@ export interface PlanSettings {
   haveSupply?: StuffKey[];
   // optional addition
   /**
-   * Steps vs raw material (fix spec R3, architecture §11.34): the share of the line's least raw material one recipe step
-   * must save to be built, 0 to 0.5 (0 = least raw material, fewest recipes only to break ties). `defaultSettings()` and
-   * `normalizeSettings()` always fill it; readers use `?? DEFAULT_STEP_CHARGE`.
+   * Steps vs raw material (fix spec R3, architecture §11.34 as entry 39 amends it), 0 to 0.5: with build cost counted the
+   * share of the line's least raw material over the horizon one new machine block costs beside its build (plan 12 fix
+   * wave 2), with it ignored the share one recipe step must save to be built; 0 = least raw material, fewest recipes only
+   * to break ties. `defaultSettings()` and `normalizeSettings()` always fill it; readers use `?? DEFAULT_STEP_CHARGE`.
    */
   stepCharge?: number;
   // optional addition

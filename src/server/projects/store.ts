@@ -7,7 +7,7 @@ import type { Db, ProjectRow } from '../db/db.ts';
 import type { PlanSettings } from '../../shared/types/plan.ts';
 import type { Project, ProjectOp } from '../../shared/types/project.ts';
 import type { StuffKey } from '../../shared/keys.ts';
-import { applyOp, defaultSettings, normalizeSettings, SETTINGS_VERSION, validateOp } from '../../shared/project/apply-op.ts';
+import { applyOp, defaultSettings, normalizeSettings, settingsUpgrade, validateOp } from '../../shared/project/apply-op.ts';
 
 /** Who the changes the planner makes on its own are recorded as (`migrateSettings`). */
 export const PLANNER_UPDATE = 'Planner update';
@@ -82,18 +82,21 @@ export class ProjectStore {
   }
 
   /**
-   * Brings every live project whose settings predate `SETTINGS_VERSION` to it, as `by` (architecture §11.32, the user's
-   * answer to fix spec §10 question 2): one recorded settings op `{ routeDerived: true, settingsVersion: 2 }` each, so
-   * projects stored while buying derived materials was the default plan supporting lines, as new ones do. A project at
-   * the current version is never touched, so a later deliberate `routeDerived: false` sticks; running it again changes
-   * nothing. A deleted project waits until it is restored and the next run. Returns the ids it changed, in list order.
+   * Brings every live project whose settings predate `SETTINGS_VERSION` to it, as `by` (architecture §11.32): one
+   * recorded settings op each, `settingsUpgrade`'s patch — supporting lines on for a project from before plan 09 (the
+   * user's answer to fix spec §10 question 2), and "Fewest machines" (a step charge of 0.5) for one still at the old
+   * default of exactly 0.02 (plan 12 fix wave 2, the user's answer of 2026-10-20), any other stored value kept — and the
+   * version. A project at the current version is never touched, so a later deliberate `routeDerived: false` or step
+   * charge of 0.02 sticks; running it again changes nothing. A deleted project waits until it is restored and the next
+   * run. Returns the ids it changed, in list order.
    */
   migrateSettings(by: string): string[] {
     return this.#db.tx(() => {
       const changed: string[] = [];
       for (const row of this.#db.listProjects()) {
-        if ((this.#parse(row.state).settings.settingsVersion ?? 0) >= SETTINGS_VERSION) continue;
-        this.apply(row.id, [{ op: 'settings', patch: { routeDerived: true, settingsVersion: SETTINGS_VERSION } }], by);
+        const patch = settingsUpgrade(this.#parse(row.state).settings);
+        if (patch === null) continue;
+        this.apply(row.id, [{ op: 'settings', patch }], by);
         changed.push(row.id);
       }
       return changed;

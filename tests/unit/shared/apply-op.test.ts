@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   applyOp, defaultSettings, MAX_BUILD_HORIZON_HOURS, MAX_OWNED_MANUAL_COUNT, MAX_OWNED_MANUAL_ENTRIES, MAX_STEP_CHARGE, normalizeSettings,
-  SETTINGS_VERSION, validateOp,
+  SETTINGS_VERSION, settingsUpgrade, validateOp,
 } from '../../../src/shared/project/apply-op.ts';
-import { DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_STEP_CHARGE, NETWORKED_LOGISTICS } from '../../../src/shared/types/plan.ts';
+import { DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_STEP_CHARGE, NETWORKED_LOGISTICS, STEP_CHARGE_BEFORE_V3 } from '../../../src/shared/types/plan.ts';
 import type { Project } from '../../../src/shared/types/project.ts';
 
 const AT = '2026-10-17T12:00:00.000Z';
@@ -59,14 +59,16 @@ describe('defaultSettings / normalizeSettings', () => {
   it('has the decided defaults', () => {
     const s = defaultSettings();
     expect(s).toMatchObject({ target: null, mode: 'rate', amount: 1, per: 'min', tier: null, routeDerived: true,
-      logistics: 'direct', coilHeat: null, automateCrafting: true, dims: { policy: 'progression', overrides: {} }, settingsVersion: 2,
-      stepCharge: 0.02, reuseOwned: true });
+      logistics: 'direct', coilHeat: null, automateCrafting: true, dims: { policy: 'progression', overrides: {} }, settingsVersion: 3,
+      stepCharge: 0.5, reuseOwned: true });
     expect(s.excludedCategories).toEqual(['recycling', 'massfab', 'replicator', 'scrap', 'lava-centrifuge', 'programmed-circuit-conversion']);
     expect(s.declineReuse).toEqual([]);
     expect(s.ownedManual).toEqual([]);
-    expect(SETTINGS_VERSION).toBe(2);
-    // Fix spec §3 as the user answered it (§10 answer 3): each step must save 2 % of the least raw material; at most 50 %.
-    expect(DEFAULT_STEP_CHARGE).toBe(0.02);
+    expect(SETTINGS_VERSION).toBe(3);
+    // "Fewest machines", the user's answer of 2026-10-20 (plan 12 fix wave 2): each new machine block costs half the least
+    // raw material over the horizon (with build cost ignored, each step must save half of it); at most 50 %.
+    expect(DEFAULT_STEP_CHARGE).toBe(0.5);
+    expect(STEP_CHARGE_BEFORE_V3).toBe(0.02);
     expect(MAX_STEP_CHARGE).toBe(0.5);
   });
   it('fills fields missing from an older stored project', () => {
@@ -85,8 +87,19 @@ describe('defaultSettings / normalizeSettings', () => {
     // A project stored before plan 09: no stepCharge, haveSupply, reuseOwned, ownedManual or settingsVersion, supporting
     // lines off. Normalizing fills the new defaults and keeps its own choice (the server switches routeDerived once, P10).
     const s = normalizeSettings({ target: 't:x@0', routeDerived: false } as never);
-    expect(s).toMatchObject({ stepCharge: 0.02, haveSupply: [], optionChoice: {}, reuseOwned: true, ownedManual: [], routeDerived: false, settingsVersion: 1 });
+    expect(s).toMatchObject({ stepCharge: 0.5, haveSupply: [], optionChoice: {}, reuseOwned: true, ownedManual: [], routeDerived: false, settingsVersion: 1 });
     expect(normalizeSettings({ stepCharge: 0.15 } as never).stepCharge).toBe(0.15);
+  });
+  it('brings older settings to this version: supporting lines from before 2, Fewest machines from the old default before 3', () => {
+    // Plan 09's switch (ruling P10) and plan 12 fix wave 2's (the user's answer of 2026-10-20): a stored step charge of
+    // exactly the old default 0.02 becomes 0.5, any other stored value stays; settings of this version are never touched.
+    const at = (s: object) => settingsUpgrade(normalizeSettings(s as never));
+    expect(at({ routeDerived: false })).toEqual({ routeDerived: true, settingsVersion: 3 });   // no stepCharge stored: 0.5 already
+    expect(at({ routeDerived: false, stepCharge: 0.02 })).toEqual({ routeDerived: true, stepCharge: 0.5, settingsVersion: 3 });
+    expect(at({ routeDerived: false, settingsVersion: 2, stepCharge: 0.02 })).toEqual({ stepCharge: 0.5, settingsVersion: 3 });
+    for (const stepCharge of [0, 0.05, 0.15, 0.5]) expect(at({ settingsVersion: 2, stepCharge })).toEqual({ settingsVersion: 3 });
+    expect(at({ settingsVersion: 3, stepCharge: 0.02 })).toBeNull();
+    expect(settingsUpgrade(defaultSettings())).toBeNull();
   });
 });
 
@@ -143,7 +156,8 @@ describe('validateOp', () => {
   it('accepts a normal settings patch and a tick', () => {
     expect(validateOp({ op: 'settings', patch: { mode: 'makeN', amount: 64, tier: 2 } })).toBeNull();
     expect(validateOp({ op: 'settings', patch: { declineReuse: [121, 1000] } })).toBeNull();
-    expect(validateOp({ op: 'settings', patch: { routeDerived: true, settingsVersion: 2 } })).toBeNull();
+    expect(validateOp({ op: 'settings', patch: { routeDerived: true, settingsVersion: 3 } })).toBeNull();
+    expect(validateOp({ op: 'settings', patch: { settingsVersion: 2 } })).toEqual('settingsVersion must be a whole number of at least 3');
     expect(validateOp({ op: 'mark', row: 'build:gregtech:gt.metaitem.01@2032', on: true })).toBeNull();
     for (const stepCharge of [0, 0.02, 0.15, 0.5]) expect(validateOp({ op: 'settings', patch: { stepCharge } })).toBeNull();
   });

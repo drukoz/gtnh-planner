@@ -178,14 +178,14 @@ export function avoidLabel(entry: string, materials: readonly AvoidMaterial[], n
 }
 
 /**
- * The "Steps vs raw material" presets (fix spec §3, architecture §11.34): the share of the line's least raw material
- * one recipe step must save to be built. "Some steps" is the default (`DEFAULT_STEP_CHARGE`, controller ruling 2).
+ * The "Steps vs raw material" presets (fix spec §3, architecture §11.34 as entry 39 amends it): with build cost counted
+ * the share of the line's least raw material over the horizon one new machine block costs, with it ignored the share
+ * one recipe step must save. "Fewest machines" is the default (`DEFAULT_STEP_CHARGE`, the user's answer of 2026-10-20).
  */
 export const STEP_CHARGE_PRESETS: ReadonlyArray<{ value: number; label: string }> = [
   { value: 0, label: 'Least raw material' },
-  { value: 0.02, label: 'Some steps' },
-  { value: 0.05, label: 'Balanced' },
-  { value: 0.15, label: 'Fewest machines' },
+  { value: 0.02, label: 'Some machines' },
+  { value: 0.5, label: 'Fewest machines' },
 ];
 
 /** A step charge as a percentage, as precise as it is stored: `2%`, `7%`, `2.5%`. */
@@ -198,7 +198,7 @@ export function stepChargeOf(settings: PlanSettings): number {
   return settings.stepCharge ?? DEFAULT_STEP_CHARGE;
 }
 
-/** A step charge in words: its preset's name (`Some steps`), else `Custom (7%)`. */
+/** A step charge in words: its preset's name (`Some machines`), else `Custom (7%)`. */
 export function stepChargeLabel(charge: number): string {
   return STEP_CHARGE_PRESETS.find((p) => p.value === charge)?.label ?? `Custom (${chargePercent(charge)})`;
 }

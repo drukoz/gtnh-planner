@@ -4,7 +4,7 @@
 // Pure TypeScript shared by server and browser: nothing from node:* may be imported here.
 
 import {
-  DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_EXCLUDED_CATEGORIES, DEFAULT_STEP_CHARGE, LogisticsMode, type PlanSettings,
+  DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_EXCLUDED_CATEGORIES, DEFAULT_STEP_CHARGE, LogisticsMode, STEP_CHARGE_BEFORE_V3, type PlanSettings,
 } from '../types/plan.ts';
 import type { Note, Project, ProjectOp } from '../types/project.ts';
 
@@ -13,7 +13,10 @@ export const MAX_NAME_LENGTH = 80;
 /** Entries of `PlanSettings.avoid`, and the characters of each. */
 export const MAX_AVOID_ENTRIES = 50;
 export const MAX_AVOID_ENTRY_LENGTH = 300;
-/** The largest `PlanSettings.stepCharge` (fix spec §3): a step must then save half the line's least raw material. */
+/**
+ * The largest `PlanSettings.stepCharge` (fix spec §3): a step must then save half the line's least raw material, or with
+ * build cost counted a new machine block costs half of it over the horizon ("Fewest machines", the default).
+ */
 export const MAX_STEP_CHARGE = 0.5;
 /** The longest `PlanSettings.buildHorizonHours` (architecture §11.39): a year of running. */
 export const MAX_BUILD_HORIZON_HOURS = 8760;
@@ -38,9 +41,10 @@ const LOGISTICS_MODES: readonly unknown[] = Object.values(LogisticsMode);
 
 /**
  * The version of the defaults new settings are made under (`PlanSettings.settingsVersion`, architecture §11.32): 2 since
- * supporting lines (`routeDerived: true`) became the default (plan 09). Settings stored before it read as version 1.
+ * supporting lines (`routeDerived: true`) became the default (plan 09), 3 since "Fewest machines" (`DEFAULT_STEP_CHARGE`
+ * 0.5) did (plan 12 fix wave 2, the user's answer of 2026-10-20). Settings stored before 2 read as version 1.
  */
-export const SETTINGS_VERSION = 2;
+export const SETTINGS_VERSION = 3;
 /** What `normalizeSettings` gives settings stored before `settingsVersion` existed. */
 const FIRST_SETTINGS_VERSION = 1;
 
@@ -84,6 +88,23 @@ function summedOwned(list: NonNullable<PlanSettings['ownedManual']>): NonNullabl
   const counts = new Map<number, number>();
   for (const { mteId, count } of list) counts.set(mteId, Math.min(MAX_OWNED_MANUAL_COUNT, (counts.get(mteId) ?? 0) + count));
   return [...counts].map(([mteId, count]) => ({ mteId, count }));
+}
+
+/**
+ * The settings patch that brings `s` (as `normalizeSettings` reads it) from its `settingsVersion` to `SETTINGS_VERSION`
+ * (`ProjectStore.migrateSettings` records it once, as the planner): from before 2, supporting lines on (plan 09); from
+ * before 3, a step charge of exactly the old default (`STEP_CHARGE_BEFORE_V3`, 0.02) becomes the new one (0.5, "Fewest
+ * machines"), any other stored value staying; and the version. Null for settings of this version, which it never
+ * touches, so a later deliberate value sticks.
+ */
+export function settingsUpgrade(s: PlanSettings): Partial<PlanSettings> | null {
+  const from = s.settingsVersion ?? FIRST_SETTINGS_VERSION;
+  if (from >= SETTINGS_VERSION) return null;
+  const patch: Partial<PlanSettings> = {};
+  if (from < 2) patch.routeDerived = true;
+  if (s.stepCharge === STEP_CHARGE_BEFORE_V3) patch.stepCharge = DEFAULT_STEP_CHARGE;
+  patch.settingsVersion = SETTINGS_VERSION;
+  return patch;
 }
 
 /** A copy without the keys whose value is `undefined`, so spreading it never blanks a default. */

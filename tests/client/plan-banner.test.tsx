@@ -104,8 +104,8 @@ describe('plan banner', () => {
   });
   it('says how much more raw material the plan uses than the least, and why', () => {
     const costly = planOf({ rawCost: { perSecond: 1.21, leastPerSecond: 1 } });
-    expect(text(html(costly))).toContain('Uses 21% more raw material than the least possible to save machines (Steps vs raw material: Some steps)');
-    expect(text(html(costly, S({ stepCharge: 0.05 })))).toContain('(Steps vs raw material: Balanced)');
+    expect(text(html(costly))).toContain('Uses 21% more raw material than the least possible to save machines (Steps vs raw material: Fewest machines)');
+    expect(text(html(costly, S({ stepCharge: 0.02 })))).toContain('(Steps vs raw material: Some machines)');
     expect(text(html(costly, S({ stepCharge: 0.07 })))).toContain('(Steps vs raw material: Custom (7%))');
     expect(html(planOf({ rawCost: { perSecond: 1, leastPerSecond: 1 } }))).toBe('');
     expect(html(planOf({ rawCost: { perSecond: 0, leastPerSecond: 0 } }))).toBe('');

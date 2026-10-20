@@ -329,7 +329,12 @@ describe('build cost in Make N', () => {
 });
 
 describe('machine tiers', () => {
-  const plates = (p: Partial<PlanSettings> = {}): PlanSettings => S({ target: 't:iron_plate@0', tier: 2, amount: 60, ...p });
+  /**
+   * Iron plates at MV, 60 a minute, at "Some machines" (2 %): at the default 50 % the pinned case with nothing owned
+   * hand-hammers its plates — raw 2 + 3 × 0.5 = 3.5 a unit against raw 1 + 5 LV benders' 5 × 0.5 + 80 / 86,400 = 3.5009
+   * — which is not this case's subject (the tiers and the fallback of a pin that cannot be built).
+   */
+  const plates = (p: Partial<PlanSettings> = {}): PlanSettings => S({ target: 't:iron_plate@0', tier: 2, amount: 60, stepCharge: 0.02, ...p });
   const oneMvBender = owning({ mteId: 102, count: 1 });
   const LV_TIER = { tier: 1, mteId: 101, name: 'Basic Bending Machine', machines: 5, owned: 0, build: 80 };
   const MV_TIER = { tier: 2, mteId: 102, name: 'Advanced Bending Machine', machines: 3, owned: 1, build: null, unbuildable: 'no recipe in this pack' };

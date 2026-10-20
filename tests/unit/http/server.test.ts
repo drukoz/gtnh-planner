@@ -234,10 +234,11 @@ describe('createApp', () => {
     const state = JSON.parse(row.state);
     delete state.settings.settingsVersion;
     state.settings.routeDerived = false;
+    state.settings.stepCharge = 0.02;   // plan 09's default, switched to "Fewest machines" with it (plan 12 fix wave 2)
     first.db.updateProject({ ...row, state: JSON.stringify(state) });
     first.db.close();
     const again = createApp(config);
-    expect(again.projects.get(id)).toMatchObject({ rev: 1, settings: { routeDerived: true, settingsVersion: 2 } });
+    expect(again.projects.get(id)).toMatchObject({ rev: 1, settings: { routeDerived: true, stepCharge: 0.5, settingsVersion: 3 } });
     again.db.close();
     const third = createApp(config);
     expect(third.projects.get(id)?.rev).toBe(1);

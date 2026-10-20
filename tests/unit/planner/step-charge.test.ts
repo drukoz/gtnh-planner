@@ -80,16 +80,17 @@ describe('the step charge', () => {
 
 describe('planLine and the step charge', () => {
   it('maps settings to solve options', () => {
-    // Crafting-table steps run on the Auto Workbench by default (plan 12's ruling): a step like any other.
-    expect(solveOptions(defaultSettings())).toEqual({ stepCharge: 0.02, handWeight: 1 });
-    const byHand: PlanSettings = { ...defaultSettings(), automateCrafting: false };
+    // Crafting-table steps run on the Auto Workbench by default (plan 12's ruling): a step like any other. The default is
+    // "Fewest machines", 0.5 (plan 12 fix wave 2).
+    expect(solveOptions(defaultSettings())).toEqual({ stepCharge: 0.5, handWeight: 1 });
+    const byHand: PlanSettings = { ...defaultSettings(), automateCrafting: false, stepCharge: 0.02 };
     expect(solveOptions(byHand)).toEqual({ stepCharge: 0.02, handWeight: 3 });
     expect(solveOptions({ ...byHand, mode: 'makeN' })).toEqual({ stepCharge: 0.02, handWeight: 1 });
     expect(solveOptions({ ...byHand, automateCrafting: true })).toEqual({ stepCharge: 0.02, handWeight: 1 });
     expect(solveOptions({ ...byHand, stepCharge: 0 })).toEqual({ stepCharge: 0, handWeight: 3 });
     // A project stored before the setting existed plans with the default.
     const { stepCharge: _, ...old } = defaultSettings();
-    expect(solveOptions(old as PlanSettings).stepCharge).toBe(0.02);
+    expect(solveOptions(old as PlanSettings).stepCharge).toBe(0.5);
   });
   it('warns about a step left to hand-crafting', async () => {
     // An LV Machine Hull a minute: the hull and its tin cables have no machine recipe at LV. Crafted by hand, with build

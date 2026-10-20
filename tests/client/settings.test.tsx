@@ -123,25 +123,29 @@ describe('steps vs raw material, supplies and pinned options', () => {
   const options = (html: string): string[] => [...html.matchAll(/<option value="([^"]*)"( selected="")?>([^<]*)<\/option>/g)].map((m) => `${m[1]}=${m[3]}${m[2] === undefined ? '' : ' *'}`);
   const stepCharge = (html: string): string[] => options(/<select[^>]*aria-label="Steps vs raw material"[^>]*>.*?<\/select>/s.exec(html)?.[0] ?? '');
   it('lists the presets of the Steps vs raw material select and sends the one picked', () => {
-    expect(STEP_CHARGE_PRESETS.map((p) => [p.value, p.label])).toEqual([[0, 'Least raw material'], [0.02, 'Some steps'], [0.05, 'Balanced'], [0.15, 'Fewest machines']]);
-    expect(stepCharge(panelOf({ ...defaultSettings(), stepCharge: 0.05 }))).toEqual([
-      '0=Least raw material (0%)', '0.02=Some steps (2%)', '0.05=Balanced (5%) *', '0.15=Fewest machines (15%)']);
+    // Plan 12 fix wave 2 (the user's answer of 2026-10-20): Least raw material, Some machines, Fewest machines (the default).
+    expect(STEP_CHARGE_PRESETS.map((p) => [p.value, p.label])).toEqual([[0, 'Least raw material'], [0.02, 'Some machines'], [0.5, 'Fewest machines']]);
+    expect(stepCharge(panelOf({ ...defaultSettings(), stepCharge: 0.02 }))).toEqual([
+      '0=Least raw material (0%)', '0.02=Some machines (2%) *', '0.5=Fewest machines (50%)']);
     const patch = vi.fn();
     const [select] = findAll(StepChargeField({ settings: defaultSettings(), patch }), (e) => e.type === 'select');
-    (select!.props.onChange as (e: unknown) => void)({ currentTarget: { value: '0.15' } });
-    expect(patch).toHaveBeenCalledWith({ stepCharge: 0.15 });
-    expect(validateOp({ op: 'settings', patch: { stepCharge: 0.15 } })).toBeNull();
-    (select!.props.onChange as (e: unknown) => void)({ currentTarget: { value: '0.02' } });   // the value it has: nothing to send
+    (select!.props.onChange as (e: unknown) => void)({ currentTarget: { value: '0.02' } });
+    expect(patch).toHaveBeenCalledWith({ stepCharge: 0.02 });
+    expect(validateOp({ op: 'settings', patch: { stepCharge: 0.02 } })).toBeNull();
+    (select!.props.onChange as (e: unknown) => void)({ currentTarget: { value: '0.5' } });   // the value it has: nothing to send
     expect(patch).toHaveBeenCalledTimes(1);
   });
   it('shows a stored value that is no preset as Custom', () => {
-    expect(stepCharge(panelOf({ ...defaultSettings(), stepCharge: 0.07 }))).toEqual([
-      '0=Least raw material (0%)', '0.02=Some steps (2%)', '0.05=Balanced (5%)', '0.15=Fewest machines (15%)', '0.07=Custom (7%) *']);
+    // 5 % and 15 % were presets before fix wave 2; a project that chose one keeps it, now shown as its value.
+    for (const charge of [0.05, 0.15, 0.07]) {
+      expect(stepCharge(panelOf({ ...defaultSettings(), stepCharge: charge }))).toEqual([
+        '0=Least raw material (0%)', '0.02=Some machines (2%)', '0.5=Fewest machines (50%)', `${charge}=Custom (${Math.round(charge * 100)}%) *`]);
+    }
   });
-  it('shows Some steps for a project without stepCharge', () => {
+  it('shows Fewest machines for a project without stepCharge', () => {
     const old = { ...defaultSettings() };
     delete old.stepCharge;
-    expect(stepCharge(panelOf(old))).toContain('0.02=Some steps (2%) *');
+    expect(stepCharge(panelOf(old))).toContain('0.5=Fewest machines (50%) *');
   });
   it('lists the free inputs the group already supplies and removes one', () => {
     const settings = { ...defaultSettings(), haveSupply: ['fluid:water', 'minecraft:cobblestone@0'] };
