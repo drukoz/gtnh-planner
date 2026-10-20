@@ -52,6 +52,8 @@ import io.github.drukoz.gtnhplanner.export.textures.TextureExporter;
  * that input; {@code mw} is omitted when the microwave would explode, burn or reject it</td></tr>
  * <tr><td>Item {@code electric}</td><td>only for a non-wildcard item that is an IC2 {@code IElectricItem} with a
  * finite {@code maxCharge} &gt; 0</td></tr>
+ * <tr><td>Crop table</td><td>adds no item to {@code items.jsonl.gz}: an item the table lacks is written inline in its
+ * crop line ({@code CropsSection}), so the items and recipe ids are those of an export without the crop table</td></tr>
  * <tr><td>Markers</td><td>{@code EXPORT_OK} or {@code EXPORT_FAILED} is written after every other file is
  * closed</td></tr>
  * </table>

@@ -9,9 +9,11 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.TreeMap;
 
+import net.minecraft.block.Block;
+import net.minecraft.init.Blocks;
 import net.minecraft.item.ItemStack;
+import net.minecraftforge.oredict.OreDictionary;
 
 import com.google.gson.stream.JsonWriter;
 
@@ -19,6 +21,7 @@ import io.github.drukoz.gtnhplanner.export.ExportContext;
 import io.github.drukoz.gtnhplanner.export.ExportSection;
 import io.github.drukoz.gtnhplanner.export.ItemTable;
 import io.github.drukoz.gtnhplanner.export.JsonlWriter;
+import io.github.drukoz.gtnhplanner.export.NameResolver;
 import io.github.drukoz.gtnhplanner.export.Reflect;
 
 /**
@@ -41,13 +44,37 @@ import io.github.drukoz.gtnhplanner.export.Reflect;
  * Both have public members without {@code @SideOnly} whose parameter is a client class
  * ({@code CropRegistry.registerIcons(IIconRegister)}, {@code ICropCard.registerSprites(IIconRegister)}), so asking
  * either for its methods throws {@link NoClassDefFoundError} on a dedicated server, while a handle resolves only its
- * own member. Minecraft and Forge members (stack sizes, enum names, translations) are called directly. The drop table and the liked
- * tags are a {@code HashMap} and a {@code HashSet} whose keys have no hash of their own, and the soils come from a hash
- * map of blocks, so CropsNH hands them over in a different order on every run: the line has the drops in
- * {@link CropLine#sortDrops} order, the tags by name and the soils by item key, each soil once, so two exports of one
- * pack agree. The growth requirements keep the card's order (a list). The drop chance is CropsNH's {@code float}
- * widened exactly, the value a harvest multiplies by. Without CropsNH the section writes no file and no count; a card
- * whose call throws, or that is not {@link CropLine#valid}, is left out with a warning.
+ * own member. Minecraft and Forge members (stack sizes, enum names, translations, blocks) are called directly.
+ *
+ * <p>
+ * The section adds nothing to the item table: it looks items up ({@link ItemTable#find}) and never interns one, so
+ * {@code items.jsonl.gz}, and with it every wildcard's options, ore name and recipe id, is what an export without the
+ * crop table has. (Exporter 0.5.0 interned them: 199 more items, and four rotated logs joined {@code logWood} and the
+ * options of 56 recipes.) An item the table has is written by its index; one it lacks is written inline
+ * ({@link CropLine.ItemRef#inline}: its key without NBT, its NBT, and its English name, which
+ * {@link NameResolver#uncountedName} gives without counting a name failure, since it is no line of the item table):
+ * <ul>
+ * <li>a drop: the stack of the drop table as it is (a berry variant and six mana beans with an aspect each are not in
+ * the item table of GTNH 2.9.0-RC-1);</li>
+ * <li>a soil: CropsNH's stack when the table has it. Otherwise the variant {@link CropLine#soilMeta} gives, by index
+ * when the table has that one. For a block registered without a meta, CropsNH writes the wildcard
+ * ({@code SoilList.lambda$getNEIItemList$1}: {@code new ItemStack(item, 1, meta == null ? 32767 : meta)}): any variant
+ * counts, and the line names variant 0. Any other soil is the variant its block drops, {@code Block.damageDropped(meta)}
+ * (Forge's pick block takes the same: {@code Block.getDamageValue} returns it), so a log lying along x or z is its log:
+ * Thaumcraft's {@code BlockMagicalLog.func_149692_a} returns {@code (meta & 3) == 2 ? 1 : meta & 3}, so Greatwood Log 4
+ * and 8 are 0 and Silverwood Log 5 and 9 are 1, as {@code BlockRotatedPillar.damageDropped} ({@code meta & 3}) does for
+ * vanilla logs;</li>
+ * <li>the seed: inline, named after its crop ({@link CropLine#seedName}), unless the table has it. Its own name on a
+ * server is "Unknown Seeds": {@code ItemGenericSeed.func_77667_c} names a seed without analyzed stats
+ * {@code cropsnh_genericSeeds.unknown}.</li>
+ * </ul>
+ * The drop table and the liked tags are a {@code HashMap} and a {@code HashSet} whose keys have no hash of their own,
+ * and the soils come from a hash map of blocks, so CropsNH hands them over in a different order on every run: the line
+ * has the drops in {@link CropLine#sortDrops} order, the tags by name and the soils by item key
+ * ({@link CropLine#soils}), each soil once, so two exports of one pack agree. The growth requirements keep the card's
+ * order (a list). The drop chance is CropsNH's {@code float} widened exactly, the value a harvest multiplies by, and a
+ * drop's chance is CropsNH's as it is, never clamped (Water Lily: 80000 and 20000). Without CropsNH the section writes
+ * no file and no count; a card whose call throws, or that is not {@link CropLine#valid}, is left out with a warning.
  */
 public final class CropsSection implements ExportSection {
 
@@ -138,17 +165,18 @@ public final class CropsSection implements ExportSection {
         int duration = number(nh.growthDuration, card).intValue();
         int minSeedBedTier = number(nh.minSeedBedTier, card).intValue();
         ItemTable items = ctx.items();
-        List<CropLine.Drop> drops = drops((Map<?, ?>) Reflect.invoke(nh.dropTable, card), items);
+        NameResolver names = ctx.names();
+        List<CropLine.Drop> drops = drops((Map<?, ?>) Reflect.invoke(nh.dropTable, card), items, names);
         List<String> liked = new ArrayList<>();
         for (Object tag : (Iterable<?>) Reflect.invoke(nh.likedBiomeTags, card)) liked.add(((Enum<?>) tag).name());
         Collections.sort(liked);
-        List<Integer> soils = soils((Iterable<?>) Reflect.invoke(nh.soilsForNei, card, true), items);
+        List<CropLine.ItemRef> soils = soils((Iterable<?>) Reflect.invoke(nh.soilsForNei, card, true), items, names);
         List<String> requirements = new ArrayList<>();
         for (Object r : (Iterable<?>) Reflect.invoke(nh.growthRequirements, card)) {
             requirements.add(r.getClass().getSimpleName());
         }
         ItemStack seedStack = (ItemStack) Reflect.invoke(nh.seedItem, card, null);
-        int seed = seedStack != null ? items.intern(seedStack) : CropLine.NO_SEED;
+        CropLine.ItemRef seed = seedStack != null ? seed(seedStack, name, items) : null;
 
         JsonWriter j = w.begin();
         CropLine
@@ -161,25 +189,71 @@ public final class CropsSection implements ExportSection {
         return (Number) Reflect.invoke(getter, card);
     }
 
-    /** The drop table as drops in {@link CropLine#sortDrops} order; each stack's item is interned. */
-    private static List<CropLine.Drop> drops(Map<?, ?> table, ItemTable items) {
+    /** The drop table as drops in {@link CropLine#sortDrops} order. */
+    private static List<CropLine.Drop> drops(Map<?, ?> table, ItemTable items, NameResolver names) {
         List<CropLine.Drop> drops = new ArrayList<>(table.size());
         for (Map.Entry<?, ?> e : table.entrySet()) {
             ItemStack stack = (ItemStack) e.getKey();
             int chance = ((Number) e.getValue()).intValue();
-            drops.add(new CropLine.Drop(ItemTable.keyOf(stack), items.intern(stack), stack.stackSize, chance));
+            drops.add(new CropLine.Drop(item(stack, items, names), stack.stackSize, chance));
         }
         CropLine.sortDrops(drops);
         return drops;
     }
 
-    /** The soils' item indices in the order of their item keys, each soil once. */
-    private static List<Integer> soils(Iterable<?> stacks, ItemTable items) {
-        Map<String, ItemStack> byKey = new TreeMap<>();
-        for (Object s : stacks) byKey.putIfAbsent(ItemTable.keyOf((ItemStack) s), (ItemStack) s);
-        List<Integer> soils = new ArrayList<>(byKey.size());
-        for (ItemStack stack : byKey.values()) soils.add(items.intern(stack));
-        return soils;
+    /** The soils as the line names them (class comment), in the order of their item keys, each once. */
+    private static List<CropLine.ItemRef> soils(Iterable<?> stacks, ItemTable items, NameResolver names) {
+        List<CropLine.ItemRef> soils = new ArrayList<>();
+        for (Object s : stacks) soils.add(soil((ItemStack) s, items, names));
+        return CropLine.soils(soils);
+    }
+
+    /**
+     * One soil: CropsNH's stack by its index when the item table has it; else the variant {@link CropLine#soilMeta}
+     * gives (wildcard: variant 0; else the variant its block drops), by index or inline.
+     */
+    private static CropLine.ItemRef soil(ItemStack stack, ItemTable items, NameResolver names) {
+        int index = items.find(stack);
+        if (index != ItemTable.ABSENT) return CropLine.ItemRef.indexed(ItemTable.keyOf(stack), index);
+        int meta = stack.getItemDamage();
+        int dropped = meta == OreDictionary.WILDCARD_VALUE ? CropLine.NOT_A_BLOCK : droppedMeta(stack);
+        ItemStack variant = stack.copy();
+        variant.setItemDamage(CropLine.soilMeta(meta, dropped));
+        return item(variant, items, names);
+    }
+
+    /**
+     * {@code Block.damageDropped} of the stack's damage on the block its item places, or {@link CropLine#NOT_A_BLOCK}
+     * when it places none or the block's method throws (a mod's array lookup by meta): the soil then keeps its own.
+     */
+    private static int droppedMeta(ItemStack stack) {
+        Block block = Block.getBlockFromItem(stack.getItem());
+        if (block == null || block == Blocks.air) return CropLine.NOT_A_BLOCK;
+        try {
+            return block.damageDropped(stack.getItemDamage());
+        } catch (RuntimeException e) {
+            return CropLine.NOT_A_BLOCK;
+        }
+    }
+
+    /** The seed: by its index when the item table has it, else inline and named after its crop. */
+    private static CropLine.ItemRef seed(ItemStack stack, String cropName, ItemTable items) {
+        int index = items.find(stack);
+        if (index != ItemTable.ABSENT) return CropLine.ItemRef.indexed(ItemTable.keyOf(stack), index);
+        return CropLine.ItemRef.inline(ItemTable.plainKeyOf(stack), ItemTable.nbtOf(stack), CropLine.seedName(cropName));
+    }
+
+    /**
+     * {@code stack} by its index when the item table has it, else inline with its English name (its key without NBT
+     * when it has none, since the loader needs a name); the table is never added to.
+     */
+    private static CropLine.ItemRef item(ItemStack stack, ItemTable items, NameResolver names) {
+        int index = items.find(stack);
+        if (index != ItemTable.ABSENT) return CropLine.ItemRef.indexed(ItemTable.keyOf(stack), index);
+        String plainKey = ItemTable.plainKeyOf(stack);
+        String name = names.uncountedName(stack);
+        return CropLine.ItemRef
+            .inline(plainKey, ItemTable.nbtOf(stack), name != null && !name.isEmpty() ? name : plainKey);
     }
 
     /** The card's id for a warning, or its class when even that call fails. */

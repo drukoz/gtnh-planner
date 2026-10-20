@@ -20,9 +20,13 @@ import ic2.api.item.IElectricItem;
 
 /**
  * Every item variant the export mentions. A variant's index is its line in {@code items.jsonl.gz}; sections refer to
- * items only by {@link #intern(ItemStack)}. Written by {@link Exporter} after every section has run.
+ * items only by {@link #intern(ItemStack)}, except the crop table, which only looks them up ({@link #find(ItemStack)})
+ * and so adds none. Written by {@link Exporter} after every section has run.
  */
 public final class ItemTable {
+
+    /** What {@link #find(ItemStack)} returns for a variant the table does not have. */
+    public static final int ABSENT = -1;
 
     private static final int WILDCARD = OreDictionary.WILDCARD_VALUE;
 
@@ -51,18 +55,37 @@ public final class ItemTable {
     }
 
     /**
+     * The index of this variant (its {@link #keyOf key}), or {@link #ABSENT} when the table does not have it; never
+     * adds one. Throws like {@link #intern(ItemStack)}.
+     */
+    public int find(ItemStack s) {
+        Integer known = byKey.get(keyOf(s));
+        return known != null ? known : ABSENT;
+    }
+
+    /**
      * The variant's table key, {@code registryName@damage} plus {@code #SNBT} for a stack with NBT, without adding
      * it: the same for every export of one pack, unlike an index. Throws like {@link #intern(ItemStack)}.
      */
     public static String keyOf(ItemStack s) {
+        String key = plainKeyOf(s);
+        String nbt = nbtOf(s);
+        return nbt != null ? key + "#" + nbt : key;
+    }
+
+    /**
+     * {@code registryName@damage}: the {@link #keyOf key} without its NBT, which is the planner's item key of an NBT-free
+     * variant. Throws like {@link #intern(ItemStack)}.
+     */
+    public static String plainKeyOf(ItemStack s) {
         if (s == null || s.getItem() == null) throw new IllegalArgumentException("empty item stack");
         String id = registryName(s);
         if (id == null) throw new IllegalArgumentException("item not in the item registry: " + s);
-        String nbt = nbtOf(s);
-        return id + "@" + s.getItemDamage() + (nbt != null ? "#" + nbt : "");
+        return id + "@" + s.getItemDamage();
     }
 
-    private static String nbtOf(ItemStack s) {
+    /** The stack's NBT as {@code items.jsonl.gz} writes it ({@code nbt}: the compound's SNBT), or {@code null}. */
+    public static String nbtOf(ItemStack s) {
         return s.hasTagCompound() ? s.getTagCompound().toString() : null;
     }
 
