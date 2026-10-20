@@ -4,7 +4,8 @@
 // its mode and channels under it), and every flow is a link drawn in the colour of what carries it, or of its EnderIO
 // channel. ELK lays the boxes out in its worker, and a drag moves the picture, the wheel zooms it and Fit shows all of it
 // (./pan-zoom.ts), as for the flow diagram; a click on a box, one of its face rows or a link shows its full configuration
-// in the side panel, and a picked link marks the face rows it leaves and enters.
+// in the side panel, and a picked link marks the face rows it leaves and enters. When the panel opens or closes beside
+// it, the picture is fitted again if it still is the fitted one, else keeps its middle (the review of 401d0ca).
 
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactElement } from 'react';
 import { DYE_HEX } from '../../shared/layout/enderio.ts';
@@ -12,12 +13,12 @@ import type { Layout } from '../../shared/types/layout.ts';
 import type { Plan } from '../../shared/types/plan.ts';
 import { messageOf } from '../api/client.ts';
 import {
-  CONN_LINE_HEIGHT, CONN_TITLE_HEIGHT, connectionsElk, connectionsFromElk, connectionsGraph, faceLines, faceModeText, pickDetails,
+  CONN_LINE_HEIGHT, CONN_TITLE_HEIGHT, connectionsElk, connectionsFromElk, connectionsGraph, faceLines, faceModeText, hasLine, pickDetails,
   type ConnEdge, type ConnFace, type ConnGraph, type ConnLayout, type ConnPick, type ConnVia,
 } from '../connections/model.ts';
 import { useLayout } from '../state/use-layout.ts';
 import { layoutFlow } from '../workers/elk.worker.ts';
-import { DRAG_THRESHOLD, fitView, wheelFactor, zoomAround, type View } from './pan-zoom.ts';
+import { DRAG_THRESHOLD, fitView, resizeView, sameView, wheelFactor, zoomAround, type Size, type View } from './pan-zoom.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
 
 export interface ConnectionsShellProps {
@@ -178,8 +179,10 @@ function EdgeShape(props: { edge: PlacedEdge; selected: boolean; onPick(pick: Co
  * zooms it as the flow diagram does: a drag moves it, from a box too once the pointer has moved DRAG_THRESHOLD px (a
  * plain click still picks, and the click that ends a drag picks nothing), the wheel or a pinch zooms around the
  * pointer, and the arrow keys move it while the area has focus. Fit, also when the picture first shows and whenever its
- * boxes change, shows all of it. The links come first, then the boxes over them. A group, not an image, so assistive
- * technology reads the boxes, rows and links inside it, as for the flow diagram (plan 11, Task 8's review ruling).
+ * boxes change, shows all of it. When the area changes size (the side panel opening or closing beside it), the view is
+ * fitted again while nothing has moved or zoomed it since it was fitted, else it keeps the spot in its middle
+ * (`resizeView`). The links come first, then the boxes over them. A group, not an image, so assistive technology reads
+ * the boxes, rows and links inside it, as for the flow diagram (plan 11, Task 8's review ruling).
  */
 function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: boolean; onPick(pick: ConnPick): void }): ReactElement {
   const { picture, pick, busy, onPick } = props;
@@ -196,12 +199,43 @@ function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: bool
   const dragged = useRef(false);
   // The view is fitted again only when the boxes change, not when someone else's change only moves a rate.
   const shape = useMemo(() => picture.nodes.map((n) => n.id).join('\n'), [picture]);
+  /** The view the last fit gave, the area's size then (or at its last change), and the latest view and picture. */
+  const fitted = useRef<View | null>(null);
+  const area = useRef<Size>({ width: 0, height: 0 });
+  const latest = useRef({ view, picture });
+  useEffect(() => {
+    latest.current = { view, picture };
+  }, [view, picture]);
 
   const fit = (): void => {
     const svg = svgRef.current;
-    setView(fitView(picture, { width: svg?.clientWidth ?? 0, height: svg?.clientHeight ?? 0 }, PAD));
+    const size = { width: svg?.clientWidth ?? 0, height: svg?.clientHeight ?? 0 };
+    const next = fitView(picture, size, PAD);
+    area.current = size;
+    fitted.current = next;
+    latest.current.view = next;
+    setView(next);
   };
   useLayoutEffect(() => fit(), [shape]);   // reads the current picture; only a change of boxes refits
+
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (svg === null || typeof ResizeObserver === 'undefined') return undefined;
+    const resized = new ResizeObserver(() => {
+      const before = area.current;
+      const after = { width: svg.clientWidth, height: svg.clientHeight };
+      if (after.width === before.width && after.height === before.height) return;
+      area.current = after;
+      const { view: was, picture: shown } = latest.current;
+      const refit = fitted.current !== null && sameView(was, fitted.current);
+      const next = resizeView(was, fitted.current, shown, before, after, PAD);
+      if (refit) fitted.current = next;   // a view fitted again is still the fitted one
+      latest.current.view = next;
+      setView(next);
+    });
+    resized.observe(svg);
+    return () => resized.disconnect();
+  }, []);
 
   useEffect(() => {
     const svg = svgRef.current;
@@ -350,11 +384,6 @@ export function ConnectionsShell(props: ConnectionsShellProps): ReactElement {
       {details !== null && <Panel details={details} onClose={() => onPick(null)} />}
     </div>
   );
-}
-
-/** Whether the plan and its layout hold a line to connect; otherwise the shell says why there is none. */
-function hasLine(plan: Plan, layout: Layout): boolean {
-  return plan.status !== 'empty' && plan.status !== 'infeasible' && layout.status !== 'empty';
 }
 
 /**

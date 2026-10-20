@@ -1,14 +1,20 @@
 // The 3D tab (Plan 5 Task 15; spec §3.8): only the new line and its hookups, in the pack's own textures (plain colours
 // where a texture cannot be had), with existing base blocks as faint ghosts where the line meets them. Drag turns it,
 // the wheel zooms, the layer slider cuts it from the top, hovering names a block with its covers and settings, and a
-// click shows a machine's recipe and facing. Beside it the side list — blocks to place, hookups, overall size — and the
-// layout's warnings, drawn from the same layout as the map, so the two always agree. The tab's code, three.js
-// included, is its own chunk (View3DTab.tsx).
+// click shows a machine's recipe and facing. Show connections (the user's requirements of 2026-10-19, item 3 (b);
+// off until this browser turns it on, and remembered in it) draws the Connections tab's links over the line, from
+// the shared model: hovering one names it as the Connections tab does, and a click marks its two faces and shows its
+// details. Beside it the side list — blocks to place, hookups, overall size — and the layout's warnings, drawn from
+// the same layout as the map, so the two always agree. The tab's code, three.js included, is its own chunk
+// (View3DTab.tsx).
 
-import { useEffect, useId, useRef, useState, type CSSProperties, type ReactElement, type ReactNode } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactElement, type ReactNode } from 'react';
+import { fmtInt } from '../../shared/layout/format.ts';
 import type { Layout } from '../../shared/types/layout.ts';
 import { messageOf } from '../api/client.ts';
+import { connectionSpans, connectionsGraph, hasLine, pickDetails, spanDetails } from '../connections/model.ts';
 import { useLayout } from '../state/use-layout.ts';
+import { linkGeometry, spansShown, type LinkGeometry } from '../three/link-geometry.ts';
 import { loadSceneInputs, realTextureDeps, tilesFor } from '../three/load-textures.ts';
 import { createViewer, type Viewer } from '../three/renderer.ts';
 import { blockList, buildScene, hoverText, pickInfo } from '../three/scene-data.ts';
@@ -30,6 +36,10 @@ export interface View3DShellProps {
   info: Info | null;
   /** The viewer's canvas. */
   canvas: ReactNode;
+  /** Whether the Connections tab's links are drawn over the line (Show connections). */
+  showLinks: boolean; onShowLinks(on: boolean): void;
+  /** What the drawn links are, under the view while they show. */
+  linksNote?: string | null;
   /** Item names (the plan's), for the side list's cover rows. */
   names?: Readonly<Record<string, string>>;
   /**
@@ -47,6 +57,8 @@ const NO_STEPS_TEXT = 'Nothing to lay out yet — the plan makes nothing';
 const PRESERVE_BUFFER_KEY = 'gp.test.preserveDrawingBuffer';
 /** A pointer that moved further than this between press and release was turning the view, not clicking a block. */
 const CLICK_SLOP_PX = 4;
+/** Whether this browser draws the Connections links in the 3D view: kept in this browser only, off until turned on. */
+export const LINKS_STORAGE_KEY = 'gtnh-planner:3d-connections';
 
 // The view sits beside the side list while both fit, and above it on a narrow screen (like the Map tab).
 const MAIN_STYLE: CSSProperties = { flex: '3 1 420px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 };
@@ -85,8 +97,25 @@ function layerText(maxLayer: number | null, height: number): string {
   return maxLayer === null ? 'All layers' : `Layers 1–${maxLayer + 1} of ${height}`;
 }
 
-function Controls(props: Pick<View3DShellProps, 'maxLayer' | 'onLayer' | 'show' | 'onShow'> & { height: number }): ReactElement {
-  const { maxLayer, onLayer, show, onShow, height } = props;
+/** Whether this browser asked for Show connections; off when storage is refused or holds anything else. */
+export function loadShowLinks(): boolean {
+  try {
+    return globalThis.localStorage?.getItem(LINKS_STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function saveShowLinks(on: boolean): void {
+  try {
+    globalThis.localStorage?.setItem(LINKS_STORAGE_KEY, on ? '1' : '0');
+  } catch {
+    // kept for this page only
+  }
+}
+
+function Controls(props: Pick<View3DShellProps, 'maxLayer' | 'onLayer' | 'show' | 'onShow' | 'showLinks' | 'onShowLinks'> & { height: number }): ReactElement {
+  const { maxLayer, onLayer, show, onShow, showLinks, onShowLinks, height } = props;
   return (
     <div className="row" style={{ gap: 16 }}>
       <label className="check">
@@ -111,6 +140,10 @@ function Controls(props: Pick<View3DShellProps, 'maxLayer' | 'onLayer' | 'show' 
       <label className="check">
         <input type="checkbox" checked={show.hookups} onChange={(e) => onShow({ ...show, hookups: e.currentTarget.checked })} />
         Hookups
+      </label>
+      <label className="check">
+        <input type="checkbox" checked={showLinks} onChange={(e) => onShowLinks(e.currentTarget.checked)} />
+        Show connections
       </label>
     </div>
   );
@@ -168,9 +201,9 @@ function Warnings(props: { layout: Layout }): ReactElement | null {
 
 /**
  * The tab without the viewer: what is happening (an error, laying out, no WebGL2, nothing to build), the canvas with
- * the hover label over it, the layer slider and the Ghosts and Hookups toggles, and beside them the clicked block's
- * details (where they show without scrolling), the side list and the layout's warnings below it. Without WebGL2 only
- * the side list and the warnings show.
+ * the hover label over it, the layer slider and the Ghosts, Hookups and Show connections toggles (with what the drawn
+ * links are while they show), and beside them the clicked block's or link's details (where they show without
+ * scrolling), the side list and the layout's warnings below it. Without WebGL2 only the side list and the warnings show.
  */
 export function View3DShell(props: View3DShellProps): ReactElement {
   const { layout, loading, error, webgl, hover, info, canvas, names } = props;
@@ -190,8 +223,12 @@ export function View3DShell(props: View3DShellProps): ReactElement {
                 {canvas}
                 {hover !== null && <p data-testid="view3d-hover" className="small" style={HOVER_STYLE}>{hover}</p>}
               </div>
-              <Controls maxLayer={props.maxLayer} onLayer={props.onLayer} show={props.show} onShow={props.onShow} height={layout.size[1]} />
+              <Controls maxLayer={props.maxLayer} onLayer={props.onLayer} show={props.show} onShow={props.onShow} showLinks={props.showLinks}
+                onShowLinks={props.onShowLinks} height={layout.size[1]} />
               <p className="muted small" style={{ margin: 0 }}>Drag to turn, right-drag to pan, scroll to zoom; click a block for its details.</p>
+              {props.showLinks && props.linksNote != null && (
+                <p data-testid="view3d-links" className="muted small" style={{ margin: 0 }}>{props.linksNote}</p>
+              )}
             </div>
           )}
           <div style={SIDE_STYLE}>
@@ -203,6 +240,15 @@ export function View3DShell(props: View3DShellProps): ReactElement {
       )}
     </div>
   );
+}
+
+/** What the drawn links are, under the view: how many, what their colours and arrows say, and what hovering and clicking do. */
+export function linksNoteText(count: number | null): string {
+  if (count === null) return 'Nothing to connect yet: the plan has no line to lay out';
+  if (count === 0) return 'No connections to draw';
+  return `${fmtInt(count)} connection${count === 1 ? '' : 's'} drawn, each from the face that gives to the face that takes, the arrow `
+    + 'pointing the way, in its EnderIO channel\'s colour or else the colour of what carries it, as on the Connections tab. Hover one for '
+    + 'what it carries; click it to mark its two faces.';
 }
 
 /** Whether the end-to-end test asked for a canvas it can read back; false when storage is refused. */
@@ -217,7 +263,9 @@ function preserveDrawingBuffer(): boolean {
 /**
  * The 3D tab: the project's layout (Task 13's `useLayout`); for a layout with blocks, its textures loaded and a viewer
  * made on the canvas, then kept in step with the slider, the toggles and the canvas's size. A new layout disposes the
- * previous viewer first, and clears the hover label and the details, which named its blocks.
+ * previous viewer first, and clears the hover label and the details, which named its blocks. While Show connections is
+ * on, the Connections tab's graph of the layout (rates per hour in Make N mode, else per the settings' unit) gives the
+ * links the viewer draws, a hookup's left out while hookups are hidden; new links let a picked one go.
  */
 export default function View3D(props: ProjectViewProps): ReactElement {
   const { project, plan } = props;
@@ -226,8 +274,11 @@ export default function View3D(props: ProjectViewProps): ReactElement {
   const [webgl] = useState(webgl2Available);
   const [maxLayer, setMaxLayer] = useState<number | null>(null);
   const [show, setShow] = useState<Show>({ ghosts: true, hookups: true });
+  const [showLinks, setShowLinks] = useState(loadShowLinks);
   const [hover, setHover] = useState<string | null>(null);
-  const [info, setInfo] = useState<Info | null>(null);
+  /** The clicked block's or link's details; `link` when they are a link's. */
+  const [info, setInfo] = useState<(Info & { link?: true }) | null>(null);
+  const [pickedLink, setPickedLink] = useState<number | null>(null);
   const [viewError, setViewError] = useState<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   /** The viewer on the canvas and the layout it draws (block indices from `pick` refer to it). */
@@ -235,7 +286,17 @@ export default function View3D(props: ProjectViewProps): ReactElement {
   const pressedAt = useRef<{ x: number; y: number } | null>(null);
   // A slider position at or above a new, lower layout's height shows all of it.
   const shownLayer = maxLayer !== null && layout !== null && maxLayer < layout.size[1] ? maxLayer : null;
-  const latest = useRef({ shownLayer, show });
+  const per = project.settings.mode === 'makeN' ? 'hour' : project.settings.per;
+  const graph = useMemo(
+    () => (showLinks && plan !== null && layout !== null && hasLine(plan, layout) ? connectionsGraph(layout, plan, per) : null),
+    [showLinks, plan, layout, per],
+  );
+  const links = useMemo((): LinkGeometry | null => {
+    if (graph === null || layout === null) return null;
+    const spans = spansShown(connectionSpans(layout, graph), graph, layout, show.hookups);
+    return linkGeometry(spans, new Map(graph.edges.map((e) => [e.id, e])), layout.origin);
+  }, [graph, layout, show.hookups]);
+  const latest = useRef<{ shownLayer: number | null; show: Show; links: LinkGeometry | null }>({ shownLayer, show, links });
 
   useEffect(() => {
     setHover(null);
@@ -256,6 +317,7 @@ export default function View3D(props: ProjectViewProps): ReactElement {
         viewer = createViewer(canvas, layout, scene, tiles, { preserveDrawingBuffer: preserveDrawingBuffer() });
         viewer.setShow(latest.current.show);
         viewer.setMaxLayer(latest.current.shownLayer);
+        viewer.setLinks(latest.current.links);
         built.current = { viewer, layout };
         resizes?.observe(canvas);
       } catch (err) {
@@ -278,6 +340,19 @@ export default function View3D(props: ProjectViewProps): ReactElement {
     latest.current.show = show;
     built.current?.viewer.setShow(show);
   }, [show]);
+  useEffect(() => {
+    latest.current.links = links;
+    built.current?.viewer.setLinks(links);
+    setPickedLink(null);
+    setInfo((was) => (was?.link === true ? null : was));
+  }, [links]);
+  useEffect(() => {
+    built.current?.viewer.setSelectedLink(pickedLink);
+  }, [pickedLink]);
+  const onShowLinks = (on: boolean): void => {
+    saveShowLinks(on);
+    setShowLinks(on);
+  };
 
   const canvas = (
     <canvas
@@ -291,8 +366,10 @@ export default function View3D(props: ProjectViewProps): ReactElement {
       onPointerMove={(e) => {
         const view = built.current;
         if (view === null) return;
-        const block = view.viewer.pick(e.clientX, e.clientY);
-        setHover(block === null ? null : hoverText(view.layout, plan, block));
+        const hit = view.viewer.pick(e.clientX, e.clientY);
+        // a link says what the Connections tab writes on it
+        if (hit?.kind === 'link') setHover(graph === null ? null : pickDetails(graph, { edge: hit.link.span.edge })?.title ?? null);
+        else setHover(hit === null ? null : hoverText(view.layout, plan, hit.block));
       }}
       onPointerLeave={() => setHover(null)}
       onClick={(e) => {
@@ -301,8 +378,11 @@ export default function View3D(props: ProjectViewProps): ReactElement {
         if (from !== null && Math.hypot(e.clientX - from.x, e.clientY - from.y) > CLICK_SLOP_PX) return;   // the end of a drag
         const view = built.current;
         if (view === null) return;
-        const block = view.viewer.pick(e.clientX, e.clientY);
-        setInfo(block === null ? null : pickInfo(view.layout, plan, block));
+        const hit = view.viewer.pick(e.clientX, e.clientY);
+        const details = hit?.kind === 'link' && graph !== null ? spanDetails(graph, hit.link.span) : null;
+        setPickedLink(hit?.kind === 'link' && details !== null ? hit.index : null);
+        if (hit?.kind === 'link') setInfo(details === null ? null : { ...details, link: true });
+        else setInfo(hit === null ? null : pickInfo(view.layout, plan, hit.block));
       }}
     />
   );
@@ -322,6 +402,9 @@ export default function View3D(props: ProjectViewProps): ReactElement {
       canvas={canvas}
       names={plan?.names}
       noSteps={plan !== null && plan.steps.length === 0}
+      showLinks={showLinks}
+      onShowLinks={onShowLinks}
+      linksNote={showLinks ? linksNoteText(links === null ? null : links.links.length) : null}
     />
   );
 }

@@ -1,13 +1,14 @@
 // The 3D view's scene as plain data (Plan 5 Task 14; spec §3.8, architecture §11.14, web-stack §8): the blocks of a
-// layout as instances of four shapes, the face textures they share as tile sources for one array texture, which
+// layout as instances of five shapes, the face textures they share as tile sources for one array texture, which
 // instances the layer slider and the ghost and hookup toggles show, the side list of blocks to place, and the texts
 // for hover and click. An EnderIO conduit bundle (architecture "EnderIO conduits, granted change requests (add-on
-// 11)") draws each of its conduits side by side, with a connector arm on every face that is set, drawn as EnderIO draws
-// it: the plate, then the mode's arrows in the face's channel colours (an In / Out face shows both). A pipe with pipe
-// layers (architecture §11.43 (c)) draws its core, arms and arm tips from them, over its role's colour; a machine
-// facing up or down keeps its hull's top, bottom and sides where GT draws them (§11.43 (j)). Pure TypeScript — no
-// DOM, no three.js — so it is tested without a browser; the viewer turns these lists into meshes and the loader turns
-// the tile sources into pixels.
+// 11)") draws every connection of its conduits as EnderIO draws it (the user's requirements of 2026-10-19, item 3
+// (a)): an arm toward each linked neighbour, the conduits that go one way side by side, and a connector arm on every
+// face that is set: the plate, then the mode's arrows in the face's channel colours (an In / Out face shows both);
+// where its conduits part, they meet in EnderIO's connector box. A pipe with pipe layers (architecture §11.43 (c))
+// draws its core, arms and arm tips from them, over its role's colour; a machine facing up or down keeps its hull's
+// top, bottom and sides where GT draws them (§11.43 (j)). Pure TypeScript — no DOM, no three.js — so it is tested
+// without a browser; the viewer turns these lists into meshes and the loader turns the tile sources into pixels.
 
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import { TIER_NAMES } from '../../shared/gt/tiers.ts';
@@ -19,12 +20,16 @@ import {
   FACES, KIND_COLORS, conduitBlockRef, orientFaces, rotateFaces,
   type BlockFaces, type CoverLayers, type Face, type IconDescriptor, type Rgb, type TextureLayer,
 } from '../../shared/types/assets.ts';
-import type { BlockRole, ConduitFace, ConduitMode, Layout, LayoutBlock } from '../../shared/types/layout.ts';
+import type { BlockRole, ConduitFace, ConduitMode, ConduitSpec, Layout, LayoutBlock } from '../../shared/types/layout.ts';
 import type { BlockRef, Product } from '../../shared/types/pack.ts';
 import type { Plan, PlanStep } from '../../shared/types/plan.ts';
 
-/** `cube`: a whole block. `core` and `arm`: a cable or pipe, its middle and one arm per connected side. `plate`: a cover on one face. */
-export type ShapeKind = 'cube' | 'core' | 'arm' | 'plate';
+/**
+ * `cube`: a whole block. `core` and `arm`: a cable, pipe or conduit, its middle and one arm per connected side. `plate`:
+ * a cover on one face. `hub`: the connector box a conduit bundle's conduits meet in where they part, a box of its own
+ * `size`.
+ */
+export type ShapeKind = 'cube' | 'core' | 'arm' | 'plate' | 'hub';
 
 /** The plain colour of a face that has no texture (spec §3.8): by machine kind where Plan 3 has one, else one of this view's own. */
 export const ROLE_FALLBACK: Readonly<Record<BlockRole, Rgb>> = {
@@ -40,8 +45,12 @@ const FALLBACK_KEY = 'fallback';
 const FALLBACK_COLOR: Rgb = [128, 128, 128];
 /** A machine with no facing looks north, like the canonical textures. */
 const DEFAULT_FACING = 2;
-/** How far apart (blocks) the conduits of a bundle are drawn, one above the other. */
+/** How far apart (blocks) the conduits of a bundle that go one way are drawn, side by side: a conduit is 6 px across. */
 const BUNDLE_SPACING = 6 / 16;
+/** Half a conduit core's width (blocks). */
+const CORE_HALF = 3 / 16;
+/** How much bigger than the cores it holds EnderIO draws a bundle's connector box (`TileConduitBundle.addConnectors`). */
+const HUB_SCALE = 1.05;
 
 /** `${id}@${meta}`, plus `#${mteId}` for a GregTech machine: how the scene names a block to the asset routes. */
 export function blockKey(ref: BlockRef): string {
@@ -96,8 +105,13 @@ export interface SceneInstance {
   /** Index into `SceneData.tiles` per world side, in ForgeDirection order (down, up, north, south, west, east). */
   tiles: [number, number, number, number, number, number];
   ghost: boolean;
-  /** Shift from the cell centre, in blocks: conduits of one bundle side by side. */
+  /** Shift from the cell centre, in blocks: conduits of one bundle side by side, the centre of a bundle's connector box. */
   offset?: Vec3;
+  // optional additions (the user's requirements of 2026-10-19, item 3 (a))
+  /** The conduit of the block's bundle a `core` or `arm` draws (index into `conduits`). */
+  conduit?: number;
+  /** A `hub`'s size in blocks along x, y and z. */
+  size?: Vec3;
 }
 
 /** Where an instance sits: its cell centre plus `offset`. */
@@ -123,6 +137,9 @@ const CONNECTOR_PARTS: Readonly<Record<SetMode, ReadonlyArray<{ part: string; si
   in_out: [{ part: 'background', side: null }, { part: 'in_out_in', side: 'extract' }, { part: 'in_out_out', side: 'insert' }],
 };
 
+/** EnderIO's internal connector (`BlockConduitBundle.connectorIcon`, `conduitConnector`): Plan 3's curated `conduit:other`. */
+const HUB_REF: BlockRef = conduitBlockRef('other');
+
 function connectorRef(part: string): BlockRef {
   return conduitBlockRef(`connector_${part}`);
 }
@@ -131,9 +148,57 @@ function isSet(face: ConduitFace): face is ConduitFace & { mode: SetMode } {
   return face.mode !== 'disabled';
 }
 
+/** One arm of a conduit: its side, its shift from the cell centre, and the set face it ends in (its connector), else null (a link). */
+interface ArmPlan { side: number; offset: Vec3; face: (ConduitFace & { mode: SetMode }) | null }
+/** How a bundle is drawn: per conduit its cores and arms (in side order), and the connector box when its conduits part. */
+interface BundlePlan { cores: Vec3[][]; arms: ArmPlan[][]; hub: { offset: Vec3; size: Vec3 } | null }
+
+/**
+ * How EnderIO 2.10.46 lays a bundle's conduits out (`TileConduitBundle.getOffset`, `getConnectionCount`, `addConnectors`):
+ * each conduit has an arm toward each side it is linked or has a set face on (the face wins); toward a side that two or
+ * more of the bundle's conduits go, their arms are drawn side by side in bundle order, BUNDLE_SPACING apart across the
+ * arm (along y for the four sides, along x up and down), and toward a side a conduit goes alone, on the cell's centre
+ * line. Linked neighbours have the same conduits going between them, so their arms meet, and every arm reaches its face.
+ * A conduit's core is at each place its arms leave from, or at its place in the bundle (along y) when it has none.
+ * Where a conduit has cores in two places, or two conduits' cores overlap, EnderIO draws its connector box around all
+ * of the bundle's cores, 1.05 times their size, and they are not drawn inside it.
+ */
+function bundlePlan(conduits: readonly ConduitSpec[]): BundlePlan {
+  const n = conduits.length;
+  const ends = conduits.map((c) => {
+    const out: Array<{ side: number; face: (ConduitFace & { mode: SetMode }) | null }> = [];
+    for (let side = 0; side < 6; side++) {
+      const face = c.faces.find((f) => f.face === FACES[side]);
+      if (face !== undefined && isSet(face)) out.push({ side, face });
+      else if (c.connections & (1 << side)) out.push({ side, face: null });
+    }
+    return out;
+  });
+  const going = FACES.map((_, side) => ends.flatMap((list, i) => (list.some((e) => e.side === side) ? [i] : [])));
+  const arms = ends.map((list, i) => list.map(({ side, face }): ArmPlan => {
+    const together = going[side]!;
+    const lane = together.length < 2 ? 0 : (together.indexOf(i) - (together.length - 1) / 2) * BUNDLE_SPACING;
+    return { side, offset: side < 2 ? [lane, 0, 0] : [0, lane, 0], face };
+  }));
+  const cores = arms.map((list, i): Vec3[] => {
+    const places = new Map(list.map((a) => [posKey(a.offset), a.offset]));
+    return places.size > 0 ? [...places.values()] : [[0, n < 2 ? 0 : (i - (n - 1) / 2) * BUNDLE_SPACING, 0]];
+  });
+  const all = cores.flatMap((list, i) => list.map((p) => ({ i, p })));
+  const overlap = (a: Vec3, b: Vec3): boolean => a.every((v, k) => Math.abs(v - b[k]!) < 2 * CORE_HALF - 1e-9);
+  const parts = n >= 2 && (cores.some((list) => list.length > 1) || all.some((a, x) => all.some((b, y) => y > x && a.i !== b.i && overlap(a.p, b.p))));
+  if (!parts) return { cores, arms, hub: null };
+  const low = [0, 1, 2].map((k) => Math.min(...all.map(({ p }) => p[k]! - CORE_HALF)));
+  const high = [0, 1, 2].map((k) => Math.max(...all.map(({ p }) => p[k]! + CORE_HALF)));
+  const mid = (k: number): number => (low[k]! + high[k]!) / 2;
+  const across = (k: number): number => (high[k]! - low[k]!) * HUB_SCALE;
+  return { cores, arms, hub: { offset: [mid(0), mid(1), mid(2)], size: [across(0), across(1), across(2)] } };
+}
+
 /**
  * The refs a block is drawn with: its own, then per conduit `conduit:<kind>` and the connector parts of each
- * non-disabled face (`CONNECTOR_PARTS`); each once, in that order.
+ * non-disabled face (`CONNECTOR_PARTS`), then the connector box (`conduit:other`) of a bundle whose conduits part
+ * (`bundlePlan`); each once, in that order.
  */
 export function sceneBlockRefs(b: LayoutBlock): BlockRef[] {
   const refs = new Map<string, BlockRef>();
@@ -146,6 +211,7 @@ export function sceneBlockRefs(b: LayoutBlock): BlockRef[] {
     add(conduitBlockRef(conduit.kind));
     for (const face of conduit.faces) if (isSet(face)) for (const { part } of CONNECTOR_PARTS[face.mode]) add(connectorRef(part));
   }
+  if ((b.conduits ?? []).length > 0 && bundlePlan(b.conduits!).hub !== null) add({ ...HUB_REF });
   return [...refs.values()];
 }
 
@@ -162,11 +228,13 @@ function onAllSides(tile: number): SceneInstance['tiles'] {
 }
 
 /**
- * The scene of a layout, instances in block order. A block holding EnderIO conduits draws, per conduit in bundle order,
- * a `core` and an `arm` per side (ascending) that is one of its links (all faces the conduit's `north` texture) or one
- * of its faces that is not Disabled (all faces that face's connector: the `north` textures of its `CONNECTOR_PARTS`,
- * each arrow tinted with its side's channel colour); in a bundle of n ≥ 2 every shape of conduit i carries `offset`
- * [0, (i − (n − 1) / 2) × 6/16, 0], so the conduits sit side by side. Any other
+ * The scene of a layout, instances in block order. A block holding EnderIO conduits draws them as `bundlePlan` lays
+ * them out: the connector box (a `hub` of its `size` and `offset`, all faces the `north` texture of `conduit:other`)
+ * when its conduits part, then per conduit in bundle order its `core` at each of its places unless the box holds them,
+ * and an `arm` per side (ascending) that is one of its links (all faces the conduit's `north` texture) or one of its
+ * faces that is not Disabled (all faces that face's connector: the `north` textures of its `CONNECTOR_PARTS`, each arrow
+ * tinted with its side's channel colour), each with its `conduit` index and its `offset` when it is off the centre. Any
+ * other
  * cable, pipe or chip pipe is a `core` plus an `arm` per connected side (ascending), and so is a ghost whose faces carry
  * `pipe`, its connected sides those whose neighbour is one of the line's cables or pipes (never a ghost): with `pipe`
  * (architecture §11.43 (c)) the core shows `pipe.core` on all six sides and an arm `pipe.end` on the side it points to,
@@ -215,15 +283,17 @@ export function buildScene(
   layout.blocks.forEach((b, block) => {
     const pos: Vec3 = [b.pos[0] - ox, b.pos[1] - oy, b.pos[2] - oz];
     const ghost = b.role === 'ghost';
-    const add = (shape: ShapeKind, side: number, sides: SceneInstance['tiles'], offset?: Vec3): void => {
-      instances.push({ block, shape, pos: [...pos], side, tiles: sides, ghost, ...(offset === undefined ? {} : { offset: [...offset] }) });
+    const add = (shape: ShapeKind, side: number, sides: SceneInstance['tiles'], offset?: Vec3, more?: { conduit?: number; size?: Vec3 }): void => {
+      const shifted = offset !== undefined && offset.some((v) => v !== 0);
+      instances.push({ block, shape, pos: [...pos], side, tiles: sides, ghost, ...(shifted ? { offset: [...offset] } : {}),
+        ...(more?.conduit === undefined ? {} : { conduit: more.conduit }), ...(more?.size === undefined ? {} : { size: [...more.size] }) });
     };
     const found = faces.get(blockKey(b.block));
     /** What the textured tiles of a core or an arm are drawn over. */
     const under = ROLE_FALLBACK[b.role];
 
     if (b.conduits !== undefined && b.conduits.length > 0) {
-      const n = b.conduits.length;
+      const plan = bundlePlan(b.conduits);
       /** The `north` face of a conduit's pseudo block, drawn over the role's colour, else the block role's plain colour. */
       const northTile = (ref: BlockRef): number => {
         const own = faces.get(blockKey(ref));
@@ -243,15 +313,11 @@ export function buildScene(
         const first = face.mode === 'insert' ? face.insert : face.extract;
         return tile(layers, first === undefined ? ROLE_FALLBACK[b.role] : dyeRgb(first.color), under);
       };
+      if (plan.hub !== null) add('hub', -1, onAllSides(northTile(HUB_REF)), plan.hub.offset, { size: plan.hub.size });
       b.conduits.forEach((conduit, i) => {
-        const offset: Vec3 | undefined = n < 2 ? undefined : [0, (i - (n - 1) / 2) * BUNDLE_SPACING, 0];
         const t = northTile(conduitBlockRef(conduit.kind));
-        add('core', -1, onAllSides(t), offset);
-        for (let side = 0; side < 6; side++) {
-          const face = conduit.faces.find((f) => f.face === FACES[side]);
-          if (face !== undefined && isSet(face)) add('arm', side, onAllSides(connectorTile(face)), offset);
-          else if (conduit.connections & (1 << side)) add('arm', side, onAllSides(t), offset);
-        }
+        if (plan.hub === null) for (const place of plan.cores[i]!) add('core', -1, onAllSides(t), place, { conduit: i });
+        for (const arm of plan.arms[i]!) add('arm', arm.side, onAllSides(arm.face === null ? t : connectorTile(arm.face)), arm.offset, { conduit: i });
       });
     } else if (PIPE_ROLES.has(b.role) || (ghost && found?.pipe !== undefined)) {
       const connections = ghost ? linksToPipes(b.pos) : b.connections ?? 0;

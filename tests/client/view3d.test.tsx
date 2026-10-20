@@ -14,9 +14,12 @@ import type { TextureDeps } from '../../src/client/three/load-textures.ts';
 import { layerKey, regionRect, type BlockFaces, type Rect, type Rgb, type TextureLayer } from '../../src/shared/types/assets.ts';
 import type { Layout, LayoutBlock } from '../../src/shared/types/layout.ts';
 import { CONV } from './layout-fixture.ts';
+// the user's requirements of 2026-10-19, item 3 (b): Show connections, remembered in this browser
+import { LINKS_STORAGE_KEY, loadShowLinks, saveShowLinks } from '../../src/client/views/View3D.tsx';
 
 const shell = (over: Partial<View3DShellProps> = {}) => renderToStaticMarkup(<View3DShell layout={sampleLayout} loading={false} error={null} webgl
-  maxLayer={null} onLayer={() => {}} show={{ ghosts: true, hookups: true }} onShow={() => {}} hover={null} info={null} canvas={<canvas />} {...over} />);
+  maxLayer={null} onLayer={() => {}} show={{ ghosts: true, hookups: true }} onShow={() => {}} hover={null} info={null} canvas={<canvas />}
+  showLinks={false} onShowLinks={() => {}} {...over} />);
 
 describe('3D tab', () => {
   it('shows the block list, the layer slider and the toggles', () => {
@@ -223,12 +226,49 @@ describe('3D tab: the rules in detail', () => {
     expect(odd).toEqual(solidTile([1, 2, 3]));
   });
 
-  it("keeps three's UVs on the cube, the core, the plate and an arm's ±x faces and ends", () => {
+  it("keeps three's UVs on the cube, the core, the plate, the connector box and an arm's ±x faces and ends", () => {
     const uvs = (g: BufferGeometry): number[] => [...g.getAttribute('uv').array];
     const box = uvs(new BoxGeometry(1, 1, 1));               // 2 numbers per vertex, 4 vertices per face: faces 0–1 are 0–15, faces 4–5 are 32–47
-    for (const shape of ['cube', 'core', 'plate'] as const) expect(uvs(shapeGeometry(shape))).toEqual(box);
+    for (const shape of ['cube', 'core', 'plate', 'hub'] as const) expect(uvs(shapeGeometry(shape))).toEqual(box);
     const arm = uvs(shapeGeometry('arm'));
     expect([...arm.slice(0, 16), ...arm.slice(32)]).toEqual([...box.slice(0, 16), ...box.slice(32)]);
     expect(arm.slice(16, 32)).not.toEqual(box.slice(16, 32));
+  });
+});
+
+// The user's requirements of 2026-10-19, item 3 (b): the Connections tab's links drawn in the 3D view on request.
+describe('3D tab: Show connections', () => {
+  it('shows the Show connections toggle beside the others, off unless asked, and what the links mean while it is on', () => {
+    const off = shell();
+    expect(off).toMatch(/Hookups<\/label><label class="check"><input type="checkbox"\/>Show connections<\/label>/);
+    expect(off).not.toContain('data-testid="view3d-links"');
+    const on = shell({ showLinks: true, linksNote: '3 connections drawn' });
+    expect(on).toMatch(/<input type="checkbox" checked=""\/>Show connections/);
+    expect(on).toMatch(/<p data-testid="view3d-links" class="muted small"[^>]*>3 connections drawn<\/p>/);
+    // no toggle without a canvas to draw on
+    expect(shell({ webgl: false, showLinks: true, linksNote: '3 connections drawn' })).not.toContain('Show connections');
+  });
+
+  it('remembers the toggle in this browser, and stays off when storage is refused or holds something else', () => {
+    const store = new Map<string, string>();
+    const was = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+    const use = (storage: unknown) => Object.defineProperty(globalThis, 'localStorage', { value: storage, configurable: true, writable: true });
+    try {
+      use({ getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => { store.set(k, v); } });
+      expect(loadShowLinks()).toBe(false);
+      saveShowLinks(true);
+      expect([store.get(LINKS_STORAGE_KEY), loadShowLinks()]).toEqual(['1', true]);
+      saveShowLinks(false);
+      expect(loadShowLinks()).toBe(false);
+      store.set(LINKS_STORAGE_KEY, 'yes');
+      expect(loadShowLinks()).toBe(false);
+      use({ getItem: () => { throw new Error('refused'); }, setItem: () => { throw new Error('refused'); } });
+      expect(loadShowLinks()).toBe(false);
+      expect(() => saveShowLinks(true)).not.toThrow();
+    } finally {
+      if (was === undefined) delete (globalThis as { localStorage?: unknown }).localStorage;
+      else Object.defineProperty(globalThis, 'localStorage', was);
+    }
+    expect(LINKS_STORAGE_KEY).toBe('gtnh-planner:3d-connections');
   });
 });

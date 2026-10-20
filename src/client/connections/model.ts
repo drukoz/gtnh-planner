@@ -6,8 +6,10 @@
 // conduit on its channel colour) and through which faces, each conduit face's row naming its mode and the channel of
 // each of its sides; then each interface attached to what it serves and each
 // logistics hookup joining the line. Also the ELK graph that lays the boxes out (inputs on the left, outputs on the
-// right), the picture read back from ELK, and what a picked box, face or link tells. No DOM and no browser APIs: the
-// server's tests lay real lines out and read their graphs too. Every order is fixed, so a layout gives one graph.
+// right), the picture read back from ELK, and what a picked box, face or link tells; and where each link starts and
+// ends in the world, which the 3D view's Show connections draws (the user's requirements of 2026-10-19, item 3 (b)).
+// No DOM and no browser APIs: the server's tests lay real lines out and read their graphs too. Every order is fixed,
+// so a layout gives one graph.
 
 import type { ElkExtendedEdge, ElkNode } from 'elkjs/lib/elk-api.js';
 import { TIER_NAMES } from '../../shared/gt/tiers.ts';
@@ -15,7 +17,7 @@ import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import { configTexts, conduitFaceText, coverText, faceName } from '../../shared/layout/configure-text.ts';
 import { CONDUIT_MODE_NAMES, CONDUIT_NAMES, DYE_NAMES, hookupNetworkKind } from '../../shared/layout/enderio.ts';
 import { fmtInt, fmtRate, joinNames, NETWORK_NAMES } from '../../shared/layout/format.ts';
-import { OPPOSITE, posKey, step, type Vec3 } from '../../shared/layout/geometry.ts';
+import { OPPOSITE, posKey, sideToward, step, type Vec3 } from '../../shared/layout/geometry.ts';
 import { FACES, type Face } from '../../shared/types/assets.ts';
 import type {
   BlockRole, ConduitFace, ConduitFilter, ConduitKind, ConduitMode, CoverSpec, DyeColor, Layout, LayoutBlock, TailChest,
@@ -190,6 +192,11 @@ function coverRow(node: string, host: LayoutBlock, cover: CoverSpec, nameOf: (k:
   return { face: { id: `${node}#cover:${posKey(host.pos)}:${cover.face}`, title: `${host.label}, ${faceName(cover.face)} face`, lines: [coverText(cover, nameOf)] }, conduit: null };
 }
 
+/** What follows `<box id>#` in the id of a conduit face's row: the conduit's cell, its kind and the face. */
+function conduitRowKey(pos: Vec3, kind: ConduitKind, face: Face): string {
+  return `conduit:${posKey(pos)}:${kind}:${face}`;
+}
+
 /**
  * `<label>, <side of what the face points at> side · <conduit name>`: one conduit face in a builder's words, with its
  * mode and the colour of each side it has.
@@ -198,7 +205,7 @@ function conduitRow(node: string, ref: ConduitRef, label: string, nameOf: (k: St
   const side: Face = FACES[OPPOSITE[FACES.indexOf(ref.face.face)]!]!;
   const { mode, extract, insert } = ref.face;
   return {
-    face: { id: `${node}#conduit:${posKey(ref.host.pos)}:${ref.kind}:${ref.face.face}`, title: `${label}, ${faceName(side)} side · ${CONDUIT_NAMES[ref.kind]}`,
+    face: { id: `${node}#${conduitRowKey(ref.host.pos, ref.kind, ref.face.face)}`, title: `${label}, ${faceName(side)} side · ${CONDUIT_NAMES[ref.kind]}`,
       lines: [conduitFaceText(ref.kind, ref.face, nameOf)],
       mode: { mode, ...(extract === undefined ? {} : { extract: extract.color }), ...(insert === undefined ? {} : { insert: insert.color }) } },
     conduit: ref.face,
@@ -302,14 +309,17 @@ function flowEdge(link: FlowLink, ends: { from: ConnNode; to: ConnNode }, condui
   const color = (fromFace === undefined ? undefined : conduitOf.get(fromFace.id)?.extract?.color)
     ?? (toFace === undefined ? undefined : conduitOf.get(toFace.id)?.insert?.color) ?? null;
   const channel = color === null ? '' : DYE_NAMES[color];
-  const end = (word: string, node: ConnNode, face: ConnFace | undefined): string[] =>
-    [`${word} ${node.title}${face === undefined ? '' : ` — ${face.title}`}`, ...(face?.lines ?? [])];
   return {
     id: link.id, from: link.from, to: link.to, via, key: link.key, perSecond: link.perSecond,
     label: `${nameOf(link.key)} ${fmtRate(link.perSecond * (per === 'min' ? 60 : 3600))}/${per === 'min' ? 'min' : 'h'}${channel === '' ? '' : ` · ${channel}`}`,
-    lines: [`${VIA_TEXT[via]}${channel === '' ? '' : `, channel ${channel}`}`, ...end('From', ends.from, fromFace), ...end('To', ends.to, toFace)],
+    lines: [`${VIA_TEXT[via]}${channel === '' ? '' : `, channel ${channel}`}`, ...endLines('From', ends.from, fromFace), ...endLines('To', ends.to, toFace)],
     color, fromFace: fromFace?.id ?? null, toFace: toFace?.id ?? null,
   };
+}
+
+/** One end of a flow in full: `<From|To> <box>[ — <face row>]`, then the face row's own lines. */
+function endLines(word: 'From' | 'To', node: ConnNode, face: ConnFace | undefined): string[] {
+  return [`${word} ${node.title}${face === undefined ? '' : ` — ${face.title}`}`, ...(face?.lines ?? [])];
 }
 
 /** A link that carries nothing: an interface on what it serves, or a hookup joining the line. */
@@ -362,6 +372,11 @@ function hookupEdges(layout: Layout, nodes: readonly ConnNode[], grid: Grid): Co
 }
 
 // ---- The graph ----
+
+/** Whether a plan and its layout hold a line to connect: a plan that makes something and a layout that places it. */
+export function hasLine(plan: Plan, layout: Layout): boolean {
+  return plan.status !== 'empty' && plan.status !== 'infeasible' && layout.status !== 'empty';
+}
 
 /**
  * Spec §3.8c: the boxes of `layout` (machines per plan step, chests, interfaces, hookups, then `raw` and `out` when a
@@ -492,4 +507,144 @@ export function pickDetails(g: ConnGraph, pick: ConnPick): { title: string; line
   if (pick.face === undefined) return { title: n.title, lines: [...n.lines, ...n.faces.flatMap((f) => [f.title, ...f.lines])] };
   const f = n.faces.find((x) => x.id === pick.face);
   return f === undefined ? null : { title: f.title, lines: [...f.lines] };
+}
+
+// ---- In the world ----
+
+/**
+ * One end of a link in the world, for the 3D view's Show connections (the user's requirements of 2026-10-19, item 3
+ * (b)): the centre of face `side` (ForgeDirection) of the block cell `cell` (world coordinates), and the id of the face
+ * row it stands for when it is one. A conduit face's end is on the face of what the conduit face points at, toward the
+ * conduit (an open fluid end's on the cell where your tank goes); any other end is the top of a block that stands for
+ * its box.
+ */
+export interface ConnSpot { cell: Vec3; side: number; face: string | null }
+/** One piece of a link in the world, from one end to the other. */
+export interface ConnSpan { edge: string; from: ConnSpot; to: ConnSpot }
+
+/** A block's top face, where a link that stands for a whole box starts or ends. */
+const TOP = 1;
+/** At most this many pieces join one set of ends to another (16 × 16), so a line of big steps stays light to draw. */
+const SPANS_PER_LINK = 256;
+
+/**
+ * Each of `a` with each of `b`; past SPANS_PER_LINK pairs, the two in turn instead (the k-th of each, round), as many
+ * pairs as the longer has, so every one of either is in a pair.
+ */
+function pairUp<A, B>(a: readonly A[], b: readonly B[]): Array<[A, B]> {
+  if (a.length === 0 || b.length === 0) return [];
+  if (a.length * b.length <= SPANS_PER_LINK) return a.flatMap((x) => b.map((y): [A, B] => [x, y]));
+  return Array.from({ length: Math.max(a.length, b.length) }, (_, k): [A, B] => [a[k % a.length]!, b[k % b.length]!]);
+}
+
+/**
+ * Every link of `g`, the Connections graph of `layout`, as the pieces the 3D view draws, in link order. A flow on
+ * conduits goes from each extract face of its source box whose side passes its good to each insert face of its target
+ * box that such an extraction reaches: an insert side on the extract side's channel, on a conduit of the good's kind
+ * (an item on the Item Conduit, a fluid on an ender fluid conduit), that passes the good, as EnderIO offers every
+ * extraction to each of them. Without such a pair it goes from the link's own faces (`fromFace`, `toFace`), and an end
+ * without one is drawn as any other link's. Any other link joins the blocks that stand for its boxes, each with each: a
+ * step's machines (a multiblock by its controller), a chest, an interface, a hookup by the block at the end of its path,
+ * and the raw inputs and final outputs by the end of the line's logistics hookup, where the base's network comes in (no
+ * piece without one); an interface's link goes to the blocks of what it serves that it touches, and a hookup's to the
+ * blocks of the box it joins that its end touches, when there are any. Where each with each would make more than
+ * SPANS_PER_LINK pieces (two big steps), the ends are joined in turn instead, each at least once (`pairUp`). Each piece
+ * once; a piece whose two ends are one spot is left out.
+ */
+export function connectionSpans(layout: Layout, g: ConnGraph): ConnSpan[] {
+  const blocks = layout.blocks;
+  const at = new Map<string, number>();
+  blocks.forEach((b, i) => {
+    if (b.role !== 'ghost' && !at.has(posKey(b.pos))) at.set(posKey(b.pos), i);
+  });
+  // the conduit face behind each conduit row of each box
+  const byKey = new Map<string, ConduitRef>();
+  for (const b of blocks) {
+    if (b.role === 'ghost') continue;
+    for (const c of b.conduits ?? []) for (const face of c.faces) byKey.set(conduitRowKey(b.pos, c.kind, face.face), { host: b, kind: c.kind, face });
+  }
+  const conduitRows = new Map(g.nodes.map((n) => [n.id, n.faces.flatMap((f) => {
+    const ref = f.id.startsWith(`${n.id}#`) ? byKey.get(f.id.slice(n.id.length + 1)) : undefined;
+    return ref === undefined ? [] : [{ id: f.id, ref }];
+  })]));
+  const refOf = new Map([...conduitRows.values()].flat().map((r) => [r.id, r.ref]));
+  const faceSpot = (id: string, ref: ConduitRef): ConnSpot => {
+    const side = FACES.indexOf(ref.face.face);
+    return { cell: step(ref.host.pos, side), side: OPPOSITE[side]!, face: id };
+  };
+  const top = (i: number): ConnSpot => ({ cell: [...blocks[i]!.pos], side: TOP, face: null });
+  /** The block at the end of hookup `n`'s path, when the hookup laid it. */
+  const hookupEnd = (n: number): number[] => {
+    const last = layout.hookups[n]?.path.at(-1);
+    const i = last === undefined ? undefined : at.get(posKey(last));
+    return i !== undefined && blocks[i]!.hookup === n ? [i] : [];
+  };
+  const logistics = layout.hookups.findIndex((h) => h.kind === 'logistics');
+  const standFor = (node: ConnNode): number[] => {
+    if (node.kind === 'machine') {
+      const machines = node.blocks.filter((i) => blocks[i]!.role === 'machine');
+      return machines.length > 0 ? machines : node.blocks.slice(0, 1);
+    }
+    if (node.kind === 'hookup') return hookupEnd(Number(node.id.slice('hookup:'.length)));
+    if (node.kind === 'source' || node.kind === 'sink') return logistics === -1 ? [] : hookupEnd(logistics);
+    return node.blocks;
+  };
+  const touching = (from: readonly number[], node: ConnNode): number[] =>
+    node.blocks.filter((i) => from.some((j) => sideToward(blocks[j]!.pos, blocks[i]!.pos) !== -1));
+  const ownEnds = (face: string | null, node: ConnNode): ConnSpot[] => {
+    const ref = face === null ? undefined : refOf.get(face);
+    return face !== null && ref !== undefined ? [faceSpot(face, ref)] : standFor(node).map(top);
+  };
+
+  const spans: ConnSpan[] = [];
+  const seen = new Set<string>();
+  const spotKey = (s: ConnSpot): string => `${posKey(s.cell)}:${s.side}`;
+  const push = (edge: string, from: ConnSpot, to: ConnSpot): void => {
+    const key = `${edge}|${spotKey(from)}|${spotKey(to)}`;
+    if (spotKey(from) === spotKey(to) || seen.has(key)) return;
+    seen.add(key);
+    spans.push({ edge, from, to });
+  };
+  const byId = new Map(g.nodes.map((n) => [n.id, n]));
+  for (const e of g.edges) {
+    const from = byId.get(e.from), to = byId.get(e.to);
+    if (from === undefined || to === undefined) continue;
+    if ((e.via === 'item_conduit' || e.via === 'fluid_conduit') && e.key !== null) {
+      const key = e.key;
+      const fits = (r: ConduitRef): boolean => (r.kind === 'item') !== isFluidKey(key);
+      const outs = (conduitRows.get(from.id) ?? []).filter(({ ref }) => fits(ref) && ref.face.extract !== undefined && passes(ref.face.extract.filter, key));
+      const ins = (conduitRows.get(to.id) ?? []).filter(({ ref }) => fits(ref) && ref.face.insert !== undefined && passes(ref.face.insert.filter, key));
+      const before = spans.length;
+      for (const color of new Set(outs.map((o) => o.ref.face.extract!.color))) {
+        const reached = ins.filter((i) => i.ref.face.insert!.color === color);
+        for (const [o, i] of pairUp(outs.filter((x) => x.ref.face.extract!.color === color), reached)) {
+          if (i.ref.face !== o.ref.face) push(e.id, faceSpot(o.id, o.ref), faceSpot(i.id, i.ref));
+        }
+      }
+      if (spans.length > before) continue;
+    }
+    const starts = ownEnds(e.fromFace, from);
+    let ends = ownEnds(e.toFace, to);
+    if (e.via === 'attached' || e.via === 'hookup') {
+      const near = touching(e.via === 'attached' ? from.blocks : standFor(from), to);
+      if (near.length > 0) ends = near.map(top);
+    }
+    for (const [a, b] of pairUp(starts, ends)) push(e.id, a, b);
+  }
+  return spans;
+}
+
+/**
+ * What a piece of a link in the 3D view tells: the link's own details (`pickDetails`), but for a piece of a flow that
+ * starts or ends on a face row, that piece's own faces: the face it leaves and the face it enters, each with its
+ * configuration. Null for a link the graph does not hold.
+ */
+export function spanDetails(g: ConnGraph, span: ConnSpan): { title: string; lines: string[] } | null {
+  const details = pickDetails(g, { edge: span.edge });
+  const e = g.edges.find((x) => x.id === span.edge);
+  if (details === null || e === undefined || e.key === null || (span.from.face === null && span.to.face === null)) return details;
+  const from = g.nodes.find((n) => n.id === e.from), to = g.nodes.find((n) => n.id === e.to);
+  if (from === undefined || to === undefined) return details;
+  const row = (node: ConnNode, id: string | null): ConnFace | undefined => (id === null ? undefined : node.faces.find((f) => f.id === id));
+  return { title: details.title, lines: [e.lines[0]!, ...endLines('From', from, row(from, span.from.face)), ...endLines('To', to, row(to, span.to.face))] };
 }

@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import ELK from 'elkjs/lib/elk.bundled.js';
 import { connectionsElk, connectionsFromElk, connectionsGraph, faceModeText, pickDetails } from '../../src/client/connections/model.ts';
+// for the tests after the plan's own: the links in the world (the user's requirements of 2026-10-19, item 3 (b))
+import { connectionSpans, spanDetails } from '../../src/client/connections/model.ts';
 import type { ConduitFace, Layout, LayoutBlock } from '../../src/shared/types/layout.ts';
 import type { Plan } from '../../src/shared/types/plan.ts';
 import { connLayout, connPlan } from './connections-fixture.ts';
@@ -140,5 +142,87 @@ describe('the Connections graph', () => {
     const laid = await new ELK().layout(connectionsElk(g));
     const x = (id: string) => laid.children!.find((c) => c.id === id)!.x!;
     expect(x('hookup:0')).toBeLessThan(x('chest:2,64,0'));
+  });
+});
+
+// The user's requirements of 2026-10-19, item 3 (b): the 3D view's Show connections draws these links in the world, each
+// from a face (or a block that stands for its box) to another.
+describe('the Connections links in the world', () => {
+  const spansOf = (mode: 'enderio' | 'direct' | 'routed' | 'ae2') => {
+    const layout = connLayout(mode);
+    return connectionSpans(layout, connectionsGraph(layout, connPlan, 'min'));
+  };
+  const brief = (mode: 'enderio' | 'direct' | 'routed' | 'ae2') =>
+    spansOf(mode).map((s) => `${s.edge}: ${s.from.cell.join(' ')} ${s.from.side} > ${s.to.cell.join(' ')} ${s.to.side}`);
+
+  it("draws an EnderIO flow from the face of the block its extract face points at to the face of the block its insert face does", () => {
+    // each conduit face's end is on the face of the block it points at, toward the conduit: the chest and the machines south
+    expect(spansOf('enderio')).toEqual([
+      { edge: 'flow:chest:2,64,0>step:a:t:in@0', from: { cell: [2, 64, 0], side: 3, face: 'chest:2,64,0#conduit:2,64,1:item:north' },
+        to: { cell: [0, 64, 0], side: 3, face: 'step:a#conduit:0,64,1:item:north' } },
+      { edge: 'flow:step:a>step:b:t:dust@0', from: { cell: [0, 64, 0], side: 3, face: 'step:a#conduit:0,64,1:item:north' },
+        to: { cell: [1, 64, 0], side: 3, face: 'step:b#conduit:1,64,1:item:north' } },
+      { edge: 'flow:step:b>chest:2,64,2:t:ingot@0', from: { cell: [1, 64, 0], side: 3, face: 'step:b#conduit:1,64,1:item:north' },
+        to: { cell: [2, 64, 2], side: 2, face: 'chest:2,64,2#conduit:2,64,1:item:south' } }]);
+  });
+
+  it('joins the blocks that stand for the boxes in the other modes, an interface to what it touches and the network at the hookup', () => {
+    expect(brief('direct')).toEqual([
+      'flow:chest:2,64,0>step:a:t:in@0: 2 64 0 1 > 0 64 0 1', 'flow:step:a>step:b:t:dust@0: 0 64 0 1 > 1 64 0 1',
+      'flow:step:b>chest:2,64,2:t:ingot@0: 1 64 0 1 > 2 64 2 1']);
+    expect(brief('routed').slice(3)).toEqual(['attach:iface:0,64,1>step:a: 0 64 1 1 > 0 64 0 1', 'attach:iface:1,64,1>step:b: 1 64 1 1 > 1 64 0 1']);
+    // an AE2 line's raw inputs and final outputs are the base's ME network, which comes in at the hookup's cable; the
+    // hookup's own link would start and end there, so it is left out
+    expect(brief('ae2')).toEqual([
+      'flow:raw>step:a:t:in@0: 3 64 1 1 > 0 64 0 1', 'flow:step:a>step:b:t:dust@0: 0 64 0 1 > 1 64 0 1', 'flow:step:b>out:t:ingot@0: 1 64 0 1 > 3 64 1 1',
+      'attach:iface:0,64,1>step:a: 0 64 1 1 > 0 64 0 1', 'attach:iface:1,64,1>step:b: 1 64 1 1 > 1 64 0 1']);
+  });
+
+  it('draws a flow from each extract face to every insert face on its channel that takes the good, and only those', () => {
+    // a third machine beside the assembler takes the dust too on Red, and a fourth on Blue: EnderIO hands the macerator's
+    // dust to the Red face only
+    const layout = connLayout('enderio');
+    const machine = (x: number, stepId: string): LayoutBlock => ({ pos: [x, 64, 0], block: { id: 'gregtech:gt.blockmachines', meta: 0, mteId: 2002 },
+      role: 'machine', facing: 3, stepId, label: 'Advanced Assembler' });
+    const into = (x: number, color: 'red' | 'blue'): LayoutBlock => ({ pos: [x, 64, 1], block: { id: 'conduit:item', meta: 0 }, role: 'pipe',
+      label: 'Item Conduit', item: ITEM, connections: 4 | 16, conduits: [{ kind: 'item', item: ITEM, connections: 16, faces: [{ face: 'north', mode: 'insert',
+        target: 'Advanced Assembler', insert: { color, filter: basic(['t:dust@0']), rate: 1, priority: 1 } }] }] });
+    layout.blocks.push(machine(3, 'b'), into(3, 'red'), machine(4, 'b'), into(4, 'blue'));
+    const g = connectionsGraph(layout, connPlan, 'min');
+    const dust = connectionSpans(layout, g).filter((s) => s.edge === 'flow:step:a>step:b:t:dust@0');
+    expect(dust.map((s) => s.to.cell)).toEqual([[1, 64, 0], [3, 64, 0]]);
+    // its details name the faces of that piece (the third assembler's), not the link's first ones
+    const details = spanDetails(g, dust[1]!)!;
+    expect(details.lines.slice(0, 2)).toEqual(['Item Conduit, channel Red', 'From 1× Basic Macerator — Basic Macerator, south side · Item Conduit']);
+    expect(details.lines).toContain('To 3× Advanced Assembler — Advanced Assembler, south side · Item Conduit');
+    expect(details.lines.at(-1)).toMatch(/^Item Conduit, north face to Advanced Assembler: Insert \(1 filter\); insert on Red/);
+    expect(g.edges.find((e) => e.id === 'flow:step:a>step:b:t:dust@0')!.lines.at(-1)).toMatch(/In \/ Out/);   // the link's own: the first assembler's
+    expect(spanDetails(g, dust[1]!)!.title).toBe('Titanium Dust 60/min · Red');
+    expect(spanDetails(g, { edge: 'nope', from: dust[0]!.from, to: dust[0]!.to })).toBeNull();
+  });
+
+  it('joins two big boxes face by face in turn once every pair would make more than 256 pieces', () => {
+    // two steps of n machines each, machine to machine: n × n pieces up to 16 × 16, else one per machine of the bigger box
+    const big = (n: number): Layout => ({ ...connLayout('direct'), blocks: [
+      ...Array.from({ length: n }, (_, i): LayoutBlock => ({ pos: [i, 64, 0], block: { id: 'gregtech:gt.blockmachines', meta: 0, mteId: 2001 }, role: 'machine',
+        facing: 3, stepId: 'a', label: 'Basic Macerator' })),
+      ...Array.from({ length: n }, (_, i): LayoutBlock => ({ pos: [i, 64, 2], block: { id: 'gregtech:gt.blockmachines', meta: 0, mteId: 2002 }, role: 'machine',
+        facing: 2, stepId: 'b', label: 'Advanced Assembler' }))] });
+    const pieces = (n: number) => {
+      const layout = big(n);
+      return connectionSpans(layout, connectionsGraph(layout, connPlan, 'min')).filter((s) => s.edge === 'flow:step:a>step:b:t:dust@0');
+    };
+    expect(pieces(16)).toHaveLength(256);
+    const many = pieces(20);
+    expect(many).toHaveLength(20);
+    expect(new Set(many.map((s) => s.from.cell.join()))).toEqual(new Set(Array.from({ length: 20 }, (_, i) => `${i},64,0`)));
+    expect(new Set(many.map((s) => s.to.cell.join()))).toEqual(new Set(Array.from({ length: 20 }, (_, i) => `${i},64,2`)));
+  });
+
+  it('tells a piece of a link without faces what the link tells', () => {
+    const layout = connLayout('routed');
+    const g = connectionsGraph(layout, connPlan, 'min');
+    const [first] = connectionSpans(layout, g);
+    expect(spanDetails(g, first!)).toEqual(pickDetails(g, { edge: first!.edge }));
   });
 });
