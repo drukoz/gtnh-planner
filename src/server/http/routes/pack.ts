@@ -4,6 +4,7 @@
 
 import type { IncomingMessage } from 'node:http';
 import type { AppContext } from '../../app.ts';
+import { tableItemCount } from '../../pack/crops.ts';
 import { searchPack } from '../../pack/search.ts';
 import { avoidableMaterials } from '../../planner/basis.ts';
 import { EXCLUSION_RULES } from '../../planner/candidates.ts';
@@ -91,7 +92,7 @@ export function packRoutes(app: AppContext): Route[] {
       handler: async (_req, res) => {
         const pack = await app.pack();
         const info: PackInfo = {
-          manifest: pack.manifest, mapCount: pack.maps.size, recipeCount: pack.recipes.length, itemCount: pack.items.size,
+          manifest: pack.manifest, mapCount: pack.maps.size, recipeCount: pack.recipes.length, itemCount: tableItemCount(pack.items),
           dimensions: pack.worldgen.dimensions, capabilities: pack.worldgen.capabilities,
           exclusionRules: Object.keys(EXCLUSION_RULES), materials: [...avoidableMaterials(pack)], machines: ownableMachines(pack),
         };
