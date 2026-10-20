@@ -101,6 +101,64 @@ export function withPriceGap(spec: PackSpec, mteIds: readonly number[]): PackSpe
   });
 }
 
+/**
+ * Mini-GT plus a Bricked Furnace (1200, a multiblock of the map `gt.recipe.brickfurnace`; its controller is crafted from
+ * 4 Firebricks, each from an iron ingot) whose exported structure, like the 2.9 export's Bricked Blast Furnace (two
+ * `minecraft:lava@1` cells in its hollow), holds cells nothing is placed in: a 3 × 4 × 1 box of its controller and 4
+ * Firebricks, lava in the hollow above the controller, water, flowing water and a BartWorks fluid block (a BioVat's fluid)
+ * on the layer above, a `minecraft:air` block and two air cells on top. Its recipe `bake` makes a Steel Ingot from an
+ * iron dust (4 EU/t × 100 t). Block ids of those cells are the real ones (`NOTHING_TO_PLACE` names them); nothing else is
+ * game data.
+ */
+export function fluidCellsSpec(): PackSpec {
+  type Cell = NonNullable<MachineSpec['structure']>['blocks'][number];
+  const brick = { id: 't:firebrick', meta: 0 };
+  const cell = (x: number, y: number, block: Cell['block']): Cell => ({ pos: [x, y, 0], block });
+  const spec = extended(MINI_GT, {
+    items: [{ key: 't:firebrick@0', name: 'Firebrick' }, { key: 't:steel_ingot@0', name: 'Steel Ingot', gt: { prefix: 'ingot', material: 'Steel' } }],
+    machines: [{
+      mteId: 1200, name: 'Bricked Furnace', kind: 'multiblock', maps: ['gt.recipe.brickfurnace'],
+      structure: {
+        size: [3, 4, 1], controller: [1, 0, 0], air: [[0, 3, 0], [2, 3, 0]],
+        blocks: [
+          cell(0, 0, brick), cell(1, 0, { id: 'gregtech:gt.blockmachines', meta: 1200, mteId: 1200 }), cell(2, 0, brick),
+          cell(0, 1, brick), cell(1, 1, { id: 'minecraft:lava', meta: 1 }), cell(2, 1, brick),
+          cell(0, 2, { id: 'minecraft:water', meta: 0 }), cell(1, 2, { id: 'minecraft:flowing_water', meta: 0 }),
+          cell(2, 2, { id: 'bartworks:coloredFluidBlock', meta: 0 }), cell(1, 3, { id: 'minecraft:air', meta: 0 }),
+        ],
+      },
+    }],
+    recipes: [
+      craft('make-firebrick', [['t:iron_ingot@0', 1]], 't:firebrick@0'),
+      craft('make-1200', [['t:firebrick@0', 4]], 'machine:1200@0'),
+      { id: 'bake', map: 'gt.recipe.brickfurnace', in: [['t:iron_dust@0', 1]], out: [['t:steel_ingot@0', 1]], eut: 4, dur: 100 },
+    ],
+  });
+  return { ...spec, maps: [...(spec.maps ?? []), { id: 'gt.recipe.brickfurnace', name: 'Bricked Furnace' }] };
+}
+
+/** GTNH's "Any LV Circuit" (NewHorizonsCoreMod's stand-in that GT recipes take for any LV circuit), by its 2.9 export key. */
+export const ANY_LV_CIRCUIT = 'dreamcraft:CircuitLV@0';
+
+/**
+ * Mini-GT plus the "Any LV Circuit" stand-in (`ANY_LV_CIRCUIT`, with the 2.9 export's GT association, circuit Basic, and
+ * ore name, circuitBasic, which Mini-GT's Basic Circuit also has) and a Sensor that an assembler recipe makes from 2 of
+ * the stand-in and an iron plate (`make-sensor`, 16 EU/t × 100 t), as GT's own recipes list it; the Advanced Bending
+ * Machine (102) is crafted from an LV hull and a Sensor. At LV: 9 + 2 × 3 + 1 = 16.
+ */
+export function standInSpec(): PackSpec {
+  return extended(MINI_GT, {
+    items: [
+      { key: ANY_LV_CIRCUIT, name: 'Any LV Circuit', oreDict: ['circuitBasic'], gt: { prefix: 'circuit', material: 'Basic', amount: -1 } },
+      { key: 't:sensor@0', name: 'Sensor' },
+    ],
+    recipes: [
+      { id: 'make-sensor', map: 'gt.recipe.assembler', in: [[ANY_LV_CIRCUIT, 2], ['t:iron_plate@0', 1]], out: [['t:sensor@0', 1]], eut: 16, dur: 100 },
+      craft('make-102', [['t:hull_lv@0', 1], ['t:sensor@0', 1]], 'machine:102@0'),
+    ],
+  });
+}
+
 /** Mini-GT's parts of an LV machine, as Task 3's `make-102` takes them: an LV hull and 4 circuits (19 raw at MV). */
 export const LV_MACHINE_PARTS: ReadonlyArray<[StuffKey, number]> = [['t:hull_lv@0', 1], ['t:circuit@0', 4]];
 

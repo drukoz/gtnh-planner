@@ -1198,8 +1198,11 @@ export async function standaloneCosts(
   return out;
 }
 
-/** Forward fixpoint: buyable goods are makeable; a recipe fires once every good it consumes is; its outputs then are. */
-function makeableGoods(graph: CandidateGraph): Set<StuffKey> {
+/**
+ * Forward fixpoint: buyable goods (and `given` ones) are makeable; a recipe fires once every good it consumes is; its
+ * outputs then are.
+ */
+function makeableGoods(graph: CandidateGraph, given: readonly StuffKey[] = []): Set<StuffKey> {
   const makeable = new Set<StuffKey>();
   const queue: StuffKey[] = [];
   const add = (key: StuffKey): void => {
@@ -1208,6 +1211,7 @@ function makeableGoods(graph: CandidateGraph): Set<StuffKey> {
       queue.push(key);
     }
   };
+  for (const key of given) add(key);
   const fire = (r: LpRecipe): void => {
     for (const [key, c] of r.coeffs) if (c > 0) add(key);
   };
@@ -1292,6 +1296,17 @@ export function deadEnds(graph: CandidateGraph, from: StuffKey): StuffKey[] {
   const makeable = makeableGoods(graph);
   if (makeable.has(from)) return [];
   return walkBack(graph, from, makeable, producersIn(graph)).found.sort(byString);
+}
+
+/**
+ * The goods of `ends` (`deadEnds(graph, from)`) each of which alone, were it makeable, would make `from` makeable (the
+ * fixpoint again with it given), sorted by key — such as the one good every route needs where one route also meets dead
+ * ends of its own: on the 2.9 export the Emitter (MV) is made in an assembler from "Any MV Circuit" (whose recipes take
+ * reactor sensor location cards nothing makes) or in a crafting table from a Good Electronic Circuit, both with an Ender
+ * Pearl, and only the pearl alone would let it be made. [] when no one good does.
+ */
+export function deadEndsAlone(graph: CandidateGraph, from: StuffKey, ends: readonly StuffKey[]): StuffKey[] {
+  return ends.filter((key) => makeableGoods(graph, [key]).has(from)).sort(byString);
 }
 
 /**

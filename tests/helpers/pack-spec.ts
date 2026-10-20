@@ -12,6 +12,7 @@ import type {
 } from '../../src/shared/types/pack.ts';
 import { buildIndices, buildMachinesByMap } from '../../src/server/pack/indices.ts';
 import { PSEUDO_MAPS } from '../../src/server/pack/load.ts';
+import { circuitStandIns, withStandIns } from '../../src/server/pack/stand-ins.ts';
 import { deriveSupply } from '../../src/server/pack/supply.ts';
 
 export interface PackSpec {
@@ -194,6 +195,12 @@ export function packFromSpec(spec: PackSpec): Pack {
       if (list === undefined) oreDict.set(ore, [item.key]);
       else list.push(item.key);
     }
+  }
+  // The loader's GT and assembly-line slots (recipes.ts): a GTNH circuit stand-in also takes every item it stands for.
+  const standIns = circuitStandIns(items.values(), oreDict);
+  for (const r of recipes) {
+    if (r.source !== 'gt' && r.source !== 'assemblyline') continue;
+    r.inputs = r.inputs.map((ing) => ({ ...ing, options: withStandIns(ing.options, standIns) }));
   }
 
   const worldgen: Worldgen = { ...defaultWorldgen(), ...spec.worldgen };

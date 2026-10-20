@@ -1,7 +1,8 @@
 // The pack loader (architecture §6.2 server API): streams an export into the in-memory `Pack`.
 //
 // Files are read in this order, so every reference resolves: manifest → items → fluids → fluid containers → ore
-// dictionary → recipe maps → recipes (GT, assembly line, crafting, furnace) → machines → structures; then the electric
+// dictionary (and from it GTNH's circuit stand-ins, stand-ins.ts) → recipe maps → recipes (GT, assembly line, crafting,
+// furnace) → machines → structures; then the electric
 // furnace and microwave recipes are derived from the smelting list, the supply recipes of the free inputs from the rock
 // breaker's display recipes, the pumps and the compressor (supply.ts), and the indices built; then GT materials and ore
 // materials; and last the nine worldgen files, because capability yields need the items' materials. Files are never
@@ -27,6 +28,7 @@ import { aliasesOf, normalizeMapId } from './map-aliases.ts';
 import { buildMaterials } from './materials.ts';
 import { nbtHash } from './recipe-id.ts';
 import { assemblyLineRecipe, craftingRecipe, furnaceEntry, furnaceRecipe, gtRecipe, RecipeCollector, type FurnaceEntry } from './recipes.ts';
+import { circuitStandIns } from './stand-ins.ts';
 import { deriveSupply } from './supply.ts';
 import { buildWorldgen, type WorldgenInput } from './worldgen.ts';
 
@@ -65,6 +67,9 @@ export interface LoadContext {
   readonly mapsByIndex: ReadonlyMap<number, RecipeMapInfo>;
   readonly oreDict: ReadonlyMap<string, ItemKey[]>;
   warn(message: string): void;
+  // optional addition (plan 12): GTNH's circuit stand-ins and the items each stands for (stand-ins.ts), once the ore
+  // dictionary is read; GT and assembly-line slots take them all
+  readonly standIns?: ReadonlyMap<ItemKey, readonly ItemKey[]>;
 }
 
 function messageOf(err: unknown): string {
@@ -296,6 +301,8 @@ interface LoadState {
   readonly pack: LoadingPack;
   readonly mapsByIndex: Map<number, RecipeMapInfo>;
   readonly ctx: LoadContext;
+  /** `ctx.standIns`, filled once the ore dictionary is read (`readStandIns`). */
+  readonly standIns: Map<ItemKey, ItemKey[]>;
   /** Every recipe read so far, merged by id; `setRecipes` puts the list into the pack. */
   readonly recipes: RecipeCollector;
   /** The smelting entries, kept for the electric furnace and microwave recipes derived from them. */
@@ -327,8 +334,9 @@ function newLoadState(src: ExportSource): LoadState {
     pack.warnings.push(message);
   };
   const mapsByIndex = new Map<number, RecipeMapInfo>();
+  const standIns = new Map<ItemKey, ItemKey[]>();
   return {
-    src, pack, mapsByIndex, ctx: { items: new ItemRefs(warn), mapsByIndex, oreDict: pack.oreDict, warn },
+    src, pack, mapsByIndex, ctx: { items: new ItemRefs(warn), mapsByIndex, oreDict: pack.oreDict, warn, standIns }, standIns,
     recipes: new RecipeCollector(), furnace: [],
   };
 }
@@ -402,6 +410,11 @@ async function readOreDict({ src, pack, ctx }: LoadState): Promise<void> {
     for (const i of line.items) for (const key of ctx.items.optionsAt(i)) keys.add(key);
   });
   for (const [ore, keys] of byOre) pack.oreDict.set(ore, [...keys]);
+}
+
+/** GTNH's circuit stand-ins and the items of their ore names (stand-ins.ts), which GT and assembly-line slots take. */
+function readStandIns({ pack, standIns }: LoadState): void {
+  for (const [key, members] of circuitStandIns(pack.items.values(), pack.oreDict)) standIns.set(key, members);
 }
 
 function toMapInfo(id: string, line: RecipeMapLine, catalysts: ItemKey[] | undefined): RecipeMapInfo {
@@ -578,6 +591,7 @@ export async function buildPack(src: ExportSource): Promise<Pack> {
   await readFluids(state);
   await readFluidContainers(state);
   await readOreDict(state);
+  readStandIns(state);
   await readRecipeMaps(state);
   await readRecipes(state);
   await readMachines(state);

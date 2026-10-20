@@ -143,6 +143,18 @@ export const GATHERED_BLOCKS: Readonly<Record<StuffKey, string /* DimensionInfo.
   'minecraft:netherrack@0': 'nether', 'minecraft:soul_sand@0': 'nether', 'minecraft:end_stone@0': 'theend',
 });
 
+/**
+ * Mob drops a group collects where their mob lives, by the dimension (`DimensionInfo.key`): Ender Pearls from Endermen in
+ * the overworld, Blaze Rods from Blazes in Nether fortresses. Where that dimension is reachable each is a natural leaf at
+ * its normal price, as a gathered block is. Both carry a GT material (gem EnderPearl, stick Blaze) that no ore vein
+ * yields, so neither the gathered ore names nor the veins gave them a source: on the 2.9 export nothing then made the MV
+ * and HV emitters (an Ender Pearl; an Eye of Ender, crafted from a pearl and blaze powder), and no MV or HV laser
+ * engraver, circuit assembler or microwave could be built.
+ */
+export const MOB_DROPS: Readonly<Record<StuffKey, string /* DimensionInfo.key */>> = Object.freeze({
+  'minecraft:ender_pearl@0': 'overworld', 'minecraft:blaze_rod@0': 'nether',
+});
+
 /** `name` is `prefix` or `prefix` followed by an upper-case letter (logWood, cropWheat; not logistics). */
 function hasOrePrefix(name: string, prefix: string): boolean {
   if (!name.startsWith(prefix)) return false;
@@ -428,8 +440,9 @@ export function fromNothingRecipes(pack: Pack, canRun: (index: number) => boolea
 }
 
 /**
- * materials-availability §8.1: seeds are the free inputs, natural items, the gathered blocks of reachable dimensions
- * (`GATHERED_BLOCKS`), the base items of direct materials and the reachable sourced fluids; a recipe the group can run
+ * materials-availability §8.1: seeds are the free inputs, natural items, the gathered blocks and mob drops of reachable
+ * dimensions (`GATHERED_BLOCKS`, `MOB_DROPS`), the base items of direct materials and the reachable sourced fluids; a
+ * recipe the group can run
  * fires once every input slot (consumed or not) has an available option,
  * and makes all its outputs with a chance above 0 available. A recipe only a multiblock runs also waits for one of
  * those multiblocks to be built: its controller item must be available (the machine's own minimum tier, §8.1 "Skip
@@ -445,6 +458,8 @@ function computeState(pack: Pack, env: PlanEnv): State {
   for (const key of fluidSources.keys()) direct.add(key);
   /** The gathered blocks whose dimension `env` reaches, with that dimension (fix spec R1). */
   const gathered = new Map(Object.entries(GATHERED_BLOCKS).filter(([, dim]) => env.reachable.has(dim)));
+  /** The mob drops whose dimension `env` reaches, with that dimension (`MOB_DROPS`). */
+  const dropped = new Map(Object.entries(MOB_DROPS).filter(([, dim]) => env.reachable.has(dim)));
 
   const ungated: PlanEnv = { ...env, multiblocks: undefined, fromNothing: undefined };
   const noMultiblock: PlanEnv = { ...ungated, multiblocks: new Set() };
@@ -490,6 +505,7 @@ function computeState(pack: Pack, env: PlanEnv): State {
     for (const key of FREE_KEYS) add(key);
     for (const key of facts.natural) add(key);
     for (const key of gathered.keys()) add(key);
+    for (const key of dropped.keys()) add(key);
     // From LV on every group has programmed circuits. The export cannot show the bootstrap: the first circuit needs a
     // vacuum tube, whose glass tube needs a ball mold, whose casting form comes from a Tinkers' casting table (not a
     // recipe) or from a fluid solidifier that itself needs a programmed circuit; without this seed nothing that takes
@@ -563,7 +579,7 @@ function computeState(pack: Pack, env: PlanEnv): State {
 
   const classOf = (key: StuffKey): LeafClass => {
     if (FREE.has(key)) return 'free';
-    if (facts.natural.has(key) || gathered.has(key)) return 'natural';
+    if (facts.natural.has(key) || gathered.has(key) || dropped.has(key)) return 'natural';
     if (direct.has(key)) return 'direct';
     if (!available.has(key)) return 'unavailable';
     const material = baseMaterialOf(key);
@@ -594,6 +610,8 @@ function computeState(pack: Pack, env: PlanEnv): State {
       case 'free':
         return [{ kind: 'natural', dims: [], detail: 'free' }];
       case 'natural': {
+        const drop = dropped.get(key);
+        if (drop !== undefined) return [{ kind: 'natural', dims: [drop], detail: 'mob drop' }];
         const dim = gathered.get(key);
         return dim === undefined
           ? [{ kind: 'natural', dims: [OVERWORLD], detail: 'gathered by hand' }]

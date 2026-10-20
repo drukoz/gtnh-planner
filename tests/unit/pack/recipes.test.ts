@@ -74,6 +74,31 @@ describe('GT recipes', () => {
     expect(r!.inputs[1]!.options).toEqual([{ key: SAMPLE.moltenIron, amount: 144 }, { key: 'fluid:water', amount: 1000 }]);
   });
 
+  it('lets a GT or assembly-line slot of GTNH\'s "Any <tier> Circuit" take every circuit of that stand-in\'s ore name', async () => {
+    // NewHorizonsCoreMod's dreamcraft:Circuit<tier> items are what GT recipes list where they take any circuit of a tier
+    // (GT matches its inputs by their ore-dictionary unification); nothing makes the stand-in itself. A crafting slot names
+    // its ore name itself (or lists exactly what it takes), so it keeps its options.
+    const spec = sampleExportSpec();
+    const standIn = spec.items!.length;
+    spec.items!.push(
+      { id: 'dreamcraft:CircuitLV', m: 0, dn: 'Any LV Circuit', od: ['circuitBasic'], gtPrefix: 'circuit', gtMat: 'Basic', gtAmt: -1 },
+      { id: 'examplemod:circuit', m: 0, dn: 'Example Circuit', od: ['circuitBasic'], gtPrefix: 'circuit', gtMat: 'Basic', gtAmt: -1 },
+    );
+    spec.oreDict!.push({ ore: 'circuitBasic', items: [standIn, standIn + 1] });
+    spec.recipesGt = [{ map: 6, in: [[standIn, 2], [4, 1]], out: [[16, 1]], fin: [], fout: [], eut: 30, dur: 200 }];
+    spec.recipesAssemblyLine = [{ research: 16, researchTime: 3600, researchVoltage: 30720, in: [[standIn, 4]], fin: [], out: [11, 1], eut: 7680, dur: 600 }];
+    spec.recipesCrafting = [{ cls: 'net.minecraft.item.crafting.ShapelessRecipes', shape: 'shapeless', in: [standIn], out: [10, 1] }];
+    const pack = await makePack(spec);
+    const anyLv = 'dreamcraft:CircuitLV@0';
+    const example = 'examplemod:circuit@0';
+    const [gt] = inMap(pack, 'gt.recipe.circuitassembler');
+    expect(gt!.inputs.map((ing) => ing.options)).toEqual([[{ key: anyLv, amount: 2 }, { key: example, amount: 2 }], [{ key: SAMPLE.steelIngot, amount: 1 }]]);
+    const [line] = inMap(pack, 'assemblyline');
+    expect(line!.inputs[0]!.options).toEqual([{ key: anyLv, amount: 4 }, { key: example, amount: 4 }]);
+    const [craft] = inMap(pack, 'crafting');
+    expect(craft!.inputs[0]!.options).toEqual([{ key: anyLv, amount: 1 }]);
+  });
+
   it('renames metadata keys, turns item values into keys and keeps unknown keys', async () => {
     const pack = await makePack({
       ...sampleExportSpec(),

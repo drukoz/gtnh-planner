@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { MINI_GT, miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec, type PackSpec } from '../../helpers/pack-spec.ts';
-import { largeBenderSpec, withPriceGap } from '../../helpers/build-fixtures.ts';
+import { fluidCellsSpec, largeBenderSpec, standInSpec, withPriceGap } from '../../helpers/build-fixtures.ts';
 import {
-  MACHINE_PRICE_MEMO_SIZE, bomBuildCost, buildKeys, gapText, hatchSet, itemPrices, machineBuildCost, machineGap, pricingSettings,
-  structureParts, type ItemPrices,
+  MACHINE_PRICE_MEMO_SIZE, NOTHING_TO_PLACE, bomBuildCost, buildKeys, gapText, hatchSet, itemPrices, machineBuildCost, machineGap,
+  pricingSettings, structureParts, type ItemPrices,
 } from '../../../src/server/planner/build-cost.ts';
 import { planBasis } from '../../../src/server/planner/basis.ts';
 import { emptyContext } from '../../../src/server/planner/plan.ts';
@@ -165,6 +165,76 @@ describe('machineGap', () => {
     const gap = machineGap(pack, prices, m1100);
     expect(gap).toEqual({ kind: 'unavailable', item: 't:casing@0' });
     expect(gapText(pack, m1100, gap!, 1)).toBe('needs Machine Casing, not available at LV');
+  });
+
+  it('names the good that alone keeps a machine from being built, not the first dead end of another route', async () => {
+    // Two ways to an Emitter: an assembler recipe that also takes a Location Card nothing makes and a Rare Dust out of reach,
+    // and a crafting one from circuits; both need an Ender Gem, which no vein yields. So on the 2.9 export the Emitter (MV)
+    // has an assembler route through "Any MV Circuit", whose only recipes take reactor sensor location cards nothing makes,
+    // and a crafting one; both take an Ender Pearl. The first dead end by key is the card; only the gem, made available,
+    // would let the machine be built.
+    const spec = structuredClone(MINI_GT);
+    const pack = packFromSpec({
+      ...spec,
+      items: [...(spec.items ?? []), { key: 'a:card@0', name: 'Location Card' }, { key: 'b:dust@0', name: 'Rare Dust', gt: { prefix: 'dust', material: 'Rare' } },
+        { key: 'm:gem@0', name: 'Ender Gem', gt: { prefix: 'gem', material: 'EnderGem' } }, { key: 't:emitter@0', name: 'Emitter' }],
+      recipes: [...(spec.recipes ?? []),
+        { id: 'emit-assembler', map: 'gt.recipe.assembler', in: [['a:card@0', 1], ['b:dust@0', 1], ['m:gem@0', 1]], out: [['t:emitter@0', 1]], eut: 16, dur: 100 },
+        { id: 'emit-crafting', map: 'crafting', in: [['t:circuit@0', 2], ['m:gem@0', 1]], out: [['t:emitter@0', 1]] },
+        { id: 'make-122', map: 'crafting', in: [['t:hull_lv@0', 1], ['t:emitter@0', 1]], out: [['machine:122@0', 1]] }],
+    });
+    const prices = await pricesOf(pack, lv);
+    const m122 = machine(pack, 122);
+    const gap = machineGap(pack, prices, m122);
+    expect(gap).toEqual({ kind: 'unavailable', item: 'm:gem@0' });
+    expect(gapText(pack, m122, gap!, 1)).toBe('needs Ender Gem, not available at LV');
+  });
+
+  it('names, of the goods that alone would do, one whose recipes cannot run here before one nothing makes', async () => {
+    // A Widget takes a Token (nothing makes it) or an MV Part (made only at 120 EU/t, above any LV machine): either alone
+    // would let the machine be built. So the 2.9 export's Basic Circuit Assembler takes MV circuits, one option of which,
+    // "Any MV Circuit", only reactor sensor location cards make: at LV it lacks an MV circuit, not a card.
+    const spec = structuredClone(MINI_GT);
+    const pack = packFromSpec({
+      ...spec,
+      items: [...(spec.items ?? []), { key: 'a:token@0', name: 'Token' }, { key: 't:mv_part@0', name: 'MV Part' }, { key: 't:widget@0', name: 'Widget' }],
+      recipes: [...(spec.recipes ?? []),
+        { id: 'mv-part', map: 'gt.recipe.assembler', in: [['t:iron_plate@0', 1]], out: [['t:mv_part@0', 1]], eut: 120, dur: 100 },
+        { id: 'widget', map: 'crafting', in: [{ any: [['a:token@0', 1], ['t:mv_part@0', 1]] }, ['t:iron_plate@0', 1]], out: [['t:widget@0', 1]] },
+        { id: 'make-122', map: 'crafting', in: [['t:hull_lv@0', 1], ['t:widget@0', 1]], out: [['machine:122@0', 1]] }],
+    });
+    const m122 = machine(pack, 122);
+    const gap = machineGap(pack, await pricesOf(pack, lv), m122);
+    expect(gap).toEqual({ kind: 'unavailable', item: 't:mv_part@0' });
+    expect(gapText(pack, m122, gap!, 1)).toBe('needs MV Part, not available at LV');
+  });
+
+  it('prices a part whose GT recipe takes GTNH\'s "Any LV Circuit" at the circuits that stand-in stands for', async () => {
+    // GT recipes list NewHorizonsCoreMod's stand-in where they take any LV circuit, and nothing makes the stand-in itself:
+    // every machine built from such a part could not be built ("needs Any LV Circuit, not available at LV").
+    const pack = packFromSpec(standInSpec());
+    const prices = await pricesOf(pack, lv);
+    const m102 = machine(pack, 102);
+    expect(machineGap(pack, prices, m102)).toBeNull();
+    // An LV hull 9 + a Sensor: 2 Basic Circuits of 3 and an iron plate.
+    expect(machineBuildCost(pack, prices, m102)).toBe(16);
+  });
+});
+
+describe('structure cells that need nothing placed', () => {
+  it('leaves out cells that hold air or a fluid, so a furnace with lava in its hollow can be built', async () => {
+    // The 2.9 export's Bricked Blast Furnace holds minecraft:lava@1 in its hollow: priced as a part nothing makes, it made the
+    // furnace a machine that cannot be built here, and every LV steel line infeasible whatever the build-cost setting.
+    expect([...NOTHING_TO_PLACE].sort())
+      .toEqual(['bartworks:coloredFluidBlock', 'minecraft:air', 'minecraft:flowing_lava', 'minecraft:flowing_water', 'minecraft:lava', 'minecraft:water']);
+    const pack = packFromSpec(fluidCellsSpec());
+    const m1200 = machine(pack, 1200);
+    expect([...structureParts(pack, m1200)]).toEqual([['t:firebrick@0', 4]]);
+    expect(buildKeys(pack, [m1200])).toEqual(['machine:1200@0', 't:firebrick@0']);
+    const prices = await pricesOf(pack, lv);
+    expect(machineGap(pack, prices, m1200)).toBeNull();
+    // Its controller (4 Firebricks) and the 4 Firebricks of its structure, each an iron ingot.
+    expect(machineBuildCost(pack, prices, m1200)).toBe(8);
   });
 });
 

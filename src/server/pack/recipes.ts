@@ -10,6 +10,7 @@ import type { Ingredient, Product, Recipe } from '../../shared/types/pack.ts';
 import type { AssemblyLineLine, CraftingLine, CraftingSlot, FurnaceLine, GtRecipeLine, ItemSlot, MetaValue } from './format.ts';
 import type { ItemRefs, LoadContext } from './load.ts';
 import { recipeId } from './recipe-id.ts';
+import { withStandIns } from './stand-ins.ts';
 
 /** GT's programmed circuit; its meta becomes `meta.circuit` when a recipe holds it as a not-consumed input. */
 export const PROGRAMMED_CIRCUIT_ID = 'gregtech:gt.integrated_circuit';
@@ -76,9 +77,15 @@ function ingredients<S extends Slot>(
   return result;
 }
 
-/** Item options of a slot: every variant of a wildcard; a not-consumed item (amount 0) still needs one. */
-function itemOptions(items: ItemRefs): (s: readonly [number, number, number?]) => Option[] {
-  return ([i, amount]) => items.optionsAt(i).map((key) => ({ key, amount: Math.max(amount, 1) }));
+/**
+ * Item options of a slot: every variant of a wildcard; a not-consumed item (amount 0) still needs one. With `standIns`
+ * (GT and assembly-line slots), a GTNH circuit stand-in also brings every item it stands for (stand-ins.ts).
+ */
+function itemOptions(items: ItemRefs, standIns?: ReadonlyMap<ItemKey, readonly ItemKey[]>): (s: readonly [number, number, number?]) => Option[] {
+  return ([i, amount]) => {
+    const options = items.optionsAt(i).map((key) => ({ key, amount: Math.max(amount, 1) }));
+    return standIns === undefined ? options : withStandIns(options, standIns);
+  };
 }
 
 function fluidOptions([name, litres]: readonly [string, number, number?]): Option[] {
@@ -150,7 +157,7 @@ export function gtRecipe(line: GtRecipeLine, ctx: LoadContext): Recipe | null {
   const content: RecipeContent = {
     source: 'gt', maps: [map.id],
     inputs: [
-      ...ingredients(line.in, line.inAlt, 0, itemOptions(ctx.items)),
+      ...ingredients(line.in, line.inAlt, 0, itemOptions(ctx.items, ctx.standIns)),
       ...ingredients(line.fin, line.finAlt, FLUID_SLOT_BASE, fluidOptions),
     ],
     outputs: [...itemProducts(line.out, ctx.items), ...products(line.fout, ([name]) => fluidKey(name))],
@@ -166,7 +173,7 @@ export function assemblyLineRecipe(line: AssemblyLineLine, ctx: LoadContext): Re
   return withId({
     source: 'assemblyline', maps: ['assemblyline'],
     inputs: [
-      ...ingredients(line.in, line.inAlt, 0, itemOptions(ctx.items)),
+      ...ingredients(line.in, line.inAlt, 0, itemOptions(ctx.items, ctx.standIns)),
       ...ingredients(line.fin, undefined, FLUID_SLOT_BASE, fluidOptions),
     ],
     outputs: itemProducts([line.out], ctx.items),

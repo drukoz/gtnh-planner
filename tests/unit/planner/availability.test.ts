@@ -115,6 +115,28 @@ describe('real-data rules (final review)', () => {
     expect(['EMT:EMTItems@8', 'minecraft:slime_ball@0', 'bread@0', 'beef@0', 'card@0', 'log@0', 'IC2:itemHarz@0'].map((k) => isNatural(p, k)))
       .toEqual([false, true, false, true, false, true, true]);
   });
+  it('counts an Ender Pearl and a Blaze Rod as mob drops where their mobs live', () => {
+    // Groups get them from Endermen in the overworld and Blazes in Nether fortresses. Both carry a GT material no vein yields,
+    // so availability had no source for them: on the 2.9 export nothing then made the MV and HV emitters (an Ender Pearl, an
+    // Eye of Ender), and no MV or HV laser engraver, circuit assembler or microwave could be built.
+    const p = packFromSpec({
+      items: [{ key: 'minecraft:ender_pearl@0', name: 'Ender Pearl', gt: { prefix: 'gem', material: 'EnderPearl' } },
+              { key: 'minecraft:blaze_rod@0', name: 'Blaze Rod', gt: { prefix: 'stick', material: 'Blaze', amount: 1_814_400 } }],
+      worldgen: { dimensions: [{ key: 'overworld', id: 0, name: 'Overworld', mod: 'minecraft', kind: 'dimension', defaultTier: 0 },
+                               { key: 'nether', id: -1, name: 'Nether', mod: 'minecraft', kind: 'dimension', defaultTier: 2 }] },
+    });
+    const at = (tier: number) => {
+      const r = reachableDims(p.worldgen, prog, [], tier);
+      return computeAvailability(p, { tier, reachable: r.keys, lowGravity: false, coilHeat: 1801, excluded: new Set() });
+    };
+    const lv = at(1);
+    expect(lv.classOf('minecraft:ender_pearl@0')).toBe('natural');
+    expect(lv.sources('minecraft:ender_pearl@0')).toEqual([{ kind: 'natural', dims: ['overworld'], detail: 'mob drop' }]);
+    expect(lv.classOf('minecraft:blaze_rod@0')).toBe('unavailable');   // the Nether is out of reach below MV here
+    const mv = at(2);
+    expect(mv.classOf('minecraft:blaze_rod@0')).toBe('natural');
+    expect(mv.sources('minecraft:blaze_rod@0')).toEqual([{ kind: 'natural', dims: ['nether'], detail: 'mob drop' }]);
+  });
   it('keeps crafting a programmed circuit back into a circuit available even when the plan skips it', () => {
     // From LV the group has programmed circuits; the export shows no other way to the first Electronic Circuit.
     const p = packFromSpec({ items: [{ key: 'gregtech:gt.integrated_circuit@0', name: 'Programmed Circuit' }, { key: 'IC2:itemPartCircuit@0', name: 'Electronic Circuit' }],

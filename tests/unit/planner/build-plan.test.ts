@@ -7,7 +7,7 @@
 // crafting-table steps by hand (HAND_STEP_WEIGHT 3), while the Auto Workbench is the default (the controller's ruling).
 
 import { describe, it, expect } from 'vitest';
-import { kitSpec, sandSpec, withPriceGap } from '../../helpers/build-fixtures.ts';
+import { fluidCellsSpec, kitSpec, sandSpec, withPriceGap } from '../../helpers/build-fixtures.ts';
 import { MINI_GT, miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec, type PackSpec } from '../../helpers/pack-spec.ts';
 import { assignOwned } from '../../../src/server/planner/machines.ts';
@@ -415,6 +415,19 @@ describe('machines of supply steps and machines that cannot be built', () => {
     expect(two.warnings).toContainEqual({
       code: 'owned-only', key: 't:stone_dust@0', text: 'Stone Dust needs more than your 2× Basic Macerator, which cannot be built here (no recipe in this pack)',
     });
+  });
+
+  it('builds a multiblock whose exported structure holds lava, water and air, whatever the build-cost setting', async () => {
+    // Those cells need nothing placed (build-cost.ts NOTHING_TO_PLACE): the 2.9 export's Bricked Blast Furnace holds lava in
+    // its hollow, which made every LV steel line infeasible, build cost counted or not (Amendment OQ3).
+    const pack = packFromSpec(fluidCellsSpec());
+    for (const buildHorizonHours of [24, null]) {
+      const plan = await planLine(pack, S({ target: 't:steel_ingot@0', amount: 1, per: 'min', buildHorizonHours }), emptyContext());
+      expect(plan.status, JSON.stringify(plan.warnings)).toBe('ok');
+      expect(stepOf(plan, 'bake')).toMatchObject({ machine: { mteId: 1200 }, count: 1 });
+      // One furnace: 4 Firebricks in its controller and 4 in its structure, each an iron ingot.
+      expect(plan.cost?.build).toBe(8);
+    }
   });
 });
 
