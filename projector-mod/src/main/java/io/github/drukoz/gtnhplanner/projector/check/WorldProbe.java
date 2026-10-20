@@ -1,5 +1,7 @@
 package io.github.drukoz.gtnhplanner.projector.check;
 
+import java.util.Set;
+
 /**
  * What the build check reads from the world the client already has (spec §3.13), one planned block position at a
  * time; it never changes the world. The {@code client} package answers it from Minecraft, tests from a fake world.
@@ -40,4 +42,11 @@ public interface WorldProbe {
      * 0…5; −1 for anything else, and while the client does not know it yet.
      */
     int mainFacingAt(int x, int y, int z);
+
+    /**
+     * The conduits of the EnderIO conduit bundle there, each named as the planner names its kind ({@link ConduitKinds#of}:
+     * {@code item}, {@code liquid_ender}, …; any other conduit by its class name); empty where there is no bundle tile
+     * and while the bundle's conduits have not reached the client; null when this client cannot read conduit bundles.
+     */
+    Set<String> conduitKindsAt(int x, int y, int z);
 }

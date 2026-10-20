@@ -43,8 +43,8 @@ describe('conduit sizing', () => {
 
 /** An end of the face `face` (its id unless given). */
 const end = (id: string, side: 'extract' | 'insert', keys: string[], more: Partial<ChannelEnd> = {}): ChannelEnd => ({ id, side, keys, face: id, ...more });
-/** The input chest of the item line: a stock, so its extract side keeps to its links. */
-const stock = (id: string, keys: string[]) => end(id, 'extract', keys, { guarded: true });
+/** The input chest of the item line: an extract side that hands out raw inputs. */
+const stock = (id: string, keys: string[]) => end(id, 'extract', keys);
 /** `n` channels, each a stock handing `k` to a machine: any two on one colour would hand `k` to each other's machine. */
 const stocks = (n: number, keysOf: (i: number) => string[] = () => ['k']) => ({
   ends: Array.from({ length: n }, (_, i) => [stock(`s${i}`, keysOf(i)), end(`m${i}`, 'insert', keysOf(i))]).flat(),
@@ -52,11 +52,11 @@ const stocks = (n: number, keysOf: (i: number) => string[] = () => ['k']) => ({
 });
 
 describe('channel colours', () => {
-  it('puts every channel on the one colour of the line while no guarded end can trade off its links', () => {
-    // two channels of their own (a hands k1 to b, c hands k2 to d) and a third that takes k1 too: filters keep each item
-    // to the faces that take it, so all of them share Red
+  it('puts every channel on the one colour of the line while no end can hand a key to another channel', () => {
+    // two channels of their own (a hands k1 to b, c hands k2 to d) and a third that takes k3, which no extract side
+    // gives: filters keep each item to the faces that take it, so all of them share Red
     const plan = assignChannels([end('a', 'extract', ['k1']), end('b', 'insert', ['k1']), end('c', 'extract', ['k2']), end('d', 'insert', ['k2']),
-      end('e', 'insert', ['k1'])], [{ from: 'a', to: 'b' }, { from: 'c', to: 'd' }]);
+      end('e', 'insert', ['k3'])], [{ from: 'a', to: 'b' }, { from: 'c', to: 'd' }]);
     expect(Object.fromEntries(plan.colors)).toEqual({ a: 'red', b: 'red', c: 'red', d: 'red', e: 'red' });
     expect(plan.shared).toEqual([]);
   });
@@ -67,17 +67,30 @@ describe('channel colours', () => {
     expect(Object.fromEntries(plan.colors)).toEqual({ chest: 'red', b: 'red', a: 'blue', c: 'blue', x: 'red', y: 'red' });
     expect(plan.shared).toEqual([]);
   });
-  it('gives a channel the next colour when a guarded insert side on the colour would take one of its keys', () => {
+  it('gives a channel the next colour when an insert side on the colour would take one of its keys', () => {
     // an open fluid end has no priority, so a maker whose fluid goes to a machine must not reach it
-    const plan = assignChannels([end('a', 'extract', ['f']), end('tank', 'insert', ['f'], { guarded: true }), end('b', 'extract', ['f']),
+    const plan = assignChannels([end('a', 'extract', ['f']), end('tank', 'insert', ['f']), end('b', 'extract', ['f']),
       end('c', 'insert', ['f'])], [{ from: 'a', to: 'tank' }, { from: 'b', to: 'c' }]);
     expect(Object.fromEntries(plan.colors)).toEqual({ a: 'red', tank: 'red', b: 'blue', c: 'blue' });
   });
+  it('gives a channel the next colour when a maker on the colour would hand one of its keys to it, though no end is a stock', () => {
+    // the review of the EnderIO single pipe: a makes Dust for c and the output chest, b makes Dust for d. On one colour
+    // a's Dust would reach d too, and b's c and the chest, which no filter stops (they all take Dust): a machine with
+    // room to spare takes Dust planned for the other one, which runs short
+    const plan = assignChannels([end('a', 'extract', ['dust']), end('c', 'insert', ['dust']), end('out', 'insert', ['dust', 'x']),
+      end('b', 'extract', ['dust']), end('d', 'insert', ['dust'])], [{ from: 'a', to: 'c' }, { from: 'a', to: 'out' }, { from: 'b', to: 'd' }]);
+    expect(Object.fromEntries(plan.colors)).toEqual({ a: 'red', c: 'red', out: 'red', b: 'blue', d: 'blue' });
+    expect(plan.shared).toEqual([]);
+  });
   it('never counts the two sides of one face against each other', () => {
-    // an In / Out open end takes Molten Iron in and sends the surplus out: EnderIO never fills the tank it drains
-    const plan = assignChannels([end('in', 'extract', ['f'], { face: 'tank', guarded: true }), end('m', 'insert', ['f']), end('p', 'extract', ['f']),
-      end('out', 'insert', ['f'], { face: 'tank', guarded: true })], [{ from: 'in', to: 'm' }, { from: 'p', to: 'out' }]);
-    expect(new Set(plan.colors.values())).toEqual(new Set(['red']));
+    // m's face gives k to x and takes k and j from y: self feed is off (and an ender fluid conduit never fills the tank
+    // it drains), so its extract side never hands k to its own insert side and both channels share Red
+    const sides = (face: string | undefined) => [end('m-out', 'extract', ['k'], { face }), end('x', 'insert', ['k']), end('y', 'extract', ['j']),
+      end('m-in', 'insert', ['k', 'j'], { face })];
+    const links = [{ from: 'm-out', to: 'x' }, { from: 'y', to: 'm-in' }];
+    expect(new Set(assignChannels(sides('m'), links).colors.values())).toEqual(new Set(['red']));
+    // on two faces m-out would hand k to m-in, so y's channel takes the next colour
+    expect(assignChannels(sides(undefined), links).colors.get('m-in')).toBe('blue');
   });
   it('shares the colour with the fewest keys that would leak once the palette is used up, and names them', () => {
     const plan = assignChannels(stocks(16).ends, stocks(16).links);
@@ -160,12 +173,15 @@ describe('channel colours in detail', () => {
       [{ from: 'chest', to: 'm' }, { from: 'x', to: 'y' }]);
     expect([plan.colors.get('x'), plan.colors.get('y')]).toEqual(['blue', 'blue']);
   });
-  it('leaves a stock on the colour of a channel that only gives what the stock gives', () => {
-    // a second maker of k hands it to its own machine: k from the chest would reach that machine, k from the maker the
-    // chest never takes (an extract side takes nothing), so only the machine's side counts
-    const plan = assignChannels([stock('chest', ['k']), end('m', 'insert', ['k']), end('a', 'extract', ['k']), end('n', 'insert', ['j'])],
+  it('never counts two extract sides against each other', () => {
+    // the chest and a both give k, which neither channel takes (an extract side takes nothing): one colour
+    const plan = assignChannels([stock('chest', ['k', 'j']), end('m', 'insert', ['j']), end('a', 'extract', ['k', 'h']), end('n', 'insert', ['h'])],
       [{ from: 'chest', to: 'm' }, { from: 'a', to: 'n' }]);
     expect(new Set(plan.colors.values())).toEqual(new Set(['red']));
+    // a machine that takes k beside the chest's: a's k would reach it, so a's channel takes the next colour
+    const taker = assignChannels([stock('chest', ['k']), end('m', 'insert', ['k']), end('a', 'extract', ['k']), end('n', 'insert', ['j'])],
+      [{ from: 'chest', to: 'm' }, { from: 'a', to: 'n' }]);
+    expect([taker.colors.get('a'), taker.colors.get('n')]).toEqual(['blue', 'blue']);
   });
   it('shares the colour with the fewest leaking keys and names them sorted', () => {
     // fifteen channels hand x and y to each other's machines; the sixteenth hands only x, so a colour whose stock gives x alone leaks least

@@ -11,24 +11,24 @@
 // unset face extracts only with a signal); item extract sides also get the speed upgrades their rate needs and self feed
 // off, and item insert sides fill machines (priority 1) before chests (0).
 // The single pipe: every machine's outputs are extracted into the line's one network and the insert sides' whitelists
-// and priorities send each item or fluid on, so the whole line shares one channel, Red. The plan's flows link what makes
-// an item or fluid to what takes it, and linked sides share a channel (each side has one colour); a channel moves to
-// another colour only where a filter cannot keep a key away from a face that must not get it, because that face takes
-// the key from elsewhere: next to a stock that hands out as fast as the conduit moves (the input chest's raw inputs; an
-// open end bringing a fluid in), which would fill a machine the plan feeds from another maker (that maker then backs up)
-// or an output chest, and next to an open end that sends a fluid out, which has no priority and would take its turn
-// with the machines (`assignChannels`, guarded ends). Machine-made items need no channel of their own: a maker extracts
-// only what it makes, at its own rate, and priority fills machines before chests. Past 15 colours a channel shares the
-// colour that leaks least, with a `conduit_channels` warning. A side's targets are the insert sides of its colour that
-// pass one of its keys, and EnderIO's round robin rotates over them whatever their priority, so an item extract side gets
-// it only when two or more machine faces take one of its items and no chest takes an item a machine takes too; a fluid
-// extract side (ender fluid conduits have no priority) gets it for any two or more, and a fluid it hands both to machines
-// and to an open end is warned about. Items and fluids are separate networks with their own channels. Only raw inputs and
-// final outputs touch storage, at the tail: an input chest the line extracts from, which an EnderIO network at the base
-// keeps stocked from the storage tap on a channel of that link's own (`TAP_CHANNEL`), output chests of 24 items each,
-// and one open fluid conduit end per fluid that enters or leaves the line, for a tank. The fluid conduit is the slowest
-// ender tier that moves the busiest face. Every order and tie-break is fixed, so the same plan gives the same faces and
-// colours.
+// and priorities send each item or fluid on, so the whole line shares one channel, Red. The plan's flows link what
+// makes an item or fluid to what takes it, and linked sides share a channel (each side has one colour); a channel moves
+// to another colour only where a filter cannot keep a key away from a face that must not get it, because that face
+// takes the key from elsewhere: where one of its extract sides would hand a key to an insert side of another channel, a
+// route no flow plans (`assignChannels`). Whatever hands it out, the input chest's raw inputs, an open end bringing a
+// fluid in or a machine making an item that two machines take from two different makers, the face takes more than its
+// flows while it has room (machine counts round up), so the face the key is planned for runs short, its maker backs up
+// or a chest fills with it; and an open end that sends a fluid out has no priority, so it would take its turn with the
+// machines. Past 15 colours a channel shares the colour that leaks least, with a `conduit_channels` warning. A side's
+// targets are the insert sides of its colour that pass one of its keys, and EnderIO's round robin rotates over them
+// whatever their priority, so an item extract side gets it only when two or more machine faces take one of its items
+// and no chest takes an item a machine takes too; a fluid extract side (ender fluid conduits have no priority) gets it
+// for any two or more, and a fluid it hands both to machines and to an open end is warned about. Items and fluids are
+// separate networks with their own channels. Only raw inputs and final outputs touch storage, at the tail: an input
+// chest the line extracts from, which an EnderIO network at the base keeps stocked from the storage tap on a channel of
+// that link's own (`TAP_CHANNEL`), output chests of 24 items each, and one open fluid conduit end per fluid that enters
+// or leaves the line, for a tank. The fluid conduit is the slowest ender tier that moves the busiest face. Every order
+// and tie-break is fixed, so the same plan gives the same faces and colours.
 
 import { isFluidKey, type StuffKey } from '../../../shared/keys.ts';
 import { conduitSideText } from '../../../shared/layout/configure-text.ts';
@@ -201,11 +201,11 @@ function unitTraders(placement: Placement, trades: (u: PlacedUnit, b: LocalBlock
  * extract sides that give its key at its source to the insert sides that take it at its target, where the faces without
  * a step (the tail chests, the open fluid ends) stand for outside the line; a flow with both ends outside is skipped. A
  * stray output links its machine to the faces outside the line that take it. Linked sides share a channel, and the
- * channels share the line's one colour unless a side that `guarded` names would trade a key off its flows
+ * channels share the line's one colour unless a side would then trade a key with a side its flows do not link it to
  * (`assignChannels`). Ends in face order, extract before insert.
  */
 function planChannels(plans: readonly FacePlan[], flows: readonly PlanFlow[], placed: ReadonlySet<string>,
-  strays: ReadonlyArray<{ stepId: string; key: StuffKey }>, guarded: (f: FacePlan, side: SideName) => boolean): ChannelPlan {
+  strays: ReadonlyArray<{ stepId: string; key: StuffKey }>): ChannelPlan {
   const sidesOf = (owner: string | null, side: SideName, key: StuffKey): string[] =>
     plans.filter((f) => f.stepId === owner && f[side]?.keys.includes(key) === true).map((f) => endId(f, side));
   const links: ChannelLink[] = [];
@@ -217,8 +217,7 @@ function planChannels(plans: readonly FacePlan[], flows: readonly PlanFlow[], pl
     if (from !== null || to !== null) link(from, to, f.key);
   }
   for (const s of strays) link(s.stepId, null, s.key);
-  const endOf = (f: FacePlan, side: SideName, s: Side): ChannelEnd =>
-    ({ id: endId(f, side), keys: s.keys, side, face: faceKey(f.pos, f.side), ...(guarded(f, side) ? { guarded: true } : {}) });
+  const endOf = (f: FacePlan, side: SideName, s: Side): ChannelEnd => ({ id: endId(f, side), keys: s.keys, side, face: faceKey(f.pos, f.side) });
   const ends: ChannelEnd[] = plans.flatMap((f) => [
     ...(f.extract === null ? [] : [endOf(f, 'extract', f.extract)]),
     ...(f.insert === null ? [] : [endOf(f, 'insert', f.insert)]),
@@ -385,9 +384,9 @@ function fluidShareWarnings(input: ModeInput, plans: readonly FacePlan[], channe
 }
 
 /**
- * `conduit_channels`, one per colour a channel had to share past the palette, naming the items or fluids that a guarded
- * side can then trade off its flows (`assignChannels`): the input chest's raw input reaching a machine the plan feeds
- * from another maker, or an output chest; a fluid reaching an open end in turn with the machines.
+ * `conduit_channels`, one per colour a channel had to share past the palette, naming the items or fluids that a side can
+ * then hand to a side its flows do not link it to (`assignChannels`): a raw input or a machine's item reaching a machine
+ * the plan feeds it from another maker, or an output chest; a fluid reaching an open end in turn with the machines.
  */
 export function channelWarnings(input: Pick<ModeInput, 'pack' | 'plan'>, channels: Pick<ChannelPlan, 'shared'>): PlanWarning[] {
   return channels.shared.map(({ color, keys }): PlanWarning => {
@@ -564,10 +563,9 @@ function itemLine(input: ModeInput): ItemLine {
   });
   const plans = [...machine, ...tailFaces].sort(compareFaces);
 
-  // the channels (the tail chests stand for outside the line; a stray output joins its machine to its output chest; the
-  // input chest is a stock, so it keeps to its flows), then each side's colour, filter, speed upgrades, priority and
-  // round robin
-  const channels = planChannels(plans, items, placed, strays, (f, side) => f.stepId === null && side === 'extract');
+  // the channels (the tail chests stand for outside the line; a stray output joins its machine to its output chest),
+  // then each side's colour, filter, speed upgrades, priority and round robin
+  const channels = planChannels(plans, items, placed, strays);
   const { configured, warnings } = itemSettings(input, plans, channels);
 
   // the conduit cells: the spine along x, then the cells above the tail cell, each joined to the one below
@@ -832,8 +830,7 @@ function fluidLine(input: ModeInput, nets: readonly FluidNet[], items: ItemLine 
   const laidCells = new Set(network.cells.map(posKey));
   const laid = planned.filter((f) => laidCells.has(posKey(f.pos))).sort(compareFaces);
 
-  // an open end keeps to its flows both ways: it brings a fluid in as a stock, and it takes one out with no priority
-  const channels = planChannels(laid, fluids, placed, [], (f) => f.stepId === null);
+  const channels = planChannels(laid, fluids, placed, []);
   const { configured, warnings: filterWarnings } = fluidSettings(input, laid, channels);
   const bits = linkBits(network.links);
   const touching = unitTraders(placement, (u, b) => (b.role === 'machine' && !u.multiblock) || hatchOf(u, b, ['input_hatch', 'output_hatch']) !== null);

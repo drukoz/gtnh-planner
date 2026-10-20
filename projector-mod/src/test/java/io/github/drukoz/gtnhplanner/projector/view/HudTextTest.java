@@ -48,6 +48,17 @@ class HudTextTest {
         for (BlockState s : BlockState.values()) assertEquals(s == WRONG_BLOCK || s == WRONG_FACING, s.wrong(), s.name());
     }
 
+    // The review of the EnderIO single pipe: a bundle with only its Item Conduit was "placed correctly". It is placed for the
+    // step that places it (the line step), and not yet for the fluids step or the whole line.
+    @Test void countsABundleWithoutItsFluidConduitAsPlacedOnlyForItsOwnStep() throws Exception {
+        ProjectorData d = PayloadParserTest.bundleSample();
+        assertEquals(PayloadParserTest.BUNDLE_LABEL + ": not all its conduits placed yet", HudText.lookingAt(d.blocks.get(10), INCOMPLETE));
+        BlockState[] s = {MISSING, MISSING, MISSING, MISSING, MISSING, CORRECT, CORRECT, MISSING, CORRECT, MISSING, INCOMPLETE, INCOMPLETE};
+        assertEquals("Planner: Steel line — 3/12 placed, 0 wrong", HudText.summary(d, s, ViewFilter.ALL));
+        assertTrue(HudText.summary(d, s, ViewFilter.ALL.withStep(PayloadParserTest.LINE)).startsWith("Planner: Steel line — 5/5 placed, 0 wrong · showing step 7: "));
+        assertTrue(HudText.summary(d, s, ViewFilter.ALL.withStep(PayloadParserTest.FLUIDS)).startsWith("Planner: Steel line — 0/2 placed, 0 wrong · showing step 11: "));
+    }
+
     @Test void namesEveryCoverAndBothFilters() throws Exception {
         ProjectorData d = PayloadParser.parse(new java.io.StringReader(PayloadParserTest.mutate(o -> {
             com.google.gson.JsonObject up = new com.google.gson.JsonObject();

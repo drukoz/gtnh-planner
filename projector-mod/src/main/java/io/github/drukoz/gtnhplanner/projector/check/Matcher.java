@@ -1,13 +1,14 @@
 package io.github.drukoz.gtnhplanner.projector.check;
 
 import io.github.drukoz.gtnhplanner.projector.model.PlannedBlock;
+import java.util.Set;
 
 /**
  * Compares one planned block with what the world has where it goes (spec §3.13). The planner decides what is
  * compared: the registry name always, then {@link PlannedBlock#meta}, {@link PlannedBlock#mteId},
- * {@link PlannedBlock#facing} and {@link PlannedBlock#mainFacing} where they are not −1. A pseudo part
- * ({@link PlannedBlock#part} set) is therefore checked by its container block only, a conduit bundle too, whatever
- * conduits it holds.
+ * {@link PlannedBlock#facing} and {@link PlannedBlock#mainFacing} where they are not −1, and every one of
+ * {@link PlannedBlock#parts} (a conduit bundle's conduits, {@link WorldProbe#conduitKindsAt}). A block with a single pseudo
+ * part ({@link PlannedBlock#part} set, no {@code parts}) is therefore checked by its container block only.
  */
 public final class Matcher {
 
@@ -24,6 +25,10 @@ public final class Matcher {
      * or no GT tile is {@link BlockState#WRONG_BLOCK};</li>
      * <li>where the front is compared and the world's front is known, another front, and likewise a single-block
      * machine's own front (its main facing): {@link BlockState#WRONG_FACING};</li>
+     * <li>where parts are compared (the review of the EnderIO single pipe: a bundle with only its Item Conduit counted as
+     * placed for the fluids step too), the client cannot read them: {@link BlockState#UNCHECKED}; it does not know them
+     * yet: {@link BlockState#UNLOADED}; a part the block's own step lays is missing: {@link BlockState#MISSING}; a part
+     * another step lays is missing: {@link BlockState#INCOMPLETE};</li>
      * <li>otherwise {@link BlockState#CORRECT}.</li>
      * </ol>
      */
@@ -47,6 +52,19 @@ public final class Matcher {
             int main = w.mainFacingAt(b.x, b.y, b.z);
             if (main >= 0 && main != b.mainFacing) return BlockState.WRONG_FACING;
         }
-        return BlockState.CORRECT;
+        return b.parts.isEmpty() ? BlockState.CORRECT : parts(b, w.conduitKindsAt(b.x, b.y, b.z));
+    }
+
+    /** What the parts rule finds for {@code b}, whose block stands, given the parts the client sees there ({@code held}). */
+    private static BlockState parts(PlannedBlock b, Set<String> held) {
+        if (held == null) return BlockState.UNCHECKED;
+        if (held.isEmpty()) return BlockState.UNLOADED;
+        BlockState state = BlockState.CORRECT;
+        for (int k = 0; k < b.parts.size(); k++) {
+            if (held.contains(b.parts.get(k))) continue;
+            if (b.partSteps[k] == b.step) return BlockState.MISSING;
+            state = BlockState.INCOMPLETE;
+        }
+        return state;
     }
 }

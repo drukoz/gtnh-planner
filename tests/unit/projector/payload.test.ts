@@ -90,8 +90,10 @@ describe('projector payload', () => {
     expect('mainFacing' in projectorPayload(projectorProject(), noFront, pack).blocks[4]!).toBe(false);
   });
 
-  it('names every conduit of a bundle and lists a bundle cell under every step that lays one of its conduits', () => {
-    // the audit of the EnderIO In / Out fix: a bundle was sent as its first conduit, in the line step only
+  it('names every conduit of a bundle and the step that lays each, and lists a block only under the step that places it', () => {
+    // the audit of the EnderIO In / Out fix: a bundle was sent as its first conduit, in the line step only. The review of
+    // the EnderIO single pipe: a bundle listed under the fluids step too let a mod that checks only the bundle block (0.1)
+    // tick "Lay N× Ender Fluid Conduit" once the Item Conduits stood, as every basic machine's fluid conduit is in a bundle
     const ITEM = 'EnderIO:itemItemConduit@0', ENDER = 'EnderIO:itemLiquidConduit@2';
     const conduit = (kind: 'item' | 'liquid_ender') => ({ kind, item: kind === 'item' ? ITEM : ENDER, connections: 0, faces: [] });
     const l = { ...projectorLayout(), mode: 'enderio' as const };
@@ -100,20 +102,25 @@ describe('projector payload', () => {
         conduits: [conduit('item'), conduit('liquid_ender')], buildStep: 'layout:logistics:line' },
       { pos: [104, 65, 201], block: { id: 'conduit:liquid_ender', meta: 0 }, role: 'pipe', label: 'Ender Fluid Conduit', item: ENDER,
         conduits: [conduit('liquid_ender')], buildStep: 'layout:logistics:fluids' },
-      { pos: [105, 64, 201], block: { id: 'conduit:item', meta: 0 }, role: 'pipe', label: 'Item Conduit', item: ITEM, conduits: [conduit('item')], hookup: 0 });
+      { pos: [105, 64, 201], block: { id: 'conduit:item', meta: 0 }, role: 'pipe', label: 'Item Conduit', item: ITEM, conduits: [conduit('item')], hookup: 0 },
+      { pos: [106, 64, 201], block: { id: 'conduit:item', meta: 0 }, role: 'pipe', label: 'Conduit bundle (Item Conduit + Ender Fluid Conduit)', item: ITEM,
+        conduits: [conduit('item'), conduit('liquid_ender')], hookup: 0 });
     l.buildSteps.splice(8, 0, { id: 'layout:logistics:fluids', order: 9, kind: 'logistics',
       text: "Lay 2× Ender Fluid Conduit from every machine's fluid port; 1 of them goes in the same bundle as the Item Conduit" });
     const p = projectorPayload(projectorProject(), l, pack);
-    expect(p.blocks.slice(10).map((b) => [b.id, b.part, b.parts, b.step])).toEqual([
-      ['EnderIO:blockConduitBundle', 'item', ['item', 'liquid_ender'], 'layout:logistics:line'],
-      ['EnderIO:blockConduitBundle', 'liquid_ender', undefined, 'layout:logistics:fluids'],
-      ['EnderIO:blockConduitBundle', 'item', undefined, 'layout:power:hookup']]);
+    expect(p.blocks.slice(10).map((b) => [b.id, b.part, b.parts, b.partSteps, b.step])).toEqual([
+      ['EnderIO:blockConduitBundle', 'item', ['item', 'liquid_ender'], ['layout:logistics:line', 'layout:logistics:fluids'], 'layout:logistics:line'],
+      ['EnderIO:blockConduitBundle', 'liquid_ender', undefined, undefined, 'layout:logistics:fluids'],
+      ['EnderIO:blockConduitBundle', 'item', undefined, undefined, 'layout:power:hookup'],
+      // a hookup's conduits all belong to its hookup
+      ['EnderIO:blockConduitBundle', 'item', ['item', 'liquid_ender'], ['layout:power:hookup', 'layout:power:hookup'], 'layout:power:hookup']]);
     const blocksOf = (id: string) => p.steps.find((s) => s.id === id)!.blocks;
-    // the bundle stands in both steps; a hookup's conduit only in its own
-    expect([blocksOf('layout:logistics:line'), blocksOf('layout:logistics:fluids'), blocksOf('layout:power:hookup')]).toEqual([[5, 6, 8, 10], [10, 11], [0, 12]]);
-    // without a fluids step the bundle is in the line step once, as the fluid-only cell now is (the line step's rule)
-    const noFluids = { ...l, buildSteps: l.buildSteps.filter((s) => s.id !== 'layout:logistics:fluids') };
-    expect(projectorPayload(projectorProject(), noFluids, pack).steps.find((s) => s.id === 'layout:logistics:line')!.blocks).toEqual([5, 6, 8, 10, 11]);
+    // a step lists the blocks it places only: the fluids step finds the bundle through its partSteps
+    expect([blocksOf('layout:logistics:line'), blocksOf('layout:logistics:fluids'), blocksOf('layout:power:hookup')]).toEqual([[5, 6, 8, 10], [11], [0, 12, 13]]);
+    // without a fluids step the line step lays the bundle's fluid conduit too, and places the fluid-only cell (its rule)
+    const noFluids = projectorPayload(projectorProject(), { ...l, buildSteps: l.buildSteps.filter((s) => s.id !== 'layout:logistics:fluids') }, pack);
+    expect(noFluids.blocks[10]!.partSteps).toEqual(['layout:logistics:line', 'layout:logistics:line']);
+    expect(noFluids.steps.find((s) => s.id === 'layout:logistics:line')!.blocks).toEqual([5, 6, 8, 10, 11]);
   });
 
   it('lists each step\'s blocks and which steps are done', () => {

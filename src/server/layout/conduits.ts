@@ -74,13 +74,9 @@ export function pickFluidConduit(parts: Parts, need: { extract: number; insert: 
 /**
  * An extract side or an insert side of a conduit face, with the items or fluids it passes. `id` is unique among the
  * ends; the two sides of one `face` never trade with each other (self feed is off, and an ender fluid conduit never
- * fills the tank it drains). A `guarded` end must trade its keys only with the ends its flows link it to: an extract
- * side that is a stock (the input chest, an open fluid end that brings a fluid in) hands a key to every face of its
- * colour that takes it, as fast as the conduit moves, so it would fill a machine that the plan feeds from another maker
- * (which then backs up) or an output chest; an insert side with no priority (an open fluid end that sends a fluid out)
- * takes its turn with every machine of its colour that takes the fluid.
+ * fills the tank it drains).
  */
-export interface ChannelEnd { id: string; keys: readonly StuffKey[]; side: 'extract' | 'insert'; face?: string; guarded?: boolean }
+export interface ChannelEnd { id: string; keys: readonly StuffKey[]; side: 'extract' | 'insert'; face?: string }
 /** The two ends must trade, so they share a channel. */
 export interface ChannelLink { from: string; to: string }
 /**
@@ -90,13 +86,15 @@ export interface ChannelLink { from: string; to: string }
 export interface ChannelPlan { colors: Map<string, DyeColor>; shared: Array<{ color: DyeColor; keys: StuffKey[] }> }
 
 /**
- * The keys that would pass between the ends of `a` and those of `b` on one colour against a guard: an extract side and
- * an insert side, of different faces, one of them `guarded`, with a key in common. Sorted, each once.
+ * The keys that would pass between the ends of `a` and those of `b` on one colour: an extract side and an insert side,
+ * of different faces, with a key in common. Called for two different channels, so no flow links such a pair (it would
+ * have joined them): every one is a route the plan does not have (the review of the EnderIO single pipe). Sorted, each
+ * once.
  */
 function leaks(a: readonly ChannelEnd[], b: readonly ChannelEnd[]): StuffKey[] {
   const keys = new Set<StuffKey>();
   const pass = (from: ChannelEnd, to: ChannelEnd): void => {
-    if (from.side !== 'extract' || to.side !== 'insert' || (from.guarded !== true && to.guarded !== true)) return;
+    if (from.side !== 'extract' || to.side !== 'insert') return;
     if (from.face !== undefined && from.face === to.face) return;
     for (const k of from.keys) if (to.keys.includes(k)) keys.add(k);
   };
@@ -113,7 +111,10 @@ function leaks(a: readonly ChannelEnd[], b: readonly ChannelEnd[]): StuffKey[] {
  * Linked ends share a channel (an extract side and an insert side each have one colour, so the ends a face trades with
  * are on its colour). Channels are coloured in order of their first end, each with the first `CHANNEL_PALETTE` colour
  * that none of the channels on it `leaks` a key with: so a line is on one colour, Red, and a channel takes another only
- * where a guarded end would trade a key off its flows, which no filter stops (the faces take that key from elsewhere).
+ * where, on a shared colour, an extract side would hand a key to an insert side its flows do not link it to. No filter
+ * stops that, as the insert side takes the key (the plan brings it from elsewhere), and whatever hands it out, the input
+ * chest, an open fluid end or a machine, the insert side takes more than its flows while it has room (machine counts
+ * round up), so the face the key is planned for runs short, its maker backs up or a chest fills with it.
  * Once every colour leaks, the one that leaks the fewest keys (ties: palette order), with a `shared` entry naming them.
  * Throws `RangeError` for a link to an end that is not listed, and for two ends with one id.
  */

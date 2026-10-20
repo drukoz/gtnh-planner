@@ -207,13 +207,18 @@ public final class ProjectorSession {
 
     /**
      * {@link HudText#lookingAt} for the planned block at that position while it is shown (the line is
-     * {@link #visibleHere} and the filter keeps the block); null otherwise, and for a block that is not loaded.
+     * {@link #visibleHere} and the filter keeps the block); null otherwise, and for a block that is not loaded. A block
+     * placed for the shown step ({@link BlockState#placedFor}: a conduit bundle without the fluids step's conduit, under
+     * the line step) reads as placed correctly, as its ghost is green and the HUD counts it.
      */
     public String lookingAt(int x, int y, int z) {
         if (!visibleHere()) return null;
         Integer i = blockAt.get(key(x, y, z));
-        if (i == null || !filter.shows(data.blocks.get(i))) return null;
-        return HudText.lookingAt(data.blocks.get(i), check.state(i));
+        if (i == null) return null;
+        PlannedBlock b = data.blocks.get(i);
+        if (!filter.shows(b)) return null;
+        BlockState state = check.state(i);
+        return HudText.lookingAt(b, state.placedFor(b, filter.stepIndex) ? BlockState.CORRECT : state);
     }
 
     /** Why the last background refresh failed, or null. */
@@ -380,12 +385,15 @@ public final class ProjectorSession {
         chat("Showing step " + s.order + ": " + s.text);
     }
 
-    /** The index of the lowest-numbered step with blocks that is not done, or −1 after saying there is none. */
+    /**
+     * The index of the lowest-numbered step with blocks ({@link PlannedStep#hasBlocks}) that is not done, or −1 after
+     * saying there is none.
+     */
     private int nextOpenStep() {
         int next = -1;
         for (int i = 0; i < data.steps.size(); i++) {
             PlannedStep s = data.steps.get(i);
-            if (s.blocks.length == 0 || tracker.isDone(s.id)) continue;
+            if (!s.hasBlocks() || tracker.isDone(s.id)) continue;
             if (next < 0 || s.order < data.steps.get(next).order) next = i;
         }
         if (next < 0) chat("Every build step with blocks is done.");
@@ -406,7 +414,7 @@ public final class ProjectorSession {
             int last = 0;
             for (PlannedStep s : data.steps) last = Math.max(last, s.order);
             chat("There is no step " + order + " (the steps are numbered 1 to " + last + ").");
-        } else if (data.steps.get(index).blocks.length == 0) {
+        } else if (!data.steps.get(index).hasBlocks()) {
             chat("Step " + order + " has no blocks to show: " + data.steps.get(index).text);
             index = -1;
         }
@@ -502,11 +510,11 @@ public final class ProjectorSession {
         return d.dim == here ? text : text + " The line is in dimension " + d.dim + "; you are in " + here + ".";
     }
 
-    /** {@code <n> blocks in <k> build steps}, counting the steps that place blocks. */
+    /** {@code <n> blocks in <k> build steps}, counting the steps that build blocks ({@link PlannedStep#hasBlocks}). */
     private static String sizeText(ProjectorData d) {
         int steps = 0;
         for (PlannedStep s : d.steps) {
-            if (s.blocks.length > 0) steps++;
+            if (s.hasBlocks()) steps++;
         }
         return d.blocks.size() + " blocks in " + steps + " build steps";
     }

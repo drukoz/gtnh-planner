@@ -68,4 +68,32 @@ class MatcherTest {
     @Test void anUnloadedBlockIsNotCalledUncheckable() throws Exception {
         assertEquals(UNLOADED, Matcher.check(b(9), new FakeWorld().unload(103, 65, 203)));   // block 9's name is unknown to this client
     }
+
+    // The review of the EnderIO single pipe: the mod compared a bundle by its block alone, so a bundle of the line with only
+    // its Item Conduit was "placed correctly", for the fluids step as well, before any Ender Fluid Conduit was placed.
+    @Test void checksEveryConduitOfABundle() throws Exception {
+        PlannedBlock bundle = PayloadParserTest.bundleSample().blocks.get(10);   // 106 64 202: Item Conduit (line step), Ender Fluid Conduit (fluids step)
+        assertEquals(INCOMPLETE, Matcher.check(bundle, new FakeWorld().bundle(106, 64, 202, "item")));        // its own step's conduit only
+        assertEquals(CORRECT, Matcher.check(bundle, new FakeWorld().bundle(106, 64, 202, "liquid_ender", "item")));
+        assertEquals(CORRECT, Matcher.check(bundle, new FakeWorld().bundle(106, 64, 202, "item", "liquid_ender", "crazypants.enderio.conduit.redstone.InsulatedRedstoneConduit")));
+        assertEquals(MISSING, Matcher.check(bundle, new FakeWorld().bundle(106, 64, 202, "liquid_ender")));   // the conduit its own step lays is missing
+        assertEquals(INCOMPLETE, Matcher.check(bundle, new FakeWorld().bundle(106, 64, 202, "item", "liquid_crystalline")));   // another tier is not the planned conduit
+        assertEquals(UNLOADED, Matcher.check(bundle, new FakeWorld().bundle(106, 64, 202)));                  // its conduits have not reached the client
+        FakeWorld blind = new FakeWorld().bundle(106, 64, 202, "item", "liquid_ender"); blind.conduitsUnreadable = true;
+        assertEquals(UNCHECKED, Matcher.check(bundle, blind));
+        assertEquals(MISSING, Matcher.check(bundle, new FakeWorld()));
+        assertEquals(WRONG_BLOCK, Matcher.check(bundle, new FakeWorld().put(106, 64, 202, "minecraft:stone", 0, WorldProbe.NO_TILE, -1)));
+        // a block with one part is still checked by its container block only
+        assertEquals(CORRECT, Matcher.check(b(8), new FakeWorld().put(105, 64, 202, "ForgeMultipart:block", 0, -1, -1)));
+        // parts the planner sent without their steps are all its own step's
+        PlannedBlock own = PayloadParser.parse(new java.io.StringReader(PayloadParserTest.mutateBundles(o -> PayloadParserTest.block(o, 10).remove("partSteps")))).blocks.get(10);
+        assertEquals(MISSING, Matcher.check(own, new FakeWorld().bundle(106, 64, 202, "item")));
+    }
+
+    @Test void buildCheckFollowsABundlesConduits() throws Exception {
+        BuildCheck c = new BuildCheck(PayloadParserTest.bundleSample());
+        FakeWorld w = new FakeWorld().placeLine("item");
+        c.run(w); assertEquals(INCOMPLETE, c.state(10)); assertEquals(INCOMPLETE, c.state(11));
+        assertTrue(c.run(w.placeLine("item", "liquid_ender"))); assertEquals(CORRECT, c.state(10)); assertEquals(CORRECT, c.state(11));
+    }
 }

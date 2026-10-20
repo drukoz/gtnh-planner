@@ -39,6 +39,13 @@ public final class PlannedBlock {
      * being {@link #part}); never null, empty otherwise.
      */
     public final List<String> parts;
+    /**
+     * Beside {@link #parts}, in its order: the index in {@link ProjectorData#steps} of the build step that lays each part,
+     * −1 where no step does, and the block's own {@link #step} for every part when the planner sent none (a bundle of the
+     * line: the line step lays its Item Conduit, the fluids step its fluid conduit). Never null; empty when {@link #parts}
+     * is. Read only.
+     */
+    public final int[] partSteps;
     /** What the block is in the line: {@code machine}, {@code casing}, {@code hatch}, {@code cable}, {@code pipe}, … */
     public final String role;
     /** The block's name for the player, for example {@code Basic Macerator}. */
@@ -46,16 +53,17 @@ public final class PlannedBlock {
     /** The index in {@link ProjectorData#steps} of the build step that places it, or −1 when no step does. */
     public final int step;
     /**
-     * The indices in {@link ProjectorData#steps} of every build step that builds it, ascending: its own {@link #step}
-     * and every step that lists it (a conduit bundle's cell is in the line step and the fluids step both). Never null;
-     * empty when no step does. Read only.
+     * The indices in {@link ProjectorData#steps} of every build step that builds it, ascending: its own {@link #step},
+     * every step that lists it and every step that lays one of its {@link #parts} (a conduit bundle of the line is built by
+     * the line step and the fluids step both). Never null; empty when no step does. Read only.
      */
     public final int[] steps;
     /** The covers on its faces; never null, empty when it has none. */
     public final List<PlannedCover> covers;
 
     PlannedBlock(int x, int y, int z, String id, int meta, int mteId, int facing, boolean facingIsOutput, int mainFacing,
-        String part, List<String> parts, String role, String label, int step, int[] steps, List<PlannedCover> covers) {
+        String part, List<String> parts, int[] partSteps, String role, String label, int step, int[] steps,
+        List<PlannedCover> covers) {
         this.x = x;
         this.y = y;
         this.z = z;
@@ -67,6 +75,7 @@ public final class PlannedBlock {
         this.mainFacing = mainFacing;
         this.part = part;
         this.parts = parts;
+        this.partSteps = partSteps;
         this.role = role;
         this.label = label;
         this.step = step;
@@ -76,8 +85,8 @@ public final class PlannedBlock {
 
     /** The same block, built by the steps at {@code steps} (ascending). */
     PlannedBlock withSteps(int[] steps) {
-        return new PlannedBlock(x, y, z, id, meta, mteId, facing, facingIsOutput, mainFacing, part, parts, role, label, step, steps,
-            covers);
+        return new PlannedBlock(x, y, z, id, meta, mteId, facing, facingIsOutput, mainFacing, part, parts, partSteps, role, label,
+            step, steps, covers);
     }
 
     /** Whether the step at {@code stepIndex} of {@link ProjectorData#steps} builds it (see {@link #steps}). */

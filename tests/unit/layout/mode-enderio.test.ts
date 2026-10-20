@@ -23,6 +23,18 @@ const TAP_NOTE = "Light Gray is the tap's own channel, so check that no other fa
   + 'your other storages)';
 const manyInputs = (n: number) => makePlan([{ id: 's1', mteId: IDS.ASSEMBLER, count: 1, tier: 2, inputs: keysN(n).map((k): [string, number] => [k, 1]) }],
   { flows: [...keysN(n).map((key) => ({ from: 'raw', to: 's1', key, perSecond: 1 })), { from: 's1', to: 'out', key: 't:out_s1@0', perSecond: 1 }] });
+/**
+ * Every route EnderIO can take on the item faces, `<extract face's target> -<key>-> <insert face's target>`, sorted: an
+ * insert side of the extract side's colour whose filter passes the key, on another face (NetworkedInventory offers each
+ * extraction to every face of the network but its own whose colour and filter take it).
+ */
+const routes = (r: { blocks: Parameters<typeof faces>[0]['blocks'] }): string[] => {
+  const item = faces(r).filter((f) => f.kind === 'item');
+  return item.flatMap((from) => (from.extract?.filter?.keys ?? []).flatMap((key) => item
+    .filter((to) => to.insert !== undefined && !(posKey(to.pos) === posKey(from.pos) && to.face === from.face) && to.insert.color === from.extract!.color
+      && (to.insert.filter?.keys ?? []).includes(key))
+    .map((to) => `${from.target} -${key}-> ${to.target}`))).sort();
+};
 
 describe('EnderIO mode — items', () => {
   it('lays one Item Conduit along the spine, every machine face In / Out with its own filters, all on the line\'s one channel', () => {
@@ -113,6 +125,36 @@ describe('EnderIO mode — items', () => {
     const at = (target: string) => faces(r).find((f) => f.target === target)!;
     expect([at('Basic Macerator').extract!.color, at('Chest (output)').insert!.color, at('Advanced Assembler').extract!.color]).toEqual(['red', 'red', 'red']);
     expect([at('Chest (input)').extract!.color, at('Basic Macerator').insert!.color, at('Advanced Assembler').insert!.color]).toEqual(['blue', 'blue', 'blue']);
+  });
+
+  it('gives a maker a channel of its own where its item would reach a machine the plan feeds that item from another maker', () => {
+    // the review of the EnderIO single pipe (its case E4, the user's own example): a makes 2 Dust/s, 1 for c and 1 for the
+    // output chest; b makes 1 Dust/s for d. On one colour both makers' extract sides reach c, d and the chest, round robin
+    // is off (the chest takes Dust) and EnderIO hands each stack to the nearest face with room: a machine with room to
+    // spare (counts round up, and raw inputs never hold it back) takes Dust planned for the other, which runs short, and
+    // b's Dust overflows into the chest. No filter stops it, as c and d both take Dust, so b and d get Blue
+    const plan = makePlan([
+      { id: 'a', mteId: IDS.MACERATOR, count: 1, inputs: [['t:in@0', 1]], outputs: [['t:dust@0', 2]] },
+      { id: 'b', mteId: IDS.EXTRACTOR, count: 1, inputs: [['t:in2@0', 1]], outputs: [['t:dust@0', 1]] },
+      { id: 'c', mteId: IDS.CHEM_HV, count: 1, tier: 3, inputs: [['t:dust@0', 1]], outputs: [['t:out_c@0', 1]] },
+      { id: 'd', mteId: IDS.ASSEMBLER, count: 1, tier: 2, inputs: [['t:dust@0', 1]], outputs: [['t:out_d@0', 1]] },
+    ], { flows: [{ from: 'raw', to: 'a', key: 't:in@0', perSecond: 1 }, { from: 'raw', to: 'b', key: 't:in2@0', perSecond: 1 },
+      { from: 'a', to: 'c', key: 't:dust@0', perSecond: 1 }, { from: 'a', to: 'out', key: 't:dust@0', perSecond: 1 },
+      { from: 'b', to: 'd', key: 't:dust@0', perSecond: 1 },
+      { from: 'c', to: 'out', key: 't:out_c@0', perSecond: 1 }, { from: 'd', to: 'out', key: 't:out_d@0', perSecond: 1 }] });
+    const r = buildMode('enderio', { ...setup(plan), network: null });
+    const at = (target: string) => faces(r).find((f) => f.target === target)!;
+    const [a, b, c, d, chest, out] = [at('Basic Macerator'), at('Basic Fluid Extractor'), at('Advanced Chemical Reactor'), at('Advanced Assembler'),
+      at('Chest (input)'), at('Chest (output)')];
+    expect([a.extract!.color, c.insert!.color, out.insert!.color, chest.extract!.color, a.insert!.color, b.insert!.color, c.extract!.color, d.extract!.color])
+      .toEqual(['red', 'red', 'red', 'red', 'red', 'red', 'red', 'red']);
+    expect([b.extract!.color, d.insert!.color]).toEqual(['blue', 'blue']);
+    // every route EnderIO can take is one the plan's flows name
+    expect(routes(r)).toEqual([
+      'Advanced Assembler -t:out_d@0-> Chest (output)', 'Advanced Chemical Reactor -t:out_c@0-> Chest (output)',
+      'Basic Fluid Extractor -t:dust@0-> Advanced Assembler', 'Basic Macerator -t:dust@0-> Advanced Chemical Reactor',
+      'Basic Macerator -t:dust@0-> Chest (output)', 'Chest (input) -t:in2@0-> Basic Fluid Extractor', 'Chest (input) -t:in@0-> Basic Macerator']);
+    expect([a.extract!.roundRobin, b.extract!.roundRobin, r.warnings]).toEqual([false, false, []]);
   });
 
   it('round robins a face whose item two machines take, though the output chest takes another of its items', () => {
@@ -295,7 +337,7 @@ describe('EnderIO mode — tail chests, the storage tap and warnings', () => {
   it('keeps sixteen channels that trade nothing off their flows on one colour', () => {
     const ids = Array.from({ length: 16 }, (_, i) => `e${String(i).padStart(2, '0')}`);
     // sixteen machines that only take Raw Input (and make nothing, so no fluid conduit is laid), each its own channel:
-    // nothing feeds them, so nothing links their faces, and with no input chest nothing guards a key
+    // nothing feeds them, so nothing links their faces, and with no extract side no face hands a key to another channel
     const plan = makePlan(ids.map((id): StepSpec => ({ id, mteId: IDS.EXTRACTOR, count: 1, outputs: [] })), { flows: [] });
     const r = buildMode('enderio', { ...setup(plan), network: null });
     expect(faces(r).map((f) => [f.mode, f.insert!.color])).toEqual(ids.map(() => ['insert', 'red']));

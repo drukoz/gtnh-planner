@@ -64,6 +64,14 @@ class ViewFilterTest {
         assertEquals(Arrays.asList(5, 6, 8), shown(d, ViewFilter.ALL.withStep(6)));
     }
 
+    // The review of the EnderIO single pipe: the fluids step lists none of the bundles it lays a conduit in, which name it
+    // in their partSteps instead; its filter shows them all the same.
+    @Test void aStepFilterShowsTheBundlesTheStepLaysAConduitIn() throws Exception {
+        ProjectorData d = PayloadParserTest.bundleSample();
+        assertEquals(Arrays.asList(10, 11), shown(d, ViewFilter.ALL.withStep(PayloadParserTest.FLUIDS)));
+        assertEquals(Arrays.asList(5, 6, 8, 10, 11), shown(d, ViewFilter.ALL.withStep(PayloadParserTest.LINE)));
+    }
+
     @Test void distanceIsAStraightLineFromTheBlockCentre() throws Exception {
         PlannedBlock b = PayloadParserTest.sample().blocks.get(3);   // centre 102.5 64.5 201.5
         assertTrue(ViewFilter.within(b, 105.5, 68.5, 201.5, 5));     // 3 across and 4 up: 5 away

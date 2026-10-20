@@ -210,6 +210,27 @@ describe('EnderIO mode — the fluid network in detail', () => {
       + '(ender fluid conduits have no priority), so it can run short: if it does, take the tank off that end' }]);
   });
 
+  it('gives a maker of a fluid a channel of its own where the fluid would reach a machine the plan feeds it from another maker', () => {
+    // the review of the EnderIO single pipe (its case F2): x makes Molten Iron for y and w makes it for z. On one colour
+    // each maker would fill the other's machine as well (EnderLiquidConduitNetwork.fillFrom fills any face of its colour
+    // whose filter passes the fluid), so x and y get Blue (w's face comes first), and each maker, with one face to fill,
+    // needs no round robin
+    const plan = makePlan([
+      { id: 'x', mteId: IDS.EXTRACTOR, count: 1, inputs: [['t:in@0', 1]], outputs: [['fluid:molten.iron', 144]] },
+      { id: 'w', mteId: IDS.MACERATOR, count: 1, inputs: [['t:in2@0', 1]], outputs: [['fluid:molten.iron', 144]] },
+      { id: 'y', mteId: IDS.SOLIDIFIER, count: 1, inputs: [['fluid:molten.iron', 144]], outputs: [['t:out_y@0', 1]] },
+      { id: 'z', mteId: IDS.CHEM_HV, count: 1, tier: 3, inputs: [['fluid:molten.iron', 144]], outputs: [['t:out_z@0', 1]] },
+    ], { flows: [{ from: 'raw', to: 'x', key: 't:in@0', perSecond: 1 }, { from: 'raw', to: 'w', key: 't:in2@0', perSecond: 1 },
+      { from: 'x', to: 'y', key: 'fluid:molten.iron', perSecond: 1 }, { from: 'w', to: 'z', key: 'fluid:molten.iron', perSecond: 1 },
+      { from: 'y', to: 'out', key: 't:out_y@0', perSecond: 1 }, { from: 'z', to: 'out', key: 't:out_z@0', perSecond: 1 }] });
+    const r = buildMode('enderio', { ...setup(plan), network: null });
+    expect(fluidFaces(r).filter((f) => f.mode !== 'disabled').map((f) => [f.mode, f.target, f.extract?.color ?? f.insert!.color, f.extract?.roundRobin ?? null]))
+      .toEqual([
+        ['extract', 'Basic Macerator', 'red', false], ['extract', 'Basic Fluid Extractor', 'blue', false],
+        ['insert', 'Basic Fluid Solidifier', 'blue', null], ['insert', 'Advanced Chemical Reactor', 'red', null]]);
+    expect(r.warnings).toEqual([]);
+  });
+
   it('sizes the fluid conduit to the busiest insert face too and names the side that is short', () => {
     // five faces extract 4,000 L/s each, an Ender Fluid Conduit's most, into one face that takes 20,000 (past its 16,000)
     expect(fluidKinds(buildMode('enderio', { ...setup(manyToOne(5, 20_000)), network: null }))).toEqual(['liquid_crystalline']);

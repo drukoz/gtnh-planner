@@ -46,7 +46,8 @@ public final class ViewFilter {
 
     /**
      * Whether the block is on the layer and built by the step, where those are set (distance aside): a step shows every
-     * block it builds ({@link PlannedBlock#inStep}), a conduit bundle in each step that lays one of its conduits.
+     * block it builds ({@link PlannedBlock#inStep}), a conduit bundle under the step that places it and each step that
+     * lays one of its conduits ({@link PlannedBlock#partSteps}).
      */
     public boolean shows(PlannedBlock b) {
         return (layerY == null || b.y == layerY) && (stepIndex < 0 || b.inStep(stepIndex));

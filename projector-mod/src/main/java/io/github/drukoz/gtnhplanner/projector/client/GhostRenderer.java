@@ -128,7 +128,9 @@ public final class GhostRenderer {
             PlannedBlock b = data.blocks.get(i);
             if (!filter.shows(b) || !ViewFilter.within(b, cx, cy, cz, maxDistance)) continue;
             double x = b.x - data.origin[0], y = b.y - data.origin[1], z = b.z - data.origin[2];
-            addBlock(b, states[i], x, y, z, alpha);
+            // green where it stands as the shown step needs it: a bundle without the fluids step's conduit, under the
+            // line step
+            addBlock(b, states[i].placedFor(b, filter.stepIndex) ? BlockState.CORRECT : states[i], x, y, z, alpha);
             for (PlannedCover c : b.covers) addCover(c, x, y, z);
         }
         if (config.useDisplayLists()) {
@@ -168,7 +170,7 @@ public final class GhostRenderer {
                 bl = look.b * UNCHECKED_B;
                 a = ghostAlpha;
                 break;
-            default: // MISSING, UNLOADED: a faint ghost of the block
+            default: // MISSING, INCOMPLETE, UNLOADED: a faint ghost of the block
                 r = look.r;
                 g = look.g;
                 bl = look.b;
