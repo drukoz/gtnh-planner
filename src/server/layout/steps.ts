@@ -156,6 +156,22 @@ function steamPlaceText(u: PlacedUnit, n: number, front: string): string {
 }
 
 /**
+ * The roof step (gt-mechanics §3.4: GT machines left in the rain can catch fire or explode). The line's height `h`
+ * counts the cells a roof must leave open (layout.ts): the block a Muffler Hatch faces and the block above each venting
+ * steam machine (`PlacedUnit.outputSide` up), where GT vents its steam after every run and waits while it is blocked
+ * (`MTEBasicMachineBronze.allowToCheckRecipe`); so with either the step names that height and says to keep them open.
+ */
+function roofText(units: readonly PlacedUnit[], h: number): string {
+  const muffler = units.some(hasMuffler);
+  const vent = units.some((u) => u.outputSide === OUTPUT_UP);
+  if (!muffler && !vent) return 'Roof the line: GT machines left in the rain can catch fire or explode';
+  const why = [...(muffler ? ['a Muffler Hatch needs the block it faces kept empty'] : []),
+    ...(vent ? ['each steam machine vents its steam through its top: keep the block above it open and roof above it'] : [])];
+  return `Roof the line over its ${fmtInt(h)}-high space: GT machines left in the rain can catch fire or explode, `
+    + `${why.length === 1 ? `and ${why[0]!}` : `${why[0]!}, and ${why[1]!}`}`;
+}
+
+/**
  * What a multiblock run by hand (`PlacedUnit.manual`: a Bricked Blast Furnace or a Coke Oven) adds to its place step:
  * it stands one block back from the middle row, its front row kept free, so you reach its controller and nothing of
  * the line touches it.
@@ -326,11 +342,7 @@ export function layoutSteps(input: StepsInput): BuildStep[] {
       ? `; dig ${fmtInt(input.site.dig)} and fill ${fmtInt(input.site.fill)} blocks to level it` : '';
     steps.push(draft('layout:site', 'place', sitePin,
       `Clear a ${fmtInt(w)}×${fmtInt(l)} spot${atPin(sitePin)} (${fmtInt(h)} high) and keep a 1-block path around it${level}`));
-    // gt-mechanics §3.4; the height counts the air a muffler needs above a multiblock's top, which a roof must not fill
-    steps.push(draft('layout:roof', 'place', sitePin, input.units.some(hasMuffler)
-      ? `Roof the line over its ${fmtInt(h)}-high space: GT machines left in the rain can catch fire or explode, and a Muffler Hatch `
-        + 'needs the block it faces kept empty'
-      : 'Roof the line: GT machines left in the rain can catch fire or explode'));
+    steps.push(draft('layout:roof', 'place', sitePin, roofText(input.units, h)));
     steps.push(...placeSteps(input.units, sitePin, input.rotation, fluidsThroughOutputSide(input.blocks)));
     steps.push(...powerSteps(input, sitePin, powerPin));
     for (const d of input.drafts) if (d.kind === 'logistics') steps.push(draft(d.id, d.kind, kindPin(d.pin), d.text));

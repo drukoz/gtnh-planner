@@ -164,6 +164,13 @@ describe.each(MODES)('primitive machines in %s mode', (mode) => {
     expect(layout.blocks.filter((b) => b.role === 'hatch')).toEqual([]);
   });
 
+  it('roofs the line above every steam machine, whose top stays open', async () => {
+    // the line is as tall as the furnace (4 blocks); the block above the steam macerator is its vent, under the roof
+    const layout = await laid(mode);
+    expect(layout.buildSteps.find((s) => s.id === 'layout:roof')?.text).toBe('Roof the line over its 4-high space: GT machines left in the rain '
+      + 'can catch fire or explode, and each steam machine vents its steam through its top: keep the block above it open and roof above it');
+  });
+
   it('sends the projector the same output side and nothing on the vent', async () => {
     const layout = await laid(mode, 90);
     const payload = projectorPayload(makeProject({ logistics: mode }), layout, primitivePack());
