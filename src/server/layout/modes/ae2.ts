@@ -310,8 +310,9 @@ export function ae2Mode(input: ModeInput): ModeResult {
   const exportBusFor = new Map<string, number>();
   /** The pattern of each step whose machines get one. */
   const patterned = new Map<string, PatternSpec>();
-  /** The units' first steps already told that their interface holds too few patterns. */
+  /** The units' first steps already told that their interface holds too few patterns, or that blocking mode stays off. */
   const patternsWarned = new Set<string>();
+  const unblockedWarned = new Set<string>();
   let patterns = 0, patternedInterfaces = 0, capacityCards = 0, accelerationCards = 0, lockingCards = 0;
   for (const { pos, behind, unit } of ports) {
     portCells.add(posKey(pos));
@@ -369,10 +370,22 @@ export function ae2Mode(input: ModeInput): ModeResult {
       warnings.push({ code: 'ae2_patterns_short', stepId: rest[0]!.id, text: `${unit.name} runs more recipes than one ME Interface holds `
         + `(${AE2_POOL_MAX_PATTERNS} patterns): ${nameList(plan, pack, rest.map(({ id }) => stepProduct(plan, id)))} need another interface` });
     }
+    const blocking = kept.every(({ feed }) => feed.blocking);
+    // a shared machine needs blocking mode, which pushes one recipe's set at a time (research machine-feeding §3.3); a held
+    // item blocking mode does not ignore keeps it off, so the recipes' sets can mix in the machine
+    if (kept.length > 1 && !blocking && !unblockedWarned.has(unit.stepId)) {
+      unblockedWarned.add(unit.stepId);
+      const held = [...new Set(kept.flatMap(({ id }) => {
+        const s = plan.steps.find((x) => x.id === id);
+        return s === undefined ? [] : stepOneOffs(pack, s).map((h) => h.key).filter((k) => !ignoredByBlocking(pack, k));
+      }))].sort();
+      warnings.push({ code: 'ae2_shared_unblocked', stepId: unit.stepId, text: `The ${unit.name} runs ${fmtInt(kept.length)} recipes from one ME Interface `
+        + `but holds ${nameList(plan, pack, held)}, which blocking mode does not ignore, so blocking mode stays off and the next recipe's items can go `
+        + 'in before the last has run: give each recipe its own machine' });
+    }
     blocks.push({
       pos, block: { ...parts.me_interface.block }, role: 'interface', label: `${parts.me_interface.name} (${unit.name})`, item: parts.me_interface.key,
-      ...(kept.length === 0 ? {} : { feed: { interface: { patterns: kept.map(({ feed }) => structuredClone(feed.pattern)),
-        blocking: kept.every(({ feed }) => feed.blocking) } } }),
+      ...(kept.length === 0 ? {} : { feed: { interface: { patterns: kept.map(({ feed }) => structuredClone(feed.pattern)), blocking } } }),
     });
   }
   // each step whose machines move items and get no pattern, once, in unit order (a multiblock that takes no item has no

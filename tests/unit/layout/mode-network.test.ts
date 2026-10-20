@@ -166,6 +166,27 @@ describe('AE2 mode', () => {
     expect(r.warnings).toEqual([]);
   });
 
+  it('says where a shared machine holds an item blocking mode does not ignore, so its recipes can mix', () => {
+    // research machine-feeding §3.3, §4.2 item 4: without blocking mode the interface pushes the next recipe's set before
+    // the machine has run the last, so two recipes' items sit in it at once (a Packager's schematic is off AE2's list)
+    const pack = layoutPack();
+    const SCHEMATIC = 'gregtech:gt.metaitem.01@32498';
+    for (const id of ['s1', 's2']) {
+      pack.recipeById.set(id, { id, source: 'gt', maps: [], euPerTick: 30, durationTicks: 20, amps: 1, specialValue: 0, meta: {}, flags: {},
+        inputs: [{ slot: 0, consumed: true, chance: 1, options: [{ key: id === 's1' ? 't:in@0' : 't:out_s1@0', amount: 1 }] },
+          { slot: 1, consumed: false, chance: 0, options: [{ key: SCHEMATIC, amount: 1 }] }],
+        outputs: [{ key: `t:out_${id}@0`, amount: 1, chance: 1 }] });
+    }
+    const plan = pooled();
+    const placement = placeUnits(unitsFromPlan(pack, plan).units, { headWidth: 1, portSpacing: PORT_SPACING.ae2 });
+    const network = makeScan({ logistics: [{ kind: 'ae2', taps: [[0, 64, 0]] }] }).logistics[0]!;
+    const r = buildMode('ae2', { pack, plan, parts: resolveParts(pack), placement, network });
+    expect(r.blocks.find((b) => b.role === 'interface')!.feed?.interface?.blocking).toBe(false);
+    expect(r.warnings.filter((w) => w.code === 'ae2_shared_unblocked')).toEqual([{ code: 'ae2_shared_unblocked', stepId: 's1',
+      text: `The Basic Macerator runs 2 recipes from one ME Interface but holds ${SCHEMATIC}, which blocking mode does not ignore, so blocking mode `
+        + 'stays off and the next recipe\'s items can go in before the last has run: give each recipe its own machine' }]);
+  });
+
   it('puts at most nine patterns in one ME interface and says which recipes need another', () => {
     // controller Amendment OQ6: one ME Interface holds nine processing patterns; the planner splits a key's pools into
     // parts of nine (`ae2Parts`), but a machine type of several maps could still gather more
