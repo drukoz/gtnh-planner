@@ -98,7 +98,7 @@ export function machinePricingKey(settings: PlanSettings, ctx: PlanContext): str
  * sorted first among such dead ends) — else a good `deadEnds` names, else a pricing gap. The good named is one that alone,
  * made available, would let `key` be made (`deadEndsAlone`), else any dead end; among those a base material out of reach
  * first, then a good whose recipes cannot run here (it has a `blocked` entry), then any other (a good nothing makes),
- * each by key. Of the dead ends of every route sorted by key, the first was often one route's oddity — on the 2.9 export
+ * each by key, and an ore the group can mine last (it is what the machine lacks only where nothing else is). Of the dead ends of every route sorted by key, the first was often one route's oddity — on the 2.9 export
  * the reactor sensor location cards nothing makes, behind the "Any MV Circuit" stand-in that one recipe of an Emitter
  * (MV) takes, or that an MV-circuit slot lists beside the real circuits — while what kept the machine from being built
  * was another good. A walk stopped at its recipe cap left goods unexpanded that would look out of reach, so there every
@@ -108,7 +108,7 @@ function gapOf(pack: Pack, graph: CandidateGraph | null, key: StuffKey, mined: (
   if ((pack.producers.get(key) ?? []).length === 0) return { kind: 'no-recipe' };
   if (graph?.truncated === true) return { kind: 'gap' };
   if (graph === null) return { kind: 'unavailable', item: key };
-  const rank = (end: StuffKey): number => (graph.goods.get(end)?.leafClass === 'unavailable' ? 0 : graph.blocked.has(end) ? 1 : 2);
+  const rank = (end: StuffKey): number => (mined(end) ? 3 : graph.goods.get(end)?.leafClass === 'unavailable' ? 0 : graph.blocked.has(end) ? 1 : 2);
   const first = (ends: readonly StuffKey[]): StuffKey | undefined => [...ends].sort((a, b) => rank(a) - rank(b) || byString(a, b))[0];
   const ends = deadEnds(graph, key);
   const ores = ends.filter(mined);

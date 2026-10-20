@@ -159,17 +159,18 @@ describe('machineGap', () => {
     // Cluster, not available at MV" for it, a mod item that sorted first among such dead ends. Where a vein of the ore is
     // in reach the chain is available and only its price is missing (controller ruling OQ5 b); where none is, the machine
     // cannot be built (OQ5 a).
-    const gemSpec = (dims: string[]): PackSpec => {
+    const gemSpec = (dims: string[], shard = false): PackSpec => {
       const spec = structuredClone(MINI_GT);
       return {
         ...spec,
         items: [...(spec.items ?? []), { key: 't:gem_ore@0', name: 'Gem Ore', gt: { prefix: 'ore', material: 'Gem' } },
           { key: 't:gem_purified@0', name: 'Purified Gem Ore', gt: { prefix: 'crushedPurified', material: 'Gem' } },
-          { key: 't:gem_flawless@0', name: 'Flawless Gem', gt: { prefix: 'gemFlawless', material: 'Gem' } }],
+          { key: 't:gem_flawless@0', name: 'Flawless Gem', gt: { prefix: 'gemFlawless', material: 'Gem' } }, { key: 't:zircon@0', name: 'Zircon Shard' }],
         recipes: [...(spec.recipes ?? []),
           { id: 'wash-gem', map: 'gt.recipe.macerator', in: [['t:gem_ore@0', 1]], out: [['t:gem_purified@0', 1]], eut: 2, dur: 100 },
           { id: 'sift-gem', map: 'gt.recipe.centrifuge', in: [['t:gem_purified@0', 1]], out: [['t:gem_flawless@0', 1]], eut: 15, dur: 100 },
-          { id: 'make-102', map: 'crafting', in: [['t:hull_lv@0', 1], ['t:gem_flawless@0', 1]], out: [['machine:102@0', 1]] }],
+          { id: 'make-102', map: 'crafting', in: [['t:hull_lv@0', 1], ['t:gem_flawless@0', 1], ...(shard ? [['t:zircon@0', 1] as [string, number]] : [])],
+            out: [['machine:102@0', 1]] }],
         worldgen: { ...spec.worldgen, veins: [...(spec.worldgen?.veins ?? []), { name: 'ore.mix.gem', dims, kind: 'vein', weight: 1, minY: 0, maxY: 255,
           size: 1, density: 1, materials: { primary: 'Gem', secondary: 'Gem', between: 'Gem', sporadic: 'Gem' } }] },
       };
@@ -184,6 +185,9 @@ describe('machineGap', () => {
     const out = machineGap(moon, moonPrices, machine(moon, 102));
     expect(out).toEqual({ kind: 'unavailable', item: 't:gem_ore@0' });
     expect(gapText(moon, machine(moon, 102), out!, 1)).toBe('needs Gem Ore, not available at LV');
+    // Where it also takes a Zircon Shard nothing makes, that is what it lacks: never the ore the group can mine.
+    const shard = packFromSpec(gemSpec(['overworld'], true));
+    expect(machineGap(shard, await pricesOf(shard, lv), machine(shard, 102))).toEqual({ kind: 'unavailable', item: 't:zircon@0' });
   });
 
   it('names the part a multiblock cannot get', async () => {
