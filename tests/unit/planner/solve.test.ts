@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { miniGt } from '../../helpers/mini-gt.ts';
 import { twinSpec } from '../../helpers/build-fixtures.ts';
 import { packFromSpec, type RecipeSpec } from '../../helpers/pack-spec.ts';
-import { solveLine, findBlockers, standaloneCosts, twinMoves } from '../../../src/server/planner/solve.ts';
+import { solveLine, findBlockers, standaloneCosts, twinMoves, withTwinsMoved, type Solution } from '../../../src/server/planner/solve.ts';
 import {
   buildCandidates, type CandidateGraph, type GoodInfo, type LeafDecision, type LeafOracle, type LpRecipe, type PlanEnv,
 } from '../../../src/server/planner/candidates.ts';
@@ -299,20 +299,89 @@ describe('twin recipes', () => {
   };
   const DUST = 't:tin_dust@0';
   const INGOT = 't:tin_ingot@0';
+  // Controller ruling 197 (1): of twins the plan keeps (a) the one whose good the line also makes, else (b) the one whose
+  // good the line already buys for another step, else (c) the ingot's before the dust's before any other form's (players
+  // stock ingots: `SolveOptions.formRank`), else (d) the one of the lowest id; it never moves a pinned recipe.
+  const FORMS = (key: string): number => (key.endsWith('_ingot@0') ? 0 : key.endsWith('_dust@0') ? 1 : 2);
+  const DUST_FIRST = (key: string): number => (key.endsWith('_dust@0') ? 0 : 1);
+  const solution = (runs: Record<string, number>, buys: Record<string, number>): Solution => ({
+    status: 'ok', runs: new Map(Object.entries(runs)), buys: new Map(Object.entries(buys)), sinks: new Map(), rawCost: 0, leastRawCost: 0, blockers: [], warnings: [],
+  });
 
-  it('moves the twin of the higher id to the lower one when the line only buys both goods', () => {
+  it('moves the twin of the higher id to the lower one when nothing else tells them apart (rule d)', () => {
     const graph = graphOf(twinSpec(), ['t:board@0']);
     expect(twinMoves(graph, graph.recipes, one('t:board@0'))).toEqual([{ recipe: 'x-ingot', to: 'x-dust', from: INGOT, into: DUST, amount: 1 }]);
     // A recipe the project pins stays: its twin moves to it.
-    expect(twinMoves(graph, graph.recipes, one('t:board@0'), undefined, new Set(['x-ingot'])))
+    expect(twinMoves(graph, graph.recipes, one('t:board@0'), { pinned: new Set(['x-ingot']) }))
       .toEqual([{ recipe: 'x-dust', to: 'x-ingot', from: DUST, into: INGOT, amount: 1 }]);
   });
 
-  it('moves a twin to the one whose good the line also makes, whatever its id', () => {
-    // `roast` makes the slag the line takes and a tin ingot beside it: a plan may melt that ingot, never a dust it makes.
+  it('moves a twin to the one whose good the line also makes, whatever the other rules say (rule a)', async () => {
+    // `roast` makes the slag the line takes and a tin ingot beside it: a plan may melt that ingot, never a dust it makes,
+    // even where the line buys tin dust for its foil (rule b) and dust ranks first (rule c).
     const graph = graphOf(twinSpec({ roast: true }), ['t:board@0', 't:slag@0']);
     expect(twinMoves(graph, graph.recipes, new Map([['t:board@0', 1], ['t:slag@0', 1]])))
       .toEqual([{ recipe: 'x-dust', to: 'x-ingot', from: DUST, into: INGOT, amount: 1 }]);
+    const foil = graphOf(twinSpec({ roast: true, foil: 'dust' }), ['t:board@0', 't:slag@0', 't:tin_foil@0']);
+    const demand = new Map([['t:board@0', 1], ['t:slag@0', 1], ['t:tin_foil@0', 1]]);
+    const plan = await solveLine(foil, demand, { formRank: DUST_FIRST });
+    expect(plan.buys.get(DUST)).toBeCloseTo(1, 9);
+    expect(twinMoves(foil, foil.recipes, demand, { plan, formRank: DUST_FIRST }))
+      .toEqual([{ recipe: 'x-dust', to: 'x-ingot', from: DUST, into: INGOT, amount: 1 }]);
+  });
+
+  it('keeps the twin whose good the line already buys for another step (rule b), before the ingot', async () => {
+    // Tin foil from an ingot: the line buys tin ingots anyway, so its Molten Tin comes from one too, though the dust's twin
+    // has the lower id.
+    const demand = new Map([['t:board@0', 1], ['t:tin_foil@0', 1]]);
+    const ingots = graphOf(twinSpec({ foil: 'ingot' }), ['t:board@0', 't:tin_foil@0']);
+    const plan = await solveLine(ingots, demand);
+    expect(Object.fromEntries(plan.runs)).toEqual({ 'board-tin': 1, foil: 1, 'x-ingot': 1 });
+    expect(Object.fromEntries(plan.buys)).toEqual({ 't:part@0': 1, [INGOT]: 2 });
+    const toIngot = [{ recipe: 'x-dust', to: 'x-ingot', from: DUST, into: INGOT, amount: 1 }];
+    expect(twinMoves(ingots, ingots.recipes, demand, { plan })).toEqual(toIngot);
+    // The same whichever twin the solver ran: what the twins take is left out of what the line buys.
+    const dustRun = solution({ 'board-tin': 1, foil: 1, 'x-dust': 1 }, { 't:part@0': 1, [DUST]: 1, [INGOT]: 1 });
+    expect(twinMoves(ingots, ingots.recipes, demand, { plan: dustRun })).toEqual(toIngot);
+    // Tin foil from dust: the dust's twin, though ingots come first by form.
+    const dusts = graphOf(twinSpec({ foil: 'dust' }), ['t:board@0', 't:tin_foil@0']);
+    const dustPlan = await solveLine(dusts, demand, { formRank: FORMS });
+    expect(Object.fromEntries(dustPlan.runs)).toEqual({ 'board-tin': 1, foil: 1, 'x-dust': 1 });
+    expect(Object.fromEntries(dustPlan.buys)).toEqual({ 't:part@0': 1, [DUST]: 2 });
+    expect(twinMoves(dusts, dusts.recipes, demand, { plan: dustPlan, formRank: FORMS }))
+      .toEqual([{ recipe: 'x-ingot', to: 'x-dust', from: INGOT, into: DUST, amount: 1 }]);
+  });
+
+  it('keeps the ingot twin before the dust twin when the line buys neither for another step (rule c)', async () => {
+    const graph = graphOf(twinSpec(), ['t:board@0']);
+    expect(twinMoves(graph, graph.recipes, one('t:board@0'), { formRank: FORMS }))
+      .toEqual([{ recipe: 'x-dust', to: 'x-ingot', from: DUST, into: INGOT, amount: 1 }]);
+    const s = await solveLine(graph, one('t:board@0'), { formRank: FORMS });
+    expect(Object.fromEntries(s.runs)).toEqual({ 'board-tin': 1, 'x-ingot': 1 });
+    expect(Object.fromEntries(s.buys)).toEqual({ 't:part@0': 1, [INGOT]: 1 });
+    // Never away from a pinned recipe: the ingot's twin moves to the pinned dust's.
+    expect(twinMoves(graph, graph.recipes, one('t:board@0'), { formRank: FORMS, pinned: new Set(['x-dust']) }))
+      .toEqual([{ recipe: 'x-ingot', to: 'x-dust', from: INGOT, into: DUST, amount: 1 }]);
+  });
+
+  it('ends a chain of twins over two goods on one twin, whichever of them the solver ran', async () => {
+    // Solder from 9 tin and 1 antimony, each as dust or ingot (`s-dd`, `s-id`, `s-ii`; no `s-di`): the ingots' twin,
+    // reached from the dusts' through `s-id` whatever order the twin sets come in.
+    const costs = { ...TIN, 't:antimony_dust@0': 1, 't:antimony_ingot@0': 1 };
+    const graph = graphOf(twinSpec({ solder: true }), ['t:solder_dust@0'], costs);
+    const demand = one('t:solder_dust@0');
+    const s = await solveLine(graph, demand, { formRank: FORMS });
+    expect([...s.runs.keys()]).toEqual(['s-ii']);
+    expect(Object.fromEntries(s.buys)).toEqual({ 't:antimony_ingot@0': 0.1, [INGOT]: 0.9 });
+    const moves = twinMoves(graph, graph.recipes, demand, { formRank: FORMS });
+    expect(moves.map((m) => `${m.recipe}>${m.to}`).sort()).toEqual(['s-dd>s-id', 's-id>s-ii']);
+    for (const order of [moves, [...moves].reverse()]) {
+      for (const [start, tin, antimony] of [['s-dd', DUST, 't:antimony_dust@0'], ['s-id', INGOT, 't:antimony_dust@0']] as const) {
+        const moved = withTwinsMoved(solution({ [start]: 0.1 }, { [antimony]: 0.1, [tin]: 0.9 }), order);
+        expect(Object.fromEntries(moved.runs), start).toEqual({ 's-ii': 0.1 });
+        expect(Object.fromEntries(moved.buys), start).toEqual({ 't:antimony_ingot@0': 0.1, [INGOT]: 0.9 });
+      }
+    }
   });
 
   it('moves none where the goods differ in amount or price, or one is demanded', () => {

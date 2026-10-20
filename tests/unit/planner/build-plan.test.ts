@@ -569,6 +569,43 @@ describe('one source at a tie', () => {
   });
 });
 
+describe('twin recipes', () => {
+  /**
+   * Mini-GT plus Tin Dust, Molten Tin, a Fluid Extractor that melts a tin dust or a tin ingot alike (`a-dust` and
+   * `b-ingot`, twins of 1 raw, the dust's of the lower id; the extractor builds for nothing) and Tinned Plates from an iron
+   * plate and 144 L of Molten Tin (assembler); with `foil`, the plate also takes a Tin Foil bent from a tin dust.
+   */
+  const tinned = (foil: boolean): PackSpec => {
+    const spec = structuredClone(MINI_GT);
+    return withBuildRecipes({
+      ...spec,
+      items: [...(spec.items ?? []), { key: 't:tin_dust@0', name: 'Tin Dust', gt: { prefix: 'dust', material: 'Tin' } },
+        { key: 't:tin_foil@0', name: 'Tin Foil' }, { key: 't:tinned_plate@0', name: 'Tinned Plate' }],
+      fluids: [...(spec.fluids ?? []), { key: 'fluid:molten.tin', name: 'Molten Tin' }],
+      recipes: [...(spec.recipes ?? []),
+        { id: 'a-dust', map: 'gt.recipe.fluidextractor', in: [['t:tin_dust@0', 1]], out: [['fluid:molten.tin', 144]], eut: 30, dur: 40 },
+        { id: 'b-ingot', map: 'gt.recipe.fluidextractor', in: [['t:tin_ingot@0', 1]], out: [['fluid:molten.tin', 144]], eut: 30, dur: 40 },
+        { id: 'bend-foil', map: 'gt.recipe.metalbender', in: [['t:tin_dust@0', 1]], out: [['t:tin_foil@0', 1]], eut: 24, dur: 100 },
+        { id: 'tin-plate', map: 'gt.recipe.assembler', in: [['t:iron_plate@0', 1], ...(foil ? [['t:tin_foil@0', 1] as [string, number]] : []), ['fluid:molten.tin', 144]],
+          out: [['t:tinned_plate@0', 1]], eut: 16, dur: 100 }],
+    }, [131]);
+  };
+  const plates = S({ target: 't:tinned_plate@0', amount: 1, per: 'min' });
+
+  it('melts the form of tin the line already buys, else an ingot (controller ruling 197 (1), by the pack\'s GT forms)', async () => {
+    // Nothing else takes tin: the ingot's twin (rule c), though the dust's has the lower id (rule d).
+    const plain = await planLine(packFromSpec(tinned(false)), plates, emptyContext());
+    expect(plain.status, JSON.stringify(plain.warnings)).toBe('ok');
+    expect(ids(plain).filter((id) => id === 'a-dust' || id === 'b-ingot')).toEqual(['b-ingot']);
+    expect(plain.rawInputs.map((r) => r.key)).not.toContain('t:tin_dust@0');
+    // The foil takes tin dust: the dust's twin (rule b, before rule c).
+    const foiled = await planLine(packFromSpec(tinned(true)), plates, emptyContext());
+    expect(foiled.status, JSON.stringify(foiled.warnings)).toBe('ok');
+    expect(ids(foiled).filter((id) => id === 'a-dust' || id === 'b-ingot')).toEqual(['a-dust']);
+    expect(foiled.rawInputs.map((r) => r.key)).not.toContain('t:tin_ingot@0');
+  });
+});
+
 describe('assignOwned', () => {
   const units = (n: number): Map<number, null[]> => new Map([[1, new Array<null>(n).fill(null)]]);
 

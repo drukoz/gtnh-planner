@@ -485,7 +485,8 @@ describe('the build-cost MIP', () => {
   it('runs the same twin of a recipe whatever the step charge, the horizon, sharing or mode', async () => {
     // The plan 12 fix wave 2 review: Molten Tin from Tin Dust (`x-dust`) or a Tin Ingot (`x-ingot`), 1 raw each on one
     // extractor, which the solver took by its numerics (Make N the ingot's); the plan runs the twin of the lower id
-    // (`twinMoves`), with the machines decided for whichever twin the solver ran.
+    // (`twinMoves` rule d: the line makes and otherwise buys neither, and no form ranks are given here), with the machines
+    // decided for whichever twin the solver ran.
     const costs: Record<StuffKey, number> = { 't:part@0': 1, 't:tin_dust@0': 1, 't:tin_ingot@0': 1 };
     const options = { 'x-dust': [opt(131, 1, 0.5, 12)], 'x-ingot': [opt(131, 1, 0.5, 12)], 'board-tin': [opt(121, 1, 0.2, 16)] };
     for (const stepCharge of [0, 0.02, 0.5]) {

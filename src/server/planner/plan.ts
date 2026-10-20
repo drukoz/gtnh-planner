@@ -68,6 +68,17 @@ export function solveOptions(settings: PlanSettings): SolveOptions {
   return options;
 }
 
+/**
+ * Rule (c) of twin step recipes (`twinMoves`, controller ruling 197 (1); `SolveOptions.formRank`): how players stock a
+ * good, by the pack's GT prefix — 0 an ingot, 1 a dust, 2 any other form (a fluid, a plate, an item without a GT one).
+ */
+export function stockForm(pack: Pack): (key: StuffKey) => number {
+  return (key) => {
+    const prefix = isFluidKey(key) ? undefined : pack.items.get(key)?.gt?.prefix;
+    return prefix === 'ingot' ? 0 : prefix === 'dust' ? 1 : 2;
+  };
+}
+
 function byString(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
@@ -1635,8 +1646,9 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
   // What the plan is for (fix spec R11): the client reads the target and its rate instead of guessing them from flows.
   const aim: Pick<PlanBody, 'target' | 'targetPerSecond'> = batch
     ? { target } : { target, targetPerSecond: sig9(settings.amount / SECONDS_PER[settings.per]) };
-  // Steps vs raw material (fix spec R3) for every solve of the line, and the build model of each graph solved in full.
-  const options = { ...solveOptions(settings), ...tuning };
+  // Steps vs raw material (fix spec R3) for every solve of the line, the forms of goods that tell twin recipes apart
+  // (`stockForm`), and the build model of each graph solved in full.
+  const options = { ...solveOptions(settings), formRank: stockForm(pack), ...tuning };
   const planned = await plannedLine(pack, settings, ctx, first, demand, options);
   const { priced, avoid, line, model: buildModel, unbuildable } = planned;
   const { graph, sol } = line;

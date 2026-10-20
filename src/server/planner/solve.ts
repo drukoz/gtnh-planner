@@ -44,6 +44,12 @@ export interface SolveOptions {
   // optional addition (the plan 12 fix wave 2 review)
   /** The recipe ids the project pins (`PlanSettings.recipeChoice`'s values): `twinMoves` never moves one to its twin. */
   pinnedRecipes?: ReadonlySet<string>;
+  // optional addition (controller ruling 197 (1))
+  /**
+   * Rule (c) of twin step recipes (`twinMoves`): how players stock a good, 0 an ingot, 1 a dust, 2 any other form
+   * (`stockForm` in plan.ts reads the pack's GT prefixes); absent, every good ranks alike there.
+   */
+  formRank?: (key: StuffKey) => number;
 }
 
 /** The step charge never lets total raw material go above (1 + this) × the least (S1) (fix spec §3). */
@@ -817,6 +823,18 @@ async function finish(lp: MainLp, s1: LpResult, warnings: PlanWarning[], opts: S
  */
 export interface TwinMove { recipe: string; to: string; from: StuffKey; into: StuffKey; amount: number }
 
+/** What `twinMoves` reads beside the graph: the build model, the pins, the plan and the forms of goods. */
+export interface TwinRules {
+  /** The line's build model: twins run on the same machines there, and a step only owned machines can run has none. */
+  model?: BuildModel;
+  /** The recipe ids the project pins (`SolveOptions.pinnedRecipes`): never moved. */
+  pinned?: ReadonlySet<string>;
+  /** The plan the moves are for (its runs and purchases): rule (b) reads what it buys apart from its twins. */
+  plan?: Pick<Solution, 'runs' | 'buys'>;
+  /** Rule (c): how players stock a good (`SolveOptions.formRank`); absent, every good ranks alike. */
+  formRank?: (key: StuffKey) => number;
+}
+
 /**
  * Twin step recipes (the plan 12 fix wave 2 review): two step recipes that differ only in which of two goods they
  * consume, the same amount of it, both goods bought at the same price and with the same weights there (raw cost and
@@ -826,15 +844,24 @@ export interface TwinMove { recipe: string; to: string; from: StuffKey; into: St
  * one or the other by its numerics: on the 2.9 export the Fluid Extractor makes Molten Tin from Tin Dust or from a Tin
  * Ingot, and the user's reference line ran the ingot's at a 2 % step charge and the dust's at 50 %. A plan that runs a
  * twin whose good no column of `recipes` makes (it is only ever bought) does exactly as well with the other twin, buying
- * the other good instead, so the plan runs one twin of each set: one whose good the line also makes (the Alloy Smelter's
- * Red Alloy from a Copper Ingot, which the Bricked Blast Furnace makes beside Ferrosilite, never its Copper Dust twin),
- * else the twin of the lowest id; a recipe the project pins (`pinned`) is never moved. Sets of twins (`<map, power, …,
- * the rest of the coefficients>` per good) are taken in key order, each among the recipes not yet moved, so every move
- * goes to a twin that is kept or moved later (the moves in that order).
+ * the other good instead, so the plan runs one twin of each set, the first of these (controller ruling 197 (1)): a
+ * recipe the project pins (`pinned`; never moved); (a) one whose good the line also makes (the Alloy Smelter's Red Alloy
+ * from a Copper Ingot, which the Bricked Blast Furnace makes beside Ferrosilite, never its Copper Dust twin); (b) one
+ * whose good the plan already buys for another step (`plan`: what it buys of it beyond what the twins take of every good
+ * their sets swap, so whichever twin the solver ran reads the same: an Electronic Circuit line at LV buys Copper Ingots
+ * for its plates, so its Red Alloy takes one too); (c) the ingot's, then the dust's, then any other form's (`formRank`:
+ * players stock ingots); (d) the lowest id. Sets of twins (`<map, power, …, the rest of the coefficients>` per good)
+ * are taken in key order, and a twin of two sets may move in each (solder from 9 tin and 1 antimony, as dusts or ingots,
+ * is a chain of two sets): `withTwinsMoved` follows the moves until none applies. Each move goes to the twin its set
+ * ranks first, by the pin and the swapped good's own (a)–(c), then the id, so no move leads back and a chain ends on one
+ * twin.
  */
 export function twinMoves(
-  graph: CandidateGraph, recipes: readonly LpRecipe[], demand: ReadonlyMap<StuffKey, number>, model?: BuildModel, pinned: ReadonlySet<string> = new Set(),
+  graph: CandidateGraph, recipes: readonly LpRecipe[], demand: ReadonlyMap<StuffKey, number>, rules: TwinRules = {},
 ): TwinMove[] {
+  const { model, plan } = rules;
+  const pinned = rules.pinned ?? new Set<string>();
+  const formRank = rules.formRank ?? ((): number => 0);
   const made = new Set<StuffKey>();
   for (const r of recipes) for (const [key, c] of r.coeffs) if (c > 0) made.add(key);
   /** What buying `key` weighs in every stage, when it may be swapped for another good: undefined when it may not. */
@@ -869,20 +896,68 @@ export function twinMoves(
       if (machines !== undefined) pushTo(twins, `${key}|${machines}`, m);
     }
   }
+  const stocked = plan === undefined ? new Set<StuffKey>() : stockedApart(plan, [...twins.values()].filter((members) => members.length >= 2));
+  const rank = (m: Member): number[] => [pinned.has(m.r.id) ? 0 : 1, made.has(m.key) ? 0 : 1, stocked.has(m.key) ? 0 : 1, formRank(m.key)];
+  const before = (a: Member, b: Member): number => {
+    const ra = rank(a);
+    const rb = rank(b);
+    for (let i = 0; i < ra.length; i++) if (ra[i] !== rb[i]) return (ra[i] as number) - (rb[i] as number);
+    return byString(a.r.id, b.r.id);
+  };
   const moves: TwinMove[] = [];
-  const moved = new Set<string>();
   for (const key of [...twins.keys()].sort(byString)) {
-    const members = (twins.get(key) as Member[]).filter((m) => !moved.has(m.r.id)).sort((a, b) => byString(a.r.id, b.r.id));
+    const members = (twins.get(key) as Member[]).slice().sort(before);
     if (members.length < 2) continue;
-    const bought = members.filter((m) => !made.has(m.key) && !pinned.has(m.r.id));
-    const to = bought.length === members.length ? (members[0] as Member) : (members.find((m) => !bought.includes(m)) as Member);
-    for (const m of bought) {
-      if (m === to) continue;
+    const to = members[0] as Member;
+    for (const m of members) {
+      if (m === to || made.has(m.key) || pinned.has(m.r.id)) continue;
       moves.push({ recipe: m.r.id, to: to.r.id, from: m.key, into: to.key, amount: m.amount });
-      moved.add(m.r.id);
     }
   }
   return moves;
+}
+
+/**
+ * The goods `plan` buys beyond what its twin recipes take of the goods their sets swap (`twinMoves` rule b): the twins of
+ * one chain of sets (`sets`, joined where they share a recipe) are told apart by every good any of their sets swaps,
+ * so what the plan buys of those for the twins it runs is left out, whichever of them the solver ran.
+ */
+function stockedApart(plan: Pick<Solution, 'runs' | 'buys'>, sets: ReadonlyArray<ReadonlyArray<{ r: LpRecipe; key: StuffKey }>>): Set<StuffKey> {
+  const parent = new Map<string, string>();
+  const root = (id: string): string => {
+    let r = id;
+    while (parent.get(r) !== r) r = parent.get(r) as string;
+    return r;
+  };
+  const recipeOf = new Map<string, LpRecipe>();
+  for (const members of sets) {
+    for (const m of members) {
+      recipeOf.set(m.r.id, m.r);
+      if (!parent.has(m.r.id)) parent.set(m.r.id, m.r.id);
+    }
+    const first = root((members[0] as { r: LpRecipe }).r.id);
+    for (const m of members) {
+      const other = root(m.r.id);
+      if (other !== first) parent.set(other, first);
+    }
+  }
+  const swapped = new Map<string, Set<StuffKey>>();
+  for (const members of sets) {
+    const chain = root((members[0] as { r: LpRecipe }).r.id);
+    let keys = swapped.get(chain);
+    if (keys === undefined) swapped.set(chain, (keys = new Set()));
+    for (const m of members) keys.add(m.key);
+  }
+  const apart = new Map(plan.buys);
+  for (const [id, r] of recipeOf) {
+    const runs = plan.runs.get(id) ?? 0;
+    if (runs <= 0) continue;
+    const keys = swapped.get(root(id)) as Set<StuffKey>;
+    for (const [key, c] of r.coeffs) if (c < 0 && keys.has(key)) apart.set(key, (apart.get(key) ?? 0) + c * runs);
+  }
+  const stocked = new Set<StuffKey>();
+  for (const [key, amount] of apart) if (amount > Math.max(TINY, RESIDUAL_REL * (plan.buys.get(key) ?? 0))) stocked.add(key);
+  return stocked;
 }
 
 /** `map` with its keys in sorted order (as `kept` inserts them). */
@@ -892,23 +967,26 @@ function sortedMap<V>(map: ReadonlyMap<string, V>): Map<string, V> {
 
 /**
  * The plan `sol` (an `ok` solution, maps at unit demand) with each twin it runs moved to the twin `moves` keeps
- * (`twinMoves`), in order: the runs, machines and sharing-pool place of `move.recipe` go to `move.to`, which buys `into`
- * where it bought `from` — at the same raw material and on the same machines, so no stage would rate it otherwise. A move
- * whose twin runs too (a plan that runs both) is left out, as is one whose good the plan buys less of than the twin takes.
- * The stages themselves see every recipe: leaving a twin out of the LP changed which plan the build MIP's root node
- * found, and slowed it (Good Electronic Circuit at HV: 3.9 s instead of 2.4 s for the same plan).
+ * (`twinMoves`), in their order and again until none applies (a twin moved in one set may move on in another): the runs,
+ * machines and sharing-pool place of `move.recipe` go to `move.to`, which buys `into` where it bought `from` — at the
+ * same raw material and on the same machines, so no stage would rate it otherwise. A move whose twin runs too (a plan
+ * that runs both) is left out, as is one whose good the plan buys less of than the twin takes. No move leads back
+ * (`twinMoves`), so this ends. The stages themselves see every recipe: leaving a twin out of the LP changed which plan
+ * the build MIP's root node found, and slowed it (Good Electronic Circuit at HV: 3.9 s instead of 2.4 s for the same
+ * plan).
  */
-function withTwinsMoved(sol: Solution, moves: readonly TwinMove[]): Solution {
+export function withTwinsMoved(sol: Solution, moves: readonly TwinMove[]): Solution {
   let runs = sol.runs;
   let buys = sol.buys;
   let machines = sol.machines;
   let pools = sol.pools;
-  for (const move of moves) {
+  /** Moves `move.recipe`'s runs to `move.to` when it applies; whether it did. */
+  const apply = (move: TwinMove): boolean => {
     const t = runs.get(move.recipe);
-    if (t === undefined || runs.has(move.to)) continue;
+    if (t === undefined || runs.has(move.to)) return false;
     const taken = move.amount * t;
     const had = buys.get(move.from) ?? 0;
-    if (had < taken * (1 - RESIDUAL_REL) - TINY) continue;
+    if (had < taken * (1 - RESIDUAL_REL) - TINY) return false;
     runs = new Map(runs);
     runs.delete(move.recipe);
     runs.set(move.to, t);
@@ -930,6 +1008,13 @@ function withTwinsMoved(sol: Solution, moves: readonly TwinMove[]): Solution {
       pools = new Map([...pools].map(([key, p]) => [key, p.steps.includes(move.recipe)
         ? { ...p, steps: p.steps.map((id) => (id === move.recipe ? move.to : id)).sort(byString) } : p]));
     }
+    return true;
+  };
+  // Each pass that moves a twin goes to one no worse (`twinMoves`), so at most one pass per move finds something to do.
+  for (let pass = 0; pass <= moves.length; pass++) {
+    let applied = false;
+    for (const move of moves) if (apply(move)) applied = true;
+    if (!applied) break;
   }
   if (runs === sol.runs) return sol;
   const out: Solution = { ...sol, runs, buys };
@@ -1266,7 +1351,9 @@ async function solveUnit(graph: CandidateGraph, demand: ReadonlyMap<StuffKey, nu
         done = model === undefined ? plan.sol : sized(lp, s1, plan, loopWarnings(), opts, model, demandScale, bounded);
       }
       // Of two twins every stage rates alike, the plan runs the same one whichever the solver met (`twinMoves`).
-      if (done.status === 'ok') done = withTwinsMoved(done, twinMoves(graph, recipes, demand, model, opts.pinnedRecipes));
+      if (done.status === 'ok') {
+        done = withTwinsMoved(done, twinMoves(graph, recipes, demand, { model, pinned: opts.pinnedRecipes, plan: done, formRank: opts.formRank }));
+      }
       done.banned = [...banned];
       return done;
     }

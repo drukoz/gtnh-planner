@@ -334,11 +334,22 @@ export function solderSpec(): PackSpec {
  * Extractor and 201 Basic Alloy Smelter (LV); `x-dust` (1 tin dust → 144 L molten tin) and `x-ingot` (1 tin ingot →
  * 144 L), each 30 EU/t × 40 t, and `board-tin` (1 part + 144 L molten tin → 1 board), 16 × 100; with `roast` also
  * `roast` (1 ore → 1 slag + 1 tin ingot, alloy smelter, 16 × 200), so a line that takes slag makes tin ingots too; with
- * `ingots` `x-ingot` takes that many ingots.
+ * `ingots` `x-ingot` takes that many ingots; with `foil` also `foil` (1 tin ingot or 1 tin dust, as `foil` says → 1 tin
+ * foil, alloy smelter, 16 × 100), so a line that takes foil buys that form for another step; with `solder` the solder
+ * twins `s-dd`, `s-id` and `s-ii` (9 tin dust or ingots and 1 antimony dust or ingot → 10 solder dust, alloy smelter,
+ * 16 × 200, no `s-di`): a chain of twins over two goods.
  */
-export function twinSpec(opts: { roast?: boolean; ingots?: number } = {}): PackSpec {
-  const roast: RecipeSpec[] = opts.roast === true
+export function twinSpec(opts: { roast?: boolean; ingots?: number; foil?: 'dust' | 'ingot'; solder?: boolean } = {}): PackSpec {
+  const extra: RecipeSpec[] = opts.roast === true
     ? [{ id: 'roast', map: ALLOY_SMELTER, in: [['t:ore@0', 1]], out: [['t:slag@0', 1], ['t:tin_ingot@0', 1]], eut: 16, dur: 200 }] : [];
+  if (opts.foil !== undefined) {
+    extra.push({ id: 'foil', map: ALLOY_SMELTER, in: [[`t:tin_${opts.foil}@0`, 1]], out: [['t:tin_foil@0', 1]], eut: 16, dur: 100 });
+  }
+  if (opts.solder === true) {
+    for (const [id, tin, antimony] of [['s-dd', 'dust', 'dust'], ['s-id', 'ingot', 'dust'], ['s-ii', 'ingot', 'ingot']] as const) {
+      extra.push({ id, map: ALLOY_SMELTER, in: [[`t:tin_${tin}@0`, 9], [`t:antimony_${antimony}@0`, 1]], out: [['t:solder_dust@0', 10]], eut: 16, dur: 200 });
+    }
+  }
   return {
     maps: [{ id: EXTRACTOR, name: 'Fluid Extractor' }, { id: ASSEMBLER, name: 'Assembler' }, { id: ALLOY_SMELTER, name: 'Alloy Smelter' }],
     machines: [
@@ -350,7 +361,7 @@ export function twinSpec(opts: { roast?: boolean; ingots?: number } = {}): PackS
       { id: 'x-dust', map: EXTRACTOR, in: [['t:tin_dust@0', 1]], out: [['fluid:molten.tin', 144]], eut: 30, dur: 40 },
       { id: 'x-ingot', map: EXTRACTOR, in: [['t:tin_ingot@0', opts.ingots ?? 1]], out: [['fluid:molten.tin', 144]], eut: 30, dur: 40 },
       { id: 'board-tin', map: ASSEMBLER, in: [['t:part@0', 1], ['fluid:molten.tin', 144]], out: [['t:board@0', 1]], eut: 16, dur: 100 },
-      ...roast,
+      ...extra,
     ],
   };
 }
