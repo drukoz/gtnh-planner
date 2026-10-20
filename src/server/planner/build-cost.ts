@@ -355,39 +355,55 @@ export function hatchSet(pack: Pack, m: Machine, r: Recipe, tier: number): Map<S
   add(lowest('MTEHatchMaintenance'), 1);
   add(lowest('MTEHatchInput'), fluidsIn.size);
   add(lowest('MTEHatchOutput'), fluidsOut.size);
-  const rule = hatchRuleFor(m);
-  const st = m.structure;
-  if (rule !== null && st !== undefined && ruleFits(rule, st.controller, st.size, st.blocks.map((b) => b.pos))) {
+  const { needs, exported } = structureNeeds(pack, m);
+  if (needs.length > 0) {
     const placed = new Set<HatchKind>(['energy', 'maintenance', ...(itemIn ? ['input_bus' as const] : []), ...(itemOut ? ['output_bus' as const] : []),
       ...(fluidsIn.size > 0 ? ['input_hatch' as const] : []), ...(fluidsOut.size > 0 ? ['output_hatch' as const] : [])]);
-    const exported = new Set(st.blocks.flatMap((b) => {
-      const tile = b.block.mteId === undefined || b.block.mteId === m.mteId ? undefined : pack.machines.get(b.block.mteId);
-      return tile?.kind === 'hatch' ? [simpleName(minimalHatch(pack, tile))] : [];
-    }));
-    for (const need of ruleNeeds(rule)) {
-      const cls = rule.classes?.[need.kind] ?? KIND_CLASS[need.kind];
-      if (need.fluid === undefined && (placed.has(need.kind) || exported.has(cls))) continue;
-      add(lowest(cls), 1);
+    for (const need of needs) {
+      if (!need.own && (placed.has(need.kind) || exported.has(need.cls))) continue;
+      add(lowest(need.cls), 1);
     }
   }
   return set;
 }
 
 /**
- * The classes of the hatches GT's structure check needs on `m` whatever its recipe moves (`ruleNeeds` of its rule, on a
- * structure the rule fits; a rule's own class for a kind first), each once; none for a multiblock without a fitting rule.
+ * What GT's structure check needs on a multiblock whatever its recipe moves: each need's kind, its class (a rule's own
+ * class for the kind first) and whether it is a fluid of the machine's own; and the classes of the hatches its exported
+ * structure holds, as `minimalHatch` builds them.
  */
-function neededHatchClasses(m: Machine): string[] {
-  const rule = hatchRuleFor(m);
-  const st = m.structure;
-  if (rule === null || st === undefined || !ruleFits(rule, st.controller, st.size, st.blocks.map((b) => b.pos))) return [];
-  return [...new Set(ruleNeeds(rule).map((need) => rule.classes?.[need.kind] ?? KIND_CLASS[need.kind]))];
+interface StructureNeeds { needs: ReadonlyArray<{ kind: HatchKind; cls: string; own: boolean }>; exported: ReadonlySet<string> }
+const NO_NEEDS: StructureNeeds = { needs: [], exported: new Set() };
+const STRUCTURE_NEEDS = new WeakMap<Pack, WeakMap<Machine, StructureNeeds>>();
+
+/**
+ * The `StructureNeeds` of `m`: `ruleNeeds` of its rule on a structure the rule fits (Plan 5's hatch-rules.ts,
+ * architecture §11 entry 47), none for a multiblock without a fitting rule. Once per pack and machine, since `hatchSet`
+ * runs for every multiblock option the planner weighs and fitting a rule walks its whole structure.
+ */
+function structureNeeds(pack: Pack, m: Machine): StructureNeeds {
+  let byMachine = STRUCTURE_NEEDS.get(pack);
+  if (byMachine === undefined) STRUCTURE_NEEDS.set(pack, (byMachine = new WeakMap()));
+  let found = byMachine.get(m);
+  if (found === undefined) {
+    const rule = hatchRuleFor(m);
+    const st = m.structure;
+    found = rule === null || st === undefined || !ruleFits(rule, st.controller, st.size, st.blocks.map((b) => b.pos)) ? NO_NEEDS : {
+      needs: ruleNeeds(rule).map((need) => ({ kind: need.kind, cls: rule.classes?.[need.kind] ?? KIND_CLASS[need.kind], own: need.fluid !== undefined })),
+      exported: new Set(st.blocks.flatMap((b) => {
+        const tile = b.block.mteId === undefined || b.block.mteId === m.mteId ? undefined : pack.machines.get(b.block.mteId);
+        return tile?.kind === 'hatch' ? [simpleName(minimalHatch(pack, tile))] : [];
+      })),
+    };
+    byMachine.set(m, found);
+  }
+  return found;
 }
 
 /**
  * The keys to price for building `machines` (`itemPrices`): each machine's item and, for a multiblock, its structure
  * parts (`structureParts`), the item of every hatch of the `HATCH_CLASSES` and the lowest hatch of each class its
- * structure check needs (`neededHatchClasses`, which `hatchSet` may add); sorted, without repeats. A pseudo machine
+ * structure check needs (`structureNeeds`, which `hatchSet` may add); sorted, without repeats. A pseudo machine
  * (crafting table, furnace) has no build cost, so its item is left out.
  */
 export function buildKeys(pack: Pack, machines: readonly Machine[]): StuffKey[] {
@@ -399,7 +415,7 @@ export function buildKeys(pack: Pack, machines: readonly Machine[]): StuffKey[] 
     if (m.kind !== 'multiblock') continue;
     multiblock = true;
     for (const { key } of structureBlocks(pack, m)) keys.add(key);
-    for (const cls of neededHatchClasses(m)) {
+    for (const { cls } of structureNeeds(pack, m).needs) {
       const hatch = hatchesByClass(pack).get(cls)?.[0];
       if (hatch !== undefined) keys.add(hatch.itemKey);
     }
