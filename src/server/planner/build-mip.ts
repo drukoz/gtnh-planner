@@ -528,10 +528,10 @@ interface Pool { key: string; option: MachineOption; members: Member[]; n?: numb
  * S1's runs within one machine of its fastest option): its first machine at the build S1's runs need (`first`, on its
  * step binary: `cheapestAdd`'s machines for them; the least build of its options where S1 runs it not at all), more runs
  * at the least build per run a second of its options (`perRun`) on a continuous column `e`, so `max(first, perRun ×
- * runs)`. That is what its machines cost at S1's runs, and at any runs where those fit one machine of the option that
- * builds one for least; elsewhere it is off by less than one machine's build (above at fewer runs than S1's, below at
- * more), so the model, its optimum and its bound hold for this pricing, and `buildMip`'s `exactCost` re-prices a
- * decision. Pricing such a step at the least build alone made one that needs a dearer, faster machine look cheaper than
+ * runs)`. That is what its machines cost at S1's runs and, where S1's runs fit one machine of its option that builds
+ * one for least, at any runs up to that machine's; elsewhere it is off by less than one machine's build (above at fewer
+ * runs than S1's, below at more), so the model, its optimum and its bound hold for this pricing, and `buildMip`'s
+ * `exactCost` re-prices a decision. Pricing such a step at the least build alone made one that needs a dearer, faster machine look cheaper than
  * a rival it is not; giving every step whose S1 runs pass one machine of its least-build option per-option columns
  * instead left the root node a harder model and worse plans (Microprocessor HV avoiding Diamond 16 % dearer).
  */
