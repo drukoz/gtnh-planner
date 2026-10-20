@@ -4,10 +4,11 @@
 // Item indices go through `LoadContext.items`, which throws for an index the export does not have; `buildPack` turns
 // whatever a converter throws into an `ExportFormatError` with the file and line.
 
+import { isExportHatchKind } from '../../shared/gt/hatch-kinds.ts';
 import { PSEUDO_MACHINES } from '../../shared/gt/tiers.ts';
 import { itemKey, type ItemKey } from '../../shared/keys.ts';
-import type { BlockRef, Machine, StructureInfo } from '../../shared/types/pack.ts';
-import type { MachineLine, StructureLine } from './format.ts';
+import type { BlockRef, Machine, StructureElement, StructureInfo } from '../../shared/types/pack.ts';
+import { EXPORT_FILES, type MachineLine, type StructureLine } from './format.ts';
 import type { LoadContext } from './load.ts';
 import { normalizeMapId } from './map-aliases.ts';
 
@@ -103,10 +104,44 @@ export function toMachine(line: MachineLine, ctx: LoadContext): Machine {
 }
 
 /**
- * A structure line with its palette resolved: every block that names one palette entry shares one `BlockRef`. Throws
- * for a block whose palette index the line does not have. The caller warns about `truncated`.
+ * The elements of a structure line with hatch rules (exporter 0.6.0+, the "Structure elements" rule of format.ts,
+ * architecture §11.49): each keeps its character, the hatch kinds this planner knows in the line's order, and as
+ * `cells` the positions of its blocks in block order. Kinds it does not know are dropped with one warning for the line
+ * (line `n`), each named once in first-seen order. Throws for rules that do not fit the blocks: `elements` or
+ * `elementOf` alone, an `elementOf` without exactly one value per block, a value that is neither -1 nor the index of
+ * an element, and an element on the controller's block.
  */
-export function toStructure(line: StructureLine): StructureInfo {
+function toElements(line: StructureLine, ctx: LoadContext, n: number): StructureElement[] {
+  const { id, blocks, controller: [cx, cy, cz], elements: elementLines, elementOf } = line;
+  if (elementLines == null) throw new RangeError(`structure ${id}: elementOf without elements`);
+  if (elementOf == null) throw new RangeError(`structure ${id}: elements without elementOf`);
+  if (elementOf.length !== blocks.length) throw new RangeError(`structure ${id}: elementOf has ${elementOf.length} values for ${blocks.length} blocks`);
+  const unknown = new Set<string>();
+  const elements = elementLines.map(({ ch, hatches }): StructureElement => {
+    for (const kind of hatches) if (!isExportHatchKind(kind)) unknown.add(kind);
+    const known = hatches.filter(isExportHatchKind);
+    return ch == null ? { hatches: known, cells: [] } : { ch, hatches: known, cells: [] };
+  });
+  blocks.forEach(([x, y, z], i) => {
+    const k = elementOf[i] as number;
+    if (!Number.isInteger(k) || k < -1 || k >= elements.length) {
+      throw new RangeError(`structure ${id}: elementOf[${i}] (the block at ${x},${y},${z}) is ${JSON.stringify(k)}, neither -1 nor the index of one of its ${elements.length} elements`);
+    }
+    if (k === -1) return;
+    if (x === cx && y === cy && z === cz) throw new RangeError(`structure ${id}: elementOf[${i}] puts the controller's block at ${x},${y},${z} in element ${k}, it must be -1`);
+    elements[k]!.cells.push([x, y, z]);
+  });
+  if (unknown.size > 0) ctx.warn(`${EXPORT_FILES.structures}:${n}: structure ${id}: hatch kinds unknown to this planner ignored: ${[...unknown].join(', ')}`);
+  return elements;
+}
+
+/**
+ * A structure line with its palette resolved: every block that names one palette entry shares one `BlockRef`. Throws
+ * for a block whose palette index the line does not have. The caller warns about `truncated`. A line with hatch rules
+ * (exporter 0.6.0+) also gets their `elements` (`toElements`; `n` is the line's number, for its warning); one without
+ * has no `elements` key, so a structure the exporter did not probe never reads as one that takes no hatch.
+ */
+export function toStructure(line: StructureLine, ctx: LoadContext, n: number): StructureInfo {
   const palette = line.palette.map(({ id, meta, mte }): BlockRef => (mte == null ? { id, meta } : { id, meta, mteId: mte }));
   const structure: StructureInfo = {
     size: [...line.size], controller: [...line.controller],
@@ -118,5 +153,6 @@ export function toStructure(line: StructureLine): StructureInfo {
     air: line.air.map(([x, y, z]) => [x, y, z]),
   };
   if (line.truncated) structure.truncated = true;
+  if (line.elements != null || line.elementOf != null) structure.elements = toElements(line, ctx, n);
   return structure;
 }

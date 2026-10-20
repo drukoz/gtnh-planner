@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { validateExport } from '../../../src/server/export/validate.ts';
 import { makeExport, type ExportSpec } from '../../helpers/make-export.ts';
-import { sampleExportSpec } from '../../helpers/sample-export.ts';
+import { SAMPLE, sampleExportSpec } from '../../helpers/sample-export.ts';
 
 const exportOf = async (spec: ExportSpec) => makeExport(join(await mkdtemp(join(tmpdir(), 'gp-val-')), 'x'), spec);
 const codes = (r: { issues: Array<{ level: string; code: string }> }, level: string) => r.issues.filter((i) => i.level === level).map((i) => i.code);
@@ -34,5 +34,12 @@ describe('validateExport', () => {
     spec.recipesGt = spec.recipesGt!.map(({ meta, ...r }) => ({ ...r, in: r.in.filter((s) => s === null || s[0] !== 5) }));
     const warns = codes(await validateExport(await exportOf(spec)), 'warn');
     expect(warns).toEqual(expect.arrayContaining(['missing-names', 'no-cleanroom', 'no-circuit']));
+  });
+
+  it('names the structures with hatch rules in the summary', async () => {
+    const spec = { ...sampleExportSpec(), fillerMaps: 140 };
+    spec.structures = spec.structures!.map((s) => (s.id === SAMPLE.ebf ? { ...s, elements: [{ ch: 'b', hatches: ['input_bus'] }], elementOf: [0, -1, 0] } : s));
+    const r = await validateExport(await exportOf(spec));
+    expect(r.summary).toContain('structures 1 (1 with hatch rules) · veins 3');
   });
 });

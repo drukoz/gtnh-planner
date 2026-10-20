@@ -35,13 +35,17 @@ export async function exportFailureLines(dir: string): Promise<string[] | null> 
 
 const indented = (lines: readonly string[]) => lines.map((line) => `\n    ${line}`).join('');
 
-/** `items <n> · fluids <n> · …`, every number taken from the loaded Pack (ruling R2). */
+/**
+ * `items <n> · fluids <n> · …`, every number taken from the loaded Pack (ruling R2); `structures <n>` says how many have
+ * hatch rules (exporter 0.6.0+) when some do.
+ */
 function summarize(pack: Pack): string {
   const machines = [...pack.machines.values()];
   const { veins, dimensions } = pack.worldgen;
+  const hatchRules = machines.filter((m) => m.structure?.elements !== undefined).length;
   return [
     `items ${pack.items.size}`, `fluids ${pack.fluids.size}`, `recipes ${pack.recipes.length}`, `maps ${pack.maps.size}`,
-    `machines ${machines.length}`, `structures ${machines.filter((m) => m.structure !== undefined).length}`,
+    `machines ${machines.length}`, `structures ${machines.filter((m) => m.structure !== undefined).length}${hatchRules > 0 ? ` (${hatchRules} with hatch rules)` : ''}`,
     `veins ${veins.length}`, `dimensions ${dimensions.length}`,
   ].join(' · ');
 }
