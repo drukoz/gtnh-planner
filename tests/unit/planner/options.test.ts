@@ -184,6 +184,19 @@ describe('ingredient options', () => {
     expect(plan.warnings.filter((w) => w.code === 'avoid-unavoidable').map((w) => w.key)).toContain(LEAD);
     expect(staleOptions(plan)).toEqual([{ code: 'stale-option', key: 'ca#100', text: 'Electronic Circuit: the pinned ingredient Molten Lead is on the avoid list; ignoring the pin' }]);
   });
+  it('says which option needs a good on the avoid list', async () => {
+    // Plan 09's final review: with tin avoided, soldering alloy (alloyed from tin ingots) was listed as usable and the
+    // cheapest, at 0.5 raw in two steps, while the line takes lead; pinning it would use tin after all.
+    const plan = await planLine(pack, S({ avoid: ['Tin'] }), emptyContext());
+    expect(ids(plan)).toEqual(['ca', 'x-lead']);
+    expect(circuitStep(plan).options?.[0]?.choices.map((c) => [c.key, c.share, c.unusable])).toEqual([
+      [SOLDER, 0, ['needs Tin Ingot, which is on your avoid list']], [LEAD, 1, undefined]]);
+    // A pin of it is honoured, its tin flagged as nothing avoiding it: the option in use is not marked.
+    const pinned = await planLine(pack, S({ avoid: ['Tin'], optionChoice: { 'ca#100': SOLDER } }), emptyContext());
+    expect(ids(pinned)).toEqual(['alloy-solder', 'ca', 'x-solder']);
+    expect(pinned.warnings.filter((w) => w.code === 'avoid-unavoidable').map((w) => w.key)).toEqual(['t:tin_ingot@0']);
+    expect(circuitStep(pinned).options?.[0]?.choices.map((c) => [c.key, c.share, c.unusable])).toEqual([[SOLDER, 1, undefined], [LEAD, 0, undefined]]);
+  });
 });
 
 describe('a slot split between two options', () => {
