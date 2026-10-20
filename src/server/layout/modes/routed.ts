@@ -14,11 +14,13 @@
 // Chip: routing ranks a Terminator below every Item Responder (`SyncResponse.isPreferredOver` compares the priority
 // first, then the chip's preference, and the path finder asks the destinations nearest first), so a machine that takes
 // an item gets it before the output chest does, however far the chest is. The chips are the interface pipes'
-// structured `feed` (architecture §11 entry 51), which the configure steps word. Without a routed network at the base
-// the line is its own network, fed by hand. A machine run by hand (architecture §11 entry 48) gets nothing: what the line
-// makes for it waits in the output chest, and what it makes for the line goes in the input chest. A venting steam
-// machine's interface pipe meets it on its middle-row side, not its output side (which faces up), and its extractor chip
-// pulls its output there (GT gives it on any side but the front).
+// structured `feed` (architecture §11 entry 51), which the configure steps word, and the logistics steps name what goes
+// in the input chest: the raw inputs to order at the request pipe, and what you make for the line yourself (by hand, in
+// your own machines or in a machine run by hand) to put in. Without a routed network at the base the line is its own
+// network, fed by hand: you put the raw inputs in too. A machine run by hand (architecture §11 entry 48) gets nothing:
+// what the line makes for it waits in the output chest, and what it makes for the line goes in the input chest. A
+// venting steam machine's interface pipe meets it on its middle-row side, not its output side (which faces up), and its
+// extractor chip pulls its output there (GT gives it on any side but the front).
 
 import { isFluidKey, type StuffKey } from '../../../shared/keys.ts';
 import { posKey, step, type Vec3 } from '../../../shared/layout/geometry.ts';
@@ -163,13 +165,27 @@ export function routedMode(input: ModeInput): ModeResult {
     warnings.unshift({ code: 'routed_missing',
       text: 'No Project Red routed network at this base: the line gets its own — put raw inputs in the input chest' });
   }
+  // what goes in the input chest, by name: the raw inputs, which the request pipe orders from the base's network (with no
+  // network there, you put them in), and what you make for the line yourself (by hand, in your own machines or in a
+  // machine the line runs by hand), which you put in
+  const raw = sorted(edge.entering.filter((f) => f.from === 'raw').map((f) => f.key));
+  const made = entering.filter((k) => !raw.includes(k));
   const drafts: StepDraft[] = [
     { id: 'layout:logistics:line', kind: 'logistics', pin: 'site',
       // at the side it touches: "in front of" would read as GT's front, which faces along the row
       text: `Lay routed pipes along the middle row: an interface pipe at every machine's output side or bus${lineExceptions(placement)}`
         + `${risers.links.length > 0 ? RISER_WORDS : ''}, a request pipe and two chests at the end` },
-    { id: 'layout:logistics:request', kind: 'logistics', pin: 'site', text: 'Request raw inputs at the request pipe — they arrive in the input chest' },
   ];
+  if (raw.length > 0) {
+    drafts.push(hooked
+      ? { id: 'layout:logistics:request', kind: 'logistics', pin: 'site',
+        text: `Request the raw inputs at the request pipe — they arrive in the input chest: ${nameList(plan, pack, raw)}` }
+      : { id: 'layout:logistics:inputs', kind: 'logistics', pin: 'site', text: `Put the raw inputs in the input chest: ${nameList(plan, pack, raw)}` });
+  }
+  if (made.length > 0) {
+    drafts.push({ id: 'layout:logistics:made', kind: 'logistics', pin: 'site',
+      text: `Put what you make for the line yourself in the input chest: ${nameList(plan, pack, made)}` });
+  }
 
   const bits = linkBits(links);
   return {

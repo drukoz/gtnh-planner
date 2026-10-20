@@ -4,7 +4,8 @@
 // (it would pull the inputs back out) and an output bus no Responder (it takes nothing in); and the output chest takes
 // everything that leaves the placed machines, to your storage, to a step the line places no machine for or as a stray,
 // on an Item Terminator Chip, which routing ranks below every machine's Item Responder Chip. The chips and their filters
-// are the interface pipes' structured `feed`, and the configure steps word them.
+// are the interface pipes' structured `feed`, and the configure steps word them; the logistics steps name what goes in
+// the input chest.
 
 import { describe, expect, it } from 'vitest';
 import { placeUnits, unitsFromPlan } from '../../../src/server/layout/arrange.ts';
@@ -64,6 +65,18 @@ describe('routed feeding', () => {
     expect(chipsOf(r, 'Routed Interface Pipe (input chest)')).toEqual([[whitelist('extractor', ['t:in@0', 't:w@0'])]]);
     expect(chipsOf(r, 'Routed Interface Pipe (output chest)')).toEqual([[whitelist('terminator', ['t:y@0', 't:z@0'])]]);
     expect(chipsOf(r, 'Routed Interface Pipe (Basic Macerator)')).toEqual([[whitelist('responder', ['t:in@0']), whitelist('extractor', ['t:x@0', 't:y@0'])]]);
+    // the steps name what goes in the input chest: the raw inputs to order at the request pipe, what you make to put in
+    expect(r.drafts.slice(1)).toEqual([
+      { id: 'layout:logistics:request', kind: 'logistics', pin: 'site', text: 'Request the raw inputs at the request pipe — they arrive in the input chest: '
+        + 'Raw Input' },
+      { id: 'layout:logistics:made', kind: 'logistics', pin: 'site', text: 'Put what you make for the line yourself in the input chest: t:w@0' }]);
+    // with no routed network at the base the request pipe has nothing to order from: you put the raw inputs in too
+    const pack = layoutPack();
+    const placement = placeUnits(unitsFromPlan(pack, plan).units, { headWidth: 1, portSpacing: PORT_SPACING.routed });
+    const own = buildMode('routed', { pack, plan, parts: resolveParts(pack), placement, network: null });
+    expect(own.drafts.slice(1).map((d) => [d.id, d.text])).toEqual([
+      ['layout:logistics:inputs', 'Put the raw inputs in the input chest: Raw Input'],
+      ['layout:logistics:made', 'Put what you make for the line yourself in the input chest: t:w@0']]);
   });
 
   it('gives an input bus only an Item Responder Chip and an output bus only an Item Extractor Chip', () => {
