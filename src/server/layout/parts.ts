@@ -196,7 +196,9 @@ export function pickTransformer(pack: Pack, lowerTier: number): Machine | null {
 
 // ---- Hatches and buses ----
 
-export type HatchClass = 'MTEHatchEnergy' | 'MTEHatchInputBus' | 'MTEHatchOutputBus' | 'MTEHatchInput' | 'MTEHatchOutput' | 'MTEHatchMaintenance';
+/** GT's hatch classes the layout places: the planner's six, the muffler, and a steam multiblock's buses and steam hatch (GT++). */
+export type HatchClass = 'MTEHatchEnergy' | 'MTEHatchInputBus' | 'MTEHatchOutputBus' | 'MTEHatchInput' | 'MTEHatchOutput' | 'MTEHatchMaintenance'
+  | 'MTEHatchMuffler' | 'MTEHatchSteamBusInput' | 'MTEHatchSteamBusOutput' | 'MTEHatchCustomFluidBase';
 
 const BUS_CLASSES: ReadonlySet<HatchClass> = new Set<HatchClass>(['MTEHatchInputBus', 'MTEHatchOutputBus']);
 const FLUID_HATCH_CLASSES: ReadonlySet<HatchClass> = new Set<HatchClass>(['MTEHatchInput', 'MTEHatchOutput']);

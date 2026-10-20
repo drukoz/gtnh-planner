@@ -15,8 +15,8 @@ import type { BlockConfig, LocalBlock } from '../arrange.ts';
 import { linkBits } from '../path.ts';
 import type { Part } from '../parts.ts';
 import {
-  emptyModeResult, finalItemOutputs, itemPorts, nameList, outputSideInputs, placedStepIds, rawItemInputs, stepItemInputs, type ModeInput,
-  type ModeResult, type StepDraft,
+  emptyModeResult, finalItemOutputs, itemPorts, itemRisers, nameList, outputSideInputs, placedStepIds, rawItemInputs, RISER_WORDS,
+  stepItemInputs, type ModeInput, type ModeResult, type StepDraft,
 } from './mode.ts';
 
 const UP = 1, SOUTH = 3, EAST = 5;
@@ -25,7 +25,8 @@ const PIPE_ROLES: ReadonlySet<BlockRole> = new Set<BlockRole>(['pipe', 'chip_pip
 interface Chip { part: Part; text: string }
 
 /**
- * The routed spine `[firstX … tailX] × (y 0, z spineZ)` with its interface pipes and chips, and the request tail.
+ * The routed spine `[firstX … tailX] × (y 0, z spineZ)` with its interface pipes and chips (junctions up the spine's
+ * column to an interface above it, `itemRisers`), and the request tail.
  * Nothing when no placed unit moves items.
  */
 export function routedMode(input: ModeInput): ModeResult {
@@ -66,6 +67,9 @@ export function routedMode(input: ModeInput): ModeResult {
     const cell: Vec3 = [x, 0, spineZ];
     if (!portCells.has(posKey(cell))) lay(cell, parts.pr_junction, 'pipe', parts.pr_junction.name);
   }
+  // junction pipes climb the spine's column to the interface of a bus GT takes only higher up
+  const risers = itemRisers(placement);
+  for (const cell of risers.cells) lay(cell, parts.pr_junction, 'pipe', parts.pr_junction.name);
 
   // the tail: the request pipe on the spine fills the input chest beside it; the chests' interface pipes sit above them,
   // joined to the request pipe by a junction
@@ -104,7 +108,8 @@ export function routedMode(input: ModeInput): ModeResult {
   const drafts: StepDraft[] = [
     { id: 'layout:logistics:line', kind: 'logistics', pin: 'site',
       // at the side it touches: "in front of" would read as GT's front, which faces along the row
-      text: "Lay routed pipes along the middle row: an interface pipe at every machine's output side or bus, a request pipe and two chests at the end" },
+      text: `Lay routed pipes along the middle row: an interface pipe at every machine's output side or bus${risers.links.length > 0 ? RISER_WORDS : ''}, `
+        + 'a request pipe and two chests at the end' },
     { id: 'layout:logistics:request', kind: 'logistics', pin: 'site', text: 'Request raw inputs at the request pipe — they arrive in the input chest' },
   ];
 

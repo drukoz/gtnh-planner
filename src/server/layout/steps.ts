@@ -64,16 +64,20 @@ function draft(id: string, kind: BuildStep['kind'], pin: number | undefined, tex
 // ---- Placing ----
 
 /** The order a multiblock's hatches are listed in. */
-const HATCH_ORDER: readonly HatchKind[] = ['input_bus', 'output_bus', 'energy', 'maintenance', 'input_hatch', 'output_hatch'];
+const HATCH_ORDER: readonly HatchKind[] = ['input_bus', 'output_bus', 'energy', 'steam', 'maintenance', 'input_hatch', 'output_hatch', 'muffler'];
 
 /**
- * The unit's hatch labels: the hatches chosen for it in `HATCH_ORDER` (fluid hatches in the canonical z, x order they
- * were given their fluids), then any hatch the exported structure itself holds, in cell order.
+ * The unit's hatch labels: the hatches chosen for it in `HATCH_ORDER` (fluid hatches in the order of the fluids they
+ * take, an output hatch without a fluid last; others in canonical z, x order), then any hatch the exported structure
+ * itself holds, in cell order.
  */
 function hatchLabels(u: PlacedUnit): string[] {
+  const fluids = [...u.io.fluidIn, ...u.io.fluidOut];
+  const fluidRank = (c: PlacedUnit['cells'][number]): number => (c.fluid === undefined ? fluids.length : fluids.indexOf(c.fluid));
   const chosen = u.cells
     .filter((c) => c.hatch !== undefined)
-    .sort((a, b) => HATCH_ORDER.indexOf(a.hatch!) - HATCH_ORDER.indexOf(b.hatch!) || a.pos[2] - b.pos[2] || a.pos[0] - b.pos[0]);
+    .sort((a, b) => HATCH_ORDER.indexOf(a.hatch!) - HATCH_ORDER.indexOf(b.hatch!) || fluidRank(a) - fluidRank(b)
+      || a.pos[2] - b.pos[2] || a.pos[0] - b.pos[0] || a.pos[1] - b.pos[1]);
   const exported = u.cells.filter((c) => c.role === 'hatch' && c.hatch === undefined);
   return [...chosen, ...exported].map((c) => c.label);
 }

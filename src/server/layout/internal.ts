@@ -663,7 +663,8 @@ function fluidCellsOf(plan: FluidPlan): Vec3[] {
 
 /**
  * One pipe tree per fluid, in key order: from the tail root (a fluid that enters or leaves the line) or the first free
- * producer port to every other port of the net. Port cells link down into their machine or hatch. The box reaches up
+ * producer port to every other port of the net. Port cells link into their machine or hatch: down from a port above it,
+ * else toward the hatch whose front faces the port. The box reaches up
  * to the highest tail root, which may sit above the units. A net that cannot reach every port in it, walled in by what
  * is laid already (a higher tier's cable that crosses the spine one block up, another fluid's pipe), is grown again in
  * a box one block above everything laid so far, so it climbs over the wall (the line may then stand taller); a net
@@ -679,6 +680,12 @@ function pipeFluids(input: InternalInput, plans: readonly FluidPlan[], fluidCell
   const inside = (p: Vec3) => p.every((v, i) => v >= bounds.min[i]! && v <= bounds.max[i]!);
   const portUnit = new Map<string, PlacedUnit>();
   for (const u of placement.units) for (const p of [...u.ports.fluidIn, ...u.ports.fluidOut]) if (!portUnit.has(posKey(p))) portUnit.set(posKey(p), u);
+  // the side of each port that touches its hatch or machine: down for a port above, a hatch's front elsewhere
+  const portSide = new Map<string, number>();
+  for (const u of placement.units) {
+    u.ports.fluidIn.forEach((p, i) => portSide.set(posKey(p), u.ports.fluidInSides[i] ?? DOWN));
+    u.ports.fluidOut.forEach((p, i) => portSide.set(posKey(p), u.ports.fluidOutSides[i] ?? DOWN));
+  }
   const pipes: InternalResult['fluidPipes'] = [];
   for (const plan of plans) {
     const { net } = plan;
@@ -720,7 +727,7 @@ function pipeFluids(input: InternalInput, plans: readonly FluidPlan[], fluidCell
     }
     grid.links.push(...tree.links);
     const unreached = new Set(tree.unreached.map(posKey));
-    for (const p of plan.ports) if (!unreached.has(posKey(p))) grid.links.push([p, step(p, DOWN)]);
+    for (const p of plan.ports) if (!unreached.has(posKey(p))) grid.links.push([p, step(p, portSide.get(posKey(p)) ?? DOWN)]);
     fail(tree.unreached);
     pipes.push({ key: net.key, name: net.name, pipe, cells: 1 + tree.cells.length });
   }

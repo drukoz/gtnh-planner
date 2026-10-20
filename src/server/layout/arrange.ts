@@ -1,7 +1,9 @@
 // Units and their placement (Plan 5 Task 5; spec §3.6, architecture §11.13–§11.14): one unit per new machine of every
 // placed step, in flow order; multiblocks take their exported structure (Plan 1 canonical frame: front on the north,
 // z = 0 side) with hatch cells chosen on its casings and sized to the step (hatch positions are not in the export,
-// gt-mechanics §5); the programmed circuit goes on the machine or its input bus. Units are then placed in two rows
+// gt-mechanics §5): on the casings GregTech's structure check takes each hatch on (hatch-rules.ts, research
+// hatch-rules.md), each hatch facing an open side where its port is; a multiblock without a rule keeps the generic
+// placement and says so. The programmed circuit goes on the machine or its input bus. Units are then placed in two rows
 // facing a one-block spine, row N turned 180° so every front faces the spine, with the ports the routing, logistics
 // and hookup stages connect to. Covers and settings from those stages are attached to their host blocks here too.
 // A singleblock's output side faces the spine and its front (GT's `mMainFacing`, kept apart from the output side) faces
@@ -10,12 +12,18 @@
 // Every order and tie-break is fixed, so the same plan gives the same placement.
 
 import { isFluidKey, itemKey, type ItemKey, type StuffKey } from '../../shared/keys.ts';
-import { OPPOSITE, posKey, step, type Vec3 } from '../../shared/layout/geometry.ts';
+import { DIRS, OPPOSITE, posKey, step, type Vec3 } from '../../shared/layout/geometry.ts';
 import type { BlockRole, ConduitSpec, CoverSpec, TailChest } from '../../shared/types/layout.ts';
-import type { BlockRef, Machine, Pack, Product } from '../../shared/types/pack.ts';
+import type { BlockRef, Machine, Pack, Product, Recipe } from '../../shared/types/pack.ts';
 import type { BomLine, Plan, PlanStep, PlanWarning } from '../../shared/types/plan.ts';
 import { UNKNOWN_BLOCK } from '../../shared/types/world.ts';
+import { simpleClassName } from '../world/facts.ts';
+import {
+  elementMap, elementTakes, hatchRuleFor, ruleFits, rulePower, ruleTakes, type HatchKind, type HatchRule,
+} from './hatch-rules.ts';
 import { busSlots, hatchLitres, machineRef, pickHatch, type HatchClass } from './parts.ts';
+
+export type { HatchKind } from './hatch-rules.ts';
 
 // ---- Types ----
 
@@ -38,16 +46,20 @@ export interface HostCover { pos: Vec3; cover: CoverSpec }
 /** Settings for the block at `pos` (Tasks 7–8). */
 export interface HostConfig { pos: Vec3; config: BlockConfig }
 
-export type HatchKind = 'energy' | 'input_bus' | 'output_bus' | 'input_hatch' | 'output_hatch' | 'maintenance';
-
 /** What a step moves in and out; fluid keys sorted. */
 export interface StepIo { itemIn: boolean; itemOut: boolean; fluidIn: StuffKey[]; fluidOut: StuffKey[] }
 
 export interface UnitCell {
   pos: Vec3; block: BlockRef; role: 'machine' | 'casing' | 'hatch'; label: string; item?: StuffKey; hatch?: HatchKind;
   config?: BlockConfig;
-  /** The casing a hatch cell replaced. */
+  /** The block of the exported structure a hatch cell replaced: a casing, or an exported hatch another tier replaced. */
   replaces?: ItemKey;
+  /** The canonical side (ForgeDirection, front on the north) a placed hatch's front faces: where its port is. */
+  face?: number;
+  /** The fluid a fluid hatch takes or gives; none on an output hatch GregTech needs empty (a distillation layer's). */
+  fluid?: StuffKey;
+  /** A cell of a layer the layout added to the exported structure (a taller distillation tower). */
+  added?: true;
 }
 
 export interface Unit {
@@ -58,11 +70,14 @@ export interface Unit {
 }
 
 /**
- * Local cells the line connects to. A multiblock's `fluidIn[i]` sits above its i-th input hatch, which takes
- * `io.fluidIn[i]` (likewise `fluidOut`); a singleblock has one cell above it for all its fluids.
+ * Local cells the line connects to. A multiblock's `fluidIn[i]` is the cell its front faces of the input hatch that
+ * takes `io.fluidIn[i]` (likewise `fluidOut`); a singleblock has one cell above it for all its fluids. An item port is
+ * on the spine's column: on the spine, or above it in front of a bus GregTech takes only higher up.
  */
 export interface UnitPorts {
   power: Vec3 | null; items: Vec3[]; fluidIn: Vec3[]; fluidOut: Vec3[];
+  /** The side of each `fluidIn[i]` / `fluidOut[i]` cell that touches its hatch or machine (down for a port above). */
+  fluidInSides: number[]; fluidOutSides: number[];
   /** Output faces that get a conveyor cover. */
   itemFaces: Array<{ pos: Vec3; side: number }>;
   /** Output faces that get a pump cover. */
@@ -96,7 +111,7 @@ export interface Placement {
 
 // ---- Small helpers ----
 
-const UP = 1, NORTH = 2, SOUTH = 3, WEST = 4;
+const DOWN = 0, UP = 1, NORTH = 2, SOUTH = 3, WEST = 4, EAST = 5;
 
 function compareText(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
@@ -248,6 +263,13 @@ function commonCasings(cells: readonly UnitCell[], y: number): number[] {
 
 const HATCH_TEXT: Readonly<Record<HatchKind, string>> = {
   energy: 'energy', input_bus: 'input bus', output_bus: 'output bus', input_hatch: 'input hatch', output_hatch: 'output hatch', maintenance: 'maintenance',
+  muffler: 'muffler', steam: 'steam hatch',
+};
+
+/** GT's ordinary hatch class of each kind (a rule's `classes` may name another). */
+const KIND_CLASS: Readonly<Record<HatchKind, HatchClass>> = {
+  energy: 'MTEHatchEnergy', input_bus: 'MTEHatchInputBus', output_bus: 'MTEHatchOutputBus', input_hatch: 'MTEHatchInput',
+  output_hatch: 'MTEHatchOutput', maintenance: 'MTEHatchMaintenance', muffler: 'MTEHatchMuffler', steam: 'MTEHatchCustomFluidBase',
 };
 
 /** A pick that holds less than `need`. */
@@ -257,17 +279,37 @@ function holdsLess(hatch: Machine, need: { slots?: number; litres?: number } | u
   return false;
 }
 
+/** "a", "a or b", "a, b or c". */
+function orList(words: readonly string[]): string {
+  return words.length <= 1 ? (words[0] ?? '') : `${words.slice(0, -1).join(', ')} or ${words.at(-1)!}`;
+}
+
+/** A multiblock's shape, what its unit moves (`io` without the fluids no hatch was placed for) and its power. */
+interface MultiblockShape { shape: Shape; io: StepIo; electric: boolean }
+
+/** `io` with only the fluids a fluid hatch of the unit takes or gives. */
+function placedIo(io: StepIo, cells: readonly UnitCell[]): StepIo {
+  const has = (kind: HatchKind, key: StuffKey) => cells.some((c) => c.hatch === kind && c.fluid === key);
+  return { ...io, fluidIn: io.fluidIn.filter((k) => has('input_hatch', k)), fluidOut: io.fluidOut.filter((k) => has('output_hatch', k)) };
+}
+
+/** The hatch of `kind` in place of the casing `cells[i]` (on an added layer, as that casing was). */
+function hatchCell(cells: UnitCell[], i: number, hatch: Machine, kind: HatchKind, face: number, extra: { config?: BlockConfig; fluid?: StuffKey }): void {
+  const casing = cells[i]!;
+  cells[i] = {
+    pos: casing.pos, block: machineRef(hatch), role: 'hatch', label: hatch.name, item: hatch.itemKey, hatch: kind,
+    ...(extra.config === undefined ? {} : { config: extra.config }), replaces: blockKey(casing.block), face,
+    ...(extra.fluid === undefined ? {} : { fluid: extra.fluid }), ...(casing.added === true ? { added: true } : {}),
+  };
+}
+
 /**
- * A multiblock: its structure (or the unknown box) with hatch cells on its casings. Buses on the front of the bottom
- * layer nearest the controller, energy and maintenance on its back nearest the middle, fluid hatches on the top layer.
+ * The generic placement, for a multiblock without a rule (or without an exported structure): buses on the front of the
+ * bottom layer nearest the controller, energy and maintenance on its back nearest the middle, fluid hatches on the top
+ * layer facing up.
  */
-function multiblockShape(pack: Pack, m: Machine, s: PlanStep, io: StepIo, electric: boolean, circuit: number | undefined,
-  warnings: PlanWarning[]): Shape {
-  let shape = structureCells(pack, m);
-  if (shape === null) {
-    warnings.push({ code: 'structure_unknown', stepId: s.id, text: `${m.name}: no exported structure, drawn as a 3×3×3 box — check its real size in game` });
-    shape = unknownBoxCells(pack, m);
-  }
+function genericHatches(pack: Pack, m: Machine, s: PlanStep, io: StepIo, electric: boolean, circuit: number | undefined, shape: Shape,
+  warnings: PlanWarning[]): StepIo {
   const { size, cells } = shape;
   const controller = cells.find((c) => c.role === 'machine')!.pos;
   const middle = Math.floor((size[0] - 1) / 2);
@@ -290,9 +332,9 @@ function multiblockShape(pack: Pack, m: Machine, s: PlanStep, io: StepIo, electr
 
   const taken = new Set<number>();
   const short: HatchKind[] = [];
-  const place = (kind: HatchKind, cls: HatchClass, tier: number | null, need: { slots?: number; litres?: number } | undefined,
-    pools: ReadonlyArray<readonly number[]>, config?: BlockConfig): void => {
-    const hatch = pickHatch(pack, cls, tier, need);
+  const place = (kind: HatchKind, tier: number | null, need: { slots?: number; litres?: number } | undefined,
+    pools: ReadonlyArray<readonly number[]>, face: number, extra: { config?: BlockConfig; fluid?: StuffKey } = {}): void => {
+    const hatch = pickHatch(pack, KIND_CLASS[kind], tier, need);
     let free: number | undefined;
     for (const pool of pools) {
       free = pool.find((i) => !taken.has(i));
@@ -303,11 +345,7 @@ function multiblockShape(pack: Pack, m: Machine, s: PlanStep, io: StepIo, electr
       return;
     }
     taken.add(free);
-    const casing = cells[free]!;
-    cells[free] = {
-      pos: casing.pos, block: machineRef(hatch), role: 'hatch', label: hatch.name, item: hatch.itemKey, hatch: kind,
-      ...(config === undefined ? {} : { config }), replaces: blockKey(casing.block),
-    };
+    hatchCell(cells, free, hatch, kind, face, extra);
     if (holdsLess(hatch, need)) {
       warnings.push({ code: 'hatch_small', stepId: s.id, text: `${m.name}: the biggest ${hatch.name} holds less than one run needs — split the inputs by hand` });
     }
@@ -315,24 +353,316 @@ function multiblockShape(pack: Pack, m: Machine, s: PlanStep, io: StepIo, electr
 
   // the circuit goes in the input bus's circuit slot, so a step with a circuit always gets one
   if (io.itemIn || circuit !== undefined) {
-    place('input_bus', 'MTEHatchInputBus', null, { slots: distinctItems(s.inputs) }, [front], circuit === undefined ? undefined : { circuit });
+    place('input_bus', null, { slots: distinctItems(s.inputs) }, [front], NORTH, circuit === undefined ? {} : { config: { circuit } });
   }
-  if (io.itemOut) place('output_bus', 'MTEHatchOutputBus', null, { slots: distinctItems(s.outputs) }, [front]);
-  if (electric) place('energy', 'MTEHatchEnergy', s.machine.tier, undefined, [back]);
+  if (io.itemOut) place('output_bus', null, { slots: distinctItems(s.outputs) }, [front], NORTH);
+  if (electric) place('energy', s.machine.tier, undefined, [back], SOUTH);
   const anyBottom = [...bottom].sort((a, b) => cells[b]!.pos[2] - cells[a]!.pos[2] || byDistance(middle)(a, b));
-  place('maintenance', 'MTEHatchMaintenance', null, undefined, [back, anyBottom]);
-  for (const key of io.fluidIn) place('input_hatch', 'MTEHatchInput', null, { litres: perRun(s.inputs, key) }, [top]);
-  for (const key of io.fluidOut) place('output_hatch', 'MTEHatchOutput', null, { litres: perRun(s.outputs, key) }, [top]);
+  place('maintenance', null, undefined, [back, anyBottom], SOUTH);
+  for (const key of io.fluidIn) place('input_hatch', null, { litres: perRun(s.inputs, key) }, [top], UP, { fluid: key });
+  for (const key of io.fluidOut) place('output_hatch', null, { litres: perRun(s.outputs, key) }, [top], UP, { fluid: key });
 
   if (short.length > 0) {
     warnings.push({ code: 'hatch_cells_short', stepId: s.id,
       text: `${m.name}: put the remaining hatches (${short.map((k) => HATCH_TEXT[k]).join(', ')}) on any casing` });
   }
-  return shape;
+  return placedIo(io, cells);
+}
+
+// ---- Hatches by GregTech's rules ----
+
+/**
+ * The cells around and inside the structure's box, one wider and up to one above it but never below its floor, that
+ * hold no block and are no reserved air and that can be reached from outside the box: the cells a hatch may face.
+ */
+function openCells(shape: Shape): Set<string> {
+  const [w, h, d] = shape.size;
+  const solid = new Set([...shape.cells.map((c) => posKey(c.pos)), ...shape.air.map(posKey)]);
+  const inBox = (p: Vec3) => p[0] >= -1 && p[0] <= w && p[1] >= 0 && p[1] <= h && p[2] >= -1 && p[2] <= d;
+  const open = new Set<string>();
+  const queue: Vec3[] = [];
+  const visit = (p: Vec3): void => {
+    const key = posKey(p);
+    if (!inBox(p) || solid.has(key) || open.has(key)) return;
+    open.add(key);
+    queue.push(p);
+  };
+  for (let y = 0; y <= h; y++) {
+    for (let z = -1; z <= d; z++) {
+      for (let x = -1; x <= w; x++) if (x < 0 || x >= w || y >= h || z < 0 || z >= d) visit([x, y, z]);
+    }
+  }
+  for (let i = 0; i < queue.length; i++) for (let side = 0; side < DIRS.length; side++) visit(step(queue[i]!, side));
+  return open;
+}
+
+/** One way to put a hatch on cell `i`: its front toward `side`, onto the open cell `port`. */
+interface Spot { i: number; side: number; port: Vec3; rank: number[] }
+
+/** How a hatch of each kind wants to face: buses the spine, fluid hatches and mufflers up, the rest the back. */
+type FacePlan = 'front' | 'up' | 'back';
+
+const FACE_PLAN: Readonly<Record<HatchKind, FacePlan>> = {
+  input_bus: 'front', output_bus: 'front', input_hatch: 'up', output_hatch: 'up', muffler: 'up', energy: 'back', maintenance: 'back', steam: 'back',
+};
+
+/**
+ * The order of the spots a hatch may take (smaller first): a bus faces the spine from the lowest layer, nearest the
+ * controller; an energy, maintenance or steam hatch faces the back from the lowest layer, nearest the middle, else a
+ * side, else up; a fluid hatch or muffler faces up (front row first, as the generic placement), else a side, else the
+ * back. A face toward the spine's side of the box (z = −1) is a bus's only: elsewhere it is the spine, or the cells
+ * above it that both rows' hatches would share.
+ */
+function spotRank(plan: FacePlan, p: Vec3, side: number, cx: number, middle: number): number[] | null {
+  const [x, y, z] = p;
+  const front = side === NORTH && z === 0;
+  if (plan === 'front') return front ? [0, y, Math.abs(x - cx), x, z] : null;
+  if (front || side === DOWN) return null;
+  const sideways = side === WEST || side === EAST;
+  if (plan === 'back') {
+    if (side === SOUTH) return [0, y, Math.abs(x - middle), x, z];
+    if (sideways) return [1, y, -z, x, side];
+    return side === UP ? [2, z, x, y] : [3, y, z, x];
+  }
+  if (side === UP) return [0, z, x, y];
+  if (sideways) return [1, y, z, x, side];
+  return side === SOUTH ? [2, y, Math.abs(x - middle), x] : [3, y, z, x];
+}
+
+function compareRanks(a: readonly number[], b: readonly number[]): number {
+  for (let k = 0; k < Math.max(a.length, b.length); k++) {
+    const d = (a[k] ?? 0) - (b[k] ?? 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+
+/** The step's fluid inputs by the recipe's fluid slot (0 = its first fluid), from `Ingredient.slot` (fluids from 100). */
+function fluidInputSlot(recipe: Recipe | undefined, key: StuffKey): number | undefined {
+  const ing = recipe?.inputs.find((i) => i.slot >= 100 && i.options.some((o) => o.key === key));
+  return ing === undefined ? undefined : ing.slot - 100;
+}
+
+/** The recipe's fluid outputs in its own order, each once (GT hands the k-th to a distillation tower's k-th layer). */
+function recipeFluidOutputs(recipe: Recipe | undefined, io: StepIo): StuffKey[] {
+  const order = recipe === undefined ? [] : [...new Set(recipe.outputs.filter((p) => isFluidKey(p.key)).map((p) => p.key))];
+  return [...order.filter((k) => io.fluidOut.includes(k)), ...io.fluidOut.filter((k) => !order.includes(k))];
+}
+
+/**
+ * The structure with `extra` more layers: copies of its first layer above the bottom go in under its top layer, which
+ * moves up (a distillation tower built taller, GT's "layer" piece repeated).
+ */
+function growLayers(shape: Shape, extra: number): Shape {
+  const [w, h, d] = shape.size;
+  if (extra <= 0 || h < 3) return shape;
+  const lift = (p: Vec3): Vec3 => (p[1] === h - 1 ? [p[0], p[1] + extra, p[2]] : [...p]);
+  const cells = shape.cells.map((c) => ({ ...copyCell(c), pos: lift(c.pos) }));
+  const air = shape.air.map(lift);
+  for (let k = 0; k < extra; k++) {
+    for (const c of shape.cells) if (c.pos[1] === 1) cells.push({ ...copyCell(c), pos: [c.pos[0], h - 1 + k, c.pos[2]], added: true });
+    for (const a of shape.air) if (a[1] === 1) air.push([a[0], h - 1 + k, a[2]]);
+  }
+  return { size: [w, h + extra, d], cells, air };
+}
+
+/** A machine whose class simple name is `cls`. */
+function isClass(pack: Pack, mteId: number | undefined, cls: string): boolean {
+  return mteId !== undefined && simpleClassName(pack.machines.get(mteId)?.cls) === cls;
+}
+
+/**
+ * Hatches on the casings GregTech's structure check takes them on (`rule`, research hatch-rules.md): each kind only on
+ * cells whose element takes it and that hold their element's usual block (so never on a coil among casings), each
+ * facing an open cell, its port, that no other hatch of the unit faces. Buses face the spine (on it, or above it where
+ * GT takes a bus only higher up), energy and maintenance the back, fluid hatches up where they may and else a side or
+ * the back; a cracker's catalyst goes in its middle hatch, and a distillation tower gets one output hatch per layer, the
+ * k-th fluid output on the k-th layer, built taller when the recipe has more fluids. A muffler GT needs is placed (the
+ * exported one becomes the lowest tier) with its front cell kept as air, and a casing minimum is kept. A kind the step
+ * needs that GT takes nowhere on the machine is left out with `hatch_not_taken`; one without a free cell gives
+ * `hatch_cells_short`.
+ */
+function ruledHatches(pack: Pack, m: Machine, s: PlanStep, io: StepIo, electric: boolean, circuit: number | undefined, rule: HatchRule,
+  base: Shape, warnings: PlanWarning[]): { shape: Shape; io: StepIo } {
+  const recipe = pack.recipeById.get(s.recipeId);
+  const outputs = recipeFluidOutputs(recipe, io);
+  const maxLayers = rule.layerOutputs?.maxLayers ?? 0;
+  const shape = rule.layerOutputs === undefined ? base
+    : growLayers(base, Math.min(Math.max(0, outputs.length + 1 - base.size[1]), Math.max(0, maxLayers - base.size[1])));
+  const { size, cells } = shape;
+  const controller = cells.find((c) => c.role === 'machine')!.pos;
+  const middle = Math.floor((size[0] - 1) / 2);
+  const map = elementMap(rule, controller, size);
+  const charOf = (i: number): string | undefined => map.get(posKey(cells[i]!.pos));
+  // an element's usual block: the one most of its casings hold (ties → smallest key)
+  const usual = new Map<string, ItemKey>();
+  {
+    const counts = new Map<string, Map<ItemKey, number>>();
+    cells.forEach((c, i) => {
+      const ch = charOf(i);
+      if (c.role !== 'casing' || ch === undefined) return;
+      const byKey = counts.get(ch) ?? new Map<ItemKey, number>();
+      byKey.set(blockKey(c.block), (byKey.get(blockKey(c.block)) ?? 0) + 1);
+      counts.set(ch, byKey);
+    });
+    for (const [ch, byKey] of counts) {
+      const best = [...byKey].sort((a, b) => b[1] - a[1] || compareText(a[0], b[0]))[0];
+      if (best !== undefined) usual.set(ch, best[0]);
+    }
+  }
+  const open = openCells(shape);
+  const claimed = new Set<string>();
+  const casingsLeft = (rule.casingMin ?? []).map((c) => ({
+    chars: c.chars, min: typeof c.min === 'number' ? c.min : c.min(size[1]),
+    left: cells.filter((cell, i) => cell.role === 'casing' && c.chars.includes(charOf(i) ?? '\0')).length,
+  }));
+  const short: HatchKind[] = [];
+  const notTaken: HatchKind[] = [];
+
+  /** The best free spot for `kind` among cells whose element character passes `chars` (and on layer `layer`). */
+  const spotFor = (kind: HatchKind, chars?: string, layer?: number): Spot | null => {
+    const plan = FACE_PLAN[kind];
+    let best: Spot | null = null;
+    cells.forEach((c, i) => {
+      const ch = charOf(i);
+      if (c.role !== 'casing' || ch === undefined || !elementTakes(rule, ch, kind) || (chars !== undefined && !chars.includes(ch))) return;
+      if (layer !== undefined && c.pos[1] !== layer) return;
+      if (blockKey(c.block) !== usual.get(ch)) return;
+      if (casingsLeft.some((min) => min.chars.includes(ch) && min.left - 1 < min.min)) return;
+      for (let side = 0; side < DIRS.length; side++) {
+        const port = step(c.pos, side);
+        if (!open.has(posKey(port)) || claimed.has(posKey(port))) continue;
+        const rank = spotRank(plan, c.pos, side, controller[0], middle);
+        if (rank !== null && (best === null || compareRanks(rank, best.rank) < 0)) best = { i, side, port, rank };
+      }
+    });
+    return best;
+  };
+  const take = (spot: Spot): void => {
+    claimed.add(posKey(spot.port));
+    const ch = charOf(spot.i) ?? '';
+    for (const c of casingsLeft) if (c.chars.includes(ch)) c.left -= 1;
+  };
+  const place = (kind: HatchKind, tier: number | null, need: { slots?: number; litres?: number } | undefined,
+    where: { chars?: string; layer?: number } = {}, extra: { config?: BlockConfig; fluid?: StuffKey } = {}): Spot | null => {
+    if (!ruleTakes(rule, kind)) {
+      if (!notTaken.includes(kind)) notTaken.push(kind);
+      return null;
+    }
+    const cls = rule.classes?.[kind] ?? KIND_CLASS[kind];
+    const sized = rule.classes?.[kind] === undefined ? need : undefined;     // another class keeps its own sizes
+    const hatch = pickHatch(pack, cls as HatchClass, tier, sized);
+    const spot = spotFor(kind, where.chars, where.layer);
+    if (hatch === null || spot === null) {
+      short.push(kind);
+      return null;
+    }
+    take(spot);
+    hatchCell(cells, spot.i, hatch, kind, spot.side, extra);
+    if (holdsLess(hatch, sized)) {
+      warnings.push({ code: 'hatch_small', stepId: s.id, text: `${m.name}: the biggest ${hatch.name} holds less than one run needs — split the inputs by hand` });
+    }
+    return spot;
+  };
+
+  // an exported muffler (a hatch-only element the export builds) stays, at the lowest tier, facing an open side
+  const lowestMuffler = pickHatch(pack, 'MTEHatchMuffler', null);
+  let mufflers = 0;
+  cells.forEach((c, i) => {
+    if (c.role !== 'hatch' || c.hatch !== undefined || !isClass(pack, c.block.mteId, 'MTEHatchMuffler')) return;
+    const spot = [UP, WEST, EAST, SOUTH].map((side) => ({ side, port: step(c.pos, side) })).find((f) => open.has(posKey(f.port)) && !claimed.has(posKey(f.port)));
+    const hatch = lowestMuffler ?? pack.machines.get(c.block.mteId!)!;
+    // the exported muffler leaves the build list Plan 2 gave the structure when another tier takes its place
+    const swapped = hatch.mteId !== c.block.mteId && c.item !== undefined;
+    cells[i] = { pos: c.pos, block: machineRef(hatch), role: 'hatch', label: hatch.name, item: hatch.itemKey, hatch: 'muffler', face: spot?.side ?? UP,
+      ...(swapped ? { replaces: c.item! } : {}) };
+    if (spot !== undefined) {
+      claimed.add(posKey(spot.port));
+      shape.air.push([...spot.port]);
+    }
+    mufflers += 1;
+  });
+
+  // the circuit goes in the input bus's circuit slot, so a step with a circuit always gets one
+  if (io.itemIn || circuit !== undefined) {
+    place('input_bus', null, { slots: distinctItems(s.inputs) }, {}, circuit === undefined ? {} : { config: { circuit } });
+  }
+  if (io.itemOut) place('output_bus', null, { slots: distinctItems(s.outputs) });
+  if (electric) place('energy', s.machine.tier, undefined);
+  if (rulePower(rule) === 'steam' || rule.needs?.includes('steam') === true) place('steam', null, undefined);
+  for (const key of io.fluidIn) {
+    const slot = fluidInputSlot(recipe, key);
+    const chars = slot === undefined ? undefined : rule.fluidInputSlots?.[slot];
+    place('input_hatch', null, { litres: perRun(s.inputs, key) }, chars === undefined ? {} : { chars }, { fluid: key });
+  }
+  for (const [k, key] of outputs.entries()) {
+    const layer = rule.layerOutputs === undefined ? undefined : k + 1;
+    if (layer !== undefined && layer >= size[1]) {
+      short.push('output_hatch');
+      continue;
+    }
+    place('output_hatch', null, { litres: perRun(s.outputs, key) }, layer === undefined ? {} : { layer }, { fluid: key });
+  }
+  if (rule.layerOutputs !== undefined) {
+    // GT needs an output hatch on every layer above the bottom, also one no fluid of the recipe reaches
+    for (let y = 1; y < size[1]; y++) {
+      if (!cells.some((c) => c.hatch === 'output_hatch' && c.pos[1] === y)) place('output_hatch', null, undefined, { layer: y });
+    }
+  }
+  if (ruleTakes(rule, 'maintenance')) place('maintenance', null, undefined);
+  if (rule.needs?.includes('muffler') === true && mufflers === 0) {
+    const spot = place('muffler', null, undefined);
+    if (spot !== null) shape.air.push([...spot.port]);                                     // GT's muffler needs air in front
+  }
+
+  const needed = notTaken.filter((k) => k !== 'energy' && k !== 'maintenance');
+  if (needed.length > 0) {
+    warnings.push({ code: 'hatch_not_taken', stepId: s.id,
+      text: `${m.name} takes no ${orList(needed.map((k) => HATCH_TEXT[k]))} in GregTech: ${rule.byHand ?? 'move those items and fluids by hand'}` });
+  }
+  if (short.length > 0) {
+    warnings.push({ code: 'hatch_cells_short', stepId: s.id,
+      text: `${m.name}: put the remaining hatches (${short.map((k) => HATCH_TEXT[k]).join(', ')}) on casings GregTech takes them on (it shows them in game)` });
+  }
+  shape.air.sort(comparePos);
+  return { shape, io: placedIo(io, cells) };
+}
+
+/**
+ * A multiblock: its structure (or the unknown box) with hatch cells on its casings, by its rule (`ruledHatches`) when
+ * the rule fits the exported structure, else by the generic placement with `hatch_rules_unknown`. Electric unless it is
+ * a steam machine or its rule runs it on steam or nothing (a steam multiblock then says how to feed it).
+ */
+function multiblockShape(pack: Pack, m: Machine, s: PlanStep, io: StepIo, circuit: number | undefined, warnings: PlanWarning[]): MultiblockShape {
+  const exported = structureCells(pack, m);
+  if (exported === null) {
+    warnings.push({ code: 'structure_unknown', stepId: s.id, text: `${m.name}: no exported structure, drawn as a 3×3×3 box — check its real size in game` });
+    const shape = unknownBoxCells(pack, m);
+    const electric = m.kind !== 'steam';
+    return { shape, io: genericHatches(pack, m, s, io, electric, circuit, shape, warnings), electric };
+  }
+  const rule = hatchRuleFor(m);
+  const st = m.structure!;
+  if (rule === null || !ruleFits(rule, st.controller, st.size, st.blocks.map((b) => b.pos))) {
+    warnings.push({ code: 'hatch_rules_unknown', stepId: s.id,
+      text: `${m.name}: hatch positions are not checked against GregTech's rules here — if it does not form, move the hatches to the casings it shows in game` });
+    const electric = m.kind !== 'steam';
+    return { shape: exported, io: genericHatches(pack, m, s, io, electric, circuit, exported, warnings), electric };
+  }
+  const power = rulePower(rule);
+  const electric = m.kind !== 'steam' && power === 'eu';
+  if (power === 'steam') warnings.push({ code: 'steam_machine', stepId: s.id, text: `${m.name} runs on steam: connect a steam supply to its Steam Hatch by hand` });
+  const ruled = ruledHatches(pack, m, s, io, electric, circuit, rule, exported, warnings);
+  return { shape: ruled.shape, io: ruled.io, electric };
 }
 
 function copyCell(c: UnitCell): UnitCell {
   return { ...c, pos: [...c.pos], block: { ...c.block }, ...(c.config === undefined ? {} : { config: { ...c.config } }) };
+}
+
+/** The canonical side `face` of a unit in `row`: row S keeps it, row N is turned 180° (north ↔ south, west ↔ east). */
+function rowFace(face: number, row: 'N' | 'S'): number {
+  return row === 'S' ? face : face <= UP ? face : OPPOSITE[face]!;
 }
 
 /**
@@ -352,13 +682,13 @@ export function unitsFromPlan(pack: Pack, plan: Plan): { units: Unit[]; warnings
       warnings.push({ code: 'unknown_machine', stepId: s.id, text: `${s.machine.name} (#${s.machine.mteId}) is not in this recipe export` });
       continue;
     }
-    const electric = m.kind !== 'steam';
-    if (!electric) warnings.push({ code: 'steam_machine', stepId: s.id, text: `${m.name} runs on steam: connect a steam supply by hand` });
+    if (m.kind === 'steam') warnings.push({ code: 'steam_machine', stepId: s.id, text: `${m.name} runs on steam: connect a steam supply by hand` });
     const multiblock = m.kind === 'multiblock';
-    const io = stepIo(s);
     // the step's own circuit wins over the recipe's (ruling R5)
     const circuit = s.circuit ?? pack.recipeById.get(s.recipeId)?.meta.circuit;
-    const shape = multiblock ? multiblockShape(pack, m, s, io, electric, circuit, warnings) : singleblockShape(m, circuit);
+    const made = multiblock ? multiblockShape(pack, m, s, stepIo(s), circuit, warnings)
+      : { shape: singleblockShape(m, circuit), io: stepIo(s), electric: m.kind !== 'steam' };
+    const { shape, io, electric } = made;
     for (let index = 0; index < count; index++) {
       units.push({
         stepId: s.id, index, mteId: m.mteId, name: m.name, tier: s.machine.tier, euPerTick: s.euPerTick, electric, multiblock,
@@ -370,12 +700,28 @@ export function unitsFromPlan(pack: Pack, plan: Plan): { units: Unit[]; warnings
   return { units, warnings };
 }
 
-/** Per casing key: how many hatch cells replaced it, over all units; sorted by key. */
+/**
+ * Per block key of the exported structures: how many hatch cells replaced it (a casing, or an exported hatch another
+ * tier took the place of), over all units; sorted by key. A hatch on a layer the layout added replaced nothing exported.
+ */
 export function replacedCasings(units: readonly Unit[]): BomLine[] {
   const counts = new Map<ItemKey, number>();
-  for (const u of units) for (const c of u.cells) if (c.role === 'hatch' && c.replaces !== undefined) counts.set(c.replaces, (counts.get(c.replaces) ?? 0) + 1);
+  for (const u of units) {
+    for (const c of u.cells) if (c.role === 'hatch' && c.replaces !== undefined && c.added !== true) counts.set(c.replaces, (counts.get(c.replaces) ?? 0) + 1);
+  }
   return [...counts].sort((a, b) => compareText(a[0], b[0]))
     .map(([key, amount]): BomLine => ({ key, amount, why: 'replaced by hatches', group: 'machines' }));
+}
+
+/**
+ * Per block key: the casings of the layers the layout added to exported structures (a taller distillation tower), over
+ * all units; sorted by key. Plan 2's build list holds the exported structure only.
+ */
+export function addedBlocks(units: readonly Unit[]): BomLine[] {
+  const counts = new Map<ItemKey, number>();
+  for (const u of units) for (const c of u.cells) if (c.added === true && c.role === 'casing') counts.set(blockKey(c.block), (counts.get(blockKey(c.block)) ?? 0) + 1);
+  return [...counts].sort((a, b) => compareText(a[0], b[0]))
+    .map(([key, amount]): BomLine => ({ key, amount, why: 'taller structure than its smallest', group: 'machines' }));
 }
 
 // ---- Placement ----
@@ -396,18 +742,9 @@ function localCell(u: Unit, row: Row, x: number, spineZ: number, c: Vec3): Vec3 
   return row === 'S' ? [x + c[0], c[1], spineZ + 1 + c[2]] : [x + w - 1 - c[0], c[1], spineZ - d + (d - 1 - c[2])];
 }
 
-function hatchFacing(kind: HatchKind | undefined, row: Row): number | undefined {
-  switch (kind) {
-    case 'input_bus': case 'output_bus': return towardSpine(row);
-    case 'energy': case 'maintenance': return OPPOSITE[towardSpine(row)];
-    case 'input_hatch': case 'output_hatch': return UP;
-    default: return undefined;
-  }
-}
-
-/** Fluid hatches of `kind` in the order they were given their fluids: canonical (z, x), like the top-layer candidates. */
-function fluidHatches(u: Unit, kind: 'input_hatch' | 'output_hatch'): UnitCell[] {
-  return u.cells.filter((c) => c.hatch === kind).sort((a, b) => a.pos[2] - b.pos[2] || a.pos[0] - b.pos[0]);
+/** The side a hatch cell faces in `row`; none for a hatch the exported structure holds. */
+function hatchFacing(c: UnitCell, row: Row): number | undefined {
+  return c.face === undefined ? undefined : rowFace(c.face, row);
 }
 
 function unitPorts(u: Unit, row: Row, x: number, spineZ: number): UnitPorts {
@@ -421,28 +758,55 @@ function unitPorts(u: Unit, row: Row, x: number, spineZ: number): UnitPorts {
       items: [step(machine, toSpine)],
       fluidIn: u.io.fluidIn.length > 0 ? [step(machine, UP)] : [],
       fluidOut: u.io.fluidOut.length > 0 ? [step(machine, UP)] : [],
+      fluidInSides: u.io.fluidIn.length > 0 ? [DOWN] : [],
+      fluidOutSides: u.io.fluidOut.length > 0 ? [DOWN] : [],
       itemFaces: u.io.itemOut ? [{ pos: machine, side: toSpine }] : [],
       fluidFaces: u.io.fluidOut.length > 0 ? [{ pos: machine, side: UP }] : [],
     };
   }
-  const energy = u.cells.find((c) => c.hatch === 'energy');
+  const sideOf = (c: UnitCell): number => rowFace(c.face!, row);
+  const portOf = (c: UnitCell): Vec3 => step(at(c), sideOf(c));
+  const energy = u.cells.find((c) => c.hatch === 'energy' && c.face !== undefined);
+  // an item port is on the spine's column: on the spine, or above it in front of a bus GT takes only higher up
   const items: Vec3[] = [];
   for (const kind of ['input_bus', 'output_bus'] as const) {
     for (const c of u.cells) {
-      if (c.hatch !== kind) continue;
-      const front = step(at(c), toSpine);
-      if (front[1] === 0 && front[2] === spineZ && !items.some((p) => samePos(p, front))) items.push(front);
+      if (c.hatch !== kind || c.face === undefined) continue;
+      const port = portOf(c);
+      if (port[2] === spineZ && !items.some((p) => samePos(p, port))) items.push(port);
     }
   }
-  const outputHatches = fluidHatches(u, 'output_hatch');
+  // fluid hatches in `io` order: the unit's io holds only the fluids a hatch was placed for
+  const hatchesOf = (kind: 'input_hatch' | 'output_hatch', keys: readonly StuffKey[]): UnitCell[] =>
+    keys.flatMap((key) => u.cells.filter((c) => c.hatch === kind && c.fluid === key && c.face !== undefined).slice(0, 1));
+  const inputs = hatchesOf('input_hatch', u.io.fluidIn);
+  const outputs = hatchesOf('output_hatch', u.io.fluidOut);
   return {
-    power: energy === undefined ? null : step(at(energy), away),
+    power: energy === undefined ? null : portOf(energy),
     items,
-    fluidIn: fluidHatches(u, 'input_hatch').map((c) => step(at(c), UP)),
-    fluidOut: outputHatches.map((c) => step(at(c), UP)),
-    itemFaces: u.cells.filter((c) => c.hatch === 'output_bus').map((c) => ({ pos: at(c), side: toSpine })),
-    fluidFaces: outputHatches.map((c) => ({ pos: at(c), side: UP })),
+    fluidIn: inputs.map(portOf),
+    fluidOut: outputs.map(portOf),
+    fluidInSides: inputs.map((c) => OPPOSITE[sideOf(c)]!),
+    fluidOutSides: outputs.map((c) => OPPOSITE[sideOf(c)]!),
+    itemFaces: u.cells.filter((c) => c.hatch === 'output_bus' && c.face !== undefined).map((c) => ({ pos: at(c), side: sideOf(c) })),
+    fluidFaces: outputs.map((c) => ({ pos: at(c), side: sideOf(c) })),
   };
+}
+
+/**
+ * The cells beside a unit's own columns that it keeps for itself, canonical: what its hatches face there (their ports)
+ * and its reserved air there (a muffler's front).
+ */
+function besideCells(u: Unit): Vec3[] {
+  const w = u.size[0];
+  const out: Vec3[] = [];
+  for (const c of u.cells) {
+    if (c.role !== 'hatch' || c.face === undefined) continue;
+    const p = step(c.pos, c.face);
+    if (p[0] < 0 || p[0] >= w) out.push(p);
+  }
+  for (const a of u.air) if (a[0] < 0 || a[0] >= w) out.push([...a]);
+  return out;
 }
 
 /**
@@ -493,8 +857,14 @@ export function placeUnits(units: readonly Unit[], opts: { headWidth: number; po
     for (let d = -(portSpacing - 1); d <= portSpacing - 1; d++) if (claimed.has(px + d)) return true;
     return false;
   };
-  // item ports lie on the spine, so their x does not depend on where the spine ends up
+  // item ports lie on the spine's column, so their x does not depend on where the spine ends up
   const portXs = (u: Unit, row: Row, x: number) => unitPorts(u, row, x, 0).items.map((p) => p[0]);
+  // the cells beside a unit's columns it keeps (side ports, a muffler's air), in the row's own z (spine at 0)
+  const beside = (u: Unit, row: Row, x: number) => besideCells(u).map((p) => localCell(u, row, x, 0, p));
+  /** Per row: the cells the last unit keeps beside its columns, and the first column past them and the unit. */
+  const kept: Record<Row, Set<string>> = { N: new Set(), S: new Set() };
+  const reach: Record<Row, number> = { N: headWidth, S: headWidth };
+  const fits = (u: Unit, row: Row, x: number) => beside(u, row, x).every((p) => p[0] >= headWidth && !kept[row].has(posKey(p)));
   const slots: Array<{ u: Unit; row: Row; x: number }> = [];
   for (const u of ordered) {
     const row: Row = cursor.N <= cursor.S ? 'N' : 'S';
@@ -502,9 +872,13 @@ export function placeUnits(units: readonly Unit[], opts: { headWidth: number; po
     const tier = feedTier(u);
     const otherTier = tier !== null && besideTier[row] !== null && tier !== besideTier[row];
     let x = cursor[row] + ((before !== null && (u.multiblock || before.multiblock)) || otherTier ? 1 : 0);
-    if (portSpacing > 0) while (portXs(u, row, x).some(near)) x += 1;
+    // a port or air cell beside the unit stays off the power head and off the cells its neighbour keeps
+    while ((portSpacing > 0 && portXs(u, row, x).some(near)) || !fits(u, row, x)) x += 1;
     for (const px of portXs(u, row, x)) claimed.add(px);
     cursor[row] = x + u.size[0];
+    const own = beside(u, row, x);
+    kept[row] = new Set(own.map(posKey));
+    reach[row] = own.reduce((r, p) => Math.max(r, p[0] + 1), cursor[row]);
     previous[row] = u;
     besideTier[row] = tier;
     slots.push({ u, row, x });
@@ -513,7 +887,8 @@ export function placeUnits(units: readonly Unit[], opts: { headWidth: number; po
   const deepest = (row: Row) => slots.reduce((d, s) => (s.row === row ? Math.max(d, s.u.size[2]) : d), 0);
   const dN = deepest('N'), dS = deepest('S');
   const spineZ = 1 + dN;
-  const tailX = Math.max(cursor.N, cursor.S);
+  // the tail column stays clear of the cells the last unit of each row keeps beside it
+  const tailX = Math.max(reach.N, reach.S);
   const size: Vec3 = [tailX + 1, units.reduce((h, u) => Math.max(h, u.size[1]), 1), dN + dS + 3];
 
   const placed: PlacedUnit[] = [];
@@ -524,7 +899,7 @@ export function placeUnits(units: readonly Unit[], opts: { headWidth: number; po
     // a singleblock's output side faces the spine (its covers and inputs go there), its front elsewhere (GT keeps the two apart)
     const mainFacing = u.multiblock ? undefined : singleblockMainFacing();
     for (const c of u.cells) {
-      const facing = c.role === 'machine' ? toSpine : c.role === 'hatch' ? hatchFacing(c.hatch, row) : undefined;
+      const facing = c.role === 'machine' ? toSpine : c.role === 'hatch' ? hatchFacing(c, row) : undefined;
       blocks.push({
         pos: localCell(u, row, x, spineZ, c.pos), block: { ...c.block }, role: c.role, ...(facing === undefined ? {} : { facing }),
         ...(c.role === 'machine' && mainFacing !== undefined ? { mainFacing } : {}),
