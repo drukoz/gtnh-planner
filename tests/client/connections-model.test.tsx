@@ -6,7 +6,7 @@ import type { Plan } from '../../src/shared/types/plan.ts';
 import { connLayout, connPlan } from './connections-fixture.ts';
 import { ITEM, basic } from './enderio-fixture.ts';
 
-const MACERATOR_FACE = 'Item Conduit, north face to Basic Macerator: In / Out; extract on Red with a Basic Item Filter (whitelist: Titanium Dust; match meta, ignore NBT), '
+const MACERATOR_FACE = 'Item Conduit, north face to Basic Macerator: In / Out (2 filters); extract on Red with a Basic Item Filter (whitelist: Titanium Dust; match meta, ignore NBT), '
   + 'round robin off, self feed off, redstone Always active; insert on Blue with a Basic Item Filter (whitelist: Raw Input; match meta, ignore NBT), priority 1, '
   + 'into its output side: keep its Input from Output Side allowed (a newly crafted machine has it on; a Screwdriver right-click on that side of '
   + 'the machine, beside the conduit, switches it)';
@@ -87,6 +87,8 @@ describe('the Connections graph', () => {
   it("says each conduit face's mode and its sides' channels in a few words", () => {
     // in: into the block the face points at (the insert side), out: out of it (the extract side)
     expect(faceModeText({ mode: 'in_out', extract: 'red', insert: 'blue' })).toBe('In / Out · in Blue · out Red');
+    // the single pipe: both sides on the line's one channel name it once
+    expect(faceModeText({ mode: 'in_out', extract: 'red', insert: 'red' })).toBe('In / Out · Red');
     expect(faceModeText({ mode: 'extract', extract: 'light_blue' })).toBe('Extract · out Light Blue');
     expect(faceModeText({ mode: 'insert', insert: 'silver' })).toBe('Insert · in Light Gray');
     expect(faceModeText({ mode: 'disabled' })).toBe('Disabled');

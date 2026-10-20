@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { assignChannels, fluidFilterFor, itemFilterFor, pickFluidConduit, speedUpgradesFor } from '../../../src/server/layout/conduits.ts';
+import { assignChannels, fluidFilterFor, itemFilterFor, pickFluidConduit, speedUpgradesFor, type ChannelEnd } from '../../../src/server/layout/conduits.ts';
 import { resolveParts } from '../../../src/server/layout/parts.ts';
 import { conduitFaceText, conduitFilterText, conduitLines, conduitSideText } from '../../../src/shared/layout/configure-text.ts';
 import type { ConduitFace } from '../../../src/shared/types/layout.ts';
@@ -18,17 +18,17 @@ describe('conduit sizing', () => {
       { count: 0, short: false }, { count: 0, short: false }, { count: 1, short: false }, { count: 7, short: false },
       { count: 15, short: false }, { count: 15, short: true }]);
   });
-  it('picks the smallest item filter that holds the keys', () => {
+  it('picks the smallest item filter that holds the keys and says how many slots it has', () => {
     expect(itemFilterFor(parts, ['t:b@0', 't:a@0', 't:a@0'])).toEqual({ dropped: [], filter: {
-      item: BASIC, whitelist: true, keys: ['t:a@0', 't:b@0'], matchMeta: true, matchNbt: false, oreDict: false, sticky: false } });
-    expect(itemFilterFor(parts, keys(6)).filter.item).toBe('EnderIO:itemBasicFilterUpgrade@1');
-    expect(itemFilterFor(parts, keys(11)).filter.item).toBe('EnderIO:itemBigFilterUpgrade@0');
+      item: BASIC, whitelist: true, keys: ['t:a@0', 't:b@0'], matchMeta: true, matchNbt: false, oreDict: false, sticky: false, slots: 5 } });
+    expect([itemFilterFor(parts, keys(6)).filter.item, itemFilterFor(parts, keys(6)).filter.slots]).toEqual(['EnderIO:itemBasicFilterUpgrade@1', 10]);
+    expect([itemFilterFor(parts, keys(11)).filter.item, itemFilterFor(parts, keys(11)).filter.slots]).toEqual(['EnderIO:itemBigFilterUpgrade@0', 24]);
     const full = itemFilterFor(parts, keys(25));
     expect([full.filter.item, full.filter.keys.length, full.dropped]).toEqual(['EnderIO:itemBigFilterUpgrade@0', 24, ['t:i24@0']]);
     expect(itemFilterFor(parts, ['t:a@0#0123456789ab']).filter.matchNbt).toBe(true);
   });
   it('holds at most five fluids in a fluid conduit filter', () => {
-    expect(fluidFilterFor(['fluid:b', 'fluid:a'])).toEqual({ filter: { whitelist: true, keys: ['fluid:a', 'fluid:b'] }, dropped: [] });
+    expect(fluidFilterFor(['fluid:b', 'fluid:a'])).toEqual({ filter: { whitelist: true, keys: ['fluid:a', 'fluid:b'], slots: 5 }, dropped: [] });
     expect(fluidFilterFor(['fluid:a', 'fluid:b', 'fluid:c', 'fluid:d', 'fluid:e', 'fluid:f']).dropped).toEqual(['fluid:f']);
   });
   it('picks the first ender fluid conduit that carries the busiest face', () => {
@@ -41,40 +41,73 @@ describe('conduit sizing', () => {
   });
 });
 
+/** An end of the face `face` (its id unless given). */
+const end = (id: string, side: 'extract' | 'insert', keys: string[], more: Partial<ChannelEnd> = {}): ChannelEnd => ({ id, side, keys, face: id, ...more });
+/** The input chest of the item line: a stock, so its extract side keeps to its links. */
+const stock = (id: string, keys: string[]) => end(id, 'extract', keys, { guarded: true });
+/** `n` channels, each a stock handing `k` to a machine: any two on one colour would hand `k` to each other's machine. */
+const stocks = (n: number, keysOf: (i: number) => string[] = () => ['k']) => ({
+  ends: Array.from({ length: n }, (_, i) => [stock(`s${i}`, keysOf(i)), end(`m${i}`, 'insert', keysOf(i))]).flat(),
+  links: Array.from({ length: n }, (_, i) => ({ from: `s${i}`, to: `m${i}` })),
+});
+
 describe('channel colours', () => {
-  it('gives linked ends one colour and each channel the next colour of the palette', () => {
-    const plan = assignChannels([{ id: 'a', keys: ['k1'] }, { id: 'b', keys: ['k1'] }, { id: 'c', keys: ['k2'] }, { id: 'd', keys: ['k2'] }],
-      [{ from: 'a', to: 'b' }, { from: 'c', to: 'd' }]);
-    expect(Object.fromEntries(plan.colors)).toEqual({ a: 'red', b: 'red', c: 'blue', d: 'blue' });
+  it('puts every channel on the one colour of the line while no guarded end can trade off its links', () => {
+    // two channels of their own (a hands k1 to b, c hands k2 to d) and a third that takes k1 too: filters keep each item
+    // to the faces that take it, so all of them share Red
+    const plan = assignChannels([end('a', 'extract', ['k1']), end('b', 'insert', ['k1']), end('c', 'extract', ['k2']), end('d', 'insert', ['k2']),
+      end('e', 'insert', ['k1'])], [{ from: 'a', to: 'b' }, { from: 'c', to: 'd' }]);
+    expect(Object.fromEntries(plan.colors)).toEqual({ a: 'red', b: 'red', c: 'red', d: 'red', e: 'red' });
     expect(plan.shared).toEqual([]);
   });
-  it('reuses a colour past 15 channels only for a channel with no item in common', () => {
-    const ends = [...Array.from({ length: 16 }, (_, i) => ({ id: `e${i}`, keys: [`k${i}`] })), { id: 'e16', keys: ['k0'] }];
-    const plan = assignChannels(ends, []);
-    expect([plan.colors.get('e14'), plan.colors.get('e15'), plan.colors.get('e16')]).toEqual(['silver', 'red', 'blue']);
+  it('gives a channel the next colour when a stock on the colour would hand it one of its keys', () => {
+    // the input chest hands k to b; a hands k to c: on one colour the chest would fill c as well and a would back up
+    const plan = assignChannels([stock('chest', ['k', 'j']), end('b', 'insert', ['k']), end('a', 'extract', ['k']), end('c', 'insert', ['k']),
+      end('x', 'extract', ['j2']), end('y', 'insert', ['j2'])], [{ from: 'chest', to: 'b' }, { from: 'a', to: 'c' }, { from: 'x', to: 'y' }]);
+    expect(Object.fromEntries(plan.colors)).toEqual({ chest: 'red', b: 'red', a: 'blue', c: 'blue', x: 'red', y: 'red' });
     expect(plan.shared).toEqual([]);
   });
-  it('shares the least-shared colour and says so when every colour carries the item', () => {
-    const plan = assignChannels(Array.from({ length: 16 }, (_, i) => ({ id: `e${i}`, keys: ['k'] })), []);
-    expect(plan.colors.get('e15')).toBe('red');
+  it('gives a channel the next colour when a guarded insert side on the colour would take one of its keys', () => {
+    // an open fluid end has no priority, so a maker whose fluid goes to a machine must not reach it
+    const plan = assignChannels([end('a', 'extract', ['f']), end('tank', 'insert', ['f'], { guarded: true }), end('b', 'extract', ['f']),
+      end('c', 'insert', ['f'])], [{ from: 'a', to: 'tank' }, { from: 'b', to: 'c' }]);
+    expect(Object.fromEntries(plan.colors)).toEqual({ a: 'red', tank: 'red', b: 'blue', c: 'blue' });
+  });
+  it('never counts the two sides of one face against each other', () => {
+    // an In / Out open end takes Molten Iron in and sends the surplus out: EnderIO never fills the tank it drains
+    const plan = assignChannels([end('in', 'extract', ['f'], { face: 'tank', guarded: true }), end('m', 'insert', ['f']), end('p', 'extract', ['f']),
+      end('out', 'insert', ['f'], { face: 'tank', guarded: true })], [{ from: 'in', to: 'm' }, { from: 'p', to: 'out' }]);
+    expect(new Set(plan.colors.values())).toEqual(new Set(['red']));
+  });
+  it('shares the colour with the fewest keys that would leak once the palette is used up, and names them', () => {
+    const plan = assignChannels(stocks(16).ends, stocks(16).links);
+    expect([plan.colors.get('s0'), plan.colors.get('s14'), plan.colors.get('m14'), plan.colors.get('s15')]).toEqual(['red', 'silver', 'silver', 'red']);
     expect(plan.shared).toEqual([{ color: 'red', keys: ['k'] }]);
   });
   it('refuses a link to an end it does not know', () => {
-    expect(() => assignChannels([{ id: 'a', keys: [] }], [{ from: 'a', to: 'x' }])).toThrow(RangeError);
+    expect(() => assignChannels([end('a', 'extract', [])], [{ from: 'a', to: 'x' }])).toThrow(RangeError);
   });
 });
 
 describe('the words for a conduit face', () => {
   const filter = (k: string) => ({ item: BASIC, whitelist: true, keys: [k], matchMeta: true, matchNbt: false, oreDict: false, sticky: false });
-  it('says both sides of an In / Out face, each with its own colour and filter', () => {
+  it('says both sides of an In / Out face, each with its own colour and filter, and what the face holds', () => {
     const face: ConduitFace = { face: 'north', mode: 'in_out', target: 'Basic Macerator',
       extract: { color: 'red', filter: filter('t:dust@0'), rate: 20, roundRobin: false, selfFeed: false, redstone: 'ignore', speed: { item: SPEED, count: 2 } },
       insert: { color: 'blue', filter: filter('t:in@0'), rate: 20, priority: 1 } };
-    expect(conduitFaceText('item', face, nameOf)).toBe('Item Conduit, north face to Basic Macerator: In / Out; '
+    expect(conduitFaceText('item', face, nameOf)).toBe('Item Conduit, north face to Basic Macerator: In / Out (2 filters, 2 speed upgrades); '
       + 'extract on Red with a Basic Item Filter (whitelist: Titanium Dust; match meta, ignore NBT), 2× Item Conduit Speed Upgrade, round robin off, self feed off, redstone Always active; '
       + 'insert on Blue with a Basic Item Filter (whitelist: Raw Input; match meta, ignore NBT), priority 1');
   });
+  it("names the slots a filter's items fill out of the filter's own, so the builder knows which filter each list needs", () => {
+    const face: ConduitFace = { face: 'south', mode: 'insert', target: 'Chest (output)',
+      insert: { color: 'red', filter: { ...filter('t:dust@0'), keys: ['t:dust@0', 't:in@0'], slots: 5 }, rate: 2, priority: 0 } };
+    expect(conduitFaceText('item', face, nameOf)).toBe('Item Conduit, south face to Chest (output): Insert (1 filter); insert on Red with a Basic '
+      + 'Item Filter (whitelist, 2 of 5 slots: Titanium Dust and Raw Input; match meta, ignore NBT), priority 0');
+    expect(conduitFilterText({ whitelist: true, keys: ['fluid:molten.iron'], slots: 5 }, nameOf)).toBe('fluid filter (whitelist, 1 of 5 slots: Molten Iron)');
+  });
   it('says a fluid face and a disabled face', () => {
+    // an ender fluid conduit's filters are its own, so the face holds no filter item
     expect(conduitFaceText('liquid_ender', { face: 'down', mode: 'extract', target: 'Basic Fluid Extractor',
       extract: { color: 'red', filter: { whitelist: true, keys: ['fluid:molten.iron'] }, rate: 1, roundRobin: false, redstone: 'ignore' } }, nameOf))
       .toBe('Ender Fluid Conduit, bottom face to Basic Fluid Extractor: Extract; extract on Red with a fluid filter (whitelist: Molten Iron), round robin off, redstone Always active');
@@ -93,8 +126,7 @@ describe('the words for a conduit face', () => {
 
 const ADVANCED = 'EnderIO:itemBasicFilterUpgrade@1';
 const BIG = 'EnderIO:itemBigFilterUpgrade@0';
-const endsOf = (n: number, keysOf: (i: number) => string[]) => Array.from({ length: n }, (_, i) => ({ id: `e${i}`, keys: keysOf(i) }));
-const colorsOf = (ends: Array<{ id: string; keys: string[] }>, links: Array<{ from: string; to: string }>) => Object.fromEntries(assignChannels(ends, links).colors);
+const colorsOf = (ends: ChannelEnd[], links: Array<{ from: string; to: string }>) => Object.fromEntries(assignChannels(ends, links).colors);
 
 describe('conduit sizing at its edges', () => {
   it('moves up a filter size only past 5 and 10 items', () => {
@@ -115,28 +147,38 @@ describe('conduit sizing at its edges', () => {
 
 describe('channel colours in detail', () => {
   it('colours channels by their first end, whatever order the links come in', () => {
-    const three = [{ id: 'a', keys: ['k1'] }, { id: 'b', keys: ['k2'] }, { id: 'c', keys: ['k1'] }];
-    expect(colorsOf(three, [{ from: 'c', to: 'a' }])).toEqual({ a: 'red', b: 'blue', c: 'red' });
-    expect(colorsOf(three, [{ from: 'c', to: 'b' }])).toEqual({ a: 'red', b: 'blue', c: 'blue' });
-    const four = [...three, { id: 'd', keys: ['k2'] }];
-    const chain = colorsOf(four, [{ from: 'd', to: 'c' }, { from: 'b', to: 'c' }]);                // b, c and d are one channel
-    expect(chain).toEqual({ a: 'red', b: 'blue', c: 'blue', d: 'blue' });
-    expect(colorsOf(four, [{ from: 'b', to: 'c' }, { from: 'c', to: 'd' }])).toEqual(chain);
+    // c hands k1 to the chest's machine b unless they share a channel; d's channel takes k1 from c
+    const four = [end('b', 'insert', ['k1']), stock('chest', ['k1']), end('c', 'extract', ['k1']), end('d', 'insert', ['k1'])];
+    expect(colorsOf(four, [{ from: 'chest', to: 'b' }, { from: 'c', to: 'd' }])).toEqual({ b: 'red', chest: 'red', c: 'blue', d: 'blue' });
+    expect(colorsOf(four, [{ from: 'c', to: 'd' }, { from: 'chest', to: 'b' }])).toEqual({ b: 'red', chest: 'red', c: 'blue', d: 'blue' });
+    // with c also feeding b, all four trade along links: one channel
+    expect(colorsOf(four, [{ from: 'c', to: 'b' }, { from: 'chest', to: 'b' }, { from: 'c', to: 'd' }])).toEqual({ b: 'red', chest: 'red', c: 'red', d: 'red' });
   });
   it('compares a whole channel with a colour, not only its first end', () => {
-    const plan = assignChannels([...endsOf(15, (i) => [`k${i}`]), { id: 'x', keys: ['k0'] }, { id: 'y', keys: ['k1'] }], [{ from: 'x', to: 'y' }]);
-    expect([plan.colors.get('x'), plan.colors.get('y')]).toEqual(['yellow', 'yellow']);                 // red carries k0, blue k1, yellow neither
-    expect(plan.shared).toEqual([]);
+    // the third channel's first end takes nothing the stock gives, its second does
+    const plan = assignChannels([stock('chest', ['k']), end('m', 'insert', ['k']), end('x', 'extract', ['j']), end('y', 'insert', ['j', 'k'])],
+      [{ from: 'chest', to: 'm' }, { from: 'x', to: 'y' }]);
+    expect([plan.colors.get('x'), plan.colors.get('y')]).toEqual(['blue', 'blue']);
   });
-  it('shares the colour with the fewest items in common and names them sorted', () => {
-    const plan = assignChannels(endsOf(16, (i) => (i === 1 ? ['x'] : ['y', 'x'])), []);
-    expect(plan.colors.get('e15')).toBe('blue');
+  it('leaves a stock on the colour of a channel that only gives what the stock gives', () => {
+    // a second maker of k hands it to its own machine: k from the chest would reach that machine, k from the maker the
+    // chest never takes (an extract side takes nothing), so only the machine's side counts
+    const plan = assignChannels([stock('chest', ['k']), end('m', 'insert', ['k']), end('a', 'extract', ['k']), end('n', 'insert', ['j'])],
+      [{ from: 'chest', to: 'm' }, { from: 'a', to: 'n' }]);
+    expect(new Set(plan.colors.values())).toEqual(new Set(['red']));
+  });
+  it('shares the colour with the fewest leaking keys and names them sorted', () => {
+    // fifteen channels hand x and y to each other's machines; the sixteenth hands only x, so a colour whose stock gives x alone leaks least
+    const keysOf = (i: number) => (i === 1 ? ['x'] : ['y', 'x']);
+    const { ends, links } = stocks(16, keysOf);
+    const plan = assignChannels(ends, links);
+    expect(plan.colors.get('s15')).toBe('blue');
     expect(plan.shared).toEqual([{ color: 'blue', keys: ['x'] }]);
-    expect(assignChannels(endsOf(16, () => ['y', 'x']), []).shared).toEqual([{ color: 'red', keys: ['x', 'y'] }]);
+    expect(assignChannels(stocks(16, () => ['y', 'x']).ends, stocks(16, () => ['y', 'x']).links).shared).toEqual([{ color: 'red', keys: ['x', 'y'] }]);
   });
   it('refuses a link from an end it does not know and two ends with one id', () => {
-    expect(() => assignChannels([{ id: 'a', keys: [] }], [{ from: 'x', to: 'a' }])).toThrow(RangeError);
-    expect(() => assignChannels([{ id: 'a', keys: [] }, { id: 'a', keys: [] }], [])).toThrow(RangeError);
+    expect(() => assignChannels([end('a', 'insert', [])], [{ from: 'x', to: 'a' }])).toThrow(RangeError);
+    expect(() => assignChannels([end('a', 'extract', []), end('a', 'insert', [])], [])).toThrow(RangeError);
   });
 });
 

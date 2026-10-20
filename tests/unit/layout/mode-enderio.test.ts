@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { channelWarnings } from '../../../src/server/layout/modes/enderio.ts';
 import { buildMode, PORT_SPACING, stepItemOutputs } from '../../../src/server/layout/modes/mode.ts';
-import { CHANNEL_PALETTE } from '../../../src/shared/layout/enderio.ts';
 import { OPPOSITE, posKey, step } from '../../../src/shared/layout/geometry.ts';
 import { makePlan, makeScan, IDS, type StepSpec } from '../../helpers/layout-fixtures.ts';
 import { BASIC, ITEM, basic, faces, keysN, setup, twoStep } from '../../helpers/enderio-fixtures.ts';
@@ -25,25 +25,26 @@ const manyInputs = (n: number) => makePlan([{ id: 's1', mteId: IDS.ASSEMBLER, co
   { flows: [...keysN(n).map((key) => ({ from: 'raw', to: 's1', key, perSecond: 1 })), { from: 's1', to: 'out', key: 't:out_s1@0', perSecond: 1 }] });
 
 describe('EnderIO mode — items', () => {
-  it('lays an Item Conduit along the spine and sets every machine face to In / Out with its own filters and colours', () => {
+  it('lays one Item Conduit along the spine, every machine face In / Out with its own filters, all on the line\'s one channel', () => {
     const r = buildMode('enderio', { ...setup(), network: null });
     expect(r.blocks.filter((b) => b.conduits !== undefined).map((b) => [b.pos, b.role, b.block.id, b.label, b.item, b.connections])).toEqual([
       [[1, 0, 2], 'pipe', 'conduit:item', 'Item Conduit', ITEM, 4 | 8 | 32],
       [[2, 0, 2], 'pipe', 'conduit:item', 'Item Conduit', ITEM, 4 | 16 | 32],
       [[3, 0, 2], 'pipe', 'conduit:item', 'Item Conduit', ITEM, 4 | 8 | 16]]);
+    // every machine's outputs go into the one pipe and the insert filters (and priorities) send each item on: Red only
     const s1 = { mode: 'in_out', target: 'Basic Macerator',
       extract: { color: 'red', filter: basic(['t:out_s1@0']), rate: 0.5, roundRobin: false, selfFeed: false, redstone: 'ignore' },
       // a singleblock takes the face's items through its output side (GT's Input from Output Side, plan 11 Task 3's configs)
-      insert: { color: 'blue', filter: basic(['t:in@0']), rate: 0.5, priority: 1, outputSide: true } };
+      insert: { color: 'red', filter: basic(['t:in@0']), rate: 0.5, priority: 1, outputSide: true } };
     expect(r.blocks.find((b) => posKey(b.pos) === '1,0,2')!.conduits).toEqual([
       { kind: 'item', item: ITEM, connections: 32, faces: [{ face: 'north', ...s1 }, { face: 'south', ...s1 }] }]);
     expect(faces(r).filter((f) => posKey(f.pos) !== '1,0,2').map(({ pos: _pos, kind: _kind, ...f }) => f)).toEqual([
       { face: 'north', mode: 'in_out', target: 'Advanced Assembler',
-        extract: { color: 'yellow', filter: basic(['t:out_s2@0']), rate: 1, roundRobin: false, selfFeed: false, redstone: 'ignore' },
+        extract: { color: 'red', filter: basic(['t:out_s2@0']), rate: 1, roundRobin: false, selfFeed: false, redstone: 'ignore' },
         insert: { color: 'red', filter: basic(['t:out_s1@0']), rate: 1, priority: 1, outputSide: true } },
       { face: 'north', mode: 'extract', target: 'Chest (input)',
-        extract: { color: 'blue', filter: basic(['t:in@0']), rate: 1, roundRobin: true, selfFeed: false, redstone: 'ignore' } },
-      { face: 'south', mode: 'insert', target: 'Chest (output)', insert: { color: 'yellow', filter: basic(['t:out_s2@0']), rate: 1, priority: 0 } }]);
+        extract: { color: 'red', filter: basic(['t:in@0']), rate: 1, roundRobin: true, selfFeed: false, redstone: 'ignore' } },
+      { face: 'south', mode: 'insert', target: 'Chest (output)', insert: { color: 'red', filter: basic(['t:out_s2@0']), rate: 1, priority: 0 } }]);
     expect(r.configs).toEqual([{ pos: [1, 0, 1], config: { inputFromOutputSide: true } }, { pos: [1, 0, 3], config: { inputFromOutputSide: true } },
       { pos: [2, 0, 1], config: { inputFromOutputSide: true } }]);
     expect(r.blocks.filter((b) => b.role === 'chest').map((b) => [b.pos, b.label, b.tail])).toEqual([
@@ -67,7 +68,7 @@ describe('EnderIO mode — items', () => {
     expect(r.extraParts).toEqual([{ key: 'EnderIO:itemBasicFilterUpgrade@0', amount: 1, why: 'filter at the storage tap', group: 'logistics' }]);
     expect(r.drafts.map((d) => [d.id, d.pin])).toEqual([['layout:logistics:line', 'site'], ['layout:configure:conduit-tap', 'logistics']]);
     expect(r.drafts[1]!.text).toBe('At the storage tap set the conduit face toward your storage to Extract (In / Out if it already inserts, its insert '
-      + 'side left as it is); extract on Light Gray with a Basic Item Filter (whitelist: Raw Input; match meta, ignore NBT), round robin off, self feed '
+      + 'side left as it is); extract on Light Gray with a Basic Item Filter (whitelist, 1 of 5 slots: Raw Input; match meta, ignore NBT), round robin off, self feed '
       + `off, redstone Always active. ${TAP_NOTE}`);
   });
 
@@ -80,6 +81,51 @@ describe('EnderIO mode — items', () => {
     // face that takes it, the machines (priority 1) before the chest (0)
     expect([a.extract!.roundRobin, a.extract!.rate, b.insert!.priority, c.insert!.priority, out.insert!.priority]).toEqual([false, 3, 1, 1, 0]);
     expect(out.insert!.filter!.keys).toEqual(['t:dust@0', 't:ingot@0', 't:out_c@0']);
+  });
+
+  it('gives the raw inputs a channel of their own only where a machine makes one of them for another machine', () => {
+    // b takes Dust from the input chest, c takes it from a: on one colour the chest would fill c as well (it hands out
+    // as fast as the conduit moves) and a would back up, which no filter stops, as c does take Dust; Ingot and
+    // t:out_c@0 only go out, so the output chest shares a's colour
+    const plan = makePlan([
+      { id: 'a', mteId: IDS.MACERATOR, count: 1, outputs: [['t:dust@0', 1]] },
+      { id: 'b', mteId: IDS.ASSEMBLER, count: 1, tier: 2, inputs: [['t:dust@0', 1]], outputs: [['t:ingot@0', 1]] },
+      { id: 'c', mteId: IDS.CHEM_HV, count: 1, tier: 3, inputs: [['t:dust@0', 1]], outputs: [['t:out_c@0', 1]] },
+    ], { flows: [{ from: 'raw', to: 'a', key: 't:in@0', perSecond: 1 }, { from: 'raw', to: 'b', key: 't:dust@0', perSecond: 1 },
+      { from: 'a', to: 'c', key: 't:dust@0', perSecond: 1 }, { from: 'b', to: 'out', key: 't:ingot@0', perSecond: 1 },
+      { from: 'c', to: 'out', key: 't:out_c@0', perSecond: 1 }] });
+    const r = buildMode('enderio', { ...setup(plan), network: null });
+    const at = (target: string) => faces(r).find((f) => f.target === target)!;
+    const [a, b, c, chest, out] = [at('Basic Macerator'), at('Advanced Assembler'), at('Advanced Chemical Reactor'), at('Chest (input)'), at('Chest (output)')];
+    expect([chest.extract!.color, a.insert!.color, b.insert!.color]).toEqual(['blue', 'blue', 'blue']);
+    expect([a.extract!.color, c.insert!.color, b.extract!.color, c.extract!.color, out.insert!.color]).toEqual(['red', 'red', 'red', 'red', 'red']);
+    expect(r.warnings).toEqual([]);
+  });
+
+  it('keeps a raw input off the output chest that collects the same item from a machine', () => {
+    // the chest would take Dust from the input chest whenever b is full and fill up with it
+    const plan = makePlan([
+      { id: 'a', mteId: IDS.MACERATOR, count: 1, outputs: [['t:dust@0', 1]] },
+      { id: 'b', mteId: IDS.ASSEMBLER, count: 1, tier: 2, inputs: [['t:dust@0', 1]], outputs: [['t:ingot@0', 1]] },
+    ], { flows: [{ from: 'raw', to: 'a', key: 't:in@0', perSecond: 1 }, { from: 'raw', to: 'b', key: 't:dust@0', perSecond: 1 },
+      { from: 'a', to: 'out', key: 't:dust@0', perSecond: 1 }, { from: 'b', to: 'out', key: 't:ingot@0', perSecond: 1 }] });
+    const r = buildMode('enderio', { ...setup(plan), network: null });
+    const at = (target: string) => faces(r).find((f) => f.target === target)!;
+    expect([at('Basic Macerator').extract!.color, at('Chest (output)').insert!.color, at('Advanced Assembler').extract!.color]).toEqual(['red', 'red', 'red']);
+    expect([at('Chest (input)').extract!.color, at('Basic Macerator').insert!.color, at('Advanced Assembler').insert!.color]).toEqual(['blue', 'blue', 'blue']);
+  });
+
+  it('round robins a face whose item two machines take, though the output chest takes another of its items', () => {
+    // EnderIO's round robin hands each extraction to the next face that takes it, so the chest only ever gets By-product
+    const plan = makePlan([
+      { id: 'a', mteId: IDS.MACERATOR, count: 1, outputs: [['t:dust@0', 2], ['t:by@0', 1]] },
+      { id: 'b', mteId: IDS.ASSEMBLER, count: 1, tier: 2, inputs: [['t:dust@0', 1]], outputs: [['t:ingot@0', 1]] },
+      { id: 'c', mteId: IDS.CHEM_HV, count: 1, tier: 3, inputs: [['t:dust@0', 1]], outputs: [['t:out_c@0', 1]] },
+    ], { flows: [{ from: 'raw', to: 'a', key: 't:in@0', perSecond: 1 }, { from: 'a', to: 'b', key: 't:dust@0', perSecond: 1 },
+      { from: 'a', to: 'c', key: 't:dust@0', perSecond: 1 }, { from: 'a', to: 'out', key: 't:by@0', perSecond: 1 },
+      { from: 'b', to: 'out', key: 't:ingot@0', perSecond: 1 }, { from: 'c', to: 'out', key: 't:out_c@0', perSecond: 1 }] });
+    const r = buildMode('enderio', { ...setup(plan), network: null });
+    expect(faces(r).find((f) => f.target === 'Basic Macerator')!.extract!.roundRobin).toBe(true);
   });
 
   it('round robins only between machine faces, so a surplus for the output chest never takes a machine\'s share', () => {
@@ -246,17 +292,24 @@ describe('EnderIO mode — tail chests, the storage tap and warnings', () => {
       { code: 'filter_full', text: `The extract filter toward Chest (input) holds 24 items, so ${left}` }]);
   });
 
-  it('reuses the least-shared colour past 15 channels and says which items it carries', () => {
+  it('keeps sixteen channels that trade nothing off their flows on one colour', () => {
     const ids = Array.from({ length: 16 }, (_, i) => `e${String(i).padStart(2, '0')}`);
     // sixteen machines that only take Raw Input (and make nothing, so no fluid conduit is laid), each its own channel:
-    // nothing feeds them, so nothing links their faces
+    // nothing feeds them, so nothing links their faces, and with no input chest nothing guards a key
     const plan = makePlan(ids.map((id): StepSpec => ({ id, mteId: IDS.EXTRACTOR, count: 1, outputs: [] })), { flows: [] });
     const r = buildMode('enderio', { ...setup(plan), network: null });
-    expect(faces(r).map((f) => [f.mode, f.insert!.color])).toEqual([...CHANNEL_PALETTE, 'red'].map((color) => ['insert', color]));
-    expect(r.warnings).toEqual([{ code: 'conduit_channels',
-      text: 'More than 15 conduit channels are needed: Red also carries Raw Input, so they can reach a machine that does not take them' }]);
+    expect(faces(r).map((f) => [f.mode, f.insert!.color])).toEqual(ids.map(() => ['insert', 'red']));
+    expect(r.warnings).toEqual([]);
     expect(r.drafts).toEqual([{ id: 'layout:logistics:line', kind: 'logistics', pin: 'site',
       text: "Lay 9× Item Conduit along the middle row so it touches every machine's output side or bus" }]);
+  });
+
+  it('says which items can reach a face the plan does not send them to once more than 15 channels are needed', () => {
+    const { pack, plan } = setup(manyInputs(1));
+    expect(channelWarnings({ pack, plan }, { shared: [{ color: 'red', keys: ['t:i00@0'] }, { color: 'blue', keys: ['t:i00@0', 't:in@0'] }] })).toEqual([
+      { code: 'conduit_channels', text: 'More than 15 conduit channels are needed: Red also carries t:i00@0, so it can reach a face the plan does not send it to' },
+      { code: 'conduit_channels',
+        text: 'More than 15 conduit channels are needed: Blue also carries t:i00@0 and Raw Input, so they can reach a face the plan does not send them to' }]);
   });
 
   it('sizes the storage tap face to the input rate and lists its filter and speed upgrades', () => {
@@ -267,7 +320,7 @@ describe('EnderIO mode — tail chests, the storage tap and warnings', () => {
       { key: SPEED, amount: 2, why: 'speed upgrades at the storage tap', group: 'logistics' }]);
     expect(r.drafts.map((d) => d.id)).toEqual(['layout:logistics:line', 'layout:configure:conduit-tap']);
     expect(r.drafts[1]!.text).toBe('At the storage tap set the conduit face toward your storage to Extract (In / Out if it already inserts, its insert '
-      + 'side left as it is); extract on Light Gray with a Basic Item Filter (whitelist: Raw Input; match meta, ignore NBT), 2× Item Conduit Speed '
+      + 'side left as it is); extract on Light Gray with a Basic Item Filter (whitelist, 1 of 5 slots: Raw Input; match meta, ignore NBT), 2× Item Conduit Speed '
       + `Upgrade, round robin off, self feed off, redstone Always active. ${TAP_NOTE}`);
     expect(r.hookup!.endConduit!.face.insert).toEqual({ color: 'silver', filter: basic(['t:in@0']), rate: 20, priority: 1 });
   });

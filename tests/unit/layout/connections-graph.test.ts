@@ -1,9 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { connectionsGraph } from '../../../src/client/connections/model.ts';
+import { blockKey, buildScene } from '../../../src/client/three/scene-data.ts';
 import { layoutLine } from '../../../src/server/layout/layout.ts';
+import { dyeRgb } from '../../../src/shared/layout/enderio.ts';
 import { posKey } from '../../../src/shared/layout/geometry.ts';
+import { FACES, type BlockFaces } from '../../../src/shared/types/assets.ts';
 import { IDS, layoutPack, makePlan, makeProject } from '../../helpers/layout-fixtures.ts';
-import { lineGround, lineScan, twoStep } from '../../helpers/enderio-fixtures.ts';
+import { fluidPlan, lineGround, lineScan, twoStep } from '../../helpers/enderio-fixtures.ts';
 
 const placement = { origin: [30, 64, 10] as [number, number, number], rotation: 0 as const };
 
@@ -21,6 +24,27 @@ describe('Connections of laid-out lines', () => {
     expect(g.edges.filter((e) => e.via === 'item_conduit').every((e) => e.color !== null && e.fromFace !== null && e.toFace !== null)).toBe(true);
     const hookup = layout.hookups.findIndex((h) => h.kind === 'logistics');
     expect(g.edges.find((e) => e.via === 'hookup')).toMatchObject({ from: `hookup:${hookup}`, to: chest('input') });
+  });
+
+  it("draws the single pipe: every link and 3D arrow on Red, and a fluid machine's item and fluid conduits on the one side it is met on", async () => {
+    // fluidPlan: the extractor makes Molten Iron from Raw Input for the solidifier, which makes t:out_y@0
+    const plan = fluidPlan();
+    const layout = await layoutLine(layoutPack(), plan, lineScan(), makeProject({ logistics: 'enderio', placement }), lineGround());
+    const g = connectionsGraph(layout, plan, 'min');
+    expect(g.edges.filter((e) => e.key !== null).map((e) => [e.via, e.color])).toEqual([
+      ['item_conduit', 'red'], ['fluid_conduit', 'red'], ['item_conduit', 'red']]);
+    const rows = (step: string) => g.nodes.find((n) => n.id === `step:${step}`)!.faces.filter((f) => f.id.includes('#conduit:'))
+      .map((f) => [f.title.replace(/^.*, (\w+) side · (.*)$/, '$1 $2'), f.mode]);
+    expect([rows('x'), rows('y')]).toEqual([
+      [['south Item Conduit', { mode: 'insert', insert: 'red' }], ['south Ender Fluid Conduit', { mode: 'extract', extract: 'red' }]],
+      [['north Item Conduit', { mode: 'extract', extract: 'red' }], ['north Ender Fluid Conduit', { mode: 'insert', insert: 'red' }]]]);
+    // the connectors' arrows, tinted with their sides' channels as EnderIO draws them
+    const texture = (id: string): [string, BlockFaces] => [blockKey({ id, meta: 0 }), { block: { id, meta: 0 }, resolved: true, fallbackColor: [1, 2, 3],
+      faces: Object.fromEntries(FACES.map((f) => [f, [{ path: `${id}.png` }]])) as BlockFaces['faces'] }];
+    const scene = buildScene(layout, new Map(['background', 'extract', 'insert', 'in_out_in', 'in_out_out'].map((p) => texture(`conduit:connector_${p}`))),
+      new Map(), new Map());
+    const tints = new Set(scene.tiles.flatMap((t) => t.layers.flatMap((l) => (l.tint === undefined ? [] : [l.tint.join(',')]))));
+    expect(tints).toEqual(new Set([dyeRgb('red').join(',')]));
   });
 
   it('builds a link per flow in the other three modes', async () => {

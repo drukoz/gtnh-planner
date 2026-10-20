@@ -11,7 +11,7 @@ import { conduitBlockRef, FACES, type Face } from '../../../src/shared/types/ass
 import type { ConduitFace, ConduitSpec, Layout, LayoutBlock } from '../../../src/shared/types/layout.ts';
 import type { BuildStep } from '../../../src/shared/types/plan.ts';
 import { flatVoxels, IDS, layoutPack, makePlan, makeProject } from '../../helpers/layout-fixtures.ts';
-import { BASIC, ENDER, ITEM, basic, fluidPlan, lineGround, lineScan, setup, twoStep } from '../../helpers/enderio-fixtures.ts';
+import { BASIC, ENDER, ITEM, basic, lineGround, lineScan, setup, twoStep } from '../../helpers/enderio-fixtures.ts';
 
 const placed = (rotation: 0 | 90 | 180 | 270) => makeProject({ logistics: 'enderio', placement: { origin: [30, 64, 10], rotation } });
 /**
@@ -42,8 +42,8 @@ describe('an EnderIO line in the layout', () => {
     expect(steps.map((s) => s.id)).toEqual(['layout:conduit:3,0,2:item:north', 'layout:conduit:3,0,2:item:south', 'layout:conduit:5,0,2:item:north',
       'layout:conduit:6,0,2:item:north', 'layout:conduit:6,0,2:item:south']);
     expect(steps.every((s) => s.kind === 'configure' && s.pin === layout.pins.find((p) => p.kind === 'site')!.n)).toBe(true);
-    expect(steps[3]!.text).toBe('Item Conduit, north face to Chest (input): Extract; extract on Blue with a Basic Item Filter '
-      + '(whitelist: Raw Input; match meta, ignore NBT), round robin on, self feed off, redstone Always active');
+    expect(steps[3]!.text).toBe('Item Conduit, north face to Chest (input): Extract (1 filter); extract on Red with a Basic Item Filter '
+      + '(whitelist, 1 of 5 slots: Raw Input; match meta, ignore NBT), round robin on, self feed off, redstone Always active');
     expect(layout.buildSteps.find((s) => s.id === 'layout:configure:s1')!.text).toBe(`Basic Macerator ×2: ${FROM_OUTPUT_SIDE}`);
     // the machines' In / Out faces remind the builder of it: they insert through the output side
     expect(steps[0]!.text.endsWith(`priority 1, ${INTO_OUTPUT_SIDE}`)).toBe(true);
@@ -79,7 +79,11 @@ describe('an EnderIO line in the layout', () => {
   });
 
   it('gives the fluid conduits to the fluid step', async () => {
-    const layout = await layoutLine(layoutPack(), fluidPlan(), lineScan(), placed(0), lineGround());
+    // two raw fluids: the second open end stands above the tail cell, where no Item Conduit is
+    const plan = makePlan([{ id: 'y', mteId: IDS.SOLIDIFIER, count: 1, inputs: [['fluid:molten.iron', 144], ['fluid:oxygen', 10]] }],
+      { flows: [{ from: 'raw', to: 'y', key: 'fluid:molten.iron', perSecond: 1 }, { from: 'raw', to: 'y', key: 'fluid:oxygen', perSecond: 1 },
+        { from: 'y', to: 'out', key: 't:out_y@0', perSecond: 1 }] });
+    const layout = await layoutLine(layoutPack(), plan, lineScan(), placed(0), lineGround());
     const fluidOnly = layout.blocks.filter((b) => b.conduits !== undefined && b.conduits.every((c) => c.kind !== 'item'));
     expect(fluidOnly.length).toBeGreaterThan(0);
     expect(fluidOnly.every((b) => b.buildStep === 'layout:logistics:fluids')).toBe(true);
@@ -122,7 +126,7 @@ function conduitBlocks(): LayoutBlock[] {
         { kind: 'item', item: ITEM, connections: 0, faces: [
           { face: 'north', mode: 'in_out', target: 'Basic Macerator',
             extract: { color: 'red', filter: basic(['t:dust@0']), rate: 20, roundRobin: false, selfFeed: false, redstone: 'ignore', speed: { item: SPEED, count: 2 } },
-            insert: { color: 'blue', filter: { ...basic(['t:in@0']), item: ADVANCED }, rate: 1, priority: 1, outputSide: true } },
+            insert: { color: 'blue', filter: { ...basic(['t:in@0']), item: ADVANCED, slots: 10 }, rate: 1, priority: 1, outputSide: true } },
           { face: 'south', mode: 'disabled', target: 'Basic Macerator' }] },
         { kind: 'liquid_ender', item: ENDER, connections: 0, faces: [{ face: 'up', mode: 'extract', target: 'your tank',
           extract: { color: 'red', filter: { whitelist: true, keys: ['fluid:molten.iron'] }, rate: 1, roundRobin: false, redstone: 'ignore' } }] },
@@ -141,14 +145,14 @@ describe('EnderIO conduits in the steps, the parts list and the hookup', () => {
       drafts: [{ id: 'layout:configure:conduit-tap', kind: 'configure', pin: 'logistics', text: 'At the storage tap set the conduit face to Extract' }] }));
     expect(steps.filter((s) => s.kind === 'configure').map((s) => [s.id, s.pin, s.text])).toEqual([
       ['layout:configure:s1', 1, `Basic Macerator: ${FROM_OUTPUT_SIDE}`],
-      ['layout:conduit:1,0,2:item:north', 1, 'Item Conduit, north face to Basic Macerator: In / Out; extract on Red with a Basic Item Filter (whitelist: '
-        + 'Titanium Dust; match meta, ignore NBT), 2× Item Conduit Speed Upgrade, round robin off, self feed off, redstone Always active; insert on Blue '
-        + `with an Advanced Item Filter (whitelist: Raw Input; match meta, ignore NBT), priority 1, ${INTO_OUTPUT_SIDE}`],
+      ['layout:conduit:1,0,2:item:north', 1, 'Item Conduit, north face to Basic Macerator: In / Out (2 filters, 2 speed upgrades); extract on Red with a '
+        + 'Basic Item Filter (whitelist, 1 of 5 slots: Titanium Dust; match meta, ignore NBT), 2× Item Conduit Speed Upgrade, round robin off, self feed '
+        + `off, redstone Always active; insert on Blue with an Advanced Item Filter (whitelist, 1 of 10 slots: Raw Input; match meta, ignore NBT), priority 1, ${INTO_OUTPUT_SIDE}`],
       ['layout:conduit:1,0,2:item:south', 1, 'Item Conduit, south face to Basic Macerator: Disabled'],
       ['layout:conduit:1,0,2:liquid_ender:up', 1, 'Ender Fluid Conduit, top face to your tank: Extract; extract on Red with a fluid filter (whitelist: '
         + 'Molten Iron), round robin off, redstone Always active'],
-      ['layout:conduit:2,1,1:item:down', 2, 'Item Conduit, bottom face to Chest (input): Insert; insert on Green with a Basic Item Filter (whitelist: '
-        + 'Raw Input; match meta, ignore NBT), priority 1'],
+      ['layout:conduit:2,1,1:item:down', 2, 'Item Conduit, bottom face to Chest (input): Insert (1 filter); insert on Green with a Basic Item Filter '
+        + '(whitelist, 1 of 5 slots: Raw Input; match meta, ignore NBT), priority 1'],
       ['layout:configure:conduit-tap', 2, 'At the storage tap set the conduit face to Extract']]);
     expect(layoutSteps(stepsInput({ status: 'empty', blocks: conduitBlocks() })).some((s) => s.id.startsWith('layout:conduit:'))).toBe(false);
   });
@@ -294,8 +298,8 @@ describe('EnderIO conduits in the steps, the parts list and the hookup', () => {
       const tank = layout.buildSteps.filter((s) => s.text.includes(' face to your tank: '));
       expect(tank.map((s) => [s.id.endsWith(`:liquid_ender:${face}`), s.text.split(':')[0]]))
         .toEqual([[true, `Ender Fluid Conduit, ${faceName(face)} face to your tank`]]);
-      // two of the four share a bundle with the Item Conduit
-      expect(layout.bom).toContainEqual({ key: ENDER, amount: 4, why: 'conduits', group: 'logistics' });
+      // both share a bundle with the Item Conduit: the solidifier's output side and the open end at the tail
+      expect(layout.bom).toContainEqual({ key: ENDER, amount: 2, why: 'conduits', group: 'logistics' });
     }
   });
 

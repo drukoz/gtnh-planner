@@ -19,6 +19,8 @@ import { packFacts } from '../../../src/server/world/facts.ts';
 import { createWorldService } from '../../../src/server/world/scan.ts';
 import type { StuffKey } from '../../../src/shared/keys.ts';
 import { CHANNEL_PALETTE } from '../../../src/shared/layout/enderio.ts';
+import { OPPOSITE, posKey, step } from '../../../src/shared/layout/geometry.ts';
+import { FACES } from '../../../src/shared/types/assets.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import type { ConduitFace, ConduitFilter, DyeColor, Layout } from '../../../src/shared/types/layout.ts';
 import type { Pack } from '../../../src/shared/types/pack.ts';
@@ -114,6 +116,17 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('an EnderIO line laid out on the
     expect(faces.filter(({ face }) => face.extract !== undefined && face.extract.redstone !== 'ignore').map((f) => `${f.kind} ${f.face.mode} ${f.face.extract!.redstone}`),
       'extract faces not Always active').toEqual([]);
     expect(itemColours.size <= CHANNEL_PALETTE.length || codes.includes('conduit_channels'), `${itemColours.size} item channel colours`).toBe(true);
+    // the single pipe: the line's one channel, and one more only for the input chest's raw inputs
+    expect(itemColours.size, 'item channel colours').toBeLessThanOrEqual(2);
+    // one connection per GT basic machine: an ender fluid conduit meets it on its output side, beside its item face
+    const at = new Map(layout.blocks.map((b) => [posKey(b.pos), b]));
+    const offSide = layout.blocks.flatMap((b) => (b.conduits ?? []).filter((c) => c.kind !== 'item').flatMap((c) => c.faces.filter((f) => {
+      const side = FACES.indexOf(f.face);
+      const target = at.get(posKey(step(b.pos, side)));
+      const basic = target?.role === 'machine' && target.block.mteId !== undefined && pack.machines.get(target.block.mteId)?.kind === 'basic';
+      return f.mode !== 'disabled' && basic && target.facing !== OPPOSITE[side];
+    })));
+    expect(offSide.length, 'fluid faces of basic machines off their output side').toBe(0);
     expect(unlinked.map((f) => f.key), 'flows with a placed end and no link').toEqual([]);
   });
 });

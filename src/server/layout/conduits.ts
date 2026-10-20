@@ -31,16 +31,18 @@ export function speedUpgradesFor(itemsPerSecond: number): { count: number; short
 }
 
 /**
- * Exact keys (sorted, each once) as a whitelist in the smallest filter that holds them: Basic ≤ 5, Advanced ≤ 10, Big ≤ 24;
- * past 24 the first 24 and the rest `dropped`. Items match meta, and NBT only when a kept key carries an NBT suffix (`#…`).
+ * Exact keys (sorted, each once) as a whitelist in the smallest filter that holds them: Basic ≤ 5, Advanced ≤ 10, Big ≤ 24
+ * (its `slots`); past 24 the first 24 and the rest `dropped`. Items match meta, and NBT only when a kept key carries an
+ * NBT suffix (`#…`).
  */
 export function itemFilterFor(parts: Parts, keys: readonly StuffKey[]): { filter: ConduitFilter; dropped: StuffKey[] } {
   const sorted = sortedKeys(keys);
   const kept = sorted.slice(0, ITEM_FILTER_SLOTS.big);
-  const part = kept.length <= ITEM_FILTER_SLOTS.basic ? parts.eio_basic_filter
-    : kept.length <= ITEM_FILTER_SLOTS.advanced ? parts.eio_advanced_filter : parts.eio_big_filter;
+  const slots = kept.length <= ITEM_FILTER_SLOTS.basic ? ITEM_FILTER_SLOTS.basic
+    : kept.length <= ITEM_FILTER_SLOTS.advanced ? ITEM_FILTER_SLOTS.advanced : ITEM_FILTER_SLOTS.big;
+  const part = slots === ITEM_FILTER_SLOTS.basic ? parts.eio_basic_filter : slots === ITEM_FILTER_SLOTS.advanced ? parts.eio_advanced_filter : parts.eio_big_filter;
   return {
-    filter: { item: part.key, whitelist: true, keys: kept, matchMeta: true, matchNbt: kept.some((k) => k.includes('#')), oreDict: false, sticky: false },
+    filter: { item: part.key, whitelist: true, keys: kept, matchMeta: true, matchNbt: kept.some((k) => k.includes('#')), oreDict: false, sticky: false, slots },
     dropped: sorted.slice(ITEM_FILTER_SLOTS.big),
   };
 }
@@ -48,7 +50,7 @@ export function itemFilterFor(parts: Parts, keys: readonly StuffKey[]): { filter
 /** An ender fluid conduit's own filter (no item): whitelist of at most 5 fluids (sorted, each once), the rest `dropped`. */
 export function fluidFilterFor(keys: readonly StuffKey[]): { filter: ConduitFilter; dropped: StuffKey[] } {
   const sorted = sortedKeys(keys);
-  return { filter: { whitelist: true, keys: sorted.slice(0, FLUID_FILTER_SLOTS) }, dropped: sorted.slice(FLUID_FILTER_SLOTS) };
+  return { filter: { whitelist: true, keys: sorted.slice(0, FLUID_FILTER_SLOTS), slots: FLUID_FILTER_SLOTS }, dropped: sorted.slice(FLUID_FILTER_SLOTS) };
 }
 
 /** The part each conduit kind is laid with. */
@@ -69,28 +71,51 @@ export function pickFluidConduit(parts: Parts, need: { extract: number; insert: 
 
 // ---- Channel colours ----
 
-/** An extract side or an insert side of a conduit face, with the items or fluids it passes. `id` is unique among the ends. */
-export interface ChannelEnd { id: string; keys: readonly StuffKey[] }
+/**
+ * An extract side or an insert side of a conduit face, with the items or fluids it passes. `id` is unique among the
+ * ends; the two sides of one `face` never trade with each other (self feed is off, and an ender fluid conduit never
+ * fills the tank it drains). A `guarded` end must trade its keys only with the ends its flows link it to: an extract
+ * side that is a stock (the input chest, an open fluid end that brings a fluid in) hands a key to every face of its
+ * colour that takes it, as fast as the conduit moves, so it would fill a machine that the plan feeds from another maker
+ * (which then backs up) or an output chest; an insert side with no priority (an open fluid end that sends a fluid out)
+ * takes its turn with every machine of its colour that takes the fluid.
+ */
+export interface ChannelEnd { id: string; keys: readonly StuffKey[]; side: 'extract' | 'insert'; face?: string; guarded?: boolean }
 /** The two ends must trade, so they share a channel. */
 export interface ChannelLink { from: string; to: string }
-/** `colors` by end id; `shared` lists each channel that had to take a colour already carrying some of its keys. */
+/**
+ * `colors` by end id; `shared` lists each colour a channel had to share once the palette was used up, with the keys that
+ * can then reach an end its flows do not link them to.
+ */
 export interface ChannelPlan { colors: Map<string, DyeColor>; shared: Array<{ color: DyeColor; keys: StuffKey[] }> }
 
 /**
- * The palette colour for a channel once the palette is used up: the first colour whose channels share no key with `keys`;
- * else the colour whose channels share the fewest (ties: palette order), with the keys it shares, sorted.
+ * The keys that would pass between the ends of `a` and those of `b` on one colour against a guard: an extract side and
+ * an insert side, of different faces, one of them `guarded`, with a key in common. Sorted, each once.
  */
-function reusedColor(keys: ReadonlySet<StuffKey>, carried: ReadonlyMap<DyeColor, ReadonlySet<StuffKey>>): { color: DyeColor; common: StuffKey[] } {
-  const options = CHANNEL_PALETTE.map((color) => ({ color, common: [...keys].filter((k) => carried.get(color)!.has(k)) }));
-  const pick = options.find((o) => o.common.length === 0) ?? options.reduce((best, o) => (o.common.length < best.common.length ? o : best));
-  return { color: pick.color, common: pick.common.sort(compareText) };
+function leaks(a: readonly ChannelEnd[], b: readonly ChannelEnd[]): StuffKey[] {
+  const keys = new Set<StuffKey>();
+  const pass = (from: ChannelEnd, to: ChannelEnd): void => {
+    if (from.side !== 'extract' || to.side !== 'insert' || (from.guarded !== true && to.guarded !== true)) return;
+    if (from.face !== undefined && from.face === to.face) return;
+    for (const k of from.keys) if (to.keys.includes(k)) keys.add(k);
+  };
+  for (const x of a) {
+    for (const y of b) {
+      pass(x, y);
+      pass(y, x);
+    }
+  }
+  return [...keys].sort(compareText);
 }
 
 /**
- * Linked ends share a channel; channels are coloured in order of their first end: the first 15 take `CHANNEL_PALETTE` in
- * order, a later one the colour of `reusedColor` (and a `shared` entry when that colour already carries one of its keys).
- * The keys of a channel are the union of its ends' keys. Throws `RangeError` for a link to an end that is not listed, and
- * for two ends with one id.
+ * Linked ends share a channel (an extract side and an insert side each have one colour, so the ends a face trades with
+ * are on its colour). Channels are coloured in order of their first end, each with the first `CHANNEL_PALETTE` colour
+ * that none of the channels on it `leaks` a key with: so a line is on one colour, Red, and a channel takes another only
+ * where a guarded end would trade a key off its flows, which no filter stops (the faces take that key from elsewhere).
+ * Once every colour leaks, the one that leaks the fewest keys (ties: palette order), with a `shared` entry naming them.
+ * Throws `RangeError` for a link to an end that is not listed, and for two ends with one id.
  */
 export function assignChannels(ends: readonly ChannelEnd[], links: readonly ChannelLink[]): ChannelPlan {
   const indexOf = new Map<string, number>();
@@ -120,27 +145,24 @@ export function assignChannels(ends: readonly ChannelEnd[], links: readonly Chan
     if (a !== b) parent[b] = a;
   }
 
-  // channels in order of their first end (a Map keeps the order its roots were first met in), each with its keys
-  const channels = new Map<number, Set<StuffKey>>();
+  // channels in order of their first end (a Map keeps the order its roots were first met in), each with its ends
+  const channels = new Map<number, ChannelEnd[]>();
   for (const [i, end] of ends.entries()) {
     const root = find(i);
-    const keys = channels.get(root) ?? new Set<StuffKey>();
-    channels.set(root, keys);
-    for (const key of end.keys) keys.add(key);
+    const own = channels.get(root) ?? [];
+    channels.set(root, own);
+    own.push(end);
   }
 
-  const carried = new Map<DyeColor, Set<StuffKey>>(CHANNEL_PALETTE.map((color) => [color, new Set<StuffKey>()]));   // keys on each colour so far
+  const onColor = new Map<DyeColor, ChannelEnd[]>(CHANNEL_PALETTE.map((color) => [color, []]));   // the ends on each colour so far
   const colorOfRoot = new Map<number, DyeColor>();
   const shared: ChannelPlan['shared'] = [];
-  for (const [root, keys] of channels) {
-    let color = CHANNEL_PALETTE[colorOfRoot.size];                                  // channel number n takes palette colour n
-    if (color === undefined) {
-      const reuse = reusedColor(keys, carried);
-      color = reuse.color;
-      if (reuse.common.length > 0) shared.push({ color, keys: reuse.common });
-    }
-    for (const key of keys) carried.get(color)!.add(key);
-    colorOfRoot.set(root, color);
+  for (const [root, own] of channels) {
+    const options = CHANNEL_PALETTE.map((color) => ({ color, keys: leaks(own, onColor.get(color)!) }));
+    const pick = options.find((o) => o.keys.length === 0) ?? options.reduce((best, o) => (o.keys.length < best.keys.length ? o : best));
+    if (pick.keys.length > 0) shared.push({ color: pick.color, keys: pick.keys });
+    onColor.get(pick.color)!.push(...own);
+    colorOfRoot.set(root, pick.color);
   }
 
   const colors = new Map<string, DyeColor>();

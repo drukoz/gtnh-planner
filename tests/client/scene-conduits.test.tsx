@@ -58,7 +58,7 @@ describe('conduits in the 3D view', () => {
   });
   it('shows every conduit face in the click info and the hover text', () => {
     expect(pickInfo(bundleLayout, plan, 0)).toEqual({ title: 'Conduit bundle (Item Conduit + Ender Fluid Conduit)', lines: [
-      'Item Conduit, north face to Basic Macerator: In / Out; extract on Red with a Basic Item Filter (whitelist: Titanium Dust; match meta, ignore NBT), '
+      'Item Conduit, north face to Basic Macerator: In / Out (2 filters, 2 speed upgrades); extract on Red with a Basic Item Filter (whitelist: Titanium Dust; match meta, ignore NBT), '
         + '2× Item Conduit Speed Upgrade, round robin off, self feed off, redstone Always active; insert on Blue with a Basic Item Filter '
         + '(whitelist: Raw Input; match meta, ignore NBT), priority 1, into its output side: keep its Input from Output Side allowed (a newly crafted '
         + 'machine has it on; a Screwdriver right-click on that side of the machine, beside the conduit, switches it)',
@@ -160,7 +160,7 @@ describe('conduits in the 3D view: the edges', () => {
       { label: 'Item Conduit Speed Upgrade', role: 'cover', count: 2 }, { label: 'Ender Fluid Conduit', role: 'pipe', count: 1 }]);
     expect(blockList(hooked).place[0]!.label).toBe(BASIC);   // no name: the item key, without " cover"
     expect(pickInfo(hooked, plan, 2).lines).toEqual([
-      'Item Conduit, north face to Chest (input): Insert; insert on Green with a Basic Item Filter (whitelist: Raw Input; match meta, ignore NBT)',
+      'Item Conduit, north face to Chest (input): Insert (1 filter); insert on Green with a Basic Item Filter (whitelist: Raw Input; match meta, ignore NBT)',
       'Part of the logistics hookup']);
   });
 });

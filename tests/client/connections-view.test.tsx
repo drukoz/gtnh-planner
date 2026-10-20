@@ -67,7 +67,7 @@ describe('the Connections tab', () => {
     const html = shell({ pick: { node: 'step:a', face: 'step:a#conduit:0,64,1:item:north' } });
     expect(html).toContain('data-testid="conn-panel"');
     expect(html).toContain('<h3>Basic Macerator, south side · Item Conduit</h3>');
-    expect(html).toContain('In / Out; extract on Red');
+    expect(html).toContain('In / Out (2 filters); extract on Red');
   });
   it('says why there is nothing to draw', () => {
     expect(shell({ plan: null })).toContain('Planning…');

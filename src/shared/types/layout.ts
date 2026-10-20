@@ -39,6 +39,11 @@ export interface ConduitFilter {
   whitelist: boolean; keys: StuffKey[];
   /** Item filters only. */
   matchMeta?: boolean; matchNbt?: boolean; oreDict?: boolean; sticky?: boolean;
+  /**
+   * How many items or fluids the filter holds: a Basic Item Filter 5, an Advanced 10, a Big 24, an ender fluid conduit's
+   * own fluid filter 5. Optional addition (the EnderIO single-pipe change), so the words can say which filter a list needs.
+   */
+  slots?: number;
 }
 export interface ConduitExtract {
   color: DyeColor; filter: ConduitFilter | null; /** items/s or L/s the face must move */ rate: number; roundRobin: boolean; redstone: RedstoneMode;
@@ -48,8 +53,9 @@ export interface ConduitExtract {
 export interface ConduitInsert {
   color: DyeColor; filter: ConduitFilter | null; rate: number; /** item conduits only; higher is filled first */ priority?: number;
   /**
-   * True when the side inserts into a GT basic machine through that machine's output side, which takes items there only
-   * while its Input from Output Side is allowed (`MTEBasicMachine.allowPutStack`); absent otherwise.
+   * True when the side inserts into a GT basic machine through that machine's output side, which takes items and fluids
+   * there only while its Input from Output Side is allowed (`MTEBasicMachine.allowPutStack`, `isLiquidInput`); absent
+   * otherwise.
    */
   outputSide?: boolean;
 }

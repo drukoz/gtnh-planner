@@ -116,6 +116,28 @@ describe('layout steps', () => {
     expect(place(0).some((t) => /power.head/.test(t))).toBe(false);
   });
 
+  it('checks Input from Output Side where an EnderIO face puts fluids in through the output side, naming what goes in', () => {
+    // the EnderIO single connection: a basic machine takes its fluids through its output side under the same setting
+    // (MTEBasicMachine.isLiquidInput), so a machine that takes only fluids there needs the check too
+    const plan = makePlan([{ id: 's1', mteId: IDS.MACERATOR, count: 1 }, { id: 'x', mteId: IDS.EXTRACTOR, count: 1, inputs: [['fluid:water', 1000]],
+      outputs: [['fluid:molten.iron', 144]] }], { flows: [] });
+    const placement = placeUnits(unitsFromPlan(layoutPack(), plan).units, { headWidth: 1, portSpacing: 0 });
+    const machine = (x: number, stepId: string, label: string, mteId: number): LayoutBlock =>
+      ({ pos: [x, 64, 1], block: GT(mteId), role: 'machine', label, stepId, config: { inputFromOutputSide: true } });
+    /** The spine cell south of the machine at `x`, its ender fluid conduit's north face taking Water (`insert`) or giving it. */
+    const conduit = (x: number, target: string, insert: boolean): LayoutBlock => ({ pos: [x, 64, 2], block: { id: 'conduit:liquid_ender', meta: 0 }, role: 'pipe',
+      label: 'Ender Fluid Conduit', conduits: [{ kind: 'liquid_ender', item: 'EnderIO:itemLiquidConduit@2', connections: 0, faces: [insert
+        ? { face: 'north', mode: 'insert', target, insert: { color: 'red', filter: { whitelist: true, keys: ['fluid:water'] }, rate: 1, outputSide: true } }
+        : { face: 'north', mode: 'extract', target, extract: { color: 'red', filter: { whitelist: true, keys: ['fluid:water'] }, rate: 1, roundRobin: false, redstone: 'ignore' } }] }] });
+    const place = (blocks: LayoutBlock[]) => layoutSteps(base({ units: placement.units, blocks })).filter((s) => s.kind === 'place').map((s) => s.text).slice(2);
+    const [s1, x] = [machine(1, 's1', 'Basic Macerator', IDS.MACERATOR), machine(2, 'x', 'Basic Fluid Extractor', IDS.EXTRACTOR)];
+    expect(place([s1, x, conduit(1, 'Basic Macerator', true), conduit(2, 'Basic Fluid Extractor', true)])).toEqual([
+      `Place 1× Basic Macerator ${PLACE_FACES}${CHECK_INPUT_SIDE.replace('its items', 'its items and fluids')}`,
+      `Place 1× Basic Fluid Extractor ${PLACE_FACES}${CHECK_INPUT_SIDE.replace('its items', 'its fluids')}`]);
+    // a face that only takes fluid out of the output side needs no setting
+    expect(place([s1, x, conduit(2, 'Basic Fluid Extractor', false)])[1]).toBe(`Place 1× Basic Fluid Extractor ${PLACE_FACES}`);
+  });
+
   it('describes multiblocks with their hatches and drops pins without a world', () => {
     const plan = makePlan([{ id: 'e', mteId: IDS.EBF, count: 1, tier: 2, euPerTick: 120,
       inputs: [['t:dust@0', 1], ['fluid:oxygen', 1000]], outputs: [['t:ingot@0', 1]] }]);

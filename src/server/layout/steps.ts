@@ -9,7 +9,8 @@ import { tierName } from '../../shared/gt/tiers.ts';
 import type { StuffKey } from '../../shared/keys.ts';
 import { conduitLines, configuredLines } from '../../shared/layout/configure-text.ts';
 import { fmtInt } from '../../shared/layout/format.ts';
-import { SIDE_NAMES, posKey, rotateFacing, type Rotation, type Vec3 } from '../../shared/layout/geometry.ts';
+import { SIDE_NAMES, posKey, rotateFacing, step, type Rotation, type Vec3 } from '../../shared/layout/geometry.ts';
+import { FACES } from '../../shared/types/assets.ts';
 import type { BlockRole, Hookup, LayoutBlock, LayoutStatus, Pin } from '../../shared/types/layout.ts';
 import type { BomLine, BuildStep } from '../../shared/types/plan.ts';
 import type { HatchKind, PlacedUnit } from './arrange.ts';
@@ -96,24 +97,48 @@ function singleblockFaces(front: string): string {
 }
 
 /**
- * What a singleblock that takes items adds to its place step: it takes them through its output side, which needs GT's
- * Input from Output Side allowed. Every `MTEBasicMachine` constructor turns it on, but a machine broken and placed again
+ * What a singleblock that takes `what` (its items, its fluids, or both) through its output side adds to its place step:
+ * that side takes them only while GT's Input from Output Side is allowed (`MTEBasicMachine.allowPutStack` for items,
+ * `isLiquidInput` for fluids). Every `MTEBasicMachine` constructor turns it on, but a machine broken and placed again
  * may have it off (its item's NBT has no `mAllowInputFromOutputSide`, which `loadNBTData` reads as false). A Screwdriver
  * switches it only on the output side or the front, on the side clicked itself (`BaseMetaTileEntity.onRightclick`
  * passes no wrench-grid side), and also works the cover on that side; the front faces the machine beside it along the
  * row. So the check is on the middle-row side while nothing stands in the middle row yet, before any pipe, conduit or
  * interface there and before its configure step puts a cover on that side.
  */
-const CHECK_INPUT_SIDE = '; it takes its items through that side, which needs Input from Output Side allowed: a newly crafted machine has it, '
-  + "but one broken and placed again may not, so while the middle row is still empty right-click such a machine's middle-row side with a "
-  + 'Screwdriver, not sneaking (a sneak-click switches the Input Filter), and once more if the chat says "Input from Output Side forbidden"';
+function checkInputSide(what: string): string {
+  return `; it takes its ${what} through that side, which needs Input from Output Side allowed: a newly crafted machine has it, `
+    + "but one broken and placed again may not, so while the middle row is still empty right-click such a machine's middle-row side with a "
+    + 'Screwdriver, not sneaking (a sneak-click switches the Input Filter), and once more if the chat says "Input from Output Side forbidden"';
+}
+
+/**
+ * The plan steps whose machines take fluids through their output side: those an ender fluid conduit face inserts into
+ * with `outputSide` (the EnderIO mode meets a GT basic machine's fluids there; every other mode pipes them in on top).
+ */
+function fluidsThroughOutputSide(blocks: readonly LayoutBlock[]): Set<string> {
+  const machineAt = new Map(blocks.filter((b) => b.role === 'machine' && b.stepId !== undefined).map((b) => [posKey(b.pos), b.stepId!]));
+  const steps = new Set<string>();
+  for (const b of blocks) {
+    if (b.role === 'ghost') continue;
+    for (const c of b.conduits ?? []) {
+      if (c.kind === 'item') continue;
+      for (const f of c.faces) {
+        const stepId = f.insert?.outputSide === true ? machineAt.get(posKey(step(b.pos, FACES.indexOf(f.face)))) : undefined;
+        if (stepId !== undefined) steps.add(stepId);
+      }
+    }
+  }
+  return steps;
+}
 
 /**
  * One step per placed plan step, in unit order: how many to place and which way they face — a singleblock's output
- * side and its front, which GT keeps apart, how to set both and, when it takes items, how to check Input from Output
- * Side; a multiblock's size, controller and hatches. The front's compass side is turned by `rotation`.
+ * side and its front, which GT keeps apart, how to set both and, when it takes items, or fluids through its output side
+ * (`fluidSteps`), how to check Input from Output Side; a multiblock's size, controller and hatches. The front's compass
+ * side is turned by `rotation`.
  */
-function placeSteps(units: readonly PlacedUnit[], sitePin: number | undefined, rotation: Rotation): Draft[] {
+function placeSteps(units: readonly PlacedUnit[], sitePin: number | undefined, rotation: Rotation, fluidSteps: ReadonlySet<string>): Draft[] {
   const byStep = new Map<string, { first: PlacedUnit; n: number }>();
   for (const u of units) {
     const seen = byStep.get(u.stepId);
@@ -123,8 +148,9 @@ function placeSteps(units: readonly PlacedUnit[], sitePin: number | undefined, r
   return [...byStep].map(([stepId, { first: u, n }]) => {
     if (!u.multiblock) {
       const front = SIDE_NAMES[rotateFacing(u.mainFacing ?? WEST, rotation)]!;
-      return draft(`layout:place:${stepId}`, 'place', sitePin,
-        `Place ${fmtInt(n)}× ${u.name} ${singleblockFaces(front)}${u.io.itemIn ? CHECK_INPUT_SIDE : ''}`);
+      const fluids = fluidSteps.has(stepId);
+      const what = u.io.itemIn && fluids ? 'items and fluids' : u.io.itemIn ? 'items' : fluids ? 'fluids' : null;
+      return draft(`layout:place:${stepId}`, 'place', sitePin, `Place ${fmtInt(n)}× ${u.name} ${singleblockFaces(front)}${what === null ? '' : checkInputSide(what)}`);
     }
     const labels = hatchLabels(u);
     const hatches = labels.length === 0 ? '' : `; hatches: ${labels.join(', ')}`;
@@ -247,7 +273,7 @@ export function layoutSteps(input: StepsInput): BuildStep[] {
       `Clear a ${fmtInt(w)}×${fmtInt(l)} spot${atPin(sitePin)} (${fmtInt(h)} high) and keep a 1-block path around it${level}`));
     // gt-mechanics §3.4
     steps.push(draft('layout:roof', 'place', sitePin, 'Roof the line: GT machines left in the rain can catch fire or explode'));
-    steps.push(...placeSteps(input.units, sitePin, input.rotation));
+    steps.push(...placeSteps(input.units, sitePin, input.rotation, fluidsThroughOutputSide(input.blocks)));
     steps.push(...powerSteps(input, sitePin, powerPin));
     for (const d of input.drafts) if (d.kind === 'logistics') steps.push(draft(d.id, d.kind, kindPin(d.pin), d.text));
     for (const f of input.fluids) {

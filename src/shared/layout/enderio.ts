@@ -70,7 +70,8 @@ export const DEFAULT_CHANNEL: DyeColor = 'green';
 
 /**
  * Channel colours in the order the line hands them out: the 15 colours other than `DEFAULT_CHANNEL`, so a base
- * network's unconfigured faces never trade with the line.
+ * network's unconfigured faces never trade with the line. The first, Red, is the line's one channel; a later one goes
+ * only to a channel that a filter cannot keep apart from it (the server's `assignChannels`).
  */
 export const CHANNEL_PALETTE: readonly DyeColor[] = Object.freeze([
   'red', 'blue', 'yellow', 'orange', 'purple', 'cyan', 'magenta', 'lime', 'pink', 'light_blue', 'brown', 'white', 'black', 'gray', 'silver',

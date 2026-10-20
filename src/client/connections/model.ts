@@ -78,9 +78,11 @@ export type ConnPick = { node: string; face?: string } | { edge: string };
 /**
  * A conduit face's mode and channels in a few words: `<mode>[ · in <insert colour>][ · out <extract colour>]`, where in
  * is into the block the face points at (its insert side) and out is out of it (its extract side), as its links go into
- * and out of the box; for example `In / Out · in Blue · out Red`. At most 41 characters.
+ * and out of the box; for example `In / Out · in Blue · out Red`. A face whose two sides share a channel, as an EnderIO
+ * line's faces do on its one channel, names it once: `In / Out · Red`. At most 41 characters.
  */
 export function faceModeText(m: ConnFaceMode): string {
+  if (m.insert !== undefined && m.insert === m.extract) return `${CONDUIT_MODE_NAMES[m.mode]} · ${DYE_NAMES[m.insert]}`;
   return `${CONDUIT_MODE_NAMES[m.mode]}${m.insert === undefined ? '' : ` · in ${DYE_NAMES[m.insert]}`}`
     + `${m.extract === undefined ? '' : ` · out ${DYE_NAMES[m.extract]}`}`;
 }
