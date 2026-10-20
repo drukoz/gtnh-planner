@@ -1,7 +1,7 @@
 // The words of the feeding settings (architecture §11 entry 51; research docs/research/machine-feeding.md §3.7): Multi
-// Stack Input off and Limiting mode on in add-on 15's words, Input Separation off in the research's, and the structured
-// chips and AE2 patterns of `LayoutBlock.feed` in a builder's words, through the one formatter the configure steps, the
-// 3D view and the Connections view share.
+// Stack Input off and Limiting mode on in add-on 15's words, Input Separation off by the controller window's button (and
+// the EBF's Screwdriver in the research's words), and the structured chips and AE2 patterns of `LayoutBlock.feed` in a
+// builder's words, through the one formatter the configure steps, the 3D view and the Connections view share.
 
 import { describe, expect, it } from 'vitest';
 import { configTexts, configuredLines, feedTexts } from '../../../src/shared/layout/configure-text.ts';
@@ -13,15 +13,18 @@ const NAMES: Record<string, string> = {
 const nameOf = (k: StuffKey): string => NAMES[k] ?? k;
 
 describe('feeding words', () => {
-  it("says how to set Multi Stack Input off and Limiting mode on in add-on 15's words, and Input Separation off in the research's", () => {
+  it("says how to set Multi Stack Input off and Limiting mode on in add-on 15's words, and Input Separation off by the controller's button", () => {
     expect(configTexts({ multiStack: false, limited: true })).toEqual([
       'Multi Stack Input off: sneak-right-click its front with a Soldering Iron (where a neighbour covers the front, the edge of the wrench grid '
         + 'toward it) until the chat says "Multi Stack Input Off"',
       'Limiting mode on: sneak-right-click it with a Screwdriver until the chat says "Limiting mode On"']);
     expect(configTexts({ multiStack: true, limited: false })).toEqual(['Multi Stack Input on', 'Limiting mode off']);
+    // every controller with the setting has the window's button, which says nothing in the chat; only a few switch it with
+    // a tool too, the EBF with a Screwdriver (GT 5.09.54 IControllerWithOptionalFeatures.createInputSeparationButton,
+    // MTEElectricBlastFurnace.onScrewdriverRightClick)
     expect(configTexts({ inputSeparation: false })).toEqual([
-      'Input Separation off: the controller window\'s Input Separation button (on the EBF, a Screwdriver right-click on the controller) until '
-        + 'the chat says "Input buses aren\'t separated"']);
+      'Input Separation off: click the Input Separation button in the controller\'s window until its tooltip says "Disabled" (on the EBF a '
+        + 'Screwdriver right-click on the controller switches it too, until the chat says "Input buses aren\'t separated")']);
     expect(configTexts({ inputSeparation: true })).toEqual(['Input Separation on']);
   });
 
