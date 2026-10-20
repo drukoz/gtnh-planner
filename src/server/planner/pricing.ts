@@ -57,6 +57,17 @@ async function costModel(pack: Pack, settings: PlanSettings, basis: PlanBasis, t
 }
 
 /**
+ * What a line's pricing derives before its own walk, whatever recipes that walk leaves out (plan 12: `linePricing`'s
+ * `unbuildable`): its basis, its cost model, and what making each derived material it prices on its own costs
+ * (`derivedCosts`) — per key of the cost model's graph, where each is one LP of that graph, and per ordered list of the
+ * other keys, which are priced together over the graph walked from them. Shared by every pricing of one line.
+ */
+interface PricingCore {
+  basis: PlanBasis; model: CostModel;
+  standalone: Map<StuffKey, Promise<Standalone | undefined>>; alone: Map<string, Promise<Map<StuffKey, Standalone | undefined>>>;
+}
+
+/**
  * What making each derived material of `keys` on its own costs, never consuming the line's target (`standaloneCosts`
  * over the cost model's graph, where derived materials are routed), and never below its plain price (fix spec R7). One
  * that graph never walked (its pruning found no cheap way to make it along the target's chain) is priced over a graph
@@ -64,21 +75,49 @@ async function costModel(pack: Pack, settings: PlanSettings, basis: PlanBasis, t
  * ingot, Glass Dust at 0): at the flat 1 Magnetic Steel was the cheapest way to the LV Machine Hull's plates, while its
  * own chain costs what the steel costs; and a graph walked from it alone is not the line's, so it may count
  * ore-processing yields the flat price of mined items over-rewards (an end-stone iron ore smelted into 40 nuggets) as
- * savings the line never makes. Infinity = only a chain through the target makes it; no entry = its plain price.
+ * savings the line never makes. Infinity = only a chain through the target makes it; no entry = its plain price. Each
+ * answer is worked out once per `core` (`PricingCore`), so a line walked again around recipes it cannot run asks again
+ * for free.
  */
 async function derivedCosts(
-  pack: Pack, settings: PlanSettings, basis: PlanBasis, model: CostModel, target: StuffKey, keys: readonly StuffKey[],
+  pack: Pack, settings: PlanSettings, core: PricingCore, target: StuffKey, keys: readonly StuffKey[],
 ): Promise<Map<StuffKey, Standalone>> {
+  const { basis, model } = core;
   const out = new Map<StuffKey, Standalone>();
   const containers = pack.fluidContainers ?? [];
   const floored = (key: StuffKey, made: Standalone): Standalone => ({ ...made, cost: Math.max(made.cost, basis.prices.price(key)) });
   const inModel = keys.filter((key) => model.graph.goods.has(key));
   const own = keys.filter((key) => !model.graph.goods.has(key));
-  for (const [key, made] of await standaloneCosts(model.graph, inModel, [target], containers)) if (made !== undefined) out.set(key, floored(key, made));
+  const missing = inModel.filter((key) => !core.standalone.has(key));
+  if (missing.length > 0) {
+    const batch = standaloneCosts(model.graph, missing, [target], containers);
+    for (const key of missing) {
+      const made = batch.then((all) => all.get(key));
+      core.standalone.set(key, made);
+      made.catch(() => {
+        if (core.standalone.get(key) === made) core.standalone.delete(key);   // a failed one is asked again
+      });
+    }
+  }
+  for (const key of inModel) {
+    const made = await core.standalone.get(key);
+    if (made !== undefined) out.set(key, floored(key, made));
+  }
   if (own.length > 0) {
-    await yieldToEventLoop();
-    const alone = aloneGraph(pack, settings, basis, model, own);
-    for (const [key, made] of await standaloneCosts(alone, own, [target], containers)) if (made !== undefined) out.set(key, floored(key, made));
+    const id = own.join('\n');
+    let alone = core.alone.get(id);
+    if (alone === undefined) {
+      const made = (async () => {
+        await yieldToEventLoop();
+        return standaloneCosts(aloneGraph(pack, settings, basis, model, own), own, [target], containers);
+      })();
+      core.alone.set(id, made);
+      made.catch(() => {
+        if (core.alone.get(id) === made) core.alone.delete(id);
+      });
+      alone = made;
+    }
+    for (const [key, made] of await alone) if (made !== undefined) out.set(key, floored(key, made));
   }
   return out;
 }
@@ -112,13 +151,20 @@ function avoidedPins(pack: Pack, settings: PlanSettings, target: StuffKey): Stuf
   return [...new Set(pinned.filter((key) => goods.has(key)))].sort();
 }
 
-async function computePricing(
-  pack: Pack, settings: PlanSettings, ctx: PlanContext, target: StuffKey, pinAvoid: ReadonlySet<StuffKey>,
-  unbuildable: ReadonlyMap<string, string> | undefined,
-): Promise<LinePricing> {
+/** A line's `PricingCore`: its basis and cost model, no derived material priced yet. */
+async function computeCore(pack: Pack, settings: PlanSettings, ctx: PlanContext, target: StuffKey): Promise<PricingCore> {
   await yieldToEventLoop();
   const basis = planBasis(pack, settings, ctx);
-  const model = await costModel(pack, settings, basis, target);
+  return { basis, model: await costModel(pack, settings, basis, target), standalone: new Map(), alone: new Map() };
+}
+
+async function computePricing(
+  pack: Pack, settings: PlanSettings, target: StuffKey, pinAvoid: ReadonlySet<StuffKey>, unbuildable: ReadonlyMap<string, string> | undefined,
+  core: Promise<PricingCore>,
+): Promise<LinePricing> {
+  await yieldToEventLoop();
+  const shared = await core;
+  const { basis, model } = shared;
   const stopCost = (key: StuffKey): number => {
     const cost = model.costs.cost(key);
     return Number.isFinite(cost) ? cost : basis.prices.price(key);
@@ -147,7 +193,7 @@ async function computePricing(
     const unpriced = [...graph.goods.values()].filter((g) => g.leafClass === 'derived' && g.buyable && !tried.has(g.key)).map((g) => g.key);
     if (unpriced.length === 0) break;
     for (const key of unpriced) tried.add(key);
-    for (const [key, cost] of await derivedCosts(pack, settings, basis, model, target, unpriced)) priced.set(key, cost);
+    for (const [key, cost] of await derivedCosts(pack, settings, shared, target, unpriced)) priced.set(key, cost);
     leaf = leafWith();
     await yieldToEventLoop();
     graph = buildCandidates(pack, settings, basis.env, leaf, [target], walk);
@@ -156,18 +202,51 @@ async function computePricing(
   // (`RawInput.pricedVia`) is read; a stop item keeps its own price.
   const stops = [...graph.goods.values()].filter((g) => g.leafClass === 'stop' && g.buyable).map((g) => g.key);
   const chains = new Map(priced);
-  for (const [key, made] of await derivedCosts(pack, settings, basis, model, target, stops)) chains.set(key, made);
+  for (const [key, made] of await derivedCosts(pack, settings, shared, target, stops)) chains.set(key, made);
   const pricing: LinePricing = { target, basis, model, leaf, graph, chains };
   if (unbuildable !== undefined) pricing.unbuildable = unbuildable;
   return pricing;
 }
 
 const MEMOS = new WeakMap<Pack, Map<string, Promise<LinePricing>>>();
+const CORES = new WeakMap<Pack, Map<string, Promise<PricingCore>>>();
+
+/**
+ * Returns `memo`'s entry for `key`, made with `make` when it has none, most recently used last; at most MEMO_SIZE
+ * entries, the least recently used dropped first; one that fails is dropped too.
+ */
+function remembered<T>(memo: Map<string, Promise<T>>, key: string, make: () => Promise<T>): Promise<T> {
+  const hit = memo.get(key);
+  if (hit !== undefined) {
+    memo.delete(key);
+    memo.set(key, hit);
+    return hit;
+  }
+  const made = make();
+  memo.set(key, made);
+  if (memo.size > MEMO_SIZE) memo.delete(memo.keys().next().value as string);
+  made.catch(() => {
+    if (memo.get(key) === made) memo.delete(key);
+  });
+  return made;
+}
+
+/** `map`'s value for `pack`, a new map when it has none. */
+function memoOf<T>(map: WeakMap<Pack, Map<string, T>>, pack: Pack): Map<string, T> {
+  let memo = map.get(pack);
+  if (memo === undefined) {
+    memo = new Map();
+    map.set(pack, memo);
+  }
+  return memo;
+}
 
 /**
  * The line's prices for `settings` in `ctx` (null when it has no target the export knows), computed once per pack,
  * settings hash, the context fields its basis reads (`basisContextKey`) and the sorted ids of `opts.unbuildable`, for at
- * most MEMO_SIZE such keys per pack: the plan and every later `expandBomLines` of the same project share one pricing.
+ * most MEMO_SIZE such keys per pack: the plan and every later `expandBomLines` of the same project share one pricing,
+ * and the pricings of one line walked without different `unbuildable` sets share its basis, cost model and derived costs
+ * (`PricingCore`, memoized the same way without `unbuildable`), so only the line's own walks run again.
  * Callers asking while it is computed share that computation; one that fails is not kept. The avoid list plays no part
  * (ruling R6: only `planLine`'s own graphs honor it) beyond the option pins it overrides (`avoidedPins`, ruling P28: the
  * line's graph ignores them, with a `stale-option` each), so projects that differ only in it share one pricing, priced
@@ -180,30 +259,17 @@ export function linePricing(
 ): Promise<LinePricing> | null {
   const target = plannableTarget(pack, settings);
   if (target === null) return null;
-  let memo = MEMOS.get(pack);
-  if (memo === undefined) {
-    memo = new Map();
-    MEMOS.set(pack, memo);
-  }
   const open: PlanSettings = { ...settings, avoid: [] };
   const pinAvoid = avoidedPins(pack, settings, target);
   const unbuildable = opts?.unbuildable !== undefined && opts.unbuildable.size > 0 ? opts.unbuildable : undefined;
   const blockedIds = unbuildable === undefined ? '' : `|unbuildable:${JSON.stringify([...unbuildable.keys()].sort())}`;
-  const key = `${settingsHash(open)}|${basisContextKey(ctx)}${pinAvoid.length === 0 ? '' : `|${JSON.stringify(pinAvoid)}`}${blockedIds}`;
-  const hit = memo.get(key);
-  if (hit !== undefined) {
-    memo.delete(key);
-    memo.set(key, hit);
-    return hit;
-  }
-  const pricing = computePricing(pack, open, ctx, target, new Set(pinAvoid), unbuildable === undefined ? undefined : new Map(unbuildable));
-  memo.set(key, pricing);
-  if (memo.size > MEMO_SIZE) memo.delete(memo.keys().next().value as string);
-  const kept = memo;
-  pricing.catch(() => {
-    if (kept.get(key) === pricing) kept.delete(key);
+  const line = `${settingsHash(open)}|${basisContextKey(ctx)}${pinAvoid.length === 0 ? '' : `|${JSON.stringify(pinAvoid)}`}`;
+  const blocked = unbuildable === undefined ? undefined : new Map(unbuildable);
+  return remembered(memoOf(MEMOS, pack), `${line}${blockedIds}`, () => {
+    // Every pricing of the line, whatever it walks without, shares its basis, cost model and derived costs (`PricingCore`).
+    const core = remembered(memoOf(CORES, pack), line, () => computeCore(pack, open, ctx, target));
+    return computePricing(pack, open, target, new Set(pinAvoid), blocked, core);
   });
-  return pricing;
 }
 
 /**

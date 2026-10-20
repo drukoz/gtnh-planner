@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import { MINI_GT, miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec, type RecipeSpec } from '../../helpers/pack-spec.ts';
-import { kitSpec, largeBenderSpec, sandSpec, withAutoWorkbenches, withPriceGap } from '../../helpers/build-fixtures.ts';
+import { centrifugeDustSpec, kitSpec, largeBenderSpec, sandSpec, withAutoWorkbenches, withPriceGap } from '../../helpers/build-fixtures.ts';
 import { buildCostCounts, planBasis } from '../../../src/server/planner/basis.ts';
 import { buildKeys, itemPrices, type ItemPrices } from '../../../src/server/planner/build-cost.ts';
 import { buildCandidates, type CandidateGraph, type LeafOracle } from '../../../src/server/planner/candidates.ts';
@@ -199,6 +199,27 @@ describe('lineBuildModel', () => {
     const basis = planBasis(onlyMv, s, ctx);
     expect(buildCandidates(onlyMv, s, basis.env, basis.leaf, [CIRCUIT], { unbuildable: blocked }).blocked.get(CIRCUIT))
       .toEqual([{ recipeId: 'circuit-mv', why: 'machine', machine: 'Advanced Assembler cannot be built here (no recipe in this pack)' }]);
+  });
+
+  it('names the other recipes of a blocked machine that no machine can run either', async () => {
+    // The walk keeps only spin-1, the cheapest producer, so the model blocks it; spin-2 and spin-3 are on the same
+    // centrifuge, which no recipe makes, so they are named too (`blockedAlike`) and one walk goes around them all.
+    const pack = packFromSpec(centrifugeDustSpec());
+    const s = { ...lv, target: 't:widget_dust@0' };
+    const pricing = await linePricing(pack, s, ctx);
+    expect(pricing!.graph.recipes.map((r) => r.id)).toContain('spin-1');
+    expect(pricing!.graph.recipes.map((r) => r.id)).not.toContain('spin-2');
+    const model = await lineBuildModel(pack, pricing!.graph, pricing!.basis, s, ctx);
+    const why = 'Basic Centrifuge cannot be built here (no recipe in this pack)';
+    expect(model.blocked).toEqual(new Map([['spin-1', why]]));
+    expect(model.blockedAlike).toEqual(new Map([['spin-2', why], ['spin-3', why]]));
+    // Walked once without all three, the line presses its dust, and that graph's model blocks nothing more.
+    const unbuildable = new Map([...model.blocked, ...(model.blockedAlike ?? [])]);
+    const again = await linePricing(pack, s, ctx, { unbuildable });
+    expect(again!.graph.recipes.map((r) => r.id)).toContain('press-widget');
+    expect((await lineBuildModel(pack, again!.graph, again!.basis, s, ctx)).blocked.size).toBe(0);
+    // A model that blocks nothing names nothing beside it.
+    expect((await modelOf(miniGt(), { ...lv, target: CIRCUIT })).blockedAlike).toBeUndefined();
   });
 
   it('falls back from a pinned tier that cannot be built to the nearest one that can', async () => {

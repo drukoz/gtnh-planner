@@ -1424,15 +1424,20 @@ interface PlannedLine {
  * The line solved (plan 12; controller ruling OQ5 a in every mode, Amendment OQ3, ruling P2): the graph it solves in
  * full — the plain one without an avoid list, else the one `avoidingLine` finds — is solved with its build model
  * (`lineBuildModel`), and while a model blocks some of its graph's recipes (no machine that runs them can be built here
- * or is owned), the line is walked again without every recipe blocked so far (`linePricing`'s `unbuildable`, which
- * `avoidingLine`'s walks leave out too), so producers that can run take their place; the set only grows, so this ends.
+ * or is owned), the line is walked again without every recipe blocked so far and the pack's other recipes on their maps
+ * that no machine can run either (`BuildModel.blockedAlike`; `linePricing`'s `unbuildable`, which `avoidingLine`'s walks
+ * leave out too), so producers that can run take their place; the set only grows, so this ends.
  * With an avoid list the plain line is first only probed (probes get no model), and a probe that plans nothing ends it.
  */
 async function plannedLine(
   pack: Pack, settings: PlanSettings, ctx: PlanContext, first: LinePricing, demand: ReadonlyMap<StuffKey, number>, options: SolveOptions,
 ): Promise<PlannedLine> {
   const unbuildable = new Map<string, string>();
-  /** Whether `model` blocks a recipe the line is not yet walked without; it is added to the set. */
+  /**
+   * Whether `model` blocks a recipe the line is not yet walked without; it is added to the set, with the pack's other
+   * recipes on its maps that no machine can run either (`BuildModel.blockedAlike`), so one walk goes around a machine
+   * that cannot be built, whichever of its recipes the line would pick next.
+   */
   const blocks = (model: BuildModel): boolean => {
     let grew = false;
     for (const [id, why] of model.blocked) {
@@ -1440,6 +1445,7 @@ async function plannedLine(
       unbuildable.set(id, why);
       grew = true;
     }
+    if (grew) for (const [id, why] of model.blockedAlike ?? []) if (!unbuildable.has(id)) unbuildable.set(id, why);
     return grew;
   };
   for (let priced = first; ;) {

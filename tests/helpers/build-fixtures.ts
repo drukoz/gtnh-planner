@@ -39,6 +39,25 @@ function extended(spec: PackSpec, more: Pick<PackSpec, 'items' | 'machines' | 'r
 }
 
 /**
+ * Mini-GT plus Widget Dust, which the Basic Centrifuge (161, which no recipe makes) spins from 1, 3 or 9 iron ingots
+ * (`spin-1`, `spin-2`, `spin-3`) and the Basic Bending Machine (101) presses from 27 (`press-widget`): the candidate walk
+ * keeps only the cheapest producer (`KEEP_WITHIN`), so a line walked around one centrifuge recipe at a time would meet
+ * the next one each walk.
+ */
+export function centrifugeDustSpec(): PackSpec {
+  const ingots = (n: number): Array<[StuffKey, number]> => [['t:iron_ingot@0', n]];
+  return extended(MINI_GT, {
+    items: [{ key: 't:widget_dust@0', name: 'Widget Dust' }],
+    recipes: [
+      { id: 'spin-1', map: 'gt.recipe.centrifuge', in: ingots(1), out: [['t:widget_dust@0', 1]], eut: 16, dur: 100 },
+      { id: 'spin-2', map: 'gt.recipe.centrifuge', in: ingots(3), out: [['t:widget_dust@0', 1]], eut: 16, dur: 100 },
+      { id: 'spin-3', map: 'gt.recipe.centrifuge', in: ingots(9), out: [['t:widget_dust@0', 1]], eut: 16, dur: 100 },
+      { id: 'press-widget', map: 'gt.recipe.metalbender', in: ingots(27), out: [['t:widget_dust@0', 1]], eut: 16, dur: 100 },
+    ],
+  });
+}
+
+/**
  * Mini-GT plus a Large Bender (1100, a multiblock of the bending map): a 3 × 1 × 3 structure of its controller, an HV
  * Muffler Hatch (93) and 7 Machine Casings, crafted from 3 circuits and a casing; the LV and HV muffler hatches (91, 93),
  * an LV input bus (51), an LV output bus (61), a maintenance hatch (71) and the LV and MV energy hatches (81, 82), each

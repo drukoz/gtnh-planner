@@ -7,7 +7,7 @@
 // crafting-table steps by hand (HAND_STEP_WEIGHT 3), while the Auto Workbench is the default (the controller's ruling).
 
 import { describe, it, expect } from 'vitest';
-import { fluidCellsSpec, kitSpec, sandSpec, withBuildRecipes, withPriceGap } from '../../helpers/build-fixtures.ts';
+import { centrifugeDustSpec, fluidCellsSpec, kitSpec, sandSpec, withBuildRecipes, withPriceGap } from '../../helpers/build-fixtures.ts';
 import { MINI_GT, miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec, type PackSpec } from '../../helpers/pack-spec.ts';
 import { assignOwned } from '../../../src/server/planner/machines.ts';
@@ -76,6 +76,22 @@ describe('build cost in the plan', () => {
     // Ruling P19: the swap list says why the recipe on a machine that cannot be built cannot be picked.
     expect(stepOf(plan, 'circuit-lv').alternatives.find((a) => a.recipeId === 'circuit-mv')?.unusable)
       .toEqual(['Advanced Assembler cannot be built here (no recipe in this pack)']);
+  });
+
+  it('walks around every recipe of a machine that cannot be built, not only the ones it met', async () => {
+    // The centrifuge no recipe makes would cost one walk per recipe the walk picks next (spin-1, then spin-2, then
+    // spin-3); its blocked step names them all at once, so the second walk presses the dust, and the swap list says why
+    // none of the three can be picked, in every mode.
+    const pack = packFromSpec(centrifugeDustSpec());
+    for (const buildHorizonHours of [24, null]) {
+      const plan = await planLine(pack, S({ target: 't:widget_dust@0', amount: 1, buildHorizonHours }), emptyContext());
+      expect(plan.status).toBe('ok');
+      const step = plan.steps.find((s) => s.mainOutput === 't:widget_dust@0');
+      expect(step?.recipeId).toBe('press-widget');
+      for (const id of ['spin-1', 'spin-2', 'spin-3']) {
+        expect(step?.alternatives.find((a) => a.recipeId === id)?.unusable, id).toEqual(['Basic Centrifuge cannot be built here (no recipe in this pack)']);
+      }
+    }
   });
 
   it('names the machines whose build cost it cannot count', async () => {

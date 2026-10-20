@@ -20,7 +20,7 @@ import { PROGRAMMED_CIRCUIT_ID } from '../pack/recipes.ts';
 import type { PlanBasis } from './basis.ts';
 import { cleanroomMachine } from './bom.ts';
 import { buildKeys, gapText, hatchSet, itemPrices, machineBuildCost, machineGap, type ItemPrices, type PriceGap } from './build-cost.ts';
-import type { CandidateGraph, LpRecipe } from './candidates.ts';
+import { acceptRecipe, type CandidateGraph, type LpRecipe } from './candidates.ts';
 import { ownedPools, recipeCircuit } from './machines.ts';
 
 const TICKS_PER_SECOND = 20;
@@ -90,6 +90,15 @@ export interface BuildModel {
    * (<why>)`. `planLine` walks the line again without them (Task 5).
    */
   blocked: ReadonlyMap<string, string>;
+  // optional addition (the plan 12 fix wave: one walk around a machine that cannot be built, not one per recipe of it)
+  /**
+   * The pack's other recipes the group can run here (`acceptRecipe`) on the maps of `blocked`'s recipes, none in the
+   * graph, that no machine can run either, by the same rule and with the same reason, judged only where every machine
+   * that could run them is one this model priced (another is left to a later walk): `planLine` walks the line without
+   * them too, so a machine that cannot be built (a Brewery with a dozen recipes for one good) costs one walk around it,
+   * not one per recipe the walk would otherwise pick next. Absent when `blocked` is empty or names all of them.
+   */
+  blockedAlike?: ReadonlyMap<string, string>;
   /**
    * OQ5 (a): a step recipe whose options all lack `canAdd` (only owned machines that cannot be built are left): the most
    * runs per second they do, Σ perMachine × owned, and `<owned>× <name>, which cannot be built here (<why>)` of its first
@@ -209,6 +218,26 @@ export function itemSlots(pack: Pack, mapId: string): number {
     ITEM_SLOTS.set(pack, byMap);
   }
   return byMap.get(mapId) ?? 0;
+}
+
+const RECIPES_OF_MAP = new WeakMap<Pack, ReadonlyMap<string, readonly Recipe[]>>();
+
+/** The pack's recipes that list `mapId` among their maps, in the pack's order; indexed once per pack. */
+function recipesOfMap(pack: Pack, mapId: string): readonly Recipe[] {
+  let byMap = RECIPES_OF_MAP.get(pack);
+  if (byMap === undefined) {
+    const lists = new Map<string, Recipe[]>();
+    for (const r of pack.recipes) {
+      for (const id of r.maps) {
+        const list = lists.get(id);
+        if (list === undefined) lists.set(id, [r]);
+        else list.push(r);
+      }
+    }
+    byMap = lists;
+    RECIPES_OF_MAP.set(pack, byMap);
+  }
+  return byMap.get(mapId) ?? [];
 }
 
 /** A step recipe of a graph (`kind: 'recipe'`) with its pack recipe and map. */
@@ -545,14 +574,22 @@ export async function lineBuildModel(pack: Pack, graph: CandidateGraph, basis: P
   const fallbackById = new Map<string, PinFallback>();
   const blocked = new Map<string, string>();
   const ownedOnly = new Map<string, { runsPerSecond: number; text: string }>();
+  /**
+   * OQ5 (a): why no machine can run `r` on `mapId` — every eligible machine cannot be built here and none is owned (a
+   * furnace step, and a crafting step by hand or in a pack without an Auto Workbench, has no machine to name), or its
+   * cleanroom cannot be built — with its options (rules 1–8, its pin) and pin fallback; `why` undefined when one can.
+   */
+  const judge = (r: Recipe, mapId: string, eligible: readonly MachineOption[] | undefined): { options: MachineOption[]; fallback?: PinFallback; why?: string } => {
+    const pin = Object.hasOwn(settings.machineTier, r.id) ? settings.machineTier[r.id] : undefined;
+    const judged: { options: MachineOption[]; fallback?: PinFallback; why?: string } = optionsOf(pack, r, mapId, { ...env, standIn, pin });
+    const first = (eligible ?? machineOptions(pack, r, mapId, { ...env, eligibleOnly: true }))[0];
+    const why = judged.options.length === 0 && first?.unbuildable !== undefined ? `${first.name} cannot be built here (${first.unbuildable})`
+      : roomWhy !== undefined && r.meta.cleanroom === true ? `Cleanroom cannot be built here (${roomWhy})` : undefined;
+    if (why !== undefined) judged.why = why;
+    return judged;
+  };
   for (const { lp, r, mapId } of steps) {
-    const pin = Object.hasOwn(settings.machineTier, lp.id) ? settings.machineTier[lp.id] : undefined;
-    const { options, fallback } = optionsOf(pack, r, mapId, { ...env, standIn, pin });
-    // OQ5 (a): every eligible machine cannot be built here and none is owned (a furnace step, and a crafting step by hand
-    // or in a pack without an Auto Workbench, has no machine to name), or its cleanroom cannot be built.
-    const first = eligibleById.get(lp.id)?.[0];
-    const why = options.length === 0 && first?.unbuildable !== undefined ? `${first.name} cannot be built here (${first.unbuildable})`
-      : roomWhy !== undefined && lp.needsCleanroom ? `Cleanroom cannot be built here (${roomWhy})` : undefined;
+    const { options, fallback, why } = judge(r, mapId, eligibleById.get(lp.id));
     if (why !== undefined) {
       blocked.set(lp.id, why);
       optionsById.set(lp.id, []);
@@ -570,6 +607,24 @@ export async function lineBuildModel(pack: Pack, graph: CandidateGraph, basis: P
     }
   }
 
+  // The recipes of the maps it blocks that no machine can run either (`BuildModel.blockedAlike`).
+  const alike = new Map<string, string>();
+  if (blocked.size > 0) {
+    const priced = new Set(machines.map((m) => m.mteId));
+    const inGraph = new Set(steps.map((s) => s.lp.id));
+    const maps = [...new Set(steps.filter((s) => blocked.has(s.lp.id)).map((s) => s.mapId))].sort(byString);
+    for (const mapId of maps) {
+      for (const r of recipesOfMap(pack, mapId)) {
+        if (inGraph.has(r.id) || alike.has(r.id)) continue;
+        const accepted = acceptRecipe(pack, r, basis.env);
+        if (!accepted.ok || accepted.mapId !== mapId) continue;
+        if (!offersFor(pack, r, mapId, { ...offerEnv, owned }).every(({ m }) => priced.has(m.mteId))) continue;
+        const { why } = judge(r, mapId, undefined);
+        if (why !== undefined) alike.set(r.id, why);
+      }
+    }
+  }
+
   const share = settings.mode === 'rate' && NETWORKED_LOGISTICS.has(settings.logistics);
   const parts = !share ? undefined
     : settings.logistics === 'routed' ? routedParts(pack, graph) : settings.logistics === 'ae2' ? ae2Parts(pack, graph) : undefined;
@@ -581,7 +636,7 @@ export async function lineBuildModel(pack: Pack, graph: CandidateGraph, basis: P
   const horizonSeconds = settings.mode === 'makeN' || settings.buildHorizonHours === null
     ? null : (settings.buildHorizonHours ?? DEFAULT_BUILD_HORIZON_HOURS) * SECONDS_PER_HOUR;
 
-  return {
+  const model: BuildModel = {
     mode: settings.mode, horizonSeconds, share,
     sharingKey: (id) => keys.get(id) ?? '-|',
     options: (id) => optionsById.get(id) ?? [],
@@ -591,4 +646,6 @@ export async function lineBuildModel(pack: Pack, graph: CandidateGraph, basis: P
     pinFallback: (id) => fallbackById.get(id),
     owned, pools, prices, cleanroom,
   };
+  if (alike.size > 0) model.blockedAlike = alike;
+  return model;
 }
