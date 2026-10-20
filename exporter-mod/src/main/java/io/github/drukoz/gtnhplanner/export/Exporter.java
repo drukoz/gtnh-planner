@@ -52,6 +52,9 @@ import io.github.drukoz.gtnhplanner.export.textures.TextureExporter;
  * ({@code src/shared/gt/hatch-kinds.ts}, in that order) GT's own structure check took on the element's probe cell;
  * {@code elementOf[i]} is the element of {@code blocks[i]}, or &minus;1 for the controller and for a cell GT's check
  * never reached or that two elements checked. The two come together or not at all</td></tr>
+ * <tr><td>Item slot counts (exporter 0.6.0+)</td><td>{@code itemInSlots} / {@code itemOutSlots} on a GT basic
+ * machine's line are its input slots ({@code mInputSlotCount}) and output slots ({@code mOutputItems.length}); every
+ * other machine and every older export has neither</td></tr>
  * <tr><td>Furnace {@code ef} / {@code mw}</td><td>output GT's own electric furnace / microwave lookup returned for
  * that input; {@code mw} is omitted when the microwave would explode, burn or reject it</td></tr>
  * <tr><td>Item {@code electric}</td><td>only for a non-wildcard item that is an IC2 {@code IElectricItem} with a
