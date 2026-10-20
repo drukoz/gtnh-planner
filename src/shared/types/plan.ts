@@ -152,7 +152,11 @@ export interface StepOption {
     key: StuffKey; amount: number /* per run, expected */; share: number /* 0..1 in this plan */;
     rawPerRun: number /* amount × its raw cost per unit */; steps: number /* its standalone chain's recipes; 0 for a leaf */;
     via?: string[] /* map names of that chain, at most 3 */;
-    /** Why the group cannot get this option here ("needs MV (your tier is LV)"), as a swap list says it; absent: it can. */
+    /**
+     * Why the group cannot get this option here ("needs MV (your tier is LV)"), as a swap list says it, or, for one this
+     * plan does not use, that no chain makes it without a good the line avoids ("needs Tin Ingot, which is on your avoid
+     * list"); absent: it can.
+     */
     unusable?: string[];
   }>;
 }
@@ -316,6 +320,9 @@ export interface PlanWarning {
   // first, and their shares
   stepIds?: string[];
   share?: number[];
+  // optional addition (fix spec R11, plan 09 follow-up): every good a `batch-short` warning covers (`key` is the first),
+  // which the plan index then leaves to it
+  keys?: StuffKey[];
 }
 
 export interface Plan {

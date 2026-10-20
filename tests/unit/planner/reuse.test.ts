@@ -102,6 +102,14 @@ describe('reusing machines we have (rate)', () => {
     expect(where[0]).not.toBe(ctx.ownedMachines[0]!.where![0]);
     expect(where[0]!.pos).not.toBe(ctx.ownedMachines[0]!.where![0]!.pos);
   });
+  it('names the dimension each reused machine stands in', async () => {
+    // Plan 09's final review: without a linked base the scan's whole world counts, so a machine the step reuses may stand
+    // in the Nether; the plan names its dimension for the step panel (`dimId:<n>`, as for a found ore spot).
+    const nether: MachineWhere = { dim: -1, pos: [8, 40, 8] };
+    const p = await planLine(pack, S(), scanned({ mteId: ASSEMBLER, count: 2, where: [A1, nether] }));
+    expect(stepOf(p, 'circuit-lv').reused?.where).toEqual([A1, nether]);
+    expect(p.names).toMatchObject({ 'dimId:0': 'Overworld', 'dimId:-1': 'Nether' });
+  });
 });
 
 describe('reusing machines we have (Make N)', () => {

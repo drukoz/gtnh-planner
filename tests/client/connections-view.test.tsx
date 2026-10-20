@@ -96,6 +96,17 @@ describe('the Connections tab', () => {
     const legend = /<ul class="conn-legend"[^>]*>(.*?)<\/ul>/.exec(html)![1]!;
     expect([...legend.matchAll(/<li>.*?<\/span>(.*?)<\/li>/g)].map((m) => m[1])).toEqual(['ME network', 'Hookup to the base']);
   });
+  it('draws a flow carried by hand as such and lists it in the legend', () => {
+    const layout = { ...connLayout('routed'), buildSteps: [{ id: 'layout:hand:b:fill', order: 1, kind: 'logistics' as const,
+      text: 'Fill the Advanced Assembler by hand: 1× Titanium Dust a run (from the output chest)' }] };
+    const g = connectionsGraph(layout, connPlan, 'min');
+    const e = connectionsElk(g);
+    const pic = connectionsFromElk(g, { ...e, width: 900, height: 300, children: e.children!.map((c, i) => ({ ...c, x: i * 300, y: 10 })), edges: [] });
+    const html = shell({ layout, graph: g, picture: pic });
+    expect(html).toContain('data-edge="flow:step:a&gt;step:b:t:dust@0" class="conn-edge conn-via-hand"');
+    const legend = /<ul class="conn-legend"[^>]*>(.*?)<\/ul>/.exec(html)![1]!;
+    expect([...legend.matchAll(/<li>.*?<\/span>(.*?)<\/li>/g)].map((m) => m[1])).toContain('By hand (a machine the line runs by hand)');
+  });
   it('keeps the last picture up while the line is laid out again, and says when a newer one failed', () => {
     const html = shell({ loading: true, error: 'boom', layoutError: 'elk' });
     expect(html).toContain('data-testid="connections" aria-busy="true"');

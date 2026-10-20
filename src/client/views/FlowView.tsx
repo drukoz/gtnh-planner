@@ -299,21 +299,24 @@ export function FlowLegend(): ReactElement {
 /**
  * What does not add up, above the diagram (fix spec §6.2 "Issues"): red with an input nothing supplies, amber
  * otherwise; one line per issue with **Show** (lights the good and centres its first producer) and, for a good made two
- * ways, **Keep only <the bigger maker>** (pins its recipe for the good). No hooks, so tests can call it.
+ * ways, **Keep only <the bigger maker>** (pins its recipe for the good) until `settings` pin it, with a note on what the
+ * pin may leave or, once in place, leaves (`FlowIssueLine.stays`; "Updating…" until the plan of the pin is on screen).
+ * No hooks, so tests can call it.
  */
 export function FlowIssues(props: {
   plan: Plan; settings: PlanSettings; send: ProjectViewProps['send']; onShow(key: StuffKey): void; index?: PlanIndex;
 }): ReactElement | null {
   const { plan, settings, send, onShow } = props;
-  const lines = flowIssueLines(plan, props.index);
+  const lines = flowIssueLines(plan, props.index, settings);
   if (lines.length === 0) return null;
   const red = lines.some((l) => l.issue.code === 'orphan-input');
   return (
     <section className={red ? 'flow-issues error' : 'flow-issues'} aria-label="What does not add up">
       <ul>
-        {lines.map(({ issue, text, keepOnly }) => (
+        {lines.map(({ issue, text, keepOnly, stays }) => (
           <li key={problemId(issue)} data-issue={issue.code}>
             <span>{text}</span>
+            {stays !== undefined && <span className="muted">{` ${stays}`}</span>}
             <button type="button" className="small" onClick={() => onShow(issue.key)}>Show</button>
             {keepOnly !== undefined && (
               <button type="button" className="small" onClick={() => send([{ op: 'settings', patch: useOnlyPatch(settings, issue.key, keepOnly.recipeId) }])}>
@@ -556,6 +559,8 @@ type Selected = { kind: 'step'; id: string } | { kind: 'import'; key: StuffKey; 
  */
 function FlowDiagram(props: {
   plan: Plan; previousPlan: Plan | null | undefined; settings: PlanSettings; per: 'min' | 'hour'; send: ProjectViewProps['send'];
+  /** The project links a world base (the step panel says the machines it reuses stand there). */
+  base: boolean;
 }): ReactElement {
   const { plan, previousPlan, settings, per, send } = props;
   const [lineToggles, setLineToggles] = useState<ReadonlyMap<StuffKey, boolean>>(() => new Map());
@@ -602,7 +607,7 @@ function FlowDiagram(props: {
     const step = plan.steps.find((s) => s.id === selected.id);
     // Keyed by the step, so its open "more…" pages close when another step is picked.
     if (step !== undefined) {
-      panel = <StepPanel key={step.id} step={step} plan={plan} settings={settings} per={per} send={send} onClose={close} onSelect={selectStep} />;
+      panel = <StepPanel key={step.id} step={step} plan={plan} settings={settings} per={per} send={send} onClose={close} onSelect={selectStep} base={props.base} />;
       selectedId = step.id;
     }
   } else if (selected?.kind === 'import' && plan.flows.some((f) => f.from === 'raw' && f.key === selected.key)) {
@@ -659,5 +664,5 @@ export function FlowView(props: ProjectViewProps): ReactElement {
   if (plan.status === 'infeasible') return <Infeasible plan={plan} />;
   const { settings } = project;
   const per = settings.mode === 'makeN' ? 'hour' : settings.per;
-  return <FlowDiagram plan={plan} previousPlan={props.previousPlan} settings={settings} per={per} send={send} />;
+  return <FlowDiagram plan={plan} previousPlan={props.previousPlan} settings={settings} per={per} send={send} base={project.world.baseId !== null} />;
 }

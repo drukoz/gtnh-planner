@@ -358,6 +358,15 @@ describe('machine tiers', () => {
     }]);
     expect(stepOf(none, 'bend-plate').tiers).toEqual([LV_TIER, { ...MV_TIER, owned: 0, pinned: true }]);
   });
+
+  it('names the dimension an owned machine of another tier stands in', async () => {
+    // The plan names the dimension of each machine a step reuses (`dimId:<n>`, plan 09 follow-up, reuse.test.ts); an
+    // owned machine of another tier that runs beside the step's own machines (`reused.others`) is one of them.
+    const nether: MachineWhere = { dim: -1, pos: [8, 40, 8] };
+    const plan = await planLine(miniGt(), plates(), owning({ mteId: 102, count: 1, where: [nether] }));
+    expect(stepOf(plan, 'bend-plate').reused).toMatchObject({ count: 0, where: [], others: [{ mteId: 102, where: [nether] }] });
+    expect(plan.names).toMatchObject({ 'dimId:-1': 'Nether' });
+  });
 });
 
 const DISPLAY = 'gregtech:gt.metaitem.02@32765#abcdefabcdef';

@@ -6,6 +6,7 @@
 // whatever a converter throws into an `ExportFormatError` with the file and line.
 
 import { fluidKey, parseItemKey, type ItemKey, type StuffKey } from '../../shared/keys.ts';
+import { TGS_MODE_ORDER, type TgsMode } from '../../shared/types/farm.ts';
 import type { Ingredient, Product, Recipe } from '../../shared/types/pack.ts';
 import type { AssemblyLineLine, CraftingLine, CraftingSlot, FurnaceLine, GtRecipeLine, ItemSlot, MetaValue } from './format.ts';
 import type { ItemRefs, LoadContext } from './load.ts';
@@ -24,6 +25,8 @@ export const GT_TOOL_ITEM_IDS: readonly string[] = Object.freeze(['gregtech:gt.m
 export const VANILLA_FURNACE_TICKS = 200;
 /** GT metadata identifiers → `Recipe.meta` keys; identifiers not listed here are kept as they are. */
 export const META_RENAMES: Readonly<Record<string, string>> = Object.freeze({ coil_heat: 'coilHeat', low_gravity: 'lowGravity', cleanroom: 'cleanroom' });
+/** The Tree Growth Simulator's display rows: item slot i of a row is the product of mode `TGS_MODE_ORDER[i]` (farms.md §1.6). */
+export const TREE_FARM_MAP = 'gt.recipe.treefarm';
 
 /** GT's chance scale: 10000 = 100 % (export-mod.md §2.5). */
 const CHANCE_SCALE = 10000;
@@ -54,8 +57,8 @@ function consumption(amount: number, c: number | undefined): Pick<Ingredient, 'c
   return { consumed, chance: consumed ? chanceOf(c) : 0 };
 }
 
-/** A concrete item's key, or a wildcard's first option (outputs and display references name one item). */
-function firstKeyAt(items: ItemRefs, i: number): ItemKey {
+/** A concrete item's key, or a wildcard's first option (outputs, display references and the crop table name one item). */
+export function firstKeyAt(items: ItemRefs, i: number): ItemKey {
   return items.optionsAt(i)[0] as ItemKey;
 }
 
@@ -144,6 +147,21 @@ function gtMeta(line: GtRecipeLine, items: ItemRefs): Recipe['meta'] {
   return meta;
 }
 
+/**
+ * The mode of each item output a tree farm row keeps (`products`: non-null, amount above 0), in output order, so that
+ * `tgsModes[k]` names `outputs[k]`. A slot past the known modes gets none, with a warning.
+ */
+function tgsModes(out: readonly ItemSlot[], ctx: LoadContext): TgsMode[] {
+  const modes: TgsMode[] = [];
+  out.forEach((s, i) => {
+    if (s === null || !(s[1] > 0)) return;
+    const mode = TGS_MODE_ORDER[i];
+    if (mode !== undefined) modes.push(mode);
+    else ctx.warn(`${TREE_FARM_MAP}: item output ${i} of a row is past the ${TGS_MODE_ORDER.length} Tree Growth Simulator modes, it has none`);
+  });
+  return modes;
+}
+
 /** A GT recipe line; null for a disabled recipe (dropped, §11.4). Throws for a map index the export does not have. */
 export function gtRecipe(line: GtRecipeLine, ctx: LoadContext): Recipe | null {
   const map = ctx.mapsByIndex.get(line.map);
@@ -154,6 +172,8 @@ export function gtRecipe(line: GtRecipeLine, ctx: LoadContext): Recipe | null {
   if (line.fake) flags.fake = true;
   if (line.meta?.recycle === true || line.cat?.endsWith('_recycling')) flags.recycling = true;
   if (map.dynamic) flags.dynamicMap = map.dynamic;
+  const meta = gtMeta(line, ctx.items);
+  if (map.id === TREE_FARM_MAP) meta.tgsModes = tgsModes(line.out, ctx);   // before the id, which hashes `meta`
   const content: RecipeContent = {
     source: 'gt', maps: [map.id],
     inputs: [
@@ -162,7 +182,7 @@ export function gtRecipe(line: GtRecipeLine, ctx: LoadContext): Recipe | null {
     ],
     outputs: [...itemProducts(line.out, ctx.items), ...products(line.fout, ([name]) => fluidKey(name))],
     euPerTick: line.eut, durationTicks: line.dur, amps: map.amps, specialValue: line.sv ?? 0,
-    meta: gtMeta(line, ctx.items), flags,
+    meta, flags,
   };
   if (line.cat !== undefined) content.category = line.cat;
   return withId(content);

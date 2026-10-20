@@ -4,7 +4,9 @@ import type { IncomingMessage } from 'node:http';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { startTestServer, type TestServer } from '../../helpers/test-server.ts';
+import { makePack } from '../../helpers/make-pack.ts';
 import { packFromSpec } from '../../helpers/pack-spec.ts';
+import { sampleExportSpec, sampleInlineCrop } from '../../helpers/sample-export.ts';
 import { createApp } from '../../../src/server/app.ts';
 import { DEFAULT_CONFIG } from '../../../src/server/config.ts';
 import { HttpError } from '../../../src/server/http/router.ts';
@@ -52,6 +54,14 @@ describe('pack routes', () => {
   it('GET /api/pack', async () => {
     expect(await (await s.request('/api/pack')).json()).toMatchObject({ recipeCount: 1, mapCount: 1, itemCount: 2,
       exclusionRules: ['recycling', 'massfab', 'replicator', 'scrap', 'lava-centrifuge', 'programmed-circuit-conversion'] });
+  });
+  it('GET /api/pack counts the items of the item table, not the crop items of the crop table', async () => {
+    const cropped = await makePack({ ...sampleExportSpec(), crops: [sampleInlineCrop()] });
+    const crop = [...cropped.items.values()].filter((item) => item.cropOnly === true).length;
+    expect(crop).toBe(3);
+    const t = await startTestServer({ pack: cropped });
+    expect((await (await t.request('/api/pack')).json()).itemCount).toBe(cropped.items.size - crop);
+    await t.close();
   });
   it('GET /api/pack lists the materials an avoid entry can name, by display name then name (ruling R12)', async () => {
     const named = packFromSpec({

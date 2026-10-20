@@ -23,7 +23,7 @@ import { DIRS, posKey, step, type Vec3 } from '../../shared/layout/geometry.ts';
 import { FACES } from '../../shared/types/assets.ts';
 import type { Machine, Pack } from '../../shared/types/pack.ts';
 import type { Plan, PlanWarning } from '../../shared/types/plan.ts';
-import type { HostCover, LocalBlock, Placement, PlacedUnit } from './arrange.ts';
+import { handRunSurroundings, type HostCover, type LocalBlock, type Placement, type PlacedUnit } from './arrange.ts';
 import { growTree, linkBits, type PathBounds, type PathOptions, type TreeResult } from './path.ts';
 import { coverRateWarning, machineRef, pickCable, pickFluidPipe, pickPump, pickTransformer, type Parts } from './parts.ts';
 import { bankLossEUt, deliveredVolts, LOSS_WARN_FRACTION, tierGroups, transformerStages, type Stage, type Stages } from './power.ts';
@@ -135,11 +135,12 @@ function fluidPortOf<T>(u: PlacedUnit, keys: readonly StuffKey[], ports: readonl
 
 /**
  * One net per fluid any placed unit takes or makes, sorted by key. A net is `atTail` when the fluid also enters or
- * leaves the line (a flow from `raw`, to `out`/`sink`, or touching a step with no placed unit). Each producing face
- * must move its step's outgoing flows of the fluid split evenly over the step's machines.
+ * leaves the line (a flow from `raw`, to `out`/`sink`, or touching a step with no placed unit or one run by hand,
+ * whose goods you carry: architecture §11 entry 48). Each producing face must move its step's outgoing flows of the
+ * fluid split evenly over the step's machines.
  */
 export function fluidNets(pack: Pack, plan: Plan, placement: Placement): FluidNet[] {
-  const placed = new Set(placement.units.map((u) => u.stepId));
+  const placed = new Set(placement.units.filter((u) => u.manual === undefined).map((u) => u.stepId));
   const counts = new Map(plan.steps.map((s) => [s.id, s.count]));
   const keys = new Set<StuffKey>();
   for (const u of placement.units) for (const key of [...u.io.fluidIn, ...u.io.fluidOut]) keys.add(key);
@@ -188,6 +189,8 @@ class Grid {
     for (const b of input.placement.blocks) this.taken.add(posKey(b.pos));
     for (const b of input.occupied) this.taken.add(posKey(b.pos));
     for (const p of input.placement.reserved) this.taken.add(posKey(p));
+    // nothing of the line touches a unit run by hand: no cable or pipe on a cell beside it
+    for (const p of handRunSurroundings(input.placement)) this.taken.add(posKey(p));
   }
 
   isTaken(p: Vec3): boolean {
@@ -663,7 +666,8 @@ function fluidCellsOf(plan: FluidPlan): Vec3[] {
 
 /**
  * One pipe tree per fluid, in key order: from the tail root (a fluid that enters or leaves the line) or the first free
- * producer port to every other port of the net. Port cells link down into their machine or hatch. The box reaches up
+ * producer port to every other port of the net. Port cells link into their machine or hatch: down from a port above it,
+ * else toward the hatch whose front faces the port. The box reaches up
  * to the highest tail root, which may sit above the units. A net that cannot reach every port in it, walled in by what
  * is laid already (a higher tier's cable that crosses the spine one block up, another fluid's pipe), is grown again in
  * a box one block above everything laid so far, so it climbs over the wall (the line may then stand taller); a net
@@ -679,6 +683,12 @@ function pipeFluids(input: InternalInput, plans: readonly FluidPlan[], fluidCell
   const inside = (p: Vec3) => p.every((v, i) => v >= bounds.min[i]! && v <= bounds.max[i]!);
   const portUnit = new Map<string, PlacedUnit>();
   for (const u of placement.units) for (const p of [...u.ports.fluidIn, ...u.ports.fluidOut]) if (!portUnit.has(posKey(p))) portUnit.set(posKey(p), u);
+  // the side of each port that touches its hatch or machine: down for a port above, a hatch's front elsewhere
+  const portSide = new Map<string, number>();
+  for (const u of placement.units) {
+    u.ports.fluidIn.forEach((p, i) => portSide.set(posKey(p), u.ports.fluidInSides[i] ?? DOWN));
+    u.ports.fluidOut.forEach((p, i) => portSide.set(posKey(p), u.ports.fluidOutSides[i] ?? DOWN));
+  }
   const pipes: InternalResult['fluidPipes'] = [];
   for (const plan of plans) {
     const { net } = plan;
@@ -720,7 +730,7 @@ function pipeFluids(input: InternalInput, plans: readonly FluidPlan[], fluidCell
     }
     grid.links.push(...tree.links);
     const unreached = new Set(tree.unreached.map(posKey));
-    for (const p of plan.ports) if (!unreached.has(posKey(p))) grid.links.push([p, step(p, DOWN)]);
+    for (const p of plan.ports) if (!unreached.has(posKey(p))) grid.links.push([p, step(p, portSide.get(posKey(p)) ?? DOWN)]);
     fail(tree.unreached);
     pipes.push({ key: net.key, name: net.name, pipe, cells: 1 + tree.cells.length });
   }
@@ -779,7 +789,8 @@ function pumpCovers(input: InternalInput, plans: readonly FluidPlan[], pipeAt: R
 
 /**
  * The power head, the cable trees per feed tier and the fluid-pipe trees, on cells inside the line that no unit, mode
- * block, reserved air cell or earlier route uses. Without `stages` (no electric unit) nothing is wired.
+ * block, reserved air cell or earlier route uses and that touch no unit run by hand (`handRunSurroundings`). Without
+ * `stages` (no electric unit) nothing is wired.
  */
 export function routeInternal(input: InternalInput): InternalResult {
   const { placement, stages } = input;

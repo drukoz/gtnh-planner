@@ -66,6 +66,12 @@ export interface ConduitSpec { kind: ConduitKind; item: StuffKey; connections: n
 /** A tail chest: where raw inputs go in, or which final outputs it collects. */
 export interface TailChest { side: 'input' | 'output'; keys: StuffKey[] }
 
+/**
+ * What a multiblock's hatch is for: power, items in or out, fluids in or out, maintenance, the muffler GT needs on
+ * some, and a steam multiblock's steam input hatch (the hatches the layout puts on a multiblock: server hatch-rules.ts).
+ */
+export type HatchKind = 'energy' | 'input_bus' | 'output_bus' | 'input_hatch' | 'output_hatch' | 'maintenance' | 'muffler' | 'steam';
+
 export interface LayoutBlock {
   pos: [number, number, number]; block: BlockRef; role: BlockRole; facing?: number; stepId?: string; label: string;
   // §11.14: covers on this block's faces; programmed circuit number, chip settings, interface/pattern settings
@@ -83,6 +89,8 @@ export interface LayoutBlock {
   conduits?: ConduitSpec[];
   /** Set on the tail's input and output chests. */
   tail?: TailChest;
+  /** What a hatch the line chose for a multiblock is for (the 3D view's links go into a multiblock through its buses). */
+  hatch?: HatchKind;
   /**
    * A GT basic machine's front (`mMainFacing`), which GT keeps apart from its output side: then `facing` is the output
    * side (`mFacing`, where its output cover and inputs go). Only singleblock machines carry it.

@@ -20,6 +20,8 @@
 // - Furnace ef / mw: the output GT's own electric furnace / microwave lookup returned for that input; mw is omitted
 //   when the microwave would explode, burn or reject it.
 // - electric: only for a non-wildcard item that is an IC2 IElectricItem with a finite maxCharge > 0.
+// - Crop table: adds no line to items.jsonl.gz, so an export with it has the items and recipe ids of one without it;
+//   an item the item table lacks is written inline in the crop line (CropItemRef).
 // - Markers: EXPORT_OK or EXPORT_FAILED is written after every other file is closed.
 
 import type { MachineKind, OrePart } from '../../shared/types/pack.ts';
@@ -63,6 +65,31 @@ export interface VoidMinerLine { dim: string; drops: Array<{ item: number; weigh
 export interface GasSiphonLine { planet: string; tier: number; depths: Array<[depth: number, fluid: string, amount: number]> }
 export interface SpacePumpLine { planetType: number; gasType: number; fluid: string; amount: number }
 export interface SpaceAsteroidLine { name: string; outputs: number[]; chances: number[]; moduleTier: number; droneTiers: [number, number]; distance: [number, number]; weight: number }
+/**
+ * An item a crop line names: its index in items.jsonl.gz when the item table has it, else the item itself, inline
+ * (exporter 0.5.1). Exporter 0.5.0 wrote indices only and added the items the table lacked to it, which gave the export
+ * more items, wildcard options and recipe ids than one without the crop table.
+ */
+export type CropItemRef = number | CropInlineItem;
+/**
+ * An item of the crop table that the item table lacks: `key` is `<registry name>@<damage>` (the item key of an NBT-free
+ * variant, never the wildcard), `name` its English name, `nbt` its SNBT when the stack has NBT (the loader appends `#`
+ * and the hash, as for items.jsonl.gz). A seed is named after its crop, `<crop name> Seeds`: CropsNH's own name format
+ * (`cropsnh_genericSeeds.format`), which the game shows once a seed is analyzed.
+ */
+export interface CropInlineItem { key: string; name: string; nbt?: string }
+/**
+ * A CropsNH crop card (exporter 0.5.0 and later; items the item table lacks are inline from 0.5.1), lines in CropsNH's
+ * registration order: `duration` in growth points; `dropChance` CropsNH's float, widened exactly; each drop's `count`
+ * its stack size and `chance` CropsNH's own value on the 1/10000 scale, never clamped, always written, the likeliest
+ * drop first (Water Lily's are above 10000: 80000 for its lily pads and 20000 for its pink dye; a Crop Manager's
+ * harvest counts at most one success per drop round, while the Industrial Farm multiplies by chance / 10000 uncapped);
+ * `liked` biome dictionary tags by name; `soils` by item key, each once, where a soil the item table lacks is the variant
+ * its block drops (`Block.damageDropped`: a rotated log is its log) and a wildcard soil (any variant of the block) is its
+ * variant 0; `requirements` the simple class names of its growth requirements in the card's order; `seed` null for a
+ * card without a seed item; `minSeedBedTier` −1 for any Seed Bed.
+ */
+export interface CropLine { id: string; name: string; tier: number; duration: number; dropChance: number; drops: Array<{ item: CropItemRef; count: number; chance: number }>; liked: string[]; soils: CropItemRef[]; requirements: string[]; seed: CropItemRef | null; minSeedBedTier: number }
 
 export interface ExportLineTypes {
   items: ItemLine; fluids: FluidLine; fluidContainers: FluidContainerLine; oreDict: OreDictLine; recipeMaps: RecipeMapLine;
@@ -70,6 +97,7 @@ export interface ExportLineTypes {
   machines: MachineLine; structures: StructureLine; materials: MaterialLine; oreMaterials: OreMaterialLine;
   dimensions: DimensionLine; celestial: CelestialLine; oreVeins: OreVeinLine; smallOres: SmallOreLine;
   undergroundFluids: UndergroundFluidLine; voidMiner: VoidMinerLine; gasSiphon: GasSiphonLine; spacePump: SpacePumpLine; spaceAsteroids: SpaceAsteroidLine;
+  crops: CropLine;
 }
 export type ExportFileKey = keyof ExportLineTypes;
 export const EXPORT_FILES: { readonly manifest: 'manifest.json' } & { readonly [K in ExportFileKey]: string } = {
@@ -81,8 +109,10 @@ export const EXPORT_FILES: { readonly manifest: 'manifest.json' } & { readonly [
   dimensions: 'dimensions.jsonl.gz', celestial: 'celestial.jsonl.gz', oreVeins: 'ore-veins.jsonl.gz', smallOres: 'small-ores.jsonl.gz',
   undergroundFluids: 'underground-fluids.jsonl.gz', voidMiner: 'void-miner.jsonl.gz', gasSiphon: 'gas-siphon.jsonl.gz',
   spacePump: 'space-pump.jsonl.gz', spaceAsteroids: 'space-asteroids.jsonl.gz',
+  crops: 'crops.jsonl.gz',
 };
-export const OPTIONAL_EXPORT_FILES: readonly ExportFileKey[] = ['structures'];
+/** Files an export may lack: the crop table comes only from exporter 0.5.0 on (self-contained from 0.5.1), and only with CropsNH installed. */
+export const OPTIONAL_EXPORT_FILES: readonly ExportFileKey[] = ['structures', 'crops'];
 
 export interface ManifestFile {
   format: typeof EXPORT_FORMAT; exportId: string; exporterVersion: string; exportedAt: string; packVersion: string; gtVersion: string;

@@ -36,6 +36,7 @@ public final class ExportFiles {
         m.put("gasSiphon", "gas-siphon.jsonl.gz");
         m.put("spacePump", "space-pump.jsonl.gz");
         m.put("spaceAsteroids", "space-asteroids.jsonl.gz");
+        m.put("crops", "crops.jsonl.gz");
         FILES = Collections.unmodifiableMap(m);
     }
 

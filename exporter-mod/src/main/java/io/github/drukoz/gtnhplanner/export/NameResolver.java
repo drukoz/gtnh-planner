@@ -32,9 +32,10 @@ public final class NameResolver {
 
     /**
      * {@link #itemName} without counting a failure or keeping a sample: for wildcard stacks (meta 32767), which are
-     * not items of their own and must not inflate {@code nameFailures} or crowd out the concrete samples.
+     * not items of their own, and for the crop table's inline items, which are no lines of {@code items.jsonl.gz}; neither
+     * may inflate {@code nameFailures} or crowd out the concrete samples.
      */
-    String uncountedName(ItemStack s) {
+    public String uncountedName(ItemStack s) {
         try {
             String name = s.getDisplayName();
             if (name != null) return name;

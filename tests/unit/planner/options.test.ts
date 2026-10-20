@@ -174,6 +174,50 @@ describe('ingredient options', () => {
     expect(flagged).toEqual([['cast-weight', LEAD], ['x-lead', 't:lead_ingot@0']]);
     expect(plan.avoided?.map((a) => [a.key, a.unavoidable])).toEqual([[LEAD, true], ['t:antimony_dust@0', false], ['t:lead_ingot@0', true]]);
   });
+  it('says it ignores a pinned option on the avoid list without promising another option', async () => {
+    // Plan 09's final review: at LV only lead can be extracted (the solder and tin extractors need 34 EU/t, an MV machine),
+    // so the line uses the pinned lead anyway, flagged as nothing at the tier avoiding it; the pin's warning said
+    // "using another option that avoids it".
+    const spec = structuredClone(CIRCUIT);
+    for (const id of ['x-solder', 'x-tin']) spec.recipes!.find((r) => r.id === id)!.eut = 34;
+    const plan = await planLine(packFromSpec(spec), S({ optionChoice: { 'ca#100': LEAD }, avoid: ['Lead'] }), emptyContext());
+    expect(plan.status).toBe('ok');
+    expect(ids(plan)).toEqual(['ca', 'x-lead']);
+    expect(plan.warnings.filter((w) => w.code === 'avoid-unavoidable').map((w) => w.key)).toContain(LEAD);
+    expect(staleOptions(plan)).toEqual([{ code: 'stale-option', key: 'ca#100', text: 'Electronic Circuit: the pinned ingredient Molten Lead is on the avoid list; ignoring the pin' }]);
+  });
+  it('says which option needs a good on the avoid list', async () => {
+    // Plan 09's final review: with tin avoided, soldering alloy (alloyed from tin ingots) was listed as usable and the
+    // cheapest, at 0.5 raw in two steps, while the line takes lead; pinning it would use tin after all.
+    const plan = await planLine(pack, S({ avoid: ['Tin'] }), emptyContext());
+    expect(ids(plan)).toEqual(['ca', 'x-lead']);
+    expect(circuitStep(plan).options?.[0]?.choices.map((c) => [c.key, c.share, c.unusable])).toEqual([
+      [SOLDER, 0, ['needs Tin Ingot, which is on your avoid list']], [LEAD, 1, undefined]]);
+    // A pin of it is honoured, its tin flagged as nothing avoiding it: the option in use is not marked.
+    const pinned = await planLine(pack, S({ avoid: ['Tin'], optionChoice: { 'ca#100': SOLDER } }), emptyContext());
+    expect(ids(pinned)).toEqual(['alloy-solder', 'ca', 'x-solder']);
+    expect(pinned.warnings.filter((w) => w.code === 'avoid-unavoidable').map((w) => w.key)).toEqual(['t:tin_ingot@0']);
+    expect(circuitStep(pinned).options?.[0]?.choices.map((c) => [c.key, c.share, c.unusable])).toEqual([[SOLDER, 1, undefined], [LEAD, 0, undefined]]);
+  });
+  it('keeps an option pinnable that a dearer chain makes without the avoided good', async () => {
+    // Review of the plan 09 follow-up: the mark read only the cheapest chain, over the cost model that ignores the avoid
+    // list, so at MV a Good Electronic Circuit read "needs Antimony Ingot", though a chain without antimony makes it and a
+    // pin of it planned fine. Here soldering alloy is also alloyed from lead, dearer (3 raw for the slot): with tin
+    // avoided it stays pinnable, at what that chain costs.
+    const spec = structuredClone(CIRCUIT);
+    spec.recipes!.push({ id: 'alloy-solder-pb', map: 'gt.recipe.alloysmelter', in: [['t:lead_ingot@0', 50], ['t:antimony_dust@0', 10]], out: [['t:solder_ingot@0', 10]], eut: 16 });
+    const p = packFromSpec(spec);
+    const plan = await planLine(p, S({ avoid: ['Tin'] }), emptyContext());
+    expect(ids(plan)).toEqual(['ca', 'x-lead']);
+    expect(circuitStep(plan).options?.[0]?.choices.map((c) => [c.key, c.share, c.rawPerRun, c.steps, c.via, c.unusable])).toEqual([
+      [LEAD, 1, 2, 1, ['Fluid Extractor'], undefined], [SOLDER, 0, 3, 2, ['Fluid Extractor', 'Alloy Smelter'], undefined]]);
+    // Its pin plans that chain, with nothing on the avoid list.
+    const pinned = await planLine(p, S({ avoid: ['Tin'], optionChoice: { 'ca#100': SOLDER } }), emptyContext());
+    expect(ids(pinned)).toEqual(['alloy-solder-pb', 'ca', 'x-solder']);
+    expect(circuitStep(pinned).options?.[0]?.pinned).toBe(SOLDER);
+    expect(pinned.warnings.filter((w) => w.code === 'avoid-unavoidable')).toEqual([]);
+    expect(pinned.avoided?.filter((a) => a.unavoidable)).toEqual([]);
+  });
 });
 
 describe('a slot split between two options', () => {
