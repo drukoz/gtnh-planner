@@ -3,6 +3,7 @@ import { MINI_GT, miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec, type RecipeSpec } from '../../helpers/pack-spec.ts';
 import { planLine, emptyContext, settingsHash, planCacheKey, PlanCache, powerSummary, batchShortWarning } from '../../../src/server/planner/plan.ts';
 import { linePricing } from '../../../src/server/planner/pricing.ts';
+import { indexPlan } from '../../../src/shared/plan/balance.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import type { OreVein } from '../../../src/shared/types/pack.ts';
 import type { Plan, PlanSettings, PlanStep } from '../../../src/shared/types/plan.ts';
@@ -372,9 +373,105 @@ describe('planLine', () => {
     expect(batch.targetPerSecond).toBeUndefined();
     expect(batch.rawCost).toBeUndefined();
   });
+  it('names a step after the output it runs for when the line also buys its other output, so the plan adds up', async () => {
+    // A macerator splits raw dust into X and Y; a thing takes 2 X and 1 Y. X is also mined, for less than a second split
+    // costs (Raw Dust at 1.5), so the line runs the macerator once and buys the other X. The split runs for its Y, and is
+    // named after it (fix spec D13, plan 09 Task 8): nothing is both bought and made (spec R11), in a rate or a batch.
+    // (At a tie the line makes all of it, one source: solve.ts withoutTiedPurchases.)
+    const p = packFromSpec({
+      items: [{ key: 'raw@0', name: 'Raw Dust', gt: { prefix: 'dust', material: 'Raw' } }, { key: 'x@0', name: 'X Dust', gt: { prefix: 'dust', material: 'X' } },
+              { key: 'y@0', name: 'Y Part' }, { key: 't@0', name: 'Thing' }],
+      maps: [{ id: 'gt.recipe.macerator', name: 'Macerator' }, { id: 'gt.recipe.assembler', name: 'Assembler' }],
+      machines: [{ mteId: 1, name: 'Basic Macerator', maps: ['gt.recipe.macerator'], tier: 1 }, { mteId: 2, name: 'Basic Assembler', maps: ['gt.recipe.assembler'], tier: 1 }],
+      recipes: [{ id: 'split', map: 'gt.recipe.macerator', in: [['raw@0', 1]], out: [['x@0', 1], ['y@0', 1]], eut: 2 },
+                { id: 'make-t', map: 'gt.recipe.assembler', in: [['x@0', 2], ['y@0', 1]], out: [['t@0', 1]], eut: 2 }],
+      worldgen: { veins: [vein('ore.mix.raw', 'Raw'), vein('ore.mix.x', 'X')] },
+    });
+    const plan = await planLine(p, S({ target: 't@0', tier: 1, amount: 60, per: 'min', costOverrides: { Raw: 1.5 } }), emptyContext());
+    expect(plan.steps.map((s) => [s.id, s.mainOutput])).toEqual([['make-t', 't@0'], ['split', 'y@0']]);
+    expect(plan.rawInputs.map((r) => [r.key, r.perSecond])).toEqual([['raw@0', 1], ['x@0', 1]]);
+    expect(plan.warnings).toEqual([]);
+    const batch = await planLine(p, S({ target: 't@0', tier: 1, mode: 'makeN', amount: 10, costOverrides: { Raw: 1.5 } }), emptyContext());
+    expect(batch.steps.map((s) => [s.id, s.mainOutput])).toEqual([['make-t', 't@0'], ['split', 'y@0']]);
+    expect(batch.rawInputs.map((r) => r.key)).toEqual(['raw@0', 'x@0']);
+    expect(batch.warnings.filter((w) => w.code === 'bought-and-made')).toEqual([]);
+  });
+  it('names two steps after the part only each makes, not the X both make beside it', async () => {
+    // Fix spec D13 (plan 09 final review): a macerator and a centrifuge each make 2 X beside a part only it makes, and a
+    // thing takes 4 X and one of each part. Each step is there for its part (the line has it from that step alone) and X
+    // is their co-product, so the plan adds up (spec R11). Named after X by value × use, both steps "made" X, and the
+    // plan said X is made two ways.
+    const p = packFromSpec({
+      items: [{ key: 'raw@0', name: 'Raw Dust', gt: { prefix: 'dust', material: 'Raw' } }, { key: 'x@0', name: 'X Dust', gt: { prefix: 'dust', material: 'X' } },
+              { key: 'a@0', name: 'A Part' }, { key: 'b@0', name: 'B Part' }, { key: 't@0', name: 'Thing' }],
+      maps: [{ id: 'gt.recipe.macerator', name: 'Macerator' }, { id: 'gt.recipe.centrifuge', name: 'Centrifuge' }, { id: 'gt.recipe.assembler', name: 'Assembler' }],
+      machines: [{ mteId: 1, name: 'Basic Macerator', maps: ['gt.recipe.macerator'], tier: 1 }, { mteId: 2, name: 'Basic Centrifuge', maps: ['gt.recipe.centrifuge'], tier: 1 },
+                 { mteId: 3, name: 'Basic Assembler', maps: ['gt.recipe.assembler'], tier: 1 }],
+      recipes: [{ id: 'make-a', map: 'gt.recipe.macerator', in: [['raw@0', 1]], out: [['x@0', 2], ['a@0', 1]], eut: 2 },
+                { id: 'make-b', map: 'gt.recipe.centrifuge', in: [['raw@0', 1]], out: [['x@0', 2], ['b@0', 1]], eut: 2 },
+                { id: 'make-t', map: 'gt.recipe.assembler', in: [['x@0', 4], ['a@0', 1], ['b@0', 1]], out: [['t@0', 1]], eut: 2 }],
+      worldgen: { veins: [vein('ore.mix.raw', 'Raw')] },
+    });
+    const plan = await planLine(p, S({ target: 't@0', tier: 1, amount: 60, per: 'min' }), emptyContext());
+    expect(plan.steps.map((s) => [s.id, s.mainOutput])).toEqual([['make-a', 'a@0'], ['make-b', 'b@0'], ['make-t', 't@0']]);
+    expect(plan.warnings).toEqual([]);
+    expect(indexPlan(plan).issues).toEqual([]);
+  });
   it('says in a warning what the plan does not add up on', async () => {
-    // A macerator splits raw dust into X and Y; a thing takes 2 X and 1 Y. X is also mined, so the line runs the
-    // macerator once and buys the other X: X is both bought and made (spec R11), and the plan says so.
+    // A centrifuge makes 2 X from the W Dust a macerator makes beside the thing's part, and a second macerator grinds
+    // the other 2 X the thing takes from raw dust: each of the two makes only X, so both are there for their X (spec
+    // D13), X is made two ways (spec R11), and the plan says so. (Grinding all 4 X would cost a raw dust more.)
+    const p = packFromSpec({
+      items: [{ key: 'raw@0', name: 'Raw Dust', gt: { prefix: 'dust', material: 'Raw' } }, { key: 'x@0', name: 'X Dust' },
+              { key: 'a@0', name: 'A Part' }, { key: 'w@0', name: 'W Dust' }, { key: 't@0', name: 'Thing' }],
+      maps: [{ id: 'gt.recipe.macerator', name: 'Macerator' }, { id: 'gt.recipe.centrifuge', name: 'Centrifuge' }, { id: 'gt.recipe.assembler', name: 'Assembler' }],
+      machines: [{ mteId: 1, name: 'Basic Macerator', maps: ['gt.recipe.macerator'], tier: 1 }, { mteId: 2, name: 'Basic Centrifuge', maps: ['gt.recipe.centrifuge'], tier: 1 },
+                 { mteId: 3, name: 'Basic Assembler', maps: ['gt.recipe.assembler'], tier: 1 }],
+      recipes: [{ id: 'make-a', map: 'gt.recipe.macerator', in: [['raw@0', 2]], out: [['a@0', 1], ['w@0', 1]], eut: 2 },
+                { id: 'spin-w', map: 'gt.recipe.centrifuge', in: [['w@0', 1]], out: [['x@0', 2]], eut: 2 },
+                { id: 'grind-x', map: 'gt.recipe.macerator', in: [['raw@0', 1]], out: [['x@0', 2]], eut: 2 },
+                { id: 'make-t', map: 'gt.recipe.assembler', in: [['x@0', 4], ['a@0', 1]], out: [['t@0', 1]], eut: 2 }],
+      worldgen: { veins: [vein('ore.mix.raw', 'Raw')] },
+    });
+    const plan = await planLine(p, S({ target: 't@0', tier: 1, amount: 60, per: 'min' }), emptyContext());
+    expect(plan.steps.map((s) => [s.id, s.runsPerSecond])).toEqual([['grind-x', 1], ['make-a', 1], ['make-t', 1], ['spin-w', 1]]);
+    expect(plan.steps.filter((s) => s.mainOutput === 'x@0').map((s) => s.id)).toEqual(['grind-x', 'spin-w']);
+    expect(plan.warnings).toEqual([{ code: 'multi-producer', key: 'x@0', text: 'X Dust is made 2 ways: Basic Macerator (50%) and Basic Centrifuge (50%).',
+      stepId: 'grind-x', stepIds: ['grind-x', 'spin-w'], share: [0.5, 0.5] }]);
+  });
+  it('names a step after the output only it makes, per minute and in a batch whose whole runs leave some of it over', async () => {
+    // Fix spec D13 (plan 09 final review): a reactor makes the line's only X Part (2 a run) and an H Cell, an
+    // electrolyzer 2 H Cells a run for less; a thing takes 3 X and 10 H. The reactor runs for its X, the electrolyzer
+    // makes the rest of the H. A batch of one thing runs the reactor twice and keeps 1 X over, yet it still runs for its
+    // X: what each step runs for comes from the line's LP, as per minute.
+    const p = packFromSpec({
+      items: [{ key: 'raw@0', name: 'Raw Dust', gt: { prefix: 'dust', material: 'Raw' } }, { key: 'x@0', name: 'X Part' }, { key: 'h@0', name: 'H Cell' },
+              { key: 'o@0', name: 'O Part' }, { key: 't@0', name: 'Thing' }],
+      maps: [{ id: 'gt.recipe.chemicalreactor', name: 'Chemical Reactor' }, { id: 'gt.recipe.electrolyzer', name: 'Electrolyzer' },
+             { id: 'gt.recipe.assembler', name: 'Assembler' }],
+      machines: [{ mteId: 1, name: 'Basic Chemical Reactor', maps: ['gt.recipe.chemicalreactor'], tier: 1 },
+                 { mteId: 2, name: 'Basic Electrolyzer', maps: ['gt.recipe.electrolyzer'], tier: 1 },
+                 { mteId: 3, name: 'Basic Assembler', maps: ['gt.recipe.assembler'], tier: 1 }],
+      recipes: [{ id: 'react', map: 'gt.recipe.chemicalreactor', in: [['raw@0', 2]], out: [['x@0', 2], ['h@0', 1]], eut: 2 },
+                { id: 'electrolyze', map: 'gt.recipe.electrolyzer', in: [['raw@0', 1]], out: [['h@0', 2], ['o@0', 1]], eut: 2 },
+                { id: 'make-t', map: 'gt.recipe.assembler', in: [['x@0', 3], ['h@0', 10]], out: [['t@0', 1]], eut: 2 }],
+      worldgen: { veins: [vein('ore.mix.raw', 'Raw')] },
+    });
+    const mains = [['electrolyze', 'h@0'], ['make-t', 't@0'], ['react', 'x@0']];
+    const rate = await planLine(p, S({ target: 't@0', tier: 1, amount: 60, per: 'min' }), emptyContext());
+    expect(rate.steps.map((s) => [s.id, s.runsPerSecond])).toEqual([['electrolyze', 4.25], ['make-t', 1], ['react', 1.5]]);
+    expect(rate.steps.map((s) => [s.id, s.mainOutput])).toEqual(mains);
+    expect(indexPlan(rate).issues).toEqual([]);
+    const batch = await planLine(p, S({ target: 't@0', tier: 1, mode: 'makeN', amount: 1 }), emptyContext());
+    expect(batch.steps.map((s) => [s.id, s.runs])).toEqual([['electrolyze', 4], ['make-t', 1], ['react', 2]]);
+    expect(batch.makeN?.leftovers).toContainEqual({ key: 'x@0', amount: 1, chance: 1 });
+    expect(batch.steps.map((s) => [s.id, s.mainOutput])).toEqual(mains);
+    expect(indexPlan(batch).issues).toEqual([]);
+  });
+  it('makes all of a good a step of the line makes rather than buy the rest at the same raw material', async () => {
+    // The case above at the plain price of Raw Dust: a second split costs what buying the other X does, and the line
+    // takes all of its X from the macerator, leaving a Y over, instead of buying X beside it (plan 09 Task 8: the audit's
+    // checker calls such a purchase redundant, and fix spec §7.2 allows no such plan).
     const p = packFromSpec({
       items: [{ key: 'raw@0', name: 'Raw Dust', gt: { prefix: 'dust', material: 'Raw' } }, { key: 'x@0', name: 'X Dust', gt: { prefix: 'dust', material: 'X' } },
               { key: 'y@0', name: 'Y Part' }, { key: 't@0', name: 'Thing' }],
@@ -385,10 +482,10 @@ describe('planLine', () => {
       worldgen: { veins: [vein('ore.mix.raw', 'Raw'), vein('ore.mix.x', 'X')] },
     });
     const plan = await planLine(p, S({ target: 't@0', tier: 1, amount: 60, per: 'min' }), emptyContext());
-    expect(plan.steps.map((s) => [s.id, s.mainOutput])).toEqual([['make-t', 't@0'], ['split', 'x@0']]);
-    expect(plan.rawInputs.map((r) => [r.key, r.perSecond])).toEqual([['raw@0', 1], ['x@0', 1]]);
-    expect(plan.warnings).toEqual([{ code: 'bought-and-made', key: 'x@0', text: 'X Dust is both bought (50%) and made by Basic Macerator.',
-      stepId: 'split', stepIds: ['split'], share: [0.5] }]);
+    expect(plan.steps.map((s) => [s.id, s.runsPerSecond])).toEqual([['make-t', 1], ['split', 2]]);
+    expect(plan.rawInputs.map((r) => [r.key, r.perSecond])).toEqual([['raw@0', 2]]);
+    expect(plan.byproducts.map((b) => [b.key, b.amount])).toEqual([['y@0', 1]]);
+    expect(plan.warnings.filter((w) => w.code === 'bought-and-made')).toEqual([]);
   });
   it('names a step after its product, not the free water beside it, when the cost model never walked the product', async () => {
     // Fix spec D13 as ruled in Task 1: a good's value is its cost-model cost (0 when not finite), never below its plain

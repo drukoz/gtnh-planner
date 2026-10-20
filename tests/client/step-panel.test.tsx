@@ -157,6 +157,31 @@ describe('step panel: sections', () => {
     const pinnedHtml = panelHtml(pinned, { ...circuits, steps: [pinned] }, S({ optionChoice: { 'ca#100': 'fluid:molten.tin' } }));
     expect(text(pinnedHtml)).toContain('Molten Tin pinned: 1.00 raw per circuit vs 0.50 for Molten Soldering Alloy; needs Fluid Extractor');
     expect(pinnedHtml).toMatch(/<input type="radio"[^>]*checked=""[^>]*><span[^>]*>144 L Molten Tin/);
+    expect(text(pinnedHtml)).not.toContain('is not usable now');
+  });
+  it('says a pinned option is not usable only when the plan cannot use it, not while the next plan is on its way', () => {
+    // The project store applies the pin at once; the plan that honours it (`slot.pinned`) comes seconds later.
+    const choices = [
+      { key: 'fluid:molten.solderingalloy', amount: 72, share: 1, rawPerRun: 0.5, steps: 2 },
+      { key: 'fluid:molten.tin', amount: 144, share: 0, rawPerRun: 1, steps: 1 },
+      { key: 'fluid:molten.lead', amount: 288, share: 0, rawPerRun: 2, steps: 1, unusable: ['needs MV (your tier is LV)'] },
+    ];
+    const ca = step({
+      id: 'ca', mapId: 'gt.recipe.circuitassembler', machine: { mteId: 1180, name: 'Circuit Assembler', tier: 1 }, runsPerSecond: 0.1, mainOutput: 't:ec@0',
+      inputs: [{ key: 't:part@0', amount: 1, chance: 1 }, { key: 'fluid:molten.solderingalloy', amount: 72, chance: 1 }],
+      outputs: [{ key: 't:ec@0', amount: 1, chance: 1 }], options: [{ slot: 100, choices }],
+    });
+    const circuits = planOf({ steps: [ca], names: { 't:ec@0': 'Electronic Circuit', 't:part@0': 'Part', 'fluid:molten.solderingalloy': 'Molten Soldering Alloy',
+      'fluid:molten.tin': 'Molten Tin', 'fluid:molten.lead': 'Molten Lead', 'fluid:molten.bismuth': 'Molten Bismuth' } });
+    const pinning = (key: string): string => panelHtml(ca, circuits, S({ optionChoice: { 'ca#100': key } }));
+    // Tin just pinned, the plan still the one before: its radio is checked, and nothing says the pin failed.
+    const waiting = pinning('fluid:molten.tin');
+    expect(waiting).toMatch(/<input type="radio"[^>]*checked=""[^>]*><span[^>]*>144 L Molten Tin/);
+    expect(text(waiting)).not.toContain('is not usable now');
+    expect(text(waiting)).toContain('Molten Soldering Alloy chosen');
+    // A pin the group cannot get here, or one the slot no longer offers (an option on the avoid list), is not usable.
+    expect(text(pinning('fluid:molten.lead'))).toContain('The pinned option Molten Lead is not usable now, so the planner chose another.');
+    expect(text(pinning('fluid:molten.bismuth'))).toContain('The pinned option Molten Bismuth is not usable now, so the planner chose another.');
   });
   it('offers to count a free input as supplied, but only one the plan consumes', () => {
     const rock = (supply: string): PlanStep => step({ id: 'rock', machine: { mteId: 3, name: 'Basic Rock Breaker', tier: 1 }, supply, mainOutput: supply,

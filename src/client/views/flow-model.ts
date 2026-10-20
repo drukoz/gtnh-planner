@@ -13,7 +13,6 @@ import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import { TIER_NAMES, V } from '../../shared/gt/tiers.ts';
 import { indexPlan, issueText, type PlanIndex, type PlanIssue, type PlanIssueCode } from '../../shared/plan/balance.ts';
 import type { LeafClass, Plan, PlanFlow, PlanSettings, PlanStep, PlanWarning } from '../../shared/types/plan.ts';
-import type { Focus } from '../state/flow-focus.ts';
 import { formatDuration, formatNumber, formatPercent, formatRate } from '../format.ts';
 import { toggleList } from './settings-model.ts';
 
@@ -103,6 +102,9 @@ export interface FlowLayout {
 
 /** A rectangle in diagram coordinates. */
 export interface Box { x: number; y: number; width: number; height: number }
+
+/** What the diagram lights up (fix spec §6.2 focus mode): one item, one box or one arrow, or nothing (`flow-focus.ts` keeps it). */
+export type Focus = { kind: 'item'; key: StuffKey } | { kind: 'node'; id: string } | { kind: 'edge'; id: string } | null;
 
 /** What a focus lights (fix spec §6.2): boxes, arrows and rows (ports), and of the boxes those that make and that take. */
 export interface FocusSets { nodes: Set<string>; edges: Set<string>; ports: Set<string>; producers: Set<string>; consumers: Set<string> }

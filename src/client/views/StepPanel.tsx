@@ -301,6 +301,10 @@ function OptionSlot(props: { step: PlanStep; slot: StepOption; settings: PlanSet
   const divisor = mainPerRun > 0 ? mainPerRun : 1;
   const unit = mainPerRun > 0 && main !== undefined ? unitWord(nameOf(main)) : 'run';
   const usable = slot.choices.filter((c) => c.unusable === undefined);
+  // As the swap list's pin: one the slot no longer offers (on the avoid list) or the group cannot get here is not
+  // usable. A pin the plan does not honour yet (`slot.pinned` comes with the next plan; the setting applies at once)
+  // is just waiting for that plan.
+  const pinUsable = pin === undefined || usable.some((c) => c.key === pin);
   const chosen = [...slot.choices].sort((a, b) => b.share - a.share)[0];
   let why: string | null = null;
   if (chosen !== undefined && chosen.share > 0) {
@@ -333,7 +337,7 @@ function OptionSlot(props: { step: PlanStep; slot: StepOption; settings: PlanSet
       ) : (
         <div key={c.key} className="option-choice unusable">{`${choiceText(c)} — ${c.unusable.join('; ')}`}</div>
       )))}
-      {pin !== undefined && slot.pinned !== pin && (
+      {pin !== undefined && !pinUsable && (
         <p className="muted small">{`The pinned option ${nameOf(pin)} is not usable now, so the planner chose another.`}</p>
       )}
     </fieldset>

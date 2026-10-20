@@ -290,14 +290,57 @@ Auditor ids: invariants INV-n, rootcause RCn, gtnh Gn, ui UI-n. "Decision" resol
   `recipeChoice` key.
 - **Fix.** `mainOutput` = the target if the recipe makes it, else the output with the largest
   `value = valueOf(key) × (amount the other steps take)`, ignoring an empty container the recipe hands back (a key
-  that is the `empty` of some `pack.fluidContainers` entry) unless the recipe makes nothing else; equal values go to the
-  output the other steps take most of, then by key. `StepLine` gets `valueOf?(key): number` and
-  `empties?: ReadonlySet<StuffKey>` (those empty containers), passed by `planSteps` and `makeN`. `planLine`'s
+  that is the `empty` of some `pack.fluidContainers` entry) unless the recipe makes nothing else, and ignoring a good
+  the line buys while the recipe makes another output that the other steps take, that the line does not buy, and that
+  is neither a free input (`FREE_KEYS`) nor an empty container the recipe hands back; and, when the recipe is the
+  line's only source of outputs the other steps take in full (no other step makes them, the other steps take all the
+  recipe makes of them, the line does not buy them, and they are neither free inputs nor empty containers it hands
+  back), choosing among those alone; equal values go to the output the other steps take most of, then by key. At an
+  LP optimum a step whose output the line also buys runs for another output (making more of the bought good would cost
+  more than buying it, and `withoutTiedPurchases` shuts a tied purchase), so
+  naming it after the bought good counted the purchase as the step's use: plan 09 Task 8 found a Bricked Blast Furnace
+  run for its Ferrosilite named Copper Ingot beside bought copper (the user's routed line, the EC MV lines), cutting
+  machines making Wafers named Poly-Si Dust, reactors making Epichlorohydrin and Epoxid named Salt Water, and R11 said
+  those balanced plans did not add up. By the same argument a step that is the only source of an output the other
+  steps take in full runs for it: that output sets how much the step runs, and run for a good another step makes too
+  the step would be that good's cheaper source and the other step would not run beside it. Plan 09's final review found
+  value × use naming such steps after a co-product the line uses a lot: on the GEC HV 2/min acceptance line at default
+  settings a reactor that alone makes the Iron III Chloride was named Hydrogen Cell and a sodalite electrolyzer that
+  alone makes the Raw Silicon Dust was named Chlorine ("Hydrogen Cell is made 3 ways", "Chlorine is made 2 ways", which
+  the issues box's Keep only could not clear), and most multi-producer warnings of Advanced and Integrated Logic
+  Circuits at HV with supporting lines, Robot Arm (MV) at HV and the MV Machine Hull had such a step (a Bricked Blast
+  Furnace run for its Ferrosilite named Copper Ingot; reactors run for Trichlorosilane, Vinyl Chloride or Methanol named
+  Hydrogen Cell, Hydrochloric Acid or Water Cell). "In full" matters: an output the step alone makes but the line throws
+  part of away sets nothing (the step runs beyond what the line takes of it), as the GEC HV line's water electrolysis
+  throws away 90 % of the Oxygen it alone makes and runs for its Hydrogen Cells, 97 % of the line's, and as the ILC HV
+  line's malachite Electric Blast Furnace throws away 46 % of its Carbon Dioxide and makes 89 % of the Copper Ingots;
+  taking any output only the step makes would name 10 of the 59 steps renamed at the default charge after a good they
+  partly throw away. The line takes all of an output when it throws at most 1e-6 of it away (`ALL_TAKEN_REL`; runs
+  keep 9 significant digits, D3). `StepLine` gets `valueOf?(key): number`, `empties?: ReadonlySet<StuffKey>` (those
+  empty containers), `bought?: ReadonlySet<StuffKey>` (the goods the solution buys, or the Make N batch buys; without
+  it no output is passed over for being bought) and `runsFor?` (recipe id → the goods the line has from that recipe
+  alone and takes in full, from the runs `stepLine` is given; without it no output is passed over for being made by
+  another step too), passed by `planSteps` and `makeN`. Make N reads `runsFor` from the line's LP, as a rate plan
+  does, not from its whole runs: rounding a run up leaves over goods the line takes in full (GEC HV × 4 kept the two
+  false warnings above when it was read from whole runs). `planLine`'s
   `valueOf(key)` = `max(costModel.cost(key) when finite else 0, basis.prices.price(key))`: never below the good's plain
   price, as R7 floors bought derived materials. The cost model splits a recipe's cost between its co-products
   arbitrarily and prices many intermediates 0 (Sulfuric Acid beside Water) or not at all (a Methyl Acetate Cell it never
   walked); at 0 against free Water the litres won, so the user's Electronic Circuit MV step "made Water" and the plan
   warned "Water is both bought and made".
+- **Effect and accepted residual (plan 09 final re-review).** R6 takes the supporting lines' roots from main outputs,
+  so the "alone and in full" rule changes which materials become roots. On the 204-line sweep it changed line
+  membership on 44 plans (165 steps). Roots lost: Hydrochloric Acid (15 plans), Silicon Solar Grade (Poly SI) Dust (13)
+  and lines named after waste gases (Carbon Dioxide 3, Hydrogen 3, Oxygen 2); roots gained: Steel Ingot, Ferrosilite
+  Dust and Phosphorus Dust (8 each) and Nitrogen (3). The GEC HV line at default settings gains a Steel Ingot line (its
+  Electric Blast Furnace was named Carbon Dioxide), and Advanced Circuit at HV with supporting lines loses its
+  Hydrochloric Acid line and gains Nitrogen and Phosphorus Dust lines. This is intended, not a regression. The GEC HV
+  2/min line keeps one co-product pair, and that is accepted: "Hydrogen Cell is made 2 ways" (water electrolysis 97 %,
+  salt water electrolysis 2 %, a step the Chlorine walk pulls in). Keep only cannot remove a maker that another good
+  pulls in; real-acceptance asserts at most one `multi-producer` issue on that line, and a later change should make the
+  issues box's Keep only honest for such pairs. Make N names a step from the LP's `runsFor` (this keeps GEC HV × 4
+  clean), so a one-run step can carry the name of an output it partly leaves over (a reactor named Naphtha in Make N
+  GEC × 4).
 
 ### D14 (minor) A thrown-away filled container makes the line extrude new cells — RC7
 
@@ -434,12 +477,19 @@ Stages at unit demand (replacing `simplest()` when `stepCharge > 0` and `S1 > 1e
    as one unit of raw material: a conversion costs no raw material, and R10 weighs a rank-1 convert option; S4 also
    weighs a conversion per run). Rows: main rows; `Σ rawCost·x ≤ (1 + STEP_CHARGE_CAP) × S1*`; `x_r ≤ STEP_BIG_M × max_j x¹_j × y_r`;
    derived purchase links as today. `integer` on the binaries, `maxNodes: STEP_MIP_MAX_NODES`, MIP start (`LpModel.start`,
-   passed to HiGHS `setSolution`) = `x¹` with `y = 1` where `x¹ > TINY`, else 0. A `feasible` (node-limited) result is
-   accepted.
+   passed to HiGHS `setSolution`) = the better, by this objective, of `x¹` and a sparse plan within the cap (today's
+   reweighted-L1 `fewestRecipes` under `Σ rawCost·x ≤ (1 + STEP_CHARGE_CAP) × S1*`, then S1 over its support), with
+   `y = 1` where the start runs a column above `TINY`, else 0 (plan 09 Task 8: from `x¹`, the most steps a plan of the
+   line has, the root node stopped on the user's line at 19 steps and +11 % raw material where 24 steps at +0.05 %
+   charge less; from the sparse start it finds them). A `feasible` (node-limited) result is accepted.
 3. **Fallback.** No MIP solution → today's fewest-recipes S3 with the exact lock; nothing → `simplify-skipped` (D2).
 4. **Consolidation.** For each good that is the `main` of 2+ recipes left in the support, try each minority producer:
    re-solve S1 over the support without it; keep the removal when
-   `raw/S1* + stepCharge·Σw` improves. (Cheap: one LP per minority producer.)
+   `raw/S1* + stepCharge·Σw` improves. (Cheap: one LP per minority producer.) Then each priced purchase of a good a step
+   recipe of the support makes is shut when the line does without it at no more raw material (within `S3_TOLERANCE`;
+   one the base does not use, at once), so S2 and S4 never buy a good beside the step that makes it at a tie (R11
+   `bought-and-made`; plan 09 Task 8: an Electric Blast Furnace run for its carbon dioxide made a share of the copper
+   ingots an HV circuit line bought).
 5. **Base and later stages.** `off` = every step recipe not in the support; base = S1 over the support; lock raw ≤ base;
    S2 (power) and S4 (canonical, R10) within the support, as `finish()` does now.
 
@@ -754,7 +804,7 @@ Each `planLine` < 5 s.
 | 3 "two places, two processes" | no good is the `mainOutput` of two steps in `P` and `PR`; at most one step makes `fluid:molten.plastic` and at most one makes `gregtech:gt.metaitem.01@17035` (Copper Plate) |
 | 4 "where the wire is coming out" | `focusSets(flowGraph(P,'hour'), { kind: 'item', key: 'gregtech:gt.blockmachines@2000' })` (1x Red Alloy Wire) has exactly one producer (the wiremill step) and the circuit assembler `c0106c4cb6b4b041` among its consumers; every `PortSide` of `indexPlan(P)` has its peers |
 | 5 "cobble … molten glass from sand" | no raw input and no step input is `minecraft:cobblestone@0`; no step makes `minecraft:gravel@0` or `minecraft:sand@0`; no step `handCraft`; the glass tube comes from sand or glass dust within 2 steps of an import (`P`: Glass Dust → forming press/alloy smelter; `PR`: Sand gathered) |
-| 6 "recheck the planning step" | `P.steps.length ≤ 20` (prototype 15), `PR.steps.length ≤ 32` (27); `P.rawCost.perSecond ≤ 1.25 × P.rawCost.leastPerSecond`; sorted recipe ids of `P` equal `P1m`'s and every rate is 60× (1e-9 relative); `checkPlanInvariants(pack, settings, P)` has no violation of kinds a, b, d, e, f; warnings include `pin-dominated` for step `0a074f4241a9e0f9`; no `numerics`, `simplify-skipped`, `free-loop`, `graph-too-big` |
+| 6 "recheck the planning step" | `P.steps.length ≤ 20` (prototype 15), `PR.steps.length ≤ 32` (27); `P.rawCost.perSecond ≤ 1.25 × P.rawCost.leastPerSecond`; sorted recipe ids of `P` equal `P1m`'s and every rate is 60× (1e-8 relative: P and P1m each round their rates to 9 significant digits, D3); `checkPlanInvariants(pack, settings, P)` has no violation of kinds a, b, d, e, f; warnings include `pin-dominated` for step `0a074f4241a9e0f9`; no `numerics`, `simplify-skipped`, `free-loop`, `graph-too-big` |
 
 The step caps above and the real-acceptance "step caps from §2" come from the 5 % prototype. At the 2 % default (§10
 answer 3) plan 09 Task 8 measures them again and sets each cap to the measured count + 5 (the same headroom; `P ≤ 27`
@@ -783,12 +833,23 @@ reactor recipes); (iii) bought-and-made where the producing step is in the plan 
 **`tests/unit/planner/real-acceptance.test.ts`** (updated): `ORDINARY` drops `fluid:molten.copper`,
 `minecraft:cobblestone@0`, `fluid:ethylene`, `fluid:molten.polyethylene` and the derived fluids; adds
 `minecraft:sand@0`, `minecraft:sand@1`, `minecraft:iron_ingot@0`, `minecraft:coal@0`, the cast iron ingot
-`gregtech:gt.metaitem.01@11304`, `fluid:helium` (HV aluminium) and `fluid:sulfuricacid` where a reachable source exists;
+`gregtech:gt.metaitem.01@11304`, `fluid:helium` (HV aluminium) and `fluid:sulfuricacid` where a reachable source exists,
+plus (plan 09 Task 8: the list came from the 5 % prototype without supporting lines) the base materials the supporting
+lines start from — antimony, chalcopyrite, malachite, sodalite, realgar, sulfur and tin dust, raw oil and sugar beet —
+and the logs canonicalRank ranks 0 (oak, acacia, rubber wood; R10), any of which fills Wood Pulp's `logWood` slot;
 the pinned-EC test asserts Sand or Glass Dust > 0 and cobblestone = 0; the MV steel test allows the supply steps
 (`maxSteps` 5) and asserts the Electric Blast Furnace; step caps from §2. Plan 08's avoid tests in this file keep their
 assertions and the 5 s bound; the one about Annealed Copper "still bought when avoiding Copper" tests a bought derived
-material, so it passes `routeDerived: false`. `real-pack.test.ts` keeps its limits except the MV steel machine count,
-which drops to ≤ 15 (the prototype's EBF plan has 12).
+material, so it passes `routeDerived: false`. Plan 09 Task 8 turns supporting lines off in four more cases, for the
+same kind of reason. The MV steel tests of both files buy Cast Iron Dust: their "no Steel Dust" check is R7's rule for
+bought derived materials, and the 5-step cap holds only then (at default settings the line also makes its cast iron
+from ore, 9 steps, so real-acceptance plans it at default settings too and asserts `ok`, < 5 s, an Electric Blast
+Furnace step and ≤ 14 steps). `real-pack.test.ts`'s 10 LV hulls a minute and 64-hull Make N cases keep the limits set
+for lines that buy their steel: at LV supporting lines make steel only in Bricked Blast Furnaces, whose count the
+objective ignores until plan 10's build cost (§9); the corpus still plans the LV hull and LV steel lines at default
+settings for soundness and time. `real-pack.test.ts` keeps its limits except the MV steel machine count, which drops
+to ≤ 20 (16 measured: oxygen from compressed air, 7 compressors, 7 centrifuges and a canner beside the EBF; the
+prototype's 12 electrolysed water).
 
 ### 7.3 Timing
 
@@ -873,6 +934,7 @@ decisions):
 | Build cost of unowned machines in the objective, `buildHorizonHours`, integer machine counts, `Plan.cost` (clarification §11.28) | needs a trustworthy build list first (D15 only partly fixes it); a machine-count term broke rate invariance in the prototype; gtnh §5: at 1/hour a 24 h horizon makes each MV machine ≈ 29 % of the line's raw | plan 10 |
 | The rest of reusing owned machines (§11.29): owned machines in the objective (no build cost for what the group owns) and sharing one owned machine across steps. Plan 09 Task 9 ships `reuseOwned`, `ownedManual` and `PlanStep.reused` for machine assignment and the build list (§10 answer 1) | "owned machines cost nothing to build" steers the plan only once the build cost is in the objective, and sharing is the same trade-off as `shareGroup`; none of the six complaints needs it | plan 10 |
 | Pooling build-list demand before rounding; stopping breakdowns at stocked components (G9) | design change of `expandWith` | plan 10 |
+| The machine-count and Make N limits of the LV hull lines at default settings (plan 09 Task 8: 10 LV hulls a minute plan 646 machines, 360 of them Bricked Blast Furnaces; 64 hulls in Make N take 38.5 h), checked only with bought steel until then (§7.2) | at LV supporting lines make steel only in Bricked Blast Furnaces, and machine counts enter the objective only with the build cost | plan 10 |
 | Machine tier choice (lowest tier that meets the rate, G11) and machine sharing (`PlanStep.shareGroup`, UI-10) | build-cost trade-offs | plan 10 |
 | Mob drops as gathered items (ender pearl, blaze rod, ghast tear, G2) | changes availability broadly; not needed for the reported lines | later |
 | Stock list from the world scan (G3: "what the group already has in storage is importable") | needs Plan 4 data in the leaf oracle | later |

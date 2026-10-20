@@ -63,15 +63,27 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('the active export', () => {
     expect(seconds).toBeLessThan(5);
   }, 300_000);
 
+  // With supporting lines (plan 09's default) an LV line makes its steel too, and LV makes steel only in Bricked Blast
+  // Furnaces: 360 of them, with 270 Coke Ovens, for 10 hulls a minute, as machine counts are not in the objective until
+  // plan 10 (fix spec §9). The hull cases plan from bought steel, as when their limits were set (fix spec §7.2).
   it('plans 10 LV Machine Hulls a minute at LV from ordinary materials', async () => {
-    const { plan, seconds } = await timed('LV Machine Hull 10/min LV', { target: gt('LV Machine Hull'), amount: 10, per: 'min', tier: 1 });
+    const { plan, seconds } = await timed('LV Machine Hull 10/min LV', { target: gt('LV Machine Hull'), amount: 10, per: 'min', tier: 1, routeDerived: false });
     expectSane(plan, 40);
     expect(seconds).toBeLessThan(5);
   }, 300_000);
 
-  it('plans Steel Ingots at MV without buying a form of steel made from steel', async () => {
-    const { plan, seconds } = await timed('Steel Ingot 10/min MV', { target: gt('Steel Ingot'), amount: 10, per: 'min', tier: 2 });
-    expectSane(plan, 30);
+  /**
+   * Fix spec §7.2 lowers this limit from 30 to 20 for the Electric Blast Furnace plan. Its oxygen comes from compressed
+   * air, a centrifuge and a canner (16 machines: 7 compressors, 7 centrifuges, a canner and the EBF): equally many steps
+   * and less power than electrolysing water (the prototype's 12 machines), so the power stage picks it. 20 still rules
+   * out the Bricked Blast Furnaces (31 to 36 machines, plan 09 Task 2).
+   */
+  const STEEL_MV_MAX_MACHINES = 20;
+
+  it('plans Steel Ingots at MV in an Electric Blast Furnace without buying a form of steel made from steel', async () => {
+    // Cast Iron Dust bought, as in real-acceptance.test.ts (supporting lines off, fix spec §7.2).
+    const { plan, seconds } = await timed('Steel Ingot 10/min MV', { target: gt('Steel Ingot'), amount: 10, per: 'min', tier: 2, routeDerived: false });
+    expectSane(plan, STEEL_MV_MAX_MACHINES);
     expect(plan.rawInputs.map((r) => pack.nameOf(r.key)).filter((name) => /Steel/.test(name))).toEqual([]);
     expect(seconds).toBeLessThan(5);
   }, 300_000);
@@ -93,7 +105,8 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('the active export', () => {
   }, 300_000);
 
   it('makes 64 LV Machine Hulls in a sane time with nothing short', async () => {
-    const { plan, seconds } = await timed('LV Machine Hull x64 LV', { target: gt('LV Machine Hull'), mode: 'makeN', amount: 64, tier: 1 });
+    // From bought steel, as above: smelting it in a Bricked Blast Furnace too takes 38 hours.
+    const { plan, seconds } = await timed('LV Machine Hull x64 LV', { target: gt('LV Machine Hull'), mode: 'makeN', amount: 64, tier: 1, routeDerived: false });
     expect(plan.status).toBe('ok');
     expect(plan.warnings.filter((w) => w.code === 'batch-short')).toEqual([]);
     expect(plan.makeN?.totalSeconds).toBeGreaterThan(0);
