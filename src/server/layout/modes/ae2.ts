@@ -134,13 +134,14 @@ interface RunAsk { perSecond: number; to: string | null; scale: number }
  * places no machine for, a machine run by hand: you keep those going), all of it. Each run of a pattern asks for the
  * pattern's inputs at the pattern's amounts (none for an item the plan sends it that its pattern does not take), which
  * the plan's flows into it split among its suppliers (raw inputs and what a step without a pattern makes come from
- * storage). A request is crafted by a pattern that makes it, but never by one already above it in the job:
- * `CraftFromPatternTask` adds its pattern to its request's `patternParents` before it asks for its inputs,
- * `CraftingContext.doWork` copies them into each input's request, and `CraftableItemResolver` drops them from that
- * request's patterns (patterns compare by what they encode, `PatternHelper.equals`). So a loop of patterns (cells emptied
- * and filled again) is planned until it would come back to a pattern above, and that item comes from storage. A step
- * runs as often as its most-asked-for pattern output needs (its other outputs go to the job's byproducts, which
- * `ExtractItemTask` takes before anything is crafted again), and nothing of what goes to your storage (`sink`) asks.
+ * storage; AE2 itself gives a request to the first pattern that makes it, by priority and then the network's order, which
+ * the layout cannot know, so the plan's split stands for it). A request is crafted by a pattern that makes it, but never
+ * by one already above it in the job: `CraftFromPatternTask` adds its pattern to its request's `patternParents` before it
+ * asks for its inputs, `CraftingContext.doWork` copies them into each input's request, and `CraftableItemResolver` drops
+ * them from that request's patterns (patterns compare by what they encode, `PatternHelper.equals`). So a loop of patterns
+ * (cells emptied and filled again) is planned until it would come back to a pattern above, and that item comes from
+ * storage. A step runs as often as its most-asked-for pattern output needs (its other outputs go to the job's byproducts,
+ * which `ExtractItemTask` takes before anything is crafted again), and nothing of what goes to your storage (`sink`) asks.
  */
 export function aeRunShares(plan: Plan, patterns: ReadonlyMap<string, PatternSpec>): Map<string, number> {
   // each distinct pattern by number, as AE2 tells patterns apart
