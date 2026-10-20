@@ -38,6 +38,16 @@ public final class HudText {
      * not loaded counts only among the shown ones. {@code states[i]} is the state of {@code d.blocks.get(i)}.
      */
     public static String summary(ProjectorData d, BlockState[] states, ViewFilter f) {
+        StringBuilder text = new StringBuilder("Planner: ").append(d.name).append(" — ").append(counts(d, states, f));
+        if (!f.isAll()) text.append(" · showing ").append(f.describe(d));
+        return text.toString();
+    }
+
+    /**
+     * The counts part of {@link #summary}, for the planner screen's title: {@code <placed>/<shown> placed, <wrong> wrong},
+     * then {@code , <n> can't be checked} when there are such blocks, counted as {@link #summary} counts them.
+     */
+    public static String counts(ProjectorData d, BlockState[] states, ViewFilter f) {
         int shown = 0, placed = 0, wrong = 0, unchecked = 0;
         for (int i = 0; i < d.blocks.size(); i++) {
             PlannedBlock b = d.blocks.get(i);
@@ -48,10 +58,9 @@ public final class HudText {
             else if (s.wrong()) wrong++;
             else if (s == BlockState.UNCHECKED) unchecked++;
         }
-        StringBuilder text = new StringBuilder("Planner: ").append(d.name).append(" — ").append(placed).append('/')
-            .append(shown).append(" placed, ").append(wrong).append(" wrong");
+        StringBuilder text = new StringBuilder().append(placed).append('/').append(shown).append(" placed, ")
+            .append(wrong).append(" wrong");
         if (unchecked > 0) text.append(", ").append(unchecked).append(" can't be checked");
-        if (!f.isAll()) text.append(" · showing ").append(f.describe(d));
         return text.toString();
     }
 

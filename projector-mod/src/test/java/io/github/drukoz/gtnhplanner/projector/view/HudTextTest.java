@@ -20,6 +20,13 @@ class HudTextTest {
         assertEquals("Planner: Steel line — the line is in dimension 0", HudText.otherDimension(d));
     }
 
+    @Test void countsAreTheSummaryWithoutTheNameOrTheFilter() throws Exception {
+        ProjectorData d = PayloadParserTest.sample();
+        assertEquals("3/10 placed, 2 wrong, 1 can't be checked", HudText.counts(d, STATES, ViewFilter.ALL));
+        assertEquals("1/2 placed, 1 wrong", HudText.counts(d, STATES, ViewFilter.ALL.withStep(1)));
+        assertEquals("0/2 placed, 0 wrong", HudText.counts(d, STATES, ViewFilter.ALL.withLayer(65)));
+    }
+
     @Test void mentionsBlocksThatCantBeChecked() throws Exception {
         assertTrue(HudText.summary(PayloadParserTest.sample(), STATES, ViewFilter.ALL.withStep(6)).contains("0/3 placed, 0 wrong, 1 can't be checked"));
     }
