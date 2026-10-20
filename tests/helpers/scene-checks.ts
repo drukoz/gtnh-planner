@@ -2,7 +2,7 @@
 // server's tests of laid-out lines: every link and every set face of every conduit of a layout has its arm, a set face's
 // arm is its connector and a link's the conduit itself, the arms of linked neighbours meet end to end, every arm reaches
 // the face it points at, two conduits never share a lane, every arm starts on its conduit's core or inside the bundle's
-// connector box, and every tile a conduit cell shows is opaque over its role's colour. Synthetic checks: nothing here
+// connector box, and every tile a conduit cell shows is opaque over a plain colour. Synthetic checks: nothing here
 // reads a game file.
 
 import { instanceTranslation, type SceneData, type SceneInstance } from '../../src/client/three/scene-data.ts';

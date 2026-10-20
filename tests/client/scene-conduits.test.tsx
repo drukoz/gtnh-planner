@@ -62,18 +62,21 @@ describe('conduits in the 3D view', () => {
       ['arm', 2, 1, [-0.1875, 0, 0], ['itemConduitIoConnector', `itemConduitInput ${RED}`]],
       ['arm', 3, 1, [-0.1875, 0, 0], ['liquidConduitEnder']]]);
     expect(scene.instances.every((i) => i.tiles.every((t) => t === i.tiles[0]))).toBe(true);   // one picture on every side
-    // every conduit tile, a connector's included, is drawn over the pipe role's colour (plan 16 Task 9)
-    const UNDER = 'under:255,179,0|';
+    // every conduit tile, a connector's included, is drawn over a colour (plan 16 Task 9): EnderIO's dark conduit grey,
+    // so the Item Conduit's see-through window shows dark as in the game, not the pipe role's amber (the review of
+    // f82c98c)
+    const UNDER = 'under:48,48,48|';
     for (const i of scene.instances) {
       const { key, layers, under } = scene.tiles[i.tiles[2]]!;
       expect(key).toBe(`${UNDER}${JSON.stringify(layers)}`);
-      expect(under).toEqual([255, 179, 0]);
+      expect(under).toEqual([48, 48, 48]);
     }
   });
   it("draws a bundle whose conduits part around EnderIO's connector box, each arm on the cell's centre line", () => {
-    // the item conduit goes north (its In / Out face) and east, the fluid conduit up (its Extract face) and west: no side
-    // has two, so every arm is centred (TileConduitBundle.getOffset), both cores sit in the middle and EnderIO draws its
-    // internal connector around them, 1.05 times their size (TileConduitBundle.addConnectors), over the role's colour
+    // the item conduit goes north (its In / Out face) and east, the fluid conduit up (its Extract face) and west: no
+    // side has two, so every arm is centred (TileConduitBundle.getOffset), both cores sit in the middle and EnderIO
+    // draws its internal connector around them, 1.05 times their size (TileConduitBundle.addConnectors), over the
+    // conduits' grey
     const scene = buildScene(bundleLayout, faces, new Map(), new Map());
     expect(scene.instances.map((i) => [i.shape, i.side, i.conduit, i.offset, drawn(scene, i.tiles[2])])).toEqual([
       ['hub', -1, undefined, undefined, ['conduitConnector']],
@@ -82,7 +85,7 @@ describe('conduits in the 3D view', () => {
       ['arm', 1, 1, undefined, ['itemConduitIoConnector', `itemConduitInput ${RED}`]],
       ['arm', 4, 1, undefined, ['liquidConduitEnder']]]);
     expect(scene.instances[0]!.size!.map((v) => Number(v.toFixed(6)))).toEqual([0.39375, 0.39375, 0.39375]);
-    expect(scene.tiles[scene.instances[0]!.tiles[0]]!.under).toEqual([255, 179, 0]);
+    expect(scene.tiles[scene.instances[0]!.tiles[0]]!.under).toEqual([48, 48, 48]);
   });
   it('lists each conduit and every filter and upgrade in the block list', () => {
     expect(blockList(bundleLayout, enderioNames).place).toEqual([

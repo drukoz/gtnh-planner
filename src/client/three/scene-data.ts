@@ -52,6 +52,11 @@ const BUNDLE_SPACING = 6 / 16;
 const CORE_HALF = 3 / 16;
 /** How much bigger than the cores it holds EnderIO draws a bundle's connector box (`TileConduitBundle.addConnectors`). */
 const HUB_SCALE = 1.05;
+/**
+ * What a conduit's, connector's and connector box's textured tiles are drawn over: the dark grey of EnderIO's conduit
+ * sheet, so the see-through window of the Item Conduit's texture shows dark, as in the game, not the pipe role's amber.
+ */
+const CONDUIT_UNDER: Rgb = [48, 48, 48];
 
 /** `${id}@${meta}`, plus `#${mteId}` for a GregTech machine: how the scene names a block to the asset routes. */
 export function blockKey(ref: BlockRef): string {
@@ -242,23 +247,22 @@ function onAllSides(tile: number): SceneInstance['tiles'] {
  * them out: the connector box (a `hub` of its `size` and `offset`, all faces the `north` texture of `conduit:other`)
  * when its conduits part, then per conduit in bundle order its `core` at each of its places unless the box holds them,
  * and an `arm` per side (ascending) that is one of its links (all faces the conduit's `north` texture) or one of its
- * faces that is not Disabled (all faces that face's connector: the `north` textures of its `CONNECTOR_PARTS`, each arrow
- * tinted with its side's channel colour), each with its `conduit` index and its `offset` when it is off the centre. Any
- * other
- * cable, pipe or chip pipe is a `core` plus an `arm` per connected side (ascending), and so is a ghost whose faces carry
- * `pipe`, its connected sides those whose neighbour is one of the line's cables or pipes (never a ghost): with `pipe`
- * (architecture §11.43 (c)) the core shows `pipe.core` on all six sides and an arm `pipe.end` on the side it points to,
- * its tip, and `pipe.arm` on the other five; without it every side is the `north` texture. The textured tiles of these
- * cores and arms, a conduit's and its connectors' included, are drawn over the block role's colour (`under`; a ghost's
- * is the ghost grey), so no pixel of a model sheet is see-through. Any other block is one `cube` whose world sides
- * show its faces oriented to its front (`frontOf`) by `orientFaces` (architecture §11.43 (j)): turned whole, except
- * that a block facing up or down whose four sides share their hull keeps each world side's own layers, as GT draws it,
- * and only its front's overlays move. After a block's own shapes come its covers, one `plate` per cover in `covers`
- * order, on the cover's face and carrying the cover's in-world overlay — else its item icon, else a plain colour — on
- * all six tiles. A face with no layers, or a block with no faces, is a plain colour, and a tile is shared by
- * everything that draws the same layers (and tints) over the same colour. Every tile's `color` is what it falls back
- * to: the block's own fallback colour (a conduit's own), a connector's channel colour (its extract side's, or an Insert
- * face's insert side's), the cover item's, or the role's.
+ * faces that is not Disabled (all faces that face's connector: the `north` textures of its `CONNECTOR_PARTS`, each
+ * arrow tinted with its side's channel colour), each with its `conduit` index and its `offset` when it is off the
+ * centre. Any other cable, pipe or chip pipe is a `core` plus an `arm` per connected side (ascending), and so is a
+ * ghost whose faces carry `pipe`, its connected sides those whose neighbour is one of the line's cables or pipes (never
+ * a ghost): with `pipe` (architecture §11.43 (c)) the core shows `pipe.core` on all six sides and an arm `pipe.end` on
+ * the side it points to, its tip, and `pipe.arm` on the other five; without it every side is the `north` texture. The
+ * textured tiles of these cores and arms are drawn over the block role's colour, a conduit's and its connectors' over
+ * CONDUIT_UNDER (`under`; a ghost's is the ghost grey), so no pixel of a model sheet is see-through. Any other block is
+ * one `cube` whose world sides show its faces oriented to its front (`frontOf`) by `orientFaces` (architecture §11.43
+ * (j)): turned whole, except that a block facing up or down whose four sides share their hull keeps each world side's
+ * own layers, as GT draws it, and only its front's overlays move. After a block's own shapes come its covers, one
+ * `plate` per cover in `covers` order, on the cover's face and carrying the cover's in-world overlay — else its item
+ * icon, else a plain colour — on all six tiles. A face with no layers, or a block with no faces, is a plain colour, and
+ * a tile is shared by everything that draws the same layers (and tints) over the same colour. Every tile's `color` is
+ * what it falls back to: the block's own fallback colour (a conduit's own), a connector's channel colour (its extract
+ * side's, or an Insert face's insert side's), the cover item's, or the role's.
  */
 export function buildScene(
   layout: Layout, faces: ReadonlyMap<string, BlockFaces>, icons: ReadonlyMap<StuffKey, IconDescriptor>, covers: ReadonlyMap<StuffKey, CoverLayers>,
@@ -299,20 +303,20 @@ export function buildScene(
         ...(more?.conduit === undefined ? {} : { conduit: more.conduit }), ...(more?.size === undefined ? {} : { size: [...more.size] }) });
     };
     const found = faces.get(blockKey(b.block));
-    /** What the textured tiles of a core or an arm are drawn over. */
-    const under = ROLE_FALLBACK[b.role];
+    /** What the textured tiles of a core or an arm are drawn over: a conduit's dark grey, else the role's colour. */
+    const under = b.conduits !== undefined && b.conduits.length > 0 ? CONDUIT_UNDER : ROLE_FALLBACK[b.role];
 
     if (b.conduits !== undefined && b.conduits.length > 0) {
       const plan = bundlePlan(b.conduits);
-      /** The `north` face of a conduit's pseudo block, drawn over the role's colour, else the block role's plain colour. */
+      /** The `north` face of a conduit's pseudo block, drawn over CONDUIT_UNDER, else the block role's plain colour. */
       const northTile = (ref: BlockRef): number => {
         const own = faces.get(blockKey(ref));
         return tile(own?.faces.north ?? [], own?.fallbackColor ?? ROLE_FALLBACK[b.role], under);
       };
       /**
-       * A set face's connector (`CONNECTOR_PARTS`): the `north` layers of each part's pseudo block, an arrow's tinted with
-       * its side's channel colour (`dyeRgb`), drawn over the role's colour like the conduit's own tiles; with no layers at
-       * all, the plain colour of the face's first side's channel.
+       * A set face's connector (`CONNECTOR_PARTS`): the `north` layers of each part's pseudo block, an arrow's tinted
+       * with its side's channel colour (`dyeRgb`), drawn over CONDUIT_UNDER like the conduit's own tiles; with no
+       * layers at all, the plain colour of the face's first side's channel.
        */
       const connectorTile = (face: ConduitFace & { mode: SetMode }): number => {
         const layers = CONNECTOR_PARTS[face.mode].flatMap(({ part, side }): TextureLayer[] => {
