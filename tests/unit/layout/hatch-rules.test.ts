@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  elementMap, elementTakes, HATCH_RULES, hatchRuleFor, ruleFits, rulePower, ruleTakes, type HatchKind, type HatchRule,
+  elementMap, elementTakes, HATCH_RULES, hatchRuleFor, ruleFits, ruleNeeds, rulePower, ruleTakes, type HatchKind, type HatchRule,
 } from '../../../src/server/layout/hatch-rules.ts';
 import { posKey, type Vec3 } from '../../../src/shared/layout/geometry.ts';
 import { EBF_STRUCTURE } from '../../helpers/layout-fixtures.ts';
@@ -94,6 +94,28 @@ describe('the hatch rule table', () => {
     }
     expect(takes(lcr, map, [1, 1, 1], 'input_hatch')).toBe(false);                                 // the PTFE pipe casing
     expect(ruleTakes(rule('MTEVacuumFreezer'), 'output_hatch')).toBe(true);
+  });
+
+  it("lists the hatches GT's check needs whatever the recipe moves, each on an element that takes it", () => {
+    for (const r of HATCH_RULES) {
+      for (const need of ruleNeeds(r)) {
+        const chars = Object.keys(r.elements).filter((ch) => need.chars === undefined || need.chars.includes(ch));
+        expect(chars.some((ch) => r.elements[ch]!.includes(need.kind)), `${r.cls}: ${need.kind} on ${need.chars ?? 'any'}`).toBe(true);
+      }
+    }
+    // each class's checkMachine (research hatch-rules.md §4): checkHasMufflerHatch, checkHasInputHatch, checkHasInputBus,
+    // checkHasOutputBus, checkHasOutputHatch, the cracker's side and middle hatches; a boiler boils water into steam
+    const needs = (cls: string) => ruleNeeds(rule(cls)).map((n) => [n.kind, n.chars ?? null, n.fluid ?? null].filter((v) => v !== null).join(' '));
+    expect(needs('MTEElectricBlastFurnace')).toEqual(['muffler']);
+    expect(needs('MTEDistillationTower')).toEqual(['input_hatch']);
+    expect(needs('MTEOilCracker')).toEqual(['input_hatch l', 'output_hatch r', 'input_hatch m']);
+    expect(needs('MTEImplosionCompressor')).toEqual(['muffler', 'input_bus', 'output_bus']);
+    expect(needs('MTEPyrolyseOven')).toEqual(['muffler']);
+    expect(needs('MTEBioVat')).toEqual(['input_hatch', 'output_hatch']);
+    expect(needs('MTESolarFactory')).toEqual(['input_bus', 'input_hatch', 'output_bus']);
+    expect(needs('MTESteamMixer')).toEqual(['steam']);
+    expect(needs('MTELargeBoilerBronze')).toEqual(['muffler', 'input_hatch fluid:water', 'output_hatch fluid:steam']);
+    expect(rule('MTELargeBoilerBronze').handNote).toContain('runs dry explodes');
   });
 
   it('runs the primitive and steam multiblocks on no EU, and takes no ordinary hatch on the bricked blast furnace or the coke oven', () => {

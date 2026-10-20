@@ -19,7 +19,7 @@ import type { BomLine, Plan, PlanStep, PlanWarning } from '../../shared/types/pl
 import { UNKNOWN_BLOCK } from '../../shared/types/world.ts';
 import { simpleClassName } from '../world/facts.ts';
 import {
-  elementMap, elementTakes, hatchRuleFor, ruleFits, rulePower, ruleTakes, type HatchKind, type HatchRule,
+  elementMap, elementTakes, hatchRuleFor, ruleFits, ruleNeeds, rulePower, ruleTakes, type HatchKind, type HatchRule,
 } from './hatch-rules.ts';
 import { busSlots, hatchLitres, machineRef, pickHatch, type HatchClass } from './parts.ts';
 
@@ -477,10 +477,11 @@ function isClass(pack: Pack, mteId: number | undefined, cls: string): boolean {
  * facing an open cell, its port, that no other hatch of the unit faces. Buses face the spine (on it, or above it where
  * GT takes a bus only higher up), energy and maintenance the back, fluid hatches up where they may and else a side or
  * the back; a cracker's catalyst goes in its middle hatch, and a distillation tower gets one output hatch per layer, the
- * k-th fluid output on the k-th layer, built taller when the recipe has more fluids. A muffler GT needs is placed (the
- * exported one becomes the lowest tier) with its front cell kept as air, and a casing minimum is kept. A kind the step
- * needs that GT takes nowhere on the machine is left out with `hatch_not_taken`; one without a free cell gives
- * `hatch_cells_short`.
+ * k-th fluid output on the k-th layer, built taller when the recipe has more fluids. A hatch GT's check needs whatever
+ * the recipe moves (`rule.needs`: a muffler, the tower's input hatch, a boiler's water and steam hatches) is added, empty,
+ * where the recipe's hatches give none; a muffler (the exported one becomes the lowest tier) keeps its front cell as air,
+ * and a casing minimum is kept. A kind the step needs that GT takes nowhere on the machine is left out with
+ * `hatch_not_taken`; one without a free cell gives `hatch_cells_short`; a row's `handNote` gives `hatch_by_hand`.
  */
 function ruledHatches(pack: Pack, m: Machine, s: PlanStep, io: StepIo, electric: boolean, circuit: number | undefined, rule: HatchRule,
   base: Shape, warnings: PlanWarning[]): { shape: Shape; io: StepIo } {
@@ -567,7 +568,6 @@ function ruledHatches(pack: Pack, m: Machine, s: PlanStep, io: StepIo, electric:
 
   // an exported muffler (a hatch-only element the export builds) stays, at the lowest tier, facing an open side
   const lowestMuffler = pickHatch(pack, 'MTEHatchMuffler', null);
-  let mufflers = 0;
   cells.forEach((c, i) => {
     if (c.role !== 'hatch' || c.hatch !== undefined || !isClass(pack, c.block.mteId, 'MTEHatchMuffler')) return;
     const spot = [UP, WEST, EAST, SOUTH].map((side) => ({ side, port: step(c.pos, side) })).find((f) => open.has(posKey(f.port)) && !claimed.has(posKey(f.port)));
@@ -580,7 +580,6 @@ function ruledHatches(pack: Pack, m: Machine, s: PlanStep, io: StepIo, electric:
       claimed.add(posKey(spot.port));
       shape.air.push([...spot.port]);
     }
-    mufflers += 1;
   });
 
   // the circuit goes in the input bus's circuit slot, so a step with a circuit always gets one
@@ -589,7 +588,7 @@ function ruledHatches(pack: Pack, m: Machine, s: PlanStep, io: StepIo, electric:
   }
   if (io.itemOut) place('output_bus', null, { slots: distinctItems(s.outputs) });
   if (electric) place('energy', s.machine.tier, undefined);
-  if (rulePower(rule) === 'steam' || rule.needs?.includes('steam') === true) place('steam', null, undefined);
+  if (rulePower(rule) === 'steam') place('steam', null, undefined);
   for (const key of io.fluidIn) {
     const slot = fluidInputSlot(recipe, key);
     const chars = slot === undefined ? undefined : rule.fluidInputSlots?.[slot];
@@ -610,9 +609,15 @@ function ruledHatches(pack: Pack, m: Machine, s: PlanStep, io: StepIo, electric:
     }
   }
   if (ruleTakes(rule, 'maintenance')) place('maintenance', null, undefined);
-  if (rule.needs?.includes('muffler') === true && mufflers === 0) {
-    const spot = place('muffler', null, undefined);
-    if (spot !== null) shape.air.push([...spot.port]);                                     // GT's muffler needs air in front
+  // what GT's check needs whatever the recipe moves: one, empty, where the recipe's hatches gave none (a kind already
+  // short is said once); a fluid of the machine's own (a boiler's water and steam) always gets a hatch of its own
+  for (const need of ruleNeeds(rule)) {
+    const met = need.fluid === undefined
+      && cells.some((c, i) => c.hatch === need.kind && (need.chars === undefined || need.chars.includes(charOf(i) ?? '\0')));
+    if (met || (need.fluid === undefined && short.includes(need.kind))) continue;
+    const spot = place(need.kind, need.kind === 'energy' ? s.machine.tier : null, undefined, need.chars === undefined ? {} : { chars: need.chars },
+      need.fluid === undefined ? {} : { fluid: need.fluid });
+    if (spot !== null && need.kind === 'muffler') shape.air.push([...spot.port]);          // GT's muffler needs air in front
   }
 
   const needed = notTaken.filter((k) => k !== 'energy' && k !== 'maintenance');
@@ -620,6 +625,7 @@ function ruledHatches(pack: Pack, m: Machine, s: PlanStep, io: StepIo, electric:
     warnings.push({ code: 'hatch_not_taken', stepId: s.id,
       text: `${m.name} takes no ${orList(needed.map((k) => HATCH_TEXT[k]))} in GregTech: ${rule.byHand ?? 'move those items and fluids by hand'}` });
   }
+  if (rule.handNote !== undefined) warnings.push({ code: 'hatch_by_hand', stepId: s.id, text: `${m.name}: ${rule.handNote}` });
   if (short.length > 0) {
     warnings.push({ code: 'hatch_cells_short', stepId: s.id,
       text: `${m.name}: put the remaining hatches (${short.map((k) => HATCH_TEXT[k]).join(', ')}) on casings GregTech takes them on (it shows them in game)` });

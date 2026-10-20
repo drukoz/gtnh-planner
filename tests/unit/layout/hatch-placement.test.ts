@@ -134,6 +134,52 @@ describe('hatches by GregTech\'s rules', () => {
     expect(dt.cells).toHaveLength(9 + 3 * 8 + 9);
   });
 
+  it('gives a distillation tower whose recipe takes no fluid an empty input hatch on its bottom, as GT needs one', () => {
+    // MTEDistillationTower.checkMachine: checkHasInputHatch whatever the recipe moves (the export's Oil Berry recipes take
+    // an item and a circuit and give five fluids)
+    const pack = hatchPack();
+    pack.recipeById.set('d', fluidRecipe('d', [], [['fluid:zzz', 100], ['fluid:aaa', 100]]));
+    const plan = makePlan([{ id: 'd', mteId: HATCH_IDS.DT, count: 1, tier: 2, inputs: [['t:in@0', 1]], outputs: [['fluid:zzz', 100], ['fluid:aaa', 100]] }]);
+    const { units, warnings } = unitsFromPlan(pack, plan);
+    const dt = units[0]!;
+    const map = elementMap(hatchRuleFor(pack.machines.get(HATCH_IDS.DT)!)!, [1, 0, 0], dt.size);
+    expect(dt.cells.filter((c) => c.hatch === 'input_hatch').map((c) => [map.get(posKey(c.pos)), c.fluid ?? null])).toEqual([['b', null]]);
+    expect(dt.io.fluidIn).toEqual([]);
+    expect(placeUnits(units, { headWidth: 1, portSpacing: 0 }).units[0]!.ports.fluidIn).toEqual([]);
+    expect(warnings).toEqual([]);
+  });
+
+  it('gives a cracker whose recipe has no catalyst an empty middle input hatch, as GT needs one', () => {
+    // MTEOilCracker.checkMachine: cracker_missing_middle_input_hatch whatever the recipe moves
+    const pack = hatchPack();
+    pack.recipeById.set('k', fluidRecipe('k', ['fluid:heavyfuel'], [['fluid:crackedheavy', 100]]));
+    const plan = makePlan([{ id: 'k', mteId: HATCH_IDS.CRACKER, count: 1, tier: 3, inputs: [['fluid:heavyfuel', 100]], outputs: [['fluid:crackedheavy', 100]] }]);
+    const { units, warnings } = unitsFromPlan(pack, plan);
+    expect(units[0]!.cells.filter((c) => c.hatch === 'input_hatch').map((c) => [c.pos[0], c.fluid ?? null]).sort()).toEqual([[2, null], [4, 'fluid:heavyfuel']]);
+    expect(warnings).toEqual([]);
+  });
+
+  it('gives a large boiler a water input hatch and a steam output hatch of their own, and says to fill and empty them by hand', () => {
+    // MTELargeBoilerBase.checkMachine: checkHasInputHatch and checkHasOutputHatch; onRunningTick boils the input hatches'
+    // water into steam and explodes without water; its recipes name only the fuel
+    const pack = hatchPack();
+    pack.recipeById.set('b', fluidRecipe('b', ['fluid:creosote'], []));
+    const plan = makePlan([{ id: 'b', mteId: HATCH_IDS.BOILER, count: 1, tier: 1, inputs: [['fluid:creosote', 100]], outputs: [] }]);
+    const { units, warnings } = unitsFromPlan(pack, plan);
+    const boiler = units[0]!;
+    const rule = hatchRuleFor(pack.machines.get(HATCH_IDS.BOILER)!)!;
+    const map = elementMap(rule, [2, 1, 0], boiler.size);
+    for (const c of boiler.cells.filter((x) => x.hatch !== undefined)) expect(elementTakes(rule, map.get(posKey(c.pos)), c.hatch!), `${c.hatch} at ${c.pos}`).toBe(true);
+    expect(boiler.cells.filter((c) => c.hatch !== undefined).map((c) => [c.hatch, c.fluid ?? null]).sort()).toEqual([
+      ['input_hatch', 'fluid:creosote'], ['input_hatch', 'fluid:water'], ['maintenance', null], ['muffler', null], ['output_hatch', 'fluid:steam']]);
+    // the fuel is piped in; the water and the steam are no fluid of the recipe, so they get no port
+    expect(boiler.io).toMatchObject({ fluidIn: ['fluid:creosote'], fluidOut: [] });
+    const placed = placeUnits(units, { headWidth: 1, portSpacing: 0 }).units[0]!;
+    expect([placed.electric, placed.ports.fluidIn.length, placed.ports.fluidOut.length, placed.ports.power]).toEqual([false, 1, 0, null]);
+    expect(warnings).toEqual([{ code: 'hatch_by_hand', stepId: 'b', text: 'Large Bronze Boiler: keep water in its water input hatch whenever it '
+      + 'burns (a large boiler that runs dry explodes) and take the steam from its steam output hatch, both by hand' }]);
+  });
+
   it('puts an output hatch on a distillation layer no fluid of the recipe reaches, with no port', () => {
     // MTEDistillationTower.checkMachine: missingOutputHatchDT for every layer above the bottom without an output hatch
     const pack = hatchPack();

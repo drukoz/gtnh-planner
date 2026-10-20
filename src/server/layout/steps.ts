@@ -67,13 +67,16 @@ function draft(id: string, kind: BuildStep['kind'], pin: number | undefined, tex
 const HATCH_ORDER: readonly HatchKind[] = ['input_bus', 'output_bus', 'energy', 'steam', 'maintenance', 'input_hatch', 'output_hatch', 'muffler'];
 
 /**
- * The unit's hatch labels: the hatches chosen for it in `HATCH_ORDER` (fluid hatches in the order of the fluids they
- * take, an output hatch without a fluid last; others in canonical z, x order), then any hatch the exported structure
+ * The unit's hatch labels: the hatches chosen for it in `HATCH_ORDER` (fluid hatches in the order of the step's fluids
+ * they take, one with no fluid of the step last; others in canonical z, x order), then any hatch the exported structure
  * itself holds, in cell order.
  */
 function hatchLabels(u: PlacedUnit): string[] {
   const fluids = [...u.io.fluidIn, ...u.io.fluidOut];
-  const fluidRank = (c: PlacedUnit['cells'][number]): number => (c.fluid === undefined ? fluids.length : fluids.indexOf(c.fluid));
+  const fluidRank = (c: PlacedUnit['cells'][number]): number => {
+    const i = c.fluid === undefined ? -1 : fluids.indexOf(c.fluid);
+    return i === -1 ? fluids.length : i;
+  };
   const chosen = u.cells
     .filter((c) => c.hatch !== undefined)
     .sort((a, b) => HATCH_ORDER.indexOf(a.hatch!) - HATCH_ORDER.indexOf(b.hatch!) || fluidRank(a) - fluidRank(b)

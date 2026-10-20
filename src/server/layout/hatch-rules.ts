@@ -7,6 +7,7 @@
 // Rows are keyed by the simple class name the export gives (architecture §11.19); a structure the row does not fit
 // gets no row, so the layout warns instead of guessing.
 
+import type { StuffKey } from '../../shared/keys.ts';
 import { posKey, type Vec3 } from '../../shared/layout/geometry.ts';
 import type { Machine } from '../../shared/types/pack.ts';
 import { simpleClassName } from '../world/facts.ts';
@@ -39,6 +40,18 @@ export interface CasingMin {
 /** How a multiblock is powered: EU through an energy hatch, steam through a steam hatch, or neither. */
 export type RulePower = 'eu' | 'steam' | 'none';
 
+/** A hatch GT's structure check needs on the machine whatever the recipe moves. */
+export interface HatchNeed {
+  kind: HatchKind;
+  /** Only on cells of these element characters (the cracker's sides and middle); default: wherever the row takes `kind`. */
+  chars?: string;
+  /**
+   * A fluid the machine moves through a hatch of its own that no recipe names (a large boiler's water and steam): that
+   * hatch is always added, for this fluid, and the group connects it by hand (`handNote`).
+   */
+  fluid?: StuffKey;
+}
+
 export interface HatchRule {
   /** The controller's simple class name, as the export's `cls` ends. */
   cls: string;
@@ -49,8 +62,14 @@ export interface HatchRule {
   width?: number;
   /** Per element character: the hatches GT's structure check takes there (any other character takes none). */
   elements: Readonly<Record<string, readonly HatchKind[]>>;
-  /** Hatches GT needs whatever the recipe moves (`checkHasMufflerHatch`, a hatch-only element, a steam input). */
-  needs?: readonly HatchKind[];
+  /**
+   * Hatches GT's check needs whatever the recipe moves (`checkHasMufflerHatch`, `checkHasInputHatch`, `checkHasInputBus`,
+   * the cracker's sides and middle, a steam input; energy and maintenance go by `power` and `elements`): where the
+   * recipe's own hatches give none, the layout adds one, empty. A need with a `fluid` always gets a hatch of its own.
+   */
+  needs?: ReadonlyArray<HatchKind | HatchNeed>;
+  /** What the group must do by hand for the machine to run, said whenever it is laid out (a boiler's water and steam). */
+  handNote?: string;
   /** Default 'eu'. */
   power?: RulePower;
   casingMin?: readonly CasingMin[];
@@ -77,7 +96,8 @@ export const HATCH_RULES: readonly HatchRule[] = [
   {
     cls: 'MTEElectricBlastFurnace',
     evidence: 'MTEElectricBlastFurnace: shape "main" (transposed), checkPiece("main", 1, 3, 0); b = buildHatchAdder.atLeast(InputHatch, '
-      + 'OutputHatch, InputBus, OutputBus, Maintenance, Energy) or casing; f = atLeast(OutputHatch) or casing; m = Muffler.newAny; C = coils',
+      + 'OutputHatch, InputBus, OutputBus, Maintenance, Energy) or casing; f = atLeast(OutputHatch) or casing; m = Muffler.newAny; C = coils; '
+      + 'checkMachine: energy, maintenance, any input, any output',
     pieces: [{ transposed: true, offset: [1, 3, 0], shape: [['fff', 'fmf', 'fff'], ['CCC', 'C-C', 'CCC'], ['CCC', 'C-C', 'CCC'], ['b~b', 'bbb', 'bbb']] }],
     elements: { b: ALL_SIX, f: ['output_hatch'], m: ['muffler'] },
     needs: ['muffler'],
@@ -85,21 +105,25 @@ export const HATCH_RULES: readonly HatchRule[] = [
   {
     cls: 'MTEDistillationTower',
     evidence: 'MTEDistillationTower: checkPiece("base", 1, 0, 0), then checkPiece("layer", 1, h, 0) for h = 1 … up to 11 until the top '
-      + '(a layer whose centre is a block); b = atLeast(Energy, OutputBus, InputHatch, InputBus, Maintenance); l = atLeast(OutputHatch with '
-      + 'addLayerOutputHatch) or energy, maintenance, casing; addFluidOutputs gives fluid k to layer k; missingOutputHatchDT for a layer '
-      + 'without one; checkCasingMin(7 × layers − 5)',
+      + '(mTopLayerFound: a layer whose c holds an output hatch or bus via addOutputToMachineList, a maintenance hatch or a casing, not '
+      + 'air); b = atLeast(Energy, OutputBus, InputHatch, InputBus, Maintenance); l = atLeast(OutputHatch with addLayerOutputHatch) or '
+      + 'energy, maintenance, casing; addFluidOutputs gives fluid k to layer k; missingOutputHatchDT for a layer without one; at least '
+      + '3 layers; checkCasingMin(7 × layers − 5); checkHasEnergyHatch, checkHasMaintenanceHatch, checkHasInputHatch',
     pieces: [
       { transposed: true, offset: [1, 0, 0], shape: [['b~b', 'bbb', 'bbb']] },
       { transposed: true, offset: [1, 1, 0], shape: [['lll', 'lcl', 'lll']], repeatUp: true },
     ],
+    // `c` takes no layer output (its output hatch is no layer's), so the layout puts nothing there
     elements: { b: ['energy', 'output_bus', 'input_hatch', 'input_bus', 'maintenance'], l: ['output_hatch', 'energy', 'maintenance'] },
+    needs: ['input_hatch'],
     casingMin: [{ chars: 'blc', min: (layers) => 7 * layers - 5 }],
     layerOutputs: { maxLayers: 12 },
   },
   {
     cls: 'MTELargeChemicalReactor',
     evidence: 'MTELargeChemicalReactor: shape "main" (transposed), checkPiece("main", 1, 1, 0); c and x = atLeast(InputHatch, OutputHatch, '
-      + 'InputBus, OutputBus, Maintenance, Energy) or PTFE casing (x also the one coil); P = PTFE pipe casing; checkCasingMin(8)',
+      + 'InputBus, OutputBus, Maintenance, Energy) or PTFE casing (x also the one coil); P = PTFE pipe casing; checkCasingMin(8); '
+      + 'need_exactly_one_coil; checkMachine: energy, maintenance, any input, any output',
     pieces: [{ transposed: true, offset: [1, 1, 0], shape: [['ccc', 'cxc', 'ccc'], ['c~c', 'xPx', 'cxc'], ['ccc', 'cxc', 'ccc']] }],
     elements: { c: ALL_SIX, x: ALL_SIX },
     casingMin: [{ chars: 'cx', min: 8 }],
@@ -109,16 +133,20 @@ export const HATCH_RULES: readonly HatchRule[] = [
     evidence: 'MTEOilCracker: shape "main" (transposed), checkPiece("main", 2, 1, 0); l = InputHatch with addLeftHatchToMachineList, Energy, '
       + 'Maintenance; r = OutputHatch with addRightHatchToMachineList, Energy, Maintenance (inputs on one side, outputs on the other); '
       + 'm = InputHatch with addMiddleInputToMachineList, InputBus, Energy, Maintenance; getStoredFluidsForColor takes only catalysts '
-      + '(OilCrackerBackend: a recipe\'s second fluid input) from the middle and the rest from the side; checkCasingMin(18)',
+      + '(OilCrackerBackend: a recipe\'s second fluid input) from the middle and the rest from the side; checkCasingMin(18); checkMachine: '
+      + 'missingHatch(InputHatch) and missingHatch(OutputHatch) without a side input and a side output, maintenance, energy, '
+      + 'cracker_missing_middle_input_hatch',
     pieces: [{ transposed: true, offset: [2, 1, 0], shape: [['lcmcr', 'lcmcr', 'lcmcr'], ['lc~cr', 'l---r', 'lcmcr'], ['lcmcr', 'lcmcr', 'lcmcr']] }],
     elements: { l: ['input_hatch', 'energy', 'maintenance'], r: ['output_hatch', 'energy', 'maintenance'], m: ['input_hatch', 'input_bus', 'energy', 'maintenance'] },
+    needs: [{ kind: 'input_hatch', chars: 'l' }, { kind: 'output_hatch', chars: 'r' }, { kind: 'input_hatch', chars: 'm' }],
     fluidInputSlots: { 0: 'l', 1: 'm' },
     casingMin: [{ chars: 'lrm', min: 18 }],
   },
   {
     cls: 'MTEVacuumFreezer',
     evidence: 'MTEVacuumFreezer: getStructureDefinition shape (transposed), checkPiece(mName, 1, 1, 0); C = atLeast(InputHatch, OutputHatch, '
-      + 'InputBus, OutputBus, Maintenance, Energy) or frost proof casing; checkCasingMin(16)',
+      + 'InputBus, OutputBus, Maintenance, Energy) or frost proof casing; checkCasingMin(16); checkMachine: energy, maintenance, any input, '
+      + 'any output',
     pieces: [{ transposed: true, offset: [1, 1, 0], shape: [['CCC', 'CCC', 'CCC'], ['C~C', 'C-C', 'CCC'], ['CCC', 'CCC', 'CCC']] }],
     elements: { C: ALL_SIX },
     casingMin: [{ chars: 'C', min: 16 }],
@@ -126,16 +154,18 @@ export const HATCH_RULES: readonly HatchRule[] = [
   {
     cls: 'MTEImplosionCompressor',
     evidence: 'MTEImplosionCompressor: getStructureDefinition shape (transposed), checkPiece(mName, 1, 1, 0); C = atLeast(InputBus, OutputBus, '
-      + 'Maintenance, Energy, Muffler) or solid steel casing; checkHasMufflerHatch; checkCasingMin(16)',
+      + 'Maintenance, Energy, Muffler) or solid steel casing; checkCasingMin(16); checkMachine: energy, maintenance, checkHasMufflerHatch, '
+      + 'checkHasInputBus, checkHasOutputBus',
     pieces: [{ transposed: true, offset: [1, 1, 0], shape: [['CCC', 'CCC', 'CCC'], ['C~C', 'C-C', 'CCC'], ['CCC', 'CCC', 'CCC']] }],
     elements: { C: ['input_bus', 'output_bus', 'maintenance', 'energy', 'muffler'] },
-    needs: ['muffler'],
+    needs: ['muffler', 'input_bus', 'output_bus'],
     casingMin: [{ chars: 'C', min: 16 }],
   },
   {
     cls: 'MTEPyrolyseOven',
     evidence: 'MTEPyrolyseOven: shape "main" (not transposed), checkPiece("main", 3, 4, 0); F = atLeast(InputBus, InputHatch, Muffler) or '
-      + 'pyrolyse oven casing; G = atLeast(OutputBus, OutputHatch, Energy, Maintenance) or casing; checkHasMufflerHatch; checkCasingMin(60)',
+      + 'pyrolyse oven casing; G = atLeast(OutputBus, OutputHatch, Energy, Maintenance) or casing; checkCasingMin(60); checkMachine: energy, '
+      + 'maintenance, checkHasMufflerHatch, any input, any output',
     width: 7,
     pieces: [{
       transposed: false, offset: [3, 4, 0], shape: [
@@ -153,7 +183,8 @@ export const HATCH_RULES: readonly HatchRule[] = [
   {
     cls: 'MTEBioVat',
     evidence: 'bartworks MTEBioVat: shape "main" (transposed), checkPiece("main", 2, 3, 0); c = atLeast(Maintenance, InputBus, OutputBus, '
-      + 'InputHatch, OutputHatch, Energy, RadioHatch) or casing; g = glass; a = bio fluid or air; checkOneOutputHatch; checkCasingMin(19)',
+      + 'InputHatch, OutputHatch, Energy, RadioHatch) or casing; g = glass; a = bio fluid or air; checkCasingMin(19); checkMachine: at most '
+      + 'one radio hatch, energy, maintenance, checkHasInputHatch, checkOneOutputHatch (exactly one)',
     pieces: [{
       transposed: true, offset: [2, 3, 0], shape: [
         ['ccccc', 'ccccc', 'ccccc', 'ccccc', 'ccccc'], ['ggggg', 'gaaag', 'gaaag', 'gaaag', 'ggggg'],
@@ -161,12 +192,14 @@ export const HATCH_RULES: readonly HatchRule[] = [
       ],
     }],
     elements: { c: ALL_SIX },
+    needs: ['input_hatch', 'output_hatch'],
     casingMin: [{ chars: 'c', min: 19 }],
   },
   {
     cls: 'MTESolarFactory',
     evidence: 'MTESolarFactory: shape "t1" (transposed), checkPiece("t1", 2, 4, 0); A = atLeast(InputHatch, InputBus, OutputBus, '
-      + 'Maintenance, Energy) or casing (no output hatch); E = frame; G = glass; checkCasingMin(15)',
+      + 'Maintenance, Energy) or casing (no output hatch); E = frame; G = glass; checkCasingMin(15); checkMachine: checkHasAnyEnergy, '
+      + 'maintenance, checkHasInputBus, checkHasInputHatch, checkHasOutputBus',
     width: 5,
     pieces: [{
       transposed: true, offset: [2, 4, 0], shape: [
@@ -175,13 +208,15 @@ export const HATCH_RULES: readonly HatchRule[] = [
       ],
     }],
     elements: { A: ['input_hatch', 'input_bus', 'output_bus', 'maintenance', 'energy'] },
+    needs: ['input_bus', 'input_hatch', 'output_bus'],
     casingMin: [{ chars: 'A', min: 15 }],
   },
   {
     cls: 'MTESteamMixer',
     evidence: 'MTESteamMixer: shape "main" (transposed), checkPiece("main", 2, 2, 0); A = steam input (buildSteamInput: MTEHatchCustomFluidBase '
       + 'with steam) or atLeast(InputBus_Steam, OutputBus_Steam, OutputHatch, InputHatch) or casing; MTESteamMultiBlockBase: steam buses '
-      + 'only (MTEHatchSteamBusInput, MTEHatchSteamBusOutput), no maintenance (getDefaultHasMaintenanceChecks false), checkHasSteamInput',
+      + 'only (MTEHatchSteamBusInput, MTEHatchSteamBusOutput), no maintenance (getDefaultHasMaintenanceChecks false); checkMachine: '
+      + 'checkCasingMin(25), checkHasSteamInput, any input, any output',
     width: 5,
     pieces: [{
       transposed: true, offset: [2, 2, 0], shape: [
@@ -198,7 +233,9 @@ export const HATCH_RULES: readonly HatchRule[] = [
     cls: 'MTELargeBoilerBronze',
     evidence: 'MTELargeBoilerBase (MTELargeBoilerBronze): createStructureDefinition shape "main" (not transposed), checkPiece("main", 2, 4, 0); '
       + 'C and F = atLeast(InputHatch, InputBus, OutputHatch, Maintenance, Muffler) or casing / firebox; P = pipe casing; '
-      + 'checkHasMufflerHatch; checkCasingMin(20) casings and (5) fireboxes',
+      + 'checkCasingMin(20) casings and (5) fireboxes; checkMachine: maintenance, checkHasMufflerHatch, checkHasInputHatch, '
+      + 'checkHasOutputHatch; onRunningTick boils water from its input hatches into steam (addOutputPartial) and calls explodeMultiblock '
+      + 'when consumeWater fails ("Boiler had no water"); its recipes (largeboilerfakefuels) name only the fuel',
     width: 5,
     pieces: [{
       transposed: false, offset: [2, 4, 0], shape: [
@@ -207,7 +244,9 @@ export const HATCH_RULES: readonly HatchRule[] = [
       ],
     }],
     elements: { C: ['input_hatch', 'input_bus', 'output_hatch', 'maintenance', 'muffler'], F: ['input_hatch', 'input_bus', 'output_hatch', 'maintenance', 'muffler'] },
-    needs: ['muffler'],
+    needs: ['muffler', { kind: 'input_hatch', fluid: 'fluid:water' }, { kind: 'output_hatch', fluid: 'fluid:steam' }],
+    handNote: 'keep water in its water input hatch whenever it burns (a large boiler that runs dry explodes) and take the steam from '
+      + 'its steam output hatch, both by hand',
     power: 'none',
     casingMin: [{ chars: 'C', min: 20 }, { chars: 'F', min: 5 }],
   },
@@ -241,6 +280,11 @@ export function hatchRuleFor(m: Pick<Machine, 'cls'>): HatchRule | null {
 /** The power a row says its multiblock runs on. */
 export function rulePower(rule: HatchRule): RulePower {
   return rule.power ?? 'eu';
+}
+
+/** The hatches a row says GT's check needs whatever the recipe moves, each as a `HatchNeed`. */
+export function ruleNeeds(rule: HatchRule): HatchNeed[] {
+  return (rule.needs ?? []).map((n): HatchNeed => (typeof n === 'string' ? { kind: n } : { ...n }));
 }
 
 // ---- The rows on an exported structure ----
