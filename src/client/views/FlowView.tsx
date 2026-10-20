@@ -299,7 +299,8 @@ export function FlowLegend(): ReactElement {
 /**
  * What does not add up, above the diagram (fix spec §6.2 "Issues"): red with an input nothing supplies, amber
  * otherwise; one line per issue with **Show** (lights the good and centres its first producer) and, for a good made two
- * ways, **Keep only <the bigger maker>** (pins its recipe for the good). No hooks, so tests can call it.
+ * ways, **Keep only <the bigger maker>** (pins its recipe for the good) unless the line keeps the other makers for other
+ * goods, with what the pin would leave (`FlowIssueLine.stays`). No hooks, so tests can call it.
  */
 export function FlowIssues(props: {
   plan: Plan; settings: PlanSettings; send: ProjectViewProps['send']; onShow(key: StuffKey): void; index?: PlanIndex;
@@ -311,9 +312,10 @@ export function FlowIssues(props: {
   return (
     <section className={red ? 'flow-issues error' : 'flow-issues'} aria-label="What does not add up">
       <ul>
-        {lines.map(({ issue, text, keepOnly }) => (
+        {lines.map(({ issue, text, keepOnly, stays }) => (
           <li key={problemId(issue)} data-issue={issue.code}>
             <span>{text}</span>
+            {stays !== undefined && <span className="muted">{` ${stays}`}</span>}
             <button type="button" className="small" onClick={() => onShow(issue.key)}>Show</button>
             {keepOnly !== undefined && (
               <button type="button" className="small" onClick={() => send([{ op: 'settings', patch: useOnlyPatch(settings, issue.key, keepOnly.recipeId) }])}>

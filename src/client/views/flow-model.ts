@@ -11,8 +11,9 @@
 import type { ElkExtendedEdge, ElkNode, ElkPort } from 'elkjs/lib/elk-api.js';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import { TIER_NAMES, V } from '../../shared/gt/tiers.ts';
+import { joinNames } from '../../shared/layout/format.ts';
 import { indexPlan, issueText, type PlanIndex, type PlanIssue, type PlanIssueCode } from '../../shared/plan/balance.ts';
-import type { LeafClass, Plan, PlanFlow, PlanSettings, PlanStep, PlanWarning } from '../../shared/types/plan.ts';
+import { FREE_KEYS, type LeafClass, type Plan, type PlanFlow, type PlanSettings, type PlanStep, type PlanWarning } from '../../shared/types/plan.ts';
 import { formatDuration, formatNumber, formatPercent, formatRate } from '../format.ts';
 import { toggleList } from './settings-model.ts';
 
@@ -908,21 +909,63 @@ export function problemId(p: { code: string; key?: StuffKey | undefined; stepId?
   return `${p.code}|${p.key ?? ''}|${p.stepId ?? ''}`;
 }
 
-/** One line of the issues box above the diagram: the issue, its words, and for a good made two ways the bigger maker. */
-export interface FlowIssueLine { issue: PlanIssue; text: string; keepOnly?: { recipeId: string; machine: string } }
+/**
+ * One line of the issues box above the diagram: the issue, its words, and for a good made two ways the bigger maker,
+ * whose recipe "Keep only" pins, and what that pin would leave in the plan (`stays`, in plain words). Without
+ * `keepOnly` the pin would leave every other maker.
+ */
+export interface FlowIssueLine { issue: PlanIssue; text: string; keepOnly?: { recipeId: string; machine: string }; stays?: string }
+
+/**
+ * Why a "Keep only" pin of `key` cannot take `step`, another maker of it, out of the plan, in words after "which …"
+ * (plan 09's final review): the planner's walk keeps the step for something else. The client sees only the plan, so
+ * these are the two cases a plan shows, null otherwise (the pin may still leave such a step, as a distillation run for
+ * another of its fractions). On the 75 two-way goods of 192 real plans (the 2.9 export) the step stayed in the replanned
+ * plan for 32 of the 33 issues they name, and the pin removed the makers of 25 of the other 42.
+ */
+function keptBy(plan: Plan, index: PlanIndex, step: PlanStep, key: StuffKey): string | null {
+  const name = (k: StuffKey): string => plan.names?.[k] ?? k;
+  // It makes another good the line takes from it that another step makes as its main output, so the walk keeps it for
+  // that good too (GEC HV's salt water electrolysis, run for Chlorine beside the canner, made 2 % of its Hydrogen Cells).
+  const forGoods = [...(index.outputs.get(step.id) ?? [])].filter(([good, side]) => good !== key && !FREE_KEYS.includes(good)
+    && side.peers.some((p) => p.node !== SINK && p.perSecond > 0)
+    && (index.producers.get(good) ?? []).some((p) => p.main && p.stepId !== step.id)).map(([good]) => name(good));
+  if (forGoods.length > 0) return `the line runs for ${joinNames(forGoods)}`;
+  // It empties containers another step fills (one item in, as many of another out beside the fluid `key`): the walk adds
+  // it with whatever makes the filled ones (fix spec D14).
+  const [filled, ...more] = step.inputs;
+  const handedBack = step.outputs.filter((o) => o.key !== key);
+  const empty = handedBack.length === 1 ? handedBack[0] : undefined;
+  if (!isFluidKey(key) || filled === undefined || more.length > 0 || isFluidKey(filled.key) || empty === undefined
+    || isFluidKey(empty.key) || empty.amount !== filled.amount) return null;
+  const made = (index.inputs.get(step.id)?.get(filled.key)?.peers ?? []).some((p) => p.node !== RAW && p.perSecond > 0);
+  return made ? `empties the ${name(filled.key)} the line makes` : null;
+}
 
 /**
  * What does not add up (fix spec §6.2 "Issues"), most serious first: each issue in the server's words when the plan
  * carries them, else `issueText`'s; a good made two ways also names the step that makes most of it, whose recipe
- * "Keep only" pins.
+ * "Keep only" pins, unless the line keeps every other maker for something else (`keptBy`): then the line says so
+ * instead, and with only some of them kept it says which the pin would leave.
  */
 export function flowIssueLines(plan: Plan, index: PlanIndex = indexPlan(plan)): FlowIssueLine[] {
   const served = new Map(plan.warnings.map((w) => [problemId(w), w.text]));
   const steps = new Map(plan.steps.map((s) => [s.id, s]));
   return [...index.issues].sort((a, b) => ISSUE_ORDER.indexOf(a.code) - ISSUE_ORDER.indexOf(b.code)).map((issue) => {
     const line: FlowIssueLine = { issue, text: served.get(problemId(issue)) ?? issueText(issue, plan) };
-    const bigger = issue.code === 'multi-producer' ? steps.get(issue.stepIds?.[0] ?? issue.stepId ?? '') : undefined;
-    if (bigger !== undefined) line.keepOnly = { recipeId: bigger.recipeId, machine: bigger.machine.name };
+    const [biggerId, ...others] = issue.stepIds ?? [];
+    const bigger = issue.code === 'multi-producer' ? steps.get(biggerId ?? issue.stepId ?? '') : undefined;
+    if (bigger === undefined) return line;
+    const kept = others.flatMap((id, i) => {
+      const step = steps.get(id);
+      const why = step === undefined ? null : keptBy(plan, index, step, issue.key);
+      return step === undefined || why === null ? [] : [{ share: formatPercent(issue.share?.[i + 1] ?? 0), machine: step.machine.name, why }];
+    });
+    if (others.length === 0 || kept.length < others.length) line.keepOnly = { recipeId: bigger.recipeId, machine: bigger.machine.name };
+    if (kept.length === 0) return line;
+    line.stays = line.keepOnly === undefined
+      ? `Keep only would not change this: ${kept.map((k) => `the ${k.share} comes from ${k.machine}, which ${k.why}`).join('; ')}.`
+      : `Keep only would still leave ${joinNames(kept.map((k) => `the ${k.share} from ${k.machine}, which ${k.why}`))}.`;
     return line;
   });
 }

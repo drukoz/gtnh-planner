@@ -5,7 +5,7 @@ import { isValidElement, type ReactElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import {
   formatNumber, formatRate, flowGraph, toElk, fromElk, ocLines, reusePatch, LEAF_WORD, focusSets, centreOn, flowEdgeId, rowCentre,
-  collapsedLines, firstProducer, edgeTag, rowNameRoom, textWidth, LINE_COLLAPSE_STEPS, TEXT_CHAR_WIDTH, type FlowLayout, type FlowNode,
+  collapsedLines, firstProducer, edgeTag, rowNameRoom, textWidth, LINE_COLLAPSE_STEPS, TEXT_CHAR_WIDTH, flowIssueLines, type FlowLayout, type FlowNode,
 } from '../../src/client/views/flow-model.ts';
 import { formatNumber as sharedNumber, formatRate as sharedRate } from '../../src/shared/format.ts';
 import { FlowView, FlowNodeShape, FlowIssues, FlowLegend } from '../../src/client/views/FlowView.tsx';
@@ -496,6 +496,81 @@ describe('flow diagram: what it renders (fix spec §6.2)', () => {
     const fed = { ...board, flows: [...board.flows, flow('raw', 'mixer', 'fluid:pva', 2000 * 3.1e-8)] };
     expect(renderToStaticMarkup(<FlowIssues plan={fed} settings={S()} send={send} onShow={onShow} />)).toMatch(/class="flow-issues"/);
     expect(FlowIssues({ plan: red, settings: S(), send, onShow })).toBeNull();
+  });
+  it('offers no Keep only for a maker the line runs for another good, and says why', () => {
+    // Plan 09's final review (GEC HV, 2 a minute): "Hydrogen Cell is made 2 ways" by water electrolysis and salt water
+    // electrolysis, which the line runs for its Chlorine (a canner makes Chlorine too). Keep only pinned the water
+    // electrolysis for the cells, but the walk for Chlorine keeps the salt water one: the plan came back the same.
+    const H_CELL = 't:h_cell@0';
+    const electrolyzer = { mteId: 371, name: 'Advanced Electrolyzer II', tier: 3 };
+    const cells = planOf({
+      target: 't:hcl@0', targetPerSecond: 1 / H,
+      names: { [H_CELL]: 'Hydrogen Cell', 'fluid:chlorine': 'Chlorine', 'fluid:saltwater': 'Salt Water', 't:cl_cell@0': 'Chlorine Cell', 't:hcl@0': 'Acid',
+        't:naoh@0': 'Sodium Hydroxide Dust', 't:empty@0': 'Empty Cell', 'fluid:oxygen': 'Oxygen' },
+      steps: [
+        mv({ id: 'water', machine: electrolyzer, mainOutput: H_CELL, runsPerSecond: 0.485 / H, inputs: [per('t:empty@0', 2), per('fluid:water', 1000)],
+          outputs: [per(H_CELL, 2), per('fluid:oxygen', 1000)] }),
+        mv({ id: 'brine', machine: electrolyzer, mainOutput: H_CELL, runsPerSecond: 0.03 / H, inputs: [per('t:empty@0', 1), per('fluid:saltwater', 1000)],
+          outputs: [per('t:naoh@0', 3), per(H_CELL, 1), per('fluid:chlorine', 1000)] }),
+        mv({ id: 'canner', machine: { mteId: 381, name: 'Canning Machine', tier: 2 }, mainOutput: 'fluid:chlorine', runsPerSecond: 0.97 / H,
+          inputs: [per('t:cl_cell@0', 1)], outputs: [per('fluid:chlorine', 1000), per('t:empty@0', 1)] }),
+        mv({ id: 'reactor', machine: { mteId: 391, name: 'Chemical Reactor', tier: 2 }, mainOutput: 't:hcl@0', runsPerSecond: 1 / H,
+          inputs: [per(H_CELL, 1), per('fluid:chlorine', 1000)], outputs: [per('t:hcl@0', 1)] }),
+      ],
+      flows: [
+        flow('water', 'reactor', H_CELL, 0.97 / H), flow('brine', 'reactor', H_CELL, 0.03 / H), flow('brine', 'reactor', 'fluid:chlorine', 30 / H),
+        flow('canner', 'reactor', 'fluid:chlorine', 970 / H), flow('brine', 'sink', 't:naoh@0', 0.09 / H), flow('water', 'sink', 'fluid:oxygen', 485 / H),
+        flow('reactor', 'out', 't:hcl@0', 1 / H), flow('canner', 'water', 't:empty@0', 0.97 / H), flow('raw', 'brine', 't:empty@0', 0.03 / H),
+        flow('raw', 'water', 'fluid:water', 485 / H), flow('raw', 'brine', 'fluid:saltwater', 30 / H), flow('raw', 'canner', 't:cl_cell@0', 0.97 / H),
+      ],
+    });
+    const [line, ...more] = flowIssueLines(cells);
+    expect(more).toEqual([]);
+    expect(line?.text).toBe('Hydrogen Cell is made 2 ways: Advanced Electrolyzer II (97%) and Advanced Electrolyzer II (3%).');
+    expect(line?.keepOnly).toBeUndefined();
+    expect(line?.stays).toBe('Keep only would not change this: the 3% comes from Advanced Electrolyzer II, which the line runs for Chlorine.');
+    const box = FlowIssues({ plan: cells, settings: S(), send: vi.fn(), onShow: vi.fn() });
+    expect(findAll(box, (e) => e.type === 'button' && childText(e).startsWith('Keep only'))).toEqual([]);
+    expect(text(renderToStaticMarkup(<FlowIssues plan={cells} settings={S()} send={() => {}} onShow={() => {}} />)))
+      .toContain('(3%). Keep only would not change this: the 3% comes from Advanced Electrolyzer II, which the line runs for Chlorine.Show');
+    // A third maker it would remove keeps the button, and the note says what it would leave.
+    const three = {
+      ...cells,
+      steps: [...cells.steps, mv({ id: 'press', machine: { mteId: 401, name: 'Cell Press', tier: 2 }, mainOutput: H_CELL, runsPerSecond: 0.01 / H, outputs: [per(H_CELL, 1)] })],
+      flows: [...cells.flows.filter((f) => !(f.from === 'water' && f.key === H_CELL)), flow('water', 'reactor', H_CELL, 0.96 / H), flow('press', 'reactor', H_CELL, 0.01 / H)],
+    };
+    const [partial] = flowIssueLines(three);
+    expect(partial?.keepOnly).toEqual({ recipeId: 'water', machine: 'Advanced Electrolyzer II' });
+    expect(partial?.stays).toBe('Keep only would still leave the 3% from Advanced Electrolyzer II, which the line runs for Chlorine.');
+    // The board's saw only leaves its dust over: Keep only removes it, and there is nothing to add.
+    expect(flowIssueLines(board).find((l) => l.issue.code === 'multi-producer')).toMatchObject({ keepOnly: { recipeId: 'solid' } });
+    expect(flowIssueLines(board).find((l) => l.issue.code === 'multi-producer')?.stays).toBeUndefined();
+  });
+  it('offers no Keep only for a step that empties the containers another step fills, and says why', () => {
+    // A canner empties the Oxygen Cells a compressor fills (the walk adds such an emptier beside whatever makes the
+    // cells, fix spec D14), so pinning the electrolyzer for Oxygen leaves it in the plan.
+    const oxygen = planOf({
+      target: 't:steel@0', targetPerSecond: 1 / H,
+      names: { 'fluid:oxygen': 'Oxygen', 't:o_cell@0': 'Oxygen Cell', 't:empty@0': 'Empty Cell', 't:steel@0': 'Steel' },
+      steps: [
+        mv({ id: 'electrolyze', machine: { mteId: 371, name: 'Electrolyzer', tier: 2 }, mainOutput: 'fluid:oxygen', runsPerSecond: 0.99 / H,
+          inputs: [per('fluid:water', 1000)], outputs: [per('fluid:oxygen', 1000)] }),
+        mv({ id: 'fill', machine: { mteId: 382, name: 'Compressor', tier: 2 }, mainOutput: 't:o_cell@0', runsPerSecond: 0.01 / H,
+          inputs: [per('t:empty@0', 1)], outputs: [per('t:o_cell@0', 1)] }),
+        mv({ id: 'empty', machine: { mteId: 381, name: 'Canning Machine', tier: 2 }, mainOutput: 'fluid:oxygen', runsPerSecond: 0.01 / H,
+          inputs: [per('t:o_cell@0', 1)], outputs: [per('fluid:oxygen', 1000), per('t:empty@0', 1)] }),
+        mv({ id: 'ebf', machine: { mteId: 1000, name: 'Electric Blast Furnace', tier: 2 }, mainOutput: 't:steel@0', runsPerSecond: 1 / H,
+          inputs: [per('fluid:oxygen', 1000)], outputs: [per('t:steel@0', 1)] }),
+      ],
+      flows: [
+        flow('electrolyze', 'ebf', 'fluid:oxygen', 990 / H), flow('empty', 'ebf', 'fluid:oxygen', 10 / H), flow('fill', 'empty', 't:o_cell@0', 0.01 / H),
+        flow('empty', 'fill', 't:empty@0', 0.01 / H), flow('ebf', 'out', 't:steel@0', 1 / H), flow('raw', 'electrolyze', 'fluid:water', 990 / H),
+      ],
+    });
+    const [line] = flowIssueLines(oxygen);
+    expect(line?.text).toBe('Oxygen is made 2 ways: Electrolyzer (99%) and Canning Machine (1%).');
+    expect(line?.keepOnly).toBeUndefined();
+    expect(line?.stays).toBe('Keep only would not change this: the 1% comes from Canning Machine, which empties the Oxygen Cell the line makes.');
   });
   it('explains every kind of box in the legend', () => {
     const legend = text(renderToStaticMarkup(<FlowLegend />));

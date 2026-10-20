@@ -337,10 +337,10 @@ Auditor ids: invariants INV-n, rootcause RCn, gtnh Gn, ui UI-n. "Decision" resol
   Hydrochloric Acid line and gains Nitrogen and Phosphorus Dust lines. This is intended, not a regression. The GEC HV
   2/min line keeps one co-product pair, and that is accepted: "Hydrogen Cell is made 2 ways" (water electrolysis 97 %,
   salt water electrolysis 2 %, a step the Chlorine walk pulls in). Keep only cannot remove a maker that another good
-  pulls in; real-acceptance asserts at most one `multi-producer` issue on that line, and a later change should make the
-  issues box's Keep only honest for such pairs. Make N names a step from the LP's `runsFor` (this keeps GEC HV × 4
-  clean), so a one-run step can carry the name of an output it partly leaves over (a reactor named Naphtha in Make N
-  GEC × 4).
+  pulls in; real-acceptance asserts at most one `multi-producer` issue on that line, and the issues box no longer offers
+  Keep only for such pairs but says why (§6.2 Issues, a plan 09 follow-up). Make N names a step from the LP's
+  `runsFor` (this keeps GEC HV × 4 clean), so a one-run step can carry the name of an output it partly leaves over (a
+  reactor named Naphtha in Make N GEC × 4).
 
 ### D14 (minor) A thrown-away filled container makes the line extrude new cells — RC7
 
@@ -708,7 +708,14 @@ issue texts. `MaterialsView.quantity()` loses its rate branch; counts of things 
 - **Find item.** Toolbar `<select aria-label="Find item">` of every good in the plan by name; choosing pins item focus and
   centres its first producer (`centreOn(node, view)`); shared with "Show" buttons.
 - **Issues.** A `FlowIssues` box above the canvas (red with any `orphan-input`, else amber), one line per issue with
-  **Show**; multi-producer lines also **Keep only <bigger producer>** (sends `recipeChoice[key] = recipeId`).
+  **Show**; multi-producer lines also **Keep only <bigger producer>** (sends `recipeChoice[key] = recipeId`). Plan 09
+  follow-up: a pin of one maker cannot take out another the walk keeps for something else, so for each other maker
+  the line runs for another good it takes from it that another step makes as its main output, or that empties
+  containers another step fills (D14), the box says so ("Keep only would not change this: the 2% comes from Advanced
+  Electrolyzer II, which the line runs for Chlorine.") and offers Keep only only while some other maker is none of
+  these ("Keep only would still leave …"). The client sees only the plan, so this is a rule of thumb, measured on the
+  2.9 export: of 75 two-way goods in 192 plans it hid Keep only on 33 (the maker stayed on a replan with the pin in
+  32), and the pin removed the other makers of 25 of the 42 it still offers.
 - **Initial view.** Zoom 0.9 centred on `out`; Fit unchanged. Legend: owned / partly owned / new, import (mined,
   gathered, bought, free), no source, left over, supporting line.
 
