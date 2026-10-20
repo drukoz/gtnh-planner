@@ -364,7 +364,8 @@ export type HatchSource = 'both' | 'export' | 'table';
 /**
  * The hatch rules of `m`. With the export's (`exportedCells`) and a row that fits the exported structure, the row
  * narrowed by the export (`'both'`): each of its characters keeps, in the row's order, the kinds the export gives on
- * every covered cell of it (a character without a covered cell keeps none), and its pieces and notes stay as they are.
+ * every covered cell of it (a character without a covered cell keeps the row's, as `elementMap` gives none of its cells
+ * and no hatch goes there), and its pieces and notes stay as they are.
  * Where the export takes more than the row (a cracker's sides, a tower's top centre) the row wins, as it holds what GT
  * checks in the controller after its walk; the layout then stays inside both. With the export's and no fitting row,
  * the export's alone (`'export'`; `rowUnfit` when there is a row and it does not fit): no needs, notes or casing
@@ -384,7 +385,9 @@ export function hatchRulesOf(m: Machine): { rule: HatchRule; source: HatchSource
 /**
  * `row`'s element lists, each narrowed to the layout kinds the export gives on every covered cell of its character:
  * one character is one element of GT's definition, so a character whose cells the export treats differently is a row
- * error (add-on 20's real-data acceptance reports it), and the layout keeps to what all of them take.
+ * error (add-on 20's real-data acceptance reports it), and the layout keeps to what all of them take. A character the
+ * export covers nowhere keeps the row's kinds: none of its cells is in `elementMap`, so a hatch GT needs there finds no
+ * cell (`hatch_cells_short`), where a list emptied here would say GT takes it nowhere on the machine (`hatch_not_taken`).
  */
 function narrowedElements(row: HatchRule, cells: ExportedCells, st: StructureInfo): Record<string, HatchKind[]> {
   const map = elementMap(row, st.controller, st.size);
@@ -396,7 +399,10 @@ function narrowedElements(row: HatchRule, cells: ExportedCells, st: StructureInf
     const before = given.get(ch);
     given.set(ch, before === undefined ? kinds : new Set([...before].filter((kind) => kinds.has(kind))));
   }
-  return Object.fromEntries(Object.entries(row.elements).map(([ch, kinds]) => [ch, kinds.filter((kind) => given.get(ch)?.has(kind) === true)]));
+  return Object.fromEntries(Object.entries(row.elements).map(([ch, kinds]) => {
+    const taken = given.get(ch);
+    return [ch, taken === undefined ? [...kinds] : kinds.filter((kind) => taken.has(kind))];
+  }));
 }
 
 /** The export's rules alone: its characters with their layout kinds, the steam buses' classes and the power it implies. */

@@ -687,8 +687,11 @@ function ruledHatches(pack: Pack, m: Machine, s: PlanStep, io: StepIo, electric:
  * (`hatchRulesOf`, `ruledHatches`): the export's narrowed by the table row that fits the exported structure, the
  * export's alone (`hatch_rules_export_only`, or `hatch_notes_unfit` for a row that does not fit), or the fitting row
  * alone; else by the generic placement with `hatch_rules_unknown`. Electric unless it is a steam machine or its rules
- * run it on steam or nothing (a steam multiblock then says how to feed it); an electric one the export gives only
- * multi-amp or laser energy hatches gets no energy hatch and says so (`hatch_energy_exotic`).
+ * run it on steam or nothing (a steam multiblock then says how to feed it), but one ruled by the export alone whose
+ * export took neither an energy nor a steam hatch (power none) stays electric when its step draws EU: GT may take only
+ * energy hatches above the probe's tier there (a fusion reactor's energy injectors), so the line still counts its
+ * power. An electric one whose export took no plain energy hatch gets no energy hatch and says so
+ * (`hatch_energy_exotic`): it takes only multi-amp or laser energy hatches, or only higher tiers.
  */
 function multiblockShape(pack: Pack, m: Machine, s: PlanStep, io: StepIo, circuit: number | undefined, warnings: PlanWarning[]): MultiblockShape {
   const exported = structureCells(pack, m);
@@ -714,12 +717,17 @@ function multiblockShape(pack: Pack, m: Machine, s: PlanStep, io: StepIo, circui
         + 'GregTech checks more in the controller (sides, layers, line length) than the planner has notes for here — check in game that it forms' });
   }
   const power = rulePower(rule);
-  const electric = m.kind !== 'steam' && power === 'eu';
+  // an export that took neither an energy nor a steam hatch (power none) does not show that the machine takes no EU: its
+  // controller may take only hatches above the probe's lowest tier (GT's fusion reactors take an energy hatch of their
+  // own tier or above)
+  const electric = m.kind !== 'steam' && (power === 'eu' || (source === 'export' && power === 'none' && s.euPerTick > 0));
   if (power === 'steam') warnings.push({ code: 'steam_machine', stepId: s.id, text: `${m.name} runs on steam: connect a steam supply to its Steam Hatch by hand` });
   const anywhere = rule.exported?.anywhere;
-  if (electric && anywhere !== undefined && !anywhere.has('energy') && (anywhere.has('energy_multi') || anywhere.has('energy_laser'))) {
-    // GT's plain energy hatch is no multi-amp or laser one: the layout lays neither, so the unit gets no energy hatch
-    warnings.push({ code: 'hatch_energy_exotic', stepId: s.id, text: `${m.name} takes only multi-amp or laser energy hatches in GregTech: place one by hand` });
+  if (electric && anywhere !== undefined && !anywhere.has('energy')) {
+    // the layout lays only GT's plain energy hatch, and only where the export took one, so the unit gets no energy hatch
+    warnings.push({ code: 'hatch_energy_exotic', stepId: s.id, text: anywhere.has('energy_multi') || anywhere.has('energy_laser')
+      ? `${m.name} takes only multi-amp or laser energy hatches in GregTech: place one by hand`
+      : `${m.name}: GregTech took none of the lowest-tier energy hatches the export tried on it, so it may take only higher tiers: place one by hand` });
   }
   const ruled = ruledHatches(pack, m, s, io, electric, circuit, rule, exported, warnings);
   return { shape: ruled.shape, io: ruled.io, electric };

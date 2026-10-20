@@ -323,14 +323,21 @@ describe("hatches by the export's rules", () => {
     expect(ebf.source).toBe('both');
     expect(ebf.rule.elements.f).toEqual([]);
     expect(ebf.rule.elements.b).toEqual(ebfRow.elements.b);
-    // a character keeps a kind only where the export gives it on every covered cell of it, and none without one: the
-    // top ring split over two elements, the coils and the top centre not covered
-    const split = hatchRulesOf(giveElements(hatchExportPack(), IDS.EBF, [
+    // a character keeps a kind only where the export gives it on every covered cell of it, and the row's kinds without
+    // one: the top ring split over two elements, the coils and the top centre not covered. No hatch goes on an
+    // uncovered cell, so the muffler GT needs there is short of a cell, not a hatch the machine takes nowhere
+    const splitPack = hatchExportPack();
+    const split = hatchRulesOf(giveElements(splitPack, IDS.EBF, [
       { ch: 'b', hatches: [...ALL_SIX], where: (p) => p[1] === 0 },
       { ch: 'f', hatches: ['output_hatch'], where: (p) => p[1] === 3 && p[2] === 0 },
       { ch: 'g', hatches: [], where: (p) => p[1] === 3 && p[2] > 0 && !isAt([1, 3, 1])(p) },
     ]))!;
-    expect([split.source, split.rule.elements.f, split.rule.elements.m]).toEqual(['both', [], []]);
+    expect([split.source, split.rule.elements.f, split.rule.elements.m]).toEqual(['both', [], ['muffler']]);
+    const splitLaid = layOne(splitPack, ebfStep);
+    expect(splitLaid.unit.cells.some((c) => c.hatch === 'muffler')).toBe(false);
+    expect(splitLaid.warnings.filter((w) => w.code === 'hatch_cells_short').map((w) => w.text)).toEqual([
+      'Electric Blast Furnace: put the remaining hatches (muffler) on casings GregTech takes them on (it shows them in game)']);
+    expect(codes(splitLaid.warnings)).not.toContain('hatch_not_taken');
     // no row: the export alone
     const boxPack = hatchExportPack();
     const box = hatchRulesOf(giveElements(boxPack, FRONT_BOX_ID, FRONT_BOX_ELEMENTS))!;
@@ -348,5 +355,38 @@ describe("hatches by the export's rules", () => {
     expect([table.source, table.rowUnfit]).toEqual(['table', false]);
     expect(table.rule).toBe(hatchRuleFor(plain.machines.get(IDS.EBF)!));
     expect(hatchRulesOf(plain.machines.get(FRONT_BOX_ID)!)).toBeNull();
+  });
+
+  it('keeps a step that draws EU electric where GregTech took none of the energy hatches the export tried, and says so', () => {
+    // GT may take only energy hatches above the probe's tier (a fusion reactor's energy injectors): the line still
+    // powers the machine, and the group places the energy hatch
+    const pack = hatchExportPack();
+    giveElements(pack, FRONT_BOX_ID, FRONT_BOX_ELEMENTS.map((s) => (s.ch === 'k' ? { ...s, hatches: [] } : s)));
+    const { unit, warnings } = layOne(pack, frontBoxStep);
+    expect(unit.electric).toBe(true);
+    expect(unit.cells.some((c) => c.hatch === 'energy')).toBe(false);
+    expect(warnings).toEqual([
+      expect.objectContaining({ code: 'hatch_rules_export_only', stepId: 'f' }),
+      { code: 'hatch_energy_exotic', stepId: 'f',
+        text: 'Test Front Box: GregTech took none of the lowest-tier energy hatches the export tried on it, so it may take only higher tiers: place one by hand' },
+    ]);
+    // under a fitting row too, which runs the machine on EU: an EBF whose export took no energy hatch
+    const ebfPack = hatchExportPack();
+    const ebf = giveElements(ebfPack, IDS.EBF, ebfElements([]).map((s) => (s.ch === 'b' ? { ...s, hatches: ALL_SIX.filter((k) => k !== 'energy') } : s)));
+    expect(hatchRulesOf(ebf)!.source).toBe('both');
+    const furnace = layOne(ebfPack, ebfStep);
+    expect(furnace.unit.electric).toBe(true);
+    expect(furnace.unit.cells.some((c) => c.hatch === 'energy')).toBe(false);
+    expect(furnace.warnings.filter((w) => w.code === 'hatch_energy_exotic').map((w) => w.text)).toEqual([
+      'Electric Blast Furnace: GregTech took none of the lowest-tier energy hatches the export tried on it, so it may take only higher tiers: place one by hand']);
+  });
+
+  it('leaves a multiblock whose export took no energy hatch unpowered when its step draws no EU', () => {
+    const pack = hatchExportPack();
+    giveElements(pack, FRONT_BOX_ID, FRONT_BOX_ELEMENTS.map((s) => (s.ch === 'k' ? { ...s, hatches: [] } : s)));
+    const { unit, warnings } = layOne(pack, { ...frontBoxStep, euPerTick: 0 });
+    expect(unit.electric).toBe(false);
+    expect(unit.cells.some((c) => c.hatch === 'energy')).toBe(false);
+    expect(codes(warnings)).toEqual(['hatch_rules_export_only']);
   });
 });
