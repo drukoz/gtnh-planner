@@ -20,13 +20,15 @@ import net.minecraftforge.client.event.GuiScreenEvent;
  * <ul>
  * <li>a key binding in Minecraft's Controls menu, {@code Open the planner screen} under {@code GTNH Planner}, unbound
  * by default because GTNH's keys are crowded;</li>
- * <li>a small {@code P} button on the survival inventory, just above the inventory panel's top-right corner. It is
- * placed from the panel's actual left edge, which moves right while potion effects show, so it stays clear of NEI's
- * panels on either side and of the inventory tabs other mods put above the panel's left end. It is not added to the
- * creative inventory, whose tabs and page buttons fill every side of the panel.</li>
+ * <li>a small {@code P} button on the survival inventory, just above the inventory panel's top-right corner, so it
+ * stays clear of NEI's panels on either side and of the inventory tabs other mods put above the panel's left end. The
+ * panel's edge is not where the inventory first put it: vanilla moves the panel right while potion effects show, and
+ * GTNH's NEI moves it back to the centre before every frame it draws. So the button reads the panel's live edge
+ * ({@code guiLeft}, {@code guiTop}, {@code xSize}) each time it is drawn or pressed and moves there. It is not added to
+ * the creative inventory, whose tabs and page buttons fill every side of the panel.</li>
  * </ul>
  * Registered on both buses: FML's carries the client tick, Forge's the GUI events. If the button cannot be placed, the
- * log says why, once, and only the key opens the screen. Used on the game thread only.
+ * log says why, once, the button goes away and only the key opens the screen. Used on the game thread only.
  */
 public final class ScreenOpener {
 
@@ -45,8 +47,6 @@ public final class ScreenOpener {
     private final KeyBinding key = new KeyBinding(KEY_NAME, UNBOUND, KEY_CATEGORY);
     private final Minecraft mc = Minecraft.getMinecraft();
 
-    /** The button on the last inventory opened, or null. */
-    private GuiButton inventoryButton;
     /** {@code GuiContainer}'s protected panel edge and width, by their development and game names; null until found. */
     private Field guiLeft, guiTop, xSize;
     /** Whether the inventory button failed: none is added any more and the failure is not logged again. */
@@ -73,9 +73,9 @@ public final class ScreenOpener {
     }
 
     /**
-     * After the survival inventory lays out its controls (again after a resize): adds the planner button, its right
-     * edge on the panel's right edge and its bottom just above the panel's top, with an id none of the inventory's
-     * buttons has.
+     * After the survival inventory lays out its controls (again after a resize): adds the planner button, with an id
+     * none of the inventory's buttons has, at the panel's top-right corner as it is now (it follows the panel from
+     * then on).
      */
     @SubscribeEvent
     public void onInitGui(GuiScreenEvent.InitGuiEvent.Post e) {
@@ -87,16 +87,11 @@ public final class ScreenOpener {
                 guiTop = ReflectionHelper.findField(GuiContainer.class, "guiTop", "field_147009_r");
                 xSize = ReflectionHelper.findField(GuiContainer.class, "xSize", "field_146999_f");
             }
-            int right = guiLeft.getInt(e.gui) + xSize.getInt(e.gui);
-            int top = guiTop.getInt(e.gui);
-            inventoryButton = new GuiButton(freeId(e.buttonList), right - BUTTON_SIZE,
-                Math.max(0, top - BUTTON_GAP - BUTTON_SIZE), BUTTON_SIZE, BUTTON_SIZE, BUTTON_LABEL);
-            e.buttonList.add(inventoryButton);
+            InventoryButton button = new InventoryButton(freeId(e.buttonList), (GuiContainer) e.gui);
+            button.place();
+            e.buttonList.add(button);
         } catch (Throwable failure) {
-            buttonFailed = true;
-            inventoryButton = null;
-            ClientProxy.LOG.error("The planner button could not be put on the inventory; the key binding still"
-                + " opens the planner screen", failure);
+            buttonFailed(failure, "The planner button could not be put on the inventory");
         }
     }
 
@@ -106,22 +101,29 @@ public final class ScreenOpener {
      */
     @SubscribeEvent
     public void onAction(GuiScreenEvent.ActionPerformedEvent.Pre e) {
-        if (inventoryButton == null || e.button != inventoryButton) return;
+        if (!(e.button instanceof InventoryButton)) return;
         e.setCanceled(true);
         try {
             e.button.func_146113_a(mc.getSoundHandler());
             mc.thePlayer.closeScreen();
             open();
         } catch (Throwable failure) {
-            if (!buttonFailed) ClientProxy.LOG.error("The planner button could not open the planner screen", failure);
-            buttonFailed = true;
-            inventoryButton = null;
+            e.button.visible = false;
+            buttonFailed(failure, "The planner button could not open the planner screen");
         }
     }
 
     /** Shows a new planner screen. */
     void open() {
         mc.displayGuiScreen(new PlannerScreen(session, config, icons));
+    }
+
+    /** No more inventory buttons from now on; the first failure is logged. */
+    private void buttonFailed(Throwable failure, String what) {
+        if (!buttonFailed) {
+            ClientProxy.LOG.error(what + "; the key binding still opens the planner screen", failure);
+        }
+        buttonFailed = true;
     }
 
     /** {@link #BUTTON_ID}, or the first id after it that none of the buttons has. */
@@ -136,5 +138,48 @@ public final class ScreenOpener {
             if (b instanceof GuiButton && ((GuiButton) b).id == id) return true;
         }
         return false;
+    }
+
+    /**
+     * The planner button on one inventory: before it is drawn and before a press is checked, it moves to just above
+     * the panel's top-right corner, wherever the panel is at that moment. If the panel's edge cannot be read, it hides.
+     */
+    private final class InventoryButton extends GuiButton {
+
+        private final GuiContainer gui;
+
+        InventoryButton(int id, GuiContainer gui) {
+            super(id, 0, 0, BUTTON_SIZE, BUTTON_SIZE, BUTTON_LABEL);
+            this.gui = gui;
+        }
+
+        /** Its right edge on the panel's right edge, its bottom just above the panel's top (never above the screen). */
+        void place() throws IllegalAccessException {
+            xPosition = guiLeft.getInt(gui) + xSize.getInt(gui) - BUTTON_SIZE;
+            yPosition = Math.max(0, guiTop.getInt(gui) - BUTTON_GAP - BUTTON_SIZE);
+        }
+
+        @Override
+        public void drawButton(Minecraft minecraft, int mouseX, int mouseY) {
+            if (follow()) super.drawButton(minecraft, mouseX, mouseY);
+        }
+
+        @Override
+        public boolean mousePressed(Minecraft minecraft, int mouseX, int mouseY) {
+            return follow() && super.mousePressed(minecraft, mouseX, mouseY);
+        }
+
+        /** Moves to the panel's corner; false, and hidden from then on, when the panel's edge cannot be read. */
+        private boolean follow() {
+            if (!visible) return false;
+            try {
+                place();
+                return true;
+            } catch (Throwable failure) {
+                visible = false;
+                buttonFailed(failure, "The planner button could not follow the inventory panel");
+                return false;
+            }
+        }
     }
 }
