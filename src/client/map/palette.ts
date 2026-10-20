@@ -4,7 +4,7 @@
 
 import { compositeLayers, type LayerPixels } from '../assets/composite.ts';
 import { loadLayerBitmap } from '../assets/texture-image.ts';
-import { hashColor, type BlockFaces, type Rgb, type TextureLayer } from '../../shared/types/assets.ts';
+import { hashColor, regionRect, type BlockFaces, type Rgb, type TextureLayer } from '../../shared/types/assets.ts';
 import type { BlockRef } from '../../shared/types/pack.ts';
 
 /** Textures are averaged at 16×16 (frame 0 only, cut by loadLayerBitmap). */
@@ -42,12 +42,15 @@ const NAME_RULES: ReadonlyArray<{ test: (name: string, id: string) => boolean; c
   { test: (name) => /casing/.test(name), color: [158, 158, 158] },
 ];
 
+/** The colour of the first name rule `ref` matches ("chisel:cobblestone" is stone grey), or null. */
+export function nameRuleColor(ref: BlockRef): Rgb | null {
+  const name = ref.id.slice(ref.id.indexOf(':') + 1).toLowerCase();
+  return NAME_RULES.find((rule) => rule.test(name, ref.id))?.color ?? null;
+}
+
 /** A colour for `ref` without any texture: its override, a name rule, else a stable hash colour of `id@meta`. */
 export function fallbackColor(ref: BlockRef): Rgb {
-  const override = OVERRIDE_COLORS[ref.id];
-  if (override !== undefined) return override;
-  const name = ref.id.slice(ref.id.indexOf(':') + 1).toLowerCase();
-  return NAME_RULES.find((rule) => rule.test(name, ref.id))?.color ?? hashColor(`${ref.id}@${ref.meta}`);
+  return OVERRIDE_COLORS[ref.id] ?? nameRuleColor(ref) ?? hashColor(`${ref.id}@${ref.meta}`);
 }
 
 export function packRgb(c: Rgb): number {
@@ -78,7 +81,10 @@ export function averageTopColor(layers: readonly LayerPixels[]): Rgb | null {
   return n === 0 ? null : [Math.round(r / n), Math.round(g / n), Math.round(b / n)];
 }
 
-/** One layer's frame 0 at PALETTE_TEXTURE_SIZE², read back from an OffscreenCanvas; null when the texture did not load. */
+/**
+ * One layer's frame 0 (or region, at its place) in a PALETTE_TEXTURE_SIZE² tile, read back from an OffscreenCanvas; null
+ * when the texture did not load.
+ */
 export async function layerPixels(layer: TextureLayer): Promise<LayerPixels | null> {
   const bitmap = await loadLayerBitmap(layer, PALETTE_TEXTURE_SIZE);
   if (bitmap === null) return null;
@@ -86,14 +92,20 @@ export async function layerPixels(layer: TextureLayer): Promise<LayerPixels | nu
   const ctx = canvas.getContext('2d');
   if (ctx === null) return null;
   // The bitmap is loadLayerBitmap's cached copy: drawn, never closed.
-  ctx.drawImage(bitmap, 0, 0, PALETTE_TEXTURE_SIZE, PALETTE_TEXTURE_SIZE);
+  const [x, y, w, h] = regionRect(layer, PALETTE_TEXTURE_SIZE);
+  ctx.drawImage(bitmap, x, y, w, h);
   const { data } = ctx.getImageData(0, 0, PALETTE_TEXTURE_SIZE, PALETTE_TEXTURE_SIZE);
   return { data, width: PALETTE_TEXTURE_SIZE, height: PALETTE_TEXTURE_SIZE, tint: layer.tint };
 }
 
 export interface PaletteDeps { faces(blocks: BlockRef[]): Promise<BlockFaces[]>; image(layer: TextureLayer): Promise<LayerPixels | null> }
 
-/** Override > average of the `up` face layers > the server's fallback when unresolved > the local fallback. */
+/**
+ * Override > average of the `up` face layers > the local fallback when resolved. Unresolved, a GT machine keeps the
+ * server's colour, its machine kind's (spec §3.8); any other block takes its name rule's colour before the server's
+ * (a hash colour, or the casing colour): chisel's cobblestone variants and the legacy `gregtech:gt.blockores` metas
+ * (RC15) are stone grey, not violet or teal.
+ */
 async function entryColor(ref: BlockRef, faces: BlockFaces | undefined, image: PaletteDeps['image']): Promise<Rgb> {
   const override = OVERRIDE_COLORS[ref.id];
   if (override !== undefined) return override;
@@ -105,7 +117,9 @@ async function entryColor(ref: BlockRef, faces: BlockFaces | undefined, image: P
   } catch {
     // a texture that failed to load, or layers of different sizes: no average
   }
-  return faces.resolved ? fallbackColor(ref) : faces.fallbackColor;
+  if (faces.resolved) return fallbackColor(ref);
+  if (ref.mteId !== undefined) return faces.fallbackColor;
+  return nameRuleColor(ref) ?? faces.fallbackColor;
 }
 
 /**

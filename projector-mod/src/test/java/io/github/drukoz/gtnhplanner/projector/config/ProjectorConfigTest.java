@@ -55,4 +55,13 @@ class ProjectorConfigTest {
         ProjectorConfig back = ProjectorConfig.load(f);
         assertNull(back.token("P1")); assertNull(back.token("P2")); assertNull(back.token("P3"));
     }
+
+    @Test void listsTheProjectsWithASavedTokenSorted() throws IOException {
+        File f = dir.resolve(ProjectorConfig.FILE_NAME).toFile();
+        ProjectorConfig c = ProjectorConfig.load(f);
+        assertTrue(c.projectIds().isEmpty());
+        c.setToken("b2", "gpt_b"); c.setToken("A1", "gpt_a"); c.setToken("c3", "gpt_c"); c.setToken("c3", " ");
+        c.save();
+        assertEquals(java.util.Arrays.asList("A1", "b2"), ProjectorConfig.load(f).projectIds());
+    }
 }

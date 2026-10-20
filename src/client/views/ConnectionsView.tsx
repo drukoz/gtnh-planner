@@ -1,18 +1,19 @@
 // The Connections tab (plan 11 Task 8; spec §3.8c; architecture §7.2 and "EnderIO conduits, granted change requests
 // (add-on 11)"): the laid-out line as a schematic of boxes and links, from the pure model in ../connections/model.ts.
-// Every placed machine, chest, interface and hookup is a box whose rows name its configured faces, and every flow is a
-// link drawn in the colour of what carries it, or of its EnderIO channel. ELK lays the boxes out in its worker, and a
-// drag moves the picture, the wheel zooms it and Fit shows all of it (./pan-zoom.ts), as for the flow diagram; a click
-// on a box, one of its face rows or a link shows its full configuration in the side panel.
+// Every placed machine, chest, interface and hookup is a box whose rows name its configured faces (a conduit face with
+// its mode and channels under it), and every flow is a link drawn in the colour of what carries it, or of its EnderIO
+// channel. ELK lays the boxes out in its worker, and a drag moves the picture, the wheel zooms it and Fit shows all of it
+// (./pan-zoom.ts), as for the flow diagram; a click on a box, one of its face rows or a link shows its full configuration
+// in the side panel, and a picked link marks the face rows it leaves and enters.
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactElement } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactElement } from 'react';
 import { DYE_HEX } from '../../shared/layout/enderio.ts';
 import type { Layout } from '../../shared/types/layout.ts';
 import type { Plan } from '../../shared/types/plan.ts';
 import { messageOf } from '../api/client.ts';
 import {
-  CONN_LINE_HEIGHT, CONN_TITLE_HEIGHT, connectionsElk, connectionsFromElk, connectionsGraph, pickDetails,
-  type ConnEdge, type ConnGraph, type ConnLayout, type ConnPick, type ConnVia,
+  CONN_LINE_HEIGHT, CONN_TITLE_HEIGHT, connectionsElk, connectionsFromElk, connectionsGraph, faceLines, faceModeText, pickDetails,
+  type ConnEdge, type ConnFace, type ConnGraph, type ConnLayout, type ConnPick, type ConnVia,
 } from '../connections/model.ts';
 import { useLayout } from '../state/use-layout.ts';
 import { layoutFlow } from '../workers/elk.worker.ts';
@@ -61,6 +62,8 @@ const DIVIDER_GAP = 2;
  */
 const TITLE_CHARS = 32;
 const ROW_CHARS = 38;
+/** A conduit face's mode line (10.5 px): the longest, `In / Out · in Light Blue · out Light Gray`, has 41 characters. */
+const MODE_CHARS = 42;
 /** Room around the fitted picture, in screen pixels, as in the flow diagram. */
 const PAD = 16;
 /** An arrow key moves the picture this far (px), the way it scrolls a page: → shows more of its right. */
@@ -84,22 +87,36 @@ function facesOutline(width: number, top: number, bottom: number): string {
   return `M 0 ${top} H ${width} V ${bottom - r} A ${r} ${r} 0 0 1 ${width - r} ${bottom} H ${r} A ${r} ${r} 0 0 1 0 ${bottom - r} Z`;
 }
 
+/** A face row in the box's tooltip: its title, and a conduit face's mode after a dash. */
+function faceTip(face: ConnFace): string {
+  return face.mode === undefined ? face.title : `${face.title} — ${faceModeText(face.mode)}`;
+}
+
 /**
- * One box: its title, its lines and, under a divider, a row per face (its title). The rect is the box above the face
- * rows (the whole box when it has none): a click on it, or on the face rows' background, picks the box, and a click on
- * a face row picks that face. Only the face rows take clicks among the texts, so the middle of the rect is always the
- * rect's own. A text too long for the box ends in '…' (`cut`), and the box's tooltip, its first child as in the flow
- * diagram, holds every text in full, one per line; the panel shows a picked one in full too. The nested svg still
- * clips anything wider than the box.
+ * One box: its title, its lines and, under a divider, a row per face: its title, and under it a conduit face's mode
+ * and channels (`faceModeText`). The rect is the box above the face rows (the whole box when it has none): a click on
+ * it, or on the face rows' background, picks the box, and a click on either line of a face row picks that face. Only the
+ * face rows take clicks among the texts, so the middle of the rect is always the rect's own. A face row is `selected`
+ * when picked and `linked` when the picked link leaves or enters through it (`linked` holds those faces). A text too
+ * long for the box ends in '…' (`cut`), and the box's tooltip, its first child as in the flow diagram, holds every text
+ * in full, one per line; the panel shows a picked one in full too. The nested svg still clips anything wider than the
+ * box.
  */
-function NodeShape(props: { node: PlacedNode; pick: ConnPick | null; onPick(pick: ConnPick): void }): ReactElement {
-  const { node, pick, onPick } = props;
+function NodeShape(props: { node: PlacedNode; pick: ConnPick | null; linked: ReadonlySet<string>; onPick(pick: ConnPick): void }): ReactElement {
+  const { node, pick, linked, onPick } = props;
   const picked = pick !== null && 'node' in pick && pick.node === node.id ? pick : null;
   const top = facesTop(node);
   const pickBox = (): void => onPick({ node: node.id });
+  /** Each face row's first line, counted from the divider. */
+  let lines = 0;
+  const rowStart = node.faces.map((face) => {
+    const at = lines;
+    lines += faceLines(face);
+    return at;
+  });
   return (
     <g data-node={node.id} className={`conn-node conn-${node.kind}${picked === null ? '' : ' selected'}`} transform={`translate(${node.x} ${node.y})`}>
-      <title>{[node.title, ...node.lines, ...node.faces.map((face) => face.title)].join('\n')}</title>
+      <title>{[node.title, ...node.lines, ...node.faces.map(faceTip)].join('\n')}</title>
       {/* the face rows' part, drawn over the rect's rounded lower corners, gives the box one outline */}
       <rect width={node.width} height={node.faces.length === 0 ? node.height : top + CORNER} rx={CORNER} onClick={pickBox} />
       {node.faces.length > 0 && <path d={facesOutline(node.width, top, node.height)} onClick={pickBox} />}
@@ -108,18 +125,21 @@ function NodeShape(props: { node: PlacedNode; pick: ConnPick | null; onPick(pick
         {node.lines.map((line, i) => (
           <text key={`${i}:${line}`} className="conn-line" x={TEXT_LEFT} y={CONN_TITLE_HEIGHT + CONN_LINE_HEIGHT * i + ROW_BASELINE}>{cut(line, ROW_CHARS)}</text>
         ))}
-        {node.faces.map((face, i) => (
-          <text
-            key={face.id}
-            className={picked?.face === face.id ? 'conn-face selected' : 'conn-face'}
-            data-face={face.id}
-            x={TEXT_LEFT}
-            y={top + DIVIDER_GAP + CONN_LINE_HEIGHT * i + ROW_BASELINE}
-            onClick={() => onPick({ node: node.id, face: face.id })}
-          >
-            {cut(face.title, ROW_CHARS)}
-          </text>
-        ))}
+        {node.faces.map((face, i) => {
+          const state = picked?.face === face.id ? ' selected' : linked.has(face.id) ? ' linked' : '';
+          const y = top + DIVIDER_GAP + CONN_LINE_HEIGHT * rowStart[i]! + ROW_BASELINE;
+          const pickFace = (): void => onPick({ node: node.id, face: face.id });
+          return (
+            <Fragment key={face.id}>
+              <text className={`conn-face${state}`} data-face={face.id} x={TEXT_LEFT} y={y} onClick={pickFace}>{cut(face.title, ROW_CHARS)}</text>
+              {face.mode !== undefined && (
+                <text className={`conn-face-mode${state}`} data-face={face.id} x={TEXT_LEFT} y={y + CONN_LINE_HEIGHT} onClick={pickFace}>
+                  {cut(faceModeText(face.mode), MODE_CHARS)}
+                </text>
+              )}
+            </Fragment>
+          );
+        })}
       </svg>
     </g>
   );
@@ -164,6 +184,11 @@ function EdgeShape(props: { edge: PlacedEdge; selected: boolean; onPick(pick: Co
 function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: boolean; onPick(pick: ConnPick): void }): ReactElement {
   const { picture, pick, busy, onPick } = props;
   const pickedEdge = pick !== null && 'edge' in pick ? pick.edge : null;
+  // the face rows the picked link leaves and enters through
+  const linked = useMemo(() => {
+    const edge = pickedEdge === null ? undefined : picture.edges.find((e) => e.id === pickedEdge);
+    return new Set([edge?.fromFace, edge?.toFace].filter((f): f is string => f !== null && f !== undefined));
+  }, [picture, pickedEdge]);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [view, setView] = useState<View>({ x: PAD, y: PAD, k: 1 });
   const [dragging, setDragging] = useState(false);
@@ -261,7 +286,7 @@ function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: bool
           </defs>
           <g className="conn-pan" transform={`translate(${view.x} ${view.y}) scale(${view.k})`}>
             {picture.edges.map((edge) => <EdgeShape key={edge.id} edge={edge} selected={edge.id === pickedEdge} onPick={pickUnlessDragged} />)}
-            {picture.nodes.map((node) => <NodeShape key={node.id} node={node} pick={pick} onPick={pickUnlessDragged} />)}
+            {picture.nodes.map((node) => <NodeShape key={node.id} node={node} pick={pick} linked={linked} onPick={pickUnlessDragged} />)}
           </g>
         </svg>
       </div>

@@ -8,6 +8,7 @@ import io.github.drukoz.gtnhplanner.projector.check.FakeWorld;
 import io.github.drukoz.gtnhplanner.projector.config.ProjectorConfig;
 import io.github.drukoz.gtnhplanner.projector.model.*;
 import io.github.drukoz.gtnhplanner.projector.net.*;
+import io.github.drukoz.gtnhplanner.projector.view.AimRay;
 import io.github.drukoz.gtnhplanner.projector.view.ViewFilter;
 import java.io.StringReader;
 import java.nio.file.Path;
@@ -43,7 +44,7 @@ class ProjectorSessionTest {
         assertEquals(Arrays.asList("[Planner] Loading project Pr0jectAb1 from http://mc.example.org:8765…",
             "[Planner] Loaded \"Steel line\": 10 blocks in 7 build steps. Showing all layers."), chat);
         assertTrue(s.visibleHere());
-        assertEquals(Collections.singletonList("Planner: Steel line — 0/10 placed, 0 wrong"), s.hudLines());
+        assertEquals("Planner: Steel line — 0/10 placed, 0 wrong", s.hudLines().get(0));
         s.run(Command.load("Pr0jectAb1", null));
         assertEquals("fetch http://mc.example.org:8765 Pr0jectAb1 gpt_abc Steve", api.calls.get(1));   // the saved token
     }
@@ -77,8 +78,8 @@ class ProjectorSessionTest {
         s.tick(w, 40); s.tick(w, 60);
         assertEquals(1, api.markCalls());
         assertTrue(s.hudLines().get(0).startsWith("Planner: Steel line — 2/10 placed"));
-        assertEquals("Basic Macerator: placed correctly; cover: Conveyor Module (LV) on the south face", s.lookingAt(102, 64, 201));
-        assertNull(s.lookingAt(0, 0, 0));
+        assertEquals(Arrays.asList("Basic Macerator", "placed correctly", "cover: Conveyor Module (LV) on the south face"), s.tagLines(3));
+        assertTrue(s.tagLines(99).isEmpty());
     }
 
     @Test void keepsTheLoadedGhostsWhenARefreshFails() throws Exception {
@@ -136,9 +137,9 @@ class ProjectorSessionTest {
     @Test void showsARenderFailureOnTheHud() throws Exception {
         loadSample();
         s.setRenderError("Ghost drawing failed: boom");
-        assertEquals("Planner: Ghost drawing failed: boom", s.hudLines().get(s.hudLines().size() - 1));
+        assertEquals("Planner: Ghost drawing failed: boom", s.hudLines().get(1));
         s.setRenderError(null);
-        assertEquals(1, s.hudLines().size());
+        assertFalse(s.hudLines().contains("Planner: Ghost drawing failed: boom"));
     }
 
     @Test void urlXrayReloadAndClear() throws Exception {
@@ -209,7 +210,7 @@ class ProjectorSessionTest {
         assertEquals("Planner: Cannot reach the planner at http://mc.example.org:8765 (SocketTimeoutException: Read time…", s.hudLines().get(1));
         s.tick(new FakeWorld(), 3);                                             // a minute after the failed one started
         api.fetches.poll().done(PayloadParserTest.sample());                   // the same version: only the ticks are read
-        assertNull(s.lastError()); assertEquals(1, s.hudLines().size());
+        assertNull(s.lastError()); assertFalse(s.hudLines().get(1).startsWith("Planner: Cannot reach"));
         assertEquals(new ViewFilter(64, 1), s.filter());
         now += 60_000; s.tick(new FakeWorld(), 4);
         api.fetches.poll().done(sampleWith(o -> o.addProperty("version", "ffffffffffffffff")));
@@ -290,16 +291,41 @@ class ProjectorSessionTest {
         assertEquals("[Planner] \"Steel line\": Not placed", last());          // not "Updated …: 0 blocks in 0 build steps."
     }
 
-    @Test void describesOnlyAShownBlockUnderTheCrosshair() throws Exception {
+    // The review of the EnderIO single pipe: a fluids step that lays its conduits in the line's bundles only places no block
+    // of its own, and is still a step with blocks to show, and to tick once its fluid conduits are in.
+    @Test void showsAndTicksAStepThatOnlyLaysConduitsInBundles() throws Exception {
+        s.run(Command.load("Pr0jectAb1", "gpt_abc")); api.fetches.poll().done(PayloadParserTest.bundleSample());
+        assertEquals("[Planner] Loaded \"Steel line\": 12 blocks in 8 build steps. Showing all layers.", last());
+        s.run(Command.step("11"));
+        assertEquals("[Planner] Showing step 11: " + PayloadParserTest.bundleSample().steps.get(PayloadParserTest.FLUIDS).text, last());
+        FakeWorld w = new FakeWorld().placeLine("item");
+        placeAndCheck(w);
+        assertEquals(Collections.singletonList("mark Pr0jectAb1 layout:logistics:line Steve"), marks());   // not the fluids step
+        assertEquals(Arrays.asList(PayloadParserTest.BUNDLE_LABEL, "not all its conduits placed yet"), s.tagLines(10));
+        assertTrue(s.hudLines().get(0).startsWith("Planner: Steel line — 0/2 placed, 0 wrong · showing step 11"), s.hudLines().get(0));
+        s.run(Command.step("7"));                                              // the line step, whose conduit the bundle holds
+        assertEquals(Arrays.asList(PayloadParserTest.BUNDLE_LABEL, "placed correctly"), s.tagLines(10));
+        assertTrue(s.hudLines().get(0).startsWith("Planner: Steel line — 5/5 placed, 0 wrong · showing step 7"), s.hudLines().get(0));
+        s.run(Command.step("all"));
+        assertEquals(Arrays.asList(PayloadParserTest.BUNDLE_LABEL, "not all its conduits placed yet"), s.tagLines(10));
+        api.marks.poll().done(8);
+        placeAndCheck(w.placeLine("item", "liquid_ender"));
+        assertEquals(Arrays.asList("mark Pr0jectAb1 layout:logistics:line Steve", "mark Pr0jectAb1 layout:logistics:fluids Steve"), marks());
+        assertEquals(Arrays.asList(PayloadParserTest.BUNDLE_LABEL, "placed correctly"), s.tagLines(10));
+    }
+    private List<String> marks() { List<String> m = new ArrayList<>(); for (String c : api.calls) if (c.startsWith("mark ")) m.add(c); return m; }
+
+    @Test void tagLinesOfAnyLoadedBlockAndNothingWhenNothingIsLoaded() throws Exception {
+        assertTrue(s.tagLines(0).isEmpty());
         loadSample();
         placeAndCheck(new FakeWorld().placeStepS1());
         s.run(Command.layer(65));
-        assertNull(s.lookingAt(102, 64, 201));                                  // hidden by the layer filter
+        assertEquals("Basic Macerator", s.tagLines(3).get(0));                  // the filter does not matter to the tag
         s.run(Command.layer(null));
         assertEquals("[Planner] Showing all layers.", last());
-        assertNotNull(s.lookingAt(102, 64, 201));
+        assertTrue(s.tagLines(-1).isEmpty());
         dim = -1;                                                               // the player went to the Nether
-        assertFalse(s.visibleHere()); assertNull(s.lookingAt(102, 64, 201));
+        assertFalse(s.visibleHere());
         assertEquals(Collections.singletonList("Planner: Steel line — the line is in dimension 0"), s.hudLines());
     }
 
@@ -334,5 +360,142 @@ class ProjectorSessionTest {
         assertTrue(chat.get(0).startsWith("[Planner] Could not save the projector config: "), chat.get(0));
         assertEquals("[Planner] Loading project Pr0jectAb1 from http://mc.example.org:8765…", chat.get(1));
         assertEquals("fetch http://mc.example.org:8765 Pr0jectAb1 gpt_abc Steve", api.calls.get(0));
+    }
+
+    private static final AimRay.Stops none = (x, y, z) -> false;
+    private static List<Integer> blocks(List<AimRay.Hit> hits) { List<Integer> l = new ArrayList<>(); for (AimRay.Hit h : hits) l.add(h.block); return l; }
+
+    @Test void aimsAtGhostsAndListsTheStackedOnes() throws Exception {
+        loadSample();
+        s.aim(new double[] {99.5, 64.5, 201.5}, new double[] {1, 0, 0}, none);
+        assertEquals(0, s.aimed());
+        List<String> hud = s.hudLines();
+        assertEquals(Arrays.asList("Behind the crosshair (4):", "> 1x Tin Cable 1 m", "  1x Tin Cable 2 m", "  Basic Macerator 3 m", "  Basic Macerator 4 m"),
+            hud.subList(1, 6));
+    }
+
+    @Test void aRealBlockStopsTheAimUnlessXrayIsOn() throws Exception {
+        loadSample();
+        AimRay.Stops wall = (x, y, z) -> x == 101 && y == 64 && z == 201;
+        s.aim(new double[] {99.5, 64.5, 201.5}, new double[] {1, 0, 0}, wall);
+        assertEquals(2, s.aimHits().size());
+        s.run(Command.xray(true));
+        s.aim(new double[] {99.5, 64.5, 201.5}, new double[] {1, 0, 0}, wall);
+        assertEquals(4, s.aimHits().size());
+    }
+
+    @Test void filteredHiddenAndFarGhostsAreNotAimedAt() throws Exception {
+        loadSample();
+        s.run(Command.step("2"));
+        s.aim(new double[] {99.5, 64.5, 201.5}, new double[] {1, 0, 0}, none);
+        assertEquals(Arrays.asList(3, 4), blocks(s.aimHits()));
+        int v = s.renderVersion();
+        s.setGhostsHidden(true);
+        assertTrue(s.ghostsHidden()); assertEquals(v + 1, s.renderVersion()); assertTrue(s.aimHits().isEmpty());
+        s.aim(new double[] {99.5, 64.5, 201.5}, new double[] {1, 0, 0}, none);
+        assertTrue(s.aimHits().isEmpty());
+        s.setGhostsHidden(false); s.run(Command.step("all"));
+        s.aim(new double[] {-100.5, 64.5, 201.5}, new double[] {1, 0, 0}, none);   // 200 blocks away, maxDistance 96
+        assertTrue(s.aimHits().isEmpty());
+    }
+
+    @Test void needsListFollowsTheCurrentStep() throws Exception {
+        loadSample();
+        assertEquals(1, s.currentStep());
+        assertTrue(s.hudLines().containsAll(Arrays.asList("Still needed for step 2:", "2× Basic Macerator")));
+        FakeWorld w = new FakeWorld().placeStepS1();
+        placeAndCheck(w); api.marks.poll().done(8);
+        assertEquals(3, s.currentStep());                                      // step 4: the transformer
+        assertTrue(s.hudLines().containsAll(Arrays.asList("Still needed for step 4:", "1× Low Voltage Transformer")));
+        s.run(Command.step("7"));
+        assertEquals(6, s.currentStep());
+    }
+
+    @Test void findingSaysWhereTheBlockIsAndEnds() throws Exception {
+        loadSample();
+        s.aim(new double[] {99.5, 64.5, 190.5}, new double[] {0, 0, 1}, none);   // nothing on this ray
+        s.find(9);
+        assertEquals(9, s.found());
+        assertTrue(s.hudLines().contains("Finding: Heat Proof Machine Casing — 14 blocks S, 1 up"), s.hudLines().toString());
+        now += 60_001;
+        assertEquals(-1, s.found());
+        s.find(9);
+        s.aim(new double[] {103.5, 65.5, 201.5}, new double[] {0, 0, 1}, none);  // aims at block 9 itself
+        assertEquals(-1, s.found()); assertEquals(9, s.aimed());
+        s.find(9); s.screenOpened(); assertEquals(-1, s.found());
+        s.find(9); s.run(Command.clear()); assertEquals(-1, s.found());
+    }
+
+    @Test void aimingAtAFoundBlockOutsideTheFilterEndsTheFinding() throws Exception {
+        loadSample();
+        s.run(Command.step("2"));                                               // shows blocks 3 and 4 only
+        s.find(0);
+        s.aim(new double[] {99.5, 64.5, 201.5}, new double[] {1, 0, 0}, none);  // block 0 is the nearest on the ray, but filtered out
+        assertEquals(Arrays.asList(3, 4), blocks(s.aimHits()));
+        assertEquals(-1, s.found());
+    }
+
+    @Test void aimingAtAFoundBlockWhileGhostsAreHiddenEndsTheFinding() throws Exception {
+        loadSample();
+        s.setGhostsHidden(true);
+        s.find(1);
+        s.aim(new double[] {99.5, 64.5, 190.5}, new double[] {0, 0, 1}, none);  // nothing on this ray
+        assertEquals(1, s.found());
+        s.aim(new double[] {99.5, 64.5, 201.5}, new double[] {1, 0, 0}, none);
+        assertTrue(s.aimHits().isEmpty());
+        assertEquals(-1, s.found());
+    }
+
+    @Test void aFoundBlockBehindARealBlockStaysFound() throws Exception {
+        loadSample();
+        AimRay.Stops wall = (x, y, z) -> x == 101 && y == 64 && z == 201;
+        s.find(3);
+        s.aim(new double[] {99.5, 64.5, 201.5}, new double[] {1, 0, 0}, wall);
+        assertEquals(3, s.found());
+        s.run(Command.xray(true));
+        s.aim(new double[] {99.5, 64.5, 201.5}, new double[] {1, 0, 0}, wall);
+        assertEquals(3, s.found());                                             // seen through the wall, but drawn ghosts are nearer
+        s.find(0);
+        s.aim(new double[] {99.5, 64.5, 201.5}, new double[] {1, 0, 0}, wall);
+        assertEquals(-1, s.found());
+    }
+
+    @Test void theHudSaysWhenGhostsAreHidden() throws Exception {
+        loadSample();
+        s.setGhostsHidden(true);
+        assertEquals("Planner: Steel line — 0/10 placed, 0 wrong · ghosts hidden", s.hudLines().get(0));
+        s.setGhostsHidden(false);
+        assertEquals("Planner: Steel line — 0/10 placed, 0 wrong", s.hudLines().get(0));
+    }
+
+    @Test void refreshDropsTheAimAndRefindsByPosition() throws Exception {
+        loadSample();
+        s.aim(new double[] {99.5, 64.5, 201.5}, new double[] {1, 0, 0}, none);
+        assertFalse(s.aimHits().isEmpty());
+        now += 60_000;
+        s.tick(new FakeWorld(), 1);
+        s.find(3);
+        api.fetches.poll().done(PayloadParser.parse(new StringReader(PayloadParserTest.mutate(o -> o.addProperty("version", "eeeeeeeeeeeeeeee")))));
+        assertTrue(s.aimHits().isEmpty());
+        assertEquals(s.blockIndexAt(102, 64, 201), s.found()); assertEquals(3, s.found());
+        now += 60_000;
+        s.tick(new FakeWorld(), 2);
+        s.find(3);
+        api.fetches.poll().done(PayloadParser.parse(new StringReader(PayloadParserTest.mutate(o -> {
+            o.addProperty("version", "ffffffffffffffff");
+            JsonArray up = new JsonArray(); up.add(new com.google.gson.JsonPrimitive(102)); up.add(new com.google.gson.JsonPrimitive(66)); up.add(new com.google.gson.JsonPrimitive(201));
+            PayloadParserTest.block(o, 3).add("pos", up);
+        }))));
+        assertEquals(-1, s.found());
+    }
+
+    @Test void listsTheProjectsWithASavedToken() throws Exception { loadSample(); assertEquals(Collections.singletonList("Pr0jectAb1"), s.savedProjects()); }
+
+    @Test void knowsBlocksByPositionAndWhichStepsAreDone() throws Exception {
+        loadSample();
+        assertEquals(3, s.blockIndexAt(102, 64, 201)); assertEquals(-1, s.blockIndexAt(0, 0, 0));
+        assertFalse(s.stepDone(1));
+        placeAndCheck(new FakeWorld().placeStepS1()); api.marks.poll().done(8);
+        assertTrue(s.stepDone(1));
     }
 }

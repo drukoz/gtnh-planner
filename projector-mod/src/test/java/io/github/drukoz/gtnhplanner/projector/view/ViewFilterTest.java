@@ -47,9 +47,29 @@ class ViewFilterTest {
     }
 
     @Test void aStepFilterHidesABlockThatNoStepPlaces() throws Exception {
-        ProjectorData d = PayloadParser.parse(new java.io.StringReader(PayloadParserTest.mutate(o -> PayloadParserTest.block(o, 0).add("step", com.google.gson.JsonNull.INSTANCE))));
+        ProjectorData d = PayloadParser.parse(new java.io.StringReader(PayloadParserTest.mutate(o -> {
+            PayloadParserTest.block(o, 0).add("step", com.google.gson.JsonNull.INSTANCE);
+            o.getAsJsonArray("steps").get(5).getAsJsonObject().add("blocks", new com.google.gson.JsonArray());
+        })));
         assertTrue(ViewFilter.ALL.shows(d.blocks.get(0))); assertTrue(ViewFilter.ALL.withLayer(64).shows(d.blocks.get(0)));
         assertEquals(Collections.emptyList(), shown(d, ViewFilter.ALL.withStep(5)));   // block 0 was the only block of step 6
+    }
+
+    // The audit of the EnderIO In / Out fix: a conduit bundle is built by the line step and the fluids step both, so either
+    // step's filter shows it.
+    @Test void aStepFilterShowsEveryBlockTheStepBuilds() throws Exception {
+        ProjectorData d = PayloadParser.parse(new java.io.StringReader(PayloadParserTest.mutate(o ->
+            o.getAsJsonArray("steps").get(7).getAsJsonObject().getAsJsonArray("blocks").add(new com.google.gson.JsonPrimitive(8)))));
+        assertEquals(Arrays.asList(7, 8), shown(d, ViewFilter.ALL.withStep(7)));
+        assertEquals(Arrays.asList(5, 6, 8), shown(d, ViewFilter.ALL.withStep(6)));
+    }
+
+    // The review of the EnderIO single pipe: the fluids step lists none of the bundles it lays a conduit in, which name it
+    // in their partSteps instead; its filter shows them all the same.
+    @Test void aStepFilterShowsTheBundlesTheStepLaysAConduitIn() throws Exception {
+        ProjectorData d = PayloadParserTest.bundleSample();
+        assertEquals(Arrays.asList(10, 11), shown(d, ViewFilter.ALL.withStep(PayloadParserTest.FLUIDS)));
+        assertEquals(Arrays.asList(5, 6, 8, 10, 11), shown(d, ViewFilter.ALL.withStep(PayloadParserTest.LINE)));
     }
 
     @Test void distanceIsAStraightLineFromTheBlockCentre() throws Exception {

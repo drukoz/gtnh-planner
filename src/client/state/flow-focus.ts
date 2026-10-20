@@ -6,9 +6,10 @@
 // when it closes.
 
 import { useSyncExternalStore } from 'react';
-import type { StuffKey } from '../../shared/keys.ts';
+import type { Focus } from '../views/flow-model.ts';
 
-export type Focus = { kind: 'item'; key: StuffKey } | { kind: 'node'; id: string } | { kind: 'edge'; id: string } | null;
+// The shape lives with the pure flow model (`focusSets` reads it), so the model needs nothing of this browser store.
+export type { Focus };
 
 let current: Focus = null;
 /** What was lit when a hover began (`hoverFlowFocus`), put back when it ends; undefined while nothing is hovered. */

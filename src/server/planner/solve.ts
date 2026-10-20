@@ -523,14 +523,29 @@ function pricedDerived(lp: MainLp): Array<{ j: number; weight: number }> {
 }
 
 /**
+ * A plan of few recipes within `Σ raw ≤ capped` (S3's reweighted L1, `fewestRecipes`), at the least raw material its
+ * recipes allow: the charge MIP's other start (fix spec R3 step 2, as amended by plan 09 Task 8). S1 runs every recipe
+ * of the least raw material, the most steps a plan of the line has, and from it the root node stopped where the line
+ * had a plan better by the charge: the user's Electronic Circuit line (MV, 1 an hour, 2 %) at 19 steps and 11 % above
+ * the least, where 24 steps at 0.05 % above it charge less (with this start the root node finds them). Null when it
+ * finds none.
+ */
+async function sparseWithin(lp: MainLp, capped: number): Promise<number[] | null> {
+  const off = await fewestRecipes(lp, lockRow(lp.rawCost, capped));
+  if (off === null) return null;
+  const base = await minimize(lp, lp.rawCost, [], Infinity, off);
+  return base.status === 'optimal' && base.objective <= capped ? base.x : null;
+}
+
+/**
  * The step-charge MIP (fix spec R3 step 2). Over the main rows and `Σ raw ≤ (1 + cap) × S1` it minimizes the
  * raw material in units of S1's, with S3's free-input and power tie-breaks (`tieBreaks`) and the canonical rank
  * (CANON_RANK_S3), plus `charge` × `stepWeight` for each step recipe it runs and S3's small charge for each priced
  * derived leaf it buys. One binary per step recipe and per such purchase, `column ≤ M × binary` (M: STEP_BIG_M × the
- * largest S1 run for a recipe, what the cap lets the line buy for a purchase). It starts from S1 (each counted column
- * S1 uses above TINY on) and stops after STEP_MIP_MAX_NODES nodes with the best whole solution it has, which may be the
- * start. Returns the counted columns it leaves out (binary off, or a step recipe it does not run), or null when it has
- * no whole solution or nothing to count.
+ * largest S1 run for a recipe, what the cap lets the line buy for a purchase). It starts from the better, by its own
+ * objective, of S1 and `sparseWithin` (each counted column the start uses above TINY on) and stops after
+ * STEP_MIP_MAX_NODES nodes with the best whole solution it has, which may be the start. Returns the counted columns it
+ * leaves out (binary off, or a step recipe it does not run), or null when it has no whole solution or nothing to count.
  */
 async function chargeMip(lp: MainLp, s1: LpResult, charge: number, handWeight: number, cap: number): Promise<Set<number> | null> {
   const least = s1.objective;
@@ -549,14 +564,25 @@ async function chargeMip(lp: MainLp, s1: LpResult, charge: number, handWeight: n
   }
   const colCost = [...relativeCosts(lp, s1), ...counted.map((c) => c.weight)];
   const all = width + counted.length;
+  /** A plan `x` as a start: its columns, and each counted binary 1 where the plan uses its column. */
+  const startOf = (x: readonly number[]): number[] => [
+    ...lp.rawCost.map((_, j) => Math.max(0, x[j] ?? 0)), ...counted.map((c) => ((x[c.j] ?? 0) > TINY ? 1 : 0)),
+  ];
+  const objectiveOf = (start: readonly number[]): number => start.reduce((sum, v, j) => sum + (colCost[j] ?? 0) * v, 0);
+  // The root node improves on the start it is given: the better of S1 and a plan of few recipes within the cap.
+  let start = startOf(s1.x);
+  const sparse = await sparseWithin(lp, capped);
+  if (sparse !== null && counted.every((c) => (sparse[c.j] ?? 0) <= c.bigM)) {
+    const candidate = startOf(sparse);
+    if (objectiveOf(candidate) < objectiveOf(start)) start = candidate;
+  }
   const result = await solveLp({
     sense: 'min', colCost, colLower: new Array<number>(all).fill(0), colUpper: [...lp.upper, ...new Array<number>(counted.length).fill(1)],
     rows: [
       ...lp.rows, ...lockRow(lp.rawCost, capped),
       ...counted.map((c, k): LpRow => ({ lower: -Infinity, upper: 0, entries: [[c.j, 1], [width + k, -c.bigM]] })),
     ],
-    integer: new Array<boolean>(all).fill(false).fill(true, width), maxNodes: STEP_MIP_MAX_NODES,
-    start: [...lp.rawCost.map((_, j) => Math.max(0, s1.x[j] ?? 0)), ...counted.map((c) => ((s1.x[c.j] ?? 0) > TINY ? 1 : 0))],
+    integer: new Array<boolean>(all).fill(false).fill(true, width), maxNodes: STEP_MIP_MAX_NODES, start,
   });
   if (result.status !== 'optimal' && result.status !== 'feasible') return null;
   const off = new Set<number>();
@@ -575,7 +601,8 @@ function netOf(r: LpRecipe | undefined, key: StuffKey): number {
  * Consolidation (fix spec R3 step 4): for each good that is the main output (`LpRecipe.main`) of two or more step
  * recipes `base` runs, its smaller producers, least made first, one LP each: leave it out when the least raw material
  * without it, in units of S1's, plus `charge` × the weights of the step recipes that plan runs is lower (and within
- * `limit`, the cap). Goods by key, so the result does not depend on the export's order.
+ * `limit`, the cap). Goods by key, so the result does not depend on the export's order. Then each purchase of a good a
+ * step makes too, where the line can do without it (`withoutTiedPurchases`).
  */
 async function consolidated(
   lp: MainLp, s1: LpResult, start: { off: Set<number>; base: LpResult }, charge: number, handWeight: number, limit: number,
@@ -609,6 +636,38 @@ async function consolidated(
         base = tried;
         best = s;
       }
+    }
+  }
+  return withoutTiedPurchases(lp, off, base);
+}
+
+/**
+ * A good a step recipe of the base makes has that one source when the line can do without buying it at the same raw
+ * material (within S3_TOLERANCE; the step charge cannot tell the two apart, as no step comes or goes), so the later
+ * stages never buy it beside the step (spec R11's bought-and-made): within the raw-material lock the power and
+ * canonical stages broke such ties towards buying, and an Electric Blast Furnace run for its carbon dioxide made some of
+ * a line's copper ingots while the line bought the rest (plan 09 Task 8). A purchase the base does not use stays shut;
+ * one it uses, when an LP without it is not dearer. Goods in key order; free goods (no raw cost) are left alone.
+ */
+async function withoutTiedPurchases(lp: MainLp, start: Set<number>, from: LpResult): Promise<{ off: Set<number>; base: LpResult }> {
+  let off = start;
+  let base = from;
+  const most = from.objective * (1 + S3_TOLERANCE) + TINY;
+  for (let i = 0; i < lp.buyKeys.length; i++) {
+    const j = lp.firstBuy + i;
+    const key = lp.buyKeys[i] as StuffKey;
+    if (off.has(j) || !((lp.rawCost[j] ?? 0) > 0)) continue;
+    const made = lp.recipes.some((r, k) => r.kind === 'recipe' && !off.has(k) && (base.x[k] ?? 0) > TINY && netOf(r, key) > 0);
+    if (!made) continue;
+    const without = new Set(off).add(j);
+    if (!((base.x[j] ?? 0) > TINY)) {
+      off = without;
+      continue;
+    }
+    const tried = await minimize(lp, lp.rawCost, [], Infinity, without);
+    if (tried.status === 'optimal' && tried.objective <= most) {
+      off = without;
+      base = tried;
     }
   }
   return { off, base };

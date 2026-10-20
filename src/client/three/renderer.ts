@@ -73,14 +73,26 @@ const SIDE_TURNS: readonly Matrix4[] = [
   new Matrix4().makeRotationY(-Math.PI / 2),   // east
 ];
 
-/** The shape around its cell's centre: an arm reaches from the core to the north face, a plate lies just outside it. */
-function shapeGeometry(shape: ShapeKind): BufferGeometry {
+/**
+ * The shape around its cell's centre: an arm reaches from the core to the north face, a plate lies just outside it. On
+ * an arm's four long faces u runs along the arm, as on ProjectRed's side model (architecture §11.43 (c)); a box runs it
+ * across the arm on its ±y faces, so those swap u and v. The others keep three's UVs.
+ */
+export function shapeGeometry(shape: ShapeKind): BufferGeometry {
   switch (shape) {
     case 'cube': return new BoxGeometry(1, 1, 1);
     case 'core': return new BoxGeometry(6 * PX, 6 * PX, 6 * PX);
-    case 'arm': return new BoxGeometry(6 * PX, 6 * PX, 5 * PX).translate(0, 0, -(3 + 2.5) * PX);
+    case 'arm': return uAlongZOnTopAndBottom(new BoxGeometry(6 * PX, 6 * PX, 5 * PX)).translate(0, 0, -(3 + 2.5) * PX);
     case 'plate': return new BoxGeometry(14 * PX, 14 * PX, PX).translate(0, 0, -(8 + 0.5) * PX);
   }
+}
+
+/** `box` with u and v swapped on its +y and −y faces, so u runs along z there as on its ±x faces. */
+function uAlongZOnTopAndBottom(box: BoxGeometry): BoxGeometry {
+  const normal = box.getAttribute('normal');
+  const uv = box.getAttribute('uv');
+  for (let i = 0; i < uv.count; i++) if (Math.abs(normal.getY(i)) === 1) uv.setXY(i, uv.getY(i), uv.getX(i));
+  return box;
 }
 
 /** The instances one mesh draws: one shape, ghosts or not, blocks of a hookup or not. */
