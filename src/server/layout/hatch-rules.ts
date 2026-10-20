@@ -9,14 +9,16 @@
 
 import type { StuffKey } from '../../shared/keys.ts';
 import { posKey, type Vec3 } from '../../shared/layout/geometry.ts';
+import type { HatchKind } from '../../shared/types/layout.ts';
 import type { Machine } from '../../shared/types/pack.ts';
 import { simpleClassName } from '../world/facts.ts';
 
 /**
  * The hatches the layout puts on a multiblock: the planner's six (buses, fluid hatches, energy, maintenance), the
- * muffler GT needs on some, and a steam multiblock's steam input hatch.
+ * muffler GT needs on some, and a steam multiblock's steam input hatch. Shared with the client, which reads a placed
+ * hatch's kind from `LayoutBlock.hatch`.
  */
-export type HatchKind = 'energy' | 'input_bus' | 'output_bus' | 'input_hatch' | 'output_hatch' | 'maintenance' | 'muffler' | 'steam';
+export type { HatchKind } from '../../shared/types/layout.ts';
 
 /** One StructureLib piece as GT checks it. */
 export interface RulePiece {

@@ -356,6 +356,7 @@ function worldBlock(b: LocalBlock, f: Frame): LayoutBlock {
     ...(b.connections === undefined ? {} : { connections: rotateConnections(b.connections, r) }),
     ...(b.conduits === undefined ? {} : { conduits: b.conduits.map((c) => worldConduit(c, r)) }),
     ...(b.tail === undefined ? {} : { tail: { side: b.tail.side, keys: [...b.tail.keys] } }),
+    ...(b.hatch === undefined ? {} : { hatch: b.hatch }),
   };
 }
 

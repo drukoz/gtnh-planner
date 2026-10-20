@@ -4,6 +4,8 @@
 
 import { describe, it, expect } from 'vitest';
 import { clampZoom, fitView, wheelFactor, zoomAround, type View } from '../../src/client/views/pan-zoom.ts';
+// the follow-up of the drag (the review of 401d0ca): the side panel narrows the area
+import { resizeView, sameView } from '../../src/client/views/pan-zoom.ts';
 
 /** The picture point (in its own units) under the screen point (px, py) of the view. */
 const under = (v: View, px: number, py: number): [number, number] => [(px - v.x) / v.k, (py - v.y) / v.k];
@@ -50,5 +52,38 @@ describe('pan and zoom', () => {
   it('shows the picture at its own size by the padding while the area or the picture has no size yet', () => {
     expect(fitView({ width: 1000, height: 400 }, { width: 0, height: 0 }, 16)).toEqual({ x: 16, y: 16, k: 1 });
     expect(fitView({ width: 0, height: 0 }, { width: 500, height: 500 }, 16)).toEqual({ x: 16, y: 16, k: 1 });
+  });
+});
+
+// The Connections view's follow-ups (the review of 401d0ca): when the side panel opens and the area narrows, the
+// picture is fitted again if nobody moved or zoomed it since it was fitted, else the spot in the middle stays there.
+describe('pan and zoom when the area changes size', () => {
+  const picture = { width: 1000, height: 400 };
+  const wide = { width: 1032, height: 432 }, narrow = { width: 632, height: 432 };
+
+  it('fits the picture again while the view is still the fitted one', () => {
+    const fitted = fitView(picture, wide, 16);
+    expect(fitted).toEqual({ x: 16, y: 16, k: 1 });
+    expect(resizeView(fitted, fitted, picture, wide, narrow, 16)).toEqual(fitView(picture, narrow, 16));
+    expect(resizeView(fitted, fitted, picture, wide, narrow, 16)).toEqual({ x: 16, y: 96, k: 0.6 });
+  });
+
+  it('keeps the spot in the middle of the area in the middle once the view was moved or zoomed', () => {
+    const fitted = fitView(picture, wide, 16);
+    const moved = { x: 116, y: 6, k: 1.5 };
+    const after = resizeView(moved, fitted, picture, wide, narrow, 16);
+    expect(after).toEqual({ x: -84, y: 6, k: 1.5 });
+    const middle = (v: View, a: { width: number; height: number }): [number, number] => [(a.width / 2 - v.x) / v.k, (a.height / 2 - v.y) / v.k];
+    expect(middle(after, narrow)).toEqual(middle(moved, wide));
+    // and back when the panel closes
+    expect(resizeView(after, fitted, picture, narrow, wide, 16)).toEqual(moved);
+    // never fitted yet (the area had no size): the middle stays too
+    expect(resizeView(moved, null, picture, wide, narrow, 16)).toEqual(after);
+  });
+
+  it('tells a view from one a hair away, as rounding leaves it', () => {
+    expect(sameView({ x: 16, y: 136, k: 0.6 }, { x: 16 + 1e-9, y: 136, k: 0.6 })).toBe(true);
+    expect(sameView({ x: 16, y: 136, k: 0.6 }, { x: 17, y: 136, k: 0.6 })).toBe(false);
+    expect(sameView({ x: 16, y: 136, k: 0.6 }, { x: 16, y: 136, k: 0.61 })).toBe(false);
   });
 });

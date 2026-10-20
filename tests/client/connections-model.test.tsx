@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import ELK from 'elkjs/lib/elk.bundled.js';
 import { connectionsElk, connectionsFromElk, connectionsGraph, faceModeText, pickDetails } from '../../src/client/connections/model.ts';
+// for the tests after the plan's own: the links in the world (the user's requirements of 2026-10-19, item 3 (b))
+import { connectionSpans, spanDetails } from '../../src/client/connections/model.ts';
+// for the tests after the commit's own (the review of f82c98c)
+import { SPANS_PER_LINK, connectionPieces, type ConnSpot } from '../../src/client/connections/model.ts';
+import { DIRS, posKey, step } from '../../src/shared/layout/geometry.ts';
 import type { ConduitFace, Layout, LayoutBlock } from '../../src/shared/types/layout.ts';
 import type { Plan } from '../../src/shared/types/plan.ts';
 import { connLayout, connPlan } from './connections-fixture.ts';
@@ -140,5 +145,181 @@ describe('the Connections graph', () => {
     const laid = await new ELK().layout(connectionsElk(g));
     const x = (id: string) => laid.children!.find((c) => c.id === id)!.x!;
     expect(x('hookup:0')).toBeLessThan(x('chest:2,64,0'));
+  });
+});
+
+// The user's requirements of 2026-10-19, item 3 (b): the 3D view's Show connections draws these links in the world, each
+// from a face (or a block that stands for its box) to another.
+describe('the Connections links in the world', () => {
+  const spansOf = (mode: 'enderio' | 'direct' | 'routed' | 'ae2') => {
+    const layout = connLayout(mode);
+    return connectionSpans(layout, connectionsGraph(layout, connPlan, 'min'));
+  };
+  const brief = (mode: 'enderio' | 'direct' | 'routed' | 'ae2') =>
+    spansOf(mode).map((s) => `${s.edge}: ${s.from.cell.join(' ')} ${s.from.side} > ${s.to.cell.join(' ')} ${s.to.side}`);
+
+  it("draws an EnderIO flow from the face of the block its extract face points at to the face of the block its insert face does", () => {
+    // each conduit face's end is on the face of the block it points at, toward the conduit: the chest and the machines south
+    expect(spansOf('enderio')).toEqual([
+      { edge: 'flow:chest:2,64,0>step:a:t:in@0', from: { cell: [2, 64, 0], side: 3, face: 'chest:2,64,0#conduit:2,64,1:item:north' },
+        to: { cell: [0, 64, 0], side: 3, face: 'step:a#conduit:0,64,1:item:north' } },
+      { edge: 'flow:step:a>step:b:t:dust@0', from: { cell: [0, 64, 0], side: 3, face: 'step:a#conduit:0,64,1:item:north' },
+        to: { cell: [1, 64, 0], side: 3, face: 'step:b#conduit:1,64,1:item:north' } },
+      { edge: 'flow:step:b>chest:2,64,2:t:ingot@0', from: { cell: [1, 64, 0], side: 3, face: 'step:b#conduit:1,64,1:item:north' },
+        to: { cell: [2, 64, 2], side: 2, face: 'chest:2,64,2#conduit:2,64,1:item:south' } }]);
+  });
+
+  it('joins the blocks that stand for the boxes in the other modes, an interface to what it touches and the network at the hookup', () => {
+    expect(brief('direct')).toEqual([
+      'flow:chest:2,64,0>step:a:t:in@0: 2 64 0 1 > 0 64 0 1', 'flow:step:a>step:b:t:dust@0: 0 64 0 1 > 1 64 0 1',
+      'flow:step:b>chest:2,64,2:t:ingot@0: 1 64 0 1 > 2 64 2 1']);
+    // an interface pipe's link to what it serves ends on the side the two share, beside the pipe's arm
+    expect(brief('routed').slice(3)).toEqual(['attach:iface:0,64,1>step:a: 0 64 1 1 > 0 64 0 3', 'attach:iface:1,64,1>step:b: 1 64 1 1 > 1 64 0 3']);
+    // an AE2 line's raw inputs and final outputs are the base's ME network, which comes in at the hookup's cable; the
+    // hookup's own link would start and end there, so it is left out
+    expect(brief('ae2')).toEqual([
+      'flow:raw>step:a:t:in@0: 3 64 1 1 > 0 64 0 1', 'flow:step:a>step:b:t:dust@0: 0 64 0 1 > 1 64 0 1', 'flow:step:b>out:t:ingot@0: 1 64 0 1 > 3 64 1 1',
+      'attach:iface:0,64,1>step:a: 0 64 1 1 > 0 64 0 1', 'attach:iface:1,64,1>step:b: 1 64 1 1 > 1 64 0 1']);
+  });
+
+  it('draws a flow from each extract face to every insert face on its channel that takes the good, and only those', () => {
+    // a third machine beside the assembler takes the dust too on Red, and a fourth on Blue: EnderIO hands the macerator's
+    // dust to the Red face only
+    const layout = connLayout('enderio');
+    const machine = (x: number, stepId: string): LayoutBlock => ({ pos: [x, 64, 0], block: { id: 'gregtech:gt.blockmachines', meta: 0, mteId: 2002 },
+      role: 'machine', facing: 3, stepId, label: 'Advanced Assembler' });
+    const into = (x: number, color: 'red' | 'blue'): LayoutBlock => ({ pos: [x, 64, 1], block: { id: 'conduit:item', meta: 0 }, role: 'pipe',
+      label: 'Item Conduit', item: ITEM, connections: 4 | 16, conduits: [{ kind: 'item', item: ITEM, connections: 16, faces: [{ face: 'north', mode: 'insert',
+        target: 'Advanced Assembler', insert: { color, filter: basic(['t:dust@0']), rate: 1, priority: 1 } }] }] });
+    layout.blocks.push(machine(3, 'b'), into(3, 'red'), machine(4, 'b'), into(4, 'blue'));
+    const g = connectionsGraph(layout, connPlan, 'min');
+    const dust = connectionSpans(layout, g).filter((s) => s.edge === 'flow:step:a>step:b:t:dust@0');
+    expect(dust.map((s) => s.to.cell)).toEqual([[1, 64, 0], [3, 64, 0]]);
+    // its details name the faces of that piece (the third assembler's), not the link's first ones
+    const details = spanDetails(g, dust[1]!)!;
+    expect(details.lines.slice(0, 2)).toEqual(['Item Conduit, channel Red', 'From 1× Basic Macerator — Basic Macerator, south side · Item Conduit']);
+    expect(details.lines).toContain('To 3× Advanced Assembler — Advanced Assembler, south side · Item Conduit');
+    expect(details.lines.at(-1)).toMatch(/^Item Conduit, north face to Advanced Assembler: Insert \(1 filter\); insert on Red/);
+    expect(g.edges.find((e) => e.id === 'flow:step:a>step:b:t:dust@0')!.lines.at(-1)).toMatch(/In \/ Out/);   // the link's own: the first assembler's
+    expect(spanDetails(g, dust[1]!)!.title).toBe('Titanium Dust 60/min · Red');
+    expect(spanDetails(g, { edge: 'nope', from: dust[0]!.from, to: dust[0]!.to })).toBeNull();
+  });
+
+  it('joins two big boxes face by face in turn, at most 8 pieces a link, and counts the pieces it leaves out', () => {
+    // two steps of a and b machines, machine to machine: a × b pieces up to 8, else one per machine of the bigger box,
+    // at most 8 of them spread over it (the review of f82c98c: a 41-machine step drew a fan of 41 arcs no one could
+    // read)
+    const big = (a: number, b: number): Layout => ({ ...connLayout('direct'), blocks: [
+      ...Array.from({ length: a }, (_, i): LayoutBlock => ({ pos: [i, 64, 0], block: { id: 'gregtech:gt.blockmachines', meta: 0, mteId: 2001 }, role: 'machine',
+        facing: 3, stepId: 'a', label: 'Basic Macerator' })),
+      ...Array.from({ length: b }, (_, i): LayoutBlock => ({ pos: [i, 64, 2], block: { id: 'gregtech:gt.blockmachines', meta: 0, mteId: 2002 }, role: 'machine',
+        facing: 2, stepId: 'b', label: 'Advanced Assembler' }))] });
+    const pieces = (a: number, b: number) => {
+      const layout = big(a, b);
+      const all = connectionPieces(layout, connectionsGraph(layout, connPlan, 'min'));
+      return { spans: all.spans.filter((s) => s.edge === 'flow:step:a>step:b:t:dust@0'), more: all.more.get('flow:step:a>step:b:t:dust@0') ?? 0 };
+    };
+    expect(SPANS_PER_LINK).toBe(8);
+    expect([pieces(2, 4).spans.length, pieces(2, 4).more]).toEqual([8, 0]);
+    const cells = (spans: ReadonlyArray<{ from: ConnSpot; to: ConnSpot }>, end: 'from' | 'to') => new Set(spans.map((s) => s[end].cell.join()));
+    // past 8 pairs, each machine of the bigger box once while there are at most 8
+    const some = pieces(6, 6);
+    expect([some.spans.length, some.more]).toEqual([6, 0]);
+    expect(cells(some.spans, 'from')).toEqual(new Set(Array.from({ length: 6 }, (_, i) => `${i},64,0`)));
+    expect(cells(some.spans, 'to')).toEqual(new Set(Array.from({ length: 6 }, (_, i) => `${i},64,2`)));
+    expect([pieces(4, 8).spans.length, pieces(4, 8).more]).toEqual([8, 0]);
+    // more: 8 spread over the bigger box, and the rest counted
+    const many = pieces(16, 16);
+    expect([many.spans.length, many.more]).toEqual([8, 8]);
+    expect(cells(many.spans, 'from')).toEqual(new Set(Array.from({ length: 8 }, (_, i) => `${2 * i},64,0`)));
+    expect([pieces(41, 1).spans.length, pieces(41, 1).more]).toEqual([8, 33]);
+  });
+
+  // the review of f9fe23e: a link's end never hides under another block; the review of f82c98c: when every face is
+  // hidden, beside a cable or pipe against it rather than inside it, and not on a side that looks away
+  it('ends a link on the face of its block that shows best: open, the top first, else beside a cable or pipe, never facing away', () => {
+    const stone = (pos: [number, number, number]): LayoutBlock => ({ pos, block: { id: 'minecraft:stone', meta: 0 }, role: 'casing', label: 'Stone' });
+    const spans = (...covers: Array<[number, number, number]>) => {
+      const layout = connLayout('direct');
+      layout.blocks.push(...covers.map(stone));
+      return connectionSpans(layout, connectionsGraph(layout, connPlan, 'min'));
+    };
+    const ends = (...covers: Array<[number, number, number]>) => spans(...covers).map((s) => `${s.from.cell.join(' ')} ${s.from.side} > ${s.to.cell.join(' ')} ${s.to.side}`);
+    // the input chest's top covered: toward the macerator (west) stands the assembler, so the raw input leaves north
+    expect(ends([2, 65, 0])[0]).toBe('2 64 0 2 > 0 64 0 1');
+    expect(spans([2, 65, 0])[0]!.from.at).toBeUndefined();
+    // north covered too: south, beside the item pipe that links into the chest (its arm on the face's middle, its arm
+    // west along the row), at the face's upper corner toward the macerator; not east, which looks away from it
+    for (const covered of [[[2, 65, 0], [2, 64, -1]], [[2, 65, 0], [2, 64, -1], [3, 64, 0]]] as Array<Array<[number, number, number]>>) {
+      const [raw] = spans(...covered);
+      expect([raw!.from.cell, raw!.from.side, raw!.from.at]).toEqual([[2, 64, 0], 3, [-5 / 16, 5 / 16, 0]]);
+    }
+    // the output chest's top covered: north is the pipe, so west, the next most toward the assembler, which shows
+    expect(ends([2, 65, 2])[2]).toBe('1 64 0 1 > 2 64 2 4');
+  });
+
+  it('ends the links of a row of machines walled in on every side beside the item pipe or the fluid pipe, never inside them', () => {
+    // the review of f82c98c: four machines side by side, a fluid pipe on top of each linking down into it, a cable
+    // behind and the item pipe in front linking into each: every face is hidden, and the fallback put every end on a
+    // top, under the fluid pipe, so the arcs rose through its core
+    const bit = (side: number) => 1 << side;
+    const GT = (mteId: number) => ({ id: 'gregtech:gt.blockmachines', meta: 0, mteId });
+    const row = [0, 1, 2, 3];
+    const last = row.length - 1;
+    const along = (x: number) => (x > 0 ? bit(4) : 0) | (x < last ? bit(5) : 0);
+    const blocks: LayoutBlock[] = row.flatMap((x): LayoutBlock[] => [
+      { pos: [x, 64, 0], block: GT(2001), role: 'machine', facing: 3, stepId: x < 2 ? 'a' : 'b', label: 'Machine' },
+      { pos: [x, 65, 0], block: GT(5110), role: 'pipe', label: 'Small Bronze Fluid Pipe (Water)', connections: bit(0) | along(x) | (x === 0 ? bit(4) : 0),
+        buildStep: 'layout:logistics:fluid:fluid:water' },
+      { pos: [x, 64, -1], block: GT(1246), role: 'cable', label: '1x Tin Cable', connections: bit(3) | along(x), buildStep: 'layout:power:wire:1' },
+      { pos: [x, 64, 1], block: GT(5600), role: 'pipe', label: 'Tin Item Pipe', connections: bit(2) | along(x), buildStep: 'layout:logistics:line' },
+    ]);
+    // the fluid pipe's run comes in from the west, where your tank goes; the row's two ends are walled in too
+    blocks.push({ pos: [-1, 65, 0], block: GT(5110), role: 'pipe', label: 'Small Bronze Fluid Pipe (Water)', connections: bit(5),
+      buildStep: 'layout:logistics:fluid:fluid:water' });
+    for (const x of [-1, row.length]) blocks.push({ pos: [x, 64, 0], block: { id: 'minecraft:stone', meta: 0 }, role: 'casing', label: 'Stone' });
+    const layout: Layout = { ...connLayout('direct'), size: [5, 2, 3], blocks };
+    const plan: Plan = { ...connPlan, flows: [{ from: 'raw', to: 'a', key: 'fluid:water', perSecond: 1 }, { from: 'a', to: 'b', key: 't:dust@0', perSecond: 1 }] };
+    const g = connectionsGraph(layout, plan, 'min');
+    const spans = connectionSpans(layout, g);
+    const at = new Map(blocks.map((b) => [posKey(b.pos), b]));
+    const machineEnds = spans.flatMap((s) => [s.from, s.to].map((end) => ({ s, end }))).filter(({ end }) => at.get(posKey(end.cell))?.role === 'machine');
+    expect(machineEnds.length).toBeGreaterThan(4);
+    for (const { s, end } of machineEnds) {
+      const against = at.get(posKey(step(end.cell, end.side)))!;
+      // never the bottom, never under a whole block; an item beside the item pipe (never the fluid pipe), a fluid
+      // beside its own pipe
+      expect([end.side === 0, against?.label], s.edge).toEqual([false, s.edge.endsWith('fluid:water') ? 'Small Bronze Fluid Pipe (Water)' : 'Tin Item Pipe']);
+      // beside the pipe's 6 px core and every arm, by more than a tube's radius
+      const axes = [0, 1, 2].filter((k) => DIRS[end.side]![k] === 0);
+      const off = end.at!;
+      expect(off, s.edge).toBeDefined();
+      expect(Math.max(...axes.map((k) => Math.abs(off[k]!))), s.edge).toBeGreaterThan(3 / 16 + 0.05);
+      for (const k of axes) {
+        for (const sign of [1, -1]) {
+          const arm = DIRS.findIndex((d) => d[k] === sign && d.every((v, j) => j === k || v === 0));
+          const across = axes.find((j) => j !== k)!;
+          if ((against.connections! & bit(arm)) !== 0 && sign * off[k]! > 0) expect(Math.abs(off[across]!), `${s.edge} arm ${arm}`).toBeGreaterThan(3 / 16 + 0.05);
+        }
+      }
+      // on a side never below its middle, out of which an arc would rise through the arm into the face
+      if (end.side > 1) expect(off[1]!).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it("leaves an AE2 hookup's own link out, as its cable shows it: both its ends are where the base's network comes in", () => {
+    const layout = connLayout('ae2');
+    const g = connectionsGraph(layout, connPlan, 'min');
+    const all = connectionPieces(layout, g);
+    expect(g.edges.map((e) => e.id)).toContain('hookup:0>raw');
+    expect([all.spans.some((s) => s.edge === 'hookup:0>raw'), [...all.joined]]).toEqual([false, ['hookup:0>raw']]);
+    expect(all.spans).toEqual(connectionSpans(layout, g));
+  });
+
+  it('tells a piece of a link without faces what the link tells', () => {
+    const layout = connLayout('routed');
+    const g = connectionsGraph(layout, connPlan, 'min');
+    const [first] = connectionSpans(layout, g);
+    expect(spanDetails(g, first!)).toEqual(pickDetails(g, { edge: first!.edge }));
   });
 });

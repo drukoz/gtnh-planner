@@ -46,6 +46,8 @@ export interface LocalBlock {
   conduits?: ConduitSpec[];
   /** Set on the tail's input and output chests (`LayoutBlock.tail`). */
   tail?: TailChest;
+  /** What a hatch the line chose for a multiblock is for (`LayoutBlock.hatch`). */
+  hatch?: HatchKind;
 }
 /** A cover for the block at `pos` (Tasks 6–8). */
 export interface HostCover { pos: Vec3; cover: CoverSpec }
@@ -1018,7 +1020,7 @@ export function placeUnits(units: readonly Unit[], opts: { headWidth: number; po
       blocks.push({
         pos: localCell(u, row, x, spineZ, c.pos), block: { ...c.block }, role: c.role, ...(facing === undefined ? {} : { facing }),
         ...(c.role === 'machine' && mainFacing !== undefined ? { mainFacing } : {}),
-        stepId: u.stepId, label: c.label, ...(c.item === undefined ? {} : { item: c.item }),
+        stepId: u.stepId, label: c.label, ...(c.item === undefined ? {} : { item: c.item }), ...(c.hatch === undefined ? {} : { hatch: c.hatch }),
         ...(c.config === undefined ? {} : { config: { ...c.config } }),
       });
     }
