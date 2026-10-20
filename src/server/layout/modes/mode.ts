@@ -15,6 +15,7 @@ import type { BomLine, BuildStep, LogisticsMode, Plan, PlanFlow, PlanWarning } f
 import type { LogisticsNetwork } from '../../../shared/types/world.ts';
 import { comparePos } from '../../world/graph.ts';
 import type { BlockConfig, HostConfig, HostCover, LocalBlock, PlacedUnit, Placement } from '../arrange.ts';
+import { hasInputSeparation } from '../multiblock-rules.ts';
 import { coverRateWarning, pickConveyor, type PartId, type Parts } from '../parts.ts';
 import { ae2Mode } from './ae2.ts';
 import { withHandSteps } from './by-hand.ts';
@@ -263,9 +264,10 @@ function inBox(p: Vec3, at: Vec3, size: Vec3): boolean {
  * Multi Stack Input off on a GT basic singleblock fed two or more kinds of item (with it on, the first kind to arrive
  * fills every free input slot and the others never get in; a new machine takes its placer's client setting), Limiting
  * mode on on each input bus of a multiblock fed two or more kinds (off on a new bus, so one kind can fill every slot), and
- * Input Separation off on a multiblock with two or more input buses (with it on, each bus is checked alone, so a recipe
- * whose items arrive on different buses never starts). The kinds are the items the step takes (`stepItemInputs`); a
- * unit run by hand gets nothing. One entry per block, sorted by pos.
+ * Input Separation off on a multiblock with two or more input buses whose controller has that setting, on when built
+ * (`hasInputSeparation`: with it on, each bus is checked alone, so a recipe whose items arrive on different buses never
+ * starts; a controller without it has nothing to set and reads all its buses together). The kinds are the items the step
+ * takes (`stepItemInputs`); a unit run by hand gets nothing. One entry per block, sorted by pos.
  */
 export function feedSettings(pack: Pack, plan: Plan, placement: Placement): HostConfig[] {
   const out: HostConfig[] = [];
@@ -280,8 +282,10 @@ export function feedSettings(pack: Pack, plan: Plan, placement: Placement): Host
       }
       continue;
     }
+    // only a controller that has the setting (on when built); one without it reads all its buses together
     const controller = own.find((b) => b.role === 'machine');
-    if (controller !== undefined && u.cells.filter((c) => c.hatch === 'input_bus').length >= 2) {
+    const buses = u.cells.filter((c) => c.hatch === 'input_bus').length;
+    if (controller !== undefined && buses >= 2 && hasInputSeparation(pack.machines.get(u.mteId))) {
       out.push({ pos: [...controller.pos], config: { inputSeparation: false } });
     }
     if (kinds >= 2) for (const bus of own.filter((b) => b.hatch === 'input_bus')) out.push({ pos: [...bus.pos], config: { limited: true } });

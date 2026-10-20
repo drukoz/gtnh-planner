@@ -108,7 +108,7 @@ describe('static feeding rules', () => {
     const unlimited = changed(layout, (b) => (b.hatch === 'input_bus' ? { ...b, config: { ...b.config, limited: false } } : b));
     expect(feedingWarnings({ pack, plan: ebf(), layout: unlimited })).toEqual([{ code: 'feed_overfill', stepId: 'e',
       text: `${at(bus)} of ${at(controller)} takes 2 kinds of item without Limiting mode: one kind can fill every slot of the bus` }]);
-    // a second input bus on a casing (the EBF starts with Input Separation on)
+    // a second input bus on a casing (the EBF has Input Separation, on when built)
     const casing = layout.blocks.find((b) => b.role === 'casing' && b.stepId === 'e' && b.pos[1] === controller.pos[1])!;
     const twoBuses = changed(layout, (b) => (posKey(b.pos) === posKey(casing.pos)
       ? { ...b, role: 'hatch', hatch: 'input_bus', label: bus.label, config: { limited: true } } : b));
@@ -116,6 +116,11 @@ describe('static feeding rules', () => {
       + 'buses with Input Separation on: each bus is checked alone, so a recipe whose items arrive on different buses never starts' }]);
     expect(feedingWarnings({ pack, plan: ebf(), layout: changed(twoBuses, (b) => (b.role === 'machine' ? { ...b, config: { inputSeparation: false } } : b)) }))
       .toEqual([]);
+    // the Pyrolyse Oven starts with Input Separation on too; a controller without the setting reads all its buses together
+    pack.machines.get(IDS.EBF)!.cls = 'gregtech.common.tileentities.machines.multi.MTEPyrolyseOven';
+    expect(feedingWarnings({ pack, plan: ebf(), layout: twoBuses }).map((w) => w.code)).toEqual(['feed_crowded']);
+    pack.machines.get(IDS.EBF)!.cls = 'gregtech.common.tileentities.machines.multi.MTEVacuumFreezer';
+    expect(feedingWarnings({ pack, plan: ebf(), layout: twoBuses })).toEqual([]);
   });
 
   describe('routed chips (R5, R6)', () => {

@@ -16,11 +16,10 @@ import type { Layout, LayoutBlock } from '../../shared/types/layout.ts';
 import type { Machine, Pack } from '../../shared/types/pack.ts';
 import type { Plan, PlanFlow, PlanStep, PlanWarning } from '../../shared/types/plan.ts';
 import { stepOneOffs } from '../planner/bom.ts';
-import { simpleClassName } from '../world/facts.ts';
 import { comparePos } from '../world/graph.ts';
 import { ignoredByBlocking } from './modes/ae2.ts';
 import { stepItemInputs, stepItemOutputs } from './modes/mode.ts';
-import { manualReasonOf } from './multiblock-rules.ts';
+import { hasInputSeparation, manualReasonOf } from './multiblock-rules.ts';
 
 export interface FeedRulesInput { pack: Pack; plan: Plan; layout: Pick<Layout, 'mode' | 'blocks'> }
 
@@ -203,8 +202,9 @@ function slotRules(line: Line, n: Node, pushes: boolean, raise: Raise): void {
       raise('feed_overfill', `${where(bus)} of ${n.label} takes ${kindWord(takes.length)} without Limiting mode: one kind can fill every slot of the bus`);
     }
   }
-  // R4: Input Separation (on in a new EBF) checks each bus alone
-  const separated = n.block.config?.inputSeparation ?? simpleClassName(n.machine?.cls) === 'MTEElectricBlastFurnace';
+  // R4: Input Separation checks each bus alone; it is on in a new controller that has the setting (the EBF, the Pyrolyse
+  // Oven, GT++'s industrial multiblocks), and a controller without it reads all its buses together
+  const separated = n.block.config?.inputSeparation ?? hasInputSeparation(n.machine);
   if (n.inBuses.length >= 2 && separated !== false) {
     raise('feed_crowded', `${n.label} has ${fmtInt(n.inBuses.length)} input buses with Input Separation on: each bus is checked alone, so a recipe `
       + 'whose items arrive on different buses never starts');
@@ -309,7 +309,8 @@ function ae2Rules(line: Line, n: Node, raise: Raise): void {
  * The static feeding rules' warnings for `layout` (none for machine-to-machine lines), per machine of a placed step in
  * block order: R1 its kinds against its free input slots; R2 Multi Stack Input left unset or On on a machine fed two or
  * more kinds by a line that pushes (routed, EnderIO); R3 an input bus fed two or more kinds without Limiting mode; R4 two
- * or more input buses with Input Separation on; on routed lines R5a an item it makes that no Extractor Chip takes out,
+ * or more input buses with Input Separation on (set, or a new controller's that has the setting: `hasInputSeparation`;
+ * a controller without it reads all its buses together); on routed lines R5a an item it makes that no Extractor Chip takes out,
  * R5b an item it takes that its Extractor lists, R5c an Extractor on an input bus, R5d an item it takes from outside the
  * line that the input chest's Extractor keeps in, R6 an item it makes that nothing on the network takes, R7 a
  * Broadcaster that offers more than its outputs; on AE2 lines R8 a pattern AE2 cannot encode (a fluid, a fraction, a

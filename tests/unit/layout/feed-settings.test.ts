@@ -2,12 +2,14 @@
 // docs/research/machine-feeding.md §1.1.3, §1.2, §3.7 and §6.4 item 2, from GT 5.09.54's bytecode): a GT basic machine
 // fed two or more kinds of item gets Multi Stack Input off (with it on, the first kind to arrive fills every free input
 // slot), an input bus fed two or more gets Limiting mode on, and a multiblock with two or more input buses Input
-// Separation off; each set where the configure steps say how, in add-on 15's words and the research's.
+// Separation off where its controller has that setting; each set where the configure steps say how, in add-on 15's words
+// and the research's.
 
 import { describe, expect, it } from 'vitest';
 import { placeUnits, unitsFromPlan, type Placement } from '../../../src/server/layout/arrange.ts';
 import { emptyScan, layoutLine } from '../../../src/server/layout/layout.ts';
 import { buildMode, feedSettings, PORT_SPACING } from '../../../src/server/layout/modes/mode.ts';
+import { hasInputSeparation, INPUT_SEPARATION_DEFAULT } from '../../../src/server/layout/multiblock-rules.ts';
 import { resolveParts } from '../../../src/server/layout/parts.ts';
 import { configTexts } from '../../../src/shared/layout/configure-text.ts';
 import type { LogisticsMode, Plan } from '../../../src/shared/types/plan.ts';
@@ -68,6 +70,31 @@ describe('feeding settings', () => {
     expect(feedSettings(pack, plan, placement)).toEqual([
       { pos: machineAt(placement, 'e'), config: { inputSeparation: false } }, { pos: busAt(placement, 'e'), config: { limited: true } }]
       .sort((a, b) => a.pos[0] - b.pos[0] || a.pos[1] - b.pos[1] || a.pos[2] - b.pos[2]));
+  });
+
+  it('turns Input Separation off only on a controller that has the setting, which a controller without it does not need', () => {
+    const { pack, plan, placement } = setup('routed', ebfTwoKinds());
+    const unit = placement.units[0]!;
+    const casing = unit.cells.findIndex((c) => c.role === 'casing' && c.pos[1] === 0);
+    unit.cells[casing] = { ...unit.cells[casing]!, role: 'hatch', hatch: 'input_bus' };
+    const settingsAs = (cls: string) => {
+      pack.machines.get(IDS.EBF)!.cls = `gregtech.common.tileentities.machines.multi.${cls}`;
+      return feedSettings(pack, plan, placement).map((c) => c.config);
+    };
+    // the Pyrolyse Oven starts with it on, as the EBF does; the Vacuum Freezer has no such setting and reads both buses
+    // together (GT 5.09.54 MTEMultiBlockBase), so there is nothing to set
+    expect(settingsAs('MTEPyrolyseOven')).toContainEqual({ inputSeparation: false });
+    expect(settingsAs('MTEVacuumFreezer')).toEqual([{ limited: true }]);
+  });
+
+  it('knows the controllers that have Input Separation, on when built', () => {
+    expect(INPUT_SEPARATION_DEFAULT.size).toBe(69);
+    const has = (cls: string) => hasInputSeparation({ kind: 'multiblock', cls: `gregtech.x.${cls}` });
+    expect(['MTEElectricBlastFurnace', 'MTEPyrolyseOven', 'MTEIndustrialMixer', 'MTEAdvEBF', 'MTEMegaChemicalReactor'].map(has))
+      .toEqual(Array(5).fill(true));
+    expect(['MTEVacuumFreezer', 'MTEDistillationTower', 'MTELargeChemicalReactor', 'MTECircuitAssemblyLine', 'MTEImplosionCompressor'].map(has))
+      .toEqual(Array(5).fill(false));
+    expect(hasInputSeparation({ kind: 'basic', cls: 'gregtech.x.MTEElectricBlastFurnace' })).toBe(false);
   });
 
   it('leaves Multi Stack Input as it is on a machine fed one kind of item', () => {
