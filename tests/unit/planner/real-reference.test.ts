@@ -31,12 +31,18 @@ const REF_IDS: readonly string[] = [
 /** Its Steel Rod on the Lathe, and on the Extruder (2 rods an ingot), which the spec allows in its place. */
 const ROD_LATHE = '3b34f87f2984fe95';
 const ROD_EXTRUDER = '31693ed806ba0a95';
+/**
+ * Its Molten Tin from Tin Dust, and the same recipe on a Tin Ingot at the same raw price, which the reference accepts in
+ * its place (controller ruling 201, option (i) on the tin twin: the user's base materials are ingots).
+ */
+const TIN_FROM_DUST = '1197004ce4210fc5';
+const TIN_FROM_INGOT = 'd4bfdccc8c512446';
 /** Its centrifuge step: Rubber Wood on circuit 2, 3 Centrifuges at MV. */
 const RUBBER_WOOD_CENTRIFUGE = '85e9bdddf3f2bced';
 const TIN_DUST = 'gregtech:gt.metaitem.01@2057';
 const TIN_INGOT = 'gregtech:gt.metaitem.01@11057';
 const STEEL_INGOT = 'gregtech:gt.metaitem.01@11305';
-/** Its raw material per minute (the acceptance spec's REF_RAW): tin as dust or ingot. */
+/** Its raw material per minute (the acceptance spec's REF_RAW): tin as dust or ingot (controller ruling 201). */
 const REF_RAW: Readonly<Record<string, number>> = {
   'IC2:blockRubWood@0': 32, 'gregtech:gt.metaitem.01@11035': 11.25, [STEEL_INGOT]: 4, tin: 1, 'minecraft:redstone@0': 5, 'minecraft:sand@0': 2,
 };
@@ -95,12 +101,15 @@ function rawPerMinute(plan: Plan): Record<string, number> {
 }
 
 /**
- * The plan's step recipes, sorted, with the Extruder's rods read as the Lathe's (the one exception the spec allows). Its
- * Molten Tin is the reference's, from Tin Dust: a plan that runs the Tin Ingot twin of that recipe (d4bfdccc8c512446),
- * the same at the same raw material, runs the dust's instead (`twinMoves`, solve.ts), so it never comes down to chance.
+ * The plan's step recipes, sorted, with the Extruder's rods read as the Lathe's (which the spec allows) and the Tin Ingot
+ * extractor as the reference's Tin Dust one (controller ruling 201, option (i) on the tin twin): the user's base
+ * materials are ingots, so the ingot is the stock form, and `twinMoves` (solve.ts) keeps the Tin Ingot twin by its rule
+ * (c), ingot before dust, as these lines buy tin for their Molten Tin alone. Once the inputsOnly base-list fix lands, the
+ * user's own list decides the form ahead of rule (c).
  */
 function referenceIds(plan: Plan): string[] {
-  return plan.steps.map((s) => (s.recipeId === ROD_EXTRUDER ? ROD_LATHE : s.recipeId)).sort();
+  const same: Readonly<Record<string, string>> = { [ROD_EXTRUDER]: ROD_LATHE, [TIN_FROM_INGOT]: TIN_FROM_DUST };
+  return plan.steps.map((s) => same[s.recipeId] ?? s.recipeId).sort();
 }
 
 /** Its raw material is the reference's: every key to 1e-6, steel at most 4 a minute (2 with the Extruder), nothing else. */
@@ -150,7 +159,7 @@ describe.skipIf(path === undefined)("the user's reference Electronic Circuit flo
   it('R0: plans the reference as stored, with its 16 recipes, raw material, 14 machine blocks, 3 Centrifuges and 4 hand steps', async () => {
     // The acceptance spec's R0 (its pins, stops and crafting by hand, its stored 2 % step charge: normalizeSettings
     // applies no migration). On 93e508e: 17 blocks, 6 Basic Centrifuges for 3 Advanced (the step charge was per step).
-    // Its 16 recipes exactly, the Molten Tin from Tin Dust included (on 56e177c the ingot twin's at 2 %, the dust's at 50 %).
+    // Its 16 recipes, the Molten Tin from Tin Dust or its Tin Ingot twin (controller ruling 201: `referenceIds`).
     const { plan, seconds } = await timed(byHand);
     logPlan('R0', plan, seconds);
     expect(plan.status, JSON.stringify(plan.warnings)).toBe('ok');
@@ -174,7 +183,7 @@ describe.skipIf(path === undefined)("the user's reference Electronic Circuit flo
   }, 120_000);
 
   it('R1: plans R0 with its crafting on 4 Auto Workbenches, no hand step and 18 machine blocks', async () => {
-    // The acceptance spec's R1: R0's recipes exactly, the Molten Tin from Tin Dust included.
+    // The acceptance spec's R1: R0's recipes, the Molten Tin from Tin Dust or its Tin Ingot twin (controller ruling 201).
     const { plan, seconds } = await timed({ ...stored, automateCrafting: true });
     logPlan('R1', plan, seconds);
     expect(plan.status, JSON.stringify(plan.warnings)).toBe('ok');
