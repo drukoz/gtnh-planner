@@ -1,8 +1,8 @@
 // Fixtures for the feeding checker's tests (plan 21): the fixture pack with recipe maps and the machines and items the
-// feeding tests need, plans whose steps carry pack recipes (chances, held items, crafting grids), and lines laid out by
-// main's `layoutLine` with or without a world. Every call returns fresh objects, so a test that changes its pack, plan or
-// layout changes no other. Synthetic only: invented names, apart from the GT class names, mteIds and item ids the code
-// names; no real export or world is read.
+// feeding tests need, plans whose steps carry pack recipes (chances, held items, crafting grids), lines laid out by
+// main's `layoutLine` with or without a world, and hand-built models with test entities for the simulation (Task 4).
+// Every call returns fresh objects, so a test that changes its pack, plan, layout or model changes no other. Synthetic
+// only: invented names, apart from the GT class names, mteIds and item ids the code names; no real export or world is read.
 
 import { isFluidKey, parseItemKey, type ItemKey, type StuffKey } from '../../src/shared/keys.ts';
 import type { Rotation, Vec3 } from '../../src/shared/layout/geometry.ts';
@@ -10,6 +10,10 @@ import type { Layout } from '../../src/shared/types/layout.ts';
 import type { Ingredient, Item, Machine, MachineKind, Pack, Product, Recipe, StructureInfo } from '../../src/shared/types/pack.ts';
 import type { LogisticsMode, Plan, PlanFlow } from '../../src/shared/types/plan.ts';
 import { PART_KEYS } from '../../src/server/layout/feeding/facts.ts';
+import { compareLocal } from '../../src/server/layout/feeding/frame.ts';
+import type { BasicNode, ChestNode, FeedModel, FeedNode, GtCover, MachineSettings, NodeId, SimRecipe } from '../../src/server/layout/feeding/model.ts';
+import { insertEmpties, NEVER, PHASE, type SimEntity } from '../../src/server/layout/feeding/sim/core.ts';
+import type { SimEnv } from '../../src/server/layout/feeding/sim/machine.ts';
 import { emptyScan, layoutLine } from '../../src/server/layout/layout.ts';
 import { lineGround, lineScan } from './enderio-fixtures.ts';
 import { EBF_STRUCTURE, IDS, layoutPack, makePlan, makeProject, type StepSpec } from './layout-fixtures.ts';
@@ -197,4 +201,209 @@ export function chain2(): { pack: Pack; plan: Plan } {
 export async function layFeed(pack: Pack, plan: Plan, mode: LogisticsMode, at?: { origin: Vec3; rotation: Rotation }): Promise<Layout> {
   if (at === undefined) return layoutLine(pack, plan, emptyScan(), makeProject({ logistics: mode, scanId: null, baseId: null }));
   return layoutLine(pack, plan, lineScan(), makeProject({ logistics: mode, placement: { origin: [...at.origin], rotation: at.rotation } }), lineGround());
+}
+
+// ---- Hand-built models and test entities for the simulation (plan Task 4) ----
+
+/** A local cell `x,y,z` as numbers. */
+function cellOf(id: NodeId): Vec3 {
+  const p = id.split(',').map(Number);
+  if (p.length !== 3 || p.some((n) => !Number.isInteger(n))) throw new Error(`not a local cell: ${id}`);
+  return [p[0]!, p[1]!, p[2]!];
+}
+
+function compareText(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/** Each key once, sorted (code-unit order). */
+function distinctKeys(keys: Iterable<StuffKey>): StuffKey[] {
+  return [...new Set(keys)].sort(compareText);
+}
+
+let names: Pack | null = null;
+
+/** An item's or a fluid's name in the fixture pack (`feedPack`), else the key itself. */
+function fixtureName(key: StuffKey): string {
+  names ??= feedPack();
+  return names.nameOf(key);
+}
+
+/**
+ * A recipe as a machine node runs it: `inputs` and `outputs` as `[key, amount, chance = 1]`, a fluid key going to
+ * `fluidsIn` / `fluidsOut` (its chance is ignored); `more` sets the rest (`held`, …).
+ */
+export function simRecipe(stepId: string, ticks: number, inputs: Array<[StuffKey, number, number?]>, outputs: Array<[StuffKey, number, number?]>,
+  more: Partial<SimRecipe> = {}): SimRecipe {
+  return {
+    stepId, ticks,
+    inputs: inputs.filter(([key]) => !isFluidKey(key)).map(([key, amount, chance]) => ({ key, amount, chance: chance ?? 1 })),
+    held: [],
+    outputs: outputs.filter(([key]) => !isFluidKey(key)).map(([key, amount, chance]) => ({ key, amount, chance: chance ?? 1 })),
+    fluidsIn: inputs.filter(([key]) => isFluidKey(key)).map(([key, amount]) => ({ key, amount })),
+    fluidsOut: outputs.filter(([key]) => isFluidKey(key)).map(([key, amount]) => ({ key, amount })),
+    ...more,
+  };
+}
+
+const UNSET: MachineSettings = { multiStack: null, inputFilter: null, inputFromOutputSide: null, autoOutput: null };
+
+type BasicBase = Pick<BasicNode, 'id' | 'mteId' | 'name' | 'tier' | 'inSlots' | 'outSlots' | 'outputSide' | 'front' | 'maps' | 'recipes'>;
+
+/**
+ * A basic node from `base` and the caller's `over`: its local cell and world cell (the same, in a hand-built model) from
+ * its id, its label `${name} at x y z`, its steps and kinds from its recipes and its settings unset, unless `over` gives
+ * them; `over.settings` is merged into the unset ones.
+ */
+function basicNode(base: BasicBase, over: Partial<BasicNode>): BasicNode {
+  const id = over.id ?? base.id;
+  const local = over.local ?? cellOf(id);
+  const pos = over.pos ?? ([...local] as Vec3);
+  const name = over.name ?? base.name;
+  const recipes = over.recipes ?? base.recipes;
+  return {
+    ...base, kind: 'basic', id, local, pos, name, label: `${name} at ${pos.join(' ')}`, recipes,
+    stepIds: [...new Set(recipes.map((r) => r.stepId))], kinds: distinctKeys(recipes.flatMap((r) => r.inputs.map((i) => i.key))), steam: false,
+    ...over, settings: { ...UNSET, ...over.settings },
+  };
+}
+
+/**
+ * The Advanced Alloy Smelter (`FEED_IDS.SMELTER`, tier 2) at local `0,0,0`: 2 input and 1 output slot, output side 3,
+ * front 4, recipe `sm`: 1 `t:a@0` + 4 `t:b@0` → 1 `t:c@0` in 100 ticks.
+ */
+export function smelterNode(over: Partial<BasicNode> = {}): BasicNode {
+  return basicNode({
+    id: '0,0,0', mteId: FEED_IDS.SMELTER, name: 'Advanced Alloy Smelter', tier: 2, inSlots: 2, outSlots: 1, outputSide: 3, front: 4,
+    maps: ['gt.recipe.alloysmelter'], recipes: [simRecipe('sm', 100, [['t:a@0', 1], ['t:b@0', 4]], [['t:c@0', 1]])],
+  }, over);
+}
+
+/** A Basic Macerator (`IDS.MACERATOR`) at `id`: 1 input and 1 output slot, output side 3, front 4, recipe `one`: 1 `t:a@0` → 1 `t:x@0` in 20 ticks. */
+export function oneSlotNode(id: NodeId, over: Partial<BasicNode> = {}): BasicNode {
+  return basicNode({
+    id, mteId: IDS.MACERATOR, name: 'Basic Macerator', tier: 1, inSlots: 1, outSlots: 1, outputSide: 3, front: 4, maps: ['gt.recipe.macerator'],
+    recipes: [simRecipe('one', 20, [['t:a@0', 1]], [['t:x@0', 1]])],
+  }, over);
+}
+
+/**
+ * A Basic Mixer (`FEED_IDS.MIXER`) at `id` that takes what it is given and never runs: `inSlots` input slots and 1 output
+ * slot, output side `side` (default 2, toward a block north of it), front 4, step `n`, whose one recipe needs `t:z@0`,
+ * which never comes.
+ */
+export function sinkNode(id: NodeId, inSlots: number, side = 2): BasicNode {
+  return basicNode({
+    id, mteId: FEED_IDS.MIXER, name: 'Basic Mixer', tier: 1, inSlots, outSlots: 1, outputSide: side, front: 4, maps: ['gt.recipe.mixer'],
+    recipes: [simRecipe('n', 20, [['t:z@0', 1]], [['t:c@0', 1]])],
+  }, {});
+}
+
+function chestNode(id: NodeId, side: ChestNode['side'], keys: StuffKey[]): ChestNode {
+  const local = cellOf(id);
+  return { kind: 'chest', id, pos: [...local], local, label: `Chest (${side}) at ${local.join(' ')}`, side, keys: distinctKeys(keys) };
+}
+
+/** An input chest at `id` that stocks `keys` (`handModel` adds them to `model.supply`). */
+export function inputChestNode(id: NodeId, keys: StuffKey[]): ChestNode {
+  return chestNode(id, 'input', keys);
+}
+
+/** An output chest at `id`. */
+export function outputChestNode(id: NodeId): ChestNode {
+  return chestNode(id, 'output', []);
+}
+
+/** An HV export conveyor (64 items every 20 ticks) on side `side` of `host`, letting items in as well, as main lays it (ruling R-15). */
+export function hvExport(host: NodeId, side: number): GtCover {
+  return { host, side, kind: 'conveyor', export: true, allowInput: true, op: { tickRate: 20, stacks: 1, items: 64 } };
+}
+
+/** The item keys a recipe's slots hold: what it uses up and what it holds. */
+function itemKeys(r: SimRecipe): StuffKey[] {
+  return [...r.inputs.map((i) => i.key), ...r.held];
+}
+
+/**
+ * A model of `nodes` without networks (mode `direct`), as `readLine` would give it for a line of only these blocks:
+ * nodes in local order, the input chests' keys in `supply`, no sinks, plan rates or makers unless `more` gives them.
+ * Names are the fixture pack's; a step's name is its first item output's (else its first fluid output's, else its id);
+ * a recipe map takes what the recipes of the nodes on it take.
+ */
+export function handModel(nodes: FeedNode[], more: Partial<FeedModel> = {}): FeedModel {
+  const sorted = [...nodes].sort((a, b) => compareLocal(a.local, b.local));
+  const machines = sorted.filter((n) => n.kind !== 'chest');
+  const recipes = machines.flatMap((n) => n.recipes);
+  const steps = new Map<string, SimRecipe>();
+  for (const r of recipes) if (!steps.has(r.stepId)) steps.set(r.stepId, r);
+  const onMap = new Map<string, SimRecipe[]>();
+  for (const n of machines) {
+    if (n.kind !== 'basic') continue;
+    for (const map of n.maps) onMap.set(map, [...(onMap.get(map) ?? []), ...n.recipes]);
+  }
+  const chestKeys = sorted.flatMap((n) => (n.kind === 'chest' && n.side === 'input' ? n.keys : []));
+  return {
+    mode: 'direct', nodes: sorted, networks: [], covers: [], sinks: [], planned: {}, makers: {}, laid: [...steps.keys()],
+    fed: Object.fromEntries([...steps].map(([id, r]) => [id, distinctKeys(r.inputs.map((i) => i.key))])),
+    made: Object.fromEntries([...steps].map(([id, r]) => [id, distinctKeys(r.outputs.map((o) => o.key))])),
+    itemFlows: [], depths: {}, unknowns: [],
+    nameOf: fixtureName,
+    stepName: (stepId) => {
+      const r = steps.get(stepId);
+      const made = r?.outputs[0]?.key ?? r?.fluidsOut[0]?.key;
+      return made === undefined ? stepId : fixtureName(made);
+    },
+    mapTakes: (map, key) => (onMap.get(map) ?? []).some((r) => itemKeys(r).includes(key)),
+    mapPair: (map, a, b) => (onMap.get(map) ?? []).some((r) => itemKeys(r).includes(a) && itemKeys(r).includes(b)),
+    circuitOre: () => false,
+    ...more,
+    supply: distinctKeys([...chestKeys, ...(more.supply ?? [])]),
+  };
+}
+
+/**
+ * A test entity (phase `feed`) that, at ticks `from`, `from + every`, …, offers `n` of each of `keys` in turn to the
+ * inventory `target` from its side `side` by `insertEmpties`, and records what goes in as `delivered`, the way a network
+ * does (ruling R-14). `every` past the run offers once.
+ */
+export function feeder(env: SimEnv, target: NodeId, side: number, keys: StuffKey[], n: number, every: number, from = 0): SimEntity {
+  const ids = keys.map((k) => env.keys.id(k));
+  const self: SimEntity = {
+    phase: PHASE.feed, order: 0,
+    tick(t: number): number {
+      if (t >= from && (t - from) % every === 0) {
+        const inv = env.inv(target);
+        if (inv === null) throw new Error(`no inventory at ${target}`);
+        for (const key of ids) {
+          const got = insertEmpties(inv, key, n, side, self);
+          if (got > 0) env.stats.delivered(target, key, got, t);
+        }
+      }
+      if (t < from) return from;
+      const next = from + (Math.floor((t - from) / every) + 1) * every;
+      return Number.isFinite(next) ? next : NEVER;
+    },
+  };
+  return self;
+}
+
+/** A test entity (phase `feed`) that, at each of the ticks `at`, takes `n` out of the first stack of `target` that its side `side` lets out. */
+export function taker(env: SimEnv, target: NodeId, side: number, n: number, at: number[]): SimEntity {
+  const ticks = [...at].sort((a, b) => a - b);
+  const self: SimEntity = {
+    phase: PHASE.feed, order: 0,
+    tick(t: number): number {
+      if (ticks.includes(t)) {
+        const inv = env.inv(target);
+        if (inv === null) throw new Error(`no inventory at ${target}`);
+        const slot = inv.sideSlots(side).find((s) => {
+          const stack = inv.stack(s);
+          return stack !== null && inv.canExtract(s, stack.key, side);
+        });
+        if (slot !== undefined) inv.extract(slot, n, self);
+      }
+      return ticks.find((x) => x > t) ?? NEVER;
+    },
+  };
+  return self;
 }
