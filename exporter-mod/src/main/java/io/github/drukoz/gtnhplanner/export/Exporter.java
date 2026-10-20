@@ -47,6 +47,11 @@ import io.github.drukoz.gtnhplanner.export.textures.TextureExporter;
  * {@code IOreMaterial.getInternalName()}</td></tr>
  * <tr><td>Structure coordinates</td><td>canonical orientation (controller front faces north, &minus;z); x east, y up,
  * z south; origin = min corner of blocks &cup; air cells, so every coordinate is &ge; 0</td></tr>
+ * <tr><td>Structure elements (exporter 0.6.0+)</td><td>{@code elements[k]} is one element of GT's structure
+ * definition &mdash; {@code ch} its shape character when the definition names one, {@code hatches} the hatch kinds
+ * ({@code src/shared/gt/hatch-kinds.ts}, in that order) GT's own structure check took on the element's probe cell;
+ * {@code elementOf[i]} is the element of {@code blocks[i]}, or &minus;1 for the controller and for a cell GT's check
+ * never reached or that two elements checked. The two come together or not at all</td></tr>
  * <tr><td>Furnace {@code ef} / {@code mw}</td><td>output GT's own electric furnace / microwave lookup returned for
  * that input; {@code mw} is omitted when the microwave would explode, burn or reject it</td></tr>
  * <tr><td>Item {@code electric}</td><td>only for a non-wildcard item that is an IC2 {@code IElectricItem} with a

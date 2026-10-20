@@ -82,6 +82,16 @@ class ElementGroupsTest {
     }
 
     @Test
+    void aBlockCountsAsVisitedOnceAnyElementCheckedIt() {
+        ElementGroups.Visits v = walk(A, B, C);
+        boolean[] expected = { true, true, true, true, false, true }; // block 3 is a conflict, block 4 never visited
+        for (int b = 0; b < expected.length; b++) assertEquals(expected[b], v.visited(b), "block " + b);
+        v.visit(4, null); // a null element is no visit
+        assertFalse(v.visited(4));
+        assertEquals(5, v.visited());
+    }
+
+    @Test
     void groupsComeInTheOrderOfTheirFirstBlockAndLeaveOutTheController() {
         List<ElementGroups.Group> groups = ElementGroups.groups(walk(A, B, C), 5); // C only on the controller
         assertEquals(2, groups.size());

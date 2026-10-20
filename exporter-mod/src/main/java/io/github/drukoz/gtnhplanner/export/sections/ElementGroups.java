@@ -67,6 +67,11 @@ final class ElementGroups {
             return visited;
         }
 
+        /** Whether some element checked {@code block}, a conflict included. */
+        boolean visited(int block) {
+            return first[block] != null;
+        }
+
         /** Blocks checked by two or more elements. */
         int conflicts() {
             return conflicts;
