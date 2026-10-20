@@ -4,7 +4,11 @@
 // pipes fill the rest of the spine. The tail holds a request pipe, where the player orders raw inputs from the base's
 // network, an input chest the request pipe fills (its own interface pipe extracts them into the line) and an output
 // chest whose interface pipe responds to the final outputs. The chip settings are the interface pipes' `config`
-// (architecture §11.14). Without a routed network at the base the line is its own network, fed by hand.
+// (architecture §11.14). Without a routed network at the base the line is its own network, fed by hand. A machine run by
+// hand (architecture §11 entry 48) gets nothing: what the line makes for it waits in the output chest, and what it
+// makes for the line goes in the input chest. A venting steam machine's interface pipe meets it on its middle-row side,
+// not its output side (which faces up), and its extractor chip pulls its output there (GT gives it on any side but the
+// front).
 
 import type { StuffKey } from '../../../shared/keys.ts';
 import { posKey, step, type Vec3 } from '../../../shared/layout/geometry.ts';
@@ -15,8 +19,8 @@ import type { BlockConfig, LocalBlock } from '../arrange.ts';
 import { linkBits } from '../path.ts';
 import type { Part } from '../parts.ts';
 import {
-  emptyModeResult, finalItemOutputs, itemPorts, nameList, outputSideInputs, placedStepIds, rawItemInputs, stepItemInputs, type ModeInput,
-  type ModeResult, type StepDraft,
+  emptyModeResult, finalItemOutputs, handItemFlows, itemPorts, lineExceptions, nameList, outputSideInputs, placedStepIds, rawItemInputs,
+  stepItemInputs, type ModeInput, type ModeResult, type StepDraft,
 } from './mode.ts';
 
 const UP = 1, SOUTH = 3, EAST = 5;
@@ -73,10 +77,13 @@ export function routedMode(input: ModeInput): ModeResult {
   const inputChest: Vec3 = [tailX, 0, spineZ - 1];
   const outputChest: Vec3 = [tailX, 0, spineZ + 1];
   const placed = placedStepIds(placement);
-  const finals = finalItemOutputs(plan, placed);
+  // the hand-run machines' goods cross the line's edge at the chests too
+  const hand = handItemFlows(plan, placement);
+  const sorted = (keys: readonly StuffKey[]): StuffKey[] => [...new Set(keys)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const finals = sorted([...finalItemOutputs(plan, placed), ...hand.toHand]);
   lay(request, parts.pr_request, 'pipe', parts.pr_request.name);
   links.push([request, inputChest]);
-  layChest(inputChest, 'Chest (input)', { side: 'input', keys: rawItemInputs(plan, placed) });
+  layChest(inputChest, 'Chest (input)', { side: 'input', keys: sorted([...rawItemInputs(plan, placed), ...hand.fromHand]) });
   layChest(outputChest, 'Chest (output)', { side: 'output', keys: [...finals] });
   lay(step(request, UP), parts.pr_junction, 'pipe', parts.pr_junction.name);
   layInterface(step(inputChest, UP), inputChest, 'input chest', [extractor]);
@@ -104,7 +111,8 @@ export function routedMode(input: ModeInput): ModeResult {
   const drafts: StepDraft[] = [
     { id: 'layout:logistics:line', kind: 'logistics', pin: 'site',
       // at the side it touches: "in front of" would read as GT's front, which faces along the row
-      text: "Lay routed pipes along the middle row: an interface pipe at every machine's output side or bus, a request pipe and two chests at the end" },
+      text: `Lay routed pipes along the middle row: an interface pipe at every machine's output side or bus${lineExceptions(placement)}, a request `
+        + 'pipe and two chests at the end' },
     { id: 'layout:logistics:request', kind: 'logistics', pin: 'site', text: 'Request raw inputs at the request pipe — they arrive in the input chest' },
   ];
 

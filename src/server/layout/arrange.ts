@@ -7,14 +7,20 @@
 // A singleblock's output side faces the spine and its front (GT's `mMainFacing`, kept apart from the output side) faces
 // the power head: GT never lets it face up or down. With the supply tier given, the lowest feed tier stands
 // next to the power head and machines fed at different tiers stand a column apart, so their power ports never touch.
+// With the `primitive` option (the routed, AE2 and EnderIO modes; architecture §11 entry 48) GT's primitive machines
+// follow their own rules: a steam singleblock vents through its output side, which turns up over an empty cell, and a
+// Bricked Blast Furnace or a Coke Oven, which GT lets nothing automated fill, is run by hand at the end of its row,
+// one block back from the spine with nothing of the line touching it.
 // Every order and tie-break is fixed, so the same plan gives the same placement.
 
 import { isFluidKey, itemKey, type ItemKey, type StuffKey } from '../../shared/keys.ts';
+import { joinNames } from '../../shared/layout/format.ts';
 import { OPPOSITE, posKey, step, type Vec3 } from '../../shared/layout/geometry.ts';
 import type { BlockRole, ConduitSpec, CoverSpec, TailChest } from '../../shared/types/layout.ts';
 import type { BlockRef, Machine, Pack, Product } from '../../shared/types/pack.ts';
 import type { BomLine, Plan, PlanStep, PlanWarning } from '../../shared/types/plan.ts';
 import { UNKNOWN_BLOCK } from '../../shared/types/world.ts';
+import { manualReasonOf } from './multiblock-rules.ts';
 import { busSlots, hatchLitres, machineRef, pickHatch, type HatchClass } from './parts.ts';
 
 // ---- Types ----
@@ -50,11 +56,28 @@ export interface UnitCell {
   replaces?: ItemKey;
 }
 
+/**
+ * Why a unit is run by hand (option `primitive`; `multiblock-rules.ts`): GT lets nothing automated move a Bricked
+ * Blast Furnace's items (`no_automation`), and takes a Coke Oven's only through its own hatch (`own_hatch`).
+ */
+export type ManualReason = 'no_automation' | 'own_hatch';
+
 export interface Unit {
   stepId: string; index: number; mteId: number; name: string; tier: number; euPerTick: number; electric: boolean; multiblock: boolean;
   /** Canonical: front on the north (z = 0) side. */
   size: Vec3;
   cells: UnitCell[]; air: Vec3[]; io: StepIo;
+  /**
+   * Run by hand (option `primitive`): its structure has no hatch, it draws no power and its `io` is empty, as the line
+   * moves nothing in or out of it; `placeUnits` stands it last in its row, one block back from the spine.
+   */
+  manual?: ManualReason;
+  /**
+   * A steam singleblock (GT `MTEBasicMachineBronze`) that vents through its output side (option `primitive`):
+   * `placeUnits` turns that side up and keeps the cell above it, and its steam inlet behind it, empty. Its `io` has no
+   * fluids, as its top vents.
+   */
+  vent?: true;
 }
 
 /**
@@ -80,6 +103,8 @@ export interface PlacedUnit extends Unit {
    * west), as GT allows no front up or down. Undefined for a multiblock.
    */
   mainFacing?: number;
+  /** A singleblock's output side where it does not face the spine: up (1) for a venting steam singleblock (`Unit.vent`). */
+  outputSide?: number;
   ports: UnitPorts;
 }
 
@@ -335,15 +360,43 @@ function copyCell(c: UnitCell): UnitCell {
   return { ...c, pos: [...c.pos], block: { ...c.block }, ...(c.config === undefined ? {} : { config: { ...c.config } }) };
 }
 
+/** Options of `unitsFromPlan`. */
+export interface UnitOptions {
+  /**
+   * The rules of GT's primitive machines, for the routed, AE2 and EnderIO modes (architecture §11 entry 48): a steam
+   * singleblock vents (`Unit.vent`), and a Bricked Blast Furnace or a Coke Oven is run by hand (`Unit.manual`).
+   * Machine-to-machine mode leaves it off: add-on 15 lays those machines out its own way.
+   */
+  primitive?: boolean;
+}
+
+/** Why a unit run by hand gets nothing of the line, for its `manual_machine` warning (`multiblock-rules.ts`). */
+const MANUAL_WHY: Readonly<Record<ManualReason, string>> = {
+  no_automation: 'GregTech lets no pipe, conveyor, bus or interface move items in or out of it',
+  own_hatch: 'GregTech lets items into it only through its own Coke Oven Hatch, which this layout does not place',
+};
+
+/** A multiblock's exported structure as it is, with no hatch chosen, or the unknown box with `structure_unknown`. */
+function plainShape(pack: Pack, m: Machine, s: PlanStep, warnings: PlanWarning[]): Shape {
+  const shape = structureCells(pack, m);
+  if (shape !== null) return shape;
+  warnings.push({ code: 'structure_unknown', stepId: s.id, text: `${m.name}: no exported structure, drawn as a 3×3×3 box — check its real size in game` });
+  return unknownBoxCells(pack, m);
+}
+
 /**
  * One unit per machine still to build (`count − owned`) of every step that is not hand-crafted and runs on a real
- * machine, sorted by (depth, step id, index). Machines missing from the pack are left out with a warning.
+ * machine, sorted by (depth, step id, index). Machines missing from the pack are left out with a warning. With
+ * `primitive`, a steam singleblock vents (`vent`: `steam_machine` says where its steam goes, `steam_fluids` that its
+ * top takes no pipe) and a Bricked Blast Furnace or a Coke Oven is run by hand (`manual`, with `manual_machine`): GT's
+ * steam machines take no EU (`MTEBasicMachineBronze.isElectric` is false) and the furnace and the oven draw none.
  */
-export function unitsFromPlan(pack: Pack, plan: Plan): { units: Unit[]; warnings: PlanWarning[] } {
+export function unitsFromPlan(pack: Pack, plan: Plan, opts: UnitOptions = {}): { units: Unit[]; warnings: PlanWarning[] } {
   const depths = stepDepths(plan);
   const steps = [...plan.steps].sort((a, b) => depths.get(a.id)! - depths.get(b.id)! || compareText(a.id, b.id));
   const units: Unit[] = [];
   const warnings: PlanWarning[] = [];
+  const nameOf = (k: StuffKey): string => plan.names?.[k] ?? pack.nameOf(k);
   for (const s of steps) {
     const count = s.count - s.owned;
     if (s.handCraft || s.machine.mteId < 0 || count <= 0) continue;
@@ -352,18 +405,37 @@ export function unitsFromPlan(pack: Pack, plan: Plan): { units: Unit[]; warnings
       warnings.push({ code: 'unknown_machine', stepId: s.id, text: `${s.machine.name} (#${s.machine.mteId}) is not in this recipe export` });
       continue;
     }
-    const electric = m.kind !== 'steam';
-    if (!electric) warnings.push({ code: 'steam_machine', stepId: s.id, text: `${m.name} runs on steam: connect a steam supply by hand` });
+    const manual = opts.primitive === true ? manualReasonOf(m) : null;
+    const vent = opts.primitive === true && m.kind === 'steam';
+    const electric = m.kind !== 'steam' && manual === null;
+    const stepped = stepIo(s);
+    if (m.kind === 'steam') {
+      // GT's steam machines take steam on every side but their front (`MTEBasicMachineBronze.isLiquidInput`)
+      warnings.push({ code: 'steam_machine', stepId: s.id, text: vent
+        ? `${m.name} runs on steam: pipe your steam into its back, the side away from the middle row (GregTech takes steam on every side but `
+          + 'its front, and its top must stay clear to vent)'
+        : `${m.name} runs on steam: connect a steam supply by hand` });
+    }
+    const fluids = [...new Set([...stepped.fluidIn, ...stepped.fluidOut])].sort(compareText);
+    if (vent && fluids.length > 0) {
+      warnings.push({ code: 'steam_fluids', stepId: s.id,
+        text: `${m.name} vents steam through its top, so the line lays no pipe to it: move ${joinNames(fluids.map(nameOf))} by hand` });
+    }
+    if (manual !== null) {
+      warnings.push({ code: 'manual_machine', stepId: s.id, text: `${m.name}: ${MANUAL_WHY[manual]}, so nothing of the line touches it: fill and empty it by hand` });
+    }
     const multiblock = m.kind === 'multiblock';
-    const io = stepIo(s);
+    const io: StepIo = manual !== null ? { itemIn: false, itemOut: false, fluidIn: [], fluidOut: [] } : vent ? { ...stepped, fluidIn: [], fluidOut: [] } : stepped;
     // the step's own circuit wins over the recipe's (ruling R5)
     const circuit = s.circuit ?? pack.recipeById.get(s.recipeId)?.meta.circuit;
-    const shape = multiblock ? multiblockShape(pack, m, s, io, electric, circuit, warnings) : singleblockShape(m, circuit);
+    const shape = manual !== null ? plainShape(pack, m, s, warnings)
+      : multiblock ? multiblockShape(pack, m, s, io, electric, circuit, warnings) : singleblockShape(m, circuit);
     for (let index = 0; index < count; index++) {
       units.push({
         stepId: s.id, index, mteId: m.mteId, name: m.name, tier: s.machine.tier, euPerTick: s.euPerTick, electric, multiblock,
         size: [...shape.size], cells: shape.cells.map(copyCell), air: shape.air.map((p): Vec3 => [...p]),
         io: { ...io, fluidIn: [...io.fluidIn], fluidOut: [...io.fluidOut] },
+        ...(manual === null ? {} : { manual }), ...(vent ? { vent: true as const } : {}),
       });
     }
   }
@@ -387,13 +459,20 @@ function towardSpine(row: Row): number {
   return row === 'N' ? SOUTH : NORTH;
 }
 
+/** How far a unit stands back from the spine: one block for a unit run by hand, whose front row stays free. */
+function standOff(u: Unit): number {
+  return u.manual === undefined ? 0 : 1;
+}
+
 /**
  * Where canonical cell `c` of `u` lands: row S keeps the orientation (min corner `[x, 0, spineZ + 1]`, cell at + c);
  * row N turns 180° (min corner `[x, 0, spineZ − D]`, cell at + (W − 1 − cx, cy, D − 1 − cz)), so both fronts touch the spine.
+ * A unit run by hand stands `standOff` further from the spine.
  */
 function localCell(u: Unit, row: Row, x: number, spineZ: number, c: Vec3): Vec3 {
   const [w, , d] = u.size;
-  return row === 'S' ? [x + c[0], c[1], spineZ + 1 + c[2]] : [x + w - 1 - c[0], c[1], spineZ - d + (d - 1 - c[2])];
+  const off = standOff(u);
+  return row === 'S' ? [x + c[0], c[1], spineZ + 1 + off + c[2]] : [x + w - 1 - c[0], c[1], spineZ - d - off + (d - 1 - c[2])];
 }
 
 function hatchFacing(kind: HatchKind | undefined, row: Row): number | undefined {
@@ -416,6 +495,11 @@ function unitPorts(u: Unit, row: Row, x: number, spineZ: number): UnitPorts {
   const at = (c: UnitCell) => localCell(u, row, x, spineZ, c.pos);
   if (!u.multiblock) {
     const machine = at(u.cells.find((c) => c.role === 'machine')!);
+    if (u.vent === true) {
+      // its output side is up, where it vents: it takes and gives its items on its spine side, which takes no cover (GT
+      // lets only primitive covers onto a steam machine: `MTEBasicMachineBronze.allowCoverOnSide`), and no fluid pipe
+      return { power: null, items: [step(machine, toSpine)], fluidIn: [], fluidOut: [], itemFaces: [], fluidFaces: [] };
+    }
     return {
       power: u.electric ? step(machine, away) : null,
       items: [step(machine, toSpine)],
@@ -476,13 +560,19 @@ function lowestFeedFirst(units: readonly Unit[], feedTier: (u: Unit) => number |
  * reach its own (Task 6 grows the trees lowest first). Units fed at different tiers never stand side by side, and a
  * unit fed at another tier than the head's last column keeps a column away from it, so cables of two tiers never have
  * to touch (spec §3.5): their power ports stay at least two cells apart.
+ * A unit run by hand (`Unit.manual`) comes after all the others, so nothing of the line has to pass it and it stands
+ * near the tail chests; it stands one block back from the spine, its front row kept empty (`reserved`), and a column
+ * from the power head, so nothing of the line touches it and its controller is in reach. A venting steam unit (`Unit.vent`) faces the spine with its
+ * output side up (`PlacedUnit.outputSide`), the cell above it (its vent: GT's `MTEBasicMachineBronze.allowToCheckRecipe`
+ * waits while a cover or a block with a hit box is there) and the one behind it (its steam inlet) kept empty.
  */
 export function placeUnits(units: readonly Unit[], opts: { headWidth: number; portSpacing: 0 | 1 | 2; supplyTier?: number }): Placement {
   const { headWidth, portSpacing, supplyTier } = opts;
   const cursor: Record<Row, number> = { N: headWidth, S: headWidth };
   const previous: Record<Row, Unit | null> = { N: null, S: null };
   const feedTier = (u: Unit): number | null => (supplyTier === undefined || !u.electric ? null : Math.min(u.tier, supplyTier));
-  const ordered = lowestFeedFirst(units, feedTier);                                   // without `supplyTier`: flow order
+  // without `supplyTier`: flow order; the units run by hand last
+  const ordered = [...lowestFeedFirst(units.filter((u) => u.manual === undefined), feedTier), ...units.filter((u) => u.manual !== undefined)];
   const feeds = ordered.map(feedTier).filter((t): t is number => t !== null);
   // the head's last column is the run of the lowest feed tier (Task 6 lays one run per fed tier, lowest last)
   const headTier = headWidth > 0 && feeds.length > 0 ? Math.min(...feeds) : null;
@@ -501,7 +591,9 @@ export function placeUnits(units: readonly Unit[], opts: { headWidth: number; po
     const before = previous[row];
     const tier = feedTier(u);
     const otherTier = tier !== null && besideTier[row] !== null && tier !== besideTier[row];
-    let x = cursor[row] + ((before !== null && (u.multiblock || before.multiblock)) || otherTier ? 1 : 0);
+    // a unit run by hand keeps a column from the power head too, whose last column is a cable run (Task 6)
+    const besideHead = before === null && u.manual !== undefined && supplyTier !== undefined;
+    let x = cursor[row] + ((before !== null && (u.multiblock || before.multiblock)) || otherTier || besideHead ? 1 : 0);
     if (portSpacing > 0) while (portXs(u, row, x).some(near)) x += 1;
     for (const px of portXs(u, row, x)) claimed.add(px);
     cursor[row] = x + u.size[0];
@@ -510,21 +602,21 @@ export function placeUnits(units: readonly Unit[], opts: { headWidth: number; po
     slots.push({ u, row, x });
   }
 
-  const deepest = (row: Row) => slots.reduce((d, s) => (s.row === row ? Math.max(d, s.u.size[2]) : d), 0);
+  const deepest = (row: Row) => slots.reduce((d, s) => (s.row === row ? Math.max(d, s.u.size[2] + standOff(s.u)) : d), 0);
   const dN = deepest('N'), dS = deepest('S');
   const spineZ = 1 + dN;
   const tailX = Math.max(cursor.N, cursor.S);
-  const size: Vec3 = [tailX + 1, units.reduce((h, u) => Math.max(h, u.size[1]), 1), dN + dS + 3];
 
   const placed: PlacedUnit[] = [];
   const blocks: LocalBlock[] = [];
   const reserved: Vec3[] = [];
   for (const { u, row, x } of slots) {
     const toSpine = towardSpine(row);
-    // a singleblock's output side faces the spine (its covers and inputs go there), its front elsewhere (GT keeps the two apart)
+    // a singleblock's output side faces the spine (its covers and inputs go there), its front elsewhere (GT keeps the
+    // two apart); a venting steam unit's output side faces up
     const mainFacing = u.multiblock ? undefined : singleblockMainFacing();
     for (const c of u.cells) {
-      const facing = c.role === 'machine' ? toSpine : c.role === 'hatch' ? hatchFacing(c.hatch, row) : undefined;
+      const facing = c.role === 'machine' ? (u.vent === true ? UP : toSpine) : c.role === 'hatch' ? hatchFacing(c.hatch, row) : undefined;
       blocks.push({
         pos: localCell(u, row, x, spineZ, c.pos), block: { ...c.block }, role: c.role, ...(facing === undefined ? {} : { facing }),
         ...(c.role === 'machine' && mainFacing !== undefined ? { mainFacing } : {}),
@@ -533,11 +625,27 @@ export function placeUnits(units: readonly Unit[], opts: { headWidth: number; po
       });
     }
     for (const a of u.air) reserved.push(localCell(u, row, x, spineZ, a));
-    const at: Vec3 = row === 'S' ? [x, 0, spineZ + 1] : [x, 0, spineZ - u.size[2]];
-    placed.push({ ...u, row, at, facing: toSpine, ...(mainFacing === undefined ? {} : { mainFacing }), ports: unitPorts(u, row, x, spineZ) });
+    if (u.manual !== undefined) {
+      // its front row, between it and the spine: you fill and empty it from there, and nothing of the line touches it
+      const z = row === 'S' ? spineZ + 1 : spineZ - 1;
+      for (let cx = 0; cx < u.size[0]; cx++) for (let y = 0; y < u.size[1]; y++) reserved.push([x + cx, y, z]);
+    }
+    if (u.vent === true) {
+      const machine = localCell(u, row, x, spineZ, u.cells.find((c) => c.role === 'machine')!.pos);
+      reserved.push(step(machine, UP), step(machine, OPPOSITE[toSpine]!));                  // its vent and its steam inlet
+    }
+    const off = standOff(u);
+    const at: Vec3 = row === 'S' ? [x, 0, spineZ + 1 + off] : [x, 0, spineZ - u.size[2] - off];
+    placed.push({
+      ...u, row, at, facing: toSpine, ...(mainFacing === undefined ? {} : { mainFacing }), ...(u.vent === true ? { outputSide: UP } : {}),
+      ports: unitPorts(u, row, x, spineZ),
+    });
   }
   blocks.sort((a, b) => comparePos(a.pos, b.pos));
   reserved.sort(comparePos);
+  // the box holds every cell kept empty too (a steam vent above a singleblock), so the site checks it is clear
+  const height = reserved.reduce((h, p) => Math.max(h, p[1] + 1), units.reduce((h, u) => Math.max(h, u.size[1]), 1));
+  const size: Vec3 = [tailX + 1, height, dN + dS + 3];
   return { units: placed, size, spineZ, firstX: headWidth, tailX, blocks, reserved };
 }
 

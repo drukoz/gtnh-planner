@@ -192,7 +192,8 @@ function buildLocal(input: {
     supplyLossVolts: stages === null ? 0 : hookupAllowanceVolts(stages.supplyTier),
   });
   const blocks = attachCovers([...placement.blocks, ...modeResult.blocks, ...internal.blocks], [...modeResult.covers, ...internal.covers], modeResult.configs);
-  const top = blocks.reduce((y, b) => Math.max(y, b.pos[1]), 0);
+  // the cells kept empty count too (a steam machine's vent), so the site is checked clear there
+  const top = placement.reserved.reduce((y, p) => Math.max(y, p[1]), blocks.reduce((y, b) => Math.max(y, b.pos[1]), 0));
   return {
     placement, mode: modeResult, internal, stages: internal.stages, blocks, size: [placement.size[0], 1 + top, placement.size[2]],
     warnings: [...modeResult.warnings, ...internal.warnings],
@@ -546,8 +547,8 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
   const ctx = base === null ? emptyContext() : contextFromScan(scan, pack, base.id);
   const dim = base?.dim ?? 0;
 
-  // stages 3–4
-  const { units, warnings: unitWarnings } = unitsFromPlan(pack, plan);
+  // stages 3–4; GT's primitive machines get their own rules in every mode but machine to machine, which add-on 15 lays out
+  const { units, warnings: unitWarnings } = unitsFromPlan(pack, plan, { primitive: mode !== 'direct' });
   const electric = units.filter((u) => u.electric);
   const lineTier = electric.length > 0 ? Math.max(...electric.map((u) => u.tier)) : plan.tier;
   const powerNet = base === null ? null : choosePowerNetwork(scan, base, lineTier);

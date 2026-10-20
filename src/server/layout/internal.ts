@@ -135,11 +135,12 @@ function fluidPortOf<T>(u: PlacedUnit, keys: readonly StuffKey[], ports: readonl
 
 /**
  * One net per fluid any placed unit takes or makes, sorted by key. A net is `atTail` when the fluid also enters or
- * leaves the line (a flow from `raw`, to `out`/`sink`, or touching a step with no placed unit). Each producing face
- * must move its step's outgoing flows of the fluid split evenly over the step's machines.
+ * leaves the line (a flow from `raw`, to `out`/`sink`, or touching a step with no placed unit or one run by hand,
+ * whose goods you carry: architecture §11 entry 48). Each producing face must move its step's outgoing flows of the
+ * fluid split evenly over the step's machines.
  */
 export function fluidNets(pack: Pack, plan: Plan, placement: Placement): FluidNet[] {
-  const placed = new Set(placement.units.map((u) => u.stepId));
+  const placed = new Set(placement.units.filter((u) => u.manual === undefined).map((u) => u.stepId));
   const counts = new Map(plan.steps.map((s) => [s.id, s.count]));
   const keys = new Set<StuffKey>();
   for (const u of placement.units) for (const key of [...u.io.fluidIn, ...u.io.fluidOut]) keys.add(key);
