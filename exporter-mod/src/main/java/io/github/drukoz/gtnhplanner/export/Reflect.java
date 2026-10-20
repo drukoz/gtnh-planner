@@ -1,13 +1,15 @@
 package io.github.drukoz.gtnhplanner.export;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 
 /**
- * Calls into mods that are not on the compile classpath: Galacticraft ({@code micdoodle8.*}) only. Such classes are
- * named in strings, never as class references, so a pack without them still loads every exporter class; the calls
- * then fail at run time and the caller's catch turns that into a warning.
+ * Calls into mods that are not on the compile classpath: Galacticraft ({@code micdoodle8.*}) and CropsNH
+ * ({@code com.gtnewhorizon.cropsnh.*}). Such classes are named in strings, never as class references, so a pack
+ * without them still loads every exporter class; the calls then fail at run time and the caller's catch turns that
+ * into a warning.
  *
  * <p>
  * Only the mod's own members may be called this way. Minecraft and Forge members are called directly, because
@@ -29,13 +31,38 @@ public final class Reflect {
 
     /** Calls the public static method {@code method} of class {@code className}, loaded by this mod's loader. */
     public static Object callStatic(String className, String method, Object... args) {
-        Class<?> cls;
+        return invoke(find(load(className), method, true, args), null, args);
+    }
+
+    /** The value of the public static field {@code field} of class {@code className}, loaded by this mod's loader. */
+    public static Object getStatic(String className, String field) {
+        Field f;
         try {
-            cls = Class.forName(className, true, Reflect.class.getClassLoader());
-        } catch (ClassNotFoundException e) {
-            throw new IllegalStateException("class not found: " + className, e);
+            f = load(className).getField(field);
+        } catch (NoSuchFieldException e) {
+            throw new IllegalArgumentException("no public field " + className + "." + field, e);
         }
-        return invoke(find(cls, method, true, args), null, args);
+        if (!Modifier.isStatic(f.getModifiers())) {
+            throw new IllegalArgumentException("field " + className + "." + field + " is not static");
+        }
+        try {
+            return f.get(null);
+        } catch (IllegalAccessException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /**
+     * Whether this mod's loader finds class {@code className}, that is whether the mod that has it is installed. The
+     * class is not initialized.
+     */
+    public static boolean hasClass(String className) {
+        try {
+            Class.forName(className, false, Reflect.class.getClassLoader());
+            return true;
+        } catch (ClassNotFoundException e) {
+            return false;
+        }
     }
 
     /**
@@ -54,6 +81,14 @@ public final class Reflect {
             }
         }
         return false;
+    }
+
+    private static Class<?> load(String className) {
+        try {
+            return Class.forName(className, true, Reflect.class.getClassLoader());
+        } catch (ClassNotFoundException e) {
+            throw new IllegalStateException("class not found: " + className, e);
+        }
     }
 
     private static Method find(Class<?> cls, String method, boolean isStatic, Object[] args) {

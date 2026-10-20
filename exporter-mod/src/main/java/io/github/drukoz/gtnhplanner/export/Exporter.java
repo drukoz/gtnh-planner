@@ -10,6 +10,7 @@ import java.util.Set;
 
 import io.github.drukoz.gtnhplanner.export.sections.AssemblyLineSection;
 import io.github.drukoz.gtnhplanner.export.sections.CraftingSection;
+import io.github.drukoz.gtnhplanner.export.sections.CropsSection;
 import io.github.drukoz.gtnhplanner.export.sections.FluidsSection;
 import io.github.drukoz.gtnhplanner.export.sections.FurnaceSection;
 import io.github.drukoz.gtnhplanner.export.sections.MachinesSection;
@@ -79,6 +80,7 @@ public final class Exporter {
         sections.add(new StructuresSection());
         sections.add(new MaterialsSection());
         sections.add(new WorldgenSection());
+        sections.add(new CropsSection());
         sections.add(new TextureExporter());
         return sections;
     }

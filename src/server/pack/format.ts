@@ -63,6 +63,14 @@ export interface VoidMinerLine { dim: string; drops: Array<{ item: number; weigh
 export interface GasSiphonLine { planet: string; tier: number; depths: Array<[depth: number, fluid: string, amount: number]> }
 export interface SpacePumpLine { planetType: number; gasType: number; fluid: string; amount: number }
 export interface SpaceAsteroidLine { name: string; outputs: number[]; chances: number[]; moduleTier: number; droneTiers: [number, number]; distance: [number, number]; weight: number }
+/**
+ * A CropsNH crop card (exporter 0.5.0 and later), lines in CropsNH's registration order: `duration` in growth points;
+ * `dropChance` CropsNH's float, widened exactly; each drop's `count` its stack size and `chance` on the 1/10000 scale,
+ * always written, the likeliest drop first; `liked` biome dictionary tags by name; `soils` by item key; `requirements`
+ * the simple class names of its growth requirements in the card's order; `seed` null for a card without a seed item;
+ * `minSeedBedTier` −1 for any Seed Bed.
+ */
+export interface CropLine { id: string; name: string; tier: number; duration: number; dropChance: number; drops: Array<{ item: number; count: number; chance: number }>; liked: string[]; soils: number[]; requirements: string[]; seed: number | null; minSeedBedTier: number }
 
 export interface ExportLineTypes {
   items: ItemLine; fluids: FluidLine; fluidContainers: FluidContainerLine; oreDict: OreDictLine; recipeMaps: RecipeMapLine;
@@ -70,6 +78,7 @@ export interface ExportLineTypes {
   machines: MachineLine; structures: StructureLine; materials: MaterialLine; oreMaterials: OreMaterialLine;
   dimensions: DimensionLine; celestial: CelestialLine; oreVeins: OreVeinLine; smallOres: SmallOreLine;
   undergroundFluids: UndergroundFluidLine; voidMiner: VoidMinerLine; gasSiphon: GasSiphonLine; spacePump: SpacePumpLine; spaceAsteroids: SpaceAsteroidLine;
+  crops: CropLine;
 }
 export type ExportFileKey = keyof ExportLineTypes;
 export const EXPORT_FILES: { readonly manifest: 'manifest.json' } & { readonly [K in ExportFileKey]: string } = {
@@ -81,8 +90,10 @@ export const EXPORT_FILES: { readonly manifest: 'manifest.json' } & { readonly [
   dimensions: 'dimensions.jsonl.gz', celestial: 'celestial.jsonl.gz', oreVeins: 'ore-veins.jsonl.gz', smallOres: 'small-ores.jsonl.gz',
   undergroundFluids: 'underground-fluids.jsonl.gz', voidMiner: 'void-miner.jsonl.gz', gasSiphon: 'gas-siphon.jsonl.gz',
   spacePump: 'space-pump.jsonl.gz', spaceAsteroids: 'space-asteroids.jsonl.gz',
+  crops: 'crops.jsonl.gz',
 };
-export const OPTIONAL_EXPORT_FILES: readonly ExportFileKey[] = ['structures'];
+/** Files an export may lack: the crop table comes only from exporter 0.5.0 on, and only with CropsNH installed. */
+export const OPTIONAL_EXPORT_FILES: readonly ExportFileKey[] = ['structures', 'crops'];
 
 export interface ManifestFile {
   format: typeof EXPORT_FORMAT; exportId: string; exporterVersion: string; exportedAt: string; packVersion: string; gtVersion: string;

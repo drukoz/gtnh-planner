@@ -3,6 +3,7 @@
 // Pure TypeScript shared by server and browser: nothing from node:* may be imported here.
 
 import type { FluidKey, ItemKey, StuffKey } from '../keys.ts';
+import type { TgsMode } from './farm.ts';
 
 /** The ore-processing forms an ore material can list in `GtMaterial.parts`. */
 export type OrePart = 'ore' | 'rawOre' | 'crushed' | 'dust' | 'ingot' | 'gem';
@@ -42,6 +43,9 @@ export interface Recipe {
      * empty cell with air; the export's own recipe, its id unchanged).
      */
     supply?: 'rock-breaker' | 'pump' | 'compressor';
+    // optional addition (add-on 17): on a `gt.recipe.treefarm` row, the Tree Growth Simulator mode of each item output
+    /** `tgsModes[k]` is the mode whose tool makes `outputs[k]`: the mode of the output's slot in the export (farm.ts). */
+    tgsModes?: TgsMode[];
     [k: string]: unknown;
   };
   flags: {
@@ -101,6 +105,13 @@ export interface Capability { key: string /* e.g. "void_miner:moon", "space_elev
 export interface Worldgen { dimensions: DimensionInfo[]; veins: OreVein[]; fluidSources: FluidSource[]; capabilities: Capability[]; byproducts: Record<string /*material*/, string[]> }
 export interface SearchHit { key: StuffKey; name: string; kind: 'item' | 'fluid'; produced: boolean }
 /**
+ * A CropsNH crop card from the export's crop table (exporter 0.5.0; farms.md §2.2–§2.3): `growthDuration` in growth
+ * points; `dropChance` the drop rounds a harvest rolls before seed stats and the harvester's bonus, each round giving
+ * drop j with its `chance`; `likedBiomes` Forge biome dictionary tags; `requirements` the simple class names of its growth
+ * requirements (sub-soil, light, machine only); `minSeedBedTier` the Industrial Farm's lowest Seed Bed, −1 for any.
+ */
+export interface CropCard { id: string; name: string; tier: number; growthDuration: number; dropChance: number; drops: Array<{ key: StuffKey; chance: number /* 0..1 */; stackSize: number }>; likedBiomes: string[]; soils: StuffKey[]; requirements: string[] /* empty = none */; seed: StuffKey | null; minSeedBedTier: number }
+/**
  * `machines` also holds the pseudo machines -1 (crafting table, map 'crafting') and -2 (furnace, map 'furnace'), not
  * -3 (hand); `machinesByMap` includes them and the 'assemblyline' pseudo map.
  */
@@ -115,4 +126,6 @@ export interface Pack {
   // optional additions
   fluidContainers?: Array<{ container: ItemKey; empty: ItemKey | null; fluid: FluidKey; amount: number }>;
   warnings?: string[];
+  // optional addition (add-on 17): the crop table, in CropsNH's registration order; absent when the export has none
+  crops?: CropCard[];
 }
