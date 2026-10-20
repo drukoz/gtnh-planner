@@ -40,15 +40,18 @@ describe('units', () => {
     const [ebf] = unitsFromPlan(layoutPack(), makePlan([ebfStep])).units;
     const hatch = (k: string) => ebf!.cells.find((c) => c.hatch === k);
     expect(ebf!.size).toEqual([3, 4, 3]);
-    expect(hatch('input_bus')).toMatchObject({ pos: [0, 0, 0], block: { mteId: IDS.INPUT_BUS_ULV }, label: 'Input Bus (ULV)' });
-    expect(hatch('output_bus')).toMatchObject({ pos: [2, 0, 0], block: { mteId: IDS.OUTPUT_BUS } });
-    expect(hatch('energy')).toMatchObject({ pos: [1, 0, 2], block: { mteId: IDS.ENERGY_MV } });
-    expect(hatch('maintenance')).toMatchObject({ pos: [0, 0, 2], block: { mteId: IDS.MAINTENANCE } });
-    expect(hatch('input_hatch')).toMatchObject({ pos: [0, 3, 0], block: { mteId: IDS.INPUT_HATCH } });
+    expect(hatch('input_bus')).toMatchObject({ pos: [0, 0, 0], block: { mteId: IDS.INPUT_BUS_ULV }, label: 'Input Bus (ULV)', face: 2 });
+    expect(hatch('output_bus')).toMatchObject({ pos: [2, 0, 0], block: { mteId: IDS.OUTPUT_BUS }, face: 2 });
+    expect(hatch('energy')).toMatchObject({ pos: [1, 0, 2], block: { mteId: IDS.ENERGY_MV }, face: 3 });
+    expect(hatch('maintenance')).toMatchObject({ pos: [0, 0, 2], block: { mteId: IDS.MAINTENANCE }, face: 3 });
+    // GT's EBF takes an input hatch only on its bottom layer (element 'b'), so the oxygen goes in beside it, facing west
+    expect(hatch('input_hatch')).toMatchObject({ pos: [0, 0, 1], block: { mteId: IDS.INPUT_HATCH }, face: 4, fluid: 'fluid:oxygen' });
+    // and it needs a muffler on the top centre (element 'm'), facing up onto a cell kept as air
+    expect(hatch('muffler')).toMatchObject({ pos: [1, 3, 1], block: { mteId: IDS.MUFFLER }, face: 1 });
     expect(hatch('energy')!.replaces).toBe('gregtech:gt.blockcasings@11');
-    expect(ebf!.cells.filter((c) => c.role === 'casing')).toHaveLength(34 - 1 - 5);
-    expect(ebf!.air).toEqual([[1, 1, 1], [1, 2, 1]]);
-    expect(replacedCasings([ebf!])).toEqual([{ key: 'gregtech:gt.blockcasings@11', amount: 5, why: 'replaced by hatches', group: 'machines' }]);
+    expect(ebf!.cells.filter((c) => c.role === 'casing')).toHaveLength(34 - 1 - 6);
+    expect(ebf!.air).toEqual([[1, 1, 1], [1, 2, 1], [1, 4, 1]]);
+    expect(replacedCasings([ebf!])).toEqual([{ key: 'gregtech:gt.blockcasings@11', amount: 6, why: 'replaced by hatches', group: 'machines' }]);
   });
 
   it('sizes buses to the recipe and puts the programmed circuit on the machine or its input bus', () => {
@@ -107,13 +110,16 @@ describe('placement', () => {
   it('turns multiblocks to face the spine and keeps their air cells free', () => {
     const plan = makePlan([{ id: 'm', mteId: IDS.MACERATOR, count: 1 }, ebfStep]);
     const p = placeUnits(unitsFromPlan(layoutPack(), plan).units, { headWidth: 1, portSpacing: 0 });
-    expect(p.size).toEqual([5, 4, 7]);
+    // the EBF's input hatch faces west on its bottom layer: its port keeps a column of its own off the power head
+    expect(p.size).toEqual([6, 4, 7]);
     const ebf = p.units[1]!;
-    expect([ebf.row, ebf.at, ebf.facing]).toEqual(['S', [1, 0, 3], 2]);
-    expect(p.blocks.find((b) => b.role === 'machine' && b.block.mteId === IDS.EBF)!.pos).toEqual([2, 0, 3]);
-    expect(ebf.ports).toMatchObject({ power: [2, 0, 6], items: [[1, 0, 2], [3, 0, 2]], fluidIn: [[1, 4, 3]] });
-    expect(p.reserved).toEqual([[2, 1, 4], [2, 2, 4]]);
-    expect(compactness(p)).toBeCloseTo(35 / 10, 5);
+    expect([ebf.row, ebf.at, ebf.facing]).toEqual(['S', [2, 0, 3], 2]);
+    expect(p.blocks.find((b) => b.role === 'machine' && b.block.mteId === IDS.EBF)!.pos).toEqual([3, 0, 3]);
+    expect(ebf.ports).toMatchObject({ power: [3, 0, 6], items: [[2, 0, 2], [4, 0, 2]], fluidIn: [[1, 0, 4]], fluidInSides: [5] });
+    expect(p.blocks.find((b) => b.role === 'hatch' && b.block.mteId === IDS.INPUT_HATCH)).toMatchObject({ pos: [2, 0, 4], facing: 4 });
+    // the hollow middle and the air above the muffler
+    expect(p.reserved).toEqual([[3, 1, 4], [3, 2, 4], [3, 4, 4]]);
+    expect(compactness(p)).toBeCloseTo(42 / 10, 5);
   });
 });
 

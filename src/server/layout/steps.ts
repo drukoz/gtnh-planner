@@ -64,22 +64,48 @@ function draft(id: string, kind: BuildStep['kind'], pin: number | undefined, tex
 // ---- Placing ----
 
 /** The order a multiblock's hatches are listed in. */
-const HATCH_ORDER: readonly HatchKind[] = ['input_bus', 'output_bus', 'energy', 'maintenance', 'input_hatch', 'output_hatch'];
+const HATCH_ORDER: readonly HatchKind[] = ['input_bus', 'output_bus', 'energy', 'steam', 'maintenance', 'input_hatch', 'output_hatch', 'muffler'];
 
 /**
- * The unit's hatch labels: the hatches chosen for it in `HATCH_ORDER` (fluid hatches in the canonical z, x order they
- * were given their fluids), then any hatch the exported structure itself holds, in cell order.
+ * The unit's hatch labels: the hatches chosen for it in `HATCH_ORDER` (fluid hatches in the order of the step's fluids
+ * they take, one with no fluid of the step last; others in canonical z, x order), then any hatch the exported structure
+ * itself holds, in cell order.
  */
 function hatchLabels(u: PlacedUnit): string[] {
+  const fluids = [...u.io.fluidIn, ...u.io.fluidOut];
+  const fluidRank = (c: PlacedUnit['cells'][number]): number => {
+    const i = c.fluid === undefined ? -1 : fluids.indexOf(c.fluid);
+    return i === -1 ? fluids.length : i;
+  };
   const chosen = u.cells
     .filter((c) => c.hatch !== undefined)
-    .sort((a, b) => HATCH_ORDER.indexOf(a.hatch!) - HATCH_ORDER.indexOf(b.hatch!) || a.pos[2] - b.pos[2] || a.pos[0] - b.pos[0]);
+    .sort((a, b) => HATCH_ORDER.indexOf(a.hatch!) - HATCH_ORDER.indexOf(b.hatch!) || fluidRank(a) - fluidRank(b)
+      || a.pos[2] - b.pos[2] || a.pos[0] - b.pos[0] || a.pos[1] - b.pos[1]);
   const exported = u.cells.filter((c) => c.role === 'hatch' && c.hatch === undefined);
   return [...chosen, ...exported].map((c) => c.label);
 }
 
 /** A singleblock's front when its unit has none: local west, along the row (`singleblockMainFacing` in arrange.ts). */
 const WEST = 4;
+const UP = 1;
+
+/** Whether the unit holds a Muffler Hatch. */
+function hasMuffler(u: PlacedUnit): boolean {
+  return u.cells.some((c) => c.hatch === 'muffler');
+}
+
+/**
+ * What a multiblock's place step adds for its mufflers: GT stops the machine when a muffler finds no air in the cell
+ * its front faces (`MTEHatchMuffler.polluteEnvironment`, `POLLUTION_FAIL`). The layout keeps that cell free and counts
+ * it in the line's height, but the Layout does not carry it, so the step names it.
+ */
+function mufflerWords(u: PlacedUnit): string {
+  const mufflers = u.cells.filter((c) => c.hatch === 'muffler');
+  if (mufflers.length === 0) return '';
+  const each = mufflers.length === 1 ? 'its Muffler Hatch' : 'each Muffler Hatch';
+  const where = mufflers.every((c) => c.face === UP) ? `the block above ${each}` : `the block ${each} faces`;
+  return `; keep ${where} empty, or GregTech stops the machine (a muffler needs air to vent)`;
+}
 
 /**
  * How a singleblock gets its two faces (`PlacedUnit.mainFacing`, along the row, and its output side toward the middle
@@ -135,8 +161,8 @@ function fluidsThroughOutputSide(blocks: readonly LayoutBlock[]): Set<string> {
 /**
  * One step per placed plan step, in unit order: how many to place and which way they face — a singleblock's output
  * side and its front, which GT keeps apart, how to set both and, when it takes items, or fluids through its output side
- * (`fluidSteps`), how to check Input from Output Side; a multiblock's size, controller and hatches. The front's compass
- * side is turned by `rotation`.
+ * (`fluidSteps`), how to check Input from Output Side; a multiblock's size, controller and hatches, and the block each of
+ * its mufflers needs empty (`mufflerWords`). The front's compass side is turned by `rotation`.
  */
 function placeSteps(units: readonly PlacedUnit[], sitePin: number | undefined, rotation: Rotation, fluidSteps: ReadonlySet<string>): Draft[] {
   const byStep = new Map<string, { first: PlacedUnit; n: number }>();
@@ -155,7 +181,7 @@ function placeSteps(units: readonly PlacedUnit[], sitePin: number | undefined, r
     const labels = hatchLabels(u);
     const hatches = labels.length === 0 ? '' : `; hatches: ${labels.join(', ')}`;
     return draft(`layout:place:${stepId}`, 'place', sitePin,
-      `Build ${fmtInt(n)}× ${u.name} (${u.size.map(fmtInt).join('×')}) with the controller facing the middle row${hatches}`);
+      `Build ${fmtInt(n)}× ${u.name} (${u.size.map(fmtInt).join('×')}) with the controller facing the middle row${hatches}${mufflerWords(u)}`);
   });
 }
 
@@ -271,8 +297,11 @@ export function layoutSteps(input: StepsInput): BuildStep[] {
       ? `; dig ${fmtInt(input.site.dig)} and fill ${fmtInt(input.site.fill)} blocks to level it` : '';
     steps.push(draft('layout:site', 'place', sitePin,
       `Clear a ${fmtInt(w)}×${fmtInt(l)} spot${atPin(sitePin)} (${fmtInt(h)} high) and keep a 1-block path around it${level}`));
-    // gt-mechanics §3.4
-    steps.push(draft('layout:roof', 'place', sitePin, 'Roof the line: GT machines left in the rain can catch fire or explode'));
+    // gt-mechanics §3.4; the height counts the air a muffler needs above a multiblock's top, which a roof must not fill
+    steps.push(draft('layout:roof', 'place', sitePin, input.units.some(hasMuffler)
+      ? `Roof the line over its ${fmtInt(h)}-high space: GT machines left in the rain can catch fire or explode, and a Muffler Hatch `
+        + 'needs the block it faces kept empty'
+      : 'Roof the line: GT machines left in the rain can catch fire or explode'));
     steps.push(...placeSteps(input.units, sitePin, input.rotation, fluidsThroughOutputSide(input.blocks)));
     steps.push(...powerSteps(input, sitePin, powerPin));
     for (const d of input.drafts) if (d.kind === 'logistics') steps.push(draft(d.id, d.kind, kindPin(d.pin), d.text));

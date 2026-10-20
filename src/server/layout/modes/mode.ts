@@ -176,6 +176,38 @@ export function itemPorts(placement: Placement): ItemPort[] {
 }
 
 /**
+ * The spine's columns up to the item ports above it (a bus GT takes only higher up, research hatch-rules.md): per column
+ * with such a port, the cells from the one above the spine up to the highest port, sorted by x, then y; `cells` are
+ * those no unit has a port on, `ports` the rest; `links` join each column from the spine up.
+ */
+export function itemRisers(placement: Placement): { cells: Vec3[]; ports: Vec3[]; links: Array<[Vec3, Vec3]> } {
+  const { spineZ } = placement;
+  const top = new Map<number, number>();
+  const portKeys = new Set<string>();
+  for (const u of placement.units) {
+    for (const p of u.ports.items) {
+      if (p[1] <= 0) continue;
+      top.set(p[0], Math.max(top.get(p[0]) ?? 0, p[1]));
+      portKeys.add(posKey(p));
+    }
+  }
+  const cells: Vec3[] = [];
+  const ports: Vec3[] = [];
+  const links: Array<[Vec3, Vec3]> = [];
+  for (const [x, highest] of [...top].sort((a, b) => a[0] - b[0])) {
+    for (let y = 1; y <= highest; y++) {
+      const cell: Vec3 = [x, y, spineZ];
+      (portKeys.has(posKey(cell)) ? ports : cells).push(cell);
+      links.push([[x, y - 1, spineZ], cell]);
+    }
+  }
+  return { cells, ports, links };
+}
+
+/** What a line's logistics step adds when the line climbs the spine's column to a bus (`itemRisers`). */
+export const RISER_WORDS = ', and up to each bus above it';
+
+/**
  * A singleblock takes its items through its spine face, which is its output side (GT keeps its front, `mainFacing`,
  * elsewhere): so in every mode each singleblock with item inputs gets "Input from Output Side" allowed on its
  * machine. Keyed by the machine cell's posKey, in unit order.

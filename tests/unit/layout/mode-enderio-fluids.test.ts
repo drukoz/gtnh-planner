@@ -132,27 +132,26 @@ describe('EnderIO mode — the fluid network in detail', () => {
         text: 'Connect a tank to the side of each open conduit end at the tail that faces out of the end of the line, from the bottom: Molten Iron and Oxygen' }]);
   });
 
-  it('runs a multiblock riser down past its fluid hatch with that face Disabled, into a bundle on the spine', () => {
+  it("runs a multiblock's riser from the side its fluid hatch faces, along that side to a bundle on the spine", () => {
     const plan = makePlan([{ id: 'e', mteId: IDS.EBF, count: 1, tier: 2, inputs: [['t:dust@0', 1], ['fluid:oxygen', 10]], outputs: [['t:ingot@0', 1]] }],
       { flows: [{ from: 'raw', to: 'e', key: 't:dust@0', perSecond: 1 }, { from: 'raw', to: 'e', key: 'fluid:oxygen', perSecond: 10 },
         { from: 'e', to: 'out', key: 't:ingot@0', perSecond: 1 }] });
     const s = setup(plan);
     const r = buildMode('enderio', { ...s, network: null });
-    // the input hatch is on the top layer's front row, so the riser from the port above it comes down the furnace's front
-    expect(s.placement.blocks.filter((b) => b.block.mteId === IDS.INPUT_HATCH).map((b) => [b.pos, b.role])).toEqual([[[3, 3, 3], 'hatch']]);
+    // GT takes the EBF's input hatch only on its bottom layer: in row N it faces east, onto the column beside the furnace
+    expect(s.placement.blocks.filter((b) => b.block.mteId === IDS.INPUT_HATCH).map((b) => [b.pos, b.role, b.facing])).toEqual([[[3, 0, 2], 'hatch', 5]]);
+    expect(s.placement.units[0]!.ports).toMatchObject({ fluidIn: [[4, 0, 2]], fluidInSides: [4] });
     expect(r.blocks.filter((b) => b.conduits?.some((c) => c.kind === 'liquid_ender')).map((b) => [b.pos, b.label])).toEqual([
-      [[3, 0, 4], 'Conduit bundle (Item Conduit + Ender Fluid Conduit)'], [[3, 1, 4], 'Ender Fluid Conduit'], [[3, 2, 4], 'Ender Fluid Conduit'],
-      [[3, 3, 4], 'Ender Fluid Conduit'], [[3, 4, 3], 'Ender Fluid Conduit'], [[3, 4, 4], 'Ender Fluid Conduit'],
-      [[4, 0, 4], 'Conduit bundle (Item Conduit + Ender Fluid Conduit)']]);
+      [[4, 0, 2], 'Ender Fluid Conduit'], [[4, 0, 3], 'Ender Fluid Conduit'], [[4, 0, 4], 'Conduit bundle (Item Conduit + Ender Fluid Conduit)'],
+      [[5, 0, 4], 'Conduit bundle (Item Conduit + Ender Fluid Conduit)']]);
     expect(fluidFaces(r).map((f) => [f.pos, f.face, f.mode, f.target, f.extract ?? f.insert ?? null])).toEqual([
-      [[3, 3, 4], 'north', 'disabled', 'Electric Blast Furnace', null],
-      [[3, 4, 3], 'down', 'insert', 'Electric Blast Furnace', { color: 'red', filter: oxygen, rate: 10 }],
-      [[4, 0, 4], 'east', 'extract', 'your tank', { color: 'red', filter: oxygen, rate: 10, roundRobin: false, redstone: 'ignore' }]]);
-    const bundle = r.blocks.find((b) => posKey(b.pos) === '3,0,4')!;
+      [[4, 0, 2], 'west', 'insert', 'Electric Blast Furnace', { color: 'red', filter: oxygen, rate: 10 }],
+      [[5, 0, 4], 'east', 'extract', 'your tank', { color: 'red', filter: oxygen, rate: 10, roundRobin: false, redstone: 'ignore' }]]);
+    const bundle = r.blocks.find((b) => posKey(b.pos) === '4,0,4')!;
     expect([bundle.connections, bundle.block.id, bundle.item, bundle.conduits!.map((c) => [c.kind, c.connections, c.faces.map((f) => [f.face, f.mode])])]).toEqual([
-      16 | 32 | 4 | 2, 'conduit:item', ITEM, [['item', 16 | 32, [['north', 'insert']]], ['liquid_ender', 2 | 32, []]]]);
+      16 | 32 | 4, 'conduit:item', ITEM, [['item', 16 | 32, []], ['liquid_ender', 4 | 32, []]]]);
     expect(r.drafts.map((d) => d.id)).toEqual(['layout:logistics:line', 'layout:logistics:fluids', 'layout:logistics:tanks', 'layout:logistics:inputs']);
-    expect(r.drafts[1]!.text).toBe('Lay 7× Ender Fluid Conduit along the middle row and up to the fluid hatches of each Electric Blast Furnace, with an open '
+    expect(r.drafts[1]!.text).toBe('Lay 4× Ender Fluid Conduit along the middle row and to the fluid hatches of each Electric Blast Furnace, with an open '
       + 'end at the tail for your tanks; 2 of them go in the same bundle as the Item Conduit');
   });
 

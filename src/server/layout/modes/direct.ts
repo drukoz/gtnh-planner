@@ -1,5 +1,6 @@
 // Machine to machine (Plan 5 Task 7; spec §3.6 mode 1, research gt-mechanics §3.8): one GT item pipe along the spine,
-// touching every machine's output side or bus (a singleblock's front faces along the row, apart from its output side).
+// touching every machine's output side or bus (a singleblock's front faces along the row, apart from its output side;
+// the pipe climbs the spine's column to a bus GregTech takes only higher up).
 // Each machine pushes its output onto it with a conveyor cover sized to its share, and
 // has its Input Filter on, because a GT pipe hands an item to any inventory that takes it and GT's item filter cover
 // cannot stop a pipe: with the filter on, a machine takes only items its recipes use. Only raw inputs and final outputs
@@ -18,8 +19,8 @@ import type { HostConfig, HostCover, LocalBlock, Placement } from '../arrange.ts
 import { linkBits } from '../path.ts';
 import { machineRef, pickItemPipe } from '../parts.ts';
 import {
-  conveyorCover, finalItemOutputs, itemStacksPerSecond, nameList, outputSideInputs, placedStepIds, rawItemInputs, rawItemRate, spineConflicts,
-  unitItemRate, type ModeHookup, type ModeInput, type ModeResult, type StepDraft,
+  conveyorCover, finalItemOutputs, itemRisers, itemStacksPerSecond, nameList, outputSideInputs, placedStepIds, rawItemInputs, rawItemRate,
+  RISER_WORDS, spineConflicts, unitItemRate, type ModeHookup, type ModeInput, type ModeResult, type StepDraft,
 } from './mode.ts';
 
 const NORTH = 2, SOUTH = 3;
@@ -85,7 +86,8 @@ function networkHookup(input: ModeInput, rawNames: string): { hookup: ModeHookup
 }
 
 /**
- * The shared spine pipe `[firstX … tailX] × (y 0, z spineZ)` with its covers, input filters, tail chests and hookup.
+ * The shared spine pipe `[firstX … tailX] × (y 0, z spineZ)`, up the spine's column to any bus above it (`itemRisers`),
+ * with its covers, input filters, tail chests and hookup.
  * Nothing when no placed unit moves items; only `no_pipe` when the pack has no GT item pipe.
  */
 export function directMode(input: ModeInput): ModeResult {
@@ -115,6 +117,13 @@ export function directMode(input: ModeInput): ModeResult {
     spine.add(posKey(cell));
     if (x > firstX) links.push([[x - 1, 0, spineZ], cell]);
   }
+  // the pipe climbs the spine's column to a bus GT takes only higher up
+  const risers = itemRisers(placement);
+  for (const cell of [...risers.cells, ...risers.ports]) {
+    layPipe(cell);
+    spine.add(posKey(cell));
+  }
+  links.push(...risers.links);
   const configs = spineContacts(placement, spine, links);
 
   const names = new Map(units.map((u) => [u.stepId, u.name]));
@@ -169,7 +178,7 @@ export function directMode(input: ModeInput): ModeResult {
   const pipeCells = blocks.filter((b) => b.role === 'pipe').length;
   const drafts: StepDraft[] = [{ id: 'layout:logistics:line', kind: 'logistics', pin: 'site',
     text: `Lay ${pipeCells}× ${pipe.name} along the middle row so it touches every machine's output side or bus`
-      + `${chests.length > 0 ? `, with ${joinNames(chests)} at the end` : ''}` },
+      + `${risers.links.length > 0 ? RISER_WORDS : ''}${chests.length > 0 ? `, with ${joinNames(chests)} at the end` : ''}` },
   ...(hooked?.drafts ?? [])];
 
   const bits = linkBits(links);
