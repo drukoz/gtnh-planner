@@ -476,8 +476,9 @@ export function optionMachines(
  * options (`machineOptions` with `settings.machineTier`'s pin), a pricing gap weighed at the largest priced build among
  * the model's eligible options of its kind and tier, else the largest of the model, else 0; the cleanroom (a pricing gap
  * weighed at the largest priced build of the model); the steps no machine can run (`blocked`), whose options are then
- * none; the steps only owned machines that cannot be built can run (`ownedOnly`); sharing in rate mode on AE2 and
- * Project Red lines, with each step's sharing key and its split; and the horizon.
+ * none; the steps only owned machines that cannot be built can run (`ownedOnly`); each step's sharing key, with on AE2
+ * lines (the only ones that share, in rate mode: `sharesMachines`) its split into parts of at most nine recipes
+ * (`ae2Parts`); and the horizon.
  */
 export async function lineBuildModel(pack: Pack, graph: CandidateGraph, basis: PlanBasis, settings: PlanSettings, ctx: PlanContext): Promise<BuildModel> {
   const pools = ownedPools(ctx, settings);

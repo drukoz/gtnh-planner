@@ -10,10 +10,11 @@ export const LogisticsMode = { Direct: 'direct', Routed: 'routed', AE2: 'ae2', E
 export type LogisticsMode = (typeof LogisticsMode)[keyof typeof LogisticsMode];
 
 /**
- * The logistics modes whose lines share machines (design spec §3.3, architecture §11.39): on Project Red (`routed`) and
- * AE2 lines in rate mode the steps of one sharing pool (`PlanStep.pool`) run on the same machines, owned and new alike,
- * and when the build cost counts only these lines may make gathered world blocks (sand from cobblestone).
- * Machine-to-machine and EnderIO lines give every step its own machines and dig gathered blocks.
+ * The networked logistics modes, Project Red (`routed`) and AE2 (design spec §3.3, architecture §11.39): when the build
+ * cost counts only their lines may make gathered world blocks (sand from cobblestone); machine-to-machine and EnderIO
+ * lines dig them. Machine sharing is narrower: only AE2 lines in rate mode share machines (`sharesMachines`,
+ * machine-options.ts: the steps of one sharing pool, `PlanStep.pool`, run on the same machines, owned and new alike);
+ * Project Red, machine-to-machine and EnderIO lines give every step its own machines.
  */
 export const NETWORKED_LOGISTICS: ReadonlySet<string> = new Set(['routed', 'ae2']);
 
