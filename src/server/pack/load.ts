@@ -494,7 +494,7 @@ async function readStructures({ src, pack, ctx }: LoadState): Promise<void> {
       ctx.warn(`${EXPORT_FILES.structures}:${n}: duplicate structure for machine ${line.id} ignored, the first line wins`);
       return;
     }
-    machine.structure = toStructure(line);
+    machine.structure = toStructure(line, ctx, n);
     if (machine.structure.truncated) {
       ctx.warn(`machine ${line.id} (${machine.metaName}): structure truncated, a block lay on the exporter's scan box boundary, it may be incomplete`);
     }

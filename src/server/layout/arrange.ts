@@ -1,11 +1,13 @@
 // Units and their placement (Plan 5 Task 5; spec §3.6, architecture §11.13–§11.14): one unit per new machine of every
 // placed step, in flow order; multiblocks take their exported structure (Plan 1 canonical frame: front on the north,
-// z = 0 side) with hatch cells chosen on its casings and sized to the step (hatch positions are not in the export,
-// gt-mechanics §5): on the casings GregTech's structure check takes each hatch on (hatch-rules.ts, research
-// hatch-rules.md), each hatch facing an open side where its port is; a multiblock without a rule keeps the generic
-// placement and says so. The programmed circuit goes on the machine or its input bus. Units are then placed in two rows
-// facing a one-block spine, row N turned 180° so every front faces the spine, with the ports the routing, logistics
-// and hookup stages connect to. Covers and settings from those stages are attached to their host blocks here too.
+// z = 0 side) with hatch cells chosen on its casings and sized to the step: on the casings GregTech's structure check
+// takes each hatch on — the export's hatch rules (exporter 0.6.0, hatch-export.ts, gt-mechanics §5.5) narrowed by the
+// hand table's row where it fits, else either alone (hatch-rules.ts, research hatch-rules.md) — each hatch facing an
+// open side where its port is; a multiblock with neither keeps the generic placement and says so (older exports hold
+// no hatch positions, gt-mechanics §5). The programmed circuit goes on the machine or its input bus. Units are then
+// placed in two rows facing a one-block spine, row N turned 180° so every front faces the spine, with the ports the
+// routing, logistics and hookup stages connect to. Covers and settings from those stages are attached to their host
+// blocks here too.
 // A singleblock's output side faces the spine and its front (GT's `mMainFacing`, kept apart from the output side) faces
 // the power head: GT never lets it face up or down. With the supply tier given, the lowest feed tier stands
 // next to the power head and machines fed at different tiers stand a column apart, so their power ports never touch.
@@ -26,7 +28,7 @@ import type { BomLine, Plan, PlanStep, PlanWarning } from '../../shared/types/pl
 import { UNKNOWN_BLOCK } from '../../shared/types/world.ts';
 import { simpleClassName } from '../world/facts.ts';
 import {
-  elementMap, elementTakes, hatchRuleFor, ruleFits, ruleNeeds, rulePower, ruleTakes, type HatchKind, type HatchRule,
+  elementMap, elementTakes, hatchRulesOf, ruleNeeds, rulePower, ruleTakes, type HatchKind, type HatchRule,
 } from './hatch-rules.ts';
 import { manualReasonOf } from './multiblock-rules.ts';
 import { busSlots, hatchLitres, machineRef, pickHatch, type HatchClass } from './parts.ts';
@@ -684,9 +686,15 @@ function ruledHatches(pack: Pack, m: Machine, s: PlanStep, io: StepIo, electric:
 }
 
 /**
- * A multiblock: its structure (or the unknown box) with hatch cells on its casings, by its rule (`ruledHatches`) when
- * the rule fits the exported structure, else by the generic placement with `hatch_rules_unknown`. Electric unless it is
- * a steam machine or its rule runs it on steam or nothing (a steam multiblock then says how to feed it).
+ * A multiblock: its structure (or the unknown box) with hatch cells on its casings, by its hatch rules
+ * (`hatchRulesOf`, `ruledHatches`): the export's narrowed by the table row that fits the exported structure, the
+ * export's alone (`hatch_rules_export_only`, or `hatch_notes_unfit` for a row that does not fit), or the fitting row
+ * alone; else by the generic placement with `hatch_rules_unknown`. Electric unless it is a steam machine or its rules
+ * run it on steam or nothing (a steam multiblock then says how to feed it), but one ruled by the export alone whose
+ * export took neither an energy nor a steam hatch (power none) stays electric when its step draws EU: GT may take only
+ * energy hatches above the probe's tier there (a fusion reactor's energy injectors), so the line still counts its
+ * power. An electric one whose export took no plain energy hatch gets no energy hatch and says so
+ * (`hatch_energy_exotic`): it takes only multi-amp or laser energy hatches, or only higher tiers.
  */
 function multiblockShape(pack: Pack, m: Machine, s: PlanStep, io: StepIo, circuit: number | undefined, warnings: PlanWarning[]): MultiblockShape {
   const exported = structureCells(pack, m);
@@ -696,17 +704,34 @@ function multiblockShape(pack: Pack, m: Machine, s: PlanStep, io: StepIo, circui
     const electric = m.kind !== 'steam';
     return { shape, io: genericHatches(pack, m, s, io, electric, circuit, shape, warnings), electric };
   }
-  const rule = hatchRuleFor(m);
-  const st = m.structure!;
-  if (rule === null || !ruleFits(rule, st.controller, st.size, st.blocks.map((b) => b.pos))) {
+  const rules = hatchRulesOf(m);
+  if (rules === null) {
     warnings.push({ code: 'hatch_rules_unknown', stepId: s.id,
       text: `${m.name}: hatch positions are not checked against GregTech's rules here — if it does not form, move the hatches to the casings it shows in game` });
     const electric = m.kind !== 'steam';
     return { shape: exported, io: genericHatches(pack, m, s, io, electric, circuit, exported, warnings), electric };
   }
+  const { rule, source, rowUnfit } = rules;
+  if (source === 'export') {
+    warnings.push(rowUnfit
+      ? { code: 'hatch_notes_unfit', stepId: s.id, text: `${m.name}: the planner's notes for this machine do not fit its exported structure, so its `
+        + "hatches follow GregTech's per-casing rules from the export alone; GregTech checks more in the controller — check in game that it forms" }
+      : { code: 'hatch_rules_export_only', stepId: s.id, text: `${m.name}: its hatches go where GregTech's structure check takes them on each casing; `
+        + 'GregTech checks more in the controller (sides, layers, line length) than the planner has notes for here — check in game that it forms' });
+  }
   const power = rulePower(rule);
-  const electric = m.kind !== 'steam' && power === 'eu';
+  // an export that took neither an energy nor a steam hatch (power none) does not show that the machine takes no EU: its
+  // controller may take only hatches above the probe's lowest tier (GT's fusion reactors take an energy hatch of their
+  // own tier or above)
+  const electric = m.kind !== 'steam' && (power === 'eu' || (source === 'export' && power === 'none' && s.euPerTick > 0));
   if (power === 'steam') warnings.push({ code: 'steam_machine', stepId: s.id, text: `${m.name} runs on steam: connect a steam supply to its Steam Hatch by hand` });
+  const anywhere = rule.exported?.anywhere;
+  if (electric && anywhere !== undefined && !anywhere.has('energy')) {
+    // the layout lays only GT's plain energy hatch, and only where the export took one, so the unit gets no energy hatch
+    warnings.push({ code: 'hatch_energy_exotic', stepId: s.id, text: anywhere.has('energy_multi') || anywhere.has('energy_laser')
+      ? `${m.name} takes only multi-amp or laser energy hatches in GregTech: place one by hand`
+      : `${m.name}: GregTech took none of the lowest-tier energy hatches the export tried on it, so it may take only higher tiers: place one by hand` });
+  }
   const ruled = ruledHatches(pack, m, s, io, electric, circuit, rule, exported, warnings);
   return { shape: ruled.shape, io: ruled.io, electric };
 }

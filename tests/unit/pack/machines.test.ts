@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { StructureElementLine, StructureLine } from '../../../src/server/pack/format.ts';
 import { makePack } from '../../helpers/make-pack.ts';
 import { SAMPLE, sampleExportSpec } from '../../helpers/sample-export.ts';
 
@@ -76,5 +77,81 @@ describe('machines', () => {
     ]);
     await expect(makePack({ machines, structures: [{ id: 1, size: [1, 1, 1], controller: [0, 0, 0], palette: [], blocks: [[0, 0, 0, 3]], air: [] }] }))
       .rejects.toMatchObject({ name: 'ExportFormatError', file: 'structures.jsonl.gz', line: 1 });
+  });
+
+  it('reads the item slot counts of a GT basic machine (exporter 0.6.0)', async () => {
+    const pack = await makePack({
+      machines: [
+        { id: 302, name: 'basicmachine.macerator.tier.02', cls: 'x', item: null, kind: 'basic', tier: 2, itemInSlots: 1, itemOutSlots: 1 },
+        { id: 211, name: 'basicmachine.assembler.tier.01', cls: 'x', item: null, kind: 'basic', tier: 1, itemInSlots: 6, itemOutSlots: 1 },
+        { id: 212, name: 'basicmachine.assembler.tier.02', cls: 'x', item: null, kind: 'basic', tier: 2, itemInSlots: 9, itemOutSlots: 1 },
+        { id: 4300, name: 'basicmachine.test_sorter.tier.01', cls: 'x', item: null, kind: 'basic', tier: 1, itemInSlots: 2, itemOutSlots: 0 },
+      ],
+    });
+    expect(pack.machines.get(302)).toMatchObject({ itemInSlots: 1, itemOutSlots: 1 });
+    expect(pack.machines.get(211)).toMatchObject({ itemInSlots: 6, itemOutSlots: 1 });
+    expect(pack.machines.get(212)).toMatchObject({ itemInSlots: 9, itemOutSlots: 1 });
+    expect(pack.machines.get(4300)).toMatchObject({ itemInSlots: 2, itemOutSlots: 0 });   // no output slot is still a count
+    const macerator = (await makePack(sampleExportSpec())).machines.get(SAMPLE.macerator)!;
+    expect('itemInSlots' in macerator).toBe(false);
+    expect('itemOutSlots' in macerator).toBe(false);
+  });
+});
+
+describe('structure hatch rules', () => {
+  const casing = { id: 'gregtech:gt.blockcasings', meta: 11 };
+  const ctrl = { id: 'gregtech:gt.blockmachines', meta: 0, mte: 1000 };
+  const machines = [{ id: 1000, name: 'multimachine.blastfurnace', cls: 'x', item: null, kind: 'multiblock' as const }];
+  /** Casings at (0, 0, 0), (2, 0, 0) and (1, 1, 0) around the controller, block 1 at (1, 0, 0). */
+  const line: StructureLine = {
+    id: 1000, size: [3, 2, 1], controller: [1, 0, 0], palette: [casing, ctrl], blocks: [[0, 0, 0, 0], [1, 0, 0, 1], [2, 0, 0, 0], [1, 1, 0, 0]], air: [],
+  };
+  const load = async (structure: StructureLine) => {
+    const pack = await makePack({ machines, structures: [structure] });
+    return { pack, structure: pack.machines.get(1000)!.structure! };
+  };
+
+  it('reads the hatch rules of a structure (exporter 0.6.0)', async () => {
+    const { pack, structure } = await load({ ...line, elements: [{ ch: 'b', hatches: ['input_bus', 'energy'] }, { ch: 'f', hatches: [] }], elementOf: [0, -1, 0, 1] });
+    expect(structure.elements).toEqual([
+      { ch: 'b', hatches: ['input_bus', 'energy'], cells: [[0, 0, 0], [2, 0, 0]] },
+      { ch: 'f', hatches: [], cells: [[1, 1, 0]] },
+    ]);
+    expect(pack.warnings).toEqual([]);
+  });
+
+  it('keeps an element without a character and a structure without rules as they were', async () => {
+    const { structure } = await load({ ...line, elements: [{ hatches: ['muffler'] }], elementOf: [0, -1, -1, -1] });
+    expect(structure.elements).toEqual([{ hatches: ['muffler'], cells: [[0, 0, 0]] }]);
+    expect('ch' in structure.elements![0]!).toBe(false);
+    const ebf = (await makePack(sampleExportSpec())).machines.get(SAMPLE.ebf)!.structure!;
+    expect('elements' in ebf).toBe(false);
+  });
+
+  it('ignores hatch kinds it does not know, with one warning', async () => {
+    const { pack, structure } = await load({
+      ...line,
+      elements: [{ ch: 'b', hatches: ['input_bus', 'quantum_hatch', 'flux_hatch'] }, { ch: 'm', hatches: ['quantum_hatch', 'muffler'] }],
+      elementOf: [0, -1, 0, 1],
+    });
+    expect(structure.elements?.map((e) => e.hatches)).toEqual([['input_bus'], ['muffler']]);
+    // one warning for the line, each kind named once in first-seen order (ruling R10)
+    expect(pack.warnings).toEqual(['structures.jsonl.gz:1: structure 1000: hatch kinds unknown to this planner ignored: quantum_hatch, flux_hatch']);
+  });
+
+  const elements: StructureElementLine[] = [{ ch: 'b', hatches: ['input_bus', 'energy'] }, { ch: 'f', hatches: [] }];
+  it.each<[string, StructureLine]>([
+    ['three values for four blocks', { ...line, elements, elementOf: [0, -1, 0] }],
+    ['five values for four blocks', { ...line, elements, elementOf: [0, -1, 0, 1, 0] }],
+    ['element 2 of two', { ...line, elements, elementOf: [0, -1, 0, 2] }],
+    ['a value below -1', { ...line, elements, elementOf: [0, -1, 0, -2] }],
+    ['a value that is no integer', { ...line, elements, elementOf: [0, -1, 0, 0.5] }],
+    ['elements without elementOf', { ...line, elements }],
+    ['elementOf without elements', { ...line, elementOf: [0, -1, 0, 1] }],
+    ['the controller in an element', { ...line, elements, elementOf: [0, 0, 0, 1] }],
+  ])('rejects hatch rules that do not fit the blocks: %s', async (_why, structure) => {
+    // a RangeError of the converter's own checks, not a TypeError from indexing past them
+    await expect(makePack({ machines, structures: [structure] })).rejects
+      .toMatchObject({ name: 'ExportFormatError', file: 'structures.jsonl.gz', line: 1, cause: expect.any(RangeError) });
   });
 });

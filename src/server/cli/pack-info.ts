@@ -47,6 +47,7 @@ function summary(exportId: string, pack: Pack): string[] {
   const m = pack.manifest;
   const bySource = (source: RecipeSource) => pack.recipes.filter((r) => r.source === source).length;
   const machines = [...pack.machines.values()];
+  const hatchRules = machines.filter((x) => x.structure?.elements !== undefined).length;   // exporter 0.6.0+
   const { dimensions, veins, capabilities } = pack.worldgen;
   const warnings = [...(pack.warnings ?? []), ...(m.warnings ?? [])];   // the loader's, then the exporter's
   const lines = [
@@ -54,7 +55,7 @@ function summary(exportId: string, pack: Pack): string[] {
     `Pack:       ${m.packVersion} · GregTech ${m.gtVersion} · exporter ${m.exporterVersion} · exported ${m.exportedAt}`,
     `Items:      ${tableItemCount(pack.items)} · Fluids: ${pack.fluids.size} · Ore names: ${pack.oreDict.size}`,
     `Recipes:    ${pack.recipes.length} (${SOURCES.map((s) => `${s} ${bySource(s)}`).join(', ')}) in ${pack.maps.size} maps`,
-    `Machines:   ${machines.length} (${machines.filter((x) => x.kind === 'multiblock').length} multiblocks, ${machines.filter((x) => x.structure !== undefined).length} with structure)`,
+    `Machines:   ${machines.length} (${machines.filter((x) => x.kind === 'multiblock').length} multiblocks, ${machines.filter((x) => x.structure !== undefined).length} with structure${hatchRules > 0 ? `, ${hatchRules} with hatch rules` : ''})`,
     `Materials:  ${pack.materials.size} · Dimensions: ${dimensions.length} · Veins: ${veins.filter((v) => v.kind === 'vein').length} (+${veins.filter((v) => v.kind === 'small').length} small ores) · Capabilities: ${capabilities.length}`,
     `Name failures: ${m.nameFailures ?? 'unknown'}`,
     `Warnings:   ${warnings.length}`,
