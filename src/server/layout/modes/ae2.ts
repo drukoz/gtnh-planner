@@ -145,13 +145,14 @@ function patternGroups(plan: Plan, patterns: ReadonlyMap<string, PatternSpec>): 
 }
 
 /**
- * The share of its planned runs AE2 gives each step with a pattern, 0 to 1. A crafting CPU pushes a pattern only as
- * often as a job needs an item the pattern makes, never for a fluid the line pipes on, so a step runs as often as its
- * most-asked-for pattern output needs: of what it makes of that item, the part that goes to the line's product (`out`),
- * to a step with a pattern at that step's own share, or to anything AE2 does not run itself and you keep going (a step
- * without a pattern, a step the line places no machine for, a machine run by hand), which asks for all it takes; none
- * of what goes to your storage as a byproduct (`sink`), and none of what goes round a loop of patterns back to the step
- * (cells emptied and filled again): AE2 cannot plan a craft that needs its own output, so such items come from stock.
+ * The share of its planned runs AE2 gives each step with a pattern at most, 0 to 1 (fewer where a job finds the items
+ * in your storage, which it takes before it crafts any). A crafting CPU pushes a pattern only as often as a job needs
+ * an item the pattern makes, never for a fluid the line pipes on, so a step runs as often as its most-asked-for pattern
+ * output needs: of what it makes of that item, the part that goes to the line's product (`out`), to a step with a
+ * pattern at that step's own share, or to anything AE2 does not run itself and you keep going (a step without a
+ * pattern, a step the line places no machine for, a machine run by hand), which asks for all it takes; none of what
+ * goes to your storage as a byproduct (`sink`), and none of what goes round a loop of patterns back to the step (cells
+ * emptied and filled again): AE2 cannot plan a craft that needs its own output, so such items come from stock.
  */
 export function aeRunShares(plan: Plan, patterns: ReadonlyMap<string, PatternSpec>): Map<string, number> {
   const shares = new Map<string, number>();
