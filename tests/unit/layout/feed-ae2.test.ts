@@ -140,6 +140,32 @@ describe('AE2 feeding', () => {
     expect(r.extraParts).toEqual([]);
   });
 
+  it('says that a machine that takes nothing gets no pattern, and that a rock breaker runs on the water and lava beside it', () => {
+    const ROCK_BREAKER = 2020, COBBLE = 'minecraft:cobblestone@0';
+    /** A step of `mteId` that takes nothing and makes Cobblestone, by a recipe that consumes nothing (`supply`: its kind). */
+    const takesNothing = (p: Pack, mteId: number, supply?: 'rock-breaker') => {
+      const plan = makePlan([{ id: 'r', mteId, count: 1, inputs: [], outputs: [[COBBLE, 1]] }], { flows: [{ from: 'r', to: 'out', key: COBBLE, perSecond: 1 }] });
+      if (supply !== undefined) plan.steps[0]!.supply = COBBLE;
+      p.recipeById.set('r', { id: 'r', source: 'derived', maps: [], euPerTick: 30, durationTicks: 16, amps: 1, specialValue: 0,
+        meta: supply === undefined ? {} : { supply }, flags: {}, inputs: [], outputs: [{ key: COBBLE, amount: 1, chance: 1 }] });
+      const { r } = ae2(p, plan);
+      expect(interfaces(r).map((b) => b.feed)).toEqual([undefined]);
+      return r.warnings;
+    };
+    const p = pack();
+    p.items.set(COBBLE, { key: COBBLE, id: 'minecraft:cobblestone', meta: 0, name: 'Cobblestone', oreDict: [] });
+    p.machines.set(ROCK_BREAKER, { ...p.machines.get(IDS.MACERATOR)!, mteId: ROCK_BREAKER, name: 'Basic Rock Breaker',
+      metaName: 'basicmachine.rockbreaker.tier.01', itemKey: `gregtech:gt.blockmachines@${ROCK_BREAKER}` });
+    // the loader's rock breaker supply recipe, its display item gone (pack supply.ts)
+    expect(takesNothing(p, ROCK_BREAKER, 'rock-breaker')).toEqual([{ code: 'ae2_no_pattern', stepId: 'r', text: 'AE2 cannot plan the Basic Rock '
+      + 'Breaker: it takes nothing, it runs on the water and lava beside it, so no pattern has anything to push into it. What it makes goes back '
+      + 'into your ME storage, so jobs that need Cobblestone rely on stock' }]);
+    // any other machine whose recipe uses up nothing (as GT++'s Algae Farm and Fish Pond)
+    expect(takesNothing(p, IDS.MACERATOR)).toEqual([{ code: 'ae2_no_pattern', stepId: 'r', text: 'AE2 cannot plan the Basic Macerator: it takes '
+      + 'nothing, so no pattern has anything to push into it. It runs by itself and what it makes goes back into your ME storage, so jobs that '
+      + 'need Cobblestone rely on stock' }]);
+  });
+
   it('gives a machine whose item outputs all come by chance no pattern, and says to fill it by hand', () => {
     const plan = oneStep({ id: 'c', mteId: IDS.MACERATOR, count: 1 }, [{ key: 't:x@0', amount: 0.5, chance: 0.5 }, { key: 't:y@0', amount: 0.25, chance: 0.25 }]);
     const { r } = ae2(pack(), plan);

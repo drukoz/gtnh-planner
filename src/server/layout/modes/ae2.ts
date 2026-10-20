@@ -344,9 +344,17 @@ function noPatternText(input: ModeInput, step: PlanStep, unit: PlacedUnit, feed:
       + `count, so it gets no pattern and nothing pushes ${nameList(plan, pack, inputs)} into it: put ${inputs.length === 1 ? 'it' : 'them'} in by hand; `
       + 'what it makes still goes back into your ME storage';
   }
-  return `AE2 cannot plan ${machine}: it takes only ${nameList(plan, pack, keysOf(step.inputs, true))}, which the line pipes in, so no pattern can `
-    + 'push anything into it. It runs from its pipes and what it makes goes back into your ME storage, so jobs that need '
-    + `${nameList(plan, pack, keysOf(step.outputs, false))} rely on stock`;
+  const fluids = keysOf(step.inputs, true);
+  const back = `goes back into your ME storage, so jobs that need ${nameList(plan, pack, keysOf(step.outputs, false))} rely on stock`;
+  if (fluids.length === 0) {
+    // it uses up nothing: a rock breaker's supply recipe (water and lava beside it), GT++'s Algae Farm or Fish Pond
+    return pack.recipeById.get(step.recipeId)?.meta.supply === 'rock-breaker'
+      ? `AE2 cannot plan ${machine}: it takes nothing, it runs on the water and lava beside it, so no pattern has anything to push into it. `
+        + `What it makes ${back}`
+      : `AE2 cannot plan ${machine}: it takes nothing, so no pattern has anything to push into it. It runs by itself and what it makes ${back}`;
+  }
+  return `AE2 cannot plan ${machine}: it takes only ${nameList(plan, pack, fluids)}, which the line pipes in, so no pattern can push anything into `
+    + `it. It runs from its pipes and what it makes ${back}`;
 }
 
 /**
