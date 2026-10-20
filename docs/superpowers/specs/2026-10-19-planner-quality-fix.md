@@ -337,10 +337,11 @@ Auditor ids: invariants INV-n, rootcause RCn, gtnh Gn, ui UI-n. "Decision" resol
   Hydrochloric Acid line and gains Nitrogen and Phosphorus Dust lines. This is intended, not a regression. The GEC HV
   2/min line keeps one co-product pair, and that is accepted: "Hydrogen Cell is made 2 ways" (water electrolysis 97 %,
   salt water electrolysis 2 %, a step the Chlorine walk pulls in). Keep only cannot remove a maker that another good
-  pulls in; real-acceptance asserts at most one `multi-producer` issue on that line, and the issues box no longer offers
-  Keep only for such pairs but says why (§6.2 Issues, a plan 09 follow-up). Make N names a step from the LP's
-  `runsFor` (this keeps GEC HV × 4 clean), so a one-run step can carry the name of an output it partly leaves over (a
-  reactor named Naphtha in Make N GEC × 4).
+  pulls in; real-acceptance asserts at most one `multi-producer` issue on that line. The issues box says so (§6.2
+  Issues, plan 09 follow-ups): before the click as a guess from what the plan shows, and once the pin is in place and
+  the issue is still there as a fact, with no Keep only left to click. Make N names a step from the LP's `runsFor`
+  (this keeps GEC HV × 4 clean), so a one-run step can carry the name of an output it partly leaves over (a reactor
+  named Naphtha in Make N GEC × 4).
 
 ### D14 (minor) A thrown-away filled container makes the line extrude new cells — RC7
 
@@ -709,13 +710,20 @@ issue texts. `MaterialsView.quantity()` loses its rate branch; counts of things 
   centres its first producer (`centreOn(node, view)`); shared with "Show" buttons.
 - **Issues.** A `FlowIssues` box above the canvas (red with any `orphan-input`, else amber), one line per issue with
   **Show**; multi-producer lines also **Keep only <bigger producer>** (sends `recipeChoice[key] = recipeId`). Plan 09
-  follow-up: a pin of one maker cannot take out another the walk keeps for something else, so for each other maker
-  the line runs for another good it takes from it that another step makes as its main output, or that empties
-  containers another step fills (D14), the box says so ("Keep only would not change this: the 2% comes from Advanced
-  Electrolyzer II, which the line runs for Chlorine.") and offers Keep only only while some other maker is none of
-  these ("Keep only would still leave …"). The client sees only the plan, so this is a rule of thumb, measured on the
-  2.9 export: of 75 two-way goods in 192 plans it hid Keep only on 33 (the maker stayed on a replan with the pin in
-  32), and the pin removed the other makers of 25 of the 42 it still offers.
+  follow-ups: a pin of one maker cannot take out another the walk keeps for something else. Before the click the
+  client can only guess from the plan: for each other maker that the line runs for another good it takes from it that
+  another step makes as its main output, or that empties containers another step fills (D14), the box notes "Keep
+  only may not change this: the 2% comes from the Advanced Electrolyzer II on Salt Water, which the line runs for
+  Chlorine." ("Keep only may still leave …" when only some other makers are such) and still offers Keep only. Once
+  `recipeChoice` pins the recipe of one of the good's makers and the issue is still there, the pin is in place: the box
+  offers no Keep only (it would change nothing, or only move the pin) and says "Advanced Electrolyzer II on Water is
+  pinned for Hydrogen Cell: the 2% still comes from …". Makers that share a machine are named by the input that sets
+  them apart, else the output, in the notes and on the button. Measured on the 2.9 export (15 LV–HV targets at their
+  tier and one above, supporting lines on and off, step charge 2 % and 0: 120 plans, 181 goods made two ways, each
+  replanned with its pin): the guess named 67 and the issue stayed after the pin for 58 of them; 54 of the 114 it did
+  not name stayed too; of the 112 that stayed, the box says the pin is in place for 111 (in the other the pinned recipe
+  left the replanned plan altogether, so Keep only offers the new bigger maker). The review of the first follow-up
+  found the guess right in 13 of 15 cases on a sweep of its own and in 28 of 33 on the builder's.
 - **Initial view.** Zoom 0.9 centred on `out`; Fit unchanged. Legend: owned / partly owned / new, import (mined,
   gathered, bought, free), no source, left over, supporting line.
 

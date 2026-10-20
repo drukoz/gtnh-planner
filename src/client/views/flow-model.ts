@@ -911,17 +911,17 @@ export function problemId(p: { code: string; key?: StuffKey | undefined; stepId?
 
 /**
  * One line of the issues box above the diagram: the issue, its words, and for a good made two ways the bigger maker,
- * whose recipe "Keep only" pins, and what that pin would leave in the plan (`stays`, in plain words). Without
- * `keepOnly` the pin would leave every other maker.
+ * whose recipe "Keep only" pins (`machine`: how the button names it), and a note in plain words (`stays`) on what that
+ * pin may leave in the plan or, once it is in place, does leave.
  */
 export interface FlowIssueLine { issue: PlanIssue; text: string; keepOnly?: { recipeId: string; machine: string }; stays?: string }
 
 /**
- * Why a "Keep only" pin of `key` cannot take `step`, another maker of it, out of the plan, in words after "which …"
- * (plan 09's final review): the planner's walk keeps the step for something else. The client sees only the plan, so
- * these are the two cases a plan shows, null otherwise (the pin may still leave such a step, as a distillation run for
- * another of its fractions). On the 75 two-way goods of 192 real plans (the 2.9 export) the step stayed in the replanned
- * plan for 32 of the 33 issues they name, and the pin removed the makers of 25 of the other 42.
+ * Why a "Keep only" pin of `key` may not take `step`, another maker of it, out of the plan, in words after "which …"
+ * (plan 09's final review): the planner's walk may keep the step for something else. The client sees only the plan, so
+ * these are two signs a plan shows, null otherwise, and a guess either way: a step named here may still go, and one not
+ * named may stay (a distillation run for another fraction). How often each happens on the 2.9 export: fix spec §6.2
+ * "Issues".
  */
 function keptBy(plan: Plan, index: PlanIndex, step: PlanStep, key: StuffKey): string | null {
   const name = (k: StuffKey): string => plan.names?.[k] ?? k;
@@ -943,29 +943,65 @@ function keptBy(plan: Plan, index: PlanIndex, step: PlanStep, key: StuffKey): st
 }
 
 /**
+ * The makers of one good by name: each step's machine, and where two of them share a machine, the input that sets each
+ * apart, else the output ("Advanced Electrolyzer II on Salt Water", "… making Sodium Hydroxide Dust"; `the` reads
+ * "the Advanced Electrolyzer II on Salt Water" inside a sentence).
+ */
+function makerNames(plan: Plan, makers: readonly PlanStep[]): Map<string, { name: string; the: string }> {
+  const named = new Map<string, { name: string; the: string }>();
+  for (const step of makers) {
+    const twins = makers.filter((s) => s !== step && s.machine.name === step.machine.name);
+    const apart = (side: (s: PlanStep) => readonly { key: StuffKey }[]): StuffKey | undefined =>
+      side(step).find((p) => twins.every((t) => !side(t).some((q) => q.key === p.key)))?.key;
+    const input = twins.length === 0 ? undefined : apart((s) => s.inputs);
+    const output = twins.length === 0 || input !== undefined ? undefined : apart((s) => s.outputs);
+    const by = input !== undefined ? ` on ${plan.names?.[input] ?? input}` : output !== undefined ? ` making ${plan.names?.[output] ?? output}` : '';
+    named.set(step.id, { name: `${step.machine.name}${by}`, the: by === '' ? step.machine.name : `the ${step.machine.name}${by}` });
+  }
+  return named;
+}
+
+/**
  * What does not add up (fix spec §6.2 "Issues"), most serious first: each issue in the server's words when the plan
  * carries them, else `issueText`'s; a good made two ways also names the step that makes most of it, whose recipe
- * "Keep only" pins, unless the line keeps every other maker for something else (`keptBy`): then the line says so
- * instead, and with only some of them kept it says which the pin would leave.
+ * "Keep only" pins, and a note on the other makers the walk may keep for something else (`keptBy`: "may not change
+ * this", "may still leave"). Once `settings` pin the recipe of one of its makers for the good (Keep only, or the step
+ * panel's "Use only this recipe") and the issue is still there, the pin is in place: the line offers no Keep only, which
+ * would change nothing or only move the pin, and says which makers stay.
  */
-export function flowIssueLines(plan: Plan, index: PlanIndex = indexPlan(plan)): FlowIssueLine[] {
+export function flowIssueLines(plan: Plan, index: PlanIndex = indexPlan(plan), settings?: PlanSettings): FlowIssueLine[] {
   const served = new Map(plan.warnings.map((w) => [problemId(w), w.text]));
   const steps = new Map(plan.steps.map((s) => [s.id, s]));
   return [...index.issues].sort((a, b) => ISSUE_ORDER.indexOf(a.code) - ISSUE_ORDER.indexOf(b.code)).map((issue) => {
     const line: FlowIssueLine = { issue, text: served.get(problemId(issue)) ?? issueText(issue, plan) };
-    const [biggerId, ...others] = issue.stepIds ?? [];
-    const bigger = issue.code === 'multi-producer' ? steps.get(biggerId ?? issue.stepId ?? '') : undefined;
-    if (bigger === undefined) return line;
-    const kept = others.flatMap((id, i) => {
+    if (issue.code !== 'multi-producer') return line;
+    const makers = (issue.stepIds ?? (issue.stepId === undefined ? [] : [issue.stepId])).flatMap((id, i) => {
       const step = steps.get(id);
-      const why = step === undefined ? null : keptBy(plan, index, step, issue.key);
-      return step === undefined || why === null ? [] : [{ share: formatPercent(issue.share?.[i + 1] ?? 0), machine: step.machine.name, why }];
+      return step === undefined ? [] : [{ step, share: formatPercent(issue.share?.[i] ?? 0) }];
     });
-    if (others.length === 0 || kept.length < others.length) line.keepOnly = { recipeId: bigger.recipeId, machine: bigger.machine.name };
+    const [bigger, ...others] = makers;
+    if (bigger === undefined) return line;
+    const names = makerNames(plan, makers.map((m) => m.step));
+    const nameOf = (step: PlanStep): { name: string; the: string } => names.get(step.id) ?? { name: step.machine.name, the: step.machine.name };
+    const pin = settings?.recipeChoice?.[issue.key];
+    const held = pin === undefined ? undefined : makers.find((m) => m.step.recipeId === pin);
+    if (held !== undefined) {
+      const stay = makers.filter((m) => m !== held).map((m) => {
+        const why = keptBy(plan, index, m.step, issue.key);
+        return `the ${m.share} still comes from ${nameOf(m.step).the}${why === null ? '' : `, which ${why}`}`;
+      });
+      line.stays = `${nameOf(held.step).name} is pinned for ${plan.names?.[issue.key] ?? issue.key}${stay.length === 0 ? '' : `: ${stay.join('; ')}`}.`;
+      return line;
+    }
+    line.keepOnly = { recipeId: bigger.step.recipeId, machine: nameOf(bigger.step).name };
+    const kept = others.flatMap((m) => {
+      const why = keptBy(plan, index, m.step, issue.key);
+      return why === null ? [] : [{ ...m, why }];
+    });
     if (kept.length === 0) return line;
-    line.stays = line.keepOnly === undefined
-      ? `Keep only would not change this: ${kept.map((k) => `the ${k.share} comes from ${k.machine}, which ${k.why}`).join('; ')}.`
-      : `Keep only would still leave ${joinNames(kept.map((k) => `the ${k.share} from ${k.machine}, which ${k.why}`))}.`;
+    line.stays = kept.length === others.length
+      ? `Keep only may not change this: ${kept.map((k) => `the ${k.share} comes from ${nameOf(k.step).the}, which ${k.why}`).join('; ')}.`
+      : `Keep only may still leave ${joinNames(kept.map((k) => `the ${k.share} from ${nameOf(k.step).the}, which ${k.why}`))}.`;
     return line;
   });
 }
