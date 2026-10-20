@@ -6,7 +6,7 @@
 // serves one sharing key), Make N's one added machine per type, the cleanroom as one more machine, and plan 09's step
 // charge measured against the raw material with gathered world blocks dug, never below the charge on one raw unit. Its
 // decision (`decode`, or `roundUp` of the LP relaxation or of S1 when the far time guard stops it) keeps the later stages
-// within the machines it bought (`capacityRows`). The plan fix wave (controller ruling 183 (2)) made its node limit the
+// within the machines it bought (`laterRoom`). The plan fix wave (controller ruling 183 (2)) made its node limit the
 // one thing that decides it — no plan depends on time or load — and its model strong and small enough that its root node
 // plans real lines within plan 09's 5 s: valid rows that bring the fixed costs of the steps a line cannot do without into
 // the relaxation, a step whose machines one binary prices where that is exact up to one machine, no columns for options
@@ -72,12 +72,22 @@ export interface BuildDecision {
    */
   short?: string[];
   /**
-   * Per step of `machines`, the runs a second its machines do, unrounded: `capacityRows`' bound. Their shares are rounded
-   * to 9 digits, and a bound a hair off the decision's runs made the base stage buy the rest of a good (below) or run a
-   * step up to it and sell the surplus back as a purchase of −1e-8 inside HiGHS's tolerance (above).
+   * Per step of `machines`, the runs a second its machines do, unrounded: the bound `laterRoom` keeps for a step on the
+   * machines of several holders. Their shares are rounded to 9 digits, and a bound a hair off the decision's runs made the
+   * base stage buy the rest of a good (below) or run a step up to it and sell the surplus back as a purchase of −1e-8
+   * inside HiGHS's tolerance (above).
    */
   capacity?: Map<string, number>;
+  /** Per step of `machines` (rate mode), the holders of machines it runs on and how much of each, unrounded (`laterRoom`). */
+  uses?: Map<string, HolderUse[]>;
 }
+/**
+ * Machines a kept step runs on, of one holder (`BuildDecision.uses`): with `model.share` a sharing pool (its new machines
+ * and the owned ones it holds), else the step's own machines of one option; `holder` is its pool key (`poolOf`), `fresh`
+ * and `owned` the machines' worth of its new and owned machines the step uses (without sharing whole machines, `fresh`
+ * the step's new count).
+ */
+export interface HolderUse { holder: string; option: MachineOption; fresh: number; owned: number }
 export interface BuildMipInput {
   lp: MainLp; x1: readonly number[]; s1: number;
   /** The least raw material per unit of demand with gathered world blocks dug (`solveLine`, below); `s1` on a graph without `alsoMade` goods. */
@@ -166,27 +176,34 @@ interface StepUse { step: Step; option: MachineOption; fresh: number /* new mach
 
 /**
  * The rate-mode `StepMachines` of a step, from its owned use per option and its new load of `option` (`added` is the
- * step's own count, without `model.share`), and the runs a second they do, unrounded (`BuildDecision.capacity`).
+ * step's own count, without `model.share`), the runs a second they do, unrounded (`BuildDecision.capacity`), and the
+ * holders they belong to (`BuildDecision.uses`: `option`'s first, then the others in `others`' order).
  */
-function stepMachines(model: BuildModel, use: StepUse, added: number): { m: StepMachines; capacity: number } {
+function stepMachines(model: BuildModel, use: StepUse, added: number): { m: StepMachines; capacity: number; uses: HolderUse[] } {
   const { step, option } = use;
   const share = model.share;
   const value = (v: number): number => (share ? sig9(v) : Math.round(v));
   let ownedLoad = 0;
   let capacity = option.perMachine * (share ? use.fresh : added);
-  const others: Array<{ option: MachineOption; ownedLoad: number; capacity: number }> = [];
+  const main: HolderUse = { holder: poolOf(model, step.r.id, step.key, option), option, fresh: share ? use.fresh : added, owned: 0 };
+  const others: Array<{ option: MachineOption; ownedLoad: number; capacity: number; use: HolderUse }> = [];
   for (const [u, v] of use.owned) {
     if (!(v > 0)) continue;
     capacity += u.o.perMachine * v;
-    if (u.o === option) ownedLoad = value(v);
-    else others.push({ option: u.o, ownedLoad: value(v), capacity: u.o.perMachine * v });
+    if (u.o === option) {
+      ownedLoad = value(v);
+      main.owned += v;
+    } else {
+      others.push({ option: u.o, ownedLoad: value(v), capacity: u.o.perMachine * v, use: { holder: u.pool, option: u.o, fresh: 0, owned: v } });
+    }
   }
   others.sort((a, b) => b.capacity - a.capacity || a.option.mteId - b.option.mteId);
   const m: StepMachines = share
     ? { option, added: 0, newLoad: use.fresh > 0 ? sig9(use.fresh) : 0, pool: poolKey(option, step.key), ownedLoad }
     : { option, added, newLoad: added, ownedLoad };
   if (others.length > 0) m.others = others.map(({ option: o, ownedLoad: load }) => ({ option: o, ownedLoad: load }));
-  return { m, capacity };
+  const uses = [...(main.fresh > 0 || main.owned > 0 ? [main] : []), ...others.map((o) => o.use)];
+  return { m, capacity, uses };
 }
 
 /** A step's option with no new load: the owned one giving it the most capacity (ties: higher tier, lower mteId), else the highest tier. */
@@ -340,13 +357,16 @@ function allocate(input: BuildMipInput, x: readonly number[], prefer?: (j: numbe
   uses.sort((a, b) => a.step.j - b.step.j);   // `machines` in id order
   for (const [pool, l] of load) alloc.added.set(pool, machinesFor(l));
   const capacity = new Map<string, number>();
+  const holders = new Map<string, HolderUse[]>();
   for (const use of uses) {
     const pool = poolOf(model, use.step.r.id, use.step.key, use.option);
     const entry = stepMachines(model, use, use.fresh > 0 ? alloc.added.get(pool) ?? 0 : 0);
     machines.set(use.step.r.id, entry.m);
     capacity.set(use.step.r.id, entry.capacity);
+    holders.set(use.step.r.id, entry.uses);
   }
   alloc.decision.capacity = capacity;
+  alloc.decision.uses = holders;
   if (model.share) alloc.decision.pools = poolsOf(machines, (pool) => alloc.added.get(pool) ?? 0);
   if (short.length > 0) alloc.decision.short = short;
   return alloc;
@@ -373,24 +393,129 @@ export function roundUp(input: BuildMipInput, x: readonly number[], prefer?: (j:
 }
 
 /**
- * The later stages' rows (rate mode): per kept step with machines, its runs at most what they do —
- * `D·x_j ≤ ρ_option·(newLoad + ownedLoad) + Σ_others ρ_o·ownedLoad_o`, unrounded (`BuildDecision.capacity`) — so, with
- * `model.share`, each step keeps the share of its pool the decision gave it and no stage runs a pool past its machines.
+ * What the later stages may run on (`laterRoom`; rate mode, nothing in Make N): the decision's machines per holder, and
+ * what may grow for nothing in the tie stage (`withoutTiedPurchases`, solve.ts).
  */
-export function capacityRows(input: BuildMipInput, decision: BuildDecision): LpRow[] {
-  if (input.model.mode !== 'rate') return [];
-  const rows: LpRow[] = [];
-  input.lp.recipes.forEach((r, j) => {
+export interface LaterRoom {
+  /**
+   * The rows: per holder of machines its steps' runs within its machines plus `grants` (whole machines more; Infinity:
+   * no bound), `Σ_j D·x_j / ρ_j ≤ machines + grant − what steps on several holders take of it` over the steps that run on
+   * it alone; per step on several holders its runs within what its machines do, unrounded (`BuildDecision.capacity`).
+   */
+  rows(grants?: ReadonlyMap<string, number>): LpRow[];
+  /**
+   * `grants`, and for the holder of each step column of `makers` that runs on one holder and may grow for nothing what it
+   * may take more: Infinity for an option that builds for nothing (`solveBuild` 0, `canAdd`), else the owned machines of
+   * its type that neither the decision nor `grants` uses, whole. Steps by column; the first takes all of a type's.
+   */
+  widen(makers: readonly number[], grants: ReadonlyMap<string, number>): Map<string, number>;
+  /** `grants` cut to the whole machines `x` uses beyond each holder's own (left out where it uses no more). */
+  trim(grants: ReadonlyMap<string, number>, x: readonly number[]): Map<string, number>;
+}
+
+/** One holder of `laterRoom`: its option, its machines (whole), what steps on several holders take of it, its other steps. */
+interface Holder {
+  key: string; option: MachineOption; machines: number; fixed: number; fresh: number; owned: number;
+  simple: Array<{ j: number; perMachine: number }>;
+}
+
+/**
+ * The machines a decision leaves the later stages (rate mode; none in Make N, whose machines bound no runs), per holder
+ * (`HolderUse`): with `model.share` a sharing pool — its new machines (`pools`' count) and the owned ones it holds
+ * (whole: an owned machine serves one sharing key) — so the steps of a pool share all its room as the build MIP let them
+ * (each step's own share of it held the base and the tie stage to the decision's split, and a tie its pool had room for
+ * went to buying); without, each step's own machines of one option. A step on several holders (owned machines of another
+ * option beside its own, `others`) keeps what its machines do. In the tie stage a holder may grow for nothing (`widen`):
+ * by any number of machines of an option that builds for nothing, or by the owned machines of its type the decision
+ * leaves idle; whichever it takes is a whole number of machines (`trim`), so the plan's own machine assignment
+ * (machines.ts `assignOwned`) adds no machine that costs anything.
+ */
+export function laterRoom(input: BuildMipInput, decision: BuildDecision): LaterRoom {
+  const { lp, model } = input;
+  const D = input.demandScale;
+  if (model.mode !== 'rate') return { rows: () => [], widen: (_, grants) => new Map(grants), trim: () => new Map() };
+  const holders = new Map<string, Holder>();
+  const holderOf = new Map<number, Holder>();
+  const bounded: Array<{ j: number; capacity: number }> = [];
+  const hold = (use: HolderUse): Holder => {
+    let h = holders.get(use.holder);
+    if (h === undefined) holders.set(use.holder, (h = { key: use.holder, option: use.option, machines: 0, fixed: 0, fresh: 0, owned: 0, simple: [] }));
+    h.fresh += use.fresh;
+    h.owned += use.owned;
+    return h;
+  };
+  lp.recipes.forEach((r, j) => {
     const m = decision.machines.get(r.id);
     if (m === undefined || !decision.support.has(j)) return;
+    const uses = decision.uses?.get(r.id) ?? [];
+    const only = uses.length === 1 ? (uses[0] as HolderUse) : undefined;
+    if (only !== undefined) {
+      const h = hold(only);
+      h.simple.push({ j, perMachine: only.option.perMachine });
+      holderOf.set(j, h);
+      return;
+    }
+    for (const use of uses) hold(use).fixed += use.fresh + use.owned;
     let capacity = decision.capacity?.get(r.id);
     if (capacity === undefined) {
       capacity = m.option.perMachine * (m.newLoad + m.ownedLoad);
       for (const o of m.others ?? []) capacity += o.option.perMachine * o.ownedLoad;
     }
-    rows.push({ lower: -Infinity, upper: capacity, entries: [[j, input.demandScale]] });
+    bounded.push({ j, capacity });
   });
-  return rows;
+  /** Per type, the owned machines the holders use. */
+  const held = new Map<number, number>();
+  for (const h of holders.values()) {
+    h.machines = (model.share ? (decision.pools.get(h.key)?.added ?? 0) : h.fresh) + machinesFor(h.owned);
+    held.set(h.option.mteId, (held.get(h.option.mteId) ?? 0) + machinesFor(h.owned));
+  }
+  /** What `h` may take more for nothing beside `grants`. */
+  const freeFor = (h: Holder, grants: ReadonlyMap<string, number>): number => {
+    if (adds(h.option) && h.option.solveBuild === 0) return Infinity;
+    let given = held.get(h.option.mteId) ?? 0;
+    for (const [key, g] of grants) if (Number.isFinite(g) && holders.get(key)?.option.mteId === h.option.mteId) given += g;
+    return Math.max(0, ownedOf(model, h.option) - given);
+  };
+  return {
+    rows: (grants = new Map()) => {
+      const rows: LpRow[] = [];
+      for (const key of [...holders.keys()].sort(byString)) {
+        const h = holders.get(key) as Holder;
+        const grant = grants.get(key) ?? 0;
+        if (h.simple.length === 0 || grant === Infinity) continue;
+        const room = h.machines + grant - h.fixed;
+        const one = h.simple.length === 1 ? (h.simple[0] as { j: number; perMachine: number }) : undefined;
+        rows.push(one !== undefined
+          ? { lower: -Infinity, upper: one.perMachine * room, entries: [[one.j, D]] }
+          : { lower: -Infinity, upper: room, entries: h.simple.map((s): [number, number] => [s.j, D / s.perMachine]) });
+      }
+      for (const b of bounded) rows.push({ lower: -Infinity, upper: b.capacity, entries: [[b.j, D]] });
+      return rows;
+    },
+    widen: (makers, grants) => {
+      const out = new Map(grants);
+      for (const j of [...makers].sort((a, b) => a - b)) {
+        const h = holderOf.get(j);
+        if (h === undefined || out.get(h.key) === Infinity) continue;
+        const more = freeFor(h, out);
+        if (more === Infinity) out.set(h.key, Infinity);
+        else if (more >= 1) out.set(h.key, (out.get(h.key) ?? 0) + Math.floor(more));
+      }
+      return out;
+    },
+    trim: (grants, x) => {
+      const out = new Map<string, number>();
+      for (const [key, grant] of grants) {
+        const h = holders.get(key);
+        if (h === undefined || !(grant > 0)) continue;
+        let used = h.fixed;
+        for (const s of h.simple) used += (D * (x[s.j] ?? 0)) / s.perMachine;
+        const over = used - h.machines;
+        if (over > WHOLE) out.set(key, Math.min(grant, Math.ceil(over - WHOLE)));
+      }
+      return out;
+    },
+  };
 }
 
 /** One (step, option) pair of the MIP: its pool and its columns of new (`a`) and owned (`q`) machines and its option binary (`w`). */
@@ -825,14 +950,16 @@ function decodeRate(input: BuildMipInput, layout: Layout, x: readonly number[]):
     return n === undefined ? 0 : Math.min(Math.round(x[n] ?? 0), machinesFor(freshByPool.get(key) ?? 0));
   };
   const capacity = new Map<string, number>();
+  const holders = new Map<string, HolderUse[]>();
   for (const { use, pool, added } of uses) {
     const entry = stepMachines(model, use, added ?? (pool === undefined ? 0 : addedOf(pool.key)));
     machines.set(use.step.r.id, entry.m);
     capacity.set(use.step.r.id, entry.capacity);
+    holders.set(use.step.r.id, entry.uses);
   }
   const c = layout.c;
   return {
-    support, machines, pools: model.share ? poolsOf(machines, addedOf) : new Map(), capacity,
+    support, machines, pools: model.share ? poolsOf(machines, addedOf) : new Map(), capacity, uses: holders,
     cleanroom: c !== undefined && (x[c] ?? 0) >= 0.5 && cleanroomNeeded(model, layout.steps, kept),
   };
 }

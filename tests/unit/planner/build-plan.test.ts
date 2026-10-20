@@ -15,6 +15,7 @@ import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
 import { linePricing } from '../../../src/server/planner/pricing.ts';
 import { sig9 } from '../../../src/server/planner/round.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
+import type { OreVein } from '../../../src/shared/types/pack.ts';
 import type { LogisticsMode, MachineWhere, Plan, PlanContext, PlanSettings, PlanStep } from '../../../src/shared/types/plan.ts';
 
 const COBBLE = 'minecraft:cobblestone@0';
@@ -468,7 +469,7 @@ describe('one source at a tie', () => {
       worldgen: { ...spec.worldgen, veins: [...(spec.worldgen?.veins ?? []), vein] },
     }, [161], from);
   };
-  const thing = (): PlanSettings => S({ target: 't:thing@0', amount: 6, per: 'min' });
+  const thing = (p: Partial<PlanSettings> = {}): PlanSettings => S({ target: 't:thing@0', amount: 6, per: 'min', ...p });
 
   it('makes all of a good a step of the line makes rather than buy the rest, where its machines have room', async () => {
     // The build stage's later stages (least raw material, then power and the canonical form) ran inside the decision's
@@ -484,10 +485,83 @@ describe('one source at a tie', () => {
   it('still buys beside a step where making the rest needs more machines than it saves', async () => {
     // One centrifuge does 0.05 runs a second: the gas takes 2 of them, all of the copper 4. Over 24 hours both use the same
     // raw material, and the 2 more centrifuges cost an iron ingot each, so buying the other ingot is cheaper.
-    const plan = await planLine(packFromSpec(gasSpec(400, [['t:iron_ingot@0', 1]])), thing(), emptyContext());
-    expect(plan.status).toBe('ok');
-    expect(plan.steps.map((s) => [s.id, s.runsPerSecond, s.count])).toEqual([['burn', 0.1, 2], ['make-thing', 0.1, 1]]);
-    expect(plan.rawInputs.map((r) => [r.key, r.perSecond])).toEqual([['t:copper_ingot@0', 0.1], ['t:raw_dust@0', 0.1]]);
+    for (const logistics of ['direct', 'ae2', 'routed'] as const) {
+      const plan = await planLine(packFromSpec(gasSpec(400, [['t:iron_ingot@0', 1]])), thing({ logistics }), emptyContext());
+      expect(plan.status).toBe('ok');
+      expect(plan.steps.map((s) => [s.id, s.runsPerSecond, s.count])).toEqual([['burn', 0.1, 2], ['make-thing', 0.1, 1]]);
+      expect(plan.rawInputs.map((r) => [r.key, r.perSecond])).toEqual([['t:copper_ingot@0', 0.1], ['t:raw_dust@0', 0.1]]);
+    }
+  });
+
+  it('makes all of it on AE2 and Project Red lines too, where the sharing pool has room', async () => {
+    // With sharing the later stages ran within each step's own share of its pool (burn: 0.1 of the one centrifuge), so the
+    // tie stage could not raise burn although the centrifuge does 1 run a second: 0.1 burnt and 0.1 copper bought, with the
+    // centrifuge free to build, priced, or owned. They now run within the pool's machines.
+    const cases: Array<[ReadonlyArray<[string, number]>, PlanContext]> = [
+      [[], emptyContext()], [[['t:iron_ingot@0', 1]], emptyContext()], [[['t:iron_ingot@0', 1]], owning({ mteId: 161, count: 4 })],
+    ];
+    for (const logistics of ['ae2', 'routed'] as const) {
+      for (const [from, ctx] of cases) {
+        const plan = await planLine(packFromSpec(gasSpec(20, from)), thing({ logistics }), ctx);
+        expect(plan.status).toBe('ok');
+        expect(plan.steps.map((s) => [s.id, s.runsPerSecond, s.count])).toEqual([['burn', 0.2, 1], ['make-thing', 0.1, 1]]);
+        expect(plan.rawInputs.map((r) => [r.key, r.perSecond])).toEqual([['t:raw_dust@0', 0.2]]);
+      }
+    }
+  });
+
+  it('makes the rest on owned machines the build stage left idle, in every mode', async () => {
+    // Four owned centrifuges (each 0.05 runs a second, priced at an iron ingot): the build MIP needed two of them for the
+    // gas and broke the raw-material tie towards buying the other ingot, two owned machines idle. Owned machines cost
+    // nothing, so the tie stage may run burn on them: all four, no copper bought, nothing new built (ignore mode's answer).
+    for (const logistics of ['direct', 'enderio', 'ae2', 'routed'] as const) {
+      for (const buildHorizonHours of [24, null]) {
+        const plan = await planLine(packFromSpec(gasSpec(400, [['t:iron_ingot@0', 1]])), thing({ logistics, buildHorizonHours }), owning({ mteId: 161, count: 4 }));
+        expect(plan.status).toBe('ok');
+        expect(plan.steps.map((s) => [s.id, s.runsPerSecond, s.count, s.owned])).toEqual([['burn', 0.2, 4, 4], ['make-thing', 0.1, 1, 0]]);
+        expect(plan.rawInputs.map((r) => [r.key, r.perSecond])).toEqual([['t:raw_dust@0', 0.2]]);
+      }
+    }
+  });
+
+  it('makes the rest on more machines that cost nothing to build', async () => {
+    // Centrifuges built from nothing: all of the copper takes 4 of them instead of 2, which costs nothing more, so the line
+    // makes it rather than buy half of it (with build cost ignored too).
+    for (const logistics of ['direct', 'ae2'] as const) {
+      for (const buildHorizonHours of [1, 24, 168, null]) {
+        const plan = await planLine(packFromSpec(gasSpec(400)), thing({ logistics, buildHorizonHours }), emptyContext());
+        expect(plan.status).toBe('ok');
+        expect(plan.steps.map((s) => [s.id, s.runsPerSecond, s.count])).toEqual([['burn', 0.2, 4], ['make-thing', 0.1, 1]]);
+        expect(plan.rawInputs.map((r) => [r.key, r.perSecond])).toEqual([['t:raw_dust@0', 0.2]]);
+      }
+    }
+  });
+
+  it('splits a raw dust for both of its products rather than buy one of them, with machines free to build', async () => {
+    // The merge's probe: `split` (Basic Macerator, 1 run a second) turns a Raw Dust into an X Dust and a Y Part, `make-t`
+    // takes 2 X and 1 Y. X is also mined, so splitting a second dust (its Y left over) and buying the X tie in raw material;
+    // every machine builds from nothing, so the second macerator costs nothing either.
+    const vein = (name: string, material: string): OreVein => ({
+      name, dims: ['overworld'], kind: 'vein', weight: 1, minY: 0, maxY: 255, size: 1, density: 1,
+      materials: { primary: material, secondary: material, between: material, sporadic: material },
+    });
+    const pack = packFromSpec(withBuildRecipes({
+      items: [{ key: 't:raw@0', name: 'Raw Dust', gt: { prefix: 'dust', material: 'Raw' } }, { key: 't:x@0', name: 'X Dust', gt: { prefix: 'dust', material: 'X' } },
+        { key: 't:y@0', name: 'Y Part' }, { key: 't:t@0', name: 'Thing' }],
+      maps: [{ id: 'gt.recipe.macerator', name: 'Macerator' }, { id: 'gt.recipe.assembler', name: 'Assembler' }],
+      machines: [{ mteId: 1, name: 'Basic Macerator', maps: ['gt.recipe.macerator'], tier: 1 }, { mteId: 2, name: 'Basic Assembler', maps: ['gt.recipe.assembler'], tier: 1 }],
+      recipes: [{ id: 'split', map: 'gt.recipe.macerator', in: [['t:raw@0', 1]], out: [['t:x@0', 1], ['t:y@0', 1]], eut: 2 },
+        { id: 'make-t', map: 'gt.recipe.assembler', in: [['t:x@0', 2], ['t:y@0', 1]], out: [['t:t@0', 1]], eut: 2 }],
+      worldgen: { veins: [vein('ore.mix.raw', 'Raw'), vein('ore.mix.x', 'X')] },
+    }));
+    for (const logistics of ['direct', 'ae2'] as const) {
+      for (const buildHorizonHours of [1, 24, 168, null]) {
+        const plan = await planLine(pack, { ...defaultSettings(), routeDerived: false, buildHorizonHours, target: 't:t@0', tier: 1, amount: 60, per: 'min', logistics }, emptyContext());
+        expect(plan.status).toBe('ok');
+        expect(plan.steps.map((s) => [s.id, s.runsPerSecond, s.count])).toEqual([['make-t', 1, 1], ['split', 2, 2]]);
+        expect(plan.rawInputs.map((r) => [r.key, r.perSecond])).toEqual([['t:raw@0', 2]]);
+      }
+    }
   });
 });
 

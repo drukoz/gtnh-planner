@@ -7,8 +7,8 @@
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import type { PlanWarning } from '../../shared/types/plan.ts';
 import {
-  BUILD_MIP_MAX_LP_ITERATIONS, BUILD_MIP_MAX_NODES, BUILD_MIP_TIME_LIMIT_SECONDS, buildMip, capacityRows, roundUp, type BuildDecision, type BuildMipInput,
-  type StepMachines,
+  BUILD_MIP_MAX_LP_ITERATIONS, BUILD_MIP_MAX_NODES, BUILD_MIP_TIME_LIMIT_SECONDS, buildMip, laterRoom, roundUp, type BuildDecision, type BuildMipInput,
+  type LaterRoom, type StepMachines,
 } from './build-mip.ts';
 import { canonicalRank, type CandidateGraph, type LpRecipe } from './candidates.ts';
 import { solveLp, type LpModel, type LpResult, type LpRow } from './lp.ts';
@@ -648,7 +648,8 @@ async function consolidated(
       }
     }
   }
-  return withoutTiedPurchases(lp, off, base);
+  const tied = await withoutTiedPurchases(lp, off, base);
+  return { off: tied.off, base: tied.base };
 }
 
 /**
@@ -657,33 +658,44 @@ async function consolidated(
  * stages never buy it beside the step (spec R11's bought-and-made): within the raw-material lock the power and
  * canonical stages broke such ties towards buying, and an Electric Blast Furnace run for its carbon dioxide made some of
  * a line's copper ingots while the line bought the rest (plan 09 Task 8). A purchase the base does not use stays shut;
- * one it uses, when an LP without it (within `locks`: the build stage's capacity rows, so the machines the decision
- * bought) is not dearer. Goods in key order; free goods (no raw cost) are left alone.
+ * one it uses, when an LP without it is not dearer. Goods in key order; free goods (no raw cost) are left alone.
+ *
+ * In the build stage (`room`: plan 12, `laterRoom`) every LP stays within the machines the decision bought, and a step
+ * that makes the good may also run on machines that cost nothing more — owned ones the decision leaves idle, or more of
+ * an option that builds for nothing — taking whole machines of them (`LaterRoom.widen`, then `trim` to what it uses):
+ * making the rest there costs no more raw material, no machine to build and no step, so buying it beside the step is
+ * only the power or canonical tie-break's choice. `locks` are the rows the later stages keep (none without `room`).
  */
 async function withoutTiedPurchases(
-  lp: MainLp, start: Set<number>, from: LpResult, locks: readonly LpRow[] = [],
-): Promise<{ off: Set<number>; base: LpResult }> {
+  lp: MainLp, start: Set<number>, from: LpResult, room?: LaterRoom,
+): Promise<{ off: Set<number>; base: LpResult; locks: LpRow[] }> {
   let off = start;
   let base = from;
+  let grants: ReadonlyMap<string, number> = new Map();
   const most = from.objective * (1 + S3_TOLERANCE) + TINY;
   for (let i = 0; i < lp.buyKeys.length; i++) {
     const j = lp.firstBuy + i;
     const key = lp.buyKeys[i] as StuffKey;
     if (off.has(j) || !((lp.rawCost[j] ?? 0) > 0)) continue;
-    const made = lp.recipes.some((r, k) => r.kind === 'recipe' && !off.has(k) && (base.x[k] ?? 0) > TINY && netOf(r, key) > 0);
-    if (!made) continue;
+    const makers: number[] = [];
+    lp.recipes.forEach((r, k) => {
+      if (r.kind === 'recipe' && !off.has(k) && (base.x[k] ?? 0) > TINY && netOf(r, key) > 0) makers.push(k);
+    });
+    if (makers.length === 0) continue;
     const without = new Set(off).add(j);
     if (!((base.x[j] ?? 0) > TINY)) {
       off = without;
       continue;
     }
-    const tried = await minimize(lp, lp.rawCost, locks, Infinity, without);
+    const widened = room?.widen(makers, grants) ?? grants;
+    const tried = await minimize(lp, lp.rawCost, room?.rows(widened) ?? [], Infinity, without);
     if (tried.status === 'optimal' && tried.objective <= most) {
       off = without;
       base = tried;
+      if (room !== undefined) grants = room.trim(widened, tried.x);
     }
   }
-  return { off, base };
+  return { off, base, locks: room?.rows(grants) ?? [] };
 }
 
 /**
@@ -869,12 +881,13 @@ function ownedOnlyRuns(bounded: readonly number[], x: readonly number[]): number
  * relaxation does not solve, or its rounding leaves a step short and S1's does not — with the `build-cost-approx`
  * warning. A decision that leaves a step short (the owned machines of one type cannot cover the steps that can only use
  * them) ends the line, with the `owned-only` warnings of the bounded steps S1 runs. Then R3's stage 5 inside the
- * decision: the step recipes outside its support off, its capacity
- * rows in every stage, the least raw material over that, each purchase of a good a step of it makes shut where the line
- * does as well without it within those rows (`withoutTiedPurchases`, plan 09's one source at a tie: the `base`), power
- * and the canonical form with the raw material locked at the base's, the latest that balances — the decision's own
- * columns last, never S1 (which may run steps past the machines it bought). A tie the decision's machines leave no room
- * for (making the rest needs a machine more) is the build MIP's to weigh.
+ * decision: the step recipes outside its support off, its machines in every stage (`laterRoom`: a sharing pool's steps
+ * share all of its room), the least raw material over that, each purchase of a good a step of it makes shut where the
+ * line does as well without it within those machines and the ones that cost nothing more (`withoutTiedPurchases`, plan
+ * 09's one source at a tie: the `base`; owned machines the decision leaves idle, more of an option that builds for
+ * nothing), power and the canonical form with the raw material locked at the base's, the latest that balances — the
+ * decision's own columns last, never S1 (which may run steps past the machines it bought). A tie that needs a machine
+ * that costs something more is the build MIP's to weigh.
  */
 async function buildStage(
   graph: CandidateGraph, lp: MainLp, s1: LpResult, warnings: PlanWarning[], opts: SolveOptions, model: BuildModel, demandScale: number,
@@ -935,7 +948,7 @@ async function buildStage(
     return sol;
   }
 
-  const rows = capacityRows(input, decision);
+  const room = laterRoom(input, decision);
   const outside = new Set<number>();
   lp.recipes.forEach((r, j) => {
     if (r.kind === 'recipe' && !decision.support.has(j)) outside.add(j);
@@ -946,12 +959,14 @@ async function buildStage(
     ownRaw += c * (own[j] ?? 0);
   });
   const stages: LpResult[] = [];
+  const rows = room.rows();
   const least = await minimize(lp, lp.rawCost, rows, Infinity, outside);
-  // Plan 09's one source at a tie (`withoutTiedPurchases`) within the decision's machines, before power and the canonical
-  // form, which broke such a tie towards buying a good beside the step that makes it.
-  const { off, base } = least.status === 'optimal' ? await withoutTiedPurchases(lp, outside, least, rows) : { off: outside, base: least };
+  // Plan 09's one source at a tie (`withoutTiedPurchases`) within the decision's machines and those that cost nothing
+  // more, before power and the canonical form, which broke such a tie towards buying a good beside the step that makes it.
+  const { off, base, locks: kept } = least.status === 'optimal'
+    ? await withoutTiedPurchases(lp, outside, least, room) : { off: outside, base: least, locks: rows };
   if (base.status === 'optimal') {
-    const locks = [...rows, ...lockRow(lp.rawCost, base.objective)];
+    const locks = [...kept, ...lockRow(lp.rawCost, base.objective)];
     const s2 = await minimize(lp, lp.power, locks, Infinity, off);
     if (s2.status === 'optimal') locks.push(...lockRow(lp.power, s2.objective));
     const s4 = await minimize(lp, lp.canonical, locks, Infinity, off);
