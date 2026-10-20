@@ -1,7 +1,7 @@
 // The 3D view on laid-out lines (the user's requirements of 2026-10-19, item 3): (a) every conduit connection of a real
 // EnderIO layout drawn as EnderIO draws it — an arm per link and per set face, a set face's arm its connector, linked
-// neighbours' arms meeting end to end, every arm reaching its face, bundles side by side and every tile opaque over
-// its role's colour; (b) the Connections tab's links in the world for every logistics mode, from the shared model.
+// neighbours' arms meeting end to end, every arm reaching its face, bundles side by side and every tile opaque over a
+// plain colour; (b) the Connections tab's links in the world for every logistics mode, from the shared model.
 
 import { describe, it, expect } from 'vitest';
 import { connectionSpans, connectionsGraph, type ConnGraph, type ConnSpan, type ConnSpot } from '../../../src/client/connections/model.ts';
@@ -15,7 +15,12 @@ import { IDS, layoutPack, makePlan, makeProject, type ScanSpec } from '../../hel
 import { fluidPlan, keysN, lineGround, lineScan, twoStep } from '../../helpers/enderio-fixtures.ts';
 import { conduitGaps } from '../../helpers/scene-checks.ts';
 // for the tests after the commit's own (the review of f9fe23e)
-import { LINK_RADIUS, LINK_SEGMENTS, linkGeometry, pickLink } from '../../../src/client/three/link-geometry.ts';
+import { LINK_RADIUS, linkGeometry, pickLink } from '../../../src/client/three/link-geometry.ts';
+// the review of f82c98c
+import { solidColumns } from '../../../src/client/three/link-geometry.ts';
+import { DIRS } from '../../../src/shared/layout/geometry.ts';
+import type { Vec3 } from '../../../src/shared/layout/geometry.ts';
+import { arcsThroughBlocks, linkEndProblems } from '../../helpers/scene-checks.ts';
 
 const placement = { origin: [30, 64, 10] as [number, number, number], rotation: 0 as const };
 /** Every conduit and connector texture the scene asks for, one file each (`<pseudo id>.png`). */
@@ -43,6 +48,17 @@ const manyOutputs = (): Plan => {
 const threeFluids = (): Plan => makePlan([{ id: 'y', mteId: IDS.SOLIDIFIER, count: 1, inputs: [['fluid:a', 1], ['fluid:b', 1], ['fluid:c', 1]] }],
   { flows: [...['fluid:a', 'fluid:b', 'fluid:c'].map((key) => ({ from: 'raw', to: 'y', key, perSecond: 1 })), { from: 'y', to: 'out', key: 't:out_y@0', perSecond: 1 }] });
 
+/**
+ * A fluid extractor feeding five solidifiers that also take a dust: in direct mode three of them stand side by side in
+ * one row, each with the molten iron's pipe on top linking down into it, its power cable behind and the item pipe in
+ * front linking into it, so no face of the middle ones shows (the review of f82c98c).
+ */
+const walledRow = (): Plan => makePlan([
+  { id: 'x', mteId: IDS.EXTRACTOR, count: 1, outputs: [['fluid:molten.iron', 144]] },
+  { id: 'y', mteId: IDS.SOLIDIFIER, count: 5, inputs: [['fluid:molten.iron', 28], ['t:dust@0', 1]], outputs: [['t:ingot@0', 1]] },
+], { flows: [{ from: 'raw', to: 'x', key: 't:in@0', perSecond: 1 }, { from: 'x', to: 'y', key: 'fluid:molten.iron', perSecond: 1 },
+  { from: 'raw', to: 'y', key: 't:dust@0', perSecond: 1 }, { from: 'y', to: 'out', key: 't:ingot@0', perSecond: 1 }] });
+
 const LINES: ReadonlyArray<readonly [string, () => Plan, Pick<ScanSpec, 'logistics'>?]> = [
   ['two steps hooked up to an EnderIO network', twoStep, { logistics: [{ kind: 'enderio', taps: [[26, 64, 12]] }] }],
   ['a fluid line', () => fluidPlan()],
@@ -51,8 +67,8 @@ const LINES: ReadonlyArray<readonly [string, () => Plan, Pick<ScanSpec, 'logisti
   ['three open fluid ends', threeFluids],
 ];
 
-async function laid(plan: Plan, logistics: 'enderio' | 'direct' | 'routed' | 'ae2', scan: Pick<ScanSpec, 'logistics'> = {}): Promise<Layout> {
-  return layoutLine(layoutPack(), plan, lineScan(scan), makeProject({ logistics, placement }), lineGround());
+async function laid(plan: Plan, logistics: 'enderio' | 'direct' | 'routed' | 'ae2', scan: Pick<ScanSpec, 'logistics'> = {}, rotation: 0 | 90 | 180 | 270 = 0): Promise<Layout> {
+  return layoutLine(layoutPack(), plan, lineScan(scan), makeProject({ logistics, placement: { ...placement, rotation } }), lineGround());
 }
 
 describe('the conduits of laid-out EnderIO lines in the 3D view', () => {
@@ -169,25 +185,47 @@ describe('the Connections links of laid-out lines as the 3D view draws them', ()
     }
   });
 
-  it('ends every link that is not on a conduit face on a face of a block of its box that no block of the line covers', async () => {
-    // covered: anything on a top; on a side, a whole block, or a cable or pipe whose arm ends on it (the 3D view draws
-    // one that only passes beside the face as a core and arms clear of it)
-    const covers = (b: LayoutBlock | undefined, side: number): boolean => b !== undefined
-      && (side === 1 || !['cable', 'pipe', 'chip_pipe'].includes(b.role) || ((b.connections ?? 0) & (1 << OPPOSITE[side]!)) !== 0);
-    const allPlans = [...PLANS, ['a stack of output chests', manyOutputs] as const];
+  it('ends every link that is not on a conduit face where it shows: never on a bottom, under a whole block or inside a cable or pipe', async () => {
+    // the review of f82c98c: a face with a cable, pipe or chip pipe against it is fine while the end sits beside its
+    // core and arms (one only passing beside a side is fine anywhere), and an item's end is never at a fluid pipe on
+    // its top or linking into its face; at every turn of the line
+    const allPlans = [...PLANS, ['a stack of output chests', manyOutputs] as const, ['a walled-in row', walledRow] as const];
     for (const mode of ['enderio', 'direct', 'routed', 'ae2'] as const) {
       for (const [name, plan] of allPlans) {
-        const p = plan();
-        const layout = await laid(p, mode, mode === 'enderio' ? { logistics: [{ kind: 'enderio', taps: [[26, 64, 12]] }] } : NETWORKS[mode]);
-        const g = connectionsGraph(layout, p, 'min');
-        const at = new Map(layout.blocks.filter((b) => b.role !== 'ghost').map((b) => [posKey(b.pos), b]));
-        const against = (end: ConnSpot) => at.get(posKey(step(end.cell, end.side)));
-        // nor on a bottom, out of which an arc would rise back through its own block
-        const hidden = connectionSpans(layout, g).flatMap((s) => [s.from, s.to].filter((end) => end.face === null && (end.side === 0 || covers(against(end), end.side)))
-          .map((end) => `${s.edge} at ${posKey(end.cell)} side ${end.side} under ${against(end)?.label ?? 'nothing'}`));
-        expect(hidden, `${mode}, ${name}`).toEqual([]);
+        for (const rotation of [0, 90, 180, 270] as const) {
+          const p = plan();
+          const layout = await laid(p, mode, mode === 'enderio' ? { logistics: [{ kind: 'enderio', taps: [[26, 64, 12]] }] } : NETWORKS[mode], rotation);
+          const g = connectionsGraph(layout, p, 'min');
+          const items = new Set(g.edges.filter((e) => e.key !== null && !e.key.startsWith('fluid:')).map((e) => e.id));
+          expect(linkEndProblems(layout, connectionSpans(layout, g), (edge) => items.has(edge)), `${mode}, ${name}, turned ${rotation}`).toEqual([]);
+        }
       }
     }
+  });
+
+  it('ends the links of a row of machines walled in on every side beside the pipe the link goes through, never under the fluid pipe', async () => {
+    // the review of f82c98c: in direct mode, a row of three solidifiers side by side with the fluid pipe on top linking
+    // into each, the cable behind and the item pipe in front: no face shows, and every end went on a top, under the
+    // pipe
+    const plan = walledRow();
+    const layout = await laid(plan, 'direct');
+    const at = new Map(layout.blocks.filter((b) => b.role !== 'ghost').map((b) => [posKey(b.pos), b]));
+    const hidden = (b: LayoutBlock) => [1, 2, 3, 4, 5].every((side) => at.has(posKey(step(b.pos, side))));
+    const walled = layout.blocks.filter((b) => b.role === 'machine' && b.stepId === 'y' && hidden(b));
+    expect(walled.length).toBeGreaterThan(0);
+    const g = connectionsGraph(layout, plan, 'min');
+    const spans = connectionSpans(layout, g);
+    for (const b of walled) {
+      const ends = spans.flatMap((s) => [s.from, s.to].filter((end) => posKey(end.cell) === posKey(b.pos)).map((end) => ({ s, end })));
+      expect(ends.length).toBeGreaterThan(0);
+      for (const { s, end } of ends) {
+        const against = at.get(posKey(step(end.cell, end.side)))!;
+        // the dust and the ingot beside the item pipe in front, the molten iron beside its own pipe on top
+        expect([end.side, against.label, end.at === undefined], s.edge).toEqual(s.edge.endsWith('fluid:molten.iron')
+          ? [1, 'Small Bronze Fluid Pipe (Molten Iron)', false] : [b.facing, 'Tin Item Pipe', false]);
+      }
+    }
+    expect(linkEndProblems(layout, spans, (edge) => !edge.endsWith('fluid:molten.iron'))).toEqual([]);
   });
 
   it("ends a multiblock's links on its own blocks, on faces outside it: a fluid's on the hatch it goes through", async () => {
@@ -210,29 +248,93 @@ describe('the Connections links of laid-out lines as the 3D view draws them', ()
     }
   });
 
-  it('draws each of many links between the same two faces as an arc of its own that a pointer on it picks', async () => {
+  it('draws each of many links between the same two faces as an arc of its own that a pointer on it picks, clear of every block', async () => {
     // a stack of output chests: on one EnderIO channel each machine's thirteen goods leave through one face for one
-    // chest face, and on the routed network each step's go from its machine to the output chest
+    // chest face, and on the routed network each step's go from its machine to the output chest. The review of f82c98c:
+    // the fan pushed half of each group back into its own machine and the rest through the next blocks; at every turn
+    const sub = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    const cross = (a: Vec3, b: Vec3): Vec3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
     for (const mode of ['enderio', 'routed'] as const) {
-      const plan = manyOutputs();
-      const layout = await laid(plan, mode);
-      const g = connectionsGraph(layout, plan, 'min');
-      const geo = linkGeometry(connectionSpans(layout, g), new Map(g.edges.map((e) => [e.id, e])), layout.origin);
-      // the links by their two ends, either way round
-      const groups = new Map<string, typeof geo.links>();
-      for (const l of geo.links) {
-        const key = [l.span.from, l.span.to].map((s) => `${posKey(s.cell)}:${s.side}`).sort().join('|');
-        groups.set(key, [...(groups.get(key) ?? []), l]);
+      for (const rotation of [0, 90, 180, 270] as const) {
+        const plan = manyOutputs();
+        const layout = await laid(plan, mode, {}, rotation);
+        const g = connectionsGraph(layout, plan, 'min');
+        const edges = new Map(g.edges.map((e) => [e.id, e]));
+        const geo = linkGeometry(connectionSpans(layout, g), edges, layout.origin, { solid: solidColumns(layout) });
+        // the links by their two ends, either way round
+        const groups = new Map<string, typeof geo.links>();
+        for (const l of geo.links) {
+          const key = [l.span.from, l.span.to].map((s) => `${posKey(s.cell)}:${s.side}`).sort().join('|');
+          groups.set(key, [...(groups.get(key) ?? []), l]);
+        }
+        const shared = [...groups.values()].filter((list) => list.length > 1);
+        const where = `${mode}, turned ${rotation}`;
+        expect(Math.max(...shared.map((list) => list.length)), where).toBe(13);
+        // no fanned centre line passes through a block, its own two ends' included
+        expect(arcsThroughBlocks(layout, shared.flat()), where).toEqual([]);
+        for (const list of shared) {
+          const middles = list.map((l) => l.path[(l.path.length - 1) / 2]!);
+          const spread = sub(middles.at(-1)!, middles[0]!);
+          expect(Math.hypot(...spread), where).toBeLessThanOrEqual(1.44 + 1e-9);
+          for (const [k, m] of middles.entries()) {
+            for (const other of middles.slice(k + 1)) expect(Math.hypot(...sub(m, other)), where).toBeGreaterThan(2 * LINK_RADIUS);
+          }
+          // seen square to the line between its ends and to the way it fans, a pointer on each middle names that link
+          const chord = sub(list[0]!.path.at(-1)!, list[0]!.path[0]!);
+          const view = cross(chord, spread);
+          const length = Math.hypot(...view);
+          const dir = view.map((v) => (view[1] > 0 ? -v : v) / length) as Vec3;
+          for (const [k, m] of middles.entries()) {
+            const hit = pickLink(list, sub(m, dir.map((v) => v * 20) as Vec3), dir, () => 0.05);
+            expect(hit === null ? null : list[hit.link]!.span.edge, `${where}: ${list[k]!.span.edge}`).toBe(list[k]!.span.edge);
+          }
+        }
       }
-      const shared = [...groups.values()].filter((list) => list.length > 1);
-      expect(Math.max(...shared.map((list) => list.length)), mode).toBe(13);
-      for (const list of shared) {
-        const middles = list.map((l) => l.path[LINK_SEGMENTS / 2]!);
-        for (const [k, m] of middles.entries()) {
-          for (const other of middles.slice(k + 1)) expect(Math.hypot(m[0] - other[0], m[1] - other[1], m[2] - other[2]), mode).toBeGreaterThan(2 * LINK_RADIUS);
-          // a ray straight down onto the middle of each names that link
-          const hit = pickLink(list, [m[0], m[1] + 20, m[2]], [0, -1, 0], () => 0.05);
-          expect(hit === null ? null : list[hit.link]!.span.edge, `${mode} ${list[k]!.span.edge}`).toBe(list[k]!.span.edge);
+    }
+  });
+
+  it("draws no link through a solid block of the line, in every mode and at every turn, a multiblock's beside it included", async () => {
+    // the review of f82c98c: arcs of a fixed rise passed through the EBF and its coils, and through the stack of chests
+    const allPlans = [...PLANS, ['a stack of output chests', manyOutputs] as const, ['a walled-in row', walledRow] as const];
+    for (const mode of ['enderio', 'direct', 'routed', 'ae2'] as const) {
+      for (const [name, plan] of allPlans) {
+        for (const rotation of [0, 90, 180, 270] as const) {
+          const p = plan();
+          const layout = await laid(p, mode, mode === 'enderio' ? { logistics: [{ kind: 'enderio', taps: [[26, 64, 12]] }] } : NETWORKS[mode], rotation);
+          const g = connectionsGraph(layout, p, 'min');
+          const geo = linkGeometry(connectionSpans(layout, g), new Map(g.edges.map((e) => [e.id, e])), layout.origin, { solid: solidColumns(layout) });
+          expect(arcsThroughBlocks(layout, geo.links), `${mode}, ${name}, turned ${rotation}`).toEqual([]);
+        }
+      }
+    }
+  });
+
+  it("ends a multiblock's item links on the bus they go through, on the side the line's pipe or interface pipe serves", async () => {
+    // the review of f82c98c: a multiblock's item ends were its controller, whose only open face could look away
+    for (const mode of ['direct', 'routed', 'ae2'] as const) {
+      const p = ebfPlan();
+      const layout = await laid(p, mode, NETWORKS[mode]);
+      const g = connectionsGraph(layout, p, 'min');
+      const at = new Map(layout.blocks.filter((b) => b.role !== 'ghost').map((b) => [posKey(b.pos), b]));
+      const spans = connectionSpans(layout, g);
+      const endOf = (key: string, into: boolean) => {
+        const e = g.edges.find((x) => x.key === key && (into ? x.to : x.from) === 'step:e')!;
+        const s = spans.find((x) => x.edge === e.id)!;
+        const end = into ? s.to : s.from;
+        return { block: at.get(posKey(end.cell))!, end };
+      };
+      const dust = endOf('t:dust@0', true), ingot = endOf('t:ingot@0', false);
+      if (mode === 'ae2') {
+        // the ME interfaces stand in front of the buses: the dust goes in on the input bus's open end toward the
+        // hookup; the output bus's only open side looks away from it, so the ingot leaves the controller's front
+        // instead, the cable passing beside it
+        expect([dust.block.hatch, dust.end.side, dust.end.at], mode).toEqual(['input_bus', 5, undefined]);
+        expect([ingot.block.role, ingot.end.side], mode).toEqual(['machine', ingot.block.facing]);
+      } else {
+        expect([dust.block.hatch, ingot.block.hatch], mode).toEqual(['input_bus', 'output_bus']);
+        for (const { block, end } of [dust, ingot]) {
+          // on its front, beside the pipe that links into it
+          expect([end.side, end.at === undefined, DIRS[end.side]!.join()], mode).toEqual([block.facing, false, DIRS[block.facing!]!.join()]);
         }
       }
     }

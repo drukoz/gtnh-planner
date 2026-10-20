@@ -1,9 +1,9 @@
 // The 3D scene's conduit checks (the user's requirements of 2026-10-19, item 3 (a)), shared by the client tests and the
-// server's tests of laid-out lines: every link and every set face of every conduit of a layout has its arm, a set face's
-// arm is its connector and a link's the conduit itself, the arms of linked neighbours meet end to end, every arm reaches
-// the face it points at, two conduits never share a lane, every arm starts on its conduit's core or inside the bundle's
-// connector box, and every tile a conduit cell shows is opaque over a plain colour. Synthetic checks: nothing here
-// reads a game file.
+// server's tests of laid-out lines: every link and every set face of every conduit of a layout has its arm, a set
+// face's arm is its connector and a link's the conduit itself, the arms of linked neighbours meet end to end, every arm
+// reaches the face it points at, two conduits never share a lane, every arm starts on its conduit's core or inside the
+// bundle's connector box, and every tile a conduit cell shows is opaque over a plain colour. Synthetic checks: nothing
+// here reads a game file.
 
 import { instanceTranslation, type SceneData, type SceneInstance } from '../../src/client/three/scene-data.ts';
 import { DIRS, OPPOSITE, posKey, step, type Vec3 } from '../../src/shared/layout/geometry.ts';
@@ -111,4 +111,77 @@ export function conduitGaps(layout: Layout, scene: SceneData, connector: string)
     }
   });
   return gaps;
+}
+
+// The review of f82c98c: where the 3D view's Connections links start, end and pass.
+
+/** The roles the 3D view draws as a core with arms rather than a whole block. */
+const THIN = new Set(['cable', 'pipe', 'chip_pipe']);
+/** A cable's or pipe's core reaches this far from its cell's middle (blocks), and a link tube is this thick round its centre line. */
+const CORE_HALF = 3 / 16;
+const TUBE = 0.05;
+
+/**
+ * Everything wrong with where the pieces `spans` of links of `layout` start and end, one line each: an end that is no
+ * conduit face on a bottom, against a whole block, or inside the core or an arm of a cable, pipe or chip pipe that
+ * stands against its face (its spot within the core's square or an arm's strip, grown by a tube's thickness; a side
+ * a thin block only passes beside is fine anywhere); and an item's end against a fluid pipe that links into its face
+ * or lies over its top.
+ */
+export function linkEndProblems(layout: Layout, spans: ReadonlyArray<{ edge: string; from: SpotLike; to: SpotLike }>, items: (edge: string) => boolean = () => false): string[] {
+  const at = new Map(layout.blocks.filter((b) => b.role !== 'ghost').map((b) => [posKey(b.pos), b]));
+  const problems: string[] = [];
+  for (const s of spans) {
+    for (const end of [s.from, s.to]) {
+      if (end.face !== null) continue;
+      const where = `${s.edge} at ${posKey(end.cell)} side ${end.side}`;
+      if (end.side === 0) problems.push(`${where}: on a bottom`);
+      const b = at.get(posKey(step(end.cell, end.side)));
+      if (b === undefined) continue;
+      if (!THIN.has(b.role)) {
+        problems.push(`${where}: under ${b.label}`);
+        continue;
+      }
+      const linked = ((b.connections ?? 0) & (1 << OPPOSITE[end.side]!)) !== 0;
+      if (items(s.edge) && b.buildStep?.startsWith('layout:logistics:fluid:') === true && (linked || end.side === 1)) problems.push(`${where}: an item at ${b.label}`);
+      const axes = [0, 1, 2].filter((k) => DIRS[end.side]![k] === 0);
+      const off = end.at ?? [0, 0, 0];
+      if (end.side !== 1 && !linked) continue;
+      if (axes.every((k) => Math.abs(off[k]!) < CORE_HALF + TUBE)) problems.push(`${where}: in the core of ${b.label}`);
+      for (const k of axes) {
+        for (const sign of [1, -1]) {
+          const arm = DIRS.findIndex((d) => d[k] === sign && d.every((v, j) => j === k || v === 0));
+          const across = axes.find((j) => j !== k)!;
+          if (((b.connections ?? 0) & (1 << arm)) !== 0 && sign * off[k]! > CORE_HALF - TUBE && Math.abs(off[across]!) < CORE_HALF + TUBE) {
+            problems.push(`${where}: in the ${FACES[arm]} arm of ${b.label}`);
+          }
+        }
+      }
+    }
+  }
+  return problems;
+}
+
+/** A link's end as the Connections model gives it (`ConnSpot`). */
+export interface SpotLike { cell: Vec3; side: number; face: string | null; at?: Vec3 }
+
+/**
+ * Every point of the drawn centre lines `links` (scene coordinates from `layout.origin`, eight points between each two
+ * of a line's own) inside a block the 3D view draws whole, one line per link: its edge, how many, and which blocks.
+ */
+export function arcsThroughBlocks(layout: Layout, links: ReadonlyArray<{ span: { edge: string }; path: Vec3[] }>): string[] {
+  const solid = new Map(layout.blocks.filter((b) => b.role !== 'ghost' && !THIN.has(b.role))
+    .map((b) => [posKey([b.pos[0] - layout.origin[0], b.pos[1] - layout.origin[1], b.pos[2] - layout.origin[2]]), b.label]));
+  return links.flatMap((l) => {
+    const hits = new Set<string>();
+    l.path.slice(1).forEach((b, i) => {
+      const a = l.path[i]!;
+      for (let k = 0; k < 8; k++) {
+        const p: Vec3 = [0, 1, 2].map((j) => Math.floor(a[j]! + ((b[j]! - a[j]!) * k) / 8)) as Vec3;
+        const label = solid.get(posKey(p));
+        if (label !== undefined) hits.add(`${label} at ${posKey(p)}`);
+      }
+    });
+    return hits.size === 0 ? [] : [`${l.span.edge}: through ${[...hits].join(', ')}`];
+  });
 }

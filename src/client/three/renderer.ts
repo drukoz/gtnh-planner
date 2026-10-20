@@ -316,11 +316,13 @@ export function createViewer(
         }
       }
       if (links !== null && links.links.length > 0) {
-        // a link counts within LINK_PICK_PX of the pointer at its distance, and only in front of the first solid block
+        // a link counts within LINK_PICK_PX of the pointer at its distance, and only in front of the first solid block, or
+        // so little behind its face that the links' polygon offset still draws it over the block
         const { origin, direction } = raycaster.ray;
         const perPixel = (2 * Math.tan((camera.fov * Math.PI) / 360)) / rect.height;
-        const hit = pickLink(links.links, [origin.x, origin.y, origin.z], [direction.x, direction.y, direction.z], (t) => LINK_PICK_PX * perPixel * t,
-          (link) => maxLayer === null || link.layer <= maxLayer, wall + LINK_RADIUS);
+        const within = (t: number): number => LINK_PICK_PX * perPixel * t;
+        const hit = pickLink(links.links, [origin.x, origin.y, origin.z], [direction.x, direction.y, direction.z], within,
+          (link) => maxLayer === null || link.layer <= maxLayer, wall + LINK_RADIUS + within(wall));
         if (hit !== null) return { kind: 'link', index: hit.link, link: links.links[hit.link]! };
       }
       return block === null ? null : { kind: 'block', block };

@@ -14,7 +14,7 @@ import type { Layout } from '../../shared/types/layout.ts';
 import { messageOf } from '../api/client.ts';
 import { connectionSpans, connectionsGraph, hasLine, pickDetails, spanDetails } from '../connections/model.ts';
 import { useLayout } from '../state/use-layout.ts';
-import { linkGeometry, linksSummary, spansShown, type LinkGeometry, type LinksSummary } from '../three/link-geometry.ts';
+import { linkGeometry, linksSummary, solidColumns, spansShown, type LinkGeometry, type LinksSummary } from '../three/link-geometry.ts';
 import { loadSceneInputs, realTextureDeps, tilesFor } from '../three/load-textures.ts';
 import { createViewer, type Viewer } from '../three/renderer.ts';
 import { blockList, buildScene, hoverText, pickInfo } from '../three/scene-data.ts';
@@ -277,7 +277,8 @@ function preserveDrawingBuffer(): boolean {
  * made on the canvas, then kept in step with the slider, the toggles and the canvas's size. A new layout disposes the
  * previous viewer first, and clears the hover label and the details, which named its blocks. While Show connections is
  * on, the Connections tab's graph of the layout (rates per hour in Make N mode, else per the settings' unit) gives the
- * links the viewer draws, a hookup's left out while hookups are hidden, and the note under the view (`linksSummary`);
+ * links the viewer draws (clear of the line's solid blocks), a hookup's left out while hookups are hidden, and the note
+ * under the view (`linksSummary`);
  * new links let a picked one go.
  */
 export default function View3D(props: ProjectViewProps): ReactElement {
@@ -307,7 +308,8 @@ export default function View3D(props: ProjectViewProps): ReactElement {
   const drawnLinks = useMemo((): { geometry: LinkGeometry; summary: LinksSummary } | null => {
     if (graph === null || layout === null) return null;
     const all = connectionSpans(layout, graph);
-    const geometry = linkGeometry(spansShown(all, graph, layout, show.hookups), new Map(graph.edges.map((e) => [e.id, e])), layout.origin);
+    const geometry = linkGeometry(spansShown(all, graph, layout, show.hookups), new Map(graph.edges.map((e) => [e.id, e])), layout.origin,
+      { solid: solidColumns(layout) });
     return { geometry, summary: linksSummary(graph, all, geometry.links, show.hookups) };
   }, [graph, layout, show.hookups]);
   const links = drawnLinks?.geometry ?? null;

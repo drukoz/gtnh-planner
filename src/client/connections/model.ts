@@ -513,12 +513,20 @@ export function pickDetails(g: ConnGraph, pick: ConnPick): { title: string; line
 
 /**
  * One end of a link in the world, for the 3D view's Show connections (the user's requirements of 2026-10-19, item 3
- * (b)): the centre of face `side` (ForgeDirection) of the block cell `cell` (world coordinates), and the id of the face
- * row it stands for when it is one. A conduit face's end is on the face of what the conduit face points at, toward the
- * conduit (an open fluid end's on the cell where your tank goes); any other end is on a face of a block that stands for
- * its box, one that nothing covers when it has one (`connectionSpans`).
+ * (b)): face `side` (ForgeDirection) of the block cell `cell` (world coordinates), at its centre or `at` off it, and
+ * the id of the face row it stands for when it is one. A conduit face's end is on the face of what the conduit face
+ * points at, toward the conduit (an open fluid end's on the cell where your tank goes); any other end is on the face of
+ * a block that stands for its box that shows best (`connectionSpans`).
  */
-export interface ConnSpot { cell: Vec3; side: number; face: string | null }
+export interface ConnSpot {
+  cell: Vec3; side: number; face: string | null;
+  // optional addition (the review of f82c98c)
+  /**
+   * Where on the face the end is, from the face's centre (blocks, in the face's plane): set when a cable, pipe or
+   * conduit of the line stands against the face, so the link starts beside its core and arms, never inside them.
+   */
+  at?: Vec3;
+}
 /** One piece of a link in the world, from one end to the other. */
 export interface ConnSpan { edge: string; from: ConnSpot; to: ConnSpot }
 
@@ -533,6 +541,28 @@ const THIN_ROLES: ReadonlySet<BlockRole> = new Set<BlockRole>(['cable', 'pipe', 
  * draw and to pick from: past it, a link is as many pieces as its bigger box has ends.
  */
 const SPANS_PER_LINK = 32;
+/**
+ * How a face shows to a link that ends on it, best first: OPEN, nothing of the line against it (a ghost lets it show);
+ * OWN, a cable, pipe or chip pipe of what carries the link stands against it (its fluid's own pipe for a fluid, the
+ * line's item pipe or chip pipe for an item), where the link really goes in or out; BESIDE, a side that a cable, pipe
+ * or chip pipe passes beside without linking to it (an arc rises steeply off a side, clear of its arms); PASSING, one
+ * that passes over a top without linking to it; LINKED, one whose arm ends on the face; WRONG, a fluid pipe for an item
+ * or an item pipe for a fluid, so an item never seems to go into a fluid pipe; SOLID, a whole block, which hides it. On
+ * any but an open face the end is beside the thin block's core and arms (`besideSpot`). A side that looks away from the
+ * other end (more than AWAY_COS off it) ranks AWAY worse, as an arc from it doubles back over its own block; and one in
+ * a notch NOTCH worse: a whole block of the line above its block's top in front of it or beside its front cell, which
+ * an arc from it has to climb out of steeply.
+ */
+const OPEN = 0, OWN = 1, BESIDE = 2, PASSING = 3, LINKED = 4, WRONG = 5, SOLID = 6;
+const AWAY = 4.5;
+const AWAY_COS = -0.5;
+const NOTCH = 2;
+/**
+ * How far off a face's centre (blocks) a link starts on a face that a thin block stands against: beside a cable's or
+ * pipe's 6 px core and arms (2 px clear, more than a tube's radius), or in a corner beside a conduit bundle's lanes.
+ */
+const BESIDE_CORE = 5 / 16;
+const BESIDE_BUNDLE = 6.5 / 16;
 
 /**
  * Each of `a` with each of `b`; past SPANS_PER_LINK pairs, the two in turn instead (the k-th of each, round), as many
@@ -551,15 +581,17 @@ function pairUp<A, B>(a: readonly A[], b: readonly B[]): Array<[A, B]> {
  * (an item on the Item Conduit, a fluid on an ender fluid conduit), that passes the good, as EnderIO offers every
  * extraction to each of them. Without such a pair it goes from the link's own faces (`fromFace`, `toFace`), and an end
  * without one is drawn as any other link's. Any other link joins the blocks that stand for its boxes, each with each: a
- * step's machines (a multiblock by its controller), a chest, an interface, a hookup by the block at the end of its path,
- * a fluid on GT pipes that enters or leaves the line by the free end of its pipe run (where your tank goes), and the
- * other raw inputs and final outputs by the end of the line's logistics hookup, where the base's network comes in (no
- * piece without one); an interface's link goes to the blocks of what it serves that it touches, and a hookup's to the
- * blocks of the box it joins that its end touches, when there are any. Each of those ends is on the face of its block
- * that nothing covers, the top first, else the side most toward the other end (`placed`; a multiblock's on its own
- * outside). Where each with each would make more than SPANS_PER_LINK pieces (two big steps), the ends are joined in
- * turn instead, each at least once (`pairUp`). Each piece once; a piece whose two ends are one spot is left out (an
- * AE2 hookup's link to the base's network, which comes in at the hookup's end).
+ * step's machines (a multiblock by its controller), a chest, an interface, a hookup by the block at the end of its
+ * path, a fluid on GT pipes that enters or leaves the line by the free end of its pipe run (where your tank goes), and
+ * the other raw inputs and final outputs by the end of the line's logistics hookup, where the base's network comes in
+ * (no piece without one); an interface's link goes to the blocks of what it serves that it touches, and a hookup's to
+ * the blocks of the box it joins that its end touches, when there are any. Each of those ends is on the face of its
+ * block that shows best (`placed`): one nothing covers, the top first, else the side most toward the other end; else
+ * one a cable or pipe stands against, beside its core; never the bottom, and a multiblock's on its own outside, an
+ * item's on the bus it goes through and a fluid's on the hatch. Where each with each would make more than
+ * SPANS_PER_LINK pieces (two big steps), the ends are joined in turn instead, each at least once (`pairUp`). Each piece
+ * once; a piece whose two ends are one spot is left out (an AE2 hookup's link to the base's network, which comes in at
+ * the hookup's end).
  */
 export function connectionSpans(layout: Layout, g: ConnGraph): ConnSpan[] {
   const blocks = layout.blocks;
@@ -621,8 +653,28 @@ export function connectionSpans(layout: Layout, g: ConnGraph): ConnSpan[] {
     }
     return node.blocks;
   };
-  const touching = (from: readonly number[], node: ConnNode): number[] =>
-    node.blocks.filter((i) => from.some((j) => sideToward(blocks[j]!.pos, blocks[i]!.pos) !== -1));
+  /** Each box's blocks by their cells, made once per box (a multiblock step's box holds thousands). */
+  const cellMaps = new Map<string, Map<string, number>>();
+  const cellsOf = (node: ConnNode): Map<string, number> => {
+    let cells = cellMaps.get(node.id);
+    if (cells === undefined) {
+      cells = new Map(node.blocks.map((j) => [posKey(blocks[j]!.pos), j]));
+      cellMaps.set(node.id, cells);
+    }
+    return cells;
+  };
+  /** The blocks of `node` face to face with one of `from`, in the box's order (a box lists its blocks in layout order). */
+  const touching = (from: readonly number[], node: ConnNode): number[] => {
+    const cells = cellsOf(node);
+    const near = new Set<number>();
+    for (const j of from) {
+      for (let side = 0; side < 6; side++) {
+        const k = cells.get(posKey(step(blocks[j]!.pos, side)));
+        if (k !== undefined) near.add(k);
+      }
+    }
+    return [...near].sort((a, b) => a - b);
+  };
   /** An end: a conduit face's spot, or a block that stands for its box, whose face `placed` picks once the other end is known. */
   type End = ConnSpot | number;
   const ownEnds = (face: string | null, node: ConnNode, e: ConnEdge): End[] => {
@@ -630,43 +682,104 @@ export function connectionSpans(layout: Layout, g: ConnGraph): ConnSpan[] {
     return face !== null && ref !== undefined ? [faceSpot(face, ref)] : standFor(node, e);
   };
   const cellOf = (end: End): Vec3 => (typeof end === 'number' ? blocks[end]!.pos : end.cell);
-  /**
-   * How face `side` of the cell `pos` shows: 0, open, when no block of the line stands against it (a ghost lets it
-   * show); 1 on one of the four sides when only a cable, pipe or chip pipe passes beside it without linking to it (an
-   * arc rises steeply off a side, clear of its core); else 2, hidden (anything on a top hides it, as an arc rises
-   * straight up through that).
-   */
-  const shows = (pos: Vec3, side: number): number => {
+  const isFluidPipe = (b: LayoutBlock): boolean => b.role === 'pipe' && b.buildStep?.startsWith(FLUID_PIPE_STEP) === true;
+  /** A thin block that carries items: a chip pipe, or a pipe that is no fluid pipe and holds no conduit (an item pipe, an ME or routed pipe). */
+  const carriesItems = (b: LayoutBlock): boolean => b.role === 'chip_pipe' || (b.role === 'pipe' && !isFluidPipe(b) && (b.conduits ?? []).length === 0);
+  /** How face `side` of the cell `pos` shows to link `e` (OPEN … SOLID), and the block against it. */
+  const shows = (pos: Vec3, side: number, e: ConnEdge): { rank: number; against?: LayoutBlock } => {
     const i = at.get(posKey(step(pos, side)));
-    if (i === undefined) return 0;
+    if (i === undefined) return { rank: OPEN };
     const b = blocks[i]!;
-    return side !== TOP && THIN_ROLES.has(b.role) && ((b.connections ?? 0) & (1 << OPPOSITE[side]!)) === 0 ? 1 : 2;
+    if (!THIN_ROLES.has(b.role)) return { rank: SOLID, against: b };
+    const linked = ((b.connections ?? 0) & (1 << OPPOSITE[side]!)) !== 0;
+    if (side !== TOP && !linked) return { rank: BESIDE, against: b };
+    const fluid = e.key === null ? null : isFluidKey(e.key);
+    if (fluid === null) return { rank: linked ? LINKED : PASSING, against: b };
+    if (fluid ? carriesItems(b) : isFluidPipe(b)) return { rank: WRONG, against: b };
+    if (fluid ? b.buildStep === `${FLUID_PIPE_STEP}${e.key}` : carriesItems(b)) return { rank: OWN, against: b };
+    return { rank: linked ? LINKED : PASSING, against: b };
+  };
+  /** Whether a whole block of the line stands above the top of the block at `p`, in front of its side `side` or beside that front cell (NOTCH). */
+  const inNotch = (p: Vec3, side: number): boolean => {
+    const front = step(p, side);
+    const across = side < 4 ? [4, 5] : [2, 3];
+    return [front, step(front, across[0]!), step(front, across[1]!)].some((c) => [1, 2].some((up) => {
+      const j = at.get(posKey([c[0], p[1] + up, c[2]]));
+      return j !== undefined && !THIN_ROLES.has(blocks[j]!.role);
+    }));
+  };
+  /** A face a link may end on: its side, how it shows (`shows`), that rank plus AWAY or NOTCH where they apply, and the thin block against it. */
+  type FaceChoice = { side: number; rank: number; total: number; against?: LayoutBlock };
+  /**
+   * The face of block `i` that shows best to link `e` (`shows`), whose other end is at the cell `toward`: of the top,
+   * then the four sides, the one most toward `toward` first (in side order among equals), the first of the best total;
+   * never the bottom, out of which an arc would rise back through its block, never one a whole block hides, and only
+   * one whose neighbour cell `open` lets it face. None when every one is hidden.
+   */
+  const bestSide = (i: number, toward: Vec3, e: ConnEdge, open: (cell: Vec3) => boolean = () => true): FaceChoice | undefined => {
+    const p = blocks[i]!.pos;
+    const d: Vec3 = [toward[0] - p[0], 0, toward[2] - p[2]];
+    const level = Math.hypot(d[0], d[2]);
+    const along = (side: number): number => DIRS[side]![0] * d[0] + DIRS[side]![2] * d[2];
+    let best: FaceChoice | undefined;
+    for (const side of [TOP, ...[2, 3, 4, 5].sort((a, b) => along(b) - along(a) || a - b)]) {
+      const seen = open(step(p, side)) ? shows(p, side, e) : { rank: SOLID };
+      if (seen.rank >= SOLID) continue;
+      const total = seen.rank + (side !== TOP && level > 0 && along(side) < AWAY_COS * level ? AWAY : 0) + (side !== TOP && inNotch(p, side) ? NOTCH : 0);
+      if (best === undefined || total < best.total) best = { side, ...seen, total };
+    }
+    return best;
   };
   /**
-   * The face of block `i` that shows best (`shows`), where a link to the cell `toward` (its other end) ends: of the
-   * top, then the four sides, the one most toward `toward` first (in side order among equals), the first that shows
-   * best; never the bottom, out of which an arc would rise back through its block; and only one whose neighbour cell
-   * `open` lets it face. None when every one is hidden.
+   * Where on face `side` of the cell `pos` a link starts that a thin block `against` stands against, toward the cell
+   * `toward`: off the face's centre by BESIDE_CORE, at the middle of an edge the block has no arm toward, or in a
+   * corner (a conduit bundle's lanes leave only the corners, BESIDE_BUNDLE off); on a side never below its middle, out
+   * of which an arc would rise through an arm into the face; the one most toward `toward` (on a side, above the middle
+   * first), but on a top never toward a whole block that stands above it next door, so an arc has room to climb before
+   * it passes over.
    */
-  const bestSide = (i: number, toward: Vec3, open: (cell: Vec3) => boolean = () => true): number | undefined => {
-    const p = blocks[i]!.pos;
-    const d: Vec3 = [toward[0] - p[0], toward[1] - p[1], toward[2] - p[2]];
-    const along = (side: number): number => DIRS[side]![0] * d[0] + DIRS[side]![1] * d[1] + DIRS[side]![2] * d[2];
-    let best: { side: number; rank: number } | undefined;
-    for (const side of [TOP, ...[2, 3, 4, 5].sort((a, b) => along(b) - along(a) || a - b)]) {
-      const rank = open(step(p, side)) ? shows(p, side) : 2;
-      if (rank < 2 && (best === undefined || rank < best.rank)) best = { side, rank };
-    }
-    return best?.side;
+  const besideSpot = (pos: Vec3, side: number, toward: Vec3, against: LayoutBlock): Vec3 => {
+    const n = DIRS[side]!;
+    const axes = [0, 1, 2].filter((k) => n[k] === 0);
+    const bundle = (against.conduits ?? []).length > 1;
+    const r = bundle ? BESIDE_BUNDLE : BESIDE_CORE;
+    const arm = (v: Vec3): boolean => {
+      const s = DIRS.findIndex((x) => x[0] === v[0] && x[1] === v[1] && x[2] === v[2]);
+      return ((against.connections ?? 0) & (1 << s)) !== 0;
+    };
+    const unitOn = (k: number, sign: number): Vec3 => [0, 1, 2].map((j) => (j === k ? sign : 0)) as Vec3;
+    const edges = bundle ? [] : axes.flatMap((k) => [1, -1].map((sign) => unitOn(k, sign))).filter((v) => !arm(v));
+    const corners = [1, -1].flatMap((a) => [1, -1].map((b): Vec3 => {
+      const u = unitOn(axes[0]!, a), v = unitOn(axes[1]!, b);
+      return [u[0] + v[0], u[1] + v[1], u[2] + v[2]];
+    }));
+    const spots = [...edges, ...corners].filter((v) => n[1] !== 0 || v[1] >= 0);
+    const d: Vec3 = [toward[0] - pos[0], toward[1] - pos[1], toward[2] - pos[2]];
+    const way = (v: Vec3): number => (v[0] * d[0] + v[1] * d[1] + v[2] * d[2]) / (Math.hypot(...v) * (Math.hypot(...d) || 1));
+    /** Whether a whole block stands above `pos`'s top in a column next door toward `v` (along each of its axes, and both). */
+    const tall = (v: Vec3): boolean => [[v[0], 0], [0, v[2]], [v[0], v[2]]].some(([dx, dz]) => (dx !== 0 || dz !== 0) && [1, 2].some((up) => {
+      const j = at.get(posKey([pos[0] + dx!, pos[1] + up, pos[2] + dz!]));
+      return j !== undefined && !THIN_ROLES.has(blocks[j]!.role);
+    }));
+    const score = (v: Vec3): number => (n[1] === 0 ? (v[1] > 0 ? 2 : 0) : tall(v) ? -3 : 0) + way(v);
+    const best = spots.reduce((a, b) => (score(b) > score(a) + 1e-9 ? b : a));
+    const scale = r / Math.max(...best.map(Math.abs));
+    return best.map((v) => v * scale) as Vec3;
   };
-  /** Block `i`'s spot on face `side`, or none. */
-  const on = (i: number, side: number | undefined): ConnSpot | undefined => (side === undefined ? undefined : { cell: [...blocks[i]!.pos], side, face: null });
-  /** A multiblock's structure that block `i` is part of: the blocks of `among` joined to it face to face, and the box round them. */
-  const structures = new Map<number, { blocks: number[]; outside: (cell: Vec3) => boolean }>();
-  const structureOf = (i: number, among: readonly number[]): { blocks: number[]; outside: (cell: Vec3) => boolean } => {
+  /** Block `i`'s spot on the face `best` names (beside the thin block against it, if any), or none. */
+  const spotOn = (i: number, best: ReturnType<typeof bestSide>, toward: Vec3): ConnSpot | undefined => {
+    if (best === undefined) return undefined;
+    const spot: ConnSpot = { cell: [...blocks[i]!.pos], side: best.side, face: null };
+    if (best.rank !== OPEN && best.against !== undefined) spot.at = besideSpot(blocks[i]!.pos, best.side, toward, best.against);
+    return spot;
+  };
+  /** A multiblock's structure that block `i` of box `node` is part of: the box's blocks joined to it face to face, and the box round them. */
+  type Structure = { blocks: number[]; outside: (cell: Vec3) => boolean };
+  const structures = new Map<number, Structure>();
+  const structureOf = (i: number, node: ConnNode): Structure => {
     const known = structures.get(i);
     if (known !== undefined) return known;
-    const cells = new Map(among.map((j) => [posKey(blocks[j]!.pos), j]));
+    const cells = cellsOf(node);
     const joined = new Set([i]);
     for (const todo = [i]; todo.length > 0;) {
       const j = todo.pop()!;
@@ -678,7 +791,7 @@ export function connectionSpans(layout: Layout, g: ConnGraph): ConnSpan[] {
         }
       }
     }
-    const own = among.filter((j) => joined.has(j));
+    const own = node.blocks.filter((j) => joined.has(j));
     const low = [0, 1, 2].map((k) => Math.min(...own.map((j) => blocks[j]!.pos[k]!)));
     const high = [0, 1, 2].map((k) => Math.max(...own.map((j) => blocks[j]!.pos[k]!)));
     const found = { blocks: own, outside: (c: Vec3): boolean => c.some((v, k) => v < low[k]! || v > high[k]!) };
@@ -686,36 +799,50 @@ export function connectionSpans(layout: Layout, g: ConnGraph): ConnSpan[] {
     return found;
   };
   /**
-   * Where block `i` of box `node` ends link `e`, whose other end is at `toward`: on its face that shows best
-   * (`bestSide`). A multiblock (a machine box with casings or hatches) ends on its own structure, only on a face that
-   * looks out of the box round it (never into its hollow): a fluid on GT pipes on the hatch it goes through (under a
-   * pipe of the fluid's run that links down into it, the nearest to `i` first), else on block `i`, else on the open top
-   * of its highest block nearest to `i` (its top layer). With nothing showing, the top of block `i`.
+   * Where block `i` of box `node` ends link `e`, whose other end is at `toward`: an interface's link to what it serves
+   * on the side the two share, beside the interface when that is a cable or pipe (when a whole interface hides that
+   * side, a multiblock's on its roof); else on its face that shows best (`bestSide`, beside a thin block against it). A
+   * multiblock (a machine box with casings or hatches) ends on its own structure, only on a face that looks out of the
+   * box round it (never into its hollow): an item on the bus it goes through (the input bus into the box, the output
+   * bus out of it), a fluid on GT pipes on the hatch under a pipe of the fluid's run that links down into it, the
+   * nearest to `i` first; else on block `i`, each only on a face that does not look away from the other end; else on
+   * the open top of its highest block nearest to `i` (its top layer), from which an arc never has to climb back over
+   * the structure; else on the first face that looks away. With nothing showing, the top of block `i`.
    */
   const placed = (i: number, node: ConnNode, e: ConnEdge, toward: Vec3): ConnSpot => {
-    if (node.kind !== 'machine' || node.blocks.every((j) => blocks[j]!.role === 'machine')) return on(i, bestSide(i, toward)) ?? top(i);
     const p = blocks[i]!.pos;
-    const { blocks: own, outside } = structureOf(i, node.blocks);
+    const shared = e.via === 'attached' ? sideToward(p, toward) : -1;
+    const behind = shared > 1 && shows(p, shared, e).rank >= SOLID;
+    if (shared > 1 && !behind) return spotOn(i, { side: shared, ...shows(p, shared, e), total: 0 }, toward)!;
+    if (node.kind !== 'machine' || node.blocks.every((j) => blocks[j]!.role === 'machine')) return spotOn(i, bestSide(i, toward, e), toward) ?? top(i);
+    const { blocks: own, outside } = structureOf(i, node);
     const level = (j: number): number => Math.hypot(blocks[j]!.pos[0] - p[0], blocks[j]!.pos[2] - p[2]);
     const nearest = (a: number, b: number): number => level(a) - level(b) || Math.abs(blocks[a]!.pos[1] - p[1]) - Math.abs(blocks[b]!.pos[1] - p[1]) || a - b;
+    const tops = own.filter((j) => outside(step(blocks[j]!.pos, TOP)) && shows(blocks[j]!.pos, TOP, e).rank === OPEN);
+    const highest = Math.max(...tops.map((j) => blocks[j]!.pos[1]));
+    const roof = tops.filter((j) => blocks[j]!.pos[1] === highest).sort(nearest)[0];
+    // a block of a multiblock that a whole interface stands in front of: the roof, never round the structure
+    if (behind && roof !== undefined) return top(roof);
+    const through: number[] = [];
     if (e.via === 'fluid_pipe' && e.key !== null) {
       const run = `${FLUID_PIPE_STEP}${e.key}`;
-      const hatches = own.filter((j) => {
+      through.push(...own.filter((j) => {
         const above = at.get(posKey(step(blocks[j]!.pos, TOP)));
         const pipe = above === undefined ? undefined : blocks[above]!;
         return blocks[j]!.role === 'hatch' && pipe?.role === 'pipe' && pipe.buildStep === run && ((pipe.connections ?? 0) & (1 << BOTTOM)) !== 0;
-      }).sort(nearest);
-      for (const h of hatches) {
-        const spot = on(h, bestSide(h, toward, outside));
-        if (spot !== undefined) return spot;
-      }
+      }).sort(nearest));
+    } else if (e.key !== null && !isFluidKey(e.key)) {
+      const bus = e.to === node.id ? 'input_bus' : 'output_bus';
+      through.push(...own.filter((j) => blocks[j]!.hatch === bus).sort(nearest));
     }
-    const spot = on(i, bestSide(i, toward, outside));
-    if (spot !== undefined) return spot;
-    const tops = own.filter((j) => outside(step(blocks[j]!.pos, TOP)) && shows(blocks[j]!.pos, TOP) === 0);
-    const highest = Math.max(...tops.map((j) => blocks[j]!.pos[1]));
-    const roof = tops.filter((j) => blocks[j]!.pos[1] === highest).sort(nearest)[0];
-    return roof === undefined ? top(i) : top(roof);
+    let away: ConnSpot | undefined;
+    for (const h of [...through, i]) {
+      const best = bestSide(h, toward, e, outside);
+      const spot = spotOn(h, best, toward);
+      if (spot !== undefined && best!.total < AWAY) return spot;
+      away ??= spot;
+    }
+    return roof === undefined ? away ?? top(i) : top(roof);
   };
 
   const spans: ConnSpan[] = [];

@@ -11,6 +11,8 @@ import {
 } from '../../src/client/three/link-geometry.ts';
 // for the tests after the commit's own (the review of f9fe23e)
 import { LINK_RADIUS, linksSummary } from '../../src/client/three/link-geometry.ts';
+// for the tests after the commit's own (the review of f82c98c)
+import { linkTriangles, linkVertices, solidColumns } from '../../src/client/three/link-geometry.ts';
 import { dyeRgb } from '../../src/shared/layout/enderio.ts';
 import type { Vec3 } from '../../src/shared/layout/geometry.ts';
 import type { Layout, LayoutBlock } from '../../src/shared/types/layout.ts';
@@ -181,8 +183,8 @@ describe("the 3D view's connections", () => {
     const ms = performance.now() - started;
     expect(layout.blocks.length).toBeGreaterThan(1000);
     expect(spans).toHaveLength((steps - 1) * per);                    // 20 × 20 is past the cap: each machine once each way
-    expect(geo.positions).toHaveLength(spans.length * LINK_VERTICES * 3);
-    expect(geo.index).toHaveLength(spans.length * LINK_TRIANGLES * 3);
+    expect(geo.positions).toHaveLength(geo.links.at(-1)!.end * 3);
+    expect(geo.index.length / 3).toBe(geo.links.reduce((n, l) => n + linkTriangles(l.path.length - 1), 0));
     expect(ms).toBeLessThan(1000);
   });
 
@@ -196,8 +198,8 @@ describe("the 3D view's connections", () => {
     const geo = linkGeometry(spans, edges, layout.origin);
     expect(layout.blocks).toHaveLength(1920);
     expect(spans).toHaveLength((steps - 1) * per);                    // 16 × 16 is past the cap: each machine once each way
-    expect(geo.positions.length / 3).toBeLessThan(60_000);            // 944 pieces of 57 vertices
-    expect(geo.index.length / 3).toBeLessThan(110_000);               // and of 106 triangles
+    expect(geo.positions.length / 3).toBeLessThan(80_000);            // 944 pieces of 57 vertices or more
+    expect(geo.index.length / 3).toBeLessThan(150_000);               // and of 106 triangles or more
     // each machine with each, as a denser drawing would be: 15,104 pieces, yet a pick stays far under a frame
     const top = (x: number) => ({ cell: [x, 64, 0] as Vec3, side: 1, face: null });
     const dense = g.edges.flatMap((e, s) => Array.from({ length: per * per }, (_, k): ConnSpan =>
@@ -294,5 +296,121 @@ describe("the 3D view's connections between the same two faces", () => {
     const onLow = above(middle(low.path));                           // on the low link 10 blocks on, past the other at 9
     expect(pickLink([low, aside], onLow, down, () => 0.4)!.link).toBe(0);
     expect(pickLink([low, aside], onLow, down, () => 0.4, () => true, 9.5)).toEqual({ link: 1, t: expect.closeTo(9, 1) });
+  });
+});
+
+// The review of f82c98c: fans that stay out of the blocks they join, arcs that clear the line's solid blocks, and long
+// arcs drawn smooth.
+describe("the 3D view's connections, readable on real lines", () => {
+  const GT = (mteId: number) => ({ id: 'gregtech:gt.blockmachines', meta: 0, mteId });
+  const machine = (pos: Vec3): LayoutBlock => ({ pos, block: GT(2001), role: 'machine', facing: 3, stepId: 'a', label: 'Machine' });
+  const casing = (pos: Vec3): LayoutBlock => ({ pos, block: { id: 'gregtech:gt.blockcasings', meta: 11 }, role: 'casing', label: 'Casing' });
+  const spot = (cell: Vec3, side: number): ConnSpan['from'] => ({ cell, side, face: null });
+  const { layout: fixture, edges } = line('direct');
+  const edge = 'flow:step:a>step:b:t:dust@0';
+  const middle = (path: readonly Vec3[]): Vec3 => path[(path.length - 1) / 2]!;
+  /** Every point of a drawn centre line, eight between each two of its points. */
+  const samples = (path: readonly Vec3[]): Vec3[] => path.slice(1).flatMap((b, i) => Array.from({ length: 8 }, (_, k): Vec3 => {
+    const a = path[i]!, f = k / 8;
+    return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
+  }));
+  /** The samples of a drawn link inside a solid block of `layout` (scene coordinates from origin 0 64 0). */
+  const inside = (layout: Layout, path: readonly Vec3[]): Vec3[] => {
+    const solid = new Set(layout.blocks.filter((b) => b.role !== 'ghost' && !['cable', 'pipe', 'chip_pipe'].includes(b.role))
+      .map((b) => `${b.pos[0]},${b.pos[1] - 64},${b.pos[2]}`));
+    return samples(path).filter((p) => solid.has(`${Math.floor(p[0])},${Math.floor(p[1])},${Math.floor(p[2])}`));
+  };
+
+  it('fans links between two tops out level, centred on where one alone goes, a gap apart that shrinks in a big group', () => {
+    const alone = middle(linkGeometry([{ edge, from: spot([0, 64, 0], 1), to: spot([3, 64, 0], 1) }], edges, fixture.origin).links[0]!.path);
+    for (const n of [2, 5, 13]) {
+      const spans = Array.from({ length: n }, (): ConnSpan => ({ edge, from: spot([0, 64, 0], 1), to: spot([3, 64, 0], 1) }));
+      const middles = linkGeometry(spans, edges, fixture.origin).links.map((l) => middle(l.path));
+      // level, across the line between the two ends (along z), centred
+      for (const m of middles) close([m[0], m[1]], [alone[0], alone[1]], 6);
+      close(mean(middles), alone, 6);
+      const gaps = middles.slice(1).map((m, k) => m[2] - middles[k]![2]);
+      for (const gap of gaps) expect(gap).toBeCloseTo(Math.max(0.12, Math.min(0.3, 1.2 / (n - 1))), 6);
+      expect(middles.at(-1)![2] - middles[0]![2]).toBeLessThanOrEqual(1.44 + 1e-9);
+    }
+  });
+
+  it('fans links between sides that look along the fan out of both faces, and between sides that look either way upward', () => {
+    // both south faces: the fan goes south only, never back into the blocks
+    const same = Array.from({ length: 4 }, (): ConnSpan => ({ edge, from: spot([0, 64, 0], 3), to: spot([3, 64, 0], 3) }));
+    const alone = middle(linkGeometry([same[0]!], edges, fixture.origin).links[0]!.path);
+    const out = linkGeometry(same, edges, fixture.origin).links.map((l) => middle(l.path));
+    close(out[0]!, alone, 6);
+    out.slice(1).forEach((m, k) => {
+      expect(m[2]).toBeGreaterThan(out[k]![2] + 0.12);
+      close([m[0], m[1]], [alone[0], alone[1]], 6);
+    });
+    // a south face and a north face across from it: the fan rises, each link above the one before
+    const across = Array.from({ length: 4 }, (): ConnSpan => ({ edge, from: spot([0, 64, 0], 3), to: spot([1, 64, 2], 2) }));
+    const up = linkGeometry(across, edges, fixture.origin).links.map((l) => middle(l.path));
+    up.slice(1).forEach((m, k) => {
+      expect(m[1]).toBeCloseTo(up[k]![1] + 0.3, 6);
+      close([m[0], m[2]], [up[0]![0], up[0]![2]], 6);
+    });
+    // and a link coming back between the same two faces is one of the same fan
+    const back = linkGeometry([across[0]!, { edge, from: across[0]!.to, to: across[0]!.from }], edges, fixture.origin).links.map((l) => middle(l.path));
+    expect(back[1]![1] - back[0]![1]).toBeCloseTo(0.3, 6);
+  });
+
+  it('rises clear of the solid blocks between its ends, steeply only next to them, and only when told what they are', () => {
+    // a tower of four casings between two machines' tops, and one right beside the first of two machines far apart
+    const tower = (x: number): LayoutBlock[] => [64, 65, 66, 67].map((y) => casing([x, y, 0]));
+    const layout: Layout = { ...fixture, size: [15, 4, 1], blocks: [machine([0, 64, 0]), ...tower(2), machine([4, 64, 0]), machine([7, 64, 0]), ...tower(8), machine([14, 64, 0])] };
+    const over: ConnSpan = { edge, from: spot([0, 64, 0], 1), to: spot([4, 64, 0], 1) };
+    const beside: ConnSpan = { edge, from: spot([7, 64, 0], 1), to: spot([14, 64, 0], 1) };
+    const plain = linkGeometry([over, beside], edges, layout.origin).links;
+    expect(plain.map((l) => inside(layout, l.path).length > 0)).toEqual([true, true]);
+    const clear = linkGeometry([over, beside], edges, layout.origin, { solid: solidColumns(layout) }).links;
+    expect(clear.map((l) => inside(layout, l.path))).toEqual([[], []]);
+    // over the tower half a block clear of its top (4 from the origin)
+    const above = samples(clear[0]!.path).filter((p) => p[0] >= 2 && p[0] < 3);
+    expect(Math.min(...above.map((p) => p[1]))).toBeGreaterThanOrEqual(4.5 - 1e-9);
+    // beside it: the climb is all at the tower's end, so the arc is highest in its first half
+    const path = clear[1]!.path;
+    const top = path.reduce((k, p, i) => (p[1] > path[k]![1] ? i : k), 0);
+    expect(top).toBeLessThan((path.length - 1) / 2);
+    expect(solidColumns(layout).get('2,0')).toBe(4);
+    expect(solidColumns(layout).has('1,0')).toBe(false);
+  });
+
+  it('comes down to a chest beside a tall multiblock without passing through it', () => {
+    // an EBF-sized block of casings (3 × 4 × 3), a chest beside its corner, a machine further off, and a link from the
+    // machine to each face of the chest that shows
+    const ebf = [0, 1, 2].flatMap((x) => [0, 1, 2].flatMap((z) => [64, 65, 66, 67].map((y) => casing([x, y, z]))));
+    const layout: Layout = { ...fixture, size: [9, 4, 5], blocks: [...ebf, { ...machine([3, 64, 0]), role: 'chest', label: 'Chest' }, machine([8, 64, 4])] };
+    const solid = solidColumns(layout);
+    for (const side of [1, 2, 3, 5]) {
+      for (const [from, to] of [[spot([8, 64, 4], 1), spot([3, 64, 0], side)], [spot([3, 64, 0], side), spot([8, 64, 4], 4)]] as const) {
+        const [link] = linkGeometry([{ edge, from, to }], edges, layout.origin, { solid }).links;
+        expect(inside(layout, link!.path), `side ${side}`).toEqual([]);
+      }
+    }
+  });
+
+  it('draws a long arc with more straight pieces than a short one, its arrowhead on its middle point', () => {
+    const lengths = [3, 30, 60, 300];
+    const geo = linkGeometry(lengths.map((x): ConnSpan => ({ edge, from: spot([0, 64, 0], 1), to: spot([x, 64, 0], 1) })), edges, fixture.origin);
+    const segments = geo.links.map((l) => l.path.length - 1);
+    expect(segments[0]).toBe(12);
+    expect(segments[1]).toBeGreaterThan(24);
+    expect(segments.slice(2)).toEqual([48, 48]);
+    for (const n of segments) expect(n % 2).toBe(0);
+    // one link after the other: each its own vertices and triangles, the arrowhead's tip last, its middle on the line's
+    let triangle = 0;
+    geo.links.forEach((l, k) => {
+      const n = l.path.length - 1;
+      expect([l.start, l.end - l.start]).toEqual([k === 0 ? 0 : geo.links[k - 1]!.end, linkVertices(n)]);
+      const own = [...geo.index.slice(triangle * 3, (triangle + linkTriangles(n)) * 3)];
+      expect([Math.min(...own), Math.max(...own)]).toEqual([l.start, l.end - 1]);
+      triangle += linkTriangles(n);
+      const base = mean([0, 1, 2, 3].map((i) => at(geo.positions, l.start + (n + 1) * RING + i)));
+      close(mean([at(geo.positions, l.end - 1), base]), middle(l.path), 3);
+    });
+    expect(triangle * 3).toBe(geo.index.length);
   });
 });

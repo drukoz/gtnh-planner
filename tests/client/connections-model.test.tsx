@@ -3,6 +3,8 @@ import ELK from 'elkjs/lib/elk.bundled.js';
 import { connectionsElk, connectionsFromElk, connectionsGraph, faceModeText, pickDetails } from '../../src/client/connections/model.ts';
 // for the tests after the plan's own: the links in the world (the user's requirements of 2026-10-19, item 3 (b))
 import { connectionSpans, spanDetails } from '../../src/client/connections/model.ts';
+// for the tests after the commit's own (the review of f82c98c)
+import { DIRS, posKey, step } from '../../src/shared/layout/geometry.ts';
 import type { ConduitFace, Layout, LayoutBlock } from '../../src/shared/types/layout.ts';
 import type { Plan } from '../../src/shared/types/plan.ts';
 import { connLayout, connPlan } from './connections-fixture.ts';
@@ -170,7 +172,8 @@ describe('the Connections links in the world', () => {
     expect(brief('direct')).toEqual([
       'flow:chest:2,64,0>step:a:t:in@0: 2 64 0 1 > 0 64 0 1', 'flow:step:a>step:b:t:dust@0: 0 64 0 1 > 1 64 0 1',
       'flow:step:b>chest:2,64,2:t:ingot@0: 1 64 0 1 > 2 64 2 1']);
-    expect(brief('routed').slice(3)).toEqual(['attach:iface:0,64,1>step:a: 0 64 1 1 > 0 64 0 1', 'attach:iface:1,64,1>step:b: 1 64 1 1 > 1 64 0 1']);
+    // an interface pipe's link to what it serves ends on the side the two share, beside the pipe's arm
+    expect(brief('routed').slice(3)).toEqual(['attach:iface:0,64,1>step:a: 0 64 1 1 > 0 64 0 3', 'attach:iface:1,64,1>step:b: 1 64 1 1 > 1 64 0 3']);
     // an AE2 line's raw inputs and final outputs are the base's ME network, which comes in at the hookup's cable; the
     // hookup's own link would start and end there, so it is left out
     expect(brief('ae2')).toEqual([
@@ -221,22 +224,76 @@ describe('the Connections links in the world', () => {
     expect(pieces(16, 16)).toHaveLength(16);
   });
 
-  // the review of f9fe23e: a link's end never hides under another block
-  it('ends a link on the first free face of its block: the top, else the side most toward the other end, else another side', () => {
+  // the review of f9fe23e: a link's end never hides under another block; the review of f82c98c: when every face is
+  // hidden, beside a cable or pipe against it rather than inside it, and not on a side that looks away
+  it('ends a link on the face of its block that shows best: open, the top first, else beside a cable or pipe, never facing away', () => {
     const stone = (pos: [number, number, number]): LayoutBlock => ({ pos, block: { id: 'minecraft:stone', meta: 0 }, role: 'casing', label: 'Stone' });
-    const ends = (...covers: Array<[number, number, number]>) => {
+    const spans = (...covers: Array<[number, number, number]>) => {
       const layout = connLayout('direct');
       layout.blocks.push(...covers.map(stone));
-      return connectionSpans(layout, connectionsGraph(layout, connPlan, 'min')).map((s) => `${s.from.cell.join(' ')} ${s.from.side} > ${s.to.cell.join(' ')} ${s.to.side}`);
+      return connectionSpans(layout, connectionsGraph(layout, connPlan, 'min'));
     };
+    const ends = (...covers: Array<[number, number, number]>) => spans(...covers).map((s) => `${s.from.cell.join(' ')} ${s.from.side} > ${s.to.cell.join(' ')} ${s.to.side}`);
     // the input chest's top covered: toward the macerator (west) stands the assembler, so the raw input leaves north
     expect(ends([2, 65, 0])[0]).toBe('2 64 0 2 > 0 64 0 1');
-    // north covered too: south is the pipe, so east, though it faces away
-    expect(ends([2, 65, 0], [2, 64, -1])[0]).toBe('2 64 0 5 > 0 64 0 1');
-    // nothing free but the bottom: the top after all
-    expect(ends([2, 65, 0], [2, 64, -1], [3, 64, 0])[0]).toBe('2 64 0 1 > 0 64 0 1');
-    // the output chest's top covered: north is the pipe, so west, the next most toward the assembler
+    expect(spans([2, 65, 0])[0]!.from.at).toBeUndefined();
+    // north covered too: south, beside the item pipe that links into the chest (its arm on the face's middle, its arm
+    // west along the row), at the face's upper corner toward the macerator; not east, which looks away from it
+    for (const covered of [[[2, 65, 0], [2, 64, -1]], [[2, 65, 0], [2, 64, -1], [3, 64, 0]]] as Array<Array<[number, number, number]>>) {
+      const [raw] = spans(...covered);
+      expect([raw!.from.cell, raw!.from.side, raw!.from.at]).toEqual([[2, 64, 0], 3, [-5 / 16, 5 / 16, 0]]);
+    }
+    // the output chest's top covered: north is the pipe, so west, the next most toward the assembler, which shows
     expect(ends([2, 65, 2])[2]).toBe('1 64 0 1 > 2 64 2 4');
+  });
+
+  it('ends the links of a row of machines walled in on every side beside the item pipe or the fluid pipe, never inside them', () => {
+    // the review of f82c98c: four machines side by side, a fluid pipe on top of each linking down into it, a cable
+    // behind and the item pipe in front linking into each: every face is hidden, and the fallback put every end on a
+    // top, under the fluid pipe, so the arcs rose through its core
+    const bit = (side: number) => 1 << side;
+    const GT = (mteId: number) => ({ id: 'gregtech:gt.blockmachines', meta: 0, mteId });
+    const row = [0, 1, 2, 3];
+    const last = row.length - 1;
+    const along = (x: number) => (x > 0 ? bit(4) : 0) | (x < last ? bit(5) : 0);
+    const blocks: LayoutBlock[] = row.flatMap((x): LayoutBlock[] => [
+      { pos: [x, 64, 0], block: GT(2001), role: 'machine', facing: 3, stepId: x < 2 ? 'a' : 'b', label: 'Machine' },
+      { pos: [x, 65, 0], block: GT(5110), role: 'pipe', label: 'Small Bronze Fluid Pipe (Water)', connections: bit(0) | along(x) | (x === 0 ? bit(4) : 0),
+        buildStep: 'layout:logistics:fluid:fluid:water' },
+      { pos: [x, 64, -1], block: GT(1246), role: 'cable', label: '1x Tin Cable', connections: bit(3) | along(x), buildStep: 'layout:power:wire:1' },
+      { pos: [x, 64, 1], block: GT(5600), role: 'pipe', label: 'Tin Item Pipe', connections: bit(2) | along(x), buildStep: 'layout:logistics:line' },
+    ]);
+    // the fluid pipe's run comes in from the west, where your tank goes; the row's two ends are walled in too
+    blocks.push({ pos: [-1, 65, 0], block: GT(5110), role: 'pipe', label: 'Small Bronze Fluid Pipe (Water)', connections: bit(5),
+      buildStep: 'layout:logistics:fluid:fluid:water' });
+    for (const x of [-1, row.length]) blocks.push({ pos: [x, 64, 0], block: { id: 'minecraft:stone', meta: 0 }, role: 'casing', label: 'Stone' });
+    const layout: Layout = { ...connLayout('direct'), size: [5, 2, 3], blocks };
+    const plan: Plan = { ...connPlan, flows: [{ from: 'raw', to: 'a', key: 'fluid:water', perSecond: 1 }, { from: 'a', to: 'b', key: 't:dust@0', perSecond: 1 }] };
+    const g = connectionsGraph(layout, plan, 'min');
+    const spans = connectionSpans(layout, g);
+    const at = new Map(blocks.map((b) => [posKey(b.pos), b]));
+    const machineEnds = spans.flatMap((s) => [s.from, s.to].map((end) => ({ s, end }))).filter(({ end }) => at.get(posKey(end.cell))?.role === 'machine');
+    expect(machineEnds.length).toBeGreaterThan(4);
+    for (const { s, end } of machineEnds) {
+      const against = at.get(posKey(step(end.cell, end.side)))!;
+      // never the bottom, never under a whole block; an item beside the item pipe (never the fluid pipe), a fluid
+      // beside its own pipe
+      expect([end.side === 0, against?.label], s.edge).toEqual([false, s.edge.endsWith('fluid:water') ? 'Small Bronze Fluid Pipe (Water)' : 'Tin Item Pipe']);
+      // beside the pipe's 6 px core and every arm, by more than a tube's radius
+      const axes = [0, 1, 2].filter((k) => DIRS[end.side]![k] === 0);
+      const off = end.at!;
+      expect(off, s.edge).toBeDefined();
+      expect(Math.max(...axes.map((k) => Math.abs(off[k]!))), s.edge).toBeGreaterThan(3 / 16 + 0.05);
+      for (const k of axes) {
+        for (const sign of [1, -1]) {
+          const arm = DIRS.findIndex((d) => d[k] === sign && d.every((v, j) => j === k || v === 0));
+          const across = axes.find((j) => j !== k)!;
+          if ((against.connections! & bit(arm)) !== 0 && sign * off[k]! > 0) expect(Math.abs(off[across]!), `${s.edge} arm ${arm}`).toBeGreaterThan(3 / 16 + 0.05);
+        }
+      }
+      // on a side never below its middle, out of which an arc would rise through the arm into the face
+      if (end.side > 1) expect(off[1]!).toBeGreaterThanOrEqual(0);
+    }
   });
 
   it('tells a piece of a link without faces what the link tells', () => {

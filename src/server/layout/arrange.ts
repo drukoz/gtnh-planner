@@ -11,7 +11,7 @@
 
 import { isFluidKey, itemKey, type ItemKey, type StuffKey } from '../../shared/keys.ts';
 import { OPPOSITE, posKey, step, type Vec3 } from '../../shared/layout/geometry.ts';
-import type { BlockRole, ConduitSpec, CoverSpec, TailChest } from '../../shared/types/layout.ts';
+import type { BlockRole, ConduitSpec, CoverSpec, HatchKind, TailChest } from '../../shared/types/layout.ts';
 import type { BlockRef, Machine, Pack, Product } from '../../shared/types/pack.ts';
 import type { BomLine, Plan, PlanStep, PlanWarning } from '../../shared/types/plan.ts';
 import { UNKNOWN_BLOCK } from '../../shared/types/world.ts';
@@ -32,13 +32,15 @@ export interface LocalBlock {
   conduits?: ConduitSpec[];
   /** Set on the tail's input and output chests (`LayoutBlock.tail`). */
   tail?: TailChest;
+  /** What a hatch the line chose for a multiblock is for (`LayoutBlock.hatch`). */
+  hatch?: HatchKind;
 }
 /** A cover for the block at `pos` (Tasks 6–8). */
 export interface HostCover { pos: Vec3; cover: CoverSpec }
 /** Settings for the block at `pos` (Tasks 7–8). */
 export interface HostConfig { pos: Vec3; config: BlockConfig }
 
-export type HatchKind = 'energy' | 'input_bus' | 'output_bus' | 'input_hatch' | 'output_hatch' | 'maintenance';
+export type { HatchKind } from '../../shared/types/layout.ts';
 
 /** What a step moves in and out; fluid keys sorted. */
 export interface StepIo { itemIn: boolean; itemOut: boolean; fluidIn: StuffKey[]; fluidOut: StuffKey[] }
@@ -528,7 +530,7 @@ export function placeUnits(units: readonly Unit[], opts: { headWidth: number; po
       blocks.push({
         pos: localCell(u, row, x, spineZ, c.pos), block: { ...c.block }, role: c.role, ...(facing === undefined ? {} : { facing }),
         ...(c.role === 'machine' && mainFacing !== undefined ? { mainFacing } : {}),
-        stepId: u.stepId, label: c.label, ...(c.item === undefined ? {} : { item: c.item }),
+        stepId: u.stepId, label: c.label, ...(c.item === undefined ? {} : { item: c.item }), ...(c.hatch === undefined ? {} : { hatch: c.hatch }),
         ...(c.config === undefined ? {} : { config: { ...c.config } }),
       });
     }
