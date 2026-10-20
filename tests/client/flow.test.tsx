@@ -11,6 +11,7 @@ import { formatNumber as sharedNumber, formatRate as sharedRate } from '../../sr
 import { FlowView, FlowNodeShape, FlowIssues, FlowLegend } from '../../src/client/views/FlowView.tsx';
 import { StepPanel } from '../../src/client/views/StepPanel.tsx';
 import { defaultSettings } from '../../src/shared/project/apply-op.ts';
+import { settingsHash } from '../../src/shared/project/settings-hash.ts';
 import { PROJECT_TABS } from '../../src/client/views/project-tabs.ts';
 import type { Product } from '../../src/shared/types/pack.ts';
 import type { LeafClass, Plan, PlanFlow, PlanSettings, PlanStep, RawInput } from '../../src/shared/types/plan.ts';
@@ -163,6 +164,8 @@ const per = (key: string, amount: number): Product => ({ key, amount, chance: 1 
 const flow = (from: string, to: string, key: string, perSecond: number): PlanFlow => ({ from, to, key, perSecond });
 const raw = (key: string, perSecond: number, leafClass: LeafClass): RawInput => ({ key, perSecond, cost: perSecond, available: true, sources: [], leafClass });
 const S = (p: Partial<PlanSettings> = {}): PlanSettings => ({ ...defaultSettings(), ...p });
+/** `p` as the plan of `s` (its `settingsHash`): the replan for those settings has arrived. */
+const planFor = (p: Plan, s: PlanSettings): Plan => ({ ...p, settingsHash: settingsHash(s) });
 const planOf = (p: Partial<Plan>): Plan => ({
   settingsHash: 'h', exportId: 'e', tier: 2, reachable: [], unlocks: [], steps: [], flows: [], rawInputs: [], byproducts: [],
   power: { peakEUt: 0, averageEUt: 0, voltageTier: 2, amps: 0 }, buildList: [], buildSteps: [], warnings: [], status: 'ok', ...p,
@@ -537,17 +540,19 @@ describe('flow diagram: what it renders (fix spec §6.2)', () => {
     // The review of the follow-up: on PTFE HV the same Keep only came back after it was clicked. With the pin in place it
     // would change nothing: no button, and the line says what stays.
     const pinned = S({ recipeChoice: { [H_CELL]: 'water' } });
-    const [after] = flowIssueLines(cells, undefined, pinned);
+    const [after] = flowIssueLines(planFor(cells, pinned), undefined, pinned);
     expect(after?.keepOnly).toBeUndefined();
     expect(after?.stays).toBe('Advanced Electrolyzer II on Water is pinned for Hydrogen Cell: the 3% still comes from the Advanced Electrolyzer II on Salt Water, which the line runs for Chlorine.');
-    expect(findAll(FlowIssues({ plan: cells, settings: pinned, send: vi.fn(), onShow: vi.fn() }), (e) => e.type === 'button' && childText(e).startsWith('Keep only'))).toEqual([]);
+    expect(findAll(FlowIssues({ plan: planFor(cells, pinned), settings: pinned, send: vi.fn(), onShow: vi.fn() }), (e) => e.type === 'button' && childText(e).startsWith('Keep only'))).toEqual([]);
     // A pin of the smaller maker's recipe is in place too: Keep only would only move it (a replan can make the pinned
     // maker the smaller one: Robot Arm (MV) at HV, Hydrochloric Acid).
-    const [moved] = flowIssueLines(cells, undefined, S({ recipeChoice: { [H_CELL]: 'brine' } }));
+    const brine = S({ recipeChoice: { [H_CELL]: 'brine' } });
+    const [moved] = flowIssueLines(planFor(cells, brine), undefined, brine);
     expect(moved?.keepOnly).toBeUndefined();
     expect(moved?.stays).toBe('Advanced Electrolyzer II on Salt Water is pinned for Hydrogen Cell: the 97% still comes from the Advanced Electrolyzer II on Water.');
     // A pin of a recipe no maker runs (the plan does not honour it) is not in place.
-    expect(flowIssueLines(cells, undefined, S({ recipeChoice: { [H_CELL]: 'gone' } }))[0]?.keepOnly).toEqual({ recipeId: 'water', machine: 'Advanced Electrolyzer II on Water' });
+    const gone = S({ recipeChoice: { [H_CELL]: 'gone' } });
+    expect(flowIssueLines(planFor(cells, gone), undefined, gone)[0]?.keepOnly).toEqual({ recipeId: 'water', machine: 'Advanced Electrolyzer II on Water' });
     // A third maker the pin would remove: the note says only what it may leave.
     const three = {
       ...cells,
@@ -557,13 +562,27 @@ describe('flow diagram: what it renders (fix spec §6.2)', () => {
     const [partial] = flowIssueLines(three, undefined, S());
     expect(partial?.keepOnly).toEqual({ recipeId: 'water', machine: 'Advanced Electrolyzer II on Water' });
     expect(partial?.stays).toBe('Keep only may still leave the 3% from the Advanced Electrolyzer II on Salt Water, which the line runs for Chlorine.');
-    expect(flowIssueLines(three, undefined, pinned)[0]?.stays)
+    expect(flowIssueLines(planFor(three, pinned), undefined, pinned)[0]?.stays)
       .toBe('Advanced Electrolyzer II on Water is pinned for Hydrogen Cell: the 3% still comes from the Advanced Electrolyzer II on Salt Water, which the line runs for Chlorine; the 1.0% still comes from Cell Press.');
     // The board's saw only leaves its dust over: Keep only removes it, and there is nothing to add; pinned, it says so.
     expect(flowIssueLines(board).find((l) => l.issue.code === 'multi-producer')).toMatchObject({ keepOnly: { recipeId: 'solid', machine: 'Fluid Solidifier' } });
     expect(flowIssueLines(board).find((l) => l.issue.code === 'multi-producer')?.stays).toBeUndefined();
-    expect(flowIssueLines(board, undefined, S({ recipeChoice: { [PLATE]: 'solid' } })).find((l) => l.issue.code === 'multi-producer'))
+    const solid = S({ recipeChoice: { [PLATE]: 'solid' } });
+    expect(flowIssueLines(planFor(board, solid), undefined, solid).find((l) => l.issue.code === 'multi-producer'))
       .toMatchObject({ stays: 'Fluid Solidifier is pinned for Copper Plate: the 2% still comes from Cutting Machine.' });
+    // Review of the follow-ups: Keep only changes the settings at once, but the plan on screen stays the one before the pin
+    // until the replan arrives (1 to 5 s), and from it the line read "… is pinned for Hydrogen Cell: the 3% still comes
+    // from …" before any plan had the pin. The pin is set: until the plan of those settings arrives, the line says so.
+    const before = planFor(cells, S());
+    for (const waiting of [flowIssueLines(before, undefined, pinned)[0], flowIssueLines(before, undefined, brine)[0], flowIssueLines(before, undefined, gone)[0]]) {
+      expect(waiting).toMatchObject({ text: 'Hydrogen Cell is made 2 ways: Advanced Electrolyzer II (97%) and Advanced Electrolyzer II (3%).', stays: 'Updating…' });
+      expect(waiting?.keepOnly).toBeUndefined();
+    }
+    const box = FlowIssues({ plan: before, settings: pinned, send: vi.fn(), onShow: vi.fn() });
+    expect(findAll(box, (e) => e.type === 'button').map(childText)).toEqual(['Show']);
+    expect(text(renderToStaticMarkup(<FlowIssues plan={before} settings={pinned} send={() => {}} onShow={() => {}} />))).toContain('(3%). Updating…Show');
+    // Without a pin the line offers Keep only whatever plan is on screen, and the plan of the pin decides as above.
+    expect(flowIssueLines(before, undefined, S())[0]?.keepOnly).toEqual({ recipeId: 'water', machine: 'Advanced Electrolyzer II on Water' });
   });
   it('says Keep only may not take out a step that empties the containers another step fills', () => {
     // A canner empties the Oxygen Cells a compressor fills (the walk adds such an emptier beside whatever makes the
@@ -590,7 +609,8 @@ describe('flow diagram: what it renders (fix spec §6.2)', () => {
     expect(line?.text).toBe('Oxygen is made 2 ways: Electrolyzer (99%) and Canning Machine (1%).');
     expect(line?.keepOnly).toEqual({ recipeId: 'electrolyze', machine: 'Electrolyzer' });
     expect(line?.stays).toBe('Keep only may not change this: the 1% comes from Canning Machine, which empties the Oxygen Cell the line makes.');
-    expect(flowIssueLines(oxygen, undefined, S({ recipeChoice: { 'fluid:oxygen': 'electrolyze' } }))[0]?.stays)
+    const electrolyze = S({ recipeChoice: { 'fluid:oxygen': 'electrolyze' } });
+    expect(flowIssueLines(planFor(oxygen, electrolyze), undefined, electrolyze)[0]?.stays)
       .toBe('Electrolyzer is pinned for Oxygen: the 1% still comes from Canning Machine, which empties the Oxygen Cell the line makes.');
   });
   it('explains every kind of box in the legend', () => {

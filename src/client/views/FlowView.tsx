@@ -300,7 +300,8 @@ export function FlowLegend(): ReactElement {
  * What does not add up, above the diagram (fix spec §6.2 "Issues"): red with an input nothing supplies, amber
  * otherwise; one line per issue with **Show** (lights the good and centres its first producer) and, for a good made two
  * ways, **Keep only <the bigger maker>** (pins its recipe for the good) until `settings` pin it, with a note on what the
- * pin may leave or, once in place, leaves (`FlowIssueLine.stays`). No hooks, so tests can call it.
+ * pin may leave or, once in place, leaves (`FlowIssueLine.stays`; "Updating…" until the plan of the pin is on screen).
+ * No hooks, so tests can call it.
  */
 export function FlowIssues(props: {
   plan: Plan; settings: PlanSettings; send: ProjectViewProps['send']; onShow(key: StuffKey): void; index?: PlanIndex;

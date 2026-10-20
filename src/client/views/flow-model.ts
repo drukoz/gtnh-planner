@@ -13,6 +13,7 @@ import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import { TIER_NAMES, V } from '../../shared/gt/tiers.ts';
 import { joinNames } from '../../shared/layout/format.ts';
 import { indexPlan, issueText, type PlanIndex, type PlanIssue, type PlanIssueCode } from '../../shared/plan/balance.ts';
+import { settingsHash } from '../../shared/project/settings-hash.ts';
 import { FREE_KEYS, type LeafClass, type Plan, type PlanFlow, type PlanSettings, type PlanStep, type PlanWarning } from '../../shared/types/plan.ts';
 import { formatDuration, formatNumber, formatPercent, formatRate } from '../format.ts';
 import { toggleList } from './settings-model.ts';
@@ -912,7 +913,7 @@ export function problemId(p: { code: string; key?: StuffKey | undefined; stepId?
 /**
  * One line of the issues box above the diagram: the issue, its words, and for a good made two ways the bigger maker,
  * whose recipe "Keep only" pins (`machine`: how the button names it), and a note in plain words (`stays`) on what that
- * pin may leave in the plan or, once it is in place, does leave.
+ * pin may leave in the plan or, once it is in place, does leave ("Updating…" until the plan of the pin is on screen).
  */
 export interface FlowIssueLine { issue: PlanIssue; text: string; keepOnly?: { recipeId: string; machine: string }; stays?: string }
 
@@ -965,13 +966,18 @@ function makerNames(plan: Plan, makers: readonly PlanStep[]): Map<string, { name
  * What does not add up (fix spec §6.2 "Issues"), most serious first: each issue in the server's words when the plan
  * carries them, else `issueText`'s; a good made two ways also names the step that makes most of it, whose recipe
  * "Keep only" pins, and a note on the other makers the walk may keep for something else (`keptBy`: "may not change
- * this", "may still leave"). Once `settings` pin the recipe of one of its makers for the good (Keep only, or the step
- * panel's "Use only this recipe") and the issue is still there, the pin is in place: the line offers no Keep only, which
- * would change nothing or only move the pin, and says which makers stay.
+ * this", "may still leave"). Once `settings` pin a recipe for the good (Keep only, or the step panel's "Use only this
+ * recipe"), the line offers no Keep only until the plan of those settings is on screen (its `settingsHash`; the plan of
+ * the settings before stays up for the 1 to 5 s of the replan, review of the plan 09 follow-ups) and says "Updating…".
+ * Then, with the pinned recipe one of the makers and the issue still there, the pin is in place: no Keep only, which
+ * would change nothing or only move the pin, and the line says which makers stay.
  */
 export function flowIssueLines(plan: Plan, index: PlanIndex = indexPlan(plan), settings?: PlanSettings): FlowIssueLine[] {
   const served = new Map(plan.warnings.map((w) => [problemId(w), w.text]));
   const steps = new Map(plan.steps.map((s) => [s.id, s]));
+  /** Whether the plan on screen is the plan of `settings`, worked out once, when a pinned good asks. */
+  let current: boolean | undefined;
+  const isCurrent = (s: PlanSettings): boolean => (current ??= plan.settingsHash === settingsHash(s));
   return [...index.issues].sort((a, b) => ISSUE_ORDER.indexOf(a.code) - ISSUE_ORDER.indexOf(b.code)).map((issue) => {
     const line: FlowIssueLine = { issue, text: served.get(problemId(issue)) ?? issueText(issue, plan) };
     if (issue.code !== 'multi-producer') return line;
@@ -984,6 +990,10 @@ export function flowIssueLines(plan: Plan, index: PlanIndex = indexPlan(plan), s
     const names = makerNames(plan, makers.map((m) => m.step));
     const nameOf = (step: PlanStep): { name: string; the: string } => names.get(step.id) ?? { name: step.machine.name, the: step.machine.name };
     const pin = settings?.recipeChoice?.[issue.key];
+    if (pin !== undefined && settings !== undefined && !isCurrent(settings)) {
+      line.stays = 'Updating…';
+      return line;
+    }
     const held = pin === undefined ? undefined : makers.find((m) => m.step.recipeId === pin);
     if (held !== undefined) {
       const stay = makers.filter((m) => m !== held).map((m) => {

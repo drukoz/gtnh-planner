@@ -717,13 +717,17 @@ issue texts. `MaterialsView.quantity()` loses its rate branch; counts of things 
   Chlorine." ("Keep only may still leave …" when only some other makers are such) and still offers Keep only. Once
   `recipeChoice` pins the recipe of one of the good's makers and the issue is still there, the pin is in place: the box
   offers no Keep only (it would change nothing, or only move the pin) and says "Advanced Electrolyzer II on Water is
-  pinned for Hydrogen Cell: the 2% still comes from …". Makers that share a machine are named by the input that sets
-  them apart, else the output, in the notes and on the button. Measured on the 2.9 export (15 LV–HV targets at their
-  tier and one above, supporting lines on and off, step charge 2 % and 0: 120 plans, 181 goods made two ways, each
-  replanned with its pin): the guess named 67 and the issue stayed after the pin for 58 of them; 54 of the 114 it did
-  not name stayed too; of the 112 that stayed, the box says the pin is in place for 111 (in the other the pinned recipe
-  left the replanned plan altogether, so Keep only offers the new bigger maker). The review of the first follow-up
-  found the guess right in 13 of 15 cases on a sweep of its own and in 28 of 33 on the builder's.
+  pinned for Hydrogen Cell: the 2% still comes from …". The pin applies to the settings at once, but the plan of the
+  settings before stays up until the replan arrives (1 to 5 s): from the moment `recipeChoice` pins a recipe for the
+  good the box offers no Keep only and says "Updating…" until the plan on screen is the plan of those settings (its
+  `settingsHash`, which the client works out as the server does: `shared/project/settings-hash.ts`), and only then
+  decides as above. Makers that share a machine are named by the input that sets them apart, else the output, in the
+  notes and on the button. Measured on the 2.9 export (15 LV–HV targets at their tier and one above, supporting lines on
+  and off, step charge 2 % and 0: 120 plans, 181 goods made two ways, each replanned with its pin): the guess named 67
+  and the issue stayed after the pin for 58 of them; 54 of the 114 it did not name stayed too; of the 112 that stayed,
+  the box says the pin is in place for 111 (in the other the pinned recipe left the replanned plan altogether, so Keep
+  only offers the new bigger maker). The review of the first follow-up found the guess right in 13 of 15 cases on a
+  sweep of its own and in 28 of 33 on the builder's.
 - **Initial view.** Zoom 0.9 centred on `out`; Fit unchanged. Legend: owned / partly owned / new, import (mined,
   gathered, bought, free), no source, left over, supporting line.
 
