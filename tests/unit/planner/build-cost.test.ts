@@ -152,14 +152,14 @@ describe('machineGap', () => {
     expect(gapText(seed, machine(seed, 122), gap!, 1)).toBeNull();
   });
 
-  it('calls a machine whose chain needs ore the group can mine a pricing gap, not one that cannot be built', async () => {
+  it('prices a machine whose part only ore processing makes from the ore the group can mine', async () => {
     // The Advanced Bending Machine is crafted from a Flawless Gem, which only sifting a Purified Gem Ore makes, from a Gem
-    // Ore. Machine prices buy no ore blocks (plan 09's R8: only a material line does), so nothing in the price graph makes
-    // the ore; on the 2.9 export the Advanced Lathe and Advanced Macerator (a Flawless Diamond) read "needs Native Diamond
-    // Cluster, not available at MV" for it, a mod item that sorted first among such dead ends. Where a vein of the ore is
-    // in reach the chain is available and only its price is missing (controller ruling OQ5 b); where none is, the machine
-    // cannot be built (OQ5 a).
-    const gemSpec = (dims: string[], shard = false): PackSpec => {
+    // Ore. Machine prices buy no ore blocks (plan 09's R8: only a material line does), so nothing in the price graph made
+    // the ore, and on the 2.9 export the Advanced Lathe and Advanced Macerator (a Flawless Diamond) had no price: first
+    // "needs Native Diamond Cluster, not available at MV", then a pricing gap at a stand-in. Fix wave 2 (c): an ore block
+    // the group can mine is a leaf for a part only ore processing makes — hull 9 + one Gem Ore 1 = 10 — while every other
+    // good keeps its price; where no vein of the ore is in reach, the machine cannot be built (OQ5 a).
+    const gemSpec = (dims: string[], opts: { shard?: boolean; press?: boolean } = {}): PackSpec => {
       const spec = structuredClone(MINI_GT);
       return {
         ...spec,
@@ -169,16 +169,22 @@ describe('machineGap', () => {
         recipes: [...(spec.recipes ?? []),
           { id: 'wash-gem', map: 'gt.recipe.macerator', in: [['t:gem_ore@0', 1]], out: [['t:gem_purified@0', 1]], eut: 2, dur: 100 },
           { id: 'sift-gem', map: 'gt.recipe.centrifuge', in: [['t:gem_purified@0', 1]], out: [['t:gem_flawless@0', 1]], eut: 15, dur: 100 },
-          { id: 'make-102', map: 'crafting', in: [['t:hull_lv@0', 1], ['t:gem_flawless@0', 1], ...(shard ? [['t:zircon@0', 1] as [string, number]] : [])],
-            out: [['machine:102@0', 1]] }],
+          { id: 'make-102', map: 'crafting', in: [['t:hull_lv@0', 1], ['t:gem_flawless@0', 1], ...(opts.shard === true ? [['t:zircon@0', 1] as [string, number]] : [])],
+            out: [['machine:102@0', 1]] },
+          ...(opts.press === true ? [{ id: 'press-gem', map: 'gt.recipe.metalbender', in: [['t:iron_ingot@0', 5] as [string, number]], out: [['t:gem_flawless@0', 1] as [string, number]], eut: 24, dur: 100 }] : [])],
         worldgen: { ...spec.worldgen, veins: [...(spec.worldgen?.veins ?? []), { name: 'ore.mix.gem', dims, kind: 'vein', weight: 1, minY: 0, maxY: 255,
           size: 1, density: 1, materials: { primary: 'Gem', secondary: 'Gem', between: 'Gem', sporadic: 'Gem' } }] },
       };
     };
     const mined = packFromSpec(gemSpec(['overworld']));
     const minedPrices = await pricesOf(mined, lv);
-    expect(machineBuildCost(mined, minedPrices, machine(mined, 102))).toBeNull();
-    expect(machineGap(mined, minedPrices, machine(mined, 102))).toEqual({ kind: 'gap' });
+    expect(machineBuildCost(mined, minedPrices, machine(mined, 102))).toBe(10);
+    expect(machineGap(mined, minedPrices, machine(mined, 102))).toBeNull();
+    expect(minedPrices.cost('t:gem_flawless@0')).toBe(1);
+    // A part another route makes keeps that route's price (5 iron ingots, so 9 + 5): the ore is a leaf only where
+    // nothing else makes the part.
+    const pressed = packFromSpec(gemSpec(['overworld'], { press: true }));
+    expect(machineBuildCost(pressed, await pricesOf(pressed, lv), machine(pressed, 102))).toBe(14);
     // On the Moon, which LV cannot reach, the ore is out of reach.
     const moon = packFromSpec(gemSpec(['moon']));
     const moonPrices = await pricesOf(moon, lv);
@@ -186,7 +192,7 @@ describe('machineGap', () => {
     expect(out).toEqual({ kind: 'unavailable', item: 't:gem_ore@0' });
     expect(gapText(moon, machine(moon, 102), out!, 1)).toBe('needs Gem Ore, not available at LV');
     // Where it also takes a Zircon Shard nothing makes, that is what it lacks: never the ore the group can mine.
-    const shard = packFromSpec(gemSpec(['overworld'], true));
+    const shard = packFromSpec(gemSpec(['overworld'], { shard: true }));
     expect(machineGap(shard, await pricesOf(shard, lv), machine(shard, 102))).toEqual({ kind: 'unavailable', item: 't:zircon@0' });
   });
 

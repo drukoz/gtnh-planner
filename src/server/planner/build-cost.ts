@@ -21,7 +21,7 @@ import { defaultSettings } from '../../shared/project/apply-op.ts';
 import type { Machine, Pack, Recipe } from '../../shared/types/pack.ts';
 import type { BomLine, PlanContext, PlanSettings } from '../../shared/types/plan.ts';
 import { basisContextKey, effectiveTier, planBasis, settingsHash } from './basis.ts';
-import { buildCandidates, type CandidateGraph } from './candidates.ts';
+import { buildCandidates, type CandidateGraph, type LeafOracle } from './candidates.ts';
 import { analyzeCosts, isOreBlock, makeLeafOracle } from './costs.ts';
 import { yieldToEventLoop } from './lp.ts';
 import { sig9 } from './round.ts';
@@ -90,12 +90,12 @@ export function machinePricingKey(settings: PlanSettings, ctx: PlanContext): str
 }
 
 /**
- * Why `key`, priced Infinity in `graph` (null: no graph was walked), has no price: `no-recipe` when no recipe of the pack
- * makes it, else a pricing gap when the ore blocks among its dead ends that the group can mine (`mined`: machine prices
- * buy none, plan 09's R8, though a material line would) would let it be made — its chain is available, only its price is
- * missing (controller ruling OQ5 b: on the 2.9 export the Advanced Lathe and Advanced Macerator, whose Flawless Diamond
- * only sifting purified Diamond Ore makes, read "needs Native Diamond Cluster, not available at MV", a mod item that
- * sorted first among such dead ends) — else a good `deadEnds` names, else a pricing gap. The good named is one that alone,
+ * Why `key`, priced Infinity in `graph` (null: no graph was walked) and by `oreProcessed`, has no price: `no-recipe` when
+ * no recipe of the pack makes it, else a pricing gap when the ore blocks among its dead ends that the group can mine
+ * (`mined`) would let it be made — its chain is available, only its price is missing (controller ruling OQ5 b; such a
+ * key `oreProcessed` usually prices, as it did the Advanced Lathe and Advanced Macerator of the 2.9 export at MV, which
+ * read "needs Native Diamond Cluster, not available at MV" before, a mod item that sorted first among such dead ends) —
+ * else a good `deadEnds` names, else a pricing gap. The good named is one that alone,
  * made available, would let `key` be made (`deadEndsAlone`), else any dead end; among those a base material out of reach
  * first, then a good whose recipes cannot run here (it has a `blocked` entry), then any other (a good nothing makes),
  * each by key, and an ore the group can mine last (it is what the machine lacks only where nothing else is). Of the dead ends of every route sorted by key, the first was often one route's oddity — on the 2.9 export
@@ -122,7 +122,8 @@ function gapOf(pack: Pack, graph: CandidateGraph | null, key: StuffKey, mined: (
  * cobblestone and lava stay leaves at 0 as in every build-material breakdown (plan 09 Task 3), and without gathered
  * recipes, so sand and gravel are dug at their price (the cost analysis counts no machines: free cobblestone and hammers
  * would price them at 0); stop items are leaves at their override or price. A buyable key costs its leaf's cost; the
- * others are the targets of one candidate graph, and cost what its cost analysis gives them.
+ * others are the targets of one candidate graph, and cost what its cost analysis gives them, or for a part only ore
+ * processing makes what the walk from the ores the group can mine gives it (`oreProcessed`).
  */
 async function computePrices(pack: Pack, s: PlanSettings, ctx: PlanContext, keys: readonly StuffKey[]): Promise<ItemPrices> {
   await yieldToEventLoop();
@@ -131,16 +132,21 @@ async function computePrices(pack: Pack, s: PlanSettings, ctx: PlanContext, keys
   const made = keys.filter((key) => !leaf(key).buyable);
   const graph = made.length > 0 ? buildCandidates(pack, s, basis.env, leaf, made) : null;
   const costs = graph === null ? null : await analyzeCosts(graph);
-  const cost = (key: StuffKey): number => {
+  const first = (key: StuffKey): number => {
     const decision = leaf(key);
     return decision.buyable ? decision.cost : (costs?.cost(key) ?? Infinity);
   };
-  const gaps = new Map<StuffKey, PriceGap | undefined>();
   // An ore block a material line would buy here (makeLeafOracle's direct and byproduct ores).
   const mined = (key: StuffKey): boolean => {
     const reach = basis.avail.classOf(key);
     return (reach === 'direct' || reach === 'byproduct') && isOreBlock(pack, key);
   };
+  const ores = await oreProcessed(pack, s, basis, graph, made, first, mined);
+  const cost = (key: StuffKey): number => {
+    const price = first(key);
+    return Number.isFinite(price) ? price : (ores?.cost(key) ?? Infinity);
+  };
+  const gaps = new Map<StuffKey, PriceGap | undefined>();
   return {
     cost,
     gap(key) {
@@ -148,6 +154,38 @@ async function computePrices(pack: Pack, s: PlanSettings, ctx: PlanContext, keys
       return gaps.get(key);
     },
   };
+}
+
+/**
+ * Fix wave 2 (c), controller ruling 187: the parts only ore processing makes, priced from the ore blocks the group can
+ * mine (`mined`). Machine prices buy no ore blocks (plan 09's R8: only a material line does), so a part only sifting or
+ * washing an ore makes had no price — on the 2.9 export the Flawless Diamond of the Advanced Lathe (292) and the Advanced
+ * Macerator (302), so neither machine could be weighed at MV. Each key of `made` the first price graph left unpriced,
+ * which a recipe of the pack makes and which the ores among its dead ends would let be made (`makeableWith`), is walked
+ * again with those ores as leaves at their price and every good the first graph priced a leaf at that price (so an ore
+ * stands in only where nothing else makes the part, and no other price moves); the cost analysis of that walk prices
+ * them. Null when no key needs it (or the first walk was cut short at its recipe cap: then such keys stay gaps).
+ */
+async function oreProcessed(
+  pack: Pack, s: PlanSettings, basis: ReturnType<typeof planBasis>, graph: CandidateGraph | null, made: readonly StuffKey[],
+  first: (key: StuffKey) => number, mined: (key: StuffKey) => boolean,
+): Promise<{ cost(key: StuffKey): number } | null> {
+  if (graph === null || graph.truncated === true) return null;
+  const targets = made.filter((key) => {
+    if (Number.isFinite(first(key)) || (pack.producers.get(key) ?? []).length === 0) return false;
+    const ends = deadEnds(graph, key).filter(mined);
+    return ends.length > 0 && makeableWith(graph, key, ends);
+  });
+  if (targets.length === 0) return null;
+  const leaf = makeLeafOracle(pack, s, basis.avail, basis.prices);
+  const oreLeaf: LeafOracle = (key) => {
+    if (mined(key)) return { buyable: true, cost: basis.prices.price(key), leafClass: basis.avail.classOf(key) };
+    const decision = leaf(key);
+    if (decision.buyable) return decision;
+    const price = first(key);
+    return Number.isFinite(price) ? { buyable: true, cost: price, leafClass: 'derived' } : decision;
+  };
+  return analyzeCosts(buildCandidates(pack, s, basis.env, oreLeaf, targets));
 }
 
 const MEMOS = new WeakMap<Pack, Map<string, Promise<ItemPrices>>>();
