@@ -4,9 +4,10 @@ import io.github.drukoz.gtnhplanner.projector.model.PlannedBlock;
 
 /**
  * Compares one planned block with what the world has where it goes (spec §3.13). The planner decides what is
- * compared: the registry name always, then {@link PlannedBlock#meta}, {@link PlannedBlock#mteId} and
- * {@link PlannedBlock#facing} where they are not −1. A pseudo part ({@link PlannedBlock#part} set) is therefore checked
- * by its container block only.
+ * compared: the registry name always, then {@link PlannedBlock#meta}, {@link PlannedBlock#mteId},
+ * {@link PlannedBlock#facing} and {@link PlannedBlock#mainFacing} where they are not −1. A pseudo part
+ * ({@link PlannedBlock#part} set) is therefore checked by its container block only, a conduit bundle too, whatever
+ * conduits it holds.
  */
 public final class Matcher {
 
@@ -21,7 +22,8 @@ public final class Matcher {
      * <li>another registry name, or another meta where the meta is compared: {@link BlockState#WRONG_BLOCK};</li>
      * <li>where the GT machine is compared: a GT tile without data yet is {@link BlockState#UNLOADED}, another machine
      * or no GT tile is {@link BlockState#WRONG_BLOCK};</li>
-     * <li>where the front is compared and the world's front is known, another front: {@link BlockState#WRONG_FACING};</li>
+     * <li>where the front is compared and the world's front is known, another front, and likewise a single-block
+     * machine's own front (its main facing): {@link BlockState#WRONG_FACING};</li>
      * <li>otherwise {@link BlockState#CORRECT}.</li>
      * </ol>
      */
@@ -40,6 +42,10 @@ public final class Matcher {
         if (b.facing >= 0) {
             int facing = w.facingAt(b.x, b.y, b.z);
             if (facing >= 0 && facing != b.facing) return BlockState.WRONG_FACING;
+        }
+        if (b.mainFacing >= 0) {
+            int main = w.mainFacingAt(b.x, b.y, b.z);
+            if (main >= 0 && main != b.mainFacing) return BlockState.WRONG_FACING;
         }
         return BlockState.CORRECT;
     }

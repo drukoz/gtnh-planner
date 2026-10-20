@@ -7,14 +7,16 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeSet;
 
 /**
  * Reads the planner's projector payload ({@code ProjectorPayload} in {@code src/shared/types/projector.ts}): Gson
  * fills private classes that mirror it field for field, then the checks below turn them into the immutable
  * {@link ProjectorData}. The payload's optional values get fixed stand-ins: {@code meta} null, a missing
- * {@code mteId} or {@code facing}, and {@code step} null become −1; a missing {@code facingIsOutput} becomes false;
- * missing {@code covers} become an empty list and a missing {@code part} null. Everything else the payload type
- * requires must be there, so later code never meets a null.
+ * {@code mteId}, {@code facing} or {@code mainFacing}, and {@code step} null become −1; a missing {@code facingIsOutput}
+ * becomes false; missing {@code covers} or {@code parts} become an empty list and a missing {@code part} null. Each
+ * block also gets {@link PlannedBlock#steps}: its own step and every step whose {@code blocks} list it. Everything else
+ * the payload type requires must be there, so later code never meets a null.
  */
 public final class PayloadParser {
 
@@ -34,9 +36,11 @@ public final class PayloadParser {
      * <li>a missing top-level field, or an {@code origin} or {@code size} that is not 3 numbers: {@code Bad projector
      * layout: <field>};</li>
      * <li>per block {@code i}: {@code pos} not 3 numbers ({@code pos at block <i>}); a missing {@code id}, {@code role}
-     * or {@code label} ({@code <field> at block <i>}); {@code facing} outside 0…5 ({@code facing <n> at block <i>}); a
-     * cover without a face, item or label ({@code cover <field> at block <i>}) or with a face outside 0…5
-     * ({@code face <n> at block <i>}); a {@code step} id no step has ({@code unknown step <id> at block <i>});</li>
+     * or {@code label} ({@code <field> at block <i>}); {@code facing} or {@code mainFacing} outside 0…5
+     * ({@code facing <n> at block <i>}, {@code mainFacing <n> at block <i>}); a null among {@code parts}
+     * ({@code parts at block <i>}); a cover without a face, item or label ({@code cover <field> at block <i>}) or with a
+     * face outside 0…5 ({@code face <n> at block <i>}); a {@code step} id no step has
+     * ({@code unknown step <id> at block <i>});</li>
      * <li>per step: no id ({@code id at step <index>}); a missing {@code order}, {@code kind}, {@code text},
      * {@code blocks} or {@code done} ({@code <field> at step <id>}); a block index outside {@code blocks}
      * ({@code block <n> at step <id>}).</li>
@@ -70,7 +74,31 @@ public final class PayloadParser {
         List<PlannedStep> steps = new ArrayList<>(rawSteps.size());
         for (int j = 0; j < rawSteps.size(); j++) steps.add(step(rawSteps.get(j), j, blocks.size()));
         return new ProjectorData(projectId, name, version, status, p.message, rev, dim, origin, size,
-            Collections.unmodifiableList(blocks), Collections.unmodifiableList(steps));
+            Collections.unmodifiableList(withSteps(blocks, steps)), Collections.unmodifiableList(steps));
+    }
+
+    /**
+     * Each block with every step that builds it ({@link PlannedBlock#steps}): its own step, and every step whose
+     * {@code blocks} list it, ascending.
+     */
+    private static List<PlannedBlock> withSteps(List<PlannedBlock> blocks, List<PlannedStep> steps) {
+        List<TreeSet<Integer>> member = new ArrayList<>(blocks.size());
+        for (PlannedBlock b : blocks) {
+            TreeSet<Integer> own = new TreeSet<>();
+            if (b.step >= 0) own.add(b.step);
+            member.add(own);
+        }
+        for (int j = 0; j < steps.size(); j++) {
+            for (int i : steps.get(j).blocks) member.get(i).add(j);
+        }
+        List<PlannedBlock> out = new ArrayList<>(blocks.size());
+        for (int i = 0; i < blocks.size(); i++) {
+            int[] in = new int[member.get(i).size()];
+            int k = 0;
+            for (int j : member.get(i)) in[k++] = j;
+            out.add(blocks.get(i).withSteps(in));
+        }
+        return out;
     }
 
     /** Gson's reading of the answer: it must be a JSON object of the payload's shape that names a format. */
@@ -94,6 +122,9 @@ public final class PayloadParser {
         String label = need(b.label, "label" + at);
         int facing = b.facing == null ? -1 : b.facing;
         if (b.facing != null && !isFace(facing)) throw bad("facing " + facing + at);
+        int mainFacing = b.mainFacing == null ? -1 : b.mainFacing;
+        if (b.mainFacing != null && !isFace(mainFacing)) throw bad("mainFacing " + mainFacing + at);
+        List<String> parts = parts(b.parts, at);
         List<PlannedCover> covers = covers(b.covers, at);
         int step = -1;
         if (b.step != null) {
@@ -102,7 +133,16 @@ public final class PayloadParser {
             step = j;
         }
         return new PlannedBlock(pos[0], pos[1], pos[2], id, b.meta == null ? -1 : b.meta,
-            b.mteId == null ? -1 : b.mteId, facing, Boolean.TRUE.equals(b.facingIsOutput), b.part, role, label, step, covers);
+            b.mteId == null ? -1 : b.mteId, facing, Boolean.TRUE.equals(b.facingIsOutput), mainFacing, b.part, parts, role,
+            label, step, new int[0], covers);
+    }
+
+    private static List<String> parts(List<String> raw, String at) throws PayloadException {
+        if (raw == null || raw.isEmpty()) return Collections.emptyList();
+        for (String part : raw) {
+            if (part == null) throw bad("parts" + at);
+        }
+        return Collections.unmodifiableList(new ArrayList<>(raw));
     }
 
     private static List<PlannedCover> covers(List<Cover> raw, String at) throws PayloadException {
@@ -172,9 +212,10 @@ public final class PayloadParser {
     private static final class Block {
         List<Integer> pos;
         String id;
-        Integer meta, mteId, facing;
+        Integer meta, mteId, facing, mainFacing;
         Boolean facingIsOutput;
         String part, role, label, step;
+        List<String> parts;
         List<Cover> covers;
     }
 

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   CHANNEL_PALETTE, CONDUIT_MODE_NAMES, CONDUIT_NAMES, DEFAULT_CHANNEL, DYE_COLORS, DYE_HEX, DYE_NAMES, FLUID_CONDUITS, FLUID_FILTER_SLOTS,
-  ITEM_FILTER_SLOTS, REDSTONE_NAMES, dyeRgb, itemFaceRate,
+  ITEM_FILTER_SLOTS, REDSTONE_NAMES, TAP_CHANNEL, dyeRgb, itemFaceRate,
 } from '../../../src/shared/layout/enderio.ts';
 import { LogisticsMode } from '../../../src/shared/types/plan.ts';
 import { validateOp } from '../../../src/shared/project/apply-op.ts';
@@ -19,14 +19,21 @@ describe('EnderIO 2.10.46 facts', () => {
     expect(DYE_COLORS).toEqual(['black', 'red', 'green', 'brown', 'blue', 'purple', 'cyan', 'silver', 'gray', 'pink', 'lime', 'yellow', 'light_blue', 'magenta', 'orange', 'white']);
     expect(CHANNEL_PALETTE).toEqual(['red', 'blue', 'yellow', 'orange', 'purple', 'cyan', 'magenta', 'lime', 'pink', 'light_blue', 'brown', 'white', 'black', 'gray', 'silver']);
     expect(DEFAULT_CHANNEL).toBe('green');
+    // the storage tap's link to the input chest has a channel of its own, not a base face's default
+    expect(TAP_CHANNEL).toBe('silver');
     expect([DYE_NAMES.silver, DYE_NAMES.light_blue]).toEqual(['Light Gray', 'Light Blue']);
   });
-  it('tints with each colour\'s swatch, as three bytes', () => {
-    expect([dyeRgb('red'), dyeRgb('blue'), dyeRgb('white')]).toEqual([[176, 46, 38], [60, 68, 170], [249, 255, 254]]);
+  it("tints with the game's own dye colours, as three bytes", () => {
+    // EnderCore 0.5.15 DyeColor.getColor() = ItemDye.field_150922_c[ordinal]: Minecraft 1.7.10's table (minecraft_server
+    // 1.7.10, class acj), which the conduit renderers tint the arrows with; not the later game versions' dye colours
+    const GAME = [0x1e1b1b, 0xb3312c, 0x3b511a, 0x51301a, 0x253192, 0x7b2fbe, 0x287697, 0xababab, 0x434343, 0xd88198, 0x41cd34, 0xdecf2a,
+      0x6689d3, 0xc354cd, 0xeb8844, 0xf0f0f0];
+    expect(DYE_COLORS.map(dyeRgb)).toEqual(GAME.map((v) => [(v >> 16) & 255, (v >> 8) & 255, v & 255]));
+    expect([dyeRgb('red'), dyeRgb('blue'), dyeRgb('white')]).toEqual([[179, 49, 44], [37, 49, 146], [240, 240, 240]]);
     for (const color of DYE_COLORS) expect(`#${dyeRgb(color).map((v) => v.toString(16).padStart(2, '0')).join('')}`).toBe(DYE_HEX[color]);
     const red = dyeRgb('red');
     red[0] = 0;
-    expect(dyeRgb('red')[0]).toBe(176);                                                  // a fresh triple each time
+    expect(dyeRgb('red')[0]).toBe(179);                                                  // a fresh triple each time
   });
   it('names modes and redstone settings as the EnderIO GUI does', () => {
     expect(CONDUIT_MODE_NAMES).toEqual({ extract: 'Extract', insert: 'Insert', in_out: 'In / Out', disabled: 'Disabled' });

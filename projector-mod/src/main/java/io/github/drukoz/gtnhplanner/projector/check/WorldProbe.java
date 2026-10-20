@@ -34,4 +34,10 @@ public interface WorldProbe {
      * face overlay); −1 when it is unknown.
      */
     int facingAt(int x, int y, int z);
+
+    /**
+     * A GT single-block machine's own front there (its main facing, where GT draws its face overlay), as ForgeDirection
+     * 0…5; −1 for anything else, and while the client does not know it yet.
+     */
+    int mainFacingAt(int x, int y, int z);
 }

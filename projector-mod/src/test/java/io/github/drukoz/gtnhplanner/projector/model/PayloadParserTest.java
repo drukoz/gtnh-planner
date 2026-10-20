@@ -31,6 +31,8 @@ public class PayloadParserTest {
         assertArrayEquals(new int[] {102, 64, 201}, new int[] {mac.x, mac.y, mac.z});
         assertEquals("gregtech:gt.blockmachines", mac.id); assertEquals(-1, mac.meta); assertEquals(201, mac.mteId); assertEquals(3, mac.facing);
         assertTrue(mac.facingIsOutput); assertFalse(d.blocks.get(2).facingIsOutput);   // a single-block machine; a transformer
+        assertEquals(4, mac.mainFacing); assertEquals(-1, d.blocks.get(2).mainFacing);   // its own front faces west; a transformer has none
+        assertTrue(mac.parts.isEmpty()); assertArrayEquals(new int[] {1}, mac.steps);
         assertEquals("machine", mac.role); assertEquals("Basic Macerator", mac.label); assertEquals("layout:place:s1", d.steps.get(mac.step).id);
         assertEquals(1, mac.covers.size()); assertEquals(3, mac.covers.get(0).face); assertEquals("Conveyor Module (LV)", mac.covers.get(0).label);
         assertEquals(-1, d.blocks.get(0).facing); assertEquals(11, d.blocks.get(9).meta);
@@ -70,8 +72,31 @@ public class PayloadParserTest {
         assertThrows(UnsupportedOperationException.class, () -> d.blocks.clear());
         assertThrows(UnsupportedOperationException.class, () -> d.steps.clear());
         assertThrows(UnsupportedOperationException.class, () -> d.blocks.get(3).covers.clear());
+        assertThrows(UnsupportedOperationException.class, () -> d.blocks.get(3).parts.add("item"));
         d.doneStepIds().add("layout:site");
         assertEquals(Collections.singleton("layout:place:s2"), d.doneStepIds());
+    }
+
+    // The review and audit of the EnderIO In / Out fix: a single-block machine's own front, every part of a bundle, and a
+    // block that more than one step builds (a conduit bundle: the line step and the fluids step).
+    @Test void readsAMachinesFrontEveryPartOfABundleAndEveryStepThatBuildsABlock() throws Exception {
+        ProjectorData d = PayloadParser.parse(new StringReader(mutate(o -> {
+            block(o, 4).remove("mainFacing");
+            JsonArray parts = new JsonArray(); parts.add(new JsonPrimitive("item")); parts.add(new JsonPrimitive("liquid_ender"));
+            block(o, 8).add("parts", parts);
+            o.getAsJsonArray("steps").get(7).getAsJsonObject().getAsJsonArray("blocks").add(new JsonPrimitive(8));
+        })));
+        assertEquals(4, d.blocks.get(3).mainFacing); assertEquals(-1, d.blocks.get(4).mainFacing);
+        PlannedBlock bundle = d.blocks.get(8);
+        assertEquals(java.util.Arrays.asList("item", "liquid_ender"), bundle.parts); assertEquals("pr_rinterface", bundle.part);
+        assertEquals(6, bundle.step); assertArrayEquals(new int[] {6, 7}, bundle.steps);   // its own step first, then by step order
+        assertTrue(bundle.inStep(6)); assertTrue(bundle.inStep(7)); assertFalse(bundle.inStep(5));
+        assertArrayEquals(new int[] {7}, d.blocks.get(7).steps);
+        // a block listed by no step keeps its own
+        ProjectorData unlisted = PayloadParser.parse(new StringReader(mutate(o -> o.getAsJsonArray("steps").get(1).getAsJsonObject().add("blocks", new JsonArray()))));
+        assertArrayEquals(new int[] {1}, unlisted.blocks.get(3).steps); assertTrue(unlisted.blocks.get(3).inStep(1));
+        assertEquals("Bad projector layout: mainFacing 6 at block 3", error(mutate(o -> block(o, 3).addProperty("mainFacing", 6))));
+        assertEquals("Bad projector layout: parts at block 8", error(mutate(o -> { JsonArray p = new JsonArray(); p.add(JsonNull.INSTANCE); block(o, 8).add("parts", p); })));
     }
 
     @Test void refusesWrongTypesMissingFieldsAndOutOfRangeFacesToo() throws Exception {

@@ -9,7 +9,7 @@ import { tierName } from '../../shared/gt/tiers.ts';
 import type { StuffKey } from '../../shared/keys.ts';
 import { conduitLines, configuredLines } from '../../shared/layout/configure-text.ts';
 import { fmtInt } from '../../shared/layout/format.ts';
-import { posKey, type Vec3 } from '../../shared/layout/geometry.ts';
+import { SIDE_NAMES, posKey, rotateFacing, type Rotation, type Vec3 } from '../../shared/layout/geometry.ts';
 import type { BlockRole, Hookup, LayoutBlock, LayoutStatus, Pin } from '../../shared/types/layout.ts';
 import type { BomLine, BuildStep } from '../../shared/types/plan.ts';
 import type { HatchKind, PlacedUnit } from './arrange.ts';
@@ -27,7 +27,10 @@ export interface StepsInput {
   supplyTier: number | null;
   drafts: readonly StepDraft[]; fluids: ReadonlyArray<{ key: StuffKey; name: string; pipe: string; cells: number }>;
   logistics: { kindName: string; part: string; blocks: number } | null; reuse: readonly ReuseFind[];
-  blocks: readonly LayoutBlock[] /* world, sorted */; origin: Vec3; nameOf: (k: StuffKey) => string;
+  blocks: readonly LayoutBlock[] /* world, sorted */; origin: Vec3;
+  /** The line's turn into the world: `units` are in its local frame, so a step that names a compass side turns it. */
+  rotation: Rotation;
+  nameOf: (k: StuffKey) => string;
 }
 
 type Group = NonNullable<BomLine['group']>;
@@ -74,22 +77,43 @@ function hatchLabels(u: PlacedUnit): string[] {
   return [...chosen, ...exported].map((c) => c.label);
 }
 
+/** A singleblock's front when its unit has none: local west, along the row (`singleblockMainFacing` in arrange.ts). */
+const WEST = 4;
+
 /**
- * How a singleblock gets its two faces (`PlacedUnit.mainFacing`, toward the power head, and its output side toward the
- * middle row) in GT 5.09.54: a sneaking Wrench click makes the side the wrench grid picks the front
+ * How a singleblock gets its two faces (`PlacedUnit.mainFacing`, along the row, and its output side toward the middle
+ * row) in GT 5.09.54: a sneaking Wrench click makes the side the wrench grid picks the front
  * (`MTEBasicMachine.setMainFacing`, which turns the output side away when it was there), a plain one makes it the output
  * side (anywhere but the front), and a click on an edge of the grid picks the side beyond that edge
- * (`GTUtility.determineWrenchingSide`), so a side a neighbour covers can be picked too.
+ * (`GTUtility.determineWrenchingSide`), so a side a neighbour covers can be picked too. The front is named by the
+ * compass (`front`, already turned into the world): the place steps come before the power steps, so nothing built yet,
+ * such as the power head it points along the row to, can name it.
  */
-const SINGLEBLOCK_FACES = 'with its output side facing the middle row and its front facing the power head: with a Wrench, sneak-right-click '
-  + 'its power-head side to make that the front (where a neighbour covers that side, click the edge of the wrench grid toward it), '
-  + 'then right-click its middle-row side to make that the output side';
+function singleblockFaces(front: string): string {
+  return `with its output side facing the middle row and its front facing ${front}: with a Wrench, sneak-right-click its ${front} side to `
+    + 'make that the front (where a neighbour covers that side, click the edge of the wrench grid toward it), then right-click its middle-row '
+    + 'side to make that the output side';
+}
+
+/**
+ * What a singleblock that takes items adds to its place step: it takes them through its output side, which needs GT's
+ * Input from Output Side allowed. Every `MTEBasicMachine` constructor turns it on, but a machine broken and placed again
+ * may have it off (its item's NBT has no `mAllowInputFromOutputSide`, which `loadNBTData` reads as false). A Screwdriver
+ * switches it only on the output side or the front, on the side clicked itself (`BaseMetaTileEntity.onRightclick`
+ * passes no wrench-grid side), and also works the cover on that side; the front faces the machine beside it along the
+ * row. So the check is on the middle-row side while nothing stands in the middle row yet, before any pipe, conduit or
+ * interface there and before its configure step puts a cover on that side.
+ */
+const CHECK_INPUT_SIDE = '; it takes its items through that side, which needs Input from Output Side allowed: a newly crafted machine has it, '
+  + "but one broken and placed again may not, so while the middle row is still empty right-click such a machine's middle-row side with a "
+  + 'Screwdriver, not sneaking (a sneak-click switches the Input Filter), and once more if the chat says "Input from Output Side forbidden"';
 
 /**
  * One step per placed plan step, in unit order: how many to place and which way they face — a singleblock's output
- * side and its front, which GT keeps apart, and how to set both; a multiblock's size, controller and hatches.
+ * side and its front, which GT keeps apart, how to set both and, when it takes items, how to check Input from Output
+ * Side; a multiblock's size, controller and hatches. The front's compass side is turned by `rotation`.
  */
-function placeSteps(units: readonly PlacedUnit[], sitePin: number | undefined): Draft[] {
+function placeSteps(units: readonly PlacedUnit[], sitePin: number | undefined, rotation: Rotation): Draft[] {
   const byStep = new Map<string, { first: PlacedUnit; n: number }>();
   for (const u of units) {
     const seen = byStep.get(u.stepId);
@@ -97,7 +121,11 @@ function placeSteps(units: readonly PlacedUnit[], sitePin: number | undefined): 
     else seen.n += 1;
   }
   return [...byStep].map(([stepId, { first: u, n }]) => {
-    if (!u.multiblock) return draft(`layout:place:${stepId}`, 'place', sitePin, `Place ${fmtInt(n)}× ${u.name} ${SINGLEBLOCK_FACES}`);
+    if (!u.multiblock) {
+      const front = SIDE_NAMES[rotateFacing(u.mainFacing ?? WEST, rotation)]!;
+      return draft(`layout:place:${stepId}`, 'place', sitePin,
+        `Place ${fmtInt(n)}× ${u.name} ${singleblockFaces(front)}${u.io.itemIn ? CHECK_INPUT_SIDE : ''}`);
+    }
     const labels = hatchLabels(u);
     const hatches = labels.length === 0 ? '' : `; hatches: ${labels.join(', ')}`;
     return draft(`layout:place:${stepId}`, 'place', sitePin,
@@ -219,7 +247,7 @@ export function layoutSteps(input: StepsInput): BuildStep[] {
       `Clear a ${fmtInt(w)}×${fmtInt(l)} spot${atPin(sitePin)} (${fmtInt(h)} high) and keep a 1-block path around it${level}`));
     // gt-mechanics §3.4
     steps.push(draft('layout:roof', 'place', sitePin, 'Roof the line: GT machines left in the rain can catch fire or explode'));
-    steps.push(...placeSteps(input.units, sitePin));
+    steps.push(...placeSteps(input.units, sitePin, input.rotation));
     steps.push(...powerSteps(input, sitePin, powerPin));
     for (const d of input.drafts) if (d.kind === 'logistics') steps.push(draft(d.id, d.kind, kindPin(d.pin), d.text));
     for (const f of input.fluids) {

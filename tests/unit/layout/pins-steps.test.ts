@@ -14,15 +14,31 @@ const NAMES: Record<string, string> = { [PUMP]: 'Electric Pump (LV)', [CONV]: 'C
 const nameOf = (k: string) => NAMES[k] ?? k;
 const base = (over: Partial<StepsInput>): StepsInput => ({ status: 'ok', pins: [], size: [6, 1, 5], site: null, units: [], stages: [],
   transformerName: () => 'Low Voltage Transformer', cables: [], power: null, supplyTier: null, drafts: [], fluids: [], logistics: null, reuse: [],
-  blocks: [], origin: [0, 64, 0], nameOf, ...over });
+  blocks: [], origin: [0, 64, 0], rotation: 0, nameOf, ...over });
 /**
  * A singleblock's place step: GT 5.09.54 sets a basic machine's front with a sneaking Wrench click (only on a side, never
  * the top or bottom: `MTEBasicMachine.isValidMainFacing`) and its output side with a plain one (anywhere but the front),
- * each on the side the wrench grid picks (`GTUtility.determineWrenchingSide`: a grid edge picks the side beyond it).
+ * each on the side the wrench grid picks (`GTUtility.determineWrenchingSide`: a grid edge picks the side beyond it). The
+ * front faces local west, along the row, so the step names it by the compass: the place steps come before anything else
+ * is built, the power head included.
  */
-const PLACE_MACERATORS = 'Place 2× Basic Macerator with its output side facing the middle row and its front facing the power head: '
-  + 'with a Wrench, sneak-right-click its power-head side to make that the front (where a neighbour covers that side, click the edge of '
-  + 'the wrench grid toward it), then right-click its middle-row side to make that the output side';
+const PLACE_FACES = 'with its output side facing the middle row and its front facing west: with a Wrench, sneak-right-click its west side to '
+  + 'make that the front (where a neighbour covers that side, click the edge of the wrench grid toward it), then right-click its middle-row '
+  + 'side to make that the output side';
+/**
+ * And for one that takes items, through that side: GT's Input from Output Side, on for a newly crafted machine, may be off
+ * on one broken and placed again (its item's NBT has no `mAllowInputFromOutputSide`). The Screwdriver works it only on
+ * the side clicked, never through the wrench grid (`BaseMetaTileEntity.onRightclick`), and the front faces the machine
+ * beside it, so the check is on the middle-row side while nothing stands there yet (no pipe, conduit, interface or cover).
+ */
+const CHECK_INPUT_SIDE = '; it takes its items through that side, which needs Input from Output Side allowed: a newly crafted machine has it, '
+  + "but one broken and placed again may not, so while the middle row is still empty right-click such a machine's middle-row side with a "
+  + 'Screwdriver, not sneaking (a sneak-click switches the Input Filter), and once more if the chat says "Input from Output Side forbidden"';
+const PLACE_MACERATORS = `Place 2× Basic Macerator ${PLACE_FACES}${CHECK_INPUT_SIDE}`;
+/** A machine setting's words: the state to leave it in, where a Screwdriver switches it, and what else that click does. */
+const FROM_OUTPUT_SIDE = (state: 'allowed' | 'forbidden') => `Input from Output Side ${state}: a newly crafted machine has it on; a Screwdriver `
+  + 'right-click on its middle-row side switches it and the chat names the new state, so leave it where the chat says '
+  + `"Input from Output Side ${state}" (a sneak-click switches the Input Filter instead, and the click also works a cover on that side)`;
 
 describe('pins', () => {
   it('numbers pins site, power, logistics, reuse, then warnings', () => {
@@ -85,6 +101,21 @@ describe('layout steps', () => {
     expect(steps.find((s) => s.id === 'layout:power:wire:1')!.text).toBe('Wire the LV machines with 1x Tin Cable (6 blocks)');
   });
 
+  it("names a singleblock's front by the compass as the line is turned, and checks Input from Output Side only where items go in", () => {
+    // the review of the EnderIO In / Out fix: no step before the power steps may lean on the power head, which no step names
+    const plan = makePlan([{ id: 's1', mteId: IDS.MACERATOR, count: 2 }, { id: 'x', mteId: IDS.EXTRACTOR, count: 1, inputs: [['fluid:water', 1000]],
+      outputs: [['fluid:molten.iron', 144]] }], { flows: [] });
+    const placement = placeUnits(unitsFromPlan(layoutPack(), plan).units, { headWidth: 1, portSpacing: 0 });
+    const place = (rotation: 0 | 90 | 180 | 270) => layoutSteps(base({ units: placement.units, rotation })).filter((s) => s.kind === 'place').map((s) => s.text);
+    // local west turns north → east → south → west by 90° each
+    for (const [rotation, side] of [[0, 'west'], [90, 'north'], [180, 'east'], [270, 'south']] as const) {
+      expect(place(rotation).slice(2), String(rotation)).toEqual([
+        `Place 2× Basic Macerator ${PLACE_FACES.replaceAll('west', side)}${CHECK_INPUT_SIDE}`,
+        `Place 1× Basic Fluid Extractor ${PLACE_FACES.replaceAll('west', side)}`]);                 // takes only fluids: no check
+    }
+    expect(place(0).some((t) => /power.head/.test(t))).toBe(false);
+  });
+
   it('describes multiblocks with their hatches and drops pins without a world', () => {
     const plan = makePlan([{ id: 'e', mteId: IDS.EBF, count: 1, tier: 2, euPerTick: 120,
       inputs: [['t:dust@0', 1], ['fluid:oxygen', 1000]], outputs: [['t:ingot@0', 1]] }]);
@@ -130,17 +161,15 @@ describe('layout steps', () => {
     expect(steps.map((s) => [s.id, s.pin, s.text])).toEqual([
       ['layout:configure:x', 1, 'Basic Fluid Extractor: Electric Pump (LV) on the top face: Export, 1 L/s'],
       ['layout:configure:s1', 1, 'Basic Macerator ×2: Conveyor Module (LV) on the south face: Export, allow input, 0.5 items/s; '
-        + 'programmed circuit 3; Input Filter on; Input from Output Side allowed: a newly crafted machine starts with it on, and a Screwdriver '
-        + 'right-click on its front, or on its output side where no cover sits, switches it, so leave it where the chat says "Input from Output '
-        + 'Side allowed" (a sneak-click switches the Input Filter instead)'],
+        + `programmed circuit 3; Input Filter on; ${FROM_OUTPUT_SIDE('allowed')}`],
       ['layout:configure:3,0,2', 1, 'Tin Item Pipe: Filtered Conveyor Cover (Export) on the south face: whitelist Titanium Ingot']]);
     expect(coverText({ face: 'north', item: CONV, settings: { mode: 'import', rate: 1000, unit: 'items/s' } }, nameOf))
       .toBe('Conveyor Module (LV) on the north face: Import, 1,000 items/s');
     // GT 5.09.54: no GUI button, only the Screwdriver, which switches it whatever its state, so the words name the state
-    // to leave it in, never a click to make
-    expect(configTexts({ inputFromOutputSide: false })).toEqual(['Input from Output Side forbidden: a newly crafted machine starts with it on, '
-      + 'and a Screwdriver right-click on its front, or on its output side where no cover sits, switches it, so leave it where the chat says '
-      + '"Input from Output Side forbidden" (a sneak-click switches the Input Filter instead)']);
+    // to leave it in, never a click to make; and the side to click is the middle-row side, as the front faces the machine
+    // beside it (the review of the EnderIO In / Out fix)
+    expect(configTexts({ inputFromOutputSide: false })).toEqual([FROM_OUTPUT_SIDE('forbidden')]);
+    expect(FROM_OUTPUT_SIDE('allowed')).not.toMatch(/front/);
     expect(configTexts({ patterns: 1, pattern: '1× A → 1× B', blockingMode: false, chips: 'Item Extractor Chip' }))
       .toEqual(['1 processing pattern', 'pattern 1× A → 1× B', 'blocking mode off', 'chips: Item Extractor Chip']);
   });

@@ -1,11 +1,13 @@
 // Machine to machine (Plan 5 Task 7; spec §3.6 mode 1, research gt-mechanics §3.8): one GT item pipe along the spine,
-// touching every machine's front. Each machine pushes its output onto it with a conveyor cover sized to its share, and
+// touching every machine's output side or bus (a singleblock's front faces along the row, apart from its output side).
+// Each machine pushes its output onto it with a conveyor cover sized to its share, and
 // has its Input Filter on, because a GT pipe hands an item to any inventory that takes it and GT's item filter cover
 // cannot stop a pipe: with the filter on, a machine takes only items its recipes use. Only raw inputs and final outputs
 // touch storage, at the tail: an input chest the pipe pulls from, and one output chest per final item behind a one-item
 // filter cover. A routed, AE2 or EnderIO item network at the base keeps the input chest stocked; a GT pipe network
 // cannot (it only carries what its sources push), so then the inputs go in by hand.
 
+import { DYE_NAMES, TAP_CHANNEL, TAP_CHANNEL_NOTE } from '../../../shared/layout/enderio.ts';
 import { joinNames } from '../../../shared/layout/format.ts';
 import { OPPOSITE, posKey, step, type Vec3 } from '../../../shared/layout/geometry.ts';
 import { FACES } from '../../../shared/types/assets.ts';
@@ -55,7 +57,8 @@ function spineContacts(placement: Placement, spine: ReadonlySet<string>, links: 
 /**
  * How the base's network keeps the input chest stocked (spec §3.6 "hooked into whatever network exists"): a routed
  * interface pipe with a stock keeper chip, an ME export bus, or an EnderIO conduit fed from a whitelisted extract face
- * at the storage tap. Null for a GT pipe network or none.
+ * at the storage tap, the tap and the input chest's face on a channel of their own (`TAP_CHANNEL`), so the tap stops
+ * once the chest is full. Null for a GT pipe network or none.
  */
 function networkHookup(input: ModeInput, rawNames: string): { hookup: ModeHookup; extraParts: BomLine[]; drafts: StepDraft[] } | null {
   const { parts, network } = input;
@@ -73,7 +76,8 @@ function networkHookup(input: ModeInput, rawNames: string): { hookup: ModeHookup
         extraParts: [{ key: parts.eio_basic_filter.key, amount: 1, why: 'filter at the storage tap', group: 'logistics' }],
         // the extract face is on the base's own conduit, so it is not a placed block's setting
         drafts: [{ id: 'layout:configure:conduit', kind: 'configure', pin: 'logistics',
-          text: `At the storage tap set the conduit face to Extract with a Basic Item Filter, whitelist: ${rawNames}; on the input chest face set Insert` }],
+          text: `At the storage tap set the conduit face to Extract on ${DYE_NAMES[TAP_CHANNEL]} with a Basic Item Filter, whitelist: ${rawNames}; `
+            + `on the input chest face set Insert on ${DYE_NAMES[TAP_CHANNEL]}. ${TAP_CHANNEL_NOTE}` }],
       };
     default:
       return null;
@@ -164,7 +168,8 @@ export function directMode(input: ModeInput): ModeResult {
     ...(outputs.length === 0 ? [] : [outputs.length === 1 ? 'an output chest' : `${outputs.length} output chests`])];
   const pipeCells = blocks.filter((b) => b.role === 'pipe').length;
   const drafts: StepDraft[] = [{ id: 'layout:logistics:line', kind: 'logistics', pin: 'site',
-    text: `Lay ${pipeCells}× ${pipe.name} along the middle row so it touches every machine's front${chests.length > 0 ? `, with ${joinNames(chests)} at the end` : ''}` },
+    text: `Lay ${pipeCells}× ${pipe.name} along the middle row so it touches every machine's output side or bus`
+      + `${chests.length > 0 ? `, with ${joinNames(chests)} at the end` : ''}` },
   ...(hooked?.drafts ?? [])];
 
   const bits = linkBits(links);

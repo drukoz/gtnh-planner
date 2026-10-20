@@ -3,7 +3,7 @@
   "projectId": "Pr0jectAb1",
   "name": "Steel line",
   "rev": 7,
-  "version": "f80f8a0174ec5b42",
+  "version": "0c64318407630102",
   "status": "ok",
   "message": null,
   "dim": 0,
@@ -69,6 +69,7 @@
       "mteId": 201,
       "facing": 3,
       "facingIsOutput": true,
+      "mainFacing": 4,
       "role": "machine",
       "label": "Basic Macerator",
       "step": "layout:place:s1",
@@ -91,6 +92,7 @@
       "mteId": 201,
       "facing": 3,
       "facingIsOutput": true,
+      "mainFacing": 4,
       "role": "machine",
       "label": "Basic Macerator",
       "step": "layout:place:s1"
@@ -223,7 +225,7 @@
       "id": "layout:logistics:line",
       "order": 7,
       "kind": "logistics",
-      "text": "Lay 1× Tin Item Pipe along the middle row so it touches every machine's front, with an input chest at the end",
+      "text": "Lay 1× Tin Item Pipe along the middle row so it touches every machine's output side or bus, with an input chest at the end",
       "blocks": [
         5,
         6,

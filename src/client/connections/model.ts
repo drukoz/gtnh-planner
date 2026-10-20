@@ -3,7 +3,8 @@
 // line as a box whose rows are its faces with their exact configuration (the covers on it and its own settings, the
 // covers of pipes and the conduit faces that point at it), and the plan's flows as links between the boxes, each saying
 // what carries it (the shared GT item pipe, a GT fluid pipe, the routed network, the ME network, an item or ender fluid
-// conduit on its channel colour) and through which faces; then each interface attached to what it serves and each
+// conduit on its channel colour) and through which faces, each conduit face's row naming its mode and the channel of
+// each of its sides; then each interface attached to what it serves and each
 // logistics hookup joining the line. Also the ELK graph that lays the boxes out (inputs on the left, outputs on the
 // right), the picture read back from ELK, and what a picked box, face or link tells. No DOM and no browser APIs: the
 // server's tests lay real lines out and read their graphs too. Every order is fixed, so a layout gives one graph.
@@ -12,19 +13,28 @@ import type { ElkExtendedEdge, ElkNode } from 'elkjs/lib/elk-api.js';
 import { TIER_NAMES } from '../../shared/gt/tiers.ts';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import { configTexts, conduitFaceText, coverText, faceName } from '../../shared/layout/configure-text.ts';
-import { CONDUIT_NAMES, DYE_NAMES, hookupNetworkKind } from '../../shared/layout/enderio.ts';
+import { CONDUIT_MODE_NAMES, CONDUIT_NAMES, DYE_NAMES, hookupNetworkKind } from '../../shared/layout/enderio.ts';
 import { fmtInt, fmtRate, joinNames, NETWORK_NAMES } from '../../shared/layout/format.ts';
 import { OPPOSITE, posKey, step, type Vec3 } from '../../shared/layout/geometry.ts';
 import { FACES, type Face } from '../../shared/types/assets.ts';
-import type { BlockRole, ConduitFace, ConduitFilter, ConduitKind, CoverSpec, DyeColor, Layout, LayoutBlock, TailChest } from '../../shared/types/layout.ts';
+import type {
+  BlockRole, ConduitFace, ConduitFilter, ConduitKind, ConduitMode, CoverSpec, DyeColor, Layout, LayoutBlock, TailChest,
+} from '../../shared/types/layout.ts';
 import type { LogisticsMode, Plan } from '../../shared/types/plan.ts';
 
 // ---- Types ----
 
 export type ConnNodeKind = 'machine' | 'chest' | 'interface' | 'hookup' | 'source' | 'sink';
 
-/** One row of a box: a cover, a block's settings or a conduit face, with its configuration in a builder's words. */
-export interface ConnFace { id: string; title: string; lines: string[] }
+/** A conduit face's mode and the channel colour of each side it has. */
+export interface ConnFaceMode { mode: ConduitMode; extract?: DyeColor; insert?: DyeColor }
+
+/**
+ * One row of a box: a cover, a block's settings or a conduit face, with its configuration in a builder's words. A
+ * conduit face's row also carries its `mode` (the audit of the EnderIO In / Out fix), which the picture shows on the
+ * row's second line (`faceModeText`), so an In / Out face shows that what comes in and what goes out pass it.
+ */
+export interface ConnFace { id: string; title: string; lines: string[]; mode?: ConnFaceMode }
 
 /** A box: a plan step's machines, a chest, an interface, a hookup, or where raw inputs come from (`raw`) and final outputs go (`out`). */
 export interface ConnNode {
@@ -49,7 +59,7 @@ export interface ConnEdge {
 
 export interface ConnGraph { nodes: ConnNode[]; edges: ConnEdge[] }
 
-/** A box is this wide, and this tall for its title plus this much per line and per face row (plus `BOX_PADDING`). */
+/** A box is this wide, and this tall for its title plus this much per line and per line of a face row (plus `BOX_PADDING`). */
 export const CONN_NODE_WIDTH = 260;
 export const CONN_TITLE_HEIGHT = 28;
 export const CONN_LINE_HEIGHT = 16;
@@ -64,6 +74,21 @@ export interface ConnLayout {
 
 /** A picked box, one of its face rows, or a link. */
 export type ConnPick = { node: string; face?: string } | { edge: string };
+
+/**
+ * A conduit face's mode and channels in a few words: `<mode>[ · in <insert colour>][ · out <extract colour>]`, where in
+ * is into the block the face points at (its insert side) and out is out of it (its extract side), as its links go into
+ * and out of the box; for example `In / Out · in Blue · out Red`. At most 41 characters.
+ */
+export function faceModeText(m: ConnFaceMode): string {
+  return `${CONDUIT_MODE_NAMES[m.mode]}${m.insert === undefined ? '' : ` · in ${DYE_NAMES[m.insert]}`}`
+    + `${m.extract === undefined ? '' : ` · out ${DYE_NAMES[m.extract]}`}`;
+}
+
+/** How many text lines a face row takes in its box: its title, and a conduit face's mode under it. */
+export function faceLines(face: ConnFace): number {
+  return face.mode === undefined ? 1 : 2;
+}
 
 // ---- Words ----
 
@@ -163,12 +188,17 @@ function coverRow(node: string, host: LayoutBlock, cover: CoverSpec, nameOf: (k:
   return { face: { id: `${node}#cover:${posKey(host.pos)}:${cover.face}`, title: `${host.label}, ${faceName(cover.face)} face`, lines: [coverText(cover, nameOf)] }, conduit: null };
 }
 
-/** `<label>, <side of what the face points at> side · <conduit name>`: one conduit face in a builder's words. */
+/**
+ * `<label>, <side of what the face points at> side · <conduit name>`: one conduit face in a builder's words, with its
+ * mode and the colour of each side it has.
+ */
 function conduitRow(node: string, ref: ConduitRef, label: string, nameOf: (k: StuffKey) => string): Row {
   const side: Face = FACES[OPPOSITE[FACES.indexOf(ref.face.face)]!]!;
+  const { mode, extract, insert } = ref.face;
   return {
     face: { id: `${node}#conduit:${posKey(ref.host.pos)}:${ref.kind}:${ref.face.face}`, title: `${label}, ${faceName(side)} side · ${CONDUIT_NAMES[ref.kind]}`,
-      lines: [conduitFaceText(ref.kind, ref.face, nameOf)] },
+      lines: [conduitFaceText(ref.kind, ref.face, nameOf)],
+      mode: { mode, ...(extract === undefined ? {} : { extract: extract.color }), ...(insert === undefined ? {} : { insert: insert.color }) } },
     conduit: ref.face,
   };
 }
@@ -333,9 +363,10 @@ function hookupEdges(layout: Layout, nodes: readonly ConnNode[], grid: Grid): Co
 
 /**
  * Spec §3.8c: the boxes of `layout` (machines per plan step, chests, interfaces, hookups, then `raw` and `out` when a
- * link or a face needs them) with their face rows and sizes, and the links: the plan's flows (rates per `per`), then
- * the attached interfaces, then the hookups. A conduit face that points at no box goes to `raw` when it extracts and to
- * `out` when it only inserts (an open fluid end, toward your tank).
+ * link or a face needs them) with their face rows and sizes (a conduit face's row takes two lines), and the links: the
+ * plan's flows (rates per `per`), then the attached interfaces, then the hookups. A conduit face that points at no box
+ * (an open fluid end, toward your tank) goes to `raw` when it extracts and to `out` when it inserts, so an In / Out one
+ * is in both and both its links name it.
  */
 export function connectionsGraph(layout: Layout, plan: Plan, per: 'min' | 'hour'): ConnGraph {
   const nameOf = (k: StuffKey): string => plan.names?.[k] ?? k;
@@ -351,8 +382,9 @@ export function connectionsGraph(layout: Layout, plan: Plan, per: 'min' | 'hour'
   const incoming = pointing(grid);
   const rows = new Map(nodes.map((n) => [n.id, boxRows(n, grid, incoming, nameOf)]));
   const extracts = (r: ConduitRef): boolean => r.face.mode === 'extract' || r.face.mode === 'in_out';
+  const inserts = (r: ConduitRef): boolean => r.face.mode === 'insert' || r.face.mode === 'in_out';
   rows.set(RAW, incoming.loose.filter(extracts).map((r) => conduitRow(RAW, r, r.face.target, nameOf)));
-  rows.set(OUT, incoming.loose.filter((r) => r.face.mode === 'insert').map((r) => conduitRow(OUT, r, r.face.target, nameOf)));
+  rows.set(OUT, incoming.loose.filter(inserts).map((r) => conduitRow(OUT, r, r.face.target, nameOf)));
 
   const boxed = new Set(nodes.map((n) => n.id));
   const links = flowLinks(plan, new Set(plan.steps.map((s) => s.id).filter((id) => boxed.has(`step:${id}`))), tails);
@@ -366,7 +398,7 @@ export function connectionsGraph(layout: Layout, plan: Plan, per: 'min' | 'hour'
     const own = rows.get(n.id) ?? [];
     n.faces = own.map((r) => r.face);
     for (const r of own) if (r.conduit !== null) conduitOf.set(r.face.id, r.conduit);
-    n.height = CONN_TITLE_HEIGHT + CONN_LINE_HEIGHT * (n.lines.length + n.faces.length) + BOX_PADDING;
+    n.height = CONN_TITLE_HEIGHT + CONN_LINE_HEIGHT * (n.lines.length + n.faces.reduce((sum, f) => sum + faceLines(f), 0)) + BOX_PADDING;
   }
 
   const byId = new Map(nodes.map((n) => [n.id, n]));

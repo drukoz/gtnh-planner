@@ -1,8 +1,10 @@
 package io.github.drukoz.gtnhplanner.projector.client;
 
 import cpw.mods.fml.common.registry.GameData;
+import gregtech.api.interfaces.metatileentity.IMetaTileEntity;
 import gregtech.api.interfaces.tileentity.IGregTechTileEntity;
 import gregtech.api.metatileentity.BaseMetaTileEntity;
+import gregtech.api.metatileentity.implementations.MTEBasicMachine;
 import io.github.drukoz.gtnhplanner.projector.check.WorldProbe;
 import net.minecraft.block.Block;
 import net.minecraft.tileentity.TileEntity;
@@ -13,7 +15,7 @@ import net.minecraftforge.common.util.ForgeDirection;
  * The build check's view of one client world (spec §3.13): only what the client already has loaded, never changed.
  * A dimension change brings a new world, and with it a new probe. Every answer that fails is the answer for a block
  * that is not loaded: {@link #isLoaded} false, {@link #isKnownBlock} false, {@link #blockAt} null, {@link #metaAt} −1,
- * {@link #mteIdAt} {@link #NO_TILE} and {@link #facingAt} −1.
+ * {@link #mteIdAt} {@link #NO_TILE}, and {@link #facingAt} and {@link #mainFacingAt} −1.
  */
 public final class McWorldProbe implements WorldProbe {
 
@@ -100,8 +102,8 @@ public final class McWorldProbe implements WorldProbe {
      * front that is no side. That is the planner's facing for every GT machine: a hatch's or a multiblock
      * controller's face, a transformer's input side, and a single-block machine's output side, which the line's spine
      * needs (its pipe feeds the machine and its conveyor cover drains it there). GT draws a single-block machine's face
-     * overlay on its main facing instead, a side GT moves no items or fluids through and never lets be the output side,
-     * so the main facing is not compared. A plain wrench sets the front facing.
+     * overlay on its main facing instead, a side GT moves no items or fluids through and never lets be the output side;
+     * {@link #mainFacingAt} reads that one. A plain wrench sets the front facing.
      */
     @Override
     public int facingAt(int x, int y, int z) {
@@ -110,6 +112,27 @@ public final class McWorldProbe implements WorldProbe {
             if (!(tile instanceof BaseMetaTileEntity)) return -1;
             ForgeDirection front = ((BaseMetaTileEntity) tile).getFrontFacing();
             int side = front == null ? -1 : front.ordinal();
+            return side >= 0 && side <= 5 ? side : -1;
+        } catch (Throwable t) {
+            return -1;
+        }
+    }
+
+    /**
+     * A GT single-block machine's main facing ({@code MTEBasicMachine.mMainFacing}: its own front, where GT draws its
+     * face overlay), as ForgeDirection 0…5; −1 for anything else, and for one that is no side, which is what the client
+     * has until GT's update data reaches it ({@code getUpdateData} sends it, {@code onValueUpdate} sets it). A sneaking
+     * wrench sets it.
+     */
+    @Override
+    public int mainFacingAt(int x, int y, int z) {
+        try {
+            TileEntity tile = world.getTileEntity(x, y, z);
+            if (!(tile instanceof BaseMetaTileEntity)) return -1;
+            IMetaTileEntity mte = ((BaseMetaTileEntity) tile).getMetaTileEntity();
+            if (!(mte instanceof MTEBasicMachine)) return -1;
+            ForgeDirection main = ((MTEBasicMachine) mte).mMainFacing;
+            int side = main == null ? -1 : main.ordinal();
             return side >= 0 && side <= 5 ? side : -1;
         } catch (Throwable t) {
             return -1;

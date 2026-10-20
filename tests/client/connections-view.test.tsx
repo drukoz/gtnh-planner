@@ -27,7 +27,7 @@ describe('the Connections tab', () => {
     for (const id of ['step:a', 'step:b', 'chest:2,64,0', 'chest:2,64,2']) expect(html).toContain(`data-node="${id}"`);
     expect(html).toContain('data-face="step:a#conduit:0,64,1:item:north"');
     expect(html).toContain('Titanium Dust 60/min · Red');
-    expect(html).toContain('stroke="#b02e26"');
+    expect(html).toContain('stroke="#b3312c"');                                       // Red as the game draws it (Minecraft 1.7.10's dye colours)
     expect(html).toContain('Item Conduit (line colour = channel)');
     expect(html).not.toContain('data-testid="conn-panel"');
   });
@@ -44,6 +44,24 @@ describe('the Connections tab', () => {
     for (const id of ['step:a', 'step:b', 'chest:2,64,0', 'chest:2,64,2']) expect(pan).toContain(`data-node="${id}"`);
     expect(pan).toContain('data-edge="flow:step:a&gt;step:b:t:dust@0"');
     expect(html).toMatch(/<button type="button" class="small">Fit<\/button>.*<div class="connections" data-testid="connections"/s);
+  });
+  // the audit of the EnderIO In / Out fix: a conduit face's row names its mode and the channel of each side under its
+  // title, so the picture shows that the link in (insert side) and the link out (extract side) pass the same face
+  it("shows each conduit face's mode and channels on its row's second line, which picks the face too", () => {
+    const box = /<g data-node="step:a"[^>]*>(.*?)<\/g>/s.exec(shell())![1]!;
+    expect(box).toContain('<text class="conn-face" data-face="step:a#conduit:0,64,1:item:north" x="8" y="59">');
+    expect(box).toContain('<text class="conn-face-mode" data-face="step:a#conduit:0,64,1:item:north" x="8" y="75">In / Out · in Blue · out Red</text>');
+    expect(box).toContain('<svg width="260" height="84">');
+    expect(shell({ pick: { node: 'step:a', face: 'step:a#conduit:0,64,1:item:north' } }))
+      .toContain('<text class="conn-face-mode selected" data-face="step:a#conduit:0,64,1:item:north"');
+  });
+  it('marks the face rows a picked link leaves and enters', () => {
+    const html = shell({ pick: { edge: 'flow:step:a>step:b:t:dust@0' } });
+    for (const face of ['step:a#conduit:0,64,1:item:north', 'step:b#conduit:1,64,1:item:north']) {
+      expect(html).toContain(`<text class="conn-face linked" data-face="${face}"`);
+      expect(html).toContain(`<text class="conn-face-mode linked" data-face="${face}"`);
+    }
+    expect(html).not.toContain('class="conn-face linked" data-face="chest:');
   });
   it('shows the picked face in the side panel', () => {
     const html = shell({ pick: { node: 'step:a', face: 'step:a#conduit:0,64,1:item:north' } });
@@ -88,7 +106,8 @@ describe('the Connections tab', () => {
   // tooltip (its first child, as in the flow diagram) holds every text in full
   it('cuts a box text too long for its box with …, and keeps every text of the box in full in its tooltip', () => {
     const box = /<g data-node="step:b"[^>]*>(.*?)<\/g>/s.exec(shell())![1]!;
-    expect(/^<title>(.*?)<\/title><rect /s.exec(box)?.[1]).toBe('1× Advanced Assembler\nMV · 30 EU/t\nAdvanced Assembler, south side · Item Conduit');
+    expect(/^<title>(.*?)<\/title><rect /s.exec(box)?.[1])
+      .toBe('1× Advanced Assembler\nMV · 30 EU/t\nAdvanced Assembler, south side · Item Conduit — In / Out · in Red · out Yellow');
     expect(box).toMatch(/data-face="step:b#conduit:1,64,1:item:north"[^>]*>Advanced Assembler, south side · Item …<\/text>/);
     expect(box).not.toContain('Item Conduit</text>');
   });

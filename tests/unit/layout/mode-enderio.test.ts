@@ -12,6 +12,15 @@ const sharedPlan = () => makePlan([
 ], { flows: [{ from: 'raw', to: 'a', key: 't:in@0', perSecond: 3 }, { from: 'a', to: 'b', key: 't:dust@0', perSecond: 1 },
   { from: 'a', to: 'c', key: 't:dust@0', perSecond: 1 }, { from: 'a', to: 'out', key: 't:dust@0', perSecond: 1 },
   { from: 'b', to: 'out', key: 't:ingot@0', perSecond: 1 }, { from: 'c', to: 'out', key: 't:out_c@0', perSecond: 1 }] });
+/**
+ * Why the storage tap and the input chest's face share a channel of their own (the audit of the EnderIO In / Out fix):
+ * EnderIO extracts only what an Insert face of the extract side's colour takes (`NetworkedInventory.doTransfer`), so on
+ * Light Gray, with the input chest's face the only one on it, the tap stops while the chest is full; on Green, every
+ * face's default, it would hand the raw inputs on to the base's other storages.
+ */
+const TAP_NOTE = "Light Gray is the tap's own channel, so check that no other face on your network inserts on Light Gray: then the tap "
+  + "hands the raw inputs to the input chest alone and stops while the chest is full (on Green, every face's default, it would go on filling "
+  + 'your other storages)';
 const manyInputs = (n: number) => makePlan([{ id: 's1', mteId: IDS.ASSEMBLER, count: 1, tier: 2, inputs: keysN(n).map((k): [string, number] => [k, 1]) }],
   { flows: [...keysN(n).map((key) => ({ from: 'raw', to: 's1', key, perSecond: 1 })), { from: 's1', to: 'out', key: 't:out_s1@0', perSecond: 1 }] });
 
@@ -46,17 +55,20 @@ describe('EnderIO mode — items', () => {
       { id: 'layout:logistics:inputs', kind: 'logistics', pin: 'site', text: 'Put the raw inputs in the input chest: Raw Input' }]);
   });
 
-  it('feeds the input chest from an EnderIO item network on the default Green channel', () => {
+  it('feeds the input chest from an EnderIO item network on a channel of its own, so the tap stops when the chest is full', () => {
     const network = makeScan({ logistics: [{ kind: 'enderio', taps: [[0, 64, 0]] }] }).logistics[0]!;
     const r = buildMode('enderio', { ...setup(), network });
     expect(r.logisticsPort).toEqual([3, 0, 1]);
-    // priority 1: above the base network's own Insert faces, which EnderIO leaves at 0, so the raw inputs come to the line first
+    // Light Gray, which the base's faces do not have by default: the tap's only target on it is the input chest, so once
+    // that is full the tap moves nothing (on Green it would fill the base's other storages); priority 1 stays, above the
+    // base network's own Insert faces at EnderIO's default 0, should another face share the colour after all
     expect(r.hookup).toEqual({ part: 'eio_item_conduit', end: null, endConduit: { kind: 'item',
-      face: { mode: 'insert', target: 'Chest (input)', insert: { color: 'green', filter: basic(['t:in@0']), rate: 1, priority: 1 } } } });
+      face: { mode: 'insert', target: 'Chest (input)', insert: { color: 'silver', filter: basic(['t:in@0']), rate: 1, priority: 1 } } } });
     expect(r.extraParts).toEqual([{ key: 'EnderIO:itemBasicFilterUpgrade@0', amount: 1, why: 'filter at the storage tap', group: 'logistics' }]);
     expect(r.drafts.map((d) => [d.id, d.pin])).toEqual([['layout:logistics:line', 'site'], ['layout:configure:conduit-tap', 'logistics']]);
-    expect(r.drafts[1]!.text).toBe('At the storage tap set the conduit face toward your storage to Extract (In / Out if it already inserts); '
-      + 'extract on Green with a Basic Item Filter (whitelist: Raw Input; match meta, ignore NBT), round robin off, self feed off, redstone Always active');
+    expect(r.drafts[1]!.text).toBe('At the storage tap set the conduit face toward your storage to Extract (In / Out if it already inserts, its insert '
+      + 'side left as it is); extract on Light Gray with a Basic Item Filter (whitelist: Raw Input; match meta, ignore NBT), round robin off, self feed '
+      + `off, redstone Always active. ${TAP_NOTE}`);
   });
 
   it('joins a shared item into one channel and fills machines before the chest', () => {
@@ -254,10 +266,10 @@ describe('EnderIO mode — tail chests, the storage tap and warnings', () => {
       { key: BASIC, amount: 1, why: 'filter at the storage tap', group: 'logistics' },
       { key: SPEED, amount: 2, why: 'speed upgrades at the storage tap', group: 'logistics' }]);
     expect(r.drafts.map((d) => d.id)).toEqual(['layout:logistics:line', 'layout:configure:conduit-tap']);
-    expect(r.drafts[1]!.text).toBe('At the storage tap set the conduit face toward your storage to Extract (In / Out if it already inserts); '
-      + 'extract on Green with a Basic Item Filter (whitelist: Raw Input; match meta, ignore NBT), 2× Item Conduit Speed Upgrade, round robin off, '
-      + 'self feed off, redstone Always active');
-    expect(r.hookup!.endConduit!.face.insert).toEqual({ color: 'green', filter: basic(['t:in@0']), rate: 20, priority: 1 });
+    expect(r.drafts[1]!.text).toBe('At the storage tap set the conduit face toward your storage to Extract (In / Out if it already inserts, its insert '
+      + 'side left as it is); extract on Light Gray with a Basic Item Filter (whitelist: Raw Input; match meta, ignore NBT), 2× Item Conduit Speed '
+      + `Upgrade, round robin off, self feed off, redstone Always active. ${TAP_NOTE}`);
+    expect(r.hookup!.endConduit!.face.insert).toEqual({ color: 'silver', filter: basic(['t:in@0']), rate: 20, priority: 1 });
   });
 
   it("disables the face toward a multiblock's controller and names the multiblock on each of its faces", () => {

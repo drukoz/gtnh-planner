@@ -52,14 +52,17 @@ export function coverText(cover: CoverSpec, nameOf: (k: StuffKey) => string): st
 /**
  * A GT basic machine's Input from Output Side in a builder's words, as the state to leave it in (GT 5.09.54
  * `MTEBasicMachine`): every constructor turns it on, and the GUI has no button for it; a Screwdriver right-click on the
- * front or the output side switches it whatever it was and names the new state in chat (`gt.interact.desc.
+ * output side or the front switches it whatever it was and names the new state in chat (`gt.interact.desc.
  * input_from_output_on`/`_off`), a sneaking one switches the Input Filter instead, and the click also works the cover
- * on the side clicked (`BaseMetaTileEntity.onRightclick`), so a covered output side is no place for it.
+ * on the side clicked (`BaseMetaTileEntity.onRightclick`, on that side itself, never the wrench grid's). The words name
+ * the side a builder can reach: every mode turns such a machine's output side to the middle row, and its front faces the
+ * machine beside it along the row.
  */
 function inputFromOutputSideText(allowed: boolean): string {
   const state = `Input from Output Side ${allowed ? 'allowed' : 'forbidden'}`;
-  return `${state}: a newly crafted machine starts with it on, and a Screwdriver right-click on its front, or on its output side where no cover `
-    + `sits, switches it, so leave it where the chat says "${state}" (a sneak-click switches the Input Filter instead)`;
+  return `${state}: a newly crafted machine has it on; a Screwdriver right-click on its middle-row side switches it and the chat names the new `
+    + `state, so leave it where the chat says "${state}" (a sneak-click switches the Input Filter instead, and the click also works a cover on `
+    + 'that side)';
 }
 
 /** One setting of a block in a builder's words. */
@@ -122,9 +125,11 @@ function extractText(s: ConduitExtract, nameOf: (k: StuffKey) => string): string
 /**
  * What an insert side into a GT basic machine's output side reminds the builder of: the machine takes the items there
  * only while its Input from Output Side is allowed, which one Screwdriver click too many switches off (see
- * `inputFromOutputSideText`).
+ * `inputFromOutputSideText`). Only the EnderIO mode sets it, so the side to click is the one the conduit touches,
+ * reached beside the conduit's connector.
  */
-const INTO_OUTPUT_SIDE = 'into its output side: keep its Input from Output Side allowed (a newly crafted machine has it on)';
+const INTO_OUTPUT_SIDE = 'into its output side: keep its Input from Output Side allowed (a newly crafted machine has it on; a Screwdriver '
+  + 'right-click on that side of the machine, beside the conduit, switches it)';
 
 function insertText(s: ConduitInsert, nameOf: (k: StuffKey) => string): string {
   const text = [`insert on ${DYE_NAMES[s.color]}${filterClause(s.filter, nameOf)}`];

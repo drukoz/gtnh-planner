@@ -25,9 +25,21 @@ export interface ProjectorBlock {
   mteId?: number; facing?: number /* only when the front is checked: GT's front facing */;
   /** `facing` is a single-block machine's output side (its GT front facing); its face overlay is on another side. */
   facingIsOutput?: true;
+  /**
+   * Beside `facingIsOutput`: the machine's own front (GT's `mMainFacing`, ForgeDirection), where GT draws its face
+   * overlay; the mod draws the ghost's overlay there and checks it too. Optional, so a mod that does not read it still
+   * reads the payload.
+   */
+  mainFacing?: number;
   part?: string /* multipart / conduit / ME cable part */;
-  role: BlockRole; label: string; step: string | null /* build step id */; covers?: ProjectorCover[];
+  /** Every part of a block holding two or more (a conduit bundle's conduits, in bundle order); `part` is the first. */
+  parts?: string[];
+  role: BlockRole; label: string; step: string | null /* build step id: the step that places it */; covers?: ProjectorCover[];
 }
+/**
+ * `blocks`: the indices of the blocks the step builds, ascending: every block whose `step` it is, and a conduit bundle
+ * of the line whose `step` is another but which holds a conduit this step lays (the line and the fluids step).
+ */
 export interface ProjectorStep { id: string; order: number; kind: BuildStep['kind']; text: string; blocks: number[] /* indices into blocks */; done: boolean }
 export interface ProjectorPayload {
   format: typeof PROJECTOR_FORMAT; projectId: string; name: string; rev: number; version: string; status: LayoutStatus;

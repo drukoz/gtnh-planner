@@ -49,7 +49,9 @@ public final class HudText {
     /**
      * What the player is looking at: {@code <label>: <what the check found>}, then
      * {@code ; cover: <label> on the <side> face} for each cover; null for a block that is not loaded, which is neither
-     * right nor wrong. A wrong facing names the side to turn: a single-block machine's output side, else the front.
+     * right nor wrong. A wrong facing names the side to turn: a single-block machine's own front and output side, both
+     * checked ({@code its front should face <side> and its output side <side>}), or its output side alone when the
+     * planner sent no front; else the front.
      */
     public static String lookingAt(PlannedBlock b, BlockState s) {
         String found;
@@ -61,8 +63,13 @@ public final class HudText {
                 found = "wrong block here";
                 break;
             case WRONG_FACING:
-                found = "wrong facing, its " + (b.facingIsOutput ? "output side" : "front") + " should face "
-                    + Facing.name(b.facing);
+                if (b.facingIsOutput && b.mainFacing >= 0) {
+                    found = "wrong facing, its front should face " + Facing.name(b.mainFacing) + " and its output side "
+                        + Facing.name(b.facing);
+                } else {
+                    found = "wrong facing, its " + (b.facingIsOutput ? "output side" : "front") + " should face "
+                        + Facing.name(b.facing);
+                }
                 break;
             case MISSING:
                 found = "not placed yet";

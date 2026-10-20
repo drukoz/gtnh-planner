@@ -230,6 +230,10 @@ describe('layoutLine: the final review', () => {
     expect(machines.every((b) => b.mainFacing === rotateFacing(4, 90))).toBe(true);
     expect(new Set(machines.map((b) => b.facing))).toEqual(new Set([4, 5]));         // the two rows face the spine, turned 90°
     expect(machines.every((b) => b.config?.inputFromOutputSide === true)).toBe(true);
+    // the place steps name that front by the compass, turned with the line (local west → north at 90°)
+    const place = layout.buildSteps.filter((s) => s.id.startsWith('layout:place:'));
+    expect(place.length).toBeGreaterThan(0);
+    expect(place.every((s) => s.text.includes('its front facing north: with a Wrench, sneak-right-click its north side'))).toBe(true);
   });
 });
 

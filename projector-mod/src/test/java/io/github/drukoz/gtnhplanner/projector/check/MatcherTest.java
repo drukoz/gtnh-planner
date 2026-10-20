@@ -54,6 +54,17 @@ class MatcherTest {
         assertEquals(WRONG_BLOCK, Matcher.check(b(3), new FakeWorld().put(102, 64, 201, GT, 0, 202, 2)));                // another machine, turned too
     }
 
+    // The review of the EnderIO In / Out fix: a single-block machine's own front is where the payload says, or GT takes
+    // no energy there (isInputFacing) and the ghost, the 3D view and the place step disagree with the machine.
+    @Test void checksASingleBlockMachinesOwnFrontToo() throws Exception {
+        PlannedBlock mac = b(3);   // output side south (3), front west (4)
+        assertEquals(CORRECT, Matcher.check(mac, new FakeWorld().put(102, 64, 201, GT, 0, 201, 3, 4)));
+        assertEquals(WRONG_FACING, Matcher.check(mac, new FakeWorld().put(102, 64, 201, GT, 0, 201, 3, 5)));
+        assertEquals(WRONG_FACING, Matcher.check(mac, new FakeWorld().put(102, 64, 201, GT, 0, 201, 2, 4)));
+        assertEquals(CORRECT, Matcher.check(mac, new FakeWorld().put(102, 64, 201, GT, 0, 201, 3, -1)));                    // not known yet
+        assertEquals(CORRECT, Matcher.check(b(2), new FakeWorld().put(101, 64, 202, GT, 0, 21, 4, 5)));                     // a transformer has none to check
+    }
+
     @Test void anUnloadedBlockIsNotCalledUncheckable() throws Exception {
         assertEquals(UNLOADED, Matcher.check(b(9), new FakeWorld().unload(103, 65, 203)));   // block 9's name is unknown to this client
     }

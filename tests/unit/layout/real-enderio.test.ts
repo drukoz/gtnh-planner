@@ -82,7 +82,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('an EnderIO line laid out on the
     const parts = resolveParts(pack);
     const partOf = new Map(EIO_PARTS.map((id) => [parts[id].key, id]));
     const colours = (f: ConduitFace): DyeColor[] => [f.extract?.color, f.insert?.color].filter((c): c is DyeColor => c !== undefined);
-    // the line's own channels: a hookup's end face inserts on the base network's Green
+    // the line's own channels: a hookup's end face inserts on the base network, on the storage tap's own channel
     const itemColours = new Set(faces.filter((f) => f.kind === 'item' && f.hookup === undefined).flatMap((f) => colours(f.face)));
     const fluidColours = new Set(faces.filter((f) => f.kind !== 'item').flatMap((f) => colours(f.face)));
     const conduitBlocks = layout.blocks.filter((b) => (b.conduits ?? []).length > 0);

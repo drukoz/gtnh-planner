@@ -44,9 +44,12 @@ public final class ViewFilter {
         return layerY == null && stepIndex < 0;
     }
 
-    /** Whether the block is on the layer and placed by the step, where those are set (distance aside). */
+    /**
+     * Whether the block is on the layer and built by the step, where those are set (distance aside): a step shows every
+     * block it builds ({@link PlannedBlock#inStep}), a conduit bundle in each step that lays one of its conduits.
+     */
     public boolean shows(PlannedBlock b) {
-        return (layerY == null || b.y == layerY) && (stepIndex < 0 || b.step == stepIndex);
+        return (layerY == null || b.y == layerY) && (stepIndex < 0 || b.inStep(stepIndex));
     }
 
     /** Whether the block's centre is at most {@code maxDistance} from the point (the camera), in a straight line. */

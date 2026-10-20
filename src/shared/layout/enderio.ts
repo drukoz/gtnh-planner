@@ -22,7 +22,8 @@
 // - Item filters hold 5 (Basic), 10 (Advanced) or 24 (Big) items and match meta and NBT by default
 //   (`ItemFilter.DEFAULT_MBT`); an ender fluid conduit's own `FluidFilter` holds 5 fluids.
 // - `ConnectionMode`, `DyeColor` and `RedstoneControlMode` are the enums behind the face types in `../types/layout.ts`;
-//   the names are the conduit GUI's (`en_US.lang`, `gui.conduit.ioMode.*` for the modes).
+//   the names are the conduit GUI's (`en_US.lang`, `gui.conduit.ioMode.*` for the modes). `DyeColor.getColor()` is
+//   Minecraft 1.7.10's `ItemDye.field_150922_c` (the pack's `minecraft_server.1.7.10.jar`), the colours `DYE_HEX` holds.
 // - Plan 4 names a scanned EnderIO network `e:<conduit type>:…` and gives its taps the kind `pipe`, as it does a GT pipe
 //   network's, so `hookupNetworkKind` tells the two apart by the network id.
 // Pure TypeScript shared by server and browser: nothing from node:* may be imported here.
@@ -47,13 +48,18 @@ export const DYE_NAMES: Readonly<Record<DyeColor, string>> = Object.freeze({
   gray: 'Gray', pink: 'Pink', lime: 'Lime', yellow: 'Yellow', light_blue: 'Light Blue', magenta: 'Magenta', orange: 'Orange', white: 'White',
 });
 
-/** A swatch per colour for drawing channels. */
+/**
+ * Each colour as the game draws it, for drawing channels: Minecraft 1.7.10's dye colours (`ItemDye.field_150922_c`),
+ * which EnderCore's `DyeColor.getColor()` returns and the conduit renderers tint a connector's arrows with
+ * (`Tessellator.setColorOpaque_I`), so the 3D view's arrows and the Connections view's links show what the player sees in
+ * game. Later game versions changed these colours; this pack's are these.
+ */
 export const DYE_HEX: Readonly<Record<DyeColor, string>> = Object.freeze({
-  black: '#1d1d21', red: '#b02e26', green: '#5e7c16', brown: '#835432', blue: '#3c44aa', purple: '#8932b8', cyan: '#169c9c', silver: '#9d9d97',
-  gray: '#474f52', pink: '#f38baa', lime: '#80c71f', yellow: '#fed83d', light_blue: '#3ab3da', magenta: '#c74ebd', orange: '#f9801d', white: '#f9fffe',
+  black: '#1e1b1b', red: '#b3312c', green: '#3b511a', brown: '#51301a', blue: '#253192', purple: '#7b2fbe', cyan: '#287697', silver: '#ababab',
+  gray: '#434343', pink: '#d88198', lime: '#41cd34', yellow: '#decf2a', light_blue: '#6689d3', magenta: '#c354cd', orange: '#eb8844', white: '#f0f0f0',
 });
 
-/** A colour's swatch (`DYE_HEX`) as a fresh RGB triple, to tint a texture with. */
+/** A colour as the game draws it (`DYE_HEX`), as a fresh RGB triple, to tint a texture with. */
 export function dyeRgb(color: DyeColor): Rgb {
   const hex = DYE_HEX[color];
   return [Number.parseInt(hex.slice(1, 3), 16), Number.parseInt(hex.slice(3, 5), 16), Number.parseInt(hex.slice(5, 7), 16)];
@@ -69,6 +75,21 @@ export const DEFAULT_CHANNEL: DyeColor = 'green';
 export const CHANNEL_PALETTE: readonly DyeColor[] = Object.freeze([
   'red', 'blue', 'yellow', 'orange', 'purple', 'cyan', 'magenta', 'lime', 'pink', 'light_blue', 'brown', 'white', 'black', 'gray', 'silver',
 ]);
+
+/**
+ * The channel of the link from the storage tap to the line's input chest, on the base's EnderIO network: the tap's
+ * extract side and the input chest's Insert face. An extract side hands items only to Insert faces of its colour and
+ * extracts only what one of them takes (`NetworkedInventory.doTransfer` moves nothing when no target takes the stack), so
+ * with the input chest's face the only one on this colour, the tap stops while the chest is full. On Green, every face's
+ * default, it would hand the raw inputs on to the base's other storages (and back again from any that extract on Green).
+ * The scan does not read the base's face colours, so the steps ask the builder to keep this one free.
+ */
+export const TAP_CHANNEL: DyeColor = 'silver';
+
+/** Why the storage tap's link has `TAP_CHANNEL`, and what to check, in a builder's words, for the steps that set it. */
+export const TAP_CHANNEL_NOTE = `${DYE_NAMES[TAP_CHANNEL]} is the tap's own channel, so check that no other face on your network inserts on `
+  + `${DYE_NAMES[TAP_CHANNEL]}: then the tap hands the raw inputs to the input chest alone and stops while the chest is full (on Green, every `
+  + "face's default, it would go on filling your other storages)";
 
 /** The face modes as the conduit GUI names them (`en_US.lang` `gui.conduit.ioMode.*`). */
 export const CONDUIT_MODE_NAMES: Readonly<Record<ConduitMode, string>> = Object.freeze({

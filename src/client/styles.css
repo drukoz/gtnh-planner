@@ -506,6 +506,12 @@ span.mat-toggle { display: inline-block; }
 .conn-node .conn-face { fill: var(--accent); cursor: pointer; pointer-events: auto; }
 .conn-node .conn-face:hover, .conn-node .conn-face.selected { text-decoration: underline; }
 .conn-node .conn-face.selected { font-weight: 600; }
+/* a conduit face's mode and channels, under its row's title; a row a picked link passes through is linked */
+.conn-node .conn-face-mode { fill: var(--muted); font-size: 10.5px; cursor: pointer; pointer-events: auto; }
+.conn-node .conn-face-mode:hover { text-decoration: underline; }
+.conn-node .conn-face-mode.selected { fill: var(--text); font-weight: 600; }
+.conn-node .conn-face.linked, .conn-node .conn-face-mode.linked { font-weight: 600; }
+.conn-node .conn-face-mode.linked { fill: var(--text); }
 .conn-via-gt_pipe { --conn-link: #9ccc65; }
 .conn-via-fluid_pipe { --conn-link: #1e88e5; }
 .conn-via-routed { --conn-link: #ff7043; }

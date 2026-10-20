@@ -12,15 +12,15 @@
 // gets it for any two or more, and a fluid it hands both to machines and to an open end is warned about. The plan's
 // flows link what makes an item or fluid to what takes it, and linked sides share a channel; items and fluids are
 // separate networks with their own channels. Only raw inputs and final outputs touch storage, at the tail: an input
-// chest the line extracts from, which an EnderIO network at the base keeps stocked on Green (a colour the line never
-// uses), output chests of 24 items each, and one open fluid conduit end per fluid that enters or leaves the line, for a
-// tank. The fluid conduit is the slowest ender tier that moves the busiest face. Every order and tie-break is fixed, so
-// the same plan gives the same faces and colours.
+// chest the line extracts from, which an EnderIO network at the base keeps stocked from the storage tap on a channel of
+// that link's own (`TAP_CHANNEL`), output chests of 24 items each, and one open fluid conduit end per fluid that enters
+// or leaves the line, for a tank. The fluid conduit is the slowest ender tier that moves the busiest face. Every order
+// and tie-break is fixed, so the same plan gives the same faces and colours.
 
 import { isFluidKey, type StuffKey } from '../../../shared/keys.ts';
 import { conduitSideText } from '../../../shared/layout/configure-text.ts';
 import {
-  CHANNEL_PALETTE, CONDUIT_NAMES, DEFAULT_CHANNEL, DYE_NAMES, FLUID_CONDUITS, ITEM_CONDUIT, ITEM_FILTER_SLOTS, itemFaceRate,
+  CHANNEL_PALETTE, CONDUIT_NAMES, DYE_NAMES, FLUID_CONDUITS, ITEM_CONDUIT, ITEM_FILTER_SLOTS, TAP_CHANNEL, TAP_CHANNEL_NOTE, itemFaceRate,
 } from '../../../shared/layout/enderio.ts';
 import { fmtInt, fmtRate, joinNames } from '../../../shared/layout/format.ts';
 import { posKey, sideToward, step, type Vec3 } from '../../../shared/layout/geometry.ts';
@@ -462,19 +462,22 @@ function itemSettings(input: ModeInput, plans: readonly FacePlan[], channels: Ch
 
 /**
  * How an EnderIO item network at the base keeps the input chest stocked (spec §3.6 "hooked into whatever network
- * exists"): Plan 5's hookup lays Item Conduits from the storage tap, the last one inserting into the chest on Green with
- * the chest's whitelist at priority 1. Every Insert face already on the base's network is at EnderIO's default 0, and
- * an extraction goes to the first target that takes it (sticky, then priority, then distance; the tap's round robin
- * is off), so the raw inputs reach the line before any nearer storage on Green. The conduit face at the tap is the
- * base's own, so its settings are a drafted configure step: Extract, or In / Out when that face already inserts into
- * the storage (Extract alone would stop it storing), and its filter and speed upgrades are parts lines.
+ * exists"): Plan 5's hookup lays Item Conduits from the storage tap, the last one inserting into the chest with the
+ * chest's whitelist. Both ends of that link are on `TAP_CHANNEL`, a colour of its own on the base's network (the audit
+ * of the EnderIO In / Out fix): an extract side hands items only to Insert faces of its colour and moves nothing none of
+ * them takes, so the tap stops while the chest is full instead of handing the raw inputs on to the base's other
+ * storages, which are on Green by default (round robin off: there is one target). The end face keeps priority 1, above
+ * EnderIO's default 0, should another face of the base share the colour after all. The conduit face at the tap is the
+ * base's own, so its settings are a drafted configure step that says why the colour must stay free: Extract, or In / Out
+ * when that face already inserts into the storage (Extract alone would stop it storing; its insert side stays as it
+ * is), and its filter and speed upgrades are parts lines.
  */
 function storageHookup(input: ModeInput, keys: readonly StuffKey[], rate: number): { hookup: ModeHookup; extraParts: BomLine[]; draft: StepDraft } {
   const { pack, plan, parts } = input;
   const { filter } = itemFilterFor(parts, keys);
   const speed = speedUpgradesFor(rate);
   const tap: ConduitExtract = {
-    color: DEFAULT_CHANNEL, filter, rate, roundRobin: false, selfFeed: false, redstone: 'ignore',
+    color: TAP_CHANNEL, filter, rate, roundRobin: false, selfFeed: false, redstone: 'ignore',
     ...(speed.count > 0 ? { speed: { item: parts.eio_speed_upgrade.key, count: speed.count } } : {}),
   };
   const extraParts: BomLine[] = [];
@@ -482,13 +485,14 @@ function storageHookup(input: ModeInput, keys: readonly StuffKey[], rate: number
   if (speed.count > 0) extraParts.push({ key: parts.eio_speed_upgrade.key, amount: speed.count, why: 'speed upgrades at the storage tap', group: 'logistics' });
   // the end face holds a filter of its own: it is a second part, on a block the hookup places; its priority is above
   // the base network's own Insert faces (EnderIO's default 0), as the line's machine faces are
-  const end: ConduitInsert = { color: DEFAULT_CHANNEL, filter: itemFilterFor(parts, keys).filter, rate, priority: 1 };
+  const end: ConduitInsert = { color: TAP_CHANNEL, filter: itemFilterFor(parts, keys).filter, rate, priority: 1 };
   const tapText = conduitSideText('extract', tap, (k) => nameList(plan, pack, [k]));
   return {
     hookup: { part: 'eio_item_conduit', end: null, endConduit: { kind: 'item', face: { mode: 'insert', target: INPUT_CHEST, insert: end } } },
     extraParts,
     draft: { id: 'layout:configure:conduit-tap', kind: 'configure', pin: 'logistics',
-      text: `At the storage tap set the conduit face toward your storage to Extract (In / Out if it already inserts); ${tapText}` },
+      text: `At the storage tap set the conduit face toward your storage to Extract (In / Out if it already inserts, its insert side left as it is); `
+        + `${tapText}. ${TAP_CHANNEL_NOTE}` },
   };
 }
 

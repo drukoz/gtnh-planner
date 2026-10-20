@@ -20,8 +20,8 @@ const faces = new Map([faceSet('conduit:item', 'itemConduit'), faceSet('conduit:
   faceSet('conduit:connector_background', 'itemConduitIoConnector'), faceSet('conduit:connector_in_out_in', 'itemConduitInOut_In'),
   faceSet('conduit:connector_in_out_out', 'itemConduitInOut_Out'), faceSet('conduit:connector_extract', 'itemConduitInput')]);
 const plan = { names: enderioNames } as unknown as Plan;
-/** The channel colours of the fixtures as the 3D view tints them: Red and Blue's swatches (`DYE_HEX`). */
-const RED = '176,46,38', BLUE = '60,68,170';
+/** The channel colours of the fixtures as the 3D view tints them: Red and Blue as the game draws them (Minecraft 1.7.10's dye colours). */
+const RED = '179,49,44', BLUE = '37,49,146';
 /** A tile's layers as `<texture name>[ <tint>]`, bottom first. */
 const drawn = (scene: SceneData, tile: number): string[] =>
   scene.tiles[tile]!.layers.map((l) => `${l.path.replace(/^.*\/(\w+)\.png$/, '$1')}${l.tint === undefined ? '' : ` ${l.tint.join(',')}`}`);
@@ -61,7 +61,7 @@ describe('conduits in the 3D view', () => {
       'Item Conduit, north face to Basic Macerator: In / Out; extract on Red with a Basic Item Filter (whitelist: Titanium Dust; match meta, ignore NBT), '
         + '2× Item Conduit Speed Upgrade, round robin off, self feed off, redstone Always active; insert on Blue with a Basic Item Filter '
         + '(whitelist: Raw Input; match meta, ignore NBT), priority 1, into its output side: keep its Input from Output Side allowed (a newly crafted '
-        + 'machine has it on)',
+        + 'machine has it on; a Screwdriver right-click on that side of the machine, beside the conduit, switches it)',
       'Ender Fluid Conduit, top face to Basic Fluid Extractor: Extract; extract on Red with a fluid filter (whitelist: Molten Iron), round robin off, redstone Always active',
       'Ender Fluid Conduit, south face to Basic Macerator: Disabled'] });
     expect(hoverText(bundleLayout, plan, 0).startsWith('Conduit bundle (Item Conduit + Ender Fluid Conduit) — Item Conduit, north face')).toBe(true);
@@ -91,7 +91,7 @@ describe('conduits in the 3D view: the edges', () => {
     // of the face's channel (its insert side's Red)
     expect(drawn(scene, scene.instances[1]!.tiles[0])).toEqual(['itemConduitIoConnector']);
     const bare = buildScene({ ...bundleLayout, blocks: [lone] }, new Map(), new Map(), new Map());
-    expect(bare.tiles[bare.instances[1]!.tiles[0]]).toEqual({ key: `color:${RED}`, layers: [], color: [176, 46, 38] });
+    expect(bare.tiles[bare.instances[1]!.tiles[0]]).toEqual({ key: `color:${RED}`, layers: [], color: [179, 49, 44] });
     const linkedFace = buildScene({ ...bundleLayout, blocks: [{ ...lone, conduits: [{ ...loneConduit, connections: 4 | 16 | 32 }] }] }, faces, new Map(), new Map());
     expect(linkedFace.instances.filter((i) => i.side === 2)).toHaveLength(1);   // a set face on a linked side is still one arm
   });
@@ -136,7 +136,7 @@ describe('conduits in the 3D view: the edges', () => {
     const tiles = await tilesFor(scene, { blocks: async () => [], icons: async () => [], covers: async () => [],
       image: async (layer) => images[layer.path.replace(/^.*\/(\w+)\.png$/, '$1')] ?? null });
     const pixel = (x: number, y: number) => [...tiles[arm]!.slice((y * TILE + x) * 4, (y * TILE + x) * 4 + 4)];
-    expect([pixel(6, 2), pixel(6, 12), pixel(0, 0)]).toEqual([[176, 46, 38, 255], [60, 68, 170, 255], [51, 51, 51, 255]]);
+    expect([pixel(6, 2), pixel(6, 12), pixel(0, 0)]).toEqual([[179, 49, 44, 255], [37, 49, 146, 255], [51, 51, 51, 255]]);
     expect(tiles[arm]!.every((v, i) => i % 4 !== 3 || v === 255)).toBe(true);           // nothing for the renderer to discard
   });
 

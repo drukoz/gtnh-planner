@@ -1,12 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import ELK from 'elkjs/lib/elk.bundled.js';
-import { connectionsElk, connectionsFromElk, connectionsGraph, pickDetails } from '../../src/client/connections/model.ts';
+import { connectionsElk, connectionsFromElk, connectionsGraph, faceModeText, pickDetails } from '../../src/client/connections/model.ts';
+import type { ConduitFace, Layout, LayoutBlock } from '../../src/shared/types/layout.ts';
+import type { Plan } from '../../src/shared/types/plan.ts';
 import { connLayout, connPlan } from './connections-fixture.ts';
 import { ITEM, basic } from './enderio-fixture.ts';
 
 const MACERATOR_FACE = 'Item Conduit, north face to Basic Macerator: In / Out; extract on Red with a Basic Item Filter (whitelist: Titanium Dust; match meta, ignore NBT), '
   + 'round robin off, self feed off, redstone Always active; insert on Blue with a Basic Item Filter (whitelist: Raw Input; match meta, ignore NBT), priority 1, '
-  + 'into its output side: keep its Input from Output Side allowed (a newly crafted machine has it on)';
+  + 'into its output side: keep its Input from Output Side allowed (a newly crafted machine has it on; a Screwdriver right-click on that side of '
+  + 'the machine, beside the conduit, switches it)';
 
 describe('the Connections graph', () => {
   it('draws an EnderIO line: machines and chests with their conduit faces, flows on their channels', () => {
@@ -14,8 +17,12 @@ describe('the Connections graph', () => {
     expect(g.nodes.map((n) => [n.id, n.kind, n.title, n.lines])).toEqual([
       ['step:a', 'machine', '1× Basic Macerator', ['LV · 2 EU/t']], ['step:b', 'machine', '1× Advanced Assembler', ['MV · 30 EU/t']],
       ['chest:2,64,0', 'chest', 'Chest (input)', ['Takes in: Raw Input']], ['chest:2,64,2', 'chest', 'Chest (output)', ['Collects: Titanium Ingot']]]);
-    expect(g.nodes[0]!.faces).toEqual([{ id: 'step:a#conduit:0,64,1:item:north', title: 'Basic Macerator, south side · Item Conduit', lines: [MACERATOR_FACE] }]);
-    expect([g.nodes[0]!.width, g.nodes[0]!.height]).toEqual([260, 68]);
+    // the row shows the face's mode and the channel of each side (the audit of the EnderIO In / Out fix): what comes in on
+    // Blue and what goes out on Red pass one face, so the row takes a second line
+    expect(g.nodes[0]!.faces).toEqual([{ id: 'step:a#conduit:0,64,1:item:north', title: 'Basic Macerator, south side · Item Conduit', lines: [MACERATOR_FACE],
+      mode: { mode: 'in_out', extract: 'red', insert: 'blue' } }]);
+    expect([g.nodes[0]!.width, g.nodes[0]!.height]).toEqual([260, 84]);
+    expect(g.nodes[2]!.faces.map((f) => f.mode)).toEqual([{ mode: 'extract', extract: 'blue' }]);
     expect(g.edges.map((e) => [e.id, e.via, e.label, e.color, e.fromFace, e.toFace])).toEqual([
       ['flow:chest:2,64,0>step:a:t:in@0', 'item_conduit', 'Raw Input 60/min · Blue', 'blue', 'chest:2,64,0#conduit:2,64,1:item:north', 'step:a#conduit:0,64,1:item:north'],
       ['flow:step:a>step:b:t:dust@0', 'item_conduit', 'Titanium Dust 60/min · Red', 'red', 'step:a#conduit:0,64,1:item:north', 'step:b#conduit:1,64,1:item:north'],
@@ -28,8 +35,8 @@ describe('the Connections graph', () => {
     expect(g.nodes.find((n) => n.id === 'step:a')!.faces).toEqual([
       { id: 'step:a#cover:0,64,0:south', title: 'Basic Macerator, south face', lines: ['Conveyor Module (LV) on the south face: Export, allow input, 1 items/s'] },
       { id: 'step:a#config:0,64,0', title: 'Basic Macerator settings', lines: ['Input Filter on', 'Input from Output Side allowed: a newly crafted '
-        + 'machine starts with it on, and a Screwdriver right-click on its front, or on its output side where no cover sits, switches it, so leave '
-        + 'it where the chat says "Input from Output Side allowed" (a sneak-click switches the Input Filter instead)'] }]);
+        + 'machine has it on; a Screwdriver right-click on its middle-row side switches it and the chat names the new state, so leave it where the '
+        + 'chat says "Input from Output Side allowed" (a sneak-click switches the Input Filter instead, and the click also works a cover on that side)'] }]);
     expect(g.nodes.find((n) => n.id === 'chest:2,64,2')!.faces).toEqual([
       { id: 'chest:2,64,2#cover:2,64,1:south', title: 'Tin Item Pipe, south face', lines: ['Filtered Conveyor Cover (Export) on the south face: whitelist Titanium Ingot'] }]);
     expect(g.edges.map((e) => [e.from, e.to, e.via, e.label, e.color])).toEqual([
@@ -75,6 +82,44 @@ describe('the Connections graph', () => {
     expect(elk.edges!.map((e) => e.labels?.[0]?.text)).toEqual(['Raw Input 60/min · Blue', 'Titanium Dust 60/min · Red', 'Titanium Ingot 60/min · Yellow']);
     const pic = connectionsFromElk(g, { ...elk, width: 900, height: 300, children: elk.children!.map((c, i) => ({ ...c, x: i * 300, y: 10 })), edges: [] });
     expect([pic.width, pic.nodes[1]!.x, pic.edges[0]!.points.length]).toEqual([900, 300, 2]);
+  });
+
+  it("says each conduit face's mode and its sides' channels in a few words", () => {
+    // in: into the block the face points at (the insert side), out: out of it (the extract side)
+    expect(faceModeText({ mode: 'in_out', extract: 'red', insert: 'blue' })).toBe('In / Out · in Blue · out Red');
+    expect(faceModeText({ mode: 'extract', extract: 'light_blue' })).toBe('Extract · out Light Blue');
+    expect(faceModeText({ mode: 'insert', insert: 'silver' })).toBe('Insert · in Light Gray');
+    expect(faceModeText({ mode: 'disabled' })).toBe('Disabled');
+    expect(faceModeText({ mode: 'in_out', extract: 'silver', insert: 'light_blue' }).length).toBeLessThanOrEqual(42);   // the longest fits its row
+  });
+
+  it('lists an In / Out open end under both raw inputs and final outputs, and names it on both its links', () => {
+    // the audit of the EnderIO In / Out fix: Molten Iron comes in from your tank and the surplus goes back out, through one face
+    const MOLTEN = 'fluid:molten.iron', ENDER = 'EnderIO:itemLiquidConduit@2';
+    const fluid = { filter: { whitelist: true, keys: [MOLTEN] }, rate: 1 };
+    const cell = (pos: [number, number, number], face: ConduitFace): LayoutBlock => ({
+      pos, block: { id: 'conduit:liquid_ender', meta: 0 }, role: 'pipe', label: 'Ender Fluid Conduit', item: ENDER, connections: 0,
+      conduits: [{ kind: 'liquid_ender', item: ENDER, connections: 0, faces: [face] }] });
+    const machine = (pos: [number, number, number], stepId: string, label: string): LayoutBlock => ({
+      pos, block: { id: 'gregtech:gt.blockmachines', meta: 0, mteId: 2001 }, role: 'machine', facing: 3, stepId, label });
+    const layout: Layout = { ...connLayout('enderio'), blocks: [machine([0, 64, 0], 'a', 'Basic Macerator'), machine([1, 64, 0], 'b', 'Advanced Assembler'),
+      cell([0, 64, 1], { face: 'north', mode: 'extract', target: 'Basic Macerator', extract: { ...fluid, color: 'red', roundRobin: false, redstone: 'ignore' } }),
+      cell([1, 64, 1], { face: 'north', mode: 'insert', target: 'Advanced Assembler', insert: { ...fluid, color: 'red' } }),
+      cell([2, 64, 1], { face: 'east', mode: 'in_out', target: 'your tank', extract: { ...fluid, color: 'blue', roundRobin: false, redstone: 'ignore' },
+        insert: { ...fluid, color: 'red' } })] };
+    const plan: Plan = { ...connPlan, flows: [{ from: 'raw', to: 'b', key: MOLTEN, perSecond: 0.5 }, { from: 'a', to: 'b', key: MOLTEN, perSecond: 1 },
+      { from: 'a', to: 'out', key: MOLTEN, perSecond: 0.25 }], names: { ...connPlan.names, [MOLTEN]: 'Molten Iron' } };
+    const g = connectionsGraph(layout, plan, 'min');
+    const rows = (id: string) => g.nodes.find((n) => n.id === id)!.faces.map((f) => [f.id, f.title, f.mode]);
+    const end = { mode: 'in_out', extract: 'blue', insert: 'red' };
+    expect(rows('raw')).toEqual([['raw#conduit:2,64,1:liquid_ender:east', 'your tank, west side · Ender Fluid Conduit', end]]);
+    expect(rows('out')).toEqual([['out#conduit:2,64,1:liquid_ender:east', 'your tank, west side · Ender Fluid Conduit', end]]);
+    const link = (id: string) => g.edges.find((e) => e.id === id)!;
+    expect([link('flow:raw>step:b:fluid:molten.iron').fromFace, link('flow:step:a>out:fluid:molten.iron').toFace])
+      .toEqual(['raw#conduit:2,64,1:liquid_ender:east', 'out#conduit:2,64,1:liquid_ender:east']);
+    expect(link('flow:step:a>out:fluid:molten.iron').lines.slice(-2)).toEqual(['To Final outputs — your tank, west side · Ender Fluid Conduit',
+      'Ender Fluid Conduit, east face to your tank: In / Out; extract on Blue with a fluid filter (whitelist: Molten Iron), round robin off, redstone '
+        + 'Always active; insert on Red with a fluid filter (whitelist: Molten Iron)']);
   });
 
   it('lays a hookup out before the input chest it joins', async () => {

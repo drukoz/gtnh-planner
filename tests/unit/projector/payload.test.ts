@@ -51,8 +51,8 @@ describe('projector payload', () => {
     expect(p.blocks).toHaveLength(10);
     expect(p.blocks[0]).toEqual({ pos: [100, 64, 201], id: 'gregtech:gt.blockmachines', meta: null, mteId: 1180, role: 'cable', label: '1x Tin Cable', step: 'layout:power:hookup' });
     expect(p.blocks[2]).toMatchObject({ mteId: 21, facing: 4, meta: null });
-    expect(p.blocks[3]).toEqual({ pos: [102, 64, 201], id: 'gregtech:gt.blockmachines', meta: null, mteId: 201, facing: 3, facingIsOutput: true, role: 'machine',
-      label: 'Basic Macerator', step: 'layout:place:s1', covers: [{ face: 3, item: CONVEYOR, label: 'Conveyor Module (LV)' }] });
+    expect(p.blocks[3]).toEqual({ pos: [102, 64, 201], id: 'gregtech:gt.blockmachines', meta: null, mteId: 201, facing: 3, facingIsOutput: true,
+      mainFacing: 4, role: 'machine', label: 'Basic Macerator', step: 'layout:place:s1', covers: [{ face: 3, item: CONVEYOR, label: 'Conveyor Module (LV)' }] });
     expect('covers' in p.blocks[4]!).toBe(false);
     expect(p.blocks[6]).toEqual({ pos: [104, 64, 202], id: 'minecraft:chest', meta: null, role: 'chest', label: 'Chest (input)', step: 'layout:logistics:line' });
     expect(p.blocks[8]).toMatchObject({ id: 'ForgeMultipart:block', part: 'pr_rinterface', meta: null });
@@ -74,6 +74,46 @@ describe('projector payload', () => {
     // no hint without a checked facing
     const noFacing = projectorLayout(); delete noFacing.blocks[4]!.facing;
     expect(Object.keys(projectorPayload(projectorProject(), noFacing, pack).blocks[4]!)).not.toContain('facingIsOutput');
+  });
+
+  it("sends a single-block machine's front, where GT draws its face overlay, beside its output side", () => {
+    // the review of the EnderIO In / Out fix: the layout turns a singleblock's front along the row (west here) and its
+    // output side to the spine (south), so the ghost draws the face overlay on that front, as the 3D view does, and the
+    // mod checks it too; it is sent only beside a checked output side
+    const p = projectorPayload(projectorProject(), projectorLayout(), pack);
+    expect([p.blocks[3], p.blocks[4]]).toMatchObject([{ facing: 3, facingIsOutput: true, mainFacing: 4 }, { facing: 3, facingIsOutput: true, mainFacing: 4 }]);
+    expect('mainFacing' in p.blocks[2]!).toBe(false);                                   // a transformer has one front
+    const machines = new Map(pack.machines);
+    machines.set(201, { kind: 'multiblock' });
+    expect('mainFacing' in projectorPayload(projectorProject(), projectorLayout(), { ...pack, machines }).blocks[3]!).toBe(false);
+    const noFront = projectorLayout(); delete noFront.blocks[4]!.mainFacing;
+    expect('mainFacing' in projectorPayload(projectorProject(), noFront, pack).blocks[4]!).toBe(false);
+  });
+
+  it('names every conduit of a bundle and lists a bundle cell under every step that lays one of its conduits', () => {
+    // the audit of the EnderIO In / Out fix: a bundle was sent as its first conduit, in the line step only
+    const ITEM = 'EnderIO:itemItemConduit@0', ENDER = 'EnderIO:itemLiquidConduit@2';
+    const conduit = (kind: 'item' | 'liquid_ender') => ({ kind, item: kind === 'item' ? ITEM : ENDER, connections: 0, faces: [] });
+    const l = { ...projectorLayout(), mode: 'enderio' as const };
+    l.blocks.push(
+      { pos: [104, 64, 201], block: { id: 'conduit:item', meta: 0 }, role: 'pipe', label: 'Conduit bundle (Item Conduit + Ender Fluid Conduit)', item: ITEM,
+        conduits: [conduit('item'), conduit('liquid_ender')], buildStep: 'layout:logistics:line' },
+      { pos: [104, 65, 201], block: { id: 'conduit:liquid_ender', meta: 0 }, role: 'pipe', label: 'Ender Fluid Conduit', item: ENDER,
+        conduits: [conduit('liquid_ender')], buildStep: 'layout:logistics:fluids' },
+      { pos: [105, 64, 201], block: { id: 'conduit:item', meta: 0 }, role: 'pipe', label: 'Item Conduit', item: ITEM, conduits: [conduit('item')], hookup: 0 });
+    l.buildSteps.splice(8, 0, { id: 'layout:logistics:fluids', order: 9, kind: 'logistics',
+      text: "Lay 2× Ender Fluid Conduit from every machine's fluid port; 1 of them goes in the same bundle as the Item Conduit" });
+    const p = projectorPayload(projectorProject(), l, pack);
+    expect(p.blocks.slice(10).map((b) => [b.id, b.part, b.parts, b.step])).toEqual([
+      ['EnderIO:blockConduitBundle', 'item', ['item', 'liquid_ender'], 'layout:logistics:line'],
+      ['EnderIO:blockConduitBundle', 'liquid_ender', undefined, 'layout:logistics:fluids'],
+      ['EnderIO:blockConduitBundle', 'item', undefined, 'layout:power:hookup']]);
+    const blocksOf = (id: string) => p.steps.find((s) => s.id === id)!.blocks;
+    // the bundle stands in both steps; a hookup's conduit only in its own
+    expect([blocksOf('layout:logistics:line'), blocksOf('layout:logistics:fluids'), blocksOf('layout:power:hookup')]).toEqual([[5, 6, 8, 10], [10, 11], [0, 12]]);
+    // without a fluids step the bundle is in the line step once, as the fluid-only cell now is (the line step's rule)
+    const noFluids = { ...l, buildSteps: l.buildSteps.filter((s) => s.id !== 'layout:logistics:fluids') };
+    expect(projectorPayload(projectorProject(), noFluids, pack).steps.find((s) => s.id === 'layout:logistics:line')!.blocks).toEqual([5, 6, 8, 10, 11]);
   });
 
   it('lists each step\'s blocks and which steps are done', () => {

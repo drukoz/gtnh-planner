@@ -565,7 +565,7 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
     const pins = makePins({ dim, site: null, power: null, logistics: null, reuse, warnings: [] });
     const buildSteps = layoutSteps({
       status: 'empty', pins, size: [0, 0, 0], site: null, units: [], stages: [], transformerName, cables: [], power: null, supplyTier: null,
-      drafts: [], fluids: [], logistics: null, reuse, blocks: [], origin: [...DEFAULT_ORIGIN], nameOf,
+      drafts: [], fluids: [], logistics: null, reuse, blocks: [], origin: [...DEFAULT_ORIGIN], rotation: 0, nameOf,
     });
     const fit = base === null ? null : fitPower({ power: plan.power, ctx: fitCtx, extraLossEUt: 0, pack, tier: supplyTier });
     return {
@@ -651,7 +651,7 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
     cables: line.internal.cables.map((c) => ({ tier: c.tier, cable: c.cable.name, cells: c.cells })),
     power: finish.power, supplyTier: finish.supplyTier, drafts: line.mode.drafts,
     fluids: line.internal.fluidPipes.map((f) => ({ key: f.key, name: f.name, pipe: f.pipe.name, cells: f.cells })),
-    logistics: finish.logistics, reuse: finish.reuse, blocks, origin: [...frame.origin], nameOf,
+    logistics: finish.logistics, reuse: finish.reuse, blocks, origin: [...frame.origin], rotation: frame.rotation, nameOf,
   };
   const buildSteps = layoutSteps(stepsInput);
   const hookups = hooked?.hookups ?? [];
