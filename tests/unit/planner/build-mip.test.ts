@@ -145,14 +145,18 @@ describe('the build-cost MIP', () => {
     }
   });
 
-  it('drops a second free route on a shared machine', async () => {
-    // S1 = S1g = 0, so σ = 1 and the bender's block costs 0.02 raw beside its 10: one bender either way, and of two plans
-    // that tie on raw material, builds and machine blocks the MIP's fewest-recipes tie-break runs one route.
-    const options = { 'p-a': [opt(101, 1, 0.2, 10)], 'p-b': [opt(101, 1, 0.2, 10)] };
-    const { runs, sol } = await solvedWithBuild(twoFreeSpec(), { 't:a@0': 0, 't:b@0': 0 }, [['t:t@0', 0.1]], { options, share: true }, { stepCharge: 0.02 });
-    expect(runs).toHaveLength(1);
-    expect(['p-a', 'p-b']).toContain(runs[0]);
-    expect([...(sol.pools?.values() ?? [])]).toMatchObject([{ option: { mteId: 101 }, added: 1, steps: runs }]);
+  it('charges a machine block at least the charge on one raw unit on a line that needs no raw material', async () => {
+    // S1 = S1g = 0, so σ = 1 (the floor) and a new machine block costs 0.02 raw beside its build. Two free routes on
+    // benders that build for nothing: a second route's bender is a second block, 0.04 > 0.02, so one route runs (charged
+    // stepCharge × S1g × F, here 0, both blocks would cost nothing). On a network both share one bender: one block either
+    // way, whichever routes run on it.
+    const free = { 'p-a': [opt(101, 1, 0.2, 0)], 'p-b': [opt(101, 1, 0.2, 0)] };
+    const direct = await solvedWithBuild(twoFreeSpec(), { 't:a@0': 0, 't:b@0': 0 }, [['t:t@0', 0.1]], { options: free }, { stepCharge: 0.02 });
+    expect(direct.runs).toHaveLength(1);
+    expect(direct.sol.machines?.get(direct.runs[0] as string)).toMatchObject({ option: { mteId: 101 }, added: 1 });
+    const priced = { 'p-a': [opt(101, 1, 0.2, 10)], 'p-b': [opt(101, 1, 0.2, 10)] };
+    const shared = await solvedWithBuild(twoFreeSpec(), { 't:a@0': 0, 't:b@0': 0 }, [['t:t@0', 0.1]], { options: priced, share: true }, { stepCharge: 0.02 });
+    expect([...(shared.sol.pools?.values() ?? [])]).toMatchObject([{ option: { mteId: 101 }, added: 1 }]);
   });
 
   it('never shares a machine between programmed circuits, held items or fluids', async () => {

@@ -112,13 +112,6 @@ function pushTo<K, V>(map: Map<K, V[]>, key: K, value: V): void {
   else list.push(value);
 }
 
-/**
- * What a step recipe weighs beside its machines, in units of σ, so that among plans of equal raw material, builds and
- * machine blocks the one of fewest step recipes wins (two free routes on one shared machine run as one, plan 09's
- * fewest recipes as a tie-break): far below one raw unit over any horizon a line is planned for.
- */
-const STEP_TIE_BREAK = 1e-6;
-
 /** Whole machines for `load` machines' worth: none for none, else at least one (a running step needs a machine). */
 function machinesFor(load: number): number {
   return load > 0 ? Math.max(1, Math.ceil(load - WHOLE)) : 0;
@@ -825,12 +818,13 @@ function layoutOf(input: BuildMipInput, withDerived: boolean): Layout {
   // One binary per step recipe, 1 where it runs. The step charge is paid per new machine block (fix wave 2 (a): on a
   // pool's new machines, a light step's machines and Make N's added types above; owned machines pay none), so a step's
   // binary carries it only where the step runs on no machine the MIP counts — by hand or on another pseudo machine —
-  // once, a crafting-table step `handWeight` times; every one carries the fewest-recipes tie-break.
+  // once, a crafting-table step `handWeight` times. (A fewest-recipes tie-break of 1e-6 on every binary made the root
+  // node of Good Electronic Circuit HV take 3.9 s instead of 2.5 s for the same plan, and decided no plan.)
   const y = new Map<number, number>();
   for (const s of steps) {
     const first = light.get(s.j)?.first ?? 0;
     const pseudo = s.usable.length === 0 ? input.stepCharge * (s.r.mapId === 'crafting' ? input.handWeight : 1) : 0;
-    const col = column(pseudo + STEP_TIE_BREAK + first / sigma, 1, true);
+    const col = column(pseudo + first / sigma, 1, true);
     y.set(s.j, col);
     rows.push({ lower: -Infinity, upper: 0, entries: [[s.j, 1], [col, -X]] });
   }
@@ -1041,8 +1035,8 @@ function decodeMakeN(input: BuildMipInput, layout: Layout, x: readonly number[])
  * `stepCharge × σ` raw beside its build — per pool whole new machines over the steps' new loads, owned machines free
  * (whole per step without sharing; with it per pool, one sharing key per owned machine), one load row per step, one
  * option for a step's new machines, Make N's one machine per type, one binary per step where it runs (with the step
- * charge × its weight as its cost only for a step on no machine the MIP counts, by hand or on another pseudo machine,
- * and the fewest-recipes tie-break `STEP_TIE_BREAK` on every one), the cleanroom and R3's
+ * charge × its weight as its cost only for a step on no machine the MIP counts, by hand or on another pseudo machine),
+ * the cleanroom and R3's
  * derived-purchase binaries (`M_d` = what a plan no dearer than the start can buy of it), and the valid rows of
  * `layoutOf` that tie the steps' binaries to their machines and to the steps that supply what they take. `start` =
  * `roundUp(input, x1)` in the columns (every step S1 runs at all with machines); `startAt(x)` the same for other runs,
