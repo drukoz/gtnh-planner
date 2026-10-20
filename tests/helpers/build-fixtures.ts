@@ -371,26 +371,30 @@ const BUILD_ENV: PlanEnv = { tier: 1, reachable: new Set(['overworld']), lowGrav
 interface BuildSetup {
   options: Record<string, MachineOption[]>; mode?: 'rate' | 'makeN'; horizonSeconds?: number | null; share?: boolean;
   cleanroom?: BuildModel['cleanroom']; alsoMade?: StuffKey[];
+  /** Goods of `leafCosts` bought as derived materials (`leafClass` 'derived', a chain of one recipe): R3's derived purchases. */
+  derived?: StuffKey[];
 }
 
 /**
  * Plan 09's `charged()` with a build model (Task 4): the goods of `leafCosts` bought at their cost (`leafClass` 'direct',
- * `alsoMade` for those of `build.alsoMade`), the graph walked from the keys of `demand` at LV, and `solveLine` with
- * `{ stepCharge: 0, handWeight: 1, ...opts, build }`, where the model's `options` and `eligible` are the given lists
- * (none for other ids), `sharingKey` is Task 3's of the recipe and its graph recipe's held items (AE2's keys: the
- * Project Red split is `lineBuildModel`'s), `owned` and `pools` come from the options' `owned` (per mteId the largest,
- * units without positions), prices price nothing, nothing is blocked or pinned, and `ownedOnly` is the owned machines
- * of a step none of whose options can add machines; defaults rate mode over 24 hours, no sharing, no cleanroom.
- * `runs` = the sorted ids of the step recipes that run.
+ * `alsoMade` for those of `build.alsoMade`; 'derived' with `steps` 1 for those of `build.derived`), the graph walked from
+ * the keys of `demand` at LV, and `solveLine` with `{ stepCharge: 0, handWeight: 1, ...opts, build }`, where the model's
+ * `options` and `eligible` are the given lists (none for other ids), `sharingKey` is Task 3's of the recipe and its
+ * graph recipe's held items (AE2's keys: the Project Red split is `lineBuildModel`'s), `owned` and `pools` come from the
+ * options' `owned` (per mteId the largest, units without positions), prices price nothing, nothing is blocked or pinned,
+ * and `ownedOnly` is the owned machines of a step none of whose options can add machines; defaults rate mode over 24
+ * hours, no sharing, no cleanroom. `runs` = the sorted ids of the step recipes that run.
  */
 export async function solvedWithBuild(
   spec: PackSpec, leafCosts: Record<StuffKey, number>, demand: Array<[StuffKey, number]>, build: BuildSetup, opts?: SolveOptions,
 ): Promise<{ runs: string[]; sol: Solution }> {
   const pack = packFromSpec(spec);
   const also = new Set(build.alsoMade ?? []);
+  const derived = new Set(build.derived ?? []);
   const leaf: LeafOracle = (key): LeafDecision => {
     if (!Object.hasOwn(leafCosts, key)) return { buyable: false, cost: 0, leafClass: null };
-    const bought: LeafDecision = { buyable: true, cost: leafCosts[key] as number, leafClass: 'direct' };
+    const cost = leafCosts[key] as number;
+    const bought: LeafDecision = derived.has(key) ? { buyable: true, cost, leafClass: 'derived', steps: 1 } : { buyable: true, cost, leafClass: 'direct' };
     if (also.has(key)) bought.alsoMade = true;
     return bought;
   };

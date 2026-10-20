@@ -783,7 +783,8 @@ function ownedOnlyRuns(bounded: readonly number[], x: readonly number[]): number
 /**
  * The build stage (plan 12 Task 4), when the model counts build cost, in place of R3's stages 2–4 (the charge MIP, its
  * fallback and consolidation; or plan 09's fewest recipes when S1 needs no raw material): S1g, then the build-cost MIP
- * started from `roundUp` of S1 (not passed when that leaves a step short) under the node limit and the time guard. A
+ * started from `roundUp` of S1 (not passed when that leaves a step short, and the MIP then has no derived-purchase
+ * binaries, whose bound comes from the start: `buildMip`) under the node limit and the time guard. A
  * MIP that ends without a whole solution, or that the guard stops (or `buildTimeLimit ≤ 0`), gives way to its LP
  * relaxation rounded up (`roundUp` with the relaxation's option of most new capacity) — `roundUp` of S1 when the
  * relaxation does not solve, or its rounding leaves a step short and S1's does not — with the `build-cost-approx`

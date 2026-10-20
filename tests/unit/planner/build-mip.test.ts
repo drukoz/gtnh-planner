@@ -11,6 +11,7 @@ import {
 } from '../../helpers/build-fixtures.ts';
 import type { StuffKey } from '../../../src/shared/keys.ts';
 import type { MachineOption } from '../../../src/server/planner/machine-options.ts';
+import type { SolveOptions } from '../../../src/server/planner/solve.ts';
 
 const COSTS: Record<StuffKey, number> = { 't:a@0': 1, 't:b@0': 1, 't:part@0': 1, 't:tin_ingot@0': 1, 't:antimony@0': 1 };
 /** Each board recipe on an assembler, each extractor recipe on an extractor, the alloy smelter (Task 4's solder line). */
@@ -186,6 +187,49 @@ describe('the build-cost MIP', () => {
     for (const id of ['press-a', 'press-b']) expect(shared.sol.machines?.get(id)).toMatchObject({ added: 0, ownedLoad: 0.5 });
     // One owned machine serves one sharing key.
     expect((await solvedWithBuild(twoPressSpec({ circuits: [1, 2] }), COSTS, demand, { options, share: true })).sol.status).toBe('infeasible');
+  });
+
+  it('gives the owned machines that cannot be built to the steps that can only use them first', async () => {
+    // press-b can only run on the owned MV press that cannot be built; press-a could run on it too, but it can add LV
+    // presses. Sized in id order, press-a took the owned press and left press-b short: with build cost ignored and in the
+    // time guard's fallback the line ended infeasible, although the build MIP plans it.
+    const mv = unbuildable(opt(102, 2, 0.4, null, 1));
+    const options = { 'press-a': [opt(101, 1, 0.2, 10), mv], 'press-b': [mv] };
+    const ways: Array<{ horizonSeconds?: number | null; opts?: SolveOptions }> = [
+      {},                                // the build MIP
+      { horizonSeconds: null },          // build cost ignored: plan 09's plan sized by `roundUp`
+      { opts: { buildTimeLimit: 0 } },   // the time guard's fallback: the relaxation sized by `roundUp`
+    ];
+    for (const { horizonSeconds, opts } of ways) {
+      const { sol } = await solvedWithBuild(twoPressSpec(), COSTS, [['t:t1@0', 0.1], ['t:t2@0', 0.1]], { options, horizonSeconds }, opts);
+      expect(sol.status).toBe('ok');
+      expect(sol.machines?.get('press-a')).toMatchObject({ option: { mteId: 101 }, added: 1, ownedLoad: 0 });
+      expect(sol.machines?.get('press-b')).toMatchObject({ option: { mteId: 102 }, added: 0, ownedLoad: 1 });
+      // On a network the two share it: press-b takes 0.75 of it, press-a the other 0.25 beside one new LV press.
+      const shared = await solvedWithBuild(twoPressSpec(), COSTS, [['t:t1@0', 0.3], ['t:t2@0', 0.3]], { options, horizonSeconds, share: true }, opts);
+      expect(shared.sol.status).toBe('ok');
+      expect(shared.sol.machines?.get('press-a'))
+        .toMatchObject({ option: { mteId: 101 }, newLoad: 1, ownedLoad: 0, others: [{ option: { mteId: 102 }, ownedLoad: 0.25 }] });
+      expect(shared.sol.machines?.get('press-b')).toMatchObject({ option: { mteId: 102 }, newLoad: 0, ownedLoad: 0.75 });
+      expect(shared.sol.pools?.get('101:1:|-|')).toMatchObject({ added: 1 });
+    }
+  });
+
+  it('weighs a derived purchase without the start\'s bound when that start leaves a step short', async () => {
+    // press-a and press-b can only use the one owned LV press that cannot be built, whole per step. S1 makes t1 from a
+    // (1 raw) rather than from the derived d (1.5), and its rounding gives the press to press-a and leaves press-b short,
+    // so that start is no plan: bounded by its objective (1.01 raw a unit of demand), the MIP could buy 0.67 of the one
+    // unit of d that t1 takes, and the line ended infeasible. It runs press-b on the owned press, press-c on a new MV one.
+    const spec = twoPressSpec();
+    spec.recipes = [...(spec.recipes ?? []), { id: 'press-c', map: 'gt.recipe.metalbender', in: [['t:d@0', 1]], out: [['t:t1@0', 1]], eut: 24, dur: 100 }];
+    const lv = unbuildable(opt(101, 1, 0.2, null, 1));
+    const options = { 'press-a': [lv], 'press-b': [lv], 'press-c': [opt(102, 2, 0.4, 16)] };
+    const demand: Array<[StuffKey, number]> = [['t:t1@0', 0.1], ['t:t2@0', 0.001]];
+    const { runs, sol } = await solvedWithBuild(spec, { ...COSTS, 't:d@0': 1.5 }, demand, { options, derived: ['t:d@0'] });
+    expect(sol.status).toBe('ok');
+    expect(runs).toEqual(['press-b', 'press-c']);
+    expect(sol.machines?.get('press-b')).toMatchObject({ added: 0, ownedLoad: 1 });
+    expect(sol.machines?.get('press-c')).toMatchObject({ option: { mteId: 102 }, added: 1 });
   });
 
   it('builds a multiblock at the hatch tier that is cheaper to build', async () => {

@@ -257,7 +257,10 @@ function allocate(input: BuildMipInput, x: readonly number[], prefer?: (j: numbe
   const used = new Map<string, number>();   // per pool: owned machines' worth its steps use
   const load = new Map<string, number>();   // per pool: new machines' worth its steps use
   const uses: StepUse[] = [];
-  for (const step of steps) {
+  // The steps none of whose options can add machines take their owned ones first, then the others, each group in id
+  // order: a step that can add machines would otherwise take an owned machine such a step needs and leave it short.
+  const addsNone = (step: Step): boolean => !step.usable.some((u) => adds(u.o));
+  for (const step of [...steps.filter(addsNone), ...steps.filter((s) => !addsNone(s))]) {
     if (!kept(step.j) || step.usable.length === 0) continue;
     let r = (x[step.j] ?? 0) * D;
     const owned = new Map<Usable, number>();
@@ -310,6 +313,7 @@ function allocate(input: BuildMipInput, x: readonly number[], prefer?: (j: numbe
     }
     uses.push({ step, option: option ?? ownedMain(step, owned), fresh, owned });
   }
+  uses.sort((a, b) => a.step.j - b.step.j);   // `machines` in id order
   for (const [pool, l] of load) alloc.added.set(pool, machinesFor(l));
   const capacity = new Map<string, number>();
   for (const use of uses) {
@@ -327,15 +331,18 @@ function allocate(input: BuildMipInput, x: readonly number[], prefer?: (j: numbe
 /**
  * Whole machines for the runs `x` (main columns, at unit demand) gives each step recipe, without a MIP: the MIP's start
  * (from S1) and the deterministic fallback (from the LP relaxation, or S1) when the MIP does not end in time. Step
- * recipes with `x_j > 1e-9` in id order, runs `r = x_j·D`: first the owned capacity, options with owned machines by
- * runs a second descending then lower mteId, each taking `min(left, r/ρ)` machines' worth (with `model.share`: `left` =
- * the room in the owned machines its pool holds plus the machines of its type no pool holds yet, which then join its
- * pool) or that many whole machines (without), then the rest as new capacity of one option — `prefer(j)` (an index in
- * `model.options(id)`) when it can add, else the one that adds the least build to its pool (ties: more runs a second,
- * lower mteId) — whose pool then has the whole machines its steps' load needs (at least one for any load). A step with
- * runs left and no option that can add is `short`. Make N: an owned option (highest tier, then lowest mteId), else a type
- * an earlier step added, else the option with the lowest build (then most runs a second, lowest mteId). Runs per second
- * up to 1e-9 × D count as none (per unit of target).
+ * recipes with `x_j > 1e-9`, runs `r = x_j·D`, first the steps none of whose options can add machines and then the
+ * others, each group in id order (so a step that can add machines never takes an owned machine that a step which cannot
+ * add needs; among the latter, id order may still leave one short where each has owned machines of several types):
+ * first the owned capacity, options with owned machines by runs a second descending then lower mteId, each taking
+ * `min(left, r/ρ)` machines' worth (with `model.share`: `left` = the room in the owned machines its pool holds plus the
+ * machines of its type no pool holds yet, which then join its pool) or that many whole machines (without), then the rest
+ * as new capacity of one option — `prefer(j)` (an index in `model.options(id)`) when it can add, else the one that adds
+ * the least build to its pool (ties: more runs a second, lower mteId) — whose pool then has the whole machines its
+ * steps' load needs (at least one for any load). A step with runs left and no option that can add is `short`;
+ * `machines` lists the steps in id order. Make N: an owned option (highest tier, then lowest mteId), else a type an
+ * earlier step added, else the option with the lowest build (then most runs a second, lowest mteId). Runs per second up
+ * to 1e-9 × D count as none (per unit of target).
  */
 export function roundUp(input: BuildMipInput, x: readonly number[], prefer?: (j: number) => number | undefined): BuildDecision {
   return allocate(input, x, prefer).decision;
@@ -374,7 +381,8 @@ interface Layout {
   colCost: number[]; colUpper: number[]; integer: boolean[]; rows: LpRow[];
 }
 
-function layoutOf(input: BuildMipInput): Layout {
+/** The MIP's layout; R3's derived-purchase binaries only `withDerived` (`buildMip`). */
+function layoutOf(input: BuildMipInput, withDerived: boolean): Layout {
   const { lp, model } = input;
   const D = input.demandScale;
   const width = lp.rawCost.length;
@@ -505,7 +513,8 @@ function layoutOf(input: BuildMipInput): Layout {
   }
 
   // R3's derived purchases with a price (their rows wait for the start's objective, `buildMip`).
-  const derived = input.derived.filter((d) => (colCost[d.j] ?? 0) > 0).map((d) => ({ j: d.j, col: column(d.weight, 1, true), weight: d.weight }));
+  const derived = !withDerived ? []
+    : input.derived.filter((d) => (colCost[d.j] ?? 0) > 0).map((d) => ({ j: d.j, col: column(d.weight, 1, true), weight: d.weight }));
 
   const layout: Layout = { steps, members, pools, z, y, derived, colCost, colUpper, integer, rows };
   if (c !== undefined) layout.c = c;
@@ -628,12 +637,17 @@ function decodeMakeN(input: BuildMipInput, layout: Layout, x: readonly number[])
  * costs `stepCharge × σ` raw), the cleanroom and R3's derived-purchase binaries (`M_d` = what a plan no dearer than the
  * start can buy of it). `start` = `roundUp(input, x1)` in the columns; `decode` reads a whole solution's decision;
  * `prefer` gives, per step column, the option with the most new capacity in `x` (the relaxation's), for `roundUp`.
+ * When `roundUp(input, x1)` leaves a step short, that start is no plan (`solveLine` does not pass it), so its objective
+ * bounds no purchase, and nothing else does soundly (a step with no machine options and no step charge has no bound of
+ * its own): the MIP, and so its relaxation, then has no derived-purchase binaries, which only break ties among equally
+ * cheap plans.
  */
 export function buildMip(input: BuildMipInput): {
   model: LpModel; start: number[]; decode(x: readonly number[]): BuildDecision; prefer(x: readonly number[]): (j: number) => number | undefined;
 } {
-  const layout = layoutOf(input);
-  const start = startOf(input, layout, allocate(input, input.x1));
+  const first = allocate(input, input.x1);
+  const layout = layoutOf(input, first.decision.short === undefined);
+  const start = startOf(input, layout, first);
   let startCost = 0;
   layout.colCost.forEach((c, col) => {
     startCost += c * (start[col] ?? 0);
