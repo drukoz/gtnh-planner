@@ -328,6 +328,19 @@ Auditor ids: invariants INV-n, rootcause RCn, gtnh Gn, ui UI-n. "Decision" resol
   arbitrarily and prices many intermediates 0 (Sulfuric Acid beside Water) or not at all (a Methyl Acetate Cell it never
   walked); at 0 against free Water the litres won, so the user's Electronic Circuit MV step "made Water" and the plan
   warned "Water is both bought and made".
+- **Effect and accepted residual (plan 09 final re-review).** R6 takes the supporting lines' roots from main outputs,
+  so the "alone and in full" rule changes which materials become roots. On the 204-line sweep it changed line
+  membership on 44 plans (165 steps). Roots lost: Hydrochloric Acid (15 plans), Silicon Solar Grade (Poly SI) Dust (13)
+  and lines named after waste gases (Carbon Dioxide 3, Hydrogen 3, Oxygen 2); roots gained: Steel Ingot, Ferrosilite
+  Dust and Phosphorus Dust (8 each) and Nitrogen (3). The GEC HV line at default settings gains a Steel Ingot line (its
+  Electric Blast Furnace was named Carbon Dioxide), and Advanced Circuit at HV with supporting lines loses its
+  Hydrochloric Acid line and gains Nitrogen and Phosphorus Dust lines. This is intended, not a regression. The GEC HV
+  2/min line keeps one co-product pair, and that is accepted: "Hydrogen Cell is made 2 ways" (water electrolysis 97 %,
+  salt water electrolysis 2 %, a step the Chlorine walk pulls in). Keep only cannot remove a maker that another good
+  pulls in; real-acceptance asserts at most one `multi-producer` issue on that line, and a later change should make the
+  issues box's Keep only honest for such pairs. Make N names a step from the LP's `runsFor` (this keeps GEC HV × 4
+  clean), so a one-run step can carry the name of an output it partly leaves over (a reactor named Naphtha in Make N
+  GEC × 4).
 
 ### D14 (minor) A thrown-away filled container makes the line extrude new cells — RC7
 
