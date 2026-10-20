@@ -285,11 +285,19 @@ type OfferEnv = Pick<MachineOptionEnv, 'groupTier' | 'multiblocks' | 'owned' | '
 
 const AUTO_WORKBENCHES = new WeakMap<Pack, readonly Machine[]>();
 
-/** The pack's Electric Auto Workbenches (`AUTO_WORKBENCH_CLASS`), by tier then mteId; once per pack. */
+/**
+ * Whether `m` is GT++'s Electric Auto Workbench (`AUTO_WORKBENCH_CLASS`): the machine crafting-table steps run on (rule 1),
+ * which Plan 5's layout lays with its own feeding (an Auto Workbench takes any item into any input slot).
+ */
+export function isAutoWorkbench(m: Machine | undefined): boolean {
+  return m !== undefined && simpleName(m) === AUTO_WORKBENCH_CLASS;
+}
+
+/** The pack's Electric Auto Workbenches (`isAutoWorkbench`), by tier then mteId; once per pack. */
 function autoWorkbenches(pack: Pack): readonly Machine[] {
   let list = AUTO_WORKBENCHES.get(pack);
   if (list === undefined) {
-    list = [...pack.machines.values()].filter((m) => simpleName(m) === AUTO_WORKBENCH_CLASS).sort((a, b) => tierOf(a) - tierOf(b) || a.mteId - b.mteId);
+    list = [...pack.machines.values()].filter(isAutoWorkbench).sort((a, b) => tierOf(a) - tierOf(b) || a.mteId - b.mteId);
     AUTO_WORKBENCHES.set(pack, list);
   }
   return list;

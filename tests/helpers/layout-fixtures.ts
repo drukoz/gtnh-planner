@@ -8,7 +8,7 @@ import { parseItemKey, type ItemKey, type StuffKey } from '../../src/shared/keys
 import type { Vec3 } from '../../src/shared/layout/geometry.ts';
 import { defaultSettings } from '../../src/shared/project/apply-op.ts';
 import type { LayoutTap } from '../../src/shared/types/layout.ts';
-import type { BlockRef, Fluid, Item, Machine, MachineKind, Pack, Product, StructureInfo } from '../../src/shared/types/pack.ts';
+import type { BlockRef, Fluid, Item, Machine, MachineKind, Pack, Product, Recipe, StructureInfo } from '../../src/shared/types/pack.ts';
 import type { BuildStep, LogisticsMode, Plan, PlanFlow, PlanStep } from '../../src/shared/types/plan.ts';
 import type { Project } from '../../src/shared/types/project.ts';
 import {
@@ -240,10 +240,37 @@ export function layoutPack(): Pack {
   return pack;
 }
 
+/** GT++'s Electric Auto Workbench (MV) as the 2.9 export lists it: mteId 31092, kind `other`, tier 2, no recipe map. */
+export const AUTO_WORKBENCH = 31092;
+const AUTO_WORKBENCH_CLS = 'gtPlusPlus.xmod.gregtech.common.tileentities.automation.MTEElectricAutoWorkbench';
+
+/** `pack` with the Auto Workbench (MV) and its item. Mutates and returns `pack`. */
+export function withAutoWorkbench(pack: Pack): Pack {
+  addMachine(pack, gtMachine(AUTO_WORKBENCH, 'Auto Workbench (MV)', 'basicmachine.automation.autoworkbench.02', 'other', AUTO_WORKBENCH_CLS, { tier: 2 }));
+  return pack;
+}
+
+/**
+ * A crafting-table recipe `id` (map `crafting`, no EU, no time, as the loader reads one) making `out`: `cells` its grid row
+ * by row, `w` cells wide (null an empty cell), each cell an ingredient slot of one item numbered by its cell, as the
+ * loader numbers a shaped recipe's slots; a cell whose index is in `tools` holds a tool the craft keeps (not consumed).
+ */
+export function craftingRecipe(id: string, w: number, cells: ReadonlyArray<StuffKey | null>, out: readonly [StuffKey, number],
+  tools: readonly number[] = []): Recipe {
+  return {
+    id, source: 'crafting', maps: ['crafting'], euPerTick: 0, durationTicks: 0, amps: 0, specialValue: 0,
+    meta: { cls: 'net.minecraft.item.crafting.ShapedRecipes', width: w, height: Math.ceil(cells.length / w) }, flags: { shaped: true },
+    inputs: cells.flatMap((key, slot) => (key === null ? [] : [{
+      slot, consumed: !tools.includes(slot), chance: tools.includes(slot) ? 0 : 1, options: [{ key, amount: 1 }],
+    }])),
+    outputs: [{ key: out[0], amount: out[1], chance: 1 }],
+  };
+}
+
 let layoutNames: Map<number, string> | null = null;
 
 function layoutMachineName(mteId: number): string | undefined {
-  layoutNames ??= new Map([...layoutPack().machines].map(([id, m]) => [id, m.name]));
+  layoutNames ??= new Map([...withAutoWorkbench(layoutPack()).machines].map(([id, m]) => [id, m.name]));
   return layoutNames.get(mteId);
 }
 

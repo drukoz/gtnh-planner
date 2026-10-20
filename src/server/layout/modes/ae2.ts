@@ -15,7 +15,8 @@
 // Blocking mode is on (the next set goes in once a run has taken the last) unless the machine holds an item AE2's
 // blocking-ignore list leaves out, which blocking mode would wait on for ever (GT's
 // `AE2Compat.registerBlockingModeIgnoreItems`: the programmed circuit, its molds, extruder shapes, slicer blades and
-// lenses; not the Packager's schematics). ME glass cable fills the rest of the spine, the tail included, where the
+// lenses; not the Packager's schematics), and never toward an Auto Workbench, whose ghost crafting grid blocking mode
+// counts as items (controller ruling 204 (1)). ME glass cable fills the rest of the spine, the tail included, where the
 // base's ME network joins the line. Each interface or bus takes a channel, so the line is checked against the channels
 // the network has free. The patterns are the interfaces' structured `feed`, and an export bus's filter and cards the
 // `feed.exportBus` of the cable it sits on (architecture §11 entry 51). Without an AE2 network at the base the ME parts
@@ -31,6 +32,7 @@ import type { ExportBusSpec, PatternSpec } from '../../../shared/types/feed.ts';
 import type { Pack } from '../../../shared/types/pack.ts';
 import type { BomLine, Plan, PlanStep, PlanWarning } from '../../../shared/types/plan.ts';
 import { stepOneOffs } from '../../planner/bom.ts';
+import { isAutoWorkbench } from '../../planner/machine-options.ts';
 import { comparePos } from '../../world/graph.ts';
 import type { HostCover, LocalBlock, PlacedUnit } from '../arrange.ts';
 import { linkBits } from '../path.ts';
@@ -101,13 +103,21 @@ type StepFeed =
   | { kind: 'export_bus'; keys: StuffKey[] }
   | { kind: 'none'; why: 'fluid_in' | 'chanced' };
 
+/**
+ * Whether blocking mode can push into the step's machine: never into an Auto Workbench, whose every slot GT's
+ * `GTItemSink` counts, its ghost crafting grid included, so a blocking interface waits for a bench whose grid is set for
+ * ever (research machine-feeding §1.3.6, §2.3; controller ruling 204 (1)); else only when the machine holds nothing
+ * blocking mode does not ignore (`ignoredByBlocking`).
+ */
+function blocksInto(pack: Pack, step: PlanStep): boolean {
+  if (isAutoWorkbench(pack.machines.get(step.machine.mteId))) return false;
+  return stepOneOffs(pack, step).every((held) => ignoredByBlocking(pack, held.key));
+}
+
 function stepFeed(pack: Pack, step: PlanStep): StepFeed {
   const inputs = patternInputs(pack, step);
   const outputs = patternOutputs(step);
-  if (inputs.length > 0 && outputs.length > 0) {
-    const blocking = stepOneOffs(pack, step).every((held) => ignoredByBlocking(pack, held.key));
-    return { kind: 'pattern', pattern: { inputs, outputs }, blocking };
-  }
+  if (inputs.length > 0 && outputs.length > 0) return { kind: 'pattern', pattern: { inputs, outputs }, blocking: blocksInto(pack, step) };
   if (inputs.length > 0 && !step.outputs.some((p) => !isFluidKey(p.key))) return { kind: 'export_bus', keys: inputs.map((i) => i.key).sort() };
   return { kind: 'none', why: inputs.length > 0 ? 'chanced' : 'fluid_in' };
 }
