@@ -41,6 +41,9 @@ export interface SolveOptions {
   // optional addition (the plan 12 fix wave)
   /** Simplex iterations the build MIP may use (default BUILD_MIP_MAX_LP_ITERATIONS; calibration and tests). */
   buildMaxIterations?: number;
+  // optional addition (the plan 12 fix wave 2 review)
+  /** The recipe ids the project pins (`PlanSettings.recipeChoice`'s values): `twinMoves` never moves one to its twin. */
+  pinnedRecipes?: ReadonlySet<string>;
 }
 
 /** The step charge never lets total raw material go above (1 + this) × the least (S1) (fix spec §3). */
@@ -808,6 +811,133 @@ async function finish(lp: MainLp, s1: LpResult, warnings: PlanWarning[], opts: S
   return settled(lp, s1, stages, notes);
 }
 
+/**
+ * A step recipe the plan does not run in place of a twin it runs (`twinMoves`): `recipe` takes `amount` of `from` a run
+ * where `to` takes as much of `into`, and is otherwise the same.
+ */
+export interface TwinMove { recipe: string; to: string; from: StuffKey; into: StuffKey; amount: number }
+
+/**
+ * Twin step recipes (the plan 12 fix wave 2 review): two step recipes that differ only in which of two goods they
+ * consume, the same amount of it, both goods bought at the same price and with the same weights there (raw cost and
+ * canonical rank; never a derived leaf, a free input, a gathered block the line may also make or a demanded good), on the
+ * same map, power, held items, cleanroom and outputs and, with a build model, the same options, eligible options, pin
+ * fallback and sharing key (never a step only owned machines can run). Every stage rates them alike, so the solver takes
+ * one or the other by its numerics: on the 2.9 export the Fluid Extractor makes Molten Tin from Tin Dust or from a Tin
+ * Ingot, and the user's reference line ran the ingot's at a 2 % step charge and the dust's at 50 %. A plan that runs a
+ * twin whose good no column of `recipes` makes (it is only ever bought) does exactly as well with the other twin, buying
+ * the other good instead, so the plan runs one twin of each set: one whose good the line also makes (the Alloy Smelter's
+ * Red Alloy from a Copper Ingot, which the Bricked Blast Furnace makes beside Ferrosilite, never its Copper Dust twin),
+ * else the twin of the lowest id; a recipe the project pins (`pinned`) is never moved. Sets of twins (`<map, power, …,
+ * the rest of the coefficients>` per good) are taken in key order, each among the recipes not yet moved, so every move
+ * goes to a twin that is kept or moved later (the moves in that order).
+ */
+export function twinMoves(
+  graph: CandidateGraph, recipes: readonly LpRecipe[], demand: ReadonlyMap<StuffKey, number>, model?: BuildModel, pinned: ReadonlySet<string> = new Set(),
+): TwinMove[] {
+  const made = new Set<StuffKey>();
+  for (const r of recipes) for (const [key, c] of r.coeffs) if (c > 0) made.add(key);
+  /** What buying `key` weighs in every stage, when it may be swapped for another good: undefined when it may not. */
+  const purchase = (key: StuffKey): string | undefined => {
+    const good = graph.goods.get(key);
+    if (good === undefined || !good.buyable || good.virtual || good.alsoMade === true || demand.has(key)) return undefined;
+    if (good.leafClass === 'derived' || good.leafClass === 'free' || !Number.isFinite(good.cost)) return undefined;
+    return `${good.cost}|${canonicalRank(key)}`;
+  };
+  type Member = { r: LpRecipe; key: StuffKey; amount: number };
+  const sets = new Map<string, Member[]>();
+  for (const r of recipes) {
+    if (r.kind !== 'recipe') continue;
+    for (const [key, c] of r.coeffs) {
+      const weighs = c < 0 ? purchase(key) : undefined;
+      if (weighs === undefined) continue;
+      const rest = r.coeffs.filter(([k]) => k !== key);
+      pushTo(sets, JSON.stringify([r.mapId, r.euPerRun, r.nonConsumed, r.needsCleanroom, r.supply === true, r.main ?? null, rest, c, weighs]), { r, key, amount: -c });
+    }
+  }
+  /** A step recipe's machines as the build model has them; undefined for one only owned machines can run. */
+  const machinesOf = (id: string): string | undefined => {
+    if (model === undefined) return '';
+    if (model.ownedOnly(id) !== undefined) return undefined;
+    return JSON.stringify([model.sharingKey(id), model.options(id), model.eligible(id), model.pinFallback(id) ?? null]);
+  };
+  const twins = new Map<string, Member[]>();
+  for (const [key, members] of sets) {
+    if (members.length < 2) continue;
+    for (const m of members) {
+      const machines = machinesOf(m.r.id);
+      if (machines !== undefined) pushTo(twins, `${key}|${machines}`, m);
+    }
+  }
+  const moves: TwinMove[] = [];
+  const moved = new Set<string>();
+  for (const key of [...twins.keys()].sort(byString)) {
+    const members = (twins.get(key) as Member[]).filter((m) => !moved.has(m.r.id)).sort((a, b) => byString(a.r.id, b.r.id));
+    if (members.length < 2) continue;
+    const bought = members.filter((m) => !made.has(m.key) && !pinned.has(m.r.id));
+    const to = bought.length === members.length ? (members[0] as Member) : (members.find((m) => !bought.includes(m)) as Member);
+    for (const m of bought) {
+      if (m === to) continue;
+      moves.push({ recipe: m.r.id, to: to.r.id, from: m.key, into: to.key, amount: m.amount });
+      moved.add(m.r.id);
+    }
+  }
+  return moves;
+}
+
+/** `map` with its keys in sorted order (as `kept` inserts them). */
+function sortedMap<V>(map: ReadonlyMap<string, V>): Map<string, V> {
+  return new Map([...map].sort(([a], [b]) => byString(a, b)));
+}
+
+/**
+ * The plan `sol` (an `ok` solution, maps at unit demand) with each twin it runs moved to the twin `moves` keeps
+ * (`twinMoves`), in order: the runs, machines and sharing-pool place of `move.recipe` go to `move.to`, which buys `into`
+ * where it bought `from` — at the same raw material and on the same machines, so no stage would rate it otherwise. A move
+ * whose twin runs too (a plan that runs both) is left out, as is one whose good the plan buys less of than the twin takes.
+ * The stages themselves see every recipe: leaving a twin out of the LP changed which plan the build MIP's root node
+ * found, and slowed it (Good Electronic Circuit at HV: 3.9 s instead of 2.4 s for the same plan).
+ */
+function withTwinsMoved(sol: Solution, moves: readonly TwinMove[]): Solution {
+  let runs = sol.runs;
+  let buys = sol.buys;
+  let machines = sol.machines;
+  let pools = sol.pools;
+  for (const move of moves) {
+    const t = runs.get(move.recipe);
+    if (t === undefined || runs.has(move.to)) continue;
+    const taken = move.amount * t;
+    const had = buys.get(move.from) ?? 0;
+    if (had < taken * (1 - RESIDUAL_REL) - TINY) continue;
+    runs = new Map(runs);
+    runs.delete(move.recipe);
+    runs.set(move.to, t);
+    runs = sortedMap(runs);
+    buys = new Map(buys);
+    const left = sig9(had - taken);
+    if (left > TINY) buys.set(move.from, left);
+    else buys.delete(move.from);
+    buys.set(move.into, sig9((buys.get(move.into) ?? 0) + taken));
+    buys = sortedMap(buys);
+    const m = machines?.get(move.recipe);
+    if (machines !== undefined && m !== undefined) {
+      machines = new Map(machines);
+      machines.delete(move.recipe);
+      machines.set(move.to, m);
+      machines = sortedMap(machines);
+    }
+    if (pools !== undefined && [...pools.values()].some((p) => p.steps.includes(move.recipe))) {
+      pools = new Map([...pools].map(([key, p]) => [key, p.steps.includes(move.recipe)
+        ? { ...p, steps: p.steps.map((id) => (id === move.recipe ? move.to : id)).sort(byString) } : p]));
+    }
+  }
+  if (runs === sol.runs) return sol;
+  const out: Solution = { ...sol, runs, buys };
+  if (machines !== undefined) out.machines = machines;
+  if (pools !== undefined) out.pools = pools;
+  return out;
+}
+
 /** A line that cannot be planned, with no blockers: empty maps, costs 0 (`Solution`). */
 function infeasibleLine(warnings: PlanWarning[]): Solution {
   return { status: 'infeasible', runs: new Map(), buys: new Map(), sinks: new Map(), rawCost: 0, leastRawCost: 0, blockers: [], warnings };
@@ -1135,6 +1265,8 @@ async function solveUnit(graph: CandidateGraph, demand: ReadonlyMap<StuffKey, nu
         const plan = await finish(lp, s1, loopWarnings(), opts);
         done = model === undefined ? plan.sol : sized(lp, s1, plan, loopWarnings(), opts, model, demandScale, bounded);
       }
+      // Of two twins every stage rates alike, the plan runs the same one whichever the solver met (`twinMoves`).
+      if (done.status === 'ok') done = withTwinsMoved(done, twinMoves(graph, recipes, demand, model, opts.pinnedRecipes));
       done.banned = [...banned];
       return done;
     }

@@ -55,13 +55,17 @@ export const PIN_DOMINATED_SHARE = 1.01;
 /**
  * How the line's solves trade steps against raw material (fix spec R3): the project's step charge (a project stored
  * before it gets the default), and a crafting-table step weighs HAND_STEP_WEIGHT steps in a running line whose crafting
- * is not automated (fix spec D7; a Make N batch may be crafted by hand).
+ * is not automated (fix spec D7; a Make N batch may be crafted by hand); with recipe pins, the pinned recipes, which no
+ * twin replaces (`twinMoves`, solve.ts).
  */
 export function solveOptions(settings: PlanSettings): SolveOptions {
-  return {
+  const options: SolveOptions = {
     stepCharge: settings.stepCharge ?? DEFAULT_STEP_CHARGE,
     handWeight: settings.mode === 'rate' && !settings.automateCrafting ? HAND_STEP_WEIGHT : 1,
   };
+  const pinned = Object.values(settings.recipeChoice);
+  if (pinned.length > 0) options.pinnedRecipes = new Set(pinned);
+  return options;
 }
 
 function byString(a: string, b: string): number {

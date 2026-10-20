@@ -8,7 +8,7 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  cleanSpec, fastSlowSpec, freeSpec, hammerSpec, handSpec, opt, pressSpec, solderSpec, solvedWithBuild, twoFreeSpec, twoPressSpec,
+  cleanSpec, fastSlowSpec, freeSpec, hammerSpec, handSpec, opt, pressSpec, solderSpec, solvedWithBuild, twinSpec, twoFreeSpec, twoPressSpec,
 } from '../../helpers/build-fixtures.ts';
 import type { StuffKey } from '../../../src/shared/keys.ts';
 import { BUILD_MIP_MAX_LP_ITERATIONS, BUILD_MIP_MAX_NODES, BUILD_MIP_TIME_LIMIT_SECONDS, type StepMachines } from '../../../src/server/planner/build-mip.ts';
@@ -480,5 +480,31 @@ describe('the build-cost MIP', () => {
     const short = await solvedWithBuild(pressSpec(), COSTS, [['t:t@0', 1]], { options: { press: [unbuildable(opt(101, 1, 0.2, null, 1))] }, horizonSeconds: null });
     expect(short.sol.status).toBe('infeasible');
     expect(short.sol.warnings).toContainEqual({ code: 'owned-only', key: 't:t@0', text: '1× M101, which cannot be built here (no recipe in this pack)' });
+  });
+
+  it('runs the same twin of a recipe whatever the step charge, the horizon, sharing or mode', async () => {
+    // The plan 12 fix wave 2 review: Molten Tin from Tin Dust (`x-dust`) or a Tin Ingot (`x-ingot`), 1 raw each on one
+    // extractor, which the solver took by its numerics (Make N the ingot's); the plan runs the twin of the lower id
+    // (`twinMoves`), with the machines decided for whichever twin the solver ran.
+    const costs: Record<StuffKey, number> = { 't:part@0': 1, 't:tin_dust@0': 1, 't:tin_ingot@0': 1 };
+    const options = { 'x-dust': [opt(131, 1, 0.5, 12)], 'x-ingot': [opt(131, 1, 0.5, 12)], 'board-tin': [opt(121, 1, 0.2, 16)] };
+    for (const stepCharge of [0, 0.02, 0.5]) {
+      for (const horizonSeconds of [3600, 86400, null]) {
+        for (const share of [false, true]) {
+          const { runs, sol } = await solvedWithBuild(twinSpec(), costs, [['t:board@0', 0.1]], { options, horizonSeconds, share }, { stepCharge });
+          const what = `charge ${stepCharge}, horizon ${horizonSeconds}, share ${share}`;
+          expect(runs, what).toEqual(['board-tin', 'x-dust']);
+          expect([...sol.buys.keys()], what).toEqual(['t:part@0', 't:tin_dust@0']);
+          expect([...(sol.machines?.keys() ?? [])], what).toEqual(['board-tin', 'x-dust']);
+          expect(sol.machines?.get('x-dust'), what).toMatchObject({ option: { mteId: 131 } });
+          expect([...(sol.pools?.values() ?? [])].flatMap((p) => p.steps).sort(), what).toEqual(share ? ['board-tin', 'x-dust'] : []);
+        }
+      }
+      const batch = await solvedWithBuild(twinSpec(), costs, [['t:board@0', 10]], { options, mode: 'makeN', horizonSeconds: null }, { stepCharge });
+      expect(batch.runs, `Make N, charge ${stepCharge}`).toEqual(['board-tin', 'x-dust']);
+    }
+    // On other machines they are no twins: the extractor that builds for less runs, whatever its id (12 < 40).
+    const dearer = { ...options, 'x-dust': [opt(132, 1, 0.5, 40)] };
+    expect((await solvedWithBuild(twinSpec(), costs, [['t:board@0', 0.1]], { options: dearer })).runs).toEqual(['board-tin', 'x-ingot']);
   });
 });

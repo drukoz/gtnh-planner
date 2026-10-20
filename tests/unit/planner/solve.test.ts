@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { miniGt } from '../../helpers/mini-gt.ts';
+import { twinSpec } from '../../helpers/build-fixtures.ts';
 import { packFromSpec, type RecipeSpec } from '../../helpers/pack-spec.ts';
-import { solveLine, findBlockers, standaloneCosts } from '../../../src/server/planner/solve.ts';
+import { solveLine, findBlockers, standaloneCosts, twinMoves } from '../../../src/server/planner/solve.ts';
 import {
   buildCandidates, type CandidateGraph, type GoodInfo, type LeafDecision, type LeafOracle, type LpRecipe, type PlanEnv,
 } from '../../../src/server/planner/candidates.ts';
@@ -281,5 +282,52 @@ describe('loop guard and blockers', () => {
     const s = await solveLine(graph, one('t@0'));
     expect(s.status).toBe('infeasible');
     expect(s.blockers).toEqual([{ key: 'x@0', reason: 'unavailable' }]);
+  });
+});
+
+describe('twin recipes', () => {
+  // The plan 12 fix wave 2 review: the 2.9 export's Fluid Extractor makes Molten Tin from Tin Dust or from a Tin Ingot
+  // (both 1 raw), and the build MIP's root node took one or the other by its numerics (the user's reference line: the
+  // ingot's at a 2 % step charge, the dust's at 50 %). Every stage rates the two alike, so the plan runs one of them.
+  const TIN: Record<string, number> = { 't:part@0': 1, 't:tin_dust@0': 1, 't:tin_ingot@0': 1, 't:ore@0': 1 };
+  const leafAt = (costs: Record<string, number>): LeafOracle => (k) => (Object.hasOwn(costs, k)
+    ? { buyable: true, cost: costs[k] as number, leafClass: 'direct' } : { buyable: false, cost: 0, leafClass: null });
+  const graphOf = (spec: Parameters<typeof packFromSpec>[0], targets: string[], costs = TIN): CandidateGraph => {
+    const pack = packFromSpec(spec);
+    const env: PlanEnv = { tier: 1, reachable: new Set(['overworld']), lowGravity: false, coilHeat: 1801, excluded: new Set(defaultSettings().excludedCategories) };
+    return buildCandidates(pack, defaultSettings(), env, leafAt(costs), targets);
+  };
+  const DUST = 't:tin_dust@0';
+  const INGOT = 't:tin_ingot@0';
+
+  it('moves the twin of the higher id to the lower one when the line only buys both goods', () => {
+    const graph = graphOf(twinSpec(), ['t:board@0']);
+    expect(twinMoves(graph, graph.recipes, one('t:board@0'))).toEqual([{ recipe: 'x-ingot', to: 'x-dust', from: INGOT, into: DUST, amount: 1 }]);
+    // A recipe the project pins stays: its twin moves to it.
+    expect(twinMoves(graph, graph.recipes, one('t:board@0'), undefined, new Set(['x-ingot'])))
+      .toEqual([{ recipe: 'x-dust', to: 'x-ingot', from: DUST, into: INGOT, amount: 1 }]);
+  });
+
+  it('moves a twin to the one whose good the line also makes, whatever its id', () => {
+    // `roast` makes the slag the line takes and a tin ingot beside it: a plan may melt that ingot, never a dust it makes.
+    const graph = graphOf(twinSpec({ roast: true }), ['t:board@0', 't:slag@0']);
+    expect(twinMoves(graph, graph.recipes, new Map([['t:board@0', 1], ['t:slag@0', 1]])))
+      .toEqual([{ recipe: 'x-dust', to: 'x-ingot', from: DUST, into: INGOT, amount: 1 }]);
+  });
+
+  it('moves none where the goods differ in amount or price, or one is demanded', () => {
+    const twice = graphOf(twinSpec({ ingots: 2 }), ['t:board@0']);
+    expect(twinMoves(twice, twice.recipes, one('t:board@0'))).toEqual([]);
+    const dearer = graphOf(twinSpec(), ['t:board@0'], { ...TIN, [INGOT]: 2 });
+    expect(twinMoves(dearer, dearer.recipes, one('t:board@0'))).toEqual([]);
+    const graph = graphOf(twinSpec(), ['t:board@0']);
+    expect(twinMoves(graph, graph.recipes, new Map([['t:board@0', 1], [INGOT, 1]]))).toEqual([]);
+  });
+
+  it('plans the kept twin, buying its good', async () => {
+    const s = await solveLine(graphOf(twinSpec(), ['t:board@0']), one('t:board@0'));
+    expect(Object.fromEntries(s.runs)).toEqual({ 'board-tin': 1, 'x-dust': 1 });
+    expect(Object.fromEntries(s.buys)).toEqual({ 't:part@0': 1, [DUST]: 1 });
+    expect(s.rawCost).toBeCloseTo(2, 9);
   });
 });

@@ -328,6 +328,33 @@ export function solderSpec(): PackSpec {
   };
 }
 
+/**
+ * Molten Tin from Tin Dust or from a Tin Ingot (the plan 12 fix wave 2 review's twin recipes, as the 2.9 export's Fluid
+ * Extractor has them): maps fluid extractor, assembler and alloy smelter; machines 121 Basic Assembler, 131 Basic Fluid
+ * Extractor and 201 Basic Alloy Smelter (LV); `x-dust` (1 tin dust → 144 L molten tin) and `x-ingot` (1 tin ingot →
+ * 144 L), each 30 EU/t × 40 t, and `board-tin` (1 part + 144 L molten tin → 1 board), 16 × 100; with `roast` also
+ * `roast` (1 ore → 1 slag + 1 tin ingot, alloy smelter, 16 × 200), so a line that takes slag makes tin ingots too; with
+ * `ingots` `x-ingot` takes that many ingots.
+ */
+export function twinSpec(opts: { roast?: boolean; ingots?: number } = {}): PackSpec {
+  const roast: RecipeSpec[] = opts.roast === true
+    ? [{ id: 'roast', map: ALLOY_SMELTER, in: [['t:ore@0', 1]], out: [['t:slag@0', 1], ['t:tin_ingot@0', 1]], eut: 16, dur: 200 }] : [];
+  return {
+    maps: [{ id: EXTRACTOR, name: 'Fluid Extractor' }, { id: ASSEMBLER, name: 'Assembler' }, { id: ALLOY_SMELTER, name: 'Alloy Smelter' }],
+    machines: [
+      { mteId: 121, name: 'Basic Assembler', tier: 1, maps: [ASSEMBLER] },
+      { mteId: 131, name: 'Basic Fluid Extractor', tier: 1, maps: [EXTRACTOR] },
+      { mteId: 201, name: 'Basic Alloy Smelter', tier: 1, maps: [ALLOY_SMELTER] },
+    ],
+    recipes: [
+      { id: 'x-dust', map: EXTRACTOR, in: [['t:tin_dust@0', 1]], out: [['fluid:molten.tin', 144]], eut: 30, dur: 40 },
+      { id: 'x-ingot', map: EXTRACTOR, in: [['t:tin_ingot@0', opts.ingots ?? 1]], out: [['fluid:molten.tin', 144]], eut: 30, dur: 40 },
+      { id: 'board-tin', map: ASSEMBLER, in: [['t:part@0', 1], ['fluid:molten.tin', 144]], out: [['t:board@0', 1]], eut: 16, dur: 100 },
+      ...roast,
+    ],
+  };
+}
+
 /** The bending map with machines 101 (LV) and 102 (MV). */
 function benders(): Pick<PackSpec, 'maps' | 'machines'> {
   return {
