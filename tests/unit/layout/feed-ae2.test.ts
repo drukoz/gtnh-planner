@@ -250,9 +250,9 @@ describe('AE2 feeding', () => {
 
     describe('in a loop of cells one machine fills and another empties', () => {
       /**
-       * f (a chemical reactor) fills Ex into Why and pipes Oxygen to e (an assembler); b (an assembler) takes Why and gives
-       * `bMakes` (Zed, the product, with Ex back to f; or Ex alone, half to f and half to the product, f's other half
-       * coming from storage).
+       * f (a chemical reactor) fills Ex, an empty cell, into Why and pipes Oxygen to e (an assembler); b (an assembler)
+       * empties Why and gives `bMakes`: Zed, the product, with Ex back to f; or Ex alone, half back to f and half as the
+       * product, f's other half coming from storage.
        */
       const cellLine = (bMakes: 'zed' | 'ex'): Plan => makePlan([
         { id: 'f', mteId: IDS.CHEM_HV, count: 1, tier: 3, inputs: [['t:x@0', 1]], outputs: [['t:y@0', 1], ['fluid:oxygen', 1000]] },
