@@ -647,9 +647,12 @@ async function consolidated(
  * stages never buy it beside the step (spec R11's bought-and-made): within the raw-material lock the power and
  * canonical stages broke such ties towards buying, and an Electric Blast Furnace run for its carbon dioxide made some of
  * a line's copper ingots while the line bought the rest (plan 09 Task 8). A purchase the base does not use stays shut;
- * one it uses, when an LP without it is not dearer. Goods in key order; free goods (no raw cost) are left alone.
+ * one it uses, when an LP without it (within `locks`: the build stage's capacity rows, so the machines the decision
+ * bought) is not dearer. Goods in key order; free goods (no raw cost) are left alone.
  */
-async function withoutTiedPurchases(lp: MainLp, start: Set<number>, from: LpResult): Promise<{ off: Set<number>; base: LpResult }> {
+async function withoutTiedPurchases(
+  lp: MainLp, start: Set<number>, from: LpResult, locks: readonly LpRow[] = [],
+): Promise<{ off: Set<number>; base: LpResult }> {
   let off = start;
   let base = from;
   const most = from.objective * (1 + S3_TOLERANCE) + TINY;
@@ -664,7 +667,7 @@ async function withoutTiedPurchases(lp: MainLp, start: Set<number>, from: LpResu
       off = without;
       continue;
     }
-    const tried = await minimize(lp, lp.rawCost, [], Infinity, without);
+    const tried = await minimize(lp, lp.rawCost, locks, Infinity, without);
     if (tried.status === 'optimal' && tried.objective <= most) {
       off = without;
       base = tried;
@@ -855,9 +858,11 @@ function ownedOnlyRuns(bounded: readonly number[], x: readonly number[]): number
  * warning. A decision that leaves a step short (the owned machines of one type cannot cover the steps that can only use
  * them) ends the line, with the `owned-only` warnings of the bounded steps S1 runs. Then R3's stage 5 inside the
  * decision: the step recipes outside its support off, its capacity
- * rows in every stage, the least raw material over that (`base`), power and the canonical form with the raw material
- * locked at the base's, the latest that balances — the decision's own columns last, never S1 (which may run steps past
- * the machines it bought).
+ * rows in every stage, the least raw material over that, each purchase of a good a step of it makes shut where the line
+ * does as well without it within those rows (`withoutTiedPurchases`, plan 09's one source at a tie: the `base`), power
+ * and the canonical form with the raw material locked at the base's, the latest that balances — the decision's own
+ * columns last, never S1 (which may run steps past the machines it bought). A tie the decision's machines leave no room
+ * for (making the rest needs a machine more) is the build MIP's to weigh.
  */
 async function buildStage(
   graph: CandidateGraph, lp: MainLp, s1: LpResult, warnings: PlanWarning[], opts: SolveOptions, model: BuildModel, demandScale: number,
@@ -909,9 +914,9 @@ async function buildStage(
   }
 
   const rows = capacityRows(input, decision);
-  const off = new Set<number>();
+  const outside = new Set<number>();
   lp.recipes.forEach((r, j) => {
-    if (r.kind === 'recipe' && !decision.support.has(j)) off.add(j);
+    if (r.kind === 'recipe' && !decision.support.has(j)) outside.add(j);
   });
   const own = from.slice(0, lp.rawCost.length);
   let ownRaw = 0;
@@ -919,7 +924,10 @@ async function buildStage(
     ownRaw += c * (own[j] ?? 0);
   });
   const stages: LpResult[] = [];
-  const base = await minimize(lp, lp.rawCost, rows, Infinity, off);
+  const least = await minimize(lp, lp.rawCost, rows, Infinity, outside);
+  // Plan 09's one source at a tie (`withoutTiedPurchases`) within the decision's machines, before power and the canonical
+  // form, which broke such a tie towards buying a good beside the step that makes it.
+  const { off, base } = least.status === 'optimal' ? await withoutTiedPurchases(lp, outside, least, rows) : { off: outside, base: least };
   if (base.status === 'optimal') {
     const locks = [...rows, ...lockRow(lp.rawCost, base.objective)];
     const s2 = await minimize(lp, lp.power, locks, Infinity, off);

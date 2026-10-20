@@ -7,7 +7,7 @@
 // crafting-table steps by hand (HAND_STEP_WEIGHT 3), while the Auto Workbench is the default (the controller's ruling).
 
 import { describe, it, expect } from 'vitest';
-import { fluidCellsSpec, kitSpec, sandSpec, withPriceGap } from '../../helpers/build-fixtures.ts';
+import { fluidCellsSpec, kitSpec, sandSpec, withBuildRecipes, withPriceGap } from '../../helpers/build-fixtures.ts';
 import { MINI_GT, miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec, type PackSpec } from '../../helpers/pack-spec.ts';
 import { assignOwned } from '../../../src/server/planner/machines.ts';
@@ -428,6 +428,50 @@ describe('machines of supply steps and machines that cannot be built', () => {
       // One furnace: 4 Firebricks in its controller and 4 in its structure, each an iron ingot.
       expect(plan.cost?.build).toBe(8);
     }
+  });
+});
+
+describe('one source at a tie', () => {
+  /**
+   * Mini-GT plus plan 09 Task 8's tie in build mode: `burn` (Basic Centrifuge 161, 16 EU/t × `dur` t) splits a Raw Dust into a
+   * Copper Ingot and 1,000 L Gas, and `make-thing` (assembler, 2 EU/t) takes 2 copper ingots and 1,000 L gas. Copper is also
+   * mined, so burning a second dust (its gas left over) costs the raw material that buying the other ingot does. The
+   * centrifuge is crafted from `from` (nothing: it builds for free).
+   */
+  const gasSpec = (dur: number, from: ReadonlyArray<[string, number]> = []): PackSpec => {
+    const spec = structuredClone(MINI_GT);
+    const vein = { name: 'ore.mix.raw', dims: ['overworld'], kind: 'vein' as const, weight: 1, minY: 0, maxY: 255, size: 1, density: 1,
+      materials: { primary: 'Raw', secondary: 'Raw', between: 'Raw', sporadic: 'Raw' } };
+    return withBuildRecipes({
+      ...spec,
+      items: [...(spec.items ?? []), { key: 't:raw_dust@0', name: 'Raw Dust', gt: { prefix: 'dust', material: 'Raw' } }, { key: 't:thing@0', name: 'Thing' }],
+      fluids: [...(spec.fluids ?? []), { key: 'fluid:gas', name: 'Gas' }],
+      recipes: [...(spec.recipes ?? []),
+        { id: 'burn', map: 'gt.recipe.centrifuge', in: [['t:raw_dust@0', 1]], out: [['t:copper_ingot@0', 1], ['fluid:gas', 1000]], eut: 16, dur },
+        { id: 'make-thing', map: 'gt.recipe.assembler', in: [['t:copper_ingot@0', 2], ['fluid:gas', 1000]], out: [['t:thing@0', 1]], eut: 2 }],
+      worldgen: { ...spec.worldgen, veins: [...(spec.worldgen?.veins ?? []), vein] },
+    }, [161], from);
+  };
+  const thing = (): PlanSettings => S({ target: 't:thing@0', amount: 6, per: 'min' });
+
+  it('makes all of a good a step of the line makes rather than buy the rest, where its machines have room', async () => {
+    // The build stage's later stages (least raw material, then power and the canonical form) ran inside the decision's
+    // machines and broke the tie towards buying: 0.1 a second burnt, 0.1 bought. One centrifuge does 1 run a second, so
+    // burning 0.2 fits the machines the decision bought, and the line makes all of its copper (plan 09's one source).
+    const plan = await planLine(packFromSpec(gasSpec(20)), thing(), emptyContext());
+    expect(plan.status).toBe('ok');
+    expect(plan.steps.map((s) => [s.id, s.runsPerSecond, s.count])).toEqual([['burn', 0.2, 1], ['make-thing', 0.1, 1]]);
+    expect(plan.rawInputs.map((r) => [r.key, r.perSecond])).toEqual([['t:raw_dust@0', 0.2]]);
+    expect(codes(plan)).not.toContain('bought-and-made');
+  });
+
+  it('still buys beside a step where making the rest needs more machines than it saves', async () => {
+    // One centrifuge does 0.05 runs a second: the gas takes 2 of them, all of the copper 4. Over 24 hours both use the same
+    // raw material, and the 2 more centrifuges cost an iron ingot each, so buying the other ingot is cheaper.
+    const plan = await planLine(packFromSpec(gasSpec(400, [['t:iron_ingot@0', 1]])), thing(), emptyContext());
+    expect(plan.status).toBe('ok');
+    expect(plan.steps.map((s) => [s.id, s.runsPerSecond, s.count])).toEqual([['burn', 0.1, 2], ['make-thing', 0.1, 1]]);
+    expect(plan.rawInputs.map((r) => [r.key, r.perSecond])).toEqual([['t:copper_ingot@0', 0.1], ['t:raw_dust@0', 0.1]]);
   });
 });
 
