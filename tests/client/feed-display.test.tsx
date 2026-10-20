@@ -50,10 +50,15 @@ describe('the feeding configuration on screen', () => {
     const layout = changed(connLayout('ae2'), (b) => (b.label !== 'ME Interface (Advanced Assembler)' ? b : {
       pos: b.pos, block: { id: 'ae2cable:glass', meta: 0 }, role: 'pipe', label: 'ME Glass Cable - Fluix', item: 'appliedenergistics2:item.ItemMultiPart@16',
       connections: (1 << 4) | (1 << 5), covers: [{ face: 'north', item: EXPORT_BUS, settings: { mode: 'me_export' }, filter: [DUST] }],
+      feed: { exportBus: { keys: [DUST] } },
     }));
     const box = connectionsGraph(layout, connPlan, 'min').nodes.find((n) => n.id === 'step:b')!;
     expect(box.faces.filter((f) => f.id.includes('#cover:1,64,1:'))).toEqual([{ id: 'step:b#cover:1,64,1:north', title: 'ME Glass Cable - Fluix, north face',
       lines: [`${EXPORT_BUS} on the north face: put Titanium Dust in its filter slots`] }]);
+    // its ExportBusSpec adds no words of its own: the cover says what goes in the filter
+    const cable = layout.blocks.findIndex((b) => b.feed?.exportBus !== undefined);
+    expect(pickInfo(layout, connPlan, cable).lines.filter((l) => l.includes('Titanium Dust'))).toEqual([
+      `${EXPORT_BUS} on the north face: put Titanium Dust in its filter slots`]);
   });
 
   it('says the chips in the 3D hover and click info, and marks the pipe configured on the map', () => {

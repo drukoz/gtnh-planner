@@ -17,16 +17,17 @@
 // `AE2Compat.registerBlockingModeIgnoreItems`: the programmed circuit, its molds, extruder shapes, slicer blades and
 // lenses; not the Packager's schematics). ME glass cable fills the rest of the spine, the tail included, where the
 // base's ME network joins the line. Each interface or bus takes a channel, so the line is checked against the channels
-// the network has free. The patterns are the interfaces' structured `feed` (architecture §11 entry 51). Without an AE2
-// network at the base the ME parts cannot work: the layout says so and never assumes one. A machine run by hand gets no
-// interface, and a venting steam machine gets its interface on its middle-row side but no cover, as GT allows none on it
-// (architecture §11 entry 48; by-hand.ts says what is then moved by hand).
+// the network has free. The patterns are the interfaces' structured `feed`, and an export bus's filter and cards the
+// `feed.exportBus` of the cable it sits on (architecture §11 entry 51). Without an AE2 network at the base the ME parts
+// cannot work: the layout says so and never assumes one. A machine run by hand gets no interface, and a venting steam
+// machine gets its interface on its middle-row side but no cover, as GT allows none on it (architecture §11 entry 48;
+// by-hand.ts says what is then moved by hand).
 
 import { isFluidKey, parseItemKey, type StuffKey } from '../../../shared/keys.ts';
 import { fmtInt, joinNames } from '../../../shared/layout/format.ts';
 import { posKey, sideToward, type Vec3 } from '../../../shared/layout/geometry.ts';
 import { FACES } from '../../../shared/types/assets.ts';
-import type { PatternSpec } from '../../../shared/types/feed.ts';
+import type { ExportBusSpec, PatternSpec } from '../../../shared/types/feed.ts';
 import type { Pack } from '../../../shared/types/pack.ts';
 import type { BomLine, Plan, PlanStep, PlanWarning } from '../../../shared/types/plan.ts';
 import { stepOneOffs } from '../../planner/bom.ts';
@@ -182,13 +183,15 @@ const EXPORT_ITEMS_PER_OP: readonly number[] = [1, 8, 32, 64, 96];
 const EXPORT_SECONDS_PER_OP = 0.5;
 /** Filter slots: 1, and 4 more per Capacity Card, at most 2 (AE2 rv3 `PartSharedItemBus.availableSlots`, a 9-slot config). */
 const EXPORT_MAX_CAPACITY_CARDS = 2;
+/** An export bus's Acceleration Cards: an index of `EXPORT_ITEMS_PER_OP`. */
+type AccelerationCards = NonNullable<ExportBusSpec['cards']>;
 
 /** The cards an export bus needs for `kinds` items at `rate` items/s; `short` when even the most cannot. */
-function exportCards(kinds: number, rate: number): { capacity: number; acceleration: number; short: boolean } {
+function exportCards(kinds: number, rate: number): { capacity: number; acceleration: AccelerationCards; short: boolean } {
   const capacity = Math.min(EXPORT_MAX_CAPACITY_CARDS, Math.ceil(Math.max(0, kinds - 1) / 4));
   const need = rate * EXPORT_SECONDS_PER_OP;
   const found = EXPORT_ITEMS_PER_OP.findIndex((n) => n >= need);
-  const acceleration = found === -1 ? EXPORT_ITEMS_PER_OP.length - 1 : found;
+  const acceleration = (found === -1 ? EXPORT_ITEMS_PER_OP.length - 1 : found) as AccelerationCards;
   return { capacity, acceleration, short: found === -1 || kinds > 1 + 4 * EXPORT_MAX_CAPACITY_CARDS };
 }
 
@@ -295,7 +298,10 @@ export function ae2Mode(input: ModeInput): ModeResult {
       const cards = exportCards(feed.keys.length, unitIntakeRate(plan, unit.stepId));
       capacityCards += cards.capacity;
       accelerationCards += cards.acceleration;
-      blocks.push({ pos, block: { ...parts.me_cable.block }, role: 'pipe', label: parts.me_cable.name, item: parts.me_cable.key });
+      // the bus is an AE2 part on the spine's cable: the cable block carries its feed (add-on 21's `ExportBusSpec`) and
+      // its cover, which the configure step words
+      const exportBus: ExportBusSpec = { keys: [...feed.keys], ...(cards.acceleration > 0 ? { cards: cards.acceleration } : {}) };
+      blocks.push({ pos, block: { ...parts.me_cable.block }, role: 'pipe', label: parts.me_cable.name, item: parts.me_cable.key, feed: { exportBus } });
       covers.push({ pos: [...pos], cover: { face: FACES[sideToward(pos, behind)]!, item: parts.me_export_bus.key, filter: [...feed.keys],
         settings: { mode: 'me_export', ...(cards.capacity > 0 ? { capacityCards: cards.capacity } : {}),
           ...(cards.acceleration > 0 ? { accelerationCards: cards.acceleration } : {}) } } });

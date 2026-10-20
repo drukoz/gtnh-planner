@@ -124,6 +124,10 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('the feeding fix on the research
         expect(spec.blocking, `${iface.label} blocking mode`).toBe(held.every((k) => ignoredByBlocking(pack, k)));
       }
       const buses = live.flatMap((b) => (b.covers ?? []).filter((c) => c.settings.mode === 'me_export'));
+      // each ME Export Bus's cable carries its filter as add-on 21's ExportBusSpec
+      for (const b of live.filter((x) => (x.covers ?? []).some((c) => c.settings.mode === 'me_export'))) {
+        expect(b.feed?.exportBus?.keys, `${b.label} export bus feed`).toEqual(b.covers!.find((c) => c.settings.mode === 'me_export')!.filter);
+      }
       // a machine whose piped fluid another machine waits for, and whose pattern no job of the line runs, is warned about
       const kindOf = (id: string | undefined) => /^basicmachine\.([a-z_]+)\.tier/.exec(pack.machines.get(stepOf(id)?.machine.mteId ?? -1)?.metaName ?? '')?.[1];
       const short = layout.warnings.filter((w) => w.code === 'ae2_fluid_short').map((w) => [kindOf(w.stepId), w.key]);

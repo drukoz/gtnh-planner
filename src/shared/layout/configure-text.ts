@@ -185,8 +185,9 @@ function interfaceTexts(spec: InterfaceSpec, nameOf: (k: StuffKey) => string): s
 
 /**
  * The structured feeding configuration in a builder's words: a routed interface pipe's chips in chip-slot order as one
- * line (`chips: <chip> + <chip>`), then an ME interface's patterns and settings. An Auto Workbench's grid (add-on 12) has
- * no words here yet.
+ * line (`chips: <chip> + <chip>`), then an ME interface's patterns and settings. An ME Export Bus's filter and cards
+ * (`exportBus`) are worded once, by its cover on the same block (`coverText`), and an Auto Workbench's grid (add-on 12)
+ * has no words here yet.
  */
 export function feedTexts(feed: FeedSpec | undefined, nameOf: (k: StuffKey) => string): string[] {
   if (feed === undefined) return [];

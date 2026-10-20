@@ -99,7 +99,9 @@ describe('AE2 feeding', () => {
     const machine = placement.blocks.find((b) => b.role === 'machine')!;
     const port = placement.units[0]!.ports.items[0]!;
     expect(interfaces(r)).toEqual([]);
-    expect(r.blocks.filter((b) => b.pos.join(',') === port.join(',')).map((b) => [b.role, b.label])).toEqual([['pipe', 'ME Glass Cable - Fluix']]);
+    // the bus is a part on the spine's cable: the cable carries its cover and add-on 21's ExportBusSpec
+    expect(r.blocks.filter((b) => b.pos.join(',') === port.join(',')).map((b) => [b.role, b.label, b.feed])).toEqual([
+      ['pipe', 'ME Glass Cable - Fluix', { exportBus: { keys: ['t:in@0'] } }]]);
     const side = machine.pos[2] > port[2] ? 'south' : 'north';
     expect(r.covers).toEqual([{ pos: port, cover: { face: side, item: EXPORT_BUS, settings: { mode: 'me_export' }, filter: ['t:in@0'] } }]);
     expect(r.extraParts).toEqual([]);
@@ -118,6 +120,7 @@ describe('AE2 feeding', () => {
     const { r } = ae2(pack(), plan);
     // 4 items/s at an operation every 10 ticks: 2 items an operation, one Acceleration Card's 8 (a bare bus moves 1; AE2 rv3 PartExportBus)
     expect(r.covers.map((c) => [c.cover.settings, c.cover.filter])).toEqual([[{ mode: 'me_export', capacityCards: 1, accelerationCards: 1 }, ['t:dust@0', 't:in@0']]]);
+    expect(r.blocks.filter((b) => b.feed?.exportBus !== undefined).map((b) => b.feed)).toEqual([{ exportBus: { keys: ['t:dust@0', 't:in@0'], cards: 1 } }]);
     expect(r.extraParts).toEqual([
       { key: 'appliedenergistics2:item.ItemMultiMaterial@27', amount: 1, why: 'ME Export Bus upgrades', group: 'logistics' },
       { key: 'appliedenergistics2:item.ItemMultiMaterial@30', amount: 1, why: 'ME Export Bus upgrades', group: 'logistics' }]);
@@ -225,6 +228,9 @@ describe('AE2 feeding', () => {
     expect(texts).toContain('ME Interface (Basic Macerator): 1 processing pattern; pattern 1× Raw Input → 1× t:out_m@0; blocking mode on');
     expect(texts.filter((t) => t.startsWith('ME Glass Cable - Fluix: '))).toEqual([expect.stringMatching(
       /^ME Glass Cable - Fluix: ME Export Bus on the (north|south) face: put t:out_m@0 in its filter slots$/)]);
+    // the laid-out cable keeps the bus's ExportBusSpec, which only its cover words
+    expect(layout.blocks.filter((b) => b.feed !== undefined && b.role === 'pipe').map((b) => [b.label, b.feed])).toEqual([
+      ['ME Glass Cable - Fluix', { exportBus: { keys: ['t:out_m@0'] } }]]);
     const parts = resolveParts(p);
     // an ME interface and an ME Export Bus, 1 AE/t each, at 2 AE per EU
     expect(ae2IdleEUt(layout.blocks, parts)).toBe(1);

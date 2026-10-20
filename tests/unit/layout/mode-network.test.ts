@@ -106,7 +106,8 @@ describe('AE2 mode', () => {
     // s3 makes only Molten Iron: no pattern could count it, so cable with an export bus on its face toward the machine
     expect(r.blocks.map((b) => [b.pos[0], b.role, b.connections])).toEqual([
       [1, 'interface', undefined], [2, 'pipe', 16 | 32], [3, 'pipe', 16 | 32], [4, 'pipe', 16 | 32], [5, 'pipe', 16 | 32], [6, 'pipe', 16]]);
-    expect([r.blocks[4]!.config, r.blocks[4]!.feed]).toEqual([undefined, undefined]);
+    // the cable carries the bus's filter as add-on 21's ExportBusSpec (its cover says what to set)
+    expect([r.blocks[4]!.config, r.blocks[4]!.feed]).toEqual([undefined, { exportBus: { keys: ['t:in@0'] } }]);
     expect([r.extraParts[0]!.amount, r.covers.map((c) => [c.pos, c.cover.item]), r.warnings.map((w) => [w.code, w.stepId])]).toEqual([1,
       [[[1, 0, 1], 'gregtech:gt.metaitem.01@32630'], [[5, 0, 2], 'appliedenergistics2:item.ItemMultiPart@260']], [['ae2_no_pattern', 's3']]]);
     // only the machines that take items get input from their output side: the chemical reactor takes only oxygen
