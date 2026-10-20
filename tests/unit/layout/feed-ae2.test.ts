@@ -11,6 +11,7 @@ import { placeUnits, unitsFromPlan } from '../../../src/server/layout/arrange.ts
 import { emptyScan, layoutLine } from '../../../src/server/layout/layout.ts';
 import { buildMode, PORT_SPACING } from '../../../src/server/layout/modes/mode.ts';
 import { ae2IdleEUt, resolveParts } from '../../../src/server/layout/parts.ts';
+import { projectorPayload } from '../../../src/server/projector/payload.ts';
 import type { StuffKey } from '../../../src/shared/keys.ts';
 import type { Pack, Product, Recipe } from '../../../src/shared/types/pack.ts';
 import type { Plan, PlanStep } from '../../../src/shared/types/plan.ts';
@@ -164,5 +165,11 @@ describe('AE2 feeding', () => {
     // an ME interface and an ME Export Bus, 1 AE/t each, at 2 AE per EU
     expect(ae2IdleEUt(layout.blocks, parts)).toBe(1);
     expect(layout.bom.find((l) => l.key === EXPORT_BUS)).toEqual({ key: EXPORT_BUS, amount: 1, why: 'covers', group: 'logistics' });
+    // the projector draws the bus on its cable and lists the step that sets it
+    const project = makeProject({ logistics: 'ae2', scanId: null, baseId: null });
+    const payload = projectorPayload(project, { ...layout, status: 'ok' }, p);
+    expect(payload.blocks.filter((b) => (b.covers ?? []).some((c) => c.item === EXPORT_BUS)).map((b) => [b.id, b.part])).toEqual([
+      ['appliedenergistics2:tile.BlockCableBus', 'glass']]);
+    expect(payload.steps.map((s) => s.text)).toContainEqual(expect.stringMatching(/^ME Glass Cable - Fluix: ME Export Bus on the (north|south) face/));
   });
 });
