@@ -9,11 +9,11 @@
 // A singleblock's output side faces the spine and its front (GT's `mMainFacing`, kept apart from the output side) faces
 // the power head: GT never lets it face up or down. With the supply tier given, the lowest feed tier stands
 // next to the power head and machines fed at different tiers stand a column apart, so their power ports never touch.
-// With the `primitive` option (the routed, AE2 and EnderIO modes; architecture §11 entry 48) GT's primitive machines
-// follow their own rules: a steam singleblock vents through its output side, which turns up over an empty cell, and a
-// Bricked Blast Furnace, which GT lets nothing automated fill, or a Coke Oven, which GT fills only through its own Coke
-// Oven Hatch (one the layout does not lay), is run by hand at the end of its row, one block back from the spine with
-// nothing of the line touching it.
+// With the `primitive` option (on unless false; layoutLine turns it off for machine to machine only; architecture §11
+// entry 48) GT's primitive machines follow their own rules: a steam singleblock vents through its output side, which
+// turns up over an empty cell, and a Bricked Blast Furnace, which GT lets nothing automated fill, or a Coke Oven, which
+// GT fills only through its own Coke Oven Hatch (one the layout does not lay), is run by hand at the end of its row,
+// one block back from the spine with nothing of the line touching it.
 // Every order and tie-break is fixed, so the same plan gives the same placement.
 
 import { isFluidKey, itemKey, type ItemKey, type StuffKey } from '../../shared/keys.ts';
@@ -133,7 +133,11 @@ export interface Placement {
   spineZ: number; firstX: number; tailX: number;
   /** Every unit cell, sorted by x, y, z. */
   blocks: LocalBlock[];
-  /** Air cells the multiblocks need kept empty, sorted by x, y, z. */
+  /**
+   * Cells kept empty, sorted by x, y, z: the air cells the multiblocks need (their hollows, the block a muffler faces),
+   * the vent above a venting steam machine and its steam inlet behind it (`Unit.vent`), and the front row of a unit run
+   * by hand, between it and the spine (`Unit.manual`).
+   */
   reserved: Vec3[];
 }
 
@@ -716,9 +720,10 @@ function rowFace(face: number, row: 'N' | 'S'): number {
 /** Options of `unitsFromPlan`. */
 export interface UnitOptions {
   /**
-   * The rules of GT's primitive machines, for the routed, AE2 and EnderIO modes (architecture §11 entry 48): a steam
-   * singleblock vents (`Unit.vent`), and a Bricked Blast Furnace or a Coke Oven is run by hand (`Unit.manual`).
-   * Machine-to-machine mode leaves it off: add-on 15 lays those machines out its own way.
+   * The rules of GT's primitive machines (architecture §11 entry 48): a steam singleblock vents (`Unit.vent`), and a
+   * Bricked Blast Furnace or a Coke Oven is run by hand (`Unit.manual`). On unless false, so every caller gets
+   * vent-safe placement; `layoutLine` passes false for machine-to-machine mode only, which add-on 15 lays out its own
+   * way.
    */
   primitive?: boolean;
 }
@@ -740,7 +745,7 @@ function plainShape(pack: Pack, m: Machine, s: PlanStep, warnings: PlanWarning[]
 /**
  * One unit per machine still to build (`count − owned`) of every step that is not hand-crafted and runs on a real
  * machine, sorted by (depth, step id, index). Machines missing from the pack are left out with a warning. With
- * `primitive`, a steam singleblock vents (`vent`: `steam_machine` says where its steam goes, `steam_fluids` that its
+ * `primitive` (the default), a steam singleblock vents (`vent`: `steam_machine` says where its steam goes, `steam_fluids` that its
  * top takes no pipe) and a Bricked Blast Furnace or a Coke Oven is run by hand (`manual`, with `manual_machine`): GT's
  * steam machines take no EU (`MTEBasicMachineBronze.isElectric` is false) and the furnace and the oven draw none.
  */
@@ -758,8 +763,9 @@ export function unitsFromPlan(pack: Pack, plan: Plan, opts: UnitOptions = {}): {
       warnings.push({ code: 'unknown_machine', stepId: s.id, text: `${s.machine.name} (#${s.machine.mteId}) is not in this recipe export` });
       continue;
     }
-    const manual = opts.primitive === true ? manualReasonOf(m) : null;
-    const vent = opts.primitive === true && m.kind === 'steam';
+    const primitive = opts.primitive !== false;
+    const manual = primitive ? manualReasonOf(m) : null;
+    const vent = primitive && m.kind === 'steam';
     const stepped = stepIo(s);
     if (m.kind === 'steam') {
       // GT's steam machines take steam on every side but their front (`MTEBasicMachineBronze.isLiquidInput`)

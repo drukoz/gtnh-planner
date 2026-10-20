@@ -268,9 +268,14 @@ describe('hatches by GregTech\'s rules', () => {
   });
 
   it('puts no hatch on a bricked blast furnace, feeds it no power and says how to run it', () => {
-    // MTEBrickedBlastFurnace is a MetaTileEntity without hatches: its structure takes firebricks and lava only
+    // MTEBrickedBlastFurnace is a MetaTileEntity without hatches: its structure takes firebricks and lava only. By
+    // default (every mode but machine to machine) the line runs it by hand and says so once, never hatch_not_taken too
     const plan = makePlan([{ id: 'b', mteId: HATCH_IDS.BBF, count: 1, tier: 1, inputs: [['t:in@0', 1]], outputs: [['t:ingot@0', 1]] }]);
-    const { units, warnings } = unitsFromPlan(hatchPack(), plan);
+    const byHand = unitsFromPlan(hatchPack(), plan);
+    expect([byHand.units[0]!.manual, byHand.units[0]!.cells.some((c) => c.role === 'hatch'), byHand.warnings.map((w) => w.code)])
+      .toEqual(['no_automation', false, ['manual_machine']]);
+    // machine to machine (the primitive rules off): the hatch rules say it takes no bus
+    const { units, warnings } = unitsFromPlan(hatchPack(), plan, { primitive: false });
     expect(units[0]!.cells.filter((c) => c.role === 'hatch')).toEqual([]);
     expect(units[0]!.electric).toBe(false);
     expect(warnings).toEqual([{ code: 'hatch_not_taken', stepId: 'b',

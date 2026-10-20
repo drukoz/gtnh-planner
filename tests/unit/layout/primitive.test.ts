@@ -68,8 +68,14 @@ describe('primitive machines: units', () => {
     expect([unit('s').vent, unit('s').electric, unit('s').io]).toEqual([true, false, { itemIn: true, itemOut: true, fluidIn: [], fluidOut: [] }]);
   });
 
-  it('leaves the units to the hatch rules without the option (machine-to-machine mode is add-on 15\'s)', () => {
-    const { units, warnings } = unitsFromPlan(primitivePack(), steelLine());
+  it('follows the rules by default, so every caller gets vent-safe placement', () => {
+    const { units } = unitsFromPlan(primitivePack(), steelLine());
+    expect(units.map((u) => [u.stepId, u.manual ?? null, u.vent ?? null])).toEqual([['k', 'own_hatch', null], ['m', null, null], ['b', 'no_automation', null],
+      ['s', null, true]]);
+  });
+
+  it('leaves the units to the hatch rules with the option off (machine-to-machine mode is add-on 15\'s)', () => {
+    const { units, warnings } = unitsFromPlan(primitivePack(), steelLine(), { primitive: false });
     const b = units.find((u) => u.stepId === 'b')!;
     // GT's rows for the furnace and the oven (hatch-rules.ts) take no hatch and no power: no unit is run by hand, none
     // vents, and each says so once, with hatch_not_taken and no manual_machine
@@ -103,8 +109,8 @@ describe('primitive machines: placement', () => {
       { power: null, items: [], fluidIn: [], fluidOut: [], fluidInSides: [], fluidOutSides: [], itemFaces: [], fluidFaces: [] }]);
   });
 
-  it('places as before without the option', () => {
-    const p = placeUnits(unitsFromPlan(primitivePack(), plan()).units, { headWidth: 1, portSpacing: 0 });
+  it('places as before with the option off', () => {
+    const p = placeUnits(unitsFromPlan(primitivePack(), plan(), { primitive: false }).units, { headWidth: 1, portSpacing: 0 });
     // b first in row N (its controller at x 2), s in row S at x 1 facing the middle row (north)
     expect(p.blocks.filter((b) => b.role === 'machine').map((b) => [b.stepId, b.facing])).toEqual([['s', 2], ['b', 3]]);
     expect(p.units.some((u) => u.outputSide !== undefined)).toBe(false);

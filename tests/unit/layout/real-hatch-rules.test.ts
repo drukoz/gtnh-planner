@@ -267,7 +267,8 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('hatch rules on the real 2.9 exp
       const plan = await planLine(pack, settings, emptyContext());
       expect(plan.status).toBe(infeasible === true ? 'infeasible' : 'ok');
       if (infeasible === true) return;
-      const { units } = unitsFromPlan(pack, plan);
+      // the hatch rules on every multiblock, the furnaces and ovens the other modes run by hand included
+      const { units } = unitsFromPlan(pack, plan, { primitive: false });
       const seen = new Set<string>();
       const bad: string[] = [];
       for (const u of units) {
