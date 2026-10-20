@@ -78,6 +78,24 @@ describe('machines', () => {
     await expect(makePack({ machines, structures: [{ id: 1, size: [1, 1, 1], controller: [0, 0, 0], palette: [], blocks: [[0, 0, 0, 3]], air: [] }] }))
       .rejects.toMatchObject({ name: 'ExportFormatError', file: 'structures.jsonl.gz', line: 1 });
   });
+
+  it('reads the item slot counts of a GT basic machine (exporter 0.6.0)', async () => {
+    const pack = await makePack({
+      machines: [
+        { id: 302, name: 'basicmachine.macerator.tier.02', cls: 'x', item: null, kind: 'basic', tier: 2, itemInSlots: 1, itemOutSlots: 1 },
+        { id: 211, name: 'basicmachine.assembler.tier.01', cls: 'x', item: null, kind: 'basic', tier: 1, itemInSlots: 6, itemOutSlots: 1 },
+        { id: 212, name: 'basicmachine.assembler.tier.02', cls: 'x', item: null, kind: 'basic', tier: 2, itemInSlots: 9, itemOutSlots: 1 },
+        { id: 4300, name: 'basicmachine.test_sorter.tier.01', cls: 'x', item: null, kind: 'basic', tier: 1, itemInSlots: 2, itemOutSlots: 0 },
+      ],
+    });
+    expect(pack.machines.get(302)).toMatchObject({ itemInSlots: 1, itemOutSlots: 1 });
+    expect(pack.machines.get(211)).toMatchObject({ itemInSlots: 6, itemOutSlots: 1 });
+    expect(pack.machines.get(212)).toMatchObject({ itemInSlots: 9, itemOutSlots: 1 });
+    expect(pack.machines.get(4300)).toMatchObject({ itemInSlots: 2, itemOutSlots: 0 });   // no output slot is still a count
+    const macerator = (await makePack(sampleExportSpec())).machines.get(SAMPLE.macerator)!;
+    expect('itemInSlots' in macerator).toBe(false);
+    expect('itemOutSlots' in macerator).toBe(false);
+  });
 });
 
 describe('structure hatch rules', () => {

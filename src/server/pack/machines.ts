@@ -100,6 +100,8 @@ export function toMachine(line: MachineLine, ctx: LoadContext): Machine {
   if (line.turbineEfficiency != null) machine.turbineEfficiency = line.turbineEfficiency;
   if (line.perfectOC != null) machine.perfectOC = line.perfectOC;
   if (line.heatOC != null) machine.heatOC = line.heatOC;
+  if (line.itemInSlots != null) machine.itemInSlots = line.itemInSlots;
+  if (line.itemOutSlots != null) machine.itemOutSlots = line.itemOutSlots;
   return machine;
 }
 
