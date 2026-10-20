@@ -50,6 +50,13 @@ describe('conduits in the 3D view', () => {
       ['arm', 1, [0, 0.1875, 0], ['itemConduitIoConnector', `itemConduitInput ${RED}`]],
       ['arm', 4, [0, 0.1875, 0], ['liquidConduitEnder']]]);
     expect(scene.instances.every((i) => i.tiles.every((t) => t === i.tiles[0]))).toBe(true);   // one picture on every side
+    // every conduit tile, a connector's included, is drawn over the pipe role's colour (plan 16 Task 9)
+    const UNDER = 'under:255,179,0|';
+    for (const i of scene.instances) {
+      const { key, layers, under } = scene.tiles[i.tiles[2]]!;
+      expect(key).toBe(`${UNDER}${JSON.stringify(layers)}`);
+      expect(under).toEqual([255, 179, 0]);
+    }
   });
   it('lists each conduit and every filter and upgrade in the block list', () => {
     expect(blockList(bundleLayout, enderioNames).place).toEqual([

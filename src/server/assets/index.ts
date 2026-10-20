@@ -3,7 +3,7 @@
 
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { Rgb, TextureLayer } from '../../shared/types/assets.ts';
+import type { LayerRegion, Rgb, TextureLayer } from '../../shared/types/assets.ts';
 
 export const ASSET_INDEX_FORMAT = 'gtnh-planner-assets/1';
 export const INDEX_FILE = 'index.json';                              // data/assets/index.json
@@ -25,25 +25,45 @@ export class AssetIndexError extends Error {
   }
 }
 
+/** What a layer carries besides its file: a tint (white is dropped), the glow flag and the region it draws. */
+export interface LayerOptions { tint?: Rgb; glow?: boolean; region?: LayerRegion }
+
 export interface AssetIndex {
   readonly size: number; readonly file: AssetIndexFile | null;
   has(path: string): boolean; info(path: string): AssetFileInfo | undefined;
-  layer(path: string, opts?: { tint?: Rgb; glow?: boolean }): TextureLayer | null;
-  firstLayer(paths: readonly string[], opts?: { tint?: Rgb; glow?: boolean }): TextureLayer | null;
+  layer(path: string, opts?: LayerOptions): TextureLayer | null;
+  firstLayer(paths: readonly string[], opts?: LayerOptions): TextureLayer | null;
 }
 
-function isWhite(rgb: Rgb): boolean {
+/** A white tint draws a texture as it is, so a layer never carries one. */
+export function isWhite(rgb: Rgb): boolean {
   return rgb[0] === 255 && rgb[1] === 255 && rgb[2] === 255;
 }
 
+/**
+ * An animated file's frames: square, `floor(h / w)`, as Minecraft 1.7.10 cuts a strip (architecture §11.43 (d)), also
+ * from an index written while a `.mcmeta` `height` could count them otherwise; 1 for a file that is not animated.
+ */
+function framesOf(info: AssetFileInfo): number {
+  return info.frames !== undefined && info.frames > 1 && info.w > 0 ? Math.max(1, Math.floor(info.h / info.w)) : 1;
+}
+
+/** A fresh copy of `region`, so a layer never shares (or alters) a table's arrays. */
+function copyRegion(region: LayerRegion): LayerRegion {
+  const { sheet, src, dst } = region;
+  return dst === undefined ? { sheet, src: [...src] } : { sheet, src: [...src], dst: [...dst] };
+}
+
 function indexOver(files: ReadonlyMap<string, AssetFileInfo>, file: AssetIndexFile | null): AssetIndex {
-  const layer = (path: string, opts?: { tint?: Rgb; glow?: boolean }): TextureLayer | null => {
+  const layer = (path: string, opts?: LayerOptions): TextureLayer | null => {
     const info = files.get(path);
     if (info === undefined) return null;
     const out: TextureLayer = { path };
     if (opts?.tint !== undefined && !isWhite(opts.tint)) out.tint = [opts.tint[0], opts.tint[1], opts.tint[2]];
     if (opts?.glow === true) out.glow = true;
-    if (info.frames !== undefined && info.frames > 1) out.frames = info.frames;
+    const frames = framesOf(info);
+    if (frames > 1) out.frames = frames;
+    if (opts?.region !== undefined) out.region = copyRegion(opts.region);
     return out;
   };
   return {
@@ -112,13 +132,19 @@ export async function loadAssetIndex(assetsDir: string): Promise<AssetIndex> {
   return assetIndexFrom(checkFile(parsed, file));
 }
 
+/** The domain of an icon name, as `iconPath` reads it: before the first `:`, lower-cased; `minecraft` when absent or empty. */
+export function iconDomain(iconName: string): string {
+  const colon = iconName.indexOf(':');
+  const domain = colon < 0 ? '' : iconName.slice(0, colon);
+  return (domain === '' ? 'minecraft' : domain).toLowerCase();
+}
+
 /**
  * The extracted file of an icon name, as Minecraft 1.7.10's `ResourceLocation` and `TextureMap` build it (research
  * §2.1): the domain before the first `:` is lower-cased (`minecraft` when absent or empty), the rest is kept as is.
  */
 export function iconPath(iconName: string, atlas: 'blocks' | 'items'): string {
   const colon = iconName.indexOf(':');
-  const domain = colon < 0 ? '' : iconName.slice(0, colon);
   const rest = colon < 0 ? iconName : iconName.slice(colon + 1);
-  return `${(domain === '' ? 'minecraft' : domain).toLowerCase()}/textures/${atlas}/${rest}.png`;
+  return `${iconDomain(iconName)}/textures/${atlas}/${rest}.png`;
 }

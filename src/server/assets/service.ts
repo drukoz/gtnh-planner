@@ -23,7 +23,7 @@ export interface AssetServiceOptions {
   pack: () => Promise<PackView | null>;
   /** How often the files are checked for changes (1000). */
   checkEveryMs?: number;
-  /** Where a failed reload is reported (console.warn). */
+  /** Where a failed reload, and a loaded dump's fluids whose still was not extracted, are reported (console.warn). */
   log?: (line: string) => void;
 }
 
@@ -126,6 +126,11 @@ export class AssetService {
       this.dumpSig = dumpSig;
       try {
         this.dump = exportDir === null ? null : await loadTexturesDump(exportDir, this.index);
+        const n = this.dump?.stats.missingStill ?? 0;
+        if (n > 0) {
+          this.log(`Assets: ${n} fluid${n === 1 ? '' : 's'} of the texture dump name a still texture that was not extracted; `
+            + 'they are drawn by name or as GT\'s generic fluid (exporter 0.4.0 fixes the GT ones).');
+        }
       } catch (err) {
         this.log(`Assets: keeping the previous texture dump: ${messageOf(err)}`);
       }

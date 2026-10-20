@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
-  averageTopColor, FACES_BATCH, fallbackColor, layerPixels, OVERRIDE_COLORS, packRgb, PALETTE_TEXTURE_SIZE, resolvePaletteColors, unpackRgb,
-  type PaletteDeps,
+  averageTopColor, FACES_BATCH, fallbackColor, layerPixels, nameRuleColor, OVERRIDE_COLORS, packRgb, PALETTE_TEXTURE_SIZE, resolvePaletteColors,
+  unpackRgb, type PaletteDeps,
 } from '../../src/client/map/palette.ts';
 import { loadLayerBitmap } from '../../src/client/assets/texture-image.ts';
 import type { LayerPixels } from '../../src/client/assets/composite.ts';
@@ -83,6 +83,18 @@ describe('layerPixels', () => {
     expect(await layerPixels({ path: 'missing.png' })).toBeNull();
     expect(PALETTE_TEXTURE_SIZE).toBe(16);
   });
+
+  it('draws a region layer at its place in the 16 px tile', async () => {
+    vi.stubGlobal('OffscreenCanvas', FakeCanvas);
+    FakeCanvas.draws = [];
+    const bitmap = { width: 14, height: 10, close() {} } as unknown as ImageBitmap;
+    vi.mocked(loadLayerBitmap).mockResolvedValueOnce(bitmap);
+    const layer: TextureLayer = { path: 'x.png', region: { sheet: 64, src: [14, 33, 14, 10], dst: [1, 6, 14, 10] } };
+    const p = await layerPixels(layer);
+    expect(loadLayerBitmap).toHaveBeenLastCalledWith(layer, 16);
+    expect(FakeCanvas.draws).toEqual([[bitmap, 1, 6, 14, 10]]);
+    expect([p!.width, p!.height]).toEqual([16, 16]);
+  });
 });
 
 describe('fallbackColor and packing', () => {
@@ -159,5 +171,18 @@ describe('resolvePaletteColors', () => {
     const c = await resolvePaletteColors(palette, deps);
     expect(unpackRgb(c[0]!)).toEqual(fallbackColor(palette[0]!));   // 1×1 and 2×2 layers: RangeError → local fallback
     expect(unpackRgb(c[1]!)).toEqual([5, 5, 5]);                     // unresolved and its texture failed → the server's fallback
+  });
+
+  it('colours an unresolved block by its name rule before the server\'s hash colour (chisel cobblestone, legacy GT ores)', async () => {
+    const deps: PaletteDeps = {
+      faces: async (blocks) => blocks.map((block) => ({ block, faces: NO_FACES, fallbackColor: [92, 89, 192], resolved: false })),
+      image: async () => null,
+    };
+    const palette = [{ id: 'chisel:cobblestone', meta: 3 }, { id: 'gregtech:gt.blockores', meta: 2 }, { id: 'mod:thing', meta: 0 }];
+    expect([...await resolvePaletteColors(palette, deps)]).toEqual([packRgb([125, 125, 125]), packRgb([125, 125, 125]), packRgb([92, 89, 192])]);
+    // A GT machine's server colour is its machine kind's (spec §3.8), which no name rule replaces.
+    expect([...await resolvePaletteColors([{ id: 'gregtech:gt.blockmachines', meta: 0, mteId: 1 }], deps)]).toEqual([packRgb([92, 89, 192])]);
+    expect(nameRuleColor({ id: 'Thaumcraft:blockMagicalLog', meta: 0 })).toEqual([143, 119, 72]);
+    expect(nameRuleColor({ id: 'mod:thing', meta: 0 })).toBeNull();
   });
 });
