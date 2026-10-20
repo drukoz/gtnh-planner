@@ -37,6 +37,7 @@ import { stepOneOffs } from '../../planner/bom.ts';
 import { AE2_POOL_MAX_PATTERNS, isAutoWorkbench } from '../../planner/machine-options.ts';
 import { comparePos } from '../../world/graph.ts';
 import type { HostCover, LocalBlock, PlacedUnit } from '../arrange.ts';
+import { benchPattern } from '../bench.ts';
 import { linkBits } from '../path.ts';
 import {
   conveyorCover, emptyModeResult, feedSettings, itemPorts, itemRisers, lineExceptions, mergeHostConfigs, nameList, outputSideInputs, placedStepIds,
@@ -311,9 +312,25 @@ export function ae2Mode(input: ModeInput): ModeResult {
   const patterned = new Map<string, PatternSpec>();
   /** The units' first steps already told that their interface holds too few patterns. */
   const patternsWarned = new Set<string>();
-  let patterns = 0, patternedInterfaces = 0, capacityCards = 0, accelerationCards = 0;
+  let patterns = 0, patternedInterfaces = 0, capacityCards = 0, accelerationCards = 0, lockingCards = 0;
   for (const { pos, behind, unit } of ports) {
     portCells.add(posKey(pos));
+    if (unit.bench !== undefined) {
+      // an Auto Workbench (research machine-feeding §3.4, controller ruling 204 (1)): one pattern exactly equal to its
+      // grid, blocking mode off (blocking mode counts its ghost grid as items, so it would never push into it) and a
+      // Locking Card on "Until crafting result is returned", so the CPU pushes one whole set at a time; it pushes what it
+      // makes into the interface itself, through its back
+      const pattern = benchPattern(unit.bench);
+      patterned.set(unit.stepId, pattern);
+      patterns += 1;
+      patternedInterfaces += 1;
+      lockingCards += 1;
+      blocks.push({
+        pos, block: { ...parts.me_interface.block }, role: 'interface', label: `${parts.me_interface.name} (${unit.name})`, item: parts.me_interface.key,
+        feed: { interface: { patterns: [pattern], blocking: false, lock: 'until_result' } },
+      });
+      continue;
+    }
     const intake = !unit.multiblock || blockAt.get(posKey(behind))?.hatch === 'input_bus';
     // how each step the machine runs is fed (`unitSteps`: a shared machine runs several, plan 12 Task 6)
     const fed = intake ? unitSteps(unit).flatMap((id) => {
@@ -433,6 +450,7 @@ export function ae2Mode(input: ModeInput): ModeResult {
   for (const [part, amount] of [[parts.ae2_capacity_card, capacityCards], [parts.ae2_acceleration_card, accelerationCards]] as const) {
     if (amount > 0) extraParts.push({ key: part.key, amount, why: 'ME Export Bus upgrades', group: 'logistics' });
   }
+  if (lockingCards > 0) extraParts.push({ key: parts.ae2_locking_card.key, amount: lockingCards, why: 'Locking Card on each Auto Workbench\'s interface', group: 'logistics' });
   const exportWords = exportBusFor.size === 0 ? ''
     : `, but only cable in front of ${joinNames([...exportBusFor].map(([name, n]) => (n === 1 ? `the ${name}` : `${fmtInt(n)}× ${name}`)))}, with an ME `
       + 'Export Bus on its face toward the machine';

@@ -1,5 +1,6 @@
 // The static feeding rules (architecture §11 entry 51; research docs/research/machine-feeding.md §7 "Static rules", with
-// add-on 21's rule table and words, its R1–R9 and R12; R10, benches, and R11, shared machines, are add-on 12's): what
+// add-on 21's rule table and words, its R1–R9 and R12; R10, benches, and R11, shared machines, are add-on 12's, which
+// so far reads a shared machine's every step and an Auto Workbench's own feed into R1, R5a, R5d and R9): what
 // a laid-out routed, AE2 or EnderIO line leaves that can overfill or deadlock a machine, read from the layout itself — its
 // machines and buses, their settings, and the structured chips and patterns of `LayoutBlock.feed` — so the warnings say
 // what the build steps and the 3D view show. Each rule raises the feeding checker's code: `feed_crowded`,
@@ -16,6 +17,7 @@ import type { Layout, LayoutBlock } from '../../shared/types/layout.ts';
 import type { Machine, Pack } from '../../shared/types/pack.ts';
 import type { Plan, PlanFlow, PlanStep, PlanWarning } from '../../shared/types/plan.ts';
 import { stepOneOffs } from '../planner/bom.ts';
+import { isAutoWorkbench } from '../planner/machine-options.ts';
 import { comparePos } from '../world/graph.ts';
 import { ignoredByBlocking } from './modes/ae2.ts';
 import { stepItemInputs, stepItemOutputs } from './modes/mode.ts';
@@ -227,8 +229,10 @@ function routedRules(line: Line, n: Node, raise: Raise): void {
   const makes = stepItemOutputs(plan, s.id);
   const outPipes = pipesAt(line, n.multiblock ? n.outBuses : [n.block]);
   const extractors = chipsOf(outPipes, 'extractor');
-  // R5a: what it makes, each out through an Extractor Chip that lists it
-  for (const key of makes.filter((k) => !extractors.some((c) => passes(c.filter, k)))) {
+  const broadcasters = chipsOf(outPipes, 'broadcaster');
+  // R5a: what it makes, each out through an Extractor Chip that lists it, or a Broadcaster Chip that fills an Auto
+  // Workbench's orders for it (plan 12)
+  for (const key of makes.filter((k) => !extractors.some((c) => passes(c.filter, k)) && !broadcasters.some((c) => passes(c.filter, k)))) {
     const how = extractors.length === 0 ? 'no Item Extractor Chip is on its interface pipe' : `its Item Extractor Chip ${extractorFault(extractors)}`;
     raise('feed_no_route', `Nothing takes ${nameOf(key)} out of ${n.label}: ${how}`, key);
   }
@@ -243,13 +247,16 @@ function routedRules(line: Line, n: Node, raise: Raise): void {
   for (const bus of n.inBuses.filter((b) => chipsOf(pipesAt(line, [b]), 'extractor').length > 0)) {
     raise('feed_churn', `The Item Extractor Chip on ${where(bus)} pulls ${n.label}'s inputs back out of its input bus`);
   }
-  // R5d: what it takes from outside the line, each out of the input chest through its Extractor
+  // R5d: what it takes from outside the line, each out of the input chest through its Extractor, or for an Auto
+  // Workbench, which orders what it takes with its Stock Keeper, its Broadcaster (plan 12)
   const fromOutside = sorted(items.filter((f) => f.to === s.id && !laid.has(f.from)).map((f) => f.key));
+  const bench = isAutoWorkbench(n.machine);
+  const chestChip = bench ? 'Item Broadcaster Chip' : 'Item Extractor Chip';
   for (const chest of line.inputChests) {
-    const chestExtractors = chipsOf(pipesAt(line, [chest]), 'extractor');
-    for (const key of fromOutside.filter((k) => !chestExtractors.some((c) => passes(c.filter, k)))) {
-      const how = chestExtractors.length === 0 ? `no Item Extractor Chip is on the interface pipe of ${where(chest)}`
-        : `the Item Extractor Chip on ${where(chest)} ${extractorFault(chestExtractors)}`;
+    const chestChips = chipsOf(pipesAt(line, [chest]), bench ? 'broadcaster' : 'extractor');
+    for (const key of fromOutside.filter((k) => !chestChips.some((c) => passes(c.filter, k)))) {
+      const how = chestChips.length === 0 ? `no ${chestChip} is on the interface pipe of ${where(chest)}`
+        : `the ${chestChip} on ${where(chest)} ${bench ? 'does not list it' : extractorFault(chestChips)}`;
       raise('feed_starved', `${n.label} never gets ${nameOf(key)}: ${how}`, key);
     }
   }
@@ -297,10 +304,15 @@ function ae2Rules(line: Line, n: Node, raise: Raise): void {
         raise('feed_fluid_packet', `${name} turns ${nameOf(key)} into a Fluid Packet item, which ${n.label} can take into an input slot for good`, key);
       }
     }
-    // R9: blocking mode waits for ever on a held item it does not ignore
+    // R9: blocking mode waits for ever on a held item it does not ignore, and on an Auto Workbench, whose ghost crafting
+    // grid GT counts as items (research machine-feeding §1.3.6, controller ruling 204 (1))
     if (iface.spec.blocking) {
       for (const key of sorted(held.filter((k) => !ignoredByBlocking(pack, k)))) {
         raise('feed_starved', `${name} has blocking mode on and ${n.label} holds ${nameOf(key)}, which blocking mode does not ignore: it never pushes into it`, key);
+      }
+      if (isAutoWorkbench(n.machine)) {
+        raise('feed_starved', `${name} has blocking mode on toward ${n.label}, an Auto Workbench: blocking mode counts the items of its crafting grid, so `
+          + 'it never pushes into it');
       }
     }
     // R12: a full-block interface pushes into every inventory beside it (a machine's buses count as the machine), said
@@ -323,8 +335,10 @@ function ae2Rules(line: Line, n: Node, raise: Raise): void {
  * R5b an item it takes that its Extractor lists, R5c an Extractor on an input bus, R5d an item it takes from outside the
  * line that the input chest's Extractor keeps in, R6 an item it makes that nothing on the network takes, R7 a
  * Broadcaster that offers more than its outputs; on AE2 lines R8 a pattern AE2 cannot encode (a fluid, a fraction, a
- * held item), R9 blocking mode toward a held item blocking mode does not ignore, and R12 an interface beside two
- * inventories.
+ * held item), R9 blocking mode toward a held item blocking mode does not ignore or toward an Auto Workbench, and R12 an
+ * interface beside two inventories. A shared machine (plan 12, `LayoutBlock.stepIds`) is read with every step it runs;
+ * an Auto Workbench's ingredients leave their makers and the input chest through Broadcaster Chips, which R5a and R5d
+ * take as their way out.
  */
 export function feedingWarnings(input: FeedRulesInput): PlanWarning[] {
   const { pack, plan, layout } = input;

@@ -45,6 +45,12 @@ export interface ConduitFilter {
    * own fluid filter 5. Optional addition (the EnderIO single-pipe change), so the words can say which filter a list needs.
    */
   slots?: number;
+  /**
+   * A Limited Item Filter's count of each key, in `keys` order: an insert side lets an item in only while the target holds
+   * fewer of it (every slot counted, an Auto Workbench's grid cells too). Optional addition (plan 12 Task 6: the cap on an
+   * Auto Workbench's ingredients, research machine-feeding §2.1, §3.4).
+   */
+  limits?: number[];
 }
 export interface ConduitExtract {
   color: DyeColor; filter: ConduitFilter | null; /** items/s or L/s the face must move */ rate: number; roundRobin: boolean; redstone: RedstoneMode;

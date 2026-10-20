@@ -21,7 +21,7 @@ export type PartId = 'conveyor_cover' | 'pump_cover' | 'item_filter_cover' | 'ch
   | 'chip_responder' | 'chip_extractor' | 'chip_stock_keeper' | 'me_interface' | 'me_cable' | 'me_export_bus' | 'blank_pattern'
   | 'eio_item_conduit' | 'eio_basic_filter' | 'eio_advanced_filter' | 'eio_big_filter' | 'eio_speed_upgrade'
   | 'eio_fluid_ender' | 'eio_fluid_crystalline' | 'eio_fluid_pink_slime' | 'eio_fluid_melodic' | 'eio_fluid_stellar'
-  | 'chip_terminator' | 'ae2_capacity_card' | 'ae2_acceleration_card';
+  | 'chip_terminator' | 'ae2_capacity_card' | 'ae2_acceleration_card' | 'chip_broadcaster' | 'eio_limited_filter' | 'ae2_locking_card';
 
 /**
  * `keys` are tried in order against the pack, then `names` (English, ignoring case). `block` is what a placed part
@@ -78,6 +78,12 @@ export const PART_DEFS: Readonly<Record<PartId, PartDef>> = Object.freeze({
   chip_terminator: partDef('Item Terminator Chip', `${PR_TRANSPORT}.routingchip@3`, 'item'),
   ae2_capacity_card: partDef('Capacity Card', 'appliedenergistics2:item.ItemMultiMaterial@27', 'item'),
   ae2_acceleration_card: partDef('Acceleration Card', 'appliedenergistics2:item.ItemMultiMaterial@30', 'item'),
+  // an Auto Workbench's cap on its ingredients (plan 12 Task 6, research machine-feeding §3.4): Project Red's suppliers
+  // broadcast what a bench's Stock Keeper asks for, EnderIO's insert side counts each ingredient, AE2's interface locks
+  // until the result is back (item ids read from the 2.9 export)
+  chip_broadcaster: partDef('Item Broadcaster Chip', `${PR_TRANSPORT}.routingchip@5`, 'item'),
+  eio_limited_filter: partDef('Limited Item Filter', 'EnderIO:itemLimitedItemFilter@0', 'item'),
+  ae2_locking_card: partDef('Locking Card', 'appliedenergistics2:item.ItemMultiMaterial@65', 'item'),
 });
 
 const PART_IDS = Object.keys(PART_DEFS) as PartId[];

@@ -145,6 +145,18 @@ function checkInputSide(what: string): string {
 const OUTPUT_UP = 1;
 
 /**
+ * An Auto Workbench's place step (plan 12 Task 6, research machine-feeding §1.3.5 and §3.7): GT++'s bench pushes what it
+ * makes out of its back, the face with the pipe overlay, and takes EU on every other face; a Wrench click makes the face
+ * clicked its front; its tank fills from any fluid that reaches it, which it puts in its input slots. So its back meets
+ * the middle row, its front faces away from it, where the power cable comes in, and no fluid pipe touches it.
+ */
+function benchPlaceText(u: PlacedUnit, n: number): string {
+  return `Place ${fmtInt(n)}× ${u.name} with its back, the face with the pipe opening (the front shows a crafting grid), toward the middle row: `
+    + 'with a Wrench, right-click its side away from the middle row to make that its front; run its power cable to the front or a side, never the '
+    + 'back, and keep fluid pipes off it';
+}
+
+/**
  * A venting steam singleblock's place step (architecture §11 entry 48; worded as add-on 15's machine-to-machine one):
  * GT vents its steam through its output side after every run and starts the next only once it could
  * (`MTEBasicMachineBronze.allowToCheckRecipe`: no cover there and no block with a hit box in front of it), so that side
@@ -221,6 +233,7 @@ function placeSteps(units: readonly PlacedUnit[], sitePin: number | undefined, r
   return [...byStep].map(([stepId, { first: u, n }]) => {
     // a machine several steps share (plan 12) says which it runs
     const runs = u.stepIds === undefined ? '' : `; it runs ${joinNames(u.stepIds.map(stepName))}`;
+    if (u.bench !== undefined) return draft(`layout:place:${stepId}`, 'place', sitePin, benchPlaceText(u, n));
     if (!u.multiblock) {
       const front = SIDE_NAMES[rotateFacing(u.mainFacing ?? WEST, rotation)]!;
       if (u.outputSide === OUTPUT_UP) return draft(`layout:place:${stepId}`, 'place', sitePin, `${steamPlaceText(u, n, front)}${runs}`);

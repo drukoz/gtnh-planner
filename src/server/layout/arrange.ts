@@ -25,11 +25,14 @@ import type { BlockRef, Machine, Pack, Product, Recipe } from '../../shared/type
 import { machineGroups } from '../../shared/plan/pools.ts';
 import type { BomLine, Plan, PlanStep, PlanWarning } from '../../shared/types/plan.ts';
 import { UNKNOWN_BLOCK } from '../../shared/types/world.ts';
+import { stepProductName } from '../planner/bom.ts';
 import { minimalHatch } from '../planner/build-cost.ts';
+import { isAutoWorkbench } from '../planner/machine-options.ts';
 import { simpleClassName } from '../world/facts.ts';
 import {
   elementMap, elementTakes, hatchRuleFor, ruleFits, ruleNeeds, rulePower, ruleTakes, type HatchKind, type HatchRule,
 } from './hatch-rules.ts';
+import { benchPlan, type BenchPlan } from './bench.ts';
 import { manualReasonOf } from './multiblock-rules.ts';
 import { busSlots, hatchLitres, machineRef, pickHatch, type HatchClass } from './parts.ts';
 
@@ -111,6 +114,13 @@ export interface Unit {
    * fluids, as its top vents.
    */
   vent?: true;
+  /**
+   * A GT++ Electric Auto Workbench's crafting-table step (plan 12 Task 6, bench.ts): its grid, ingredients, result, what
+   * a craft hands back and the tools its grid holds. `placeUnits` turns its front (GT's front: no main facing apart from
+   * it) away from the middle row, so its back, the face it pushes its result out of, meets the line's logistics and its
+   * front takes its power; it gets no output cover (covers fit neither its front nor its back) and no fluid port.
+   */
+  bench?: BenchPlan;
 }
 
 /**
@@ -817,6 +827,14 @@ export function unitsFromPlan(pack: Pack, plan: Plan, opts: UnitOptions = {}): {
     }
     const manual = primitive ? manualReasonOf(m) : null;
     const vent = primitive && m.kind === 'steam';
+    // a crafting-table step on GT++'s Auto Workbench (crafting recipes never share one: their sharing key holds the
+    // recipe), laid with its grid; a tool in the grid stops it after one craft (research machine-feeding §1.3.4)
+    const bench = isAutoWorkbench(m) ? benchPlan(pack, s) : undefined;
+    if (bench !== undefined && bench.tools.length > 0) {
+      const product = stepProductName(pack, s);
+      warnings.push({ code: 'bench_tool', stepId: s.id, text: `${m.name} cannot keep crafting ${product}: its grid holds ${joinNames(bench.tools.map(nameOf))}, `
+        + `which every craft wears out or uses up, so it stops after one craft — craft ${product} by hand, or put a fresh one in for every craft` });
+    }
     const stepped = group.length === 1 ? stepIo(s) : unionIo(group.map(stepIo));
     if (m.kind === 'steam') {
       // GT's steam machines take steam on every side but their front (`MTEBasicMachineBronze.isLiquidInput`)
@@ -841,7 +859,8 @@ export function unitsFromPlan(pack: Pack, plan: Plan, opts: UnitOptions = {}): {
     const made: MultiblockShape = manual !== null
       ? { shape: plainShape(pack, m, s, warnings), io: { itemIn: false, itemOut: false, fluidIn: [], fluidOut: [] }, electric: false }
       : multiblock ? multiblockShape(pack, m, s, stepped, circuit, hatchNeed(group), warnings)
-      : { shape: singleblockShape(m, circuit), io: vent ? { ...stepped, fluidIn: [], fluidOut: [] } : stepped, electric: m.kind !== 'steam' };
+      // a steam machine's top vents and a bench takes no fluid: neither gets a fluid port
+      : { shape: singleblockShape(m, circuit), io: vent || bench !== undefined ? { ...stepped, fluidIn: [], fluidOut: [] } : stepped, electric: m.kind !== 'steam' };
     const { shape, io, electric } = made;
     const euPerTick = Math.max(...group.map((g) => g.euPerTick));
     for (let index = 0; index < count; index++) {
@@ -850,7 +869,7 @@ export function unitsFromPlan(pack: Pack, plan: Plan, opts: UnitOptions = {}): {
         ...(group.length > 1 ? { stepIds: group.map((g) => g.id) } : {}),
         size: [...shape.size], cells: shape.cells.map(copyCell), air: shape.air.map((p): Vec3 => [...p]),
         io: { ...io, fluidIn: [...io.fluidIn], fluidOut: [...io.fluidOut] },
-        ...(manual === null ? {} : { manual }), ...(vent ? { vent: true as const } : {}),
+        ...(manual === null ? {} : { manual }), ...(vent ? { vent: true as const } : {}), ...(bench === undefined ? {} : { bench: structuredClone(bench) }),
       });
     }
   }
@@ -923,13 +942,15 @@ function unitPorts(u: Unit, row: Row, x: number, spineZ: number): UnitPorts {
       return { power: null, items: [step(machine, toSpine)], fluidIn: [], fluidOut: [], fluidInSides: [], fluidOutSides: [], itemFaces: [], fluidFaces: [] };
     }
     return {
+      // a bench's power comes in at its front, which faces away from the spine
       power: u.electric ? step(machine, away) : null,
       items: [step(machine, toSpine)],
       fluidIn: u.io.fluidIn.length > 0 ? [step(machine, UP)] : [],
       fluidOut: u.io.fluidOut.length > 0 ? [step(machine, UP)] : [],
       fluidInSides: u.io.fluidIn.length > 0 ? [DOWN] : [],
       fluidOutSides: u.io.fluidOut.length > 0 ? [DOWN] : [],
-      itemFaces: u.io.itemOut ? [{ pos: machine, side: toSpine }] : [],
+      // a bench pushes its result out of its back by itself, and takes no cover there
+      itemFaces: u.io.itemOut && u.bench === undefined ? [{ pos: machine, side: toSpine }] : [],
       fluidFaces: u.io.fluidOut.length > 0 ? [{ pos: machine, side: UP }] : [],
     };
   }
@@ -1078,10 +1099,12 @@ export function placeUnits(units: readonly Unit[], opts: { headWidth: number; po
   for (const { u, row, x } of slots) {
     const toSpine = towardSpine(row);
     // a singleblock's output side faces the spine (its covers and inputs go there), its front elsewhere (GT keeps the
-    // two apart); a venting steam unit's output side faces up
-    const mainFacing = u.multiblock ? undefined : singleblockMainFacing();
+    // two apart); a venting steam unit's output side faces up; a bench has only its front, turned away from the spine,
+    // so its back, its output face, meets the spine
+    const mainFacing = u.multiblock || u.bench !== undefined ? undefined : singleblockMainFacing();
     for (const c of u.cells) {
-      const facing = c.role === 'machine' ? (u.vent === true ? UP : toSpine) : c.role === 'hatch' ? hatchFacing(c, row) : undefined;
+      const facing = c.role === 'machine' ? (u.vent === true ? UP : u.bench !== undefined ? OPPOSITE[toSpine]! : toSpine)
+        : c.role === 'hatch' ? hatchFacing(c, row) : undefined;
       blocks.push({
         pos: localCell(u, row, x, spineZ, c.pos), block: { ...c.block }, role: c.role, ...(facing === undefined ? {} : { facing }),
         ...(c.role === 'machine' && mainFacing !== undefined ? { mainFacing } : {}),
@@ -1089,6 +1112,8 @@ export function placeUnits(units: readonly Unit[], opts: { headWidth: number; po
         // a hatch the exported structure holds is no hatch the line chose (`UnitCell.exported`)
         label: c.label, ...(c.item === undefined ? {} : { item: c.item }), ...(c.hatch === undefined || c.exported === true ? {} : { hatch: c.hatch }),
         ...(c.config === undefined ? {} : { config: { ...c.config } }),
+        // a bench's grid, mode and button: the configure step words them (architecture §11 entry 51's `FeedSpec.bench`)
+        ...(c.role === 'machine' && u.bench !== undefined ? { feed: { bench: structuredClone(u.bench.spec) } } : {}),
       });
     }
     for (const a of u.air) reserved.push(localCell(u, row, x, spineZ, a));

@@ -180,6 +180,9 @@ const PART_ITEMS: ReadonlyArray<readonly [ItemKey, string]> = [
   ['appliedenergistics2:item.ItemMultiMaterial@52', 'Blank Pattern'],
   ['appliedenergistics2:item.ItemMultiMaterial@27', 'Capacity Card'],
   ['appliedenergistics2:item.ItemMultiMaterial@30', 'Acceleration Card'],
+  ['ProjRed|Transportation:projectred.transportation.routingchip@5', 'Item Broadcaster Chip'],
+  ['EnderIO:itemLimitedItemFilter@0', 'Limited Item Filter'],
+  ['appliedenergistics2:item.ItemMultiMaterial@65', 'Locking Card'],
 ];
 
 /** Plain items `layoutPack` adds for plans to flow. */

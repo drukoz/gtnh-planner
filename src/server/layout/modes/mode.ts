@@ -246,13 +246,14 @@ export const RISER_WORDS = ', and up to each bus above it';
  * A singleblock takes its items through its spine face, which is its output side (GT keeps its front, `mainFacing`,
  * elsewhere): so in every mode each singleblock with item inputs gets "Input from Output Side" allowed on its
  * machine. A venting steam singleblock's output side faces up (`PlacedUnit.outputSide`), so it takes its items on a
- * side that needs no such setting. Keyed by the machine cell's posKey, in unit order.
+ * side that needs no such setting, and an Auto Workbench (`Unit.bench`) takes them on any face and has no such setting.
+ * Keyed by the machine cell's posKey, in unit order.
  */
 export function outputSideInputs(placement: Placement): Map<string, HostConfig> {
   const configs = new Map<string, HostConfig>();
   for (const u of placement.units) {
     const port = u.ports.items[0];
-    if (u.multiblock || u.outputSide !== undefined || !u.io.itemIn || port === undefined) continue;
+    if (u.multiblock || u.outputSide !== undefined || u.bench !== undefined || !u.io.itemIn || port === undefined) continue;
     const cell = step(port, OPPOSITE[u.facing]!);
     configs.set(posKey(cell), { pos: cell, config: { inputFromOutputSide: true } });
   }
