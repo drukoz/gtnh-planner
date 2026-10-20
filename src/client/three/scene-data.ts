@@ -3,7 +3,8 @@
 // instances the layer slider and the ghost and hookup toggles show, the side list of blocks to place, and the texts
 // for hover and click. An EnderIO conduit bundle (architecture "EnderIO conduits, granted change requests (add-on
 // 11)") draws each of its conduits side by side, with a connector arm on every face that is set. A pipe with pipe
-// layers (architecture §11.43 (c)) draws its core, arms and arm tips from them, over its role's colour. Pure
+// layers (architecture §11.43 (c)) draws its core, arms and arm tips from them, over its role's colour; a machine
+// facing up or down keeps its hull's top, bottom and sides where GT draws them (§11.43 (j)). Pure
 // TypeScript — no DOM, no three.js — so it is tested without a browser; the viewer turns these lists into meshes and
 // the loader turns the tile sources into pixels.
 
@@ -14,7 +15,7 @@ import { CONDUIT_NAMES } from '../../shared/layout/enderio.ts';
 import { fmtInt, fmtRate } from '../../shared/layout/format.ts';
 import { SIDE_NAMES, posKey, step, type Vec3 } from '../../shared/layout/geometry.ts';
 import {
-  FACES, KIND_COLORS, conduitBlockRef, rotateFaces,
+  FACES, KIND_COLORS, conduitBlockRef, orientFaces, rotateFaces,
   type BlockFaces, type CoverLayers, type Face, type IconDescriptor, type Rgb, type TextureLayer,
 } from '../../shared/types/assets.ts';
 import type { BlockRole, ConduitMode, Layout, LayoutBlock } from '../../shared/types/layout.ts';
@@ -50,7 +51,8 @@ const IDENTITY: Readonly<Record<Face, Face>> = { down: 'down', up: 'up', north: 
 
 /**
  * Which canonical face (front on north) shows on world side `worldSide` of a block that faces `facing`: Plan 3's
- * rotation read the other way round, so the front texture ends up where the machine faces.
+ * rotation read the other way round, so the front texture ends up where the machine faces. This is the whole-cube
+ * turn; `buildScene` orients a cube with `orientFaces`, which keeps a vertical machine's hull by world side.
  */
 export function canonicalFaceFor(facing: number, worldSide: number): Face {
   const face = FACES[worldSide];
@@ -148,8 +150,10 @@ function onAllSides(tile: number): SceneInstance['tiles'] {
  * (architecture §11.43 (c)) the core shows `pipe.core` on all six sides and an arm `pipe.end` on the side it points to,
  * its tip, and `pipe.arm` on the other five; without it every side is the `north` texture. The textured tiles of these
  * cores and arms, a conduit's included, are drawn over the block role's colour (`under`; a ghost's is the ghost grey),
- * so no pixel of a model sheet is see-through. Any other block is one `cube` whose world side shows the canonical face
- * its front (`frontOf`) puts there. After a block's own shapes come its covers, one `plate` per cover in `covers`
+ * so no pixel of a model sheet is see-through. Any other block is one `cube` whose world sides show its faces oriented
+ * to its front (`frontOf`) by `orientFaces` (architecture §11.43 (j)): turned whole, except that a block facing up or
+ * down whose four sides share their hull keeps each world side's own layers, as GT draws it, and only its front's
+ * overlays move. After a block's own shapes come its covers, one `plate` per cover in `covers`
  * order, on the cover's face and carrying the cover's in-world overlay — else its item icon, else a plain colour — on
  * all six tiles. A face with no layers, or a block with no faces, is a plain colour, and a tile is shared by
  * everything that draws the same layers over the same colour. Every tile's `color` is what it falls back to: the
@@ -192,7 +196,6 @@ export function buildScene(
       instances.push({ block, shape, pos: [...pos], side, tiles: sides, ghost, ...(offset === undefined ? {} : { offset: [...offset] }) });
     };
     const found = faces.get(blockKey(b.block));
-    const faceTile = (face: Face): number => tile(found?.faces[face] ?? [], found?.fallbackColor ?? ROLE_FALLBACK[b.role]);
     /** What the textured tiles of a core or an arm are drawn over. */
     const under = ROLE_FALLBACK[b.role];
 
@@ -227,8 +230,9 @@ export function buildScene(
         add('arm', side, sides);
       }
     } else {
-      const at = (side: number): number => faceTile(canonicalFaceFor(frontOf(b), side));
-      add('cube', -1, [at(0), at(1), at(2), at(3), at(4), at(5)]);
+      const oriented = found === undefined ? undefined : orientFaces(found.faces, frontOf(b));
+      const at = (face: Face): number => tile(oriented?.[face] ?? [], found?.fallbackColor ?? ROLE_FALLBACK[b.role]);
+      add('cube', -1, [at('down'), at('up'), at('north'), at('south'), at('west'), at('east')]);   // ForgeDirection order, as FACES
     }
 
     for (const cover of b.covers ?? []) {

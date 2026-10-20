@@ -64,6 +64,71 @@ export function rotateFaces<T>(faces: Record<Face, T>, facing: number): Record<F
   return out;
 }
 
+/** The four sides of a block; canonical north is its front. */
+const SIDES: readonly Face[] = ['north', 'south', 'west', 'east'];
+
+/**
+ * Whether two JSON values are deeply equal, a property holding `undefined` counting as absent: a layer compares the same
+ * before and after it travels as JSON, so the server and the client orient the same faces alike.
+ */
+function sameJson(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((value, i) => sameJson(value, b[i]));
+  }
+  const left = a as Record<string, unknown>;
+  const right = b as Record<string, unknown>;
+  const keys = (o: Record<string, unknown>): string[] => Object.keys(o).filter((key) => o[key] !== undefined);
+  const leftKeys = keys(left);
+  return leftKeys.length === keys(right).length && leftKeys.every((key) => sameJson(left[key], right[key]));
+}
+
+/** A fresh copy of `layer`: its tint and its region's rectangles are copied too, so a copy never shares an array. */
+function copyLayer(layer: TextureLayer): TextureLayer {
+  const out: TextureLayer = { ...layer };
+  if (layer.tint !== undefined) out.tint = [...layer.tint];
+  if (layer.region !== undefined) {
+    out.region = { ...layer.region, src: [...layer.region.src] };
+    if (layer.region.dst !== undefined) out.region.dst = [...layer.region.dst];
+  }
+  return out;
+}
+
+type FaceLayers = Readonly<Record<Face, readonly TextureLayer[]>>;
+
+/**
+ * The world sides of a block facing up (1) or down (0) that GT draws by world side, as `MTEBasicMachine.getTexture`
+ * does with a vertical main facing: the facing side its own hull layer under the front's (canonical north's) overlays,
+ * world north its hull alone, every other side its own canonical layers, overlays included. Null for any other
+ * facing, or unless the four sides are non-empty with deep-equal first layers (the hull) and the top and bottom have
+ * layers.
+ */
+function hullBySide(faces: FaceLayers, facing: number): FaceLayers | null {
+  const front: Face | null = facing === 0 ? 'down' : facing === 1 ? 'up' : null;
+  if (front === null) return null;
+  const hull = faces.north[0];
+  const own = faces[front][0];
+  if (hull === undefined || own === undefined || faces.down.length === 0 || faces.up.length === 0) return null;
+  if (!SIDES.every((side) => faces[side].length > 0 && sameJson(faces[side][0], hull))) return null;
+  const sides = {} as Record<Face, readonly TextureLayer[]>;
+  for (const face of FACES) sides[face] = face === front ? [own, ...faces.north.slice(1)] : face === 'north' ? [hull] : faces[face];
+  return sides;
+}
+
+/**
+ * Canonical faces (front on north) as the world sides of a block whose front points to `facing` show them (architecture
+ * §11.43 (j)): facing up or down, a block whose four sides share their first layer keeps each world side's own layers
+ * and only its front's overlays move (`hullBySide`); any other block turns whole (`rotateFaces`). Always fresh arrays of
+ * layer copies.
+ */
+export function orientFaces(faces: Readonly<Record<Face, readonly TextureLayer[]>>, facing: number): Record<Face, TextureLayer[]> {
+  const shown = hullBySide(faces, facing) ?? rotateFaces(faces, facing);
+  const out = {} as Record<Face, TextureLayer[]>;
+  for (const face of FACES) out[face] = shown[face].map(copyLayer);
+  return out;
+}
+
 /** Stable colour for anything without a texture: FNV-1a hue, HSL(hue, 45%, 55%). */
 export function hashColor(s: string): Rgb {
   let h = 0x811c9dc5;

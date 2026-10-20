@@ -5,7 +5,7 @@
 
 import { isFluidKey, parseItemKey, type StuffKey } from '../../shared/keys.ts';
 import {
-  FACES, hashColor, KIND_COLORS, rotateFaces,
+  FACES, hashColor, KIND_COLORS, orientFaces,
   type BlockFaces, type CoverLayers, type Face, type IconDescriptor, type PipeLayers, type Rgb, type TextureLayer,
 } from '../../shared/types/assets.ts';
 import type { BlockRef, Pack } from '../../shared/types/pack.ts';
@@ -189,17 +189,18 @@ export function blockFallbackColor(ref: BlockRef, pack: PackView | null): Rgb {
 }
 
 /**
- * Each block's faces turned so its front points to `facing` (ForgeDirection index, default north); same order as
- * `refs`. A block drawn as a core with arms also gets `pipe` (architecture §11.43 (c)): a curated pipe (ProjectRed's,
- * AE2's) the crops of its model sheet when every one is extracted; else a GT pipe its core and arms drawn as its side
- * with nothing connected, its arm tips as its (connected) north face. The faces stay the whole texture, which the Map
- * and the item icons draw.
+ * Each block's faces oriented so its front points to `facing` (ForgeDirection index, default north; `orientFaces`,
+ * architecture §11.43 (j): a block facing up or down whose sides share their hull keeps each world side's own layers,
+ * any other block turns whole); same order as `refs`. A block drawn as a core with arms also gets `pipe` (architecture
+ * §11.43 (c)): a curated pipe (ProjectRed's, AE2's) the crops of its model sheet when every one is extracted; else a GT
+ * pipe its core and arms drawn as its side with nothing connected, its arm tips as its (connected) north face. The
+ * faces stay the whole texture, which the Map and the item icons draw.
  */
 export function resolveBlocks(src: AssetSources, refs: readonly BlockRef[], facing?: number): BlockFaces[] {
   return refs.map((ref) => {
     const copy = copier(src, 1);
     const found = refFaces(src, ref, copy);
-    const faces = rotateFaces(found?.faces ?? emptyFaces(), facing ?? CANONICAL_FACING);
+    const faces = orientFaces(found?.faces ?? emptyFaces(), facing ?? CANONICAL_FACING);
     const out: BlockFaces = {
       block: ref.mteId === undefined ? { id: ref.id, meta: ref.meta } : { id: ref.id, meta: ref.meta, mteId: ref.mteId },
       faces,

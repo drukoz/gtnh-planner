@@ -295,3 +295,38 @@ describe('3D scene data: pipes', () => {
     expect(ROLE_FALLBACK.pipe).toEqual([255, 179, 0]);
   });
 });
+
+// Plan 16 Task 10 (architecture §11.43 (j)): a block facing up or down keeps its hull by world side; only its front turns.
+describe('3D scene data: vertical facings', () => {
+  const l = (n: string): TextureLayer => ({ path: `gregtech/textures/blocks/iconsets/${n}.png` });
+  const hatchFaces: BlockFaces = { block: GT(60), resolved: true, fallbackColor: [121, 85, 72],
+    faces: { down: [l('B')], up: [l('T')], north: [l('S'), l('OUT')], south: [l('S')], west: [l('S')], east: [l('S')] } };
+  const hatchFacing = (facing: number): Layout => ({ ...layout, blocks: [{ pos: [10, 64, 20], block: GT(60), role: 'hatch', label: 'Output Hatch (ULV)', facing }], hookups: [], pins: [] });
+  /** The layers the hatch's cube shows on each world side, down to east. */
+  const sides = (facing: number): TextureLayer[][] => {
+    const scene = buildScene(hatchFacing(facing), new Map([[blockKey(GT(60)), hatchFaces]]), icons, covers);
+    return scene.instances[0]!.tiles.map((t) => scene.tiles[t]!.layers);
+  };
+
+  it('keeps the hull of a hatch facing up on every world side, its overlay on top', () => {
+    const shown = sides(1);
+    expect([shown[1], shown[2], shown[0]]).toEqual([[l('T'), l('OUT')], [l('S')], [l('B')]]);
+  });
+
+  // ---- after the plan's own tests: the edges the plan leaves open ----
+
+  it('draws a hatch facing down with its overlay on the bottom, and its four sides with one tile', () => {
+    expect(sides(0)).toEqual([[l('B'), l('OUT')], [l('T')], [l('S')], [l('S')], [l('S')], [l('S')]]);
+    const scene = buildScene(hatchFacing(0), new Map([[blockKey(GT(60)), hatchFaces]]), icons, covers);
+    expect(new Set(scene.instances[0]!.tiles.slice(2)).size).toBe(1);   // world north shows the hull alone: the sides' tile
+  });
+
+  it('turns a hatch facing a side whole, its overlay onto that side', () => {
+    expect(sides(5)).toEqual([[l('B')], [l('T')], [l('S')], [l('S')], [l('S')], [l('S'), l('OUT')]]);
+  });
+
+  it('draws a block facing up without faces in its plain colour on every side', () => {
+    const scene = buildScene(hatchFacing(1), new Map(), icons, covers);
+    expect(scene.instances[0]!.tiles.map((t) => scene.tiles[t]!.key)).toEqual(Array(6).fill('color:121,85,72'));
+  });
+});

@@ -247,6 +247,16 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('real coverage', { timeout: 300_
   /** Blocks other than cables and pipes whose front faces up or down. */
   const vertical = (target: StuffKey): LayoutBlock[] =>
     blocksOf(target).filter((b) => !PIPE_ROLES.has(b.role) && (frontOf(b) === 0 || frontOf(b) === 1));
+  /**
+   * Resolved with its front's facing, a block keeps its canonical hull on world north and world up (architecture §11.43
+   * (j)): GT draws the hull by world side, so neither its bottom nor its top turns onto north.
+   */
+  const hullKept = (b: LayoutBlock): boolean => {
+    const canonical = facesOf(b).faces;
+    const { faces } = resolveBlocks(src, [b.block], frontOf(b))[0]!;
+    return canonical.north[0] !== undefined && canonical.up[0] !== undefined
+      && isDeepStrictEqual(faces.north[0], canonical.north[0]) && isDeepStrictEqual(faces.up[0], canonical.up[0]);
+  };
 
   it('pack-wide icons', () => {
     const nbtKeys = [...pack.items.keys()].filter(isNbtKey);
@@ -303,15 +313,17 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('real coverage', { timeout: 300_
       'IC2:itemPartCircuit@0': '637 blocks: unresolved 4, GT pipes and insulated cables with pipe 0 of 427, other pipe MTEs 0; RC5 39, vertical 18',
       'fluid:ethylene': '909 blocks: unresolved 0, GT pipes and insulated cables with pipe 0 of 602, other pipe MTEs 0; RC5 0, vertical 37',
     };
-    show('layout blocks (vertical facings printed only: Task 10)', TARGETS.flatMap(([target, logistics]) => {
+    show('layout blocks', TARGETS.flatMap(([target, logistics]) => {
       const unresolved = blocksOf(target).filter((b) => !facesOf(b).resolved).map((b) => blockKey(b.block));
       const pipes = gtPipes(target);
+      const turned = vertical(target).filter((b) => !hullKept(b)).map((b) => `${blockKey(b.block)}>${frontOf(b)}`);
       return [
         `${target} ${logistics}: ${before[target]}`,
         `  → ${fmt(blocksOf(target).length)} blocks: unresolved ${fmt(unresolved.length)}, GT pipes and insulated cables with pipe `
           + `${fmt(withPipe(pipes).length)} of ${fmt(pipes.length)} (ghosts ${pipes.filter((b) => b.role === 'ghost').length}), `
           + `other pipe MTEs ${fmt(otherPipeMtes(target).length)}; RC5 ${fmt(rc5(target).length)} (with pipe ${withPipe(rc5(target)).length}), `
-          + `vertical ${fmt(vertical(target).length)}${listed([...new Set(unresolved)].sort())}`,
+          + `vertical ${fmt(vertical(target).length)} (hull kept ${fmt(vertical(target).length - turned.length)})`
+          + `${listed([...new Set(unresolved)].sort())}${listed([...new Set(turned)].sort())}`,
       ];
     }));
     expect(TARGETS.map(([t]) => unresolvedBlocks(t))).toEqual([0, 0]);
@@ -321,6 +333,9 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('real coverage', { timeout: 300_
     // rc5(t): the ProjectRed pipes, AE2 cables and ForgeMultipart ghosts, each drawn from its model sheet's crops (39 and 0 at 340dad8)
     expect(TARGETS.map(([t]) => withPipe(rc5(t)).length)).toEqual(TARGETS.map(([t]) => rc5(t).length));
     expect(rc5('IC2:itemPartCircuit@0').length).toBeGreaterThan(0);
+    // vertical(t): the blocks other than cables and pipes whose front faces up or down (18 and 37 at 340dad8), each keeping its hull
+    expect(TARGETS.map(([t]) => vertical(t).filter(hullKept).length)).toEqual(TARGETS.map(([t]) => vertical(t).length));
+    expect(vertical('fluid:ethylene').length).toBeGreaterThan(0);
   });
 
   it("the user's reports and the named rules", () => {

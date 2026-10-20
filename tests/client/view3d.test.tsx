@@ -11,7 +11,7 @@ import { sampleLayout, sampleFaces, sampleIcons, sampleCovers, L } from './layou
 import { BoxGeometry, type BufferGeometry } from 'three';
 import { webgl2Available } from '../../src/client/views/View3D.tsx';
 import type { TextureDeps } from '../../src/client/three/load-textures.ts';
-import type { BlockFaces, TextureLayer } from '../../src/shared/types/assets.ts';
+import { layerKey, regionRect, type BlockFaces, type Rect, type Rgb, type TextureLayer } from '../../src/shared/types/assets.ts';
 import type { Layout, LayoutBlock } from '../../src/shared/types/layout.ts';
 import { CONV } from './layout-fixture.ts';
 
@@ -163,6 +163,52 @@ describe('3D tab: the rules in detail', () => {
       }
       expect(new Set(uAtZ.values()).size).toBe(2);
     }
+  });
+
+  // Plan 16 Task 10, RC10's 3D check: a chest face is three crops of one model sheet (Task 4's table), drawn at their places.
+  describe('a chest', () => {
+    const N = 'minecraft/textures/entity/chest/normal.png';
+    const r = (src: Rect, dst: Rect): TextureLayer => ({ path: N, region: { sheet: 64, src, dst } });
+    const CHEST = { id: 'minecraft:chest', meta: 0 };
+    const chestFaces: BlockFaces = { block: CHEST, resolved: true, fallbackColor: [160, 110, 50], faces: {
+      down: [r([28, 19, 14, 14], [1, 1, 14, 14])],
+      up: [r([14, 0, 14, 14], [1, 1, 14, 14])],
+      north: [r([14, 33, 14, 10], [1, 6, 14, 10]), r([14, 14, 14, 5], [1, 2, 14, 5]), r([1, 1, 2, 4], [7, 5, 2, 4])],
+      south: [r([42, 33, 14, 10], [1, 6, 14, 10]), r([42, 14, 14, 5], [1, 2, 14, 5])],
+      west: [r([28, 33, 14, 10], [1, 6, 14, 10]), r([28, 14, 14, 5], [1, 2, 14, 5])],
+      east: [r([0, 33, 14, 10], [1, 6, 14, 10]), r([0, 14, 14, 5], [1, 2, 14, 5])],
+    } };
+    const chestLayout: Layout = { ...sampleLayout, size: [1, 1, 1], hookups: [], pins: [],
+      blocks: [{ pos: [10, 64, 20], block: CHEST, role: 'chest', label: 'Chest', facing: 2 }] };
+    const scene = buildScene(chestLayout, new Map([[blockKey(CHEST), chestFaces]]), new Map(), new Map());
+    /** A TILE × TILE image of `rgb` inside `rect` and transparent elsewhere: what `layerPixels` draws for a region layer. */
+    const rectImage = ([x, y, w, h]: Rect, rgb: Rgb): Uint8ClampedArray => {
+      const data = new Uint8ClampedArray(TILE * TILE * 4);
+      for (let row = y; row < y + h; row++) for (let col = x; col < x + w; col++) data.set([...rgb, 255], (row * TILE + col) * 4);
+      return data;
+    };
+
+    it('composes a chest face from its three crops of one sheet', async () => {
+      const color = (l: TextureLayer): Rgb => (l.region!.src[0] === 1 ? [255, 0, 0] : l.region!.src[1] < 19 ? [120, 80, 40] : [60, 40, 20]);   // knob, lid, base
+      const asked: string[] = [];
+      const tiles = await tilesFor(scene, { ...noTextures, image: async (l) => { asked.push(layerKey(l)); return { data: rectImage(regionRect(l, TILE), color(l)) }; } });
+      expect(new Set(asked).size).toBe(11);
+      expect(asked).toHaveLength(11);                                           // each crop loaded once
+      const north = tiles[scene.instances[0]!.tiles[2]]!;
+      const px = (x: number, y: number) => [...north.slice((y * TILE + x) * 4, (y * TILE + x) * 4 + 4)];
+      expect([px(7, 6), px(3, 3), px(3, 12)]).toEqual([[255, 0, 0, 255], [120, 80, 40, 255], [60, 40, 20, 255]]);   // knob over lid over base
+      expect(px(0, 0)[3]).toBe(0);                                              // outside the chest: transparent, so the shader drops it
+    });
+
+    // ---- after the plan's own tests: the edges the plan leaves open ----
+
+    it('draws each side of a chest facing north from that side\'s crops, with no colour under them', () => {
+      const [inst] = scene.instances;
+      expect([scene.instances.length, inst!.shape]).toEqual([1, 'cube']);
+      const { down, up, north, south, west, east } = chestFaces.faces;
+      expect(inst!.tiles.map((t) => scene.tiles[t]!.layers)).toEqual([down, up, north, south, west, east]);
+      expect(inst!.tiles.map((t) => scene.tiles[t]!.under)).toEqual(Array(6).fill(undefined));   // the border round the chest stays see-through
+    });
   });
 
   // ---- after the plan's own tests: the edges the plan leaves open ----

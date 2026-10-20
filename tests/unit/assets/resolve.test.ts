@@ -79,6 +79,29 @@ describe('resolveBlocks', () => {
     expect(hatch).toMatchObject({ block: { id: GT, meta: 0, mteId: 50 }, resolved: true });
     expect(hatch.faces.up).toEqual([{ path: I + 'MACHINE_CASING_SOLID_STEEL.png' }, { path: I + 'OVERLAY_PIPE_IN.png' }]);
   });
+
+  // Plan 16 Task 10 (architecture §11.43 (j)): GT draws a hull by world side, so only the front's overlays move.
+  const hull = (n: string): DumpLayer => ({ p: [`${I}${n}.png`] });
+  const hullIndex = indexOf({ [I + 'B.png']: {}, [I + 'T.png']: {}, [I + 'S.png']: {}, [I + 'OUT.png']: {} });
+  const hullSrc: AssetSources = { index: hullIndex, nei: null, pack: null, dump: buildTexturesDump(dumpFile({ mte: [
+    { id: 60, cls: 'MTEHatchOutput', inactive: [[hull('B')], [hull('T')], [hull('S'), hull('OUT')], [hull('S')], [hull('S')], [hull('S')]] }] }), hullIndex) };
+  const hatchRef = { id: GT, meta: 0, mteId: 60 };
+  const paths = (layers: readonly { path: string }[]) => layers.map((l) => l.path);
+
+  it('keeps the hull of a hatch facing up on every world side, its front\'s overlay on top', () => {
+    const { faces } = resolveBlocks(hullSrc, [hatchRef], 1)[0]!;
+    expect(paths(faces.north)).toEqual([I + 'S.png']);
+    expect(paths(faces.up)).toEqual([I + 'T.png', I + 'OUT.png']);
+  });
+
+  // ---- after the plan's own tests: the edges the plan leaves open ----
+
+  it('draws a hatch facing down with its overlay on the bottom, and counts it resolved as its canonical faces are', () => {
+    const [canonical, down] = [resolveBlocks(hullSrc, [hatchRef])[0]!, resolveBlocks(hullSrc, [hatchRef], 0)[0]!];
+    expect(FACES.map((face) => paths(down.faces[face]))).toEqual([[I + 'B.png', I + 'OUT.png'], [I + 'T.png'], [I + 'S.png'], [I + 'S.png'], [I + 'S.png'], [I + 'S.png']]);
+    expect([canonical.resolved, down.resolved]).toEqual([true, true]);
+    expect(paths(canonical.faces.north)).toEqual([I + 'S.png', I + 'OUT.png']);   // the canonical faces are unchanged
+  });
 });
 
 describe('GT ore blocks', () => {
