@@ -15,8 +15,8 @@ import { comparePos } from '../../world/graph.ts';
 import type { HostCover, LocalBlock } from '../arrange.ts';
 import { linkBits } from '../path.ts';
 import {
-  amountList, conveyorCover, emptyModeResult, itemPorts, itemRisers, lineExceptions, outputSideInputs, RISER_WORDS, unitItemRate,
-  type ModeInput, type ModeResult, type StepDraft,
+  amountList, conveyorCover, emptyModeResult, feedSettings, itemPorts, itemRisers, lineExceptions, mergeHostConfigs, outputSideInputs, RISER_WORDS,
+  unitItemRate, type ModeInput, type ModeResult, type StepDraft,
 } from './mode.ts';
 
 /** A network whose scan gives no channel figures is taken to have the 8 channels of a network without a controller. */
@@ -98,8 +98,9 @@ export function ae2Mode(input: ModeInput): ModeResult {
       })
       .sort((a, b) => comparePos(a.pos, b.pos) || (a.facing ?? -1) - (b.facing ?? -1)),
     covers: covers.sort((a, b) => comparePos(a.pos, b.pos) || FACES.indexOf(a.cover.face) - FACES.indexOf(b.cover.face)),
-    // the interface pushes the pattern's inputs through the machine's output side
-    configs: [...outputSideInputs(placement).values()].sort((a, b) => comparePos(a.pos, b.pos)),
+    // the interface pushes the pattern's inputs through the machine's output side; the machines' feeding settings
+    // (architecture §11 entry 51)
+    configs: mergeHostConfigs([...outputSideInputs(placement).values(), ...feedSettings(pack, plan, placement)]),
     logisticsPort: hooked ? [tailX, 0, spineZ] : null,
     hookup: hooked ? { part: 'me_cable', end: null } : null,
     extraParts, drafts, warnings, tailFluidY: 1,

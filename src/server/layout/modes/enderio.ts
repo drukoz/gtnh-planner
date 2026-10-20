@@ -52,8 +52,8 @@ import { fluidNets, type FluidNet } from '../internal.ts';
 import type { Parts } from '../parts.ts';
 import { growTree, linkBits, type PathBounds } from '../path.ts';
 import {
-  emptyModeResult, itemPorts, itemRisers, lineExceptions, nameList, placedStepIds, RISER_WORDS, stepItemInputs, stepItemOutputs, unitItemRate,
-  type ItemPort, type ModeHookup, type ModeInput, type ModeResult, type StepDraft,
+  emptyModeResult, feedSettings, itemPorts, itemRisers, lineExceptions, mergeHostConfigs, nameList, placedStepIds, RISER_WORDS, stepItemInputs,
+  stepItemOutputs, unitItemRate, type ItemPort, type ModeHookup, type ModeInput, type ModeResult, type StepDraft,
 } from './mode.ts';
 
 const DOWN = 0, NORTH = 2, SOUTH = 3, EAST = 5;
@@ -883,11 +883,12 @@ export function enderioMode(input: ModeInput): ModeResult {
   if (items === null && nets.length === 0) return emptyModeResult();
   const fluids = nets.length > 0 ? fluidLine(input, nets, items) : null;
   const stock = items?.stockDraft ?? null;
-  // a machine that takes items and fluids through its output side gets the setting once
-  const configs = new Map([...(items?.configs ?? []), ...(fluids?.configs ?? [])].map((c) => [posKey(c.pos), c]));
+  // a machine that takes items and fluids through its output side gets the setting once; then the machines' feeding
+  // settings (architecture §11 entry 51)
+  const configs = mergeHostConfigs([...(items?.configs ?? []), ...(fluids?.configs ?? []), ...feedSettings(pack, plan, placement)]);
   return {
     blocks: [...conduitBlocks(items?.conduits ?? [], fluids?.conduits ?? []), ...(items?.chests ?? [])].sort((a, b) => comparePos(a.pos, b.pos)),
-    covers: [], configs: [...configs.values()].sort((a, b) => comparePos(a.pos, b.pos)),
+    covers: [], configs,
     logisticsPort: items?.logisticsPort ?? null,
     hookup: items?.hookup ?? null,
     extraParts: items?.extraParts ?? [],

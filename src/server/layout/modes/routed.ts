@@ -31,8 +31,8 @@ import { linkBits } from '../path.ts';
 import type { Part, PartId } from '../parts.ts';
 import { crossing } from './enderio.ts';
 import {
-  emptyModeResult, itemPorts, itemRisers, lineExceptions, nameList, outputSideInputs, placedStepIds, RISER_WORDS, stepItemInputs, stepItemOutputs,
-  type ModeInput, type ModeResult, type StepDraft,
+  emptyModeResult, feedSettings, itemPorts, itemRisers, lineExceptions, mergeHostConfigs, nameList, outputSideInputs, placedStepIds, RISER_WORDS,
+  stepItemInputs, stepItemOutputs, type ModeInput, type ModeResult, type StepDraft,
 } from './mode.ts';
 
 const UP = 1, SOUTH = 3, EAST = 5;
@@ -176,8 +176,8 @@ export function routedMode(input: ModeInput): ModeResult {
         return connections === undefined ? b : { ...b, connections };
       })
       .sort((a, b) => comparePos(a.pos, b.pos) || (a.facing ?? -1) - (b.facing ?? -1)),
-    // the interface pipe inserts through the machine's output side
-    covers: [], configs: [...outputSideInputs(placement).values()].sort((a, b) => comparePos(a.pos, b.pos)),
+    // the interface pipe inserts through the machine's output side; the machines' feeding settings (architecture §11 entry 51)
+    covers: [], configs: mergeHostConfigs([...outputSideInputs(placement).values(), ...feedSettings(pack, plan, placement)]),
     logisticsPort: hooked ? request : null,
     hookup: hooked ? { part: 'pr_junction', end: null } : null,
     extraParts, drafts, warnings, tailFluidY: 2,
