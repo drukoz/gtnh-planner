@@ -434,12 +434,19 @@ Stages at unit demand (replacing `simplest()` when `stepCharge > 0` and `S1 > 1e
    as one unit of raw material: a conversion costs no raw material, and R10 weighs a rank-1 convert option; S4 also
    weighs a conversion per run). Rows: main rows; `Σ rawCost·x ≤ (1 + STEP_CHARGE_CAP) × S1*`; `x_r ≤ STEP_BIG_M × max_j x¹_j × y_r`;
    derived purchase links as today. `integer` on the binaries, `maxNodes: STEP_MIP_MAX_NODES`, MIP start (`LpModel.start`,
-   passed to HiGHS `setSolution`) = `x¹` with `y = 1` where `x¹ > TINY`, else 0. A `feasible` (node-limited) result is
-   accepted.
+   passed to HiGHS `setSolution`) = the better, by this objective, of `x¹` and a sparse plan within the cap (today's
+   reweighted-L1 `fewestRecipes` under `Σ rawCost·x ≤ (1 + STEP_CHARGE_CAP) × S1*`, then S1 over its support), with
+   `y = 1` where the start runs a column above `TINY`, else 0 (plan 09 Task 8: from `x¹`, the most steps a plan of the
+   line has, the root node stopped on the user's line at 19 steps and +11 % raw material where 24 steps at +0.05 %
+   charge less; from the sparse start it finds them). A `feasible` (node-limited) result is accepted.
 3. **Fallback.** No MIP solution → today's fewest-recipes S3 with the exact lock; nothing → `simplify-skipped` (D2).
 4. **Consolidation.** For each good that is the `main` of 2+ recipes left in the support, try each minority producer:
    re-solve S1 over the support without it; keep the removal when
-   `raw/S1* + stepCharge·Σw` improves. (Cheap: one LP per minority producer.)
+   `raw/S1* + stepCharge·Σw` improves. (Cheap: one LP per minority producer.) Then each priced purchase of a good a step
+   recipe of the support makes is shut when the line does without it at no more raw material (within `S3_TOLERANCE`;
+   one the base does not use, at once), so S2 and S4 never buy a good beside the step that makes it at a tie (R11
+   `bought-and-made`; plan 09 Task 8: an Electric Blast Furnace run for its carbon dioxide made a share of the copper
+   ingots an HV circuit line bought).
 5. **Base and later stages.** `off` = every step recipe not in the support; base = S1 over the support; lock raw ≤ base;
    S2 (power) and S4 (canonical, R10) within the support, as `finish()` does now.
 

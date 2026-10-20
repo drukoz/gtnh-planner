@@ -373,8 +373,28 @@ describe('planLine', () => {
     expect(batch.rawCost).toBeUndefined();
   });
   it('says in a warning what the plan does not add up on', async () => {
-    // A macerator splits raw dust into X and Y; a thing takes 2 X and 1 Y. X is also mined, so the line runs the
-    // macerator once and buys the other X: X is both bought and made (spec R11), and the plan says so.
+    // A macerator splits raw dust into X and Y; a thing takes 2 X and 1 Y. X is also mined, for less than a second split
+    // costs (Raw Dust at 1.5), so the line runs the macerator once and buys the other X: X is both bought and made (spec
+    // R11), and the plan says so. (At a tie the line makes all of it, one source: solve.ts withoutTiedPurchases.)
+    const p = packFromSpec({
+      items: [{ key: 'raw@0', name: 'Raw Dust', gt: { prefix: 'dust', material: 'Raw' } }, { key: 'x@0', name: 'X Dust', gt: { prefix: 'dust', material: 'X' } },
+              { key: 'y@0', name: 'Y Part' }, { key: 't@0', name: 'Thing' }],
+      maps: [{ id: 'gt.recipe.macerator', name: 'Macerator' }, { id: 'gt.recipe.assembler', name: 'Assembler' }],
+      machines: [{ mteId: 1, name: 'Basic Macerator', maps: ['gt.recipe.macerator'], tier: 1 }, { mteId: 2, name: 'Basic Assembler', maps: ['gt.recipe.assembler'], tier: 1 }],
+      recipes: [{ id: 'split', map: 'gt.recipe.macerator', in: [['raw@0', 1]], out: [['x@0', 1], ['y@0', 1]], eut: 2 },
+                { id: 'make-t', map: 'gt.recipe.assembler', in: [['x@0', 2], ['y@0', 1]], out: [['t@0', 1]], eut: 2 }],
+      worldgen: { veins: [vein('ore.mix.raw', 'Raw'), vein('ore.mix.x', 'X')] },
+    });
+    const plan = await planLine(p, S({ target: 't@0', tier: 1, amount: 60, per: 'min', costOverrides: { Raw: 1.5 } }), emptyContext());
+    expect(plan.steps.map((s) => [s.id, s.mainOutput])).toEqual([['make-t', 't@0'], ['split', 'x@0']]);
+    expect(plan.rawInputs.map((r) => [r.key, r.perSecond])).toEqual([['raw@0', 1], ['x@0', 1]]);
+    expect(plan.warnings).toEqual([{ code: 'bought-and-made', key: 'x@0', text: 'X Dust is both bought (50%) and made by Basic Macerator.',
+      stepId: 'split', stepIds: ['split'], share: [0.5] }]);
+  });
+  it('makes all of a good a step of the line makes rather than buy the rest at the same raw material', async () => {
+    // The case above at the plain price of Raw Dust: a second split costs what buying the other X does, and the line
+    // takes all of its X from the macerator, leaving a Y over, instead of buying X beside it (plan 09 Task 8: the audit's
+    // checker calls such a purchase redundant, and fix spec §7.2 allows no such plan).
     const p = packFromSpec({
       items: [{ key: 'raw@0', name: 'Raw Dust', gt: { prefix: 'dust', material: 'Raw' } }, { key: 'x@0', name: 'X Dust', gt: { prefix: 'dust', material: 'X' } },
               { key: 'y@0', name: 'Y Part' }, { key: 't@0', name: 'Thing' }],
@@ -385,10 +405,10 @@ describe('planLine', () => {
       worldgen: { veins: [vein('ore.mix.raw', 'Raw'), vein('ore.mix.x', 'X')] },
     });
     const plan = await planLine(p, S({ target: 't@0', tier: 1, amount: 60, per: 'min' }), emptyContext());
-    expect(plan.steps.map((s) => [s.id, s.mainOutput])).toEqual([['make-t', 't@0'], ['split', 'x@0']]);
-    expect(plan.rawInputs.map((r) => [r.key, r.perSecond])).toEqual([['raw@0', 1], ['x@0', 1]]);
-    expect(plan.warnings).toEqual([{ code: 'bought-and-made', key: 'x@0', text: 'X Dust is both bought (50%) and made by Basic Macerator.',
-      stepId: 'split', stepIds: ['split'], share: [0.5] }]);
+    expect(plan.steps.map((s) => [s.id, s.runsPerSecond])).toEqual([['make-t', 1], ['split', 2]]);
+    expect(plan.rawInputs.map((r) => [r.key, r.perSecond])).toEqual([['raw@0', 2]]);
+    expect(plan.byproducts.map((b) => [b.key, b.amount])).toEqual([['y@0', 1]]);
+    expect(plan.warnings.filter((w) => w.code === 'bought-and-made')).toEqual([]);
   });
   it('names a step after its product, not the free water beside it, when the cost model never walked the product', async () => {
     // Fix spec D13 as ruled in Task 1: a good's value is its cost-model cost (0 when not finite), never below its plain
