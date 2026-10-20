@@ -214,37 +214,48 @@ function makersOf(pack: Pack, key: StuffKey): Recipe[] {
 const NO_WAY: ReadonlySet<string> = new Set(['fake', 'opaque', 'fuel', 'vanilla-furnace']);
 
 /**
- * The places out of the group's reach (`reachable`) that would give it `key`, by name in the pack's order: for a GT base
- * item, the dimensions whose veins or small ores hold its material and the capabilities that yield it; for a fluid, the
- * dimensions that pump it, and for a molten one (`fluid:molten.titanium`) also those of its material, as for its dust.
- * "Moon (T1 rocket)", as unlock hints name them.
+ * The places out of the group's reach (`reachable`) that would give it `key`, by name, nearest first (the tier at which
+ * progression reaches a dimension, `defaultTier`, or a capability's `minTier`; the pack's order within one): for a GT
+ * base item, the dimensions whose veins or small ores hold its material and the capabilities that yield it; for a fluid,
+ * the dimensions that pump it, and for a molten one (`fluid:molten.titanium`) also those of its material, as for its
+ * dust. None for a molten one whose material a place in reach holds: what is in the way then is the tier of what melts
+ * it (Molten Lead at LV, which Io and Venus pump), not a place. "Moon (T1 rocket)", as unlock hints name them.
  */
 function placesFor(pack: Pack, key: StuffKey, reachable: ReadonlySet<string>): string[] {
-  const places = new Set<string>();
-  if (isFluidKey(key)) {
-    for (const source of pack.worldgen.fluidSources) if (source.fluid === key) for (const dim of source.dims) places.add(dim);
-  }
   const material = isFluidKey(key) ? moltenMaterial(pack, key) : isBaseItem(pack, key) ? pack.items.get(key)?.gt?.material : undefined;
+  const places = new Set<string>();
   if (material !== undefined) {
     for (const vein of pack.worldgen.veins) if (Object.values(vein.materials).includes(material)) for (const dim of vein.dims) places.add(dim);
     for (const capability of pack.worldgen.capabilities) if (capability.yields.includes(material)) places.add(capability.key);
+    if (isFluidKey(key) && [...places].some((place) => reachable.has(place))) return [];
   }
-  const names: string[] = [];
+  if (isFluidKey(key)) {
+    for (const source of pack.worldgen.fluidSources) if (source.fluid === key) for (const dim of source.dims) places.add(dim);
+  }
+  const found: Array<{ name: string; tier: number }> = [];
   for (const dim of pack.worldgen.dimensions) {
-    if (places.has(dim.key) && !reachable.has(dim.key)) names.push(dim.rocketTier === undefined ? dim.name : `${dim.name} (T${dim.rocketTier} rocket)`);
+    const name = dim.rocketTier === undefined ? dim.name : `${dim.name} (T${dim.rocketTier} rocket)`;
+    if (places.has(dim.key) && !reachable.has(dim.key)) found.push({ name, tier: dim.defaultTier });
   }
-  for (const capability of pack.worldgen.capabilities) if (places.has(capability.key) && !reachable.has(capability.key)) names.push(capability.name);
-  return [...new Set(names)];
+  for (const capability of pack.worldgen.capabilities) {
+    if (places.has(capability.key) && !reachable.has(capability.key)) found.push({ name: capability.name, tier: capability.minTier });
+  }
+  return [...new Set(found.sort((a, b) => a.tier - b.tier).map((place) => place.name))];
 }
+
+/** Places a reason names (`unobtainableReason`) before "or <n> more": Molten Titanium has 53 at LV. */
+const MAX_PLACES = 3;
 
 /**
  * Why the group cannot get `key` here, which availability does not reach, when the pack says: the places out of reach
- * that have it ("needs Moon (T1 rocket)", `placesFor`), else the lowest tier a recipe making it needs ("needs MV (your
- * tier is LV)": one level down, as the first thing in the way). Null when neither tells.
+ * that have it, the nearest MAX_PLACES ("needs Moon (T1 rocket)", "needs The End or Moon (T1 rocket) or Mars (T2 rocket)
+ * or 38 more", `placesFor`), else the lowest tier a recipe making it needs ("needs MV (your tier is LV)": one level
+ * down, as the first thing in the way). Null when neither tells.
  */
 function unobtainableReason(pack: Pack, key: StuffKey, env: PlanEnv): string | null {
   const places = placesFor(pack, key, env.reachable);
-  if (places.length > 0) return `needs ${places.join(' or ')}`;
+  const more = places.length > MAX_PLACES ? ` or ${places.length - MAX_PLACES} more` : '';
+  if (places.length > 0) return `needs ${places.slice(0, MAX_PLACES).join(' or ')}${more}`;
   let need = Infinity;
   for (const i of pack.producers.get(key) ?? []) {
     const a = acceptRecipe(pack, pack.recipes[i] as Recipe, env);
