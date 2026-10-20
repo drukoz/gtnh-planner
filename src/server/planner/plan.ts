@@ -246,16 +246,85 @@ function placesFor(pack: Pack, key: StuffKey, reachable: ReadonlySet<string>): s
 /** Places a reason names (`unobtainableReason`) before "or <n> more": Molten Titanium has 53 at LV. */
 const MAX_PLACES = 3;
 
+const METALS = new WeakMap<Pack, ReadonlyMap<string, readonly StuffKey[]>>();
+
+/** The dusts and ingots of `material` (by GT prefix, and its ore parts): what its molten fluid is melted from. Once per pack. */
+function metalOf(pack: Pack, material: string): readonly StuffKey[] {
+  let byMaterial = METALS.get(pack);
+  if (byMaterial === undefined) {
+    const sets = new Map<string, Set<StuffKey>>();
+    const add = (name: string, key: StuffKey | undefined): void => {
+      if (key === undefined) return;
+      const set = sets.get(name);
+      if (set === undefined) sets.set(name, new Set([key]));
+      else set.add(key);
+    };
+    for (const item of pack.items.values()) if (item.gt?.prefix === 'dust' || item.gt?.prefix === 'ingot') add(item.gt.material, item.key);
+    for (const [name, m] of pack.materials) {
+      add(name, m.parts?.dust);
+      add(name, m.parts?.ingot);
+    }
+    byMaterial = new Map([...sets].map(([name, set]) => [name, [...set]]));
+    METALS.set(pack, byMaterial);
+  }
+  return byMaterial.get(material) ?? [];
+}
+
+/** Whether a singleblock machine runs some map of `r` (not only multiblocks). */
+function singleblockMap(pack: Pack, r: Recipe): boolean {
+  return r.maps.some((mapId) => (pack.machinesByMap.get(mapId) ?? []).some((id) => pack.machines.get(id)?.kind === 'basic'));
+}
+
 /**
- * Why the group cannot get `key` here, which availability does not reach, when the pack says: the places out of reach
- * that have it, the nearest MAX_PLACES ("needs Moon (T1 rocket)", "needs The End or Moon (T1 rocket) or Mars (T2 rocket)
- * or 38 more", `placesFor`), else the lowest tier a recipe making it needs ("needs MV (your tier is LV)": one level
- * down, as the first thing in the way). Null when neither tells.
+ * The lowest tier above the group's at which a plan of the same settings and world gets `key` (`PlanBasis.at`), for a
+ * molten metal whose dust or ingot the group gets here (`has`). A recipe making it from what the group gets (an option
+ * of every slot) that a singleblock runs settles it at the tier its voltage needs (as `acceptRecipe` judges it, ruling
+ * R2): most metals, in a fluid extractor. Below that tier, or where no such recipe is, what a plan at each tier would get
+ * says: some metals only multiblocks melt, none of which the group can build yet, or only once they are ingots (on the
+ * 2.9 export an LV group gets Niobium Dust, which the Alloy Blast Smelter melts from IV; from HV the blast furnace and
+ * vacuum freezer make the ingots a fluid extractor melts). Past the next tier only when a plan at MAX would get it;
+ * undefined when not.
  */
-function unobtainableReason(pack: Pack, key: StuffKey, env: PlanEnv): string | null {
-  const places = placesFor(pack, key, env.reachable);
-  const more = places.length > MAX_PLACES ? ` or ${places.length - MAX_PLACES} more` : '';
-  if (places.length > 0) return `needs ${places.slice(0, MAX_PLACES).join(' or ')}${more}`;
+function meltTier(pack: Pack, key: StuffKey, basis: PlanBasis, has: (key: StuffKey) => boolean): number | undefined {
+  const producers = pack.producers.get(key) ?? [];
+  if (producers.length === 0 && !pack.worldgen.fluidSources.some((s) => s.fluid === key)) return undefined;
+  let single = Infinity;
+  for (const i of producers) {
+    const r = pack.recipes[i] as Recipe;
+    if (!singleblockMap(pack, r) || !r.inputs.every((ing) => ing.options.some((o) => has(o.key)))) continue;
+    const a = acceptRecipe(pack, r, { ...basis.env, multiblocks: new Set() });
+    if (!a.ok && a.why === 'tier' && a.needTier !== undefined) single = Math.min(single, a.needTier);
+  }
+  const max = V.length - 1;
+  const bound = Math.min(single, max + 1);
+  for (let tier = basis.tier + 1; tier < bound; tier++) {
+    if (basis.at(tier).avail.available.has(key)) return tier;
+    if (tier === basis.tier + 1 && bound > max && !basis.at(max).avail.available.has(key)) return undefined;
+  }
+  return Number.isFinite(single) ? single : undefined;
+}
+
+/**
+ * Why the group cannot get `key` here, which availability does not reach, when the pack says. A molten metal whose dust
+ * or ingot the group gets (`has`, `metalOf`), by whatever route, waits only for what melts it, never for the places of
+ * its ore (review of the plan 09 follow-ups: on the 2.9 export 17 molten fluids at LV, 6 at MV and 1 at HV whose ore is
+ * out of reach but whose metal the group gets another way, as Antimony Dust from the Nether's stibnite ore, read
+ * "needs Mars (T2 rocket) or …"): the tier at which it could melt it ("needs HV (your tier is LV)", `meltTier`). Any
+ * other good, the places out of reach that have it, the nearest MAX_PLACES ("needs Moon (T1 rocket)", "needs The End or
+ * Moon (T1 rocket) or Mars (T2 rocket) or 38 more", `placesFor`). Else the lowest tier a recipe making it needs ("needs
+ * MV (your tier is LV)": one level down, as the first thing in the way). Null when none tells.
+ */
+function unobtainableReason(pack: Pack, key: StuffKey, basis: PlanBasis, has: (key: StuffKey) => boolean): string | null {
+  const { env } = basis;
+  const material = isFluidKey(key) ? moltenMaterial(pack, key) : undefined;
+  if (material !== undefined && metalOf(pack, material).some(has)) {
+    const melt = meltTier(pack, key, basis, has);
+    if (melt !== undefined) return `needs ${tierName(melt)} (your tier is ${tierName(env.tier)})`;
+  } else {
+    const places = placesFor(pack, key, env.reachable);
+    const more = places.length > MAX_PLACES ? ` or ${places.length - MAX_PLACES} more` : '';
+    if (places.length > 0) return `needs ${places.slice(0, MAX_PLACES).join(' or ')}${more}`;
+  }
   let need = Infinity;
   for (const i of pack.producers.get(key) ?? []) {
     const a = acceptRecipe(pack, pack.recipes[i] as Recipe, env);
@@ -280,7 +349,7 @@ function machineReason(r: Recipe, a: Extract<Acceptance, { ok: false }>, tier: n
  * (T1 rocket)"), else that ingredient by name. Null for a recipe that is no way of its own (`NO_WAY`).
  */
 function judgeWay(
-  pack: Pack, r: Recipe, env: PlanEnv, obtainable: (key: StuffKey) => boolean, avoid: ReadonlySet<StuffKey>,
+  pack: Pack, r: Recipe, env: PlanEnv, obtainable: Obtainable, avoid: ReadonlySet<StuffKey>,
 ): { mapId: string; reasons: string[] } | null {
   const accepted = acceptRecipe(pack, r, env);
   const firstMap = [...r.maps].sort(byString)[0] ?? '';
@@ -289,8 +358,8 @@ function judgeWay(
     for (const ing of r.inputs) {
       const options = keptOptions(ing.options, avoid);
       const first = options[0];
-      if (first === undefined || options.some((o) => obtainable(o.key))) continue;
-      reasons.add(unobtainableReason(pack, first.key, env) ?? `needs ${pack.nameOf(first.key)}, which you cannot get here`);
+      if (first === undefined || options.some((o) => obtainable.has(o.key))) continue;
+      reasons.add(obtainable.why(first.key) ?? `needs ${pack.nameOf(first.key)}, which you cannot get here`);
     }
     return { mapId: accepted.mapId, reasons: [...reasons] };
   }
@@ -305,10 +374,23 @@ function judgeWay(
   return { mapId: firstMap, reasons: [...reasons, machineReason(r, machine, env.tier)] };
 }
 
-/** Whether the group can get a good here: availability reaches it, or the project says it already makes it. */
-function obtainableIn(basis: PlanBasis, settings: PlanSettings): (key: StuffKey) => boolean {
+/** Whether the group can get a good here (`has`), and why not when it cannot (`why`, null when the pack does not say). */
+export interface Obtainable { has(key: StuffKey): boolean; why(key: StuffKey): string | null }
+
+/**
+ * What the group can get here: availability reaches it, or the project says it already makes it; and why it cannot get
+ * the rest (`unobtainableReason`, worked out once per good).
+ */
+export function obtainableIn(pack: Pack, basis: PlanBasis, settings: PlanSettings): Obtainable {
   const stops = new Set(settings.stopItems);
-  return (key) => basis.avail.available.has(key) || stops.has(key);
+  const has = (key: StuffKey): boolean => basis.avail.available.has(key) || stops.has(key);
+  const reasons = new Map<StuffKey, string | null>();
+  const why = (key: StuffKey): string | null => {
+    let reason = reasons.get(key);
+    if (reason === undefined) reasons.set(key, (reason = unobtainableReason(pack, key, basis, has)));
+    return reason;
+  };
+  return { has, why };
 }
 
 /** Producers of each wanted good in the cost graph, ranked by raw cost per unit then id; finite costs only. */
@@ -354,7 +436,7 @@ async function addAlternatives(
 ): Promise<Map<string, ReadonlySet<string>>> {
   const wanted = new Set(steps.flatMap((s) => (s.mainOutput === undefined ? [] : [s.mainOutput])));
   const priced = alternativesFor(model, wanted);
-  const obtainable = obtainableIn(basis, settings);
+  const obtainable = obtainableIn(pack, basis, settings);
   let lineCosts: CostAnalysis | undefined;
   const ownCost = async (recipeId: string, main: StuffKey): Promise<number> => {
     const inModel = model.costs.recipeCost(recipeId, main);
@@ -473,15 +555,15 @@ async function optionPrices(
 ): Promise<Map<StuffKey, OptionPrice>> {
   const { model, basis, target, leaf } = pricing;
   const containers = pack.fluidContainers ?? [];
-  const obtainable = obtainableIn(basis, settings);
+  const obtainable = obtainableIn(pack, basis, settings);
   const prices = new Map<StuffKey, OptionPrice>();
   const inModel: StuffKey[] = [];
   const unreached: StuffKey[] = [];
   for (const key of keys) {
     const d = leaf(key);
     const cost = model.costs.cost(key);
-    if (!obtainable(key)) {
-      prices.set(key, { cost: basis.prices.price(key), steps: 0, via: [], unusable: [unobtainableReason(pack, key, basis.env) ?? 'you cannot get it here'] });
+    if (!obtainable.has(key)) {
+      prices.set(key, { cost: basis.prices.price(key), steps: 0, via: [], unusable: [obtainable.why(key) ?? 'you cannot get it here'] });
     } else if (d.buyable) {
       prices.set(key, { cost: Number.isFinite(cost) ? cost : d.cost, steps: 0, via: [] });
     } else if (Number.isFinite(cost)) {
