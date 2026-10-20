@@ -286,9 +286,8 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('hatch rules on the real 2.9 exp
       for (const mode of MODES) {
         const project = { ...makeProject({ scanId: null, baseId: null }), settings: { ...settings, logistics: mode } };
         const layout = await layoutLine(pack, plan, emptyScan(), project);
-        // the units as layoutLine makes them in this mode: GT's primitive machines follow their own rules in every mode
-        // but machine to machine (architecture §11 entry 48), which runs a Bricked Blast Furnace or a Coke Oven by hand
-        // and so places the units of its row elsewhere
+        // the units as layoutLine makes them in this mode: in every mode but machine to machine (architecture §11
+        // entry 48) a Bricked Blast Furnace or a Coke Oven is run by hand, which places the units of its row elsewhere
         const modeUnits = unitsFromPlan(pack, plan, { primitive: mode !== 'direct' }).units;
         const hatches = modeUnits.reduce((n, u) => n + u.cells.filter((c) => c.role === 'hatch').length, 0);
         expect(layout.status, mode).toBe('no-world');

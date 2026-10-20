@@ -641,9 +641,10 @@ interface FluidPortPlan { pos: Vec3; side: number; port: FluidPort; makes: reado
  * tank holds anything, `AbstractLiquidConduit.canConnectToExternal` asking `getCapacity() > 0`, which every machine whose
  * recipes use fluids has, and each conduit of a bundle connects on its own). A multiblock: the cell each fluid hatch
  * faces, one fluid each (`hatch`: above it, or beside it where GT takes the hatch only lower down). Any other
- * single-block machine keeps the cell above it for all its fluids (`top`):
- * a steam machine (`MTEBasicMachineBronze`) holds only steam in its tank and must keep its output side clear to vent
- * (`allowToCheckRecipe`), and the other kinds follow rules of their own. A port's face looks at its hatch or machine.
+ * single-block machine that is no steam machine keeps the cell above it for all its fluids (`top`). A steam machine
+ * (`MTEBasicMachineBronze`) vents through its top (`allowToCheckRecipe`), so it gets no fluid port here and its fluids
+ * are moved by hand (`steam_fluids`); the other kinds follow rules of their own. A port's face looks at its hatch or
+ * machine.
  */
 function unitFluidPorts(pack: Pack, u: PlacedUnit): FluidPortPlan[] {
   if (u.io.fluidIn.length === 0 && u.io.fluidOut.length === 0) return [];

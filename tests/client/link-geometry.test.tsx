@@ -247,9 +247,14 @@ describe("the 3D view's connections", () => {
     expect(many).toHaveLength(15_104);
     const ray = (): ReturnType<typeof pickLink> => pickLink(many, [10, 20, 10], [0, -Math.SQRT1_2, -Math.SQRT1_2], (t) => 0.004 * t);
     const first = ray();
+    const picks: Array<ReturnType<typeof pickLink>> = [];
     const started = performance.now();
-    for (let i = 0; i < 50; i++) expect(ray()).toEqual(first);
-    expect((performance.now() - started) / 50).toBeLessThan(2);
+    for (let i = 0; i < 50; i++) picks.push(ray());
+    const perPick = (performance.now() - started) / 50;
+    for (const p of picks) expect(p).toEqual(first);
+    // about 0.8 ms a pick on a quiet machine; the bound leaves room for a busy shared host and still catches a scan of
+    // every link (14.7 ms a pick before the bounding-sphere skip)
+    expect(perPick).toBeLessThan(6);
   });
 
   it('leaves out the links to a hookup and to its blocks while hookups are hidden', () => {

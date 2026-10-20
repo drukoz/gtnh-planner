@@ -265,7 +265,7 @@ describe('EnderIO mode — the fluid network in detail', () => {
     const s = topPortSetup(fluidPlan(), [IDS.EXTRACTOR]);
     s.placement.reserved.push([1, 1, 0], [1, 1, 2], [2, 1, 1]);                       // walls the extractor's port in (west: the power head)
     const r = buildMode('enderio', { ...s, network: null });
-    // the spine cell the solidifier is met on touches the steam extractor's output side too, so that face is Disabled
+    // the spine cell the solidifier is met on touches the extractor's output side too, so that face is Disabled
     expect(fluidFaces(r).map((f) => [f.pos, f.mode, f.target])).toEqual([
       [[1, 0, 2], 'disabled', 'Basic Fluid Extractor'], [[1, 0, 2], 'insert', 'Basic Fluid Solidifier']]);
     expect(r.warnings).toEqual([{ code: 'route_failed', stepId: 'x', text: 'Could not lay the Ender Fluid Conduit to Basic Fluid Extractor — connect it by hand' }]);

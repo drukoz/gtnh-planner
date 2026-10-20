@@ -48,7 +48,6 @@ export interface ConnNode {
   tail?: 'input' | 'output';
 }
 
-/** What carries a link: a flow's network, an interface on what it serves, or a hookup joining the line. */
 /**
  * What carries a link: a flow's network, your hands (`hand`: a flow into or out of a machine the line runs by hand, as
  * its layout:hand:* build steps say), an interface on what it serves, or a hookup joining the line.
