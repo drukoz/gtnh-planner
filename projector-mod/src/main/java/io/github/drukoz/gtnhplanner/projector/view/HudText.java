@@ -4,7 +4,13 @@ import io.github.drukoz.gtnhplanner.projector.check.BlockState;
 import io.github.drukoz.gtnhplanner.projector.geom.Facing;
 import io.github.drukoz.gtnhplanner.projector.model.PlannedBlock;
 import io.github.drukoz.gtnhplanner.projector.model.PlannedCover;
+import io.github.drukoz.gtnhplanner.projector.model.PlannedStep;
 import io.github.drukoz.gtnhplanner.projector.model.ProjectorData;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 
 /** The projector's HUD lines, in plain words (spec §3.13). */
 public final class HudText {
@@ -99,5 +105,131 @@ public final class HudText {
     /** For a player in another dimension than the line: {@code Planner: <name> — the line is in dimension <dim>}. */
     public static String otherDimension(ProjectorData d) {
         return "Planner: " + d.name + " — the line is in dimension " + d.dim;
+    }
+
+    /**
+     * The lines of a block's name tag and tooltip: its label; what the check found ({@code placed correctly},
+     * {@code wrong block here}, {@code wrong facing, its <output side|front> should face <side>}, {@code not placed yet},
+     * {@code not all its conduits placed yet}, {@code can't be checked by the mod}, {@code not checked yet} for a block
+     * that is not loaded); {@code front should face <side>} (or {@code output side should face <side>}) when the block
+     * has a facing and is not placed right yet; then {@code cover: <label> on the <side> face} for each cover.
+     */
+    public static List<String> blockLines(PlannedBlock b, BlockState s) {
+        String found;
+        boolean facingLine = false;
+        switch (s) {
+            case CORRECT:
+                found = "placed correctly";
+                break;
+            case WRONG_BLOCK:
+                found = "wrong block here";
+                facingLine = true;
+                break;
+            case WRONG_FACING:
+                found = "wrong facing, its " + side(b) + " should face " + Facing.name(b.facing);
+                break;
+            case MISSING:
+                found = "not placed yet";
+                facingLine = true;
+                break;
+            case INCOMPLETE:
+                found = "not all its conduits placed yet";
+                break;
+            case UNCHECKED:
+                found = "can't be checked by the mod";
+                facingLine = true;
+                break;
+            case UNLOADED:
+                found = "not checked yet";
+                facingLine = true;
+                break;
+            default:
+                throw new IllegalArgumentException("Unknown block state " + s);
+        }
+        List<String> lines = new ArrayList<>();
+        lines.add(b.label);
+        lines.add(found);
+        if (facingLine && b.facing >= 0) lines.add(side(b) + " should face " + Facing.name(b.facing));
+        for (PlannedCover c : b.covers) lines.add("cover: " + c.label + " on the " + Facing.name(c.face) + " face");
+        return lines;
+    }
+
+    private static String side(PlannedBlock b) {
+        return b.facingIsOutput ? "output side" : "front";
+    }
+
+    /** Ghost blocks listed behind the header of {@link #stacked} before {@code … and <n> more}. */
+    private static final int STACKED_SHOWN = 6;
+    /** Names listed by {@link #needs} before {@code … and <n> more kinds}. */
+    private static final int NEEDS_NAMES = 8;
+
+    /**
+     * The ghost blocks along the crosshair, nearest first: {@code Behind the crosshair (<n>):}, then
+     * {@code > <label> <m> m} for the nearest (distances rounded) and {@code   <label> <m> m} for the rest, at most six,
+     * then {@code … and <n> more}. Empty for fewer than two hits, when there is nothing to choose between.
+     */
+    public static List<String> stacked(ProjectorData d, List<AimRay.Hit> hits) {
+        if (hits.size() < 2) return Collections.emptyList();
+        List<String> lines = new ArrayList<>();
+        lines.add("Behind the crosshair (" + hits.size() + "):");
+        for (int k = 0; k < hits.size() && k < STACKED_SHOWN; k++) {
+            AimRay.Hit h = hits.get(k);
+            lines.add((k == 0 ? "> " : "  ") + d.blocks.get(h.block).label + " " + Math.round(h.distance) + " m");
+        }
+        if (hits.size() > STACKED_SHOWN) lines.add("… and " + (hits.size() - STACKED_SHOWN) + " more");
+        return lines;
+    }
+
+    /**
+     * What a step still needs: {@code Still needed for step <order>:}, then {@code <n>× <label>} for the step's blocks
+     * that are not {@link BlockState#CORRECT}, most first then by label, and after those
+     * {@code <n>× <label> (can't check)} for the ones the mod cannot check; at most eight names, then
+     * {@code … and <n> more kinds}. Empty for {@code stepIndex < 0} and when nothing is needed.
+     */
+    public static List<String> needs(ProjectorData d, BlockState[] states, int stepIndex) {
+        if (stepIndex < 0) return Collections.emptyList();
+        PlannedStep step = d.steps.get(stepIndex);
+        Map<String, Integer> open = new TreeMap<>(), unchecked = new TreeMap<>();
+        for (int i : step.blocks) {
+            if (states[i] == BlockState.CORRECT) continue;
+            (states[i] == BlockState.UNCHECKED ? unchecked : open).merge(d.blocks.get(i).label, 1, Integer::sum);
+        }
+        List<String> names = new ArrayList<>();
+        counted(open, "", names);
+        counted(unchecked, " (can't check)", names);
+        if (names.isEmpty()) return Collections.emptyList();
+        List<String> lines = new ArrayList<>();
+        lines.add("Still needed for step " + step.order + ":");
+        lines.addAll(names.subList(0, Math.min(NEEDS_NAMES, names.size())));
+        if (names.size() > NEEDS_NAMES) lines.add("… and " + (names.size() - NEEDS_NAMES) + " more kinds");
+        return lines;
+    }
+
+    /** {@code <n>× <label><suffix>} for each label, the highest count first and then by label (the map is by label). */
+    private static void counted(Map<String, Integer> counts, String suffix, List<String> out) {
+        List<Map.Entry<String, Integer>> entries = new ArrayList<>(counts.entrySet());
+        entries.sort((a, b) -> b.getValue().compareTo(a.getValue())); // stable: equal counts stay by label
+        for (Map.Entry<String, Integer> e : entries) out.add(e.getValue() + "× " + e.getKey() + suffix);
+    }
+
+    private static final String[] COMPASS = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
+
+    /**
+     * Where a block is from the player, given the offset to it: {@code <n> block(s) <compass>} for the horizontal
+     * distance (north is −z, east +x), or {@code here} within half a block, then {@code , <n> up} or {@code , <n> down}
+     * unless it is level.
+     */
+    public static String direction(int dx, int dy, int dz) {
+        long n = Math.round(Math.hypot(dx, dz));
+        String text;
+        if (n == 0) {
+            text = "here";
+        } else {
+            int sector = (int) Math.round(Math.toDegrees(Math.atan2(dx, -dz)) / 45.0);
+            text = n + (n == 1 ? " block " : " blocks ") + COMPASS[Math.floorMod(sector, 8)];
+        }
+        if (dy > 0) text += ", " + dy + " up";
+        else if (dy < 0) text += ", " + -dy + " down";
+        return text;
     }
 }
