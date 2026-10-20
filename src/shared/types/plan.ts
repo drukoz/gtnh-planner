@@ -123,8 +123,8 @@ export interface StepOption {
     via?: string[] /* map names of that chain, at most 3 */;
     /**
      * Why the group cannot get this option here ("needs MV (your tier is LV)"), as a swap list says it, or, for one this
-     * plan does not use, that its chain needs a good the line avoids ("needs Tin Ingot, which is on your avoid list");
-     * absent: it can.
+     * plan does not use, that no chain makes it without a good the line avoids ("needs Tin Ingot, which is on your avoid
+     * list"); absent: it can.
      */
     unusable?: string[];
   }>;

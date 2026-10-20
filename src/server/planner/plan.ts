@@ -413,7 +413,8 @@ const MAX_VIA = 3;
 
 /**
  * What one unit of an ingredient option costs, the recipes making it on its own runs, their maps by name, why the
- * group cannot get it here, when it cannot, and the goods the line avoids that those recipes cannot run without.
+ * group cannot get it here, when it cannot, and the goods the line avoids that those recipes cannot run without when no
+ * chain around them makes it.
  */
 interface OptionPrice { cost: number; steps: number; via: string[]; unusable?: string[]; avoided?: StuffKey[] }
 
@@ -450,8 +451,11 @@ function viaOf(pack: Pack, graph: CandidateGraph, chain: Standalone | undefined)
  * option the line would buy (its leaf oracle) at its cost-model cost, else its leaf cost, in 0 steps; one the cost
  * model's graph prices at that cost, with the recipes of making it on its own there (`standaloneCosts`, never through
  * the target); one that graph never reached (the walk found it far dearer) priced the same way over the graph walked
- * from those options alone (`aloneGraph`), else at its plain price. Those chains ignore the avoid list, so each also
- * says which goods of `avoid` (the line's) it cannot do without (`avoidedBy`).
+ * from those options alone (`aloneGraph`), else at its plain price. Those chains ignore the avoid list: one that cannot do
+ * without a good of `avoid` (the line's, `avoidedBy`) is chained again over the graph walked from those options alone
+ * around `avoid`, as the line would plan a pin of it (a Good Electronic Circuit has a dearer chain without antimony): at
+ * its least raw material there (`Standalone.cost`, never below the first price), with that chain's steps and maps. Only
+ * one that graph cannot make keeps those goods (`avoided`).
  */
 async function optionPrices(
   pack: Pack, settings: PlanSettings, pricing: LinePricing, keys: readonly StuffKey[], avoid?: ReadonlySet<StuffKey>,
@@ -493,6 +497,16 @@ async function optionPrices(
     const alone = aloneGraph(pack, settings, basis, model, unreached);
     await chained(alone, await analyzeCosts(alone), unreached);
   }
+  const around = [...prices].filter(([, price]) => price.avoided !== undefined).map(([key]) => key);
+  if (around.length > 0) {
+    await yieldToEventLoop();
+    const alone = aloneGraph(pack, settings, basis, model, around, avoid);
+    for (const [key, chain] of await standaloneCosts(alone, around, [target], containers)) {
+      if (chain === undefined || !Number.isFinite(chain.cost)) continue;
+      const cost = Math.max((prices.get(key) as OptionPrice).cost, chain.cost);
+      prices.set(key, { cost, steps: chain.steps, via: viaOf(pack, alone, chain) });
+    }
+  }
   return prices;
 }
 
@@ -501,8 +515,8 @@ async function optionPrices(
  * more options the line may take (`keptOptions`), every one of them, those the walk left out too (controller ruling),
  * with what one run would take of it, its share of the slot in this plan (`optionShares` over `line`, the plan's own
  * runs), its raw material per run (amount × `optionPrices`' cost) and the steps and maps of its own chain, or why the
- * group cannot get it here (`unusable`), among it an option the plan does not use whose chain needs a good the line
- * avoids ("needs Tin Ingot, which is on your avoid list"); cheapest first, then by key. `pinned` names the option
+ * group cannot get it here (`unusable`), among it an option the plan does not use that no chain makes without a good the
+ * line avoids ("needs Tin Ingot, which is on your avoid list"); cheapest first, then by key. `pinned` names the option
  * `optionChoice` pins when the graph honours it. Priced once per plan.
  */
 async function addOptions(pack: Pack, settings: PlanSettings, steps: readonly PlanStep[], line: StepLine, pricing: LinePricing): Promise<void> {

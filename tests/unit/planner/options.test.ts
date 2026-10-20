@@ -197,6 +197,25 @@ describe('ingredient options', () => {
     expect(pinned.warnings.filter((w) => w.code === 'avoid-unavoidable').map((w) => w.key)).toEqual(['t:tin_ingot@0']);
     expect(circuitStep(pinned).options?.[0]?.choices.map((c) => [c.key, c.share, c.unusable])).toEqual([[SOLDER, 1, undefined], [LEAD, 0, undefined]]);
   });
+  it('keeps an option pinnable that a dearer chain makes without the avoided good', async () => {
+    // Review of the plan 09 follow-up: the mark read only the cheapest chain, over the cost model that ignores the avoid
+    // list, so at MV a Good Electronic Circuit read "needs Antimony Ingot", though a chain without antimony makes it and a
+    // pin of it planned fine. Here soldering alloy is also alloyed from lead, dearer (3 raw for the slot): with tin
+    // avoided it stays pinnable, at what that chain costs.
+    const spec = structuredClone(CIRCUIT);
+    spec.recipes!.push({ id: 'alloy-solder-pb', map: 'gt.recipe.alloysmelter', in: [['t:lead_ingot@0', 50], ['t:antimony_dust@0', 10]], out: [['t:solder_ingot@0', 10]], eut: 16 });
+    const p = packFromSpec(spec);
+    const plan = await planLine(p, S({ avoid: ['Tin'] }), emptyContext());
+    expect(ids(plan)).toEqual(['ca', 'x-lead']);
+    expect(circuitStep(plan).options?.[0]?.choices.map((c) => [c.key, c.share, c.rawPerRun, c.steps, c.via, c.unusable])).toEqual([
+      [LEAD, 1, 2, 1, ['Fluid Extractor'], undefined], [SOLDER, 0, 3, 2, ['Fluid Extractor', 'Alloy Smelter'], undefined]]);
+    // Its pin plans that chain, with nothing on the avoid list.
+    const pinned = await planLine(p, S({ avoid: ['Tin'], optionChoice: { 'ca#100': SOLDER } }), emptyContext());
+    expect(ids(pinned)).toEqual(['alloy-solder-pb', 'ca', 'x-solder']);
+    expect(circuitStep(pinned).options?.[0]?.pinned).toBe(SOLDER);
+    expect(pinned.warnings.filter((w) => w.code === 'avoid-unavoidable')).toEqual([]);
+    expect(pinned.avoided?.filter((a) => a.unavoidable)).toEqual([]);
+  });
 });
 
 describe('a slot split between two options', () => {
