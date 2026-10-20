@@ -1,38 +1,43 @@
 # Feeding machines without overfill or deadlock (GTNH 2.9.0-RC-1)
 
-Status: research reference for add-on 12 Task 6 (crafting steps on the GT++ Auto Workbench), add-on 15 (machine to machine) and the routed, AE2 and EnderIO modes. Date: 2026-10-20.
+Status: research reference, revision 2 (2026-10-20). Revision 1 was reviewed adversarially; this revision corrects its Project Red and tool claims, adds the cases the review broke it with (§5), and gives the rulings per lane (§6) and the design of a feeding checker (§7). It serves add-on 12 Task 6 (crafting steps on the GT++ Auto Workbench, shared machines), add-on 15 (machine to machine), add-on 19 (logistics parts and their cost), a fix lane on main and the build steps.
 
-The user's request (2026-10-20): "remember that logistic pipes have to interact correctly with the machines so over filling lets say a workbench has to be taken into account". A push network keeps inserting what it holds while the target takes it, so one ingredient can fill every input slot and keep the others out (a deadlock), or a machine can fill with a stack it cannot use. This page establishes from the pack's jars what each machine kind accepts and how each logistics mode pushes into it (§1–§4), audits main's layouts (§5), and gives, per mode and machine kind, the cheapest configuration that can neither overfill nor deadlock, with what the layout and the build steps must say (§6–§7).
+The user's request (2026-10-20): "remember that logistic pipes have to interact correctly with the machines so over filling lets say a workbench has to be taken into account". A push network keeps inserting what it holds while the target takes it. One ingredient can then fill every input slot and keep the others out (a deadlock), or a machine fills with a stack it cannot use. This page reads from the pack's jars what each machine kind accepts (§1) and how each logistics mode pushes into it (§2), and gives per machine kind and mode the cheapest configuration that can neither overfill nor deadlock, what it costs and what the steps must say (§3). It audits main's layouts (§4).
 
 ## How to read this page
 
-- Jars (all in `$PACK/mods`, read with `javap -c -p`): `gregtech-5.09.54.183.jar` (`$GT`, GT5-Unofficial with GT++ folded in; a multi-release jar, so `javap --multi-release 17`, as in gt-mechanics), `EnderIO-2.10.46.jar` with `endercore-0.5.15.jar`, `appliedenergistics2-rv3-beta-1073-GTNH.jar` with `ae2fc-1.5.110-gtnh.jar`, `ProjRed-4.12.44-GTNH.jar` with `MrTJPCore-1.3.7.jar`, and `gtnhlib-0.11.51.jar` (the item-transfer code GT and GTNH's AE2 share).
-- Tags: **[jar]** read in the bytecode; **[src]** read in the mod's source at the tag the jar was built from (GT5-Unofficial `5.09.54.183`, Applied-Energistics-2-Unofficial `rv3-beta-1073-GTNH`, EnderIO `2.10.46`, ProjectRed `4.12.44-GTNH`, MrTJPCore `1.3.7`); where both were read, the jar's `LineNumberTable` matches the source lines quoted; **[cfg]** the pack's server config; **[probe]** main's layouts, planned and laid out on the active export without a world by a scratch script (not committed); **UNVERIFIED** = not checked in game or in code.
-- "Insert" means an automated insertion. In 1.7.10 every network here asks `ISidedInventory.canInsertItem(slot, stack, side)` for each slot (§4). For a GT tile that is `BaseMetaTileEntity.canInsertItem` = the side's cover `letsItemsIn(slot)` and `CommonMetaTileEntity.canInsertItem` = `isValidSlot(slot)` and (slot empty or the same item) and the machine's `allowPutStack(slot, side, stack)` **[jar]** (`CommonMetaTileEntity` line 456–459). `isItemValidForSlot` is only `isValidSlot` (line 418), so the rules below hold only for inserters that use `canInsertItem`; all four of the planner's networks do.
+- Jars (from the server's `mods` folder, read with `javap -c -p -l`): `gregtech-5.09.54.183.jar` (GT5-Unofficial with GT++ and GGFab folded in; a multi-release jar, so `javap --multi-release 17`), `EnderIO-2.10.46.jar` with `endercore-0.5.15.jar`, `appliedenergistics2-rv3-beta-1073-GTNH.jar` with `ae2fc-1.5.110-gtnh.jar`, `ProjRed-4.12.44-GTNH.jar` with `MrTJPCore-1.3.7.jar`, and `gtnhlib-0.11.51.jar` (the item transfer code GT and GTNH's AE2 share). TConstruct and TGregworks were read for one question (§2.3).
+- Tags: **[jar]** read in the bytecode; **[src]** read in the mod's source at the tag the jar was built from (GT5-Unofficial `5.09.54.183`, Applied-Energistics-2-Unofficial `rv3-beta-1073-GTNH`, EnderIO `2.10.46`, ProjectRed `4.12.44-GTNH`, MrTJPCore `1.3.7`); where both were read, the jar's `LineNumberTable` matches the source lines quoted. **[cfg]** the pack's server config. **[export]** the planner's active export. **[probe]** main's layouts, planned and laid out with no world by a scratch script (not committed). **[model]** a scratch Python model of the Auto Workbench's mode-0 code (§1.3, line for line from the bytecode) fed by simplified network policies (not committed). **UNVERIFIED** = not checked in game or in code.
+- "Insert" means an automated insertion. In 1.7.10 every network here asks `ISidedInventory.canInsertItem(slot, stack, side)` for each slot. For a GT tile that is the side's cover (`letsItemsIn(slot)`) and `CommonMetaTileEntity.canInsertItem`: a valid slot (`isValidSlot`), empty or holding the same item with the same NBT (`GTUtility.areStacksEqual`), and the machine's `allowPutStack(slot, side, stack)` **[jar]**. `isItemValidForSlot` is only the slot test, so the rules below hold for inserters that use `canInsertItem`; all four of the planner's networks do.
 
-## 0. Summary for the planner
+## 0. In brief
 
-| Topic | Rule | § |
-|---|---|---|
-| GT basic machine inputs | Items go only into the input slots, through any face but the front, and through the output side only with Input from Output Side allowed. With **Multi Stack Input Off** an item kind already in an input slot goes only into that slot, so each kind holds at most one slot (64). With it **On** a kind takes every free input slot. | §1.2–1.3 |
-| Who sets Multi Stack Input | Every placement copies the placer's client preference (`singleBlockInitialAllowMultiStack`, default false = Off), so machines of one line differ by who placed them. A sneaking Soldering Iron click on the front switches it; the chat says "Multi Stack Input On / Off". The planner's steps never mention it today. | §1.4 |
-| Input Filter | A recipe-map check, off by default. On a 2-slot machine it also wants a recipe that uses both stacks; on 3+ slots it is the map check alone (assemblers also take anything ore-dictionaried `circuit*`). It is no slot limit. | §1.2 |
-| Auto Workbench (mode "Normal Crafting Table") | Slots 0–8 take **any** item from **any** face, 64 each, with no check against the grid: one ingredient can fill all nine. A craft needs ≥ 2,048 EU, slots 17 and 18 empty and every grid item in slots 0–17. When it cannot craft it pushes the slot-8 stack, strays and duplicate stacks out of its back. Results leave only through its back (one stack per update) or by extraction from any face. | §2 |
-| Auto Workbench and the networks | Its ghost grid (slots 19–27) and preview (28) are real inventory slots: AE2's blocking mode counts them, so a blocking interface **never** pushes into a bench; EnderIO's Limited Item Filter counts one per grid cell. Its back must face the line's logistics block and must not carry the power cable (the back takes no EU). | §2.6–2.7 |
-| Input buses | Limiting mode (a GUI toggle "Limit insertion", or a sneaking Screwdriver click) is off on a new bus; on, each item kind holds one slot. With Input Separation on (the EBF's default) every bus is checked alone with its own circuit, so all items of one recipe must be in one bus. | §3 |
-| EnderIO filters | Basic (5), Advanced (10) and Big (24) Item Filters are whitelists only. This EnderIO has the **Limited Item Filter** (`EnderIO:itemLimitedItemFilter@0`, assembler: Advanced Item Filter + Comparator, 120 EU/t): on an Insert side it caps each listed item's count in the whole target inventory at the number set (10 slots, 1–64 each, summed per item). | §4.1 |
-| AE2 | GTNH's interface pushes each pattern stack into whatever fits and keeps the rest in its send list (busy until it is sent); there is no all-or-nothing check. Blocking mode (free) checks a GT machine's input slots without programmed circuits, molds, shapes and lenses. A full-block interface pushes into every neighbour. A plain interface turns a pattern's fluid into a Fluid Packet *item* (stack 1) and pushes it into the machine. A Locking Card can hold the next push "Until crafting result is returned". | §4.2 |
-| Project Red | An Item Responder Chip whitelists and answers with all the room the target's accepting slots have, without counting items on the way. The Item Stock Keeper Chip keeps a set amount (≤ 255 per slot, counting stored, en-route and promised items) but is filled only by Item Broadcaster or crafting chips. Extractor chips pull 64 items per 10 ticks and never route back to their own inventory. | §4.3 |
-| Audit (main) | Routed and EnderIO: every singleblock that takes 2+ item kinds is safe with Multi Stack Input Off and deadlocks with it On, and the steps never say which. Routed also lays Extractor chips on input buses and leaves items bound for steps without units with nowhere to go. AE2: patterns list piped fluids (pushed as Fluid Packet items), fluid-only outputs and fractional chance outputs. The Bricked Blast Furnace's buses never empty (known). No mode lays a crafting step today. | §5 |
-| Fix | Multi Stack Input Off on every singleblock fed 2+ kinds; Limiting mode on every input bus fed 2+ kinds; AE2 blocking mode on for GT machines (off where a held item is not on AE2's ignore list, e.g. a Packager schematic) and item-only, whole-number patterns; the Auto Workbench back-to-the-line with a per-ingredient cap: EnderIO Limited Item Filter, Project Red Stock Keeper, AE2 blocking off (Locking Card optional). | §6 |
+1. **The Auto Workbench takes anything, anywhere.** In "Normal Crafting Table" mode its nine input slots take any item from any face, 64 each, with no check against its grid. A network that keeps pushing one ingredient fills all nine. The bench then ejects stacks out of its back: where that face refuses them it stops for good, and where it takes them a bug in its clean-up loop **deletes** stacks (in the model, a Resistor bench fed through whitelist filters deleted 4,038 ingredients in 20 minutes, §1.3). Every mode must cap each ingredient at the bench: EnderIO a Limited Item Filter, Project Red an Item Stock Keeper Chip, AE2 an exact pattern with a Locking Card. Direct mode cannot cap it yet.
+2. **GT tools cannot run on a bench.** Each craft damages the tool, the damaged tool no longer matches the grid, and the bench stops after one craft. GGFab's single-use tools (made 64 at a time in a Fluid Solidifier at MV) are ordinary ingredients and work. The planner must feed them as consumed inputs; the planner's first option for a file slot is already the Single Use File, but it counts it as a held one-off.
+3. **GT machines fed two or more kinds of item are safe only with Multi Stack Input Off.** With it On, the first kind fills every free input slot. Off is the client default, but each machine takes its placer's client setting, and no step says which.
+4. **Input buses fed two or more kinds need Limiting mode on.** One recipe's items must reach one bus, or Input Separation (on by default in the EBF) must be off.
+5. **Routed lines on main move nothing.** A new Item Extractor Chip is an empty whitelist, and main lays them bare.
+6. **AE2 patterns on main list piped fluids and fractional chance outputs.** As written they cannot be planned; encoded, a fluid becomes an item that jams the machine. Blocking mode must be on for GT machines and off for benches.
+7. **Shared machines starve in push networks.** A GT machine reruns its last recipe and waits when that recipe's output is blocked, so on a routed line the other recipe never runs. AE2 with blocking mode on is fine.
+8. **The user's Electronic Circuit line in EnderIO mode** is safe today as long as its Alloy Smelter and Circuit Assembler have Multi Stack Input Off.
 
-## 1. GT basic singleblock machines (`MTEBasicMachine`)
+| Machine kind | Direct (add-on 15) | Routed (Project Red) | AE2 | EnderIO |
+|---|---|---|---|---|
+| GT singleblock, 1 kind | as add-on 15 plans | Responder (whitelist inputs) + Extractor (whitelist outputs) | blocking mode on | Basic filter whitelist (as today) |
+| GT singleblock, 2+ kinds | Multi Stack Input Off (add-on 15 plans it) | the same + Multi Stack Input Off | the same; Multi Stack Off advised | the same + Multi Stack Input Off |
+| Input bus, 2+ kinds | Limiting mode on; one bus per recipe or Input Separation off | Limiting mode on; no Extractor on input buses | Limiting mode on | Limiting mode on |
+| Machine shared by 2+ steps | never shared | never shared (§1.1.5) | blocking mode on | never shared |
+| Auto Workbench | not fed yet (a pipe would flood it) | Stock Keeper + Extractor (result) + Broadcasters on its suppliers | blocking off, Locking Card, pattern = the grid | Limited Item Filter in, Basic filter out |
 
-### 1.1 Slots
+## 1. How each machine kind takes items
 
-- Inventory size is `5 + inputs + outputs + 1` (constructor: `iconst_5 + aInputSlotCount + aOutputSlotCount + iconst_1`) **[jar]**. Slot 3 is the special slot (`getSpecialSlotIndex`), slot 4 the programmed circuit (`getCircuitSlot`), slots `5 … 4 + n` the inputs (`getInputSlot` = 5), then the outputs (`getOutputSlot` = 5 + n); `isValidSlot` excludes slot 0, the tank's display slot (`MTEBasicTank.isValidSlot`), the circuit slot and the last slot (line 326–329), so automation never reaches the circuit **[jar]**.
-- Held items (extruder shapes, molds, schematics, lenses) sit in an input slot and take it; a programmed circuit does not (it is the ghost slot 4).
-- Input slot counts are set per machine in `LoaderMetaTileEntities` (`setSlotsCount(in, out)`) **[src]**, and some change with the tier. The export does not carry them (`Machine` has no slot count), so the planner cannot see them yet.
+### 1.1 GT basic singleblock machines (`MTEBasicMachine`)
+
+#### 1.1.1 Slots
+
+- Inventory size is `5 + inputs + outputs + 1` **[jar]**. Slot 3 is the special slot (`getSpecialSlotIndex`), slot 4 the programmed circuit (`getCircuitSlot`), then the inputs (`getInputSlot` = 5), then the outputs. `isValidSlot` leaves out slot 0, the circuit slot and the last slot, so automation never reaches the circuit **[jar]**.
+- Held items (molds, extruder shapes, schematics, lenses) sit in an input slot and take it; a programmed circuit does not (it is ghost slot 4).
+- Input slot counts are set per machine and tier in `LoaderMetaTileEntities` (`setSlotsCount(in, out)`) **[src]**. The export does not carry them.
 
 | Machine | LV | MV | HV | EV |
 |---|---|---|---|---|
@@ -42,12 +47,12 @@ The user's request (2026-10-20): "remember that logistic pipes have to interact 
 | Forming Press | 2 | 2 | 4 | 4 |
 | Laser Engraver | 2 | 2 | 2 | 4 |
 | Alloy Smelter, Chemical Reactor, Arc Furnace, Extruder, Wiremill, Bending Machine, Cutting Machine, Canner, Centrifuge, Electrolyzer, Autoclave | 2 | 2 | 2 | 2 |
-| Packager (`MTEBoxinator`, its own class: item + schematic) | 2 | 2 | 2 | 2 |
+| Packager (`MTEBoxinator`, item + schematic) | 2 | 2 | 2 | 2 |
 | Compressor, Extractor, Macerator, Lathe, Polarizer, Forge Hammer, Electric Furnace, Fluid Extractor, Fluid Solidifier, Chemical Bath, Electromagnetic Separator, Fluid Heater | 1 | 1 | 1 | 1 |
 
-### 1.2 What may go in, and where **[jar]**
+#### 1.1.2 What may go in, and where **[jar]**
 
-`MTEBasicMachine.allowPutStack` (line 996–1007):
+`MTEBasicMachine.allowPutStack`:
 
 ```java
 if (side == mMainFacing) return false;                                  // never through the front
@@ -59,222 +64,371 @@ for (int i = getInputSlot(), j = i + mInputSlotCount; i < j; i++)
 return mDisableFilter || allowPutStackValidated(base, aIndex, side, aStack);
 ```
 
-- `MTEBasicMachine.allowPutStackValidated` (line 1017) is `!mDisableMultiStack || mInventory[aIndex] == null`.
-- The Input Filter is `MTEBasicMachineWithRecipe.allowPutStackValidated` (line 321–378): no input slot: refuse. One slot: with an empty tank `RecipeMap.containsInput(stack)`, else a full recipe search with the stack, the selected circuit, the tank's fluid and the machine's voltage. Two slots: both full → yes (merging); both empty → `containsInput`; one full → `containsInput` and a recipe that uses this stack together with the other slot's stack (stack sizes not checked, so a recipe whose only item input is that item matches too). Three or more slots: `containsInput` alone, and the LV–IV Assemblers, every Circuit Assembler and the LuV–UMV Assembling Machines also take any item with an ore-dictionary name starting `circuit`.
-- So the filter keeps out items no recipe of the map uses, but it does not stop one kind filling several slots of a 3+ slot machine.
+- `MTEBasicMachine.allowPutStackValidated` is `!mDisableMultiStack || mInventory[aIndex] == null`.
+- The Input Filter is `MTEBasicMachineWithRecipe.allowPutStackValidated`. One input slot: the map must contain the item (with fluid in the tank, a full recipe search). Two slots: with one full, a recipe must use both stacks. Three or more: the map check alone; assemblers and circuit assemblers also take anything ore-dictionaried `circuit*`. It keeps out items no recipe of the map uses; it does not stop one kind filling several slots of a 3+ slot machine.
 
-### 1.3 How many stacks of one item
+#### 1.1.3 How many stacks of one item
 
-- **Multi Stack Input Off** (`mDisableMultiStack = true`): a kind not yet present may enter any empty input slot (subject to the filter); once it is in slot k, every further insertion of it is allowed only into slot k. Every network asks `canInsertItem` per slot inside one insertion call (§4), so a second slot is refused as soon as the first holds the kind. Result: at most one slot per kind, up to 64 (`getInventoryStackLimit`) or the item's own stack size. The comparison uses the ore-dictionary-unified stack, so two variants of one material (another mod's ingot) could still take two slots.
-- **Multi Stack Input On**: the loop never returns early; with the filter off any empty input slot takes the kind, so one kind can fill every input slot (a 2-slot Alloy Smelter with two stacks of Redstone has no room for Copper). With the filter on, see §1.2.
-- A machine with N input slots, h of them holding held items, fed k kinds, cannot crowd itself out with Multi Stack Off when k ≤ N − h. With k > N − h some kind has no slot whatever the setting.
+- **Multi Stack Input Off** (`mDisableMultiStack = true`): a kind not yet present may enter any empty input slot; once it is in slot k, more of it goes only into slot k. So each kind holds at most one slot (64, or the item's own stack size). The comparison uses the ore-dictionary-unified stack.
+- **Multi Stack Input On**: any empty input slot takes the kind, so one kind can fill every input slot (two stacks of Redstone in a 2-slot Alloy Smelter leave no room for Copper).
+- A machine with N input slots, h of them holding held items, fed k kinds, cannot crowd itself out with Multi Stack Off when k ≤ N − h.
 
-### 1.4 Defaults and the controls
+#### 1.1.4 Defaults and the controls **[jar]**
 
-- The constructor sets `mDisableFilter = true` and `mDisableMultiStack = true` (Input Filter Off, Multi Stack Input Off) and `mAllowInputFromOutputSide = true` **[jar]**.
-- `ItemMachines.placeBlockAt` calls `initDefaultModes` on every placement **[jar]**, and `MTEBasicMachine.initDefaultModes` (line 519–534) then sets `mDisableFilter = !pref.isSingleBlockInitialFilterEnabled()` and `mDisableMultiStack = !pref.isSingleBlockInitialMultiStackEnabled()` from the placing player's `GTClientPreference`, which comes from the client's GregTech `Client.cfg`: `singleBlockInitialFilter` and `singleBlockInitialAllowMultiStack`, both `@DefaultBoolean(false)` in `gregtech.common.config.Client$Preference` **[jar]**. So with default client settings a placed machine has Filter Off and Multi Stack Off, but a group member who enabled either gets machines with it on, and nothing in the world shows which. They are saved as NBT `mDisableFilter` and `mDisableMultiStack`.
-- Controls **[jar]**: a sneaking Soldering Iron right-click whose wrench-grid side is the front (`onSolderingToolRightClick`, line 973–977) switches Multi Stack Input, chat `GT5U.hatch.disableMultiStack.*` = "Multi Stack Input On" / "Multi Stack Input Off". A Screwdriver right-click on the output side or the front (`onScrewdriverRightClick`, line 956–968) switches Input from Output Side; sneaking, it switches the Input Filter ("Input Filter On" / "Input Filter Off"). Every click switches, so a step must say which chat line to stop at.
-- Outputs leave only from the output slots (`allowPullStack`: output slots, any face but the front). Item auto-output (`mItemTransfer`) is off on a new machine.
+- The constructor sets Input Filter Off, Multi Stack Input Off and Input from Output Side allowed. `ItemMachines.placeBlockAt` then calls `initDefaultModes`, which copies the placing player's client preferences (`singleBlockInitialFilter`, `singleBlockInitialAllowMultiStack` in GregTech's `Client.cfg`, both default false). So machines of one line can differ by who placed them, and nothing in the world shows which. They are saved as NBT `mDisableFilter` and `mDisableMultiStack`.
+- A sneaking Soldering Iron right-click on the front (`onSolderingToolRightClick`) switches Multi Stack Input; the chat says "Multi Stack Input On" or "Multi Stack Input Off". A Screwdriver right-click on the output side or the front switches Input from Output Side; sneaking, the Input Filter. Every click switches, so a step must name the chat line to stop at.
+- Outputs leave only from the output slots (`allowPullStack`). Item auto-output is off on a new machine.
 
-## 2. The GT++ Electric Auto Workbench (`MTEElectricAutoWorkbench`)
+#### 1.1.5 Which recipe runs, and a blocked output **[src]**
 
-All of this section is **[jar]**, with the source **[src]** at `5.09.54.183` (its line numbers match the jar; the key branches were also checked in the bytecode). gt-mechanics §8 (on add-on 12's branch) has its ids, tiers, energy and container items; this section adds what automation can do to it.
+`MTEBasicMachine.checkRecipe` asks the map for one recipe (`findRecipeQuery().items(getAllInputs())...cachedRecipe(mLastRecipe).find()`), the last recipe first. If that recipe's output does not fit (`!canOutput`), it counts `mOutputBlocked` and returns without trying another recipe. Inputs are taken when a run starts (`isRecipeInputEqual(true, ...)`).
 
-### 2.1 Slots
+So a machine that runs two recipes keeps running the last one while its inputs are there, and when that recipe's output cannot leave it waits, even if the other recipe's inputs are present. In a push network producers always run ahead of consumers, so outputs back up as a matter of course; a responder keeps the waiting recipe's inputs topped up, and the other recipe starves. If anything downstream needs the starved recipe, the line deadlocks. AE2 with blocking mode on avoids this: it pushes one recipe's set only into an empty machine, and the outputs go into ME storage.
 
-- 30 slots (`getSizeInventory`): 0–8 input buffer, 9–17 output buffer, 18 the result, 19–27 the 3×3 ghost grid (`getSlotLimit` 1, `isItemValidForPhantomSlot`), 28 the result preview.
-- `isValidSlot(i)` is `i < 19` (line 68): automation never touches the grid or the preview.
+### 1.2 Multiblock input buses (`MTEHatchInputBus`) and Input Separation
 
-### 2.2 What it takes (mode 0, "Normal Crafting Table")
+- An input bus has `(tier + 1)²` slots plus a circuit slot automation never reaches **[jar]**. Items go in only through its front. `allowPutStack` = the front, not the circuit slot, the Input Filter (a recipe-map check, off by default) and, unless `disableLimited`, `limitedAllowPutStack`: an item already in a slot goes only into that slot.
+- **Limiting mode** is off on a new bus. The bus window's button (tooltip "Limit insertion") or a sneaking Screwdriver click turns it on; the Screwdriver steps through Sorting and Limiting, and the chat names both ("Sorting mode On", "Limiting mode On") **[jar, src]**. With it on, each kind holds one slot; with it off, one kind can fill every slot.
+- The input bus lets items be pulled out of its front (`allowPullStack`), so an extractor there takes the inputs back out **[jar]**.
+- **Input Separation** **[jar]**: `MTEMultiBlockBase` starts `inputSeparation` from `IControllerWithOptionalFeatures.getDefaultInputSeparationMode()`, which is `supportsInputSeparation()`; the EBF returns true, so a new EBF has it on. With it on, each input bus is checked alone with its own circuit, so all items of a recipe must reach one bus. The controller window has the button; on the EBF a Screwdriver click on the controller also switches it, and the chat says "Input buses are separated" or "Input buses aren't separated".
+- Output buses take no automated input and push into the block their front faces. Input hatches take one fluid.
+- Main lays one input bus per multiblock, so Input Separation matters only where a layout gives one recipe two or more buses (add-on 15's lanes).
 
-- `allowPutStack` is `mMode == 0 ? aIndex < 9 : aIndex < 18` (line 717): **any item, from any face** (no side test, no filter, no grid test), up to 64 per slot. `allowPullStack` is `mMode == 0 ? aIndex >= 9 : aIndex >= 18` (line 711): slots 9–18 from any face.
-- So a network can put nine stacks of one ingredient (576 items) into it, and then no other ingredient fits.
+### 1.3 The GT++ Electric Auto Workbench (`MTEElectricAutoWorkbench`)
 
-### 2.3 Updates, crafting and the anti-clog moves (`onPostTick`)
+All of this section is **[jar]** with the source **[src]** at `5.09.54.183`; source line numbers match the jar's. gt-mechanics §8 (on add-on 12's branch) has its ids, tiers and energy.
 
-- An update runs when the machine may work, has at least 2,048 EU stored (line 184) and either was just enabled or its countdown ran out; it sets the countdown to 32 ticks (line 186), or to 1 tick after a craft or an ejection. Below 2,048 EU nothing at all happens, not even the push.
-- Everything below happens only while slot 18 is empty (line 196).
-- **Stray**: when the cycled slot (`mCurrentSlot`, 0–17) is one of slots 0–7 and holds an item that is neither in the grid nor the empty container of a grid item, it moves to slot 18 (`isStrayBeingEjectedInModeZero`, line 613–614).
-- **Craft**: the result of the grid; it runs only when slot 17 is empty (line 506) and slots 0–17 hold every grid item in the grid's count; it takes them from the highest slot first, puts container items into 9–17, the result into 18 and draws 2,048 EU.
-- **Failed craft**: when the grid has a result but an ingredient is missing, the **slot-8 stack moves to slot 18** (line 557), whatever it is.
-- **Duplicates**: when the grid has a result and slot 18 is still empty after the above, the later of two stacks of one item in slots 0–8 moves to slot 18, for items that stack above 8 (line 563–569).
-- **Push**: at throughput settings 0 and 1 (`mThroughPut < 2`) every update ends with `GTItemTransfer.outOfMachine(this, back)` (line 584): gtnhlib's `ItemTransfer` defaults move **one stack of up to 64 items** from the pullable slots (9–18, in slot order) into the block behind it, through that block's own insertion rules (`ItemTransfer` constructor: `stacksToTransfer = 1`, `maxItemsPerTransfer = 64` **[jar]**). At settings 2 and 3 nothing is pushed. A new bench is at setting 0; the GUI's throughput button shows only an icon.
+#### 1.3.1 Slots and what it takes
 
-### 2.4 Faces, power and orientation
+- 30 slots: 0–8 input buffer, 9–17 output buffer, 18 the result, 19–27 the 3×3 ghost grid, 28 the result preview. `isValidSlot(i)` is `i < 19`, so automation never touches the grid or the preview.
+- In mode 0 ("Normal Crafting Table") `allowPutStack` is `aIndex < 9` and `allowPullStack` is `aIndex >= 9` (lines 711, 717): **any item, from any face, into any of the nine input slots**, 64 each, with no check against the grid. A network can put nine stacks of one ingredient into it.
 
-- Results leave through the **back** (`isOutputFacing` = back, line 93); the back face carries the pipe overlay texture (`getBack`). Energy enters every face but the back (`isInputFacing = !isOutputFacing`, line 88), at 1 A of V[tier]; at throughput settings 0 and 2 it also sends V[tier] EU/t out of the back (`maxEUOutput`, line 108).
-- Covers fit every face but the front and the back (line 173), so the AE2 and direct modes' output conveyor cover cannot go on its back. A plain Wrench click sets the front to the wrench-grid side (`MetaTileEntity.onWrenchRightClick`), and any face may be the front (`isFacingValid` true).
-- So the bench's back must face the block the results go into (the line's conduit, ME interface or pipe), and the power cable must reach any other face. Laid like a basic machine (front along the row, the side away from the line as its power port, the planner's singleblock rule in `arrange.ts`), a bench whose back points away from the line gets the cable on the one face that takes no EU and pushes its results into that cable: it never crafts.
+#### 1.3.2 One update, in order (`onPostTick`, lines 182–589)
 
-### 2.5 Deadlocks
+An update runs only while at least 2,048 EU is stored, and only when a countdown runs out; the countdown counts down only while the EU is there. After an update with no craft it is 32 ticks, after a craft or an ejection 1 tick. Steps 1–4 run only while slot 18 is empty; step 5 runs every update.
 
-1. **Result cannot leave**: nothing behind the back takes slot 18 (no inventory there, a filter that refuses it, settings 2–3 with no extractor) → no update ever crafts again.
-2. **Ingredient flood**: a push network fills the input buffer with the ingredients that arrive first; the missing one has no room. The bench then ejects slot 8 on every failed update and duplicate stacks when idle; the ejected stack goes out of its back, usually back into the same network, which can hand the same ingredient straight back. Whether the missing ingredient ever gets in depends on timing: a livelock that, with a fast supplier of one ingredient, never ends, and leaks ingredients into whatever else takes them (other benches, the output chest).
-3. **Pushed items it cannot hand on**: an ejected ingredient that the block behind refuses stays in slot 18 → case 1.
-4. With every ingredient capped at about one stack and only grid items delivered, none of this happens: no stray, no duplicate above a stack size of 8, and slot 8 stays empty while the grid has at most 8 distinct items (inserters fill the lowest empty slot first, §4).
+1. **Stray** (line 240): if the slot the bench is looking at is one of slots 0–7 and holds an item that is neither in the grid nor the empty container of a grid item, it moves to slot 18.
+2. **Craft** (lines 502–554): the grid's result, if slot 17 is empty and slots 0–17 hold every grid item in the grid's count. It takes them from the highest slot first, so the output buffer counts too. Container items go into slots 9–17, the result into 18, and 2,048 EU are drawn.
+3. **Failed craft** (lines 557–560): if the grid has a result but something is missing, the **slot-8 stack moves to slot 18**, whatever it is.
+4. **Duplicates** (lines 565–573): if slot 18 is still empty, for each pair of equal stacks in slots 0–8 (items that stack above 8) the later one moves to slot 18. The loop checks slot 18 only once, before it starts. With two or more pairs, each move **overwrites** the stack the previous one put in slot 18, and that stack is gone. A bench holding stacks of one ingredient in slots 0–7 loses all but one of the moved stacks in a single update.
+5. **Push** (lines 581–586): at throughput settings 0 and 1 it moves one stack, up to 64 items, from slots 9–18 in slot order into the block behind it, through that block's own insertion rules, at 10 EU per item moved. Nothing is pushed at settings 2 and 3.
 
-### 2.6 What the networks see
+So once slot 18 holds something the block behind refuses, the bench does nothing more.
 
-- `IMetaTileEntity.isIOSlot` defaults to true and the bench does not override it (nor does `MTEBasicTank` or `MetaTileEntity`) **[jar]**, so `GTItemSink.getStoredItemsInSink` counts all 30 slots, ghost grid and preview included. AE2's blocking mode uses exactly that count for `gt.blockmachines` tiles (§4.2), so **an interface in blocking mode (or smart blocking) never pushes into a bench whose grid is set**: it starves.
-- `getStackInSlot` returns the ghost items too (`CommonMetaTileEntity.getStackInSlot`: any index below the array length) **[src]**, and EnderIO's Limited Item Filter counts every slot of the target (§4.1), so each grid cell holding an ingredient counts as one of it.
-- Project Red's inventory wrapper uses `getAccessibleSlotsFromSide` (slots 0–18), so a Stock Keeper sees only real stock.
+#### 1.3.3 What it matches
 
-### 2.7 Throughput
+- Grid items and stored items must be `GTUtility.areStacksEqual`: the same item, the same damage (or a wildcard) and **exactly the same NBT**.
+- At each update, grid items that are vanilla-damageable (`isItemStackDamageable`) and have a container item get a wildcard damage (lines 188–192). GT tools are not vanilla-damageable: `MetaGeneratedTool` keeps its wear in NBT and leaves the item's max damage at 0.
+- Ore-dictionary cells of a recipe hold one concrete item in the grid, and only that item is used. The pattern of a shaped recipe must be in its shape.
 
-- In mode 0 a craft needs 2,048 EU: 64 ticks at LV (0.3125/s), 16 at MV (1.25/s), 4 at HV (5/s), 1 tick from EV (gt-mechanics §8). One result stack leaves per update.
+#### 1.3.4 Tools
 
-## 3. Multiblock input buses and hatches
+- **GT tools**: `MetaGeneratedTool.getContainerItem` returns a copy with new wear in its NBT. The bench puts it into the output buffer, where it no longer matches the grid, so the next craft fails. One craft per fresh tool.
+- **GGFab single-use tools** (`ggfab:gt.ggfab.d1`, class `GGMetaItemDumbItems`): File, Wrench, Crowbar, Wire Cutter, Hard Hammer, Screwdriver, Saw and Soft Mallet, ore-dictionaried `craftingToolFile` and so on. They have no container item (`GTGenericItem.getContainerItem` returns null) and stack to 64 (`MetaBaseItem.getItemStackLimit`), so a craft uses one up like any ingredient. They are made in the Fluid Solidifier at 120 EU/t with a non-consumed Mold (Single Use …), e.g. 144 L Molten Steel → 64 Single Use Files in 1 s **[export]**. Each mold is crafted from a Hard Hammer, an Empty Shape Plate and the tool.
+- In the export, 26,870 of the 60,417 crafting recipes take a tool (a `craftingTool*` ore slot, or a slot that only takes a GT tool item). In 24,674 of them every tool slot is one of the eight single-use kinds. The rest need a Mortar (145), Knife (56), Rolling Pin (4), Soldering Iron (1) or Scoop (1), or take a GT tool item directly (1,989) **[export]**.
+- The planner's loader marks every tool slot not consumed (`isToolSlot`, `TOOL_ORE_PREFIX`), and names the slot after its first option, which for a file slot is the Single Use File. On a bench that is wrong: a single-use tool is used up each craft.
 
-- **Input bus** (`MTEHatchInputBus`) **[jar]**: `(tier + 1)²` slots (`MTEHatch.getSlots`) plus a circuit slot that automation never reaches (`isValidSlot`, `allowPutStack`). Items go in only through its front. `allowPutStack` (line 255–257) = front, not the circuit slot, the Input Filter (`mRecipeMap.containsInput`, only while the multiblock has set the map and the filter is on) and, unless `disableLimited`, `limitedAllowPutStack` (line 261–263): an item already in a slot goes only into that slot, else only into an empty slot. A new bus has `disableFilter = true` and `disableLimited = true` (constructors), then the filter follows the placer's `inputBusInitialFilter` (default false).
-- **Limiting mode**: the GUI toggle with the tooltip "Limit insertion / Up to 1 stack of each item can be inserted" (`addOneStackLimitButton`), or a sneaking Screwdriver click, which steps Sorting and Limiting: from a new bus (Sorting On, Limiting Off) one click gives "Sorting mode On   Limiting mode On", the next both Off, the next Sorting On and Limiting Off **[src]** (line 222–243). With it on, each kind holds one slot; with it off one kind can fill every slot.
-- The input bus **lets items be pulled out of its front** (`allowPullStack`: front, any slot but the circuit) **[jar]**, so an extractor on its front takes the inputs back out.
-- **Input Separation** **[jar]**: `inputSeparation` starts as `getDefaultInputSeparationMode()` = `supportsInputSeparation()`, which the EBF returns true. With it on, `doCheckRecipe` tries each input bus alone (its slots and its own circuit, plus the controller slot); with it off it merges every bus of one colour (`getStoredInputsForColor`). So with it on, all items of a recipe must reach the same bus. It is the controller GUI's Input Separation button.
-- **Output bus**: no automated input (`allowPutStack` false), pushes into the block its front faces every 8 ticks; it can be locked to one item (`IItemLockable`, the filter slot in its window), and a multiblock fills locked buses first (add-on 15's research).
-- **Input hatch** (`MTEHatchInput`): one fluid, `8000 × 2^tier` L (gt-mechanics §3.8); its filter (`isFluidInputAllowed`) is the map check, off by default (`inputHatchInitialFilter` false).
+#### 1.3.5 Faces, power, covers, tank and buttons
 
-## 4. What each network does when it pushes
+- Results leave through the **back** (`isOutputFacing` = back), the face with the pipe overlay. Energy enters every face but the back (`isInputFacing`), at 1 A of V[tier]. At throughput settings 0 and 2 it also emits V[tier] out of its back.
+- Covers fit every face but the front and the back (`allowCoverOnSide`), so no conveyor cover on its back. A Wrench click on a face makes that face the front (`MetaTileEntity.onWrenchRightClick`); any face may be the front.
+- It has a 16,000 L tank that any face fills (`canTankBeFilled`). With fluid in it, it fills empty containers in slots 0–17 and puts them into slots 0–8, where they are strays unless the grid uses them. Keep fluid pipes and fluid conduit faces off it.
+- GUI: the bottom-left button is the mode (tooltip "Mode: Normal Crafting Table" for mode 0); the top-left button is the throughput setting (icons only; a new bench is at 0).
 
-### 4.1 EnderIO 2.10.46 item conduits
+#### 1.3.6 What the networks see
 
-- **Insertion** **[jar]**: `NetworkedInventory.insertItem` asks the face's Insert-side filter, then `EnderCore ItemUtil.doInsertItem`, which for an `ISidedInventory` walks `getAccessibleSlotsFromSide`, asks `canInsertItem` per slot, merges into existing stacks and puts the rest into the **first** empty slot that takes it (one empty slot per insertion). So the GT rules of §1 and §3 hold, and an item enters the lowest free input slot.
-- **Extraction**: an Extract (or In / Out) side pulls 4 + 4 × speed upgrades items from one source slot at a time (round robin over the source's slots), offers them to the Insert sides of its colour in priority and distance order (or round robin) and moves only what they take (`insertIntoTargets`). There is no amount limit beyond what the target takes.
-- **Filters** (`crazypants.enderio.conduit.item.filter`) **[jar]**: Basic (5), Advanced (10) and Big (24) Item Filters are whitelists or blacklists, matching meta and NBT by default; the Existing Item Filter passes only items the target already holds; the Mod and Power filters do not count. None of them limits an amount.
-- **Limited Item Filter** **[src]** (jar classes `ItemLimitedItemFilter`, `ItemFilterLimited`; method calls checked in the jar): 10 ghost slots, each with a count of 1–64 set in its window (a stack held on the slot, then Shift-click or the wheel adjusts by 10). `getMaxCountThatCanPassFilter(item)` = the sum of the counts of the slots that match it (so one item may be given more than 64 with two slots). As an Insert-side filter, `insertItem` inserts at most `max − count`, where `count` is every matching item in **every slot of the target** (`getInsertLimit` walks `getSizeInventory()` with `getStackInSlot`), and nothing when that is ≤ 0; an item the filter does not list has a max of 0, so the filter is also a whitelist. As an Extract-side filter it extracts only what the source holds above the count (`getInsertLimitInv`). The pack has it: `EnderIO:itemLimitedItemFilter@0`, made in the assembler from an Advanced Item Filter and a Comparator at 120 EU/t, 300 ticks (export).
-  - For a GT basic machine the count is its stock (input slots; the circuit slot holds only a programmed circuit). For an Auto Workbench it includes one per ghost-grid cell holding the item (§2.6), so the number to set is the stock wanted plus the cells.
-- **Machines pushing into a conduit**: a conduit bundle is a cofh `IItemDuct`; `ItemConduit.insertItem(face, stack)` takes a pushed stack only through a face whose mode accepts input (Extract or In / Out, `ConnectionMode.acceptsInput`) and whose Extract-side filter passes it, and sends it on like an extraction **[jar]**. gtnhlib's `ItemUtil.getItemSink` wraps an `IItemDuct` (`ItemDuctSink`) **[jar]**, so the Auto Workbench's back push reaches the conduit. Self feed off keeps a face from inserting into its own inventory (`updateInsertOrder`: `other != this`).
+- `IMetaTileEntity.isIOSlot` defaults to true and the bench does not override it (only `MTEBasicMachine` does in the GT jar), so `GTItemSink.getStoredItemsInSink` counts all 30 slots, ghost grid and preview included. AE2's blocking mode uses that count for `gt.blockmachines` tiles (§2.3), so **a blocking interface never pushes into a bench whose grid is set**.
+- `getStackInSlot` returns the ghost items too, so EnderIO's Limited Item Filter counts one item per grid cell (§2.1).
+- Project Red sees slots 0–18 (`getAccessibleSlotsFromSide`): its Stock Keeper counts real stock, the output buffer and slot 18 included.
 
-### 4.2 AE2 rv3-beta-1073-GTNH interfaces
+#### 1.3.7 Throughput
 
-- **How a GT tile is reached** **[src, jar]**: `InventoryAdaptor.getAdaptor` asks the tile's `InventoryAdaptor` capability (GT has none), then `ItemUtil.getItemIO`, which for a GT tile builds gtnhlib's `WrappedItemIO(InventoryItemSource, GTItemSink)` (`CommonMetaTileEntity.getItemSink`) **[jar]**. `InventoryItemSink.store` fills matching stacks first, then empty slots, asking `canInsertItem` per slot **[jar]**, so §1 and §3 hold.
-- **`pushPattern`** (`DualityInterface` line 1216–1351) **[src, jar]**: refuses while the interface still has items to send or a crafting lock is on. For every target side: an `ICraftingMachine` that `acceptsPlans()` (a Molecular Assembler) gets the whole pattern; any other inventory first passes the blocking test (below), then gets each stack with `addStack`, leftovers moving on to the next side; whatever no side took goes to the interface's **send list** (`addToSendList`) and the push still counts as done. While the send list holds anything the interface is busy (`isBusy`, `hasItemsToSend`) and pushes nothing new. There is no "only if all of it fits" test, so a pattern can arrive in parts.
-- **Targets**: a full-block ME Interface pushes into every neighbour (`TileInterface.getTargets`: all six sides unless rotated to point at one with a wrench, `setSide`) **[src]**; one pattern's stacks can spread over several machines. The probe found no interface of main's layouts touching a second inventory.
-- **Blocking mode** (interface GUI "Blocking Mode", tooltip "Do not push crafting items if inventory contains items") **[src, jar]**: a side is skipped when `ad.containsItems()` and not `inventoryCountsAsEmpty`. For any `gt.blockmachines` tile `inventoryCountsAsEmpty` (line 1031–1050) asks `GTItemSink.getStoredItemsInSink` with a predicate that ignores the blocking-ignore registry, which GT fills with the programmed circuit, every mold and extruder shape and the lenses (`AE2Compat.registerBlockingModeIgnoreItems`) **[src]**; `GTItemSink` counts the slots `isIOSlot` names: a basic machine's input slots (`MTEBasicMachine.isIOSlot`, the only override in `$GT` **[jar]**), every slot of anything else (input buses, the Auto Workbench). So for a GT basic machine blocking means "push only when its inputs hold nothing but a circuit, mold, shape or lens": one set at a time; GT takes a run's inputs when the run starts, so the next set goes in while the run works and nothing idles. A held item that is not on the list keeps the machine from ever counting as empty: the Packager's schematic (`MTEBoxinator` holds it in its second input slot) is not registered, so a blocking interface never pushes into a Packager. For the Auto Workbench it is never empty either (§2.6). Smart blocking (tooltip "Allows inserting the same recipe") lets the same pattern be pushed again and blocks only a different one; its first push still needs an empty target.
-- **Locking Card** (`appliedenergistics2:item.ItemMultiMaterial@65`, upgrade `LOCK_CRAFTING`): the interface's "Lock Crafting" setting gains "Until crafting result is returned" (`LOCK_UNTIL_RESULT`): after a push it intercepts the network's storage and pushes nothing more until the pattern's outputs have come back (`onPushPatternSuccess`, `injectItems`) **[src]**. That keeps one craft in flight.
-- **Molecular Assembler** (`TileMolecularAssembler`) **[src]**: takes a crafting pattern only while its nine slots are empty (`pushPattern`), crafts in 100 progress points at 10–50 a tick (10 to 2 ticks with Acceleration Cards), pushes the result back toward the interface. It cannot be overfilled. Its recipe needs an Advanced Assembling Machine III and titanium plates (export), far above MV.
-- **Fluids in a plain interface's pattern** **[src, jar]**: `pushPattern` turns a fluid stack into `Platform.stackConvertPacket` = an ae2fc `ItemFluidPacket` item (`setMaxStackSize(1)` **[jar]**) unless the interface is a Dual Interface. A GT machine with the Input Filter off takes the packet into a free input slot, where no recipe uses it; with the filter on, or no free slot, it waits in the send list and the interface is stuck.
-- **Jobs**: a crafting CPU completes when the requested output arrives (`CraftingCPUCluster.completeJob`); a pattern whose output a later pattern needs must deliver that output into ME storage, or the job waits for ever. Fluids piped from machine to machine, and chanced outputs that come back short, never arrive.
+A craft needs 2,048 EU: 64 ticks at LV (0.31/s), 16 at MV (1.25/s), 4 at HV, 1 from EV. A recipe that returns a container (a bucket, a cell) crafts at most every second update, because the push moves the container stack first and slot 18 must be empty to craft (0.61/s at MV in the model).
 
-### 4.3 Project Red 4.12.44-GTNH routed pipes
+#### 1.3.8 When a bench is safe (the cap rule)
 
-All **[src]** in Scala, with the chip classes' calls and constants checked in the jar.
+A bench never strays, ejects or deletes when, for every ingredient i with a_i per craft:
 
-- **Item Responder Chip** (`ChipItemResponder.getSyncResponse`): if its filter (9 slots) allows the item, answers with `room = InvWrapper.getSpaceForItem(item)` over the slots `getAccessibleSlotsFromSide` gives; `TDefWrapHandler.getSpaceForItem` (MrTJPCore) adds a full stack for every empty slot that passes `canInsertItem` and the rest of every matching stack. Items already on their way are not subtracted. The Dynamic Item Responder accepts only items the target already holds, the Overflow Responder is the low-priority catch-all, the Terminator a sink; none limits amounts.
-- **Item Extractor Chip** (`ChipExtractor`): every 10 ticks, for each item the inventory offers through its side (a GT machine: its output slots; an input bus: every slot but the circuit), up to 64 items to responders found by `getLogisticPath(item, exclusions, true)`: the `true` excludes its own router, so it never routes back to its own machine.
-- **Arrival** (`PayloadPipePart.passToInventory`): `injectItem` merges, then fills empty slots (each asking `canInsertItem`); what does not fit bounces back into the pipe and is routed again (`resolveDestination`), or wanders through the routed pipes until something has room. The pack's `ProjectRed.cfg` sets "Routed Pipes: Max Wander Distance" to 0 **[cfg]**, which `Configurator.maxPipesWandered` documents as "0 for unlimited" **[src]**, so wandering items are never erased.
-- **Item Stock Keeper Chip** (`ChipStockKeeper`): every 100 ticks (up to 60 s slower while it requests nothing; a neighbour change resets it), for each of its 9 stock slots (counts up to 255) requests `min(stock − (stored + en route + promised), free space, 128)`; modes "when missing" (fill to the count), "when empty", "infinite". Only broadcasters and crafting chips fill requests.
-- **Item Broadcaster Chip** (`ChipBroadcaster`): offers what its inventory holds through its side to requests and extracts on demand (≤ 64 per operation, never more than the requester has room for, `getActiveFreeSpace`).
-- **Crafting Chip** (`ChipCrafting`): promises its recipe's result and requests exactly the ingredients for each order (UNVERIFIED in game for GT machines).
-- **Pipes take no pushes**: no routed pipe part implements `IInventory` or `ISidedInventory` **[jar]**, so a machine's own push (GT auto-output, the Auto Workbench's back push) into a routed pipe moves nothing; only chips move items.
+- only grid items ever reach slots 0–8 (a whitelist, or exact AE2 patterns);
+- its stock s_i (what sits in slots 0–8) stays between a_i and its stack size, so it always merges into one slot: no duplicate pairs;
+- Σ ⌈s_i / stack size_i⌉ ≤ 8, so slot 8 stays empty: inserters fill the lowest empty slot first, so a failed craft (a missing ingredient) has nothing to eject;
+- the block behind takes the result and the container returns (AE2 interface, EnderIO extract filter, or the routed Extractor pulling them).
 
-### 4.4 GT pipes and covers (machine to machine)
+A recipe that needs all nine input slots for one craft (nine kinds, or unstackable ingredients filling nine slots) cannot meet the third rule: each shortage ejects slot 8. Only AE2 with a Locking Card (one whole set at a time) or hand crafting fits it.
 
-- A GT item pipe hands a stack to any block that takes it through its neighbour's own rules; the Filtered Conveyor Cover never stops a pipe (`letsItemsIn` true for every item); the Shutter Module Cover on "Only Input allowed" does; conveyor covers below mode 6 let items only out (export) or only in (import) (`CoverConveyor.letsItemsIn/Out`) **[src]** (add-on 15's research has the rest).
-- None of them limits an amount. The Robot Arm cover (`CoverArm`) can import into one chosen slot of its host (`setSinkSlots(internalSlotId − 1)`, one stack per operation) **[src]**, which is the only GT part that can give an Auto Workbench ingredient a slot of its own (UNVERIFIED in game).
+#### 1.3.9 Model runs [model]
 
-## 5. Audit of main's layouts [probe]
+A Resistor bench at MV (grid: Sticky Resin, Fine Copper Wire, Sticky Resin / 1x Copper Wire, Carbon Dust, 1x Copper Wire / –, Fine Copper Wire, –), 20 minutes, suppliers at full speed: Sticky Resin 1/s, each wire 2/s, Carbon Dust 0.1/s from the 60th second.
 
-Method: a scratch worktree of main (`7c14d4f`), the active export, no world (`no-world` layouts), five lines in routed, AE2 and EnderIO: an Electronic Circuit line at MV (1/min, 12 MV machines and 4 crafting-table steps, also once with crafting automated), Red Alloy Ingot (60/min), the LV Electric Motor (6/min) and Vacuum Tube (30/min), MV. For every machine input the probe listed the machine's input slots (§1.1), its held items, and what the mode's part there lets in (chip whitelist, pattern, conduit insert filter). On main a crafting-table step is a pseudo machine (mteId −1 or −3) and is never laid out, so no Auto Workbench appears; §5.4 says what today's parts would do to one.
+| Feed | Crafts | Ejections | Deleted | End state |
+|---|---|---|---|---|
+| EnderIO Basic Item Filter (whitelist of the grid), extract filter = Resistor | 0 | 2 | 3 | slot 18 holds Copper Wire the face refuses: dead |
+| The same, extract filter passing everything | 113 | 2,320 | 4,038 | runs, but 1,084 ingredients leak to other faces |
+| EnderIO Limited Item Filter, 2 crafts + grid cells (6, 6, 6, 3) | 113 | 0 | 0 | runs at the Carbon Dust rate |
+| Project Red Item Responder (whitelist of the grid) | 0 | 2 | 2 | dead, as the first row |
+| Project Red Item Stock Keeper, 2 crafts | 113 | 0 | 0 | runs |
+| AE2, blocking off, pattern = grid, jobs of 10 / 200 / 2,000 | all, at the EU limit | 0 | 0 | a big job fills all nine slots, harmlessly |
+| AE2, pattern holding another Fine Copper Wire item than the grid, job of 500 | 0 | 1,241 | 1,816 | the whole job pushed and churned |
+| The same with a Locking Card | 0 | 1 | 0 | one set pushed, the job waits visibly |
 
-### 5.1 Every input that can overfill or deadlock
+With every supplier fast, the Stock Keeper's 100-tick cadence caps the bench: 2 crafts of stock gave 0.40 crafts/s, 4 gave 0.80, 8 gave 1.24 (the MV maximum). The Limited Item Filter refills at once, and 2 crafts gave 1.24. The Locking Card cost AE2 no throughput in the model, whichever of the interface and the bench ticked first.
+
+### 1.4 The AE2 Molecular Assembler
+
+It takes a crafting pattern only while its nine slots are empty, so it cannot be overfilled **[src]**. Its recipe is an HV assembler recipe (480 EU/t: an Advanced Assembling Machine III, 4 Titanium Plates, a Formation Core, an Annihilation Core and 288 L Molten Glass) **[export]**, so an MV group cannot build it. It has the same tool problem as the bench: a pattern holds exact items, so tool recipes need single-use tools there too.
+
+## 2. How each mode pushes
+
+### 2.1 EnderIO 2.10.46 item conduits
+
+- **Insertion** **[jar]**: `NetworkedInventory.insertItem` applies the face's Insert-side filter, then EnderCore's `ItemUtil.doInsertItem` walks `getAccessibleSlotsFromSide`, asks `canInsertItem` per slot, merges into existing stacks and puts the rest into the **first** empty slot (one per insertion). So §1's rules hold, and an item enters the lowest free slot.
+- **Extraction**: an Extract or In / Out side pulls 4 items, plus 4 per speed upgrade, every 10 ticks, from one source slot at a time, and offers them to the Insert sides of its channel colour in priority and distance order (or round robin). It moves only what they take.
+- **Filters**: Basic (5), Advanced (10) and Big (24) Item Filters are whitelists or blacklists that match meta and NBT by default; none limits an amount. An empty whitelist passes nothing.
+- **Limited Item Filter** (`ItemFilterLimited`, item `EnderIO:itemLimitedItemFilter@0`) **[src, jar]**: 10 slots, each with a count of 1 up to the item's stack size (shift-click or the wheel steps by 10). Its limit for an item is the sum of the counts of the slots that match it. On an Insert side, `NetworkedInventory.insertItem` inserts at most `limit − count`, where `count` is that item in **every slot of the target** (`getInsertLimit` walks `getSizeInventory()` with `getStackInSlot`), and nothing at or below 0. An item it does not list has a limit of 0, so it is also a whitelist. For an Auto Workbench the count includes one per grid cell holding the item, so the number to set is the stock wanted plus its grid cells. Recipe: an Advanced Item Filter and a Comparator in an assembler, 120 EU/t, 15 s **[export]**.
+- **Pushes into a conduit**: a conduit takes a stack a machine pushes (`ItemConduit.insertItem`) only through a face that extracts (Extract or In / Out) and whose Extract-side filter passes it; gtnhlib wraps the conduit (`ItemDuctSink`), so the bench's push reaches it. Self feed off keeps a face from inserting into the inventory it took from.
+
+### 2.2 Project Red 4.12.44-GTNH routed pipes
+
+All **[src]** in Scala, with the chip classes' defaults and returns checked in the jar.
+
+- **Item Responder Chip** (`ChipItemResponder.getSyncResponse`): if its filter allows the item, it answers with the room `InvWrapper.getSpaceForItem` finds: a full stack for every slot that is empty and passes `canInsertItem`, plus what fits on matching stacks. The interface pipe (`RoutedInterfacePipePart.getSyncResponse`) then subtracts what is already on its way there (`transitQueue`): the same item's count, and a full stack per slot that other items in transit will need. Revision 1 said it did not; it does. It still overshoots on an empty machine with Multi Stack Input Off: each empty slot counts a stack, the machine takes one; the extra bounces and is routed again.
+- **Item Extractor Chip** (`ChipExtractor`): a new chip is a **whitelist with an empty filter** (`TChipFilter.$init$`: `filterExclude = false`), and it extracts only items with `filter.hasItem(item) != filterExclude`, so a bare chip extracts nothing **[jar]**. Every 10 ticks it lists every item in every slot the machine shows that side (inputs included), and for each one it finds a route (never back to its own machine) and extracts up to 64. When an extraction finds nothing to take (an input item, which GT does not let out), it **abandons the whole update** (Scala `return` inside the loop; a `NonLocalReturnControl` throw in the jar). So it must whitelist the machine's outputs.
+- **Item Broadcaster Chip** (`ChipBroadcaster`): a new chip is a **blacklist** with an empty filter (`filterExclude = true`), so it offers everything the machine shows, inputs included. It promises what a request asks for and extracts it every 10 ticks (up to 8 stacks or 64 items, never more than the requester has room for); when its extraction fails it drops the order (`timeOutOnFailedExtract`), and the requester asks again later. It must whitelist the machine's outputs.
+- **Item Stock Keeper Chip** (`ChipStockKeeper`, trait `TChipStock`): 9 stock slots, counts up to 255, mode "when missing" by default. Every 100 ticks, plus 10 ticks per earlier pass that requested nothing (at most 1,200 more), it requests for each stock item `min(stock − (stored + en route + promised), room, 128)`. A change next to it resets the slowdown (`onNeighborTileChanged`). Only Broadcaster and Crafting Chips fill its requests.
+- **Item Terminator Chip**: a filtered responder at priority "Terminated", below every Item Responder ("Passive") and above the Overflow Responder ("Default"). Routing prefers the higher priority.
+- **Arrival** (`PayloadPipePart.passToInventory`): `injectItem` merges, then fills empty slots; what does not fit bounces back and is routed again, or wanders. The pack's `ProjectRed.cfg` sets "Routed Pipes: Max Wander Distance" to 0, which means unlimited **[cfg]**: a wandering item is never erased.
+- **Restart**: an item in a pipe saves only its stack and travel data (`AbstractPipePayload.save`); its destination and every pipe's in-transit count are not saved. After a restart, items whose only destination was a request (not a responder) wander, and Stock Keepers ask again.
+- **Pipes take no pushes**: no routed pipe part is an inventory **[jar]**, so a machine's own push into a routed pipe moves nothing; only chips move items.
+
+### 2.3 AE2 rv3-beta-1073-GTNH interfaces
+
+- **How a GT tile is reached** **[src, jar]**: GT has no `InventoryAdaptor` capability, so AE2 uses gtnhlib's `WrappedItemIO` over GT's `GTItemSink`, which fills matching stacks first, then empty slots, asking `canInsertItem` per slot.
+- **`pushPattern`** (`DualityInterface`) **[src, jar]**: it refuses while the interface still has items to send or a crafting lock is on. For each target side, a machine that accepts whole patterns (a Molecular Assembler) gets the pattern; any other inventory first passes the blocking test, then gets each stack, leftovers moving on. What no side took goes to the interface's send list, and the push still counts as done; the interface retries the list on its own tick and is busy until it is empty. There is no "only if it all fits" test.
+- **Targets**: a full-block ME Interface pushes into every neighbour unless a Wrench points it at one. On main no interface touches a second inventory **[probe]**.
+- **Blocking mode** ("Do not push crafting items if inventory contains items"): a side is skipped unless it counts as empty. For a `gt.blockmachines` tile, empty means `GTItemSink.getStoredItemsInSink` finds nothing outside AE2's blocking-ignore registry. `GTItemSink` counts the slots `isIOSlot` names: a basic machine's input slots, and every slot of anything else (input buses, the Auto Workbench). GT registers (`AE2Compat.registerBlockingModeIgnoreItems`) the programmed circuit, its 31 molds (`gregtech:gt.metaitem.01` 32301–32331), 28 extruder shapes (32350–32377), 2 slicer blades (32398–32399), its own and BartWorks' lenses and a few special lenses; AE2 adds its inscriber presses and blood orbs **[src, export]**. Not registered, so a blocking interface **never** pushes into a machine holding one: the Packager's schematic, GGFab's single-use tool molds, TGregworks' Shard Casts and TConstruct's casts (neither jar registers anything **[jar]**). Smart blocking skips the test when the pattern is the one pushed last, so its first push still needs an empty target. The Advanced Blocking Card only matters when the target is another interface.
+- For a basic machine with blocking on, the next set goes in when the run starts (GT takes the inputs then), so nothing idles and every kind holds one set at most.
+- **Locking Card** (`appliedenergistics2:item.ItemMultiMaterial@65`, upgrade `LOCK_CRAFTING`): adds Lock Crafting "Until crafting result is returned" (`LOCK_UNTIL_RESULT`): after a push the interface pushes nothing more until the pattern's result has entered the network **[src]**. The export has only an opaque crafting recipe for it **[export]**.
+- **Fluids in a plain interface's pattern** **[src, jar]**: `pushPattern` turns a fluid stack into an ae2fc Fluid Packet item (stack size 1) unless the interface is a Dual Interface. A GT machine with the Input Filter off takes the packet into a free input slot for good; with the filter on, or no free slot, it waits in the send list and the interface is stuck.
+- **Jobs**: a crafting CPU completes when the requested outputs arrive. A pattern whose output a later pattern needs must deliver that output into ME storage, or the job waits for ever. Fluids piped from machine to machine, and chance outputs that come back short, never arrive.
+
+### 2.4 GT pipes and covers (machine to machine)
+
+- A GT item pipe hands a stack to any block that takes it, by the block's own rules. The Filtered Conveyor Cover never stops a pipe; the Shutter Module Cover on "Only Input allowed" does; conveyor covers below mode 6 let items only out or only in (add-on 15's research has the rest). None limits an amount.
+- The Robot Arm cover (`CoverArm`) can import into one chosen slot of its host (`setSinkSlots`, one stack per operation; the chat says "Grabs in for own Slot #n" for slot n − 1) **[src]**. Its `letsItemsIn` is true for every slot, so a pipe touching the same face still pushes anywhere: an arm can only give a bench ingredient its own slot by pulling from a buffer inventory that does not push (UNVERIFIED in game).
+
+## 3. Per machine kind and mode: what to lay, what it costs, what the steps say
+
+Free settings cost a tool click. Prices of the new parts: the Item Stock Keeper, Broadcaster and Terminator Chips are circuit-assembler recipes like the Responder (4 chips per LV circuit, a plate and two Illumar; 30 EU/t); the Limited Item Filter is an Advanced Item Filter and a Comparator (MV assembler); the Locking Card has only an opaque recipe in the export; a Robot Arm cover is an LV Robot Arm (2 LV motors, an LV piston, 2 steel rods, an LV circuit, 3 tin cables) **[export]**.
+
+### 3.1 GT singleblock machines
+
+| Mode | Fed 1 kind | Fed 2+ kinds | Cost |
+|---|---|---|---|
+| Direct | as add-on 15 plans | Multi Stack Input Off (add-on 15 plans it); kinds ≤ input slots − held at the machine's tier | free |
+| Routed | Item Responder Chip (whitelist: its inputs) + Item Extractor Chip (whitelist: its outputs) | the same + Multi Stack Input Off | the Extractor whitelist is free; same chips as today |
+| AE2 | one processing pattern of item inputs → whole guaranteed item outputs; blocking mode on, unless it holds an item off AE2's ignore list | the same; Multi Stack Input Off advised (blocking keeps one set anyway) | free |
+| EnderIO | as today (Basic, Advanced or Big Item Filter whitelists) | as today + Multi Stack Input Off | free |
+
+Overfill and deadlock risk without it: with Multi Stack Input On, routed and EnderIO deadlock (the first kind to arrive takes every free input slot); AE2 does not, because each push brings every kind.
+
+### 3.2 Input buses and multiblocks
+
+| Mode | Configuration | Risk without it |
+|---|---|---|
+| Every mode, bus fed 2+ kinds | Limiting mode on | one kind fills every slot of the bus |
+| Every mode, one recipe through 2+ buses | all its items on one bus, or Input Separation off | each bus is checked alone: no bus ever holds a whole set |
+| Routed | Responder only on an input bus (never an Extractor); Extractor (whitelist: outputs) only on an output bus | an extractor on an input bus pulls the inputs back out (two EBFs pass dust back and forth) |
+| AE2 | blocking mode on (the circuit slot's programmed circuit is ignored) | the interface fills every free slot |
+
+### 3.3 A machine shared by two or more steps (add-on 12's sharing pools)
+
+- **Routed**: never share. §1.1.5: the machine reruns one recipe and waits on its blocked output while responders top up its inputs; the other recipe starves.
+- **AE2**: share, with blocking mode on (one recipe's set at a time; outputs go to ME, never blocked). Only machines whose held items are all on AE2's ignore list; the kinds of the largest recipe must fit the machine's own input slots at its tier, minus held items.
+- **Direct, EnderIO**: never share (add-on 12 already rules so).
+
+### 3.4 The Auto Workbench
+
+| Mode | How it takes items there | Configuration | Cost per bench |
+|---|---|---|---|
+| Every mode | — | mode "Normal Crafting Table"; the grid exactly the recipe, cell by cell in its shape, single-use tools in tool cells; the back (pipe overlay) against the line's logistics block, the front away from it; power to the front or a side, never the back; no fluid face; the top-left button on its first state | free |
+| Direct | a pipe or conveyor fills all nine slots with whatever it carries | no pipe until add-on 15 tests Robot Arms: one arm per ingredient (at most 4: covers fit neither front nor back), each pulling from a buffer chest at its lane's end into a slot of its own | per ingredient: 1 Robot Arm cover + 1 chest (UNVERIFIED) |
+| Routed | a responder answers with the room of all nine slots | Item Stock Keeper Chip (each ingredient at its stock, §3.6) + Item Extractor Chip (whitelist: its container returns, and its result when a machine's responder or the output chest takes it); + Item Broadcaster Chip (whitelist: the result) when another bench takes it. Each maker of a bench ingredient: + Item Broadcaster Chip (whitelist: its outputs that benches take). A bench-only item (one no responder takes) is on no Extractor's whitelist, only on Broadcasters'. The input chest: + Item Broadcaster Chip for raw inputs benches take. The output chest: + Item Terminator Chip (whitelist: the bench-only items), which catches them only when they lose their way, after a restart | 1 Stock Keeper instead of a Responder; 1 Broadcaster per supplier; 1 Terminator per line |
+| AE2 | blocking never pushes into a bench (its grid counts); blocking off pushes whole sets until the slots are full | blocking mode off; a **Locking Card** on "Until crafting result is returned"; one processing pattern of exactly the grid's items (single-use tools included) → the result (+ container returns); no conveyor cover (the bench pushes into the interface itself) | 1 interface, 1 pattern, 1 Locking Card |
+| EnderIO | a whitelist filter lets one ingredient fill all nine slots | the face on its back In / Out; Insert: a **Limited Item Filter**, each ingredient at its stock plus its grid cells; Extract: a Basic Item Filter with the result and container returns | a Limited Item Filter instead of a Basic one |
+
+Why the Locking Card is required in AE2: with exact patterns a flood is harmless (crafts never fail, §1.3.9), but a pattern holding another variant of an ingredient than the grid makes the bench churn the whole job and delete stacks; with the card it stops after one set and the job waits where the player can see it.
+
+### 3.5 AE2 steps without a whole item output, or without an item input
+
+- A step whose item outputs are none or only chanced (a Fluid Extractor, a Centrifuge whose outputs are all chanced): no pattern. An ME Export Bus on its middle-row face, filtered to its item inputs, keeps it fed (with Multi Stack Input Off it stops at one stack a kind); it runs whenever storage has them, and its chanced outputs return through its conveyor cover.
+- A step whose only input is a piped fluid (the Fluid Solidifier making Glass Tubes): no pattern and no feed; it runs from its pipe and its output returns to ME. Jobs then rely on stock.
+- Every other pattern: item inputs only (no fluid the line pipes, no held item, no circuit) → whole, guaranteed item outputs only (chanced byproducts still return to storage).
+
+### 3.6 Sizing a bench's stock
+
+For ingredient i with a_i per craft, r the bench's planned crafts per second and t the travel time from its suppliers:
+
+- EnderIO: s_i = 2 a_i (the Limited Item Filter refills at once). The Limited count is s_i plus the item's grid cells.
+- Routed: s_i = a_i × max(2, ⌈r × (5 s + t)⌉), because the Stock Keeper asks every 100 ticks at best.
+- Either: s_i ≤ the item's stack size, and Σ ⌈s_i / stack size⌉ ≤ 8; else the recipe is not safe on that mode (AE2 with a Locking Card, or by hand).
+- Example, the Electronic Circuit line's benches at 1 per minute (counts in a Limited Item Filter): Resistor — Sticky Resin 6, Fine Copper Wire 6, 1x Copper Wire 6, Carbon Dust 3; Circuit Board — 1x Copper Wire 24, Coated Circuit Board 3; Vacuum Tube — 1x Copper Wire 9, Fine Copper Wire 6, Glass Tube 3, Steel Rod 6, Red Alloy Bolt 3; Coated Circuit Board — Sticky Resin 18, Wood Plank 9; Steel Rod by file — Single Use File 3, Steel Ingot 3.
+
+### 3.7 Build and configure step wording
+
+- GT singleblock fed 2+ kinds: "Multi Stack Input off: sneak-right-click its front with a Soldering Iron (where a neighbour covers the front, the edge of the wrench grid toward it) until the chat says "Multi Stack Input Off"" (add-on 15's words).
+- Input bus fed 2+ kinds: "Limiting mode on: sneak-right-click it with a Screwdriver until the chat says "Limiting mode On"" (add-on 15's words).
+- Multiblock with one recipe through 2+ buses: "Input Separation off: the controller window's Input Separation button (on the EBF, a Screwdriver right-click on the controller) until the chat says "Input buses aren't separated"".
+- Auto Workbench, place: "Place 1× Auto Workbench (MV) with its back, the face with the pipe opening (the front shows a crafting grid), against the <conduit / ME interface / routed pipe>: with a Wrench, right-click its side away from the middle row to make that its front. Run its power cable to the front or a side, never the back, and keep fluid pipes off it."
+- Auto Workbench, configure: "Mode Normal Crafting Table (the bottom-left button; its tooltip names the mode). Grid, top row first: Sticky Resin, Fine Copper Wire, Sticky Resin / 1x Copper Wire, Carbon Dust, 1x Copper Wire / empty, Fine Copper Wire, empty. Leave the top-left button on its first state."
+- EnderIO bench face: "In / Out. Insert on Red with a Limited Item Filter: Sticky Resin 6, Fine Copper Wire 6, 1x Copper Wire 6, Carbon Dust 3 (each count includes the item's cells in the grid). Extract on Red with a Basic Item Filter: Resistor."
+- Routed bench pipe: "Item Stock Keeper Chip (when missing): Sticky Resin 4, Fine Copper Wire 4, 1x Copper Wire 4, Carbon Dust 2 + Item Extractor Chip (whitelist: Resistor)". Supplier: "+ Item Broadcaster Chip (whitelist: …; a new one is a blacklist, so switch its filter to whitelist)". Output chest: "+ Item Terminator Chip (whitelist: …)". Every machine: "Item Extractor Chip (whitelist: <its outputs>)".
+- AE2 bench interface: "1 processing pattern: <grid items> → <result>; blocking mode off; Locking Card, Lock Crafting: Until crafting result is returned". AE2 machine interface: "blocking mode on" ("blocking mode off" for a Packager, a Fluid Solidifier with a single-use mold, or any machine holding a cast).
+
+## 4. Audit of main's layouts [probe]
+
+Method: a scratch worktree of main (`7c14d4f`), the active export, no world: an Electronic Circuit line at MV (1 per minute; also with crafting automated), Red Alloy Ingot (60/min), the LV Electric Motor (6/min) and the Vacuum Tube (30/min), each in routed, AE2 and EnderIO. For every machine input the probe listed its slots (§1.1.1), held items and what the mode's part there lets in. On main a crafting step is a pseudo machine that is never laid out, so no Auto Workbench appears. No machine is fed more kinds than its free slots.
+
+### 4.1 Routed, worst first
+
+1. **No item moves.** Every Item Extractor Chip is laid bare, and a new one is an empty whitelist (§2.2): nothing leaves the input chest or any machine. A builder who flips them to blacklist meets the next trap: the chip also lists input items, and when the first one it tries could go to another machine, the extraction fails and the chip gives up that update. Machines that share an input (the Alloy Smelter and the two Wiremills on Copper Ingot; the three Centrifuges on Rubber Wood) then let their outputs out only when every sibling is full.
+2. **Multi Stack Input left to chance**: with it On, the first kind fills every input slot of the Alloy Smelter, Circuit Assembler, Chemical Reactor, Assemblers, Mixer and Arc Furnaces, and the line deadlocks. Off (the client default) is safe.
+3. **Items bound for steps without units have no responder.** In the Electronic Circuit line, Copper Wire, Fine Copper Wire, Glass Tube, Red Alloy Bolt, Steel Rod and Wood Plank go only to hand-crafted steps, so each maker stops when its output slot fills.
+4. **Input-bus ports get an Extractor Chip** (once configured, it pulls the inputs back out: the two Redstone Alloy EBFs pass dust back and forth), and output-bus ports a Responder that never answers.
+5. Empty Multi-Stack-Off machines are credited a stack per empty slot; the overshoot bounces and is routed again (churn, no deadlock).
+6. The Bricked Blast Furnaces get buses they cannot use (known; the steam and primitive fix lane).
+
+### 4.2 AE2, worst first
+
+1. **Patterns list fluids the line pipes** (Molten Tin, Molten Glass, Molten Rubber, Oxygen, Molten Redstone Alloy). ME never holds them, so the CPU cannot plan the job; encoded as written, the interface pushes a Fluid Packet item into the machine. That jams the Fluid Solidifier's interface for good (its only slot holds the mold), and takes an input slot of the others for good.
+2. **Fluid-only outputs never return to ME** ("1× Tin Dust → 144× Molten Tin", the Chemical Reactor's Molten Rubber, the Oxygen, Water and Methane outputs): jobs that need them stall, and a step whose only input is a piped fluid ("144× Molten Glass → 1× Glass Tube") has no item to put in a pattern.
+3. **Chance outputs written as fractions** ("0.50× Sticky Resin + 0.38× Plantball + …", "0.11× Ashes"): a pattern holds whole numbers, and a job that counts on a chanced output gets fewer and stalls.
+4. **Blocking mode off everywhere**: with one recipe per machine and whole sets this only buffers more (no deadlock); with add-on 12's pools it mixes recipes.
+5. The Bricked Blast Furnaces (known).
+
+### 4.3 EnderIO, worst first
+
+1. **Multi Stack Input left to chance**, as routed item 2: EnderIO merges, then fills the first empty slot, so with it On the first kind takes every free slot of a 2+ kind machine. The Electronic Circuit line is safe exactly as long as its Alloy Smelter and Circuit Assembler have it Off.
+2. The Bricked Blast Furnaces (known).
+
+Everything else holds: whitelists keep strays out, machines fill before chests, every bus takes one kind, and strays leave through output chests.
+
+### 4.4 Direct
+
+Main's direct mode lays one shared pipe with each machine's Input Filter on; add-on 15 replaces it. The Input Filter does not limit slots on a 3+ slot machine, so item 2 of §4.1 applies there too.
+
+### 4.5 Every input that can overfill or deadlock
 
 | Line | Machine (slots, held) | Fed kinds | Routed | AE2 | EnderIO |
 |---|---|---|---|---|---|
-| Electronic Circuit | Alloy Smelter (2, 0) | Copper Ingot, Redstone | F1 | F1*, — | F1 |
-| Electronic Circuit | Circuit Assembler (6, 0) | Red Alloy Wire, Vacuum Tube, Resistor, Circuit Board (+ Molten Tin piped) | F1 | F1*, F4 | F1 |
-| Electronic Circuit | Fluid Solidifier (1, mold) | (Molten Glass piped) | F3 (Glass Tube) | F4: the pattern's only input is a fluid | — |
-| Electronic Circuit | Fluid Extractor ×2 (1, 0) | Tin Dust; Sand | — | F5 (Molten Tin, Molten Glass out) | — |
-| Electronic Circuit | Centrifuge ×3 (2, 0) | Rubber Wood | — | F5 (Methane out), F6 | — |
-| Electronic Circuit | Wiremill ×3, Extruder, Lathe, Compressor | one kind each | F3: Copper Wire, Fine Copper Wire, Red Alloy Bolt, Steel Rod and Wood Plank go only to hand-crafted steps | — | — |
-| Red Alloy | Alloy Smelter ×2 (2, 0) | Copper Dust, Redstone | F1 | F1* | F1 |
-| Electric Motor | Chemical Reactor (2, 0) | Raw Rubber Dust, Sulfur Dust | F1 | F1*, F5 (output 1,296 L Molten Rubber) | F1 |
-| Electric Motor | Assembler (9, 0) | Magnetic Iron Rod, Iron Rod, Copper Wire, Tin Cable | F1 | F1* | F1 |
-| Electric Motor | Assembler (9, 0), tin cable | Tin Wire (+ Molten Rubber piped) | — | F4 | — |
-| Vacuum Tube | Mixer (6, 0) | Redstone, Raw Silicon Dust, Coal Dust | F1 | F1* | F1 |
-| Vacuum Tube | Arc Furnace (2, 0) | Iron Dust, Charcoal Dust | F1 | F1* | F1 |
-| Vacuum Tube | Arc Furnace (2, 0), annealing | Copper Ingot (+ Oxygen piped) | — | F4 | — |
-| Vacuum Tube | Assembler (9, 0) | Glass Tube, Annealed Copper Wire, Steel Rod (+ Molten Redstone Alloy piped) | F1 | F1*, F4 | F1 |
-| Vacuum Tube | EBF ×2 (Input Bus ULV, 1) | Redstone Alloy Dust | F2 | — | — |
-| Vacuum Tube | EBF (Input Bus ULV, 1) | Cast Iron Dust (+ Oxygen piped) | F2 | F4, F6 (0.11× Ashes) | — |
-| Vacuum Tube | Bricked Blast Furnace ×2 (Input Bus LV) | Chalcopyrite, Glass, Charcoal Dust | F7 | F7 | F7 |
-| Vacuum Tube | Electrolyzer, Pyrolyse Oven | one kind each | — | F5 (Oxygen, Water out) | — |
+| Electronic Circuit | Alloy Smelter (2, 0) | Copper Ingot, Redstone | 1, 2 | — | 1 |
+| Electronic Circuit | Circuit Assembler (6, 0) | Red Alloy Wire, Vacuum Tube, Resistor, Circuit Board (+ Molten Tin piped) | 1, 2 | 1 | 1 |
+| Electronic Circuit | Fluid Solidifier (1, mold) | (Molten Glass piped) | 1, 3 (Glass Tube) | 1, 2 | — |
+| Electronic Circuit | Fluid Extractor ×2 (1, 0) | Tin Dust; Sand | 1 | 2 | — |
+| Electronic Circuit | Centrifuge ×3 (2, 0) | Rubber Wood | 1 | 2, 3 | — |
+| Electronic Circuit | Wiremill ×3, Extruder, Lathe, Compressor | one kind each | 1, 3 | — | — |
+| Red Alloy | Alloy Smelter ×2 (2, 0) | Copper Dust, Redstone | 1, 2 | — | 1 |
+| Electric Motor | Chemical Reactor (2, 0) | Raw Rubber Dust, Sulfur Dust | 1, 2 | 2 | 1 |
+| Electric Motor | Assembler (9, 0) | Magnetic Iron Rod, Iron Rod, Copper Wire, Tin Cable | 1, 2 | — | 1 |
+| Electric Motor | Assembler (9, 0), tin cable | Tin Wire (+ Molten Rubber piped) | 1 | 1 | — |
+| Vacuum Tube | Mixer (6, 0) | Redstone, Raw Silicon Dust, Coal Dust | 1, 2 | — | 1 |
+| Vacuum Tube | Arc Furnace (2, 0) | Iron Dust, Charcoal Dust | 1, 2 | — | 1 |
+| Vacuum Tube | Arc Furnace (2, 0), annealing | Copper Ingot (+ Oxygen piped) | 1 | 1 | — |
+| Vacuum Tube | Assembler (9, 0) | Glass Tube, Annealed Copper Wire, Steel Rod (+ Molten Redstone Alloy piped) | 1, 2 | 1 | 1 |
+| Vacuum Tube | EBF ×2 (Input Bus ULV) | Redstone Alloy Dust | 1, 4 | — | — |
+| Vacuum Tube | EBF (Input Bus ULV) | Cast Iron Dust (+ Oxygen piped) | 1, 4 | 1, 3 | — |
+| Vacuum Tube | Bricked Blast Furnace ×2 | Chalcopyrite, Glass, Charcoal Dust | 6 | 5 | 2 |
+| Vacuum Tube | Electrolyzer, Pyrolyse Oven | one kind each | 1 | 2 | — |
 
-Every other input of these layouts takes one kind into a machine with room for it and cannot overfill a second slot.
+The numbers are the items of §4.1, §4.2 and §4.3 for that mode.
 
-### 5.2 The findings
+### 4.6 Auto Workbenches with today's parts
 
-- **F1 — Multi Stack Input is left to chance (routed, EnderIO; AE2 only buffers).** No step mentions it; a machine has whatever its placer's client preference gave it (§1.4). With it Off every row above is safe: each kind holds one slot and the kinds fit. With it On, routed and EnderIO deadlock: the first kind to arrive takes every free input slot (Project Red's responder answers with the room of every empty slot; EnderIO merges, then fills the next empty slot), e.g. two stacks of Redstone in the Alloy Smelter and Copper never gets in. *AE2 pushes whole sets, every kind in each push, so its machines keep every kind present and do not deadlock; they only fill every free slot.
-- **F2 — Routed lays an Item Extractor Chip on input-bus ports.** `routed.ts` gives every port of a unit that makes items `responder(inputs) + extractor`, buses included. The extractor pulls the inputs back out of the bus's front (§3) and sends them to any other responder that takes them: the two Redstone Alloy EBFs pass their dust back and forth every 10 ticks. Output-bus ports get a responder for the step's inputs that never answers (the bus takes nothing). Not a hard deadlock, but churn and starvation, and wasted chips.
-- **F3 — Routed has no place for items that leave the line to a step without units.** Its output chest's responder whitelists only flows to out or sink (`finalItemOutputs`); EnderIO sends every flow that leaves the placed steps, and every stray, to an output chest (`edgeFlows`, `crossing`). In the Electronic Circuit line six items made by machines (Copper Wire, Fine Copper Wire, Glass Tube, Red Alloy Bolt, Steel Rod, Wood Plank) are taken only by hand-crafted steps, so no responder takes them: each maker stops when its output slot is full and must be emptied by hand.
-- **F4 — AE2 patterns list fluids the line pipes.** The configure step's pattern reads, e.g., "1× Circuit Board + 2× Resistor + 2× 1x Red Alloy Wire + 2× Vacuum Tube + 144× Molten Tin → 1× Electronic Circuit" and "144× Molten Glass → 1× Glass Tube", but AE2 mode pipes fluids from machine to machine (GT fluid pipes and pump covers), so ME storage never holds them: the CPU cannot plan the job, and a pattern encoded as written makes the plain ME Interface push a Fluid Packet item into the machine (§4.2), which takes a free input slot for good (Input Filter off) or sticks in the interface (filter on, or a full machine such as the Fluid Solidifier, whose one slot holds the mold).
-- **F5 — AE2 patterns with fluid-only or piped fluid outputs.** "1× Tin Dust → 144× Molten Tin" (Fluid Extractor), "9× Raw Rubber Dust + 1× Sulfur Dust → 1,296× Molten Rubber" (Chemical Reactor), and the Oxygen, Water and Methane outputs: the fluid goes into a pipe and never returns to ME (a plain interface takes no fluid), so a job that needs it waits for ever, and a step whose only output is a piped fluid cannot be a processing pattern at all.
-- **F6 — AE2 patterns with chance outputs as fractions.** "1× Rubber Wood → 0.50× Sticky Resin + 0.38× Plantball + 0.25× Carbon Dust + 0.25× Wood Pulp + 60× Methane", "… + 0.11× Ashes": a pattern holds whole numbers, and a job that counts on a chanced output it pushed for gets fewer and stalls.
-- **F7 — The Bricked Blast Furnace gets an input bus and an output bus with chips, a pattern or conduit faces.** It takes no hatches (add-on 15's research), so the bus fills and nothing runs. Known; the steam and primitive fix lane takes these machines out of the modes.
-- **F8 — Blocking mode off.** Every AE2 configure step says "blocking mode off". For one recipe per machine with whole sets this is not a deadlock (F1*), but it lets the interface fill every free slot, and it mixes recipes in a shared machine (add-on 12's sharing pools).
-- **F9 — Input slots are not known.** Add-on 12's routed split bounds a pool's distinct inputs with `itemSlots`, the most item inputs any recipe of the map takes; the machine's own slots can be fewer (LV Assembler 6 against the map's 9; LV and MV Mixer 6; LV and MV Forming Press 2) and held items take slots. The export carries no input slot count.
-- EnderIO's whitelists keep every other item out, its priorities fill machines before chests, and every bus it feeds takes one kind (or is the Bricked Blast Furnace's).
+With crafting automated, the Electronic Circuit line has five crafting steps: Resistor, Circuit Board, Vacuum Tube, Coated Circuit Board, and Steel Rod from a Steel Ingot and a file (it replaces the Lathe). If add-on 12 Task 6 laid them with each mode's current part: routed responders and EnderIO whitelist filters flood them and they die or delete (§1.3.9); AE2 with blocking off works only while every pattern matches its grid exactly; direct's pipe floods them; and laid like a basic machine, a bench's power cable lands on its back, which takes no EU. The Steel Rod bench stops after its first craft: the planner holds the Single Use File as a one-off instead of feeding one per craft.
 
-### 5.3 The Electronic Circuit line in EnderIO mode
+## 5. Counterexamples and their fixes
 
-It is safe today exactly as long as the Alloy Smelter and the Circuit Assembler have Multi Stack Input Off, which is the client default but never stated or checked (F1). Its four crafting-table steps are hand-crafted on main; with add-on 12 they become four Auto Workbenches (Resistor: four kinds; Circuit Board: two; Vacuum Tube: five; Coated Circuit Board: two), all fed from the same Red channel, which is where §5.4's EnderIO flood would start.
+| # | Case | What happens (evidence) | Fix (lane) |
+|---|---|---|---|
+| C1 | Tool recipes on a bench (all modes) | A GT tool's wear goes into its NBT, so it no longer matches the grid after one craft; a single-use tool the planner holds as a one-off is used up by the first craft (§1.3.4) | Bench steps consume a GGFab single-use tool per craft; other tool kinds are by hand with the reason (add-on 12) |
+| C2 | A flooded bench whose back takes what it ejects | The duplicates loop overwrites slot 18: 4,038 items deleted in the model (§1.3.2, §1.3.9) | Never lay a bench without its mode's cap (add-on 12) |
+| C3 | Routed machines sharing an input | A blacklist Extractor tries an input item first, fails and gives up the update; a bare one extracts nothing (§2.2) | Extractor whitelist = the machine's outputs (fix lane) |
+| C4 | Routed bench fed by a bench | A default Broadcaster offers the Sticky Resin in its own bench's input slots, fails, drops the order; the requester waits (§2.2) | Broadcaster whitelist = the machine's outputs (add-on 12) |
+| C5 | Routed restart | Destinations and transit counts are not saved; bench-only ingredients in pipes wander for ever (wander limit 0) and Stock Keepers ask again (§2.2) | Item Terminator Chip on the output chest whitelisting bench-only items, which no Extractor may then list (add-on 12) |
+| C6 | Routed bench needed faster than its Stock Keeper refills | 2 crafts of stock cap an MV bench at 0.40 crafts/s (§1.3.9) | Size stock by §3.6; warn when it cannot fit (add-on 12) |
+| C7 | Routed shared machine | It reruns the last recipe and waits on its blocked output; the other recipe starves (§1.1.5) | No routed pools (add-on 12) |
+| C8 | AE2 machine holding an item off the ignore list (Packager schematic, GGFab single-use mold, TGregworks or TConstruct cast) | Blocking mode never pushes (§2.3) | Decide blocking by the held items' ids against GT's list (fix lane) |
+| C9 | AE2 step whose only input is a piped fluid | The pattern would be empty; it cannot be encoded (§2.3) | No pattern; it runs from its pipe (fix lane) |
+| C10 | A recipe that needs all nine input slots on EnderIO or routed | Every shortage ejects slot 8, which the result-only filter refuses: the bench dies (§1.3.8) | Such recipes go to AE2 with a Locking Card or by hand (add-on 12) |
+| C11 | AE2 pattern holding another variant than the grid, no Locking Card | Strays churn back to ME, the whole job is pushed, 1,816 items deleted in the model (§1.3.9) | Locking Card on every bench interface (add-on 12) |
+| C12 | A fluid pipe or fluid conduit face on a bench | Its tank takes any fluid and it fills containers into its input slots (§1.3.5) | No fluid face on a bench (add-on 12) |
+| C13 | Shaped recipes and ore-dictionary cells | A grid in the wrong shape has no result; another variant in a cell never matches (§1.3.3) | The configure step gives the grid cell by cell with the planner's concrete items (add-on 12) |
+| C14 | Container returns (buckets, cells) | They land in slots 9–17; if the extract filter refuses them, the buffer fills and crafting stops (slot 17 must be empty); they also halve the craft rate (§1.3.7) | Extract filters, Extractor whitelists and AE2 pattern outputs include them; the rate counts them (add-on 12) |
+| C15 | Routed Stock Keeper after a fault | It counts slot 18 and the output buffer as stock, so an ejected ingredient there is never replaced (§1.3.6) | Prevented by the caps; the checker flags any ejection (checker) |
+| C16 | Routed item that is both a surplus and a bench ingredient (Sticky Resin) | The maker's Extractor sends it to the output chest every 10 ticks while the bench's request races it: slower, not stuck (UNVERIFIED) | The checker measures it; more stock if slow (checker) |
+| C17 | Direct-mode bench | A lane pipe touching it fills all nine slots (§2.4) | No pipe; Robot Arms from buffer chests, after an in-game test (add-on 15) |
+| C18 | One recipe through two input buses with Input Separation on | No bus ever holds a whole set (§1.2) | One bus per recipe, or Input Separation off (add-on 15) |
+| C19 | Routed overshoot into empty Multi-Stack-Off machines | Each empty slot is credited a stack; extras bounce and are routed again (§2.2) | Accepted as churn; the checker counts bounces (checker) |
 
-### 5.4 Auto Workbenches with today's parts
+## 6. Rulings per lane
 
-When add-on 12 Task 6 lays the crafting steps on Auto Workbenches and each mode keeps today's part for a machine input:
+### 6.1 Add-on 12 (Task 6 lays out shared machines and Auto Workbenches)
 
-- **Routed** (Item Responder Chip, whitelist = the grid): the responder answers with the room of all nine slots (§2.2), the extractor sends whatever ingredient comes first, it floods the bench, the bench ejects slot 8 into slot 18, its back push into the routed pipe moves nothing (§4.3), the Item Extractor Chip takes slot 18 only if another responder wants that ingredient, otherwise slot 18 stays full and the bench never crafts again (§2.5 cases 2 and 3). The Resistor bench (Sticky Resin, Fine Copper Wire, Copper Wire, Carbon Dust) and the Vacuum Tube bench (five kinds) fill with whichever wire arrives first.
-- **AE2** (one processing pattern, blocking off as today): whole sets arrive and the bench crafts; its back must face the interface, which takes the results. With blocking on it would never push (§2.6). A pattern item that differs from the grid's (NBT, another ore-dictionary variant) is a stray: the bench pushes it back into storage and the job waits for a result that never comes.
-- **EnderIO** (Basic Item Filter, whitelist = the grid): the first ingredient floods the bench; slot-8 and duplicate ejections go out through the In / Out face to the other benches and the output chest that take that ingredient: livelock and leaks (§2.5 case 2).
-- **Machine to machine** (GT pipe, add-on 15 lanes): each lane pushes its ingredient until all nine slots hold it.
-- **All modes**: laid like a basic machine (§2.4) it gets no power and pushes into its cable.
+1. **Blocking: no bench without its cap.** Task 6 lays an Auto Workbench only with its mode's configuration of §3.4: EnderIO a Limited Item Filter, routed a Stock Keeper with Broadcasters on its suppliers, AE2 a pattern equal to the grid plus a Locking Card. In direct mode, until add-on 15 adopts Robot Arms, the bench gets no pipe and a warning "Fill this Auto Workbench by hand: machine-to-machine lines cannot cap its ingredients yet".
+2. **Blocking: tools.** Before Task 6 lays benches (it changes Task 3's options and the loader): a crafting recipe whose tool slots are all of the eight single-use kinds runs on a bench as a variant whose tool slots are consumed inputs of the matching GGFab single-use tool, one per craft; the grid shows the single-use tool. The hand recipe keeps the tool held. Any other tool slot (Mortar, Knife, Rolling Pin, Soldering Iron, Scoop, or a slot that only takes GT tool items) has no bench option: the step is by hand, saying "needs a <tool>, which an Auto Workbench cannot keep using". The loader can add the variant as its own recipe (same outputs, map `crafting`, bench only), so the solve weighs it against the Lathe and the hand recipe on cost.
+3. **Routed pools off.** `BuildModel.share` only on AE2 lines (§1.1.5). Task 6's routed pool test changes accordingly.
+4. **AE2 pools with blocking on.** A pooled interface's config is `blockingMode: true` (Task 6's text says `false`); pool only machines whose held items are all on AE2's ignore list; size a pool by the machine's own input slots at its tier minus held items (the largest recipe, since blocking sends one set at a time), not by the map's largest recipe (`itemSlots`).
+5. **Bench layout.** `facing` is the bench's front, away from the middle row, so its back is the middle-row cell; no `mainFacing`, no `inputFromOutputSide`, no output cover (covers fit neither front nor back); power at the existing away-side port (the front takes EU); no fluid face toward it.
+6. **Bench config** (structured, so the steps, the 3D view and the checker read the same thing): `mode: 'normal'`, `grid` as nine cells in the recipe's shape with the planner's concrete items, `throughput: 0`; per mode the chips, filter counts or pattern of §3.4, with stock sized by §3.6, container returns from the export's fluid-container table.
+7. **Recipes that cannot meet the cap rule** (one craft needs all nine slots): not on EnderIO or routed benches; on AE2 with the Locking Card; else by hand with the reason.
+8. **The bench's rate**: EU-limited as Task 3 has it, halved for recipes with container returns, and on routed lines capped by the Stock Keeper's cadence (§3.6): add benches or warn when the stock cannot fit in a stack.
+9. **Molecular Assembler**: offered only where its HV recipe can be built; it needs the same single-use tools.
+10. Task 6 builds on the fix lane's chip and pattern text (§6.4), and Task 8's acceptance runs the feeding checker (§7) on the user's Electronic Circuit settings in every mode: no ejection, deletion, stuck bench or starved pool.
 
-## 6. The configuration that cannot overfill or deadlock
+### 6.2 Add-on 15 (direct mode)
 
-Costs: a Soldering Iron or Screwdriver click and AE2 blocking mode are free; an EnderIO Limited Item Filter is an Advanced Item Filter and a Comparator (MV assembler) instead of a Basic Item Filter; an Item Stock Keeper or Item Broadcaster Chip is a circuit-assembler chip like the Responder; a Locking Card is one AE2 card.
+1. Keep `multiStack: false` for 2+ kinds and `limited: true` for buses fed 2+ kinds; they match §1.1 and §1.2. The fix lane uses add-on 15's words verbatim, so the merge keeps one copy.
+2. **Input Separation**: a multiblock step whose items come in through two or more input buses (one per lane network) deadlocks with the EBF's default. Put one recipe's items on one bus, or set `inputSeparation: false` with the step text of §3.7.
+3. **Benches**: a lane pipe must never touch an Auto Workbench. Feed one only through Robot Arm covers set to "Grabs in for own Slot #n", one per ingredient (at most four), each pulling from a buffer chest that ends its lane; else leave it by hand with add-on 12's warning. Adopt the arms only after the in-game test of §8.
+4. Its rules checker should use the machine's real input slots at its tier and the feeding checker's slot model (§7).
 
-| Machine kind | Every mode | Machine to machine | Routed | AE2 | EnderIO |
-|---|---|---|---|---|---|
-| GT singleblock fed 1 kind | nothing new | add-on 15 as planned | as today: Item Responder Chip, whitelist | blocking mode on (off if it holds an unlisted item, e.g. the Packager's schematic); item-only pattern (below) | as today: Basic Item Filter, whitelist |
-| GT singleblock fed 2+ kinds | **Multi Stack Input Off**; kinds ≤ input slots − held items | add-on 15 (it already sets Multi Stack Input Off) | as today + Multi Stack Input Off | blocking mode on (same exception) + Multi Stack Input Off | as today + Multi Stack Input Off |
-| Input bus fed 1 kind | nothing new | add-on 15 | responder only, **no Extractor Chip on an input bus**; extractor only on output buses | blocking mode on | as today |
-| Input bus fed 2+ kinds | **Limiting mode on**; every item of a recipe into **one** bus, or Input Separation off | add-on 15 + one bus per step, or Input Separation off | as above + Limiting mode on | as above + Limiting mode on | as today + Limiting mode on |
-| GT++ Auto Workbench | mode "Normal Crafting Table", the grid exactly the plan's recipe, **back on the line's logistics block**, front away from it, power to the front (never the back), throughput on its first (new) state | Robot Arm covers importing each ingredient into its own slot (≤ 4 kinds: the four coverable faces), else by hand (UNVERIFIED) | **Item Stock Keeper Chip** ("when missing", each ingredient's count = 2 crafts) + Item Extractor Chip; Item Broadcaster Chips on the input chest and on every machine that makes a bench ingredient; the output chest's responder never takes a bench ingredient (a GT consumer's responder may: it fills its one slot and leaves the rest for the broadcaster) | interface on its back, **blocking mode off**; a processing pattern of exactly the grid's items → the result (+ container returns); Locking Card on "Until crafting result is returned" to keep one craft in flight | In / Out face on its back: Insert side a **Limited Item Filter**, each ingredient at 2 crafts' worth **plus its grid cells** (e.g. 2 + 1 cell → 3 for an item used once; at most the item's stack size); Extract side a Basic Item Filter with the result and any container returns |
-| AE2 Molecular Assembler | — | — | — | interface with the crafting pattern touching only the assembler | — |
-| Machine shared by 2+ steps (add-on 12 pools) | kinds of all its steps ≤ input slots − held items at its tier | never pools | as above, Multi Stack Input Off | blocking mode on (one recipe's set at a time; smart blocking lets the same recipe repeat) | never pools |
-| Steam and primitive machines | by hand (the steam and primitive fix) | | | | |
+### 6.3 Add-on 19 (logistics parts and cost)
 
-Line-wide rules:
+1. New parts to price and count: Item Stock Keeper, Item Broadcaster and Item Terminator Chips (routed), the Limited Item Filter (EnderIO; priced only where the Advanced Item Filter is, its open question 4), the Locking Card (AE2; only an opaque recipe, so an unpriced gap with a warning), the ME Export Bus for AE2 steps without a pattern (§3.5), and, if add-on 15 adopts them, Robot Arm covers and buffer chests.
+2. The per-unit estimate gets a bench row per mode: routed interface pipe + Stock Keeper + Extractor (+ Broadcaster when a bench takes its result), and a Broadcaster on each supplier of a bench ingredient, a Terminator per line; AE2 interface + pattern + Locking Card and no conveyor cover; EnderIO a Limited Item Filter (insert) + a Basic Item Filter (extract).
+3. "Cheapest adequate filter" never picks a Basic, Advanced or Big Item Filter for a bench's insert side: only the Limited Item Filter is adequate there.
+4. Single-use tools and their molds are recipe cost (consumed inputs and one-off held items), not logistics.
 
-- **Routed**: the output chest's responder whitelists every item that leaves the placed steps (to out, sink or a step without units) and every stray a placed machine makes, as EnderIO's `edgeFlows` and `crossing` do; an input-bus port gets no Extractor Chip and an output-bus port no Responder Chip.
-- **AE2**: a pattern holds one run's **item** inputs (no programmed circuit, no held item, no fluid the line pipes) and only the **whole-number, guaranteed item** outputs (chanced byproducts left out: they still return to storage). A step whose outputs are only fluids or only chanced items is no pattern step: an ME Export Bus on the machine's spine face, filtered to its item inputs, keeps it fed (with Multi Stack Input Off it stops at one stack a kind). Each interface touches only its own machine (true today).
-- **EnderIO**: nothing beyond the table.
-- **Why two crafts' worth for the bench**: the cap must stay at one stack so the bench never holds a duplicate (§2.3), and above one craft so it does not wait for each delivery. EnderIO's insert side moves at most the cap at a time and refills as soon as a craft takes some; at MV (1.25 crafts/s) two crafts keep it busy as long as the makers keep up (UNVERIFIED in game).
-- **Why the bench needs no Multi Stack setting**: it has none; the cap is the only limit, and only a network part can set it.
+### 6.4 Fix lane on main for routed, AE2 and EnderIO — needed now
 
-## 7. What the layout and the build steps must say
+Routed lines on the live site move nothing as written, and AE2 patterns cannot be encoded as written. Suggested branch `fix/feeding`, merged before add-on 12 Task 6 starts (or Task 6 follows these texts and add-on 12 merges main before Task 8). Scope, main's current single-recipe layouts only:
 
-### 7.1 Layout data (planner)
+1. **Routed**: Item Extractor Chip whitelist = the unit's item outputs (the input chest's: its raw inputs); no Extractor on input-bus ports and no Responder on output-bus ports; the output chest's whitelist = every item that leaves the placed steps (to out, sink or a step without units) and every stray, as EnderIO's `edgeFlows` and `crossing` do.
+2. **All three modes**: `multiStack: false` on singleblocks fed 2+ item kinds; `limited: true` on input buses fed 2+ kinds; with add-on 15's words.
+3. **AE2**: pattern text with item inputs only and whole, guaranteed item outputs only; steps without either get no pattern (§3.5: an ME Export Bus for item-in, fluid-out steps; nothing for fluid-in steps) and a warning that AE2 cannot plan them, so the line relies on stock; `blockingMode: true` for machines and buses whose held items are all on AE2's ignore list, `false` otherwise.
+4. **The static rules of the feeding checker** (§7) as layout warnings and unit tests on the five probe lines.
+5. Out of scope: benches and pools (add-on 12), direct (add-on 15), prices (add-on 19), Bricked Blast Furnaces (the steam and primitive lane).
 
-- `BlockConfig` gains `multiStack: false` on every singleblock whose step takes 2+ item kinds (all modes; add-on 15 already plans the key) and `limited: true` on every input bus fed 2+ kinds (add-on 15's key, now in routed, AE2 and EnderIO too).
-- The Auto Workbench unit (pack kind `other`, class `MTEElectricAutoWorkbench`): its facing is its **front, away from the spine**, so its back is the spine cell; no `mainFacing`, no Input from Output Side, no output cover (covers do not fit its back); its power port any face but the back.
-- Routed (`routed.ts`): chips per port by bus kind (responder on singleblocks and input buses, extractor on singleblocks and output buses); for a bench: Item Stock Keeper Chip `stock: <item> ×n, …; mode when missing` + Item Extractor Chip, and an Item Broadcaster Chip on the input chest and on each maker of a bench ingredient; the output chest whitelists every leaving item and stray.
-- AE2 (`ae2.ts`): `blockingMode: true` on GT machines and buses whose held items are all programmed circuits, molds, extruder or slicer shapes or lenses (AE2's ignore list, §4.2), `false` on benches and on machines holding anything else (the Packager's schematic); pattern text from item inputs and whole guaranteed item outputs only; an optional `lock: 'until result'` on a bench's interface; an export-bus feed for fluid-only or chance-only steps.
-- EnderIO (`enderio.ts`, `conduits.ts`): a `limited` filter kind (`ConduitFilter.counts`, 10 slots) on a bench's Insert side; the bench's face In / Out on its back.
-- Export: machine input slot counts per mteId (`mInputSlotCount`, or `setSlotsCount` read from the class) so the slot rule (kinds ≤ slots − held) and add-on 12's routed split use the machine's own slots.
+### 6.5 Projector and build steps
 
-### 7.2 Build-step wording
+1. The step words are §3.7's, written by the fix lane (settings) and add-on 12 Task 6 (benches); add-on 14's build list carries them unchanged.
+2. Projector: a unit without `mainFacing` (the bench) is checked on its GT front facing only, which must point away from the line; nothing in plan 18's worktree changes now. A client cannot read Multi Stack Input, Limiting mode, Input Separation, chip and filter settings, patterns or a bench's mode and grid, so these stay checklist steps with the chat line to stop at.
 
-- Singleblock fed 2+ kinds: "Multi Stack Input Off: sneak-right-click its front with a Soldering Iron (where a neighbour covers the front, click the edge of the wrench grid toward it); stop when the chat says "Multi Stack Input Off" (each click switches it; a machine you placed with default client settings already has it off)."
-- Input bus fed 2+ kinds: "Limiting mode on: in the bus window switch on "Limit insertion", or sneak-right-click the bus with a Screwdriver until the chat says "Limiting mode On"."
-- Multiblock with 2+ input buses for one recipe: "Input Separation off (the controller window's button)", or lay one bus.
-- Auto Workbench place step: "Place the Auto Workbench with its back (the face with the pipe opening) against the <conduit / ME interface / routed pipe>: with a Wrench, right-click the face away from the line to make that the front. Keep the power cable off its back."
-- Auto Workbench configure step: "Set the mode to "Normal Crafting Table" and the grid to <recipe>; leave the top-left button on its first state."
-- EnderIO bench face: "In / Out; insert on <colour> with a Limited Item Filter: <item> 3, <item> 6, …; extract on <colour> with a Basic Item Filter: <result>."
-- Routed bench pipe: "Item Stock Keeper Chip (when missing): <item> 2, <item> 4, … + Item Extractor Chip", and on each supplier "+ Item Broadcaster Chip".
-- AE2 bench interface: "1 processing pattern <grid items> → <result>; blocking mode off; (Locking Card: Lock Crafting "Until crafting result is returned")". AE2 machine interface: "blocking mode on" (but "blocking mode off" for a Packager or any machine holding an item that is no circuit, mold, shape or lens).
+## 7. Feeding checker design
 
-## 8. Open questions (UNVERIFIED)
+A pure module, `src/server/layout/feeding/`, `checkFeeding({ pack, plan, layout, options }) → FeedingReport`.
 
-- Game tests: a Limited Item Filter on an In / Out face toward a bench holding the planned counts; a Stock Keeper fed by broadcasters keeping a bench at its counts; a Locking Card's throughput on an HV bench; a Robot Arm cover importing into one bench slot.
+- **Machine models**: a GT basic machine (input slots by recipe map and tier, from a table built from `LoaderMetaTileEntities` until the export carries slot counts; held items from the recipe's non-consumed inputs; Multi Stack, Input Filter, Input from Output Side; inputs taken at run start; output slots; a cached last recipe that waits on a blocked output); an input bus with Limiting mode and its controller's Input Separation; the Auto Workbench's mode-0 update line for line from §1.3.2 (EU threshold, countdown, stray, craft, failed craft, duplicates with the overwrite, one-stack push to its back); chests as unlimited.
+- **Network models**, read from the layout's structured config (chips with filter mode and items, filter kind and counts, patterns with inputs and outputs, blocking and lock, conduit faces and channels): EnderIO 4 + 4 × upgrades items per 10 ticks per extract face, filters, priority and round robin, merge then first empty slot; routed extractors every 10 ticks up to 64 to the best responder (room minus transit), Stock Keepers every 100 ticks plus the idle slowdown, Broadcasters on orders, bounces and wanderers; AE2 a CPU job pushing sets with the send list, blocking, smart blocking and the Locking Card; direct GT pipe pushes from add-on 15's lanes.
+- **Static rules** (exact and cheap, in every `layoutLine` as layout warnings): kinds ≤ input slots − held; `multiStack` set where 2+ kinds; `limited` and Input Separation on buses; routed Extractors whitelisting outputs and nowhere on input buses, every made item with a destination, Broadcasters as whitelists; AE2 patterns encodable and blocking set by the ignore list; every bench with its mode's cap, stock within §3.6 and the 8-slot rule, its back on the logistics block, power off its back, no fluid face, single-use tools in tool cells; pools only on AE2 with blocking on.
+- **Simulation** (tests and an on-demand check): ticks over 20 minutes of game time with every machine running flat out until its output backs up (the normal state of a push network), under adversarial schedules: one supplier ten times faster, one input delayed, a server restart (routed transit lost), and Multi Stack Input On wherever the layout does not set it. Codes: `feed_crowded` (a kind that cannot enter while its recipe waits for it), `feed_overfill` (a kind in two slots of a capped machine, a bench above its cap or holding a non-grid item), `feed_bench_eject`, `feed_bench_delete`, `feed_bench_stuck`, `feed_no_route` (an output with nowhere to go), `feed_pool_starve`, `feed_fluid_packet`, `feed_pattern_unencodable`, `feed_slow` (a rate below the plan's), `feed_leak` (an item reaching a chest the plan sends to a machine).
+- **Acceptance**: no `feed_crowded`, `feed_bench_*`, `feed_pool_starve` or `feed_fluid_packet` on the five probe lines and the user's Electronic Circuit settings in every mode; `feed_slow` only where the plan asks for more than the parts can move.
+- **Who builds it**: the static rules in the fix lane (§6.4), as its tests and warnings; the simulation in a new lane (add-on 21 suggested), pure new files, in parallel with add-on 12 Task 6, merged before add-on 12 Task 8, which uses it as a gate, as does add-on 15's Task 8. The exporter then replaces the slot table with exported counts.
+
+## 8. Open questions (UNVERIFIED in game)
+
+- A Limited Item Filter on an In / Out face toward a bench holding the counts of §3.6; a Stock Keeper fed by Broadcasters keeping a bench at its stock; the Locking Card's throughput on an MV bench; Robot Arm covers feeding a bench from buffer chests.
+- Whether a GT machine's inventory change resets a Stock Keeper's idle slowdown (`onNeighborTileChanged`), which decides how fast an idle routed bench restarts.
+- The Locking Card's recipe (opaque in the export).
+- ae2fc Dual Interfaces (fluids into a machine's tank from a pattern) as an AE2 alternative to piping, and an ME Level Emitter to stop free-running AE2 steps (§3.5) at a stock.
 - The Project Red Crafting Chip as a pull-based alternative for whole routed lines.
-- Whether GTNH's Advanced Blocking Card ("Loose Mode") changes the bench case; this page did not trace where `ADVANCED_BLOCKING_MODE` is read.
-- ae2fc Dual Interfaces (fluids into a machine's tank from a pattern) as an AE2 alternative to piping.
+- The pack also has Logistics Pipes (`logisticspipes-1.5.36-GTNH`, with supplier and crafting pipes); the planner does not lay it, and this page did not read it. A supplier pipe that keeps set amounts in a target would suit benches.
