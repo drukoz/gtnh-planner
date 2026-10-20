@@ -18,6 +18,7 @@ import { buildMode, PORT_SPACING } from '../../../src/server/layout/modes/mode.t
 import { ae2IdleEUt, resolveParts } from '../../../src/server/layout/parts.ts';
 import { projectorPayload } from '../../../src/server/projector/payload.ts';
 import type { StuffKey } from '../../../src/shared/keys.ts';
+import type { PatternSpec } from '../../../src/shared/types/feed.ts';
 import type { Pack, Product, Recipe } from '../../../src/shared/types/pack.ts';
 import type { Plan, PlanStep } from '../../../src/shared/types/plan.ts';
 import { IDS, layoutPack, makePlan, makeProject, makeScan, type StepSpec } from '../../helpers/layout-fixtures.ts';
@@ -196,11 +197,16 @@ describe('AE2 feeding', () => {
     describe('the runs a job asks for (AE2 rv3-beta-1073-GTNH CraftingJobV2)', () => {
       const flow = (from: string, to: string, key: StuffKey, perSecond = 1) => ({ from, to, key, perSecond });
       type Side = ReadonlyArray<StuffKey | readonly [StuffKey, number]>;
-      /** aeRunShares of one run a second of each step of `patterns` (its inputs, its outputs; one of each but where an amount is given). */
+      /**
+       * aeRunShares of one run a second of each step of `patterns` (its inputs, its outputs; one of each but where an
+       * amount is given), each counted exactly.
+       */
       const shares = (flows: Plan['flows'], patterns: Readonly<Record<string, readonly [Side, Side]>>) => {
         const plan = makePlan(Object.keys(patterns).map((id) => ({ id, mteId: IDS.MACERATOR, count: 1 })), { flows });
         const side = (list: Side) => list.map((x) => (typeof x === 'string' ? { key: x, amount: 1 } : { key: x[0], amount: x[1] }));
-        return Object.fromEntries(aeRunShares(plan, new Map(Object.entries(patterns).map(([id, [ins, outs]]) => [id, { inputs: side(ins), outputs: side(outs) }]))));
+        const runs = aeRunShares(plan, new Map(Object.entries(patterns).map(([id, [ins, outs]]) => [id, { inputs: side(ins), outputs: side(outs) }])));
+        expect([...runs.values()].filter((r) => r.low !== r.share)).toEqual([]);
+        return Object.fromEntries([...runs].map(([id, r]) => [id, r.share]));
       };
       const O0 = 't:o0@0', O1 = 't:o1@0', O2 = 't:o2@0', IN = 't:in@0';
 
@@ -246,6 +252,44 @@ describe('AE2 feeding', () => {
         // a pattern that takes what it makes (a catalyst) never runs itself for it
         expect(shares([flow('a', 'a', O0), flow('raw', 'a', IN), flow('a', 'sink', O0)], { a: [[O0, IN], [O0]] })).toEqual({ a: 0 });
       });
+
+      describe('in a pooled loop too dense to follow every job', () => {
+        /**
+         * `k` cell fillers and `k` emptiers, pooled: filler i fills Ex into its own cell, which emptier i empties back into
+         * Ex; every emptier sends its Ex to every filler alike and a tenth of it to the product, and storage tops each
+         * filler up. A job can come round such a loop by any set of its patterns: about k² × 2^(k−1) sets above a step,
+         * past AE_SHARE_SETS_MAX for k = 10 and on.
+         */
+        const pooled = (k: number) => {
+          const ids = Array.from({ length: k }, (_, i) => i);
+          const cell = (i: number): StuffKey => `t:cell${i}@0`;
+          const flows = ids.flatMap((i) => [flow(`f${i}`, `e${i}`, cell(i)), flow(`e${i}`, 'out', 't:x@0', 0.1), flow('raw', `f${i}`, 't:x@0', 0.1),
+            ...ids.map((j) => flow(`e${i}`, `f${j}`, 't:x@0', 0.9 / k))]);
+          const pattern = (input: StuffKey, output: StuffKey): PatternSpec => ({ inputs: [{ key: input, amount: 1 }], outputs: [{ key: output, amount: 1 }] });
+          const patterns = new Map(ids.flatMap((i): Array<[string, PatternSpec]> => [[`f${i}`, pattern('t:x@0', cell(i))], [`e${i}`, pattern(cell(i), 't:x@0')]]));
+          return { plan: makePlan([...patterns.keys()].map((id) => ({ id, mteId: IDS.MACERATOR, count: 1 })), { flows }), patterns };
+        };
+
+        it('counts 16 fillers and 16 emptiers in a fraction of a second, between a lower and an upper bound', () => {
+          const { plan, patterns } = pooled(16);
+          const start = performance.now();
+          const runs = aeRunShares(plan, patterns);
+          expect(performance.now() - start).toBeLessThan(200);
+          expect([...runs.values()].filter((r) => !(r.low > 0 && r.low < r.share && r.share < 1))).toEqual([]);
+        });
+
+        it('bounds each share by what the jobs ask for, from below and from above', () => {
+          const { plan, patterns } = pooled(6);
+          const exact = aeRunShares(plan, patterns);
+          expect([...exact.values()].filter((r) => r.low !== r.share)).toEqual([]);
+          // the same loop counted exactly for at most 50 sets: each exact share between the two bounds, which differ
+          const bounded = aeRunShares(plan, patterns, 50);
+          expect([...exact].filter(([id, r]) => {
+            const b = bounded.get(id)!;
+            return !(b.low <= r.share + 1e-12 && r.share <= b.share + 1e-12 && b.low < b.share && b.share <= 1);
+          })).toEqual([]);
+        });
+      });
     });
 
     describe('in a loop of cells one machine fills and another empties', () => {
@@ -282,6 +326,29 @@ describe('AE2 feeding', () => {
           + 'Reactor only as often as a job needs what its pattern makes (Why), about 50 % of the runs the Oxygen it pipes to the Advanced Assembler '
           + 'needs: so it runs out of Oxygen and waits for ever, and so does a job that needs what it makes. Keep the Advanced Chemical Reactor '
           + 'running yourself: feed it Ex from stock, keep a request for Why standing, or fill it by hand']]);
+      });
+
+      it('says "at most" where the loop is too dense to follow every job', () => {
+        // ten fillers and ten emptiers, pooled as in the dense loop above (past AE_SHARE_SETS_MAX); f0 also pipes Oxygen to e
+        const ids = Array.from({ length: 10 }, (_, i) => i);
+        const cell = (i: number): StuffKey => `t:cell${i}@0`;
+        const p = pack();
+        for (const i of ids) p.items.set(cell(i), { key: cell(i), id: `t:cell${i}`, meta: 0, name: `Cell ${i}`, oreDict: [] });
+        const oxygen: Array<[StuffKey, number]> = [['fluid:oxygen', 1000]];
+        const steps: StepSpec[] = [...ids.flatMap((i): StepSpec[] => [
+          { id: `f${i}`, mteId: IDS.CHEM_HV, count: 1, tier: 3, inputs: [['t:x@0', 1]], outputs: [[cell(i), 1], ...(i === 0 ? oxygen : [])] },
+          { id: `b${i}`, mteId: IDS.ASSEMBLER, count: 1, tier: 2, inputs: [[cell(i), 1]], outputs: [['t:x@0', 1]] }]),
+        { id: 'e', mteId: IDS.ASSEMBLER, count: 1, tier: 2, inputs: [['t:dust@0', 1], ...oxygen] }];
+        const plan = makePlan(steps, { flows: [...ids.flatMap((i) => [
+          { from: `f${i}`, to: `b${i}`, key: cell(i), perSecond: 1 }, { from: `b${i}`, to: 'out', key: 't:x@0', perSecond: 0.1 },
+          { from: 'raw', to: `f${i}`, key: 't:x@0', perSecond: 0.1 }, ...ids.map((j) => ({ from: `b${i}`, to: `f${j}`, key: 't:x@0', perSecond: 0.09 }))]),
+        { from: 'f0', to: 'e', key: 'fluid:oxygen', perSecond: 1000 }, { from: 'raw', to: 'e', key: 't:dust@0', perSecond: 1 },
+        { from: 'e', to: 'out', key: 't:out_e@0', perSecond: 1 }] });
+        const texts = ae2(p, plan).r.warnings.filter((w) => w.code === 'ae2_fluid_short').map((w) => w.text.replace(/about \d+ %/, 'about N %'));
+        expect(texts).toEqual(['AE2 runs the Advanced Chemical Reactor only as often as a job needs what its pattern makes (Cell 0), at most about N % '
+          + 'of the runs the Oxygen it pipes to the Advanced Assembler needs (the line\'s patterns loop round in too many ways for the layout to follow '
+          + 'every job, so it counts some runs AE2 never plans): so it runs out of Oxygen and waits for ever, and so does a job that needs what it '
+          + 'makes. Keep the Advanced Chemical Reactor running yourself: feed it Ex from stock, keep a request for Cell 0 standing, or fill it by hand']);
       });
     });
   });
