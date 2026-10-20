@@ -4,7 +4,9 @@
 // glass cable fills the rest of the spine, the tail included, where the base's ME network joins the line. Each
 // interface takes a channel, so the line is checked against the channels the network has free. The pattern settings
 // are the interfaces' `config` (architecture §11.14). Without an AE2 network at the base the ME parts cannot work: the
-// layout says so and never assumes one.
+// layout says so and never assumes one. A machine run by hand gets no interface, and a venting steam machine gets its
+// interface on its middle-row side but no cover, as GT allows none on it (architecture §11 entry 48; by-hand.ts says
+// what is then moved by hand).
 
 import { posKey, type Vec3 } from '../../../shared/layout/geometry.ts';
 import { FACES } from '../../../shared/types/assets.ts';
@@ -13,8 +15,8 @@ import { comparePos } from '../../world/graph.ts';
 import type { HostCover, LocalBlock } from '../arrange.ts';
 import { linkBits } from '../path.ts';
 import {
-  amountList, conveyorCover, emptyModeResult, itemPorts, itemRisers, outputSideInputs, RISER_WORDS, unitItemRate, type ModeInput,
-  type ModeResult, type StepDraft,
+  amountList, conveyorCover, emptyModeResult, itemPorts, itemRisers, lineExceptions, outputSideInputs, RISER_WORDS, unitItemRate,
+  type ModeInput, type ModeResult, type StepDraft,
 } from './mode.ts';
 
 /** A network whose scan gives no channel figures is taken to have the 8 channels of a network without a controller. */
@@ -83,7 +85,8 @@ export function ae2Mode(input: ModeInput): ModeResult {
 
   const extraParts: BomLine[] = [{ key: parts.blank_pattern.key, amount: patterns, why: 'one processing pattern per machine', group: 'logistics' }];
   const drafts: StepDraft[] = [{ id: 'layout:logistics:line', kind: 'logistics', pin: 'site',
-    text: `Lay ME glass cable along the middle row with an ME interface at every machine's output side or bus${risers.links.length > 0 ? RISER_WORDS : ''}` }];
+    text: `Lay ME glass cable along the middle row with an ME interface at every machine's output side or bus${lineExceptions(placement)}`
+      + `${risers.links.length > 0 ? RISER_WORDS : ''}` }];
 
   // cable cells show their joins to the spine cells beside them; an interface is a full block
   const bits = linkBits(links);

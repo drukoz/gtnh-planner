@@ -138,6 +138,31 @@ function checkInputSide(what: string): string {
     + 'Screwdriver, not sneaking (a sneak-click switches the Input Filter), and once more if the chat says "Input from Output Side forbidden"';
 }
 
+/** Up: a venting steam singleblock's output side (`PlacedUnit.outputSide`). */
+const OUTPUT_UP = 1;
+
+/**
+ * A venting steam singleblock's place step (architecture §11 entry 48; worded as add-on 15's machine-to-machine one):
+ * GT vents its steam through its output side after every run and starts the next only once it could
+ * (`MTEBasicMachineBronze.allowToCheckRecipe`: no cover there and no block with a hit box in front of it), so that side
+ * faces up over an empty block. A basic machine's wrench clicks set both sides; its steam goes in at its back, which
+ * the layout keeps free (GT takes steam on every side but the front: `MTEBasicMachineBronze.isLiquidInput`).
+ */
+function steamPlaceText(u: PlacedUnit, n: number, front: string): string {
+  return `Place ${fmtInt(n)}× ${u.name} with its output side facing up and nothing above it (GregTech vents its steam there after every run, `
+    + `and waits while that side is covered or blocked) and its front facing ${front}: with a Wrench, sneak-right-click its ${front} side to make `
+    + 'that the front (where a neighbour covers that side, click the edge of the wrench grid toward it), then right-click its top to make that the '
+    + 'output side; pipe its steam into its back, the side away from the middle row';
+}
+
+/**
+ * What a multiblock run by hand (`PlacedUnit.manual`: a Bricked Blast Furnace or a Coke Oven) adds to its place step:
+ * it stands one block back from the middle row, its front row kept free, so you reach its controller and nothing of
+ * the line touches it.
+ */
+const MANUAL_PLACE = ', one block back from it, and keep the blocks in front of it free: it gets no hatches, covers, pipes or power, as you '
+  + 'fill and empty it by hand through its controller';
+
 /**
  * The plan steps whose machines take fluids through their output side: those an ender fluid conduit face inserts into
  * with `outputSide` (the EnderIO mode meets a GT basic machine's fluids there; every other mode pipes them in on top).
@@ -161,8 +186,10 @@ function fluidsThroughOutputSide(blocks: readonly LayoutBlock[]): Set<string> {
 /**
  * One step per placed plan step, in unit order: how many to place and which way they face — a singleblock's output
  * side and its front, which GT keeps apart, how to set both and, when it takes items, or fluids through its output side
- * (`fluidSteps`), how to check Input from Output Side; a multiblock's size, controller and hatches, and the block each of
- * its mufflers needs empty (`mufflerWords`). The front's compass side is turned by `rotation`.
+ * (`fluidSteps`), how to check Input from Output Side (a venting steam machine's output side faces up instead:
+ * `steamPlaceText`); a multiblock's size, controller and hatches and the block each of its mufflers needs empty
+ * (`mufflerWords`), or for one run by hand where it stands (`MANUAL_PLACE`). The front's compass side is turned by
+ * `rotation`.
  */
 function placeSteps(units: readonly PlacedUnit[], sitePin: number | undefined, rotation: Rotation, fluidSteps: ReadonlySet<string>): Draft[] {
   const byStep = new Map<string, { first: PlacedUnit; n: number }>();
@@ -174,6 +201,7 @@ function placeSteps(units: readonly PlacedUnit[], sitePin: number | undefined, r
   return [...byStep].map(([stepId, { first: u, n }]) => {
     if (!u.multiblock) {
       const front = SIDE_NAMES[rotateFacing(u.mainFacing ?? WEST, rotation)]!;
+      if (u.outputSide === OUTPUT_UP) return draft(`layout:place:${stepId}`, 'place', sitePin, steamPlaceText(u, n, front));
       const fluids = fluidSteps.has(stepId);
       const what = u.io.itemIn && fluids ? 'items and fluids' : u.io.itemIn ? 'items' : fluids ? 'fluids' : null;
       return draft(`layout:place:${stepId}`, 'place', sitePin, `Place ${fmtInt(n)}× ${u.name} ${singleblockFaces(front)}${what === null ? '' : checkInputSide(what)}`);
@@ -181,7 +209,8 @@ function placeSteps(units: readonly PlacedUnit[], sitePin: number | undefined, r
     const labels = hatchLabels(u);
     const hatches = labels.length === 0 ? '' : `; hatches: ${labels.join(', ')}`;
     return draft(`layout:place:${stepId}`, 'place', sitePin,
-      `Build ${fmtInt(n)}× ${u.name} (${u.size.map(fmtInt).join('×')}) with the controller facing the middle row${hatches}${mufflerWords(u)}`);
+      `Build ${fmtInt(n)}× ${u.name} (${u.size.map(fmtInt).join('×')}) with the controller facing the middle row`
+        + `${u.manual === undefined ? `${hatches}${mufflerWords(u)}` : MANUAL_PLACE}`);
   });
 }
 

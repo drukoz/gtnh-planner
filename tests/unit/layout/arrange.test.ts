@@ -110,8 +110,9 @@ describe('placement', () => {
   it('turns multiblocks to face the spine and keeps their air cells free', () => {
     const plan = makePlan([{ id: 'm', mteId: IDS.MACERATOR, count: 1 }, ebfStep]);
     const p = placeUnits(unitsFromPlan(layoutPack(), plan).units, { headWidth: 1, portSpacing: 0 });
-    // the EBF's input hatch faces west on its bottom layer: its port keeps a column of its own off the power head
-    expect(p.size).toEqual([6, 4, 7]);
+    // the EBF's input hatch faces west on its bottom layer: its port keeps a column of its own off the power head; the
+    // placement is as tall as its cells kept empty too, the air above the muffler (architecture §11 entry 48)
+    expect(p.size).toEqual([6, 5, 7]);
     const ebf = p.units[1]!;
     expect([ebf.row, ebf.at, ebf.facing]).toEqual(['S', [2, 0, 3], 2]);
     expect(p.blocks.find((b) => b.role === 'machine' && b.block.mteId === IDS.EBF)!.pos).toEqual([3, 0, 3]);

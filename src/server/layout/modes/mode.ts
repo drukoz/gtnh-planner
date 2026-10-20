@@ -16,6 +16,7 @@ import type { LogisticsNetwork } from '../../../shared/types/world.ts';
 import type { BlockConfig, HostConfig, HostCover, LocalBlock, PlacedUnit, Placement } from '../arrange.ts';
 import { coverRateWarning, pickConveyor, type PartId, type Parts } from '../parts.ts';
 import { ae2Mode } from './ae2.ts';
+import { withHandSteps } from './by-hand.ts';
 import { directMode } from './direct.ts';
 import { enderioMode } from './enderio.ts';
 import { routedMode } from './routed.ts';
@@ -70,12 +71,16 @@ export interface ModeResult {
  */
 export const PORT_SPACING: Readonly<Record<LogisticsMode, 0 | 1 | 2>> = Object.freeze({ direct: 0, routed: 1, ae2: 2, enderio: 0 });
 
+/**
+ * The mode's line. Every mode but machine to machine (add-on 15's) also says how to run its hand-run machines and what
+ * a steam machine's line cannot take out of it (`withHandSteps`).
+ */
 export function buildMode(mode: LogisticsMode, input: ModeInput): ModeResult {
   switch (mode) {
     case 'direct': return directMode(input);
-    case 'routed': return routedMode(input);
-    case 'ae2': return ae2Mode(input);
-    case 'enderio': return enderioMode(input);
+    case 'routed': return withHandSteps(input, mode, routedMode(input));
+    case 'ae2': return withHandSteps(input, mode, ae2Mode(input));
+    case 'enderio': return withHandSteps(input, mode, enderioMode(input));
     default: throw new Error(`unknown logistics mode ${String(mode)}`);
   }
 }
@@ -106,9 +111,27 @@ export function emptyModeResult(warnings: PlanWarning[] = []): ModeResult {
   return { blocks: [], covers: [], configs: [], logisticsPort: null, hookup: null, extraParts: [], drafts: [], warnings, tailFluidY: 1 };
 }
 
-/** The step ids that have units in the placement, in unit order. */
+/**
+ * The step ids whose units the line's logistics serve, in unit order: every unit in the placement but those run by hand
+ * (`Unit.manual`), whose goods cross the line's edge like those of a step it does not place.
+ */
 export function placedStepIds(placement: Placement): Set<string> {
-  return new Set(placement.units.map((u) => u.stepId));
+  return new Set(placement.units.filter((u) => u.manual === undefined).map((u) => u.stepId));
+}
+
+/**
+ * The item keys the line hands to the steps it runs by hand (`toHand`: flows from a placed step into one of them, which
+ * wait in the line's output chest) and takes from them (`fromHand`: flows from one of them into a placed step, which go
+ * in its input chest), each sorted.
+ */
+export function handItemFlows(plan: Plan, placement: Placement): { toHand: StuffKey[]; fromHand: StuffKey[] } {
+  const hand = new Set(placement.units.filter((u) => u.manual !== undefined).map((u) => u.stepId));
+  const placed = placedStepIds(placement);
+  const flows = itemFlows(plan);
+  return {
+    toHand: distinctKeys(flows.filter((f) => placed.has(f.from) && hand.has(f.to))),
+    fromHand: distinctKeys(flows.filter((f) => hand.has(f.from) && placed.has(f.to))),
+  };
 }
 
 /** Σ item flows touching a placed step ÷ 64. */
@@ -210,17 +233,33 @@ export const RISER_WORDS = ', and up to each bus above it';
 /**
  * A singleblock takes its items through its spine face, which is its output side (GT keeps its front, `mainFacing`,
  * elsewhere): so in every mode each singleblock with item inputs gets "Input from Output Side" allowed on its
- * machine. Keyed by the machine cell's posKey, in unit order.
+ * machine. A venting steam singleblock's output side faces up (`PlacedUnit.outputSide`), so it takes its items on a
+ * side that needs no such setting. Keyed by the machine cell's posKey, in unit order.
  */
 export function outputSideInputs(placement: Placement): Map<string, HostConfig> {
   const configs = new Map<string, HostConfig>();
   for (const u of placement.units) {
     const port = u.ports.items[0];
-    if (u.multiblock || !u.io.itemIn || port === undefined) continue;
+    if (u.multiblock || u.outputSide !== undefined || !u.io.itemIn || port === undefined) continue;
     const cell = step(port, OPPOSITE[u.facing]!);
     configs.set(posKey(cell), { pos: cell, config: { inputFromOutputSide: true } });
   }
   return configs;
+}
+
+// ---- Line words ----
+
+/**
+ * What the `layout:logistics:line` step adds where the line's parts do not meet a machine at its output side or bus
+ * (architecture §11 entry 48): a venting steam machine is met on its middle-row side, as its output side faces up, and a
+ * machine run by hand gets nothing. Empty for a line with neither.
+ */
+export function lineExceptions(placement: Placement): string {
+  const steam = placement.units.some((u) => u.outputSide !== undefined);
+  const hand = [...new Set(placement.units.filter((u) => u.manual !== undefined).map((u) => `the ${u.name}`))];
+  const words = [...(steam ? ["a steam machine's middle-row side instead, as its output side faces up"] : []),
+    ...(hand.length === 0 ? [] : [`${joinNames(hand)} ${hand.length === 1 ? 'gets' : 'get'} nothing`])];
+  return words.length === 0 ? '' : ` (${words.join('; ')})`;
 }
 
 // ---- Names ----

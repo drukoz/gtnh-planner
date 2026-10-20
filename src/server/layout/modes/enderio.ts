@@ -52,7 +52,7 @@ import { fluidNets, type FluidNet } from '../internal.ts';
 import type { Parts } from '../parts.ts';
 import { growTree, linkBits, type PathBounds } from '../path.ts';
 import {
-  emptyModeResult, itemPorts, itemRisers, nameList, placedStepIds, RISER_WORDS, stepItemInputs, stepItemOutputs, unitItemRate,
+  emptyModeResult, itemPorts, itemRisers, lineExceptions, nameList, placedStepIds, RISER_WORDS, stepItemInputs, stepItemOutputs, unitItemRate,
   type ItemPort, type ModeHookup, type ModeInput, type ModeResult, type StepDraft,
 } from './mode.ts';
 
@@ -408,6 +408,8 @@ interface Crossing { entering: PlanFlow[]; leaving: PlanFlow[]; strays: Array<{ 
  * the step's items on every bus (plan 11, ruling R10). A unit's rates are split evenly over its extract faces and over
  * its insert faces. With them, `inputFromOutputSide` on every singleblock that takes items (the face is on its output
  * side, GT's `getFrontFacing()`, which takes items only with that setting), sorted by pos; such a face is `outputSide`.
+ * A venting steam machine's output side faces up (`PlacedUnit.outputSide`), so its face needs neither (architecture §11
+ * entry 48): GT lets its items in and out on any side but its front and its output side.
  */
 function machineFaces(plan: Plan, items: readonly PlanFlow[], placement: Placement): { faces: FacePlan[]; configs: HostConfig[] } {
   const blockAt = new Map(placement.blocks.map((b) => [posKey(b.pos), b]));
@@ -431,7 +433,7 @@ function machineFaces(plan: Plan, items: readonly PlanFlow[], placement: Placeme
     const insertRate = unitIntake(plan, items, u.stepId) / Math.max(1, roles.filter((r) => r.inserts).length);
     for (const { port, extracts, inserts } of roles) {
       if (!extracts && !inserts) continue;
-      const outputSide = !u.multiblock && inserts;
+      const outputSide = !u.multiblock && u.outputSide === undefined && inserts;
       faces.push({
         pos: port.pos, side: sideToward(port.pos, port.behind), target: u.name, stepId: u.stepId,
         extract: extracts ? { keys: makes, rate: extractRate } : null, insert: inserts ? { keys: takes, rate: insertRate } : null,
@@ -609,7 +611,7 @@ function itemLine(input: ModeInput): ItemLine {
   const chestWords = [...(inputChest === null ? [] : ['an input chest']),
     ...(outputSlices.length === 0 ? [] : [outputSlices.length === 1 ? 'an output chest' : `${fmtInt(outputSlices.length)} output chests`])];
   const lineDraft: StepDraft = { id: 'layout:logistics:line', kind: 'logistics', pin: 'site',
-    text: `Lay ${fmtInt(cells.length)}× ${CONDUIT_NAMES.item} along the middle row so it touches every machine's output side or bus`
+    text: `Lay ${fmtInt(cells.length)}× ${CONDUIT_NAMES.item} along the middle row so it touches every machine's output side or bus${lineExceptions(placement)}`
       + `${risers.links.length > 0 ? RISER_WORDS : ''}${chestWords.length > 0 ? `, with ${joinNames(chestWords)} at the end` : ''}` };
   const stockDraft: StepDraft | null = hooked !== null ? hooked.draft : inputChest === null ? null
     : { id: 'layout:logistics:inputs', kind: 'logistics', pin: 'site', text: `Put the raw inputs in the input chest: ${nameList(plan, pack, inputKeys)}` };

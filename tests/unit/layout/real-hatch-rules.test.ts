@@ -281,15 +281,19 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('hatch rules on the real 2.9 exp
         bad.push(...checkUnit(u, { inputs: fluidInputs, outputs: fluidOutputs }), ...checkGt(u));
       }
       expect(bad).toEqual([]);
-      const hatches = units.reduce((n, u) => n + u.cells.filter((c) => c.role === 'hatch').length, 0);
       const loose: string[] = [];
       for (const mode of MODES) {
         const project = { ...makeProject({ scanId: null, baseId: null }), settings: { ...settings, logistics: mode } };
         const layout = await layoutLine(pack, plan, emptyScan(), project);
+        // the units as layoutLine makes them in this mode: GT's primitive machines follow their own rules in every mode
+        // but machine to machine (architecture §11 entry 48), which runs a Bricked Blast Furnace or a Coke Oven by hand
+        // and so places the units of its row elsewhere
+        const modeUnits = unitsFromPlan(pack, plan, { primitive: mode !== 'direct' }).units;
+        const hatches = modeUnits.reduce((n, u) => n + u.cells.filter((c) => c.role === 'hatch').length, 0);
         expect(layout.status, mode).toBe('no-world');
         expect(overlaps(layout.blocks.filter((b) => b.role !== 'ghost')).length, `${mode}: cells holding two blocks`).toBe(0);
         expect(layout.blocks.filter((b) => b.role === 'hatch').length, `${mode}: hatches in the layout`).toBe(hatches);
-        loose.push(...checkPorts(plan, units, layout, mode));
+        loose.push(...checkPorts(plan, modeUnits, layout, mode));
         for (const w of layout.warnings) bump(codes, `${mode} ${w.code}`);
       }
       expect(loose).toEqual([]);
