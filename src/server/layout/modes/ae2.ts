@@ -265,8 +265,9 @@ export function ae2Mode(input: ModeInput): ModeResult {
   }
 
   if (patterns > 0) extraParts.push({ key: parts.blank_pattern.key, amount: patterns, why: 'one processing pattern per machine', group: 'logistics' });
-  if (capacityCards > 0) extraParts.push({ key: parts.ae2_capacity_card.key, amount: capacityCards, why: 'ME Export Bus upgrades', group: 'logistics' });
-  if (accelerationCards > 0) extraParts.push({ key: parts.ae2_acceleration_card.key, amount: accelerationCards, why: 'ME Export Bus upgrades', group: 'logistics' });
+  for (const [part, amount] of [[parts.ae2_capacity_card, capacityCards], [parts.ae2_acceleration_card, accelerationCards]] as const) {
+    if (amount > 0) extraParts.push({ key: part.key, amount, why: 'ME Export Bus upgrades', group: 'logistics' });
+  }
   const exportWords = exportBusFor.size === 0 ? ''
     : `, but only cable in front of ${joinNames([...exportBusFor].map(([name, n]) => (n === 1 ? `the ${name}` : `${fmtInt(n)}× ${name}`)))}, with an ME `
       + 'Export Bus on its face toward the machine';

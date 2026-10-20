@@ -44,7 +44,9 @@ export const CHIP_FILTER_SLOTS = 9;
 export const INTERFACE_CHIP_SLOTS = 4;
 
 /** The part of each chip kind the line lays, in the order the parts list names them. */
-const CHIP_PARTS: ReadonlyArray<readonly [ChipKind, PartId]> = [['responder', 'chip_responder'], ['extractor', 'chip_extractor'], ['terminator', 'chip_terminator']];
+const CHIP_PARTS: ReadonlyArray<readonly [ChipKind, PartId]> = [
+  ['responder', 'chip_responder'], ['extractor', 'chip_extractor'], ['terminator', 'chip_terminator'],
+];
 
 function compareText(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
@@ -158,7 +160,8 @@ export function routedMode(input: ModeInput): ModeResult {
 
   const hooked = network?.kind === 'routed';
   if (!hooked) {
-    warnings.unshift({ code: 'routed_missing', text: 'No Project Red routed network at this base: the line gets its own — put raw inputs in the input chest' });
+    warnings.unshift({ code: 'routed_missing',
+      text: 'No Project Red routed network at this base: the line gets its own — put raw inputs in the input chest' });
   }
   const drafts: StepDraft[] = [
     { id: 'layout:logistics:line', kind: 'logistics', pin: 'site',

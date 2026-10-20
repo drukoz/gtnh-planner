@@ -73,7 +73,8 @@ describe('AE2 feeding', () => {
       inputs: [{ slot: 0, consumed: true, chance: 1, options: [{ key: 't:dust@0', amount: 1 }, { key: 't:in@0', amount: 1 }] }],
       outputs: [{ key: 't:out_m@0', amount: 1, chance: 1 }] });
     // one run takes one item of the slot: the option the line uses most, the slot's first on a tie (here Titanium Dust)
-    expect(interfaces(ae2(p, plan).r)[0]!.feed?.interface?.patterns).toEqual([{ inputs: [{ key: 't:dust@0', amount: 1 }], outputs: [{ key: 't:out_m@0', amount: 1 }] }]);
+    expect(interfaces(ae2(p, plan).r)[0]!.feed?.interface?.patterns).toEqual([
+      { inputs: [{ key: 't:dust@0', amount: 1 }], outputs: [{ key: 't:out_m@0', amount: 1 }] }]);
   });
 
   it('turns blocking mode on unless the machine holds an item blocking mode does not ignore', () => {
