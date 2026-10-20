@@ -558,6 +558,26 @@ describe('planLine', () => {
     // The left-out recipes by machine and product, not by their 16-hex ids.
     expect(p.warnings).toEqual([{ code: 'free-loop', text: 'Ignored 2 recipes that make Thing from nothing (likely a recipe data loop): Macerator making Widget, Macerator making Gizmo' }]);
   });
+  it('says where a molten metal out of reach is found, as for its dust', async () => {
+    // Plan 09's final review: a swap list read only pumped fluids for where a fluid comes from, so a Widget cast from
+    // Molten Titanium (titanium only the Moon has) read "needs Molten Titanium, which you cannot get here". A molten
+    // fluid's material is found where its ores are, as a base item's is (and an option of a slot says the same).
+    const p = packFromSpec({
+      ...MINI_GT,
+      items: [...MINI_GT.items!, { key: 't:widget@0', name: 'Widget' }],
+      fluids: [...MINI_GT.fluids!, { key: 'fluid:molten.titanium', name: 'Molten Titanium' }],
+      recipes: [...MINI_GT.recipes!,
+        { id: 'widget-lv', map: 'gt.recipe.assembler', in: [['t:iron_plate@0', 2]], out: [['t:widget@0', 1]], eut: 16 },
+        { id: 'widget-ti', map: 'gt.recipe.assembler', in: [['fluid:molten.titanium', 144]], out: [['t:widget@0', 1]], eut: 16 },
+        { id: 'widget-mix', map: 'gt.recipe.assembler', in: [{ any: [['fluid:molten.titanium', 72], ['fluid:molten.iron', 288]] }], out: [['t:widget@0', 1]], eut: 16 },
+        { id: 'extract-ti', map: 'gt.recipe.fluidextractor', in: [['t:titanium_ingot@0', 1]], out: [['fluid:molten.titanium', 144]], eut: 30, dur: 40 }],
+    });
+    const plan = await planLine(p, S({ target: 't:widget@0', tier: 1, recipeChoice: { 't:widget@0': 'widget-mix' } }), emptyContext());
+    const step = plan.steps.find((s) => s.mainOutput === 't:widget@0')!;
+    expect(step.recipeId).toBe('widget-mix');
+    expect(step.alternatives.find((a) => a.recipeId === 'widget-ti')?.unusable).toEqual(['needs Moon (T1 rocket)']);
+    expect(step.options?.[0]?.choices.find((c) => c.key === 'fluid:molten.titanium')?.unusable).toEqual(['needs Moon (T1 rocket)']);
+  });
 });
 
 describe('settingsHash / planCacheKey / PlanCache', () => {

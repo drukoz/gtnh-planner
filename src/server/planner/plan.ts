@@ -20,7 +20,7 @@ import {
   EXCLUSION_RULES, acceptRecipe, buildCandidates, heldOption, keptOptions, usesAvoided, type Acceptance, type CandidateGraph, type HeldAvoid,
   type LeafDecision, type LeafOracle, type LpRecipe, type PlanEnv,
 } from './candidates.ts';
-import { analyzeCosts, type CostAnalysis } from './costs.ts';
+import { analyzeCosts, moltenMaterial, type CostAnalysis } from './costs.ts';
 import { supportingLines } from './lines.ts';
 import { buildFlows, emptyContainers, optionShares, planSteps, stepLine, type OptionShare, type StepLine } from './machines.ts';
 import { makeN, wholeRuns } from './make-n.ts';
@@ -216,18 +216,18 @@ const NO_WAY: ReadonlySet<string> = new Set(['fake', 'opaque', 'fuel', 'vanilla-
 /**
  * The places out of the group's reach (`reachable`) that would give it `key`, by name in the pack's order: for a GT base
  * item, the dimensions whose veins or small ores hold its material and the capabilities that yield it; for a fluid, the
- * dimensions that pump it. "Moon (T1 rocket)", as unlock hints name them.
+ * dimensions that pump it, and for a molten one (`fluid:molten.titanium`) also those of its material, as for its dust.
+ * "Moon (T1 rocket)", as unlock hints name them.
  */
 function placesFor(pack: Pack, key: StuffKey, reachable: ReadonlySet<string>): string[] {
   const places = new Set<string>();
   if (isFluidKey(key)) {
     for (const source of pack.worldgen.fluidSources) if (source.fluid === key) for (const dim of source.dims) places.add(dim);
-  } else {
-    const material = isBaseItem(pack, key) ? pack.items.get(key)?.gt?.material : undefined;
-    if (material !== undefined) {
-      for (const vein of pack.worldgen.veins) if (Object.values(vein.materials).includes(material)) for (const dim of vein.dims) places.add(dim);
-      for (const capability of pack.worldgen.capabilities) if (capability.yields.includes(material)) places.add(capability.key);
-    }
+  }
+  const material = isFluidKey(key) ? moltenMaterial(pack, key) : isBaseItem(pack, key) ? pack.items.get(key)?.gt?.material : undefined;
+  if (material !== undefined) {
+    for (const vein of pack.worldgen.veins) if (Object.values(vein.materials).includes(material)) for (const dim of vein.dims) places.add(dim);
+    for (const capability of pack.worldgen.capabilities) if (capability.yields.includes(material)) places.add(capability.key);
   }
   const names: string[] = [];
   for (const dim of pack.worldgen.dimensions) {
@@ -777,7 +777,7 @@ function dimensionOfId(byKey: ReadonlyMap<string, DimensionInfo>, sortedDims: re
  * swap lists with every option of a slot, flows, raw inputs, byproducts, build list with its breakdown, totals, unlocks,
  * warnings, the avoided goods with what they are made from and the item and fluid entries of the avoid list, ruling
  * R11), `map:<id>` for every recipe map of a step or alternative, `dim:<key>` for every dimension it reaches or a source
- * names, and `dimId:<n>` for every dimension id a found spot names; keys in sorted order.
+ * names, and `dimId:<n>` for every dimension id a found spot or a reused machine stands in; keys in sorted order.
  */
 function planNames(pack: Pack, plan: Plan, settings: PlanSettings): Record<string, string> {
   const target = settings.target;
@@ -839,6 +839,12 @@ function planNames(pack: Pack, plan: Plan, settings: PlanSettings): Record<strin
         const id = `dimId:${spot.dim}`;
         if (!names.has(id)) names.set(id, dimensionOfId(byKey, sortedDims, source, spot.dim)?.name ?? `DIM${spot.dim}`);
       }
+    }
+  }
+  // Where the machines a step reuses stand: the step panel names a dimension other than the overworld.
+  for (const step of plan.steps) {
+    for (const { dim } of step.reused?.where ?? []) {
+      if (!names.has(`dimId:${dim}`)) names.set(`dimId:${dim}`, sortedDims.find((d) => d.id === dim)?.name ?? `DIM${dim}`);
     }
   }
   return Object.fromEntries([...names].sort(([a], [b]) => byString(a, b)));

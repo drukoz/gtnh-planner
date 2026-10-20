@@ -718,7 +718,7 @@ function optionPinsOf(pack: Pack, settings: PlanSettings, onAvoidList: (key: Stu
     if (held.length === 0) {
       stale(`${product}: ${pack.nameOf(key)} is no longer an option of the pinned ingredient; the planner chooses one`);
     } else if (onAvoidList(key)) {
-      stale(`${product}: the pinned ingredient ${pack.nameOf(key)} is on the avoid list; using another option that avoids it`);
+      stale(`${product}: the pinned ingredient ${pack.nameOf(key)} is on the avoid list; ignoring the pin`);
     } else {
       for (const [ing, option] of held) slots.set(ing, option);
       pins.set(pin, key);

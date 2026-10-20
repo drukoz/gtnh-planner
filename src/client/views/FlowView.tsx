@@ -556,6 +556,8 @@ type Selected = { kind: 'step'; id: string } | { kind: 'import'; key: StuffKey; 
  */
 function FlowDiagram(props: {
   plan: Plan; previousPlan: Plan | null | undefined; settings: PlanSettings; per: 'min' | 'hour'; send: ProjectViewProps['send'];
+  /** The project links a world base (the step panel says the machines it reuses stand there). */
+  base: boolean;
 }): ReactElement {
   const { plan, previousPlan, settings, per, send } = props;
   const [lineToggles, setLineToggles] = useState<ReadonlyMap<StuffKey, boolean>>(() => new Map());
@@ -602,7 +604,7 @@ function FlowDiagram(props: {
     const step = plan.steps.find((s) => s.id === selected.id);
     // Keyed by the step, so its open "more…" pages close when another step is picked.
     if (step !== undefined) {
-      panel = <StepPanel key={step.id} step={step} plan={plan} settings={settings} per={per} send={send} onClose={close} onSelect={selectStep} />;
+      panel = <StepPanel key={step.id} step={step} plan={plan} settings={settings} per={per} send={send} onClose={close} onSelect={selectStep} base={props.base} />;
       selectedId = step.id;
     }
   } else if (selected?.kind === 'import' && plan.flows.some((f) => f.from === 'raw' && f.key === selected.key)) {
@@ -659,5 +661,5 @@ export function FlowView(props: ProjectViewProps): ReactElement {
   if (plan.status === 'infeasible') return <Infeasible plan={plan} />;
   const { settings } = project;
   const per = settings.mode === 'makeN' ? 'hour' : settings.per;
-  return <FlowDiagram plan={plan} previousPlan={props.previousPlan} settings={settings} per={per} send={send} />;
+  return <FlowDiagram plan={plan} previousPlan={props.previousPlan} settings={settings} per={per} send={send} base={project.world.baseId !== null} />;
 }

@@ -172,6 +172,18 @@ describe('ingredient options', () => {
     expect(flagged).toEqual([['cast-weight', LEAD], ['x-lead', 't:lead_ingot@0']]);
     expect(plan.avoided?.map((a) => [a.key, a.unavoidable])).toEqual([[LEAD, true], ['t:antimony_dust@0', false], ['t:lead_ingot@0', true]]);
   });
+  it('says it ignores a pinned option on the avoid list without promising another option', async () => {
+    // Plan 09's final review: at LV only lead can be extracted (the solder and tin extractors need 34 EU/t, an MV machine),
+    // so the line uses the pinned lead anyway, flagged as nothing at the tier avoiding it; the pin's warning said
+    // "using another option that avoids it".
+    const spec = structuredClone(CIRCUIT);
+    for (const id of ['x-solder', 'x-tin']) spec.recipes!.find((r) => r.id === id)!.eut = 34;
+    const plan = await planLine(packFromSpec(spec), S({ optionChoice: { 'ca#100': LEAD }, avoid: ['Lead'] }), emptyContext());
+    expect(plan.status).toBe('ok');
+    expect(ids(plan)).toEqual(['ca', 'x-lead']);
+    expect(plan.warnings.filter((w) => w.code === 'avoid-unavoidable').map((w) => w.key)).toContain(LEAD);
+    expect(staleOptions(plan)).toEqual([{ code: 'stale-option', key: 'ca#100', text: 'Electronic Circuit: the pinned ingredient Molten Lead is on the avoid list; ignoring the pin' }]);
+  });
 });
 
 describe('a slot split between two options', () => {
