@@ -31,9 +31,6 @@ const REF_IDS: readonly string[] = [
 /** Its Steel Rod on the Lathe, and on the Extruder (2 rods an ingot), which the spec allows in its place. */
 const ROD_LATHE = '3b34f87f2984fe95';
 const ROD_EXTRUDER = '31693ed806ba0a95';
-/** Its Molten Tin from Tin Dust, and the same recipe on a Tin Ingot, at the same raw material: an exact tie. */
-const TIN_FROM_DUST = '1197004ce4210fc5';
-const TIN_FROM_INGOT = 'd4bfdccc8c512446';
 /** Its centrifuge step: Rubber Wood on circuit 2, 3 Centrifuges at MV. */
 const RUBBER_WOOD_CENTRIFUGE = '85e9bdddf3f2bced';
 const TIN_DUST = 'gregtech:gt.metaitem.01@2057';
@@ -97,10 +94,13 @@ function rawPerMinute(plan: Plan): Record<string, number> {
   return out;
 }
 
-/** The plan's step recipes, sorted, with the Extruder's rods read as the Lathe's and the tin-ingot extractor as the dust's. */
+/**
+ * The plan's step recipes, sorted, with the Extruder's rods read as the Lathe's (the one exception the spec allows). Its
+ * Molten Tin is the reference's, from Tin Dust: a plan that runs the Tin Ingot twin of that recipe (d4bfdccc8c512446),
+ * the same at the same raw material, runs the dust's instead (`twinMoves`, solve.ts), so it never comes down to chance.
+ */
 function referenceIds(plan: Plan): string[] {
-  const same: Readonly<Record<string, string>> = { [ROD_EXTRUDER]: ROD_LATHE, [TIN_FROM_INGOT]: TIN_FROM_DUST };
-  return plan.steps.map((s) => same[s.recipeId] ?? s.recipeId).sort();
+  return plan.steps.map((s) => (s.recipeId === ROD_EXTRUDER ? ROD_LATHE : s.recipeId)).sort();
 }
 
 /** Its raw material is the reference's: every key to 1e-6, steel at most 4 a minute (2 with the Extruder), nothing else. */
@@ -128,6 +128,12 @@ describe.skipIf(path === undefined)("the user's reference Electronic Circuit flo
   let pack: Pack;
   /** The reference's settings as the planner reads them (`normalizeSettings`: no migration). */
   let stored: PlanSettings;
+  /**
+   * R0's settings: `stored` with crafting by hand given explicitly, as the acceptance spec's R0 crafts by hand. The stored
+   * project says so today; once `normalizeSettings` reads every project as automated (the user's ruling that crafting
+   * steps are automatic), `planLine` still plans an explicit `automateCrafting: false` by hand.
+   */
+  let byHand: PlanSettings;
   const timed = async (s: PlanSettings, tuning?: SolveTuning): Promise<{ plan: Plan; seconds: number }> => {
     const started = performance.now();
     const plan = await planLine(pack, s, emptyContext(), tuning);
@@ -136,6 +142,7 @@ describe.skipIf(path === undefined)("the user's reference Electronic Circuit flo
 
   beforeAll(async () => {
     stored = normalizeSettings((JSON.parse(readFileSync(path as string, 'utf8')) as { settings: Partial<PlanSettings> }).settings);
+    byHand = { ...stored, automateCrafting: false };
     pack = await loadPack(activeExportDir(loadConfig()));
     await planLine(pack, { ...stored, target: GLASS_TUBE, recipeChoice: {}, per: 'min', tier: 1 }, emptyContext());   // warm the pack
   }, 300_000);
@@ -143,9 +150,8 @@ describe.skipIf(path === undefined)("the user's reference Electronic Circuit flo
   it('R0: plans the reference as stored, with its 16 recipes, raw material, 14 machine blocks, 3 Centrifuges and 4 hand steps', async () => {
     // The acceptance spec's R0 (its pins, stops and crafting by hand, its stored 2 % step charge: normalizeSettings
     // applies no migration). On 93e508e: 17 blocks, 6 Basic Centrifuges for 3 Advanced (the step charge was per step).
-    // Its Molten Tin step may run the Tin Ingot twin of the dust's recipe: the two are the same recipe at the same raw
-    // price (1 a unit), an exact tie the build MIP's root node breaks either way, and REF_RAW takes tin as dust or ingot.
-    const { plan, seconds } = await timed(stored);
+    // Its 16 recipes exactly, the Molten Tin from Tin Dust included (on 56e177c the ingot twin's at 2 %, the dust's at 50 %).
+    const { plan, seconds } = await timed(byHand);
     logPlan('R0', plan, seconds);
     expect(plan.status, JSON.stringify(plan.warnings)).toBe('ok');
     expect(seconds).toBeLessThan(PLAN_SECONDS);
@@ -158,17 +164,17 @@ describe.skipIf(path === undefined)("the user's reference Electronic Circuit flo
     expect(centrifuges?.count).toBe(3);
     expect(plan.steps.filter((s) => s.handCraft)).toHaveLength(4);
     // A Project Red copy shares no machine (fix wave 2 (d)): the two circuit-1 Wiremills keep their own, 14 blocks still.
-    const routed = await timed({ ...stored, logistics: 'routed' });
+    const routed = await timed({ ...byHand, logistics: 'routed' });
     logPlan('R0 on Project Red', routed.plan, routed.seconds);
     expect(routed.plan.status).toBe('ok');
     expect(routed.plan.steps.filter((s) => s.pool !== undefined)).toEqual([]);
     expect(machineBlocks(routed.plan)).toBe(14);
-    const ae2 = await timed({ ...stored, logistics: 'ae2' });
+    const ae2 = await timed({ ...byHand, logistics: 'ae2' });
     logPlan('R0 on AE2 (logged only: its parts need HV and EV)', ae2.plan, ae2.seconds);
   }, 120_000);
 
   it('R1: plans R0 with its crafting on 4 Auto Workbenches, no hand step and 18 machine blocks', async () => {
-    // The acceptance spec's R1 (its Molten Tin, as R0's, may come from the Tin Ingot twin of the dust's recipe).
+    // The acceptance spec's R1: R0's recipes exactly, the Molten Tin from Tin Dust included.
     const { plan, seconds } = await timed({ ...stored, automateCrafting: true });
     logPlan('R1', plan, seconds);
     expect(plan.status, JSON.stringify(plan.warnings)).toBe('ok');
