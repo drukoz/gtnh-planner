@@ -1,12 +1,13 @@
 // The line layout: architecture §6.7, with configured parts (§11.14: `CoverSpec`, `LayoutBlock.covers/config`), the
 // owning build step for the projector (§11.23: `LayoutBlock.buildStep`), EnderIO conduit faces and tail chests
-// (architecture "EnderIO conduits, granted change requests (add-on 11)": `ConduitSpec`, `LayoutBlock.conduits/tail`)
-// and Plan 5's optional additions.
+// (architecture "EnderIO conduits, granted change requests (add-on 11)": `ConduitSpec`, `LayoutBlock.conduits/tail`),
+// the structured feeding configuration (architecture §11 entry 51: `LayoutBlock.feed`) and Plan 5's optional additions.
 // Fields after an "optional addition" comment extend §6.7 without renaming or reshaping it.
 // Pure TypeScript shared by server and browser: nothing from node:* may be imported here.
 
 import type { StuffKey } from '../keys.ts';
 import type { Face } from './assets.ts';
+import type { FeedSpec } from './feed.ts';
 import type { BlockRef } from './pack.ts';
 import type { BomLine, BuildStep, LogisticsMode, PlanContext, PlanWarning, PowerSummary } from './plan.ts';
 import type { TapPoint } from './world.ts';
@@ -96,6 +97,12 @@ export interface LayoutBlock {
    * side (`mFacing`, where its output cover and inputs go). Only singleblock machines carry it.
    */
   mainFacing?: number;
+  /**
+   * The structured feeding configuration (architecture §11 entry 51, `src/shared/types/feed.ts`): a routed interface
+   * pipe's chips with their filter mode and items, an ME interface's patterns and blocking mode. The configure steps,
+   * the 3D view and the Connections view word it with `configuredLines`; the feeding checker reads it.
+   */
+  feed?: FeedSpec;
 }
 
 export interface Hookup {

@@ -206,7 +206,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('hatch rules on the real 2.9 exp
   /**
    * Every fluid port of the line's multiblocks, and every bus port that moves the step's items (an input bus that holds
    * only the programmed circuit takes nothing), joined to its hatch by a pipe (GT pipes, a routed interface pipe, an ME
-   * interface) or a conduit face, or a fluid port the layout warns route_failed for (by its text: the layout gives each
+   * interface or an ME Export Bus on a cable) or a conduit face, or a fluid port the layout warns route_failed for (by its text: the layout gives each
    * text once, so two steps of one machine share it); a port that faces no hatch of its unit is a fault of the placement
    * this test copies.
    */
@@ -253,7 +253,8 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('hatch rules on the real 2.9 exp
         if (!(kind === 'input_bus' ? u.io.itemIn : u.io.itemOut)) continue;
         const joined = mode === 'direct' ? at(p).some((b) => b.role === 'pipe' && (((b.connections ?? 0) >> side) & 1) === 1)
           : mode === 'routed' ? at(p).some((b) => b.role === 'chip_pipe')
-            : mode === 'ae2' ? at(p).some((b) => b.role === 'interface')
+            // an ME interface, or (a multiblock that makes only fluids: architecture §11 entry 51) an ME Export Bus on the cable's face toward its bus
+            : mode === 'ae2' ? at(p).some((b) => b.role === 'interface' || (b.covers ?? []).some((c) => c.settings.mode === 'me_export' && c.face === FACES[side]))
               : faces(p, side, (kind) => kind === 'item');
         bump(ports, `${mode} bus ${joined ? 'joined' : 'LOOSE'}`);
         if (!joined) bad.push(`${mode}: ${u.name}'s bus port at ${p.join(',')} is not joined`);

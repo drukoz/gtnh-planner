@@ -15,7 +15,7 @@
 import type { ElkExtendedEdge, ElkNode } from 'elkjs/lib/elk-api.js';
 import { TIER_NAMES } from '../../shared/gt/tiers.ts';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
-import { configTexts, conduitFaceText, coverText, faceName } from '../../shared/layout/configure-text.ts';
+import { configTexts, conduitFaceText, coverText, faceName, feedTexts } from '../../shared/layout/configure-text.ts';
 import { CONDUIT_MODE_NAMES, CONDUIT_NAMES, DYE_NAMES, hookupNetworkKind } from '../../shared/layout/enderio.ts';
 import { fmtInt, fmtRate, joinNames, NETWORK_NAMES } from '../../shared/layout/format.ts';
 import { DIRS, OPPOSITE, posKey, sideToward, step, type Vec3 } from '../../shared/layout/geometry.ts';
@@ -195,7 +195,8 @@ function lineBoxes(layout: Layout, plan: Plan, nameOf: (k: StuffKey) => string):
   }
   for (const i of live.filter(isInterface)) {
     const b = blocks[i]!;
-    add({ id: `iface:${posKey(b.pos)}`, kind: 'interface', title: b.label, lines: configTexts(b.config ?? {}), blocks: [i] });
+    // its settings, then its chips or patterns (architecture §11 entry 51)
+    add({ id: `iface:${posKey(b.pos)}`, kind: 'interface', title: b.label, lines: [...configTexts(b.config ?? {}), ...feedTexts(b.feed, nameOf)], blocks: [i] });
   }
   layout.hookups.forEach((h, n) => {
     const laid = live.filter((i) => blocks[i]!.hookup === n);

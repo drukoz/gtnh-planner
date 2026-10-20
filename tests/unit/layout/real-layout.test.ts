@@ -30,9 +30,9 @@ const PER_MINUTE = 60;
 const LAYOUT_LIMIT_MS = 5_000;
 const MODES: readonly LogisticsMode[] = ['direct', 'routed', 'ae2'];
 
-/** A non-ghost block with covers or settings: what needs a configure step (architecture §11.14). */
+/** A non-ghost block with covers, settings, or chips and patterns: what needs a configure step (architecture §11.14, §11 entry 51). */
 function isConfigured(b: LayoutBlock): boolean {
-  return b.role !== 'ghost' && ((b.covers?.length ?? 0) > 0 || Object.keys(b.config ?? {}).length > 0);
+  return b.role !== 'ghost' && ((b.covers?.length ?? 0) > 0 || Object.keys(b.config ?? {}).length > 0 || Object.keys(b.feed ?? {}).length > 0);
 }
 
 /** `code` or `code×n`, one per code in code order. */

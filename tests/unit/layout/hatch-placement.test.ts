@@ -116,7 +116,8 @@ describe.each(MODES)('a pyrolyse oven, whose input bus GT takes only above its b
       expect(at(layout, bus.pos)[0]!.config).toEqual({ inputFilter: true });
     } else if (mode === 'routed') {
       expect([roleAt(below), roleAt(port)]).toEqual([['pipe'], ['chip_pipe']]);
-      expect(at(layout, port)[0]!.config!.chips).toContain('Item Responder Chip');
+      // an input bus gets its Item Responder Chip and no Item Extractor Chip (the feeding fix, architecture §11 entry 51)
+      expect(at(layout, port)[0]!.feed?.chips?.map((c) => [c.kind, c.filter?.mode])).toEqual([['responder', 'whitelist']]);
     } else if (mode === 'ae2') {
       expect([roleAt(below), roleAt(port)]).toEqual([['pipe'], ['interface']]);
       expect(at(layout, below)[0]!.label).toBe('ME Glass Cable - Fluix');
