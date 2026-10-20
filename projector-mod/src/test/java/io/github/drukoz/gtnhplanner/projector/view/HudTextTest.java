@@ -24,17 +24,7 @@ class HudTextTest {
         assertTrue(HudText.summary(PayloadParserTest.sample(), STATES, ViewFilter.ALL.withStep(6)).contains("0/3 placed, 0 wrong, 1 can't be checked"));
     }
 
-    @Test void explainsTheBlockUnderTheCrosshair() throws Exception {
-        ProjectorData d = PayloadParserTest.sample();
-        PlannedBlock plain = d.blocks.get(4), covered = d.blocks.get(3);
-        assertEquals("Basic Macerator: placed correctly", HudText.lookingAt(plain, CORRECT));
-        assertEquals("Basic Macerator: wrong block here", HudText.lookingAt(plain, WRONG_BLOCK));
-        // a single-block machine names both its sides (the review of the EnderIO In / Out fix): the check compares both
-        assertEquals("Basic Macerator: wrong facing, its front should face west and its output side south", HudText.lookingAt(plain, WRONG_FACING));
-        assertEquals("Low Voltage Transformer: wrong facing, its front should face west", HudText.lookingAt(d.blocks.get(2), WRONG_FACING));
-        assertEquals("Basic Macerator: can't be checked by the mod", HudText.lookingAt(plain, UNCHECKED));
-        assertNull(HudText.lookingAt(plain, UNLOADED));
-        assertEquals("Basic Macerator: not placed yet; cover: Conveyor Module (LV) on the south face", HudText.lookingAt(covered, MISSING));
+    @Test void shortensLongStepText() {
         assertEquals("Place 2× Basic Macerator facing the mid…", HudText.shorten("Place 2× Basic Macerator facing the middle row", 40));
     }
 
@@ -55,7 +45,6 @@ class HudTextTest {
     // step that places it (the line step), and not yet for the fluids step or the whole line.
     @Test void countsABundleWithoutItsFluidConduitAsPlacedOnlyForItsOwnStep() throws Exception {
         ProjectorData d = PayloadParserTest.bundleSample();
-        assertEquals(PayloadParserTest.BUNDLE_LABEL + ": not all its conduits placed yet", HudText.lookingAt(d.blocks.get(10), INCOMPLETE));
         BlockState[] s = {MISSING, MISSING, MISSING, MISSING, MISSING, CORRECT, CORRECT, MISSING, CORRECT, MISSING, INCOMPLETE, INCOMPLETE};
         assertEquals("Planner: Steel line — 3/12 placed, 0 wrong", HudText.summary(d, s, ViewFilter.ALL));
         assertTrue(HudText.summary(d, s, ViewFilter.ALL.withStep(PayloadParserTest.LINE)).startsWith("Planner: Steel line — 5/5 placed, 0 wrong · showing step 7: "));
@@ -68,10 +57,8 @@ class HudTextTest {
             up.addProperty("face", 1); up.addProperty("item", "gregtech:gt.metaitem.01@32749"); up.addProperty("label", "Shutter Module");
             PayloadParserTest.block(o, 3).getAsJsonArray("covers").add(up);
         })));
-        assertEquals("Basic Macerator: wrong facing, its front should face west and its output side south; cover: Conveyor Module (LV) on the south face; "
-            + "cover: Shutter Module on the up face", HudText.lookingAt(d.blocks.get(3), WRONG_FACING));
-        ProjectorData noFront = PayloadParser.parse(new java.io.StringReader(PayloadParserTest.mutate(o -> PayloadParserTest.block(o, 4).remove("mainFacing"))));
-        assertEquals("Basic Macerator: wrong facing, its output side should face south", HudText.lookingAt(noFront.blocks.get(4), WRONG_FACING));
+        assertEquals(Arrays.asList("cover: Conveyor Module (LV) on the south face", "cover: Shutter Module on the up face"),
+            HudText.blockLines(d.blocks.get(3), WRONG_FACING).subList(2, 4));
         assertEquals("Planner: Steel line — 1/2 placed, 1 wrong · showing layer y=64, step 2: Place 2× Basic Macerator facing the mid…",
             HudText.summary(d, STATES, ViewFilter.ALL.withLayer(64).withStep(1)));
     }

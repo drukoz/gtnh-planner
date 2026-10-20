@@ -55,47 +55,6 @@ public final class HudText {
         return text.toString();
     }
 
-    /**
-     * What the player is looking at: {@code <label>: <what the check found>} (a conduit bundle that lacks a conduit
-     * another step lays: {@code not all its conduits placed yet}), then
-     * {@code ; cover: <label> on the <side> face} for each cover; null for a block that is not loaded, which is neither
-     * right nor wrong. A wrong facing names the side to turn: a single-block machine's own front and output side, both
-     * checked ({@code its front should face <side> and its output side <side>}), or its output side alone when the
-     * planner sent no front; else the front.
-     */
-    public static String lookingAt(PlannedBlock b, BlockState s) {
-        String found;
-        switch (s) {
-            case CORRECT:
-                found = "placed correctly";
-                break;
-            case WRONG_BLOCK:
-                found = "wrong block here";
-                break;
-            case WRONG_FACING:
-                found = wrongFacing(b);
-                break;
-            case MISSING:
-                found = "not placed yet";
-                break;
-            case INCOMPLETE:
-                found = "not all its conduits placed yet";
-                break;
-            case UNCHECKED:
-                found = "can't be checked by the mod";
-                break;
-            case UNLOADED:
-                return null;
-            default:
-                throw new IllegalArgumentException("Unknown block state " + s);
-        }
-        StringBuilder text = new StringBuilder(b.label).append(": ").append(found);
-        for (PlannedCover c : b.covers) {
-            text.append("; cover: ").append(c.label).append(" on the ").append(Facing.name(c.face)).append(" face");
-        }
-        return text.toString();
-    }
-
     /** For a player in another dimension than the line: {@code Planner: <name> — the line is in dimension <dim>}. */
     public static String otherDimension(ProjectorData d) {
         return "Planner: " + d.name + " — the line is in dimension " + d.dim;

@@ -11,10 +11,12 @@ import io.github.drukoz.gtnhplanner.projector.model.ProjectorData;
 import io.github.drukoz.gtnhplanner.projector.net.Callback;
 import io.github.drukoz.gtnhplanner.projector.net.PlannerApi;
 import io.github.drukoz.gtnhplanner.projector.net.PlannerUrl;
+import io.github.drukoz.gtnhplanner.projector.view.AimRay;
 import io.github.drukoz.gtnhplanner.projector.view.HudText;
 import io.github.drukoz.gtnhplanner.projector.view.ViewFilter;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -90,6 +92,18 @@ public final class ProjectorSession {
     /** Why the last background refresh failed, shown on the HUD until a fetch works; null when it did not fail. */
     private String lastError;
     private String renderError;
+
+    /** How long a find lasts at most, in milliseconds. */
+    private static final long FIND_MS = 60_000;
+
+    /** The ghosts under the crosshair, nearest first, and where the eye was; not saved. */
+    private List<AimRay.Hit> hits = Collections.emptyList();
+    private double[] eye;
+    /** Whether {@code G} hid every ghost; lasts the game run and survives {@code /planner clear}. */
+    private boolean ghostsHidden;
+    /** The block being found (index in {@link ProjectorData#blocks}), −1 for none, and when it ends. */
+    private int foundIndex = -1;
+    private long foundUntil;
 
     /** Numbers the fetches: an answer to any but the latest is stale. */
     private int fetchNumber;
@@ -192,7 +206,9 @@ public final class ProjectorSession {
     /**
      * The HUD lines, none when nothing is loaded: {@code Planner: <name> — <why>} for a line that is not placed,
      * {@link HudText#otherDimension} in another dimension, else {@link HudText#summary}; then the last refresh failure
-     * (shortened to 90 characters) and the renderer's failure, each as {@code Planner: <text>}. A new list each call.
+     * (shortened to 90 characters) and the renderer's failure, each as {@code Planner: <text>}. While a line is
+     * {@link #visibleHere}: then {@code Finding: <label> — <direction>} while a block is being found,
+     * {@link HudText#stacked} for the aim and {@link HudText#needs} for the {@link #currentStep}. A new list each call.
      */
     public List<String> hudLines() {
         List<String> lines = new ArrayList<>(3);
@@ -202,23 +218,126 @@ public final class ProjectorSession {
         else lines.add(HudText.summary(data, check.states(), filter));
         if (lastError != null) lines.add("Planner: " + HudText.shorten(lastError, ERROR_TEXT_LENGTH));
         if (renderError != null) lines.add("Planner: " + renderError);
+        if (!visibleHere()) return lines;
+        int f = found();
+        if (f >= 0 && eye != null) {
+            PlannedBlock b = data.blocks.get(f);
+            lines.add("Finding: " + b.label + " — " + HudText.direction(b.x - (int) Math.floor(eye[0]), b.y - (int) Math.floor(eye[1]), b.z - (int) Math.floor(eye[2])));
+        }
+        lines.addAll(HudText.stacked(data, hits));
+        lines.addAll(HudText.needs(data, check.states(), currentStep()));
         return lines;
     }
 
     /**
-     * {@link HudText#lookingAt} for the planned block at that position while it is shown (the line is
-     * {@link #visibleHere} and the filter keeps the block); null otherwise, and for a block that is not loaded. A block
-     * placed for the shown step ({@link BlockState#placedFor}: a conduit bundle without the fluids step's conduit, under
-     * the line step) reads as placed correctly, as its ghost is green and the HUD counts it.
+     * The lines of the name tag and tooltip of block {@code blockIndex} ({@link HudText#blockLines}); a block placed for
+     * the shown step ({@link BlockState#placedFor}: a conduit bundle without the fluids step's conduit, under the line
+     * step) reads as placed correctly, as its ghost is green and the HUD counts it. Empty when nothing is loaded or the
+     * index is not a block's.
      */
-    public String lookingAt(int x, int y, int z) {
-        if (!visibleHere()) return null;
-        Integer i = blockAt.get(key(x, y, z));
-        if (i == null) return null;
-        PlannedBlock b = data.blocks.get(i);
-        if (!filter.shows(b)) return null;
-        BlockState state = check.state(i);
-        return HudText.lookingAt(b, state.placedFor(b, filter.stepIndex) ? BlockState.CORRECT : state);
+    public List<String> tagLines(int blockIndex) {
+        if (data == null || blockIndex < 0 || blockIndex >= data.blocks.size()) return Collections.emptyList();
+        PlannedBlock b = data.blocks.get(blockIndex);
+        BlockState state = check.state(blockIndex);
+        return HudText.blockLines(b, state.placedFor(b, filter.stepIndex) ? BlockState.CORRECT : state);
+    }
+
+    /**
+     * Takes where the player looks: the drawn ghosts on the ray from {@code eye} along {@code look}, up to
+     * {@code maxDistance}, nearest first. A ghost is drawn when the line is {@link #visibleHere}, the ghosts are not
+     * hidden, the filter shows it and it is within {@code maxDistance} of the eye. {@code stops} (a real block in the
+     * way) is ignored while {@link #seeThrough}. Aiming at the block being found ends the finding.
+     */
+    public void aim(double[] eye, double[] look, AimRay.Stops stops) {
+        this.eye = eye.clone();
+        hits = Collections.emptyList();
+        if (!visibleHere() || ghostsHidden) return;
+        final double[] from = this.eye;
+        final double max = config.maxDistance();
+        AimRay.Ghosts ghosts = (x, y, z) -> {
+            Integer i = blockAt.get(key(x, y, z));
+            if (i == null) return -1;
+            PlannedBlock b = data.blocks.get(i);
+            return filter.shows(b) && ViewFilter.within(b, from[0], from[1], from[2], max) ? i : -1;
+        };
+        hits = Collections.unmodifiableList(AimRay.walk(from, look, max, ghosts, seeThrough() ? (x, y, z) -> false : stops));
+        if (!hits.isEmpty() && hits.get(0).block == foundIndex) foundIndex = -1;
+    }
+
+    /** The ghosts under the crosshair, nearest first; unmodifiable. */
+    public List<AimRay.Hit> aimHits() {
+        return hits;
+    }
+
+    /** The nearest ghost under the crosshair (its index in {@link ProjectorData#blocks}), or −1. */
+    public int aimed() {
+        return hits.isEmpty() ? -1 : hits.get(0).block;
+    }
+
+    /** Starts finding block {@code blockIndex}: the HUD says where it is until it is aimed at, 60 s pass or a screen opens. */
+    public void find(int blockIndex) {
+        if (data == null || blockIndex < 0 || blockIndex >= data.blocks.size()) return;
+        foundIndex = blockIndex;
+        foundUntil = env.nowMs() + FIND_MS;
+    }
+
+    /** The block being found, or −1 when none is, or its 60 seconds are over. */
+    public int found() {
+        if (foundIndex >= 0 && env.nowMs() >= foundUntil) foundIndex = -1;
+        return foundIndex;
+    }
+
+    /** The planner screen was opened: the finding ends. */
+    public void screenOpened() {
+        foundIndex = -1;
+    }
+
+    /** Whether every ghost is hidden ({@code G}); not saved. */
+    public boolean ghostsHidden() {
+        return ghostsHidden;
+    }
+
+    /** Hides or shows every ghost; a change redraws and clears the aim. */
+    public void setGhostsHidden(boolean hidden) {
+        if (hidden == ghostsHidden) return;
+        ghostsHidden = hidden;
+        hits = Collections.emptyList();
+        renderVersion++;
+    }
+
+    /**
+     * The step the HUD and the planner screen are about: the filter's, else the lowest-numbered step with blocks
+     * ({@link PlannedStep#hasBlocks}) that is not done, else −1. Says nothing in the chat.
+     */
+    public int currentStep() {
+        if (data == null) return -1;
+        return filter.stepIndex >= 0 ? filter.stepIndex : openStep();
+    }
+
+    private int openStep() {
+        int next = -1;
+        for (int i = 0; i < data.steps.size(); i++) {
+            PlannedStep s = data.steps.get(i);
+            if (!s.hasBlocks() || tracker.isDone(s.id)) continue;
+            if (next < 0 || s.order < data.steps.get(next).order) next = i;
+        }
+        return next;
+    }
+
+    /** Whether the step (an index in {@link ProjectorData#steps}) is done; false when nothing is loaded. */
+    public boolean stepDone(int stepIndex) {
+        return data != null && stepIndex >= 0 && stepIndex < data.steps.size() && tracker.isDone(data.steps.get(stepIndex).id);
+    }
+
+    /** The index of the first block at that position, whatever the filter, or −1. */
+    public int blockIndexAt(int x, int y, int z) {
+        Integer i = data == null ? null : blockAt.get(key(x, y, z));
+        return i == null ? -1 : i;
+    }
+
+    /** The ids of the projects with a saved token, sorted. */
+    public List<String> savedProjects() {
+        return config.projectIds();
     }
 
     /** Why the last background refresh failed, or null. */
@@ -304,6 +423,8 @@ public final class ProjectorSession {
 
     /** Makes {@code d} the loaded line: a new build check and step tracker, its block map, no last error. */
     private void install(ProjectorData d, String id, String t, ViewFilter f) {
+        PlannedBlock finding = found() >= 0 ? data.blocks.get(foundIndex) : null;
+        hits = Collections.emptyList();
         data = d;
         projectId = id;
         token = t;
@@ -313,6 +434,11 @@ public final class ProjectorSession {
         for (int i = 0; i < d.blocks.size(); i++) {
             PlannedBlock b = d.blocks.get(i);
             blockAt.putIfAbsent(key(b.x, b.y, b.z), i);
+        }
+        foundIndex = -1;
+        if (finding != null) {
+            int again = blockIndexAt(finding.x, finding.y, finding.z);
+            if (again >= 0 && d.blocks.get(again).id.equals(finding.id)) foundIndex = again;
         }
         filter = f;
         lastError = null;
@@ -330,6 +456,8 @@ public final class ProjectorSession {
         check = null;
         tracker = null;
         blockAt.clear();
+        hits = Collections.emptyList();
+        foundIndex = -1;
         toldFailures.clear();
         filter = ViewFilter.ALL;
         lastError = null;
@@ -390,12 +518,7 @@ public final class ProjectorSession {
      * saying there is none.
      */
     private int nextOpenStep() {
-        int next = -1;
-        for (int i = 0; i < data.steps.size(); i++) {
-            PlannedStep s = data.steps.get(i);
-            if (!s.hasBlocks() || tracker.isDone(s.id)) continue;
-            if (next < 0 || s.order < data.steps.get(next).order) next = i;
-        }
+        int next = openStep();
         if (next < 0) chat("Every build step with blocks is done.");
         return next;
     }
