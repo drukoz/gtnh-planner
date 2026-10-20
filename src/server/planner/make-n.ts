@@ -9,8 +9,8 @@ import type { Pack, Product } from '../../shared/types/pack.ts';
 import type { PlanContext, PlanSettings, PlanStep } from '../../shared/types/plan.ts';
 import type { CandidateGraph, LpRecipe } from './candidates.ts';
 import {
-  describeStep, machineWarnings, ownedCounts, ownedMachineTypes, pickStepMachines, reusedMachines, stepLine, type PickedRecipe, type StepLine,
-  type StepSize,
+  boughtGoods, describeStep, machineWarnings, ownedCounts, ownedMachineTypes, pickStepMachines, reusedMachines, stepLine, type PickedRecipe,
+  type StepLine, type StepSize,
 } from './machines.ts';
 import { solveLp, type LpRow } from './lp.ts';
 import type { Solution } from './solve.ts';
@@ -341,6 +341,7 @@ export async function makeN(
   const totalSeconds = busiest + fillSeconds(graph, whole.runs, picked, demand.keys());
 
   const line = stepLine(graph, whole.runs, opts.value);
+  line.bought = boughtGoods(whole.buys);
   const steps = picked.map((p): PlanStep => {
     const mteId = p.pick.mteId;
     const count = machinesOf(mteId);

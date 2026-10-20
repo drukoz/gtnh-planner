@@ -1,7 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { miniGt } from '../../helpers/mini-gt.ts';
-import { pickMachine, planSteps, buildFlows, ownedMachineMap, recipeCircuit, emptyContainers, stepInputs, type StepLine } from '../../../src/server/planner/machines.ts';
-import { buildCandidates, virtualKey, type LeafOracle, type PlanEnv } from '../../../src/server/planner/candidates.ts';
+import {
+  pickMachine, planSteps, buildFlows, ownedMachineMap, recipeCircuit, emptyContainers, stepInputs, boughtGoods, describeStep, pickStepMachines, stepLine,
+  type StepLine,
+} from '../../../src/server/planner/machines.ts';
+import { buildCandidates, virtualKey, type CandidateGraph, type LeafOracle, type PlanEnv } from '../../../src/server/planner/candidates.ts';
 import { computeAvailability, reachableDims } from '../../../src/server/planner/availability.ts';
 import { makeLeafOracle, makePrices } from '../../../src/server/planner/costs.ts';
 import { solveLine } from '../../../src/server/planner/solve.ts';
@@ -73,21 +76,28 @@ describe('planSteps and buildFlows', () => {
 
 describe('more machine and flow cases', () => {
   const rawLeaf: LeafOracle = (k) => (k === 'raw@0' ? { buyable: true, cost: 1, leafClass: 'direct' } : { buyable: false, cost: 0, leafClass: null });
-  /** `value` gives the steps what each good is worth and the empty containers of the pack (`StepLine`), as planLine does. */
+  /**
+   * `value` gives the steps what each good is worth and the empty containers of the pack (`StepLine`), as planLine does;
+   * `leaf` says what the line may buy (raw@0 at 1 unless given).
+   */
   async function planned(
     spec: PackSpec, target: string, perSecond: number, tier: number, settings: Partial<PlanSettings> = {},
-    value?: (p: Pack) => Pick<StepLine, 'valueOf' | 'empties'>,
+    value?: (p: Pack) => Pick<StepLine, 'valueOf' | 'empties'>, leaf: LeafOracle = rawLeaf,
   ) {
     const p = packFromSpec(spec);
     const s = { ...defaultSettings(), ...settings };
     const env: PlanEnv = { tier, reachable: new Set(['overworld']), lowGravity: false, coilHeat: 1801, excluded: new Set(s.excludedCategories) };
-    const graph = buildCandidates(p, s, env, rawLeaf, [target]);
+    const graph = buildCandidates(p, s, env, leaf, [target]);
     const sol = await solveLine(graph, new Map([[target, perSecond]]));
     const steps = planSteps(p, graph, sol, {
       settings: s, groupTier: tier, coilHeat: 1801, ctx: emptyContextForTest(), perSecondScale: 1, ...(value === undefined ? {} : { value: value(p) }),
     });
-    return { graph, sol, steps, flows: buildFlows(graph, sol, [target]) };
+    return { pack: p, graph, sol, steps, flows: buildFlows(graph, sol, [target]) };
   }
+  /** Each step's main output when its line is `line` instead of the one planSteps builds: the steps described again. */
+  const mainOutputs = (p: Pack, graph: CandidateGraph, runs: ReadonlyMap<string, number>, line: StepLine): Array<[string, string | undefined]> =>
+    pickStepMachines(p, graph, runs, { settings: defaultSettings(), groupTier: 1, coilHeat: 1801, owned: new Map() })
+      .map((r) => [r.id, describeStep(p, r, line, { count: 1, owned: 0, runsPerSecond: r.runs, utilization: 1, warnings: [] }).mainOutput]);
   const oreDict: PackSpec = {
     machines: [{ mteId: 1, name: 'M', maps: ['gt.recipe.macerator'], tier: 1 }],
     recipes: [{ id: 'use', map: 'gt.recipe.macerator', in: [{ any: [['a@0', 1], ['b@0', 2]] }], out: [['t@0', 1]], eut: 2 },
@@ -142,6 +152,48 @@ describe('more machine and flow cases', () => {
     expect(cells.steps.map((s) => [s.id, s.mainOutput])).toEqual([['make-cell', 't:empty_cell@0'], ['pack', 'u@0']]);
     const target = await planned(spec, 't:empty_cell@0', 1, 1, {}, value);
     expect(target.steps.map((s) => [s.id, s.mainOutput])).toEqual([['make-cell', 't:empty_cell@0']]);
+    // A good the line buys stays the step's product when all it makes beside it is the container it hands back.
+    const { pack: p, graph, sol } = await planned(spec, 't@0', 1, 1, {}, value);
+    const buying = { ...stepLine(graph, sol.runs, value(p)), bought: new Set(['t:product@0']) };
+    expect(mainOutputs(p, graph, sol.runs, buying).find(([id]) => id === 'use-cell')).toEqual(['use-cell', 't:product@0']);
+  });
+  it('names a step after the output it runs for, not a good the line also buys', async () => {
+    // Fix spec D13 (plan 09 Task 8): a split makes X and Y, and the line takes 2 X and 1 Y. X is also bought, for less
+    // than a second split costs (raw at 1.5), so the line splits once and buys the other X: the split runs for its Y.
+    // Without what the line buys the old choice stands: X, the output the other steps value most (2 taken against 1).
+    const spec: PackSpec = {
+      machines: [{ mteId: 1, name: 'M', maps: ['gt.recipe.macerator'], tier: 1 }],
+      recipes: [
+        { id: 'split', map: 'gt.recipe.macerator', in: [['raw@0', 1]], out: [['x@0', 1], ['y@0', 1]], eut: 2 },
+        { id: 'make-t', map: 'gt.recipe.macerator', in: [['x@0', 2], ['y@0', 1]], out: [['t@0', 1]], eut: 2 },
+      ],
+    };
+    const leaf: LeafOracle = (k) => (k === 'raw@0' ? { buyable: true, cost: 1.5, leafClass: 'direct' }
+      : k === 'x@0' ? { buyable: true, cost: 1, leafClass: 'direct' } : { buyable: false, cost: 0, leafClass: null });
+    const value = () => ({ valueOf: () => 1 });
+    const { pack: p, graph, sol, steps } = await planned(spec, 't@0', 1, 1, {}, value, leaf);
+    expect(boughtGoods(sol.buys)).toEqual(new Set(['raw@0', 'x@0']));
+    expect(steps.map((s) => [s.id, s.mainOutput])).toEqual([['make-t', 't@0'], ['split', 'y@0']]);
+    expect(mainOutputs(p, graph, sol.runs, stepLine(graph, sol.runs, value()))).toEqual([['make-t', 't@0'], ['split', 'x@0']]);
+  });
+  it('still names a good the line buys when the step makes only free water beside it', async () => {
+    // The pyrolysis-like step above, its charcoal also bought: the water it makes beside is free, no reason to run it.
+    const spec: PackSpec = {
+      machines: [{ mteId: 1, name: 'M', maps: ['gt.recipe.macerator'], tier: 1 }],
+      recipes: [
+        { id: 'pyrolyse', map: 'gt.recipe.macerator', in: [['raw@0', 1]], out: [['fluid:water', 1000], ['t:charcoal@0', 1]], eut: 2 },
+        { id: 'use-water', map: 'gt.recipe.macerator', in: [['fluid:water', 500]], out: [['wet@0', 1]], eut: 2 },
+        { id: 'use-charcoal', map: 'gt.recipe.macerator', in: [['t:charcoal@0', 1]], out: [['fuel@0', 1]], eut: 2 },
+        { id: 'combine', map: 'gt.recipe.macerator', in: [['wet@0', 1], ['fuel@0', 1]], out: [['t@0', 1]], eut: 2 },
+      ],
+    };
+    const value = () => ({ valueOf: (key: string): number => (key === 'fluid:water' ? 0.001 : key === 't:charcoal@0' ? 1 : 0) });
+    const { pack: p, graph, sol } = await planned(spec, 't@0', 1, 1, {}, value);
+    const buying = { ...stepLine(graph, sol.runs, value()), bought: new Set(['t:charcoal@0']) };
+    expect(mainOutputs(p, graph, sol.runs, buying).find(([id]) => id === 'pyrolyse')).toEqual(['pyrolyse', 't:charcoal@0']);
+    // The same step with its water bought is there for its charcoal, as before.
+    const water = { ...stepLine(graph, sol.runs, value()), bought: new Set(['fluid:water']) };
+    expect(mainOutputs(p, graph, sol.runs, water).find(([id]) => id === 'pyrolyse')).toEqual(['pyrolyse', 't:charcoal@0']);
   });
   it('lists every option a slot used', () => {
     // Fix spec R9: the solder slot of a circuit recipe split 36/64 between soldering alloy and tin lists both, each with

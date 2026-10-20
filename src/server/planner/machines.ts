@@ -6,7 +6,7 @@ import { multiblockOverclock, singleblockOverclock, voltageTier, type MachineOc 
 import { PSEUDO_MACHINES, V, tierName } from '../../shared/gt/tiers.ts';
 import { isFluidKey, parseItemKey, type StuffKey } from '../../shared/keys.ts';
 import type { Ingredient, Machine, Pack, Product, Recipe } from '../../shared/types/pack.ts';
-import type { MachineWhere, PlanContext, PlanFlow, PlanSettings, PlanStep } from '../../shared/types/plan.ts';
+import { FREE_KEYS, type MachineWhere, type PlanContext, type PlanFlow, type PlanSettings, type PlanStep } from '../../shared/types/plan.ts';
 import { PROGRAMMED_CIRCUIT_ID } from '../pack/recipes.ts';
 import { suppliedKey } from '../pack/supply.ts';
 import { keptOptions, virtualKey, type CandidateGraph, type LpRecipe } from './candidates.ts';
@@ -304,25 +304,40 @@ function valueOfLine(line: Pick<StepLine, 'valueOf'>): ((key: StuffKey) => numbe
   return Object.hasOwn(line, 'valueOf') && typeof line.valueOf === 'function' ? line.valueOf : undefined;
 }
 
+/** Free inputs (water, lava, air, cobblestone): a step that makes one beside a bought good does not run for it. */
+const FREE: ReadonlySet<StuffKey> = new Set(FREE_KEYS);
+
 /**
  * What the step is for (fix spec D13): the target when the recipe makes it; else the output with the largest value,
  * `line.valueOf(key)` × what the other recipes take of it, then the most taken, then the smallest key; never an empty
- * container the recipe hands back (`line.empties`) unless it makes nothing else. Without `valueOf` every value is 0, so
- * the output the other recipes take most of wins (the rule before values: litres beat items there).
+ * container the recipe hands back (`line.empties`) unless it makes nothing else, and never a good the line buys
+ * (`line.bought`) while the recipe makes another that the other recipes take, that the line does not buy and that is
+ * neither a free input nor a container it hands back: at an optimum the step runs for that one (making more of a good
+ * the line buys would cost more than buying it), as a Bricked Blast Furnace runs for its Ferrosilite beside bought
+ * copper. Without `valueOf` every value is 0, so the output the other recipes take most of wins (the rule before
+ * values: litres beat items there); without `bought` no output is passed over for being bought.
  */
 function mainOutputOf(r: Recipe, line: StepLine): StuffKey | undefined {
   const outputs = [...new Set(r.outputs.map((p) => p.key))].sort(byString);
   const target = outputs.find((key) => line.targets.has(key));
   if (target !== undefined) return target;
   const handedBack = (key: StuffKey): boolean => line.empties?.has(key) === true;
-  const candidates = outputs.some((key) => !handedBack(key)) ? outputs.filter((key) => !handedBack(key)) : outputs;
+  /** What the line's other recipes take of `key`. */
+  const useOf = (key: StuffKey): number => {
+    const nodes = line.used.get(key);
+    return sum(nodes) - (nodes?.get(r.id) ?? 0);
+  };
+  let candidates = outputs.some((key) => !handedBack(key)) ? outputs.filter((key) => !handedBack(key)) : outputs;
+  const bought = line.bought;
+  if (bought !== undefined && outputs.some((key) => !bought.has(key) && !FREE.has(key) && !handedBack(key) && useOf(key) > 0)) {
+    candidates = candidates.filter((key) => !bought.has(key));
+  }
   const valueOf = valueOfLine(line);
   let best: StuffKey | undefined;
   let bestValue = -Infinity;
   let bestUse = -Infinity;
   for (const key of candidates) {
-    const nodes = line.used.get(key);
-    const use = sum(nodes) - (nodes?.get(r.id) ?? 0);
+    const use = useOf(key);
     const value = valueOf === undefined ? 0 : valueOf(key) * use;
     if (value > bestValue || (value === bestValue && use > bestUse)) {
       best = key;
@@ -377,6 +392,12 @@ export interface StepLine {
   valueOf?: (key: StuffKey) => number;
   /** The empty containers of the pack (`emptyContainers`): a recipe handing one back is not there for it. */
   empties?: ReadonlySet<StuffKey>;
+  // optional addition (fix spec D13, plan 09 Task 8)
+  /**
+   * The goods the line buys (`boughtGoods` of the solution's purchases, or of the Make N batch's): a step making one of
+   * them beside another output the line uses and does not buy is named after that other output (`mainOutputOf`).
+   */
+  bought?: ReadonlySet<StuffKey>;
   // optional addition (fix spec R9)
   /** The ingredient options the graph pins (`CandidateGraph.optionPins`): `<recipe id>#<slot>` → the option it takes. */
   optionPins?: ReadonlyMap<string, StuffKey>;
@@ -395,6 +416,11 @@ export function stepLine(graph: CandidateGraph, runs: ReadonlyMap<string, number
   if (value?.empties !== undefined) line.empties = value.empties;
   if (graph.optionPins !== undefined) line.optionPins = graph.optionPins;
   return line;
+}
+
+/** The goods a line buys, from its purchases (`Solution.buys`, or a Make N batch's): `StepLine.bought`. */
+export function boughtGoods(buys: ReadonlyMap<StuffKey, number>): ReadonlySet<StuffKey> {
+  return new Set([...buys].filter(([, amount]) => amount > 0).map(([key]) => key));
 }
 
 const EMPTIES = new WeakMap<Pack, ReadonlySet<StuffKey>>();
@@ -478,6 +504,7 @@ export function planSteps(
   const owned = ownedCounts(types);
   const claimed = new Map<number, number>();   // per type: the owned machines earlier steps run on
   const line = stepLine(graph, sol.runs, opts.value);
+  line.bought = boughtGoods(sol.buys);
   return pickStepMachines(pack, graph, sol.runs, { settings, groupTier, coilHeat, owned, multiblocks }).map((p) => {
     const runsPerSecond = p.runs * perSecondScale;
     const perMachine = p.pick.runsPerSecondPerMachine;

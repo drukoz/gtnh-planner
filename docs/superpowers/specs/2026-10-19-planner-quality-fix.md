@@ -290,9 +290,17 @@ Auditor ids: invariants INV-n, rootcause RCn, gtnh Gn, ui UI-n. "Decision" resol
   `recipeChoice` key.
 - **Fix.** `mainOutput` = the target if the recipe makes it, else the output with the largest
   `value = valueOf(key) × (amount the other steps take)`, ignoring an empty container the recipe hands back (a key
-  that is the `empty` of some `pack.fluidContainers` entry) unless the recipe makes nothing else; equal values go to the
-  output the other steps take most of, then by key. `StepLine` gets `valueOf?(key): number` and
-  `empties?: ReadonlySet<StuffKey>` (those empty containers), passed by `planSteps` and `makeN`. `planLine`'s
+  that is the `empty` of some `pack.fluidContainers` entry) unless the recipe makes nothing else, and ignoring a good
+  the line buys while the recipe makes another output that the other steps take, that the line does not buy, and that
+  is neither a free input (`FREE_KEYS`) nor an empty container the recipe hands back; equal values go to the output the
+  other steps take most of, then by key. At an LP optimum a step whose output the line also buys runs for another output
+  (making more of the bought good would cost more than buying it, and `withoutTiedPurchases` shuts a tied purchase), so
+  naming it after the bought good counted the purchase as the step's use: plan 09 Task 8 found a Bricked Blast Furnace
+  run for its Ferrosilite named Copper Ingot beside bought copper (the user's routed line, the EC MV lines), cutting
+  machines making Wafers named Poly-Si Dust, reactors making Epichlorohydrin and Epoxid named Salt Water, and R11 said
+  those balanced plans did not add up. `StepLine` gets `valueOf?(key): number`, `empties?: ReadonlySet<StuffKey>`
+  (those empty containers) and `bought?: ReadonlySet<StuffKey>` (the goods the solution buys, or the Make N batch buys;
+  without it no output is passed over for being bought), passed by `planSteps` and `makeN`. `planLine`'s
   `valueOf(key)` = `max(costModel.cost(key) when finite else 0, basis.prices.price(key))`: never below the good's plain
   price, as R7 floors bought derived materials. The cost model splits a recipe's cost between its co-products
   arbitrarily and prices many intermediates 0 (Sulfuric Acid beside Water) or not at all (a Methyl Acetate Cell it never
