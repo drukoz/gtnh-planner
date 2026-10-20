@@ -342,6 +342,10 @@ export async function makeN(
 
   const line = stepLine(graph, whole.runs, opts.value);
   line.bought = boughtGoods(whole.buys);
+  // What each step runs for, from the line's LP as for a rate (fix spec D13): rounding up to whole runs leaves goods
+  // over that the line takes in full.
+  const lp = stepLine(graph, sol.runs).runsFor;
+  if (lp !== undefined) line.runsFor = lp;
   const steps = picked.map((p): PlanStep => {
     const mteId = p.pick.mteId;
     const count = machinesOf(mteId);

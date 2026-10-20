@@ -292,15 +292,37 @@ Auditor ids: invariants INV-n, rootcause RCn, gtnh Gn, ui UI-n. "Decision" resol
   `value = valueOf(key) × (amount the other steps take)`, ignoring an empty container the recipe hands back (a key
   that is the `empty` of some `pack.fluidContainers` entry) unless the recipe makes nothing else, and ignoring a good
   the line buys while the recipe makes another output that the other steps take, that the line does not buy, and that
-  is neither a free input (`FREE_KEYS`) nor an empty container the recipe hands back; equal values go to the output the
-  other steps take most of, then by key. At an LP optimum a step whose output the line also buys runs for another output
-  (making more of the bought good would cost more than buying it, and `withoutTiedPurchases` shuts a tied purchase), so
+  is neither a free input (`FREE_KEYS`) nor an empty container the recipe hands back; and, when the recipe is the
+  line's only source of outputs the other steps take in full (no other step makes them, the other steps take all the
+  recipe makes of them, the line does not buy them, and they are neither free inputs nor empty containers it hands
+  back), choosing among those alone; equal values go to the output the other steps take most of, then by key. At an
+  LP optimum a step whose output the line also buys runs for another output (making more of the bought good would cost
+  more than buying it, and `withoutTiedPurchases` shuts a tied purchase), so
   naming it after the bought good counted the purchase as the step's use: plan 09 Task 8 found a Bricked Blast Furnace
   run for its Ferrosilite named Copper Ingot beside bought copper (the user's routed line, the EC MV lines), cutting
   machines making Wafers named Poly-Si Dust, reactors making Epichlorohydrin and Epoxid named Salt Water, and R11 said
-  those balanced plans did not add up. `StepLine` gets `valueOf?(key): number`, `empties?: ReadonlySet<StuffKey>`
-  (those empty containers) and `bought?: ReadonlySet<StuffKey>` (the goods the solution buys, or the Make N batch buys;
-  without it no output is passed over for being bought), passed by `planSteps` and `makeN`. `planLine`'s
+  those balanced plans did not add up. By the same argument a step that is the only source of an output the other
+  steps take in full runs for it: that output sets how much the step runs, and run for a good another step makes too
+  the step would be that good's cheaper source and the other step would not run beside it. Plan 09's final review found
+  value × use naming such steps after a co-product the line uses a lot: on the GEC HV 2/min acceptance line at default
+  settings a reactor that alone makes the Iron III Chloride was named Hydrogen Cell and a sodalite electrolyzer that
+  alone makes the Raw Silicon Dust was named Chlorine ("Hydrogen Cell is made 3 ways", "Chlorine is made 2 ways", which
+  the issues box's Keep only could not clear), and most multi-producer warnings of Advanced and Integrated Logic
+  Circuits at HV with supporting lines, Robot Arm (MV) at HV and the MV Machine Hull had such a step (a Bricked Blast
+  Furnace run for its Ferrosilite named Copper Ingot; reactors run for Trichlorosilane, Vinyl Chloride or Methanol named
+  Hydrogen Cell, Hydrochloric Acid or Water Cell). "In full" matters: an output the step alone makes but the line throws
+  part of away sets nothing (the step runs beyond what the line takes of it), as the GEC HV line's water electrolysis
+  throws away 90 % of the Oxygen it alone makes and runs for its Hydrogen Cells, 97 % of the line's, and as the ILC HV
+  line's malachite Electric Blast Furnace throws away 46 % of its Carbon Dioxide and makes 89 % of the Copper Ingots;
+  taking any output only the step makes would name 10 of the 59 steps renamed at the default charge after a good they
+  partly throw away. The line takes all of an output when it throws at most 1e-6 of it away (`ALL_TAKEN_REL`; runs
+  keep 9 significant digits, D3). `StepLine` gets `valueOf?(key): number`, `empties?: ReadonlySet<StuffKey>` (those
+  empty containers), `bought?: ReadonlySet<StuffKey>` (the goods the solution buys, or the Make N batch buys; without
+  it no output is passed over for being bought) and `runsFor?` (recipe id → the goods the line has from that recipe
+  alone and takes in full, from the runs `stepLine` is given; without it no output is passed over for being made by
+  another step too), passed by `planSteps` and `makeN`. Make N reads `runsFor` from the line's LP, as a rate plan
+  does, not from its whole runs: rounding a run up leaves over goods the line takes in full (GEC HV × 4 kept the two
+  false warnings above when it was read from whole runs). `planLine`'s
   `valueOf(key)` = `max(costModel.cost(key) when finite else 0, basis.prices.price(key))`: never below the good's plain
   price, as R7 floors bought derived materials. The cost model splits a recipe's cost between its co-products
   arbitrarily and prices many intermediates 0 (Sulfuric Acid beside Water) or not at all (a Methyl Acetate Cell it never

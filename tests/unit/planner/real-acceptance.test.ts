@@ -13,11 +13,12 @@ import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
 import { loadPack } from '../../../src/server/pack/load.ts';
 import { planBasis, resolveAvoid } from '../../../src/server/planner/basis.ts';
 import { expandBomLines } from '../../../src/server/planner/bom.ts';
+import { emptyContainers } from '../../../src/server/planner/machines.ts';
 import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
 import { indexPlan } from '../../../src/shared/plan/balance.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import type { Pack } from '../../../src/shared/types/pack.ts';
-import type { BomLine, Plan, PlanSettings } from '../../../src/shared/types/plan.ts';
+import { FREE_KEYS, type BomLine, type Plan, type PlanSettings, type PlanStep } from '../../../src/shared/types/plan.ts';
 
 const ELECTRONIC_CIRCUIT = 'IC2:itemPartCircuit@0';
 const GOOD_ELECTRONIC_CIRCUIT = 'gregtech:gt.metaitem.01@32702';
@@ -33,6 +34,8 @@ const MAGNETIC_STEEL_INGOT = 'gregtech:gt.metaitem.01@11355';
 const ANNEALED_COPPER_INGOT = 'gregtech:gt.metaitem.01@11345';
 const ALUMINIUM_INGOT = 'gregtech:gt.metaitem.01@11019';
 const RED_ALLOY_INGOT = 'gregtech:gt.metaitem.01@11308';
+const IRON_III_CHLORIDE = 'fluid:ironiiichloride';
+const RAW_SILICON_DUST = 'gregtech:gt.metaitem.01@2020';
 const SAND = 'minecraft:sand@0';
 const GLASS_DUST = 'gregtech:gt.metaitem.01@2890';
 /**
@@ -98,6 +101,23 @@ const perMinute = (plan: Plan, key: string): number => 60 * (plan.rawInputs.find
 /** What the line's steps take of `key` a minute, bought or made in the line. */
 const takenPerMinute = (plan: Plan, key: string): number =>
   60 * plan.steps.reduce((sum, s) => sum + s.inputs.filter((i) => i.key === key).reduce((a, i) => a + i.amount, 0) * s.runsPerSecond, 0);
+
+/**
+ * The outputs of `step` the line has from it alone and takes in full (fix spec D13): no other step makes them, the line
+ * buys none, they are no free input or empty container (`empties`), and the steps take all `step` makes of them. Such
+ * an output sets how much the step runs, so the step is named after one, never after a good another step makes too.
+ */
+function soleTakenOutputs(plan: Plan, step: PlanStep, empties: ReadonlySet<string>): string[] {
+  const bought = new Set(plan.rawInputs.map((r) => r.key));
+  return [...new Set(step.outputs.map((o) => o.key))].filter((key) => {
+    if (bought.has(key) || FREE_KEYS.includes(key) || empties.has(key)) return false;
+    if (plan.steps.some((s) => s.id !== step.id && s.outputs.some((o) => o.key === key))) return false;
+    const net = (step.outputs.filter((o) => o.key === key).reduce((a, o) => a + o.amount, 0)
+      - step.inputs.filter((i) => i.key === key).reduce((a, i) => a + i.amount, 0)) * step.runsPerSecond;
+    const taken = plan.flows.filter((f) => f.from === step.id && f.key === key && f.to !== 'sink').reduce((a, f) => a + f.perSecond, 0);
+    return net > 0 && taken >= net * (1 - 1e-6);
+  });
+}
 
 /** The checks every plan of this file must pass; `alsoRaw` are further raw inputs the target itself is made of. */
 function expectSane(plan: Plan, seconds: number, maxSteps: number, alsoRaw: readonly string[] = []): void {
@@ -200,6 +220,26 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
     const { plan: p, seconds } = await plan(settings);
     expectSane(p, seconds, GEC_HV_MAX_STEPS);
     await expectSameBreakdown(p, settings);
+    // It adds up but for one good (fix spec R11, D13). The reactor that alone makes its Iron III Chloride and the sodalite
+    // electrolyzer that alone makes its Raw Silicon Dust are named so, not after the Hydrogen Cells and Chlorine other
+    // steps make too ("Hydrogen Cell is made 3 ways", "Chlorine is made 2 ways" before the final review), and no good is
+    // made two ways by a step that runs for an output it alone makes. Measured left: Hydrogen Cell, from the water
+    // electrolysis (97 % of it; it throws away 90 % of the Oxygen it alone makes) and the salt water electrolysis.
+    const issues = indexPlan(p).issues;
+    expect(issues.filter((i) => i.code !== 'multi-producer')).toEqual([]);
+    expect(issues.length).toBeLessThanOrEqual(1);
+    const empties = emptyContainers(pack);
+    for (const issue of issues) {
+      for (const id of issue.stepIds ?? []) {
+        const maker = p.steps.find((s) => s.id === id) as PlanStep;
+        expect(soleTakenOutputs(p, maker, empties), `${pack.nameOf(issue.key)} made by ${id}`).toEqual([]);
+      }
+    }
+    for (const key of [IRON_III_CHLORIDE, RAW_SILICON_DUST]) {
+      const makers = p.steps.filter((s) => s.outputs.some((o) => o.key === key));
+      expect(makers.length, key).toBeGreaterThan(0);
+      expect(makers.map((s) => s.mainOutput), key).toEqual(makers.map(() => key));
+    }
     expect(p.steps.find((s) => s.mainOutput === GOOD_ELECTRONIC_CIRCUIT)?.mapId).toBe('gt.recipe.circuitassembler');
     expect(perMinute(p, 'minecraft:gold_ingot@0') + perMinute(p, 'gregtech:gt.metaitem.01@2086')).toBeGreaterThan(0);   // the board's gold foil
   }, 60_000);

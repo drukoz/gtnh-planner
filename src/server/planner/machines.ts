@@ -219,6 +219,35 @@ function recipeAmounts(graph: CandidateGraph, runsById: ReadonlyMap<string, numb
   return { made, used };
 }
 
+/**
+ * The line takes all a recipe makes of a good when it throws at most this share of it away (fix spec D13): runs keep 9
+ * significant digits (D3), which leaves about 1e-9 of it over where the line takes it all, while a recipe run for
+ * another output throws a real share of it away (the GEC HV line's water electrolysis, 90 % of its Oxygen).
+ */
+const ALL_TAKEN_REL = 1e-6;
+
+/**
+ * Per recipe id, the goods the line has from that recipe alone and takes in full (fix spec D13, `StepLine.runsFor`): no
+ * other recipe makes any of the good, and the other recipes take all the recipe makes of it but what rounding leaves
+ * (`ALL_TAKEN_REL`).
+ */
+function soleTakenInFull(made: Amounts, used: Amounts): Map<string, Set<StuffKey>> {
+  const runsFor = new Map<string, Set<StuffKey>>();
+  for (const [key, makers] of made) {
+    const making = [...makers].filter(([, amount]) => amount > 0);
+    const only = making.length === 1 ? making[0] : undefined;
+    if (only === undefined) continue;
+    const [id, own] = only;
+    const users = used.get(key);
+    const taken = sum(users) - (users?.get(id) ?? 0);
+    if (own - taken >= own * ALL_TAKEN_REL) continue;
+    const goods = runsFor.get(id);
+    if (goods === undefined) runsFor.set(id, new Set([key]));
+    else goods.add(key);
+  }
+  return runsFor;
+}
+
 /** The good a convert recipe fills (its only output) and the option it takes (its only input). */
 function convertEnds(r: LpRecipe): { virtual: StuffKey; option: StuffKey } | null {
   const virtual = r.coeffs.find(([, c]) => c > 0)?.[0];
@@ -304,18 +333,27 @@ function valueOfLine(line: Pick<StepLine, 'valueOf'>): ((key: StuffKey) => numbe
   return Object.hasOwn(line, 'valueOf') && typeof line.valueOf === 'function' ? line.valueOf : undefined;
 }
 
-/** Free inputs (water, lava, air, cobblestone): a step that makes one beside a bought good does not run for it. */
+/** Free inputs (water, lava, air, cobblestone): a step that makes one beside another good does not run for it. */
 const FREE: ReadonlySet<StuffKey> = new Set(FREE_KEYS);
 
 /**
  * What the step is for (fix spec D13): the target when the recipe makes it; else the output with the largest value,
- * `line.valueOf(key)` × what the other recipes take of it, then the most taken, then the smallest key; never an empty
- * container the recipe hands back (`line.empties`) unless it makes nothing else, and never a good the line buys
- * (`line.bought`) while the recipe makes another that the other recipes take, that the line does not buy and that is
- * neither a free input nor a container it hands back: at an optimum the step runs for that one (making more of a good
- * the line buys would cost more than buying it), as a Bricked Blast Furnace runs for its Ferrosilite beside bought
- * copper. Without `valueOf` every value is 0, so the output the other recipes take most of wins (the rule before
- * values: litres beat items there); without `bought` no output is passed over for being bought.
+ * `line.valueOf(key)` × what the other recipes take of it, then the most taken, then the smallest key, of these:
+ * - its outputs but an empty container the recipe hands back (`line.empties`), unless it makes nothing else;
+ * - of those, never a good the line buys (`line.bought`) while the recipe makes another that the other recipes take,
+ *   that the line does not buy and that is neither a free input nor a container it hands back: at an optimum the step
+ *   runs for that one (making more of a good the line buys would cost more than buying it), as a Bricked Blast Furnace
+ *   runs for its Ferrosilite beside bought copper;
+ * - of those, when there are any, only the ones the line has from this recipe alone and takes in full
+ *   (`line.runsFor`), that the line does not buy and that are neither free inputs nor containers it hands back. Such an
+ *   output sets how much the step runs, so at an optimum the step runs for it, not for a good another step makes too
+ *   (run for that good, it would be its cheaper source and the other step would not run beside it): a reactor that
+ *   alone makes the line's Iron III Chloride runs for it, not for the Hydrogen Cells beside it that an electrolyzer
+ *   makes too. An output the line throws part of away sets nothing: the GEC HV line's water electrolysis alone makes
+ *   its Oxygen, throws 90 % of it away and runs for its Hydrogen Cells.
+ * Without `valueOf` every value is 0, so the output the other recipes take most of wins (the rule before values:
+ * litres beat items there); without `bought` no output is passed over for being bought, and without `runsFor` none for
+ * being made by another recipe too.
  */
 function mainOutputOf(r: Recipe, line: StepLine): StuffKey | undefined {
   const outputs = [...new Set(r.outputs.map((p) => p.key))].sort(byString);
@@ -327,10 +365,15 @@ function mainOutputOf(r: Recipe, line: StepLine): StuffKey | undefined {
     const nodes = line.used.get(key);
     return sum(nodes) - (nodes?.get(r.id) ?? 0);
   };
-  let candidates = outputs.some((key) => !handedBack(key)) ? outputs.filter((key) => !handedBack(key)) : outputs;
   const bought = line.bought;
-  if (bought !== undefined && outputs.some((key) => !bought.has(key) && !FREE.has(key) && !handedBack(key) && useOf(key) > 0)) {
-    candidates = candidates.filter((key) => !bought.has(key));
+  /** An output the other recipes take that the line does not buy and that is neither a free input nor handed back. */
+  const takenAndNotBought = (key: StuffKey): boolean => bought?.has(key) !== true && !FREE.has(key) && !handedBack(key) && useOf(key) > 0;
+  let candidates = outputs.some((key) => !handedBack(key)) ? outputs.filter((key) => !handedBack(key)) : outputs;
+  if (bought !== undefined && outputs.some(takenAndNotBought)) candidates = candidates.filter((key) => !bought.has(key));
+  const runsFor = line.runsFor?.get(r.id);
+  if (runsFor !== undefined) {
+    const alone = candidates.filter((key) => runsFor.has(key) && takenAndNotBought(key));
+    if (alone.length > 0) candidates = alone;
   }
   const valueOf = valueOfLine(line);
   let best: StuffKey | undefined;
@@ -398,6 +441,13 @@ export interface StepLine {
    * them beside another output the line uses and does not buy is named after that other output (`mainOutputOf`).
    */
   bought?: ReadonlySet<StuffKey>;
+  // optional addition (fix spec D13, plan 09 final review)
+  /**
+   * Recipe id → the goods the line has from that recipe alone and takes in full (`soleTakenInFull`): what sets how much
+   * the recipe runs, so a step is named after one of them (`mainOutputOf`). `stepLine` reads it from the runs it is
+   * given; Make N from the line's LP, not its whole runs, whose rounding leaves over goods the line takes in full.
+   */
+  runsFor?: ReadonlyMap<string, ReadonlySet<StuffKey>>;
   // optional addition (fix spec R9)
   /** The ingredient options the graph pins (`CandidateGraph.optionPins`): `<recipe id>#<slot>` → the option it takes. */
   optionPins?: ReadonlyMap<string, StuffKey>;
@@ -408,8 +458,9 @@ export interface StepLine {
  * the `value` of its goods when the caller has one.
  */
 export function stepLine(graph: CandidateGraph, runs: ReadonlyMap<string, number>, value?: Pick<StepLine, 'valueOf' | 'empties'>): StepLine {
+  const { made, used } = recipeAmounts(graph, runs);
   const line: StepLine = {
-    targets: new Set(graph.targets), used: recipeAmounts(graph, runs).used, conversions: conversionRuns(graph, runs),
+    targets: new Set(graph.targets), used, runsFor: soleTakenInFull(made, used), conversions: conversionRuns(graph, runs),
     valueOf: value === undefined ? undefined : valueOfLine(value),
   };
   if (graph.avoid !== undefined) line.avoid = graph.avoid;
