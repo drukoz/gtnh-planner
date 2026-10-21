@@ -9,7 +9,7 @@ import { OPPOSITE, posKey, rotateFace, type Vec3 } from '../../../../src/shared/
 import type { Layout, LayoutBlock } from '../../../../src/shared/types/layout.ts';
 import type { PlanFlow } from '../../../../src/shared/types/plan.ts';
 import { busSlots } from '../../../../src/server/layout/parts.ts';
-import { chain2, feedPlan, layFeed, FEED_IDS } from '../../../helpers/feeding-fixtures.ts';
+import { chain2, feedPlan, layFeed, layLegacy, FEED_IDS } from '../../../helpers/feeding-fixtures.ts';
 import { IDS } from '../../../helpers/layout-fixtures.ts';
 
 /** The line's own block at world cell `pos` (no ghost, no hookup block). */
@@ -61,7 +61,7 @@ function localView(m: FeedModel): unknown {
 describe('readLine', () => {
   it('reads a routed line from its chip text', async () => {
     const { pack, plan } = chain2();
-    const m = readLine({ pack, plan, layout: await layFeed(pack, plan, 'routed') });
+    const m = readLine({ pack, plan, layout: await layLegacy(pack, plan, 'routed') });
     expect(m.nodes.map((n) => `${n.kind} ${n.id}`)).toEqual(['basic 3,0,1', 'basic 4,0,3', 'basic 5,0,1', 'chest 6,0,1', 'chest 6,0,3']);
     const net = m.networks.find((n): n is RoutedNet => n.kind === 'routed')!;
     expect(net.pipes.find((p) => p.id === '3,0,2')).toMatchObject({
@@ -77,7 +77,7 @@ describe('readLine', () => {
 
   it('reads AE2 patterns from the plan steps', async () => {
     const { pack, plan } = chain2();
-    const m = readLine({ pack, plan, layout: await layFeed(pack, plan, 'ae2') });
+    const m = readLine({ pack, plan, layout: await layLegacy(pack, plan, 'ae2') });
     const nets = m.networks.filter((n): n is Ae2Net => n.kind === 'ae2');
     expect(nets).toHaveLength(1);
     expect(nets[0]!.interfaces.map((i) => i.id)).toEqual(['3,0,2', '5,0,2', '7,0,2']);
@@ -121,7 +121,7 @@ describe('readLine', () => {
 
   it('prefers the structured config over the text', async () => {
     const { pack, plan } = chain2();
-    const layout = await layFeed(pack, plan, 'routed');
+    const layout = await layLegacy(pack, plan, 'routed');
     blockAt(layout, [3, 64, 2]).feed = { chips: [{ kind: 'extractor', filter: { mode: 'whitelist', keys: ['t:x@0'] } }] };   // its config.chips kept
     blockAt(layout, [5, 64, 2]).config = { chips: 'Item Responder Chip (whitelist: Nothing Known)' };
     const m = readLine({ pack, plan, layout });
@@ -141,7 +141,7 @@ describe('readLine', () => {
       const views: unknown[] = [];
       for (const rotation of [0, 90, 180, 270] as const) {
         const { pack, plan } = chain2();
-        const layout = await layFeed(pack, plan, mode, { origin: [30, 64, 10], rotation });
+        const layout = await layLegacy(pack, plan, mode, { origin: [30, 64, 10], rotation });
         expect(layout.rotation).toBe(rotation);
         if (mode === 'ae2') {
           // the world face toward the assembler, as the writer turns it with the line
@@ -165,7 +165,7 @@ describe('readLine', () => {
 
   it('reads a steam machine as a basic machine', async () => {
     const { pack, plan } = twoSteps(FEED_IDS.STEAM);
-    const layout = await layFeed(pack, plan, 'routed');
+    const layout = await layLegacy(pack, plan, 'routed');
     const m = readLine({ pack, plan, layout });
     expect(m.nodes.find((n) => n.id === '1,0,1')).toMatchObject({ kind: 'basic', steam: true, outputSide: 1, front: 4, inSlots: 1, outSlots: 1 });
     expect(m.unknowns.filter((u) => u.code === 'slots_unknown')).toEqual([expect.objectContaining({ pos: [1, 64, 1], stepId: 's1' })]);
@@ -308,12 +308,12 @@ describe('readLine', () => {
     expect(m.networks.filter((n): n is GtPipeNet => n.kind === 'gtpipe').map((n) => n.pipes.map((p) => p.id))).toEqual([['3,0,2', '4,0,2', '5,0,2', '6,0,2']]);
   });
 
-  it('reads chip lists as main writes them', async () => {
+  it('reads chip lists as main wrote them', async () => {
     // an item whose name holds " and ", sorted last, so main's list ends with it
     const { pack, plan } = chain2();
     pack.items.set('t:zz@0', { key: 't:zz@0', id: 't:zz', meta: 0, name: 'Salt and Pepper', oreDict: [] });
     plan.flows.push({ from: 'raw', to: 's2', key: 't:zz@0', perSecond: 1 });
-    const layout = await layFeed(pack, plan, 'routed');
+    const layout = await layLegacy(pack, plan, 'routed');
     expect(blockAt(layout, [5, 64, 2]).config?.chips).toBe('Item Responder Chip (whitelist: Ex and Salt and Pepper) + Item Extractor Chip');
     blockAt(layout, [4, 64, 2]).config = { chips: 'Item Responder Chip (whitelist: Alpha, Ex and Salt and Pepper) + Item Crafting Chip + Item Broadcaster Chip' };
     const m = readLine({ pack, plan, layout });

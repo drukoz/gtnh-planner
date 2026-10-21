@@ -1,6 +1,6 @@
 // The new line on the map (spec §3.7, architecture §7.2, §11.14): a filled square per column of the line in the colour
-// of its most important block (EnderIO's for a conduit cell), a dot on every configured block (covers, settings or
-// conduit faces), the line's box outline, each hookup as a dashed path in its network's colour ("dashed = still to
+// of its most important block (EnderIO's for a conduit cell), a dot on every configured block (covers, settings,
+// conduit faces, or chips and patterns: §11 entry 51), the line's box outline, each hookup as a dashed path in its network's colour ("dashed = still to
 // build"), white arrows for the item flow between steps, and the layout pins as numbered markers next to the note pins
 // (notes show N1, N2, … so a build step's "pin 1" names one marker). In move mode a drag that starts inside the line
 // moves it. The shapes are plain data (`overlayShapes`) drawn by `drawShapes`, so they are tested without a canvas.
@@ -20,14 +20,14 @@ export const ROLE_COLORS: Readonly<Record<BlockRole, string>> = {
   machine: '#90caf9', casing: '#b0bec5', hatch: '#a1887f', cable: '#616161', transformer: '#8e24aa', pipe: '#ffb300', cover: '#ffffff',
   interface: '#7e57c2', chip_pipe: '#ff7043', chest: '#ffca28', ghost: 'rgba(255,255,255,0.25)',
 };
-/** The mark on a configured block: one with covers, settings (§11.14) or conduit faces. */
+/** The mark on a configured block: one with covers, settings (§11.14), conduit faces, or chips and patterns (§11 entry 51). */
 export const CONFIGURED_COLOR = '#ffffff';
 
 export type Shape =
   | { kind: 'rect'; x: number; y: number; w: number; h: number; fill: string | null; stroke: string | null; dash: number[] }
   | { kind: 'path'; points: Array<[number, number]>; stroke: string; dash: number[]; width: number }
   | { kind: 'arrow'; from: [number, number]; to: [number, number]; color: string }
-  | { kind: 'dot'; x: number; y: number; r: number; color: string };   // a configured block (covers, settings or conduit faces)
+  | { kind: 'dot'; x: number; y: number; r: number; color: string };   // a configured block (covers, settings, conduit faces, chips or patterns)
 
 /** A drag of the line in move mode: the block it started on and the block under the pointer now. */
 export type Drag = { from: { x: number; z: number }; to: { x: number; z: number } };
@@ -57,7 +57,7 @@ function holdsConduits(b: LayoutBlock): boolean {
 
 function configured(b: LayoutBlock): boolean {
   return (b.covers !== undefined && b.covers.length > 0) || (b.config !== undefined && Object.keys(b.config).length > 0)
-    || (b.conduits ?? []).some((c) => c.faces.length > 0);
+    || (b.conduits ?? []).some((c) => c.faces.length > 0) || (b.feed !== undefined && Object.keys(b.feed).length > 0);
 }
 
 /** A power hookup in the colour of its tap's voltage (as Plan 4 draws cables), a logistics one in its network's. */

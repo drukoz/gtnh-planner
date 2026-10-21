@@ -173,10 +173,13 @@ const PART_ITEMS: ReadonlyArray<readonly [ItemKey, string]> = [
   ['ProjRed|Transportation:projectred.transportation.routingchip@0', 'Item Responder Chip'],
   ['ProjRed|Transportation:projectred.transportation.routingchip@4', 'Item Extractor Chip'],
   ['ProjRed|Transportation:projectred.transportation.routingchip@6', 'Item Stock Keeper Chip'],
+  ['ProjRed|Transportation:projectred.transportation.routingchip@3', 'Item Terminator Chip'],
   ['appliedenergistics2:tile.BlockInterface@0', 'ME Interface'],
   ['appliedenergistics2:item.ItemMultiPart@16', 'ME Glass Cable - Fluix'],
   ['appliedenergistics2:item.ItemMultiPart@260', 'ME Export Bus'],
   ['appliedenergistics2:item.ItemMultiMaterial@52', 'Blank Pattern'],
+  ['appliedenergistics2:item.ItemMultiMaterial@27', 'Capacity Card'],
+  ['appliedenergistics2:item.ItemMultiMaterial@30', 'Acceleration Card'],
 ];
 
 /** Plain items `layoutPack` adds for plans to flow. */

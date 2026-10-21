@@ -2,6 +2,7 @@
 // Fields after an "optional addition" comment extend §6.2 without renaming or reshaping it.
 // Pure TypeScript shared by server and browser: nothing from node:* may be imported here.
 
+import type { ExportHatchKind } from '../gt/hatch-kinds.ts';
 import type { FluidKey, ItemKey, StuffKey } from '../keys.ts';
 import type { TgsMode } from './farm.ts';
 
@@ -68,10 +69,18 @@ export interface RecipeMapInfo {
 }
 export type MachineKind = 'basic' | 'multiblock' | 'steam' | 'generator' | 'boiler' | 'turbine' | 'battery_buffer' | 'transformer' | 'cable' | 'fluid_pipe' | 'item_pipe' | 'hatch' | 'casing' | 'other';
 export interface BlockRef { id: string; meta: number; mteId?: number }                 // registry name + meta (+ GT tile id)
+/**
+ * One element of a structure (exporter 0.6.0+, architecture §11.49): a shape character of GT's definition, the hatch
+ * kinds GT's own check took on it, its cells.
+ */
+export interface StructureElement { ch?: string; hatches: ExportHatchKind[]; cells: Array<[number, number, number]> }
 export interface StructureInfo {
   size: [number, number, number]; controller: [number, number, number]; blocks: Array<{ pos: [number, number, number]; block: BlockRef }>; air: Array<[number, number, number]>;
   // optional addition: a block lay on the boundary of the exporter's scan box, so the structure may be incomplete
   truncated?: boolean;
+  // optional addition (add-on 20): GT's own hatch rules; absent from older exports and for multiblocks the exporter
+  // could not probe
+  elements?: StructureElement[];
 }
 /** A singleblock's `amps` is its mAmperage (thermal centrifuge 2, arc furnace 3, mass fabricator 8). */
 export interface Machine {
@@ -82,6 +91,10 @@ export interface Machine {
   itemPipe?: { stacksPerSecond: number; material: string };
   batterySlots?: number; steamPerSecondMax?: number; turbineEfficiency?: number;
   structure?: StructureInfo; perfectOC?: boolean; heatOC?: boolean;
+  // optional addition (add-on 20): a GT basic machine's (MTEBasicMachine: kinds basic and steam) item input slots
+  // (mInputSlotCount) and output slots (mOutputItems.length), exporter 0.6.0+; no other machine and no older export
+  // has them
+  itemInSlots?: number; itemOutSlots?: number;
 }
 /**
  * `name` is GT's mName, or for a BartWorks/GT++ ore material its internal name (prefixed `bw:`/`gtpp:` only when it

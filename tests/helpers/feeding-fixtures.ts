@@ -6,8 +6,9 @@
 
 import { TIER_NAMES } from '../../src/shared/gt/tiers.ts';
 import { isFluidKey, parseItemKey, type ItemKey, type StuffKey } from '../../src/shared/keys.ts';
-import type { Rotation, Vec3 } from '../../src/shared/layout/geometry.ts';
-import type { Layout } from '../../src/shared/types/layout.ts';
+import { DIRS, posKey, step, type Rotation, type Vec3 } from '../../src/shared/layout/geometry.ts';
+import { FACES } from '../../src/shared/types/assets.ts';
+import type { Layout, LayoutBlock } from '../../src/shared/types/layout.ts';
 import type { Ingredient, Item, Machine, MachineKind, Pack, Product, Recipe, StructureInfo } from '../../src/shared/types/pack.ts';
 import type { LogisticsMode, Plan, PlanFlow } from '../../src/shared/types/plan.ts';
 import { PART_KEYS } from '../../src/server/layout/feeding/facts.ts';
@@ -18,6 +19,9 @@ import type {
 import { insertEmpties, NEVER, PHASE, type SimEntity } from '../../src/server/layout/feeding/sim/core.ts';
 import type { SimEnv } from '../../src/server/layout/feeding/sim/machine.ts';
 import { emptyScan, layoutLine } from '../../src/server/layout/layout.ts';
+import { amountList, finalItemOutputs, nameList, rawItemInputs, stepItemInputs, stepItemOutputs } from '../../src/server/layout/modes/mode.ts';
+import { manualReasonOf } from '../../src/server/layout/multiblock-rules.ts';
+import { resolveParts } from '../../src/server/layout/parts.ts';
 import { lineGround, lineScan } from './enderio-fixtures.ts';
 import { EBF_STRUCTURE, IDS, layoutPack, makePlan, makeProject, type StepSpec } from './layout-fixtures.ts';
 
@@ -207,6 +211,109 @@ export function chain2(): { pack: Pack; plan: Plan } {
 export async function layFeed(pack: Pack, plan: Plan, mode: LogisticsMode, at?: { origin: Vec3; rotation: Rotation }): Promise<Layout> {
   if (at === undefined) return layoutLine(pack, plan, emptyScan(), makeProject({ logistics: mode, scanId: null, baseId: null }));
   return layoutLine(pack, plan, lineScan(), makeProject({ logistics: mode, placement: { origin: [...at.origin], rotation: at.rotation } }), lineGround());
+}
+
+// ---- Main's layouts before fix/feeding (ruling R-28) ----
+
+/** The `config` keys of fix/feeding's feeding settings (architecture §11 entry 51), which main wrote nowhere before. */
+const FEED_SETTING_KEYS = ['multiStack', 'limited', 'inputSeparation'] as const;
+const EXTRACTOR_TEXT = 'Item Extractor Chip';
+const INTERFACE_LABEL = /^.* \((.*)\)$/;
+
+/**
+ * `layout` as main laid it out before fix/feeding gave its lines structured feeding (architecture §11 entry 51): the
+ * input the feeding tests' "today's text" cases were written against, rebuilt from the plan with main's own helpers, so
+ * those cases keep their input when main's layout moves on (ruling R-28). A fresh copy:
+ * - every block loses its `feed` and fix/feeding's settings `multiStack`, `limited` and `inputSeparation`;
+ * - routed: the chests list what main listed then (the input chest the raw inputs and what the hand-run units make, the
+ *   output chest the line's final outputs and what the hand-run units take), and each Routed Interface Pipe carries its
+ *   chips as `config.chips` text: a machine's, and each bus pipe of a multiblock's, `Item Responder Chip (whitelist: <what
+ *   its step takes>)` when the step takes items and then a bare `Item Extractor Chip` when it makes items; the input
+ *   chest's a bare `Item Extractor Chip`; the output chest's an `Item Responder Chip` whitelisting what it lists, in place
+ *   of fix/feeding's Item Terminator Chip;
+ * - AE2: an ME Export Bus fix/feeding put on the spine's cable is the ME interface main laid there, and an interface in
+ *   front of a singleblock or an input bus (in front of an output bus where the step takes no item) carries `config`
+ *   `{ patterns: 1, pattern: '<inputs> → <outputs>', blockingMode: false }`, the plan step's per-run amounts as main wrote
+ *   them (main wrote it on each unit's first port: one per unit for the units with one input bus, as every fixture's);
+ * - EnderIO and machine-to-machine lines lose only the settings.
+ */
+export function legacyFeed(layout: Layout, pack: Pack, plan: Plan): Layout {
+  const out = structuredClone(layout);
+  const live = out.blocks.filter((b) => b.role !== 'ghost' && b.hookup === undefined);
+  const byPos = new Map(live.map((b) => [posKey(b.pos), b]));
+  const steps = new Map(plan.steps.map((s) => [s.id, s]));
+  const unitName = (stepId: string | undefined): string | undefined => {
+    const s = stepId === undefined ? undefined : steps.get(stepId);
+    return s === undefined ? undefined : pack.machines.get(s.machine.mteId)?.name;
+  };
+  const isStepBlock = (b: LayoutBlock | undefined): b is LayoutBlock & { stepId: string } =>
+    b !== undefined && b.stepId !== undefined && (b.role === 'machine' || b.hatch === 'input_bus' || b.hatch === 'output_bus');
+  // the ME Export Buses fix/feeding lays on the spine's cable, read before the feed goes
+  const parts = resolveParts(pack);
+  const exportBuses = out.mode !== 'ae2' ? [] : live.flatMap((b) => {
+    const cover = b.feed?.exportBus === undefined ? undefined : b.covers?.find((c) => c.item === parts.me_export_bus.key);
+    return cover === undefined ? [] : [{ b, cover }];
+  });
+  for (const b of live) {
+    delete b.feed;
+    if (b.config === undefined) continue;
+    for (const key of FEED_SETTING_KEYS) delete b.config[key];
+    if (Object.keys(b.config).length === 0) delete b.config;
+  }
+
+  if (out.mode === 'routed') {
+    const placed = new Set<string>(), hand = new Set<string>();
+    for (const b of live) {
+      if (b.role !== 'machine' || b.stepId === undefined) continue;
+      const m = b.block.mteId === undefined ? undefined : pack.machines.get(b.block.mteId);
+      (m !== undefined && manualReasonOf(m) !== null ? hand : placed).add(b.stepId);
+    }
+    const items = plan.flows.filter((f) => !isFluidKey(f.key));
+    const inputKeys = distinctKeys([...rawItemInputs(plan, placed), ...items.filter((f) => hand.has(f.from) && placed.has(f.to)).map((f) => f.key)]);
+    const outputKeys = distinctKeys([...finalItemOutputs(plan, placed), ...items.filter((f) => placed.has(f.from) && hand.has(f.to)).map((f) => f.key)]);
+    for (const b of live) if (b.role === 'chest' && b.tail !== undefined) b.tail.keys = [...(b.tail.side === 'input' ? inputKeys : outputKeys)];
+    const responder = (keys: readonly StuffKey[]): string[] => (keys.length === 0 ? [] : [`Item Responder Chip (whitelist: ${nameList(plan, pack, keys)})`]);
+    for (const b of live) {
+      if (b.role !== 'chip_pipe') continue;
+      // the inventory the pipe links to, in side order
+      const target = DIRS.map((_, side) => (((b.connections ?? 0) & (1 << side)) === 0 ? undefined : byPos.get(posKey(step(b.pos, side)))))
+        .find((n) => n !== undefined && (n.role === 'chest' || isStepBlock(n)));
+      let chips: string[] = [];
+      if (target?.role === 'chest') chips = target.tail?.side === 'input' ? [EXTRACTOR_TEXT] : responder(outputKeys);
+      else if (isStepBlock(target)) {
+        chips = [...responder(stepItemInputs(plan, target.stepId)), ...(stepItemOutputs(plan, target.stepId).length > 0 ? [EXTRACTOR_TEXT] : [])];
+      }
+      if (chips.length > 0) b.config = { ...b.config, chips: chips.join(' + ') };
+    }
+  }
+
+  if (out.mode === 'ae2') {
+    for (const { b, cover } of exportBuses) {
+      const name = unitName(byPos.get(posKey(step(b.pos, FACES.indexOf(cover.face))))?.stepId) ?? '?';
+      Object.assign(b, { block: { ...parts.me_interface.block }, role: 'interface', label: `${parts.me_interface.name} (${name})`, item: parts.me_interface.key });
+      delete b.connections;
+      const covers = (b.covers ?? []).filter((c) => c !== cover);
+      if (covers.length > 0) b.covers = covers;
+      else delete b.covers;
+    }
+    for (const b of live) {
+      if (b.role !== 'interface') continue;
+      // the unit it serves: the step block beside it whose machine names the interface, else the first beside it
+      const name = INTERFACE_LABEL.exec(b.label)?.[1];
+      const around = DIRS.map((_, side) => byPos.get(posKey(step(b.pos, side)))).filter(isStepBlock);
+      const target = around.find((n) => unitName(n.stepId) === name) ?? around[0];
+      const s = target === undefined ? undefined : steps.get(target.stepId);
+      // a multiblock that takes items has its pattern in front of its input bus
+      if (target === undefined || s === undefined || (target.hatch === 'output_bus' && s.inputs.some((p) => !isFluidKey(p.key)))) continue;
+      b.config ={ ...b.config, patterns: 1, pattern: `${amountList(plan, pack, s.inputs)} → ${amountList(plan, pack, s.outputs)}`, blockingMode: false };
+    }
+  }
+  return out;
+}
+
+/** `layFeed`'s line as main laid it out before fix/feeding (`legacyFeed`). */
+export async function layLegacy(pack: Pack, plan: Plan, mode: LogisticsMode, at?: { origin: Vec3; rotation: Rotation }): Promise<Layout> {
+  return legacyFeed(await layFeed(pack, plan, mode, at), pack, plan);
 }
 
 // ---- Hand-built models and test entities for the simulation (plan Tasks 4–6) ----

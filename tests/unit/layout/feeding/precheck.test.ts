@@ -10,7 +10,7 @@ import { amountText, listText, slotWord } from '../../../../src/server/layout/fe
 import { posKey, type Vec3 } from '../../../../src/shared/layout/geometry.ts';
 import type { Layout } from '../../../../src/shared/types/layout.ts';
 import type { PlanFlow } from '../../../../src/shared/types/plan.ts';
-import { chain2, feedPlan, layFeed, FEED_IDS } from '../../../helpers/feeding-fixtures.ts';
+import { chain2, feedPlan, layFeed, layLegacy, FEED_IDS } from '../../../helpers/feeding-fixtures.ts';
 import { IDS } from '../../../helpers/layout-fixtures.ts';
 
 const brief = (f: { code: string; certainty: string; key?: string; machine: string }) => `${f.code} ${f.certainty} ${f.key ?? '-'} ${f.machine}`;
@@ -30,9 +30,9 @@ function labelled(layout: Layout, label: string): FeedBlock {
 }
 
 describe('precheckFeeding', () => {
-  it('finds today\'s routed lines move nothing', async () => {
+  it('finds the routed lines main laid before fix/feeding move nothing', async () => {
     const { pack, plan } = chain2();
-    const m = readLine({ pack, plan, layout: await layFeed(pack, plan, 'routed') });
+    const m = readLine({ pack, plan, layout: await layLegacy(pack, plan, 'routed') });
     // node order, then rule order (R5a before R5d)
     expect(precheckFeeding(m, pack).map(brief)).toEqual([
       'feed_no_route certain t:x@0 Basic Macerator at 3 64 1', 'feed_starved certain t:a@0 Basic Macerator at 3 64 1',
@@ -114,7 +114,7 @@ describe('precheckFeeding', () => {
       { id: 's1', mteId: IDS.MACERATOR, count: 1, inputs: [['t:a@0', 1]], outputs: [['t:x@0', 1]] },
       { id: 'h', mteId: -1, count: 1, handCraft: true, inputs: [['t:x@0', 1]], outputs: [['t:y@0', 1]] },
     ]);
-    const layout = await layFeed(pack, plan, 'routed');
+    const layout = await layLegacy(pack, plan, 'routed');
     labelled(layout, 'Routed Interface Pipe (Basic Macerator)').feed = {
       chips: [{ kind: 'responder', filter: { mode: 'whitelist', keys: ['t:a@0'] } }, { kind: 'extractor', filter: { mode: 'whitelist', keys: ['t:x@0'] } }],
     };
@@ -128,14 +128,14 @@ describe('precheckFeeding', () => {
 
   it('flags input-bus extractors and blacklist chips', async () => {
     const ebf = feedPlan([{ id: 'e', mteId: IDS.EBF, count: 1, inputs: [['t:a@0', 1], ['t:b@0', 1]], outputs: [['t:x@0', 1]] }]);
-    const ebfModel = readLine({ pack: ebf.pack, plan: ebf.plan, layout: await layFeed(ebf.pack, ebf.plan, 'routed') });
+    const ebfModel = readLine({ pack: ebf.pack, plan: ebf.plan, layout: await layLegacy(ebf.pack, ebf.plan, 'routed') });
     const ebfFindings = precheckFeeding(ebfModel, ebf.pack);
     const churn = ebfFindings.filter((f) => f.code === 'feed_churn');
     expect(churn.map(brief)).toEqual(['feed_churn certain - Electric Blast Furnace at 2 64 3']);
     expect(churn[0]!.text).toBe("The Item Extractor Chip on Input Bus (LV) at 3 64 3 pulls Electric Blast Furnace at 2 64 3's inputs back out of its input bus");
 
     const { pack, plan } = chain2();
-    const layout = await layFeed(pack, plan, 'routed');
+    const layout = await layLegacy(pack, plan, 'routed');
     labelled(layout, 'Routed Interface Pipe (Basic Macerator)').feed = {
       chips: [{ kind: 'extractor', filter: { mode: 'blacklist', keys: [] } }, { kind: 'broadcaster', filter: { mode: 'blacklist', keys: [] } }],
     };
@@ -149,7 +149,7 @@ describe('precheckFeeding', () => {
 
   it('finds patterns AE2 cannot encode', async () => {
     const f = feedPlan([{ id: 'f', mteId: IDS.SOLIDIFIER, count: 1, inputs: [['fluid:molten.iron', 144]], held: ['gregtech:gt.metaitem.01@32301'], outputs: [['t:x@0', 1]] }]);
-    const fm = readLine({ pack: f.pack, plan: f.plan, layout: await layFeed(f.pack, f.plan, 'ae2') });
+    const fm = readLine({ pack: f.pack, plan: f.plan, layout: await layLegacy(f.pack, f.plan, 'ae2') });
     const label = fm.nodes.find((n) => n.kind === 'basic')!.label;
     const findings = precheckFeeding(fm, f.pack);
     expect(findings.map(brief)).toEqual([`feed_pattern_unencodable certain fluid:molten.iron ${label}`, `feed_fluid_packet risk fluid:molten.iron ${label}`]);
@@ -157,7 +157,7 @@ describe('precheckFeeding', () => {
     expect(findings[1]!.text).toBe(`ME Interface (Basic Fluid Solidifier) at 1 64 2 turns Molten Iron into a Fluid Packet item, which ${label} can take into an input slot for good`);
 
     const c = feedPlan([{ id: 'c', mteId: IDS.MACERATOR, count: 1, inputs: [['t:a@0', 1]], outputs: [['t:x@0', 1], ['t:y@0', 1]], chances: { 't:y@0': 0.5 } }]);
-    const cm = readLine({ pack: c.pack, plan: c.plan, layout: await layFeed(c.pack, c.plan, 'ae2') });
+    const cm = readLine({ pack: c.pack, plan: c.plan, layout: await layLegacy(c.pack, c.plan, 'ae2') });
     const cLabel = cm.nodes.find((n) => n.kind === 'basic')!.label;
     const fraction = precheckFeeding(cm, c.pack);
     expect(fraction.map(brief)).toEqual([`feed_pattern_unencodable certain t:y@0 ${cLabel}`]);
@@ -224,7 +224,7 @@ describe('precheckFeeding', () => {
         { id: 'p1', mteId: IDS.MACERATOR, count: 1, inputs: [['t:a@0', 1]], outputs: [['t:x@0', 1]] },
         { id: 'p2', mteId: IDS.MACERATOR, count: 1, inputs: [['t:b@0', 1]], outputs: [['t:y@0', 1]] },
       ]);
-      const layout = await layFeed(pack, plan, mode);
+      const layout = await layLegacy(pack, plan, mode);
       machineBlock(layout, 'p1').stepIds = ['p1', 'p2'];
       layout.blocks = layout.blocks.filter((b) => b.stepId !== 'p2');
       if (blocking) {
@@ -282,10 +282,13 @@ const benchLine = () => feedPlan([{
 }]);
 const ebfLine = () => feedPlan([{ id: 'e', mteId: IDS.EBF, count: 1, inputs: [['t:a@0', 1], ['t:b@0', 1]], outputs: [['t:x@0', 1]] }]);
 
-/** The bench line laid in `mode` with the bench's front turned away from the middle row (so its back touches the line and no cable is on it). */
-async function benchAway(mode: 'enderio' | 'routed' | 'ae2') {
+/**
+ * The bench line laid in `mode` with the bench's front turned away from the middle row (so its back touches the line and no cable is on it),
+ * as main lays it, or with `legacy` as main laid it before fix/feeding (`legacyFeed`).
+ */
+async function benchAway(mode: 'enderio' | 'routed' | 'ae2', legacy = false) {
   const { pack, plan } = benchLine();
-  const layout = await layFeed(pack, plan, mode);
+  const layout = await (legacy ? layLegacy : layFeed)(pack, plan, mode);
   machineBlock(layout, 'b').facing = 2;
   return { pack, plan, layout };
 }
@@ -317,7 +320,7 @@ describe('precheckFeeding, the other branches', () => {
 
   it('says why an Item Extractor Chip does not let an output out', async () => {
     const { pack, plan } = chain2();
-    const layout = await layFeed(pack, plan, 'routed');
+    const layout = await layLegacy(pack, plan, 'routed');
     blockAt(layout, [3, 64, 2]).feed = { chips: [responderOf('t:a@0'), { kind: 'extractor', filter: { mode: 'blacklist', keys: ['t:x@0'] } }] };
     blockAt(layout, [4, 64, 2]).feed = { chips: [extractorOf('t:y@0')] };
     const noRoute = precheckFeeding(readLine({ pack, plan, layout }), pack).filter((f) => f.code === 'feed_no_route');
@@ -334,7 +337,7 @@ describe('precheckFeeding, the other branches', () => {
 
   it('reads a multiblock\'s outputs from its output buses only, and raises each finding once', async () => {
     const { pack, plan } = ebfLine();
-    const layout = await layFeed(pack, plan, 'routed');
+    const layout = await layLegacy(pack, plan, 'routed');
     // the pipe on the input bus lists the EBF's output; the pipe on the output bus (main's bare chip) does not
     blockAt(layout, [3, 64, 4]).feed = { chips: [responderOf('t:a@0'), extractorOf('t:x@0')] };
     const m = readLine({ pack, plan, layout });
@@ -383,7 +386,7 @@ describe('precheckFeeding, the other branches', () => {
 
   it('orders a node\'s findings by rule and then by item key', async () => {
     const { pack, plan } = feedPlan([{ id: 'c', mteId: IDS.MACERATOR, count: 1, inputs: [['t:a@0', 1]], outputs: [['t:y@0', 1], ['t:x@0', 1]] }]);
-    const m = readLine({ pack, plan, layout: await layFeed(pack, plan, 'routed') });
+    const m = readLine({ pack, plan, layout: await layLegacy(pack, plan, 'routed') });
     const label = m.nodes.find((n) => n.kind === 'basic')!.label;
     expect(precheckFeeding(m, pack).map(brief)).toEqual([`feed_no_route certain t:x@0 ${label}`, `feed_no_route certain t:y@0 ${label}`, `feed_starved certain t:a@0 ${label}`]);
   });
@@ -426,7 +429,7 @@ describe('precheckFeeding, the other branches', () => {
       { id: 'h1', mteId: -1, count: 1, handCraft: true, inputs: [['t:x@0', 1]], outputs: [['t:y@0', 1]] },
       { id: 'h2', mteId: -1, count: 1, handCraft: true, inputs: [['t:x@0', 1]], outputs: [['t:c@0', 1]] },
     ], flows);
-    const layout = await layFeed(pack, plan, 'routed');
+    const layout = await layLegacy(pack, plan, 'routed');
     blockAt(layout, [1, 64, 2]).feed = { chips: [responderOf('t:a@0'), extractorOf('t:x@0')] };
     const findings = precheckFeeding(readLine({ pack, plan, layout }), pack).filter((f) => f.text.startsWith('Nothing on the routed network'));
     expect(texts(findings)).toEqual(['Nothing on the routed network takes Ex from Basic Macerator at 1 64 1: no Item Responder Chip lists it (it goes to Why and Gamma, which have no machine)']);
@@ -478,8 +481,8 @@ describe('precheckFeeding, the other branches', () => {
   });
 
   it('caps a routed bench with a Stock Keeper, not a responder', async () => {
-    const { pack, plan, layout } = await benchAway('routed');
-    // today's chips: a responder answers with the room of all nine slots (and the bare extractors move nothing)
+    const { pack, plan, layout } = await benchAway('routed', true);
+    // main's chips before fix/feeding: a responder answers with the room of all nine slots (and the bare extractors move nothing)
     const label = readLine({ pack, plan, layout }).nodes.find((n) => n.kind === 'bench')!.label;
     const today = precheckFeeding(readLine({ pack, plan, layout }), pack);
     expect(today.map(brief)).toEqual([`feed_no_route certain t:x@0 ${label}`, `feed_starved certain t:a@0 ${label}`, `feed_overfill certain - ${label}`]);
@@ -631,7 +634,7 @@ describe('precheckFeeding, the other branches', () => {
 
     // two pipes on one output bus carry the same bare extractor (ruling R-9)
     const { pack, plan } = ebfLine();
-    const m = readLine({ pack, plan, layout: await layFeed(pack, plan, 'routed') });
+    const m = readLine({ pack, plan, layout: await layLegacy(pack, plan, 'routed') });
     const net = m.networks.find((n) => n.kind === 'routed')!;
     if (net.kind !== 'routed') throw new Error('no routed network');
     const outBusPipe = net.pipes.find((p) => p.target?.bus === '1,0,3')!;
@@ -688,7 +691,7 @@ describe('precheckFeeding, the other branches', () => {
 
   it('gives the same findings every run, as plain data', async () => {
     const { pack, plan } = chain2();
-    const m = readLine({ pack, plan, layout: await layFeed(pack, plan, 'routed') });
+    const m = readLine({ pack, plan, layout: await layLegacy(pack, plan, 'routed') });
     const first = precheckFeeding(m, pack);
     expect(first.length).toBeGreaterThan(0);
     expect(precheckFeeding(m, pack)).toEqual(first);
