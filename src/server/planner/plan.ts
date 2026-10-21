@@ -26,7 +26,7 @@ import {
 } from './candidates.ts';
 import { analyzeCosts, moltenMaterial, type CostAnalysis } from './costs.ts';
 import { supportingLines } from './lines.ts';
-import { lineBuildModel, type BuildModel } from './machine-options.ts';
+import { buildCounts, lineBuildModel, type BuildModel } from './machine-options.ts';
 import { buildFlows, emptyContainers, optionShares, planSteps, stepLine, type OptionShare, type StepLine } from './machines.ts';
 import { makeN, wholeRuns, type MakeNResult } from './make-n.ts';
 import { yieldToEventLoop } from './lp.ts';
@@ -1355,7 +1355,8 @@ const RAW = 'raw';
  * One `hand-step` warning per step of a running line crafted by hand (fix spec D7): what it makes and how much an hour.
  * The step charge weighs such a step three times, so one that remains has no machine recipe that pays. With crafting
  * automated, a step is crafted by hand only where no Auto Workbench of the line runs its recipe (`LpRecipe.byHand` of
- * `graph`, controller ruling 214; user ruling 180 (d)), and the warning says why instead of asking to automate crafting.
+ * `graph`, controller ruling 214; user ruling 180 (d)), and the warning says why. Every project's crafting is automated
+ * (`normalizeSettings`, user ruling 180 (b): no switch for it any more), so the advice never names a crafting setting.
  */
 function handStepWarnings(pack: Pack, steps: readonly PlanStep[], graph: CandidateGraph): PlanWarning[] {
   const byHand = new Map(graph.recipes.flatMap((r): Array<[string, string]> => (r.byHand === undefined ? [] : [[r.id, r.byHand]])));
@@ -1365,7 +1366,7 @@ function handStepWarnings(pack: Pack, steps: readonly PlanStep[], graph: Candida
     for (const p of s.outputs) if (p.key === key) perRun += p.amount;
     const rate = formatRate(perRun * s.runsPerSecond, 'hour', { fluid: isFluidKey(key) });
     const why = byHand.get(s.recipeId);
-    const advice = why === undefined ? 'mark crafting as automated or pin a machine recipe' : `it ${why}, so pin a machine recipe to automate it`;
+    const advice = why === undefined ? 'pin a machine recipe to automate it' : `it ${why}, so pin a machine recipe to automate it`;
     return { code: 'hand-step', stepId: s.id, text: `${pack.nameOf(key)} is crafted by hand: ${rate}; ${advice}` };
   });
 }
@@ -1561,6 +1562,27 @@ function tierFallbackWarnings(pack: Pack, model: BuildModel, steps: readonly Pla
   });
 }
 
+/**
+ * The step notes of the user's ruling 224 (plan 12 Task 7), on each step that builds new machines (`count > owned`): with
+ * "Build machines at" a tier, where its new machines are of another tier and why (`BuildModel.buildTierFallback`):
+ * `Built at <TIER2>, not <TIER>: <why>`; with "Multiblocks: only when nothing else can do it" and build cost counted
+ * (where a new multiblock weighs ONLY_REQUIRED_MULTIBLOCK_WEIGHT more, so that any other route would have won), a new
+ * multiblock: `A multiblock is needed: nothing else makes <product>`.
+ */
+function addBuildNotes(pack: Pack, settings: PlanSettings, model: BuildModel, steps: readonly PlanStep[]): void {
+  const onlyRequired = settings.multiblocks === 'only-required' && buildCounts(model);
+  for (const step of steps) {
+    if (step.handCraft || !(step.count > step.owned)) continue;
+    const built = model.buildTierFallback?.(step.recipeId);
+    if (built !== undefined && step.machine.tier === built.tier) {
+      step.warnings.push(`Built at ${tierName(built.tier)}, not ${tierName(built.wanted)}: ${built.why}`);
+    }
+    if (onlyRequired && pack.machines.get(step.machine.mteId)?.kind === 'multiblock') {
+      step.warnings.push(`A multiblock is needed: nothing else makes ${stepProductName(pack, step)}`);
+    }
+  }
+}
+
 /** The line `planLine` plans: its pricing and avoid list, its graph solved, and the build model it was solved with. */
 interface PlannedLine {
   priced: LinePricing; avoid: AvoidRequest; line: AvoidingLine;
@@ -1721,6 +1743,8 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
     stepRuns = sol.runs;
     spend = { mode: 'rate', rawPerSecond: sol.rawCost };
   }
+  // Where the new machines are built and why a multiblock is needed (the user's ruling 224).
+  addBuildNotes(pack, settings, buildModel, steps);
   const exact = await addAlternatives(pack, settings, basis, steps, model, graph, line.avoid, unbuildable);
   // Every option of each ore-dictionary slot, with its share in this plan and what it would cost (fix spec R9).
   await addOptions(pack, settings, steps, stepLine(graph, stepRuns), priced);

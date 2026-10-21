@@ -7,7 +7,7 @@
 // crafting-table steps by hand (HAND_STEP_WEIGHT 3), while the Auto Workbench is the default (the controller's ruling).
 
 import { describe, it, expect } from 'vitest';
-import { centrifugeDustSpec, fluidCellsSpec, kitSpec, sandSpec, withBuildRecipes, withPriceGap } from '../../helpers/build-fixtures.ts';
+import { centrifugeDustSpec, fluidCellsSpec, kitSpec, sandSpec, withAutoWorkbenches, withBuildRecipes, withPriceGap } from '../../helpers/build-fixtures.ts';
 import { MINI_GT, miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec, type PackSpec } from '../../helpers/pack-spec.ts';
 import { expandBomLines } from '../../../src/server/planner/bom.ts';
@@ -312,6 +312,20 @@ describe('build cost in Make N', () => {
     const few = await planLine(pack, S({ mode: 'makeN', amount: 8 }), emptyContext());
     expect(ids(few)).toEqual(['circuit-lv', 'hammer-plate', 'wire']);
     expect(few.cost).toMatchObject({ build: 33, batch: 32 });
+  });
+
+  it('tells the steps that share an Auto Workbench in a batch to set its grid between batches (controller ruling 177)', async () => {
+    // Make N runs the steps of one machine type on its one added machine: hull-lv and cable both craft on the LV Auto
+    // Workbench, which is switched by setting its 3x3 crafting grid; other machines keep swapping circuits or molds.
+    const pack = packFromSpec(withAutoWorkbenches(MINI_GT, [1]));
+    const plan = await planLine(pack, { ...defaultSettings(), target: 't:hull_lv@0', tier: 1, mode: 'makeN', amount: 2 }, emptyContext());
+    expect(plan.status, JSON.stringify(plan.warnings)).toBe('ok');
+    const benches = plan.steps.filter((s) => s.machine.mteId === 31091);
+    expect(benches.map((s) => s.id)).toEqual(expect.arrayContaining(['cable', 'hull-lv']));
+    for (const s of benches) {
+      expect(s.warnings.filter((w) => w.startsWith('Shares machines with')), s.id).toEqual([
+        `Shares machines with ${benches.filter((o) => o.id !== s.id).map((o) => o.id).join(', ')} — set its crafting grid between batches`]);
+    }
   });
 
   it('counts owned machines as free in Make N', async () => {

@@ -296,16 +296,21 @@ function sized(node: Omit<FlowNode, 'width' | 'height'>): FlowNode {
   return { ...node, width, height };
 }
 
-/** "3 machines", "1 machine". */
-function machinesText(n: number): string {
-  return n === 1 ? '1 machine' : `${n} machines`;
+/** "3 machines", "1 machine"; with `shared`, "3 shared machines", "1 shared machine". */
+function machinesText(n: number, shared = false): string {
+  const kind = shared ? 'shared machine' : 'machine';
+  return n === 1 ? `1 ${kind}` : `${n} ${kind}s`;
 }
 
-/** A step box's lines (fix spec §6.2): tier, EU/t, machines and how busy, or "by hand"; what it supplies; what is owned. */
+/**
+ * A step box's lines (fix spec §6.2): tier, EU/t, machines and how busy, or "by hand"; what it supplies; what is owned.
+ * A step whose machines a sharing pool shares with other steps (`PlanStep.pool`, plan 12) has "shared" machines.
+ */
 function stepLines(step: PlanStep, nameOf: (key: StuffKey) => string): string[] {
   const busy = `${formatPercent(step.utilization)} busy`;
+  const machines = machinesText(step.count, step.pool !== undefined);
   // A hand step has no machine, no tier and no power: only how much of a person's time it takes.
-  const lines = [step.handCraft ? `by hand · ${busy}` : `${tierText(step.machine.tier)} · ${step.euPerTick} EU/t · ${machinesText(step.count)} · ${busy}`];
+  const lines = [step.handCraft ? `by hand · ${busy}` : `${tierText(step.machine.tier)} · ${step.euPerTick} EU/t · ${machines} · ${busy}`];
   if (step.supply !== undefined) lines.push(`supplies ${nameOf(step.supply)}`);
   if (step.owned > 0) lines.push(`${step.owned} owned`);
   return lines;

@@ -172,6 +172,18 @@ describe('views', () => {
     expect(html).toMatch(/data-row="step:gather"[^>]*data-marked="true"/);
     expect(html).toContain('Jörg 🙂');
   });
+  it('totals what the build takes: the machines and the layout parts (plan 12)', () => {
+    const costed = { ...plan, cost: { runPerHour: 1, build: 182, horizonHours: 24, layout: 40 } } as Plan;
+    const html = renderToStaticMarkup(<MaterialsView project={project} plan={costed} send={() => {}} me="Ann" />);
+    const section = /<section[^>]*aria-labelledby="to-build-title"[^>]*>.*?<\/section>/s.exec(html)?.[0] ?? '';
+    expect(text(section)).toContain('About 222 raw to build: 182 for the machines, 40 for power and logistics parts');
+    expect(section.indexOf('About 222 raw to build')).toBeLessThan(section.indexOf('Machines'));
+    // Nothing in the build list: the section says so once.
+    const empty = renderToStaticMarkup(<MaterialsView project={project} plan={{ ...costed, buildList: [], cost: { runPerHour: 1, build: 0, horizonHours: 24 } } as Plan}
+      send={() => {}} me="Ann" />);
+    expect(text(empty)).toContain('Nothing new to build: the machines you have cover this line.');
+    expect(text(empty).match(/Nothing new to build/g)).toHaveLength(1);
+  });
   it('renders all sections and sits between flow and notes', () => {
     const html = renderToStaticMarkup(<MaterialsView project={project} plan={plan} send={() => {}} me="Ann" />);
     for (const s of ['To build (once)', 'Machines', 'To run', 'Titanium Ingot: needs Moon', 'Gather the base materials']) expect(html).toContain(s);

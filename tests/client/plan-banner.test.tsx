@@ -129,4 +129,23 @@ describe('plan banner', () => {
     expect(html(planOf({ rawCost: { perSecond: 1, leastPerSecond: 1 } }))).toBe('');
     expect(html(planOf({ rawCost: { perSecond: 0, leastPerSecond: 0 } }))).toBe('');
   });
+  it('says what the plan costs to run and to build (plan 12)', () => {
+    const costed = planOf({ cost: { runPerHour: 5400, build: 182, horizonHours: 24 } });
+    const out = html(costed);
+    expect(text(out)).toContain('5,400 raw per hour to run + 182 raw to build new machines, counted over 24 h');
+    expect(out).toMatch(/<p class="plan-cost">5,400 raw per hour to run/);
+    // A plan with nothing to warn about keeps its cost line, outside the warning box.
+    expect(out).not.toContain('plan-banner');
+    const warned = html({ ...costed, warnings: [{ code: 'no-recipe', text: 'Nothing at ≤ LV makes Glue' }] });
+    expect(warned).toContain('class="plan-banner"');
+    expect(text(warned)).toContain('counted over 24 h');
+    expect(text(html(planOf({ cost: { runPerHour: 1, build: 50, horizonHours: null, batch: 192 } })))).toContain('192 raw for the batch + 50 raw to build new machines');
+  });
+  it('says a line whose least raw material is 0 uses raw material free inputs could replace, without a percentage', () => {
+    // A glass line digging sand that rock-breaker cobblestone and forge hammers could make (plan 12, D1).
+    const line = (html(planOf({ rawCost: { perSecond: 0.01, leastPerSecond: 0 } }))).match(/<p class="banner-cost">(.*?)<\/p>/)?.[1] ?? '';
+    expect(text(line)).toBe('Uses raw material that free inputs could replace, to save machines (Steps vs raw material: Fewest machines)');
+    expect(line).not.toContain('%');
+    expect(text(html(planOf({ rawCost: { perSecond: 0.01, leastPerSecond: 0 } }), S({ stepCharge: 0.02 })))).toContain('(Steps vs raw material: Some machines)');
+  });
 });

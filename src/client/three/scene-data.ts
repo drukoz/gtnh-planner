@@ -465,7 +465,8 @@ function stepLines(step: PlanStep, nameOf: (k: StuffKey) => string): string[] {
 
 /**
  * What a click on a block shows (spec §3.8, §11.14): its label as the title, then where it faces; for a block of a
- * plan step what the step makes from what, and its tier and power; every cover's item, face, settings and filter and
+ * plan step what the step makes from what, and its tier and power (for a machine several steps share, `stepIds`, each of
+ * them in order: plan 12); every cover's item, face, settings and filter and
  * the block's own settings, then every conduit face's mode and settings, in the words of its configure step; that it
  * belongs to a hookup; that it is a ghost. A block index outside the layout (a stale pick) gives an empty title and no
  * lines.
@@ -480,8 +481,11 @@ export function pickInfo(layout: Layout, plan: Plan | null, blockIndex: number):
   // a GT basic machine keeps its front and its output side apart: name both
   if (front !== undefined) lines.push(`Front facing ${front}`, ...(facing === undefined ? [] : [`Output side ${facing}`]));
   else if (facing !== undefined) lines.push(`Facing ${facing}`);
-  const step = block.stepId === undefined ? undefined : plan?.steps.find((s) => s.id === block.stepId);
-  if (step !== undefined) lines.push(...stepLines(step, nameOf));
+  // A machine several steps share (`stepIds`, plan 12) says what each of them makes, its first step first.
+  for (const id of block.stepIds ?? (block.stepId === undefined ? [] : [block.stepId])) {
+    const step = plan?.steps.find((s) => s.id === id);
+    if (step !== undefined) lines.push(...stepLines(step, nameOf));
+  }
   lines.push(...configuredLines(block, nameOf));
   lines.push(...conduitLines(block, nameOf).map((l) => l.text));
   const hookup = block.hookup === undefined ? undefined : layout.hookups[block.hookup];

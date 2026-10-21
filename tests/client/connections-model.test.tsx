@@ -67,6 +67,25 @@ describe('the Connections graph', () => {
     expect(g.edges.filter((e) => e.key !== null).map((e) => [e.from, e.to, e.via])).toEqual([['raw', 'step:a', 'ae2'], ['step:a', 'step:b', 'ae2'], ['step:b', 'out', 'ae2']]);
   });
 
+  it('draws a machine that runs two steps as one box, with what it makes and uses itself as a line, not a link (plan 12)', () => {
+    // An AE2 sharing pool: the macerator runs a (Raw Input → Titanium Dust) and a2 (Titanium Dust → Fine Dust); b takes the fine dust.
+    const FINE = 't:fine@0';
+    const a2 = { ...connPlan.steps[0]!, id: 'a2', recipeId: 'a2', inputs: [{ key: 't:dust@0', amount: 1, chance: 1 }], outputs: [{ key: FINE, amount: 1, chance: 1 }] };
+    const b = { ...connPlan.steps[1]!, inputs: [{ key: FINE, amount: 1, chance: 1 }] };
+    const plan: Plan = { ...connPlan, steps: [connPlan.steps[0]!, a2, b], names: { ...connPlan.names, [FINE]: 'Fine Dust' },
+      flows: [{ from: 'raw', to: 'a', key: 't:in@0', perSecond: 1 }, { from: 'a', to: 'a2', key: 't:dust@0', perSecond: 1 },
+        { from: 'a2', to: 'b', key: FINE, perSecond: 1 }, { from: 'b', to: 'out', key: 't:ingot@0', perSecond: 1 }] };
+    const layout = connLayout('ae2');
+    layout.blocks = layout.blocks.map((blk) => (blk.role === 'machine' && blk.stepId === 'a' ? { ...blk, stepIds: ['a', 'a2'] } : blk));
+    const g = connectionsGraph(layout, plan, 'min');
+    expect(g.nodes.filter((n) => n.kind === 'machine').map((n) => [n.id, n.title, n.lines])).toEqual([
+      ['step:a', '1× Basic Macerator', ['LV · 2 EU/t', 'Runs Titanium Dust and Fine Dust', 'Titanium Dust 60/min: made and used here']],
+      ['step:b', '1× Advanced Assembler', ['MV · 30 EU/t']]]);
+    expect(g.edges.filter((e) => e.key !== null).map((e) => [e.from, e.to, e.key])).toEqual([['raw', 'step:a', 't:in@0'], ['step:a', 'step:b', FINE], ['step:b', 'out', 't:ingot@0']]);
+    const box = g.nodes.find((n) => n.id === 'step:a')!;
+    expect(box.height).toBe(28 + 16 * (box.lines.length + box.faces.length) + 8);
+  });
+
   it('tells the full configuration of a picked box, face or link', () => {
     const g = connectionsGraph(connLayout('enderio'), connPlan, 'min');
     const face = g.nodes[0]!.faces[0]!;

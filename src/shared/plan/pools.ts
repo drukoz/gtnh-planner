@@ -1,9 +1,21 @@
 // Sharing pools of a plan's steps (plan 12, architecture §11.39, `PlanStep.pool`): the steps of one pool run on the same
 // machines, so whatever counts machines — the plan's build cost, its power, the place step, the configure step, the build
-// list, the layout — counts a pool once, at its first step (ruling P18: one helper for all of them).
+// list, the layout — counts a pool once, at its first step (ruling P18: one helper for all of them); and what the steps
+// a shared machine runs are called where the client names them (the step panel, the Connections view).
 // Pure TypeScript shared by server and browser: nothing from node:* and no DOM.
 
-import type { PlanStep } from '../types/plan.ts';
+import type { StuffKey } from '../keys.ts';
+import type { Plan, PlanStep } from '../types/plan.ts';
+
+/**
+ * A step of `plan` by what it makes, as the layout names the steps a shared machine runs: the name of its main output,
+ * else of its first output, else its id (also for an id the plan lacks).
+ */
+export function stepNameIn(plan: Pick<Plan, 'steps'>, stepId: string, nameOf: (key: StuffKey) => string): string {
+  const step = plan.steps.find((s) => s.id === stepId);
+  const key = step?.mainOutput ?? step?.outputs[0]?.key;
+  return key === undefined ? stepId : nameOf(key);
+}
 
 /**
  * The steps grouped by the machines they hold, in step order: each step outside a sharing pool alone, and each sharing

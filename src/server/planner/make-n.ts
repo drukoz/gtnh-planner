@@ -8,6 +8,7 @@ import { PSEUDO_IDS } from '../../shared/gt/tiers.ts';
 import type { StuffKey } from '../../shared/keys.ts';
 import type { Pack, Product } from '../../shared/types/pack.ts';
 import type { PlanContext, PlanSettings, PlanStep } from '../../shared/types/plan.ts';
+import { isAutoWorkbench } from './benches.ts';
 import type { CandidateGraph, LpRecipe } from './candidates.ts';
 import {
   boughtGoods, describeStep, machineWarnings, ownedPools, pickStepMachines, reusedOf, stepLine, type PickedRecipe, type StepLine, type StepSize,
@@ -310,7 +311,9 @@ function fillSeconds(graph: CandidateGraph, runs: ReadonlyMap<string, number>, p
  * we have" off, and a type in `settings.declineReuse` counts as not owned). An owned type gives the step all the owned
  * machines of that type (`count = owned`, `reused` with all its units, where they stand and the other steps of the type
  * in `sharedWith`), shared with the other steps of that type; any other type gets one new machine (`count 1, owned 0`, in
- * `addedMachines`), likewise shared — no sharing pool (`PlanStep.pool`): a batch already shares one machine per type.
+ * `addedMachines`), likewise shared — no sharing pool (`PlanStep.pool`): a batch already shares one machine per type, and
+ * each step of a shared type says so: swap circuits or molds between batches, or on an Auto Workbench set its crafting
+ * grid (controller ruling 177).
  * Pseudo machines (hand-crafting, crafting table, furnace) are never added. `totalSeconds` = the busiest machine type
  * (Σ work ÷ its machines) plus the fill time.
  */
@@ -359,9 +362,11 @@ export async function makeN(
     const utilization = totalSeconds > 0 ? workTicks(p) / TICKS_PER_SECOND / (count * totalSeconds) : 0;
     const warnings = machineWarnings(p.lp, p.pick, runsPerSecond);
     const others = (stepsOfType.get(mteId) ?? []).filter((id) => id !== p.id);
-    // Hand-crafting, a crafting table or a furnace has no circuit or mold to swap.
+    // Hand-crafting, a crafting table or a furnace has no circuit or mold to swap; an Auto Workbench is switched by
+    // setting its 3x3 crafting grid (controller ruling 177).
     if (others.length > 0 && !PSEUDO_IDS.has(mteId)) {
-      warnings.push(`Shares machines with ${others.join(', ')} — swap circuits/molds between batches`);
+      const swap = isAutoWorkbench(pack.machines.get(mteId)) ? 'set its crafting grid between batches' : 'swap circuits/molds between batches';
+      warnings.push(`Shares machines with ${others.join(', ')} — ${swap}`);
     }
     if (p.recipe.outputs.some((o) => o.chance < 1)) warnings.push(CHANCED_WARNING);
     const size: StepSize = { count, owned: ownedOf(mteId), runsPerSecond, utilization, warnings };

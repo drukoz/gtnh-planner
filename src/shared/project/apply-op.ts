@@ -38,6 +38,8 @@ const MAX_WORLD_ID_LENGTH = 100;
 const MARK_ROW = /^(build|run|step):.{1,300}$/;
 const ROTATIONS: readonly unknown[] = [0, 90, 180, 270];
 const LOGISTICS_MODES: readonly unknown[] = Object.values(LogisticsMode);
+/** `PlanSettings.multiblocks`'s values (the user's ruling 224). */
+const MULTIBLOCK_CHOICES: readonly unknown[] = ['allow', 'only-required'] satisfies ReadonlyArray<NonNullable<PlanSettings['multiblocks']>>;
 
 /**
  * The version of the defaults new settings are made under (`PlanSettings.settingsVersion`, architecture §11.32): 2 since
@@ -54,7 +56,7 @@ export function defaultSettings(): PlanSettings {
     routeDerived: true, logistics: 'direct', costOverrides: {}, stopItems: [], expandItems: [], recipeChoice: {},
     machineTier: {}, excludedCategories: [...DEFAULT_EXCLUDED_CATEGORIES], coilHeat: null, automateCrafting: true,
     avoid: [], declineReuse: [], settingsVersion: SETTINGS_VERSION, haveSupply: [], stepCharge: DEFAULT_STEP_CHARGE,
-    optionChoice: {}, reuseOwned: true, ownedManual: [], buildHorizonHours: DEFAULT_BUILD_HORIZON_HOURS,
+    optionChoice: {}, reuseOwned: true, ownedManual: [], buildHorizonHours: DEFAULT_BUILD_HORIZON_HOURS, buildTier: null, multiblocks: 'allow',
   };
 }
 
@@ -63,7 +65,9 @@ export function defaultSettings(): PlanSettings {
  * avoid entries and sums repeated machines of the "Machines we have" list. A missing `settingsVersion` is 1, not the
  * default: the project was stored before it, and the server switches such projects to the new defaults once
  * (`ProjectStore.migrateSettings`); every stored value, a stored `routeDerived: false` or `buildHorizonHours: null`
- * ("Ignore build cost") among them, is kept.
+ * ("Ignore build cost") among them, is kept — but `automateCrafting`, which reads true whatever was stored (the user's
+ * ruling 180 of 2026-10-20: crafting steps are automatic, with no switch for them), so a project stored "by hand" plans
+ * its crafting on Auto Workbenches at once, with no recorded change. `planLine` still plans an explicit false by hand.
  */
 export function normalizeSettings(s: Partial<PlanSettings> | undefined): PlanSettings {
   const defaults = defaultSettings();
@@ -71,6 +75,7 @@ export function normalizeSettings(s: Partial<PlanSettings> | undefined): PlanSet
   merged.dims = { ...defaults.dims, ...definedOnly(s?.dims ?? {}) };
   merged.avoid = withoutRepeats(merged.avoid);
   merged.ownedManual = summedOwned(merged.ownedManual ?? []);
+  merged.automateCrafting = true;
   if (s?.settingsVersion === undefined) merged.settingsVersion = FIRST_SETTINGS_VERSION;
   return merged;
 }
@@ -235,6 +240,9 @@ const SETTING_CHECKS: { readonly [K in keyof PlanSettings]-?: Check } = {
   // null = ignore build cost (rate mode).
   buildHorizonHours: (v) => (v === null || (typeof v === 'number' && Number.isFinite(v) && v > 0 && v <= MAX_BUILD_HORIZON_HOURS)
     ? null : `buildHorizonHours must be empty or above 0 and at most ${MAX_BUILD_HORIZON_HOURS}`),
+  // null = the cheapest tier; a tier above the project's is kept and clamped by the planner.
+  buildTier: (v) => (v === null || (isTier(v) && (v as number) >= 1) ? null : `buildTier must be empty or a whole number from 1 to ${MAX_TIER}`),
+  multiblocks: oneOf('multiblocks', MULTIBLOCK_CHOICES),
 };
 
 const SETTING_KEYS: ReadonlySet<string> = new Set(Object.keys(defaultSettings()));

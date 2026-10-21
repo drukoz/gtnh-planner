@@ -11,7 +11,7 @@
 
 import { basicInputSlots, ignoredByBlocking } from '../../shared/gt/feeding.ts';
 import { multiblockOverclock, singleblockOverclock, voltageTier, type MachineOc } from '../../shared/gt/overclock.ts';
-import { V } from '../../shared/gt/tiers.ts';
+import { V, tierName } from '../../shared/gt/tiers.ts';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import type { Machine, Pack, Recipe } from '../../shared/types/pack.ts';
 import {
@@ -29,6 +29,14 @@ const TICKS_PER_SECOND = 20;
 const SECONDS_PER_HOUR = 3600;
 /** Step recipes one AE2 pool runs at most (controller Amendment OQ6): the processing patterns of one ME Interface. */
 export const AE2_POOL_MAX_PATTERNS = 9;
+/**
+ * The raw material over the build horizon (Make N: the batch) a new multiblock weighs on top of its build where
+ * "Multiblocks: only when nothing else can do it" (`PlanSettings.multiblocks`, the user's ruling 224) and no single-block
+ * machine that can be built here runs its recipe: so large that any route without one wins, buying the good included,
+ * and one is built only where nothing else works. Only `MachineOption.solveBuild` carries it; `build`, the build list
+ * and `Plan.cost` keep the machine's own price.
+ */
+export const ONLY_REQUIRED_MULTIBLOCK_WEIGHT = 1e6;
 /** EU one craft of the Auto Workbench draws in its "Normal Crafting Table" mode (gt-mechanics §8). */
 const AUTO_WORKBENCH_EU_PER_CRAFT = 2048;
 
@@ -70,6 +78,13 @@ export type OwnedPools = ReadonlyMap<number, ReadonlyArray<OwnedUnit | null>>;
 
 /** Amendment OQ5 (ruling P5): the pinned tier `t*` whose machine cannot be built here, so its step falls back to another. */
 export interface PinFallback { tier: number; name: string; why: string }
+
+/**
+ * "Build machines at" (`PlanSettings.buildTier`, the user's ruling 224): the tier a step's new machines were wanted at
+ * (the setting, clamped to the group's tier), the tier they are built at instead, and why, in plain words: "its recipe
+ * needs more power than an LV machine gives", "no HV machine runs this recipe", "<machine> cannot be built here (<why>)".
+ */
+export interface BuildTierFallback { wanted: number; tier: number; why: string }
 
 export interface BuildModel {
   mode: 'rate' | 'makeN';
@@ -115,6 +130,12 @@ export interface BuildModel {
    * the machine of its eligible option with the lowest mteId and that option's `unbuildable`; undefined otherwise.
    */
   pinFallback(recipeId: string): PinFallback | undefined;
+  // optional addition (the user's ruling 224, plan 12 Task 7)
+  /**
+   * With "Build machines at" a tier (`PlanSettings.buildTier`) and no `machineTier` pin for the step: where its new
+   * machines are built at another tier than the one wanted, which and why (`BuildTierFallback`); undefined otherwise.
+   */
+  buildTierFallback?: (recipeId: string) => BuildTierFallback | undefined;
   owned: ReadonlyMap<number, number>; pools: OwnedPools; prices: ItemPrices;
   cleanroom: { mteId: number; name: string; build: number | null; solveBuild: number; owned: number; unbuildable?: string } | null;
 }
@@ -135,6 +156,11 @@ export interface MachineOptionEnv {
   standIn?: (kind: MachineOption['kind'], tier: number) => number;
   /** Rules 1–4 only. */
   eligibleOnly?: boolean;
+  // optional additions (the user's ruling 224, plan 12 Task 7)
+  /** `PlanSettings.buildTier`: the tier new machines are built at (rule 6b; clamped to `groupTier`); a `pin` wins. */
+  buildTier?: number;
+  /** `PlanSettings.multiblocks` is `only-required` (rules 5b and 8b). */
+  onlyRequiredMultiblocks?: boolean;
 }
 
 /**
@@ -422,12 +448,48 @@ function dominates(p: MachineOption, o: MachineOption): boolean {
   return p.perMachine > o.perMachine || pBuild < oBuild || p.mteId < o.mteId;
 }
 
-/** Rules 1–8 of `machineOptions`, and the pinned tier rule 6 fell back from (Amendment OQ5). */
-function optionsOf(pack: Pack, r: Recipe, mapId: string, env: MachineOptionEnv): { options: MachineOption[]; fallback?: PinFallback } {
+/** A tier's name with its article: "an LV", "an MV", "a ZPM". */
+function aTier(tier: number): string {
+  const name = tierName(tier);
+  return `${name !== 'MAX' && /^[LMHEI]/.test(name) ? 'an' : 'a'} ${name}`;
+}
+
+/**
+ * Why a step's new machines are not built at the tier `wanted` (rule 6b, `BuildTierFallback.why`): a machine of that tier
+ * runs the recipe but cannot be built here (`<name> cannot be built here (<why>)`) or adds none for it; else the map has
+ * a machine of that tier the recipe needs more voltage than (a single-block one of that tier, or a multiblock whose
+ * energy hatch would be below the recipe's voltage): `its recipe needs more power than an <TIER> machine gives`; else
+ * `no <TIER> machine runs this recipe`.
+ */
+function buildTierWhy(pack: Pack, r: Recipe, mapId: string, eligible: readonly MachineOption[], wanted: number): string {
+  const at = eligible.filter((o) => o.tier === wanted).sort((a, b) => a.mteId - b.mteId);
+  if (at.length > 0) {
+    const unbuilt = at.find((o) => o.unbuildable !== undefined);
+    return unbuilt !== undefined ? `${unbuilt.name} cannot be built here (${unbuilt.unbuildable})` : `no new ${tierName(wanted)} machine is built for it`;
+  }
+  const machines = mapId === 'crafting' ? [] : (pack.machinesByMap.get(mapId) ?? []).flatMap((id) => pack.machines.get(id) ?? []);
+  const short = machines.some((m) => m.kind === 'basic' && tierOf(m) === wanted)
+    || (machines.some((m) => m.kind === 'multiblock') && wanted < voltageTier(r.euPerTick));
+  return short ? `its recipe needs more power than ${aTier(wanted)} machine gives` : `no ${tierName(wanted)} machine runs this recipe`;
+}
+
+/**
+ * Rules 1–8 of `machineOptions`, the pinned tier rule 6 fell back from (Amendment OQ5), and the tier rule 6b built at
+ * instead of the one "Build machines at" wanted.
+ */
+function optionsOf(
+  pack: Pack, r: Recipe, mapId: string, env: MachineOptionEnv,
+): { options: MachineOption[]; fallback?: PinFallback; buildTier?: BuildTierFallback } {
   const eligible = offersFor(pack, r, mapId, env).map((offer) => optionOf(pack, r, mapId, offer, env)).sort(byTierThenId);
   if (env.eligibleOnly === true) return { options: eligible };
   // Rule 5: one that cannot be built here serves only as far as the group owns it.
   let options = eligible.filter((o) => o.unbuildable === undefined || o.owned > 0);
+  // Rule 5b (the user's ruling 224 (B)): with multiblocks only where nothing else can do it, a recipe a single-block
+  // machine that can be built here runs gets no new multiblock; an owned one still serves.
+  const singleRuns = eligible.some((o) => o.kind === 'basic' && o.unbuildable === undefined);
+  if (env.onlyRequiredMultiblocks === true && singleRuns) {
+    options = options.flatMap((o) => (o.kind !== 'multiblock' ? [o] : o.owned > 0 ? [{ ...o, canAdd: false }] : []));
+  }
   // Rule 6 (Amendment OQ5, ruling P5): the pin clamped to the eligible tiers; when that tier cannot be built here, its
   // owned machines and the buildable ones of the highest tier below it, else of the lowest above it.
   let fallback: PinFallback | undefined;
@@ -448,14 +510,34 @@ function optionsOf(pack: Pack, r: Recipe, mapId: string, env: MachineOptionEnv):
       if (first?.unbuildable !== undefined) fallback = { tier: pinned, name: first.name, why: first.unbuildable };
     }
   }
-  // Rule 7 (OQ5 b): beside a priced option, a pricing gap serves only as far as the group owns it.
-  if (options.some((o) => o.build !== null)) {
+  // Rule 6b (the user's ruling 224 (A)): "Build machines at" (without a pin, which wins): new machines only of the tier
+  // wanted (the setting, clamped to the group's), else of the lowest tier above it with machines that can be added, else
+  // of the highest below it; owned machines of the other tiers still serve.
+  let built: BuildTierFallback | undefined;
+  if (env.buildTier !== undefined && pin === undefined) {
+    const wanted = Math.min(env.buildTier, env.groupTier);
+    const addable = [...new Set(options.filter((o) => o.canAdd).map((o) => o.tier))];
+    const above = addable.filter((t) => t > wanted);
+    const below = addable.filter((t) => t < wanted);
+    const tier = addable.includes(wanted) ? wanted : above.length > 0 ? Math.min(...above) : below.length > 0 ? Math.max(...below) : undefined;
+    if (tier !== undefined) {
+      options = options.flatMap((o) => (o.tier === tier ? [o] : o.owned > 0 ? [{ ...o, canAdd: false }] : []));
+      if (tier !== wanted) built = { wanted, tier, why: buildTierWhy(pack, r, mapId, eligible, wanted) };
+    }
+  }
+  // Rule 7 (OQ5 b): beside a priced option that can add machines, a pricing gap serves only as far as the group owns it.
+  if (options.some((o) => o.build !== null && o.canAdd)) {
     options = options.flatMap((o) => (o.build !== null || o.unbuildable !== undefined ? [o] : o.owned > 0 ? [{ ...o, canAdd: false }] : []));
   }
   // Rule 8: an option the group owns none of, dominated by another, is never worth new machines.
   const kept = options;
   options = kept.filter((o) => o.owned > 0 || !kept.some((p) => dominates(p, o)));
-  return fallback === undefined ? { options } : { options, fallback };
+  // Rule 8b (the user's ruling 224 (B)): a recipe only a multiblock runs weighs each new multiblock so much more that any
+  // other route wins where build cost counts.
+  if (env.onlyRequiredMultiblocks === true && !singleRuns) {
+    options = options.map((o) => (o.kind === 'multiblock' && o.canAdd ? { ...o, solveBuild: o.solveBuild + ONLY_REQUIRED_MULTIBLOCK_WEIGHT } : o));
+  }
+  return { options, ...(fallback === undefined ? {} : { fallback }), ...(built === undefined ? {} : { buildTier: built }) };
 }
 
 /**
@@ -474,13 +556,21 @@ function optionsOf(pack: Pack, r: Recipe, mapId: string, env: MachineOptionEnv):
  *    gap (`machineGap`) is `no-recipe` or `unavailable` (controller ruling OQ5 a). With `eligibleOnly`, stop here (every
  *    option `canAdd` but those with `unbuildable`).
  * 5. An option with `unbuildable` never has `canAdd` and is dropped when the group owns none of it.
+ * 5b. With `env.onlyRequiredMultiblocks` (the user's ruling 224 (B)) and some eligible single-block option that can be
+ *    built here, every multiblock option loses `canAdd` and is dropped when none is owned.
  * 6. A pin (`env.pin`, Amendment OQ5): `t*` = the pin clamped to the eligible option tiers (the highest at or below it,
  *    else the lowest); keep rule 5's options of `t*`, and when none of them can add machines also those that can of the
  *    highest tier below `t*` that has one, else of the lowest above it (`optionsOf`'s fallback).
- * 7. Pricing gaps (OQ5 b, `build` null without `unbuildable`): when some option has a price, each loses `canAdd` and is
- *    dropped when none is owned; otherwise they keep `canAdd` (the solve weighs them at their stand-in).
+ * 6b. Without a pin, `env.buildTier` (the user's ruling 224 (A), clamped to `groupTier`): new machines only of that tier
+ *    where an option of it can add machines, else of the lowest tier above it that has one, else of the highest below it
+ *    (`BuildTierFallback`, with why); the options of the other tiers lose `canAdd` and are dropped when none is owned.
+ * 7. Pricing gaps (OQ5 b, `build` null without `unbuildable`): when some option that can add machines has a price, each
+ *    loses `canAdd` and is dropped when none is owned; otherwise they keep `canAdd` (the solve weighs them at their
+ *    stand-in).
  * 8. An option the group owns none of is dropped when another dominates it (`dominates`); one with owned machines always
  *    stays (the solve may run them beside another option's new ones).
+ * 8b. With `env.onlyRequiredMultiblocks` and no eligible single-block option that can be built here, every multiblock
+ *    option that can add machines weighs `ONLY_REQUIRED_MULTIBLOCK_WEIGHT` more in `solveBuild`.
  */
 export function machineOptions(pack: Pack, r: Recipe, mapId: string, env: MachineOptionEnv): MachineOption[] {
   return optionsOf(pack, r, mapId, env).options;
@@ -519,6 +609,9 @@ export async function lineBuildModel(pack: Pack, graph: CandidateGraph, basis: P
   const room = steps.some((s) => s.lp.needsCleanroom) ? cleanroomMachine(pack) : undefined;
   const prices = await itemPrices(pack, settings, ctx, buildKeys(pack, room === undefined ? machines : [...machines, room]));
   const env: MachineOptionEnv = { ...offerEnv, coilHeat: basis.coilHeat, owned, prices };
+  // the user's ruling 224: the tier new machines are built at, and multiblocks only where nothing else can do it
+  if (typeof settings.buildTier === 'number') env.buildTier = settings.buildTier;
+  if (settings.multiblocks === 'only-required') env.onlyRequiredMultiblocks = true;
 
   const eligibleById = new Map<string, MachineOption[]>();
   for (const { lp, r, mapId } of steps) eligibleById.set(lp.id, machineOptions(pack, r, mapId, { ...env, eligibleOnly: true }));
@@ -546,6 +639,7 @@ export async function lineBuildModel(pack: Pack, graph: CandidateGraph, basis: P
 
   const optionsById = new Map<string, MachineOption[]>();
   const fallbackById = new Map<string, PinFallback>();
+  const builtAtById = new Map<string, BuildTierFallback>();
   const blocked = new Map<string, string>();
   const ownedOnly = new Map<string, { runsPerSecond: number; text: string }>();
   /**
@@ -553,9 +647,9 @@ export async function lineBuildModel(pack: Pack, graph: CandidateGraph, basis: P
    * furnace step, and a crafting step by hand or in a pack without an Auto Workbench, has no machine to name), or its
    * cleanroom cannot be built — with its options (rules 1–8, its pin) and pin fallback; `why` undefined when one can.
    */
-  const judge = (r: Recipe, mapId: string, eligible: readonly MachineOption[] | undefined): { options: MachineOption[]; fallback?: PinFallback; why?: string } => {
+  const judge = (r: Recipe, mapId: string, eligible: readonly MachineOption[] | undefined): ReturnType<typeof optionsOf> & { why?: string } => {
     const pin = Object.hasOwn(settings.machineTier, r.id) ? settings.machineTier[r.id] : undefined;
-    const judged: { options: MachineOption[]; fallback?: PinFallback; why?: string } = optionsOf(pack, r, mapId, { ...env, standIn, pin });
+    const judged: ReturnType<typeof optionsOf> & { why?: string } = optionsOf(pack, r, mapId, { ...env, standIn, pin });
     const first = (eligible ?? machineOptions(pack, r, mapId, { ...env, eligibleOnly: true }))[0];
     const why = judged.options.length === 0 && first?.unbuildable !== undefined ? `${first.name} cannot be built here (${first.unbuildable})`
       : roomWhy !== undefined && r.meta.cleanroom === true ? `Cleanroom cannot be built here (${roomWhy})` : undefined;
@@ -563,7 +657,7 @@ export async function lineBuildModel(pack: Pack, graph: CandidateGraph, basis: P
     return judged;
   };
   for (const { lp, r, mapId } of steps) {
-    const { options, fallback, why } = judge(r, mapId, eligibleById.get(lp.id));
+    const { options, fallback, buildTier: builtAt, why } = judge(r, mapId, eligibleById.get(lp.id));
     if (why !== undefined) {
       blocked.set(lp.id, why);
       optionsById.set(lp.id, []);
@@ -571,6 +665,7 @@ export async function lineBuildModel(pack: Pack, graph: CandidateGraph, basis: P
     }
     optionsById.set(lp.id, options);
     if (fallback !== undefined) fallbackById.set(lp.id, fallback);
+    if (builtAt !== undefined) builtAtById.set(lp.id, builtAt);
     // Only owned machines that cannot be built are left when no option can add machines (a pricing gap loses `canAdd`
     // only beside a priced option, which keeps it).
     const lead = options[0];
@@ -617,6 +712,7 @@ export async function lineBuildModel(pack: Pack, graph: CandidateGraph, basis: P
     blocked,
     ownedOnly: (id) => ownedOnly.get(id),
     pinFallback: (id) => fallbackById.get(id),
+    buildTierFallback: (id) => builtAtById.get(id),
     owned, pools, prices, cleanroom,
   };
   if (alike.size > 0) model.blockedAlike = alike;

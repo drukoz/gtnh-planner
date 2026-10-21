@@ -19,6 +19,7 @@ import { configTexts, conduitFaceText, coverText, faceName, feedTexts } from '..
 import { CONDUIT_MODE_NAMES, CONDUIT_NAMES, DYE_NAMES, hookupNetworkKind } from '../../shared/layout/enderio.ts';
 import { fmtInt, fmtRate, joinNames, NETWORK_NAMES } from '../../shared/layout/format.ts';
 import { DIRS, OPPOSITE, posKey, sideToward, step, type Vec3 } from '../../shared/layout/geometry.ts';
+import { stepNameIn } from '../../shared/plan/pools.ts';
 import { FACES, type Face } from '../../shared/types/assets.ts';
 import type {
   BlockRole, ConduitFace, ConduitFilter, ConduitKind, ConduitMode, CoverSpec, DyeColor, Layout, LayoutBlock, TailChest,
@@ -164,25 +165,37 @@ interface Grid { blocks: readonly LayoutBlock[]; at: ReadonlyMap<string, number>
 /**
  * The line's boxes in order, without faces: one per plan step that has placed blocks (plan order), per chest, per
  * interface or chip pipe (a hookup's end interface included: it is configured like the line's), per hookup. A block
- * belongs to one box at most; ghosts to none.
+ * belongs to one box at most; ghosts to none. A machine several steps share (`LayoutBlock.stepIds`, plan 12) is in the
+ * box of its first step, which says which steps it runs (`Runs <their names>`), and `boxOf` maps each step id to the box
+ * its machines are in.
  */
-function lineBoxes(layout: Layout, plan: Plan, nameOf: (k: StuffKey) => string): { nodes: ConnNode[]; tails: Map<string, TailChest> } {
+function lineBoxes(layout: Layout, plan: Plan, nameOf: (k: StuffKey) => string): { nodes: ConnNode[]; tails: Map<string, TailChest>; boxOf: Map<string, string> } {
   const blocks = layout.blocks;
   const live = blocks.flatMap((b, i) => (b.role === 'ghost' ? [] : [i]));
   const isInterface = (i: number): boolean => INTERFACE_ROLES.has(blocks[i]!.role);
   const nodes: ConnNode[] = [];
   const tails = new Map<string, TailChest>();
+  const boxOf = new Map<string, string>();
   const add = (node: Omit<ConnNode, 'faces' | 'width' | 'height'>): void => {
     nodes.push({ ...node, faces: [], width: CONN_NODE_WIDTH, height: 0 });
   };
 
+  const sharedBy = new Map<string, string[]>();
   for (const s of plan.steps) {
     const own = live.filter((i) => blocks[i]!.stepId === s.id && blocks[i]!.hookup === undefined && !isInterface(i));
     if (own.length === 0) continue;
     const machines = Math.max(1, own.filter((i) => blocks[i]!.role === 'machine').length);
-    add({ id: `step:${s.id}`, kind: 'machine', title: `${fmtInt(machines)}× ${s.machine.name}`,
-      lines: [`${tierText(s.machine.tier)} · ${fmtInt(s.euPerTick)} EU/t`], blocks: own });
+    const runs = [...new Set(own.flatMap((i) => (blocks[i]!.role === 'machine' ? blocks[i]!.stepIds ?? [] : [])))];
+    const lines = [`${tierText(s.machine.tier)} · ${fmtInt(s.euPerTick)} EU/t`];
+    if (runs.length > 1) {
+      lines.push(`Runs ${joinNames(runs.map((id) => stepNameIn(plan, id, nameOf)))}`);
+      sharedBy.set(`step:${s.id}`, runs);
+    }
+    add({ id: `step:${s.id}`, kind: 'machine', title: `${fmtInt(machines)}× ${s.machine.name}`, lines, blocks: own });
+    boxOf.set(s.id, `step:${s.id}`);
   }
+  // the other steps of a shared machine, where they have no box of their own
+  for (const [box, ids] of sharedBy) for (const id of ids) if (!boxOf.has(id)) boxOf.set(id, box);
   for (const i of live) {
     const b = blocks[i]!;
     if (b.role !== 'chest' || b.hookup !== undefined) continue;
@@ -206,7 +219,7 @@ function lineBoxes(layout: Layout, plan: Plan, nameOf: (k: StuffKey) => string):
         ...(h.found === false ? ['No free route was found: the path is a straight guide line'] : [])],
       blocks: laid.filter((i) => !isInterface(i)) });
   });
-  return { nodes, tails };
+  return { nodes, tails, boxOf };
 }
 
 /** `<host label>, <face> face`: one cover in a builder's words. */
@@ -296,23 +309,37 @@ function passes(filter: ConduitFilter | null, key: StuffKey): boolean {
 interface FlowLink { id: string; from: string; to: string; key: StuffKey; perSecond: number }
 
 /**
- * Each flow with a placed end, from its step's box (else the input chest that takes the key in, else `raw`) to its
- * step's box (else the output chest that collects the key, else `out`).
+ * Each flow with a placed end, from its step's box (`boxOf`; else the input chest that takes the key in, else `raw`) to
+ * its step's box (else the output chest that collects the key, else `out`). A flow whose two ends are one box (two steps
+ * of one shared machine, plan 12) is no link: `inside` holds it, per box and key in flow order, its rates summed.
  */
-function flowLinks(plan: Plan, placed: ReadonlySet<string>, tails: ReadonlyMap<string, TailChest>): FlowLink[] {
+function flowLinks(plan: Plan, boxOf: ReadonlyMap<string, string>, tails: ReadonlyMap<string, TailChest>): { links: FlowLink[]; inside: Map<string, Map<StuffKey, number>> } {
   const chest = (side: TailChest['side'], key: StuffKey): string | undefined =>
     [...tails].find(([, t]) => t.side === side && t.keys.includes(key))?.[0];
   const links = new Map<string, FlowLink>();
+  const inside = new Map<string, Map<StuffKey, number>>();
   for (const f of plan.flows) {
-    if (!placed.has(f.from) && !placed.has(f.to)) continue;
-    const from = placed.has(f.from) ? `step:${f.from}` : chest('input', f.key) ?? RAW;
-    const to = placed.has(f.to) ? `step:${f.to}` : chest('output', f.key) ?? OUT;
+    const fromBox = boxOf.get(f.from), toBox = boxOf.get(f.to);
+    if (fromBox === undefined && toBox === undefined) continue;
+    if (fromBox !== undefined && fromBox === toBox) {
+      let goods = inside.get(fromBox);
+      if (goods === undefined) inside.set(fromBox, (goods = new Map()));
+      goods.set(f.key, (goods.get(f.key) ?? 0) + f.perSecond);
+      continue;
+    }
+    const from = fromBox ?? chest('input', f.key) ?? RAW;
+    const to = toBox ?? chest('output', f.key) ?? OUT;
     const id = `flow:${from}>${to}:${f.key}`;
     const link = links.get(id);
     if (link === undefined) links.set(id, { id, from, to, key: f.key, perSecond: f.perSecond });
     else link.perSecond += f.perSecond;
   }
-  return [...links.values()];
+  return { links: [...links.values()], inside };
+}
+
+/** A rate of a good as a link label says it: `<name> <rate>/min` (or `/h`). */
+function rateWords(key: StuffKey, perSecond: number, per: 'min' | 'hour', nameOf: (k: StuffKey) => string): string {
+  return `${nameOf(key)} ${fmtRate(perSecond * (per === 'min' ? 60 : 3600))}/${per === 'min' ? 'min' : 'h'}`;
 }
 
 /**
@@ -324,7 +351,7 @@ function flowLinks(plan: Plan, placed: ReadonlySet<string>, tails: ReadonlyMap<s
  */
 function flowEdge(link: FlowLink, ends: { from: ConnNode; to: ConnNode }, conduitOf: ReadonlyMap<string, ConduitFace>, mode: LogisticsMode,
   per: 'min' | 'hour', nameOf: (k: StuffKey) => string, hand: readonly string[]): ConnEdge {
-  const rate = `${nameOf(link.key)} ${fmtRate(link.perSecond * (per === 'min' ? 60 : 3600))}/${per === 'min' ? 'min' : 'h'}`;
+  const rate = rateWords(link.key, link.perSecond, per, nameOf);
   if (hand.length > 0) {
     return {
       id: link.id, from: link.from, to: link.to, via: 'hand', key: link.key, perSecond: link.perSecond, label: `${rate} · by hand`,
@@ -415,11 +442,12 @@ export function hasLine(plan: Plan, layout: Layout): boolean {
  * link or a face needs them) with their face rows and sizes (a conduit face's row takes two lines), and the links: the
  * plan's flows (rates per `per`), then the attached interfaces, then the hookups. A conduit face that points at no box
  * (an open fluid end, toward your tank) goes to `raw` when it extracts and to `out` when it inserts, so an In / Out one
- * is in both and both its links name it.
+ * is in both and both its links name it. A machine several steps share (plan 12) is one box, the steps' flows to and
+ * from it its links, and a flow from one of its steps to another a line of the box: `<good> <rate>: made and used here`.
  */
 export function connectionsGraph(layout: Layout, plan: Plan, per: 'min' | 'hour'): ConnGraph {
   const nameOf = (k: StuffKey): string => plan.names?.[k] ?? k;
-  const { nodes, tails } = lineBoxes(layout, plan, nameOf);
+  const { nodes, tails, boxOf } = lineBoxes(layout, plan, nameOf);
   const at = new Map<string, number>();
   layout.blocks.forEach((b, i) => {
     if (b.role !== 'ghost' && !at.has(posKey(b.pos))) at.set(posKey(b.pos), i);
@@ -435,8 +463,9 @@ export function connectionsGraph(layout: Layout, plan: Plan, per: 'min' | 'hour'
   rows.set(RAW, incoming.loose.filter(extracts).map((r) => conduitRow(RAW, r, r.face.target, nameOf)));
   rows.set(OUT, incoming.loose.filter(inserts).map((r) => conduitRow(OUT, r, r.face.target, nameOf)));
 
-  const boxed = new Set(nodes.map((n) => n.id));
-  const links = flowLinks(plan, new Set(plan.steps.map((s) => s.id).filter((id) => boxed.has(`step:${id}`))), tails);
+  const { links, inside } = flowLinks(plan, boxOf, tails);
+  // what a shared machine makes and uses itself (plan 12): a line of its box, not a link
+  for (const n of nodes) for (const [key, perSecond] of inside.get(n.id) ?? []) n.lines.push(`${rateWords(key, perSecond, per, nameOf)}: made and used here`);
   for (const [id, kind, title] of [[RAW, 'source', 'Raw inputs'], [OUT, 'sink', 'Final outputs']] as const) {
     if ((rows.get(id) ?? []).length > 0 || links.some((l) => l.from === id || l.to === id)) {
       nodes.push({ id, kind, title, lines: [], faces: [], blocks: [], width: CONN_NODE_WIDTH, height: 0 });

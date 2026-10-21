@@ -246,6 +246,19 @@ describe('flow diagram: boxes, rows and stubs (fix spec §6.2)', () => {
     const long = flowGraph(planOf({ steps: [mv({ id: 'x', machine: { mteId: 1, name: 'Extremely Advanced Large Multiblock Assembling Machine of Great Length', tier: 2 } })] }), 'hour');
     expect(nodeOf(long, 'x').width).toBe(330);
   });
+  it('says when a step shares its machines with other steps (plan 12)', () => {
+    // The hammer steps of Task 5's AE2 sand plan: one forge hammer for both.
+    const pool = { id: 'pool:hammer-gravel', steps: ['hammer-gravel', 'hammer-sand'] };
+    const hammer = (id: string, out: string): PlanStep => mv({ id, machine: { mteId: 481, name: 'Basic Forge Hammer', tier: 1 }, euPerTick: 16,
+      utilization: 1 / 30, mainOutput: out, outputs: [per(out, 1)], pool });
+    const shared = flowGraph(planOf({ tier: 1, steps: [hammer('hammer-gravel', 't:gravel@0'), hammer('hammer-sand', 't:sand@0'),
+      mv({ id: 'smelt', machine: { mteId: 151, name: 'Basic Electric Furnace', tier: 1 }, euPerTick: 16, utilization: 1 / 30, mainOutput: 't:glass@0', outputs: [per('t:glass@0', 1)] })],
+      names: { 't:gravel@0': 'Gravel', 't:sand@0': 'Sand', 't:glass@0': 'Glass' } }), 'min');
+    expect(nodeOf(shared, 'hammer-gravel').lines).toEqual(['LV · 16 EU/t · 1 shared machine · 3% busy']);
+    expect(nodeOf(shared, 'smelt').lines).toEqual(['LV · 16 EU/t · 1 machine · 3% busy']);
+    const two = flowGraph(planOf({ steps: [mv({ id: 'p', count: 2, pool: { id: 'pool:p', steps: ['p', 'q'] } })] }), 'min');
+    expect(nodeOf(two, 'p').lines[0]).toContain('2 shared machines');
+  });
   it('says what a supply step supplies and that a hand step is done by hand', () => {
     const COBBLE = 'minecraft:cobblestone@0';
     const supplied = planOf({

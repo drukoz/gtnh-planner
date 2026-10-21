@@ -54,13 +54,15 @@ describe('ProjectStore', () => {
     const row = db.getProject(p.id)!;
     const state = JSON.parse(row.state); delete state.settings.automateCrafting;
     db.updateProject({ ...row, state: JSON.stringify(state) });
-    // The Auto Workbench default (plan 12's ruling) for the missing field; a stored choice stays as it was.
+    // The Auto Workbench (plan 12's ruling) for the missing field; and since the user's ruling 180 (crafting steps are
+    // automatic, no checkbox) a stored "by hand" reads as automated too, with no recorded change.
     expect(store.get(p.id)?.settings.automateCrafting).toBe(true);
     const byHand = store.create('By hand', 'Ann');
     const stored = db.getProject(byHand.id)!;
     const hand = JSON.parse(stored.state); hand.settings.automateCrafting = false;
     db.updateProject({ ...stored, state: JSON.stringify(hand) });
-    expect(store.get(byHand.id)?.settings.automateCrafting).toBe(false);
+    expect(store.get(byHand.id)?.settings.automateCrafting).toBe(true);
+    expect(store.get(byHand.id)?.rev).toBe(stored.rev);
   });
 });
 
