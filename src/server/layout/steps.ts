@@ -348,20 +348,21 @@ function reusePin(pins: readonly Pin[], find: ReuseFind): number | undefined {
 }
 
 /**
- * One hook step per reuse pin (`reuseGroups`; a find without a machine found its own), id `layout:reuse:<step>` of its
- * first find (`:<mteId>` added for an owned machine of another option, `ReuseFind.otherMteId`, so ids stay unique): hook
- * the machines into the line's logistics; for a machine several steps share (plan 12), which steps it serves, by what
- * they make, in find order.
+ * One hook step per reuse pin (`reuseGroups`: the finds that share owned machines; a find without a machine found its
+ * own), id `layout:reuse:<step>` of its first find (`:<mteId>` added for an owned machine of another option,
+ * `ReuseFind.otherMteId`, so ids stay unique): hook the group's machines, each counted once (controller ruling 215), into
+ * the line's logistics; for machines several steps share (plan 12), which steps they serve, by what they make, in find
+ * order.
  */
 function reuseSteps(finds: readonly ReuseFind[], pins: readonly Pin[]): Draft[] {
-  return reuseGroups(finds).map(({ finds: group }) => {
+  return reuseGroups(finds).map(({ finds: group, count }) => {
     const first = group[0]!;
     const pin = reusePin(pins, first);
     const steps = groupSteps(group);
     const products = steps.map((id) => group.find((f) => f.stepId === id)?.product ?? id);
     const serves = steps.length > 1 ? `; it serves ${fmtInt(steps.length)} steps: ${products.join(', ')}` : '';
     return draft(`layout:reuse:${first.stepId}${first.otherMteId === undefined ? '' : `:${first.otherMteId}`}`, 'logistics', pin,
-      `Hook your ${fmtInt(first.count)}× ${first.name}${atPin(pin)} into the line's logistics${serves}`);
+      `Hook your ${fmtInt(count)}× ${first.name}${atPin(pin)} into the line's logistics${serves}`);
   });
 }
 

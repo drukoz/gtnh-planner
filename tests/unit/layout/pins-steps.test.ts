@@ -89,6 +89,30 @@ describe('pins', () => {
       text: "Hook your 1× Basic Macerator at pin 1 into the line's logistics; it serves 2 steps: t:out_s1@0, t:out_s2@0" }]);
   });
 
+  it('gives finds that share some owned machines one pin and one hook step counting each machine once', () => {
+    // controller ruling 215 (the review's probe): s1 runs on unit 0, s2 on units 0 and 1, so the two finds share the
+    // macerator nearest the site and s2 also runs on the other one: one pin, one hook step, both machines counted
+    const scan = twoMacerators();
+    const finds = findReuse(layoutPack(), onUnits([[0], [0, 1]]), scan, scan.bases[0]!, [0, 64, 0]);
+    const pins = makePins({ dim: 0, site: null, power: null, logistics: null, reuse: finds, warnings: [] });
+    expect(pins).toEqual([{ n: 1, dim: 0, pos: [2, 64, 2], kind: 'reuse', text: 'Reuse your 2× Basic Macerator (shared by 2 steps)' }]);
+    expect(layoutSteps(base({ status: 'empty', pins, reuse: finds }))).toEqual([{ id: 'layout:reuse:s1', order: 1, pin: 1, kind: 'logistics',
+      text: "Hook your 2× Basic Macerator at pin 1 into the line's logistics; it serves 2 steps: t:out_s1@0, t:out_s2@0" }]);
+    // finds that meet in one machine of several (s1 on m0 and m2, s2 on m0 and m1) count three machines, not the larger
+    // find's two; a unit with no machine in this base (the third one first used, of two macerators here) counts too
+    const three = findReuse(layoutPack(), onUnits([[0, 2], [0, 1]]), scan, scan.bases[0]!, [0, 64, 0]);
+    const threePins = makePins({ dim: 0, site: null, power: null, logistics: null, reuse: three, warnings: [] });
+    expect(threePins.map((p) => [p.pos, p.text])).toEqual([[[2, 64, 2], 'Reuse your 3× Basic Macerator (shared by 2 steps)']]);
+    expect(layoutSteps(base({ status: 'empty', pins: threePins, reuse: three })).map((s) => s.text)).toEqual([
+      "Hook your 3× Basic Macerator at pin 1 into the line's logistics; it serves 2 steps: t:out_s1@0, t:out_s2@0"]);
+    // a chain of finds (s1 and s2 share one machine, s2 and s3 the other) is one group
+    const chain = findReuse(layoutPack(), onUnits([[0], [0, 1], [1]]), scan, scan.bases[0]!, [0, 64, 0]);
+    const chainPins = makePins({ dim: 0, site: null, power: null, logistics: null, reuse: chain, warnings: [] });
+    expect(chainPins.map((p) => [p.pos, p.text])).toEqual([[[2, 64, 2], 'Reuse your 2× Basic Macerator (shared by 3 steps)']]);
+    expect(layoutSteps(base({ status: 'empty', pins: chainPins, reuse: chain })).map((s) => [s.id, s.text])).toEqual([['layout:reuse:s1',
+      "Hook your 2× Basic Macerator at pin 1 into the line's logistics; it serves 3 steps: t:out_s1@0, t:out_s2@0, t:out_s3@0"]]);
+  });
+
   it('maps planner units onto the machines nearest the site', () => {
     // one index is one machine, the first one used the nearest; a third has no machine in this base (one elsewhere or
     // from the "Machines we have" list), and a step on it never takes the machine another step has

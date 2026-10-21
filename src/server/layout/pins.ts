@@ -22,6 +22,12 @@ export interface ReuseFind {
   product?: string;
   /** The type of an owned machine of another option that runs the step beside its own (`PlanStep.reused.others`). */
   otherMteId?: number;
+  /**
+   * The planner's units of the find (`PlanStep.reused.units`, or its `others` entry's) that have no machine in this base
+   * (owned elsewhere, or on the "Machines we have" list); absent when every one stands here. A group of finds that share
+   * machines (`reuseGroups`) counts each of its machines once, these too (controller ruling 215).
+   */
+  elsewhere?: number[];
 }
 
 export interface PinInput {
@@ -45,8 +51,9 @@ function compareText(a: string, b: string): number {
  * several steps share is the same one for each and stands nearest the line, whatever the planner's pool order; an index
  * past the base's machines of the type (an owned machine elsewhere, or one of the "Machines we have" list) has no
  * position. Such a step gives a find for its own type (`count` its `owned`, positions its units' machines) and one per
- * `others` entry (`count` its units, `otherMteId` its type), each with the step's `product`; a find without positions is
- * left out, and such a step never takes another machine of the base. A step without units takes, as Plan 2 lets each
+ * `others` entry (`count` its units, `otherMteId` its type), each with the step's `product` and its units without a
+ * machine here (`elsewhere`, when it has any); a find without positions is left out, and such a step never takes
+ * another machine of the base. A step without units takes, as Plan 2 lets each
  * owned machine serve one step, at most `owned` of the type's machines no other step has, nearest first. Steps by id;
  * a step with no machine found is left out: the planner may count owned machines that stand outside this base.
  */
@@ -79,13 +86,19 @@ export function findReuse(pack: Pack, plan: Plan, scan: WorldScan, base: Base | 
       for (const unit of units) if (!order.includes(unit)) order.push(unit);
     }
   }
-  /** The machines of the planner's units of `mteId`, nearest first. */
-  const machinesOf = (mteId: number, units: readonly number[]): Vec3[] => units
-    .flatMap((unit) => {
-      const at = poolOf(mteId)[firstUse.get(mteId)?.indexOf(unit) ?? -1];
-      return at === undefined ? [] : [[...at] as Vec3];
-    })
-    .sort(nearest);
+  /** The machines of the planner's units of `mteId`, nearest first, and the units with no machine in this base. */
+  const machinesOf = (mteId: number, units: readonly number[]): { at: Vec3[]; elsewhere: number[] } => {
+    const at: Vec3[] = [];
+    const elsewhere: number[] = [];
+    for (const unit of units) {
+      const pos = poolOf(mteId)[firstUse.get(mteId)?.indexOf(unit) ?? -1];
+      if (pos === undefined) elsewhere.push(unit);
+      else at.push([...pos]);
+    }
+    return { at: at.sort(nearest), elsewhere };
+  };
+  /** A unit find: its positions, and the units standing elsewhere when it has any. */
+  const unitFind = (find: ReuseFind, elsewhere: readonly number[]): ReuseFind => (elsewhere.length === 0 ? find : { ...find, elsewhere: [...elsewhere] });
   /** Per type, the machines none of the planner's units took, for the steps without units. */
   const free = new Map<number, Vec3[]>();
   const freeOf = (mteId: number): Vec3[] => {
@@ -99,11 +112,15 @@ export function findReuse(pack: Pack, plan: Plan, scan: WorldScan, base: Base | 
     if (s.reused?.units !== undefined) {
       const product = stepProductName(pack, s);
       const own = machinesOf(s.machine.mteId, s.reused.units);
-      if (own.length > 0) out.push({ stepId: s.id, name: nameOf(s.machine.mteId, s.machine.name), count: s.owned, positions: own, product });
+      if (own.at.length > 0) {
+        out.push(unitFind({ stepId: s.id, name: nameOf(s.machine.mteId, s.machine.name), count: s.owned, positions: own.at, product }, own.elsewhere));
+      }
       for (const o of s.reused.others ?? []) {
         const units = o.units ?? [];
-        const at = machinesOf(o.mteId, units);
-        if (at.length > 0) out.push({ stepId: s.id, name: nameOf(o.mteId, o.name), count: units.length, positions: at, product, otherMteId: o.mteId });
+        const other = machinesOf(o.mteId, units);
+        if (other.at.length > 0) {
+          out.push(unitFind({ stepId: s.id, name: nameOf(o.mteId, o.name), count: units.length, positions: other.at, product, otherMteId: o.mteId }, other.elsewhere));
+        }
       }
       continue;
     }
@@ -120,26 +137,60 @@ export function reuseText(find: ReuseFind): string {
   return `Reuse your ${fmtInt(find.count)}× ${find.name}`;
 }
 
+/** Reuse finds that share owned machines (`reuseGroups`), where they meet, and how many machines they run on. */
+export interface ReuseGroup { at: Vec3 | null; finds: ReuseFind[]; count: number }
+
 /**
- * The reuse finds by the machine they stand at (plan 12): the finds whose first machine stands at one position, in the
- * order first met, with that position — one owned machine several steps share — and each find without positions alone,
- * at null. `makePins` gives each group with a position one reuse pin, `layoutSteps` each group one hook step.
+ * The reuse finds by the owned machines they run on (plan 12; controller ruling 215): finds that share any machine (any
+ * of their positions), directly or through other finds, form one group, in the order of their first find; a find without
+ * positions is a group alone, at null. A group stands at its first find's first machine, which is its machine nearest
+ * the site (`findReuse` maps the units in the order the steps first use them onto the machines nearest the site, and
+ * gives a find's positions nearest first), so every machine is in one group; `count` is the group's distinct machines —
+ * each position once, and each unit with no machine in this base (`ReuseFind.elsewhere`) once — and a group of one find
+ * keeps that find's `count`. `makePins` gives each group with a position one reuse pin, `layoutSteps` each group one
+ * hook step.
  */
-export function reuseGroups(finds: readonly ReuseFind[]): Array<{ at: Vec3 | null; finds: ReuseFind[] }> {
-  const groups: Array<{ at: Vec3 | null; finds: ReuseFind[] }> = [];
-  const byPos = new Map<string, { at: Vec3 | null; finds: ReuseFind[] }>();
-  for (const find of finds) {
-    const at = find.positions[0];
-    const group = at === undefined ? undefined : byPos.get(posKey(at));
-    if (group !== undefined) {
-      group.finds.push(find);
-      continue;
+export function reuseGroups(finds: readonly ReuseFind[]): ReuseGroup[] {
+  // union-find over the finds, joined where two hold one position
+  const parent = finds.map((_, i) => i);
+  const root = (i: number): number => {
+    let r = i;
+    while (parent[r] !== r) r = parent[r] as number;
+    for (let j = i; parent[j] !== r;) {
+      const next = parent[j] as number;
+      parent[j] = r;
+      j = next;
     }
-    const made = { at: at === undefined ? null : ([...at] as Vec3), finds: [find] };
-    if (at !== undefined) byPos.set(posKey(at), made);
-    groups.push(made);
-  }
-  return groups;
+    return r;
+  };
+  const holder = new Map<string, number>();
+  finds.forEach((find, i) => {
+    for (const pos of find.positions) {
+      const key = posKey(pos);
+      const other = holder.get(key);
+      if (other === undefined) {
+        holder.set(key, i);
+        continue;
+      }
+      const [a, b] = [root(other), root(i)];
+      if (a !== b) parent[Math.max(a, b)] = Math.min(a, b);
+    }
+  });
+  const byRoot = new Map<number, ReuseFind[]>();
+  finds.forEach((find, i) => {
+    const r = root(i);
+    const list = byRoot.get(r);
+    if (list === undefined) byRoot.set(r, [find]);
+    else list.push(find);
+  });
+  return [...byRoot.keys()].sort((a, b) => a - b).map((r) => {
+    const members = byRoot.get(r) as ReuseFind[];
+    const first = members[0] as ReuseFind;
+    const at = first.positions[0];
+    const count = members.length === 1 ? first.count
+      : new Set(members.flatMap((f) => f.positions.map(posKey))).size + new Set(members.flatMap((f) => f.elsewhere ?? [])).size;
+    return { at: at === undefined ? null : ([...at] as Vec3), finds: members, count };
+  });
 }
 
 /** The distinct steps of a reuse group's finds, in find order. */
@@ -150,10 +201,10 @@ export function groupSteps(finds: readonly ReuseFind[]): string[] {
 // ---- Pins ----
 
 /**
- * Pins numbered from 1: the site, the power tap, the logistics tap, one reuse pin per machine the reuse finds stand at
- * (`reuseGroups`: a find's nearest machine; finds that share it, of an owned machine several steps share, one pin, its
- * text `reuseText` of the first plus ` (shared by <n> steps)`), then the warnings by code and posKey. Every pin
- * carries `dim`.
+ * Pins numbered from 1: the site, the power tap, the logistics tap, one reuse pin per group of reuse finds
+ * (`reuseGroups`: finds that share owned machines, at their machine nearest the site, so at most one reuse pin per
+ * position; its text `reuseText` of the first find with the group's machine count, plus ` (shared by <n> steps)` when
+ * its finds belong to n > 1 steps, controller ruling 215), then the warnings by code and posKey. Every pin carries `dim`.
  */
 export function makePins(input: PinInput): Pin[] {
   const pins: Pin[] = [];
@@ -163,10 +214,10 @@ export function makePins(input: PinInput): Pin[] {
   if (input.site !== null) add(input.site.center, 'site', input.site.text);
   if (input.power !== null) add(input.power.pos, 'power', input.power.text);
   if (input.logistics !== null) add(input.logistics.pos, 'logistics', input.logistics.text);
-  for (const { at, finds } of reuseGroups(input.reuse)) {
+  for (const { at, finds, count } of reuseGroups(input.reuse)) {
     if (at === null) continue;
     const steps = groupSteps(finds).length;
-    add(at, 'reuse', `${reuseText(finds[0]!)}${steps > 1 ? ` (shared by ${fmtInt(steps)} steps)` : ''}`);
+    add(at, 'reuse', `${reuseText({ ...finds[0]!, count })}${steps > 1 ? ` (shared by ${fmtInt(steps)} steps)` : ''}`);
   }
   const warnings = [...input.warnings].sort((a, b) => compareText(a.code, b.code) || compareText(posKey(a.pos), posKey(b.pos)));
   for (const w of warnings) add(w.pos, 'warning', w.text);
