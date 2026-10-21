@@ -3,6 +3,7 @@ import { unitsFromPlan, placeUnits, stepDepths, stepIo, overlaps, compactness, r
 import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import { kitSpec } from '../../helpers/build-fixtures.ts';
+import { FRONT_BOX_ELEMENTS, FRONT_BOX_ID, hatchExportPack, withElements } from '../../helpers/hatch-export-fixtures.ts';
 import { layoutPack, makePlan, IDS, type StepSpec } from '../../helpers/layout-fixtures.ts';
 import { packFromSpec } from '../../helpers/pack-spec.ts';
 import type { Recipe } from '../../../src/shared/types/pack.ts';
@@ -117,6 +118,18 @@ describe('units', () => {
     expect(ebf).toMatchObject({ stepId: 'e1', stepIds: ['e1', 'e2'], euPerTick: 480 });
     // 3 kinds take the LV bus (4 slots), not the ULV one (1); 2,000 L of oxygen fit the LV input hatch
     expect(ebf!.cells.find((c) => c.hatch === 'input_bus')!.block.mteId).toBe(IDS.INPUT_BUS_LV);
+  });
+
+  it('keeps a shared multiblock ruled by the export alone electric when any step it runs draws EU', () => {
+    // architecture §11 entry 49 (3): an export that took no energy hatch keeps a machine whose steps draw EU powered; the
+    // first step of this pool draws none, the second does
+    const pack = hatchExportPack();
+    const box = pack.machines.get(FRONT_BOX_ID)!;
+    box.structure = withElements(box.structure!, FRONT_BOX_ELEMENTS.map((s) => (s.ch === 'k' ? { ...s, hatches: [] } : s)));
+    const pool = { id: 'pool:f1', steps: ['f1', 'f2'] };
+    const step = { mteId: FRONT_BOX_ID, count: 1, tier: 1, pool, inputs: [['t:in@0', 1]] as Array<[string, number]>, outputs: [['t:dust@0', 1]] as Array<[string, number]> };
+    const { units } = unitsFromPlan(pack, makePlan([{ ...step, id: 'f1', euPerTick: 0 }, { ...step, id: 'f2', euPerTick: 30 }], { flows: [] }));
+    expect(units).toMatchObject([{ stepId: 'f1', stepIds: ['f1', 'f2'], euPerTick: 30, electric: true }]);
   });
 
   it('draws a multiblock without an exported structure as a 3×3×3 box and says so', () => {

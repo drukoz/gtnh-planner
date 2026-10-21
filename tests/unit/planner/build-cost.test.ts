@@ -12,6 +12,8 @@ import { PSEUDO_MACHINES } from '../../../src/shared/gt/tiers.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import type { Machine, Pack, Recipe } from '../../../src/shared/types/pack.ts';
 import { EBF_STRUCTURE, IDS, layoutPack } from '../../helpers/layout-fixtures.ts';
+import { rowElements, withElements } from '../../helpers/hatch-export-fixtures.ts';
+import { hatchRulesOf } from '../../../src/server/layout/hatch-rules.ts';
 import type { PlanSettings } from '../../../src/shared/types/plan.ts';
 
 const lv: PlanSettings = { ...defaultSettings(), tier: 1 };
@@ -118,6 +120,24 @@ describe('machineBuildCost', () => {
       ? { pos: b.pos, block: { id: 'gregtech:gt.blockmachines', meta: 0, mteId: IDS.MUFFLER } } : b)) } };
     expect([...hatchSet(pack, withMuffler, recipe, 2)].map(([key]) => key)).not.toContain(gt(IDS.MUFFLER));
     expect([...structureParts(pack, withMuffler)].find(([key]) => key === gt(IDS.MUFFLER))).toEqual([gt(IDS.MUFFLER), 1]);
+  });
+
+  it("reads a multiblock's needs from the hatch rules its layout lays it by, the export's own included", () => {
+    // architecture §11 entry 49 (3): with GT's own rules in the export the layout narrows the fitting row by them and keeps
+    // the row's needs, and the export's rules alone need nothing, so the build counts the EBF's muffler only beside its row
+    const pack = layoutPack();
+    const ebf = machine(pack, IDS.EBF);
+    const recipe: Recipe = { id: 'e', source: 'gt', maps: [], euPerTick: 120, durationTicks: 20, amps: 1, specialValue: 0, meta: {}, flags: {},
+      inputs: [{ slot: 0, consumed: true, chance: 1, options: [{ key: 't:dust@0', amount: 1 }] }], outputs: [{ key: 't:ingot@0', amount: 1, chance: 1 }] };
+    const muffler = `gregtech:gt.blockmachines@${IDS.MUFFLER}`;
+    const exported: Machine = { ...ebf, structure: withElements(ebf.structure!, rowElements(ebf, {
+      b: ['input_hatch', 'output_hatch', 'input_bus', 'output_bus', 'maintenance', 'energy'], f: ['output_hatch'], m: ['muffler'], C: [],
+    })) };
+    expect(hatchRulesOf(exported)?.source).toBe('both');
+    expect([...hatchSet(pack, exported, recipe, 2).keys()]).toContain(muffler);
+    const alone: Machine = { ...exported, cls: `${exported.cls}ExportOnly` };
+    expect(hatchRulesOf(alone)?.source).toBe('export');
+    expect([...hatchSet(pack, alone, recipe, 2).keys()]).not.toContain(muffler);
   });
 
   it('prices an EBF with the muffler its structure check needs', async () => {

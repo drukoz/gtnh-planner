@@ -13,7 +13,9 @@
 // with an `ae2_no_pattern` warning that the line then relies on stock or your hands. A crafting CPU pushes a pattern
 // only as often as a job needs what the pattern makes, never for a fluid the line pipes from it to another machine, so a
 // machine with a pattern whose fluid another machine waits for, and whose items no job of the line needs as often as
-// that fluid is needed, gets an `ae2_fluid_short` warning: that machine must be kept running by you (`aeRunShares`).
+// that fluid is needed, gets an `ae2_fluid_short` warning: that machine must be kept running by you (`aeRunShares`, as
+// the pack's crafting calculator plans a job: a loop of patterns until it would come back to a pattern above; a loop
+// with too many ways round to follow gets a lower and an upper bound, and the warning says "at most" where they differ).
 // Blocking mode is on (the next set goes in once a run has taken the last) unless the machine holds an item AE2's
 // blocking-ignore list leaves out, which blocking mode would wait on for ever (GT's
 // `AE2Compat.registerBlockingModeIgnoreItems`: the programmed circuit, its molds, extruder shapes, slicer blades and
@@ -114,63 +116,175 @@ function stepFeed(pack: Pack, step: PlanStep): StepFeed {
   return { kind: 'none', why: inputs.length > 0 ? 'chanced' : 'fluid_in' };
 }
 
-// ---- What AE2 runs (research machine-feeding §2.3 "Jobs", §4.2 item 2) ----
+// ---- What AE2 runs (research machine-feeding §2.3 "Jobs", §4.2 item 2; AE2 rv3-beta-1073-GTNH's crafting calculator) ----
 
 /** A run share this far below 1 still counts as every planned run: the plan's flows are sums of floating rates. */
 const SHARE_EPSILON = 1e-6;
+/**
+ * The most sets of patterns above a step that `aeRunShares` counts exactly in one loop of patterns (the steps whose runs
+ * can be asked for through the same patterns). A job can come round a loop by any set of its patterns, so a dense loop
+ * has a set for every way round it (k cell fillers and k emptiers pooled: about k² × 2^(k−1), some nine million for
+ * k = 16). The real-data corpus lines need at most about 60,000 in one loop, and the two past this many get the same
+ * percentages from both bounds as from a full count, as the sets nearest the requests decide them.
+ */
+export const AE_SHARE_SETS_MAX = 20_000;
 
 /**
- * The strongly connected groups of the steps with a pattern, joined where one's pattern output flows into another's
- * pattern, each group listed after every group its steps' outputs flow into (Tarjan's order), so the steps a step
- * feeds come first. Steps, edges and members in plan order.
+ * A step's share of its planned runs (`aeRunShares`): what the jobs ask for at most (`share`) and at least (`low`), the
+ * same but where a loop of patterns had more sets than `aeRunShares` counts exactly.
  */
-function patternGroups(plan: Plan, patterns: ReadonlyMap<string, PatternSpec>): string[][] {
-  const ids = plan.steps.map((s) => s.id).filter((id) => patterns.has(id));
-  const feeds = new Map(ids.map((id) => {
-    const made = new Set(patterns.get(id)!.outputs.map((o) => o.key));
-    return [id, [...new Set(plan.flows.filter((f) => f.from === id && made.has(f.key) && patterns.has(f.to)).map((f) => f.to))]];
-  }));
-  const index = new Map<string, number>(), low = new Map<string, number>(), stack: string[] = [], on = new Set<string>();
-  const groups: string[][] = [];
-  const visit = (id: string): void => {
-    index.set(id, index.size); low.set(id, index.get(id)!); stack.push(id); on.add(id);
-    for (const to of feeds.get(id)!) {
-      if (!index.has(to)) { visit(to); low.set(id, Math.min(low.get(id)!, low.get(to)!)); } else if (on.has(to)) low.set(id, Math.min(low.get(id)!, index.get(to)!));
-    }
-    if (low.get(id) !== index.get(id)) return;
-    const group: string[] = [];
-    for (let top = stack.pop()!; ; top = stack.pop()!) { on.delete(top); group.push(top); if (top === id) break; }
-    groups.push(group.sort((a, b) => ids.indexOf(a) - ids.indexOf(b)));
-  };
-  for (const id of ids) if (!index.has(id)) visit(id);
-  return groups;
+export interface RunShare { share: number; low: number }
+
+const NO_RUNS: RunShare = Object.freeze({ share: 0, low: 0 });
+
+/** The number of patterns in a set. */
+function setSize(set: bigint): number {
+  let n = 0;
+  for (let rest = set; rest !== 0n; rest &= rest - 1n) n += 1;
+  return n;
 }
 
 /**
- * The share of its planned runs AE2 gives each step with a pattern at most, 0 to 1 (fewer where a job finds the items
- * in your storage, which it takes before it crafts any). A crafting CPU pushes a pattern only as often as a job needs
- * an item the pattern makes, never for a fluid the line pipes on, so a step runs as often as its most-asked-for pattern
- * output needs: of what it makes of that item, the part that goes to the line's product (`out`), to a step with a
- * pattern at that step's own share, or to anything AE2 does not run itself and you keep going (a step without a
- * pattern, a step the line places no machine for, a machine run by hand), which asks for all it takes; none of what
- * goes to your storage as a byproduct (`sink`), and none of what goes round a loop of patterns back to the step (cells
- * emptied and filled again): AE2 cannot plan a craft that needs its own output, so such items come from stock.
+ * A flow of a pattern output that a request answers: what it carries, the step with a pattern that asks for it (its
+ * index; -1: a job's own request, for all of it), and how much that step's pattern asks for each unit of it the plan
+ * feeds the step (its amount a run over the plan's: 1 but for an input used up by chance or a slot whose options the
+ * plan splits).
  */
-export function aeRunShares(plan: Plan, patterns: ReadonlyMap<string, PatternSpec>): Map<string, number> {
-  const shares = new Map<string, number>();
-  for (const group of patternGroups(plan, patterns)) {
-    const inGroup = new Set(group);
-    const asked = (to: string): number => (to === 'sink' || inGroup.has(to) ? 0 : shares.get(to) ?? (patterns.has(to) ? 0 : 1));
-    for (const id of group) {
-      const share = Math.max(0, ...patterns.get(id)!.outputs.map(({ key }) => {
-        const flows = plan.flows.filter((f) => f.from === id && f.key === key);
-        const made = flows.reduce((sum, f) => sum + f.perSecond, 0);
-        return made > 0 ? flows.reduce((sum, f) => sum + f.perSecond * asked(f.to), 0) / made : 0;
-      }));
-      shares.set(id, Math.min(1, share));
+interface RunAsk { perSecond: number; to: number; scale: number }
+
+/**
+ * The share of its planned runs AE2 gives each step with a pattern at most, 0 to 1 (fewer where a job finds the items
+ * in your storage, which it takes before it crafts any; but see the byproducts below), as the pack's crafting
+ * calculator plans its jobs (`CraftingJobV2`, which `CraftingGridCache.beginCraftingJob` starts unless lite crafting is
+ * on; AE2 rv3-beta-1073-GTNH, read with javap). A crafting CPU pushes a pattern only for a job, never for a fluid the
+ * line pipes on. A job crafts what it is asked for: the line's product (`out`), or what something AE2 does not run
+ * itself takes (a step without a pattern, a step the line places no machine for, a machine run by hand: you keep those
+ * going), all of it. Each run of a pattern asks for the pattern's inputs at the pattern's amounts (none for an item the
+ * plan sends it that its pattern does not take), which the plan's flows into it split among its suppliers (raw inputs
+ * and what a step without a pattern makes come from storage; AE2 itself gives a request to the first pattern that makes
+ * it, by priority and then the network's order, which the layout cannot know, so the plan's split stands for it). A
+ * request is crafted by a pattern that makes it, but never by one already above it in the job: `CraftFromPatternTask`
+ * adds its pattern to its request's `patternParents` before it asks for its inputs, `CraftingContext.doWork` copies
+ * them into each input's request, and `CraftableItemResolver` drops them from that request's patterns (patterns compare
+ * by what they encode, `PatternHelper.equals`). So a loop of patterns (cells emptied and filled again) is planned until
+ * it would come back to a pattern above, and that item comes from storage. A step runs as often as its most-asked-for
+ * pattern output needs (its other outputs go to the job's byproducts, which `ExtractItemTask` takes before anything is
+ * crafted again), and nothing of what goes to your storage (`sink`) asks. That is a second approximation where other
+ * steps also make such a byproduct: the job's byproducts (`context.byproductsInventory`) go to whichever of its
+ * requests for the item `ExtractItemTask` meets first, not to the one the plan's flows send them to, so a request the
+ * plan meets with a byproduct can be crafted after all, and a step whose pattern makes that item can run more often
+ * than its share says (its share is then no upper bound). The sets of patterns above a step are counted breadth first
+ * from every step, at most `setsMax` in one loop of patterns (`AE_SHARE_SETS_MAX`), so the sets nearest the jobs'
+ * requests come first; a set past them counts as asking for nothing at least (`RunShare.low`) and at most for a cheap
+ * upper bound (`RunShare.share`): its share counted along every chain of requests no longer than the patterns it could
+ * still be asked through, even a chain that comes back to a pattern above (which AE2 never plans), so never below what
+ * the jobs ask for. `ae2_fluid_short` says "at most" where the two give different percentages.
+ */
+export function aeRunShares(plan: Plan, patterns: ReadonlyMap<string, PatternSpec>, setsMax = AE_SHARE_SETS_MAX): Map<string, RunShare> {
+  const ids = [...patterns.keys()];
+  const indexOf = new Map(ids.map((id, i) => [id, i]));
+  // each distinct pattern as a bit of a set, as AE2 tells patterns apart
+  const kinds = new Map<string, bigint>();
+  const bit = ids.map((id) => {
+    const text = JSON.stringify(patterns.get(id));
+    if (!kinds.has(text)) kinds.set(text, 1n << BigInt(kinds.size));
+    return kinds.get(text)!;
+  });
+  const runsOf = new Map(plan.steps.map((s) => [s.id, s.runsPerSecond]));
+  const fed = (to: string, key: StuffKey): number => plan.flows.reduce((n, f) => (f.to === to && f.key === key ? n + f.perSecond : n), 0);
+  // per step, per pattern output it makes: what it makes of it and the flows of it a request answers
+  const outputs = ids.map((id) => patterns.get(id)!.outputs.flatMap(({ key }) => {
+    const flows = plan.flows.filter((f) => f.from === id && f.key === key && f.perSecond > 0);
+    const made = flows.reduce((n, f) => n + f.perSecond, 0);
+    const asks = flows.flatMap((f): RunAsk[] => {
+      if (f.to === 'sink') return [];
+      const consumer = patterns.get(f.to);
+      if (consumer === undefined) return [{ perSecond: f.perSecond, to: -1, scale: 1 }];
+      const ratio = (consumer.inputs.find((i) => i.key === key)?.amount ?? 0) * (runsOf.get(f.to) ?? 0) / fed(f.to, key);
+      // the plan's rates are floating sums: a pattern that asks what the plan feeds asks exactly that
+      const scale = Math.abs(ratio - 1) < SHARE_EPSILON ? 1 : ratio;
+      return scale > 0 ? [{ perSecond: f.perSecond, to: indexOf.get(f.to)!, scale }] : [];
+    });
+    return made > 0 ? [{ made, asks }] : [];
+  }));
+  // the patterns a step's runs can be asked for through (its own among them): only these of the ones above it matter,
+  // and the steps of one loop share them
+  const through = ids.map((_, i) => {
+    const seen = new Set([i]);
+    for (const at of seen) for (const o of outputs[at]!) for (const a of o.asks) if (a.to >= 0) seen.add(a.to);
+    return [...seen].reduce((set, s) => set | bit[s]!, 0n);
+  });
+  /** Step `i`'s share at most and at least, given that `of` each step with a pattern that asks for what it makes. */
+  const asked = (i: number, of: (to: number) => RunShare): RunShare => {
+    let share = 0, low = 0;
+    for (const { made, asks } of outputs[i]!) {
+      let most = 0, least = 0;
+      for (const a of asks) {
+        if (a.to < 0) {
+          most += a.perSecond;
+          least += a.perSecond;
+        } else {
+          const r = of(a.to);
+          most += a.perSecond * (a.scale * r.share);
+          least += a.perSecond * (a.scale * r.low);
+        }
+      }
+      share = Math.max(share, most / made);
+      low = Math.max(low, least / made);
     }
+    return { share: Math.min(1, share), low: Math.min(1, low) };
+  };
+  // the sets above each step counted exactly (null until counted): breadth first from every step, at most `setsMax` in
+  // one loop, so the sets nearest the requests come first
+  const counted = ids.map(() => new Map<bigint, RunShare | null>());
+  const used = new Map<bigint, number>();
+  const queue: Array<readonly [number, bigint]> = [];
+  const admit = (i: number, above: bigint): void => {
+    const loop = through[i]!;
+    const key = above & loop;
+    const n = used.get(loop) ?? 0;
+    if (counted[i]!.has(key) || n >= setsMax) return;
+    used.set(loop, n + 1);
+    counted[i]!.set(key, null);
+    queue.push([i, key]);
+  };
+  for (let i = 0; i < ids.length; i++) admit(i, 0n);
+  for (let q = 0; q < queue.length; q++) {
+    const [i, above] = queue[q]!;
+    const next = above | bit[i]!;
+    for (const o of outputs[i]!) for (const a of o.asks) if (a.to >= 0 && (next & bit[a.to]!) === 0n) admit(a.to, next);
   }
-  return shares;
+  // the upper bound of a set past them: per step, the share counted along every chain of at most m requests, m = 0, 1, …
+  // up to the most patterns a step can be asked through, whatever is above (each round is never below the one before)
+  let chains: RunShare[][] | null = null;
+  const upperBound = (i: number, free: number): number => {
+    if (chains === null) {
+      const rounds = Math.max(...through.map(setSize));
+      const byStep = ids.map(() => [NO_RUNS]);
+      for (let m = 1; m <= rounds; m++) for (let s = 0; s < ids.length; s++) byStep[s]!.push(asked(s, (to) => byStep[to]![m - 1]!));
+      chains = byStep;
+    }
+    return chains[i]![free]!.share;
+  };
+  /**
+   * The share of step `i`'s planned runs asked for by the requests whose job reaches them through none of the patterns
+   * `above` (none at all where the step's own pattern is one of them): what goes to a job's own request in full, and
+   * what goes to a step with a pattern at that step's share through none of `above` nor the step's own pattern; for a set
+   * not counted exactly, nothing at least and the upper bound of a chain as long as the patterns it can still be asked
+   * through at most.
+   */
+  const share = (i: number, above: bigint): RunShare => {
+    if ((above & bit[i]!) !== 0n) return NO_RUNS;
+    const loop = through[i]!;
+    const known = counted[i]!.get(above & loop);
+    if (known === undefined) return { share: upperBound(i, setSize(loop & ~above)), low: 0 };
+    if (known !== null) return known;
+    const next = above | bit[i]!;
+    const result = asked(i, (to) => share(to, next));
+    counted[i]!.set(above & loop, result);
+    return result;
+  };
+  return new Map(ids.map((id, i) => [id, share(i, 0n)]));
 }
 
 // ---- The ME Export Bus ----
@@ -214,6 +328,14 @@ function stepProduct(plan: Plan, id: string): StuffKey {
   return s?.mainOutput ?? s?.outputs[0]?.key ?? id;
 }
 
+/** What `ae2_fluid_short` adds to a share it counts only at most (`RunShare.low` gives another percentage). */
+const AT_MOST_WORDS = " (the line's patterns loop round in too many ways for the layout to follow every job, so it counts some runs AE2 never plans)";
+
+/** A share as a percentage, as `ae2_fluid_short` words it. */
+function percentWords(share: number): string {
+  return share < 0.01 ? 'less than 1' : fmtInt(Math.floor(share * 100));
+}
+
 function noPatternText(input: ModeInput, step: PlanStep, unit: PlacedUnit, feed: Exclude<StepFeed, { kind: 'pattern' }>): string {
   const { pack, plan } = input;
   const keysOf = (list: readonly { key: StuffKey }[], fluid: boolean) => [...new Set(list.filter((p) => isFluidKey(p.key) === fluid).map((p) => p.key))];
@@ -231,17 +353,27 @@ function noPatternText(input: ModeInput, step: PlanStep, unit: PlacedUnit, feed:
       + `count, so it gets no pattern and nothing pushes ${nameList(plan, pack, inputs)} into it: put ${inputs.length === 1 ? 'it' : 'them'} in by hand; `
       + 'what it makes still goes back into your ME storage';
   }
-  return `AE2 cannot plan ${machine}: it takes only ${nameList(plan, pack, keysOf(step.inputs, true))}, which the line pipes in, so no pattern can `
-    + 'push anything into it. It runs from its pipes and what it makes goes back into your ME storage, so jobs that need '
-    + `${nameList(plan, pack, keysOf(step.outputs, false))} rely on stock`;
+  const fluids = keysOf(step.inputs, true);
+  const back = `goes back into your ME storage, so jobs that need ${nameList(plan, pack, keysOf(step.outputs, false))} rely on stock`;
+  if (fluids.length === 0) {
+    // it uses up nothing: a rock breaker's supply recipe (water and lava beside it), GT++'s Algae Farm or Fish Pond
+    return pack.recipeById.get(step.recipeId)?.meta.supply === 'rock-breaker'
+      ? `AE2 cannot plan ${machine}: it takes nothing, it runs on the water and lava beside it, so no pattern has anything to push into it. `
+        + `What it makes ${back}`
+      : `AE2 cannot plan ${machine}: it takes nothing, so no pattern has anything to push into it. It runs by itself and what it makes ${back}`;
+  }
+  return `AE2 cannot plan ${machine}: it takes only ${nameList(plan, pack, fluids)}, which the line pipes in, so no pattern can push anything into `
+    + `it. It runs from its pipes and what it makes ${back}`;
 }
 
 /**
  * `ae2_fluid_short` for a step with a pattern whose fluid `fluid` the line pipes to `to` (its placed consumers, in flow
- * order) while AE2 runs it for `share` of its planned runs: what its pattern makes, how much of the fluid that gives, and
- * how to keep it running.
+ * order) while AE2 runs it for `run.share` of its planned runs: what its pattern makes, how much of the fluid that gives
+ * ("at most" where `run.low` would give another percentage), and how to keep it running.
  */
-function fluidShortText(input: ModeInput, unit: PlacedUnit, pattern: PatternSpec, fluid: StuffKey, to: readonly string[], share: number): string {
+function fluidShortText(input: ModeInput, unit: PlacedUnit, pattern: PatternSpec, fluid: StuffKey, to: readonly string[], run: RunShare): string {
+  const { share } = run;
+  const atMost = percentWords(run.low) !== percentWords(share);
   const { pack, plan, placement } = input;
   const n = placement.units.filter((u) => u.stepId === unit.stepId).length;
   const machine = `the ${unit.name}${n > 1 ? ` (${fmtInt(n)}×)` : ''}`;
@@ -260,9 +392,9 @@ function fluidShortText(input: ModeInput, unit: PlacedUnit, pattern: PatternSpec
   const runs = share <= 0
     ? `AE2 runs ${machine} only for a job that needs what its pattern makes (${made}), and no job of this line does: so its ${fluidName} never `
       + `reaches ${consumers} by pipe, which ${one ? 'waits' : 'wait'} for it for ever, ${andJobs}`
-    : `AE2 runs ${machine} only as often as a job needs what its pattern makes (${made}), about ${share < 0.01 ? 'less than 1' : fmtInt(Math.floor(share * 100))} % `
-      + `of the runs the ${fluidName} it pipes to ${consumers} needs: so ${one ? 'it runs' : 'they run'} out of ${fluidName} and ${one ? 'waits' : 'wait'} `
-      + `for ever, ${andJobs}`;
+    : `AE2 runs ${machine} only as often as a job needs what its pattern makes (${made}), ${atMost ? 'at most ' : ''}about ${percentWords(share)} % `
+      + `of the runs the ${fluidName} it pipes to ${consumers} needs${atMost ? AT_MOST_WORDS : ''}: so ${one ? 'it runs' : 'they run'} out of `
+      + `${fluidName} and ${one ? 'waits' : 'wait'} for ever, ${andJobs}`;
   return `${runs}. Keep the ${unit.name} running yourself: feed it ${used} from stock, keep a request for ${made} standing, or fill it by hand`;
 }
 
@@ -397,15 +529,18 @@ export function ae2Mode(input: ModeInput): ModeResult {
   const placed = placedStepIds(placement);
   const short = new Set<string>();
   for (const u of units) {
+    // every step the machine runs (`unitSteps`: a shared machine runs several, plan 12 Task 6), each with its own share
+    // (`RunShare`: at most and at least)
     const own = unitSteps(u);
     for (const id of own) {
       const pattern = patterned.get(id);
-      if (pattern === undefined || short.has(id) || (shares.get(id) ?? 0) >= 1 - SHARE_EPSILON) continue;
+      const run = shares.get(id) ?? NO_RUNS;
+      if (pattern === undefined || short.has(id) || run.share >= 1 - SHARE_EPSILON) continue;
       short.add(id);
       const piped = plan.flows.filter((f) => f.from === id && isFluidKey(f.key) && !own.includes(f.to) && placed.has(f.to));
       for (const fluid of [...new Set(piped.map((f) => f.key))].sort()) {
         const to = [...new Set(piped.filter((f) => f.key === fluid).map((f) => f.to))];
-        warnings.push({ code: 'ae2_fluid_short', stepId: id, key: fluid, text: fluidShortText(input, u, pattern, fluid, to, shares.get(id) ?? 0) });
+        warnings.push({ code: 'ae2_fluid_short', stepId: id, key: fluid, text: fluidShortText(input, u, pattern, fluid, to, run) });
       }
     }
   }

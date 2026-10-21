@@ -105,8 +105,10 @@ export interface LayoutBlock {
   mainFacing?: number;
   /**
    * The structured feeding configuration (architecture §11 entry 51, `src/shared/types/feed.ts`): a routed interface
-   * pipe's chips with their filter mode and items, an ME interface's patterns and blocking mode. The configure steps,
-   * the 3D view and the Connections view word it with `configuredLines`; the feeding checker reads it.
+   * pipe's chips with their filter mode and items, an ME interface's patterns and blocking mode, and on the ME glass
+   * cable block an ME Export Bus sits on (as its `me_export_bus` cover) the bus's filter in slot order and its
+   * Acceleration Cards (`exportBus`, which that cover's words say, not the feed's). The configure steps, the 3D view and
+   * the Connections view word it with `configuredLines`; the feeding checker reads it.
    */
   feed?: FeedSpec;
   /**

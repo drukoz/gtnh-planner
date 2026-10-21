@@ -70,6 +70,11 @@ public final class ExportContext {
         if (warnings.size() < MAX_WARNINGS) warnings.add(message);
     }
 
+    /** Logs a line, such as a section's measured cost; unlike a warning, it is not kept for the manifest. */
+    public void info(String message) {
+        ExporterMod.LOG.info(message);
+    }
+
     public Map<String, Long> counts() {
         return Collections.unmodifiableMap(counts);
     }

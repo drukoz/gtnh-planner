@@ -105,13 +105,16 @@ const LIMITING_ON = 'Limiting mode on: sneak-right-click it with a Screwdriver u
 
 /**
  * A multiblock controller's Input Separation off (GT 5.09.54 `MTEMultiBlockBase.inputSeparation`, on when built for a
- * controller that supports it, such as the EBF): then all its input buses are checked together, so a recipe whose items
- * arrive on different buses can start. The controller window has the button; on the EBF a Screwdriver click on the
- * controller switches it too, and the chat names the new state (`GT5U.machines.separatebus.false`). Research
- * machine-feeding §1.2 and §3.7, whose words these are.
+ * controller that supports it, the 69 of `INPUT_SEPARATION_DEFAULT`): then all its input buses are checked together, so
+ * a recipe whose items arrive on different buses can start. Every such controller's window has the button
+ * (`IControllerWithOptionalFeatures.createInputSeparationButton`: a click switches it and its tooltip says "Enabled" or
+ * "Disabled", `GT5U.gui.button.feature_disabled`; nothing in the chat). Only ten of them switch it with a tool as well,
+ * which names the new state in the chat (`GT5U.machines.separatebus.false`): the EBF with a Screwdriver right-click on the
+ * controller (`MTEElectricBlastFurnace.onScrewdriverRightClick`; research machine-feeding §1.2 and §3.7), the others with
+ * a Screwdriver, GT++'s Screwdriver mode change or a sneaking Wire Cutter click (read with javap on 2026-10-20).
  */
-const INPUT_SEPARATION_OFF = 'Input Separation off: the controller window\'s Input Separation button (on the EBF, a Screwdriver right-click on '
-  + 'the controller) until the chat says "Input buses aren\'t separated"';
+const INPUT_SEPARATION_OFF = 'Input Separation off: click the Input Separation button in the controller\'s window until its tooltip says '
+  + '"Disabled" (on the EBF a Screwdriver right-click on the controller switches it too, until the chat says "Input buses aren\'t separated")';
 
 /** One setting of a block in a builder's words. */
 function configText(key: string, v: Value): string {

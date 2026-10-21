@@ -6,7 +6,9 @@
 // your hands). Blocking mode is on unless the machine holds an item AE2's blocking-ignore list (GT's
 // `AE2Compat.registerBlockingModeIgnoreItems`) leaves out, which blocking mode would never push past. A crafting CPU runs a
 // pattern only as often as a job needs what it makes, so a machine whose piped fluid another machine waits for, and whose
-// items no job needs as often, is warned about (`ae2_fluid_short`).
+// items no job needs as often, is warned about (`ae2_fluid_short`); a job plans a loop of patterns until it would come
+// back to a pattern above the request (AE2 rv3-beta-1073-GTNH `CraftingRequest.patternParents`), as the pack's
+// calculator does.
 
 import { describe, expect, it } from 'vitest';
 import { placeUnits, unitsFromPlan } from '../../../src/server/layout/arrange.ts';
@@ -16,6 +18,7 @@ import { buildMode, PORT_SPACING } from '../../../src/server/layout/modes/mode.t
 import { ae2IdleEUt, resolveParts } from '../../../src/server/layout/parts.ts';
 import { projectorPayload } from '../../../src/server/projector/payload.ts';
 import type { StuffKey } from '../../../src/shared/keys.ts';
+import type { PatternSpec } from '../../../src/shared/types/feed.ts';
 import type { Pack, Product, Recipe } from '../../../src/shared/types/pack.ts';
 import type { Plan, PlanStep } from '../../../src/shared/types/plan.ts';
 import {
@@ -148,6 +151,32 @@ describe('AE2 feeding', () => {
     expect(r.extraParts).toEqual([]);
   });
 
+  it('says that a machine that takes nothing gets no pattern, and that a rock breaker runs on the water and lava beside it', () => {
+    const ROCK_BREAKER = 2020, COBBLE = 'minecraft:cobblestone@0';
+    /** A step of `mteId` that takes nothing and makes Cobblestone, by a recipe that consumes nothing (`supply`: its kind). */
+    const takesNothing = (p: Pack, mteId: number, supply?: 'rock-breaker') => {
+      const plan = makePlan([{ id: 'r', mteId, count: 1, inputs: [], outputs: [[COBBLE, 1]] }], { flows: [{ from: 'r', to: 'out', key: COBBLE, perSecond: 1 }] });
+      if (supply !== undefined) plan.steps[0]!.supply = COBBLE;
+      p.recipeById.set('r', { id: 'r', source: 'derived', maps: [], euPerTick: 30, durationTicks: 16, amps: 1, specialValue: 0,
+        meta: supply === undefined ? {} : { supply }, flags: {}, inputs: [], outputs: [{ key: COBBLE, amount: 1, chance: 1 }] });
+      const { r } = ae2(p, plan);
+      expect(interfaces(r).map((b) => b.feed)).toEqual([undefined]);
+      return r.warnings;
+    };
+    const p = pack();
+    p.items.set(COBBLE, { key: COBBLE, id: 'minecraft:cobblestone', meta: 0, name: 'Cobblestone', oreDict: [] });
+    p.machines.set(ROCK_BREAKER, { ...p.machines.get(IDS.MACERATOR)!, mteId: ROCK_BREAKER, name: 'Basic Rock Breaker',
+      metaName: 'basicmachine.rockbreaker.tier.01', itemKey: `gregtech:gt.blockmachines@${ROCK_BREAKER}` });
+    // the loader's rock breaker supply recipe, its display item gone (pack supply.ts)
+    expect(takesNothing(p, ROCK_BREAKER, 'rock-breaker')).toEqual([{ code: 'ae2_no_pattern', stepId: 'r', text: 'AE2 cannot plan the Basic Rock '
+      + 'Breaker: it takes nothing, it runs on the water and lava beside it, so no pattern has anything to push into it. What it makes goes back '
+      + 'into your ME storage, so jobs that need Cobblestone rely on stock' }]);
+    // any other machine whose recipe uses up nothing (as GT++'s Algae Farm and Fish Pond)
+    expect(takesNothing(p, IDS.MACERATOR)).toEqual([{ code: 'ae2_no_pattern', stepId: 'r', text: 'AE2 cannot plan the Basic Macerator: it takes '
+      + 'nothing, so no pattern has anything to push into it. It runs by itself and what it makes goes back into your ME storage, so jobs that '
+      + 'need Cobblestone rely on stock' }]);
+  });
+
   it('gives a machine whose item outputs all come by chance no pattern, and says to fill it by hand', () => {
     const plan = oneStep({ id: 'c', mteId: IDS.MACERATOR, count: 1 }, [{ key: 't:x@0', amount: 0.5, chance: 0.5 }, { key: 't:y@0', amount: 0.25, chance: 0.25 }]);
     const { r } = ae2(pack(), plan);
@@ -170,6 +199,8 @@ describe('AE2 feeding', () => {
         ...to.map(([id, product]) => ({ id, mteId: IDS.ASSEMBLER, count: 1, tier: 2, outputs: [[product, 1]] as Array<[StuffKey, number]>,
           inputs: [['t:dust@0', 1], ...(takesEx.has(id) ? [['t:x@0', 1]] : []), ['fluid:oxygen', 1000]] as Array<[StuffKey, number]> })),
       ], { flows: [{ from: 'raw', to: 'c', key: 't:in@0', perSecond: 1 }, ...exTo.map(([id, perSecond]) => ({ from: 'c', to: id, key: 't:x@0', perSecond })),
+        // an assembler that takes Ex takes one a run: what c does not send it comes from storage
+        ...exTo.filter(([id, perSecond]) => to.some(([t]) => t === id) && perSecond < 1).map(([id, perSecond]) => ({ from: 'raw', to: id, key: 't:x@0', perSecond: 1 - perSecond })),
         ...to.flatMap(([id, product]) => [{ from: 'c', to: id, key: 'fluid:oxygen', perSecond: 1000 / to.length },
           { from: 'raw', to: id, key: 't:dust@0', perSecond: 1 }, { from: id, to: 'out', key: product, perSecond: 1 }])] });
     };
@@ -200,22 +231,162 @@ describe('AE2 feeding', () => {
       expect(short(fluidLine([['n', 1]]))).toEqual([]);
     });
 
-    it('counts runs only along what a job asks for: the product, patterns at their own share, and what you keep going', () => {
-      const pattern = (out: StuffKey) => ({ inputs: [{ key: 't:in@0', amount: 1 }], outputs: [{ key: out, amount: 1 }] });
+    describe('the runs a job asks for (AE2 rv3-beta-1073-GTNH CraftingJobV2)', () => {
       const flow = (from: string, to: string, key: StuffKey, perSecond = 1) => ({ from, to, key, perSecond });
-      const shares = (flows: Plan['flows'], ids: readonly string[]) => {
-        const plan = makePlan(ids.map((id) => ({ id, mteId: IDS.MACERATOR, count: 1 })), { flows });
-        return Object.fromEntries(aeRunShares(plan, new Map(ids.map((id, i) => [id, pattern(`t:o${i}@0`)]))));
+      type Side = ReadonlyArray<StuffKey | readonly [StuffKey, number]>;
+      /**
+       * aeRunShares of one run a second of each step of `patterns` (its inputs, its outputs; one of each but where an
+       * amount is given), each counted exactly.
+       */
+      const shares = (flows: Plan['flows'], patterns: Readonly<Record<string, readonly [Side, Side]>>) => {
+        const plan = makePlan(Object.keys(patterns).map((id) => ({ id, mteId: IDS.MACERATOR, count: 1 })), { flows });
+        const side = (list: Side) => list.map((x) => (typeof x === 'string' ? { key: x, amount: 1 } : { key: x[0], amount: x[1] }));
+        const runs = aeRunShares(plan, new Map(Object.entries(patterns).map(([id, [ins, outs]]) => [id, { inputs: side(ins), outputs: side(outs) }])));
+        expect([...runs.values()].filter((r) => r.low !== r.share)).toEqual([]);
+        return Object.fromEntries([...runs].map(([id, r]) => [id, r.share]));
       };
-      // a chain to the product; a byproduct; half to a pattern, half to storage; to a step without a pattern
-      expect(shares([flow('a', 'b', 't:o0@0'), flow('b', 'out', 't:o1@0')], ['a', 'b'])).toEqual({ a: 1, b: 1 });
-      expect(shares([flow('a', 'sink', 't:o0@0')], ['a'])).toEqual({ a: 0 });
-      expect(shares([flow('a', 'b', 't:o0@0', 0.5), flow('a', 'sink', 't:o0@0', 0.5), flow('b', 'out', 't:o1@0')], ['a', 'b'])).toEqual({ a: 0.5, b: 1 });
-      expect(shares([flow('a', 'hand', 't:o0@0')], ['a'])).toEqual({ a: 1 });
-      // a loop of cells (b empties what a fills): AE2 cannot plan a craft that needs its own output, so the loop asks
-      // for nothing, and what leaves it for the product asks only for its own share
-      expect(shares([flow('a', 'b', 't:o0@0'), flow('b', 'a', 't:o1@0')], ['a', 'b'])).toEqual({ a: 0, b: 0 });
-      expect(shares([flow('a', 'b', 't:o0@0'), flow('b', 'a', 't:o1@0'), flow('b', 'out', 't:o1@0')], ['a', 'b'])).toEqual({ a: 0, b: 0.5 });
+      const O0 = 't:o0@0', O1 = 't:o1@0', O2 = 't:o2@0', IN = 't:in@0';
+
+      it('counts runs only along what a job asks for: the product, patterns at their own share, and what you keep going', () => {
+        // a chain to the product; a byproduct; half to a pattern (whose other half comes from storage), half to storage; to
+        // a step without a pattern
+        expect(shares([flow('raw', 'a', IN), flow('a', 'b', O0), flow('b', 'out', O1)], { a: [[IN], [O0]], b: [[O0], [O1]] })).toEqual({ a: 1, b: 1 });
+        expect(shares([flow('raw', 'a', IN), flow('a', 'sink', O0)], { a: [[IN], [O0]] })).toEqual({ a: 0 });
+        expect(shares([flow('raw', 'a', IN), flow('a', 'b', O0, 0.5), flow('a', 'sink', O0, 0.5), flow('raw', 'b', O0, 0.5), flow('b', 'out', O1)],
+          { a: [[IN], [O0]], b: [[O0], [O1]] })).toEqual({ a: 0.5, b: 1 });
+        expect(shares([flow('raw', 'a', IN), flow('a', 'hand', O0)], { a: [[IN], [O0]] })).toEqual({ a: 1 });
+        // the plan's rates are floating sums: a pattern that asks for what the plan feeds it a run asks for just that
+        expect(shares([flow('raw', 'a', IN), flow('a', 'b', O0, 0.5), flow('a', 'sink', O0, 0.5), flow('raw', 'b', O0, 0.5 + 1e-10), flow('b', 'out', O1)],
+          { a: [[IN], [O0]], b: [[O0], [O1]] })).toEqual({ a: 0.5, b: 1 });
+      });
+
+      it("asks for what a pattern takes, at the pattern's amounts", () => {
+        // b's pattern does not take the O0 the plan sends it (it holds it, or its slot takes another option): no job asks a for it
+        expect(shares([flow('raw', 'a', IN), flow('a', 'b', O0), flow('raw', 'b', IN), flow('b', 'out', O1)], { a: [[IN], [O0]], b: [[IN], [O1]] }))
+          .toEqual({ a: 0, b: 1 });
+        // b's pattern takes 2 O0 a run where the plan feeds it 1 (an input used up one run in two): each run of b asks a for 2
+        expect(shares([flow('raw', 'a', IN), flow('a', 'b', O0, 0.5), flow('a', 'sink', O0, 0.5), flow('raw', 'b', O0, 0.5), flow('b', 'out', O1)],
+          { a: [[IN], [O0]], b: [[[O0, 2]], [O1]] })).toEqual({ a: 1, b: 1 });
+      });
+
+      it('plans a loop until it comes back to a pattern the request descends from, which takes that item from storage', () => {
+        // cells b empties and a fills: a job for b's product runs b, b's filled cells run a, and a's empty cells cannot run b
+        // again (b's pattern is above them), so they come from storage, where b puts them back
+        expect(shares([flow('a', 'b', O0), flow('b', 'a', O1), flow('b', 'out', O2)], { a: [[O1], [O0]], b: [[O0], [O2, O1]] })).toEqual({ a: 1, b: 1 });
+        // three patterns round: t's product runs t, t runs s, s runs u, and u's input, made by t, comes from storage
+        expect(shares([flow('s', 't', O0), flow('u', 's', O1), flow('t', 'u', O2), flow('t', 'out', 't:p@0')],
+          { t: [[O0], ['t:p@0', O2]], s: [[O1], [O0]], u: [[O2], [O1]] })).toEqual({ t: 1, s: 1, u: 1 });
+      });
+
+      it('never plans what goes round a loop back to a pattern above it, nor a loop no job enters', () => {
+        // b makes O1 for the product and for a, a makes b's O0 from it: a job runs b for the product only, and a as often as
+        // that b asks; the O1 a asks for cannot run b (b's pattern is above it), so it comes from storage, and neither runs
+        // as often as the plan has them
+        expect(shares([flow('a', 'b', O0), flow('b', 'a', O1, 0.5), flow('raw', 'a', O1, 0.5), flow('b', 'out', O1, 0.5)],
+          { a: [[O1], [O0]], b: [[O0], [O1]] })).toEqual({ a: 0.5, b: 0.5 });
+        // what goes only round the loop: no job ever asks for it
+        expect(shares([flow('a', 'b', O0), flow('b', 'a', O1)], { a: [[O1], [O0]], b: [[O0], [O1]] })).toEqual({ a: 0, b: 0 });
+        // a pattern that takes what it makes (a catalyst) never runs itself for it
+        expect(shares([flow('a', 'a', O0), flow('raw', 'a', IN), flow('a', 'sink', O0)], { a: [[O0, IN], [O0]] })).toEqual({ a: 0 });
+      });
+
+      describe('in a pooled loop too dense to follow every job', () => {
+        /**
+         * `k` cell fillers and `k` emptiers, pooled: filler i fills Ex into its own cell, which emptier i empties back into
+         * Ex; every emptier sends its Ex to every filler alike and a tenth of it to the product, and storage tops each
+         * filler up. A job can come round such a loop by any set of its patterns: about k² × 2^(k−1) sets above a step,
+         * past AE_SHARE_SETS_MAX for k = 10 and on.
+         */
+        const pooled = (k: number) => {
+          const ids = Array.from({ length: k }, (_, i) => i);
+          const cell = (i: number): StuffKey => `t:cell${i}@0`;
+          const flows = ids.flatMap((i) => [flow(`f${i}`, `e${i}`, cell(i)), flow(`e${i}`, 'out', 't:x@0', 0.1), flow('raw', `f${i}`, 't:x@0', 0.1),
+            ...ids.map((j) => flow(`e${i}`, `f${j}`, 't:x@0', 0.9 / k))]);
+          const pattern = (input: StuffKey, output: StuffKey): PatternSpec => ({ inputs: [{ key: input, amount: 1 }], outputs: [{ key: output, amount: 1 }] });
+          const patterns = new Map(ids.flatMap((i): Array<[string, PatternSpec]> => [[`f${i}`, pattern('t:x@0', cell(i))], [`e${i}`, pattern(cell(i), 't:x@0')]]));
+          return { plan: makePlan([...patterns.keys()].map((id) => ({ id, mteId: IDS.MACERATOR, count: 1 })), { flows }), patterns };
+        };
+
+        it('counts 16 fillers and 16 emptiers in a fraction of a second, between a lower and an upper bound', () => {
+          const { plan, patterns } = pooled(16);
+          const start = performance.now();
+          const runs = aeRunShares(plan, patterns);
+          expect(performance.now() - start).toBeLessThan(200);
+          expect([...runs.values()].filter((r) => !(r.low > 0 && r.low < r.share && r.share < 1))).toEqual([]);
+        });
+
+        it('bounds each share by what the jobs ask for, from below and from above', () => {
+          const { plan, patterns } = pooled(6);
+          const exact = aeRunShares(plan, patterns);
+          expect([...exact.values()].filter((r) => r.low !== r.share)).toEqual([]);
+          // the same loop counted exactly for at most 50 sets: each exact share between the two bounds, which differ
+          const bounded = aeRunShares(plan, patterns, 50);
+          expect([...exact].filter(([id, r]) => {
+            const b = bounded.get(id)!;
+            return !(b.low <= r.share + 1e-12 && r.share <= b.share + 1e-12 && b.low < b.share && b.share <= 1);
+          })).toEqual([]);
+        });
+      });
+    });
+
+    describe('in a loop of cells one machine fills and another empties', () => {
+      /**
+       * f (a chemical reactor) fills Ex, an empty cell, into Why and pipes Oxygen to e (an assembler); b (an assembler)
+       * empties Why and gives `bMakes`: Zed, the product, with Ex back to f; or Ex alone, half back to f and half as the
+       * product, f's other half coming from storage.
+       */
+      const cellLine = (bMakes: 'zed' | 'ex'): Plan => makePlan([
+        { id: 'f', mteId: IDS.CHEM_HV, count: 1, tier: 3, inputs: [['t:x@0', 1]], outputs: [['t:y@0', 1], ['fluid:oxygen', 1000]] },
+        { id: 'b', mteId: IDS.ASSEMBLER, count: 1, tier: 2, inputs: [['t:y@0', 1], ['t:dust@0', 1]], outputs: bMakes === 'zed' ? [['t:z@0', 1], ['t:x@0', 1]] : [['t:x@0', 1]] },
+        { id: 'e', mteId: IDS.ASSEMBLER, count: 1, tier: 2, inputs: [['t:dust@0', 1], ['fluid:oxygen', 1000]] },
+      ], { flows: [
+        { from: 'f', to: 'b', key: 't:y@0', perSecond: 1 }, { from: 'raw', to: 'b', key: 't:dust@0', perSecond: 1 },
+        ...(bMakes === 'zed'
+          ? [{ from: 'b', to: 'f', key: 't:x@0', perSecond: 1 }, { from: 'b', to: 'out', key: 't:z@0', perSecond: 1 }]
+          : [{ from: 'b', to: 'f', key: 't:x@0', perSecond: 0.5 }, { from: 'raw', to: 'f', key: 't:x@0', perSecond: 0.5 }, { from: 'b', to: 'out', key: 't:x@0', perSecond: 0.5 }]),
+        { from: 'f', to: 'e', key: 'fluid:oxygen', perSecond: 1000 }, { from: 'raw', to: 'e', key: 't:dust@0', perSecond: 1 },
+        { from: 'e', to: 'out', key: 't:out_e@0', perSecond: 1 },
+      ] });
+      const short = (plan: Plan) => {
+        const p = pack();
+        p.items.set('t:z@0', { key: 't:z@0', id: 't:z', meta: 0, name: 'Zed', oreDict: [] });
+        return ae2(p, plan).r.warnings.filter((w) => w.code === 'ae2_fluid_short');
+      };
+
+      it('says nothing where a job runs the machine that fills them', () => {
+        // a job for Zed runs b, b's Why runs f, and f's Ex comes from storage, where b puts it back
+        expect(short(cellLine('zed'))).toEqual([]);
+      });
+
+      it('says how short it runs where what goes round the loop comes back to a pattern above it', () => {
+        expect(short(cellLine('ex')).map((w) => [w.stepId, w.key, w.text])).toEqual([['f', 'fluid:oxygen', 'AE2 runs the Advanced Chemical '
+          + 'Reactor only as often as a job needs what its pattern makes (Why), about 50 % of the runs the Oxygen it pipes to the Advanced Assembler '
+          + 'needs: so it runs out of Oxygen and waits for ever, and so does a job that needs what it makes. Keep the Advanced Chemical Reactor '
+          + 'running yourself: feed it Ex from stock, keep a request for Why standing, or fill it by hand']]);
+      });
+
+      it('says "at most" where the loop is too dense to follow every job', () => {
+        // ten fillers and ten emptiers, pooled as in the dense loop above (past AE_SHARE_SETS_MAX); f0 also pipes Oxygen to e
+        const ids = Array.from({ length: 10 }, (_, i) => i);
+        const cell = (i: number): StuffKey => `t:cell${i}@0`;
+        const p = pack();
+        for (const i of ids) p.items.set(cell(i), { key: cell(i), id: `t:cell${i}`, meta: 0, name: `Cell ${i}`, oreDict: [] });
+        const oxygen: Array<[StuffKey, number]> = [['fluid:oxygen', 1000]];
+        const steps: StepSpec[] = [...ids.flatMap((i): StepSpec[] => [
+          { id: `f${i}`, mteId: IDS.CHEM_HV, count: 1, tier: 3, inputs: [['t:x@0', 1]], outputs: [[cell(i), 1], ...(i === 0 ? oxygen : [])] },
+          { id: `b${i}`, mteId: IDS.ASSEMBLER, count: 1, tier: 2, inputs: [[cell(i), 1]], outputs: [['t:x@0', 1]] }]),
+        { id: 'e', mteId: IDS.ASSEMBLER, count: 1, tier: 2, inputs: [['t:dust@0', 1], ...oxygen] }];
+        const plan = makePlan(steps, { flows: [...ids.flatMap((i) => [
+          { from: `f${i}`, to: `b${i}`, key: cell(i), perSecond: 1 }, { from: `b${i}`, to: 'out', key: 't:x@0', perSecond: 0.1 },
+          { from: 'raw', to: `f${i}`, key: 't:x@0', perSecond: 0.1 }, ...ids.map((j) => ({ from: `b${i}`, to: `f${j}`, key: 't:x@0', perSecond: 0.09 }))]),
+        { from: 'f0', to: 'e', key: 'fluid:oxygen', perSecond: 1000 }, { from: 'raw', to: 'e', key: 't:dust@0', perSecond: 1 },
+        { from: 'e', to: 'out', key: 't:out_e@0', perSecond: 1 }] });
+        const texts = ae2(p, plan).r.warnings.filter((w) => w.code === 'ae2_fluid_short').map((w) => w.text.replace(/about \d+ %/, 'about N %'));
+        expect(texts).toEqual(['AE2 runs the Advanced Chemical Reactor only as often as a job needs what its pattern makes (Cell 0), at most about N % '
+          + 'of the runs the Oxygen it pipes to the Advanced Assembler needs (the line\'s patterns loop round in too many ways for the layout to follow '
+          + 'every job, so it counts some runs AE2 never plans): so it runs out of Oxygen and waits for ever, and so does a job that needs what it '
+          + 'makes. Keep the Advanced Chemical Reactor running yourself: feed it Ex from stock, keep a request for Cell 0 standing, or fill it by hand']);
+      });
     });
   });
 

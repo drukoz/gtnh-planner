@@ -45,9 +45,10 @@ import io.github.drukoz.gtnhplanner.export.JsonlWriter;
 /**
  * {@code machines}: one line per registered GT meta tile entity, {@code id} = its index in
  * {@link GregTechAPI#METATILEENTITIES} (the {@code mID} a world stores), with its kind, tier, recipe maps, power or
- * pipe stats and overclock flags (export-mod.md §3, gt-mechanics.md §2.4, §4.1). Every slot holds a prototype with no
- * world behind it, so only fields and field-only getters are read; {@code maxEUInput()} / {@code maxEUOutput()} of
- * generators and transformers are never called (export-mod.md §3.5).
+ * pipe stats, a basic machine's item slot counts ({@link ItemSlots}) and overclock flags (export-mod.md §3,
+ * gt-mechanics.md §2.4, §4.1). Every slot holds a prototype with no world behind it, so only fields and field-only
+ * getters are read; {@code maxEUInput()} / {@code maxEUOutput()} of generators and transformers are never called
+ * (export-mod.md §3.5).
  */
 public final class MachinesSection implements ExportSection {
 
@@ -141,8 +142,12 @@ public final class MachinesSection implements ExportSection {
             j.name("tier").value(tier);
             if (tier >= 0 && tier < GTValues.V.length) j.name("voltage").value(GTValues.V[tier]);
         }
-        if (m instanceof MTEBasicMachine) j.name("amps").value(((MTEBasicMachine) m).mAmperage);
-        else if (m instanceof MTEBasicBatteryBuffer) {
+        if (m instanceof MTEBasicMachine) {
+            MTEBasicMachine basic = (MTEBasicMachine) m;
+            j.name("amps").value(basic.mAmperage);
+            // the slot counts GT's MTEBasicMachineWithRecipeBuilder slots step gave the constructor
+            ItemSlots.write(j, basic.mInputSlotCount, basic.mOutputItems);
+        } else if (m instanceof MTEBasicBatteryBuffer) {
             MTEBasicBatteryBuffer b = (MTEBasicBatteryBuffer) m;
             j.name("amps").value(BatteryBuffers.ampsOut(b.mInventory.length, b.maxAmperesOut()));
         }
