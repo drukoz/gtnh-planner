@@ -1,48 +1,28 @@
 // The feeding checker's contract: the structured layout config it reads and the report it gives
 // (architecture §11 entry 50; research `docs/research/machine-feeding.md` §7, the design of a feeding checker; plan
 // `docs/superpowers/plans/2026-10-20-21-feeding-checker.md`).
-// - The first half is the config the checker reads from a layout. fix/feeding writes chips, interface patterns and the
-//   flat `CONFIG_KEYS` on main's routed and AE2 layouts, and add-on 12 Task 6 writes bench grids, Limited Item Filter
-//   counts and patterns. Until a lane adds `LayoutBlock.feed?` to `src/shared/types/layout.ts` the checker reads it
-//   structurally through `FeedBlock`; the lane that adds it moves these types unchanged to `src/shared/types/feed.ts`
-//   and leaves this file re-exporting them (plan open question 1).
+// - The first half is the config the checker reads from a layout. Its structured part, `LayoutBlock.feed` (fix/feeding's
+//   architecture entry 51), is typed in `src/shared/types/feed.ts`: fix/feeding moved this file's Task 1 types from
+//   `ItemFilterSpec` to `FeedSpec` there unchanged, and this file re-exports them (plan open question 1), so the layout,
+//   the build steps, the 3D view and the checker read one structure. fix/feeding writes the chips, the interface patterns,
+//   the ME Export Bus on its cable and the flat `CONFIG_KEYS` settings on main's routed, AE2 and EnderIO layouts; add-on
+//   12 Task 6 writes bench grids, Limited Item Filter counts (`FeedConduitFilter`) and shared machines (`FeedBlock`).
 // - The second half is what the checker reports: the thirteen `feed_*` codes, their kinds and the gate (the plan's
 //   Codes table), the scenarios, the options and the time constants.
 // Pure TypeScript: nothing from node:* may be imported here.
 
 import type { StuffKey } from '../../../shared/keys.ts';
 import type { Vec3 } from '../../../shared/layout/geometry.ts';
-import type { Face } from '../../../shared/types/assets.ts';
 import type { ConduitFilter, LayoutBlock } from '../../../shared/types/layout.ts';
 
-// ---- The layout config the checker reads (architecture entry 50) ----
-export interface ItemFilterSpec { mode: 'whitelist' | 'blacklist'; keys: StuffKey[] }
-export type ChipKind = 'responder' | 'extractor' | 'broadcaster' | 'stock_keeper' | 'terminator' | 'overflow';
-/** One chip of a Routed Interface Pipe, in chip-slot order (at most 4). A new chip: responder and extractor whitelist [], broadcaster blacklist []. */
-export interface RoutedChipSpec {
-  kind: ChipKind;
-  filter?: ItemFilterSpec;                              // responder, extractor, broadcaster, terminator
-  stock?: Array<{ key: StuffKey; count: number }>;      // stock keeper: up to 9, counts 1–255
-  requestMode?: 'when_missing' | 'when_empty' | 'infinite';   // stock keeper; default 'when_missing'
-  priority?: number;                                    // the chip's own priority setting; default 0
-}
-/** A processing pattern: whole amounts per craft; item keys only once encodable. */
-export interface PatternSpec { inputs: Array<{ key: StuffKey; amount: number }>; outputs: Array<{ key: StuffKey; amount: number }> }
-export interface InterfaceSpec {
-  patterns: PatternSpec[]; blocking: boolean; smartBlocking?: boolean;
-  lock?: 'none' | 'until_result';                       // Locking Card on "Until crafting result is returned"
-  targets?: Face[];                                     // a wrench target, in world faces like CoverSpec.face; absent = every neighbour
-  dual?: boolean;                                       // ae2fc Dual Interface: fluids go in as fluids
-}
-/** Auto Workbench: mode 'normal' = GT++ mode 0; grid top row first, the planner's concrete items. */
-export interface BenchSpec { mode: 'normal'; grid: Array<StuffKey | null>; throughput: 0 | 1 | 2 | 3 }
-/** An ME Export Bus feeding a step without an encodable pattern (research §3.5): its config slots in order, its Acceleration Cards. */
-export interface ExportBusSpec { keys: StuffKey[]; cards?: 0 | 1 | 2 | 3 | 4 }
-export interface FeedSpec { chips?: RoutedChipSpec[]; interface?: InterfaceSpec; bench?: BenchSpec; exportBus?: ExportBusSpec }
+// ---- The layout config the checker reads (architecture entries 50 and 51) ----
+export type {
+  BenchSpec, ChipKind, ExportBusSpec, FeedSpec, InterfaceSpec, ItemFilterSpec, PatternSpec, RoutedChipSpec,
+} from '../../../shared/types/feed.ts';
 /** A conduit side's filter that may be a Limited Item Filter (`item` = PART_KEYS.limitedFilter). */
 export type FeedConduitFilter = ConduitFilter & { limits?: Array<{ key: StuffKey; count: number }> };
-/** A layout block that may carry the structured config and add-on 12's shared-machine steps. */
-export type FeedBlock = LayoutBlock & { feed?: FeedSpec; stepIds?: string[] };
+/** A layout block (its `feed` is `LayoutBlock.feed`) that may carry add-on 12's shared-machine steps, which `LayoutBlock` does not have yet. */
+export type FeedBlock = LayoutBlock & { stepIds?: string[] };
 /** The flat `LayoutBlock.config` keys the checker reads (add-on 15's words, architecture entry 50 item 4). */
 export const CONFIG_KEYS = { multiStack: 'multiStack', inputFilter: 'inputFilter', inputFromOutputSide: 'inputFromOutputSide',
   autoOutput: 'autoOutput', limited: 'limited', inputSeparation: 'inputSeparation', circuit: 'circuit',
