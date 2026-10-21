@@ -368,7 +368,8 @@ function cardsOf(n: unknown): 0 | 1 | 2 | 3 | 4 {
 /**
  * An ME Export Bus outside the hookup (rule 13, E16): its filter and Acceleration Cards from `feed.exportBus`, else from
  * the bus cover on its cable (its `filter` and `settings.accelerationCards`, as fix/feeding writes them there too), else
- * its `config.exportFilter` names. A bus on a cable is named by its part, at the cable's cell.
+ * its `config.exportFilter` names. Beside either structured filter that text is ignored, and `text_ignored` says so
+ * (Review Focus 4). A bus on a cable is named by its part, at the cable's cell.
  */
 function exportBus(ctx: ReadContext, cell: Cell): Ae2ExportBus {
   const given = cell.block.feed?.exportBus;
@@ -376,11 +377,9 @@ function exportBus(ctx: ReadContext, cell: Cell): Ae2ExportBus {
   const label = cover === undefined ? cell.label : `${ctx.nameOf(cover.item)} at ${cell.pos.join(' ')}`;
   const text = cell.block.config?.exportFilter;
   let keys: StuffKey[] = [];
-  if (given !== undefined) {
+  if (given !== undefined || cover !== undefined) {
     if (text !== undefined) ctx.unknown('text_ignored', `${label}: its structured filter is read, and its text "${String(text)}" is ignored`, cell);
-    keys = [...given.keys];
-  } else if (cover !== undefined) {
-    keys = [...(cover.filter ?? [])];
+    keys = [...(given?.keys ?? cover?.filter ?? [])];
   } else if (text !== undefined) {
     ctx.unknown('export_bus_text', `${label}: its filter is read from the layout's text "${String(text)}"`, cell);
     const read = typeof text === 'string' ? ctx.readNames(text) : { keys: [], unread: [String(text)] };

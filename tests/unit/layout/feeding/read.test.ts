@@ -511,6 +511,14 @@ describe('readLine', () => {
     delete cable.feed;
     cable.covers![0]!.settings = { mode: 'me_export', accelerationCards: 3 };
     expect(ae2Net(readLine({ pack, plan, layout })).exportBuses).toEqual([expect.objectContaining({ keys: ['t:x@0'], amount: 64, target: { node: '3,0,3', side: 2 } })]);
+    // a text filter beside the bus cover is ignored, as it is beside feed.exportBus
+    expect(cable.config).toBeUndefined();
+    cable.config = { exportFilter: 'Alpha' };
+    const texted = readLine({ pack, plan, layout });
+    expect(ae2Net(texted).exportBuses).toEqual([expect.objectContaining({ keys: ['t:x@0'] })]);
+    expect(texted.unknowns.filter((u) => u.code === 'text_ignored' || u.code === 'export_bus_text').map((u) => [u.code, u.pos, u.text]))
+      .toEqual([['text_ignored', [3, 64, 2], 'ME Export Bus at 3 64 2: its structured filter is read, and its text "Alpha" is ignored']]);
+    delete cable.config;
     // a bus that faces no inventory feeds nothing the checker knows
     cable.covers![0]!.face = 'up';
     const lost = readLine({ pack, plan, layout });
