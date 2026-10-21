@@ -3,6 +3,7 @@
 // Pure TypeScript shared by server and browser: nothing from node:* may be imported here.
 
 import type { StuffKey } from '../keys.ts';
+import type { FarmSettings, FarmStep } from './farm.ts';
 import type { Product } from './pack.ts';
 
 /** Spec §3.6 modes 1–4; `enderio` is architecture §11.30. */
@@ -52,6 +53,17 @@ export const STEP_CHARGE_BEFORE_V3 = 0.02;
  * build the machines a line adds is weighed against 24 hours of running it.
  */
 export const DEFAULT_BUILD_HORIZON_HOURS = 24;
+
+/**
+ * The planning modes a project picks under "Plan for" (design spec §3.3, architecture §11.45 (1)): `least-raw`, raw
+ * material per item while the line runs, machines not counted (add-on 12's "Ignore build cost"); `cheapest`, raw material
+ * over the build horizon plus the machines the group does not have (add-on 12's objective); `multi-output`, cheapest with
+ * a weight on each different raw material the line must be supplied with.
+ */
+export const PLAN_OBJECTIVES = ['least-raw', 'cheapest', 'multi-output'] as const;
+export type PlanObjective = (typeof PLAN_OBJECTIVES)[number];
+/** Every project's mode unless it picks another (the user's ruling of 2026-10-20: machine build cost counts). */
+export const DEFAULT_OBJECTIVE: PlanObjective = 'cheapest';
 
 export interface PlanSettings {
   target: StuffKey | null; mode: 'rate' | 'makeN'; amount: number; per: 'min' | 'hour';   // per ignored for makeN
@@ -133,6 +145,15 @@ export interface PlanSettings {
    * `DEFAULT_BUILD_HORIZON_HOURS`.
    */
   buildHorizonHours?: number | null;
+  // optional addition
+  /** The planning mode (add-on 17, §11.45 (1)); in rate mode a null `buildHorizonHours` plans least raw whatever it says. */
+  objective?: PlanObjective;
+  // optional addition
+  /** The farms the planner may build or reuse, and those the group runs (add-on 17, farm.ts); readers use `?? defaultFarmSettings()`. */
+  farms?: FarmSettings;
+  // optional addition
+  /** "Use other projects' surplus" (add-on 17, §11.45 (4)): on by default; readers treat only `false` as off. */
+  useSurplus?: boolean;
 }
 
 /** Where one of the group's machines stands (a world scan's `PlacedMachine`): its dimension id and block position. */
@@ -203,6 +224,12 @@ export interface RawInput {
   // optional addition
   /** Some recipe the group can run at this tier makes it (fix spec R7); false for free and gathered goods. */
   canMake?: boolean;
+  // optional addition
+  /** Where a capped free supply comes from (add-on 17): another project's surplus or a farm the group runs; a row of its own beside a bought row of the key. */
+  from?: { kind: 'project' | 'farm'; id: string; name: string };
+  // optional addition
+  /** A farm's tool wear (add-on 17): priced upkeep, never a raw source of best multi-output. */
+  upkeep?: true;
 }
 
 export interface PlanStep {
@@ -292,6 +319,9 @@ export interface PlanStep {
    * `reused.units`, and its machines are counted once. Set only for a pool of two or more steps.
    */
   pool?: { id: string /* 'pool:' + its smallest step id */; steps: string[] /* every step id it runs, sorted, this one included */ };
+  // optional addition
+  /** A farm step's farm (add-on 17, farm.ts): what it plants and its words; the layout keeps an area for it. */
+  farm?: FarmStep;
 }
 
 export interface PlanFlow { from: string /* step id | 'raw' */; to: string /* step id | 'out' | 'sink' */; key: StuffKey; perSecond: number }
@@ -368,6 +398,21 @@ export interface Plan {
     /** New machines (a cleanroom included) that can be made here but that `build` leaves out: no price could be worked out. Set only when above 0. */
     unpriced?: number;
   };
+  // optional addition
+  /** The planning mode the plan was made in (add-on 17): its settings' mode as the planner reads it (`objectiveOf`). */
+  objective?: PlanObjective;
+  // optional addition
+  /** The different raw goods the plan buys (cost above 0, upkeep aside), which best multi-output keeps few (add-on 17). */
+  rawSources?: number;
+  // optional addition
+  /** Byproducts of the line's own runs credited to other projects that need them (best multi-output, add-on 17), per second. */
+  credits?: Array<{ to: string; name: string; key: StuffKey; perSecond: number }>;
+  // optional addition
+  /** Who takes this plan's surplus (add-on 17): each live project's draw on it, oldest project first, per second. */
+  drawnBy?: Array<{ by: string; name: string; key: StuffKey; perSecond: number }>;
+  // optional addition
+  /** The hash of what the plan read from other projects' summaries (add-on 17); absent when it read nothing. */
+  crossHash?: string;
 }
 
 export interface PlanContext {           // filled from a world scan by Plan 4; Plan 2 works with an empty one

@@ -1,9 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import {
-  applyOp, defaultSettings, MAX_BUILD_HORIZON_HOURS, MAX_OWNED_MANUAL_COUNT, MAX_OWNED_MANUAL_ENTRIES, MAX_STEP_CHARGE, normalizeSettings,
-  SETTINGS_VERSION, settingsUpgrade, validateOp,
+  applyOp, defaultSettings, MAX_BUILD_HORIZON_HOURS, MAX_CROP_LAYERS, MAX_FARM_OUTPUTS, MAX_FARM_PER_MINUTE, MAX_OWNED_MANUAL_COUNT,
+  MAX_OWNED_MANUAL_ENTRIES, MAX_RUNNING_FARMS, MAX_STEP_CHARGE, normalizeSettings, SETTINGS_VERSION, settingsUpgrade, validateOp,
+  withObjectiveRules,
 } from '../../../src/shared/project/apply-op.ts';
-import { DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_STEP_CHARGE, NETWORKED_LOGISTICS, STEP_CHARGE_BEFORE_V3 } from '../../../src/shared/types/plan.ts';
+import { defaultFarmSettings, FERTILIZER_CHOICES, TOOL_DURABILITY, TOOL_MATERIALS, type FarmSettings } from '../../../src/shared/types/farm.ts';
+import {
+  DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_OBJECTIVE, DEFAULT_STEP_CHARGE, NETWORKED_LOGISTICS, PLAN_OBJECTIVES, STEP_CHARGE_BEFORE_V3,
+  type PlanSettings,
+} from '../../../src/shared/types/plan.ts';
 import type { Project } from '../../../src/shared/types/project.ts';
 
 const AT = '2026-10-17T12:00:00.000Z';
@@ -347,5 +352,183 @@ describe('NETWORKED_LOGISTICS', () => {
     expect(NETWORKED_LOGISTICS.has('direct')).toBe(false);
     // EnderIO plans like machine to machine, each step on its own machines (controller ruling).
     expect(NETWORKED_LOGISTICS.has('enderio')).toBe(false);
+  });
+});
+
+// "Plan for", the farms and "Use other projects' surplus" (add-on 17 Task 1; architecture §11.45 (1), (2) and (4)): the
+// mode a project plans for, the farms the planner may build or reuse, and the switch for other projects' surplus. In rate
+// mode add-on 12's "Ignore build cost" (a null horizon) is least raw material.
+describe('objective, farms and useSurplus', () => {
+  /** A project whose stored settings are `settings` over the defaults, as the store reads it back. */
+  function projectWith(settings: Partial<PlanSettings>): Project {
+    return Object.freeze({ ...project(), settings: normalizeSettings({ ...defaultSettings(), ...settings }) }) as Project;
+  }
+  const patched = (p: Project, patch: Partial<PlanSettings>): PlanSettings => applyOp(p, { op: 'settings', patch }, 'Ann', AT).settings;
+
+  it('plans cheapest, with both kinds of farm and other projects\' surplus, by default', () => {
+    expect(PLAN_OBJECTIVES).toEqual(['least-raw', 'cheapest', 'multi-output']);
+    expect(DEFAULT_OBJECTIVE).toBe('cheapest');
+    const s = defaultSettings();
+    expect(s).toMatchObject({ objective: 'cheapest', useSurplus: true, buildHorizonHours: 24 });
+    expect(s.farms).toEqual(defaultFarmSettings());
+    // Saw and knife: the research's rubber example; LV: the most items per EU; seeds at the stats a new seed has.
+    expect(defaultFarmSettings()).toEqual({
+      kinds: ['tgs', 'crop-manager'],
+      tgs: { tier: 1, tools: { log: true, sapling: false, leaves: false, fruit: true }, toolMaterial: 'Steel' },
+      crops: { tier: 1, stats: { growth: 1, gain: 1, resistance: 1 }, layers: 1, likedTags: 0, sky: true, fertilizer: 'none' },
+      running: [],
+    });
+    // A new object each time, down to its parts, so one project's farm settings never share state with another's.
+    const [a, b] = [defaultSettings().farms!, defaultSettings().farms!];
+    expect([a === b, a.tgs.tools === b.tgs.tools, a.crops.stats === b.crops.stats, a.running === b.running]).toEqual([false, false, false, false]);
+  });
+
+  it('gives an old project the mode its horizon meant', () => {
+    // A rate project stored with "Ignore build cost" plans least raw material and keeps its null horizon.
+    expect(normalizeSettings({ target: 't:x@0', buildHorizonHours: null } as never)).toMatchObject({ objective: 'least-raw', buildHorizonHours: null });
+    expect(normalizeSettings({ target: 't:x@0', buildHorizonHours: 8 } as never)).toMatchObject({ objective: 'cheapest', buildHorizonHours: 8 });
+    expect(normalizeSettings({ target: 't:x@0' } as never)).toMatchObject({ objective: 'cheapest', buildHorizonHours: 24 });
+    expect(normalizeSettings({ objective: 'multi-output', buildHorizonHours: 8 } as never)).toMatchObject({ objective: 'multi-output', buildHorizonHours: 8 });
+    // What the create route stored before these rules: the defaults' cheapest beside a null horizon.
+    expect(normalizeSettings({ objective: 'cheapest', buildHorizonHours: null } as never)).toMatchObject({ objective: 'least-raw', buildHorizonHours: null });
+    expect(normalizeSettings({ objective: 'multi-output', buildHorizonHours: null } as never)).toMatchObject({ objective: 'least-raw', buildHorizonHours: null });
+    // Add-on 12 always counted a Make N batch's build cost (against the batch), whatever its horizon.
+    expect(normalizeSettings({ mode: 'makeN', amount: 64, buildHorizonHours: null } as never)).toMatchObject({ objective: 'cheapest', buildHorizonHours: null });
+    expect(normalizeSettings({ mode: 'makeN', amount: 64, objective: 'least-raw' } as never).objective).toBe('least-raw');
+    // Stored farm settings without `running` get none and keep the rest; farms and other projects' surplus are on for old projects.
+    const farms = {
+      kinds: ['tgs'], tgs: { tier: 3, tools: { log: true, sapling: true, leaves: false, fruit: false }, toolMaterial: 'Titanium' },
+      crops: { tier: 2, stats: { growth: 10, gain: 5, resistance: 1 }, layers: 2, likedTags: 1, sky: false, fertilizer: 'bone-meal' },
+    };
+    expect(normalizeSettings({ farms } as never).farms).toEqual({ ...farms, running: [] });
+    expect(normalizeSettings({ target: 't:x@0' } as never)).toMatchObject({ farms: defaultFarmSettings(), useSurplus: true });
+    expect(normalizeSettings({ useSurplus: false } as never).useSurplus).toBe(false);
+  });
+
+  it('fills stored farm settings field by field, as dims', () => {
+    const d = defaultFarmSettings();
+    expect(normalizeSettings({ farms: { tgs: { tier: 2 }, crops: { stats: { growth: 5 } } } } as never).farms)
+      .toEqual({ ...d, tgs: { ...d.tgs, tier: 2 }, crops: { ...d.crops, stats: { growth: 5, gain: 1, resistance: 1 } } });
+    expect(normalizeSettings({ farms: { tgs: { tools: { fruit: false } } } } as never).farms?.tgs.tools)
+      .toEqual({ log: true, sapling: false, leaves: false, fruit: false });
+    const running = [{ name: 'Forestry rubber farm', outputs: [{ key: 't:rubber_wood@0', perMinute: 32 }] }];
+    expect(normalizeSettings({ farms: { running, kinds: [] } } as never).farms).toEqual({ ...d, kinds: [], running });
+    expect(normalizeSettings({ farms: { tgs: { tier: undefined } } } as never).farms).toEqual(d);
+  });
+
+  it('turns a stale ignore-build-cost patch into least raw', () => {
+    const cheapest = project();   // the defaults: cheapest over 24 hours
+    expect(patched(cheapest, { buildHorizonHours: null })).toMatchObject({ objective: 'least-raw', buildHorizonHours: null });
+    // A patch that names its mode keeps it, and cheapest then counts over the default horizon (the third rule wins).
+    expect(patched(cheapest, { buildHorizonHours: null, objective: 'cheapest' })).toMatchObject({ objective: 'cheapest', buildHorizonHours: 24 });
+    // A stale tab that picks a horizon on a least-raw project plans it cheapest over that horizon, unless it names the mode.
+    for (const leastRaw of [projectWith({ buildHorizonHours: null }), projectWith({ objective: 'least-raw' })]) {
+      expect(leastRaw.settings.objective).toBe('least-raw');
+      expect(patched(leastRaw, { buildHorizonHours: 8 })).toMatchObject({ objective: 'cheapest', buildHorizonHours: 8 });
+      expect(patched(leastRaw, { buildHorizonHours: 8, objective: 'least-raw' })).toMatchObject({ objective: 'least-raw', buildHorizonHours: 8 });
+    }
+    // Any other patch leaves the mode and the horizon as they were.
+    expect(patched(projectWith({ buildHorizonHours: null }), { amount: 2 })).toMatchObject({ objective: 'least-raw', buildHorizonHours: null });
+    expect(patched(projectWith({ objective: 'multi-output' }), { buildHorizonHours: 8 })).toMatchObject({ objective: 'multi-output', buildHorizonHours: 8 });
+  });
+
+  it('gives cheapest and multi-output a horizon', () => {
+    const ignored = projectWith({ buildHorizonHours: null });
+    expect(patched(ignored, { objective: 'multi-output' })).toMatchObject({ objective: 'multi-output', buildHorizonHours: 24 });
+    expect(patched(ignored, { objective: 'cheapest' })).toMatchObject({ objective: 'cheapest', buildHorizonHours: 24 });
+    expect(patched(ignored, { objective: 'least-raw' })).toMatchObject({ objective: 'least-raw', buildHorizonHours: null });
+    expect(patched(projectWith({ buildHorizonHours: 8 }), { objective: 'cheapest' })).toMatchObject({ objective: 'cheapest', buildHorizonHours: 8 });
+    const batch = projectWith({ mode: 'makeN', amount: 64, buildHorizonHours: null });
+    expect(batch.settings).toMatchObject({ objective: 'cheapest', buildHorizonHours: null });
+    expect(patched(batch, { mode: 'rate' })).toMatchObject({ mode: 'rate', objective: 'cheapest', buildHorizonHours: 24 });
+  });
+
+  it('applies the rules to a copy, in their order', () => {
+    const before = Object.freeze(defaultSettings());
+    const patch = Object.freeze({ buildHorizonHours: null });
+    expect(withObjectiveRules(before, patch)).toEqual({ ...defaultSettings(), objective: 'least-raw', buildHorizonHours: null });
+    expect(before).toEqual(defaultSettings());
+    // Rule 2 reads the mode before the patch; rule 3 the mode and horizon after it.
+    const leastRaw = { ...defaultSettings(), objective: 'least-raw' as const, buildHorizonHours: null };
+    expect(withObjectiveRules(leastRaw, { buildHorizonHours: 1 })).toMatchObject({ objective: 'cheapest', buildHorizonHours: 1 });
+    expect(withObjectiveRules(leastRaw, { objective: 'multi-output' })).toMatchObject({ objective: 'multi-output', buildHorizonHours: DEFAULT_BUILD_HORIZON_HOURS });
+    expect(withObjectiveRules(leastRaw, {})).toEqual(leastRaw);
+  });
+
+  it('checks the planning mode, the surplus switch and the farm settings', () => {
+    const settingsOp = (patch: object) => ({ op: 'settings', patch });
+    /** A settings op holding the default farm settings with `change` made to them. */
+    const farmsOp = (change: (f: FarmSettings) => void) => {
+      const farms = defaultFarmSettings();
+      change(farms);
+      return settingsOp({ farms });
+    };
+    const problem = (change: (f: FarmSettings) => void) => validateOp(farmsOp(change));
+    for (const objective of PLAN_OBJECTIVES) expect(validateOp(settingsOp({ objective }))).toBeNull();
+    for (const objective of ['fastest', '', null, 1]) {
+      expect(validateOp(settingsOp({ objective })), String(objective)).toBe('objective must be one of least-raw, cheapest, multi-output');
+    }
+    for (const useSurplus of [true, false]) expect(validateOp(settingsOp({ useSurplus }))).toBeNull();
+    for (const useSurplus of ['yes', 1, null]) expect(validateOp(settingsOp({ useSurplus })), String(useSurplus)).toEqual(expect.any(String));
+
+    expect(validateOp(settingsOp({ farms: defaultFarmSettings() }))).toBeNull();
+    for (const farms of [null, 'tgs', [], {}]) expect(validateOp(settingsOp({ farms })), JSON.stringify(farms)).toEqual(expect.any(String));
+    // Kinds: each of the two at most once.
+    for (const kinds of [[], ['crop-manager'], ['crop-manager', 'tgs']]) expect(problem((f) => { f.kinds = kinds as never; }), String(kinds)).toBeNull();
+    for (const kinds of [['tgs', 'bees'], ['tgs', 'tgs'], 'tgs', null]) expect(problem((f) => { f.kinds = kinds as never; }), String(kinds)).toEqual(expect.any(String));
+    // The Tree Growth Simulator: an energy hatch of LV to MAX, a true or false per tool, a tool material the research priced.
+    for (const tier of [1, 14]) expect(problem((f) => { f.tgs.tier = tier; })).toBeNull();
+    for (const tier of [0, 15, 1.5, '1']) expect(problem((f) => { f.tgs.tier = tier as never; }), String(tier)).toEqual(expect.any(String));
+    expect(problem((f) => { f.tgs.tools.sapling = 'yes' as never; })).toEqual(expect.any(String));
+    expect(problem((f) => { delete (f.tgs.tools as Partial<FarmSettings['tgs']['tools']>).leaves; })).toEqual(expect.any(String));
+    for (const toolMaterial of TOOL_MATERIALS) expect(problem((f) => { f.tgs.toolMaterial = toolMaterial; })).toBeNull();
+    expect(problem((f) => { f.tgs.toolMaterial = 'Unobtainium'; })).toBe('farms.tgs.toolMaterial must be one of Bronze, Iron, Invar, '
+      + 'Stainless Steel, Steel, Black Steel, Diamond, Damascus Steel, Titanium, Vanadiumsteel, Tungstensteel, HSS-G, HSS-E');
+    // Every material offered has its durability (farms.md §1.5).
+    expect(Object.keys(TOOL_DURABILITY)).toEqual([...TOOL_MATERIALS]);
+    expect(TOOL_MATERIALS.map((m) => TOOL_DURABILITY[m])).toEqual([192, 256, 256, 480, 512, 768, 1280, 1280, 1600, 1920, 2560, 4000, 10240]);
+    // The Crop Manager: LV to UMV (28001–28012), seed stats 1 to 31, 1 to 3 layers, 0 to 2 liked biome tags.
+    for (const tier of [1, 12]) expect(problem((f) => { f.crops.tier = tier; })).toBeNull();
+    for (const tier of [0, 13]) expect(problem((f) => { f.crops.tier = tier; })).toBe('farms.crops.tier must be a whole number from 1 to 12');
+    for (const stat of ['growth', 'gain', 'resistance'] as const) {
+      for (const v of [1, 31]) expect(problem((f) => { f.crops.stats[stat] = v; }), `${stat} ${v}`).toBeNull();
+      for (const v of [0, 32, 2.5]) {
+        expect(problem((f) => { f.crops.stats[stat] = v; }), `${stat} ${v}`).toBe(`farms.crops.stats.${stat} must be a whole number from 1 to 31`);
+      }
+    }
+    expect(problem((f) => { f.crops.stats = null as never; })).toEqual(expect.any(String));
+    expect(MAX_CROP_LAYERS).toBe(3);
+    for (const layers of [1, 2, 3]) expect(problem((f) => { f.crops.layers = layers; })).toBeNull();
+    for (const layers of [0, 4]) expect(problem((f) => { f.crops.layers = layers; })).toBe('farms.crops.layers must be a whole number from 1 to 3');
+    for (const likedTags of [0, 2]) expect(problem((f) => { f.crops.likedTags = likedTags; })).toBeNull();
+    for (const likedTags of [3, -1, 0.5]) expect(problem((f) => { f.crops.likedTags = likedTags; }), String(likedTags)).toEqual(expect.any(String));
+    expect(problem((f) => { f.crops.sky = false; })).toBeNull();
+    expect(problem((f) => { f.crops.sky = 'yes' as never; })).toEqual(expect.any(String));
+    for (const fertilizer of FERTILIZER_CHOICES) expect(problem((f) => { f.crops.fertilizer = fertilizer; })).toBeNull();
+    expect(problem((f) => { f.crops.fertilizer = 'compost' as never; })).toEqual(expect.any(String));
+    // Farms the group runs: at most 20, each named in 1 to 80 characters with at most 10 outputs of a key above 0 and at most 1e6 a minute.
+    expect([MAX_RUNNING_FARMS, MAX_FARM_OUTPUTS, MAX_FARM_PER_MINUTE]).toEqual([20, 10, 1e6]);
+    const output = (i: number) => ({ key: `t:x@${i}`, perMinute: 1 });
+    const farm = (name: string, outputs: number) => ({ name, outputs: Array.from({ length: outputs }, (_, i) => output(i)) });
+    const running = (list: unknown) => problem((f) => { f.running = list as never; });
+    expect(running(Array.from({ length: 20 }, (_, i) => farm(`Farm ${i}`, 10)))).toBeNull();
+    expect(running([farm('x'.repeat(80), 0), { name: 'Rubber', outputs: [{ key: 'fluid:water', perMinute: 1e6 }, { key: 't:y@0', perMinute: 1e-6 }] }])).toBeNull();
+    const bad: Array<[string, unknown]> = [
+      ['21 farms', Array.from({ length: 21 }, (_, i) => farm(`Farm ${i}`, 1))],
+      ['11 outputs', [farm('Rubber', 11)]],
+      ['perMinute 0', [{ name: 'Rubber', outputs: [{ key: 't:x@0', perMinute: 0 }] }]],
+      ['perMinute 1e7', [{ name: 'Rubber', outputs: [{ key: 't:x@0', perMinute: 1e7 }] }]],
+      ['perMinute "1"', [{ name: 'Rubber', outputs: [{ key: 't:x@0', perMinute: '1' }] }]],
+      ['an empty name', [farm('', 1)]],
+      ['a name of 81 characters', [farm('x'.repeat(81), 1)]],
+      ['no name', [{ outputs: [output(0)] }]],
+      ['an empty key', [{ name: 'Rubber', outputs: [{ key: '', perMinute: 1 }] }]],
+      ['a key of 301 characters', [{ name: 'Rubber', outputs: [{ key: 'x'.repeat(301), perMinute: 1 }] }]],
+      ['a key that is no string', [{ name: 'Rubber', outputs: [{ key: 5, perMinute: 1 }] }]],
+      ['outputs that are no list', [{ name: 'Rubber', outputs: output(0) }]],
+      ['a farm that is no object', ['Rubber']],
+      ['running that is no list', { name: 'Rubber', outputs: [] }],
+    ];
+    for (const [what, list] of bad) expect(running(list), what).toEqual(expect.any(String));
   });
 });

@@ -14,7 +14,7 @@ import { worldToScreen } from './render.ts';
 import type { MapMarker, MapOverlay, MapViewport } from './types.ts';
 
 export const PIN_COLORS: Readonly<Record<Pin['kind'], string>> = {
-  site: '#1e88e5', power: '#00acc1', logistics: '#8e24aa', reuse: '#43a047', warning: '#e53935',
+  site: '#1e88e5', power: '#00acc1', logistics: '#8e24aa', reuse: '#43a047', warning: '#e53935', farm: '#7cb342',
 };
 export const ROLE_COLORS: Readonly<Record<BlockRole, string>> = {
   machine: '#90caf9', casing: '#b0bec5', hatch: '#a1887f', cable: '#616161', transformer: '#8e24aa', pipe: '#ffb300', cover: '#ffffff',

@@ -124,7 +124,18 @@ export interface Hookup {
   found?: boolean;
 }
 
-export interface Pin { n: number; dim: number; pos: [number, number, number]; kind: 'site' | 'power' | 'logistics' | 'reuse' | 'warning'; text: string }
+/** `farm` (add-on 17): where an area is kept for a new farm (`Layout.reserved`). */
+export interface Pin { n: number; dim: number; pos: [number, number, number]; kind: 'site' | 'power' | 'logistics' | 'reuse' | 'warning' | 'farm'; text: string }
+
+/**
+ * An area kept for a new farm machine of a farm step (add-on 17, architecture §11.45 (7)), which the layout does not lay
+ * out block by block: its build step says what to build there and how to connect it. `pin` is set when the layout has
+ * pins (none without a scan base). Not entry 48's `Placement.reserved`, the cells a line keeps empty.
+ */
+export interface ReservedArea {
+  stepId: string; pos: [number, number, number] /* min corner, world */; size: [number, number, number] /* x, height, z */;
+  pin?: number; text: string;
+}
 
 /** `empty`: nothing to place; `no-world`: laid out without a scan or base, at a default origin. */
 export type LayoutStatus = 'ok' | 'empty' | 'no-world';
@@ -138,6 +149,9 @@ export interface Layout {
   power?: PowerSummary;
   /** Structure casings that hatches replace. */
   replaced?: BomLine[];
+  // optional addition
+  /** The areas kept for the plan's new farm machines (add-on 17), one per machine, by step id. */
+  reserved?: ReservedArea[];
 }
 
 /**
