@@ -9,7 +9,8 @@ import { fromWorld } from '../../../../src/server/layout/feeding/frame.ts';
 import { amountText, listText, slotWord } from '../../../../src/server/layout/feeding/text.ts';
 import { posKey, type Vec3 } from '../../../../src/shared/layout/geometry.ts';
 import type { Layout } from '../../../../src/shared/types/layout.ts';
-import type { PlanFlow } from '../../../../src/shared/types/plan.ts';
+import type { Pack } from '../../../../src/shared/types/pack.ts';
+import type { Plan, PlanFlow } from '../../../../src/shared/types/plan.ts';
 import { chain2, feedPlan, layFeed, layLegacy, FEED_IDS } from '../../../helpers/feeding-fixtures.ts';
 import { IDS } from '../../../helpers/layout-fixtures.ts';
 
@@ -700,6 +701,49 @@ describe('precheckFeeding, the other branches', () => {
     first[0]!.pos[0] = -1;
     expect(precheckFeeding(m, pack)[0]!.pos[0]).not.toBe(-1);
     expect(m.nodes[0]!.pos[0]).not.toBe(-1);
+  });
+});
+
+// ---- the lines main lays now: fix/feeding's structured feed and settings (architecture §11 entry 51; ruling R-28's twins) ----
+
+describe('precheckFeeding on the lines main lays now', () => {
+  /** Both kinds flow into the step: the smelter (Alpha and 4 Beta → Ex) and the EBF (Alpha and Beta → Ex). */
+  const smelterBoth = () => feedPlan([{ id: 'sm', mteId: FEED_IDS.SMELTER, count: 1, inputs: [['t:a@0', 1], ['t:b@0', 4]], outputs: [['t:x@0', 1]] }], [
+    { from: 'raw', to: 'sm', key: 't:a@0', perSecond: 1 }, { from: 'raw', to: 'sm', key: 't:b@0', perSecond: 4 }, { from: 'sm', to: 'out', key: 't:x@0', perSecond: 1 },
+  ]);
+  const ebfBoth = () => feedPlan([{ id: 'e', mteId: IDS.EBF, count: 1, inputs: [['t:a@0', 1], ['t:b@0', 1]], outputs: [['t:x@0', 1]] }], [
+    { from: 'raw', to: 'e', key: 't:a@0', perSecond: 1 }, { from: 'raw', to: 'e', key: 't:b@0', perSecond: 1 }, { from: 'e', to: 'out', key: 't:x@0', perSecond: 1 },
+  ]);
+  const findings = async (line: { pack: Pack; plan: Plan }, mode: 'routed' | 'ae2' | 'enderio') =>
+    precheckFeeding(readLine({ pack: line.pack, plan: line.plan, layout: await layFeed(line.pack, line.plan, mode) }), line.pack).map(brief);
+
+  it('finds that the routed and AE2 lines main lays move what they make (R5a, R5d, R6, R8, R9)', async () => {
+    expect(await findings(chain2(), 'routed')).toEqual([]);
+    expect(await findings(chain2(), 'ae2')).toEqual([]);
+    // what goes to a step with no machine reaches the output chest's Item Terminator Chip
+    const nowhere = feedPlan([
+      { id: 's1', mteId: IDS.MACERATOR, count: 1, inputs: [['t:a@0', 1]], outputs: [['t:x@0', 1]] },
+      { id: 'h', mteId: -1, count: 1, handCraft: true, inputs: [['t:x@0', 1]], outputs: [['t:y@0', 1]] },
+    ]);
+    expect(await findings(nowhere, 'routed')).toEqual([]);
+  });
+
+  it('finds Multi Stack Input, Limiting mode and the input bus\'s chips set where main sets them (R2, R3, R5c)', async () => {
+    for (const mode of ['routed', 'ae2', 'enderio'] as const) {
+      expect([mode, await findings(smelterBoth(), mode)]).toEqual([mode, []]);
+      expect([mode, await findings(ebfBoth(), mode)]).toEqual([mode, []]);
+    }
+  });
+
+  it('finds the patterns main encodes encodable (R8)', async () => {
+    // the pattern holds the outputs of chance 1 only
+    const c = feedPlan([{ id: 'c', mteId: IDS.MACERATOR, count: 1, inputs: [['t:a@0', 1]], outputs: [['t:x@0', 1], ['t:y@0', 1]], chances: { 't:y@0': 0.5 } }]);
+    expect(await findings(c, 'ae2')).toEqual([]);
+    // a machine that takes only a fluid the line pipes gets no pattern: main says so itself (ae2_no_pattern)
+    const f = feedPlan([{ id: 'f', mteId: IDS.SOLIDIFIER, count: 1, inputs: [['fluid:molten.iron', 144]], held: [MOLD], outputs: [['t:x@0', 1]] }]);
+    const layout = await layFeed(f.pack, f.plan, 'ae2');
+    expect(precheckFeeding(readLine({ pack: f.pack, plan: f.plan, layout }), f.pack)).toEqual([]);
+    expect(layout.warnings.map((w) => w.code)).toContain('ae2_no_pattern');
   });
 });
 

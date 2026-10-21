@@ -40,6 +40,21 @@ const benchLine = () => feedPlan([{
   craft: { width: 2, cells: ['t:a@0', 't:b@0', 't:b@0', 't:a@0'] },
 }]);
 const BENCH_GRID = ['t:a@0', 't:b@0', null, 't:b@0', 't:a@0', null, null, null, null];
+/** Both kinds flow into the step: the smelter (Alpha and 4 Beta → Ex) and the EBF (Alpha and Beta → Ex). */
+const smelterBoth = () => feedPlan([{ id: 'sm', mteId: FEED_IDS.SMELTER, count: 1, inputs: [['t:a@0', 1], ['t:b@0', 4]], outputs: [['t:x@0', 1]] }], [
+  { from: 'raw', to: 'sm', key: 't:a@0', perSecond: 1 }, { from: 'raw', to: 'sm', key: 't:b@0', perSecond: 4 }, { from: 'sm', to: 'out', key: 't:x@0', perSecond: 1 },
+]);
+const ebfBoth = () => feedPlan([{ id: 'e', mteId: IDS.EBF, count: 1, inputs: [['t:a@0', 1], ['t:b@0', 1]], outputs: [['t:x@0', 1]] }], [
+  { from: 'raw', to: 'e', key: 't:a@0', perSecond: 1 }, { from: 'raw', to: 'e', key: 't:b@0', perSecond: 1 }, { from: 'e', to: 'out', key: 't:x@0', perSecond: 1 },
+]);
+/** A macerator (Alpha → Ex) feeding a fluid extractor that makes only Molten Iron: main feeds the extractor through an ME Export Bus. */
+const fluidOnly = () => feedPlan([
+  { id: 's1', mteId: IDS.MACERATOR, count: 1, inputs: [['t:a@0', 1]], outputs: [['t:x@0', 1]] },
+  { id: 'fx', mteId: IDS.EXTRACTOR, count: 1, inputs: [['t:x@0', 1]], outputs: [['fluid:molten.iron', 144]] },
+]);
+/** An EBF that takes Alpha and makes only Molten Iron: main's export bus sits in front of its input bus. */
+const ebfFluidOut = () => feedPlan([{ id: 'e', mteId: IDS.EBF, count: 1, inputs: [['t:a@0', 1]], outputs: [['fluid:molten.iron', 144]] }]);
+const ae2Net = (m: FeedModel): Ae2Net => m.networks.find((n): n is Ae2Net => n.kind === 'ae2')!;
 
 /** What must not change when the line turns: nodes, then each network's members and targets, then covers, all in local terms. */
 function localView(m: FeedModel): unknown {
@@ -399,6 +414,111 @@ describe('readLine', () => {
       { id: '5,1,3', label: 'ME Export Bus at 5 65 3', keys: ['t:x@0'], amount: 32, target: { node: '5,0,3', side: 1 } },
     ]);
     expect(['export_bus_text', 'text_unread', 'export_target_unknown'].map((code) => unknownsAt(m, code))).toEqual([[[3, 66, 1]], [[3, 66, 1]], [[3, 66, 1]]]);
+  });
+
+  // ---- the lines main lays now: fix/feeding's structured feed and settings (architecture §11 entry 51; ruling R-28's twins) ----
+
+  it('reads the structured chips of a routed line as main lays it', async () => {
+    const { pack, plan } = chain2();
+    const m = readLine({ pack, plan, layout: await layFeed(pack, plan, 'routed') });
+    const chipsAt = (id: string) => routedNet(m).pipes.find((p) => p.id === id)!.chips;
+    expect(chipsAt('3,0,2')).toEqual([{ kind: 'responder', filter: { mode: 'whitelist', keys: ['t:a@0'] } }, { kind: 'extractor', filter: { mode: 'whitelist', keys: ['t:x@0'] } }]);
+    // the input chest's extractor lists what enters the line; the output chest takes what leaves it on an Item Terminator Chip
+    expect(chipsAt('6,1,1')).toEqual([{ kind: 'extractor', filter: { mode: 'whitelist', keys: ['t:a@0'] } }]);
+    expect(chipsAt('6,1,3')).toEqual([{ kind: 'terminator', filter: { mode: 'whitelist', keys: ['t:y@0'] } }]);
+    // nothing is read from text, and nothing is left unknown
+    expect(m.unknowns).toEqual([]);
+  });
+
+  it('reads the chips main gives a steam machine and a multiblock\'s buses', async () => {
+    const steam = twoSteps(FEED_IDS.STEAM);
+    const m = readLine({ pack: steam.pack, plan: steam.plan, layout: await layFeed(steam.pack, steam.plan, 'routed') });
+    expect(routedNet(m).pipes.find((p) => p.id === '1,0,2')).toMatchObject({
+      target: { node: '1,0,1', side: 3 },
+      chips: [{ kind: 'responder', filter: { mode: 'whitelist', keys: ['t:a@0'] } }, { kind: 'extractor', filter: { mode: 'whitelist', keys: ['t:x@0'] } }],
+    });
+    expect(m.unknowns.map((u) => u.code)).toEqual(['slots_unknown']);
+    // the input bus's pipe only answers for what the EBF takes, the output bus's only takes out what it makes
+    const ebf = ebfBoth();
+    const em = readLine({ pack: ebf.pack, plan: ebf.plan, layout: await layFeed(ebf.pack, ebf.plan, 'routed') });
+    expect(routedNet(em).pipes.filter((p) => p.target?.bus !== undefined).map((p) => [p.target!.bus, p.chips])).toEqual([
+      ['1,0,3', [{ kind: 'extractor', filter: { mode: 'whitelist', keys: ['t:x@0'] } }]],
+      ['3,0,3', [{ kind: 'responder', filter: { mode: 'whitelist', keys: ['t:a@0', 't:b@0'] } }]],
+    ]);
+  });
+
+  it('reads the structured patterns of an AE2 line as main lays it', async () => {
+    const { pack, plan } = chain2();
+    const m = readLine({ pack, plan, layout: await layFeed(pack, plan, 'ae2') });
+    const makeEx = { patterns: [{ inputs: [{ key: 't:a@0', amount: 1 }], outputs: [{ key: 't:x@0', amount: 1 }] }], blocking: true };
+    expect(ae2Net(m).interfaces.map((i) => [i.id, i.targets, i.spec])).toEqual([
+      ['3,0,2', [{ node: '3,0,1', side: 3 }], makeEx], ['5,0,2', [{ node: '5,0,3', side: 2 }], makeEx],
+      ['7,0,2', [{ node: '7,0,1', side: 3 }], { patterns: [{ inputs: [{ key: 't:x@0', amount: 1 }], outputs: [{ key: 't:y@0', amount: 1 }] }], blocking: true }],
+    ]);
+    expect(m.unknowns).toEqual([]);
+  });
+
+  it('reads the feeding settings main sets', async () => {
+    for (const mode of ['routed', 'ae2', 'enderio'] as const) {
+      // Multi Stack Input off on a singleblock both kinds flow into, Limiting mode on on such a multiblock's input bus
+      const sm = smelterBoth();
+      const smModel = readLine({ pack: sm.pack, plan: sm.plan, layout: await layFeed(sm.pack, sm.plan, mode) });
+      expect([mode, smModel.nodes.find((n): n is BasicNode => n.kind === 'basic')!.settings.multiStack, unknownsAt(smModel, 'multistack_unset')]).toEqual([mode, false, []]);
+      const ebf = ebfBoth();
+      const ebfModel = readLine({ pack: ebf.pack, plan: ebf.plan, layout: await layFeed(ebf.pack, ebf.plan, mode) });
+      const multi = ebfModel.nodes.find((n): n is MultiNode => n.kind === 'multi')!;
+      expect([mode, multi.inBuses.map((b) => b.limited), unknownsAt(ebfModel, 'limited_unset')]).toEqual([mode, [true], []]);
+    }
+    // Input Separation off, as main sets it on a controller with two input buses (a second bus in place of a coil casing here)
+    const { pack, plan } = ebfLine();
+    const layout = await layFeed(pack, plan, 'routed');
+    Object.assign(blockAt(layout, [3, 65, 3]), {
+      role: 'hatch', block: { id: 'gregtech:gt.blockmachines', meta: 0, mteId: IDS.INPUT_BUS_LV }, label: 'Input Bus (LV)', facing: 3, hatch: 'input_bus',
+    });
+    blockAt(layout, [2, 64, 3]).config = { ...blockAt(layout, [2, 64, 3]).config, inputSeparation: false };
+    const m = readLine({ pack, plan, layout });
+    expect([m.nodes.find((n): n is MultiNode => n.kind === 'multi')!.inputSeparation, unknownsAt(m, 'separation_unset')]).toEqual([false, []]);
+  });
+
+  it('reads the ME Export Bus main lays on the cable in front of a machine that makes only fluid', async () => {
+    const { pack, plan } = fluidOnly();
+    const layout = await layFeed(pack, plan, 'ae2');
+    const m = readLine({ pack, plan, layout });
+    // an AE2 part on the spine's cable, facing the extractor, its filter the extractor's input; no card moves 1 item an operation
+    expect(ae2Net(m).exportBuses).toEqual([{ id: '3,0,2', label: 'ME Export Bus at 3 64 2', keys: ['t:x@0'], amount: 1, target: { node: '3,0,3', side: 2 } }]);
+    expect(ae2Net(m).interfaces.map((i) => i.id)).toEqual(['1,0,2']);
+    // the bus is no unknown cover: only the extractor's own fluid cover is left unread
+    expect(unknownsAt(m, 'cover_unknown')).toEqual([[3, 64, 3]]);
+    // its Acceleration Cards set what it moves an operation
+    const cable = blockAt(layout, [3, 64, 2]);
+    cable.feed = { exportBus: { keys: ['t:x@0'], cards: 2 } };
+    expect(ae2Net(readLine({ pack, plan, layout })).exportBuses[0]!.amount).toBe(32);
+    // without the feed, the bus cover's own filter and cards
+    delete cable.feed;
+    cable.covers![0]!.settings = { mode: 'me_export', accelerationCards: 3 };
+    expect(ae2Net(readLine({ pack, plan, layout })).exportBuses).toEqual([expect.objectContaining({ keys: ['t:x@0'], amount: 64, target: { node: '3,0,3', side: 2 } })]);
+    // a bus that faces no inventory feeds nothing the checker knows
+    cable.covers![0]!.face = 'up';
+    const lost = readLine({ pack, plan, layout });
+    expect(ae2Net(lost).exportBuses[0]!.target).toBeNull();
+    expect(unknownsAt(lost, 'export_target_unknown')).toEqual([[3, 64, 2]]);
+  });
+
+  it('reads an export bus in front of an input bus in the local frame', async () => {
+    const views: unknown[] = [];
+    for (const rotation of [0, 90, 180, 270] as const) {
+      const { pack, plan } = ebfFluidOut();
+      const layout = await layFeed(pack, plan, 'ae2', { origin: [30, 64, 10], rotation });
+      const m = readLine({ pack, plan, layout });
+      const buses = ae2Net(m).exportBuses;
+      views.push(buses.map((b) => [b.id, b.keys, b.amount, b.target]));
+      // the bus is read from its cover, which is then no unknown cover
+      const unread = m.unknowns.filter((u) => u.code === 'cover_unknown').map((u) => posKey(fromWorld(u.pos!, layout)));
+      expect(buses.filter((b) => unread.includes(b.id))).toEqual([]);
+    }
+    // on the line laid on the test scan (two cells further along than without one): in front of the EBF's input bus, facing it
+    expect(views[0]).toEqual([['5,0,4', ['t:a@0'], 1, { node: '4,0,3', bus: '5,0,3', side: 3 }]]);
+    expect(views.slice(1)).toEqual([views[0], views[0], views[0]]);
   });
 
   it('counts the sides a bench is connected on and the containers of its grid', async () => {

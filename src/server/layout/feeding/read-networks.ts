@@ -1,8 +1,9 @@
 // The network and cover readers of `readLine` (plan `docs/superpowers/plans/2026-10-20-21-feeding-checker.md` Task 2
 // rules 11–15): Project Red routed pipes, AE2 interfaces and ME Export Buses, EnderIO item conduits, GT item pipes, and
-// the GT covers of every block. Each reads the structured config (`FeedBlock.feed`) first and today's layout text and
-// the plan second, and lists what it could not know as unknowns. Everything comes out in the line's local frame
-// (`frame.ts`): cells and their links turned back by the line's rotation, members in local order, sides 0–5.
+// the GT covers of every block. Each reads the structured config first (`LayoutBlock.feed`, architecture §11 entry 51,
+// which main's routed and AE2 lines carry since fix/feeding) and the layout text of older lines and the plan second, and
+// lists what it could not know as unknowns. Everything comes out in the line's local frame (`frame.ts`): cells and their
+// links turned back by the line's rotation, members in local order, sides 0–5.
 // Pure TypeScript: nothing from node:* may be imported here.
 
 import type { StuffKey } from '../../../shared/keys.ts';
@@ -264,8 +265,20 @@ function blockKey(b: FeedBlock): StuffKey {
   return `${b.block.id}@${b.block.meta}`;
 }
 
+/**
+ * The ME Export Bus fix/feeding lays as an AE2 part on the spine's ME cable (architecture §11 entry 51): the cable block's
+ * `me_export_bus` cover, on the face toward the machine or input bus it feeds. Only a cable carries one (role `pipe`, no
+ * GT tile): GT's blocks take no AE2 part.
+ */
+function exportBusCover(c: Cell): CoverSpec | undefined {
+  if (c.block.role !== 'pipe' || c.machine !== undefined) return undefined;
+  return c.block.covers?.find((cover) => cover.item === PART_KEYS.meExportBus);
+}
+
+/** An ME Export Bus: a block that is the bus (as main lays the hookup's end), or a cable with the bus on it (`feed.exportBus`, its cover). */
 function isExportBus(c: Cell): boolean {
-  return blockKey(c.block) === PART_KEYS.meExportBus || c.block.item === PART_KEYS.meExportBus;
+  return blockKey(c.block) === PART_KEYS.meExportBus || c.block.item === PART_KEYS.meExportBus || c.block.feed?.exportBus !== undefined
+    || exportBusCover(c) !== undefined;
 }
 
 /** The `config` keys main and add-on 12 write an interface's patterns as: `patterns` (count), `pattern`, `pattern2` …, `blockingMode`. */
@@ -324,8 +337,17 @@ function ae2Interface(ctx: ReadContext, cell: Cell): Ae2Iface {
   return { id: cell.id, label: cell.label, spec, targets };
 }
 
-/** What an ME Export Bus feeds: the inventory it faces, else its one neighbouring inventory (E16). */
-function exportTarget(ctx: ReadContext, cell: Cell): InvRef | null {
+/**
+ * What an ME Export Bus feeds (E16): for a bus on a cable, the inventory on its cover's face (a world face, turned into the
+ * local frame); for a bus block, the inventory it faces, else its one neighbouring inventory.
+ */
+function exportTarget(ctx: ReadContext, cell: Cell, label: string): InvRef | null {
+  const cover = exportBusCover(cell);
+  if (cover !== undefined) {
+    const ref = ctx.invRef(cell.local, ctx.sideOf(cover.face));
+    if (ref === null) ctx.unknown('export_target_unknown', `${label}: it faces no machine, bus or chest, so what it feeds is not known`, cell);
+    return ref;
+  }
   const facing = cell.block.facing;
   if (facing !== undefined && Number.isInteger(facing) && facing >= 0 && facing <= 5) {
     const ref = ctx.invRef(cell.local, localSide(facing, ctx.rotation));
@@ -333,32 +355,49 @@ function exportTarget(ctx: ReadContext, cell: Cell): InvRef | null {
   }
   const around = inventoriesAround(ctx, cell);
   if (around.length === 1) return around[0]!;
-  ctx.unknown('export_target_unknown', `${cell.label}: it ${around.length === 0 ? 'touches no machine, bus or chest' : `touches ${around.length} inventories`}, `
+  ctx.unknown('export_target_unknown', `${label}: it ${around.length === 0 ? 'touches no machine, bus or chest' : `touches ${around.length} inventories`}, `
     + 'so what it feeds is not known', cell);
   return null;
 }
 
-/** An ME Export Bus outside the hookup: `feed.exportBus`, else its `config.exportFilter` names (rule 13, E16). */
+/** A bus's Acceleration Cards, 0 to 4 (E16); anything else counts as none. */
+function cardsOf(n: unknown): 0 | 1 | 2 | 3 | 4 {
+  return n === 1 || n === 2 || n === 3 || n === 4 ? n : 0;
+}
+
+/**
+ * An ME Export Bus outside the hookup (rule 13, E16): its filter and Acceleration Cards from `feed.exportBus`, else from
+ * the bus cover on its cable (its `filter` and `settings.accelerationCards`, as fix/feeding writes them there too), else
+ * its `config.exportFilter` names. A bus on a cable is named by its part, at the cable's cell.
+ */
 function exportBus(ctx: ReadContext, cell: Cell): Ae2ExportBus {
   const given = cell.block.feed?.exportBus;
+  const cover = exportBusCover(cell);
+  const label = cover === undefined ? cell.label : `${ctx.nameOf(cover.item)} at ${cell.pos.join(' ')}`;
   const text = cell.block.config?.exportFilter;
   let keys: StuffKey[] = [];
   if (given !== undefined) {
-    if (text !== undefined) ctx.unknown('text_ignored', `${cell.label}: its structured filter is read, and its text "${String(text)}" is ignored`, cell);
+    if (text !== undefined) ctx.unknown('text_ignored', `${label}: its structured filter is read, and its text "${String(text)}" is ignored`, cell);
     keys = [...given.keys];
+  } else if (cover !== undefined) {
+    keys = [...(cover.filter ?? [])];
   } else if (text !== undefined) {
-    ctx.unknown('export_bus_text', `${cell.label}: its filter is read from the layout's text "${String(text)}"`, cell);
+    ctx.unknown('export_bus_text', `${label}: its filter is read from the layout's text "${String(text)}"`, cell);
     const read = typeof text === 'string' ? ctx.readNames(text) : { keys: [], unread: [String(text)] };
     if (read.unread.length > 0) {
-      ctx.unknown('text_unread', `${cell.label}: its filter lists ${joinNames(read.unread.map((n) => `"${n}"`))}, which names no single item of the plan, `
+      ctx.unknown('text_unread', `${label}: its filter lists ${joinNames(read.unread.map((n) => `"${n}"`))}, which names no single item of the plan, `
         + 'so that slot is left out', cell);
     }
     keys = read.keys;
   }
-  return { id: cell.id, label: cell.label, keys, amount: AE2.exportAmounts[given?.cards ?? 0], target: exportTarget(ctx, cell) };
+  const cards = cardsOf(given?.cards ?? cover?.settings.accelerationCards);
+  return { id: cell.id, label, keys, amount: AE2.exportAmounts[cards], target: exportTarget(ctx, cell, label) };
 }
 
-/** Rule 13: the line's ME interfaces and its ME Export Buses (main lays both with role `interface`), one network. */
+/**
+ * Rule 13: the line's ME interfaces and its ME Export Buses, one network. Main lays an interface, and the hookup's end
+ * bus, with role `interface`; fix/feeding lays a step's export bus as a part on the spine's cable (`exportBusCover`).
+ */
 export function readAe2(ctx: ReadContext): Ae2Net[] {
   const buses = ctx.cells.filter(isExportBus);
   const interfaces = ctx.cells.filter((c) => c.block.role === 'interface' && !isExportBus(c));
@@ -462,12 +501,14 @@ function gtCover(host: NodeId, side: number, cover: CoverSpec): GtCover | null {
 /**
  * Rule 11: every block's covers (cover faces are world faces), by host in local order, then side. A cover that is no
  * conveyor, Item Filter or Shutter cover, and any cover on a steam machine (GT lets only primitive covers onto one,
- * E17), is not read: `cover_unknown` names them.
+ * E17), is not read: `cover_unknown` names them. The ME Export Bus on a cable is no GT cover: `readAe2` reads it.
  */
 export function readCovers(ctx: ReadContext): GtCover[] {
   const covers: GtCover[] = [];
   for (const cell of ctx.cells) {
-    const list = (cell.block.covers ?? []).map((cover) => ({ cover, side: ctx.sideOf(cover.face) })).sort((a, b) => a.side - b.side);
+    const bus = exportBusCover(cell);
+    const list = (cell.block.covers ?? []).filter((cover) => cover !== bus).map((cover) => ({ cover, side: ctx.sideOf(cover.face) }))
+      .sort((a, b) => a.side - b.side);
     const steam = cell.machine?.kind === 'steam';
     const unread: string[] = [];
     for (const { cover, side } of list) {

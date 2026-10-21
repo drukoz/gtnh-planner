@@ -2,10 +2,12 @@
 // pack as the feeding checker's model — machines (GT basic and steam machines, multiblocks with their buses, Auto
 // Workbenches), tail chests, each machine's recipes, slots, faces and settings, what comes into the line and what
 // leaves it, the plan's rates per machine, one network model per network the line lays (read-networks.ts) and its GT
-// covers. It reads the structured config where a block has it and today's layout and plan otherwise, and lists what it
-// could not know as unknowns, at most once per code and block. Everything is in the line's local frame (frame.ts): the
-// same line reads the same in every rotation and wherever it was dragged (Review Focus 1); a block the plan has no step
-// for is skipped (Review Focus 2); a machine without slot data takes its slots from its recipes (Review Focus 3).
+// covers. It reads the structured config where a block has it (`LayoutBlock.feed` and the flat `config` settings, which
+// main's lines carry since fix/feeding, architecture §11 entry 51) and the text of older layouts and the plan
+// otherwise, and lists what it could not know as unknowns, at most once per code and block. Everything is in the line's
+// local frame (frame.ts): the same line reads the same in every rotation and wherever it was dragged (Review Focus 1);
+// a block the plan has no step for is skipped (Review Focus 2); a machine without slot data takes its slots from its
+// recipes (Review Focus 3).
 // Pure TypeScript: nothing from node:* may be imported here, and from the server only what the plan's Global
 // Constraints allow (`stepItemInputs`, `stepItemOutputs`, `stepDepths`, `busSlots`, `manualReasonOf`).
 
