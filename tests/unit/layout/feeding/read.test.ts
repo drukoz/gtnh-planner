@@ -258,6 +258,20 @@ describe('readLine', () => {
     expect(m.unknowns.filter((u) => u.code === 'slots_unknown')).toEqual([expect.objectContaining({ pos: node.pos, stepId: 'q' })]);
   });
 
+  it('takes slot counts from the export before the table', async () => {
+    // the export's counts (exporter 0.6.0: Machine.itemInSlots and itemOutSlots) replace the table's 9 and 1 of the tier-2 assembler
+    const { pack, plan } = chain2();
+    Object.assign(pack.machines.get(IDS.ASSEMBLER)!, { itemInSlots: 5, itemOutSlots: 2 });
+    const m = readLine({ pack, plan, layout: await layFeed(pack, plan, 'enderio') });
+    expect(m.nodes.find((n): n is BasicNode => n.kind === 'basic' && n.stepIds[0] === 's2')).toMatchObject({ inSlots: 5, outSlots: 2 });
+    // such an export counts a steam machine's slots too, so they are known
+    const steam = twoSteps(FEED_IDS.STEAM);
+    Object.assign(steam.pack.machines.get(FEED_IDS.STEAM)!, { itemInSlots: 1, itemOutSlots: 1 });
+    const sm = readLine({ pack: steam.pack, plan: steam.plan, layout: await layFeed(steam.pack, steam.plan, 'routed') });
+    expect(sm.nodes.find((n) => n.id === '1,0,1')).toMatchObject({ kind: 'basic', steam: true, inSlots: 1, outSlots: 1 });
+    expect(unknownsAt(sm, 'slots_unknown')).toEqual([]);
+  });
+
   it('reads recipes, chances and circuits', async () => {
     const line = () => feedPlan([{
       id: 'r', mteId: IDS.MACERATOR, count: 1, inputs: [['t:a@0', 1]], consumeChance: { 't:a@0': 0.5 }, held: ['gregtech:gt.integrated_circuit@2'],

@@ -24,6 +24,14 @@ describe('feeding facts', () => {
 
   it('prefers exported slot counts and knows nothing of other machines', () => {
     expect(basicSlots({ metaName: 'basicmachine.assembler.tier.02', tier: 2, itemInSlots: 5, itemOutSlots: 2 })).toEqual({ in: 5, out: 2, source: 'export' });
+    // exporter 0.6.0 counts a steam machine's slots too (GT's bronze machines are basic machines); the table has no row for one
+    expect(basicSlots({ metaName: 'bronzemachine.macerator', tier: 1, itemInSlots: 1, itemOutSlots: 1 })).toEqual({ in: 1, out: 1, source: 'export' });
+    // no output slot is still a count; one count alone, or one that is no count of slots, is no export's: the table's then
+    expect(basicSlots({ metaName: 'basicmachine.assembler.tier.02', tier: 2, itemInSlots: 2, itemOutSlots: 0 })).toEqual({ in: 2, out: 0, source: 'export' });
+    expect(basicSlots({ metaName: 'basicmachine.assembler.tier.02', tier: 2, itemInSlots: 5 })).toEqual({ in: 9, out: 1, source: 'table' });
+    for (const bad of [-1, 1.5, Number.NaN]) {
+      expect(basicSlots({ metaName: 'basicmachine.assembler.tier.02', tier: 2, itemInSlots: bad, itemOutSlots: 1 })).toEqual({ in: 9, out: 1, source: 'table' });
+    }
     expect(slots('cropsnh.seedthing.tier.01', 1)).toBeNull();
     expect(slots('basicmachine.assembler.tier.00', 0)).toBeNull();
     expect(basicSlots({ metaName: 'basicmachine.assembler.tier.01', tier: undefined })).toBeNull();

@@ -74,6 +74,21 @@ describe('precheckFeeding', () => {
     expect(precheckFeeding(m, pack).map(brief)).toEqual([`feed_crowded risk - ${node.label}`]);
   });
 
+  it('counts a machine\'s kinds against the slots the export gives it', async () => {
+    // a steam macerator that takes two kinds: without exported counts its slots come from its recipes, which are no measure
+    const line = () => feedPlan([{ id: 'st', mteId: FEED_IDS.STEAM, count: 1, inputs: [['t:a@0', 1], ['t:b@0', 1]], outputs: [['t:x@0', 1]] }]);
+    const certain = async (counts?: { itemInSlots: number; itemOutSlots: number }) => {
+      const { pack, plan } = line();
+      if (counts !== undefined) Object.assign(pack.machines.get(FEED_IDS.STEAM)!, counts);
+      const m = readLine({ pack, plan, layout: await layFeed(pack, plan, 'enderio') });
+      const label = m.nodes.find((n) => n.kind === 'basic')!.label;
+      return precheckFeeding(m, pack).filter((f) => f.certainty === 'certain').map((f) => [f.code, f.text.replace(label, '<steam>')]);
+    };
+    expect(await certain()).toEqual([]);
+    // exporter 0.6.0 counts its one input slot: R1 applies
+    expect(await certain({ itemInSlots: 1, itemOutSlots: 1 })).toEqual([['feed_crowded', '<steam> takes 2 kinds of item but has 1 input slot free: one kind always waits']]);
+  });
+
   it('flags Multi Stack Input left to chance', async () => {
     const line = () => feedPlan([{ id: 'sm', mteId: FEED_IDS.SMELTER, count: 1, inputs: [['t:a@0', 1], ['t:b@0', 4]], outputs: [['t:x@0', 1]] }]);
     const run = async (mode: 'enderio' | 'ae2', multiStack?: boolean) => {

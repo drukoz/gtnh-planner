@@ -81,16 +81,21 @@ function slotsAt(count: SlotCount, tier: number): number {
   return typeof count === 'number' ? count : count[Math.min(tier, 5) - 1]!;
 }
 
+/** A count of slots: a whole number, 0 or more. */
+function isSlotCount(n: number | undefined): n is number {
+  return n !== undefined && Number.isInteger(n) && n >= 0;
+}
+
 /**
- * The item slots of a GT basic machine. The exported counts when the machine has both (add-on 20's `itemInSlots` and
- * `itemOutSlots`, which replace the table: research §7); else the table, by the kind in its meta name and its tier (E11);
- * else null. A steam machine's `bronzemachine.*` and `hpmachine.*` names and a CropsNH or GT++ singleblock are among the
- * nulls: their slots come from their recipes (plan Task 2).
+ * The item slots of a GT basic machine. The exported counts when the machine has both (`Machine.itemInSlots` and
+ * `itemOutSlots`, exporter 0.6.0, architecture §11 entry 49 (5): GT's `mInputSlotCount` and `mOutputItems.length` on
+ * every `MTEBasicMachine`, steam machines among them; they replace the table: research §7); else the table, by the kind
+ * in its meta name and its tier (E11); else null. On an older export a steam machine's `bronzemachine.*` and
+ * `hpmachine.*` names, and on any a CropsNH or GT++ singleblock, are among the nulls: their slots come from their recipes
+ * (plan Task 2).
  */
-export function basicSlots(
-  m: Pick<Machine, 'metaName' | 'tier'> & { itemInSlots?: number; itemOutSlots?: number },
-): { in: number; out: number; source: 'export' | 'table' } | null {
-  if (typeof m.itemInSlots === 'number' && typeof m.itemOutSlots === 'number') return { in: m.itemInSlots, out: m.itemOutSlots, source: 'export' };
+export function basicSlots(m: Pick<Machine, 'metaName' | 'tier' | 'itemInSlots' | 'itemOutSlots'>): { in: number; out: number; source: 'export' | 'table' } | null {
+  if (isSlotCount(m.itemInSlots) && isSlotCount(m.itemOutSlots)) return { in: m.itemInSlots, out: m.itemOutSlots, source: 'export' };
   const kind = BASIC_KIND.exec(m.metaName)?.[1];
   if (kind === undefined || m.tier === undefined || !Number.isInteger(m.tier) || m.tier < 1) return null;
   const row = Object.hasOwn(SLOT_ROWS, kind) ? SLOT_ROWS[kind] : undefined;
