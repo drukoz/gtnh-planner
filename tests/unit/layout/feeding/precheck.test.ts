@@ -693,15 +693,19 @@ describe('precheckFeeding, the other branches', () => {
   });
 
   it('reports the same findings in every rotation', async () => {
-    for (const mode of ['direct', 'routed', 'ae2', 'enderio'] as const) {
-      const views: unknown[] = [];
-      for (const rotation of [0, 90, 180, 270] as const) {
-        const { pack, plan } = chain2();
-        const layout = await layFeed(pack, plan, mode, { origin: [30, 64, 10], rotation });
-        const findings = precheckFeeding(readLine({ pack, plan, layout }), pack);
-        views.push(findings.map((f) => [f.code, f.certainty, f.key, f.stepId, fromWorld(f.pos, layout)]));
+    // the lines main laid before fix/feeding, whose routed line has findings to turn, and main's lines now, which have none
+    for (const lay of [layLegacy, layFeed]) {
+      for (const mode of ['direct', 'routed', 'ae2', 'enderio'] as const) {
+        const views: unknown[][] = [];
+        for (const rotation of [0, 90, 180, 270] as const) {
+          const { pack, plan } = chain2();
+          const layout = await lay(pack, plan, mode, { origin: [30, 64, 10], rotation });
+          const findings = precheckFeeding(readLine({ pack, plan, layout }), pack);
+          views.push(findings.map((f) => [f.code, f.certainty, f.key, f.stepId, fromWorld(f.pos, layout)]));
+        }
+        expect(views.slice(1)).toEqual([views[0], views[0], views[0]]);
+        if (lay === layLegacy && mode === 'routed') expect(views[0]!.length).toBeGreaterThan(0);
       }
-      expect(views.slice(1)).toEqual([views[0], views[0], views[0]]);
     }
   });
 
