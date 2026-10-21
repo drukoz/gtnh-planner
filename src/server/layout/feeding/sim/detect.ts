@@ -1,8 +1,10 @@
 // What a scenario run records and the findings it gives (plan `docs/superpowers/plans/2026-10-20-21-feeding-checker.md`
-// Task 4, detector rules 10–16, Task 5 rule 4 and Task 6 rule 5). The models record as they run (`SimStats`): what each
-// machine was handed and gave up, every recipe check it made and what came of it, how many input slots each kind filled,
-// what reached each chest and what was dropped into the world, and what each Auto Workbench moved to its result slot,
-// destroyed, crafted, could not push and took in. `detect` reads that once the run is over:
+// Task 4, detector rules 10–16, Task 5 rule 4, Task 6 rule 5 and Task 8 rule 10). The models record as they run
+// (`SimStats`): what each machine was handed and gave up, every recipe check it made and what came of it, how many input
+// slots each kind filled, what reached each chest and what was dropped into the world, what each Auto Workbench moved to
+// its result slot, destroyed, crafted, could not push and took in, and what Project Red's payloads did: each pipe's
+// dispatches, the orders its broadcaster dropped and what a restart took out of its send queue, and at each node the items
+// that bounced, wandered or were pulled back out of an input bus. `detect` reads that once the run is over:
 // - `feed_crowded`: a recipe waits for a kind that cannot get in, for `STALL_TICKS` in a row; or a multiblock has every
 //   input of its recipe on its input buses but no one bus holds them all while Input Separation is on, as long;
 // - `feed_overfill`: one kind in two or more input slots of a machine (or slots of a multiblock's input bus) that takes two
@@ -13,7 +15,9 @@
 // - `feed_no_route`: an output blocked for `STALL_TICKS` in a row while nothing is taken out of the machine;
 // - `feed_pool_starve`: a recipe of a shared machine that never ran while its inputs were there for `STALL_TICKS`;
 // - `feed_starved`, `feed_slow`: a planned input never handed over, or handed over too slowly while the recipe waited;
-// - `feed_leak`: an item planned for a machine that reached a chest instead.
+// - `feed_leak`: an item planned for a machine that reached a chest instead;
+// - `feed_churn`: `CHURN_ITEMS` of one item sent to a node over Project Red that did not fit and circle its pipe, that lost
+//   their way to it and wander, or that an Item Extractor Chip pulled back out of one of its input buses.
 // A multiblock's buses stand in for a basic machine's slots: what its input buses were handed counts as handed to it, and
 // what left its output buses as taken out of it.
 // Each finding is `phase: 'sim'` and `certain` for its scenario, with the first tick of its condition; findings come by node
@@ -22,7 +26,7 @@
 
 import type { StuffKey } from '../../../../shared/keys.ts';
 import { fmtInt, fmtRate } from '../../../../shared/layout/format.ts';
-import { FEED_KINDS, STALL_TICKS, TICKS_PER_SECOND, SLOW_TOLERANCE, type FeedCode, type FeedFinding, type ScenarioName } from '../contract.ts';
+import { CHURN_ITEMS, FEED_KINDS, STALL_TICKS, TICKS_PER_SECOND, SLOW_TOLERANCE, type FeedCode, type FeedFinding, type ScenarioName } from '../contract.ts';
 import type { BenchNode, ChestNode, FeedModel, FeedNode, MultiNode, NodeId } from '../model.ts';
 import { listText } from '../text.ts';
 import type { KeyTable, SimInv } from './core.ts';
@@ -77,6 +81,36 @@ function emptyBench(): BenchRecord {
   return { moved: [], lost: [], crafts: [], refused: [], took: new Map() };
 }
 
+/** How many of one item a node has seen churn (Task 8 rule 10), and the tick that count reached `CHURN_ITEMS` (−1 before). */
+interface Tally { n: number; reached: number }
+
+/**
+ * What a run records about the Project Red payloads that concern one node (Task 8), by key: what bounced at it (sent to it,
+ * it did not all fit, and it circles its pipe), what lost its way to it and wanders, and (at an input bus) what an Item
+ * Extractor Chip pulled back out of it. Each payload is counted once.
+ */
+interface ChurnRecord { bounced: Map<number, Tally>; wandered: Map<number, Tally>; pulledBack: Map<number, Tally> }
+
+/** What a run records about one Project Red pipe (Task 8): its dispatch ticks, the items in the orders its broadcaster dropped, and what a restart took out of its send queue. */
+interface PipeRecord { dispatches: number[]; dropped: number; lost: number }
+
+/** Adds `n` of `key` at tick `t` to `tallies`. */
+function tally(tallies: Map<number, Tally>, key: number, n: number, t: number): void {
+  let s = tallies.get(key);
+  if (s === undefined) {
+    s = { n: 0, reached: -1 };
+    tallies.set(key, s);
+  }
+  s.n += n;
+  if (s.reached < 0 && s.n >= CHURN_ITEMS) s.reached = t;
+}
+
+function totalOf(tallies: ReadonlyMap<number, Tally> | undefined): number {
+  let n = 0;
+  for (const s of tallies?.values() ?? []) n += s.n;
+  return n;
+}
+
 /**
  * What a scenario run records, by node id. The models call the recorders as things happen (keys are `KeyTable` ids);
  * the readers turn ids back into keys. Nothing here depends on how often an entity ran, so a scheduled run and an
@@ -87,11 +121,31 @@ export class SimStats {
   readonly keys: KeyTable;
   private readonly nodes = new Map<NodeId, NodeRecord>();
   private readonly benches = new Map<NodeId, BenchRecord>();
+  private readonly churns = new Map<NodeId, ChurnRecord>();
+  private readonly pipes = new Map<NodeId, PipeRecord>();
   private readonly simulated = new Set<NodeId>();
   private readonly spills: Array<[NodeId, number]> = [];      // (node, key) in the order they first spilled
 
   constructor(keys: KeyTable) {
     this.keys = keys;
+  }
+
+  private churnOf(node: NodeId): ChurnRecord {
+    let r = this.churns.get(node);
+    if (r === undefined) {
+      r = { bounced: new Map(), wandered: new Map(), pulledBack: new Map() };
+      this.churns.set(node, r);
+    }
+    return r;
+  }
+
+  private pipeOf(pipe: NodeId): PipeRecord {
+    let r = this.pipes.get(pipe);
+    if (r === undefined) {
+      r = { dispatches: [], dropped: 0, lost: 0 };
+      this.pipes.set(pipe, r);
+    }
+    return r;
   }
 
   private of(node: NodeId): NodeRecord {
@@ -229,6 +283,42 @@ export class SimStats {
     if (!took.has(key)) took.set(key, t);
   }
 
+  /** Project Red: the routed pipe `pipe` dispatched a payload of `n` of `key` (the head of its send queue). */
+  dispatched(pipe: NodeId, key: number, n: number, t: number): void {
+    void key;
+    void n;
+    this.pipeOf(pipe).dispatches.push(t);
+  }
+
+  /** Project Red: `n` of `key` sent to `node` did not all go in; they keep their destination and circle its pipe (once per payload). */
+  bounced(node: NodeId, key: number, n: number, t: number): void {
+    tally(this.churnOf(node).bounced, key, n, t);
+  }
+
+  /** Project Red: `n` of `key` on their way to `node` lost their destination and found no other: they wander (once per payload). */
+  wandered(node: NodeId, key: number, n: number, t: number): void {
+    tally(this.churnOf(node).wandered, key, n, t);
+  }
+
+  /** Project Red: an Item Extractor Chip took `n` of `key` back out of the input bus `node` (research §3.2). */
+  pulledBack(node: NodeId, key: number, n: number, t: number): void {
+    tally(this.churnOf(node).pulledBack, key, n, t);
+  }
+
+  /** Project Red: the Item Broadcaster Chip on `pipe` dropped an order for `n` of `key`, which it could not extract (`timeOutOnFailedExtract`). */
+  prDropped(pipe: NodeId, key: number, n: number, t: number): void {
+    void key;
+    void t;
+    this.pipeOf(pipe).dropped += n;
+  }
+
+  /** Project Red: a restart lost `n` of `key` that waited in `pipe`'s send queue, which Project Red does not save. */
+  queueLost(pipe: NodeId, key: number, n: number, t: number): void {
+    void key;
+    void t;
+    this.pipeOf(pipe).lost += n;
+  }
+
   /** Records `inv`'s contents at the end of the run. */
   snapshot(inv: SimInv): void {
     const out: Array<[number, number] | null> = [];
@@ -279,6 +369,36 @@ export class SimStats {
     return [...(this.benches.get(node)?.crafts ?? [])];
   }
 
+  /** The ticks the routed pipe `pipe` dispatched a payload, in order. */
+  dispatches(pipe: NodeId): number[] {
+    return [...(this.pipes.get(pipe)?.dispatches ?? [])];
+  }
+
+  /** The items sent to `node` over Project Red that bounced and circle its pipe. */
+  bouncedTotal(node: NodeId): number {
+    return totalOf(this.churns.get(node)?.bounced);
+  }
+
+  /** The items on their way to `node` over Project Red that wander. */
+  wanderedTotal(node: NodeId): number {
+    return totalOf(this.churns.get(node)?.wandered);
+  }
+
+  /** The items Item Extractor Chips pulled back out of the input bus `node`. */
+  pulledBackTotal(node: NodeId): number {
+    return totalOf(this.churns.get(node)?.pulledBack);
+  }
+
+  /** The items in the orders the Item Broadcaster Chip on `pipe` dropped. */
+  droppedTotal(pipe: NodeId): number {
+    return this.pipes.get(pipe)?.dropped ?? 0;
+  }
+
+  /** The items restarts took out of `pipe`'s send queue. */
+  queueLostTotal(pipe: NodeId): number {
+    return this.pipes.get(pipe)?.lost ?? 0;
+  }
+
   /** @internal what `detect` reads */
   recordOf(node: NodeId): Readonly<NodeRecord> | undefined {
     return this.nodes.get(node);
@@ -287,6 +407,11 @@ export class SimStats {
   /** @internal what `detect` reads of a bench */
   benchRecordOf(node: NodeId): Readonly<BenchRecord> | undefined {
     return this.benches.get(node);
+  }
+
+  /** @internal what `detect` reads of Project Red's payloads at a node or an input bus */
+  churnRecordOf(node: NodeId): Readonly<ChurnRecord> | undefined {
+    return this.churns.get(node);
   }
 }
 
@@ -395,6 +520,7 @@ export function detect(model: FeedModel, stats: SimStats, run: { scenario: Scena
     if (own === undefined) return;
     if (node.kind === 'chest') {
       leaks(at, node, own);
+      churn(at, node);
       return;
     }
     const rec = node.kind === 'multi' ? withBuses(stats, node, own) : own;
@@ -517,7 +643,33 @@ export function detect(model: FeedModel, stats: SimStats, run: { scenario: Scena
       emit(at, node, 'feed_slow', `${node.label} gets ${model.nameOf(key)} at ${fmtRate(late / seconds)}/s, below the ${fmtRate(p.rate)}/s the plan needs`,
         { key, stepId: p.stepId, tick: since });
     }
+
+    churn(at, node);
   });
+
+  /**
+   * Task 8 rule 10, `feed_churn`, per item from the tick its count reached `CHURN_ITEMS`: what was sent to the node over Project
+   * Red, did not fit and circles its pipe; what lost its way to it and wanders; and what an Item Extractor Chip pulled back out
+   * of one of its input buses (bus by bus).
+   */
+  function churn(at: number, node: FeedNode): void {
+    const stepFor = (key: StuffKey): string | undefined => (node.kind === 'chest' ? undefined : node.recipes.find((r) => r.inputs.some((i) => i.key === key))?.stepId);
+    const each = (tallies: ReadonlyMap<number, Tally> | undefined, words: (n: string, item: string) => string): void => {
+      for (const [key, s] of [...(tallies ?? [])].sort((a, b) => a[0] - b[0])) {
+        if (s.reached < 0) continue;
+        const k = keyOf(key);
+        emit(at, node, 'feed_churn', words(fmtInt(s.n), name(key)), { key: k, stepId: stepFor(k), tick: s.reached, count: s.n });
+      }
+    };
+    const rec = stats.churnRecordOf(node.id);
+    each(rec?.bounced, (n, item) => `${n} ${item} sent to ${node.label} did not fit and circle its pipe, trying again every pipe length until there is room `
+      + '(its responder counted every empty slot as a stack, or a restart lost the count of what was on its way)');
+    each(rec?.wandered, (n, item) => `${n} ${item} lost their way and wander the routed pipes until a responder answers`);
+    if (node.kind !== 'multi') return;
+    for (const bus of node.inBuses) {
+      each(stats.churnRecordOf(bus.id)?.pulledBack, (n, item) => `${n} ${item} were pulled back out of ${bus.label} of ${node.label} by its Item Extractor Chip`);
+    }
+  }
 
   /** `${n}× ${name}` for each item of `events` by its total, the largest first (ties: key order), joined by ", ". */
   function countsText(events: ReadonlyArray<{ key: number; n: number }>): string {

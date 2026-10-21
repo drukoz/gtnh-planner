@@ -1,7 +1,7 @@
 // Fixtures for the feeding checker's tests (plan 21): the fixture pack with recipe maps and the machines and items the
 // feeding tests need, plans whose steps carry pack recipes (chances, held items, crafting grids), lines laid out by
 // main's `layoutLine` with or without a world, and hand-built models with test entities for the simulation (Tasks 4–6),
-// EnderIO lines among them (Task 7).
+// EnderIO lines (Task 7) and Project Red lines (Task 8) among them.
 // Every call returns fresh objects, so a test that changes its pack, plan, layout or model changes no other. Synthetic
 // only: invented names, apart from the GT class names, mteIds and item ids the code names; no real export or world is read.
 
@@ -12,11 +12,12 @@ import { FACES } from '../../src/shared/types/assets.ts';
 import type { ConduitMode, Layout, LayoutBlock } from '../../src/shared/types/layout.ts';
 import type { Ingredient, Item, Machine, MachineKind, Pack, Product, Recipe, StructureInfo } from '../../src/shared/types/pack.ts';
 import type { LogisticsMode, Plan, PlanFlow } from '../../src/shared/types/plan.ts';
+import type { RoutedChipSpec } from '../../src/server/layout/feeding/contract.ts';
 import { PART_KEYS } from '../../src/server/layout/feeding/facts.ts';
 import { compareLocal } from '../../src/server/layout/feeding/frame.ts';
 import type {
-  BasicNode, BenchNode, BusNode, ChestNode, EioFace, EioNet, FeedModel, FeedNode, GtCover, InvRef, MachineSettings, MultiNode, NodeId, OutBusNode,
-  SimRecipe,
+  BasicNode, BenchNode, BusNode, ChestNode, EioFace, FeedModel, FeedNode, GtCover, InvRef, MachineSettings, MultiNode, NodeId, OutBusNode,
+  RoutedPipe, SimRecipe,
 } from '../../src/server/layout/feeding/model.ts';
 import { insertEmpties, NEVER, PHASE, type SimEntity } from '../../src/server/layout/feeding/sim/core.ts';
 import type { SimEnv } from '../../src/server/layout/feeding/sim/machine.ts';
@@ -606,13 +607,26 @@ export function eioModel(nodes: FeedNode[], faces: EioFaceSpec[], links?: Array<
   }).sort((a, b) => compareLocal(cellOf(a.conduit), cellOf(b.conduit)) || a.side - b.side);
   // the conduit cells and their links
   const cells = [...new Set([...faces.map((f) => f.conduit), ...(links ?? []).flat()])];
+  return handModel(nodes, { mode: 'enderio', networks: [{ kind: 'enderio', faces: read, hops: hopsOver(cells, links) }] });
+}
+
+/**
+ * Breadth-first hops between `cells` (`hops[a][b]`, 0 from a cell to itself), linked as `links` lists them, else in a chain
+ * in the order `cells` gives them.
+ */
+function hopsOver(cells: readonly NodeId[], links: ReadonlyArray<readonly [NodeId, NodeId]> | undefined): Record<NodeId, Record<NodeId, number>> {
   const chain = links ?? cells.slice(1).map((c, i): [NodeId, NodeId] => [cells[i]!, c]);
   const next = new Map<NodeId, NodeId[]>(cells.map((c) => [c, []]));
+  const linksOf = (c: NodeId): NodeId[] => {
+    const list = next.get(c);
+    if (list === undefined) throw new Error(`a link names ${c}, which is not one of the network's cells`);
+    return list;
+  };
   for (const [a, b] of chain) {
-    next.get(a)!.push(b);
-    next.get(b)!.push(a);
+    linksOf(a).push(b);
+    linksOf(b).push(a);
   }
-  const hops: EioNet['hops'] = {};
+  const hops: Record<NodeId, Record<NodeId, number>> = {};
   for (const from of cells) {
     const dist: Record<NodeId, number> = { [from]: 0 };
     const queue = [from];
@@ -625,7 +639,25 @@ export function eioModel(nodes: FeedNode[], faces: EioFaceSpec[], links?: Array<
     }
     hops[from] = dist;
   }
-  return handModel(nodes, { mode: 'enderio', networks: [{ kind: 'enderio', faces: read, hops }] });
+  return hops;
+}
+
+// ---- Project Red lines (plan Task 8) ----
+
+/** A pipe of `prModel`'s network: its cell, its chips (a Routed Interface Pipe's; without them, a Routed Junction Pipe) and the inventory it serves. */
+export interface PrPipeSpec { id: NodeId; chips?: RoutedChipSpec[]; target?: InvRef }
+
+/**
+ * `handModel(nodes)` in routed mode with one Project Red network of `pipes`, linked in a chain in the order given unless `links`
+ * lists the links, hops breadth-first over them. A pipe with chips is a Routed Interface Pipe (`Routed Interface Pipe at x y z`)
+ * serving `target` (null when it gives none), one without a Routed Junction Pipe; the network lists them in local order.
+ */
+export function prModel(nodes: FeedNode[], pipes: PrPipeSpec[], links?: Array<[NodeId, NodeId]>): FeedModel {
+  const read = pipes.map((p): RoutedPipe => ({
+    id: p.id, label: `${p.chips === undefined ? 'Routed Junction Pipe' : 'Routed Interface Pipe'} at ${cellOf(p.id).join(' ')}`,
+    chips: structuredClone(p.chips ?? []), target: p.target === undefined ? null : { ...p.target },
+  })).sort((a, b) => compareLocal(cellOf(a.id), cellOf(b.id)));
+  return handModel(nodes, { mode: 'routed', networks: [{ kind: 'routed', pipes: read, hops: hopsOver(pipes.map((p) => p.id), links) }] });
 }
 
 /** A test entity (phase `feed`) that, at each of the ticks `at`, takes `n` out of the first stack of `target` that its side `side` lets out. */

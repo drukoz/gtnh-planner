@@ -1,15 +1,19 @@
-// One scenario run of the feeding simulation (plan `docs/superpowers/plans/2026-10-20-21-feeding-checker.md` Tasks 4–7):
+// One scenario run of the feeding simulation (plan `docs/superpowers/plans/2026-10-20-21-feeding-checker.md` Tasks 4–8):
 // `runScenario` builds the entities of a model for a scenario — one per node (GT basic machines and chests; a multiblock's
 // controller and each of its buses, Task 5; an Auto Workbench and its energy, Task 6), the networks' entities from
-// `NETWORK_MODELS` (EnderIO's, Task 7; Tasks 8–10 add the others) and a test's extra ones — runs them tick by tick and
-// turns what they recorded into findings (`detect`).
+// `NETWORK_MODELS` (EnderIO's, Task 7; Project Red's, Task 8; Tasks 9–10 add the others) and a test's extra ones — runs
+// them tick by tick and turns what they recorded into findings (`detect`).
 // - A network kind without a model is left out, with the unknown `not_simulated`; every node kind has its model.
 // - `env.push(from, side)` is what a GT transfer out of that side meets: the receiver a network registered at the
-//   neighbouring cell for that side, else the inventory of the node (or bus) there, else nothing.
+//   neighbouring cell for that side, else the inventory of the node (or bus) there, else nothing (a routed pipe too: it is
+//   no inventory).
 // - In `restart` the line's chunk loads again at the start of tick `restartAt` (rule 3a): every tile's timer and the
 //   covers' counter start again from there, every multiblock controller looks for a recipe (ruling R-17), and every
 //   bench's and every network's `restart()` runs.
 // - A bench's crafts are the runs of its first recipe's step, the one its grid is laid from (`SimStats.benchCrafted`).
+// - The run's unknowns: the stack sizes, an input chest of too many kinds and each network kind without a model, then the
+//   items dropped into the world, then what each network's model could not know (Project Red's lost send queues and
+//   wanderers), each in the order first met.
 // Pure TypeScript: nothing from node:* may be imported here.
 
 import { isFluidKey, type StuffKey } from '../../../../shared/keys.ts';
@@ -25,17 +29,22 @@ import { detect, SimStats, type Explain } from './detect.ts';
 import { enderioModel } from './enderio.ts';
 import { basicMachine, type SimEnv } from './machine.ts';
 import { multiblock } from './multi.ts';
+import { routedModel } from './routed.ts';
 import { inputChest, outputChest } from './storage.ts';
 
-/** What a network kind's model gives a run: its entities, its reasons, the push targets it registers at cells, and what a restart resets. */
+/**
+ * What a network kind's model gives a run: its entities, its reasons, the push targets it registers at cells, what a restart
+ * resets, and what the run left it unable to know (read once the run is over).
+ */
 export interface NetworkModel {
   entities: SimEntity[]; explain: Explain; receivers: Array<{ at: NodeId; side: number; target: PushTarget }>; restart?: () => void;
+  unknowns?: () => FeedUnknown[];
 }
 
 type NetworkModels = { [K in FeedNetwork['kind']]?: (net: Extract<FeedNetwork, { kind: K }>, env: SimEnv) => NetworkModel };
 
-/** The network models by kind: EnderIO's (Task 7); Project Red (Task 8), AE2 (Task 9) and GT pipes (Task 10) add theirs. */
-export const NETWORK_MODELS: NetworkModels = { enderio: enderioModel };
+/** The network models by kind: EnderIO's (Task 7) and Project Red's (Task 8); AE2 (Task 9) and GT pipes (Task 10) add theirs. */
+export const NETWORK_MODELS: NetworkModels = { enderio: enderioModel, routed: routedModel };
 
 export interface ScenarioOptions {
   ticks: number; restartAt: number; exhaustive?: boolean; ae2Coprocessors?: number; ae2FluidStock?: boolean; slowTolerance?: number;
@@ -183,6 +192,7 @@ export function runScenario(model: FeedModel, scenario: ScenarioName, opts: Scen
 
   // the networks
   const explains: Explain[] = [];
+  const models: NetworkModel[] = [];
   const unmodelled = new Set<FeedNetwork['kind']>();
   for (const net of model.networks) {
     const make = NETWORK_MODELS[net.kind] as ((n: FeedNetwork, e: SimEnv) => NetworkModel) | undefined;
@@ -194,6 +204,7 @@ export function runScenario(model: FeedModel, scenario: ScenarioName, opts: Scen
       continue;
     }
     const m = make(net, env);
+    models.push(m);
     entities.push(...m.entities);
     explains.push(m.explain);
     for (const r of m.receivers) receivers.set(`${r.at}|${r.side}`, r.target);
@@ -247,6 +258,7 @@ export function runScenario(model: FeedModel, scenario: ScenarioName, opts: Scen
     unknowns.push({ code: 'items_dropped', text: `${label} dropped ${fmtInt(n)} ${model.nameOf(key)} into the world: nothing at the side it pushes them out of `
       + 'takes them, so they are lost to the line', ...(node === undefined ? {} : at(node)) });
   }
+  for (const m of models) unknowns.push(...(m.unknowns?.() ?? []));
   return {
     name: scenario, ticks: opts.ticks, findings, stats, runs,
     out: Object.fromEntries([...out].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))), unknowns,
