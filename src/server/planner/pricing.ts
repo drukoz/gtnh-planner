@@ -8,7 +8,8 @@ import type { Pack } from '../../shared/types/pack.ts';
 import type { PlanContext, PlanSettings } from '../../shared/types/plan.ts';
 import { isBaseItem } from './availability.ts';
 import { basisContextKey, gatheredRecipesOn, planBasis, resolveAvoid, settingsHash, type PlanBasis } from './basis.ts';
-import { buildCandidates, type CandidateGraph, type LeafOracle } from './candidates.ts';
+import { benchLine } from './benches.ts';
+import { buildCandidates, type CandidateGraph, type CandidateOptions, type LeafOracle } from './candidates.ts';
 import { analyzeCosts, makeLeafOracle, type CostAnalysis } from './costs.ts';
 import { yieldToEventLoop } from './lp.ts';
 import { standaloneCosts, type Standalone } from './solve.ts';
@@ -134,6 +135,17 @@ export function aloneGraph(
   return buildCandidates(pack, s, basis.env, makeLeafOracle(pack, s, basis.avail, basis.prices), keys, avoid === undefined ? {} : { avoid });
 }
 
+/**
+ * The options of a walk of the line's own graph (`computePricing`, plan.ts's avoid trials): `opts` with the line's Auto
+ * Workbenches (`CandidateOptions.bench`, `benchLine`: crafting automated and one at the tier; controller ruling 214),
+ * which only the line's own graphs get — never the cost model, machine prices or build-material breakdowns, where
+ * crafting is the build list's one-off crafting by hand.
+ */
+export function lineWalk(pack: Pack, settings: PlanSettings, basis: PlanBasis, opts: CandidateOptions): CandidateOptions {
+  const bench = benchLine(pack, settings, basis.tier);
+  return bench === undefined ? opts : { ...opts, bench };
+}
+
 /** The line's target when it has one the export knows (an item or a fluid), else null. */
 export function plannableTarget(pack: Pack, settings: PlanSettings): StuffKey | null {
   const target = settings.target;
@@ -187,8 +199,10 @@ async function computePricing(
   const gatheredRecipes = gatheredRecipesOn(settings);
   const leafWith = (): LeafOracle =>
     makeLeafOracle(pack, settings, basis.avail, basis.prices, stopCost, (key) => priced.get(key), { supplied: basis.supplied, gatheredRecipes });
-  // Plan 12 (controller ruling OQ5 a): the step recipes no machine can run here are left out of every walk of the line.
-  const walk = unbuildable === undefined ? { pinAvoid } : { pinAvoid, unbuildable };
+  // Plan 12 (controller ruling OQ5 a): the step recipes no machine can run here are left out of every walk of the line;
+  // and with crafting automated (controller ruling 214) its walks offer the Auto Workbench's single-use tool variants and
+  // mark the crafting recipes no bench runs as crafted by hand (`lineWalk`).
+  const walk = lineWalk(pack, settings, basis, { pinAvoid, ...(unbuildable === undefined ? {} : { unbuildable }) });
   let leaf = leafWith();
   await yieldToEventLoop();
   let graph = buildCandidates(pack, settings, basis.env, leaf, [target], walk);

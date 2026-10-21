@@ -11,6 +11,7 @@
 
 import { isFluidKey, parseItemKey, type StuffKey } from '../../shared/keys.ts';
 import { fmtInt, joinNames } from '../../shared/layout/format.ts';
+import { basicInputSlots, ignoredByBlocking, PROGRAMMED_CIRCUIT_ITEM } from '../../shared/gt/feeding.ts';
 import { DIRS, posKey, step, type Vec3 } from '../../shared/layout/geometry.ts';
 import type { InterfaceSpec, ItemFilterSpec, RoutedChipSpec } from '../../shared/types/feed.ts';
 import type { Layout, LayoutBlock } from '../../shared/types/layout.ts';
@@ -19,7 +20,6 @@ import type { Plan, PlanFlow, PlanStep, PlanWarning } from '../../shared/types/p
 import { stepOneOffs } from '../planner/bom.ts';
 import { isAutoWorkbench } from '../planner/machine-options.ts';
 import { comparePos } from '../world/graph.ts';
-import { ignoredByBlocking } from './modes/ae2.ts';
 import { stepItemInputs, stepItemOutputs } from './modes/mode.ts';
 import { hasInputSeparation, manualReasonOf } from './multiblock-rules.ts';
 
@@ -27,27 +27,8 @@ export interface FeedRulesInput { pack: Pack; plan: Plan; layout: Pick<Layout, '
 
 // ---- GT basic machines' input slots ----
 
-/**
- * The input slots of a GT basic machine by its kind (`basicmachine.<kind>.tier.<nn>`) and tier, LV first, the last value
- * for every higher tier: read from GT 5.09.54.183's bytecode, `LoaderMetaTileEntities`' `setSlotsCount(in, out)` per
- * machine (the Packager's from the `MTEBoxinator` constructor). The export does not carry them yet (add-on 20).
- */
-const INPUT_SLOTS: Readonly<Record<string, number | readonly number[]>> = {
-  alloysmelter: 2, amplifab: 1, arcfurnace: 2, assembler: [6, 9], autoclave: 2, bender: 2, boxinator: 2, canner: 2, centrifuge: 2, chemicalbath: 1,
-  chemicalreactor: 2, circuitassembler: 6, compressor: 1, cutter: 2, distillery: 1, e_furnace: 1, e_oven: 1, electrolyzer: 2,
-  electromagneticseparator: 1, extractor: 1, extruder: 2, fermenter: 1, fluidcanner: 1, fluidextractor: 1, fluidheater: 1, fluidsolidifier: 1,
-  hammer: 1, laserengraver: [2, 2, 2, 4], lathe: 1, macerator: 1, microwave: 1, mixer: [6, 6, 6, 9], orewasher: 1, plasmaarcfurnace: 2,
-  polarizer: 1, press: [2, 2, 4, 4, 6], printer: 1, recycler: 1, sifter: 1, thermalcentrifuge: 1, unboxinator: 1, wiremill: 2,
-};
-
-/** A GT basic machine's input slots (`INPUT_SLOTS`), or null for a machine the table does not know. */
-export function basicInputSlots(m: Pick<Machine, 'metaName' | 'tier'>): number | null {
-  const kind = /^basicmachine\.([a-z_]+)\.tier\.\d+$/.exec(m.metaName)?.[1];
-  const slots = kind === undefined || !Object.hasOwn(INPUT_SLOTS, kind) ? undefined : INPUT_SLOTS[kind];
-  if (slots === undefined || m.tier === undefined || m.tier < 1) return null;
-  if (typeof slots === 'number') return slots;
-  return slots[Math.min(m.tier, slots.length) - 1] ?? null;
-}
+/** A GT basic machine's input slots (shared/gt/feeding.ts, which the planner reads too: controller ruling 214 (b)). */
+export { basicInputSlots };
 
 // ---- Words ----
 
@@ -75,8 +56,6 @@ function extractorFault(extractors: readonly RoutedChipSpec[]): string {
 }
 
 // ---- The line as the rules read it ----
-
-const CIRCUIT_ID = 'gregtech:gt.integrated_circuit';
 
 /**
  * A machine of a placed step: its block, step (the first of a shared machine's, `LayoutBlock.stepIds`: plan 12), every
@@ -186,7 +165,7 @@ function slotRules(line: Line, n: Node, pushes: boolean, raise: Raise): void {
   if (slots !== null) {
     const crowded = n.steps.map((s) => {
       const kinds = new Set(s.inputs.filter((p) => !isFluidKey(p.key)).map((p) => p.key)).size;
-      const held = stepOneOffs(pack, s).map((h) => h.key).filter((k) => parseItemKey(k).id !== CIRCUIT_ID);
+      const held = stepOneOffs(pack, s).map((h) => h.key).filter((k) => parseItemKey(k).id !== PROGRAMMED_CIRCUIT_ITEM);
       return { kinds, held, free: Math.max(0, slots - held.length) };
     }).find((r) => r.kinds > r.free);
     if (crowded !== undefined) {
@@ -293,7 +272,7 @@ function ae2Rules(line: Line, n: Node, raise: Raise): void {
       for (const { key, amount } of p.inputs) {
         if (isFluidKey(key)) unencodable(key, `lists ${nameOf(key)}, a fluid the line pipes: ME never holds it, so AE2 cannot plan with it`);
         else if (!Number.isInteger(amount)) unencodable(key, `holds ${amountText(amount)}× ${nameOf(key)}: a pattern holds whole items`);
-        else if (held.includes(key) || parseItemKey(key).id === CIRCUIT_ID) unencodable(key, `lists ${nameOf(key)}, which ${n.label} keeps and does not use up`);
+        else if (held.includes(key) || parseItemKey(key).id === PROGRAMMED_CIRCUIT_ITEM) unencodable(key, `lists ${nameOf(key)}, which ${n.label} keeps and does not use up`);
       }
       for (const { key, amount } of p.outputs) {
         if (isFluidKey(key)) unencodable(key, `makes ${nameOf(key)}, which the line pipes away: it never comes back to ME`);

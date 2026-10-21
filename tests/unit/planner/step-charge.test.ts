@@ -81,12 +81,14 @@ describe('the step charge', () => {
 describe('planLine and the step charge', () => {
   it('maps settings to solve options', () => {
     // Crafting-table steps run on the Auto Workbench by default (plan 12's ruling): a step like any other. The default is
-    // "Fewest machines", 0.5 (plan 12 fix wave 2).
-    expect(solveOptions(defaultSettings())).toEqual({ stepCharge: 0.5, handWeight: 1 });
+    // "Fewest machines", 0.5 (plan 12 fix wave 2). One no Auto Workbench runs is still crafted by hand, and weighs
+    // three steps in a running line (controller ruling 214, `byHandWeight`).
+    expect(solveOptions(defaultSettings())).toEqual({ stepCharge: 0.5, handWeight: 1, byHandWeight: 3 });
     const byHand: PlanSettings = { ...defaultSettings(), automateCrafting: false, stepCharge: 0.02 };
     expect(solveOptions(byHand)).toEqual({ stepCharge: 0.02, handWeight: 3 });
     expect(solveOptions({ ...byHand, mode: 'makeN' })).toEqual({ stepCharge: 0.02, handWeight: 1 });
-    expect(solveOptions({ ...byHand, automateCrafting: true })).toEqual({ stepCharge: 0.02, handWeight: 1 });
+    expect(solveOptions({ ...byHand, automateCrafting: true })).toEqual({ stepCharge: 0.02, handWeight: 1, byHandWeight: 3 });
+    expect(solveOptions({ ...byHand, automateCrafting: true, mode: 'makeN' })).toEqual({ stepCharge: 0.02, handWeight: 1 });
     expect(solveOptions({ ...byHand, stepCharge: 0 })).toEqual({ stepCharge: 0, handWeight: 3 });
     // A project stored before the setting existed plans with the default.
     const { stepCharge: _, ...old } = defaultSettings();

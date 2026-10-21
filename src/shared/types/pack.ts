@@ -52,6 +52,12 @@ export interface Recipe {
     // optional addition (add-on 17): on a `gt.recipe.treefarm` row, the Tree Growth Simulator mode of each item output
     /** `tgsModes[k]` is the mode whose tool makes `outputs[k]`: the mode of the output's slot in the export (farm.ts). */
     tgsModes?: TgsMode[];
+    // optional addition (plan 12, controller ruling 214 (a)): what the loader made a bench variant (server/pack/bench-tools.ts)
+    /**
+     * The id of the crafting-table recipe this one is the GGFab single-use variant of: its tool slots are consumed inputs
+     * of the single-use tools, one a craft, so GT++'s Auto Workbench, the only machine that runs it, keeps crafting.
+     */
+    benchVariantOf?: string;
     [k: string]: unknown;
   };
   flags: {

@@ -282,6 +282,57 @@ export function withAutoWorkbenches(spec: PackSpec, tiers: readonly number[], op
   });
 }
 
+/** GGFab's Single Use File as the 2.9 export keys it (bench-tools.ts reads its id and its `craftingTool…` ore name). */
+export const SINGLE_USE_FILE = 'ggfab:gt.ggfab.d1@0';
+
+/**
+ * Mini-GT with the LV and MV Auto Workbenches (`withAutoWorkbenches`) and tool recipes (plan 12 Task 6, controller ruling
+ * 214): items Iron Rod (`t:rod@0`), Iron Mash (`t:mash@0`), a File (`t:file@0`) and a Mortar (`t:mortar@0`) — tools —
+ * and GGFab's Single Use File (`SINGLE_USE_FILE`, ore name `craftingToolFile`), which the Basic Assembler makes 64 at a
+ * time from an iron ingot (`make-file`, 16 EU/t × 20 t); crafting recipes `rod-file` (an iron ingot and a file slot that
+ * takes the Single Use File or the File, held: the loader gives it a bench variant) and `mash-mortar` (an iron ingot and
+ * a Mortar, held: GGFab has no single-use mortar); the Basic Macerator (141, built here from 4 iron ingots) and its
+ * `mash-mill` (6 iron ingots → 5 mash, 2 EU/t × 40 t). With `mill: false` no `mash-mill`.
+ */
+export function benchToolSpec(opts: { mill?: boolean } = {}): PackSpec {
+  const spec = withBuildRecipes(withAutoWorkbenches(MINI_GT, [1, 2]), [141], [['t:iron_ingot@0', 4]]);
+  return extended(spec, {
+    items: [
+      { key: 't:rod@0', name: 'Iron Rod' }, { key: 't:mash@0', name: 'Iron Mash' }, { key: 't:file@0', name: 'File' },
+      { key: 't:mortar@0', name: 'Mortar' }, { key: SINGLE_USE_FILE, name: 'Single Use File', oreDict: ['craftingToolFile'] },
+    ],
+    recipes: [
+      { id: 'make-file', map: 'gt.recipe.assembler', in: [['t:iron_ingot@0', 1]], out: [[SINGLE_USE_FILE, 64]], eut: 16, dur: 20 },
+      { id: 'rod-file', map: 'crafting', in: [{ ncAny: [SINGLE_USE_FILE, 't:file@0'] }, ['t:iron_ingot@0', 1]], out: [['t:rod@0', 1]] },
+      { id: 'mash-mortar', map: 'crafting', in: [{ nc: 't:mortar@0' }, ['t:iron_ingot@0', 1]], out: [['t:mash@0', 1]] },
+      ...(opts.mill === false ? [] : [{ id: 'mash-mill', map: 'gt.recipe.macerator', in: [['t:iron_ingot@0', 6]], out: [['t:mash@0', 5]], eut: 2, dur: 40 } satisfies RecipeSpec]),
+    ],
+  });
+}
+
+/** Nine goods a Mini-GT line gets at LV without a step (`gizmoSpec`): a crafting recipe of all nine fills a bench. */
+export const NINE_KINDS: readonly StuffKey[] = [
+  't:iron_ingot@0', 't:copper_ingot@0', 't:tin_ingot@0', 't:redstone@0', 't:iron_dust@0', 't:copper_dust@0', 't:tin_dust@0', 'minecraft:log@0',
+  'minecraft:cobblestone@0',
+];
+
+/**
+ * Mini-GT with the LV and MV Auto Workbenches and a Gizmo (`t:gizmo@0`) crafted from one each of `NINE_KINDS` (`gizmo`,
+ * a shapeless crafting recipe): one craft needs all nine of a bench's input slots, so no Project Red or EnderIO line can
+ * keep its stock safely (plan 12 Task 6, controller ruling 214 (c)). Copper Dust and Tin Dust are new base items of
+ * their materials.
+ */
+export function gizmoSpec(): PackSpec {
+  return extended(withAutoWorkbenches(MINI_GT, [1, 2]), {
+    items: [
+      { key: 't:gizmo@0', name: 'Gizmo' },
+      { key: 't:copper_dust@0', name: 'Copper Dust', gt: { prefix: 'dust', material: 'Copper' } },
+      { key: 't:tin_dust@0', name: 'Tin Dust', gt: { prefix: 'dust', material: 'Tin' } },
+    ],
+    recipes: [craft('gizmo', NINE_KINDS.map((key): [string, number] => [key, 1]), 't:gizmo@0')],
+  });
+}
+
 /**
  * A machine option of the build-cost MIP's tests (Task 4): a `basic` machine `M<mteId>` that can be added, at `tier`,
  * doing `perMachine` runs a second, `build` raw to build (null: no price), `owned` of it owned, weighed at `solveBuild`

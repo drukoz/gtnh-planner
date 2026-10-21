@@ -9,6 +9,7 @@
 // build-cost MIP weighs these options (plan 12 Task 4), and `planLine` walks a line again without its blocked recipes
 // (Task 5).
 
+import { basicInputSlots, ignoredByBlocking } from '../../shared/gt/feeding.ts';
 import { multiblockOverclock, singleblockOverclock, voltageTier, type MachineOc } from '../../shared/gt/overclock.ts';
 import { V } from '../../shared/gt/tiers.ts';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
@@ -21,14 +22,13 @@ import type { PlanBasis } from './basis.ts';
 import { cleanroomMachine } from './bom.ts';
 import { buildKeys, gapText, hatchSet, itemPrices, machineBuildCost, machineGap, type ItemPrices, type PriceGap } from './build-cost.ts';
 import { acceptRecipe, type CandidateGraph, type LpRecipe } from './candidates.ts';
+import { autoWorkbenches, benchCapBy, benchRefusal, isAutoWorkbench } from './benches.ts';
 import { ownedPools, recipeCircuit } from './owned.ts';
 
 const TICKS_PER_SECOND = 20;
 const SECONDS_PER_HOUR = 3600;
 /** Step recipes one AE2 pool runs at most (controller Amendment OQ6): the processing patterns of one ME Interface. */
 export const AE2_POOL_MAX_PATTERNS = 9;
-/** GT++'s Electric Auto Workbench, by its simple class name (architecture §11.19): mteIds 31091–31098, LV–UV, on 2.9. */
-const AUTO_WORKBENCH_CLASS = 'MTEElectricAutoWorkbench';
 /** EU one craft of the Auto Workbench draws in its "Normal Crafting Table" mode (gt-mechanics §8). */
 const AUTO_WORKBENCH_EU_PER_CRAFT = 2048;
 
@@ -53,6 +53,14 @@ export interface MachineOption {
    * a pricing gap.
    */
   unbuildable?: string;
+  // optional addition (plan 12, controller ruling 214 (b))
+  /**
+   * The step recipe's id when it may share no machine of this option with another recipe: the item kinds one run uses up
+   * do not fit the machine's own input slots at its tier less the items the recipe holds there (`basicInputSlots`; an AE2
+   * interface on blocking mode pushes one recipe's set at a time, research machine-feeding §3.3). `poolKey` holds it, so
+   * the recipe's pool on the option is its own. Absent where it fits, or on a machine the slot table does not know.
+   */
+  ownPool?: string;
 }
 
 /** Where one owned machine stands (ruling P11: the existing `MachineWhere`). */
@@ -116,6 +124,13 @@ export interface MachineOptionEnv {
   groupTier: number; coilHeat: number; multiblocks?: ReadonlySet<number>; owned: ReadonlyMap<number, number>; prices: ItemPrices; pin?: number;
   /** `PlanSettings.automateCrafting`: crafting-table steps run on the Auto Workbench (rule 1); absent = by hand. */
   automateCrafting?: boolean;
+  // optional addition (plan 12, controller ruling 214 (c))
+  /**
+   * The logistics that keep a stock at an Auto Workbench on the line (`benchCapBy`: Project Red, EnderIO): a crafting
+   * recipe whose least stock cannot fit its safe input slots gets no Auto Workbench (rule 1). Absent: AE2, machine to
+   * machine.
+   */
+  benchCapBy?: string;
   /** The stand-in build of a pricing-gap option of this kind and tier (default: 0). */
   standIn?: (kind: MachineOption['kind'], tier: number) => number;
   /** Rules 1–4 only. */
@@ -151,10 +166,6 @@ function tierOf(m: Machine): number {
   return m.tier ?? 0;
 }
 
-function simpleName(m: Machine): string {
-  return m.cls.slice(m.cls.lastIndexOf('.') + 1);
-}
-
 /** A programmed circuit (`gregtech:gt.integrated_circuit@<n>`), which the circuit part of a sharing key stands for. */
 function isProgrammedCircuit(key: StuffKey): boolean {
   if (isFluidKey(key)) return false;
@@ -181,21 +192,43 @@ function distinctSorted(keys: Iterable<string>): string[] {
  * makes>` (each distinct, sorted, joined by ","): a basic machine has one input and one output tank and a fluid hatch
  * holds one fluid, so steps on different fluids never share (review). A crafting-table recipe also ends in
  * `|recipe:<id>`: the Auto Workbench crafts the 3×3 pattern set in its GUI and never switches recipes by itself
- * (gt-mechanics §8), so two crafting recipes never share one. `held` is the graph recipe's `LpRecipe.nonConsumed`.
+ * (gt-mechanics §8), so two crafting recipes never share one. With the pack (every planning caller passes it), so does
+ * a recipe holding an item AE2's blocking mode does not ignore (`ignoredByBlocking`: the Packager's schematic, a GGFab
+ * mold, a cast): a shared machine needs blocking mode, which never pushes into a machine holding one, so such a recipe
+ * never shares one (controller ruling 214 (b)). `held` is the graph recipe's `LpRecipe.nonConsumed`.
  */
-export function sharingKey(r: Recipe, held: readonly StuffKey[]): string {
+export function sharingKey(r: Recipe, held: readonly StuffKey[], pack?: Pack): string {
   const items = distinctSorted(held.filter((key) => !isFluidKey(key) && !isProgrammedCircuit(key)));
   let key = `${recipeCircuit(r) ?? '-'}|${items.join(',')}`;
   const fluidsIn = distinctSorted(r.inputs.flatMap((ing) => fluidSlot(ing.options) ?? []));
   const fluidsOut = distinctSorted(r.outputs.filter((p) => isFluidKey(p.key)).map((p) => p.key));
   if (fluidsIn.length > 0 || fluidsOut.length > 0) key += `|${fluidsIn.join(',')}|${fluidsOut.join(',')}`;
-  if (r.maps.includes('crafting')) key += `|recipe:${r.id}`;
+  const unblocked = pack !== undefined && items.some((item) => !ignoredByBlocking(pack, item));
+  if (r.maps.includes('crafting') || unblocked) key += `|recipe:${r.id}`;
   return key;
 }
 
-/** The sharing pool of a step on option `o`: `<mteId>:<tier>:<hatches ?? ''>|<key>`. */
+/**
+ * The sharing pool of a step on option `o`: `<mteId>:<tier>:<hatches ?? ''>|<key>`, and `|own:<recipe id>` for an option
+ * its recipe may share with no other (`MachineOption.ownPool`).
+ */
 export function poolKey(o: MachineOption, key: string): string {
-  return `${o.mteId}:${o.tier}:${o.hatches ?? ''}|${key}`;
+  return `${o.mteId}:${o.tier}:${o.hatches ?? ''}|${key}${o.ownPool === undefined ? '' : `|own:${o.ownPool}`}`;
+}
+
+/**
+ * Whether the item kinds one run of `r` uses up fit the input slots of `m` at its own tier less the items `r` holds there
+ * (its not-consumed item slots but the programmed circuit, which has a ghost slot of its own; research machine-feeding
+ * §1.1.1, §3.3): a slot each, consumed slots of the same options one kind. True for a machine `basicInputSlots` does not
+ * know (a multiblock's buses, a steam machine, the Auto Workbench).
+ */
+export function kindsFitSlots(r: Recipe, m: Machine): boolean {
+  const slots = basicInputSlots(m);
+  if (slots === null) return true;
+  const items = r.inputs.filter((ing) => ing.options.length > 0 && !ing.options.some((o) => isFluidKey(o.key)));
+  const held = items.filter((ing) => !ing.consumed && !ing.options.every((o) => isProgrammedCircuit(o.key))).length;
+  const kinds = new Set(items.filter((ing) => ing.consumed).map((ing) => ing.options.map((o) => o.key).sort().join('|'))).size;
+  return kinds <= slots - held;
 }
 
 const RECIPES_OF_MAP = new WeakMap<Pack, ReadonlyMap<string, readonly Recipe[]>>();
@@ -236,7 +269,7 @@ function poolGroups(pack: Pack, graph: CandidateGraph): StepRecipe[][] {
   const groups = new Map<string, StepRecipe[]>();
   for (const step of stepRecipes(pack, graph)) {
     if (step.mapId === 'furnace') continue;
-    const id = `${step.mapId}\u0000${sharingKey(step.r, step.lp.nonConsumed)}`;
+    const id = `${step.mapId}\u0000${sharingKey(step.r, step.lp.nonConsumed, pack)}`;
     const group = groups.get(id);
     if (group === undefined) groups.set(id, [step]);
     else group.push(step);
@@ -281,27 +314,10 @@ export function ae2Parts(pack: Pack, graph: CandidateGraph): Map<string, number>
 interface Offer { m: Machine; tier: number; kind: MachineOption['kind'] }
 
 /** What rules 1–3 read. */
-type OfferEnv = Pick<MachineOptionEnv, 'groupTier' | 'multiblocks' | 'owned' | 'automateCrafting'>;
+type OfferEnv = Pick<MachineOptionEnv, 'groupTier' | 'multiblocks' | 'owned' | 'automateCrafting' | 'benchCapBy'>;
 
-const AUTO_WORKBENCHES = new WeakMap<Pack, readonly Machine[]>();
-
-/**
- * Whether `m` is GT++'s Electric Auto Workbench (`AUTO_WORKBENCH_CLASS`): the machine crafting-table steps run on (rule 1),
- * which Plan 5's layout lays with its own feeding (an Auto Workbench takes any item into any input slot).
- */
-export function isAutoWorkbench(m: Machine | undefined): boolean {
-  return m !== undefined && simpleName(m) === AUTO_WORKBENCH_CLASS;
-}
-
-/** The pack's Electric Auto Workbenches (`isAutoWorkbench`), by tier then mteId; once per pack. */
-function autoWorkbenches(pack: Pack): readonly Machine[] {
-  let list = AUTO_WORKBENCHES.get(pack);
-  if (list === undefined) {
-    list = [...pack.machines.values()].filter(isAutoWorkbench).sort((a, b) => tierOf(a) - tierOf(b) || a.mteId - b.mteId);
-    AUTO_WORKBENCHES.set(pack, list);
-  }
-  return list;
-}
+/** Whether `m` is GT++'s Electric Auto Workbench (benches.ts, where the planner's bench rules live). */
+export { isAutoWorkbench };
 
 /** `lo`, `lo + 1`, … `hi`. */
 function tiersFrom(lo: number, hi: number): number[] {
@@ -318,6 +334,9 @@ function offersFor(pack: Pack, r: Recipe, mapId: string, env: OfferEnv): Offer[]
   if (mapId === 'furnace') return [];
   if (mapId === 'crafting') {
     if (env.automateCrafting !== true) return [];
+    // controller ruling 214: a recipe no bench runs (a tool slot; a stock past its safe slots where the line keeps one) is
+    // crafted by hand
+    if (benchRefusal(pack, r, env.benchCapBy === undefined ? {} : { capBy: env.benchCapBy }) !== undefined) return [];
     return autoWorkbenches(pack).filter((m) => tierOf(m) <= env.groupTier).map((m) => ({ m, tier: tierOf(m), kind: 'basic' }));
   }
   const machines = (pack.machinesByMap.get(mapId) ?? []).flatMap((id) => pack.machines.get(id) ?? []);
@@ -381,6 +400,7 @@ function optionOf(pack: Pack, r: Recipe, mapId: string, offer: Offer, env: Machi
     owned: env.owned.get(m.mteId) ?? 0, solveBuild: build ?? env.standIn?.(kind, tier) ?? 0, canAdd: true,
   };
   if (kind === 'multiblock') option.hatches = hatchesText(hatchSet(pack, m, r, tier));
+  if (kind === 'basic' && !kindsFitSlots(r, m)) option.ownPool = r.id;
   const why = build === null ? unbuildableText(pack, m, machineGap(pack, env.prices, m, use), env.groupTier) : undefined;
   if (why !== undefined) {
     option.unbuildable = why;
@@ -471,7 +491,8 @@ export function machineOptions(pack: Pack, r: Recipe, mapId: string, env: Machin
  * recipe's Auto Workbenches only with `automateCrafting` — distinct, by mteId: what `lineBuildModel` prices.
  */
 export function optionMachines(
-  pack: Pack, graph: CandidateGraph, env: { groupTier: number; multiblocks?: ReadonlySet<number>; automateCrafting?: boolean }, owned: ReadonlyMap<number, number>,
+  pack: Pack, graph: CandidateGraph, env: { groupTier: number; multiblocks?: ReadonlySet<number>; automateCrafting?: boolean; benchCapBy?: string },
+  owned: ReadonlyMap<number, number>,
 ): Machine[] {
   const byId = new Map<number, Machine>();
   for (const { r, mapId } of stepRecipes(pack, graph)) for (const { m } of offersFor(pack, r, mapId, { ...env, owned })) byId.set(m.mteId, m);
@@ -491,7 +512,8 @@ export function optionMachines(
 export async function lineBuildModel(pack: Pack, graph: CandidateGraph, basis: PlanBasis, settings: PlanSettings, ctx: PlanContext): Promise<BuildModel> {
   const pools = ownedPools(ctx, settings);
   const owned: ReadonlyMap<number, number> = new Map([...pools].map(([mteId, units]) => [mteId, units.length]));
-  const offerEnv = { groupTier: basis.tier, multiblocks: basis.env.multiblocks, automateCrafting: settings.automateCrafting };
+  const capBy = benchCapBy(settings.logistics);
+  const offerEnv = { groupTier: basis.tier, multiblocks: basis.env.multiblocks, automateCrafting: settings.automateCrafting, ...(capBy === undefined ? {} : { benchCapBy: capBy }) };
   const steps = stepRecipes(pack, graph);
   const machines = optionMachines(pack, graph, offerEnv, owned);
   const room = steps.some((s) => s.lp.needsCleanroom) ? cleanroomMachine(pack) : undefined;
@@ -582,7 +604,7 @@ export async function lineBuildModel(pack: Pack, graph: CandidateGraph, basis: P
   const keys = new Map<string, string>();
   for (const { lp, r } of steps) {
     const part = parts?.get(lp.id) ?? 0;
-    keys.set(lp.id, `${sharingKey(r, lp.nonConsumed)}${part > 0 ? `#${part}` : ''}`);
+    keys.set(lp.id, `${sharingKey(r, lp.nonConsumed, pack)}${part > 0 ? `#${part}` : ''}`);
   }
   const horizonSeconds = settings.mode === 'makeN' || settings.buildHorizonHours === null
     ? null : (settings.buildHorizonHours ?? DEFAULT_BUILD_HORIZON_HOURS) * SECONDS_PER_HOUR;

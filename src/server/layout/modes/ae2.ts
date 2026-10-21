@@ -26,7 +26,8 @@
 // machine gets its interface on its middle-row side but no cover, as GT allows none on it (architecture §11 entry 48;
 // by-hand.ts says what is then moved by hand).
 
-import { isFluidKey, parseItemKey, type StuffKey } from '../../../shared/keys.ts';
+import { ignoredByBlocking } from '../../../shared/gt/feeding.ts';
+import { isFluidKey, type StuffKey } from '../../../shared/keys.ts';
 import { fmtInt, joinNames } from '../../../shared/layout/format.ts';
 import { posKey, sideToward, type Vec3 } from '../../../shared/layout/geometry.ts';
 import { FACES } from '../../../shared/types/assets.ts';
@@ -49,23 +50,11 @@ const DEFAULT_CHANNELS_MAX = 8;
 
 // ---- What AE2 can count (research machine-feeding §2.3, §3.5) ----
 
-const CIRCUIT_ID = 'gregtech:gt.integrated_circuit';
-const GT_META_ITEM = 'gregtech:gt.metaitem.01';
-/** The `gt.metaitem.01` metas GT registers with AE2's blocking-ignore list: its 31 molds, 28 extruder shapes and 2 slicer blades. */
-const IGNORED_META_RANGES: ReadonlyArray<readonly [number, number]> = [[32301, 32331], [32350, 32377], [32398, 32399]];
-
 /**
- * Whether AE2's blocking mode ignores `key` in a machine (GT 5.09.54 `AE2Compat.registerBlockingModeIgnoreItems`, read in
- * its bytecode: every programmed circuit, the 61 shape items above, BartWorks' and GT's lenses and a few named lenses):
- * the programmed circuit, those metas, and any item of GT's `lens` prefix.
+ * Whether AE2's blocking mode ignores `key` in a machine (shared/gt/feeding.ts, which the planner reads too: controller
+ * ruling 214 (b)).
  */
-export function ignoredByBlocking(pack: Pack, key: StuffKey): boolean {
-  if (isFluidKey(key)) return false;
-  const { id, meta } = parseItemKey(key);
-  if (id === CIRCUIT_ID) return true;
-  if (id === GT_META_ITEM && IGNORED_META_RANGES.some(([lo, hi]) => meta >= lo && meta <= hi)) return true;
-  return pack.items.get(key)?.gt?.prefix === 'lens';
-}
+export { ignoredByBlocking };
 
 /** "1× A" amounts summed per key, in first-seen order. */
 function summed(list: ReadonlyArray<{ key: StuffKey; amount: number }>): Array<{ key: StuffKey; amount: number }> {

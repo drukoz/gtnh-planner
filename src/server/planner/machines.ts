@@ -383,7 +383,9 @@ export function pickStepMachines(
       continue;
     }
     const wantTier = Object.hasOwn(settings.machineTier, id) ? settings.machineTier[id] : undefined;
-    const pick = pickMachine(pack, recipe, lp.mapId, { groupTier, wantTier, coilHeat, automateCrafting: settings.automateCrafting, owned, multiblocks });
+    // a crafting-table recipe no Auto Workbench of the line runs is crafted by hand (`LpRecipe.byHand`, controller ruling 214)
+    const automateCrafting = settings.automateCrafting && lp.byHand === undefined;
+    const pick = pickMachine(pack, recipe, lp.mapId, { groupTier, wantTier, coilHeat, automateCrafting, owned, multiblocks });
     picked.push({ id, runs: n, lp, mapId: lp.mapId, recipe, pick });
   }
   return picked;
@@ -462,6 +464,8 @@ export function emptyContainers(pack: Pack): ReadonlySet<StuffKey> {
 export function machineWarnings(lp: LpRecipe, pick: MachinePick, runsPerSecond: number): string[] {
   const warnings: string[] = [];
   if (lp.needsCleanroom) warnings.push('Needs a cleanroom');
+  // why no Auto Workbench crafts it although the line's crafting is automated (controller ruling 214, user ruling 180 (d))
+  if (pick.handCraft && lp.byHand !== undefined) warnings.push(`Crafted by hand: it ${lp.byHand}`);
   if (pick.handCraft && runsPerSecond > HAND_CRAFT_RUNS_PER_SECOND) {
     warnings.push('More than one craft per second by hand — consider automating it');
   }
@@ -741,14 +745,15 @@ function ownOutputWarning(machineName: string): string {
  * one machine, where one of the two takes an item the other makes (`feedsEither`): Project Red's extractor never routes
  * an item back to the machine it came from, so one machine for both needs AE2.
  */
-function keptApart(picked: readonly PickedRecipe[]): Set<string> {
+function keptApart(pack: Pack, picked: readonly PickedRecipe[]): Set<string> {
   const apart = new Set<string>();
-  const decided = picked.flatMap((p) => (p.decided === undefined ? [] : [{ p, o: p.decided.option, key: sharingKey(p.recipe, p.lp.nonConsumed) }]));
+  // the pool each would join on AE2: option and sharing key (`poolKey`, which holds a recipe that may share with none)
+  const decided = picked.flatMap((p) => (p.decided === undefined ? [] : [{ p, pool: poolKey(p.decided.option, sharingKey(p.recipe, p.lp.nonConsumed, pack)) }]));
   for (let i = 0; i < decided.length; i++) {
     const a = decided[i] as (typeof decided)[number];
     for (let j = i + 1; j < decided.length; j++) {
       const b = decided[j] as (typeof decided)[number];
-      if (a.o.mteId !== b.o.mteId || a.o.tier !== b.o.tier || (a.o.hatches ?? '') !== (b.o.hatches ?? '') || a.key !== b.key) continue;
+      if (a.pool !== b.pool) continue;
       if (!feedsEither(a.p.recipe, b.p.recipe)) continue;
       apart.add(a.p.id);
       apart.add(b.p.id);
@@ -804,7 +809,7 @@ export function planSteps(
     }
     if (a.pool !== undefined) poolSteps.set(a.pool, [...(poolSteps.get(a.pool) ?? []), p.id]);
   }
-  const apart = model !== undefined && settings.mode === 'rate' && settings.logistics === 'routed' ? keptApart(picked) : new Set<string>();
+  const apart = model !== undefined && settings.mode === 'rate' && settings.logistics === 'routed' ? keptApart(pack, picked) : new Set<string>();
 
   return picked.map((p) => {
     const runsPerSecond = p.runs * perSecondScale;

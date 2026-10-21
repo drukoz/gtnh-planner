@@ -9,6 +9,7 @@ import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import type { Ingredient, Pack, Recipe } from '../../shared/types/pack.ts';
 import type { LeafClass, PlanSettings, PlanWarning } from '../../shared/types/plan.ts';
 import { PROGRAMMED_CIRCUIT_ID } from '../pack/recipes.ts';
+import { benchRefusal, isBenchVariant, type BenchLine } from './benches.ts';
 
 export interface PlanEnv {
   tier: number; reachable: ReadonlySet<string> /* DimensionInfo.key and Capability.key */; lowGravity: boolean; coilHeat: number; excluded: ReadonlySet<string>;
@@ -27,9 +28,12 @@ export interface PlanEnv {
 /**
  * `fuel`: the recipe only burns its inputs in a generator (a fuel map, or one run by generators, boilers or turbines).
  * `machine` (plan 12, controller ruling OQ5 a): no machine that can run it can be built here and none is owned
- * (`CandidateOptions.unbuildable`); only `buildCandidates` gives it, never `acceptRecipe`.
+ * (`CandidateOptions.unbuildable`); only `buildCandidates` gives it, never `acceptRecipe`. `bench` (plan 12, controller
+ * ruling 214 (a)): a GGFab single-use variant of a tool recipe (`Recipe.meta.benchVariantOf`) where no Auto Workbench runs
+ * it (crafting by hand, none at the tier, or a line whose bench cannot keep its stock: `benchRefusal`); it is no way of
+ * its own there, as its original is the hand way.
  */
-export type Rejection = 'fake' | 'opaque' | 'excluded' | 'vanilla-furnace' | 'low-gravity' | 'heat' | 'tier' | 'no-machine' | 'multiblock' | 'fuel' | 'machine';
+export type Rejection = 'fake' | 'opaque' | 'excluded' | 'vanilla-furnace' | 'low-gravity' | 'heat' | 'tier' | 'no-machine' | 'multiblock' | 'fuel' | 'machine' | 'bench';
 export type Acceptance = { ok: true; mapId: string } | { ok: false; why: Rejection; needTier?: number };
 
 export interface LpRecipe {
@@ -48,6 +52,14 @@ export interface LpRecipe {
    * source of free input, which the loop guard never takes for a loop (solve.ts `sourceColumns`).
    */
   supply?: true;
+  // optional addition (plan 12, controller ruling 214; user ruling 180 (d))
+  /**
+   * A crafting-table recipe no Auto Workbench of the line runs although its crafting is automated
+   * (`CandidateOptions.bench`): why, in plain words (`benchRefusal`: "needs a Mortar, which an Auto Workbench cannot keep
+   * using"). It is crafted by hand: the step charge weighs it as a step by hand (`SolveOptions.byHandWeight`) and its step
+   * says why.
+   */
+  byHand?: string;
 }
 export interface LeafDecision {
   buyable: boolean; cost: number; leafClass: LeafClass | null /* null = not a leaf, must be made */;
@@ -334,10 +346,15 @@ function judgeMap(pack: Pack, r: Recipe, mapId: string, env: PlanEnv): MapVerdic
   return { ok: false, hasMachine: t.basicTiers.length > 0 || hasMultiblock, heat, unbuilt, needTier };
 }
 
-/** Whether the group can run `r` at `env.tier` where it is, and on which map (the first that works, by map id). */
-export function acceptRecipe(pack: Pack, r: Recipe, env: PlanEnv): Acceptance {
+/**
+ * Whether the group can run `r` at `env.tier` where it is, and on which map (the first that works, by map id). A GGFab
+ * single-use variant of a tool recipe runs only on an Auto Workbench of `bench` (the line's, `benchLine`) that can keep
+ * its stock (`benchRefusal`), else it is rejected as `bench` (plan 12, controller ruling 214 (a)).
+ */
+export function acceptRecipe(pack: Pack, r: Recipe, env: PlanEnv, bench?: BenchLine): Acceptance {
   if (r.flags.fake === true) return { ok: false, why: 'fake' };
   if (r.flags.opaque === true) return { ok: false, why: 'opaque' };
+  if (isBenchVariant(r) && (bench === undefined || benchRefusal(pack, r, bench) !== undefined)) return { ok: false, why: 'bench' };
   for (const [name, rule] of Object.entries(EXCLUSION_RULES)) {
     if (env.excluded.has(name) && rule(r, pack)) return { ok: false, why: 'excluded' };
   }
@@ -798,6 +815,14 @@ export interface CandidateOptions {
    * place; a good left with none names that reason in its `blocked` entry (`machine`). Absent = none.
    */
   unbuildable?: ReadonlyMap<string, string>;
+  // optional addition (plan 12, controller ruling 214)
+  /**
+   * The line's Auto Workbenches (`benchLine`: crafting automated, one at the tier), for the line's own walks only: the
+   * GGFab single-use variants of tool recipes they run are candidates (`acceptRecipe`), a variant and its original count
+   * as one producer where the walk keeps the cheapest, and a crafting-table recipe none of them runs is marked
+   * `LpRecipe.byHand` with why. Absent: no variant is a candidate and nothing is marked (the cost model, prices, breakdowns).
+   */
+  bench?: BenchLine;
 }
 
 /**
@@ -822,7 +847,9 @@ export interface CandidateOptions {
  * (as without it), one at the cheaper of digging and making it — and keep every producer and option either keeps
  * (`cheapest`, R4's `simplestAndNotFar` and an ore-dictionary slot's options each take the union of the two passes'
  * picks, in id order): made sand from free cobblestone estimates 0, and `KEEP_WITHIN` × 0 alone would cut every route
- * dug sand makes worth keeping. Without such a leaf, one estimate as before.
+ * dug sand makes worth keeping. Without such a leaf, one estimate as before. Plan 12, controller ruling 214: with the
+ * line's Auto Workbenches (`opts.bench`), the GGFab single-use variants of tool recipes they run are candidates, each
+ * kept with its original as one producer, and a crafting-table recipe none of them runs is marked `LpRecipe.byHand`.
  */
 export function buildCandidates(
   pack: Pack, settings: PlanSettings, env: PlanEnv, leaf: LeafOracle, targets: StuffKey[], opts: CandidateOptions = {},
@@ -876,7 +903,7 @@ export function buildCandidates(
   const accept = (r: Recipe): Acceptance => {
     let a = acceptance.get(r.id);
     if (a === undefined) {
-      a = unbuildable?.has(r.id) === true ? { ok: false, why: 'machine' } : acceptRecipe(pack, r, env);
+      a = unbuildable?.has(r.id) === true ? { ok: false, why: 'machine' } : acceptRecipe(pack, r, env, opts.bench);
       acceptance.set(r.id, a);
     }
     return a;
@@ -1004,9 +1031,27 @@ export function buildCandidates(
       return !(Number.isFinite(n) && n > limit) || pass.unitCost(x.r, key) <= least + ESTIMATE_TOLERANCE;
     });
   };
-  /** The producers of `key` one pass keeps: its cheapest (grounded ones first, `grounded`), with R4's simplest. */
-  const keptBy = (pass: EstimatePass, key: StuffKey, accepted: readonly Producer[]): Producer[] => simplestAndNotFar(pass, key, accepted,
-    cheapest(accepted, (x) => pass.unitCost(x.r, key), (x) => x.r.id, KEEP_PRODUCERS, KEEP_PRODUCERS, (x) => pass.grounded(x.r, key), (x) => pass.inputRank(x.r)));
+  /** A producer's family: a bench variant's original (`Recipe.meta.benchVariantOf`), else itself. */
+  const familyOf = (x: Producer): string => (typeof x.r.meta.benchVariantOf === 'string' ? x.r.meta.benchVariantOf : x.r.id);
+  /**
+   * The producers of `key` one pass keeps: its cheapest (grounded ones first, `grounded`), with R4's simplest. A bench
+   * variant and its original (controller ruling 214 (a): one recipe, crafted on an Auto Workbench or by hand) count as
+   * one producer, ranked by the cheaper of the two, and are kept together, so the variants never crowd out another route.
+   */
+  const keptBy = (pass: EstimatePass, key: StuffKey, accepted: readonly Producer[]): Producer[] => {
+    const rank = (list: readonly Producer[], max: number): Producer[] =>
+      cheapest(list, (x) => pass.unitCost(x.r, key), (x) => x.r.id, max, max, (x) => pass.grounded(x.r, key), (x) => pass.inputRank(x.r));
+    if (!accepted.some((x) => isBenchVariant(x.r))) return simplestAndNotFar(pass, key, accepted, rank(accepted, KEEP_PRODUCERS));
+    const families = new Map<string, Producer[]>();
+    for (const x of accepted) {
+      const members = families.get(familyOf(x));
+      if (members === undefined) families.set(familyOf(x), [x]);
+      else members.push(x);
+    }
+    const heads = [...families.values()].map((members) => rank(members, 1)[0] ?? (members[0] as Producer));
+    const kept = rank(heads, KEEP_PRODUCERS).flatMap((head) => families.get(familyOf(head)) ?? []);
+    return simplestAndNotFar(pass, key, accepted, kept);
+  };
 
   /** Ruling R6: a virtual good never asks the oracle and is never bought; its kept options are made or bought. */
   const addVirtual = (vkey: StuffKey, options: Ingredient['options']): void => {
@@ -1057,6 +1102,9 @@ export function buildCandidates(
     const main = r.outputs[0]?.key;
     if (main !== undefined) lp.main = main;
     if (r.meta.supply !== undefined) lp.supply = true;
+    // a crafting-table recipe none of the line's Auto Workbenches runs is crafted by hand (controller ruling 214)
+    const byHand = opts.bench !== undefined && mapId === 'crafting' && !isBenchVariant(r) ? benchRefusal(pack, r, opts.bench) : undefined;
+    if (byHand !== undefined) lp.byHand = byHand;
     recipes.set(r.id, lp);
     for (const [key, c] of lp.coeffs) {
       const options = slots.get(key);
@@ -1106,6 +1154,8 @@ export function buildCandidates(
         accepted.push({ r, mapId: a.mapId });
         continue;
       }
+      // a bench variant no bench runs here is no way of its own: its original is the hand way
+      if (a.why === 'bench') continue;
       const entry: { recipeId: string; why: Rejection; needTier?: number; machine?: string } = { recipeId: r.id, why: a.why };
       if (a.needTier !== undefined) entry.needTier = a.needTier;
       const machine = a.why === 'machine' ? unbuildable?.get(r.id) : undefined;

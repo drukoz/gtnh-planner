@@ -7,9 +7,11 @@
 // them. Each mode therefore caps every ingredient at the bench: AE2 pushes one exact set behind a Locking Card,
 // Project Red keeps a stock with an Item Stock Keeper Chip, EnderIO lets each ingredient in up to a count with a Limited
 // Item Filter, and machine-to-machine lines lay no pipe to it. This module holds what the modes share: the grid, the
-// pattern, the stock to keep and whether it fits the bench's safe slots, what a craft hands back, and the tools a craft
-// wears out. The export gives no stack sizes, so every ingredient is taken to stack to 64.
+// pattern, the stock to keep and whether it fits the bench's safe slots (shared/gt/feeding.ts, whose least stock the
+// planner also reads: controller ruling 214 (c)), what a craft hands back, and the tools a craft wears out. The export
+// gives no stack sizes, so every ingredient is taken to stack to 64.
 
+import { BENCH_LEAST_CRAFTS, BENCH_SAFE_SLOTS, benchSlots } from '../../shared/gt/feeding.ts';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import type { BenchSpec, PatternSpec } from '../../shared/types/feed.ts';
 import type { Pack } from '../../shared/types/pack.ts';
@@ -20,19 +22,12 @@ import { heldOption } from '../planner/candidates.ts';
 /** The Auto Workbench's crafting grid: 3 × 3 cells, top row first. */
 export const BENCH_GRID_WIDTH = 3;
 const GRID_CELLS = BENCH_GRID_WIDTH * BENCH_GRID_WIDTH;
-/** What one stack of an ingredient is taken to hold (the export gives no stack sizes). */
-export const BENCH_STACK = 64;
-/**
- * The input slots a bench's stock may fill (research §1.3.8): inserters fill the lowest empty slot first, so with slot 8
- * of its nine left empty, a craft that fails for a missing ingredient has nothing to throw out of its back.
- */
-export const BENCH_SAFE_SLOTS = 8;
-/** Crafts of stock an EnderIO Limited Item Filter keeps (research §3.6: it refills at once). */
-const ENDERIO_STOCK_CRAFTS = 2;
+/** Crafts of stock an EnderIO Limited Item Filter keeps (research §3.6: it refills at once), the least a bench keeps. */
+const ENDERIO_STOCK_CRAFTS = BENCH_LEAST_CRAFTS;
 /** Project Red's Item Stock Keeper Chip asks every 100 ticks at best (research §2.2, §3.6). */
 const STOCK_KEEPER_SECONDS = 5;
 /** Crafts of stock a Stock Keeper keeps at least (research §3.6). */
-const ROUTED_MIN_CRAFTS = 2;
+const ROUTED_MIN_CRAFTS = BENCH_LEAST_CRAFTS;
 
 /** What a line needs of one bench. */
 export interface BenchPlan {
@@ -125,8 +120,7 @@ export function benchPattern(bench: BenchPlan): PatternSpec {
 export interface BenchStock { stock: Array<{ key: StuffKey; count: number }>; slots: number; safe: boolean }
 
 function stocked(stock: Array<{ key: StuffKey; count: number }>): BenchStock {
-  const slots = stock.reduce((sum, s) => sum + Math.ceil(s.count / BENCH_STACK), 0);
-  return { stock, slots, safe: slots <= BENCH_SAFE_SLOTS && stock.every((s) => s.count <= BENCH_STACK) };
+  return { stock, ...benchSlots(stock.map((s) => s.count)) };
 }
 
 /**
@@ -149,13 +143,16 @@ export function routedStock(bench: BenchPlan, craftsPerSecond: number): BenchSto
 }
 
 /**
- * `bench_cap`: a bench whose stock, on a line that keeps one (Project Red, EnderIO), takes more input slots than it fills
- * safely (research §1.3.8): when one ingredient runs short, the failed craft throws the stack in its last input slot out
- * of its back, which the line's part there refuses, and the bench stops. AE2 pushes one whole set at a time instead.
+ * `bench_cap`: a Project Red bench whose stock at its planned rate (`routedStock`: the Stock Keeper's 5 s cadence) takes
+ * more input slots than it fills safely, or more than a stack of one ingredient (research §1.3.8, §6.1 item 8: "add
+ * benches or warn"): when one ingredient runs short, the failed craft throws the stack in its last input slot out of its
+ * back, which the line's part there refuses, and the bench stops. A recipe whose least stock cannot fit has no bench on
+ * Project Red or EnderIO lines at all (the planner's cap rule, controller ruling 214 (c)), and EnderIO's stock (two
+ * crafts) never grows with the rate; AE2 pushes one whole set at a time.
  */
 export function benchCapWarning(pack: Pack, unit: { name: string }, step: PlanStep, slots: number): PlanWarning {
   const product = stepProductName(pack, step);
   return { code: 'bench_cap', stepId: step.id, text: `${unit.name} crafting ${product} cannot keep its ingredients within the ${BENCH_SAFE_SLOTS} `
-    + `input slots it fills safely on this line (it would take ${slots}): when one runs short it throws a stack out of its back and stops — craft `
-    + `${product} by hand, or plan the line on AE2` };
+    + `input slots it fills safely at its planned rate on this line (it would take ${slots}): when one runs short it throws a stack out of its `
+    + `back and stops — give it more Auto Workbenches so each crafts less, craft ${product} by hand, or plan the line on AE2` };
 }

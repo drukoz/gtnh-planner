@@ -181,21 +181,43 @@ describe('the Auto Workbench in a line', () => {
     expect(benchBlock(laid('ae2', plan, pack).placement.blocks).feed?.bench?.grid).toEqual([A, FILE, null, null, null, null, null, null, null]);
   });
 
-  it('says where its stock cannot fit its safe input slots, on the lines that keep a stock', () => {
-    // nine kinds of ingredient: a stack each fills all nine input slots, so a short one makes it throw a stack out
+  it('says where a Project Red stock at its planned rate cannot fit its safe input slots', () => {
+    // three ingredients of three cells each at 10 crafts a second: the Stock Keeper's 5 s cadence keeps 50 crafts, 150 of
+    // each, three stacks apiece, nine slots (research §3.6, §6.1 item 8)
     const pack = benchPack();
-    const nine = Array.from({ length: 9 }, (_, i): StuffKey => `t:n${i}@0`);
-    pack.recipeById.set('r', craftingRecipe('r', 3, nine, [R, 1]));
-    const plan = makePlan([{ id: 'r', mteId: AUTO_WORKBENCH, count: 1, tier: 2, inputs: nine.map((k): [StuffKey, number] => [k, 1]), outputs: [[R, 1]] }],
-      { flows: [...nine.map((key) => ({ from: 'raw', to: 'r', key, perSecond: 1 })), { from: 'r', to: 'out', key: R, perSecond: 1 }] });
-    const cap = (mode: LogisticsMode) => laid(mode, plan, pack).r.warnings.filter((w) => w.code === 'bench_cap');
-    for (const mode of ['routed', 'enderio'] as const) {
-      expect(cap(mode), mode).toEqual([{ code: 'bench_cap', stepId: 'r', text: 'Auto Workbench (MV) crafting Resistor cannot keep its ingredients '
-        + 'within the 8 input slots it fills safely on this line (it would take 9): when one runs short it throws a stack out of its back and stops '
-        + '— craft Resistor by hand, or plan the line on AE2' }]);
-    }
-    // AE2 pushes one whole set at a time behind its Locking Card
-    expect(cap('ae2')).toEqual([]);
+    pack.recipeById.set('r', craftingRecipe('r', 3, [A, A, A, C, C, C, D, D, D], [R, 1]));
+    const at = (perSecond: number): Plan => {
+      const plan = makePlan([{ id: 'r', mteId: AUTO_WORKBENCH, count: 1, tier: 2, inputs: [[A, 3], [C, 3], [D, 3]], outputs: [[R, 1]] }],
+        { flows: [...[A, C, D].map((key) => ({ from: 'raw', to: 'r', key, perSecond: 3 * perSecond })), { from: 'r', to: 'out', key: R, perSecond }] });
+      plan.steps[0]!.runsPerSecond = perSecond;
+      return plan;
+    };
+    const cap = (mode: LogisticsMode, perSecond: number) => laid(mode, at(perSecond), pack).r.warnings.filter((w) => w.code === 'bench_cap');
+    expect(cap('routed', 10)).toEqual([{ code: 'bench_cap', stepId: 'r', text: 'Auto Workbench (MV) crafting Resistor cannot keep its ingredients '
+      + 'within the 8 input slots it fills safely at its planned rate on this line (it would take 9): when one runs short it throws a stack out of its '
+      + 'back and stops — give it more Auto Workbenches so each crafts less, craft Resistor by hand, or plan the line on AE2' }]);
+    // at 1 a second, 5 crafts: 15 of each, a slot apiece
+    expect(cap('routed', 1)).toEqual([]);
+    // EnderIO keeps two crafts whatever the rate, which the planner's cap rule (controller ruling 214 (c)) always fits; AE2
+    // pushes one whole set at a time behind its Locking Card
+    expect(cap('enderio', 10)).toEqual([]);
+    expect(cap('ae2', 10)).toEqual([]);
+  });
+
+  it("grids a single-use variant with its tool as an ingredient, so it keeps crafting and AE2 can encode its pattern", async () => {
+    // controller ruling 214 (a): the variant's file slot is a consumed input of GGFab's Single Use File, one a craft
+    const pack = benchPack();
+    const FILE1 = 'ggfab:gt.ggfab.d1@0';
+    pack.items.set(FILE1, { key: FILE1, id: 'ggfab:gt.ggfab.d1', meta: 0, name: 'Single Use File', oreDict: ['craftingToolFile'] });
+    pack.recipeById.set('r', { ...craftingRecipe('r', 3, [A, FILE1], [R, 1]), meta: { ...craftingRecipe('r', 3, [A, FILE1], [R, 1]).meta, benchVariantOf: 'r0' } });
+    const plan = makePlan([{ id: 'r', mteId: AUTO_WORKBENCH, count: 1, tier: 2, inputs: [[A, 1], [FILE1, 1]], outputs: [[R, 1]] }],
+      { flows: [{ from: 'raw', to: 'r', key: A, perSecond: 1 }, { from: 'raw', to: 'r', key: FILE1, perSecond: 1 }, { from: 'r', to: 'out', key: R, perSecond: 1 }] });
+    expect(unitsFromPlan(pack, plan, { primitive: true }).warnings).toEqual([]);
+    const { placement, r } = laid('ae2', plan, pack);
+    expect(benchBlock(placement.blocks).feed?.bench?.grid).toEqual([A, FILE1, null, null, null, null, null, null, null]);
+    expect(r.blocks.find((b) => b.role === 'interface')?.feed?.interface?.patterns).toEqual([{ inputs: [{ key: A, amount: 1 }, { key: FILE1, amount: 1 }], outputs: [{ key: R, amount: 1 }] }]);
+    const layout = await layoutLine(pack, plan, emptyScan(), makeProject({ logistics: 'ae2', scanId: null, baseId: null }));
+    expect(layout.warnings.filter((w) => w.code === 'bench_tool' || w.code === 'feed_pattern_unencodable')).toEqual([]);
   });
 });
 

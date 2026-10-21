@@ -47,7 +47,7 @@ import type { Pack } from '../../../shared/types/pack.ts';
 import type { BomLine, Plan, PlanFlow, PlanWarning } from '../../../shared/types/plan.ts';
 import { comparePos } from '../../world/graph.ts';
 import { handRunSurroundings, type HatchKind, type HostConfig, type LocalBlock, type PlacedUnit, type Placement } from '../arrange.ts';
-import { benchCapWarning, enderioStock } from '../bench.ts';
+import { enderioStock } from '../bench.ts';
 import {
   assignChannels, fluidFilterFor, itemFilterFor, limitedFilterFor, pickFluidConduit, speedUpgradesFor, type ChannelEnd, type ChannelLink,
   type ChannelPlan,
@@ -418,9 +418,10 @@ export interface Crossing { entering: PlanFlow[]; leaving: PlanFlow[]; strays: A
  * entry 48): GT lets its items in and out on any side but its front and its output side. An Auto Workbench's face
  * (`Unit.bench`, plan 12 Task 6, research machine-feeding §3.4) meets its back: In / Out, extracting what it makes and
  * hands back and inserting its ingredients through a Limited Item Filter at its stock (`enderioStock`), with no setting
- * to make (it takes items on any face); `capped` names the benches whose stock does not fit their safe input slots.
+ * to make (it takes items on any face). That stock, two crafts, always fits a bench's safe input slots: the planner gives
+ * no Auto Workbench on an EnderIO line to a recipe whose stock would not (controller ruling 214 (c), planner/benches.ts).
  */
-function machineFaces(plan: Plan, items: readonly PlanFlow[], placement: Placement): { faces: FacePlan[]; configs: HostConfig[]; capped: Array<{ unit: PlacedUnit; slots: number }> } {
+function machineFaces(plan: Plan, items: readonly PlanFlow[], placement: Placement): { faces: FacePlan[]; configs: HostConfig[] } {
   const blockAt = new Map(placement.blocks.map((b) => [posKey(b.pos), b]));
   const portsOf = new Map<PlacedUnit, ItemPort[]>();
   for (const p of itemPorts(placement)) {
@@ -430,12 +431,10 @@ function machineFaces(plan: Plan, items: readonly PlanFlow[], placement: Placeme
   }
   const faces: FacePlan[] = [];
   const configs: HostConfig[] = [];
-  const capped: Array<{ unit: PlacedUnit; slots: number }> = [];
   for (const [u, ports] of portsOf) {
     const makes = u.bench === undefined ? stepItemOutputs(plan, u.stepId) : distinctKeys([...stepItemOutputs(plan, u.stepId), ...u.bench.returns.map((r) => r.key)]);
     const takes = stepItemInputs(plan, u.stepId);
     const stock = u.bench === undefined ? undefined : enderioStock(u.bench);
-    if (stock !== undefined && !stock.safe && !capped.some((c) => c.unit.stepId === u.stepId)) capped.push({ unit: u, slots: stock.slots });
     const limits = stock === undefined ? undefined : new Map(u.bench!.ingredients.map((i, k) => [i.key, stock.limits[k]!]));
     const roles = ports.map((port) => {
       const bus = u.multiblock ? busOf(u, blockAt.get(posKey(port.behind))) : null;
@@ -456,7 +455,7 @@ function machineFaces(plan: Plan, items: readonly PlanFlow[], placement: Placeme
       if (outputSide) configs.push({ pos: [...port.behind], config: { inputFromOutputSide: true } });
     }
   }
-  return { faces, configs: configs.sort((a, b) => comparePos(a.pos, b.pos)), capped };
+  return { faces, configs: configs.sort((a, b) => comparePos(a.pos, b.pos)) };
 }
 
 /**
@@ -565,7 +564,7 @@ function itemLine(input: ModeInput): ItemLine {
 
   // the face plan: every item port; the input chest north of the tail cell; output chest j south of tail cell j. What a
   // bench hands back (an empty container) goes to an output chest as a placed machine's strays do
-  const { faces: machine, configs, capped } = machineFaces(plan, items, placement);
+  const { faces: machine, configs } = machineFaces(plan, items, placement);
   const edge = crossing(plan, items, placed);
   const { entering, leaving } = edge;
   const strays = [...edge.strays, ...placement.units.flatMap((u) => (u.bench?.returns ?? []).map((r) => ({ stepId: u.stepId, key: r.key })))]
@@ -634,17 +633,13 @@ function itemLine(input: ModeInput): ItemLine {
   const stockDraft: StepDraft | null = hooked !== null ? hooked.draft : inputChest === null ? null
     : { id: 'layout:logistics:inputs', kind: 'logistics', pin: 'site', text: `Put the raw inputs in the input chest: ${nameList(plan, pack, inputKeys)}` };
 
-  const benchWarnings = capped.flatMap(({ unit, slots }) => {
-    const s = plan.steps.find((x) => x.id === unit.stepId);
-    return s === undefined ? [] : [benchCapWarning(pack, unit, s, slots)];
-  });
   return {
     conduits, chests, configs,
     logisticsPort: hooked === null || inputChest === null ? null : [...inputChest],
     hookup: hooked?.hookup ?? null,
     extraParts: hooked?.extraParts ?? [],
     lineDraft, stockDraft,
-    warnings: [...warnings, ...channelWarnings(input, channels), ...benchWarnings],
+    warnings: [...warnings, ...channelWarnings(input, channels)],
     tailFluidY: Math.max(1, outputSlices.length),
   };
 }

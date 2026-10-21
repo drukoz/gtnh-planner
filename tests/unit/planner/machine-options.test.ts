@@ -17,7 +17,7 @@ import {
   type MachineOptionEnv,
 } from '../../../src/server/planner/machine-options.ts';
 import { ownedMachineMap, ownedPools } from '../../../src/server/planner/machines.ts';
-import { emptyContext } from '../../../src/server/planner/plan.ts';
+import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
 import { linePricing } from '../../../src/server/planner/pricing.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import type { Pack, Recipe } from '../../../src/shared/types/pack.ts';
@@ -412,5 +412,70 @@ describe('crafting-table steps on the Auto Workbench', () => {
     // By hand the step stays a pseudo step: no options, nothing eligible, not blocked.
     const byHand = await modelOf(pack, { ...s, automateCrafting: false });
     expect([byHand.options('hammer-plate'), byHand.eligible('hammer-plate'), byHand.blocked.has('hammer-plate')]).toEqual([[], [], false]);
+  });
+});
+
+describe('AE2 pools by blocking mode and the machine\'s own input slots', () => {
+  // Controller ruling 214 (b), research machine-feeding §3.3: a shared machine needs blocking mode, which never pushes into
+  // a machine holding an item it does not ignore, and pushes one recipe's set at a time, which must fit the machine's own
+  // input slots at its tier less what it holds.
+  const MOLD = 'gregtech:gt.metaitem.01@32301';
+  const SCHEMATIC = 't:schematic@0';
+  const LENS = 't:lens@0';
+  /** Mini-GT with LV and HV Forming Presses (GT's slot table: 2 and 4 input slots) and press recipes holding `held`. */
+  const pressPack = (held: string) => packFromSpec({
+    ...structuredClone(MINI_GT),
+    items: [...structuredClone(MINI_GT).items!, { key: LENS, name: 'Glass Lens', gt: { prefix: 'lens', material: 'Glass' } }, { key: SCHEMATIC, name: 'Schematic' },
+      { key: MOLD, name: 'Mold (Plate)' }, { key: 't:combo@0', name: 'Combo' }],
+    maps: [...structuredClone(MINI_GT).maps!, { id: 'gt.recipe.press', name: 'Forming Press' }],
+    machines: [...structuredClone(MINI_GT).machines!,
+      { mteId: 201, name: 'Basic Forming Press', tier: 1, maps: ['gt.recipe.press'], metaName: 'basicmachine.press.tier.01' },
+      { mteId: 203, name: 'Advanced Forming Press II', tier: 3, maps: ['gt.recipe.press'], metaName: 'basicmachine.press.tier.03' }],
+    recipes: [...structuredClone(MINI_GT).recipes!,
+      { id: 'press-a', map: 'gt.recipe.press', in: [{ nc: held }, ['t:iron_ingot@0', 1]], out: [['t:pa@0', 1]], eut: 16, dur: 40 },
+      { id: 'press-b', map: 'gt.recipe.press', in: [{ nc: held }, ['t:copper_ingot@0', 1]], out: [['t:pb@0', 1]], eut: 16, dur: 40 },
+      { id: 'press-two', map: 'gt.recipe.press', in: [{ nc: held }, ['t:iron_ingot@0', 1], ['t:tin_ingot@0', 1]], out: [['t:pt@0', 1]], eut: 16, dur: 40 },
+      { id: 'make-201', map: 'crafting', in: [['t:iron_ingot@0', 4]], out: [['machine:201@0', 1]] },
+      { id: 'make-203', map: 'crafting', in: [['t:iron_ingot@0', 8]], out: [['machine:203@0', 1]] },
+      { id: 'combo', map: 'gt.recipe.assembler', in: [['t:pa@0', 1], ['t:pb@0', 1]], out: [['t:combo@0', 1]], eut: 16, dur: 40 }],
+  });
+
+  it('keys a recipe holding an item blocking mode does not ignore by its own recipe', () => {
+    // GT's ignore list holds the programmed circuit, its molds, shapes and blades, and lenses: not a Packager's schematic
+    const keyOf = (held: string, withPack: boolean): string => {
+      const pack = pressPack(held);
+      return sharingKey(recipeOf(pack, 'press-a'), [held], withPack ? pack : undefined);
+    };
+    expect(keyOf(SCHEMATIC, true)).toBe(`-|${SCHEMATIC}|recipe:press-a`);
+    expect(keyOf(MOLD, true)).toBe(`-|${MOLD}`);
+    expect(keyOf(LENS, true)).toBe(`-|${LENS}`);
+    expect(keyOf('gregtech:gt.integrated_circuit@2', true)).toBe('2|');
+    // without the pack (Task 3's callers) as before
+    expect(keyOf(SCHEMATIC, false)).toBe(`-|${SCHEMATIC}`);
+  });
+
+  it('pools on AE2 the recipes holding one mold, and none holding a schematic', async () => {
+    const s: PlanSettings = { ...lv, target: 't:combo@0', logistics: 'ae2' };
+    const molds = await planLine(pressPack(MOLD), s, ctx);
+    const pool = { id: 'pool:press-a', steps: ['press-a', 'press-b'] };
+    expect(molds.steps.filter((x) => x.pool !== undefined).map((x) => [x.id, x.pool])).toEqual([['press-a', pool], ['press-b', pool]]);
+    const schematics = await planLine(pressPack(SCHEMATIC), s, ctx);
+    expect(schematics.steps.map((x) => x.id)).toEqual(expect.arrayContaining(['press-a', 'press-b']));
+    expect(schematics.steps.filter((x) => x.pool !== undefined)).toEqual([]);
+  });
+
+  it("pools on an option only the recipes whose item kinds fit its own input slots less what they hold", async () => {
+    const pack = pressPack(MOLD);
+    const env = mvEnv(await pricesOf(pack, mv), [], { groupTier: 3 });
+    // two kinds and a held mold: the LV press's two slots leave one, the HV press's four leave three
+    const two = machineOptions(pack, recipeOf(pack, 'press-two'), 'gt.recipe.press', { ...env, eligibleOnly: true });
+    expect(two.map((o) => [o.mteId, o.ownPool])).toEqual([[201, 'press-two'], [203, undefined]]);
+    expect(poolKey(two[0]!, '-|' + MOLD)).toBe(`201:1:|-|${MOLD}|own:press-two`);
+    expect(poolKey(two[1]!, '-|' + MOLD)).toBe(`203:3:|-|${MOLD}`);
+    const one = machineOptions(pack, recipeOf(pack, 'press-a'), 'gt.recipe.press', { ...env, eligibleOnly: true });
+    expect(one.map((o) => [o.mteId, o.ownPool])).toEqual([[201, undefined], [203, undefined]]);
+    // a machine the slot table does not know is not limited
+    const assembler = machineOptions(pack, recipeOf(pack, 'combo'), 'gt.recipe.assembler', { ...env, eligibleOnly: true });
+    expect(assembler.every((o) => o.ownPool === undefined)).toBe(true);
   });
 });

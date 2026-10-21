@@ -100,6 +100,9 @@ export interface BuildMipInput {
   /** R3's bought derived leaves with a price: their purchase column and weight (the big-M is the build MIP's own, below). */
   derived: ReadonlyArray<{ j: number; weight: number }>;
   demandScale: number /* D: actual demand = unit demand × D */; model: BuildModel; stepCharge: number; handWeight: number;
+  // optional addition (plan 12, controller ruling 214)
+  /** The weight of a crafting-table step no Auto Workbench runs (`LpRecipe.byHand`; `SolveOptions.byHandWeight`); absent: 1. */
+  byHandWeight?: number;
 }
 
 function byString(a: string, b: string): number {
@@ -110,6 +113,19 @@ function pushTo<K, V>(map: Map<K, V[]>, key: K, value: V): void {
   const list = map.get(key);
   if (list === undefined) map.set(key, [value]);
   else list.push(value);
+}
+
+/** How many step charges a crafting-table step weighs: `hand` (`SolveOptions.handWeight`), `byHand` for one no bench runs. */
+export interface StepWeights { hand: number; byHand: number }
+
+/**
+ * A step recipe's weight in the step charge: for a crafting-table recipe `weights.hand`, or `weights.byHand` for one no
+ * Auto Workbench of the line runs (`LpRecipe.byHand`, controller ruling 214); 1 for any other. The build MIP's pseudo
+ * steps and plan 09's charge MIP (solve.ts) both read it.
+ */
+export function stepWeight(r: LpRecipe, weights: StepWeights): number {
+  if (r.mapId !== 'crafting') return 1;
+  return r.byHand !== undefined ? weights.byHand : weights.hand;
 }
 
 /** Whole machines for `load` machines' worth: none for none, else at least one (a running step needs a machine). */
@@ -818,12 +834,14 @@ function layoutOf(input: BuildMipInput, withDerived: boolean): Layout {
   // One binary per step recipe, 1 where it runs. The step charge is paid per new machine block (fix wave 2 (a): on a
   // pool's new machines, a light step's machines and Make N's added types above; owned machines pay none), so a step's
   // binary carries it only where the step runs on no machine the MIP counts — by hand or on another pseudo machine —
-  // once, a crafting-table step `handWeight` times. (A fewest-recipes tie-break of 1e-6 on every binary made the root
+  // once, a crafting-table step `handWeight` times (one no Auto Workbench runs, `LpRecipe.byHand`, `byHandWeight` times:
+  // controller ruling 214). (A fewest-recipes tie-break of 1e-6 on every binary made the root
   // node of Good Electronic Circuit HV take 3.9 s instead of 2.5 s for the same plan, and decided no plan.)
   const y = new Map<number, number>();
   for (const s of steps) {
     const first = light.get(s.j)?.first ?? 0;
-    const pseudo = s.usable.length === 0 ? input.stepCharge * (s.r.mapId === 'crafting' ? input.handWeight : 1) : 0;
+    const pseudo = s.usable.length === 0
+      ? input.stepCharge * stepWeight(s.r, { hand: input.handWeight, byHand: input.byHandWeight ?? 1 }) : 0;
     const col = column(pseudo + first / sigma, 1, true);
     y.set(s.j, col);
     rows.push({ lower: -Infinity, upper: 0, entries: [[s.j, 1], [col, -X]] });

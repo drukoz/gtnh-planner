@@ -7,8 +7,8 @@
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import type { PlanWarning } from '../../shared/types/plan.ts';
 import {
-  BUILD_MIP_MAX_LP_ITERATIONS, BUILD_MIP_MAX_NODES, BUILD_MIP_TIME_LIMIT_SECONDS, buildMip, laterRoom, roundUp, type BuildDecision, type BuildMipInput,
-  type LaterRoom, type StepMachines,
+  BUILD_MIP_MAX_LP_ITERATIONS, BUILD_MIP_MAX_NODES, BUILD_MIP_TIME_LIMIT_SECONDS, buildMip, laterRoom, roundUp, stepWeight, type BuildDecision, type BuildMipInput,
+  type LaterRoom, type StepMachines, type StepWeights,
 } from './build-mip.ts';
 import { canonicalRank, type CandidateGraph, type LpRecipe } from './candidates.ts';
 import { solveLp, type LpModel, type LpResult, type LpRow } from './lp.ts';
@@ -25,6 +25,12 @@ export interface SolveOptions {
   stepCharge?: number;
   /** Weight of a crafting-table step: HAND_STEP_WEIGHT in rate mode with automateCrafting off, else 1. */
   handWeight?: number;
+  // optional addition (plan 12, controller ruling 214; user ruling 180 (d))
+  /**
+   * Weight of a crafting-table step no Auto Workbench runs although crafting is automated (`LpRecipe.byHand`), which is
+   * crafted by hand: HAND_STEP_WEIGHT in rate mode (`solveOptions`), else 1 (absent: 1).
+   */
+  byHandWeight?: number;
   /** S1 only: whether the line plans and its least-raw solution (avoid trials, below). */
   probe?: boolean;
   // optional additions (plan 12: build cost, architecture §11.39)
@@ -495,8 +501,8 @@ const LEAST_RAW_STEP = 0.01;
 function simplest(lp: MainLp, s1: LpResult, locks: LpRow[], opts: SolveOptions): Promise<Simplified> {
   if (!(s1.objective > TINY)) return fewestRecipesStage(lp, s1, locks);
   const charge = opts.stepCharge ?? 0;
-  if (Number.isFinite(charge) && charge > 0) return chargedStage(lp, s1, locks, charge, opts.handWeight ?? 1, STEP_CHARGE_CAP);
-  return chargedStage(lp, s1, locks, LEAST_RAW_STEP, 1, 0);
+  if (Number.isFinite(charge) && charge > 0) return chargedStage(lp, s1, locks, charge, weightsOf(opts), STEP_CHARGE_CAP);
+  return chargedStage(lp, s1, locks, LEAST_RAW_STEP, { hand: 1, byHand: 1 }, 0);
 }
 
 /**
@@ -523,10 +529,12 @@ async function fewestRecipesStage(lp: MainLp, s1: LpResult, locks: LpRow[]): Pro
   return { off: new Set(), locks, base: s1, skipped: !simple };
 }
 
-/** A step recipe's weight in the step charge: `handWeight` for a crafting-table recipe, 1 for any other. */
-function stepWeight(r: LpRecipe, handWeight: number): number {
-  return r.mapId === 'crafting' ? handWeight : 1;
+/** The step weights of `opts` (1 for each it does not set). */
+function weightsOf(opts: SolveOptions): StepWeights {
+  return { hand: opts.handWeight ?? 1, byHand: opts.byHandWeight ?? 1 };
 }
+
+
 
 /**
  * R3's relative cost per main column (the step-charge MIP's objective there): the raw material in units of S1's, S3's
@@ -573,7 +581,7 @@ async function sparseWithin(lp: MainLp, capped: number): Promise<number[] | null
  * STEP_MIP_MAX_NODES nodes with the best whole solution it has, which may be the start. Returns the counted columns it
  * leaves out (binary off, or a step recipe it does not run), or null when it has no whole solution or nothing to count.
  */
-async function chargeMip(lp: MainLp, s1: LpResult, charge: number, handWeight: number, cap: number): Promise<Set<number> | null> {
+async function chargeMip(lp: MainLp, s1: LpResult, charge: number, weights: StepWeights, cap: number): Promise<Set<number> | null> {
   const least = s1.objective;
   let largest = 0;
   for (let j = 0; j < lp.firstBuy; j++) largest = Math.max(largest, s1.x[j] ?? 0);
@@ -582,7 +590,7 @@ async function chargeMip(lp: MainLp, s1: LpResult, charge: number, handWeight: n
   const capped = (1 + cap) * least;
   const counted: Array<{ j: number; weight: number; bigM: number; step: boolean }> = [];
   lp.recipes.forEach((r, j) => {
-    if (r.kind === 'recipe') counted.push({ j, weight: charge * stepWeight(r, handWeight), bigM: STEP_BIG_M * largest, step: true });
+    if (r.kind === 'recipe') counted.push({ j, weight: charge * stepWeight(r, weights), bigM: STEP_BIG_M * largest, step: true });
   });
   if (counted.length === 0) return null;
   for (const { j, weight } of pricedDerived(lp)) {
@@ -631,14 +639,14 @@ function netOf(r: LpRecipe | undefined, key: StuffKey): number {
  * step makes too, where the line can do without it (`withoutTiedPurchases`).
  */
 async function consolidated(
-  lp: MainLp, s1: LpResult, start: { off: Set<number>; base: LpResult }, charge: number, handWeight: number, limit: number,
+  lp: MainLp, s1: LpResult, start: { off: Set<number>; base: LpResult }, charge: number, weights: StepWeights, limit: number,
 ): Promise<{ off: Set<number>; base: LpResult }> {
   const score = (plan: LpResult): number => {
-    let weights = 0;
+    let total = 0;
     lp.recipes.forEach((r, j) => {
-      if (r.kind === 'recipe' && (plan.x[j] ?? 0) > TINY) weights += stepWeight(r, handWeight);
+      if (r.kind === 'recipe' && (plan.x[j] ?? 0) > TINY) total += stepWeight(r, weights);
     });
-    return plan.objective / s1.objective + charge * weights;
+    return plan.objective / s1.objective + charge * total;
   };
   let { off, base } = start;
   let best = score(base);
@@ -722,10 +730,10 @@ async function withoutTiedPurchases(
  * `consolidated`. The later stages run only the step recipes the base runs, the derived purchases left out stay out,
  * and they lock raw material at the base's.
  */
-async function chargedStage(lp: MainLp, s1: LpResult, open: LpRow[], charge: number, handWeight: number, cap: number): Promise<Simplified> {
+async function chargedStage(lp: MainLp, s1: LpResult, open: LpRow[], charge: number, weights: StepWeights, cap: number): Promise<Simplified> {
   const limit = (1 + cap) * s1.objective * (1 + S3_TOLERANCE) + TINY;
   let start: { off: Set<number>; base: LpResult } | undefined;
-  const mipOff = await chargeMip(lp, s1, charge, handWeight, cap);
+  const mipOff = await chargeMip(lp, s1, charge, weights, cap);
   if (mipOff !== null) {
     const base = await minimize(lp, lp.rawCost, [], Infinity, mipOff);
     if (base.status === 'optimal' && base.objective <= limit) start = { off: mipOff, base };
@@ -735,7 +743,7 @@ async function chargedStage(lp: MainLp, s1: LpResult, open: LpRow[], charge: num
     if (fallback.skipped) return fallback;
     start = { off: fallback.off, base: fallback.base };
   }
-  const { off, base } = await consolidated(lp, s1, start, charge, handWeight, limit);
+  const { off, base } = await consolidated(lp, s1, start, charge, weights, limit);
   const leftOut = new Set([...off].filter((j) => j >= lp.firstBuy));
   lp.recipes.forEach((r, j) => {
     if (r.kind === 'recipe' && !((base.x[j] ?? 0) > TINY)) leftOut.add(j);
@@ -1079,6 +1087,7 @@ function buildInput(lp: MainLp, s1: LpResult, s1g: number, demandScale: number, 
   return {
     lp, x1: s1.x, s1: s1.objective, s1g, columnCost: s1.objective > TINY ? relativeCosts(lp, s1) : [], derived: pricedDerived(lp),
     demandScale, model, stepCharge: Number.isFinite(charge) && charge > 0 ? charge : 0, handWeight: opts.handWeight ?? 1,
+    byHandWeight: opts.byHandWeight ?? 1,
   };
 }
 

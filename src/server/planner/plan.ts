@@ -17,6 +17,7 @@ import {
 } from '../../shared/types/plan.ts';
 import { GATHERED_BLOCKS, isBaseItem, unlockText, type Availability } from './availability.ts';
 import { gatheredRecipesOn, planBasis, resolveAvoid, settingsHash, type PlanBasis } from './basis.ts';
+import { benchLine, type BenchLine } from './benches.ts';
 import { buildBom, stepProductName } from './bom.ts';
 import { machineBuildCost } from './build-cost.ts';
 import {
@@ -29,7 +30,7 @@ import { lineBuildModel, type BuildModel } from './machine-options.ts';
 import { buildFlows, emptyContainers, optionShares, planSteps, stepLine, type OptionShare, type StepLine } from './machines.ts';
 import { makeN, wholeRuns, type MakeNResult } from './make-n.ts';
 import { yieldToEventLoop } from './lp.ts';
-import { aloneGraph, linePricing, type CostModel, type LinePricing } from './pricing.ts';
+import { aloneGraph, linePricing, lineWalk, type CostModel, type LinePricing } from './pricing.ts';
 import { sig9 } from './round.ts';
 import {
   HAND_STEP_WEIGHT, MAX_NAMED_LOOP_RECIPES, solveLine, standaloneCosts, type Solution, type SolveOptions, type Standalone,
@@ -54,14 +55,17 @@ export const PIN_DOMINATED_SHARE = 1.01;
 /**
  * How the line's solves trade steps against raw material (fix spec R3): the project's step charge (a project stored
  * before it gets the default), and a crafting-table step weighs HAND_STEP_WEIGHT steps in a running line whose crafting
- * is not automated (fix spec D7; a Make N batch may be crafted by hand); with recipe pins, the pinned recipes, which no
- * twin replaces (`twinMoves`, solve.ts).
+ * is not automated (fix spec D7; a Make N batch may be crafted by hand), as does one no Auto Workbench runs in a running
+ * line whose crafting is (`byHandWeight`, controller ruling 214); with recipe pins, the pinned recipes, which no twin
+ * replaces (`twinMoves`, solve.ts).
  */
 export function solveOptions(settings: PlanSettings): SolveOptions {
   const options: SolveOptions = {
     stepCharge: settings.stepCharge ?? DEFAULT_STEP_CHARGE,
     handWeight: settings.mode === 'rate' && !settings.automateCrafting ? HAND_STEP_WEIGHT : 1,
   };
+  // with crafting automated, a crafting-table recipe no Auto Workbench runs is still crafted by hand (controller ruling 214)
+  if (settings.mode === 'rate' && settings.automateCrafting) options.byHandWeight = HAND_STEP_WEIGHT;
   const pinned = Object.values(settings.recipeChoice);
   if (pinned.length > 0) options.pinnedRecipes = new Set(pinned);
   return options;
@@ -262,8 +266,11 @@ function makersOf(pack: Pack, key: StuffKey): Recipe[] {
   return makers;
 }
 
-/** A recipe's rejections that are no way of making anything of its own (display-only, unreadable, fuel, a duplicate). */
-const NO_WAY: ReadonlySet<string> = new Set(['fake', 'opaque', 'fuel', 'vanilla-furnace']);
+/**
+ * A recipe's rejections that are no way of making anything of its own (display-only, unreadable, fuel, a duplicate, and
+ * a bench variant no Auto Workbench runs here, whose original is the hand way: plan 12, controller ruling 214 (a)).
+ */
+const NO_WAY: ReadonlySet<string> = new Set(['fake', 'opaque', 'fuel', 'vanilla-furnace', 'bench']);
 
 /**
  * The places out of the group's reach (`reachable`) that would give it `key`, by name, nearest first (the tier at which
@@ -401,9 +408,9 @@ function machineReason(r: Recipe, a: Extract<Acceptance, { ok: false }>, tier: n
  * (T1 rocket)"), else that ingredient by name. Null for a recipe that is no way of its own (`NO_WAY`).
  */
 function judgeWay(
-  pack: Pack, r: Recipe, env: PlanEnv, obtainable: Obtainable, avoid: ReadonlySet<StuffKey>,
+  pack: Pack, r: Recipe, env: PlanEnv, obtainable: Obtainable, avoid: ReadonlySet<StuffKey>, bench?: BenchLine,
 ): { mapId: string; reasons: string[] } | null {
-  const accepted = acceptRecipe(pack, r, env);
+  const accepted = acceptRecipe(pack, r, env, bench);
   const firstMap = [...r.maps].sort(byString)[0] ?? '';
   if (accepted.ok) {
     const reasons = new Set<string>();
@@ -420,7 +427,7 @@ function judgeWay(
   const categories = Object.entries(EXCLUSION_RULES).filter(([name, rule]) => env.excluded.has(name) && rule(r, pack)).map(([name]) => name);
   // `fromNothing` recipes are left out with the `lava-centrifuge` category (PlanEnv.fromNothing).
   const reasons = (categories.length > 0 ? categories : ['lava-centrifuge']).map((name) => `excluded: ${name.replaceAll('-', ' ')} (see Settings)`);
-  const machine = acceptRecipe(pack, r, { ...env, excluded: new Set(), fromNothing: undefined });
+  const machine = acceptRecipe(pack, r, { ...env, excluded: new Set(), fromNothing: undefined }, bench);
   if (machine.ok) return { mapId: machine.mapId, reasons };
   if (NO_WAY.has(machine.why)) return null;
   return { mapId: firstMap, reasons: [...reasons, machineReason(r, machine, env.tier)] };
@@ -491,6 +498,8 @@ async function addAlternatives(
   const wanted = new Set(steps.flatMap((s) => (s.mainOutput === undefined ? [] : [s.mainOutput])));
   const priced = alternativesFor(model, wanted);
   const obtainable = obtainableIn(pack, basis, settings);
+  // the line's Auto Workbenches judge its bench variants, as its own walks do (`lineWalk`, controller ruling 214 (a))
+  const bench = benchLine(pack, settings, basis.tier);
   let lineCosts: CostAnalysis | undefined;
   const ownCost = async (recipeId: string, main: StuffKey): Promise<number> => {
     const inModel = model.costs.recipeCost(recipeId, main);
@@ -539,7 +548,7 @@ async function addAlternatives(
     for (const r of makers) {
       const own = r.id === step.recipeId;
       if (!own && usesAvoided(r, avoid)) continue;
-      const way = own ? { mapId: step.mapId, reasons: [] } : judgeWay(pack, r, basis.env, obtainable, avoid);
+      const way = own ? { mapId: step.mapId, reasons: [] } : judgeWay(pack, r, basis.env, obtainable, avoid, bench);
       if (way === null) continue;
       const machine = own ? undefined : unbuildable.get(r.id);
       const reasons = machine === undefined || way.reasons.includes(machine) ? way.reasons : [...way.reasons, machine];
@@ -1274,7 +1283,8 @@ async function avoidingLine(
         const avoid = without(back);
         const leaf: LeafOracle = (key) => (!back.has(key) && request.madeFrom(key).length > 0 ? NOT_BOUGHT : pricing.leaf(key));
         await yieldToEventLoop();
-        const walk = pricing.unbuildable === undefined ? { avoid, pinAvoid: goods } : { avoid, pinAvoid: goods, unbuildable: pricing.unbuildable };
+        const walk = lineWalk(pack, settings, pricing.basis,
+          pricing.unbuildable === undefined ? { avoid, pinAvoid: goods } : { avoid, pinAvoid: goods, unbuildable: pricing.unbuildable });
         const graph = buildCandidates(pack, settings, pricing.basis.env, leaf, [pricing.target], walk);
         return { graph, sol: await solveLine(graph, demand, { ...options, probe: true }), avoid };
       })();
@@ -1343,15 +1353,20 @@ const RAW = 'raw';
 
 /**
  * One `hand-step` warning per step of a running line crafted by hand (fix spec D7): what it makes and how much an hour.
- * The step charge weighs such a step three times, so one that remains has no machine recipe that pays.
+ * The step charge weighs such a step three times, so one that remains has no machine recipe that pays. With crafting
+ * automated, a step is crafted by hand only where no Auto Workbench of the line runs its recipe (`LpRecipe.byHand` of
+ * `graph`, controller ruling 214; user ruling 180 (d)), and the warning says why instead of asking to automate crafting.
  */
-function handStepWarnings(pack: Pack, steps: readonly PlanStep[]): PlanWarning[] {
+function handStepWarnings(pack: Pack, steps: readonly PlanStep[], graph: CandidateGraph): PlanWarning[] {
+  const byHand = new Map(graph.recipes.flatMap((r): Array<[string, string]> => (r.byHand === undefined ? [] : [[r.id, r.byHand]])));
   return steps.filter((s) => s.handCraft).map((s): PlanWarning => {
     const key = s.mainOutput ?? s.outputs[0]?.key ?? s.recipeId;
     let perRun = 0;
     for (const p of s.outputs) if (p.key === key) perRun += p.amount;
     const rate = formatRate(perRun * s.runsPerSecond, 'hour', { fluid: isFluidKey(key) });
-    return { code: 'hand-step', stepId: s.id, text: `${pack.nameOf(key)} is crafted by hand: ${rate}; mark crafting as automated or pin a machine recipe` };
+    const why = byHand.get(s.recipeId);
+    const advice = why === undefined ? 'mark crafting as automated or pin a machine recipe' : `it ${why}, so pin a machine recipe to automate it`;
+    return { code: 'hand-step', stepId: s.id, text: `${pack.nameOf(key)} is crafted by hand: ${rate}; ${advice}` };
   });
 }
 
@@ -1712,7 +1727,7 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
   // A batch may be crafted by hand (fix spec D7); a pin is judged against the swap list just made (D24); a pinned tier
   // that cannot be built says so (plan 12).
   const stepWarnings = [
-    ...(batch ? [] : handStepWarnings(pack, steps)), ...pinDominatedWarnings(pack, settings, steps, exact),
+    ...(batch ? [] : handStepWarnings(pack, steps, graph)), ...pinDominatedWarnings(pack, settings, steps, exact),
     ...tierFallbackWarnings(pack, buildModel, steps),
   ];
   const cost = planCost(pack, settings, buildModel, steps, spend);
