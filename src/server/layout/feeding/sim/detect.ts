@@ -1,10 +1,12 @@
 // What a scenario run records and the findings it gives (plan `docs/superpowers/plans/2026-10-20-21-feeding-checker.md`
-// Task 4, detector rules 10–16, Task 5 rule 4, Task 6 rule 5 and Task 8 rule 10). The models record as they run
-// (`SimStats`): what each machine was handed and gave up, every recipe check it made and what came of it, how many input
+// Task 4, detector rules 10–16, Task 5 rule 4, Task 6 rule 5, Task 8 rule 10 and Task 9 rule 8). The models record as they
+// run (`SimStats`): what each machine was handed and gave up, every recipe check it made and what came of it, how many input
 // slots each kind filled, what reached each chest and what was dropped into the world, what each Auto Workbench moved to
-// its result slot, destroyed, crafted, could not push and took in, and what Project Red's payloads did: each pipe's
+// its result slot, destroyed, crafted, could not push and took in, what Project Red's payloads did: each pipe's
 // dispatches, the orders its broadcaster dropped and what a restart took out of its send queue, and at each node the items
-// that bounced, wandered or were pulled back out of an input bus. `detect` reads that once the run is over:
+// that bounced, wandered or were pulled back out of an input bus; and what AE2 did: each ME interface's pushes and the
+// ticks its Locking Card let go, and each Fluid Packet that went into a machine's slot, waited in an interface's send list or
+// found no slot. `detect` reads that once the run is over:
 // - `feed_crowded`: a recipe waits for a kind that cannot get in, for `STALL_TICKS` in a row; or a multiblock has every
 //   input of its recipe on its input buses but no one bus holds them all while Input Separation is on, as long;
 // - `feed_overfill`: one kind in two or more input slots of a machine (or slots of a multiblock's input bus) that takes two
@@ -14,6 +16,9 @@
 // - `feed_bench_stuck`: a bench whose push left the stack in its result slot where it was for `STALL_TICKS` in a row;
 // - `feed_no_route`: an output blocked for `STALL_TICKS` in a row while nothing is taken out of the machine;
 // - `feed_pool_starve`: a recipe of a shared machine that never ran while its inputs were there for `STALL_TICKS`;
+// - `feed_fluid_packet`: once per machine and fluid, an ME interface's Fluid Packet that went into one of its input slots,
+//   that it kept in its send list for `STALL_TICKS` because the machine took none, or the CPU's push of a pattern of Fluid
+//   Packets alone that the machine refused for `STALL_TICKS` (it has no slot for them): whichever began first;
 // - `feed_starved`, `feed_slow`: a planned input never handed over, or handed over too slowly while the recipe waited;
 // - `feed_leak`: an item planned for a machine that reached a chest instead;
 // - `feed_churn`: `CHURN_ITEMS` of one item sent to a node over Project Red that did not fit and circle its pipe, that lost
@@ -94,6 +99,23 @@ interface ChurnRecord { bounced: Map<number, Tally>; wandered: Map<number, Tally
 /** What a run records about one Project Red pipe (Task 8): its dispatch ticks, the items in the orders its broadcaster dropped, and what a restart took out of its send queue. */
 interface PipeRecord { dispatches: number[]; dropped: number; lost: number }
 
+/** What a run records about one ME interface (Task 9): the ticks the CPU pushed a pattern into it, and those its Locking Card's lock cleared. */
+interface IfaceRecord { pushes: number[]; unlocks: number[] }
+
+/**
+ * How an ME interface's Fluid Packet fared at a machine (Task 9 rule 5): it went into an input slot (`slot`), it waits in the
+ * interface's send list as the machine took none of it (`send_list`), or the CPU's push of a pattern whose only stacks are Fluid
+ * Packets went nowhere (`no_slot`).
+ */
+export type PacketHow = 'slot' | 'send_list' | 'no_slot';
+
+/**
+ * The Fluid Packets of one fluid that one interface had at one machine, one way. `slot` keeps its first tick. `send_list` and
+ * `no_slot` keep stretches: records follow one another in a stretch until the CPU pushes into the interface again (`seq`, its
+ * count of pushes at the stretch's last record), as the packet left the send list or the refused push went through.
+ */
+interface PacketRecord { readonly iface: NodeId; readonly fluid: number; readonly how: PacketHow; readonly stretches: Array<{ from: number; to: number; seq: number }> }
+
 /** Adds `n` of `key` at tick `t` to `tallies`. */
 function tally(tallies: Map<number, Tally>, key: number, n: number, t: number): void {
   let s = tallies.get(key);
@@ -123,6 +145,9 @@ export class SimStats {
   private readonly benches = new Map<NodeId, BenchRecord>();
   private readonly churns = new Map<NodeId, ChurnRecord>();
   private readonly pipes = new Map<NodeId, PipeRecord>();
+  private readonly ifaces = new Map<NodeId, IfaceRecord>();
+  private readonly packets = new Map<string, PacketRecord>();
+  private readonly packetsAt = new Map<NodeId, PacketRecord[]>();
   private readonly simulated = new Set<NodeId>();
   private readonly spills: Array<[NodeId, number]> = [];      // (node, key) in the order they first spilled
 
@@ -144,6 +169,15 @@ export class SimStats {
     if (r === undefined) {
       r = { dispatches: [], dropped: 0, lost: 0 };
       this.pipes.set(pipe, r);
+    }
+    return r;
+  }
+
+  private ifaceOf(iface: NodeId): IfaceRecord {
+    let r = this.ifaces.get(iface);
+    if (r === undefined) {
+      r = { pushes: [], unlocks: [] };
+      this.ifaces.set(iface, r);
     }
     return r;
   }
@@ -319,6 +353,41 @@ export class SimStats {
     this.pipeOf(pipe).lost += n;
   }
 
+  /** AE2: the crafting CPU pushed a pattern into the ME interface `iface` (one entry per push, several in one tick with co-processors). */
+  ae2Push(iface: NodeId, t: number): void {
+    this.ifaceOf(iface).pushes.push(t);
+  }
+
+  /** AE2: the lock the Locking Card of the ME interface `iface` set on a push cleared: its list of the pattern's outputs is down to 0. */
+  ae2Unlock(iface: NodeId, t: number): void {
+    this.ifaceOf(iface).unlocks.push(t);
+  }
+
+  /**
+   * AE2: a Fluid Packet of `fluid` from the ME interface `iface` at machine `node` (Task 9 rule 5): it went into one of its
+   * input slots (`slot`), waits in `iface`'s send list (`send_list`: at the push that left it there and at each try of the list
+   * that leaves it), or the CPU's push of a pattern of packets alone went nowhere (`no_slot`: at each refused push).
+   */
+  packet(node: NodeId, iface: NodeId, fluid: number, how: PacketHow, t: number): void {
+    const id = `${node}\n${iface}\n${fluid}\n${how}`;
+    let rec = this.packets.get(id);
+    if (rec === undefined) {
+      rec = { iface, fluid, how, stretches: [] };
+      this.packets.set(id, rec);
+      const list = this.packetsAt.get(node);
+      if (list === undefined) this.packetsAt.set(node, [rec]);
+      else list.push(rec);
+    }
+    if (how === 'slot') {
+      if (rec.stretches.length === 0) rec.stretches.push({ from: t, to: t, seq: 0 });
+      return;
+    }
+    const seq = this.ifaces.get(iface)?.pushes.length ?? 0;
+    const last = rec.stretches.at(-1);
+    if (last !== undefined && last.seq === seq) last.to = Math.max(last.to, t);
+    else rec.stretches.push({ from: t, to: t, seq });
+  }
+
   /** Records `inv`'s contents at the end of the run. */
   snapshot(inv: SimInv): void {
     const out: Array<[number, number] | null> = [];
@@ -362,6 +431,21 @@ export class SimStats {
   /** The runs `node` started, by recipe index. */
   runsOf(node: NodeId): number[] {
     return [...(this.nodes.get(node)?.starts ?? [])];
+  }
+
+  /** The ticks `node` started a run, in order: a basic machine's, a multiblock controller's, a bench's crafts. */
+  starts(node: NodeId): number[] {
+    return (this.nodes.get(node)?.checks ?? []).filter((c) => c.kind === START).map((c) => c.t);
+  }
+
+  /** The ticks the crafting CPU pushed a pattern into the ME interface `iface`, in order (one entry per push). */
+  ae2Pushes(iface: NodeId): number[] {
+    return [...(this.ifaces.get(iface)?.pushes ?? [])];
+  }
+
+  /** The ticks the lock of the ME interface `iface`'s Locking Card cleared, in order. */
+  unlocked(iface: NodeId): number[] {
+    return [...(this.ifaces.get(iface)?.unlocks ?? [])];
   }
 
   /** The ticks bench `node` crafted, in order. */
@@ -413,6 +497,11 @@ export class SimStats {
   churnRecordOf(node: NodeId): Readonly<ChurnRecord> | undefined {
     return this.churns.get(node);
   }
+
+  /** @internal what `detect` reads of the Fluid Packets at a machine, in the order each (interface, fluid, how) was first recorded */
+  packetRecordsOf(node: NodeId): readonly PacketRecord[] {
+    return this.packetsAt.get(node) ?? [];
+  }
 }
 
 // ---- detect ----
@@ -425,6 +514,9 @@ const BENCH_REASONS: ReadonlyArray<readonly [BenchMove, string]> = [
   ['failed', 'a failed craft empties its last input slot'],
   ['duplicate', 'its clean-up moves the second of two stacks of one ingredient to its result slot'],
 ];
+
+/** How a Fluid Packet fared, in the order `feed_fluid_packet` prefers one that began on the same tick (Task 9 rule 8). */
+const PACKET_HOWS: readonly PacketHow[] = ['slot', 'send_list', 'no_slot'];
 
 /** "1 item", "448 items". */
 function itemsText(n: number): string {
@@ -513,6 +605,9 @@ export function detect(model: FeedModel, stats: SimStats, run: { scenario: Scena
     }
   }
   const sinks = new Set(model.sinks);
+  // the ME interfaces' names, for the Fluid Packet texts
+  const ifaceLabels = new Map<NodeId, string>();
+  for (const net of model.networks) if (net.kind === 'ae2') for (const i of net.interfaces) ifaceLabels.set(i.id, i.label);
 
   model.nodes.forEach((node, at) => {
     if (!stats.isSimulated(node.id)) return;
@@ -605,6 +700,9 @@ export function detect(model: FeedModel, stats: SimStats, run: { scenario: Scena
       });
     }
 
+    // Task 9 rule 8: feed_fluid_packet, once per fluid
+    fluidPackets(at, node);
+
     // rules 12 and 13: feed_starved and feed_slow, per planned input
     const planned = new Map<StuffKey, { rate: number; stepId: string }>();
     for (const stepId of node.stepIds) {
@@ -668,6 +766,31 @@ export function detect(model: FeedModel, stats: SimStats, run: { scenario: Scena
     if (node.kind !== 'multi') return;
     for (const bus of node.inBuses) {
       each(stats.churnRecordOf(bus.id)?.pulledBack, (n, item) => `${n} ${item} were pulled back out of ${bus.label} of ${node.label} by its Item Extractor Chip`);
+    }
+  }
+
+  /**
+   * Task 9 rule 8, `feed_fluid_packet`, once per fluid (key order) at a machine: of its interfaces' Fluid Packets of that fluid,
+   * the condition that began first (ties: one that went into a slot, then one held in a send list, then a refused push; then the
+   * order first recorded): a packet that went into one of its input slots, at once; one an interface kept in its send list, and a
+   * push of packets alone the machine refused, once that lasted `STALL_TICKS`.
+   */
+  function fluidPackets(at: number, node: Exclude<FeedNode, ChestNode>): void {
+    const records = stats.packetRecordsOf(node.id);
+    const first = new Map<number, { tick: number; rank: number; rec: (typeof records)[number] }>();
+    for (const rec of records) {
+      const s = rec.how === 'slot' ? rec.stretches[0] : rec.stretches.find((x) => x.to - x.from >= STALL_TICKS);
+      if (s === undefined) continue;
+      const rank = PACKET_HOWS.indexOf(rec.how);
+      const best = first.get(rec.fluid);
+      if (best === undefined || s.from < best.tick || (s.from === best.tick && rank < best.rank)) first.set(rec.fluid, { tick: s.from, rank, rec });
+    }
+    for (const [fluid, { tick, rec }] of [...first].sort((a, b) => a[0] - b[0])) {
+      const iface = ifaceLabels.get(rec.iface) ?? rec.iface, f = name(fluid), m = node.label, key = keyOf(fluid);
+      const text = rec.how === 'slot' ? `${iface} pushed a Fluid Packet (${f}) into ${m}: it stays in an input slot for good`
+        : rec.how === 'send_list' ? `${iface} cannot push the Fluid Packet (${f}) into ${m}, so it is stuck with it`
+          : `${iface} cannot push ${f} into ${m}: as a Fluid Packet item it needs a free input slot, and ${m} has none`;
+      emit(at, node, 'feed_fluid_packet', text, { key, stepId: node.recipes.find((r) => r.fluidsIn.some((x) => x.key === key))?.stepId, tick });
     }
   }
 

@@ -1,8 +1,8 @@
-// One scenario run of the feeding simulation (plan `docs/superpowers/plans/2026-10-20-21-feeding-checker.md` Tasks 4–8):
+// One scenario run of the feeding simulation (plan `docs/superpowers/plans/2026-10-20-21-feeding-checker.md` Tasks 4–9):
 // `runScenario` builds the entities of a model for a scenario — one per node (GT basic machines and chests; a multiblock's
 // controller and each of its buses, Task 5; an Auto Workbench and its energy, Task 6), the networks' entities from
-// `NETWORK_MODELS` (EnderIO's, Task 7; Project Red's, Task 8; Tasks 9–10 add the others) and a test's extra ones — runs
-// them tick by tick and turns what they recorded into findings (`detect`).
+// `NETWORK_MODELS` (EnderIO's, Task 7; Project Red's, Task 8; AE2's, Task 9; Task 10 adds GT pipes') and a test's extra
+// ones — runs them tick by tick and turns what they recorded into findings (`detect`).
 // - A network kind without a model is left out, with the unknown `not_simulated`; every node kind has its model.
 // - `env.push(from, side)` is what a GT transfer out of that side meets: the receiver a network registered at the
 //   neighbouring cell for that side, else the inventory of the node (or bus) there, else nothing (a routed pipe too: it is
@@ -13,16 +13,19 @@
 // - A bench's crafts are the runs of its first recipe's step, the one its grid is laid from (`SimStats.benchCrafted`).
 // - The run's unknowns: the stack sizes, an input chest of too many kinds and each network kind without a model, then the
 //   items dropped into the world, then what each network's model could not know (Project Red's lost send queues and
-//   wanderers), each in the order first met.
+//   wanderers, AE2's steam machines emptied by hand), each in the order first met.
+// - What reached the line's output chests or ME (`out`): the output chests' arrivals and what each network's model says
+//   entered ME.
 // Pure TypeScript: nothing from node:* may be imported here.
 
 import { isFluidKey, type StuffKey } from '../../../../shared/keys.ts';
 import { fmtInt, NETWORK_NAMES } from '../../../../shared/layout/format.ts';
 import { OPPOSITE, posKey, step, type Vec3 } from '../../../../shared/layout/geometry.ts';
 import { SLOW_TOLERANCE, type FeedFinding, type FeedUnknown, type ScenarioName } from '../contract.ts';
-import { CHEST_SLOTS } from '../facts.ts';
+import { CHEST_SLOTS, PART_KEYS } from '../facts.ts';
 import { localOf } from '../frame.ts';
 import type { FeedModel, FeedNetwork, FeedNode, NodeId } from '../model.ts';
+import { ae2Model } from './ae2.ts';
 import { bench } from './bench.ts';
 import { FluidPools, KeyTable, Sim, type Preloadable, type PushTarget, type SimEntity, type SimInv } from './core.ts';
 import { detect, SimStats, type Explain } from './detect.ts';
@@ -34,17 +37,18 @@ import { inputChest, outputChest } from './storage.ts';
 
 /**
  * What a network kind's model gives a run: its entities, its reasons, the push targets it registers at cells, what a restart
- * resets, and what the run left it unable to know (read once the run is over).
+ * resets, what the run left it unable to know, and what entered ME, by item (both read once the run is over).
  */
 export interface NetworkModel {
   entities: SimEntity[]; explain: Explain; receivers: Array<{ at: NodeId; side: number; target: PushTarget }>; restart?: () => void;
   unknowns?: () => FeedUnknown[];
+  out?: () => Array<[StuffKey, number]>;
 }
 
 type NetworkModels = { [K in FeedNetwork['kind']]?: (net: Extract<FeedNetwork, { kind: K }>, env: SimEnv) => NetworkModel };
 
-/** The network models by kind: EnderIO's (Task 7) and Project Red's (Task 8); AE2 (Task 9) and GT pipes (Task 10) add theirs. */
-export const NETWORK_MODELS: NetworkModels = { enderio: enderioModel, routed: routedModel };
+/** The network models by kind: EnderIO's (Task 7), Project Red's (Task 8) and AE2's (Task 9); GT pipes (Task 10) add theirs. */
+export const NETWORK_MODELS: NetworkModels = { enderio: enderioModel, routed: routedModel, ae2: ae2Model };
 
 export interface ScenarioOptions {
   ticks: number; restartAt: number; exhaustive?: boolean; ae2Coprocessors?: number; ae2FluidStock?: boolean; slowTolerance?: number;
@@ -94,7 +98,13 @@ function modelKeys(model: FeedModel, initial: ScenarioOptions['initial']): Stuff
         for (const p of net.pipes) for (const chip of p.chips) keys.push(...(chip.filter?.keys ?? []), ...(chip.stock ?? []).map((s) => s.key));
         break;
       case 'ae2':
-        for (const i of net.interfaces) for (const p of i.spec.patterns) keys.push(...p.inputs.map((x) => x.key), ...p.outputs.map((x) => x.key));
+        for (const i of net.interfaces) {
+          for (const p of i.spec.patterns) {
+            keys.push(...p.inputs.map((x) => x.key), ...p.outputs.map((x) => x.key));
+            // a plain interface pushes a pattern's fluid as a Fluid Packet item
+            if (p.inputs.some((x) => isFluidKey(x.key))) keys.push(PART_KEYS.fluidPacket);
+          }
+        }
         for (const b of net.exportBuses) keys.push(...b.keys);
         break;
       default:
@@ -141,6 +151,7 @@ export function runScenario(model: FeedModel, scenario: ScenarioName, opts: Scen
       ticks: opts.ticks, restartAt: opts.restartAt, ae2Coprocessors: opts.ae2Coprocessors ?? 0, ae2FluidStock: opts.ae2FluidStock === true,
       slowTolerance: opts.slowTolerance ?? SLOW_TOLERANCE,
     },
+    byHand: null,
   };
   const unknowns: FeedUnknown[] = [{
     code: 'stack_sizes', text: 'The recipe export carries no stack sizes: every item is taken to stack to 64, a Fluid Packet and a GT tool to 1',
@@ -230,7 +241,7 @@ export function runScenario(model: FeedModel, scenario: ScenarioName, opts: Scen
     for (const e of entities) sim.wake(e, null);
   });
 
-  // what is left, what ran, what reached the output chests
+  // what is left, what ran, what reached the output chests or ME
   for (const inv of invs.values()) stats.snapshot(inv);
   const runs: Record<string, number> = {};
   const out = new Map<StuffKey, number>();
@@ -243,6 +254,7 @@ export function runScenario(model: FeedModel, scenario: ScenarioName, opts: Scen
     const counts = stats.runsOf(node.id);
     node.recipes.forEach((r, i) => { runs[r.stepId] = (runs[r.stepId] ?? 0) + (counts[i] ?? 0); });
   }
+  for (const m of models) for (const [key, n] of m.out?.() ?? []) out.set(key, (out.get(key) ?? 0) + n);
   const explain: Explain = (kind, node, key) => {
     for (const ex of explains) {
       const why = ex(kind, node, key);

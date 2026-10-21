@@ -1,7 +1,7 @@
 // Fixtures for the feeding checker's tests (plan 21): the fixture pack with recipe maps and the machines and items the
 // feeding tests need, plans whose steps carry pack recipes (chances, held items, crafting grids), lines laid out by
 // main's `layoutLine` with or without a world, and hand-built models with test entities for the simulation (Tasks 4–6),
-// EnderIO lines (Task 7) and Project Red lines (Task 8) among them.
+// EnderIO lines (Task 7), Project Red lines (Task 8) and AE2 lines (Task 9) among them.
 // Every call returns fresh objects, so a test that changes its pack, plan, layout or model changes no other. Synthetic
 // only: invented names, apart from the GT class names, mteIds and item ids the code names; no real export or world is read.
 
@@ -12,12 +12,12 @@ import { FACES } from '../../src/shared/types/assets.ts';
 import type { ConduitMode, Layout, LayoutBlock } from '../../src/shared/types/layout.ts';
 import type { Ingredient, Item, Machine, MachineKind, Pack, Product, Recipe, StructureInfo } from '../../src/shared/types/pack.ts';
 import type { LogisticsMode, Plan, PlanFlow } from '../../src/shared/types/plan.ts';
-import type { RoutedChipSpec } from '../../src/server/layout/feeding/contract.ts';
+import type { InterfaceSpec, RoutedChipSpec } from '../../src/server/layout/feeding/contract.ts';
 import { PART_KEYS } from '../../src/server/layout/feeding/facts.ts';
 import { compareLocal } from '../../src/server/layout/feeding/frame.ts';
 import type {
-  BasicNode, BenchNode, BusNode, ChestNode, EioFace, FeedModel, FeedNode, GtCover, InvRef, MachineSettings, MultiNode, NodeId, OutBusNode,
-  RoutedPipe, SimRecipe,
+  Ae2ExportBus, Ae2Iface, BasicNode, BenchNode, BusNode, ChestNode, EioFace, FeedModel, FeedNode, GtCover, InvRef, MachineSettings, MultiNode, NodeId,
+  OutBusNode, RoutedPipe, SimRecipe,
 } from '../../src/server/layout/feeding/model.ts';
 import { insertEmpties, NEVER, PHASE, type SimEntity } from '../../src/server/layout/feeding/sim/core.ts';
 import type { SimEnv } from '../../src/server/layout/feeding/sim/machine.ts';
@@ -62,11 +62,14 @@ const FIXTURE_MAPS: ReadonlyArray<readonly [number, string]> = [
   [IDS.EXTRACTOR, 'gt.recipe.fluidextractor'], [IDS.SOLIDIFIER, 'gt.recipe.fluidsolidifier'], [IDS.EBF, 'gt.recipe.blastfurnace'],
 ];
 
-/** Plain items the feeding tests flow through machines, and those of the bench tests (Task 6: the research's Resistor grid and a cell). */
+/**
+ * Plain items the feeding tests flow through machines, and those of the bench tests (Task 6: the research's Resistor grid and a
+ * cell; Task 9: another Fine Wire than the grid's, research C11).
+ */
 const FEED_ITEMS: ReadonlyArray<readonly [ItemKey, string]> = [
   ['t:a@0', 'Alpha'], ['t:b@0', 'Beta'], ['t:c@0', 'Gamma'], ['t:x@0', 'Ex'], ['t:y@0', 'Why'],
   ['t:resin@0', 'Resin'], ['t:fine@0', 'Fine Wire'], ['t:wire@0', 'Wire'], ['t:carbon@0', 'Carbon Dust'], ['t:resistor@0', 'Resistor'],
-  ['t:wet@0', 'Wet Cell'], ['t:dry@0', 'Dry Cell'],
+  ['t:wet@0', 'Wet Cell'], ['t:dry@0', 'Dry Cell'], ['t:fine2@0', 'Other Fine Wire'],
 ];
 
 /** The part items of `PART_KEYS` that `layoutPack` lacks (it holds the item filter cover and the ME Export Bus). */
@@ -95,8 +98,8 @@ function feedMachines(): Machine[] {
  * `layoutPack` leaves without one), the machines of `FEED_IDS` (a smelter and a mixer, an Auto Workbench, a basic machine of an
  * unknown kind, a steam macerator and a Coke Oven), the items `t:a@0` "Alpha", `t:b@0` "Beta", `t:c@0` "Gamma", `t:x@0` "Ex",
  * `t:y@0` "Why" and `t:lens@0` "Test Lens" (a GT lens), the bench tests' `t:resin@0` "Resin", `t:fine@0` "Fine Wire", `t:wire@0`
- * "Wire", `t:carbon@0` "Carbon Dust", `t:resistor@0` "Resistor", `t:wet@0` "Wet Cell" and `t:dry@0` "Dry Cell", and the part items
- * of `PART_KEYS`. The machines of `layoutPack` keep their ids (`IDS`) and names.
+ * "Wire", `t:carbon@0` "Carbon Dust", `t:resistor@0` "Resistor", `t:wet@0` "Wet Cell", `t:dry@0` "Dry Cell" and `t:fine2@0` "Other
+ * Fine Wire", and the part items of `PART_KEYS`. The machines of `layoutPack` keep their ids (`IDS`) and names.
  */
 export function feedPack(): Pack {
   const pack = layoutPack();
@@ -679,4 +682,27 @@ export function taker(env: SimEnv, target: NodeId, side: number, n: number, at: 
     },
   };
   return self;
+}
+
+// ---- AE2 lines (plan Task 9) ----
+
+/** An ME interface of `ae2Model`'s network: its cell, its patterns and settings, and the inventories it pushes into (each by its own side toward it). */
+export interface Ae2IfaceSpec { id: NodeId; spec: InterfaceSpec; targets: InvRef[] }
+
+/**
+ * `handModel(nodes)` in AE2 mode with one AE2 network of the interfaces `ifaces` (each `ME Interface at x y z`, in local order)
+ * and the ME Export Buses `more.exportBuses`. ME's supply is `t:a@0`, and the plan sends `t:x@0` out of the line at 1/s from
+ * the first machine's first step, unless `more` gives `supply` or `itemFlows`; `more` sets the rest of the model.
+ */
+export function ae2Model(nodes: FeedNode[], ifaces: Ae2IfaceSpec[], more: Partial<FeedModel> & { exportBuses?: Ae2ExportBus[] } = {}): FeedModel {
+  const { exportBuses = [], ...rest } = more;
+  const interfaces = ifaces.map((i): Ae2Iface => ({
+    id: i.id, label: `ME Interface at ${cellOf(i.id).join(' ')}`, spec: structuredClone(i.spec), targets: i.targets.map((t) => ({ ...t })),
+  })).sort((a, b) => compareLocal(cellOf(a.id), cellOf(b.id)));
+  const buses = exportBuses.map((b): Ae2ExportBus => ({ ...b, keys: [...b.keys], target: b.target === null ? null : { ...b.target } }));
+  const first = nodes.find((n): n is Exclude<FeedNode, ChestNode> => n.kind !== 'chest');
+  return handModel(nodes, {
+    mode: 'ae2', supply: ['t:a@0'], itemFlows: [{ from: first?.stepIds[0] ?? 'raw', to: 'out', key: 't:x@0', perSecond: 1 }], ...rest,
+    networks: [{ kind: 'ae2', interfaces, exportBuses: buses }],
+  });
 }

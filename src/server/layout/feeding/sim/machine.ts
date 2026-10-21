@@ -11,7 +11,8 @@
 //   cached recipe when that recipe's inputs are there, else its first recipe whose are; a recipe whose outputs do not fit
 //   blocks it, and it never tries another. Inputs are taken when a run starts, chanced outputs rolled then, by a
 //   deterministic accumulator per machine and item (Review Focus 5).
-// - A steam machine (E17) keeps these slot rules, takes no cover and never auto-outputs.
+// - A steam machine (E17) keeps these slot rules, takes no cover and never auto-outputs. In AE2 mode the player takes its
+//   outputs out by hand: each run's outputs go to `env.byHand` (into ME) as the run ends, not into its output slots.
 // Pure TypeScript: nothing from node:* may be imported here.
 
 import type { StuffKey } from '../../../../shared/keys.ts';
@@ -47,6 +48,12 @@ export interface SimEnv {
   readonly fluids: FluidPools;
   /** The run's options (ruling R-12). */
   readonly opts: { ticks: number; restartAt: number; ae2Coprocessors: number; ae2FluidStock: boolean; slowTolerance: number };
+  /**
+   * Where a steam machine's outputs go when the player takes them out by hand: the AE2 model sets it in AE2 mode (Task 9
+   * rule 1, E17: `steam_items`), and a steam machine then hands each run's outputs to it as the run ends, in place of its
+   * output slots. Null in every other mode.
+   */
+  byHand: ((node: NodeId, key: number, n: number, by: SimEntity | null) => void) | null;
 }
 
 /** The timer a GT tile sees at tick `t`: its age since its chunk loaded, plus 1 (E1, rule 3a). */
@@ -435,12 +442,20 @@ export class BasicMachine implements SimInv, SimEntity, Preloadable, FluidWaiter
     env.stats.started(this.id, r, t);
   }
 
-  /** The run's last tick: output i into output slot i, i + 1, … (mod the output slots), the first empty one or one holding it with room for all of it. */
+  /**
+   * The run's last tick: output i into output slot i, i + 1, … (mod the output slots), the first empty one or one holding it with
+   * room for all of it; a steam machine whose outputs the player takes out by hand (`env.byHand`) hands them over instead.
+   */
   private finish(): void {
     const recipe = this.recipes[this.running]!;
+    const byHand = this.node.steam ? this.env.byHand : null;
     recipe.outputs.forEach((o, i) => {
       const amount = this.rolled[i] ?? 0;
       if (amount <= 0 || i >= this.outSlots) return;
+      if (byHand !== null) {
+        byHand(this.id, o.key, amount, this);
+        return;
+      }
       const limit = this.stackLimit(o.key);
       for (let j = 0; j < this.outSlots; j++) {
         const slot = this.inSlots + ((i + j) % this.outSlots);
