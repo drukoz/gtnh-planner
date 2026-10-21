@@ -411,14 +411,19 @@ function itemConduit(cell: Cell): ConduitSpec | undefined {
 }
 
 /**
- * A face's filter, copied. A Limited Item Filter on an extract side raises `eio_limited_extract` (it extracts only
- * what is above its counts, which the checker does not model); one without counts raises `limited_counts_missing` and
- * is read as a whitelist of its keys.
+ * A face's filter, copied. One that matches by ore dictionary raises `eio_oredict`: the simulation reads it as the exact
+ * items it lists (plan Task 7 rule 4). A Limited Item Filter on an extract side raises `eio_limited_extract` (it extracts
+ * only what is above its counts, which the checker does not model); one without counts raises `limited_counts_missing`
+ * and is read as a whitelist of its keys.
  */
 function conduitFilter(ctx: ReadContext, cell: Cell, face: Face, filter: FeedConduitFilter | null, side: 'extract' | 'insert'): FeedConduitFilter | null {
   if (filter === null) return null;
   const copy: FeedConduitFilter = { ...filter, keys: [...filter.keys] };
   if (filter.limits !== undefined) copy.limits = filter.limits.map((l) => ({ key: l.key, count: l.count }));
+  if (filter.oreDict === true) {
+    ctx.unknown('eio_oredict', `${cell.label}: the item filter on its ${face} face's ${side} side matches by ore dictionary, which the checker reads `
+      + 'as the exact items it lists', cell);
+  }
   if (filter.item !== PART_KEYS.limitedFilter) return copy;
   if (side === 'extract') {
     ctx.unknown('eio_limited_extract', `${cell.label}: the Limited Item Filter on its ${face} face's extract side extracts only what is above its counts, `

@@ -253,6 +253,12 @@ export class SimStats {
     return this.spills.map(([node, key]) => [node, this.keys.key(key), this.nodes.get(node)!.spilled.get(key)!]);
   }
 
+  /** What was handed to `node` (or to the bus `node`), in order: one entry per `delivered`. */
+  deliveries(node: NodeId): Array<[tick: number, key: StuffKey, count: number]> {
+    const g = this.nodes.get(node)?.given;
+    return g === undefined ? [] : g.t.map((t, i) => [t, this.keys.key(g.key[i]!), g.n[i]!]);
+  }
+
   /** What reached `chest`, in order: one entry per tick and key. */
   arrivals(chest: NodeId): Array<[tick: number, key: StuffKey, count: number]> {
     return (this.nodes.get(chest)?.arrived ?? []).map(([t, key, n]) => [t, this.keys.key(key), n]);

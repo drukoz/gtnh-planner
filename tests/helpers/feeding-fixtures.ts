@@ -1,20 +1,22 @@
 // Fixtures for the feeding checker's tests (plan 21): the fixture pack with recipe maps and the machines and items the
 // feeding tests need, plans whose steps carry pack recipes (chances, held items, crafting grids), lines laid out by
-// main's `layoutLine` with or without a world, and hand-built models with test entities for the simulation (Tasks 4–6).
+// main's `layoutLine` with or without a world, and hand-built models with test entities for the simulation (Tasks 4–6),
+// EnderIO lines among them (Task 7).
 // Every call returns fresh objects, so a test that changes its pack, plan, layout or model changes no other. Synthetic
 // only: invented names, apart from the GT class names, mteIds and item ids the code names; no real export or world is read.
 
 import { TIER_NAMES } from '../../src/shared/gt/tiers.ts';
 import { isFluidKey, parseItemKey, type ItemKey, type StuffKey } from '../../src/shared/keys.ts';
-import { DIRS, posKey, step, type Rotation, type Vec3 } from '../../src/shared/layout/geometry.ts';
+import { DIRS, OPPOSITE, posKey, step, type Rotation, type Vec3 } from '../../src/shared/layout/geometry.ts';
 import { FACES } from '../../src/shared/types/assets.ts';
-import type { Layout, LayoutBlock } from '../../src/shared/types/layout.ts';
+import type { ConduitMode, Layout, LayoutBlock } from '../../src/shared/types/layout.ts';
 import type { Ingredient, Item, Machine, MachineKind, Pack, Product, Recipe, StructureInfo } from '../../src/shared/types/pack.ts';
 import type { LogisticsMode, Plan, PlanFlow } from '../../src/shared/types/plan.ts';
 import { PART_KEYS } from '../../src/server/layout/feeding/facts.ts';
 import { compareLocal } from '../../src/server/layout/feeding/frame.ts';
 import type {
-  BasicNode, BenchNode, BusNode, ChestNode, FeedModel, FeedNode, GtCover, MachineSettings, MultiNode, NodeId, OutBusNode, SimRecipe,
+  BasicNode, BenchNode, BusNode, ChestNode, EioFace, EioNet, FeedModel, FeedNode, GtCover, InvRef, MachineSettings, MultiNode, NodeId, OutBusNode,
+  SimRecipe,
 } from '../../src/server/layout/feeding/model.ts';
 import { insertEmpties, NEVER, PHASE, type SimEntity } from '../../src/server/layout/feeding/sim/core.ts';
 import type { SimEnv } from '../../src/server/layout/feeding/sim/machine.ts';
@@ -561,6 +563,69 @@ export function feeder(env: SimEnv, target: NodeId, side: number, keys: StuffKey
     },
   };
   return self;
+}
+
+// ---- EnderIO lines (plan Task 7) ----
+
+/**
+ * A face of `eioModel`'s network: side `side` of the conduit cell `conduit`, its mode, and its extract and insert sides'
+ * settings (each one the defaults where it does not say).
+ */
+export interface EioFaceSpec {
+  conduit: NodeId; side: number; mode?: ConduitMode;
+  extract?: Partial<NonNullable<EioFace['extract']>>; insert?: Partial<NonNullable<EioFace['insert']>>;
+}
+
+/**
+ * `handModel(nodes)` in EnderIO mode with one item conduit network over the conduit cells that `faces` and `links` name:
+ * linked in a chain in the order the faces first name them unless `links` lists the links, hops breadth-first over them.
+ * Each face (`${conduit}:${side}`, in local order) has as its target the node, or the multiblock's bus, on its side (null
+ * when none is there). Its mode is `mode`, else `in_out` when it gives both sides, `insert` when it gives only an insert
+ * side, and `extract` otherwise (EnderIO's own default for an item conduit face); a `disabled` face is left out, as
+ * `readLine` leaves it out. An extract side is red, unfiltered, 4 items at a time, without round robin or self feed and
+ * with redstone `ignore`; an insert side is red, unfiltered and of priority 0, unless the face's `extract` and `insert`
+ * say otherwise.
+ */
+export function eioModel(nodes: FeedNode[], faces: EioFaceSpec[], links?: Array<[NodeId, NodeId]>): FeedModel {
+  // the inventory at each cell: a node, or a multiblock's bus
+  const owners = new Map<NodeId, { node: NodeId; bus?: NodeId }>();
+  for (const n of nodes) {
+    owners.set(n.id, { node: n.id });
+    if (n.kind === 'multi') for (const b of [...n.inBuses, ...n.outBuses]) owners.set(b.id, { node: n.id, bus: b.id });
+  }
+  const read = faces.flatMap((spec): EioFace[] => {
+    const mode = spec.mode ?? (spec.insert === undefined ? 'extract' : spec.extract === undefined ? 'insert' : 'in_out');
+    if (mode === 'disabled') return [];
+    const cell = cellOf(spec.conduit);
+    const owner = owners.get(posKey(step(cell, spec.side)));
+    const target: InvRef | null = owner === undefined ? null : { ...owner, side: OPPOSITE[spec.side]! };
+    const face: EioFace = { id: `${spec.conduit}:${spec.side}`, conduit: spec.conduit, side: spec.side, target, label: `Item Conduit at ${cell.join(' ')}, ${FACES[spec.side]} face` };
+    if (mode !== 'insert') face.extract = { color: 'red', filter: null, max: 4, roundRobin: false, selfFeed: false, redstone: 'ignore', ...spec.extract };
+    if (mode !== 'extract') face.insert = { color: 'red', filter: null, priority: 0, ...spec.insert };
+    return [face];
+  }).sort((a, b) => compareLocal(cellOf(a.conduit), cellOf(b.conduit)) || a.side - b.side);
+  // the conduit cells and their links
+  const cells = [...new Set([...faces.map((f) => f.conduit), ...(links ?? []).flat()])];
+  const chain = links ?? cells.slice(1).map((c, i): [NodeId, NodeId] => [cells[i]!, c]);
+  const next = new Map<NodeId, NodeId[]>(cells.map((c) => [c, []]));
+  for (const [a, b] of chain) {
+    next.get(a)!.push(b);
+    next.get(b)!.push(a);
+  }
+  const hops: EioNet['hops'] = {};
+  for (const from of cells) {
+    const dist: Record<NodeId, number> = { [from]: 0 };
+    const queue = [from];
+    for (let i = 0; i < queue.length; i++) {
+      for (const n of next.get(queue[i]!)!) {
+        if (dist[n] !== undefined) continue;
+        dist[n] = dist[queue[i]!]! + 1;
+        queue.push(n);
+      }
+    }
+    hops[from] = dist;
+  }
+  return handModel(nodes, { mode: 'enderio', networks: [{ kind: 'enderio', faces: read, hops }] });
 }
 
 /** A test entity (phase `feed`) that, at each of the ticks `at`, takes `n` out of the first stack of `target` that its side `side` lets out. */

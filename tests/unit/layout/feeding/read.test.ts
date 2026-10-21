@@ -370,6 +370,19 @@ describe('readLine', () => {
     expect(['limited_counts_missing', 'eio_limited_extract'].map((code) => unknownsAt(m, code))).toEqual([[[5, 64, 2]], [[5, 64, 2]]]);
   });
 
+  it('reads an ore dictionary filter as its exact items, and says so', async () => {
+    const { pack, plan } = chain2();
+    const layout = await layFeed(pack, plan, 'enderio');
+    const face = blockAt(layout, [5, 64, 2]).conduits![0]!.faces[0]!;
+    face.insert!.filter = { ...face.insert!.filter!, oreDict: true };
+    const m = readLine({ pack, plan, layout });
+    const read = m.networks.find((n): n is EioNet => n.kind === 'enderio')!.faces.find((f) => f.id === '5,0,2:2')!;
+    // the simulation reads its items as they are (Task 7 rule 4); the ore dictionary is left to the unknown
+    expect(read.insert!.filter).toMatchObject({ keys: ['t:x@0'], oreDict: true });
+    expect(m.unknowns.filter((u) => u.code === 'eio_oredict').map((u) => [u.pos, u.text])).toEqual([[[5, 64, 2],
+      'Item Conduit at 5 64 2: the item filter on its north face\'s insert side matches by ore dictionary, which the checker reads as the exact items it lists']]);
+  });
+
   it('reads every cover it knows and names the others', async () => {
     const { pack, plan } = chain2();
     const layout = await layFeed(pack, plan, 'direct');

@@ -43,6 +43,12 @@ export function nodeId(local: Vec3): NodeId {
   return posKey(local);
 }
 
+/** The local cell an id names, as numbers (`nodeId` inverted; NaN where the id is no cell). */
+export function localOf(id: NodeId): Vec3 {
+  const p = id.split(',').map(Number);
+  return [p[0] ?? Number.NaN, p[1] ?? Number.NaN, p[2] ?? Number.NaN];
+}
+
 /** Local cells by x, then y, then z. */
 export function compareLocal(a: Vec3, b: Vec3): number {
   return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];

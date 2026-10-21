@@ -1,8 +1,8 @@
-// One scenario run of the feeding simulation (plan `docs/superpowers/plans/2026-10-20-21-feeding-checker.md` Tasks 4–6):
+// One scenario run of the feeding simulation (plan `docs/superpowers/plans/2026-10-20-21-feeding-checker.md` Tasks 4–7):
 // `runScenario` builds the entities of a model for a scenario — one per node (GT basic machines and chests; a multiblock's
 // controller and each of its buses, Task 5; an Auto Workbench and its energy, Task 6), the networks' entities from
-// `NETWORK_MODELS` (filled by Tasks 7–10) and a test's extra ones — runs them tick by tick and turns what they recorded
-// into findings (`detect`).
+// `NETWORK_MODELS` (EnderIO's, Task 7; Tasks 8–10 add the others) and a test's extra ones — runs them tick by tick and
+// turns what they recorded into findings (`detect`).
 // - A network kind without a model is left out, with the unknown `not_simulated`; every node kind has its model.
 // - `env.push(from, side)` is what a GT transfer out of that side meets: the receiver a network registered at the
 //   neighbouring cell for that side, else the inventory of the node (or bus) there, else nothing.
@@ -17,10 +17,12 @@ import { fmtInt, NETWORK_NAMES } from '../../../../shared/layout/format.ts';
 import { OPPOSITE, posKey, step, type Vec3 } from '../../../../shared/layout/geometry.ts';
 import { SLOW_TOLERANCE, type FeedFinding, type FeedUnknown, type ScenarioName } from '../contract.ts';
 import { CHEST_SLOTS } from '../facts.ts';
+import { localOf } from '../frame.ts';
 import type { FeedModel, FeedNetwork, FeedNode, NodeId } from '../model.ts';
 import { bench } from './bench.ts';
 import { FluidPools, KeyTable, Sim, type Preloadable, type PushTarget, type SimEntity, type SimInv } from './core.ts';
 import { detect, SimStats, type Explain } from './detect.ts';
+import { enderioModel } from './enderio.ts';
 import { basicMachine, type SimEnv } from './machine.ts';
 import { multiblock } from './multi.ts';
 import { inputChest, outputChest } from './storage.ts';
@@ -32,8 +34,8 @@ export interface NetworkModel {
 
 type NetworkModels = { [K in FeedNetwork['kind']]?: (net: Extract<FeedNetwork, { kind: K }>, env: SimEnv) => NetworkModel };
 
-/** The network models by kind: EnderIO (Task 7), Project Red (Task 8), AE2 (Task 9) and GT pipes (Task 10) add theirs. */
-export const NETWORK_MODELS: NetworkModels = {};
+/** The network models by kind: EnderIO's (Task 7); Project Red (Task 8), AE2 (Task 9) and GT pipes (Task 10) add theirs. */
+export const NETWORK_MODELS: NetworkModels = { enderio: enderioModel };
 
 export interface ScenarioOptions {
   ticks: number; restartAt: number; exhaustive?: boolean; ae2Coprocessors?: number; ae2FluidStock?: boolean; slowTolerance?: number;
@@ -94,12 +96,6 @@ function modelKeys(model: FeedModel, initial: ScenarioOptions['initial']): Stuff
   return keys.filter((k) => k !== '');
 }
 
-/** The cell `id` names, as numbers. */
-function cellOf(id: NodeId): Vec3 {
-  const p = id.split(',').map(Number);
-  return [p[0] ?? Number.NaN, p[1] ?? Number.NaN, p[2] ?? Number.NaN];
-}
-
 function isPreloadable(inv: SimInv): inv is SimInv & Preloadable {
   return typeof (inv as Partial<Preloadable>).preload === 'function';
 }
@@ -123,7 +119,7 @@ export function runScenario(model: FeedModel, scenario: ScenarioName, opts: Scen
       const memo = `${from}|${side}`;
       let found = reached.get(memo);
       if (found === undefined) {
-        const to = posKey(step(cellOf(from), side));
+        const to = posKey(step(localOf(from), side));
         found = receivers.get(`${to}|${OPPOSITE[side]}`) ?? invs.get(to) ?? null;
         reached.set(memo, found);
       }
