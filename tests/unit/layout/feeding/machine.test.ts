@@ -1,12 +1,12 @@
 // tests/unit/layout/feeding/machine.test.ts
 import { describe, expect, it } from 'vitest';
 import type { ScenarioName } from '../../../../src/server/layout/feeding/contract.ts';
-import type { BenchNode, FeedModel, GtCover } from '../../../../src/server/layout/feeding/model.ts';
+import type { FeedModel, GtCover } from '../../../../src/server/layout/feeding/model.ts';
 import { gtTransfer, insertEmpties, insertOneEmpty, KeyTable, NEVER, PHASE, roomFor, Sim, type SimEntity } from '../../../../src/server/layout/feeding/sim/core.ts';
 import { basicMachine, type SimEnv } from '../../../../src/server/layout/feeding/sim/machine.ts';
 import { NETWORK_MODELS, runScenario, type ScenarioOptions, type ScenarioRun } from '../../../../src/server/layout/feeding/sim/run.ts';
 import {
-  FEED_IDS, feeder, handModel, hvExport, inputChestNode, oneSlotNode, outputChestNode, simRecipe, sinkNode, smelterNode, taker,
+  feeder, handModel, hvExport, inputChestNode, oneSlotNode, outputChestNode, simRecipe, sinkNode, smelterNode, taker,
 } from '../../../helpers/feeding-fixtures.ts';
 
 const ticks = 1_000;
@@ -410,16 +410,10 @@ describe('covers, timers and scenarios', () => {
   });
 
   it('leaves out what it has no model for', () => {
-    // an Auto Workbench: the one node kind without a model until Task 6
-    const bench: BenchNode = {
-      kind: 'bench', id: '0,0,0', pos: [0, 0, 0], local: [0, 0, 0], name: 'Auto Workbench (MV)', label: 'Auto Workbench (MV) at 0 0 0', stepIds: ['w'],
-      recipes: [simRecipe('w', 20, [['t:a@0', 1]], [['t:x@0', 1]])], kinds: ['t:a@0'], mteId: FEED_IDS.BENCH, tier: 2, front: 2, back: 3,
-      grid: ['t:a@0', null, null, null, null, null, null, null, null], result: { key: 't:x@0', amount: 1 }, containers: {}, throughput: 0,
-      fluidSides: [], powerSides: [], itemPipeSides: [],
-    };
-    const r = both(handModel([bench], { networks: [{ kind: 'gtpipe', pipes: [] }], planned: { w: { 't:a@0': 1 } } }), { ticks: 10, restartAt: 10 });
-    expect(r.unknowns.map((u) => [u.code, u.pos, u.stepId])).toEqual([['stack_sizes', undefined, undefined], ['not_simulated', [0, 0, 0], 'w'], ['not_simulated', undefined, undefined]]);
-    expect([r.findings, r.runs]).toEqual([[], {}]);
+    // GT item pipes: the one network kind without a model until Task 10 (every node kind has its model since Task 6)
+    const r = both(handModel([oneSlotNode('0,0,0')], { networks: [{ kind: 'gtpipe', pipes: [] }] }), { ticks: 10, restartAt: 10 });
+    expect(r.unknowns.map((u) => [u.code, u.pos, u.stepId])).toEqual([['stack_sizes', undefined, undefined], ['not_simulated', undefined, undefined]]);
+    expect([r.findings, r.runs]).toEqual([[], { one: 0 }]);
   });
 });
 

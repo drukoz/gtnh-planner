@@ -1,11 +1,15 @@
 // What a scenario run records and the findings it gives (plan `docs/superpowers/plans/2026-10-20-21-feeding-checker.md`
-// Task 4, detector rules 10–16, and Task 5 rule 4). The models record as they run (`SimStats`): what each machine was
-// handed and gave up, every recipe check it made and what came of it, how many input slots each kind filled, what reached
-// each chest and what was dropped into the world. `detect` reads that once the run is over:
+// Task 4, detector rules 10–16, Task 5 rule 4 and Task 6 rule 5). The models record as they run (`SimStats`): what each
+// machine was handed and gave up, every recipe check it made and what came of it, how many input slots each kind filled,
+// what reached each chest and what was dropped into the world, and what each Auto Workbench moved to its result slot,
+// destroyed, crafted, could not push and took in. `detect` reads that once the run is over:
 // - `feed_crowded`: a recipe waits for a kind that cannot get in, for `STALL_TICKS` in a row; or a multiblock has every
 //   input of its recipe on its input buses but no one bus holds them all while Input Separation is on, as long;
 // - `feed_overfill`: one kind in two or more input slots of a machine (or slots of a multiblock's input bus) that takes two
-//   or more kinds;
+//   or more kinds; one item in two or more input slots of a bench, or an item not in its grid in one;
+// - `feed_bench_eject`, `feed_bench_delete`: what a bench moved to its result slot that it did not craft, and what its
+//   clean-up of duplicate stacks overwrote there;
+// - `feed_bench_stuck`: a bench whose push left the stack in its result slot where it was for `STALL_TICKS` in a row;
 // - `feed_no_route`: an output blocked for `STALL_TICKS` in a row while nothing is taken out of the machine;
 // - `feed_pool_starve`: a recipe of a shared machine that never ran while its inputs were there for `STALL_TICKS`;
 // - `feed_starved`, `feed_slow`: a planned input never handed over, or handed over too slowly while the recipe waited;
@@ -17,9 +21,9 @@
 // Pure TypeScript: nothing from node:* may be imported here.
 
 import type { StuffKey } from '../../../../shared/keys.ts';
-import { fmtRate } from '../../../../shared/layout/format.ts';
+import { fmtInt, fmtRate } from '../../../../shared/layout/format.ts';
 import { FEED_KINDS, STALL_TICKS, TICKS_PER_SECOND, SLOW_TOLERANCE, type FeedCode, type FeedFinding, type ScenarioName } from '../contract.ts';
-import type { ChestNode, FeedModel, FeedNode, MultiNode, NodeId } from '../model.ts';
+import type { BenchNode, ChestNode, FeedModel, FeedNode, MultiNode, NodeId } from '../model.ts';
 import { listText } from '../text.ts';
 import type { KeyTable, SimInv } from './core.ts';
 
@@ -55,6 +59,25 @@ function emptyRecord(): NodeRecord {
 }
 
 /**
+ * Why a bench moved a stack to its result slot that it did not craft (Task 6 rule 3): a stray (an item neither in its grid
+ * nor a grid item's container), the last input slot after a failed craft, or the second of two stacks of one ingredient.
+ */
+export type BenchMove = 'stray' | 'failed' | 'duplicate';
+
+/** What a run records about one Auto Workbench (Task 6). */
+interface BenchRecord {
+  moved: Array<{ t: number; key: number; n: number; why: BenchMove }>;   // stacks moved to its result slot that it did not craft
+  lost: Array<{ t: number; key: number; n: number }>;                    // stacks its clean-up overwrote in its result slot
+  crafts: number[];                                                      // craft ticks
+  refused: Array<{ key: number; from: number; to: number }>;             // its push left its result from `from` until it went out at `to` (−1: never)
+  took: Map<number, number>;                                             // items not in its grid it took into an input slot: the first tick, by key
+}
+
+function emptyBench(): BenchRecord {
+  return { moved: [], lost: [], crafts: [], refused: [], took: new Map() };
+}
+
+/**
  * What a scenario run records, by node id. The models call the recorders as things happen (keys are `KeyTable` ids);
  * the readers turn ids back into keys. Nothing here depends on how often an entity ran, so a scheduled run and an
  * exhaustive one record the same.
@@ -63,6 +86,7 @@ export class SimStats {
   /** The run's key table: the readers turn ids back into keys with it. */
   readonly keys: KeyTable;
   private readonly nodes = new Map<NodeId, NodeRecord>();
+  private readonly benches = new Map<NodeId, BenchRecord>();
   private readonly simulated = new Set<NodeId>();
   private readonly spills: Array<[NodeId, number]> = [];      // (node, key) in the order they first spilled
 
@@ -75,6 +99,15 @@ export class SimStats {
     if (r === undefined) {
       r = emptyRecord();
       this.nodes.set(node, r);
+    }
+    return r;
+  }
+
+  private benchOf(node: NodeId): BenchRecord {
+    let r = this.benches.get(node);
+    if (r === undefined) {
+      r = emptyBench();
+      this.benches.set(node, r);
     }
     return r;
   }
@@ -161,6 +194,41 @@ export class SimStats {
     m.set(key, (m.get(key) ?? 0) + n);
   }
 
+  /** Bench `node` moved `n` of `key` to its result slot, not as a craft's result: `why`. */
+  benchMoved(node: NodeId, key: number, n: number, why: BenchMove, t: number): void {
+    this.benchOf(node).moved.push({ t, key, n, why });
+  }
+
+  /** Bench `node`'s clean-up of duplicate stacks overwrote the `n` of `key` it had moved to its result slot: they are gone. */
+  benchLost(node: NodeId, key: number, n: number, t: number): void {
+    this.benchOf(node).lost.push({ t, key, n });
+  }
+
+  /** Bench `node` crafted: a run of its recipe 0, the one its grid is laid from (`started`). */
+  benchCrafted(node: NodeId, t: number): void {
+    this.benchOf(node).crafts.push(t);
+    this.started(node, 0, t);
+  }
+
+  /** Bench `node`'s push moved nothing while its result slot held `key`: from `t`, until that stack goes out (`benchFreed`). */
+  benchStuck(node: NodeId, key: number, t: number): void {
+    const list = this.benchOf(node).refused;
+    if (list.at(-1)?.to === -1) return;
+    list.push({ key, from: t, to: -1 });
+  }
+
+  /** The stack in bench `node`'s result slot that its push had left there went out at `t`, in whole or in part. */
+  benchFreed(node: NodeId, t: number): void {
+    const open = this.benchOf(node).refused.at(-1);
+    if (open !== undefined && open.to === -1) open.to = t;
+  }
+
+  /** Bench `node` took `key`, which is not in its grid, into an input slot (only its first time counts). */
+  benchTook(node: NodeId, key: number, t: number): void {
+    const took = this.benchOf(node).took;
+    if (!took.has(key)) took.set(key, t);
+  }
+
   /** Records `inv`'s contents at the end of the run. */
   snapshot(inv: SimInv): void {
     const out: Array<[number, number] | null> = [];
@@ -200,15 +268,37 @@ export class SimStats {
     return [...(this.nodes.get(node)?.starts ?? [])];
   }
 
+  /** The ticks bench `node` crafted, in order. */
+  benchCrafts(node: NodeId): number[] {
+    return [...(this.benches.get(node)?.crafts ?? [])];
+  }
+
   /** @internal what `detect` reads */
   recordOf(node: NodeId): Readonly<NodeRecord> | undefined {
     return this.nodes.get(node);
+  }
+
+  /** @internal what `detect` reads of a bench */
+  benchRecordOf(node: NodeId): Readonly<BenchRecord> | undefined {
+    return this.benches.get(node);
   }
 }
 
 // ---- detect ----
 
 const CODE_ORDER: readonly FeedCode[] = Object.keys(FEED_KINDS) as FeedCode[];
+
+/** Why a bench threw items out of its input slots, in the order `feed_bench_eject` gives them (Task 6 rule 5). */
+const BENCH_REASONS: ReadonlyArray<readonly [BenchMove, string]> = [
+  ['stray', 'it took items that are not in its grid'],
+  ['failed', 'a failed craft empties its last input slot'],
+  ['duplicate', 'its clean-up moves the second of two stacks of one ingredient to its result slot'],
+];
+
+/** "1 item", "448 items". */
+function itemsText(n: number): string {
+  return `${fmtInt(n)} item${n === 1 ? '' : 's'}`;
+}
 
 function compareText(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
@@ -327,8 +417,9 @@ export function detect(model: FeedModel, stats: SimStats, run: { scenario: Scena
         { stepId: recipeStep(recipe), tick: first.from, count: Math.max(...mine.map((s) => s.to - s.from)) });
     }
 
-    // rule 11 (Task 5 rule 4 on a multiblock's input buses): feed_overfill
-    if (node.kinds.length >= 2) {
+    // rule 11 (Task 5 rule 4 on a multiblock's input buses): feed_overfill; a bench's has its own words (Task 6 rule 5)
+    if (node.kind === 'bench') benchFindings(at, node, rec);
+    else if (node.kinds.length >= 2) {
       const filled = node.kind === 'multi'
         ? node.inBuses.map((bus) => ({ slots: stats.recordOf(bus.id)?.slots, where: (n: number) => `${n} slots of ${bus.label} of ${node.label}` }))
         : [{ slots: rec.slots, where: (n: number) => `${n} input slots of ${node.label}` }];
@@ -421,6 +512,50 @@ export function detect(model: FeedModel, stats: SimStats, run: { scenario: Scena
         { key, stepId: p.stepId, tick: since });
     }
   });
+
+  /** `${n}× ${name}` for each item of `events` by its total, the largest first (ties: key order), joined by ", ". */
+  function countsText(events: ReadonlyArray<{ key: number; n: number }>): string {
+    const totals = new Map<number, number>();
+    for (const e of events) totals.set(e.key, (totals.get(e.key) ?? 0) + e.n);
+    return [...totals].sort((a, b) => b[1] - a[1] || a[0] - b[0]).map(([key, n]) => `${fmtInt(n)}× ${name(key)}`).join(', ');
+  }
+
+  /**
+   * Task 6 rule 5, a bench: `feed_overfill` (one item in two or more input slots: n the most, from the first tick; an item
+   * not in its grid in one), `feed_bench_eject` (what it moved to its result slot that it did not craft), `feed_bench_delete`
+   * (what its clean-up overwrote there) and `feed_bench_stuck` (its push left its result for `STALL_TICKS` in a row, once
+   * per item, from the first such stretch).
+   */
+  function benchFindings(at: number, node: BenchNode, rec: Readonly<NodeRecord>): void {
+    for (const [key, s] of [...rec.slots].sort((a, b) => a[0] - b[0])) {
+      if (s.most >= 2) emit(at, node, 'feed_overfill', `${name(key)} fills ${s.most} input slots of ${node.label}`, { key: keyOf(key), tick: s.first });
+    }
+    const b = stats.benchRecordOf(node.id);
+    if (b === undefined) return;
+    for (const [key, t] of [...b.took].sort((x, y) => x[0] - y[0])) {
+      emit(at, node, 'feed_overfill', `${node.label} took ${name(key)}, which is not in its grid`, { key: keyOf(key), tick: t });
+    }
+    if (b.moved.length > 0) {
+      const n = b.moved.reduce((sum, m) => sum + m.n, 0);
+      const reasons = BENCH_REASONS.filter(([why]) => b.moved.some((m) => m.why === why)).map(([, words]) => words);
+      emit(at, node, 'feed_bench_eject', `${node.label} threw ${itemsText(n)} out of its input slots (${countsText(b.moved)}): ${reasons.join('; ')}`,
+        { tick: b.moved[0]!.t, count: n });
+    }
+    if (b.lost.length > 0) {
+      const n = b.lost.reduce((sum, l) => sum + l.n, 0);
+      emit(at, node, 'feed_bench_delete', `${node.label} destroyed ${itemsText(n)} (${countsText(b.lost)}): its clean-up of stacks of one ingredient `
+        + 'overwrites the stack it already moved to its result slot', { tick: b.lost[0]!.t, count: n });
+    }
+    const stuck = new Map<number, number>();
+    for (const r of b.refused) {
+      if (stuck.has(r.key) || (r.to === -1 ? ticks : r.to) - r.from < STALL_TICKS) continue;
+      stuck.set(r.key, r.from);
+    }
+    for (const [key, from] of [...stuck].sort((x, y) => x[0] - y[0])) {
+      emit(at, node, 'feed_bench_stuck', `${node.label} stopped: ${name(key)} sits in its result slot and the block behind it does not take it`,
+        { key: keyOf(key), tick: from });
+    }
+  }
 
   /** Rule 16: an item planned for a machine that reached the chest, and the plan does not send out of the line. */
   function leaks(at: number, chest: ChestNode, rec: Readonly<NodeRecord>): void {

@@ -1,14 +1,15 @@
-// One scenario run of the feeding simulation (plan `docs/superpowers/plans/2026-10-20-21-feeding-checker.md` Tasks 4
-// and 5): `runScenario` builds the entities of a model for a scenario — one per node (GT basic machines and chests; a
-// multiblock's controller and each of its buses, Task 5; Task 6 adds benches), the networks' entities from
+// One scenario run of the feeding simulation (plan `docs/superpowers/plans/2026-10-20-21-feeding-checker.md` Tasks 4–6):
+// `runScenario` builds the entities of a model for a scenario — one per node (GT basic machines and chests; a multiblock's
+// controller and each of its buses, Task 5; an Auto Workbench and its energy, Task 6), the networks' entities from
 // `NETWORK_MODELS` (filled by Tasks 7–10) and a test's extra ones — runs them tick by tick and turns what they recorded
 // into findings (`detect`).
-// - A node kind or a network kind without a model is left out, with the unknown `not_simulated`.
+// - A network kind without a model is left out, with the unknown `not_simulated`; every node kind has its model.
 // - `env.push(from, side)` is what a GT transfer out of that side meets: the receiver a network registered at the
 //   neighbouring cell for that side, else the inventory of the node (or bus) there, else nothing.
 // - In `restart` the line's chunk loads again at the start of tick `restartAt` (rule 3a): every tile's timer and the
 //   covers' counter start again from there, every multiblock controller looks for a recipe (ruling R-17), and every
-//   network's `restart()` runs.
+//   bench's and every network's `restart()` runs.
+// - A bench's crafts are the runs of its first recipe's step, the one its grid is laid from (`SimStats.benchCrafted`).
 // Pure TypeScript: nothing from node:* may be imported here.
 
 import { isFluidKey, type StuffKey } from '../../../../shared/keys.ts';
@@ -17,6 +18,7 @@ import { OPPOSITE, posKey, step, type Vec3 } from '../../../../shared/layout/geo
 import { SLOW_TOLERANCE, type FeedFinding, type FeedUnknown, type ScenarioName } from '../contract.ts';
 import { CHEST_SLOTS } from '../facts.ts';
 import type { FeedModel, FeedNetwork, FeedNode, NodeId } from '../model.ts';
+import { bench } from './bench.ts';
 import { FluidPools, KeyTable, Sim, type Preloadable, type PushTarget, type SimEntity, type SimInv } from './core.ts';
 import { detect, SimStats, type Explain } from './detect.ts';
 import { basicMachine, type SimEnv } from './machine.ts';
@@ -140,8 +142,9 @@ export function runScenario(model: FeedModel, scenario: ScenarioName, opts: Scen
   }];
   const at = (node: FeedNode) => ({ pos: [node.pos[0], node.pos[1], node.pos[2]] as Vec3, ...(node.kind === 'chest' ? {} : { stepId: node.stepIds[0]! }) });
 
-  // one entity per node
+  // one entity per node (two for a bench: its energy too)
   const entities: SimEntity[] = [];
+  const restarts: Array<() => void> = [];
   for (const node of model.nodes) {
     let inv: (SimInv & SimEntity) | null = null;
     switch (node.kind) {
@@ -158,6 +161,13 @@ export function runScenario(model: FeedModel, scenario: ScenarioName, opts: Scen
         entities.push(parts.controller);
         break;
       }
+      case 'bench': {
+        const b = bench(node, env);
+        inv = b;
+        entities.push(b.power);
+        restarts.push(() => b.restart());
+        break;
+      }
       case 'chest':
         inv = node.side === 'input' ? inputChest(node, env) : outputChest(node, env);
         if (node.side === 'input' && node.keys.length > CHEST_SLOTS) {
@@ -165,10 +175,10 @@ export function runScenario(model: FeedModel, scenario: ScenarioName, opts: Scen
             + `the checker stocks the first ${CHEST_SLOTS} in key order`, ...at(node) });
         }
         break;
-      default:
-        unknowns.push({ code: 'not_simulated', text: `${node.label} is not simulated: the checker has no model of an Auto Workbench `
-          + 'yet, so nothing it takes or makes is checked', ...at(node) });
-        break;
+      default: {
+        const otherKind: never = node;                        // every node kind has its model
+        void otherKind;
+      }
     }
     if (inv === null) continue;
     invs.set(node.id, inv);
@@ -177,7 +187,6 @@ export function runScenario(model: FeedModel, scenario: ScenarioName, opts: Scen
 
   // the networks
   const explains: Explain[] = [];
-  const restarts: Array<() => void> = [];
   const unmodelled = new Set<FeedNetwork['kind']>();
   for (const net of model.networks) {
     const make = NETWORK_MODELS[net.kind] as ((n: FeedNetwork, e: SimEnv) => NetworkModel) | undefined;

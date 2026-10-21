@@ -1,9 +1,10 @@
 // Fixtures for the feeding checker's tests (plan 21): the fixture pack with recipe maps and the machines and items the
 // feeding tests need, plans whose steps carry pack recipes (chances, held items, crafting grids), lines laid out by
-// main's `layoutLine` with or without a world, and hand-built models with test entities for the simulation (Tasks 4 and 5).
+// main's `layoutLine` with or without a world, and hand-built models with test entities for the simulation (Tasks 4–6).
 // Every call returns fresh objects, so a test that changes its pack, plan, layout or model changes no other. Synthetic
 // only: invented names, apart from the GT class names, mteIds and item ids the code names; no real export or world is read.
 
+import { TIER_NAMES } from '../../src/shared/gt/tiers.ts';
 import { isFluidKey, parseItemKey, type ItemKey, type StuffKey } from '../../src/shared/keys.ts';
 import type { Rotation, Vec3 } from '../../src/shared/layout/geometry.ts';
 import type { Layout } from '../../src/shared/types/layout.ts';
@@ -12,7 +13,7 @@ import type { LogisticsMode, Plan, PlanFlow } from '../../src/shared/types/plan.
 import { PART_KEYS } from '../../src/server/layout/feeding/facts.ts';
 import { compareLocal } from '../../src/server/layout/feeding/frame.ts';
 import type {
-  BasicNode, BusNode, ChestNode, FeedModel, FeedNode, GtCover, MachineSettings, MultiNode, NodeId, OutBusNode, SimRecipe,
+  BasicNode, BenchNode, BusNode, ChestNode, FeedModel, FeedNode, GtCover, MachineSettings, MultiNode, NodeId, OutBusNode, SimRecipe,
 } from '../../src/server/layout/feeding/model.ts';
 import { insertEmpties, NEVER, PHASE, type SimEntity } from '../../src/server/layout/feeding/sim/core.ts';
 import type { SimEnv } from '../../src/server/layout/feeding/sim/machine.ts';
@@ -54,9 +55,11 @@ const FIXTURE_MAPS: ReadonlyArray<readonly [number, string]> = [
   [IDS.EXTRACTOR, 'gt.recipe.fluidextractor'], [IDS.SOLIDIFIER, 'gt.recipe.fluidsolidifier'], [IDS.EBF, 'gt.recipe.blastfurnace'],
 ];
 
-/** Plain items the feeding tests flow through machines. */
+/** Plain items the feeding tests flow through machines, and those of the bench tests (Task 6: the research's Resistor grid and a cell). */
 const FEED_ITEMS: ReadonlyArray<readonly [ItemKey, string]> = [
   ['t:a@0', 'Alpha'], ['t:b@0', 'Beta'], ['t:c@0', 'Gamma'], ['t:x@0', 'Ex'], ['t:y@0', 'Why'],
+  ['t:resin@0', 'Resin'], ['t:fine@0', 'Fine Wire'], ['t:wire@0', 'Wire'], ['t:carbon@0', 'Carbon Dust'], ['t:resistor@0', 'Resistor'],
+  ['t:wet@0', 'Wet Cell'], ['t:dry@0', 'Dry Cell'],
 ];
 
 /** The part items of `PART_KEYS` that `layoutPack` lacks (it holds the item filter cover and the ME Export Bus). */
@@ -84,8 +87,9 @@ function feedMachines(): Machine[] {
  * `layoutPack()` plus what the feeding tests need: recipe maps on the fixture machines (`IDS.MACERATOR` and the other five that
  * `layoutPack` leaves without one), the machines of `FEED_IDS` (a smelter and a mixer, an Auto Workbench, a basic machine of an
  * unknown kind, a steam macerator and a Coke Oven), the items `t:a@0` "Alpha", `t:b@0` "Beta", `t:c@0` "Gamma", `t:x@0` "Ex",
- * `t:y@0` "Why" and `t:lens@0` "Test Lens" (a GT lens), and the part items of `PART_KEYS`. The machines of `layoutPack` keep their
- * ids (`IDS`) and names.
+ * `t:y@0` "Why" and `t:lens@0` "Test Lens" (a GT lens), the bench tests' `t:resin@0` "Resin", `t:fine@0` "Fine Wire", `t:wire@0`
+ * "Wire", `t:carbon@0` "Carbon Dust", `t:resistor@0` "Resistor", `t:wet@0` "Wet Cell" and `t:dry@0` "Dry Cell", and the part items
+ * of `PART_KEYS`. The machines of `layoutPack` keep their ids (`IDS`) and names.
  */
 export function feedPack(): Pack {
   const pack = layoutPack();
@@ -205,7 +209,7 @@ export async function layFeed(pack: Pack, plan: Plan, mode: LogisticsMode, at?: 
   return layoutLine(pack, plan, lineScan(), makeProject({ logistics: mode, placement: { origin: [...at.origin], rotation: at.rotation } }), lineGround());
 }
 
-// ---- Hand-built models and test entities for the simulation (plan Tasks 4 and 5) ----
+// ---- Hand-built models and test entities for the simulation (plan Tasks 4–6) ----
 
 /** A local cell `x,y,z` as numbers. */
 function cellOf(id: NodeId): Vec3 {
@@ -336,6 +340,32 @@ export function ebfNode(over: Partial<MultiNode> = {}): MultiNode {
 /** `ebfNode()` with a second input bus at `0,1,0`, front 3. */
 export function twoBusNode(): MultiNode {
   return ebfNode({ inBuses: [busNode('0,0,0'), busNode('0,1,0')] });
+}
+
+/** The research's Resistor grid (§1.3.9), top row first: Resin, Fine Wire, Resin / Wire, Carbon Dust, Wire / –, Fine Wire, –. */
+const RESISTOR_GRID: ReadonlyArray<StuffKey | null> = ['t:resin@0', 't:fine@0', 't:resin@0', 't:wire@0', 't:carbon@0', 't:wire@0', null, 't:fine@0', null];
+
+/**
+ * An MV Auto Workbench (`FEED_IDS.BENCH`, tier 2) at local `0,0,0`: front 2, back 3, the research's Resistor grid, result 1
+ * `t:resistor@0`, no containers, throughput 0, no fluid, power or item pipe sides. Its name follows its tier (`Auto Workbench
+ * (MV)`), and its recipe (step `w`) takes one of each grid cell's item and makes its result, unless `over` gives `recipes`.
+ */
+export function benchNode(over: Partial<BenchNode> = {}): BenchNode {
+  const id = over.id ?? '0,0,0';
+  const local = over.local ?? cellOf(id);
+  const pos = over.pos ?? ([...local] as Vec3);
+  const tier = over.tier ?? 2;
+  const name = over.name ?? `Auto Workbench (${TIER_NAMES[tier] ?? `tier ${tier}`})`;
+  const grid = over.grid ?? [...RESISTOR_GRID];
+  const result = over.result ?? { key: 't:resistor@0', amount: 1 };
+  const cells = new Map<StuffKey, number>();
+  for (const key of grid) if (key !== null) cells.set(key, (cells.get(key) ?? 0) + 1);
+  const recipes = over.recipes ?? [simRecipe('w', 1, [...cells], [[result.key, result.amount]])];
+  return {
+    kind: 'bench', id, local, pos, name, label: `${name} at ${pos.join(' ')}`, mteId: FEED_IDS.BENCH, tier, front: 2, back: 3, grid, result,
+    containers: {}, throughput: 0, fluidSides: [], powerSides: [], itemPipeSides: [], recipes, stepIds: [...new Set(recipes.map((r) => r.stepId))],
+    kinds: distinctKeys(recipes.flatMap((r) => r.inputs.map((i) => i.key))), ...over,
+  };
 }
 
 function chestNode(id: NodeId, side: ChestNode['side'], keys: StuffKey[]): ChestNode {
