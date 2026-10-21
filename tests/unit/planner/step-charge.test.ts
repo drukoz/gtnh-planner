@@ -96,15 +96,16 @@ describe('planLine and the step charge', () => {
   });
   it('warns about a step left to hand-crafting', async () => {
     // An LV Machine Hull a minute: the hull and its tin cables have no machine recipe at LV. Crafted by hand, with build
-    // cost ignored (plan 12): this case predates both.
+    // cost ignored (plan 12): this case predates both. With no crafting switch left in Settings (the user's ruling 180),
+    // the warning no longer asks to mark crafting as automated.
     const pack = miniGt();
     const settings: PlanSettings = { ...defaultSettings(), target: 't:hull_lv@0', tier: 1, automateCrafting: false, buildHorizonHours: null };
     const plan = await planLine(pack, settings, emptyContext());
     expect(plan.steps.map((s) => s.id)).toEqual(['bend-plate', 'cable', 'hull-lv']);
     expect(plan.warnings).toContainEqual({ code: 'hand-step', stepId: 'hull-lv',
-      text: 'LV Machine Hull is crafted by hand: 60/h; mark crafting as automated or pin a machine recipe' });
+      text: 'LV Machine Hull is crafted by hand: 60/h; pin a machine recipe to automate it' });
     expect(plan.warnings).toContainEqual({ code: 'hand-step', stepId: 'cable',
-      text: '1x Tin Cable is crafted by hand: 120/h; mark crafting as automated or pin a machine recipe' });
+      text: '1x Tin Cable is crafted by hand: 120/h; pin a machine recipe to automate it' });
     const automated = await planLine(pack, { ...settings, automateCrafting: true }, emptyContext());
     expect(automated.warnings.filter((w) => w.code === 'hand-step')).toEqual([]);
     // A batch may be crafted by hand.

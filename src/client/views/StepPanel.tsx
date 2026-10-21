@@ -1,7 +1,9 @@
 // The panel beside the flow diagram (spec §3.9, fix spec §6.3). A step's panel: what it takes and makes and from or to
-// which step (hovering a row lights the item in the diagram, clicking a step selects it), who else makes its product,
-// why it uses the ingredient option it does (pin another), the free input it supplies or the supporting line it belongs
-// to, the group's machines it reuses and where they stand, its overclock math, every way to make its product (swap its
+// which step (hovering a row lights the item in the diagram, clicking a step selects it), the machine it shares with
+// other steps (plan 12), who else makes its product, why it uses the ingredient option it does (pin another), the free
+// input it supplies or the supporting line it belongs to, the group's machines it reuses and where they stand (those of
+// other tiers, and the steps a machine is shared with, included), the machine tier it runs at (pin another, plan 12),
+// its overclock math, every way to make its product (swap its
 // recipe, or import the product instead) and its warnings. A raw material's panel: what kind of import it is, which
 // steps use it, what a bought one stands for, and making it in the line instead. Every choice sends one `settings` op
 // with whole field values.
@@ -10,7 +12,11 @@ import { useId, useState, type ReactElement, type ReactNode } from 'react';
 import { tierName } from '../../shared/gt/tiers.ts';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import { indexPlan, ORPHAN_REL, SHORT_INPUT_SHARE, type PlanIndex } from '../../shared/plan/balance.ts';
-import { FREE_KEYS, type LeafClass, type MachineWhere, type Plan, type PlanFlow, type PlanSettings, type PlanStep, type RawInput, type SourceInfo, type StepOption } from '../../shared/types/plan.ts';
+import { stepNameIn } from '../../shared/plan/pools.ts';
+import {
+  FREE_KEYS, type LeafClass, type MachineWhere, type Plan, type PlanFlow, type PlanSettings, type PlanStep, type RawInput, type SourceInfo, type StepOption,
+  type StepTier,
+} from '../../shared/types/plan.ts';
 import { ItemIcon } from '../components/ItemIcon.tsx';
 import { formatNumber, formatPercent, formatRate } from '../format.ts';
 import { endHoverFlowFocus, hoverFlowFocus } from '../state/flow-focus.ts';
@@ -411,18 +417,10 @@ function LineSection(props: { step: PlanStep; settings: PlanSettings; patch: Pat
   );
 }
 
-/**
- * Which owned machines a step runs on and where they stand (architecture §11.29): "2× Basic Assembler (LV) reused — at
- * your base 1 64 2, 3 64 2" for machines a world scan found (the first few positions; "at 1 64 2" when the project links
- * no base, as the scan's whole world counts then, `base`), each in a dimension other than the overworld named ("8 40 8
- * (Nether)", `dimId:<n>` in `names`, else `DIM<n>`), "— from your list" for those of the "Machines we have" list, both
- * for a mix; just "… reused" for a plan that does not say where; null for none.
- */
-export function reusedText(step: PlanStep, opts: { base?: boolean; names?: Plan['names'] } = {}): string | null {
-  const count = step.reused?.count ?? step.owned;
-  if (count <= 0) return null;
-  const machines = `${formatNumber(count)}× ${step.machine.name} (${tierText(step.machine.tier)}) reused`;
-  const where = step.reused?.where;
+/** Owned machines of one type in words, and where they stand (`reusedText`'s form, without what they are shared with). */
+function reuseLine(machine: { count: number; name: string; tier: number; where: readonly MachineWhere[] | undefined }, opts: { base?: boolean; names?: Plan['names'] }): string {
+  const { count, where } = machine;
+  const machines = `${formatNumber(count)}× ${machine.name} (${tierText(machine.tier)}) reused`;
   if (where === undefined) return machines;
   if (where.length === 0) return `${machines} — from your list`;
   const more = where.length > MAX_REUSED_AT ? ` and ${where.length - MAX_REUSED_AT} more` : '';
@@ -432,23 +430,108 @@ export function reusedText(step: PlanStep, opts: { base?: boolean; names?: Plan[
   return listed > 0 ? `${machines} — ${formatNumber(where.length)} ${spots}; ${formatNumber(listed)} from your list` : `${machines} — ${spots}`;
 }
 
+/** A step of `plan` by what it makes (`stepNameIn`), in the plan's names. */
+function stepName(plan: Plan, id: string): string {
+  return stepNameIn(plan, id, namesOf(plan));
+}
+
+/**
+ * Which owned machines a step runs on and where they stand (architecture §11.29): "2× Basic Assembler (LV) reused — at
+ * your base 1 64 2, 3 64 2" for machines a world scan found (the first few positions; "at 1 64 2" when the project links
+ * no base, as the scan's whole world counts then, `base`), each in a dimension other than the overworld named ("8 40 8
+ * (Nether)", `dimId:<n>` in `names`, else `DIM<n>`), "— from your list" for those of the "Machines we have" list, both
+ * for a mix; just "… reused" for a plan that does not say where; and, with the plan, " — shared with Gear, Kit" for
+ * machines other steps run on too (`reused.sharedWith`, plan 12: what those steps make). Null for none.
+ */
+export function reusedText(step: PlanStep, opts: { base?: boolean; names?: Plan['names']; plan?: Plan } = {}): string | null {
+  const count = step.reused?.count ?? step.owned;
+  if (count <= 0) return null;
+  const line = reuseLine({ count, name: step.machine.name, tier: step.machine.tier, where: step.reused?.where }, opts);
+  const shared = step.reused?.sharedWith ?? [];
+  const { plan } = opts;
+  return plan === undefined || shared.length === 0 ? line : `${line} — shared with ${shared.map((id) => stepName(plan, id)).join(', ')}`;
+}
+
 function ReuseSection(props: { step: PlanStep; plan: Plan; settings: PlanSettings; base: boolean; patch: Patch }): ReactElement | null {
-  const { step, settings, patch } = props;
+  const { step, plan, settings, patch } = props;
   const { mteId, name } = step.machine;
   const declined = (settings.declineReuse ?? []).includes(mteId);
+  const others = step.reused?.others ?? [];
   // With "Reuse machines we have" off nothing is reused, whatever a machine type's own switch says.
-  if (settings.reuseOwned === false || (step.owned <= 0 && !declined)) return null;
-  const reused = reusedText(step, { base: props.base, names: props.plan.names });
+  if (settings.reuseOwned === false || (step.owned <= 0 && others.length === 0 && !declined)) return null;
+  const opts = { base: props.base, names: plan.names, plan };
+  const reused = reusedText(step, opts);
   return (
     <section className="flow-panel-section">
       <h4 className="flow-panel-title">Reuse</h4>
       {reused !== null && <p>{reused}</p>}
-      <label className="check">
-        <input type="checkbox" name="reuse" checked={!declined} onChange={(e) => patch(reusePatch(settings, mteId, e.currentTarget.checked))} />
-        {declined ? `Reuse your ${name} machines` : `Reuse your ${step.owned}× ${name}`}
-      </label>
+      {/* Owned machines of the step's other tiers that run it beside its own (plan 12). */}
+      {others.map((o) => <p key={`${o.mteId}:${o.tier}`}>{reuseLine(o, opts)}</p>)}
+      {(step.owned > 0 || declined) && (
+        <label className="check">
+          <input type="checkbox" name="reuse" checked={!declined} onChange={(e) => patch(reusePatch(settings, mteId, e.currentTarget.checked))} />
+          {declined ? `Reuse your ${name} machines` : `Reuse your ${step.owned}× ${name}`}
+        </label>
+      )}
     </section>
   );
+}
+
+/** `<tier>: <machines>× <name>[, <owned> yours] — <its build cost, why it cannot be built here, or that its price is unknown>`. */
+function tierChoiceText(t: StepTier): string {
+  const yours = t.owned > 0 ? `, ${formatNumber(t.owned)} yours` : '';
+  const build = t.build !== null ? `${formatNumber(t.build)} raw to build`
+    : t.unbuildable !== undefined ? `cannot be built here (${t.unbuildable})` : 'build cost unknown';
+  return `${tierText(t.tier)}: ${formatNumber(t.machines)}× ${t.name}${yours} — ${build}`;
+}
+
+/**
+ * "Machine tier" (plan 12, architecture §11.39): Auto (checked unless one of `step.tiers` is pinned), then every tier the
+ * step can run at with the machines it would take there, the group's among them, and what building the rest costs (or
+ * why that machine cannot be built here); the pinned one checked. Picking a tier pins it for the step's recipe
+ * (`machineTier`); Auto takes the pin out. Shown where there is a choice: two tiers or more, or a pin.
+ */
+export function MachineTierSection(props: { step: PlanStep; settings: PlanSettings; patch: Patch }): ReactElement | null {
+  const { step, settings, patch } = props;
+  const tiers = step.tiers ?? [];
+  const pinned = tiers.some((t) => t.pinned === true);
+  if (tiers.length < 2 && !pinned) return null;
+  const name = `machine-tier-${step.id}`;
+  const choose = (tier: number | null): void => {
+    const next = { ...settings.machineTier };
+    if (tier === null) delete next[step.recipeId];
+    else next[step.recipeId] = tier;
+    patch({ machineTier: next });
+  };
+  return (
+    <fieldset className="flow-panel-section" data-machine-tier="">
+      <legend className="flow-panel-title">Machine tier</legend>
+      <label className="check">
+        <input type="radio" name={name} checked={!pinned} onChange={() => choose(null)} />
+        Auto
+      </label>
+      {tiers.map((t) => (
+        <label key={t.tier} className="check">
+          <input type="radio" name={name} checked={t.pinned === true} onChange={() => choose(t.tier)} />
+          {tierChoiceText(t)}
+        </label>
+      ))}
+    </fieldset>
+  );
+}
+
+/**
+ * A step whose machines a sharing pool shares with other steps (`PlanStep.pool`, plan 12) and that are not all the
+ * group's: `Shares <count>× <machine> with <what the pool's other steps make> — <how busy the pool's steps keep them> busy
+ * together`; null otherwise (a pool of owned machines only is said by its reuse text).
+ */
+export function sharedMachineText(step: PlanStep, plan: Plan): string | null {
+  const pool = step.pool;
+  if (pool === undefined || !(step.count > step.owned)) return null;
+  const others = pool.steps.filter((id) => id !== step.id);
+  let busy = 0;
+  for (const id of pool.steps) busy += plan.steps.find((s) => s.id === id)?.utilization ?? 0;
+  return `Shares ${formatNumber(step.count)}× ${step.machine.name} with ${others.map((id) => stepName(plan, id)).join(', ')} — ${formatPercent(busy)} busy together`;
 }
 
 /**
@@ -578,6 +661,7 @@ export function StepPanel(props: {
   const index = indexPlan(plan);
   const warnings = [...new Set([...step.warnings, ...plan.warnings.filter((w) => w.stepId === step.id).map((w) => w.text)])];
   const machines = step.count === 1 ? '1 machine' : `${step.count} machines`;
+  const shared = sharedMachineText(step, plan);
   return (
     <aside className="flow-panel" aria-label={`Step: ${step.machine.name}`}>
       <PanelHead
@@ -587,12 +671,14 @@ export function StepPanel(props: {
       <p className="muted">
         {[machines, ...(step.mainOutput === undefined ? [] : [`makes ${nameOf(step.mainOutput)}`]), ...(step.handCraft ? ['by hand'] : [])].join(' · ')}
       </p>
+      {shared !== null && <p>{shared}</p>}
       <PortsSection step={step} plan={plan} per={per} index={index} onSelect={onSelect} />
       <AlsoMadeBySection step={step} plan={plan} index={index} settings={settings} nameOf={nameOf} patch={patch} />
       <SupplySection step={step} plan={plan} settings={settings} nameOf={nameOf} patch={patch} />
       <LineSection step={step} settings={settings} patch={patch} />
       <OptionsSection step={step} settings={settings} nameOf={nameOf} patch={patch} />
       <ReuseSection step={step} plan={plan} settings={settings} base={props.base === true} patch={patch} />
+      <MachineTierSection step={step} settings={settings} patch={patch} />
       <section className="flow-panel-section">
         <h4 className="flow-panel-title">Overclock</h4>
         <ul className="oc-lines">

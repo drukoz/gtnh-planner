@@ -198,6 +198,29 @@ describe.skipIf(path === undefined)("the user's reference Electronic Circuit flo
     expect(machineBlocks(plan)).toBe(18);
   }, 120_000);
 
+  it('probes R1 with its new machines at MV, and with new multiblocks only where nothing else can do it', async () => {
+    // The user's ruling 224 (2026-10-20): "Build machines at" MV, logged with its machine blocks and raw material, and
+    // "Multiblocks: only when nothing else can do it", logged with the multiblocks that remain. A step that builds new
+    // machines elsewhere than at MV, or a new multiblock, says why on the step.
+    const r1: PlanSettings = { ...stored, automateCrafting: true };
+    const atMv = await timed({ ...r1, buildTier: 2 });
+    logPlan('R1, new machines at MV', atMv.plan, atMv.seconds);
+    expect(atMv.plan.status, JSON.stringify(atMv.plan.warnings)).toBe('ok');
+    for (const s of atMv.plan.steps) {
+      if (s.handCraft || s.machine.mteId < 0 || !(s.count > s.owned) || s.machine.tier === 2) continue;
+      expect(s.warnings.filter((w) => w.startsWith('Built at')), s.recipeId).toHaveLength(1);
+    }
+    const required = await timed({ ...r1, multiblocks: 'only-required' });
+    logPlan('R1, multiblocks only where required', required.plan, required.seconds);
+    expect(required.plan.status, JSON.stringify(required.plan.warnings)).toBe('ok');
+    const multiblocks = required.plan.steps.filter((s) => pack.machines.get(s.machine.mteId)?.kind === 'multiblock');
+    console.log(`real-reference R1, multiblocks only where required: ${multiblocks.length === 0 ? 'no multiblock'
+      : multiblocks.map((s) => `${s.count}× ${s.machine.name} (${s.recipeId}, ${s.owned} owned)`).join('; ')}`);
+    for (const s of multiblocks) {
+      if (s.count > s.owned) expect(s.warnings.filter((w) => w.startsWith('A multiblock is needed')), s.recipeId).toHaveLength(1);
+    }
+  }, 120_000);
+
   it('falls back to no more steps than the plan that ignores build cost when the time guard stops the build MIP', async () => {
     // Fix wave 2 (b): with the guard forced to 0 the line comes from the cheapest by the build MIP's objective of plan
     // 09's plan, the relaxation and S1, each rounded up; on 93e508e's fallback (the relaxation rounded up) these lines

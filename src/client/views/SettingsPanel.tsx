@@ -1,8 +1,9 @@
 // The project's settings beside its views (spec §3.2–§3.3b, §3.6, §3.11): what to make and how much, the tier, where
 // the group can mine, how the line is fed, what materials cost, which materials to avoid, which recipe groups to skip,
-// the planner's options (supporting lines, how many steps a little raw material is worth, reusing the machines the group
-// has), the machines it has that no world scan shows, and the lists the panels fill: what the group already makes,
-// makes itself, already has a supply of, and the ingredient options it pinned.
+// the planner's options (supporting lines, how much a machine is worth in raw material, what the build cost of new
+// machines is counted against, the tier they are built at and when a multiblock is, reusing the machines the group has),
+// the machines it has that no world scan shows, and the lists the panels fill: what the group already makes, makes
+// itself, already has a supply of, and the ingredient options it pinned.
 // Everyone sees the same settings: every change sends one `settings` op carrying whole field values, and nothing is
 // sent for an amount or a cost that would be refused.
 
@@ -21,8 +22,8 @@ import { TierPicker } from '../components/TierPicker.tsx';
 import { haveSupplyPatch, optionPatch } from './flow-model.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
 import {
-  EXCLUSION_LABELS, dimOverridePatch, dimRows, groupDimRows, isStuffKey, optionPinRows, parseAmount, parseCost, stepChargeOf, stepChargeOptions,
-  stepChargePatch, toggleList,
+  BUILD_HORIZON_PRESETS, EXCLUSION_LABELS, MULTIBLOCK_CHOICES, buildTierOptions, buildTierPatch, dimOverridePatch, dimRows, groupDimRows, horizonChoice,
+  horizonPatch, isStuffKey, multiblocksPatch, optionPinRows, parseAmount, parseCost, stepChargeOf, stepChargeOptions, stepChargePatch, toggleList,
 } from './settings-model.ts';
 
 /** Typing pauses this long before the amount is sent (one plan per pause, not one per keystroke). */
@@ -429,6 +430,87 @@ export function StepChargeField(props: { settings: PlanSettings; patch: Patch })
 }
 
 /**
+ * "Count build cost against" (plan 12 Task 7, design spec §3.3): the hours of running the build cost of new machines is
+ * weighed against, as a preset ("24 hours" for a project stored before the setting) or a stored value no preset names as
+ * "Custom (<n> h)"; picking one sends `buildHorizonHours`. In Make N, which always counts the build cost against the batch
+ * (controller ruling OQ6), a note takes its place.
+ */
+export function BuildHorizonField(props: { settings: PlanSettings; patch: Patch }): ReactElement {
+  const { settings, patch } = props;
+  if (settings.mode === 'makeN') return <p className="muted small">Make N counts the build cost of new machines against the batch itself.</p>;
+  const choice = horizonChoice(settings.buildHorizonHours);
+  const options = BUILD_HORIZON_PRESETS.map((p): { value: string; label: string } => ({ value: p.value, label: p.label }));
+  if (!BUILD_HORIZON_PRESETS.some((p) => p.value === choice.value)) options.push(choice);
+  return (
+    <label className="field">
+      <span>Count build cost against</span>
+      <select
+        aria-label="Count build cost against"
+        value={choice.value}
+        onChange={(e) => {
+          const next = horizonPatch(e.currentTarget.value);
+          if ('buildHorizonHours' in next && e.currentTarget.value !== choice.value) patch(next);
+        }}
+      >
+        {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+    </label>
+  );
+}
+
+/**
+ * "Build machines at" (the user's ruling 224): the cheapest tier (the default) or a tier from LV up to the project's,
+ * at which every step's new machines are built where a machine of that tier runs its recipe; picking one sends
+ * `buildTier`.
+ */
+export function BuildTierField(props: { settings: PlanSettings; plan?: Plan | null; patch: Patch }): ReactElement {
+  const { settings, plan, patch } = props;
+  const stored = settings.buildTier ?? null;
+  const value = stored === null ? '' : String(stored);
+  return (
+    <label className="field">
+      <span>Build machines at</span>
+      <select
+        aria-label="Build machines at"
+        value={value}
+        onChange={(e) => {
+          const next = buildTierPatch(e.currentTarget.value);
+          if (next !== null && e.currentTarget.value !== value) patch(next);
+        }}
+      >
+        {buildTierOptions(settings.tier ?? plan?.tier ?? 1, stored).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+    </label>
+  );
+}
+
+/**
+ * "Multiblocks" (the user's ruling 224): use them where cheaper (the default), or build a new one only where nothing
+ * else can do it; picking one sends `multiblocks`. With build cost ignored nothing weighs a machine, and it says so.
+ */
+export function MultiblocksField(props: { settings: PlanSettings; patch: Patch }): ReactElement {
+  const { settings, patch } = props;
+  const value = settings.multiblocks ?? 'allow';
+  const ignored = settings.mode === 'rate' && settings.buildHorizonHours === null && value === 'only-required';
+  return (
+    <label className="field">
+      <span>Multiblocks</span>
+      <select
+        aria-label="Multiblocks"
+        value={value}
+        onChange={(e) => {
+          const next = multiblocksPatch(e.currentTarget.value);
+          if (next !== null && e.currentTarget.value !== value) patch(next);
+        }}
+      >
+        {MULTIBLOCK_CHOICES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+      </select>
+      {ignored && <span className="muted small">With build cost ignored, a recipe only a multiblock runs is weighed by its raw material alone.</span>}
+    </label>
+  );
+}
+
+/**
  * "Reuse machines we have" (design spec §3.3, architecture §11.29): on (the default, also for a project stored before
  * the switch), a step runs first on the machines the group owns; off, every machine is planned new.
  */
@@ -442,8 +524,14 @@ export function ReuseOwnedField(props: { settings: PlanSettings; patch: Patch })
   );
 }
 
-function OptionsSection(props: { settings: PlanSettings; patch: Patch }): ReactElement {
-  const { settings, patch } = props;
+/**
+ * The planner's options: supporting lines, how much a machine weighs against raw material, what the build cost is counted
+ * against, the tier new machines are built at and when a multiblock is built (plan 12 Task 7, the user's ruling 224),
+ * reusing the machines the group has, and the EBF coil. Crafting-table steps always run on an Auto Workbench, so there is
+ * no switch for them (the user's ruling 180).
+ */
+function OptionsSection(props: { settings: PlanSettings; plan: Plan | null; patch: Patch }): ReactElement {
+  const { settings, plan, patch } = props;
   const { coilHeat } = settings;
   const coils = COIL_HEATS.map((c) => ({ heat: c.heat, label: `${c.name} (${c.heat} K)` }));
   if (coilHeat !== null && !coils.some((c) => c.heat === coilHeat)) coils.push({ heat: coilHeat, label: `${coilHeat} K` });
@@ -455,11 +543,10 @@ function OptionsSection(props: { settings: PlanSettings; patch: Patch }): ReactE
         Plan supporting lines for alloys, plastics and chemicals (off: buy the shallow ones)
       </label>
       <StepChargeField settings={settings} patch={patch} />
+      <BuildHorizonField settings={settings} patch={patch} />
+      <BuildTierField settings={settings} plan={plan} patch={patch} />
+      <MultiblocksField settings={settings} patch={patch} />
       <ReuseOwnedField settings={settings} patch={patch} />
-      <label className="check">
-        <input type="checkbox" checked={settings.automateCrafting} onChange={(e) => patch({ automateCrafting: e.currentTarget.checked })} />
-        Crafting-table steps are automated
-      </label>
       <label className="field">
         <span>EBF coil</span>
         <select
@@ -581,7 +668,7 @@ export function SettingsPanel(props: ProjectViewProps & { info: PackInfo | null 
       <CostsSection settings={settings} patch={patch} nameOf={nameOf} remember={remember} />
       <AvoidSection info={info} settings={settings} send={send} nameOf={nameOf} remember={remember} />
       <SkipSection info={info} settings={settings} patch={patch} />
-      <OptionsSection settings={settings} patch={patch} />
+      <OptionsSection settings={settings} plan={plan} patch={patch} />
       <OwnedMachinesSection info={info} settings={settings} patch={patch} />
       <KeyListSection
         title="We already make"

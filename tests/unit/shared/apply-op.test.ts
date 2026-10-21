@@ -346,6 +346,35 @@ describe('buildHorizonHours', () => {
   });
 });
 
+// "Build machines at" and "Multiblocks" (the user's ruling 224 of 2026-10-20, plan 12 Task 7): the tier every step's new
+// machines are built at (null: the cheapest), and whether a new multiblock is built only where nothing else can do it.
+describe('buildTier and multiblocks', () => {
+  const op = (patch: Record<string, unknown>) => ({ op: 'settings', patch });
+  it('builds at the cheapest tier and uses multiblocks where cheaper by default', () => {
+    expect(defaultSettings()).toMatchObject({ buildTier: null, multiblocks: 'allow' });
+    expect(normalizeSettings({ target: 't:x@0' } as never)).toMatchObject({ buildTier: null, multiblocks: 'allow' });
+    expect(normalizeSettings({ buildTier: 2, multiblocks: 'only-required' } as never)).toMatchObject({ buildTier: 2, multiblocks: 'only-required' });
+  });
+  it('takes the cheapest tier or a whole tier from LV, and the two multiblock choices', () => {
+    for (const v of [null, 1, 2, 14]) expect(validateOp(op({ buildTier: v })), String(v)).toBeNull();
+    for (const v of [0, 15, 1.5, -1, '2', true]) expect(validateOp(op({ buildTier: v })), String(v)).toEqual(expect.any(String));
+    expect(validateOp(op({ buildTier: 0 }))).toBe('buildTier must be empty or a whole number from 1 to 14');
+    for (const v of ['allow', 'only-required']) expect(validateOp(op({ multiblocks: v }))).toBeNull();
+    for (const v of ['never', null, true]) expect(validateOp(op({ multiblocks: v })), String(v)).toEqual(expect.any(String));
+  });
+});
+
+// The user's ruling 180 (2026-10-20): "crafting steps are automatic, should not be a checkbox" — whatever a stored project
+// holds, it reads as automated; the field stays for old data and an explicit false still validates (and plans by hand).
+describe('automateCrafting', () => {
+  it('reads every project as automated', () => {
+    expect(normalizeSettings({ automateCrafting: false } as never).automateCrafting).toBe(true);
+    expect(normalizeSettings({ target: 't:x@0' } as never).automateCrafting).toBe(true);
+    expect(normalizeSettings(undefined).automateCrafting).toBe(true);
+    expect(validateOp({ op: 'settings', patch: { automateCrafting: false } })).toBeNull();
+  });
+});
+
 describe('NETWORKED_LOGISTICS', () => {
   it('lists the networked logistics modes', () => {
     expect([...NETWORKED_LOGISTICS].sort()).toEqual(['ae2', 'routed']);

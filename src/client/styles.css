@@ -137,6 +137,8 @@ button.banner-chip {
   display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px 2px 4px; border-radius: 999px; font-size: 0.85rem;
 }
 .banner-cost { color: var(--muted); }
+/* What the plan costs to run and to build (plan 12), above the banner. */
+.plan-cost { color: var(--muted); margin: 0 0 var(--gap); }
 
 /* What changed with the last settings change (fix spec §6.4), above the flow diagram and the materials. */
 .what-changed { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; }

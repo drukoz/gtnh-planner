@@ -78,7 +78,7 @@ export interface PlanSettings {
   machineTier: Record<string, number>;     // per recipe id
   excludedCategories: string[];            // default: DEFAULT_EXCLUDED_CATEGORIES
   coilHeat: number | null;                 // EBF coil heat (K); null = default for tier or from world
-  automateCrafting: boolean;               // true (default, plan 12's Auto Workbench ruling) = crafting-table steps run on the GT++ Auto Workbench; false = by hand
+  automateCrafting: boolean;               // true = crafting-table steps run on the GT++ Auto Workbench (plan 12's Auto Workbench ruling); false = by hand. `normalizeSettings` reads every project as true (the user's ruling 180: no checkbox); an explicit false still plans by hand
   /**
    * Materials to avoid (§11.25): GT material names ("Silver": every form of it) or StuffKeys, at most 50, no repeats.
    * `defaultSettings()` and `normalizeSettings()` always fill it; readers still use `?? []` (projects stored before it).
@@ -145,6 +145,25 @@ export interface PlanSettings {
    * `DEFAULT_BUILD_HORIZON_HOURS`.
    */
   buildHorizonHours?: number | null;
+  // optional addition
+  /**
+   * "Build machines at" (the user's ruling 224 of 2026-10-20, plan 12 Task 7, architecture §11.39): the tier every step's
+   * new machines are built at, where a machine of that tier runs its recipe (else the lowest tier above it that does,
+   * else the nearest below, and the step says so; never above the project's tier, to which a higher value is clamped);
+   * null = the cheapest tier, by the objective. A step's own `machineTier` pin wins; owned machines of every tier still
+   * serve. A whole tier from 1 (LV) to 14. `defaultSettings()` and `normalizeSettings()` always fill it (null); readers
+   * use `?? null`.
+   */
+  buildTier?: number | null;
+  // optional addition
+  /**
+   * "Multiblocks" (the user's ruling 224, plan 12 Task 7): `allow` (the default) weighs a new multiblock like any machine;
+   * `only-required` builds none for a step a single-block machine that can be built here runs, and weighs every new
+   * multiblock of the others at `ONLY_REQUIRED_MULTIBLOCK_WEIGHT` raw on top of its build (machine-options.ts), so any
+   * route without one wins where build cost counts, and a step that still needs one says so. Owned multiblocks stay free.
+   * `defaultSettings()` and `normalizeSettings()` always fill it; readers treat only `only-required` as on.
+   */
+  multiblocks?: 'allow' | 'only-required';
   // optional addition
   /** The planning mode (add-on 17, §11.45 (1)); in rate mode a null `buildHorizonHours` plans least raw whatever it says. */
   objective?: PlanObjective;

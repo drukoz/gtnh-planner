@@ -82,6 +82,27 @@ describe('the line on the map', () => {
     expect(layoutOverlay(layout, { moving: false, drag: null, flows: [], onDrag: () => {}, onDrop: () => {} }).onPointer!({ kind: 'down', x: 11, z: 20 })).toBe(false);
   });
 
+  it('counts an owned machine three steps share once, and draws flows from and to a shared machine (plan 12)', () => {
+    // One owned macerator serving three steps (`reused.units` [0] each) is one machine reused; steps that do not say which
+    // owned machines they run on count their owned machines as before.
+    const shared = (units: boolean) => ({ ...plan, steps: ['a', 'b', 'c'].map((id) => ({ id, machine: { mteId: 2001, name: 'Basic Macerator', tier: 1 },
+      count: 1, owned: 1, handCraft: false, ...(units ? { reused: { count: 1, where: [], units: [0] } } : {}) })) }) as unknown as Plan;
+    expect(lineSummary(layout, shared(true)).reused).toBe(1);
+    expect(lineSummary(layout, shared(false)).reused).toBe(3);
+    // Owned machines of another tier beside a step's own count once each too.
+    const others = { ...plan, steps: [
+      { id: 'a', machine: { mteId: 2001, name: 'Basic Macerator', tier: 1 }, count: 2, owned: 1, handCraft: false,
+        reused: { count: 1, where: [], units: [0], others: [{ mteId: 2002, name: 'Advanced Macerator', tier: 2, count: 1, units: [0], where: [], euPerTick: 8, runsPerSecondPerMachine: 1 }] } },
+      { id: 'b', machine: { mteId: 2002, name: 'Advanced Macerator', tier: 2 }, count: 1, owned: 1, handCraft: false, reused: { count: 1, where: [], units: [0] } }] } as unknown as Plan;
+    expect(lineSummary(layout, others).reused).toBe(2);
+    // One macerator block runs s1 and s2, the assembler s3: the flow from s2 starts on the macerator, and s1 → s2 stays inside it.
+    const pooled: Layout = { ...layout, blocks: [
+      { ...layout.blocks[0]!, stepId: 's1', stepIds: ['s1', 's2'] }, { ...layout.blocks[1]!, stepId: 's3' }, ...layout.blocks.slice(2)] };
+    const arrows = overlayShapes(pooled, view, null, [{ from: 's1', to: 's2', key: 'k', perSecond: 1 }, { from: 's2', to: 's3', key: 'j', perSecond: 1 }])
+      .filter((s) => s.kind === 'arrow');
+    expect(arrows).toEqual([{ kind: 'arrow', from: [202, 202], to: [206, 202], color: '#ffffff' }]);
+  });
+
   it('sums up the line and lists its pins', () => {
     expect(lineSummary(layout, plan)).toEqual({ newMachines: 2, reused: 2, footprint: '3×2×1', peak: '150 EU/t', fits: 'Tight in rain', fitsClass: 'tight' });
     const html = panel(layout);
