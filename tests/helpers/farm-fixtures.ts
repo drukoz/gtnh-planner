@@ -5,7 +5,8 @@
 // Bonsai and Ferrofern. Names and numbers are invented, nothing is game data, except the keys the farm code names (GT's
 // tools, CropsNH's crop sticks and fertilizer, vanilla bone meal and dirt), as Mini-GT keeps the real programmed-circuit
 // key. `farmSpec()` and `farmPack()` return fresh objects, so a test that changes one changes no other (and never
-// MINI_GT); the cards are shared constants, which a test copies to change (`{ ...RESIN_CANE, tier: 12 }`).
+// MINI_GT); the cards are shared constants, which a test copies to change (`{ ...RESIN_CANE, tier: 12 }`). Also the
+// small pack of the cross-project tests (`crossSpec()`, Task 6): one line's byproduct another line uses.
 
 import type { CropCard, Pack } from '../../src/shared/types/pack.ts';
 import { MINI_GT } from './mini-gt.ts';
@@ -125,4 +126,24 @@ export function farmPack(): Pack {
   const pack = packFromSpec(farmSpec());
   pack.crops = structuredClone([RESIN_CANE, RUBBER_BONSAI, ORE_FERN]);
   return pack;
+}
+
+/**
+ * Mini-GT plus the goods of add-on 17's cross-project tests (Task 6) — a Tee (`t:t@0`), a Wye (`t:y@0`) and a Cue
+ * (`t:q@0`) — and three assembler recipes between them, 16 EU/t for 100 ticks each: `split` makes a Tee and a Wye from an
+ * iron ingot, `use-y` a Cue from a Wye, and `make-y` two Wyes from a copper ingot, cheaper per Wye than running `split`
+ * for it. So a project making Tees has Wyes to spare for one making Cues. A fresh copy on every call.
+ */
+export function crossSpec(): PackSpec {
+  const spec = structuredClone(MINI_GT);
+  return {
+    ...spec,
+    items: [...(spec.items ?? []), { key: 't:t@0', name: 'Tee' }, { key: 't:y@0', name: 'Wye' }, { key: 't:q@0', name: 'Cue' }],
+    recipes: [
+      ...(spec.recipes ?? []),
+      { id: 'split', map: 'gt.recipe.assembler', in: [['t:iron_ingot@0', 1]], out: [['t:t@0', 1], ['t:y@0', 1]], eut: 16, dur: 100 },
+      { id: 'use-y', map: 'gt.recipe.assembler', in: [['t:y@0', 1]], out: [['t:q@0', 1]], eut: 16, dur: 100 },
+      { id: 'make-y', map: 'gt.recipe.assembler', in: [['t:copper_ingot@0', 1]], out: [['t:y@0', 2]], eut: 16, dur: 100 },
+    ],
+  };
 }

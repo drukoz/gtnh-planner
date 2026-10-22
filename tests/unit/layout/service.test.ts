@@ -122,6 +122,22 @@ describe('layout service', () => {
     expect(svc.computations).toBe(1);
   });
 
+  it('lays a plan out again when what it read changed', async () => {
+    // add-on 17 Task 6: the hash of what the plan read of other projects' summaries comes before the placement
+    const p = makeProject();
+    expect(layoutKey({ ...twoStep(), crossHash: 'abc' }, p)).toBe('E1|S1|0:0:0|h1|x:abc|-');
+    expect(layoutKey(twoStep(), p)).toBe('E1|S1|0:0:0|h1|-');
+    // what Q's plan does once it takes y from P: the same settings hash, and its step that made y gone
+    const taken = { ...makePlan([{ id: 's1', mteId: IDS.MACERATOR, count: 2 }]), crossHash: 'abc' };
+    let calls = 0;
+    const svc = createLayoutService(deps({ plan: async () => (calls++ === 0 ? twoStep() : taken) }));
+    const first = await svc.layoutFor(p);
+    expect(first.blocks.some((b) => b.stepId === 's2')).toBe(true);
+    const again = await svc.layoutFor(p);
+    expect(svc.computations).toBe(2);
+    expect(again.blocks.some((b) => b.stepId === 's2')).toBe(false);
+  });
+
   it('lays out on an empty scan until the scan is done, and reads terrain only for a scan id', async () => {
     const reads: boolean[] = [];
     const svc = createLayoutService(deps({

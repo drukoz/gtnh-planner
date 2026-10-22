@@ -1,8 +1,9 @@
 // The layout service (Plan 5 Task 12; architecture §6.7, §7, §11.8, §11.15–§11.16; spec §3.5–§3.10): each project's
-// line layout, cached by the plan's own cache key (export, scan, base, settings hash) plus the placement, which only
-// the layout depends on; and the work of Plan 2's `planFinish` hook, which merges that layout into the plan: its power
-// fit, its parts broken down to base materials, and its pin-linked build steps. The app's real dependencies read the
-// world service and the planner hook on every call, so a service registered later is the one used.
+// line layout, cached by the plan's own cache key (export, scan, base, settings hash, and the hash of what the plan read
+// of other projects: add-on 17) plus the placement, which only the layout depends on; and the work of Plan 2's
+// `planFinish` hook, which merges that layout into the plan: its power fit, its parts broken down to base materials,
+// and its pin-linked build steps. The app's real dependencies read the world service and the planner hook on every
+// call, so a service registered later is the one used.
 
 import type { AppContext } from '../app.ts';
 import { planForProject } from '../http/routes/projects.ts';
@@ -65,13 +66,15 @@ export function layoutParts(pack: Pack, layout: Layout): BomLine[] {
 }
 
 /**
- * The plan cache key of `plan` in `project`'s scan and base (architecture §11.8), then the placement as
- * `<x>,<y>,<z>@<rotation>` ('-' without one).
+ * The plan cache key of `plan` in `project`'s scan and base (architecture §11.8), then `x:<plan.crossHash>` when the
+ * plan read other projects' summaries (add-on 17, §11.45 (4): a plan made again because what it read changed, under the
+ * same settings hash, is laid out again), then the placement as `<x>,<y>,<z>@<rotation>` ('-' without one).
  */
 export function layoutKey(plan: Plan, project: Project): string {
   const { scanId, baseId } = project.world;
   const { placement } = project;
-  return `${planCacheKey(plan.settingsHash, plan.exportId, scanId, baseId)}|${placement ? `${placement.origin.join(',')}@${placement.rotation}` : '-'}`;
+  const read = plan.crossHash === undefined ? '' : `|x:${plan.crossHash}`;
+  return `${planCacheKey(plan.settingsHash, plan.exportId, scanId, baseId)}${read}|${placement ? `${placement.origin.join(',')}@${placement.rotation}` : '-'}`;
 }
 
 /**
