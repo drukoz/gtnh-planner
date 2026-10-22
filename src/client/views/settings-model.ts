@@ -1,12 +1,16 @@
 // What the settings panel shows and sends (spec §3.2–§3.3b, §3.6), as pure functions: the reachable-dimension rows
 // and their labels, the patches the panel sends (each a whole field value, so one `settings` op says everything), the
-// checks an amount or a cost must pass before anything is sent, and the avoid list's suggestions, labels and changes.
+// checks an amount or a cost must pass before anything is sent, the avoid list's suggestions, labels and changes, the
+// "Steps vs raw material" presets (fix spec §3), the build horizon's presets and the choices of the tier new machines are
+// built at and of when to build a multiblock (plan 12 Task 7, the user's ruling 224), the pinned ingredient options in
+// words (fix spec §6.4) and the "Machines we have" list's machines, counts and changes (architecture §11.29).
 
 import { TIER_NAMES, tierName } from '../../shared/gt/tiers.ts';
-import { isFluidKey } from '../../shared/keys.ts';
-import { MAX_AVOID_ENTRIES, MAX_AVOID_ENTRY_LENGTH } from '../../shared/project/apply-op.ts';
+import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
+import { MAX_AVOID_ENTRIES, MAX_AVOID_ENTRY_LENGTH, MAX_OWNED_MANUAL_COUNT, MAX_OWNED_MANUAL_ENTRIES, MAX_STEP_CHARGE } from '../../shared/project/apply-op.ts';
 import type { PackInfo } from '../../shared/types/api.ts';
-import type { Plan, PlanSettings, ReachableDim } from '../../shared/types/plan.ts';
+import { DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_STEP_CHARGE, type Plan, type PlanSettings, type ReachableDim } from '../../shared/types/plan.ts';
+import { formatNumber } from '../format.ts';
 
 export interface DimRow { key: string; name: string; group: string; state: 'auto' | 'on' | 'off'; reachable: boolean; label: string }
 
@@ -172,4 +176,183 @@ export function avoidWithout(avoid: readonly string[], entry: string): string[] 
 /** What an avoid entry's chip says: a material's display name, else the item or fluid's name (`nameOf`). */
 export function avoidLabel(entry: string, materials: readonly AvoidMaterial[], nameOf: (key: string) => string): string {
   return materials.find((m) => m.name === entry)?.label ?? nameOf(entry);
+}
+
+/**
+ * The "Steps vs raw material" presets (fix spec §3, architecture §11.34 as entry 39 amends it): with build cost counted
+ * the share of the line's least raw material over the horizon one new machine block costs, with it ignored the share
+ * one recipe step must save. "Fewest machines" is the default (`DEFAULT_STEP_CHARGE`, the user's answer of 2026-10-20).
+ */
+export const STEP_CHARGE_PRESETS: ReadonlyArray<{ value: number; label: string }> = [
+  { value: 0, label: 'Least raw material' },
+  { value: 0.02, label: 'Some machines' },
+  { value: 0.5, label: 'Fewest machines' },
+];
+
+/** A step charge as a percentage, as precise as it is stored: `2%`, `7%`, `2.5%`. */
+function chargePercent(charge: number): string {
+  return `${formatNumber(charge * 100)}%`;
+}
+
+/** The step charge a project plans with: its own, else the default (a project stored before the setting). */
+export function stepChargeOf(settings: PlanSettings): number {
+  return settings.stepCharge ?? DEFAULT_STEP_CHARGE;
+}
+
+/** A step charge in words: its preset's name (`Some machines`), else `Custom (7%)`. */
+export function stepChargeLabel(charge: number): string {
+  return STEP_CHARGE_PRESETS.find((p) => p.value === charge)?.label ?? `Custom (${chargePercent(charge)})`;
+}
+
+/** The choices of the "Steps vs raw material" select: each preset as "<name> (<n>%)", then the stored value when it is none of them. */
+export function stepChargeOptions(charge: number): Array<{ value: string; label: string }> {
+  const options = STEP_CHARGE_PRESETS.map((p) => ({ value: String(p.value), label: `${p.label} (${chargePercent(p.value)})` }));
+  if (!STEP_CHARGE_PRESETS.some((p) => p.value === charge)) options.push({ value: String(charge), label: stepChargeLabel(charge) });
+  return options;
+}
+
+/** The patch for a value picked in that select, or null for anything validateOp would refuse. */
+export function stepChargePatch(value: string): Partial<PlanSettings> | null {
+  const charge = value.trim() === '' ? Number.NaN : Number(value);
+  return Number.isFinite(charge) && charge >= 0 && charge <= MAX_STEP_CHARGE ? { stepCharge: charge } : null;
+}
+
+/**
+ * "Count build cost against" (plan 12 Task 7, design spec §3.3): the hours of running the build cost of new machines is
+ * weighed against, `none` to ignore it (`PlanSettings.buildHorizonHours` null). 24 hours is the default.
+ */
+export const BUILD_HORIZON_PRESETS: ReadonlyArray<{ value: string; hours: number | null; label: string }> = [
+  { value: '1', hours: 1, label: '1 hour' },
+  { value: '8', hours: 8, label: '8 hours' },
+  { value: '24', hours: 24, label: '24 hours' },
+  { value: '168', hours: 168, label: '1 week' },
+  { value: 'none', hours: null, label: 'Ignore build cost' },
+];
+
+/** The value of a stored horizon no preset names. */
+const CUSTOM_HORIZON = 'custom';
+
+/**
+ * What the horizon select shows for `hours`: its preset, the 24 h one for a project stored without the setting
+ * (undefined), else `Custom (<n> h)` under the value `custom`.
+ */
+export function horizonChoice(hours: number | null | undefined): { value: string; label: string } {
+  const wanted = hours === undefined ? DEFAULT_BUILD_HORIZON_HOURS : hours;
+  const preset = BUILD_HORIZON_PRESETS.find((p) => p.hours === wanted);
+  return preset !== undefined ? { value: preset.value, label: preset.label } : { value: CUSTOM_HORIZON, label: `Custom (${formatNumber(wanted as number)} h)` };
+}
+
+/** The patch for a value picked in the horizon select: `{ buildHorizonHours }` of its preset; nothing for any other value. */
+export function horizonPatch(value: string): Partial<PlanSettings> {
+  const preset = BUILD_HORIZON_PRESETS.find((p) => p.value === value);
+  return preset === undefined ? {} : { buildHorizonHours: preset.hours };
+}
+
+/**
+ * The choices of "Build machines at" (the user's ruling 224): `Cheapest tier` (null, the default, under the value '')
+ * and each tier from LV up to the project's tier; a stored tier above it (the project's tier was lowered since) last,
+ * said to be above it (the planner builds at the project's tier then).
+ */
+export function buildTierOptions(projectTier: number, stored: number | null | undefined): Array<{ value: string; label: string }> {
+  const options = [{ value: '', label: 'Cheapest tier' }];
+  for (let tier = 1; tier <= projectTier; tier++) options.push({ value: String(tier), label: tierText(tier) });
+  if (typeof stored === 'number' && stored > projectTier) options.push({ value: String(stored), label: `${tierText(stored)} (above the project’s tier)` });
+  return options;
+}
+
+/** The patch for a value picked in "Build machines at", or null for anything validateOp would refuse. */
+export function buildTierPatch(value: string): Partial<PlanSettings> | null {
+  if (value === '') return { buildTier: null };
+  const tier = /^\d+$/.test(value) ? Number(value) : Number.NaN;
+  return Number.isInteger(tier) && tier >= 1 && tier < TIER_NAMES.length ? { buildTier: tier } : null;
+}
+
+/** "Multiblocks" (the user's ruling 224): use them where cheaper (the default), or only where nothing else can do it. */
+export const MULTIBLOCK_CHOICES: ReadonlyArray<{ value: NonNullable<PlanSettings['multiblocks']>; label: string }> = [
+  { value: 'allow', label: 'Use when cheaper' },
+  { value: 'only-required', label: 'Only when nothing else can do it' },
+];
+
+/** The patch for a value picked in "Multiblocks", or null for one it does not offer. */
+export function multiblocksPatch(value: string): Partial<PlanSettings> | null {
+  const choice = MULTIBLOCK_CHOICES.find((c) => c.value === value);
+  return choice === undefined ? null : { multiblocks: choice.value };
+}
+
+/** One pinned ingredient option (`PlanSettings.optionChoice`): its key, recipe, slot, the option and the pin in words. */
+export interface OptionPinRow { pin: string; recipeId: string; slot: number; option: StuffKey; label: string; optionName: string }
+
+/**
+ * The project's pinned ingredient options by key, each named by the step of the plan that runs its recipe ("Circuit
+ * Assembler (Electronic Circuit): Molten Tin"), else by its recipe id and slot; a key that is no `<recipe>#<slot>` is left out.
+ */
+export function optionPinRows(settings: PlanSettings, plan: Plan | null, nameOf: (key: string) => string): OptionPinRow[] {
+  const stepOf = new Map((plan?.steps ?? []).map((s) => [s.recipeId, s]));
+  return Object.entries(settings.optionChoice ?? {}).sort(([a], [b]) => byString(a, b)).flatMap(([pin, option]): OptionPinRow[] => {
+    const hash = pin.lastIndexOf('#');
+    const slot = Number(pin.slice(hash + 1));
+    if (hash <= 0 || !Number.isInteger(slot)) return [];
+    const recipeId = pin.slice(0, hash);
+    const step = stepOf.get(recipeId);
+    const where = step === undefined ? `recipe ${recipeId}, slot ${slot}`
+      : step.mainOutput === undefined ? step.machine.name : `${step.machine.name} (${nameOf(step.mainOutput)})`;
+    const optionName = nameOf(option);
+    return [{ pin, recipeId, slot, option, label: `${where}: ${optionName}`, optionName }];
+  });
+}
+
+/** A machine the "Machines we have" list can name (`PackInfo.machines`). */
+export type OwnableMachine = NonNullable<PackInfo['machines']>[number];
+/** One entry of the "Machines we have" list (`PlanSettings.ownedManual`). */
+export type OwnedEntry = NonNullable<PlanSettings['ownedManual']>[number];
+
+const OWNED_COUNT_ERROR = `Enter a whole number from 1 to ${formatNumber(MAX_OWNED_MANUAL_COUNT)}`;
+/** The add form's group of the machines without a tier of their own. */
+const MULTIBLOCKS = 'Multiblocks';
+
+/** A machine in words: its name and tier ("Basic Assembler (LV)"), a multiblock by its name, one the pack does not know by its id. */
+export function ownedMachineLabel(machine: OwnableMachine | undefined, mteId: number): string {
+  if (machine === undefined) return `Machine #${mteId}`;
+  return machine.tier === undefined ? machine.name : `${machine.name} (${tierText(machine.tier)})`;
+}
+
+/** The machines of the add form by tier, the lowest first, then the multiblocks; each group in the list's order. */
+export function ownableMachineGroups(machines: readonly OwnableMachine[]): Array<{ label: string; machines: OwnableMachine[] }> {
+  const byTier = new Map<number, OwnableMachine[]>();   // multiblocks under +∞
+  for (const m of machines) {
+    const tier = m.tier ?? Number.POSITIVE_INFINITY;
+    const list = byTier.get(tier);
+    if (list === undefined) byTier.set(tier, [m]);
+    else list.push(m);
+  }
+  return [...byTier].sort(([a], [b]) => a - b)
+    .map(([tier, list]) => ({ label: Number.isFinite(tier) ? tierText(tier) : MULTIBLOCKS, machines: list }));
+}
+
+/** How many of a machine the group has, as typed into the "Machines we have" form, or why it cannot be sent. */
+export function parseOwnedCount(text: string): { count: number } | { error: string } {
+  const trimmed = text.trim();
+  const count = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
+  return count >= 1 && count <= MAX_OWNED_MANUAL_COUNT ? { count } : { error: OWNED_COUNT_ERROR };
+}
+
+/**
+ * `owned` with `count` more of machine `mteId`: added to its entry (up to the most one entry may count) or at the end;
+ * else why that cannot be sent (validateOp's limits).
+ */
+export function ownedWith(owned: readonly OwnedEntry[], mteId: number, count: number): { owned: OwnedEntry[] } | { error: string } {
+  if (!Number.isInteger(count) || count < 1 || count > MAX_OWNED_MANUAL_COUNT) return { error: OWNED_COUNT_ERROR };
+  const entry = owned.find((e) => e.mteId === mteId);
+  if (entry === undefined) {
+    return owned.length >= MAX_OWNED_MANUAL_ENTRIES
+      ? { error: `The list holds at most ${MAX_OWNED_MANUAL_ENTRIES} machine types; remove one first` }
+      : { owned: [...owned, { mteId, count }] };
+  }
+  if (entry.count >= MAX_OWNED_MANUAL_COUNT) return { error: `The list already counts ${formatNumber(MAX_OWNED_MANUAL_COUNT)} of this machine` };
+  return { owned: owned.map((e) => (e === entry ? { mteId, count: Math.min(MAX_OWNED_MANUAL_COUNT, e.count + count) } : e)) };
+}
+
+/** `owned` without machine `mteId`. */
+export function ownedWithout(owned: readonly OwnedEntry[], mteId: number): OwnedEntry[] {
+  return owned.filter((e) => e.mteId !== mteId);
 }

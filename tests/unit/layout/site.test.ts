@@ -62,3 +62,17 @@ describe('site finder', () => {
     expect(isReplaceable({ id: 'minecraft:tallgrass', meta: 1 })).toBe(true);
   });
 });
+
+// Final review: a dragged placement is read and checked where it is, and says what the scan does not know.
+describe('site finder: a placement away from the base', () => {
+  it('reads the placement too, and counts the cells of the spot the voxels do not know', () => {
+    const b = base([10, 64, 10]);
+    expect(siteSearchBox(b, 64, { w: 4, h: 1, l: 3 }, [], { minX: 69, minY: 63, minZ: 9, maxX: 74, maxY: 64, maxZ: 13 }))
+      .toMatchObject({ minX: -16, maxX: 74, minZ: -16, maxZ: 36 });
+    const vox = world();                                                            // x 0…39
+    expect(checkPlacement(req(), vox, { origin: [5, 64, 9], rotation: 0 }).unknown).toBe(0);
+    // 2 of the 4 columns lie east of the box: 2 × 3 cells of volume and 2 × 3 floor cells unknown
+    expect(checkPlacement(req(), vox, { origin: [38, 64, 9], rotation: 0 })).toMatchObject({ unknown: 12, blocked: 0 });
+    expect(findSite(req(), vox)!.unknown).toBe(0);
+  });
+});

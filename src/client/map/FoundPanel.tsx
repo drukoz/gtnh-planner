@@ -1,16 +1,18 @@
 // The Map tab's side panel (spec §3.7, §3.4, §3.5): what the scan found at the base, the world's dimensions, the
 // prospected veins near it and the numbered note pins. Every section is optional and says "None found" when empty;
 // "Scan notes" (what the scan could not read or work out) comes first and only when there is something to say.
-// Items show their pack name once `GET /api/pack/stuff/:key` answers (asked once per key per page), the key until then.
+// Items show their pack name once `POST /api/pack/names` answers (one request per 500 keys asked together, each key
+// asked once per page unless its request failed), the key until then.
 
 import { useEffect, useState, useSyncExternalStore, type ReactElement, type ReactNode } from 'react';
 import type { StuffKey } from '../../shared/keys.ts';
 import { tierName } from '../../shared/gt/tiers.ts';
-import type { StuffInfo } from '../../shared/types/api.ts';
+import type { PackNamesRequest } from '../../shared/types/api.ts';
 import type { Note } from '../../shared/types/project.ts';
 import type { LogisticsNetwork, StorageBlock } from '../../shared/types/world.ts';
-import { apiGet } from '../api/client.ts';
+import { apiPost } from '../api/client.ts';
 import { ItemIcon } from '../components/ItemIcon.tsx';
+import { createNameBatcher } from './name-batcher.ts';
 import { numberedPins } from './overlays.ts';
 import { dimLabel } from './render.ts';
 import type { FoundSummary } from './summary.ts';
@@ -29,16 +31,19 @@ const STORAGE_LABELS: Readonly<Record<StorageBlock['kind'], string>> = {
   gt_tank: 'GT tank', ae2_drive: 'AE2 drive',
 };
 
-const int = (n: number): string => n.toLocaleString('en-US', { maximumFractionDigits: 0 });
+// One formatter each: `toLocaleString` with options builds a new formatter on every call, and re-rendering the base's
+// 1,537-row storage list spent most of a minute in them (RC13).
+const INT_FORMAT = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
+const EUT_FORMAT = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1, signDisplay: 'negative' });
+const int = (n: number): string => INT_FORMAT.format(n);
 /** EU/t to 0.1, without a "-0". */
-const eut = (n: number): string => `${n.toLocaleString('en-US', { maximumFractionDigits: 1, signDisplay: 'negative' })} EU/t`;
+const eut = (n: number): string => `${EUT_FORMAT.format(n)} EU/t`;
 const plural = (n: number, word: string): string => `${int(n)} ${word}${n === 1 ? '' : 's'}`;
 const posText = (p: readonly number[]): string => p.join(' ');
 
 // ---- Item names, shared by every panel on the page ----
 
 const itemNames = new Map<StuffKey, string>();
-const askedNames = new Set<StuffKey>();
 const nameListeners = new Set<() => void>();
 let namesVersion = 0;
 
@@ -49,25 +54,22 @@ function subscribeNames(fn: () => void): () => void {
 
 const namesSnapshot = (): number => namesVersion;
 
-function askName(key: StuffKey): void {
-  if (askedNames.has(key)) return;
-  askedNames.add(key);
-  apiGet<StuffInfo>(`/api/pack/stuff/${encodeURIComponent(key)}`).then(
-    (info) => {
-      itemNames.set(key, info.name);
-      namesVersion++;
-      for (const fn of [...nameListeners]) fn();
-    },
-    () => {},   // a key the pack cannot name (or no export) keeps showing the key
-  );
-}
+// A key the pack cannot name keeps showing the key; a failed request (no export, say) is asked again by a later ask.
+const nameBatcher = createNameBatcher(
+  (keys) => apiPost<Array<string | null>>('/api/pack/names', { keys } satisfies PackNamesRequest),
+  (answered) => {
+    for (const [key, name] of answered) itemNames.set(key, name);
+    namesVersion++;   // one re-render per answered request
+    for (const fn of [...nameListeners]) fn();
+  },
+);
 
 /** The pack names known so far; asks for the names of `keys` it does not have yet (also the map's hover tooltip). */
 export function useItemNames(keys: readonly StuffKey[]): ReadonlyMap<StuffKey, string> {
   useSyncExternalStore(subscribeNames, namesSnapshot, namesSnapshot);
   const wanted = keys.join('\n');
   useEffect(() => {
-    for (const key of wanted === '' ? [] : wanted.split('\n')) askName(key);
+    for (const key of wanted === '' ? [] : wanted.split('\n')) nameBatcher.ask(key);
   }, [wanted]);
   return itemNames;
 }
@@ -160,7 +162,7 @@ function ItemRow(props: { item: FoundSummary['storage']['items'][number]; name: 
       <details>
         <summary style={{ cursor: 'pointer' }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, verticalAlign: 'middle' }}>
-            <ItemIcon itemKey={item.key} size={ICON_SIZE} />
+            <ItemIcon itemKey={item.key} size={ICON_SIZE} name={name} />
             <span style={{ overflowWrap: 'anywhere' }}>{name}</span>
           </span>
           {` · ${int(item.total)} · `}
@@ -253,7 +255,8 @@ function Notes(props: { notes: readonly Note[]; focusedNote: number | null; onFo
               style={{ width: '100%', textAlign: 'left', ...(n === focusedNote ? { borderColor: 'var(--accent)', background: 'var(--surface-2)' } : {}) }}
               onClick={() => onFocusNote(n)}
             >
-              <span className="badge">{n}</span>
+              {/* N<n>, as the map draws note pins: a plain number is a layout pin (a build step's "pin 1") */}
+              <span className="badge">{`N${n}`}</span>
               {` ${note.text} `}
               <span className="muted">{`at ${note.pin.x} ${note.pin.y} ${note.pin.z} (${dimLabel(note.pin.dim)})`}</span>
             </button>

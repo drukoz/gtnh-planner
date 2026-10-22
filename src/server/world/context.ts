@@ -4,28 +4,33 @@
 // `app.services.planContext` hook; Plan 5 calls it with three arguments (mode `direct`).
 
 import type { Pack } from '../../shared/types/pack.ts';
-import type { LogisticsMode, PlanContext } from '../../shared/types/plan.ts';
+import type { LogisticsMode, MachineWhere, PlanContext } from '../../shared/types/plan.ts';
 import { findBase, type PlacedMachine, type PowerNetwork, type WorldScan } from '../../shared/types/world.ts';
 import { reachKinds, storageTotals } from '../../shared/world/storage-totals.ts';
 import { countsForTopTier } from './classify/gt.ts';
 import { RAIN_OUTAGE_SECONDS } from './power.ts';
 
 /**
- * What the machines say: how many of each export-known mID there are (sorted by mID; machines the export does not know
- * are left out), the highest export tier among those that say what voltage a base runs at (the rule of the scan's
- * `Base.topTier`), and the highest EBF coil heat.
+ * What the machines say: how many of each export-known mID there are and where each stands, in the scan's order (sorted
+ * by mID; machines the export does not know are left out), the highest export tier among those that say what voltage a
+ * base runs at (the rule of the scan's `Base.topTier`), and the highest EBF coil heat.
  */
 function machineFacts(machines: readonly PlacedMachine[], pack: Pack): Pick<PlanContext, 'ownedMachines' | 'topTier' | 'coilHeat'> {
   const counts = new Map<number, number>();
+  const places = new Map<number, MachineWhere[]>();   // ruling P22: a plan says where the machines it reuses stand
   let topTier: number | null = null, coilHeat: number | null = null;
   for (const placed of machines) {
     if (placed.coilHeat !== undefined && (coilHeat === null || placed.coilHeat > coilHeat)) coilHeat = placed.coilHeat;
     const m = pack.machines.get(placed.mteId);
     if (m === undefined) continue;
     counts.set(m.mteId, (counts.get(m.mteId) ?? 0) + 1);
+    const where: MachineWhere = { dim: placed.dim, pos: [placed.pos[0], placed.pos[1], placed.pos[2]] };
+    const list = places.get(m.mteId);
+    if (list === undefined) places.set(m.mteId, [where]);
+    else list.push(where);
     if (m.tier !== undefined && (topTier === null || m.tier > topTier) && countsForTopTier({ kind: m.kind, tier: m.tier, cls: m.cls })) topTier = m.tier;
   }
-  const ownedMachines = [...counts].sort((a, b) => a[0] - b[0]).map(([mteId, count]) => ({ mteId, count }));
+  const ownedMachines = [...counts].sort((a, b) => a[0] - b[0]).map(([mteId, count]) => ({ mteId, count, where: places.get(mteId) ?? [] }));
   return { ownedMachines, topTier, coilHeat };
 }
 

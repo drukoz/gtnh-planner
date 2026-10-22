@@ -736,6 +736,40 @@ dist/client/assets/elk-worker.min-*.js   1,595.33 kB
 - License: EPL-2.0 OR GPL-3.0-or-later (`elkjs/package.json`). Fine to depend on unmodified from an MIT repo; no
   copying of ELK source.
 
+### 7.1 Ports, import stubs and supporting lines (amended by plan 09, fix spec §6.2)
+
+The flow diagram (`src/client/views/flow-model.ts` `toElk`/`fromElk`) now lays out boxes that list the goods they take
+and make as rows, with these options on top of the snippet above (verified in Node with `elk.bundled.js`, 2026-10-19):
+```ts
+// root: the snippet's four options plus
+'elk.hierarchyHandling': 'INCLUDE_CHILDREN',                  // an open supporting line is a compound node holding its boxes
+'elk.layered.cycleBreaking.strategy': 'DEPTH_FIRST',
+'elk.layered.considerModelOrder.strategy': 'NODES_AND_EDGES', // children and edges are sorted by id
+// every box: one port per row, fixed on the box's edge and centred on the row
+{ id, width, height, layoutOptions: { 'elk.portConstraints': 'FIXED_POS' },
+  ports: [{ id: '<node>|in|<key>', x: -2, y: rowCentre - 1, width: 2, height: 2, layoutOptions: { 'elk.port.side': 'WEST' } },
+          { id: '<node>|out|<key>', x: width, y: rowCentre - 1, width: 2, height: 2, layoutOptions: { 'elk.port.side': 'EAST' } }] }
+// edges run port to port; a rate label only where a port has 2+ edges, as an end label at that port
+{ id, sources: [fromPort], targets: [toPort], labels: [{ text, width, height, layoutOptions: { 'elk.edgeLabels.placement': 'HEAD' } }] }
+```
+- **Arrows start and end on their row.** With `FIXED_POS` ports ELK ends each edge section at its port's centre (the
+  y of the row exactly; x 2 px outside the box), so `fromElk` reads the good of an arrow from the row it leaves.
+- **Imports beside their step.** Import stubs (one per good and consumer) get no layer constraint: the default
+  network-simplex layering puts a source with one edge in the layer just before its consumer, and ELK aligns a node with
+  only outgoing edges to the right of its layer. A node with edges in and out is centred in its layer, so a narrow step
+  in a layer with a wide one sat 129 px from its stub; `'elk.alignment': 'LEFT'` on steps (and collapsed lines) puts
+  every stub 64 px (the 60 px layer spacing plus the ports) before its step. The toolbar's "Imports in one column" puts
+  `'elk.layered.layering.layerConstraint': 'FIRST'` back on the stubs; the target keeps `LAST`.
+- **Labels.** A centre label (`CENTER`, the default) becomes a label dummy node in a layer of its own: the one labelled
+  import edge in the probe moved its stub 458 px away. End labels (`HEAD` when the target port has the other edges, else
+  `TAIL`) take no layer; the gap between two layers grows by the widest end label in it (a 40 px label: 64 → 106 px).
+- **Compound nodes.** A child's `x`/`y` are relative to its parent, and an edge comes back with `container` (the lowest
+  common ancestor of its ends): its sections and its labels are relative to that node, so `fromElk` adds the
+  container's position. Edges may all be declared on the root.
+- Timings (Node, `new ELK()`, main thread, synthetic lines with three inputs per step): 61 boxes / 88 edges / 148
+  ports with 5 open lines: 110 ms (first call); 121 / 178 / 298: 72 ms; 241 / 358 / 598 with 20 open lines: 112 ms;
+  the same with the lines collapsed: 32–97 ms.
+
 ---
 
 ## 8. 3D view: three.js r186 with real block textures

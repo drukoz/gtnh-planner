@@ -66,9 +66,30 @@ describe('import-nei-icons CLI', () => {
     expect(lines.some((l) => l.startsWith('Usage: npm run import-nei-icons'))).toBe(true);
   });
 
+  it('lists the rows left without an icon because their name changed between the dumps', async () => {
+    const { dir, deps, lines } = await setup();
+    // Some items pick a display name at random each time they are drawn (both seen in a real dump).
+    const rows: NeiDumpRow[] = [
+      ...ROWS_CS,
+      { name: 'ExtraUtilities:endConstructor', meta: 0, display: 'QED (Quite Elegant Device)' },
+      { name: 'dreamcraft:OvenGlove', meta: 0, display: 'BBQ Glove (Left hand)' },
+    ];
+    const d = await writeNeiDump(join(dir, 'random'), rows, { caseInsensitive: false });
+    await rename(join(d.pngDir, 'QED (Quite Elegant Device).png'), join(d.pngDir, 'QED (Quantum Ender Diviner).png'));
+    await rename(join(d.pngDir, 'BBQ Glove (Left hand).png'), join(d.pngDir, 'Pizza Glove (Left hand).png'));
+    expect(await main(['--csv', d.csv, '--png', d.pngDir], deps)).toBe(0);
+    expect(lines).toEqual([
+      'Imported 7 NEI icons (1 fluids) from 10 rows; skipped 1 rows with NBT; file names matched case-sensitively',
+      '2 rows were left without an icon because their name changed between the CSV and PNG dumps (some items change their name at random):',
+      '  ExtraUtilities:endConstructor@0 "QED (Quite Elegant Device)"',
+      '  dreamcraft:OvenGlove@0 "BBQ Glove (Left hand)"',
+    ]);
+  });
+
   it('refuses a dump whose rows and PNGs do not line up', async () => {
     const { d, deps, lines } = await setup();
-    await rename(join(d.pngDir, 'Granite.png'), join(d.pngDir, 'Andesite.png'));
+    // A second Stone where the CSV has Granite. A name of its own (Andesite.png) would pass for a random name.
+    await rename(join(d.pngDir, 'Granite.png'), join(d.pngDir, 'Stone_2.png'));
     expect(await main(['--csv', d.csv, '--png', d.pngDir], deps)).toBe(1);
     expect(lines.join('\n')).toContain('Row 2 (minecraft:stone@1 "Granite") expects "Granite.png"');
   });

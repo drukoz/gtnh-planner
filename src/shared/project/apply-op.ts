@@ -3,7 +3,9 @@
 // applying the same op again with the same `by` and `at` changes nothing but `rev`.
 // Pure TypeScript shared by server and browser: nothing from node:* may be imported here.
 
-import { DEFAULT_EXCLUDED_CATEGORIES, LogisticsMode, type PlanSettings } from '../types/plan.ts';
+import {
+  DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_EXCLUDED_CATEGORIES, DEFAULT_STEP_CHARGE, LogisticsMode, STEP_CHARGE_BEFORE_V3, type PlanSettings,
+} from '../types/plan.ts';
 import type { Note, Project, ProjectOp } from '../types/project.ts';
 
 export const MAX_NOTE_LENGTH = 4000;
@@ -11,6 +13,20 @@ export const MAX_NAME_LENGTH = 80;
 /** Entries of `PlanSettings.avoid`, and the characters of each. */
 export const MAX_AVOID_ENTRIES = 50;
 export const MAX_AVOID_ENTRY_LENGTH = 300;
+/**
+ * The largest `PlanSettings.stepCharge` (fix spec §3): a step must then save half the line's least raw material, or with
+ * build cost counted a new machine block costs half of it over the horizon ("Fewest machines", the default).
+ */
+export const MAX_STEP_CHARGE = 0.5;
+/** The longest `PlanSettings.buildHorizonHours` (architecture §11.39): a year of running. */
+export const MAX_BUILD_HORIZON_HOURS = 8760;
+/** Characters of a pinned option (`PlanSettings.optionChoice` values, fix spec §3). */
+export const MAX_OPTION_KEY_LENGTH = 300;
+/** `<recipe id>#<Ingredient.slot>`: the keys of `PlanSettings.optionChoice` (fix spec §3). */
+const OPTION_SLOT = /^[^#]{1,100}#\d{1,4}$/;
+/** Entries of `PlanSettings.ownedManual` ("Machines we have", architecture §11.29), and the machines one may count. */
+export const MAX_OWNED_MANUAL_ENTRIES = 200;
+export const MAX_OWNED_MANUAL_COUNT = 10_000;
 
 const MAX_TIER = 14;
 const MAX_AMOUNT = 1e9;
@@ -22,31 +38,78 @@ const MAX_WORLD_ID_LENGTH = 100;
 const MARK_ROW = /^(build|run|step):.{1,300}$/;
 const ROTATIONS: readonly unknown[] = [0, 90, 180, 270];
 const LOGISTICS_MODES: readonly unknown[] = Object.values(LogisticsMode);
+/** `PlanSettings.multiblocks`'s values (the user's ruling 224). */
+const MULTIBLOCK_CHOICES: readonly unknown[] = ['allow', 'only-required'] satisfies ReadonlyArray<NonNullable<PlanSettings['multiblocks']>>;
+
+/**
+ * The version of the defaults new settings are made under (`PlanSettings.settingsVersion`, architecture §11.32): 2 since
+ * supporting lines (`routeDerived: true`) became the default (plan 09), 3 since "Fewest machines" (`DEFAULT_STEP_CHARGE`
+ * 0.5) did (plan 12 fix wave 2, the user's answer of 2026-10-20). Settings stored before 2 read as version 1.
+ */
+export const SETTINGS_VERSION = 3;
+/** What `normalizeSettings` gives settings stored before `settingsVersion` existed. */
+const FIRST_SETTINGS_VERSION = 1;
 
 export function defaultSettings(): PlanSettings {
   return {
     target: null, mode: 'rate', amount: 1, per: 'min', tier: null, dims: { policy: 'progression', overrides: {} },
-    routeDerived: false, logistics: 'direct', costOverrides: {}, stopItems: [], expandItems: [], recipeChoice: {},
-    machineTier: {}, excludedCategories: [...DEFAULT_EXCLUDED_CATEGORIES], coilHeat: null, automateCrafting: false,
-    avoid: [], declineReuse: [],
+    routeDerived: true, logistics: 'direct', costOverrides: {}, stopItems: [], expandItems: [], recipeChoice: {},
+    machineTier: {}, excludedCategories: [...DEFAULT_EXCLUDED_CATEGORIES], coilHeat: null, automateCrafting: true,
+    avoid: [], declineReuse: [], settingsVersion: SETTINGS_VERSION, haveSupply: [], stepCharge: DEFAULT_STEP_CHARGE,
+    optionChoice: {}, reuseOwned: true, ownedManual: [], buildHorizonHours: DEFAULT_BUILD_HORIZON_HOURS, buildTier: null, multiblocks: 'allow',
   };
 }
 
 /**
  * Fills the fields an older stored project lacks (later plans add settings), `dims` field by field, and drops repeated
- * avoid entries.
+ * avoid entries and sums repeated machines of the "Machines we have" list. A missing `settingsVersion` is 1, not the
+ * default: the project was stored before it, and the server switches such projects to the new defaults once
+ * (`ProjectStore.migrateSettings`); every stored value, a stored `routeDerived: false` or `buildHorizonHours: null`
+ * ("Ignore build cost") among them, is kept — but `automateCrafting`, which reads true whatever was stored (the user's
+ * ruling 180 of 2026-10-20: crafting steps are automatic, with no switch for them), so a project stored "by hand" plans
+ * its crafting on Auto Workbenches at once, with no recorded change. `planLine` still plans an explicit false by hand.
  */
 export function normalizeSettings(s: Partial<PlanSettings> | undefined): PlanSettings {
   const defaults = defaultSettings();
   const merged = { ...defaults, ...definedOnly(s ?? {}) };
   merged.dims = { ...defaults.dims, ...definedOnly(s?.dims ?? {}) };
   merged.avoid = withoutRepeats(merged.avoid);
+  merged.ownedManual = summedOwned(merged.ownedManual ?? []);
+  merged.automateCrafting = true;
+  if (s?.settingsVersion === undefined) merged.settingsVersion = FIRST_SETTINGS_VERSION;
   return merged;
 }
 
 /** `list` with each value only where it first appears. */
 function withoutRepeats(list: readonly string[]): string[] {
   return [...new Set(list)];
+}
+
+/**
+ * A "Machines we have" list with one entry per mteId, where it first appears, holding the counts of its repeats added up
+ * (at most `MAX_OWNED_MANUAL_COUNT`, ruling P22); each entry keeps only its id and count.
+ */
+function summedOwned(list: NonNullable<PlanSettings['ownedManual']>): NonNullable<PlanSettings['ownedManual']> {
+  const counts = new Map<number, number>();
+  for (const { mteId, count } of list) counts.set(mteId, Math.min(MAX_OWNED_MANUAL_COUNT, (counts.get(mteId) ?? 0) + count));
+  return [...counts].map(([mteId, count]) => ({ mteId, count }));
+}
+
+/**
+ * The settings patch that brings `s` (as `normalizeSettings` reads it) from its `settingsVersion` to `SETTINGS_VERSION`
+ * (`ProjectStore.migrateSettings` records it once, as the planner): from before 2, supporting lines on (plan 09); from
+ * before 3, a step charge of exactly the old default (`STEP_CHARGE_BEFORE_V3`, 0.02) becomes the new one (0.5, "Fewest
+ * machines"), any other stored value staying; and the version. Null for settings of this version, which it never
+ * touches, so a later deliberate value sticks.
+ */
+export function settingsUpgrade(s: PlanSettings): Partial<PlanSettings> | null {
+  const from = s.settingsVersion ?? FIRST_SETTINGS_VERSION;
+  if (from >= SETTINGS_VERSION) return null;
+  const patch: Partial<PlanSettings> = {};
+  if (from < 2) patch.routeDerived = true;
+  if (s.stepCharge === STEP_CHARGE_BEFORE_V3) patch.stepCharge = DEFAULT_STEP_CHARGE;
+  patch.settingsVersion = SETTINGS_VERSION;
+  return patch;
 }
 
 /** A copy without the keys whose value is `undefined`, so spreading it never blanks a default. */
@@ -61,9 +124,11 @@ export function applyOp(p: Project, op: ProjectOp, by: string, at: string): Proj
     case 'rename':
       return { ...next, name: op.name.trim() };
     case 'settings': {
-      // Records and arrays in the patch replace the old value whole; an avoid list keeps the first of repeated entries.
+      // Records and arrays in the patch replace the old value whole; an avoid list keeps the first of repeated entries,
+      // and the "Machines we have" list sums the counts of a repeated machine.
       const settings = { ...p.settings, ...op.patch };
       if (op.patch.avoid !== undefined) settings.avoid = withoutRepeats(op.patch.avoid);
+      if (op.patch.ownedManual !== undefined) settings.ownedManual = summedOwned(op.patch.ownedManual);
       return { ...next, settings };
     }
     case 'mark': {
@@ -123,6 +188,12 @@ function recordOf(field: string, ok: (v: unknown) => boolean, what: string): Che
   return (v) => (isRecord(v) && Object.values(v).every(ok) ? null : `${field} values must be ${what}`);
 }
 
+/** One entry of the "Machines we have" list: a machine id of 0 or more and a whole count from 1 to the most one may count. */
+function isOwnedEntry(v: unknown): boolean {
+  return isRecord(v) && Number.isSafeInteger(v.mteId) && (v.mteId as number) >= 0
+    && Number.isInteger(v.count) && (v.count as number) >= 1 && (v.count as number) <= MAX_OWNED_MANUAL_COUNT;
+}
+
 /** One check per setting; a setting added to `PlanSettings` must get its check here (and its default above). */
 const SETTING_CHECKS: { readonly [K in keyof PlanSettings]-?: Check } = {
   target: (v) => (v === null || isStringOfLength(v, 1, MAX_TARGET_LENGTH) ? null : `target must be empty or 1 to ${MAX_TARGET_LENGTH} characters`),
@@ -152,6 +223,26 @@ const SETTING_CHECKS: { readonly [K in keyof PlanSettings]-?: Check } = {
   avoid: (v) => (Array.isArray(v) && v.length <= MAX_AVOID_ENTRIES && v.every((x) => isStringOfLength(x, 1, MAX_AVOID_ENTRY_LENGTH))
     ? null : `avoid must be a list of at most ${MAX_AVOID_ENTRIES} entries of 1 to ${MAX_AVOID_ENTRY_LENGTH} characters`),
   declineReuse: (v) => (Array.isArray(v) && v.every((x) => Number.isSafeInteger(x)) ? null : 'declineReuse must be a list of whole numbers'),
+  // Never back below the current version: a project switched to the new defaults stays switched.
+  settingsVersion: (v) => (Number.isSafeInteger(v) && (v as number) >= SETTINGS_VERSION
+    ? null : `settingsVersion must be a whole number of at least ${SETTINGS_VERSION}`),
+  // Keys of free inputs; one that is no free input is kept and has no effect (fix spec §3).
+  haveSupply: stringList('haveSupply'),
+  stepCharge: (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= MAX_STEP_CHARGE
+    ? null : `stepCharge must be a number from 0 to ${MAX_STEP_CHARGE}`),
+  // A pin the pack no longer fits is kept and ignored with a warning (fix spec R9); only its shape is checked here.
+  optionChoice: (v) => (isRecord(v) && Object.entries(v).every(([slot, key]) => OPTION_SLOT.test(slot) && isStringOfLength(key, 1, MAX_OPTION_KEY_LENGTH))
+    ? null : `optionChoice keys must look like <recipe id>#<slot>, with options of 1 to ${MAX_OPTION_KEY_LENGTH} characters`),
+  reuseOwned: booleanField('reuseOwned'),
+  // Counted as sent, repeats included: applyOp sums the counts of a repeated machine.
+  ownedManual: (v) => (Array.isArray(v) && v.length <= MAX_OWNED_MANUAL_ENTRIES && v.every(isOwnedEntry)
+    ? null : `ownedManual must be a list of at most ${MAX_OWNED_MANUAL_ENTRIES} machines, each an mteId of 0 or more with a whole count from 1 to ${MAX_OWNED_MANUAL_COUNT}`),
+  // null = ignore build cost (rate mode).
+  buildHorizonHours: (v) => (v === null || (typeof v === 'number' && Number.isFinite(v) && v > 0 && v <= MAX_BUILD_HORIZON_HOURS)
+    ? null : `buildHorizonHours must be empty or above 0 and at most ${MAX_BUILD_HORIZON_HOURS}`),
+  // null = the cheapest tier; a tier above the project's is kept and clamped by the planner.
+  buildTier: (v) => (v === null || (isTier(v) && (v as number) >= 1) ? null : `buildTier must be empty or a whole number from 1 to ${MAX_TIER}`),
+  multiblocks: oneOf('multiblocks', MULTIBLOCK_CHOICES),
 };
 
 const SETTING_KEYS: ReadonlySet<string> = new Set(Object.keys(defaultSettings()));

@@ -4,7 +4,9 @@ import type { IncomingMessage } from 'node:http';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { startTestServer, type TestServer } from '../../helpers/test-server.ts';
+import { makePack } from '../../helpers/make-pack.ts';
 import { packFromSpec } from '../../helpers/pack-spec.ts';
+import { sampleExportSpec, sampleInlineCrop } from '../../helpers/sample-export.ts';
 import { createApp } from '../../../src/server/app.ts';
 import { DEFAULT_CONFIG } from '../../../src/server/config.ts';
 import { HttpError } from '../../../src/server/http/router.ts';
@@ -53,6 +55,14 @@ describe('pack routes', () => {
     expect(await (await s.request('/api/pack')).json()).toMatchObject({ recipeCount: 1, mapCount: 1, itemCount: 2,
       exclusionRules: ['recycling', 'massfab', 'replicator', 'scrap', 'lava-centrifuge', 'programmed-circuit-conversion'] });
   });
+  it('GET /api/pack counts the items of the item table, not the crop items of the crop table', async () => {
+    const cropped = await makePack({ ...sampleExportSpec(), crops: [sampleInlineCrop()] });
+    const crop = [...cropped.items.values()].filter((item) => item.cropOnly === true).length;
+    expect(crop).toBe(3);
+    const t = await startTestServer({ pack: cropped });
+    expect((await (await t.request('/api/pack')).json()).itemCount).toBe(cropped.items.size - crop);
+    await t.close();
+  });
   it('GET /api/pack lists the materials an avoid entry can name, by display name then name (ruling R12)', async () => {
     const named = packFromSpec({
       items: [{ key: 't:ss@0', name: 'Stainless Steel Ingot', gt: { prefix: 'ingot', material: 'StainlessSteel' } },
@@ -66,6 +76,28 @@ describe('pack routes', () => {
     // AnyCopper, which no item or fluid is made of, would avoid nothing (final review): it is not offered.
     expect((await (await t.request('/api/pack')).json()).materials).toEqual([
       { name: 'Ash', label: 'Ash' }, { name: 'Copper', label: 'Copper' }, { name: 'StainlessSteel', label: 'Stainless Steel' }]);
+    await t.close();
+  });
+  it('GET /api/pack lists the machines the "Machines we have" list can name, by name, tier and id (ruling P21)', async () => {
+    const machined = packFromSpec({
+      maps: [{ id: 'gt.recipe.assembler' }, { id: 'gt.recipe.blastfurnace' }, { id: 'gt.recipe.steamturbinefuel' }],
+      machines: [
+        { mteId: 402, name: 'Boxinator', maps: ['gt.recipe.assembler'], tier: 2 },
+        { mteId: 401, name: 'Boxinator', maps: ['gt.recipe.assembler'], tier: 1 },
+        { mteId: 121, name: 'Basic Assembler', maps: ['gt.recipe.assembler'], tier: 1 },
+        { mteId: 15512, name: 'Industrial Centrifuge', maps: ['gt.recipe.blastfurnace'], kind: 'multiblock' },
+        { mteId: 790, name: 'Industrial Centrifuge', maps: ['gt.recipe.blastfurnace'], kind: 'multiblock' },
+        // Never on a step (pickMachine runs singleblocks and multiblocks only), or running no recipe map: not offered.
+        { mteId: 1120, name: 'Basic Steam Turbine', maps: ['gt.recipe.steamturbinefuel'], kind: 'generator', tier: 1 },
+        { mteId: 1246, name: '1x Tin Cable', maps: [], kind: 'cable', tier: 1 },
+        { mteId: 130, name: 'Assembler Without Recipes', maps: [], tier: 1 },
+      ],
+    });
+    const t = await startTestServer({ pack: machined });
+    // A multiblock has no tier of its own (it runs at its energy hatch's), so it has none here.
+    expect((await (await t.request('/api/pack')).json()).machines).toEqual([
+      { mteId: 121, name: 'Basic Assembler', tier: 1 }, { mteId: 401, name: 'Boxinator', tier: 1 }, { mteId: 402, name: 'Boxinator', tier: 2 },
+      { mteId: 790, name: 'Industrial Centrifuge' }, { mteId: 15512, name: 'Industrial Centrifuge' }]);
     await t.close();
   });
   it('search and stuff', async () => {
@@ -140,7 +172,7 @@ describe('pack routes: details', () => {
     expect(await (await s.request('/api/pack/search?q=iron&limit=0')).json()).toHaveLength(1);
     expect(await (await s.request('/api/pack/search?q=iron&limit=abc')).json()).toHaveLength(2);
   });
-  it('summarizes recipes: crafting, furnace, a map without machines, the first ore-dict option, fake recipes', () => {
+  it('summarizes recipes: crafting, furnace, a map without machines, every ore-dict option, fake recipes', () => {
     const p = packFromSpec({
       items: [{ key: 't:plank@0', name: 'Plank' }, { key: 't:plank@1', name: 'Birch Plank' }],
       maps: [{ id: 'gt.recipe.lathe', name: 'Lathe' }],
@@ -151,11 +183,14 @@ describe('pack routes: details', () => {
       ],
     });
     const sum = (id: string) => summarizeRecipe(p, p.recipeById.get(id)!);
+    // An ore-dictionary slot shows its first option and lists all of them (controller ruling: every option stays visible).
     expect(sum('stick')).toEqual({
       id: 'stick', source: 'crafting', maps: ['crafting'], machineName: 'Crafting table', tier: 1, euPerTick: 0, durationTicks: 0,
-      inputs: [{ key: 't:plank@0', name: 'Plank', amount: 2, consumed: true }],
+      inputs: [{ key: 't:plank@0', name: 'Plank', amount: 2, consumed: true,
+        options: [{ key: 't:plank@0', name: 'Plank', amount: 2 }, { key: 't:plank@1', name: 'Birch Plank', amount: 2 }] }],
       outputs: [{ key: 't:stick@0', name: 't:stick@0', amount: 4, chance: 1 }],
     });
+    expect(sum('char').inputs).toEqual([{ key: 't:plank@0', name: 'Plank', amount: 1, consumed: true }]);
     expect(sum('char').machineName).toBe('Furnace');
     expect(sum('lathe')).toMatchObject({ machineName: 'Lathe', tier: 2, fake: true, outputs: [{ chance: 0.5 }] });
   });
@@ -195,6 +230,29 @@ describe('app.pack()', () => {
     app.config.activeExportId = null;
     await expect(app.pack()).rejects.toMatchObject({ status: 503, code: 'no-export' });
     app.db.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('createApp', () => {
+  it('switches projects stored before supporting lines were the default to them at start, once (ruling P10)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gp-app-'));
+    const config = { ...DEFAULT_CONFIG, dataDir: dir };
+    const first = createApp(config);
+    const id = first.projects.create('Old line', 'Ann').id;
+    const row = first.db.getProject(id)!;
+    const state = JSON.parse(row.state);
+    delete state.settings.settingsVersion;
+    state.settings.routeDerived = false;
+    state.settings.stepCharge = 0.02;   // plan 09's default, switched to "Fewest machines" with it (plan 12 fix wave 2)
+    first.db.updateProject({ ...row, state: JSON.stringify(state) });
+    first.db.close();
+    const again = createApp(config);
+    expect(again.projects.get(id)).toMatchObject({ rev: 1, settings: { routeDerived: true, stepCharge: 0.5, settingsVersion: 3 } });
+    again.db.close();
+    const third = createApp(config);
+    expect(third.projects.get(id)?.rev).toBe(1);
+    third.db.close();
     rmSync(dir, { recursive: true, force: true });
   });
 });

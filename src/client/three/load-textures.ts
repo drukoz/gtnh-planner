@@ -6,14 +6,14 @@
 
 import type { StuffKey } from '../../shared/keys.ts';
 import { ASSET_KEYS_MAX, type AssetCoversRequest } from '../../shared/types/api.ts';
-import type { BlockFaces, CoverLayers, IconDescriptor, TextureLayer } from '../../shared/types/assets.ts';
+import { layerKey, type BlockFaces, type CoverLayers, type IconDescriptor, type TextureLayer } from '../../shared/types/assets.ts';
 import type { Layout } from '../../shared/types/layout.ts';
 import type { BlockRef } from '../../shared/types/pack.ts';
 import { apiPost } from '../api/client.ts';
 import { iconBatcher } from '../assets/icons.ts';
 import { worldApi } from '../map/api.ts';
 import { FACES_BATCH, layerPixels } from '../map/palette.ts';
-import { blockKey, type SceneData } from './scene-data.ts';
+import { blockKey, sceneBlockRefs, type SceneData } from './scene-data.ts';
 import { compositeTile, solidTile, TILE, type TileImage } from './textures.ts';
 
 /** The asset lookups the 3D view makes; the browser's are `realTextureDeps`, tests pass their own. */
@@ -76,9 +76,10 @@ async function answersBy<A, V>(keys: readonly string[], args: A[], ask: (args: A
 }
 
 /**
- * The faces of every distinct block of `layout` (by `blockKey`, ghosts included), and for every distinct cover item
- * its in-world overlay (`covers`) and its icon (`icons`, what a plate shows when the overlay is `[]`): one request of
- * each kind, in the order the layout first names them.
+ * The faces of every distinct block the scene draws (`sceneBlockRefs`: each block of `layout`, and for a block holding
+ * EnderIO conduits each conduit's and connector's pseudo block; plan 11 merge follow-up F2), by `blockKey`, ghosts
+ * included, and for every distinct cover item its in-world overlay (`covers`) and its icon (`icons`, what a plate shows
+ * when the overlay is `[]`): one request of each kind, in the order the layout first names them.
  */
 export async function loadSceneInputs(layout: Layout, deps: TextureDeps): Promise<{
   faces: Map<string, BlockFaces>; icons: Map<StuffKey, IconDescriptor>; covers: Map<StuffKey, CoverLayers>;
@@ -86,8 +87,10 @@ export async function loadSceneInputs(layout: Layout, deps: TextureDeps): Promis
   const blocks = new Map<string, BlockRef>();
   const coverItems = new Set<StuffKey>();
   for (const b of layout.blocks) {
-    const key = blockKey(b.block);
-    if (!blocks.has(key)) blocks.set(key, b.block);
+    for (const ref of sceneBlockRefs(b)) {
+      const key = blockKey(ref);
+      if (!blocks.has(key)) blocks.set(key, ref);
+    }
     for (const cover of b.covers ?? []) coverItems.add(cover.item);
   }
   const items = [...coverItems];
@@ -110,16 +113,18 @@ async function imageOrNull(deps: TextureDeps, layer: TextureLayer): Promise<Tile
 
 /**
  * The pixels of every scene tile, in tile order: its layers composited bottom to top, each with its own tint (Task
- * 14's `compositeTile`), each texture path asked for once however many tiles use it; a tile without layers, whose
+ * 14's `compositeTile`), over `solidTile(tile.under)` when the tile has `under` (so none of its pixels is transparent),
+ * each texture asked for once per path and region (`layerKey`) however many tiles use it; a tile without layers, whose
  * images all fail to load, or that cannot be composited is `solidTile(tile.color)`. Never rejects.
  */
 export async function tilesFor(scene: SceneData, deps: TextureDeps): Promise<Uint8ClampedArray[]> {
   const images = new Map<string, Promise<TileImage | null>>();
   const imageOf = (layer: TextureLayer): Promise<TileImage | null> => {
-    let image = images.get(layer.path);
+    const key = layerKey(layer);
+    let image = images.get(key);
     if (image === undefined) {
       image = imageOrNull(deps, layer);
-      images.set(layer.path, image);
+      images.set(key, image);
     }
     return image;
   };
@@ -129,8 +134,10 @@ export async function tilesFor(scene: SceneData, deps: TextureDeps): Promise<Uin
       const image = await imageOf(layer);
       return image === null ? null : { image, ...(layer.tint === undefined ? {} : { tint: layer.tint }) };
     }));
+    if (drawn.every((entry) => entry === null)) return solidTile(tile.color);   // nothing loaded: never `under` alone
+    const under = tile.under === undefined ? [] : [{ image: { data: solidTile(tile.under) } }];
     try {
-      return compositeTile(drawn) ?? solidTile(tile.color);
+      return compositeTile([...under, ...drawn]) ?? solidTile(tile.color);
     } catch {
       return solidTile(tile.color);   // an image of another size
     }

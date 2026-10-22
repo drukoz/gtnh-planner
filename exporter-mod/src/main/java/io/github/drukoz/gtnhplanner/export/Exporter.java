@@ -10,6 +10,7 @@ import java.util.Set;
 
 import io.github.drukoz.gtnhplanner.export.sections.AssemblyLineSection;
 import io.github.drukoz.gtnhplanner.export.sections.CraftingSection;
+import io.github.drukoz.gtnhplanner.export.sections.CropsSection;
 import io.github.drukoz.gtnhplanner.export.sections.FluidsSection;
 import io.github.drukoz.gtnhplanner.export.sections.FurnaceSection;
 import io.github.drukoz.gtnhplanner.export.sections.MachinesSection;
@@ -47,10 +48,20 @@ import io.github.drukoz.gtnhplanner.export.textures.TextureExporter;
  * {@code IOreMaterial.getInternalName()}</td></tr>
  * <tr><td>Structure coordinates</td><td>canonical orientation (controller front faces north, &minus;z); x east, y up,
  * z south; origin = min corner of blocks &cup; air cells, so every coordinate is &ge; 0</td></tr>
+ * <tr><td>Structure elements (exporter 0.6.0+)</td><td>{@code elements[k]} is one element of GT's structure
+ * definition &mdash; {@code ch} its shape character when the definition names one, {@code hatches} the hatch kinds
+ * ({@code src/shared/gt/hatch-kinds.ts}, in that order) GT's own structure check took on the element's probe cell;
+ * {@code elementOf[i]} is the element of {@code blocks[i]}, or &minus;1 for the controller and for a cell GT's check
+ * never reached or that two elements checked. The two come together or not at all</td></tr>
+ * <tr><td>Item slot counts (exporter 0.6.0+)</td><td>{@code itemInSlots} / {@code itemOutSlots} on a GT basic
+ * machine's line are its input slots ({@code mInputSlotCount}) and output slots ({@code mOutputItems.length}); every
+ * other machine and every older export has neither</td></tr>
  * <tr><td>Furnace {@code ef} / {@code mw}</td><td>output GT's own electric furnace / microwave lookup returned for
  * that input; {@code mw} is omitted when the microwave would explode, burn or reject it</td></tr>
  * <tr><td>Item {@code electric}</td><td>only for a non-wildcard item that is an IC2 {@code IElectricItem} with a
  * finite {@code maxCharge} &gt; 0</td></tr>
+ * <tr><td>Crop table</td><td>adds no item to {@code items.jsonl.gz}: an item the table lacks is written inline in its
+ * crop line ({@code CropsSection}), so the items and recipe ids are those of an export without the crop table</td></tr>
  * <tr><td>Markers</td><td>{@code EXPORT_OK} or {@code EXPORT_FAILED} is written after every other file is
  * closed</td></tr>
  * </table>
@@ -79,6 +90,7 @@ public final class Exporter {
         sections.add(new StructuresSection());
         sections.add(new MaterialsSection());
         sections.add(new WorldgenSection());
+        sections.add(new CropsSection());
         sections.add(new TextureExporter());
         return sections;
     }

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { miniGt } from '../../helpers/mini-gt.ts';
+import { MINI_GT, miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec, type IngredientSpec } from '../../helpers/pack-spec.ts';
+import { largeBenderSpec } from '../../helpers/build-fixtures.ts';
 import { buildBom, expandBomLines } from '../../../src/server/planner/bom.ts';
 import { buildSteps } from '../../../src/server/planner/steps.ts';
 import { planLine } from '../../../src/server/planner/plan.ts';
@@ -8,7 +9,7 @@ import { planBasis, effectiveTier } from '../../../src/server/planner/basis.ts';
 import { computeAvailability, reachableDims } from '../../../src/server/planner/availability.ts';
 import { makeLeafOracle, makePrices } from '../../../src/server/planner/costs.ts';
 import { MAX_RECIPES, type PlanEnv } from '../../../src/server/planner/candidates.ts';
-import type { PlanStep } from '../../../src/shared/types/plan.ts';
+import type { PlanContext, PlanStep } from '../../../src/shared/types/plan.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import { emptyContextForTest } from '../../helpers/plan-context.ts';
 
@@ -59,6 +60,17 @@ describe('buildBom', () => {
     expect(bom.lines.map((l) => [l.key, l.amount, l.group])).toEqual([['machine:1000@0', 1, 'machines'], ['machine:50@0', 1, 'machines'], ['t:casing@11', 1, 'machines']]);
     expect(bom.lines.find((l) => l.key === 'machine:1000@0')?.why).toBe('1× Electric Blast Furnace');
   });
+  it('lists a structure hatch at the lowest tier of its class', async () => {
+    // The Large Bender's exported structure holds an HV muffler hatch; the LV one does the same job.
+    const p = packFromSpec(largeBenderSpec());
+    const settings = { ...defaultSettings(), tier: 1 };
+    const b = planBasis(p, settings, emptyContextForTest());
+    const bom = await buildBom(p, [step({ id: 'bend-plate', recipeId: 'bend-plate', machine: { mteId: 1100, name: 'Large Bender', tier: 1 } })],
+      { settings, env: b.env, leaf: b.leaf, ctx: emptyContextForTest() });
+    const lines = bom.lines.map((l) => [l.key, l.amount, l.why, l.group]);
+    expect(lines).toContainEqual(['machine:91@0', 1, 'structure of 1× Large Bender', 'machines']);
+    expect(lines.map(([key]) => key)).not.toContain('machine:93@0');
+  });
   it('adds one cleanroom for the steps that need it, and warns when the pack has none', async () => {
     const spec = (cls: string) => packFromSpec({ maps: [{ id: 'gt.recipe.assembler' }],
       machines: [{ mteId: 121, name: 'Basic Assembler', maps: ['gt.recipe.assembler'], tier: 1 },
@@ -77,6 +89,23 @@ describe('buildBom', () => {
     const none = await buildBom(without, steps, { settings, env: nb.env, leaf: nb.leaf, ctx: emptyContextForTest() });
     expect(none.lines.map((l) => l.key)).toEqual(['machine:121@0']);
     expect(none.warnings.map((w) => w.code)).toEqual(['no-cleanroom']);
+  });
+  it('leaves out a cleanroom the group owns', async () => {
+    // Plan 12 Task 6: the group's own cleanroom (a world scan's, or the "Machines we have" list's) needs no building.
+    const p = packFromSpec({ ...MINI_GT, machines: [...(MINI_GT.machines ?? []),
+      { mteId: 1200, name: 'Cleanroom', kind: 'multiblock', maps: [], cls: 'gregtech.common.tileentities.machines.multi.MTECleanroom' }] });
+    const settings = { ...defaultSettings(), tier: 1 };
+    const b = planBasis(p, settings, emptyContextForTest());
+    const steps = [step({ id: 'x', recipeId: 'x', needsCleanroom: true, mainOutput: 't:circuit@0' })];
+    const rooms = async (ctx: PlanContext) => (await buildBom(p, steps, { settings, env: b.env, leaf: b.leaf, ctx })).lines.filter((l) => l.key === 'machine:1200@0');
+    expect(await rooms(emptyContextForTest())).toEqual([expect.objectContaining({ amount: 1, why: expect.stringMatching(/^cleanroom for /), group: 'machines' })]);
+    expect(await rooms({ ...emptyContextForTest(), ownedMachines: [{ mteId: 1200, count: 1 }] })).toEqual([]);
+    // the list's own one counts the same; a declined one does not
+    const listed = await buildBom(p, steps, { settings: { ...settings, ownedManual: [{ mteId: 1200, count: 1 }] }, env: b.env, leaf: b.leaf, ctx: emptyContextForTest() });
+    expect(listed.lines.map((l) => l.key)).not.toContain('machine:1200@0');
+    const declined = await buildBom(p, steps, { settings: { ...settings, declineReuse: [1200] }, env: b.env, leaf: b.leaf,
+      ctx: { ...emptyContextForTest(), ownedMachines: [{ mteId: 1200, count: 1 }] } });
+    expect(declined.lines.map((l) => l.key)).toContain('machine:1200@0');
   });
   it('counts a machine that Make N steps share once', async () => {
     const steps = [step({ id: 'bend-plate', recipeId: 'bend-plate', count: 1, owned: 0, machine: { mteId: 101, name: 'Basic Bending Machine', tier: 1 } }),
@@ -136,7 +165,7 @@ describe('buildBom', () => {
                 { id: 'bender-q', map: 'crafting', in: [['q@0', 2]], out: [['machine:2@0', 1]] }],
       worldgen: { veins: ['X', 'Y', 'P', 'Q'].map(vein) },
     });
-    const settings = { ...defaultSettings(), tier: 1, target: 't@0', stopItems: ['s@0'] };
+    const settings = { ...defaultSettings(), tier: 1, target: 't@0', stopItems: ['s@0'], routeDerived: false };
     const plan = await planLine(p, settings, emptyContextForTest());
     expect(plan.status).toBe('ok');
     expect(plan.rawInputs.map((r) => [r.key, r.leafClass])).toEqual([['d@0', 'derived'], ['s@0', 'stop']]);
@@ -162,6 +191,98 @@ describe('buildBom', () => {
     expect(out.find((s) => s.id === 'handcraft:hammer-plate')?.text).toBe('Hand-craft 30/min Iron Plate at a crafting table (tools: Hammer)');
     expect(out.find((s) => s.id === 'configure:hammer-plate')).toBeUndefined();
     expect(out.filter((s) => s.kind === 'configure')).toEqual([]);
+  });
+  it('keeps free inputs as leaves of a breakdown', async () => {
+    // Fix spec R2: with a pump at LV a running line pumps its water (it is no leaf for the line), but the one-off
+    // materials of its machines get no generator. The chemical bath is crafted from two parts that each take 500 L of it.
+    const p = packFromSpec({
+      ...MINI_GT,
+      items: [...MINI_GT.items!, { key: 't:part@0', name: 'Bath Part' }],
+      maps: [...MINI_GT.maps!, { id: 'gt.recipe.chemicalbath', name: 'Chemical Bath' }],
+      machines: [...MINI_GT.machines!, { mteId: 171, name: 'Basic Chemical Bath', maps: ['gt.recipe.chemicalbath'], tier: 1 },
+                 { mteId: 1140, name: 'Basic Pump', maps: [], tier: 1, cls: 'gregtech.common.tileentities.machines.basic.MTEPump' }],
+      recipes: [...MINI_GT.recipes!,
+                { id: 'make-part', map: 'gt.recipe.assembler', in: [['t:iron_ingot@0', 1], ['fluid:water', 500]], out: [['t:part@0', 1]], eut: 16 },
+                { id: 'make-bath', map: 'crafting', in: [['t:part@0', 2]], out: [['machine:171@0', 1]] }],
+    });
+    const settings = { ...defaultSettings(), tier: 1 };
+    const b = planBasis(p, settings, emptyContextForTest());
+    expect(b.supplied.has('fluid:water')).toBe(true);
+    expect(b.leaf('fluid:water').buyable).toBe(false);
+    const steps = [step({ id: 'wash', recipeId: 'wash', machine: { mteId: 171, name: 'Basic Chemical Bath', tier: 1 } })];
+    const bom = await buildBom(p, steps, { settings, env: b.env, leaf: b.leaf, ctx: emptyContextForTest() });
+    expect(bom.totals.map((l) => [l.key, l.amount])).toEqual([['fluid:water', 1000], ['t:iron_ingot@0', 2]]);
+    const r = await expandBomLines(p, [{ key: 'machine:171@0', amount: 1, why: '1× Basic Chemical Bath', group: 'machines' }], settings, emptyContextForTest());
+    expect(r.totals).toEqual(bom.totals);
+  });
+  it('never makes an Empty Cell from a recipe that only hands it back', async () => {
+    // Fix spec D15 (audit patch G-bom-containers): a reaction takes 3 Acid Cells and hands their Empty Cells back beside
+    // a Gold Dust. Crediting the dust, the cost analysis prices that the cheapest Empty Cell (1 against 2 from tin), so
+    // the assembler's breakdown asked for Acid Cells; an empty container is made from its own parts instead. (The Acid
+    // Cell is made without a cell here, so the breakdown's loop guard cannot catch it.)
+    const vein = (material: string) => ({ name: `ore.mix.${material}`, dims: ['overworld'], kind: 'vein' as const, weight: 1, minY: 0, maxY: 255, size: 1, density: 1,
+      materials: { primary: material, secondary: material, between: material, sporadic: material } });
+    const p = packFromSpec({
+      items: [
+        { key: 't:empty_cell@0', name: 'Empty Cell' }, { key: 't:acid_cell@0', name: 'Acid Cell' }, { key: 'machine:8@0', name: 'Basic Assembler' },
+        { key: 't:tin_ingot@0', name: 'Tin Ingot', gt: { prefix: 'ingot', material: 'Tin' } },
+        { key: 't:raw@0', name: 'Raw Dust', gt: { prefix: 'dust', material: 'Raw' } },
+        { key: 't:gold_dust@0', name: 'Gold Dust', gt: { prefix: 'dust', material: 'Gold' } },
+      ],
+      maps: [{ id: 'gt.recipe.chemicalreactor', name: 'Chemical Reactor' }, { id: 'gt.recipe.assembler', name: 'Assembler' }, { id: 'crafting' }],
+      machines: [{ mteId: 7, name: 'Basic Chemical Reactor', maps: ['gt.recipe.chemicalreactor'], tier: 1 }, { mteId: 8, name: 'Basic Assembler', maps: ['gt.recipe.assembler'], tier: 1 }],
+      recipes: [
+        { id: 'react-acid', map: 'gt.recipe.chemicalreactor', in: [['t:acid_cell@0', 3], ['t:raw@0', 1]], out: [['t:gold_dust@0', 1], ['t:empty_cell@0', 3]], eut: 16 },
+        { id: 'make-acid-cell', map: 'gt.recipe.chemicalreactor', in: [['t:raw@0', 1]], out: [['t:acid_cell@0', 1]], eut: 16 },
+        { id: 'make-cell', map: 'gt.recipe.assembler', in: [['t:tin_ingot@0', 2]], out: [['t:empty_cell@0', 1]], eut: 16 },
+        { id: 'craft-assembler', map: 'crafting', in: [['t:empty_cell@0', 1]], out: [['machine:8@0', 1]] },
+      ],
+      fluidContainers: [{ container: 't:acid_cell@0', empty: 't:empty_cell@0', fluid: 'fluid:acid', amount: 1000 }],
+      worldgen: { veins: ['Tin', 'Raw', 'Gold'].map(vein) },
+    });
+    const settings = { ...defaultSettings(), tier: 1 };
+    const b = planBasis(p, settings, emptyContextForTest());
+    const steps = [step({ id: 'make-acid-cell', recipeId: 'make-acid-cell', machine: { mteId: 8, name: 'Basic Assembler', tier: 1 } })];
+    const bom = await buildBom(p, steps, { settings, env: b.env, leaf: b.leaf, ctx: emptyContextForTest() });
+    expect(bom.lines.map((l) => [l.key, l.children?.map((c) => [c.key, c.amount, c.children?.map((g) => [g.key, g.amount])])])).toEqual([
+      ['machine:8@0', [['t:empty_cell@0', 1, [['t:tin_ingot@0', 2]]]]]]);
+    expect(bom.totals.map((l) => [l.key, l.amount])).toEqual([['t:tin_ingot@0', 2]]);
+  });
+  it('says which build lines need each total', async () => {
+    // Fix spec D15 and ruling P18: each total names the top-level lines it is for, and their amounts add up to it.
+    const named = packFromSpec({ ...MINI_GT, items: [...MINI_GT.items!, { key: 'machine:111@0', name: 'Basic Wiremill' }, { key: 'machine:121@0', name: 'Basic Assembler' }] });
+    const steps = [step({ id: 'wire', recipeId: 'wire', machine: { mteId: 111, name: 'Basic Wiremill', tier: 1 } }),
+                   step({ id: 'circuit-lv', recipeId: 'circuit-lv', machine: { mteId: 121, name: 'Basic Assembler', tier: 1 } })];
+    const b = planBasis(named, { ...defaultSettings(), tier: 1 }, emptyContextForTest());
+    const bom = await buildBom(named, steps, { settings: defaultSettings(), env: b.env, leaf: b.leaf, ctx: emptyContextForTest() });
+    // Top-level lines keep their own why.
+    expect(bom.lines.map((l) => [l.key, l.why])).toEqual([
+      ['machine:111@0', '1× Basic Wiremill'], ['machine:121@0', '1× Basic Assembler'], [PC, '1× Programmed Circuit (stays in the machine)']]);
+    expect(bom.totals.length).toBeGreaterThan(0);
+    for (const total of bom.totals) {
+      const needs = total.neededFor ?? [];
+      expect(needs.length, total.key).toBeGreaterThan(0);
+      expect(needs.reduce((sum, n) => sum + n.amount, 0)).toBeCloseTo(total.amount, 9);
+      expect(total.why).toBe(`for ${[...new Set(needs.map((n) => named.nameOf(n.key)))].join(', ')}`);
+    }
+    expect(bom.totals.find((t) => t.key === 't:copper_ingot@0')).toMatchObject({
+      amount: 6, why: 'for Basic Wiremill, Basic Assembler', neededFor: [{ key: 'machine:111@0', amount: 4 }, { key: 'machine:121@0', amount: 2 }] });
+    expect(bom.totals.find((t) => t.key === PC)).toMatchObject({ amount: 1, why: 'for Programmed Circuit', neededFor: [{ key: PC, amount: 1 }] });
+    // expandBomLines gives Plan 5's parts the same totals (architecture §11.15).
+    const r = await expandBomLines(named, bom.lines.map(({ key, amount, why, group }) => ({ key, amount, why, ...(group === undefined ? {} : { group }) })), { ...defaultSettings(), tier: 1 }, emptyContextForTest());
+    expect(r.totals).toEqual(bom.totals);
+  });
+  it('names each line a total is for once, keeping every one in neededFor', async () => {
+    // Two parts of one name (as programmed circuits of two configurations are) crafted from the same ingot.
+    const vein = { name: 'ore.mix.iron', dims: ['overworld'], kind: 'vein' as const, weight: 1, minY: 0, maxY: 255, size: 1, density: 1,
+      materials: { primary: 'Iron', secondary: 'Iron', between: 'Iron', sporadic: 'Iron' } };
+    const p = packFromSpec({ maps: [{ id: 'crafting' }],
+      items: [{ key: 't:gear@0', name: 'Gear' }, { key: 't:gear@1', name: 'Gear' }, { key: 't:iron_ingot@0', name: 'Iron Ingot', gt: { prefix: 'ingot', material: 'Iron' } }],
+      recipes: [{ id: 'gear-0', map: 'crafting', in: [['t:iron_ingot@0', 1]], out: [['t:gear@0', 1]] },
+                { id: 'gear-1', map: 'crafting', in: [['t:iron_ingot@0', 1]], out: [['t:gear@1', 1]] }],
+      worldgen: { veins: [vein] } });
+    const r = await expandBomLines(p, [{ key: 't:gear@0', amount: 1, why: 'a' }, { key: 't:gear@1', amount: 2, why: 'b' }], { ...defaultSettings(), tier: 1 }, emptyContextForTest());
+    expect(r.totals).toEqual([{ key: 't:iron_ingot@0', amount: 3, why: 'for Gear', neededFor: [{ key: 't:gear@0', amount: 1 }, { key: 't:gear@1', amount: 2 }] }]);
   });
   it('merges a hand-crafting tool with the same part an automated step keeps in its machine', async () => {
     const p = packFromSpec({ maps: [{ id: 'crafting' }],
@@ -256,5 +377,16 @@ describe('buildSteps', () => {
     expect(out[0]?.text).toBe('Gather the base materials: 1× t:a@0, 1× t:b@0, 1× t:c@0, 1× t:d@0, 1× t:e@0, 1× t:f@0, 1× t:g@0, 1× t:h@0 (and 2 more)');
     expect(out.find((s) => s.id === 'handcraft:planks')?.text).toBe('Hand-craft 900/h Oak Planks at a crafting table');
     expect(out.at(-1)?.text).toBe('Run the line and check it makes 60 Oak Planks per hour');
+  });
+  it('writes litres for fluids in build steps', () => {
+    // Spec §6.1: counts of things keep their "×", fluids are amounts in litres.
+    const totals = [{ key: 'fluid:water', amount: 1000, why: 'base material' }, { key: 't:iron_ingot@0', amount: 3, why: 'base material' }];
+    const settings = { ...defaultSettings(), target: 'fluid:molten.iron', mode: 'makeN' as const, amount: 1440 };
+    const out = buildSteps(pack, { steps: [], bom: { lines: [], totals, warnings: [] }, power: { peakEUt: 0, averageEUt: 0, voltageTier: 0, amps: 0 }, settings, tier: 1, target: 'fluid:molten.iron' });
+    const gather = out.find((s) => s.id === 'gather')?.text;
+    expect(gather).toContain('1,000 L Water');
+    expect(gather).toContain('3× Iron Ingot');
+    expect(gather).toBe('Gather the base materials: 1,000 L Water, 3× Iron Ingot');
+    expect(out.at(-1)?.text).toBe('Run the batch: 1,440 L Molten Iron');
   });
 });

@@ -8,7 +8,7 @@ import { parseItemKey, type ItemKey, type StuffKey } from '../../src/shared/keys
 import type { Vec3 } from '../../src/shared/layout/geometry.ts';
 import { defaultSettings } from '../../src/shared/project/apply-op.ts';
 import type { LayoutTap } from '../../src/shared/types/layout.ts';
-import type { BlockRef, Fluid, Item, Machine, MachineKind, Pack, Product, StructureInfo } from '../../src/shared/types/pack.ts';
+import type { BlockRef, Fluid, Item, Machine, MachineKind, Pack, Product, Recipe, StructureInfo } from '../../src/shared/types/pack.ts';
 import type { BuildStep, LogisticsMode, Plan, PlanFlow, PlanStep } from '../../src/shared/types/plan.ts';
 import type { Project } from '../../src/shared/types/project.ts';
 import {
@@ -23,7 +23,7 @@ export const IDS = {
   MACERATOR: 2001, ASSEMBLER: 2002, CHEM_HV: 2003, EXTRACTOR: 2010, SOLIDIFIER: 2011, EBF: 1000, AIR_MULTI: 9100,
   TRANSFORMER_ULV: 20, TRANSFORMER_LV: 21, TRANSFORMER_MV: 22, TRANSFORMER_HV: 23,
   ENERGY_LV: 41, ENERGY_MV: 42, ENERGY_HV: 43,
-  INPUT_HATCH: 51, INPUT_BUS_ULV: 60, INPUT_BUS_LV: 61, OUTPUT_HATCH: 71, OUTPUT_BUS: 81, MAINTENANCE: 90,
+  INPUT_HATCH: 51, INPUT_BUS_ULV: 60, INPUT_BUS_LV: 61, OUTPUT_HATCH: 71, OUTPUT_BUS: 81, MAINTENANCE: 90, MUFFLER: 91,
   TIN_WIRE: 1240, TIN_1X: 1246, TIN_2X: 1247, TIN_4X: 1248, COPPER_1X: 1366, ANNEALED_1X: 1386, ANNEALED_2X: 1387,
   SILVER_1X: 1466, SILVER_2X: 1467, SMALL_BRONZE_PIPE: 5110, BRONZE_PIPE: 5121, TIN_ITEM_PIPE: 5600, BRASS_ITEM_PIPE: 5610,
   HP_SOLAR: 114, TURBINE_LV: 1120, TURBINE_MV: 1121, TURBINE_HV: 1122,
@@ -106,6 +106,7 @@ function lineMachines(): Machine[] {
     hatch(IDS.OUTPUT_HATCH, 1, 'Output Hatch (LV)', 'hatch.output.tier.01', 'MTEHatchOutput'),
     hatch(IDS.OUTPUT_BUS, 1, 'Output Bus (LV)', 'hatch.output_bus.tier.01', 'MTEHatchOutputBus'),
     hatch(IDS.MAINTENANCE, 1, 'Maintenance Hatch', 'hatch.maintenance', 'MTEHatchMaintenance'),
+    hatch(IDS.MUFFLER, 1, 'Muffler Hatch (LV)', 'hatch.muffler.tier.01', 'MTEHatchMuffler'),
     cable(IDS.TIN_WIRE, '1x Tin Wire', 'wire.tin.01', 32, 1, 2, false, 'Tin'),
     cable(IDS.TIN_1X, '1x Tin Cable', 'cable.tin.01', 32, 1, 1, true, 'Tin'),
     cable(IDS.TIN_2X, '2x Tin Cable', 'cable.tin.02', 32, 2, 1, true, 'Tin'),
@@ -158,16 +159,30 @@ const PART_ITEMS: ReadonlyArray<readonly [ItemKey, string]> = [
   ['minecraft:chest@0', 'Chest'],
   ['EnderIO:itemItemConduit@0', 'Item Conduit'],
   ['EnderIO:itemBasicFilterUpgrade@0', 'Basic Item Filter'],
+  ['EnderIO:itemBasicFilterUpgrade@1', 'Advanced Item Filter'],
+  ['EnderIO:itemBigFilterUpgrade@0', 'Big Item Filter'],
+  ['EnderIO:itemExtractSpeedUpgrade@0', 'Item Conduit Speed Upgrade'],
+  ['EnderIO:itemLiquidConduit@2', 'Ender Fluid Conduit'],
+  ['EnderIO:itemLiquidConduit@3', 'Crystalline Ender Fluid Conduit'],
+  ['EnderIO:itemLiquidConduit@4', 'Crystalline Pink Slime Ender Fluid Conduit'],
+  ['EnderIO:itemLiquidConduit@5', 'Melodic Ender Fluid Conduit'],
+  ['EnderIO:itemLiquidConduit@6', 'Stellar Ender Fluid Conduit'],
   ['ProjRed|Transportation:projectred.transportation.pipe@1', 'Routed Junction Pipe'],
   ['ProjRed|Transportation:projectred.transportation.pipe@2', 'Routed Interface Pipe'],
   ['ProjRed|Transportation:projectred.transportation.pipe@4', 'Routed Request Pipe'],
   ['ProjRed|Transportation:projectred.transportation.routingchip@0', 'Item Responder Chip'],
   ['ProjRed|Transportation:projectred.transportation.routingchip@4', 'Item Extractor Chip'],
   ['ProjRed|Transportation:projectred.transportation.routingchip@6', 'Item Stock Keeper Chip'],
+  ['ProjRed|Transportation:projectred.transportation.routingchip@3', 'Item Terminator Chip'],
   ['appliedenergistics2:tile.BlockInterface@0', 'ME Interface'],
   ['appliedenergistics2:item.ItemMultiPart@16', 'ME Glass Cable - Fluix'],
   ['appliedenergistics2:item.ItemMultiPart@260', 'ME Export Bus'],
   ['appliedenergistics2:item.ItemMultiMaterial@52', 'Blank Pattern'],
+  ['appliedenergistics2:item.ItemMultiMaterial@27', 'Capacity Card'],
+  ['appliedenergistics2:item.ItemMultiMaterial@30', 'Acceleration Card'],
+  ['ProjRed|Transportation:projectred.transportation.routingchip@5', 'Item Broadcaster Chip'],
+  ['EnderIO:itemLimitedItemFilter@0', 'Limited Item Filter'],
+  ['appliedenergistics2:item.ItemMultiMaterial@65', 'Locking Card'],
 ];
 
 /** Plain items `layoutPack` adds for plans to flow. */
@@ -228,10 +243,37 @@ export function layoutPack(): Pack {
   return pack;
 }
 
+/** GT++'s Electric Auto Workbench (MV) as the 2.9 export lists it: mteId 31092, kind `other`, tier 2, no recipe map. */
+export const AUTO_WORKBENCH = 31092;
+const AUTO_WORKBENCH_CLS = 'gtPlusPlus.xmod.gregtech.common.tileentities.automation.MTEElectricAutoWorkbench';
+
+/** `pack` with the Auto Workbench (MV) and its item. Mutates and returns `pack`. */
+export function withAutoWorkbench(pack: Pack): Pack {
+  addMachine(pack, gtMachine(AUTO_WORKBENCH, 'Auto Workbench (MV)', 'basicmachine.automation.autoworkbench.02', 'other', AUTO_WORKBENCH_CLS, { tier: 2 }));
+  return pack;
+}
+
+/**
+ * A crafting-table recipe `id` (map `crafting`, no EU, no time, as the loader reads one) making `out`: `cells` its grid row
+ * by row, `w` cells wide (null an empty cell), each cell an ingredient slot of one item numbered by its cell, as the
+ * loader numbers a shaped recipe's slots; a cell whose index is in `tools` holds a tool the craft keeps (not consumed).
+ */
+export function craftingRecipe(id: string, w: number, cells: ReadonlyArray<StuffKey | null>, out: readonly [StuffKey, number],
+  tools: readonly number[] = []): Recipe {
+  return {
+    id, source: 'crafting', maps: ['crafting'], euPerTick: 0, durationTicks: 0, amps: 0, specialValue: 0,
+    meta: { cls: 'net.minecraft.item.crafting.ShapedRecipes', width: w, height: Math.ceil(cells.length / w) }, flags: { shaped: true },
+    inputs: cells.flatMap((key, slot) => (key === null ? [] : [{
+      slot, consumed: !tools.includes(slot), chance: tools.includes(slot) ? 0 : 1, options: [{ key, amount: 1 }],
+    }])),
+    outputs: [{ key: out[0], amount: out[1], chance: 1 }],
+  };
+}
+
 let layoutNames: Map<number, string> | null = null;
 
 function layoutMachineName(mteId: number): string | undefined {
-  layoutNames ??= new Map([...layoutPack().machines].map(([id, m]) => [id, m.name]));
+  layoutNames ??= new Map([...withAutoWorkbench(layoutPack()).machines].map(([id, m]) => [id, m.name]));
   return layoutNames.get(mteId);
 }
 
@@ -241,6 +283,8 @@ export interface StepSpec {
   id: string; mteId: number; count: number; owned?: number; tier?: number /* 1 */; euPerTick?: number /* 30 */; utilization?: number /* 1 */;
   name?: string; inputs?: Array<[StuffKey, number]> /* [['t:in@0', 1]] */; outputs?: Array<[StuffKey, number]> /* [[`t:out_${id}@0`, 1]] */;
   handCraft?: boolean;
+  /** The step's sharing pool (plan 12: `PlanStep.pool`); none by default. */
+  pool?: PlanStep['pool'];
 }
 
 const DEFAULT_INPUT: StuffKey = 't:in@0';
@@ -258,6 +302,7 @@ function planStep(s: StepSpec): PlanStep {
     durationTicks: 20, overclocks: 0,
     inputs: products(s.inputs ?? [[DEFAULT_INPUT, 1]]), outputs: products(s.outputs ?? [[defaultOutput(s.id), 1]]),
     alternatives: [], handCraft: s.handCraft ?? false, warnings: [],
+    ...(s.pool === undefined ? {} : { pool: { id: s.pool.id, steps: [...s.pool.steps] } }),
   };
 }
 

@@ -1,15 +1,20 @@
 // Make N (spec §3.2, prior-art §3.6): a one-off batch of N on the machines the group already owns. The LP's runs are
 // rounded up to whole crafts (a good the rounding leaves short gets more runs, a buyable one is bought, a surplus is a
-// leftover); each step runs on every owned machine of its type, or on one added machine when nothing owned can run
-// it; and the batch takes as long as the busiest machine type plus the time one run needs to pass down the chain.
+// leftover); each step runs on every owned machine of its type, or on one added machine when nothing owned can run it
+// or a new one pays for itself against the batch (plan 12: the build-cost solve decides which); and the batch takes as
+// long as the busiest machine type plus the time one run needs to pass down the chain.
 
-import { PSEUDO_MACHINES } from '../../shared/gt/tiers.ts';
+import { PSEUDO_IDS } from '../../shared/gt/tiers.ts';
 import type { StuffKey } from '../../shared/keys.ts';
 import type { Pack, Product } from '../../shared/types/pack.ts';
 import type { PlanContext, PlanSettings, PlanStep } from '../../shared/types/plan.ts';
+import { isAutoWorkbench } from './benches.ts';
 import type { CandidateGraph, LpRecipe } from './candidates.ts';
-import { describeStep, machineWarnings, ownedMachineMap, pickStepMachines, stepLine, type PickedRecipe } from './machines.ts';
+import {
+  boughtGoods, describeStep, machineWarnings, ownedPools, pickStepMachines, reusedOf, stepLine, type PickedRecipe, type StepLine, type StepSize,
+} from './machines.ts';
 import { solveLp, type LpRow } from './lp.ts';
+import type { BuildModel } from './machine-options.ts';
 import type { Solution } from './solve.ts';
 
 export interface MakeNResult {
@@ -27,10 +32,9 @@ const LOOP_TOP_UPS = 8;
 /** A good of a loop short again by more than this times its last deficit: topping up only digs the loop deeper. */
 const GROWTH = 1.5;
 const TICKS_PER_SECOND = 20;
-const PSEUDO_IDS: ReadonlySet<number> = new Set(Object.values(PSEUDO_MACHINES));
 const CHANCED_WARNING = 'Chanced outputs: amounts are expected values; a small batch may come out short';
 
-/** 9 decimal places; −0 reads 0 (the rounding of `Solution`). */
+/** 9 decimal places; −0 reads 0: whole-batch amounts (rates use `sig9`). */
 function round9(x: number): number {
   return Math.round(x * 1e9) / 1e9 || 0;
 }
@@ -300,20 +304,34 @@ function fillSeconds(graph: CandidateGraph, runs: ReadonlyMap<string, number>, p
 }
 
 /**
- * Make N on the group's machines (spec §3.2, prior-art §3.6). Each step runs on the machine `pickMachine` chooses with
- * the group's owned machines (a type in `settings.declineReuse` counts as not owned): an owned type gives the step all
- * the owned machines of that type (`count = owned`), shared with the other steps of that type; any other type gets one
- * new machine (`count 1, owned 0`, in `addedMachines`), likewise shared. Pseudo machines (hand-crafting, crafting
- * table, furnace) are never added. `totalSeconds` = the busiest machine type (Σ work ÷ its machines) plus the fill time.
+ * Make N on the group's machines (spec §3.2, prior-art §3.6). Each step runs on the machine the build-cost solve decided
+ * for it (`Solution.machines`, plan 12: an owned option, else the one whose one new machine pays for itself against the
+ * batch), else on the one `pickMachine` chooses with the group's owned machines (pseudo steps); owned machines are the
+ * owned pools (`opts.build`'s, else `ownedPools`: the scan's and the "Machines we have" list's, none with "Reuse machines
+ * we have" off, and a type in `settings.declineReuse` counts as not owned). An owned type gives the step all the owned
+ * machines of that type (`count = owned`, `reused` with all its units, where they stand and the other steps of the type
+ * in `sharedWith`), shared with the other steps of that type; any other type gets one new machine (`count 1, owned 0`, in
+ * `addedMachines`), likewise shared — no sharing pool (`PlanStep.pool`): a batch already shares one machine per type, and
+ * each step of a shared type says so: swap circuits or molds between batches, or on an Auto Workbench set its crafting
+ * grid (controller ruling 177).
+ * Pseudo machines (hand-crafting, crafting table, furnace) are never added. `totalSeconds` = the busiest machine type
+ * (Σ work ÷ its machines) plus the fill time.
  */
 export async function makeN(
   pack: Pack, graph: CandidateGraph, sol: Solution, demand: ReadonlyMap<StuffKey, number>,
-  opts: { settings: PlanSettings; groupTier: number; coilHeat: number; ctx: PlanContext; multiblocks?: ReadonlySet<number> },
+  opts: {
+    settings: PlanSettings; groupTier: number; coilHeat: number; ctx: PlanContext; multiblocks?: ReadonlySet<number>;
+    /** What the line's goods are worth and the pack's empty containers, for each step's main output (`StepLine`). */
+    value?: Pick<StepLine, 'valueOf' | 'empties'>;
+    /** The line's build model (plan 12): its owned pools. */
+    build?: BuildModel;
+  },
 ): Promise<MakeNResult> {
   const { settings, groupTier, coilHeat, ctx, multiblocks } = opts;
   const whole = await wholeRuns(graph, sol, demand);
-  const owned = ownedMachineMap(ctx, settings);
-  const picked = pickStepMachines(pack, graph, whole.runs, { settings, groupTier, coilHeat, owned, multiblocks });
+  const pools = opts.build?.pools ?? ownedPools(ctx, settings);
+  const owned = new Map([...pools].map(([mteId, units]) => [mteId, units.length]));
+  const picked = pickStepMachines(pack, graph, whole.runs, { settings, groupTier, coilHeat, owned, multiblocks, machines: sol.machines });
 
   const ownedOf = (mteId: number): number => Math.max(0, owned.get(mteId) ?? 0);
   const machinesOf = (mteId: number): number => ownedOf(mteId) || 1;
@@ -330,7 +348,12 @@ export async function makeN(
   for (const [mteId, ticks] of workOfType) busiest = Math.max(busiest, ticks / (machinesOf(mteId) * TICKS_PER_SECOND));
   const totalSeconds = busiest + fillSeconds(graph, whole.runs, picked, demand.keys());
 
-  const line = stepLine(graph, whole.runs);
+  const line = stepLine(graph, whole.runs, opts.value);
+  line.bought = boughtGoods(whole.buys);
+  // What each step runs for, from the line's LP as for a rate (fix spec D13): rounding up to whole runs leaves goods
+  // over that the line takes in full.
+  const lp = stepLine(graph, sol.runs).runsFor;
+  if (lp !== undefined) line.runsFor = lp;
   const steps = picked.map((p): PlanStep => {
     const mteId = p.pick.mteId;
     const count = machinesOf(mteId);
@@ -339,12 +362,20 @@ export async function makeN(
     const utilization = totalSeconds > 0 ? workTicks(p) / TICKS_PER_SECOND / (count * totalSeconds) : 0;
     const warnings = machineWarnings(p.lp, p.pick, runsPerSecond);
     const others = (stepsOfType.get(mteId) ?? []).filter((id) => id !== p.id);
-    // Hand-crafting, a crafting table or a furnace has no circuit or mold to swap.
+    // Hand-crafting, a crafting table or a furnace has no circuit or mold to swap; an Auto Workbench is switched by
+    // setting its 3x3 crafting grid (controller ruling 177).
     if (others.length > 0 && !PSEUDO_IDS.has(mteId)) {
-      warnings.push(`Shares machines with ${others.join(', ')} — swap circuits/molds between batches`);
+      const swap = isAutoWorkbench(pack.machines.get(mteId)) ? 'set its crafting grid between batches' : 'swap circuits/molds between batches';
+      warnings.push(`Shares machines with ${others.join(', ')} — ${swap}`);
     }
     if (p.recipe.outputs.some((o) => o.chance < 1)) warnings.push(CHANCED_WARNING);
-    const step = describeStep(pack, p, line, { count, owned: ownedOf(mteId), runsPerSecond, utilization, warnings });
+    const size: StepSize = { count, owned: ownedOf(mteId), runsPerSecond, utilization, warnings };
+    if (size.owned > 0) {
+      const reused = reusedOf(pools, mteId, Array.from({ length: size.owned }, (_, u) => u));
+      if (others.length > 0) reused.sharedWith = [...others].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+      size.reused = reused;
+    }
+    const step = describeStep(pack, p, line, size);
     step.runs = p.runs;
     return step;
   });

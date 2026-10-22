@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { loadPack } from '../../../src/server/pack/load.ts';
 import { makeExport } from '../../helpers/make-export.ts';
 import { runCli } from '../../helpers/run-cli.ts';
-import { sampleExportSpec } from '../../helpers/sample-export.ts';
+import { SAMPLE, sampleExportSpec, sampleInlineCrop } from '../../helpers/sample-export.ts';
 
 async function root(active: string | null) {
   const dir = await mkdtemp(join(tmpdir(), 'gp-info-'));
@@ -25,7 +25,19 @@ describe('pack:info', () => {
     expect(r.code).toBe(0);
     expect(r.stdout).toContain('Export:     sample');
     expect(r.stdout).toContain(`Recipes:    ${pack.recipes.length} (gt ${by('gt')}, assemblyline ${by('assemblyline')}, crafting ${by('crafting')}, furnace ${by('furnace')}, derived ${by('derived')}) in ${pack.maps.size} maps`);
+    expect(r.stdout).toContain('Machines:   8 (2 multiblocks, 1 with structure)\n');   // no structure has hatch rules
     expect(r.stdout).toContain('Name failures: 1');
+  });
+
+  it('counts the items of the item table, not the crop items of the crop table', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'gp-info-'));
+    const exportDir = await makeExport(join(dir, 'crops'), { ...sampleExportSpec(), crops: [sampleInlineCrop()] });
+    const pack = await loadPack(exportDir);
+    const crop = [...pack.items.values()].filter((item) => item.cropOnly === true).length;
+    expect(crop).toBe(3);
+    const r = await runCli('pack-info', ['--export', exportDir], { cwd: dir, env });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain(`Items:      ${pack.items.size - crop} · Fluids: ${pack.fluids.size} · Ore names: ${pack.oreDict.size}`);
   });
 
   it('lists producing recipes with machine, EU/t, duration and tier', async () => {
@@ -49,5 +61,15 @@ describe('pack:info', () => {
     const given = await runCli('pack-info', ['--export', exportDir], { cwd: dir, env });
     expect(given.code).toBe(0);
     expect(given.stdout).toContain('Export:     sample');
+  });
+
+  it('counts the multiblocks with hatch rules', async () => {
+    const spec = sampleExportSpec();
+    spec.structures = spec.structures!.map((s) => (s.id === SAMPLE.ebf ? { ...s, elements: [{ ch: 'b', hatches: ['input_bus'] }], elementOf: [0, -1, 0] } : s));
+    const dir = await mkdtemp(join(tmpdir(), 'gp-info-'));
+    const exportDir = await makeExport(join(dir, 'rules'), spec);
+    const r = await runCli('pack-info', ['--export', exportDir], { cwd: dir, env });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain('1 with structure, 1 with hatch rules)');
   });
 });

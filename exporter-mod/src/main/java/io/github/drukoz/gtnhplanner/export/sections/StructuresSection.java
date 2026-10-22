@@ -37,6 +37,7 @@ import gregtech.api.GregTechAPI;
 import gregtech.api.interfaces.metatileentity.IMetaTileEntity;
 import gregtech.api.interfaces.tileentity.IGregTechTileEntity;
 import gregtech.api.metatileentity.MetaPipeEntity;
+import gregtech.api.metatileentity.implementations.MTEHatch;
 import gregtech.api.metatileentity.implementations.MTEMultiBlockBase;
 import io.github.drukoz.gtnhplanner.export.ExportContext;
 import io.github.drukoz.gtnhplanner.export.ExportSection;
@@ -49,9 +50,12 @@ import io.github.drukoz.gtnhplanner.export.JsonlWriter;
  * north, exactly as GT's {@code ItemMachines.placeBlockAt} places it; {@code construct(hologram × 1, false)} builds the
  * smallest variant, the way the hologram projector does; every non-air block in the scan box around {@code C} is
  * recorded. The cells of the {@code "main"} piece that must stay air come from StructureLib's private
- * {@code occupiedSpaces}. Coordinates are written in the canonical frame of the wire format (controller front faces
- * north, origin = min corner of blocks &cup; air). Everything placed is cleared again before the next machine.
- * Optional: if the section fails, the export goes on without structures.
+ * {@code occupiedSpaces}. Then {@link HatchProbe} asks the controller's own structure check which hatch kinds each
+ * element of the structure takes (exporter 0.6.0, gt-mechanics.md §5.5); its answers are the line's
+ * {@code elements} and {@code elementOf}, and {@code counts.hatchRules} is the number of lines with them.
+ * Coordinates are written in the canonical frame of the wire format (controller front faces north, origin = min
+ * corner of blocks &cup; air). Everything placed is cleared again before the next machine. Optional: if the section
+ * fails, the export goes on without structures.
  */
 public final class StructuresSection implements ExportSection {
 
@@ -115,18 +119,32 @@ public final class StructuresSection implements ExportSection {
             ctx.warn("structures: " + notConstructable.size() + " multiblocks are not IConstructable and get no structure: "
                 + listIds(notConstructable));
         }
+        Map<String, Integer> kinds = HatchKinds.representatives(hatches());
+        for (HatchKinds.Kind kind : HatchKinds.ALL) {
+            if (!kinds.containsKey(kind.name)) {
+                ctx.warn("structures: no hatch of class " + kind.cls + " in this pack, hatch kind " + kind.name
+                    + " not probed");
+            }
+        }
+        int probeSeconds = Integer.getInteger(HatchProbe.BUDGET_PROPERTY, HatchProbe.DEFAULT_BUDGET_SECONDS);
+        HatchProbe probe = new HatchProbe(world, kinds, TimeUnit.SECONDS.toNanos(probeSeconds));
 
         prepareArea(world, ctx);
-        try (JsonlWriter w = ctx.jsonl("structures")) {
-            for (int k = 0; k < ids.size(); k++) {
-                if (System.nanoTime() - start > budgetNanos) {
-                    List<Integer> rest = ids.subList(k, ids.size());
-                    ctx.warn("structures: time budget of " + budgetSeconds + " s (" + BUDGET_PROPERTY + ") used up, "
-                        + rest.size() + " multiblocks not built: " + listIds(rest));
-                    break;
+        try {
+            try (JsonlWriter w = ctx.jsonl("structures")) {
+                for (int k = 0; k < ids.size(); k++) {
+                    if (System.nanoTime() - start > budgetNanos) {
+                        List<Integer> rest = ids.subList(k, ids.size());
+                        ctx.warn("structures: time budget of " + budgetSeconds + " s (" + BUDGET_PROPERTY
+                            + ") used up, " + rest.size() + " multiblocks not built: " + listIds(rest));
+                        break;
+                    }
+                    build(world, ids.get(k), hologram, occupiedSpaces, probe, w, ctx);
                 }
-                build(world, ids.get(k), hologram, occupiedSpaces, w, ctx);
             }
+        } finally { // the lines written so far, also when a scan box could not be emptied and the section fails
+            ctx.count("hatchRules", probe.probed());
+            probe.summarize(ctx);
         }
     }
 
@@ -142,6 +160,19 @@ public final class StructuresSection implements ExportSection {
             if (m instanceof IConstructable) constructable.add(id);
             else if (m instanceof MTEMultiBlockBase) notConstructable.add(id);
         }
+    }
+
+    /** Every GT hatch of the pack, in id order: the candidates for the probe hatches of {@link HatchKinds}. */
+    private static List<HatchKinds.Candidate> hatches() {
+        List<HatchKinds.Candidate> hatches = new ArrayList<>();
+        IMetaTileEntity[] all = GregTechAPI.METATILEENTITIES;
+        for (int id = 0; id < all.length; id++) {
+            IMetaTileEntity m = all[id];
+            if (m instanceof MTEHatch) {
+                hatches.add(new HatchKinds.Candidate(id, m.getClass().getSimpleName(), m.getMetaName()));
+            }
+        }
+        return hatches;
     }
 
     /** StructureLib's private per-piece cell sets; {@code null} with one warning when they cannot be read. */
@@ -175,11 +206,12 @@ public final class StructuresSection implements ExportSection {
     }
 
     /**
-     * Builds one machine, writes its line and clears everything it placed. A failure for this machine is a warning;
-     * only a scan box that cannot be emptied again throws, because its blocks would end up in every later structure.
+     * Builds one machine, probes its hatch rules, writes its line and clears everything it placed. A failure for this
+     * machine is a warning; only a scan box that cannot be emptied again throws, because its blocks would end up in
+     * every later structure.
      */
-    private static void build(World world, int id, Item hologram, Field occupiedSpaces, JsonlWriter w,
-        ExportContext ctx) {
+    private static void build(World world, int id, Item hologram, Field occupiedSpaces, HatchProbe probe,
+        JsonlWriter w, ExportContext ctx) {
         List<Placed> blocks = null;
         boolean truncated = false;
         boolean failed = false;
@@ -196,14 +228,15 @@ public final class StructuresSection implements ExportSection {
                 ctx.warn("structure " + id + ": no air cells: " + t);
                 air = new ArrayList<>();
             }
-            write(w, id, blocks, air, truncated);
+            HatchProbe.Result rules = truncated ? probe.skip(id) : probe.probe(id, machine, blocks);
+            write(w, id, blocks, air, truncated, rules);
         } catch (Throwable t) {
             failed = true;
             ctx.warn("structure " + id + ": " + t);
         }
         List<int[]> placed;
         if (truncated) placed = nonAir(world, BOX.widen(TRUNCATED_CLEAR_MARGIN));
-        else if (failed) placed = nonAir(world, BOX);
+        else if (failed || probe.failedLast()) placed = nonAir(world, BOX); // the probe may have left a cell changed
         else placed = positions(blocks);
         clear(world, placed);
     }
@@ -242,7 +275,10 @@ public final class StructuresSection implements ExportSection {
         return (IConstructable) machine;
     }
 
-    /** Every non-air block in the scan box with its registry name, metadata and GT machine id, in layer order. */
+    /**
+     * Every non-air block in the scan box with its block, registry name, metadata, GT machine id and whether it held a
+     * tile entity, in layer order.
+     */
     private static List<Placed> record(World world) {
         List<Placed> placed = new ArrayList<>();
         for (int[] p : nonAir(world, BOX)) {
@@ -253,7 +289,7 @@ public final class StructuresSection implements ExportSection {
             // null for a block without a tile entity; nothing is created for one
             TileEntity te = world.getTileEntity(p[0], p[1], p[2]);
             Integer mte = te instanceof IGregTechTileEntity ? ((IGregTechTileEntity) te).getMetaTileID() : null;
-            placed.add(new Placed(p, name, meta, mte));
+            placed.add(new Placed(p, block, name, meta, mte, te != null));
         }
         placed.sort((a, b) -> layerOrder(a.pos, b.pos));
         return placed;
@@ -336,10 +372,10 @@ public final class StructuresSection implements ExportSection {
 
     /**
      * One {@code StructureLine}: shifted so that the min corner of blocks &cup; air is the origin; palette entries in
-     * first-seen order.
+     * first-seen order; the hatch rules after the air cells when the probe gave some ({@code rules} not null).
      */
-    private static void write(JsonlWriter w, int id, List<Placed> blocks, List<int[]> air, boolean truncated)
-        throws IOException {
+    private static void write(JsonlWriter w, int id, List<Placed> blocks, List<int[]> air, boolean truncated,
+        HatchProbe.Result rules) throws IOException {
         int[] min = { Integer.MAX_VALUE, Integer.MAX_VALUE, Integer.MAX_VALUE };
         int[] max = { Integer.MIN_VALUE, Integer.MIN_VALUE, Integer.MIN_VALUE };
         for (Placed b : blocks) extend(min, max, b.pos);
@@ -387,6 +423,7 @@ public final class StructuresSection implements ExportSection {
         j.name("air").beginArray();
         for (int[] a : air) triple(j, a[0] - min[0], a[1] - min[1], a[2] - min[2]);
         j.endArray();
+        if (rules != null) ElementLine.write(j, rules.elements, rules.elementOf);
         if (truncated) j.name("truncated").value(true);
         j.endObject();
         w.end();
@@ -476,7 +513,8 @@ public final class StructuresSection implements ExportSection {
         j.endArray();
     }
 
-    private static String listIds(List<Integer> ids) {
+    /** The first {@value #LISTED_IDS} ids, then {@code …} when there are more. */
+    static String listIds(List<Integer> ids) {
         StringBuilder s = new StringBuilder();
         for (int k = 0; k < ids.size() && k < LISTED_IDS; k++) {
             if (k > 0) s.append(", ");
@@ -486,19 +524,26 @@ public final class StructuresSection implements ExportSection {
         return s.toString();
     }
 
-    /** One recorded block: world position, registry name, metadata and GT machine id ({@code null} for other blocks). */
-    private static final class Placed {
+    /**
+     * One recorded block: world position, block, registry name, metadata, GT machine id ({@code null} for other
+     * blocks) and whether the cell held a tile entity. {@link HatchProbe} reads them to put the block back.
+     */
+    static final class Placed {
 
         final int[] pos;
+        final Block block;
         final String name;
         final int meta;
         final Integer mte;
+        final boolean tile;
 
-        Placed(int[] pos, String name, int meta, Integer mte) {
+        Placed(int[] pos, Block block, String name, int meta, Integer mte, boolean tile) {
             this.pos = pos;
+            this.block = block;
             this.name = name;
             this.meta = meta;
             this.mte = mte;
+            this.tile = tile;
         }
     }
 

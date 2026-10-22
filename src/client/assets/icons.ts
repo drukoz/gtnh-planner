@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react';
 import { apiPost } from '../api/client.ts';
 import type { StuffKey } from '../../shared/keys.ts';
 import type { AssetIconsRequest } from '../../shared/types/api.ts';
-import type { IconDescriptor } from '../../shared/types/assets.ts';
+import { regionRect, type IconDescriptor } from '../../shared/types/assets.ts';
 import { compositeLayers, type LayerPixels } from './composite.ts';
 import { createIconBatcher, type IconBatcher } from './icon-batcher.ts';
 import { loadLayerBitmap } from './texture-image.ts';
@@ -51,11 +51,13 @@ async function render(desc: IconDescriptor, px: number): Promise<string | null> 
   const layers: LayerPixels[] = [];
   for (const [index, bitmap] of bitmaps.entries()) {
     if (!bitmap) continue; // a missing file drops only its own layer
+    const layer = desc.layers[index]!;
     // Bitmaps are shared through loadLayerBitmap's cache (also by the 3D view), so they are drawn, never closed.
     ctx.clearRect(0, 0, px, px);
-    ctx.drawImage(bitmap, 0, 0, px, px);
+    const [x, y, w, h] = regionRect(layer, px);   // the whole icon, or a region's place in it
+    ctx.drawImage(bitmap, x, y, w, h);
     const { data } = ctx.getImageData(0, 0, px, px);
-    const tint = desc.layers[index]!.tint;
+    const tint = layer.tint;
     layers.push(tint ? { data, width: px, height: px, tint } : { data, width: px, height: px });
   }
   if (layers.length === 0) return null;

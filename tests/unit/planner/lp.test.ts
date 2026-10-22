@@ -33,6 +33,56 @@ describe('solveLp', () => {
     expect(r.status).toBe('optimal');
     expect(r.objective).toBeCloseTo(1, 9);
     expect(r.x.every((v) => Math.abs(v - Math.round(v)) < 1e-9)).toBe(true);
+    expect(r.stop).toBeUndefined();
+  });
+  it('says why a MIP stopped early', async () => {
+    // A 0–1 knapsack HiGHS 1.15.3 needs 2,072 nodes for unlimited (4,719 with the zero gaps a node limit sets; about half
+    // a second), so either limit stops it with the start.
+    const weights = Array.from({ length: 40 }, (_, i) => 1000 + ((i * 7919) % 1000));
+    const values = weights.map((w, i) => w + ((i * 104729) % 97));
+    const knapsack = {
+      sense: 'max' as const, colCost: values, colLower: new Array<number>(40).fill(0), colUpper: new Array<number>(40).fill(1),
+      rows: [{ lower: -Infinity, upper: Math.floor(weights.reduce((a, b) => a + b, 0) / 2), entries: weights.map((w, i): [number, number] => [i, w]) }],
+      integer: new Array<boolean>(40).fill(true), start: new Array<number>(40).fill(0),
+    };
+    expect(await solveLp({ ...knapsack, maxNodes: 1 })).toMatchObject({ status: 'feasible', stop: 'limit', nodes: 1 });
+    expect(await solveLp({ ...knapsack, timeLimit: 0 })).toMatchObject({ status: 'feasible', stop: 'time' });
+    // The simplex-iteration bound (plan 12 fix wave) stops it deterministically, the same way twice, with a bound on
+    // the optimum no better than the solution it keeps.
+    const bounded = await solveLp({ ...knapsack, maxNodes: 100_000, maxIterations: 50 });
+    expect(bounded).toMatchObject({ status: 'feasible', stop: 'limit' });
+    expect(bounded.bound).toBeGreaterThanOrEqual(bounded.objective - 1e-9);
+    expect(await solveLp({ ...knapsack, maxNodes: 100_000, maxIterations: 50 })).toEqual(bounded);
+  });
+  it('accepts a start solution', async () => {
+    const r = await solveLp({ sense: 'max', colCost: [1, 1], colLower: [0, 0], colUpper: [Infinity, Infinity],
+      rows: [{ lower: -Infinity, upper: 3, entries: [[0, 2], [1, 2]] }], integer: [true, true], maxNodes: 100, start: [1, 0] });
+    expect(r.status).toBe('optimal');
+    expect(r.objective).toBeCloseTo(1, 9);
+    expect(r.x.every((v) => Math.abs(v - Math.round(v)) < 1e-9)).toBe(true);
+  });
+  it('keeps the start as the solution of a MIP its node limit stops at once', async () => {
+    // 40 binaries whose weights must add up to exactly `b`: HiGHS finds no whole solution before its first node, so with
+    // no node to search the start is the solution (fix spec R3: the step-charge MIP starts from the least-raw plan).
+    let seed = 1;
+    const next = (): number => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed / 2147483648;
+    };
+    const weights = Array.from({ length: 40 }, () => 100 + Math.floor(next() * 900));
+    const costs = Array.from({ length: 40 }, () => 1 + Math.floor(next() * 100));
+    const start = weights.map(() => (next() < 0.5 ? 1 : 0));
+    const b = weights.reduce((sum, w, i) => sum + w * (start[i] as number), 0);
+    const r = await solveLp({
+      sense: 'min', colCost: costs, colLower: new Array<number>(40).fill(0), colUpper: new Array<number>(40).fill(1),
+      rows: [{ lower: b, upper: b, entries: weights.map((w, i): [number, number] => [i, w]) }],
+      integer: new Array<boolean>(40).fill(true), maxNodes: 0, start,
+    });
+    expect(r.status).toBe('feasible');
+    expect(r.objective).toBe(costs.reduce((sum, c, i) => sum + c * (start[i] as number), 0));
+  });
+  it('rejects a start of the wrong length', async () => {
+    await expect(solveLp({ sense: 'min', colCost: [1, 1], colLower: [0, 0], colUpper: [1, 1], rows: [], start: [1] })).rejects.toThrow(RangeError);
   });
   it('rejects a row with a missing column, a repeated column or a non-finite coefficient', async () => {
     const model = (entries: Array<[number, number]>) => ({ sense: 'min' as const, colCost: [1], colLower: [0], colUpper: [1], rows: [{ lower: 0, upper: 1, entries }] });

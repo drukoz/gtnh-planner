@@ -18,7 +18,7 @@ export function layoutRoutes(app: AppContext): Route[] {
   app.services.planFinish = (plan, project) => service.finishPlan(plan, project);
   return [
     {
-      method: 'GET', path: '/api/projects/:id/layout',
+      method: 'GET', path: '/api/projects/:id/layout', bearer: true,
       handler: async (_req, res, params) => {
         const project = app.projects.get(params.id!);
         if (project === null) throw new HttpError(404, 'not-found', `No project ${params.id!}`);

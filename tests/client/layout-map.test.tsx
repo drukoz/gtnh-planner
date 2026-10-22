@@ -6,9 +6,11 @@ import { lineSummary, LinePanel } from '../../src/client/map/LinePanel.tsx';
 import { layoutInputKey, createLayoutLoader } from '../../src/client/state/use-layout.ts';
 import { focusPin, getFocusedPin } from '../../src/client/state/pin-focus.ts';
 import { StepsView } from '../../src/client/views/StepsView.tsx';
-import type { Layout } from '../../src/shared/types/layout.ts';
+import { hookupNetworkKind } from '../../src/shared/layout/enderio.ts';
+import type { ConduitFace, Layout } from '../../src/shared/types/layout.ts';
 import type { Plan } from '../../src/shared/types/plan.ts';
 import type { Project } from '../../src/shared/types/project.ts';
+import { bundle, bundleLayout } from './enderio-fixture.ts';
 // for the tests after the plan's own
 import { ApiError } from '../../src/client/api/client.ts';
 import { subscribePinFocus } from '../../src/client/state/pin-focus.ts';
@@ -80,6 +82,27 @@ describe('the line on the map', () => {
     expect(layoutOverlay(layout, { moving: false, drag: null, flows: [], onDrag: () => {}, onDrop: () => {} }).onPointer!({ kind: 'down', x: 11, z: 20 })).toBe(false);
   });
 
+  it('counts an owned machine three steps share once, and draws flows from and to a shared machine (plan 12)', () => {
+    // One owned macerator serving three steps (`reused.units` [0] each) is one machine reused; steps that do not say which
+    // owned machines they run on count their owned machines as before.
+    const shared = (units: boolean) => ({ ...plan, steps: ['a', 'b', 'c'].map((id) => ({ id, machine: { mteId: 2001, name: 'Basic Macerator', tier: 1 },
+      count: 1, owned: 1, handCraft: false, ...(units ? { reused: { count: 1, where: [], units: [0] } } : {}) })) }) as unknown as Plan;
+    expect(lineSummary(layout, shared(true)).reused).toBe(1);
+    expect(lineSummary(layout, shared(false)).reused).toBe(3);
+    // Owned machines of another tier beside a step's own count once each too.
+    const others = { ...plan, steps: [
+      { id: 'a', machine: { mteId: 2001, name: 'Basic Macerator', tier: 1 }, count: 2, owned: 1, handCraft: false,
+        reused: { count: 1, where: [], units: [0], others: [{ mteId: 2002, name: 'Advanced Macerator', tier: 2, count: 1, units: [0], where: [], euPerTick: 8, runsPerSecondPerMachine: 1 }] } },
+      { id: 'b', machine: { mteId: 2002, name: 'Advanced Macerator', tier: 2 }, count: 1, owned: 1, handCraft: false, reused: { count: 1, where: [], units: [0] } }] } as unknown as Plan;
+    expect(lineSummary(layout, others).reused).toBe(2);
+    // One macerator block runs s1 and s2, the assembler s3: the flow from s2 starts on the macerator, and s1 → s2 stays inside it.
+    const pooled: Layout = { ...layout, blocks: [
+      { ...layout.blocks[0]!, stepId: 's1', stepIds: ['s1', 's2'] }, { ...layout.blocks[1]!, stepId: 's3' }, ...layout.blocks.slice(2)] };
+    const arrows = overlayShapes(pooled, view, null, [{ from: 's1', to: 's2', key: 'k', perSecond: 1 }, { from: 's2', to: 's3', key: 'j', perSecond: 1 }])
+      .filter((s) => s.kind === 'arrow');
+    expect(arrows).toEqual([{ kind: 'arrow', from: [202, 202], to: [206, 202], color: '#ffffff' }]);
+  });
+
   it('sums up the line and lists its pins', () => {
     expect(lineSummary(layout, plan)).toEqual({ newMachines: 2, reused: 2, footprint: '3×2×1', peak: '150 EU/t', fits: 'Tight in rain', fitsClass: 'tight' });
     const html = panel(layout);
@@ -118,6 +141,17 @@ describe('the line on the map', () => {
     const project = { id: 'P1', name: 'T', createdAt: '', createdBy: 'a', rev: 1, settings: {}, world: { scanId: null, baseId: null },
       placement: null, marks: {}, notes: [] } as unknown as Project;
     expect(renderToStaticMarkup(<StepsView project={project} plan={plan} send={() => {}} me="Ann" />)).toContain('data-pin="1"');
+  });
+
+  it('draws an EnderIO line in the EnderIO colour with a dot on its configured conduits', () => {
+    const hookup = { kind: 'logistics' as const, from: { pos: [8, 64, 20] as [number, number, number], dim: 0, kind: 'pipe' as const, networkId: 'enderio:0:0' },
+      path: [[8, 64, 20], [9, 64, 20]] as Array<[number, number, number]>, parts: [] };
+    const shapes = overlayShapes({ ...bundleLayout, hookups: [hookup] }, view, null, []);
+    expect(shapes.find((s) => s.kind === 'rect' && s.fill !== null)).toMatchObject({ fill: '#26c6da' });
+    expect(shapes.filter((s) => s.kind === 'dot')).toHaveLength(1);
+    expect(shapes.find((s) => s.kind === 'path')).toMatchObject({ stroke: '#26c6da' });
+    expect([hookupNetworkKind(hookup, 'direct'), hookupNetworkKind({ ...hookup, from: { ...hookup.from, networkId: 'e:item:0:1' } }, 'direct'),
+      hookupNetworkKind({ ...hookup, kind: 'power' }, 'enderio')]).toEqual(['gtpipe', 'enderio', null]);
   });
 });
 
@@ -234,5 +268,22 @@ describe('the line on the map: the rules in detail', () => {
     const html = renderToStaticMarkup(<StepsView project={project} plan={withGather} send={() => {}} me="Ann" />);
     expect(html).toMatch(/data-row="step:layout:site"[^]*<button type="button" class="pin-link" data-pin="1"[^>]*>pin 1<\/button>/);
     expect(html.match(/class="pin-link"/g)).toHaveLength(1);
+  });
+
+  it('gives a conduit column the EnderIO colour only when a conduit colours it, and dots only conduits with faces', () => {
+    const fills = (l: Layout) => overlayShapes(l, view, null, []).filter((s) => s.kind === 'rect' && s.fill !== null).map((s) => s.kind === 'rect' && s.fill);
+    const machineAbove = { pos: [10, 65, 20] as [number, number, number], block: GT(2001), role: 'machine' as const, label: 'Basic Macerator', stepId: 's1' };
+    expect(fills({ ...bundleLayout, blocks: [bundle, machineAbove] })).toEqual(['#90caf9']);   // the machine wins the column
+    const cell = (faces: ConduitFace[]) => ({ ...bundle, label: 'Item Conduit', conduits: [{ ...bundle.conduits![0]!, faces }] });
+    const dots = (l: Layout) => overlayShapes(l, view, null, []).filter((s) => s.kind === 'dot').length;
+    expect([dots({ ...bundleLayout, blocks: [cell([])] }), dots({ ...bundleLayout, blocks: [cell([{ face: 'south', mode: 'disabled', target: 'Basic Macerator' }])] })])
+      .toEqual([0, 1]);   // links alone set nothing; a Disabled face is still set by hand
+    expect(fills({ ...bundleLayout, blocks: [cell([])] })).toEqual(['#26c6da']);
+  });
+
+  it('keeps a routed or AE2 tap its own kind in any mode', () => {
+    const from = { pos: [8, 64, 20] as [number, number, number], dim: 0, networkId: 'e:item:0:1' };
+    expect((['routed', 'ae2'] as const).map((kind) => hookupNetworkKind({ kind: 'logistics', from: { ...from, kind }, path: [], parts: [] }, 'enderio')))
+      .toEqual(['routed', 'ae2']);
   });
 });

@@ -10,4 +10,8 @@ playwright-report/
 exporter-mod/build/
 exporter-mod/.gradle/
 exporter-mod/run/
+projector-mod/build/
+projector-mod/.gradle/
+projector-mod/run/
 *.tsbuildinfo
+.vitest/

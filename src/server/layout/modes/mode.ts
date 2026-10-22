@@ -7,15 +7,20 @@
 
 import { isFluidKey, type StuffKey } from '../../../shared/keys.ts';
 import { joinNames } from '../../../shared/layout/format.ts';
-import { OPPOSITE, step, type Vec3 } from '../../../shared/layout/geometry.ts';
+import { OPPOSITE, posKey, step, type Vec3 } from '../../../shared/layout/geometry.ts';
 import { FACES } from '../../../shared/types/assets.ts';
-import type { Pack } from '../../../shared/types/pack.ts';
+import type { ConduitFace, ConduitKind } from '../../../shared/types/layout.ts';
+import type { MachineKind, Pack } from '../../../shared/types/pack.ts';
 import type { BomLine, BuildStep, LogisticsMode, Plan, PlanFlow, PlanWarning } from '../../../shared/types/plan.ts';
 import type { LogisticsNetwork } from '../../../shared/types/world.ts';
-import type { BlockConfig, HostConfig, HostCover, LocalBlock, PlacedUnit, Placement } from '../arrange.ts';
+import { comparePos } from '../../world/graph.ts';
+import { placedStepIds, unitSteps, type BlockConfig, type HostConfig, type HostCover, type LocalBlock, type PlacedUnit, type Placement, type Unit } from '../arrange.ts';
+import { hasInputSeparation } from '../multiblock-rules.ts';
 import { coverRateWarning, pickConveyor, type PartId, type Parts } from '../parts.ts';
 import { ae2Mode } from './ae2.ts';
+import { withHandSteps } from './by-hand.ts';
 import { directMode } from './direct.ts';
+import { enderioMode } from './enderio.ts';
 import { routedMode } from './routed.ts';
 
 // ---- Types ----
@@ -30,7 +35,14 @@ export interface ModeInput {
 }
 
 /** The hookup path's part; `end` replaces its last cell (facing the port); `endConfig` goes on the last cell. */
-export interface ModeHookup { part: PartId; end: PartId | null; endConfig?: BlockConfig }
+export interface ModeHookup {
+  part: PartId; end: PartId | null; endConfig?: BlockConfig;
+  /**
+   * The conduit face the hookup's last cell turns toward the port; the hookup fills in `face`, the side that touches the
+   * port, where its route ends (architecture "EnderIO conduits, granted change requests (add-on 11)").
+   */
+  endConduit?: { kind: ConduitKind; face: Omit<ConduitFace, 'face'> };
+}
 
 export interface ModeResult {
   /** Sorted by x, y, z, then facing; every block carries `item`. */
@@ -49,18 +61,28 @@ export interface ModeResult {
   warnings: PlanWarning[];
   /** The lowest y the tail's fluid roots may use (above the mode's tail blocks). */
   tailFluidY: number;
+  /** The mode lays the line's fluid network itself: internal routing then gets no fluid nets (no GT fluid pipes, no pump covers). */
+  ownsFluids?: boolean;
 }
 
 // ---- Dispatch ----
 
-/** How far apart units' item ports must be in each mode (Task 5 `placeUnits`): direct may share, routed and AE2 may not. */
-export const PORT_SPACING: Readonly<Record<LogisticsMode, 0 | 1 | 2>> = Object.freeze({ direct: 0, routed: 1, ae2: 2 });
+/**
+ * How far apart units' item ports must be in each mode (Task 5 `placeUnits`): direct may share, routed and AE2 may not.
+ * EnderIO may share too: each face of a conduit is set on its own, so the N and S machines may share a spine cell.
+ */
+export const PORT_SPACING: Readonly<Record<LogisticsMode, 0 | 1 | 2>> = Object.freeze({ direct: 0, routed: 1, ae2: 2, enderio: 0 });
 
+/**
+ * The mode's line. Every mode but machine to machine (add-on 15's) also says how to run its hand-run machines and what
+ * a steam machine's line cannot take out of it (`withHandSteps`).
+ */
 export function buildMode(mode: LogisticsMode, input: ModeInput): ModeResult {
   switch (mode) {
     case 'direct': return directMode(input);
-    case 'routed': return routedMode(input);
-    case 'ae2': return ae2Mode(input);
+    case 'routed': return withHandSteps(input, mode, routedMode(input));
+    case 'ae2': return withHandSteps(input, mode, ae2Mode(input));
+    case 'enderio': return withHandSteps(input, mode, enderioMode(input));
     default: throw new Error(`unknown logistics mode ${String(mode)}`);
   }
 }
@@ -91,9 +113,22 @@ export function emptyModeResult(warnings: PlanWarning[] = []): ModeResult {
   return { blocks: [], covers: [], configs: [], logisticsPort: null, hookup: null, extraParts: [], drafts: [], warnings, tailFluidY: 1 };
 }
 
-/** The step ids that have units in the placement, in unit order. */
-export function placedStepIds(placement: Placement): Set<string> {
-  return new Set(placement.units.map((u) => u.stepId));
+// `unitSteps` and `placedStepIds` live beside the placement (arrange.ts), which internal.ts reads too.
+export { placedStepIds, unitSteps };
+
+/**
+ * The item keys the line hands to the steps it runs by hand (`toHand`: flows from a placed step into one of them, which
+ * wait in the line's output chest) and takes from them (`fromHand`: flows from one of them into a placed step, which go
+ * in its input chest), each sorted.
+ */
+export function handItemFlows(plan: Plan, placement: Placement): { toHand: StuffKey[]; fromHand: StuffKey[] } {
+  const hand = new Set(placement.units.filter((u) => u.manual !== undefined).flatMap(unitSteps));
+  const placed = placedStepIds(placement);
+  const flows = itemFlows(plan);
+  return {
+    toHand: distinctKeys(flows.filter((f) => placed.has(f.from) && hand.has(f.to))),
+    fromHand: distinctKeys(flows.filter((f) => hand.has(f.from) && placed.has(f.to))),
+  };
 }
 
 /** Σ item flows touching a placed step ÷ 64. */
@@ -102,10 +137,15 @@ export function itemStacksPerSecond(plan: Plan, placed: ReadonlySet<string>): nu
   return items / ITEMS_PER_STACK;
 }
 
-/** Σ item flows out of the step ÷ step.count: the items/s each of its machines pushes out. */
-export function unitItemRate(plan: Plan, stepId: string): number {
-  const count = plan.steps.find((s) => s.id === stepId)?.count ?? 1;
-  const items = itemFlows(plan).reduce((sum, f) => (f.from === stepId ? sum + f.perSecond : sum), 0);
+/**
+ * The items/s each machine pushes out: of a step (by id), Σ item flows out of it ÷ its `count`; of a unit, Σ item flows
+ * out of every step it runs (`unitSteps`) ÷ the `count` of its first step, which a sharing pool's steps share (the pool's
+ * machines).
+ */
+export function unitItemRate(plan: Plan, of: string | Pick<Unit, 'stepId' | 'stepIds'>): number {
+  const steps = typeof of === 'string' ? [of] : unitSteps(of);
+  const count = plan.steps.find((s) => s.id === steps[0])?.count ?? 1;
+  const items = itemFlows(plan).reduce((sum, f) => (steps.includes(f.from) ? sum + f.perSecond : sum), 0);
   return items / Math.max(1, count);
 }
 
@@ -128,6 +168,16 @@ export function finalItemOutputs(plan: Plan, placed: ReadonlySet<string>): Stuff
   return distinctKeys(itemFlows(plan).filter((f) => placed.has(f.from) && isFinal(f.to)));
 }
 
+/** The items a unit's machine takes for every step it runs (`stepItemInputs` of each, `unitSteps`), sorted, each once. */
+export function unitItemInputs(plan: Plan, u: Pick<Unit, 'stepId' | 'stepIds'>): StuffKey[] {
+  return [...new Set(unitSteps(u).flatMap((id) => stepItemInputs(plan, id)))].sort(compareText);
+}
+
+/** The items a unit's machine makes for every step it runs (`stepItemOutputs` of each, `unitSteps`), sorted, each once. */
+export function unitItemOutputs(plan: Plan, u: Pick<Unit, 'stepId' | 'stepIds'>): StuffKey[] {
+  return [...new Set(unitSteps(u).flatMap((id) => stepItemOutputs(plan, id)))].sort(compareText);
+}
+
 /**
  * The items a step's machine takes: the item keys of the flows into it, or its `step.inputs` item keys when no item
  * flows into it (ruling R4). Sorted, each once.
@@ -136,6 +186,12 @@ export function stepItemInputs(plan: Plan, stepId: string): StuffKey[] {
   const fed = distinctKeys(itemFlows(plan).filter((f) => f.to === stepId));
   if (fed.length > 0) return fed;
   const own = plan.steps.find((s) => s.id === stepId)?.inputs ?? [];
+  return [...new Set(own.filter((p) => !isFluidKey(p.key)).map((p) => p.key))].sort(compareText);
+}
+
+/** The item keys of `step.outputs`, sorted, each once. */
+export function stepItemOutputs(plan: Plan, stepId: string): StuffKey[] {
+  const own = plan.steps.find((s) => s.id === stepId)?.outputs ?? [];
   return [...new Set(own.filter((p) => !isFluidKey(p.key)).map((p) => p.key))].sort(compareText);
 }
 
@@ -152,6 +208,127 @@ export function itemPorts(placement: Placement): ItemPort[] {
   return placement.units.filter((u) => u.io.itemIn || u.io.itemOut).flatMap((u) => u.ports.items.map((pos, i): ItemPort => ({
     pos: [...pos], behind: step(pos, OPPOSITE[u.facing]!), unit: u, first: i === 0,
   })));
+}
+
+/**
+ * The spine's columns up to the item ports above it (a bus GT takes only higher up, research hatch-rules.md): per column
+ * with such a port, the cells from the one above the spine up to the highest port, sorted by x, then y; `cells` are
+ * those no unit has a port on, `ports` the rest; `links` join each column from the spine up.
+ */
+export function itemRisers(placement: Placement): { cells: Vec3[]; ports: Vec3[]; links: Array<[Vec3, Vec3]> } {
+  const { spineZ } = placement;
+  const top = new Map<number, number>();
+  const portKeys = new Set<string>();
+  for (const u of placement.units) {
+    for (const p of u.ports.items) {
+      if (p[1] <= 0) continue;
+      top.set(p[0], Math.max(top.get(p[0]) ?? 0, p[1]));
+      portKeys.add(posKey(p));
+    }
+  }
+  const cells: Vec3[] = [];
+  const ports: Vec3[] = [];
+  const links: Array<[Vec3, Vec3]> = [];
+  for (const [x, highest] of [...top].sort((a, b) => a[0] - b[0])) {
+    for (let y = 1; y <= highest; y++) {
+      const cell: Vec3 = [x, y, spineZ];
+      (portKeys.has(posKey(cell)) ? ports : cells).push(cell);
+      links.push([[x, y - 1, spineZ], cell]);
+    }
+  }
+  return { cells, ports, links };
+}
+
+/** What a line's logistics step adds when the line climbs the spine's column to a bus (`itemRisers`). */
+export const RISER_WORDS = ', and up to each bus above it';
+
+/**
+ * A singleblock takes its items through its spine face, which is its output side (GT keeps its front, `mainFacing`,
+ * elsewhere): so in every mode each singleblock with item inputs gets "Input from Output Side" allowed on its
+ * machine. A venting steam singleblock's output side faces up (`PlacedUnit.outputSide`), so it takes its items on a
+ * side that needs no such setting, and an Auto Workbench (`Unit.bench`) takes them on any face and has no such setting.
+ * Keyed by the machine cell's posKey, in unit order.
+ */
+export function outputSideInputs(placement: Placement): Map<string, HostConfig> {
+  const configs = new Map<string, HostConfig>();
+  for (const u of placement.units) {
+    const port = u.ports.items[0];
+    if (u.multiblock || u.outputSide !== undefined || u.bench !== undefined || !u.io.itemIn || port === undefined) continue;
+    const cell = step(port, OPPOSITE[u.facing]!);
+    configs.set(posKey(cell), { pos: cell, config: { inputFromOutputSide: true } });
+  }
+  return configs;
+}
+
+// ---- Feeding settings (architecture §11 entry 51) ----
+
+/** GT machine kinds whose input slots Multi Stack Input governs: `MTEBasicMachine` and its steam subclass. */
+const MULTI_STACK_KINDS: ReadonlySet<MachineKind> = new Set<MachineKind>(['basic', 'steam']);
+
+function inBox(p: Vec3, at: Vec3, size: Vec3): boolean {
+  return p.every((v, i) => v >= at[i]! && v < at[i]! + size[i]!);
+}
+
+/**
+ * The settings that keep the line's machines from crowding themselves (research machine-feeding §1.1.3, §1.2, §3.7; GT
+ * 5.09.54 `MTEBasicMachine.allowPutStack`, `MTEHatchInputBus.limitedAllowPutStack`, `MTEMultiBlockBase.inputSeparation`):
+ * Multi Stack Input off on a GT basic singleblock fed two or more kinds of item (with it on, the first kind to arrive
+ * fills every free input slot and the others never get in; a new machine takes its placer's client setting), Limiting
+ * mode on on each input bus of a multiblock fed two or more kinds (off on a new bus, so one kind can fill every slot), and
+ * Input Separation off on a multiblock with two or more input buses whose controller has that setting, on when built
+ * (`hasInputSeparation`: with it on, each bus is checked alone, so a recipe whose items arrive on different buses never
+ * starts; a controller without it has nothing to set and reads all its buses together). The kinds are the items the
+ * machine takes for every step it runs (`unitItemInputs`: a shared machine is fed each of its steps' items); a unit run
+ * by hand gets nothing. One entry per block, sorted by pos.
+ */
+export function feedSettings(pack: Pack, plan: Plan, placement: Placement): HostConfig[] {
+  const out: HostConfig[] = [];
+  for (const u of placement.units) {
+    if (u.manual !== undefined || !u.io.itemIn) continue;
+    const kinds = unitItemInputs(plan, u).length;
+    const own = placement.blocks.filter((b) => b.stepId === u.stepId && inBox(b.pos, u.at, u.size));
+    if (!u.multiblock) {
+      const machine = own.find((b) => b.role === 'machine');
+      if (kinds >= 2 && machine !== undefined && MULTI_STACK_KINDS.has(pack.machines.get(u.mteId)?.kind ?? 'other')) {
+        out.push({ pos: [...machine.pos], config: { multiStack: false } });
+      }
+      continue;
+    }
+    // only a controller that has the setting (on when built); one without it reads all its buses together
+    const controller = own.find((b) => b.role === 'machine');
+    const buses = u.cells.filter((c) => c.hatch === 'input_bus').length;
+    if (controller !== undefined && buses >= 2 && hasInputSeparation(pack.machines.get(u.mteId))) {
+      out.push({ pos: [...controller.pos], config: { inputSeparation: false } });
+    }
+    if (kinds >= 2) for (const bus of own.filter((b) => b.hatch === 'input_bus')) out.push({ pos: [...bus.pos], config: { limited: true } });
+  }
+  return out.sort((a, b) => comparePos(a.pos, b.pos));
+}
+
+/** `configs` merged key by key per block, in order, one entry per block, sorted by pos. */
+export function mergeHostConfigs(configs: readonly HostConfig[]): HostConfig[] {
+  const byPos = new Map<string, HostConfig>();
+  for (const c of configs) {
+    const seen = byPos.get(posKey(c.pos));
+    if (seen === undefined) byPos.set(posKey(c.pos), { pos: [...c.pos], config: { ...c.config } });
+    else seen.config = { ...seen.config, ...c.config };
+  }
+  return [...byPos.values()].sort((a, b) => comparePos(a.pos, b.pos));
+}
+
+// ---- Line words ----
+
+/**
+ * What the `layout:logistics:line` step adds where the line's parts do not meet a machine at its output side or bus
+ * (architecture §11 entry 48): a venting steam machine is met on its middle-row side, as its output side faces up, and a
+ * machine run by hand gets nothing. Empty for a line with neither.
+ */
+export function lineExceptions(placement: Placement): string {
+  const steam = placement.units.some((u) => u.outputSide !== undefined);
+  const hand = [...new Set(placement.units.filter((u) => u.manual !== undefined).map((u) => `the ${u.name}`))];
+  const words = [...(steam ? ["a steam machine's middle-row side instead, as its output side faces up"] : []),
+    ...(hand.length === 0 ? [] : [`${joinNames(hand)} ${hand.length === 1 ? 'gets' : 'get'} nothing`])];
+  return words.length === 0 ? '' : ` (${words.join('; ')})`;
 }
 
 // ---- Names ----

@@ -1,12 +1,17 @@
 // The pack loader (architecture §6.2 server API): streams an export into the in-memory `Pack`.
 //
 // Files are read in this order, so every reference resolves: manifest → items → fluids → fluid containers → ore
-// dictionary → recipe maps → recipes (GT, assembly line, crafting, furnace) → machines → structures; then the electric
-// furnace and microwave recipes are derived from the smelting list and the indices built; then GT materials and ore
-// materials; and last the nine worldgen files, because capability yields need the items' materials. Files are never
-// read into one string; `readJsonl` streams them line by line. Structural damage (bad gzip, bad JSON, a line count that
-// differs from the manifest, an index that points nowhere) fails with the file and line instead of returning a
-// half-loaded pack; recoverable oddities become `pack.warnings`.
+// dictionary (and from it GTNH's circuit stand-ins, stand-ins.ts) → recipe maps → recipes (GT, assembly line, crafting,
+// furnace) → machines → structures → the optional crop table; then the electric furnace and microwave recipes are
+// derived from the smelting list, the supply recipes of the free inputs from the rock breaker's display recipes, the
+// pumps and the compressor (supply.ts), the Auto Workbench's GGFab single-use variants of tool recipes from the crafting
+// recipes (bench-tools.ts), and the indices built; then GT materials and ore materials; and last the nine
+// worldgen files, because capability yields need the items' materials. Files are never read into one string;
+// `readJsonl` streams them line by line. Structural damage (bad gzip, bad JSON, a line count that differs from the
+// manifest, an index that points nowhere) fails with the file and line instead of returning a half-loaded pack;
+// recoverable oddities become `pack.warnings`, and so does an item the crop table names but the loader cannot resolve
+// (crops.ts). The crop table's inline items join `pack.items` after every item line, as crop items that no wildcard,
+// ore name, circuit stand-in or recipe of the export ever sees (crops.ts).
 
 import { createReadStream } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
@@ -16,6 +21,7 @@ import { pipeline } from 'node:stream';
 import { createGunzip } from 'node:zlib';
 import { fluidKey, itemKey, type FluidKey, type ItemKey } from '../../shared/keys.ts';
 import type { Fluid, Item, Pack, PackManifest, RecipeMapInfo } from '../../shared/types/pack.ts';
+import { cropTable } from './crops.ts';
 import {
   EXPORT_FILES, EXPORT_FORMAT, OPTIONAL_EXPORT_FILES,
   type ExportFileKey, type ExportLineTypes, type ItemLine, type ManifestFile, type RecipeMapLine,
@@ -25,7 +31,10 @@ import { PSEUDO_MACHINE_ENTRIES, toMachine, toStructure } from './machines.ts';
 import { aliasesOf, normalizeMapId } from './map-aliases.ts';
 import { buildMaterials } from './materials.ts';
 import { nbtHash } from './recipe-id.ts';
+import { benchVariants } from './bench-tools.ts';
 import { assemblyLineRecipe, craftingRecipe, furnaceEntry, furnaceRecipe, gtRecipe, RecipeCollector, type FurnaceEntry } from './recipes.ts';
+import { circuitStandIns } from './stand-ins.ts';
+import { deriveSupply } from './supply.ts';
 import { buildWorldgen, type WorldgenInput } from './worldgen.ts';
 
 /** Minecraft's OreDictionary.WILDCARD_VALUE: "any meta". Expanded here, never part of a key (architecture §5). */
@@ -63,6 +72,9 @@ export interface LoadContext {
   readonly mapsByIndex: ReadonlyMap<number, RecipeMapInfo>;
   readonly oreDict: ReadonlyMap<string, ItemKey[]>;
   warn(message: string): void;
+  // optional addition (plan 12): GTNH's circuit stand-ins and the items each stands for (stand-ins.ts), once the ore
+  // dictionary is read; GT and assembly-line slots take them all
+  readonly standIns?: ReadonlyMap<ItemKey, readonly ItemKey[]>;
 }
 
 function messageOf(err: unknown): string {
@@ -226,8 +238,13 @@ export class ItemRefs {
     return key;
   }
 
+  /** Whether `i` is the index of an item line. */
+  has(i: number): boolean {
+    return Number.isInteger(i) && i >= 0 && i < this.size;
+  }
+
   #check(i: number): number {
-    if (!Number.isInteger(i) || i < 0 || i >= this.size) throw new RangeError(`unknown item index ${i}`);
+    if (!this.has(i)) throw new RangeError(`unknown item index ${i}`);
     return i;
   }
 
@@ -294,6 +311,8 @@ interface LoadState {
   readonly pack: LoadingPack;
   readonly mapsByIndex: Map<number, RecipeMapInfo>;
   readonly ctx: LoadContext;
+  /** `ctx.standIns`, filled once the ore dictionary is read (`readStandIns`). */
+  readonly standIns: Map<ItemKey, ItemKey[]>;
   /** Every recipe read so far, merged by id; `setRecipes` puts the list into the pack. */
   readonly recipes: RecipeCollector;
   /** The smelting entries, kept for the electric furnace and microwave recipes derived from them. */
@@ -325,8 +344,9 @@ function newLoadState(src: ExportSource): LoadState {
     pack.warnings.push(message);
   };
   const mapsByIndex = new Map<number, RecipeMapInfo>();
+  const standIns = new Map<ItemKey, ItemKey[]>();
   return {
-    src, pack, mapsByIndex, ctx: { items: new ItemRefs(warn), mapsByIndex, oreDict: pack.oreDict, warn },
+    src, pack, mapsByIndex, ctx: { items: new ItemRefs(warn), mapsByIndex, oreDict: pack.oreDict, warn, standIns }, standIns,
     recipes: new RecipeCollector(), furnace: [],
   };
 }
@@ -400,6 +420,11 @@ async function readOreDict({ src, pack, ctx }: LoadState): Promise<void> {
     for (const i of line.items) for (const key of ctx.items.optionsAt(i)) keys.add(key);
   });
   for (const [ore, keys] of byOre) pack.oreDict.set(ore, [...keys]);
+}
+
+/** GTNH's circuit stand-ins and the items of their ore names (stand-ins.ts), which GT and assembly-line slots take. */
+function readStandIns({ pack, standIns }: LoadState): void {
+  for (const [key, members] of circuitStandIns(pack.items.values(), pack.oreDict)) standIns.set(key, members);
 }
 
 function toMapInfo(id: string, line: RecipeMapLine, catalysts: ItemKey[] | undefined): RecipeMapInfo {
@@ -484,16 +509,49 @@ async function readStructures({ src, pack, ctx }: LoadState): Promise<void> {
       ctx.warn(`${EXPORT_FILES.structures}:${n}: duplicate structure for machine ${line.id} ignored, the first line wins`);
       return;
     }
-    machine.structure = toStructure(line);
+    machine.structure = toStructure(line, ctx, n);
     if (machine.structure.truncated) {
       ctx.warn(`machine ${line.id} (${machine.metaName}): structure truncated, a block lay on the exporter's scan box boundary, it may be incomplete`);
     }
   });
 }
 
-/** The electric furnace and microwave recipes of the smelting list, through the same collector as the others. */
-function addDerivedRecipes({ pack, recipes, furnace }: LoadState): void {
+/**
+ * The crop table becomes `pack.crops` when the export has one (exporter 0.5.0 and later, with CropsNH), and the items
+ * it names inline that the item table lacks become crop items of `pack.items`, after every item line (crops.ts).
+ */
+async function readCrops({ src, pack, ctx }: LoadState): Promise<void> {
+  if (!src.has('crops')) return;
+  const { cards, items } = cropTable(await collectLines(src, 'crops'), ctx);
+  pack.crops = cards;
+  for (const item of items) if (!pack.items.has(item.key)) pack.items.set(item.key, item);
+}
+
+/**
+ * The derived recipes, through the same collector as the others: the electric furnace and microwave recipes of the
+ * smelting list, and the supply recipes (supply.ts, fix spec R2): the rock breaker's display-only recipes made real and
+ * the pumps' water and lava on the pseudo map `pump`, which the pump machines get; the compressor recipe that fills an
+ * empty cell with air is marked `meta.supply` with its id unchanged (ruling P20); and the GGFab single-use variant of each
+ * crafting recipe whose tool slots all take a single-use tool, which only an Auto Workbench runs (bench-tools.ts, plan 12
+ * controller ruling 214 (a)).
+ */
+function addDerivedRecipes({ pack, recipes, furnace, ctx }: LoadState): void {
   for (const recipe of deriveFurnaceRecipes(furnace, pack.maps)) recipes.add(recipe);
+  const loaded = recipes.list();
+  const supply = deriveSupply({ recipes: loaded, machines: pack.machines, maps: pack.maps, fluidContainers: pack.fluidContainers });
+  for (const recipe of supply.recipes) recipes.add(recipe);
+  if (supply.pumpMap !== null) {
+    const map = supply.pumpMap.id;
+    if (pack.maps.has(map)) ctx.warn(`recipe map ${map} of the export is replaced by the pseudo map of the pumps`);
+    pack.maps.set(map, supply.pumpMap);
+    for (const id of supply.pumpMachines) {
+      const machine = pack.machines.get(id);
+      if (machine !== undefined && !machine.maps.includes(map)) machine.maps.push(map);
+    }
+  }
+  const flagged = new Set(supply.flagged);
+  for (const recipe of loaded) if (flagged.has(recipe.id)) recipe.meta.supply = 'compressor';
+  for (const recipe of benchVariants(loaded, pack.items)) recipes.add(recipe);
 }
 
 /** The collected recipes become `pack.recipes`, and `recipeById` points at the same objects. */
@@ -557,10 +615,12 @@ export async function buildPack(src: ExportSource): Promise<Pack> {
   await readFluids(state);
   await readFluidContainers(state);
   await readOreDict(state);
+  readStandIns(state);
   await readRecipeMaps(state);
   await readRecipes(state);
   await readMachines(state);
   await readStructures(state);
+  await readCrops(state);
   addDerivedRecipes(state);
   setRecipes(state);
   setIndices(state);

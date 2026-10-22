@@ -1,0 +1,263 @@
+{
+  "format": "gtnh-planner-projector/1",
+  "projectId": "Pr0jectAb1",
+  "name": "Steel line",
+  "rev": 7,
+  "version": "0c64318407630102",
+  "status": "ok",
+  "message": null,
+  "dim": 0,
+  "origin": [
+    99,
+    64,
+    200
+  ],
+  "size": [
+    7,
+    2,
+    4
+  ],
+  "blocks": [
+    {
+      "pos": [
+        100,
+        64,
+        201
+      ],
+      "id": "gregtech:gt.blockmachines",
+      "meta": null,
+      "mteId": 1180,
+      "role": "cable",
+      "label": "1x Tin Cable",
+      "step": "layout:power:hookup"
+    },
+    {
+      "pos": [
+        101,
+        64,
+        201
+      ],
+      "id": "gregtech:gt.blockmachines",
+      "meta": null,
+      "mteId": 1180,
+      "role": "cable",
+      "label": "1x Tin Cable",
+      "step": "layout:power:wire:1"
+    },
+    {
+      "pos": [
+        101,
+        64,
+        202
+      ],
+      "id": "gregtech:gt.blockmachines",
+      "meta": null,
+      "mteId": 21,
+      "facing": 4,
+      "role": "transformer",
+      "label": "Low Voltage Transformer",
+      "step": "layout:power:stage:1"
+    },
+    {
+      "pos": [
+        102,
+        64,
+        201
+      ],
+      "id": "gregtech:gt.blockmachines",
+      "meta": null,
+      "mteId": 201,
+      "facing": 3,
+      "facingIsOutput": true,
+      "mainFacing": 4,
+      "role": "machine",
+      "label": "Basic Macerator",
+      "step": "layout:place:s1",
+      "covers": [
+        {
+          "face": 3,
+          "item": "gregtech:gt.metaitem.01@32630",
+          "label": "Conveyor Module (LV)"
+        }
+      ]
+    },
+    {
+      "pos": [
+        103,
+        64,
+        201
+      ],
+      "id": "gregtech:gt.blockmachines",
+      "meta": null,
+      "mteId": 201,
+      "facing": 3,
+      "facingIsOutput": true,
+      "mainFacing": 4,
+      "role": "machine",
+      "label": "Basic Macerator",
+      "step": "layout:place:s1"
+    },
+    {
+      "pos": [
+        102,
+        64,
+        202
+      ],
+      "id": "gregtech:gt.blockmachines",
+      "meta": null,
+      "mteId": 5110,
+      "role": "pipe",
+      "label": "Tin Item Pipe",
+      "step": "layout:logistics:line"
+    },
+    {
+      "pos": [
+        104,
+        64,
+        202
+      ],
+      "id": "minecraft:chest",
+      "meta": null,
+      "role": "chest",
+      "label": "Chest (input)",
+      "step": "layout:logistics:line"
+    },
+    {
+      "pos": [
+        102,
+        65,
+        201
+      ],
+      "id": "gregtech:gt.blockmachines",
+      "meta": null,
+      "mteId": 5131,
+      "role": "pipe",
+      "label": "Bronze Fluid Pipe (Water)",
+      "step": "layout:logistics:fluid:fluid:water"
+    },
+    {
+      "pos": [
+        105,
+        64,
+        202
+      ],
+      "id": "ForgeMultipart:block",
+      "part": "pr_rinterface",
+      "meta": null,
+      "role": "chip_pipe",
+      "label": "Routed Interface Pipe (input chest)",
+      "step": "layout:logistics:line"
+    },
+    {
+      "pos": [
+        103,
+        65,
+        203
+      ],
+      "id": "gregtech:gt.blockcasings",
+      "meta": 11,
+      "role": "casing",
+      "label": "Heat Proof Machine Casing",
+      "step": "layout:place:s2"
+    }
+  ],
+  "steps": [
+    {
+      "id": "layout:site",
+      "order": 1,
+      "kind": "place",
+      "text": "Clear a 7×4 spot (2 high) and keep a 1-block path around it",
+      "blocks": [],
+      "done": false
+    },
+    {
+      "id": "layout:place:s1",
+      "order": 2,
+      "kind": "place",
+      "text": "Place 2× Basic Macerator facing the middle row",
+      "blocks": [
+        3,
+        4
+      ],
+      "done": false
+    },
+    {
+      "id": "layout:place:s2",
+      "order": 3,
+      "kind": "place",
+      "text": "Build 1× Electric Blast Furnace (3×4×3) with the controller facing the middle row; hatches: LV Input Bus",
+      "blocks": [
+        9
+      ],
+      "done": true
+    },
+    {
+      "id": "layout:power:stage:1",
+      "order": 4,
+      "kind": "power",
+      "text": "Place 1× Low Voltage Transformer between the MV and LV cables, front (input) toward MV",
+      "blocks": [
+        2
+      ],
+      "done": false
+    },
+    {
+      "id": "layout:power:wire:1",
+      "order": 5,
+      "kind": "power",
+      "text": "Wire the LV machines with 1x Tin Cable (1 blocks)",
+      "blocks": [
+        1
+      ],
+      "done": false
+    },
+    {
+      "id": "layout:power:hookup",
+      "order": 6,
+      "kind": "power",
+      "text": "Run 1× 1x Tin Cable from the tap to the line: up to 1 A at LV, arriving at 32 V",
+      "blocks": [
+        0
+      ],
+      "done": false
+    },
+    {
+      "id": "layout:logistics:line",
+      "order": 7,
+      "kind": "logistics",
+      "text": "Lay 1× Tin Item Pipe along the middle row so it touches every machine's output side or bus, with an input chest at the end",
+      "blocks": [
+        5,
+        6,
+        8
+      ],
+      "done": false
+    },
+    {
+      "id": "layout:logistics:fluid:fluid:water",
+      "order": 8,
+      "kind": "logistics",
+      "text": "Lay 1× Bronze Fluid Pipe for Water",
+      "blocks": [
+        7
+      ],
+      "done": false
+    },
+    {
+      "id": "layout:configure:s1",
+      "order": 9,
+      "kind": "configure",
+      "text": "Basic Macerator: Conveyor Module (LV) on the south face: Export, 1 stacks/s",
+      "blocks": [],
+      "done": false
+    },
+    {
+      "id": "layout:test",
+      "order": 10,
+      "kind": "test",
+      "text": "Switch on and check: every machine has power, none is fed above its tier, items reach the output",
+      "blocks": [],
+      "done": false
+    }
+  ]
+}

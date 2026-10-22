@@ -1,10 +1,28 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { isValidElement, type ReactElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { buildRows, groupBuildRows, runRows, sourceText, amountText, haveText, whereLines, unavoidableKeys } from '../../src/client/views/materials-model.ts';
+import { buildRows, groupBuildRows, runRows, sourceText, amountText, haveText, whereLines, unavoidableKeys, missingRows } from '../../src/client/views/materials-model.ts';
 import { StepsView } from '../../src/client/views/StepsView.tsx';
-import { MaterialsView } from '../../src/client/views/MaterialsView.tsx';
+import { MaterialsView, UsedByChips } from '../../src/client/views/MaterialsView.tsx';
 import { PROJECT_TABS } from '../../src/client/views/project-tabs.ts';
-import type { Plan } from '../../src/shared/types/plan.ts';
+import { getFlowFocus, setFlowFocus } from '../../src/client/state/flow-focus.ts';
+import { indexPlan } from '../../src/shared/plan/balance.ts';
+import type { Plan, PlanStep } from '../../src/shared/types/plan.ts';
+
+/** What a reader sees: the markup without its tags and comments, entities decoded. */
+function text(html: string): string {
+  return html.replace(/<!--[\s\S]*?-->/g, '').replace(/<[^>]+>/g, '')
+    .replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+}
+
+/** Every element in `node` (a tree of unrendered elements) that `match` accepts, depth first. */
+function findAll(node: ReactNode, match: (e: ReactElement<Record<string, unknown>>) => boolean): Array<ReactElement<Record<string, unknown>>> {
+  if (Array.isArray(node)) return node.flatMap((n: ReactNode) => findAll(n, match));
+  if (!isValidElement<Record<string, unknown>>(node)) return [];
+  return [...(match(node) ? [node] : []), ...findAll(node.props.children as ReactNode, match)];
+}
+
+afterEach(() => { setFlowFocus(null); vi.unstubAllGlobals(); });
 
 const names = { 'machine:111@0': 'Basic Wiremill', 't:hull_lv@0': 'LV Machine Hull', 't:iron_ingot@0': 'Iron Ingot', 't:titanium_ingot@0': 'Titanium Ingot', 'dim:overworld': 'Overworld', 'dim:moon': 'Moon', 'dimId:0': 'Overworld' };
 const plan = {
@@ -62,6 +80,89 @@ describe('materials model', () => {
   });
 });
 
+describe('materials rows', () => {
+  const step = (p: Partial<PlanStep> & Pick<PlanStep, 'id'>): PlanStep => ({
+    recipeId: p.id, mapId: 'gt.recipe.mixer', machine: { mteId: 581, name: 'Mixer', tier: 1 }, count: 1, owned: 0, runsPerSecond: 0.001,
+    utilization: 0.01, euPerTick: 16, durationTicks: 100, overclocks: 0, inputs: [], outputs: [], alternatives: [], handCraft: false, warnings: [], ...p,
+  });
+  const PVA_PER_SECOND = 0.003438 / 3600;
+  const mixer = step({ id: 'mixer', mainOutput: 't:glue@0', inputs: [{ key: 'fluid:pva', amount: PVA_PER_SECOND / 0.001, chance: 1 }],
+    outputs: [{ key: 't:glue@0', amount: 1, chance: 1 }] });
+  const asm = step({ id: 'asm', mapId: 'gt.recipe.assembler', machine: { mteId: 121, name: 'Assembler', tier: 1 }, mainOutput: 't:board@0',
+    inputs: [{ key: 't:glue@0', amount: 1, chance: 1 }, { key: 'fluid:solder', amount: 72, chance: 1 }], outputs: [{ key: 't:board@0', amount: 1, chance: 1 }] });
+  const tiny = {
+    ...plan,
+    names: { ...names, 'fluid:pva': 'Polyvinyl Acetate', 't:glue@0': 'Glue', 't:board@0': 'Circuit Board', 'fluid:solder': 'Molten Solder' },
+    steps: [mixer, asm],
+    flows: [{ from: 'raw', to: 'mixer', key: 'fluid:pva', perSecond: PVA_PER_SECOND }, { from: 'mixer', to: 'asm', key: 't:glue@0', perSecond: 0.001 },
+      { from: 'asm', to: 'out', key: 't:board@0', perSecond: 0.001 }],
+    rawInputs: [{ key: 'fluid:pva', perSecond: PVA_PER_SECOND, cost: PVA_PER_SECOND / 1000, available: true, leafClass: 'derived', sources: [] }],
+    byproducts: [{ key: 't:iron_ingot@0', amount: 2e-7, chance: 1 }],
+    buildTotals: [{ key: 't:iron_ingot@0', amount: 10, why: 'for Basic Wiremill, LV Machine Hull', neededFor: [{ key: 'machine:111@0', amount: 6 }, { key: 't:hull_lv@0', amount: 4 }] }],
+  } as unknown as Plan;
+  const view = (p: Plan, mode: 'rate' | 'makeN' = 'rate'): string => renderToStaticMarkup(<MaterialsView project={{ id: 'p', name: 'x', createdAt: '', createdBy: '', rev: 3,
+    settings: { mode, per: 'hour', stopItems: [], expandItems: [] }, world: { scanId: null, baseId: null }, placement: null, notes: [], marks: {} } as never} plan={p} send={() => {}} me="Ann" />);
+
+  it('never prints a tiny amount as 0, and gives fluids their litres', () => {
+    /** An amount that reads "0.00" (not the start of 0.004). */
+    const ZERO = /(?<![\d.])0\.00(?!\d)/;
+    expect(runRows(tiny, 'rate')[0]?.amount).toBe('1 L every 12.1 days');
+    expect([amountText(0.004), amountText(0.0000123), amountText(-0.001), amountText(0.125)]).toEqual(['0.004', '0.0000123', '-0.001', '0.13']);
+    const html = view(tiny);
+    expect(text(html)).toContain('1 L every 12.1 days');
+    expect(text(html)).not.toMatch(ZERO);
+    const batch = { ...tiny, makeN: { totalSeconds: 10, leftovers: [{ key: 'fluid:solder', amount: 0.0001, chance: 1 }] },
+      rawInputs: [{ ...tiny.rawInputs[0]!, total: 0.0003 }] } as Plan;
+    expect(text(view(batch, 'makeN'))).not.toMatch(ZERO);
+    expect(text(view(batch, 'makeN'))).toContain('0.0003 L');
+    expect(text(view(batch, 'makeN'))).toContain('0.0001 L');
+    expect(runRows(batch, 'makeN')[0]?.usedBy).toEqual([{ stepId: 'mixer', label: 'Mixer (Glue)', rate: '0.00000955 L' }]);   // the batch's share, with its unit
+  });
+  it('names the steps that use each base material, and shows them in the flow', () => {
+    expect(runRows(tiny, 'rate')[0]?.usedBy).toEqual([{ stepId: 'mixer', label: 'Mixer (Glue)', rate: '1 L every 12.1 days' }]);
+    const html = text(view(tiny));
+    expect(html).toContain('Mixer (Glue)');
+    expect(html).toContain('Show in flow');
+    vi.stubGlobal('location', { hash: '#materials' });
+    const chips = UsedByChips({ itemKey: 'fluid:pva', usedBy: runRows(tiny, 'rate')[0]!.usedBy });
+    const [show] = findAll(chips, (e) => e.type === 'button' && e.props.children === 'Show in flow');
+    (show!.props.onClick as () => void)();
+    expect(getFlowFocus()).toEqual({ kind: 'item', key: 'fluid:pva' });
+    expect(location.hash).toBe('#flow');
+  });
+  it('lists the inputs nothing supplies first', () => {
+    const rows = missingRows(tiny, indexPlan(tiny));
+    expect(rows).toMatchObject([{ row: 'missing:fluid:solder@asm', key: 'fluid:solder', name: 'Molten Solder', badge: 'no source in the plan',
+      amount: '259 L/h', usedBy: [{ stepId: 'asm', label: 'Assembler (Circuit Board)', rate: '259 L/h' }] }]);
+    const html = view(tiny);
+    expect(html).toContain('no source in the plan');
+    expect(html.indexOf('data-row="missing:fluid:solder@asm"')).toBeGreaterThan(-1);
+    expect(html.indexOf('data-row="missing:fluid:solder@asm"')).toBeLessThan(html.indexOf('data-row="run:fluid:pva"'));
+    expect(missingRows(plan, indexPlan(plan))).toEqual([]);
+  });
+  it('opens a total of base materials to the build lines that need it', () => {
+    const [row] = buildRows(tiny.buildTotals!, tiny.names!, new Set());
+    expect(row?.why).toBe('for Basic Wiremill, LV Machine Hull');
+    expect(row?.neededFor).toEqual([{ key: 'machine:111@0', name: 'Basic Wiremill', amount: '6' }, { key: 't:hull_lv@0', name: 'LV Machine Hull', amount: '4' }]);
+    const html = view(tiny);
+    expect(html).toMatch(/<details class="mat-needed[^"]*"><summary>for Basic Wiremill, LV Machine Hull<\/summary>/);
+    expect(text(html)).toContain('6× for Basic Wiremill');
+    expect(text(html)).toContain('4× for LV Machine Hull');
+  });
+  it('names a programmed circuit by its configuration', () => {
+    const circuits: Plan['buildList'] = [{ key: 'gregtech:gt.integrated_circuit@3', amount: 1, why: 'stays in the machine', group: 'one-off' }];
+    expect(buildRows(circuits, { 'gregtech:gt.integrated_circuit@3': 'Programmed Circuit' }, new Set())[0]?.name).toBe('Programmed Circuit (config 3)');
+    const html = view({ ...plan, names: { ...names, 'gregtech:gt.integrated_circuit@3': 'Programmed Circuit' }, buildList: circuits } as Plan);
+    expect(text(html)).toContain('Programmed Circuit (config 3)');
+  });
+  it('keeps a base material nothing here makes from being planned in the line', () => {
+    const fixed = { ...plan, tier: 1, rawInputs: [{ ...plan.rawInputs[0]!, canMake: false }] } as Plan;
+    expect(runRows(fixed, 'rate')[0]?.cannotMake).toBe('Nothing at LV makes Iron Ingot');
+    expect(view(fixed)).toMatch(/<button[^>]*disabled=""[^>]*>We&#x27;ll make it ourselves<\/button>/);
+    expect(runRows(plan, 'rate')[0]?.cannotMake).toBeUndefined();
+  });
+});
+
 describe('views', () => {
   const project = { id: 'p', name: 'x', createdAt: '', createdBy: '', rev: 3, settings: { mode: 'rate', per: 'min', stopItems: [], expandItems: [] },
     world: { scanId: null, baseId: null }, placement: null, notes: [], marks: { 'step:gather': { by: 'Jörg 🙂', at: '2026-10-17T12:00:00.000Z' } } } as never;
@@ -70,6 +171,18 @@ describe('views', () => {
     expect(html).toContain('data-row="step:gather"');
     expect(html).toMatch(/data-row="step:gather"[^>]*data-marked="true"/);
     expect(html).toContain('Jörg 🙂');
+  });
+  it('totals what the build takes: the machines and the layout parts (plan 12)', () => {
+    const costed = { ...plan, cost: { runPerHour: 1, build: 182, horizonHours: 24, layout: 40 } } as Plan;
+    const html = renderToStaticMarkup(<MaterialsView project={project} plan={costed} send={() => {}} me="Ann" />);
+    const section = /<section[^>]*aria-labelledby="to-build-title"[^>]*>.*?<\/section>/s.exec(html)?.[0] ?? '';
+    expect(text(section)).toContain('About 222 raw to build: 182 for the machines, 40 for power and logistics parts');
+    expect(section.indexOf('About 222 raw to build')).toBeLessThan(section.indexOf('Machines'));
+    // Nothing in the build list: the section says so once.
+    const empty = renderToStaticMarkup(<MaterialsView project={project} plan={{ ...costed, buildList: [], cost: { runPerHour: 1, build: 0, horizonHours: 24 } } as Plan}
+      send={() => {}} me="Ann" />);
+    expect(text(empty)).toContain('Nothing new to build: the machines you have cover this line.');
+    expect(text(empty).match(/Nothing new to build/g)).toHaveLength(1);
   });
   it('renders all sections and sits between flow and notes', () => {
     const html = renderToStaticMarkup(<MaterialsView project={project} plan={plan} send={() => {}} me="Ann" />);

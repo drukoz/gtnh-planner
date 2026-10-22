@@ -1,16 +1,20 @@
 // The planner's basis: the one place that turns a project's settings and the world context into the tier, the
-// reachable dimensions, the environment the candidate recipes are judged in, material availability, prices and the leaf
-// oracle, so `planLine` and `expandBomLines` always derive them the same way. Also the settings hash, and the part of
-// the world context the basis reads (`basisContextKey`), which together key what is derived from them (pricing.ts);
-// and the goods an avoid list covers (`resolveAvoid`), which only `planLine`'s own graphs honor (plan.ts).
+// reachable dimensions, the environment the candidate recipes are judged in, material availability, prices, the free
+// inputs the line makes itself and the leaf oracle, so `planLine` and `expandBomLines` always derive them the same way.
+// Also the settings hash, and the part of the world context the basis reads (`basisContextKey`), which together key
+// what is derived from them (pricing.ts); the goods an avoid list covers (`resolveAvoid`), which only `planLine`'s own
+// graphs honor (plan.ts); and whether the settings count the build cost of new machines and let the line make gathered
+// world blocks (`buildCostCounts`, `gatheredRecipesOn`: plan 12, here because pricing.ts reads them and importing
+// machine-options.ts there would close a cycle through bom.ts).
 
 import { createHash } from 'node:crypto';
 import { defaultCoilHeat } from '../../shared/gt/overclock.ts';
 import type { StuffKey } from '../../shared/keys.ts';
-import type { Pack } from '../../shared/types/pack.ts';
-import type { PlanContext, PlanSettings } from '../../shared/types/plan.ts';
+import type { Pack, Recipe } from '../../shared/types/pack.ts';
+import { FREE_KEYS, NETWORKED_LOGISTICS, type PlanContext, type PlanSettings } from '../../shared/types/plan.ts';
+import { suppliedKey } from '../pack/supply.ts';
 import { computeAvailability, reachableDims, type Availability, type Reachability } from './availability.ts';
-import type { LeafOracle, PlanEnv } from './candidates.ts';
+import { acceptRecipe, type LeafOracle, type PlanEnv } from './candidates.ts';
 import { makeLeafOracle, makePrices, type PriceTable } from './costs.ts';
 
 function byString(a: string, b: string): number {
@@ -117,6 +121,25 @@ export function effectiveTier(s: PlanSettings, ctx: PlanContext): number {
 }
 
 /**
+ * Whether the settings count the build cost of the machines a line adds (architecture §11.39): Make N (against the
+ * batch), or rate mode whose `buildHorizonHours` is not null ("Ignore build cost"; absent = 24 h). The settings' side of
+ * machine-options.ts's `buildCounts`, which says the same of the model `lineBuildModel` builds from them.
+ */
+export function buildCostCounts(settings: PlanSettings): boolean {
+  return settings.mode === 'makeN' || settings.buildHorizonHours !== null;
+}
+
+/**
+ * Whether the line's own graph offers the recipes of gathered world blocks (sand from cobblestone; change request 13 as
+ * controller Amendment OQ4 limits it, ruling P1): only where build cost counts — nothing would bound a chain of free
+ * inputs otherwise — and only on AE2 and Project Red lines (`NETWORKED_LOGISTICS`); machine-to-machine and EnderIO lines
+ * dig them until add-on 15 redesigns the direct line's tail.
+ */
+export function gatheredRecipesOn(settings: PlanSettings): boolean {
+  return buildCostCounts(settings) && NETWORKED_LOGISTICS.has(settings.logistics);
+}
+
+/**
  * Every field of the world context `planBasis` reads (top tier, coil heat, visited dimensions, in their order): two
  * contexts with the same key give the same basis for the same settings. Whatever `planBasis` starts reading of the
  * context must be added here.
@@ -125,13 +148,60 @@ export function basisContextKey(ctx: PlanContext): string {
   return JSON.stringify([ctx.topTier, ctx.coilHeat, ctx.visitedDims]);
 }
 
-export interface PlanBasis { tier: number; coilHeat: number; reach: Reachability; env: PlanEnv; avail: Availability; prices: PriceTable; leaf: LeafOracle }
+export interface PlanBasis {
+  tier: number; coilHeat: number; reach: Reachability; env: PlanEnv; avail: Availability; prices: PriceTable; leaf: LeafOracle;
+  /** The free inputs the line makes with a supply recipe instead of buying them (`suppliedFreeKeys`, fix spec R2). */
+  supplied: ReadonlySet<StuffKey>;
+  /**
+   * The basis of the same settings and world at another tier: what a plan at that tier would get and run (plan.ts names
+   * the tier at which the group could melt a metal it has). Its availability is cached per pack as every basis's is.
+   */
+  at(tier: number): PlanBasis;
+}
+
+const FREE: ReadonlySet<StuffKey> = new Set(FREE_KEYS);
+const SUPPLY_RECIPES = new WeakMap<Pack, ReadonlyMap<StuffKey, readonly Recipe[]>>();
+
+/** The supply recipes of the pack (`Recipe.meta.supply`) by the free input each gives a line (`suppliedKey`), once per pack. */
+function supplyRecipes(pack: Pack): ReadonlyMap<StuffKey, readonly Recipe[]> {
+  let byKey = SUPPLY_RECIPES.get(pack);
+  if (byKey === undefined) {
+    const lists = new Map<StuffKey, Recipe[]>();
+    for (const r of pack.recipes) {
+      const key = suppliedKey(r, pack.fluidContainers);
+      if (key === undefined || !FREE.has(key)) continue;
+      const list = lists.get(key);
+      if (list === undefined) lists.set(key, [r]);
+      else list.push(r);
+    }
+    byKey = lists;
+    SUPPLY_RECIPES.set(pack, byKey);
+  }
+  return byKey;
+}
+
+/**
+ * The free inputs a running line makes itself (fix spec R2, architecture §11.26): in rate mode, each free key the group
+ * does not already supply (`settings.haveSupply`) that a supply recipe makes, directly or as the fluid of the cells it
+ * fills, and the group can run here (`acceptRecipe` in `env`). The leaf oracle then never buys them, so the line plans
+ * their generator. A Make N batch takes them free, and so does a tier with no supply machine (ULV).
+ */
+function suppliedFreeKeys(pack: Pack, settings: PlanSettings, env: PlanEnv): ReadonlySet<StuffKey> {
+  const supplied = new Set<StuffKey>();
+  if (settings.mode !== 'rate') return supplied;
+  const have = new Set(settings.haveSupply ?? []);
+  for (const [key, recipes] of supplyRecipes(pack)) {
+    if (!have.has(key) && recipes.some((r) => acceptRecipe(pack, r, env).ok)) supplied.add(key);
+  }
+  return supplied;
+}
 
 /**
  * The planner's environment for a project in a world: tier (`effectiveTier`); coil heat (the project's, else the
  * world's, else the default coil of the tier); the dimensions it reaches; what it can get there; the env candidate
- * recipes are judged in, with the multiblocks it can build; prices with the project's cost overrides; and the leaf
- * oracle over those (derived leaves at their plain price: `linePricing` in pricing.ts prices the ones a line buys).
+ * recipes are judged in, with the multiblocks it can build; prices with the project's cost overrides; the free inputs
+ * the line makes itself (`supplied`); and the leaf oracle over those (derived leaves at their plain price: `linePricing`
+ * in pricing.ts prices the ones a line buys).
  */
 export function planBasis(pack: Pack, settings: PlanSettings, ctx: PlanContext): PlanBasis {
   const tier = effectiveTier(settings, ctx);
@@ -143,6 +213,11 @@ export function planBasis(pack: Pack, settings: PlanSettings, ctx: PlanContext):
   // from free inputs alone (availability.ts).
   const env: PlanEnv = { ...open, multiblocks: avail.multiblocks, fromNothing: avail.fromNothing };
   const prices = makePrices(pack, settings.costOverrides);
-  const leaf = makeLeafOracle(pack, settings, avail, prices);
-  return { tier, coilHeat, reach, env, avail, prices, leaf };
+  const supplied = suppliedFreeKeys(pack, settings, env);
+  const leaf = makeLeafOracle(pack, settings, avail, prices, undefined, undefined, { supplied });
+  const basis: PlanBasis = {
+    tier, coilHeat, reach, env, avail, prices, leaf, supplied,
+    at: (other) => (other === tier ? basis : planBasis(pack, { ...settings, tier: other }, ctx)),
+  };
+  return basis;
 }

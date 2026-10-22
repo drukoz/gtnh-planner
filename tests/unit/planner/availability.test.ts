@@ -73,6 +73,26 @@ describe('computeAvailability', () => {
     expect(['log@0', 'plank@0', 'widget@0', 'gadget@0'].map((k) => a.classOf(k))).toEqual(['natural', 'derived', 'unavailable', 'unavailable']);
     expect(a.sources('widget@0')).toEqual([]);
   });
+  it('counts recipe layers from the seeds: the shallowest option of each consumed slot, the deepest slot (fix spec R6)', () => {
+    const p = packFromSpec({
+      items: [{ key: 'a@0', name: 'A Dust', gt: { prefix: 'dust', material: 'A' } }],
+      machines: [{ mteId: 1, name: 'M', maps: ['gt.recipe.mixer'], tier: 1 }],
+      recipes: [
+        { id: 'b', map: 'gt.recipe.mixer', in: [['a@0', 1]], out: [['b@0', 1]], eut: 2 },
+        { id: 'c', map: 'gt.recipe.mixer', in: [['b@0', 1]], out: [['c@0', 1]], eut: 2 },
+        // c or a, and b: 1 + max(min(2, 0), 1); the c the machine only holds does not count.
+        { id: 'd', map: 'gt.recipe.mixer', in: [{ any: [['c@0', 1], ['a@0', 1]] }, ['b@0', 1], { nc: 'c@0' }], out: [['d@0', 1]], eut: 2 },
+        // A loop: g from f or a, f from g. Going round it never changes how deep g is.
+        { id: 'g', map: 'gt.recipe.mixer', in: [{ any: [['f@0', 1], ['a@0', 1]] }], out: [['g@0', 1]], eut: 2 },
+        { id: 'f', map: 'gt.recipe.mixer', in: [['g@0', 1]], out: [['f@0', 1]], eut: 2 },
+        { id: 'h', map: 'gt.recipe.mixer', out: [['h@0', 1]], eut: 2 },   // consumes nothing: one layer
+      ],
+      worldgen: { veins: [{ name: 'ore.mix.a', dims: ['overworld'], materials: { primary: 'A', secondary: 'A', between: 'A', sporadic: 'A' },
+        weight: 1, minY: 0, maxY: 255, size: 1, density: 1, kind: 'vein' }] },
+    });
+    const a = computeAvailability(p, { tier: 1, reachable: new Set(['overworld']), lowGravity: false, coilHeat: 1801, excluded: new Set() });
+    expect(['a@0', 'fluid:water', 'b@0', 'c@0', 'd@0', 'g@0', 'f@0', 'h@0', 'nowhere@0'].map((k) => a.depth(k))).toEqual([0, 0, 1, 2, 2, 1, 2, 1, 0]);
+  });
   it('knows base and natural items', () => {
     expect(['t:iron_dust@0', 't:iron_plate@0', 'fluid:oil', 'fluid:molten.iron', 'minecraft:cobblestone@0'].map((k) => isBaseItem(pack, k)))
       .toEqual([true, false, true, false, true]);
@@ -94,6 +114,28 @@ describe('real-data rules (final review)', () => {
       { key: 'IC2:itemHarz@0', name: 'Sticky Resin', oreDict: ['slimeball'] }] });
     expect(['EMT:EMTItems@8', 'minecraft:slime_ball@0', 'bread@0', 'beef@0', 'card@0', 'log@0', 'IC2:itemHarz@0'].map((k) => isNatural(p, k)))
       .toEqual([false, true, false, true, false, true, true]);
+  });
+  it('counts an Ender Pearl and a Blaze Rod as mob drops where their mobs live', () => {
+    // Groups get them from Endermen in the overworld and Blazes in Nether fortresses. Both carry a GT material no vein yields,
+    // so availability had no source for them: on the 2.9 export nothing then made the MV and HV emitters (an Ender Pearl, an
+    // Eye of Ender), and no MV or HV laser engraver, circuit assembler or microwave could be built.
+    const p = packFromSpec({
+      items: [{ key: 'minecraft:ender_pearl@0', name: 'Ender Pearl', gt: { prefix: 'gem', material: 'EnderPearl' } },
+              { key: 'minecraft:blaze_rod@0', name: 'Blaze Rod', gt: { prefix: 'stick', material: 'Blaze', amount: 1_814_400 } }],
+      worldgen: { dimensions: [{ key: 'overworld', id: 0, name: 'Overworld', mod: 'minecraft', kind: 'dimension', defaultTier: 0 },
+                               { key: 'nether', id: -1, name: 'Nether', mod: 'minecraft', kind: 'dimension', defaultTier: 2 }] },
+    });
+    const at = (tier: number) => {
+      const r = reachableDims(p.worldgen, prog, [], tier);
+      return computeAvailability(p, { tier, reachable: r.keys, lowGravity: false, coilHeat: 1801, excluded: new Set() });
+    };
+    const lv = at(1);
+    expect(lv.classOf('minecraft:ender_pearl@0')).toBe('natural');
+    expect(lv.sources('minecraft:ender_pearl@0')).toEqual([{ kind: 'natural', dims: ['overworld'], detail: 'mob drop' }]);
+    expect(lv.classOf('minecraft:blaze_rod@0')).toBe('unavailable');   // the Nether is out of reach below MV here
+    const mv = at(2);
+    expect(mv.classOf('minecraft:blaze_rod@0')).toBe('natural');
+    expect(mv.sources('minecraft:blaze_rod@0')).toEqual([{ kind: 'natural', dims: ['nether'], detail: 'mob drop' }]);
   });
   it('keeps crafting a programmed circuit back into a circuit available even when the plan skips it', () => {
     // From LV the group has programmed circuits; the export shows no other way to the first Electronic Circuit.

@@ -19,7 +19,11 @@ describe('parts', () => {
     expect(resolveParts(emptyPack()).pump_cover).toMatchObject({ key: 'gregtech:gt.metaitem.01@32610', name: 'Electric Pump (LV)', found: false });
     expect(parts.item_filter_cover).toMatchObject({ key: 'gregtech:gt.metaitem.01@32270', name: 'Filtered Conveyor Cover (Export)' });
     expect(parts.eio_item_conduit.block).toEqual({ id: 'conduit:item', meta: 0 });
-    expect(Object.keys(PART_DEFS)).toHaveLength(16);
+    // plan 12 Task 6 adds an Auto Workbench's caps: the Item Broadcaster Chip, the Limited Item Filter and the Locking Card
+    expect(Object.keys(PART_DEFS)).toHaveLength(30);
+    expect([parts.chip_broadcaster, parts.eio_limited_filter, parts.ae2_locking_card].map((p) => [p.key, p.name, p.found])).toEqual([
+      ['ProjRed|Transportation:projectred.transportation.routingchip@5', 'Item Broadcaster Chip', true],
+      ['EnderIO:itemLimitedItemFilter@0', 'Limited Item Filter', true], ['appliedenergistics2:item.ItemMultiMaterial@65', 'Locking Card', true]]);
   });
 
   it('picks the smallest pump cover that carries the flow', () => {

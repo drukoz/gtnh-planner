@@ -2,7 +2,8 @@
 // join the `planFinish` hook uses (Task 12). The plan takes the layout's power fit, its grouped parts (broken down to
 // base materials by Plan 2's `expandBomLines`), less the structure casings the layout's hatches stand on, and its
 // pin-linked build steps in place of Plan 2's generic place, power and logistics steps. Generator suggestions are only
-// optional build-list lines: they never count towards the base-material totals. Pure: the inputs are not changed.
+// optional build-list lines: they never count towards the base-material totals. Each merged total keeps what every
+// build line needs of it (`neededFor`, architecture §11.36). Pure: the inputs are not changed.
 
 import type { StuffKey } from '../../shared/keys.ts';
 import type { Layout } from '../../shared/types/layout.ts';
@@ -22,8 +23,15 @@ export function isOptional(line: BomLine): boolean {
   return line.why.startsWith(OPTIONAL_PREFIX);
 }
 
-/** A line being merged: the distinct non-empty whys in the order first seen, the first `have`, children and group set. */
-interface Draft { key: StuffKey; amount: number; whys: string[]; have?: BomLine['have']; children?: BomLine[]; group?: BomLine['group'] }
+/**
+ * A line being merged: the distinct non-empty whys in the order first seen, the first `have`, children and group set,
+ * and what each build line needs of it (`BomLine.neededFor`, architecture §11.36) summed per key in the order first
+ * seen — null once a merged line has no `neededFor`, as the amounts would no longer add up to `amount`.
+ */
+interface Draft {
+  key: StuffKey; amount: number; whys: string[]; have?: BomLine['have']; children?: BomLine[]; group?: BomLine['group'];
+  neededFor: Map<StuffKey, number> | null;
+}
 
 function draftOf(line: BomLine): Draft {
   return {
@@ -31,6 +39,7 @@ function draftOf(line: BomLine): Draft {
     ...(line.have === undefined ? {} : { have: line.have }),
     ...(line.children === undefined ? {} : { children: line.children }),
     ...(line.group === undefined ? {} : { group: line.group }),
+    neededFor: line.neededFor === undefined ? null : new Map(),
   };
 }
 
@@ -40,6 +49,8 @@ function addTo(draft: Draft, line: BomLine): void {
   if (draft.have === undefined && line.have !== undefined) draft.have = line.have;
   if (draft.children === undefined && line.children !== undefined) draft.children = line.children;
   if (draft.group === undefined && line.group !== undefined) draft.group = line.group;
+  if (line.neededFor === undefined) draft.neededFor = null;
+  else if (draft.neededFor !== null) for (const n of line.neededFor) draft.neededFor.set(n.key, (draft.neededFor.get(n.key) ?? 0) + n.amount);
 }
 
 function lineOf(d: Draft): BomLine {
@@ -48,6 +59,7 @@ function lineOf(d: Draft): BomLine {
     ...(d.have === undefined ? {} : { have: d.have }),
     ...(d.children === undefined ? {} : { children: d.children.map((c) => ({ ...c })) }),
     ...(d.group === undefined ? {} : { group: d.group }),
+    ...(d.neededFor === null ? {} : { neededFor: [...d.neededFor].map(([key, amount]) => ({ key, amount })) }),
   };
 }
 
@@ -55,7 +67,9 @@ function lineOf(d: Draft): BomLine {
 
 /**
  * One line per key over `a` then `b`: amounts summed, the distinct non-empty whys joined with "; " in the order first
- * seen, and the first `have`, `children` and group set (architecture §11.13); sorted by key.
+ * seen, and the first `have`, `children` and group set (architecture §11.13); sorted by key. A total of base materials
+ * keeps `neededFor` (architecture §11.36): the build lines that need it, by key in the order first seen, each one's
+ * amounts summed, so they still add up to the merged amount; it is left out when one of the merged lines has none.
  */
 export function mergeBom(a: readonly BomLine[], b: readonly BomLine[]): BomLine[] {
   const drafts = new Map<StuffKey, Draft>();
@@ -149,10 +163,12 @@ function keysOf(lines: readonly BomLine[]): StuffKey[] {
  * list — `expanded` is `expandBomLines` of the layout's required (non-optional) parts, or null to take those parts as
  * they are — with the replaced casings taken off and the optional generator lines appended, the base materials of the
  * expanded parts in `buildTotals`, the layout's build steps, its warnings not already there (code + text) and a name
- * (`nameOf`) for every key it adds. A plan whose status is not `ok` is returned unchanged.
+ * (`nameOf`) for every key it adds; and with `layoutCost` (plan 12, architecture §11 entry 39: the raw material of the
+ * layout's parts other than its hatches) a plan that has a `cost` gets it as `cost.layout`. A plan whose status is not
+ * `ok` is returned unchanged.
  */
 export function mergeLayoutIntoPlan(plan: Plan, layout: Layout, expanded: { lines: BomLine[]; totals: BomLine[] } | null,
-  nameOf: (k: StuffKey) => string): Plan {
+  nameOf: (k: StuffKey) => string, layoutCost?: number): Plan {
   if ((plan.status ?? 'ok') !== 'ok') return plan;
   const required = layout.bom.filter((l) => !isOptional(l));
   const optional = layout.bom.filter(isOptional);
@@ -169,5 +185,6 @@ export function mergeLayoutIntoPlan(plan: Plan, layout: Layout, expanded: { line
   for (const key of [...keysOf(buildList), ...keysOf(buildTotals)]) if (!Object.hasOwn(names, key)) names[key] = nameOf(key);
   return {
     ...plan, power: layout.power ?? plan.power, buildList, buildTotals, buildSteps: mergeBuildSteps(plan.buildSteps, layout.buildSteps), warnings, names,
+    ...(plan.cost === undefined || layoutCost === undefined ? {} : { cost: { ...plan.cost, layout: layoutCost } }),
   };
 }

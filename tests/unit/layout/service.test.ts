@@ -77,6 +77,42 @@ describe('layout service', () => {
     expect(done.buildTotals).toEqual(totals);
   });
 
+  it('keeps what each build line needs of every total it merges (architecture §11.36)', async () => {
+    const plan = { ...twoStep(), buildTotals: [
+      { key: 't:iron@0', amount: 6, why: 'for Basic Macerator, Basic Assembler', neededFor: [{ key: 'gregtech:gt.blockmachines@2001', amount: 4 }, { key: 'gregtech:gt.blockmachines@2002', amount: 2 }] },
+      { key: 't:tin@0', amount: 1, why: 'for Basic Assembler', neededFor: [{ key: 'gregtech:gt.blockmachines@2002', amount: 1 }] }] };
+    const svc = createLayoutService(deps({
+      plan: async () => plan,
+      expand: async (_pack, lines) => ({ lines, totals: [
+        { key: 't:copper@0', amount: 2, why: 'for 1x Copper Cable', neededFor: [{ key: 'gregtech:gt.blockmachines@1366', amount: 2 }] },
+        { key: 't:tin@0', amount: 5, why: 'for 2x Tin Cable, 1x Tin Cable', neededFor: [{ key: 'gregtech:gt.blockmachines@1247', amount: 3 }, { key: 'gregtech:gt.blockmachines@1246', amount: 2 }] }] }),
+    }));
+    const done = await svc.finishPlan(plan, makeProject());
+    expect(done.buildTotals).toEqual([
+      { key: 't:copper@0', amount: 2, why: 'for 1x Copper Cable', neededFor: [{ key: 'gregtech:gt.blockmachines@1366', amount: 2 }] },
+      { key: 't:iron@0', amount: 6, why: 'for Basic Macerator, Basic Assembler', neededFor: [{ key: 'gregtech:gt.blockmachines@2001', amount: 4 }, { key: 'gregtech:gt.blockmachines@2002', amount: 2 }] },
+      { key: 't:tin@0', amount: 6, why: 'for Basic Assembler; for 2x Tin Cable, 1x Tin Cable', neededFor: [
+        { key: 'gregtech:gt.blockmachines@2002', amount: 1 }, { key: 'gregtech:gt.blockmachines@1247', amount: 3 }, { key: 'gregtech:gt.blockmachines@1246', amount: 2 }] }]);
+    for (const total of done.buildTotals!) expect(total.neededFor!.reduce((sum, n) => sum + n.amount, 0)).toBe(total.amount);
+  });
+
+  it('prices the layout parts of a finished plan', async () => {
+    // plan 12 Task 6: `cost.layout` is the layout's required parts other than its hatches (each new multiblock's build
+    // already holds its hatch set less the casings it stands on); without the dep a finished plan gets none
+    const recorded: string[][] = [];
+    const plan = { ...makePlan([{ id: 's1', mteId: IDS.MACERATOR, count: 2 }, { id: 'e', mteId: IDS.EBF, count: 1, tier: 2, euPerTick: 120,
+      inputs: [['t:dust@0', 1]], outputs: [['t:ingot@0', 1]] }]), cost: { runPerHour: 1, build: 10, horizonHours: 24 } };
+    const svc = createLayoutService(deps({ plan: async () => plan, layoutCost: async (_pack, lines) => { recorded.push(lines.map((l) => l.key)); return 7; } }));
+    const done = await svc.finishPlan(plan, makeProject());
+    expect(done.cost).toEqual({ runPerHour: 1, build: 10, horizonHours: 24, layout: 7 });
+    const layout = await svc.layoutFor(makeProject());
+    const hatches = layout.bom.filter((l) => l.group === 'machines' && l.why.includes('hatches')).map((l) => l.key);
+    expect(hatches.length).toBeGreaterThan(0);
+    expect(recorded).toEqual([layout.bom.filter((l) => !l.why.startsWith('optional:') && !hatches.includes(l.key)).map((l) => l.key)]);
+    const unpriced = await createLayoutService(deps({ plan: async () => plan })).finishPlan(plan, makeProject());
+    expect(unpriced.cost).toEqual({ runPerHour: 1, build: 10, horizonHours: 24 });
+  });
+
   it('does not keep a failed parts breakdown', async () => {
     let fail = true;
     const svc = createLayoutService(deps({ expand: async (_pack, lines) => { if (fail) throw new Error('no prices'); return { lines, totals: [] }; } }));
@@ -91,8 +127,11 @@ describe('layout service', () => {
     const svc = createLayoutService(deps({
       scan: async () => null, layout: async (...args) => { reads.push(args[4]?.readArea !== undefined); return layoutLine(...args); },
     }));
-    expect(await svc.layoutFor(makeProject())).toMatchObject({ status: 'no-world', warnings: [{ code: 'no_base' }] });
-    expect(await svc.layoutFor(makeProject({ scanId: null, baseId: null }))).toMatchObject({ status: 'no-world', warnings: [{ code: 'no_scan' }] });
+    // the warning that says what to pick comes first; the line's own wiring warnings follow it
+    const noBase = await svc.layoutFor(makeProject());
+    expect([noBase.status, noBase.warnings[0]?.code]).toEqual(['no-world', 'no_base']);
+    const noScan = await svc.layoutFor(makeProject({ scanId: null, baseId: null }));
+    expect([noScan.status, noScan.warnings[0]?.code]).toEqual(['no-world', 'no_scan']);
     expect(reads).toEqual([true, false]);
   });
 });

@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { applyOp, defaultSettings, normalizeSettings, validateOp } from '../../../src/shared/project/apply-op.ts';
+import {
+  applyOp, defaultSettings, MAX_BUILD_HORIZON_HOURS, MAX_OWNED_MANUAL_COUNT, MAX_OWNED_MANUAL_ENTRIES, MAX_STEP_CHARGE, normalizeSettings,
+  SETTINGS_VERSION, settingsUpgrade, validateOp,
+} from '../../../src/shared/project/apply-op.ts';
+import { DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_STEP_CHARGE, NETWORKED_LOGISTICS, STEP_CHARGE_BEFORE_V3 } from '../../../src/shared/types/plan.ts';
 import type { Project } from '../../../src/shared/types/project.ts';
 
 const AT = '2026-10-17T12:00:00.000Z';
@@ -54,10 +58,18 @@ describe('applyOp', () => {
 describe('defaultSettings / normalizeSettings', () => {
   it('has the decided defaults', () => {
     const s = defaultSettings();
-    expect(s).toMatchObject({ target: null, mode: 'rate', amount: 1, per: 'min', tier: null, routeDerived: false,
-      logistics: 'direct', coilHeat: null, automateCrafting: false, dims: { policy: 'progression', overrides: {} } });
+    expect(s).toMatchObject({ target: null, mode: 'rate', amount: 1, per: 'min', tier: null, routeDerived: true,
+      logistics: 'direct', coilHeat: null, automateCrafting: true, dims: { policy: 'progression', overrides: {} }, settingsVersion: 3,
+      stepCharge: 0.5, reuseOwned: true });
     expect(s.excludedCategories).toEqual(['recycling', 'massfab', 'replicator', 'scrap', 'lava-centrifuge', 'programmed-circuit-conversion']);
     expect(s.declineReuse).toEqual([]);
+    expect(s.ownedManual).toEqual([]);
+    expect(SETTINGS_VERSION).toBe(3);
+    // "Fewest machines", the user's answer of 2026-10-20 (plan 12 fix wave 2): each new machine block costs half the least
+    // raw material over the horizon (with build cost ignored, each step must save half of it); at most 50 %.
+    expect(DEFAULT_STEP_CHARGE).toBe(0.5);
+    expect(STEP_CHARGE_BEFORE_V3).toBe(0.02);
+    expect(MAX_STEP_CHARGE).toBe(0.5);
   });
   it('fills fields missing from an older stored project', () => {
     const s = normalizeSettings({ target: 'fluid:steam', amount: 5 } as never);
@@ -65,6 +77,49 @@ describe('defaultSettings / normalizeSettings', () => {
     expect(s.stopItems).toEqual([]);
     expect(s.declineReuse).toEqual([]);
     expect(s.dims).toEqual({ policy: 'progression', overrides: {} });
+    // Ruling P10: a project stored before plan 09 reads as settings version 1 (so the server switches it once), and
+    // normalizing alone keeps the routeDerived it stored.
+    expect(s.settingsVersion).toBe(1);
+    expect(normalizeSettings({ routeDerived: false } as never)).toMatchObject({ routeDerived: false, settingsVersion: 1 });
+    expect(normalizeSettings({ routeDerived: false, settingsVersion: 2 } as never)).toMatchObject({ routeDerived: false, settingsVersion: 2 });
+  });
+  it('fills the new settings of an old project', () => {
+    // A project stored before plan 09: no stepCharge, haveSupply, reuseOwned, ownedManual or settingsVersion, supporting
+    // lines off. Normalizing fills the new defaults and keeps its own choice (the server switches routeDerived once, P10).
+    const s = normalizeSettings({ target: 't:x@0', routeDerived: false } as never);
+    expect(s).toMatchObject({ stepCharge: 0.5, haveSupply: [], optionChoice: {}, reuseOwned: true, ownedManual: [], routeDerived: false, settingsVersion: 1 });
+    expect(normalizeSettings({ stepCharge: 0.15 } as never).stepCharge).toBe(0.15);
+  });
+  it('brings older settings to this version: supporting lines from before 2, Fewest machines from the old default before 3', () => {
+    // Plan 09's switch (ruling P10) and plan 12 fix wave 2's (the user's answer of 2026-10-20): a stored step charge of
+    // exactly the old default 0.02 becomes 0.5, any other stored value stays; settings of this version are never touched.
+    const at = (s: object) => settingsUpgrade(normalizeSettings(s as never));
+    expect(at({ routeDerived: false })).toEqual({ routeDerived: true, settingsVersion: 3 });   // no stepCharge stored: 0.5 already
+    expect(at({ routeDerived: false, stepCharge: 0.02 })).toEqual({ routeDerived: true, stepCharge: 0.5, settingsVersion: 3 });
+    expect(at({ routeDerived: false, settingsVersion: 2, stepCharge: 0.02 })).toEqual({ stepCharge: 0.5, settingsVersion: 3 });
+    for (const stepCharge of [0, 0.05, 0.15, 0.5]) expect(at({ settingsVersion: 2, stepCharge })).toEqual({ settingsVersion: 3 });
+    expect(at({ settingsVersion: 3, stepCharge: 0.02 })).toBeNull();
+    expect(settingsUpgrade(defaultSettings())).toBeNull();
+  });
+});
+
+// Pinned ingredient options (plan 09 Task 5; fix spec R9, §3).
+describe('optionChoice', () => {
+  const optionOp = (optionChoice: unknown) => ({ op: 'settings', patch: { optionChoice } });
+  it('is empty by default and for an older stored project', () => {
+    expect(defaultSettings().optionChoice).toEqual({});
+    expect(normalizeSettings({ target: 't:x@0' } as never).optionChoice).toEqual({});
+    expect(normalizeSettings({ optionChoice: { 'r1#100': 'fluid:molten.tin' } } as never).optionChoice).toEqual({ 'r1#100': 'fluid:molten.tin' });
+  });
+  it('takes <recipe id>#<slot> keys and option keys of 1 to 300 characters', () => {
+    expect(validateOp(optionOp({ 'r1#100': 'fluid:molten.tin' }))).toBeNull();
+    expect(validateOp(optionOp({}))).toBeNull();
+    expect(validateOp(optionOp({ [`${'r'.repeat(100)}#9999`]: 'x'.repeat(300) }))).toBeNull();
+    for (const key of ['nohash', 'r#x', '#1', 'r#12345', `${'r'.repeat(101)}#1`, 'a#b#1']) {
+      expect(validateOp(optionOp({ [key]: 'fluid:molten.tin' })), key).toEqual(expect.any(String));
+    }
+    for (const value of ['x'.repeat(301), '', 5, null]) expect(validateOp(optionOp({ 'r1#100': value })), String(value)).toEqual(expect.any(String));
+    for (const v of [null, 'r1#100', ['r1#100']]) expect(validateOp(optionOp(v)), JSON.stringify(v)).toEqual(expect.any(String));
   });
 });
 
@@ -80,6 +135,17 @@ describe('validateOp', () => {
     [{ op: 'settings', patch: { bogus: 1 } }],
     [{ op: 'settings', patch: { declineReuse: ['121'] } }],
     [{ op: 'settings', patch: { declineReuse: [1.5] } }],
+    [{ op: 'settings', patch: { settingsVersion: 1 } }],
+    [{ op: 'settings', patch: { settingsVersion: 1.5 } }],
+    [{ op: 'settings', patch: { settingsVersion: 'x' } }],
+    [{ op: 'settings', patch: { stepCharge: 0.6 } }],
+    [{ op: 'settings', patch: { stepCharge: -0.1 } }],
+    [{ op: 'settings', patch: { stepCharge: 'x' } }],
+    [{ op: 'settings', patch: { stepCharge: Number.NaN } }],
+    [{ op: 'settings', patch: { reuseOwned: 'x' } }],
+    [{ op: 'settings', patch: { ownedManual: Array.from({ length: 201 }, (_, i) => ({ mteId: i, count: 1 })) } }],
+    [{ op: 'settings', patch: { ownedManual: [{ mteId: 121, count: 0 }] } }],
+    [{ op: 'settings', patch: { ownedManual: [{ mteId: -1, count: 1 }] } }],
     [{ op: 'mark', row: 'foo', on: true }],
     [{ op: 'addNote', note: { id: 'n', text: 'x'.repeat(4001) } }],
     [{ op: 'rename', name: '   ' }],
@@ -90,7 +156,10 @@ describe('validateOp', () => {
   it('accepts a normal settings patch and a tick', () => {
     expect(validateOp({ op: 'settings', patch: { mode: 'makeN', amount: 64, tier: 2 } })).toBeNull();
     expect(validateOp({ op: 'settings', patch: { declineReuse: [121, 1000] } })).toBeNull();
+    expect(validateOp({ op: 'settings', patch: { routeDerived: true, settingsVersion: 3 } })).toBeNull();
+    expect(validateOp({ op: 'settings', patch: { settingsVersion: 2 } })).toEqual('settingsVersion must be a whole number of at least 3');
     expect(validateOp({ op: 'mark', row: 'build:gregtech:gt.metaitem.01@2032', on: true })).toBeNull();
+    for (const stepCharge of [0, 0.02, 0.15, 0.5]) expect(validateOp({ op: 'settings', patch: { stepCharge } })).toBeNull();
   });
 });
 
@@ -125,7 +194,8 @@ describe('applyOp (more)', () => {
 describe('normalizeSettings (more)', () => {
   it('fills a partial dims and an absent settings object', () => {
     expect(normalizeSettings({ dims: { policy: 'visited' } } as never).dims).toEqual({ policy: 'visited', overrides: {} });
-    expect(normalizeSettings(undefined)).toEqual(defaultSettings());
+    // A missing settings object is an old project's: version 1 (ruling P10), every other field the default.
+    expect(normalizeSettings(undefined)).toEqual({ ...defaultSettings(), settingsVersion: 1 });
   });
 });
 
@@ -167,6 +237,21 @@ describe('validateOp (more)', () => {
   });
 });
 
+// Free inputs the group already supplies (plan 09 Task 3; fix spec R2, §3).
+describe('haveSupply', () => {
+  it('is an empty list by default and for an older stored project', () => {
+    expect(defaultSettings().haveSupply).toEqual([]);
+    expect(normalizeSettings({ target: 't:x@0' } as never).haveSupply).toEqual([]);
+    expect(normalizeSettings({ haveSupply: ['fluid:water'] } as never).haveSupply).toEqual(['fluid:water']);
+  });
+  it('takes a list of keys', () => {
+    expect(validateOp({ op: 'settings', patch: { haveSupply: ['minecraft:cobblestone@0', 'fluid:water'] } })).toBeNull();
+    expect(validateOp({ op: 'settings', patch: { haveSupply: [] } })).toBeNull();
+    expect(validateOp({ op: 'settings', patch: { haveSupply: 'x' } })).toEqual(expect.any(String));
+    expect(validateOp({ op: 'settings', patch: { haveSupply: [1] } })).toEqual(expect.any(String));
+  });
+});
+
 // Materials to avoid (plan 2026-10-18-08, rulings R1 and R3).
 describe('avoid', () => {
   const avoidOp = (avoid: unknown) => ({ op: 'settings', patch: { avoid } });
@@ -188,5 +273,108 @@ describe('avoid', () => {
     expect(q.settings.avoid).toEqual(['Tin', 'Silver', 't:x@0']);
     expect(applyOp(q, { op: 'settings', patch: { amount: 2 } }, 'Ann', AT).settings.avoid).toEqual(['Tin', 'Silver', 't:x@0']);
     expect(normalizeSettings({ avoid: ['Gold', 'Gold', 'Tin'] } as never).avoid).toEqual(['Gold', 'Tin']);
+  });
+});
+
+// "Reuse machines we have" and the "Machines we have" list (plan 09 Task 9; architecture §11.29, ruling P22).
+describe('reuseOwned and ownedManual', () => {
+  const ownedOp = (ownedManual: unknown) => ({ op: 'settings', patch: { ownedManual } });
+  const entries = (n: number) => Array.from({ length: n }, (_, i) => ({ mteId: i, count: 1 }));
+  it('reuses owned machines and lists none by default and for an older stored project', () => {
+    expect(defaultSettings()).toMatchObject({ reuseOwned: true, ownedManual: [] });
+    expect(normalizeSettings({ target: 't:x@0' } as never)).toMatchObject({ reuseOwned: true, ownedManual: [] });
+    expect(normalizeSettings({ reuseOwned: false, ownedManual: [{ mteId: 121, count: 2 }] } as never))
+      .toMatchObject({ reuseOwned: false, ownedManual: [{ mteId: 121, count: 2 }] });
+  });
+  it('takes the switch as true or false', () => {
+    for (const reuseOwned of [true, false]) expect(validateOp({ op: 'settings', patch: { reuseOwned } })).toBeNull();
+    for (const reuseOwned of ['x', 1, null]) expect(validateOp({ op: 'settings', patch: { reuseOwned } }), String(reuseOwned)).toEqual(expect.any(String));
+  });
+  it('takes at most 200 entries, each a machine id of 0 or more and a whole count from 1 to 10,000', () => {
+    expect([MAX_OWNED_MANUAL_ENTRIES, MAX_OWNED_MANUAL_COUNT]).toEqual([200, 10_000]);
+    expect(validateOp(ownedOp([]))).toBeNull();
+    expect(validateOp(ownedOp(entries(200)))).toBeNull();
+    expect(validateOp(ownedOp([{ mteId: 0, count: 10_000 }, { mteId: 15512, count: 1 }]))).toBeNull();
+    expect(validateOp(ownedOp(entries(201)))).toEqual(expect.any(String));
+    expect(validateOp(ownedOp(new Array(201).fill({ mteId: 121, count: 1 })))).toEqual(expect.any(String));   // counted before repeats merge
+    for (const entry of [{ mteId: 121, count: 0 }, { mteId: 121, count: -1 }, { mteId: 121, count: 1.5 }, { mteId: 121, count: 10_001 },
+      { mteId: 121, count: '2' }, { mteId: -1, count: 1 }, { mteId: 1.5, count: 1 }, { mteId: '121', count: 1 }, { mteId: 121 }, { count: 1 }, null, 121]) {
+      expect(validateOp(ownedOp([entry])), JSON.stringify(entry)).toEqual(expect.any(String));
+    }
+    for (const list of [null, 'x', { mteId: 121, count: 1 }]) expect(validateOp(ownedOp(list)), JSON.stringify(list)).toEqual(expect.any(String));
+  });
+  it('sums the counts of a repeated machine where it first appears, keeping only id and count', () => {
+    const q = applyOp(project(), ownedOp([{ mteId: 121, count: 2 }, { mteId: 101, count: 1 }, { mteId: 121, count: 3 }]) as never, 'Ann', AT);
+    expect(q.settings.ownedManual).toEqual([{ mteId: 121, count: 5 }, { mteId: 101, count: 1 }]);
+    expect(applyOp(q, { op: 'settings', patch: { amount: 2 } }, 'Ann', AT).settings.ownedManual).toEqual([{ mteId: 121, count: 5 }, { mteId: 101, count: 1 }]);
+    expect(normalizeSettings({ ownedManual: [{ mteId: 7, count: 1 }, { mteId: 7, count: 1 }] } as never).ownedManual).toEqual([{ mteId: 7, count: 2 }]);
+    expect(applyOp(project(), ownedOp([{ mteId: 121, count: 1, note: 'x' }]) as never, 'Ann', AT).settings.ownedManual).toEqual([{ mteId: 121, count: 1 }]);
+  });
+  it('never sums a machine above 10,000 (ruling P22)', () => {
+    const q = applyOp(project(), ownedOp([{ mteId: 121, count: 10_000 }, { mteId: 121, count: 1 }]) as never, 'Ann', AT);
+    expect(q.settings.ownedManual).toEqual([{ mteId: 121, count: 10_000 }]);
+    expect(normalizeSettings({ ownedManual: [{ mteId: 121, count: 6_000 }, { mteId: 121, count: 6_000 }] } as never).ownedManual).toEqual([{ mteId: 121, count: 10_000 }]);
+  });
+});
+
+// "Count build cost against" (plan 12 Task 1; architecture §11.28, §11.39): the hours of running the build cost of new
+// machines is weighed against, null to ignore it.
+describe('buildHorizonHours', () => {
+  const horizonOp = (buildHorizonHours: unknown) => ({ op: 'settings', patch: { buildHorizonHours } });
+  it('counts the build cost over 24 hours by default', () => {
+    expect(DEFAULT_BUILD_HORIZON_HOURS).toBe(24);
+    expect(defaultSettings().buildHorizonHours).toBe(24);
+  });
+  it('takes empty or a number of hours above 0 and at most 8760', () => {
+    expect(MAX_BUILD_HORIZON_HOURS).toBe(8760);
+    for (const v of [null, 1, 0.5, 168, 8760]) expect(validateOp(horizonOp(v)), `${typeof v} ${String(v)}`).toBeNull();
+    // Number.POSITIVE_INFINITY stands for 1e309, which JSON parsing turns into Infinity.
+    for (const v of [0, -1, 8761, '24', true, Number.POSITIVE_INFINITY]) {
+      expect(validateOp(horizonOp(v)), `${typeof v} ${String(v)}`).toEqual(expect.any(String));
+    }
+    expect(validateOp(horizonOp(0))).toBe('buildHorizonHours must be empty or above 0 and at most 8760');
+  });
+  it('fills the build horizon of an old project', () => {
+    expect(normalizeSettings({ target: 't:x@0' } as never).buildHorizonHours).toBe(24);
+    expect(normalizeSettings({ buildHorizonHours: null } as never).buildHorizonHours).toBeNull();
+    expect(normalizeSettings({ buildHorizonHours: 8 } as never).buildHorizonHours).toBe(8);
+  });
+});
+
+// "Build machines at" and "Multiblocks" (the user's ruling 224 of 2026-10-20, plan 12 Task 7): the tier every step's new
+// machines are built at (null: the cheapest), and whether a new multiblock is built only where nothing else can do it.
+describe('buildTier and multiblocks', () => {
+  const op = (patch: Record<string, unknown>) => ({ op: 'settings', patch });
+  it('builds at the cheapest tier and uses multiblocks where cheaper by default', () => {
+    expect(defaultSettings()).toMatchObject({ buildTier: null, multiblocks: 'allow' });
+    expect(normalizeSettings({ target: 't:x@0' } as never)).toMatchObject({ buildTier: null, multiblocks: 'allow' });
+    expect(normalizeSettings({ buildTier: 2, multiblocks: 'only-required' } as never)).toMatchObject({ buildTier: 2, multiblocks: 'only-required' });
+  });
+  it('takes the cheapest tier or a whole tier from LV, and the two multiblock choices', () => {
+    for (const v of [null, 1, 2, 14]) expect(validateOp(op({ buildTier: v })), String(v)).toBeNull();
+    for (const v of [0, 15, 1.5, -1, '2', true]) expect(validateOp(op({ buildTier: v })), String(v)).toEqual(expect.any(String));
+    expect(validateOp(op({ buildTier: 0 }))).toBe('buildTier must be empty or a whole number from 1 to 14');
+    for (const v of ['allow', 'only-required']) expect(validateOp(op({ multiblocks: v }))).toBeNull();
+    for (const v of ['never', null, true]) expect(validateOp(op({ multiblocks: v })), String(v)).toEqual(expect.any(String));
+  });
+});
+
+// The user's ruling 180 (2026-10-20): "crafting steps are automatic, should not be a checkbox" — whatever a stored project
+// holds, it reads as automated; the field stays for old data and an explicit false still validates (and plans by hand).
+describe('automateCrafting', () => {
+  it('reads every project as automated', () => {
+    expect(normalizeSettings({ automateCrafting: false } as never).automateCrafting).toBe(true);
+    expect(normalizeSettings({ target: 't:x@0' } as never).automateCrafting).toBe(true);
+    expect(normalizeSettings(undefined).automateCrafting).toBe(true);
+    expect(validateOp({ op: 'settings', patch: { automateCrafting: false } })).toBeNull();
+  });
+});
+
+describe('NETWORKED_LOGISTICS', () => {
+  it('lists the networked logistics modes', () => {
+    expect([...NETWORKED_LOGISTICS].sort()).toEqual(['ae2', 'routed']);
+    expect(NETWORKED_LOGISTICS.has('direct')).toBe(false);
+    // EnderIO plans like machine to machine, each step on its own machines (controller ruling).
+    expect(NETWORKED_LOGISTICS.has('enderio')).toBe(false);
   });
 });

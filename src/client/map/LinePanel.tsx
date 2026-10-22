@@ -37,12 +37,33 @@ const SUBHEAD_STYLE = { margin: '4px 0 0', fontSize: '0.85rem' } as const;
 const DOT_STYLE = { display: 'inline-block', width: 10, height: 10, borderRadius: '50%', marginRight: 6, verticalAlign: 'middle' } as const;
 
 /**
- * Spec §3.7's line summary: machine blocks of the line, owned machines the plan's machine steps reuse, the line's world
- * size as W×L×H (x, z, y), the plan's peak (the layout's while there is no plan) and the layout's power fit.
+ * The owned machines the plan's machine steps reuse, each once (plan 12): the distinct (type, unit) pairs of the steps'
+ * `reused.units` and of their `reused.others`, so one machine serving three steps is one, plus the `owned` count of each
+ * step that does not say which units it runs on (a plan from before plan 12).
+ */
+function reusedMachines(plan: Plan | null): number {
+  const units = new Set<string>();
+  let unnamed = 0;
+  for (const s of plan?.steps ?? []) {
+    if (s.handCraft) continue;
+    if (s.reused?.units === undefined) unnamed += s.owned;
+    else for (const u of s.reused.units) units.add(`${s.machine.mteId}:${u}`);
+    for (const o of s.reused?.others ?? []) {
+      if (o.units === undefined) unnamed += o.count;
+      else for (const u of o.units) units.add(`${o.mteId}:${u}`);
+    }
+  }
+  return units.size + unnamed;
+}
+
+/**
+ * Spec §3.7's line summary: machine blocks of the line (a machine shared by several steps is one block), owned machines
+ * the plan's machine steps reuse (each once: `reusedMachines`), the line's world size as W×L×H (x, z, y), the plan's peak
+ * (the layout's while there is no plan) and the layout's power fit.
  */
 export function lineSummary(layout: Layout, plan: Plan | null): LineSummary {
   const newMachines = layout.blocks.filter((b) => b.role === 'machine').length;
-  const reused = (plan?.steps ?? []).reduce((sum, s) => (s.handCraft ? sum : sum + s.owned), 0);
+  const reused = reusedMachines(plan);
   const [w, h, l] = layout.size;
   const peakEUt = plan?.power.peakEUt ?? layout.power?.peakEUt;
   const fitsClass = layout.power?.fits ?? 'unknown';

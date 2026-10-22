@@ -14,7 +14,9 @@ test('a planned line renders as a flow diagram and a materials list', async ({ p
   await expect(page.getByText('Swap recipe')).toBeVisible();
   await expect(page.getByText('0 overclocks → 16 EU/t × 200 t')).toBeVisible();
   await page.getByRole('tab', { name: 'Materials & steps' }).click();
-  await expect(page.locator('[data-row="run:t:iron_ingot@0"]')).toContainText('1,800/h');
+  // At the default "Fewest machines" (each new machine block costs half a day's least raw material, plan 12 fix wave 2)
+  // the plates come from the automated crafting table, 2 ingots each, rather than from 3 new Bending Machines.
+  await expect(page.locator('[data-row="run:t:iron_ingot@0"]')).toContainText('3,600/h');
   await page.evaluate(() => { location.hash = '#notes'; });                           // a hash set from outside the tab bar (Plan 5's pin links)
   await expect(page.getByRole('tab', { name: 'Notes' })).toHaveAttribute('aria-selected', 'true');
 });

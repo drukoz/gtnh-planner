@@ -14,17 +14,28 @@ export interface ApiError { error: string; message: string }
 
 /** `GET /api/pack`: §7's fields plus the settings panel's checklists (§11.6). */
 export interface PackInfo {
-  manifest: PackManifest; mapCount: number; recipeCount: number; itemCount: number;
+  manifest: PackManifest; mapCount: number; recipeCount: number; itemCount: number /* the item table's, without crop items */;
   dimensions: DimensionInfo[]; capabilities: Capability[]; exclusionRules: string[];
   // optional addition
   /** The material names an avoid entry can be, with their display names, sorted by display name (§11.25). */
   materials?: Array<{ name: string; label: string }>;
+  // optional addition
+  /**
+   * The machines the "Machines we have" list can name (plan 09 ruling P21): those a plan can put on a step (a singleblock
+   * or a multiblock running a recipe map), sorted by name, then tier, then mteId. `tier` is absent for a multiblock,
+   * which has none of its own (it runs at its energy hatch's).
+   */
+  machines?: Array<{ mteId: number; name: string; tier?: number }>;
 }
 
 /** One recipe as the item browser shows it; an ingredient with alternatives shows its first option. */
 export interface RecipeSummary {
   id: string; source: RecipeSource; maps: string[]; machineName: string; tier: number; euPerTick: number; durationTicks: number;
-  inputs: Array<{ key: StuffKey; name: string; amount: number; consumed: boolean }>;
+  inputs: Array<{
+    key: StuffKey; name: string; amount: number; consumed: boolean;
+    // optional addition (plan 09 controller rulings): every option of an ore-dictionary slot, the first one included
+    options?: Array<{ key: StuffKey; name: string; amount: number }>;
+  }>;
   outputs: Array<{ key: StuffKey; name: string; amount: number; chance: number }>;
   /** From `flags.fake`: display only, the machine runs its own code. */
   fake?: boolean;
@@ -66,3 +77,11 @@ export const ASSET_BLOCKS_MAX = 500;
 export interface DeletedProjectSummary { id: string; name: string; rev: number; target: StuffKey | null; updatedAt: string; deletedAt: string; deletedBy: string }
 /** SSE `deleted` (§11.24): the last event of every stream of a project someone deleted; the stream then ends. */
 export interface DeletedEvent { id: string; by: string; at: string }
+
+// --- pack names (Plan 16; architecture §11.43(f)) ---
+
+/**
+ * `POST /api/pack/names` → `Array<string | null>` in request order: the pack's name of each item or fluid, null for a
+ * key the pack does not hold; at most `ASSET_KEYS_MAX` keys of at most 300 characters each.
+ */
+export interface PackNamesRequest { keys: StuffKey[] }

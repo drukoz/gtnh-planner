@@ -33,10 +33,31 @@ describe('mergeLayoutIntoPlan', () => {
     expect(mergeBuildSteps(steps, [])).toEqual(steps);
   });
 
+  it('carries the layout parts into the plan cost', () => {
+    // plan 12 Task 6: the layout's parts other than its hatches, priced by the layout service, beside the machines' build
+    const plan = { ...makePlan([{ id: 's1', mteId: IDS.MACERATOR, count: 2 }]), cost: { runPerHour: 1, build: 10, horizonHours: 24 } };
+    expect(mergeLayoutIntoPlan(plan, layout(), null, (k) => k, 7).cost).toEqual({ runPerHour: 1, build: 10, horizonHours: 24, layout: 7 });
+    expect(mergeLayoutIntoPlan(plan, layout(), null, (k) => k).cost).toEqual({ runPerHour: 1, build: 10, horizonHours: 24 });
+    const costless = makePlan([{ id: 's1', mteId: IDS.MACERATOR, count: 2 }]);
+    expect(mergeLayoutIntoPlan(costless, layout(), null, (k) => k, 7).cost).toBeUndefined();
+  });
+
   it('keeps each line group when merging, taking the first one set', () => {
     expect(mergeBom([{ key: 'k', amount: 1, why: 'a' }, { key: 'm', amount: 1, why: 'm', group: 'machines' }],
       [{ key: 'k', amount: 2, why: 'b', group: 'logistics' }, { key: 'm', amount: 1, why: 'n', group: 'power' }])).toEqual([
       { key: 'k', amount: 3, why: 'a; b', group: 'logistics' }, { key: 'm', amount: 2, why: 'm; n', group: 'machines' }]);
+  });
+
+  it('keeps what each build line needs of a total, summed per line in the order first seen (architecture §11.36)', () => {
+    const merged = mergeBom(
+      [{ key: 't:tin@0', amount: 6, why: 'for Basic Macerator, Basic Assembler', neededFor: [{ key: 'gregtech:gt.blockmachines@2001', amount: 4 }, { key: 'gregtech:gt.blockmachines@2002', amount: 2 }] }],
+      [{ key: 't:tin@0', amount: 5, why: 'for 2x Tin Cable, Basic Assembler', neededFor: [{ key: 'gregtech:gt.blockmachines@1247', amount: 3 }, { key: 'gregtech:gt.blockmachines@2002', amount: 2 }] }]);
+    expect(merged).toEqual([{ key: 't:tin@0', amount: 11, why: 'for Basic Macerator, Basic Assembler; for 2x Tin Cable, Basic Assembler', neededFor: [
+      { key: 'gregtech:gt.blockmachines@2001', amount: 4 }, { key: 'gregtech:gt.blockmachines@2002', amount: 4 }, { key: 'gregtech:gt.blockmachines@1247', amount: 3 }] }]);
+    expect(merged[0]!.neededFor!.reduce((sum, n) => sum + n.amount, 0)).toBe(merged[0]!.amount);
+    // a merged line without neededFor leaves it out: the rest would no longer add up to the amount
+    expect(mergeBom([{ key: 'k', amount: 1, why: 'a', neededFor: [{ key: 'x', amount: 1 }] }], [{ key: 'k', amount: 2, why: 'b' }]))
+      .toEqual([{ key: 'k', amount: 3, why: 'a; b' }]);
   });
 
   it('takes the casings that energy and maintenance hatches replace off an EBF build list', () => {

@@ -162,7 +162,7 @@ export function ProjectList(): ReactElement {
                     <span className="muted">Nothing picked yet</span>
                   ) : (
                     <>
-                      <ItemIcon itemKey={p.target} size={20} />
+                      <ItemIcon itemKey={p.target} size={20} name={names[p.target] ?? p.target} />
                       <span>{names[p.target] ?? p.target}</span>
                     </>
                   )}

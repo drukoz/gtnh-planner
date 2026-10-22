@@ -1,13 +1,14 @@
 // The new line on the map (spec §3.7, architecture §7.2, §11.14): a filled square per column of the line in the colour
-// of its most important block, a dot on every configured block (covers or settings), the line's box outline, each
-// hookup as a dashed path ("dashed = still to build"), white arrows for the item flow between steps, and the layout
-// pins as numbered markers next to the note pins (notes show N1, N2, … so a build step's "pin 1" names one marker). In
-// move mode a drag that starts inside the line moves it. The shapes are plain data (`overlayShapes`) drawn by
-// `drawShapes`, so they are tested without a canvas.
+// of its most important block (EnderIO's for a conduit cell), a dot on every configured block (covers, settings,
+// conduit faces, or chips and patterns: §11 entry 51), the line's box outline, each hookup as a dashed path in its network's colour ("dashed = still to
+// build"), white arrows for the item flow between steps, and the layout pins as numbered markers next to the note pins
+// (notes show N1, N2, … so a build step's "pin 1" names one marker). In move mode a drag that starts inside the line
+// moves it. The shapes are plain data (`overlayShapes`) drawn by `drawShapes`, so they are tested without a canvas.
 
+import { hookupNetworkKind } from '../../shared/layout/enderio.ts';
 import type { Rotation, Vec3 } from '../../shared/layout/geometry.ts';
 import type { BlockRole, Hookup, Layout, LayoutBlock, Pin } from '../../shared/types/layout.ts';
-import type { PlanFlow } from '../../shared/types/plan.ts';
+import type { LogisticsMode, PlanFlow } from '../../shared/types/plan.ts';
 import { LOGISTICS_COLORS, VOLTAGE_COLORS } from './overlays.ts';
 import { worldToScreen } from './render.ts';
 import type { MapMarker, MapOverlay, MapViewport } from './types.ts';
@@ -19,14 +20,14 @@ export const ROLE_COLORS: Readonly<Record<BlockRole, string>> = {
   machine: '#90caf9', casing: '#b0bec5', hatch: '#a1887f', cable: '#616161', transformer: '#8e24aa', pipe: '#ffb300', cover: '#ffffff',
   interface: '#7e57c2', chip_pipe: '#ff7043', chest: '#ffca28', ghost: 'rgba(255,255,255,0.25)',
 };
-/** The mark on a configured block: one with covers or settings (§11.14). */
+/** The mark on a configured block: one with covers, settings (§11.14), conduit faces, or chips and patterns (§11 entry 51). */
 export const CONFIGURED_COLOR = '#ffffff';
 
 export type Shape =
   | { kind: 'rect'; x: number; y: number; w: number; h: number; fill: string | null; stroke: string | null; dash: number[] }
   | { kind: 'path'; points: Array<[number, number]>; stroke: string; dash: number[]; width: number }
   | { kind: 'arrow'; from: [number, number]; to: [number, number]; color: string }
-  | { kind: 'dot'; x: number; y: number; r: number; color: string };   // a configured block (covers or settings)
+  | { kind: 'dot'; x: number; y: number; r: number; color: string };   // a configured block (covers, settings, conduit faces, chips or patterns)
 
 /** A drag of the line in move mode: the block it started on and the block under the pointer now. */
 export type Drag = { from: { x: number; z: number }; to: { x: number; z: number } };
@@ -49,23 +50,30 @@ const HOOKUP_DASH: readonly number[] = [6, 4];
 const HOOKUP_WIDTH = 2;
 const NEXT_ROTATION: Readonly<Record<Rotation, Rotation>> = { 0: 90, 90: 180, 180: 270, 270: 0 };
 
+/** Whether the block holds EnderIO conduits (a conduit cell or bundle). */
+function holdsConduits(b: LayoutBlock): boolean {
+  return b.conduits !== undefined && b.conduits.length > 0;
+}
+
 function configured(b: LayoutBlock): boolean {
-  return (b.covers !== undefined && b.covers.length > 0) || (b.config !== undefined && Object.keys(b.config).length > 0);
+  return (b.covers !== undefined && b.covers.length > 0) || (b.config !== undefined && Object.keys(b.config).length > 0)
+    || (b.conduits ?? []).some((c) => c.faces.length > 0) || (b.feed !== undefined && Object.keys(b.feed).length > 0);
 }
 
 /** A power hookup in the colour of its tap's voltage (as Plan 4 draws cables), a logistics one in its network's. */
-function hookupColor(h: Hookup): string {
-  if (h.kind === 'power') return VOLTAGE_COLORS[h.from.voltageTier ?? 0] ?? VOLTAGE_COLORS[0]!;
-  const kind = h.from.kind === 'routed' ? 'routed' : h.from.kind === 'ae2' ? 'ae2' : 'gtpipe';
-  return LOGISTICS_COLORS[kind];
+function hookupColor(h: Hookup, mode: LogisticsMode): string {
+  const kind = hookupNetworkKind(h, mode);
+  return kind === null ? VOLTAGE_COLORS[h.from.voltageTier ?? 0] ?? VOLTAGE_COLORS[0]! : LOGISTICS_COLORS[kind];
 }
 
 /**
  * What the line looks like in `view` (nothing in another dimension), with the line itself shifted by `drag` blocks:
- * a square per (x, z) column of its blocks (hookup blocks and ghosts left out), the box outline, the hookups as dashed
- * paths through their cell centres (never shifted: they run from the base's taps), an arrow per plan flow between two
- * steps that both have machines (first machine to first machine, in layout order) and last a dot per column holding a
- * configured block, a hookup block's dot unshifted. Squares are at least one pixel, as Plan 4 draws blocks.
+ * a square per (x, z) column of its blocks (hookup blocks and ghosts left out; EnderIO's colour when the block that
+ * colours it holds conduits), the box outline, the hookups as dashed paths through their cell centres (never shifted:
+ * they run from the base's taps), an arrow per plan flow between two steps that both have machines (first machine to
+ * first machine, in layout order; a machine shared by several steps, `stepIds`, is each of theirs, and a flow between two
+ * steps of one machine draws none) and last a dot per column holding a configured block, a hookup block's dot
+ * unshifted. Squares are at least one pixel, as Plan 4 draws blocks.
  */
 export function overlayShapes(layout: Layout, view: MapViewport, drag: { dx: number; dz: number } | null, flows: readonly PlanFlow[]): Shape[] {
   if (view.dim !== layout.dim) return [];
@@ -74,17 +82,18 @@ export function overlayShapes(layout: Layout, view: MapViewport, drag: { dx: num
   const centre = (x: number, z: number): [number, number] => worldToScreen(view, x + 0.5, z + 0.5);
   const shapes: Shape[] = [];
 
-  const columns = new Map<string, { x: number; z: number; rank: number }>();
+  const columns = new Map<string, { x: number; z: number; rank: number; conduits: boolean }>();
   for (const b of layout.blocks) {
     if (b.hookup !== undefined || b.role === 'ghost') continue;
     const key = `${b.pos[0]},${b.pos[2]}`;
     const rank = ROLE_PRIORITY.indexOf(b.role);
     const seen = columns.get(key);
-    if (seen === undefined || rank < seen.rank) columns.set(key, { x: b.pos[0], z: b.pos[2], rank });
+    if (seen === undefined || rank < seen.rank) columns.set(key, { x: b.pos[0], z: b.pos[2], rank, conduits: holdsConduits(b) });
   }
   for (const c of columns.values()) {
     const [x, y] = worldToScreen(view, c.x + dx, c.z + dz);
-    shapes.push({ kind: 'rect', x, y, w: side, h: side, fill: ROLE_COLORS[ROLE_PRIORITY[c.rank]!], stroke: null, dash: [] });
+    const fill = c.conduits ? LOGISTICS_COLORS.enderio : ROLE_COLORS[ROLE_PRIORITY[c.rank]!];
+    shapes.push({ kind: 'rect', x, y, w: side, h: side, fill, stroke: null, dash: [] });
   }
 
   const [ox, , oz] = layout.origin;
@@ -97,12 +106,14 @@ export function overlayShapes(layout: Layout, view: MapViewport, drag: { dx: num
 
   for (const h of layout.hookups) {
     if (h.path.length === 0) continue;
-    shapes.push({ kind: 'path', points: h.path.map((p) => centre(p[0], p[2])), stroke: hookupColor(h), dash: [...HOOKUP_DASH], width: HOOKUP_WIDTH });
+    shapes.push({ kind: 'path', points: h.path.map((p) => centre(p[0], p[2])), stroke: hookupColor(h, layout.mode), dash: [...HOOKUP_DASH], width: HOOKUP_WIDTH });
   }
 
+  // A machine several steps share (`LayoutBlock.stepIds`, plan 12) stands for each of them.
   const firstMachine = new Map<string, LayoutBlock>();
   for (const b of layout.blocks) {
-    if (b.role === 'machine' && b.stepId !== undefined && !firstMachine.has(b.stepId)) firstMachine.set(b.stepId, b);
+    if (b.role !== 'machine' || b.stepId === undefined) continue;
+    for (const id of b.stepIds ?? [b.stepId]) if (!firstMachine.has(id)) firstMachine.set(id, b);
   }
   for (const f of flows) {
     const from = firstMachine.get(f.from), to = firstMachine.get(f.to);

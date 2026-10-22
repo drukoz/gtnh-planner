@@ -6,9 +6,10 @@
 
 import { tierName } from '../../shared/gt/tiers.ts';
 import { parseItemKey, type ItemKey, type StuffKey } from '../../shared/keys.ts';
+import { CONDUIT_NAMES, FLUID_CONDUITS } from '../../shared/layout/enderio.ts';
 import { fmtRate } from '../../shared/layout/format.ts';
 import { ae2CableBlockRef, conduitBlockRef, partBlockRef } from '../../shared/types/assets.ts';
-import type { LayoutBlock } from '../../shared/types/layout.ts';
+import type { ConduitKind, LayoutBlock } from '../../shared/types/layout.ts';
 import type { BlockRef, Machine, Pack } from '../../shared/types/pack.ts';
 import type { PlanWarning } from '../../shared/types/plan.ts';
 import { simpleClassName } from '../world/facts.ts';
@@ -18,7 +19,9 @@ import { GT_MACHINE_BLOCK } from '../world/tiles.ts';
 
 export type PartId = 'conveyor_cover' | 'pump_cover' | 'item_filter_cover' | 'chest' | 'pr_junction' | 'pr_interface' | 'pr_request'
   | 'chip_responder' | 'chip_extractor' | 'chip_stock_keeper' | 'me_interface' | 'me_cable' | 'me_export_bus' | 'blank_pattern'
-  | 'eio_item_conduit' | 'eio_basic_filter';
+  | 'eio_item_conduit' | 'eio_basic_filter' | 'eio_advanced_filter' | 'eio_big_filter' | 'eio_speed_upgrade'
+  | 'eio_fluid_ender' | 'eio_fluid_crystalline' | 'eio_fluid_pink_slime' | 'eio_fluid_melodic' | 'eio_fluid_stellar'
+  | 'chip_terminator' | 'ae2_capacity_card' | 'ae2_acceleration_card' | 'chip_broadcaster' | 'eio_limited_filter' | 'ae2_locking_card';
 
 /**
  * `keys` are tried in order against the pack, then `names` (English, ignoring case). `block` is what a placed part
@@ -28,11 +31,19 @@ export interface PartDef { name: string; keys: readonly ItemKey[]; names: readon
 
 const GT_META_ITEM = 'gregtech:gt.metaitem.01';
 const PR_TRANSPORT = 'ProjRed|Transportation:projectred.transportation';
+const EIO_LIQUID_CONDUIT = 'EnderIO:itemLiquidConduit';
 
 function partDef(name: string, key: ItemKey, block: BlockRef | 'item', otherNames: readonly string[] = []): PartDef {
   return Object.freeze({
     name, keys: Object.freeze([key]), names: Object.freeze([name, ...otherNames]), block: block === 'item' ? block : Object.freeze(block),
   });
+}
+
+/** An ender fluid conduit by its `FLUID_CONDUITS` row: the pack's item name and meta, drawn as its `conduit:<kind>` pseudo block. */
+function fluidConduitDef(kind: ConduitKind): PartDef {
+  const row = FLUID_CONDUITS.find((c) => c.kind === kind);
+  if (row === undefined) throw new RangeError(`${kind} is not an ender fluid conduit`);
+  return partDef(CONDUIT_NAMES[kind], `${EIO_LIQUID_CONDUIT}@${row.meta}`, conduitBlockRef(kind));
 }
 
 /** The pack's usual ids for each part (research gt-mechanics §3.8 for the GT covers). */
@@ -54,6 +65,25 @@ export const PART_DEFS: Readonly<Record<PartId, PartDef>> = Object.freeze({
   blank_pattern: partDef('Blank Pattern', 'appliedenergistics2:item.ItemMultiMaterial@52', 'item'),
   eio_item_conduit: partDef('Item Conduit', 'EnderIO:itemItemConduit@0', conduitBlockRef('item')),
   eio_basic_filter: partDef('Basic Item Filter', 'EnderIO:itemBasicFilterUpgrade@0', 'item'),
+  eio_advanced_filter: partDef('Advanced Item Filter', 'EnderIO:itemBasicFilterUpgrade@1', 'item'),
+  eio_big_filter: partDef('Big Item Filter', 'EnderIO:itemBigFilterUpgrade@0', 'item'),
+  eio_speed_upgrade: partDef('Item Conduit Speed Upgrade', 'EnderIO:itemExtractSpeedUpgrade@0', 'item'),
+  eio_fluid_ender: fluidConduitDef('liquid_ender'),
+  eio_fluid_crystalline: fluidConduitDef('liquid_crystalline'),
+  eio_fluid_pink_slime: fluidConduitDef('liquid_pink_slime'),
+  eio_fluid_melodic: fluidConduitDef('liquid_melodic'),
+  eio_fluid_stellar: fluidConduitDef('liquid_stellar'),
+  // the feeding fix (architecture §11 entry 51): the routed output chest's chip, and an ME Export Bus's upgrades (its
+  // filter holds 1 item, 4 more per Capacity Card; it moves 1 item an operation, 8, 32, 64 or 96 with Acceleration Cards)
+  chip_terminator: partDef('Item Terminator Chip', `${PR_TRANSPORT}.routingchip@3`, 'item'),
+  ae2_capacity_card: partDef('Capacity Card', 'appliedenergistics2:item.ItemMultiMaterial@27', 'item'),
+  ae2_acceleration_card: partDef('Acceleration Card', 'appliedenergistics2:item.ItemMultiMaterial@30', 'item'),
+  // an Auto Workbench's cap on its ingredients (plan 12 Task 6, research machine-feeding §3.4): Project Red's suppliers
+  // broadcast what a bench's Stock Keeper asks for, EnderIO's insert side counts each ingredient, AE2's interface locks
+  // until the result is back (item ids read from the 2.9 export)
+  chip_broadcaster: partDef('Item Broadcaster Chip', `${PR_TRANSPORT}.routingchip@5`, 'item'),
+  eio_limited_filter: partDef('Limited Item Filter', 'EnderIO:itemLimitedItemFilter@0', 'item'),
+  ae2_locking_card: partDef('Locking Card', 'appliedenergistics2:item.ItemMultiMaterial@65', 'item'),
 });
 
 const PART_IDS = Object.keys(PART_DEFS) as PartId[];
@@ -178,7 +208,9 @@ export function pickTransformer(pack: Pack, lowerTier: number): Machine | null {
 
 // ---- Hatches and buses ----
 
-export type HatchClass = 'MTEHatchEnergy' | 'MTEHatchInputBus' | 'MTEHatchOutputBus' | 'MTEHatchInput' | 'MTEHatchOutput' | 'MTEHatchMaintenance';
+/** GT's hatch classes the layout places: the planner's six, the muffler, and a steam multiblock's buses and steam hatch (GT++). */
+export type HatchClass = 'MTEHatchEnergy' | 'MTEHatchInputBus' | 'MTEHatchOutputBus' | 'MTEHatchInput' | 'MTEHatchOutput' | 'MTEHatchMaintenance'
+  | 'MTEHatchMuffler' | 'MTEHatchSteamBusInput' | 'MTEHatchSteamBusOutput' | 'MTEHatchCustomFluidBase';
 
 const BUS_CLASSES: ReadonlySet<HatchClass> = new Set<HatchClass>(['MTEHatchInputBus', 'MTEHatchOutputBus']);
 const FLUID_HATCH_CLASSES: ReadonlySet<HatchClass> = new Set<HatchClass>(['MTEHatchInput', 'MTEHatchOutput']);
@@ -298,13 +330,20 @@ export const AE2_IDLE_AE_PER_TICK: Readonly<Record<'me_interface' | 'me_cable' |
 /** AE per EU: `PowerRatios.IC2 = 2.0`, so 1 EU = 2 AE. */
 export const AE_PER_EU = 2;
 
-/** EU/t the line's ME parts draw while idle: Σ idle AE/t of non-ghost blocks whose item is one of those parts, ÷ `AE_PER_EU`. */
+/**
+ * EU/t the line's ME parts draw while idle: Σ idle AE/t of non-ghost blocks whose item is one of those parts, and of the
+ * covers on them that are (an ME Export Bus on a cable's face: architecture §11 entry 51), ÷ `AE_PER_EU`.
+ */
 export function ae2IdleEUt(blocks: readonly LayoutBlock[], parts: Parts): number {
   const idleByKey = new Map<StuffKey, number>();
   for (const id of Object.keys(AE2_IDLE_AE_PER_TICK) as Array<keyof typeof AE2_IDLE_AE_PER_TICK>) {
     if (!idleByKey.has(parts[id].key)) idleByKey.set(parts[id].key, AE2_IDLE_AE_PER_TICK[id]);
   }
   let ae = 0;
-  for (const b of blocks) if (b.role !== 'ghost' && b.item !== undefined) ae += idleByKey.get(b.item) ?? 0;
+  for (const b of blocks) {
+    if (b.role === 'ghost') continue;
+    if (b.item !== undefined) ae += idleByKey.get(b.item) ?? 0;
+    for (const c of b.covers ?? []) ae += idleByKey.get(c.item) ?? 0;
+  }
   return ae / AE_PER_EU;
 }
