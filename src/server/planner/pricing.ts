@@ -126,13 +126,19 @@ async function derivedCosts(
 /**
  * The graph `keys` alone walk to, as the cost model walks (no pins, its stop items, derived materials routed): where goods
  * the cost model's graph never reached are priced (`derivedCosts`; plan.ts prices ingredient options there), with
- * `avoid` around those goods (`CandidateOptions.avoid`, as a line that avoids them walks: plan.ts's options).
+ * `walk.avoid` around those goods (`CandidateOptions.avoid`, as a line that avoids them walks: plan.ts's options) and
+ * without the recipes of `walk.unbuildable` (`CandidateOptions.unbuildable`: no machine that runs them can be built here
+ * or is owned, plan 12; plan.ts's options walk a chain around the avoid list so, as the line is walked).
  */
 export function aloneGraph(
-  pack: Pack, settings: PlanSettings, basis: PlanBasis, model: CostModel, keys: StuffKey[], avoid?: ReadonlySet<StuffKey>,
+  pack: Pack, settings: PlanSettings, basis: PlanBasis, model: CostModel, keys: StuffKey[],
+  walk: Pick<CandidateOptions, 'avoid' | 'unbuildable'> = {},
 ): CandidateGraph {
   const s: PlanSettings = { ...settings, recipeChoice: {}, optionChoice: {}, stopItems: model.stopItems, routeDerived: true };
-  return buildCandidates(pack, s, basis.env, makeLeafOracle(pack, s, basis.avail, basis.prices), keys, avoid === undefined ? {} : { avoid });
+  const opts: CandidateOptions = {};
+  if (walk.avoid !== undefined) opts.avoid = walk.avoid;
+  if (walk.unbuildable !== undefined && walk.unbuildable.size > 0) opts.unbuildable = walk.unbuildable;
+  return buildCandidates(pack, s, basis.env, makeLeafOracle(pack, s, basis.avail, basis.prices), keys, opts);
 }
 
 /**

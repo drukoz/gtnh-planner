@@ -571,10 +571,11 @@ const MAX_VIA = 3;
 
 /**
  * What one unit of an ingredient option costs, the recipes making it on its own runs, their maps by name, why the
- * group cannot get it here, when it cannot, and the goods the line avoids that those recipes cannot run without when no
- * chain around them makes it.
+ * group cannot get it here, when it cannot, the goods the line avoids that those recipes cannot run without when no
+ * chain around them makes it, and when the only chains around them run on a machine that cannot be built here, why
+ * (`<machine> cannot be built here (<why>)`, plan 12).
  */
-interface OptionPrice { cost: number; steps: number; via: string[]; unusable?: string[]; avoided?: StuffKey[] }
+interface OptionPrice { cost: number; steps: number; via: string[]; unusable?: string[]; avoided?: StuffKey[]; unbuildable?: string }
 
 /** The goods of `avoid` the recipes `ids` cannot run without (a slot of avoided options only, as `usesAvoided` reads it). */
 function avoidedBy(pack: Pack, ids: readonly string[], avoid: ReadonlySet<StuffKey> | undefined): StuffKey[] {
@@ -612,11 +613,15 @@ function viaOf(pack: Pack, graph: CandidateGraph, chain: Standalone | undefined)
  * from those options alone (`aloneGraph`), else at its plain price. Those chains ignore the avoid list: one that cannot do
  * without a good of `avoid` (the line's, `avoidedBy`) is chained again over the graph walked from those options alone
  * around `avoid`, as the line would plan a pin of it (a Good Electronic Circuit has a dearer chain without antimony): at
- * its least raw material there (`Standalone.cost`, never below the first price), with that chain's steps and maps. Only
- * one that graph cannot make keeps those goods (`avoided`).
+ * its least raw material there (`Standalone.cost`, never below the first price), with that chain's steps and maps. That
+ * graph is walked as the line is (`plannedLine`, controller ruling OQ5 a; the controller's ruling after the verify of
+ * 5e3820f): without the recipes the line was walked without (`LinePricing.unbuildable`) and, again and again, without
+ * those its build model in `ctx` blocks (`lineBuildModel`'s `blocked` and `blockedAlike`: no machine that runs them can be
+ * built here or is owned). One that graph cannot make keeps those goods (`avoided`), and with them, where the graph
+ * walked with those recipes made it, the reason the first of its chain's recipes cannot run (`unbuildable`).
  */
 async function optionPrices(
-  pack: Pack, settings: PlanSettings, pricing: LinePricing, keys: readonly StuffKey[], avoid?: ReadonlySet<StuffKey>,
+  pack: Pack, settings: PlanSettings, ctx: PlanContext, pricing: LinePricing, keys: readonly StuffKey[], avoid?: ReadonlySet<StuffKey>,
 ): Promise<Map<StuffKey, OptionPrice>> {
   const { model, basis, target, leaf } = pricing;
   const containers = pack.fluidContainers ?? [];
@@ -658,11 +663,29 @@ async function optionPrices(
   const around = [...prices].filter(([, price]) => price.avoided !== undefined).map(([key]) => key);
   if (around.length > 0) {
     await yieldToEventLoop();
-    const alone = aloneGraph(pack, settings, basis, model, around, avoid);
-    for (const [key, chain] of await standaloneCosts(alone, around, [target], containers)) {
-      if (chain === undefined || !Number.isFinite(chain.cost)) continue;
-      const cost = Math.max((prices.get(key) as OptionPrice).cost, chain.cost);
-      prices.set(key, { cost, steps: chain.steps, via: viaOf(pack, alone, chain) });
+    const walked = (unbuildable?: ReadonlyMap<string, string>): CandidateGraph =>
+      aloneGraph(pack, settings, basis, model, around, unbuildable === undefined ? { avoid } : { avoid, unbuildable });
+    const open = walked();
+    const unbuildable = new Map(pricing.unbuildable ?? []);
+    let alone = open;
+    for (;;) {
+      const built = await lineBuildModel(pack, alone, basis, settings, ctx);
+      for (const [id, why] of [...built.blocked, ...(built.blockedAlike ?? [])]) if (!unbuildable.has(id)) unbuildable.set(id, why);
+      if (!alone.recipes.some((r) => unbuildable.has(r.id))) break;
+      await yieldToEventLoop();
+      alone = walked(unbuildable);
+    }
+    const chains = await standaloneCosts(alone, around, [target], containers);
+    const opened = alone === open ? chains : await standaloneCosts(open, around, [target], containers);
+    for (const key of around) {
+      const price = prices.get(key) as OptionPrice;
+      const chain = chains.get(key);
+      if (chain !== undefined && Number.isFinite(chain.cost)) {
+        prices.set(key, { cost: Math.max(price.cost, chain.cost), steps: chain.steps, via: viaOf(pack, alone, chain) });
+        continue;
+      }
+      const reason = opened.get(key)?.recipes.flatMap((id) => unbuildable.get(id) ?? [])[0];
+      if (reason !== undefined) prices.set(key, { ...price, unbuildable: reason });
     }
   }
   return prices;
@@ -674,10 +697,13 @@ async function optionPrices(
  * with what one run would take of it, its share of the slot in this plan (`optionShares` over `line`, the plan's own
  * runs), its raw material per run (amount × `optionPrices`' cost) and the steps and maps of its own chain, or why the
  * group cannot get it here (`unusable`), among it an option the plan does not use that no chain makes without a good the
- * line avoids ("needs Tin Ingot, which is on your avoid list"); cheapest first, then by key. `pinned` names the option
- * `optionChoice` pins when the graph honours it. Priced once per plan.
+ * line avoids: "needs Tin Ingot, which is on your avoid list", or where every such chain runs on a machine that cannot
+ * be built here, "<machine> cannot be built here (<why>)" (plan 12); cheapest first, then by key. `pinned` names the
+ * option `optionChoice` pins when the graph honours it. Priced once per plan, in the plan's context `ctx`.
  */
-async function addOptions(pack: Pack, settings: PlanSettings, steps: readonly PlanStep[], line: StepLine, pricing: LinePricing): Promise<void> {
+async function addOptions(
+  pack: Pack, settings: PlanSettings, ctx: PlanContext, steps: readonly PlanStep[], line: StepLine, pricing: LinePricing,
+): Promise<void> {
   const slotsOf = new Map<PlanStep, Array<{ ing: Ingredient; shares: OptionShare[] }>>();
   const keys = new Set<StuffKey>();
   for (const step of steps) {
@@ -689,7 +715,7 @@ async function addOptions(pack: Pack, settings: PlanSettings, steps: readonly Pl
     for (const { shares } of slots) for (const { option } of shares) keys.add(option.key);
   }
   if (keys.size === 0) return;
-  const prices = await optionPrices(pack, settings, pricing, [...keys].sort(byString), line.avoid);
+  const prices = await optionPrices(pack, settings, ctx, pricing, [...keys].sort(byString), line.avoid);
   for (const [step, slots] of slotsOf) {
     step.options = slots.map(({ ing, shares }): StepOption => {
       const choices = shares.map(({ option, share }): StepOption['choices'][number] => {
@@ -698,6 +724,7 @@ async function addOptions(pack: Pack, settings: PlanSettings, steps: readonly Pl
         const choice: StepOption['choices'][number] = { key: option.key, amount, share, rawPerRun: round6(amount * (price?.cost ?? 0)), steps: price?.steps ?? 0 };
         if (price !== undefined && price.via.length > 0) choice.via = price.via;
         if (price?.unusable !== undefined) choice.unusable = [...price.unusable];
+        else if (share === 0 && price?.unbuildable !== undefined) choice.unusable = [price.unbuildable];
         else if (share === 0 && price?.avoided !== undefined) choice.unusable = price.avoided.map((k) => `needs ${pack.nameOf(k)}, which is on your avoid list`);
         return choice;
       }).sort((a, b) => a.rawPerRun - b.rawPerRun || byString(a.key, b.key));
@@ -1442,11 +1469,37 @@ function unavoidableUses(
     const shown = from.length > MAX_LISTED ? `${from.slice(0, MAX_LISTED).join(', ')} and ${from.length - MAX_LISTED} more` : listed(from);
     return `${pack.nameOf(key)} (made from ${shown})`;
   };
+  /**
+   * Whether a use of an allowed-back good of the list is one its step could do without: a consumed slot of its recipe
+   * that takes the good also takes a good the list does not cover (the step then takes it only because the line allows it
+   * back for another step: plan 12's build cost may pick it over adding the machines of the other option). A part the
+   * machine holds, and a derived leaf, it needs.
+   */
+  const couldAvoid = (use: { stepId: string; key: StuffKey; holds: boolean }): boolean => {
+    const recipe = pack.recipeById.get(stepOf.get(use.stepId)?.recipeId ?? '');
+    return !use.holds && !derived(use.key) && (recipe?.inputs ?? []).some((ing) =>
+      ing.consumed && ing.options.some((o) => o.key === use.key) && keptOptions(ing.options, request.goods).length > 0);
+  };
+  /** Per good, the steps that need it: those whose use of it is no `couldAvoid` one. */
+  const neededBy = new Map<StuffKey, string[]>();
+  for (const use of uses.values()) {
+    if (couldAvoid(use)) continue;
+    const step = stepOf.get(use.stepId);
+    if (step !== undefined) neededBy.set(use.key, [...(neededBy.get(use.key) ?? []), stepProductName(pack, step)]);
+  }
   const warnings = [...uses.values()]
     .sort((a, b) => byString(a.stepId, b.stepId) || byString(a.key, b.key))
-    .map(({ stepId, key, machine, holds }): PlanWarning => ({
-      code: 'avoid-unavoidable', key, stepId, text: `${machine} ${holds ? 'needs' : 'uses'} ${named(key)} — no recipe at ${tierName(tier)} avoids it`,
-    }));
+    .map((use): PlanWarning => {
+      const { stepId, key, machine, holds } = use;
+      // the controller's ruling after the verify of 5e3820f, (b): a step that takes the good although it could do
+      // without it says that the line allows it back for the steps that need it, not that no recipe avoids it
+      const neededFor = couldAvoid(use) ? [...new Set(neededBy.get(key) ?? [])].sort(byString) : [];
+      return {
+        code: 'avoid-unavoidable', key, stepId, text: neededFor.length > 0
+          ? `${machine} uses ${named(key)}, which the line allows back for ${listed(neededFor)}`
+          : `${machine} ${holds ? 'needs' : 'uses'} ${named(key)} — no recipe at ${tierName(tier)} avoids it`,
+      };
+    });
   const avoided = line.used.map((key): NonNullable<Plan['avoided']>[number] => {
     const entry = { key, name: pack.nameOf(key), unavoidable: inUse.has(key) };
     const from = request.madeFrom(key);
@@ -1747,7 +1800,7 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
   addBuildNotes(pack, settings, buildModel, steps);
   const exact = await addAlternatives(pack, settings, basis, steps, model, graph, line.avoid, unbuildable);
   // Every option of each ore-dictionary slot, with its share in this plan and what it would cost (fix spec R9).
-  await addOptions(pack, settings, steps, stepLine(graph, stepRuns), priced);
+  await addOptions(pack, settings, ctx, steps, stepLine(graph, stepRuns), priced);
   // A batch may be crafted by hand (fix spec D7); a pin is judged against the swap list just made (D24); a pinned tier
   // that cannot be built says so (plan 12).
   const stepWarnings = [
