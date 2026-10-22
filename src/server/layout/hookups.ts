@@ -271,9 +271,9 @@ function straightGuide(world: RouteWorld, tap: Vec3, ports: readonly Vec3[]): Ve
   return straightPath(guideEnd(world, tap, port, LEVEL_FIRST), guideEnd(world, port, tap, portSides(world)));
 }
 
-/** The box around the tap and the ports (and the line), `HOOKUP_REACH` wider on every side. */
-function reachBounds(world: RouteWorld, tap: Vec3, ports: readonly Vec3[]): PathBounds {
-  const around = bboxOf([tap, ...ports, ...(world.box === undefined ? [] : [world.box.min, world.box.max])])!;
+/** The box around the taps and the ports (and the line), `HOOKUP_REACH` wider on every side. */
+function reachBounds(world: RouteWorld, taps: readonly Vec3[], ports: readonly Vec3[]): PathBounds {
+  const around = bboxOf([...taps, ...ports, ...(world.box === undefined ? [] : [world.box.min, world.box.max])])!;
   return {
     min: [around.min[0] - HOOKUP_REACH, around.min[1] - HOOKUP_REACH, around.min[2] - HOOKUP_REACH],
     max: [around.max[0] + HOOKUP_REACH, around.max[1] + HOOKUP_REACH, around.max[2] + HOOKUP_REACH],
@@ -291,7 +291,7 @@ export function hookupPath(world: RouteWorld, tap: Vec3, ports: readonly Vec3[],
   if (ports.length === 0) return { path: [], found: false };
   const clear = (p: Vec3) => clearOfLine(world, p);
   const { starts, goals } = endCells(world, tap, ports);
-  const reach = reachBounds(world, tap, ports);
+  const reach = reachBounds(world, [tap], ports);
   const budget = maxNodes ?? MAX_PATH_NODES;
   if (vox !== null) {
     const passable = (p: Vec3) => clear(p) && isFreeVoxel(vox, p);
@@ -300,6 +300,28 @@ export function hookupPath(world: RouteWorld, tap: Vec3, ports: readonly Vec3[],
   }
   const guide = findPath(starts.filter(clear), goals.filter(clear), { passable: clear, bounds: reach, maxNodes: budget });
   return { path: guide.found ? guide.path : straightGuide(world, tap, ports), found: false };
+}
+
+/**
+ * Which of `taps` a hookup can leave (architecture §11 entry 52): `hookupPath`'s route search, run once from the face
+ * neighbours of every tap at the same time, through the same cells to the same goals, inside the voxel box and within 16
+ * blocks of the taps and ports. The tap the cheapest route leaves from (routes of equal cost go by the search's fixed
+ * order, which takes the taps in the order given); null without voxels or when no route is found. It draws no guide.
+ */
+export function reachableTap<T extends TapPoint>(world: RouteWorld, taps: readonly T[], ports: readonly Vec3[], maxNodes?: number): T | null {
+  const { vox } = world;
+  if (vox === null || taps.length === 0 || ports.length === 0) return null;
+  const passable = (p: Vec3) => clearOfLine(world, p) && isFreeVoxel(vox, p);
+  // each passable start cell with the first tap it is a face neighbour of
+  const leaves = new Map<string, { start: Vec3; tap: T }>();
+  for (const tap of taps) {
+    for (const start of endCells(world, tap.pos, ports).starts) if (passable(start) && !leaves.has(posKey(start))) leaves.set(posKey(start), { start, tap });
+  }
+  const { goals } = endCells(world, taps[0]!.pos, ports);                // the same for every tap
+  const route = findPath([...leaves.values()].map((l) => l.start), goals.filter(passable), {
+    passable, bounds: intersect(voxelBounds(vox), reachBounds(world, taps.map((t) => t.pos), ports)), maxNodes: maxNodes ?? MAX_PATH_NODES,
+  });
+  return route.found ? leaves.get(posKey(route.path[0]!))!.tap : null;
 }
 
 /** The side of `cell` that touches a port (DIRS order); -1 when none does. */
