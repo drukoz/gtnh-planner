@@ -1,9 +1,10 @@
-// One scenario run of the feeding simulation (plan `docs/superpowers/plans/2026-10-20-21-feeding-checker.md` Tasks 4–9):
+// One scenario run of the feeding simulation (plan `docs/superpowers/plans/2026-10-20-21-feeding-checker.md` Tasks 4–10):
 // `runScenario` builds the entities of a model for a scenario — one per node (GT basic machines and chests; a multiblock's
 // controller and each of its buses, Task 5; an Auto Workbench and its energy, Task 6), the networks' entities from
-// `NETWORK_MODELS` (EnderIO's, Task 7; Project Red's, Task 8; AE2's, Task 9; Task 10 adds GT pipes') and a test's extra
+// `NETWORK_MODELS` (EnderIO's, Task 7; Project Red's, Task 8; AE2's, Task 9; GT item pipes', Task 10) and a test's extra
 // ones — runs them tick by tick and turns what they recorded into findings (`detect`).
-// - A network kind without a model is left out, with the unknown `not_simulated`; every node kind has its model.
+// - Every node kind and every network kind has its model; a network kind without one would be left out, with the unknown
+//   `not_simulated`.
 // - `env.push(from, side)` is what a GT transfer out of that side meets: the receiver a network registered at the
 //   neighbouring cell for that side, else the inventory of the node (or bus) there, else nothing (a routed pipe too: it is
 //   no inventory).
@@ -30,6 +31,7 @@ import { bench } from './bench.ts';
 import { FluidPools, KeyTable, Sim, type Preloadable, type PushTarget, type SimEntity, type SimInv } from './core.ts';
 import { detect, SimStats, type Explain } from './detect.ts';
 import { enderioModel } from './enderio.ts';
+import { gtPipeModel } from './gtpipe.ts';
 import { basicMachine, type SimEnv } from './machine.ts';
 import { multiblock } from './multi.ts';
 import { routedModel } from './routed.ts';
@@ -47,8 +49,8 @@ export interface NetworkModel {
 
 type NetworkModels = { [K in FeedNetwork['kind']]?: (net: Extract<FeedNetwork, { kind: K }>, env: SimEnv) => NetworkModel };
 
-/** The network models by kind: EnderIO's (Task 7), Project Red's (Task 8) and AE2's (Task 9); GT pipes (Task 10) add theirs. */
-export const NETWORK_MODELS: NetworkModels = { enderio: enderioModel, routed: routedModel, ae2: ae2Model };
+/** The network models by kind: EnderIO's (Task 7), Project Red's (Task 8), AE2's (Task 9) and GT item pipes' (Task 10). */
+export const NETWORK_MODELS: NetworkModels = { enderio: enderioModel, routed: routedModel, ae2: ae2Model, gtpipe: gtPipeModel };
 
 export interface ScenarioOptions {
   ticks: number; restartAt: number; exhaustive?: boolean; ae2Coprocessors?: number; ae2FluidStock?: boolean; slowTolerance?: number;

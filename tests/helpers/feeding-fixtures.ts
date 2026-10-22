@@ -1,7 +1,7 @@
 // Fixtures for the feeding checker's tests (plan 21): the fixture pack with recipe maps and the machines and items the
 // feeding tests need, plans whose steps carry pack recipes (chances, held items, crafting grids), lines laid out by
 // main's `layoutLine` with or without a world, and hand-built models with test entities for the simulation (Tasks 4–6),
-// EnderIO lines (Task 7), Project Red lines (Task 8) and AE2 lines (Task 9) among them.
+// EnderIO lines (Task 7), Project Red lines (Task 8), AE2 lines (Task 9) and GT item pipe lines (Task 10) among them.
 // Every call returns fresh objects, so a test that changes its pack, plan, layout or model changes no other. Synthetic
 // only: invented names, apart from the GT class names, mteIds and item ids the code names; no real export or world is read.
 
@@ -16,8 +16,8 @@ import type { InterfaceSpec, RoutedChipSpec } from '../../src/server/layout/feed
 import { ignoredByBlocking, PART_KEYS } from '../../src/server/layout/feeding/facts.ts';
 import { compareLocal } from '../../src/server/layout/feeding/frame.ts';
 import type {
-  Ae2ExportBus, Ae2Iface, BasicNode, BenchNode, BusNode, ChestNode, EioFace, FeedModel, FeedNode, GtCover, InvRef, MachineSettings, MultiNode, NodeId,
-  OutBusNode, RoutedPipe, SimRecipe,
+  Ae2ExportBus, Ae2Iface, BasicNode, BenchNode, BusNode, ChestNode, EioFace, FeedModel, FeedNode, GtCover, GtPipe, InvRef, MachineSettings, MultiNode,
+  NodeId, OutBusNode, RoutedPipe, SimRecipe,
 } from '../../src/server/layout/feeding/model.ts';
 import { insertEmpties, NEVER, PHASE, type SimEntity } from '../../src/server/layout/feeding/sim/core.ts';
 import type { SimEnv } from '../../src/server/layout/feeding/sim/machine.ts';
@@ -331,6 +331,16 @@ function cellOf(id: NodeId): Vec3 {
   return [p[0]!, p[1]!, p[2]!];
 }
 
+/** The inventory at each cell of `nodes`: the node there, or the multiblock whose bus it is with that bus. */
+function ownersOf(nodes: readonly FeedNode[]): Map<NodeId, { node: NodeId; bus?: NodeId }> {
+  const owners = new Map<NodeId, { node: NodeId; bus?: NodeId }>();
+  for (const n of nodes) {
+    owners.set(n.id, { node: n.id });
+    if (n.kind === 'multi') for (const b of [...n.inBuses, ...n.outBuses]) owners.set(b.id, { node: n.id, bus: b.id });
+  }
+  return owners;
+}
+
 function compareText(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
@@ -598,12 +608,7 @@ export interface EioFaceSpec {
  * say otherwise.
  */
 export function eioModel(nodes: FeedNode[], faces: EioFaceSpec[], links?: Array<[NodeId, NodeId]>): FeedModel {
-  // the inventory at each cell: a node, or a multiblock's bus
-  const owners = new Map<NodeId, { node: NodeId; bus?: NodeId }>();
-  for (const n of nodes) {
-    owners.set(n.id, { node: n.id });
-    if (n.kind === 'multi') for (const b of [...n.inBuses, ...n.outBuses]) owners.set(b.id, { node: n.id, bus: b.id });
-  }
+  const owners = ownersOf(nodes);
   const read = faces.flatMap((spec): EioFace[] => {
     const mode = spec.mode ?? (spec.insert === undefined ? 'extract' : spec.extract === undefined ? 'insert' : 'in_out');
     if (mode === 'disabled') return [];
@@ -712,4 +717,27 @@ export function ae2Model(nodes: FeedNode[], ifaces: Ae2IfaceSpec[], more: Partia
     mode: 'ae2', supply: ['t:a@0'], itemFlows: [{ from: first?.stepIds[0] ?? 'raw', to: 'out', key: 't:x@0', perSecond: 1 }], ...rest,
     networks: [{ kind: 'ae2', interfaces, exportBuses: buses }],
   });
+}
+
+// ---- GT item pipe lines (plan Task 10) ----
+
+/** A pipe of `pipeModel`'s network: its cell, its capacity (its slots, and the stacks it moves per 20 ticks; 1 unless given) and its links (`1 << side`, local). */
+export interface GtPipeSpec { id: NodeId; capacity?: number; links: number }
+
+/**
+ * `handModel(nodes)` in direct mode with one GT item pipe network of `pipes` (each `Item Pipe at x y z`, in local order) and the
+ * covers `covers`: a pipe's `sides` are its linked sides whose neighbour is a node or a multiblock's bus, each with that
+ * inventory's own side toward the pipe, as `readLine` reads them; `more` sets the rest of the model.
+ */
+export function pipeModel(nodes: FeedNode[], pipes: GtPipeSpec[], covers: GtCover[] = [], more: Partial<FeedModel> = {}): FeedModel {
+  const owners = ownersOf(nodes);
+  const read = pipes.map((p): GtPipe => {
+    const cell = cellOf(p.id);
+    const sides = DIRS.flatMap((_, side) => {
+      const owner = (p.links & (1 << side)) === 0 ? undefined : owners.get(posKey(step(cell, side)));
+      return owner === undefined ? [] : [{ side, target: { ...owner, side: OPPOSITE[side]! } }];
+    });
+    return { id: p.id, label: `Item Pipe at ${cell.join(' ')}`, capacity: p.capacity ?? 1, links: p.links, sides };
+  }).sort((a, b) => compareLocal(cellOf(a.id), cellOf(b.id)));
+  return handModel(nodes, { mode: 'direct', ...more, covers: structuredClone(covers), networks: [{ kind: 'gtpipe', pipes: read }] });
 }

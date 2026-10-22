@@ -410,10 +410,16 @@ describe('covers, timers and scenarios', () => {
   });
 
   it('leaves out what it has no model for', () => {
-    // GT item pipes: the one network kind without a model until Task 10 (every node kind has its model since Task 6)
-    const r = both(handModel([oneSlotNode('0,0,0')], { networks: [{ kind: 'gtpipe', pipes: [] }] }), { ticks: 10, restartAt: 10 });
-    expect(r.unknowns.map((u) => [u.code, u.pos, u.stepId])).toEqual([['stack_sizes', undefined, undefined], ['not_simulated', undefined, undefined]]);
-    expect([r.findings, r.runs]).toEqual([[], { one: 0 }]);
+    // every node kind (Task 6) and every network kind (Task 10) has its model: this run takes GT item pipes' away
+    const gtpipe = NETWORK_MODELS.gtpipe;
+    delete NETWORK_MODELS.gtpipe;
+    try {
+      const r = both(handModel([oneSlotNode('0,0,0')], { networks: [{ kind: 'gtpipe', pipes: [] }] }), { ticks: 10, restartAt: 10 });
+      expect(r.unknowns.map((u) => [u.code, u.pos, u.stepId])).toEqual([['stack_sizes', undefined, undefined], ['not_simulated', undefined, undefined]]);
+      expect([r.findings, r.runs]).toEqual([[], { one: 0 }]);
+    } finally {
+      NETWORK_MODELS.gtpipe = gtpipe;
+    }
   });
 });
 
@@ -499,6 +505,8 @@ describe('the GT basic machine, more closely', () => {
 describe('a scenario run', () => {
   it('pushes into what a network registers at a cell and asks the network why', () => {
     const got: Array<[number, number, number]> = [];
+    // a toy network in GT item pipes' place for this run
+    const gtpipe = NETWORK_MODELS.gtpipe;
     NETWORK_MODELS.gtpipe = () => ({
       entities: [], explain: (kind, node, key) => (kind === 'in' && node === '0,0,0' && key === 't:a@0' ? 'its pipe brings none' : null),
       receivers: [{ at: '0,0,1', side: 2, target: { accept: (key, n, side) => { got.push([key, n, side]); return n; } } }],
@@ -512,12 +520,14 @@ describe('a scenario run', () => {
       expect(r.findings.map((f) => f.text)).toEqual(['Basic Macerator at 0 0 0 never gets Alpha: its pipe brings none']);
       expect(r.unknowns.map((u) => u.code)).toEqual(['stack_sizes']);
     } finally {
-      delete NETWORK_MODELS.gtpipe;
+      NETWORK_MODELS.gtpipe = gtpipe;
     }
   });
 
   it('runs the networks\' restarts when the line loads again, and wakes everything for it', () => {
     const acted: number[] = [];
+    // a toy network in GT item pipes' place for this run
+    const gtpipe = NETWORK_MODELS.gtpipe;
     NETWORK_MODELS.gtpipe = (_net, env) => {
       let armed = -1;
       // a toy network entity that sleeps until a restart arms it for 5 ticks later
@@ -531,7 +541,7 @@ describe('a scenario run', () => {
       both(model, { ticks: 400, restartAt: 250 });
       expect(acted).toEqual([255, 255]);
     } finally {
-      delete NETWORK_MODELS.gtpipe;
+      NETWORK_MODELS.gtpipe = gtpipe;
     }
   });
 
