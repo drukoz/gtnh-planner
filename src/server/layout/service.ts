@@ -27,7 +27,12 @@ interface Expansion { lines: BomLine[]; totals: BomLine[] }
 
 export interface LayoutServiceDeps {
   pack(): Promise<Pack>;
-  /** The project's plan before `planFinish`: the plan the plan route finishes. */
+  /**
+   * The project's plan before `planFinish`, the one the plan route serves, asked only when a caller brings no plan (the
+   * layout route). `finishPlan`, and the projector through `layoutFor(project, plan)`, lay out the plan their own
+   * request was served: a plan reads the other projects' summaries when it is made (add-on 17), so asking again could
+   * plan another line after a publish in between.
+   */
   plan(project: Project): Promise<Plan>;
   /** Null unless the scan is done. */
   scan(scanId: string): Promise<WorldScan | null>;
@@ -44,8 +49,9 @@ export interface LayoutServiceDeps {
 }
 
 export interface LayoutService {
-  layoutFor(project: Project): Promise<Layout>;
-  /** The plan with the project's layout merged in; a plan with nothing to build comes back as it is (same object). */
+  /** The layout of `plan` in `project`, or of the plan `deps.plan` gives when there is none (`plan`: add-on 17). */
+  layoutFor(project: Project, plan?: Plan): Promise<Layout>;
+  /** The plan with its own layout merged in; a plan with nothing to build comes back as it is (same object). */
   finishPlan(plan: Plan, project: Project): Promise<Plan>;
   /** Layouts computed so far (cache misses). */
   readonly computations: number;
@@ -98,11 +104,12 @@ export function createLayoutService(deps: LayoutServiceDeps): LayoutService {
   }
 
   /**
-   * The entry of `project`'s key, made the youngest; a miss starts the layout and drops the oldest beyond the cap.
-   * Nothing is awaited between the lookup and the insert, so concurrent callers share one computation.
+   * The entry of `given`'s key in `project` (of `deps.plan`'s plan when none is given), made the youngest; a miss
+   * lays that plan out and drops the oldest beyond the cap. Nothing is awaited between the lookup and the insert, so
+   * concurrent callers share one computation.
    */
-  async function entryFor(project: Project): Promise<Entry> {
-    const plan = await deps.plan(project);
+  async function entryFor(project: Project, given?: Plan): Promise<Entry> {
+    const plan = given ?? (await deps.plan(project));
     const key = layoutKey(plan, project);
     const hit = entries.get(key);
     if (hit !== undefined) {
@@ -148,12 +155,12 @@ export function createLayoutService(deps: LayoutServiceDeps): LayoutService {
     get computations() {
       return computations;
     },
-    async layoutFor(project) {
-      return (await entryFor(project)).layout;
+    async layoutFor(project, plan) {
+      return (await entryFor(project, plan)).layout;
     },
     async finishPlan(plan, project) {
       if (plan.status !== undefined && plan.status !== 'ok') return plan;
-      const entry = await entryFor(project);
+      const entry = await entryFor(project, plan);
       const layout = await entry.layout;
       const pack = await deps.pack();
       const expansion = await expansionOf(entry, pack, layout, project);
@@ -165,8 +172,8 @@ export function createLayoutService(deps: LayoutServiceDeps): LayoutService {
 
 /**
  * The app's layout service (`app.services.layout`), created on first use: the active pack, the plan the plan route
- * serves (`planForProject`), scans and voxels from the world service, and parts broken down and priced in the
- * project's world context (`app.services.planContext`, else an empty one).
+ * serves (`planForProject`) for a caller that brings none, scans and voxels from the world service, and parts broken
+ * down and priced in the project's world context (`app.services.planContext`, else an empty one).
  */
 export function layoutService(app: AppContext): LayoutService {
   const existing = app.services.layout as LayoutService | undefined;

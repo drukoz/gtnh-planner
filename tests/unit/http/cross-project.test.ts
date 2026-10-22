@@ -97,6 +97,25 @@ describe('surplus across projects (add-on 17, architecture §11.45 (4))', () => 
     expect(stored!.draws).toEqual([{ from: p.id, key: 't:y@0', perSecond: sig9(30 / HOUR) }]);
   });
 
+  it("finishes the plan it serves with that plan's own layout, whatever the board holds by then", async () => {
+    // P's summary is withdrawn between Q's plan and its layout, as a publish of P landing then would change it: the
+    // served plan keeps its own power, layout steps and summary, not those of Q making its own Wyes
+    const p = await create('P', MAKES_T);
+    const q = await create('Q', USES_Y);
+    await plan(p.id);
+    const finish = s.app.services.planFinish!;
+    s.app.services.planFinish = async (planned, whose) => {
+      surplusBoardFor(s.app).remove(p.id);
+      return finish(planned, whose);
+    };
+    const served = await plan(q.id);
+    expect(fromRows(served).map((r) => r.from?.id)).toEqual([p.id]);
+    expect(recipes(served)).toEqual(['use-y']);
+    expect(served.buildSteps.filter((b) => b.id.startsWith('layout:place:')).map((b) => b.id)).toEqual(['layout:place:use-y']);
+    expect(served.power.peakEUt).toBe(16);
+    expect(surplusBoardFor(s.app).get(q.id)?.draws).toEqual([{ from: p.id, key: 't:y@0', perSecond: sig9(30 / HOUR) }]);
+  });
+
   it('follows a rename, a new target and a delete of the project it takes from', async () => {
     const p = await create('P', MAKES_T);
     const q = await create('Q', USES_Y);
