@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { smeltSpec } from '../../helpers/howto-fixtures.ts';
 import { miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec, type IngredientSpec, type RecipeSpec } from '../../helpers/pack-spec.ts';
 import { acceptRecipe, buildCandidates, MAX_RECIPES, virtualKey, type PlanEnv, type LeafOracle } from '../../../src/server/planner/candidates.ts';
@@ -332,5 +333,17 @@ describe('real-data rules (final review)', () => {
     expect(acceptRecipe(p, p.recipeById.get('back')!, env(1, { excluded: new Set() })).ok).toBe(true);
     expect(acceptRecipe(p, p.recipeById.get('dust')!, env(1)).ok).toBe(true);
     expect(acceptRecipe(p, p.recipeById.get('obsidian')!, env(1, { fromNothing: new Set(['obsidian']) }))).toEqual({ ok: false, why: 'excluded' });
+  });
+  it('counts smelting a part, or a thing made of the metal, back into metal as recycling', () => {
+    const p = packFromSpec(smeltSpec());
+    const ids = ['smelt-rod', 'smelt-mag-long', 'smelt-pig-spring', 'smelt-bars', 'smelt-dust', 'smelt-red-iron', 'smelt-cluster', 'smelt-nugget', 'polarize-rod'];
+    const recycling = (id: string): boolean => EXCLUSION_RULES.recycling!(p.recipeById.get(id)!, p);
+    // A rod into its own steel (as before), a magnetic and a pig-iron part into their base metal, and bars made from rods
+    // are recycling; a dust smelted, Red Iron Compound into a Red Alloy Ingot (how GTNH makes it), a cluster nothing makes
+    // and a nugget (a base form) into another metal's nugget are not, nor is a polarizer recipe.
+    expect(Object.fromEntries(ids.map((id) => [id, recycling(id)]))).toEqual({
+      'smelt-rod': true, 'smelt-mag-long': true, 'smelt-pig-spring': true, 'smelt-bars': true, 'smelt-dust': false, 'smelt-red-iron': false,
+      'smelt-cluster': false, 'smelt-nugget': false, 'polarize-rod': false,
+    });
   });
 });

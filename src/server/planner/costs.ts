@@ -84,6 +84,15 @@ export function makePrices(pack: Pack, overrides: Record<string, number>): Price
   return { price, costPerIngot };
 }
 
+/**
+ * The least a "we already make this" item costs (architecture §11 entry 41 (6)): its plain price (`prices`) when it is a GT
+ * material form or a molten fluid — never less than the metal in it — else 0, so a part without GT data costs what its
+ * own chain costs.
+ */
+export function stopFloor(pack: Pack, prices: PriceTable): (key: StuffKey) => number {
+  return (key) => (pack.items.get(key)?.gt !== undefined || pack.fluids.get(key)?.molten === true ? prices.price(key) : 0);
+}
+
 const NOT_A_LEAF: LeafDecision = { buyable: false, cost: 0, leafClass: null };
 const UNAVAILABLE: LeafDecision = { buyable: false, cost: 0, leafClass: 'unavailable' };
 const NO_KEYS: ReadonlySet<StuffKey> = new Set();

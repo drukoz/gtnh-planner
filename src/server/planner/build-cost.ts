@@ -26,10 +26,10 @@ import type { BomLine, PlanContext, PlanSettings } from '../../shared/types/plan
 import { hatchRulesOf, KIND_CLASS, ruleNeeds } from '../layout/hatch-rules.ts';
 import { basisContextKey, effectiveTier, planBasis, settingsHash } from './basis.ts';
 import { buildCandidates, type CandidateGraph, type LeafOracle } from './candidates.ts';
-import { analyzeCosts, isOreBlock, makeLeafOracle } from './costs.ts';
+import { analyzeCosts, isOreBlock, makeLeafOracle, stopFloor } from './costs.ts';
 import { yieldToEventLoop } from './lp.ts';
 import { sig9 } from './round.ts';
-import { deadEnds, deadEndsAlone, makeableWith } from './solve.ts';
+import { deadEnds, deadEndsAlone, makeableWith, standaloneCosts } from './solve.ts';
 
 /** Machine pricings kept per pack (`itemPrices`), the least recently used dropped first. */
 export const MACHINE_PRICE_MEMO_SIZE = 8;
@@ -120,18 +120,63 @@ function gapOf(pack: Pack, graph: CandidateGraph | null, key: StuffKey, mined: (
   return item === undefined ? { kind: 'gap' } : { kind: 'unavailable', item };
 }
 
+const STOP_COSTS = new WeakMap<Pack, Map<string, Promise<(key: StuffKey) => number>>>();
+
+/**
+ * What each "we already make this" item of `s` without a key override costs to build with (architecture §11 entry 41 (6)),
+ * as a line prices it: what making it on its own costs (`standaloneCosts` over the graph walked from those items alone,
+ * with no stop items; byproducts thrown away; machine prices have no target to keep out), never below `stopFloor`; its
+ * plain price when nothing here makes it. Worked out once per pack and pricing context, whatever keys are asked, for at
+ * most MACHINE_PRICE_MEMO_SIZE contexts per pack, the least recently used dropped first; one that fails is not kept.
+ */
+function stopItemCosts(pack: Pack, s: PlanSettings, ctx: PlanContext, basis: ReturnType<typeof planBasis>): Promise<(key: StuffKey) => number> {
+  const stops = s.stopItems.filter((key) => !Object.hasOwn(s.costOverrides, key));
+  if (stops.length === 0) return Promise.resolve((key: StuffKey) => basis.prices.price(key));
+  const id = `${settingsHash(s)}|${basisContextKey(ctx)}`;
+  let memo = STOP_COSTS.get(pack);
+  if (memo === undefined) {
+    memo = new Map();
+    STOP_COSTS.set(pack, memo);
+  }
+  const hit = memo.get(id);
+  if (hit !== undefined) {
+    memo.delete(id);
+    memo.set(id, hit);
+    return hit;
+  }
+  const costs = (async (): Promise<(key: StuffKey) => number> => {
+    await yieldToEventLoop();
+    const open: PlanSettings = { ...s, stopItems: [] };
+    const graph = buildCandidates(pack, open, basis.env, makeLeafOracle(pack, open, basis.avail, basis.prices), stops);
+    const made = await standaloneCosts(graph, stops, [], pack.fluidContainers ?? []);
+    const floor = stopFloor(pack, basis.prices);
+    return (key) => {
+      const cost = made.get(key)?.cost;
+      return cost !== undefined && Number.isFinite(cost) ? Math.max(cost, floor(key)) : basis.prices.price(key);
+    };
+  })();
+  memo.set(id, costs);
+  if (memo.size > MACHINE_PRICE_MEMO_SIZE) memo.delete(memo.keys().next().value as string);
+  const kept = memo;
+  costs.catch(() => {
+    if (kept.get(id) === costs) kept.delete(id);
+  });
+  return costs;
+}
+
 /**
  * The prices of `keys` at `s` (`pricingSettings`): the leaf oracle of its basis with no `supplied` option, so water, air,
  * cobblestone and lava stay leaves at 0 as in every build-material breakdown (plan 09 Task 3), and without gathered
  * recipes, so sand and gravel are dug at their price (the cost analysis counts no machines: free cobblestone and hammers
- * would price them at 0); stop items are leaves at their override or price. A buyable key costs its leaf's cost; the
- * others are the targets of one candidate graph, and cost what its cost analysis gives them, or for a part only ore
- * processing makes what the walk from the ores the group can mine gives it (`oreProcessed`).
+ * would price them at 0); stop items are leaves at their override, else what making them on their own costs
+ * (`stopItemCosts`, change request 6). A buyable key costs its leaf's cost; the others are the targets of one candidate
+ * graph, and cost what its cost analysis gives them, or for a part only ore processing makes what the walk from the ores
+ * the group can mine gives it (`oreProcessed`).
  */
 async function computePrices(pack: Pack, s: PlanSettings, ctx: PlanContext, keys: readonly StuffKey[]): Promise<ItemPrices> {
   await yieldToEventLoop();
   const basis = planBasis(pack, s, ctx);
-  const leaf = makeLeafOracle(pack, s, basis.avail, basis.prices);
+  const leaf = makeLeafOracle(pack, s, basis.avail, basis.prices, await stopItemCosts(pack, s, ctx, basis));
   const made = keys.filter((key) => !leaf(key).buyable);
   const graph = made.length > 0 ? buildCandidates(pack, s, basis.env, leaf, made) : null;
   const costs = graph === null ? null : await analyzeCosts(graph);
@@ -144,7 +189,7 @@ async function computePrices(pack: Pack, s: PlanSettings, ctx: PlanContext, keys
     const reach = basis.avail.classOf(key);
     return (reach === 'direct' || reach === 'byproduct') && isOreBlock(pack, key);
   };
-  const ores = await oreProcessed(pack, s, basis, graph, made, first, mined);
+  const ores = await oreProcessed(pack, s, basis, graph, made, first, mined, leaf);
   const cost = (key: StuffKey): number => {
     const price = first(key);
     return Number.isFinite(price) ? price : (ores?.cost(key) ?? Infinity);
@@ -171,7 +216,7 @@ async function computePrices(pack: Pack, s: PlanSettings, ctx: PlanContext, keys
  */
 async function oreProcessed(
   pack: Pack, s: PlanSettings, basis: ReturnType<typeof planBasis>, graph: CandidateGraph | null, made: readonly StuffKey[],
-  first: (key: StuffKey) => number, mined: (key: StuffKey) => boolean,
+  first: (key: StuffKey) => number, mined: (key: StuffKey) => boolean, leaf: LeafOracle,
 ): Promise<{ cost(key: StuffKey): number } | null> {
   if (graph === null || graph.truncated === true) return null;
   const targets = made.filter((key) => {
@@ -180,7 +225,6 @@ async function oreProcessed(
     return ends.length > 0 && makeableWith(graph, key, ends);
   });
   if (targets.length === 0) return null;
-  const leaf = makeLeafOracle(pack, s, basis.avail, basis.prices);
   const oreLeaf: LeafOracle = (key) => {
     if (mined(key)) return { buyable: true, cost: basis.prices.price(key), leafClass: basis.avail.classOf(key) };
     const decision = leaf(key);

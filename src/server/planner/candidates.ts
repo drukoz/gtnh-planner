@@ -199,21 +199,51 @@ function anyMapContains(r: Recipe, part: string): boolean {
 const SMELTING_MAPS: ReadonlySet<string> = new Set(['furnace', 'gt.recipe.furnace', 'gt.recipe.microwave']);
 /** GT prefixes of the forms ore processing gives; smelting one of these is how metal is made, not recycling. */
 const PROCESSING_PREFIXES: readonly string[] = ['dust', 'crushed', 'ore', 'rawOre', 'gem', 'cell'];
+/** GT prefixes of a metal's base forms: smelting one into another metal's form is how GTNH makes it (cast iron), not recycling. */
+const BASE_FORM_PREFIXES: readonly string[] = ['ingot', 'nugget', 'block'];
+
+const MADE_OF = new WeakMap<Pack, Map<string, boolean>>();
+
+/** Whether some recipe of the pack that makes `key` consumes a GT item of one of `metals` (memoized per pack). */
+function madeOfMetal(pack: Pack, key: StuffKey, metals: ReadonlySet<string>): boolean {
+  let memo = MADE_OF.get(pack);
+  if (memo === undefined) MADE_OF.set(pack, (memo = new Map()));
+  const id = `${key}|${[...metals].sort().join(',')}`;
+  let made = memo.get(id);
+  if (made === undefined) {
+    made = (pack.producers.get(key) ?? []).some((i) => (pack.recipes[i]?.inputs ?? [])
+      .some((ing) => ing.consumed && ing.options.some((o) => metals.has(pack.items.get(o.key)?.gt?.material ?? ''))));
+    memo.set(id, made);
+  }
+  return made;
+}
 
 /**
- * A smelting recipe that melts a finished GT part back into its own material (a spring, rod, pipe or casing into
- * ingots or nuggets): GT's recycling, which its unificator adds to the furnace list without a recycling flag. A plan
- * would otherwise make Polyethylene Bars by crafting sheets into pipes and smelting those.
+ * A smelting recipe that melts a finished part back into metal (architecture §11 entry 41 (7)): GT's recycling, which its
+ * unificator adds to the furnace list without a recycling flag. Its one consumed input is a GT part (no ore-processing
+ * prefix) smelted into GT forms of its own material, or one that is no base form (`BASE_FORM_PREFIXES`) smelted into any
+ * material's forms — a magnetic or pig-iron part into its base metal, which priced a stopped Steel Rod at 0 on the 2.9
+ * export (128 such recipes there that the first rule missed) — or a non-GT item that the pack makes from one of the
+ * outputs' materials (bars made from rods, tools, machines: 214 of the export's 344 smelts of a non-GT item into GT
+ * forms; native clusters, poor ores, Red Iron Compound, wood and clay stay). A plan would otherwise make Polyethylene Bars
+ * by crafting sheets into pipes and smelting those.
  */
 function smeltsBack(r: Recipe, pack: Pack): boolean {
   if (!r.maps.some((map) => SMELTING_MAPS.has(map))) return false;
   const consumed = r.inputs.filter((ing) => ing.consumed);
   if (consumed.length !== 1 || r.outputs.length === 0) return false;
   const material = (key: StuffKey): { prefix: string; material: string } | undefined => pack.items.get(key)?.gt;
+  const metals = new Set<string>();
+  for (const p of r.outputs) {
+    const m = material(p.key)?.material;
+    if (m === undefined) return false;
+    metals.add(m);
+  }
   return consumed[0]!.options.some((o) => {
     const input = material(o.key);
-    if (input === undefined || PROCESSING_PREFIXES.some((prefix) => input.prefix.startsWith(prefix))) return false;
-    return r.outputs.every((p) => material(p.key)?.material === input.material);
+    if (input === undefined) return madeOfMetal(pack, o.key, metals);
+    if (PROCESSING_PREFIXES.some((prefix) => input.prefix.startsWith(prefix))) return false;
+    return (metals.size === 1 && metals.has(input.material)) || !BASE_FORM_PREFIXES.some((prefix) => input.prefix.startsWith(prefix));
   });
 }
 

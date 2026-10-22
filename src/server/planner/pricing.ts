@@ -10,7 +10,7 @@ import { isBaseItem } from './availability.ts';
 import { basisContextKey, gatheredRecipesOn, planBasis, resolveAvoid, settingsHash, type PlanBasis } from './basis.ts';
 import { benchLine } from './benches.ts';
 import { buildCandidates, type CandidateGraph, type CandidateOptions, type LeafOracle } from './candidates.ts';
-import { analyzeCosts, makeLeafOracle, type CostAnalysis } from './costs.ts';
+import { analyzeCosts, makeLeafOracle, stopFloor, type CostAnalysis } from './costs.ts';
 import { yieldToEventLoop } from './lp.ts';
 import { standaloneCosts, type Standalone } from './solve.ts';
 
@@ -23,7 +23,7 @@ const MEMO_SIZE = 8;
 export interface CostModel { graph: CandidateGraph; costs: CostAnalysis; stopItems: StuffKey[] }
 
 /**
- * A line's prices: its basis, the cost model, the leaf oracle with stop items at their cost-model price and derived
+ * A line's prices: its basis, the cost model, the leaf oracle with stop items (never below `stopFloor`) and derived
  * leaves at their own chain's cost, and the line's candidate graph over that oracle (the graph `planLine` solves).
  * `chains` holds what making each priced derived material and each stop item of that graph on its own runs
  * (`Standalone`, fix spec R7): the chain a bought one stands for (`RawInput.pricedVia`). `unbuildable` (plan 12) holds
@@ -70,23 +70,24 @@ interface PricingCore {
 
 /**
  * What making each derived material of `keys` on its own costs, never consuming the line's target (`standaloneCosts`
- * over the cost model's graph, where derived materials are routed), and never below its plain price (fix spec R7). One
- * that graph never walked (its pruning found no cheap way to make it along the target's chain) is priced over a graph
- * walked from it alone. Without the floor a bought material undercut what it is made from (molten copper at 0.826 an
- * ingot, Glass Dust at 0): at the flat 1 Magnetic Steel was the cheapest way to the LV Machine Hull's plates, while its
- * own chain costs what the steel costs; and a graph walked from it alone is not the line's, so it may count
- * ore-processing yields the flat price of mined items over-rewards (an end-stone iron ore smelted into 40 nuggets) as
- * savings the line never makes. Infinity = only a chain through the target makes it; no entry = its plain price. Each
- * answer is worked out once per `core` (`PricingCore`), so a line walked again around recipes it cannot run asks again
- * for free.
+ * over the cost model's graph, where derived materials are routed), and never below `floor` (default: its plain price,
+ * fix spec R7). One that graph never walked (its pruning found no cheap way to make it along the target's chain) is
+ * priced over a graph walked from it alone. Without the floor a bought material undercut what it is made from (molten
+ * copper at 0.826 an ingot, Glass Dust at 0): at the flat 1 Magnetic Steel was the cheapest way to the LV Machine
+ * Hull's plates, while its own chain costs what the steel costs; and a graph walked from it alone is not the line's, so
+ * it may count ore-processing yields the flat price of mined items over-rewards (an end-stone iron ore smelted into 40
+ * nuggets) as savings the line never makes. Infinity = only a chain through the target makes it; no entry = its plain
+ * price. Each answer is worked out once per `core` (`PricingCore`), so a line walked again around recipes it cannot run
+ * asks again for free.
  */
 async function derivedCosts(
   pack: Pack, settings: PlanSettings, core: PricingCore, target: StuffKey, keys: readonly StuffKey[],
+  floor: (key: StuffKey) => number = (key) => core.basis.prices.price(key),
 ): Promise<Map<StuffKey, Standalone>> {
   const { basis, model } = core;
   const out = new Map<StuffKey, Standalone>();
   const containers = pack.fluidContainers ?? [];
-  const floored = (key: StuffKey, made: Standalone): Standalone => ({ ...made, cost: Math.max(made.cost, basis.prices.price(key)) });
+  const floored = (key: StuffKey, made: Standalone): Standalone => ({ ...made, cost: Math.max(made.cost, floor(key)) });
   const inModel = keys.filter((key) => model.graph.goods.has(key));
   const own = keys.filter((key) => !model.graph.goods.has(key));
   const missing = inModel.filter((key) => !core.standalone.has(key));
@@ -180,9 +181,17 @@ async function computePricing(
   await yieldToEventLoop();
   const shared = await core;
   const { basis, model } = shared;
+  // "We already make this" items cost what making them on their own costs (architecture §11 entry 41 (6)), never less
+  // than the metal in them (`stopFloor`): the cost model's dual price made a stopped Steel Rod cost 0 on the 2.9 export,
+  // as its recycling loop prices Steel at 0, and the line turned stopped rods into its own steel. The stop items of the
+  // cost model's graph (which walks their recipes) are priced so; a key override still wins in `makeLeafOracle`, and any
+  // other stop item keeps its plain price.
+  const floor = stopFloor(pack, basis.prices);
+  const stopMade = await derivedCosts(pack, settings, shared, target,
+    settings.stopItems.filter((key) => model.graph.goods.has(key) && !Object.hasOwn(settings.costOverrides, key)), floor);
   const stopCost = (key: StuffKey): number => {
-    const cost = model.costs.cost(key);
-    return Number.isFinite(cost) ? cost : basis.prices.price(key);
+    const cost = stopMade.get(key)?.cost;
+    return cost !== undefined && Number.isFinite(cost) ? cost : basis.prices.price(key);
   };
   // Derived leaves cost what making them on their own costs (`derivedCosts`): first the graph at their plain prices,
   // then again with the derived leaves it buys priced, until it buys no unpriced one. One only a chain through the
@@ -219,7 +228,7 @@ async function computePricing(
   // (`RawInput.pricedVia`) is read; a stop item keeps its own price.
   const stops = [...graph.goods.values()].filter((g) => g.leafClass === 'stop' && g.buyable).map((g) => g.key);
   const chains = new Map(priced);
-  for (const [key, made] of await derivedCosts(pack, settings, shared, target, stops)) chains.set(key, made);
+  for (const [key, made] of await derivedCosts(pack, settings, shared, target, stops, floor)) chains.set(key, made);
   const pricing: LinePricing = { target, basis, model, leaf, graph, chains };
   if (unbuildable !== undefined) pricing.unbuildable = unbuildable;
   return pricing;
