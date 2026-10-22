@@ -12,6 +12,7 @@ import { FACES } from '../../src/shared/types/assets.ts';
 import type { ConduitMode, Layout, LayoutBlock } from '../../src/shared/types/layout.ts';
 import type { Ingredient, Item, Machine, MachineKind, Pack, Product, Recipe, StructureInfo } from '../../src/shared/types/pack.ts';
 import type { LogisticsMode, Plan, PlanFlow } from '../../src/shared/types/plan.ts';
+import { itemFilterFor } from '../../src/server/layout/conduits.ts';
 import type { InterfaceSpec, RoutedChipSpec } from '../../src/server/layout/feeding/contract.ts';
 import { ignoredByBlocking, PART_KEYS } from '../../src/server/layout/feeding/facts.ts';
 import { compareLocal } from '../../src/server/layout/feeding/frame.ts';
@@ -320,6 +321,39 @@ export function legacyFeed(layout: Layout, pack: Pack, plan: Plan): Layout {
 /** `layFeed`'s line as main laid it out before fix/feeding (`legacyFeed`). */
 export async function layLegacy(pack: Pack, plan: Plan, mode: LogisticsMode, at?: { origin: Vec3; rotation: Rotation }): Promise<Layout> {
   return legacyFeed(await layFeed(pack, plan, mode, at), pack, plan);
+}
+
+// ---- Main's Auto Workbenches before add-on 12 capped them ----
+
+/**
+ * `layout`'s Auto Workbenches (the blocks with `feed.bench`) as main laid them before add-on 12 Task 6 capped them: the
+ * input the bench cases were written against, rebuilt so they keep it now that main lays benches capped. A fresh copy, in
+ * which each bench's front faces the middle row, where its back meets the line now, so its back touches nothing of the
+ * line and its power cable is on its back; it has no `feed`, so the checker derives its grid from the recipe; and on an
+ * EnderIO line the conduit face toward it inserts through the Basic Item Filter of what its step takes, on its output
+ * side, which `inputFromOutputSide` opens. The rest of what add-on 12 changed stays as main lays it now, since no bench
+ * case reads it: the bench's `mainFacing` (the checker reads a bench's front from `facing`), its routed chips, its AE2
+ * pattern and Locking Card, its pipe, cover and settings on a machine-to-machine line, and the build steps and the bill.
+ */
+export function uncappedBenches(layout: Layout, pack: Pack, plan: Plan): Layout {
+  const out = structuredClone(layout);
+  const parts = resolveParts(pack);
+  const faces = out.blocks.flatMap((b) => b.conduits ?? []).flatMap((c) => c.faces);
+  for (const b of out.blocks) {
+    if (b.feed?.bench === undefined || b.stepId === undefined) continue;
+    if (b.facing !== undefined) b.facing = OPPOSITE[b.facing]!;
+    delete b.feed;
+    if (out.mode !== 'enderio') continue;
+    b.config = { ...b.config, inputFromOutputSide: true };
+    const { filter } = itemFilterFor(parts, stepItemInputs(plan, b.stepId));
+    for (const f of faces) if (f.target === b.label && f.insert !== undefined) f.insert = { ...f.insert, filter: structuredClone(filter), outputSide: true };
+  }
+  return out;
+}
+
+/** `layFeed`'s line with its Auto Workbenches as main laid them before add-on 12 (`uncappedBenches`). */
+export async function layUncapped(pack: Pack, plan: Plan, mode: LogisticsMode, at?: { origin: Vec3; rotation: Rotation }): Promise<Layout> {
+  return uncappedBenches(await layFeed(pack, plan, mode, at), pack, plan);
 }
 
 // ---- Hand-built models and test entities for the simulation (plan Tasks 4–6) ----

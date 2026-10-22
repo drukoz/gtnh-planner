@@ -9,7 +9,7 @@ import { OPPOSITE, posKey, rotateFace, type Vec3 } from '../../../../src/shared/
 import type { Layout, LayoutBlock } from '../../../../src/shared/types/layout.ts';
 import type { PlanFlow } from '../../../../src/shared/types/plan.ts';
 import { busSlots } from '../../../../src/server/layout/parts.ts';
-import { chain2, feedPlan, layFeed, layLegacy, FEED_IDS } from '../../../helpers/feeding-fixtures.ts';
+import { chain2, feedPlan, layFeed, layLegacy, layUncapped, FEED_IDS } from '../../../helpers/feeding-fixtures.ts';
 import { IDS } from '../../../helpers/layout-fixtures.ts';
 
 /** The line's own block at world cell `pos` (no ghost, no hookup block). */
@@ -318,17 +318,23 @@ describe('readLine', () => {
   it('reads a bench', async () => {
     for (const given of [true, false]) {
       const { pack, plan } = benchLine();
-      const layout = await layFeed(pack, plan, 'enderio');
+      const layout = await layUncapped(pack, plan, 'enderio');
       const block = layout.blocks.find((b) => b.role === 'machine' && b.stepId === 'b')! as FeedBlock;
       if (given) block.feed = { bench: { mode: 'normal', grid: [...BENCH_GRID], throughput: 0 } };
       const m = readLine({ pack, plan, layout });
       const bench = m.nodes.find((n): n is BenchNode => n.kind === 'bench')!;
       expect(bench).toMatchObject({ grid: BENCH_GRID, result: { key: 't:x@0', amount: 1 }, throughput: 0, kinds: ['t:a@0', 't:b@0'] });
-      // main turns the bench's front to the middle row, so north is its back, and only the cable north of it connects toward it
+      // as main laid it before add-on 12, its front turned to the middle row: north is its back, and only the cable north of it connects toward it
       expect(bench.back).toBe(OPPOSITE[bench.front]);
       expect([bench.front, bench.back, bench.powerSides, bench.fluidSides, bench.itemPipeSides]).toEqual([3, 2, [2], [], []]);
       expect(['bench_grid_derived', 'bench_mode_unset'].map((code) => m.unknowns.some((u) => u.code === code))).toEqual([!given, !given]);
     }
+    // main lays it since add-on 12 with its front away from the middle row, so the cable north of it, its power, meets its front, and with its grid
+    const { pack, plan } = benchLine();
+    const now = readLine({ pack, plan, layout: await layFeed(pack, plan, 'enderio') });
+    const bench = now.nodes.find((n): n is BenchNode => n.kind === 'bench')!;
+    expect([bench.front, bench.back, bench.powerSides, bench.fluidSides, bench.itemPipeSides, bench.grid]).toEqual([2, 3, [2], [], [], BENCH_GRID]);
+    expect(['bench_grid_derived', 'bench_mode_unset'].map((code) => now.unknowns.some((u) => u.code === code))).toEqual([false, false]);
   });
 
   // ---- the reading rules' other branches ----

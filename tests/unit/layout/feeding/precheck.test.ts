@@ -11,7 +11,7 @@ import { posKey, type Vec3 } from '../../../../src/shared/layout/geometry.ts';
 import type { Layout } from '../../../../src/shared/types/layout.ts';
 import type { Pack } from '../../../../src/shared/types/pack.ts';
 import type { Plan, PlanFlow } from '../../../../src/shared/types/plan.ts';
-import { chain2, feedPlan, layFeed, layLegacy, FEED_IDS } from '../../../helpers/feeding-fixtures.ts';
+import { chain2, feedPlan, layFeed, layLegacy, layUncapped, FEED_IDS } from '../../../helpers/feeding-fixtures.ts';
 import { IDS } from '../../../helpers/layout-fixtures.ts';
 
 const brief = (f: { code: string; certainty: string; key?: string; machine: string }) => `${f.code} ${f.certainty} ${f.key ?? '-'} ${f.machine}`;
@@ -201,9 +201,10 @@ describe('precheckFeeding', () => {
     const benchLine = () => feedPlan([{
       id: 'b', mteId: FEED_IDS.BENCH, count: 1, inputs: [['t:a@0', 2], ['t:b@0', 2]], outputs: [['t:x@0', 1]], craft: { width: 2, cells: ['t:a@0', 't:b@0', 't:b@0', 't:a@0'] },
     }]);
-    // today's faces: the bench's front is turned to the middle row, so its back touches nothing of the line, and the only cable that connects to it is on its back
+    // the faces main laid before add-on 12 capped its benches (`layUncapped`): the bench's front is turned to the middle row, so its back touches
+    // nothing of the line, and the only cable that connects to it is on its back
     const today = benchLine();
-    const todayModel = readLine({ pack: today.pack, plan: today.plan, layout: await layFeed(today.pack, today.plan, 'enderio') });
+    const todayModel = readLine({ pack: today.pack, plan: today.plan, layout: await layUncapped(today.pack, today.plan, 'enderio') });
     const label = todayModel.nodes.find((n) => n.kind === 'bench')!.label;
     const findings = precheckFeeding(todayModel, today.pack);
     expect(findings.map(brief)).toEqual([`feed_overfill certain - ${label}`, `feed_bench_stuck certain - ${label}`, `feed_starved certain - ${label}`]);
@@ -213,7 +214,7 @@ describe('precheckFeeding', () => {
       `${label}'s only power cable touches its back, which takes no EU`,
     ]);
 
-    // facing away from the middle row puts the conduit on its back and the cable on its front; a Limited Item Filter caps it
+    // facing away from the middle row puts the conduit on its back and the cable on its front; a Limited Item Filter caps it (as main lays it since add-on 12)
     const fixed = benchLine();
     const layout = await layFeed(fixed.pack, fixed.plan, 'enderio');
     const bench = machineBlock(layout, 'b');
@@ -553,7 +554,8 @@ describe('precheckFeeding, the other branches', () => {
 
   it('finds the faces and pipes that touch a bench', async () => {
     const { pack, plan } = benchLine();
-    const layout = await layFeed(pack, plan, 'enderio');
+    // the bench as main laid it before add-on 12: its front toward the middle row, a Basic Item Filter on its conduit face
+    const layout = await layUncapped(pack, plan, 'enderio');
     // the cable west of it becomes a GT item pipe linked toward it; its conduit bundle gets an ender fluid conduit face toward it
     Object.assign(blockAt(layout, [0, 64, 1]), { role: 'pipe', block: { id: 'gregtech:gt.blockmachines', meta: 0, mteId: IDS.TIN_ITEM_PIPE }, connections: 1 << 5 });
     blockAt(layout, [1, 64, 2]).conduits!.push({ kind: 'liquid_ender', item: 'EnderIO:itemLiquidConduit@2', connections: 0, faces: [{ face: 'north', mode: 'insert', target: 'Auto Workbench (MV)' }] });
@@ -569,9 +571,9 @@ describe('precheckFeeding, the other branches', () => {
 
   it('names the side of a bench as its builder sees it', async () => {
     const { pack, plan } = benchLine();
-    const m = readLine({ pack, plan, layout: await layFeed(pack, plan, 'direct') });
+    const m = readLine({ pack, plan, layout: await layUncapped(pack, plan, 'direct') });
     const bench = m.nodes.find((n): n is BenchNode => n.kind === 'bench')!;
-    // facing south (side 3): its back is north, its left east and its right west
+    // facing south (side 3), as main laid it before add-on 12: its back is north, its left east and its right west
     bench.fluidSides = [0, 1, 2, 3, 4, 5];
     const sides = precheckFeeding(m, pack).filter((f) => f.text.includes(' has a fluid '));
     expect(sides.map((f) => f.text.replace(`${bench.label} has a fluid pipe on its `, '').replace(/: .*/, ''))).toEqual(['bottom', 'top', 'back', 'front', 'right side', 'left side']);
@@ -584,7 +586,8 @@ describe('precheckFeeding, the other branches', () => {
 
   it('says a bench\'s back touches nothing when no network is there at all', async () => {
     const { pack, plan } = benchLine();
-    const m = readLine({ pack, plan, layout: await layFeed(pack, plan, 'enderio') });
+    // as main laid it before add-on 12, its only cable is on its back
+    const m = readLine({ pack, plan, layout: await layUncapped(pack, plan, 'enderio') });
     m.networks = [];
     expect(precheckFeeding(m, pack).map((f) => f.code)).toEqual(['feed_bench_stuck', 'feed_starved']);
     // another cable that connects to it, on a side that takes EU, makes the one on its back harmless
