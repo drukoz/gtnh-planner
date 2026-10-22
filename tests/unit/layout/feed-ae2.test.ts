@@ -21,7 +21,9 @@ import type { StuffKey } from '../../../src/shared/keys.ts';
 import type { PatternSpec } from '../../../src/shared/types/feed.ts';
 import type { Pack, Product, Recipe } from '../../../src/shared/types/pack.ts';
 import type { Plan, PlanStep } from '../../../src/shared/types/plan.ts';
-import { IDS, layoutPack, makePlan, makeProject, makeScan, type StepSpec } from '../../helpers/layout-fixtures.ts';
+import {
+  AUTO_WORKBENCH, craftingRecipe, IDS, layoutPack, makePlan, makeProject, makeScan, withAutoWorkbench, type StepSpec,
+} from '../../helpers/layout-fixtures.ts';
 
 const MOLD = 'gregtech:gt.metaitem.01@32307', SCHEMATIC = 'gregtech:gt.metaitem.01@32498', CIRCUIT = 'gregtech:gt.integrated_circuit@3';
 const LENS = 't:lens@0', EXPORT_BUS = 'appliedenergistics2:item.ItemMultiPart@260';
@@ -94,6 +96,15 @@ describe('AE2 feeding', () => {
     // GT registers its molds, extruder shapes, slicer blades, lenses and the programmed circuit; not the Packager's schematics
     expect([blocking([]), blocking([MOLD]), blocking([CIRCUIT]), blocking([LENS]), blocking([MOLD, CIRCUIT])]).toEqual([true, true, true, true, true]);
     expect([blocking([SCHEMATIC]), blocking([MOLD, SCHEMATIC]), blocking(['t:dust@0'])]).toEqual([false, false, false]);
+  });
+
+  it('turns blocking mode off toward an Auto Workbench, whose crafting grid blocking mode counts', () => {
+    // Controller ruling 204 (1), research machine-feeding §1.3.6 and §2.3: GT's GTItemSink counts every slot of an Auto
+    // Workbench, its ghost grid included, so a blocking interface never pushes into a bench whose grid is set
+    const p = withAutoWorkbench(pack());
+    p.recipeById.set('r', craftingRecipe('r', 3, ['t:in@0', 't:dust@0', 't:in@0'], ['t:x@0', 1]));
+    const plan = oneStep({ id: 'r', mteId: AUTO_WORKBENCH, count: 1, tier: 2, euPerTick: 128, inputs: [['t:in@0', 2], ['t:dust@0', 1]], outputs: [['t:x@0', 1]] });
+    expect(interfaces(ae2(p, plan).r)[0]!.feed?.interface?.blocking).toBe(false);
   });
 
   it('feeds a machine that makes only fluids through an ME Export Bus filtered to its inputs, and says the line relies on stock', () => {

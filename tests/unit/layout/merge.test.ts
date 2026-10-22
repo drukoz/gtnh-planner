@@ -33,6 +33,15 @@ describe('mergeLayoutIntoPlan', () => {
     expect(mergeBuildSteps(steps, [])).toEqual(steps);
   });
 
+  it('carries the layout parts into the plan cost', () => {
+    // plan 12 Task 6: the layout's parts other than its hatches, priced by the layout service, beside the machines' build
+    const plan = { ...makePlan([{ id: 's1', mteId: IDS.MACERATOR, count: 2 }]), cost: { runPerHour: 1, build: 10, horizonHours: 24 } };
+    expect(mergeLayoutIntoPlan(plan, layout(), null, (k) => k, 7).cost).toEqual({ runPerHour: 1, build: 10, horizonHours: 24, layout: 7 });
+    expect(mergeLayoutIntoPlan(plan, layout(), null, (k) => k).cost).toEqual({ runPerHour: 1, build: 10, horizonHours: 24 });
+    const costless = makePlan([{ id: 's1', mteId: IDS.MACERATOR, count: 2 }]);
+    expect(mergeLayoutIntoPlan(costless, layout(), null, (k) => k, 7).cost).toBeUndefined();
+  });
+
   it('keeps each line group when merging, taking the first one set', () => {
     expect(mergeBom([{ key: 'k', amount: 1, why: 'a' }, { key: 'm', amount: 1, why: 'm', group: 'machines' }],
       [{ key: 'k', amount: 2, why: 'b', group: 'logistics' }, { key: 'm', amount: 1, why: 'n', group: 'power' }])).toEqual([

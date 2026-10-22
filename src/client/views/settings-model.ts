@@ -1,14 +1,15 @@
 // What the settings panel shows and sends (spec §3.2–§3.3b, §3.6), as pure functions: the reachable-dimension rows
 // and their labels, the patches the panel sends (each a whole field value, so one `settings` op says everything), the
 // checks an amount or a cost must pass before anything is sent, the avoid list's suggestions, labels and changes, the
-// "Steps vs raw material" presets (fix spec §3), the pinned ingredient options in words (fix spec §6.4) and the
-// "Machines we have" list's machines, counts and changes (architecture §11.29).
+// "Steps vs raw material" presets (fix spec §3), the build horizon's presets and the choices of the tier new machines are
+// built at and of when to build a multiblock (plan 12 Task 7, the user's ruling 224), the pinned ingredient options in
+// words (fix spec §6.4) and the "Machines we have" list's machines, counts and changes (architecture §11.29).
 
 import { TIER_NAMES, tierName } from '../../shared/gt/tiers.ts';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import { MAX_AVOID_ENTRIES, MAX_AVOID_ENTRY_LENGTH, MAX_OWNED_MANUAL_COUNT, MAX_OWNED_MANUAL_ENTRIES, MAX_STEP_CHARGE } from '../../shared/project/apply-op.ts';
 import type { PackInfo } from '../../shared/types/api.ts';
-import { DEFAULT_STEP_CHARGE, type Plan, type PlanSettings, type ReachableDim } from '../../shared/types/plan.ts';
+import { DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_STEP_CHARGE, type Plan, type PlanSettings, type ReachableDim } from '../../shared/types/plan.ts';
 import { formatNumber } from '../format.ts';
 
 export interface DimRow { key: string; name: string; group: string; state: 'auto' | 'on' | 'off'; reachable: boolean; label: string }
@@ -178,14 +179,14 @@ export function avoidLabel(entry: string, materials: readonly AvoidMaterial[], n
 }
 
 /**
- * The "Steps vs raw material" presets (fix spec §3, architecture §11.34): the share of the line's least raw material
- * one recipe step must save to be built. "Some steps" is the default (`DEFAULT_STEP_CHARGE`, controller ruling 2).
+ * The "Steps vs raw material" presets (fix spec §3, architecture §11.34 as entry 39 amends it): with build cost counted
+ * the share of the line's least raw material over the horizon one new machine block costs, with it ignored the share
+ * one recipe step must save. "Fewest machines" is the default (`DEFAULT_STEP_CHARGE`, the user's answer of 2026-10-20).
  */
 export const STEP_CHARGE_PRESETS: ReadonlyArray<{ value: number; label: string }> = [
   { value: 0, label: 'Least raw material' },
-  { value: 0.02, label: 'Some steps' },
-  { value: 0.05, label: 'Balanced' },
-  { value: 0.15, label: 'Fewest machines' },
+  { value: 0.02, label: 'Some machines' },
+  { value: 0.5, label: 'Fewest machines' },
 ];
 
 /** A step charge as a percentage, as precise as it is stored: `2%`, `7%`, `2.5%`. */
@@ -198,7 +199,7 @@ export function stepChargeOf(settings: PlanSettings): number {
   return settings.stepCharge ?? DEFAULT_STEP_CHARGE;
 }
 
-/** A step charge in words: its preset's name (`Some steps`), else `Custom (7%)`. */
+/** A step charge in words: its preset's name (`Some machines`), else `Custom (7%)`. */
 export function stepChargeLabel(charge: number): string {
   return STEP_CHARGE_PRESETS.find((p) => p.value === charge)?.label ?? `Custom (${chargePercent(charge)})`;
 }
@@ -214,6 +215,74 @@ export function stepChargeOptions(charge: number): Array<{ value: string; label:
 export function stepChargePatch(value: string): Partial<PlanSettings> | null {
   const charge = value.trim() === '' ? Number.NaN : Number(value);
   return Number.isFinite(charge) && charge >= 0 && charge <= MAX_STEP_CHARGE ? { stepCharge: charge } : null;
+}
+
+/**
+ * "Count build cost against" (plan 12 Task 7, design spec §3.3): the hours of running the build cost of new machines is
+ * weighed against, `none` to ignore it (`PlanSettings.buildHorizonHours` null). 24 hours is the default.
+ */
+export const BUILD_HORIZON_PRESETS: ReadonlyArray<{ value: string; hours: number | null; label: string }> = [
+  { value: '1', hours: 1, label: '1 hour' },
+  { value: '8', hours: 8, label: '8 hours' },
+  { value: '24', hours: 24, label: '24 hours' },
+  { value: '168', hours: 168, label: '1 week' },
+  { value: 'none', hours: null, label: 'Ignore build cost' },
+];
+
+/** The value of a stored horizon no preset names. */
+const CUSTOM_HORIZON = 'custom';
+
+/**
+ * What the horizon select shows for `hours`: its preset, the 24 h one for a project stored without the setting
+ * (undefined), else `Custom (<n> h)` under the value `custom`.
+ */
+export function horizonChoice(hours: number | null | undefined): { value: string; label: string } {
+  const wanted = hours === undefined ? DEFAULT_BUILD_HORIZON_HOURS : hours;
+  const preset = BUILD_HORIZON_PRESETS.find((p) => p.hours === wanted);
+  return preset !== undefined ? { value: preset.value, label: preset.label } : { value: CUSTOM_HORIZON, label: `Custom (${formatNumber(wanted as number)} h)` };
+}
+
+/** The patch for a value picked in the horizon select: `{ buildHorizonHours }` of its preset; nothing for any other value. */
+export function horizonPatch(value: string): Partial<PlanSettings> {
+  const preset = BUILD_HORIZON_PRESETS.find((p) => p.value === value);
+  return preset === undefined ? {} : { buildHorizonHours: preset.hours };
+}
+
+/**
+ * The choices of "Build machines at" (the user's ruling 224): `Cheapest tier` (null, the default, under the value '')
+ * and each tier from LV up to the project's tier; a stored tier above it (the project's tier was lowered since) last,
+ * said to be above it (the planner builds at the project's tier then). With the project's tier not known yet (`null`: an
+ * auto tier, which the world scan decides, and no plan yet; the controller's ruling after plan 12 Task 7, (b)), only
+ * the cheapest tier and a stored tier, plainly: the list of tiers waits for the plan.
+ */
+export function buildTierOptions(projectTier: number | null, stored: number | null | undefined): Array<{ value: string; label: string }> {
+  const options = [{ value: '', label: 'Cheapest tier' }];
+  if (projectTier === null) {
+    if (typeof stored === 'number') options.push({ value: String(stored), label: tierText(stored) });
+    return options;
+  }
+  for (let tier = 1; tier <= projectTier; tier++) options.push({ value: String(tier), label: tierText(tier) });
+  if (typeof stored === 'number' && stored > projectTier) options.push({ value: String(stored), label: `${tierText(stored)} (above the project’s tier)` });
+  return options;
+}
+
+/** The patch for a value picked in "Build machines at", or null for anything validateOp would refuse. */
+export function buildTierPatch(value: string): Partial<PlanSettings> | null {
+  if (value === '') return { buildTier: null };
+  const tier = /^\d+$/.test(value) ? Number(value) : Number.NaN;
+  return Number.isInteger(tier) && tier >= 1 && tier < TIER_NAMES.length ? { buildTier: tier } : null;
+}
+
+/** "Multiblocks" (the user's ruling 224): use them where cheaper (the default), or only where nothing else can do it. */
+export const MULTIBLOCK_CHOICES: ReadonlyArray<{ value: NonNullable<PlanSettings['multiblocks']>; label: string }> = [
+  { value: 'allow', label: 'Use when cheaper' },
+  { value: 'only-required', label: 'Only when nothing else can do it' },
+];
+
+/** The patch for a value picked in "Multiblocks", or null for one it does not offer. */
+export function multiblocksPatch(value: string): Partial<PlanSettings> | null {
+  const choice = MULTIBLOCK_CHOICES.find((c) => c.value === value);
+  return choice === undefined ? null : { multiblocks: choice.value };
 }
 
 /** One pinned ingredient option (`PlanSettings.optionChoice`): its key, recipe, slot, the option and the pin in words. */

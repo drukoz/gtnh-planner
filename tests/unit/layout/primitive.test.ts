@@ -9,7 +9,7 @@ import { describe, it, expect } from 'vitest';
 import { connectionSpans, connectionsGraph } from '../../../src/client/connections/model.ts';
 import { handRunSurroundings, placeUnits, unitsFromPlan } from '../../../src/server/layout/arrange.ts';
 import { headWidthFor, routeInternal } from '../../../src/server/layout/internal.ts';
-import { layoutLine } from '../../../src/server/layout/layout.ts';
+import { emptyScan, layoutLine } from '../../../src/server/layout/layout.ts';
 import { buildMode } from '../../../src/server/layout/modes/mode.ts';
 import { resolveParts } from '../../../src/server/layout/parts.ts';
 import { tierGroups, transformerStages } from '../../../src/server/layout/power.ts';
@@ -225,6 +225,23 @@ describe('primitive machines, mode by mode', () => {
       { side: 'input', keys: ['t:in@0', 't:steel@0'] }, { side: 'output', keys: ['t:iron@0', 't:out_s@0'] }]);
     expect(layout.blocks.find((b) => b.label === 'Routed Interface Pipe (output chest)')?.feed).toEqual({
       chips: [{ kind: 'terminator', filter: { mode: 'whitelist', keys: ['t:iron@0', 't:out_s@0'] } }] });
+  });
+
+  it('ae2: fills and empties a furnace two steps share, recipe by recipe (plan 12)', async () => {
+    // an AE2 sharing pool on one Bricked Blast Furnace: b2 makes Coal Coke from Coal, b1 Steel Ingot from it
+    const pool = { id: 'pool:b1', steps: ['b1', 'b2'] };
+    const plan = makePlan([
+      { id: 'b1', mteId: BRICKED, count: 1, euPerTick: 0, name: 'Bricked Blast Furnace', pool, inputs: [['t:iron@0', 1], ['t:coke@0', 2]], outputs: [['t:steel@0', 1]] },
+      { id: 'b2', mteId: BRICKED, count: 1, euPerTick: 0, name: 'Bricked Blast Furnace', pool, inputs: [['t:coal@0', 1]], outputs: [['t:coke@0', 1]] },
+    ], { flows: [{ from: 'raw', to: 'b1', key: 't:iron@0', perSecond: 1 }, { from: 'raw', to: 'b2', key: 't:coal@0', perSecond: 2 },
+      { from: 'b2', to: 'b1', key: 't:coke@0', perSecond: 2 }, { from: 'b1', to: 'out', key: 't:steel@0', perSecond: 1 }] });
+    const layout = await layoutLine(primitivePack(), plan, emptyScan(), makeProject({ logistics: 'ae2', scanId: null, baseId: null }));
+    expect(layout.blocks.filter((b) => b.role === 'machine').map((b) => [b.stepId, b.stepIds])).toEqual([['b1', ['b1', 'b2']]]);
+    const hand = new Map(layout.buildSteps.filter((s) => s.id.startsWith('layout:hand:')).map((s) => [s.id, s.text]));
+    expect([...hand.keys()]).toEqual(['layout:hand:b1:fill', 'layout:hand:b1:empty', 'layout:hand:b2:fill', 'layout:hand:b2:empty']);
+    // the coke it makes for itself comes from the furnace itself
+    expect(hand.get('layout:hand:b1:fill')).toBe('Fill the Bricked Blast Furnace by hand: 1× Iron Ingot + 2× Coal Coke a run (Iron Ingot from your storage, '
+      + 'Coal Coke from the Bricked Blast Furnace)');
   });
 
   it('ae2: the steam machine gets its interface but no cover, and what it makes is taken out by hand', async () => {

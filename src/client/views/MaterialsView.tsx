@@ -1,5 +1,6 @@
 // The Materials & steps tab (spec §3.10): what changed with the last settings change, what to build once (grouped as
-// architecture §11.13, expandable down to base materials), the base materials that build needs and which build lines
+// architecture §11.13, expandable down to base materials, with its raw material in all: plan 12's `buildTotalLine`),
+// the base materials that build needs and which build lines
 // need each, what the line runs on (per hour, or for the whole batch in Make N) with where it comes from, what unlocks
 // it and which steps use it (spec §3.3b, fix spec §6.4) — the inputs nothing supplies first — what is left over, and
 // then the build steps. Every row can be ticked off by anyone, and the have-counts from the world scan sit next to each
@@ -18,6 +19,7 @@ import { formatRate } from '../format.ts';
 import { showInFlow } from '../state/flow-focus.ts';
 import { makeHerePatch } from './flow-model.ts';
 import { amountText, buildRows, groupBuildRows, missingRows, runRows, unavoidableKeys, type BuildRow, type MissingRow, type RunRow, type UsedBy } from './materials-model.ts';
+import { buildTotalLine } from './plan-cost.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
 import { toggleList } from './settings-model.ts';
 import { StepsView } from './StepsView.tsx';
@@ -118,10 +120,13 @@ function BuildSection(props: { plan: Plan; names: Record<string, string>; marks:
     });
   };
   const groups = groupBuildRows(plan.buildList, names, expanded, unavoidable);
+  // What it all takes in raw material, the layout's power and logistics parts included (plan 12).
+  const total = buildTotalLine(plan);
   return (
     <section className="materials-section" aria-labelledby="to-build-title">
       <h3 id="to-build-title">To build (once)</h3>
       {groups.length === 0 && <p className="muted">Nothing new to build: the machines you have cover this line.</p>}
+      {groups.length > 0 && total !== null && <p className="muted">{total}</p>}
       {groups.map((group) => (
         <div key={group.id} className="mat-group">
           <h4>{group.label}</h4>

@@ -14,6 +14,7 @@ import type { RoutedChipSpec } from '../../../src/shared/types/feed.ts';
 import type { Layout, LayoutBlock } from '../../../src/shared/types/layout.ts';
 import type { Pack } from '../../../src/shared/types/pack.ts';
 import type { LogisticsMode, Plan, PlanSettings } from '../../../src/shared/types/plan.ts';
+import { LV_MACHINE_PARTS, withBuildRecipes } from '../../helpers/build-fixtures.ts';
 import { addLineParts, IDS, layoutPack, makePlan, makeProject } from '../../helpers/layout-fixtures.ts';
 import { MINI_GT } from '../../helpers/mini-gt.ts';
 import { packFromSpec } from '../../helpers/pack-spec.ts';
@@ -78,6 +79,20 @@ describe('static feeding rules', () => {
     const m = await lay(pack, held, 'enderio');
     expect(feedCodes(m).map((w) => w.text)).toEqual([`${at(m.blocks.find((b) => b.role === 'machine')!)} takes 1 kind of item but has 0 input slots `
       + 'free (1 held: Schematic (Dusts)): one kind always waits']);
+  });
+
+  it('counts the kinds of every recipe a shared machine runs (R1, plan 12)', async () => {
+    // an AE2 sharing pool on the 1-slot macerator: s1 takes one kind, s2 two, which one input slot never holds at once
+    const pack = namedPack();
+    const pool = { id: 'pool:s1', steps: ['s1', 's2'] };
+    const plan = makePlan([{ id: 's1', mteId: IDS.MACERATOR, count: 1, pool },
+      { id: 's2', mteId: IDS.MACERATOR, count: 1, pool, inputs: [['t:out_s1@0', 1], ['t:dust@0', 1]] }], { flows: [
+      { from: 'raw', to: 's1', key: 't:in@0', perSecond: 1 }, { from: 's1', to: 's2', key: 't:out_s1@0', perSecond: 1 },
+      { from: 'raw', to: 's2', key: 't:dust@0', perSecond: 1 }, { from: 's2', to: 'out', key: 't:out_s2@0', perSecond: 1 }] });
+    const layout = await lay(pack, plan, 'ae2');
+    const m = layout.blocks.find((b) => b.role === 'machine')!;
+    expect(m.stepIds).toEqual(['s1', 's2']);
+    expect(feedCodes(layout)).toEqual([{ code: 'feed_crowded', stepId: 's1', text: `${at(m)} takes 2 kinds of item but has 1 input slot free: one kind always waits` }]);
   });
 
   it('flags Multi Stack Input left unset or set On on a machine fed two kinds, in a line that pushes (R2)', async () => {
@@ -218,10 +233,12 @@ describe('static feeding rules', () => {
 
   it.each(['routed', 'ae2', 'enderio'] as const)('lays a Mini-GT circuit line with its feeding settings and no feeding warning (%s)', async (mode) => {
     // Mini-GT's MV circuit: 2 copper wire, 1 redstone and piped molten iron in an assembler; the wire from a wiremill, the molten
-    // iron from a fluid extractor
+    // iron from a fluid extractor. Plan 12 never plans a machine no recipe makes as a new one (Amendment OQ3), so the
+    // Advanced Assembler and the Basic Fluid Extractor get a build recipe to keep this route (ruling P3)
+    const spec = withBuildRecipes(MINI_GT, [122, 131], LV_MACHINE_PARTS);
     const settings: PlanSettings = { ...defaultSettings(), target: 't:circuit@0', amount: 6, per: 'min', tier: 2, logistics: mode };
-    const plan = await planLine(packFromSpec(structuredClone(MINI_GT)), settings, emptyContext());
-    const pack = addLineParts(packFromSpec(structuredClone(MINI_GT)));
+    const plan = await planLine(packFromSpec(structuredClone(spec)), settings, emptyContext());
+    const pack = addLineParts(packFromSpec(structuredClone(spec)));
     const layout = await layoutLine(pack, plan, emptyScan(), { ...makeProject({ logistics: mode, scanId: null, baseId: null }), settings });
     expect(plan.steps.map((s) => s.id).sort()).toEqual(['circuit-mv', 'extract-iron', 'wire']);
     expect(feedCodes(layout)).toEqual([]);

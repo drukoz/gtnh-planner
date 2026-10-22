@@ -1,7 +1,7 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { isValidElement, type ReactElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { PortsSection, RawPanel, StepPanel, shownWays } from '../../src/client/views/StepPanel.tsx';
+import { MachineTierSection, PortsSection, RawPanel, StepPanel, shownWays } from '../../src/client/views/StepPanel.tsx';
 import { haveSupplyPatch, importInsteadPatch, makeHerePatch, optionPatch, useOnlyPatch } from '../../src/client/views/flow-model.ts';
 import { getFlowFocus, setFlowFocus } from '../../src/client/state/flow-focus.ts';
 import { defaultSettings, validateOp } from '../../src/shared/project/apply-op.ts';
@@ -344,5 +344,89 @@ describe('step panel: reused machines', () => {
     const off = panel(step({ id: 'asm', count: 3, owned: 0 }), wires, S({ reuseOwned: false, declineReuse: [121] }));
     expect(off).not.toContain('Reuse your');
     expect(off).not.toContain('reused');
+  });
+});
+
+// Plan 12 Task 7 (architecture §11.39): each step's machine tier, an owned machine shared with other steps or of another
+// tier, and a machine a sharing pool's steps share.
+describe('step panel: machine tiers and shared machines', () => {
+  const LV = { tier: 1, mteId: 101, name: 'Basic Bending Machine', machines: 5, owned: 0, build: 80 };
+  const MV = { tier: 2, mteId: 102, name: 'Advanced Bending Machine', machines: 3, owned: 1, build: null, unbuildable: 'no recipe in this pack' };
+  const bend = (p: Partial<PlanStep> = {}): PlanStep => step({
+    id: 'bend-plate', mapId: 'gt.recipe.metalbender', machine: { mteId: 101, name: 'Basic Bending Machine', tier: 1 }, count: 3, mainOutput: 't:iron_plate@0',
+    tiers: [LV, MV], ...p,
+  });
+  const plates = (s: PlanStep): Plan => planOf({ steps: [s], names: { 't:iron_plate@0': 'Iron Plate' } });
+  /** The radios of the "Machine tier" fieldset, by their text, `*` after the checked one. */
+  const radios = (html: string): string[] => {
+    const set = /<fieldset[^>]*data-machine-tier=""[^>]*>.*?<\/fieldset>/s.exec(html)?.[0] ?? '';
+    return [...set.matchAll(/<label[^>]*>(<input[^>]*>)(.*?)<\/label>/gs)].map((m) => `${text(m[2] ?? '').trim()}${/checked=""/.test(m[1] ?? '') ? ' *' : ''}`);
+  };
+  /** What clicking the radio whose text starts with `start` sends. */
+  const sends = (s: PlanStep, settings: PlanSettings, start: string): unknown => {
+    const patch = vi.fn();
+    const inputs = findAll(MachineTierSection({ step: s, settings, patch }), (e) => e.type === 'label');
+    const label = inputs.find((l) => childText(l).startsWith(start));
+    const [input] = findAll(label!.props.children as ReactNode, (e) => e.type === 'input');
+    (input!.props.onChange as () => void)();
+    return patch.mock.calls[0]?.[0];
+  };
+
+  it('lists every tier a step can run at, what it would take there and why one cannot be built', () => {
+    const html = panelHtml(bend(), plates(bend()));
+    expect(text(html)).toContain('Machine tier');
+    expect(radios(html)).toEqual([
+      'Auto *', 'LV: 5× Basic Bending Machine — 80 raw to build', 'MV: 3× Advanced Bending Machine, 1 yours — cannot be built here (no recipe in this pack)']);
+    // A pricing gap: the machine can be made, but its price could not be worked out.
+    const gap = bend({ tiers: [LV, { tier: 2, mteId: 102, name: 'Advanced Bending Machine', machines: 3, owned: 1, build: null }] });
+    expect(radios(panelHtml(gap, plates(gap)))).toContain('MV: 3× Advanced Bending Machine, 1 yours — build cost unknown');
+  });
+  it('pins the tier picked, keeps every tier listed while one is pinned, and goes back to Auto', () => {
+    expect(sends(bend(), S(), 'MV')).toEqual({ machineTier: { 'bend-plate': 2 } });
+    const pinned = bend({ tiers: [LV, { ...MV, pinned: true }] });
+    const settings = S({ machineTier: { 'bend-plate': 2, other: 3 } });
+    expect(radios(panelHtml(pinned, plates(pinned), settings))).toEqual([
+      'Auto', 'LV: 5× Basic Bending Machine — 80 raw to build', 'MV: 3× Advanced Bending Machine, 1 yours — cannot be built here (no recipe in this pack) *']);
+    expect(sends(pinned, settings, 'Auto')).toEqual({ machineTier: { other: 3 } });
+    expect(sends(pinned, S({ machineTier: { 'bend-plate': 2 } }), 'Auto')).toEqual({ machineTier: {} });
+    expect(validateOp({ op: 'settings', patch: { machineTier: { 'bend-plate': 2 } } })).toBeNull();
+  });
+  it('shows the tier choice only where there is one', () => {
+    const one = bend({ tiers: [LV] });
+    expect(panel(one, plates(one))).not.toContain('Machine tier');
+    const none = bend({ tiers: undefined });
+    expect(panel(none, plates(none))).not.toContain('Machine tier');
+    const pinnedOne = bend({ tiers: [{ ...LV, pinned: true }] });
+    expect(radios(panelHtml(pinnedOne, plates(pinnedOne)))).toEqual(['Auto', 'LV: 5× Basic Bending Machine — 80 raw to build *']);
+  });
+  it('names the steps an owned machine is shared with, and the owned machines of another tier', () => {
+    const asmOf = (id: string, out: string): PlanStep => step({ id, mainOutput: out, outputs: [{ key: out, amount: 1, chance: 1 }], count: 1, owned: 1,
+      reused: { count: 1, where: [], units: [0], sharedWith: ['circuit-lv', 'gear', 'kit'].filter((x) => x !== id) } });
+    const kit = planOf({ steps: [asmOf('circuit-lv', 't:circuit@0'), asmOf('gear', 't:gear@0'), asmOf('kit', 't:kit@0')],
+      names: { 't:circuit@0': 'Basic Circuit', 't:gear@0': 'Gear', 't:kit@0': 'Kit' } });
+    expect(panel(kit.steps[0]!, kit)).toContain('1× Basic Assembler (LV) reused — from your list — shared with Gear, Kit');
+    const other = bend({ count: 3, owned: 0, tiers: undefined,
+      reused: { count: 0, where: [], others: [{ mteId: 102, name: 'Advanced Bending Machine', tier: 2, count: 1, units: [0], where: [], euPerTick: 96, runsPerSecondPerMachine: 0.4 }] } });
+    const html = panel(other, plates(other));
+    expect(html).toContain('1× Advanced Bending Machine (MV) reused — from your list');
+    expect(html).not.toContain('0× Basic Bending Machine');
+    const atBase = bend({ count: 3, owned: 0, tiers: undefined,
+      reused: { count: 0, where: [], others: [{ mteId: 102, name: 'Advanced Bending Machine', tier: 2, count: 1, units: [0], where: [{ dim: 0, pos: [4, 64, 4] }], euPerTick: 96, runsPerSecondPerMachine: 0.4 }] } });
+    expect(text(renderToStaticMarkup(<StepPanel step={atBase} plan={plates(atBase)} settings={S()} send={() => {}} onClose={() => {}} per="min" base />)))
+      .toContain('1× Advanced Bending Machine (MV) reused — at your base 4 64 4');
+  });
+  it('says how busy a machine its sharing pool shares is', () => {
+    // The hammer steps of Task 5's AE2 sand plan: one new forge hammer, each step 1/30 of it (1/15 together: 7%).
+    const pool = { id: 'pool:hammer-gravel', steps: ['hammer-gravel', 'hammer-sand'] };
+    const hammer = (id: string, out: string): PlanStep => step({ id, mapId: 'gt.recipe.hammer', machine: { mteId: 481, name: 'Basic Forge Hammer', tier: 1 },
+      count: 1, owned: 0, utilization: 1 / 30, mainOutput: out, outputs: [{ key: out, amount: 1, chance: 1 }], pool });
+    const sand = planOf({ steps: [hammer('hammer-gravel', 'minecraft:gravel@0'), hammer('hammer-sand', 'minecraft:sand@0')],
+      names: { 'minecraft:gravel@0': 'Gravel', 'minecraft:sand@0': 'Sand' } });
+    expect(panel(sand.steps[0]!, sand)).toContain('Shares 1× Basic Forge Hammer with Sand — 7% busy together');
+    expect(panel(sand.steps[1]!, sand)).toContain('Shares 1× Basic Forge Hammer with Gravel — 7% busy together');
+    // A pool of owned machines only is said by its reuse text.
+    const owned = planOf({ ...sand, steps: sand.steps.map((s) => ({ ...s, owned: 1, reused: { count: 1, where: [], units: [0], sharedWith: s.id === 'hammer-gravel' ? ['hammer-sand'] : ['hammer-gravel'] } })) });
+    expect(panel(owned.steps[0]!, owned)).not.toContain('Shares');
+    expect(panel(owned.steps[0]!, owned)).toContain('1× Basic Forge Hammer (LV) reused — from your list — shared with Sand');
   });
 });

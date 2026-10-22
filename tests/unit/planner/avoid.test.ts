@@ -4,6 +4,7 @@
 // pack-spec.ts stay as they are).
 
 import { describe, it, expect } from 'vitest';
+import { withBuildRecipes } from '../../helpers/build-fixtures.ts';
 import { MINI_GT, miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec, type PackSpec, type RecipeSpec } from '../../helpers/pack-spec.ts';
 import { resolveAvoid } from '../../../src/server/planner/basis.ts';
@@ -13,12 +14,21 @@ import type { Pack } from '../../../src/shared/types/pack.ts';
 import type { Plan, PlanSettings } from '../../../src/shared/types/plan.ts';
 
 const pack = miniGt();
-/** Supporting lines off (the default before plan 09): these cases buy derived materials. */
-const S = (p: Partial<PlanSettings>): PlanSettings => ({ ...defaultSettings(), routeDerived: false, ...p });
+/**
+ * Supporting lines off (the default before plan 09): these cases buy derived materials. Crafting-table steps by hand
+ * (some cases name 'Crafting table (by hand)'; the Auto Workbench became the default in plan 12) and build cost ignored
+ * (plan 12): their numbers predate both.
+ */
+const S = (p: Partial<PlanSettings>): PlanSettings => ({
+  ...defaultSettings(), routeDerived: false, automateCrafting: false, buildHorizonHours: null, ...p,
+});
 /** Half a dust or ingot in GT's material units: 1x wires and cables. */
 const HALF = 1_814_400;
 
-/** Mini-GT with more items, recipes, maps, machines and materials. */
+/**
+ * Mini-GT with more items, recipes, maps, machines and materials; the extra machines can be built (ruling P3: plan 12
+ * never plans a machine no recipe makes as a new one).
+ */
 function extended(extra: Pick<PackSpec, 'items' | 'recipes' | 'maps' | 'machines' | 'materials'>): Pack {
   const spec = structuredClone(MINI_GT);
   spec.items = [...(spec.items ?? []), ...(extra.items ?? [])];
@@ -26,7 +36,7 @@ function extended(extra: Pick<PackSpec, 'items' | 'recipes' | 'maps' | 'machines
   spec.maps = [...(spec.maps ?? []), ...(extra.maps ?? [])];
   spec.machines = [...(spec.machines ?? []), ...(extra.machines ?? [])];
   spec.materials = [...(spec.materials ?? []), ...(extra.materials ?? [])];
-  return packFromSpec(spec);
+  return packFromSpec(withBuildRecipes(spec, (extra.machines ?? []).map((m) => m.mteId)));
 }
 
 /** An LV alloy smelter, which Mini-GT lacks. */

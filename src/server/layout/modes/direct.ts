@@ -6,7 +6,12 @@
 // cannot stop a pipe: with the filter on, a machine takes only items its recipes use. Only raw inputs and final outputs
 // touch storage, at the tail: an input chest the pipe pulls from, and one output chest per final item behind a one-item
 // filter cover. A routed, AE2 or EnderIO item network at the base keeps the input chest stocked; a GT pipe network
-// cannot (it only carries what its sources push), so then the inputs go in by hand.
+// cannot (it only carries what its sources push), so then the inputs go in by hand. An Auto Workbench (plan 12 Task 6)
+// takes any item into any input slot, which a pipe would fill with one ingredient, and nothing here can cap them (research
+// machine-feeding §3.4, controller ruling 188): the pipe runs past its back without joining it, and you fill it by hand.
+
+/** What a machine-to-machine line says of each Auto Workbench it lays (controller ruling 188, verbatim). */
+const BENCH_BY_HAND = 'Fill this Auto Workbench by hand: machine-to-machine lines cannot cap its ingredients yet';
 
 import { DYE_NAMES, TAP_CHANNEL, TAP_CHANNEL_NOTE } from '../../../shared/layout/enderio.ts';
 import { joinNames } from '../../../shared/layout/format.ts';
@@ -38,7 +43,8 @@ function spineContacts(placement: Placement, spine: ReadonlySet<string>, links: 
   const blockAt = new Map(placement.blocks.map((b) => [posKey(b.pos), b]));
   const fromOutputSide = outputSideInputs(placement);
   const configs = new Map<string, HostConfig>();
-  for (const u of placement.units) {
+  // the pipe never joins an Auto Workbench: it would fill its input slots with whatever it carries
+  for (const u of placement.units.filter((x) => x.bench === undefined)) {
     const inputBuses = new Set(u.cells.filter((c) => c.hatch === 'input_bus').map((c) => c.block.mteId));
     for (const port of u.ports.items) {
       if (!spine.has(posKey(port))) continue;
@@ -93,15 +99,19 @@ function networkHookup(input: ModeInput, rawNames: string): { hookup: ModeHookup
 export function directMode(input: ModeInput): ModeResult {
   const { pack, plan, parts, placement } = input;
   const { units, firstX, tailX, spineZ } = placement;
-  if (!units.some((u) => u.io.itemIn || u.io.itemOut)) return noLine([]);
-  const placed = placedStepIds(placement);
+  const benchWarnings: PlanWarning[] = [...new Set(units.filter((u) => u.bench !== undefined).map((u) => u.stepId))]
+    .map((stepId) => ({ code: 'bench_by_hand', stepId, text: BENCH_BY_HAND }));
+  if (!units.some((u) => u.bench === undefined && (u.io.itemIn || u.io.itemOut))) return noLine(benchWarnings);
+  // the pipe carries what the machines it joins move: a bench's goods go by hand
+  const benchSteps = new Set(units.filter((u) => u.bench !== undefined).map((u) => u.stepId));
+  const placed = new Set([...placedStepIds(placement)].filter((id) => !benchSteps.has(id)));
   const pipe = pickItemPipe(pack, itemStacksPerSecond(plan, placed));
   if (pipe === null) return noLine([{ code: 'no_pipe', text: 'No GT item pipe in this export: move items by hand' }]);
 
   const blocks: LocalBlock[] = [];
   const links: Array<[Vec3, Vec3]> = [];
   const covers: HostCover[] = [];
-  const warnings: PlanWarning[] = [];
+  const warnings: PlanWarning[] = [...benchWarnings];
   const layPipe = (pos: Vec3): void => {
     blocks.push({ pos, block: machineRef(pipe), role: 'pipe', label: pipe.name, item: pipe.itemKey });
   };

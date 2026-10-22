@@ -1,5 +1,6 @@
 // The static feeding rules (architecture §11 entry 51; research docs/research/machine-feeding.md §7 "Static rules", with
-// add-on 21's rule table and words, its R1–R9 and R12; R10, benches, and R11, shared machines, are add-on 12's): what
+// add-on 21's rule table and words, its R1–R9 and R12; R10, benches, and R11, shared machines, are add-on 12's, which
+// so far reads a shared machine's every step and an Auto Workbench's own feed into R1, R5a, R5d and R9): what
 // a laid-out routed, AE2 or EnderIO line leaves that can overfill or deadlock a machine, read from the layout itself — its
 // machines and buses, their settings, and the structured chips and patterns of `LayoutBlock.feed` — so the warnings say
 // what the build steps and the 3D view show. Each rule raises the feeding checker's code: `feed_crowded`,
@@ -10,14 +11,15 @@
 
 import { isFluidKey, parseItemKey, type StuffKey } from '../../shared/keys.ts';
 import { fmtInt, joinNames } from '../../shared/layout/format.ts';
+import { basicInputSlots, ignoredByBlocking, PROGRAMMED_CIRCUIT_ITEM } from '../../shared/gt/feeding.ts';
 import { DIRS, posKey, step, type Vec3 } from '../../shared/layout/geometry.ts';
 import type { InterfaceSpec, ItemFilterSpec, RoutedChipSpec } from '../../shared/types/feed.ts';
 import type { Layout, LayoutBlock } from '../../shared/types/layout.ts';
 import type { Machine, Pack } from '../../shared/types/pack.ts';
 import type { Plan, PlanFlow, PlanStep, PlanWarning } from '../../shared/types/plan.ts';
 import { stepOneOffs } from '../planner/bom.ts';
+import { isAutoWorkbench } from '../planner/machine-options.ts';
 import { comparePos } from '../world/graph.ts';
-import { ignoredByBlocking } from './modes/ae2.ts';
 import { stepItemInputs, stepItemOutputs } from './modes/mode.ts';
 import { hasInputSeparation, manualReasonOf } from './multiblock-rules.ts';
 
@@ -25,27 +27,8 @@ export interface FeedRulesInput { pack: Pack; plan: Plan; layout: Pick<Layout, '
 
 // ---- GT basic machines' input slots ----
 
-/**
- * The input slots of a GT basic machine by its kind (`basicmachine.<kind>.tier.<nn>`) and tier, LV first, the last value
- * for every higher tier: read from GT 5.09.54.183's bytecode, `LoaderMetaTileEntities`' `setSlotsCount(in, out)` per
- * machine (the Packager's from the `MTEBoxinator` constructor). The export does not carry them yet (add-on 20).
- */
-const INPUT_SLOTS: Readonly<Record<string, number | readonly number[]>> = {
-  alloysmelter: 2, amplifab: 1, arcfurnace: 2, assembler: [6, 9], autoclave: 2, bender: 2, boxinator: 2, canner: 2, centrifuge: 2, chemicalbath: 1,
-  chemicalreactor: 2, circuitassembler: 6, compressor: 1, cutter: 2, distillery: 1, e_furnace: 1, e_oven: 1, electrolyzer: 2,
-  electromagneticseparator: 1, extractor: 1, extruder: 2, fermenter: 1, fluidcanner: 1, fluidextractor: 1, fluidheater: 1, fluidsolidifier: 1,
-  hammer: 1, laserengraver: [2, 2, 2, 4], lathe: 1, macerator: 1, microwave: 1, mixer: [6, 6, 6, 9], orewasher: 1, plasmaarcfurnace: 2,
-  polarizer: 1, press: [2, 2, 4, 4, 6], printer: 1, recycler: 1, sifter: 1, thermalcentrifuge: 1, unboxinator: 1, wiremill: 2,
-};
-
-/** A GT basic machine's input slots (`INPUT_SLOTS`), or null for a machine the table does not know. */
-export function basicInputSlots(m: Pick<Machine, 'metaName' | 'tier'>): number | null {
-  const kind = /^basicmachine\.([a-z_]+)\.tier\.\d+$/.exec(m.metaName)?.[1];
-  const slots = kind === undefined || !Object.hasOwn(INPUT_SLOTS, kind) ? undefined : INPUT_SLOTS[kind];
-  if (slots === undefined || m.tier === undefined || m.tier < 1) return null;
-  if (typeof slots === 'number') return slots;
-  return slots[Math.min(m.tier, slots.length) - 1] ?? null;
-}
+/** A GT basic machine's input slots (shared/gt/feeding.ts, which the planner reads too: controller ruling 214 (b)). */
+export { basicInputSlots };
 
 // ---- Words ----
 
@@ -74,11 +57,12 @@ function extractorFault(extractors: readonly RoutedChipSpec[]): string {
 
 // ---- The line as the rules read it ----
 
-const CIRCUIT_ID = 'gregtech:gt.integrated_circuit';
-
-/** A machine of a placed step: its block, step, pack machine and words, and for a multiblock its item buses. */
+/**
+ * A machine of a placed step: its block, step (the first of a shared machine's, `LayoutBlock.stepIds`: plan 12), every
+ * step it runs, pack machine and words, and for a multiblock its item buses.
+ */
 interface Node {
-  block: LayoutBlock; step: PlanStep; machine: Machine | undefined; label: string; multiblock: boolean;
+  block: LayoutBlock; step: PlanStep; steps: PlanStep[]; machine: Machine | undefined; label: string; multiblock: boolean;
   inBuses: LayoutBlock[]; outBuses: LayoutBlock[];
 }
 
@@ -121,7 +105,8 @@ function lineNodes(pack: Pack, plan: Plan, live: readonly LayoutBlock[]): Node[]
     const step = plan.steps.find((s) => s.id === b.stepId);
     const machine = b.block.mteId === undefined ? undefined : pack.machines.get(b.block.mteId);
     if (step === undefined || (machine !== undefined && manualReasonOf(machine) !== null)) continue;
-    nodes.push({ block: b, step, machine, label: where(b), multiblock: machine?.kind === 'multiblock', inBuses: [], outBuses: [] });
+    const steps = (b.stepIds ?? [b.stepId]).flatMap((id) => plan.steps.find((s) => s.id === id) ?? []);
+    nodes.push({ block: b, step, steps, machine, label: where(b), multiblock: machine?.kind === 'multiblock', inBuses: [], outBuses: [] });
   }
   for (const b of live) {
     if (b.role !== 'hatch' || (b.hatch !== 'input_bus' && b.hatch !== 'output_bus')) continue;
@@ -171,16 +156,20 @@ function stepName(line: Line, s: PlanStep): string {
 /** R1–R4: a machine's kinds against its input slots, and the settings that keep one kind from crowding the others. */
 function slotRules(line: Line, n: Node, pushes: boolean, raise: Raise): void {
   const { pack, plan, nameOf } = line;
-  const s = n.step;
-  const takes = stepItemInputs(plan, s.id);
+  // what the machine is fed for every step it runs (a shared machine, plan 12)
+  const takes = sorted(n.steps.flatMap((s) => stepItemInputs(plan, s.id)));
   const basic = !n.multiblock && (n.machine?.kind === 'basic' || n.machine?.kind === 'steam');
-  // R1: the kinds one run uses up against the input slots its held items leave (a programmed circuit has its own slot)
+  // R1: the kinds one run uses up against the input slots its held items leave (a programmed circuit has its own slot),
+  // for each recipe the machine runs, once per machine
   const slots = basic && n.machine !== undefined ? basicInputSlots(n.machine) : null;
   if (slots !== null) {
-    const kinds = new Set(s.inputs.filter((p) => !isFluidKey(p.key)).map((p) => p.key)).size;
-    const held = stepOneOffs(pack, s).map((h) => h.key).filter((k) => parseItemKey(k).id !== CIRCUIT_ID);
-    const free = Math.max(0, slots - held.length);
-    if (kinds > free) {
+    const crowded = n.steps.map((s) => {
+      const kinds = new Set(s.inputs.filter((p) => !isFluidKey(p.key)).map((p) => p.key)).size;
+      const held = stepOneOffs(pack, s).map((h) => h.key).filter((k) => parseItemKey(k).id !== PROGRAMMED_CIRCUIT_ITEM);
+      return { kinds, held, free: Math.max(0, slots - held.length) };
+    }).find((r) => r.kinds > r.free);
+    if (crowded !== undefined) {
+      const { kinds, held, free } = crowded;
       raise('feed_crowded', `${n.label} takes ${kindWord(kinds)} but has ${slotWord(free)} free`
         + `${held.length > 0 ? ` (${fmtInt(held.length)} held: ${joinNames(held.map(nameOf))})` : ''}: one kind always waits`);
     }
@@ -219,8 +208,10 @@ function routedRules(line: Line, n: Node, raise: Raise): void {
   const makes = stepItemOutputs(plan, s.id);
   const outPipes = pipesAt(line, n.multiblock ? n.outBuses : [n.block]);
   const extractors = chipsOf(outPipes, 'extractor');
-  // R5a: what it makes, each out through an Extractor Chip that lists it
-  for (const key of makes.filter((k) => !extractors.some((c) => passes(c.filter, k)))) {
+  const broadcasters = chipsOf(outPipes, 'broadcaster');
+  // R5a: what it makes, each out through an Extractor Chip that lists it, or a Broadcaster Chip that fills an Auto
+  // Workbench's orders for it (plan 12)
+  for (const key of makes.filter((k) => !extractors.some((c) => passes(c.filter, k)) && !broadcasters.some((c) => passes(c.filter, k)))) {
     const how = extractors.length === 0 ? 'no Item Extractor Chip is on its interface pipe' : `its Item Extractor Chip ${extractorFault(extractors)}`;
     raise('feed_no_route', `Nothing takes ${nameOf(key)} out of ${n.label}: ${how}`, key);
   }
@@ -235,13 +226,16 @@ function routedRules(line: Line, n: Node, raise: Raise): void {
   for (const bus of n.inBuses.filter((b) => chipsOf(pipesAt(line, [b]), 'extractor').length > 0)) {
     raise('feed_churn', `The Item Extractor Chip on ${where(bus)} pulls ${n.label}'s inputs back out of its input bus`);
   }
-  // R5d: what it takes from outside the line, each out of the input chest through its Extractor
+  // R5d: what it takes from outside the line, each out of the input chest through its Extractor, or for an Auto
+  // Workbench, which orders what it takes with its Stock Keeper, its Broadcaster (plan 12)
   const fromOutside = sorted(items.filter((f) => f.to === s.id && !laid.has(f.from)).map((f) => f.key));
+  const bench = isAutoWorkbench(n.machine);
+  const chestChip = bench ? 'Item Broadcaster Chip' : 'Item Extractor Chip';
   for (const chest of line.inputChests) {
-    const chestExtractors = chipsOf(pipesAt(line, [chest]), 'extractor');
-    for (const key of fromOutside.filter((k) => !chestExtractors.some((c) => passes(c.filter, k)))) {
-      const how = chestExtractors.length === 0 ? `no Item Extractor Chip is on the interface pipe of ${where(chest)}`
-        : `the Item Extractor Chip on ${where(chest)} ${extractorFault(chestExtractors)}`;
+    const chestChips = chipsOf(pipesAt(line, [chest]), bench ? 'broadcaster' : 'extractor');
+    for (const key of fromOutside.filter((k) => !chestChips.some((c) => passes(c.filter, k)))) {
+      const how = chestChips.length === 0 ? `no ${chestChip} is on the interface pipe of ${where(chest)}`
+        : `the ${chestChip} on ${where(chest)} ${bench ? 'does not list it' : extractorFault(chestChips)}`;
       raise('feed_starved', `${n.label} never gets ${nameOf(key)}: ${how}`, key);
     }
   }
@@ -268,7 +262,8 @@ function routedRules(line: Line, n: Node, raise: Raise): void {
 /** R8, R9, R12: the patterns of the ME interfaces that serve a machine, their blocking mode, and what else they touch. */
 function ae2Rules(line: Line, n: Node, raise: Raise): void {
   const { pack, nameOf } = line;
-  const held = stepOneOffs(pack, n.step).map((h) => h.key);
+  // what the machine holds for every step it runs (a shared machine's steps hold the same: their sharing key holds them)
+  const held = sorted(n.steps.flatMap((s) => stepOneOffs(pack, s).map((h) => h.key)));
   const unencodable = (key: StuffKey, text: string): void => raise('feed_pattern_unencodable', `The pattern for ${n.label} ${text}`, key);
   for (const iface of line.interfaces.filter((i) => i.targets.some((t) => nodeOf(line, t) === n))) {
     const name = where(iface.block);
@@ -277,7 +272,7 @@ function ae2Rules(line: Line, n: Node, raise: Raise): void {
       for (const { key, amount } of p.inputs) {
         if (isFluidKey(key)) unencodable(key, `lists ${nameOf(key)}, a fluid the line pipes: ME never holds it, so AE2 cannot plan with it`);
         else if (!Number.isInteger(amount)) unencodable(key, `holds ${amountText(amount)}× ${nameOf(key)}: a pattern holds whole items`);
-        else if (held.includes(key) || parseItemKey(key).id === CIRCUIT_ID) unencodable(key, `lists ${nameOf(key)}, which ${n.label} keeps and does not use up`);
+        else if (held.includes(key) || parseItemKey(key).id === PROGRAMMED_CIRCUIT_ITEM) unencodable(key, `lists ${nameOf(key)}, which ${n.label} keeps and does not use up`);
       }
       for (const { key, amount } of p.outputs) {
         if (isFluidKey(key)) unencodable(key, `makes ${nameOf(key)}, which the line pipes away: it never comes back to ME`);
@@ -288,10 +283,15 @@ function ae2Rules(line: Line, n: Node, raise: Raise): void {
         raise('feed_fluid_packet', `${name} turns ${nameOf(key)} into a Fluid Packet item, which ${n.label} can take into an input slot for good`, key);
       }
     }
-    // R9: blocking mode waits for ever on a held item it does not ignore
+    // R9: blocking mode waits for ever on a held item it does not ignore, and on an Auto Workbench, whose ghost crafting
+    // grid GT counts as items (research machine-feeding §1.3.6, controller ruling 204 (1))
     if (iface.spec.blocking) {
       for (const key of sorted(held.filter((k) => !ignoredByBlocking(pack, k)))) {
         raise('feed_starved', `${name} has blocking mode on and ${n.label} holds ${nameOf(key)}, which blocking mode does not ignore: it never pushes into it`, key);
+      }
+      if (isAutoWorkbench(n.machine)) {
+        raise('feed_starved', `${name} has blocking mode on toward ${n.label}, an Auto Workbench: blocking mode counts the items of its crafting grid, so `
+          + 'it never pushes into it');
       }
     }
     // R12: a full-block interface pushes into every inventory beside it (a machine's buses count as the machine), said
@@ -314,8 +314,10 @@ function ae2Rules(line: Line, n: Node, raise: Raise): void {
  * R5b an item it takes that its Extractor lists, R5c an Extractor on an input bus, R5d an item it takes from outside the
  * line that the input chest's Extractor keeps in, R6 an item it makes that nothing on the network takes, R7 a
  * Broadcaster that offers more than its outputs; on AE2 lines R8 a pattern AE2 cannot encode (a fluid, a fraction, a
- * held item), R9 blocking mode toward a held item blocking mode does not ignore, and R12 an interface beside two
- * inventories.
+ * held item), R9 blocking mode toward a held item blocking mode does not ignore or toward an Auto Workbench, and R12 an
+ * interface beside two inventories. A shared machine (plan 12, `LayoutBlock.stepIds`) is read with every step it runs;
+ * an Auto Workbench's ingredients leave their makers and the input chest through Broadcaster Chips, which R5a and R5d
+ * take as their way out.
  */
 export function feedingWarnings(input: FeedRulesInput): PlanWarning[] {
   const { pack, plan, layout } = input;
@@ -325,7 +327,7 @@ export function feedingWarnings(input: FeedRulesInput): PlanWarning[] {
   const nodes = lineNodes(pack, plan, live);
   const linked = (b: LayoutBlock) => (side: number): boolean => ((b.connections ?? 0) & (1 << side)) !== 0;
   const line: Line = {
-    pack, plan, nameOf: (k) => plan.names?.[k] ?? pack.nameOf(k), nodes, laid: new Set(nodes.map((n) => n.step.id)),
+    pack, plan, nameOf: (k) => plan.names?.[k] ?? pack.nameOf(k), nodes, laid: new Set(nodes.flatMap((n) => n.steps.map((s) => s.id))),
     items: plan.flows.filter((f) => !isFluidKey(f.key)),
     pipes: layout.mode !== 'routed' ? [] : live.filter((b) => b.role === 'chip_pipe' && b.feed?.chips !== undefined)
       .map((b) => ({ block: b, chips: b.feed!.chips!, targets: inventoriesBeside(b, byPos, linked(b)) })),

@@ -24,7 +24,9 @@
 // whatever their priority, so an item extract side gets it only when two or more machine faces take one of its items
 // and no chest takes an item a machine takes too; a fluid extract side (ender fluid conduits have no priority) gets it
 // for any two or more, and a fluid it hands both to machines and to an open end is warned about. Items and fluids are
-// separate networks with their own channels. Only raw inputs and final outputs touch storage, at the tail: an input
+// separate networks with their own channels. An Auto Workbench's face (plan 12 Task 6) inserts each ingredient through a
+// Limited Item Filter up to its stock and its grid cells (bench.ts), so no ingredient fills its input slots, and what it
+// hands back (its empty containers) leaves through an output chest. Only raw inputs and final outputs touch storage, at the tail: an input
 // chest the line extracts from, which an EnderIO network at the base keeps stocked from the storage tap on a channel of
 // that link's own (`TAP_CHANNEL`), output chests of 24 items each, and one open fluid conduit end per fluid that enters
 // or leaves the line, for a tank. The fluid conduit is the slowest ender tier that moves the busiest face. Every order
@@ -45,8 +47,10 @@ import type { Pack } from '../../../shared/types/pack.ts';
 import type { BomLine, Plan, PlanFlow, PlanWarning } from '../../../shared/types/plan.ts';
 import { comparePos } from '../../world/graph.ts';
 import { handRunSurroundings, type HatchKind, type HostConfig, type LocalBlock, type PlacedUnit, type Placement } from '../arrange.ts';
+import { enderioStock } from '../bench.ts';
 import {
-  assignChannels, fluidFilterFor, itemFilterFor, pickFluidConduit, speedUpgradesFor, type ChannelEnd, type ChannelLink, type ChannelPlan,
+  assignChannels, fluidFilterFor, itemFilterFor, limitedFilterFor, pickFluidConduit, speedUpgradesFor, type ChannelEnd, type ChannelLink,
+  type ChannelPlan,
 } from '../conduits.ts';
 import { fluidNets, type FluidNet } from '../internal.ts';
 import type { Parts } from '../parts.ts';
@@ -81,6 +85,8 @@ type FluidPort = 'spine' | 'hatch' | 'top';
  */
 interface FacePlan {
   pos: Vec3; side: number; target: string; stepId: string | null; extract: Side | null; insert: Side | null; outputSide?: true; port?: FluidPort;
+  /** An Auto Workbench's insert side (plan 12): each ingredient let in up to its count, through a Limited Item Filter. */
+  limits?: ReadonlyMap<StuffKey, number>;
 }
 
 /** Each face's mode and sides, by `faceKey`. */
@@ -409,7 +415,11 @@ export interface Crossing { entering: PlanFlow[]; leaving: PlanFlow[]; strays: A
  * its insert faces. With them, `inputFromOutputSide` on every singleblock that takes items (the face is on its output
  * side, GT's `getFrontFacing()`, which takes items only with that setting), sorted by pos; such a face is `outputSide`.
  * A venting steam machine's output side faces up (`PlacedUnit.outputSide`), so its face needs neither (architecture §11
- * entry 48): GT lets its items in and out on any side but its front and its output side.
+ * entry 48): GT lets its items in and out on any side but its front and its output side. An Auto Workbench's face
+ * (`Unit.bench`, plan 12 Task 6, research machine-feeding §3.4) meets its back: In / Out, extracting what it makes and
+ * hands back and inserting its ingredients through a Limited Item Filter at its stock (`enderioStock`), with no setting
+ * to make (it takes items on any face). That stock, two crafts, always fits a bench's safe input slots: the planner gives
+ * no Auto Workbench on an EnderIO line to a recipe whose stock would not (controller ruling 214 (c), planner/benches.ts).
  */
 function machineFaces(plan: Plan, items: readonly PlanFlow[], placement: Placement): { faces: FacePlan[]; configs: HostConfig[] } {
   const blockAt = new Map(placement.blocks.map((b) => [posKey(b.pos), b]));
@@ -422,7 +432,10 @@ function machineFaces(plan: Plan, items: readonly PlanFlow[], placement: Placeme
   const faces: FacePlan[] = [];
   const configs: HostConfig[] = [];
   for (const [u, ports] of portsOf) {
-    const makes = stepItemOutputs(plan, u.stepId), takes = stepItemInputs(plan, u.stepId);
+    const makes = u.bench === undefined ? stepItemOutputs(plan, u.stepId) : distinctKeys([...stepItemOutputs(plan, u.stepId), ...u.bench.returns.map((r) => r.key)]);
+    const takes = stepItemInputs(plan, u.stepId);
+    const stock = u.bench === undefined ? undefined : enderioStock(u.bench);
+    const limits = stock === undefined ? undefined : new Map(u.bench!.ingredients.map((i, k) => [i.key, stock.limits[k]!]));
     const roles = ports.map((port) => {
       const bus = u.multiblock ? busOf(u, blockAt.get(posKey(port.behind))) : null;
       return {
@@ -433,11 +446,11 @@ function machineFaces(plan: Plan, items: readonly PlanFlow[], placement: Placeme
     const insertRate = unitIntake(plan, items, u.stepId) / Math.max(1, roles.filter((r) => r.inserts).length);
     for (const { port, extracts, inserts } of roles) {
       if (!extracts && !inserts) continue;
-      const outputSide = !u.multiblock && u.outputSide === undefined && inserts;
+      const outputSide = !u.multiblock && u.outputSide === undefined && u.bench === undefined && inserts;
       faces.push({
         pos: port.pos, side: sideToward(port.pos, port.behind), target: u.name, stepId: u.stepId,
         extract: extracts ? { keys: makes, rate: extractRate } : null, insert: inserts ? { keys: takes, rate: insertRate } : null,
-        ...(outputSide ? { outputSide: true as const } : {}),
+        ...(outputSide ? { outputSide: true as const } : {}), ...(limits === undefined || !inserts ? {} : { limits }),
       });
       if (outputSide) configs.push({ pos: [...port.behind], config: { inputFromOutputSide: true } });
     }
@@ -484,8 +497,8 @@ function itemSettings(input: ModeInput, plans: readonly FacePlan[], channels: Ch
     };
   };
   const insertOf = (f: FacePlan, s: Side): ConduitInsert => ({
-    color: channels.colors.get(endId(f, 'insert'))!, filter: filterOf(f, 'insert', s.keys), rate: s.rate, priority: insertPriority(f),
-    ...(f.outputSide === true ? { outputSide: true } : {}),
+    color: channels.colors.get(endId(f, 'insert'))!, filter: f.limits === undefined ? filterOf(f, 'insert', s.keys) : limitedFilterFor(parts, f.limits),
+    rate: s.rate, priority: insertPriority(f), ...(f.outputSide === true ? { outputSide: true } : {}),
   });
   return { configured: configureFaces(plans, extractOf, insertOf), warnings: [...rateWarnings.list, ...filterWarnings.list] };
 }
@@ -549,9 +562,13 @@ function itemLine(input: ModeInput): ItemLine {
   const placed = placedStepIds(placement);
   const items = plan.flows.filter((f) => !isFluidKey(f.key));
 
-  // the face plan: every item port; the input chest north of the tail cell; output chest j south of tail cell j
+  // the face plan: every item port; the input chest north of the tail cell; output chest j south of tail cell j. What a
+  // bench hands back (an empty container) goes to an output chest as a placed machine's strays do
   const { faces: machine, configs } = machineFaces(plan, items, placement);
-  const { entering, leaving, strays } = crossing(plan, items, placed);
+  const edge = crossing(plan, items, placed);
+  const { entering, leaving } = edge;
+  const strays = [...edge.strays, ...placement.units.flatMap((u) => (u.bench?.returns ?? []).map((r) => ({ stepId: u.stepId, key: r.key })))]
+    .filter((s, i, all) => all.findIndex((t) => t.stepId === s.stepId && t.key === s.key) === i);
   const inputKeys = distinctKeys(entering.map((f) => f.key));
   const inputRate = sumRate(entering);
   const outputSlices = slices(distinctKeys([...leaving.map((f) => f.key), ...strays.map((s) => s.key)]), ITEM_FILTER_SLOTS.big);

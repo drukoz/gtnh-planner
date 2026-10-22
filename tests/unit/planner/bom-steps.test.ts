@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { MINI_GT, miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec, type IngredientSpec } from '../../helpers/pack-spec.ts';
+import { largeBenderSpec } from '../../helpers/build-fixtures.ts';
 import { buildBom, expandBomLines } from '../../../src/server/planner/bom.ts';
 import { buildSteps } from '../../../src/server/planner/steps.ts';
 import { planLine } from '../../../src/server/planner/plan.ts';
@@ -8,7 +9,7 @@ import { planBasis, effectiveTier } from '../../../src/server/planner/basis.ts';
 import { computeAvailability, reachableDims } from '../../../src/server/planner/availability.ts';
 import { makeLeafOracle, makePrices } from '../../../src/server/planner/costs.ts';
 import { MAX_RECIPES, type PlanEnv } from '../../../src/server/planner/candidates.ts';
-import type { PlanStep } from '../../../src/shared/types/plan.ts';
+import type { PlanContext, PlanStep } from '../../../src/shared/types/plan.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import { emptyContextForTest } from '../../helpers/plan-context.ts';
 
@@ -59,6 +60,17 @@ describe('buildBom', () => {
     expect(bom.lines.map((l) => [l.key, l.amount, l.group])).toEqual([['machine:1000@0', 1, 'machines'], ['machine:50@0', 1, 'machines'], ['t:casing@11', 1, 'machines']]);
     expect(bom.lines.find((l) => l.key === 'machine:1000@0')?.why).toBe('1× Electric Blast Furnace');
   });
+  it('lists a structure hatch at the lowest tier of its class', async () => {
+    // The Large Bender's exported structure holds an HV muffler hatch; the LV one does the same job.
+    const p = packFromSpec(largeBenderSpec());
+    const settings = { ...defaultSettings(), tier: 1 };
+    const b = planBasis(p, settings, emptyContextForTest());
+    const bom = await buildBom(p, [step({ id: 'bend-plate', recipeId: 'bend-plate', machine: { mteId: 1100, name: 'Large Bender', tier: 1 } })],
+      { settings, env: b.env, leaf: b.leaf, ctx: emptyContextForTest() });
+    const lines = bom.lines.map((l) => [l.key, l.amount, l.why, l.group]);
+    expect(lines).toContainEqual(['machine:91@0', 1, 'structure of 1× Large Bender', 'machines']);
+    expect(lines.map(([key]) => key)).not.toContain('machine:93@0');
+  });
   it('adds one cleanroom for the steps that need it, and warns when the pack has none', async () => {
     const spec = (cls: string) => packFromSpec({ maps: [{ id: 'gt.recipe.assembler' }],
       machines: [{ mteId: 121, name: 'Basic Assembler', maps: ['gt.recipe.assembler'], tier: 1 },
@@ -77,6 +89,23 @@ describe('buildBom', () => {
     const none = await buildBom(without, steps, { settings, env: nb.env, leaf: nb.leaf, ctx: emptyContextForTest() });
     expect(none.lines.map((l) => l.key)).toEqual(['machine:121@0']);
     expect(none.warnings.map((w) => w.code)).toEqual(['no-cleanroom']);
+  });
+  it('leaves out a cleanroom the group owns', async () => {
+    // Plan 12 Task 6: the group's own cleanroom (a world scan's, or the "Machines we have" list's) needs no building.
+    const p = packFromSpec({ ...MINI_GT, machines: [...(MINI_GT.machines ?? []),
+      { mteId: 1200, name: 'Cleanroom', kind: 'multiblock', maps: [], cls: 'gregtech.common.tileentities.machines.multi.MTECleanroom' }] });
+    const settings = { ...defaultSettings(), tier: 1 };
+    const b = planBasis(p, settings, emptyContextForTest());
+    const steps = [step({ id: 'x', recipeId: 'x', needsCleanroom: true, mainOutput: 't:circuit@0' })];
+    const rooms = async (ctx: PlanContext) => (await buildBom(p, steps, { settings, env: b.env, leaf: b.leaf, ctx })).lines.filter((l) => l.key === 'machine:1200@0');
+    expect(await rooms(emptyContextForTest())).toEqual([expect.objectContaining({ amount: 1, why: expect.stringMatching(/^cleanroom for /), group: 'machines' })]);
+    expect(await rooms({ ...emptyContextForTest(), ownedMachines: [{ mteId: 1200, count: 1 }] })).toEqual([]);
+    // the list's own one counts the same; a declined one does not
+    const listed = await buildBom(p, steps, { settings: { ...settings, ownedManual: [{ mteId: 1200, count: 1 }] }, env: b.env, leaf: b.leaf, ctx: emptyContextForTest() });
+    expect(listed.lines.map((l) => l.key)).not.toContain('machine:1200@0');
+    const declined = await buildBom(p, steps, { settings: { ...settings, declineReuse: [1200] }, env: b.env, leaf: b.leaf,
+      ctx: { ...emptyContextForTest(), ownedMachines: [{ mteId: 1200, count: 1 }] } });
+    expect(declined.lines.map((l) => l.key)).toContain('machine:1200@0');
   });
   it('counts a machine that Make N steps share once', async () => {
     const steps = [step({ id: 'bend-plate', recipeId: 'bend-plate', count: 1, owned: 0, machine: { mteId: 101, name: 'Basic Bending Machine', tier: 1 } }),
@@ -111,7 +140,7 @@ describe('buildBom', () => {
     const r = await expandBomLines(p, bom.lines.map(({ key, amount, why, group }) => ({ key, amount, why, ...(group === undefined ? {} : { group }) })), settings, emptyContextForTest());
     expect(Object.keys(r).sort()).toEqual(['lines', 'totals']);
     expect(r.totals).toEqual(bom.totals);
-  });
+  }, 30_000);   // 40,201 recipes: about 1.3 s alone, past vitest's 5 s default under a parallel run's load (the controller's ruling after Task 5)
   it('breaks the build list down at the line\'s prices, the same in expandBomLines, with a derived leaf and a stop item', async () => {
     // The line bends U from D (an alloy of 3 X, mined nowhere) and assembles T from U and S (4 Y, which the group says it
     // already makes). Its assembler is crafted from 1 D or 2 P, its bender from 1 S or 2 Q. At plain prices D and S cost

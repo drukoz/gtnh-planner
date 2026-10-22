@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { buildMode, PORT_SPACING } from '../../../src/server/layout/modes/mode.ts';
+import { buildMode, PORT_SPACING, type ModeResult } from '../../../src/server/layout/modes/mode.ts';
 import { unitsFromPlan, placeUnits } from '../../../src/server/layout/arrange.ts';
 import { resolveParts } from '../../../src/server/layout/parts.ts';
+import { configuredLines } from '../../../src/shared/layout/configure-text.ts';
+import type { StuffKey } from '../../../src/shared/keys.ts';
 import { layoutPack, makePlan, makeScan, IDS } from '../../helpers/layout-fixtures.ts';
 import type { LogisticsMode, Plan } from '../../../src/shared/types/plan.ts';
 
@@ -66,6 +68,31 @@ describe('routed mode', () => {
     // responders, extractors (one on the input chest) and the output chest's terminator
     expect(r.extraParts.map((p) => p.amount)).toEqual([2, 2, 1]);
   });
+
+  it('splits a long whitelist over responder chips of nine and keeps the extractor', () => {
+    // one chip's filter holds 9 items and an interface pipe 4 chips (ProjRed-4.12.44-GTNH); a Project Red line shares no
+    // machine (fix wave 2 (d)), so only a recipe of many inputs gets there. Its extractor keeps its slot, as without it
+    // nothing the machine makes would leave: past three responders the rest of the inputs are named.
+    const assembler = (inputs: StuffKey[]): Plan => makePlan([{ id: 'a', mteId: IDS.ASSEMBLER, count: 1, tier: 2, inputs: inputs.map((k): [StuffKey, number] => [k, 1]) }],
+      { flows: [...inputs.map((key) => ({ from: 'raw', to: 'a', key, perSecond: 1 })), { from: 'a', to: 'out', key: 't:out_a@0', perSecond: 1 }] });
+    const keys = (prefix: string, n: number): StuffKey[] => Array.from({ length: n }, (_, i): StuffKey => `t:${prefix}${i + 1}@0`);
+    const pipeOf = (r: ModeResult) => r.blocks.find((b) => b.label === 'Routed Interface Pipe (Advanced Assembler)')!;
+    const whitelist = (kind: string, list: StuffKey[]) => ({ kind, filter: { mode: 'whitelist', keys: list } });
+    const ten = [...keys('a', 5), ...keys('b', 5)];
+    const r = buildMode('routed', { ...setup('routed', assembler(ten)), network: routedNet() });
+    expect(pipeOf(r).feed?.chips).toEqual([whitelist('responder', ten.slice(0, 9)), whitelist('responder', ten.slice(9)), whitelist('extractor', ['t:out_a@0'])]);
+    expect(configuredLines(pipeOf(r), (k) => k)).toEqual(['chips: Item Responder Chip (whitelist: t:a1@0, t:a2@0, t:a3@0, t:a4@0, t:a5@0, '
+      + 't:b1@0, t:b2@0, t:b3@0 and t:b4@0) + Item Responder Chip (whitelist: t:b5@0) + Item Extractor Chip (whitelist: t:out_a@0)']);
+    // two responders on the assembler; one extractor on it and two on the input chest (its ten raw inputs); the terminator
+    expect(r.extraParts.map((p) => p.amount)).toEqual([2, 3, 1]);
+    expect(r.warnings.filter((w) => w.code === 'routed_chips_short')).toEqual([]);
+    // 28 inputs: three responders of nine and the extractor; the 28th needs a second pipe or your hands
+    const many = [...keys('a', 14), ...keys('b', 14)].sort();
+    const full = buildMode('routed', { ...setup('routed', assembler(many)), network: routedNet() });
+    expect(pipeOf(full).feed?.chips?.map((c) => [c.kind, c.filter?.keys.length])).toEqual([['responder', 9], ['responder', 9], ['responder', 9], ['extractor', 1]]);
+    expect(full.warnings.filter((w) => w.code === 'routed_chips_short')).toEqual([{ code: 'routed_chips_short', stepId: 'a',
+      text: `The interface pipe of the Advanced Assembler holds 4 chips of 9 items each, too few for ${many[27]!}: move it by hand` }]);
+  });
 });
 
 describe('AE2 mode', () => {
@@ -112,5 +139,66 @@ describe('AE2 mode', () => {
       [[[1, 0, 1], 'gregtech:gt.metaitem.01@32630'], [[5, 0, 2], 'appliedenergistics2:item.ItemMultiPart@260']], [['ae2_no_pattern', 's3']]]);
     // only the machines that take items get input from their output side: the chemical reactor takes only oxygen
     expect(r.configs.map((c) => c.pos)).toEqual([[1, 0, 1], [5, 0, 1]]);
+  });
+
+  /** s1 makes t:out_s1@0 from Raw Input and s2 makes t:out_s2@0 from it, both on one macerator (an AE2 sharing pool). */
+  const pooled = (): Plan => {
+    const pool = { id: 'pool:s1', steps: ['s1', 's2'] };
+    return makePlan([{ id: 's1', mteId: IDS.MACERATOR, count: 1, pool }, { id: 's2', mteId: IDS.MACERATOR, count: 1, pool, inputs: [['t:out_s1@0', 1]] }]);
+  };
+
+  it('gives a shared machine one ME interface with a pattern per step', () => {
+    // one machine, one interface: its steps' patterns in step order, blocking mode on (a crafting CPU then pushes one
+    // recipe's set at a time, and nothing the macerator holds is off AE2's ignore list: controller ruling 204 (3))
+    const network = makeScan({ logistics: [{ kind: 'ae2', taps: [[0, 64, 0]] }] }).logistics[0]!;
+    const r = buildMode('ae2', { ...setup('ae2', pooled()), network });
+    const ifaces = r.blocks.filter((b) => b.role === 'interface');
+    expect(ifaces.map((b) => b.label)).toEqual(['ME Interface (Basic Macerator)']);
+    expect(ifaces[0]!.feed).toEqual({ interface: { patterns: [
+      { inputs: [{ key: 't:in@0', amount: 1 }], outputs: [{ key: 't:out_s1@0', amount: 1 }] },
+      { inputs: [{ key: 't:out_s1@0', amount: 1 }], outputs: [{ key: 't:out_s2@0', amount: 1 }] }], blocking: true } });
+    expect(configuredLines(ifaces[0]!, layoutPack().nameOf)).toEqual(['2 processing patterns', 'pattern 1: 1× Raw Input → 1× t:out_s1@0',
+      'pattern 2: 1× t:out_s1@0 → 1× t:out_s2@0', 'blocking mode on']);
+    expect(r.extraParts).toEqual([{ key: 'appliedenergistics2:item.ItemMultiMaterial@52', amount: 2, why: 'one processing pattern per recipe each machine runs',
+      group: 'logistics' }]);
+    // its conveyor cover pushes out what both steps make, 1 item/s each
+    expect(r.covers.map((c) => [c.cover.item, c.cover.settings.rate])).toEqual([['gregtech:gt.metaitem.01@32630', 2]]);
+    expect(r.warnings).toEqual([]);
+  });
+
+  it('says where a shared machine holds an item blocking mode does not ignore, so its recipes can mix', () => {
+    // research machine-feeding §3.3, §4.2 item 4: without blocking mode the interface pushes the next recipe's set before
+    // the machine has run the last, so two recipes' items sit in it at once (a Packager's schematic is off AE2's list)
+    const pack = layoutPack();
+    const SCHEMATIC = 'gregtech:gt.metaitem.01@32498';
+    for (const id of ['s1', 's2']) {
+      pack.recipeById.set(id, { id, source: 'gt', maps: [], euPerTick: 30, durationTicks: 20, amps: 1, specialValue: 0, meta: {}, flags: {},
+        inputs: [{ slot: 0, consumed: true, chance: 1, options: [{ key: id === 's1' ? 't:in@0' : 't:out_s1@0', amount: 1 }] },
+          { slot: 1, consumed: false, chance: 0, options: [{ key: SCHEMATIC, amount: 1 }] }],
+        outputs: [{ key: `t:out_${id}@0`, amount: 1, chance: 1 }] });
+    }
+    const plan = pooled();
+    const placement = placeUnits(unitsFromPlan(pack, plan).units, { headWidth: 1, portSpacing: PORT_SPACING.ae2 });
+    const network = makeScan({ logistics: [{ kind: 'ae2', taps: [[0, 64, 0]] }] }).logistics[0]!;
+    const r = buildMode('ae2', { pack, plan, parts: resolveParts(pack), placement, network });
+    expect(r.blocks.find((b) => b.role === 'interface')!.feed?.interface?.blocking).toBe(false);
+    expect(r.warnings.filter((w) => w.code === 'ae2_shared_unblocked')).toEqual([{ code: 'ae2_shared_unblocked', stepId: 's1',
+      text: `The Basic Macerator runs 2 recipes from one ME Interface but holds ${SCHEMATIC}, which blocking mode does not ignore, so blocking mode `
+        + 'stays off and the next recipe\'s items can go in before the last has run: give each recipe its own machine' }]);
+  });
+
+  it('puts at most nine patterns in one ME interface and says which recipes need another', () => {
+    // controller Amendment OQ6: one ME Interface holds nine processing patterns; the planner splits a key's pools into
+    // parts of nine (`ae2Parts`), but a machine type of several maps could still gather more
+    const ids = Array.from({ length: 10 }, (_, i) => `m${i}`);
+    const pool = { id: 'pool:m0', steps: ids };
+    const plan = makePlan(ids.map((id) => ({ id, mteId: IDS.MACERATOR, count: 1, pool })), { flows: ids.flatMap((id) => [
+      { from: 'raw', to: id, key: 't:in@0', perSecond: 0.1 }, { from: id, to: 'out', key: `t:out_${id}@0`, perSecond: 0.1 }]) });
+    const network = makeScan({ logistics: [{ kind: 'ae2', taps: [[0, 64, 0]] }] }).logistics[0]!;
+    const r = buildMode('ae2', { ...setup('ae2', plan), network });
+    expect(r.blocks.filter((b) => b.role === 'interface').map((b) => b.feed?.interface?.patterns.length)).toEqual([9]);
+    expect(r.extraParts.find((p) => p.key === 'appliedenergistics2:item.ItemMultiMaterial@52')?.amount).toBe(9);
+    expect(r.warnings).toEqual([{ code: 'ae2_patterns_short', stepId: 'm9',
+      text: 'Basic Macerator runs more recipes than one ME Interface holds (9 patterns): t:out_m9@0 need another interface' }]);
   });
 });

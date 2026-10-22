@@ -56,6 +56,17 @@ describe('3D scene data', () => {
     expect(pickInfo(layout, null, 3)).toEqual({ title: 'existing Stone', lines: ['Already in your base'] });
   });
 
+  it('pickInfo lists every step a shared machine runs, in order (plan 12)', () => {
+    const plan = { steps: [
+      { id: 's2', machine: { mteId: 2001, name: 'Basic Macerator', tier: 1 }, euPerTick: 2, inputs: [{ key: 't:gravel@0', amount: 1, chance: 1 }], outputs: [{ key: 't:sand@0', amount: 1, chance: 1 }] },
+      { id: 's1', machine: { mteId: 2001, name: 'Basic Macerator', tier: 1 }, euPerTick: 30, inputs: [{ key: 't:ore@0', amount: 1, chance: 1 }], outputs: [{ key: 't:dust@0', amount: 2, chance: 1 }] }],
+    names: { 't:ore@0': 'Iron Ore', 't:dust@0': 'Iron Dust', 't:gravel@0': 'Gravel', 't:sand@0': 'Sand', ...names } } as unknown as Plan;
+    const pooled: Layout = { ...layout, blocks: [{ ...layout.blocks[0]!, stepId: 's1', stepIds: ['s1', 's2'] }, ...layout.blocks.slice(1)] };
+    expect(pickInfo(pooled, plan, 0).lines).toEqual(['Facing south', 'Makes 2× Iron Dust from 1× Iron Ore', 'LV · 30 EU/t', 'Makes 1× Sand from 1× Gravel',
+      'LV · 2 EU/t', 'Conveyor Module (LV) on the south face: Export, allow input, 0.5 items/s']);
+    expect(hoverText(pooled, plan, 0)).toBe(hoverText(layout, plan, 0));
+  });
+
   it('composites tinted layers into one tile and packs tiles for the array texture', () => {
     const white = { data: new Uint8ClampedArray(TILE * TILE * 4).fill(255) };
     const dot = new Uint8ClampedArray(TILE * TILE * 4);

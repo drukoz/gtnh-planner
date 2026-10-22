@@ -18,6 +18,13 @@ export interface LpModel {
   integer?: readonly boolean[];
   /** A MIP stops after this many branch-and-bound nodes (deterministic, unlike a time limit) with its best solution. */
   maxNodes?: number;
+  // optional addition (the plan 12 fix wave: the build MIP's work bound)
+  /**
+   * A MIP stops at the first of HiGHS's interrupt checkpoints where its simplex iterations (`mip_total_lp_iterations`, its
+   * root node's cuts and heuristics included) reach this, with its best whole solution: like `maxNodes` a deterministic
+   * bound, and one that also bounds the work inside a node (`stop: 'limit'`).
+   */
+  maxIterations?: number;
   /** Seconds the solve may take; a MIP that runs out keeps its best whole solution (`feasible`), if it found one. */
   timeLimit?: number;
   // optional addition (the step-charge MIP, solve.ts; fix spec R3)
@@ -31,7 +38,17 @@ export interface LpModel {
  * `objective` and `x` (one value per column) are meaningful only when `optimal`, or `feasible` (a MIP that stopped at
  * its node or time limit with a whole solution); otherwise they are NaN and `[]`.
  */
-export interface LpResult { status: 'optimal' | 'feasible' | 'infeasible' | 'unbounded' | 'error'; objective: number; x: number[] }
+export interface LpResult {
+  status: 'optimal' | 'feasible' | 'infeasible' | 'unbounded' | 'error'; objective: number; x: number[];
+  // optional additions (the build-cost MIP, build-mip.ts; plan 12)
+  /** Why a `feasible` MIP stopped: its time limit (`'time'`), else its node limit (`'limit'`; HiGHS says `solutionLimit`). */
+  stop?: 'time' | 'limit';
+  /** The branch-and-bound nodes a MIP used (HiGHS's `mip_node_count`), on every result of a model with `integer`. */
+  nodes?: number;
+  // optional addition (the plan 12 fix wave: the build MIP's gap, for its stats)
+  /** A MIP's best proven bound on the objective (HiGHS's `mip_dual_bound`), on an `optimal` or `feasible` result. */
+  bound?: number;
+}
 
 let loading: Promise<Highs> | null = null;
 
@@ -145,25 +162,49 @@ export async function solveLp(model: LpModel): Promise<LpResult> {
         // A start HiGHS refuses (its shape was checked above) only loses the head start: the model solves without it.
       }
     }
+    /** A MIP's result carries the nodes it used and, with a solution, its bound, when HiGHS can say. */
+    const withNodes = (result: LpResult): LpResult => {
+      if (model.integer === undefined) return result;
+      let out = result;
+      try {
+        out = { ...out, nodes: Number(m.info.get('mip_node_count')) };
+        const bound = Number(m.info.get('mip_dual_bound'));
+        if (result.x.length > 0 && Number.isFinite(bound)) out = { ...out, bound };
+      } catch {
+        // the counts are only stats
+      }
+      return out;
+    };
+    const most = model.maxIterations;
     try {
-      m.run();
+      if (most === undefined) {
+        m.run();
+      } else {
+        m.run({ [highs.constants.callbackType.mipInterrupt]: (event) => {
+          if (Number(event.data.mip_total_lp_iterations ?? 0) >= most) event.interrupt();
+        } });
+      }
     } catch {
-      return notOptimal('error');   // a native solver failure; malformed input already threw in passModel
+      return withNodes(notOptimal('error'));   // a native solver failure; malformed input already threw in passModel
     }
-    switch (m.getModelStatus()) {
+    const status = m.getModelStatus();
+    switch (status) {
       case statuses.optimal:
-        return { status: 'optimal', objective: m.getObjectiveValue(), x: Array.from(m.getSolution().colValue) };
+        return withNodes({ status: 'optimal', objective: m.getObjectiveValue(), x: Array.from(m.getSolution().colValue) });
       case statuses.infeasible:
-        return notOptimal('infeasible');
+        return withNodes(notOptimal('infeasible'));
       case statuses.unbounded:
       case statuses.unboundedOrInfeasible:
-        return notOptimal('unbounded');
+        return withNodes(notOptimal('unbounded'));
       default:
         // A MIP stopped by its node or time limit keeps its best whole solution, if it found one (status 2 = feasible).
         if (model.integer !== undefined && Number(m.info.get('primal_solution_status')) === 2) {
-          return { status: 'feasible', objective: m.getObjectiveValue(), x: Array.from(m.getSolution().colValue) };
+          return withNodes({
+            status: 'feasible', objective: m.getObjectiveValue(), x: Array.from(m.getSolution().colValue),
+            stop: status === statuses.timeLimit ? 'time' : 'limit',
+          });
         }
-        return notOptimal('error');
+        return withNodes(notOptimal('error'));
     }
   });
 }

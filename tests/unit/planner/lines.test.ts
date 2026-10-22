@@ -2,6 +2,7 @@
 // are tagged with that material's line, so the flow diagram can group them and the group can say "we already make it".
 
 import { describe, expect, it } from 'vitest';
+import { withBuildRecipes } from '../../helpers/build-fixtures.ts';
 import { packFromSpec } from '../../helpers/pack-spec.ts';
 import { supportingLines } from '../../../src/server/planner/lines.ts';
 import { planBasis } from '../../../src/server/planner/basis.ts';
@@ -18,11 +19,11 @@ const RED_ALLOY = 'fluid:molten.redalloy';
 /**
  * A wire assembled from 72 L of molten red alloy (`takes: 'ingot'`: one red alloy ingot), a copper ingot and 100 L of
  * glue. Red alloy ingots are alloyed from mined copper and redstone and melted down; glue is spun out of mined resin in
- * one step.
+ * one step. Every machine can be built (ruling P3: plan 12 never plans one no recipe makes as a new one).
  */
 function wirePack(takes: 'molten' | 'ingot' = 'molten'): Pack {
   const alloy: [string, number] = takes === 'molten' ? [RED_ALLOY, 72] : ['t:redalloy_ingot@0', 1];
-  const p = packFromSpec({
+  const p = packFromSpec(withBuildRecipes({
     items: [
       { key: 't:copper_ingot@0', name: 'Copper Ingot', gt: { prefix: 'ingot', material: 'Copper' } },
       { key: 't:redstone@0', name: 'Redstone', gt: { prefix: 'dust', material: 'Redstone' } },
@@ -48,13 +49,13 @@ function wirePack(takes: 'molten' | 'ingot' = 'molten'): Pack {
       { id: 'glue', map: 'gt.recipe.centrifuge', in: [['t:resin@0', 1]], out: [['fluid:glue', 100]], eut: 16 },
     ],
     worldgen: { veins: ['Copper', 'Redstone', 'Resin'].map(vein) },
-  });
+  }));
   p.materials.get('RedAlloy')!.displayName = 'Red Alloy';
   return p;
 }
 
 const pack = wirePack();
-const S = (p: Partial<PlanSettings> = {}): PlanSettings => ({ ...defaultSettings(), target: 't:wire@0', tier: 1, ...p });
+const S = (p: Partial<PlanSettings> = {}): PlanSettings => ({ ...defaultSettings(), target: 't:wire@0', tier: 1, buildHorizonHours: null, ...p });
 const lineOf = (plan: Plan, id: string) => plan.steps.find((s) => s.id === id)?.line;
 
 describe('supporting lines', () => {

@@ -16,7 +16,7 @@ import { isFluidKey, type StuffKey } from '../../../shared/keys.ts';
 import { fmtInt, joinNames } from '../../../shared/layout/format.ts';
 import type { LogisticsMode, PlanFlow, PlanStep, PlanWarning } from '../../../shared/types/plan.ts';
 import type { PlacedUnit } from '../arrange.ts';
-import { placedStepIds, type ModeInput, type ModeResult, type StepDraft } from './mode.ts';
+import { placedStepIds, unitSteps, type ModeInput, type ModeResult, type StepDraft } from './mode.ts';
 
 /** The modes whose lines run GT's primitive machines by these rules (machine to machine is add-on 15's). */
 export type HandMode = Exclude<LogisticsMode, 'direct'>;
@@ -62,20 +62,27 @@ function placesText(goods: ReadonlyArray<{ name: string; places: readonly string
 }
 
 /**
- * The hand steps and warnings of `input`'s line in `mode`: for each step run by hand, in unit order, a fill step
- * (`layout:hand:<step>:fill`, per run, with where each input comes from) and an empty step (`layout:hand:<step>:empty`,
- * with where each output goes); in AE2 mode, for each venting steam step that makes items, `steam_items` and its empty
- * step.
+ * The hand steps and warnings of `input`'s line in `mode`: for each step run by hand, in unit order (every step a shared
+ * machine runs, plan 12), a fill step (`layout:hand:<step>:fill`, per run, with where each input comes from) and an
+ * empty step (`layout:hand:<step>:empty`, with where each output goes); in AE2 mode, for each venting steam step that
+ * makes items, `steam_items` and its empty step.
  */
 export function handSteps(input: ModeInput, mode: HandMode): { drafts: StepDraft[]; warnings: PlanWarning[] } {
   const { pack, plan, placement } = input;
   const nameOf = (k: StuffKey): string => plan.names?.[k] ?? pack.nameOf(k);
   const placed = placedStepIds(placement);
+  /** The machines of each step, by every step they run (`unitSteps`); `groups` one entry per machine group, in unit order. */
   const steps = new Map<string, StepUnits>();
+  const groups: StepUnits[] = [];
   for (const u of placement.units) {
     const seen = steps.get(u.stepId);
-    if (seen === undefined) steps.set(u.stepId, { name: u.name, count: 1, unit: u });
-    else seen.count += 1;
+    if (seen !== undefined) {
+      seen.count += 1;
+      continue;
+    }
+    const group: StepUnits = { name: u.name, count: 1, unit: u };
+    groups.push(group);
+    for (const id of unitSteps(u)) steps.set(id, group);
   }
   const line = LINE_PLACES[mode];
   const machineWord = (s: StepUnits): string => (s.count === 1 ? `the ${s.name}` : `each ${s.name}`);
@@ -104,9 +111,10 @@ export function handSteps(input: ModeInput, mode: HandMode): { drafts: StepDraft
     drafts.push({ id: `layout:hand:${stepId}:empty`, kind: 'logistics', pin: 'site',
       text: `Empty ${who(s)} by hand: ${placesText(goods, 'into', joinNames(goods.map((g) => g.name)), joinNames)}` });
   };
-  for (const [stepId, s] of steps) {
+  /** One step's hand steps and warnings, on the machines of `s`. */
+  const stepHands = (stepId: string, s: StepUnits): void => {
     const planStep = plan.steps.find((x) => x.id === stepId);
-    if (planStep === undefined) continue;
+    if (planStep === undefined) return;
     if (s.unit.manual !== undefined) {
       const inputs = perKey(planStep.inputs);
       if (inputs.length > 0) {
@@ -118,15 +126,18 @@ export function handSteps(input: ModeInput, mode: HandMode): { drafts: StepDraft
       }
       const outputs = perKey(planStep.outputs).map((p) => p.key);
       if (outputs.length > 0) emptyStep(stepId, s, outputs);
-      continue;
+      return;
     }
     // AE2: a steam machine's ME interface pushes its inputs in, but nothing takes its output back
-    if (mode !== 'ae2' || s.unit.vent !== true) continue;
+    if (mode !== 'ae2' || s.unit.vent !== true) return;
     const made = perKey(planStep.outputs).map((p) => p.key).filter((k) => !isFluidKey(k));
-    if (made.length === 0) continue;
+    if (made.length === 0) return;
     warnings.push({ code: 'steam_items', stepId, text: `${s.name} takes no conveyor cover (GregTech allows none on a steam machine) and never pushes `
       + `out what it makes, so no ME interface gets ${joinNames(made.map(nameOf))} back from it: take ${made.length === 1 ? 'it' : 'them'} out by hand` });
     emptyStep(stepId, s, made);
+  };
+  for (const s of groups) {
+    for (const stepId of unitSteps(s.unit)) stepHands(stepId, s);
   }
   return { drafts, warnings };
 }

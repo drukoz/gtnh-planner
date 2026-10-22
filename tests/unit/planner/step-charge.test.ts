@@ -80,24 +80,32 @@ describe('the step charge', () => {
 
 describe('planLine and the step charge', () => {
   it('maps settings to solve options', () => {
-    expect(solveOptions(defaultSettings())).toEqual({ stepCharge: 0.02, handWeight: 3 });
-    expect(solveOptions({ ...defaultSettings(), mode: 'makeN' })).toEqual({ stepCharge: 0.02, handWeight: 1 });
-    expect(solveOptions({ ...defaultSettings(), automateCrafting: true })).toEqual({ stepCharge: 0.02, handWeight: 1 });
-    expect(solveOptions({ ...defaultSettings(), stepCharge: 0 })).toEqual({ stepCharge: 0, handWeight: 3 });
+    // Crafting-table steps run on the Auto Workbench by default (plan 12's ruling): a step like any other. The default is
+    // "Fewest machines", 0.5 (plan 12 fix wave 2). One no Auto Workbench runs is still crafted by hand, and weighs
+    // three steps in a running line (controller ruling 214, `byHandWeight`).
+    expect(solveOptions(defaultSettings())).toEqual({ stepCharge: 0.5, handWeight: 1, byHandWeight: 3 });
+    const byHand: PlanSettings = { ...defaultSettings(), automateCrafting: false, stepCharge: 0.02 };
+    expect(solveOptions(byHand)).toEqual({ stepCharge: 0.02, handWeight: 3 });
+    expect(solveOptions({ ...byHand, mode: 'makeN' })).toEqual({ stepCharge: 0.02, handWeight: 1 });
+    expect(solveOptions({ ...byHand, automateCrafting: true })).toEqual({ stepCharge: 0.02, handWeight: 1, byHandWeight: 3 });
+    expect(solveOptions({ ...byHand, automateCrafting: true, mode: 'makeN' })).toEqual({ stepCharge: 0.02, handWeight: 1 });
+    expect(solveOptions({ ...byHand, stepCharge: 0 })).toEqual({ stepCharge: 0, handWeight: 3 });
     // A project stored before the setting existed plans with the default.
     const { stepCharge: _, ...old } = defaultSettings();
-    expect(solveOptions(old as PlanSettings).stepCharge).toBe(0.02);
+    expect(solveOptions(old as PlanSettings).stepCharge).toBe(0.5);
   });
   it('warns about a step left to hand-crafting', async () => {
-    // An LV Machine Hull a minute: the hull and its tin cables have no machine recipe at LV.
+    // An LV Machine Hull a minute: the hull and its tin cables have no machine recipe at LV. Crafted by hand, with build
+    // cost ignored (plan 12): this case predates both. With no crafting switch left in Settings (the user's ruling 180),
+    // the warning no longer asks to mark crafting as automated.
     const pack = miniGt();
-    const settings: PlanSettings = { ...defaultSettings(), target: 't:hull_lv@0', tier: 1 };
+    const settings: PlanSettings = { ...defaultSettings(), target: 't:hull_lv@0', tier: 1, automateCrafting: false, buildHorizonHours: null };
     const plan = await planLine(pack, settings, emptyContext());
     expect(plan.steps.map((s) => s.id)).toEqual(['bend-plate', 'cable', 'hull-lv']);
     expect(plan.warnings).toContainEqual({ code: 'hand-step', stepId: 'hull-lv',
-      text: 'LV Machine Hull is crafted by hand: 60/h; mark crafting as automated or pin a machine recipe' });
+      text: 'LV Machine Hull is crafted by hand: 60/h; pin a machine recipe to automate it' });
     expect(plan.warnings).toContainEqual({ code: 'hand-step', stepId: 'cable',
-      text: '1x Tin Cable is crafted by hand: 120/h; mark crafting as automated or pin a machine recipe' });
+      text: '1x Tin Cable is crafted by hand: 120/h; pin a machine recipe to automate it' });
     const automated = await planLine(pack, { ...settings, automateCrafting: true }, emptyContext());
     expect(automated.warnings.filter((w) => w.code === 'hand-step')).toEqual([]);
     // A batch may be crafted by hand.

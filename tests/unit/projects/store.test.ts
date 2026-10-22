@@ -54,7 +54,15 @@ describe('ProjectStore', () => {
     const row = db.getProject(p.id)!;
     const state = JSON.parse(row.state); delete state.settings.automateCrafting;
     db.updateProject({ ...row, state: JSON.stringify(state) });
-    expect(store.get(p.id)?.settings.automateCrafting).toBe(false);
+    // The Auto Workbench (plan 12's ruling) for the missing field; and since the user's ruling 180 (crafting steps are
+    // automatic, no checkbox) a stored "by hand" reads as automated too, with no recorded change.
+    expect(store.get(p.id)?.settings.automateCrafting).toBe(true);
+    const byHand = store.create('By hand', 'Ann');
+    const stored = db.getProject(byHand.id)!;
+    const hand = JSON.parse(stored.state); hand.settings.automateCrafting = false;
+    db.updateProject({ ...stored, state: JSON.stringify(hand) });
+    expect(store.get(byHand.id)?.settings.automateCrafting).toBe(true);
+    expect(store.get(byHand.id)?.rev).toBe(stored.rev);
   });
 });
 
@@ -80,12 +88,22 @@ describe('ProjectStore.migrateSettings', () => {
       sql.close();
     }
   }
+  /** A project as plan 12's fix wave 2 found it: settings version 2 and the step charge `stepCharge` stored. */
+  function storedAtVersion2(name: string, stepCharge: number): string {
+    const p = store.create(name, 'Ann');
+    const row = db.getProject(p.id)!;
+    const state = JSON.parse(row.state);
+    state.settings.settingsVersion = 2;
+    state.settings.stepCharge = stepCharge;
+    db.updateProject({ ...row, state: JSON.stringify(state) });
+    return p.id;
+  }
   it('switches an old project to supporting lines once, as a recorded settings op by the planner', () => {
     const id = storedBeforePlan09('Old');
     expect(store.get(id)?.settings).toMatchObject({ routeDerived: false, settingsVersion: 1 });
     expect(store.migrateSettings(PLANNER_UPDATE)).toEqual([id]);
-    expect(store.get(id)).toMatchObject({ rev: 1, settings: { routeDerived: true, settingsVersion: 2 } });
-    expect(opsOf(id)).toEqual([{ rev: 1, op: { op: 'settings', patch: { routeDerived: true, settingsVersion: 2 } }, by: 'Planner update' }]);
+    expect(store.get(id)).toMatchObject({ rev: 1, settings: { routeDerived: true, settingsVersion: 3 } });
+    expect(opsOf(id)).toEqual([{ rev: 1, op: { op: 'settings', patch: { routeDerived: true, settingsVersion: 3 } }, by: 'Planner update' }]);
     // Run again (the next start): nothing left to switch.
     expect(store.migrateSettings(PLANNER_UPDATE)).toEqual([]);
     expect(store.get(id)?.rev).toBe(1);
@@ -95,8 +113,28 @@ describe('ProjectStore.migrateSettings', () => {
     const p = store.create('New', 'Ann', { routeDerived: false });
     const migratedOld = storedBeforePlan09('Old');
     expect(store.migrateSettings(PLANNER_UPDATE)).toEqual([migratedOld]);
-    expect(store.get(p.id)).toMatchObject({ rev: 0, settings: { routeDerived: false, settingsVersion: 2 } });
+    expect(store.get(p.id)).toMatchObject({ rev: 0, settings: { routeDerived: false, settingsVersion: 3 } });
     expect(db.countOps(p.id)).toBe(0);
+  });
+  // Plan 12 fix wave 2 (the user's answer of 2026-10-20): "Fewest machines" (0.5) is the default, and a project still at
+  // the old default of exactly 0.02 is switched to it once; any other stored value stays.
+  it('switches a project still at the old 2 % step charge to Fewest machines once, and leaves any other value', () => {
+    const old = storedAtVersion2('Old default', 0.02);
+    const kept = new Map([0, 0.05, 0.15, 0.5].map((charge) => [storedAtVersion2(`Chose ${charge}`, charge), charge]));
+    expect(store.get(old)?.settings).toMatchObject({ stepCharge: 0.02, settingsVersion: 2 });
+    expect(store.migrateSettings(PLANNER_UPDATE).sort()).toEqual([old, ...kept.keys()].sort());
+    expect(store.get(old)).toMatchObject({ rev: 1, settings: { stepCharge: 0.5, routeDerived: true, settingsVersion: 3 } });
+    expect(opsOf(old)).toEqual([{ rev: 1, op: { op: 'settings', patch: { stepCharge: 0.5, settingsVersion: 3 } }, by: 'Planner update' }]);
+    for (const [id, charge] of kept) {
+      expect(store.get(id)).toMatchObject({ rev: 1, settings: { stepCharge: charge, settingsVersion: 3 } });
+      expect(opsOf(id)).toEqual([{ rev: 1, op: { op: 'settings', patch: { settingsVersion: 3 } }, by: 'Planner update' }]);
+    }
+    // Idempotent: the next start changes nothing, and a later deliberate 2 % ("Some machines") sticks.
+    expect(store.migrateSettings(PLANNER_UPDATE)).toEqual([]);
+    store.apply(old, [{ op: 'settings', patch: { stepCharge: 0.02 } }], 'Ann');
+    expect(store.migrateSettings(PLANNER_UPDATE)).toEqual([]);
+    expect(store.get(old)).toMatchObject({ rev: 2, settings: { stepCharge: 0.02, settingsVersion: 3 } });
+    expect(db.countOps(old)).toBe(2);
   });
   it('leaves deleted projects for the start after they are restored', () => {
     const id = storedBeforePlan09('Old');

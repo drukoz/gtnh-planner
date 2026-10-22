@@ -4,13 +4,13 @@
 // the same thing. The same goes for an EnderIO conduit face (architecture "EnderIO conduits, granted change requests
 // (add-on 11)"): its mode, and for each side its channel colour, filter, speed upgrades, round robin, priority and
 // redstone setting, written from the block's `conduits`. And for the structured feeding configuration (architecture §11
-// entry 51): each routed interface pipe's chips with their filter mode and items, and each ME interface's patterns and
-// blocking mode, written from the block's `feed`. Pure TypeScript shared by server and browser: nothing from node:* may
-// be imported here.
+// entry 51): each routed interface pipe's chips with their filter mode and items, each ME interface's patterns and
+// blocking mode, and an Auto Workbench's mode, grid and button (plan 12), written from the block's `feed`. Pure TypeScript
+// shared by server and browser: nothing from node:* may be imported here.
 
 import type { StuffKey } from '../keys.ts';
 import type { Face } from '../types/assets.ts';
-import type { ChipKind, FeedSpec, InterfaceSpec, PatternSpec, RoutedChipSpec } from '../types/feed.ts';
+import type { BenchSpec, ChipKind, FeedSpec, InterfaceSpec, PatternSpec, RoutedChipSpec } from '../types/feed.ts';
 import type { ConduitExtract, ConduitFace, ConduitFilter, ConduitInsert, ConduitKind, CoverSpec, LayoutBlock } from '../types/layout.ts';
 import { CONDUIT_MODE_NAMES, CONDUIT_NAMES, DYE_NAMES, REDSTONE_NAMES } from './enderio.ts';
 import { fmtInt, fmtRate, joinNames } from './format.ts';
@@ -175,6 +175,22 @@ function patternText(p: PatternSpec, nameOf: (k: StuffKey) => string): string {
   return `${side(p.inputs)} → ${side(p.outputs)}`;
 }
 
+/** The states of an Auto Workbench's top-left (throughput) button, by its setting. */
+const BUTTON_STATES: readonly string[] = ['first', 'second', 'third', 'fourth'];
+
+/**
+ * An Auto Workbench's settings in a builder's words (research machine-feeding §3.7): its mode, by the bottom-left button,
+ * whose tooltip names it; its grid, top row first, the cells of a row by commas and the rows by slashes, each cell the
+ * item to put in it or `empty`; and its top-left (throughput) button, on its first state for a bench that pushes what
+ * it makes out of its back.
+ */
+function benchTexts(spec: BenchSpec, nameOf: (k: StuffKey) => string): string[] {
+  const rows: string[] = [];
+  for (let i = 0; i < spec.grid.length; i += 3) rows.push(spec.grid.slice(i, i + 3).map((k) => (k === null ? 'empty' : nameOf(k))).join(', '));
+  return ['mode Normal Crafting Table (the bottom-left button; its tooltip names the mode)', `grid, top row first: ${rows.join(' / ')}`,
+    `leave the top-left button on its ${BUTTON_STATES[spec.throughput] ?? 'first'} state`];
+}
+
 /** An ME interface's patterns (numbered when there are two or more), blocking mode and Locking Card. */
 function interfaceTexts(spec: InterfaceSpec, nameOf: (k: StuffKey) => string): string[] {
   const n = spec.patterns.length;
@@ -188,15 +204,16 @@ function interfaceTexts(spec: InterfaceSpec, nameOf: (k: StuffKey) => string): s
 
 /**
  * The structured feeding configuration in a builder's words: a routed interface pipe's chips in chip-slot order as one
- * line (`chips: <chip> + <chip>`), then an ME interface's patterns and settings. An ME Export Bus's filter and cards
- * (`exportBus`) are worded once, by its cover on the same block (`coverText`), and an Auto Workbench's grid (add-on 12)
- * has no words here yet.
+ * line (`chips: <chip> + <chip>`), then an ME interface's patterns and settings, then an Auto Workbench's mode, grid and
+ * button (plan 12, `benchTexts`). An ME Export Bus's filter and cards (`exportBus`) are worded once, by its cover on the
+ * same block (`coverText`).
  */
 export function feedTexts(feed: FeedSpec | undefined, nameOf: (k: StuffKey) => string): string[] {
   if (feed === undefined) return [];
   const lines: string[] = [];
   if (feed.chips !== undefined && feed.chips.length > 0) lines.push(`chips: ${feed.chips.map((c) => chipText(c, nameOf)).join(' + ')}`);
   if (feed.interface !== undefined) lines.push(...interfaceTexts(feed.interface, nameOf));
+  if (feed.bench !== undefined) lines.push(...benchTexts(feed.bench, nameOf));
   return lines;
 }
 
@@ -210,13 +227,16 @@ export function configuredLines(block: Pick<LayoutBlock, 'covers' | 'config' | '
 /**
  * A filter in a builder's words: `<filter name> (<whitelist|blacklist>[, <n> of <slots> slots]: <names>; <match
  * meta|ignore meta>, <match NBT|ignore NBT>[, ore dictionary][, sticky])`, the slot count when the filter knows how many
- * it has (a Basic Item Filter 5, an Advanced 10, a Big 24), so the builder sees which filter the list needs. An ender
- * fluid conduit's own filter has no item and no flags: `fluid filter (<whitelist|blacklist>[, <n> of 5 slots]: <names>)`.
- * A flag the filter does not set reads as off.
+ * it has (a Basic Item Filter 5, an Advanced 10, a Big 24), so the builder sees which filter the list needs. A Limited
+ * Item Filter's names carry their counts, `<name> <count>`, which count the item's cells in an Auto Workbench's crafting
+ * grid too (plan 12, `ConduitFilter.limits`). An ender fluid conduit's own filter has no item and no flags: `fluid filter
+ * (<whitelist|blacklist>[, <n> of 5 slots]: <names>)`. A flag the filter does not set reads as off.
  */
 export function conduitFilterText(filter: ConduitFilter, nameOf: (k: StuffKey) => string): string {
   const slots = filter.slots === undefined ? '' : `, ${fmtInt(filter.keys.length)} of ${fmtInt(filter.slots)} slots`;
-  const list = `${filter.whitelist ? 'whitelist' : 'blacklist'}${slots}: ${joinNames(filter.keys.map((k) => nameOf(k)))}`;
+  const names = filter.keys.map((k, i) => (filter.limits === undefined ? nameOf(k) : `${nameOf(k)} ${fmtInt(filter.limits[i] ?? 0)}`));
+  const counted = filter.limits === undefined ? '' : ', each count with its cells in the crafting grid';
+  const list = `${filter.whitelist ? 'whitelist' : 'blacklist'}${slots}: ${joinNames(names)}${counted}`;
   if (filter.item === undefined) return `fluid filter (${list})`;
   const flags = [filter.matchMeta === true ? 'match meta' : 'ignore meta', filter.matchNbt === true ? 'match NBT' : 'ignore NBT'];
   if (filter.oreDict === true) flags.push('ore dictionary');

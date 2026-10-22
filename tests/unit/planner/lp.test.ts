@@ -33,6 +33,26 @@ describe('solveLp', () => {
     expect(r.status).toBe('optimal');
     expect(r.objective).toBeCloseTo(1, 9);
     expect(r.x.every((v) => Math.abs(v - Math.round(v)) < 1e-9)).toBe(true);
+    expect(r.stop).toBeUndefined();
+  });
+  it('says why a MIP stopped early', async () => {
+    // A 0–1 knapsack HiGHS 1.15.3 needs 2,072 nodes for unlimited (4,719 with the zero gaps a node limit sets; about half
+    // a second), so either limit stops it with the start.
+    const weights = Array.from({ length: 40 }, (_, i) => 1000 + ((i * 7919) % 1000));
+    const values = weights.map((w, i) => w + ((i * 104729) % 97));
+    const knapsack = {
+      sense: 'max' as const, colCost: values, colLower: new Array<number>(40).fill(0), colUpper: new Array<number>(40).fill(1),
+      rows: [{ lower: -Infinity, upper: Math.floor(weights.reduce((a, b) => a + b, 0) / 2), entries: weights.map((w, i): [number, number] => [i, w]) }],
+      integer: new Array<boolean>(40).fill(true), start: new Array<number>(40).fill(0),
+    };
+    expect(await solveLp({ ...knapsack, maxNodes: 1 })).toMatchObject({ status: 'feasible', stop: 'limit', nodes: 1 });
+    expect(await solveLp({ ...knapsack, timeLimit: 0 })).toMatchObject({ status: 'feasible', stop: 'time' });
+    // The simplex-iteration bound (plan 12 fix wave) stops it deterministically, the same way twice, with a bound on
+    // the optimum no better than the solution it keeps.
+    const bounded = await solveLp({ ...knapsack, maxNodes: 100_000, maxIterations: 50 });
+    expect(bounded).toMatchObject({ status: 'feasible', stop: 'limit' });
+    expect(bounded.bound).toBeGreaterThanOrEqual(bounded.objective - 1e-9);
+    expect(await solveLp({ ...knapsack, maxNodes: 100_000, maxIterations: 50 })).toEqual(bounded);
   });
   it('accepts a start solution', async () => {
     const r = await solveLp({ sense: 'max', colCost: [1, 1], colLower: [0, 0], colUpper: [Infinity, Infinity],

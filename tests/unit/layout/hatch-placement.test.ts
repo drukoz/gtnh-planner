@@ -295,8 +295,10 @@ describe('hatches by GregTech\'s rules', () => {
     expect(warnings).toEqual([{ code: 'steam_machine', stepId: 's', text: 'Steam Blender runs on steam: connect a steam supply to its Steam Hatch by hand' }]);
   });
 
-  it("swaps the export's muffler for the lowest tier and takes the exported one off the build list", () => {
-    // the export builds the EBF's hatch-only muffler element as a UHV muffler (mte 99)
+  it("lays the export's muffler at the lowest tier of its class, the one Plan 2's build list lists", () => {
+    // the export builds the EBF's hatch-only muffler element as a UHV muffler (mte 99); Plan 2's build list lists every
+    // structure hatch at the lowest tier of its class (Task 2's `minimalHatch`), and so does the layout (plan 12 Task 6),
+    // so that cell replaces nothing on the list
     const pack = layoutPack();
     pack.machines.set(99, { ...pack.machines.get(IDS.MUFFLER)!, mteId: 99, name: 'Muffler Hatch (UHV)', tier: 9, itemKey: 'gregtech:gt.blockmachines@99' });
     const ebf = pack.machines.get(IDS.EBF)!;
@@ -304,10 +306,8 @@ describe('hatches by GregTech\'s rules', () => {
     const { units, warnings } = unitsFromPlan(pack, makePlan([ebfOxygen]));
     expect(warnings).toEqual([]);
     expect(units[0]!.cells.filter((c) => c.hatch === 'muffler').map((c) => [c.pos, c.block.mteId, c.face, c.replaces])).toEqual([
-      [[1, 3, 1], IDS.MUFFLER, 1, 'gregtech:gt.blockmachines@99']]);
-    expect(replacedCasings(units)).toEqual([
-      { key: 'gregtech:gt.blockcasings@11', amount: 5, why: 'replaced by hatches', group: 'machines' },
-      { key: 'gregtech:gt.blockmachines@99', amount: 1, why: 'replaced by hatches', group: 'machines' }]);
+      [[1, 3, 1], IDS.MUFFLER, 1, undefined]]);
+    expect(replacedCasings(units)).toEqual([{ key: 'gregtech:gt.blockcasings@11', amount: 5, why: 'replaced by hatches', group: 'machines' }]);
     expect(units[0]!.air).toContainEqual([1, 4, 1]);
   });
 

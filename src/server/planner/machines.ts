@@ -1,15 +1,20 @@
 // Machines per step (spec §3.3, §3.9; prior-art §3.4 step 6, §3.5; gt-mechanics §2): which machine runs each recipe the
-// solver chose and at what tier, its overclocked speed, how many machines a step needs and how busy they are, which of
-// the group's own machines it can reuse, and the item and fluid flows between the steps.
+// solver chose and at what tier (plan 12: the build-cost solve's decision), its overclocked speed, how many machines a
+// step needs and how busy they are, which of the group's own machines it runs on (owned units, sharing pools, owned
+// machines of other tiers), the tiers it could run at, and the item and fluid flows between the steps.
 
 import { multiblockOverclock, singleblockOverclock, voltageTier, type MachineOc } from '../../shared/gt/overclock.ts';
-import { PSEUDO_MACHINES, V, tierName } from '../../shared/gt/tiers.ts';
-import { isFluidKey, parseItemKey, type StuffKey } from '../../shared/keys.ts';
+import { PSEUDO_IDS, PSEUDO_MACHINES, V, tierName } from '../../shared/gt/tiers.ts';
+import type { StuffKey } from '../../shared/keys.ts';
 import type { Ingredient, Machine, Pack, Product, Recipe } from '../../shared/types/pack.ts';
-import { FREE_KEYS, type MachineWhere, type PlanContext, type PlanFlow, type PlanSettings, type PlanStep } from '../../shared/types/plan.ts';
-import { PROGRAMMED_CIRCUIT_ID } from '../pack/recipes.ts';
+import {
+  FREE_KEYS, type MachineWhere, type PlanContext, type PlanFlow, type PlanSettings, type PlanStep, type StepTier,
+} from '../../shared/types/plan.ts';
 import { suppliedKey } from '../pack/supply.ts';
+import type { StepMachines } from './build-mip.ts';
 import { keptOptions, virtualKey, type CandidateGraph, type LpRecipe } from './candidates.ts';
+import { feedsEither, poolKey, sharesMachines, sharingKey, type BuildModel, type MachineOption, type OwnedPools } from './machine-options.ts';
+import { ownedPools, recipeCircuit } from './owned.ts';
 import { sig9 } from './round.ts';
 import type { Solution } from './solve.ts';
 
@@ -26,6 +31,23 @@ const CRAFT_TICKS = 20;
  * step 6: a count that is exactly 2 stays 2).
  */
 const TINY = 1e-9;
+/**
+ * The share of a load its rate's 9 significant digits can move it by (plan 12 Task 8): a step's runs per second keep 9
+ * significant digits (`sig9`), up to 5e-9 of their value off, so a set of machines exactly full can read a little above a
+ * whole number — 10 machines' worth at 1/6 a run a second reads 10.00000002 — and stays that whole number, as an exact 2
+ * stays 2 (`TINY`).
+ */
+const SIG9_SLACK = 1e-8;
+
+/** How little above a whole number `load` machines' worth may read and still stay that number: `TINY` or its 9 digits' slack. */
+function wholeSlack(load: number): number {
+  return Math.max(TINY, SIG9_SLACK * Math.abs(load));
+}
+
+/** The whole machines `load` machines' worth needs (`wholeSlack`); 0 for none. */
+function wholeMachines(load: number): number {
+  return Math.ceil(load - wholeSlack(load));
+}
 const HAND_CRAFT_RUNS_PER_SECOND = 1;
 /**
  * A flow below this share of what its producer makes of the good is dropped (fix spec D3): relative, so a line keeps
@@ -133,59 +155,8 @@ export function pickMachine(
   return picked({ mteId: multi.mteId, name: multi.name, tier: hatchTier, kind: 'multiblock', oc, handCraft: false });
 }
 
-/** The machines of one type a line may run on: how many, and where those a world scan found stand (at most `count`). */
-export interface OwnedType { count: number; where: MachineWhere[] }
-
-/**
- * The machines the line may run on, per mteId (architecture §11.29): none when the project turned "Reuse machines we
- * have" off (`settings.reuseOwned === false`); else the world scan's (`ctx.ownedMachines`, with where they stand) and
- * then the "Machines we have" list's (`settings.ownedManual`, without a position), added up per type, in that order,
- * leaving out the types the group declined to reuse for this line (`settings.declineReuse`).
- */
-export function ownedMachineTypes(ctx: PlanContext, settings: PlanSettings): Map<number, OwnedType> {
-  const owned = new Map<number, OwnedType>();
-  if (settings.reuseOwned === false) return owned;
-  const declined = new Set(settings.declineReuse ?? []);
-  const add = (mteId: number, count: number, where: readonly MachineWhere[]): void => {
-    if (declined.has(mteId) || !(count > 0)) return;
-    let type = owned.get(mteId);
-    if (type === undefined) owned.set(mteId, (type = { count: 0, where: [] }));
-    type.count += count;
-    type.where.push(...where.slice(0, count));
-  };
-  for (const m of ctx.ownedMachines) add(m.mteId, m.count, m.where ?? []);
-  for (const m of settings.ownedManual ?? []) add(m.mteId, m.count, []);
-  return owned;
-}
-
-/** How many machines of each type `types` holds: the owned machines `pickMachine` prefers. */
-export function ownedCounts(types: ReadonlyMap<number, OwnedType>): Map<number, number> {
-  return new Map([...types].map(([mteId, type]) => [mteId, type.count]));
-}
-
-/** How many machines of each type the line may run on (`ownedMachineTypes`): a declined type counts as not owned everywhere. */
-export function ownedMachineMap(ctx: PlanContext, settings: PlanSettings): Map<number, number> {
-  return ownedCounts(ownedMachineTypes(ctx, settings));
-}
-
-/** `PlanStep.reused` of a step running on `count` owned machines, with where those a scan found stand (copies). */
-export function reusedMachines(count: number, where: readonly MachineWhere[]): NonNullable<PlanStep['reused']> {
-  return { count, where: where.map(({ dim, pos }) => ({ dim, pos: [pos[0], pos[1], pos[2]] })) };
-}
-
-/** The programmed-circuit number a recipe needs: `meta.circuit`, else the meta of a not-consumed programmed circuit. */
-export function recipeCircuit(r: Recipe): number | undefined {
-  if (typeof r.meta.circuit === 'number') return r.meta.circuit;
-  for (const ing of r.inputs) {
-    if (ing.consumed) continue;
-    for (const option of ing.options) {
-      if (isFluidKey(option.key)) continue;
-      const { id, meta } = parseItemKey(option.key);
-      if (id === PROGRAMMED_CIRCUIT_ID) return meta;
-    }
-  }
-  return undefined;
-}
+// The owned pools and a recipe's programmed circuit live in a leaf module (owned.ts); their callers keep reading them here.
+export { ownedMachineMap, ownedPools, recipeCircuit } from './owned.ts';
 
 type Option = Ingredient['options'][number];
 
@@ -391,18 +362,31 @@ function mainOutputOf(r: Recipe, line: StepLine): StuffKey | undefined {
   return best;
 }
 
-/** A recipe the solution runs that is a step (convert recipes are not), and the machine that runs it. */
-export interface PickedRecipe { id: string; runs: number; lp: LpRecipe; mapId: string; recipe: Recipe; pick: MachinePick }
+/**
+ * A recipe the solution runs that is a step (convert recipes are not), and the machine that runs it; `decided` is the
+ * build-cost solve's decision for it (`Solution.machines`), when it made one.
+ */
+export interface PickedRecipe { id: string; runs: number; lp: LpRecipe; mapId: string; recipe: Recipe; pick: MachinePick; decided?: StepMachines }
+
+/** The machine of a machine option (plan 12): its type, tier and overclock, as the build-cost solve picked it. */
+function optionPick(o: MachineOption): MachinePick {
+  return { mteId: o.mteId, name: o.name, tier: o.tier, kind: o.kind, oc: o.oc, runsPerSecondPerMachine: o.perMachine, handCraft: false };
+}
 
 /**
- * The recipes in `runs` that are steps, sorted by id, each with its machine: `pickMachine` with the recipe's own tier
- * from `settings.machineTier` and the group's `owned` machines. Shared by the rate plan and Make N.
+ * The recipes in `runs` that are steps, sorted by id, each with its machine: the option the build-cost solve decided
+ * for it (`machines`, plan 12: `Solution.machines`), else `pickMachine` with the recipe's own tier from
+ * `settings.machineTier` and the group's `owned` machines (pseudo steps, and lines solved without a build model). Shared
+ * by the rate plan and Make N.
  */
 export function pickStepMachines(
   pack: Pack, graph: CandidateGraph, runs: ReadonlyMap<string, number>,
-  opts: { settings: PlanSettings; groupTier: number; coilHeat: number; owned: ReadonlyMap<number, number>; multiblocks?: ReadonlySet<number> },
+  opts: {
+    settings: PlanSettings; groupTier: number; coilHeat: number; owned: ReadonlyMap<number, number>; multiblocks?: ReadonlySet<number>;
+    machines?: ReadonlyMap<string, StepMachines>;
+  },
 ): PickedRecipe[] {
-  const { settings, groupTier, coilHeat, owned, multiblocks } = opts;
+  const { settings, groupTier, coilHeat, owned, multiblocks, machines } = opts;
   const lpById = new Map(graph.recipes.map((r) => [r.id, r]));
   const picked: PickedRecipe[] = [];
   for (const [id, n] of [...runs].sort(([a], [b]) => byString(a, b))) {
@@ -410,8 +394,15 @@ export function pickStepMachines(
     if (lp === undefined || lp.kind === 'convert' || lp.mapId === null) continue;
     const recipe = pack.recipeById.get(id);
     if (recipe === undefined) throw new Error(`recipe ${id} of the plan is not in the pack`);
+    const decided = machines?.get(id);
+    if (decided !== undefined) {
+      picked.push({ id, runs: n, lp, mapId: lp.mapId, recipe, pick: optionPick(decided.option), decided });
+      continue;
+    }
     const wantTier = Object.hasOwn(settings.machineTier, id) ? settings.machineTier[id] : undefined;
-    const pick = pickMachine(pack, recipe, lp.mapId, { groupTier, wantTier, coilHeat, automateCrafting: settings.automateCrafting, owned, multiblocks });
+    // a crafting-table recipe no Auto Workbench of the line runs is crafted by hand (`LpRecipe.byHand`, controller ruling 214)
+    const automateCrafting = settings.automateCrafting && lp.byHand === undefined;
+    const pick = pickMachine(pack, recipe, lp.mapId, { groupTier, wantTier, coilHeat, automateCrafting, owned, multiblocks });
     picked.push({ id, runs: n, lp, mapId: lp.mapId, recipe, pick });
   }
   return picked;
@@ -490,6 +481,8 @@ export function emptyContainers(pack: Pack): ReadonlySet<StuffKey> {
 export function machineWarnings(lp: LpRecipe, pick: MachinePick, runsPerSecond: number): string[] {
   const warnings: string[] = [];
   if (lp.needsCleanroom) warnings.push('Needs a cleanroom');
+  // why no Auto Workbench crafts it although the line's crafting is automated (controller ruling 214, user ruling 180 (d))
+  if (pick.handCraft && lp.byHand !== undefined) warnings.push(`Crafted by hand: it ${lp.byHand}`);
   if (pick.handCraft && runsPerSecond > HAND_CRAFT_RUNS_PER_SECOND) {
     warnings.push('More than one craft per second by hand — consider automating it');
   }
@@ -523,7 +516,7 @@ export function describeStep(pack: Pack, p: PickedRecipe, line: StepLine, size: 
   const mainOutput = mainOutputOf(r, line);
   if (mainOutput !== undefined) step.mainOutput = mainOutput;
   step.oc = {
-    recipeEuPerTick: r.euPerTick, recipeDurationTicks: baseDurationTicks(r, pick), machineVoltage: pick.oc.machineVoltage,
+    recipeEuPerTick: r.euPerTick, recipeDurationTicks: baseDurationTicks(r, p.mapId, pick), machineVoltage: pick.oc.machineVoltage,
     machineAmps: pick.oc.machineAmps, perfect: pick.kind === 'multiblock' && pack.machines.get(pick.mteId)?.perfectOC === true,
     heatOverclocks: pick.oc.heatOverclocks,
   };
@@ -537,10 +530,271 @@ export function describeStep(pack: Pack, p: PickedRecipe, line: StepLine, size: 
 }
 
 /**
- * One step per recipe the solution runs (convert recipes are not steps), sorted by id: the picked machine, how many
- * of it the rate needs (`perSecondScale` turns runs into runs per second) and how busy they are, how many of them the
- * group already owns (`ownedMachineTypes`; each owned machine serves one step, earlier steps first, those a scan found
- * before those of the list, and `reused` says where they stand), per-run inputs and outputs, and its warnings.
+ * One step's claim on the owned machines of one machine type (`assignOwned`, plan 12): `load` is the machines' worth of
+ * the type it needs; `also` marks the owned machines of another of its options it runs on beside its own type's
+ * (`StepMachines.others`), which take exactly their `share` (the owned machines' worth the build-cost solve gave it; an
+ * own claim is placed by its load alone); `key` is its sharing pool (with sharing; default its own id); `ownedOnly`, a
+ * step that can only run on owned machines (`BuildModel.ownedOnly`).
+ */
+export interface OwnedClaim { id: string; mteId: number; load: number; share?: number; also?: boolean; key?: string; ownedOnly?: boolean }
+
+/**
+ * Which owned machines (`units`, indices in the type's pool, ascending) a step runs on and how many new ones of its
+ * type it adds; `pool` (`'pool:' + its smallest id`) when a sharing pool of two or more steps holds them; `others`, the
+ * units of its `also` claims, per type.
+ */
+export interface OwnedAssignment { units: number[]; added: number; pool?: string; others?: Array<{ mteId: number; units: number[] }> }
+
+/**
+ * A claim's first unit is taken for any load above 0 (a running step needs a machine); further ones while more than
+ * `slack` is left (`wholeSlack` of the claim's whole load).
+ */
+function loadLeft(left: number, taken: number, slack: number): boolean {
+  return taken === 0 ? left > 0 : left > slack;
+}
+
+/**
+ * The owned machines of `pools` the steps run on (plan 12, design spec §3.3 "Reusing machines we have"), one entry per
+ * step id of `claims`, deterministic whatever order the solver broke its ties in. Per machine type (by mteId), first the
+ * `also` claims, by id, each taking exactly its `share` — without `shared`, that many whole units (the next indices);
+ * with it, room in a unit that serves its key and holds all of it (the least room that does, then the lower index), else
+ * the next free unit, which then serves its key, spilling into further free units for a share above 1 — and adding no
+ * machine (the solve's owned rows left room for them); then the own claims, those with `ownedOnly` first (a step that
+ * can only use owned machines takes its units before the others, so a machine that cannot be built is never added).
+ * Without `shared`, by load descending, then id: `needed = max(1, wholeMachines(load))`, the next `min(needed, left)`
+ * units, and the rest added new. With it, the claims of one key form a sharing pool of their summed load; pools by load
+ * descending, then their smallest id: a pool takes the room left in the units of its key (index order), then free units
+ * (the next indices) while load is left — any load above 0 takes one — then `ceil(left − slack)` new machines, at least
+ * one machine in all, `slack` being `wholeSlack` of the pool's load (a load read from 9 significant digits, a little
+ * above a whole number, stays whole); every claim of the pool gets the pool's units and new machines. A unit serves one key (controller
+ * ruling 9), and a pool takes no unit its load does not reach, so no step is counted on machines it does not use.
+ */
+export function assignOwned(claims: readonly OwnedClaim[], pools: OwnedPools, shared: boolean): Map<string, OwnedAssignment> {
+  const out = new Map<string, OwnedAssignment>();
+  const entryOf = (id: string): OwnedAssignment => {
+    let entry = out.get(id);
+    if (entry === undefined) out.set(id, (entry = { units: [], added: 0 }));
+    return entry;
+  };
+  const byType = new Map<number, OwnedClaim[]>();
+  for (const claim of claims) {
+    entryOf(claim.id);
+    const list = byType.get(claim.mteId);
+    if (list === undefined) byType.set(claim.mteId, [claim]);
+    else list.push(claim);
+  }
+  for (const mteId of [...byType.keys()].sort((a, b) => a - b)) {
+    const list = byType.get(mteId) as OwnedClaim[];
+    const total = pools.get(mteId)?.length ?? 0;
+    const free = Array.from({ length: total }, (_, u) => u);   // the next indices first
+    const used = new Array<number>(total).fill(0);              // with sharing: machines' worth on each unit
+    const keyOf: Array<string | undefined> = new Array<string | undefined>(total).fill(undefined);
+    const take = (u: number, key: string, amount: number): void => {
+      keyOf[u] = key;
+      used[u] = (used[u] ?? 0) + amount;
+    };
+    for (const claim of list.filter((c) => c.also === true).sort((a, b) => byString(a.id, b.id))) {
+      const share = Math.max(0, claim.share ?? claim.load);
+      const key = claim.key ?? claim.id;
+      const taken: number[] = [];
+      if (!shared) {
+        taken.push(...free.splice(0, Math.min(free.length, wholeMachines(share))));
+      } else {
+        let best: number | undefined;
+        for (let u = 0; u < total; u++) {
+          const room = 1 - (used[u] ?? 0);
+          if (keyOf[u] === key && room >= share - TINY && (best === undefined || room < 1 - (used[best] ?? 0))) best = u;
+        }
+        if (best !== undefined) {
+          take(best, key, share);
+          taken.push(best);
+        } else {
+          for (let left = share; loadLeft(left, taken.length, wholeSlack(share)) && free.length > 0;) {
+            const u = free.shift() as number;
+            take(u, key, Math.min(1, left));
+            taken.push(u);
+            left -= 1;
+          }
+        }
+      }
+      if (taken.length > 0) (entryOf(claim.id).others ??= []).push({ mteId, units: taken.sort((a, b) => a - b) });
+    }
+    const own = list.filter((c) => c.also !== true);
+    const onlyOwnedFirst = (a: boolean, b: boolean): number => Number(b) - Number(a);
+    if (!shared) {
+      own.sort((a, b) => onlyOwnedFirst(a.ownedOnly === true, b.ownedOnly === true) || b.load - a.load || byString(a.id, b.id));
+      for (const claim of own) {
+        const needed = Math.max(1, wholeMachines(claim.load));
+        const entry = entryOf(claim.id);
+        entry.units = free.splice(0, Math.min(needed, free.length));
+        entry.added = needed - entry.units.length;
+      }
+      continue;
+    }
+    const byKey = new Map<string, OwnedClaim[]>();
+    for (const claim of own) {
+      const key = claim.key ?? claim.id;
+      const members = byKey.get(key);
+      if (members === undefined) byKey.set(key, [claim]);
+      else members.push(claim);
+    }
+    const sharingPools = [...byKey].map(([key, members]) => {
+      members.sort((a, b) => byString(a.id, b.id));
+      let load = 0;
+      for (const m of members) load += Math.max(0, m.load);
+      return { key, members, load, first: (members[0] as OwnedClaim).id, ownedOnly: members.some((m) => m.ownedOnly === true) };
+    }).sort((a, b) => onlyOwnedFirst(a.ownedOnly, b.ownedOnly) || b.load - a.load || byString(a.first, b.first));
+    for (const p of sharingPools) {
+      let left = p.load;
+      const slack = wholeSlack(p.load);
+      const taken: number[] = [];
+      for (let u = 0; u < total && loadLeft(left, taken.length, slack); u++) {
+        const room = 1 - (used[u] ?? 0);
+        if (keyOf[u] !== p.key || room <= TINY) continue;
+        const t = Math.min(room, left);
+        take(u, p.key, t);
+        taken.push(u);
+        left -= t;
+      }
+      while (loadLeft(left, taken.length, slack) && free.length > 0) {
+        const u = free.shift() as number;
+        const t = Math.min(1, left);
+        take(u, p.key, t);
+        taken.push(u);
+        left -= t;
+      }
+      let added = Math.max(0, Math.ceil(left - slack));
+      if (taken.length + added === 0) added = 1;
+      const units = taken.sort((a, b) => a - b);
+      for (const m of p.members) {
+        const entry = entryOf(m.id);
+        entry.units = [...units];
+        entry.added = added;
+        if (p.members.length >= 2) entry.pool = `pool:${p.first}`;
+      }
+    }
+  }
+  return out;
+}
+
+/** A step on a pseudo machine (by hand, the crafting table, the vanilla furnace): no owned machines, no build cost. */
+function isPseudo(pick: MachinePick): boolean {
+  return pick.handCraft || PSEUDO_IDS.has(pick.mteId);
+}
+
+/**
+ * A step's claims on owned machines (`assignOwned`): its own type, for the runs its owned machines of other options do
+ * not take (`load = max(0, runs − Σ others ownedLoad × ρ) ÷ its own ρ`), with the solve's owned share, whether it can
+ * only use owned machines and, with sharing, its pool (`poolKey` of its option and sharing key); and an `also` claim per
+ * option of `StepMachines.others`, taking that option's owned share. None for a pseudo step.
+ */
+function ownedClaims(p: PickedRecipe, runsPerSecond: number, model: BuildModel | undefined): OwnedClaim[] {
+  if (isPseudo(p.pick)) return [];
+  const decided = p.decided;
+  const others = decided?.others ?? [];
+  let besides = 0;
+  for (const o of others) besides += o.ownedLoad * o.option.perMachine;
+  const load = Math.max(0, runsPerSecond - besides) / p.pick.runsPerSecondPerMachine;
+  const claim: OwnedClaim = { id: p.id, mteId: p.pick.mteId, load };
+  if (decided !== undefined) claim.share = Math.min(decided.ownedLoad, load);
+  if (model?.ownedOnly(p.id) !== undefined) claim.ownedOnly = true;
+  if (decided !== undefined && model?.share === true) claim.key = poolKey(decided.option, model.sharingKey(p.id));
+  const claims = [claim];
+  for (const o of others) {
+    const also: OwnedClaim = { id: p.id, mteId: o.option.mteId, load: o.ownedLoad, share: o.ownedLoad, also: true };
+    if (model !== undefined) also.key = poolKey(o.option, model.sharingKey(p.id));
+    claims.push(also);
+  }
+  return claims;
+}
+
+/** Where the owned machines `units` of type `mteId` stand, those known, in unit order (copies). */
+function unitPositions(pools: OwnedPools, mteId: number, units: readonly number[]): MachineWhere[] {
+  const pool = pools.get(mteId) ?? [];
+  return units.flatMap((u) => {
+    const at = pool[u];
+    return at === undefined || at === null ? [] : [{ dim: at.dim, pos: [at.pos[0], at.pos[1], at.pos[2]] as [number, number, number] }];
+  });
+}
+
+/** `PlanStep.reused` of a step on the owned machines `units` of type `mteId` (plan 12): how many, where those known stand, which. */
+export function reusedOf(pools: OwnedPools, mteId: number, units: readonly number[]): NonNullable<PlanStep['reused']> {
+  return { count: units.length, where: unitPositions(pools, mteId, units), units: [...units] };
+}
+
+/** The option of `list` with the lowest build (an unpriced one last), then the lowest mteId. */
+function cheapestBuild(list: readonly MachineOption[]): MachineOption | undefined {
+  return [...list].sort((a, b) => (a.build ?? Infinity) - (b.build ?? Infinity) || a.mteId - b.mteId)[0];
+}
+
+/**
+ * `PlanStep.tiers` (plan 12): per distinct tier of the step's eligible options (`BuildModel.eligible`, before a pin, rule
+ * 5, rule 7 and rule 8 narrow them), the option with the lowest build: the machines the step needs of it at its rate (at
+ * least 1), the group's among them, the raw material to build the rest (null without a price) and why it cannot be built
+ * here; with a `machineTier` pin, `pinned` on the tier the pin clamps to (the highest at or below it, else the lowest —
+ * also when that tier cannot be built here, Amendment OQ5). Undefined for a step with no eligible options.
+ */
+function stepTiers(model: BuildModel, recipeId: string, runsPerSecond: number, pin: number | undefined): StepTier[] | undefined {
+  const byTier = new Map<number, MachineOption[]>();
+  for (const o of model.eligible(recipeId)) {
+    const list = byTier.get(o.tier);
+    if (list === undefined) byTier.set(o.tier, [o]);
+    else list.push(o);
+  }
+  if (byTier.size === 0) return undefined;
+  const tiers = [...byTier.keys()].sort((a, b) => a - b);
+  const below = pin === undefined ? [] : tiers.filter((t) => t <= pin);
+  const pinned = pin === undefined ? undefined : below.length > 0 ? Math.max(...below) : tiers[0];
+  return tiers.map((tier): StepTier => {
+    const o = cheapestBuild(byTier.get(tier) as MachineOption[]) as MachineOption;
+    const machines = Math.max(1, wholeMachines(runsPerSecond / o.perMachine));
+    const owned = Math.min(machines, o.owned);
+    const entry: StepTier = { tier, mteId: o.mteId, name: o.name, machines, owned, build: o.build === null ? null : sig9((machines - owned) * o.build) };
+    if (o.unbuildable !== undefined) entry.unbuildable = o.unbuildable;
+    if (tier === pinned) entry.pinned = true;
+    return entry;
+  });
+}
+
+/** Ruling P7 (controller Amendment OQ1): the step warning on a Project Red line for a step kept out of a shared machine. */
+function ownOutputWarning(machineName: string): string {
+  return `One ${machineName} needs AE2: Project Red cannot feed a machine its own output`;
+}
+
+/**
+ * Ruling P7: on a Project Red line, which shares no machine (`sharesMachines`), the steps that run on the same machine
+ * option (mteId, tier and hatch set) with the same sharing key as another step, so that an AE2 line would run both on
+ * one machine, where one of the two takes an item the other makes (`feedsEither`): Project Red's extractor never routes
+ * an item back to the machine it came from, so one machine for both needs AE2.
+ */
+function keptApart(pack: Pack, picked: readonly PickedRecipe[]): Set<string> {
+  const apart = new Set<string>();
+  // the pool each would join on AE2: option and sharing key (`poolKey`, which holds a recipe that may share with none)
+  const decided = picked.flatMap((p) => (p.decided === undefined ? [] : [{ p, pool: poolKey(p.decided.option, sharingKey(p.recipe, p.lp.nonConsumed, pack)) }]));
+  for (let i = 0; i < decided.length; i++) {
+    const a = decided[i] as (typeof decided)[number];
+    for (let j = i + 1; j < decided.length; j++) {
+      const b = decided[j] as (typeof decided)[number];
+      if (a.pool !== b.pool) continue;
+      if (!feedsEither(a.p.recipe, b.p.recipe)) continue;
+      apart.add(a.p.id);
+      apart.add(b.p.id);
+    }
+  }
+  return apart;
+}
+
+/**
+ * One step per recipe the solution runs (convert recipes are not steps), sorted by id: the machine the build-cost solve
+ * decided for it (`Solution.machines`, plan 12; else `pickStepMachines`' pick: pseudo steps and lines solved without a
+ * build model), its overclocked speed, per-run inputs and outputs, and its warnings. Its machines come from `assignOwned`
+ * over every step that is no pseudo step, from the final runs (`perSecondScale` turns runs into runs per second): the
+ * owned ones of its type it runs on (`reused.units` in the owned pools — `opts.build`'s, else `ownedPools` — with where
+ * they stand) and the new ones it adds (`count = added + owned`); the owned machines of its other options beside them
+ * (`reused.others`); the other steps on any of those machines (`reused.sharedWith`); and its sharing pool (`pool`, with
+ * the model's sharing, else on an AE2 rate line: `sharesMachines`). `utilization` counts the others' capacity too, and a pooled step's
+ * is its own share of the pool. With a model, `tiers` lists the step's eligible tiers, and on a Project Red line a step
+ * kept out of another's machine because one feeds the other says so (ruling P7).
  */
 export function planSteps(
   pack: Pack, graph: CandidateGraph, sol: Solution,
@@ -548,37 +802,88 @@ export function planSteps(
     settings: PlanSettings; groupTier: number; coilHeat: number; ctx: PlanContext; perSecondScale: number; multiblocks?: ReadonlySet<number>;
     /** What the line's goods are worth and the pack's empty containers, for each step's main output (`StepLine`). */
     value?: Pick<StepLine, 'valueOf' | 'empties'>;
+    /** The line's build model (plan 12): its owned pools, sharing, steps that can only use owned machines and tiers. */
+    build?: BuildModel;
   },
 ): PlanStep[] {
-  const { settings, groupTier, coilHeat, ctx, perSecondScale, multiblocks } = opts;
-  const types = ownedMachineTypes(ctx, settings);
-  const owned = ownedCounts(types);
-  const claimed = new Map<number, number>();   // per type: the owned machines earlier steps run on
+  const { settings, groupTier, coilHeat, ctx, perSecondScale, multiblocks, build: model } = opts;
+  const pools: OwnedPools = model?.pools ?? ownedPools(ctx, settings);
+  const owned = new Map([...pools].map(([mteId, units]) => [mteId, units.length]));
   const line = stepLine(graph, sol.runs, opts.value);
   line.bought = boughtGoods(sol.buys);
-  return pickStepMachines(pack, graph, sol.runs, { settings, groupTier, coilHeat, owned, multiblocks }).map((p) => {
+  const picked = pickStepMachines(pack, graph, sol.runs, { settings, groupTier, coilHeat, owned, multiblocks, machines: sol.machines });
+  const shared = model?.share ?? sharesMachines(settings);
+  const assigned = assignOwned(picked.flatMap((p) => ownedClaims(p, p.runs * perSecondScale, model)), pools, shared);
+
+  // Every owned machine (type, unit) and the steps on it, for `sharedWith`; every pool and its steps.
+  const onUnit = new Map<string, Set<string>>();
+  const unitsOf = new Map<string, string[]>();
+  const poolSteps = new Map<string, string[]>();
+  for (const p of picked) {
+    const a = assigned.get(p.id);
+    if (a === undefined) continue;
+    const mine = [...a.units.map((u) => `${p.pick.mteId}:${u}`), ...(a.others ?? []).flatMap((o) => o.units.map((u) => `${o.mteId}:${u}`))];
+    unitsOf.set(p.id, mine);
+    for (const unit of mine) {
+      const ids = onUnit.get(unit);
+      if (ids === undefined) onUnit.set(unit, new Set([p.id]));
+      else ids.add(p.id);
+    }
+    if (a.pool !== undefined) poolSteps.set(a.pool, [...(poolSteps.get(a.pool) ?? []), p.id]);
+  }
+  const apart = model !== undefined && settings.mode === 'rate' && settings.logistics === 'routed' ? keptApart(pack, picked) : new Set<string>();
+
+  return picked.map((p) => {
     const runsPerSecond = p.runs * perSecondScale;
     const perMachine = p.pick.runsPerSecondPerMachine;
-    const count = Math.max(1, Math.ceil(runsPerSecond / perMachine - TINY));
-    const type = types.get(p.pick.mteId);
-    const before = claimed.get(p.pick.mteId) ?? 0;
-    const reused = type === undefined ? 0 : Math.max(0, Math.min(count, type.count - before));
-    const size: StepSize = {
-      count, owned: reused, runsPerSecond, utilization: runsPerSecond / (count * perMachine),
-      warnings: machineWarnings(p.lp, p.pick, runsPerSecond),
-    };
-    if (type !== undefined && reused > 0) {
-      claimed.set(p.pick.mteId, before + reused);
-      size.reused = reusedMachines(reused, type.where.slice(before, before + reused));
+    const a = assigned.get(p.id);
+    const warnings = machineWarnings(p.lp, p.pick, runsPerSecond);
+    if (apart.has(p.id)) warnings.push(ownOutputWarning(p.pick.name));
+    if (a === undefined) {
+      const count = Math.max(1, wholeMachines(runsPerSecond / perMachine));
+      return describeStep(pack, p, line, { count, owned: 0, runsPerSecond, utilization: runsPerSecond / (count * perMachine), warnings });
     }
-    return describeStep(pack, p, line, size);
+    const count = a.added + a.units.length;
+    // The owned machines of the step's other options, matched to the solve's `others` in its order: per type, its claims
+    // in the order they were made (two options of one type, a multiblock at two hatch tiers, take one claim each).
+    const left = new Map<number, number[][]>();
+    for (const o of a.others ?? []) left.set(o.mteId, [...(left.get(o.mteId) ?? []), o.units]);
+    const others = (p.decided?.others ?? []).flatMap(({ option: o }) => {
+      const units = left.get(o.mteId)?.shift() ?? [];
+      return units.length === 0 ? [] : [{
+        mteId: o.mteId, name: o.name, tier: o.tier, count: units.length, units, where: unitPositions(pools, o.mteId, units),
+        euPerTick: o.oc.euPerTick, runsPerSecondPerMachine: o.perMachine,
+      }];
+    });
+    let capacity = count * perMachine;
+    for (const o of others) capacity += o.count * o.runsPerSecondPerMachine;
+    const size: StepSize = { count, owned: a.units.length, runsPerSecond, utilization: capacity > 0 ? runsPerSecond / capacity : 0, warnings };
+    if (a.units.length > 0 || others.length > 0) {
+      const reused = reusedOf(pools, p.pick.mteId, a.units);
+      const peers = new Set<string>();
+      for (const unit of unitsOf.get(p.id) ?? []) for (const id of onUnit.get(unit) ?? []) if (id !== p.id) peers.add(id);
+      if (peers.size > 0) reused.sharedWith = [...peers].sort(byString);
+      if (others.length > 0) reused.others = others;
+      size.reused = reused;
+    }
+    const step = describeStep(pack, p, line, size);
+    if (a.pool !== undefined) step.pool = { id: a.pool, steps: [...(poolSteps.get(a.pool) ?? [p.id])].sort(byString) };
+    if (model !== undefined) {
+      const pin = Object.hasOwn(settings.machineTier, p.id) ? settings.machineTier[p.id] : undefined;
+      const tiers = stepTiers(model, p.id, runsPerSecond, pin);
+      if (tiers !== undefined) step.tiers = tiers;
+    }
+    return step;
   });
 }
 
-/** The duration the pick started from: a crafting table's fixed craft time, the furnace's own, else the recipe's. */
-function baseDurationTicks(r: Recipe, pick: MachinePick): number {
+/**
+ * The duration the pick started from: a crafting table's fixed craft time, the furnace's own, the Auto Workbench's own
+ * time per craft (a crafting recipe has none), else the recipe's.
+ */
+function baseDurationTicks(r: Recipe, mapId: string, pick: MachinePick): number {
   if (pick.kind === 'hand' || pick.kind === 'crafting') return CRAFT_TICKS;
-  return pick.kind === 'furnace' ? pick.oc.durationTicks : r.durationTicks;
+  return pick.kind === 'furnace' || mapId === 'crafting' ? pick.oc.durationTicks : r.durationTicks;
 }
 
 /**

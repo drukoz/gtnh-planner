@@ -71,7 +71,8 @@ function hookupColor(h: Hookup, mode: LogisticsMode): string {
  * a square per (x, z) column of its blocks (hookup blocks and ghosts left out; EnderIO's colour when the block that
  * colours it holds conduits), the box outline, the hookups as dashed paths through their cell centres (never shifted:
  * they run from the base's taps), an arrow per plan flow between two steps that both have machines (first machine to
- * first machine, in layout order) and last a dot per column holding a configured block, a hookup block's dot
+ * first machine, in layout order; a machine shared by several steps, `stepIds`, is each of theirs, and a flow between two
+ * steps of one machine draws none) and last a dot per column holding a configured block, a hookup block's dot
  * unshifted. Squares are at least one pixel, as Plan 4 draws blocks.
  */
 export function overlayShapes(layout: Layout, view: MapViewport, drag: { dx: number; dz: number } | null, flows: readonly PlanFlow[]): Shape[] {
@@ -108,9 +109,11 @@ export function overlayShapes(layout: Layout, view: MapViewport, drag: { dx: num
     shapes.push({ kind: 'path', points: h.path.map((p) => centre(p[0], p[2])), stroke: hookupColor(h, layout.mode), dash: [...HOOKUP_DASH], width: HOOKUP_WIDTH });
   }
 
+  // A machine several steps share (`LayoutBlock.stepIds`, plan 12) stands for each of them.
   const firstMachine = new Map<string, LayoutBlock>();
   for (const b of layout.blocks) {
-    if (b.role === 'machine' && b.stepId !== undefined && !firstMachine.has(b.stepId)) firstMachine.set(b.stepId, b);
+    if (b.role !== 'machine' || b.stepId === undefined) continue;
+    for (const id of b.stepIds ?? [b.stepId]) if (!firstMachine.has(id)) firstMachine.set(id, b);
   }
   for (const f of flows) {
     const from = firstMachine.get(f.from), to = firstMachine.get(f.to);

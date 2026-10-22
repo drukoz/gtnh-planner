@@ -8,7 +8,7 @@ import { parseItemKey, type ItemKey, type StuffKey } from '../../src/shared/keys
 import type { Vec3 } from '../../src/shared/layout/geometry.ts';
 import { defaultSettings } from '../../src/shared/project/apply-op.ts';
 import type { LayoutTap } from '../../src/shared/types/layout.ts';
-import type { BlockRef, Fluid, Item, Machine, MachineKind, Pack, Product, StructureInfo } from '../../src/shared/types/pack.ts';
+import type { BlockRef, Fluid, Item, Machine, MachineKind, Pack, Product, Recipe, StructureInfo } from '../../src/shared/types/pack.ts';
 import type { BuildStep, LogisticsMode, Plan, PlanFlow, PlanStep } from '../../src/shared/types/plan.ts';
 import type { Project } from '../../src/shared/types/project.ts';
 import {
@@ -180,6 +180,9 @@ const PART_ITEMS: ReadonlyArray<readonly [ItemKey, string]> = [
   ['appliedenergistics2:item.ItemMultiMaterial@52', 'Blank Pattern'],
   ['appliedenergistics2:item.ItemMultiMaterial@27', 'Capacity Card'],
   ['appliedenergistics2:item.ItemMultiMaterial@30', 'Acceleration Card'],
+  ['ProjRed|Transportation:projectred.transportation.routingchip@5', 'Item Broadcaster Chip'],
+  ['EnderIO:itemLimitedItemFilter@0', 'Limited Item Filter'],
+  ['appliedenergistics2:item.ItemMultiMaterial@65', 'Locking Card'],
 ];
 
 /** Plain items `layoutPack` adds for plans to flow. */
@@ -240,10 +243,37 @@ export function layoutPack(): Pack {
   return pack;
 }
 
+/** GT++'s Electric Auto Workbench (MV) as the 2.9 export lists it: mteId 31092, kind `other`, tier 2, no recipe map. */
+export const AUTO_WORKBENCH = 31092;
+const AUTO_WORKBENCH_CLS = 'gtPlusPlus.xmod.gregtech.common.tileentities.automation.MTEElectricAutoWorkbench';
+
+/** `pack` with the Auto Workbench (MV) and its item. Mutates and returns `pack`. */
+export function withAutoWorkbench(pack: Pack): Pack {
+  addMachine(pack, gtMachine(AUTO_WORKBENCH, 'Auto Workbench (MV)', 'basicmachine.automation.autoworkbench.02', 'other', AUTO_WORKBENCH_CLS, { tier: 2 }));
+  return pack;
+}
+
+/**
+ * A crafting-table recipe `id` (map `crafting`, no EU, no time, as the loader reads one) making `out`: `cells` its grid row
+ * by row, `w` cells wide (null an empty cell), each cell an ingredient slot of one item numbered by its cell, as the
+ * loader numbers a shaped recipe's slots; a cell whose index is in `tools` holds a tool the craft keeps (not consumed).
+ */
+export function craftingRecipe(id: string, w: number, cells: ReadonlyArray<StuffKey | null>, out: readonly [StuffKey, number],
+  tools: readonly number[] = []): Recipe {
+  return {
+    id, source: 'crafting', maps: ['crafting'], euPerTick: 0, durationTicks: 0, amps: 0, specialValue: 0,
+    meta: { cls: 'net.minecraft.item.crafting.ShapedRecipes', width: w, height: Math.ceil(cells.length / w) }, flags: { shaped: true },
+    inputs: cells.flatMap((key, slot) => (key === null ? [] : [{
+      slot, consumed: !tools.includes(slot), chance: tools.includes(slot) ? 0 : 1, options: [{ key, amount: 1 }],
+    }])),
+    outputs: [{ key: out[0], amount: out[1], chance: 1 }],
+  };
+}
+
 let layoutNames: Map<number, string> | null = null;
 
 function layoutMachineName(mteId: number): string | undefined {
-  layoutNames ??= new Map([...layoutPack().machines].map(([id, m]) => [id, m.name]));
+  layoutNames ??= new Map([...withAutoWorkbench(layoutPack()).machines].map(([id, m]) => [id, m.name]));
   return layoutNames.get(mteId);
 }
 
@@ -253,6 +283,8 @@ export interface StepSpec {
   id: string; mteId: number; count: number; owned?: number; tier?: number /* 1 */; euPerTick?: number /* 30 */; utilization?: number /* 1 */;
   name?: string; inputs?: Array<[StuffKey, number]> /* [['t:in@0', 1]] */; outputs?: Array<[StuffKey, number]> /* [[`t:out_${id}@0`, 1]] */;
   handCraft?: boolean;
+  /** The step's sharing pool (plan 12: `PlanStep.pool`); none by default. */
+  pool?: PlanStep['pool'];
 }
 
 const DEFAULT_INPUT: StuffKey = 't:in@0';
@@ -270,6 +302,7 @@ function planStep(s: StepSpec): PlanStep {
     durationTicks: 20, overclocks: 0,
     inputs: products(s.inputs ?? [[DEFAULT_INPUT, 1]]), outputs: products(s.outputs ?? [[defaultOutput(s.id), 1]]),
     alternatives: [], handCraft: s.handCraft ?? false, warnings: [],
+    ...(s.pool === undefined ? {} : { pool: { id: s.pool.id, steps: [...s.pool.steps] } }),
   };
 }
 

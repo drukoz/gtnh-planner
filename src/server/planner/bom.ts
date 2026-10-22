@@ -3,13 +3,16 @@
 // materials, plus those base materials summed, each saying which lines need it. `expandBomLines` gives Plan 5's layout
 // parts the same breakdown.
 
-import { PSEUDO_MACHINES } from '../../shared/gt/tiers.ts';
-import { itemKey, type StuffKey } from '../../shared/keys.ts';
+import { PSEUDO_IDS } from '../../shared/gt/tiers.ts';
+import type { StuffKey } from '../../shared/keys.ts';
+import { machineGroups } from '../../shared/plan/pools.ts';
 import type { Machine, Pack } from '../../shared/types/pack.ts';
 import { FREE_KEYS, type BomLine, type PlanContext, type PlanSettings, type PlanStep, type PlanWarning } from '../../shared/types/plan.ts';
+import { structureParts } from './build-cost.ts';
 import { buildCandidates, heldOption, type HeldAvoid, type LeafOracle, type LpRecipe, type PlanEnv } from './candidates.ts';
 import { analyzeCosts, makePrices, type CostAnalysis } from './costs.ts';
 import { yieldToEventLoop } from './lp.ts';
+import { ownedPools } from './owned.ts';
 import { lineLeaf } from './pricing.ts';
 
 export interface Bom { lines: BomLine[] /* top level, with children */; totals: BomLine[] /* leaves summed, sorted by key */; warnings: PlanWarning[] }
@@ -24,7 +27,6 @@ const MAX_DEPTH = 12;
 const TINY = 1e-9;
 /** Ruling R8 (architecture §11.19): the cleanroom is the machine with this simple class name. */
 const CLEANROOM_CLASS = 'MTECleanroom';
-const PSEUDO_IDS: ReadonlySet<number> = new Set(Object.values(PSEUDO_MACHINES));
 const FREE: ReadonlySet<StuffKey> = new Set(FREE_KEYS);
 
 function byString(a: string, b: string): number {
@@ -77,30 +79,20 @@ export function stepProductName(pack: Pack, step: PlanStep): string {
   return pack.nameOf(step.mainOutput ?? step.outputs[0]?.key ?? step.recipeId);
 }
 
-/** The blocks of a multiblock's exported structure per item, without the controller cell (the machine line itself). */
-function structureParts(pack: Pack, m: Machine): Map<StuffKey, number> {
-  const parts = new Map<StuffKey, number>();
-  const s = m.structure;
-  if (m.kind !== 'multiblock' || s === undefined) return parts;
-  const [cx, cy, cz] = s.controller;
-  for (const { pos, block } of s.blocks) {
-    if ((pos[0] === cx && pos[1] === cy && pos[2] === cz) || block.mteId === m.mteId) continue;
-    const hatch = block.mteId === undefined ? undefined : pack.machines.get(block.mteId);
-    const key = hatch?.itemKey ?? itemKey(block.id, block.meta);
-    parts.set(key, (parts.get(key) ?? 0) + 1);
-  }
-  return parts;
-}
-
 /**
  * The build list of a line's steps: per step its new machines (`count − owned`; pseudo machines skipped) and, for a
- * multiblock, the blocks of their structures; the not-consumed inputs of every machine step's recipe for all `count`
- * machines (owned ones need them too); each hand-crafting tool once, however many steps use it (Task 13 ruling); one
- * cleanroom when any step needs one. In Make N the steps of one machine type share its machines (make-n.ts), so only
- * the first step of a type adds machines. Lines with the same key and group are merged, sorted by group then key, and
- * broken down to base materials. The warnings are `no-cleanroom` and the breakdown's own `graph-too-big`. With `avoid`
- * (what the line avoids) each not-consumed slot holds an option the line may use (`heldOption`); the breakdown itself
- * avoids nothing (ruling R6).
+ * multiblock, the blocks of their structures (`structureParts`: each structure hatch at the lowest tier of its class);
+ * the not-consumed inputs of every machine step's recipe for all `count` machines (owned ones need them too); each
+ * hand-crafting tool once, however many steps use it (Task 13 ruling); one cleanroom when any step needs one and the
+ * group owns none (`ownedPools`: the world scan's and the "Machines we have" list's, plan 12). The steps of a sharing pool
+ * run on the same machines (plan 12, `PlanStep.pool`, through `machineGroups`, ruling P18): its first step
+ * (`pool.steps[0]`) adds the pool's new machines, their structure and the items they hold, and its other steps none. In
+ * Make N the steps of one machine type share its machines (make-n.ts), so only the first step of a type adds machines.
+ * So the list holds exactly the machines the plan adds: owned machines, a pool's shared ones and the owned machines of
+ * other tiers a step runs on beside its own (`reused.others`) are left out. Lines with the same key and group are
+ * merged, sorted by group then key, and broken down to base materials. The warnings are `no-cleanroom` and the
+ * breakdown's own `graph-too-big`. With `avoid` (what the line avoids) each not-consumed slot holds an option the line
+ * may use (`heldOption`); the breakdown itself avoids nothing (ruling R6).
  */
 export async function buildBom(
   pack: Pack, steps: PlanStep[],
@@ -119,7 +111,10 @@ export async function buildBom(
 
   const makeN = opts.settings.mode === 'makeN';
   const typesSeen = new Set<number>();
-  for (const step of steps) {
+  // a sharing pool's machines once, by its first step (`machineGroups`): its steps' `count`, `owned` and held items are
+  // the pool's
+  for (const group of machineGroups(steps)) {
+    const step = group[0]!;
     const mteId = step.machine.mteId;
     const machine = PSEUDO_IDS.has(mteId) ? undefined : pack.machines.get(mteId);
     if (machine !== undefined && !(makeN && typesSeen.has(mteId))) {
@@ -152,8 +147,10 @@ export async function buildBom(
   if (clean.length > 0) {
     const products = [...new Set(clean.map((s) => stepProductName(pack, s)))].join(', ');
     const room = cleanroomMachine(pack);
-    if (room !== undefined) add(room.itemKey, 1, `cleanroom for ${products}`, 'machines');
-    else warnings.push({ code: 'no-cleanroom', text: `Making ${products} needs a cleanroom, but this pack has no cleanroom machine` });
+    // the group's own cleanroom needs no building (plan 12 Task 6)
+    const owned = room !== undefined && (ownedPools(opts.ctx, opts.settings).get(room.mteId)?.length ?? 0) > 0;
+    if (room === undefined) warnings.push({ code: 'no-cleanroom', text: `Making ${products} needs a cleanroom, but this pack has no cleanroom machine` });
+    else if (!owned) add(room.itemKey, 1, `cleanroom for ${products}`, 'machines');
   }
 
   const lines: BomLine[] = [...drafts.values()]
@@ -299,13 +296,20 @@ async function recipeBook(pack: Pack, x: Expansion, targets: StuffKey[]): Promis
 /**
  * The breakdown's leaf oracle: the line's, except that every free input (`FREE_KEYS`) is a leaf at its price (fix spec
  * R2): a running line makes its own with a generator (`PlanBasis.supplied`), but the one-off materials of its machines
- * get none.
+ * get none. And a leaf the line may also make (`LeafDecision.alsoMade`, plan 12: a gathered world block) is a plain one
+ * here: one-off build materials are dug, so the breakdown never walks a gathered block's producers, nor prices it at
+ * what free cobblestone and hammers would make it for.
  */
 function freeLeaves(pack: Pack, x: Expansion): LeafOracle {
   const prices = makePrices(pack, x.settings.costOverrides);
   return (key) => {
     const d = x.leaf(key);
-    return d.buyable || !FREE.has(key) ? d : { buyable: true, cost: prices.price(key), leafClass: 'free' };
+    if (d.buyable) {
+      if (d.alsoMade !== true) return d;
+      const { alsoMade: _made, ...dug } = d;
+      return dug;
+    }
+    return FREE.has(key) ? { buyable: true, cost: prices.price(key), leafClass: 'free' } : d;
   };
 }
 

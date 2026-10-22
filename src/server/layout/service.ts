@@ -8,6 +8,7 @@ import type { AppContext } from '../app.ts';
 import { planForProject } from '../http/routes/projects.ts';
 import { worldService } from '../http/routes/world.ts';
 import { expandBomLines } from '../planner/bom.ts';
+import { bomBuildCost } from '../planner/build-cost.ts';
 import { emptyContext, planCacheKey } from '../planner/plan.ts';
 import { emptyScan, layoutLine, type LayoutDeps } from './layout.ts';
 import { isOptional, mergeLayoutIntoPlan } from './merge.ts';
@@ -33,6 +34,12 @@ export interface LayoutServiceDeps {
   expand(pack: Pack, lines: BomLine[], project: Project): Promise<Expansion>;
   /** Tests inject failures; `layoutLine` by default. */
   layout?: typeof layoutLine;
+  // optional addition (plan 12, architecture §11 entry 39)
+  /**
+   * The raw material to build `lines` (`layoutParts`: the layout's parts other than its hatches) in the project's world
+   * context, the plan's `cost.layout`; without it a finished plan gets none.
+   */
+  layoutCost?(pack: Pack, lines: BomLine[], project: Project): Promise<number>;
 }
 
 export interface LayoutService {
@@ -43,8 +50,19 @@ export interface LayoutService {
   readonly computations: number;
 }
 
-/** A cached layout and, once a plan was finished with it, its expansion. */
-interface Entry { layout: Promise<Layout>; expansion: Promise<Expansion> | null }
+/** A cached layout and, once a plan was finished with it, its expansion and the raw material of its parts. */
+interface Entry { layout: Promise<Layout>; expansion: Promise<Expansion> | null; cost: Promise<number> | null }
+
+/**
+ * The layout's parts `cost.layout` prices (plan 12, architecture §11 entry 39): its required (non-optional) parts but its
+ * hatches — each new multiblock's build already holds the hatches it needs to run less the casings they stand on (Task
+ * 2), and the hatches its exported structure holds are on Plan 2's build list; the layout's own picks of those may
+ * differ in tier, which is not counted twice. A taller tower's added casings stay: no build counts them.
+ */
+export function layoutParts(pack: Pack, layout: Layout): BomLine[] {
+  const hatches = new Set([...pack.machines.values()].filter((m) => m.kind === 'hatch').map((m) => m.itemKey));
+  return layout.bom.filter((l) => !isOptional(l) && !(l.group === 'machines' && hatches.has(l.key)));
+}
 
 /**
  * The plan cache key of `plan` in `project`'s scan and base (architecture §11.8), then the placement as
@@ -90,7 +108,7 @@ export function createLayoutService(deps: LayoutServiceDeps): LayoutService {
       return hit;
     }
     computations++;
-    const entry: Entry = { layout: compute(plan, project), expansion: null };
+    const entry: Entry = { layout: compute(plan, project), expansion: null, cost: null };
     entries.set(key, entry);
     if (entries.size > LAYOUT_CACHE_SIZE) entries.delete(entries.keys().next().value as string);
     entry.layout.catch(() => {
@@ -110,6 +128,19 @@ export function createLayoutService(deps: LayoutServiceDeps): LayoutService {
     return expansion;
   }
 
+  /** The raw material of `layout`'s parts (`layoutParts`, its entry's), started on first use; null without the dep. */
+  function costOf(entry: Entry, pack: Pack, layout: Layout, project: Project): Promise<number> | null {
+    const price = deps.layoutCost;
+    if (price === undefined) return null;
+    if (entry.cost !== null) return entry.cost;
+    const cost = price(pack, layoutParts(pack, layout), project);
+    entry.cost = cost;
+    cost.catch(() => {
+      if (entry.cost === cost) entry.cost = null;
+    });
+    return cost;
+  }
+
   return {
     get computations() {
       return computations;
@@ -122,15 +153,17 @@ export function createLayoutService(deps: LayoutServiceDeps): LayoutService {
       const entry = await entryFor(project);
       const layout = await entry.layout;
       const pack = await deps.pack();
-      return mergeLayoutIntoPlan(plan, layout, await expansionOf(entry, pack, layout, project), (k) => pack.nameOf(k));
+      const expansion = await expansionOf(entry, pack, layout, project);
+      const cost = costOf(entry, pack, layout, project);
+      return mergeLayoutIntoPlan(plan, layout, expansion, (k) => pack.nameOf(k), cost === null ? undefined : await cost);
     },
   };
 }
 
 /**
  * The app's layout service (`app.services.layout`), created on first use: the active pack, the plan the plan route
- * serves (`planForProject`), scans and voxels from the world service, and parts broken down in the project's world
- * context (`app.services.planContext`, else an empty one).
+ * serves (`planForProject`), scans and voxels from the world service, and parts broken down and priced in the
+ * project's world context (`app.services.planContext`, else an empty one).
  */
 export function layoutService(app: AppContext): LayoutService {
   const existing = app.services.layout as LayoutService | undefined;
@@ -142,6 +175,9 @@ export function layoutService(app: AppContext): LayoutService {
     readArea: (scanId, dim, bbox) => worldService(app).readArea(scanId, dim, bbox),
     expand: async (pack, lines, project) =>
       expandBomLines(pack, lines, project.settings, await (app.services.planContext?.(project) ?? emptyContext())),
+    // the layout's parts at the prices the plan's machines are priced at (plan 12: `cost.layout`)
+    layoutCost: async (pack, lines, project) =>
+      bomBuildCost(pack, project.settings, await (app.services.planContext?.(project) ?? emptyContext()), lines),
   });
   app.services.layout = service;
   return service;

@@ -17,7 +17,11 @@
 // structured `feed` (architecture §11 entry 51), which the configure steps word, and the logistics steps name what goes
 // in the input chest: the raw inputs to order at the request pipe, and what you make for the line yourself (by hand, in
 // your own machines or in a machine run by hand) to put in. Without a routed network at the base the line is its own
-// network, fed by hand: you put the raw inputs in too. A machine run by hand (architecture §11 entry 48) gets nothing:
+// network, fed by hand: you put the raw inputs in too. An Auto Workbench (plan 12 Task 6, research machine-feeding §3.4)
+// takes any item into any input slot, so its pipe holds an Item Stock Keeper Chip, which orders each ingredient up to a
+// stock (bench.ts), instead of a responder; its suppliers and the input chest fill those orders with Item Broadcaster
+// Chips, an item only benches take is on no Item Extractor Chip, and the output chest's Terminator also catches those
+// items, lost after a restart, and what a bench hands back (its empty containers). A machine run by hand (architecture §11 entry 48) gets nothing:
 // what the line makes for it waits in the output chest, and what it makes for the line goes in the input chest. A
 // venting steam machine's interface pipe meets it on its middle-row side, not its output side (which faces up), and its
 // extractor chip pulls its output there (GT gives it on any side but the front).
@@ -29,12 +33,13 @@ import type { BlockRole, TailChest } from '../../../shared/types/layout.ts';
 import type { BomLine, PlanWarning } from '../../../shared/types/plan.ts';
 import { comparePos } from '../../world/graph.ts';
 import type { LocalBlock } from '../arrange.ts';
+import { benchCapWarning, routedStock } from '../bench.ts';
 import { linkBits } from '../path.ts';
 import type { Part, PartId } from '../parts.ts';
 import { crossing } from './enderio.ts';
 import {
   emptyModeResult, feedSettings, itemPorts, itemRisers, lineExceptions, mergeHostConfigs, nameList, outputSideInputs, placedStepIds, RISER_WORDS,
-  stepItemInputs, stepItemOutputs, type ModeInput, type ModeResult, type StepDraft,
+  unitItemInputs, unitItemOutputs, type ModeInput, type ModeResult, type StepDraft,
 } from './mode.ts';
 
 const UP = 1, SOUTH = 3, EAST = 5;
@@ -45,9 +50,13 @@ export const CHIP_FILTER_SLOTS = 9;
 /** How many chips a Routed Interface Pipe holds (ProjRed `RoutedInterfacePipePart.chipSlots`: `SimpleInventory(4)`). */
 export const INTERFACE_CHIP_SLOTS = 4;
 
+/** The chips that take items out of the inventory their pipe meets (its Extractor, a Broadcaster filling orders). */
+const OUTGOING_CHIPS: ReadonlySet<ChipKind> = new Set<ChipKind>(['extractor', 'broadcaster']);
+
 /** The part of each chip kind the line lays, in the order the parts list names them. */
 const CHIP_PARTS: ReadonlyArray<readonly [ChipKind, PartId]> = [
-  ['responder', 'chip_responder'], ['extractor', 'chip_extractor'], ['terminator', 'chip_terminator'],
+  ['responder', 'chip_responder'], ['extractor', 'chip_extractor'], ['terminator', 'chip_terminator'], ['broadcaster', 'chip_broadcaster'],
+  ['stock_keeper', 'chip_stock_keeper'],
 ];
 
 function compareText(a: string, b: string): number {
@@ -89,12 +98,19 @@ export function routedMode(input: ModeInput): ModeResult {
     blocks.push({ pos, block: { ...parts.chest.block }, role: 'chest', label, item: parts.chest.key, tail });
   };
   /**
-   * An interface pipe on `pos` joined to the inventory `onto`, holding the first `INTERFACE_CHIP_SLOTS` of `chips`;
-   * `routed_chips_short` names the items of the chips left over (`whose`: the pipe's owner, `stepId` its step).
+   * An interface pipe on `pos` joined to the inventory `onto`, holding as many of `chips` as its `INTERFACE_CHIP_SLOTS`
+   * take, in their order: the chips that take items out of the inventory (`OUTGOING_CHIPS`) claim their slots first, as
+   * without them nothing it holds would leave, then the others in order (plan 12 Task 6: past three responders beside an
+   * extractor, a machine keeps the extractor); `routed_chips_short` names the items of the chips left over (`whose`: the
+   * pipe's owner, `stepId` its step).
    */
   const layInterface = (pos: Vec3, onto: Vec3, label: string, chips: readonly RoutedChipSpec[], whose: string, stepId?: string): void => {
-    const kept = chips.slice(0, INTERFACE_CHIP_SLOTS);
-    const left = chips.slice(INTERFACE_CHIP_SLOTS).flatMap((c) => c.filter?.keys ?? []);
+    const fits = new Set<RoutedChipSpec>();
+    for (const outgoing of [true, false]) {
+      for (const c of chips) if (OUTGOING_CHIPS.has(c.kind) === outgoing && fits.size < INTERFACE_CHIP_SLOTS) fits.add(c);
+    }
+    const kept = chips.filter((c) => fits.has(c));
+    const left = chips.filter((c) => !fits.has(c)).flatMap((c) => [...(c.filter?.keys ?? []), ...(c.stock ?? []).map((s) => s.key)]);
     if (left.length > 0) {
       const one = left.length === 1;
       warnings.push({ code: 'routed_chips_short', ...(stepId === undefined ? {} : { stepId }),
@@ -106,16 +122,59 @@ export function routedMode(input: ModeInput): ModeResult {
     links.push([pos, onto]);
   };
 
-  // every machine: a responder for what it takes and an extractor for what it makes; a multiblock's input bus only the
-  // responder, its output bus only the extractor
+  // What crosses the line's edge: the item flows into the placed machines from outside them (raw, a step without machines
+  // of its own, a machine run by hand), and those out of them to outside, with each item a placed machine makes that no
+  // flow carries (a stray), as EnderIO's chests take them. The Auto Workbenches (`Unit.bench`, plan 12 Task 6, research
+  // machine-feeding §3.4) take only what their Item Stock Keeper Chips ask for, which an Item Broadcaster Chip on each
+  // supplier (a machine, or the input chest) fills: so an item only benches take is on no Item Extractor Chip, which
+  // would push it to the output chest, and a bench's Extractor takes out what it hands back, and its result where a
+  // machine's Responder or the output chest takes it, its Broadcaster where another bench does
+  const placed = placedStepIds(placement);
+  const items = plan.flows.filter((f) => !isFluidKey(f.key));
+  const edge = crossing(plan, items, placed);
+  const benches = placement.units.filter((u) => u.bench !== undefined);
+  const benchSteps = new Set(benches.map((u) => u.stepId));
+  const returns = sorted(benches.flatMap((u) => u.bench!.returns.map((r) => r.key)));
+  const entering = sorted(edge.entering.map((f) => f.key));
+  const leaving = sorted([...edge.leaving.map((f) => f.key), ...edge.strays.map((s) => s.key), ...returns]);
+  /** What the benches' Stock Keepers ask for. */
+  const benchTakes = new Set(items.filter((f) => benchSteps.has(f.to)).map((f) => f.key));
+  /** What a Responder or the output chest's Terminator takes: what a placed machine other than a bench takes, or leaves. */
+  const pushed = new Set([...items.filter((f) => placed.has(f.to) && !benchSteps.has(f.to)).map((f) => f.key), ...leaving]);
+  const benchOnly = (key: StuffKey): boolean => benchTakes.has(key) && !pushed.has(key);
+  /** The chips that take `keys` out of an inventory: an Extractor for what is pushed on, a Broadcaster for what benches order. */
+  const outgoing = (keys: readonly StuffKey[]): RoutedChipSpec[] => [
+    ...chipsFor('extractor', keys.filter((k) => !benchOnly(k))), ...chipsFor('broadcaster', keys.filter((k) => benchTakes.has(k))),
+  ];
+
+  // every machine: a responder for what it takes and the chips that take out what it makes, for every step it runs
+  // (`unitItemInputs`); a multiblock's input bus only the responder, its output bus only the outgoing chips; a bench its
+  // Stock Keeper instead of a responder, its stock sized by bench.ts
   const blockAt = new Map(placement.blocks.map((b) => [posKey(b.pos), b]));
   const portCells = new Set<string>();
+  const capWarned = new Set<string>();
   for (const { pos, behind, unit } of ports) {
-    const bus = unit.multiblock ? blockAt.get(posKey(behind))?.hatch : undefined;
-    const takes = !unit.multiblock || bus === 'input_bus' ? stepItemInputs(plan, unit.stepId) : [];
-    const makes = unit.io.itemOut && (!unit.multiblock || bus === 'output_bus') ? stepItemOutputs(plan, unit.stepId) : [];
-    layInterface(pos, behind, unit.name, [...chipsFor('responder', takes), ...chipsFor('extractor', makes)], `the ${unit.name}`, unit.stepId);
     portCells.add(posKey(pos));
+    if (unit.bench !== undefined) {
+      const s = plan.steps.find((x) => x.id === unit.stepId);
+      const stock = routedStock(unit.bench, s === undefined ? 0 : s.runsPerSecond / Math.max(1, s.count));
+      if (!stock.safe && s !== undefined && !capWarned.has(s.id)) {
+        capWarned.add(s.id);
+        warnings.push(benchCapWarning(pack, unit, s, stock.slots));
+      }
+      const result = unit.bench.result.map((r) => r.key);
+      const chips: RoutedChipSpec[] = [
+        { kind: 'stock_keeper', stock: stock.stock, requestMode: 'when_missing' },
+        ...chipsFor('extractor', sorted([...unit.bench.returns.map((r) => r.key), ...result.filter((k) => pushed.has(k))])),
+        ...chipsFor('broadcaster', sorted(result.filter((k) => benchTakes.has(k)))),
+      ];
+      layInterface(pos, behind, unit.name, chips, `the ${unit.name}`, unit.stepId);
+      continue;
+    }
+    const bus = unit.multiblock ? blockAt.get(posKey(behind))?.hatch : undefined;
+    const takes = !unit.multiblock || bus === 'input_bus' ? unitItemInputs(plan, unit) : [];
+    const makes = unit.io.itemOut && (!unit.multiblock || bus === 'output_bus') ? unitItemOutputs(plan, unit) : [];
+    layInterface(pos, behind, unit.name, [...chipsFor('responder', takes), ...outgoing(makes)], `the ${unit.name}`, unit.stepId);
   }
   for (let x = firstX; x < tailX; x++) {
     const cell: Vec3 = [x, 0, spineZ];
@@ -126,23 +185,18 @@ export function routedMode(input: ModeInput): ModeResult {
   for (const cell of risers.cells) lay(cell, parts.pr_junction, 'pipe', parts.pr_junction.name);
 
   // the tail: the request pipe on the spine fills the input chest beside it; the chests' interface pipes sit above them,
-  // joined to the request pipe by a junction. What crosses the line's edge: the item flows into the placed machines from
-  // outside them (raw, a step without machines of its own, a machine run by hand), and those out of them to outside, with
-  // each item a placed machine makes that no flow carries (a stray), as EnderIO's chests take them
+  // joined to the request pipe by a junction. The output chest's Terminator also catches what only benches take, which
+  // loses its way after a restart (research §2.2: destinations are not saved), below every machine's Responder
   const request: Vec3 = [tailX, 0, spineZ];
   const inputChest: Vec3 = [tailX, 0, spineZ - 1];
   const outputChest: Vec3 = [tailX, 0, spineZ + 1];
-  const placed = placedStepIds(placement);
-  const edge = crossing(plan, plan.flows.filter((f) => !isFluidKey(f.key)), placed);
-  const entering = sorted(edge.entering.map((f) => f.key));
-  const leaving = sorted([...edge.leaving.map((f) => f.key), ...edge.strays.map((s) => s.key)]);
   lay(request, parts.pr_request, 'pipe', parts.pr_request.name);
   links.push([request, inputChest]);
   layChest(inputChest, 'Chest (input)', { side: 'input', keys: [...entering] });
   layChest(outputChest, 'Chest (output)', { side: 'output', keys: [...leaving] });
   lay(step(request, UP), parts.pr_junction, 'pipe', parts.pr_junction.name);
-  layInterface(step(inputChest, UP), inputChest, 'input chest', chipsFor('extractor', entering), 'the input chest');
-  layInterface(step(outputChest, UP), outputChest, 'output chest', chipsFor('terminator', leaving), 'the output chest');
+  layInterface(step(inputChest, UP), inputChest, 'input chest', outgoing(entering), 'the input chest');
+  layInterface(step(outputChest, UP), outputChest, 'output chest', chipsFor('terminator', sorted([...leaving, ...[...benchTakes].filter(benchOnly)])), 'the output chest');
 
   // every pair of face-adjacent pipe cells is joined
   const pipeCells = new Set(blocks.filter((b) => PIPE_ROLES.has(b.role)).map((b) => posKey(b.pos)));

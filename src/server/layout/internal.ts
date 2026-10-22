@@ -23,7 +23,7 @@ import { DIRS, posKey, step, type Vec3 } from '../../shared/layout/geometry.ts';
 import { FACES } from '../../shared/types/assets.ts';
 import type { Machine, Pack } from '../../shared/types/pack.ts';
 import type { Plan, PlanWarning } from '../../shared/types/plan.ts';
-import { handRunSurroundings, type HostCover, type LocalBlock, type Placement, type PlacedUnit } from './arrange.ts';
+import { handRunSurroundings, placedStepIds, unitSteps, type HostCover, type LocalBlock, type Placement, type PlacedUnit } from './arrange.ts';
 import { growTree, linkBits, type PathBounds, type PathOptions, type TreeResult } from './path.ts';
 import { coverRateWarning, machineRef, pickCable, pickFluidPipe, pickPump, pickTransformer, type Parts } from './parts.ts';
 import { bankLossEUt, deliveredVolts, LOSS_WARN_FRACTION, tierGroups, transformerStages, type Stage, type Stages } from './power.ts';
@@ -136,18 +136,21 @@ function fluidPortOf<T>(u: PlacedUnit, keys: readonly StuffKey[], ports: readonl
 /**
  * One net per fluid any placed unit takes or makes, sorted by key. A net is `atTail` when the fluid also enters or
  * leaves the line (a flow from `raw`, to `out`/`sink`, or touching a step with no placed unit or one run by hand,
- * whose goods you carry: architecture §11 entry 48). Each producing face must move its step's outgoing flows of the
- * fluid split evenly over the step's machines.
+ * whose goods you carry: architecture §11 entry 48); every step of a shared machine is placed (`placedStepIds`). Each
+ * producing face must move the outgoing flows of the fluid of the steps its machine runs (`unitSteps`: a sharing pool's
+ * all, plan 12) split evenly over the machines, the `count` of its first step.
  */
 export function fluidNets(pack: Pack, plan: Plan, placement: Placement): FluidNet[] {
-  const placed = new Set(placement.units.filter((u) => u.manual === undefined).map((u) => u.stepId));
+  const placed = placedStepIds(placement);
   const counts = new Map(plan.steps.map((s) => [s.id, s.count]));
   const keys = new Set<StuffKey>();
   for (const u of placement.units) for (const key of [...u.io.fluidIn, ...u.io.fluidOut]) keys.add(key);
   return [...keys].sort(compareText).map((key): FluidNet => {
     const flows = plan.flows.filter((f) => f.key === key);
-    const stepRate = (stepId: string) =>
-      flows.reduce((sum, f) => (f.from === stepId ? sum + f.perSecond : sum), 0) / Math.max(1, counts.get(stepId) ?? 1);
+    const unitRate = (u: PlacedUnit) => {
+      const steps = unitSteps(u);
+      return flows.reduce((sum, f) => (steps.includes(f.from) ? sum + f.perSecond : sum), 0) / Math.max(1, counts.get(u.stepId) ?? 1);
+    };
     const producers: Vec3[] = [];
     const consumers: Vec3[] = [];
     const faces: FluidNet['faces'] = [];
@@ -157,7 +160,7 @@ export function fluidNets(pack: Pack, plan: Plan, placement: Placement): FluidNe
       const into = fluidPortOf(u, u.io.fluidIn, u.ports.fluidIn, key);
       if (into !== null) consumers.push(into);
       const face = fluidPortOf(u, u.io.fluidOut, u.ports.fluidFaces, key);
-      if (face !== null) faces.push({ pos: [...face.pos], side: face.side, stepId: u.stepId, rate: stepRate(u.stepId) });
+      if (face !== null) faces.push({ pos: [...face.pos], side: face.side, stepId: u.stepId, rate: unitRate(u) });
     }
     faces.sort((a, b) => comparePos(a.pos, b.pos) || a.side - b.side);
     return {

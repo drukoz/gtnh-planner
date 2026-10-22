@@ -47,6 +47,21 @@ export function itemFilterFor(parts: Parts, keys: readonly StuffKey[]): { filter
   };
 }
 
+/** Slots of EnderIO's Limited Item Filter (`ItemFilterLimited`, research machine-feeding §2.1). */
+export const LIMITED_FILTER_SLOTS = 10;
+
+/**
+ * A Limited Item Filter (plan 12 Task 6: an Auto Workbench's insert side): a whitelist of the keys of `limits` (sorted,
+ * at most `LIMITED_FILTER_SLOTS`; a bench takes at most nine), each let in up to its count, matching meta.
+ */
+export function limitedFilterFor(parts: Parts, limits: ReadonlyMap<StuffKey, number>): ConduitFilter {
+  const keys = sortedKeys([...limits.keys()]).slice(0, LIMITED_FILTER_SLOTS);
+  return {
+    item: parts.eio_limited_filter.key, whitelist: true, keys, limits: keys.map((k) => limits.get(k)!), matchMeta: true,
+    matchNbt: keys.some((k) => k.includes('#')), oreDict: false, sticky: false, slots: LIMITED_FILTER_SLOTS,
+  };
+}
+
 /** An ender fluid conduit's own filter (no item): whitelist of at most 5 fluids (sorted, each once), the rest `dropped`. */
 export function fluidFilterFor(keys: readonly StuffKey[]): { filter: ConduitFilter; dropped: StuffKey[] } {
   const sorted = sortedKeys(keys);

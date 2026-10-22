@@ -10,6 +10,15 @@ export const LogisticsMode = { Direct: 'direct', Routed: 'routed', AE2: 'ae2', E
 export type LogisticsMode = (typeof LogisticsMode)[keyof typeof LogisticsMode];
 
 /**
+ * The networked logistics modes, Project Red (`routed`) and AE2 (design spec §3.3, architecture §11.39): when the build
+ * cost counts only their lines may make gathered world blocks (sand from cobblestone); machine-to-machine and EnderIO
+ * lines dig them. Machine sharing is narrower: only AE2 lines in rate mode share machines (`sharesMachines`,
+ * machine-options.ts: the steps of one sharing pool, `PlanStep.pool`, run on the same machines, owned and new alike);
+ * Project Red, machine-to-machine and EnderIO lines give every step its own machines.
+ */
+export const NETWORKED_LOGISTICS: ReadonlySet<string> = new Set(['routed', 'ae2']);
+
+/**
  * Recipe categories left out unless the group turns the rule off: recycling, mass fab, replicator, scrap, lava/stone-dust
  * centrifuge (which also covers the Large Thermal Refinery's lava filter: metals out of free lava), and crafting a
  * Programmed Circuit back into a circuit.
@@ -28,10 +37,21 @@ export const FREE_KEYS: readonly StuffKey[] = ['fluid:water', 'fluid:lava', 'flu
 export type LeafClass = 'free' | 'direct' | 'byproduct' | 'derived' | 'natural' | 'stop' | 'unavailable';
 
 /**
- * The default `PlanSettings.stepCharge` (fix spec R3, architecture §11.34): a recipe step is built only when it saves
- * at least 2 % of the line's least raw material (the user chose 2 % over the 5 % first proposed).
+ * The default `PlanSettings.stepCharge` (fix spec R3, architecture §11.34 as entry 39 amends it): "Fewest machines", the
+ * user's answer of 2026-10-20 ("the fewer machines make a big difference where 3 % more raw material is negligible"):
+ * with build cost counted each new machine block costs half the line's least raw material over the horizon, with it
+ * ignored each recipe step must save half of it (within plan 09's +25 % cap). It was 0.02 from plan 09 to plan 12's fix
+ * wave 2, which switches stored projects still at that value once (`SETTINGS_VERSION` 3, apply-op.ts).
  */
-export const DEFAULT_STEP_CHARGE = 0.02;
+export const DEFAULT_STEP_CHARGE = 0.5;
+/** The default `PlanSettings.stepCharge` before `SETTINGS_VERSION` 3 (plan 09 to plan 12's fix wave 2). */
+export const STEP_CHARGE_BEFORE_V3 = 0.02;
+
+/**
+ * The default `PlanSettings.buildHorizonHours` (design spec §3.3, architecture §11.28): in rate mode the raw material to
+ * build the machines a line adds is weighed against 24 hours of running it.
+ */
+export const DEFAULT_BUILD_HORIZON_HOURS = 24;
 
 export interface PlanSettings {
   target: StuffKey | null; mode: 'rate' | 'makeN'; amount: number; per: 'min' | 'hour';   // per ignored for makeN
@@ -46,7 +66,7 @@ export interface PlanSettings {
   machineTier: Record<string, number>;     // per recipe id
   excludedCategories: string[];            // default: DEFAULT_EXCLUDED_CATEGORIES
   coilHeat: number | null;                 // EBF coil heat (K); null = default for tier or from world
-  automateCrafting: boolean;               // false = crafting-table steps are hand-crafting
+  automateCrafting: boolean;               // true = crafting-table steps run on the GT++ Auto Workbench (plan 12's Auto Workbench ruling); false = by hand. `normalizeSettings` reads every project as true (the user's ruling 180: no checkbox); an explicit false still plans by hand
   /**
    * Materials to avoid (§11.25): GT material names ("Silver": every form of it) or StuffKeys, at most 50, no repeats.
    * `defaultSettings()` and `normalizeSettings()` always fill it; readers still use `?? []` (projects stored before it).
@@ -61,8 +81,9 @@ export interface PlanSettings {
   // optional addition
   /**
    * Which defaults the settings were made under (`SETTINGS_VERSION` in apply-op.ts; architecture §11.32): 2 from plan 09,
-   * when supporting lines (`routeDerived: true`) became the default. `defaultSettings()` sets the current version and
-   * `normalizeSettings()` fills a missing one with 1 (a project stored before it), which the server switches once.
+   * when supporting lines (`routeDerived: true`) became the default, 3 from plan 12's fix wave 2, when "Fewest machines"
+   * (`DEFAULT_STEP_CHARGE` 0.5) did. `defaultSettings()` sets the current version and `normalizeSettings()` fills a
+   * missing one with 1 (a project stored before it), which the server switches once.
    */
   settingsVersion?: number;
   // optional addition
@@ -74,9 +95,10 @@ export interface PlanSettings {
   haveSupply?: StuffKey[];
   // optional addition
   /**
-   * Steps vs raw material (fix spec R3, architecture §11.34): the share of the line's least raw material one recipe step
-   * must save to be built, 0 to 0.5 (0 = least raw material, fewest recipes only to break ties). `defaultSettings()` and
-   * `normalizeSettings()` always fill it; readers use `?? DEFAULT_STEP_CHARGE`.
+   * Steps vs raw material (fix spec R3, architecture §11.34 as entry 39 amends it), 0 to 0.5: with build cost counted the
+   * share of the line's least raw material over the horizon one new machine block costs beside its build (plan 12 fix
+   * wave 2), with it ignored the share one recipe step must save to be built; 0 = least raw material, fewest recipes only
+   * to break ties. `defaultSettings()` and `normalizeSettings()` always fill it; readers use `?? DEFAULT_STEP_CHARGE`.
    */
   stepCharge?: number;
   // optional addition
@@ -102,6 +124,34 @@ export interface PlanSettings {
    * per mteId (repeats are summed). `defaultSettings()` and `normalizeSettings()` always fill it; readers use `?? []`.
    */
   ownedManual?: Array<{ mteId: number; count: number }>;
+  // optional addition
+  /**
+   * Hours of running the build cost of new machines is weighed against (rate mode); null = ignore build cost; Make N always
+   * counts it against the batch. Above 0 and at most `MAX_BUILD_HORIZON_HOURS` (apply-op.ts); design spec §3.3,
+   * architecture §11.28 and §11.39. `defaultSettings()` and `normalizeSettings()` always fill it
+   * (`DEFAULT_BUILD_HORIZON_HOURS`) and keep a stored null, so readers test for null before they read a missing value as
+   * `DEFAULT_BUILD_HORIZON_HOURS`.
+   */
+  buildHorizonHours?: number | null;
+  // optional addition
+  /**
+   * "Build machines at" (the user's ruling 224 of 2026-10-20, plan 12 Task 7, architecture §11.39): the tier every step's
+   * new machines are built at, where a machine of that tier runs its recipe (else the lowest tier above it that does,
+   * else the nearest below, and the step says so; never above the project's tier, to which a higher value is clamped);
+   * null = the cheapest tier, by the objective. A step's own `machineTier` pin wins; owned machines of every tier still
+   * serve. A whole tier from 1 (LV) to 14. `defaultSettings()` and `normalizeSettings()` always fill it (null); readers
+   * use `?? null`.
+   */
+  buildTier?: number | null;
+  // optional addition
+  /**
+   * "Multiblocks" (the user's ruling 224, plan 12 Task 7): `allow` (the default) weighs a new multiblock like any machine;
+   * `only-required` builds none for a step a single-block machine that can be built here runs, and weighs every new
+   * multiblock of the others at `ONLY_REQUIRED_MULTIBLOCK_WEIGHT` raw on top of its build (machine-options.ts), so any
+   * route without one wins where build cost counts, and a step that still needs one says so. Owned multiblocks stay free.
+   * `defaultSettings()` and `normalizeSettings()` always fill it; readers treat only `only-required` as on.
+   */
+  multiblocks?: 'allow' | 'only-required';
 }
 
 /** Where one of the group's machines stands (a world scan's `PlacedMachine`): its dimension id and block position. */
@@ -128,6 +178,27 @@ export interface StepOption {
      */
     unusable?: string[];
   }>;
+}
+
+/**
+ * One machine tier a step can run at (plan 12, architecture §11.39), for the step panel's "Machine tier" choice: of the
+ * step's eligible machine options of that tier (before a `PlanSettings.machineTier` pin narrows them), the one with the
+ * lowest build cost (an unpriced one last, then the lowest mteId), and what the step would need of it.
+ */
+export interface StepTier {
+  /** The machine tier (a multiblock's: its energy-hatch tier). */
+  tier: number;
+  mteId: number; name: string;
+  /** Machines of it the step would need at its rate, at least 1. */
+  machines: number;
+  /** How many of those the group owns. */
+  owned: number;
+  /** Raw material to build the rest; null when the machine has no price (it cannot be built here, or no price could be worked out). */
+  build: number | null;
+  /** Why the machine cannot be built here ("no recipe in this pack", "needs <item>, not available at <tier>"); absent when it can. */
+  unbuildable?: string;
+  /** On the tier a `PlanSettings.machineTier` pin names, clamped to the step's eligible tiers; set also when it cannot be built here. */
+  pinned?: true;
 }
 
 /** One storage block holding some of a good (§11.20). */
@@ -211,7 +282,35 @@ export interface PlanStep {
    * stand, scan positions first (a machine of the "Machines we have" list counts without one). Absent when the step
    * reuses none, as with "Reuse machines we have" off.
    */
-  reused?: { count: number; where: MachineWhere[] };
+  reused?: {
+    count: number; where: MachineWhere[];
+    // optional additions (plan 12, architecture §11.39)
+    /**
+     * Which of the type's owned machines the step runs on, 0-based in the owned pool's order (the scan's machines, then the
+     * "Machines we have" list's): one index in two steps' lists is one machine serving both.
+     */
+    units?: number[];
+    /** The ids of the other steps that run on one of these machines (`units` or those of `others`), sorted. */
+    sharedWith?: string[];
+    /**
+     * Owned machines of the step's other eligible options (another tier, or a multiblock beside a singleblock) that run it
+     * beside `machine`'s. They are in no `count`; `utilization` counts their capacity too.
+     */
+    others?: Array<{
+      mteId: number; name: string; tier: number; count: number; units?: number[]; where: MachineWhere[];
+      euPerTick: number; runsPerSecondPerMachine: number;
+    }>;
+  };
+  // optional addition
+  /** Every eligible machine tier of the step (plan 12), by tier, for the step panel's "Machine tier" choice. */
+  tiers?: StepTier[];
+  // optional addition
+  /**
+   * A sharing pool (plan 12): this step's machines are shared with the other steps of `steps` — same machine option,
+   * programmed circuit, held items and fluids; every step of the pool carries the same `count`, `owned` and
+   * `reused.units`, and its machines are counted once. Set only for a pool of two or more steps.
+   */
+  pool?: { id: string /* 'pool:' + its smallest step id */; steps: string[] /* every step id it runs, sorted, this one included */ };
 }
 
 export interface PlanFlow { from: string /* step id | 'raw' */; to: string /* step id | 'out' | 'sink' */; key: StuffKey; perSecond: number }
@@ -271,6 +370,23 @@ export interface Plan {
   target?: StuffKey;
   targetPerSecond?: number;
   rawCost?: { perSecond: number; leastPerSecond: number };
+  // optional addition
+  /**
+   * What the plan costs in raw material (architecture §11.28, §11.39; every `ok` plan): to run it an hour (Make N: the
+   * batch spread over its run time), and to build the machines it adds beyond what the group owns — step machines,
+   * multiblock structures with the hatches they run with, and the cleanroom, a sharing pool's machines once — never the
+   * layout's power and logistics parts. `horizonHours` is what the build cost was weighed against (null: ignored, and in
+   * Make N, where the batch is the horizon).
+   */
+  cost?: {
+    runPerHour: number; build: number; horizonHours: number | null;
+    /** Make N: the raw material the whole batch consumes. */
+    batch?: number;
+    /** The layout's required parts other than its hatches (Plan 5's `planFinish`); the Materials page adds it to `build`. */
+    layout?: number;
+    /** New machines (a cleanroom included) that can be made here but that `build` leaves out: no price could be worked out. Set only when above 0. */
+    unpriced?: number;
+  };
 }
 
 export interface PlanContext {           // filled from a world scan by Plan 4; Plan 2 works with an empty one

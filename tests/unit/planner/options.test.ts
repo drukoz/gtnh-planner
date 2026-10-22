@@ -3,6 +3,7 @@
 // re-export broke is ignored with a warning.
 
 import { describe, expect, it } from 'vitest';
+import { withBuildRecipes } from '../../helpers/build-fixtures.ts';
 import { packFromSpec, type PackSpec } from '../../helpers/pack-spec.ts';
 import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
@@ -21,9 +22,10 @@ const LEAD = 'fluid:molten.lead';
  * A circuit assembler takes a mined part and 72 L of soldering alloy, 144 L of tin or 288 L of lead. Soldering alloy
  * ingots are alloyed from 9 tin ingots and 1 antimony dust into 10, so 72 L costs 0.5 raw in two steps; tin costs 1 and
  * lead 2, each one extraction from a mined ingot. Lead is priced above KEEP_WITHIN (2 × the cheapest), so the walk
- * leaves it out of the line's graph.
+ * leaves it out of the line's graph. Every machine can be built (ruling P3: plan 12 never plans one no recipe makes as a
+ * new one).
  */
-const CIRCUIT: PackSpec = {
+const CIRCUIT: PackSpec = withBuildRecipes({
   items: [
     { key: 't:ec@0', name: 'Electronic Circuit' },
     { key: 't:part@0', name: 'Circuit Part', gt: { prefix: 'dust', material: 'Part' } },
@@ -50,10 +52,10 @@ const CIRCUIT: PackSpec = {
     { id: 'alloy-solder', map: 'gt.recipe.alloysmelter', in: [['t:tin_ingot@0', 9], ['t:antimony_dust@0', 1]], out: [['t:solder_ingot@0', 10]], eut: 16 },
   ],
   worldgen: { veins: ['Part', 'Tin', 'Lead', 'Antimony'].map(vein) },
-};
+});
 
 const pack = packFromSpec(CIRCUIT);
-const S = (p: Partial<PlanSettings> = {}): PlanSettings => ({ ...defaultSettings(), target: 't:ec@0', tier: 1, ...p });
+const S = (p: Partial<PlanSettings> = {}): PlanSettings => ({ ...defaultSettings(), target: 't:ec@0', tier: 1, buildHorizonHours: null, ...p });
 const circuitStep = (plan: Plan): PlanStep => plan.steps.find((s) => s.id === 'ca')!;
 const ids = (plan: Plan): string[] => plan.steps.map((s) => s.id);
 const staleOptions = (plan: Plan) => plan.warnings.filter((w) => w.code === 'stale-option');
@@ -162,7 +164,7 @@ describe('ingredient options', () => {
     spec.machines!.push({ mteId: 4, name: 'Basic Fluid Solidifier', maps: ['gt.recipe.fluidsolidifier'], tier: 1 });
     spec.recipes!.find((r) => r.id === 'ca')!.in!.push(['t:weight@0', 1]);
     spec.recipes!.push({ id: 'cast-weight', map: 'gt.recipe.fluidsolidifier', in: [[LEAD, 144]], out: [['t:weight@0', 1]], eut: 16 });
-    const plan = await planLine(packFromSpec(spec), S({ optionChoice: { 'ca#100': LEAD }, avoid: ['Lead', 'Antimony'] }), emptyContext());
+    const plan = await planLine(packFromSpec(withBuildRecipes(spec)), S({ optionChoice: { 'ca#100': LEAD }, avoid: ['Lead', 'Antimony'] }), emptyContext());
     expect(plan.status).toBe('ok');
     expect(ids(plan)).toEqual(['ca', 'cast-weight', 'x-lead', 'x-tin']);
     expect(circuitStep(plan).inputs).toContainEqual({ key: TIN, amount: 144, chance: 1 });
@@ -171,6 +173,41 @@ describe('ingredient options', () => {
     const flagged = plan.warnings.filter((w) => w.code === 'avoid-unavoidable').map((w) => [w.stepId, w.key]);
     expect(flagged).toEqual([['cast-weight', LEAD], ['x-lead', 't:lead_ingot@0']]);
     expect(plan.avoided?.map((a) => [a.key, a.unavoidable])).toEqual([[LEAD, true], ['t:antimony_dust@0', false], ['t:lead_ingot@0', true]]);
+    // With build cost counted ("Fewest machines", the default) the slot takes the lead the line allows back for the weight,
+    // rather than add a tin extractor: its warning says so, where the weight's and the lead extractor's say nothing avoids
+    // it (the controller's ruling after the verify of 5e3820f, (b); a per-consumer allowance is a later follow-up).
+    const built = await planLine(packFromSpec(withBuildRecipes(spec)), S({ optionChoice: { 'ca#100': LEAD }, avoid: ['Lead', 'Antimony'], buildHorizonHours: 24 }), emptyContext());
+    expect(built.status).toBe('ok');
+    expect(ids(built)).toEqual(['ca', 'cast-weight', 'x-lead']);
+    expect(circuitStep(built).inputs).toContainEqual({ key: LEAD, amount: 288, chance: 1 });
+    expect(built.warnings.filter((w) => w.code === 'avoid-unavoidable').map((w) => [w.stepId, w.text])).toEqual([
+      ['ca', 'Basic Circuit Assembler uses Molten Lead, which the line allows back for Lead Weight'],
+      ['cast-weight', 'Basic Fluid Solidifier uses Molten Lead — no recipe at LV avoids it'],
+      ['x-lead', 'Basic Fluid Extractor uses Lead Ingot — no recipe at LV avoids it'],
+    ]);
+    expect(built.avoided?.map((a) => [a.key, a.unavoidable])).toEqual([[LEAD, true], ['t:antimony_dust@0', false], ['t:lead_ingot@0', true]]);
+  });
+  it('marks an option whose only chain around the avoid list runs on a machine that cannot be built here, in every mode', async () => {
+    // The controller's ruling after the verify of 5e3820f, (a): soldering alloy is also alloyed from lead, but only on a
+    // Lead Alloy Smelter that no recipe makes. With tin avoided the chain around it is walked again without that machine
+    // (as the line is, controller ruling OQ5 a), so no chain that can be built makes soldering alloy without tin: the
+    // option says why, not that it is usable through the Lead Alloy Smelter.
+    const spec = structuredClone(CIRCUIT);
+    spec.maps!.push({ id: 'gt.recipe.leadalloy', name: 'Lead Alloy Smelter' });
+    spec.machines!.push({ mteId: 77, name: 'Lead Alloy Smelter', maps: ['gt.recipe.leadalloy'], tier: 1 });
+    spec.recipes!.push({ id: 'alloy-solder-pb', map: 'gt.recipe.leadalloy', in: [['t:lead_ingot@0', 50], ['t:antimony_dust@0', 10]], out: [['t:solder_ingot@0', 10]], eut: 16 });
+    const p = packFromSpec(spec);
+    for (const buildHorizonHours of [null, 24]) {
+      const plan = await planLine(p, S({ avoid: ['Tin'], buildHorizonHours }), emptyContext());
+      expect(ids(plan), String(buildHorizonHours)).toEqual(['ca', 'x-lead']);
+      expect(circuitStep(plan).options?.[0]?.choices.map((c) => [c.key, c.share, c.unusable]), String(buildHorizonHours)).toEqual([
+        [SOLDER, 0, ['Lead Alloy Smelter cannot be built here (no recipe in this pack)']], [LEAD, 1, undefined]]);
+    }
+    // Where the Lead Alloy Smelter can be built, the chain around tin is the option's again.
+    const buildable = packFromSpec(withBuildRecipes(spec, [77]));
+    const plan = await planLine(buildable, S({ avoid: ['Tin'] }), emptyContext());
+    expect(circuitStep(plan).options?.[0]?.choices.map((c) => [c.key, c.share, c.rawPerRun, c.steps, c.via, c.unusable])).toEqual([
+      [LEAD, 1, 2, 1, ['Fluid Extractor'], undefined], [SOLDER, 0, 3, 2, ['Fluid Extractor', 'Lead Alloy Smelter'], undefined]]);
   });
   it('says it ignores a pinned option on the avoid list without promising another option', async () => {
     // Plan 09's final review: at LV only lead can be extracted (the solder and tin extractors need 34 EU/t, an MV machine),
@@ -222,7 +259,7 @@ describe('a slot split between two options', () => {
   // The line makes A as a by-product of X (half a dust a run) and takes the rest of the slot as mined B: 1.5 raw per
   // Thing, where B alone would cost 2. Task 1's deferred minor: the step listed only the busiest option with the whole
   // slot amount, so the flows looked short.
-  const split = packFromSpec({
+  const split = packFromSpec(withBuildRecipes({
     items: [
       { key: 't:thing@0', name: 'Thing' }, { key: 't:x@0', name: 'X' },
       { key: 't:a@0', name: 'A Dust', gt: { prefix: 'dust', material: 'A' } },
@@ -237,9 +274,9 @@ describe('a slot split between two options', () => {
       { id: 'make-a', map: 'gt.recipe.macerator', in: [['t:raw@0', 3]], out: [['t:a@0', 1]], eut: 16 },
     ],
     worldgen: { veins: ['B', 'Raw'].map(vein) },
-  });
+  }));
   it('lists both options with their shares, and the flows feed the step in full', async () => {
-    const plan = await planLine(split, { ...defaultSettings(), target: 't:thing@0', tier: 1 }, emptyContext());
+    const plan = await planLine(split, { ...defaultSettings(), target: 't:thing@0', tier: 1, buildHorizonHours: null }, emptyContext());
     expect(plan.status).toBe('ok');
     const use = plan.steps.find((s) => s.id === 'use')!;
     expect(use.inputs).toEqual([{ key: 't:x@0', amount: 1, chance: 1 }, { key: 't:a@0', amount: 0.5, chance: 0.5 }, { key: 't:b@0', amount: 0.5, chance: 0.5 }]);

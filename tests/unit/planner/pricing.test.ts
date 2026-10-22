@@ -23,6 +23,22 @@ describe('linePricing', () => {
     const all = await Promise.all([first, ...others]);
     expect(all.map((p) => p?.target)).toEqual(Array(5).fill('t:circuit@0'));
   });
+  it('walks a line again around the recipes it cannot run on the same basis, cost model and derived costs', async () => {
+    // Plan 12's walk around recipes no machine can run here re-walks the line, never its basis or cost model, which do
+    // not depend on what the walk leaves out (the plan fix wave: each walk used to price the line from scratch).
+    const plain = (await linePricing(pack, settings, emptyContext()))!;
+    const unbuildable = new Map([['bend-plate', 'Basic Bending Machine cannot be built here (no recipe in this pack)']]);
+    const around = (await linePricing(pack, settings, emptyContext(), { unbuildable }))!;
+    expect(around).not.toBe(plain);
+    expect(around.basis).toBe(plain.basis);
+    expect(around.model).toBe(plain.model);
+    expect(around.unbuildable).toEqual(unbuildable);
+    expect(around.graph.recipes.map((r) => r.id)).not.toContain('bend-plate');
+    // What it prices is what a pricing of its own gives: the derived costs and chains are the same answers.
+    const fresh = (await linePricing(miniGt(), settings, emptyContext(), { unbuildable }))!;
+    expect(around.graph.recipes.map((r) => r.id)).toEqual(fresh.graph.recipes.map((r) => r.id));
+    expect([...around.chains]).toEqual([...fresh.chains]);
+  });
   it('has nothing to price without a target the export knows, so breakdowns use the plain basis', async () => {
     expect(linePricing(pack, defaultSettings(), emptyContext())).toBeNull();
     expect(linePricing(pack, { ...settings, target: 't:not_exported@0' }, emptyContext())).toBeNull();

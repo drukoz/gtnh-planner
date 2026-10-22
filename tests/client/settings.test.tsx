@@ -3,9 +3,11 @@ import { isValidElement, type ReactElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import {
   dimRows, dimOverridePatch, toggleList, parseAmount, groupDimRows, parseCost, STEP_CHARGE_PRESETS, ownableMachineGroups, ownedMachineLabel, ownedWith,
-  ownedWithout, parseOwnedCount,
+  ownedWithout, parseOwnedCount, BUILD_HORIZON_PRESETS, horizonChoice, horizonPatch, buildTierOptions, buildTierPatch, MULTIBLOCK_CHOICES, multiblocksPatch,
 } from '../../src/client/views/settings-model.ts';
-import { HaveSupplySection, OptionPinsSection, ReuseOwnedField, SettingsPanel, StepChargeField } from '../../src/client/views/SettingsPanel.tsx';
+import {
+  BuildHorizonField, BuildTierField, HaveSupplySection, MultiblocksField, OptionPinsSection, ReuseOwnedField, SettingsPanel, StepChargeField,
+} from '../../src/client/views/SettingsPanel.tsx';
 import { OwnedMachinesEditor } from '../../src/client/components/OwnedMachinesEditor.tsx';
 import { TierPicker } from '../../src/client/components/TierPicker.tsx';
 import { defaultSettings, validateOp } from '../../src/shared/project/apply-op.ts';
@@ -123,25 +125,29 @@ describe('steps vs raw material, supplies and pinned options', () => {
   const options = (html: string): string[] => [...html.matchAll(/<option value="([^"]*)"( selected="")?>([^<]*)<\/option>/g)].map((m) => `${m[1]}=${m[3]}${m[2] === undefined ? '' : ' *'}`);
   const stepCharge = (html: string): string[] => options(/<select[^>]*aria-label="Steps vs raw material"[^>]*>.*?<\/select>/s.exec(html)?.[0] ?? '');
   it('lists the presets of the Steps vs raw material select and sends the one picked', () => {
-    expect(STEP_CHARGE_PRESETS.map((p) => [p.value, p.label])).toEqual([[0, 'Least raw material'], [0.02, 'Some steps'], [0.05, 'Balanced'], [0.15, 'Fewest machines']]);
-    expect(stepCharge(panelOf({ ...defaultSettings(), stepCharge: 0.05 }))).toEqual([
-      '0=Least raw material (0%)', '0.02=Some steps (2%)', '0.05=Balanced (5%) *', '0.15=Fewest machines (15%)']);
+    // Plan 12 fix wave 2 (the user's answer of 2026-10-20): Least raw material, Some machines, Fewest machines (the default).
+    expect(STEP_CHARGE_PRESETS.map((p) => [p.value, p.label])).toEqual([[0, 'Least raw material'], [0.02, 'Some machines'], [0.5, 'Fewest machines']]);
+    expect(stepCharge(panelOf({ ...defaultSettings(), stepCharge: 0.02 }))).toEqual([
+      '0=Least raw material (0%)', '0.02=Some machines (2%) *', '0.5=Fewest machines (50%)']);
     const patch = vi.fn();
     const [select] = findAll(StepChargeField({ settings: defaultSettings(), patch }), (e) => e.type === 'select');
-    (select!.props.onChange as (e: unknown) => void)({ currentTarget: { value: '0.15' } });
-    expect(patch).toHaveBeenCalledWith({ stepCharge: 0.15 });
-    expect(validateOp({ op: 'settings', patch: { stepCharge: 0.15 } })).toBeNull();
-    (select!.props.onChange as (e: unknown) => void)({ currentTarget: { value: '0.02' } });   // the value it has: nothing to send
+    (select!.props.onChange as (e: unknown) => void)({ currentTarget: { value: '0.02' } });
+    expect(patch).toHaveBeenCalledWith({ stepCharge: 0.02 });
+    expect(validateOp({ op: 'settings', patch: { stepCharge: 0.02 } })).toBeNull();
+    (select!.props.onChange as (e: unknown) => void)({ currentTarget: { value: '0.5' } });   // the value it has: nothing to send
     expect(patch).toHaveBeenCalledTimes(1);
   });
   it('shows a stored value that is no preset as Custom', () => {
-    expect(stepCharge(panelOf({ ...defaultSettings(), stepCharge: 0.07 }))).toEqual([
-      '0=Least raw material (0%)', '0.02=Some steps (2%)', '0.05=Balanced (5%)', '0.15=Fewest machines (15%)', '0.07=Custom (7%) *']);
+    // 5 % and 15 % were presets before fix wave 2; a project that chose one keeps it, now shown as its value.
+    for (const charge of [0.05, 0.15, 0.07]) {
+      expect(stepCharge(panelOf({ ...defaultSettings(), stepCharge: charge }))).toEqual([
+        '0=Least raw material (0%)', '0.02=Some machines (2%)', '0.5=Fewest machines (50%)', `${charge}=Custom (${Math.round(charge * 100)}%) *`]);
+    }
   });
-  it('shows Some steps for a project without stepCharge', () => {
+  it('shows Fewest machines for a project without stepCharge', () => {
     const old = { ...defaultSettings() };
     delete old.stepCharge;
-    expect(stepCharge(panelOf(old))).toContain('0.02=Some steps (2%) *');
+    expect(stepCharge(panelOf(old))).toContain('0.5=Fewest machines (50%) *');
   });
   it('lists the free inputs the group already supplies and removes one', () => {
     const settings = { ...defaultSettings(), haveSupply: ['fluid:water', 'minecraft:cobblestone@0'] };
@@ -171,6 +177,120 @@ describe('steps vs raw material, supplies and pinned options', () => {
   });
   it('labels the supporting-lines switch', () => {
     expect(panelOf(defaultSettings())).toContain('Plan supporting lines for alloys, plastics and chemicals (off: buy the shallow ones)');
+  });
+});
+
+// The build horizon (plan 12 Task 7, design spec §3.3), the tier new machines are built at and when a multiblock may be
+// built (the user's ruling 224 of 2026-10-20), and no crafting switch any more (the user's ruling 180: crafting steps are
+// automatic), all in the Options section beside "Steps vs raw material".
+describe('build cost, machine tier and multiblocks', () => {
+  const options = (html: string): string[] => [...html.matchAll(/<option value="([^"]*)"( selected="")?>([^<]*)<\/option>/g)].map((m) => `${m[1]}=${m[3]}${m[2] === undefined ? '' : ' *'}`);
+  const select = (html: string, label: string): string[] => options(new RegExp(`<select[^>]*aria-label="${label}"[^>]*>.*?</select>`, 's').exec(html)?.[0] ?? '');
+  const optionsSection = (html: string): string => /<h3>Options<\/h3>.*?<\/section>/s.exec(html)?.[0] ?? '';
+  /** What picking `value` in the select of `field` sends. */
+  const sendsOf = (field: (props: { settings: PlanSettings; plan?: Plan | null; patch: (p: Partial<PlanSettings>) => void }) => ReactElement,
+    settings: PlanSettings, value: string, plan: Plan | null = null): unknown[] => {
+    const patch = vi.fn();
+    const [el] = findAll(field({ settings, plan, patch }), (e) => e.type === 'select');
+    (el!.props.onChange as (e: unknown) => void)({ currentTarget: { value } });
+    return patch.mock.calls.map((c) => c[0]);
+  };
+
+  it('shows 24 hours for a project without buildHorizonHours', () => {
+    expect(BUILD_HORIZON_PRESETS.map((p) => [p.value, p.hours, p.label])).toEqual([
+      ['1', 1, '1 hour'], ['8', 8, '8 hours'], ['24', 24, '24 hours'], ['168', 168, '1 week'], ['none', null, 'Ignore build cost']]);
+    expect(horizonChoice(undefined)).toEqual({ value: '24', label: '24 hours' });
+    const old = { ...defaultSettings() };
+    delete old.buildHorizonHours;
+    expect(select(panelOf(old), 'Count build cost against')).toEqual(['1=1 hour', '8=8 hours', '24=24 hours *', '168=1 week', 'none=Ignore build cost']);
+    expect(optionsSection(panelOf(old))).toContain('Count build cost against');
+  });
+  it('sends the horizon picked: a week, or ignoring build cost', () => {
+    expect(sendsOf(BuildHorizonField, defaultSettings(), '168')).toEqual([{ buildHorizonHours: 168 }]);
+    expect(sendsOf(BuildHorizonField, defaultSettings(), 'none')).toEqual([{ buildHorizonHours: null }]);
+    expect(sendsOf(BuildHorizonField, defaultSettings(), '24')).toEqual([]);                     // the value it has: nothing to send
+    expect(horizonPatch('1')).toEqual({ buildHorizonHours: 1 });
+    for (const patch of [horizonPatch('168'), horizonPatch('none'), horizonPatch('8')]) expect(validateOp({ op: 'settings', patch })).toBeNull();
+    expect(select(panelOf({ ...defaultSettings(), buildHorizonHours: null }), 'Count build cost against')).toContain('none=Ignore build cost *');
+  });
+  it('shows a stored horizon that is no preset as Custom', () => {
+    expect(horizonChoice(48)).toEqual({ value: 'custom', label: 'Custom (48 h)' });
+    expect(horizonChoice(168)).toEqual({ value: '168', label: '1 week' });
+    expect(horizonChoice(null)).toEqual({ value: 'none', label: 'Ignore build cost' });
+    expect(select(panelOf({ ...defaultSettings(), buildHorizonHours: 48 }), 'Count build cost against')).toEqual([
+      '1=1 hour', '8=8 hours', '24=24 hours', '168=1 week', 'none=Ignore build cost', 'custom=Custom (48 h) *']);
+    expect(sendsOf(BuildHorizonField, { ...defaultSettings(), buildHorizonHours: 48 }, 'custom')).toEqual([]);
+  });
+  it('says in Make N that the batch carries the build cost, with no select', () => {
+    const html = panelOf({ ...defaultSettings(), mode: 'makeN', amount: 64 });
+    expect(html).not.toContain('aria-label="Count build cost against"');
+    expect(optionsSection(html)).toContain('Make N counts the build cost of new machines against the batch itself.');
+    expect(panelOf(defaultSettings())).not.toContain('Make N counts the build cost');
+  });
+
+  it('offers the cheapest tier and every tier from LV up to the project tier for new machines', () => {
+    expect(buildTierOptions(2, null)).toEqual([{ value: '', label: 'Cheapest tier' }, { value: '1', label: 'LV' }, { value: '2', label: 'MV' }]);
+    expect(select(panelOf({ ...defaultSettings(), tier: 2 }), 'Build machines at')).toEqual(['=Cheapest tier *', '1=LV', '2=MV']);
+    // The project's tier from the world: the plan's.
+    expect(select(panelOf(defaultSettings(), { ...plan([]), tier: 3 } as Plan), 'Build machines at')).toEqual(['=Cheapest tier *', '1=LV', '2=MV', '3=HV']);
+    expect(select(panelOf({ ...defaultSettings(), tier: 2, buildTier: 2 }), 'Build machines at')).toEqual(['=Cheapest tier', '1=LV', '2=MV *']);
+    // A stored tier above the project's (the tier was lowered since): kept and said so.
+    expect(select(panelOf({ ...defaultSettings(), tier: 2, buildTier: 4 }), 'Build machines at'))
+      .toEqual(['=Cheapest tier', '1=LV', '2=MV', '4=EV (above the project’s tier) *']);
+    const old = { ...defaultSettings(), tier: 1 };
+    delete old.buildTier;
+    expect(select(panelOf(old), 'Build machines at')).toEqual(['=Cheapest tier *', '1=LV']);
+    expect(optionsSection(panelOf(defaultSettings()))).toContain('Build machines at');
+  });
+  it('waits for the plan to list the tiers when the project tier comes from the world (the controller\'s ruling after Task 7, (b))', () => {
+    // An auto tier (null) with no plan yet (loading, or none) is not LV: the select offers the cheapest tier and the stored
+    // tier, plainly, until the plan says the project's tier.
+    expect(buildTierOptions(null, null)).toEqual([{ value: '', label: 'Cheapest tier' }]);
+    expect(buildTierOptions(null, 2)).toEqual([{ value: '', label: 'Cheapest tier' }, { value: '2', label: 'MV' }]);
+    expect(select(panelOf(defaultSettings()), 'Build machines at')).toEqual(['=Cheapest tier *']);
+    expect(select(panelOf({ ...defaultSettings(), buildTier: 2 }), 'Build machines at')).toEqual(['=Cheapest tier', '2=MV *']);
+    expect(select(panelOf({ ...defaultSettings(), buildTier: 2 }, { ...plan([]), tier: 3 } as Plan), 'Build machines at'))
+      .toEqual(['=Cheapest tier', '1=LV', '2=MV *', '3=HV']);
+    expect(sendsOf(BuildTierField, { ...defaultSettings(), buildTier: 2 }, '')).toEqual([{ buildTier: null }]);
+  });
+  it('sends the tier picked for new machines, or the cheapest', () => {
+    const mv = { ...defaultSettings(), tier: 2 };
+    expect(sendsOf(BuildTierField, mv, '2')).toEqual([{ buildTier: 2 }]);
+    expect(sendsOf(BuildTierField, { ...mv, buildTier: 2 }, '')).toEqual([{ buildTier: null }]);
+    expect(sendsOf(BuildTierField, mv, '')).toEqual([]);
+    expect([buildTierPatch('1'), buildTierPatch(''), buildTierPatch('x')]).toEqual([{ buildTier: 1 }, { buildTier: null }, null]);
+    for (const patch of [{ buildTier: 2 }, { buildTier: null }]) expect(validateOp({ op: 'settings', patch })).toBeNull();
+  });
+  it('lets the group keep new multiblocks to what nothing else can do', () => {
+    expect(MULTIBLOCK_CHOICES.map((c) => [c.value, c.label])).toEqual([['allow', 'Use when cheaper'], ['only-required', 'Only when nothing else can do it']]);
+    expect(select(panelOf(defaultSettings()), 'Multiblocks')).toEqual(['allow=Use when cheaper *', 'only-required=Only when nothing else can do it']);
+    const old = { ...defaultSettings() };
+    delete old.multiblocks;
+    expect(select(panelOf(old), 'Multiblocks')).toEqual(['allow=Use when cheaper *', 'only-required=Only when nothing else can do it']);
+    expect(select(panelOf({ ...defaultSettings(), multiblocks: 'only-required' }), 'Multiblocks')).toContain('only-required=Only when nothing else can do it *');
+    expect(sendsOf(MultiblocksField, defaultSettings(), 'only-required')).toEqual([{ multiblocks: 'only-required' }]);
+    expect(sendsOf(MultiblocksField, defaultSettings(), 'allow')).toEqual([]);
+    expect([multiblocksPatch('allow'), multiblocksPatch('other')]).toEqual([{ multiblocks: 'allow' }, null]);
+    expect(validateOp({ op: 'settings', patch: { multiblocks: 'only-required' } })).toBeNull();
+    expect(optionsSection(panelOf(defaultSettings()))).toContain('Multiblocks');
+  });
+  it('says what "Only when nothing else can do it" does with build cost ignored (the controller\'s ruling after Task 7, (c))', () => {
+    const hint = 'With build cost ignored, a recipe only a multiblock runs is weighed by its raw material alone.';
+    const onlyRequired: PlanSettings = { ...defaultSettings(), multiblocks: 'only-required' };
+    expect(optionsSection(panelOf({ ...onlyRequired, buildHorizonHours: null }))).toContain(hint);
+    // not with build cost counted (the default horizon), not where multiblocks are used when cheaper, not in Make N
+    expect(optionsSection(panelOf(onlyRequired))).not.toContain(hint);
+    expect(optionsSection(panelOf({ ...defaultSettings(), buildHorizonHours: null }))).not.toContain(hint);
+    expect(optionsSection(panelOf({ ...onlyRequired, buildHorizonHours: null, mode: 'makeN', amount: 64 }))).not.toContain(hint);
+  });
+  it('has no switch for crafting-table steps: they run on an Auto Workbench', () => {
+    // The user's ruling 180 (a): no control replaces the old checkbox, whatever a stored project held.
+    for (const automateCrafting of [true, false]) {
+      const options = optionsSection(panelOf({ ...defaultSettings(), automateCrafting }));
+      expect(options).not.toContain('Crafting-table steps are automated');
+      expect(options).not.toMatch(/crafting/i);
+      expect(options.match(/type="checkbox"/g)).toHaveLength(2);   // supporting lines, reuse machines we have
+    }
   });
 });
 

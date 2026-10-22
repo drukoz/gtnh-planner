@@ -8,14 +8,14 @@
 import { tierName } from '../../shared/gt/tiers.ts';
 import type { StuffKey } from '../../shared/keys.ts';
 import { conduitLines, configuredLines } from '../../shared/layout/configure-text.ts';
-import { fmtInt } from '../../shared/layout/format.ts';
+import { fmtInt, joinNames } from '../../shared/layout/format.ts';
 import { SIDE_NAMES, posKey, rotateFacing, step, type Rotation, type Vec3 } from '../../shared/layout/geometry.ts';
 import { FACES } from '../../shared/types/assets.ts';
 import type { BlockRole, Hookup, LayoutBlock, LayoutStatus, Pin } from '../../shared/types/layout.ts';
 import type { BomLine, BuildStep } from '../../shared/types/plan.ts';
 import type { HatchKind, PlacedUnit } from './arrange.ts';
 import type { StepDraft } from './modes/mode.ts';
-import { pinNumber, reuseText, type ReuseFind } from './pins.ts';
+import { groupSteps, pinNumber, reuseGroups, type ReuseFind } from './pins.ts';
 import type { Stage } from './power.ts';
 
 // ---- Types ----
@@ -32,6 +32,9 @@ export interface StepsInput {
   /** The line's turn into the world: `units` are in its local frame, so a step that names a compass side turns it. */
   rotation: Rotation;
   nameOf: (k: StuffKey) => string;
+  // optional addition (plan 12)
+  /** A plan step by what it makes (its main output's name), for the place step of a machine several steps share. */
+  stepName?: (stepId: string) => string;
 }
 
 type Group = NonNullable<BomLine['group']>;
@@ -142,6 +145,18 @@ function checkInputSide(what: string): string {
 const OUTPUT_UP = 1;
 
 /**
+ * An Auto Workbench's place step (plan 12 Task 6, research machine-feeding §1.3.5 and §3.7): GT++'s bench pushes what it
+ * makes out of its back, the face with the pipe overlay, and takes EU on every other face; a Wrench click makes the face
+ * clicked its front; its tank fills from any fluid that reaches it, which it puts in its input slots. So its back meets
+ * the middle row, its front faces away from it, where the power cable comes in, and no fluid pipe touches it.
+ */
+function benchPlaceText(u: PlacedUnit, n: number): string {
+  return `Place ${fmtInt(n)}× ${u.name} with its back, the face with the pipe opening (the front shows a crafting grid), toward the middle row: `
+    + 'with a Wrench, right-click its side away from the middle row to make that its front; run its power cable to the front or a side, never the '
+    + 'back, and keep fluid pipes off it';
+}
+
+/**
  * A venting steam singleblock's place step (architecture §11 entry 48; worded as add-on 15's machine-to-machine one):
  * GT vents its steam through its output side after every run and starts the next only once it could
  * (`MTEBasicMachineBronze.allowToCheckRecipe`: no cover there and no block with a hit box in front of it), so that side
@@ -207,7 +222,8 @@ function fluidsThroughOutputSide(blocks: readonly LayoutBlock[]): Set<string> {
  * (`mufflerWords`), or for one run by hand where it stands (`MANUAL_PLACE`). The front's compass side is turned by
  * `rotation`.
  */
-function placeSteps(units: readonly PlacedUnit[], sitePin: number | undefined, rotation: Rotation, fluidSteps: ReadonlySet<string>): Draft[] {
+function placeSteps(units: readonly PlacedUnit[], sitePin: number | undefined, rotation: Rotation, fluidSteps: ReadonlySet<string>,
+  stepName: (stepId: string) => string): Draft[] {
   const byStep = new Map<string, { first: PlacedUnit; n: number }>();
   for (const u of units) {
     const seen = byStep.get(u.stepId);
@@ -215,18 +231,22 @@ function placeSteps(units: readonly PlacedUnit[], sitePin: number | undefined, r
     else seen.n += 1;
   }
   return [...byStep].map(([stepId, { first: u, n }]) => {
+    // a machine several steps share (plan 12) says which it runs
+    const runs = u.stepIds === undefined ? '' : `; it runs ${joinNames(u.stepIds.map(stepName))}`;
+    if (u.bench !== undefined) return draft(`layout:place:${stepId}`, 'place', sitePin, benchPlaceText(u, n));
     if (!u.multiblock) {
       const front = SIDE_NAMES[rotateFacing(u.mainFacing ?? WEST, rotation)]!;
-      if (u.outputSide === OUTPUT_UP) return draft(`layout:place:${stepId}`, 'place', sitePin, steamPlaceText(u, n, front));
+      if (u.outputSide === OUTPUT_UP) return draft(`layout:place:${stepId}`, 'place', sitePin, `${steamPlaceText(u, n, front)}${runs}`);
       const fluids = fluidSteps.has(stepId);
       const what = u.io.itemIn && fluids ? 'items and fluids' : u.io.itemIn ? 'items' : fluids ? 'fluids' : null;
-      return draft(`layout:place:${stepId}`, 'place', sitePin, `Place ${fmtInt(n)}× ${u.name} ${singleblockFaces(front)}${what === null ? '' : checkInputSide(what)}`);
+      return draft(`layout:place:${stepId}`, 'place', sitePin,
+        `Place ${fmtInt(n)}× ${u.name} ${singleblockFaces(front)}${what === null ? '' : checkInputSide(what)}${runs}`);
     }
     const labels = hatchLabels(u);
     const hatches = labels.length === 0 ? '' : `; hatches: ${labels.join(', ')}`;
     return draft(`layout:place:${stepId}`, 'place', sitePin,
       `Build ${fmtInt(n)}× ${u.name} (${u.size.map(fmtInt).join('×')}) with the controller facing the middle row`
-        + `${u.manual === undefined ? `${hatches}${mufflerWords(u)}` : MANUAL_PLACE}`);
+        + `${u.manual === undefined ? `${hatches}${mufflerWords(u)}` : MANUAL_PLACE}${runs}`);
   });
 }
 
@@ -317,12 +337,33 @@ function conduitSteps(input: StepsInput, sitePin: number | undefined, logisticsP
 
 // ---- Steps ----
 
-/** The pin of a reuse find: the reuse pin `makePins` put at its nearest machine. */
+/**
+ * The pin of a reuse find: the reuse pin `makePins` put at its nearest machine, found by kind and position (a pin of a
+ * machine several steps share says so in its text, plan 12).
+ */
 function reusePin(pins: readonly Pin[], find: ReuseFind): number | undefined {
   const at = find.positions[0];
   if (at === undefined) return undefined;
-  const text = reuseText(find);
-  return pins.find((p) => p.kind === 'reuse' && samePos(p.pos, at) && p.text === text)?.n;
+  return pins.find((p) => p.kind === 'reuse' && samePos(p.pos, at))?.n;
+}
+
+/**
+ * One hook step per reuse pin (`reuseGroups`: the finds that share owned machines; a find without a machine found its
+ * own), id `layout:reuse:<step>` of its first find (`:<mteId>` added for an owned machine of another option,
+ * `ReuseFind.otherMteId`, so ids stay unique): hook the group's machines, each counted once (controller ruling 215), into
+ * the line's logistics; for machines several steps share (plan 12), which steps they serve, by what they make, in find
+ * order.
+ */
+function reuseSteps(finds: readonly ReuseFind[], pins: readonly Pin[]): Draft[] {
+  return reuseGroups(finds).map(({ finds: group, count }) => {
+    const first = group[0]!;
+    const pin = reusePin(pins, first);
+    const steps = groupSteps(group);
+    const products = steps.map((id) => group.find((f) => f.stepId === id)?.product ?? id);
+    const serves = steps.length > 1 ? `; it serves ${fmtInt(steps.length)} steps: ${products.join(', ')}` : '';
+    return draft(`layout:reuse:${first.stepId}${first.otherMteId === undefined ? '' : `:${first.otherMteId}`}`, 'logistics', pin,
+      `Hook your ${fmtInt(count)}× ${first.name}${atPin(pin)} into the line's logistics${serves}`);
+  });
 }
 
 /**
@@ -343,7 +384,7 @@ export function layoutSteps(input: StepsInput): BuildStep[] {
     steps.push(draft('layout:site', 'place', sitePin,
       `Clear a ${fmtInt(w)}×${fmtInt(l)} spot${atPin(sitePin)} (${fmtInt(h)} high) and keep a 1-block path around it${level}`));
     steps.push(draft('layout:roof', 'place', sitePin, roofText(input.units, h)));
-    steps.push(...placeSteps(input.units, sitePin, input.rotation, fluidsThroughOutputSide(input.blocks)));
+    steps.push(...placeSteps(input.units, sitePin, input.rotation, fluidsThroughOutputSide(input.blocks), input.stepName ?? ((id) => id)));
     steps.push(...powerSteps(input, sitePin, powerPin));
     for (const d of input.drafts) if (d.kind === 'logistics') steps.push(draft(d.id, d.kind, kindPin(d.pin), d.text));
     for (const f of input.fluids) {
@@ -360,10 +401,7 @@ export function layoutSteps(input: StepsInput): BuildStep[] {
     // settings on blocks the line does not place (e.g. the EnderIO extract face)
     for (const d of input.drafts) if (d.kind === 'configure') steps.push(draft(d.id, d.kind, kindPin(d.pin), d.text));
   }
-  for (const r of input.reuse) {
-    const pin = reusePin(pins, r);
-    steps.push(draft(`layout:reuse:${r.stepId}`, 'logistics', pin, `Hook your ${fmtInt(r.count)}× ${r.name}${atPin(pin)} into the line's logistics`));
-  }
+  steps.push(...reuseSteps(input.reuse, pins));
   if (placing) {
     steps.push(draft('layout:test', 'test', sitePin, 'Switch on and check: every machine has power, none is fed above its tier, items reach the output'));
   }
@@ -447,10 +485,11 @@ function conduitParts(b: LayoutBlock): Array<{ key: StuffKey; amount: number; wh
 }
 
 /**
- * Spec §3.10: every cable, transformer, hatch, pipe, interface, chip pipe and chest the layout places (machines and
- * casings are on Plan 2's build list; ghosts are there already) and one per cover of every non-ghost block, plus
- * `extra`, by key: amounts summed, the distinct whys sorted and joined with "; ", the first group set; sorted by key.
- * A non-ghost block with conduits lists its `conduitParts` (group `logistics`) instead of its item.
+ * Spec §3.10: every cable, transformer, hatch the line chose (`LayoutBlock.hatch`), pipe, interface, chip pipe and chest
+ * the layout places (machines, casings and the hatches an exported structure holds are on Plan 2's build list, which
+ * lists those at the lowest tier of their class, plan 12; ghosts are there already) and one per cover of every non-ghost
+ * block, plus `extra`, by key: amounts summed, the distinct whys sorted and joined with "; ", the first group set; sorted
+ * by key. A non-ghost block with conduits lists its `conduitParts` (group `logistics`) instead of its item.
  */
 export function bomFromBlocks(blocks: readonly LayoutBlock[], extra: readonly BomLine[]): BomLine[] {
   const lines = new Map<StuffKey, { amount: number; whys: Set<string>; group: Group | undefined }>();
@@ -469,7 +508,7 @@ export function bomFromBlocks(blocks: readonly LayoutBlock[], extra: readonly Bo
     // a conduit block's item is its first conduit's, which its conduit parts already count
     if (b.role !== 'ghost' && b.conduits !== undefined) {
       for (const l of conduitParts(b)) add(l.key, l.amount, l.why, 'logistics');
-    } else if (part !== undefined && b.item !== undefined) {
+    } else if (part !== undefined && b.item !== undefined && (b.role !== 'hatch' || b.hatch !== undefined)) {
       add(b.item, 1, b.hookup !== undefined ? part.hookupWhy ?? part.why : part.why, part.group);
     }
     if (b.role !== 'ghost') for (const c of b.covers ?? []) add(c.item, 1, 'covers', 'logistics');
