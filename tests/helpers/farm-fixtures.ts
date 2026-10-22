@@ -39,7 +39,9 @@ export const ORE_FERN: CropCard = {
  * Mini-GT plus the farm goods, maps, machines and recipes above. The Tree Growth Simulator (15541) is crafted from 20
  * titanium dust and 4 circuits: Mini-GT mines titanium dust on the Moon, which progression reaches at HV, so a TGS can be
  * built from HV on and not at MV (titanium plates would need Mini-GT's EBF, whose controller nothing makes). The Basic
- * Crop Manager (28001) is crafted as Mini-GT's LV machines are, and the Advanced one (28002) from two Basic ones.
+ * Crop Manager (28001) is crafted as Mini-GT's LV machines are, and the Advanced one (28002) from two Basic ones. So are
+ * Mini-GT's Basic Macerator (141) and Basic Centrifuge (161), which the rubber recipes run on (add-on 17 Task 4): without
+ * a recipe neither can be built, and with build cost counted (add-on 12) no line of the pack would plan.
  */
 export function farmSpec(): PackSpec {
   const spec = structuredClone(MINI_GT);
@@ -111,6 +113,8 @@ export function farmSpec(): PackSpec {
       { id: 'make-28001', map: 'crafting', in: [['t:hull_lv@0', 1], ['t:circuit@0', 2], ['t:iron_plate@0', 2]], out: [['machine:28001@0', 1]] },
       { id: 'make-28002', map: 'crafting', in: [['machine:28001@0', 2]], out: [['machine:28002@0', 1]] },
       { id: 'make-15541', map: 'crafting', in: [['t:titanium_dust@0', 20], ['t:circuit@0', 4]], out: [['machine:15541@0', 1]] },
+      { id: 'make-141', map: 'crafting', in: [['t:hull_lv@0', 1], ['t:circuit@0', 2], ['t:iron_plate@0', 2]], out: [['machine:141@0', 1]] },
+      { id: 'make-161', map: 'crafting', in: [['t:hull_lv@0', 1], ['t:circuit@0', 2], ['t:copper_wire@0', 4]], out: [['machine:161@0', 1]] },
       { id: 'sticks', map: 'crafting', in: [['minecraft:planks@0', 1]], out: [['cropsnh:cropSticks@0', 2]] },
     ],
   };

@@ -103,6 +103,13 @@ export interface BuildMipInput {
   // optional addition (plan 12, controller ruling 214)
   /** The weight of a crafting-table step no Auto Workbench runs (`LpRecipe.byHand`; `SolveOptions.byHandWeight`); absent: 1. */
   byHandWeight?: number;
+  // optional addition (add-on 17)
+  /**
+   * Per crop farm recipe column `j` (rate mode), `perRun`: the raw material to plant the crop sticks one run a second of
+   * it needs (`BuildModel.planting`: `cycleTicks / 20 × (Crop Sticks + its soil)`, the sticks a farm needs being runs a
+   * second × seconds a run), weighed as `perRun × D × x_j / σ`, a build cost of its runs. Make N passes none.
+   */
+  plantings?: ReadonlyArray<{ j: number; perRun: number }>;
 }
 
 function byString(a: string, b: string): number {
@@ -723,6 +730,8 @@ function layoutOf(input: BuildMipInput, withDerived: boolean): Layout {
   const colCost = input.s1 > TINY
     ? lp.rawCost.map((_, j) => k * (input.columnCost[j] ?? 0))
     : lp.rawCost.map((c) => (F * c) / sigma);
+  // Add-on 17: a crop farm's crop sticks and soil are built with its runs (rate mode), so they weigh on its column.
+  for (const { j, perRun } of input.plantings ?? []) colCost[j] = (colCost[j] ?? 0) + (perRun * D) / sigma;
   const colUpper = [...lp.upper];
   const integer = new Array<boolean>(width).fill(false);
   const column = (cost: number, upper: number, whole: boolean): number => {
@@ -1049,7 +1058,8 @@ function decodeMakeN(input: BuildMipInput, layout: Layout, x: readonly number[])
  * The build-cost MIP over the main LP (main columns first, as in `MainLp`; the plan's model, `BuildMipInput` and the
  * spec's Objective). With D the demand scale, F = D × horizon (rate) or D (Make N), σ = max(s1g × F, 1) and
  * k = s1 × F / σ, it minimizes `k × columnCost` on the main columns (with s1 ≤ 1e-9: F × rawCost / σ, the raw over the
- * horizon) plus each new machine's build and step charge (`blockCost`) / σ — so a new machine block costs
+ * horizon; in rate mode a crop farm's column also pays its planting, `perRun × D / σ`: `BuildMipInput.plantings`, add-on
+ * 17) plus each new machine's build and step charge (`blockCost`) / σ — so a new machine block costs
  * `stepCharge × σ` raw beside its build — per pool whole new machines over the steps' new loads, owned machines free
  * (whole per step without sharing; with it per pool, one sharing key per owned machine), one load row per step, one
  * option for a step's new machines, Make N's one machine per type, one binary per step where it runs (with the step

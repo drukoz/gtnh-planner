@@ -1081,14 +1081,24 @@ async function leastDug(graph: CandidateGraph, lp: MainLp, s1: LpResult): Promis
   return dug.status === 'optimal' ? Math.max(dug.objective, s1.objective) : s1.objective;
 }
 
-/** The build MIP's input for a line whose S1 is `s1` (`BuildMipInput`). */
+/**
+ * The build MIP's input for a line whose S1 is `s1` (`BuildMipInput`); in rate mode with each crop farm column's planting
+ * (`BuildModel.planting`, add-on 17).
+ */
 function buildInput(lp: MainLp, s1: LpResult, s1g: number, demandScale: number, model: BuildModel, opts: SolveOptions): BuildMipInput {
   const charge = opts.stepCharge ?? 0;
-  return {
+  const input: BuildMipInput = {
     lp, x1: s1.x, s1: s1.objective, s1g, columnCost: s1.objective > TINY ? relativeCosts(lp, s1) : [], derived: pricedDerived(lp),
     demandScale, model, stepCharge: Number.isFinite(charge) && charge > 0 ? charge : 0, handWeight: opts.handWeight ?? 1,
     byHandWeight: opts.byHandWeight ?? 1,
   };
+  const planting = model.mode === 'rate' ? model.planting : undefined;
+  const plantings = planting === undefined ? [] : lp.recipes.flatMap((r, j) => {
+    const perRun = r.kind === 'recipe' ? planting(r.id) : undefined;
+    return perRun !== undefined && perRun > 0 ? [{ j, perRun }] : [];
+  });
+  if (plantings.length > 0) input.plantings = plantings;
+  return input;
 }
 
 /** The `build-cost-approx` warning, a fresh object per plan. */

@@ -1,11 +1,11 @@
 // The planner's basis: the one place that turns a project's settings and the world context into the tier, the
 // reachable dimensions, the environment the candidate recipes are judged in, material availability, prices, the free
 // inputs the line makes itself and the leaf oracle, so `planLine` and `expandBomLines` always derive them the same way.
-// Also the settings hash, and the part of the world context the basis reads (`basisContextKey`), which together key
-// what is derived from them (pricing.ts); the goods an avoid list covers (`resolveAvoid`), which only `planLine`'s own
-// graphs honor (plan.ts); and whether the settings count the build cost of new machines and let the line make gathered
-// world blocks (`buildCostCounts`, `gatheredRecipesOn`: plan 12, here because pricing.ts reads them and importing
-// machine-options.ts there would close a cycle through bom.ts).
+// Also the settings hash (and the part of it a line's pricing reads, `pricingHash`), and the part of the world context
+// the basis reads (`basisContextKey`), which together key what is derived from them (pricing.ts); the goods an avoid list
+// covers (`resolveAvoid`), which only `planLine`'s own graphs honor (plan.ts); and whether the settings count the build
+// cost of new machines and let the line make gathered world blocks (`buildCostCounts`, `gatheredRecipesOn`: plan 12,
+// here because pricing.ts reads them and importing machine-options.ts there would close a cycle through bom.ts).
 
 import { createHash } from 'node:crypto';
 import { defaultCoilHeat } from '../../shared/gt/overclock.ts';
@@ -127,6 +127,18 @@ export function effectiveTier(s: PlanSettings, ctx: PlanContext): number {
  */
 export function buildCostCounts(settings: PlanSettings): boolean {
   return settings.mode === 'makeN' || settings.buildHorizonHours !== null;
+}
+
+/**
+ * The settings part of a line pricing's memo key (pricing.ts `linePricing`, add-on 17): the settings hash without the
+ * planning mode (`objective`), the build horizon and "Use other projects' surplus", which pricing never reads, then
+ * whether build cost counts (`buildCostCounts`), the one thing it reads of them (the gathered blocks of
+ * `gatheredRecipesOn`; farms are walked in every mode). So a project's cheapest and multi-output plans, and its horizons,
+ * share one pricing.
+ */
+export function pricingHash(s: PlanSettings): string {
+  const { objective: _objective, useSurplus: _surplus, buildHorizonHours: _horizon, ...read } = s;
+  return `${settingsHash(read)}|${buildCostCounts(s) ? 'build-cost' : 'no-build-cost'}`;
 }
 
 /**

@@ -11,6 +11,8 @@ import { FREE_KEYS, type BomLine, type PlanContext, type PlanSettings, type Plan
 import { structureParts } from './build-cost.ts';
 import { buildCandidates, heldOption, type HeldAvoid, type LeafOracle, type LpRecipe, type PlanEnv } from './candidates.ts';
 import { analyzeCosts, makePrices, type CostAnalysis } from './costs.ts';
+import { exportPack } from './farms/pack.ts';
+import { CROP_STICKS } from './farms/recipes.ts';
 import { yieldToEventLoop } from './lp.ts';
 import { ownedPools } from './owned.ts';
 import { lineLeaf } from './pricing.ts';
@@ -93,11 +95,17 @@ export function stepProductName(pack: Pack, step: PlanStep): string {
  * merged, sorted by group then key, and broken down to base materials. The warnings are `no-cleanroom` and the
  * breakdown's own `graph-too-big`. With `avoid` (what the line avoids) each not-consumed slot holds an option the line
  * may use (`heldOption`); the breakdown itself avoids nothing (ruling R6).
+ *
+ * Add-on 17: `pack` may be the line's farm pack (farms/pack.ts), whose farm recipes say what each farm step plants: a crop
+ * farm its Crop Sticks, soil and seeds, one each per crop stick it tends (`FarmStep.sticks`; the seeds come from the
+ * group's own seed bank, so the build cost leaves them out), a new Tree Growth Simulator its sapling, one per new machine;
+ * each a one-off line `<crop or sapling name> farm`. The breakdown reads the export pack (`exportPack`, ruling S5).
  */
 export async function buildBom(
   pack: Pack, steps: PlanStep[],
   opts: { settings: PlanSettings; env: PlanEnv; leaf: LeafOracle; ctx: PlanContext; avoid?: HeldAvoid },
 ): Promise<Bom> {
+  const base = exportPack(pack);
   const drafts = new Map<string, { key: StuffKey; amount: number; whys: string[]; group: Group }>();
   const add = (key: StuffKey, amount: number, why: string, group: Group): void => {
     const id = `${group}\u0000${key}`;
@@ -122,7 +130,7 @@ export async function buildBom(
       const n = step.count - step.owned;
       if (n > 0) {
         add(machine.itemKey, n, `${n}× ${step.machine.name}`, 'machines');
-        for (const [key, cells] of structureParts(pack, machine)) add(key, cells * n, `structure of ${n}× ${step.machine.name}`, 'machines');
+        for (const [key, cells] of structureParts(base, machine)) add(key, cells * n, `structure of ${n}× ${step.machine.name}`, 'machines');
       }
     }
     for (const { key, amount } of stepOneOffs(pack, step, opts.avoid)) {
@@ -141,12 +149,24 @@ export async function buildBom(
   for (const [key, products] of toolUses) {
     add(key, 1, `1× ${pack.nameOf(key)} (tool for hand-crafting ${[...products].join(', ')})`, 'one-off');
   }
+  // What the line's farms plant (add-on 17).
+  for (const step of steps) {
+    const farm = step.farm === undefined ? undefined : pack.recipeById.get(step.recipeId)?.meta.farm;
+    if (farm?.kind === 'crop' && farm.crop !== undefined) {
+      const sticks = step.farm?.sticks ?? 0;
+      const why = `${farm.crop.name} farm`;
+      if (sticks > 0) for (const key of [CROP_STICKS, farm.crop.soil, farm.crop.seed]) if (key !== null) add(key, sticks, why, 'one-off');
+    } else if (farm?.kind === 'tgs' && farm.sapling !== undefined) {
+      const n = step.count - step.owned;
+      if (n > 0) add(farm.sapling, n, `${pack.nameOf(farm.sapling)} farm`, 'one-off');
+    }
+  }
 
   const warnings: PlanWarning[] = [];
   const clean = steps.filter((s) => s.needsCleanroom === true);
   if (clean.length > 0) {
     const products = [...new Set(clean.map((s) => stepProductName(pack, s)))].join(', ');
-    const room = cleanroomMachine(pack);
+    const room = cleanroomMachine(base);
     // the group's own cleanroom needs no building (plan 12 Task 6)
     const owned = room !== undefined && (ownedPools(opts.ctx, opts.settings).get(room.mteId)?.length ?? 0) > 0;
     if (room === undefined) warnings.push({ code: 'no-cleanroom', text: `Making ${products} needs a cleanroom, but this pack has no cleanroom machine` });
@@ -156,7 +176,7 @@ export async function buildBom(
   const lines: BomLine[] = [...drafts.values()]
     .map((d) => ({ key: d.key, amount: round9(d.amount), why: d.whys.join('; '), group: d.group }))
     .sort((a, b) => GROUP_ORDER.indexOf(a.group) - GROUP_ORDER.indexOf(b.group) || byString(a.key, b.key));
-  const expanded = await expandWith(pack, lines, opts);
+  const expanded = await expandWith(base, lines, opts);
   return { lines: expanded.lines, totals: expanded.totals, warnings: [...warnings, ...expanded.warnings] };
 }
 
@@ -165,13 +185,14 @@ export async function buildBom(
  * does for the line's plan: in its environment and at its prices (`lineLeaf`: stop items at their cost-model price,
  * derived leaves at their own chain's cost; the plain prices of `planBasis` when the settings name no target the export
  * knows), so the same lines break down the same way in both. One output line per input line, in input order. The return
- * shape is architecture §11.15's, so the breakdown's warnings are not passed on here.
+ * shape is architecture §11.15's, so the breakdown's warnings are not passed on here. On the export pack, also when given
+ * a line's farm pack (`exportPack`, add-on 17).
  */
 export async function expandBomLines(
   pack: Pack, lines: BomLine[], settings: PlanSettings, ctx: PlanContext,
 ): Promise<{ lines: BomLine[]; totals: BomLine[] }> {
   const { env, leaf } = await lineLeaf(pack, settings, ctx);
-  const expanded = await expandWith(pack, lines, { settings, env, leaf, ctx });
+  const expanded = await expandWith(exportPack(pack), lines, { settings, env, leaf, ctx });
   return { lines: expanded.lines, totals: expanded.totals };
 }
 
@@ -298,15 +319,16 @@ async function recipeBook(pack: Pack, x: Expansion, targets: StuffKey[]): Promis
  * R2): a running line makes its own with a generator (`PlanBasis.supplied`), but the one-off materials of its machines
  * get none. And a leaf the line may also make (`LeafDecision.alsoMade`, plan 12: a gathered world block) is a plain one
  * here: one-off build materials are dug, so the breakdown never walks a gathered block's producers, nor prices it at
- * what free cobblestone and hammers would make it for.
+ * what free cobblestone and hammers would make it for. So is a leaf a farm of the line makes (`farmMade`, add-on 17): the
+ * breakdown buys it, as the farm-free cost model prices it.
  */
 function freeLeaves(pack: Pack, x: Expansion): LeafOracle {
   const prices = makePrices(pack, x.settings.costOverrides);
   return (key) => {
     const d = x.leaf(key);
     if (d.buyable) {
-      if (d.alsoMade !== true) return d;
-      const { alsoMade: _made, ...dug } = d;
+      if (d.alsoMade !== true && d.farmMade !== true) return d;
+      const { alsoMade: _made, farmMade: _farmed, ...dug } = d;
       return dug;
     }
     return FREE.has(key) ? { buyable: true, cost: prices.price(key), leafClass: 'free' } : d;

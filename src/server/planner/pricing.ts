@@ -2,15 +2,20 @@
 // stop-item prices and swap lists, and the leaf oracle whose derived leaves cost what making them on their own costs.
 // `planLine` plans with it and `expandBomLines` breaks Plan 5's layout parts down with it, so a line's machines and its
 // layout parts break down at the same prices (architecture §11.15). Derived once per pack, settings and world context.
+// Add-on 17: the line's graph also holds the farms it may use (farms/), walked on a pack of their own; the cost model
+// stays farm-free.
 
 import type { StuffKey } from '../../shared/keys.ts';
 import type { Pack } from '../../shared/types/pack.ts';
 import type { PlanContext, PlanSettings } from '../../shared/types/plan.ts';
 import { isBaseItem } from './availability.ts';
-import { basisContextKey, gatheredRecipesOn, planBasis, resolveAvoid, settingsHash, type PlanBasis } from './basis.ts';
+import { basisContextKey, gatheredRecipesOn, planBasis, pricingHash, resolveAvoid, type PlanBasis } from './basis.ts';
 import { benchLine } from './benches.ts';
 import { buildCandidates, type CandidateGraph, type CandidateOptions, type LeafOracle } from './candidates.ts';
 import { analyzeCosts, makeLeafOracle, type CostAnalysis } from './costs.ts';
+import { exportPack, withFarms } from './farms/pack.ts';
+import { farmRecipes, wantedGoods } from './farms/recipes.ts';
+import { farmSetup, ownedFarmMachines, type FarmSetup } from './farms/setup.ts';
 import { yieldToEventLoop } from './lp.ts';
 import { standaloneCosts, type Standalone } from './solve.ts';
 
@@ -28,11 +33,18 @@ export interface CostModel { graph: CandidateGraph; costs: CostAnalysis; stopIte
  * `chains` holds what making each priced derived material and each stop item of that graph on its own runs
  * (`Standalone`, fix spec R7): the chain a bought one stands for (`RawInput.pricedVia`). `unbuildable` (plan 12) holds
  * the step recipes the graph was walked without (`linePricing`'s `opts`), which every other walk of the line leaves out
- * too.
+ * too. With farms (add-on 17), `graph` was walked on `pack`, the export pack with the line's farm recipes
+ * (farms/pack.ts), by `leaf` with what they make `farmMade` and the tools they wear `fixed`, and `farm` holds the farms
+ * the line may use and those tools' prices; `planLine` plans on `pack` from then on.
  */
 export interface LinePricing {
   target: StuffKey; basis: PlanBasis; model: CostModel; leaf: LeafOracle; graph: CandidateGraph; chains: ReadonlyMap<StuffKey, Standalone>;
   unbuildable?: ReadonlyMap<string, string>;
+  // optional additions (add-on 17), set when the line has farm recipes
+  /** The pack the line's graph was walked on: the export pack and its farm recipes (`withFarms`). */
+  pack?: Pack;
+  /** The farms the line may use (`farmSetup`) and the price of each tool its tree farms wear, by item: upkeep. */
+  farm?: { setup: FarmSetup; tools: ReadonlyMap<StuffKey, number> };
 }
 
 /**
@@ -174,8 +186,8 @@ async function computeCore(pack: Pack, settings: PlanSettings, ctx: PlanContext,
 }
 
 async function computePricing(
-  pack: Pack, settings: PlanSettings, target: StuffKey, pinAvoid: ReadonlySet<StuffKey>, unbuildable: ReadonlyMap<string, string> | undefined,
-  core: Promise<PricingCore>,
+  pack: Pack, settings: PlanSettings, ctx: PlanContext, target: StuffKey, pinAvoid: ReadonlySet<StuffKey>,
+  unbuildable: ReadonlyMap<string, string> | undefined, core: Promise<PricingCore>,
 ): Promise<LinePricing> {
   await yieldToEventLoop();
   const shared = await core;
@@ -197,30 +209,54 @@ async function computePricing(
   // uses (sand from rock-breaker cobblestone), beside digging them; the cost model, machine prices and build-material
   // breakdowns keep them plain leaves.
   const gatheredRecipes = gatheredRecipesOn(settings);
-  const leafWith = (): LeafOracle =>
-    makeLeafOracle(pack, settings, basis.avail, basis.prices, stopCost, (key) => priced.get(key), { supplied: basis.supplied, gatheredRecipes });
+  /** Add-on 17: what the line's farm recipes make (walked beside buying it) and the tools they wear, at their price. */
+  let farmed: { farmMade: ReadonlySet<StuffKey>; fixed: ReadonlyMap<StuffKey, number> } | undefined;
+  const leafWith = (): LeafOracle => makeLeafOracle(
+    pack, settings, basis.avail, basis.prices, stopCost, (key) => priced.get(key), { supplied: basis.supplied, gatheredRecipes, ...farmed },
+  );
   // Plan 12 (controller ruling OQ5 a): the step recipes no machine can run here are left out of every walk of the line;
   // and with crafting automated (controller ruling 214) its walks offer the Auto Workbench's single-use tool variants and
   // mark the crafting recipes no bench runs as crafted by hand (`lineWalk`).
-  const walk = lineWalk(pack, settings, basis, { pinAvoid, ...(unbuildable === undefined ? {} : { unbuildable }) });
-  let leaf = leafWith();
-  await yieldToEventLoop();
-  let graph = buildCandidates(pack, settings, basis.env, leaf, [target], walk);
-  for (let round = 0; round < MAX_PRICING_ROUNDS; round++) {
-    const unpriced = [...graph.goods.values()].filter((g) => g.leafClass === 'derived' && g.buyable && !tried.has(g.key)).map((g) => g.key);
-    if (unpriced.length === 0) break;
-    for (const key of unpriced) tried.add(key);
-    for (const [key, cost] of await derivedCosts(pack, settings, shared, target, unpriced)) priced.set(key, cost);
-    leaf = leafWith();
+  const options: CandidateOptions = { pinAvoid, ...(unbuildable === undefined ? {} : { unbuildable }) };
+  /** The line walked on `on` at the leaf prices so far, then again while it buys a derived leaf not yet priced. */
+  const settle = async (on: Pack): Promise<{ leaf: LeafOracle; graph: CandidateGraph }> => {
+    const walk = lineWalk(on, settings, basis, options);
+    let leaf = leafWith();
     await yieldToEventLoop();
-    graph = buildCandidates(pack, settings, basis.env, leaf, [target], walk);
+    let graph = buildCandidates(on, settings, basis.env, leaf, [target], walk);
+    for (let round = 0; round < MAX_PRICING_ROUNDS; round++) {
+      const unpriced = [...graph.goods.values()].filter((g) => g.leafClass === 'derived' && g.buyable && !tried.has(g.key)).map((g) => g.key);
+      if (unpriced.length === 0) break;
+      for (const key of unpriced) tried.add(key);
+      for (const [key, cost] of await derivedCosts(pack, settings, shared, target, unpriced)) priced.set(key, cost);
+      leaf = leafWith();
+      await yieldToEventLoop();
+      graph = buildCandidates(on, settings, basis.env, leaf, [target], walk);
+    }
+    return { leaf, graph };
+  };
+  let { leaf, graph } = await settle(pack);
+  // Add-on 17: the farms the line may use (`farmSetup`) make the goods its farm-free graph wants (`wantedGoods`) as
+  // synthetic recipes (`farmRecipes`); when there are any, the line is walked once more on the pack that holds them
+  // (`withFarms`), what they make walked beside buying it (`farmMade`) and the tools they wear bought at their price
+  // (`fixed`). That graph, its pack and the farms are the line's; the cost model stays farm-free.
+  const setup = farmSetup(pack, settings, ctx, basis);
+  let farms: Pick<LinePricing, 'pack' | 'farm'> = {};
+  if (setup.tgs !== null || setup.crops !== null) {
+    const made = farmRecipes(pack, setup, wantedGoods(graph), basis.prices);
+    if (made.recipes.length > 0) {
+      const farmPack = withFarms(pack, made.recipes);
+      farmed = { farmMade: new Set(made.recipes.flatMap((r) => r.outputs.map((p) => p.key))), fixed: made.tools };
+      ({ leaf, graph } = await settle(farmPack));
+      farms = { pack: farmPack, farm: { setup, tools: made.tools } };
+    }
   }
   // The chains behind the stop items the line may buy, as the derived leaves' (`priced`): only what they stand for
   // (`RawInput.pricedVia`) is read; a stop item keeps its own price.
   const stops = [...graph.goods.values()].filter((g) => g.leafClass === 'stop' && g.buyable).map((g) => g.key);
   const chains = new Map(priced);
   for (const [key, made] of await derivedCosts(pack, settings, shared, target, stops)) chains.set(key, made);
-  const pricing: LinePricing = { target, basis, model, leaf, graph, chains };
+  const pricing: LinePricing = { target, basis, model, leaf, graph, chains, ...farms };
   if (unbuildable !== undefined) pricing.unbuildable = unbuildable;
   return pricing;
 }
@@ -260,32 +296,38 @@ function memoOf<T>(map: WeakMap<Pack, Map<string, T>>, pack: Pack): Map<string, 
 
 /**
  * The line's prices for `settings` in `ctx` (null when it has no target the export knows), computed once per pack,
- * settings hash, the context fields its basis reads (`basisContextKey`) and the sorted ids of `opts.unbuildable`, for at
- * most MEMO_SIZE such keys per pack: the plan and every later `expandBomLines` of the same project share one pricing,
- * and the pricings of one line walked without different `unbuildable` sets share its basis, cost model and derived costs
- * (`PricingCore`, memoized the same way without `unbuildable`), so only the line's own walks run again.
+ * the settings as pricing reads them (`pricingHash`: without the planning mode, the build horizon and the cross-project
+ * switch, with whether build cost counts), the context fields its basis reads (`basisContextKey`), the farm machines the
+ * context owns (`ownedFarmMachines`, which `farmSetup` reads: add-on 17) and the sorted ids of `opts.unbuildable`, for
+ * at most MEMO_SIZE such keys per pack: the plan and every later `expandBomLines` of the same project share one pricing,
+ * as do its planning modes, and the pricings of one line walked without different `unbuildable` sets share its basis,
+ * cost model and derived costs (`PricingCore`, memoized the same way without `unbuildable` and the owned farms), so only
+ * the line's own walks run again.
  * Callers asking while it is computed share that computation; one that fails is not kept. The avoid list plays no part
  * (ruling R6: only `planLine`'s own graphs honor it) beyond the option pins it overrides (`avoidedPins`, ruling P28: the
  * line's graph ignores them, with a `stale-option` each), so projects that differ only in it share one pricing, priced
  * and walked without it, unless it covers an option they pin. `opts.unbuildable` (plan 12, controller ruling OQ5 a):
  * step recipes no machine can run here, with why (`BuildModel.blocked`), which the line's graph is walked without
- * (`CandidateOptions.unbuildable`), so producers that can run take their place.
+ * (`CandidateOptions.unbuildable`), so producers that can run take their place. A line's farm pack prices as the export
+ * pack it was made from (`exportPack`).
  */
 export function linePricing(
   pack: Pack, settings: PlanSettings, ctx: PlanContext, opts?: { unbuildable?: ReadonlyMap<string, string> },
 ): Promise<LinePricing> | null {
-  const target = plannableTarget(pack, settings);
+  const base = exportPack(pack);
+  const target = plannableTarget(base, settings);
   if (target === null) return null;
   const open: PlanSettings = { ...settings, avoid: [] };
-  const pinAvoid = avoidedPins(pack, settings, target);
+  const pinAvoid = avoidedPins(base, settings, target);
   const unbuildable = opts?.unbuildable !== undefined && opts.unbuildable.size > 0 ? opts.unbuildable : undefined;
   const blockedIds = unbuildable === undefined ? '' : `|unbuildable:${JSON.stringify([...unbuildable.keys()].sort())}`;
-  const line = `${settingsHash(open)}|${basisContextKey(ctx)}${pinAvoid.length === 0 ? '' : `|${JSON.stringify(pinAvoid)}`}`;
+  const line = `${pricingHash(open)}|${basisContextKey(ctx)}${pinAvoid.length === 0 ? '' : `|${JSON.stringify(pinAvoid)}`}`;
+  const farms = `|farms:${JSON.stringify(ownedFarmMachines(base, ctx))}`;
   const blocked = unbuildable === undefined ? undefined : new Map(unbuildable);
-  return remembered(memoOf(MEMOS, pack), `${line}${blockedIds}`, () => {
+  return remembered(memoOf(MEMOS, base), `${line}${farms}${blockedIds}`, () => {
     // Every pricing of the line, whatever it walks without, shares its basis, cost model and derived costs (`PricingCore`).
-    const core = remembered(memoOf(CORES, pack), line, () => computeCore(pack, open, ctx, target));
-    return computePricing(pack, open, target, new Set(pinAvoid), blocked, core);
+    const core = remembered(memoOf(CORES, base), line, () => computeCore(base, open, ctx, target));
+    return computePricing(base, open, ctx, target, new Set(pinAvoid), blocked, core);
   });
 }
 
@@ -295,7 +337,7 @@ export function linePricing(
  */
 export async function lineLeaf(pack: Pack, settings: PlanSettings, ctx: PlanContext): Promise<Pick<PlanBasis, 'env' | 'leaf'>> {
   const pricing = linePricing(pack, settings, ctx);
-  if (pricing === null) return planBasis(pack, settings, ctx);
+  if (pricing === null) return planBasis(exportPack(pack), settings, ctx);
   const { basis, leaf } = await pricing;
   return { env: basis.env, leaf };
 }
