@@ -19,7 +19,7 @@ import { OPPOSITE } from '../../../../shared/layout/geometry.ts';
 import { BENCH, benchEnergyCap } from '../facts.ts';
 import type { BenchNode } from '../model.ts';
 import {
-  blockingIgnoredKey, gtTransfer, isTarget, NEVER, nodeOrder, PHASE, type Preloadable, type PushTarget, type SimEntity, type SimInv, type Stack,
+  gtTransfer, isTarget, NEVER, nodeOrder, PHASE, type Preloadable, type PushTarget, type SimEntity, type SimInv, type Stack,
 } from './core.ts';
 import { coverGates, coverTicks, deliverInto, type CoverTicks } from './covers.ts';
 import type { BenchMove } from './detect.ts';
@@ -198,7 +198,7 @@ class AutoWorkbench implements SimInv, SimEntity, Preloadable {
   /** Never while its grid holds an item (every one of its 30 slots counts); else when it holds nothing AE2's blocking mode does not ignore. */
   countsAsEmpty(): boolean {
     if (this.needs.length > 0) return false;
-    for (const s of this.slots) if (s !== null && !blockingIgnoredKey(this.env.keys.key(s.key))) return false;
+    for (const s of this.slots) if (s !== null && !this.env.model.ignoredByBlocking(this.env.keys.key(s.key))) return false;
     return true;
   }
 

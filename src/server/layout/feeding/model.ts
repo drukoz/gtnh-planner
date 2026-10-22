@@ -85,4 +85,9 @@ export interface FeedModel {
   mapTakes(map: string, key: StuffKey): boolean;              // some recipe of the map takes the item (GT's containsInput)
   mapPair(map: string, a: StuffKey, b: StuffKey): boolean;    // some recipe of the map takes both
   circuitOre(key: StuffKey): boolean;                         // the item has an ore name starting `circuit`
+  /**
+   * Whether AE2's blocking mode leaves the item out of its "is the machine empty" test: facts.ts `ignoredByBlocking` over
+   * the line's pack (E12), so GT's lenses, which only the pack tells by their prefix, are among them.
+   */
+  ignoredByBlocking(key: StuffKey): boolean;
 }

@@ -13,7 +13,7 @@ import type { ConduitMode, Layout, LayoutBlock } from '../../src/shared/types/la
 import type { Ingredient, Item, Machine, MachineKind, Pack, Product, Recipe, StructureInfo } from '../../src/shared/types/pack.ts';
 import type { LogisticsMode, Plan, PlanFlow } from '../../src/shared/types/plan.ts';
 import type { InterfaceSpec, RoutedChipSpec } from '../../src/server/layout/feeding/contract.ts';
-import { PART_KEYS } from '../../src/server/layout/feeding/facts.ts';
+import { ignoredByBlocking, PART_KEYS } from '../../src/server/layout/feeding/facts.ts';
 import { compareLocal } from '../../src/server/layout/feeding/frame.ts';
 import type {
   Ae2ExportBus, Ae2Iface, BasicNode, BenchNode, BusNode, ChestNode, EioFace, FeedModel, FeedNode, GtCover, InvRef, MachineSettings, MultiNode, NodeId,
@@ -340,12 +340,17 @@ function distinctKeys(keys: Iterable<StuffKey>): StuffKey[] {
   return [...new Set(keys)].sort(compareText);
 }
 
-let names: Pack | null = null;
+let fixture: Pack | null = null;
+
+/** The fixture pack (`feedPack`), built once: a hand-built model's names and its blocking-ignore test read it. */
+function fixturePack(): Pack {
+  fixture ??= feedPack();
+  return fixture;
+}
 
 /** An item's or a fluid's name in the fixture pack (`feedPack`), else the key itself. */
 function fixtureName(key: StuffKey): string {
-  names ??= feedPack();
-  return names.nameOf(key);
+  return fixturePack().nameOf(key);
 }
 
 /**
@@ -510,7 +515,8 @@ function itemKeys(r: SimRecipe): StuffKey[] {
  * A model of `nodes` without networks (mode `direct`), as `readLine` would give it for a line of only these blocks:
  * nodes in local order, the input chests' keys in `supply`, no sinks, plan rates or makers unless `more` gives them.
  * Names are the fixture pack's; a step's name is its first item output's (else its first fluid output's, else its id);
- * a recipe map takes what the recipes of the nodes on it take (a basic machine's maps, a multiblock's input buses' maps).
+ * a recipe map takes what the recipes of the nodes on it take (a basic machine's maps, a multiblock's input buses' maps);
+ * AE2's blocking mode ignores what `ignoredByBlocking` says over the fixture pack (its GT lens `t:lens@0` among them).
  */
 export function handModel(nodes: FeedNode[], more: Partial<FeedModel> = {}): FeedModel {
   const sorted = [...nodes].sort((a, b) => compareLocal(a.local, b.local));
@@ -538,6 +544,7 @@ export function handModel(nodes: FeedNode[], more: Partial<FeedModel> = {}): Fee
     mapTakes: (map, key) => (onMap.get(map) ?? []).some((r) => itemKeys(r).includes(key)),
     mapPair: (map, a, b) => (onMap.get(map) ?? []).some((r) => itemKeys(r).includes(a) && itemKeys(r).includes(b)),
     circuitOre: () => false,
+    ignoredByBlocking: (key) => ignoredByBlocking(fixturePack(), key),
     ...more,
     supply: distinctKeys([...chestKeys, ...(more.supply ?? [])]),
   };

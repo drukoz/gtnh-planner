@@ -294,6 +294,13 @@ describe('multiblocks', () => {
     const held = both(handModel([ebfNode({ recipes: [simRecipe('e', 100, [['t:a@0', 1]], [['t:x@0', 1]], { held: [mold] })] })]),
       { ticks: 250, restartAt: 250, extra: (env) => [feeder(env, '0,0,0', 3, ['t:a@0'], 5, NEVER_AGAIN, 0)] });
     expect([held.runs, held.stats.final('0,0,0')]).toEqual([{ e: 3 }, [[mold, 1], ['t:a@0', 2], null, null]]);
+    // AE2's blocking mode counts every slot of an input bus but what it ignores: a GT lens, which the pack tells by its prefix, is not counted
+    const engraver = ebfNode({ recipes: [simRecipe('e', 100, [['t:a@0', 1]], [['t:x@0', 1]], { held: ['t:lens@0'] })] });
+    const env = envOf(handModel([engraver]));
+    const bus = multiblock(engraver, env).buses[0]!;
+    expect([bus.stack(0), bus.countsAsEmpty()]).toEqual([{ key: env.keys.id('t:lens@0'), count: 1 }, true]);
+    bus.insert(1, env.keys.id('t:a@0'), 1, null);
+    expect(bus.countsAsEmpty()).toBe(false);
     // a fluid a slower machine makes: each of the maker's runs (300 ticks) lets one run of the EBF start, the tick after
     const maker = oneSlotNode('3,0,0', { recipes: [simRecipe('m', 300, [['t:a@0', 1]], [['fluid:molten.iron', 144]])] });
     const user = ebfNode({ recipes: [simRecipe('e', 100, [['t:b@0', 1], ['fluid:molten.iron', 144]], [['t:x@0', 1]])] });

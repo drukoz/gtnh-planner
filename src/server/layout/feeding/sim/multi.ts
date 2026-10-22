@@ -24,7 +24,7 @@ import { FAST_FACTOR } from '../contract.ts';
 import { compareLocal } from '../frame.ts';
 import type { BusNode, MultiNode, OutBusNode } from '../model.ts';
 import {
-  blockingIgnoredKey, gtTransfer, isTarget, NEVER, nodeOrder, PHASE, type FluidWaiter, type Preloadable, type PushTarget, type SimEntity, type SimInv,
+  gtTransfer, isTarget, NEVER, nodeOrder, PHASE, type FluidWaiter, type Preloadable, type PushTarget, type SimEntity, type SimInv,
   type Stack,
 } from './core.ts';
 import { coverGates, coverTicks, deliverInto, type CoverTicks } from './covers.ts';
@@ -116,9 +116,9 @@ abstract class Bus implements SimInv, SimEntity, Preloadable {
     return n;
   }
 
-  /** Every slot counts, but an item AE2's blocking mode ignores. */
+  /** Every slot counts, but not an item AE2's blocking mode ignores (`model.ignoredByBlocking`: the pack's list, GT's lenses among them). */
   countsAsEmpty(): boolean {
-    for (const s of this.slots) if (s !== null && !blockingIgnoredKey(this.env.keys.key(s.key))) return false;
+    for (const s of this.slots) if (s !== null && !this.env.model.ignoredByBlocking(this.env.keys.key(s.key))) return false;
     return true;
   }
 

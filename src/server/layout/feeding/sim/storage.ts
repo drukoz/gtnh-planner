@@ -11,7 +11,7 @@
 
 import { CHEST_SLOTS } from '../facts.ts';
 import type { ChestNode } from '../model.ts';
-import { blockingIgnoredKey, NEVER, nodeOrder, PHASE, type Preloadable, type SimEntity, type SimInv, type Stack } from './core.ts';
+import { NEVER, nodeOrder, PHASE, type Preloadable, type SimEntity, type SimInv, type Stack } from './core.ts';
 import type { SimEnv } from './machine.ts';
 
 const ALL_SLOTS: readonly number[] = Array.from({ length: CHEST_SLOTS }, (_, i) => i);
@@ -92,7 +92,7 @@ abstract class Chest implements SimInv, SimEntity, Preloadable {
   countsAsEmpty(): boolean {
     for (let i = 0; i < CHEST_SLOTS; i++) {
       const s = this.stack(i);
-      if (s !== null && !blockingIgnoredKey(this.env.keys.key(s.key))) return false;
+      if (s !== null && !this.env.model.ignoredByBlocking(this.env.keys.key(s.key))) return false;
     }
     return true;
   }

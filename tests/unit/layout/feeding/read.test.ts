@@ -292,6 +292,15 @@ describe('readLine', () => {
     expect(m.unknowns.map((u) => u.code)).toEqual(expect.arrayContaining(['recipe_missing', 'amount_fraction']));
   });
 
+  it('tells what AE2 blocking mode ignores from the pack', async () => {
+    // a step holding the fixture pack's GT lens keeps it as a held item; the model's blocking-ignore test reads the pack, which tells
+    // the lens by its prefix (a mold by its key alike), and Gamma is on no list
+    const { pack, plan } = feedPlan([{ id: 'l', mteId: FEED_IDS.SMELTER, count: 1, inputs: [['t:a@0', 1]], held: ['t:lens@0'], outputs: [['t:x@0', 1]] }]);
+    const m = readLine({ pack, plan, layout: await layFeed(pack, plan, 'ae2') });
+    expect(m.nodes.find((n): n is BasicNode => n.kind === 'basic')!.recipes[0]!.held).toEqual(['t:lens@0']);
+    expect(['t:lens@0', 'gregtech:gt.metaitem.01@32301', 't:c@0'].map((k) => m.ignoredByBlocking(k))).toEqual([true, true, false]);
+  });
+
   it('reads a multiblock and its buses', async () => {
     const { pack, plan } = ebfLine();
     const layout = await layFeed(pack, plan, 'routed');

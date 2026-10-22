@@ -20,7 +20,7 @@ import { OPPOSITE } from '../../../../shared/layout/geometry.ts';
 import { FAST_FACTOR, type ScenarioName } from '../contract.ts';
 import type { BasicNode, FeedModel, NodeId, SimRecipe } from '../model.ts';
 import {
-  blockingIgnoredKey, gtTransfer, nodeOrder, PHASE, type FluidPools, type FluidWaiter, type KeyTable, type Preloadable, type PushTarget, type Sim,
+  gtTransfer, nodeOrder, PHASE, type FluidPools, type FluidWaiter, type KeyTable, type Preloadable, type PushTarget, type Sim,
   type SimEntity, type SimInv, type Stack,
 } from './core.ts';
 import { coverGates, coverTicks, pushTargetOf, type CoverTicks } from './covers.ts';
@@ -248,11 +248,14 @@ export class BasicMachine implements SimInv, SimEntity, Preloadable, FluidWaiter
     return n;
   }
 
-  /** Only the input slots count (`MTEBasicMachine.isIOSlot`, ruling R-16), and an item AE2's blocking mode ignores does not. */
+  /**
+   * Only the input slots count (`MTEBasicMachine.isIOSlot`, ruling R-16), and an item AE2's blocking mode ignores does not
+   * (`model.ignoredByBlocking`: the pack's list, GT's lenses among them).
+   */
   countsAsEmpty(): boolean {
     for (let i = 0; i < this.inSlots; i++) {
       const s = this.slots[i];
-      if (s !== null && s !== undefined && !blockingIgnoredKey(this.env.keys.key(s.key))) return false;
+      if (s !== null && s !== undefined && !this.env.model.ignoredByBlocking(this.env.keys.key(s.key))) return false;
     }
     return true;
   }

@@ -36,7 +36,7 @@ import { AE2, PART_KEYS } from '../facts.ts';
 import { compareLocal, localOf } from '../frame.ts';
 import type { Ae2Iface, Ae2Net, BasicNode, FeedModel, FeedNode, NodeId } from '../model.ts';
 import { amountText } from '../text.ts';
-import { blockingIgnoredKey, insertEmpties, NEVER, PHASE, type PushTarget, type SimEntity, type SimInv } from './core.ts';
+import { insertEmpties, NEVER, PHASE, type PushTarget, type SimEntity, type SimInv } from './core.ts';
 import type { Explain } from './detect.ts';
 import type { SimEnv } from './machine.ts';
 import type { NetworkModel } from './run.ts';
@@ -506,13 +506,14 @@ export function ae2Model(net: Ae2Net, env: SimEnv): NetworkModel {
         if (maker !== undefined) return `the AE2 job waits for ${nameOf(k)}, which ${maker.maker} makes but the line pipes away, so it never comes back to ME`;
       }
     }
-    // R9: blocking mode toward a bench, or toward a machine that holds what blocking mode does not ignore
+    // R9: blocking mode toward a bench, or toward a machine that holds what blocking mode does not ignore (the model's test, as
+    // the machine's `countsAsEmpty` asks it: the pack's list, GT's lenses among them)
     const target = byId.get(node);
     for (const f of toward) {
       if (!f.spec.spec.blocking || target === undefined) continue;
       if (target.kind === 'bench') return `${f.spec.label} has blocking mode on and ${target.label}'s crafting grid counts as items: it never pushes into it`;
       if (target.kind !== 'basic') continue;
-      const held = [...new Set(target.recipes.flatMap((r) => r.held))].sort(compareText).find((h) => !blockingIgnoredKey(h));
+      const held = [...new Set(target.recipes.flatMap((r) => r.held))].sort(compareText).find((h) => !model.ignoredByBlocking(h));
       if (held !== undefined) {
         return `${f.spec.label} has blocking mode on and ${target.label} holds ${model.nameOf(held)}, which blocking mode does not ignore: it never pushes into it`;
       }

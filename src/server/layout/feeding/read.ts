@@ -23,7 +23,7 @@ import { stepItemInputs, stepItemOutputs } from '../modes/mode.ts';
 import { manualReasonOf } from '../multiblock-rules.ts';
 import { busSlots } from '../parts.ts';
 import { CONFIG_KEYS, type FeedBlock, type FeedUnknown } from './contract.ts';
-import { basicSlots, BENCH_CLASS, INPUT_SEPARATION_DEFAULT, PART_KEYS } from './facts.ts';
+import { basicSlots, BENCH_CLASS, ignoredByBlocking, INPUT_SEPARATION_DEFAULT, PART_KEYS } from './facts.ts';
 import { compareLocal, fromWorld, localConnections, localSide, nodeId } from './frame.ts';
 import type {
   BasicNode, BenchNode, BusNode, ChestNode, FeedModel, FeedNetwork, FeedNode, InvRef, MachineSettings, MultiNode, NodeId, OutBusNode, SimRecipe,
@@ -475,6 +475,16 @@ export function readLine(input: { pack: Pack; plan: Plan; layout: Layout }): Fee
     }
     return v;
   };
+  // AE2's blocking-ignore test over the pack (E12: GT's lenses by their prefix), memoized per key: AE2 blocking mode asks it on every CPU update
+  const ignored = new Map<StuffKey, boolean>();
+  const blockingIgnores = (key: StuffKey): boolean => {
+    let v = ignored.get(key);
+    if (v === undefined) {
+      v = ignoredByBlocking(pack, key);
+      ignored.set(key, v);
+    }
+    return v;
+  };
 
   // every list in local order: the unknowns by their block (those tied to no block first), each block's in the order raised
   const located = unknowns.map((u, i) => ({ u, i, local: u.pos === undefined ? null : fromWorld(u.pos, layout) }));
@@ -491,7 +501,7 @@ export function readLine(input: { pack: Pack; plan: Plan; layout: Layout }): Fee
       if (s === undefined) return stepId;
       return s.mainOutput === undefined ? s.machine.name : nameOf(s.mainOutput);
     },
-    mapTakes, mapPair, circuitOre,
+    mapTakes, mapPair, circuitOre, ignoredByBlocking: blockingIgnores,
   };
 }
 

@@ -29,6 +29,8 @@ const IRON = 'fluid:molten.iron';
 /** A machine's settings with its Input Filter on and the rest unset. */
 const FILTER_ON = { multiStack: null, inputFilter: true, inputFromOutputSide: null, autoOutput: null };
 const MOLD = 'gregtech:gt.metaitem.01@32301';
+/** The fixture pack's GT lens: only its pack entry (prefix `lens`) puts it on AE2's blocking-ignore list (E12). */
+const LENS = 't:lens@0';
 const PACKET = 'ae2fc:fluid_packet@0';
 
 // the Resistor bench (research §1.3.9): its grid's exact pattern, what ME stocks for it, and the plan asking for Resistors
@@ -146,6 +148,17 @@ describe('AE2', () => {
     // a mold is on the list (E12): the same with a mold pushes as usual
     const molded = oneSlotNode('0,0,0', { inSlots: 2, recipes: [simRecipe('one', 20, [['t:a@0', 1]], [['t:x@0', 1]], { held: [MOLD] })] });
     expect(same(line(true, { node: molded }), { ticks: 70, restartAt: 70 }).stats.ae2Pushes('0,0,1')).toEqual([0, 4, 21, 41, 61]);
+    // so is a GT lens, which the pack tells by its prefix: a laser engraver holding its lens is pushed as usual, and nothing starves
+    const engraver = (held: string[]) => oneSlotNode('0,0,0', {
+      name: 'Laser Engraver', inSlots: 1 + held.length, recipes: [simRecipe('one', 20, [['t:a@0', 1]], [['t:x@0', 1]], { held })],
+    });
+    const lensed = same({ ...line(true, { node: engraver([LENS]) }), planned: { one: { 't:a@0': 1 } } }, { ticks: 2_000, restartAt: 2_000 });
+    expect([lensed.stats.ae2Pushes('0,0,1').slice(0, 5), lensed.findings]).toEqual([[0, 4, 21, 41, 61], []]);
+    // beside a held Why, which the list does not have, R9 names the Why and not the lens
+    const beside = same({ ...line(true, { node: engraver([LENS, 't:y@0']) }), planned: { one: { 't:a@0': 1 } } }, { ticks: 2_000, restartAt: 2_000 });
+    expect(beside.stats.ae2Pushes('0,0,1')).toEqual([]);
+    expect(brief(beside)).toEqual([['feed_starved', 't:a@0', 0, 'Laser Engraver at 0 0 0 never gets Alpha: ME Interface at 0 0 1 has blocking mode on and '
+      + 'Laser Engraver at 0 0 0 holds Why, which blocking mode does not ignore: it never pushes into it']]);
   });
 
   it('unlocks every interface waiting on the same result', () => {

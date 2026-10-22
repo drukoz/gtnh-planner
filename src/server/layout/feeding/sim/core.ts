@@ -12,18 +12,12 @@
 
 import { isFluidKey, type StuffKey } from '../../../../shared/keys.ts';
 import type { Vec3 } from '../../../../shared/layout/geometry.ts';
-import { BLOCKING_IGNORED, stackLimit } from '../facts.ts';
+import { stackLimit } from '../facts.ts';
 import { compareLocal } from '../frame.ts';
 import type { FeedModel, NodeId } from '../model.ts';
 
 function compareText(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
-}
-
-/** An item key's id: the text before its last '@' (a key is `id@meta`, or `id@meta#hash`). */
-function idOf(key: StuffKey): string {
-  const at = key.lastIndexOf('@');
-  return at < 1 ? key : key.slice(0, at);
 }
 
 // ---- Keys ----
@@ -66,14 +60,6 @@ export class KeyTable {
   isFluid(id: number): boolean {
     return isFluidKey(this.key(id));
   }
-}
-
-/**
- * Whether AE2's blocking mode leaves the item out of its "is the machine empty" test (E12), from its key alone: the run
- * has no pack, so GT's lenses, which the pack tells by their prefix, are not among them (`ignoredByBlocking` in facts.ts).
- */
-export function blockingIgnoredKey(key: StuffKey): boolean {
-  return BLOCKING_IGNORED.ids.has(idOf(key)) || BLOCKING_IGNORED.keys.has(key);
 }
 
 /** Every cell of the model that is a tile entity of its own: its nodes, and each multiblock's input and output buses. */
