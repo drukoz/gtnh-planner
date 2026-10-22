@@ -140,7 +140,7 @@ describe('buildBom', () => {
     const r = await expandBomLines(p, bom.lines.map(({ key, amount, why, group }) => ({ key, amount, why, ...(group === undefined ? {} : { group }) })), settings, emptyContextForTest());
     expect(Object.keys(r).sort()).toEqual(['lines', 'totals']);
     expect(r.totals).toEqual(bom.totals);
-  });
+  }, 30_000);   // 40,201 recipes: about 1.3 s alone, past vitest's 5 s default under a parallel run's load (the controller's ruling after Task 5)
   it('breaks the build list down at the line\'s prices, the same in expandBomLines, with a derived leaf and a stop item', async () => {
     // The line bends U from D (an alloy of 3 X, mined nowhere) and assembles T from U and S (4 Y, which the group says it
     // already makes). Its assembler is crafted from 1 D or 2 P, its bender from 1 S or 2 Q. At plain prices D and S cost

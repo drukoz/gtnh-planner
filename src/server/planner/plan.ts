@@ -759,9 +759,11 @@ function recipeLabel(pack: Pack, recipe: LpRecipe | undefined, id: string): stri
  * A solver warning in names (solve.ts has no pack). `free-loop`: the targets by name and the recipes the loop guard
  * left out as "<machine> making <product>", the same label once, at most MAX_NAMED_LOOP_RECIPES and a count of the
  * rest. `numerics`: the good it could not balance by name. `owned-only` (plan 12, controller ruling OQ5 a): `<good>
- * needs more than your <n>× <machine>, which cannot be built here (<why>)`.
+ * needs more than your <n>× <machine>, which cannot be built here (<why>)`, `The line needs …` for one without a good
+ * (solve.ts keys it by the step's main output, its recipe's first output, which every step recipe of a line's walk has:
+ * exported so the wording of a keyless one is tested all the same, the controller's ruling after plan 12 Task 5).
  */
-function namedSolverWarning(pack: Pack, graph: CandidateGraph, sol: Solution, w: PlanWarning): PlanWarning {
+export function namedSolverWarning(pack: Pack, graph: CandidateGraph, sol: Solution, w: PlanWarning): PlanWarning {
   if (w.code === 'numerics' && w.key !== undefined) {
     return { ...w, text: `The solver could not balance ${pack.nameOf(w.key)} exactly; the plan uses an earlier stage` };
   }

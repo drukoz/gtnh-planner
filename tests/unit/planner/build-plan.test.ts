@@ -12,9 +12,10 @@ import { MINI_GT, miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec, type PackSpec } from '../../helpers/pack-spec.ts';
 import { expandBomLines } from '../../../src/server/planner/bom.ts';
 import { assignOwned } from '../../../src/server/planner/machines.ts';
-import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
+import { emptyContext, namedSolverWarning, planLine } from '../../../src/server/planner/plan.ts';
 import { linePricing } from '../../../src/server/planner/pricing.ts';
 import { sig9 } from '../../../src/server/planner/round.ts';
+import type { Solution } from '../../../src/server/planner/solve.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import type { OreVein } from '../../../src/shared/types/pack.ts';
 import type { LogisticsMode, MachineWhere, Plan, PlanContext, PlanSettings, PlanStep } from '../../../src/shared/types/plan.ts';
@@ -663,6 +664,113 @@ describe('the build list', () => {
     // Make N's one added machine per type
     expect(machines(await planLine(miniGt(), S({ mode: 'makeN', amount: 64 }), emptyContext())))
       .toEqual([['machine:101@0', 1], ['machine:111@0', 1], ['machine:121@0', 1]]);
+  });
+});
+
+describe("more of the plan's build cost (the controller's ruling after Task 5)", () => {
+  const ore = (material: string): OreVein => ({ name: `ore.mix.${material.toLowerCase()}`, dims: ['overworld'], kind: 'vein', weight: 1, minY: 0, maxY: 255,
+    size: 1, density: 1, materials: { primary: material, secondary: material, between: material, sporadic: material } });
+
+  it('walks the line again when the walk around the avoid list meets a machine that cannot be built', async () => {
+    // A Thing is pressed from 1 Alpha Dust (A Press), 3 Xeno Dust (U Press, which no recipe makes) or 4 Ypsi Dust (B
+    // Press). The plain walk keeps only the Alpha press (the others cost more than twice as much, KEEP_WITHIN); around
+    // Alpha the walk meets the U Press, whose step the trial graph's build model blocks, so `avoidingLine` gives up that
+    // graph and the line is walked again without it (plannedLine): it presses Ypsi Dust, and the swap list says why not
+    // Xeno, in both modes.
+    const pack = packFromSpec(withBuildRecipes({
+      items: [{ key: 't:t@0', name: 'Thing' }, { key: 't:a@0', name: 'Alpha Dust', gt: { prefix: 'dust', material: 'Alpha' } },
+        { key: 't:x@0', name: 'Xeno Dust', gt: { prefix: 'dust', material: 'Xeno' } }, { key: 't:y@0', name: 'Ypsi Dust', gt: { prefix: 'dust', material: 'Ypsi' } }],
+      maps: [{ id: 'gt.recipe.a', name: 'A Press' }, { id: 'gt.recipe.u', name: 'U Press' }, { id: 'gt.recipe.b', name: 'B Press' }],
+      machines: [{ mteId: 301, name: 'Basic A Press', tier: 1, maps: ['gt.recipe.a'] }, { mteId: 302, name: 'Basic U Press', tier: 1, maps: ['gt.recipe.u'] },
+        { mteId: 303, name: 'Basic B Press', tier: 1, maps: ['gt.recipe.b'] }],
+      recipes: [
+        { id: 'r-a', map: 'gt.recipe.a', in: [['t:a@0', 1]], out: [['t:t@0', 1]], eut: 16 },
+        { id: 'r-u', map: 'gt.recipe.u', in: [['t:x@0', 3]], out: [['t:t@0', 1]], eut: 16 },
+        { id: 'r-b', map: 'gt.recipe.b', in: [['t:y@0', 4]], out: [['t:t@0', 1]], eut: 16 },
+      ],
+      worldgen: { veins: ['Alpha', 'Xeno', 'Ypsi'].map(ore) },
+    }, [301, 303]));
+    expect(ids(await planLine(pack, S({ target: 't:t@0' }), emptyContext()))).toEqual(['r-a']);
+    for (const buildHorizonHours of [24, null]) {
+      const plan = await planLine(pack, S({ target: 't:t@0', avoid: ['Alpha'], buildHorizonHours }), emptyContext());
+      expect(plan.status).toBe('ok');
+      expect(ids(plan)).toEqual(['r-b']);
+      expect(plan.avoided).toEqual([{ key: 't:a@0', name: 'Alpha Dust', unavoidable: false }]);
+      expect(stepOf(plan, 'r-b').alternatives.find((a) => a.recipeId === 'r-u')?.unusable).toEqual(['Basic U Press cannot be built here (no recipe in this pack)']);
+    }
+  });
+
+  it('counts a cleanroom the line builds, never one the group owns, and names one it cannot price', async () => {
+    // A Chip is assembled in a cleanroom from a circuit and an iron plate: the Cleanroom (4 iron plates, 4 raw) is counted
+    // once beside the line's machines (66), not where the group owns one; a Cleanroom of a pricing gap is not counted,
+    // named, and counted in `unpriced`.
+    const spec = (gap: boolean): PackSpec => {
+      const s = structuredClone(MINI_GT);
+      s.items!.push({ key: 't:chip@0', name: 'Chip' });
+      s.machines!.push({ mteId: 1200, name: 'Cleanroom', kind: 'multiblock', maps: [], cls: 'gregtech.common.tileentities.machines.multi.MTECleanroom' });
+      s.recipes!.push({ id: 'chip', map: 'gt.recipe.assembler', in: [['t:circuit@0', 1], ['t:iron_plate@0', 1]], out: [['t:chip@0', 1]], eut: 16, dur: 100, meta: { cleanroom: true } });
+      return gap ? withPriceGap(s, [1200]) : withBuildRecipes(s, [1200], [['t:iron_plate@0', 4]]);
+    };
+    const chips = S({ target: 't:chip@0' });
+    const owningRoom = owning({ mteId: 1200, count: 1 });
+    const built = packFromSpec(spec(false));
+    expect((await planLine(built, chips, emptyContext())).cost).toEqual({ runPerHour: 240, build: 70, horizonHours: 24 });
+    expect((await planLine(built, chips, owningRoom)).cost).toEqual({ runPerHour: 240, build: 66, horizonHours: 24 });
+    const gap = packFromSpec(spec(true));
+    const unpriced = await planLine(gap, chips, emptyContext());
+    expect(unpriced.cost).toEqual({ runPerHour: 240, build: 66, horizonHours: 24, unpriced: 1 });
+    expect(unpriced.warnings.filter((w) => w.code === 'build-cost-unknown'))
+      .toEqual([{ code: 'build-cost-unknown', text: 'Not counted in the build cost: Cleanroom (its price could not be worked out)' }]);
+    const owned = await planLine(gap, chips, owningRoom);
+    expect(owned.cost).toEqual({ runPerHour: 240, build: 66, horizonHours: 24 });
+    expect(codes(owned)).not.toContain('build-cost-unknown');
+  });
+
+  it('names at most five machines it cannot price, then counts the rest', async () => {
+    // Six steps, each on a machine of a pricing gap (MAX_UNPRICED_NAMED is 5).
+    const chain: PackSpec = {
+      items: [{ key: 't:g0@0', name: 'Base Dust', gt: { prefix: 'dust', material: 'Base' } }], maps: [{ id: 'crafting', name: 'Crafting' }], machines: [],
+      recipes: [{ id: 'hull', map: 'crafting', in: [['t:g0@0', 1]], out: [['t:hull_lv@0', 1]] }], worldgen: { veins: [ore('Base')] },
+    };
+    for (let i = 1; i <= 6; i++) {
+      chain.items!.push({ key: `t:g${i}@0`, name: `Good ${i}` });
+      chain.maps!.push({ id: `gt.recipe.m${i}`, name: `Map ${i}` });
+      chain.machines!.push({ mteId: 400 + i, name: `Basic Machine ${i}`, tier: 1, maps: [`gt.recipe.m${i}`] });
+      chain.recipes!.push({ id: `s${i}`, map: `gt.recipe.m${i}`, in: [[`t:g${i - 1}@0`, 1]], out: [[`t:g${i}@0`, 1]], eut: 16 });
+    }
+    const plan = await planLine(packFromSpec(withPriceGap(chain, [401, 402, 403, 404, 405, 406])), S({ target: 't:g6@0' }), emptyContext());
+    expect(ids(plan)).toEqual(['s1', 's2', 's3', 's4', 's5', 's6']);
+    expect(plan.cost?.unpriced).toBe(6);
+    expect(plan.warnings.filter((w) => w.code === 'build-cost-unknown')).toEqual([{ code: 'build-cost-unknown',
+      text: 'Not counted in the build cost: Basic Machine 1, Basic Machine 2, Basic Machine 3, Basic Machine 4, Basic Machine 5 and 1 more (their price could not be worked out)' }]);
+  });
+
+  it("words an owned-only warning without a good as the line's", () => {
+    // solve.ts keys an owned-only warning by the step's main output, which every step recipe of a line's walk has, so
+    // planLine never meets one without; its wording is checked all the same.
+    const pack = miniGt();
+    const graph = { recipes: [], goods: new Map(), targets: [], blocked: new Map(), warnings: [] } as unknown as Parameters<typeof namedSolverWarning>[1];
+    const sol = { status: 'infeasible', runs: new Map(), buys: new Map(), sinks: new Map(), rawCost: 0, leastRawCost: 0, blockers: [], warnings: [] } as Solution;
+    const text = '2× Basic Macerator, which cannot be built here (no recipe in this pack)';
+    expect(namedSolverWarning(pack, graph, sol, { code: 'owned-only', text })).toEqual({ code: 'owned-only', text: `The line needs more than your ${text}` });
+    expect(namedSolverWarning(pack, graph, sol, { code: 'owned-only', key: 't:iron_plate@0', text }))
+      .toEqual({ code: 'owned-only', key: 't:iron_plate@0', text: `Iron Plate needs more than your ${text}` });
+  });
+
+  it('runs crafting-table steps on Auto Workbenches by default, priced and powered like any machine', async () => {
+    // The default settings (`automateCrafting` true): Mini-GT's cable and hull, crafting-table recipes, each on an Auto
+    // Workbench (LV) of its own (no two crafting recipes share one: the sharing key holds the recipe), 32 EU/t × 64 t a
+    // craft; build 2 Basic Bending Machines (17 each) and 2 Auto Workbenches (an LV hull 9 and 2 circuits 6: 15 each).
+    const pack = packFromSpec(withAutoWorkbenches(MINI_GT, [1]));
+    const plan = await planLine(pack, { ...defaultSettings(), target: 't:hull_lv@0', tier: 1, amount: 2 }, emptyContext());
+    expect(plan.status).toBe('ok');
+    expect(plan.steps.map((s) => [s.id, s.machine.name, s.count, s.euPerTick, s.durationTicks, s.handCraft])).toEqual([
+      ['bend-plate', 'Basic Bending Machine', 2, 24, 100, false], ['cable', 'Auto Workbench (LV)', 1, 32, 64, false],
+      ['hull-lv', 'Auto Workbench (LV)', 1, 32, 64, false]]);
+    expect(codes(plan)).not.toContain('hand-step');
+    expect(plan.cost).toEqual({ runPerHour: 1080, build: 64, horizonHours: 24 });
+    expect(plan.power.peakEUt).toBe(2 * 24 + 32 + 32);
+    expect(plan.buildList.find((l) => l.key === 'machine:31091@0')).toMatchObject({ amount: 2, group: 'machines' });
   });
 });
 
