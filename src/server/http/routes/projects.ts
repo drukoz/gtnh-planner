@@ -3,10 +3,13 @@
 // project's plan, cached per settings, export, scan and base, with a `plan` event whenever it may have changed.
 // Anyone may delete a project; it waits in "Recently deleted" until restored or purged (§11.24, spec §3.11).
 // Add-on 17 (§11.45 (4)): a plan reads what the group's other projects published of their surplus and needs, keyed by
-// what it read, and publishes its own, which tells the projects that read it to plan again.
+// what it read, and publishes its own, which tells the projects that read it to plan again; and (§11.45 (5)) the Compare
+// card's three planning modes of a project, with a `compare` event when the modes still planning at its answer are done.
 
 import type { IncomingMessage } from 'node:http';
 import type { AppContext } from '../../app.ts';
+import { COMPARE_TIME_LIMIT_SECONDS, compareModes, compareRunnerFor, modeSettings } from '../../planner/compare.ts';
+import { objectiveOf } from '../../planner/objective.ts';
 import { emptyContext, planCacheKey, planLine, PlanCache, settingsHash } from '../../planner/plan.ts';
 import { linePricing } from '../../planner/pricing.ts';
 import { OpError, type ProjectStore } from '../../projects/store.ts';
@@ -18,10 +21,11 @@ import { HttpError, readJson, sendJson, type RequestContext, type Route } from '
 import { validateOp } from '../../../shared/project/apply-op.ts';
 import type { StuffKey } from '../../../shared/keys.ts';
 import type {
-  CreateProjectBody, DeletedEvent, DeletedProjectSummary, OpEvent, OpsResult, PlanEvent, ProjectListEntry,
+  CompareEvent, CompareMode, CompareResult, CreateProjectBody, DeletedEvent, DeletedProjectSummary, OpEvent, OpsResult, PlanEvent,
+  ProjectListEntry,
 } from '../../../shared/types/api.ts';
 import type { Pack } from '../../../shared/types/pack.ts';
-import type { Plan, PlanContext, PlanSettings } from '../../../shared/types/plan.ts';
+import type { Plan, PlanContext, PlanObjective, PlanSettings } from '../../../shared/types/plan.ts';
 import type { Project, ProjectOp } from '../../../shared/types/project.ts';
 
 const MAX_OPS_PER_REQUEST = 100;
@@ -307,6 +311,35 @@ function replanInBackground(app: AppContext, project: Project): void {
   run(project);
 }
 
+/**
+ * The Compare card's modes of `project` (add-on 17, architecture §11.45 (5)): its three planning modes, each planned with
+ * its own settings (`modeSettings`) from the plan cache without publishing (`publish: false`: the board keeps the
+ * summary of the mode the project plans in) and without `planFinish` (the card needs no layout), the current mode first,
+ * within `COMPARE_TIME_LIMIT_SECONDS`; the modes still planning then finish in the background and send the project's tabs
+ * `event: compare`. One compare per project at a time (`compareRunnerFor`), keyed by what its plans read of the project:
+ * its settings and its world (scan and base, as the plan cache key), so a compare of the project's earlier settings or
+ * world is never served for its current ones.
+ */
+function compareProject(app: AppContext, project: Project): Promise<CompareMode[]> {
+  const { scanId, baseId } = project.world;
+  const key = `${settingsHash(project.settings)}|${scanId ?? '-'}|${baseId ?? '-'}`;
+  const planMode = async (objective: PlanObjective): Promise<Plan> => {
+    try {
+      return await planForProject(app, project, { settings: modeSettings(project.settings, objective), publish: false });
+    } catch (err) {
+      if (!(err instanceof HttpError)) console.error(`Planning project ${project.id} in mode ${objective} failed:`, err);
+      throw err;
+    }
+  };
+  const onLate = (): void => {
+    const event: CompareEvent = { rev: project.rev };
+    app.sse.send(project.id, 'compare', event);
+  };
+  return compareRunnerFor(app).run(project.id, key, (stale, planning) => compareModes(planMode, {
+    current: objectiveOf(project.settings), limitSeconds: COMPARE_TIME_LIMIT_SECONDS, onLate, stale, planning,
+  }));
+}
+
 export function projectRoutes(app: AppContext): Route[] {
   return [
     {
@@ -411,6 +444,16 @@ export function projectRoutes(app: AppContext): Route[] {
           throw new HttpError(500, 'plan-failed', `The planner failed: ${messageOf(err)}`);
         }
         sendJson(res, 200, await finishedPlan(app, plan, project));
+      },
+    },
+    {
+      method: 'GET', path: '/api/projects/:id/compare',
+      handler: async (_req, res, params) => {
+        const project = app.projects.get(params.id!);
+        if (project === null) throw notFound(params.id!);
+        const modes = await compareProject(app, project);
+        const result: CompareResult = { rev: project.rev, current: objectiveOf(project.settings), modes };
+        sendJson(res, 200, result);
       },
     },
   ];
