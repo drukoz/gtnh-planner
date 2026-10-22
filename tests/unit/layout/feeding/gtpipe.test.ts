@@ -146,6 +146,40 @@ describe('GT item pipes', () => {
     expect(r.stats.deliveries('1,0,2')).toEqual([[39, 't:x@0', 64], [59, 't:y@0', 64]]);
   });
 
+  it('never sends through a pipe that has reached its capacity', () => {
+    // five pipes in a plus: W 0,0,1 – M 1,0,1 – E 2,0,1, with N 1,0,0 and S 1,0,2 on M; Kx west of W takes only Ex and Ky east
+    // of E only Why (Input Filters on); Ex is pushed into N and Why into S at 20
+    const filterOn = { multiStack: null, inputFilter: true, inputFromOutputSide: null, autoOutput: null };
+    const kx = oneSlotNode('-1,0,1', { recipes: [simRecipe('kx', 20, [['t:x@0', 1]], [['t:c@0', 1]])], settings: filterOn });
+    const ky = oneSlotNode('3,0,1', { front: 2, maps: ['gt.recipe.mixer'], recipes: [simRecipe('ky', 20, [['t:y@0', 1]], [['t:d@0', 1]])], settings: filterOn });
+    const model = pipeModel([kx, ky], [{ id: '0,0,1', links: 0b110000 }, { id: '1,0,0', links: 0b001100 }, { id: '1,0,1', links: 0b111100 },
+      { id: '1,0,2', links: 0b001100 }, { id: '2,0,1', links: 0b110000 }]);
+    const r = both(model, { ticks: 120, restartAt: 120, extra: (env) => [pushIn(env, '1,0,-1', 3, 't:x@0', 20), pushIn(env, '1,0,3', 2, 't:y@0', 20)] });
+    // at 39 N sends Ex through M and W to Kx, which fills M (capacity 1) until 59; S, which checks later in that tick, reaches
+    // no pipe past M (the scan neither adds a pipe at its capacity nor goes through it), so its Why goes at 59
+    expect(r.stats.deliveries('-1,0,1')).toEqual([[39, 't:x@0', 64]]);
+    expect(r.stats.deliveries('3,0,1')).toEqual([[59, 't:y@0', 64]]);
+  });
+
+  it('counts a send only against the pipes its scan reaches', () => {
+    // X 0,0,1 – M 1,0,1 – S 2,0,1 – Z 3,0,1 – Y 4,0,1, with N 1,0,0 on M; Kx west of X takes only Ex, Km south of M only Beta
+    // and Ky east of Y only Why (Input Filters on); Beta is pushed into N and Why into S at 20, and Ex into X at 30
+    const filterOn = { multiStack: null, inputFilter: true, inputFromOutputSide: null, autoOutput: null };
+    const kx = oneSlotNode('-1,0,1', { recipes: [simRecipe('kx', 20, [['t:x@0', 1]], [['t:c@0', 1]])], settings: filterOn });
+    const km = oneSlotNode('1,0,2', { maps: ['gt.recipe.compressor'], recipes: [simRecipe('km', 20, [['t:b@0', 1]], [['t:d@0', 1]])], settings: filterOn });
+    const ky = oneSlotNode('5,0,1', { front: 2, maps: ['gt.recipe.mixer'], recipes: [simRecipe('ky', 20, [['t:y@0', 1]], [['t:d@0', 1]])], settings: filterOn });
+    const model = pipeModel([kx, km, ky], [{ id: '0,0,1', links: 0b110100 }, { id: '1,0,0', links: 0b001100 }, { id: '1,0,1', links: 0b111100 },
+      { id: '2,0,1', links: 0b110100 }, { id: '3,0,1', links: 0b110000 }, { id: '4,0,1', links: 0b110000 }]);
+    const r = both(model, { ticks: 120, restartAt: 120, extra: (env) => [
+      pushIn(env, '1,0,-1', 3, 't:b@0', 20), pushIn(env, '2,0,0', 3, 't:y@0', 20), pushIn(env, '0,0,0', 3, 't:x@0', 30),
+    ] });
+    // at 39 N's Beta fills M on its way to Km; S, later in that tick, reaches Y through Z alone, so its Why counts against S, Z
+    // and Y, and not against X, which lies behind M though S's order puts it before Y: X sends its Ex at its next check, 49
+    expect(r.stats.deliveries('1,0,2')).toEqual([[39, 't:b@0', 64]]);
+    expect(r.stats.deliveries('5,0,1')).toEqual([[39, 't:y@0', 64]]);
+    expect(r.stats.deliveries('-1,0,1')).toEqual([[49, 't:x@0', 64]]);
+  });
+
   it('starts its 20-tick window at the first send it counts', () => {
     // as above, without the chests: Ex pushed into P1 at 35 is sent through P2 at 49 (aTick 50), so P2 rests until 69; Why
     // pushed into P3 at 45 waits one check, and at 59 still finds P2 full (a window from aTick 40 would have let it go)
@@ -204,6 +238,8 @@ describe('GT item pipes', () => {
     // nor does a machine through its front
     const machine = (front: number) => line([lv()], 0b111000, [oneSlotNode('2,0,1', { front })]);
     expect([whyOf(machine(4))('out', '0,0,0', 't:x@0'), whyOf(machine(5))('out', '0,0,0', 't:x@0')]).toEqual(['nothing on its pipe takes Ex', null]);
+    // a machine that takes Ex but has no room for it (its one input slot holds 64) is no way out either
+    expect(whyOf(machine(5), { '2,0,1': [[0, 't:x@0', 64]] })('out', '0,0,0', 't:x@0')).toBe('its pipe\'s only taker for Ex, Basic Macerator at 2 0 1, has no room');
     // a node another network touches is that network's to explain: a second GT pipe network, or another kind
     const two = line([lv()]);
     two.networks.push({ kind: 'gtpipe', pipes: [{ id: '3,0,1', label: 'Item Pipe at 3 0 1', capacity: 1, links: 0b100, sides: [{ side: 2, target: { node: '3,0,0', side: 3 } }] }] });
@@ -253,5 +289,9 @@ describe('GT item pipes', () => {
       'Advanced Assembler at 5 64 1',
       `Nothing takes Why out of Advanced Assembler at 5 64 1: its pipe's only taker for Why, ${chest}, is full`,
     ]]);
+    // so the macerators' Ex has nowhere to go: the stopped assembler holds 64 Ex in its one slot of Ex, and the chest is full
+    expect(long.findings.filter((f) => f.code === 'feed_no_route' && f.key === 't:x@0').map((f) => [f.machine, f.text])).toEqual(macerators.map((m) => [
+      m, `Nothing takes Ex out of ${m}: its pipe's only takers for Ex, Advanced Assembler at 5 64 1 and ${chest}, have no room`,
+    ]));
   });
 });

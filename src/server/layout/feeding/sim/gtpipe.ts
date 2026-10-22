@@ -14,13 +14,16 @@
 //   Item Filter cover never does), and that inventory takes it by its own rules. The sending pipe never sends back out of the
 //   side it received from.
 // - A send counts against the transfer counter of every pipe the scan tried up to the one that handed the stack over, the
-//   sender included. A pipe whose counter has reached its capacity is left out of the scan, and sends no more, until its
-//   window starts again: 20 ticks after the first send it counted (`mCurrentTransferStartTick`, `mTickTime` 20 [jar]).
+//   sender included. A pipe whose counter has reached its capacity sends no more until its window starts again, 20 ticks
+//   after the first send it counted (`mCurrentTransferStartTick`, `mTickTime` 20 [jar]), and until then a scan neither adds
+//   it nor goes through it (`scanPipes` [jar]): a scan reaches only the pipes that a path of pipes below their capacity leads
+//   to, in its order by hops over every connection. So a pipe moves at most its capacity in stacks per 20 ticks (E9).
 // - When its chunk loads again (`restart`), a pipe keeps its items and the side it received them from, which GT saves, but
 //   not the side of its previous check nor its counter: a stack in it waits one check again.
 // - Why an item does not arrive (`in`): no pipe touches the machine; its Input Filter keeps the item out; nothing pushes the
 //   item into its pipes; or a nearer taker got it first. Why one does not leave (`out`): no conveyor cover pushes it out of
-//   the machine; its Item Filter cover refuses it; the only takers on its pipes are full chests; or nothing there takes it.
+//   the machine; its Item Filter cover refuses it; nothing on its pipes takes it; or every taker there has no room for it
+//   (full chests, or machines with no room).
 // Pure TypeScript: nothing from node:* may be imported here.
 
 import type { StuffKey } from '../../../../shared/keys.ts';
@@ -224,12 +227,17 @@ class Network {
   private readonly cells = new Map<string, Pipe>();
   private readonly into: boolean[];
   private readonly keysIn = new Set<StuffKey>();
+  private links: Array<readonly Pipe[] | undefined> = [];
   private scans: Array<readonly Pipe[] | undefined> = [];
   private outlets: Array<readonly Outlet[] | undefined> = [];
   private hands: Array<readonly Hand[] | undefined> = [];
   private byKey: Array<Map<number, readonly number[]> | undefined> = [];
   /** The item of the last stack a hand took. */
   private took = -1;
+  /** The walk of `reach`: its number, each pipe's mark (the number of the last walk that reached it) and its queue, one place per pipe. */
+  private walk = 0;
+  private readonly marks: number[] = [];
+  private readonly queue: Pipe[] = [];
 
   constructor(env: SimEnv, wouldTake: (ref: InvRef, key: StuffKey) => boolean) {
     this.env = env;
@@ -240,6 +248,8 @@ class Network {
   add(pipe: Pipe): void {
     this.pipes.push(pipe);
     this.cells.set(pipe.id, pipe);
+    this.marks.push(0);
+    this.queue.push(pipe);
   }
 
   /** A stack of `key` entered one of its pipes. */
@@ -260,7 +270,24 @@ class Network {
     return p.count < p.capacity;
   }
 
-  /** The network's pipes from `s`: itself, then by pipe hops over the connections, then in local order (computed once). */
+  /** The pipes of the network that `p`'s connections lead to, in side order (computed once). */
+  private linksOf(p: Pipe): readonly Pipe[] {
+    const known = this.links[p.index];
+    if (known !== undefined) return known;
+    const at = localOf(p.id);
+    const list: Pipe[] = [];
+    for (const side of SIDES) {
+      const q = p.linked(side) ? this.cells.get(posKey(step(at, side))) : undefined;
+      if (q !== undefined) list.push(q);
+    }
+    this.links[p.index] = list;
+    return list;
+  }
+
+  /**
+   * The network's pipes from `s`: itself, then by pipe hops over the connections, then in local order (computed once). A scan
+   * reaches only some of them while a pipe is at its capacity (`reach`), but it keeps this order.
+   */
   scanOf(s: Pipe): readonly Pipe[] {
     const known = this.scans[s.index];
     if (known !== undefined) return known;
@@ -268,11 +295,8 @@ class Network {
     const queue: Pipe[] = [s];
     for (let i = 0; i < queue.length; i++) {
       const p = queue[i]!;
-      const at = localOf(p.id);
-      for (const side of SIDES) {
-        if (!p.linked(side)) continue;
-        const q = this.cells.get(posKey(step(at, side)));
-        if (q === undefined || hops.has(q)) continue;
+      for (const q of this.linksOf(p)) {
+        if (hops.has(q)) continue;
         hops.set(q, hops.get(p)! + 1);
         queue.push(q);
       }
@@ -280,6 +304,32 @@ class Network {
     const scan = queue.sort((x, y) => hops.get(x)! - hops.get(y)! || x.index - y.index);
     this.scans[s.index] = scan;
     return scan;
+  }
+
+  /**
+   * Which pipes of `scan`, `s`'s scan at its timer `a`, the scan reaches: `s` and every pipe that a path of pipes below their
+   * capacity leads to, for `scanPipes` neither adds a pipe at its capacity nor goes through it. False when every pipe of the
+   * scan is below its capacity, so it reaches them all; else true, with the pipes it reaches marked `walk`. It allocates nothing.
+   */
+  private reach(s: Pipe, scan: readonly Pipe[], a: number): boolean {
+    let all = true;
+    for (let i = 0; i < scan.length; i++) if (!this.free(scan[i]!, a)) all = false;
+    if (all) return false;
+    const walk = ++this.walk;
+    const { marks, queue } = this;
+    marks[s.index] = walk;
+    queue[0] = s;
+    let n = 1;
+    for (let i = 0; i < n; i++) {
+      const next = this.linksOf(queue[i]!);
+      for (let j = 0; j < next.length; j++) {
+        const q = next[j]!;
+        if (marks[q.index] === walk || !this.free(q, a)) continue;
+        marks[q.index] = walk;
+        queue[n++] = q;
+      }
+    }
+    return true;
   }
 
   /** The sides of `p` that hand stacks to an inventory of the run, past its own cover there, in side order (computed once). */
@@ -355,8 +405,9 @@ class Network {
 
   /**
    * Rule 1, `s`'s send at its check (timer `a`), as `MTEItemPipe.onPostTick` loops: while some pipe of a scan reached its
-   * capacity and `s` still holds items and has room on its counter, it scans again; each pipe of a scan, in order, hands
-   * stacks over as long as one goes in and no pipe of the scan has reached its capacity.
+   * capacity and `s` still holds items and has room on its counter, it scans again; a scan reaches the pipes that pipes below
+   * their capacity lead to (`reach`), and each of them, in order, hands stacks over as long as one goes in and no pipe of the
+   * scan has reached its capacity (so every pipe it reaches stays below its capacity until the scan ends).
    */
   send(s: Pipe, a: number): void {
     let full = true;
@@ -365,13 +416,18 @@ class Network {
       const outlets = this.outletsOf(s);
       const scan = this.scanOf(s);
       const list = this.candidates(s);
+      if (list.length === 0) return;
+      // the pipes this scan reaches: all of them, or (`cut`) those this walk marked
+      const cut = this.reach(s, scan, a);
+      const walk = this.walk;
+      const marks = this.marks;
       let i = 0;
       while (i < list.length && !full && s.filled > 0) {
         // the candidates on one pipe: it tries its sides from the first again after each stack it hands over
         const pipe = outlets[list[i]!]!.pipe;
         let end = i;
         while (end < list.length && outlets[list[end]!]!.pipe === pipe) end++;
-        if (this.free(pipe, a)) {
+        if (!cut || marks[pipe.index] === walk) {
           while (!full && s.filled > 0) {
             let handed = -1;
             for (let j = i; j < end && handed < 0; j++) {
@@ -382,11 +438,11 @@ class Network {
             }
             if (handed < 0) break;
             this.note(s, handed);
-            // the send counts against every pipe of the scan up to this one, the sender included
+            // the send counts against every pipe the scan reaches up to this one, the sender included
             const at = outlets[handed]!.at;
             for (let r = 0; r <= at; r++) {
               const q = scan[r]!;
-              if (!this.free(q, a)) continue;
+              if (cut && marks[q.index] !== walk) continue;
               if (q.count === 0) q.since = a;
               q.count++;
               if (q.count >= q.capacity) full = true;
@@ -560,10 +616,13 @@ export function gtPipeModel(net: GtPipeNet, env: SimEnv): NetworkModel {
     if (filters.length === out.length && filters.every((c) => !passes(c, key))) return `its Item Filter cover ${refusal(filters[0]!, key)}`;
     const all = takers(node, key);
     if (all.length === 0) return `nothing on its pipe takes ${name}`;
+    // rule 2 as the Task 10 ruling amends it: every taker lacks room for it from its pipe side (full chests, or machines with no room)
     const k = keys.id(key);
-    if (all.every((h) => byId.get(h.ref.node)?.kind === 'chest' && roomFor(h.inv, k, h.ref.side) <= 0)) {
-      const chests = [...new Set(all.map((h) => byId.get(h.ref.node)!.label))];
-      return chests.length === 1 ? `its pipe's only taker for ${name}, ${chests[0]!}, is full` : `its pipe's only takers for ${name}, ${listText(chests)}, are full`;
+    if (all.every((h) => roomFor(h.inv, k, h.ref.side) <= 0)) {
+      const names = [...new Set(all.map((h) => byId.get(h.ref.node)!.label))];
+      const chests = all.every((h) => byId.get(h.ref.node)?.kind === 'chest');
+      if (names.length === 1) return `its pipe's only taker for ${name}, ${names[0]!}, ${chests ? 'is full' : 'has no room'}`;
+      return `its pipe's only takers for ${name}, ${listText(names)}, ${chests ? 'are full' : 'have no room'}`;
     }
     return null;
   };
