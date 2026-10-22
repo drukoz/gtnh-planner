@@ -16,6 +16,7 @@ import { suppliedKey } from '../pack/supply.ts';
 import { computeAvailability, reachableDims, type Availability, type Reachability } from './availability.ts';
 import { acceptRecipe, type LeafOracle, type PlanEnv } from './candidates.ts';
 import { makeLeafOracle, makePrices, type PriceTable } from './costs.ts';
+import { horizonHoursOf, objectiveOf } from './objective.ts';
 
 function byString(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
@@ -121,12 +122,13 @@ export function effectiveTier(s: PlanSettings, ctx: PlanContext): number {
 }
 
 /**
- * Whether the settings count the build cost of the machines a line adds (architecture §11.39): Make N (against the
- * batch), or rate mode whose `buildHorizonHours` is not null ("Ignore build cost"; absent = 24 h). The settings' side of
- * machine-options.ts's `buildCounts`, which says the same of the model `lineBuildModel` builds from them.
+ * Whether the settings count the build cost of the machines a line adds (architecture §11.39 as §11.45 (1) amends it):
+ * never in least raw material (`objectiveOf`: also a rate project whose `buildHorizonHours` is null, add-on 12's "Ignore
+ * build cost"); else Make N (against the batch), or rate mode with a horizon (`horizonHoursOf`; absent = 24 h). The
+ * settings' side of machine-options.ts's `buildCounts`, which says the same of the model `lineBuildModel` builds from them.
  */
 export function buildCostCounts(settings: PlanSettings): boolean {
-  return settings.mode === 'makeN' || settings.buildHorizonHours !== null;
+  return objectiveOf(settings) !== 'least-raw' && (settings.mode === 'makeN' || horizonHoursOf(settings) !== null);
 }
 
 /**

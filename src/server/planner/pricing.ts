@@ -3,7 +3,7 @@
 // `planLine` plans with it and `expandBomLines` breaks Plan 5's layout parts down with it, so a line's machines and its
 // layout parts break down at the same prices (architecture §11.15). Derived once per pack, settings and world context.
 // Add-on 17: the line's graph also holds the farms it may use (farms/), walked on a pack of their own; the cost model
-// stays farm-free.
+// stays farm-free, but prices what a farm the group runs makes at its upkeep in rate mode (`costPrices`).
 
 import type { StuffKey } from '../../shared/keys.ts';
 import type { Pack } from '../../shared/types/pack.ts';
@@ -12,11 +12,12 @@ import { isBaseItem } from './availability.ts';
 import { basisContextKey, gatheredRecipesOn, planBasis, pricingHash, resolveAvoid, type PlanBasis } from './basis.ts';
 import { benchLine } from './benches.ts';
 import { buildCandidates, type CandidateGraph, type CandidateOptions, type LeafOracle } from './candidates.ts';
-import { analyzeCosts, makeLeafOracle, type CostAnalysis } from './costs.ts';
+import { analyzeCosts, makeLeafOracle, type CostAnalysis, type PriceTable } from './costs.ts';
 import { exportPack, withFarms } from './farms/pack.ts';
 import { farmRecipes, wantedGoods } from './farms/recipes.ts';
 import { farmSetup, ownedFarmMachines, type FarmSetup } from './farms/setup.ts';
 import { yieldToEventLoop } from './lp.ts';
+import { runningSupplies } from './objective.ts';
 import { standaloneCosts, type Standalone } from './solve.ts';
 
 /** Rounds of pricing the derived leaves a line buys (`linePricing`). */
@@ -48,18 +49,34 @@ export interface LinePricing {
 }
 
 /**
+ * The prices the line's cost model reads (add-on 17, ruling S6): `basis.prices`, but in rate mode each good a farm the
+ * group runs makes (`FarmSettings.running`) at its upkeep, 0, as nothing of a typed-in farm is modelled. So every per-unit
+ * figure the cost model gives — step alternatives, `pin-dominated`, stop-item prices, derived-leaf chain costs and
+ * `RawInput.pricedVia` — prices it from the farm, while the line's own leaf oracle keeps `basis.prices`: its LP takes the
+ * farm's rate free (a supply column, solve.ts) and buys anything past it at the plain price. Make N keeps plain prices
+ * (it has no supplies).
+ */
+function costPrices(basis: PlanBasis, settings: PlanSettings): PriceTable {
+  const farmed = settings.mode === 'rate' ? new Set(runningSupplies(settings).map((s) => s.key)) : new Set<StuffKey>();
+  if (farmed.size === 0) return basis.prices;
+  return { price: (key) => (farmed.has(key) ? 0 : basis.prices.price(key)), costPerIngot: (material) => basis.prices.costPerIngot(material) };
+}
+
+/**
  * Raw-material costs over a candidate graph built without pins (of recipes or ingredient options) and stop items and
  * with derived base materials routed, so every recipe of a good and every option of a slot is an alternative, costs
  * count raw material (not stop prices), and every derived material the line may buy has the cost of making it
  * (`makeLeafOracle`'s `derivedCost`). A stop item or derived material that graph cannot make (nothing at the tier makes
  * it, but the group already does, or gets it some other way) would cost Infinity there and hide every recipe that uses
  * it, the one the plan chose among them; such goods are leaves at their stop price (key override, else price) instead.
+ * A good a farm the group runs makes is a leaf at its upkeep (`costPrices`, add-on 17).
  */
 async function costModel(pack: Pack, settings: PlanSettings, basis: PlanBasis, target: StuffKey): Promise<CostModel> {
+  const prices = costPrices(basis, settings);
   const analyze = async (stopItems: StuffKey[]): Promise<CostModel> => {
     await yieldToEventLoop();
     const s: PlanSettings = { ...settings, recipeChoice: {}, optionChoice: {}, stopItems, routeDerived: true };
-    const graph = buildCandidates(pack, s, basis.env, makeLeafOracle(pack, s, basis.avail, basis.prices), [target]);
+    const graph = buildCandidates(pack, s, basis.env, makeLeafOracle(pack, s, basis.avail, prices), [target]);
     return { graph, costs: await analyzeCosts(graph), stopItems };
   };
   const open = await analyze([]);
@@ -136,15 +153,17 @@ async function derivedCosts(
 }
 
 /**
- * The graph `keys` alone walk to, as the cost model walks (no pins, its stop items, derived materials routed): where goods
- * the cost model's graph never reached are priced (`derivedCosts`; plan.ts prices ingredient options there), with
- * `avoid` around those goods (`CandidateOptions.avoid`, as a line that avoids them walks: plan.ts's options).
+ * The graph `keys` alone walk to, as the cost model walks (no pins, its stop items, derived materials routed, a running
+ * farm's goods at their upkeep: `costPrices`): where goods the cost model's graph never reached are priced
+ * (`derivedCosts`; plan.ts prices ingredient options there), with `avoid` around those goods (`CandidateOptions.avoid`,
+ * as a line that avoids them walks: plan.ts's options).
  */
 export function aloneGraph(
   pack: Pack, settings: PlanSettings, basis: PlanBasis, model: CostModel, keys: StuffKey[], avoid?: ReadonlySet<StuffKey>,
 ): CandidateGraph {
   const s: PlanSettings = { ...settings, recipeChoice: {}, optionChoice: {}, stopItems: model.stopItems, routeDerived: true };
-  return buildCandidates(pack, s, basis.env, makeLeafOracle(pack, s, basis.avail, basis.prices), keys, avoid === undefined ? {} : { avoid });
+  const leaf = makeLeafOracle(pack, s, basis.avail, costPrices(basis, settings));
+  return buildCandidates(pack, s, basis.env, leaf, keys, avoid === undefined ? {} : { avoid });
 }
 
 /**

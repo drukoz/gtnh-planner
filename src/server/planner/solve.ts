@@ -7,12 +7,13 @@
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import type { PlanWarning } from '../../shared/types/plan.ts';
 import {
-  BUILD_MIP_MAX_LP_ITERATIONS, BUILD_MIP_MAX_NODES, BUILD_MIP_TIME_LIMIT_SECONDS, buildMip, laterRoom, roundUp, stepWeight, type BuildDecision, type BuildMipInput,
-  type LaterRoom, type StepMachines, type StepWeights,
+  BUILD_MIP_MAX_LP_ITERATIONS, BUILD_MIP_MAX_NODES, BUILD_MIP_TIME_LIMIT_SECONDS, buildMip, laterRoom, roundUp, scaleOf, stepWeight, type BuildDecision,
+  type BuildMipInput, type LaterRoom, type StepMachines, type StepWeights,
 } from './build-mip.ts';
 import { canonicalRank, type CandidateGraph, type LpRecipe } from './candidates.ts';
 import { solveLp, type LpModel, type LpResult, type LpRow } from './lp.ts';
 import { buildCounts, type BuildModel, type MachineOption } from './machine-options.ts';
+import { sourceWeight } from './objective.ts';
 import { sig9 } from './round.ts';
 
 /** How `solveLine` trades steps against raw material, and whether it only probes (fix spec R3, architecture §11.34). */
@@ -56,7 +57,30 @@ export interface SolveOptions {
    * (`stockForm` in plan.ts reads the pack's GT prefixes); absent, every good ranks alike there.
    */
   formRank?: (key: StuffKey) => number;
+  // optional additions (add-on 17, architecture §11.45 (3), (4); rulings R14, S10)
+  /**
+   * Best multi-output: where build cost counts, the build MIP also weighs each raw good the line buys (`sources` of
+   * `BuildMipInput`, objective.ts `sourceWeight`), after a pre-solve as cheapest plans it; and `credits` are credited.
+   */
+  multiOutput?: boolean;
+  /** The goods the line's farms wear (tool wear, `LinePricing.farm.tools`): priced upkeep, never a raw source. */
+  upkeep?: ReadonlySet<StuffKey>;
+  /**
+   * Capped free supplies (farms the group runs, other projects' surplus): one column each after the sinks, `+1` in its
+   * good's row, at most `perSecond`, cost 0 in every stage; the loop guard fixes them to 0 with the purchases. Ids unique.
+   */
+  supplies?: readonly SupplyColumn[];
+  /**
+   * Other projects' needs (multi-output only, ruling R14): never in the LP or the build MIP; after the final stage the
+   * byproduct of the line's own runs of each good is shared among its needs in this order (`Solution.credited`).
+   */
+  credits?: readonly CreditColumn[];
 }
+
+/** A capped free supply (add-on 17): a farm the group runs (`farm:<index>:<key>`) or another project's surplus (`project:<from>:<key>`). */
+export interface SupplyColumn { id: string; key: StuffKey; perSecond: number }
+/** Another project's need of a good (add-on 17, ruling R14: no price, nothing of it enters the solve): `need:<by>:<key>`. */
+export interface CreditColumn { id: string; key: StuffKey; perSecond: number }
 
 /** The step charge never lets total raw material go above (1 + this) × the least (S1) (fix spec §3). */
 export const STEP_CHARGE_CAP = 0.25;
@@ -121,6 +145,26 @@ export interface Solution {
   buildStats?: {
     seconds: number; nodes: number; status: LpResult['status'] | 'skipped'; stop?: 'time' | 'limit'; approx: boolean; objective?: number; bound?: number;
   };
+  // optional additions (add-on 17, architecture §11.45 (3), (4); ruling R14)
+  /** Per supply column (`SolveOptions.supplies`) the plan takes from, what it takes: per second, ids sorted, above TINY. */
+  supplied?: Map<string, number>;
+  /** The good of each id of `supplied` (its column's key): what `buildFlows` adds as made by `raw`. */
+  supplyKeys?: Map<string, StuffKey>;
+  /**
+   * Multi-output with `SolveOptions.credits`: per credit id, the byproduct of the line's own runs it is credited (per
+   * second, ids sorted, above TINY): per good g, `max(0, Σ_{j∈B_g} a_jg·x_j − Σ_{j: a_jg<0} |a_jg|·x_j)` — B_g the step
+   * recipes whose main is not g that make it — never more than the line sinks of g, shared among g's credits in their
+   * order up to each one's `perSecond`. It is part of `sinks`, as the line throws it away.
+   */
+  credited?: Map<string, number>;
+  /** The distinct goods the plan buys whose cost is above 0, upkeep (`SolveOptions.upkeep`) aside: an `ok` plan's raw sources. */
+  sources?: number;
+  /**
+   * Where build cost counts (absent otherwise): the least raw material with the synthetic farm recipes off (S1f, per
+   * second, scaled like `rawCost`) and its count of raw sources (as `sources` counts them); S1's when the graph has no farm
+   * recipe or that LP fails.
+   */
+  farmFree?: { raw: number; sources: number };
 }
 
 /**
@@ -153,8 +197,9 @@ function pushTo<K, V>(map: Map<K, V[]>, key: K, value: V): void {
 
 /**
  * The main LP (prior-art §3.4 step 3). Columns: one run count per recipe by id, then one purchase per buyable good by
- * key, then one sink per good by key; one row per good by key, `Σ a_rg·x_r + buy_g − sink_g = demand_g`. The goods are
- * the whole graph's, so banning a recipe drops only its column.
+ * key, then one sink per good by key, then (add-on 17) one per capped free supply; one row per good by key,
+ * `Σ a_rg·x_r + buy_g + supply_g − sink_g = demand_g`. The goods are the whole graph's, so banning a recipe drops only its
+ * column.
  */
 export interface MainLp {
   recipes: LpRecipe[]; buyKeys: StuffKey[]; goods: StuffKey[];
@@ -181,9 +226,17 @@ export interface MainLp {
   free: number[];
   /** Per column, the recipes of a bought derived leaf's chain (`GoodInfo.steps`, at least 1); 0 for other columns. */
   derivedSteps: number[];
+  /**
+   * Add-on 17: the supply columns (`SolveOptions.supplies` of goods the LP has a row for, each id once), after the sinks: column
+   * `firstSupply + i` takes `supplies[i]`, `+1` in its good's row, at most its rate at unit demand (`upper`), cost 0 in
+   * every stage. `firstSupply` is the width of the LP without them.
+   */
+  firstSupply: number; supplies: SupplyColumn[];
 }
 
-function mainLp(graph: CandidateGraph, recipes: readonly LpRecipe[], demand: ReadonlyMap<StuffKey, number>): MainLp {
+function mainLp(
+  graph: CandidateGraph, recipes: readonly LpRecipe[], demand: ReadonlyMap<StuffKey, number>, supplied: readonly SupplyColumn[] = [], demandScale = 1,
+): MainLp {
   const keys = new Set<StuffKey>([...graph.goods.keys(), ...demand.keys()]);
   for (const r of graph.recipes) for (const [key] of r.coeffs) keys.add(key);
   const goods = [...keys].sort(byString);
@@ -192,7 +245,14 @@ function mainLp(graph: CandidateGraph, recipes: readonly LpRecipe[], demand: Rea
   const buyKeys = goods.filter((key) => graph.goods.get(key)?.buyable === true);
   const firstBuy = sorted.length;
   const firstSink = firstBuy + buyKeys.length;
-  const width = firstSink + goods.length;
+  const firstSupply = firstSink + goods.length;
+  const ids = new Set<string>();
+  const supplies = supplied.filter((s) => {
+    if (!rowOf.has(s.key) || ids.has(s.id) || !(s.perSecond > 0) || !Number.isFinite(s.perSecond)) return false;
+    ids.add(s.id);
+    return true;
+  });
+  const width = firstSupply + supplies.length;
 
   const entries = goods.map((): Array<[number, number]> => []);
   const rowEntries = (key: StuffKey): Array<[number, number]> => entries[rowOf.get(key) as number] as Array<[number, number]>;
@@ -200,6 +260,7 @@ function mainLp(graph: CandidateGraph, recipes: readonly LpRecipe[], demand: Rea
     for (const [key, c] of r.coeffs) rowEntries(key).push([j, c]);
   });
   buyKeys.forEach((key, i) => rowEntries(key).push([firstBuy + i, 1]));
+  supplies.forEach((s, i) => rowEntries(s.key).push([firstSupply + i, 1]));
   const rows = goods.map((key, g): LpRow => {
     const d = demand.get(key) ?? 0;
     return { lower: d, upper: d, entries: [...(entries[g] as Array<[number, number]>), [firstSink + g, -1]] };
@@ -236,7 +297,14 @@ function mainLp(graph: CandidateGraph, recipes: readonly LpRecipe[], demand: Rea
     canonical[j] = (canonical[j] as number) + CANON_RANK_S4 * n;
   });
   const upper = new Array<number>(width).fill(Infinity);
-  return { recipes: sorted, buyKeys, goods, firstBuy, firstSink, rows, upper, rawCost, power, canonical, rank, free, derivedSteps };
+  // Add-on 17: a supply costs nothing in any stage, up to its rate at unit demand.
+  supplies.forEach((s, i) => {
+    canonical[firstSupply + i] = 0;
+    upper[firstSupply + i] = s.perSecond / demandScale;
+  });
+  return {
+    recipes: sorted, buyKeys, goods, firstBuy, firstSink, rows, upper, rawCost, power, canonical, rank, free, derivedSteps, firstSupply, supplies,
+  };
 }
 
 /**
@@ -401,6 +469,24 @@ function kept(keys: readonly string[], x: readonly number[], first: number): Map
 }
 
 /**
+ * What `x` takes of the supply columns (add-on 17: `Solution.supplied`, by id in sorted order, with each one's good in
+ * `supplyKeys`), as `kept` keeps values; nothing when the LP has no supply column.
+ */
+function suppliedBy(lp: MainLp, x: readonly number[]): Pick<Solution, 'supplied' | 'supplyKeys'> {
+  if (lp.supplies.length === 0) return {};
+  const supplied = new Map<string, number>();
+  const supplyKeys = new Map<string, StuffKey>();
+  const byId = lp.supplies.map((s, i) => ({ s, j: lp.firstSupply + i })).sort((a, b) => byString(a.s.id, b.s.id));
+  for (const { s, j } of byId) {
+    const value = x[j] ?? 0;
+    if (!(value > TINY)) continue;
+    supplied.set(s.id, sig9(value));
+    supplyKeys.set(s.id, s.key);
+  }
+  return { supplied, supplyKeys };
+}
+
+/**
  * The rows `x` does not balance: per row, `residual` = activity − the nearest bound (`Σ a·x − d` for a row of demand
  * `d`, purchases and sinks included) and `scale` = max(|that bound|, max |a·x|); a row fails when
  * `|residual| > RESIDUAL_ABS + RESIDUAL_REL × scale`, or when its activity is not a number.
@@ -454,6 +540,8 @@ function sourceColumns(lp: MainLp): Set<number> {
  */
 async function freeLoop(lp: MainLp): Promise<LpRecipe[]> {
   const sources = sourceColumns(lp);
+  // Add-on 17: capped supplies are sources too, fixed to 0 with the purchases.
+  for (let i = 0; i < lp.supplies.length; i++) sources.add(lp.firstSupply + i);
   const runsOnly = lp.canonical.map((_, j) => (j < lp.firstBuy ? 1 : 0));
   const fromNothing = await minimize(lp, runsOnly, [], 0, sources);
   if (fromNothing.status === 'error') throw new Error('rate solver: the loop-guard LP failed');
@@ -795,6 +883,7 @@ function settled(lp: MainLp, s1: LpResult, stages: readonly LpResult[], notes: P
     sinks: kept(lp.goods, best.x, lp.firstSink),
     // Within tolerance a later stage may read a hair under S1's objective; the least is never more than the plan's.
     rawCost: sig9(rawCost), leastRawCost: sig9(Math.min(s1.objective, rawCost)), blockers: [], warnings: notes,
+    ...suppliedBy(lp, best.x),
   };
   return { sol, x: best.x };
 }
@@ -1066,19 +1155,112 @@ function ownedOnlyWarnings(lp: MainLp, model: BuildModel, columns: readonly numb
   });
 }
 
+/** The synthetic farm recipes of `lp` (`LpRecipe.farm`, add-on 17), by column. */
+function farmColumns(lp: MainLp): Set<number> {
+  const farms = new Set<number>();
+  lp.recipes.forEach((r, j) => {
+    if (r.kind === 'recipe' && r.farm === true) farms.add(j);
+  });
+  return farms;
+}
+
 /**
  * S1g (plan 12): the least raw material with gathered world blocks dug — S1 again with the step recipes whose `main`
  * the line may also buy (`GoodInfo.alsoMade`) left out, never below S1; S1 itself on a graph without such goods, or when
- * that LP does not solve (an `alsoMade` good keeps its purchase, so it solves whenever S1 does).
+ * that LP does not solve (an `alsoMade` good keeps its purchase, so it solves whenever S1 does). Add-on 17 (ruling S7):
+ * the synthetic farm recipes (`farmColumns`) are left out as well, so σ never counts a farm's output as free and the step
+ * charge keeps its farm-free size; running farms' supplies and other projects' offers stay on.
  */
 async function leastDug(graph: CandidateGraph, lp: MainLp, s1: LpResult): Promise<number> {
-  const off = new Set<number>();
+  const off = farmColumns(lp);
   lp.recipes.forEach((r, j) => {
     if (r.kind === 'recipe' && r.main !== undefined && graph.goods.get(r.main)?.alsoMade === true) off.add(j);
   });
   if (off.size === 0) return s1.objective;
   const dug = await minimize(lp, lp.rawCost, [], Infinity, off);
   return dug.status === 'optimal' ? Math.max(dug.objective, s1.objective) : s1.objective;
+}
+
+/** The purchase columns of raw sources: goods whose cost is above 0, the goods of `upkeep` (a farm's tool wear) aside. */
+function sourcePurchases(lp: MainLp, upkeep?: ReadonlySet<StuffKey>): number[] {
+  const columns: number[] = [];
+  lp.buyKeys.forEach((key, i) => {
+    const j = lp.firstBuy + i;
+    if ((lp.rawCost[j] ?? 0) > 0 && upkeep?.has(key) !== true) columns.push(j);
+  });
+  return columns;
+}
+
+/** The raw sources `x` buys (`sourcePurchases` above TINY). */
+function sourcesIn(lp: MainLp, x: readonly number[], upkeep?: ReadonlySet<StuffKey>): number {
+  return sourcePurchases(lp, upkeep).filter((j) => (x[j] ?? 0) > TINY).length;
+}
+
+/** The distinct goods of `buys` whose cost is above 0, the goods of `upkeep` aside: a plan's raw sources (`Solution.sources`). */
+function sourcesOf(graph: CandidateGraph, buys: ReadonlyMap<StuffKey, number>, upkeep?: ReadonlySet<StuffKey>): number {
+  let count = 0;
+  for (const key of buys.keys()) if ((graph.goods.get(key)?.cost ?? 0) > 0 && upkeep?.has(key) !== true) count++;
+  return count;
+}
+
+/**
+ * S1f (add-on 17, ruling S7): the least raw material with the synthetic farm recipes off (`farmColumns`), never below
+ * S1, and its raw sources (`sourcesIn`); S1's own when the graph has no farm recipe or that LP fails. Running farms'
+ * supplies and other projects' offers stay on. Per unit of demand (`Solution.farmFree`, scaled by `solveLine`).
+ */
+async function leastWithoutFarms(lp: MainLp, s1: LpResult, upkeep?: ReadonlySet<StuffKey>): Promise<{ raw: number; sources: number }> {
+  const farms = farmColumns(lp);
+  if (farms.size > 0) {
+    const without = await minimize(lp, lp.rawCost, [], Infinity, farms);
+    if (without.status === 'optimal') return { raw: Math.max(without.objective, s1.objective), sources: sourcesIn(lp, without.x, upkeep) };
+  }
+  return { raw: s1.objective, sources: sourcesIn(lp, s1.x, upkeep) };
+}
+
+/**
+ * Best multi-output's source binaries (`BuildMipInput.sources`): every purchase column of a raw source
+ * (`sourcePurchases`), at one horizon of the farm-free line's mean raw input (`sourceWeight` of S1f in the MIP's units,
+ * `scaleOf`); undefined when there is none or it would weigh nothing, as then cheapest's MIP decides alone.
+ */
+function multiOutputSources(
+  lp: MainLp, input: BuildMipInput, farmFree: { raw: number; sources: number }, upkeep?: ReadonlySet<StuffKey>,
+): BuildMipInput['sources'] {
+  const columns = sourcePurchases(lp, upkeep);
+  const { F, sigma } = scaleOf(input);
+  const weight = sourceWeight({ s1f: farmFree.raw, k1f: farmFree.sources, F, sigma });
+  return columns.length > 0 && weight > 0 ? { columns, weight } : undefined;
+}
+
+/**
+ * The byproduct of `sol`'s own runs credited to other projects' needs (`Solution.credited`, ruling R14; at unit demand):
+ * per good of `credits`, what the step recipes run for another good make of it (`kind: 'recipe'` whose `main` is not the
+ * good) less what the line takes of it (every column that consumes it), at least 0 and at most what the line sinks of
+ * it, shared among that good's credits in their order, each up to its `perSecond` (per unit of demand here); above TINY,
+ * ids sorted. Nothing of it entered the solve: the runs are those the line needs anyway (OQ5).
+ */
+function creditedOf(recipes: readonly LpRecipe[], sol: Solution, credits: readonly CreditColumn[], demandScale: number): Map<string, number> {
+  const spare = new Map<StuffKey, number>();
+  for (const key of new Set(credits.map((c) => c.key))) {
+    let made = 0;
+    let used = 0;
+    for (const r of recipes) {
+      const runs = sol.runs.get(r.id) ?? 0;
+      const a = runs > 0 ? netOf(r, key) : 0;
+      if (a < 0) used -= a * runs;
+      else if (a > 0 && r.kind === 'recipe' && r.main !== key) made += a * runs;
+    }
+    spare.set(key, Math.max(0, Math.min(made - used, sol.sinks.get(key) ?? 0)));
+  }
+  const taken = new Map<string, number>();
+  for (const c of credits) {
+    const left = spare.get(c.key) ?? 0;
+    const take = Math.min(left, Math.max(0, c.perSecond) / demandScale);
+    spare.set(c.key, left - take);
+    taken.set(c.id, (taken.get(c.id) ?? 0) + take);
+  }
+  const credited = new Map<string, number>();
+  for (const [id, amount] of taken) if (amount > TINY) credited.set(id, sig9(amount));
+  return sortedMap(credited);
 }
 
 /**
@@ -1104,6 +1286,41 @@ function buildInput(lp: MainLp, s1: LpResult, s1g: number, demandScale: number, 
 /** The `build-cost-approx` warning, a fresh object per plan. */
 function buildCostApprox(): PlanWarning {
   return { code: 'build-cost-approx', text: 'Weighing the build cost of new machines took too long; machine counts are rounded up from an estimate' };
+}
+
+/** The `sources-approx` warning (add-on 17: best multi-output on add-on 12's fallback), a fresh object per plan. */
+function sourcesApprox(): PlanWarning {
+  return { code: 'sources-approx', text: 'Finding the fewest different raw materials took too long; this plan may need more of them than it could' };
+}
+
+/** `result` when it is a whole solution the build stage keeps: optimal, or feasible and not stopped by the time guard. */
+function wholeOf(result: LpResult | undefined): LpResult | undefined {
+  return result !== undefined && (result.status === 'optimal' || (result.status === 'feasible' && result.stop !== 'time')) ? result : undefined;
+}
+
+/** A build MIP of the build stage: its model as solved, and its result (none when skipped) and wall time. */
+interface SolvedMip { mip: ReturnType<typeof buildMip>; model: LpModel; result?: LpResult; seconds: number }
+
+/**
+ * The build MIP of `input` solved as the build stage does: started from the cheaper by its own objective of its start
+ * (`buildMip`'s `start`) and `sparse` rounded up (`startAt`; none when both leave a step short), a model with source
+ * binaries bounded by the start it uses (`modelAt`, ruling S10), within the node and simplex-iteration limits that decide
+ * it and the far time guard (skipped when `buildTimeLimit` is not above 0).
+ */
+async function solvedMip(input: BuildMipInput, sparse: readonly number[] | null, opts: SolveOptions): Promise<SolvedMip> {
+  const mip = buildMip(input);
+  const alternative = sparse === null ? undefined : mip.startAt(sparse);
+  const sparser = alternative !== undefined && alternative.cost < mip.startCost;
+  const start = sparser ? alternative.start : mip.start;
+  const model = sparser ? mip.modelAt(alternative.cost) : mip.model;
+  const limit = opts.buildTimeLimit ?? BUILD_MIP_TIME_LIMIT_SECONDS;
+  if (!(limit > 0)) return { mip, model, seconds: 0 };
+  const began = performance.now();
+  const result = await solveLp({
+    ...model, ...(start === undefined ? {} : { start }),
+    maxNodes: opts.buildMaxNodes ?? BUILD_MIP_MAX_NODES, maxIterations: opts.buildMaxIterations ?? BUILD_MIP_MAX_LP_ITERATIONS, timeLimit: limit,
+  });
+  return { mip, model, result, seconds: (performance.now() - began) / 1000 };
 }
 
 /** The steps of `bounded` (`boundOwnedOnly`) that `x` runs. */
@@ -1132,41 +1349,45 @@ function ownedOnlyRuns(bounded: readonly number[], x: readonly number[]): number
  * locked at the base's, the latest that balances — the decision's own columns last, never S1 (which may run steps past
  * the machines it bought). A tie that needs a new machine (its build and the step charge on its block) is the build
  * MIP's to weigh.
+ *
+ * Add-on 17: S1g leaves the synthetic farm recipes out too (`leastDug`), and S1f is measured (`leastWithoutFarms`,
+ * `Solution.farmFree`). Best multi-output (`opts.multiOutput`, architecture §11.45 (3); rulings R14, S10): the build MIP is
+ * first solved as cheapest solves it, then again with a binary per raw source (`multiOutputSources`), started from the
+ * best by its own objective of S1 rounded up, the sparse plan rounded up and the cheapest pre-solve's whole solution
+ * (`BuildMipInput.start`), so it is never worse in its objective than cheapest's decision; the purchases it drops
+ * (`BuildDecision.dropped`) stay out of stage 5, as stage 5 would buy a dropped source back where that is less raw
+ * material, and its fallback also weighs the pre-solve's plan rounded up and carries `sources-approx`. `buildStats` adds
+ * up both MIPs' seconds and nodes and keeps the multi-output MIP's status, stop, objective and bound.
  */
 async function buildStage(
   graph: CandidateGraph, lp: MainLp, s1: LpResult, warnings: PlanWarning[], opts: SolveOptions, model: BuildModel, demandScale: number,
   bounded: readonly number[],
 ): Promise<Solution> {
   const input = buildInput(lp, s1, await leastDug(graph, lp, s1), demandScale, model, opts);
-  const mip = buildMip(input);
+  const farmFree = await leastWithoutFarms(lp, s1, opts.upkeep);
   // The MIP's start: S1 rounded up, or plan 09's sparse plan within the step charge's cap (`sparseWithin`) rounded up
   // when that costs less in the MIP's own objective — S1 runs every step of the least raw material, the most a plan of
   // the line has, so the sparse one is far closer to what the MIP plans.
   const sparse = await sparseWithin(lp, (1 + STEP_CHARGE_CAP) * s1.objective);
-  const alternative = sparse === null ? undefined : mip.startAt(sparse);
-  const start = alternative !== undefined && alternative.cost < mip.startCost ? alternative.start : mip.start;
+  const cheapest = await solvedMip(input, sparse, opts);
+  const sources = opts.multiOutput === true ? multiOutputSources(lp, input, farmFree, opts.upkeep) : undefined;
+  const pre = sources === undefined ? undefined : wholeOf(cheapest.result);
+  const run = sources === undefined ? cheapest
+    : await solvedMip({ ...input, sources, ...(pre === undefined ? {} : { start: pre.x }) }, sparse, opts);
+  const { mip, result } = run;
   const notes = [...warnings];
-  const limit = opts.buildTimeLimit ?? BUILD_MIP_TIME_LIMIT_SECONDS;
-  let result: LpResult | undefined;
-  let seconds = 0;
-  if (limit > 0) {
-    const began = performance.now();
-    result = await solveLp({
-      ...mip.model, ...(start === undefined ? {} : { start }),
-      maxNodes: opts.buildMaxNodes ?? BUILD_MIP_MAX_NODES, maxIterations: opts.buildMaxIterations ?? BUILD_MIP_MAX_LP_ITERATIONS, timeLimit: limit,
-    });
-    seconds = (performance.now() - began) / 1000;
-  }
   let decision: BuildDecision;
   let from: readonly number[];
   let approx = false;
-  if (result !== undefined && (result.status === 'optimal' || (result.status === 'feasible' && result.stop !== 'time'))) {
-    decision = mip.decode(result.x);
-    from = result.x;
+  const whole = wholeOf(result);
+  if (whole !== undefined) {
+    decision = mip.decode(whole.x);
+    from = whole.x;
   } else {
     approx = true;
     notes.push(buildCostApprox());
-    const m = mip.model;
+    if (sources !== undefined) notes.push(sourcesApprox());
+    const m = run.model;
     const relaxation: LpModel = { sense: m.sense, colCost: m.colCost, colLower: m.colLower, colUpper: m.colUpper, rows: m.rows };
     const relaxed = await solveLp(relaxation);
     // Fix wave 2 (b): beside the relaxation and S1, plan 09's plan of the same graph ("Ignore build cost": its charged
@@ -1174,9 +1395,12 @@ async function buildStage(
     // capacity, the others at each step's cheapest option — and the one the build MIP's objective rates lowest kept (ties:
     // plan 09's, which has the fewest steps, then the relaxation's, then S1's). The relaxation spreads a step's fixed
     // costs over runs far below one machine's, so its rounding can build machines a plan of fewer steps does without.
+    // Add-on 17: in best multi-output the cheapest pre-solve's plan is one more (after plan 09's), which the binaries'
+    // relaxation never sees.
     const ignored = await finish(lp, s1, [], opts);
     const candidates: Array<{ decision: BuildDecision; cost: number; from: readonly number[] }> = [
       { ...mip.rounded(ignored.x), from: ignored.x },
+      ...(pre === undefined ? [] : [{ ...mip.rounded(pre.x), from: pre.x }]),
       ...(relaxed.status === 'optimal' ? [{ ...mip.rounded(relaxed.x, mip.prefer(relaxed.x)), from: relaxed.x }] : []),
       { ...mip.rounded(s1.x), from: s1.x },
     ];
@@ -1187,7 +1411,9 @@ async function buildStage(
     decision = kept.decision;
     from = kept.from;
   }
-  const buildStats: NonNullable<Solution['buildStats']> = { seconds, nodes: result?.nodes ?? 0, status: result?.status ?? 'skipped', approx };
+  const nodes = (cheapest.result?.nodes ?? 0) + (run === cheapest ? 0 : (run.result?.nodes ?? 0));
+  const seconds = cheapest.seconds + (run === cheapest ? 0 : run.seconds);
+  const buildStats: NonNullable<Solution['buildStats']> = { seconds, nodes, status: result?.status ?? 'skipped', approx };
   if (result?.stop !== undefined) buildStats.stop = result.stop;
   if (result !== undefined && result.x.length > 0) {
     buildStats.objective = mip.exactCost(result.x);
@@ -1204,6 +1430,8 @@ async function buildStage(
   lp.recipes.forEach((r, j) => {
     if (r.kind === 'recipe' && !decision.support.has(j)) outside.add(j);
   });
+  // Add-on 17: the sources the multi-output MIP dropped stay out (its own solution shows the rest stays feasible).
+  for (const j of decision.dropped ?? []) outside.add(j);
   const own = from.slice(0, lp.rawCost.length);
   let ownRaw = 0;
   lp.rawCost.forEach((c, j) => {
@@ -1231,6 +1459,7 @@ async function buildStage(
   sol.pools = decision.pools;
   sol.cleanroom = decision.cleanroom;
   sol.buildStats = buildStats;
+  sol.farmFree = farmFree;
   return sol;
 }
 
@@ -1277,7 +1506,7 @@ function probed(lp: MainLp, s1: LpResult, warnings: PlanWarning[]): Solution {
   const least = sig9(Math.min(s1.objective, rawCost));
   return {
     status: 'ok', runs: kept(lp.recipes.map((r) => r.id), s1.x, 0), buys: kept(lp.buyKeys, s1.x, lp.firstBuy),
-    sinks: kept(lp.goods, s1.x, lp.firstSink), rawCost: least, leastRawCost: least, blockers: [], warnings,
+    sinks: kept(lp.goods, s1.x, lp.firstSink), rawCost: least, leastRawCost: least, blockers: [], warnings, ...suppliedBy(lp, s1.x),
   };
 }
 
@@ -1321,10 +1550,15 @@ export async function solveLine(graph: CandidateGraph, demand: ReadonlyMap<Stuff
   const unit = new Map([...demand].map(([key, amount]): [StuffKey, number] => [key, amount / scale]));
   const sol = await solveUnit(graph, unit, opts, scale);
   const times = <K>(values: ReadonlyMap<K, number>): Map<K, number> => new Map([...values].map(([key, v]): [K, number] => [key, sig9(v * scale)]));
-  return {
+  const scaled: Solution = {
     ...sol, runs: times(sol.runs), buys: times(sol.buys), sinks: times(sol.sinks),
     rawCost: sig9(sol.rawCost * scale), leastRawCost: sig9(sol.leastRawCost * scale),
   };
+  if (sol.supplied !== undefined) scaled.supplied = times(sol.supplied);
+  if (sol.credited !== undefined) scaled.credited = times(sol.credited);
+  // S1f is no plan figure (it only weighs the multi-output sources): scaled, not rounded to 9 digits.
+  if (sol.farmFree !== undefined) scaled.farmFree = { raw: sol.farmFree.raw * scale, sources: sol.farmFree.sources };
+  return scaled;
 }
 
 /**
@@ -1344,15 +1578,16 @@ async function solveUnit(graph: CandidateGraph, demand: ReadonlyMap<StuffKey, nu
   const model = opts.build;
   for (let round = 0; ; round++) {
     const recipes = graph.recipes.filter((r) => !bannedSet.has(r.id));
-    const lp = mainLp(graph, recipes, demand);
+    const lp = mainLp(graph, recipes, demand, opts.supplies, demandScale);
     const bounded = model !== undefined && model.mode === 'rate' ? boundOwnedOnly(lp, model, demandScale) : [];
     const s1 = await minimize(lp, lp.rawCost, []);
     if (s1.status === 'error') throw new Error('rate solver: the raw-material LP failed');
     // Costs are ≥ 0, so S1 is bounded below: an "unbounded or infeasible" answer can only mean infeasible.
     if (s1.status !== 'optimal') {
       if (model !== undefined && bounded.length > 0) {
-        // The owned machines that cannot be built are too few when the line plans without their bounds.
-        const free = await minimize({ ...lp, upper: new Array<number>(lp.upper.length).fill(Infinity) }, lp.rawCost, []);
+        // The owned machines that cannot be built are too few when the line plans without their bounds (the supplies
+        // keep their caps, add-on 17).
+        const free = await minimize({ ...lp, upper: lp.upper.map((u, j) => (j < lp.firstSupply ? Infinity : u)) }, lp.rawCost, []);
         if (free.status === 'optimal') {
           const past = bounded.filter((j) => (free.x[j] ?? 0) > (lp.upper[j] as number) + TINY);
           return infeasible([], [...loopWarnings(), ...ownedOnlyWarnings(lp, model, past.length > 0 ? past : ownedOnlyRuns(bounded, free.x))]);
@@ -1372,6 +1607,9 @@ async function solveUnit(graph: CandidateGraph, demand: ReadonlyMap<StuffKey, nu
       // Of two twins every stage rates alike, the plan runs the same one whichever the solver met (`twinMoves`).
       if (done.status === 'ok') {
         done = withTwinsMoved(done, twinMoves(graph, recipes, demand, { model, pinned: opts.pinnedRecipes, plan: done, formRank: opts.formRank }));
+        // Add-on 17: the final plan's raw sources, and in best multi-output the byproducts credited to other projects.
+        done.sources = sourcesOf(graph, done.buys, opts.upkeep);
+        if (opts.multiOutput === true && (opts.credits?.length ?? 0) > 0) done.credited = creditedOf(recipes, done, opts.credits ?? [], demandScale);
       }
       done.banned = [...banned];
       return done;

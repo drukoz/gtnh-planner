@@ -12,7 +12,7 @@ import { indexPlan, issueText, type PlanIssue } from '../../shared/plan/balance.
 import { machineGroups } from '../../shared/plan/pools.ts';
 import type { DimensionInfo, Ingredient, Pack, Product, Recipe } from '../../shared/types/pack.ts';
 import {
-  DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_STEP_CHARGE, type BomLine, type LeafClass, type Plan, type PlanContext, type PlanFlow, type PlanSettings,
+  DEFAULT_STEP_CHARGE, type BomLine, type LeafClass, type Plan, type PlanContext, type PlanFlow, type PlanSettings,
   type PlanStep, type PlanWarning, type PowerSummary, type RawInput, type SourceInfo, type StepOption,
 } from '../../shared/types/plan.ts';
 import { GATHERED_BLOCKS, isBaseItem, unlockText, type Availability } from './availability.ts';
@@ -32,10 +32,12 @@ import { buildCounts, lineBuildModel, type BuildModel } from './machine-options.
 import { buildFlows, emptyContainers, optionShares, planSteps, stepLine, type OptionShare, type StepLine } from './machines.ts';
 import { makeN, wholeRuns, type MakeNResult } from './make-n.ts';
 import { yieldToEventLoop } from './lp.ts';
+import { horizonHoursOf, objectiveOf, runningSupplies, type Need, type Offer } from './objective.ts';
 import { aloneGraph, linePricing, lineWalk, type CostModel, type LinePricing } from './pricing.ts';
 import { sig9 } from './round.ts';
 import {
-  HAND_STEP_WEIGHT, MAX_NAMED_LOOP_RECIPES, solveLine, standaloneCosts, type Solution, type SolveOptions, type Standalone,
+  HAND_STEP_WEIGHT, MAX_NAMED_LOOP_RECIPES, solveLine, standaloneCosts, type CreditColumn, type Solution, type SolveOptions, type Standalone,
+  type SupplyColumn,
 } from './solve.ts';
 import { buildSteps } from './steps.ts';
 
@@ -59,9 +61,13 @@ export const PIN_DOMINATED_SHARE = 1.01;
  * before it gets the default), and a crafting-table step weighs HAND_STEP_WEIGHT steps in a running line whose crafting
  * is not automated (fix spec D7; a Make N batch may be crafted by hand), as does one no Auto Workbench runs in a running
  * line whose crafting is (`byHandWeight`, controller ruling 214); with recipe pins, the pinned recipes, which no twin
- * replaces (`twinMoves`, solve.ts).
+ * replaces (`twinMoves`, solve.ts). Add-on 17 (architecture §11.45): best multi-output (`objectiveOf`) sets
+ * `multiOutput`; `line` adds the goods its farms wear (`upkeep`) and, in rate mode only, its capped free supplies and the
+ * needs it may be credited for (a Make N batch has no steady rate to cap them by), each only when it has some.
  */
-export function solveOptions(settings: PlanSettings): SolveOptions {
+export function solveOptions(
+  settings: PlanSettings, line?: { upkeep?: ReadonlySet<StuffKey>; supplies?: readonly SupplyColumn[]; credits?: readonly CreditColumn[] },
+): SolveOptions {
   const options: SolveOptions = {
     stepCharge: settings.stepCharge ?? DEFAULT_STEP_CHARGE,
     handWeight: settings.mode === 'rate' && !settings.automateCrafting ? HAND_STEP_WEIGHT : 1,
@@ -70,6 +76,12 @@ export function solveOptions(settings: PlanSettings): SolveOptions {
   if (settings.mode === 'rate' && settings.automateCrafting) options.byHandWeight = HAND_STEP_WEIGHT;
   const pinned = Object.values(settings.recipeChoice);
   if (pinned.length > 0) options.pinnedRecipes = new Set(pinned);
+  if (objectiveOf(settings) === 'multi-output') options.multiOutput = true;
+  if (line?.upkeep !== undefined && line.upkeep.size > 0) options.upkeep = line.upkeep;
+  if (settings.mode === 'rate') {
+    if (line?.supplies !== undefined && line.supplies.length > 0) options.supplies = line.supplies;
+    if (line?.credits !== undefined && line.credits.length > 0) options.credits = line.credits;
+  }
   return options;
 }
 
@@ -967,6 +979,9 @@ interface PlanBody {
   rawCost?: Plan['rawCost'];
   /** `Plan.cost` (plan 12): every line that plans. */
   cost?: Plan['cost'];
+  /** `Plan.rawSources` and `Plan.credits` (add-on 17): a line that plans; credits only when it is credited for some. */
+  rawSources?: number;
+  credits?: Plan['credits'];
 }
 
 function bodyWithout(status: PlanBody['status'], warnings: PlanWarning[], unlocks: Plan['unlocks'] = []): PlanBody {
@@ -1076,7 +1091,8 @@ function integrityWarning(issue: PlanIssue, plan: Plan): PlanWarning {
 /**
  * The plan of `body`, named (`planNames`), with one warning per integrity issue of its flows (`indexPlan`: an input
  * nothing supplies or supplies short, a good made two ways, a good both bought and made). A correct plan has none; a
- * plan that has one says so instead of reading as if it added up.
+ * plan that has one says so instead of reading as if it added up. Every plan says the mode it was made in
+ * (`Plan.objective`, `objectiveOf`: add-on 17).
  */
 function assemble(pack: Pack, settings: PlanSettings, basis: PlanBasis, body: PlanBody): Plan {
   const plan: Plan = {
@@ -1092,6 +1108,9 @@ function assemble(pack: Pack, settings: PlanSettings, basis: PlanBasis, body: Pl
   if (body.targetPerSecond !== undefined) plan.targetPerSecond = body.targetPerSecond;
   if (body.rawCost !== undefined) plan.rawCost = body.rawCost;
   if (body.cost !== undefined) plan.cost = body.cost;
+  plan.objective = objectiveOf(settings);
+  if (body.rawSources !== undefined) plan.rawSources = body.rawSources;
+  if (body.credits !== undefined) plan.credits = body.credits;
   plan.names = planNames(pack, plan, settings);
   const issues = indexPlan(plan).issues;
   if (issues.length > 0) plan.warnings = [...plan.warnings, ...issues.map((issue) => integrityWarning(issue, plan))];
@@ -1525,7 +1544,8 @@ type Spend = { mode: 'rate'; rawPerSecond: number } | { mode: 'makeN'; run: Make
  * set only when above 0, and the warning names them, each type once, a cleanroom last: `Not counted in the build cost:
  * <names> (their price could not be worked out)`, `its price` for one, at most MAX_UNPRICED_NAMED names then ` and <n>
  * more`. Rate: `runPerHour` = the raw material a second × 3,600, `horizonHours` what build cost was weighed against
- * (null: ignored). Make N: `batch` = Σ bought × leaf cost, `runPerHour` that spread over the batch's time an hour,
+ * (`horizonHoursOf`, add-on 17: null in least raw material, which counts no build cost, whatever horizon is stored).
+ * Make N: `batch` = Σ bought × leaf cost, `runPerHour` that spread over the batch's time an hour,
  * `horizonHours` null. `build` also holds what the line's crop farms plant (`plantingsOf`, add-on 17), in every mode.
  */
 function planCost(
@@ -1553,8 +1573,7 @@ function planCost(
   }
   let cost: NonNullable<Plan['cost']>;
   if (spend.mode === 'rate') {
-    const horizonHours = settings.buildHorizonHours === null ? null : (settings.buildHorizonHours ?? DEFAULT_BUILD_HORIZON_HOURS);
-    cost = { runPerHour: sig9(spend.rawPerSecond * SECONDS_PER_HOUR), build: sig9(build), horizonHours };
+    cost = { runPerHour: sig9(spend.rawPerSecond * SECONDS_PER_HOUR), build: sig9(build), horizonHours: horizonHoursOf(settings) };
   } else {
     let batch = 0;
     for (const [key, amount] of spend.run.buys) batch += amount * (spend.graph.goods.get(key)?.cost ?? 0);
@@ -1626,9 +1645,11 @@ interface PlannedLine {
  * that no machine can run either (`BuildModel.blockedAlike`; `linePricing`'s `unbuildable`, which `avoidingLine`'s walks
  * leave out too), so producers that can run take their place; the set only grows, so this ends.
  * With an avoid list the plain line is first only probed (probes get no model), and a probe that plans nothing ends it.
+ * Each pricing's solves take `optionsFor` it (add-on 17: the tools its farms wear are upkeep).
  */
 async function plannedLine(
-  pack: Pack, settings: PlanSettings, ctx: PlanContext, first: LinePricing, demand: ReadonlyMap<StuffKey, number>, options: SolveOptions,
+  pack: Pack, settings: PlanSettings, ctx: PlanContext, first: LinePricing, demand: ReadonlyMap<StuffKey, number>,
+  optionsFor: (pricing: LinePricing) => SolveOptions,
 ): Promise<PlannedLine> {
   const unbuildable = new Map<string, string>();
   /**
@@ -1649,6 +1670,7 @@ async function plannedLine(
   for (let priced = first; ;) {
     const pricing = priced;
     const open = pricing.graph;
+    const options = optionsFor(pricing);
     const avoid = avoidRequest(pack, settings, pricing.target, pricing);
     // the line's farm pack, when it has farms (add-on 17): its graphs' farm recipes are recipes of that pack only
     const linePack = pricing.pack ?? pack;
@@ -1681,16 +1703,71 @@ async function plannedLine(
 export type SolveTuning = Pick<SolveOptions, 'buildTimeLimit' | 'buildMaxNodes' | 'buildMaxIterations'>;
 
 /**
+ * What a line takes from beyond its own steps and purchases, and whom its byproducts may serve (add-on 17, architecture
+ * §11.45 (2), (4)): its capped free supplies, each with where it comes from (`RawInput.from`), and the needs it may be
+ * credited for, each with the project that needs it.
+ */
+interface LineReads {
+  supplies: Array<SupplyColumn & { from: NonNullable<RawInput['from']> }>;
+  credits: Array<CreditColumn & { by: string; name: string }>;
+}
+
+/**
+ * The line's reads (`LineReads`): in rate mode the farms the group runs (`runningSupplies`: `farm:<index>:<key>`, from
+ * that farm) and the offers of other projects (`project:<from>:<key>`, from that project), and in best multi-output the
+ * needs of other projects (`need:<by>:<key>`), each in the order given (Task 6 orders them oldest project first: ruling
+ * R16); none in Make N, which has no steady rate to cap or credit them by.
+ */
+function lineReads(settings: PlanSettings, offers: readonly Offer[], needs: readonly Need[]): LineReads {
+  if (settings.mode !== 'rate') return { supplies: [], credits: [] };
+  const supplies: LineReads['supplies'] = runningSupplies(settings)
+    .map(({ id, key, perSecond, name }) => ({ id, key, perSecond, from: { kind: 'farm', id, name } }));
+  for (const o of offers) {
+    supplies.push({ id: `project:${o.from}:${o.key}`, key: o.key, perSecond: o.perSecond, from: { kind: 'project', id: o.from, name: o.name } });
+  }
+  const credits = objectiveOf(settings) !== 'multi-output' ? []
+    : needs.map((n) => ({ id: `need:${n.by}:${n.key}`, key: n.key, perSecond: n.perSecond, by: n.by, name: n.name }));
+  return { supplies, credits };
+}
+
+/**
+ * The raw inputs a line takes from its supplies (add-on 17): one row per supply it takes from, a row of its own beside
+ * any bought row of the good — per second, cost 0, available, no sources, and where it comes from (`from`).
+ */
+function suppliedInputs(sol: Solution, supplies: LineReads['supplies']): RawInput[] {
+  return supplies.flatMap((s): RawInput[] => {
+    const perSecond = sol.supplied?.get(s.id) ?? 0;
+    return perSecond > 0 ? [{ key: s.key, perSecond, cost: 0, available: true, sources: [], from: s.from }] : [];
+  });
+}
+
+/** `Plan.credits` (add-on 17): each need the line's byproducts are credited to (`Solution.credited`), in the order of the needs. */
+function creditsOf(sol: Solution, credits: LineReads['credits']): NonNullable<Plan['credits']> {
+  return credits.flatMap((c) => {
+    const perSecond = sol.credited?.get(c.id) ?? 0;
+    return perSecond > 0 ? [{ to: c.by, name: c.name, key: c.key, perSecond }] : [];
+  });
+}
+
+/**
  * Plans one line (spec §3.2–§3.11): least raw material at the project's tier where the group can reach — with the raw
  * material to build the machines it adds weighed against the build horizon (Make N: the batch; plan 12) — each recipe
  * step paying for itself in raw material (the project's step charge, `solveOptions`), as a steady rate or as a batch of N
  * on the machines the group owns, keeping out of the materials the project avoids where any plan can (`avoidingLine`),
  * and around the steps no machine that can be built here or is owned can run (`plannedLine`). A missing or unknown
  * target gives an `empty` plan; a target nothing reachable makes gives an `infeasible` plan whose warnings say what
- * blocks it and what unlocks it. Every plan that plans has its `cost` (`planCost`). `tuning` (tests and calibration
- * only) overrides the build MIP's limits.
+ * blocks it and what unlocks it. Every plan that plans has its `cost` (`planCost`). `opts`' build MIP limits (tests and
+ * calibration only) override the solver's (`SolveTuning`).
+ *
+ * Add-on 17 (architecture §11.45; ruling S4): the plan is made in its settings' mode (`objectiveOf`, `Plan.objective`) and
+ * says how many different raw goods it buys (`Plan.rawSources`). In rate mode the farms the group runs and the offers of
+ * other projects (`opts.offers`, read by Task 6) are capped free supplies, each one the plan takes from a raw input of its
+ * own beside any bought row of the good (`RawInput.from`); in best multi-output the needs of other projects
+ * (`opts.needs`) are credited with the byproducts of the line's own runs (`Plan.credits`, part of `byproducts`).
  */
-export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanContext, tuning?: SolveTuning): Promise<Plan> {
+export async function planLine(
+  pack: Pack, settings: PlanSettings, ctx: PlanContext, opts?: SolveTuning & { offers?: readonly Offer[]; needs?: readonly Need[] },
+): Promise<Plan> {
   // Each synchronous stretch (availability, each candidate walk, each LP solve) yields first, so other
   // requests and live events go on between them (ledger 200).
   await yieldToEventLoop();
@@ -1711,9 +1788,15 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
   const aim: Pick<PlanBody, 'target' | 'targetPerSecond'> = batch
     ? { target } : { target, targetPerSecond: sig9(settings.amount / SECONDS_PER[settings.per]) };
   // Steps vs raw material (fix spec R3) for every solve of the line, the forms of goods that tell twin recipes apart
-  // (`stockForm`), and the build model of each graph solved in full.
-  const options = { ...solveOptions(settings), formRank: stockForm(pack), ...tuning };
-  const planned = await plannedLine(pack, settings, ctx, first, demand, options);
+  // (`stockForm`), and the build model of each graph solved in full; add-on 17: the mode, the line's supplies and
+  // credits, and the tools its farms wear (upkeep, per pricing).
+  const { offers, needs, ...tuning } = opts ?? {};
+  const reads = lineReads(settings, offers ?? [], needs ?? []);
+  const optionsFor = (pricing: LinePricing): SolveOptions => ({
+    ...solveOptions(settings, { upkeep: new Set(pricing.farm?.tools.keys() ?? []), supplies: reads.supplies, credits: reads.credits }),
+    formRank: stockForm(pack), ...tuning,
+  });
+  const planned = await plannedLine(pack, settings, ctx, first, demand, optionsFor);
   const { priced, avoid, line, model: buildModel, unbuildable } = planned;
   const { graph, sol } = line;
   const { model } = priced;
@@ -1741,7 +1824,7 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
     },
     empties: emptyContainers(pack),
   };
-  const opts = { settings, groupTier: basis.tier, coilHeat: basis.coilHeat, ctx, multiblocks: basis.env.multiblocks, value, build: buildModel };
+  const stepOpts = { settings, groupTier: basis.tier, coilHeat: basis.coilHeat, ctx, multiblocks: basis.env.multiblocks, value, build: buildModel };
   let steps: PlanStep[];
   let flows: PlanFlow[];
   let buys: ReadonlyMap<StuffKey, number>;
@@ -1752,7 +1835,7 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
   let batchWarnings: PlanWarning[] = [];
   let spend: Spend;
   if (batch) {
-    const run = await makeN(linePack, graph, sol, demand, opts);
+    const run = await makeN(linePack, graph, sol, demand, stepOpts);
     batchWarnings = batchShortWarning(pack, run.short, target, settings.amount);
     // The whole runs makeN planned (the same rounding again), spread over the batch's time: flows and byproducts are
     // rates, as in every plan, and the leftovers are what the line sinks.
@@ -1767,7 +1850,7 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
     stepRuns = whole.runs;
     spend = { mode: 'makeN', run, graph };
   } else {
-    steps = planSteps(linePack, graph, sol, { ...opts, perSecondScale: 1 });
+    steps = planSteps(linePack, graph, sol, { ...stepOpts, perSecondScale: 1 });
     flows = buildFlows(graph, sol, [target]);
     buys = sol.buys;
     sinks = sol.sinks;
@@ -1791,6 +1874,8 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
   const raw = rawInputsOf(
     linePack, graph, basis, priced.chains, ctx, buys, made?.totalSeconds ?? null, gatheredRecipesOn(settings), priced.farm?.tools,
   );
+  // Add-on 17: a row per supply the line takes from, beside any bought row of its good (by key, the bought row first).
+  const rawInputs = [...raw.rawInputs, ...suppliedInputs(sol, reads.supplies)].sort((a, b) => byString(a.key, b.key));
   // Make N steps of one machine type share that type's machines (makeN), so they draw at most once per type.
   const power = powerSummary(steps, { sharedByType: batch });
   // The parts the machines hold are ones the line may use (ruling R7): never an option it still avoids.
@@ -1802,7 +1887,7 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
   const bom = await buildBom(linePack, steps, { settings, env: basis.env, leaf: first.leaf, ctx, avoid: held });
   const uses = unavoidableUses(linePack, avoid, line, steps, flows, buys, basis.tier);
   const body: PlanBody = {
-    status: 'ok', unlocks: [], steps, flows, rawInputs: raw.rawInputs, byproducts: byproductsOf(graph, sinks, target), power,
+    status: 'ok', unlocks: [], steps, flows, rawInputs, byproducts: byproductsOf(graph, sinks, target), power,
     buildList: bom.lines, buildTotals: bom.totals,
     buildSteps: buildSteps(linePack, { steps, bom, power, settings, tier: basis.tier, target, totalSeconds: made?.totalSeconds, avoid: held }),
     warnings: [
@@ -1815,6 +1900,10 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
   if (made !== undefined) body.makeN = made;
   // The raw material the plan uses against the least any plan of its graph needs (fix spec R3): a rate's trade-off.
   if (!batch) body.rawCost = { perSecond: sol.rawCost, leastPerSecond: sol.leastRawCost };
+  // Add-on 17: its raw sources, and the needs of other projects its byproducts are credited to.
+  if (sol.sources !== undefined) body.rawSources = sol.sources;
+  const credits = creditsOf(sol, reads.credits);
+  if (credits.length > 0) body.credits = credits;
   // Supporting lines come from the finished steps and flows (fix spec R6).
   return withLines(linePack, basis, assemble(linePack, settings, basis, withAvoided(body, avoid, uses.avoided)));
 }

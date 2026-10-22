@@ -77,16 +77,27 @@ function portSide(peers: ReadonlyMap<string, number> | undefined): PortSide {
  * (got < SHORT_INPUT_SHARE × need), `multi-producer` (the main output of 2+ steps), `bought-and-made` (a good the line
  * buys that is some step's main output). A good several steps make only beside their main output is no issue, nor is
  * the shortfall of a good a Make N batch's `batch-short` warning covers (its `keys`): it says what to have ready.
+ * Add-on 17: what the line buys of a good is only the bought share of its `raw` flows — those less its raw inputs taken
+ * from a farm the group runs or another project (`RawInput.from`), at least 0, and above ORPHAN_REL of them, as the flows
+ * and rows each keep 9 digits — so a capped supply topped up by a step is no `bought-and-made` issue.
  */
 export function indexPlan(plan: Plan): PlanIndex {
   const into: FlowsByNode = new Map();
   const outOf: FlowsByNode = new Map();
-  const bought = new Map<StuffKey, number>();
+  const fromRaw = new Map<StuffKey, number>();
   for (const f of plan.flows) {
     addFlow(into, f.to, f.key, f.from, f.perSecond);
     addFlow(outOf, f.from, f.key, f.to, f.perSecond);
-    if (f.from === RAW) bought.set(f.key, (bought.get(f.key) ?? 0) + f.perSecond);
+    if (f.from === RAW) fromRaw.set(f.key, (fromRaw.get(f.key) ?? 0) + f.perSecond);
   }
+  const supplied = new Map<StuffKey, number>();
+  for (const input of plan.rawInputs) if (input.from !== undefined) supplied.set(input.key, (supplied.get(input.key) ?? 0) + input.perSecond);
+  /** What the line buys of `key` a second: its `raw` flows less what it takes from supplies, when that is more than rounding. */
+  const boughtOf = (key: StuffKey): number => {
+    const raw = fromRaw.get(key) ?? 0;
+    const share = Math.max(0, raw - (supplied.get(key) ?? 0));
+    return share > ORPHAN_REL * raw ? share : 0;
+  };
   const batchShort = new Set(plan.warnings.flatMap((w) => (w.code === 'batch-short' ? (w.keys ?? []) : [])));
 
   const inputs: PlanIndex['inputs'] = new Map();
@@ -139,7 +150,7 @@ export function indexPlan(plan: Plan): PlanIndex {
     if (mains.length >= 2) {
       issues.push({ code: 'multi-producer', key, stepId: largest.stepId, stepIds: mains.map((p) => p.stepId), share: mains.map((p) => p.share) });
     }
-    const buys = bought.get(key) ?? 0;
+    const buys = boughtOf(key);
     if (buys > 0) {
       let makesTotal = 0;
       for (const p of list) makesTotal += p.perSecond;

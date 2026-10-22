@@ -885,11 +885,18 @@ function baseDurationTicks(r: Recipe, mapId: string, pick: MachinePick): number 
  * proportion to what each takes. Convert recipes are transparent: what one takes of an option goes on to the recipes
  * that consume its virtual good, in proportion to their use. A flow at most `FLOW_DROP_REL` of what its producer makes
  * of the good is dropped, and a target's `out` flow needs more than that share of what is made of it; values keep 9
- * significant digits and are sorted by `from`, `to`, `key`.
+ * significant digits and are sorted by `from`, `to`, `key`. Add-on 17: what the line takes of a capped free supply (a
+ * farm the group runs, another project's surplus: `Solution.supplied`, by its column's good) reaches it as a bought input
+ * does, from `raw`, so the layout's input chest, the flow diagram's imports and `indexPlan`'s ports count it; what it is
+ * credited for (`Solution.credited`) is already part of what it sinks.
  */
 export function buildFlows(graph: CandidateGraph, sol: Solution, targets: StuffKey[]): PlanFlow[] {
   const { made, used } = recipeAmounts(graph, sol.runs);
   for (const [key, amount] of sol.buys) addAmount(made, key, RAW, amount);
+  for (const [id, amount] of sol.supplied ?? []) {
+    const key = sol.supplyKeys?.get(id);
+    if (key !== undefined) addAmount(made, key, RAW, amount);
+  }
   for (const [key, amount] of sol.sinks) addAmount(used, key, SINK, amount);
   for (const target of new Set(targets)) {
     const total = sum(made.get(target));

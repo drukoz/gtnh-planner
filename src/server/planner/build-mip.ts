@@ -83,6 +83,13 @@ export interface BuildDecision {
   capacity?: Map<string, number>;
   /** Per step of `machines` (rate mode), the holders of machines it runs on and how much of each, unrounded (`laterRoom`). */
   uses?: Map<string, HolderUse[]>;
+  // optional addition (add-on 17, architecture §11.45 (3))
+  /**
+   * Best multi-output (`BuildMipInput.sources`): the purchase columns whose source binary `s_j` the MIP set to 0, which
+   * the later stages keep out (solve.ts: they minimize raw material again and would buy a dropped source back). Set by
+   * `decode` of a model with source binaries; absent from the fallback's decision (`roundUp`, `rounded`).
+   */
+  dropped?: Set<number>;
 }
 /**
  * Machines a kept step runs on, of one holder (`BuildDecision.uses`): with `model.share` a sharing pool (its new machines
@@ -110,6 +117,20 @@ export interface BuildMipInput {
    * second × seconds a run), weighed as `perRun × D × x_j / σ`, a build cost of its runs. Make N passes none.
    */
   plantings?: ReadonlyArray<{ j: number; perRun: number }>;
+  // optional additions (add-on 17, architecture §11.45 (3); rulings R14, S10)
+  /**
+   * Best multi-output: the purchase columns of the raw goods the line may buy (cost above 0, upkeep aside), each with a
+   * binary `s_j` of cost `weight` (objective.ts `sourceWeight`), `x_j − M_j·s_j ≤ 0`, `M_j = obj(start) / c_j × (1 + 1e-6)
+   * + TINY` of the start the MIP uses (`c_j` the column's objective coefficient; every objective term is ≥ 0, so a plan no
+   * dearer than the start buys no more of it), `s_j = 1` in a start where it buys.
+   */
+  sources?: { columns: readonly number[]; weight: number };
+  /**
+   * A whole solution of the same model without the source binaries (the cheapest pre-solve's, solve.ts), which `buildMip`
+   * extends with `s_j = 1` where it buys and starts from instead of `roundUp(input, x1)` when it is better in the model's
+   * objective.
+   */
+  start?: readonly number[];
 }
 
 function byString(a: string, b: string): number {
@@ -150,9 +171,10 @@ function adds(o: MachineOption): boolean {
  * unit of the objective stands for — k = s1 × F / σ (0 when s1 ≤ 1e-9), and `charge`, the step charge on one new machine
  * block in raw material, `stepCharge × σ` (fix wave 2 (a): the charge is paid per new machine block, not per step).
  */
-interface Scale { F: number; sigma: number; k: number; charge: number }
+export interface Scale { F: number; sigma: number; k: number; charge: number }
 
-function scaleOf(input: BuildMipInput): Scale {
+/** The MIP's scale of `input` (`Scale`); solve.ts weighs best multi-output's raw sources in its units (`sourceWeight`). */
+export function scaleOf(input: BuildMipInput): Scale {
   const D = input.demandScale;
   const F = input.model.mode === 'rate' ? D * (input.model.horizonSeconds ?? 0) : D;
   const sigma = Math.max(input.s1g * F, 1);
@@ -589,6 +611,8 @@ interface Layout {
   steps: Step[]; members: Map<number, Member[]>; light: Map<number, Light>; pools: Map<string, Pool>;
   z: Map<number, number> /* Make N: mteId → column */; y: Map<number, number> /* step column → column */; c?: number;
   derived: Array<{ j: number; col: number; weight: number }>;
+  /** Best multi-output's source binaries (`BuildMipInput.sources`, add-on 17): purchase column → its binary; the last columns. */
+  sources: Array<{ j: number; col: number }>;
   colCost: number[]; colUpper: number[]; integer: boolean[]; rows: LpRow[];
 }
 
@@ -674,7 +698,8 @@ function cheapestAdd(step: Step, r: number, charge: number): { u: Usable; added:
 /**
  * Per good row of the main LP, the step recipes (columns) that can supply the good when the line cannot buy it: the
  * ones that make it, and for an ore-dictionary slot's good (only conversions make it) the ones that supply an option it
- * converts; null when the line can buy it or an option it converts from (then no step need run for it).
+ * converts; null when the line can buy it or an option it converts from, or (add-on 17) a capped free supply gives it
+ * (then no step need run for it).
  */
 function suppliersOf(lp: MainLp): Array<Set<number> | null> {
   const rowOf = new Map(lp.goods.map((key, g) => [key, g]));
@@ -687,7 +712,8 @@ function suppliersOf(lp: MainLp): Array<Set<number> | null> {
     let found: Set<number> | null = new Set<number>();
     open.add(g);
     for (const [j, c] of row.entries) {
-      if (j >= lp.firstBuy && j < lp.firstSink) {
+      // a purchase, or a supply (the columns after the sinks)
+      if ((j >= lp.firstBuy && j < lp.firstSink) || j >= lp.firstSupply) {
         found = null;
         break;
       }
@@ -928,7 +954,14 @@ function layoutOf(input: BuildMipInput, withDerived: boolean): Layout {
   const derived = !withDerived ? []
     : input.derived.filter((d) => (colCost[d.j] ?? 0) > 0).map((d) => ({ j: d.j, col: column(d.weight, 1, true), weight: d.weight }));
 
-  const layout: Layout = { sigma, charge, steps, members, light, pools, z, y, derived, colCost, colUpper, integer, rows };
+  // Add-on 17: best multi-output's source binaries, one per priced purchase column, at the source weight; the last
+  // columns, so the model without them (`BuildMipInput.start`'s) is this one's first columns. Their rows wait for the
+  // start's objective too (`buildMip`).
+  const weight = input.sources?.weight ?? 0;
+  const sources = !(weight > 0) ? []
+    : (input.sources?.columns ?? []).filter((j) => (colCost[j] ?? 0) > 0).map((j) => ({ j, col: column(weight, 1, true) }));
+
+  const layout: Layout = { sigma, charge, steps, members, light, pools, z, y, derived, sources, colCost, colUpper, integer, rows };
   if (c !== undefined) layout.c = c;
   return layout;
 }
@@ -963,7 +996,17 @@ function startOf(layout: Layout, width: number, x: readonly number[], alloc: All
   for (const [j, l] of layout.light) start[l.e] = Math.max(0, l.perRun * D * Math.max(0, x[j] ?? 0) - l.first * (start[layout.y.get(j) as number] ?? 0));
   if (layout.c !== undefined) start[layout.c] = layout.steps.some((s) => s.r.needsCleanroom && (x[s.j] ?? 0) > 0) ? 1 : 0;
   for (const d of layout.derived) start[d.col] = (x[d.j] ?? 0) > 0 ? 1 : 0;
+  for (const s of layout.sources) start[s.col] = (x[s.j] ?? 0) > 0 ? 1 : 0;
   return start;
+}
+
+/**
+ * `start` (a whole solution of the model without source binaries: the cheapest pre-solve's, `BuildMipInput.start`) with
+ * each source binary 1 where it buys, 0 elsewhere; undefined when it is no solution of that model (another length).
+ */
+function givenStart(layout: Layout, start: readonly number[] | undefined): number[] | undefined {
+  if (start === undefined || start.length !== layout.colCost.length - layout.sources.length) return undefined;
+  return [...start, ...layout.sources.map((s) => ((start[s.j] ?? 0) > 0 ? 1 : 0))];
 }
 
 /** The decision of a whole solution `x` of the MIP (rate mode), each step's columns trimmed to what its runs use. */
@@ -1074,12 +1117,22 @@ function decodeMakeN(input: BuildMipInput, layout: Layout, x: readonly number[])
  * may be off by less than a machine each; `rounded(x, prefer)` is `roundUp(input, x, prefer)` with its objective so (its
  * columns filled as a start's; Infinity for a decision that leaves a step short), so the time guard's fallback can keep
  * the cheapest of several roundings. When `roundUp(input, x1)` leaves a step short, that start
- * is no plan (`start` is undefined), so its objective bounds no purchase, and nothing else does soundly (a step with no
+ * is no plan, so its objective bounds no purchase, and nothing else does soundly (a step with no
  * machine options and no step charge has no bound of its own): the MIP, and so its relaxation, then has no
  * derived-purchase binaries, which only break ties among equally cheap plans.
+ *
+ * Add-on 17, best multi-output (`input.sources`; ruling S10): a binary `s_j` per source purchase column at the source
+ * weight, 1 in a start where it buys; `start` is the cheaper in this objective of `roundUp(input, x1)`'s and
+ * `input.start` extended with its binaries (`givenStart`), `startCost` its objective; `model` bounds each source by the
+ * start's objective, `x_j − M_j·s_j ≤ 0` with `M_j = startCost / c_j × (1 + 1e-6) + TINY`, valid as every objective term
+ * is ≥ 0 — `modelAt(cost)` the same model bounded by another start's objective (solve.ts starts from `sparseWithin`'s
+ * plan rounded up when that is cheaper still); without any start (`cost` Infinity) every binary is fixed to 1, as nothing
+ * bounds the purchases then. The derived-purchase binaries keep `roundUp(input, x1)`'s objective in this model, so the
+ * cheapest pre-solve's solution satisfies them too. `decode` lists the source columns whose binary is 0 (`dropped`).
  */
 export function buildMip(input: BuildMipInput): {
   model: LpModel; start: number[] | undefined; startCost: number; startAt(x: readonly number[]): { start: number[]; cost: number } | undefined;
+  modelAt(cost: number): LpModel;
   decode(x: readonly number[]): BuildDecision; prefer(x: readonly number[]): (j: number) => number | undefined;
   exactCost(x: readonly number[]): number;
   rounded(x: readonly number[], prefer?: (j: number) => number | undefined): { decision: BuildDecision; cost: number };
@@ -1094,20 +1147,48 @@ export function buildMip(input: BuildMipInput): {
     });
     return cost;
   };
-  const start = first.decision.short === undefined ? startOf(layout, width, input.x1, first, input.demandScale) : undefined;
-  const startCost = start === undefined ? Infinity : costOf(start);
-  if (start === undefined) {
+  const s1Start = first.decision.short === undefined ? startOf(layout, width, input.x1, first, input.demandScale) : undefined;
+  const s1StartCost = s1Start === undefined ? Infinity : costOf(s1Start);
+  if (s1Start === undefined) {
     for (const d of layout.derived) layout.colUpper[d.col] = 0;   // no start bounds them: no binaries (doc above)
   } else {
     for (const d of layout.derived) {
-      const bigM = (startCost / (layout.colCost[d.j] as number)) * (1 + BIG_M_SLACK) + TINY;
+      const bigM = (s1StartCost / (layout.colCost[d.j] as number)) * (1 + BIG_M_SLACK) + TINY;
       layout.rows.push({ lower: -Infinity, upper: 0, entries: [[d.j, 1], [d.col, -bigM]] });
     }
   }
-  const model: LpModel = {
+  // Add-on 17 (ruling S10): the cheapest pre-solve's solution, when it is better in this objective than roundUp(x1)'s.
+  let start = s1Start;
+  let startCost = s1StartCost;
+  const given = givenStart(layout, input.start);
+  if (given !== undefined) {
+    const cost = costOf(given);
+    if (cost < startCost) {
+      start = given;
+      startCost = cost;
+    }
+  }
+  const base: LpModel = {
     sense: 'min', colCost: layout.colCost, colLower: new Array<number>(layout.colCost.length).fill(0), colUpper: layout.colUpper, rows: layout.rows,
     integer: layout.integer,
   };
+  const modelAt = (cost: number): LpModel => {
+    if (layout.sources.length === 0) return base;
+    const colLower = [...base.colLower];
+    const colUpper = [...base.colUpper];
+    const rows = [...base.rows];
+    for (const s of layout.sources) {
+      if (!Number.isFinite(cost)) {
+        colLower[s.col] = 1;   // no start bounds the purchases: every source counts (doc above)
+        colUpper[s.col] = 1;
+        continue;
+      }
+      const bigM = (cost / (layout.colCost[s.j] as number)) * (1 + BIG_M_SLACK) + TINY;
+      rows.push({ lower: -Infinity, upper: 0, entries: [[s.j, 1], [s.col, -bigM]] });
+    }
+    return { ...base, colLower, colUpper, rows };
+  };
+  const model = modelAt(startCost);
   const exactCost = (x: readonly number[]): number => {
     let cost = costOf(x);
     for (const [j, l] of layout.light) {
@@ -1119,13 +1200,17 @@ export function buildMip(input: BuildMipInput): {
     return cost;
   };
   return {
-    model, start, startCost,
+    model, start, startCost, modelAt,
     startAt: (x) => {
       const alloc = allocate(input, x, undefined, 0);
       const at = alloc.decision.short === undefined ? startOf(layout, width, x, alloc, input.demandScale) : undefined;
       return at === undefined ? undefined : { start: at, cost: costOf(at) };
     },
-    decode: (x) => (input.model.mode === 'rate' ? decodeRate(input, layout, x) : decodeMakeN(input, layout, x)),
+    decode: (x) => {
+      const decision = input.model.mode === 'rate' ? decodeRate(input, layout, x) : decodeMakeN(input, layout, x);
+      if (layout.sources.length > 0) decision.dropped = new Set(layout.sources.filter((s) => (x[s.col] ?? 0) < 0.5).map((s) => s.j));
+      return decision;
+    },
     exactCost,
     rounded: (x, prefer) => {
       const alloc = allocate(input, x, prefer);

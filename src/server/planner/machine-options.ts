@@ -14,9 +14,7 @@ import { multiblockOverclock, singleblockOverclock, voltageTier, type MachineOc 
 import { V, tierName } from '../../shared/gt/tiers.ts';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import type { Machine, Pack, Recipe } from '../../shared/types/pack.ts';
-import {
-  DEFAULT_BUILD_HORIZON_HOURS, type MachineWhere, type PlanContext, type PlanSettings,
-} from '../../shared/types/plan.ts';
+import type { MachineWhere, PlanContext, PlanSettings } from '../../shared/types/plan.ts';
 import { PROGRAMMED_CIRCUIT_ID } from '../pack/recipes.ts';
 import type { PlanBasis } from './basis.ts';
 import { cleanroomMachine } from './bom.ts';
@@ -25,6 +23,7 @@ import { acceptRecipe, type CandidateGraph, type LpRecipe } from './candidates.t
 import { autoWorkbenches, benchCapBy, benchRefusal, isAutoWorkbench } from './benches.ts';
 import { exportPack } from './farms/pack.ts';
 import { farmMachineKind, farmOc, plantingKeys, stickCost } from './farms/recipes.ts';
+import { horizonHoursOf, objectiveOf } from './objective.ts';
 import { ownedPools, recipeCircuit } from './owned.ts';
 
 const TICKS_PER_SECOND = 20;
@@ -90,8 +89,14 @@ export interface BuildTierFallback { wanted: number; tier: number; why: string }
 
 export interface BuildModel {
   mode: 'rate' | 'makeN';
-  /** rate: buildHorizonHours × 3600, null = build cost ignored; makeN: null (the batch is the horizon). */
+  /**
+   * rate: the build horizon (`horizonHoursOf`, add-on 17) × 3600, null = build cost ignored (least raw material); makeN:
+   * null (the batch is the horizon).
+   */
   horizonSeconds: number | null;
+  // optional addition (add-on 17, architecture §11.45 (1))
+  /** Make N planned for least raw material (`objectiveOf`): the batch's build cost is not counted either (`buildCounts`). */
+  leastRaw?: true;
   /** New and owned machines are shared by sharing pools (`sharesMachines`: rate mode on AE2 lines); else every step has its own. */
   share: boolean;
   /**
@@ -185,9 +190,12 @@ export function sharesMachines(settings: Pick<PlanSettings, 'mode' | 'logistics'
   return settings.mode === 'rate' && settings.logistics === 'ae2';
 }
 
-/** Whether the model counts build cost: Make N, or rate mode with a horizon (basis.ts `buildCostCounts` says so of the settings). */
+/**
+ * Whether the model counts build cost: Make N unless it plans least raw material (`leastRaw`, add-on 17), or rate mode
+ * with a horizon (basis.ts `buildCostCounts` says so of the settings).
+ */
 export function buildCounts(model: BuildModel): boolean {
-  return model.mode === 'makeN' || model.horizonSeconds !== null;
+  return model.mode === 'makeN' ? model.leastRaw !== true : model.horizonSeconds !== null;
 }
 
 function byString(a: string, b: string): number {
@@ -733,8 +741,9 @@ export async function lineBuildModel(pack: Pack, graph: CandidateGraph, basis: P
     const part = parts?.get(lp.id) ?? 0;
     keys.set(lp.id, `${sharingKey(r, lp.nonConsumed, pack)}${part > 0 ? `#${part}` : ''}`);
   }
-  const horizonSeconds = settings.mode === 'makeN' || settings.buildHorizonHours === null
-    ? null : (settings.buildHorizonHours ?? DEFAULT_BUILD_HORIZON_HOURS) * SECONDS_PER_HOUR;
+  // Add-on 17: the horizon of the project's mode (none in least raw material, none in Make N).
+  const hours = horizonHoursOf(settings);
+  const horizonSeconds = hours === null ? null : hours * SECONDS_PER_HOUR;
   // A crop farm's planting per run a second: its cycle in seconds is the sticks one run a second keeps growing.
   const plantings = new Map<string, number>();
   for (const { lp, r } of steps) {
@@ -754,5 +763,6 @@ export async function lineBuildModel(pack: Pack, graph: CandidateGraph, basis: P
     owned, pools, prices, cleanroom,
   };
   if (alike.size > 0) model.blockedAlike = alike;
+  if (settings.mode === 'makeN' && objectiveOf(settings) === 'least-raw') model.leastRaw = true;
   return model;
 }
