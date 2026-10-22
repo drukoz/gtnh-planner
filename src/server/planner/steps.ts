@@ -8,7 +8,7 @@ import { machineGroups } from '../../shared/plan/pools.ts';
 import type { Pack } from '../../shared/types/pack.ts';
 import type { BuildStep, LogisticsMode, PlanSettings, PlanStep, PowerSummary } from '../../shared/types/plan.ts';
 import { PROGRAMMED_CIRCUIT_ID } from '../pack/recipes.ts';
-import { cleanroomMachine, stepOneOffs, stepProductName, stepTools, type Bom } from './bom.ts';
+import { cleanroomMachine, partName, stepOneOffs, stepProductName, stepTools, type Bom } from './bom.ts';
 import type { HeldAvoid } from './candidates.ts';
 
 /** The gather step names this many base materials. */
@@ -33,9 +33,9 @@ function amountText(n: number): string {
     : x.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-/** "3× Iron Ingot", "1,000 L Water": an amount of a good, items counted and fluids in litres (spec §6.1). */
+/** "3× Iron Ingot", "1,000 L Water": an amount of a good, items counted and fluids in litres (spec §6.1), named as a build part. */
 function amountOf(pack: Pack, key: StuffKey, amount: number): string {
-  return isFluidKey(key) ? `${amountText(amount)} L ${pack.nameOf(key)}` : `${amountText(amount)}× ${pack.nameOf(key)}`;
+  return isFluidKey(key) ? `${amountText(amount)} L ${partName(pack, key)}` : `${amountText(amount)}× ${partName(pack, key)}`;
 }
 
 function isProgrammedCircuit(key: StuffKey): boolean {
@@ -188,7 +188,7 @@ export function buildSteps(
     const amount = amountOf(pack, line.key, line.amount);
     if (group === 'one-off' && toolsOnly.has(line.key)) add(id, 'craft', `Make ${amount} (a tool for hand-crafting)`);
     else if (group === 'one-off') add(id, 'craft', `Make ${amount} (stays in the machine)`);
-    else if (group === 'machines' && line.key === roomKey) add(id, 'craft', `Build a cleanroom (${pack.nameOf(line.key)}) around the steps that need it`);
+    else if (group === 'machines' && line.key === roomKey) add(id, 'craft', `Build a cleanroom (${partName(pack, line.key)}) around the steps that need it`);
     else add(id, 'craft', `Craft ${amount}`);
   }
 

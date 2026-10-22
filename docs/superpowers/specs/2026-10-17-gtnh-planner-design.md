@@ -37,7 +37,7 @@ drukoz and friends on the server (a handful of people). drukoz runs the server a
 - **Materials to avoid** (added 2026-10-18 at the user's request): each project has an "Avoid" list of materials (by name, covering every form: ingot, dust, plate, molten, …) or specific items/fluids. The planner chooses recipes that use none of them anywhere in the chain. If no recipe at the current tier avoids one, the plan still comes out, and every step that needs it carries a warning naming the material and why (my call: hard avoid with a visible fallback instead of an unplannable line).
 - **Complex materials get their own supporting line** (added 2026-10-18 at the user's request): a material that is not mined or gathered but made by processing — e.g. ethylene, polyethylene bars, plastics, acids, alloys like red alloy or soldering alloy, steel — is not bought out of thin air by default. The plan includes the line that makes it, down to mined, gathered or pumped materials, shown as a separate "supporting line" behind the main line (e.g. "Ethylene line", "PE line"). Any supporting line can be switched to "we already make this", which turns that material into an import the group supplies from an existing setup.
 - With supporting lines switched off, a derived material is bought when the pack makes it within four recipe layers; derived fluids are always made. Gathered world blocks (sand, gravel, clay, …) are bought like logs and crops. When the build cost counts, AE2 and Project Red lines may make them instead where that costs less, machines included (sand from rock-breaker cobblestone on forge hammers); with "ignore build cost" they are always dug. Projects made before supporting lines were the default are switched to them once (a recorded 'Planner update' change); after that a project's own choice stays.
-- Items marked "we already make this" stop the chain there and become inputs, counted at their (editable) cost like any other input (my call).
+- Items marked "we already make this" stop the chain there and become inputs, counted at their (editable) cost like any other input (my call). That cost is what making the item on its own costs, never less than the metal in it, so the line never smelts or takes apart a stopped item to make something it would otherwise make (changed 2026-10-22: a stopped Steel Rod had cost nothing, less than its own steel).
 - GT overclocking rules decide how fast a recipe runs on the tier of machine used, and so how many machines are needed.
 - "Base material" by default = mined ingots, dusts and gems, gathered items, and fluids pumpable where the group can reach; ore blocks only for lines that make a material.
 - When the group already owns machines that make a part (found in the world), the planner suggests reusing them. The group decides.
@@ -110,7 +110,7 @@ drukoz and friends on the server (a handful of people). drukoz runs the server a
 - **To build the line (once)**: every machine, hull, cable, pipe/cover/interface part, broken down to base materials (expandable / user chooses where to stop).
 - **To run it**: base materials per hour, or for the whole run in Make N. Amounts never print as 0 (tiny rates read "1 every N days"); base-material totals say what needs them.
 - "Have in storage" counts from the world scan next to each line.
-- **Build steps**: ordered, linked to the map pins (incl. chip/pattern setup for networked modes, and hand-crafting steps).
+- **Build steps**: ordered, linked to the map pins (incl. chip/pattern setup for networked modes, and hand-crafting steps). Every machine-made part of the build (the layout's parts too, once the line is placed) has its own step — what to make, how much, from what and in which machine (one the group has, one this line builds, or one it still needs, else "import it"; one-off crafts at a crafting table) — in the order the parts are needed; the "to build" list says how each part is made and offers the flow diagram's recipe swap (added 2026-10-22 at the user's request).
 - Every row can be ticked/crossed off; the name of who did it is shown.
 
 ### 3.11 Projects and sharing
@@ -183,7 +183,7 @@ My calls (open to change):
 - Include GT super/quantum chests and tanks, iron chests and plain chests in the storage scan; "have" counts everything at the base, broken down by location, flagging what the line can reach.
 - Auto-detect tier from the highest-tier machine at the base.
 - Suggest (not force) reusing machines the group already owns.
-- "We already make this" inputs keep their normal cost (not free).
+- "We already make this" inputs cost what making them costs (not free, never below the material in them).
 - Crafting-table steps run on a GT++ Auto Workbench, with no setting for it. (Changed 2026-10-19 and 2026-10-20 at the user's request; this replaces "default to hand-crafting".)
 - Power "fits" rule: the average covers the line and buffers cover a rain outage.
 - Item/fluid icons from the game, same as block textures.

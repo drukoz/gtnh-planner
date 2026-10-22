@@ -4,7 +4,7 @@
 // parts the same breakdown.
 
 import { PSEUDO_IDS } from '../../shared/gt/tiers.ts';
-import type { StuffKey } from '../../shared/keys.ts';
+import { isFluidKey, parseItemKey, type StuffKey } from '../../shared/keys.ts';
 import { machineGroups } from '../../shared/plan/pools.ts';
 import type { Machine, Pack } from '../../shared/types/pack.ts';
 import { FREE_KEYS, type BomLine, type PlanContext, type PlanSettings, type PlanStep, type PlanWarning } from '../../shared/types/plan.ts';
@@ -77,6 +77,37 @@ export function stepTools(pack: Pack, step: PlanStep, avoid?: HeldAvoid): StuffK
 /** The English name of what a step makes: its main output, else its first output, else its recipe id. */
 export function stepProductName(pack: Pack, step: PlanStep): string {
   return pack.nameOf(step.mainOutput ?? step.outputs[0]?.key ?? step.recipeId);
+}
+
+const MACHINE_ITEMS = new WeakMap<Pack, ReadonlyMap<StuffKey, Machine>>();
+
+/** Each machine's item → the machine (the lowest mteId when several share an item), once per pack. */
+function machineItems(pack: Pack): ReadonlyMap<StuffKey, Machine> {
+  let byItem = MACHINE_ITEMS.get(pack);
+  if (byItem === undefined) {
+    const map = new Map<StuffKey, Machine>();
+    for (const m of [...pack.machines.values()].sort((a, b) => a.mteId - b.mteId)) if (!map.has(m.itemKey)) map.set(m.itemKey, m);
+    byItem = map;
+    MACHINE_ITEMS.set(pack, byItem);
+  }
+  return byItem;
+}
+
+/**
+ * A build part's name (architecture §11 entry 41 (8)): the item's or fluid's name when the pack has one other than its key;
+ * else, for some machine's item, the machine's name; else, for a plain item key at a meta above 0 whose `<id>@0` has a
+ * name, `<that name> (variant <meta>)`; else `<id>` at meta 0 and `<id> (meta <meta>)` above it. A key that is no plain
+ * item key (a fluid, an NBT variant) keeps `pack.nameOf`.
+ */
+export function partName(pack: Pack, key: StuffKey): string {
+  const named = pack.nameOf(key);
+  if (named !== key || isFluidKey(key) || key.includes('#') || !/@\d+$/.test(key)) return named;
+  const machine = machineItems(pack).get(key);
+  if (machine !== undefined) return machine.name;
+  const { id, meta } = parseItemKey(key);
+  if (meta === 0) return id;
+  const base = pack.nameOf(`${id}@0`);
+  return base !== `${id}@0` ? `${base} (variant ${meta})` : `${id} (meta ${meta})`;
 }
 
 /**

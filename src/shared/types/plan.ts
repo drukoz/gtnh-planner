@@ -315,6 +315,26 @@ export interface PlanStep {
 
 export interface PlanFlow { from: string /* step id | 'raw' */; to: string /* step id | 'out' | 'sink' */; key: StuffKey; perSecond: number }
 
+/**
+ * The machine a one-off job of the build list runs on (architecture §11 entry 41 (1)): `owned` the group has one (world
+ * scan, "Machines we have" or a step's owned machines; reuse settings do not apply to a one-off job), `line` a type this
+ * line adds, `new` neither (the cheapest that runs it), `first` only this line's own unit could, but its build needs the part.
+ */
+export interface BomMachine { mteId: number; name: string; tier: number; source: 'owned' | 'line' | 'new' | 'first' }
+
+/** How the build list makes a good (architecture §11 entry 41 (1)): its recipe, machine and runs. */
+export interface BomMade {
+  recipeId: string; mapId: string; machine: BomMachine | 'crafting table';
+  /** Whole runs of this node, alone (the pooled runs are the make plan's). */
+  runs: number;
+  /** The programmed-circuit configuration the recipe needs. */
+  circuit?: number;
+  /** The not-consumed parts the machine holds (`heldOption`'s pick per slot; the programmed circuit left out when `circuit` is set). */
+  nonConsumed?: StuffKey[];
+  /** The recipe needs a cleanroom. */
+  cleanroom?: true;
+}
+
 export interface BomLine {
   key: StuffKey; amount: number; why: string /* e.g. "2× Assembler (MV)" */;
   have?: { total: number; reachable: number; where?: StorageWhere[] };
@@ -329,9 +349,16 @@ export interface BomLine {
    * the order of the lines, and how much each needs; the amounts add up to the total's `amount`.
    */
   neededFor?: Array<{ key: StuffKey; amount: number }>;
+  // optional addition
+  /** How the breakdown makes this good (architecture §11 entry 41 (1)); never on a leaf. */
+  made?: BomMade;
+  // optional addition
+  /** A good the line cannot buy and the breakdown cannot make here, and why (architecture §11 entry 41 (2)). */
+  unmade?: 'no-recipe' | 'own-chain';
 }
 
-export interface BuildStep { id: string; order: number; text: string; pin?: number; kind: 'gather' | 'craft' | 'handcraft' | 'place' | 'power' | 'logistics' | 'configure' | 'test' }
+// 'make' is an optional addition (architecture §11 entry 41 (5)): a build part made in a machine
+export interface BuildStep { id: string; order: number; text: string; pin?: number; kind: 'gather' | 'craft' | 'make' | 'handcraft' | 'place' | 'power' | 'logistics' | 'configure' | 'test' }
 export interface PowerSummary { peakEUt: number; averageEUt: number; voltageTier: number; amps: number; fits?: 'yes' | 'tight' | 'no'; detail?: string; suggestions?: string[] }
 export interface PlanWarning {
   code: string; text: string; stepId?: string; key?: StuffKey;
@@ -387,6 +414,9 @@ export interface Plan {
     /** New machines (a cleanroom included) that can be made here but that `build` leaves out: no price could be worked out. Set only when above 0. */
     unpriced?: number;
   };
+  // optional addition
+  /** The swap list of every made build part (architecture §11 entry 41 (3)), by key; absent when there is none. */
+  buildAlternatives?: Record<StuffKey, PlanStep['alternatives']>;
 }
 
 export interface PlanContext {           // filled from a world scan by Plan 4; Plan 2 works with an empty one

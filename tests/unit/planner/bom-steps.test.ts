@@ -2,9 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { MINI_GT, miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec, type IngredientSpec } from '../../helpers/pack-spec.ts';
 import { largeBenderSpec } from '../../helpers/build-fixtures.ts';
-import { buildBom, expandBomLines } from '../../../src/server/planner/bom.ts';
+import { variantCellSpec } from '../../helpers/howto-fixtures.ts';
+import { buildBom, expandBomLines, partName } from '../../../src/server/planner/bom.ts';
 import { buildSteps } from '../../../src/server/planner/steps.ts';
-import { planLine } from '../../../src/server/planner/plan.ts';
+import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
 import { planBasis, effectiveTier } from '../../../src/server/planner/basis.ts';
 import { computeAvailability, reachableDims } from '../../../src/server/planner/availability.ts';
 import { makeLeafOracle, makePrices } from '../../../src/server/planner/costs.ts';
@@ -374,7 +375,8 @@ describe('buildSteps', () => {
     const settings = { ...defaultSettings(), target: 'minecraft:planks@0', amount: 60, per: 'hour' as const, logistics: 'routed' as const };
     const out = buildSteps(pack, { steps, bom: { lines: [], totals, warnings: [] }, power: { peakEUt: 0, averageEUt: 0, voltageTier: 0, amps: 0 }, settings, tier: 1, target: 'minecraft:planks@0' });
     expect(out.map((s) => [s.id, s.kind])).toEqual([['gather', 'gather'], ['logistics:routed', 'logistics'], ['handcraft:planks', 'handcraft'], ['test', 'test']]);
-    expect(out[0]?.text).toBe('Gather the base materials: 1× t:a@0, 1× t:b@0, 1× t:c@0, 1× t:d@0, 1× t:e@0, 1× t:f@0, 1× t:g@0, 1× t:h@0 (and 2 more)');
+    // An unnamed plain item key at meta 0 reads as its id (`partName`).
+    expect(out[0]?.text).toBe('Gather the base materials: 1× t:a, 1× t:b, 1× t:c, 1× t:d, 1× t:e, 1× t:f, 1× t:g, 1× t:h (and 2 more)');
     expect(out.find((s) => s.id === 'handcraft:planks')?.text).toBe('Hand-craft 900/h Oak Planks at a crafting table');
     expect(out.at(-1)?.text).toBe('Run the line and check it makes 60 Oak Planks per hour');
   });
@@ -388,5 +390,37 @@ describe('buildSteps', () => {
     expect(gather).toContain('3× Iron Ingot');
     expect(gather).toBe('Gather the base materials: 1,000 L Water, 3× Iron Ingot');
     expect(out.at(-1)?.text).toBe('Run the batch: 1,440 L Molten Iron');
+  });
+});
+
+describe('partName', () => {
+  it('names every build part, a machine named after its key and a variant block alike', async () => {
+    // Architecture §11 entry 41 (8): a key the pack names only after itself reads as the machine whose item it is, as a
+    // variant of its meta-0 block, or as its id; the plan's names and every build step name it so.
+    const p = packFromSpec(variantCellSpec());
+    expect(partName(p, 't:firebrick@0')).toBe('Firebrick');
+    expect(partName(p, 't:firebrick@3')).toBe('Firebrick (variant 3)');   // make-firebrick-3's output: an item named after its key
+    expect(partName(p, 'x:mystery@0')).toBe('x:mystery');
+    expect(partName(p, 'x:mystery@3')).toBe('x:mystery (meta 3)');
+    expect(partName(p, 'fluid:molten.iron')).toBe('Molten Iron');
+    expect(partName(p, 'machine:1200@0')).toBe('Bricked Furnace');   // an item named after its key in the pack
+    expect(partName(p, 'machine:1000@0')).toBe('Electric Blast Furnace');   // no recipe makes the EBF: the pack has no item for it
+
+    // The Bricked Furnace's `bake`: its controller, 3 Firebricks and the variant one in its structure.
+    const plan = await planLine(p, { ...defaultSettings(), target: 't:steel_ingot@0', tier: 1, amount: 1, per: 'min' }, emptyContext());
+    expect(plan.status, JSON.stringify(plan.warnings)).toBe('ok');
+    const lines = plan.buildList.map((l) => [l.key, l.amount]);
+    expect(lines).toContainEqual(['machine:1200@0', 1]);
+    expect(lines).toContainEqual(['t:firebrick@0', 3]);
+    expect(lines).toContainEqual(['t:firebrick@3', 1]);
+    expect(plan.names?.['t:firebrick@3']).toBe('Firebrick (variant 3)');
+    expect(plan.names?.['machine:1200@0']).toBe('Bricked Furnace');
+    const text = (id: string) => plan.buildSteps.find((s) => s.id === id)?.text;
+    expect(text('craft:t:firebrick@3')).toMatch(/^Craft 1× Firebrick \(variant 3\)( |$)/);
+    expect(text('craft:machine:1200@0')).toMatch(/^Craft 1× Bricked Furnace( |$)/);
+    for (const s of plan.buildSteps) {
+      expect(s.text, s.id).not.toContain('machine:');
+      expect(s.text, s.id).not.toContain('t:firebrick');
+    }
   });
 });

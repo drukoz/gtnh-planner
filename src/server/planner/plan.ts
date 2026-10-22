@@ -18,7 +18,7 @@ import {
 import { GATHERED_BLOCKS, isBaseItem, unlockText, type Availability } from './availability.ts';
 import { gatheredRecipesOn, planBasis, resolveAvoid, settingsHash, type PlanBasis } from './basis.ts';
 import { benchLine, type BenchLine } from './benches.ts';
-import { buildBom, stepProductName } from './bom.ts';
+import { buildBom, partName, stepProductName } from './bom.ts';
 import { machineBuildCost } from './build-cost.ts';
 import {
   EXCLUSION_RULES, acceptRecipe, buildCandidates, heldOption, keptOptions, usesAvoided, type Acceptance, type CandidateGraph, type HeldAvoid,
@@ -990,9 +990,10 @@ function planNames(pack: Pack, plan: Plan, settings: PlanSettings): Record<strin
   const add = (key: StuffKey | undefined): void => {
     if (key !== undefined && !names.has(key)) names.set(key, pack.nameOf(key));
   };
+  /** Build-list keys are named as their steps name them (`partName`), also where a step named one by its key first. */
   const addLines = (lines: readonly BomLine[]): void => {
     for (const line of lines) {
-      add(line.key);
+      if (!names.has(line.key) || names.get(line.key) === line.key) names.set(line.key, partName(pack, line.key));
       if (line.children !== undefined) addLines(line.children);
     }
   };
