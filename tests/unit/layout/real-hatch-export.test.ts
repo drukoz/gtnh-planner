@@ -3,7 +3,8 @@
 // definitions say, they agree with the hand table (hatch-rules.ts) wherever both have rules apart from the controller
 // logic listed in EXPORT_WIDER, and the plan 09 corpus (tests/helpers/real-corpus.ts) lays out in every logistics mode
 // with every hatch on a cell GregTech takes it on and no more hatch_cells_short or hatch_notes_unfit warnings than the
-// table-ruled layout of the same export gives. A fusion reactor, which takes energy hatches only at its own tier or
+// table-ruled layout of the same export gives (with build cost counted, plan 12's default, two of its lines planned again
+// with it ignored for the multiblocks only they still place: IGNORING_BUILD_COST). A fusion reactor, which takes energy hatches only at its own tier or
 // above, lays out electric with no energy hatch and hatch_energy_exotic. It runs only with GTNH_LOCAL=1 and is skipped
 // everywhere else. It prints counts, codes and the export's machine names only (pack data), never anything from a world.
 
@@ -33,6 +34,16 @@ const LAYOUT_KINDS = Object.keys(KIND_SOURCES) as HatchKind[];
 const ALL_SIX: readonly ExportHatchKind[] = ['input_bus', 'output_bus', 'input_hatch', 'output_hatch', 'energy', 'maintenance'];
 /** The multiblocks the corpus places: EBF, Distillation Tower, Oil Cracking Unit, LCR, Vacuum Freezer, Pyrolyse Oven, Coke Oven, Bricked Blast Furnace. */
 const CORPUS_MULTIBLOCKS: readonly number[] = [1000, 1126, 1160, 1169, 1002, 15546, 236, 140];
+/**
+ * Corpus lines planned again with build cost ignored (plan 12 Task 8, the controller's ruling after the merge e2efd36):
+ * with build cost counted, the default, the corpus plans no Oil Cracking Unit (1160) and no Pyrolyse Oven (15546) — it
+ * buys or makes their goods with fewer machines — while these lines still need them where build cost is ignored (measured
+ * on the 2.9 export: the cracker in the Advanced Circuit a minute, the oven in it with supporting lines).
+ */
+const IGNORING_BUILD_COST: ReadonlyArray<{ target: string; variant: (typeof VARIANTS)[number]['label'] }> = [
+  { target: 'Advanced Circuit', variant: 'per minute' },   // the cracker
+  { target: 'Advanced Circuit', variant: 'per minute with supporting lines' },   // the oven
+];
 /** The fusion controllers Mk I–III and the tier of the energy hatch each takes at the least (MTEFusionComputer.tier()). */
 const FUSION: ReadonlyArray<readonly [mteId: number, tier: number]> = [[1193, 6], [1194, 7], [1195, 8]];
 
@@ -262,42 +273,47 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('hatch rules of the 0.6.0 export
     const metIds = new Set<number>();
     const ruledCodes = new Map<LogisticsMode, Map<string, number>>(MODES.map((mode) => [mode, new Map()]));
     const tableCodes = new Map<LogisticsMode, Map<string, number>>(MODES.map((mode) => [mode, new Map()]));
-    for (const t of CORPUS) {
-      for (const v of VARIANTS) {
-        const at = `${t.name} ${v.label}`;
-        const plan: Plan = await planLine(pack, { ...defaultSettings(), target: t.key, amount: t.amount, per: v.per, tier: t.tier, routeDerived: v.routeDerived },
-          emptyContext());
-        if (plan.status !== 'ok') {
-          problems.push(`${at} - -: the plan is ${plan.status}`);
-          continue;
+    const lines = [
+      ...CORPUS.flatMap((t) => VARIANTS.map((v) => ({ t, v, ignoring: false }))),
+      ...IGNORING_BUILD_COST.map(({ target, variant }) => ({
+        t: CORPUS.find((c) => c.name === target)!, v: VARIANTS.find((x) => x.label === variant)!, ignoring: true,
+      })),
+    ];
+    for (const { t, v, ignoring } of lines) {
+      const at = `${t.name} ${v.label}${ignoring ? ', build cost ignored' : ''}`;
+      const plan: Plan = await planLine(pack, {
+        ...defaultSettings(), target: t.key, amount: t.amount, per: v.per, tier: t.tier, routeDerived: v.routeDerived, ...(ignoring ? { buildHorizonHours: null } : {}),
+      }, emptyContext());
+      if (plan.status !== 'ok') {
+        problems.push(`${at} - -: the plan is ${plan.status}`);
+        continue;
+      }
+      const machineOf = (stepId: string | undefined): string => {
+        const s = plan.steps.find((x) => x.id === stepId);
+        return s === undefined ? `step ${stepId ?? '?'}` : `${s.machine.name} (${s.machine.mteId})`;
+      };
+      for (const u of unitsFromPlan(pack, plan).units) {
+        if (!u.multiblock) continue;
+        bump(met, `${u.name} (${u.mteId})`);
+        metIds.add(u.mteId);
+        for (const p of checkUnit(u)) problems.push(`${at} units ${u.name} (${u.mteId}): ${p}`);
+      }
+      for (const mode of MODES) {
+        const ruled: Layout = await layoutLine(pack, plan, emptyScan(), makeProject({ logistics: mode }));
+        const table: Layout = await layoutLine(tablePack, plan, emptyScan(), makeProject({ logistics: mode }));
+        for (const w of ruled.warnings) bump(ruledCodes.get(mode)!, w.code);
+        for (const w of table.warnings) bump(tableCodes.get(mode)!, w.code);
+        for (const w of ruled.warnings) {
+          if (w.code !== 'hatch_rules_unknown') continue;
+          const mteId = plan.steps.find((s) => s.id === w.stepId)?.machine.mteId;
+          if (mteId === undefined || !UNPROBED.has(mteId)) problems.push(`${at} ${mode} ${machineOf(w.stepId)}: hatch_rules_unknown: ${w.text}`);
         }
-        const machineOf = (stepId: string | undefined): string => {
-          const s = plan.steps.find((x) => x.id === stepId);
-          return s === undefined ? `step ${stepId ?? '?'}` : `${s.machine.name} (${s.machine.mteId})`;
-        };
-        for (const u of unitsFromPlan(pack, plan).units) {
-          if (!u.multiblock) continue;
-          bump(met, `${u.name} (${u.mteId})`);
-          metIds.add(u.mteId);
-          for (const p of checkUnit(u)) problems.push(`${at} units ${u.name} (${u.mteId}): ${p}`);
-        }
-        for (const mode of MODES) {
-          const ruled: Layout = await layoutLine(pack, plan, emptyScan(), makeProject({ logistics: mode }));
-          const table: Layout = await layoutLine(tablePack, plan, emptyScan(), makeProject({ logistics: mode }));
-          for (const w of ruled.warnings) bump(ruledCodes.get(mode)!, w.code);
-          for (const w of table.warnings) bump(tableCodes.get(mode)!, w.code);
-          for (const w of ruled.warnings) {
-            if (w.code !== 'hatch_rules_unknown') continue;
-            const mteId = plan.steps.find((s) => s.id === w.stepId)?.machine.mteId;
-            if (mteId === undefined || !UNPROBED.has(mteId)) problems.push(`${at} ${mode} ${machineOf(w.stepId)}: hatch_rules_unknown: ${w.text}`);
-          }
-          for (const code of ['hatch_cells_short', 'hatch_notes_unfit']) {
-            const before = perStep(table.warnings, code);
-            for (const [stepId, ws] of perStep(ruled.warnings, code)) {
-              const n = before.get(stepId)?.length ?? 0;
-              if (ws.length > n) {
-                problems.push(`${at} ${mode} ${machineOf(stepId)}: ${ws.length} ${code} where the table-ruled layout has ${n}: ${ws.map((w) => w.text).join(' | ')}`);
-              }
+        for (const code of ['hatch_cells_short', 'hatch_notes_unfit']) {
+          const before = perStep(table.warnings, code);
+          for (const [stepId, ws] of perStep(ruled.warnings, code)) {
+            const n = before.get(stepId)?.length ?? 0;
+            if (ws.length > n) {
+              problems.push(`${at} ${mode} ${machineOf(stepId)}: ${ws.length} ${code} where the table-ruled layout has ${n}: ${ws.map((w) => w.text).join(' | ')}`);
             }
           }
         }

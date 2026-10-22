@@ -27,7 +27,10 @@ import { STEP_BIG_M, type MainLp } from './solve.ts';
  * them; the model prices a light step's machines as `Light` says), the others within 1.3–6.9 % of the optimum or best
  * known by the MIP's objective (the most on Microprocessor HV and the routed Electronic Circuit MV); 10 nodes cost up to
  * 7 s more on Good Electronic Circuit HV (strong branching), and 100 cheap ones found nothing better on the five largest
- * lines.
+ * lines. Task 8's calibration (real-build-cost.test.ts, load 5–12 of 16 cores): on its 12 plans and the user's reference
+ * flow's R0, R1, V1 and V4 the root takes 0.07–2.5 s, ends optimal on 7 of the 16 and at its limit on the others (gaps
+ * 3.4–16 % where nothing is owned; where two of every machine are owned the root proves almost nothing), never reaches
+ * the time guard, and no plan is worse by the MIP's measure than the plan that ignores build cost.
  */
 export const BUILD_MIP_MAX_NODES = 1;
 /**

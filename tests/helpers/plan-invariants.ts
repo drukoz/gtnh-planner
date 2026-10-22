@@ -19,13 +19,17 @@
 // derives from them). `checkPlanInvariantsDeep` adds what needs the LP: an independent least-raw-material optimum of the
 // line's own candidate graph (solved at a normalized demand, so HiGHS tolerances cannot hand out goods), and for every
 // multi-producer / bought-and-made good whether the plan still works at the same raw cost without one of its sources.
+// With `buildCost` (plan 12) the checks that assume plan 09's objective follow plan 12's (`InvariantOptions.buildCost`).
 
-import { multiplierUnderOneTick, singleblockOverclock } from '../../src/shared/gt/overclock.ts';
-import { V } from '../../src/shared/gt/tiers.ts';
+import { multiblockOverclock, multiplierUnderOneTick, singleblockOverclock, voltageTier, type MachineOc } from '../../src/shared/gt/overclock.ts';
+import { V, tierName } from '../../src/shared/gt/tiers.ts';
 import type { StuffKey } from '../../src/shared/keys.ts';
-import type { Pack } from '../../src/shared/types/pack.ts';
+import type { Machine, Pack, Recipe } from '../../src/shared/types/pack.ts';
 import { FREE_KEYS, type Plan, type PlanContext, type PlanSettings, type PlanStep } from '../../src/shared/types/plan.ts';
+// The world blocks the planner gathers, and with build cost counted may also make (plan 12's change request 13)
+import { GATHERED_BLOCKS as MADE_WHEN_IT_PAYS } from '../../src/server/planner/availability.ts';
 import { planBasis, type PlanBasis } from '../../src/server/planner/basis.ts';
+import { isAutoWorkbench } from '../../src/server/planner/benches.ts';
 import type { CandidateGraph } from '../../src/server/planner/candidates.ts';
 import { solveLp, type LpRow } from '../../src/server/planner/lp.ts';
 import { ownedMachineMap, pickMachine, type MachinePick } from '../../src/server/planner/machines.ts';
@@ -59,10 +63,28 @@ export interface InvariantOptions {
   absTol?: number;
   /** Context the plan was made in (default: no world scan). */
   ctx?: PlanContext;
+  /**
+   * The plan counts build cost (plan 12: a running line with a build horizon, or Make N), so the checks that assume plan
+   * 09's objective follow plan 12's: a step's machine may be any machine that can run its recipe here, at any of its
+   * eligible tiers (the solve picks the tier), its overclock recomputed for its own tier, and a crafting-table step's an
+   * Auto Workbench; the owned machines of a step's other options (`reused.others`) count in its machine checks; a sharing
+   * pool is checked once — its steps on equal machines, `max(1, ⌈Σ busy − 1e-9⌉)` of them, each step at its own share —
+   * and the peak power counts a pool's machines and each owned unit once (`powerSummary`'s rule); a free detour that ends
+   * in a gathered world block is a note, as the objective chose to make it, machines and step charges counted. The deep
+   * check keeps the least raw material as a floor but lifts the step charge's +25 % cap, and reads a producer, a purchase
+   * or the plan's own recipes that are dearer only in raw material as notes: one machine of A beside a cheaper machine of
+   * B for the rest is a plan build cost makes.
+   */
+  buildCost?: boolean;
 }
 
 const SECONDS_PER: Readonly<Record<PlanSettings['per'], number>> = { min: 60, hour: 3600 };
 const TICKS_PER_SECOND = 20;
+/**
+ * EU one craft of GT++'s Electric Auto Workbench draws, at 1 A of its tier and at most one craft a tick (gt-mechanics §8):
+ * below EV a craft takes 2,048 / V ticks at V EU/t, from EV on one tick at 2,048 EU/t; it never overclocks.
+ */
+const AUTO_WORKBENCH_EU_PER_CRAFT = 2048;
 /**
  * Plan values keep 9 significant digits (`sig9`, rounded at unit demand and again when scaled back): what that rounding
  * can move one term by, relative to the term (half a unit of the 9th digit is at most 5e-9 of it; twice that, and some).
@@ -421,9 +443,93 @@ function checkProducers(pack: Pack, plan: Plan, led: Map<StuffKey, Ledger>): Vio
 // ---------------------------------------------------------------------------------------------------------------------
 // (d) machines
 
-function checkMachines(pack: Pack, settings: PlanSettings, plan: Plan, basis: PlanBasis, ctx: PlanContext, relTol: number): Violation[] {
+/**
+ * With build cost counted: why `m` cannot run `step`'s recipe `r` here at the step's own tier, as plan 12's machine
+ * options allow (their rules 1–3), or null. A crafting-table step: an Auto Workbench of a tier at most the project's.
+ * Any other step: a machine of its map — a singleblock at its own tier, at most the project's, whose voltage × the map's
+ * amps covers the recipe's EU/t; or a multiblock whose energy hatch is from the recipe's voltage tier (at most the
+ * project's) up to the project's, one the group owns or one for a recipe no such singleblock runs.
+ */
+function notEligible(pack: Pack, r: Recipe, step: PlanStep, m: Machine, groupTier: number, owned: ReadonlyMap<number, number>): string | null {
+  const tier = step.machine.tier;
+  if (step.mapId === 'crafting') {
+    if (!isAutoWorkbench(m)) return 'a crafting-table step runs on an Auto Workbench';
+    return tier === (m.tier ?? 0) && tier <= groupTier ? null : `an Auto Workbench of ${tierName(tier)} above the project's ${tierName(groupTier)}`;
+  }
+  const onMap = (pack.machinesByMap.get(step.mapId) ?? []).flatMap((id) => pack.machines.get(id) ?? []);
+  if (!onMap.some((x) => x.mteId === m.mteId)) return `${m.name} runs no recipe of ${pack.maps.get(step.mapId)?.name ?? step.mapId}`;
+  const mapAmps = pack.maps.get(step.mapId)?.amps ?? 1;
+  const runs = (x: Machine): boolean => x.kind === 'basic' && (x.tier ?? 0) <= groupTier && (V[x.tier ?? 0] as number) * mapAmps >= r.euPerTick;
+  if (m.kind === 'basic') {
+    if (tier !== (m.tier ?? 0)) return `${m.name} is ${tierName(m.tier ?? 0)}, not ${tierName(tier)}`;
+    return runs(m) ? null : `${m.name} (${tierName(tier)}) cannot run it at the project's ${tierName(groupTier)}`;
+  }
+  if (m.kind === 'multiblock') {
+    const lowest = Math.min(voltageTier(r.euPerTick), groupTier);
+    if (tier < lowest || tier > groupTier) return `an energy hatch of ${tierName(tier)} is outside ${tierName(lowest)}–${tierName(groupTier)}`;
+    return onMap.some(runs) && (owned.get(m.mteId) ?? 0) === 0 ? `a singleblock runs it and the group owns no ${m.name}` : null;
+  }
+  return `${m.name} is no machine a step runs on`;
+}
+
+/** With build cost counted: the overclock of `step`'s own machine `m` at its own tier (gt-mechanics §2, §6, §8). */
+function ownOverclock(pack: Pack, r: Recipe, step: PlanStep, m: Machine, coilHeat: number): MachineOc {
+  const tier = step.machine.tier;
+  if (step.mapId === 'crafting') {
+    const volts = V[tier] as number;
+    const euPerTick = Math.min(volts, AUTO_WORKBENCH_EU_PER_CRAFT);
+    return { euPerTick, durationTicks: Math.ceil(AUTO_WORKBENCH_EU_PER_CRAFT / euPerTick), overclocks: 0, heatOverclocks: 0, machineVoltage: volts, machineAmps: 1, parallel: 1 };
+  }
+  if (m.kind === 'multiblock') {
+    return multiblockOverclock(
+      { euPerTick: r.euPerTick, durationTicks: r.durationTicks, heat: r.meta.coilHeat ?? r.specialValue },
+      { hatchTier: tier, perfectOC: m.perfectOC === true, heatOC: m.heatOC === true, coilHeat },
+    );
+  }
+  return singleblockOverclock(r, { tier, amps: m.amps ?? pack.maps.get(step.mapId)?.amps ?? 1 });
+}
+
+/**
+ * The peak draw `powerSummary` (plan.ts) gives with build cost counted (plan 12, architecture §11.39): each step's new
+ * machines, `count − reused.units.length` at its EU/t — a sharing pool's once, by its first step, at the largest EU/t of
+ * its steps — plus each distinct owned machine (mteId and unit, those of `reused.others` at their own EU/t) once, at the
+ * largest EU/t among the steps on it; an owned machine of another option without units at its count × EU/t.
+ */
+function peakAsPlanned(steps: readonly PlanStep[]): number {
+  let peak = 0;
+  const units = new Map<string, number>();
+  const onUnit = (mteId: number, unit: number, euPerTick: number): void => {
+    const key = `${mteId}:${unit}`;
+    units.set(key, Math.max(units.get(key) ?? 0, euPerTick));
+  };
+  const seen = new Set<string>();
+  for (const step of steps) {
+    const pool = step.pool;
+    const group = pool === undefined ? [step] : steps.filter((s) => s.pool?.id === pool.id);
+    const key = pool === undefined ? `step:${step.id}` : `pool:${pool.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const first = group.find((s) => s.id === pool?.steps[0]) ?? step;
+    let euPerTick = 0;
+    for (const s of group) euPerTick = Math.max(euPerTick, s.euPerTick);
+    peak += Math.max(0, first.count - (first.reused?.units?.length ?? 0)) * euPerTick;
+    for (const s of group) {
+      for (const u of s.reused?.units ?? []) onUnit(s.machine.mteId, u, s.euPerTick);
+      for (const o of s.reused?.others ?? []) {
+        if (o.units === undefined) peak += o.count * o.euPerTick;
+        else for (const u of o.units) onUnit(o.mteId, u, o.euPerTick);
+      }
+    }
+  }
+  for (const euPerTick of units.values()) peak += euPerTick;
+  return peak;
+}
+
+function checkMachines(pack: Pack, settings: PlanSettings, plan: Plan, basis: PlanBasis, ctx: PlanContext, relTol: number, buildCost: boolean): Violation[] {
   const out: Violation[] = [];
   const owned = ownedMachineMap(ctx, settings);
+  /** Per sharing pool (with build cost counted): its steps, and each one's machines kept busy (`busy`). */
+  const pools = new Map<string, Array<{ step: PlanStep; busy: number; label: string }>>();
   for (const step of plan.steps) {
     const label = stepLabel(pack, plan, step);
     const r = pack.recipeById.get(step.recipeId);
@@ -437,69 +543,130 @@ function checkMachines(pack: Pack, settings: PlanSettings, plan: Plan, basis: Pl
     if (step.machine.tier > plan.tier && step.machine.mteId >= 0) {
       out.push({ kind: 'machines', severity: 'error', stepId: step.id, message: `${label}: machine tier ${step.machine.tier} above the group's tier ${plan.tier}` });
     }
-    let pick: MachinePick | undefined;
-    try {
-      const wantTier = Object.hasOwn(settings.machineTier, step.recipeId) ? settings.machineTier[step.recipeId] : undefined;
-      pick = pickMachine(pack, r, step.mapId, {
-        groupTier: plan.tier, wantTier, coilHeat: basis.coilHeat, automateCrafting: settings.automateCrafting, owned, multiblocks: basis.env.multiblocks,
-      });
-    } catch (error) {
-      out.push({ kind: 'machines', severity: 'error', stepId: step.id, message: `${label}: no machine runs it (${(error as Error).message})` });
-    }
     let parallel = 1;
-    if (pick !== undefined) {
-      parallel = pick.oc.parallel;
-      if (pick.mteId !== step.machine.mteId || pick.tier !== step.machine.tier || pick.oc.euPerTick !== step.euPerTick
-        || pick.oc.durationTicks !== step.durationTicks || pick.oc.overclocks !== step.overclocks) {
+    const machine = step.machine.mteId >= 0 ? pack.machines.get(step.machine.mteId) : undefined;
+    if (buildCost && machine !== undefined) {
+      // Plan 12: the solve picks the step's machine among those that can run it, at any eligible tier; its overclock is
+      // recomputed for that tier.
+      const why = notEligible(pack, r, step, machine, plan.tier, owned);
+      if (why !== null) {
+        out.push({ kind: 'machines', severity: 'error', stepId: step.id, message: `${label}: ${step.machine.name} T${step.machine.tier} is none of the machines that can run it here (${why})` });
+      }
+      const oc = ownOverclock(pack, r, step, machine, basis.coilHeat);
+      parallel = oc.parallel;
+      if (oc.euPerTick !== step.euPerTick || oc.durationTicks !== step.durationTicks || oc.overclocks !== step.overclocks) {
         out.push({
           kind: 'machines', severity: 'error', stepId: step.id,
-          message: `${label}: machine/OC differ from a fresh pick (${step.machine.name} T${step.machine.tier} ${step.euPerTick} EU/t ${step.durationTicks} t ×${step.overclocks} OC vs ${pick.name} T${pick.tier} ${pick.oc.euPerTick} EU/t ${pick.oc.durationTicks} t ×${pick.oc.overclocks} OC)`,
+          message: `${label}: overclock ${step.euPerTick} EU/t × ${step.durationTicks} t ×${step.overclocks} OC on ${step.machine.name} T${step.machine.tier}, recomputed ${oc.euPerTick} × ${oc.durationTicks} ×${oc.overclocks}`,
         });
       }
-      // An independent overclock of a singleblock (gt-mechanics §2.2) and its voltage.
-      if (pick.kind === 'basic') {
-        const machine = pack.machines.get(step.machine.mteId);
-        const amps = machine?.amps ?? pack.maps.get(step.mapId)?.amps ?? 1;
-        const oc = singleblockOverclock(r, { tier: step.machine.tier, amps });
-        if (oc.euPerTick !== step.euPerTick || oc.durationTicks !== step.durationTicks) {
-          out.push({ kind: 'machines', severity: 'error', stepId: step.id, message: `${label}: overclock ${step.euPerTick} EU/t × ${step.durationTicks} t, recomputed ${oc.euPerTick} × ${oc.durationTicks}` });
-        }
-        if (r.euPerTick > (V[step.machine.tier] as number) * (pack.maps.get(step.mapId)?.amps ?? 1)) {
-          out.push({ kind: 'machines', severity: 'error', stepId: step.id, message: `${label}: recipe ${r.euPerTick} EU/t above what a T${step.machine.tier} machine supplies` });
-        }
-      } else if (pick.kind === 'multiblock' && step.oc !== undefined) {
-        parallel = multiplierUnderOneTick({
+      if (machine.kind === 'basic' && r.euPerTick > (V[step.machine.tier] as number) * (pack.maps.get(step.mapId)?.amps ?? 1)) {
+        out.push({ kind: 'machines', severity: 'error', stepId: step.id, message: `${label}: recipe ${r.euPerTick} EU/t above what a T${step.machine.tier} machine supplies` });
+      }
+      if (machine.kind === 'multiblock' && step.oc !== undefined) {
+        parallel = Math.max(parallel, multiplierUnderOneTick({
           recipeEUt: r.euPerTick, duration: r.durationTicks, machineVoltage: step.oc.machineVoltage, amperage: step.oc.machineAmps, amperageOC: true, perfectOC: step.oc.perfect,
+        }));
+      }
+    } else {
+      let pick: MachinePick | undefined;
+      try {
+        const wantTier = Object.hasOwn(settings.machineTier, step.recipeId) ? settings.machineTier[step.recipeId] : undefined;
+        // With build cost counted a crafting-table step no Auto Workbench runs is crafted by hand although crafting is
+        // automated (controller ruling 214): its pick is the hand's.
+        const automateCrafting = settings.automateCrafting && !(buildCost && step.handCraft);
+        pick = pickMachine(pack, r, step.mapId, {
+          groupTier: plan.tier, wantTier, coilHeat: basis.coilHeat, automateCrafting, owned, multiblocks: basis.env.multiblocks,
         });
-        parallel = Math.max(parallel, pick.oc.parallel);
+      } catch (error) {
+        out.push({ kind: 'machines', severity: 'error', stepId: step.id, message: `${label}: no machine runs it (${(error as Error).message})` });
+      }
+      if (pick !== undefined) {
+        parallel = pick.oc.parallel;
+        if (pick.mteId !== step.machine.mteId || pick.tier !== step.machine.tier || pick.oc.euPerTick !== step.euPerTick
+          || pick.oc.durationTicks !== step.durationTicks || pick.oc.overclocks !== step.overclocks) {
+          out.push({
+            kind: 'machines', severity: 'error', stepId: step.id,
+            message: `${label}: machine/OC differ from a fresh pick (${step.machine.name} T${step.machine.tier} ${step.euPerTick} EU/t ${step.durationTicks} t ×${step.overclocks} OC vs ${pick.name} T${pick.tier} ${pick.oc.euPerTick} EU/t ${pick.oc.durationTicks} t ×${pick.oc.overclocks} OC)`,
+          });
+        }
+        // An independent overclock of a singleblock (gt-mechanics §2.2) and its voltage.
+        if (pick.kind === 'basic') {
+          const amps = machine?.amps ?? pack.maps.get(step.mapId)?.amps ?? 1;
+          const oc = singleblockOverclock(r, { tier: step.machine.tier, amps });
+          if (oc.euPerTick !== step.euPerTick || oc.durationTicks !== step.durationTicks) {
+            out.push({ kind: 'machines', severity: 'error', stepId: step.id, message: `${label}: overclock ${step.euPerTick} EU/t × ${step.durationTicks} t, recomputed ${oc.euPerTick} × ${oc.durationTicks}` });
+          }
+          if (r.euPerTick > (V[step.machine.tier] as number) * (pack.maps.get(step.mapId)?.amps ?? 1)) {
+            out.push({ kind: 'machines', severity: 'error', stepId: step.id, message: `${label}: recipe ${r.euPerTick} EU/t above what a T${step.machine.tier} machine supplies` });
+          }
+        } else if (pick.kind === 'multiblock' && step.oc !== undefined) {
+          parallel = multiplierUnderOneTick({
+            recipeEUt: r.euPerTick, duration: r.durationTicks, machineVoltage: step.oc.machineVoltage, amperage: step.oc.machineAmps, amperageOC: true, perfectOC: step.oc.perfect,
+          });
+          parallel = Math.max(parallel, pick.oc.parallel);
+        }
       }
     }
     if (step.oc !== undefined && step.oc.recipeEuPerTick !== r.euPerTick) {
       out.push({ kind: 'machines', severity: 'warn', stepId: step.id, message: `${label}: oc.recipeEuPerTick ${step.oc.recipeEuPerTick} ≠ recipe ${r.euPerTick}` });
     }
-    const busy = (step.runsPerSecond * step.durationTicks) / (TICKS_PER_SECOND * parallel);   // machines fully busy
-    if (step.count < busy * (1 - relTol) - 1e-12) {
-      out.push({
-        kind: 'machines', severity: 'error', stepId: step.id,
-        message: `${label}: ${step.count} machine(s) but ${sci(step.runsPerSecond)} runs/s × ${step.durationTicks / TICKS_PER_SECOND} s / ${parallel} parallel needs ${busy.toFixed(4)}`,
-        data: { count: step.count, needed: busy },
-      });
+    // Runs a second one machine of the step's own type does; with build cost counted, the owned machines of its other
+    // options take their share of the runs beside them (`reused.others`).
+    const perMachine = (TICKS_PER_SECOND * parallel) / step.durationTicks;
+    let besides = 0;
+    if (buildCost) for (const o of step.reused?.others ?? []) besides += o.count * o.runsPerSecondPerMachine;
+    const capacity = step.count * perMachine + besides;
+    const busy = Math.max(0, step.runsPerSecond - besides) / perMachine;   // machines of its own type fully busy
+    const beside = besides > 0 ? ` beside the owned machines of its other options, which do ${sci(besides)}/s,` : '';
+    if (buildCost && step.pool !== undefined) {
+      const list = pools.get(step.pool.id) ?? [];
+      list.push({ step, busy, label });
+      pools.set(step.pool.id, list);
+    } else {
+      if (step.count < busy * (1 - relTol) - 1e-12) {
+        out.push({
+          kind: 'machines', severity: 'error', stepId: step.id,
+          message: `${label}: ${step.count} machine(s)${beside} but ${sci(step.runsPerSecond)} runs/s × ${step.durationTicks / TICKS_PER_SECOND} s / ${parallel} parallel needs ${busy.toFixed(4)}`,
+          data: { count: step.count, needed: busy },
+        });
+      }
+      if (step.count > 1 && busy <= step.count - 1 + 1e-9) {
+        out.push({ kind: 'machines', severity: 'error', stepId: step.id, message: `${label}: ${step.count} machines${beside} where ${Math.ceil(busy - 1e-9)} would do (${busy.toFixed(4)} busy)` });
+      }
     }
     if (step.utilization > 1 + relTol) {
       out.push({ kind: 'machines', severity: 'error', stepId: step.id, message: `${label}: utilization ${step.utilization} > 1` });
     }
-    if (step.count >= 1 && differs(step.utilization, busy / step.count, Math.max(relTol, 1e-6), 1e-12)) {
-      out.push({ kind: 'machines', severity: 'warn', stepId: step.id, message: `${label}: utilization ${step.utilization} ≠ recomputed ${busy / step.count}` });
-    }
-    if (step.count > 1 && busy <= step.count - 1 + 1e-9) {
-      out.push({ kind: 'machines', severity: 'error', stepId: step.id, message: `${label}: ${step.count} machines where ${Math.ceil(busy - 1e-9)} would do (${busy.toFixed(4)} busy)` });
+    const utilization = capacity > 0 ? step.runsPerSecond / capacity : 0;   // a pooled step's: its own share of the pool
+    if (step.count >= 1 && differs(step.utilization, utilization, Math.max(relTol, 1e-6), 1e-12)) {
+      out.push({ kind: 'machines', severity: 'warn', stepId: step.id, message: `${label}: utilization ${step.utilization} ≠ recomputed ${utilization}` });
     }
   }
-  // Power: the summary adds up the steps (rate mode: Σ count × EU/t).
+  // A sharing pool (plan 12): every step of it on the same machines, as many as its steps keep busy together.
+  for (const [id, list] of pools) {
+    const first = (list[0] as (typeof list)[number]).step;
+    const ids = list.map((e) => e.step.id).sort(byString);
+    if (list.some(({ step }) => step.count !== first.count || step.owned !== first.owned || (step.pool?.steps ?? []).join() !== ids.join())) {
+      out.push({
+        kind: 'machines', severity: 'error', stepId: first.id,
+        message: `${id}: its steps differ (${list.map(({ step }) => `${step.id} ${step.count} machine(s), ${step.owned} owned, listing ${(step.pool?.steps ?? []).join(', ')}`).join('; ')})`,
+      });
+    }
+    let busy = 0;
+    for (const e of list) busy += e.busy;
+    const want = Math.max(1, Math.ceil(busy - 1e-9));
+    if (first.count < busy * (1 - relTol) - 1e-12) {
+      out.push({ kind: 'machines', severity: 'error', stepId: first.id, message: `${id}: ${first.count} machine(s) but its steps (${ids.join(', ')}) keep ${busy.toFixed(4)} busy`, data: { count: first.count, needed: busy } });
+    } else if (first.count > want) {
+      out.push({ kind: 'machines', severity: 'error', stepId: first.id, message: `${id}: ${first.count} machines where ${want} would do (${busy.toFixed(4)} busy over ${ids.join(', ')})` });
+    }
+  }
+  // Power: the summary adds up the steps (rate mode: Σ count × EU/t; with build cost counted, `powerSummary`'s rule).
   if (settings.mode === 'rate' && plan.steps.length > 0) {
-    const peak = plan.steps.reduce((s, x) => s + x.count * x.euPerTick, 0);
+    const peak = buildCost ? peakAsPlanned(plan.steps) : plan.steps.reduce((s, x) => s + x.count * x.euPerTick, 0);
     if (differs(peak, plan.power.peakEUt, 1e-9, 1e-6)) {
-      out.push({ kind: 'machines', severity: 'warn', message: `power.peakEUt ${plan.power.peakEUt} ≠ Σ count × EU/t ${peak}` });
+      out.push({ kind: 'machines', severity: 'warn', message: `power.peakEUt ${plan.power.peakEUt} ≠ ${buildCost ? 'its machines, each pool and owned unit once,' : 'Σ count × EU/t'} ${peak}` });
     }
   }
   return out;
@@ -624,11 +791,16 @@ export function freeDetours(pack: Pack, plan: Plan, basis: PlanBasis): Detour[] 
   return out;
 }
 
-function checkDetours(pack: Pack, plan: Plan, basis: PlanBasis): Violation[] {
+/**
+ * Kind (g). With build cost counted, a detour that ends in a world block the planner gathers (availability.ts's
+ * `GATHERED_BLOCKS`, plan 09's R1) is a note: plan 12 offers those blocks' recipes beside digging them (spec §3.3, change
+ * request 13), and the objective chose to make it with its machines and step charges counted (plan 12's D1).
+ */
+function checkDetours(pack: Pack, plan: Plan, basis: PlanBasis, buildCost: boolean): Violation[] {
   const totalCost = plan.rawInputs.reduce((s, r) => s + r.cost, 0);
   const stepById = new Map(plan.steps.map((s) => [s.id, s]));
   return freeDetours(pack, plan, basis).map((d): Violation => ({
-    kind: 'free-detour', severity: 'warn', key: d.product,
+    kind: 'free-detour', severity: buildCost && Object.hasOwn(MADE_WHEN_IT_PAYS, d.product) ? 'info' : 'warn', key: d.product,
     message: `${d.steps.length} step(s) (${d.steps.map((id) => stepLabel(pack, plan, stepById.get(id) as PlanStep)).join(' ⇐ ')}) turn free input into ${pack.nameOf(d.product)} (${d.why}) at ${sci(d.perSecond)}/s, saving ${sci(d.savedPerSecond)} raw cost/s (${totalCost > 0 ? ((d.savedPerSecond / totalCost) * 100).toPrecision(3) : '∞'}% of the line's ${sci(totalCost)}/s)`,
     data: { ...d, lineRawCost: totalCost },
   }));
@@ -640,6 +812,7 @@ function checkDetours(pack: Pack, plan: Plan, basis: PlanBasis): Violation[] {
 export function checkPlanInvariants(pack: Pack, settings: PlanSettings, plan: Plan, opts: InvariantOptions = {}): Violation[] {
   const relTol = opts.relTol ?? 1e-6;
   const absTol = opts.absTol ?? 1e-12;
+  const buildCost = opts.buildCost === true;
   const ctx = opts.ctx ?? { ownedMachines: [], storage: new Map(), visitedDims: [], topTier: null, coilHeat: null, prospected: [] };
   if (plan.status !== 'ok') return [];
   const basis = planBasis(pack, settings, ctx);
@@ -648,9 +821,9 @@ export function checkPlanInvariants(pack: Pack, settings: PlanSettings, plan: Pl
     ...checkBalance(pack, settings, plan, led, relTol, absTol),
     ...checkFlows(pack, settings, plan, led, relTol, absTol),
     ...checkProducers(pack, plan, led),
-    ...checkMachines(pack, settings, plan, basis, ctx, relTol),
+    ...checkMachines(pack, settings, plan, basis, ctx, relTol, buildCost),
     ...checkRawSources(pack, plan),
-    ...checkDetours(pack, plan, basis),
+    ...checkDetours(pack, plan, basis, buildCost),
   ];
 }
 
@@ -758,15 +931,17 @@ export interface DeepOptions extends InvariantOptions {
 
 /**
  * Everything `checkPlanInvariants` checks, plus: the plan's raw cost against an independent S1 optimum of the line's own
- * candidate graph (`cost`; with `opts.stepCharge` above 0, anywhere from the optimum to `STEP_CHARGE_CAP` above it), and
- * for every multi-producer and bought-and-made good, the raw cost of the line without each of its sources (a recipe
- * banned, or the purchase barred). A source the line can drop within `costTol` makes the multi-producer an `error` (the
- * plan uses more recipes than it needs); otherwise it stays `info` with the extra cost.
+ * candidate graph (`cost`; with `opts.stepCharge` above 0, anywhere from the optimum to `STEP_CHARGE_CAP` above it; with
+ * `opts.buildCost`, anywhere from the optimum up), and for every multi-producer and bought-and-made good, the raw cost of
+ * the line without each of its sources (a recipe banned, or the purchase barred). A source the line can drop within
+ * `costTol` makes the multi-producer an `error` (the plan uses more recipes than it needs) — with `opts.buildCost` an
+ * `info`, since the machines it saves may pay for it; otherwise it stays `info` with the extra cost.
  */
 export async function checkPlanInvariantsDeep(pack: Pack, settings: PlanSettings, plan: Plan, opts: DeepOptions = {}): Promise<Violation[]> {
   const base = checkPlanInvariants(pack, settings, plan, opts);
   if (plan.status !== 'ok' || settings.target === null || settings.mode !== 'rate') return base;
   const costTol = opts.costTol ?? 1e-6;
+  const buildCost = opts.buildCost === true;
   const ctx = opts.ctx ?? { ownedMachines: [], storage: new Map(), visitedDims: [], topTier: null, coilHeat: null, prospected: [] };
   const pricing = linePricing(pack, settings, ctx);
   if (pricing === null) return base;
@@ -782,9 +957,10 @@ export async function checkPlanInvariantsDeep(pack: Pack, settings: PlanSettings
   const relGap = (planCost - optimum.cost) / Math.max(optimum.cost, 1e-300);
   const roundingCost = plan.rawInputs.reduce((sum, r) => sum + ROUND_REL * Math.abs(r.cost), 0);
   const slack = Math.max(roundingCost, 1e-6 * optimum.cost);
-  // With a step charge the plan may pay up to the cap in raw material to save steps; never less than the optimum.
+  // With a step charge the plan may pay up to the cap in raw material to save steps; never less than the optimum. With
+  // build cost counted the cap applies only when build cost is ignored (plan 12, architecture §11.39 amending §11.34).
   const charged = (opts.stepCharge ?? 0) > 0;
-  const ceiling = optimum.cost * (1 + (charged ? STEP_CHARGE_CAP : 0));
+  const ceiling = buildCost ? Infinity : optimum.cost * (1 + (charged ? STEP_CHARGE_CAP : 0));
   if (optimum.cost - planCost > slack || planCost - ceiling > slack) {
     extra.push({
       kind: 'cost', severity: 'error',
@@ -794,10 +970,13 @@ export async function checkPlanInvariantsDeep(pack: Pack, settings: PlanSettings
       data: { planCost, optimum: optimum.cost, relGap, ...(charged ? { stepCharge: opts.stepCharge, cap: STEP_CHARGE_CAP } : {}) },
     });
   } else {
-    const within = charged && planCost - optimum.cost > slack
-      ? `is +${(relGap * 100).toPrecision(3)}% on the optimum ${sci(optimum.cost)}/s, within the step charge's +${STEP_CHARGE_CAP * 100}%`
-      : `matches the optimum ${sci(optimum.cost)}/s`;
-    extra.push({ kind: 'cost', severity: 'info', message: `raw cost ${sci(planCost)}/s ${within}`, data: { planCost, optimum: optimum.cost, relGap } });
+    const above = planCost - optimum.cost > slack;
+    const within = buildCost && above
+      ? `is +${(relGap * 100).toPrecision(3)}% on the optimum ${sci(optimum.cost)}/s, raw material the build cost of the machines it saves pays for`
+      : charged && above
+        ? `is +${(relGap * 100).toPrecision(3)}% on the optimum ${sci(optimum.cost)}/s, within the step charge's +${STEP_CHARGE_CAP * 100}%`
+        : `matches the optimum ${sci(optimum.cost)}/s`;
+    extra.push({ kind: 'cost', severity: 'info', message: `raw cost ${sci(planCost)}/s ${within}`, data: { planCost, optimum: optimum.cost, relGap, ...(buildCost ? { buildCost } : {}) } });
   }
   // Removing a source from the plan: over the plan's own recipes when they meet the demand in an exact LP, else (the
   // plan only works through LP tolerance) over the whole graph.
@@ -810,7 +989,12 @@ export async function checkPlanInvariantsDeep(pack: Pack, settings: PlanSettings
       message: `the plan's own recipes cannot meet the demand in an exact LP (${own.status}): the plan only balances through LP tolerance`,
     });
   } else if (own.cost > optimum.cost * (1 + costTol) + 1e-15) {
-    extra.push({ kind: 'cost', severity: 'warn', message: `the plan's own recipes cost ${sci(own.cost)}/s at best, the graph's optimum is ${sci(optimum.cost)}/s`, data: { ownCost: own.cost } });
+    // With build cost counted the plan's own recipes may cost more raw material than the graph's least: the machines saved pay.
+    extra.push({
+      kind: 'cost', severity: buildCost ? 'info' : 'warn',
+      message: `the plan's own recipes cost ${sci(own.cost)}/s at best, the graph's optimum is ${sci(optimum.cost)}/s${buildCost ? ' (build cost counted)' : ''}`,
+      data: { ownCost: own.cost },
+    });
   }
   const refCost = ownFeasible ? own.cost : optimum.cost;
   const cache = new Map<string, number>();
@@ -837,8 +1021,12 @@ export async function checkPlanInvariantsDeep(pack: Pack, settings: PlanSettings
         tests.push({ stepId: p.stepId, map: p.map, share: p.share, isMain: p.isMain, costWithout: c, delta: delta(c) });
       }
       const removable = tests.filter((t) => t.delta <= costTol);
-      v.data = { ...v.data, banTests: tests, over };
-      if (removable.length > 0) {
+      v.data = { ...v.data, banTests: tests, over, ...(buildCost ? { buildCost } : {}) };
+      if (removable.length > 0 && buildCost) {
+        // Plan 12: one machine of one recipe beside a cheaper machine of the other for the rest is a build-cost plan.
+        v.severity = 'info';
+        v.message += ` — redundant in raw material alone: over ${over}, the line without ${removable.map((t) => `${t.map} (${(t.share * 100).toPrecision(3)}% of it)`).join(' or ')} costs the same raw material, and build cost counts the machines`;
+      } else if (removable.length > 0) {
         v.severity = producers.filter((p) => p.isMain).length >= 2 ? 'error' : 'warn';
         v.message += ` — REDUNDANT: over ${over}, the line without ${removable.map((t) => `${t.map} (${(t.share * 100).toPrecision(3)}% of it)`).join(' or ')} costs the same`;
       } else {
@@ -851,8 +1039,12 @@ export async function checkPlanInvariantsDeep(pack: Pack, settings: PlanSettings
       const recipeIds = producers.map((id) => plan.steps.find((s) => s.id === id)?.recipeId).filter((x): x is string => x !== undefined);
       const dBuy = delta(await costWithout([], key));
       const dMake = delta(await costWithout(recipeIds));
-      v.data = { ...v.data, deltaWithoutBuying: dBuy, deltaWithoutMaking: dMake, over };
-      if (dBuy <= costTol || dMake <= costTol) {
+      v.data = { ...v.data, deltaWithoutBuying: dBuy, deltaWithoutMaking: dMake, over, ...(buildCost ? { buildCost } : {}) };
+      if ((dBuy <= costTol || dMake <= costTol) && buildCost) {
+        // Plan 12: buying the rest beside a step whose machines are full saves the machines making it would add.
+        v.severity = 'info';
+        v.message += ` — redundant in raw material alone: over ${over}, ${dBuy <= costTol ? 'not buying it' : 'not making it'} costs the same raw material (without buying ${pct(dBuy)}, without making ${pct(dMake)}), and build cost counts the machines`;
+      } else if (dBuy <= costTol || dMake <= costTol) {
         // Buying the shortfall of a byproduct is a tie by construction (derived leaves cost what making them costs); a
         // step run to make the good while the line also buys it is not.
         const mainProducer = producers.some((id) => plan.steps.find((s) => s.id === id)?.mainOutput === key);

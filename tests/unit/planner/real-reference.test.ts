@@ -1,12 +1,10 @@
 // Real-data acceptance on the user's reference Electronic Circuit flow (plan 12 fix wave 2, controller rulings 184 and
-// 186-187, the acceptance specification of the reference-flow analysis): the reference's settings, and only its
+// 186-187, the acceptance specification of the reference-flow analysis; the user's ruling 179's case without the
+// reference's pins and stops, plan 12 Task 8): the reference's settings, and only its
 // settings, read at run time from the main checkout's private docs/local/circuit-reference/reference.json, which is
 // never committed or copied; without that file the cases skip with a logged note. It runs only with GTNH_LOCAL=1 and
 // logs only counts, keys and timings; nothing game-derived is read or written otherwise. The export is loaded once.
 
-import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
 import { loadPack } from '../../../src/server/pack/load.ts';
@@ -14,9 +12,9 @@ import { emptyContext, planLine, type SolveTuning } from '../../../src/server/pl
 import { HAND_STEP_WEIGHT } from '../../../src/server/planner/solve.ts';
 import { normalizeSettings } from '../../../src/shared/project/apply-op.ts';
 import type { Pack } from '../../../src/shared/types/pack.ts';
-import type { Plan, PlanSettings } from '../../../src/shared/types/plan.ts';
+import { DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_STEP_CHARGE, FREE_KEYS, type Plan, type PlanSettings } from '../../../src/shared/types/plan.ts';
+import { REFERENCE, localDocPath, storedSettings } from '../../helpers/local-docs.ts';
 
-const REFERENCE = join('docs', 'local', 'circuit-reference', 'reference.json');
 const GLASS_TUBE = 'gregtech:gt.metaitem.03@32012';
 const SECONDS_PER_HOUR = 3600;
 /** Plan 09's bound on a real-data plan with a warm pack (an MV line; ruling 187). */
@@ -42,38 +40,34 @@ const RUBBER_WOOD_CENTRIFUGE = '85e9bdddf3f2bced';
 const TIN_DUST = 'gregtech:gt.metaitem.01@2057';
 const TIN_INGOT = 'gregtech:gt.metaitem.01@11057';
 const STEEL_INGOT = 'gregtech:gt.metaitem.01@11305';
+/**
+ * The reference's raw materials (the user's ruling 179: Rubber Wood, Copper Ingot, Steel Ingot, Tin Dust, Redstone, Sand;
+ * tin as dust or ingot, controller ruling 201) and the free inputs.
+ */
+const REFERENCE_RAW_KINDS: ReadonlySet<string> = new Set([
+  'IC2:blockRubWood@0', 'gregtech:gt.metaitem.01@11035', STEEL_INGOT, 'gregtech:gt.metaitem.01@2057', 'gregtech:gt.metaitem.01@11057', 'minecraft:redstone@0',
+  'minecraft:sand@0', ...FREE_KEYS,
+]);
 /** Its raw material per minute (the acceptance spec's REF_RAW): tin as dust or ingot (controller ruling 201). */
 const REF_RAW: Readonly<Record<string, number>> = {
   'IC2:blockRubWood@0': 32, 'gregtech:gt.metaitem.01@11035': 11.25, [STEEL_INGOT]: 4, tin: 1, 'minecraft:redstone@0': 5, 'minecraft:sand@0': 2,
 };
 
-/**
- * The reference file: `GTNH_REFERENCE` when set, else REFERENCE in this checkout, else in the main checkout (the parent
- * of git's common directory, where a worktree's private docs live); undefined when none exists.
- */
-function referencePath(): string | undefined {
-  const candidates = [process.env.GTNH_REFERENCE, resolve(REFERENCE)];
-  try {
-    candidates.push(join(dirname(resolve(execFileSync('git', ['rev-parse', '--git-common-dir'], { encoding: 'utf8' }).trim())), REFERENCE));
-  } catch {
-    // no git here: the other places only
-  }
-  return candidates.find((path): path is string => path !== undefined && existsSync(path));
-}
-
 const local = process.env.GTNH_LOCAL === '1';
-const path = local ? referencePath() : undefined;
+/** The reference file: `GTNH_REFERENCE` when set, else in this checkout, else in the main checkout (`localDocPath`). */
+const path = local ? localDocPath(REFERENCE, process.env.GTNH_REFERENCE) : undefined;
 if (local && path === undefined) console.log(`real-reference: skipped, no ${REFERENCE} (the user's private reference settings)`);
 
 /**
  * What a plan costs by the build MIP's measure, its tie-breaks aside: its raw material over the build horizon, the
  * machines it builds and the step charge on every new machine block (a pool's once; a step on a pseudo machine once, by
  * hand `HAND_STEP_WEIGHT` times), the charge being `stepCharge` × the least raw material over the horizon, at least 1
- * raw (no gathered block is made on these EnderIO lines, so S1g is S1).
+ * raw (no gathered block is made on these EnderIO lines, so S1g is S1): the plan's own least, or `least` per second where
+ * two plans are weighed alike.
  */
-function buildObjective(plan: Plan, s: PlanSettings): number {
+function buildObjective(plan: Plan, s: PlanSettings, least = plan.rawCost?.leastPerSecond ?? 0): number {
   const horizon = (s.buildHorizonHours ?? 24) * SECONDS_PER_HOUR;
-  const charge = (s.stepCharge ?? 0) * Math.max((plan.rawCost?.leastPerSecond ?? 0) * horizon, 1);
+  const charge = (s.stepCharge ?? 0) * Math.max(least * horizon, 1);
   let blocks = 0;
   for (const step of plan.steps) {
     if (step.pool !== undefined && step.pool.steps[0] !== step.id) continue;
@@ -150,7 +144,7 @@ describe.skipIf(path === undefined)("the user's reference Electronic Circuit flo
   };
 
   beforeAll(async () => {
-    stored = normalizeSettings((JSON.parse(readFileSync(path as string, 'utf8')) as { settings: Partial<PlanSettings> }).settings);
+    stored = normalizeSettings(storedSettings(path as string));
     byHand = { ...stored, automateCrafting: false };
     pack = await loadPack(activeExportDir(loadConfig()));
     await planLine(pack, { ...stored, target: GLASS_TUBE, recipeChoice: {}, per: 'min', tier: 1 }, emptyContext());   // warm the pack
@@ -239,4 +233,46 @@ describe.skipIf(path === undefined)("the user's reference Electronic Circuit flo
       expect(buildObjective(guarded.plan, s), name).toBeLessThanOrEqual(buildObjective(ignored.plan, s) * (1 + 1e-6));
     }
   }, 120_000);
+
+  it("plans the line without the reference's pins and stops, at the default build-cost settings, in no more machine blocks than the reference, from its raw materials unless that is dearer", async () => {
+    // The user's ruling 179 (2026-10-20): "the fewer machines make a big difference where 3 % more raw material is
+    // negligible" — the reference's settings without its recipe pins and stop items, at the defaults of build cost (24
+    // hours, "Fewest machines"), crafting on Auto Workbenches: no more machine blocks than the reference (its 12 machine
+    // steps, one of them 3 Centrifuges, and its 4 crafting steps on Auto Workbenches: the reference at the same settings),
+    // and no raw material outside the reference's unless the plan is cheaper than the reference by the build MIP's measure.
+    // Where the 24-hour horizon does not achieve it, the other horizons are tried and logged for the controller, and the
+    // case fails rather than loosen (the ruling: a controller ruling is needed then).
+    const defaults: Partial<PlanSettings> = { stepCharge: DEFAULT_STEP_CHARGE, buildHorizonHours: DEFAULT_BUILD_HORIZON_HOURS, automateCrafting: true };
+    const judge = async (hours: number): Promise<{ text: string; ok: boolean; blocks: boolean; raw: boolean }> => {
+      const own: PlanSettings = { ...stored, ...defaults, recipeChoice: {}, stopItems: [], buildHorizonHours: hours };
+      const reference: PlanSettings = { ...stored, ...defaults, buildHorizonHours: hours };
+      const mine = await timed(own);
+      const theirs = await timed(reference);
+      const least = mine.plan.rawCost?.leastPerSecond ?? 0;
+      const outside = mine.plan.rawInputs.map((r) => r.key).filter((key) => !REFERENCE_RAW_KINDS.has(key)).sort();
+      const cheaper = buildObjective(mine.plan, own, least) < buildObjective(theirs.plan, reference, least);
+      const blocks = machineBlocks(mine.plan) <= machineBlocks(theirs.plan);
+      const raw = outside.length === 0 || cheaper;
+      return {
+        ok: mine.plan.status === 'ok' && blocks && raw, blocks, raw,
+        text: `${hours} h: ${mine.plan.status}, ${mine.seconds.toFixed(2)} s, ${mine.plan.steps.length} steps, ${machineBlocks(mine.plan)} machine blocks `
+          + `against the reference's ${machineBlocks(theirs.plan)}; raw ${(((mine.plan.rawCost?.perSecond ?? 0) * 60)).toFixed(3)} a minute, build ${mine.plan.cost?.build}, `
+          + `outside the reference's raw materials ${outside.join(' ') || 'none'}; by the build MIP's measure ${buildObjective(mine.plan, own, least).toFixed(1)} `
+          + `against the reference's ${buildObjective(theirs.plan, reference, least).toFixed(1)}`,
+      };
+    };
+    const day = await judge(DEFAULT_BUILD_HORIZON_HOURS);
+    console.log(`real-reference without pins and stops, ${day.text}`);
+    if (!day.ok) {
+      let largest: number | undefined;
+      for (const hours of [1, 2, 4, 8, 12, 48, 168, 720, 8760]) {
+        const other = await judge(hours);
+        console.log(`real-reference without pins and stops, FOR THE CONTROLLER (the user's ruling 179), ${other.text}`);
+        if (other.ok) largest = hours;
+      }
+      console.log(`real-reference without pins and stops: the largest horizon that achieves it: ${largest === undefined ? 'none of 1 h to 8,760 h' : `${largest} h`}`);
+    }
+    expect(day.blocks, 'no more machine blocks than the reference').toBe(true);
+    expect(day.raw, "the reference's raw materials, unless dearer").toBe(true);
+  }, 600_000);
 });

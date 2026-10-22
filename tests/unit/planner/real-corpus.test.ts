@@ -4,6 +4,12 @@
 // audit's invariant checker against an independent least-raw-material optimum of its own graph. It runs only with
 // GTNH_LOCAL=1 and is skipped everywhere else; nothing game-derived is read or written otherwise. The export is loaded
 // once for the whole file, and each plan is timed on a warm pack (a first, unrelated plan warms it).
+//
+// Plan 12 (Task 8): the plans count build cost over 24 hours by default, so the checker runs with `buildCost` (its checks
+// that assume plan 09's objective follow plan 12's: a free detour into a gathered block, a multi-producer or purchase
+// dearer only in raw material are notes, and nothing caps raw material above the least); and the line per hour is
+// compared with the line per minute on the same settings with build cost ignored (plan 09's scale-free objective, where
+// they run the same recipes), the build-cost plans' differences logged.
 
 import { beforeAll, describe, expect, it } from 'vitest';
 import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
@@ -36,9 +42,14 @@ function raiseWithout(test: BanTest): number {
  * raises the raw material by more than the step charge × the least raw material (the deep check's ban test); (iii)
  * bought and made, where every step making it is in the plan for another main output: each names another (spec D13: a
  * step making a good the line buys beside another output it uses is named after that one, as a cutting machine making
- * Wafers beside bought Poly-Si dust or a centrifuge making Arsenic beside bought Sulfur Dust).
+ * Wafers beside bought Poly-Si dust or a centrifuge making Arsenic beside bought Sulfur Dust); (iv) with build cost
+ * counted (plan 12), any note of the deep check: the build MIP weighed each source's machines (and step charge per new
+ * machine block) against the raw material it saves — one machine of A beside a cheaper machine of B for the rest, or
+ * buying the rest beside a step whose machines are full — so the step charge × the least raw material of (ii), plan 09's
+ * per-step trade, is no measure of it.
  */
 function excuse(v: Violation, plan: Plan, stepCharge: number, optimum: number): string | null {
+  if (v.severity === 'info' && v.data?.buildCost === true) return 'build cost: the machines a source saves';
   if (v.kind === 'multi-producer') {
     const mains = ((v.data?.producers ?? []) as ProducerInfo[]).filter((p) => p.isMain);
     if (mains.length <= 1) return 'co-products';
@@ -74,16 +85,19 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('the plan 09 corpus on the real 
     expect(seconds, name).toBeLessThan(PLAN_SECONDS);
     expect(plan.warnings.map((w) => w.code).filter((c) => NEVER.includes(c)), name).toEqual([]);
     const stepCharge = settings.stepCharge ?? DEFAULT_STEP_CHARGE;
-    const found = await checkPlanInvariantsDeep(pack, settings, plan, { marginal: false, stepCharge });
+    const buildCost = settings.buildHorizonHours !== null;
+    const found = await checkPlanInvariantsDeep(pack, settings, plan, { marginal: false, stepCharge, buildCost });
     const text = (v: Violation): string => `${v.kind}/${v.severity}: ${v.message}`;
     expect(found.filter((v) => EXACT_KINDS.includes(v.kind) && v.severity !== 'info').map(text), name).toEqual([]);
-    expect(found.filter((v) => v.kind === 'free-detour').map(text), name).toEqual([]);
-    // Raw material: nothing from solver tolerance, at most the step charge's cap above the optimum.
+    // Kind (g): with build cost counted a detour into a gathered block is a note (plan 12's D1), any other a warning.
+    expect(found.filter((v) => v.kind === 'free-detour' && v.severity !== 'info').map(text), name).toEqual([]);
+    // Raw material: nothing from solver tolerance; with build cost ignored at most the step charge's cap above the
+    // optimum (with it counted the machines it saves may pay for more, architecture §11.39 amending §11.34).
     const cost = found.find((v) => v.kind === 'cost' && v.data?.optimum !== undefined);
     expect(cost, name).toBeDefined();
     const { planCost, optimum } = cost?.data as { planCost: number; optimum: number };
     expect(planCost, name).toBeGreaterThanOrEqual(optimum * (1 - 1e-6));
-    expect(planCost, name).toBeLessThanOrEqual(optimum * (1 + STEP_CHARGE_CAP));
+    if (!buildCost) expect(planCost, name).toBeLessThanOrEqual(optimum * (1 + STEP_CHARGE_CAP));
     expect(found.filter((v) => v.kind === 'cost' && v.severity === 'error').map(text), name).toEqual([]);
     // (c) per good: never an error, a warning or note only under one of the documented exceptions.
     for (const v of found.filter((x) => x.kind === 'multi-producer' || x.kind === 'bought-and-made')) {
@@ -97,12 +111,19 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('the plan 09 corpus on the real 
   for (const target of CORPUS) {
     it(`plans ${target.name} at its natural tier soundly per minute, per hour and with supporting lines`, async () => {
       const plans = new Map<string, Plan>();
-      for (const v of VARIANTS) {
-        const settings: PlanSettings = { ...defaultSettings(), target: target.key, amount: target.amount, per: v.per, tier: target.tier, routeDerived: v.routeDerived };
-        plans.set(v.label, await expectSound(`${target.name} ${v.label}`, settings));
-      }
-      // The LP is the same at every rate (fix spec D1): per hour the line runs the same recipes as per minute.
-      expect(recipeIds(plans.get('per hour') as Plan)).toEqual(recipeIds(plans.get('per minute') as Plan));
-    }, 120_000);
+      const settingsOf = (v: (typeof VARIANTS)[number]): PlanSettings =>
+        ({ ...defaultSettings(), target: target.key, amount: target.amount, per: v.per, tier: target.tier, routeDerived: v.routeDerived });
+      for (const v of VARIANTS) plans.set(v.label, await expectSound(`${target.name} ${v.label}`, settingsOf(v)));
+      // The LP is the same at every rate (fix spec D1): with build cost ignored, per hour the line runs the same recipes
+      // as per minute. With it counted the objective weighs machines against the rate (plan 12), so they may differ:
+      // logged.
+      const [perMinute, perHour] = VARIANTS;
+      const ignored = async (v: (typeof VARIANTS)[number]): Promise<Plan> => planLine(pack, { ...settingsOf(v), buildHorizonHours: null }, emptyContext());
+      expect(recipeIds(await ignored(perHour))).toEqual(recipeIds(await ignored(perMinute)));
+      const hour = recipeIds(plans.get('per hour') as Plan);
+      const minute = recipeIds(plans.get('per minute') as Plan);
+      console.log(`real-corpus ${target.name}: with build cost per hour ${hour.length} recipes, per minute ${minute.length}; `
+        + `per hour only ${hour.filter((id) => !minute.includes(id)).join(' ') || 'none'}, per minute only ${minute.filter((id) => !hour.includes(id)).join(' ') || 'none'}`);
+    }, 180_000);
   }
 });

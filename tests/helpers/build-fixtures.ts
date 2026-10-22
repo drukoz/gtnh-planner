@@ -380,6 +380,40 @@ export function solderSpec(): PackSpec {
 }
 
 /**
+ * `solderSpec()` as a pack a whole line plans on (Task 8's synthetic horizon flip): its goods with GT data (`t:part@0`
+ * Partium Dust, `t:tin_ingot@0` Tin Ingot, `t:antimony@0` Antimony Dust, `t:iron_ingot@0` Iron Ingot), one overworld
+ * vein `ore.mix.solder` (primary Tin, secondary Antimony, between Partium, sporadic Iron; weight 100, y 10–60, size 32,
+ * density 3) so each is mined at 1 raw, and the crafting recipes that build its machines: `make-121` (16 iron ingots →
+ * the Basic Assembler), `make-131` (12 → the Basic Fluid Extractor) and `make-201` (20 → the Basic Alloy Smelter). The
+ * tin route then builds 28 and the solder route 48.
+ */
+export function solderPackSpec(): PackSpec {
+  const spec = solderSpec();
+  return {
+    ...spec,
+    items: [
+      { key: 't:part@0', name: 'Partium Dust', gt: { prefix: 'dust', material: 'Partium' } },
+      { key: 't:tin_ingot@0', name: 'Tin Ingot', gt: { prefix: 'ingot', material: 'Tin' } },
+      { key: 't:antimony@0', name: 'Antimony Dust', gt: { prefix: 'dust', material: 'Antimony' } },
+      { key: 't:iron_ingot@0', name: 'Iron Ingot', gt: { prefix: 'ingot', material: 'Iron' } },
+    ],
+    maps: [...(spec.maps ?? []), { id: 'crafting', name: 'Crafting' }],
+    recipes: [
+      ...(spec.recipes ?? []),
+      craft('make-121', [['t:iron_ingot@0', 16]], 'machine:121@0'),
+      craft('make-131', [['t:iron_ingot@0', 12]], 'machine:131@0'),
+      craft('make-201', [['t:iron_ingot@0', 20]], 'machine:201@0'),
+    ],
+    worldgen: {
+      veins: [{
+        name: 'ore.mix.solder', dims: ['overworld'], kind: 'vein', weight: 100, minY: 10, maxY: 60, size: 32, density: 3,
+        materials: { primary: 'Tin', secondary: 'Antimony', between: 'Partium', sporadic: 'Iron' },
+      }],
+    },
+  };
+}
+
+/**
  * Molten Tin from Tin Dust or from a Tin Ingot (the plan 12 fix wave 2 review's twin recipes, as the 2.9 export's Fluid
  * Extractor has them): maps fluid extractor, assembler and alloy smelter; machines 121 Basic Assembler, 131 Basic Fluid
  * Extractor and 201 Basic Alloy Smelter (LV); `x-dust` (1 tin dust → 144 L molten tin) and `x-ingot` (1 tin ingot →
