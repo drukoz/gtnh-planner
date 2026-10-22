@@ -255,6 +255,11 @@ export function choosePowerTap(taps: readonly LayoutTap[], target: Vec3, amps: n
     ?? nearestTap(taps, target);
 }
 
+/** `choosePowerTap`'s two classes of taps that can carry the line: those with `amps` free, then the others whose cable carries `amps`. */
+export function carryingTaps<T extends LayoutTap>(taps: readonly T[], amps: number): [T[], T[]] {
+  return [taps.filter((t) => freeAmpsOf(t) >= amps), taps.filter((t) => freeAmpsOf(t) < amps && cableAmpsOf(t) >= amps)];
+}
+
 // ---- Routes ----
 
 /** A neighbour of `p` nearest to `toward` (ties level first), clear of the line unless no neighbour is. */

@@ -10,7 +10,7 @@ import { tierName, V } from '../../shared/gt/tiers.ts';
 import type { StuffKey } from '../../shared/keys.ts';
 import { fmtInt, fmtRate } from '../../shared/layout/format.ts';
 import {
-  DIRS, posKey, rotateConnections, rotatedSize, rotateFace, rotateFacing, sideToward, step, toWorld, type Rotation, type Vec3,
+  DIRS, manhattan, posKey, rotateConnections, rotatedSize, rotateFace, rotateFacing, sideToward, step, toWorld, type Rotation, type Vec3,
 } from '../../shared/layout/geometry.ts';
 import { FACES } from '../../shared/types/assets.ts';
 import type { FeedSpec } from '../../shared/types/feed.ts';
@@ -28,8 +28,8 @@ import { RAIN_OUTAGE_SECONDS } from '../world/power.ts';
 import { addedBlocks, attachCovers, placeUnits, replacedCasings, unitsFromPlan, type LocalBlock, type Placement, type Unit } from './arrange.ts';
 import { feedingWarnings } from './feed-rules.ts';
 import {
-  chooseLogisticsNetwork, choosePowerNetwork, choosePowerTap, ghostBlocks, logisticsHookup, nearestTap, powerHookup, tapCableAmps,
-  type HookupBuild, type PowerHookupBuild, type RouteWorld,
+  carryingTaps, chooseLogisticsNetwork, choosePowerNetwork, choosePowerTap, ghostBlocks, logisticsHookup, nearestTap, powerHookup, reachableTap,
+  tapCableAmps, type HookupBuild, type PowerHookupBuild, type RouteWorld,
 } from './hookups.ts';
 import { fluidNets, headWidthFor, routeInternal, supplyRunLoss, type InternalResult } from './internal.ts';
 import { buildMode, PORT_SPACING, type ModeResult } from './modes/mode.ts';
@@ -115,6 +115,26 @@ function ratedTaps(pack: Pack, scan: WorldScan, vox: Voxels | null, taps: readon
 }
 
 /**
+ * The network's cables on the supply tier that Plan 4 did not list as taps (it lists one per 16×16×16 cell, the cable that
+ * comes first in (x, y, z) with a side free of tile entities, however buried), as taps (architecture §11 entry 52): free
+ * amps as Plan 4 works a tap's out (the cable's rating, at most the network's spare EU/t in whole amps), `cableAmps` the
+ * rating. A cable whose rating is unknown is left out.
+ */
+function networkCableTaps(pack: Pack, scan: WorldScan, net: PowerNetwork, dim: number, supplyTier: number, listed: readonly LayoutTap[]): LayoutTap[] {
+  const spareAmps = Math.max(0, Math.floor((net.generatorEUt.average - (net.loadEUt ?? 0)) / V[supplyTier]!));
+  const isListed = new Set(listed.map((t) => posKey(t.pos)));
+  const taps: LayoutTap[] = [];
+  for (const p of scan.pipes) {
+    const machine = pack.machines.get(p.mteId);
+    if (p.networkId !== net.id || p.dim !== dim || p.voltageTier !== supplyTier || (p.kind ?? machine?.kind) !== 'cable') continue;
+    const amps = p.amps ?? machine?.cable?.amps;
+    if (amps === undefined || isListed.has(posKey(p.pos))) continue;
+    taps.push({ pos: [...p.pos], dim, kind: 'power', networkId: net.id, voltageTier: supplyTier, freeAmps: Math.min(amps, spareAmps), cableAmps: amps });
+  }
+  return taps;
+}
+
+/**
  * The power the line is judged against (spec §3.5): the one network it is wired to — its average generation less its
  * load, its stored EU, what it still makes in rain, and the rain outage when any of it is solar.
  */
@@ -156,6 +176,37 @@ function baseKeepAway(pack: Pack, scan: WorldScan, dim: number, supplyTier: numb
   }
   keys.delete(posKey(tap));
   return keys;
+}
+
+/**
+ * The tap the power hookup starts from (architecture §11 entry 52): `choosePowerTap`'s whenever a route leaves it, so a
+ * hookup that routes keeps its tap. Else a tap of the first of these groups that a route leaves, each searched once from
+ * all of its taps (`reachableTap`, the nearest to the power port first): the listed taps with the line's amps free, the
+ * listed taps whose cable carries them, then the same two groups of the network's other cables on the supply tier
+ * (`networkCableTaps`). A group's search keeps away from what the hookup keeps away from but the group's own cells, and its
+ * tap is taken only when a route leaves that tap alone, as `powerHookup` then searches it. When no group gives one, or
+ * without voxels, `choosePowerTap`'s: its hookup stays a dashed guide with `no_path`.
+ */
+function powerTapFor(input: {
+  pack: Pack; scan: WorldScan; dim: number; net: PowerNetwork; taps: readonly LayoutTap[]; target: Vec3; amps: number; supplyTier: number;
+  ports: readonly Vec3[]; world: RouteWorld; lineKeepAway: readonly string[]; maxNodes: number | undefined;
+}): LayoutTap | null {
+  const { pack, scan, dim, net, taps, target, amps, supplyTier, ports, world, lineKeepAway, maxNodes } = input;
+  const chosen = choosePowerTap(taps, target, amps);
+  if (chosen === null || world.vox === null) return chosen;
+  // what the hookup from `tap` keeps away from, as `buildHookups` gives it
+  const keepAway = (tap: Vec3) => new Set([...lineKeepAway, ...baseKeepAway(pack, scan, dim, supplyTier, tap)]);
+  const routes = (tap: LayoutTap) => reachableTap({ ...world, keepAway: keepAway(tap.pos) }, [tap], ports, maxNodes) !== null;
+  if (routes(chosen)) return chosen;
+  const nearestFirst = (a: LayoutTap, b: LayoutTap) => manhattan(a.pos, target) - manhattan(b.pos, target) || compareText(posKey(a.pos), posKey(b.pos));
+  for (const group of [...carryingTaps(taps, amps), ...carryingTaps(networkCableTaps(pack, scan, net, dim, supplyTier, taps), amps)]) {
+    if (group.length === 0) continue;
+    const away = keepAway(group[0]!.pos);
+    for (const t of group) away.delete(posKey(t.pos));
+    const tap = reachableTap({ ...world, keepAway: away }, [...group].sort(nearestFirst), ports, maxNodes);
+    if (tap !== null && routes(tap)) return tap;
+  }
+  return chosen;
 }
 
 // ---- The line in its local grid (stages 3–5) ----
@@ -405,11 +456,12 @@ export function hookupKeepOff(lineBlocks: readonly LayoutBlock[], port: Vec3): S
 }
 
 /**
- * Spec §3.5, §3.6, §3.8: the power hookup from the supply-tier tap whose cable can carry the line to the supply run,
- * and the logistics hookup from the network's tap nearest the logistics port. Each goes round the line's box (never
- * through it, so it ends beside its port), the multiblocks' air cells and the hookups laid before it; the power hookup
- * also keeps off everything of another tier, in the line and in the base, and a logistics hookup that ends on a
- * conduit face keeps off the cells `hookupKeepOff` names. The taps they join show as ghosts.
+ * Spec §3.5, §3.6, §3.8: the power hookup from the supply-tier tap whose cable can carry the line and that a route can
+ * leave (`powerTapFor`) to the supply run, and the logistics hookup from the network's tap nearest the logistics port.
+ * Each goes round the line's box (never through it, so it ends beside its port), the multiblocks' air cells and the
+ * hookups laid before it; the power hookup also keeps off everything of another tier, in the line and in the base, and a
+ * logistics hookup that ends on a conduit face keeps off the cells `hookupKeepOff` names. The taps they join show as
+ * ghosts.
  */
 function buildHookups(input: {
   pack: Pack; parts: Parts; scan: WorldScan; dim: number; line: LocalLine; frame: Frame; vox: Voxels | null; lineBlocks: readonly LayoutBlock[];
@@ -440,7 +492,11 @@ function buildHookups(input: {
   if (stages !== null) {
     if (powerNet === null) out.warnings.push({ code: 'no_power_tap', text: 'No power network found at this base' });
     else {
-      const tap = choosePowerTap(ratedTaps(pack, scan, vox, powerTaps), worldPos([-1, 0, line.placement.spineZ], frame), stages.supplyAmps);
+      const tap = powerTapFor({
+        pack, scan, dim, net: powerNet, taps: ratedTaps(pack, scan, vox, powerTaps), target: worldPos([-1, 0, line.placement.spineZ], frame),
+        amps: stages.supplyAmps, supplyTier, ports: line.internal.supplyRun.map((c) => worldPos(c, frame)), world: { vox, line: routeLine, box },
+        lineKeepAway, maxNodes,
+      });
       if (tap !== null) {
         const keepAway = new Set([...lineKeepAway, ...baseKeepAway(pack, scan, dim, supplyTier, tap.pos)]);
         const world: RouteWorld = { vox, line: routeLine, box, keepAway };
