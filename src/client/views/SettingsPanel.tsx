@@ -461,7 +461,8 @@ export function BuildHorizonField(props: { settings: PlanSettings; patch: Patch 
 /**
  * "Build machines at" (the user's ruling 224): the cheapest tier (the default) or a tier from LV up to the project's,
  * at which every step's new machines are built where a machine of that tier runs its recipe; picking one sends
- * `buildTier`.
+ * `buildTier`. The project's tier is the setting's, else the plan's (the world scan's tier, as the planner resolved
+ * it); with neither yet the tiers wait for the plan (`buildTierOptions`).
  */
 export function BuildTierField(props: { settings: PlanSettings; plan?: Plan | null; patch: Patch }): ReactElement {
   const { settings, plan, patch } = props;
@@ -478,7 +479,7 @@ export function BuildTierField(props: { settings: PlanSettings; plan?: Plan | nu
           if (next !== null && e.currentTarget.value !== value) patch(next);
         }}
       >
-        {buildTierOptions(settings.tier ?? plan?.tier ?? 1, stored).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+        {buildTierOptions(settings.tier ?? plan?.tier ?? null, stored).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select>
     </label>
   );

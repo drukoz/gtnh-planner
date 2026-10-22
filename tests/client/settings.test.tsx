@@ -242,6 +242,17 @@ describe('build cost, machine tier and multiblocks', () => {
     expect(select(panelOf(old), 'Build machines at')).toEqual(['=Cheapest tier *', '1=LV']);
     expect(optionsSection(panelOf(defaultSettings()))).toContain('Build machines at');
   });
+  it('waits for the plan to list the tiers when the project tier comes from the world (the controller\'s ruling after Task 7, (b))', () => {
+    // An auto tier (null) with no plan yet (loading, or none) is not LV: the select offers the cheapest tier and the stored
+    // tier, plainly, until the plan says the project's tier.
+    expect(buildTierOptions(null, null)).toEqual([{ value: '', label: 'Cheapest tier' }]);
+    expect(buildTierOptions(null, 2)).toEqual([{ value: '', label: 'Cheapest tier' }, { value: '2', label: 'MV' }]);
+    expect(select(panelOf(defaultSettings()), 'Build machines at')).toEqual(['=Cheapest tier *']);
+    expect(select(panelOf({ ...defaultSettings(), buildTier: 2 }), 'Build machines at')).toEqual(['=Cheapest tier', '2=MV *']);
+    expect(select(panelOf({ ...defaultSettings(), buildTier: 2 }, { ...plan([]), tier: 3 } as Plan), 'Build machines at'))
+      .toEqual(['=Cheapest tier', '1=LV', '2=MV *', '3=HV']);
+    expect(sendsOf(BuildTierField, { ...defaultSettings(), buildTier: 2 }, '')).toEqual([{ buildTier: null }]);
+  });
   it('sends the tier picked for new machines, or the cheapest', () => {
     const mv = { ...defaultSettings(), tier: 2 };
     expect(sendsOf(BuildTierField, mv, '2')).toEqual([{ buildTier: 2 }]);
@@ -262,6 +273,15 @@ describe('build cost, machine tier and multiblocks', () => {
     expect([multiblocksPatch('allow'), multiblocksPatch('other')]).toEqual([{ multiblocks: 'allow' }, null]);
     expect(validateOp({ op: 'settings', patch: { multiblocks: 'only-required' } })).toBeNull();
     expect(optionsSection(panelOf(defaultSettings()))).toContain('Multiblocks');
+  });
+  it('says what "Only when nothing else can do it" does with build cost ignored (the controller\'s ruling after Task 7, (c))', () => {
+    const hint = 'With build cost ignored, a recipe only a multiblock runs is weighed by its raw material alone.';
+    const onlyRequired: PlanSettings = { ...defaultSettings(), multiblocks: 'only-required' };
+    expect(optionsSection(panelOf({ ...onlyRequired, buildHorizonHours: null }))).toContain(hint);
+    // not with build cost counted (the default horizon), not where multiblocks are used when cheaper, not in Make N
+    expect(optionsSection(panelOf(onlyRequired))).not.toContain(hint);
+    expect(optionsSection(panelOf({ ...defaultSettings(), buildHorizonHours: null }))).not.toContain(hint);
+    expect(optionsSection(panelOf({ ...onlyRequired, buildHorizonHours: null, mode: 'makeN', amount: 64 }))).not.toContain(hint);
   });
   it('has no switch for crafting-table steps: they run on an Auto Workbench', () => {
     // The user's ruling 180 (a): no control replaces the old checkbox, whatever a stored project held.

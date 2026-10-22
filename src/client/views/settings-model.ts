@@ -251,10 +251,16 @@ export function horizonPatch(value: string): Partial<PlanSettings> {
 /**
  * The choices of "Build machines at" (the user's ruling 224): `Cheapest tier` (null, the default, under the value '')
  * and each tier from LV up to the project's tier; a stored tier above it (the project's tier was lowered since) last,
- * said to be above it (the planner builds at the project's tier then).
+ * said to be above it (the planner builds at the project's tier then). With the project's tier not known yet (`null`: an
+ * auto tier, which the world scan decides, and no plan yet; the controller's ruling after plan 12 Task 7, (b)), only
+ * the cheapest tier and a stored tier, plainly: the list of tiers waits for the plan.
  */
-export function buildTierOptions(projectTier: number, stored: number | null | undefined): Array<{ value: string; label: string }> {
+export function buildTierOptions(projectTier: number | null, stored: number | null | undefined): Array<{ value: string; label: string }> {
   const options = [{ value: '', label: 'Cheapest tier' }];
+  if (projectTier === null) {
+    if (typeof stored === 'number') options.push({ value: String(stored), label: tierText(stored) });
+    return options;
+  }
   for (let tier = 1; tier <= projectTier; tier++) options.push({ value: String(tier), label: tierText(tier) });
   if (typeof stored === 'number' && stored > projectTier) options.push({ value: String(stored), label: `${tierText(stored)} (above the project’s tier)` });
   return options;
