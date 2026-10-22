@@ -23,7 +23,7 @@ import type { HatchKind } from '../../shared/types/layout.ts';
 import type { BomLine, PlanContext, PlanSettings } from '../../shared/types/plan.ts';
 // GT's structure rules the layout lays a multiblock's hatches by (entries 47 and 49 (3): `hatchRulesOf`, which reads
 // only the machine and its export), read here so a multiblock's build holds the hatches its layout lays
-import { hatchRulesOf, KIND_CLASS, ruleNeeds } from '../layout/hatch-rules.ts';
+import { hatchRulesOf, KIND_CLASS, ruleNeeds, rulePower, ruleTakes, type HatchRule, type HatchSource } from '../layout/hatch-rules.ts';
 import { basisContextKey, effectiveTier, planBasis, settingsHash } from './basis.ts';
 import { buildCandidates, type CandidateGraph, type LeafOracle } from './candidates.ts';
 import { analyzeCosts, isOreBlock, makeLeafOracle } from './costs.ts';
@@ -324,79 +324,139 @@ export function structureParts(pack: Pack, m: Machine): Map<StuffKey, number> {
 }
 
 /**
- * The hatches Plan 5's `multiblockShape` places for a step of `r` on the multiblock `m`, one each, keyed by the hatch's
- * item: an input bus when `r` takes an item, consumed or not (a programmed circuit included), an output bus when it
- * makes an item, an energy hatch of exactly `tier` (the lowest mteId of that tier), a maintenance hatch, an input hatch
- * per distinct fluid it takes (a slot of several fluid options counts once) and an output hatch per distinct fluid it
- * makes; and where GT's structure check needs a hatch whatever the recipe moves (an EBF's muffler, a tower's input
- * hatch: the `needs` of the rules the layout lays it by, `hatchRulesOf` — a hatch-rules.ts row that fits the exported
- * structure, with or without the export's own rules, architecture §11 entries 47 and 49 (3); the export's rules alone
- * need none), one of each such kind that neither those hatches nor the exported structure hold (a fluid of the
- * machine's own, a boiler's water and steam, always), as Plan 5's `ruledHatches` adds it on a casing, so the build and
- * the layout agree (plan 12 Task 6, the controller's note at the merge of main's hatch rules). The energy hatch aside,
- * each at the lowest tier of its class (`minimalHatch`'s pick). A class the pack lacks (or no energy hatch of `tier`) is
- * left out: Plan 5 then warns `hatch_cells_short`. Empty for a machine that is no multiblock.
+ * The hatches Plan 5's `multiblockShape` lays for a step of `r` on the multiblock `m`, kind for kind (the controller's
+ * ruling after the merge of main's hatch rules at e2efd36: a multiblock's build holds exactly the hatches its layout
+ * lays), keyed by the hatch's item:
+ * - By its hatch rules (`hatchRulesOf`: a hatch-rules.ts row that fits the exported structure, narrowed by the export's
+ *   own rules where it has them, or the export's rules alone; architecture §11 entries 47 and 49), as `ruledHatches`
+ *   lays them, each only where the rules take its kind anywhere (`ruleTakes`): an input bus when `r` takes an item,
+ *   consumed or not (a programmed circuit included), an output bus when it makes one (a steam multiblock's steam buses:
+ *   the rules' `classes`); an energy hatch of exactly `tier` (the lowest mteId of that tier) when the machine is
+ *   electric — its rules run it on EU, or only the export's rules know it, they took neither an energy nor a steam hatch
+ *   and `r` draws EU — and the rules take GT's plain energy hatch (one taking only multi-amp or laser energy hatches gets
+ *   none: `hatch_energy_exotic`); a steam hatch when they run it on steam; an input hatch per distinct fluid `r` takes (a
+ *   slot of several fluid options counts once), each on the cells the rules give that fluid slot (`fluidInputSlots`); an
+ *   output hatch per distinct fluid it makes, or on a tower that GT hands one fluid a layer (`layerOutputs`) one on every
+ *   layer above the bottom of the tower its layout builds (taller for more fluids, up to `maxLayers`); a maintenance
+ *   hatch where the rules take one; and where GT's structure check needs a hatch whatever the recipe moves (the rules'
+ *   `needs`: an EBF's muffler, a tower's input hatch, a cracker's middle input hatch), one of each such kind that none of
+ *   those can stand in for (none on the cells the need names) and, for a muffler, that the exported structure does not
+ *   hold (a fluid of the machine's own, a boiler's water and steam, always).
+ * - Without rules, as `genericHatches` lays them: the buses as above, an energy hatch of `tier`, a maintenance hatch, an
+ *   input hatch per distinct fluid it takes and an output hatch per distinct fluid it makes.
+ * The energy hatch aside, each at the lowest tier of its class (`minimalHatch`'s pick). A class the pack lacks (or no
+ * energy hatch of `tier`) is left out: Plan 5 then warns `hatch_cells_short`. Empty for a machine that is no multiblock.
  */
 export function hatchSet(pack: Pack, m: Machine, r: Recipe, tier: number): Map<StuffKey, number> {
   const set = new Map<StuffKey, number>();
   if (m.kind !== 'multiblock') return set;
   const byClass = hatchesByClass(pack);
+  const lowest = (cls: string): Machine | undefined => byClass.get(cls)?.[0];
+  const energy = byClass.get('MTEHatchEnergy')?.find((hatch) => hatch.tier === tier);
   const add = (hatch: Machine | undefined, n: number): void => {
     if (hatch !== undefined && n > 0) set.set(hatch.itemKey, (set.get(hatch.itemKey) ?? 0) + n);
   };
-  const lowest = (cls: string): Machine | undefined => byClass.get(cls)?.[0];
   const itemIn = r.meta.circuit !== undefined || r.inputs.some((ing) => ing.options.some((o) => !isFluidKey(o.key)));
   const itemOut = r.outputs.some((p) => !isFluidKey(p.key));
-  const fluidsIn = new Set(r.inputs.filter((ing) => ing.options.length > 0 && ing.options.every((o) => isFluidKey(o.key)))
-    .map((ing) => ing.options.map((o) => o.key).sort(byString).join('/')));
+  // the fluid slots, each once, in slot order, with the slot (from 0) GT counts its fluid inputs by
+  const fluidSlots = new Map<string, number>();
+  for (const ing of r.inputs) {
+    if (ing.options.length === 0 || !ing.options.every((o) => isFluidKey(o.key))) continue;
+    const key = ing.options.map((o) => o.key).sort(byString).join('/');
+    if (!fluidSlots.has(key)) fluidSlots.set(key, ing.slot - FLUID_SLOT_BASE);
+  }
   const fluidsOut = new Set(r.outputs.filter((p) => isFluidKey(p.key)).map((p) => p.key));
-  add(lowest('MTEHatchInputBus'), itemIn ? 1 : 0);
-  add(lowest('MTEHatchOutputBus'), itemOut ? 1 : 0);
-  add(byClass.get('MTEHatchEnergy')?.find((hatch) => hatch.tier === tier), 1);
-  add(lowest('MTEHatchMaintenance'), 1);
-  add(lowest('MTEHatchInput'), fluidsIn.size);
-  add(lowest('MTEHatchOutput'), fluidsOut.size);
-  const { needs, exported } = structureNeeds(pack, m);
-  if (needs.length > 0) {
-    const placed = new Set<HatchKind>(['energy', 'maintenance', ...(itemIn ? ['input_bus' as const] : []), ...(itemOut ? ['output_bus' as const] : []),
-      ...(fluidsIn.size > 0 ? ['input_hatch' as const] : []), ...(fluidsOut.size > 0 ? ['output_hatch' as const] : [])]);
-    for (const need of needs) {
-      if (!need.own && (placed.has(need.kind) || exported.has(need.cls))) continue;
-      add(lowest(need.cls), 1);
+  const { rules, needs, exportedMuffler } = laidRules(pack, m);
+  if (rules === null) {
+    add(lowest('MTEHatchInputBus'), itemIn ? 1 : 0);
+    add(lowest('MTEHatchOutputBus'), itemOut ? 1 : 0);
+    add(energy, 1);
+    add(lowest('MTEHatchMaintenance'), 1);
+    add(lowest('MTEHatchInput'), fluidSlots.size);
+    add(lowest('MTEHatchOutput'), fluidsOut.size);
+    return set;
+  }
+  const { rule, source } = rules;
+  /** The element characters that take `kind`. */
+  const takers = (kind: HatchKind): string => Object.keys(rule.elements).filter((ch) => rule.elements[ch]?.includes(kind) === true).join('');
+  /** The hatches laid, each with the characters of the cells it may stand on; and the kinds a hatch of which found no cell or no hatch. */
+  const laid: Array<{ kind: HatchKind; chars: string }> = [];
+  const short = new Set<HatchKind>();
+  const lay = (kind: HatchKind, hatch: Machine | undefined, within?: string): void => {
+    if (!ruleTakes(rule, kind)) return;   // `hatch_not_taken`
+    const chars = [...takers(kind)].filter((ch) => within === undefined || within.includes(ch)).join('');
+    if (hatch === undefined || chars === '') {
+      short.add(kind);   // `hatch_cells_short`
+      return;
     }
+    add(hatch, 1);
+    laid.push({ kind, chars });
+  };
+  const of = (kind: HatchKind): Machine | undefined => lowest(rule.classes?.[kind] ?? KIND_CLASS[kind]);
+  const power = rulePower(rule);
+  if (itemIn) lay('input_bus', of('input_bus'));
+  if (itemOut) lay('output_bus', of('output_bus'));
+  if (power === 'eu' || (source === 'export' && power === 'none' && r.euPerTick > 0)) lay('energy', energy);
+  if (power === 'steam') lay('steam', of('steam'));
+  for (const slot of fluidSlots.values()) lay('input_hatch', of('input_hatch'), rule.fluidInputSlots?.[slot]);
+  const layers = rule.layerOutputs === undefined ? 0 : towerHeight(m, fluidsOut.size, rule.layerOutputs.maxLayers) - 1;
+  for (let k = 0; k < (rule.layerOutputs === undefined ? fluidsOut.size : layers); k++) lay('output_hatch', of('output_hatch'));
+  lay('maintenance', of('maintenance'));
+  for (const need of needs) {
+    const met = !need.own && (laid.some((h) => h.kind === need.kind && [...h.chars].every((ch) => need.chars === undefined || need.chars.includes(ch)))
+      || (need.kind === 'muffler' && exportedMuffler));
+    if (met || (!need.own && short.has(need.kind))) continue;
+    lay(need.kind, need.kind === 'energy' ? energy : lowest(need.cls), need.chars);
   }
   return set;
 }
 
-/**
- * What GT's structure check needs on a multiblock whatever its recipe moves: each need's kind, its class (a rule's own
- * class for the kind first) and whether it is a fluid of the machine's own; and the classes of the hatches its exported
- * structure holds, as `minimalHatch` builds them.
- */
-interface StructureNeeds { needs: ReadonlyArray<{ kind: HatchKind; cls: string; own: boolean }>; exported: ReadonlySet<string> }
-const NO_NEEDS: StructureNeeds = { needs: [], exported: new Set() };
-const STRUCTURE_NEEDS = new WeakMap<Pack, WeakMap<Machine, StructureNeeds>>();
+/** GT's first fluid slot (`Ingredient.slot`): fluid inputs count from it. */
+const FLUID_SLOT_BASE = 100;
 
 /**
- * The `StructureNeeds` of `m`: `ruleNeeds` of the hatch rules the layout lays it by (`hatchRulesOf`, architecture §11
- * entries 47 and 49 (3): a row that fits its exported structure, narrowed by the export's own rules where it has them),
- * none for a multiblock without a fitting row (the export's rules alone carry no needs). Once per pack and machine,
- * since `hatchSet` runs for every multiblock option the planner weighs and fitting a rule walks its whole structure.
+ * The height of the tower Plan 5's layout builds for a step of `fluids` fluid outputs on `m` (`ruledHatches`, whose
+ * `growLayers` adds layers to a tower of at least 3): one layer per fluid above the bottom, at least its exported height,
+ * at most `maxLayers`.
  */
-function structureNeeds(pack: Pack, m: Machine): StructureNeeds {
-  let byMachine = STRUCTURE_NEEDS.get(pack);
-  if (byMachine === undefined) STRUCTURE_NEEDS.set(pack, (byMachine = new WeakMap()));
+function towerHeight(m: Machine, fluids: number, maxLayers: number): number {
+  const height = m.structure?.size[1] ?? 0;
+  return height < 3 ? height : height + Math.min(Math.max(0, fluids + 1 - height), Math.max(0, maxLayers - height));
+}
+
+/**
+ * How Plan 5's layout lays a multiblock's hatches: by the hatch rules of `hatchRulesOf` (null: generically), what GT's
+ * structure check needs whatever the recipe moves (`ruleNeeds`: each need's kind, its class, a rule's own class for the
+ * kind first, the cells it names and whether it is a fluid of the machine's own), and whether the exported structure
+ * holds a muffler, which the layout keeps as the muffler it needs.
+ */
+interface LaidRules {
+  rules: { rule: HatchRule; source: HatchSource } | null;
+  needs: ReadonlyArray<{ kind: HatchKind; cls: string; chars?: string; own: boolean }>;
+  exportedMuffler: boolean;
+}
+const LAID_RULES = new WeakMap<Pack, WeakMap<Machine, LaidRules>>();
+
+/**
+ * The `LaidRules` of `m`, once per pack and machine, since `hatchSet` runs for every multiblock option the planner
+ * weighs and fitting a rule walks its whole structure.
+ */
+function laidRules(pack: Pack, m: Machine): LaidRules {
+  let byMachine = LAID_RULES.get(pack);
+  if (byMachine === undefined) LAID_RULES.set(pack, (byMachine = new WeakMap()));
   let found = byMachine.get(m);
   if (found === undefined) {
-    const rule = hatchRulesOf(m)?.rule;
-    const needs = rule === undefined ? [] : ruleNeeds(rule);
-    const st = m.structure;
-    found = rule === undefined || needs.length === 0 || st === undefined ? NO_NEEDS : {
-      needs: needs.map((need) => ({ kind: need.kind, cls: rule.classes?.[need.kind] ?? KIND_CLASS[need.kind], own: need.fluid !== undefined })),
-      exported: new Set(st.blocks.flatMap((b) => {
-        const tile = b.block.mteId === undefined || b.block.mteId === m.mteId ? undefined : pack.machines.get(b.block.mteId);
-        return tile?.kind === 'hatch' ? [simpleName(minimalHatch(pack, tile))] : [];
+    const of = hatchRulesOf(m);
+    const rule = of?.rule;
+    found = {
+      rules: of === null ? null : { rule: of.rule, source: of.source },
+      needs: rule === undefined ? [] : ruleNeeds(rule).map((need) => ({
+        kind: need.kind, cls: rule.classes?.[need.kind] ?? KIND_CLASS[need.kind], ...(need.chars === undefined ? {} : { chars: need.chars }), own: need.fluid !== undefined,
       })),
+      exportedMuffler: (m.structure?.blocks ?? []).some((b) => {
+        const tile = b.block.mteId === undefined || b.block.mteId === m.mteId ? undefined : pack.machines.get(b.block.mteId);
+        return tile?.kind === 'hatch' && simpleName(minimalHatch(pack, tile)) === KIND_CLASS.muffler;
+      }),
     };
     byMachine.set(m, found);
   }
@@ -405,9 +465,10 @@ function structureNeeds(pack: Pack, m: Machine): StructureNeeds {
 
 /**
  * The keys to price for building `machines` (`itemPrices`): each machine's item and, for a multiblock, its structure
- * parts (`structureParts`), the item of every hatch of the `HATCH_CLASSES` and the lowest hatch of each class its
- * structure check needs (`structureNeeds`, which `hatchSet` may add); sorted, without repeats. A pseudo machine
- * (crafting table, furnace) has no build cost, so its item is left out.
+ * parts (`structureParts`), the item of every hatch of the `HATCH_CLASSES` and the lowest hatch of each other class its
+ * hatch rules may lay (`laidRules`: a steam multiblock's buses and steam hatch, what its structure check needs), which
+ * `hatchSet` may add; sorted, without repeats. A pseudo machine (crafting table, furnace) has no build cost, so its item
+ * is left out.
  */
 export function buildKeys(pack: Pack, machines: readonly Machine[]): StuffKey[] {
   const keys = new Set<StuffKey>();
@@ -418,7 +479,10 @@ export function buildKeys(pack: Pack, machines: readonly Machine[]): StuffKey[] 
     if (m.kind !== 'multiblock') continue;
     multiblock = true;
     for (const { key } of structureBlocks(pack, m)) keys.add(key);
-    for (const { cls } of structureNeeds(pack, m).needs) {
+    const { rules, needs } = laidRules(pack, m);
+    const classes = [...needs.map((need) => need.cls), ...Object.values(rules?.rule.classes ?? {})];
+    if (rules !== null && rulePower(rules.rule) === 'steam') classes.push(rules.rule.classes?.steam ?? KIND_CLASS.steam);
+    for (const cls of classes) {
       const hatch = hatchesByClass(pack).get(cls)?.[0];
       if (hatch !== undefined) keys.add(hatch.itemKey);
     }

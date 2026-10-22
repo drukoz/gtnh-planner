@@ -11,9 +11,14 @@ import { emptyContext } from '../../../src/server/planner/plan.ts';
 import { PSEUDO_MACHINES } from '../../../src/shared/gt/tiers.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import type { Machine, Pack, Recipe } from '../../../src/shared/types/pack.ts';
-import { EBF_STRUCTURE, IDS, layoutPack } from '../../helpers/layout-fixtures.ts';
-import { rowElements, withElements } from '../../helpers/hatch-export-fixtures.ts';
+import { EBF_STRUCTURE, IDS, layoutPack, makePlan, type StepSpec } from '../../helpers/layout-fixtures.ts';
+import {
+  FRONT_BOX_ELEMENTS, FRONT_BOX_ID, hatchExportPack, rowElements, STEAM_BOX_ID, withElements, type ElementSpec,
+} from '../../helpers/hatch-export-fixtures.ts';
+import { HATCH_IDS } from '../../helpers/hatch-fixtures.ts';
+import { unitsFromPlan } from '../../../src/server/layout/arrange.ts';
 import { hatchRulesOf } from '../../../src/server/layout/hatch-rules.ts';
+import type { ExportHatchKind } from '../../../src/shared/gt/hatch-kinds.ts';
 import type { PlanSettings } from '../../../src/shared/types/plan.ts';
 
 const lv: PlanSettings = { ...defaultSettings(), tier: 1 };
@@ -161,6 +166,118 @@ describe('machineBuildCost', () => {
     // casings they stand on (30)
     const prices = await itemPrices(pack, lv, ctx, buildKeys(pack, [ebf]));
     expect(machineBuildCost(pack, prices, ebf, { recipe: smelt, tier: 1 })).toBe(233);
+  });
+
+  describe('counts exactly the hatches its layout lays (the controller\'s ruling after the merge e2efd36)', () => {
+    // A multiblock's build holds the hatches Plan 5's layout lays for the same step, kind for kind: by its hatch rules
+    // (ruledHatches) where it has any, else generically. Each case lays the step out and compares the classes.
+    const OX = 'fluid:oxygen';
+    const MI = 'fluid:molten.iron';
+    /** A GT recipe `id` of these item and fluid inputs and outputs, `eut` EU/t. */
+    const recipeOf = (id: string, inputs: Array<[string, number]>, outputs: Array<[string, number]>, eut = 30): Recipe => ({
+      id, source: 'gt', maps: [], euPerTick: eut, durationTicks: 20, amps: 1, specialValue: 0, meta: {}, flags: {},
+      inputs: inputs.map(([key, amount], i) => ({ slot: key.startsWith('fluid:') ? 100 + inputs.slice(0, i).filter(([k]) => k.startsWith('fluid:')).length
+        : inputs.slice(0, i).filter(([k]) => !k.startsWith('fluid:')).length, consumed: true, chance: 1, options: [{ key, amount }] })),
+      outputs: outputs.map(([key, amount]) => ({ key, amount, chance: 1 })),
+    });
+    /** The simple class names of `hatchSet`'s hatches and of the hatch cells the layout lays (exported mufflers aside), each sorted. */
+    const both = (pack: Pack, mteId: number, r: Recipe, tier: number): { build: string[]; layout: string[] } => {
+      pack.recipes.push(r);
+      pack.recipeById.set(r.id, r);
+      const simple = (m: Machine | undefined): string => (m?.cls ?? '?').slice((m?.cls ?? '?').lastIndexOf('.') + 1);
+      const byItem = new Map([...pack.machines.values()].map((m) => [m.itemKey, m]));
+      const build = [...hatchSet(pack, machine(pack, mteId), r, tier)].flatMap(([key, n]) => Array.from({ length: n }, () => simple(byItem.get(key)))).sort();
+      const step: StepSpec = { id: r.id, mteId, count: 1, tier, euPerTick: r.euPerTick,
+        inputs: r.inputs.map((ing) => [ing.options[0]!.key, ing.options[0]!.amount]), outputs: r.outputs.map((p) => [p.key, p.amount]) };
+      const { units } = unitsFromPlan(pack, makePlan([step]));
+      const layout = units[0]!.cells.filter((c) => c.hatch !== undefined && c.exported !== true).map((c) => simple(pack.machines.get(c.block.mteId!))).sort();
+      return { build, layout };
+    };
+    const ALL_SIX: ExportHatchKind[] = ['input_bus', 'output_bus', 'input_hatch', 'output_hatch', 'energy', 'maintenance'];
+    const giveElements = (pack: Pack, mteId: number, specs: readonly ElementSpec[]): void => {
+      const m = machine(pack, mteId);
+      m.structure = withElements(m.structure!, specs);
+    };
+
+    it('lays no maintenance hatch where the export takes none, and no energy hatch where it takes only multi-amp ones', () => {
+      const frontBox = recipeOf('f', [['t:in@0', 1], [OX, 1000]], [['t:dust@0', 1], [MI, 144]]);
+      const noMaintenance = hatchExportPack();
+      giveElements(noMaintenance, FRONT_BOX_ID, FRONT_BOX_ELEMENTS.map((s) => (s.ch === 'k' ? { ...s, hatches: ['energy'] } : s)));
+      const a = both(noMaintenance, FRONT_BOX_ID, frontBox, 1);
+      expect(a.build).toEqual(['MTEHatchEnergy', 'MTEHatchInput', 'MTEHatchInputBus', 'MTEHatchOutput', 'MTEHatchOutputBus']);
+      expect(a.build).toEqual(a.layout);
+      const exotic = hatchExportPack();
+      giveElements(exotic, FRONT_BOX_ID, FRONT_BOX_ELEMENTS.map((s) => (s.ch === 'k' ? { ...s, hatches: ['energy_multi', 'maintenance'] } : s)));
+      const b = both(exotic, FRONT_BOX_ID, frontBox, 1);
+      expect(b.build).toEqual(['MTEHatchInput', 'MTEHatchInputBus', 'MTEHatchMaintenance', 'MTEHatchOutput', 'MTEHatchOutputBus']);
+      expect(b.build).toEqual(b.layout);
+      // the export's six on its cells: all of them, as before
+      const all = hatchExportPack();
+      giveElements(all, FRONT_BOX_ID, FRONT_BOX_ELEMENTS);
+      const c = both(all, FRONT_BOX_ID, frontBox, 1);
+      expect(c.build).toEqual(['MTEHatchEnergy', 'MTEHatchInput', 'MTEHatchInputBus', 'MTEHatchMaintenance', 'MTEHatchOutput', 'MTEHatchOutputBus']);
+      expect(c.build).toEqual(c.layout);
+    });
+
+    it("lays a steam multiblock's steam buses and steam hatch, and no energy or maintenance hatch", () => {
+      const pack = hatchExportPack();
+      giveElements(pack, STEAM_BOX_ID, [
+        { ch: 'a', hatches: ['steam_input_bus', 'steam_output_bus'], where: (p) => p[1] === 0 && p[2] === 0 },
+        { ch: 'k', hatches: ['steam_hatch'], where: (p) => p[1] === 0 && p[2] === 2 },
+        { ch: 'c', hatches: [], where: () => true },
+      ]);
+      const { build, layout } = both(pack, STEAM_BOX_ID, recipeOf('s', [['t:in@0', 1]], [['t:dust@0', 1]], 0), 1);
+      expect(build).toEqual(['MTEHatchCustomFluidBase', 'MTEHatchSteamBusInput', 'MTEHatchSteamBusOutput']);
+      expect(build).toEqual(layout);
+      // and prices them: the keys of a build hold its steam hatches
+      expect(buildKeys(pack, [machine(pack, STEAM_BOX_ID)])).toEqual(expect.arrayContaining(
+        [HATCH_IDS.STEAM_BUS_IN, HATCH_IDS.STEAM_BUS_OUT, HATCH_IDS.STEAM_HATCH].map((id) => `gregtech:gt.blockmachines@${id}`)));
+    });
+
+    it('lays a tower an output hatch on every layer, a cracker its middle input hatch, an EBF its muffler, by the table and the export', () => {
+      // the tower: one fluid out on its 3 layers needs an output hatch on each of the 2 above the bottom, and the input
+      // hatch GT's check needs; four fluids out build it 5 high
+      const tower = hatchExportPack();
+      const one = both(tower, HATCH_IDS.DT, recipeOf('d1', [['t:in@0', 1]], [['fluid:t1', 100]], 480), 3);
+      expect(one.build.filter((c) => c === 'MTEHatchOutput')).toHaveLength(2);
+      expect(one.build).toEqual(one.layout);
+      const four = both(tower, HATCH_IDS.DT, recipeOf('d4', [['fluid:t1', 100]], [['fluid:t1', 100], ['fluid:t2', 100], ['fluid:t3', 100], ['fluid:t4', 100]], 480), 3);
+      expect(four.build.filter((c) => c === 'MTEHatchOutput')).toHaveLength(4);
+      expect(four.build).toEqual(four.layout);
+      // the cracker: a recipe of one fluid on the sides still needs a middle input hatch; with two, both are its own
+      const cracker = hatchExportPack();
+      const single = both(cracker, HATCH_IDS.CRACKER, recipeOf('c1', [['fluid:heavyfuel', 1000]], [['fluid:crackedheavy', 1000]], 30), 1);
+      expect(single.build.filter((c) => c === 'MTEHatchInput')).toHaveLength(2);
+      expect(single.build).toEqual(single.layout);
+      const pair = both(cracker, HATCH_IDS.CRACKER, recipeOf('c2', [['fluid:heavyfuel', 1000], ['fluid:steam', 1000]], [['fluid:crackedheavy', 1000]], 30), 1);
+      expect(pair.build.filter((c) => c === 'MTEHatchInput')).toHaveLength(2);
+      expect(pair.build).toEqual(pair.layout);
+      // the EBF by its row narrowed by the export, and by the export alone (no muffler need there)
+      const ebfRule = layoutPack();
+      const ebf = machine(ebfRule, IDS.EBF);
+      ebf.structure = withElements(ebf.structure!, rowElements(ebf, { b: ALL_SIX, f: ['output_hatch'], m: ['muffler'], C: [] }));
+      const smelt = recipeOf('e', [['t:dust@0', 1]], [['t:ingot@0', 1]], 120);
+      const ruled = both(ebfRule, IDS.EBF, smelt, 2);
+      expect(ruled.build).toContain('MTEHatchMuffler');
+      expect(ruled.build).toEqual(ruled.layout);
+      ebfRule.machines.set(IDS.EBF, { ...ebf, cls: `${ebf.cls}ExportOnly` });
+      const alone = both(ebfRule, IDS.EBF, { ...smelt, id: 'e2' }, 2);
+      expect(alone.build).not.toContain('MTEHatchMuffler');
+      expect(alone.build).toEqual(alone.layout);
+    });
+
+    it('lays no energy hatch on a furnace its rules run without power, and keeps the generic placement without rules', () => {
+      // the Bricked Blast Furnace (power none, run by hand): nothing its rules take; the large bender (no rules): buses,
+      // energy and maintenance as Plan 5's generic placement lays them
+      const pack = hatchExportPack();
+      const bbf = both(pack, HATCH_IDS.BBF, recipeOf('b', [['t:in@0', 1]], [['t:dust@0', 1]], 0), 1);
+      expect(bbf.build).toEqual([]);
+      expect(bbf.build).toEqual(bbf.layout);
+      const bender = packFromSpec(largeBenderSpec());
+      const plate = bender.recipeById.get('bend-plate')!;
+      expect([...hatchSet(bender, machine(bender, 1100), plate, 1)].sort())
+        .toEqual([['machine:51@0', 1], ['machine:61@0', 1], ['machine:71@0', 1], ['machine:81@0', 1]]);
+    });
   });
 
   it('prices free inputs at 0 where a supply machine exists', async () => {
