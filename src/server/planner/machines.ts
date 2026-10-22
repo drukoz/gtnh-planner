@@ -31,6 +31,23 @@ const CRAFT_TICKS = 20;
  * step 6: a count that is exactly 2 stays 2).
  */
 const TINY = 1e-9;
+/**
+ * The share of a load its rate's 9 significant digits can move it by (plan 12 Task 8): a step's runs per second keep 9
+ * significant digits (`sig9`), up to 5e-9 of their value off, so a set of machines exactly full can read a little above a
+ * whole number — 10 machines' worth at 1/6 a run a second reads 10.00000002 — and stays that whole number, as an exact 2
+ * stays 2 (`TINY`).
+ */
+const SIG9_SLACK = 1e-8;
+
+/** How little above a whole number `load` machines' worth may read and still stay that number: `TINY` or its 9 digits' slack. */
+function wholeSlack(load: number): number {
+  return Math.max(TINY, SIG9_SLACK * Math.abs(load));
+}
+
+/** The whole machines `load` machines' worth needs (`wholeSlack`); 0 for none. */
+function wholeMachines(load: number): number {
+  return Math.ceil(load - wholeSlack(load));
+}
 const HAND_CRAFT_RUNS_PER_SECOND = 1;
 /**
  * A flow below this share of what its producer makes of the good is dropped (fix spec D3): relative, so a line keeps
@@ -528,9 +545,12 @@ export interface OwnedClaim { id: string; mteId: number; load: number; share?: n
  */
 export interface OwnedAssignment { units: number[]; added: number; pool?: string; others?: Array<{ mteId: number; units: number[] }> }
 
-/** A claim's first unit is taken for any load above 0 (a running step needs a machine); further ones above this. */
-function loadLeft(left: number, taken: number): boolean {
-  return taken === 0 ? left > 0 : left > TINY;
+/**
+ * A claim's first unit is taken for any load above 0 (a running step needs a machine); further ones while more than
+ * `slack` is left (`wholeSlack` of the claim's whole load).
+ */
+function loadLeft(left: number, taken: number, slack: number): boolean {
+  return taken === 0 ? left > 0 : left > slack;
 }
 
 /**
@@ -541,11 +561,12 @@ function loadLeft(left: number, taken: number): boolean {
  * the next free unit, which then serves its key, spilling into further free units for a share above 1 — and adding no
  * machine (the solve's owned rows left room for them); then the own claims, those with `ownedOnly` first (a step that
  * can only use owned machines takes its units before the others, so a machine that cannot be built is never added).
- * Without `shared`, by load descending, then id: `needed = max(1, ceil(load − 1e-9))`, the next `min(needed, left)`
+ * Without `shared`, by load descending, then id: `needed = max(1, wholeMachines(load))`, the next `min(needed, left)`
  * units, and the rest added new. With it, the claims of one key form a sharing pool of their summed load; pools by load
  * descending, then their smallest id: a pool takes the room left in the units of its key (index order), then free units
- * (the next indices) while load is left — any load above 0 takes one — then `ceil(left − 1e-9)` new machines, at least
- * one machine in all; every claim of the pool gets the pool's units and new machines. A unit serves one key (controller
+ * (the next indices) while load is left — any load above 0 takes one — then `ceil(left − slack)` new machines, at least
+ * one machine in all, `slack` being `wholeSlack` of the pool's load (a load read from 9 significant digits, a little
+ * above a whole number, stays whole); every claim of the pool gets the pool's units and new machines. A unit serves one key (controller
  * ruling 9), and a pool takes no unit its load does not reach, so no step is counted on machines it does not use.
  */
 export function assignOwned(claims: readonly OwnedClaim[], pools: OwnedPools, shared: boolean): Map<string, OwnedAssignment> {
@@ -577,7 +598,7 @@ export function assignOwned(claims: readonly OwnedClaim[], pools: OwnedPools, sh
       const key = claim.key ?? claim.id;
       const taken: number[] = [];
       if (!shared) {
-        taken.push(...free.splice(0, Math.min(free.length, Math.ceil(share - TINY))));
+        taken.push(...free.splice(0, Math.min(free.length, wholeMachines(share))));
       } else {
         let best: number | undefined;
         for (let u = 0; u < total; u++) {
@@ -588,7 +609,7 @@ export function assignOwned(claims: readonly OwnedClaim[], pools: OwnedPools, sh
           take(best, key, share);
           taken.push(best);
         } else {
-          for (let left = share; loadLeft(left, taken.length) && free.length > 0;) {
+          for (let left = share; loadLeft(left, taken.length, wholeSlack(share)) && free.length > 0;) {
             const u = free.shift() as number;
             take(u, key, Math.min(1, left));
             taken.push(u);
@@ -603,7 +624,7 @@ export function assignOwned(claims: readonly OwnedClaim[], pools: OwnedPools, sh
     if (!shared) {
       own.sort((a, b) => onlyOwnedFirst(a.ownedOnly === true, b.ownedOnly === true) || b.load - a.load || byString(a.id, b.id));
       for (const claim of own) {
-        const needed = Math.max(1, Math.ceil(claim.load - TINY));
+        const needed = Math.max(1, wholeMachines(claim.load));
         const entry = entryOf(claim.id);
         entry.units = free.splice(0, Math.min(needed, free.length));
         entry.added = needed - entry.units.length;
@@ -625,8 +646,9 @@ export function assignOwned(claims: readonly OwnedClaim[], pools: OwnedPools, sh
     }).sort((a, b) => onlyOwnedFirst(a.ownedOnly, b.ownedOnly) || b.load - a.load || byString(a.first, b.first));
     for (const p of sharingPools) {
       let left = p.load;
+      const slack = wholeSlack(p.load);
       const taken: number[] = [];
-      for (let u = 0; u < total && loadLeft(left, taken.length); u++) {
+      for (let u = 0; u < total && loadLeft(left, taken.length, slack); u++) {
         const room = 1 - (used[u] ?? 0);
         if (keyOf[u] !== p.key || room <= TINY) continue;
         const t = Math.min(room, left);
@@ -634,14 +656,14 @@ export function assignOwned(claims: readonly OwnedClaim[], pools: OwnedPools, sh
         taken.push(u);
         left -= t;
       }
-      while (loadLeft(left, taken.length) && free.length > 0) {
+      while (loadLeft(left, taken.length, slack) && free.length > 0) {
         const u = free.shift() as number;
         const t = Math.min(1, left);
         take(u, p.key, t);
         taken.push(u);
         left -= t;
       }
-      let added = Math.max(0, Math.ceil(left - TINY));
+      let added = Math.max(0, Math.ceil(left - slack));
       if (taken.length + added === 0) added = 1;
       const units = taken.sort((a, b) => a - b);
       for (const m of p.members) {
@@ -725,7 +747,7 @@ function stepTiers(model: BuildModel, recipeId: string, runsPerSecond: number, p
   const pinned = pin === undefined ? undefined : below.length > 0 ? Math.max(...below) : tiers[0];
   return tiers.map((tier): StepTier => {
     const o = cheapestBuild(byTier.get(tier) as MachineOption[]) as MachineOption;
-    const machines = Math.max(1, Math.ceil(runsPerSecond / o.perMachine - TINY));
+    const machines = Math.max(1, wholeMachines(runsPerSecond / o.perMachine));
     const owned = Math.min(machines, o.owned);
     const entry: StepTier = { tier, mteId: o.mteId, name: o.name, machines, owned, build: o.build === null ? null : sig9((machines - owned) * o.build) };
     if (o.unbuildable !== undefined) entry.unbuildable = o.unbuildable;
@@ -818,7 +840,7 @@ export function planSteps(
     const warnings = machineWarnings(p.lp, p.pick, runsPerSecond);
     if (apart.has(p.id)) warnings.push(ownOutputWarning(p.pick.name));
     if (a === undefined) {
-      const count = Math.max(1, Math.ceil(runsPerSecond / perMachine - TINY));
+      const count = Math.max(1, wholeMachines(runsPerSecond / perMachine));
       return describeStep(pack, p, line, { count, owned: 0, runsPerSecond, utilization: runsPerSecond / (count * perMachine), warnings });
     }
     const count = a.added + a.units.length;

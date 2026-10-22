@@ -109,6 +109,35 @@ describe('build cost in the plan', () => {
     }
   });
 
+  it('keeps a step whose machines are exactly full at that many machines, whatever the 9 digits of its rate', async () => {
+    // A Thing a minute per machine (1,200 ticks a run), 10 a minute: exactly 10 machines, which the build MIP decides.
+    // The step's rate keeps 9 significant digits, 1/6 a second as 0.166666667, so its load read 10.00000002 and the step
+    // took an 11th machine: a block more than the plan the MIP chose (on the 2.9 export: 11 Electric Blast Furnaces for
+    // aluminium at HV where 10 do, worse by the MIP's own measure than the plan that ignores build cost).
+    const spec: PackSpec = withBuildRecipes({
+      items: [{ key: 't:a@0', name: 'A Dust', gt: { prefix: 'dust', material: 'A' } }, { key: 't:b@0', name: 'B' }, { key: 't:t@0', name: 'Thing' }],
+      maps: [{ id: 'gt.recipe.press', name: 'Press' }],
+      machines: [{ mteId: 301, name: 'Basic Press', tier: 1, maps: ['gt.recipe.press'] }],
+      recipes: [
+        { id: 'press-b', map: 'gt.recipe.press', in: [['t:a@0', 1]], out: [['t:b@0', 1]], eut: 16, dur: 1200 },
+        { id: 'press-t', map: 'gt.recipe.press', in: [['t:b@0', 1]], out: [['t:t@0', 1]], eut: 16, dur: 1200 },
+      ],
+      worldgen: { veins: [{ name: 'ore.mix.a', dims: ['overworld'], kind: 'vein', weight: 1, minY: 0, maxY: 255, size: 1, density: 1,
+        materials: { primary: 'A', secondary: 'A', between: 'A', sporadic: 'A' } }] },
+    }, [301], [['t:a@0', 4]]);
+    const pack = packFromSpec(spec);
+    const things = (p: Partial<PlanSettings>): Promise<Plan> => planLine(pack, { ...defaultSettings(), target: 't:t@0', tier: 1, amount: 10, per: 'min', ...p }, emptyContext());
+    const direct = await things({});
+    expect(direct.steps.map((s) => [s.id, s.runsPerSecond, s.count])).toEqual([['press-b', 0.166666667, 10], ['press-t', 0.166666667, 10]]);
+    expect(direct.cost?.build).toBe(80);
+    // On AE2 the two steps share their presses: 20 machines' worth, 20 presses.
+    const ae2 = await things({ logistics: 'ae2' });
+    expect(ae2.steps.map((s) => [s.id, s.count, s.pool?.id])).toEqual([['press-b', 20, 'pool:press-b'], ['press-t', 20, 'pool:press-b']]);
+    expect(ae2.cost?.build).toBe(80);
+    // The step panel's tiers say 10 too.
+    expect(stepOf(direct, 'press-t').tiers?.map((t) => t.machines)).toEqual([10]);
+  });
+
   it('names the machines whose build cost it cannot count', async () => {
     // OQ5 (b): both are made from a Seed Crystal nothing grounds (pricing gaps). The solve weighed them at their stand-in
     // of 16, and the circuit-mv route still wins by 21,600 raw over 24 h.
