@@ -19,12 +19,13 @@ import type { CandidateGraph } from '../../../src/server/planner/candidates.ts';
 import { lineBuildModel, optionMachines, type BuildModel } from '../../../src/server/planner/machine-options.ts';
 import { emptyContext, planLine, solveOptions, stockForm } from '../../../src/server/planner/plan.ts';
 import { linePricing } from '../../../src/server/planner/pricing.ts';
-import { HAND_STEP_WEIGHT, solveLine, type Solution } from '../../../src/server/planner/solve.ts';
+import { solveLine, type Solution } from '../../../src/server/planner/solve.ts';
 import { tierName } from '../../../src/shared/gt/tiers.ts';
 import type { StuffKey } from '../../../src/shared/keys.ts';
 import { defaultSettings, normalizeSettings } from '../../../src/shared/project/apply-op.ts';
 import type { Machine, Pack } from '../../../src/shared/types/pack.ts';
-import { DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_STEP_CHARGE, type Plan, type PlanContext, type PlanSettings } from '../../../src/shared/types/plan.ts';
+import { DEFAULT_BUILD_HORIZON_HOURS, type Plan, type PlanContext, type PlanSettings } from '../../../src/shared/types/plan.ts';
+import { buildObjective } from '../../helpers/build-objective.ts';
 import { REFERENCE, localDocPath, storedSettings } from '../../helpers/local-docs.ts';
 import { USER_EC_STORED } from '../../helpers/user-project.ts';
 
@@ -50,7 +51,6 @@ const AE2_POOL_MAX_STEPS = 9;
 /** `GTNH_BUILD_NODES`: the build MIP's node limit for a calibration run the controller asks for (`SolveOptions.buildMaxNodes`). */
 const NODES = process.env.GTNH_BUILD_NODES === undefined ? undefined : Number(process.env.GTNH_BUILD_NODES);
 const SECONDS_PER: Readonly<Record<PlanSettings['per'], number>> = { min: 60, hour: 3600 };
-const SECONDS_PER_HOUR = 3600;
 
 /** One calibration plan: its settings and whether two of every candidate machine of its line are owned (`owning`). */
 interface Case { name: string; settings: PlanSettings; owned: boolean }
@@ -95,31 +95,22 @@ const LABELLED = CASES.map((c) => ({ ...c, label: `${c.name}${c.owned ? ', two o
 /** The line's build MIP run on its own, as `planLine` solves the line when nothing is avoided. */
 interface BuildRun {
   sol: Solution; model: BuildModel; graph: CandidateGraph;
+  /** The line's first walk, before any recipe is walked around: its graph and build model (`optionMachines`' list for it). */
+  first: { graph: CandidateGraph; model: BuildModel };
   /** Walks of the line, the last the one solved. */
   rounds: number;
-  /** The step recipes the line was walked without (no machine that runs them can be built here or is owned). */
+  /** The step recipes the build models blocked (no machine that runs them can be built here or is owned), every walk's. */
   blocked: string[];
+  /** How many of the pack's recipes alike to those were walked around with them (`BuildModel.blockedAlike`). */
+  alike: number;
 }
 
 /**
- * The build MIP's measure of a plan (controller ruling 187), as build-mip.ts prices it (fix wave 2 (a)): the raw material
- * it uses over the horizon, the raw material to build its new machines, and the step charge — `stepCharge` × the line's
- * least raw material over the horizon with gathered world blocks dug, at least 1 raw — on every new machine block (a
- * sharing pool's once; a step on a pseudo machine once, one crafted by hand `HAND_STEP_WEIGHT` times; owned machines
- * none). `leastDug` is that least per second: the least of the plan that ignores build cost, whose walk digs them.
+ * The build MIP's measure of a plan (controller ruling 187; `buildObjective`, tests/helpers/build-objective.ts), its
+ * `least` the least raw material a second with gathered world blocks dug: the plan's that ignores build cost, whose walk
+ * digs them.
  */
-function buildObjective(plan: Plan, s: PlanSettings, leastDug: number): number {
-  const horizon = (s.buildHorizonHours ?? DEFAULT_BUILD_HORIZON_HOURS) * SECONDS_PER_HOUR;
-  const charge = (s.stepCharge ?? DEFAULT_STEP_CHARGE) * Math.max(leastDug * horizon, 1);
-  let blocks = 0;
-  for (const step of plan.steps) {
-    if (step.pool !== undefined && step.pool.steps[0] !== step.id) continue;
-    if (step.handCraft) blocks += HAND_STEP_WEIGHT;
-    else if (step.machine.mteId < 0) blocks += 1;
-    else blocks += Math.max(0, step.count - step.owned);
-  }
-  return (plan.rawCost?.perSecond ?? 0) * horizon + (plan.cost?.build ?? 0) + charge * blocks;
-}
+const leastDug = (ignored: Plan): number => ignored.rawCost?.leastPerSecond ?? 0;
 
 /** How a plan gets `key`: dug (a raw input), made (by its steps), both, or neither. */
 function sourceOf(plan: Plan, key: StuffKey): 'dug' | 'made' | 'both' | 'none' {
@@ -169,13 +160,17 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
    */
   const buildRun = async (s: PlanSettings): Promise<BuildRun> => {
     const unbuildable = new Map<string, string>();
+    const blocked = new Set<string>();
+    let first: BuildRun['first'] | undefined;
     for (let rounds = 1; ; rounds++) {
       const pricing = linePricing(pack, s, ctx, { unbuildable });
       if (pricing === null) throw new Error(`no line for ${s.target}`);
       const { graph, basis, target } = await pricing;
       const model = await lineBuildModel(pack, graph, basis, s, ctx);
+      first ??= { graph, model };
       let grew = false;
       for (const [id, why] of model.blocked) {
+        blocked.add(id);
         if (unbuildable.has(id)) continue;
         unbuildable.set(id, why);
         grew = true;
@@ -187,20 +182,21 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
       const sol = await solveLine(graph, new Map([[target, s.amount / SECONDS_PER[s.per]]]), {
         ...solveOptions(s), formRank: stockForm(pack), build: model, ...(NODES === undefined ? {} : { buildMaxNodes: NODES }),
       });
-      return { sol, model, graph, rounds, blocked: [...unbuildable.keys()].sort() };
+      return { sol, model, graph, first, rounds, blocked: [...blocked].sort(), alike: unbuildable.size - blocked.size };
     }
   };
 
   /**
-   * Of the machines the line's step recipes can run on (`BuildModel.eligible`, what `optionMachines` lists), how many
-   * cannot be built here (OQ5 a) and how many are pricing gaps (OQ5 b): a machine priced for any of its uses is priced.
+   * Of the machines `optionMachines` lists for the line's graph — its first walk's, before any recipe is walked around
+   * (`BuildRun.first`: the eligible options of every step recipe, `lineBuildModel`'s list) — how many cannot be built here
+   * (OQ5 a) and how many are pricing gaps (OQ5 b): a machine priced for any of its uses is priced.
    */
   const machineCounts = (run: BuildRun): { candidates: number; unbuildable: number; gaps: number } => {
     const rank = { priced: 0, gap: 1, unbuildable: 2 } as const;
     const verdict = new Map<number, keyof typeof rank>();
-    for (const r of run.graph.recipes) {
+    for (const r of run.first.graph.recipes) {
       if (r.kind !== 'recipe') continue;
-      for (const o of run.model.eligible(r.id)) {
+      for (const o of run.first.model.eligible(r.id)) {
         const v = o.build !== null ? 'priced' : o.unbuildable !== undefined ? 'unbuildable' : 'gap';
         const before = verdict.get(o.mteId);
         if (before === undefined || rank[v] < rank[before]) verdict.set(o.mteId, v);
@@ -221,24 +217,36 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
     return (performance.now() - started) / 1000;
   };
 
-  /** One log line of a calibration plan: counts, keys and timings only. */
-  const logLine = async (label: string, s: PlanSettings, plan: Plan, seconds: number, run: BuildRun, ignored: Plan): Promise<void> => {
+  /**
+   * One log line of a plan, each `it` one per plan it makes (Step 2's list): its target, tier, logistics and what is
+   * owned; seconds, steps, run, build and unpriced cost; how many of the machines its graph lists cannot be built here
+   * (OQ5 a) and are pricing gaps (OQ5 b); the step recipes its build models block and its walks; its sharing pools; how it
+   * gets its sand and gravel; its price table's seconds; its build MIP's seconds, nodes, end, objective, bound and gap
+   * (`buildRun`, run here); and with `ignored`, the plan that ignores build cost, both by the build MIP's measure. Counts,
+   * keys and timings only. Returns the build run and the price table's seconds.
+   */
+  const logPlan = async (label: string, s: PlanSettings, plan: Plan, seconds: number, ignored?: Plan): Promise<{ run: BuildRun; priceSeconds: number }> => {
+    const run = await buildRun(s);
+    const priceSeconds = await priceTableSeconds(s);
     const counts = machineCounts(run);
     const stats = run.sol.buildStats;
     const gap = stats?.objective !== undefined && stats.bound !== undefined && stats.objective > 0 ? (stats.objective - stats.bound) / stats.objective : undefined;
-    const leastDug = ignored.rawCost?.leastPerSecond ?? 0;
     const pools = poolsOf(plan);
+    const owned = s.ownedManual ?? [];
     console.log([
-      `real-build-cost ${label}: ${s.target} at ${tierName(s.tier ?? 1)} on ${s.logistics}, ${s.ownedManual?.length ? `${s.ownedManual.length} machine types owned ×2` : 'nothing owned'};`,
-      `${plan.status}, ${seconds.toFixed(2)} s, ${plan.steps.length} steps (ignoring build cost ${ignored.steps.length});`,
+      `real-build-cost ${label}: ${s.target} at ${tierName(s.tier ?? 1)} on ${s.logistics},`
+        + ` ${owned.length === 0 ? 'nothing owned' : `${owned.reduce((n, o) => n + o.count, 0)} machines of ${owned.length} types owned`},`
+        + ` build horizon ${s.buildHorizonHours === null ? 'ignored' : `${s.buildHorizonHours} h`};`,
+      `${plan.status}, ${seconds.toFixed(2)} s, ${plan.steps.length} steps${ignored === undefined ? '' : ` (ignoring build cost ${ignored.steps.length})`};`,
       `run ${plan.cost?.runPerHour ?? '-'} raw/h, build ${plan.cost?.build ?? '-'}, unpriced ${plan.cost?.unpriced ?? 0};`,
       `candidate machines ${counts.candidates}: ${counts.unbuildable} cannot be built here, ${counts.gaps} pricing gaps;`,
-      `walks ${run.rounds}, blocked step recipes ${run.blocked.length}; pools ${pools.length === 0 ? 'none' : pools.join(' | ')};`,
-      `sand ${sourceOf(plan, SAND)}, gravel ${sourceOf(plan, GRAVEL)}; price table ${(await priceTableSeconds(s)).toFixed(2)} s;`,
+      `walks ${run.rounds}, blocked step recipes ${run.blocked.length === 0 ? 'none' : `${run.blocked.length} (${run.blocked.join(' ')})`} and ${run.alike} alike ones;`,
+      `pools ${pools.length === 0 ? 'none' : pools.join(' | ')}; sand ${sourceOf(plan, SAND)}, gravel ${sourceOf(plan, GRAVEL)}; price table ${priceSeconds.toFixed(2)} s;`,
       `build MIP ${stats === undefined ? 'none' : `${stats.seconds.toFixed(2)} s, ${stats.nodes} nodes, ${stats.status}${stats.stop === undefined ? '' : `/${stats.stop}`}${stats.approx ? ', approx' : ''}`},`
-        + ` objective ${stats?.objective?.toFixed(1) ?? '-'}, bound ${stats?.bound?.toFixed(1) ?? '-'}, gap ${gap === undefined ? '-' : `${(gap * 100).toFixed(2)} %`};`,
-      `by its measure ${buildObjective(plan, s, leastDug).toFixed(1)} against ${buildObjective(ignored, s, leastDug).toFixed(1)} ignoring build cost`,
+        + ` objective ${stats?.objective?.toFixed(3) ?? '-'}, bound ${stats?.bound?.toFixed(3) ?? '-'}, gap ${gap === undefined ? '-' : `${(gap * 100).toFixed(2)} %`}`
+        + (ignored === undefined ? '' : `; by its measure ${buildObjective(plan, s, leastDug(ignored)).toFixed(1)} against ${buildObjective(ignored, s, leastDug(ignored)).toFixed(1)} ignoring build cost`),
     ].join(' '));
+    return { run, priceSeconds };
   };
 
   beforeAll(async () => {
@@ -249,9 +257,8 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
   it.each(LABELLED)('plans $label with its build cost', async (c) => {
     const s = c.owned ? await owning(c.settings) : c.settings;
     const { plan, seconds } = await timed(s);
-    const run = await buildRun(s);
     const ignored = (await timed({ ...s, buildHorizonHours: null })).plan;
-    await logLine(c.label, s, plan, seconds, run, ignored);
+    const { run } = await logPlan(c.label, s, plan, seconds, ignored);
     expect(plan.status, JSON.stringify(plan.warnings)).toBe('ok');
     expect(plan.cost?.horizonHours).toBe(DEFAULT_BUILD_HORIZON_HOURS);
     if (!c.owned) expect(plan.cost?.build).toBeGreaterThan(0);
@@ -286,8 +293,7 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
     expect(stats?.approx, 'build-cost-approx').toBe(false);
     expect(stats?.status === 'optimal' || (stats?.status === 'feasible' && stats.stop === 'limit'), `${stats?.status}/${stats?.stop}`).toBe(true);
     // Never worse by the build MIP's own measure than the plan that ignores build cost (controller ruling 187).
-    const leastDug = ignored.rawCost?.leastPerSecond ?? 0;
-    expect(buildObjective(plan, s, leastDug)).toBeLessThanOrEqual(buildObjective(ignored, s, leastDug) * (1 + 1e-6) + 1e-6);
+    expect(buildObjective(plan, s, leastDug(ignored))).toBeLessThanOrEqual(buildObjective(ignored, s, leastDug(ignored)) * (1 + 1e-6) + 1e-6);
   }, 300_000);
 
   it('keeps Electronic Circuit at LV and Polyethylene Bar within 5 steps of the plan that ignores build cost', async () => {
@@ -303,9 +309,13 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
     for (const [name, base] of lines) {
       for (const owned of [false, true]) {
         const s = owned ? await owning(base) : base;
-        const built = await planLine(pack, s, ctx);
-        const ignored = await planLine(pack, { ...s, buildHorizonHours: null }, ctx);
+        const ignoring: PlanSettings = { ...s, buildHorizonHours: null };
         const label = `${name}${owned ? ', two of every machine owned' : ''}`;
+        const withCost = await timed(s);
+        const without = await timed(ignoring);
+        const [built, ignored] = [withCost.plan, without.plan];
+        await logPlan(`D1 bound, ${label}`, s, built, withCost.seconds, ignored);
+        await logPlan(`D1 bound, ${label}, ignoring build cost`, ignoring, ignored, without.seconds);
         console.log(`real-build-cost steps ${label}: ${built.steps.length} with build cost against ${ignored.steps.length} ignoring it; `
           + `sand ${sourceOf(built, SAND)}, gravel ${sourceOf(built, GRAVEL)} (ignoring: ${sourceOf(ignored, SAND)}, ${sourceOf(ignored, GRAVEL)}); `
           + `pools ${poolsOf(built).join(' | ') || 'none'}\n  with: ${built.steps.map((st) => st.recipeId).join(' ')}\n  ignoring: ${ignored.steps.map((st) => st.recipeId).join(' ')}`);
@@ -326,15 +336,14 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
     const runs: Array<{ hours: number; plan: Plan; run: BuildRun }> = [];
     for (const hours of [1, 24, 168]) {
       const s = at(ELECTRONIC_CIRCUIT, 2, 1, { buildHorizonHours: hours });
-      runs.push({ hours, plan: await planLine(pack, s, ctx), run: await buildRun(s) });
+      const { plan, seconds } = await timed(s);
+      const { run } = await logPlan(`horizon ${hours} h, Electronic Circuit MV`, s, plan, seconds);
+      runs.push({ hours, plan, run });
     }
-    const ignored = await planLine(pack, at(ELECTRONIC_CIRCUIT, 2, 1, { buildHorizonHours: null }), ctx);
-    for (const { hours, plan, run } of runs) {
-      const stats = run.sol.buildStats;
-      console.log(`real-build-cost horizon ${hours} h: ${plan.status}, ${plan.steps.length} steps, run ${plan.cost?.runPerHour} raw/h, build ${plan.cost?.build}; `
-        + `build MIP ${stats?.status}${stats?.stop === undefined ? '' : `/${stats.stop}`}, objective ${stats?.objective?.toFixed(1)}, bound ${stats?.bound?.toFixed(1)}`);
-      expect(plan.status, `${hours} h`).toBe('ok');
-    }
+    const ignoring = at(ELECTRONIC_CIRCUIT, 2, 1, { buildHorizonHours: null });
+    const { plan: ignored, seconds: ignoredSeconds } = await timed(ignoring);
+    await logPlan('horizon ignored, Electronic Circuit MV', ignoring, ignored, ignoredSeconds);
+    for (const { hours, plan } of runs) expect(plan.status, `${hours} h`).toBe('ok');
     console.log(`real-build-cost horizon: ignoring build cost runs ${ignored.cost?.runPerHour} raw/h (${ignored.steps.length} steps), the 1-hour plan ${runs[0]?.plan.cost?.runPerHour}`);
     const [hour, , week] = runs as [typeof runs[number], typeof runs[number], typeof runs[number]];
     const exact = runs.every(({ plan, run }) => !plan.warnings.some((w) => w.code === 'build-cost-approx') && run.sol.buildStats?.status === 'optimal');
@@ -350,19 +359,23 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
   it('keeps the time guard', async () => {
     // A Microprocessor a minute at HV: under plan 09's bound, the build MIP decided by its limits; whether it fell back
     // to the relaxation (build-cost-approx) is logged, not asserted.
-    const { plan, seconds } = await timed(at(MICROPROCESSOR, 3, 1));
-    console.log(`real-build-cost time guard: Microprocessor HV ${plan.status}, ${seconds.toFixed(2)} s, ${plan.steps.length} steps, `
-      + `build-cost-approx ${plan.warnings.some((w) => w.code === 'build-cost-approx') ? 'yes' : 'no'}`);
+    const s = at(MICROPROCESSOR, 3, 1);
+    const { plan, seconds } = await timed(s);
+    await logPlan('time guard, Microprocessor HV', s, plan, seconds);
+    console.log(`real-build-cost time guard: Microprocessor HV build-cost-approx ${plan.warnings.some((w) => w.code === 'build-cost-approx') ? 'yes' : 'no'}`);
     expect(plan.status, JSON.stringify(plan.warnings)).toBe('ok');
     expect(seconds).toBeLessThan(PLAN_SECONDS);
-  }, 120_000);
+  }, 180_000);
 
   it('prices the candidate machines quickly', async () => {
-    // The Electronic Circuit at MV: every candidate machine of its line on a memo key nothing priced yet.
-    const seconds = await priceTableSeconds(at(ELECTRONIC_CIRCUIT, 2, 1));
-    console.log(`real-build-cost price table: Electronic Circuit MV, ${(await candidateMachines(at(ELECTRONIC_CIRCUIT, 2, 1))).length} machines, ${seconds.toFixed(2)} s`);
-    expect(seconds).toBeLessThan(2);
-  }, 120_000);
+    // The Electronic Circuit at MV: every candidate machine of its line on a memo key nothing priced yet (its log line's
+    // price table).
+    const s = at(ELECTRONIC_CIRCUIT, 2, 1);
+    const { plan, seconds } = await timed(s);
+    const { priceSeconds } = await logPlan('price table, Electronic Circuit MV', s, plan, seconds);
+    console.log(`real-build-cost price table: Electronic Circuit MV, ${(await candidateMachines(s)).length} machines, ${priceSeconds.toFixed(2)} s`);
+    expect(priceSeconds).toBeLessThan(2);
+  }, 180_000);
 
   describe("plan 09's checks that build cost legitimately changes, with build cost counted (Task 8 Step 4)", () => {
     // Plan 09's real-data tests check these settings with build cost ignored now (`buildHorizonHours: null`), where its
@@ -373,7 +386,10 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
       // nitrogen recipe that needs fewer furnaces, with the steps that make its nitrogen.
       const s = at(ALUMINIUM_INGOT, 3, 10);
       const { plan, seconds } = await timed(s);
-      const ignored = (await timed({ ...s, buildHorizonHours: null })).plan;
+      const without = await timed({ ...s, buildHorizonHours: null });
+      const ignored = without.plan;
+      await logPlan('aluminium HV x10', s, plan, seconds, ignored);
+      await logPlan('aluminium HV x10, ignoring build cost', { ...s, buildHorizonHours: null }, ignored, without.seconds);
       const ebf = plan.steps.filter((st) => st.machine.name === 'Electric Blast Furnace');
       console.log(`real-build-cost aluminium HV: ${plan.status}, ${seconds.toFixed(2)} s, ${plan.steps.length} steps (${ebf.map((st) => `${st.count}× EBF on ${st.recipeId}`).join(', ')}), `
         + `raw ${plan.rawInputs.map((r) => r.key).join(' ')}; ignoring build cost ${ignored.steps.length} steps`);
@@ -381,9 +397,8 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
       expect(seconds).toBeLessThan(PLAN_SECONDS);
       expect(plan.steps.find((st) => st.mainOutput === ALUMINIUM_INGOT)?.machine.name).toBe('Electric Blast Furnace');
       expect(plan.rawInputs.map((r) => r.key)).toContain('gregtech:gt.metaitem.01@2019');   // the mined aluminium dust
-      const leastDug = ignored.rawCost?.leastPerSecond ?? 0;
-      expect(buildObjective(plan, s, leastDug)).toBeLessThanOrEqual(buildObjective(ignored, s, leastDug) * (1 + 1e-6));
-    }, 120_000);
+      expect(buildObjective(plan, s, leastDug(ignored))).toBeLessThanOrEqual(buildObjective(ignored, s, leastDug(ignored)) * (1 + 1e-6));
+    }, 300_000);
 
     it('plans 2 Good Electronic Circuits a minute at HV in fewer steps than ignoring build cost, from ordinary materials', async () => {
       // real-acceptance's Good Electronic Circuit case: ignoring build cost the line etches its Good Circuit Board in a
@@ -391,7 +406,10 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
       // and needs about half the steps, no worse by the build MIP's measure.
       const s = at(GOOD_ELECTRONIC_CIRCUIT, 3, 2);
       const { plan, seconds } = await timed(s);
-      const ignored = (await timed({ ...s, buildHorizonHours: null })).plan;
+      const without = await timed({ ...s, buildHorizonHours: null });
+      const ignored = without.plan;
+      await logPlan('Good Electronic Circuit HV x2', s, plan, seconds, ignored);
+      await logPlan('Good Electronic Circuit HV x2, ignoring build cost', { ...s, buildHorizonHours: null }, ignored, without.seconds);
       const board = plan.steps.find((st) => st.mainOutput === 'gregtech:gt.metaitem.03@32101');
       console.log(`real-build-cost Good Electronic Circuit HV x2: ${plan.status}, ${seconds.toFixed(2)} s, ${plan.steps.length} steps (ignoring build cost ${ignored.steps.length}), `
         + `its Good Circuit Board on ${board?.machine.name ?? 'none'}, build ${plan.cost?.build} (ignoring ${ignored.cost?.build})`);
@@ -401,9 +419,8 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
       expect(plan.steps.find((st) => st.mainOutput === GOOD_ELECTRONIC_CIRCUIT)?.mapId).toBe('gt.recipe.circuitassembler');
       expect(plan.rawInputs.filter((r) => !r.available)).toEqual([]);
       expect(plan.warnings.map((w) => w.code)).not.toContain('build-cost-approx');
-      const leastDug = ignored.rawCost?.leastPerSecond ?? 0;
-      expect(buildObjective(plan, s, leastDug)).toBeLessThanOrEqual(buildObjective(ignored, s, leastDug) * (1 + 1e-6));
-    }, 120_000);
+      expect(buildObjective(plan, s, leastDug(ignored))).toBeLessThanOrEqual(buildObjective(ignored, s, leastDug(ignored)) * (1 + 1e-6));
+    }, 300_000);
 
     it('plans an Advanced Circuit at HV on "Least raw material" with build cost counted, at least the least raw material', async () => {
       // real-acceptance's and real-user-project's 0 % cases: ignoring build cost they plan at the least raw material; with it
@@ -411,6 +428,7 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
       for (const [name, s] of [['default settings', at(ADVANCED_CIRCUIT, 3, 1, { stepCharge: 0 })],
         ["the user's project", { ...normalizeSettings(USER_EC_STORED), automateCrafting: false, target: ADVANCED_CIRCUIT, tier: 3, stepCharge: 0 }]] as const) {
         const { plan, seconds } = await timed(s);
+        await logPlan(`Advanced Circuit HV at 0 %, ${name}`, s, plan, seconds);
         const raw = plan.rawCost as NonNullable<Plan['rawCost']>;
         console.log(`real-build-cost Advanced Circuit HV at 0 %, ${name}: ${plan.status}, ${seconds.toFixed(2)} s, ${plan.steps.length} steps, raw ${raw.perSecond} against the least ${raw.leastPerSecond}, build ${plan.cost?.build}`);
         expect(plan.status, `${name}: ${JSON.stringify(plan.warnings)}`).toBe('ok');
@@ -418,18 +436,22 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
         expect(raw.perSecond, name).toBeGreaterThanOrEqual(raw.leastPerSecond * (1 - 1e-6));
         expect(plan.warnings.map((w) => w.code), name).not.toContain('build-cost-approx');
       }
-    }, 120_000);
+    }, 300_000);
 
     it("reuses the machines the user's project lists, and none with \"Reuse machines we have\" off", async () => {
       // real-user-project's reuse case: with build cost counted, owned machines are free, so owning one of the circuit
       // assembler's and of the red alloy wiremill's types may change the line; switched on they serve its steps, off none.
       const settings: PlanSettings = { ...normalizeSettings(USER_EC_STORED), automateCrafting: false };
-      const plain = await planLine(pack, settings, ctx);
+      const first = await timed(settings);
+      const plain = first.plan;
+      await logPlan("user project", settings, plain, first.seconds);
       const listed = plain.steps.filter((st) => st.recipeId === 'c0106c4cb6b4b041' || st.mainOutput === 'gregtech:gt.blockmachines@2000');
       expect(listed).toHaveLength(2);
       const ownedManual = listed.map((st) => ({ mteId: st.machine.mteId, count: 1 }));
       const on = await timed({ ...settings, ownedManual });
       const off = await timed({ ...settings, ownedManual, reuseOwned: false });
+      await logPlan('user project, its two machines owned', { ...settings, ownedManual }, on.plan, on.seconds);
+      await logPlan('user project, its two machines owned, "Reuse machines we have" off', { ...settings, ownedManual, reuseOwned: false }, off.plan, off.seconds);
       console.log(`real-build-cost user project reuse: on ${on.plan.steps.length} steps, ${on.seconds.toFixed(2)} s, build ${on.plan.cost?.build}; `
         + `off ${off.plan.steps.length} steps, ${off.seconds.toFixed(2)} s, build ${off.plan.cost?.build}`);
       for (const { plan, seconds } of [on, off]) {
@@ -441,6 +463,6 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
       for (const st of reusing) expect(st.reused?.units?.length, st.id).toBe(st.owned);
       expect(off.plan.steps.filter((st) => st.owned !== 0 || st.reused !== undefined).map((st) => st.id)).toEqual([]);
       expect(off.plan.cost?.build ?? 0).toBeGreaterThanOrEqual(on.plan.cost?.build ?? 0);
-    }, 120_000);
+    }, 300_000);
   });
 });

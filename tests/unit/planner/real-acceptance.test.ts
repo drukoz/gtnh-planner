@@ -44,6 +44,9 @@ const RED_ALLOY_INGOT = 'gregtech:gt.metaitem.01@11308';
 const IRON_III_CHLORIDE = 'fluid:ironiiichloride';
 const RAW_SILICON_DUST = 'gregtech:gt.metaitem.01@2020';
 const SAND = 'minecraft:sand@0';
+const GRAVEL = 'minecraft:gravel@0';
+const COBBLESTONE = 'minecraft:cobblestone@0';
+const FORGE_HAMMER_MAP = 'gt.recipe.hammer';
 const GLASS_DUST = 'gregtech:gt.metaitem.01@2890';
 const ANTIMONY_INGOT = 'gregtech:gt.metaitem.01@11058';
 /**
@@ -111,6 +114,20 @@ const GEC_HV_MAX_STEPS = 56;   // 51 steps
 const STEEL_MV_MAX_STEPS = 14; // 9 steps at default settings, the cast iron made from ore too
 
 const perMinute = (plan: Plan, key: string): number => 60 * (plan.rawInputs.find((r) => r.key === key)?.perSecond ?? 0);
+
+/**
+ * Whether the plan's flows run Sand ← a forge hammer ← Gravel ← a forge hammer ← Cobblestone ← the rock breaker's supply
+ * step (plan 12, D1: sand made from free cobblestone): a `gt.recipe.hammer` step making Sand takes Gravel from a
+ * `gt.recipe.hammer` step that takes Cobblestone from the step supplying it (`PlanStep.supply`).
+ */
+function sandFromBreaker(plan: Plan): boolean {
+  const byId = new Map(plan.steps.map((s) => [s.id, s]));
+  /** The steps that send `key` into step `id`. */
+  const feeding = (id: string, key: string): PlanStep[] => plan.flows.filter((f) => f.to === id && f.key === key).flatMap((f) => byId.get(f.from) ?? []);
+  return plan.steps.some((sand) => sand.mapId === FORGE_HAMMER_MAP && sand.outputs.some((o) => o.key === SAND)
+    && feeding(sand.id, GRAVEL).some((gravel) => gravel.mapId === FORGE_HAMMER_MAP
+      && feeding(gravel.id, COBBLESTONE).some((breaker) => breaker.supply === COBBLESTONE)));
+}
 /** What the line's steps take of `key` a minute, bought or made in the line. */
 const takenPerMinute = (plan: Plan, key: string): number =>
   60 * plan.steps.reduce((sum, s) => sum + s.inputs.filter((i) => i.key === key).reduce((a, i) => a + i.amount, 0) * s.runsPerSecond, 0);
@@ -312,12 +329,11 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
     // Its red alloy and steel come from supporting lines now (routeDerived on): what the line takes, bought or made.
     expect(takenPerMinute(p, RED_ALLOY_INGOT)).toBeCloseTo(1, 6);   // 2 × 1x red alloy wire = 1 ingot
     expect(takenPerMinute(p, STEEL_INGOT)).toBeGreaterThan(0);      // steel rods of the vacuum tubes
-    // The glass tubes' glass comes from sand: gathered, or bought as glass dust, or (plan 12, D1) made on forge hammers
-    // from gravel that the rock breaker's cobblestone feeds; cobblestone is never bought (fix spec §7.2).
-    const hammerSand = p.steps.filter((s) => s.mapId === 'gt.recipe.hammer' && s.outputs.some((o) => o.key === SAND));
-    const fedByBreaker = hammerSand.length > 0 && p.steps.some((s) => s.supply === 'minecraft:cobblestone@0');
-    expect(perMinute(p, SAND) + perMinute(p, GLASS_DUST) > 0 || fedByBreaker).toBe(true);
-    expect(perMinute(p, 'minecraft:cobblestone@0')).toBe(0);
+    // The glass tubes' glass comes from sand: gathered, or bought as glass dust, or (plan 12, D1) made on a forge hammer
+    // from gravel that a forge hammer makes from the rock breaker's cobblestone, as the plan's flows say; cobblestone is
+    // never bought (fix spec §7.2).
+    expect(perMinute(p, SAND) + perMinute(p, GLASS_DUST) > 0 || sandFromBreaker(p)).toBe(true);
+    expect(perMinute(p, COBBLESTONE)).toBe(0);
   }, 60_000);
 
   it('plans an LV Machine Hull at LV on LV machines: 8 steel plates, tin cable', async () => {

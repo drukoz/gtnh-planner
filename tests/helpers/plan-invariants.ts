@@ -69,11 +69,13 @@ export interface InvariantOptions {
    * eligible tiers (the solve picks the tier), its overclock recomputed for its own tier, and a crafting-table step's an
    * Auto Workbench; the owned machines of a step's other options (`reused.others`) count in its machine checks; a sharing
    * pool is checked once — its steps on equal machines, `max(1, ⌈Σ busy − 1e-9⌉)` of them, each step at its own share —
-   * and the peak power counts a pool's machines and each owned unit once (`powerSummary`'s rule); a free detour that ends
-   * in a gathered world block is a note, as the objective chose to make it, machines and step charges counted. The deep
-   * check keeps the least raw material as a floor but lifts the step charge's +25 % cap, and reads a producer, a purchase
-   * or the plan's own recipes that are dearer only in raw material as notes: one machine of A beside a cheaper machine of
-   * B for the rest is a plan build cost makes.
+   * and the peak power counts a pool's machines and each owned unit once (`powerSummary`'s rule); on an AE2 or Project Red
+   * line, the lines that may make gathered world blocks (Amendment OQ4), a free detour that ends in one is a note, as the
+   * objective chose to make it, machines and step charges counted (controller ruling 250). The deep check keeps the least
+   * raw material as a floor but lifts the step charge's +25 % cap, and a source of a good the line could drop at no more
+   * raw material is a note only where the plan's machines cannot do without it (controller ruling 249, `needsMachine`): a
+   * producer whose share the other steps cannot take within their machines (one machine of A beside a cheaper machine of
+   * B for the rest), or a purchase beside steps whose machines are full.
    */
   buildCost?: boolean;
 }
@@ -101,6 +103,12 @@ export const GATHERED_BLOCKS: ReadonlySet<StuffKey> = new Set([
   'minecraft:sand@0', 'minecraft:sand@1', 'minecraft:gravel@0', 'minecraft:dirt@0', 'minecraft:clay@0', 'minecraft:clay_ball@0',
   'minecraft:netherrack@0', 'minecraft:end_stone@0', 'minecraft:soul_sand@0', 'minecraft:snowball@0', 'minecraft:ice@0',
 ]);
+/**
+ * The logistics of the lines that may make gathered world blocks with build cost counted: AE2 and Project Red (plan 12's
+ * Amendment OQ4, ruling P1; machine-to-machine and EnderIO lines dig them). Written out here rather than read from the
+ * planner's `gatheredRecipesOn` (basis.ts), whose regression kind (g) is there to catch (controller ruling 250).
+ */
+const GATHERED_MADE_ON: ReadonlySet<string> = new Set(['routed', 'ae2']);
 
 function byString(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
@@ -792,15 +800,18 @@ export function freeDetours(pack: Pack, plan: Plan, basis: PlanBasis): Detour[] 
 }
 
 /**
- * Kind (g). With build cost counted, a detour that ends in a world block the planner gathers (availability.ts's
- * `GATHERED_BLOCKS`, plan 09's R1) is a note: plan 12 offers those blocks' recipes beside digging them (spec §3.3, change
- * request 13), and the objective chose to make it with its machines and step charges counted (plan 12's D1).
+ * Kind (g). With build cost counted on an AE2 or Project Red line (`GATHERED_MADE_ON`), a detour that ends in a world
+ * block the planner gathers (availability.ts's `GATHERED_BLOCKS`, plan 09's R1) is a note: plan 12 offers those blocks'
+ * recipes there beside digging them (spec §3.3, Amendment OQ4), and the objective chose to make it with its machines and
+ * step charges counted (plan 12's D1). On machine-to-machine and EnderIO lines, which dig them, such a detour stays a
+ * warning, as with build cost ignored (controller ruling 250).
  */
-function checkDetours(pack: Pack, plan: Plan, basis: PlanBasis, buildCost: boolean): Violation[] {
+function checkDetours(pack: Pack, settings: PlanSettings, plan: Plan, basis: PlanBasis, buildCost: boolean): Violation[] {
   const totalCost = plan.rawInputs.reduce((s, r) => s + r.cost, 0);
   const stepById = new Map(plan.steps.map((s) => [s.id, s]));
+  const madeHere = buildCost && GATHERED_MADE_ON.has(settings.logistics);
   return freeDetours(pack, plan, basis).map((d): Violation => ({
-    kind: 'free-detour', severity: buildCost && Object.hasOwn(MADE_WHEN_IT_PAYS, d.product) ? 'info' : 'warn', key: d.product,
+    kind: 'free-detour', severity: madeHere && Object.hasOwn(MADE_WHEN_IT_PAYS, d.product) ? 'info' : 'warn', key: d.product,
     message: `${d.steps.length} step(s) (${d.steps.map((id) => stepLabel(pack, plan, stepById.get(id) as PlanStep)).join(' ⇐ ')}) turn free input into ${pack.nameOf(d.product)} (${d.why}) at ${sci(d.perSecond)}/s, saving ${sci(d.savedPerSecond)} raw cost/s (${totalCost > 0 ? ((d.savedPerSecond / totalCost) * 100).toPrecision(3) : '∞'}% of the line's ${sci(totalCost)}/s)`,
     data: { ...d, lineRawCost: totalCost },
   }));
@@ -823,7 +834,7 @@ export function checkPlanInvariants(pack: Pack, settings: PlanSettings, plan: Pl
     ...checkProducers(pack, plan, led),
     ...checkMachines(pack, settings, plan, basis, ctx, relTol, buildCost),
     ...checkRawSources(pack, plan),
-    ...checkDetours(pack, plan, basis, buildCost),
+    ...checkDetours(pack, settings, plan, basis, buildCost),
   ];
 }
 
@@ -845,6 +856,69 @@ export interface S1Options {
   notBuyable?: ReadonlySet<StuffKey>;
   /** After S1, look for a plan of that cost that runs few recipes (reweighted L1, as the planner's fallback S3 does). */
   sparse?: boolean;
+  /** The recipes held to machines (`heldBy`: a plan's), runs a second; a recipe it does not name runs unbounded. */
+  held?: HeldMachines;
+}
+
+/**
+ * What machines let recipes run, runs a second: each recipe of `most` at most its value; the recipes of each `pools`
+ * entry, which share their machines, together at most them — Σ runs ÷ the recipe's value ≤ 1 (each value: the recipe's
+ * runs a second on all of the pool's machines).
+ */
+export interface HeldMachines { most: ReadonlyMap<string, number>; pools: ReadonlyArray<ReadonlyMap<string, number>> }
+
+/** Whether `step` runs on no machine a build counts: by hand, or on a pseudo machine (the furnace, the crafting table). */
+function onPseudo(step: PlanStep): boolean {
+  return step.handCraft || step.machine.mteId < 0;
+}
+
+/**
+ * The machines a plan gives its steps (controller ruling 249): a step's runs at most `runsPerSecond / utilization` (its
+ * own machines and the owned ones of its other options, `reused.others`); the steps of one sharing pool together at most
+ * their pool's machines (Σ runs × utilization / runsPerSecond ≤ 1); a step on a pseudo machine or by hand unbounded, as
+ * the solve's later stages leave them (`laterRoom` holds no pseudo step). Each bound is `slack` (relative) wider, so the
+ * plan's own 9-digit rates stay inside them.
+ */
+function heldBy(plan: Plan, slack: number): HeldMachines {
+  const most = new Map<string, number>();
+  const pools = new Map<string, Map<string, number>>();
+  for (const step of plan.steps) {
+    if (onPseudo(step) || !(step.runsPerSecond > 0) || !(step.utilization > 0)) continue;
+    const full = (step.runsPerSecond / step.utilization) * (1 + slack);
+    if (step.pool === undefined) {
+      most.set(step.recipeId, full);
+      continue;
+    }
+    let pool = pools.get(step.pool.id);
+    if (pool === undefined) {
+      pool = new Map();
+      pools.set(step.pool.id, pool);
+    }
+    pool.set(step.recipeId, full);
+  }
+  return { most, pools: [...pools.values()] };
+}
+
+/** How full `step`'s machines are: its utilization, a pooled step's pool's (Σ of its steps' shares); none on a pseudo machine. */
+function fullness(plan: Plan, step: PlanStep): number {
+  if (onPseudo(step)) return 0;
+  const pool = step.pool;
+  if (pool === undefined) return step.utilization;
+  return plan.steps.filter((s) => s.pool?.id === pool.id).reduce((sum, s) => sum + s.utilization, 0);
+}
+
+/**
+ * Whether dropping `step` saves a machine block the build MIP pays for (fix wave 2 (a)): its new machines, one of its
+ * sharing pool's (the pool's other steps keep `Σ utilization × count` of its machines busy), or, by hand or on a pseudo
+ * machine, its step charge. Not where it runs on owned machines only, nor where its pool keeps its count without it.
+ */
+function savesBlock(plan: Plan, step: PlanStep): boolean {
+  if (onPseudo(step)) return true;
+  const pool = step.pool;
+  if (pool === undefined) return step.count > step.owned;
+  const busy = plan.steps.filter((s) => s.pool?.id === pool.id && s.id !== step.id).reduce((sum, s) => sum + s.utilization, 0) * step.count;
+  const without = Math.max(1, Math.ceil(busy - 1e-9));
+  return Math.max(0, step.count - step.owned) > Math.max(0, without - step.owned);
 }
 
 /**
@@ -877,6 +951,21 @@ export async function leastRawCost(graph: CandidateGraph, demand: ReadonlyMap<St
   });
   const lower = new Array<number>(width).fill(0);
   const upper = new Array<number>(width).fill(Infinity);
+  // Machines: a recipe's runs at the normalized demand are its runs a second ÷ `scale`.
+  if (opts.held !== undefined) {
+    const held = opts.held;
+    recipes.forEach((r, j) => {
+      const most = held.most.get(r.id);
+      if (most !== undefined) upper[j] = most / scale;
+    });
+    for (const pool of held.pools) {
+      const entries = recipes.flatMap((r, j): Array<[number, number]> => {
+        const full = pool.get(r.id);
+        return full === undefined ? [] : [[j, scale / full]];
+      });
+      if (entries.length > 0) rows.push({ lower: -Infinity, upper: 1, entries });
+    }
+  }
   const res = await solveLp({ sense: 'min', colCost, colLower: lower, colUpper: upper, rows });
   if (res.status !== 'optimal') return { status: res.status === 'error' ? 'error' : 'infeasible', cost: Infinity, runs: new Map(), buys: new Map() };
   let x = res.x;
@@ -934,12 +1023,20 @@ export interface DeepOptions extends InvariantOptions {
  * candidate graph (`cost`; with `opts.stepCharge` above 0, anywhere from the optimum to `STEP_CHARGE_CAP` above it; with
  * `opts.buildCost`, anywhere from the optimum up), and for every multi-producer and bought-and-made good, the raw cost of
  * the line without each of its sources (a recipe banned, or the purchase barred). A source the line can drop within
- * `costTol` makes the multi-producer an `error` (the plan uses more recipes than it needs) — with `opts.buildCost` an
- * `info`, since the machines it saves may pay for it; otherwise it stays `info` with the extra cost.
+ * `costTol` makes the multi-producer an `error` (the plan uses more recipes than it needs; a `warn` with fewer than two
+ * main producers) and the purchase or the making an `error` (a `warn` where no step makes the good as its main output);
+ * otherwise each stays `info` with the extra cost. With `opts.buildCost` (controller ruling 249) such a source is an
+ * `info` with `data.needsMachine` only where the plan's machines cannot do without it: for a producer, where the same ban
+ * test with every step held to the machines the plan gives it (`heldBy`) is infeasible or dearer than that held test
+ * with nothing dropped; for a purchase, where the steps making the good are full (making the rest needs another
+ * machine; ruling 183 (4) forbids a tie purchase beside a step with room). A producer the line can drop within its
+ * machines keeps the `error` where that saves a machine block the build cost counts (`savesBlock`) and is a `warn`
+ * where it saves none (owned machines, or a pool that keeps its count): a tie the objective cannot see.
  */
 export async function checkPlanInvariantsDeep(pack: Pack, settings: PlanSettings, plan: Plan, opts: DeepOptions = {}): Promise<Violation[]> {
   const base = checkPlanInvariants(pack, settings, plan, opts);
   if (plan.status !== 'ok' || settings.target === null || settings.mode !== 'rate') return base;
+  const relTol = opts.relTol ?? 1e-6;
   const costTol = opts.costTol ?? 1e-6;
   const buildCost = opts.buildCost === true;
   const ctx = opts.ctx ?? { ownedMachines: [], storage: new Map(), visitedDims: [], topTier: null, coilHeat: null, prospected: [] };
@@ -989,10 +1086,9 @@ export async function checkPlanInvariantsDeep(pack: Pack, settings: PlanSettings
       message: `the plan's own recipes cannot meet the demand in an exact LP (${own.status}): the plan only balances through LP tolerance`,
     });
   } else if (own.cost > optimum.cost * (1 + costTol) + 1e-15) {
-    // With build cost counted the plan's own recipes may cost more raw material than the graph's least: the machines saved pay.
     extra.push({
-      kind: 'cost', severity: buildCost ? 'info' : 'warn',
-      message: `the plan's own recipes cost ${sci(own.cost)}/s at best, the graph's optimum is ${sci(optimum.cost)}/s${buildCost ? ' (build cost counted)' : ''}`,
+      kind: 'cost', severity: 'warn',
+      message: `the plan's own recipes cost ${sci(own.cost)}/s at best, the graph's optimum is ${sci(optimum.cost)}/s`,
       data: { ownCost: own.cost },
     });
   }
@@ -1012,23 +1108,60 @@ export async function checkPlanInvariantsDeep(pack: Pack, settings: PlanSettings
   const delta = (cost: number): number => (Number.isFinite(cost) ? (cost - refCost) / Math.max(refCost, 1e-300) : Infinity);
   const pct = (d: number): string => (Number.isFinite(d) ? `+${(d * 100).toPrecision(3)}%` : 'infeasible');
   const over = ownFeasible ? "the plan's other recipes" : 'the whole graph (the plan alone is infeasible)';
+  const stepById = new Map(plan.steps.map((s) => [s.id, s]));
+  // With build cost counted (controller ruling 249): the ban test again with every step held to the machines the plan
+  // gives it, against that held test with nothing dropped — over the plan's own recipes, when they meet the demand at all.
+  const held = buildCost && ownFeasible ? heldBy(plan, relTol) : undefined;
+  let heldBase: Promise<S1Result> | undefined;   // solved when a source is first tested
+  /**
+   * Whether the line without `recipeId` cannot do within the plan's machines at the raw material it uses within them;
+   * false where the plan's own runs do not fit its machines in an exact LP (`heldBase`'s status says so).
+   */
+  const needsMachine = async (recipeId: string): Promise<boolean> => {
+    if (held === undefined) return false;
+    heldBase ??= leastRawCost(graph, demand, { allowed: planRecipes, held });
+    const within = await heldBase;
+    if (within.status !== 'optimal') return false;
+    const r = await leastRawCost(graph, demand, { allowed: new Set([...planRecipes].filter((x) => x !== recipeId)), held });
+    return r.status !== 'optimal' || r.cost > within.cost * (1 + costTol) + 1e-15;
+  };
   for (const v of base) {
     if (v.kind === 'multi-producer' && v.key !== undefined) {
       const producers = (v.data?.producers ?? []) as ProducerInfo[];
+      const mains = producers.filter((p) => p.isMain).length;
       const tests: Array<{ stepId: string; map: string; share: number; isMain: boolean; costWithout: number; delta: number }> = [];
       for (const p of producers) {
         const c = await costWithout([p.recipeId]);
         tests.push({ stepId: p.stepId, map: p.map, share: p.share, isMain: p.isMain, costWithout: c, delta: delta(c) });
       }
       const removable = tests.filter((t) => t.delta <= costTol);
+      const names = (list: typeof tests): string => list.map((t) => `${t.map} (${(t.share * 100).toPrecision(3)}% of it)`).join(' or ');
       v.data = { ...v.data, banTests: tests, over, ...(buildCost ? { buildCost } : {}) };
       if (removable.length > 0 && buildCost) {
-        // Plan 12: one machine of one recipe beside a cheaper machine of the other for the rest is a build-cost plan.
-        v.severity = 'info';
-        v.message += ` — redundant in raw material alone: over ${over}, the line without ${removable.map((t) => `${t.map} (${(t.share * 100).toPrecision(3)}% of it)`).join(' or ')} costs the same raw material, and build cost counts the machines`;
+        // Controller ruling 249: one machine of A beside a cheaper machine of B for the rest is a build-cost plan where A's
+        // machines cannot take B's share; dropped within the plan's machines, B saves its machine block, or nothing.
+        const heldTests: Array<{ stepId: string; needsMachine: boolean; savesBlock: boolean }> = [];
+        for (const t of removable) {
+          const step = stepById.get(t.stepId) as PlanStep;
+          heldTests.push({ stepId: t.stepId, needsMachine: await needsMachine(step.recipeId), savesBlock: savesBlock(plan, step) });
+        }
+        const droppable = removable.filter((t) => heldTests.some((x) => x.stepId === t.stepId && !x.needsMachine));
+        const saving = droppable.filter((t) => heldTests.some((x) => x.stepId === t.stepId && x.savesBlock));
+        const within = held === undefined ? 'not run' : (await (heldBase as Promise<S1Result>)).status;
+        v.data = { ...v.data, heldTests, heldBase: within, ...(droppable.length === 0 ? { needsMachine: true } : {}) };
+        if (droppable.length === 0) {
+          v.severity = 'info';
+          v.message += ` — redundant in raw material alone: over ${over}, the line without ${names(removable)} costs the same raw material, but not within the plan's machines: dropping it needs another machine`;
+        } else if (saving.length > 0) {
+          v.severity = mains >= 2 ? 'error' : 'warn';
+          v.message += ` — REDUNDANT: over ${over}, the line without ${names(saving)} costs the same within the plan's machines, and saves a machine block the build cost counts`;
+        } else {
+          v.severity = 'warn';
+          v.message += ` — redundant: over ${over}, the line without ${names(droppable)} costs the same within the plan's machines, but saves no new machine (owned machines, or a pool that keeps its count): a tie the build cost cannot see`;
+        }
       } else if (removable.length > 0) {
-        v.severity = producers.filter((p) => p.isMain).length >= 2 ? 'error' : 'warn';
-        v.message += ` — REDUNDANT: over ${over}, the line without ${removable.map((t) => `${t.map} (${(t.share * 100).toPrecision(3)}% of it)`).join(' or ')} costs the same`;
+        v.severity = mains >= 2 ? 'error' : 'warn';
+        v.message += ` — REDUNDANT: over ${over}, the line without ${names(removable)} costs the same`;
       } else {
         v.severity = 'info';
         v.message += ` — justified: dropping any one costs more (${tests.map((t) => `${t.map} ${pct(t.delta)}`).join(', ')})`;
@@ -1036,20 +1169,26 @@ export async function checkPlanInvariantsDeep(pack: Pack, settings: PlanSettings
     } else if (v.kind === 'bought-and-made' && v.key !== undefined && !FREE.has(v.key)) {
       const key = v.key;
       const producers = Object.keys((v.data?.producers ?? {}) as Record<string, number>);
-      const recipeIds = producers.map((id) => plan.steps.find((s) => s.id === id)?.recipeId).filter((x): x is string => x !== undefined);
+      const recipeIds = producers.map((id) => stepById.get(id)?.recipeId).filter((x): x is string => x !== undefined);
       const dBuy = delta(await costWithout([], key));
       const dMake = delta(await costWithout(recipeIds));
       v.data = { ...v.data, deltaWithoutBuying: dBuy, deltaWithoutMaking: dMake, over, ...(buildCost ? { buildCost } : {}) };
-      if ((dBuy <= costTol || dMake <= costTol) && buildCost) {
-        // Plan 12: buying the rest beside a step whose machines are full saves the machines making it would add.
+      // Important A, controller ruling 249: with build cost counted, buying the rest beside steps whose machines are full
+      // saves the machine making it would add; beside a step with room, ruling 183 (4) has the line make it instead.
+      const full = producers.every((id) => {
+        const step = stepById.get(id);
+        return step !== undefined && fullness(plan, step) >= 1 - relTol;
+      });
+      if ((dBuy <= costTol || dMake <= costTol) && buildCost && full) {
         v.severity = 'info';
-        v.message += ` — redundant in raw material alone: over ${over}, ${dBuy <= costTol ? 'not buying it' : 'not making it'} costs the same raw material (without buying ${pct(dBuy)}, without making ${pct(dMake)}), and build cost counts the machines`;
+        v.data = { ...v.data, needsMachine: true };
+        v.message += ` — redundant in raw material alone: over ${over}, ${dBuy <= costTol ? 'not buying it' : 'not making it'} costs the same raw material (without buying ${pct(dBuy)}, without making ${pct(dMake)}), but the steps making it are full: making the rest needs another machine`;
       } else if (dBuy <= costTol || dMake <= costTol) {
         // Buying the shortfall of a byproduct is a tie by construction (derived leaves cost what making them costs); a
         // step run to make the good while the line also buys it is not.
-        const mainProducer = producers.some((id) => plan.steps.find((s) => s.id === id)?.mainOutput === key);
+        const mainProducer = producers.some((id) => stepById.get(id)?.mainOutput === key);
         v.severity = mainProducer ? 'error' : 'warn';
-        v.message += ` — REDUNDANT: over ${over}, ${dBuy <= costTol ? 'not buying it' : 'not making it'} costs the same (without buying ${pct(dBuy)}, without making ${pct(dMake)})`;
+        v.message += ` — REDUNDANT: over ${over}, ${dBuy <= costTol ? 'not buying it' : 'not making it'} costs the same (without buying ${pct(dBuy)}, without making ${pct(dMake)})${buildCost ? ', and a step making it has room for more within its machines' : ''}`;
       } else {
         v.severity = 'info';
         v.message += ` — justified (without buying ${pct(dBuy)}, without making ${pct(dMake)})`;

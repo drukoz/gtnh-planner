@@ -9,14 +9,13 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
 import { loadPack } from '../../../src/server/pack/load.ts';
 import { emptyContext, planLine, type SolveTuning } from '../../../src/server/planner/plan.ts';
-import { HAND_STEP_WEIGHT } from '../../../src/server/planner/solve.ts';
 import { normalizeSettings } from '../../../src/shared/project/apply-op.ts';
 import type { Pack } from '../../../src/shared/types/pack.ts';
 import { DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_STEP_CHARGE, FREE_KEYS, type Plan, type PlanSettings } from '../../../src/shared/types/plan.ts';
+import { buildObjective } from '../../helpers/build-objective.ts';
 import { REFERENCE, localDocPath, storedSettings } from '../../helpers/local-docs.ts';
 
 const GLASS_TUBE = 'gregtech:gt.metaitem.03@32012';
-const SECONDS_PER_HOUR = 3600;
 /** Plan 09's bound on a real-data plan with a warm pack (an MV line; ruling 187). */
 const PLAN_SECONDS = 5;
 
@@ -57,25 +56,6 @@ const local = process.env.GTNH_LOCAL === '1';
 /** The reference file: `GTNH_REFERENCE` when set, else in this checkout, else in the main checkout (`localDocPath`). */
 const path = local ? localDocPath(REFERENCE, process.env.GTNH_REFERENCE) : undefined;
 if (local && path === undefined) console.log(`real-reference: skipped, no ${REFERENCE} (the user's private reference settings)`);
-
-/**
- * What a plan costs by the build MIP's measure, its tie-breaks aside: its raw material over the build horizon, the
- * machines it builds and the step charge on every new machine block (a pool's once; a step on a pseudo machine once, by
- * hand `HAND_STEP_WEIGHT` times), the charge being `stepCharge` × the least raw material over the horizon, at least 1
- * raw (no gathered block is made on these EnderIO lines, so S1g is S1): the plan's own least, or `least` per second where
- * two plans are weighed alike.
- */
-function buildObjective(plan: Plan, s: PlanSettings, least = plan.rawCost?.leastPerSecond ?? 0): number {
-  const horizon = (s.buildHorizonHours ?? 24) * SECONDS_PER_HOUR;
-  const charge = (s.stepCharge ?? 0) * Math.max(least * horizon, 1);
-  let blocks = 0;
-  for (const step of plan.steps) {
-    if (step.pool !== undefined && step.pool.steps[0] !== step.id) continue;
-    if (step.handCraft) blocks += s.automateCrafting ? 1 : HAND_STEP_WEIGHT;
-    else blocks += step.machine.mteId < 0 ? 1 : step.count - step.owned;
-  }
-  return (plan.rawCost?.perSecond ?? 0) * horizon + (plan.cost?.build ?? 0) + charge * blocks;
-}
 
 /** The acceptance spec's machine blocks: the machines of every step not crafted by hand, a sharing pool once (Auto Workbenches count). */
 function machineBlocks(plan: Plan): number {
@@ -224,13 +204,16 @@ describe.skipIf(path === undefined)("the user's reference Electronic Circuit flo
       const guarded = await timed(s, { buildTimeLimit: 0 });
       const ignored = await timed({ ...s, buildHorizonHours: null });
       const solved = await timed(s);
+      // The three weighed alike: by the least raw material of the line with gathered blocks dug, the plan's that ignores
+      // build cost (these EnderIO lines make none, so it is the least of each).
+      const least = ignored.plan.rawCost?.leastPerSecond ?? 0;
       for (const [what, run] of [['guarded', guarded], ['ignored', ignored], ['solved', solved]] as const) {
-        console.log(`real-reference ${name} ${what}: ${run.plan.status}, ${run.plan.steps.length} steps, objective ${buildObjective(run.plan, s).toFixed(1)}, ${run.seconds.toFixed(2)} s`);
+        console.log(`real-reference ${name} ${what}: ${run.plan.status}, ${run.plan.steps.length} steps, objective ${buildObjective(run.plan, s, least).toFixed(1)}, ${run.seconds.toFixed(2)} s`);
       }
       expect(guarded.plan.status, name).toBe('ok');
       expect(guarded.plan.warnings.map((w) => w.code), name).toContain('build-cost-approx');
       expect(guarded.plan.steps.length, name).toBeLessThanOrEqual(ignored.plan.steps.length);
-      expect(buildObjective(guarded.plan, s), name).toBeLessThanOrEqual(buildObjective(ignored.plan, s) * (1 + 1e-6));
+      expect(buildObjective(guarded.plan, s, least), name).toBeLessThanOrEqual(buildObjective(ignored.plan, s, least) * (1 + 1e-6));
     }
   }, 120_000);
 

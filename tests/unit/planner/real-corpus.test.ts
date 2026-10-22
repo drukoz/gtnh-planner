@@ -6,10 +6,12 @@
 // once for the whole file, and each plan is timed on a warm pack (a first, unrelated plan warms it).
 //
 // Plan 12 (Task 8): the plans count build cost over 24 hours by default, so the checker runs with `buildCost` (its checks
-// that assume plan 09's objective follow plan 12's: a free detour into a gathered block, a multi-producer or purchase
-// dearer only in raw material are notes, and nothing caps raw material above the least); and the line per hour is
-// compared with the line per minute on the same settings with build cost ignored (plan 09's scale-free objective, where
-// they run the same recipes), the build-cost plans' differences logged.
+// that assume plan 09's objective follow plan 12's: nothing caps raw material above the least; a source of a good the line
+// could drop at no more raw material is a note only where the plan's machines cannot do without it, `needsMachine`,
+// controller ruling 249; a free detour into a gathered block is a note only on AE2 and Project Red lines, ruling 250,
+// and these plans run machine to machine, which digs); and the line per hour is compared with the line per minute on the
+// same settings with build cost ignored (plan 09's scale-free objective, where they run the same recipes), the build-cost
+// plans' differences logged.
 
 import { beforeAll, describe, expect, it } from 'vitest';
 import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
@@ -43,13 +45,14 @@ function raiseWithout(test: BanTest): number {
  * bought and made, where every step making it is in the plan for another main output: each names another (spec D13: a
  * step making a good the line buys beside another output it uses is named after that one, as a cutting machine making
  * Wafers beside bought Poly-Si dust or a centrifuge making Arsenic beside bought Sulfur Dust); (iv) with build cost
- * counted (plan 12), any note of the deep check: the build MIP weighed each source's machines (and step charge per new
- * machine block) against the raw material it saves — one machine of A beside a cheaper machine of B for the rest, or
- * buying the rest beside a step whose machines are full — so the step charge × the least raw material of (ii), plan 09's
- * per-step trade, is no measure of it.
+ * counted (plan 12, controller ruling 249), a note where the deep check found that the plan's machines cannot do without
+ * the source (`needsMachine`): the line without it costs the same raw material, but not within the machines the plan
+ * gives its steps — one machine of A beside a cheaper machine of B for the rest, or a purchase beside steps whose
+ * machines are full — so dropping it needs another machine, which the build MIP weighed. Every other finding of kind
+ * (c), with build cost counted or not, needs (i)-(iii).
  */
 function excuse(v: Violation, plan: Plan, stepCharge: number, optimum: number): string | null {
-  if (v.severity === 'info' && v.data?.buildCost === true) return 'build cost: the machines a source saves';
+  if (v.severity === 'info' && v.data?.needsMachine === true) return 'build cost: dropping it needs another machine';
   if (v.kind === 'multi-producer') {
     const mains = ((v.data?.producers ?? []) as ProducerInfo[]).filter((p) => p.isMain);
     if (mains.length <= 1) return 'co-products';
@@ -89,7 +92,8 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('the plan 09 corpus on the real 
     const found = await checkPlanInvariantsDeep(pack, settings, plan, { marginal: false, stepCharge, buildCost });
     const text = (v: Violation): string => `${v.kind}/${v.severity}: ${v.message}`;
     expect(found.filter((v) => EXACT_KINDS.includes(v.kind) && v.severity !== 'info').map(text), name).toEqual([]);
-    // Kind (g): with build cost counted a detour into a gathered block is a note (plan 12's D1), any other a warning.
+    // Kind (g): with build cost counted a detour into a gathered block is a note on AE2 and Project Red lines (plan 12's
+    // D1), any other a warning (controller ruling 250): these machine-to-machine plans dig their gathered blocks.
     expect(found.filter((v) => v.kind === 'free-detour' && v.severity !== 'info').map(text), name).toEqual([]);
     // Raw material: nothing from solver tolerance; with build cost ignored at most the step charge's cap above the
     // optimum (with it counted the machines it saves may pay for more, architecture §11.39 amending §11.34).

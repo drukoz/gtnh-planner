@@ -194,6 +194,28 @@ export function withBuildRecipes(spec: PackSpec, mteIds?: readonly number[], fro
   return extended(spec, { recipes: machines.map((mteId) => craft(`make-${mteId}`, [...from], itemOf(mteId))) });
 }
 
+/**
+ * Mini-GT plus plan 09 Task 8's tie in build mode (build-plan.test.ts's "one source at a tie", plan-invariants.test.ts's
+ * purchase beside a full step): `burn` (Basic Centrifuge 161, 16 EU/t × `dur` t) splits a Raw Dust into a Copper Ingot and
+ * 1,000 L Gas, and `make-thing` (assembler, 2 EU/t) takes 2 copper ingots and 1,000 L gas into a Thing. Copper is also
+ * mined, so burning a second dust (its gas left over) costs the raw material that buying the other ingot does. The
+ * centrifuge is crafted from `from` (nothing: it builds for free).
+ */
+export function gasSpec(dur: number, from: ReadonlyArray<[StuffKey, number]> = []): PackSpec {
+  const spec = structuredClone(MINI_GT);
+  const vein = { name: 'ore.mix.raw', dims: ['overworld'], kind: 'vein' as const, weight: 1, minY: 0, maxY: 255, size: 1, density: 1,
+    materials: { primary: 'Raw', secondary: 'Raw', between: 'Raw', sporadic: 'Raw' } };
+  return withBuildRecipes({
+    ...spec,
+    items: [...(spec.items ?? []), { key: 't:raw_dust@0', name: 'Raw Dust', gt: { prefix: 'dust', material: 'Raw' } }, { key: 't:thing@0', name: 'Thing' }],
+    fluids: [...(spec.fluids ?? []), { key: 'fluid:gas', name: 'Gas' }],
+    recipes: [...(spec.recipes ?? []),
+      { id: 'burn', map: 'gt.recipe.centrifuge', in: [['t:raw_dust@0', 1]], out: [['t:copper_ingot@0', 1], ['fluid:gas', 1000]], eut: 16, dur },
+      { id: 'make-thing', map: 'gt.recipe.assembler', in: [['t:copper_ingot@0', 2], ['fluid:gas', 1000]], out: [['t:thing@0', 1]], eut: 2 }],
+    worldgen: { ...spec.worldgen, veins: [...(spec.worldgen?.veins ?? []), vein] },
+  }, [161], from);
+}
+
 /** GT's display item the rock breaker's recipes list as their input (plan 09 R2: the loader drops it). */
 const ROCK_BREAKER_DISPLAY = 'gregtech:gt.metaitem.02@32765#abcdefabcdef';
 const COBBLE = 'minecraft:cobblestone@0';

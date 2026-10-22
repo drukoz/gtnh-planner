@@ -4,7 +4,7 @@
 // that assume plan 09's objective follow plan 12's, and the damage is still found.
 
 import { describe, expect, it } from 'vitest';
-import { LV_MACHINE_PARTS, kitSpec, sandSpec, withAutoWorkbenches, withBuildRecipes } from '../../helpers/build-fixtures.ts';
+import { LV_MACHINE_PARTS, gasSpec, kitSpec, sandSpec, withAutoWorkbenches, withBuildRecipes } from '../../helpers/build-fixtures.ts';
 import { MINI_GT, miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec } from '../../helpers/pack-spec.ts';
 import { checkPlanInvariants, checkPlanInvariantsDeep, countByKind, type Violation } from '../../helpers/plan-invariants.ts';
@@ -115,6 +115,24 @@ describe('checkPlanInvariants with build cost counted', () => {
   /** Glass at LV, 1 a minute, at 2 %, crafted by hand, on AE2: one forge hammer runs gravel and sand from free cobblestone. */
   const glass: PlanSettings = { ...defaultSettings(), target: 't:glass@0', tier: 1, amount: 1, per: 'min', stepCharge: 0.02, automateCrafting: false, logistics: 'ae2' };
   const sand = packFromSpec(sandSpec());
+  /**
+   * A Thing bent or drawn from 1 A Dust, at 0.5 runs a second per machine, 60 a minute: the owned bender (10 raw to build)
+   * does half, one new wiremill (1 raw) the rest. The two recipes cost the same raw material.
+   */
+  const vein: OreVein = { name: 'ore.mix.a', dims: ['overworld'], kind: 'vein', weight: 1, minY: 0, maxY: 255, size: 1, density: 1,
+    materials: { primary: 'A', secondary: 'A', between: 'A', sporadic: 'A' } };
+  const tie = packFromSpec(withBuildRecipes(withBuildRecipes({
+    items: [{ key: 't:a@0', name: 'A Dust', gt: { prefix: 'dust', material: 'A' } }, { key: 't:t@0', name: 'Thing' }],
+    maps: [{ id: 'gt.recipe.metalbender', name: 'Bending Machine' }, { id: 'gt.recipe.wiremill', name: 'Wiremill' }],
+    machines: [{ mteId: 301, name: 'Basic Bending Machine', tier: 1, maps: ['gt.recipe.metalbender'] }, { mteId: 302, name: 'Basic Wiremill', tier: 1, maps: ['gt.recipe.wiremill'] }],
+    recipes: [
+      { id: 'bend', map: 'gt.recipe.metalbender', in: [['t:a@0', 1]], out: [['t:t@0', 1]], eut: 16, dur: 40 },
+      { id: 'mill', map: 'gt.recipe.wiremill', in: [['t:a@0', 1]], out: [['t:t@0', 1]], eut: 16, dur: 40 },
+    ],
+    worldgen: { veins: [vein] },
+  }, [301], [['t:a@0', 10]]), [302], [['t:a@0', 1]]));
+  const oneBender = owning({ mteId: 301, count: 1 });
+  const things: PlanSettings = { ...defaultSettings(), target: 't:t@0', tier: 1, amount: 60, per: 'min' };
 
   it("accepts the tier the solve picks and counts the owned machines of another tier beside a step's own", async () => {
     // 3 new Basic Bending Machines (0.2 runs/s each) beside the owned Advanced one (0.4): build-plan.test.ts's
@@ -154,10 +172,16 @@ describe('checkPlanInvariants with build cost counted', () => {
     expect(findings(checkPlanInvariants(benches, hulls, plan, { buildCost: true }))).toEqual([]);
   });
 
-  it('reads sand made from free cobblestone as a note: the build-cost objective chose it, machines and step charges counted', async () => {
+  it('reads sand made from free cobblestone as a note on AE2 and Project Red lines only: the build-cost objective chose it there', async () => {
     const plan = await planLine(sand, glass, emptyContext());
     expect(severityOf(checkPlanInvariants(sand, glass, plan), 'free-detour')).toEqual(['warn']);
     expect(severityOf(checkPlanInvariants(sand, glass, plan, { buildCost: true }), 'free-detour')).toEqual(['info']);
+    expect(severityOf(checkPlanInvariants(sand, { ...glass, logistics: 'routed' }, plan, { buildCost: true }), 'free-detour')).toEqual(['info']);
+    // Machine-to-machine and EnderIO lines dig their sand (Amendment OQ4): the same plan there is a warning (controller
+    // ruling 250), as it is with build cost ignored.
+    for (const logistics of ['direct', 'enderio'] as const) {
+      expect(severityOf(checkPlanInvariants(sand, { ...glass, logistics }, plan, { buildCost: true }), 'free-detour'), logistics).toEqual(['warn']);
+    }
   });
 
   it('still finds a machine no step could run, a pool sized wrong, an overclock not of its own tier and too few machines', async () => {
@@ -187,36 +211,73 @@ describe('checkPlanInvariants with build cost counted', () => {
     expect(poolErrors(twice)).toEqual([expect.stringContaining('2 machines where 1 would do')]);
   });
 
-  it('lets raw material rise above the step charge cap and a producer be redundant in raw material alone, never below the least', async () => {
+  it('lets raw material rise above the step charge cap, never below the least, and a producer be redundant in raw material alone where its share needs another machine', async () => {
     // Over 1 hour a Basic Circuit an hour hammers its plates by hand (4 raw against the bender's 3: +33 %).
     const hourly: PlanSettings = { ...defaultSettings(), target: 't:circuit@0', tier: 1, amount: 1, per: 'hour', automateCrafting: false, buildHorizonHours: 1 };
     const hammered = await planLine(mini, hourly, emptyContext());
     expect(hammered.steps.map((x) => x.id)).toContain('hammer-plate');
     expect(severityOf(await checkPlanInvariantsDeep(mini, hourly, hammered, { stepCharge: hourly.stepCharge }), 'cost')).toContain('error');
-    expect(findings(await checkPlanInvariantsDeep(mini, hourly, hammered, { stepCharge: hourly.stepCharge, buildCost: true }))).toEqual([]);
+    // With build cost counted no cap: only plan 09's warning that the plan's own recipes cost more than the least is left.
+    expect(findings(await checkPlanInvariantsDeep(mini, hourly, hammered, { stepCharge: hourly.stepCharge, buildCost: true })))
+      .toEqual([expect.stringMatching(/^cost\/warn: the plan's own recipes cost .* at best, the graph's optimum is /)]);
     // The lower bound stays: a plan that uses less raw material than the least gets it from nowhere.
     const short = copy(hammered);
     for (const r of short.rawInputs) r.cost /= 2;
     expect(severityOf(await checkPlanInvariantsDeep(mini, hourly, short, { stepCharge: hourly.stepCharge, buildCost: true }), 'cost')).toContain('error');
-    // A Thing bent or drawn from 1 A Dust, at 0.5 runs a second per machine: the owned bender does half, one new wiremill
-    // (1 raw to build, against the bender's 10) the rest. The two recipes cost the same raw material.
-    const vein: OreVein = { name: 'ore.mix.a', dims: ['overworld'], kind: 'vein', weight: 1, minY: 0, maxY: 255, size: 1, density: 1,
-      materials: { primary: 'A', secondary: 'A', between: 'A', sporadic: 'A' } };
-    const tie = packFromSpec(withBuildRecipes(withBuildRecipes({
-      items: [{ key: 't:a@0', name: 'A Dust', gt: { prefix: 'dust', material: 'A' } }, { key: 't:t@0', name: 'Thing' }],
-      maps: [{ id: 'gt.recipe.metalbender', name: 'Bending Machine' }, { id: 'gt.recipe.wiremill', name: 'Wiremill' }],
-      machines: [{ mteId: 301, name: 'Basic Bending Machine', tier: 1, maps: ['gt.recipe.metalbender'] }, { mteId: 302, name: 'Basic Wiremill', tier: 1, maps: ['gt.recipe.wiremill'] }],
-      recipes: [
-        { id: 'bend', map: 'gt.recipe.metalbender', in: [['t:a@0', 1]], out: [['t:t@0', 1]], eut: 16, dur: 40 },
-        { id: 'mill', map: 'gt.recipe.wiremill', in: [['t:a@0', 1]], out: [['t:t@0', 1]], eut: 16, dur: 40 },
-      ],
-      worldgen: { veins: [vein] },
-    }, [301], [['t:a@0', 10]]), [302], [['t:a@0', 1]]));
-    const oneBender = owning({ mteId: 301, count: 1 });
-    const things: PlanSettings = { ...defaultSettings(), target: 't:t@0', tier: 1, amount: 60, per: 'min' };
+    // The tie line (`tie`): the owned bender does half, one new wiremill the rest, both full.
     const both = await planLine(tie, things, oneBender);
-    expect(both.steps.map((x) => [x.id, x.count, x.owned])).toEqual([['bend', 1, 1], ['mill', 1, 0]]);
+    expect(both.steps.map((x) => [x.id, x.count, x.owned, x.utilization])).toEqual([['bend', 1, 1, 1], ['mill', 1, 0, 1]]);
     expect(severityOf(await checkPlanInvariantsDeep(tie, things, both, { ctx: oneBender }), 'multi-producer')).toEqual(['error']);
-    expect(findings(await checkPlanInvariantsDeep(tie, things, both, { ctx: oneBender, buildCost: true }))).toEqual([]);
+    // Both machines full: the bender cannot take the wiremill's share, so dropping either needs another machine (ruling 249).
+    const full = await checkPlanInvariantsDeep(tie, things, both, { ctx: oneBender, buildCost: true });
+    expect(findings(full)).toEqual([]);
+    expect(full.filter((x) => x.kind === 'multi-producer').map((x) => [x.severity, x.data?.needsMachine])).toEqual([['info', true]]);
+  });
+
+  it("calls a producer redundant where the plan's machines can take its share, as the build cost would", async () => {
+    // The tie line of the case above with two owned benders, each 0.5 runs a second: they have room for the wiremill's
+    // share, so the line can drop the new wiremill within its machines at no more raw material — a plan dearer by the
+    // wiremill's build and step charge, plan 09's error (controller ruling 249). With the wiremill owned too, dropping it
+    // saves no new machine: a tie the build cost cannot see, a warning.
+    const both = await planLine(tie, things, oneBender);
+    const roomy = copy(both);
+    Object.assign(roomy.steps.find((x) => x.id === 'bend')!, { count: 2, owned: 2, utilization: 0.5 });
+    const twoBenders = owning({ mteId: 301, count: 2 });
+    const multi = async (p: Plan, ctx: PlanContext): Promise<Violation | undefined> =>
+      (await checkPlanInvariantsDeep(tie, things, p, { ctx, buildCost: true })).find((x) => x.kind === 'multi-producer');
+    const saves = await multi(roomy, twoBenders);
+    expect(saves?.severity, saves?.message).toBe('error');
+    expect(saves?.message).toContain('saves a machine block the build cost counts');
+    expect(saves?.data?.needsMachine).toBeUndefined();
+    const ownedMill = copy(roomy);
+    Object.assign(ownedMill.steps.find((x) => x.id === 'mill')!, { owned: 1 });
+    const savesNone = await multi(ownedMill, owning({ mteId: 301, count: 2 }, { mteId: 302, count: 1 }));
+    expect(savesNone?.severity, savesNone?.message).toBe('warn');
+    expect(savesNone?.message).toContain('saves no new machine');
+  });
+
+  it('reads a purchase beside steps whose machines are full as a note, and one beside a step with room as plan 09 does', async () => {
+    // build-plan.test.ts's "still buys beside a step where making the rest needs more machines than it saves": two
+    // centrifuges, full, burn the dust whose gas the line needs, and buying the other copper ingot costs the raw material
+    // burning one more dust would — but a third centrifuge. Important A: a note that dropping the purchase needs another
+    // machine. The same plan with a third centrifuge already there has room to make the rest: ruling 183 (4) has the
+    // line make it, so buying it is plan 09's finding.
+    const gas = packFromSpec(gasSpec(400, [['t:iron_ingot@0', 1]]));
+    const thing: PlanSettings = { ...defaultSettings(), target: 't:thing@0', tier: 1, amount: 6, per: 'min', automateCrafting: false };
+    const plan = await planLine(gas, thing, emptyContext());
+    expect(plan.steps.map((x) => [x.id, x.runsPerSecond, x.count, x.utilization])).toEqual([['burn', 0.1, 2, 1], ['make-thing', 0.1, 1, 0.1]]);
+    expect(plan.rawInputs.map((r) => r.key)).toEqual(['t:copper_ingot@0', 't:raw_dust@0']);
+    const bought = async (p: Plan, buildCost: boolean): Promise<Violation | undefined> =>
+      (await checkPlanInvariantsDeep(gas, thing, p, { buildCost })).find((x) => x.kind === 'bought-and-made' && x.key === 't:copper_ingot@0');
+    // Plan 09: a warning, the centrifuge running for its gas (no step makes copper as its main output).
+    expect((await bought(plan, false))?.severity).toBe('warn');
+    const full = await bought(plan, true);
+    expect([full?.severity, full?.data?.needsMachine]).toEqual(['info', true]);
+    const roomy = copy(plan);
+    Object.assign(roomy.steps.find((x) => x.id === 'burn')!, { count: 3, utilization: 2 / 3 });
+    const room = await bought(roomy, true);
+    expect(room?.severity, room?.message).toBe('warn');
+    expect(room?.message).toContain('has room for more within its machines');
+    expect(room?.data?.needsMachine).toBeUndefined();
   });
 });
