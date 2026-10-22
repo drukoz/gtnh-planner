@@ -102,7 +102,7 @@ describe('EnderIO item conduits', () => {
       { conduit: '0,0,1', side: 3, mode: 'extract' },
     ]);
     const opts = { ticks: 2_000, restartAt: 2_000 };
-    const limited = same(line({ item: PART_KEYS.limitedFilter, whitelist: true, keys: ['t:resin@0'], limits: [{ key: 't:resin@0', count: 6 }] }), opts);
+    const limited = same(line({ item: PART_KEYS.limitedFilter, whitelist: true, keys: ['t:resin@0'], limits: [6] }), opts);
     // 6, less the 2 grid cells that hold Resin: 4 at tick 0, then 6 − 2 − 4 = 0
     expect(limited.stats.deliveries('0,0,0')).toEqual([[0, 't:resin@0', 4]]);
     expect(limited.findings).toEqual([]);

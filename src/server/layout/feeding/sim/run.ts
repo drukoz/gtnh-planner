@@ -92,7 +92,7 @@ function modelKeys(model: FeedModel, initial: ScenarioOptions['initial']): Stuff
         for (const f of net.faces) {
           for (const filter of [f.extract?.filter, f.insert?.filter]) {
             if (filter === null || filter === undefined) continue;
-            keys.push(...filter.keys, ...(filter.limits ?? []).map((l) => l.key));
+            keys.push(...filter.keys);
           }
         }
         break;

@@ -63,19 +63,21 @@ interface CompiledFilter { pass: Uint8Array; limits: Float64Array | null }
 
 /**
  * Rule 4: `filter` (null: none, which passes everything) for every key of the run. A Limited Item Filter's limit for an
- * item is the sum of the counts of its slots that match it, so an item it does not list has none.
+ * item is the sum of the counts of its slots that match it (`limits[i]` is the count of the slot that holds `keys[i]`), so
+ * an item it does not list has none.
  */
 function compile(filter: FeedConduitFilter | null, keys: KeyTable): CompiledFilter {
   const pass = new Uint8Array(keys.size);
   if (filter === null) return { pass: pass.fill(1), limits: null };
   const meta = filter.matchMeta !== false, nbt = filter.matchNbt !== false;
-  const listed = new Set(filter.keys.map((k) => matchForm(k, meta, nbt)));
+  const forms = filter.keys.map((k) => matchForm(k, meta, nbt));
+  const listed = new Set(forms);
   const counts = filter.item === PART_KEYS.limitedFilter && filter.limits !== undefined ? filter.limits : null;
   const limits = counts === null ? null : new Float64Array(keys.size);
   for (let id = 0; id < keys.size; id++) {
     const form = matchForm(keys.key(id), meta, nbt);
     pass[id] = listed.has(form) === filter.whitelist ? 1 : 0;
-    if (counts !== null && limits !== null) for (const l of counts) if (matchForm(l.key, meta, nbt) === form) limits[id]! += l.count;
+    if (counts !== null && limits !== null) for (let i = 0; i < forms.length; i++) if (forms[i] === form) limits[id]! += counts[i] ?? 0;
   }
   return { pass, limits };
 }

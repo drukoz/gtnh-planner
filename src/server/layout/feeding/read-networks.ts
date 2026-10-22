@@ -419,7 +419,7 @@ function itemConduit(cell: Cell): ConduitSpec | undefined {
 function conduitFilter(ctx: ReadContext, cell: Cell, face: Face, filter: FeedConduitFilter | null, side: 'extract' | 'insert'): FeedConduitFilter | null {
   if (filter === null) return null;
   const copy: FeedConduitFilter = { ...filter, keys: [...filter.keys] };
-  if (filter.limits !== undefined) copy.limits = filter.limits.map((l) => ({ key: l.key, count: l.count }));
+  if (filter.limits !== undefined) copy.limits = [...filter.limits];
   if (filter.oreDict === true) {
     ctx.unknown('eio_oredict', `${cell.label}: the item filter on its ${face} face's ${side} side matches by ore dictionary, which the checker reads `
       + 'as the exact items it lists', cell);

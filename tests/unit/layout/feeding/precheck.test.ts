@@ -221,7 +221,7 @@ describe('precheckFeeding', () => {
     const conduit = layout.blocks.find((b) => b.conduits !== undefined && b.conduits.some((c) => c.faces.some((f) => f.target === bench.label)))!;
     const face = conduit.conduits![0]!.faces.find((f) => f.target === bench.label)!;
     const limited: FeedConduitFilter = {
-      item: PART_KEYS.limitedFilter, whitelist: true, keys: ['t:a@0', 't:b@0'], limits: [{ key: 't:a@0', count: 6 }, { key: 't:b@0', count: 6 }],
+      item: PART_KEYS.limitedFilter, whitelist: true, keys: ['t:a@0', 't:b@0'], limits: [6, 6],
     };
     face.insert!.filter = limited;
     expect(precheckFeeding(readLine({ pack: fixed.pack, plan: fixed.plan, layout }), fixed.pack)).toEqual([]);
@@ -539,10 +539,10 @@ describe('precheckFeeding, the other branches', () => {
     };
     const label = readLine({ pack, plan, layout }).nodes.find((n) => n.kind === 'bench')!.label;
     // the grid holds 2 of each, so a count of 2 leaves no stock, and 200 leaves 198, more than a stack
-    const counted = run({ item: PART_KEYS.limitedFilter, whitelist: true, keys: ['t:a@0', 't:b@0'], limits: [{ key: 't:a@0', count: 2 }, { key: 't:b@0', count: 200 }] });
+    const counted = run({ item: PART_KEYS.limitedFilter, whitelist: true, keys: ['t:a@0', 't:b@0'], limits: [2, 200] });
     expect(texts(counted)).toEqual([`${label} keeps 0× Alpha for 2 a craft: less than one craft`, `${label} keeps 198× Beta for 2 a craft: more than a stack`]);
-    // counts add up over the filter's slots
-    expect(run({ item: PART_KEYS.limitedFilter, whitelist: true, keys: ['t:a@0', 't:b@0'], limits: [{ key: 't:a@0', count: 2 }, { key: 't:a@0', count: 2 }, { key: 't:b@0', count: 5 }] })).toEqual([]);
+    // counts add up over the filter's slots (Alpha is in two)
+    expect(run({ item: PART_KEYS.limitedFilter, whitelist: true, keys: ['t:a@0', 't:a@0', 't:b@0'], limits: [2, 2, 5] })).toEqual([]);
     // the filters that cap nothing, by name; a Limited Item Filter without counts is one of them
     const capOf = (item: string | undefined) => texts(run({ ...(item === undefined ? {} : { item }), whitelist: true, keys: ['t:a@0', 't:b@0'] }));
     expect(capOf('EnderIO:itemBasicFilterUpgrade@1')).toEqual([`${label} takes its ingredients through an Advanced Item Filter, which does not cap amounts: one ingredient can fill all nine input slots`]);

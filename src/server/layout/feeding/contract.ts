@@ -6,7 +6,8 @@
 //   `ItemFilterSpec` to `FeedSpec` there unchanged, and this file re-exports them (plan open question 1), so the layout,
 //   the build steps, the 3D view and the checker read one structure. fix/feeding writes the chips, the interface patterns,
 //   the ME Export Bus on its cable and the flat `CONFIG_KEYS` settings on main's routed, AE2 and EnderIO layouts; add-on
-//   12 Task 6 writes bench grids, Limited Item Filter counts (`FeedConduitFilter`) and shared machines (`FeedBlock`).
+//   12 Task 6 writes bench grids, Limited Item Filter counts (main's `ConduitFilter.limits`, read through
+//   `FeedConduitFilter`) and shared machines (`FeedBlock`).
 // - The second half is what the checker reports: the thirteen `feed_*` codes, their kinds and the gate (the plan's
 //   Codes table), the scenarios, the options and the time constants.
 // Pure TypeScript: nothing from node:* may be imported here.
@@ -19,8 +20,13 @@ import type { ConduitFilter, LayoutBlock } from '../../../shared/types/layout.ts
 export type {
   BenchSpec, ChipKind, ExportBusSpec, FeedSpec, InterfaceSpec, ItemFilterSpec, PatternSpec, RoutedChipSpec,
 } from '../../../shared/types/feed.ts';
-/** A conduit side's filter that may be a Limited Item Filter (`item` = PART_KEYS.limitedFilter). */
-export type FeedConduitFilter = ConduitFilter & { limits?: Array<{ key: StuffKey; count: number }> };
+/**
+ * A conduit side's filter that may be a Limited Item Filter (`item` = PART_KEYS.limitedFilter): main's `ConduitFilter` as
+ * it is. Its counts are main's `ConduitFilter.limits` (add-on 12 Task 6), in `keys` order: `limits[i]` is the count of the
+ * slot that holds `keys[i]`. An item in several slots is let in up to the sum of their counts (research §2.1), and a key
+ * past the end of `limits` counts 0, as main's configure text reads it.
+ */
+export type FeedConduitFilter = ConduitFilter;
 /** A layout block (its `feed` is `LayoutBlock.feed`) that may carry add-on 12's shared-machine steps, which `LayoutBlock` does not have yet. */
 export type FeedBlock = LayoutBlock & { stepIds?: string[] };
 /** The flat `LayoutBlock.config` keys the checker reads (add-on 15's words, architecture entry 50 item 4). */

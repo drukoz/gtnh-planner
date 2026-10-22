@@ -547,8 +547,12 @@ function benchStock(c: Ctx, bench: BenchNode, cells: ReadonlyMap<StuffKey, numbe
     for (const face of c.faces.get(bench.id) ?? []) {
       const filter = face.insert?.filter;
       if (filter?.item !== PART_KEYS.limitedFilter || filter.limits === undefined) continue;
+      // `limits[i]` is the count of the slot that holds `keys[i]`: an item in several slots counts their sum
       const limits = new Map<StuffKey, number>();
-      for (const l of filter.limits) limits.set(l.key, (limits.get(l.key) ?? 0) + l.count);
+      for (let i = 0; i < filter.keys.length; i++) {
+        const key = filter.keys[i]!;
+        limits.set(key, (limits.get(key) ?? 0) + (filter.limits[i] ?? 0));
+      }
       for (const [key, limit] of limits) keep(key, Math.max(0, limit - (cells.get(key) ?? 0)));
     }
   } else if (c.model.mode === 'routed') {
