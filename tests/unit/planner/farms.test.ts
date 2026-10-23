@@ -367,6 +367,8 @@ describe('farms in the line', () => {
       kind: 'crop', tier: 1, footprint: [11, 2, 11], sticks: 2,
       crop: { id: 'cropsnh:testCane', name: 'Resin Cane', stats: { growth: 1, gain: 1, resistance: 1 } },
       text: '1× Basic Crop Manager: 2 crop sticks of Resin Cane (growth 1, gain 1, resistance 1) on Dirt, watering on',
+      // its words after the stick count, from which the layout words the area of each new Crop Manager
+      planting: 'of Resin Cane (growth 1, gain 1, resistance 1) on Dirt, watering on',
     });
     expect(plan.rawInputs.some((r) => r.key === RESIN)).toBe(false);
     expect(plan.buildList.filter((l) => l.group === 'one-off').map((l) => [l.key, l.amount, l.why])).toEqual([

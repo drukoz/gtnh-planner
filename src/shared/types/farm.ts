@@ -85,4 +85,10 @@ export interface FarmRecipeMeta {
 export interface FarmStep {
   kind: 'tgs' | 'crop'; tier: number; footprint: [number, number, number]; text: string;
   sapling?: StuffKey; tools?: StuffKey[]; crop?: { id: string; name: string; stats: CropStats }; sticks?: number;
+  // optional addition
+  /**
+   * A crop farm's words after its stick count (`of <crop> (growth …) on <soil>, watering on[, fertilizer: <name>]`), from
+   * which the layout words the area of each new machine with that machine's share of `sticks`; absent for a tree farm.
+   */
+  planting?: string;
 }

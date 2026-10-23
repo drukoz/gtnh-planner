@@ -233,12 +233,21 @@ function joined(names: readonly string[]): string {
 }
 
 /**
+ * The words of `count` crop farm machines named `machine` tending `sticks` crop sticks: `<count>× <machine>: <sticks> crop
+ * stick(s) <planting>` (`FarmStep.planting`). A crop farm step's own words give its count and all its sticks
+ * (`farmStepOf`); the area the layout keeps for one of its new machines gives 1 and that machine's share (layout/farms.ts).
+ */
+export function cropFarmText(count: number, machine: string, sticks: number, planting: string): string {
+  return `${count}× ${machine}: ${sticks} crop stick${sticks === 1 ? '' : 's'} ${planting}`;
+}
+
+/**
  * The farm of a step of farm recipe `r` (`PlanStep.farm`), sized as `step` is: its kind, tier, footprint and words, and
  * what it plants. A tree farm: `Tree Growth Simulator (<tier>): <sapling> in the controller; <tools, by their tool names,
  * joined by " and "> (<the farm settings' tool material>) in an input bus`, its sapling and tools. A crop farm: `<count>×
  * <machine>: <sticks> crop sticks of <crop> (growth <g>, gain <g>, resistance <r>) on <soil>, watering on` and, with
- * fertilizer, `, fertilizer: <its name>`; its crop and the crop sticks it tends (`sticksOf`). Undefined for any other
- * recipe.
+ * fertilizer, `, fertilizer: <its name>` (`cropFarmText`); its crop, the crop sticks it tends (`sticksOf`) and its
+ * planting, the words after the stick count. Undefined for any other recipe.
  */
 export function farmStepOf(pack: Pack, step: Pick<PlanStep, 'count' | 'machine' | 'runsPerSecond'>, r: Recipe, farms: FarmSettings): FarmStep | undefined {
   const farm = r.meta.farm;
@@ -263,8 +272,8 @@ export function farmStepOf(pack: Pack, step: Pick<PlanStep, 'count' | 'machine' 
   const stats = crop?.stats ?? farms.crops.stats;
   const soil = crop?.soil ?? null;
   const fertilizer = r.inputs.find((ing) => ing.consumed && ing.options.some((o) => !isFluidKey(o.key)))?.options[0]?.key;
-  const text = `${step.count}× ${step.machine.name}: ${sticks} crop stick${sticks === 1 ? '' : 's'} of ${name} `
-    + `(growth ${stats.growth}, gain ${stats.gain}, resistance ${stats.resistance})${soil === null ? '' : ` on ${pack.nameOf(soil)}`}, watering on`
-    + (fertilizer === undefined ? '' : `, fertilizer: ${pack.nameOf(fertilizer)}`);
-  return { kind: 'crop', tier: farm.tier, footprint, text, crop: { id: crop?.id ?? r.id, name, stats: { ...stats } }, sticks };
+  const planting = `of ${name} (growth ${stats.growth}, gain ${stats.gain}, resistance ${stats.resistance})`
+    + `${soil === null ? '' : ` on ${pack.nameOf(soil)}`}, watering on` + (fertilizer === undefined ? '' : `, fertilizer: ${pack.nameOf(fertilizer)}`);
+  const text = cropFarmText(step.count, step.machine.name, sticks, planting);
+  return { kind: 'crop', tier: farm.tier, footprint, text, crop: { id: crop?.id ?? r.id, name, stats: { ...stats } }, sticks, planting };
 }

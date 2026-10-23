@@ -1,15 +1,18 @@
 // Farms in the layout (add-on 17, architecture §11 entry 45 (7)): a farm step (`PlanStep.farm`) is not laid out block by
 // block. Each of its new machines (its count less the owned ones, which Plan 5's reuse pins already name) gets an area
-// kept for it beside the line on +x, the areas stacked along z by step id, with a pin and one plain build step that says
-// what to build or plant there, what goes in its buses, which hatch, and how to connect it. The site search finds the
-// line and its areas clear together (`farmExtent`); the line's power and logistics hookups go round the areas and never
-// reach them, and the 3D view, the Connections view and the ghost projector show no farm blocks: there are none.
+// kept for it beside the line on +x, the areas stacked along z by step id, with a pin and one plain build step that says,
+// in that machine's own words, what to build or plant there, what goes in its buses, which hatch, and how to connect it.
+// The site search finds the line and its areas clear together (`farmExtent`); the line's power and logistics hookups go
+// round the areas and never reach them, and the 3D view, the Connections view and the ghost projector show no farm
+// blocks: there are none.
 
 import { tierName } from '../../shared/gt/tiers.ts';
 import { fmtInt } from '../../shared/layout/format.ts';
 import type { Vec3 } from '../../shared/layout/geometry.ts';
+import type { FarmStep } from '../../shared/types/farm.ts';
 import type { ReservedArea } from '../../shared/types/layout.ts';
 import type { Plan, PlanStep } from '../../shared/types/plan.ts';
+import { cropFarmText } from '../planner/farms/recipes.ts';
 
 /** Blocks between the line and its farms, and between two farms. */
 export const FARM_GAP = 2;
@@ -17,18 +20,34 @@ export const FARM_GAP = 2;
 /** A layer of a crop farm: a soil block and the crop stick on it (the planner makes a crop farm 2 × its layers high). */
 const CROP_LAYER_HEIGHT = 2;
 
-/** An area kept for one new farm machine, in the line's own frame. */
-export interface FarmArea { stepId: string; local: Vec3 /* min corner in the line's frame */; size: Vec3; text: string }
+/**
+ * An area kept for one new farm machine, in the line's own frame: `words` say what that machine builds or plants (a crop
+ * farm's: its share of the step's crop sticks), and `text` is `Farm: <words>`.
+ */
+export interface FarmArea { stepId: string; local: Vec3 /* min corner in the line's frame */; size: Vec3; text: string; words: string }
 
 function compareText(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
 /**
+ * The words of the area kept for new machine `k` (0 first) of farm step `step`. A crop farm's: `1× <machine>: <n> crop
+ * stick(s) <planting>` (`cropFarmText`), n that machine's share of the step's crop sticks split evenly over its `count`
+ * machines (the first `sticks mod count` shares take one more, and its new machines take the first shares), so the
+ * shares of all its machines add up to the step's sticks. A tree farm's: `farm.text`, which names no count. A crop farm
+ * without `planting` or `sticks` (a step built by hand) keeps `farm.text` too.
+ */
+function areaWords(step: PlanStep, farm: FarmStep, k: number): string {
+  if (farm.kind !== 'crop' || farm.planting === undefined || farm.sticks === undefined) return farm.text;
+  const share = Math.floor(farm.sticks / step.count) + (k < farm.sticks % step.count ? 1 : 0);
+  return cropFarmText(1, step.machine.name, share, farm.planting);
+}
+
+/**
  * One area per new farm machine (count − owned) of every farm step, beside the line on +x, stacked along z, by step id:
  * the first at x = the line's width + `FARM_GAP` (0 without a line: `lineSize[0]` 0, every other machine owned), y 0,
  * z 0, each next one `FARM_GAP` past the previous one's far side; its size the step's `farm.footprint` (x, height, z),
- * its text `Farm: <farm.text>`.
+ * its words its own machine's (`areaWords`), its text `Farm: <words>`.
  */
 export function farmAreas(plan: Plan, lineSize: Vec3): FarmArea[] {
   const x = lineSize[0] === 0 ? 0 : lineSize[0] + FARM_GAP;
@@ -39,7 +58,8 @@ export function farmAreas(plan: Plan, lineSize: Vec3): FarmArea[] {
     if (farm === undefined) continue;
     for (let i = 0; i < s.count - s.owned; i++) {
       const size: Vec3 = [farm.footprint[0], farm.footprint[1], farm.footprint[2]];
-      areas.push({ stepId: s.id, local: [x, 0, z], size, text: `Farm: ${farm.text}` });
+      const words = areaWords(s, farm, i);
+      areas.push({ stepId: s.id, local: [x, 0, z], size, text: `Farm: ${words}`, words });
       z += size[2] + FARM_GAP;
     }
   }
@@ -56,11 +76,11 @@ export function farmExtent(lineSize: Vec3, areas: readonly FarmArea[]): Vec3 {
 /**
  * The build step of `area`, kept for a machine of farm step `step` (W, L and H its footprint's x, z and height), with
  * ` at pin <n>` only when it has a pin. A Tree Growth Simulator: `Build the Tree Growth Simulator in the <W×L×H> area at
- * pin <n> as NEI shows its structure: <farm.text>; one <tier name> energy hatch, a maintenance hatch, a muffler hatch, an
- * input bus and an output bus. Connect the energy hatch to your power and bring what the output bus fills to the line.`
- * A crop farm: `Lay out the <W×L> area at pin <n>: <farm.text>, with the Crop Manager in the middle and water in its
- * tank. Connect it to your power and bring what it harvests to the line.`, a farm of more than one layer with
- * `, <layers> layers of soil and sticks stacked inside the Crop Manager's reach` after `<farm.text>`.
+ * pin <n> as NEI shows its structure: <the area's words>; one <tier name> energy hatch, a maintenance hatch, a muffler
+ * hatch, an input bus and an output bus. Connect the energy hatch to your power and bring what the output bus fills to the
+ * line.` A crop farm: `Lay out the <W×L> area at pin <n>: <the area's words>, with the Crop Manager in the middle and water
+ * in its tank. Connect it to your power and bring what it harvests to the line.`, a farm of more than one layer with
+ * `, <layers> layers of soil and sticks stacked inside the Crop Manager's reach` after the area's words.
  */
 export function farmBuildText(step: PlanStep, area: FarmArea, pin?: number): string {
   const farm = step.farm;
@@ -68,13 +88,13 @@ export function farmBuildText(step: PlanStep, area: FarmArea, pin?: number): str
   const [w, h, l] = area.size;
   const at = pin === undefined ? '' : ` at pin ${pin}`;
   if (farm.kind === 'tgs') {
-    return `Build the Tree Growth Simulator in the ${fmtInt(w)}×${fmtInt(l)}×${fmtInt(h)} area${at} as NEI shows its structure: ${farm.text}; `
+    return `Build the Tree Growth Simulator in the ${fmtInt(w)}×${fmtInt(l)}×${fmtInt(h)} area${at} as NEI shows its structure: ${area.words}; `
       + `one ${tierName(farm.tier)} energy hatch, a maintenance hatch, a muffler hatch, an input bus and an output bus. `
       + 'Connect the energy hatch to your power and bring what the output bus fills to the line.';
   }
   const layers = Math.floor(h / CROP_LAYER_HEIGHT);
   const stacked = layers > 1 ? `, ${fmtInt(layers)} layers of soil and sticks stacked inside the Crop Manager's reach` : '';
-  return `Lay out the ${fmtInt(w)}×${fmtInt(l)} area${at}: ${farm.text}${stacked}, with the Crop Manager in the middle and water in its tank. `
+  return `Lay out the ${fmtInt(w)}×${fmtInt(l)} area${at}: ${area.words}${stacked}, with the Crop Manager in the middle and water in its tank. `
     + 'Connect it to your power and bring what it harvests to the line.';
 }
 

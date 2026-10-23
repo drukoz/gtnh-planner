@@ -40,21 +40,27 @@ function farmPack(): Pack {
 }
 
 const TGS_TEXT = 'Tree Growth Simulator (LV): Rubber Sapling in the controller; Saw and Knife (Steel) in an input bus';
+/** The crop farm step's own words: both its Crop Managers and all their crop sticks. */
 const CROP_TEXT = '2× Basic Crop Manager: 242 crop sticks of Resin Cane (growth 1, gain 1, resistance 1) on Dirt, watering on';
+/** What the crop farm plants: its words after the stick count. */
+const CROP_PLANTING = 'of Resin Cane (growth 1, gain 1, resistance 1) on Dirt, watering on';
+/** The words of an area kept for one of the crop farm's Crop Managers, which tends `sticks` of the step's crop sticks. */
+const CROP_AREA = (sticks: number) => `1× Basic Crop Manager: ${sticks} crop sticks ${CROP_PLANTING}`;
 const TGS_FARM: FarmStep = { kind: 'tgs', tier: 1, footprint: [7, 7, 7], text: TGS_TEXT };
-/** x, height, z: one layer of 11 × 11 crop sticks on their soil. */
-const CROP_FARM: FarmStep = { kind: 'crop', tier: 1, footprint: [11, 2, 11], text: CROP_TEXT };
+/** x, height, z: one layer of 11 × 11 crop sticks on their soil; 242 sticks in all, 121 for each of two Crop Managers. */
+const CROP_FARM: FarmStep = { kind: 'crop', tier: 1, footprint: [11, 2, 11], text: CROP_TEXT, sticks: 242, planting: CROP_PLANTING };
 const TGS_BUILD = (at: string) => `Build the Tree Growth Simulator in the 7×7×7 area${at} as NEI shows its structure: ${TGS_TEXT}; one LV energy hatch, `
   + 'a maintenance hatch, a muffler hatch, an input bus and an output bus. Connect the energy hatch to your power and bring what the output bus fills '
   + 'to the line.';
-const CROP_BUILD = (at: string, layers = '') => `Lay out the 11×11 area${at}: ${CROP_TEXT}${layers}, with the Crop Manager in the middle and water in `
-  + 'its tank. Connect it to your power and bring what it harvests to the line.';
+const CROP_BUILD = (at: string, words: string, layers = '') => `Lay out the 11×11 area${at}: ${words}${layers}, with the Crop Manager in the middle `
+  + 'and water in its tank. Connect it to your power and bring what it harvests to the line.';
 
 /** The tree farm: a new Tree Growth Simulator making Rubber Wood. */
 const tgsStep = (over: Partial<StepSpec> = {}): StepSpec => ({ id: 'tgs', mteId: TGS, count: 1, inputs: [], outputs: [['t:wood@0', 1]], farm: TGS_FARM, ...over });
-/** The crop farm: two new Crop Managers making Sticky Resin from water. */
+/** The crop farm: two new Basic Crop Managers making Sticky Resin from water. */
 const cropStep = (over: Partial<StepSpec> = {}): StepSpec => ({
-  id: 'crop', mteId: CROP_MANAGER, count: 2, inputs: [['fluid:water', 20]], outputs: [['t:resin@0', 1]], farm: CROP_FARM, ...over,
+  id: 'crop', mteId: CROP_MANAGER, name: 'Basic Crop Manager', count: 2, inputs: [['fluid:water', 20]], outputs: [['t:resin@0', 1]], farm: CROP_FARM,
+  ...over,
 });
 /** The line: one macerator taking `takes`. */
 const lineStep = (takes: readonly string[], over: Partial<StepSpec> = {}): StepSpec => ({
@@ -88,9 +94,10 @@ describe('farm areas', () => {
   it('stacks the areas of every farm step along z beside the line, by step id', () => {
     const plan = makePlan([lineStep(['t:wood@0']), tgsStep({ id: 'z-tgs' }), cropStep({ id: 'a-crop', count: 3, owned: 2 })], { flows: [] });
     const areas = farmAreas(plan, [5, 2, 4]);
+    // the one new Crop Manager of three takes the first share of the step's 242 crop sticks (81, 81 and 80)
     expect(areas).toEqual([
-      { stepId: 'a-crop', local: [7, 0, 0], size: [11, 2, 11], text: `Farm: ${CROP_TEXT}` },
-      { stepId: 'z-tgs', local: [7, 0, 13], size: [7, 7, 7], text: `Farm: ${TGS_TEXT}` },
+      { stepId: 'a-crop', local: [7, 0, 0], size: [11, 2, 11], text: `Farm: ${CROP_AREA(81)}`, words: CROP_AREA(81) },
+      { stepId: 'z-tgs', local: [7, 0, 13], size: [7, 7, 7], text: `Farm: ${TGS_TEXT}`, words: TGS_TEXT },
     ]);
     expect(FARM_GAP).toBe(2);
     expect(farmExtent([5, 2, 4], areas)).toEqual([18, 7, 20]);
@@ -105,12 +112,30 @@ describe('farm areas', () => {
     expect(farmBuildText(tgs.steps[0]!, farmAreas(tgs, [5, 2, 7])[0]!, 3)).toBe(TGS_BUILD(' at pin 3'));
     expect(farmBuildText(tgs.steps[0]!, farmAreas(tgs, [5, 2, 7])[0]!)).toBe(TGS_BUILD(''));
     const crop = makePlan([cropStep()]);
-    expect(farmBuildText(crop.steps[0]!, farmAreas(crop, [5, 2, 7])[0]!, 4)).toBe(CROP_BUILD(' at pin 4'));
+    expect(farmBuildText(crop.steps[0]!, farmAreas(crop, [5, 2, 7])[0]!, 4)).toBe(CROP_BUILD(' at pin 4', CROP_AREA(121)));
     // two layers of soil and sticks stand 4 high
     const layered = makePlan([cropStep({ farm: { ...CROP_FARM, footprint: [11, 4, 11] } })]);
     const layers = ", 2 layers of soil and sticks stacked inside the Crop Manager's reach";
-    expect(farmBuildText(layered.steps[0]!, farmAreas(layered, [5, 2, 7])[0]!, 4)).toBe(CROP_BUILD(' at pin 4', layers));
-    expect(farmBuildText(layered.steps[0]!, farmAreas(layered, [5, 2, 7])[0]!)).toBe(CROP_BUILD('', layers));
+    expect(farmBuildText(layered.steps[0]!, farmAreas(layered, [5, 2, 7])[0]!, 4)).toBe(CROP_BUILD(' at pin 4', CROP_AREA(121), layers));
+    expect(farmBuildText(layered.steps[0]!, farmAreas(layered, [5, 2, 7])[0]!)).toBe(CROP_BUILD('', CROP_AREA(121), layers));
+  });
+
+  it('words each crop area for its own Crop Manager, the step\'s crop sticks split evenly over its machines', () => {
+    // 241 sticks over two Crop Managers: the first share takes the one left over, and the shares add up to the step's
+    const odd = makePlan([cropStep({ farm: { ...CROP_FARM, sticks: 241 } })]);
+    const areas = farmAreas(odd, [5, 2, 7]);
+    expect(areas.map((a) => a.text)).toEqual([`Farm: ${CROP_AREA(121)}`, `Farm: ${CROP_AREA(120)}`]);
+    expect(areas.map((a, i) => farmBuildText(odd.steps[0]!, a, 3 + i))).toEqual([CROP_BUILD(' at pin 3', CROP_AREA(121)), CROP_BUILD(' at pin 4', CROP_AREA(120))]);
+    // the new machines' areas take the first shares
+    expect(farmAreas(makePlan([cropStep({ owned: 1, farm: { ...CROP_FARM, sticks: 241 } })]), [5, 2, 7]).map((a) => a.words)).toEqual([CROP_AREA(121)]);
+    // one crop stick is said as one
+    expect(farmAreas(makePlan([cropStep({ farm: { ...CROP_FARM, sticks: 3 } })]), [5, 2, 7]).map((a) => a.words)).toEqual([
+      CROP_AREA(2), `1× Basic Crop Manager: 1 crop stick ${CROP_PLANTING}`]);
+    // a crop farm step without its planting or its sticks (one built by hand) keeps the step's words
+    const unplanted = makePlan([cropStep({ farm: { kind: 'crop', tier: 1, footprint: [11, 2, 11], text: CROP_TEXT, sticks: 242 } })]);
+    expect(farmAreas(unplanted, [5, 2, 7]).map((a) => a.text)).toEqual([`Farm: ${CROP_TEXT}`, `Farm: ${CROP_TEXT}`]);
+    const uncounted = makePlan([cropStep({ farm: { kind: 'crop', tier: 1, footprint: [11, 2, 11], text: CROP_TEXT, planting: CROP_PLANTING } })]);
+    expect(farmAreas(uncounted, [5, 2, 7]).map((a) => a.words)).toEqual([CROP_TEXT, CROP_TEXT]);
   });
 
   it('numbers the farm pins after the reuse pins and before the warnings', () => {
@@ -244,10 +269,16 @@ describe('farms in the layout', () => {
     const [a, b] = two.reserved!;
     expect([b!.pos[0] - a!.pos[0], b!.pos[1] - a!.pos[1], b!.pos[2] - a!.pos[2]]).toEqual([0, 0, 13]);
     expect(two.size[2]).toBe(11 + FARM_GAP + 11);
+    // each area is one Crop Manager's, with its half of the step's 242 crop sticks
+    const words = '1× Basic Crop Manager: 121 crop sticks of Resin Cane (growth 1, gain 1, resistance 1) on Dirt, watering on';
+    expect(two.reserved!.map((a) => a.text)).toEqual([`Farm: ${words}`, `Farm: ${words}`]);
     expect(two.buildSteps.filter((s) => s.id.startsWith('layout:farm:')).map((s) => [s.id, s.kind, s.text]))
-      .toEqual([['layout:farm:crop', 'place', CROP_BUILD('')], ['layout:farm:crop:2', 'place', CROP_BUILD('')]]);
+      .toEqual([['layout:farm:crop', 'place', CROP_BUILD('', words)], ['layout:farm:crop:2', 'place', CROP_BUILD('', words)]]);
+    // with a scan base, each area's pin says the same
+    const pinned = await layoutLine(pack, plan(0), scan(), placedAt(), ground());
+    expect(pinned.pins.filter((p) => p.kind === 'farm').map((p) => p.text)).toEqual([`Farm: ${words}`, `Farm: ${words}`]);
     const one = await layoutLine(pack, plan(1), emptyScan(), makeProject());
-    expect(one.reserved).toHaveLength(1);
+    expect(one.reserved!.map((a) => a.text)).toEqual([`Farm: ${words}`]);
   });
 
   it('gives an owned farm a reuse pin and no area', async () => {
