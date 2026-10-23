@@ -10,7 +10,7 @@ import { OPPOSITE, posKey, rotateFace, type Vec3 } from '../../../../src/shared/
 import type { Layout, LayoutBlock } from '../../../../src/shared/types/layout.ts';
 import type { PlanFlow } from '../../../../src/shared/types/plan.ts';
 import { busSlots } from '../../../../src/server/layout/parts.ts';
-import { chain2, feedPlan, layFeed, layLegacy, layUncapped, FEED_IDS } from '../../../helpers/feeding-fixtures.ts';
+import { benchBesideMachine, chain2, feedPlan, layFeed, layLegacy, layUncapped, FEED_IDS } from '../../../helpers/feeding-fixtures.ts';
 import { IDS } from '../../../helpers/layout-fixtures.ts';
 
 /** The line's own block at world cell `pos` (no ghost, no hookup block). */
@@ -211,6 +211,29 @@ describe('readLine', () => {
     // the input chest lists it
     expect(m.nodes.find((n) => n.kind === 'chest' && n.side === 'input')).toMatchObject({ keys: ['t:x@0'] });
     expect(m.unknowns.some((u) => u.code === 'supply_not_listed')).toBe(false);
+  });
+
+  it('leaves out an Auto Workbench main leaves to the player, as it does a hand-run multiblock', async () => {
+    // machine to machine: main connects nothing to a bench, says so on its step (bench_by_hand) and lists only the macerator's
+    // raw Gamma in the input chest
+    const { pack, plan } = benchBesideMachine();
+    const layout = await layFeed(pack, plan, 'direct');
+    expect(layout.warnings.filter((w) => w.code === 'bench_by_hand').map((w) => w.stepId)).toEqual(['b']);
+    const bench = layout.blocks.find((b) => b.role === 'machine' && b.stepId === 'b')!;
+    const m = readLine({ pack, plan, layout });
+    expect(m.nodes.filter((n) => n.kind !== 'chest').map((n) => n.stepIds)).toEqual([['m']]);
+    expect(m.unknowns.filter((u) => u.code === 'hand_run')).toEqual([expect.objectContaining({ pos: bench.pos, stepId: 'b', text: expect.stringContaining('bench_by_hand') })]);
+    // its step is not laid, so its ingredients are no supply and nothing stocks them ahead of what the input chest lists
+    expect([m.laid, m.supply, m.sinks]).toEqual([['m'], ['t:c@0'], ['t:x@0']]);
+    expect(m.nodes.find((n) => n.kind === 'chest' && n.side === 'input')).toMatchObject({ keys: ['t:c@0'] });
+    expect(m.unknowns.some((u) => u.code === 'supply_not_listed')).toBe(false);
+    // the mode alone says so on a machine-to-machine line; elsewhere the step's warning does
+    layout.warnings = layout.warnings.filter((w) => w.code !== 'bench_by_hand');
+    expect(readLine({ pack, plan, layout }).laid).toEqual(['m']);
+    const eio = await layFeed(pack, plan, 'enderio');
+    expect(readLine({ pack, plan, layout: eio }).laid).toEqual(['m', 'b']);
+    eio.warnings.push({ code: 'bench_by_hand', stepId: 'b', text: 'Fill this Auto Workbench by hand' });
+    expect(readLine({ pack, plan, layout: eio }).laid).toEqual(['m']);
   });
 
   it('reads output bus locks', async () => {

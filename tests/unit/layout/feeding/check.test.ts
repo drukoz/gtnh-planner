@@ -145,6 +145,19 @@ describe('checkFeeding', () => {
     expect(report.inputs.map((i) => [i.machine, i.deliveredPerSecond.steady! > 0])).toEqual(report.inputs.map((i) => [i.machine, true]));
   });
 
+  it('leaves the bench main fills by hand out of the machine-to-machine line beside it', async () => {
+    // main connects nothing to the bench on a machine-to-machine line: no finding names it or what it takes, nothing stocks its
+    // Alpha and Beta in the input chest ahead of the macerator's Gamma, and the macerator gets Gamma and runs (what is left is
+    // the tail's leak of Gamma into the output chest, which then stops its Ex: Task 10's machine-to-machine case)
+    const { pack, plan } = benchBesideMachine();
+    const report = checkFeeding({ pack, plan, layout: await layFeed(pack, plan, 'direct') });
+    expect(report.findings.filter((f) => f.stepId === 'b' || f.key === 't:a@0' || f.key === 't:b@0' || f.machine.startsWith('Auto Workbench'))).toEqual([]);
+    expect(report.findings.filter((f) => f.code === 'feed_starved' || f.code === 'feed_slow')).toEqual([]);
+    expect(report.inputs.map((i) => [i.stepId, i.key])).toEqual([['m', 't:c@0']]);
+    expect(report.scenarios.map((s) => [s.name, (s.runs.m ?? 0) > 0, s.runs.b])).toEqual(report.scenarios.map((s) => [s.name, true, undefined]));
+    expect(report.unknowns.filter((u) => u.code === 'hand_run').map((u) => u.stepId)).toEqual(['b']);
+  });
+
   it('passes the routed line main lays for a bench beside a machine', async () => {
     // the input chest's Item Broadcaster Chip sends Alpha and Beta, which only the bench takes, on its Item Stock Keeper Chip's
     // orders; its Item Extractor Chip sends the macerator's Gamma: R5d has nothing to find, and every scenario keeps the plan's pace

@@ -7,7 +7,9 @@
 // otherwise, and lists what it could not know as unknowns, at most once per code and block. Everything is in the line's
 // local frame (frame.ts): the same line reads the same in every rotation and wherever it was dragged (Review Focus 1);
 // a block the plan has no step for is skipped (Review Focus 2); a machine without slot data takes its slots from its
-// recipes (Review Focus 3).
+// recipes (Review Focus 3). A machine main leaves to the player is left out as hand-run, its step not laid: the multiblocks
+// `manualReasonOf` names, and an Auto Workbench on a machine-to-machine line, which main connects to nothing
+// (`bench_by_hand`), so its ingredients are neither supply nor stocked.
 // Pure TypeScript: nothing from node:* may be imported here, and from the server only what the plan's Global
 // Constraints allow (`stepItemInputs`, `stepItemOutputs`, `stepDepths`, `busSlots`, `manualReasonOf`).
 
@@ -147,6 +149,9 @@ const HAND_RUN_WHY: Readonly<Record<NonNullable<ReturnType<typeof manualReasonOf
   own_hatch: 'GregTech lets items into it only through its own Coke Oven Hatch, which the layout does not place',
 };
 
+/** Main's layout warning on a step whose Auto Workbench the player fills by hand (machine to machine: `modes/direct.ts`). */
+const BENCH_BY_HAND = 'bench_by_hand';
+
 /**
  * The line `layout` of `plan` as the feeding checker's model (Task 2 rules 1–16). Ghost blocks and the hookups' blocks
  * are not read: the base's own network is outside the line.
@@ -214,7 +219,9 @@ export function readLine(input: { pack: Pack; plan: Plan; layout: Layout }): Fee
     return copyRecipe(r);
   };
 
-  // rules 2–5, 7: machines
+  // rules 2–5, 7: machines; the Auto Workbenches main leaves to the player: on a machine-to-machine line, whose GT pipe cannot
+  // cap a bench's ingredients, main connects nothing to one and says so on its step (`bench_by_hand`)
+  const benchesByHand = new Set((layout.warnings ?? []).filter((w) => w.code === BENCH_BY_HAND && w.stepId !== undefined).map((w) => w.stepId!));
   const machines: Array<BasicNode | MultiNode | BenchNode> = [];
   const multiMaps = new Map<NodeId, string[]>();
   for (const cell of cells) {
@@ -236,6 +243,12 @@ export function readLine(input: { pack: Pack; plan: Plan; layout: Layout }): Fee
     if (manual !== null) {
       unknown('hand_run', `${machine.name} at ${where(cell.pos)} is run by hand (${manual}: ${HAND_RUN_WHY[manual]}): the checker leaves it out, `
         + 'and what it makes reaches the line through its input chest', cell, stepIds[0]);
+      continue;
+    }
+    if (cls === BENCH_CLASS && (layout.mode === 'direct' || stepIds.some((id) => benchesByHand.has(id)))) {
+      unknown('hand_run', `${machine.name} at ${where(cell.pos)} is filled by hand (${BENCH_BY_HAND}: a machine-to-machine line cannot cap an Auto `
+        + 'Workbench\'s ingredients, so main connects nothing to it): the checker leaves it out, and what it makes reaches the line through its input chest',
+      cell, stepIds[0]);
       continue;
     }
     const base = {
