@@ -1,7 +1,8 @@
 // Keyboard focus is always visible (restyle plan Phase 1 Task 2, design spec §4 and §6): one 3 px ring with no gap. On a
 // button inside a light panel and on a link in the top bar it is yellow: the ring touches the control's own dark border or
 // sits on the dark page, which is what keeps it readable. A link inside a light panel has no dark border of its own, so
-// there the ring is near black (the panel's focus ink, ruling R12), and so it is on a tick or a summary (ruling R13) and on a slider (R30).
+// there the ring is near black (the panel's focus ink, ruling R12), and so it is on a tick or a summary (ruling R13), on a slider (R30)
+// and on a file input (R33).
 
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -67,6 +68,20 @@ test('the focus ring of a tick and of a disclosure on a panel is near black too'
     await expect(control).toBeFocused();
     expect(await ring(control)).toEqual(PANEL_LINK_RING);
   }
+});
+
+test('the focus ring of a file input on a panel is near black too', async ({ page }) => {
+  // The World page's two pickers sit on a panel. A file input has no field box, and round its file name no dark edge of its own, so a
+  // yellow ring there would read 1.6:1 on the panel's grey: it takes the focus ink of the panel, as a link does (ruling R33).
+  await login(page); await setName(page, 'Ann');
+  await page.goto('/world');
+  const picker = page.getByTestId('world-zip-input');
+  await expect(picker).toBeVisible();
+  await picker.focus();
+  await page.keyboard.press('Shift+Tab');                                              // stepping off and back on is a keyboard focus
+  await page.keyboard.press('Tab');
+  await expect(picker).toBeFocused();
+  expect(await ring(picker)).toEqual(PANEL_LINK_RING);
 });
 
 test('the focus ring of a slider on a panel is near black too', async ({ page }) => {

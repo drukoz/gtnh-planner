@@ -413,7 +413,9 @@ describe('the Machine GUI controls', () => {
     expectDeclared([
       [SUMMARY, 'display', 'flex'], [SUMMARY, 'list-style', 'none'], [SUMMARY, 'min-height', '36px'],
       [SUMMARY, 'border', '2px solid var(--outline)'], [SUMMARY, 'background', 'var(--btn)'], [SUMMARY, 'box-shadow', 'var(--bevel-btn)'],
-      [SUMMARY, 'color', '#ffffff'], [SUMMARY, 'font', '15px/1 var(--font-pixel)'], [SUMMARY, 'cursor', 'pointer'],
+      // ruling R37: a title that wraps grows the button instead of spilling over it (a line of 1.25 and 4px above and below, which
+      // keeps a one-line button at its 36px: the readout of a settings section is 23.5px)
+      [SUMMARY, 'color', '#ffffff'], [SUMMARY, 'font', '15px/1.25 var(--font-pixel)'], [SUMMARY, 'padding', '4px 12px'], [SUMMARY, 'cursor', 'pointer'],
       [SUMMARY.replace(/summary/g, 'summary::-webkit-details-marker'), 'display', 'none'],
       [SUMMARY.replace(/summary/g, 'summary:hover'), 'background', 'var(--btn-hover)'],
       [SUMMARY.replace(/summary/g, 'summary:active'), 'transform', 'translateY(1px)'],
@@ -439,7 +441,7 @@ describe('the Machine GUI controls', () => {
     const panels = blocks.find((b) => !b.nested && b.prelude.split(', ').includes('.tab-panel') && b.inner.includes('--ink:'));
     if (panels === undefined) throw new Error('styles.css has no rule that sets the panel ink');
     expect(declarations(panels.inner).filter(([name]) => name === '--ink-focus').map(([, value]) => value)).toEqual(['#1b1b1b']);
-    const link = ':where(a, button.link, summary, input[type=checkbox], input[type=radio], input[type=range]):focus-visible';   // ruling R13: a summary and a tick have no dark edge either; R30: nor has a slider
+    const link = ':where(a, button.link, summary, input[type=checkbox], input[type=radio], input[type=range], input[type=file]):focus-visible';   // ruling R13: a summary and a tick have no dark edge either; R30: nor has a slider; R33: nor a file input
     expect(declared(link, 'outline-color')).toBe('var(--ink-focus)');
     // only the colour: the width and the offset stay the base ring's
     expect(declarations(ruleBody(link)).map(([name]) => name)).toEqual(['outline-color']);
@@ -619,7 +621,9 @@ describe('the Machine GUI chrome', () => {
       // a hint or a warning is yellow, a problem is red in the pixel font with its items in a paler red
       ['.plan-banner', 'color', 'var(--ink-title)'],
       ['.plan-banner > .error, .banner-integrity, .banner-heading.error', 'color', 'var(--ink-error)'],
-      ['.plan-banner > .error, .banner-integrity, .banner-heading.error', 'font-family', 'var(--font-pixel)'],
+      // ruling R35: the heading of the problems is pixel, the planner's error is a sentence of the server's, so it is Inter
+      ['.banner-integrity, .banner-heading.error', 'font-family', 'var(--font-pixel)'],
+      ['.plan-banner > .error', 'font-family', 'var(--font-ui)'],
       ['.banner-integrity li', 'color', '#ffaaaa'], ['.banner-integrity li', 'font-family', 'var(--font-ui)'],
       ['.plan-banner .banner-heading', 'font', '600 14px/1.45 var(--font-pixel)'],
       ['.what-changed h4', 'font', '600 14px/1.45 var(--font-pixel)'], ['.what-changed h4', 'color', 'var(--ink-title)'],
@@ -627,6 +631,8 @@ describe('the Machine GUI chrome', () => {
       ['button.banner-chip', 'min-height', '28px'], ['button.banner-chip', 'padding', '0 10px 0 4px'],
       ['button.banner-chip', 'font-size', '13px'], ['button.banner-chip', 'display', 'inline-flex'],
     ]);
+    // the red of all three is one rule, which sets no font: each part has its own (ruling R35)
+    expect(declared('.plan-banner > .error, .banner-integrity, .banner-heading.error', 'font-family')).toBeUndefined();
     // what the plan costs sits on the page, in its ink, with figures that line up
     expectDeclared([
       ['.plan-cost', 'color', 'var(--ink)'], ['.plan-cost', 'font-family', 'var(--font-ui)'], ['.plan-cost', 'font-size', '14px'],
@@ -774,6 +780,8 @@ describe('the Machine GUI settings column', () => {
       [SETTINGS_SUMMARY, 'font-size', '16px'],
       [`${SETTINGS_SUMMARY} > .muted`, 'background', 'var(--screen)'], [`${SETTINGS_SUMMARY} > .muted`, 'color', 'var(--screen-text)'],
       [`${SETTINGS_SUMMARY} > .muted`, 'font', '13px/1.5 var(--font-pixel)'], [`${SETTINGS_SUMMARY} > .muted`, 'margin-left', 'auto'],
+      // ruling R37: the readout keeps its size, and the title beside it wraps (drawer.spec.ts measures a title that does)
+      [`${SETTINGS_SUMMARY} > .muted`, 'flex', 'none'], [`${SETTINGS_SUMMARY} > .muted`, 'white-space', 'nowrap'],
     ]);
     // the readout has the specificity of the rule that gives the summary's `.muted` the button's own text colour, so it must come after
     expect(position(`${SETTINGS_SUMMARY} > .muted`)).toBeGreaterThan(position('details.settings-section > summary .muted'));
@@ -1120,7 +1128,8 @@ describe('the Machine GUI Flow diagram', () => {
   it('keeps a pipe its width under the pointer, and draws one from a missing source as a solid red casing', () => {
     // pointed at, only the colour of the casing changes: a wider casing would overshoot its flange (the old rule widened it)
     expect(declarations(ruleBody('.flow-edge:hover .flow-edge-line'))).toEqual([['stroke', '#2e2e2e']]);
-    expect(declarations(ruleBody('.flow-edge.missing .flow-edge-line'))).toEqual([['stroke', '#aa0000']]);
+    // ruling R34: nothing moves in it, so its casing is all there is to see: a red that reads 3.79:1 on the well (#aa0000 read 1.54:1)
+    expect(declarations(ruleBody('.flow-edge.missing .flow-edge-line'))).toEqual([['stroke', '#ff5555']]);
     // the base rule is the only one that sizes a casing or dashes it, in any state
     const casings = blocks.filter((b) => b.prelude.includes(CASING) && b.prelude !== CASING);
     for (const block of casings) expect(block.inner, block.prelude).not.toMatch(/stroke-width|dasharray/);
@@ -1128,10 +1137,11 @@ describe('the Machine GUI Flow diagram', () => {
     expect(position('.flow-edge.missing .flow-edge-line')).toBeGreaterThan(position('.flow-edge:hover .flow-edge-line'));
   });
 
-  it('heads each arrow in the colour of what it carries, yellow when lit and a light red from a missing source', () => {
+  it('heads each arrow in the colour of what it carries, yellow when lit and white on the red pipe of a missing source', () => {
     expectDeclared([
       ['.flow-arrow-head', 'fill', 'var(--item)'], ['.flow-arrow-head-fluid', 'fill', 'var(--fluid)'],
-      ['.flow-arrow-head-hl', 'fill', 'var(--accent)'], ['.flow-arrow-head-missing', 'fill', '#ff5555'],
+      // ruling R34 (over R20): white, which reads on the lighter red of its casing
+      ['.flow-arrow-head-hl', 'fill', 'var(--accent)'], ['.flow-arrow-head-missing', 'fill', '#ffffff'],
     ]);
     // ruling R20: a missing source's head is not its casing's red, so the arrow's direction shows on it
     expect(declared('.flow-arrow-head-missing', 'fill')).not.toBe(declared('.flow-edge.missing .flow-edge-line', 'stroke'));
@@ -1369,8 +1379,13 @@ describe('the Machine GUI Connections tab', () => {
   });
 
   it('heads each pipe in the colour of what it carries, or of a hookup\'s line', () => {
-    // the marker sits on the contents (on the casing where nothing moves), and its head takes that element's stroke
-    expect(declarations(ruleBody('.conn-arrow-head'))).toEqual([['fill', 'context-stroke']]);
+    // the marker sits on the contents (on the casing where nothing moves), and its head takes that element's stroke where the browser
+    // knows `context-stroke`; ruling R32: a fallback comes first, which a browser without it (WebKit) keeps, so its heads are the items'
+    // yellow and not black. Two rules, as the build's minifier keeps only the last `fill` of one (pipes.spec.ts asks the built page).
+    const SUPPORTS = '@supports (fill: context-stroke)';
+    expect(declarations(ruleBody('.conn-arrow-head'))).toEqual([['fill', 'var(--item)']]);
+    expect(inQuery(SUPPORTS, '.conn-arrow-head')).toEqual([['fill', 'context-stroke']]);
+    expect(position(SUPPORTS)).toBeGreaterThan(position('.conn-arrow-head'));
   });
 
   it('rims a pointed-at link in white and a picked one in yellow that blinks once, 1.5px round a casing that keeps its width', () => {
@@ -1974,16 +1989,17 @@ describe('the Machine GUI World page', () => {
 });
 
 describe('the Machine GUI projector panel', () => {
-  it('is a settings panel with 14px above it, and its body a column', () => {
+  it('is a settings panel the column spaces as every other, and its body a column', () => {
     expectDeclared([
-      ['.projector-panel', 'margin-top', '14px'],
       ['.projector-body', 'display', 'flex'], ['.projector-body', 'flex-direction', 'column'], ['.projector-body', 'gap', '10px'],
       ['.command-row', 'display', 'flex'], ['.command-row', 'gap', '8px'], ['.command-row', 'align-items', 'flex-start'],
       ['.projector-form', 'align-items', 'flex-end'], ['.projector-form > .field', 'flex', '1'], ['.projector-form > .field', 'min-width', '0'],
       ['.projector-commands', 'margin', '0'], ['.projector-commands', 'padding-left', '18px'],
     ]);
-    // the panel is the settings panel of the class it carries (its summary is that class's button): this rule adds no surface of its own
-    expect(declarations(ruleBody('.projector-panel')).map(([name]) => name)).toEqual(['margin-top']);
+    // the panel is the settings panel of the class it carries (its summary is that class's button), with the 12px gap of the column
+    // above it like every section: ruling R38 took its own 14px margin away, which the gap added to (26px)
+    expect(blocks.filter((b) => b.prelude.split(', ').includes('.projector-panel')).map((b) => b.prelude)).toEqual([]);
+    expect(declared('.settings-panel', 'gap')).toBe('12px');
     expect(inkGroup('.settings-section')).toBe(inkGroup('.tab-panel'));
     // `.row` aligns its items in the middle: the form's alignment comes after it
     expect(position('.projector-form')).toBeGreaterThan(position('.row'));

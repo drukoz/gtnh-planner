@@ -219,12 +219,13 @@ textarea { resize: vertical; width: 100%; }
 /*
  * The summary of a settings section or of a disclosure is a full-width Minecraft button with a pixel caret that turns down
  * when it is open. These two selectors only: a global `summary` rule would also hit the two inline disclosures of Materials
- * and every storage row.
+ * and every storage row. Its height is a minimum: a title that wraps in a narrow column grows the button, its lines 1.25 apart
+ * and 4px clear of the bevel above and below, instead of spilling over it (ruling R37); on one line it is 36px.
  */
 details.settings-section > summary, details.disclosure > summary {
-  display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 12px; list-style: none;
+  display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 4px 12px; list-style: none;
   border: 2px solid var(--outline); background: var(--btn); box-shadow: var(--bevel-btn); color: #ffffff;
-  font: 15px/1 var(--font-pixel); text-shadow: 2px 2px 0 #3f3f3f; cursor: pointer;
+  font: 15px/1.25 var(--font-pixel); text-shadow: 2px 2px 0 #3f3f3f; cursor: pointer;
   transition: background-color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
 }
 details.settings-section > summary::-webkit-details-marker, details.disclosure > summary::-webkit-details-marker { display: none; }
@@ -246,11 +247,11 @@ details.settings-section > summary .muted { color: inherit; }
 /* The keyboard focus: a 3px ring that touches the control, whose own dark border keeps it readable on the light panels. */
 :focus-visible { outline: 3px solid var(--accent); outline-offset: 0; }
 /* A link has no dark edge of its own for that ring to touch, and neither has the summary of an inline disclosure, a tick (a
-   dark well with a bevel but no border) or a slider (a track inside a box with no border, and a transparent one), and yellow on
-   the light grey of a panel measures 1.6:1: their ring takes the focus ink of the surface they are on (yellow on the stone and in
-   a dark box, near black on a panel). Same specificity as the ring above, so it recolours it by coming after; the width and the
-   offset stay the ring's. */
-:where(a, button.link, summary, input[type=checkbox], input[type=radio], input[type=range]):focus-visible { outline-color: var(--ink-focus); }
+   dark well with a bevel but no border), a slider (a track inside a box with no border, and a transparent one) or a file input
+   (no field box: round its file name the ring lies on the panel, ruling R33), and yellow on the light grey of a panel measures
+   1.6:1: their ring takes the focus ink of the surface they are on (yellow on the stone and in a dark box, near black on a panel).
+   Same specificity as the ring above, so it recolours it by coming after; the width and the offset stay the ring's. */
+:where(a, button.link, summary, input[type=checkbox], input[type=radio], input[type=range], input[type=file]):focus-visible { outline-color: var(--ink-focus); }
 
 .field { display: flex; flex-direction: column; gap: 4px; }
 .field > span { font-size: 0.9rem; color: var(--ink-muted); }
@@ -351,9 +352,9 @@ details.settings-section > summary .muted { color: inherit; }
 .connection.live { color: #55ff55; }
 .connection.live::before { background: #55ff55; animation: breathe 2s ease-in-out 2; }
 
-/* The plan banner is a chat box too (design spec §6). A problem is red in the pixel font, with its items in a paler red; anything
-   else it says (another warning, a hint, what unlocks) is yellow, and the busy line grey. Hints and problems no longer share
-   one look. */
+/* The plan banner is a chat box too (design spec §6). A problem is red, its heading in the pixel font, with its items in a paler red;
+   the planner's error is red too, a sentence and so in Inter (ruling R35: the pixel font is never for paragraphs). Anything else it
+   says (another warning, a hint, what unlocks) is yellow, and the busy line grey. Hints and problems no longer share one look. */
 .plan-banner {
   margin-bottom: var(--gap); padding: 10px 14px; color: var(--ink-title);
   background: var(--chat); border: 2px solid var(--outline); border-radius: 0;
@@ -364,7 +365,9 @@ details.settings-section > summary .muted { color: inherit; }
 .plan-banner p { margin: 0 0 4px; }
 .plan-banner ul { margin: 0 0 4px; padding-left: 20px; }
 .plan-banner .banner-heading { margin-top: 6px; font: 600 14px/1.45 var(--font-pixel); }
-.plan-banner > .error, .banner-integrity, .banner-heading.error { color: var(--ink-error); font-family: var(--font-pixel); }
+.plan-banner > .error, .banner-integrity, .banner-heading.error { color: var(--ink-error); }
+.banner-integrity, .banner-heading.error { font-family: var(--font-pixel); }
+.plan-banner > .error { font-family: var(--font-ui); }
 .banner-integrity li { color: #ffaaaa; font-family: var(--font-ui); }
 .plan-banner .banner-heading button { margin-left: 6px; }
 .banner-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 6px; }
@@ -518,7 +521,7 @@ details.settings-section[open]::details-content { block-size: auto; }
 details.settings-section > :not(summary) { margin-top: 8px; }
 /* The summary is a button (the controls above), so its text keeps the button's white: the title ink is dark and would fail on the
    button face. Its count is a green readout, since the muted grey of a `.muted` is as faint on the button face. The readout stays on
-   one line; it is the title that gives way and wraps (the bar is 36px, and two lines of the title fit in it). */
+   one line; it is the title that gives way and wraps, and the button grows to hold its lines (ruling R37). */
 details.settings-section > summary { font-size: 16px; }
 details.settings-section > summary > h3 { min-width: 0; overflow-wrap: anywhere; }
 details.settings-section > summary > .muted {
@@ -688,7 +691,8 @@ button.avoid-chip-remove { width: 24px; height: 24px; min-height: 0; padding: 0;
  * bends with mitred corners (no round cap or gap shows at a port or a corner), and the contents on the same path: 6px dashes 16px
  * apart that travel from the output toward the input (the path runs that way), one cycle per `--pipe-dur` (pipe-motion.ts). The
  * contents never take the pointer. Pointed at, the casing lightens; it never grows, which would overshoot the flange. From a
- * missing source the casing is solid red (a dashed one could end in a gap at the flange), with nothing moving in it.
+ * missing source the casing is solid red (a dashed one could end in a gap at the flange), with nothing moving in it: the casing is
+ * all there is to see of that pipe, so its red is light enough to read at 3:1 on the well (ruling R34; #aa0000 read 1.54:1).
  */
 .flow-edge-hit { fill: none; stroke: transparent; stroke-width: 10; }
 .flow-edge-line { fill: none; stroke: var(--flow-edge); stroke-width: 6; stroke-linejoin: miter; stroke-linecap: butt; }
@@ -698,13 +702,13 @@ button.avoid-chip-remove { width: 24px; height: 24px; min-height: 0; padding: 0;
 }
 .flow-edge.fluid .flow-edge-flow { stroke: var(--fluid); }
 .flow-edge:hover .flow-edge-line { stroke: #2e2e2e; }
-.flow-edge.missing .flow-edge-line { stroke: #aa0000; }
-/* The head of an arrow is in the colour of what it carries; from a missing source, a lighter red than its casing, so the arrow's
-   direction shows (ruling R20). */
+.flow-edge.missing .flow-edge-line { stroke: #ff5555; }
+/* The head of an arrow is in the colour of what it carries; from a missing source, white, which reads on that red casing, so the
+   arrow's direction shows (ruling R34, over R20's red head). */
 .flow-arrow-head { fill: var(--item); }
 .flow-arrow-head-fluid { fill: var(--fluid); }
 .flow-arrow-head-hl { fill: var(--accent); }
-.flow-arrow-head-missing { fill: #ff5555; }
+.flow-arrow-head-missing { fill: #ffffff; }
 .flow-edge-label {
   fill: #ffffff; font-size: 11px; paint-order: stroke; stroke: var(--well); stroke-width: 3px; stroke-linejoin: round;
 }
@@ -1073,8 +1077,14 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
 .conn-edge-line { stroke: var(--pipe-casing, #1b1b1b); stroke-width: 6; stroke-linecap: butt; }
 .conn-edge-flow { stroke-width: 2.5; stroke-dasharray: 6 10; animation: pipe-flow var(--pipe-dur, 0.8s) linear infinite; }
 .conn-edge-flow:not([stroke]) { stroke: var(--conn-link); }
-/* the marker sits on the contents (on the casing where nothing moves), and its head takes that element's stroke */
-.conn-arrow-head { fill: context-stroke; }
+/* the marker sits on the contents (on the casing where nothing moves), and its head takes that element's stroke where the browser knows
+   `context-stroke`. WebKit does not, and would fill it black, which vanishes on the dark casing: it keeps the fallback, the items' yellow
+   (ruling R32). The fallback is a rule of its own and `context-stroke` an @supports rule after it, not two `fill`s in one rule: the
+   build's CSS minifier keeps only the last of those (pipes.spec.ts asks the built page). */
+.conn-arrow-head { fill: var(--item); }
+@supports (fill: context-stroke) {
+  .conn-arrow-head { fill: context-stroke; }
+}
 .conn-via-hand .conn-edge-line { stroke: transparent; }
 .conn-via-hand .conn-edge-flow { stroke-dasharray: 8 3 2 3; }
 .conn-via-attached .conn-edge-line, .conn-via-hookup .conn-edge-line { stroke: var(--conn-link); stroke-width: 2; }
@@ -1262,12 +1272,12 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
 }
 
 /*
- * The projector panel (design spec §6 and §8): the settings panel of the class it carries, 14px under the settings above it, with a
- * body that is a column. A command is a readout on a screen in monospace, not the pixel font: a token has an l, a 1 and an I, which the
- * pixel font draws alike. One click selects the whole command (`user-select: all`), and a command is never made unselectable or
- * transformed: the Copy button selects that text and copies it as written.
+ * The projector panel (design spec §6 and §8): the settings panel of the class it carries, spaced from the settings above it by the
+ * column's 12px gap like every section (ruling R38: a margin of its own added to the gap), with a body that is a column. A command is a
+ * readout on a screen in monospace, not the pixel font: a token has an l, a 1 and an I, which the pixel font draws alike. One click
+ * selects the whole command (`user-select: all`), and a command is never made unselectable or transformed: the Copy button selects that
+ * text and copies it as written.
  */
-.projector-panel { margin-top: 14px; }
 .projector-body { display: flex; flex-direction: column; gap: 10px; }
 /* The form's button sits on the bottom edge of the field's box (its label is above it); `.row` centres, so this comes after it. */
 .projector-form { align-items: flex-end; }

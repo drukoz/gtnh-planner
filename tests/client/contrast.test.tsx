@@ -129,6 +129,22 @@ describe('contrast of the Connections tab', () => {
   });
 });
 
+// A Flow pipe from a missing source (ruling R34, over R20): nothing moves in it, so its casing is all there is to see of it, and as a
+// graphic it reads at 3:1 on the well; its arrow head is white, which reads on that red (and on the well beside it).
+describe('contrast of a Flow pipe from a missing source', () => {
+  it('reads its red casing at 3:1 on the well, where the panel\'s red read 1.54:1', () => {
+    expect(ratio('#ff5555', WELL)).toBeGreaterThanOrEqual(GRAPHICS);
+    expect(ratio('#aa0000', WELL)).toBeLessThan(GRAPHICS);
+  });
+
+  it('reads its white head at 3:1 on the casing and on the well', () => {
+    expect(ratio('#ffffff', '#ff5555')).toBeGreaterThanOrEqual(GRAPHICS);
+    expect(ratio('#ffffff', WELL)).toBeGreaterThanOrEqual(GRAPHICS);
+    // the head of R20, in the casing's own red now, would not show on it
+    expect(ratio('#ff5555', '#ff5555')).toBeLessThan(GRAPHICS);
+  });
+});
+
 // The Map tab (restyle plan Phase 1 Task 8, design spec §6): the fits badge's four colours on the badge's screen, the NEI tooltip's
 // two greys of text on its box (94% of #100010 over the lightest a map can be, white), the rows of the pin and note lists on the panel
 // and under the pointer (the panel's grey under a 35% white veil), and the picked row (yellow and the screen's grey on a screen).

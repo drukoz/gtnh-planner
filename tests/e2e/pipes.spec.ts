@@ -156,6 +156,27 @@ test('connections pipes move', async ({ page }) => {
   expect(after, 'the dashes have moved along the pipe in a quarter of a second').not.toBe(before);
 });
 
+// Ruling R32: a Connections arrow head takes the colour of its pipe with `context-stroke`, which WebKit does not know: it would fill the
+// head black, lost on the dark casing, so a rule before gives it the items' yellow. The build's CSS minifier keeps only the last `fill` of
+// one rule (it dropped the fallback of `fill: var(--item); fill: context-stroke`), so `context-stroke` is an @supports rule of its own:
+// this asks the stylesheet the built page loaded that both rules are there.
+test('the built stylesheet keeps a fallback colour for the Connections arrow heads', async ({ page }) => {
+  await login(page);
+  await page.goto('/');
+  const heads = await page.evaluate(() => {
+    const found: string[] = [];
+    const walk = (rules: CSSRuleList, within: string): void => {
+      for (const rule of rules) {
+        if (rule instanceof CSSStyleRule && rule.selectorText === '.conn-arrow-head') found.push(`${within}fill: ${rule.style.getPropertyValue('fill')}`);
+        else if (rule instanceof CSSSupportsRule) walk(rule.cssRules, `@supports ${rule.conditionText.replace(/\s+/g, '')} `);   // as minified or not
+      }
+    };
+    for (const sheet of document.styleSheets) walk(sheet.cssRules, '');
+    return found;
+  });
+  expect(heads).toEqual(['fill: var(--item)', '@supports (fill:context-stroke) fill: context-stroke']);
+});
+
 // Ruling R31 (WCAG 2.2.2 Pause, Stop, Hide): the pipes move for as long as a diagram is shown, so the toolbars of both diagrams have a
 // button that stops them where they are. It is one setting for this browser: it holds when the page is loaded again and on the other
 // diagram, until Play pipes.

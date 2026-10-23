@@ -5,7 +5,7 @@
 // gives the focus back to the Settings button, and a window that grows past 900 px closes it. The Settings button is found by its
 // exact name: "Close settings" has it in its own.
 
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 import { login, setName, createProject } from './helpers.ts';
 
 /** What the page behind the drawer is made of: inert while the drawer is open. */
@@ -208,6 +208,52 @@ test('the avoid box\'s list, and a key something inside the drawer has handled, 
   await page.keyboard.press('Escape');
   await expect(settings).toBeHidden();
   await expect(toggle).toBeFocused();
+});
+
+// Ruling R37: in a column 300 px wide or so, the title of a section can wrap beside its readout ("Reachable dimensions"). The button
+// then grows to hold its lines, instead of spilling them over its bevel; a title on one line keeps the button at 36 px.
+test('a settings title that wraps grows its button and stays inside it, in the column and in the drawer', async ({ page }) => {
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Wrapped titles', { target: 't:circuit@0', amount: 30, per: 'min', tier: 1 });   // a plan: the readout shows
+  const settings = page.locator('aside[aria-label="Project settings"]');
+  const dims = settings.locator('details.settings-section > summary').filter({ hasText: 'Reachable dimensions' });
+  const projector = settings.locator('details.settings-section > summary').filter({ hasText: 'In-game projector' });
+  /** A summary's face less its 2 px edge and 2 px bevel, its title's box and line height, and its readout's box. */
+  const measure = (summary: Locator) => summary.evaluate((el) => {
+    const box = (of: Element): { top: number; bottom: number; left: number; right: number; height: number } => {
+      const { top, bottom, left, right, height } = of.getBoundingClientRect();
+      return { top, bottom, left, right, height };
+    };
+    const face = box(el);
+    const inset = 2 + 2;
+    const title = el.querySelector('h3');
+    const readout = el.querySelector('.muted');
+    return {
+      height: face.height,
+      inside: { top: face.top + inset, bottom: face.bottom - inset, left: face.left + inset, right: face.right - inset },
+      title: title === null ? null : { ...box(title), line: Number.parseFloat(getComputedStyle(title).lineHeight) },
+      readout: readout === null ? null : box(readout),
+    };
+  });
+
+  for (const [width, height, drawer] of [[1280, 720, false], [800, 900, true]] as const) {
+    await page.setViewportSize({ width, height });
+    if (drawer) await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await expect(dims).toBeVisible();
+    await expect(dims.locator('.muted')).toBeVisible();
+    const drawn = await measure(dims);
+    if (drawn.title === null || drawn.readout === null) throw new Error('the summary has no title or no readout');
+    expect(Math.round(drawn.title.height / drawn.title.line), `the title wraps at ${width} px`).toBeGreaterThanOrEqual(2);
+    expect(drawn.height, `the button grows at ${width} px`).toBeGreaterThan(36);
+    // every line of the title, and the readout beside it, is inside the face: clear of its edge and its bevel
+    for (const part of [drawn.title, drawn.readout]) {
+      expect(part.top, `at ${width} px`).toBeGreaterThanOrEqual(drawn.inside.top);
+      expect(part.bottom, `at ${width} px`).toBeLessThanOrEqual(drawn.inside.bottom);
+      expect(part.right, `at ${width} px`).toBeLessThanOrEqual(drawn.inside.right);
+    }
+    // a title on one line keeps the button's 36 px
+    expect((await measure(projector)).height, `at ${width} px`).toBe(36);
+  }
 });
 
 test('wide screens keep the settings beside the views and show no button', async ({ page }) => {

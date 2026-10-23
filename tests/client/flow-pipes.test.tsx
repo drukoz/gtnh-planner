@@ -44,7 +44,7 @@ describe('flow diagram: pipes (design spec §7)', () => {
     expect(html).toContain('--pipe-dur:1s');
   });
 
-  it('gives an arrow from a missing source a red head on its casing and nothing moving in it', () => {
+  it('gives an arrow from a missing source a head of its own (white on its red casing, ruling R34) and nothing moving in it', () => {
     const html = draw(edge, null, true);
     expect(html).toMatch(/class="flow-edge item missing"/);
     expect(html).toContain('marker-end="url(#flow-arrow-missing)"');

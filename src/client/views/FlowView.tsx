@@ -242,11 +242,12 @@ export function FlowNodeShape(props: { node: PlacedNode; selected?: boolean; set
 }
 
 /**
- * One arrow, drawn as a pipe (design spec §7): a 10 px transparent path to hover and click, the casing with its head (red
- * from a stub of what is missing), the good moving inside it from the output toward the input (`fluid` or `item`, at the
- * speed of its rate: `--pipe-dur` from `pipeSeconds`; nothing moves from a missing source), its tooltip "name · rate ·
- * From → To", and the rate as its label where a port has other arrows. Under a focus the group alone is lit (`hl`) or
- * dimmed (`dim`). A lit arrow writes "name · rate" in its tag above the boxes instead (`EdgeTagShape`).
+ * One arrow, drawn as a pipe (design spec §7): a 10 px transparent path to hover and click, the casing with its head (a
+ * red casing with a white head from a stub of what is missing, ruling R34), the good moving inside it from the output
+ * toward the input (`fluid` or `item`, at the speed of its rate: `--pipe-dur` from `pipeSeconds`; nothing moves from a
+ * missing source), its tooltip "name · rate · From → To", and the rate as its label where a port has other arrows. Under a
+ * focus the group alone is lit (`hl`) or dimmed (`dim`). A lit arrow writes "name · rate" in its tag above the boxes
+ * instead (`EdgeTagShape`).
  */
 export function FlowEdgeShape(props: { edge: PlacedEdge; lit: boolean | null; missing: boolean }): ReactElement | null {
   const { edge, lit, missing } = props;
