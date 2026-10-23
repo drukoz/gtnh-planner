@@ -34,7 +34,11 @@ import { yieldToEventLoop } from './lp.ts';
 import { sig9 } from './round.ts';
 import { deadEnds, deadEndsAlone, makeableGoods, makeableWith, standalonePrices } from './solve.ts';
 
-/** Machine pricings kept per pack (`itemPrices`), the least recently used dropped first. */
+/**
+ * The most entries each of the two per-pack pricing memos keeps, the least recently used dropped first: the price
+ * graphs (`priceGraph`, where a context with cost overrides also keeps the one without them in use) and the price
+ * tables (`itemPrices`).
+ */
 export const MACHINE_PRICE_MEMO_SIZE = 8;
 /**
  * Block ids of structure cells nothing is placed in: air, and the fluids an exported structure holds where the machine or
@@ -96,7 +100,7 @@ export function machinePricingKey(settings: PlanSettings, ctx: PlanContext): str
 }
 
 /**
- * Why `key`, priced Infinity on `graph` (null: no graph was walked) and by `orePrice`, has no price: `no-recipe` when
+ * Why `key`, priced Infinity on `graph` and by `orePrice`, has no price: `no-recipe` when
  * no recipe of the pack makes it, else a pricing gap when the ore blocks among its dead ends that the group can mine
  * (`mined`) would let it be made — its chain is available, only its price is missing (controller ruling OQ5 b; such a
  * key `orePrice` usually prices, as it did the Advanced Lathe and Advanced Macerator of the 2.9 export at MV, which
@@ -113,10 +117,9 @@ export function machinePricingKey(settings: PlanSettings, ctx: PlanContext): str
  * was another good. A walk stopped at its recipe cap left goods unexpanded that would look out of reach, so there every
  * such key is a pricing gap, never a machine that cannot be built.
  */
-function gapOf(pack: Pack, graph: CandidateGraph | null, key: StuffKey, mined: (key: StuffKey) => boolean): PriceGap {
+function gapOf(pack: Pack, graph: CandidateGraph, key: StuffKey, mined: (key: StuffKey) => boolean): PriceGap {
   if ((pack.producers.get(key) ?? []).length === 0) return { kind: 'no-recipe' };
-  if (graph?.truncated === true) return { kind: 'gap' };
-  if (graph === null) return { kind: 'unavailable', item: key };
+  if (graph.truncated === true) return { kind: 'gap' };
   const rank = (end: StuffKey): number => (mined(end) ? 3 : graph.goods.get(end)?.leafClass === 'unavailable' ? 0 : graph.blocked.has(end) ? 1 : 2);
   const first = (ends: readonly StuffKey[]): StuffKey | undefined => [...ends].sort((a, b) => rank(a) - rank(b) || byString(a, b))[0];
   const ends = deadEnds(graph, key);
@@ -259,12 +262,14 @@ async function orePrice(pack: Pack, entry: PriceGraph, graph: CandidateGraph, ke
  * their price — the analysis counts no machines: free cobblestone and hammers would price them at 0); stop items are
  * leaves at their override or price. Any other key costs the least raw material that makes one unit of it on its own
  * (`standalonePrices`: its byproducts sunk) on the context's price graph (`priceGraph`), or on its own walk when the
- * price graph never reached it, or, for a part only ore processing makes, what `orePrice` gives. Each price is worked
- * out once per context and key, so it never depends on the other keys asked: the cost analysis of one candidate graph
- * per key set that this replaced (`analyzeCosts`, which shares a recipe's cost among its outputs by what else the graph
- * holds) priced the Advanced Distillery at HV at 33.39 alone, 34.59 beside the Large Chemical Reactor and 42.40 beside
- * it and the Distillation Tower (all 42.59 now), and 16x Redstone Alloy Cable at MV at 12.38 alone and 6.48 beside every
- * cable (13.05 now).
+ * price graph never reached it — with cost overrides united with its own walk in the same context without them, as the
+ * price graph is, so there too an override that makes a good cheaper never drops the producers the walk without it
+ * keeps — or, for a part only ore processing makes, what `orePrice` gives. Each price is worked out once per context
+ * and key, so it never depends on the other keys asked: the cost analysis of one candidate graph per key set that this
+ * replaced (`analyzeCosts`, which shares a recipe's cost among its outputs by what else the graph holds) priced the
+ * Advanced Distillery at HV at 33.39 alone, 34.59 beside the Large Chemical Reactor and 42.40 beside it and the
+ * Distillation Tower (all 42.59 now), and 16x Redstone Alloy Cable at MV at 12.38 alone and 6.48 beside every cable
+ * (13.05 now).
  */
 async function computePrices(pack: Pack, settings: PlanSettings, ctx: PlanContext, keys: readonly StuffKey[]): Promise<ItemPrices> {
   const entry = await priceGraph(pack, settings, ctx);
@@ -286,7 +291,12 @@ async function computePrices(pack: Pack, settings: PlanSettings, ctx: PlanContex
     const price = graph.goods.has(key)
       ? (batch !== null && makeable.has(key) ? batch.then((m) => withOre(key, m.get(key) ?? Infinity, graph)) : withOre(key, Infinity, graph))
       : (async () => {
-        const own = buildCandidates(pack, s, basis.env, leaf, [key]);
+        let own = buildCandidates(pack, s, basis.env, leaf, [key]);
+        if (Object.keys(s.costOverrides).length > 0) {
+          // united with the key's own walk in the same context without them, as `priceGraph` unites the price graphs
+          const plain = await priceGraph(pack, { ...settings, costOverrides: {} }, ctx);
+          own = unitedGraph(own, buildCandidates(pack, plain.s, plain.basis.env, plain.leaf, [key]), leaf);
+        }
         return withOre(key, (await standalonePrices(own, [key])).get(key) ?? Infinity, own);
       })();
     priced.set(key, price);

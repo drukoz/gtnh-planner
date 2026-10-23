@@ -566,19 +566,22 @@ function splitPack(machines: boolean): Pack {
 
 /**
  * Mini-GT where Part P is joined in an assembler from the four quarters one centrifuge run of a Tin Ingot (1) makes, or
- * carved from three Oak Wood logs, and machine 174 (LV) is crafted from it.
+ * carved from three Oak Wood logs; with `withMachine`, machine 174 (LV) is crafted from it (without it no price key
+ * needs Part P, so no price graph reaches it).
  */
-function quarterPack(): Pack {
+function quarterPack(withMachine: boolean): Pack {
   const spec = structuredClone(MINI_GT);
   const quarters = [1, 2, 3, 4].map((i) => `t:quarter_${i}@0`);
   spec.items?.push(...quarters.map((key, i) => ({ key, name: `Quarter ${i + 1}` })), { key: 't:part_p@0', name: 'Part P' });
-  spec.machines?.push({ mteId: 174, name: 'Part P Machine', maps: [], tier: 1 });
   spec.recipes?.push(
     { id: 'quarter', map: 'gt.recipe.centrifuge', in: [['t:tin_ingot@0', 1]], out: quarters.map((key): [string, number] => [key, 1]), eut: 8, dur: 100 },
     { id: 'join', map: 'gt.recipe.assembler', in: quarters.map((key): [string, number] => [key, 1]), out: [['t:part_p@0', 1]], eut: 16, dur: 100 },
     { id: 'carve', map: 'crafting', in: [['minecraft:log@0', 3]], out: [['t:part_p@0', 1]] },
-    { id: 'make-174', map: 'crafting', in: [['t:part_p@0', 1]], out: [['machine:174@0', 1]] },
   );
+  if (withMachine) {
+    spec.machines?.push({ mteId: 174, name: 'Part P Machine', maps: [], tier: 1 });
+    spec.recipes?.push({ id: 'make-174', map: 'crafting', in: [['t:part_p@0', 1]], out: [['machine:174@0', 1]] });
+  }
   return packFromSpec(spec);
 }
 
@@ -632,9 +635,20 @@ describe('prices independent of the keys asked (fix wave 3 (D))', () => {
     // output, so joining the quarters is estimated at 4 against carving at 3 logs. With logs at 0.4 (carving 1.2) it
     // dropped the join, and Part P Machine rose from 1 to 1.2 when the logs got cheaper. A context with cost overrides
     // also keeps the producers of the same context without them.
-    const pack = quarterPack();
+    const pack = quarterPack(true);
     const at = async (log: number): Promise<number | null> => machineBuildCost(
       pack, await itemPrices(pack, { ...lv, costOverrides: { 'minecraft:log@0': log } }, ctx, ['machine:174@0']), machine(pack, 174));
+    expect([await at(1), await at(0.4), await at(0.2)]).toEqual([1, 1, 0.6]);
+  });
+
+  it('never prices a key the price graph never reached above its price without the override either', async () => {
+    // Without machine 174 no price graph reaches Part P, so it is priced on its own walk, which at logs 0.4 dropped the
+    // join as the price graph's walk did, and Part P rose from 1 to 1.2 when the logs got cheaper. With cost overrides
+    // that walk is united with the key's own walk in the same context without them, as a price graph is with the one
+    // without them.
+    const pack = quarterPack(false);
+    const at = async (log: number): Promise<number> =>
+      (await itemPrices(pack, { ...lv, costOverrides: { 'minecraft:log@0': log } }, ctx, ['t:part_p@0'])).cost('t:part_p@0');
     expect([await at(1), await at(0.4), await at(0.2)]).toEqual([1, 1, 0.6]);
   });
 });
