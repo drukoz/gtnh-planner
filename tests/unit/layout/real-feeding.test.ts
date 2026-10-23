@@ -200,8 +200,8 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('the feeding checker on the rese
     // Research §4.1 items 1, 3 and 4 are gone on today's main: fix/feeding whitelists every Item Extractor Chip with what its
     // machine makes (the input chest's: its supply), lists every item the line sends out on the output chest's Item
     // Terminator Chips, lays no extractor on an input bus's pipe, and sets Multi Stack Input Off where a machine takes two
-    // kinds or more, so R5a, R5d, R6, R5c and R2 have nothing to find. What stops each line is research C19 as Task 8's ruling
-    // reads Project Red (E6): an empty machine with Multi Stack Input Off is credited a stack per empty slot, so a kind the input
+    // kinds or more, so R5a, R5d, R6, R5c and R2 have nothing to find. What stops each line is research C19 as the plan's E6
+    // reads Project Red: an empty machine with Multi Stack Input Off is credited a stack per empty slot, so a kind the input
     // chest sends (a stack an act, from stock) overshoots it; the overshoot circles its pipe and stays counted on its way there,
     // and the responder then answers for the other kinds with no room: they never come (until a restart). So every machine fed
     // two kinds or more, one of them from the input chest, starves of one kind while another circles.

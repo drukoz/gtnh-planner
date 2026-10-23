@@ -46,7 +46,7 @@ export interface SimEnv {
   loadedAt: number;
   /** The line's fluid pools (rule 7a). */
   readonly fluids: FluidPools;
-  /** The run's options (ruling R-12). */
+  /** The run's options the models read: its length and restart tick, AE2's co-processors and fluid stock, and `feed_slow`'s tolerance. */
   readonly opts: { ticks: number; restartAt: number; ae2Coprocessors: number; ae2FluidStock: boolean; slowTolerance: number };
   /**
    * Where a steam machine's outputs go when the player takes them out by hand: the AE2 model sets it in AE2 mode (Task 9
@@ -253,7 +253,8 @@ export class BasicMachine implements SimInv, SimEntity, Preloadable, FluidWaiter
   }
 
   /**
-   * Only the input slots count (`MTEBasicMachine.isIOSlot`, ruling R-16), and an item AE2's blocking mode ignores does not
+   * Only the input slots count (`MTEBasicMachine.isIOSlot`, research §2.3: an output waiting in its slot does not hold up a
+   * push), and an item AE2's blocking mode ignores does not
    * (`model.ignoredByBlocking`: the pack's list, GT's lenses among them).
    */
   countsAsEmpty(): boolean {
@@ -325,7 +326,10 @@ export class BasicMachine implements SimInv, SimEntity, Preloadable, FluidWaiter
     return this.nextTick(t);
   }
 
-  /** The next tick it must run (rule 8, ruling R-11): its run's last tick or its next 600-tick check, its covers' next act, the end of a hold. */
+  /**
+   * The next tick it must run (rule 8, with every periodic act it owns, so a scheduled run equals an exhaustive one): its run's
+   * last tick or its next 600-tick check, its covers' next act, the end of a hold.
+   */
   private nextTick(t: number): number {
     if (this.autoOutput) return t + 1;
     const env = this.env;

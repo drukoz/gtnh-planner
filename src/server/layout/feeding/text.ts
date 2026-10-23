@@ -8,7 +8,7 @@ import { joinNames } from '../../../shared/layout/format.ts';
 /**
  * Whole numbers with thousands separators, anything else with two decimals: 1286400 gives "1,286,400" and 0.5 gives
  * "0.50". A copy of the private `amountText` in `src/server/layout/modes/mode.ts`, which the checker may not import
- * (ruling R-5: the plan allows only `stepItemInputs` and `stepItemOutputs` from that file); keep the two in step.
+ * (the plan's Global Constraints allow only `stepItemInputs` and `stepItemOutputs` from that file); keep the two in step.
  */
 export function amountText(n: number): string {
   const x = Math.round(n * 1e9) / 1e9 || 0;

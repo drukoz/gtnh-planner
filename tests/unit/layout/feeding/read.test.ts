@@ -1,5 +1,6 @@
 // tests/unit/layout/feeding/read.test.ts — the cases below; positions are rotation 0 at origin [0, 64, 0] unless a case says otherwise
 import { describe, expect, it } from 'vitest';
+import { checkFeeding } from '../../../../src/server/layout/feeding/check.ts';
 import { readLine } from '../../../../src/server/layout/feeding/read.ts';
 import { fromWorld } from '../../../../src/server/layout/feeding/frame.ts';
 import type { RoutedNet, Ae2Net, EioNet, GtPipeNet, BasicNode, BenchNode, FeedModel, FeedNetwork, MultiNode } from '../../../../src/server/layout/feeding/model.ts';
@@ -226,6 +227,21 @@ describe('readLine', () => {
     }
   });
 
+  it('reads a blank output bus lock as no lock, and checks the line as without one', async () => {
+    // a cleared lock field (add-on 15 writes the item's name there): no lock, nothing unread, and the check does not throw
+    const { pack, plan } = ebfLine();
+    const layout = await layFeed(pack, plan, 'routed');
+    const unlocked = checkFeeding({ pack, plan, layout, options: { ticks: 2_000 } });
+    const bus = layout.blocks.find((b) => b.hatch === 'output_bus')!;
+    for (const lock of ['', '   ']) {
+      bus.config = { ...bus.config, lock };
+      const m = readLine({ pack, plan, layout });
+      expect(m.nodes.find((n): n is MultiNode => n.kind === 'multi')!.outBuses[0]!.lock).toBeNull();
+      expect(unknownsAt(m, 'text_unread')).toEqual([]);
+      expect(checkFeeding({ pack, plan, layout, options: { ticks: 2_000 } })).toEqual(unlocked);
+    }
+  });
+
   it('reads an ME Export Bus', async () => {
     const { pack, plan } = chain2();
     const layout = await layFeed(pack, plan, 'ae2');
@@ -444,7 +460,7 @@ describe('readLine', () => {
   });
 
   it('gives each bus to the nearest controller of its step', async () => {
-    // ruling R-6: hatch blocks carry their step but no unit, and main lays both EBFs of a two-machine step
+    // hatch blocks carry their step but no unit, and main lays both EBFs of a two-machine step: each bus goes to the nearest one
     const { pack, plan } = feedPlan([{ id: 'e', mteId: IDS.EBF, count: 2, inputs: [['t:a@0', 1], ['t:b@0', 1]], outputs: [['t:x@0', 1]] }]);
     const m = readLine({ pack, plan, layout: await layFeed(pack, plan, 'routed') });
     expect(m.nodes.filter((n): n is MultiNode => n.kind === 'multi').map((n) => [n.id, n.inBuses.map((b) => b.id), n.outBuses.map((b) => b.id)]))
@@ -479,7 +495,8 @@ describe('readLine', () => {
     expect(['export_bus_text', 'text_unread', 'export_target_unknown'].map((code) => unknownsAt(m, code))).toEqual([[[3, 66, 1]], [[3, 66, 1]], [[3, 66, 1]]]);
   });
 
-  // ---- the lines main lays now: fix/feeding's structured feed and settings (architecture §11 entry 51; ruling R-28's twins) ----
+  // ---- the lines main lays now: fix/feeding's structured feed and settings (architecture §11 entry 51), each the twin of a ----
+  // ---- case above that keeps the layout main laid before fix/feeding, so its input does not move when main's layout does ----
 
   it('reads the structured chips of a routed line as main lays it', async () => {
     const { pack, plan } = chain2();

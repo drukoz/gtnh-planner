@@ -9,7 +9,7 @@
 //   is a multiple of 8 it pushes every stack out of its front by GT's transfer, skipping what the block there refuses, and
 //   moves nothing when nothing is there (no `dropItems` on a bus). Whenever it loses items it tells its controller.
 // - The controller looks for a recipe when a bus tells it, when a run ends and when its chunk loads (tick 0, and again at
-//   `restartAt` in `restart`: ruling R-17), never on a timer. With Input Separation on (the layout's setting, else its
+//   `restartAt` in `restart`, its load-time check), never on a timer. With Input Separation on (the layout's setting, else its
 //   class's default, E15) each input bus is checked alone, in local order; off, all of them together. On each bus (or on
 //   all of them) it tries its cached recipe first, then its recipes in step order, and starts the first whose inputs are
 //   there and whose outputs fit; a recipe whose outputs do not fit is passed over, and when no recipe fits it waits for a
@@ -230,7 +230,9 @@ class InputBus extends Bus {
 
   /**
    * A run's inputs: up to `n` of `key` from its highest slot down (E3: GT lists a bus's slots from the last one), taken
-   * straight out of its slots as GT's controller does, so no change is marked. Returns what it took.
+   * straight out of its slots as GT's controller does: so `markChanged` is not called (GT's `hasInventoryBeenModified` stays
+   * unset, and the bus neither sorts nor tells its controller for it), while `changes` still moves, as `canInsert` reads the
+   * slots. Returns what it took.
    */
   consume(key: number, n: number): number {
     let left = n;
@@ -280,7 +282,7 @@ class InputBus extends Bus {
 
 /** GT's output bus (`MTEHatchOutputBus`, rule 2). */
 class OutputBus extends Bus {
-  /** The item it is locked to (`lockedItem`) as a key id, −1 when unlocked; a lock no item matches stores nothing (ruling R-7). */
+  /** The item it is locked to (`lockedItem`) as a key id, −1 when unlocked; a lock no item matches (a name the reader could not read) stores nothing. */
   readonly lock: number;
   /** What its front pushes into: resolved at its first push, null when nothing there takes items. */
   private into: PushTarget | null | undefined;
@@ -351,7 +353,10 @@ class OutputBus extends Bus {
     if (this.into !== null) gtTransfer(this, this.all, front, this.into, OPPOSITE[front]!, this.slots.length, 64, this);
   }
 
-  /** The next tick after `t` whose timer is a multiple of 8, while it holds items and may have somewhere to push them (ruling R-11). */
+  /**
+   * The next tick after `t` whose timer is a multiple of 8, while it holds items and may have somewhere to push them: an entity is
+   * due at every periodic act it owns, so a scheduled run equals an exhaustive one.
+   */
   private nextPush(t: number): number {
     if (this.into === null || this.front < 0 || this.front > 5 || this.isEmpty()) return NEVER;
     const age = aTick(this.env, t);

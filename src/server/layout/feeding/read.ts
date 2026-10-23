@@ -50,7 +50,10 @@ function where(p: Vec3): string {
   return `${p[0]} ${p[1]} ${p[2]}`;
 }
 
-/** A class's simple name, the text after its last '.' (architecture entry 19; ruling R-4: computed here, not imported). */
+/**
+ * A class's simple name, the text after its last '.' (architecture entry 19), computed here: the module imports from the server
+ * only what the plan's Global Constraints allow, and `simpleClassName` (`src/server/world/facts.ts`) is not among it.
+ */
 function simpleName(cls: string): string {
   return cls.slice(cls.lastIndexOf('.') + 1);
 }
@@ -320,7 +323,9 @@ export function readLine(input: { pack: Pack; plan: Plan; layout: Layout }): Fee
     };
   }
 
-  // rule 2: each input and output bus of a multiblock step, at the nearest controller of its step (ruling R-6)
+  // rule 2: each input and output bus of a multiblock step, at the nearest controller of its step (Manhattan distance in local
+  // cells, a tie to the controller earlier in local order): a hatch block names its step but no unit, and a step of two
+  // machines lays two controllers
   const multis = machines.filter((m): m is MultiNode => m.kind === 'multi');
   const busOwner = new Map<NodeId, MultiNode>();
   for (const cell of cells) {
@@ -362,10 +367,14 @@ export function readLine(input: { pack: Pack; plan: Plan; layout: Layout }): Fee
       + `${m.separationDefault ? 'with it on' : 'with it off'}`, at, m.stepIds[0]);
   }
 
-  /** An output bus's `config.lock`: the item it names, else the text itself, which no item key matches (ruling R-7). */
+  /**
+   * An output bus's `config.lock`: the item it names; a blank one (a cleared lock field) is no lock. A name that resolves to
+   * no item of the plan, or to two, is kept as the text itself, which holds no '@' and so matches no item key: the plan asks
+   * for a lock no output of the line matches and gives no value for it, and the unknown says the text was not read.
+   */
   function busLock(cell: Cell): StuffKey | null {
     const text = cell.block.config?.[CONFIG_KEYS.lock];
-    if (text === undefined) return null;
+    if (text === undefined || (typeof text === 'string' && text.trim() === '')) return null;
     const read = typeof text === 'string' ? readNames(text) : { keys: [], unread: [String(text)] };
     if (read.unread.length === 0 && read.keys.length === 1) return read.keys[0]!;
     unknown('text_unread', `${cell.label}: its lock "${String(text)}" names no single item of the plan, so it is read as a lock no output of the line matches`,

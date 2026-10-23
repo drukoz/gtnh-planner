@@ -83,7 +83,8 @@ export interface FeedModel {
   fed: Record<string, StuffKey[]>; made: Record<string, StuffKey[]>;   // stepItemInputs / stepItemOutputs of every plan step (text fallbacks only: "takes 2+ kinds" is `node.kinds`)
   itemFlows: PlanFlow[];                                      // the plan's item flows, plan order
   /**
-   * `stepDepths(plan)` (ruling R-20): 0 for a step fed only from raw, else 1 + the deepest step feeding it. The AE2 model
+   * `stepDepths(plan)`, kept here because the model holds neither the plan's steps nor its flows: 0 for a step fed only from
+   * raw, else 1 + the deepest step feeding it. The AE2 model
    * orders its tasks by it; a step a model does not list (a hand-built fixture model) counts as depth 0.
    */
   depths: Record<string, number>;

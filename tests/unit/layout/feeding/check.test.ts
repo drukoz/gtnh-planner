@@ -116,7 +116,9 @@ describe('checkFeeding', () => {
     const statics = checkFeeding({ pack, plan, layout, options: { scenarios: [] } });
     expect([statics.ok, statics.findings, statics.scenarios]).toEqual([false, report.findings.filter((f) => f.phase === 'static'), []]);
     expect(statics.inputs.map((i) => i.deliveredPerSecond)).toEqual([{}, {}, {}]);
-    expect(statics.unknowns).toEqual(report.unknowns.slice(0, -1));
+    // the model's unknowns, and the stack sizes once, as the static rules read them too (rule 6)
+    expect(statics.unknowns).toEqual(report.unknowns);
+    expect(statics.unknowns.at(-1)?.code).toBe('stack_sizes');
   });
 
   it('runs the scenarios asked for, in report order, with the options given', async () => {

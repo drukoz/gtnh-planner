@@ -673,7 +673,7 @@ describe('precheckFeeding, the other branches', () => {
     labelled(layout, 'ME Interface (Basic Fluid Solidifier)').feed = { interface: { patterns: [{ inputs: [], outputs: [{ key: 't:x@0', amount: 1 + 1e-12 }] }], blocking: false } };
     expect(precheckFeeding(readLine({ pack: f.pack, plan: f.plan, layout }), f.pack)).toEqual([]);
 
-    // two pipes on one output bus carry the same bare extractor (ruling R-9)
+    // two pipes on one output bus carry the same bare extractor: one finding, as main lays a pipe at both bus ports
     const { pack, plan } = ebfLine();
     const m = readLine({ pack, plan, layout: await layLegacy(pack, plan, 'routed') });
     const net = m.networks.find((n) => n.kind === 'routed')!;
@@ -748,7 +748,8 @@ describe('precheckFeeding, the other branches', () => {
   });
 });
 
-// ---- the lines main lays now: fix/feeding's structured feed and settings (architecture §11 entry 51; ruling R-28's twins) ----
+// ---- the lines main lays now: fix/feeding's structured feed and settings (architecture §11 entry 51), each the twin of a ----
+// ---- case above that keeps the layout main laid before fix/feeding, so its input does not move when main's layout does ----
 
 describe('precheckFeeding on the lines main lays now', () => {
   /** Both kinds flow into the step: the smelter (Alpha and 4 Beta → Ex) and the EBF (Alpha and Beta → Ex). */

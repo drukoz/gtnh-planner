@@ -8,9 +8,10 @@
 // - Findings come ordered by node (the model's local order), then rule (R1 … R12, a rule's parts in the table's order), then
 //   item key (code-unit order). Each rule raises a finding once per node and item (and once per bus, interface or side where
 //   its text names one): main lays a responder and an extractor on both bus ports of a multiblock, and a machine fed by
-//   two pipes must not double (ruling R-9). The rule table, not the Codes table, says which rule raises which code
-//   and certainty (ruling R-10).
-// - R1 applies to a basic node whose slots the slot table or the export gives (ruling R-8).
+//   two pipes must not double. The rule table, not the Codes table (a summary), says which rule raises which code and
+//   certainty.
+// - R1 applies to a basic node whose slots the slot table or the export gives (`basicSlots`): slots taken from its recipes
+//   are no measure of what it has.
 // Pure TypeScript: nothing from node:* may be imported here.
 
 import { isFluidKey, type StuffKey } from '../../../shared/keys.ts';
@@ -300,7 +301,8 @@ function r4(c: Ctx): void {
 
 /**
  * R5a, `feed_no_route` certain: a machine's Item Extractor Chips do not pass an item it makes, so nothing takes it out. A
- * multiblock's outputs leave through its output buses, so only the chips on their pipes count (ruling R-9). A machine with no
+ * multiblock's outputs leave through its output buses, so only the chips on their pipes count (an Item Extractor Chip on an
+ * input bus's pipe is R5c's). A machine with no
  * extractor chip at all has none to blame: the simulation reports its blocked output. Nor is the extractor why an item stays
  * when an Item Broadcaster Chip beside it passes the item and an Item Stock Keeper Chip on its network keeps it: the
  * broadcaster sends it on the stock keeper's orders (research §2.2), as main lays a supplier of an Auto Workbench.

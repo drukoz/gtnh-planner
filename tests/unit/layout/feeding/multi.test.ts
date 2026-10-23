@@ -219,9 +219,9 @@ describe('multiblocks', () => {
     });
     const model = handModel([ebfNode(), outputChestNode('2,0,1')]);
     expect(both(model, { ticks: 700, restartAt: 350, extra: (env) => [sneak(env)] }).runs).toEqual({ e: 0 });
-    // a set there from the start (no change marked): its check at tick 0 finds it
+    // a set there from the start (a preload calls no markChanged): its check at tick 0 finds it
     expect(both(model, { ticks: 100, restartAt: 100, initial: { '0,0,0': [[0, 't:a@0', 1], [1, 't:b@0', 1]] } }).runs).toEqual({ e: 1 });
-    // the line loads again at 350 and the controller looks then (ruling R-17); the output bus's timer starts again from
+    // the line loads again at 350 and the controller looks then (its load-time check); the output bus's timer starts again from
     // that load, so the run's Ex (tick 450, aTick 101) leaves at 453 (aTick 104)
     const reloaded = both(model, { ticks: 700, restartAt: 350, extra: (env) => [sneak(env)] }, 'restart');
     expect([reloaded.runs, reloaded.stats.arrivals('2,0,1')]).toEqual([{ e: 1 }, [[453, 't:x@0', 1]]]);

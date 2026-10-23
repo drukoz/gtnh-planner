@@ -13,7 +13,7 @@
 //   `multistack_on` reads a Multi Stack Input the layout leaves unset as On (the machine models read the scenario), and
 //   `restart` loads the line's chunk again (below).
 // - In `restart` the line's chunk loads again at the start of tick `restartAt` (rule 3a): every tile's timer and the
-//   covers' counter start again from there, every multiblock controller looks for a recipe (ruling R-17), and every
+//   covers' counter start again from there, every multiblock controller looks for a recipe (its load-time check), and every
 //   bench's and every network's `restart()` runs.
 // - A bench's crafts are the runs of its first recipe's step, the one its grid is laid from (`SimStats.benchCrafted`).
 // - The run's unknowns: the stack sizes, an input chest of too many kinds and each network kind without a model, then the
@@ -64,10 +64,19 @@ export interface ScenarioOptions {
   initial?: Record<NodeId, Array<[slot: number, key: StuffKey, count: number]>>;
 }
 
-/** One scenario's result (`unknowns`: ruling R-13, in first-seen order). */
+/** One scenario's result; its `unknowns` in the order first met, which `checkFeeding` merges over the scenarios (Task 11 rule 6). */
 export interface ScenarioRun {
   name: ScenarioName; ticks: number; findings: FeedFinding[]; stats: SimStats; runs: Record<string, number>; out: Record<StuffKey, number>;
   unknowns: FeedUnknown[];
+}
+
+/**
+ * The unknown every report gives once (Global Constraints): the export carries no stack sizes, so the checker takes 64 for
+ * every item but a Fluid Packet and a GT tool (1 each; `stackLimit`). Each scenario run raises it first, and `checkFeeding`
+ * raises it itself when no scenario ran, as the static rules (R1, R10b) read stack sizes too.
+ */
+export function stackSizesUnknown(): FeedUnknown {
+  return { code: 'stack_sizes', text: 'The recipe export carries no stack sizes: every item is taken to stack to 64, a Fluid Packet and a GT tool to 1' };
 }
 
 /** Every item and fluid key the model names, and those of the test's contents. */
@@ -184,9 +193,7 @@ export function runScenario(model: FeedModel, scenario: ScenarioName, opts: Scen
     },
     byHand: null,
   };
-  const unknowns: FeedUnknown[] = [{
-    code: 'stack_sizes', text: 'The recipe export carries no stack sizes: every item is taken to stack to 64, a Fluid Packet and a GT tool to 1',
-  }];
+  const unknowns: FeedUnknown[] = [stackSizesUnknown()];
   const at = (node: FeedNode) => ({ pos: [node.pos[0], node.pos[1], node.pos[2]] as Vec3, ...(node.kind === 'chest' ? {} : { stepId: node.stepIds[0]! }) });
 
   // one entity per node (two for a bench: its energy too)

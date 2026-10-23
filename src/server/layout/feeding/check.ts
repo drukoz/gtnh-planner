@@ -13,6 +13,7 @@
 //   those from it.
 // - Unknowns: the model's, then each scenario's, each (code, place, step, item) once, the first met kept with its count, in
 //   the order first met: an item dropped at one machine in every scenario is one unknown, and two items dropped there are two.
+//   `stack_sizes` is in every report once, a report of the static rules alone too (they read stack sizes as well).
 // - A line with nothing to check (a plan with status `empty` or `infeasible`, an empty layout, no machine read) is `ok`, with
 //   the unknown `empty_line` and what reading it left unknown (Review Focus 2).
 // - Deterministic: the same inputs give a deep-equal report, scheduled or with every entity on every tick (`exhaustive`).
@@ -29,7 +30,7 @@ import {
 import type { FeedModel, NodeId } from './model.ts';
 import { precheckFeeding } from './precheck.ts';
 import { readLine } from './read.ts';
-import { runScenario, type ScenarioRun } from './sim/run.ts';
+import { runScenario, stackSizesUnknown, type ScenarioRun } from './sim/run.ts';
 
 export { scenarioParams, type ScenarioParams } from './sim/run.ts';
 
@@ -64,11 +65,13 @@ export function checkFeeding(input: { pack: Pack; plan: Plan; layout: Layout; op
     ae2FluidStock: options.ae2FluidStock === true, slowTolerance: options.slowTolerance ?? SLOW_TOLERANCE,
   }));
   const findings = [...precheckFeeding(model, pack), ...scenarioFindings(runs)];
+  // rule 6: with no scenario run, the report still says once that it takes the stack sizes it does (the static rules read them)
+  const runUnknowns = runs.length === 0 ? [stackSizesUnknown()] : runs.flatMap((r) => r.unknowns);
   return {
     ok: !findings.some((f) => f.certainty === 'certain' && FEED_GATE_CODES.includes(f.code)),
     findings,
     inputs: inputReports(model, runs, ticks, restartAt),
-    unknowns: distinctUnknowns([...model.unknowns, ...runs.flatMap((r) => r.unknowns)]),
+    unknowns: distinctUnknowns([...model.unknowns, ...runUnknowns]),
     scenarios: runs.map((r) => ({ name: r.name, ticks: r.ticks, runs: r.runs, out: r.out })),
   };
 }

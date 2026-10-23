@@ -220,7 +220,7 @@ export async function layFeed(pack: Pack, plan: Plan, mode: LogisticsMode, at?: 
   return layoutLine(pack, plan, lineScan(), makeProject({ logistics: mode, placement: { origin: [...at.origin], rotation: at.rotation } }), lineGround());
 }
 
-// ---- Main's layouts before fix/feeding (ruling R-28) ----
+// ---- Main's layouts before fix/feeding ----
 
 /** The `config` keys of fix/feeding's feeding settings (architecture §11 entry 51), which main wrote nowhere before. */
 const FEED_SETTING_KEYS = ['multiStack', 'limited', 'inputSeparation'] as const;
@@ -230,7 +230,7 @@ const INTERFACE_LABEL = /^.* \((.*)\)$/;
 /**
  * `layout` as main laid it out before fix/feeding gave its lines structured feeding (architecture §11 entry 51): the
  * input the feeding tests' "today's text" cases were written against, rebuilt from the plan with main's own helpers, so
- * those cases keep their input when main's layout moves on (ruling R-28). A fresh copy:
+ * those cases keep their input when main's layout moves on. A fresh copy:
  * - every block loses its `feed` and fix/feeding's settings `multiStack`, `limited` and `inputSeparation`;
  * - routed: the chests list what main listed then (the input chest the raw inputs and what the hand-run units make, the
  *   output chest the line's final outputs and what the hand-run units take), and each Routed Interface Pipe carries its
@@ -548,7 +548,10 @@ export function outputChestNode(id: NodeId): ChestNode {
   return chestNode(id, 'output', []);
 }
 
-/** An HV export conveyor (64 items every 20 ticks) on side `side` of `host`, letting items in as well, as main lays it (ruling R-15). */
+/**
+ * An HV export conveyor (64 items every 20 ticks) on side `side` of `host`, letting items in as well, as main lays a machine's
+ * output-side conveyor: an ME interface pushes in through it.
+ */
 export function hvExport(host: NodeId, side: number): GtCover {
   return { host, side, kind: 'conveyor', export: true, allowInput: true, op: { tickRate: 20, stacks: 1, items: 64 } };
 }
@@ -600,7 +603,7 @@ export function handModel(nodes: FeedNode[], more: Partial<FeedModel> = {}): Fee
 /**
  * A test entity (phase `feed`) that, at ticks `from`, `from + every`, …, offers `n` of each of `keys` in turn to the
  * inventory `target` from its side `side` by `insertEmpties`, and records what goes in as `delivered`, the way a network
- * does (ruling R-14). `every` past the run offers once.
+ * does, so a test's `feed_starved` names only an item it never offered. `every` past the run offers once.
  */
 export function feeder(env: SimEnv, target: NodeId, side: number, keys: StuffKey[], n: number, every: number, from = 0): SimEntity {
   const ids = keys.map((k) => env.keys.id(k));

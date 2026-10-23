@@ -1,6 +1,7 @@
 // The line's chests in the feeding simulation (plan `docs/superpowers/plans/2026-10-20-21-feeding-checker.md` Task 4
-// rule 9; ruling R-21): vanilla chests of 27 slots, which take anything on any side by the inserter's own rule and let
-// anything out, and count everything that arrives.
+// rule 9): vanilla chests of 27 slots, which take anything on any side by the inserter's own rule and let anything out,
+// and count everything that arrives. Not research §7's unlimited chests: a chest full of a leaked item is a real stop in
+// the game, and only leaked items fill one here.
 // - An input chest holds a full stack of each item it stocks in its first slots (key order; only the first 27), refilled
 //   at once after each extraction: the hookup or the player keeps it stocked. In `late_input` the slots of the items held
 //   back stay empty until the hold ends. Its other slots start empty and keep what is pushed into them.

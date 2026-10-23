@@ -623,7 +623,8 @@ export function gtPipeModel(net: GtPipeNet, env: SimEnv): NetworkModel {
     if (filters.length === out.length && filters.every((c) => !passes(c, key))) return `its Item Filter cover ${refusal(filters[0]!, key)}`;
     const all = takers(node, key);
     if (all.length === 0) return `nothing on its pipe takes ${name}`;
-    // rule 2 as the Task 10 ruling amends it: every taker lacks room for it from its pipe side (full chests, or machines with no room)
+    // rule 2's last reason: every taker lacks room for it from its pipe side (full chests, or machines with no room); named, as
+    // the fallback "nothing on the line takes it" would deny what these takers show
     const k = keys.id(key);
     if (all.every((h) => roomFor(h.inv, k, h.ref.side) <= 0)) {
       const names = [...new Set(all.map((h) => byId.get(h.ref.node)!.label))];
