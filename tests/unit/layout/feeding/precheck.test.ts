@@ -236,7 +236,7 @@ describe('precheckFeeding', () => {
   });
 
   it('flags shared machines outside AE2', async () => {
-    const run = async (mode: 'routed' | 'ae2', blocking = false) => {
+    const run = async (mode: 'routed' | 'ae2', blocking: boolean | 'no_pattern' = false) => {
       const { pack, plan } = feedPlan([
         { id: 'p1', mteId: IDS.MACERATOR, count: 1, inputs: [['t:a@0', 1]], outputs: [['t:x@0', 1]] },
         { id: 'p2', mteId: IDS.MACERATOR, count: 1, inputs: [['t:b@0', 1]], outputs: [['t:y@0', 1]] },
@@ -244,10 +244,11 @@ describe('precheckFeeding', () => {
       const layout = await layLegacy(pack, plan, mode);
       machineBlock(layout, 'p1').stepIds = ['p1', 'p2'];
       layout.blocks = layout.blocks.filter((b) => b.stepId !== 'p2');
-      if (blocking) {
+      if (blocking === true) {
         const patterns = [{ inputs: [{ key: 't:a@0', amount: 1 }], outputs: [{ key: 't:x@0', amount: 1 }] }, { inputs: [{ key: 't:b@0', amount: 1 }], outputs: [{ key: 't:y@0', amount: 1 }] }];
         labelled(layout, 'ME Interface (Basic Macerator)').feed = { interface: { patterns, blocking: true } };
       }
+      if (blocking === 'no_pattern') labelled(layout, 'ME Interface (Basic Macerator)').feed = { interface: { patterns: [], blocking: false } };
       const m = readLine({ pack, plan, layout });
       const findings = precheckFeeding(m, pack);
       // each recipe takes one kind of item, which the macerator's one input slot holds: the two together are not R1's concern
@@ -262,6 +263,9 @@ describe('precheckFeeding', () => {
     expect(ae2[0]!.text).toBe("Basic Macerator at 1 64 1 runs 2 recipes and ME Interface (Basic Macerator) at 1 64 2 has blocking mode off: it mixes the recipes' sets");
     // blocking mode on pushes one recipe's set at a time into an empty machine: nothing to say
     expect(await run('ae2', true)).toEqual([]);
+    // an interface that holds no pattern is never pushed into, so it mixes nothing (main lays one on a multiblock's second input
+    // bus, beside the interface that holds its recipes)
+    expect(await run('ae2', 'no_pattern')).toEqual([]);
   });
 
   it('flags an interface touching two inventories', async () => {
@@ -350,6 +354,24 @@ describe('precheckFeeding, the other branches', () => {
     blockAt(layout, [4, 64, 2]).feed = { chips: [responderOf('t:a@0')] };
     expect(precheckFeeding(readLine({ pack, plan, layout }), pack).filter((f) => f.code === 'feed_no_route').map((f) => f.machine))
       .toEqual(['Basic Macerator at 3 64 1', 'Advanced Assembler at 5 64 1']);
+  });
+
+  it('leaves to an Item Broadcaster Chip what an Item Stock Keeper Chip asks for', async () => {
+    // research §2.2: a broadcaster sends what its filter passes on a stock keeper's order, so the extractor beside it (main lays one
+    // for a machine's other outputs) is not why the item stays: the first macerator's Ex goes to the assembler's stock keeper
+    const { pack, plan } = chain2();
+    const layout = await layFeed(pack, plan, 'routed');
+    const noRoute = () => precheckFeeding(readLine({ pack, plan, layout }), pack).filter((f) => f.code === 'feed_no_route');
+    blockAt(layout, [3, 64, 2]).feed = { chips: [responderOf('t:a@0'), extractorOf('t:q@0'), { kind: 'broadcaster', filter: whitelist('t:x@0') }] };
+    blockAt(layout, [5, 64, 2]).feed = { chips: [{ kind: 'stock_keeper', stock: [{ key: 't:x@0', count: 16 }] }, extractorOf('t:y@0')] };
+    expect(noRoute()).toEqual([]);
+    // with no stock keeper that keeps Ex, no order ever comes: the extractor, which does not list it, is why it stays
+    blockAt(layout, [5, 64, 2]).feed = { chips: [responderOf('t:x@0'), extractorOf('t:y@0')] };
+    expect(texts(noRoute())).toEqual(['Nothing takes Ex out of Basic Macerator at 3 64 1: its Item Extractor Chip does not list it']);
+    // and so it is with a broadcaster that does not offer Ex
+    blockAt(layout, [3, 64, 2]).feed = { chips: [responderOf('t:a@0'), extractorOf('t:q@0'), { kind: 'broadcaster', filter: whitelist('t:q@0') }] };
+    blockAt(layout, [5, 64, 2]).feed = { chips: [{ kind: 'stock_keeper', stock: [{ key: 't:x@0', count: 16 }] }, extractorOf('t:y@0')] };
+    expect(texts(noRoute())).toEqual(['Nothing takes Ex out of Basic Macerator at 3 64 1: its Item Extractor Chip does not list it']);
   });
 
   it('reads a multiblock\'s outputs from its output buses only, and raises each finding once', async () => {

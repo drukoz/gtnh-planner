@@ -732,10 +732,14 @@ export function routedModel(net: RoutedNet, env: SimEnv): NetworkModel {
       }
       return blamed;
     }
+    // an Item Broadcaster Chip on its pipe that passes the item sends it on the orders of a Stock Keeper Chip that keeps it
+    // (research §2.2): then that is its way out, and the extractor beside it is not why it stays (as R5a reads it)
+    const ordered = own.some((p) => p.spec.chips.some((c) => c.kind === 'broadcaster' && passes(c, key)))
+      && pipes.some((p) => p.spec.chips.some((c) => c.kind === 'stock_keeper' && c.stock?.some((s) => s.key === key) === true));
     const extractors = extractorsOn(own);
-    if (extractors.length > 0 && !extractors.some((c) => passes(c, key))) return `its Item Extractor Chip ${refusal(extractors)}`;
+    if (!ordered && extractors.length > 0 && !extractors.some((c) => passes(c, key))) return `its Item Extractor Chip ${refusal(extractors)}`;
     // an answer on another node's pipe
-    const answered = pipes.some((p) => p.inv !== null && p.spec.target?.node !== node
+    const answered = ordered || pipes.some((p) => p.inv !== null && p.spec.target?.node !== node
       && p.spec.chips.some((c) => ANSWERING[c.kind] !== undefined && (c.kind === 'overflow' || passes(c, key))));
     return answered ? null : 'no Item Responder Chip on the line lists it';
   };

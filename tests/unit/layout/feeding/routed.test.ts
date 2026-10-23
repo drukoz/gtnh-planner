@@ -332,6 +332,15 @@ describe('Project Red routed pipes, more closely', () => {
     expect(why(extractor({ mode: 'blacklist', keys: ['t:x@0'] }), responder('t:x@0'))).toEqual(stuck('its Item Extractor Chip blacklists it'));
     expect(why(extractor(whitelist('t:x@0')), responder('t:y@0'))).toEqual(stuck('no Item Responder Chip on the line lists it'));
     expect(why(extractor(whitelist('t:x@0')), responder('t:x@0'))).toEqual([]);
+    // an Item Broadcaster Chip beside the extractor offers Ex to the chest's Item Stock Keeper Chip, which keeps it: the extractor is
+    // not why Ex stays. The chest already holds the stock, so no order comes, and the network has no other reason to give
+    const broadcast = (chest: RoutedChipSpec) => same(prModel([outputChestNode('0,0,0'), oneSlotNode('2,0,0')], [
+      { id: '0,1,0', target: { node: '0,0,0', side: 1 }, chips: [chest] }, { id: '1,1,0' },
+      { id: '2,1,0', target: { node: '2,0,0', side: 1 }, chips: [extractor(whitelist('t:y@0')), { kind: 'broadcaster', filter: whitelist('t:x@0') }] }]),
+    { ticks: 2_000, restartAt: 2_000, initial: { '2,0,0': [[0, 't:a@0', 1], [1, 't:x@0', 64]], '0,0,0': [[0, 't:x@0', 16]] } }).findings.map((f) => [f.code, f.tick, f.text]);
+    expect(broadcast({ kind: 'stock_keeper', stock: [{ key: 't:x@0', count: 16 }] })).toEqual(stuck('nothing on the line takes it'));
+    // with no stock keeper that keeps Ex, no order ever comes: the extractor is why
+    expect(broadcast(responder('t:x@0'))).toEqual(stuck('its Item Extractor Chip does not list it'));
     // R5a words the same line the same
     expect(precheckFeeding(model(extractor(whitelist()), responder('t:x@0')), feedPack()).map((f) => [f.code, f.text]))
       .toEqual([['feed_no_route', 'Nothing takes Ex out of Basic Macerator at 2 0 0: its Item Extractor Chip has an empty whitelist (a new chip extracts nothing)']]);

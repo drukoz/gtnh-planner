@@ -301,14 +301,19 @@ function r4(c: Ctx): void {
 /**
  * R5a, `feed_no_route` certain: a machine's Item Extractor Chips do not pass an item it makes, so nothing takes it out. A
  * multiblock's outputs leave through its output buses, so only the chips on their pipes count (ruling R-9). A machine with no
- * extractor chip at all has none to blame: the simulation reports its blocked output.
+ * extractor chip at all has none to blame: the simulation reports its blocked output. Nor is the extractor why an item stays
+ * when an Item Broadcaster Chip beside it passes the item and an Item Stock Keeper Chip on its network keeps it: the
+ * broadcaster sends it on the stock keeper's orders (research §2.2), as main lays a supplier of an Auto Workbench.
  */
 function r5a(c: Ctx): void {
   for (const node of c.machines) {
-    const extractors = chipsOf(node.kind === 'multi' ? pipesOf(c, node, 'out') : pipesOf(c, node), 'extractor');
+    const pipes = node.kind === 'multi' ? pipesOf(c, node, 'out') : pipesOf(c, node);
+    const extractors = chipsOf(pipes, 'extractor');
     if (extractors.length === 0) continue;
+    const broadcasters = chipsOf(pipes, 'broadcaster');
     for (const key of madeKeys(node)) {
       if (extractors.some((chip) => passes(chip, key))) continue;
+      if (broadcasters.some((chip) => passes(chip, key)) && stockedOn(c, node, key)) continue;
       emit(c, node, 'R5a', 'feed_no_route', 'certain', `Nothing takes ${c.nameOf(key)} out of ${node.label}: its Item Extractor Chip ${whyNotPassed(extractors)}`,
         { key, stepId: stepWith(node, key, 'outputs') });
     }
@@ -370,6 +375,11 @@ function r5d(c: Ctx): void {
 function netsOf(c: Ctx, node: MachineNode): readonly RoutedNet[] {
   const own = c.routedNets.filter((net) => net.pipes.some((p) => p.target?.node === node.id));
   return own.length > 0 ? own : c.routedNets;
+}
+
+/** Whether an Item Stock Keeper Chip on a routed network `node` is on keeps `key`: it orders it from the network's broadcasters. */
+function stockedOn(c: Ctx, node: MachineNode, key: StuffKey): boolean {
+  return netsOf(c, node).some((net) => net.pipes.some((pipe) => pipe.chips.some((chip) => chip.kind === 'stock_keeper' && chip.stock?.some((s) => s.key === key) === true)));
 }
 
 /**
@@ -483,7 +493,8 @@ function r9(c: Ctx): void {
 
 /**
  * R11, `feed_pool_starve`: a node of two or more steps. In a push mode it reruns its last recipe while that recipe's output waits, so
- * the others can starve (certain). In AE2 an interface toward it with blocking off mixes the recipes' sets (a risk).
+ * the others can starve (certain). In AE2 an interface toward it with blocking off mixes the recipes' sets (a risk), when it holds a
+ * pattern at all.
  */
 function r11(c: Ctx): void {
   const { model } = c;
@@ -495,7 +506,8 @@ function r11(c: Ctx): void {
         + `so ${listText(node.stepIds.slice(1).map((id) => stepLabel(model, id)))} can starve`);
     } else if (model.mode === 'ae2') {
       for (const iface of c.ifacesAt.get(node.id) ?? []) {
-        if (iface.spec.blocking === true) continue;
+        // an interface that holds no pattern is never pushed into: it mixes nothing (main lays one on a second input bus)
+        if (iface.spec.blocking === true || iface.spec.patterns.length === 0) continue;
         emit(c, node, 'R11', 'feed_pool_starve', 'risk',
           `${node.label} runs ${node.stepIds.length} recipes and ${iface.label} has blocking mode off: it mixes the recipes' sets`, { id: iface.id });
       }
