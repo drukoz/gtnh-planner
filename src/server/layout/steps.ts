@@ -1,7 +1,7 @@
 // The layout's build steps and parts list (Plan 5 Task 10; spec §3.7, §3.10, architecture §11.13–§11.14, §11.23):
-// clear the site, roof it, place the machines, power them through the transformer banks and cable trees, hook up the
-// tap, lay the logistics, configure every covered or set block and every EnderIO conduit face with its exact settings,
-// reuse owned machines, test.
+// clear the site, roof it, place the machines, build each new farm in the area kept for it (add-on 17), power the
+// machines through the transformer banks and cable trees, hook up the tap, lay the logistics, configure every covered or
+// set block and every EnderIO conduit face with its exact settings, reuse owned machines, test.
 // Steps link to the numbered pins and keep stable ids, so ticks survive re-plans. The parts list counts every placed
 // part and cover by key in its group. Every order and tie-break is fixed, so the same inputs give the same steps.
 
@@ -35,6 +35,17 @@ export interface StepsInput {
   // optional addition (plan 12)
   /** A plan step by what it makes (its main output's name), for the place step of a machine several steps share. */
   stepName?: (stepId: string) => string;
+  // optional additions (add-on 17)
+  /**
+   * The areas kept for the plan's new farms (`Layout.reserved`, farms.ts), in their order: each one's farm step, the
+   * words of its build step (`farmBuildText`) and its pin (none without pins). One `place` step each.
+   */
+  farms?: ReadonlyArray<{ stepId: string; text: string; pin?: number }>;
+  /**
+   * The box the site search found clear when areas kept for farms widen the line's (`farmExtent`, in the world): the
+   * clear step names it, as its earthwork (`site`) and its free path round it are that box's; `size` stays the line's own.
+   */
+  siteSize?: Vec3;
 }
 
 type Group = NonNullable<BomLine['group']>;
@@ -250,6 +261,21 @@ function placeSteps(units: readonly PlacedUnit[], sitePin: number | undefined, r
   });
 }
 
+// ---- Farms ----
+
+/**
+ * One `place` step per area kept for a new farm (add-on 17), in order, with the area's pin: `layout:farm:<step>` for a
+ * farm step's first area, then `:2`, `:3`, … (as a step's configure steps count theirs), so ticks survive re-plans.
+ */
+function farmSteps(farms: NonNullable<StepsInput['farms']>): Draft[] {
+  const seen = new Map<string, number>();
+  return farms.map((f) => {
+    const k = (seen.get(f.stepId) ?? 0) + 1;
+    seen.set(f.stepId, k);
+    return draft(k === 1 ? `layout:farm:${f.stepId}` : `layout:farm:${f.stepId}:${k}`, 'place', f.pin, f.text);
+  });
+}
+
 // ---- Power ----
 
 function powerSteps(input: StepsInput, sitePin: number | undefined, powerPin: number | undefined): Draft[] {
@@ -367,8 +393,10 @@ function reuseSteps(finds: readonly ReuseFind[], pins: readonly Pin[]): Draft[] 
 }
 
 /**
- * Spec §3.10: the layout's build steps in building order, linked to the pins (no pins, no pin numbers). A layout with
- * nothing to place (`empty`) only asks to hook up the owned machines.
+ * Spec §3.10: the layout's build steps in building order, linked to the pins (no pins, no pin numbers). The clear step
+ * names the box the site search found clear (`siteSize`, the line's own `size` without farms), the roof the line's own
+ * height. Each area kept for a new farm gets its build step after the line's place steps (add-on 17). A layout with
+ * nothing to place (`empty`) only asks to build its farms and to hook up the owned machines.
  */
 export function layoutSteps(input: StepsInput): BuildStep[] {
   const { pins } = input;
@@ -378,13 +406,16 @@ export function layoutSteps(input: StepsInput): BuildStep[] {
   const placing = input.status !== 'empty';
 
   if (placing) {
-    const [w, h, l] = input.size;
+    const [w, h, l] = input.siteSize ?? input.size;
     const level = input.site !== null && (input.site.dig > 0 || input.site.fill > 0)
       ? `; dig ${fmtInt(input.site.dig)} and fill ${fmtInt(input.site.fill)} blocks to level it` : '';
     steps.push(draft('layout:site', 'place', sitePin,
       `Clear a ${fmtInt(w)}×${fmtInt(l)} spot${atPin(sitePin)} (${fmtInt(h)} high) and keep a 1-block path around it${level}`));
-    steps.push(draft('layout:roof', 'place', sitePin, roofText(input.units, h)));
+    steps.push(draft('layout:roof', 'place', sitePin, roofText(input.units, input.size[1])));
     steps.push(...placeSteps(input.units, sitePin, input.rotation, fluidsThroughOutputSide(input.blocks), input.stepName ?? ((id) => id)));
+  }
+  steps.push(...farmSteps(input.farms ?? []));
+  if (placing) {
     steps.push(...powerSteps(input, sitePin, powerPin));
     for (const d of input.drafts) if (d.kind === 'logistics') steps.push(draft(d.id, d.kind, kindPin(d.pin), d.text));
     for (const f of input.fluids) {

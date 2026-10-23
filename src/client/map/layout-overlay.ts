@@ -1,9 +1,11 @@
 // The new line on the map (spec §3.7, architecture §7.2, §11.14): a filled square per column of the line in the colour
 // of its most important block (EnderIO's for a conduit cell), a dot on every configured block (covers, settings,
-// conduit faces, or chips and patterns: §11 entry 51), the line's box outline, each hookup as a dashed path in its network's colour ("dashed = still to
-// build"), white arrows for the item flow between steps, and the layout pins as numbered markers next to the note pins
+// conduit faces, or chips and patterns: §11 entry 51), the line's box outline, each area kept for a new farm as a
+// dashed box in the farm pins' colour (add-on 17), each hookup as a dashed path in its network's colour ("dashed = still
+// to build"), white arrows for the item flow between steps, and the layout pins as numbered markers next to the note pins
 // (notes show N1, N2, … so a build step's "pin 1" names one marker). In move mode a drag that starts inside the line
-// moves it. The shapes are plain data (`overlayShapes`) drawn by `drawShapes`, so they are tested without a canvas.
+// (its box holds its farms' areas) moves it. The shapes are plain data (`overlayShapes`) drawn by `drawShapes`, so they
+// are tested without a canvas.
 
 import { hookupNetworkKind } from '../../shared/layout/enderio.ts';
 import type { Rotation, Vec3 } from '../../shared/layout/geometry.ts';
@@ -48,6 +50,8 @@ const ARROW_HALO = 'rgba(0, 0, 0, 0.55)';
 const DOT_OUTLINE = '#000000';
 const HOOKUP_DASH: readonly number[] = [6, 4];
 const HOOKUP_WIDTH = 2;
+/** An area kept for a farm is still to build, as a hookup is: the same dash. */
+const AREA_DASH = HOOKUP_DASH;
 const NEXT_ROTATION: Readonly<Record<Rotation, Rotation>> = { 0: 90, 90: 180, 180: 270, 270: 0 };
 
 /** Whether the block holds EnderIO conduits (a conduit cell or bundle). */
@@ -69,11 +73,12 @@ function hookupColor(h: Hookup, mode: LogisticsMode): string {
 /**
  * What the line looks like in `view` (nothing in another dimension), with the line itself shifted by `drag` blocks:
  * a square per (x, z) column of its blocks (hookup blocks and ghosts left out; EnderIO's colour when the block that
- * colours it holds conduits), the box outline, the hookups as dashed paths through their cell centres (never shifted:
- * they run from the base's taps), an arrow per plan flow between two steps that both have machines (first machine to
- * first machine, in layout order; a machine shared by several steps, `stepIds`, is each of theirs, and a flow between two
- * steps of one machine draws none) and last a dot per column holding a configured block, a hookup block's dot
- * unshifted. Squares are at least one pixel, as Plan 4 draws blocks.
+ * colours it holds conduits), the box outline, each area kept for a farm (`Layout.reserved`, add-on 17) as a dashed box
+ * over its world bounds in `PIN_COLORS.farm`, shifted with the line, the hookups as dashed paths through their cell
+ * centres (never shifted: they run from the base's taps), an arrow per plan flow between two steps that both have
+ * machines (first machine to first machine, in layout order; a machine shared by several steps, `stepIds`, is each of
+ * theirs, and a flow between two steps of one machine draws none) and last a dot per column holding a configured block,
+ * a hookup block's dot unshifted. Squares are at least one pixel, as Plan 4 draws blocks.
  */
 export function overlayShapes(layout: Layout, view: MapViewport, drag: { dx: number; dz: number } | null, flows: readonly PlanFlow[]): Shape[] {
   if (view.dim !== layout.dim) return [];
@@ -102,6 +107,12 @@ export function overlayShapes(layout: Layout, view: MapViewport, drag: { dx: num
     const [x0, y0] = worldToScreen(view, ox + dx, oz + dz);
     const [x1, y1] = worldToScreen(view, ox + w + dx, oz + l + dz);
     shapes.push({ kind: 'rect', x: x0, y: y0, w: x1 - x0, h: y1 - y0, fill: null, stroke: OUTLINE_COLOR, dash: [] });
+  }
+
+  for (const a of layout.reserved ?? []) {
+    const [x0, y0] = worldToScreen(view, a.pos[0] + dx, a.pos[2] + dz);
+    const [x1, y1] = worldToScreen(view, a.pos[0] + a.size[0] + dx, a.pos[2] + a.size[2] + dz);
+    shapes.push({ kind: 'rect', x: x0, y: y0, w: x1 - x0, h: y1 - y0, fill: null, stroke: PIN_COLORS.farm, dash: [...AREA_DASH] });
   }
 
   for (const h of layout.hookups) {

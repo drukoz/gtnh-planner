@@ -153,6 +153,19 @@ describe('the line on the map', () => {
     expect([hookupNetworkKind(hookup, 'direct'), hookupNetworkKind({ ...hookup, from: { ...hookup.from, networkId: 'e:item:0:1' } }, 'direct'),
       hookupNetworkKind({ ...hookup, kind: 'power' }, 'enderio')]).toEqual(['gtpipe', 'enderio', null]);
   });
+
+  it('draws an area kept for a farm as a dashed box in the farm colour that moves with the line (add-on 17)', () => {
+    const farmed: Layout = { ...layout, reserved: [{ stepId: 'tgs', pos: [14, 64, 20], size: [7, 7, 5], pin: 3, text: 'Farm: Tree Growth Simulator' }] };
+    const dashed = (l: Layout, drag: { dx: number; dz: number } | null) =>
+      overlayShapes(l, view, drag, []).filter((s) => s.kind === 'rect' && s.dash.length > 0);
+    expect(dashed(layout, null)).toEqual([]);
+    // the area's world bounds, x 14–20 and z 20–24, in view pixels
+    expect(dashed(farmed, null)).toEqual([{ kind: 'rect', x: 216, y: 200, w: 28, h: 20, fill: null, stroke: PIN_COLORS.farm, dash: expect.any(Array) }]);
+    expect(dashed(farmed, { dx: 5, dz: -1 })).toEqual([{ kind: 'rect', x: 236, y: 196, w: 28, h: 20, fill: null, stroke: PIN_COLORS.farm, dash: expect.any(Array) }]);
+    expect(overlayShapes({ ...farmed, dim: -1 }, view, null, [])).toEqual([]);
+    expect(layoutMarkers({ ...farmed, pins: [{ n: 3, dim: 0, pos: [17, 64, 22], kind: 'farm', text: 'Farm: Tree Growth Simulator' }] }))
+      .toEqual([{ n: 3, pos: [17, 64, 22], color: PIN_COLORS.farm, label: 'Pin 3: Farm: Tree Growth Simulator' }]);
+  });
 });
 
 describe('the line on the map: the rules in detail', () => {
