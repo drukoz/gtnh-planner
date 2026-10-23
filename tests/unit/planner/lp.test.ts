@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { highsOptions, LP_ROWS_PER_MODEL, MIP_FEASIBILITY_TOLERANCE, solveLp, solveLpRows, type LpModel } from '../../../src/server/planner/lp.ts';
+import { highsOptions, MIP_FEASIBILITY_TOLERANCE, solveLp } from '../../../src/server/planner/lp.ts';
 
 describe('solveLp', () => {
   it('solves a small minimisation', async () => {
@@ -117,39 +117,5 @@ describe('solveLp', () => {
     await expect(solveLp(model([[1, 1]]))).rejects.toThrow(RangeError);
     await expect(solveLp(model([[0, 1], [0, 2]]))).rejects.toThrow(RangeError);
     await expect(solveLp(model([[0, Infinity]]))).rejects.toThrow(RangeError);
-  });
-});
-
-describe('solveLpRows', () => {
-  // Goods A (row 0), B (row 1) and C (row 2): buy A at 1 (column 0) or B at 3 (column 1), make 4 B from 1 A (column 2),
-  // sink each (columns 3–5). Nothing makes C. Every row 0 in the model.
-  const model: LpModel = {
-    sense: 'min', colCost: [1, 3, 0, 0, 0, 0], colLower: [0, 0, 0, 0, 0, 0], colUpper: new Array<number>(6).fill(Infinity),
-    rows: [
-      { lower: 0, upper: 0, entries: [[0, 1], [2, -1], [3, -1]] },
-      { lower: 0, upper: 0, entries: [[1, 1], [2, 4], [4, -1]] },
-      { lower: 0, upper: 0, entries: [[5, -1]] },
-    ],
-  };
-  it('solves one model per row change, every other row as the model has it (fix wave 3 (D))', async () => {
-    const out = await solveLpRows(model, [
-      { row: 0, lower: 1, upper: 1 }, { row: 1, lower: 1, upper: 1 }, { row: 1, lower: 2, upper: 2 },
-      { row: 2, lower: 1, upper: 1 }, { row: 0, lower: 1, upper: 1 },
-    ]);
-    expect(out.map((r) => r.status)).toEqual(['optimal', 'optimal', 'optimal', 'infeasible', 'optimal']);
-    // One A; a quarter of an A for one B (row 1's coefficient 4 scales the row, its bounds with it); half for two; A again.
-    [1, 0.25, 0.5].forEach((v, i) => expect(out[i]?.objective).toBeCloseTo(v, 9));
-    expect(out[3]?.objective).toBeNaN();
-    expect(out[4]?.objective).toBeCloseTo(1, 9);
-  });
-  it('runs a series longer than one model holds', async () => {
-    const changes = Array.from({ length: 2 * LP_ROWS_PER_MODEL + 2 }, (_, i) => ({ row: i % 2, lower: 1, upper: 1 }));
-    const out = await solveLpRows(model, changes);
-    expect(out.map((r) => +r.objective.toFixed(9))).toEqual(changes.map((c) => (c.row === 0 ? 1 : 0.25)));
-  });
-  it('decides a model without columns from its row bounds', async () => {
-    const empty: LpModel = { sense: 'min', colCost: [], colLower: [], colUpper: [], rows: [{ lower: 0, upper: 0, entries: [] }] };
-    const out = await solveLpRows(empty, [{ row: 0, lower: 0, upper: 0 }, { row: 0, lower: 1, upper: 1 }]);
-    expect(out.map((r) => r.status)).toEqual(['optimal', 'infeasible']);
   });
 });
