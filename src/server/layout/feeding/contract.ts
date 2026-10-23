@@ -64,7 +64,11 @@ export interface FeedFinding {
   stepId?: string; machine: string /* `${name} at ${x} ${y} ${z}`, world position */; pos: Vec3; key?: StuffKey;
   text: string; tick?: number; count?: number;
 }
-export interface FeedUnknown { code: string; text: string; pos?: Vec3; stepId?: string }
+/**
+ * One thing the checker could not know. `key`: the item it is about, on an unknown raised once per item (`items_dropped`,
+ * `pr_queue_lost`, `pr_wander_path`); the model's unknowns are one per code and block, and name their items in `text`.
+ */
+export interface FeedUnknown { code: string; text: string; pos?: Vec3; stepId?: string; key?: StuffKey }
 export interface InputReport {
   stepId: string; machine: string; pos: Vec3; key: StuffKey; plannedPerSecond: number;
   deliveredPerSecond: Partial<Record<ScenarioName, number>>; burst?: { before: number; after: number };

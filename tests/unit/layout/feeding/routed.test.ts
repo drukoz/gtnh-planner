@@ -155,7 +155,7 @@ describe('Project Red routed pipes', () => {
     expect(run.stats.queueLostTotal('0,1,0')).toBe(64);
     expect(run.stats.dispatches('0,1,0')).toEqual([20]);
     expect(run.stats.deliveries('2,0,0')).toEqual([[35, 't:a@0', 64]]);
-    expect(run.unknowns.map((u) => [u.code, u.pos])).toEqual([['stack_sizes', undefined], ['pr_queue_lost', [0, 0, 0]]]);
+    expect(run.unknowns.map((u) => [u.code, u.pos, u.key])).toEqual([['stack_sizes', undefined, undefined], ['pr_queue_lost', [0, 0, 0], 't:a@0']]);
     expect(run.unknowns[1]!.text).toBe('Routed Interface Pipe at 0 1 0 lost 64 Alpha from its send queue in the restart: Project Red saves no send queue, '
       + 'so a restart just after a chip\'s act deletes what it queued');
     expect(same(line(['t:a@0']), { ticks: 100, restartAt: 10 }).stats.queueLostTotal('0,1,0')).toBe(0);
@@ -283,7 +283,7 @@ describe('Project Red routed pipes, more closely', () => {
     expect([run.stats.wanderedTotal('6,0,0'), run.stats.bouncedTotal('6,0,0')]).toEqual([64, 0]);
     expect(run.findings.map((f) => [f.code, f.key, f.tick, f.count, f.text]))
       .toEqual([['feed_churn', 't:a@0', 114, 64, '64 Alpha lost their way and wander the routed pipes until a responder answers']]);
-    expect(run.unknowns.map((u) => [u.code, u.pos, u.stepId])).toEqual([['stack_sizes', undefined, undefined], ['pr_wander_path', [6, 0, 0], 'n']]);
+    expect(run.unknowns.map((u) => [u.code, u.pos, u.stepId, u.key])).toEqual([['stack_sizes', undefined, undefined, undefined], ['pr_wander_path', [6, 0, 0], 'n', 't:a@0']]);
     // with an output chest that takes Alpha on the pipe 3,1,0, full of Beta until a taker empties a slot at 140: the wanderer asks
     // at 114 and 134 (every 20 ticks at Wandering speed), finds room at 154 and reaches the chest 2 hops on, at Passive speed
     const chest = prModel([inputChestNode('0,0,0', ['t:a@0']), outputChestNode('3,0,0'), sinkNode('6,0,0', 1, 1)], [

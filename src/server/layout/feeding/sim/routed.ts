@@ -752,12 +752,12 @@ export function routedModel(net: RoutedNet, env: SimEnv): NetworkModel {
   const unknowns = (): FeedUnknown[] => [
     ...lostQueues.map(({ pipe, key, n }): FeedUnknown => ({
       code: 'pr_queue_lost', text: `${pipe.spec.label} lost ${fmtInt(n)} ${model.nameOf(keys.key(key))} from its send queue in the restart: Project Red saves `
-        + 'no send queue, so a restart just after a chip\'s act deletes what it queued', ...where(pipe.spec.target?.node),
+        + 'no send queue, so a restart just after a chip\'s act deletes what it queued', key: keys.key(key), ...where(pipe.spec.target?.node),
     })),
     ...lostWays.map(({ node, key, n }): FeedUnknown => ({
       code: 'pr_wander_path', text: `${fmtInt(n)} ${model.nameOf(keys.key(key))} on their way to ${model.nodes.find((x) => x.id === node)?.label ?? node} `
         + `lost their way: the checker keeps a wandering payload at the pipe where it lost its way, asking for a route there every ${prTravelTicks(0, 'wandering')} `
-        + 'ticks, as it does not follow its random path through the pipes', ...where(node),
+        + 'ticks, as it does not follow its random path through the pipes', key: keys.key(key), ...where(node),
     })),
   ];
 

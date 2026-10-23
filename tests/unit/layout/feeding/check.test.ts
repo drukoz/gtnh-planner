@@ -342,6 +342,25 @@ describe('checkFeeding', () => {
     expect(report.unknowns.filter((u) => u.code === 'step_missing').map((u) => u.stepId)).toEqual(['q']);
   });
 
+  it('lists each item a machine drops into the world, once for the five scenarios (rule 6)', async () => {
+    // a Seed Thing making Ex and Why on main's machine-to-machine line, without its two output chests and with an HV export
+    // conveyor on its top, where nothing stands: every scenario drops 38 of each into the world there
+    const { pack, plan } = feedPlan([{ id: 'q', mteId: FEED_IDS.ODD, count: 1, inputs: [['t:a@0', 1]], outputs: [['t:x@0', 1], ['t:y@0', 1]], ticks: 100 }], [
+      { from: 'raw', to: 'q', key: 't:a@0', perSecond: 0.2 }, { from: 'q', to: 'out', key: 't:x@0', perSecond: 0.2 }, { from: 'q', to: 'out', key: 't:y@0', perSecond: 0.2 },
+    ]);
+    const layout = await layFeed(pack, plan, 'direct');
+    layout.blocks = layout.blocks.filter((b) => b.tail?.side !== 'output');
+    const machine = machineBlock(layout, 'q');
+    machine.covers = [...(machine.covers ?? []), { face: 'up', item: 'gregtech:gt.metaitem.01@32632', settings: { mode: 'export', allowInput: true } }];
+    const report = checkFeeding({ pack, plan, layout, options: { ticks: 4_000 } });
+    expect([report.ok, report.findings]).toEqual([true, []]);
+    // two items dropped at one machine are two unknowns, each kept once, with its count
+    const lost = (name: string) => `Seed Thing at 1 64 1 dropped 38 ${name} into the world: nothing at the side it pushes them out of takes them, so they are lost to the line`;
+    expect(report.unknowns.filter((u) => u.code === 'items_dropped').map((u) => [u.pos, u.stepId, u.key, u.text])).toEqual([
+      [[1, 64, 1], 'q', 't:x@0', lost('Ex')], [[1, 64, 1], 'q', 't:y@0', lost('Why')],
+    ]);
+  });
+
   it('checks a 1,200-block line in under a second', { timeout: 120_000 }, async () => {
     // per mode, one untimed run as the warm-up, then three timed in main-thread CPU time: other lanes' load on this shared host
     // stretches wall-clock time, and process.cpuUsage() would count the process's other threads too

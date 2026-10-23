@@ -299,7 +299,7 @@ export function runScenario(model: FeedModel, scenario: ScenarioName, opts: Scen
     const node = byId.get(id);
     const label = node?.label ?? id;
     unknowns.push({ code: 'items_dropped', text: `${label} dropped ${fmtInt(n)} ${model.nameOf(key)} into the world: nothing at the side it pushes them out of `
-      + 'takes them, so they are lost to the line', ...(node === undefined ? {} : at(node)) });
+      + 'takes them, so they are lost to the line', key, ...(node === undefined ? {} : at(node)) });
   }
   for (const m of models) unknowns.push(...(m.unknowns?.() ?? []));
   return {

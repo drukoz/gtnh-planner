@@ -11,7 +11,8 @@
 // - Inputs: per machine and planned item (the model's local order, then key), the plan's rate, what each scenario handed
 //   over in the run's second half, per second, and in `restart` what came in the `BURST_TICKS` before the restart and in
 //   those from it.
-// - Unknowns: the model's, then each scenario's, each (code, place, step) once, in the order first met.
+// - Unknowns: the model's, then each scenario's, each (code, place, step, item) once, the first met kept with its count, in
+//   the order first met: an item dropped at one machine in every scenario is one unknown, and two items dropped there are two.
 // - A line with nothing to check (a plan with status `empty` or `infeasible`, an empty layout, no machine read) is `ok`, with
 //   the unknown `empty_line` and what reading it left unknown (Review Focus 2).
 // - Deterministic: the same inputs give a deep-equal report, scheduled or with every entity on every tick (`exhaustive`).
@@ -134,12 +135,15 @@ function inputReports(model: FeedModel, runs: readonly ScenarioRun[], ticks: num
   return reports;
 }
 
-/** Rule 6: each (code, place, step) once, the first met kept, in the order met. */
+/**
+ * Rule 6: each (code, place, step, item) once, the first met kept with its count, in the order met. Only an unknown raised
+ * once per item (`items_dropped`, `pr_queue_lost`, `pr_wander_path`) carries its item (`key`).
+ */
 function distinctUnknowns(list: readonly FeedUnknown[]): FeedUnknown[] {
   const seen = new Set<string>();
   const out: FeedUnknown[] = [];
   for (const u of list) {
-    const id = `${u.code}|${u.pos?.join(' ') ?? '-'}|${u.stepId ?? '-'}`;
+    const id = `${u.code}|${u.pos?.join(' ') ?? '-'}|${u.stepId ?? '-'}|${u.key ?? '-'}`;
     if (seen.has(id)) continue;
     seen.add(id);
     out.push({ ...u, ...(u.pos === undefined ? {} : { pos: [u.pos[0], u.pos[1], u.pos[2]] }) });
