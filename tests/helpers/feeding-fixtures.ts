@@ -778,3 +778,56 @@ export function pipeModel(nodes: FeedNode[], pipes: GtPipeSpec[], covers: GtCove
   }).sort((a, b) => compareLocal(cellOf(a.id), cellOf(b.id)));
   return handModel(nodes, { mode: 'direct', ...more, covers: structuredClone(covers), networks: [{ kind: 'gtpipe', pipes: read }] });
 }
+
+// ---- The 1,200-block line (plan Task 11) ----
+
+/** The blocks Task 11's timing case lays at least (Global Constraints: under 1,000 ms on a 1,200-block line). */
+const BIG_LINE_BLOCKS = 1_200;
+
+/**
+ * `bigLine`'s plan of `steps` chain steps: step i (`s${i}`) is 8 Basic Macerators (`IDS.MACERATOR`, i even) or 8 Advanced
+ * Assemblers (`IDS.ASSEMBLER`, tier 2, i odd) on a 200-tick recipe that takes the previous step's output (step 0: Alpha)
+ * and, for odd i, Alpha from outside too, and makes Part i (`t:o${i}@0`); after every fourth step (i = 3, 7, …) a step
+ * `e${i}` of 2 Electric Blast Furnaces (`IDS.EBF`) on a 200-tick recipe takes Part i and makes Ingot i (`t:e${i}@0`), which
+ * the next step takes. Every flow is 1/s: from the step before when it makes the item, else from outside; the last step's
+ * output leaves the line.
+ */
+function bigPlan(steps: number): { pack: Pack; plan: Plan } {
+  const pack = feedPack();
+  const specs: FeedStep[] = [];
+  const flows: PlanFlow[] = [];
+  const add = (spec: FeedStep): void => {
+    const before = specs.at(-1);
+    const made = before?.outputs?.[0]?.[0];
+    for (const [key] of spec.inputs ?? []) flows.push({ from: before !== undefined && made === key ? before.id : 'raw', to: spec.id, key, perSecond: 1 });
+    specs.push(spec);
+  };
+  for (let i = 0; i < steps; i++) {
+    const odd = i % 2 === 1;
+    const prev = specs.at(-1)?.outputs?.[0]?.[0] ?? 't:a@0';
+    pack.items.set(`t:o${i}@0`, item(`t:o${i}@0`, `Part ${i}`));
+    add({
+      id: `s${i}`, mteId: odd ? IDS.ASSEMBLER : IDS.MACERATOR, ...(odd ? { tier: 2 } : {}), count: 8,
+      inputs: odd ? [[prev, 1], ['t:a@0', 1]] : [[prev, 1]], outputs: [[`t:o${i}@0`, 1]], ticks: 200,
+    });
+    if (i % 4 !== 3) continue;
+    pack.items.set(`t:e${i}@0`, item(`t:e${i}@0`, `Ingot ${i}`));
+    add({ id: `e${i}`, mteId: IDS.EBF, count: 2, inputs: [[`t:o${i}@0`, 1]], outputs: [[`t:e${i}@0`, 1]], ticks: 200 });
+  }
+  const last = specs.at(-1);
+  if (last !== undefined) flows.push({ from: last.id, to: 'out', key: last.outputs![0]![0], perSecond: 1 });
+  return feedPlan(specs, flows, pack);
+}
+
+/**
+ * A line of at least 1,200 blocks laid out in `mode` (Task 11's timing case): `bigPlan`'s chain grown one step at a time
+ * until `layFeed(pack, plan, mode)` places at least 1,200 blocks.
+ */
+export async function bigLine(mode: LogisticsMode): Promise<{ pack: Pack; plan: Plan; layout: Layout }> {
+  for (let steps = 1; steps <= 200; steps++) {
+    const { pack, plan } = bigPlan(steps);
+    const layout = await layFeed(pack, plan, mode);
+    if (layout.blocks.length >= BIG_LINE_BLOCKS) return { pack, plan, layout };
+  }
+  throw new Error(`a chain of 200 steps lays fewer than ${BIG_LINE_BLOCKS} blocks in ${mode} mode`);
+}

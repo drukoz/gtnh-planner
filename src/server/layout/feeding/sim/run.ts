@@ -8,6 +8,10 @@
 // - `env.push(from, side)` is what a GT transfer out of that side meets: the receiver a network registered at the
 //   neighbouring cell for that side, else the inventory of the node (or bus) there, else nothing (a routed pipe too: it is
 //   no inventory).
+// - What a scenario changes in a run (`scenarioParams`, Task 11 rule 3): `fast_supplier` runs the makers of each 2+ kind
+//   machine's first kind ten times faster, `late_input` holds each such machine's last kind back for `LATE_TICKS`;
+//   `multistack_on` reads a Multi Stack Input the layout leaves unset as On (the machine models read the scenario), and
+//   `restart` loads the line's chunk again (below).
 // - In `restart` the line's chunk loads again at the start of tick `restartAt` (rule 3a): every tile's timer and the
 //   covers' counter start again from there, every multiblock controller looks for a recipe (ruling R-17), and every
 //   bench's and every network's `restart()` runs.
@@ -22,7 +26,7 @@
 import { isFluidKey, type StuffKey } from '../../../../shared/keys.ts';
 import { fmtInt, NETWORK_NAMES } from '../../../../shared/layout/format.ts';
 import { OPPOSITE, posKey, step, type Vec3 } from '../../../../shared/layout/geometry.ts';
-import { SLOW_TOLERANCE, type FeedFinding, type FeedUnknown, type ScenarioName } from '../contract.ts';
+import { LATE_TICKS, SLOW_TOLERANCE, type FeedFinding, type FeedUnknown, type ScenarioName } from '../contract.ts';
 import { CHEST_SLOTS, PART_KEYS } from '../facts.ts';
 import { localOf } from '../frame.ts';
 import type { FeedModel, FeedNetwork, FeedNode, NodeId } from '../model.ts';
@@ -121,6 +125,30 @@ function isPreloadable(inv: SimInv): inv is SimInv & Preloadable {
   return typeof (inv as Partial<Preloadable>).preload === 'function';
 }
 
+/** What a scenario changes in a run (Task 11 rule 3): the steps whose runs are fast, the items held back, and until when. */
+export interface ScenarioParams { fastSteps: Set<string>; heldBack: Set<StuffKey>; heldUntil: number }
+
+/**
+ * What `scenario` changes in a run of `model` (Task 11 rule 3, research §7). The "2+ kind machines" are the machine nodes
+ * whose recipes take two or more item kinds (`node.kinds`, Task 2 rule 5: the recipes, not the plan's flows).
+ * - `fast_supplier`: `fastSteps` are the steps that make each such machine's first kind (`kinds[0]`, key order;
+ *   `model.makers`): their runs last `⌈ticks / FAST_FACTOR⌉`.
+ * - `late_input`: `heldBack` holds each such machine's last kind (key order) that is not also the first kind of another;
+ *   supplies (input chests, ME storage) hold none of them before `heldUntil` (`LATE_TICKS`), and a machine whose step
+ *   makes one starts no run before it.
+ * - `steady`, `restart` and `multistack_on` change none of these.
+ */
+export function scenarioParams(model: FeedModel, scenario: ScenarioName): ScenarioParams {
+  const fastSteps = new Set<string>(), heldBack = new Set<StuffKey>();
+  const kinds = model.nodes.flatMap((n) => (n.kind !== 'chest' && n.kinds.length >= 2 ? [n.kinds] : []));
+  if (scenario === 'fast_supplier') for (const k of kinds) for (const stepId of model.makers[k[0]!] ?? []) fastSteps.add(stepId);
+  if (scenario === 'late_input') {
+    const firsts = new Set(kinds.map((k) => k[0]!));
+    for (const k of kinds) if (!firsts.has(k.at(-1)!)) heldBack.add(k.at(-1)!);
+  }
+  return { fastSteps, heldBack, heldUntil: scenario === 'late_input' ? LATE_TICKS : 0 };
+}
+
 /**
  * Runs `model` in `scenario` for `opts.ticks` ticks and reports what it found. `exhaustive` runs every entity on every
  * tick instead of waking each when it is due; the result must be the same.
@@ -134,6 +162,7 @@ export function runScenario(model: FeedModel, scenario: ScenarioName, opts: Scen
   const reached = new Map<string, PushTarget | SimInv | null>();
   // rule 7a: one pool per fluid a laid step makes
   const pooled = Object.keys(model.makers).filter((k) => isFluidKey(k) && (model.makers[k]?.length ?? 0) > 0).map((k) => keys.id(k));
+  const { fastSteps, heldBack, heldUntil } = scenarioParams(model, scenario);
   const env: SimEnv = {
     sim, keys, stats, scenario, model,
     push(from, side) {
@@ -147,7 +176,7 @@ export function runScenario(model: FeedModel, scenario: ScenarioName, opts: Scen
       return found;
     },
     inv: (id) => invs.get(id) ?? null,
-    fastSteps: new Set(), heldBack: new Set(), heldUntil: 0, loadedAt: 0,
+    fastSteps, heldBack, heldUntil, loadedAt: 0,
     fluids: new FluidPools(pooled),
     opts: {
       ticks: opts.ticks, restartAt: opts.restartAt, ae2Coprocessors: opts.ae2Coprocessors ?? 0, ae2FluidStock: opts.ae2FluidStock === true,

@@ -90,6 +90,8 @@ class Pipe implements SimInv, SimEntity, PushTarget {
   since = 0;
   /** How many of its slots hold a stack. */
   filled = 0;
+  /** Every change to its slots and to the side it takes stacks from, which its `canInsert` reads (`SimInv.changes`). */
+  changes = 0;
   private readonly slots: Array<Stack | null>;
   private readonly covers: CoverTicks;
   private readonly env: SimEnv;
@@ -159,6 +161,7 @@ class Pipe implements SimInv, SimEntity, PushTarget {
     this.asked = UNKNOWN;
     this.slots[slot] = { key, count: m };
     this.filled++;
+    this.changes++;
     this.net.entered(key);
     this.env.sim.wake(this, by);
     return m;
@@ -173,6 +176,7 @@ class Pipe implements SimInv, SimEntity, PushTarget {
       this.slots[slot] = null;
       this.filled--;
     }
+    this.changes++;
     return m;
   }
 
@@ -200,7 +204,10 @@ class Pipe implements SimInv, SimEntity, PushTarget {
     const a = aTick(this.env, t);
     if (a % CHECK_TICKS === 0) {
       if (this.filled > 0 && this.previous === this.received) this.net.send(this, a);
-      if (this.filled === 0) this.received = UNKNOWN;
+      if (this.filled === 0 && this.received !== UNKNOWN) {
+        this.received = UNKNOWN;
+        this.changes++;
+      }
       this.previous = this.received;
     }
     // its next check matters while it holds items or still has sides to forget; an insert wakes it otherwise

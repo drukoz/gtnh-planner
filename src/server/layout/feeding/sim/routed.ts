@@ -31,6 +31,10 @@
 //   Wandering speed, for ever (the pack's "Max Wander Distance" is 0); the model keeps it at the pipe where it lost its way.
 // - A routed pipe is no inventory, so a machine's own push (a cover, auto-output, an output bus) never goes into one: the
 //   model registers no push target.
+// - Work whose answer is already known is skipped, and only that (Task 11 rule 7's exact steps, which change no result): a
+//   payload's try at an inventory that a try for its item already found full in the same arrivals tick, or that its own
+//   last try found full while the inventory has not changed since (`SimInv.changes`), and the room of an inventory that has
+//   not changed since it was last taken.
 // Pure TypeScript: nothing from node:* may be imported here.
 
 import type { StuffKey } from '../../../../shared/keys.ts';
@@ -123,6 +127,8 @@ interface Payload {
   step: typeof ARRIVE | typeof ENTER | typeof WANDER; at: number; enters: Pipe | null;
   /** It has been counted as bounced, or as wandering; it has gone in. */
   bounced: boolean; wandered: boolean; done: boolean;
+  /** The pipe of its last try that took nothing, and that pipe's inventory's `changes` then (null: none yet). */
+  tried: Pipe | null; triedAt: number;
 }
 
 /** What a broadcaster promised: `count` of `key` for the stock keeper's pipe `to`. */
@@ -197,9 +203,25 @@ export function routedModel(net: RoutedNet, env: SimEnv): NetworkModel {
     return list;
   };
 
+  /**
+   * A further exact step of Task 11 rule 7, for the extractors' answer scan: `roomFor` of each pipe's inventory for each item,
+   * kept with the inventory's `changes` it was taken at (`roomSeen`, −1: never), and taken again only once they moved. While
+   * they stay the same every `canInsert` answers as it did, so `roomFor` gives what it gave.
+   */
+  const roomKept = new Float64Array(pipes.length * keys.size);
+  const roomSeen = new Float64Array(pipes.length * keys.size).fill(-1);
+
   /** What pipe `p` answers for `key` (`RoutedInterfacePipePart.getSyncResponse`): its inventory's room less its transit, a full stack of `key` for each slot another item in transit needs. */
   const roomOf = (p: Pipe, key: number): number => {
-    let room = roomFor(p.inv!, key, p.side);
+    const inv = p.inv!;
+    const memo = p.index * keys.size + key;
+    let room: number;
+    if (roomSeen[memo] === inv.changes) room = roomKept[memo]!;
+    else {
+      room = roomFor(inv, key, p.side);
+      roomKept[memo] = room;
+      roomSeen[memo] = inv.changes;
+    }
     if (room <= 0) return room;
     const limit = keys.limit(key);
     for (const [k, n] of p.transit) room -= k === key ? n : limit * Math.ceil(n / keys.limit(k));
@@ -230,7 +252,7 @@ export function routedModel(net: RoutedNet, env: SimEnv): NetworkModel {
   const enqueue = (pipe: Pipe, key: number, count: number, dest: Pipe, priority: PrPriority): void => {
     pipe.queue.push({
       key, count, priority, dest, heading: dest.spec.target!.node, edge: dest, from: pipe, base: -1, step: ARRIVE, at: NEVER, enters: null,
-      bounced: false, wandered: false, done: false,
+      bounced: false, wandered: false, done: false, tried: null, triedAt: 0,
     });
   };
 
@@ -287,14 +309,49 @@ export function routedModel(net: RoutedNet, env: SimEnv): NetworkModel {
   };
 
   /**
+   * Task 11 rule 7's exact step for the payloads that bounce and try the same inventory again: within one tick of the arrivals
+   * entity, a try at a pipe's inventory (its edge: the pipe and its side) for an item is skipped when an earlier try there for
+   * that item in the same tick took nothing and no try since took anything, and it takes nothing, as that one did. It is
+   * exact: during that tick only the payloads' tries move items, a try that takes nothing changes nothing (`canInsert` only
+   * reads, and every `insert` returns 0 before it changes anything), and whether a try takes anything does not depend on its
+   * count. `futile[pipe × keys + key]` holds the generation of the memo in which such a try took nothing; the memo empties, a
+   * new generation, at the start of each arrivals tick and whenever a try takes something.
+   */
+  const futile = new Int32Array(pipes.length * keys.size);
+  let generation = 1;
+  const forget = (): void => {
+    if (generation >= 0x7fffffff) {
+      futile.fill(0);
+      generation = 0;
+    }
+    generation++;
+  };
+
+  /**
    * Payload `p` reaches the inventory of its `edge` pipe at tick `t` (`passToInventory`, `injectItem`): what goes in is delivered.
    * When the last of it goes in, that last part comes off the pipe's transit. Else it bounces: with a destination it keeps it,
    * stays in its transit and tries again one pipe length later; without one (a restart lost it) it asks for a route there.
+   * A further exact step of rule 7: a payload whose last try at this inventory took nothing skips a try at it while the
+   * inventory is unchanged since (its `changes`, which every change to what `canInsert` reads moves), as that try would take
+   * nothing again; and a try that the memo above skips is one that took nothing at the inventory as it stands.
    */
   const arrive = (p: Payload, t: number, by: SimEntity): void => {
     const { edge } = p;
-    const got = edge.inv === null ? 0 : insertEmpties(edge.inv, p.key, p.count, edge.side, by);
-    if (got > 0) stats.delivered(edge.inv!.id, p.key, got, t);
+    const inv = edge.inv;
+    let got = 0;
+    if (inv !== null && (p.tried !== edge || p.triedAt !== inv.changes)) {
+      const memo = edge.index * keys.size + p.key;
+      if (futile[memo] !== generation) {
+        got = insertEmpties(inv, p.key, p.count, edge.side, by);
+        if (got > 0) forget();
+        else futile[memo] = generation;
+      }
+      if (got <= 0) {
+        p.tried = edge;
+        p.triedAt = inv.changes;
+      }
+    }
+    if (got > 0) stats.delivered(inv!.id, p.key, got, t);
     if (got >= p.count) {
       received(edge, p.key, got);
       p.done = true;
@@ -319,6 +376,7 @@ export function routedModel(net: RoutedNet, env: SimEnv): NetworkModel {
     tick(t: number): number {
       let due = NEVER;
       let gone = false;
+      forget();                                               // rule 7's memo empties at the start of each arrivals tick
       for (const p of flying) {
         if (p.at === t) {
           if (p.step === ARRIVE) arrive(p, t, arrivals);

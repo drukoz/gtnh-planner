@@ -22,6 +22,8 @@ abstract class Chest implements SimInv, SimEntity, Preloadable {
   readonly label: string;
   readonly phase = PHASE.tile;
   readonly order: number;
+  /** Every change to its slots (`SimInv.changes`). */
+  changes = 0;
   protected readonly env: SimEnv;
   protected readonly slots: Array<Stack | null> = ALL_SLOTS.map(() => null);
 
@@ -67,6 +69,7 @@ abstract class Chest implements SimInv, SimEntity, Preloadable {
     if (this.keeps(key)) {
       if (s === null) this.slots[slot] = { key, count: m };
       else s.count += m;
+      this.changes++;
     }
     return m;
   }
@@ -77,6 +80,7 @@ abstract class Chest implements SimInv, SimEntity, Preloadable {
     const m = Math.min(n, s.count);
     s.count -= m;
     if (s.count <= 0) this.slots[slot] = null;
+    this.changes++;
     return m;
   }
 
@@ -100,6 +104,7 @@ abstract class Chest implements SimInv, SimEntity, Preloadable {
   preload(slot: number, key: number, count: number): void {
     if (slot < 0 || slot >= CHEST_SLOTS || !Number.isInteger(slot)) throw new RangeError(`${this.label} has no slot ${slot}`);
     this.slots[slot] = count > 0 ? { key, count: Math.min(count, this.stackLimit(key)) } : null;
+    this.changes++;
   }
 
   /** Whether an arrival of `key` stays in the chest. */

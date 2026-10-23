@@ -125,6 +125,8 @@ export class BasicMachine implements SimInv, SimEntity, Preloadable, FluidWaiter
   private readonly rolled: number[];
   private readonly made = new Map<number, number>();         // chanced outputs rolled so far, by key
   private readonly used = new Map<number, number>();         // chanced inputs used up so far, by key
+  /** Every change to its slots, its runs' own included (`SimInv.changes`). */
+  changes = 0;
   private changed = false;
   private cached = -1;
   private running = -1;
@@ -226,6 +228,7 @@ export class BasicMachine implements SimInv, SimEntity, Preloadable, FluidWaiter
       this.slots[slot] = { key, count: m };
       if (slot < this.inSlots) this.env.stats.occupancy(this.id, key, this.inputSlotsOf(key), this.env.sim.t);
     } else s.count += m;
+    this.changes++;
     this.markChanged(by);
     return m;
   }
@@ -237,6 +240,7 @@ export class BasicMachine implements SimInv, SimEntity, Preloadable, FluidWaiter
     const key = s.key;
     s.count -= m;
     if (s.count <= 0) this.slots[slot] = null;
+    this.changes++;
     if (slot >= this.inSlots) this.env.stats.extracted(this.id, key, m, this.env.sim.t);
     this.markChanged(by);
     return m;
@@ -263,6 +267,7 @@ export class BasicMachine implements SimInv, SimEntity, Preloadable, FluidWaiter
   preload(slot: number, key: number, count: number): void {
     if (slot < 0 || slot >= this.slots.length || !Number.isInteger(slot)) throw new RangeError(`${this.label} has no slot ${slot}`);
     this.slots[slot] = count > 0 ? { key, count: Math.min(count, this.stackLimit(key)) } : null;
+    this.changes++;
     if (count > 0 && slot < this.inSlots) this.env.stats.occupancy(this.id, key, this.inputSlotsOf(key), 0);
   }
 
@@ -425,6 +430,7 @@ export class BasicMachine implements SimInv, SimEntity, Preloadable, FluidWaiter
   private start(r: number, t: number): void {
     const env = this.env;
     const recipe = this.recipes[r]!;
+    this.changes++;
     // inputs, each from the input slots in slot order, lowest first (GTRecipe.consumeInput)
     for (const input of recipe.inputs) {
       let n = input.chance >= 1 ? input.amount : rollShare(this.used, input.key, input.amount * input.chance);
@@ -452,6 +458,7 @@ export class BasicMachine implements SimInv, SimEntity, Preloadable, FluidWaiter
   private finish(): void {
     const recipe = this.recipes[this.running]!;
     const byHand = this.node.steam ? this.env.byHand : null;
+    this.changes++;
     recipe.outputs.forEach((o, i) => {
       const amount = this.rolled[i] ?? 0;
       if (amount <= 0 || i >= this.outSlots) return;

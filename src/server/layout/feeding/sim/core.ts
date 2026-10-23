@@ -100,6 +100,13 @@ export interface SimInv {
   countsAsEmpty(): boolean;               // AE2 blocking: nothing in its IO slots that ignoredByBlocking does not cover
   /** How many of the key one of its slots holds (the item's stack size); `roomFor` reads it. */
   stackLimit(key: number): number;
+  /**
+   * A count that grows with every change to what its slots hold, whoever makes it (an insert or an extract, its own run, craft
+   * or sort), and to anything else its `canInsert` reads. While it stays the same, every `canInsert` answers as it did, so
+   * `roomFor` gives what it gave and an `insertEmpties` takes something exactly when it did before (Task 11 rule 7's exact
+   * steps in routed.ts rest on it). Counting a change that is none is harmless; missing one is not.
+   */
+  readonly changes: number;
 }
 
 /** An inventory whose contents a test sets before the first tick (`runScenario`'s `initial`): no change is marked. */

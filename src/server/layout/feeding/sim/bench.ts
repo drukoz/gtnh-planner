@@ -46,6 +46,8 @@ class AutoWorkbench implements SimInv, SimEntity, Preloadable {
   readonly order: number;
   /** Its energy, an entity of the power phase: each tick's gain, taken up to the tick it runs. */
   readonly power: SimEntity;
+  /** Every change to its slots, its updates' own included (`SimInv.changes`). */
+  changes = 0;
   private readonly env: SimEnv;
   private readonly node: BenchNode;
   private readonly slots: Array<Stack | null> = SIDE_SLOTS.map(() => null);
@@ -169,6 +171,7 @@ class AutoWorkbench implements SimInv, SimEntity, Preloadable {
       this.slots[slot] = { key, count: m };
       this.landed(slot, key);
     } else s.count += m;
+    this.changes++;
     return m;
   }
 
@@ -179,6 +182,7 @@ class AutoWorkbench implements SimInv, SimEntity, Preloadable {
     const m = Math.min(n, s.count);
     s.count -= m;
     if (s.count <= 0) this.slots[slot] = null;
+    this.changes++;
     if (slot === RESULT && this.refusedSince >= 0) {
       // its result went out, by its own push or by a network: it is not refused any more
       this.refusedSince = -1;
@@ -205,6 +209,7 @@ class AutoWorkbench implements SimInv, SimEntity, Preloadable {
   preload(slot: number, key: number, count: number): void {
     if (!Number.isInteger(slot) || slot < 0 || slot > RESULT) throw new RangeError(`${this.label} has no slot ${slot} that holds items`);
     this.slots[slot] = count > 0 ? { key, count: Math.min(count, this.stackLimit(key)) } : null;
+    this.changes++;
     if (count > 0) this.landed(slot, key);
   }
 
@@ -276,6 +281,8 @@ class AutoWorkbench implements SimInv, SimEntity, Preloadable {
     const s = this.slots;
     const { stats } = this.env;
     const pushes = this.node.throughput < NO_PUSH;
+    // an update may move stacks to its result slot, craft and return containers: each a change to its slots (`SimInv.changes`)
+    this.changes++;
     this.countdown = BENCH.idleTicks;
     if (s[RESULT] === null) {
       if (!this.lastOk) {

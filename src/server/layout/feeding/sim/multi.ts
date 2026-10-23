@@ -64,6 +64,8 @@ abstract class Bus implements SimInv, SimEntity, Preloadable {
   readonly order: number;
   /** The multiblock the bus belongs to: `multiblock` sets it once every part is built. */
   controller: Controller | null = null;
+  /** Every change to its slots, its controller's and its own sorting included (`SimInv.changes`). */
+  changes = 0;
   protected readonly env: SimEnv;
   protected readonly front: number;
   protected readonly slots: Array<Stack | null>;
@@ -125,6 +127,7 @@ abstract class Bus implements SimInv, SimEntity, Preloadable {
   preload(slot: number, key: number, count: number): void {
     if (slot < 0 || slot >= this.slots.length || !Number.isInteger(slot)) throw new RangeError(`${this.label} has no slot ${slot}`);
     this.slots[slot] = count > 0 ? { key, count: Math.min(count, this.stackLimit(key)) } : null;
+    this.changes++;
   }
 
   /** How many of its slots hold `key`. */
@@ -198,6 +201,7 @@ class InputBus extends Bus {
       this.slots[slot] = { key, count: m };
       this.env.stats.occupancy(this.id, key, this.slotsOf(key), this.env.sim.t);
     } else s.count += m;
+    this.changes++;
     this.markChanged(by);
     return m;
   }
@@ -208,6 +212,7 @@ class InputBus extends Bus {
     const m = Math.min(n, s.count);
     s.count -= m;
     if (s.count <= 0) this.slots[slot] = null;
+    this.changes++;
     this.markChanged(by);
     return m;
   }
@@ -229,6 +234,7 @@ class InputBus extends Bus {
    */
   consume(key: number, n: number): number {
     let left = n;
+    this.changes++;
     for (let i = this.slots.length - 1; i >= 0 && left > 0; i--) {
       const s = this.slots[i] ?? null;
       if (s === null || s.key !== key) continue;
@@ -245,6 +251,7 @@ class InputBus extends Bus {
    * slot at each place one of its stacks stood, in slot order, so one item in two part stacks becomes one.
    */
   sort(): void {
+    this.changes++;
     const stacks = this.slots.filter((s): s is Stack => s !== null);
     const left = new Map<number, number>();
     for (const s of stacks) left.set(s.key, (left.get(s.key) ?? 0) + s.count);
@@ -300,6 +307,7 @@ class OutputBus extends Bus {
     const key = s.key;
     s.count -= m;
     if (s.count <= 0) this.slots[slot] = null;
+    this.changes++;
     this.env.stats.extracted(this.id, key, m, this.env.sim.t);
     this.controller?.alert(by);
     return m;
@@ -308,7 +316,10 @@ class OutputBus extends Bus {
   /** A run's output: up to `n` of `key`, merged first, then into empty slots. Returns what is left. */
   store(key: number, n: number, by: SimEntity | null): number {
     const left = place(this.slots, key, n, this.stackLimit(key));
-    if (left < n) this.env.sim.wake(this, by);
+    if (left < n) {
+      this.changes++;
+      this.env.sim.wake(this, by);
+    }
     return left;
   }
 
