@@ -21,7 +21,7 @@ import { lineBuildModel, optionMachines, type BuildModel } from '../../../src/se
 import { emptyContext, planLine, solveOptions, stockForm } from '../../../src/server/planner/plan.ts';
 import { linePricing } from '../../../src/server/planner/pricing.ts';
 import { solveLine, type Solution } from '../../../src/server/planner/solve.ts';
-import { tierName } from '../../../src/shared/gt/tiers.ts';
+import { tierName, V } from '../../../src/shared/gt/tiers.ts';
 import type { StuffKey } from '../../../src/shared/keys.ts';
 import { defaultSettings, normalizeSettings } from '../../../src/shared/project/apply-op.ts';
 import type { Machine, Pack } from '../../../src/shared/types/pack.ts';
@@ -367,6 +367,28 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
     expect(plan.status, JSON.stringify(plan.warnings)).toBe('ok');
     expect(seconds).toBeLessThan(PLAN_SECONDS);
   }, 180_000);
+
+  it('prices a part the same whatever else is asked, and never dearer than without the override when an override makes a good cheaper', async () => {
+    // Fix wave 3 (D), the Electronic Circuit at MV, each table on a pricing context nothing priced yet (`priceTableSeconds`'
+    // override). a5f5100 priced 16x Redstone Alloy Cable at 12.3789 asked alone and 6.4770 beside every cable rated up to
+    // HV, and 1x Tin Cable at 0.6111 / 0.7111 / 0.6211 / 0.6111 with Rubber Wood at 1 / 0.1 / 0.01 / 0.
+    const s = at(ELECTRONIC_CIRCUIT, 2, 1);
+    const fresh = (more: PlanSettings): PlanSettings => ({ ...more, costOverrides: { ...more.costOverrides, 'gregtech:gt.metaitem.01@99999': ++measured } });
+    const cableKey = (name: string): StuffKey => ([...pack.machines.values()].find((m) => m.name === name) as Machine).itemKey;
+    const redstoneAlloy = cableKey('16x Redstone Alloy Cable');
+    const cables = [...pack.machines.values()].filter((m) => m.kind === 'cable' && m.cable !== undefined && m.cable.voltage <= (V[3] as number)).map((m) => m.itemKey);
+    const alone = (await itemPrices(pack, fresh(s), ctx, [redstoneAlloy])).cost(redstoneAlloy);
+    const together = (await itemPrices(pack, fresh(s), ctx, cables)).cost(redstoneAlloy);
+    const tin = cableKey('1x Tin Cable');
+    const byWood: number[] = [];
+    for (const wood of [1, 0.1, 0.01, 0]) {
+      byWood.push((await itemPrices(pack, { ...s, costOverrides: { 'IC2:blockRubWood@0': wood } }, ctx, [tin])).cost(tin));
+    }
+    console.log(`real-build-cost prices: 16x Redstone Alloy Cable ${alone} alone, ${together} beside ${cables.length} cables; 1x Tin Cable at Rubber Wood 1 / 0.1 / 0.01 / 0: ${byWood.join(' / ')}`);
+    expect(Number.isFinite(alone)).toBe(true);
+    expect(together).toBeCloseTo(alone, 6);
+    byWood.slice(1).forEach((price, i) => expect(price, `Rubber Wood step ${i + 1}`).toBeLessThanOrEqual((byWood[i] as number) * (1 + 1e-9)));
+  }, 300_000);
 
   it('prices the candidate machines quickly', async () => {
     // The Electronic Circuit at MV: every candidate machine of its line on a memo key nothing priced yet (its log line's
