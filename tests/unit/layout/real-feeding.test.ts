@@ -6,7 +6,10 @@
 // options (in AE2 once more with ME stocking every pattern's fluid). It runs only with GTNH_LOCAL=1 and GTNH_PLANNER_CONFIG
 // naming a config whose data folder holds the export, and is skipped everywhere else. The user's settings are read at run
 // time from GTNH_FEED_REFERENCE, else docs/local/circuit-reference/reference.json (private: never printed, copied or
-// committed); without that file their two lines are skipped with a note. It prints counts, codes and mteIds only.
+// committed); without that file their two lines are skipped with a note. It prints counts, codes and mteIds only: its
+// assertions compare, and their messages name, a machine by its place among the line's machines and its mteId, an item by its
+// place among the line's items, a finding by its code, and a report by whether it is equal, never a name, a cell or a key, so a
+// failing run of the user's lines prints nothing of the settings they were planned from.
 //
 // Today's main lays these lines with fix/feeding's structured feeding (research §6.4: chips that list what their machine
 // makes, encodable patterns, Multi Stack Input Off where a machine takes two kinds or more) and add-on 12's Auto Workbenches
@@ -15,6 +18,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
 import { checkFeeding } from '../../../src/server/layout/feeding/check.ts';
@@ -116,6 +120,24 @@ function machines(model: FeedModel): Array<Exclude<FeedNode, { kind: 'chest' }>>
   return model.nodes.filter((n): n is Exclude<FeedNode, { kind: 'chest' }> => n.kind !== 'chest');
 }
 
+/** A machine as a message may name it: its place among the model's machines and its mteId, never its name or cell. */
+function who(model: FeedModel, node: Exclude<FeedNode, { kind: 'chest' }>): string {
+  return `machine ${machines(model).indexOf(node)} (mteId ${node.mteId})`;
+}
+
+/** Every item key the model names (its supply, sinks, plan rates and recipes), sorted: an item's place in it stands for the item. */
+function itemsOf(model: FeedModel): StuffKey[] {
+  const keys = new Set<StuffKey>([...model.supply, ...model.sinks, ...Object.values(model.planned).flatMap((r) => Object.keys(r))]);
+  for (const n of machines(model)) for (const r of n.recipes) for (const k of [...r.inputs.map((i) => i.key), ...r.held, ...r.outputs.map((o) => o.key)]) keys.add(k);
+  return [...keys].sort();
+}
+
+/** Items as a message may give them: each by its place among the model's items (`itemsOf`). */
+function itemIds(model: FeedModel, keys: readonly (StuffKey | undefined)[]): string[] {
+  const all = itemsOf(model);
+  return keys.map((k) => (k === undefined ? '-' : `item ${all.indexOf(k)}`));
+}
+
 /** The items the plan brings to a machine's steps (`stepItemInputs`), each once. */
 function kindsOf(plan: Plan, node: Exclude<FeedNode, { kind: 'chest' }>): StuffKey[] {
   return [...new Set(node.stepIds.flatMap((id) => stepItemInputs(plan, id)))].sort();
@@ -148,7 +170,15 @@ function inScenario(report: FeedingReport, scenario: string): FeedFinding[] {
   return report.findings.filter((f) => f.phase === 'sim' && f.scenario === scenario);
 }
 
-const brief = (f: FeedFinding) => `${f.code} ${f.certainty} ${f.key ?? '-'} ${f.machine}`;
+/**
+ * A finding as an assertion compares it and its message prints it: its code, certainty and phase, its machine by place and
+ * mteId (a chest by its place among the nodes) and its item by place (`itemIds`), never a name, a cell or a key.
+ */
+function brief(model: FeedModel, f: FeedFinding): string {
+  const node = model.nodes.find((n) => n.pos.join(' ') === f.pos.join(' '));
+  const at = node === undefined ? 'no node' : node.kind === 'chest' ? `node ${model.nodes.indexOf(node)} (chest)` : who(model, node);
+  return `${f.code} ${f.certainty} ${f.phase} ${at} ${itemIds(model, [f.key])[0]!}`;
+}
 
 describe.skipIf(process.env.GTNH_LOCAL !== '1')('the feeding checker on the research probe lines', () => {
   let pack: Pack;
@@ -184,10 +214,10 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('the feeding checker on the rese
         if (check === undefined) continue;
         console.log(consoleLine(line, check));
         const { report } = check;
-        expect(JSON.parse(JSON.stringify(report)), `${line.name} ${check.what}: plain data`).toStrictEqual(report);
+        expect(isDeepStrictEqual(JSON.parse(JSON.stringify(report)), report), `${line.name} ${check.what}: plain data`).toBe(true);
         // the static findings come first, then each scenario's
         const statics = report.findings.filter((f) => f.phase === 'static');
-        expect(report.findings.slice(0, statics.length), `${line.name} ${check.what}: static findings first`).toEqual(statics);
+        expect(isDeepStrictEqual(report.findings.slice(0, statics.length), statics), `${line.name} ${check.what}: static findings first`).toBe(true);
         expect(report.findings.slice(statics.length).every((f) => f.phase === 'sim'), `${line.name} ${check.what}: then the scenarios'`).toBe(true);
         expect(report.scenarios.map((s) => s.name)).toEqual([...SCENARIOS]);
         expect(check.ms, `${line.name} ${check.what}: CPU ms`).toBeLessThan(LINE_MS);
@@ -207,7 +237,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('the feeding checker on the rese
     // two kinds or more, one of them from the input chest, starves of one kind while another circles.
     for (const line of of('routed')) {
       const { report, model } = line.main;
-      expect(report.findings.filter((f) => f.phase === 'static').map(brief), `${line.name}: static findings`).toEqual([]);
+      expect(report.findings.filter((f) => f.phase === 'static').map((f) => brief(model, f)), `${line.name}: static findings`).toEqual([]);
       expect(model.unknowns.filter((u) => u.code === 'routed_text' || u.code === 'extractor_new').map((u) => u.code), `${line.name}: chips read from text`).toEqual([]);
       const steady = inScenario(report, 'steady');
       let deadlocked = 0;
@@ -217,9 +247,9 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('the feeding checker on the rese
         deadlocked++;
         const starved = steady.filter((f) => f.code === 'feed_starved' && f.machine === node.label && kinds.includes(f.key!)).map((f) => f.key);
         const circling = steady.filter((f) => f.code === 'feed_churn' && f.machine === node.label && kinds.includes(f.key!)).map((f) => f.key);
-        expect(starved.length, `${line.name}: ${node.label} gets one of its kinds`).toBeGreaterThan(0);
-        expect(circling.length, `${line.name}: ${node.label} has the first kind's overshoot circling its pipe`).toBeGreaterThan(0);
-        expect(starved.filter((k) => circling.includes(k)), `${line.name}: ${node.label} starves of another kind than the one that circles`).toEqual([]);
+        expect(starved.length, `${line.name}: ${who(model, node)} gets one of its kinds`).toBeGreaterThan(0);
+        expect(circling.length, `${line.name}: ${who(model, node)} has the first kind's overshoot circling its pipe`).toBeGreaterThan(0);
+        expect(itemIds(model, starved.filter((k) => circling.includes(k))), `${line.name}: ${who(model, node)} starves of another kind than the one that circles`).toEqual([]);
       }
       // every line has one (red-alloy its two Alloy Smelters, motor-lv its Chemical Reactor, vacuum-tube its Mixer and Electric
       // Blast Furnaces, the Electronic Circuit lines their Alloy Smelter), so no line makes its product, and every one fails the gate
@@ -242,16 +272,16 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('the feeding checker on the rese
     for (const line of of('ae2')) {
       const { report, model, layout } = line.main;
       const laid = layout.blocks.flatMap((b) => b.feed?.interface?.patterns ?? []).flatMap((p) => [...p.inputs, ...p.outputs]);
-      expect(laid.filter((e) => isFluidKey(e.key) || !Number.isInteger(e.amount)), `${line.name}: laid pattern entries a pattern cannot hold`).toEqual([]);
-      expect(report.findings.filter((f) => f.phase === 'static').map(brief), `${line.name}: static findings`).toEqual([]);
+      expect(laid.filter((e) => isFluidKey(e.key) || !Number.isInteger(e.amount)).length, `${line.name}: laid pattern entries a pattern cannot hold`).toBe(0);
+      expect(report.findings.filter((f) => f.phase === 'static').map((f) => brief(model, f)), `${line.name}: static findings`).toEqual([]);
       // no pattern lists a fluid, so ME's fluid stock changes nothing
-      expect(line.stocked!.report, `${line.name}: with ME stocking the patterns' fluids`).toEqual(report);
+      expect(isDeepStrictEqual(line.stocked!.report, report), `${line.name}: with ME stocking the patterns' fluids`).toBe(true);
 
       const steady = inScenario(report, 'steady');
       const product = productOf(line.plan);
       const made = report.scenarios.find((s) => s.name === 'steady')!;
       if (line.name === 'red-alloy') {
-        expect(report.findings.map(brief), 'red-alloy: findings').toEqual([]);
+        expect(report.findings.map((f) => brief(model, f)), 'red-alloy: findings').toEqual([]);
         expect(report.ok).toBe(true);
         expect(made.out[product.key] ?? 0, 'red-alloy: its product into ME').toBeGreaterThan(0);
         continue;
@@ -264,26 +294,29 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('the feeding checker on the rese
         const node = model.nodes.find((n) => n.id === bus.target?.node);
         if (node === undefined) continue;
         for (const key of bus.keys.filter((k) => !model.supply.includes(k))) {
-          expect(steady.filter((f) => f.code === 'feed_starved' && f.machine === node.label && f.key === key).length, `${line.name}: ${node.label} gets ${key}`).toBe(1);
+          expect(steady.filter((f) => f.code === 'feed_starved' && f.machine === node.label && f.key === key).length,
+            `${line.name}: ${node.kind === 'chest' ? 'a chest' : who(model, node)} gets ${itemIds(model, [key])[0]!}`).toBe(1);
         }
       }
       // and a machine fix/feeding warns AE2 runs too seldom for the fluid it pipes never runs at all
       for (const w of layout.warnings.filter((x) => x.code === 'ae2_fluid_short')) {
         for (const node of machines(model).filter((n) => n.stepIds.includes(w.stepId ?? ''))) {
           const missed = new Set(steady.filter((f) => f.code === 'feed_starved' && f.machine === node.label).map((f) => f.key));
-          expect(plannedOf(model, node).filter((k) => !missed.has(k)), `${line.name}: what ${node.label}, whose fluid AE2 runs too seldom, gets`).toEqual([]);
+          expect(itemIds(model, plannedOf(model, node).filter((k) => !missed.has(k))), `${line.name}: what ${who(model, node)}, whose fluid AE2 runs too seldom, gets`).toEqual([]);
         }
       }
 
       // the job: only where an item it needs comes only by chance can AE2 not plan it at all, and then nothing is pushed anywhere
       const cannot = [...new Set(steady.map((f) => /the AE2 job cannot be planned: (.*)$/.exec(f.text)?.[1]).filter((x) => x !== undefined))];
       const missing = unplanned[line.name];
-      expect(cannot, `${line.name}: why its job cannot be planned`).toEqual(missing === undefined ? [] : [`nothing makes ${model.nameOf(missing)} and ME holds none`]);
+      // compared, not printed: a reason names items
+      expect(isDeepStrictEqual(cannot, missing === undefined ? [] : [`nothing makes ${model.nameOf(missing)} and ME holds none`]),
+        `${line.name}: why its job cannot be planned (${cannot.length} reasons)`).toBe(true);
       if (missing !== undefined) {
         const pushed = new Set(model.networks.flatMap((n) => (n.kind === 'ae2' ? n.interfaces.flatMap((i) => i.targets.map((t) => t.node)) : [])));
         for (const node of machines(model).filter((n) => pushed.has(n.id))) {
           const starved = new Set(steady.filter((f) => f.code === 'feed_starved' && f.machine === node.label && f.text.includes(`: the AE2 job cannot be planned: ${cannot[0]}`)).map((f) => f.key));
-          expect(plannedOf(model, node).filter((k) => !starved.has(k)), `${line.name}: what ${node.label} gets`).toEqual([]);
+          expect(itemIds(model, plannedOf(model, node).filter((k) => !starved.has(k))), `${line.name}: what ${who(model, node)} gets`).toEqual([]);
         }
       }
     }
@@ -293,7 +326,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('the feeding checker on the rese
     const bench = machines(motor.main.model).find((n) => n.stepIds.includes(productOf(motor.plan).stepId))!;
     expect(bench.kind).toBe('bench');
     const benchStarved = new Set(inScenario(motor.main.report, 'steady').filter((f) => f.code === 'feed_starved' && f.machine === bench.label).map((f) => f.key));
-    expect(plannedOf(motor.main.model, bench).filter((k) => !benchStarved.has(k))).toEqual([]);
+    expect(itemIds(motor.main.model, plannedOf(motor.main.model, bench).filter((k) => !benchStarved.has(k)))).toEqual([]);
     expect(plannedOf(motor.main.model, bench)).toHaveLength(4);
   });
 
@@ -308,21 +341,21 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('the feeding checker on the rese
     for (const line of of('enderio')) {
       const { report, model } = line.main;
       const twoKinds = machines(model).filter((n) => n.kind === 'basic' && kindsOf(line.plan, n).length >= 2);
-      expect(twoKinds.filter((n) => n.kind === 'basic' && n.settings.multiStack !== false).map((n) => n.label), `${line.name}: Multi Stack Input left on`).toEqual([]);
-      expect(report.findings.filter((f) => f.code === 'feed_crowded').map(brief), `${line.name}: crowded`).toEqual([]);
+      expect(twoKinds.filter((n) => n.kind === 'basic' && n.settings.multiStack !== false).map((n) => who(model, n)), `${line.name}: Multi Stack Input left on`).toEqual([]);
+      expect(report.findings.filter((f) => f.code === 'feed_crowded').map((f) => brief(model, f)), `${line.name}: crowded`).toEqual([]);
       expect(report.ok, `${line.name}: ok`).toBe(true);
       const product = productOf(line.plan);
       expect(report.scenarios.find((s) => s.name === 'steady')!.out[product.key] ?? 0, `${line.name}: its product out`).toBeGreaterThan(0);
 
       const unset = line.unset!.report;
       // R2 names each machine whose Multi Stack Input the layout leaves to chance
-      expect(unset.findings.filter((f) => f.phase === 'static' && f.code === 'feed_crowded').map((f) => `${f.certainty} ${f.machine}`), `${line.name} unset: R2`)
-        .toEqual(twoKinds.map((n) => `risk ${n.label}`));
-      expect(inScenario(unset, 'steady').filter((f) => f.code === 'feed_crowded').map(brief), `${line.name} unset: crowded in steady`).toEqual([]);
+      expect(unset.findings.filter((f) => f.phase === 'static' && f.code === 'feed_crowded').map((f) => brief(model, f)), `${line.name} unset: R2`)
+        .toEqual(twoKinds.map((n) => `feed_crowded risk static ${who(model, n)} -`));
+      expect(inScenario(unset, 'steady').filter((f) => f.code === 'feed_crowded').map((f) => brief(model, f)), `${line.name} unset: crowded in steady`).toEqual([]);
       const crowded = new Set(inScenario(unset, 'multistack_on').filter((f) => f.code === 'feed_crowded').map((f) => f.machine));
       const chestFed = twoKinds.filter((n) => fedFromChest(model, n));
       crowdedFromChest += chestFed.length;
-      expect(chestFed.filter((n) => !crowded.has(n.label)).map((n) => n.label), `${line.name} unset: not crowded with Multi Stack Input On`).toEqual([]);
+      expect(chestFed.filter((n) => !crowded.has(n.label)).map((n) => who(model, n)), `${line.name} unset: not crowded with Multi Stack Input On`).toEqual([]);
       // the others crowded there (the research also names the Electronic Circuit line's Circuit Assembler): counts and mteIds only
       const others = machines(model).filter((n) => crowded.has(n.label) && !chestFed.includes(n));
       console.log(`real-feeding ${line.name} enderio (Multi Stack Input unset): multistack_on crowds ${machinesText(chestFed.length)} fed from the input chest `
@@ -340,13 +373,13 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('the feeding checker on the rese
     let single = 0;
     for (const line of of('routed')) {
       const { report, model } = line.main;
-      expect(report.findings.filter((f) => f.phase === 'static' && f.code === 'feed_no_route').map(brief), `${line.name}: R5a and R6`).toEqual([]);
-      expect(report.findings.filter((f) => f.code === 'feed_starved' && f.text.includes('Item Extractor Chip')).map(brief), `${line.name}: starved by a chip`).toEqual([]);
-      expect(inScenario(report, 'multistack_on').filter((f) => f.code === 'feed_crowded').map(brief), `${line.name}: crowded with Multi Stack Input On`).toEqual([]);
+      expect(report.findings.filter((f) => f.phase === 'static' && f.code === 'feed_no_route').map((f) => brief(model, f)), `${line.name}: R5a and R6`).toEqual([]);
+      expect(report.findings.filter((f) => f.code === 'feed_starved' && f.text.includes('Item Extractor Chip')).map((f) => brief(model, f)), `${line.name}: starved by a chip`).toEqual([]);
+      expect(inScenario(report, 'multistack_on').filter((f) => f.code === 'feed_crowded').map((f) => brief(model, f)), `${line.name}: crowded with Multi Stack Input On`).toEqual([]);
       const fedOne = machines(model).filter((n) => kindsOf(line.plan, n).length === 1 && fedFromChest(model, n));
       single += fedOne.length;
       const starved = new Set(report.findings.filter((f) => f.code === 'feed_starved').map((f) => f.machine));
-      expect(fedOne.filter((n) => starved.has(n.label)).map((n) => n.label), `${line.name}: fed one kind from the chest and starved`).toEqual([]);
+      expect(fedOne.filter((n) => starved.has(n.label)).map((n) => who(model, n)), `${line.name}: fed one kind from the chest and starved`).toEqual([]);
     }
     expect(single).toBeGreaterThan(0);
   });
