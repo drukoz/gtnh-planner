@@ -331,14 +331,16 @@ export async function layLegacy(pack: Pack, plan: Plan, mode: LogisticsMode, at?
  * which each bench's front faces the middle row, where its back meets the line now, so its back touches nothing of the
  * line and its power cable is on its back; it has no `feed`, so the checker derives its grid from the recipe; and on an
  * EnderIO line the conduit face toward it inserts through the Basic Item Filter of what its step takes, on its output
- * side, which `inputFromOutputSide` opens. The rest of what add-on 12 changed stays as main lays it now, since no bench
+ * side, which `inputFromOutputSide` opens. A face is toward a bench when its conduit cell neighbours the bench's cell on
+ * that face, as two benches share one label. The rest of what add-on 12 changed stays as main lays it now, since no bench
  * case reads it: the bench's `mainFacing` (the checker reads a bench's front from `facing`), its routed chips, its AE2
  * pattern and Locking Card, its pipe, cover and settings on a machine-to-machine line, and the build steps and the bill.
  */
 export function uncappedBenches(layout: Layout, pack: Pack, plan: Plan): Layout {
   const out = structuredClone(layout);
   const parts = resolveParts(pack);
-  const faces = out.blocks.flatMap((b) => b.conduits ?? []).flatMap((c) => c.faces);
+  // every conduit face, with the cell it faces
+  const faces = out.blocks.flatMap((b) => (b.conduits ?? []).flatMap((c) => c.faces.map((f) => ({ f, toward: posKey(step(b.pos, FACES.indexOf(f.face))) }))));
   for (const b of out.blocks) {
     if (b.feed?.bench === undefined || b.stepId === undefined) continue;
     if (b.facing !== undefined) b.facing = OPPOSITE[b.facing]!;
@@ -346,7 +348,8 @@ export function uncappedBenches(layout: Layout, pack: Pack, plan: Plan): Layout 
     if (out.mode !== 'enderio') continue;
     b.config = { ...b.config, inputFromOutputSide: true };
     const { filter } = itemFilterFor(parts, stepItemInputs(plan, b.stepId));
-    for (const f of faces) if (f.target === b.label && f.insert !== undefined) f.insert = { ...f.insert, filter: structuredClone(filter), outputSide: true };
+    const at = posKey(b.pos);
+    for (const { f, toward } of faces) if (toward === at && f.insert !== undefined) f.insert = { ...f.insert, filter: structuredClone(filter), outputSide: true };
   }
   return out;
 }

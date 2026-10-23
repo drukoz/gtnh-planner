@@ -337,6 +337,25 @@ describe('readLine', () => {
     expect(['bench_grid_derived', 'bench_mode_unset'].map((code) => now.unknowns.some((u) => u.code === code))).toEqual([false, false]);
   });
 
+  it('reads the face toward each of two benches as main laid them before add-on 12', async () => {
+    // two bench steps, each fed from the conduit cell between them: each face toward a bench lists what that bench's step
+    // takes, though both benches have one label
+    const { pack, plan } = feedPlan([
+      { id: 'b1', mteId: FEED_IDS.BENCH, count: 1, inputs: [['t:a@0', 2], ['t:b@0', 2]], outputs: [['t:x@0', 1]], craft: { width: 2, cells: ['t:a@0', 't:b@0', 't:b@0', 't:a@0'] } },
+      { id: 'b2', mteId: FEED_IDS.BENCH, count: 1, inputs: [['t:x@0', 1], ['t:c@0', 1]], outputs: [['t:y@0', 1]], craft: { width: 2, cells: ['t:x@0', 't:c@0', null, null] } },
+    ], [
+      { from: 'raw', to: 'b1', key: 't:a@0', perSecond: 1 }, { from: 'raw', to: 'b1', key: 't:b@0', perSecond: 1 }, { from: 'b1', to: 'b2', key: 't:x@0', perSecond: 0.5 },
+      { from: 'raw', to: 'b2', key: 't:c@0', perSecond: 0.5 }, { from: 'b2', to: 'out', key: 't:y@0', perSecond: 0.5 },
+    ]);
+    const m = readLine({ pack, plan, layout: await layUncapped(pack, plan, 'enderio') });
+    const benches = m.nodes.filter((n): n is BenchNode => n.kind === 'bench');
+    const faces = m.networks.filter((n): n is EioNet => n.kind === 'enderio').flatMap((n) => n.faces);
+    expect(benches.map((b) => [b.stepIds, faces.filter((f) => f.target?.node === b.id).map((f) => [f.insert?.filter?.item, f.insert?.filter?.keys])])).toEqual([
+      [['b1'], [['EnderIO:itemBasicFilterUpgrade@0', ['t:a@0', 't:b@0']]]],
+      [['b2'], [['EnderIO:itemBasicFilterUpgrade@0', ['t:c@0', 't:x@0']]]],
+    ]);
+  });
+
   // ---- the reading rules' other branches ----
 
   it('leaves out the hookup and the ghosts', async () => {
