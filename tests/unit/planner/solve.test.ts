@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { miniGt } from '../../helpers/mini-gt.ts';
 import { twinSpec } from '../../helpers/build-fixtures.ts';
 import { packFromSpec, type RecipeSpec } from '../../helpers/pack-spec.ts';
-import { solveLine, findBlockers, standaloneCosts, twinMoves, withTwinsMoved, type Solution } from '../../../src/server/planner/solve.ts';
+import {
+  chainRecipes, solveLine, findBlockers, standaloneCosts, standalonePrices, twinMoves, withTwinsMoved, type Solution,
+} from '../../../src/server/planner/solve.ts';
 import {
   buildCandidates, type CandidateGraph, type GoodInfo, type LeafDecision, type LeafOracle, type LpRecipe, type PlanEnv,
 } from '../../../src/server/planner/candidates.ts';
@@ -78,6 +80,21 @@ describe('solveLine', () => {
       ['magnetic@0', { cost: 2, steps: 2, free: 0, recipes: ['magnetize', 'smelt'], top: 'magnetize' }], ['nowhere@0', undefined]]);
     expect((await standaloneCosts(g, ['magnetic@0'], ['steel@0'])).get('magnetic@0')).toEqual({ cost: Infinity, steps: 0, free: 0, recipes: [] });
   });
+  it('prices each good on its own, whatever else is asked, on the recipes its chain can use (fix wave 3 (D))', async () => {
+    // One split of raw (1) makes A and B; C is made from B; T takes A and C.
+    const p = packFromSpec({ machines: [{ mteId: 1, name: 'M', maps: ['gt.recipe.macerator'], tier: 1 }], recipes: [
+      { id: 'split', map: 'gt.recipe.macerator', in: [['raw@0', 1]], out: [['a@0', 1], ['b@0', 1]], eut: 2 },
+      { id: 'b-to-c', map: 'gt.recipe.macerator', in: [['b@0', 1]], out: [['c@0', 1]], eut: 2 },
+      { id: 'use', map: 'gt.recipe.macerator', in: [['a@0', 1], ['c@0', 1]], out: [['t@0', 1]], eut: 2 }] });
+    const leaf: LeafOracle = (k) => (k === 'raw@0' ? { buyable: true, cost: 1, leafClass: 'direct' } : { buyable: false, cost: 0, leafClass: null });
+    const g = graphFor(p, 't@0', 1, leaf);
+    expect(chainRecipes(g, ['c@0']).map((r) => r.id)).toEqual(['b-to-c', 'split']);
+    expect(chainRecipes(g, ['t@0']).map((r) => r.id)).toEqual(['b-to-c', 'split', 'use']);
+    const all = await standalonePrices(g, ['a@0', 'c@0', 't@0', 'nowhere@0']);
+    expect(Object.fromEntries(all)).toEqual({ 'a@0': 1, 'c@0': 1, 't@0': 1, 'nowhere@0': Infinity });
+    expect((await standalonePrices(g, ['a@0'])).get('a@0')).toBe(1);
+  });
+
   it('names the chemistry behind a fluid, not the canner that empties its cells (fix spec R7)', async () => {
     // A reactor makes Gas Cells (1,000 L each) from 2 raw; a canner empties them; another canner fills cells again.
     const p = packFromSpec({

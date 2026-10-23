@@ -11,7 +11,7 @@ import {
   type LaterRoom, type StepMachines, type StepWeights,
 } from './build-mip.ts';
 import { canonicalRank, type CandidateGraph, type LpRecipe } from './candidates.ts';
-import { solveLp, type LpModel, type LpResult, type LpRow } from './lp.ts';
+import { solveLp, solveLpRows, type LpModel, type LpResult, type LpRow } from './lp.ts';
 import { buildCounts, type BuildModel, type MachineOption } from './machine-options.ts';
 import { sig9 } from './round.ts';
 
@@ -1533,10 +1533,64 @@ export async function standaloneCosts(
 }
 
 /**
+ * The recipes of `graph` that the chains of `keys` can use: each recipe that makes one of them, then each recipe that
+ * makes a good one of those takes, and so on. A recipe outside them makes only goods none of those recipes take, so the
+ * least raw material that makes one of `keys` is the same on them as on the whole graph.
+ */
+export function chainRecipes(graph: CandidateGraph, keys: readonly StuffKey[]): LpRecipe[] {
+  const producers = producersIn(graph);
+  const seen = new Set<StuffKey>(keys);
+  const queue = [...seen];
+  const used = new Set<LpRecipe>();
+  while (queue.length > 0) {
+    for (const r of producers.get(queue.pop() as StuffKey) ?? []) {
+      if (used.has(r)) continue;
+      used.add(r);
+      for (const [key, c] of r.coeffs) {
+        if (c < 0 && !seen.has(key)) {
+          seen.add(key);
+          queue.push(key);
+        }
+      }
+    }
+  }
+  return graph.recipes.filter((r) => used.has(r));
+}
+
+/**
+ * The least raw material that makes one unit of each of `keys` on its own in `graph` (fix wave 3 (D)): `standaloneCosts`'
+ * LP — the main LP's rows with that one demand, every byproduct sunk — without its barred inputs and its chain details,
+ * all of them on one model through `solveLpRows`, on the recipes their chains can use (`chainRecipes`), to 9
+ * significant digits (`sig9`). So each price depends on `graph` and its leaf costs only, never on the other keys asked
+ * (the solves of one series start from each other's bases, so unrounded they could differ in the last bits), and never
+ * rises when a leaf gets cheaper. Infinity for a key that is no good of `graph` or that it cannot make.
+ */
+export async function standalonePrices(graph: CandidateGraph, keys: readonly StuffKey[]): Promise<Map<StuffKey, number>> {
+  const out = new Map<StuffKey, number>();
+  const lp = mainLp(graph, chainRecipes(graph, keys), new Map());
+  const rowOf = new Map(lp.goods.map((key, g) => [key, g]));
+  const asked = [...new Set(keys)].filter((key) => {
+    if (rowOf.has(key)) return true;
+    out.set(key, Infinity);
+    return false;
+  });
+  const width = lp.rawCost.length;
+  const results = await solveLpRows(
+    { sense: 'min', colCost: [...lp.rawCost], colLower: new Array<number>(width).fill(0), colUpper: new Array<number>(width).fill(Infinity), rows: lp.rows },
+    asked.map((key) => ({ row: rowOf.get(key) as number, lower: 1, upper: 1 })),
+  );
+  asked.forEach((key, i) => {
+    const r = results[i];
+    out.set(key, r?.status === 'optimal' ? sig9(Math.max(0, r.objective)) : Infinity);
+  });
+  return out;
+}
+
+/**
  * Forward fixpoint: buyable goods (and `given` ones) are makeable; a recipe fires once every good it consumes is; its
  * outputs then are.
  */
-function makeableGoods(graph: CandidateGraph, given: readonly StuffKey[] = []): Set<StuffKey> {
+export function makeableGoods(graph: CandidateGraph, given: readonly StuffKey[] = []): Set<StuffKey> {
   const makeable = new Set<StuffKey>();
   const queue: StuffKey[] = [];
   const add = (key: StuffKey): void => {
