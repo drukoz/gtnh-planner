@@ -374,8 +374,10 @@ button.banner-chip { display: inline-flex; align-items: center; gap: 6px; min-he
    one in the panel's own colour so that it joins it. The height is a minimum and the line-height 1, so the strip is 38px
    whichever font is in. The six tabs wrap onto a second row on a narrow screen (as the mockup's do) rather than scroll the page. */
 .tabs { display: flex; flex-wrap: wrap; gap: 2px; padding-left: 6px; border: 0; margin: 0; }
+/* The z-index keeps a tab above the panel, whose fade-in makes it a stacking context for its 160ms, painted after a tab without one:
+   its black top edge would cover the selected tab's 2px foot and cut the tab off the panel on every switch. 1 is under the modal. */
 .tabs [role='tab'] {
-  position: relative; top: 2px; min-height: 38px; padding: 0 14px;
+  position: relative; top: 2px; z-index: 1; min-height: 38px; padding: 0 14px;
   background: #8b8b8b; border: 2px solid #000; box-shadow: inset 2px 2px 0 #a8a8a8;
   color: #1b1b1b; font: 15px/1 var(--font-pixel); text-shadow: none;
 }

@@ -636,7 +636,7 @@ describe('the Machine GUI chrome', () => {
     expectDeclared([
       ['.tabs', 'gap', '2px'], ['.tabs', 'padding-left', '6px'], ['.tabs', 'border', '0'], ['.tabs', 'margin', '0'],
       ['.tabs', 'flex-wrap', 'wrap'],                                                  // as the mockup's: six pixel tabs are wider than a phone
-      [TAB, 'position', 'relative'], [TAB, 'top', '2px'], [TAB, 'min-height', '38px'], [TAB, 'padding', '0 14px'],
+      [TAB, 'position', 'relative'], [TAB, 'top', '2px'], [TAB, 'z-index', '1'], [TAB, 'min-height', '38px'], [TAB, 'padding', '0 14px'],
       [TAB, 'border', '2px solid #000'], [TAB, 'font', '15px/1 var(--font-pixel)'], [TAB, 'text-shadow', 'none'],
       [TAB, 'background', '#8b8b8b'], [TAB, 'box-shadow', 'inset 2px 2px 0 #a8a8a8'], [TAB, 'color', '#1b1b1b'],
       [`${TAB}:hover:not([aria-selected='true'])`, 'background', '#9a9a9a'],
@@ -650,6 +650,11 @@ describe('the Machine GUI chrome', () => {
     // ruling R1: the fade is in the one rule the panel has
     expect(ruleBody('.tab-panel')).toContain('animation: fade-in var(--dur-base) var(--ease-out)');
     expect(blocks.filter((b) => b.prelude === '.tab-panel')).toHaveLength(1);
+    // The tab sits 2px over the panel's top edge, and the selected one joins the panel only while it paints above that edge. The
+    // panel's fade-in makes it a stacking context for its 160ms, painted in tree order after a tab that has no z-index, so its
+    // black edge covered the selected tab's foot for most of every tab switch. The tab's own z-index (1) keeps it on top, and
+    // stays under the modal.
+    expect(Number(declared(TAB, 'z-index'))).toBeLessThan(Number(declared('.modal-backdrop', 'z-index')));
   });
 
   it('draws the project list: panel cards, a pixel link, a small danger button and a chat box to confirm in', () => {
