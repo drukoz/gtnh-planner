@@ -42,8 +42,12 @@ const FILTER_NAMES: Readonly<Record<StuffKey, string>> = {
 /** How many input slots a bench's stock may fill: slot 8 must stay empty, or a failed craft throws its stack out (research §1.3.8, §3.6). */
 const BENCH_STOCK_SLOTS = 8;
 
-/** A bench's local sides ForgeDirection 0–5 turned to its left when it faces out of side `front` (north's left is west, south's east, west's south, east's north). */
-const LEFT_OF: Readonly<Record<number, number>> = { 2: 4, 3: 5, 4: 3, 5: 2 };
+/**
+ * For a bench whose front is side `front` (ForgeDirection 2–5), the side on the left of a player who stands in front of it and
+ * faces it: a bench facing north has the player look south, with east on the left; facing south, west; west, north; east, south.
+ * (The bench's own left, looking out of its front, is the other side.)
+ */
+const LEFT_OF: Readonly<Record<number, number>> = { 2: 5, 3: 4, 4: 2, 5: 3 };
 
 /** The rules in the order their findings come in a node's list (R10c's parts and the others' in the table's order). */
 const RULES = ['R1', 'R2', 'R3', 'R4', 'R5a', 'R5b', 'R5c', 'R5d', 'R6', 'R7', 'R8a', 'R8b', 'R8c', 'R8d', 'R9', 'R10a', 'R10b',
@@ -656,14 +660,18 @@ function touchedSides(c: Ctx, nodeId: NodeId): Set<number> {
   return sides;
 }
 
-/** A side of a bench as its builder sees it, whatever way the line is turned: front, back, left side, right side, top or bottom. */
+/**
+ * A side of a bench as a player who faces its front sees it, whatever way the line is turned: front, back, top, bottom, and
+ * the left and right sides as they are on that player's left and right (the words say so, as the bench's own left is the
+ * player's right). Without a front along the ground, a side is just a side.
+ */
 function benchSide(bench: BenchNode, side: number): string {
   if (side === 1) return 'top';
   if (side === 0) return 'bottom';
   if (bench.front < 2) return 'side';
   if (side === bench.front) return 'front';
   if (side === bench.back) return 'back';
-  return side === LEFT_OF[bench.front] ? 'left side' : 'right side';
+  return `${side === LEFT_OF[bench.front] ? 'left' : 'right'} side as you face its front`;
 }
 
 /**

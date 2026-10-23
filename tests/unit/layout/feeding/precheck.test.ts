@@ -591,19 +591,25 @@ describe('precheckFeeding, the other branches', () => {
     expect(findings[4]!.text).toBe(`A GT item pipe touches ${label}: it fills all nine input slots with whatever it carries`);
   });
 
-  it('names the side of a bench as its builder sees it', async () => {
+  it('names the side of a bench as a player facing its front sees it', async () => {
     const { pack, plan } = benchLine();
-    const m = readLine({ pack, plan, layout: await layUncapped(pack, plan, 'direct') });
+    const m = readLine({ pack, plan, layout: await layUncapped(pack, plan, 'routed') });
     const bench = m.nodes.find((n): n is BenchNode => n.kind === 'bench')!;
-    // facing south (side 3), as main laid it before add-on 12: its back is north, its left east and its right west
+    const named = () => precheckFeeding(m, pack).filter((f) => f.text.includes(' has a fluid '))
+      .map((f) => f.text.replace(`${bench.label} has a fluid pipe on its `, '').replace(/: .*/, ''));
+    // facing south (side 3), as main laid it before add-on 12: its back is north, and a player in front of it looks north,
+    // with west on the left and east on the right (the bench's own left, looking out of its front, is east)
+    expect([bench.front, bench.back]).toEqual([3, 2]);
     bench.fluidSides = [0, 1, 2, 3, 4, 5];
-    const sides = precheckFeeding(m, pack).filter((f) => f.text.includes(' has a fluid '));
-    expect(sides.map((f) => f.text.replace(`${bench.label} has a fluid pipe on its `, '').replace(/: .*/, ''))).toEqual(['bottom', 'top', 'back', 'front', 'right side', 'left side']);
+    expect(named()).toEqual(['bottom', 'top', 'back', 'front', 'left side as you face its front', 'right side as you face its front']);
+    // facing west, the player looks east: north on the left, south on the right
+    bench.front = 4;
+    bench.back = 5;
+    expect(named()).toEqual(['bottom', 'top', 'left side as you face its front', 'right side as you face its front', 'front', 'back']);
     // without a front, left and right are not defined
     bench.front = -1;
     bench.back = -1;
-    expect(precheckFeeding(m, pack).filter((f) => f.text.includes(' has a fluid ')).map((f) => f.text.replace(`${bench.label} has a fluid pipe on its `, '').replace(/: .*/, '')))
-      .toEqual(['bottom', 'top', 'side', 'side', 'side', 'side']);
+    expect(named()).toEqual(['bottom', 'top', 'side', 'side', 'side', 'side']);
   });
 
   it('says a bench\'s back touches nothing when no network is there at all', async () => {
