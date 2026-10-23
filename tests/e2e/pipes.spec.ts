@@ -34,7 +34,7 @@ async function loosePipeEnds(page: Page): Promise<{ loose: string[]; pipes: numb
       const ends: Array<[string, DOMPoint]> = [['start', pipe.getPointAtLength(0)], ['end', pipe.getPointAtLength(pipe.getTotalLength())]];
       for (const [which, point] of ends) {
         const at = new DOMPoint(point.x, point.y).matrixTransform(toScreen);
-        // on the flange's outer face, give or take a pixel across it, and within its height
+        // inside some flange: across it give or take a pixel, and within its height
         const held = flanges.some((f) => at.x >= f.left - 1 && at.x <= f.right + 1 && at.y >= f.top && at.y <= f.bottom);
         if (!held) loose.push(`${id} ${which} at (${at.x.toFixed(1)}, ${at.y.toFixed(1)})`);
       }
@@ -85,6 +85,32 @@ test('a drag stops the flow pipes until it ends', async ({ page }) => {
   await page.mouse.up();
   await expect(canvas).not.toHaveClass(/\bdragging\b/);
   expect(await state()).toBe('running');
+});
+
+test('a second pointer cannot leave the flow pipes stopped', async ({ page }) => {
+  await openWithPlan(page, circuitLv());
+  const canvas = page.locator('svg.flow-canvas');
+  const box = await canvas.boundingBox();
+  if (box === null) throw new Error('no canvas');
+  // the mouse drags from the empty top left corner, as above
+  await page.mouse.move(box.x + 6, box.y + 6);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 46, box.y + 26, { steps: 4 });
+  await expect(canvas).toHaveClass(/\bdragging\b/);
+  // then a finger presses and lets go without moving (dispatched: Playwright's touchscreen only taps), and the mouse lets go after
+  // it. The press takes the drag over, so the mouse's release is not its drag's end and the finger's is no drag's end: the old
+  // handlers left `dragging` on, and every pipe stopped, until some later drag ended
+  const finger = (type: 'pointerdown' | 'pointerup'): Promise<void> => canvas.evaluate((svg, [kind, x, y]) => {
+    svg.dispatchEvent(new PointerEvent(kind, {
+      bubbles: true, pointerId: 2, pointerType: 'touch', isPrimary: false, button: 0, buttons: kind === 'pointerdown' ? 1 : 0, clientX: x, clientY: y,
+    }));
+  }, [type, box.x + 200, box.y + 6] as const);
+  await finger('pointerdown');
+  await expect(canvas).not.toHaveClass(/\bdragging\b/);                               // the mouse's drag pans no more
+  await finger('pointerup');
+  await page.mouse.up();
+  await expect(canvas).not.toHaveClass(/\bdragging\b/);
+  expect(await page.locator('.flow-edge-flow').first().evaluate((el) => getComputedStyle(el).animationPlayState)).toBe('running');
 });
 
 test('reduced motion stills the pipes', async ({ page }) => {

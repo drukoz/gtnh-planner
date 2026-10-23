@@ -81,8 +81,9 @@ a, button.link { color: var(--ink-link); }
 
 /*
  * Motion (design spec §7a): the entrances the later rules ask for by name, on transform and opacity only (the pipes' dash
- * offset and brightness pulse aside), and the dots that breathe or blink on opacity alone. Under reduced motion every
- * duration is zero and an animation runs once, for a millisecond: nothing moves.
+ * offset aside), and the dots that breathe or blink and the rim of a newly lit pipe that blinks once, on opacity alone (ruling
+ * R19: a brightness pulse could not show on the lit pipe's white contents). Under reduced motion every duration is zero and an
+ * animation runs once, for a millisecond: nothing moves.
  */
 @keyframes fade-in { from { opacity: 0; } }
 @keyframes rise-in { from { opacity: 0; transform: translateY(-4px); } }
@@ -92,7 +93,7 @@ a, button.link { color: var(--ink-link); }
 @keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
 @keyframes blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0.25; } }
 @keyframes pipe-flow { to { stroke-dashoffset: -16; } }
-@keyframes pipe-pulse { from { filter: brightness(1.6); } }
+@keyframes pipe-pulse { 0%, 100% { opacity: 1; } 35% { opacity: 0.15; } }
 @media (prefers-reduced-motion: reduce) {
   :root { --dur-fast: 0ms; --dur-base: 0ms; --dur-slow: 0ms; --dur-exit: 0ms; }
   *, *::before, *::after {
@@ -684,11 +685,12 @@ button.avoid-chip-remove { width: 24px; height: 24px; min-height: 0; padding: 0;
 .flow-edge.fluid .flow-edge-flow { stroke: var(--fluid); }
 .flow-edge:hover .flow-edge-line { stroke: #2e2e2e; }
 .flow-edge.missing .flow-edge-line { stroke: #aa0000; }
-/* The head of an arrow is in the colour of what it carries. */
+/* The head of an arrow is in the colour of what it carries; from a missing source, a lighter red than its casing, so the arrow's
+   direction shows (ruling R20). */
 .flow-arrow-head { fill: var(--item); }
 .flow-arrow-head-fluid { fill: var(--fluid); }
 .flow-arrow-head-hl { fill: var(--accent); }
-.flow-arrow-head-missing { fill: #aa0000; }
+.flow-arrow-head-missing { fill: #ff5555; }
 .flow-edge-label {
   fill: #ffffff; font-size: 11px; paint-order: stroke; stroke: var(--well); stroke-width: 3px; stroke-linejoin: round;
 }
@@ -703,16 +705,14 @@ button.avoid-chip-remove { width: 24px; height: 24px; min-height: 0; padding: 0;
 /*
  * Focus (fix spec §6.2, design spec §7a): what is not lit fades (160ms, not a snap) and its pipe stops; the selected box and those
  * that make the good get a yellow edge, those that take it a dashed one; a lit pipe a 1.5px yellow rim (its hit path, 9px under the
- * 6px casing) and white contents that flash once.
+ * 6px casing) that blinks once as it lights, and white contents.
  */
 .flow-node, .flow-row, .flow-edge, .flow-group { transition: opacity var(--dur-base) var(--ease-out); }
 .flow-canvas.focusing .dim { opacity: 0.18; }
 .flow-node.selected > .flow-node-box, .flow-node.producer > .flow-node-box { stroke: var(--accent); stroke-width: 3; }
 .flow-node.consumer > .flow-node-box { stroke: var(--accent); stroke-width: 3; stroke-dasharray: 6 3; }
-.flow-edge.hl .flow-edge-hit { stroke: var(--accent); stroke-width: 9; }
-.flow-edge.hl .flow-edge-flow {
-  stroke: #ffffff; animation: pipe-flow var(--pipe-dur, 1s) linear infinite, pipe-pulse 400ms var(--ease-out);
-}
+.flow-edge.hl .flow-edge-hit { stroke: var(--accent); stroke-width: 9; animation: pipe-pulse 400ms var(--ease-out); }
+.flow-edge.hl .flow-edge-flow { stroke: #ffffff; animation: pipe-flow var(--pipe-dur, 1s) linear infinite; }
 .flow-edge.dim .flow-edge-flow { animation-play-state: paused; }
 /* Panning stays smooth (design spec §7 "Motion budget"): the pipes stand still while the diagram is dragged, and above 200 edges
    only the lit ones move (pipe-motion.ts). After the lit rule, which sets the whole animation, its play state too. */

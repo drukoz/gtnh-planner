@@ -492,9 +492,15 @@ function FlowCanvas(props: {
     if (hit?.node !== undefined) onOpen(hit.node);
   };
 
+  /**
+   * After any press or release, by whatever pointer: `dragging` while the drag under way has passed the threshold, else not.
+   * A second pointer that takes the drag over, a release that is not the drag's, or a press that never moves would otherwise
+   * leave every pipe stopped until some later drag ended.
+   */
+  const settleDragging = (): void => setDragging(drag.current?.moved === true);
   const onPointerDown = (e: PointerEvent<SVGSVGElement>): void => {
-    if (e.button !== 0) return;
-    drag.current = { pointer: e.pointerId, sx: e.clientX, sy: e.clientY, ox: view.x, oy: view.y, moved: false };
+    if (e.button === 0) drag.current = { pointer: e.pointerId, sx: e.clientX, sy: e.clientY, ox: view.x, oy: view.y, moved: false };
+    settleDragging();
   };
   const onPointerMove = (e: PointerEvent<SVGSVGElement>): void => {
     const d = drag.current;
@@ -514,14 +520,16 @@ function FlowCanvas(props: {
   };
   const onPointerEnd = (e: PointerEvent<SVGSVGElement>): void => {
     const d = drag.current;
-    if (d === null || d.pointer !== e.pointerId) return;
-    drag.current = null;
-    if (!d.moved) return;
-    setDragging(false);
-    dragged.current = true;   // the click that ends a drag picks nothing
-    setTimeout(() => {
-      dragged.current = false;
-    }, 0);
+    if (d !== null && d.pointer === e.pointerId) {
+      drag.current = null;
+      if (d.moved) {
+        dragged.current = true;   // the click that ends a drag picks nothing
+        setTimeout(() => {
+          dragged.current = false;
+        }, 0);
+      }
+    }
+    settleDragging();
   };
   const onClick = (e: MouseEvent<SVGSVGElement>): void => {
     if (!dragged.current) activate(hitOf(e.target));

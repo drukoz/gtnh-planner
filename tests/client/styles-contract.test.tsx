@@ -139,7 +139,7 @@ const KEYFRAMES: Record<string, string[]> = {
   breathe: ['opacity'],
   blink: ['opacity'],
   'pipe-flow': ['stroke-dashoffset'],
-  'pipe-pulse': ['filter'],
+  'pipe-pulse': ['opacity'],
 };
 
 const FONT_IMPORTS = [
@@ -171,7 +171,7 @@ describe('the Machine GUI stylesheet', () => {
   it('defines the keyframes', () => {
     for (const [name, properties] of Object.entries(KEYFRAMES)) {
       expect(new RegExp(`@keyframes ${name}\\s*\\{`).test(css), `@keyframes ${name} is defined`).toBe(true);
-      // opacity and transform only, but the pipes' dash offset and brightness pulse; the breathing and blinking dots never move
+      // opacity and transform only, but the pipes' dash offset; the breathing and blinking dots never move
       const steps = ruleBody(`@keyframes ${name}`).match(/\{[^}]*\}/g) ?? [];
       const animated = new Set(steps.flatMap((step) => declarations(step.slice(1, -1)).map(([property]) => property)));
       expect([...animated].sort(), name).toEqual([...properties].sort());
@@ -1118,18 +1118,22 @@ describe('the Machine GUI Flow diagram', () => {
     expect(position('.flow-edge.missing .flow-edge-line')).toBeGreaterThan(position('.flow-edge:hover .flow-edge-line'));
   });
 
-  it('heads each arrow in the colour of what it carries, yellow when lit and red from a missing source', () => {
+  it('heads each arrow in the colour of what it carries, yellow when lit and a light red from a missing source', () => {
     expectDeclared([
       ['.flow-arrow-head', 'fill', 'var(--item)'], ['.flow-arrow-head-fluid', 'fill', 'var(--fluid)'],
-      ['.flow-arrow-head-hl', 'fill', 'var(--accent)'], ['.flow-arrow-head-missing', 'fill', '#aa0000'],
+      ['.flow-arrow-head-hl', 'fill', 'var(--accent)'], ['.flow-arrow-head-missing', 'fill', '#ff5555'],
     ]);
+    // ruling R20: a missing source's head is not its casing's red, so the arrow's direction shows on it
+    expect(declared('.flow-arrow-head-missing', 'fill')).not.toBe(declared('.flow-edge.missing .flow-edge-line', 'stroke'));
   });
 
-  it('lights a focused pipe with an accent rim and white contents that pulse once, and pauses the dimmed ones', () => {
+  it('lights a focused pipe with an accent rim that blinks once and white contents, and pauses the dimmed ones', () => {
     expectDeclared([
       [LIT_RIM, 'stroke', 'var(--accent)'], [LIT_RIM, 'stroke-width', '9'],
+      // ruling R19: the pulse is the rim's, on opacity (brightness cannot raise the white contents: each channel stops at 1)
+      [LIT_RIM, 'animation', 'pipe-pulse 400ms var(--ease-out)'],
       [LIT_CONTENTS, 'stroke', '#ffffff'],
-      [LIT_CONTENTS, 'animation', 'pipe-flow var(--pipe-dur, 1s) linear infinite, pipe-pulse 400ms var(--ease-out)'],
+      [LIT_CONTENTS, 'animation', 'pipe-flow var(--pipe-dur, 1s) linear infinite'],
       [DIMMED_CONTENTS, 'animation-play-state', 'paused'],
       // what is not lit fades over 160ms instead of snapping; the dimming rule itself stays
       [FADES, 'transition', 'opacity var(--dur-base) var(--ease-out)'],
@@ -1137,6 +1141,9 @@ describe('the Machine GUI Flow diagram', () => {
     ]);
     // the rim is the hit path showing 1.5px past each side of the 6px casing it lies under
     expect((Number(declared(LIT_RIM, 'stroke-width')) - Number(declared(CASING, 'stroke-width'))) / 2).toBe(1.5);
+    // the blink is visible: the rim fades to 15% and back, ending where it started
+    expect(ruleBody('@keyframes pipe-pulse')).toContain('35% { opacity: 0.15; }');
+    expect(ruleBody('@keyframes pipe-pulse')).toContain('0%, 100% { opacity: 1; }');
     // the casing of a lit pipe keeps its colour and width (the old rule thinned it to a 3px accent line)
     expect(position('.flow-edge.hl .flow-edge-line')).toBe(-1);
   });
