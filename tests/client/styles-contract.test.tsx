@@ -868,3 +868,182 @@ describe('the Machine GUI settings drawer', () => {
     expect(hasTopLevelRule('.settings-open .settings-panel'), 'a .settings-open rule outside the query').toBe(false);
   });
 });
+
+// The item slots, the search list, the chips and the Materials & steps tab (restyle plan Phase 1 Task 5, design spec §4, §6 and
+// §7a). Every HTML item icon sits in a slot. assets.spec.ts reads the <img>'s own decoded bitmap, so nothing drawn around the image
+// can change that pixel. The Flow diagram's 16 px icons sit in a 16 px foreignObject, which has no room for 4 px of frame, so they
+// opt out; slots.spec.ts measures that in a browser. These cases pin the values of the brief and the order the cascade needs.
+
+const SLOT = '.item-icon';
+const SLOT_VEIL = '.item-icon::after';
+const LIT_SLOT = '.item-icon:hover::after, .search-hit.active .item-icon::after';
+const FLOW_SLOT = 'svg .item-icon';
+const ACTIVE_HIT = ".search-hit.active, .search-hit[aria-selected='true']";
+/** The pixel caret of the build toggle and of the two inline disclosures, which share one rule, and the same three turned down. */
+const CARETS = 'button.mat-toggle::before, .mat-have summary::before, .mat-needed summary::before';
+const CARETS_DOWN = "button.mat-toggle[aria-expanded='true']::before, .mat-have[open] summary::before, .mat-needed[open] summary::before";
+const INLINE_SUMMARY = '.mat-have summary, .mat-needed summary';
+const INLINE_CARET = '.mat-have summary::before, .mat-needed summary::before';
+const DARK_CHIP = '.badge, .chip';
+/** The rules of this task: none may read an alias of the old palette any more. */
+const SLOT_AND_MATERIALS_RULES = [
+  SLOT, '.item-icon.placeholder', '.search-results', '.search-hit', ACTIVE_HIT, '.search-note', '.badge.avoid-badge', '.missing-badge',
+  '.materials-section', '.materials-section h3', '.mat-group h4', '.mat-row', '.mat-row > .item-icon', '.mat-toggle', '.mat-unlock',
+  '.mat-missing .tick-label', 'button.pin-link',
+];
+
+describe('the Machine GUI item slots', () => {
+  it('sets every HTML item icon in a slot: 2px of padding round the image, a grey face, an inverted bevel', () => {
+    expectDeclared([
+      [SLOT, 'box-sizing', 'content-box'], [SLOT, 'padding', '2px'], [SLOT, 'position', 'relative'], [SLOT, 'border-radius', '0'],
+      [SLOT, 'background-color', 'var(--slot)'], [SLOT, 'box-shadow', 'var(--bevel-slot)'],
+      // the letters of a placeholder are 7 to 12px, below what the pixel font may be
+      [SLOT, 'font-family', 'var(--font-ui)'],
+    ]);
+    // `* { box-sizing: border-box }` would let the padding eat into the inline width and height that the unit tests pin
+    expect(declared('*', 'box-sizing')).toBe('border-box');
+    // a placeholder keeps the inline `background: rgb()` of its markup (an inline style beats the face), with the bevel over a dark ring
+    expect(declared('.item-icon.placeholder', 'box-shadow')).toBe('var(--bevel-slot), inset 0 0 0 3px rgb(0 0 0 / 0.3)');
+    expect(declared('.item-icon.placeholder', 'background')).toBeUndefined();
+    expect(declared('.item-icon.placeholder', 'background-color')).toBeUndefined();
+    // the letters of a light placeholder stay dark
+    expect(declared('.item-icon.ink-dark', 'color')).toBe('#1f2328');
+    // nothing styles the image inside: the end-to-end test reads its own bitmap
+    expect(blocks.filter((b) => /\.item-icon\s*>?\s*img\b/.test(b.prelude)).map((b) => b.prelude)).toEqual([]);
+  });
+
+  it('lifts a white 35% veil over a slot that is pointed at, or that is the highlighted search hit', () => {
+    expectDeclared([
+      [SLOT_VEIL, 'content', "''"], [SLOT_VEIL, 'position', 'absolute'], [SLOT_VEIL, 'inset', '2px'],
+      [SLOT_VEIL, 'background', 'rgb(255 255 255 / 0.35)'], [SLOT_VEIL, 'opacity', '0'], [SLOT_VEIL, 'pointer-events', 'none'],
+      [SLOT_VEIL, 'transition', 'opacity var(--dur-fast) var(--ease-out)'],
+      [LIT_SLOT, 'opacity', '1'],
+    ]);
+    // the veil covers the image and not the bevel: the padding box is the whole slot, so inset 2px is the padding's width
+    expect(declared(SLOT, 'padding')).toBe(declared(SLOT_VEIL, 'inset'));
+    expect(position(LIT_SLOT)).toBeGreaterThan(position(SLOT_VEIL));
+  });
+
+  it('frames no icon inside an SVG, where a 16px foreignObject has no room for 4px of frame', () => {
+    expectDeclared([
+      [FLOW_SLOT, 'padding', '0'], [FLOW_SLOT, 'box-shadow', 'none'], [FLOW_SLOT, 'background-color', 'transparent'],
+      [FLOW_SLOT, 'position', 'static'], [FLOW_SLOT, 'box-sizing', 'border-box'],
+      ['svg .item-icon::after', 'content', 'none'],
+      // `.item-icon.placeholder` (0,2,0) would out-rank `svg .item-icon` (0,1,1) and keep the 2px bevel on a 16px square, so a
+      // placeholder in the diagram has a rule of its own: the thin inset edge it had before the slots
+      ['svg .item-icon.placeholder', 'box-shadow', 'inset 0 0 0 1px rgb(0 0 0 / 0.3)'],
+    ]);
+    expect(position(FLOW_SLOT)).toBeGreaterThan(position(SLOT));
+    expect(position('svg .item-icon.placeholder')).toBeGreaterThan(position('.item-icon.placeholder'));
+    // the inline background of a placeholder still wins over the transparent one, so the square keeps its colour in the diagram
+    expect(declared('svg .item-icon.placeholder', 'background')).toBeUndefined();
+  });
+
+  it('makes the search list a dark well, with a hit that squares its corners and wears a yellow frame when it is highlighted', () => {
+    expectDeclared([
+      ['.search-results', 'background', 'var(--screen)'], ['.search-results', 'border', '2px solid #a0a0a0'],
+      ['.search-results', 'border-radius', '0'], ['.search-hit', 'border-radius', '0'],
+      // inset, so the list's own scrolling does not clip it; a frame, not a fill: the hit's text stays white on the well
+      [ACTIVE_HIT, 'box-shadow', 'inset 0 0 0 2px var(--accent)'],
+    ]);
+    expect(declared(ACTIVE_HIT, 'background')).toBeUndefined();
+    expect(declared('.search-hit', 'background')).toBeUndefined();
+    // ruling R3: no scale animation on the frame
+    expect(declared(ACTIVE_HIT, 'animation')).toBeUndefined();
+    expect(declared(ACTIVE_HIT, 'transform')).toBeUndefined();
+    // a dark box: the light ink of its group (white text, grey `.muted`), so the group is before `.muted`, which still wins on its text
+    const dark = inkGroup('.banner');
+    expect(dark.prelude.split(', ')).toContain('.search-results');
+    expect(inkGroup('.tab-panel').prelude.split(', ')).not.toContain('.search-results');
+    expect(blocks.indexOf(dark)).toBeLessThan(position('.muted'));
+  });
+
+  it('draws the avoid and missing badges as the dark chip of the shared rule, in amber and in red', () => {
+    expectDeclared([['.badge.avoid-badge', 'color', '#ffaa00'], ['.missing-badge', 'color', '#ff5555']]);
+    // colour only: the light fills and edges they had would win over the shared rule by coming after it
+    for (const selector of ['.badge.avoid-badge', '.missing-badge']) {
+      expect(declarations(ruleBody(selector)).map(([name]) => name), selector).toEqual(['color']);
+    }
+    // no other rule of the page gives them a face (the Flow diagram's `.flow-avoid-badge` is another class)
+    const faces = blocks.filter((b) => /\.(avoid-badge|missing-badge)\b/.test(b.prelude)).map((b) => b.prelude);
+    expect(faces.sort()).toEqual(['.badge.avoid-badge', '.missing-badge']);
+    // `.missing-badge` and the shared rule are both one class: it is the order that lets the red win
+    expect(position('.missing-badge')).toBeGreaterThan(position(DARK_CHIP));
+  });
+});
+
+describe('the Machine GUI Materials & steps tab', () => {
+  it('draws each section as a panel with a pixel title, in the ink of a panel', () => {
+    expect(inkGroup('.tab-panel').prelude.split(', ')).toContain('.materials-section');
+    expect(inkGroup('.banner').prelude.split(', ')).not.toContain('.materials-section');
+    expectDeclared([
+      ['.materials-section', 'background', 'var(--panel)'], ['.materials-section', 'border', '2px solid var(--outline)'],
+      ['.materials-section', 'border-radius', '0'], ['.materials-section', 'box-shadow', 'var(--bevel-panel)'],
+      ['.materials-section h3', 'font', '600 16px/1.3 var(--font-pixel)'], ['.materials-section h3', 'margin', '0'],
+    ]);
+    // the micro heading of a group stays Inter (the pixel font is never below 13px)
+    expect(declared('.mat-group h4', 'font-family')).toBeUndefined();
+    expect(declared('.mat-group h4', 'color')).toBe('var(--ink-muted)');
+  });
+
+  it('separates the rows with a grey line, and centres the framed icon on the first line of text', () => {
+    expectDeclared([
+      ['.mat-row', 'border-bottom', '1px solid #8b8b8b'],
+      // the text line is 20.3px (14px at 1.45) and the framed icon 24px: half of the 4px difference, above the line
+      ['.mat-row > .item-icon', 'margin-top', '-2px'],
+    ]);
+  });
+
+  it('turns the toggle of a build row into a 20px caret button that turns down when the row is open', () => {
+    expectDeclared([
+      ['.mat-toggle', 'width', '20px'], ['.mat-toggle', 'height', '20px'], ['.mat-toggle', 'min-height', '0'], ['.mat-toggle', 'padding', '0'],
+      ['.mat-toggle', 'border', 'none'], ['.mat-toggle', 'background', 'none'], ['.mat-toggle', 'box-shadow', 'none'],
+      // the glyph in the markup (▸ and ▾, which the pixel font may lack) is hidden, and a pixel caret is drawn in its place
+      ['.mat-toggle', 'font-size', '0'],
+      [CARETS, 'content', "''"], [CARETS, 'width', '9px'], [CARETS, 'height', '9px'], [CARETS, 'background', 'currentColor'],
+      [CARETS, 'transition', 'transform var(--dur-fast) var(--ease-out)'],
+      [CARETS_DOWN, 'transform', 'rotate(90deg)'],
+    ]);
+    expect(declared(CARETS, 'clip-path'), 'a pixel caret').toMatch(/^polygon\(/);
+    // a borderless button has no dark edge for the yellow ring to touch: its ring takes the focus ink of the surface, like a link's
+    expect(declared('button.mat-toggle:focus-visible', 'outline-color')).toBe('var(--ink-focus)');
+    // only a button has a caret: the span that keeps a leaf row in line with the others has no state to show
+    const carets = blocks.flatMap((b) => b.prelude.split(', ')).filter((selector) => selector.includes('.mat-toggle') && selector.includes('::before'));
+    expect(carets.length).toBeGreaterThan(0);
+    for (const selector of carets) expect(selector).toMatch(/^button\.mat-toggle/);
+  });
+
+  it('keeps the two disclosures of a row inline, with the caret before the text and turned down while they are open', () => {
+    expectDeclared([
+      [INLINE_SUMMARY, 'cursor', 'pointer'], [INLINE_SUMMARY, 'list-style', 'none'],
+      [INLINE_SUMMARY.replace(/summary/g, 'summary::-webkit-details-marker'), 'display', 'none'],
+      // the caret is text-sized: inline, a little right margin and a hair below the baseline
+      [INLINE_CARET, 'display', 'inline-block'], [INLINE_CARET, 'margin-right', '6px'], [INLINE_CARET, 'vertical-align', '-1px'],
+    ]);
+    // the shared caret rule is before the layout of the inline one, and the turned-down rule after the caret it turns
+    expect(position(INLINE_CARET)).toBeGreaterThan(position(CARETS));
+    expect(position(CARETS_DOWN)).toBeGreaterThan(position(CARETS));
+    // inline: not the full-width Minecraft button of a settings section (no button face, no bevel, no height of its own)
+    for (const property of ['background', 'border', 'box-shadow', 'min-height', 'display']) {
+      expect(declared(INLINE_SUMMARY, property), `${INLINE_SUMMARY} { ${property} }`).toBeUndefined();
+    }
+  });
+
+  it('draws what unlocks a row as an amber chat box, the step numbers in the pixel font, and a pin as a small button', () => {
+    expectDeclared([
+      ['.mat-unlock', 'background', 'var(--chat)'], ['.mat-unlock', 'color', 'var(--ink-warn)'], ['.mat-unlock', 'border-radius', '0'],
+      ['.step-list li::marker', 'font-family', 'var(--font-pixel)'],
+      // the inline style the pin used to carry (StepsView's PIN_LINK_STYLE), plus the height of `button.small`, which its class is not
+      ['button.pin-link', 'padding', '2px 10px'], ['button.pin-link', 'font-size', '0.85rem'], ['button.pin-link', 'min-height', '28px'],
+    ]);
+    // a dark box, so the light ink of its group (amber is `--ink-warn` there), and its own colour comes after the group's
+    expect(inkGroup('.banner').prelude.split(', ')).toContain('.mat-unlock');
+    expect(blocks.indexOf(inkGroup('.banner'))).toBeLessThan(position('.mat-unlock'));
+    // the pixel font is never below 13px: the marker takes the 14px of the list
+    expect(declared('.step-list li::marker', 'font-size')).toBeUndefined();
+  });
+
+  it('reads no alias of the old palette in the rules of the slots, the search list and Materials', () => {
+    for (const selector of SLOT_AND_MATERIALS_RULES) expect(ruleBody(selector), selector).not.toMatch(OLD_ALIASES);
+  });
+});

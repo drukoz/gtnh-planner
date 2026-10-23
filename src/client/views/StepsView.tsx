@@ -6,8 +6,6 @@ import { Tick } from '../components/Tick.tsx';
 import { focusPin } from '../state/pin-focus.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
 
-const PIN_LINK_STYLE = { padding: '2px 10px', fontSize: '0.85rem' } as const;
-
 function showPin(n: number): void {
   focusPin(n);
   location.hash = '#map';
@@ -30,7 +28,7 @@ export function StepsView(props: ProjectViewProps): ReactElement {
               <li key={step.id} className="step-row">
                 <Tick row={row} mark={project.marks[row]} label={step.text} onToggle={(on) => send([{ op: 'mark', row, on }])}>
                   {pin !== undefined && (
-                    <button type="button" className="pin-link" data-pin={pin} style={PIN_LINK_STYLE} onClick={() => showPin(pin)}>{`pin ${pin}`}</button>
+                    <button type="button" className="pin-link" data-pin={pin} onClick={() => showPin(pin)}>{`pin ${pin}`}</button>
                   )}
                 </Tick>
               </li>

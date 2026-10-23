@@ -19,6 +19,8 @@ describe('ItemIcon', () => {
     expect(html).toContain('width:16px');
     expect(html).toContain('rgb(89, 192, 106)');
     expect(html).toContain('>WA<');
+    // the slot frame is square and the stylesheet's: an inline radius would beat the `border-radius: 0` of `.item-icon`
+    expect(html).not.toContain('border-radius');
   });
 
   it('names the good it shows in its tooltip and accessible name', () => {
@@ -71,6 +73,11 @@ describe('placeholder ink', () => {
     expect(shown).toContain('src="blob:icon-1"');
     expect(shown).not.toContain('placeholder');
     expect(shown).not.toContain('background');
+    expect(shown).not.toContain('border-radius');
+    // exactly one image, which the slot frame leaves alone (assets.spec.ts reads its own bitmap)
+    expect(shown.match(/<img /g)).toHaveLength(1);
+    expect(shown).toContain('width="16" height="16"');
+    expect(shown).toContain('image-rendering:pixelated');
   });
 });
 

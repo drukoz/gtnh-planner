@@ -60,7 +60,7 @@ h2 { font-size: 1.2rem; margin: 0 0 var(--gap); }
  * hold inherits it; a dark box (chat, screen, well) sets the light ink of the same table instead, in the group below. Both
  * groups come before .muted and .error, so those two still win on an element that is both (.banner.error).
  */
-.card, .modal, .settings-section, .flow-panel, .conn-panel, .tab-panel, .note, .note-add,
+.card, .modal, .settings-section, .flow-panel, .conn-panel, .tab-panel, .note, .note-add, .materials-section,
 .flow-issues, .flow-infeasible {
   --ink: #303030; --ink-muted: #4a4a4a; --ink-title: #404040; --ink-link: #1a3fa0;
   --ink-error: #aa0000; --ink-ok: #1e5a1e; --ink-warn: #6a4000; --ink-focus: #1b1b1b; --muted: #4a4a4a;
@@ -68,7 +68,8 @@ h2 { font-size: 1.2rem; margin: 0 0 var(--gap); }
 }
 /* Ink on a dark box (a chat box, a screen, a chip): light text on near black. It sets the focus ink too, so a dark box inside a
    panel does not take the panel's dark ring. */
-.banner, .plan-banner, .what-changed, .delete-confirm, .connection, .badge, .chip, .avoid-chip {
+.banner, .plan-banner, .what-changed, .delete-confirm, .connection, .badge, .chip, .avoid-chip,
+.search-results, .mat-unlock {
   --ink: #ffffff; --ink-muted: #aaaaaa; --ink-title: #ffff55; --ink-link: #ffff55;
   --ink-error: #ff5555; --ink-ok: #55ff55; --ink-warn: #ffaa00; --ink-focus: #ffff55; --muted: #aaaaaa;
   color: var(--ink);
@@ -424,15 +425,39 @@ button.banner-chip { display: inline-flex; align-items: center; gap: 6px; min-he
 /* Who ticked a row and when: the ✓ text in it is the markup's; the line pops in (opacity and scale) when a tick is made. */
 .tick-by { font-size: 0.8rem; color: var(--ink-ok); animation: pop var(--dur-fast) var(--ease-pop); }
 
+/*
+ * An item sits in a slot (design spec §6): a #8b8b8b face with the inverted bevel of a Minecraft slot and 2px of padding round the
+ * image, so every HTML icon is 4px wider and taller than its size. The size is the markup's own inline width and height (the unit
+ * tests pin them), which is why the box is content-box: the padding must not eat into it. Nothing styles the image inside, and the
+ * end-to-end test reads that image's own bitmap. The letters of a placeholder are 7 to 12px, below what the pixel font may be, so
+ * they are Inter.
+ */
 .item-icon {
   display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
-  color: #fff; font-weight: 700; letter-spacing: -0.02em; line-height: 1;
+  box-sizing: content-box; position: relative; padding: 2px; border-radius: 0;
+  background-color: var(--slot); box-shadow: var(--bevel-slot);
+  color: #fff; font-family: var(--font-ui); font-weight: 700; letter-spacing: -0.02em; line-height: 1;
   user-select: none; text-shadow: 0 1px 1px rgb(0 0 0 / 0.35);
 }
-/* A placeholder (no texture yet or none at all) gets an inset edge, so a white square still reads as an icon; its
-   letters turn dark when the colour is too light for white ones (ItemIcon's placeholderInk). */
-.item-icon.placeholder { box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.3); }
+/* A placeholder (no texture yet or none at all) keeps the inline `background: rgb()` of its markup, which beats the slot face, and has a
+   dark ring under the bevel, so a white square still reads as an icon; its letters turn dark when the colour is too light for white
+   ones (ItemIcon's placeholderInk). */
+.item-icon.placeholder { box-shadow: var(--bevel-slot), inset 0 0 0 3px rgb(0 0 0 / 0.3); }
 .item-icon.ink-dark { color: #1f2328; text-shadow: 0 1px 0 rgb(255 255 255 / 0.45); }
+/* The Minecraft hover: a white veil over the image and not the bevel (the padding box is the whole slot, so inset 2px is the padding's
+   width), fading in. It is lit on a pointed-at slot and on the highlighted search hit, and it never takes the pointer. */
+.item-icon::after {
+  content: ''; position: absolute; inset: 2px; background: rgb(255 255 255 / 0.35); opacity: 0; pointer-events: none;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+.item-icon:hover::after, .search-hit.active .item-icon::after { opacity: 1; }
+/* The Flow diagram draws its icons in 16px foreignObjects, which clip what overflows them and have no room for 4px of frame (nor
+   for a positioned veil): there the icon is the bare image, as it was. A placeholder in the diagram has a rule of its own, because
+   `.item-icon.placeholder` (0,2,0) would out-rank `svg .item-icon` (0,1,1) and put a 2px bevel on a 16px square: it gets the thin
+   inset edge it had before the slots. Its inline background still wins over the transparent one. */
+svg .item-icon { box-sizing: border-box; position: static; padding: 0; background-color: transparent; box-shadow: none; }
+svg .item-icon.placeholder { box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.3); }
+svg .item-icon::after { content: none; }
 
 .small:where(:not(button)) { font-size: 0.85rem; }
 .visually-hidden {
@@ -507,12 +532,17 @@ details.settings-section > summary > .muted {
 
 .item-search { display: flex; flex-direction: column; gap: 4px; }
 .item-search input { width: 100%; }
+/* The list of matches is a screen set into the panel (design spec §6): near black with the grey edge of a field, and white text, the
+   light ink of its group. A hit is a row of it with square corners. */
 .search-results {
   list-style: none; margin: 0; padding: 4px; max-height: 320px; overflow-y: auto;
-  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--screen); border: 2px solid #a0a0a0; border-radius: 0;
 }
-.search-hit { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 6px; cursor: pointer; }
-.search-hit.active { background: var(--surface-2); }
+.search-hit { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 0; cursor: pointer; }
+/* The highlighted hit (the arrow keys' and the pointer's, which moves it) wears the yellow frame of a selected slot. Inset, so the list's own
+   scrolling does not clip it; a frame and not a fill, so the text stays white on the screen. Its slot is lit by the veil above. Design
+   spec §7a has the frame scale in from 0.9; that is Phase 2 (ruling R3). */
+.search-hit.active, .search-hit[aria-selected='true'] { box-shadow: inset 0 0 0 2px var(--accent); }
 .search-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .search-note { margin: 0; font-size: 0.85rem; }
 
@@ -550,7 +580,9 @@ details.settings-section > summary > .muted {
 }
 .avoid-chip-name { min-width: 0; overflow-wrap: anywhere; }
 button.avoid-chip-remove { width: 24px; height: 24px; min-height: 0; padding: 0; flex-shrink: 0; text-shadow: none; }
-.avoid-badge { background: var(--warn-bg); border-color: var(--warn-border); }
+/* An avoid marker is the dark chip of the shared `.badge` rule in amber: colour only, as a face or an edge here would win over the
+   shared rule by coming after it. */
+.badge.avoid-badge { color: #ffaa00; }
 
 /*
  * Flow diagram (spec §3.9, fix spec §6.2): green = owned machines, blue = new ones, half and half = partly owned; olive
@@ -709,35 +741,68 @@ button.link:hover:not(:disabled) { background: none; text-decoration: none; }
 .option-choice input { margin-top: 4px; }
 .choice-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 
-/* Materials & steps (spec §3.10): the tree indents by depth, unlock texts are warnings, ticked rows are crossed out. */
+/* Materials & steps (spec §3.10): the tree indents by depth, unlock texts are warnings, ticked rows are crossed out. Each section is a
+   panel of its own (design spec §6), in the ink of a panel, with a pixel title: the same panel as a note, set into the tab's. */
 .materials { display: flex; flex-direction: column; gap: 22px; max-width: 1600px; }
-.materials-section { display: flex; flex-direction: column; gap: 6px; }
-.materials-section h3 { font-size: 1.05rem; margin: 0; }
+.materials-section {
+  display: flex; flex-direction: column; gap: 6px; padding: 10px 12px 12px;
+  background: var(--panel); border: 2px solid var(--outline); border-radius: 0; box-shadow: var(--bevel-panel);
+}
+.materials-section h3 { margin: 0; font: 600 16px/1.3 var(--font-pixel); }
 .materials-section > p { margin: 0; }
-.mat-group h4 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 8px 0 2px; }
+.mat-group h4 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-muted); margin: 8px 0 2px; }
 .mat-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
-.mat-row { display: flex; align-items: flex-start; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--border); }
-.mat-row > .item-icon { margin-top: 1px; }
+.mat-row { display: flex; align-items: flex-start; gap: 8px; padding: 5px 0; border-bottom: 1px solid #8b8b8b; }
+/* The first line of text is 20.3px tall (14px at 1.45) and the slot 24px: it starts 2px above the line to be centred on it. */
+.mat-row > .item-icon { margin-top: -2px; }
 .mat-row > .tick { flex: 1; min-width: 0; gap: 4px 10px; }
-.mat-toggle { width: 1.6em; flex-shrink: 0; padding: 0; border: none; background: none; text-align: center; color: var(--muted); }
+/* The caret that opens a row of the build tree. The glyph in its markup (▸ and ▾, which the pixel font may lack; the aria-label is its
+   name) is hidden by a font size of 0, and a pixel caret is drawn in its place, turned down while the row is open. A bare caret, no
+   button face: the base button's face, bevel and height are reset. The leaf rows have a span of the same size to keep in line. */
+.mat-toggle {
+  flex: none; width: 20px; height: 20px; min-height: 0; padding: 0; border: none; background: none; box-shadow: none;
+  text-shadow: none; color: var(--ink); font-size: 0;
+}
 span.mat-toggle { display: inline-block; }
+button.mat-toggle { display: inline-grid; place-content: center; }
+button.mat-toggle:hover { background: rgb(0 0 0 / 0.15); }
+/* Like a link, it has no dark edge for the yellow ring to touch, so its ring takes the focus ink of the surface it is on. */
+button.mat-toggle:focus-visible { outline-color: var(--ink-focus); }
+/* The caret of the toggle and of the two inline disclosures below: the pixel caret of a settings summary, in the colour of the text it
+   belongs to, turned a quarter to point down while what it opens is open. Only a button has one: the span of a leaf row has no state. */
+button.mat-toggle::before, .mat-have summary::before, .mat-needed summary::before {
+  content: ''; width: 9px; height: 9px; background: currentColor;
+  clip-path: polygon(2px 0px, 3px 0px, 3px 1px, 4px 1px, 4px 2px, 5px 2px, 5px 3px, 6px 3px, 6px 4px, 7px 4px, 7px 5px,
+    6px 5px, 6px 6px, 5px 6px, 5px 7px, 4px 7px, 4px 8px, 3px 8px, 3px 9px, 2px 9px);
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+button.mat-toggle[aria-expanded='true']::before, .mat-have[open] summary::before, .mat-needed[open] summary::before {
+  transform: rotate(90deg);
+}
 .mat-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .mat-amount { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
-.mat-have summary { cursor: pointer; }
+/* The stock and the why of a row stay inline text that opens: the caret above sits before the line, in place of the browser's own
+   marker, which is dropped. Not the full-width button of a settings section. */
+.mat-have summary, .mat-needed summary { cursor: pointer; list-style: none; }
+.mat-have summary::-webkit-details-marker, .mat-needed summary::-webkit-details-marker { display: none; }
+.mat-have summary::before, .mat-needed summary::before { display: inline-block; margin-right: 6px; vertical-align: -1px; }
 .mat-where { margin: 2px 0 0; padding-left: 18px; }
 .mat-sources, .mat-unlock, .mat-actions { flex-basis: 100%; }
 .mat-sources { margin: 0; padding-left: 18px; overflow-wrap: anywhere; }
-.mat-unlock {
-  margin: 0; padding: 4px 8px; background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: 6px;
-}
+/* What unlocks a row is a chat box in amber (a dark box, so it takes the light ink of its group). */
+.mat-unlock { margin: 0; padding: 4px 8px; background: var(--chat); border-radius: 0; color: var(--ink-warn); }
 .mat-used-by { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
 .chip { overflow-wrap: anywhere; }
-.mat-needed summary { cursor: pointer; }
-.mat-missing .tick-label { color: var(--error); font-weight: 600; }
-.missing-badge { color: var(--error); border-color: var(--error); background: var(--error-bg); }
+.mat-missing .tick-label { color: var(--ink-error); font-weight: 600; }
+/* A missing marker is the dark chip of the shared `.badge` rule in red: colour only, and it comes after that rule (both are one class). */
+.missing-badge { color: #ff5555; }
 .step-list { margin: 0; padding-left: 24px; display: flex; flex-direction: column; gap: 4px; }
+.step-list li::marker { font-family: var(--font-pixel); }
 .step-row { padding: 3px 0; }
 .step-row .tick-label { overflow-wrap: anywhere; }
+/* The pin of a step is a small button: the padding and size its markup used to carry inline, with the 28px height of `button.small`,
+   whose class it does not have (the markup is pinned). */
+button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
 
 /* Connections (spec §3.8c, plan 11): a box per machine, chest, interface and hookup with a row per configured face,
    and a link per flow. Boxes, face rows, the picked box and the panel follow the flow diagram's look. A link takes its

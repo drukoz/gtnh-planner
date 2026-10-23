@@ -1,7 +1,8 @@
 // Item and fluid icon (architecture §6.5, spec §3.8): the game's own texture once it is loaded, composited from the
 // server's layers; until then, and for anything without a texture, a plain-colour square with two letters, the same
-// colour for the same key every time (the server's fallback colour once it has answered). A placeholder has a thin
-// border, and dark letters when its colour is too light for white ones (architecture §11.43).
+// colour for the same key every time (the server's fallback colour once it has answered). A placeholder has dark letters
+// when its colour is too light for white ones (architecture §11.43). The slot round either one (a grey face, a bevel, a
+// square edge) is the stylesheet's `.item-icon`: the span carries no radius and no extra class for it.
 
 import type { ReactElement } from 'react';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
@@ -57,8 +58,7 @@ export function ItemIcon(props: { itemKey: StuffKey; size?: number; name?: strin
       data-item-key={itemKey}
       data-icon-source={desc?.source ?? 'loading'}
       style={{
-        display: 'inline-flex', width: size, height: size,
-        borderRadius: Math.max(2, Math.round(size / 6)), fontSize: Math.max(7, Math.round(size * 0.42)),
+        display: 'inline-flex', width: size, height: size, fontSize: Math.max(7, Math.round(size * 0.42)),
         ...(url === null ? { background: `rgb(${r}, ${g}, ${b})` } : {}),
       }}
     >
