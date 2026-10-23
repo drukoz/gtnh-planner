@@ -249,6 +249,15 @@ describe('EnderIO item conduits, more closely', () => {
     // an output chest's face on another channel colour takes nothing from it; on the same one it takes Ex
     expect(why({ conduit: '0,0,1', side: 3, mode: 'in_out' }, [{ conduit: '1,0,1', side: 3, insert: { color: 'blue' } }])).toEqual(stuck('no conduit face on the line inserts Ex'));
     expect(why({ conduit: '0,0,1', side: 3, mode: 'in_out' }, [{ conduit: '1,0,1', side: 3, insert: {} }])).toEqual([]);
+    // the output chest's face takes Ex but has no room for it when the run ends: the chest is full of Beta, or its Limited Item
+    // Filter's limit for Ex (8) is reached though the chest has room; then the taker is named, not "nothing on the line takes it"
+    const noRoom = (insert: EioFaceSpec['insert'], chest: Array<[number, string, number]>) => same(eioModel([inputChestNode('0,0,0', ['t:a@0']),
+      oneSlotNode('0,0,2'), outputChestNode('1,0,2')], [{ conduit: '0,0,1', side: 2 }, { conduit: '0,0,1', side: 3, mode: 'in_out' }, { conduit: '1,0,1', side: 3, insert }],
+    [['0,0,1', '1,0,1']]), { ticks: 1_300, restartAt: 1_300, initial: { '0,0,2': [[1, 't:x@0', 64]], '1,0,2': chest } }).findings.map((f) => [f.code, f.tick, f.text]);
+    const beta = Array.from({ length: 27 }, (_, i) => [i, 't:b@0', 64] as [number, string, number]);
+    expect(noRoom({}, beta)).toEqual(stuck("its conduit network's only taker for Ex, Chest (output) at 1 0 2, is full"));
+    const limited: FeedConduitFilter = { item: PART_KEYS.limitedFilter, whitelist: true, keys: ['t:x@0'], limits: [8] };
+    expect(noRoom({ filter: limited }, [[0, 't:x@0', 8]])).toEqual(stuck("its conduit network's only taker for Ex, Chest (output) at 1 0 2, has no room"));
   });
 
   it('takes a conveyor\'s push only through an extracting face, and drops nothing', () => {

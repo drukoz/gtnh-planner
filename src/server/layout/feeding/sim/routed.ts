@@ -31,6 +31,11 @@
 //   Wandering speed, for ever (the pack's "Max Wander Distance" is 0); the model keeps it at the pipe where it lost its way.
 // - A routed pipe is no inventory, so a machine's own push (a cover, auto-output, an output bus) never goes into one: the
 //   model registers no push target.
+// - Why an item does not reach a node (`in`): no chip on its pipe takes it; its sources' Item Extractor Chips do not let it out;
+//   or one does, but items of another kind sent to it did not fit and circle its pipe, still counted as on their way, so its
+//   pipe answers for the item with no room (research C19, named with what circles). Why one does not leave (`out`): its Item
+//   Extractor Chip refuses it (unless a Broadcaster sends it on a Stock Keeper's orders), nothing on the line answers for it,
+//   or every taker has no room for it, named, as the fallback "nothing on the line takes it" would deny what they show.
 // - Work whose answer is already known is skipped, and only that (Task 11 rule 7's exact steps, which change no result): a
 //   payload's try at an inventory that a try for its item already found full in the same arrivals tick, or that its own
 //   last try found full while the inventory has not changed since (`SimInv.changes`), and the room of an inventory that has
@@ -43,6 +48,7 @@ import type { FeedUnknown, ItemFilterSpec, RoutedChipSpec } from '../contract.ts
 import { PR, PR_PRIORITY_ORDER, prTravelTicks, stockKeeperDelay, type PrPriority } from '../facts.ts';
 import { compareLocal, localOf } from '../frame.ts';
 import type { FeedModel, FeedNode, NodeId, RoutedNet, RoutedPipe } from '../model.ts';
+import { listText } from '../text.ts';
 import { insertEmpties, NEVER, PHASE, roomFor, type KeyTable, type SimEntity, type SimInv } from './core.ts';
 import type { Explain } from './detect.ts';
 import type { SimEnv } from './machine.ts';
@@ -716,17 +722,58 @@ export function routedModel(net: RoutedNet, env: SimEnv): NetworkModel {
   const supplies = (n: FeedNode, key: StuffKey): boolean => (n.kind === 'chest' ? n.side === 'input' && n.keys.includes(key) : n.recipes.some((r) => r.outputs.some((o) => o.key === key)));
   const extractorsOn = (list: readonly Pipe[]): RoutedChipSpec[] => list.flatMap((p) => p.spec.chips.filter((c) => c.kind === 'extractor'));
 
+  /** Whether pipe `p` keeps `key` in stock: an Item Stock Keeper Chip of it lists it. */
+  const keeps = (p: Pipe, key: StuffKey): boolean => p.spec.chips.some((c) => c.kind === 'stock_keeper' && c.stock?.some((s) => s.key === key) === true);
+
+  /**
+   * Why `key` finds no room at node `node`'s pipes `own` although its sources let it out (research C19 as E6 reads Project Red):
+   * payloads of other items sent there did not fit and circle the pipe, and while they stay counted as on their way there,
+   * every other item's answer loses a stack for each slot they will need, so the pipe answers for `key` with no room. Names
+   * each such item with what of it circles, in key order; null when nothing of another item circles there counted.
+   */
+  const circlingAt = (own: readonly Pipe[], key: StuffKey): string | null => {
+    const k = keys.id(key);
+    const circling = new Map<number, number>();
+    for (const p of flying) {
+      if (p.done || !p.bounced || p.dest === null || p.key === k || !own.includes(p.dest) || (p.dest.transit.get(p.key) ?? 0) <= 0) continue;
+      circling.set(p.key, (circling.get(p.key) ?? 0) + p.count);
+    }
+    if (circling.size === 0) return null;
+    const items = [...circling].sort((a, b) => a[0] - b[0]).map(([id, n]) => `${fmtInt(n)} ${model.nameOf(keys.key(id))}`);
+    return `${listText(items)} sent to it did not fit and circle its pipe, still counted as on their way there, so its pipe has no room left `
+      + `to answer for ${model.nameOf(key)}`;
+  };
+
+  /**
+   * Why `key` does not leave node `node` though something on the network takes it: every taker has no room for it when `detect`
+   * asks (at the run's end) — an answering pipe's answer (its inventory's room less what is on its way there), a stock keeper's
+   * room; one taker by name, else all of them, "full" when they are chests without room. Null when one still has room.
+   */
+  const noRoomFor = (node: NodeId, key: StuffKey, ordered: boolean): string | null => {
+    const k = keys.id(key);
+    const answers = (p: Pipe): boolean => p.spec.chips.some((c) => ANSWERING[c.kind] !== undefined && (c.kind === 'overflow' || passes(c, key)));
+    const takers = pipes.filter((p) => p.inv !== null && p.spec.target?.node !== node && (answers(p) || (ordered && keeps(p, key))));
+    if (takers.length === 0 || takers.some((p) => (answers(p) ? roomOf(p, k) : roomFor(p.inv!, k, p.side)) > 0)) return null;
+    const nodes = [...new Set(takers.map((p) => p.spec.target!.node))].map((id) => model.nodes.find((n) => n.id === id) ?? id);
+    const names = nodes.map((n) => (typeof n === 'string' ? n : n.label));
+    const full = nodes.every((n) => typeof n !== 'string' && n.kind === 'chest') && takers.every((p) => roomFor(p.inv!, k, p.side) <= 0);
+    const name = model.nameOf(key);
+    if (names.length === 1) return `its routed network's only taker for ${name}, ${names[0]!}, ${full ? 'is full' : 'has no room'}`;
+    return `its routed network's only takers for ${name}, ${listText(names)}, ${full ? 'are full' : 'have no room'}`;
+  };
+
   const explain: Explain = (kind, node, key) => {
     const own = serving(node, kind);
     if (own.length === 0) return null;
     if (kind === 'in') {
       if (!own.some((p) => p.spec.chips.some((c) => takesIn(c, key)))) return `no Item Responder Chip on its pipe lists ${model.nameOf(key)}`;
-      // the network's sources of the item, in node order: when none lets it out, the first whose Item Extractor Chip refuses it
+      // the network's sources of the item, in node order: when none lets it out, the first whose Item Extractor Chip refuses it;
+      // when one does, what circles its pipe may keep it out
       let blamed: string | null = null;
       for (const n of model.nodes) {
         if (n.id === node || !supplies(n, key)) continue;
         const at = serving(n.id, 'out');
-        if (at.some((p) => p.spec.chips.some((c) => (c.kind === 'extractor' || c.kind === 'broadcaster') && passes(c, key)))) return null;
+        if (at.some((p) => p.spec.chips.some((c) => (c.kind === 'extractor' || c.kind === 'broadcaster') && passes(c, key)))) return circlingAt(own, key);
         const extractors = extractorsOn(at);
         if (blamed === null && extractors.length > 0) blamed = `the Item Extractor Chip on ${n.label} ${refusal(extractors)}`;
       }
@@ -734,14 +781,13 @@ export function routedModel(net: RoutedNet, env: SimEnv): NetworkModel {
     }
     // an Item Broadcaster Chip on its pipe that passes the item sends it on the orders of a Stock Keeper Chip that keeps it
     // (research §2.2): then that is its way out, and the extractor beside it is not why it stays (as R5a reads it)
-    const ordered = own.some((p) => p.spec.chips.some((c) => c.kind === 'broadcaster' && passes(c, key)))
-      && pipes.some((p) => p.spec.chips.some((c) => c.kind === 'stock_keeper' && c.stock?.some((s) => s.key === key) === true));
+    const ordered = own.some((p) => p.spec.chips.some((c) => c.kind === 'broadcaster' && passes(c, key))) && pipes.some((p) => keeps(p, key));
     const extractors = extractorsOn(own);
     if (!ordered && extractors.length > 0 && !extractors.some((c) => passes(c, key))) return `its Item Extractor Chip ${refusal(extractors)}`;
-    // an answer on another node's pipe
+    // an answer on another node's pipe, which may have no room left
     const answered = ordered || pipes.some((p) => p.inv !== null && p.spec.target?.node !== node
       && p.spec.chips.some((c) => ANSWERING[c.kind] !== undefined && (c.kind === 'overflow' || passes(c, key))));
-    return answered ? null : 'no Item Responder Chip on the line lists it';
+    return answered ? noRoomFor(node, key, ordered) : 'no Item Responder Chip on the line lists it';
   };
 
   // ---- What the run leaves unknown ----

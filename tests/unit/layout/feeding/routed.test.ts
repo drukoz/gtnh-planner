@@ -200,6 +200,9 @@ describe('Project Red routed pipes, more closely', () => {
     expect(run.stats.deliveries('2,0,0')).toEqual([[25, 't:a@0', 64]]);
     expect(run.runs).toEqual({ s: 0 });
     expect(run.findings.map((f) => [f.code, f.key, f.tick])).toEqual([['feed_starved', 't:b@0', 0], ['feed_churn', 't:a@0', 35]]);
+    // the chest's extractor lists Beta: what keeps it out is the Alpha that circles, which the starved text names with its count
+    expect(run.findings[0]!.text).toBe('Advanced Alloy Smelter at 2 0 0 never gets Beta: 64 Alpha sent to it did not fit and circle its pipe, '
+      + 'still counted as on their way there, so its pipe has no room left to answer for Beta');
   });
 
   it('weighs answers by priority, then the chip\'s own priority, then hops, then pipe order', () => {
@@ -341,6 +344,16 @@ describe('Project Red routed pipes, more closely', () => {
     expect(broadcast({ kind: 'stock_keeper', stock: [{ key: 't:x@0', count: 16 }] })).toEqual(stuck('nothing on the line takes it'));
     // with no stock keeper that keeps Ex, no order ever comes: the extractor is why
     expect(broadcast(responder('t:x@0'))).toEqual(stuck('its Item Extractor Chip does not list it'));
+    // the only taker of Ex answers with no room when the run ends: a chest full of Beta, or a two-slot machine whose slot of Ex is
+    // full (Multi Stack Input Off keeps Ex out of its other slot); then the taker is named, not "nothing on the line takes it"
+    const noRoom = (taker: ReturnType<typeof sinkNode> | ReturnType<typeof outputChestNode>, held: Array<[number, string, number]>) => same(
+      prModel([taker, oneSlotNode('2,0,0')], [
+        { id: '0,1,0', target: { node: '0,0,0', side: 1 }, chips: [responder('t:x@0')] }, { id: '1,1,0' },
+        { id: '2,1,0', target: { node: '2,0,0', side: 1 }, chips: [extractor(whitelist('t:x@0'))] }]),
+      { ticks: 2_000, restartAt: 2_000, initial: { '2,0,0': [[0, 't:a@0', 1], [1, 't:x@0', 64]], '0,0,0': held } }).findings.map((f) => [f.code, f.tick, f.text]);
+    const beta = Array.from({ length: 27 }, (_, i) => [i, 't:b@0', 64] as [number, string, number]);
+    expect(noRoom(outputChestNode('0,0,0'), beta)).toEqual(stuck("its routed network's only taker for Ex, Chest (output) at 0 0 0, is full"));
+    expect(noRoom(sinkNode('0,0,0', 2, 1), [[0, 't:x@0', 64]])).toEqual(stuck("its routed network's only taker for Ex, Basic Mixer at 0 0 0, has no room"));
     // R5a words the same line the same
     expect(precheckFeeding(model(extractor(whitelist()), responder('t:x@0')), feedPack()).map((f) => [f.code, f.text]))
       .toEqual([['feed_no_route', 'Nothing takes Ex out of Basic Macerator at 2 0 0: its Item Extractor Chip has an empty whitelist (a new chip extracts nothing)']]);

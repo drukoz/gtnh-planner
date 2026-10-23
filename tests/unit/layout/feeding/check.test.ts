@@ -169,6 +169,23 @@ describe('checkFeeding', () => {
     ]);
   });
 
+  it('names the cause of the stops on the lines main lays: the item that circles, the takers without room', { timeout: 60_000 }, async () => {
+    // main's routed smelter line (research C19): the input chest's Item Extractor Chip lists Beta, but the Alpha that overshot the
+    // empty smelter circles its pipe, still counted as on its way, and leaves its pipe no room to answer for Beta
+    const smelter = smelterLine();
+    const routed = checkFeeding({ ...smelter, layout: await layFeed(smelter.pack, smelter.plan, 'routed'), options: { scenarios: ['steady'] } });
+    expect(routed.findings.filter((f) => f.code === 'feed_starved').map((f) => f.text)).toEqual([
+      'Advanced Alloy Smelter at 1 64 1 never gets Beta: 64 Alpha sent to it did not fit and circle its pipe, still counted as on their way there, '
+        + 'so its pipe has no room left to answer for Beta',
+    ]);
+    // the 1,200-block line on EnderIO: the assemblers of Part 3 stop because the two blast furnaces that take it have no room
+    const big = checkFeeding({ ...(await bigLine('enderio')), options: { scenarios: ['steady'] } });
+    const parts = big.findings.filter((f) => f.code === 'feed_no_route' && f.key === 't:o3@0');
+    expect(parts.length).toBeGreaterThan(0);
+    expect(parts.filter((f) => !/: its conduit network's only takers for Part 3, Electric Blast Furnace at .* and Electric Blast Furnace at .*, have no room$/.test(f.text))).toEqual([]);
+    expect(big.findings.filter((f) => f.text.endsWith('nothing on the line takes it'))).toEqual([]);
+  });
+
   describe('finds today\'s EnderIO smelter crowded only when Multi Stack Input is On', () => {
     it('as main laid it before fix/feeding', async () => {
       const { pack, plan } = smelterLine();

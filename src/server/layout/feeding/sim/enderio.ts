@@ -25,6 +25,10 @@
 // - When its chunk loads again (`restart`), EnderIO builds the network anew: every face's deficit is 0, and its start slot
 //   and its round robin index are back at the first.
 // - A face whose side has no inventory of the run moves nothing; nor does a face without targets, which therefore never acts.
+// - Why an item does not reach a node (`in`): no face toward it inserts, its Insert filter refuses the item, or no face extracts
+//   it anywhere. Why one does not leave (`out`): no face toward it extracts, its Extract filter refuses the item, no face on its
+//   channel inserts it, or every face that does has no room for it (full chests, machines with no room, a Limited Item Filter's
+//   limit reached), named, as the fallback "nothing on the line takes it" would deny what those takers show.
 // Pure TypeScript: nothing from node:* may be imported here.
 
 import type { StuffKey } from '../../../../shared/keys.ts';
@@ -34,7 +38,7 @@ import { EIO, eioDeficit, PART_KEYS } from '../facts.ts';
 import { compareLocal, localOf } from '../frame.ts';
 import type { EioFace, EioNet, FeedModel, NodeId } from '../model.ts';
 import { listText } from '../text.ts';
-import { insertOneEmpty, NEVER, PHASE, type KeyTable, type PushTarget, type SimEntity, type SimInv } from './core.ts';
+import { insertOneEmpty, NEVER, PHASE, roomFor, type KeyTable, type PushTarget, type SimEntity, type SimInv } from './core.ts';
 import type { Explain } from './detect.ts';
 import type { SimEnv } from './machine.ts';
 import type { NetworkModel } from './run.ts';
@@ -269,8 +273,20 @@ export function enderioModel(net: EioNet, env: SimEnv): NetworkModel {
     if (extracting.length === 0) return 'no conduit face toward it extracts';
     const passing = extracting.filter((f) => f.extract!.pass[k] === 1);
     if (passing.length === 0) return `its conduit face's Extract filter ${refusal(extracting[0]!.spec.extract!.filter, name, nameOf)}`;
-    const takenBy = (f: Face): boolean => elsewhere.some((g) => g.insert !== null && g.spec.insert!.color === f.spec.extract!.color && g.insert.pass[k] === 1);
-    return passing.some(takenBy) ? null : `no conduit face on the line inserts ${name}`;
+    // the faces elsewhere whose insert side, on the channel of a face that lets it out, passes it
+    const takers = elsewhere.filter((g) => g.insert !== null && g.insert.pass[k] === 1 && passing.some((f) => g.spec.insert!.color === f.spec.extract!.color));
+    if (takers.length === 0) return `no conduit face on the line inserts ${name}`;
+    // every one has no room for it when `detect` asks (at the run's end): its inventory's, and under a Limited Item Filter its limit's
+    const roomAt = (g: Face): number => {
+      const capped = g.insert!.limits === null ? Number.POSITIVE_INFINITY : g.insert!.limits[k]! - g.inv.countAll(k);
+      return capped <= 0 ? 0 : Math.min(capped, roomFor(g.inv, k, g.side));
+    };
+    if (takers.some((g) => roomAt(g) > 0)) return null;
+    const nodes = [...new Set(takers.map((g) => g.spec.target!.node))].map((id) => model.nodes.find((n) => n.id === id) ?? id);
+    const names = nodes.map((n) => (typeof n === 'string' ? n : n.label));
+    const full = nodes.every((n) => typeof n !== 'string' && n.kind === 'chest') && takers.every((g) => roomFor(g.inv, k, g.side) <= 0);
+    if (names.length === 1) return `its conduit network's only taker for ${name}, ${names[0]!}, ${full ? 'is full' : 'has no room'}`;
+    return `its conduit network's only takers for ${name}, ${listText(names)}, ${full ? 'are full' : 'have no room'}`;
   };
 
   // rule 6: the network is built anew when its chunk loads
