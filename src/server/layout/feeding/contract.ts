@@ -7,7 +7,7 @@
 //   the build steps, the 3D view and the checker read one structure. fix/feeding writes the chips, the interface patterns,
 //   the ME Export Bus on its cable and the flat `CONFIG_KEYS` settings on main's routed, AE2 and EnderIO layouts; add-on
 //   12 Task 6 writes bench grids, Limited Item Filter counts (main's `ConduitFilter.limits`, read through
-//   `FeedConduitFilter`) and shared machines (`FeedBlock`).
+//   `FeedConduitFilter`) and shared machines (`LayoutBlock.stepIds`, read through `FeedBlock`).
 // - The second half is what the checker reports: the thirteen `feed_*` codes, their kinds and the gate (the plan's
 //   Codes table), the scenarios, the options and the time constants.
 // Pure TypeScript: nothing from node:* may be imported here.
@@ -27,8 +27,12 @@ export type {
  * past the end of `limits` counts 0, as main's configure text reads it.
  */
 export type FeedConduitFilter = ConduitFilter;
-/** A layout block (its `feed` is `LayoutBlock.feed`) that may carry add-on 12's shared-machine steps, which `LayoutBlock` does not have yet. */
-export type FeedBlock = LayoutBlock & { stepIds?: string[] };
+/**
+ * A layout block as the checker reads it: main's `LayoutBlock` itself, which carries both fields the checker needed beyond
+ * §6.7 — `feed` (architecture entry 51) and a shared machine's `stepIds` (add-on 12). An alias, kept because entry 51 names
+ * it among this contract's types.
+ */
+export type FeedBlock = LayoutBlock;
 /** The flat `LayoutBlock.config` keys the checker reads (add-on 15's words, architecture entry 50 item 4). */
 export const CONFIG_KEYS = { multiStack: 'multiStack', inputFilter: 'inputFilter', inputFromOutputSide: 'inputFromOutputSide',
   autoOutput: 'autoOutput', limited: 'limited', inputSeparation: 'inputSeparation', circuit: 'circuit',
