@@ -33,13 +33,14 @@
   --muted: #4a4a4a; --ok: #1e5a1e; --error: #aa0000; --error-bg: #e3b0b0;
   --warn-bg: #e6d9a8; --warn-border: #6a4000; --accent-text: #1b1b1b;
   color-scheme: dark; scrollbar-color: var(--btn) var(--screen);
-  font-family: var(--font-ui); font-size: 14px; line-height: 1.45; color: var(--ink); background: var(--page);
+  font-family: var(--font-ui); line-height: 1.45; color: var(--ink); background: var(--page);
 }
 
 * { box-sizing: border-box; }
-/* The stone is the body's own background, never an overlay element: the diagrams' hit tests need nothing laid over them. */
+/* The stone is the body's own background, never an overlay element: the diagrams' hit tests need nothing laid over them.
+   The 14px text size is the body's too: :root keeps the browser's 16px, so a rem means what it always did. */
 body {
-  margin: 0; min-height: 100vh;
+  margin: 0; min-height: 100vh; font-size: 14px;
   background-color: var(--page);
   background-image:
     linear-gradient(45deg, var(--page-check) 25%, transparent 25%, transparent 75%, var(--page-check) 75%),

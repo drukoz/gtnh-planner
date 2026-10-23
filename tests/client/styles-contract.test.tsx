@@ -127,7 +127,7 @@ const TOKENS: [string, string][] = [
   ['--ink-error', '#ff5555'], ['--ink-ok', '#55ff55'], ['--ink-warn', '#ffaa00'],
   ['--gap', '12px'],
   ['color-scheme', 'dark'], ['scrollbar-color', 'var(--btn) var(--screen)'],
-  ['font-family', 'var(--font-ui)'], ['font-size', '14px'], ['line-height', '1.45'], ['color', 'var(--ink)'], ['background', 'var(--page)'],
+  ['font-family', 'var(--font-ui)'], ['line-height', '1.45'], ['color', 'var(--ink)'], ['background', 'var(--page)'],
 ];
 
 const KEYFRAMES: Record<string, string[]> = {
@@ -187,6 +187,11 @@ describe('the Machine GUI stylesheet', () => {
       expect(at, font).toBeGreaterThan(-1);
       expect(at, font).toBeLessThan(sheet);
     }
+  });
+
+  it('sets the 14px text size on the body, so a rem stays what it was', () => {
+    expect(ruleBody('body')).toMatch(/(^|; )font-size: 14px(;|$)/);
+    expect(rootTokens().has('font-size'), ':root declares a font-size, which would change every rem').toBe(false);
   });
 
   it('paints the stone page', () => {
