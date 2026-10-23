@@ -229,19 +229,31 @@ export function ProjectPage(props: { id: string }): ReactElement {
   }, [deleted]);
   // What the flow diagram lights belongs to this project: leaving it (for another project or another page) clears it.
   useEffect(() => () => setFlowFocus(null), [props.id]);
-  // The settings column is a drawer below 900 px. While it is open, Escape closes it and gives the focus back to its button. These
-  // hooks sit above the early return below; the listener is removed when the drawer closes, and between StrictMode's two runs.
+  // The settings column is a drawer below 900 px. While it is open, Escape closes it and gives the focus back to its button, one layer
+  // per press: a key that something inside has already handled (`defaultPrevented`) is not the drawer's, and neither is the key that
+  // closes a search list open in it (the item search and the avoid box close on Escape without preventing the default). React has
+  // drawn such a list closed by the time the key reaches the document, so `look` reads whether one is open on the way down, before
+  // the list's own handler runs, and `closeOnEscape` decides on the way up. These hooks sit above the early return below; the
+  // listeners are removed when the drawer closes, and between StrictMode's two runs.
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsToggle = useRef<HTMLButtonElement | null>(null);
   useEffect(() => {
     if (!settingsOpen) return;
+    let listOpen = false;
+    const look = (e: KeyboardEvent): void => {
+      listOpen = e.target instanceof Element && e.target.closest('[role="combobox"][aria-expanded="true"]') !== null;
+    };
     const closeOnEscape = (e: KeyboardEvent): void => {
-      if (e.key !== 'Escape') return;
+      if (e.key !== 'Escape' || e.defaultPrevented || listOpen) return;
       setSettingsOpen(false);
       settingsToggle.current?.focus();
     };
+    document.addEventListener('keydown', look, true);
     document.addEventListener('keydown', closeOnEscape);
-    return () => document.removeEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('keydown', look, true);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
   }, [settingsOpen]);
 
   if (project === null) {
