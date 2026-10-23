@@ -1638,15 +1638,19 @@ describe('the Machine GUI Map tab', () => {
     expect(blocks.filter((b) => /\.found-panel[^,{]*\.badge|\.map-row-button[^,{]*\.badge/.test(b.prelude)).map((b) => b.prelude)).toEqual([]);
   });
 
-  // Pixelify Sans draws its lowercase "fi" and "fl" as ligatures that look like an A at 13 and 14px ("Does not fit" read "Does not At",
-  // "minecraft:fire" read "minecraft:Are": measured in a browser). The `font` shorthand resets the setting, so it comes after the
-  // shorthand in a rule of its own, or in the same rule below it.
-  it('keeps the pixel font\'s fi and fl ligatures off in the text of the fit and of the tooltip', () => {
-    expect(declarations(ruleBody('.badge[data-fits]'))).toEqual([['font-variant-ligatures', 'none']]);
-    expect(position('.badge[data-fits]')).toBeGreaterThan(position('.badge, .chip'));
-    const tooltip = declarations(ruleBody(TIP)).map(([name]) => name);
-    expect(declared(TIP, 'font-variant-ligatures')).toBe('none');
-    expect(tooltip.indexOf('font-variant-ligatures')).toBeGreaterThan(tooltip.indexOf('font'));
+  // Pixelify Sans draws its lowercase "fi", "fl" and "ff" as ligatures that look like an A at 13 to 22px ("Does not fit" read "Does not
+  // At", "minecraft:fire" read "minecraft:Are": measured in a browser), so they are off for every element, once (ruling R24). A value on
+  // :root, the first form of that ruling, does not reach the text: the `font` shorthand of every rule that sets the pixel font resets
+  // font-feature-settings on its own element, and ligatures.spec.ts saw `normal` on the head's name field with it. So it is a rule for
+  // every element, and !important to win over those shorthands. Only liga and clig: Inter's contextual alternates stay on.
+  it('keeps the pixel font\'s fi, fl and ff ligatures off for every element, once, and not only on the root', () => {
+    const rules = blocks.filter((b) => b.inner.includes('font-feature-settings'));
+    expect(rules.map((b) => b.prelude)).toEqual(['*']);
+    expect(declarations(rules[0]!.inner)).toEqual([['font-feature-settings', '"liga" 0, "clig" 0 !important']]);
+    expect(rules[0]!.nested).toBe(false);
+    // nowhere else, in another property or on a rule of the pixel font's users (they would be the second place to forget)
+    expect(blocks.filter((b) => b.inner.includes('font-variant-ligatures')).map((b) => b.prelude)).toEqual([]);
+    expect(rootTokens().has('font-feature-settings'), 'the root: inherited text reaches it, text set with `font` does not').toBe(false);
   });
 
   it('keeps the pin dot the one round shape, with the thin ring of the map\'s own markers', () => {

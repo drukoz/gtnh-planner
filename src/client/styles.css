@@ -40,6 +40,12 @@
 }
 
 * { box-sizing: border-box; }
+/* Pixelify Sans draws a lowercase "fi", "fl" or "ff" as a ligature that looks like an A at 13 to 22px ("Does not fit" read "Does not At",
+   "minecraft:fire" "minecraft:Are"), so ligatures are off for every element, once. It is a rule for every element and !important because
+   the `font` shorthand, which most rules that set the pixel font use, resets font-feature-settings (and font-variant-ligatures) on its
+   own element: a value on :root or on a parent never reaches that text (measured in Chromium; ligatures.spec.ts). Only liga and clig:
+   Inter's contextual alternates stay on, and none of its text changes. */
+* { font-feature-settings: "liga" 0, "clig" 0 !important; }
 /* The stone is the body's own background, never an overlay element: the diagrams' hit tests need nothing laid over them.
    The 14px text size is the body's too: :root keeps the browser's 16px, so a rem means what it always did. */
 body {
@@ -914,7 +920,7 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
 .map-tooltip {
   width: max-content; max-width: 360px; padding: 6px 8px; overflow-wrap: anywhere;
   background: var(--tip-bg); border: 2px solid var(--tip-border); box-shadow: 0 0 0 1px #100010, inset 0 0 0 1px var(--tip-inner);
-  color: #aaaaaa; font: 14px/1.35 var(--font-pixel); font-variant-ligatures: none; animation: rise-in 120ms var(--ease-out);
+  color: #aaaaaa; font: 14px/1.35 var(--font-pixel); animation: rise-in 120ms var(--ease-out);
 }
 .map-tooltip > :first-child { color: #ffffff; }
 /* The new line and what the scan found are a panel each, in the ink of a panel (their group is at the top), with pixel titles. The micro
@@ -962,10 +968,7 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
   display: inline-block; width: 10px; height: 10px; margin-right: 6px; vertical-align: middle;
   border-radius: 50%; box-shadow: 0 0 0 1px rgb(0 0 0 / 0.7);
 }
-/* Whether the base's power carries the line: the shared badge (pixel text on a screen) in the colour of the answer. Pixelify Sans draws a
-   lowercase "fi" or "fl" as a ligature that looks like an A at 13 and 14px ("Does not fit" read "Does not At"; "minecraft:fire" in the
-   tooltip would read "minecraft:Are"): off here and in the tooltip, after the `font` shorthand, which resets it. */
-.badge[data-fits] { font-variant-ligatures: none; }
+/* Whether the base's power carries the line: the shared badge (pixel text on a screen) in the colour of the answer. */
 .badge[data-fits='yes'] { color: #55ff55; }
 .badge[data-fits='tight'] { color: #ffaa00; }
 .badge[data-fits='no'] { color: #ff5555; }
