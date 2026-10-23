@@ -15,19 +15,19 @@ export function SmartUploadPanel(props: {
   const { reading, plan, radius, busy, onRadius, onUpload } = props;
   const hasRegion = plan !== null && plan.items.some((i) => i.rel !== 'level.dat');
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <h3 style={{ margin: 0 }}>Smart upload (recommended)</h3>
-      <p className="muted" style={{ margin: 0 }}>
+    <div className="smart-upload">
+      <h3>Smart upload (recommended)</h3>
+      <p className="muted">
         Sends only the chunks around players, the spawn, claimed chunks and chunks people have spent time in.
       </p>
-      {reading !== null && <p className="muted" role="status" style={{ margin: 0 }}>{`Reading your world… ${reading.done} / ${reading.total} region files`}</p>}
-      {reading === null && plan === null && <p className="muted" style={{ margin: 0 }}>Working out what to send…</p>}
+      {reading !== null && <p className="muted" role="status">{`Reading your world… ${reading.done} / ${reading.total} region files`}</p>}
+      {reading === null && plan === null && <p className="muted">Working out what to send…</p>}
       {plan !== null && (plan.areas.length === 0 ? (
-        <p className="muted" style={{ margin: 0 }}>
+        <p className="muted">
           No players, spawn, claims or lived-in chunks were found in the picked region files. Use “Advanced: whole dimensions” below instead.
         </p>
       ) : (
-        <ul style={{ margin: 0, paddingLeft: 20 }}>
+        <ul className="smart-areas">
           {plan.areas.map((a) => (
             <li key={`${a.dim}:${a.x}:${a.z}`} data-testid="smart-area">
               {`${dimLabel(a.dim)} around ${a.x}, ${a.z} — ${a.why} — ${plural(a.chunks, 'chunk')}`}
@@ -35,15 +35,15 @@ export function SmartUploadPanel(props: {
           ))}
         </ul>
       ))}
-      <div className="row" style={{ gap: 12 }}>
+      <div className="row smart-radius">
         <input
           type="range" min={SMART_RADIUS.min} max={SMART_RADIUS.max} step={1} value={radius} aria-label="Radius in chunks" disabled={busy}
           onChange={(e) => onRadius(Number(e.currentTarget.value))}
         />
         <span>{`${plural(radius, 'chunk')} (${radius * BLOCKS_PER_CHUNK} blocks) around each spot`}</span>
       </div>
-      {plan !== null && <p data-testid="smart-total" style={{ margin: 0 }}>{`To send: ${plural(plan.chunks, 'chunk')}, ${formatSize(plan.bytes)}`}</p>}
-      <p className="muted" style={{ margin: 0 }}>Only level.dat and the trimmed region files are sent; player files stay on your computer.</p>
+      {plan !== null && <p data-testid="smart-total" className="smart-total">{`To send: ${plural(plan.chunks, 'chunk')}, ${formatSize(plan.bytes)}`}</p>}
+      <p className="muted">Only level.dat and the trimmed region files are sent; player files stay on your computer.</p>
       <div>
         <button type="button" className="primary" disabled={reading !== null || busy || !hasRegion} data-testid="upload-button" onClick={onUpload}>
           Upload and scan

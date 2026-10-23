@@ -31,10 +31,6 @@
   --ink: #dddddd; --ink-muted: #aaaaaa; --ink-title: #ffffff; --ink-link: #ffff55;
   --ink-error: #ff5555; --ink-ok: #55ff55; --ink-warn: #ffaa00; --ink-focus: #ffff55;
   --gap: 12px;
-  /* Old names, still read by inline styles and older rules; Task 9 removes them. */
-  --bg: var(--page); --surface: var(--panel); --surface-2: #b5b5b5; --border: #555555; --radius: 0;
-  --muted: #4a4a4a; --ok: #1e5a1e; --error: #aa0000; --error-bg: #e3b0b0;
-  --warn-bg: #e6d9a8; --warn-border: #6a4000; --accent-text: #1b1b1b;
   color-scheme: dark; scrollbar-color: var(--btn) var(--screen);
   font-family: var(--font-ui); line-height: 1.45; color: var(--ink); background: var(--page);
 }
@@ -44,8 +40,12 @@
    "minecraft:fire" "minecraft:Are"), so ligatures are off for every element, once. It is a rule for every element and !important because
    the `font` shorthand, which most rules that set the pixel font use, resets font-feature-settings (and font-variant-ligatures) on its
    own element: a value on :root or on a parent never reaches that text (measured in Chromium; ligatures.spec.ts). Only liga and clig:
-   Inter's contextual alternates stay on, and none of its text changes. */
+   Inter's contextual alternates stay on, and none of its text changes. `*` does not match a pseudo-element, so the button of a file
+   input (the World page's two pickers set it in the pixel font) has its rule too. Two rules, not one list: the build's CSS minifier
+   (Lightning CSS, with Vite's browser targets) splits `*, ::file-selector-button`, merges its `*` half into the rule above and loses the
+   other half; as two rules both survive (ligatures.spec.ts asks the built page). */
 * { font-feature-settings: "liga" 0, "clig" 0 !important; }
+::file-selector-button { font-feature-settings: "liga" 0, "clig" 0 !important; }
 /* The stone is the body's own background, never an overlay element: the diagrams' hit tests need nothing laid over them.
    The 14px text size is the body's too: :root keeps the browser's 16px, so a rem means what it always did. */
 body {
@@ -66,18 +66,20 @@ h2 { font-size: 1.2rem; margin: 0 0 var(--gap); }
  * hold inherits it; a dark box (chat, screen, well) sets the light ink of the same table instead, in the group below. Both
  * groups come before .muted and .error, so those two still win on an element that is both (.banner.error).
  */
-.card, .modal, .settings-section, .flow-panel, .conn-panel, .tab-panel, .note, .note-add, .materials-section, .line-panel, .found-panel {
+.card, .modal, .settings-section, .flow-panel, .conn-panel, .tab-panel, .note, .note-add, .materials-section, .line-panel, .found-panel,
+.view3d-box {
   --ink: #303030; --ink-muted: #4a4a4a; --ink-title: #404040; --ink-link: #1a3fa0;
-  --ink-error: #aa0000; --ink-ok: #1e5a1e; --ink-warn: #6a4000; --ink-focus: #1b1b1b; --muted: #4a4a4a;
+  --ink-error: #aa0000; --ink-ok: #1e5a1e; --ink-warn: #6a4000; --ink-focus: #1b1b1b;
   color: var(--ink);
 }
 /* Ink on a dark box (a chat box, a screen, a chip): light text on near black. It sets the focus ink too, so a dark box inside a
    panel does not take the panel's dark ring. */
 .banner, .plan-banner, .what-changed, .delete-confirm, .connection, .badge, .chip, .avoid-chip,
 .search-results, .mat-unlock, .flow-issues, .flow-infeasible,
-.flow-panel .ports, .flow-panel .oc-lines, .flow-panel .warnings, .flow-panel .sources, .flow-panel .used-by, .flow-panel .also-made {
+.flow-panel .ports, .flow-panel .oc-lines, .flow-panel .warnings, .flow-panel .sources, .flow-panel .used-by, .flow-panel .also-made,
+.view3d-warnings {
   --ink: #ffffff; --ink-muted: #aaaaaa; --ink-title: #ffff55; --ink-link: #ffff55;
-  --ink-error: #ff5555; --ink-ok: #55ff55; --ink-warn: #ffaa00; --ink-focus: #ffff55; --muted: #aaaaaa;
+  --ink-error: #ff5555; --ink-ok: #55ff55; --ink-warn: #ffaa00; --ink-focus: #ffff55;
   color: var(--ink);
 }
 a, button.link { color: var(--ink-link); }
@@ -88,11 +90,12 @@ a, button.link { color: var(--ink-link); }
 /*
  * Motion (design spec §7a): the entrances the later rules ask for by name, on transform and opacity only (the pipes' dash
  * offset aside), and the dots that breathe or blink and the rim of a newly lit pipe that blinks once, on opacity alone (ruling
- * R19: a brightness pulse could not show on the lit pipe's white contents). Under reduced motion every duration is zero and an
- * animation runs once, for a millisecond: nothing moves.
+ * R19: a brightness pulse could not show on the lit pipe's white contents). A tooltip fades in and rises 2px (`tip-in`, ruling
+ * R27). Under reduced motion every duration is zero and an animation runs once, for a millisecond: nothing moves.
  */
 @keyframes fade-in { from { opacity: 0; } }
 @keyframes rise-in { from { opacity: 0; transform: translateY(-4px); } }
+@keyframes tip-in { from { opacity: 0; transform: translateY(2px); } }
 @keyframes scale-in { from { opacity: 0; transform: scale(0.96); } }
 @keyframes slide-in-right { from { opacity: 0; transform: translateX(24px); } }
 @keyframes pop { from { opacity: 0; transform: scale(0.6); } }
@@ -249,7 +252,7 @@ details.settings-section > summary .muted { color: inherit; }
 :where(a, button.link, summary, input[type=checkbox], input[type=radio]):focus-visible { outline-color: var(--ink-focus); }
 
 .field { display: flex; flex-direction: column; gap: 4px; }
-.field > span { font-size: 0.9rem; color: var(--muted); }
+.field > span { font-size: 0.9rem; color: var(--ink-muted); }
 
 /*
  * The top bar (design spec §6): a dark strip with a black edge and a grey line inside it, the brand and the pages as Minecraft
@@ -920,7 +923,7 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
 .map-tooltip {
   width: max-content; max-width: 360px; padding: 6px 8px; overflow-wrap: anywhere;
   background: var(--tip-bg); border: 2px solid var(--tip-border); box-shadow: 0 0 0 1px #100010, inset 0 0 0 1px var(--tip-inner);
-  color: #aaaaaa; font: 14px/1.35 var(--font-pixel); animation: rise-in 120ms var(--ease-out);
+  color: #aaaaaa; font: 14px/1.35 var(--font-pixel); animation: tip-in 120ms var(--ease-out);
 }
 .map-tooltip > :first-child { color: #ffffff; }
 /* The new line and what the scan found are a panel each, in the ink of a panel (their group is at the top), with pixel titles. The micro
@@ -1119,6 +1122,156 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
 @media (max-width: 1100px) {
   .flow.has-panel { grid-template-columns: minmax(0, 1fr); }
   .flow-panel { position: static; max-height: none; }
+}
+
+/*
+ * The 3D tab (design spec §6 and §8): the chrome round a scene that is drawn as it was. The scene sits in a well, framed by the
+ * viewport's own border and outline, on a pale sky: the line's cables are dark grey or black and would vanish on the dark of a well,
+ * and the WebGL clear is transparent, so what is behind the canvas shows. The canvas (`.view3d-scene`, a class and not a rule for the
+ * `canvas` element: the map's own guard allows no such rule) fills the viewport and has no edge, padding or margin of its own (the
+ * renderer picks with its rect and the end-to-end tests map pixels with it), and nothing that holds it moves or animates: a size
+ * change makes the renderer resize its viewer. What slides in does so in the side column, beside it.
+ */
+.view3d { display: flex; flex-direction: column; gap: 10px; }
+.view3d > p { margin: 0; }
+.view3d-body { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; }
+/* The view sits beside the side list while both fit, and above it on a narrow screen (like the Map tab). */
+.view3d-main { flex: 3 1 420px; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.view3d-main > p { margin: 0; }
+/* The side column keeps its width when the details box appears in it, so the viewport beside it is not resized. */
+.view3d-side { flex: 1 1 260px; max-width: 400px; display: flex; flex-direction: column; gap: 12px; }
+.view3d-viewport {
+  position: relative; overflow: hidden; height: min(64vh, 680px); min-height: 360px;
+  background: linear-gradient(#cfe3f2, #a9c4d9);
+  border: 2px solid; border-color: var(--slot-lo) var(--slot-hi) var(--slot-hi) var(--slot-lo); outline: 2px solid var(--outline);
+}
+.view3d-scene { display: block; width: 100%; height: 100%; }
+/* What is under the pointer, named on an NEI tooltip in the corner of the scene (design spec §6): a near black box with a violet edge and
+   a thin dark line round it, in white, fading in and rising 2px (ruling R27). It never takes the pointer: the canvas under it keeps it. */
+.view3d-hover {
+  position: absolute; top: 8px; left: 8px; right: 8px; margin: 0; width: fit-content; max-width: calc(100% - 16px);
+  padding: 6px 8px; overflow-wrap: anywhere; pointer-events: none;
+  background: var(--tip-bg); border: 2px solid var(--tip-border); box-shadow: 0 0 0 1px #100010, inset 0 0 0 1px var(--tip-inner);
+  color: #ffffff; font: 14px/1.35 var(--font-pixel); animation: tip-in 120ms var(--ease-out);
+}
+/*
+ * The controls under the scene. A toggle is a Minecraft button that holds its tick: the label is the button, and the native input stays
+ * in it, visible and the click target. The markup has no class on a toggle (it is pinned), so the button is a `.check` that holds a
+ * tick, and yellow text says it is on. The keyboard's ring is the toggle's, yellow where it touches the toggle's black edge, and the tick
+ * inside draws none of its own. The slider is a slider and a screen readout of the layers it shows: the readout keeps its width, so the
+ * toggles beside it stay where they are as the slider moves.
+ */
+.view3d-controls { gap: 8px; }
+.view3d-controls > .check:has(> input[type=checkbox]) {
+  align-items: center; min-height: 32px; padding: 0 12px; user-select: none;
+  background: var(--btn); border: 2px solid var(--outline); box-shadow: var(--bevel-btn); color: #ffffff;
+  font: 15px/1 var(--font-pixel); text-shadow: 2px 2px 0 #3f3f3f;
+  transition: background-color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+}
+.view3d-controls > .check:has(> input[type=checkbox]):hover { background: var(--btn-hover); }
+.view3d-controls > .check:has(> input[type=checkbox]):active { transform: translateY(1px); box-shadow: var(--bevel-btn-down); }
+.view3d-controls > .check:has(> input:checked) { color: var(--accent); text-shadow: 2px 2px 0 #3f3f15; }
+.view3d-controls > .check > input[type=checkbox] { margin-top: 0; }
+.view3d-controls > .check:has(> input[type=checkbox]:focus-visible) { outline: 3px solid var(--accent); }
+.view3d-controls > .check > input[type=checkbox]:focus-visible { outline: none; }
+.view3d-controls > .check:has(> input[type=range]) { align-items: center; gap: 10px; }
+.view3d-layer-text {
+  display: inline-flex; align-items: center; justify-content: center; min-width: 10em; min-height: 28px; padding: 0 8px;
+  background: var(--screen); box-shadow: var(--bevel-well); color: var(--screen-text); font: 13px/1 var(--font-pixel);
+  font-variant-numeric: tabular-nums;
+}
+/*
+ * The side column (design spec §6): the clicked block's or link's details, the blocks to place and the layout's warnings, a panel each in
+ * the ink of a panel, with pixel titles. The micro heading stays Inter and quiet, as in the settings and on the map's line panel. The
+ * warnings are a chat box in amber, like the flow's issues (the dark ink group comes after the panel group, so it wins on a box that is
+ * both), and the details slide in from the right, on opacity and transform only.
+ */
+.view3d-box {
+  display: flex; flex-direction: column; gap: 4px; padding: 12px 14px;
+  background: var(--panel); border: 2px solid var(--outline); border-radius: 0; box-shadow: var(--bevel-panel);
+}
+.view3d-box > h3 { margin: 0; font: 600 16px/1.3 var(--font-pixel); }
+.view3d-box > h4 { margin: 6px 0 0; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-muted); }
+.view3d-box > ul { margin: 0; padding-left: 18px; }
+.view3d-box > .view3d-size { margin: 4px 0 0; }
+.view3d-warnings { background: var(--chat); box-shadow: none; }
+.view3d-warnings > ul { color: var(--ink-warn); }
+.view3d-details { animation: slide-in-right var(--dur-slow) var(--ease-out); }
+/* What the drawn links' colours mean, a swatch each. A swatch's colour is its own inline style (the colour of its link in the scene), so
+   this is the frame round it. */
+.view3d-legend { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 2px 12px; }
+.view3d-legend > li > span { display: inline-block; width: 12px; height: 12px; margin-right: 4px; vertical-align: middle; box-shadow: 0 0 0 1px #000000; }
+
+/*
+ * The World page (design spec §6 and §8): a column on the stone, a gold pixel title like the brand's, a panel for each section, and a
+ * quiet footer in the ink of the stone. The progress bars are the controls' own (a screen with a green fill); a failed scan's is red.
+ */
+.world-page { display: flex; flex-direction: column; gap: 16px; }
+.world-page > h1 { margin: 0; color: #ffd84a; text-shadow: 2px 2px 0 #3f3300; }
+.world-page > footer { color: var(--ink-muted); }
+.world-section { display: flex; flex-direction: column; gap: 10px; }
+.world-section > h2 { margin: 0; font: 600 16px/1.3 var(--font-pixel); }
+.world-section > p { margin: 0; }
+/* The rows of a section have a wider gap than `.row`'s, and the two file pickers wider still: both come after it. */
+.world-section > .row { gap: 12px; }
+.world-section > .world-pickers { gap: 24px; align-items: flex-end; }
+.backup-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.backup-list > li { gap: 12px; }
+/* A scan is a row set into its section's panel as an inset frame (the panel's bevel inverted round the same grey), not a panel inside
+   a panel. Its state is a chip on a screen, in the colour of the state: grey while queued, amber while it runs, green when done, red
+   when it failed (the chip is only there when the scan's message does not say the state already). */
+.scan-list { margin: 0; }
+.scan-row {
+  display: flex; flex-direction: column; gap: 6px; padding: 8px 10px;
+  border: 2px solid; border-color: var(--panel-lo) var(--panel-hi) var(--panel-hi) var(--panel-lo);
+}
+.scan-row-head { gap: 12px; }
+.scan-row-head > button { margin-left: auto; }
+.scan-row-head > strong { padding: 0 6px; background: var(--screen); color: var(--screen-muted); font: 13px/1.5 var(--font-pixel); }
+.scan-row[data-state='running'] .scan-row-head > strong { color: #ffaa00; }
+.scan-row[data-state='done'] .scan-row-head > strong { color: var(--screen-text); }
+.scan-row[data-state='failed'] .scan-row-head > strong { color: #ff5555; }
+/* A failed scan's bar fills red. A browser drops a whole selector list when one selector in it has a pseudo-element it does not know,
+   so the two engines have a rule each. */
+.scan-row[data-state='failed'] progress::-webkit-progress-value { background: #e03c3c; }
+.scan-row[data-state='failed'] progress::-moz-progress-bar { background: #e03c3c; }
+.scan-notes > ul { margin: 2px 0 0; padding-left: 18px; }
+/* "Advanced: whole dimensions" is a disclosure whose summary is the button of the controls; what it opens is a column. */
+.disclosure-body { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.disclosure-body > p { margin: 0; }
+.upload-status { display: flex; flex-direction: column; gap: 6px; }
+.upload-status > p { margin: 0; }
+/* The smart upload is a column with a pixel subtitle, and what it will send is a readout on a screen. */
+.smart-upload { display: flex; flex-direction: column; gap: 8px; }
+.smart-upload > h3 { margin: 0; font: 600 14px/1.3 var(--font-pixel); }
+.smart-upload > p { margin: 0; }
+.smart-areas { margin: 0; padding-left: 20px; }
+.smart-radius { gap: 12px; }
+.smart-total {
+  align-self: flex-start; padding: 4px 8px; background: var(--screen); box-shadow: var(--bevel-well); color: var(--screen-text);
+  font: 14px/1.3 var(--font-pixel);
+}
+
+/*
+ * The projector panel (design spec §6 and §8): the settings panel of the class it carries, 14px under the settings above it, with a
+ * body that is a column. A command is a readout on a screen in monospace, not the pixel font: a token has an l, a 1 and an I, which the
+ * pixel font draws alike. One click selects the whole command (`user-select: all`), and a command is never made unselectable or
+ * transformed: the Copy button selects that text and copies it as written.
+ */
+.projector-panel { margin-top: 14px; }
+.projector-body { display: flex; flex-direction: column; gap: 10px; }
+/* The form's button sits on the bottom edge of the field's box (its label is above it); `.row` centres, so this comes after it. */
+.projector-form { align-items: flex-end; }
+.projector-form > .field { flex: 1; min-width: 0; }
+.command-row { display: flex; gap: 8px; align-items: flex-start; }
+.command-text {
+  flex: 1; min-width: 0; padding: 4px 8px; overflow-wrap: anywhere; user-select: all; -webkit-user-select: all;
+  background: var(--screen); box-shadow: var(--bevel-well); color: var(--screen-text); font: 0.85rem/1.4 ui-monospace, Menlo, Consolas, monospace;
+}
+.command-text code { font: inherit; }
+.projector-commands { margin: 0; padding-left: 18px; }
+.projector-commands code {
+  padding: 1px 5px; background: var(--screen); color: var(--screen-text); font-family: ui-monospace, Menlo, Consolas, monospace;
 }
 
 /* The settings drawer (design spec §7a). The page is one column and the settings column leaves it: it waits off the left edge, slides in

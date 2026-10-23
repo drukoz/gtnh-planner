@@ -87,3 +87,21 @@ test('the pixel font draws fi, fl and ff as separate letters, in every rule that
   expect(Math.abs(figures.tabular[0]! - figures.tabular[1]!), 'tabular figures').toBeLessThan(0.01);
   expect(Math.abs(figures.plain[0]! - figures.plain[1]!), 'plain figures are proportional').toBeGreaterThan(1);
 });
+
+// The World page's two file pickers draw their button in the pixel font (the small button's `font` on `::file-selector-button`), and a
+// pseudo-element is not matched by `*`: the universal rule names it too (restyle plan Phase 1 Task 9, the hand-off of Task 8). A French
+// browser's "Choisir un fichier" has the "fi" the font would ligate. What the browser draws for the button is its own text, so this asks what
+// the page told it: the computed style of the pseudo-element.
+test('the button of a file picker draws no ligature either', async ({ page }) => {
+  await login(page);
+  await setName(page, 'E2E');
+  await page.goto('/world');
+  for (const picker of ['world-folder-input', 'world-zip-input']) {
+    const button = await page.getByTestId(picker).evaluate((input) => {
+      const style = getComputedStyle(input, '::file-selector-button');
+      return { features: style.fontFeatureSettings, family: style.fontFamily };
+    });
+    expect(tagsOf(button.features), picker).toEqual({ clig: '0', liga: '0' });
+    expect(button.family, `${picker}: the button is the pixel font's`).toContain('Pixelify Sans');
+  }
+});

@@ -3,7 +3,7 @@
 // in node, so the stylesheet is read as text and cut into blocks by the small scanner below. Later tasks add cases here
 // and reuse `css`, `rootTokens` and `ruleBody`.
 
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
 
 const read = (file: string): string => readFileSync(new URL(`../../src/client/${file}`, import.meta.url), 'utf8');
@@ -99,8 +99,8 @@ function rootTokens(): Map<string, string> {
   return tokens;
 }
 
-// The `:root` block (the values of design spec §4), row for row. The old names it keeps as aliases for the inline styles
-// are left out: the last task of this plan deletes them.
+// The `:root` block (the values of design spec §4), row for row. The old names it once kept as aliases for the inline styles
+// are gone (Task 9), and a case at the end of this file says so.
 const TOKENS: [string, string][] = [
   ['--page', '#2b2b2b'], ['--page-check', '#262626'], ['--bar', '#1a1a1a'],
   ['--panel', '#c6c6c6'], ['--panel-hi', '#ffffff'], ['--panel-lo', '#555555'], ['--outline', '#000000'],
@@ -140,6 +140,7 @@ const KEYFRAMES: Record<string, string[]> = {
   blink: ['opacity'],
   'pipe-flow': ['stroke-dashoffset'],
   'pipe-pulse': ['opacity'],
+  'tip-in': ['opacity', 'transform'],                                                // ruling R27: a tooltip fades in and rises 2px
 };
 
 const FONT_IMPORTS = [
@@ -502,7 +503,7 @@ describe('the Machine GUI chrome', () => {
       ['--ink', '#ffffff'], ['--ink-muted', '#aaaaaa'], ['--ink-title', '#ffff55'], ['--ink-link', '#ffff55'],
       ['--ink-error', '#ff5555'], ['--ink-ok', '#55ff55'], ['--ink-warn', '#ffaa00'],
       ['--ink-focus', '#ffff55'],                                                      // ruling R12: not the dark ring of a panel it may sit in
-      ['--muted', '#aaaaaa'], ['color', 'var(--ink)'],
+      ['color', 'var(--ink)'],
     ];
     const set = new Map(declarations(dark.inner));
     for (const [name, value] of INK) expect(set.get(name), name).toBe(value);
@@ -1535,7 +1536,7 @@ describe('the Machine GUI Map tab', () => {
     expectDeclared([
       [TIP, 'background', 'var(--tip-bg)'], [TIP, 'border', '2px solid var(--tip-border)'],
       [TIP, 'box-shadow', '0 0 0 1px #100010, inset 0 0 0 1px var(--tip-inner)'],
-      [TIP, 'color', '#aaaaaa'], [TIP, 'font', '14px/1.35 var(--font-pixel)'], [TIP, 'animation', 'rise-in 120ms var(--ease-out)'],
+      [TIP, 'color', '#aaaaaa'], [TIP, 'font', '14px/1.35 var(--font-pixel)'], [TIP, 'animation', 'tip-in 120ms var(--ease-out)'],
       // what the inline style used to carry, but the position and the pointer events (they stay inline)
       [TIP, 'width', 'max-content'], [TIP, 'max-width', '360px'], [TIP, 'padding', '6px 8px'], [TIP, 'overflow-wrap', 'anywhere'],
       ['.map-tooltip > :first-child', 'color', '#ffffff'],
@@ -1642,12 +1643,16 @@ describe('the Machine GUI Map tab', () => {
   // At", "minecraft:fire" read "minecraft:Are": measured in a browser), so they are off for every element, once (ruling R24). A value on
   // :root, the first form of that ruling, does not reach the text: the `font` shorthand of every rule that sets the pixel font resets
   // font-feature-settings on its own element, and ligatures.spec.ts saw `normal` on the head's name field with it. So it is a rule for
-  // every element, and !important to win over those shorthands. Only liga and clig: Inter's contextual alternates stay on.
+  // every element, and !important to win over those shorthands. Only liga and clig: Inter's contextual alternates stay on. `*` does not
+  // match a pseudo-element, so the file pickers' button has the same declaration in a rule of its own (Task 9; one list would be one rule,
+  // but the build's minifier loses a list's second selector here: ligatures.spec.ts asks the built page).
   it('keeps the pixel font\'s fi, fl and ff ligatures off for every element, once, and not only on the root', () => {
     const rules = blocks.filter((b) => b.inner.includes('font-feature-settings'));
-    expect(rules.map((b) => b.prelude)).toEqual(['*']);
-    expect(declarations(rules[0]!.inner)).toEqual([['font-feature-settings', '"liga" 0, "clig" 0 !important']]);
-    expect(rules[0]!.nested).toBe(false);
+    expect(rules.map((b) => b.prelude)).toEqual(['*', '::file-selector-button']);
+    for (const rule of rules) {
+      expect(declarations(rule.inner), rule.prelude).toEqual([['font-feature-settings', '"liga" 0, "clig" 0 !important']]);
+      expect(rule.nested, rule.prelude).toBe(false);
+    }
     // nowhere else, in another property or on a rule of the pixel font's users (they would be the second place to forget)
     expect(blocks.filter((b) => b.inner.includes('font-variant-ligatures')).map((b) => b.prelude)).toEqual([]);
     expect(rootTokens().has('font-feature-settings'), 'the root: inherited text reaches it, text set with `font` does not').toBe(false);
@@ -1691,5 +1696,351 @@ describe('the Machine GUI Map tab', () => {
     // the scan sees the tab's rules, so a rule it cannot parse would not pass unnoticed
     expect(rules.length).toBeGreaterThan(40);
     for (const block of rules) expect(block.inner, block.prelude).not.toMatch(OLD_ALIASES);
+  });
+});
+
+// The 3D tab, the World page and the projector panel, and the old palette's end (restyle plan Phase 1 Task 9, design spec §6, §7a and
+// §8). The inline styles of View3D's chrome, WorldPage, SmartUploadPanel and ProjectorPanel are classes now, with the values they had
+// where those were layout, and the Machine GUI where they were colour, edges and fonts. What stays inline is what a test or the drawing
+// reads: the canvas's cursor, the legend swatch's colour (the colour of its link in the scene), and the projector hint's top margin.
+// view3d.test.tsx, world-page.test.tsx, world-smart.test.tsx and projector-panel.test.tsx pin the classes in the markup, and
+// view3d-links.spec.ts, layout.spec.ts, world.spec.ts and projector.spec.ts what must keep working in a browser.
+
+const SCREEN_FILES = ['views/View3D.tsx', 'views/WorldPage.tsx', 'views/SmartUploadPanel.tsx', 'views/ProjectorPanel.tsx'];
+const STYLE_CONSTANTS = /\b(MAIN_STYLE|VIEWPORT_STYLE|HOVER_STYLE|SIDE_STYLE|BOX_STYLE|HEADING_STYLE|SUBHEAD_STYLE|LIST_STYLE|SWATCH_STYLE|PANEL_STYLE|BODY_STYLE|COMMAND_STYLE)\b/;
+const VIEWPORT = '.view3d-viewport';
+const SCENE = '.view3d-scene';
+const HOVER = '.view3d-hover';
+const TOGGLE = '.view3d-controls > .check:has(> input[type=checkbox])';
+const LAYER_GROUP = '.view3d-controls > .check:has(> input[type=range])';
+const BOX = '.view3d-box';
+const WARNINGS = '.view3d-warnings';
+const SCAN_CHIP = '.scan-row-head > strong';
+const COMMAND = '.command-text';
+const MONOSPACE = 'ui-monospace, Menlo, Consolas, monospace';
+/** The selectors of this task: the class it styles is one of its own. */
+const SCREEN_RULE = /\.(view3d(-[a-z]+)*|world-(page|section|pickers)|scan-(row(-head)?|notes|list)|backup-list|upload-status|disclosure-body|smart-(upload|areas|radius|total)|projector-(panel|body|commands|form)|command-(row|text))(?![\w-])/;
+/** The old palette's names, as the stylesheet or an inline style would read them (`--ink-error` and `--accent` are not `--error` and `--accent-text`). */
+const OLD_NAMES = ['bg', 'surface', 'surface-2', 'border', 'radius', 'muted', 'ok', 'error', 'error-bg', 'warn-bg', 'warn-border', 'accent-text'];
+const OLD_READ = new RegExp(`var\\(--(${OLD_NAMES.join('|')})(?![\\w-])`);
+
+/** Every `.ts`, `.tsx` and `.css` file under src/client, by its path from there, with its text. */
+function clientSources(): [string, string][] {
+  const out: [string, string][] = [];
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(new URL(`../../src/client/${dir}`, import.meta.url), { withFileTypes: true })) {
+      if (entry.isDirectory()) walk(`${dir}${entry.name}/`);
+      else if (/\.(tsx?|css)$/.test(entry.name)) out.push([`${dir}${entry.name}`, read(`${dir}${entry.name}`)]);
+    }
+  };
+  walk('');
+  return out;
+}
+
+/** The text of `source` without its comments, which may still say what the old names were. */
+const withoutComments = (source: string): string => source.replace(/\/\*[\s\S]*?\*\//g, '');
+
+describe('the Machine GUI 3D tab', () => {
+  it('has moved the inline styles of the four files to classes, and left the old palette', () => {
+    const inline: Record<string, number> = {};
+    for (const file of SCREEN_FILES) {
+      const source = read(file);
+      for (const name of ['var(--surface', 'var(--border', 'var(--radius']) expect(source.includes(name), `${file} reads ${name}`).toBe(false);
+      expect(source, file).not.toMatch(STYLE_CONSTANTS);
+      expect(source.includes('borderRadius'), `${file} rounds a corner`).toBe(false);
+      inline[file] = (source.match(/\bstyle=\{/g) ?? []).length;
+    }
+    // what stays inline: the canvas's cursor (written from code) and the legend swatch's colour; the projector's one margin, which a test pins
+    expect(inline).toEqual({ 'views/View3D.tsx': 2, 'views/WorldPage.tsx': 0, 'views/SmartUploadPanel.tsx': 0, 'views/ProjectorPanel.tsx': 1 });
+    expect(read('views/View3D.tsx')).toContain("style={{ cursor: hover === null ? 'grab' : 'pointer' }}");
+    expect(read('views/View3D.tsx')).toContain('className="view3d-scene"');
+    expect(read('views/View3D.tsx')).toContain('style={{ background: `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})` }}');
+    expect(read('views/ProjectorPanel.tsx')).toContain('const HINT_STYLE: CSSProperties = { marginTop: 4 };');
+  });
+
+  it('lays the tab out as its inline styles did: a column, its main column beside the side column, wrapping on a narrow screen', () => {
+    expectDeclared([
+      ['.view3d', 'display', 'flex'], ['.view3d', 'flex-direction', 'column'], ['.view3d', 'gap', '10px'], ['.view3d > p', 'margin', '0'],
+      ['.view3d-body', 'display', 'flex'], ['.view3d-body', 'flex-wrap', 'wrap'], ['.view3d-body', 'gap', '12px'],
+      ['.view3d-body', 'align-items', 'flex-start'],
+      ['.view3d-main', 'flex', '3 1 420px'], ['.view3d-main', 'min-width', '0'], ['.view3d-main', 'display', 'flex'],
+      ['.view3d-main', 'flex-direction', 'column'], ['.view3d-main', 'gap', '8px'], ['.view3d-main > p', 'margin', '0'],
+      // the side column keeps its width when the details box appears in it, so the viewport beside it is not resized
+      ['.view3d-side', 'flex', '1 1 260px'], ['.view3d-side', 'max-width', '400px'], ['.view3d-side', 'display', 'flex'],
+      ['.view3d-side', 'flex-direction', 'column'], ['.view3d-side', 'gap', '12px'],
+    ]);
+  });
+
+  it('frames the scene in a well with a pale sky behind it, and gives the canvas no edge of its own', () => {
+    expectDeclared([
+      [VIEWPORT, 'position', 'relative'], [VIEWPORT, 'overflow', 'hidden'], [VIEWPORT, 'height', 'min(64vh, 680px)'], [VIEWPORT, 'min-height', '360px'],
+      // the dark cables of a line would vanish on a dark well, and the WebGL clear is transparent: a light sky behind it
+      [VIEWPORT, 'background', 'linear-gradient(#cfe3f2, #a9c4d9)'],
+      // the frame is the box's border, the inverted bevel of a slot (dark above and left) inside a black outline: as the map's
+      [VIEWPORT, 'border', '2px solid'], [VIEWPORT, 'border-color', 'var(--slot-lo) var(--slot-hi) var(--slot-hi) var(--slot-lo)'],
+      [VIEWPORT, 'outline', '2px solid var(--outline)'],
+      [SCENE, 'display', 'block'], [SCENE, 'width', '100%'], [SCENE, 'height', '100%'],
+    ]);
+    // the renderer picks with the canvas's own rect and the end-to-end tests map pixels with it: no border, padding or margin on it, and
+    // nothing laid over it that could take the pointer (the hover label is the one thing over it, and takes no pointer events). The canvas
+    // has a class of its own: the Map tab's guard allows no rule for the `canvas` element in the stylesheet.
+    expect(declarations(ruleBody(SCENE)).map(([name]) => name).sort()).toEqual(['display', 'height', 'width']);
+    expect(blocks.filter((b) => /\.view3d(-[a-z]+)*[^,{]*::?(before|after)/.test(b.prelude)).map((b) => b.prelude), 'a pseudo-element in the 3D tab').toEqual([]);
+    expect(css.includes('.view3d-canvas'), 'a class that the markup test of a view without WebGL would trip on').toBe(false);
+  });
+
+  it('draws the hover label as an NEI tooltip that fades in, rises 2px, and never takes the pointer', () => {
+    expect(ruleBody(HOVER)).toContain('background: var(--tip-bg)');
+    expect(ruleBody(HOVER)).toContain('pointer-events: none');
+    expectDeclared([
+      [HOVER, 'position', 'absolute'], [HOVER, 'top', '8px'], [HOVER, 'left', '8px'], [HOVER, 'right', '8px'], [HOVER, 'margin', '0'],
+      [HOVER, 'width', 'fit-content'], [HOVER, 'max-width', 'calc(100% - 16px)'], [HOVER, 'padding', '6px 8px'], [HOVER, 'overflow-wrap', 'anywhere'],
+      [HOVER, 'border', '2px solid var(--tip-border)'], [HOVER, 'box-shadow', '0 0 0 1px #100010, inset 0 0 0 1px var(--tip-inner)'],
+      [HOVER, 'color', '#ffffff'], [HOVER, 'font', '14px/1.35 var(--font-pixel)'], [HOVER, 'animation', 'tip-in 120ms var(--ease-out)'],
+    ]);
+    expect(declared(HOVER, 'border-radius') ?? '0').toBe('0');
+    // ruling R27: both tooltips of the client rise with the one keyframes, `from` 2px down
+    expect(ruleBody('@keyframes tip-in')).toMatch(/^from \{ opacity: 0; transform: translateY\(2px\);? \}$/);
+    expect(declared(TIP, 'animation')).toBe('tip-in 120ms var(--ease-out)');
+  });
+
+  it('turns the toggles into buttons that read yellow while they are on, and the layer slider into a slider and a readout', () => {
+    expectDeclared([
+      ['.view3d-controls', 'gap', '8px'],
+      [TOGGLE, 'align-items', 'center'], [TOGGLE, 'min-height', '32px'], [TOGGLE, 'padding', '0 12px'], [TOGGLE, 'background', 'var(--btn)'],
+      [TOGGLE, 'border', '2px solid var(--outline)'], [TOGGLE, 'box-shadow', 'var(--bevel-btn)'], [TOGGLE, 'color', '#ffffff'],
+      [TOGGLE, 'font', '15px/1 var(--font-pixel)'], [TOGGLE, 'text-shadow', '2px 2px 0 #3f3f3f'],
+      [`${TOGGLE}:hover`, 'background', 'var(--btn-hover)'],
+      [`${TOGGLE}:active`, 'transform', 'translateY(1px)'], [`${TOGGLE}:active`, 'box-shadow', 'var(--bevel-btn-down)'],
+      ['.view3d-controls > .check:has(> input:checked)', 'color', 'var(--accent)'],
+      ['.view3d-controls > .check:has(> input:checked)', 'text-shadow', '2px 2px 0 #3f3f15'],
+      // the tick is centred on the line of the button (the 2px that line a tick up with a label that wraps are for a label that wraps)
+      ['.view3d-controls > .check > input[type=checkbox]', 'margin-top', '0'],
+      // the ring is the toggle's: yellow where it touches the toggle's black edge, and the tick inside it draws none of its own
+      ['.view3d-controls > .check:has(> input[type=checkbox]:focus-visible)', 'outline', '3px solid var(--accent)'],
+      ['.view3d-controls > .check > input[type=checkbox]:focus-visible', 'outline', 'none'],
+      [LAYER_GROUP, 'align-items', 'center'],
+      ['.view3d-layer-text', 'display', 'inline-flex'], ['.view3d-layer-text', 'justify-content', 'center'], ['.view3d-layer-text', 'min-height', '28px'],
+      ['.view3d-layer-text', 'padding', '0 8px'], ['.view3d-layer-text', 'background', 'var(--screen)'], ['.view3d-layer-text', 'box-shadow', 'var(--bevel-well)'],
+      ['.view3d-layer-text', 'color', 'var(--screen-text)'], ['.view3d-layer-text', 'font', '13px/1 var(--font-pixel)'],
+      ['.view3d-layer-text', 'font-variant-numeric', 'tabular-nums'],
+    ]);
+    // "All layers" and "Layers 1–12 of 12" are the same readout: it does not narrow, so the toggles beside it stay where they are
+    expect(Number.parseFloat(declared('.view3d-layer-text', 'min-width') ?? '0')).toBeGreaterThanOrEqual(9);
+    expect(declared('.view3d-layer-text', 'min-width')).toMatch(/em$/);
+    // `font` resets the numbers' variant, so the variant comes after it; the checked look comes after the base it recolours
+    expect(declarations(ruleBody('.view3d-layer-text')).findIndex(([name]) => name === 'font-variant-numeric'))
+      .toBeGreaterThan(declarations(ruleBody('.view3d-layer-text')).findIndex(([name]) => name === 'font'));
+    expect(position('.view3d-controls > .check:has(> input:checked)')).toBeGreaterThan(position(TOGGLE));
+    expect(position(`${TOGGLE}:hover`)).toBeGreaterThan(position(TOGGLE));
+  });
+
+  it('puts the side column in panels, the warnings in a chat box and the details box sliding in', () => {
+    expectDeclared([
+      [BOX, 'display', 'flex'], [BOX, 'flex-direction', 'column'], [BOX, 'gap', '4px'], [BOX, 'padding', '12px 14px'],
+      [BOX, 'background', 'var(--panel)'], [BOX, 'border', '2px solid var(--outline)'], [BOX, 'border-radius', '0'], [BOX, 'box-shadow', 'var(--bevel-panel)'],
+      ['.view3d-box > h3', 'margin', '0'], ['.view3d-box > h3', 'font', '600 16px/1.3 var(--font-pixel)'],
+      // the micro heading stays Inter and quiet, as in the settings and on the map's line panel
+      ['.view3d-box > h4', 'font-size', '0.75rem'], ['.view3d-box > h4', 'text-transform', 'uppercase'], ['.view3d-box > h4', 'color', 'var(--ink-muted)'],
+      ['.view3d-box > h4', 'margin', '6px 0 0'],
+      ['.view3d-box > ul', 'margin', '0'], ['.view3d-box > ul', 'padding-left', '18px'], ['.view3d-box > .view3d-size', 'margin', '4px 0 0'],
+      // what the scene's warnings say is a chat box in amber, like the flow's issues
+      [WARNINGS, 'background', 'var(--chat)'], [WARNINGS, 'box-shadow', 'none'], [`${WARNINGS} > ul`, 'color', 'var(--ink-warn)'],
+      ['.view3d-details', 'animation', 'slide-in-right var(--dur-slow) var(--ease-out)'],
+      ['.view3d-legend', 'margin', '0'], ['.view3d-legend', 'padding', '0'], ['.view3d-legend', 'list-style', 'none'], ['.view3d-legend', 'display', 'flex'],
+      ['.view3d-legend', 'flex-wrap', 'wrap'], ['.view3d-legend', 'gap', '2px 12px'],
+      // the swatch's colour is its inline style: this is the frame round it
+      ['.view3d-legend > li > span', 'display', 'inline-block'], ['.view3d-legend > li > span', 'width', '12px'], ['.view3d-legend > li > span', 'height', '12px'],
+      ['.view3d-legend > li > span', 'margin-right', '4px'], ['.view3d-legend > li > span', 'vertical-align', 'middle'],
+      ['.view3d-legend > li > span', 'box-shadow', '0 0 0 1px #000000'],
+    ]);
+    // the panels are in the ink of a panel (their text, links and muted text), and the chat box is in the light ink of a dark box, which
+    // comes after the panel group so that it wins on the element that is both a panel and a chat box
+    expect(inkGroup(BOX)).toBe(inkGroup('.tab-panel'));
+    expect(inkGroup(WARNINGS)).toBe(inkGroup('.banner'));
+    expect(inkGroup('.banner').prelude.split(', ')).not.toContain(BOX);
+    expect(blocks.indexOf(inkGroup(WARNINGS))).toBeGreaterThan(blocks.indexOf(inkGroup(BOX)));
+    expect(position(WARNINGS)).toBeGreaterThan(position(BOX));
+  });
+
+  it('never moves, resizes or covers what the scene is drawn in', () => {
+    // a size change of the canvas makes the renderer resize its viewer, and a transform or an animation on an ancestor could shift the
+    // canvas under the pointer the end-to-end tests hover and click: the canvas's ancestors do not animate at all
+    for (const selector of ['.view3d', '.view3d-body', '.view3d-main', VIEWPORT, SCENE, '.view3d-side']) {
+      for (const [name] of declarations(ruleBody(selector))) expect(name, selector).not.toMatch(/^(animation|transition|transform|translate|scale|rotate|filter|will-change|contain|clip-path)/);
+    }
+    // what slides in does so beside the canvas, in the side column: on opacity and transform only
+    expect(declared('.view3d-details', 'animation')).toMatch(/^slide-in-right /);
+    expect(declared(HOVER, 'animation')).toMatch(/^tip-in /);
+    // nothing else of the tab animates
+    for (const block of blocks.filter((b) => SCREEN_RULE.test(b.prelude) && /\.view3d/.test(b.prelude))) {
+      if (!['.view3d-details', HOVER].includes(block.prelude)) expect(declarations(block.inner).map(([name]) => name), block.prelude).not.toContain('animation');
+    }
+  });
+});
+
+describe('the Machine GUI World page', () => {
+  it('lays the page out as a column on the stone, with a gold title and a quiet footer', () => {
+    expectDeclared([
+      ['.world-page', 'display', 'flex'], ['.world-page', 'flex-direction', 'column'], ['.world-page', 'gap', '16px'],
+      ['.world-page > h1', 'margin', '0'], ['.world-page > h1', 'color', '#ffd84a'], ['.world-page > h1', 'text-shadow', '2px 2px 0 #3f3300'],
+      ['.world-page > footer', 'color', 'var(--ink-muted)'],
+    ]);
+    // the title is the global pixel h1 (this rule only recolours it and takes its margin away), and the footer is the `.muted` line it was
+    expect(declared('.world-page > h1', 'font')).toBeUndefined();
+    expect(declared('.world-page > h1', 'font-size')).toBeUndefined();
+  });
+
+  it('puts each section in a panel, with a pixel title and no stray margins', () => {
+    expectDeclared([
+      ['.world-section', 'display', 'flex'], ['.world-section', 'flex-direction', 'column'], ['.world-section', 'gap', '10px'],
+      ['.world-section > h2', 'margin', '0'], ['.world-section > h2', 'font', '600 16px/1.3 var(--font-pixel)'],
+      ['.world-section > p', 'margin', '0'],
+      ['.world-section > .row', 'gap', '12px'],
+      ['.world-section > .world-pickers', 'gap', '24px'], ['.world-section > .world-pickers', 'align-items', 'flex-end'],
+      ['.backup-list', 'list-style', 'none'], ['.backup-list', 'margin', '0'], ['.backup-list', 'padding', '0'], ['.backup-list', 'display', 'flex'],
+      ['.backup-list', 'flex-direction', 'column'], ['.backup-list', 'gap', '4px'], ['.backup-list > li', 'gap', '12px'],
+    ]);
+    // the pickers' wider gap comes after the sections' row gap (the same specificity), and the backup rows' gap out-ranks `.row`'s
+    expect(position('.world-section > .world-pickers')).toBeGreaterThan(position('.world-section > .row'));
+  });
+
+  it('sets each scan in an inset frame, with its state as a screen chip coloured by the state', () => {
+    expectDeclared([
+      ['.scan-list', 'margin', '0'],
+      // a row is not a panel inside a panel: an inset frame (the panel's bevel inverted) round the same grey
+      ['.scan-row', 'display', 'flex'], ['.scan-row', 'flex-direction', 'column'], ['.scan-row', 'gap', '6px'], ['.scan-row', 'padding', '8px 10px'],
+      ['.scan-row', 'border', '2px solid'], ['.scan-row', 'border-color', 'var(--panel-lo) var(--panel-hi) var(--panel-hi) var(--panel-lo)'],
+      ['.scan-row-head', 'gap', '12px'], ['.scan-row-head > button', 'margin-left', 'auto'],
+      [SCAN_CHIP, 'padding', '0 6px'], [SCAN_CHIP, 'background', 'var(--screen)'], [SCAN_CHIP, 'color', 'var(--screen-muted)'],
+      [SCAN_CHIP, 'font', '13px/1.5 var(--font-pixel)'],
+      [".scan-row[data-state='running'] .scan-row-head > strong", 'color', '#ffaa00'],
+      [".scan-row[data-state='done'] .scan-row-head > strong", 'color', 'var(--screen-text)'],
+      [".scan-row[data-state='failed'] .scan-row-head > strong", 'color', '#ff5555'],
+      ['.scan-notes > ul', 'margin', '2px 0 0'], ['.scan-notes > ul', 'padding-left', '18px'],
+    ]);
+    // `.cards` has a bottom margin of 20px, and `.row` a gap of 8px: both are overridden by coming after them
+    expect(position('.scan-list')).toBeGreaterThan(position('.cards'));
+    expect(position('.scan-row-head')).toBeGreaterThan(position('.row'));
+  });
+
+  it('fills a failed scan\'s progress bar in red, in both engines, and every other one in the base\'s green', () => {
+    for (const fill of ['::-webkit-progress-value', '::-moz-progress-bar']) {
+      expect(declared(`.scan-row[data-state='failed'] progress${fill}`, 'background')).toBe('#e03c3c');
+    }
+    // a browser drops a whole selector list when one selector in it has a pseudo-element it does not know: one rule per engine
+    expect(blocks.filter((b) => b.prelude.includes('progress') && b.prelude.includes('-webkit-') && b.prelude.includes('-moz-')).map((b) => b.prelude)).toEqual([]);
+    // the bar takes the row's width from the base (`width: 100%`), which the inline style used to say
+    expect(declared(':where(progress)', 'width')).toBe('100%');
+  });
+
+  it('opens the whole-dimensions disclosure into a column, and shows an upload in a column of its own', () => {
+    expectDeclared([
+      ['.disclosure-body', 'display', 'flex'], ['.disclosure-body', 'flex-direction', 'column'], ['.disclosure-body', 'gap', '8px'],
+      ['.disclosure-body', 'margin-top', '8px'], ['.disclosure-body > p', 'margin', '0'],
+      ['.upload-status', 'display', 'flex'], ['.upload-status', 'flex-direction', 'column'], ['.upload-status', 'gap', '6px'],
+      ['.upload-status > p', 'margin', '0'],
+    ]);
+  });
+
+  it('draws the smart upload as a titled column, with its total as a screen readout', () => {
+    expectDeclared([
+      ['.smart-upload', 'display', 'flex'], ['.smart-upload', 'flex-direction', 'column'], ['.smart-upload', 'gap', '8px'],
+      ['.smart-upload > h3', 'margin', '0'], ['.smart-upload > h3', 'font', '600 14px/1.3 var(--font-pixel)'], ['.smart-upload > p', 'margin', '0'],
+      ['.smart-areas', 'margin', '0'], ['.smart-areas', 'padding-left', '20px'], ['.smart-radius', 'gap', '12px'],
+      ['.smart-total', 'align-self', 'flex-start'], ['.smart-total', 'padding', '4px 8px'], ['.smart-total', 'background', 'var(--screen)'],
+      ['.smart-total', 'box-shadow', 'var(--bevel-well)'], ['.smart-total', 'color', 'var(--screen-text)'], ['.smart-total', 'font', '14px/1.3 var(--font-pixel)'],
+    ]);
+    expect(position('.smart-radius')).toBeGreaterThan(position('.row'));
+  });
+
+  it('keeps the file pickers\' button in the pixel font without ligatures, as the rest of the pixel font', () => {
+    // the button is a pseudo-element of the input, which `*` does not match: it has the universal rule's declaration in a rule of its own,
+    // and not in a list with `*` (Lightning CSS, with Vite's targets, merges the list's `*` half into the rule above and drops the rest)
+    expect(declared('::file-selector-button', 'font-feature-settings')).toBe('"liga" 0, "clig" 0 !important');
+    expect(position('::file-selector-button')).toBeGreaterThan(position('*'));
+    expect(blocks.filter((b) => b.prelude.split(',').length > 1 && b.prelude.includes('::file-selector-button') && b.inner.includes('font-feature-settings'))).toEqual([]);
+    expect(declared(':where(input[type=file])::file-selector-button', 'font')).toBe('13px/1 var(--font-pixel)');
+  });
+});
+
+describe('the Machine GUI projector panel', () => {
+  it('is a settings panel with 14px above it, and its body a column', () => {
+    expectDeclared([
+      ['.projector-panel', 'margin-top', '14px'],
+      ['.projector-body', 'display', 'flex'], ['.projector-body', 'flex-direction', 'column'], ['.projector-body', 'gap', '10px'],
+      ['.command-row', 'display', 'flex'], ['.command-row', 'gap', '8px'], ['.command-row', 'align-items', 'flex-start'],
+      ['.projector-form', 'align-items', 'flex-end'], ['.projector-form > .field', 'flex', '1'], ['.projector-form > .field', 'min-width', '0'],
+      ['.projector-commands', 'margin', '0'], ['.projector-commands', 'padding-left', '18px'],
+    ]);
+    // the panel is the settings panel of the class it carries (its summary is that class's button): this rule adds no surface of its own
+    expect(declarations(ruleBody('.projector-panel')).map(([name]) => name)).toEqual(['margin-top']);
+    expect(inkGroup('.settings-section')).toBe(inkGroup('.tab-panel'));
+    // `.row` aligns its items in the middle: the form's alignment comes after it
+    expect(position('.projector-form')).toBeGreaterThan(position('.row'));
+  });
+
+  it('shows a command as a green monospace readout in a screen well, selected whole by a click', () => {
+    expectDeclared([
+      [COMMAND, 'flex', '1'], [COMMAND, 'min-width', '0'], [COMMAND, 'padding', '4px 8px'], [COMMAND, 'overflow-wrap', 'anywhere'],
+      [COMMAND, 'user-select', 'all'], [COMMAND, '-webkit-user-select', 'all'],
+      [COMMAND, 'background', 'var(--screen)'], [COMMAND, 'box-shadow', 'var(--bevel-well)'], [COMMAND, 'color', 'var(--screen-text)'],
+      [COMMAND, 'font', `0.85rem/1.4 ${MONOSPACE}`], ['.command-text code', 'font', 'inherit'],
+      ['.projector-commands code', 'background', 'var(--screen)'], ['.projector-commands code', 'color', 'var(--screen-text)'],
+      ['.projector-commands code', 'padding', '1px 5px'], ['.projector-commands code', 'font-family', MONOSPACE],
+    ]);
+    // a token has an l, a 1 and an I: not the pixel font, which draws them alike
+    for (const selector of [COMMAND, '.projector-commands code']) expect(ruleBody(selector).includes('--font-pixel'), selector).toBe(false);
+  });
+
+  it('never stops a command from being selected or copied as written: no `user-select: none`, no `text-transform` on it or on any code', () => {
+    // projector.spec.ts: `String(getSelection())` must equal the code's `textContent`, and the Copy button selects that text
+    const codes = blocks.filter((b) => !b.prelude.startsWith('@') && b.prelude.split(',').some((s) => /(^|[\s>+~])code(?![\w-])|\.command-(text|line|row)/.test(s)));
+    expect(codes.length, 'the scan sees the rules of the commands').toBeGreaterThanOrEqual(4);
+    for (const block of codes) {
+      const set = new Map(declarations(block.inner));
+      expect(set.get('user-select'), block.prelude).not.toBe('none');
+      expect(set.get('-webkit-user-select'), block.prelude).not.toBe('none');
+      expect(set.has('text-transform'), block.prelude).toBe(false);
+    }
+  });
+});
+
+describe('the end of the old palette', () => {
+  it('has no alias of an old name on :root, and no rule, style or file that reads one', () => {
+    const tokens = rootTokens();
+    for (const name of OLD_NAMES) expect(tokens.has(`--${name}`), `--${name} on :root`).toBe(false);
+    const sources = clientSources();
+    // the walk sees the whole client, so a file it could not read would not pass unnoticed
+    expect(sources.length).toBeGreaterThan(60);
+    for (const [file, text] of sources) expect(OLD_READ.test(withoutComments(text)), `${file} reads a name of the old palette`).toBe(false);
+    // the label above a field takes the ink of the surface it is on (the stone would have made it dark on dark)
+    expect(declared('.field > span', 'color')).toBe('var(--ink-muted)');
+  });
+
+  it('has no `--muted` in any ink group either: the last reader is gone (ruling R8)', () => {
+    expect(withoutComments(css)).not.toMatch(/--muted\b/);
+    for (const member of ['.tab-panel', '.banner']) expect(declarations(inkGroup(member).inner).map(([name]) => name), member).not.toContain('--muted');
+    // and the two groups still set every ink the generic classes read
+    for (const member of ['.tab-panel', '.banner']) {
+      const set = new Set(declarations(inkGroup(member).inner).map(([name]) => name));
+      for (const name of ['--ink', '--ink-muted', '--ink-title', '--ink-link', '--ink-error', '--ink-ok', '--ink-warn', '--ink-focus', 'color']) expect(set.has(name), `${member}: ${name}`).toBe(true);
+    }
+  });
+
+  it('rounds no corner but the pin dot\'s, in the stylesheet or in a style attribute', () => {
+    const radii = blocks.filter((b) => !b.prelude.startsWith('@'))
+      .flatMap((b) => declarations(b.inner).filter(([name]) => name === 'border-radius').map(([, value]): [string, string] => [b.prelude, value]));
+    expect(radii.length, 'the scan sees the radii').toBeGreaterThan(30);
+    for (const [selector, value] of radii) expect(value, selector).toBe(selector === '.pin-dot' ? '50%' : '0');
+    for (const [file, text] of clientSources()) if (/\.tsx?$/.test(file)) expect(/borderRadius|border-radius/.test(text), `${file} sets a radius`).toBe(false);
+  });
+
+  it('reads no alias of the old palette in the rules of the 3D tab, the World page and the projector panel', () => {
+    const rules = blocks.filter((b) => SCREEN_RULE.test(b.prelude));
+    // the scan sees the rules of the three, so a rule it cannot parse would not pass unnoticed
+    expect(rules.length).toBeGreaterThan(70);
+    for (const block of rules) expect(block.inner, block.prelude).not.toMatch(OLD_ALIASES);
+    for (const block of rules.filter((b) => !b.prelude.startsWith('@'))) expect(declared(block.prelude, 'border-radius') ?? '0', block.prelude).toBe('0');
   });
 });

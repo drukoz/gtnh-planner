@@ -155,3 +155,35 @@ describe('contrast of the Map tab', () => {
     expect(ratio('#aaaaaa', '#6b6b6b')).toBeLessThan(AA);                             // and the dark box's
   });
 });
+
+// The 3D tab, the World page and the projector panel (restyle plan Phase 1 Task 9, design spec §6): the hover label's white on the NEI tooltip
+// (over white, the lightest the scene or its sky can put under it: the Map's pair above), the toggles' two texts on a button under the
+// pointer, the warnings' chat box, the World page's gold title and grey footer on the stone, the scans' four state chips, and the green
+// readouts (the layer, the smart upload's total and the commands) on a screen; and, as graphics (WCAG 1.4.11: 3:1), the red fill of a failed
+// scan's bar.
+const CHAT_OVER_PANEL = '#242424';
+const STONE = '#2b2b2b';
+const SCREEN_PAIRS: [string, string, string][] = [
+  ['3D hover label', '#ffffff', TIP_OVER_WHITE],
+  ['toggle that is on, under the pointer', '#ffff55', '#4a5499'], ['toggle that is off, under the pointer', '#ffffff', '#4a5499'],
+  ['warnings title on its chat box', '#ffff55', CHAT_OVER_PANEL], ['warnings text on its chat box', '#ffaa00', CHAT_OVER_PANEL],
+  ['World page title', '#ffd84a', STONE], ['World page footer', '#aaaaaa', STONE],
+  ['scan state: queued', '#aaaaaa', SCREEN], ['scan state: running', '#ffaa00', SCREEN], ['scan state: done', '#55ff55', SCREEN],
+  ['scan state: failed', '#ff5555', SCREEN],
+  ['layer readout', '#55ff55', SCREEN], ['smart upload total', '#55ff55', SCREEN], ['command', '#55ff55', SCREEN],
+];
+
+describe('contrast of the 3D tab, the World page and the projector panel', () => {
+  it.each(SCREEN_PAIRS)('%s: %s on %s meets AA', (_what, text, background) => {
+    expect(ratio(text, background)).toBeGreaterThanOrEqual(AA);
+  });
+
+  it('reads the red fill of a failed scan\'s bar at 3:1 on its screen, as the green of the others', () => {
+    expect(ratio('#e03c3c', SCREEN)).toBeGreaterThanOrEqual(GRAPHICS);
+    expect(ratio('#55ff55', SCREEN)).toBeGreaterThanOrEqual(GRAPHICS);
+  });
+
+  it('needs the stone\'s own ink: the panel\'s grey footer would be dark on dark', () => {
+    expect(ratio('#4a4a4a', STONE)).toBeLessThan(AA);
+  });
+});

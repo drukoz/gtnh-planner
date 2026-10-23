@@ -9,7 +9,7 @@
 // Beside it the side list — blocks to place, hookups, overall size — and the layout's warnings, drawn from the same
 // layout as the map, so the two always agree. The tab's code, three.js included, is its own chunk (View3DTab.tsx).
 
-import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactElement, type ReactNode } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import { DYE_NAMES } from '../../shared/layout/enderio.ts';
 import { fmtInt } from '../../shared/layout/format.ts';
 import type { Rgb } from '../../shared/types/assets.ts';
@@ -73,25 +73,6 @@ export const LINKS_STORAGE_KEY = 'gtnh-planner:3d-connections';
 /** Whether this browser's Show connections shows only the links of one block (Focus): kept like the toggle above. */
 export const FOCUS_STORAGE_KEY = 'gtnh-planner:3d-connections-focus';
 
-// The view sits beside the side list while both fit, and above it on a narrow screen (like the Map tab).
-const MAIN_STYLE: CSSProperties = { flex: '3 1 420px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 };
-const VIEWPORT_STYLE: CSSProperties = {
-  position: 'relative', height: 'min(64vh, 680px)', minHeight: 360, overflow: 'hidden',
-  border: '1px solid var(--border)', borderRadius: 'var(--radius)', background: 'var(--surface-2)',
-};
-const HOVER_STYLE: CSSProperties = {
-  position: 'absolute', top: 8, left: 8, right: 8, margin: 0, width: 'fit-content', maxWidth: 'calc(100% - 16px)', padding: '4px 8px',
-  borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface)', pointerEvents: 'none', overflowWrap: 'anywhere',
-};
-const SIDE_STYLE: CSSProperties = { flex: '1 1 260px', maxWidth: 400, display: 'flex', flexDirection: 'column', gap: 12 };
-const BOX_STYLE: CSSProperties = {
-  display: 'flex', flexDirection: 'column', gap: 4, padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 'var(--radius)',
-  background: 'var(--surface)',
-};
-const HEADING_STYLE: CSSProperties = { margin: 0, fontSize: '0.95rem' };
-const SUBHEAD_STYLE: CSSProperties = { margin: '4px 0 0', fontSize: '0.85rem' };
-const LIST_STYLE: CSSProperties = { margin: 0, paddingLeft: 18 };
-
 /** Whether this browser can draw the view; the test canvas's context is let go at once. */
 export function webgl2Available(): boolean {
   if (typeof document === 'undefined') return false;
@@ -130,7 +111,7 @@ export function saveShowLinks(on: boolean, key: string = LINKS_STORAGE_KEY): voi
 function Controls(props: Pick<View3DShellProps, 'maxLayer' | 'onLayer' | 'show' | 'onShow' | 'showLinks' | 'onShowLinks' | 'focus' | 'onFocus'> & { height: number }): ReactElement {
   const { maxLayer, onLayer, show, onShow, showLinks, onShowLinks, height } = props;
   return (
-    <div className="row" style={{ gap: 16 }}>
+    <div className="row view3d-controls">
       <label className="check">
         <input
           type="range"
@@ -144,7 +125,7 @@ function Controls(props: Pick<View3DShellProps, 'maxLayer' | 'onLayer' | 'show' 
             onLayer(n >= height ? null : n);   // the top position shows every layer
           }}
         />
-        <span style={{ fontVariantNumeric: 'tabular-nums' }}>{layerText(maxLayer, height)}</span>
+        <span className="view3d-layer-text">{layerText(maxLayer, height)}</span>
       </label>
       <label className="check">
         <input type="checkbox" checked={show.ghosts} onChange={(e) => onShow({ ...show, ghosts: e.currentTarget.checked })} />
@@ -168,15 +149,13 @@ function Controls(props: Pick<View3DShellProps, 'maxLayer' | 'onLayer' | 'show' 
   );
 }
 
-const SWATCH_STYLE: CSSProperties = { display: 'inline-block', width: 10, height: 10, borderRadius: 2, marginRight: 4, verticalAlign: 'middle' };
-
 /** The drawn links' colours, each a swatch with what it means. */
 function LinksLegend(props: { legend: ReadonlyArray<{ rgb: Rgb; label: string }> }): ReactElement {
   return (
-    <ul data-testid="view3d-links-legend" className="muted small" style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexWrap: 'wrap', gap: '2px 12px' }}>
+    <ul data-testid="view3d-links-legend" className="muted small view3d-legend">
       {props.legend.map(({ rgb, label }) => (
         <li key={`${rgb.join()}|${label}`}>
-          <span aria-hidden="true" style={{ ...SWATCH_STYLE, background: `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})` }} />
+          <span aria-hidden="true" style={{ background: `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})` }} />
           {label}
         </li>
       ))}
@@ -187,10 +166,10 @@ function LinksLegend(props: { legend: ReadonlyArray<{ rgb: Rgb; label: string }>
 function BlockInfo(props: { info: Info }): ReactElement {
   const { title, lines } = props.info;
   return (
-    <section data-testid="view3d-info" aria-live="polite" style={BOX_STYLE}>
-      <h3 style={HEADING_STYLE}>{title}</h3>
+    <section data-testid="view3d-info" aria-live="polite" className="view3d-box view3d-details">
+      <h3>{title}</h3>
       {lines.length > 0 && (
-        <ul className="small" style={LIST_STYLE}>
+        <ul className="small">
           {lines.map((line, i) => <li key={`${i}|${line}`}>{line}</li>)}
         </ul>
       )}
@@ -203,20 +182,20 @@ function BlockList(props: { layout: Layout; names: Readonly<Record<string, strin
   const { place, hookups, size } = blockList(props.layout, props.names);
   const headingId = useId();
   return (
-    <section data-testid="block-list" aria-labelledby={headingId} style={BOX_STYLE}>
-      <h3 id={headingId} style={HEADING_STYLE}>Blocks to place</h3>
-      <ul className="small" style={LIST_STYLE}>
+    <section data-testid="block-list" aria-labelledby={headingId} className="view3d-box">
+      <h3 id={headingId}>Blocks to place</h3>
+      <ul className="small">
         {place.map((row, i) => <li key={`${i}|${row.label}`}>{`${row.label} ×${row.count}`}</li>)}
       </ul>
       {hookups.length > 0 && (
         <>
-          <h4 style={SUBHEAD_STYLE}>Hookups</h4>
-          <ul className="small" style={LIST_STYLE}>
+          <h4>Hookups</h4>
+          <ul className="small">
             {hookups.map((text, i) => <li key={`${i}|${text}`}>{text}</li>)}
           </ul>
         </>
       )}
-      <p className="small" style={{ margin: '4px 0 0' }}>{`Size: ${size}`} <span className="muted">(W×L×H)</span></p>
+      <p className="small view3d-size">{`Size: ${size}`} <span className="muted">(W×L×H)</span></p>
     </section>
   );
 }
@@ -225,9 +204,9 @@ function Warnings(props: { layout: Layout }): ReactElement | null {
   const { warnings } = props.layout;
   if (warnings.length === 0) return null;
   return (
-    <section aria-label="Warnings" style={BOX_STYLE}>
-      <h3 style={HEADING_STYLE}>Warnings</h3>
-      <ul className="small" style={LIST_STYLE}>
+    <section aria-label="Warnings" className="view3d-box view3d-warnings">
+      <h3>Warnings</h3>
+      <ul className="small">
         {warnings.map((w, i) => <li key={`${w.code}:${i}`}>{w.text}</li>)}
       </ul>
     </section>
@@ -245,29 +224,29 @@ export function View3DShell(props: View3DShellProps): ReactElement {
   const blocks = layout !== null && layout.blocks.length > 0;
   const warned = layout !== null && layout.warnings.length > 0;
   return (
-    <div className="view3d" data-testid="view3d" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      {error !== null && <p className="error" style={{ margin: 0 }}>{error}</p>}
-      {loading && <p className="muted" style={{ margin: 0 }}>{LOADING_TEXT}</p>}
-      {!webgl && <p className="muted" style={{ margin: 0 }}>{NO_WEBGL_TEXT}</p>}
-      {layout?.status === 'empty' && <p className="muted" style={{ margin: 0 }}>{props.noSteps === true ? NO_STEPS_TEXT : ALL_OWNED_TEXT}</p>}
+    <div className="view3d" data-testid="view3d">
+      {error !== null && <p className="error">{error}</p>}
+      {loading && <p className="muted">{LOADING_TEXT}</p>}
+      {!webgl && <p className="muted">{NO_WEBGL_TEXT}</p>}
+      {layout?.status === 'empty' && <p className="muted">{props.noSteps === true ? NO_STEPS_TEXT : ALL_OWNED_TEXT}</p>}
       {layout !== null && (blocks || warned) && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-start' }}>
+        <div className="view3d-body">
           {blocks && webgl && (
-            <div style={MAIN_STYLE}>
-              <div data-testid="view3d-canvas" style={VIEWPORT_STYLE}>
+            <div className="view3d-main">
+              <div data-testid="view3d-canvas" className="view3d-viewport">
                 {canvas}
-                {hover !== null && <p data-testid="view3d-hover" className="small" style={HOVER_STYLE}>{hover}</p>}
+                {hover !== null && <p data-testid="view3d-hover" className="view3d-hover">{hover}</p>}
               </div>
               <Controls maxLayer={props.maxLayer} onLayer={props.onLayer} show={props.show} onShow={props.onShow} showLinks={props.showLinks}
                 onShowLinks={props.onShowLinks} height={layout.size[1]} {...(props.onFocus === undefined ? {} : { focus: props.focus === true, onFocus: props.onFocus })} />
-              <p className="muted small" style={{ margin: 0 }}>Drag to turn, right-drag to pan, scroll to zoom; click a block for its details.</p>
+              <p className="muted small">Drag to turn, right-drag to pan, scroll to zoom; click a block for its details.</p>
               {props.showLinks && props.linksNote != null && (
-                <p data-testid="view3d-links" className="muted small" style={{ margin: 0 }}>{props.linksNote}</p>
+                <p data-testid="view3d-links" className="muted small">{props.linksNote}</p>
               )}
               {props.showLinks && props.linksLegend !== undefined && props.linksLegend.length > 0 && <LinksLegend legend={props.linksLegend} />}
             </div>
           )}
-          <div style={SIDE_STYLE}>
+          <div className="view3d-side">
             {info !== null && <BlockInfo info={info} />}
             {blocks && <BlockList layout={layout} names={names} />}
             <Warnings layout={layout} />
@@ -459,12 +438,14 @@ export default function View3D(props: ProjectViewProps): ReactElement {
     setFocus(on);
   };
 
+  // The canvas's size and its lack of an edge are the stylesheet's (`.view3d-scene`); its cursor follows what is under the pointer.
   const canvas = (
     <canvas
       ref={canvasRef}
       role="img"
       aria-label="The new line in 3D"
-      style={{ display: 'block', width: '100%', height: '100%', cursor: hover === null ? 'grab' : 'pointer' }}
+      className="view3d-scene"
+      style={{ cursor: hover === null ? 'grab' : 'pointer' }}
       onPointerDown={(e) => {
         pressedAt.current = { x: e.clientX, y: e.clientY };
       }}
