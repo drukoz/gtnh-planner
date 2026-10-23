@@ -231,3 +231,224 @@ describe('the Machine GUI stylesheet', () => {
     ]) expect(panels.inner, declaration).toContain(declaration);
   });
 });
+
+// The controls (restyle plan Phase 1 Task 2, design spec §6 and §7a). Every base rule is a `:where(…)` rule, which has no
+// specificity: a component rule (the tabs, the toolbars, the chips) wins on its own, and a state rule here can no longer
+// outrank it the way `button:hover:not(:disabled)` outranked `.tabs [role='tab']`. Among rules of equal specificity the
+// source order is the cascade, so the cases below pin the order where it matters.
+
+/** The value the first rule for `selector` gives `property` (the last such declaration), or undefined. */
+function declared(selector: string, property: string): string | undefined {
+  return declarations(ruleBody(selector)).filter(([name]) => name === property).map(([, value]) => value).pop();
+}
+
+/** Where in the source the first rule for `selector` is; -1 when there is none. */
+function position(selector: string): number {
+  const wanted = selector.replace(/\s+/g, ' ').trim();
+  return blocks.findIndex((b) => b.prelude === wanted);
+}
+
+/** Each `[selector, property, value]`: the rule gives the property exactly that value. */
+function expectDeclared(rows: [string, string, string][]): void {
+  for (const [selector, property, value] of rows) expect(declared(selector, property), `${selector} { ${property} }`).toBe(value);
+}
+
+const TICK = ':where(input[type=checkbox], input[type=radio])';
+const FIELD = 'input:not([type=checkbox], [type=radio], [type=range], [type=file])';
+const FIELDS = `:where(${FIELD}, textarea, select)`;
+const SUMMARY = 'details.settings-section > summary, details.disclosure > summary';
+const BUTTON_FACE = 'background-color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out)';
+
+describe('the Machine GUI controls', () => {
+  it('draws a button as a Minecraft button, from a base that adds no specificity', () => {
+    expectDeclared([
+      [':where(button)', 'min-height', '36px'], [':where(button)', 'padding', '0 14px'],
+      [':where(button)', 'border', '2px solid var(--outline)'], [':where(button)', 'border-radius', '0'],
+      [':where(button)', 'background', 'var(--btn)'], [':where(button)', 'box-shadow', 'var(--bevel-btn)'],
+      [':where(button)', 'color', '#ffffff'], [':where(button)', 'font', '15px/1 var(--font-pixel)'],
+      [':where(button)', 'text-shadow', '2px 2px 0 #3f3f3f'], [':where(button)', 'cursor', 'pointer'],
+      [':where(button)', 'transition', BUTTON_FACE],
+    ]);
+    // the old states are gone: `button:hover:not(:disabled)` (0,2,1) beat `.tabs [role='tab']` (0,2,0) and `.mat-toggle`
+    for (const old of ['button', 'button:hover:not(:disabled)', 'button:disabled']) expect(position(old), `a bare "${old}" rule`).toBe(-1);
+  });
+
+  it('lights a button on hover and sinks it when pressed', () => {
+    expectDeclared([
+      [':where(button:hover:not(:disabled))', 'background', 'var(--btn-hover)'],
+      [':where(button:active:not(:disabled))', 'transform', 'translateY(1px)'],
+      [':where(button:active:not(:disabled))', 'box-shadow', 'var(--bevel-btn-down)'],
+    ]);
+  });
+
+  it('dresses the primary, danger and small buttons, and the disabled look covers them all', () => {
+    expectDeclared([
+      [':where(button.primary)', 'color', 'var(--accent)'], [':where(button.primary)', 'text-shadow', '2px 2px 0 #3f3f15'],
+      [':where(button.danger)', 'background', 'var(--danger-face)'],
+      [':where(button.danger:hover:not(:disabled))', 'background', 'var(--danger-face-hover)'],
+      [':where(button.small)', 'min-height', '28px'], [':where(button.small)', 'padding', '0 10px'],
+      [':where(button.small)', 'font-size', '13px'],
+      [':where(button:disabled)', 'background', '#4a4a4a'], [':where(button:disabled)', 'color', '#a0a0a0'],
+      [':where(button:disabled)', 'text-shadow', 'none'], [':where(button:disabled)', 'box-shadow', 'none'],
+      [':where(button:disabled)', 'cursor', 'default'],
+    ]);
+    expect(declared(':where(button:disabled)', 'opacity'), 'a disabled button is a grey face, not a faded one').toBeUndefined();
+    // equal specificity, so the order is the cascade: a variant after the base and its hover, the disabled look last
+    const order = [
+      ':where(button)', ':where(button:hover:not(:disabled))', ':where(button:active:not(:disabled))', ':where(button.primary)',
+      ':where(button.danger)', ':where(button.danger:hover:not(:disabled))', ':where(button.small)', ':where(button:disabled)',
+    ].map(position);
+    expect(order.every((at) => at >= 0), 'every button rule exists').toBe(true);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+  });
+
+  it('lets the small utility size everything but a button', () => {
+    // `.small { font-size: 0.85rem }` (0,1,0) would beat the 13px of `:where(button.small)` and leave it 13.6px
+    expect(ruleBody('.small:where(:not(button))')).toContain('font-size: 0.85rem');
+    expect(position('.small'), 'a bare .small rule').toBe(-1);
+  });
+
+  it('keeps a link button a link, with every button property reset', () => {
+    expectDeclared([
+      ['button.link', 'min-height', '0'], ['button.link', 'padding', '0'], ['button.link', 'border', 'none'],
+      ['button.link', 'background', 'none'], ['button.link', 'box-shadow', 'none'], ['button.link', 'text-shadow', 'none'],
+      ['button.link', 'transform', 'none'], ['button.link', 'font', 'inherit'], ['button.link', 'text-decoration', 'underline'],
+    ]);
+    // its colour is the link ink of `a, button.link`, which sits on the surface it is in; no later rule may give it another
+    expect(declared('button.link', 'color')).toBeUndefined();
+    expect(ruleBody('a, button.link')).toContain('color: var(--ink-link)');
+  });
+
+  it('puts a text field, a text area and a select in a black field, and no box around a tick, slider or file', () => {
+    // the literal selector of the plan: a checkbox, radio, range or file input is never boxed like a text field
+    expect(position(':where(input:not([type=checkbox], [type=radio], [type=range], [type=file]), textarea, select)')).toBeGreaterThan(-1);
+    expectDeclared([
+      [FIELDS, 'min-height', '36px'], [FIELDS, 'padding', '6px 10px'], [FIELDS, 'background', '#000000'],
+      [FIELDS, 'border', '2px solid var(--btn-hi)'], [FIELDS, 'border-radius', '0'], [FIELDS, 'color', '#ffffff'],
+      [FIELDS, 'font', '14px var(--font-ui)'], ['::placeholder', 'color', '#8b8b8b'],
+      [`:where(${FIELD}:focus, textarea:focus, select:focus)`, 'border-color', 'var(--accent)'],
+    ]);
+    const invalid = `:where(${FIELD}[aria-invalid='true'], textarea[aria-invalid='true'], select[aria-invalid='true'])`;
+    expect(declared(invalid, 'border-color')).toBe('#ff5555');
+    expect(position(invalid), 'an invalid field stays red while it has the focus').toBeGreaterThan(position(`:where(${FIELD}:focus, textarea:focus, select:focus)`));
+  });
+
+  it('gives a select a pixel caret, and a search field a pixel cross', () => {
+    expectDeclared([
+      [':where(select)', 'appearance', 'none'], [':where(select)', 'padding-right', '26px'],
+      [':where(select)', 'background-repeat', 'no-repeat'], [':where(select)', 'background-position', 'right 8px center'],
+      [':where(input[type=search])', 'appearance', 'none'],
+      [':where(input[type=search])::-webkit-search-cancel-button', 'appearance', 'none'],
+    ]);
+    // the field's `background` shorthand would wipe the caret if it came after it
+    expect(position(':where(select)')).toBeGreaterThan(position(FIELDS));
+    const caret = decodeURIComponent(declared(':where(select)', 'background-image') ?? '');
+    for (const part of ['data:image/svg+xml', "width='8'", "height='5'", "fill='#ffffff'", "shape-rendering='crispEdges'"]) expect(caret, part).toContain(part);
+    const cross = decodeURIComponent(declared(':where(input[type=search])::-webkit-search-cancel-button', 'background') ?? '');
+    for (const part of ['data:image/svg+xml', "fill='#ffffff'", "shape-rendering='crispEdges'"]) expect(cross, part).toContain(part);
+  });
+
+  it('turns a checkbox and a radio into a screen well, and keeps the native input', () => {
+    expectDeclared([
+      [TICK, 'appearance', 'none'], [TICK, 'display', 'inline-grid'], [TICK, 'place-content', 'center'], [TICK, 'flex', 'none'],
+      [TICK, 'width', '16px'], [TICK, 'height', '16px'], [TICK, 'margin', '0'],
+      [TICK, 'background', 'var(--screen)'], [TICK, 'box-shadow', 'var(--bevel-slot)'],
+      [`${TICK}::before`, 'content', "''"], [`${TICK}::before`, 'width', '10px'], [`${TICK}::before`, 'height', '10px'],
+      [`${TICK}::before`, 'opacity', '0'], [`${TICK}::before`, 'transform', 'scale(0.6)'],
+      [`${TICK}::before`, 'transition', 'opacity var(--dur-fast) var(--ease-pop), transform var(--dur-fast) var(--ease-pop)'],
+      [':where(input[type=checkbox])::before', 'background', 'var(--screen-text)'],
+      [':where(input[type=radio])::before', 'background', 'var(--screen-text)'],
+      [':where(input[type=radio])::before', 'width', '6px'], [':where(input[type=radio])::before', 'height', '6px'],
+      [`${TICK}:checked::before`, 'opacity', '1'], [`${TICK}:checked::before`, 'transform', 'none'],
+      [`${TICK}:disabled`, 'opacity', '0.5'], [`${TICK}:disabled`, 'cursor', 'default'],
+    ]);
+    expect(declared(':where(input[type=checkbox])::before', 'clip-path'), 'a pixel tick').toMatch(/^polygon\((\d+px \d+px, )+\d+px \d+px\)$/);
+  });
+
+  it('draws a range as a well with a Minecraft button for a thumb', () => {
+    expectDeclared([[':where(input[type=range])', 'appearance', 'none'], [':where(input[type=range])', 'background', 'transparent']]);
+    for (const track of ['::-webkit-slider-runnable-track', '::-moz-range-track']) {
+      expectDeclared([
+        [`:where(input[type=range])${track}`, 'height', '6px'], [`:where(input[type=range])${track}`, 'background', 'var(--screen)'],
+        [`:where(input[type=range])${track}`, 'box-shadow', 'var(--bevel-well)'],
+      ]);
+    }
+    for (const thumb of ['::-webkit-slider-thumb', '::-moz-range-thumb']) {
+      expectDeclared([
+        [`:where(input[type=range])${thumb}`, 'width', '12px'], [`:where(input[type=range])${thumb}`, 'height', '20px'],
+        [`:where(input[type=range])${thumb}`, 'background', 'var(--btn)'], [`:where(input[type=range])${thumb}`, 'border', '2px solid var(--outline)'],
+        [`:where(input[type=range])${thumb}`, 'box-shadow', 'var(--bevel-btn)'], [`:where(input[type=range])${thumb}`, 'border-radius', '0'],
+      ]);
+    }
+    // a browser drops a whole selector list when one selector in it has a pseudo-element it does not know
+    const mixed = blocks.filter((b) => b.prelude.includes('-webkit-') && b.prelude.includes('-moz-'));
+    expect(mixed.map((b) => b.prelude)).toEqual([]);
+  });
+
+  it('draws a progress bar as a screen with a green fill', () => {
+    expectDeclared([
+      [':where(progress)', 'appearance', 'none'], [':where(progress)', 'width', '100%'], [':where(progress)', 'height', '14px'],
+      [':where(progress)', 'border', '2px solid var(--outline)'], [':where(progress)', 'background', 'var(--screen)'],
+      [':where(progress)::-webkit-progress-bar', 'background', 'var(--screen)'],
+      [':where(progress)::-webkit-progress-value', 'background', 'var(--screen-text)'],
+      [':where(progress)::-moz-progress-bar', 'background', 'var(--screen-text)'],
+    ]);
+  });
+
+  it('gives a file input no field box, and its button the small button look', () => {
+    expectDeclared([
+      [':where(input[type=file])', 'padding', '0'], [':where(input[type=file])', 'border', '0'], [':where(input[type=file])', 'background', 'none'],
+      [':where(input[type=file])::file-selector-button', 'min-height', '28px'],
+      [':where(input[type=file])::file-selector-button', 'padding', '0 10px'],
+      [':where(input[type=file])::file-selector-button', 'border', '2px solid var(--outline)'],
+      [':where(input[type=file])::file-selector-button', 'background', 'var(--btn)'],
+      [':where(input[type=file])::file-selector-button', 'box-shadow', 'var(--bevel-btn)'],
+      [':where(input[type=file])::file-selector-button', 'font', '13px/1 var(--font-pixel)'],
+      [':where(input[type=file]:disabled)::file-selector-button', 'background', '#4a4a4a'],
+    ]);
+  });
+
+  it('draws the summary of a settings section or a disclosure as a full-width button with a turning caret', () => {
+    expectDeclared([
+      [SUMMARY, 'display', 'flex'], [SUMMARY, 'list-style', 'none'], [SUMMARY, 'min-height', '36px'],
+      [SUMMARY, 'border', '2px solid var(--outline)'], [SUMMARY, 'background', 'var(--btn)'], [SUMMARY, 'box-shadow', 'var(--bevel-btn)'],
+      [SUMMARY, 'color', '#ffffff'], [SUMMARY, 'font', '15px/1 var(--font-pixel)'], [SUMMARY, 'cursor', 'pointer'],
+      [SUMMARY.replace(/summary/g, 'summary::-webkit-details-marker'), 'display', 'none'],
+      [SUMMARY.replace(/summary/g, 'summary:hover'), 'background', 'var(--btn-hover)'],
+      [SUMMARY.replace(/summary/g, 'summary:active'), 'transform', 'translateY(1px)'],
+      [SUMMARY.replace(/summary/g, 'summary:active'), 'box-shadow', 'var(--bevel-btn-down)'],
+      [SUMMARY.replace(/summary/g, 'summary::before'), 'content', "''"],
+      [SUMMARY.replace(/summary/g, 'summary::before'), 'transition', 'transform var(--dur-fast) var(--ease-out)'],
+      ['details.settings-section[open] > summary::before, details.disclosure[open] > summary::before', 'transform', 'rotate(90deg)'],
+    ]);
+    expect(declared(SUMMARY.replace(/summary/g, 'summary::before'), 'clip-path'), 'a pixel caret').toMatch(/^polygon\(/);
+    // a global `summary` rule would also hit Materials' two inline disclosures and the thousands of storage rows
+    expect(blocks.filter((b) => b.prelude.split(',').some((s) => /^\s*summary\b/.test(s))).map((b) => b.prelude)).toEqual([]);
+  });
+
+  it('shows the keyboard focus as a 3px yellow ring that touches the control', () => {
+    expectDeclared([[':focus-visible', 'outline', '3px solid var(--accent)'], [':focus-visible', 'outline-offset', '0']]);
+  });
+
+  it('draws badges and chips as dark rectangles with pixel text', () => {
+    expectDeclared([
+      ['.badge, .chip', 'background', 'var(--screen)'], ['.badge, .chip', 'color', '#ffffff'], ['.badge, .chip', 'border-radius', '0'],
+      ['.badge, .chip', 'padding', '0 6px'], ['.badge, .chip', 'font', '13px/1.5 var(--font-pixel)'],
+      ['.badge.muted', 'color', 'var(--screen-muted)'],
+    ]);
+    // the old pill of the materials section (a border, a radius, a light fill) would win over the shared rule by coming later
+    const chip = blocks.filter((b) => b.prelude === '.chip').flatMap((b) => declarations(b.inner).map(([name]) => name));
+    expect(chip.filter((name) => name !== 'overflow-wrap')).toEqual([]);
+  });
+
+  it('gives a decorative pseudo-element an empty content, never text that joins an accessible name', () => {
+    const drawn = blocks.filter((b) => b.prelude.split(',').some((s) => /::(before|after)$/.test(s.trim())));
+    // the scan sees the controls' own marks, so a rule it cannot parse would not pass unnoticed
+    for (const mark of [`${TICK}::before`, ':where(input[type=checkbox])::before', ':where(input[type=radio])::before', SUMMARY.replace(/summary/g, 'summary::before')]) {
+      expect(drawn.map((b) => b.prelude), mark).toContain(mark);
+    }
+    for (const block of drawn) {
+      for (const [name, value] of declarations(block.inner)) if (name === 'content') expect(value, block.prelude).toMatch(/^(''|none)$/);
+    }
+  });
+});

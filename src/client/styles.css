@@ -89,22 +89,141 @@ a, button.link { color: var(--ink-link); }
   }
 }
 
-button, input, textarea, select { font: inherit; color: inherit; }
-button {
-  padding: 6px 14px; border: 1px solid var(--border); border-radius: var(--radius);
-  background: var(--surface); cursor: pointer;
+/*
+ * Controls (design spec §6, §7a). Every base rule here is a :where() rule, which has no specificity: a component rule (the
+ * tabs, the toolbars, the chips) wins on its own, and a state rule can no longer outrank it the way `button:hover:not(:disabled)`
+ * outranked `.tabs [role='tab']`. Among equals the source order is the cascade: a base, its states, its variants, and the
+ * disabled look last so that it covers a variant. Native inputs stay native, visible and the click target; what decorates
+ * them is a pseudo-element with an empty content or a background image, never a glyph (a glyph joins the accessible name).
+ */
+:where(button) {
+  min-height: 36px; padding: 0 14px; border: 2px solid var(--outline); border-radius: 0;
+  background: var(--btn); box-shadow: var(--bevel-btn); color: #ffffff;
+  font: 15px/1 var(--font-pixel); text-shadow: 2px 2px 0 #3f3f3f; cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
 }
-button:hover:not(:disabled) { background: var(--surface-2); }
-button:disabled { opacity: 0.55; cursor: default; }
-button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
-button.primary:hover:not(:disabled) { filter: brightness(1.08); background: var(--accent); }
-button.danger { border-color: var(--error); color: var(--error); }
-button.danger:hover:not(:disabled) { background: var(--error-bg); }
-input, textarea, select {
-  padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface);
+:where(button:hover:not(:disabled)) { background: var(--btn-hover); }
+:where(button:active:not(:disabled)) { transform: translateY(1px); box-shadow: var(--bevel-btn-down); }
+:where(button.primary) { color: var(--accent); text-shadow: 2px 2px 0 #3f3f15; }
+:where(button.danger) { background: var(--danger-face); }
+:where(button.danger:hover:not(:disabled)) { background: var(--danger-face-hover); }
+/* 13px is the smallest the pixel font goes; the .small utility below leaves a button's size to this rule. */
+:where(button.small) { min-height: 28px; padding: 0 10px; font-size: 13px; }
+:where(button:disabled) { background: #4a4a4a; color: #a0a0a0; text-shadow: none; box-shadow: none; cursor: default; }
+
+/* A text field, a text area and a select are black fields. A tick, a slider and a file input get no such box. */
+:where(input:not([type=checkbox], [type=radio], [type=range], [type=file]), textarea, select) {
+  min-height: 36px; padding: 6px 10px; background: #000000; border: 2px solid var(--btn-hi); border-radius: 0;
+  color: #ffffff; font: 14px var(--font-ui);
 }
+:where(input:not([type=checkbox], [type=radio], [type=range], [type=file]):focus, textarea:focus, select:focus) {
+  border-color: var(--accent);
+}
+/* After the focus rule: a field in error stays red while it is being corrected. */
+:where(input:not([type=checkbox], [type=radio], [type=range], [type=file])[aria-invalid='true'],
+       textarea[aria-invalid='true'], select[aria-invalid='true']) {
+  border-color: #ff5555;
+}
+::placeholder { color: #8b8b8b; opacity: 1; }
 textarea { resize: vertical; width: 100%; }
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* The pixel caret is an 8 x 5 white image (URL-encoded SVG: %3C %3E are the angle brackets, %23 the hash). It comes after the
+   fields' `background` shorthand, which would reset it. */
+:where(select) {
+  appearance: none; padding-right: 26px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' shape-rendering='crispEdges'%3E%3Cpath fill='%23ffffff' d='M0 1h8v1H0zM1 2h6v1H1zM2 3h4v1H2zM3 4h2v1H3z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 8px center;
+}
+:where(input[type=search]) { appearance: none; }
+:where(input[type=search])::-webkit-search-cancel-button {
+  appearance: none; width: 12px; height: 12px; margin: 0 0 0 8px; cursor: pointer;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' shape-rendering='crispEdges'%3E%3Cpath fill='%23ffffff' d='M0 0h2v1H0zM6 0h2v1H6zM1 1h2v1H1zM5 1h2v1H5zM2 2h4v1H2zM3 3h2v2H3zM2 5h4v1H2zM1 6h2v1H1zM5 6h2v1H5zM0 7h2v1H0zM6 7h2v1H6z'/%3E%3C/svg%3E") center no-repeat;
+}
+
+/* A checkbox or a radio is a 16px well. Its mark pops in (scale 0.6 to 1) when it is checked: a pixel tick, a square dot. */
+:where(input[type=checkbox], input[type=radio]) {
+  appearance: none; display: inline-grid; place-content: center; flex: none; width: 16px; height: 16px; margin: 0;
+  background: var(--screen); box-shadow: var(--bevel-slot); cursor: pointer;
+}
+:where(input[type=checkbox], input[type=radio])::before {
+  content: ''; width: 10px; height: 10px; opacity: 0; transform: scale(0.6);
+  transition: opacity var(--dur-fast) var(--ease-pop), transform var(--dur-fast) var(--ease-pop);
+}
+:where(input[type=checkbox])::before {
+  background: var(--screen-text);
+  clip-path: polygon(8px 1px, 10px 1px, 10px 2px, 9px 2px, 9px 3px, 8px 3px, 8px 4px, 7px 4px, 7px 5px, 6px 5px, 6px 7px,
+    5px 7px, 5px 8px, 3px 8px, 3px 7px, 2px 7px, 2px 6px, 1px 6px, 1px 5px, 0px 5px, 0px 4px, 2px 4px, 2px 5px, 3px 5px,
+    3px 6px, 4px 6px, 4px 5px, 5px 5px, 5px 4px, 6px 4px, 6px 3px, 7px 3px, 7px 2px, 8px 2px);
+}
+:where(input[type=radio])::before { width: 6px; height: 6px; background: var(--screen-text); }
+:where(input[type=checkbox], input[type=radio]):checked::before { opacity: 1; transform: none; }
+:where(input[type=checkbox], input[type=radio]):disabled { opacity: 0.5; cursor: default; }
+
+/* A range is a well with a small Minecraft button for a thumb. A browser drops a whole selector list when one selector in it
+   has a pseudo-element it does not know, so the WebKit and the Gecko rules cannot share a list. */
+:where(input[type=range]) { appearance: none; height: 20px; margin: 0; background: transparent; cursor: pointer; }
+:where(input[type=range])::-webkit-slider-runnable-track {
+  height: 6px; background: var(--screen); box-shadow: var(--bevel-well); border-radius: 0;
+}
+:where(input[type=range])::-moz-range-track { height: 6px; background: var(--screen); box-shadow: var(--bevel-well); border-radius: 0; }
+:where(input[type=range])::-webkit-slider-thumb {
+  appearance: none; box-sizing: border-box; width: 12px; height: 20px; margin-top: -7px;
+  background: var(--btn); border: 2px solid var(--outline); border-radius: 0; box-shadow: var(--bevel-btn);
+}
+:where(input[type=range])::-moz-range-thumb {
+  box-sizing: border-box; width: 12px; height: 20px;
+  background: var(--btn); border: 2px solid var(--outline); border-radius: 0; box-shadow: var(--bevel-btn);
+}
+:where(input[type=range]:disabled) { opacity: 0.5; cursor: default; }
+
+/* A progress bar is a screen with a green fill. Its edge is the border: an inset shadow would hide under the bar. */
+:where(progress) {
+  appearance: none; width: 100%; height: 14px; border: 2px solid var(--outline); border-radius: 0; background: var(--screen);
+}
+:where(progress)::-webkit-progress-bar { background: var(--screen); border-radius: 0; }
+:where(progress)::-webkit-progress-value { background: var(--screen-text); border-radius: 0; }
+:where(progress)::-moz-progress-bar { background: var(--screen-text); border-radius: 0; }
+
+/* A file input has no field box; its button is a small button. */
+:where(input[type=file]) { padding: 0; border: 0; background: none; font: inherit; color: inherit; }
+:where(input[type=file])::file-selector-button {
+  min-height: 28px; padding: 0 10px; margin-right: 10px; border: 2px solid var(--outline); border-radius: 0;
+  background: var(--btn); box-shadow: var(--bevel-btn); color: #ffffff;
+  font: 13px/1 var(--font-pixel); text-shadow: 2px 2px 0 #3f3f3f; cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+}
+:where(input[type=file]:not(:disabled))::file-selector-button:hover { background: var(--btn-hover); }
+:where(input[type=file]:not(:disabled))::file-selector-button:active { transform: translateY(1px); box-shadow: var(--bevel-btn-down); }
+:where(input[type=file]:disabled)::file-selector-button { background: #4a4a4a; color: #a0a0a0; text-shadow: none; box-shadow: none; cursor: default; }
+
+/*
+ * The summary of a settings section or of a disclosure is a full-width Minecraft button with a pixel caret that turns down
+ * when it is open. These two selectors only: a global `summary` rule would also hit the two inline disclosures of Materials
+ * and every storage row.
+ */
+details.settings-section > summary, details.disclosure > summary {
+  display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 12px; list-style: none;
+  border: 2px solid var(--outline); background: var(--btn); box-shadow: var(--bevel-btn); color: #ffffff;
+  font: 15px/1 var(--font-pixel); text-shadow: 2px 2px 0 #3f3f3f; cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+}
+details.settings-section > summary::-webkit-details-marker, details.disclosure > summary::-webkit-details-marker { display: none; }
+details.settings-section > summary:hover, details.disclosure > summary:hover { background: var(--btn-hover); }
+details.settings-section > summary:active, details.disclosure > summary:active {
+  transform: translateY(1px); box-shadow: var(--bevel-btn-down);
+}
+details.settings-section > summary::before, details.disclosure > summary::before {
+  content: ''; flex: none; width: 9px; height: 9px; background: currentColor;
+  clip-path: polygon(2px 0px, 3px 0px, 3px 1px, 4px 1px, 4px 2px, 5px 2px, 5px 3px, 6px 3px, 6px 4px, 7px 4px, 7px 5px,
+    6px 5px, 6px 6px, 5px 6px, 5px 7px, 4px 7px, 4px 8px, 3px 8px, 3px 9px, 2px 9px);
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+details.settings-section[open] > summary::before, details.disclosure[open] > summary::before { transform: rotate(90deg); }
+/* What the summary holds takes the button's own text: the settings title is an h3, its count a .muted. */
+details.settings-section > summary h3 { color: inherit; font: inherit; }
+details.settings-section > summary .muted { color: inherit; }
+
+/* The keyboard focus: a 3px ring that touches the control, whose own dark border keeps it readable on the light panels. */
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 0; }
 
 .field { display: flex; flex-direction: column; gap: 4px; }
 .field > span { font-size: 0.9rem; color: var(--muted); }
@@ -141,7 +260,6 @@ textarea { resize: vertical; width: 100%; }
 }
 .delete-confirm p { margin: 0; }
 .delete-confirm .field { max-width: 360px; }
-.delete-confirm input { background: var(--surface); }
 
 .recently-deleted { margin-top: 28px; }
 .recently-deleted h2 { margin-bottom: 4px; }
@@ -234,14 +352,16 @@ button.banner-chip {
 .item-icon.placeholder { box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.3); }
 .item-icon.ink-dark { color: #1f2328; text-shadow: 0 1px 0 rgb(255 255 255 / 0.45); }
 
-.small { font-size: 0.85rem; }
-button.small { padding: 2px 10px; }
+.small:where(:not(button)) { font-size: 0.85rem; }
 .visually-hidden {
   position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
 }
-.badge {
-  font-size: 0.75rem; padding: 1px 7px; border: 1px solid var(--border); border-radius: 999px; white-space: nowrap;
+/* Badges and chips are dark rectangles with pixel text (13px is the smallest the pixel font goes). */
+.badge, .chip {
+  background: var(--screen); color: #ffffff; border-radius: 0; padding: 0 6px; font: 13px/1.5 var(--font-pixel);
 }
+.badge { white-space: nowrap; }
+.badge.muted { color: var(--screen-muted); }
 
 .project-body { display: grid; grid-template-columns: minmax(260px, 330px) minmax(0, 1fr); gap: 20px; align-items: start; }
 .project-views { min-width: 0; }
@@ -254,7 +374,6 @@ button.small { padding: 2px 10px; }
 .settings-section:last-child { border-bottom: none; padding-bottom: 0; }
 details.settings-section { display: block; }
 details.settings-section > :not(summary) { margin-top: 8px; }
-details.settings-section > summary { cursor: pointer; }
 details.settings-section > summary h3 { display: inline; margin-right: 8px; }
 .settings-section h3, .settings-title { font-size: 0.95rem; font-weight: 600; margin: 0; color: var(--text); }
 .settings-section h4 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 6px 0 4px; }
@@ -283,7 +402,7 @@ details.settings-section > summary h3 { display: inline; margin-right: 8px; }
 
 .dim-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .dim-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 8px; align-items: center; }
-.dim-row select { padding: 2px 6px; }
+.dim-row select { padding: 2px 26px 2px 6px; }
 .dim-name { overflow-wrap: anywhere; }
 .dim-name::before {
   content: ''; display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 50%; background: var(--border);
@@ -340,7 +459,7 @@ button.avoid-chip-remove:hover:not(:disabled) { background: var(--surface-2); }
 .flow-main { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
 .flow-diagram { display: flex; flex-direction: column; gap: 8px; }
 .flow-toolbar button { min-width: 2.2em; }
-.flow-toolbar select.flow-find { max-width: 260px; padding: 2px 8px; }
+.flow-toolbar select.flow-find { max-width: 260px; padding: 2px 26px 2px 8px; }
 .flow-canvas {
   display: block; width: 100%; min-height: 240px; background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius); cursor: grab; touch-action: none; user-select: none;
@@ -449,8 +568,10 @@ fieldset.flow-panel-section > legend.flow-panel-title { float: left; width: 100%
 /* A way or an option the group cannot use here: greyed, no radio, with why not. */
 .swap-option.unusable, .option-choice.unusable { color: var(--muted); padding-left: 24px; font-size: 0.9rem; overflow-wrap: anywhere; }
 abbr.unit-hint { text-decoration: underline dotted; cursor: help; }
+/* Its colour is the link ink of `a, button.link` at the top, which follows the surface it sits on: no colour here. */
 button.link {
-  padding: 0; border: none; border-radius: 0; background: none; text-decoration: underline; font: inherit;
+  min-height: 0; padding: 0; border: none; border-radius: 0; background: none; box-shadow: none; text-shadow: none;
+  transform: none; text-decoration: underline; font: inherit;
 }
 button.link:hover:not(:disabled) { background: none; text-decoration: none; }
 /* Takes / Makes: per good its rate, and the steps it comes from or goes to (fix spec §6.3). */
@@ -493,7 +614,7 @@ span.mat-toggle { display: inline-block; }
   margin: 0; padding: 4px 8px; background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: 6px;
 }
 .mat-used-by { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
-.chip { padding: 1px 8px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); overflow-wrap: anywhere; }
+.chip { overflow-wrap: anywhere; }
 .mat-needed summary { cursor: pointer; }
 .mat-missing .tick-label { color: var(--error); font-weight: 600; }
 .missing-badge { color: var(--error); border-color: var(--error); background: var(--error-bg); }
