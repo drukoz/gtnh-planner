@@ -591,8 +591,8 @@ button.avoid-chip-remove { width: 24px; height: 24px; min-height: 0; padding: 0;
  * nothing supplies an input, grey dashed ones for what is left over, violet supporting lines, the target in gold. Every arrow
  * is a pipe that ends on the flange of its port. Under a focus the canvas gets `focusing`, everything not lit `dim`; the boxes
  * that make the good get a yellow edge, those that take it a dashed one. The text of a box keeps 4.5:1 on its fill, so a row
- * that does not add up is in a red and an amber a little darker than a panel's (contrast.test.tsx). The Connections tab reads
- * this palette too.
+ * that does not add up is in a red and an amber a little darker than a panel's (contrast.test.tsx). The Connections tab draws
+ * its boxes in the same colours, from its own rules.
  */
 :root {
   --flow-owned: #b9d6b0; --flow-owned-line: #2f6b2f;
@@ -866,83 +866,141 @@ button.mat-toggle[aria-expanded='true']::before, .mat-have[open] summary::before
    whose class it does not have (the markup is pinned). */
 button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
 
-/* Connections (spec §3.8c, plan 11): a box per machine, chest, interface and hookup with a row per configured face,
-   and a link per flow. Boxes, face rows, the picked box and the panel follow the flow diagram's look. A link takes its
-   EnderIO channel's colour (its stroke attribute), else the colour of what carries it, the same as the map's
-   LOGISTICS_COLORS (src/client/map/overlays.ts); a hookup is dashed, like everything still to build to hook the line up. */
-:root { --conn-halo: rgb(0 0 0 / 0.55); }
-.conn-view { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
+/*
+ * Connections (spec §3.8c, plan 11, design spec §7): a box per machine, chest, interface and hookup with a row per configured
+ * face, and a pipe per link, on a dark well with a 32px grid like the flow diagram's. The grid is the area's own background, never
+ * an element or a pseudo-element: nothing may lie over the svg, whose empty space connections.spec.ts hit-tests. The svg keeps
+ * the diagram font, which the model's box metrics and cuts (32 and 38 characters) and ELK's label sizes are measured for.
+ */
+/* The side panel slides in from the right: as for the flow diagram (ruling R17), the clip keeps it from flashing a horizontal
+   scroll bar, and its margin leaves the Fit button its whole focus ring. The grid column itself changes at once (the e2e tests
+   read the narrowed svg straight away). */
+.conn-view {
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start;
+  overflow-x: clip; overflow-y: clip; overflow-clip-margin: 4px;
+}
 .conn-view.has-panel { grid-template-columns: minmax(0, 1fr) minmax(260px, 340px); }
 .conn-main { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
 .conn-main > p { margin: 0; }
 .conn-toolbar > span { flex: 1 1 16em; }   /* the hint wraps beside Fit rather than below it */
 .connections {
-  overflow: hidden; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  overflow: hidden; border: 2px solid var(--outline); border-radius: 0; box-shadow: var(--bevel-well);
+  background-color: var(--well);
+  background-image: linear-gradient(#404040 1px, transparent 1px), linear-gradient(90deg, #404040 1px, transparent 1px);
+  background-size: 32px 32px;
 }
 .connections > svg {
-  display: block; width: 100%; min-height: 240px; cursor: grab; touch-action: none; user-select: none; transition: opacity 0.2s;
+  display: block; width: 100%; min-height: 240px; cursor: grab; touch-action: none; user-select: none;
+  font-family: var(--font-diagram); transition: opacity var(--dur-base);
 }
 /* a drag shows grabbing over the boxes and links too. A click focuses the area (for the arrow keys) without a ring, the
-   keyboard with one, inside it, as the box clips its outside. */
+   keyboard with one, inside it, as the area clips its outside. */
 .connections > svg.dragging, .connections > svg.dragging * { cursor: grabbing; }
 .connections > svg:focus { outline: none; }
-.connections > svg:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.connections > svg:focus-visible { outline: 3px solid var(--accent); outline-offset: -3px; }
 .connections[aria-busy='true'] > svg { opacity: 0.6; }
-.conn-node > rect, .conn-node > path { stroke-width: 1.5; fill: var(--flow-raw); stroke: var(--flow-raw-line); cursor: pointer; }
-.conn-node > path { fill: var(--surface); }
-.conn-machine > rect { fill: var(--flow-new); }
-.conn-machine > rect, .conn-machine > path { stroke: var(--flow-new-line); }
-.conn-chest > rect { fill: var(--flow-out); }
-.conn-chest > rect, .conn-chest > path { stroke: var(--flow-out-line); }
-.conn-hookup > rect, .conn-source > rect, .conn-sink > rect { fill: var(--surface); }
-.conn-hookup > rect, .conn-hookup > path { stroke-dasharray: 4 3; }
-.conn-node:hover > rect, .conn-node:hover > path, .conn-node.selected > rect, .conn-node.selected > path { stroke-width: 3; }
-/* only the face rows take clicks among a box's texts; a click anywhere else on the box picks the box */
+/* A box (design spec §7): a Machine GUI block, a tinted fill with a 2px edge and a hard shadow under the rect and the face rows'
+   part (theirs alone, so the text stays crisp), the face rows on a lighter grey. Machines are panel grey, chests gold, interfaces
+   violet, what the line takes from the base olive; a hookup and a left over are grey and dashed, like what is still to build.
+   Pointed at, a box's edge turns white; it never moves or grows (connections.spec.ts measures a hovered box). Picked, its edge
+   is yellow and 3px. */
+.conn-node > rect, .conn-node > path {
+  fill: var(--panel); stroke: var(--outline); stroke-width: 2; filter: drop-shadow(0 2px 0 #000); cursor: pointer;
+}
+.conn-node > path { fill: #e0e0e0; }
+.conn-chest > rect { fill: #f0d870; }
+.conn-chest > rect, .conn-chest > path { stroke: #6b5500; }
+.conn-interface > rect { fill: #cbbbe0; }
+.conn-interface > rect, .conn-interface > path { stroke: #5a3a8a; }
+.conn-source > rect { fill: #d8cfa8; }
+.conn-source > rect, .conn-source > path { stroke: #6b5a20; }
+.conn-hookup > rect, .conn-sink > rect { fill: #a8a8a8; }
+.conn-hookup > rect, .conn-hookup > path, .conn-sink > rect, .conn-sink > path { stroke-dasharray: 4 3; }
+.conn-node:hover > rect, .conn-node:hover > path { stroke: #ffffff; }
+.conn-node.selected > rect, .conn-node.selected > path { stroke: var(--accent); stroke-width: 3; }
+/* only the face rows take clicks among a box's texts; a click anywhere else on the box picks the box. Every text keeps 4.5:1 on
+   its fill (contrast.test.tsx), so a face row is a dark blue link and a quieter line the panel's muted grey. */
 .conn-node text { fill: var(--text); font-size: 11.5px; pointer-events: none; }
 .conn-node .conn-title { font-size: 13px; font-weight: 600; }
-.conn-node .conn-line { fill: var(--muted); }
-.conn-node .conn-face { fill: var(--accent); cursor: pointer; pointer-events: auto; }
+.conn-node .conn-line { fill: var(--text-muted); }
+/* the grey of a hookup or a left over is darker than a panel: its quieter lines would fall under 4.5:1 there */
+.conn-hookup .conn-line, .conn-sink .conn-line { fill: var(--text); }
+.conn-node .conn-face { fill: #1d3b9a; cursor: pointer; pointer-events: auto; }
 .conn-node .conn-face:hover, .conn-node .conn-face.selected { text-decoration: underline; }
 .conn-node .conn-face.selected { font-weight: 600; }
 /* a conduit face's mode and channels, under its row's title; a row a picked link passes through is linked */
-.conn-node .conn-face-mode { fill: var(--muted); font-size: 10.5px; cursor: pointer; pointer-events: auto; }
+.conn-node .conn-face-mode { fill: var(--text-muted); font-size: 10.5px; cursor: pointer; pointer-events: auto; }
 .conn-node .conn-face-mode:hover { text-decoration: underline; }
 .conn-node .conn-face-mode.selected { fill: var(--text); font-weight: 600; }
 .conn-node .conn-face.linked, .conn-node .conn-face-mode.linked { font-weight: 600; }
 .conn-node .conn-face-mode.linked { fill: var(--text); }
+/*
+ * A link is a pipe (design spec §7), drawn as the flow diagram's: a 6px casing that ends square on the boxes and bends with
+ * mitred corners, and the good it carries in it, 6px dashes 16px apart that travel toward the box it enters (the points run that
+ * way), one cycle per `--pipe-dur` (pipe-motion.ts). The good takes its EnderIO channel's dye (the contents' stroke attribute),
+ * else the colour of what carries it (`--conn-link`, the same as the map's LOGISTICS_COLORS and the 3D view's VIA_RGB); the
+ * arrow head on it takes the same colour. A dye too dark for the dark casing gets a panel-grey one from the view
+ * (`--pipe-casing`). A flow carried by hand has no pipe, only its good in a dash-dot (whose lengths add up to the same 16px, so
+ * the loop is seamless); what carries nothing (an interface on its machine, a hookup) is a thin still grey line, dashed.
+ */
 .conn-via-gt_pipe { --conn-link: #9ccc65; }
 .conn-via-fluid_pipe { --conn-link: #1e88e5; }
 .conn-via-routed { --conn-link: #ff7043; }
 .conn-via-ae2 { --conn-link: #7e57c2; }
 .conn-via-item_conduit, .conn-via-fluid_conduit { --conn-link: #26c6da; }
 .conn-via-hand { --conn-link: #ffca28; }
-.conn-via-attached, .conn-via-hookup { --conn-link: var(--flow-edge); }
+.conn-via-attached, .conn-via-hookup { --conn-link: #8a92a0; }
 .conn-edge { cursor: pointer; }
-.conn-edge polyline { fill: none; stroke-width: 2.5; }
-.conn-edge polyline:not([stroke]) { stroke: var(--conn-link, var(--flow-edge)); }
-/* a channel can have the canvas's own colour (White on light, Black on dark), so channel lines get a thin halo */
-.conn-edge polyline[stroke] { filter: drop-shadow(0 0 1px var(--conn-halo)); }
-.conn-via-hookup polyline { stroke-dasharray: 6 4; }
-.conn-via-attached polyline { stroke-dasharray: 2 3; }
-/* a flow carried by hand: no network carries it, so its line is broken */
-.conn-via-hand polyline { stroke-dasharray: 10 3 2 3; }
-.conn-edge:hover polyline, .conn-edge.selected polyline { stroke-width: 4; }
-.conn-arrow-head { fill: var(--flow-edge); }
+.conn-edge polyline { fill: none; stroke-linejoin: miter; }
+.conn-edge-line { stroke: var(--pipe-casing, #1b1b1b); stroke-width: 6; stroke-linecap: butt; }
+.conn-edge-flow { stroke-width: 2.5; stroke-dasharray: 6 10; animation: pipe-flow var(--pipe-dur, 0.8s) linear infinite; }
+.conn-edge-flow:not([stroke]) { stroke: var(--conn-link); }
+/* the marker sits on the contents (on the casing where nothing moves), and its head takes that element's stroke */
+.conn-arrow-head { fill: context-stroke; }
+.conn-via-hand .conn-edge-line { stroke: transparent; }
+.conn-via-hand .conn-edge-flow { stroke-dasharray: 8 3 2 3; }
+.conn-via-attached .conn-edge-line, .conn-via-hookup .conn-edge-line { stroke: var(--conn-link); stroke-width: 2; }
+.conn-via-hookup .conn-edge-line { stroke-dasharray: 6 4; }
+.conn-via-attached .conn-edge-line { stroke-dasharray: 2 3; }
+/* Pointed at, a link shows a white rim 1.5px round its casing, picked a yellow one that blinks once as it lights (ruling R19: on
+   opacity, the rim's); neither casing nor contents ever widens. A hand's link shows a dark casing inside its rim, so that its
+   amber does not lie on the white or the yellow. */
+.conn-edge-rim { stroke: none; stroke-width: 9; }
+.conn-via-attached .conn-edge-rim, .conn-via-hookup .conn-edge-rim { stroke-width: 5; }
+.conn-edge:hover .conn-edge-rim { stroke: #ffffff; }
+.conn-edge.selected .conn-edge-rim { stroke: var(--accent); animation: pipe-pulse 400ms var(--ease-out); }
+.conn-via-hand:hover .conn-edge-line, .conn-via-hand.selected .conn-edge-line { stroke: #1b1b1b; }
+/* Panning stays smooth (design spec §7 "Motion budget"): the pipes stand still while the picture is dragged, and above 200 links
+   only the picked one moves (pipe-motion.ts, `data-pipes` on the area). */
+.connections > svg.dragging .conn-edge-flow { animation-play-state: paused; }
+.connections[data-pipes='lit'] .conn-edge:not(.selected) .conn-edge-flow { animation: none; }
+/* a link's label, in white on a dark halo over the well; 11px of the diagram font, as ELK sizes it */
 .conn-label {
-  fill: var(--text); font-size: 11px; paint-order: stroke; stroke: var(--surface); stroke-width: 3px; stroke-linejoin: round;
+  fill: #ffffff; font-size: 11px; paint-order: stroke; stroke: #1b1b1b; stroke-width: 3px; stroke-linejoin: round;
 }
 .conn-edge.selected .conn-label { font-weight: 600; }
-.conn-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 0.85rem; color: var(--muted); }
+/* The legend, on the panel: per kind of link a mini pipe drawn on its one empty span (a dark casing with the link's dashes), so the
+   colours read as they do on the well; by hand a dash-dot, a hookup a thin dashed line. */
+.conn-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 0.85rem; color: var(--ink-muted); }
 .conn-legend li { display: inline-flex; align-items: center; gap: 6px; }
-.conn-swatch { width: 22px; border-top: 3px solid var(--conn-link, var(--flow-edge)); }
-.conn-swatch.conn-via-hookup { border-top-style: dashed; }
-.conn-swatch.conn-via-hand { border-top-style: dotted; }
+.conn-swatch {
+  flex: none; width: 26px; height: 6px; background-color: #1b1b1b;
+  background-image: linear-gradient(90deg, var(--conn-link) 6px, transparent 6px);
+  background-size: 16px 2px; background-position: 2px 50%; background-repeat: repeat-x;
+}
+.conn-swatch.conn-via-hand {
+  background-image: linear-gradient(90deg, var(--conn-link) 8px, transparent 8px 11px, var(--conn-link) 11px 13px, transparent 13px);
+}
+.conn-swatch.conn-via-hookup { background-size: 10px 2px; }
+/* The panel of a pick (design spec §6): a Machine GUI panel with a pixel title that slides in from the right, on opacity and
+   transform only. */
 .conn-panel {
-  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px;
   display: flex; flex-direction: column; gap: 12px; position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto;
+  padding: 12px 14px; background: var(--panel); border: 2px solid var(--outline); border-radius: 0; box-shadow: var(--bevel-panel);
+  animation: slide-in-right var(--dur-slow) var(--ease-out);
 }
 .conn-panel-head { display: flex; align-items: center; gap: 8px; }
-.conn-panel-head h3 { flex: 1; min-width: 0; margin: 0; font-size: 1rem; overflow-wrap: anywhere; }
+.conn-panel-head h3 { flex: 1; min-width: 0; margin: 0; font: 600 16px/1.3 var(--font-pixel); overflow-wrap: anywhere; }
 .conn-panel-lines { margin: 0; padding-left: 18px; font-size: 0.9rem; display: flex; flex-direction: column; gap: 4px; }
 .conn-panel-lines li { overflow-wrap: anywhere; }
 @media (max-width: 1100px) {

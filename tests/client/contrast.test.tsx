@@ -3,6 +3,8 @@
 // from the start and stay as the guard for every later edit of a colour.
 
 import { describe, it, expect } from 'vitest';
+import { DYE_HEX } from '../../src/shared/layout/enderio.ts';
+import type { DyeColor } from '../../src/shared/types/layout.ts';
 
 const AA = 4.5;
 
@@ -82,5 +84,47 @@ describe('contrast of the Flow diagram', () => {
     expect(ratio('#aa0000', '#e3b0b0')).toBeLessThan(AA);                             // the panel's error ink on a missing source
     expect(ratio('#aa0000', '#cbbbe0')).toBeLessThan(AA);                             // and on a collapsed supporting line
     expect(ratio('#4a4a4a', '#a8a8a8')).toBeLessThan(AA);                             // the quiet grey on a left over
+  });
+});
+
+// The Connections tab (restyle plan Phase 1 Task 7, design spec §7): the text of each kind of box on its fill and of the face rows on
+// their lighter grey, the links' white labels on their dark halo; and, as graphics (WCAG 1.4.11: 3:1), what moves in each pipe
+// against the casing it moves in. Design spec §7 names the seven dyes too dark for the dark casing, which get the panel grey.
+const GRAPHICS = 3;
+const DARK_CASING = '#1b1b1b';
+const PANEL_CASING = '#c6c6c6';
+const WELL = '#373737';
+const CONN_FILLS: [string, string][] = [['machine', '#c6c6c6'], ['chest', '#f0d870'], ['interface', '#cbbbe0'], ['source', '#d8cfa8'], ['hookup', '#a8a8a8']];
+const CONN_PAIRS: [string, string, string][] = [
+  ...CONN_FILLS.map(([box, fill]): [string, string, string] => [`${box} box text`, '#303030', fill]),
+  // a hookup's and a left over's lines take the box text's colour instead, as in the flow diagram
+  ...CONN_FILLS.filter(([box]) => box !== 'hookup').map(([box, fill]): [string, string, string] => [`${box} box lines`, '#4a4a4a', fill]),
+  ['face row', '#303030', '#e0e0e0'], ['face row link', '#1d3b9a', '#e0e0e0'], ['face row mode', '#4a4a4a', '#e0e0e0'],
+  ['link label on its halo', '#ffffff', DARK_CASING], ['link label on the well', '#ffffff', WELL],
+];
+const DARK_DYES: readonly DyeColor[] = ['black', 'brown', 'blue', 'gray', 'green', 'purple', 'red'];
+/** What carries a link without a channel (styles.css `.conn-via-*`), and what it moves on: by hand there is no casing. */
+const CARRIERS: [string, string, string][] = [
+  ['GT item pipe', '#9ccc65', DARK_CASING], ['GT fluid pipe', '#1e88e5', DARK_CASING], ['Project Red network', '#ff7043', DARK_CASING],
+  ['ME network', '#7e57c2', DARK_CASING], ['EnderIO conduit', '#26c6da', DARK_CASING], ['by hand', '#ffca28', WELL],
+  ['an interface on its machine or a hookup', '#8a92a0', WELL],
+];
+
+describe('contrast of the Connections tab', () => {
+  it.each(CONN_PAIRS)('%s: %s on %s meets AA', (_what, text, background) => {
+    expect(ratio(text, background)).toBeGreaterThanOrEqual(AA);
+  });
+
+  it('shows every channel dye at 3:1 on its casing: the seven too dark for the dark casing on the panel grey', () => {
+    for (const [dye, hex] of Object.entries(DYE_HEX) as [DyeColor, string][]) {
+      const casing = DARK_DYES.includes(dye) ? PANEL_CASING : DARK_CASING;
+      expect(ratio(hex, casing), dye).toBeGreaterThanOrEqual(GRAPHICS);
+    }
+    // and those seven do need it: Red, the line's first channel, would be 2.8:1 on the dark casing
+    for (const dye of DARK_DYES) expect(ratio(DYE_HEX[dye], DARK_CASING), dye).toBeLessThan(GRAPHICS);
+  });
+
+  it.each(CARRIERS)('what carries a link without a channel, %s: %s on %s, reads at 3:1', (_what, colour, under) => {
+    expect(ratio(colour, under)).toBeGreaterThanOrEqual(GRAPHICS);
   });
 });

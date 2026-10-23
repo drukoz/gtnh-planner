@@ -19,8 +19,8 @@ import type { ConnEdge, ConnGraph, ConnPieces, ConnSpan, ConnSpot, ConnVia } fro
 
 /**
  * The colour of what carries a link that has no channel, as the Connections tab draws it (styles.css `.conn-via-*`,
- * the map's LOGISTICS_COLORS; a flow carried by hand in amber; an interface on what it serves and a hookup in the flow
- * diagram's link grey).
+ * the map's LOGISTICS_COLORS; a flow carried by hand in amber; an interface on what it serves and a hookup in the grey
+ * of their thin lines there).
  */
 export const VIA_RGB: Readonly<Record<ConnVia, Rgb>> = Object.freeze({
   gt_pipe: [156, 204, 101], fluid_pipe: [30, 136, 229], routed: [255, 112, 67], ae2: [126, 87, 194],

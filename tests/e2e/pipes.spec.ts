@@ -1,12 +1,14 @@
-// The pipes of the diagrams move and stay connected (restyle plan Phase 1 Task 6, design spec §7 and §7a, review focuses 4 and
-// 5). The Flow part opens a real project of the Mini-GT e2e server and serves a fixture plan in place of the server's, the way
+// The pipes of the diagrams move and stay connected (restyle plan Phase 1 Tasks 6 and 7, design spec §7 and §7a, review focuses 4
+// and 5). The Flow part opens a real project of the Mini-GT e2e server and serves a fixture plan in place of the server's, the way
 // flow-focus.spec.ts does: the contents of every pipe move, every pipe starts and ends on the flange of a port at any zoom, a
-// drag stops them, and a user who asked for reduced motion gets pipes that hold still.
+// drag stops them, and a user who asked for reduced motion gets pipes that hold still. The Connections part lays an EnderIO line
+// out on the uploaded sample world, the way connections.spec.ts does: the contents of its pipes move too.
 
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 import type { Plan, PlanSettings } from '../../src/shared/types/plan.ts';
 import { circuitLv } from './fixtures/plans.ts';
 import { createProject, login, setName } from './helpers.ts';
+import { uploadSampleWorld } from './world-upload.ts';
 
 const LV_CIRCUITS: Partial<PlanSettings> = { target: 't:circuit@0', amount: 30, per: 'min', tier: 1 };
 
@@ -120,4 +122,36 @@ test('reduced motion stills the pipes', async ({ page }) => {
   expect(await count()).toBe('1');                                                     // run once, for a millisecond: still dashes
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   expect(await count(), 'without the preference the pipes flow for ever, so the check above is not vacuous').toBe('infinite');
+});
+
+/** Opens a new project with an EnderIO line laid out on the sample world's base, on its Connections tab (connections.spec.ts). */
+async function openConnections(page: Page): Promise<Locator> {
+  await login(page);
+  await setName(page, 'E2E');
+  const scanId = await uploadSampleWorld(page);
+  const id = await createProject(page, 'Pipes conduits');
+  const ops = [{ op: 'settings', patch: { target: 't:iron_plate@0', amount: 24, per: 'min', logistics: 'enderio' } }, { op: 'world', scanId, baseId: '0:0:0' }];
+  expect((await page.request.post(`/api/projects/${id}/ops`, { data: { ops }, headers: { 'X-Planner-Name': 'E2E' } })).ok()).toBe(true);
+  await expect.poll(async () => (await (await page.request.get(`/api/projects/${id}/layout`)).json()).status, { timeout: 30_000 }).toBe('ok');
+  const view = page.getByTestId('connections');
+  // the layout's warnings can still be coming in above the tabs and move them: click again until the tab shows
+  await expect(async () => {
+    await page.getByRole('tab', { name: 'Connections' }).click();
+    await expect(view).toBeVisible({ timeout: 2_000 });
+  }).toPass();
+  await expect(view).toContainText('2× Basic Bending Machine');
+  return view;
+}
+
+test('connections pipes move', async ({ page }) => {
+  const view = await openConnections(page);
+  const contents = view.locator('.conn-edge-flow').first();
+  const [name, before, after] = await contents.evaluate(async (el) => {
+    const style = getComputedStyle(el);
+    const first = style.strokeDashoffset;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    return [style.animationName, first, getComputedStyle(el).strokeDashoffset];
+  });
+  expect(name).toBe('pipe-flow');
+  expect(after, 'the dashes have moved along the pipe in a quarter of a second').not.toBe(before);
 });

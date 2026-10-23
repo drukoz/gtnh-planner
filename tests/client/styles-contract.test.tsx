@@ -1291,3 +1291,206 @@ describe('the Machine GUI Flow diagram', () => {
     }
   });
 });
+
+// The Connections tab (restyle plan Phase 1 Task 7, design spec §7 and §7a): every link is a pipe like the flow diagram's, its
+// contents in its channel's dye or in the colour of what carries it; a dye too dark for the dark casing gets a panel-grey one (the
+// view sets `--pipe-casing`); what carries nothing is a thin still line. The boxes are Machine GUI blocks that never move under the
+// pointer (connections.spec.ts measures a hovered box), on a well whose grid is the area's own background, so nothing lies over the
+// svg (connections.spec.ts hit-tests empty space). connections-view.test.tsx pins the markup, pipes.spec.ts watches the pipes move.
+
+const CONN_CASING = '.conn-edge-line';
+const CONN_CONTENTS = '.conn-edge-flow';
+const CONN_RIM = '.conn-edge-rim';
+const CONN_HOVER_RIM = '.conn-edge:hover .conn-edge-rim';
+const CONN_PICKED_RIM = '.conn-edge.selected .conn-edge-rim';
+const CONN_DRAGGED = '.connections > svg.dragging .conn-edge-flow';
+const CONN_MANY = ".connections[data-pipes='lit'] .conn-edge:not(.selected) .conn-edge-flow";
+const CONN_HAND_CASING = '.conn-via-hand .conn-edge-line';
+const CONN_HAND_LIT = '.conn-via-hand:hover .conn-edge-line, .conn-via-hand.selected .conn-edge-line';
+const CONN_QUIET = '.conn-via-attached .conn-edge-line, .conn-via-hookup .conn-edge-line';
+const CONN_QUIET_RIM = '.conn-via-attached .conn-edge-rim, .conn-via-hookup .conn-edge-rim';
+const CONN_BOX = '.conn-node > rect, .conn-node > path';
+const CONN_BOX_HOVER = '.conn-node:hover > rect, .conn-node:hover > path';
+const CONN_BOX_PICKED = '.conn-node.selected > rect, .conn-node.selected > path';
+const CONN_DASHED = '.conn-hookup > rect, .conn-hookup > path, .conn-sink > rect, .conn-sink > path';
+/** The rules of this task that colour, edge or round something: none may read an alias of the old palette any more. */
+const CONN_RULES = [
+  '.connections', '.connections > svg', '.connections > svg:focus-visible', CONN_BOX, '.conn-node > path', CONN_BOX_HOVER, CONN_BOX_PICKED,
+  '.conn-node text', '.conn-node .conn-line', '.conn-node .conn-face', '.conn-node .conn-face-mode', CONN_CASING, CONN_CONTENTS,
+  `${CONN_CONTENTS}:not([stroke])`, CONN_QUIET, CONN_RIM, CONN_HOVER_RIM, CONN_PICKED_RIM, '.conn-arrow-head', '.conn-label', '.conn-legend',
+  '.conn-swatch', '.conn-panel', '.conn-panel-head h3',
+];
+
+describe('the Machine GUI Connections tab', () => {
+  it('draws each link as a pipe: a 6px casing, dark or the panel grey the view asks for, with butt ends on the boxes and mitred bends', () => {
+    expectDeclared([
+      ['.conn-edge polyline', 'fill', 'none'], ['.conn-edge polyline', 'stroke-linejoin', 'miter'],
+      [CONN_CASING, 'stroke', 'var(--pipe-casing, #1b1b1b)'], [CONN_CASING, 'stroke-width', '6'], [CONN_CASING, 'stroke-linecap', 'butt'],
+    ]);
+    // the old rules styled the bare polyline, so the contents would have taken the casing's width and the hand's dashes
+    expect(blocks.filter((b) => /\.conn-edge(\.selected|:hover)? polyline(:|\[|,|$)/.test(b.prelude)).map((b) => b.prelude)).toEqual(['.conn-edge polyline']);
+    expect(declarations(ruleBody('.conn-edge polyline')).map(([name]) => name).sort()).toEqual(['fill', 'stroke-linejoin']);
+    // a casing is never dashed but where it carries nothing, so a pipe cannot end in a gap at its box
+    for (const block of blocks.filter((b) => b.prelude.includes(CONN_CASING) && b.inner.includes('dasharray'))) {
+      expect(block.prelude, 'only an interface on its machine or a hookup has a dashed line').toMatch(/^\.conn-via-(attached|hookup) \.conn-edge-line$/);
+    }
+  });
+
+  it('moves the contents 6px on 10px off at the speed of the link, in the channel\'s colour or else the carrier\'s', () => {
+    expect(ruleBody(CONN_CONTENTS)).toContain('stroke-dasharray: 6 10');
+    expect(ruleBody(CONN_CONTENTS)).toContain('animation: pipe-flow var(--pipe-dur, 0.8s) linear infinite');
+    expectDeclared([[CONN_CONTENTS, 'stroke-width', '2.5'], [`${CONN_CONTENTS}:not([stroke])`, 'stroke', 'var(--conn-link)']]);
+    // a channel's dye is the contents' stroke attribute, which a stroke in any rule for every content would cover
+    expect(declared(CONN_CONTENTS, 'stroke')).toBeUndefined();
+    // a seamless loop: one turn of the keyframes moves the dashes by exactly one dash and its gap
+    const cycle = (declared(CONN_CONTENTS, 'stroke-dasharray') ?? '').split(' ').reduce((sum, length) => sum + Number(length), 0);
+    expect(ruleBody('@keyframes pipe-flow')).toContain(`stroke-dashoffset: -${cycle}`);
+  });
+
+  it('draws a flow by hand as a 16px dash-dot with no pipe round it, and what carries nothing as a thin still grey line', () => {
+    expectDeclared([
+      ['.conn-via-hand .conn-edge-flow', 'stroke-dasharray', '8 3 2 3'], [CONN_HAND_CASING, 'stroke', 'transparent'],
+      [CONN_QUIET, 'stroke', 'var(--conn-link)'], [CONN_QUIET, 'stroke-width', '2'],
+      ['.conn-via-attached, .conn-via-hookup', '--conn-link', '#8a92a0'],
+      ['.conn-via-hookup .conn-edge-line', 'stroke-dasharray', '6 4'], ['.conn-via-attached .conn-edge-line', 'stroke-dasharray', '2 3'],
+    ]);
+    // the hand's dash-dot loops as seamlessly as the 6 10 of the others
+    expect((declared('.conn-via-hand .conn-edge-flow', 'stroke-dasharray') ?? '').split(' ').reduce((sum, length) => sum + Number(length), 0)).toBe(16);
+  });
+
+  it('heads each pipe in the colour of what it carries, or of a hookup\'s line', () => {
+    // the marker sits on the contents (on the casing where nothing moves), and its head takes that element's stroke
+    expect(declarations(ruleBody('.conn-arrow-head'))).toEqual([['fill', 'context-stroke']]);
+  });
+
+  it('rims a pointed-at link in white and a picked one in yellow that blinks once, 1.5px round a casing that keeps its width', () => {
+    expectDeclared([
+      [CONN_RIM, 'stroke', 'none'], [CONN_RIM, 'stroke-width', '9'], [CONN_QUIET_RIM, 'stroke-width', '5'],
+      [CONN_HOVER_RIM, 'stroke', '#ffffff'], [CONN_PICKED_RIM, 'stroke', 'var(--accent)'],
+      // ruling R19: a pulse is the rim's, on opacity, never the contents'
+      [CONN_PICKED_RIM, 'animation', 'pipe-pulse 400ms var(--ease-out)'],
+      // a hand's link shows a casing only while it is rimmed, so its amber does not lie on the white or the yellow
+      [CONN_HAND_LIT, 'stroke', '#1b1b1b'],
+      ['.conn-edge.selected .conn-label', 'font-weight', '600'],
+    ]);
+    // 1.5px of rim past each side of a 6px casing and of a 2px line
+    expect((Number(declared(CONN_RIM, 'stroke-width')) - Number(declared(CONN_CASING, 'stroke-width'))) / 2).toBe(1.5);
+    expect((Number(declared(CONN_QUIET_RIM, 'stroke-width')) - Number(declared(CONN_QUIET, 'stroke-width'))) / 2).toBe(1.5);
+    // only the base rules size a casing or its contents: no state widens either (the old rule widened a hovered link to 4px)
+    for (const block of blocks.filter((b) => /\.conn-edge-(line|flow)/.test(b.prelude) && /:hover|\.selected/.test(b.prelude))) {
+      expect(block.inner, block.prelude).not.toMatch(/stroke-width/);
+    }
+    // the picked rim wins over the pointed-at one on a picked link under the pointer (both 0,3,0)
+    expect(position(CONN_PICKED_RIM)).toBeGreaterThan(position(CONN_HOVER_RIM));
+  });
+
+  it('stops the pipes while the picture is dragged, and above 200 links moves only the picked one', () => {
+    expect(declarations(ruleBody(CONN_DRAGGED))).toEqual([['animation-play-state', 'paused']]);
+    expect(declarations(ruleBody(CONN_MANY))).toEqual([['animation', 'none']]);
+  });
+
+  it('sets the picture on a dark well with a 32px grid that is the area\'s own background, and nothing over the svg', () => {
+    expectDeclared([
+      ['.connections', 'background-color', 'var(--well)'],
+      ['.connections', 'background-image', 'linear-gradient(#404040 1px, transparent 1px), linear-gradient(90deg, #404040 1px, transparent 1px)'],
+      ['.connections', 'background-size', '32px 32px'],
+      ['.connections', 'border', '2px solid var(--outline)'], ['.connections', 'border-radius', '0'],
+      ['.connections', 'box-shadow', 'var(--bevel-well)'], ['.connections', 'overflow', 'hidden'],
+      // the box metrics and cuts (32 and 38 characters) are measured for the diagram font
+      ['.connections > svg', 'font-family', 'var(--font-diagram)'], ['.connections > svg', 'transition', 'opacity var(--dur-base)'],
+      ['.connections > svg', 'cursor', 'grab'],
+      // the area clips its outside, so the keyboard's ring is drawn inside the svg
+      ['.connections > svg:focus-visible', 'outline', '3px solid var(--accent)'], ['.connections > svg:focus-visible', 'outline-offset', '-3px'],
+    ]);
+    // a pseudo-element of the area would lie over the svg, and elementFromPoint on empty space must find the svg
+    expect(blocks.filter((b) => /\.connections[^,{]*::?(before|after)/.test(b.prelude)).map((b) => b.prelude)).toEqual([]);
+  });
+
+  it('draws the boxes as Machine GUI blocks that never move or grow under the pointer', () => {
+    expectDeclared([
+      [CONN_BOX, 'fill', 'var(--panel)'], [CONN_BOX, 'stroke', 'var(--outline)'], [CONN_BOX, 'stroke-width', '2'],
+      [CONN_BOX, 'filter', 'drop-shadow(0 2px 0 #000)'], ['.conn-node > path', 'fill', '#e0e0e0'],
+      ['.conn-chest > rect', 'fill', '#f0d870'], ['.conn-chest > rect, .conn-chest > path', 'stroke', '#6b5500'],
+      ['.conn-interface > rect', 'fill', '#cbbbe0'], ['.conn-interface > rect, .conn-interface > path', 'stroke', '#5a3a8a'],
+      ['.conn-source > rect', 'fill', '#d8cfa8'], ['.conn-source > rect, .conn-source > path', 'stroke', '#6b5a20'],
+      ['.conn-hookup > rect, .conn-sink > rect', 'fill', '#a8a8a8'], [CONN_DASHED, 'stroke-dasharray', '4 3'],
+      [CONN_BOX_PICKED, 'stroke', 'var(--accent)'], [CONN_BOX_PICKED, 'stroke-width', '3'],
+    ]);
+    // pointed at, a box only changes the colour of its edge (connections.spec.ts measures it hovered)
+    expect(declarations(ruleBody(CONN_BOX_HOVER))).toEqual([['stroke', '#ffffff']]);
+    // the shadow is the rect's and the face rows', never the text's
+    expect(blocks.filter((b) => b.prelude.includes('conn') && b.inner.includes('drop-shadow')).map((b) => b.prelude)).toEqual([CONN_BOX]);
+    // a CSS transform on a group would replace its transform attribute (a box would jump to the corner), and the view moves at once
+    for (const block of blocks.filter((b) => /\.conn-|\.connections/.test(b.prelude))) expect(block.inner, block.prelude).not.toMatch(/(^|; )transform:/);
+    expect(blocks.filter((b) => /\.conn-pan(?![\w-])/.test(b.prelude)).map((b) => b.prelude)).toEqual([]);
+    // the hover and the pick come after the kinds whose edges they cover
+    expect(position(CONN_BOX_HOVER)).toBeGreaterThan(position('.conn-source > rect, .conn-source > path'));
+    expect(position(CONN_BOX_PICKED)).toBeGreaterThan(position(CONN_BOX_HOVER));
+  });
+
+  it('keeps the box texts at the sizes the model measures, in inks of 4.5:1, and the labels light on the dark well', () => {
+    expectDeclared([
+      ['.conn-node text', 'fill', 'var(--text)'], ['.conn-node text', 'font-size', '11.5px'], ['.conn-node text', 'pointer-events', 'none'],
+      ['.conn-node .conn-title', 'font-size', '13px'], ['.conn-node .conn-title', 'font-weight', '600'],
+      ['.conn-node .conn-line', 'fill', 'var(--text-muted)'], ['.conn-node .conn-face', 'fill', '#1d3b9a'],
+      ['.conn-node .conn-face-mode', 'fill', 'var(--text-muted)'], ['.conn-node .conn-face-mode', 'font-size', '10.5px'],
+      // the grey of a hookup or a left over is darker than a panel: its quieter lines would fall under 4.5:1 there
+      ['.conn-hookup .conn-line, .conn-sink .conn-line', 'fill', 'var(--text)'],
+      ['.conn-label', 'fill', '#ffffff'], ['.conn-label', 'stroke', '#1b1b1b'], ['.conn-label', 'font-size', '11px'],
+      ['.conn-label', 'paint-order', 'stroke'],
+    ]);
+    expect(position('.conn-hookup .conn-line, .conn-sink .conn-line')).toBeGreaterThan(position('.conn-node .conn-line'));
+    // ELK sizes a label at 6.5px a character of the diagram font: no rule gives a label or a box text another font
+    for (const block of blocks.filter((b) => /\.conn-(node|label|title|line|face)/.test(b.prelude))) {
+      expect(block.inner, block.prelude).not.toMatch(/(^|; )font(-family)?:/);
+    }
+  });
+
+  it('draws the legend\'s swatch as a mini pipe on its one empty span, and its text in the quiet ink of the panel', () => {
+    expectDeclared([
+      ['.conn-legend', 'color', 'var(--ink-muted)'],
+      ['.conn-swatch', 'height', '6px'], ['.conn-swatch', 'background-color', '#1b1b1b'],
+      ['.conn-swatch', 'background-image', 'linear-gradient(90deg, var(--conn-link) 6px, transparent 6px)'],
+      ['.conn-swatch', 'background-size', '16px 2px'],
+    ]);
+    // a pseudo-element would need content, and the legend reads one span per entry
+    expect(blocks.filter((b) => /\.conn-swatch[^,{]*::?(before|after)/.test(b.prelude)).map((b) => b.prelude)).toEqual([]);
+  });
+
+  it('slides the side panel in as a Machine GUI panel, and never animates the grid or the panel\'s width', () => {
+    expectDeclared([
+      ['.conn-panel', 'background', 'var(--panel)'], ['.conn-panel', 'border', '2px solid var(--outline)'], ['.conn-panel', 'border-radius', '0'],
+      ['.conn-panel', 'box-shadow', 'var(--bevel-panel)'], ['.conn-panel', 'animation', 'slide-in-right var(--dur-slow) var(--ease-out)'],
+      ['.conn-panel-head h3', 'font', '600 16px/1.3 var(--font-pixel)'],
+      // as for the flow diagram (ruling R17): the slide flashes no horizontal scroll bar, and the Fit button keeps its whole ring
+      ['.conn-view', 'overflow-x', 'clip'], ['.conn-view', 'overflow-y', 'clip'], ['.conn-view', 'overflow-clip-margin', '4px'],
+    ]);
+    expect(inkGroup('.tab-panel').prelude.split(', ')).toContain('.conn-panel');
+    // the grid column changes at once (connections.spec.ts reads the narrowed svg straight away)
+    for (const block of blocks.filter((b) => b.prelude === '.conn-view' || b.prelude === '.conn-view.has-panel')) {
+      expect(block.inner, block.prelude).not.toMatch(/transition|animation/);
+    }
+    expect(ruleBody('.conn-panel')).not.toMatch(/transition|(^|; )width/);
+  });
+
+  it('keeps the carriers\' colours of the 3D view and the map, and has dropped the halo of the old channel lines', () => {
+    expectDeclared([
+      ['.conn-via-gt_pipe', '--conn-link', '#9ccc65'], ['.conn-via-fluid_pipe', '--conn-link', '#1e88e5'],
+      ['.conn-via-routed', '--conn-link', '#ff7043'], ['.conn-via-ae2', '--conn-link', '#7e57c2'],
+      ['.conn-via-item_conduit, .conn-via-fluid_conduit', '--conn-link', '#26c6da'], ['.conn-via-hand', '--conn-link', '#ffca28'],
+    ]);
+    expect(css).not.toContain('--conn-halo');
+  });
+
+  it('reads no alias of the old palette and rounds no corner in the Connections rules', () => {
+    for (const selector of CONN_RULES) {
+      expect(ruleBody(selector), selector).not.toMatch(OLD_ALIASES);
+      expect(declared(selector, 'border-radius') ?? '0', selector).toBe('0');
+    }
+    // nor does any other rule of the tab: they are the flow diagram's tokens no more either
+    for (const block of blocks.filter((b) => /\.conn-|\.connections/.test(b.prelude))) {
+      expect(block.inner, block.prelude).not.toMatch(OLD_ALIASES);
+      expect(block.inner, block.prelude).not.toMatch(/var\(--flow-/);
+    }
+  });
+});
