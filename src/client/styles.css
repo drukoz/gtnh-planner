@@ -507,7 +507,8 @@ svg .item-icon::after { content: none; }
   background: var(--panel); border: 2px solid var(--outline); border-radius: 0; box-shadow: var(--bevel-panel);
 }
 /* A section that folds. Its height animates where the browser can (`interpolate-size` lets `block-size` go between 0 and auto, the
-   transition on `content-visibility` keeps the content painted while it closes), and snaps where it cannot: a browser that does
+   transition on `content-visibility` keeps the content painted while it closes; an allowed exception to "transform and opacity
+   only", ruling R16: design spec §7a asks for this height animation), and snaps where it cannot: a browser that does
    not know `::details-content` drops that whole rule. The clip is vertical only, with a margin for the keyboard focus ring of
    what sits at the edges of the content. The content is a block formatting context (`flow-root`), so the gap under the summary,
    which is the first child's margin, stays inside the clipped box and moves with it: out in the open, a margin would collapse

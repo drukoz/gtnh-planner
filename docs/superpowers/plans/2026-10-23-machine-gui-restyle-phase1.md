@@ -845,3 +845,86 @@ Contract: none of the five files contains `var(--surface`, `var(--border`, `var(
   filter first, then lower `PIPE_ANIMATION_LIMIT`.
 - [ ] **Step 5:** Report results to the user with the after-screenshots; hand off to
   superpowers:finishing-a-development-branch.
+
+---
+
+## As built
+
+The rulings made while this plan was executed (pre-flight, task reviews and the final whole-branch review; all kept
+in the SDD ledger, which is not committed) changed or read the steps above. Where a ruling supersedes a step, the code
+and the spec follow the ruling; the task text is left as it was planned. `file:line` anchors in the tasks are at
+`b762b6f`. One line per ruling, in order:
+
+- **R1** — Task 3 put the tab panel's `fade-in` in Task 1's `.tab-panel` rule: one rule per selector, as the contract
+  reads the first rule for a selector.
+- **R2** — Task 1's contrast cases pass at their RED step; they stay as guards on the spec's colour values.
+- **R3** — The selected slot's 0.9 → 1 scale-in is deferred to Phase 2 (a box-shadow frame does not scale cheaply);
+  the yellow frame shows at once.
+- **R4** — `.flow-issues` gets the banners' `rise-in` entrance, as spec §7a lists the Flow issues with the banners.
+- **R5** — Task 10 (verification, no code) ran as a verification lens whose evidence was checked, not diff-reviewed.
+- **R6** — The skill's helper scripts were refused by the isolated session's git guard; briefs and review packages
+  were made with equivalent plain commands.
+- **R7** — Models: sonnet implementers for Tasks 1–5, 8 and 9, opus for 6 and 7; sonnet task reviews, opus final review.
+- **R8** — Task 9 also deleted the surface groups' dead `--muted` declarations once nothing read `var(--muted)`.
+- **R9** — The 14 px base is on `body`, not `:root` (which would shrink every rem by 12.5 %); the root stays 16 px.
+- **R10** — `h1`/`h2` stay 1.6rem/1.2rem as page headings; panel titles are an explicit 16 px Pixelify.
+- **R11** — A summary's text stays white on the button face (5.3:1), not `--ink-title` (1.9:1 there).
+- **R12** — Borderless focusables (`a`, `button.link`) take their ring colour from a per-surface `--ink-focus`
+  (`#ffff55` on the stone and dark boxes, `#1b1b1b` on panels): yellow on a panel is 1.6:1.
+- **R13** — `--ink-focus` also rings summaries, checkboxes and radios, which have no reliably dark edge either.
+- **R14** — The contract's "no global summary rule" guard skipped `:focus-visible` rules so R13's ring rule passed
+  (replaced by R40).
+- **R15** — Escape closes one layer of the drawer per press: an open search list first, and a key something inside
+  already handled (`defaultPrevented`) not at all.
+- **R16** — The settings `<details>` fold animating `block-size` is an allowed exception to "transform and opacity
+  only" (spec §7a asks for an animated height); it is instant where unsupported.
+- **R17** — `.flow` clips both axes with `overflow-clip-margin: 4px`: an x-only clip cut the Zoom in button's focus
+  ring, and Chromium honours the margin only when both axes clip.
+- **R18** — Flow issue rows are `#990000`/`#6a4000` and a left over's text `#303030`, to keep box text at 4.5:1.
+- **R19** — A newly lit pipe's pulse is a one-time opacity blink of its accent rim (`pipe-pulse`, 1 → 0.15 → 1,
+  400 ms): a brightness pulse cannot show on the white lit contents.
+- **R20** — The missing-source arrow head was `#ff5555`, lighter than its `#aa0000` casing (replaced by R34).
+- **R21** — `dragging` is reset on every pointer press, release and cancel, so a second pointer cannot leave the
+  pipes stopped; the pipes spec's comment states the flange acceptance it checks.
+- **R22** — Connections rim: a `polyline.conn-edge-rim` under the casing (none at rest, white on hover, accent with
+  one blink when picked), as recolouring the casing would hide yellow or white contents.
+- **R23** — Connections hookup and left-over text is `#303030` (`#4a4a4a` is 3.7:1 on their grey); `.conn-view`
+  clips both axes as R17.
+- **R24** — Pixelify draws lowercase fi/fl/ff ligatures as a wrong glyph ("Does not At"): ligatures off, once
+  (first on `:root`; the mechanism is R24a).
+- **R24a** — The `font` shorthand resets `font-feature-settings`, so the rule is
+  `* { font-feature-settings: "liga" 0, "clig" 0 !important }`.
+- **R25** — Map pin and note rows are flat Inter rows with a dark picked row, not button faces (a note's muted
+  coordinates would be 1.7:1 on a button's grey).
+- **R26** — The NEI tooltip's mod-name line does not apply: MapTooltip's lines carry no mod.
+- **R27** — Tooltips fade in and rise 2 px (`tip-in`) instead of `rise-in`, which drops 4 px from above.
+- **R28** — The ligature rule is two rules, `*` and `::file-selector-button`: the build's minifier dropped the
+  pseudo-element half of the combined list.
+- **R29** — The 3D canvas has its own class, `.view3d-scene`: the Map's guard forbids a rule on the `canvas` element.
+- **R30** — Sliders join the `--ink-focus` ring selector (a yellow ring on a light panel is 1.6:1).
+- **R31** — WCAG 2.2.2: a "Pause pipes" / "Play pipes" button (`aria-pressed`) after Fit in the Flow and Connections
+  toolbars, one setting per browser (`gtnh-planner:pipes-paused`), applied as `pipes-paused` on the Flow svg and
+  `data-pipes="paused"` on `.connections`; the live dot breathes twice and the reconnect dot blinks three times, so
+  both stop within 5 s.
+- **R32** — `.conn-arrow-head` falls back to `var(--item)` before `context-stroke`, which WebKit lacks (it drew black
+  heads); as a base rule plus an `@supports (fill: context-stroke)` rule, as the minifier keeps only the last `fill`
+  of one rule.
+- **R33** — File inputs join the `--ink-focus` ring selector.
+- **R34** — The missing-source pipe casing is `#ff5555` (3.79:1 on the well; `#aa0000` was 1.54:1 with nothing moving
+  in it) and its arrow head `#ffffff`.
+- **R35** — Sentence-length text is never Pixelify: the plan banner's error is Inter; headings stay pixel.
+- **R36** — The narrow-screen drawer is a layer of its own: the focus moves to its "Close settings" button on open,
+  the page behind is `inert` (head, banners, views and top bar), every way out closes it through one function that
+  gives the focus back to the Settings button, it closes when the window grows past 900 px, and it slides out with
+  `--dur-exit`/`--ease-in`.
+- **R37** — A settings or disclosure summary whose title wraps grows (min-height 36 px, line-height 1.25, 4 px above
+  and below) instead of spilling over its face.
+- **R38** — `.projector-panel { margin-top: 14px }` is gone: it stacked on the column's 12 px gap (26 px).
+- **R39** — Docs as built: the README (placeholders sit in slots, new boxes are grey), the spec amended where a
+  ruling changed the design (status approved, Phase 1 built), and this section.
+- **R40** — Tests: the summary guard cuts selector lists at top-level commas only (R14's exemption is gone); the
+  pipe-motion e2e polls one attached element for a changed dash offset instead of sleeping 250 ms.
+
+Also from the final review (I1, no ruling number): forced colours. A Windows contrast theme drops backgrounds and
+shadows, which hid the custom ticks, radios, carets, slider tracks and progress fills; one
+`@media (forced-colors: active)` block at the end of the stylesheet redraws them in system colours (spec §6).
