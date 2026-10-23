@@ -60,7 +60,7 @@ h2 { font-size: 1.2rem; margin: 0 0 var(--gap); }
  * hold inherits it; a dark box (chat, screen, well) sets the light ink of the same table instead, in the group below. Both
  * groups come before .muted and .error, so those two still win on an element that is both (.banner.error).
  */
-.card, .modal, .settings-panel, .flow-panel, .conn-panel, .tab-panel, .note, .note-add,
+.card, .modal, .settings-section, .flow-panel, .conn-panel, .tab-panel, .note, .note-add,
 .flow-issues, .flow-infeasible {
   --ink: #303030; --ink-muted: #4a4a4a; --ink-title: #404040; --ink-link: #1a3fa0;
   --ink-error: #aa0000; --ink-ok: #1e5a1e; --ink-warn: #6a4000; --ink-focus: #1b1b1b; --muted: #4a4a4a;
@@ -68,7 +68,7 @@ h2 { font-size: 1.2rem; margin: 0 0 var(--gap); }
 }
 /* Ink on a dark box (a chat box, a screen, a chip): light text on near black. It sets the focus ink too, so a dark box inside a
    panel does not take the panel's dark ring. */
-.banner, .plan-banner, .what-changed, .delete-confirm, .connection, .badge, .chip {
+.banner, .plan-banner, .what-changed, .delete-confirm, .connection, .badge, .chip, .avoid-chip {
   --ink: #ffffff; --ink-muted: #aaaaaa; --ink-title: #ffff55; --ink-link: #ffff55;
   --ink-error: #ff5555; --ink-ok: #55ff55; --ink-warn: #ffaa00; --ink-focus: #ffff55; --muted: #aaaaaa;
   color: var(--ink);
@@ -447,26 +447,60 @@ button.banner-chip { display: inline-flex; align-items: center; gap: 6px; min-he
 
 .project-body { display: grid; grid-template-columns: minmax(260px, 330px) minmax(0, 1fr); gap: 20px; align-items: start; }
 .project-views { min-width: 0; }
+
+/*
+ * The settings column (design spec §6): a transparent stack on the stone, every section a panel of its own. It sticks to the top
+ * of the window and scrolls inside itself when the sections are taller than it. Below 900 px it is a drawer instead (the last
+ * block of this file), opened by the Settings button of the project head; wider, that button is not drawn.
+ */
 .settings-panel {
   position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto;
-  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 12px;
 }
-.settings { display: flex; flex-direction: column; gap: 14px; }
-.settings-section { display: flex; flex-direction: column; gap: 8px; padding-bottom: 14px; border-bottom: 1px solid var(--border); }
-.settings-section:last-child { border-bottom: none; padding-bottom: 0; }
-details.settings-section { display: block; }
+.settings-toggle { display: none; }
+.settings { display: flex; flex-direction: column; gap: 12px; }
+.settings-section {
+  display: flex; flex-direction: column; gap: 8px; padding: 12px;
+  background: var(--panel); border: 2px solid var(--outline); border-radius: 0; box-shadow: var(--bevel-panel);
+}
+/* A section that folds. Its height animates where the browser can (`interpolate-size` lets `block-size` go between 0 and auto, the
+   transition on `content-visibility` keeps the content painted while it closes), and snaps where it cannot: a browser that does
+   not know `::details-content` drops that whole rule. The clip is vertical only, with a margin for the keyboard focus ring of
+   what sits at the edges of the content. The content is a block formatting context (`flow-root`), so the gap under the summary,
+   which is the first child's margin, stays inside the clipped box and moves with it: out in the open, a margin would collapse
+   through the box and jump when the content is hidden at the end of the closing. */
+details.settings-section { display: block; interpolate-size: allow-keywords; }
+details.settings-section::details-content {
+  display: flow-root; block-size: 0; overflow-y: clip; overflow-clip-margin: 4px;
+  transition: block-size var(--dur-base) var(--ease-out), content-visibility var(--dur-base) var(--ease-out) allow-discrete;
+}
+details.settings-section[open]::details-content { block-size: auto; }
 details.settings-section > :not(summary) { margin-top: 8px; }
-details.settings-section > summary h3 { display: inline; margin-right: 8px; }
-.settings-section h3, .settings-title { font-size: 0.95rem; font-weight: 600; margin: 0; color: var(--text); }
-.settings-section h4 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 6px 0 4px; }
+/* The summary is a button (the controls above), so its text keeps the button's white: the title ink is dark and would fail on the
+   button face. Its count is a green readout, since the muted grey of a `.muted` is as faint on the button face. The readout stays on
+   one line; it is the title that gives way and wraps (the bar is 36px, and two lines of the title fit in it). */
+details.settings-section > summary { font-size: 16px; }
+details.settings-section > summary > h3 { min-width: 0; overflow-wrap: anywhere; }
+details.settings-section > summary > .muted {
+  flex: none; margin-left: auto; padding: 2px 6px; white-space: nowrap; background: var(--screen); color: var(--screen-text);
+  font: 13px/1.5 var(--font-pixel); text-shadow: none;
+}
+/* A title, whichever element carries it. The h3 stays a bare h3 (the settings tests match its markup), so the look is on the selector. */
+.settings-section h3, .settings-title, .settings .field > span.settings-title, .choice > legend.settings-title {
+  font: 600 16px/1.3 var(--font-pixel); color: var(--ink-title);
+}
+.settings-section h3 { margin: 0; }
+.settings-section h4 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-muted); margin: 6px 0 4px; }
 .settings-section p { margin: 0; }
-.settings .field > span.settings-title { color: var(--text); font-size: 0.95rem; }
-.field-label { font-size: 0.9rem; color: var(--muted); }
+.field-label { font-size: 0.9rem; color: var(--ink-muted); }
 .field-error { margin: 0; font-size: 0.85rem; }
-.choice { border: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.choice > legend { padding: 0; margin-bottom: 4px; font-size: 0.9rem; color: var(--muted); }
-.choice > legend.settings-title { color: var(--text); font-size: 0.95rem; }
-.check { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.choice { border: none; margin: 0; padding: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; }
+.choice > legend { padding: 0; margin-bottom: 4px; font-size: 0.9rem; color: var(--ink-muted); }
+/* A label that wraps keeps its tick beside the first line; the 2px centre the 16px well on that 20px line. Only a tick has the
+   margin (the 3D tab's layer slider sits in a `.check` too), and `:where()` keeps it from outranking a rule that tunes a tick of
+   its own (the Flow panel's options). */
+.check { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; }
+.check > :where(input[type=checkbox], input[type=radio]) { margin-top: 2px; }
 .amount-input { width: 9em; }
 .settings-target { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .settings-target-name { flex: 1; min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
@@ -484,19 +518,21 @@ details.settings-section > summary h3 { display: inline; margin-right: 8px; }
 
 .dim-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .dim-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 8px; align-items: center; }
-.dim-row select { padding: 2px 26px 2px 6px; }
+.dim-row select { min-height: 28px; padding: 2px 26px 2px 6px; }
 .dim-name { overflow-wrap: anywhere; }
+/* A dimension's lamp: a square with a black edge, dark while the group cannot reach the dimension and lit green when it can. */
 .dim-name::before {
-  content: ''; display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 50%; background: var(--border);
+  content: ''; display: inline-block; box-sizing: border-box; width: 10px; height: 10px; margin-right: 6px;
+  background: #6b6b6b; border: 1px solid #000;
 }
-.dim-row.reachable .dim-name::before { background: var(--ok); }
+.dim-row.reachable .dim-name::before { background: #55ff55; }
 .dim-label { grid-column: 1 / -1; font-size: 0.8rem; }
 
 .cost-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
-.cost-table th { text-align: left; font-weight: 500; color: var(--muted); padding: 2px 4px; }
+.cost-table th { text-align: left; font-weight: 500; color: var(--ink-muted); padding: 2px 4px; }
 .cost-table td { padding: 3px 4px; vertical-align: middle; }
 .cost-name { display: inline-flex; align-items: center; gap: 6px; overflow-wrap: anywhere; }
-.cost-input { width: 6em; padding: 3px 6px; }
+.cost-input { width: 6em; min-height: 28px; padding: 3px 6px; }
 .cost-add, .owned-machines, .owned-add { display: flex; flex-direction: column; gap: 8px; }
 .cost-add .row, .owned-add .row { align-items: flex-end; }
 .cost-field input { width: 7em; }
@@ -506,15 +542,14 @@ details.settings-section > summary h3 { display: inline; margin-right: 8px; }
 .key-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .avoid-picker { display: flex; flex-direction: column; gap: 8px; }
 .avoid-chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+/* An avoided material is a readout in amber on a screen (a dark box, so it is in the group of the light ink), with a small square
+   button to take it off. The button has no background of its own: it keeps the face and the hover light of every button. */
 .avoid-chip {
-  display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 2px 4px 2px 8px;
-  background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: 999px; font-size: 0.85rem;
+  display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 2px 2px 2px 8px;
+  background: var(--screen); color: #ffaa00; font: 13px/1.5 var(--font-pixel);
 }
 .avoid-chip-name { min-width: 0; overflow-wrap: anywhere; }
-button.avoid-chip-remove {
-  padding: 0; width: 24px; height: 24px; flex-shrink: 0; border: none; border-radius: 50%; background: transparent; line-height: 1;
-}
-button.avoid-chip-remove:hover:not(:disabled) { background: var(--surface-2); }
+button.avoid-chip-remove { width: 24px; height: 24px; min-height: 0; padding: 0; flex-shrink: 0; text-shadow: none; }
 .avoid-badge { background: var(--warn-bg); border-color: var(--warn-border); }
 
 /*
@@ -793,9 +828,22 @@ span.mat-toggle { display: inline-block; }
   .flow-panel { position: static; max-height: none; }
 }
 
+/* The settings drawer (design spec §7a). The page is one column and the settings column leaves it: it waits off the left edge, slides in
+   over a dimmed page when the Settings button opens it, and slides out again. Hidden, it is also `visibility: hidden`, so the
+   keyboard cannot reach what is not on screen; that is set after the slide when it closes, at once when it opens. Both layers are
+   under the modal (z-index 100). The backdrop is drawn only here: on a wide window, a drawer left open dims nothing. */
 @media (max-width: 900px) {
   .project-body { grid-template-columns: 1fr; }
-  .settings-panel { position: static; max-height: none; }
+  .settings-toggle { display: inline-flex; align-items: center; }
+  .settings-panel {
+    position: fixed; inset: 0 auto 0 0; width: min(340px, 88vw); max-height: none; overflow: auto; padding: 12px;
+    background: var(--page); z-index: 60; transform: translateX(-105%); visibility: hidden;
+    transition: transform var(--dur-slow) var(--ease-out), visibility 0s var(--dur-slow);
+  }
+  .settings-open .settings-panel { transform: none; visibility: visible; transition: transform var(--dur-slow) var(--ease-out); }
+  .drawer-backdrop {
+    position: fixed; inset: 0; z-index: 50; background: rgba(0, 0, 0, 0.6); animation: fade-in var(--dur-base) var(--ease-out);
+  }
 }
 
 @media (max-width: 640px) {

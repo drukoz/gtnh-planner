@@ -2,7 +2,8 @@
 // needs unlocked, the settings panel with the in-game projector panel under it (§3.13) and, beside them, the project
 // tabs. The tab follows the URL hash, so links elsewhere
 // (a build step's map pin sets `#map`) switch it too. Anyone can delete the project; once it is deleted, here or
-// elsewhere, the page goes back to the project list, which says so (§11.24).
+// elsewhere, the page goes back to the project list, which says so (§11.24). Below 900 px the settings panel is a drawer
+// that the Settings button in the head slides in over a dimmed page (design spec §7a).
 
 import { useEffect, useRef, useState, type ReactElement } from 'react';
 import type { StuffKey } from '../../shared/keys.ts';
@@ -13,6 +14,7 @@ import type { ProjectOp } from '../../shared/types/project.ts';
 import { apiGet, messageOf } from '../api/client.ts';
 import { DeleteProject } from '../components/DeleteProject.tsx';
 import { ItemIcon } from '../components/ItemIcon.tsx';
+import { SettingsToggle } from '../components/SettingsToggle.tsx';
 import { formatPercent } from '../format.ts';
 import { leaveDeletedProject } from '../state/deleted-notice.ts';
 import { setFlowFocus, showInFlow } from '../state/flow-focus.ts';
@@ -227,6 +229,20 @@ export function ProjectPage(props: { id: string }): ReactElement {
   }, [deleted]);
   // What the flow diagram lights belongs to this project: leaving it (for another project or another page) clears it.
   useEffect(() => () => setFlowFocus(null), [props.id]);
+  // The settings column is a drawer below 900 px. While it is open, Escape closes it and gives the focus back to its button. These
+  // hooks sit above the early return below; the listener is removed when the drawer closes, and between StrictMode's two runs.
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsToggle = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const closeOnEscape = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return;
+      setSettingsOpen(false);
+      settingsToggle.current?.focus();
+    };
+    document.addEventListener('keydown', closeOnEscape);
+    return () => document.removeEventListener('keydown', closeOnEscape);
+  }, [settingsOpen]);
 
   if (project === null) {
     return (
@@ -240,14 +256,15 @@ export function ProjectPage(props: { id: string }): ReactElement {
   return (
     <main className="page project-page">
       <div className="project-head">
+        <SettingsToggle open={settingsOpen} onToggle={() => setSettingsOpen((open) => !open)} ref={settingsToggle} />
         <ProjectName name={project.name} onRename={(name) => send([{ op: 'rename', name }])} />
         <span className={view.connected ? 'connection live' : 'connection'}>{view.connected ? 'live' : 'reconnecting…'}</span>
         <DeleteProject id={project.id} name={project.name} label="Delete project" onDeleted={() => view.markDeleted(me)} />
       </div>
       {view.error !== null && <p className="banner error" role="alert">{view.error}</p>}
       <PlanBanner plan={plan} planError={view.planError} planLoading={view.planLoading} settings={project.settings} send={send} />
-      <div className="project-body">
-        <aside className="settings-panel" aria-label="Project settings">
+      <div className={settingsOpen ? 'project-body settings-open' : 'project-body'}>
+        <aside className="settings-panel" id="project-settings" aria-label="Project settings">
           {pack.error !== null && <p className="error small">{`Could not load the pack: ${pack.error}`}</p>}
           <SettingsPanel project={project} plan={plan} send={send} me={me} info={pack.info} />
           {deleted === null && <ProjectorPanel projectId={project.id} />}
@@ -276,6 +293,8 @@ export function ProjectPage(props: { id: string }): ReactElement {
           </section>
         </div>
       </div>
+      {/* After the body, not in its grid: the dimmed page behind the drawer is not a cell. It only draws below 900 px. */}
+      {settingsOpen && <div className="drawer-backdrop" onClick={() => setSettingsOpen(false)} />}
     </main>
   );
 }

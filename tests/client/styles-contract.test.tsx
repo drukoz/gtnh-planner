@@ -690,3 +690,181 @@ describe('the Machine GUI chrome', () => {
     for (const selector of CHROME_RULES) expect(ruleBody(selector), selector).not.toMatch(OLD_ALIASES);
   });
 });
+
+// The settings column and the narrow-screen drawer (restyle plan Phase 1 Task 4, design spec §6 and §7a). The column is a stack of
+// panels on the stone, one per section, with pixel titles; below 900 px it is a drawer that slides in from the left over a dimmed
+// page, opened by the Settings button of the project head. drawer.spec.ts drives it in a browser; these cases pin the values of the
+// brief, and the order the cascade needs.
+
+const NARROW = '@media (max-width: 900px)';
+/** The title of a section, whichever element carries it: its h3, the Tier label's span and the Logistics legend. */
+const TITLES = '.settings-section h3, .settings-title, .settings .field > span.settings-title, .choice > legend.settings-title';
+const SETTINGS_SUMMARY = 'details.settings-section > summary';
+const SECTION_CONTENT = 'details.settings-section::details-content';
+const LED = '.dim-name::before';
+
+/** The declarations of the first rule for `selector` inside the `@media` block whose prelude is `query`; throws when there is none. */
+function inQuery(query: string, selector: string): [string, string][] {
+  const wanted = selector.replace(/\s+/g, ' ').trim();
+  for (const media of blocks.filter((b) => b.prelude === query)) {
+    const rule = scan(media.inner, true, []).find((b) => b.prelude === wanted);
+    if (rule !== undefined) return declarations(rule.inner);
+  }
+  throw new Error(`styles.css has no rule for "${selector}" inside "${query}"`);
+}
+
+/** The value `property` has in the rule for `selector` inside the `query` block (the last such declaration), or undefined. */
+function declaredIn(query: string, selector: string, property: string): string | undefined {
+  return inQuery(query, selector).filter(([name]) => name === property).map(([, value]) => value).pop();
+}
+
+/** True when a rule for exactly `selector` sits outside every `@media` block. */
+function hasTopLevelRule(selector: string): boolean {
+  return blocks.some((b) => !b.nested && b.prelude === selector);
+}
+
+/** The settings rules whose colours and edges this task moved to the tokens: none may read an alias of the old palette any more. */
+const SETTINGS_RULES = [
+  '.settings-panel', '.settings', '.settings-section', TITLES, '.settings-section h3', '.settings-section h4', '.choice',
+  '.choice > legend', '.check', '.field-label', LED, '.dim-row.reachable .dim-name::before', '.cost-table th', '.avoid-chip',
+  'button.avoid-chip-remove',
+];
+
+describe('the Machine GUI settings column', () => {
+  it('stacks the sections as panels on the stone, and takes the panel ink with them', () => {
+    // the column itself is transparent: no surface, no edge, no padding of its own
+    const column = declarations(ruleBody('.settings-panel')).map(([name]) => name);
+    for (const surface of ['background', 'border', 'border-radius', 'box-shadow', 'padding']) expect(column, `.settings-panel { ${surface} }`).not.toContain(surface);
+    expectDeclared([
+      ['.settings-panel', 'position', 'sticky'], ['.settings-panel', 'top', '12px'], ['.settings-panel', 'max-height', 'calc(100vh - 24px)'],
+      ['.settings-panel', 'overflow-y', 'auto'], ['.settings-panel', 'display', 'flex'], ['.settings-panel', 'flex-direction', 'column'],
+      ['.settings-panel', 'gap', '12px'],
+      ['.settings-section', 'background', 'var(--panel)'], ['.settings-section', 'border', '2px solid var(--outline)'],
+      ['.settings-section', 'border-radius', '0'], ['.settings-section', 'box-shadow', 'var(--bevel-panel)'],
+      ['.settings-section', 'padding', '12px'],
+    ]);
+    // each section is a panel, so the lines between sections are gone
+    expect(declared('.settings-section', 'border-bottom')).toBeUndefined();
+    expect(position('.settings-section:last-child')).toBe(-1);
+    // the panel ink moved with the surface: the sections have it, and the column (now the stone) no longer does
+    const panels = inkGroup('.tab-panel').prelude.split(', ');
+    expect(panels).toContain('.settings-section');
+    expect(panels).not.toContain('.settings-panel');
+  });
+
+  it('sets a title in the pixel font and the title ink, on whichever element carries it', () => {
+    expectDeclared([
+      [TITLES, 'font', '600 16px/1.3 var(--font-pixel)'], [TITLES, 'color', 'var(--ink-title)'],
+      ['.settings-section h3', 'margin', '0'],
+    ]);
+    // only the h3 has a margin to take away: the Logistics legend keeps the 4px under it
+    expect(declared(TITLES, 'margin')).toBeUndefined();
+    // the micro headings of a section stay Inter (the pixel font is never below 13px)
+    expect(declared('.settings-section h4', 'font-family')).toBeUndefined();
+    expect(declared('.settings-section h4', 'font-size')).toBe('0.75rem');
+  });
+
+  it('keeps the summary text white on its button face, and shows the count as a green readout', () => {
+    // ruling R11: the title ink (#404040) on the button face (#6b6b6b) measures 1.9:1, the white 5.3:1
+    expect(declared(SUMMARY, 'color')).toBe('#ffffff');
+    expect(declared(SETTINGS_SUMMARY, 'color')).toBeUndefined();
+    expectDeclared([
+      [SETTINGS_SUMMARY, 'font-size', '16px'],
+      [`${SETTINGS_SUMMARY} > .muted`, 'background', 'var(--screen)'], [`${SETTINGS_SUMMARY} > .muted`, 'color', 'var(--screen-text)'],
+      [`${SETTINGS_SUMMARY} > .muted`, 'font', '13px/1.5 var(--font-pixel)'], [`${SETTINGS_SUMMARY} > .muted`, 'margin-left', 'auto'],
+    ]);
+    // the readout has the specificity of the rule that gives the summary's `.muted` the button's own text colour, so it must come after
+    expect(position(`${SETTINGS_SUMMARY} > .muted`)).toBeGreaterThan(position('details.settings-section > summary .muted'));
+    // the title sits in a flex summary, which spaces it with `gap`: the old inline title with a margin is gone
+    expect(blocks.filter((b) => b.prelude === 'details.settings-section > summary h3')).toHaveLength(1);
+  });
+
+  it('animates the height of a section that opens, and snaps where the browser cannot', () => {
+    expectDeclared([
+      ['details.settings-section', 'interpolate-size', 'allow-keywords'],
+      [SECTION_CONTENT, 'block-size', '0'], [SECTION_CONTENT, 'overflow-y', 'clip'],
+      ['details.settings-section[open]::details-content', 'block-size', 'auto'],
+    ]);
+    const transition = declared(SECTION_CONTENT, 'transition') ?? '';
+    expect(transition).toContain('block-size var(--dur-base) var(--ease-out)');
+    expect(transition).toContain('content-visibility var(--dur-base) var(--ease-out) allow-discrete');
+    // the gap under the summary is the first child's margin, kept inside the clipped box by a block formatting context: out in the
+    // open it would collapse through the box and jump when the content is hidden. Not padding: that of a fieldset goes under its legend.
+    expect(declared(SECTION_CONTENT, 'display')).toBe('flow-root');
+    expect(declared('details.settings-section > :not(summary)', 'margin-top')).toBe('8px');
+    expect(declared('details.settings-section > :not(summary)', 'padding-top')).toBeUndefined();
+  });
+
+  it('lines a tick up with the first line of a label that wraps, and lights a dimension with a square LED', () => {
+    expectDeclared([
+      ['.check', 'align-items', 'flex-start'], ['.choice', 'align-items', 'flex-start'],
+      // the 16px well beside a 20px line of text; a tick only (the layer slider of the 3D tab is in a `.check` too)
+      ['.check > :where(input[type=checkbox], input[type=radio])', 'margin-top', '2px'],
+      [LED, 'content', "''"], [LED, 'border', '1px solid #000'], [LED, 'background', '#6b6b6b'],
+      ['.dim-row.reachable .dim-name::before', 'background', '#55ff55'],
+    ]);
+    expect(position('.check > input'), 'a margin on every input of a check label, the 3D layer slider\'s included').toBe(-1);
+    expect(ruleBody(LED), 'a square, not a round dot').not.toContain('radius');
+  });
+
+  it('draws an avoided material as an amber readout with a square remove button', () => {
+    expectDeclared([
+      ['.avoid-chip', 'background', 'var(--screen)'], ['.avoid-chip', 'color', '#ffaa00'], ['.avoid-chip', 'font', '13px/1.5 var(--font-pixel)'],
+      ['button.avoid-chip-remove', 'width', '24px'], ['button.avoid-chip-remove', 'height', '24px'],
+      ['button.avoid-chip-remove', 'min-height', '0'], ['button.avoid-chip-remove', 'padding', '0'],
+    ]);
+    // a rectangle and a square: the pills are gone
+    expect(ruleBody('.avoid-chip')).not.toContain('radius');
+    expect(ruleBody('button.avoid-chip-remove')).not.toContain('radius');
+    // no background of its own, so the button keeps the face and the hover of every button (a transparent one hid both)
+    expect(declared('button.avoid-chip-remove', 'background')).toBeUndefined();
+    expect(position('button.avoid-chip-remove:hover:not(:disabled)'), 'the old hover rule').toBe(-1);
+    // a dark box: it takes the light ink of the group, like the other chips, and its own colour comes after the group's
+    expect(inkGroup('.banner').prelude.split(', ')).toContain('.avoid-chip');
+    expect(blocks.indexOf(inkGroup('.banner'))).toBeLessThan(position('.avoid-chip'));
+  });
+
+  it('reads no alias of the old palette in the settings rules', () => {
+    for (const selector of SETTINGS_RULES) expect(ruleBody(selector), selector).not.toMatch(OLD_ALIASES);
+  });
+});
+
+describe('the Machine GUI settings drawer', () => {
+  it('shows the Settings button on narrow screens only', () => {
+    expect(declared('.settings-toggle', 'display')).toBe('none');
+    expect(declaredIn(NARROW, '.settings-toggle', 'display')).toBe('inline-flex');
+    expect(declaredIn(NARROW, '.settings-toggle', 'align-items')).toBe('center');
+  });
+
+  it('slides the settings column in from the left, and keeps the hidden one out of the tab order', () => {
+    for (const [property, value] of [
+      ['position', 'fixed'], ['inset', '0 auto 0 0'], ['width', 'min(340px, 88vw)'], ['max-height', 'none'], ['overflow', 'auto'],
+      ['padding', '12px'], ['background', 'var(--page)'], ['z-index', '60'],
+      ['transform', 'translateX(-105%)'], ['visibility', 'hidden'],
+      ['transition', 'transform var(--dur-slow) var(--ease-out), visibility 0s var(--dur-slow)'],
+    ] as const) expect(declaredIn(NARROW, '.settings-panel', property), `.settings-panel { ${property} }`).toBe(value);
+    // open: in place at once and visible at once; closed: out of sight and out of the tab order after the slide (the delayed `visibility`)
+    expect(declaredIn(NARROW, '.settings-open .settings-panel', 'transform')).toBe('none');
+    expect(declaredIn(NARROW, '.settings-open .settings-panel', 'visibility')).toBe('visible');
+    expect(declaredIn(NARROW, '.settings-open .settings-panel', 'transition')).toBe('transform var(--dur-slow) var(--ease-out)');
+    // the views keep the one column, with the settings column out of it
+    expect(declaredIn(NARROW, '.project-body', 'grid-template-columns')).toBe('1fr');
+  });
+
+  it('dims the page behind the drawer, under the modal', () => {
+    for (const [property, value] of [
+      ['position', 'fixed'], ['inset', '0'], ['z-index', '50'], ['background', 'rgba(0, 0, 0, 0.6)'],
+      ['animation', 'fade-in var(--dur-base) var(--ease-out)'],
+    ] as const) expect(declaredIn(NARROW, '.drawer-backdrop', property), `.drawer-backdrop { ${property} }`).toBe(value);
+    // the drawer is above its backdrop, and both are below the modal's
+    const modal = Number(declared('.modal-backdrop', 'z-index'));
+    expect(Number(declaredIn(NARROW, '.drawer-backdrop', 'z-index'))).toBeLessThan(Number(declaredIn(NARROW, '.settings-panel', 'z-index')));
+    expect(Number(declaredIn(NARROW, '.settings-panel', 'z-index'))).toBeLessThan(modal);
+  });
+
+  it('keeps every drawer rule inside the query, so a wide screen keeps its sticky column and a stale backdrop dims nothing', () => {
+    expect(declared('.settings-panel', 'position')).toBe('sticky');
+    expect(hasTopLevelRule('.drawer-backdrop'), 'a .drawer-backdrop rule outside the query').toBe(false);
+    expect(hasTopLevelRule('.settings-open .settings-panel'), 'a .settings-open rule outside the query').toBe(false);
+  });
+});
