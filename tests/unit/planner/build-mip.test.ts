@@ -11,7 +11,7 @@ import {
   cleanSpec, fastSlowSpec, freeSpec, hammerSpec, handSpec, opt, pressSpec, solderSpec, solvedWithBuild, twinSpec, twoFreeSpec, twoPressSpec,
 } from '../../helpers/build-fixtures.ts';
 import type { StuffKey } from '../../../src/shared/keys.ts';
-import { BUILD_MIP_MAX_LP_ITERATIONS, BUILD_MIP_MAX_NODES, BUILD_MIP_TIME_LIMIT_SECONDS, type StepMachines } from '../../../src/server/planner/build-mip.ts';
+import { BUILD_MIP_MAX_LP_ITERATIONS, BUILD_MIP_MAX_NODES, BUILD_MIP_RETRY_TOLERANCE, BUILD_MIP_TIME_LIMIT_SECONDS, type StepMachines } from '../../../src/server/planner/build-mip.ts';
 import type { MachineOption } from '../../../src/server/planner/machine-options.ts';
 import type { Solution, SolveOptions } from '../../../src/server/planner/solve.ts';
 
@@ -330,15 +330,18 @@ describe('the build-cost MIP', () => {
     }
   });
 
-  it('stops at its root node, which its node limit decides, and keeps a far time guard', async () => {
-    // Controller ruling 183 (2): no plan depends on time or load. Plan 09's step-charge MIP stops at its root node too.
-    expect(BUILD_MIP_MAX_NODES).toBe(1);
+  it('stops at its node and simplex-iteration limits, without strong branching, and keeps a far time guard', async () => {
+    // Controller ruling 183 (2): no plan depends on time or load. Fix wave 3 (F), ledger 248: 50 nodes without strong
+    // branching (whose iterations escape the iteration cap), and a root whose LP relaxation fails at 1e-10 runs again at 1e-9.
+    expect(BUILD_MIP_MAX_NODES).toBe(50);
     expect(BUILD_MIP_MAX_LP_ITERATIONS).toBe(50_000);
+    expect(BUILD_MIP_RETRY_TOLERANCE).toBe(1e-9);
     expect(BUILD_MIP_TIME_LIMIT_SECONDS).toBe(30);
     const { sol } = await solvedWithBuild(hammerSpec(), GLASS, [['t:glass@0', 1 / 60]], { options: HAMMERS, share: true, alsoMade: GATHERED }, CHARGED);
     const stats = sol.buildStats;
     expect(stats?.approx).toBe(false);
-    expect(stats?.nodes).toBeLessThanOrEqual(1);
+    expect(stats?.nodes).toBeLessThanOrEqual(BUILD_MIP_MAX_NODES);
+    expect(stats?.retried).toBeUndefined();
     expect(stats?.status === 'optimal' || (stats?.status === 'feasible' && stats.stop === 'limit')).toBe(true);
     // Its objective and HiGHS's proven bound say how close to the optimum the node limit left it (here: at it).
     expect(stats?.objective).toBeGreaterThan(0);

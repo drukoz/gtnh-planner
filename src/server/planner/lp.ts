@@ -33,7 +33,26 @@ export interface LpModel {
    * better whole solution keeps this one (`feasible`). Only rows are scaled, so the columns' values need no scaling.
    */
   start?: number[];
+  // optional additions (plan 12 fix wave 3 (F): the build MIP's robust pick)
+  /** A MIP's feasibility and integrality tolerance (HiGHS `mip_feasibility_tolerance`); absent: MIP_FEASIBILITY_TOLERANCE. */
+  feasibilityTolerance?: number;
+  /**
+   * False: no strong branching (HiGHS `mip_pscost_minreliable` 0). Strong branching's simplex iterations reach no
+   * interrupt checkpoint's count until its node ends (measured: 107,176 of them past a 50,000 cap, 23 s), so only without
+   * it does `maxIterations` bound the work of nodes after the root.
+   */
+  strongBranching?: boolean;
+  /**
+   * A MIP stops at its first interrupt checkpoint after simplex iterations whose dual bound is not finite: its root LP
+   * relaxation did not solve at `feasibilityTolerance` (every model this is set on has a finite LP bound), so its search
+   * would run without a bound, cuts or LP-guided heuristics. The result says so (`rootLpFailed`).
+   */
+  stopOnRootLpFailure?: boolean;
+  /** Keep every improving whole solution HiGHS reports, in order (`LpResult.improving`). */
+  keepImproving?: boolean;
 }
+/** The integrality and feasibility tolerance of every MIP with `maxNodes` unless the model sets one (523d6be: a binary at 1e-7 is not 0). */
+export const MIP_FEASIBILITY_TOLERANCE = 1e-10;
 /**
  * `objective` and `x` (one value per column) are meaningful only when `optimal`, or `feasible` (a MIP that stopped at
  * its node or time limit with a whole solution); otherwise they are NaN and `[]`.
@@ -48,6 +67,11 @@ export interface LpResult {
   // optional addition (the plan 12 fix wave: the build MIP's gap, for its stats)
   /** A MIP's best proven bound on the objective (HiGHS's `mip_dual_bound`), on an `optimal` or `feasible` result. */
   bound?: number;
+  // optional additions (plan 12 fix wave 3 (F))
+  /** `stopOnRootLpFailure` stopped it: its root LP relaxation did not solve (its `x`, if any, is the start's). */
+  rootLpFailed?: true;
+  /** With `keepImproving`: the whole solutions HiGHS found better than the one before, in order (the last is `x` unless it stopped on time). */
+  improving?: number[][];
 }
 
 let loading: Promise<Highs> | null = null;
@@ -140,6 +164,22 @@ function checkStart(model: LpModel): void {
   });
 }
 
+/**
+ * The HiGHS options of `model`: no output; its time limit; with `maxNodes` the node limit, both gaps 0 and its
+ * feasibility tolerance (`feasibilityTolerance`, else MIP_FEASIBILITY_TOLERANCE); without strong branching when
+ * `strongBranching` is false.
+ */
+export function highsOptions(model: LpModel): Record<string, number | boolean> {
+  return {
+    output_flag: false,
+    ...(model.timeLimit === undefined ? {} : { time_limit: model.timeLimit }),
+    ...(model.maxNodes === undefined ? {} : {
+      mip_max_nodes: model.maxNodes, mip_rel_gap: 0, mip_abs_gap: 0, mip_feasibility_tolerance: model.feasibilityTolerance ?? MIP_FEASIBILITY_TOLERANCE,
+    }),
+    ...(model.strongBranching === false ? { mip_pscost_minreliable: 0 } : {}),
+  };
+}
+
 export async function solveLp(model: LpModel): Promise<LpResult> {
   if (model.colCost.length === 0) return solveEmpty(model);
   checkStart(model);
@@ -149,11 +189,7 @@ export async function solveLp(model: LpModel): Promise<LpResult> {
   const data = modelData(highs, model);
   const statuses = highs.constants.modelStatus;
   return highs.withModel((m): LpResult => {
-    m.options.set({
-      output_flag: false,
-      ...(model.timeLimit === undefined ? {} : { time_limit: model.timeLimit }),
-      ...(model.maxNodes === undefined ? {} : { mip_max_nodes: model.maxNodes, mip_rel_gap: 0, mip_abs_gap: 0, mip_feasibility_tolerance: 1e-10 }),
-    });
+    m.options.set(highsOptions(model));
     m.passModel(data);
     if (model.start !== undefined) {
       try {
@@ -176,35 +212,54 @@ export async function solveLp(model: LpModel): Promise<LpResult> {
       return out;
     };
     const most = model.maxIterations;
+    const improving: number[][] = [];
+    let rootLpFailed = false;
     try {
-      if (most === undefined) {
+      if (most === undefined && model.stopOnRootLpFailure !== true && model.keepImproving !== true) {
         m.run();
       } else {
-        m.run({ [highs.constants.callbackType.mipInterrupt]: (event) => {
-          if (Number(event.data.mip_total_lp_iterations ?? 0) >= most) event.interrupt();
-        } });
+        m.run({
+          [highs.constants.callbackType.mipInterrupt]: (event) => {
+            const iterations = Number(event.data.mip_total_lp_iterations ?? 0);
+            if (model.stopOnRootLpFailure === true && iterations > 0 && !Number.isFinite(Number(event.data.mip_dual_bound))) {
+              rootLpFailed = true;
+              event.interrupt();
+            }
+            if (most !== undefined && iterations >= most) event.interrupt();
+          },
+          ...(model.keepImproving === true ? {
+            [highs.constants.callbackType.mipImprovingSolution]: (event) => {
+              const x = event.data.mip_solution;
+              if (x !== undefined) improving.push(Array.from(x));
+            },
+          } : {}),
+        });
       }
     } catch {
       return withNodes(notOptimal('error'));   // a native solver failure; malformed input already threw in passModel
     }
+    /** The result with `improving` and `rootLpFailed` when the model asked for them. */
+    const withRun = (result: LpResult): LpResult => ({
+      ...withNodes(result), ...(model.keepImproving === true ? { improving } : {}), ...(rootLpFailed ? { rootLpFailed: true as const } : {}),
+    });
     const status = m.getModelStatus();
     switch (status) {
       case statuses.optimal:
-        return withNodes({ status: 'optimal', objective: m.getObjectiveValue(), x: Array.from(m.getSolution().colValue) });
+        return withRun({ status: 'optimal', objective: m.getObjectiveValue(), x: Array.from(m.getSolution().colValue) });
       case statuses.infeasible:
-        return withNodes(notOptimal('infeasible'));
+        return withRun(notOptimal('infeasible'));
       case statuses.unbounded:
       case statuses.unboundedOrInfeasible:
-        return withNodes(notOptimal('unbounded'));
+        return withRun(notOptimal('unbounded'));
       default:
         // A MIP stopped by its node or time limit keeps its best whole solution, if it found one (status 2 = feasible).
         if (model.integer !== undefined && Number(m.info.get('primal_solution_status')) === 2) {
-          return withNodes({
+          return withRun({
             status: 'feasible', objective: m.getObjectiveValue(), x: Array.from(m.getSolution().colValue),
             stop: status === statuses.timeLimit ? 'time' : 'limit',
           });
         }
-        return withNodes(notOptimal('error'));
+        return withRun(notOptimal('error'));
     }
   });
 }

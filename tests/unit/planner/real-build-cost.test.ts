@@ -1,14 +1,15 @@
 // Real-data acceptance of plan 12's build cost (Task 8; design spec §3.3 Objective, "How materials are counted" and
 // "Reusing machines we have", D1–D3; architecture §11.39): the calibration plans on the active export with build cost
 // counted over the default 24 hours, nothing owned and with two of every candidate machine owned (`owning`), each timed
-// on a warm pack, its build MIP run again on its own (`buildRun`) to log the root node's time, nodes, objective, bound
-// and gap — the root node decides, never time (controller ruling 183 (2)) — and each held to the plan that ignores
-// build cost by the build MIP's own measure (controller ruling 187); what a line adds that cannot be built here or has
-// no price; how it gets its sand and gravel; the step counts against the plan that ignores build cost (D1); the horizon
-// trade; the time guard; the speed of the price table; and the build-cost plans of plan 09's checks that build cost
-// legitimately changes (plan 12 Task 8 Step 4). It runs only with GTNH_LOCAL=1 and logs only counts, keys and timings;
-// nothing game-derived is read or written otherwise. The user's reference flow joins the calibration plans when its
-// private settings file is there (docs/local, never committed).
+// on a warm pack, its build MIP run again on its own (`buildRun`) to log the MIP's time, nodes, objective, bound and
+// gap — its node and simplex-iteration limits decide, never time (controller ruling 183 (2), fix wave 3 (F)) — and each
+// held to the plan that ignores build cost by the build MIP's own measure (controller ruling 187); what a line adds that
+// cannot be built here or has no price; how it gets its sand and gravel; the step counts against the plan that ignores
+// build cost (D1); the horizon trade; the time guard; the speed of the price table; the build-cost plans of plan 09's
+// checks that build cost legitimately changes (plan 12 Task 8 Step 4); and the build MIP's pick (fix wave 3 (F), ledger
+// 248). It runs only with GTNH_LOCAL=1 and logs only counts, keys and timings; nothing game-derived is read or written
+// otherwise. The user's reference flow joins the calibration plans when its private settings file is there (docs/local,
+// never committed).
 
 import { beforeAll, describe, expect, it } from 'vitest';
 import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
@@ -288,7 +289,7 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
       expect(step.pool?.steps.length, step.id).toBeLessThanOrEqual(AE2_POOL_MAX_STEPS);
       for (const id of step.pool?.steps ?? []) expect(plan.steps.find((st) => st.id === id)?.pool, `${step.id} beside ${id}`).toEqual(step.pool);
     }
-    // The build MIP on its own: decided by its limits (the root node, its simplex iterations), never by time.
+    // The build MIP on its own: decided by its limits (its nodes, its simplex iterations), never by time.
     const stats = run.sol.buildStats;
     expect(stats?.approx, 'build-cost-approx').toBe(false);
     expect(stats?.status === 'optimal' || (stats?.status === 'feasible' && stats.stop === 'limit'), `${stats?.status}/${stats?.stop}`).toBe(true);
@@ -376,6 +377,58 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
     console.log(`real-build-cost price table: Electronic Circuit MV, ${(await candidateMachines(s)).length} machines, ${priceSeconds.toFixed(2)} s`);
     expect(priceSeconds).toBeLessThan(2);
   }, 180_000);
+
+  describe('the build MIP pick (fix wave 3 (F), ledger 248)', () => {
+    /** New machine blocks: per step with a machine its machines beyond the owned ones, a sharing pool once (its first step). */
+    const newBlocks = (plan: Plan): number => plan.steps
+      .filter((st) => st.machine.mteId >= 0 && (st.pool === undefined || st.pool.steps[0] === st.id))
+      .reduce((n, st) => n + Math.max(0, st.count - st.owned), 0);
+    /** 737bcd0's build-MIP objectives (`buildStats.objective`, nothing owned, empty context), measured on a5f5100. */
+    const PINNED: ReadonlyArray<[string, PlanSettings, number]> = [
+      ['Electronic Circuit MV', at(ELECTRONIC_CIRCUIT, 2, 1), 12.461033224],
+      ['Electronic Circuit MV on Project Red', at(ELECTRONIC_CIRCUIT, 2, 1, { logistics: 'routed' }), 12.461035482],
+      ['Good Electronic Circuit HV', at(GOOD_ELECTRONIC_CIRCUIT, 3, 1), 18.001102870],
+      ['Polyethylene Bar MV', at(POLYETHYLENE_BAR, 2, 1), 8.560959884],
+      ['Steel Ingot MV x10', at(STEEL_INGOT, 2, 10), 11.942477007],
+      ['Electronic Circuit LV', at(ELECTRONIC_CIRCUIT, 1, 1), 17.236946974],
+      ['Electronic Circuit LV on Project Red', at(ELECTRONIC_CIRCUIT, 1, 1, { logistics: 'routed' }), 17.255959337],
+      ['Electronic Circuit LV on AE2', at(ELECTRONIC_CIRCUIT, 1, 1, { logistics: 'ae2' }), 15.853602028],
+      ['Advanced Circuit HV 1/min', at(ADVANCED_CIRCUIT, 3, 1, { routeDerived: false }), 24.120350305],
+      ['Advanced Circuit HV 1/h', at(ADVANCED_CIRCUIT, 3, 1, { routeDerived: false, per: 'hour' }), 33.545086173],
+      ['Advanced Circuit HV 1/min, supporting lines', at(ADVANCED_CIRCUIT, 3, 1), 27.196379291],
+    ];
+    const statsOf = (run: BuildRun): NonNullable<Solution['buildStats']> => run.sol.buildStats as NonNullable<Solution['buildStats']>;
+    const logPick = (name: string, stats: NonNullable<Solution['buildStats']>): void => {
+      console.log(`real-build-cost pick ${name}: ${stats.objective?.toFixed(9)} ${stats.status}/${stats.stop ?? '-'}, ${stats.nodes} nodes`
+        + `${stats.retried ? ', retried at 1e-9' : ''}${stats.earlier ? ', an earlier incumbent' : ''}, ${stats.seconds.toFixed(2)} s`);
+    };
+
+    it.each(PINNED)('is no worse by the build MIP than 737bcd0 on %s', async (name, s, pinned) => {
+      const stats = statsOf(await buildRun(s));
+      logPick(name, stats);
+      expect(stats.approx).toBe(false);
+      expect(stats.objective as number).toBeLessThanOrEqual(pinned * (1 + 1e-6));
+    }, 300_000);
+
+    it('plans 2 Good Electronic Circuits a minute at HV on AE2 in at most 28 new machines, at most 16.371 by the build MIP', async () => {
+      const s = at(GOOD_ELECTRONIC_CIRCUIT, 3, 2, { logistics: 'ae2' });
+      const stats = statsOf(await buildRun(s));
+      logPick('Good Electronic Circuit HV x2 on AE2', stats);
+      expect(stats.retried).toBe(true);   // its root LP relaxation does not solve at 1e-10
+      expect(stats.status === 'optimal' || stats.stop === 'limit', `${stats.status}/${stats.stop}`).toBe(true);
+      expect(stats.objective as number).toBeLessThanOrEqual(16.371 + 1e-6);
+      const { plan } = await timed(s);
+      expect(plan.status, JSON.stringify(plan.warnings)).toBe('ok');
+      expect(newBlocks(plan)).toBeLessThanOrEqual(28);
+    }, 300_000);
+
+    it('proves its plan of 2 Good Electronic Circuits a minute at HV optimal within its iteration cap', async () => {
+      const stats = statsOf(await buildRun(at(GOOD_ELECTRONIC_CIRCUIT, 3, 2)));
+      logPick('Good Electronic Circuit HV x2', stats);
+      expect(stats.status).toBe('optimal');
+      expect(stats.objective as number).toBeLessThanOrEqual(17.755002798 * (1 + 1e-6));
+    }, 300_000);
+  });
 
   describe("plan 09's checks that build cost legitimately changes, with build cost counted (Task 8 Step 4)", () => {
     // Plan 09's real-data tests check these settings with build cost ignored now (`buildHorizonHours: null`), where its

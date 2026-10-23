@@ -7,7 +7,7 @@
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import type { PlanWarning } from '../../shared/types/plan.ts';
 import {
-  BUILD_MIP_MAX_LP_ITERATIONS, BUILD_MIP_MAX_NODES, BUILD_MIP_TIME_LIMIT_SECONDS, buildMip, laterRoom, roundUp, stepWeight, type BuildDecision, type BuildMipInput,
+  BUILD_MIP_MAX_LP_ITERATIONS, BUILD_MIP_MAX_NODES, BUILD_MIP_RETRY_TOLERANCE, BUILD_MIP_TIME_LIMIT_SECONDS, buildMip, laterRoom, roundUp, stepWeight, type BuildDecision, type BuildMipInput,
   type LaterRoom, type StepMachines, type StepWeights,
 } from './build-mip.ts';
 import { canonicalRank, type CandidateGraph, type LpRecipe } from './candidates.ts';
@@ -120,6 +120,11 @@ export interface Solution {
    */
   buildStats?: {
     seconds: number; nodes: number; status: LpResult['status'] | 'skipped'; stop?: 'time' | 'limit'; approx: boolean; objective?: number; bound?: number;
+    // optional additions (fix wave 3 (F))
+    /** Its root LP relaxation did not solve at MIP_FEASIBILITY_TOLERANCE, so it ran again at BUILD_MIP_RETRY_TOLERANCE (`pickBuild`). */
+    retried?: true;
+    /** The decision is an earlier incumbent than HiGHS's last, cheaper by `exactCost` (`pickBuild`). */
+    earlier?: true;
   };
 }
 
@@ -1101,13 +1106,54 @@ function ownedOnlyRuns(bounded: readonly number[], x: readonly number[]): number
   return bounded.filter((j) => (x[j] ?? 0) > TINY);
 }
 
+/** Whether a build MIP's result is a plan: it has a whole solution and the time guard did not stop it. */
+function wholeBuild(r: LpResult): boolean {
+  return r.status === 'optimal' || (r.status === 'feasible' && r.stop !== 'time');
+}
+
+/**
+ * The build MIP's solve and its pick (fix wave 3 (F), ledger 248): robust and still decided by node and simplex-iteration
+ * limits only. One solve from `start` — BUILD_MIP_MAX_NODES nodes without strong branching (whose iterations escape the
+ * iteration cap) within BUILD_MIP_MAX_LP_ITERATIONS — that stops itself when its root LP relaxation does not solve at
+ * MIP_FEASIBILITY_TOLERANCE (`stopOnRootLpFailure`) and then runs again at BUILD_MIP_RETRY_TOLERANCE from the same
+ * start. The decision is the cheapest by `exactCost` (every machine at its true build) of the whole solutions HiGHS
+ * reported on the way (`keepImproving`), of both solves: HiGHS ranks them by the model, whose light steps are off by less
+ * than a machine each, and on 2 of 66 measured lines an earlier one is cheaper; ties keep HiGHS's last. A solve the time
+ * guard stops gives nothing: when the last solve is no plan, `buildStage` falls back as before. The result is the last
+ * solve's, with `x` the pick. `model` is the model solved: `mip.model`, or one a caller derived from it for `start`.
+ */
+async function pickBuild(
+  mip: ReturnType<typeof buildMip>, start: number[] | undefined, opts: SolveOptions, limit: number, model: LpModel = mip.model,
+): Promise<{ result: LpResult; retried?: true; earlier?: true }> {
+  const solve = (tolerance?: number): Promise<LpResult> => solveLp({
+    ...model, ...(start === undefined ? {} : { start }),
+    maxNodes: opts.buildMaxNodes ?? BUILD_MIP_MAX_NODES, maxIterations: opts.buildMaxIterations ?? BUILD_MIP_MAX_LP_ITERATIONS, timeLimit: limit,
+    strongBranching: false, keepImproving: true,
+    ...(tolerance === undefined ? { stopOnRootLpFailure: true } : { feasibilityTolerance: tolerance }),
+  });
+  const first = await solve();
+  const runs = [first];
+  if (first.rootLpFailed === true) runs.push(await solve(BUILD_MIP_RETRY_TOLERANCE));
+  const result = runs[runs.length - 1] as LpResult;
+  const retried = runs.length > 1 ? { retried: true as const } : {};
+  if (!wholeBuild(result)) return { result, ...retried };
+  let best = { x: result.x, cost: mip.exactCost(result.x) };
+  for (const r of runs) {
+    for (const x of r.improving ?? []) {
+      const cost = mip.exactCost(x);
+      if (cost < best.cost * (1 - 1e-9) - 1e-12) best = { x, cost };
+    }
+  }
+  return { result: { ...result, x: best.x }, ...retried, ...(best.x !== result.x ? { earlier: true as const } : {}) };
+}
+
 /**
  * The build stage (plan 12 Task 4), when the model counts build cost, in place of R3's stages 2–4 (the charge MIP, its
  * fallback and consolidation; or plan 09's fewest recipes when S1 needs no raw material): S1g, then the build-cost MIP
  * started from the cheaper by its own objective of `roundUp` of S1 and of plan 09's sparse plan (none when both leave a
- * step short; without S1's the MIP has no derived-purchase binaries, whose bound comes from that start: `buildMip`), which
- * its node and simplex-iteration limits decide (BUILD_MIP_MAX_NODES, BUILD_MIP_MAX_LP_ITERATIONS) and a far time guard
- * only backs up. A
+ * step short; without S1's the MIP has no derived-purchase binaries, whose bound comes from that start: `buildMip`),
+ * solved and picked by `pickBuild`, which its node and simplex-iteration limits decide (BUILD_MIP_MAX_NODES,
+ * BUILD_MIP_MAX_LP_ITERATIONS) and a far time guard only backs up. A
  * MIP that ends without a whole solution, or that the guard stops (or `buildTimeLimit ≤ 0`), gives way to the cheapest
  * by the MIP's objective (`rounded`) of plan 09's plan of the line ("Ignore build cost", `finish`), its LP relaxation
  * and S1, each rounded up to whole machines (the relaxation's at its options of most new capacity, the others at each
@@ -1139,12 +1185,10 @@ async function buildStage(
   const limit = opts.buildTimeLimit ?? BUILD_MIP_TIME_LIMIT_SECONDS;
   let result: LpResult | undefined;
   let seconds = 0;
+  let picked: Pick<NonNullable<Solution['buildStats']>, 'retried' | 'earlier'> = {};
   if (limit > 0) {
     const began = performance.now();
-    result = await solveLp({
-      ...mip.model, ...(start === undefined ? {} : { start }),
-      maxNodes: opts.buildMaxNodes ?? BUILD_MIP_MAX_NODES, maxIterations: opts.buildMaxIterations ?? BUILD_MIP_MAX_LP_ITERATIONS, timeLimit: limit,
-    });
+    ({ result, ...picked } = await pickBuild(mip, start, opts, limit));
     seconds = (performance.now() - began) / 1000;
   }
   let decision: BuildDecision;
@@ -1177,7 +1221,7 @@ async function buildStage(
     decision = kept.decision;
     from = kept.from;
   }
-  const buildStats: NonNullable<Solution['buildStats']> = { seconds, nodes: result?.nodes ?? 0, status: result?.status ?? 'skipped', approx };
+  const buildStats: NonNullable<Solution['buildStats']> = { seconds, nodes: result?.nodes ?? 0, status: result?.status ?? 'skipped', approx, ...picked };
   if (result?.stop !== undefined) buildStats.stop = result.stop;
   if (result !== undefined && result.x.length > 0) {
     buildStats.objective = mip.exactCost(result.x);

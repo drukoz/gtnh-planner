@@ -8,9 +8,11 @@
 // per new machine block (fix wave 2 (a): each new machine of a step or a sharing pool, an Auto Workbench included, once;
 // owned machines none; a step by hand or on another pseudo machine once, a crafting-table one HAND_STEP_WEIGHT times). Its
 // decision (`decode`, or `roundUp` of the LP relaxation or of S1 when the far time guard stops it) keeps the later stages
-// within the machines it bought (`laterRoom`). The plan fix wave (controller ruling 183 (2)) made its node limit the
-// one thing that decides it — no plan depends on time or load — and its model strong and small enough that its root node
-// plans real lines within plan 09's 5 s: valid rows that bring the fixed costs of the steps a line cannot do without into
+// within the machines it bought (`laterRoom`). The plan fix wave (controller ruling 183 (2)) made its node and
+// simplex-iteration limits the one thing that decides it — no plan depends on time or load — and its model strong and
+// small enough that it plans real lines within plan 09's 5 s (fix wave 3 (F): 50 nodes without strong branching, a retry
+// at 1e-9 when its root LP fails, the cheapest incumbent by `exactCost`: solve.ts `pickBuild`): valid rows that bring the
+// fixed costs of the steps a line cannot do without into
 // the relaxation, a step whose machines one binary prices where that is exact up to one machine, no columns for options
 // another builds for less, and a start from plan 09's sparse plan (`solveLine`).
 
@@ -21,18 +23,22 @@ import { sig9 } from './round.ts';
 import { STEP_BIG_M, type MainLp } from './solve.ts';
 
 /**
- * The build MIP stops after its root node (deterministic, as plan 09's STEP_MIP_MAX_NODES), with its best whole solution,
- * which may be the start. Measured on 26 lines of the 2.9 export (plan fix wave, load 3–6 of 16 cores): the root takes
- * 0.04–4 s and plans 15 of them at the model's proven optimum (Electronic Circuit MV, the user's line, Robot Arm MV among
- * them; the model prices a light step's machines as `Light` says), the others within 1.3–6.9 % of the optimum or best
- * known by the MIP's objective (the most on Microprocessor HV and the routed Electronic Circuit MV); 10 nodes cost up to
- * 7 s more on Good Electronic Circuit HV (strong branching), and 100 cheap ones found nothing better on the five largest
- * lines. Task 8's calibration (real-build-cost.test.ts, load 5–12 of 16 cores): on its 12 plans and the user's reference
- * flow's R0, R1, V1 and V4 the root takes 0.07–2.5 s, ends optimal on 7 of the 16 and at its limit on the others (gaps
- * 3.4–16 % where nothing is owned; where two of every machine are owned the root proves almost nothing), never reaches
- * the time guard, and no plan is worse by the MIP's measure than the plan that ignores build cost.
+ * The build MIP's node limit (fix wave 3 (F), ledger 248; strong branching off, so BUILD_MIP_MAX_LP_ITERATIONS bounds
+ * every node): deterministic, like plan 09's STEP_MIP_MAX_NODES. The root alone (the fix wave's 1, controller ruling 183
+ * (2)) left Good Electronic Circuit 2/min HV `feasible` at bound 17.12 against 17.41 where one more node proves it; 50
+ * prove it at 33,968 iterations (37 nodes). On 66 lines of the 2.9 export (a5f5100's 48-plan corpus, the 8 calibration
+ * plans, the reference R0, R1, V1 and V4, GEC 2/min HV default and on AE2, 4 live projects) it plans none worse by
+ * `exactCost` than the root alone, 48 of them proven optimal against 44, for 7 s more MIP time in all (+13 %, loaded
+ * host); 3 or 10 nodes with strong branching took 35-62 s on AE2 (its iterations escape the cap).
  */
-export const BUILD_MIP_MAX_NODES = 1;
+export const BUILD_MIP_MAX_NODES = 50;
+/**
+ * The tolerance a build MIP whose root LP relaxation did not solve at MIP_FEASIBILITY_TOLERANCE (lp.ts
+ * `stopOnRootLpFailure`) runs again at (fix wave 3 (F)): Good Electronic Circuit 2/min HV on AE2 (10,001 rows, 5,321
+ * integers) has no bound at 1e-10, its incumbent a lottery of LP-free heuristics (21.41 at seed 0, 15.45-25.39 at seeds
+ * 1-4), and at 1e-9 a bound of 13.15 and 15.95 (seeds 1-4: 15.45-15.55).
+ */
+export const BUILD_MIP_RETRY_TOLERANCE = 1e-9;
 /**
  * The build MIP also stops once its simplex iterations reach this (deterministic, `LpModel.maxIterations`), so a root
  * node far larger than the real lines' — at most 32,000 iterations on 26 of them, 0.05–4 s — ends with the best plan it

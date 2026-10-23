@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { solveLp } from '../../../src/server/planner/lp.ts';
+import { highsOptions, MIP_FEASIBILITY_TOLERANCE, solveLp } from '../../../src/server/planner/lp.ts';
 
 describe('solveLp', () => {
   it('solves a small minimisation', async () => {
@@ -53,6 +53,34 @@ describe('solveLp', () => {
     expect(bounded).toMatchObject({ status: 'feasible', stop: 'limit' });
     expect(bounded.bound).toBeGreaterThanOrEqual(bounded.objective - 1e-9);
     expect(await solveLp({ ...knapsack, maxNodes: 100_000, maxIterations: 50 })).toEqual(bounded);
+  });
+  it('gives a MIP its node limit, gaps and tolerance, and turns strong branching off only when asked (fix wave 3 (F))', () => {
+    const lp = { sense: 'min' as const, colCost: [1], colLower: [0], colUpper: [1], rows: [] };
+    expect(MIP_FEASIBILITY_TOLERANCE).toBe(1e-10);
+    expect(highsOptions(lp)).toEqual({ output_flag: false });
+    expect(highsOptions({ ...lp, timeLimit: 30 })).toEqual({ output_flag: false, time_limit: 30 });
+    expect(highsOptions({ ...lp, integer: [true], maxNodes: 1 }))
+      .toEqual({ output_flag: false, mip_max_nodes: 1, mip_rel_gap: 0, mip_abs_gap: 0, mip_feasibility_tolerance: 1e-10 });
+    expect(highsOptions({ ...lp, integer: [true], maxNodes: 50, feasibilityTolerance: 1e-9, strongBranching: false }))
+      .toEqual({ output_flag: false, mip_max_nodes: 50, mip_rel_gap: 0, mip_abs_gap: 0, mip_feasibility_tolerance: 1e-9, mip_pscost_minreliable: 0 });
+  });
+  it('keeps the improving whole solutions of a MIP in order, and stops on a failed root LP only when it fails', async () => {
+    const weights = Array.from({ length: 40 }, (_, i) => 1000 + ((i * 7919) % 1000));
+    const values = weights.map((w, i) => w + ((i * 104729) % 97));
+    const knapsack = {
+      sense: 'max' as const, colCost: values, colLower: new Array<number>(40).fill(0), colUpper: new Array<number>(40).fill(1),
+      rows: [{ lower: -Infinity, upper: Math.floor(weights.reduce((a, b) => a + b, 0) / 2), entries: weights.map((w, i): [number, number] => [i, w]) }],
+      integer: new Array<boolean>(40).fill(true), start: new Array<number>(40).fill(0),
+    };
+    const r = await solveLp({ ...knapsack, maxNodes: 200, maxIterations: 50_000, strongBranching: false, keepImproving: true, stopOnRootLpFailure: true });
+    expect(r.status === 'optimal' || r.stop === 'limit').toBe(true);
+    expect(r.rootLpFailed).toBeUndefined();   // its LP relaxation solves
+    const worth = (x: readonly number[]): number => x.reduce((sum, v, i) => sum + (values[i] as number) * v, 0);
+    const seen = (r.improving ?? []).map(worth);
+    expect(seen.length).toBeGreaterThan(0);
+    for (let i = 1; i < seen.length; i++) expect(seen[i] as number).toBeGreaterThanOrEqual((seen[i - 1] as number) - 1e-9);
+    expect(seen[seen.length - 1] as number).toBeCloseTo(r.objective, 6);
+    expect((await solveLp({ ...knapsack, maxNodes: 200 })).improving).toBeUndefined();
   });
   it('accepts a start solution', async () => {
     const r = await solveLp({ sense: 'max', colCost: [1, 1], colLower: [0, 0], colUpper: [Infinity, Infinity],
