@@ -181,11 +181,33 @@ describe('the Auto Workbench', () => {
       ticks: 24_000, restartAt: 24_000, initial: { '0,0,1': full },
       extra: (env) => [feeder(env, '0,0,0', 1, ['t:a@0'], 1, 1_000, 0), taker(env, '0,0,1', 2, 1, at)],
     });
-    // the run's second half pushes 6 Ex out in 600 s: the 0.01/s the plan asks of it
+    // the run's second half pushes 6 Ex out in 600 s: the 0.01/s the plan asks of it; the wait still open at the run's end,
+    // 1,939 ticks, is shorter than the plan's interval between takes (1 Ex at 0.01/s: 2,000 ticks)
     expect(go({ w: { 't:x@0': 0.01 } }).findings).toEqual([]);
     // a plan that asks 0.02/s of it, and a model that does not say: its first wait, from its first craft at 34, counts
     expect(go({ w: { 't:x@0': 0.02 } }).findings.map((f) => [f.code, f.key, f.tick])).toEqual([['feed_bench_stuck', 't:x@0', 34]]);
     expect(go().findings.map((f) => [f.code, f.key, f.tick])).toEqual([['feed_bench_stuck', 't:x@0', 34]]);
+  });
+
+  it('is stuck when the block behind it stops taking for good after it ran ahead of the plan', () => {
+    // Task 6 rule 5 as Task 4 rule 14 reads a stop: one Alpha (one every 100 ticks) makes one Ex; the chest behind it is full
+    // of Ex, and a taker frees one every 100 ticks until tick 20,000 and never again: from 20,042 its push moves nothing
+    const node = benchNode({ grid: ['t:a@0', null, null, null, null, null, null, null, null], result: { key: 't:x@0', amount: 1 } });
+    const full = Array.from({ length: 27 }, (_, slot) => [slot, 't:x@0', 64] as [number, string, number]);
+    const at = Array.from({ length: 200 }, (_, i) => 100 * (i + 1));
+    const go = (plannedOut?: FeedModel['plannedOut']) => both(handModel([node, outputChestNode('0,0,1')], plannedOut === undefined ? {} : { plannedOut }), {
+      ticks: 24_000, restartAt: 24_000, initial: { '0,0,1': full },
+      extra: (env) => [feeder(env, '0,0,0', 1, ['t:a@0'], 1, 100, 0), taker(env, '0,0,1', 2, 1, at)],
+    });
+    const found = (r: ScenarioRun) => r.findings.map((f) => [f.code, f.key, f.tick]);
+    // the plan asks 0.1/s of it and the second half pushed 81 Ex out (0.135/s), but the wait still open at the run's end, 3,958
+    // ticks, is longer than the plan's own interval between takes (1 Ex at 0.1/s: 200 ticks): it stopped, it does not wait
+    expect(found(go({ w: { 't:x@0': 0.1 } }))).toEqual([['feed_bench_stuck', 't:x@0', 20_042]]);
+    // a plan that asks 0.2/s of it, more than it gave, and a model that does not say
+    expect(found(go({ w: { 't:x@0': 0.2 } }))).toEqual([['feed_bench_stuck', 't:x@0', 20_042]]);
+    expect(found(go())).toEqual([['feed_bench_stuck', 't:x@0', 20_042]]);
+    // a plan that asks 0.002/s of it takes one every 10,000 ticks, more than the 3,990 since its last push: the next may still come
+    expect(go({ w: { 't:x@0': 0.002 } }).findings).toEqual([]);
   });
 
   it('lets its covers act first in its tick', () => {

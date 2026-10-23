@@ -456,13 +456,34 @@ describe('the detectors', () => {
       ticks: 24_000, restartAt: 24_000, initial: { '0,0,0': [[2, 't:c@0', 64]] },
       extra: (env) => [feeder(env, '0,0,0', 3, ['t:a@0', 't:b@0'], 64, NEVER_AGAIN, 0), taker(env, '0,0,0', 3, 4, at)],
     });
-    // the run's second half takes 6 × 4 Gamma out in 600 s: the 0.04/s the plan asks of it, so it only waits for its takers
+    // the run's second half takes 6 × 4 Gamma out in 600 s: the 0.04/s the plan asks of it, so it only waits for its takers;
+    // the wait still open at the run's end, 1,900 ticks, is shorter than the plan's interval between takes (4 at 0.04/s: 2,000)
     expect(go({ sm: { 't:c@0': 0.04 } }).findings).toEqual([]);
     // a plan that asks 0.05/s of it, more than 10 % above what leaves it, and a model that does not say: the stall from tick 0 counts
     expect(go({ sm: { 't:c@0': 0.05 } }).findings.map((f) => [f.code, f.key, f.tick])).toEqual([['feed_no_route', 't:c@0', 0]]);
     expect(go().findings.map((f) => [f.code, f.key, f.tick])).toEqual([['feed_no_route', 't:c@0', 0]]);
     // a plan that sends no Gamma out of it asks nothing of it there: the stall counts
     expect(go({ sm: { 't:x@0': 1 } }).findings.map((f) => [f.code, f.key, f.tick])).toEqual([['feed_no_route', 't:c@0', 0]]);
+  });
+
+  it('counts an output that stops for good after its machine ran ahead of the plan', () => {
+    // Task 4 rule 14: a line that drained it before and then stopped counts. A run makes 4 Gamma every 100 ticks (0.8/s), and a
+    // taker takes 4 every 100 ticks until tick 20,000 and never again: the output slot is full from 21,500 to the run's end
+    const node = smelterNode({ recipes: [simRecipe('sm', 100, [['t:a@0', 1], ['t:b@0', 4]], [['t:c@0', 4]])] });
+    const at = Array.from({ length: 200 }, (_, i) => 100 * (i + 1));
+    const go = (plannedOut?: FeedModel['plannedOut']) => both(handModel([node], plannedOut === undefined ? {} : { plannedOut }), {
+      ticks: 24_000, restartAt: 24_000,
+      extra: (env) => [feeder(env, '0,0,0', 3, ['t:a@0', 't:b@0'], 64, 100, 0), taker(env, '0,0,0', 3, 4, at)],
+    });
+    const found = (r: ScenarioRun) => r.findings.map((f) => [f.code, f.key, f.tick]);
+    // the plan asks 0.5/s of it and the second half took 324 out (0.54/s), but the stall still open at the run's end, 2,500
+    // ticks, is longer than the plan's own interval between takes (4 Gamma at 0.5/s: 160 ticks): it stopped, it does not wait
+    expect(found(go({ sm: { 't:c@0': 0.5 } }))).toEqual([['feed_no_route', 't:c@0', 21_500]]);
+    // a plan at its own pace (0.8/s), more than what left it, and a model that does not say
+    expect(found(go({ sm: { 't:c@0': 0.8 } }))).toEqual([['feed_no_route', 't:c@0', 21_500]]);
+    expect(found(go())).toEqual([['feed_no_route', 't:c@0', 21_500]]);
+    // a plan that asks 0.01/s of it takes 4 every 8,000 ticks, more than the 4,000 since the last take: the next may still come
+    expect(go({ sm: { 't:c@0': 0.01 } }).findings).toEqual([]);
   });
 
   it('looks at the slots, not the side, for what keeps a kind out', () => {

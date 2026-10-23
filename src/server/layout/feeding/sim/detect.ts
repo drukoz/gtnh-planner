@@ -15,9 +15,11 @@
 //   clean-up of duplicate stacks overwrote there;
 // - `feed_bench_stuck`: a bench whose push left the stack in its result slot where it was for `STALL_TICKS` in a row;
 // - `feed_no_route`: an output blocked for `STALL_TICKS` in a row while nothing is taken out of the machine;
-// - neither of these two where the machine still gave what the plan asks of it of that item over the run's second half
-//   (`model.plannedOut`, within `feed_slow`'s tolerance): it only waited for its takers, as a push line's machines run ahead of
-//   their takers and wait, the line's normal state (research §7);
+// - neither of these two for a stall that only waited for its takers, as a push line's machines run ahead of their takers and
+//   wait, the line's normal state (research §7): the machine still gave what the plan asks of it of that item over the run's
+//   second half (`model.plannedOut`, within `feed_slow`'s tolerance), and the stall ended before the run's end, or is still
+//   open there but shorter than the plan's own interval between takes. Each is judged by itself, and an item reports its
+//   first stall that did not only wait: a line that drained it before and then stopped counts (Task 4 rule 14);
 // - `feed_pool_starve`: a recipe of a shared machine that never ran while its inputs were there for `STALL_TICKS`;
 // - `feed_fluid_packet`: once per machine and fluid, an ME interface's Fluid Packet that went into one of its input slots,
 //   that it kept in its send list for `STALL_TICKS` because the machine took none, or the CPU's push of a pattern of Fluid
@@ -537,6 +539,12 @@ function compareText(a: string, b: string): number {
 
 interface Pending { at: number; code: number; key: string; seq: number; finding: FeedFinding }
 
+/**
+ * How a machine kept to the plan's pace for one item: whether it gave what the plan asks of it over the run's second half,
+ * and the plan's own interval between takes, in ticks.
+ */
+interface Pace { kept: boolean; interval: number }
+
 /** The end of check `i`'s condition: the next check's tick, or the end of the run. */
 function endOf(checks: readonly Check[], i: number, ticks: number): number {
   return checks[i + 1]?.t ?? ticks;
@@ -624,23 +632,38 @@ export function detect(model: FeedModel, stats: SimStats, run: { scenario: Scena
   const seconds = (ticks - half) / TICKS_PER_SECOND;
   const tolerance = run.slowTolerance ?? SLOW_TOLERANCE;
   /**
-   * Whether `node` gave what the plan asks of it of item `key` (an id) over the run's second half, within `feed_slow`'s
-   * tolerance (`model.plannedOut`): then a blocked output, or a result its back refuses, only waits for its takers, as a push
-   * line's machines run ahead of their takers and wait (research §7). False where the plan asks nothing of it there: a
-   * hand-built model, or an item the plan sends nowhere.
+   * How `node` kept to the plan's pace for item `key` (an id), or null where the plan asks nothing of it there (a hand-built
+   * model, or an item the plan sends nowhere): `kept`, whether it gave what the plan asks of it over the run's second half,
+   * within `feed_slow`'s tolerance (`model.plannedOut`); `interval`, the plan's own ticks between takes: the most of the item
+   * taken out of it in one tick, over its plan rate.
    */
-  const keptUp = (node: FeedNode, rec: Readonly<NodeRecord>, key: number): boolean => {
-    if (node.kind === 'chest' || seconds <= 0) return false;
+  const paceOf = (node: FeedNode, rec: Readonly<NodeRecord>, key: number): Pace | null => {
+    if (node.kind === 'chest' || seconds <= 0) return null;
     const k = keyOf(key);
     let rate = 0;
     for (const stepId of node.stepIds) rate += model.plannedOut?.[stepId]?.[k] ?? 0;
-    if (rate <= 0) return false;
-    let gave = 0;
+    if (rate <= 0) return null;
+    let gave = 0, most = 0;
+    const takes = new Map<number, number>();
     rec.out.key.forEach((x, i) => {
-      if (x === key && rec.out.t[i]! >= half && rec.out.t[i]! < ticks) gave += rec.out.n[i]!;
+      if (x !== key) return;
+      const t = rec.out.t[i]!, n = rec.out.n[i]!;
+      const took = (takes.get(t) ?? 0) + n;
+      takes.set(t, took);
+      most = Math.max(most, took);
+      if (t >= half && t < ticks) gave += n;
     });
-    return gave >= (1 - tolerance) * rate * seconds;
+    return { kept: gave >= (1 - tolerance) * rate * seconds, interval: (most / rate) * TICKS_PER_SECOND };
   };
+  /**
+   * Whether a stall of an output (a blocked output slot, or a result its back refuses) from tick `from` until `to` (`ticks`:
+   * still open at the run's end) only waited for its takers, as a push line's machines run ahead of their takers and wait
+   * (research §7): its machine kept to the plan's pace for the item (`pace`), and the stall ended before the run's end, or is
+   * still open there but shorter than the plan's own interval between takes. A stall open at the end that lasts longer is a
+   * stop, however far ahead of its plan the machine ran before it (Task 4 rule 14: a line that drained it before and then
+   * stopped counts).
+   */
+  const waited = (pace: Pace | null, from: number, to: number): boolean => pace !== null && pace.kept && (to < ticks || to - from < pace.interval);
   // the ME interfaces' names, for the Fluid Packet texts
   const ifaceLabels = new Map<NodeId, string>();
   for (const net of model.networks) if (net.kind === 'ae2') for (const i of net.interfaces) ifaceLabels.set(i.id, i.label);
@@ -696,29 +719,28 @@ export function detect(model: FeedModel, stats: SimStats, run: { scenario: Scena
       }
     }
 
-    // rule 14: feed_no_route, an output blocked with nothing taken out of the machine meanwhile, and it gave less of the item
-    // than the plan asks of it (`keptUp`)
+    // rule 14: feed_no_route, an output blocked with nothing taken out of the machine meanwhile: every such stall, by item, and
+    // each item's first one that did not only wait for its takers (`waited`)
     const blocked = stretches(rec.checks, ticks, (c) => (c.kind === BLOCK ? c.key : null));
-    const stalls = new Map<number, { from: number; recipe: number }>();
+    const stalls = new Map<number, Array<{ from: number; to: number; recipe: number }>>();
+    let next = 0;                                               // the first take not before the stretch (stretches come in tick order)
     for (const s of blocked) {
-      if (stalls.has(s.value)) continue;
+      while (next < rec.taken.length && rec.taken[next]! < s.from) next++;
+      const list = stalls.get(s.value) ?? [];
       // the stall starts again each time something leaves the output slots
       let from = s.from;
-      let stalled = -1;
-      for (const t of rec.taken) {
-        if (t < s.from) continue;
-        if (t >= s.to) break;
-        if (t - from >= STALL_TICKS) {
-          stalled = from;
-          break;
-        }
+      for (let i = next; i < rec.taken.length && rec.taken[i]! < s.to; i++) {
+        const t = rec.taken[i]!;
+        if (t - from >= STALL_TICKS) list.push({ from, to: t, recipe: s.first.recipe });
         from = t;
       }
-      if (stalled < 0 && s.to - from >= STALL_TICKS) stalled = from;
-      if (stalled >= 0) stalls.set(s.value, { from: stalled, recipe: s.first.recipe });
+      if (s.to - from >= STALL_TICKS) list.push({ from, to: s.to, recipe: s.first.recipe });
+      if (list.length > 0) stalls.set(s.value, list);
     }
-    for (const [key, s] of [...stalls].sort((a, b) => a[0] - b[0])) {
-      if (keptUp(node, rec, key)) continue;
+    for (const [key, list] of [...stalls].sort((a, b) => a[0] - b[0])) {
+      const pace = paceOf(node, rec, key);
+      const s = list.find((x) => !waited(pace, x.from, x.to));
+      if (s === undefined) continue;
       const k = keyOf(key);
       emit(at, node, 'feed_no_route', `Nothing takes ${name(key)} out of ${node.label}: ${run.explain('out', node.id, k) ?? 'nothing on the line takes it'}`,
         { key: k, stepId: recipeStep(s.recipe), tick: s.from });
@@ -840,7 +862,7 @@ export function detect(model: FeedModel, stats: SimStats, run: { scenario: Scena
    * Task 6 rule 5, a bench: `feed_overfill` (one item in two or more input slots: n the most, from the first tick; an item
    * not in its grid in one), `feed_bench_eject` (what it moved to its result slot that it did not craft), `feed_bench_delete`
    * (what its clean-up overwrote there) and `feed_bench_stuck` (its push left its result for `STALL_TICKS` in a row, once
-   * per item, from the first such stretch, unless it still gave what the plan asks of it: `keptUp`).
+   * per item, from the first such stretch that did not only wait for its takers: `waited`).
    */
   function benchFindings(at: number, node: BenchNode, rec: Readonly<NodeRecord>): void {
     for (const [key, s] of [...rec.slots].sort((a, b) => a[0] - b[0])) {
@@ -863,12 +885,18 @@ export function detect(model: FeedModel, stats: SimStats, run: { scenario: Scena
         + 'overwrites the stack it already moved to its result slot', { tick: b.lost[0]!.t, count: n });
     }
     const stuck = new Map<number, number>();
+    const paces = new Map<number, Pace | null>();
     for (const r of b.refused) {
-      if (stuck.has(r.key) || (r.to === -1 ? ticks : r.to) - r.from < STALL_TICKS) continue;
-      stuck.set(r.key, r.from);
+      const to = r.to === -1 ? ticks : r.to;
+      if (stuck.has(r.key) || to - r.from < STALL_TICKS) continue;
+      let pace = paces.get(r.key);
+      if (pace === undefined) {
+        pace = paceOf(node, rec, r.key);
+        paces.set(r.key, pace);
+      }
+      if (!waited(pace, r.from, to)) stuck.set(r.key, r.from);
     }
     for (const [key, from] of [...stuck].sort((x, y) => x[0] - y[0])) {
-      if (keptUp(node, rec, key)) continue;
       emit(at, node, 'feed_bench_stuck', `${node.label} stopped: ${name(key)} sits in its result slot and the block behind it does not take it`,
         { key: keyOf(key), tick: from });
     }
