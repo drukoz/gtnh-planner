@@ -92,10 +92,12 @@ export function projectorRoutes(app: AppContext): Route[] {
           const pack = await app.pack();
           // looked up per request, so a layout service registered or replaced after start is the one used
           const layout = await layoutService(app).layoutFor(project);
-          // the plan's own steps (cached: the layout was planned from the same plan), which the checklist shows merged
-          // with the layout's, so the mod numbers the steps as the Steps view does
-          const plan = await planForProject(app, project);
-          payload = projectorPayload(project, layout, pack, plan.buildSteps);
+          // the plan's own steps as the plan route finishes it (cached: the layout was planned from the same plan, and its
+          // whole build broken down once, add-on 14), less the layout's, which the checklist shows merged with the
+          // layout's, so the mod numbers the steps as the Steps view does
+          const plan = await layoutService(app).finishPlan(await planForProject(app, project), project);
+          const layoutIds = new Set(layout.buildSteps.map((s) => s.id));
+          payload = projectorPayload(project, layout, pack, plan.buildSteps.filter((s) => !layoutIds.has(s.id)));
         } catch (err) {
           if (err instanceof HttpError) throw err;
           console.error(`Building the projector payload of project ${project.id} failed:`, err);

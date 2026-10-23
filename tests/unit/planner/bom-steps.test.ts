@@ -458,6 +458,8 @@ describe('how each build part is made', () => {
     expect(r.lines[0]?.made?.recipeId).toBe('x2');
     expect(r.totals.map((l) => [l.key, l.amount])).toEqual([['t:copper_ingot@0', 3]]);
     expect(unmade(r.lines)).toEqual([]);
+    // the dropped pin stays on X's swap list: x1 costs Y's 3 once Y settles from Z by z1, the same as x2, so by id
+    expect(r.alternatives?.['t:x@0']?.map((a) => [a.recipeId, a.rawCost])).toEqual([['x1', 3], ['x2', 3]]);
   });
 
   it('makes each good one way across the build list', async () => {
@@ -883,6 +885,39 @@ describe('the build steps of the build parts', () => {
       { ...defaultSettings(), tier: 1 }, emptyContextForTest());
     expect(partSteps(pack, { steps: [], bom: { lines: r.lines, totals: r.totals, makes: r.makes ?? [] }, tier: 1 })).toEqual([
       { id: 'gather', kind: 'gather', text: 'Gather the base materials: 3× Tin Ingot' }, { id: 'craft:t:tin_ingot@0', kind: 'craft', text: 'Craft 3× Tin Ingot' }]);
+  });
+});
+
+describe('the whole build of a placed line', () => {
+  // Architecture §11 entry 41 (9): Plan 5 breaks the plan's own top-level lines and the layout's parts down in one call,
+  // with the plan's steps, so a part both need is made once for the summed demand, stepped once and totalled once.
+  /** Every node, depth first. */
+  const all = (lines: readonly BomLine[]): BomLine[] => lines.flatMap((l) => [l, ...all(l.children ?? [])]);
+
+  it('pools a part the machines and the wiring both need', async () => {
+    // The assembler takes 2 cables and its hull 2 more, the wiring 1 + 1: 6 cables, 3 runs of `cable` (per line 1 + 1 +
+    // 1 + 1 = 4 runs, so 4 tin ingots).
+    const asm = step({ id: 'circuit-lv', recipeId: 'circuit-lv', count: 1, owned: 0, machine: { mteId: 121, name: 'Basic Assembler', tier: 1 } });
+    const lines: BomLine[] = [{ key: 'machine:121@0', amount: 1, why: '1× Basic Assembler', group: 'machines' },
+      { key: 't:tin_cable@0', amount: 1, why: 'power cable', group: 'power' }, { key: 't:tin_cable@0', amount: 1, why: 'cover cable', group: 'logistics' }];
+    const settings = { ...defaultSettings(), tier: 1 };
+    const r = await expandBomLines(pack, lines, settings, emptyContextForTest(), { steps: [asm] });
+    expect(r.makes?.filter((m) => m.key === 't:tin_cable@0').map((m) => [m.made.runs, m.amount])).toEqual([[3, 6]]);
+    expect(r.totals.find((t) => t.key === 't:tin_ingot@0')?.amount).toBe(3);
+    // one step for the cables, under the first top-level cable line's id: the logistics line gets none
+    const out = partSteps(pack, { steps: [asm], bom: { lines: r.lines, totals: r.totals, makes: r.makes! }, tier: 1 });
+    expect(out.filter((s) => s.id.includes('t:tin_cable@0'))).toEqual([
+      { id: 'craft:t:tin_cable@0', kind: 'craft', text: 'Craft 6× 1x Tin Cable from 3× Tin Ingot at a crafting table' }]);
+    // with the plan's steps the circuits' assembler is the line's, whose own build needs them, as buildBom has it
+    const circuits = all(r.lines).filter((l) => l.key === 't:circuit@0');
+    expect(circuits.length).toBeGreaterThan(0);
+    for (const c of circuits) expect(c.made?.machine).toEqual({ mteId: 121, name: 'Basic Assembler', tier: 1, source: 'first' });
+    const without = all((await expandBomLines(pack, lines, settings, emptyContextForTest())).lines).filter((l) => l.key === 't:circuit@0');
+    expect(without.length).toBe(circuits.length);
+    for (const c of without) expect(c.made?.machine).toEqual({ mteId: 121, name: 'Basic Assembler', tier: 1, source: 'new' });
+    // every good the list makes has its swap list
+    expect(Object.keys(r.alternatives ?? {}).sort()).toEqual(['machine:121@0', 't:circuit@0', 't:copper_wire@0', 't:hull_lv@0', 't:iron_plate@0', 't:tin_cable@0']);
+    expect(r.alternatives?.['t:iron_plate@0']?.map((a) => a.recipeId)).toEqual(['bend-plate', 'hammer-plate']);
   });
 });
 

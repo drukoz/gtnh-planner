@@ -261,9 +261,11 @@ export async function buildBom(
  * does for the line's plan: in its environment and at its prices (`lineLeaf`: stop items at their cost-model price,
  * derived leaves at their own chain's cost; the plain prices of `planBasis` when the settings name no target the export
  * knows), so the same lines break down the same way in both. One output line per input line, in input order. The return
- * shape is architecture §11.15's plus the build's make plan (`Bom.makes`), so the breakdown's warnings are not passed on
- * here. With `opts.steps` the machine pass knows the line's machines and the owned ones as `buildBom` does; without them,
- * no line machines and only the context's owned ones.
+ * shape is architecture §11.15's plus the build's make plan (`Bom.makes`) and the swap list of every good the lines make
+ * (`Bom.alternatives`, by key), so the breakdown's warnings are not passed on here: `makes` and `alternatives` are
+ * optional additions to §11.15's shape; `alternatives` is absent when the lines make nothing (or nothing with a recipe at
+ * a finite cost). With `opts.steps` the machine pass knows the line's machines and the owned ones as `buildBom` does;
+ * without them, no line machines and only the context's owned ones.
  */
 export async function expandBomLines(
   pack: Pack, lines: BomLine[], settings: PlanSettings, ctx: PlanContext,
@@ -273,10 +275,15 @@ export async function expandBomLines(
   lines: BomLine[]; totals: BomLine[];
   // optional addition
   makes?: BomMake[];
+  // optional addition
+  alternatives?: Record<StuffKey, PlanStep['alternatives']>;
 }> {
   const { env, leaf } = await lineLeaf(pack, settings, ctx);
   const expanded = await expandWith(pack, lines, { settings, env, leaf, ctx, ...(opts?.steps === undefined ? {} : { steps: opts.steps }) });
-  return { lines: expanded.lines, totals: expanded.totals, makes: expanded.makes };
+  return {
+    lines: expanded.lines, totals: expanded.totals, makes: expanded.makes,
+    ...(expanded.alternatives.size === 0 ? {} : { alternatives: Object.fromEntries(expanded.alternatives) }),
+  };
 }
 
 interface Expansion {
