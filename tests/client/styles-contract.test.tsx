@@ -837,13 +837,21 @@ describe('the Machine GUI settings drawer', () => {
     expect(declaredIn(NARROW, '.settings-toggle', 'align-items')).toBe('center');
   });
 
+  it('shows the drawer\'s Close settings button in the drawer only, at the top right of it', () => {
+    // ruling R36: the drawer's way out, where the focus goes when it opens; a wide column has nothing to close
+    expect(declarations(ruleBody('.settings-close'))).toEqual([['display', 'none']]);
+    expect(inQuery(NARROW, '.settings-close')).toEqual([['display', 'inline-flex'], ['align-items', 'center'], ['align-self', 'flex-end']]);
+  });
+
   it('slides the settings column in from the left, and keeps the hidden one out of the tab order', () => {
     for (const [property, value] of [
       ['position', 'fixed'], ['inset', '0 auto 0 0'], ['width', 'min(340px, 88vw)'], ['max-height', 'none'], ['overflow', 'auto'],
       ['padding', '12px'], ['background', 'var(--page)'], ['z-index', '60'],
       ['transform', 'translateX(-105%)'], ['visibility', 'hidden'],
-      ['transition', 'transform var(--dur-slow) var(--ease-out), visibility 0s var(--dur-slow)'],
+      // ruling R36: the closed state's transition is the one it slides out with, the exit's: faster, easing in (design spec §7a)
+      ['transition', 'transform var(--dur-exit) var(--ease-in), visibility 0s var(--dur-exit)'],
     ] as const) expect(declaredIn(NARROW, '.settings-panel', property), `.settings-panel { ${property} }`).toBe(value);
+    expect(Number.parseFloat(rootTokens().get('--dur-exit') ?? '')).toBeLessThan(Number.parseFloat(rootTokens().get('--dur-slow') ?? ''));
     // open: in place at once and visible at once; closed: out of sight and out of the tab order after the slide (the delayed `visibility`)
     expect(declaredIn(NARROW, '.settings-open .settings-panel', 'transform')).toBe('none');
     expect(declaredIn(NARROW, '.settings-open .settings-panel', 'visibility')).toBe('visible');

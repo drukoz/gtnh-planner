@@ -3,9 +3,10 @@
 // tabs. The tab follows the URL hash, so links elsewhere
 // (a build step's map pin sets `#map`) switch it too. Anyone can delete the project; once it is deleted, here or
 // elsewhere, the page goes back to the project list, which says so (§11.24). Below 900 px the settings panel is a drawer
-// that the Settings button in the head slides in over a dimmed page (design spec §7a).
+// that the Settings button in the head slides in over a dimmed page (design spec §7a), a layer of its own while it is
+// open (ruling R36).
 
-import { useEffect, useRef, useState, type ReactElement } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactElement } from 'react';
 import type { StuffKey } from '../../shared/keys.ts';
 import { indexPlan, issueText, type PlanIssue, type PlanIssueCode } from '../../shared/plan/balance.ts';
 import type { PackInfo } from '../../shared/types/api.ts';
@@ -229,14 +230,31 @@ export function ProjectPage(props: { id: string }): ReactElement {
   }, [deleted]);
   // What the flow diagram lights belongs to this project: leaving it (for another project or another page) clears it.
   useEffect(() => () => setFlowFocus(null), [props.id]);
-  // The settings column is a drawer below 900 px. While it is open, Escape closes it and gives the focus back to its button, one layer
-  // per press: a key that something inside has already handled (`defaultPrevented`) is not the drawer's, and neither is the key that
-  // closes a search list open in it (the item search and the avoid box close on Escape without preventing the default). React has
-  // drawn such a list closed by the time the key reaches the document, so `look` reads whether one is open on the way down, before
-  // the list's own handler runs, and `closeOnEscape` decides on the way up. These hooks sit above the early return below; the
-  // listeners are removed when the drawer closes, and between StrictMode's two runs.
+  // The settings column is a drawer below 900 px, and a layer of its own while it is open (ruling R36): opening it moves the focus to
+  // its Close settings button, and the page behind it is inert (the head, the banners and the views here, and the App's top bar above
+  // this page), so neither the keyboard nor a click reaches what the drawer covers. Every way out, Escape, a click on the dimmed page,
+  // its Close button or the Settings button, goes through `closeSettings`, which gives the focus back to the Settings button. A window
+  // that grows past 900 px closes it too, without moving the focus: the column is beside the views again and the button is not drawn.
+  // The focus moves in a layout effect, after the commit: until then the page behind is still inert, and an inert button takes no focus.
+  // These hooks sit above the early return below; the listeners are removed when the drawer closes, and between StrictMode's two runs.
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsToggle = useRef<HTMLButtonElement | null>(null);
+  const settingsClose = useRef<HTMLButtonElement | null>(null);
+  /** The drawer is being closed by a way out of it: the focus goes back to the Settings button. */
+  const refocusToggle = useRef(false);
+  const closeSettings = (): void => {
+    refocusToggle.current = true;
+    setSettingsOpen(false);
+  };
+  useLayoutEffect(() => {
+    if (settingsOpen) settingsClose.current?.focus();
+    else if (refocusToggle.current) settingsToggle.current?.focus();
+    refocusToggle.current = false;
+  }, [settingsOpen]);
+  // While it is open, Escape closes it, one layer per press: a key that something inside has already handled (`defaultPrevented`) is not
+  // the drawer's, and neither is the key that closes a search list open in it (the item search and the avoid box close on Escape without
+  // preventing the default). React has drawn such a list closed by the time the key reaches the document, so `look` reads whether one is
+  // open on the way down, before the list's own handler runs, and `closeOnEscape` decides on the way up.
   useEffect(() => {
     if (!settingsOpen) return;
     let listOpen = false;
@@ -245,14 +263,29 @@ export function ProjectPage(props: { id: string }): ReactElement {
     };
     const closeOnEscape = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape' || e.defaultPrevented || listOpen) return;
-      setSettingsOpen(false);
-      settingsToggle.current?.focus();
+      closeSettings();
     };
     document.addEventListener('keydown', look, true);
     document.addEventListener('keydown', closeOnEscape);
     return () => {
       document.removeEventListener('keydown', look, true);
       document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [settingsOpen]);
+  // What lies outside this page while the drawer is open: the top bar, which the App draws above it, goes inert with the rest of the
+  // page behind the drawer; and the drawer closes when the window grows past the width it is a drawer at (the stylesheet's query).
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const bar = document.querySelector<HTMLElement>('.top-nav');
+    if (bar !== null) bar.inert = true;
+    const narrow = matchMedia('(max-width: 900px)');
+    const onWidth = (): void => {
+      if (!narrow.matches) setSettingsOpen(false);
+    };
+    narrow.addEventListener('change', onWidth);
+    return () => {
+      narrow.removeEventListener('change', onWidth);
+      if (bar !== null) bar.inert = false;
     };
   }, [settingsOpen]);
 
@@ -267,21 +300,26 @@ export function ProjectPage(props: { id: string }): ReactElement {
   const View = active.component;
   return (
     <main className="page project-page">
-      <div className="project-head">
-        <SettingsToggle open={settingsOpen} onToggle={() => setSettingsOpen((open) => !open)} ref={settingsToggle} />
+      <div className="project-head" inert={settingsOpen}>
+        <SettingsToggle open={settingsOpen} onToggle={() => (settingsOpen ? closeSettings() : setSettingsOpen(true))} ref={settingsToggle} />
         <ProjectName name={project.name} onRename={(name) => send([{ op: 'rename', name }])} />
         <span className={view.connected ? 'connection live' : 'connection'}>{view.connected ? 'live' : 'reconnecting…'}</span>
         <DeleteProject id={project.id} name={project.name} label="Delete project" onDeleted={() => view.markDeleted(me)} />
       </div>
-      {view.error !== null && <p className="banner error" role="alert">{view.error}</p>}
-      <PlanBanner plan={plan} planError={view.planError} planLoading={view.planLoading} settings={project.settings} send={send} />
+      {/* The banners' own box, so the page behind an open drawer can be inert in three pieces (ruling R36); it adds no space. */}
+      <div className="project-banners" inert={settingsOpen}>
+        {view.error !== null && <p className="banner error" role="alert">{view.error}</p>}
+        <PlanBanner plan={plan} planError={view.planError} planLoading={view.planLoading} settings={project.settings} send={send} />
+      </div>
       <div className={settingsOpen ? 'project-body settings-open' : 'project-body'}>
         <aside className="settings-panel" id="project-settings" aria-label="Project settings">
+          {/* The drawer's way out, and where the focus goes when it opens; the stylesheet draws it in the drawer only. */}
+          <button type="button" className="settings-close" onClick={closeSettings} ref={settingsClose}>Close settings</button>
           {pack.error !== null && <p className="error small">{`Could not load the pack: ${pack.error}`}</p>}
           <SettingsPanel project={project} plan={plan} send={send} me={me} info={pack.info} />
           {deleted === null && <ProjectorPanel projectId={project.id} />}
         </aside>
-        <div className="project-views">
+        <div className="project-views" inert={settingsOpen}>
           <div className="tabs" role="tablist" aria-label="Project views">
             {PROJECT_TABS.map((t) => (
               <button
@@ -306,7 +344,7 @@ export function ProjectPage(props: { id: string }): ReactElement {
         </div>
       </div>
       {/* After the body, not in its grid: the dimmed page behind the drawer is not a cell. It only draws below 900 px. */}
-      {settingsOpen && <div className="drawer-backdrop" onClick={() => setSettingsOpen(false)} />}
+      {settingsOpen && <div className="drawer-backdrop" onClick={closeSettings} />}
     </main>
   );
 }
