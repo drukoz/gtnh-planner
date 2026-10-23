@@ -243,6 +243,31 @@ function declared(selector: string, property: string): string | undefined {
   return declarations(ruleBody(selector)).filter(([name]) => name === property).map(([, value]) => value).pop();
 }
 
+/**
+ * The selectors of a selector list, cut at its top-level commas only: `:where(a, summary):focus-visible` is one selector, as is
+ * `[title='a, b']`.
+ */
+function selectorList(prelude: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let quote = '';
+  let start = 0;
+  for (let i = 0; i < prelude.length; i++) {
+    const c = prelude.charAt(i);
+    if (quote !== '') {
+      if (c === quote) quote = '';
+    } else if (c === '"' || c === "'") quote = c;
+    else if (c === '(' || c === '[') depth++;
+    else if (c === ')' || c === ']') depth--;
+    else if (c === ',' && depth === 0) {
+      out.push(prelude.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+  out.push(prelude.slice(start).trim());
+  return out;
+}
+
 /** Where in the source the first rule for `selector` is; -1 when there is none. */
 function position(selector: string): number {
   const wanted = selector.replace(/\s+/g, ' ').trim();
@@ -425,9 +450,11 @@ describe('the Machine GUI controls', () => {
       ['details.settings-section[open] > summary::before, details.disclosure[open] > summary::before', 'transform', 'rotate(90deg)'],
     ]);
     expect(declared(SUMMARY.replace(/summary/g, 'summary::before'), 'clip-path'), 'a pixel caret').toMatch(/^polygon\(/);
-    // a global `summary` rule would also hit Materials' two inline disclosures and the thousands of storage rows (the focus ring's
-    // colour rule lists `summary` too, ruling R13: it recolours a ring and dresses nothing)
-    expect(blocks.filter((b) => !b.prelude.endsWith(':focus-visible') && b.prelude.split(',').some((s) => /^\s*summary\b/.test(s))).map((b) => b.prelude)).toEqual([]);
+    // a global `summary` rule would also hit Materials' two inline disclosures and the thousands of storage rows. A selector list is cut
+    // at its top-level commas only (ruling R40, in place of R14's exemption of every `:focus-visible` rule): the focus ring's colour rule
+    // names `summary` inside `:where(…)` (ruling R13), one selector that recolours a ring and dresses nothing
+    expect(blocks.filter((b) => selectorList(b.prelude).some((s) => /^summary\b/.test(s))).map((b) => b.prelude)).toEqual([]);
+    expect(selectorList(':where(a, button.link, summary):focus-visible, summary:hover')).toEqual([':where(a, button.link, summary):focus-visible', 'summary:hover']);
   });
 
   it('shows the keyboard focus as a 3px yellow ring that touches the control', () => {

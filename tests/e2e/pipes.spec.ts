@@ -45,17 +45,36 @@ async function loosePipeEnds(page: Page): Promise<{ loose: string[]; pipes: numb
   });
 }
 
+/**
+ * Watches the dashes of the pipe `contents` finds first, the same element all along: they are the moving pipe's (`pipe-flow`), and their
+ * offset along the pipe changes within two seconds while that element stays in the page (ruling R40: a poll, not a fixed sleep). A
+ * reading of a pipe the view had drawn anew would be another pipe's, and the empty offset of a detached one differs from any number:
+ * neither counts as a move.
+ */
+async function expectDashesMove(contents: Locator): Promise<void> {
+  const pipe = await contents.elementHandle();
+  if (pipe === null) throw new Error('no pipe to watch');
+  try {
+    const read = (): Promise<{ attached: boolean; name: string; offset: number }> => pipe.evaluate((el) => {
+      const style = getComputedStyle(el);
+      return { attached: el.isConnected, name: style.animationName, offset: Number.parseFloat(style.strokeDashoffset) };
+    });
+    const first = await read();
+    expect(first.name).toBe('pipe-flow');
+    expect(Number.isFinite(first.offset), `the dash offset reads as a number, not "${first.offset}"`).toBe(true);
+    await expect.poll(async () => {
+      const now = await read();
+      return now.attached && Number.isFinite(now.offset) && now.offset !== first.offset;
+    }, { message: 'the dashes move along the pipe, which stays in the page', timeout: 2_000 }).toBe(true);
+    expect((await read()).attached, 'the pipe watched is still in the page').toBe(true);
+  } finally {
+    await pipe.dispose();
+  }
+}
+
 test('flow pipes move', async ({ page }) => {
   await openWithPlan(page, circuitLv());
-  const contents = page.locator('.flow-edge-flow').first();
-  const [name, before, after] = await contents.evaluate(async (el) => {
-    const style = getComputedStyle(el);
-    const first = style.strokeDashoffset;
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    return [style.animationName, first, getComputedStyle(el).strokeDashoffset];
-  });
-  expect(name).toBe('pipe-flow');
-  expect(after, 'the dashes have moved along the pipe in a quarter of a second').not.toBe(before);
+  await expectDashesMove(page.locator('.flow-edge-flow').first());
 });
 
 test('every flow pipe starts and ends on a flange', async ({ page }) => {
@@ -145,15 +164,7 @@ async function openConnections(page: Page): Promise<Locator> {
 
 test('connections pipes move', async ({ page }) => {
   const view = await openConnections(page);
-  const contents = view.locator('.conn-edge-flow').first();
-  const [name, before, after] = await contents.evaluate(async (el) => {
-    const style = getComputedStyle(el);
-    const first = style.strokeDashoffset;
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    return [style.animationName, first, getComputedStyle(el).strokeDashoffset];
-  });
-  expect(name).toBe('pipe-flow');
-  expect(after, 'the dashes have moved along the pipe in a quarter of a second').not.toBe(before);
+  await expectDashesMove(view.locator('.conn-edge-flow').first());
 });
 
 // Ruling R32: a Connections arrow head takes the colour of its pipe with `context-stroke`, which WebKit does not know: it would fill the
