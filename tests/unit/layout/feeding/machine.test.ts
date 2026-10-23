@@ -486,6 +486,46 @@ describe('the detectors', () => {
     expect(go({ sm: { 't:c@0': 0.01 } }).findings).toEqual([]);
   });
 
+  it('counts a stop after a whole stack went out at once in the first half', () => {
+    // as above, but its output slot starts full of Gamma and a taker takes all 64 at tick 50, as a conveyor that moves a stack an
+    // operation drains it once; from 200 a taker takes 4 every 100 ticks until 20,000. That stack says nothing of the pace of
+    // its takers since: the second half's takes give the plan's interval between takes (4 Gamma at 0.5/s: 160 ticks, not the
+    // stack's 2,560), so the stall still open at the run's end, from 21,550 (2,450 ticks), counts
+    const node = smelterNode({ recipes: [simRecipe('sm', 100, [['t:a@0', 1], ['t:b@0', 4]], [['t:c@0', 4]])] });
+    const at = Array.from({ length: 200 }, (_, i) => 100 * (i + 1));
+    const go = (plannedOut?: FeedModel['plannedOut']) => both(handModel([node], plannedOut === undefined ? {} : { plannedOut }), {
+      ticks: 24_000, restartAt: 24_000, initial: { '0,0,0': [[2, 't:c@0', 64]] },
+      extra: (env) => [feeder(env, '0,0,0', 3, ['t:a@0', 't:b@0'], 64, 100, 0), taker(env, '0,0,0', 3, 64, [50]), taker(env, '0,0,0', 3, 4, at)],
+    });
+    const found = (r: ScenarioRun) => r.findings.map((f) => [f.code, f.key, f.tick]);
+    expect(found(go({ sm: { 't:c@0': 0.5 } }))).toEqual([['feed_no_route', 't:c@0', 21_550]]);
+    expect(found(go())).toEqual([['feed_no_route', 't:c@0', 21_550]]);
+    // a plan that asks 0.01/s of it takes 4 every 8,000 ticks, more than the 2,450: the next may still come
+    expect(go({ sm: { 't:c@0': 0.01 } }).findings).toEqual([]);
+  });
+
+  it('leaves out an output whose taker moves each run\'s share in pieces while it keeps to the plan\'s pace', () => {
+    // a taker can move a run's share in pieces (an EnderIO face offers at most 4 an extraction, a conveyor may move 1): its output
+    // slot full of Gamma (4 a run), a taker takes 1 four times, 20 ticks apart, every 2,000 ticks from 2,600 to 22,660, the 0.04/s
+    // the plan asks of it. The most it takes in one tick, 1, is 500 ticks of the plan's rate, but in the run's second half it
+    // waits 1,940 ticks between two of its takes: the wait still open at the run's end, from 22,760 (1,240 ticks), is shorter
+    const node = smelterNode({ recipes: [simRecipe('sm', 100, [['t:a@0', 1], ['t:b@0', 4]], [['t:c@0', 4]])] });
+    // four takes 20 ticks apart, every `every` ticks from 2,600 to `last`
+    const bursts = (every: number, last: number) => Array.from({ length: Math.floor((last - 2_600) / every) + 1 }, (_, i) => 2_600 + every * i)
+      .flatMap((t0) => [t0, t0 + 20, t0 + 40, t0 + 60]);
+    const go = (at: number[], plannedOut?: FeedModel['plannedOut']) => both(handModel([node], plannedOut === undefined ? {} : { plannedOut }), {
+      ticks: 24_000, restartAt: 24_000, initial: { '0,0,0': [[2, 't:c@0', 64]] },
+      extra: (env) => [feeder(env, '0,0,0', 3, ['t:a@0', 't:b@0'], 64, 100, 0), taker(env, '0,0,0', 3, 1, at)],
+    });
+    const found = (r: ScenarioRun) => r.findings.map((f) => [f.code, f.key, f.tick]);
+    expect(go(bursts(2_000, 22_600), { sm: { 't:c@0': 0.04 } }).findings).toEqual([]);
+    // a model that does not say: the stall from tick 0 counts
+    expect(found(go(bursts(2_000, 22_600)))).toEqual([['feed_no_route', 't:c@0', 0]]);
+    // twice as often until 19,660 and never again: the wait still open at the run's end, from 19,760 (4,240 ticks), is longer than
+    // any wait between two takes in the second half (940 ticks): it stopped
+    expect(found(go(bursts(1_000, 19_600), { sm: { 't:c@0': 0.04 } }))).toEqual([['feed_no_route', 't:c@0', 19_760]]);
+  });
+
   it('looks at the slots, not the side, for what keeps a kind out', () => {
     // its output side takes nothing (Input from Output Side off), so it is fed from the north; Beta never comes, but nothing keeps it out
     const node = smelterNode({ settings: { multiStack: null, inputFilter: null, inputFromOutputSide: false, autoOutput: null } });

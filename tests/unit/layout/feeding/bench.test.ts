@@ -182,7 +182,8 @@ describe('the Auto Workbench', () => {
       extra: (env) => [feeder(env, '0,0,0', 1, ['t:a@0'], 1, 1_000, 0), taker(env, '0,0,1', 2, 1, at)],
     });
     // the run's second half pushes 6 Ex out in 600 s: the 0.01/s the plan asks of it; the wait still open at the run's end,
-    // 1,939 ticks, is shorter than the plan's interval between takes (1 Ex at 0.01/s: 2,000 ticks)
+    // 1,939 ticks, is shorter than the interval between takes that pace keeps (1 Ex at 0.01/s: 2,000 ticks; 2,017 between two
+    // of its pushes in the second half)
     expect(go({ w: { 't:x@0': 0.01 } }).findings).toEqual([]);
     // a plan that asks 0.02/s of it, and a model that does not say: its first wait, from its first craft at 34, counts
     expect(go({ w: { 't:x@0': 0.02 } }).findings.map((f) => [f.code, f.key, f.tick])).toEqual([['feed_bench_stuck', 't:x@0', 34]]);
@@ -208,6 +209,29 @@ describe('the Auto Workbench', () => {
     expect(found(go())).toEqual([['feed_bench_stuck', 't:x@0', 20_042]]);
     // a plan that asks 0.002/s of it takes one every 10,000 ticks, more than the 3,990 since its last push: the next may still come
     expect(go({ w: { 't:x@0': 0.002 } }).findings).toEqual([]);
+  });
+
+  it('waits for a block behind it that takes each craft\'s result in pieces while it keeps to the plan\'s pace', () => {
+    // one Alpha (one every 1,000 ticks) makes 4 Ex; the chest behind it is full of Ex, and a taker frees one four times, 20 ticks
+    // apart, every 2,000 ticks from 2,600 to 22,660: the 0.04/s the plan asks of it. Each push moves the 1 or 2 Ex the chest has
+    // room for (the most in one tick, 2, is 1,000 ticks of the plan's rate), but in the run's second half it waits up to 1,953
+    // ticks between two of its pushes: the wait still open at the run's end, from 22,701 (1,299 ticks), is shorter
+    const node = benchNode({ grid: ['t:a@0', null, null, null, null, null, null, null, null], result: { key: 't:x@0', amount: 4 } });
+    const full = Array.from({ length: 27 }, (_, slot) => [slot, 't:x@0', 64] as [number, string, number]);
+    // four takes 20 ticks apart, every `every` ticks from 2,600 to `last`
+    const bursts = (every: number, last: number) => Array.from({ length: Math.floor((last - 2_600) / every) + 1 }, (_, i) => 2_600 + every * i)
+      .flatMap((t0) => [t0, t0 + 20, t0 + 40, t0 + 60]);
+    const go = (at: number[], plannedOut?: FeedModel['plannedOut']) => both(handModel([node, outputChestNode('0,0,1')], plannedOut === undefined ? {} : { plannedOut }), {
+      ticks: 24_000, restartAt: 24_000, initial: { '0,0,1': full },
+      extra: (env) => [feeder(env, '0,0,0', 1, ['t:a@0'], 1, 1_000, 0), taker(env, '0,0,1', 2, 1, at)],
+    });
+    const found = (r: ScenarioRun) => r.findings.map((f) => [f.code, f.key, f.tick]);
+    expect(go(bursts(2_000, 22_600), { w: { 't:x@0': 0.04 } }).findings).toEqual([]);
+    // a model that does not say: its first wait, from its first craft at 34, counts
+    expect(found(go(bursts(2_000, 22_600)))).toEqual([['feed_bench_stuck', 't:x@0', 34]]);
+    // twice as often until 19,660 and never again: the wait still open at the run's end, from 19,700 (4,300 ticks), is longer than
+    // any wait between two of its pushes in the second half (961 ticks): it stopped
+    expect(found(go(bursts(1_000, 19_600), { w: { 't:x@0': 0.04 } }))).toEqual([['feed_bench_stuck', 't:x@0', 19_700]]);
   });
 
   it('lets its covers act first in its tick', () => {

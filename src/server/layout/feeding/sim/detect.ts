@@ -18,8 +18,10 @@
 // - neither of these two for a stall that only waited for its takers, as a push line's machines run ahead of their takers and
 //   wait, the line's normal state (research §7): the machine still gave what the plan asks of it of that item over the run's
 //   second half (`model.plannedOut`, within `feed_slow`'s tolerance), and the stall ended before the run's end, or is still
-//   open there but shorter than the plan's own interval between takes. Each is judged by itself, and an item reports its
-//   first stall that did not only wait: a line that drained it before and then stopped counts (Task 4 rule 14);
+//   open there but shorter than the interval between takes that pace keeps: over the second half, the most of the item taken
+//   in one tick over its plan rate, or the longest wait between two takes of it where that is longer (a taker that moves a
+//   run's share in pieces). Each is judged by itself, and an item reports its first stall that did not only wait: a line
+//   that drained it before and then stopped counts (Task 4 rule 14);
 // - `feed_pool_starve`: a recipe of a shared machine that never ran while its inputs were there for `STALL_TICKS`;
 // - `feed_fluid_packet`: once per machine and fluid, an ME interface's Fluid Packet that went into one of its input slots,
 //   that it kept in its send list for `STALL_TICKS` because the machine took none, or the CPU's push of a pattern of Fluid
@@ -540,8 +542,8 @@ function compareText(a: string, b: string): number {
 interface Pending { at: number; code: number; key: string; seq: number; finding: FeedFinding }
 
 /**
- * How a machine kept to the plan's pace for one item: whether it gave what the plan asks of it over the run's second half,
- * and the plan's own interval between takes, in ticks.
+ * How a machine kept to the plan's pace for one item over the run's second half: whether it gave what the plan asks of it,
+ * and the interval between takes that pace keeps, in ticks.
  */
 interface Pace { kept: boolean; interval: number }
 
@@ -632,10 +634,13 @@ export function detect(model: FeedModel, stats: SimStats, run: { scenario: Scena
   const seconds = (ticks - half) / TICKS_PER_SECOND;
   const tolerance = run.slowTolerance ?? SLOW_TOLERANCE;
   /**
-   * How `node` kept to the plan's pace for item `key` (an id), or null where the plan asks nothing of it there (a hand-built
-   * model, or an item the plan sends nowhere): `kept`, whether it gave what the plan asks of it over the run's second half,
-   * within `feed_slow`'s tolerance (`model.plannedOut`); `interval`, the plan's own ticks between takes: the most of the item
-   * taken out of it in one tick, over its plan rate.
+   * How `node` kept to the plan's pace for item `key` (an id) over the run's second half, or null where the plan asks nothing
+   * of it there (a hand-built model, or an item the plan sends nowhere): `kept`, whether it gave what the plan asks of it,
+   * within `feed_slow`'s tolerance (`model.plannedOut`); `interval`, the ticks between takes that keep to it: the most of the
+   * item taken out of it in one tick, over its plan rate, or the longest wait between two takes of it where that is longer,
+   * as with a taker that moves a run's share in pieces (an EnderIO face offers at most 4 an extraction; a push moves only what
+   * the block behind has room for) and then waits for the next run's. The first half counts for neither: a stack taken at
+   * once there (an output slot that filled before its takers ran) says nothing of their pace.
    */
   const paceOf = (node: FeedNode, rec: Readonly<NodeRecord>, key: number): Pace | null => {
     if (node.kind === 'chest' || seconds <= 0) return null;
@@ -643,24 +648,27 @@ export function detect(model: FeedModel, stats: SimStats, run: { scenario: Scena
     let rate = 0;
     for (const stepId of node.stepIds) rate += model.plannedOut?.[stepId]?.[k] ?? 0;
     if (rate <= 0) return null;
-    let gave = 0, most = 0;
+    // the second half's takes of the item: what left it each tick (a multiblock's buses add theirs, out of tick order)
     const takes = new Map<number, number>();
     rec.out.key.forEach((x, i) => {
-      if (x !== key) return;
-      const t = rec.out.t[i]!, n = rec.out.n[i]!;
-      const took = (takes.get(t) ?? 0) + n;
-      takes.set(t, took);
-      most = Math.max(most, took);
-      if (t >= half && t < ticks) gave += n;
+      const t = rec.out.t[i]!;
+      if (x === key && t >= half && t < ticks) takes.set(t, (takes.get(t) ?? 0) + rec.out.n[i]!);
     });
-    return { kept: gave >= (1 - tolerance) * rate * seconds, interval: (most / rate) * TICKS_PER_SECOND };
+    let gave = 0, most = 0, longest = 0, last = -1;
+    for (const [t, n] of [...takes].sort((a, b) => a[0] - b[0])) {
+      gave += n;
+      most = Math.max(most, n);
+      if (last >= 0) longest = Math.max(longest, t - last);
+      last = t;
+    }
+    return { kept: gave >= (1 - tolerance) * rate * seconds, interval: Math.max((most / rate) * TICKS_PER_SECOND, longest) };
   };
   /**
    * Whether a stall of an output (a blocked output slot, or a result its back refuses) from tick `from` until `to` (`ticks`:
    * still open at the run's end) only waited for its takers, as a push line's machines run ahead of their takers and wait
    * (research §7): its machine kept to the plan's pace for the item (`pace`), and the stall ended before the run's end, or is
-   * still open there but shorter than the plan's own interval between takes. A stall open at the end that lasts longer is a
-   * stop, however far ahead of its plan the machine ran before it (Task 4 rule 14: a line that drained it before and then
+   * still open there but shorter than the interval between takes that pace keeps. A stall open at the end that lasts longer is
+   * a stop, however far ahead of its plan the machine ran before it (Task 4 rule 14: a line that drained it before and then
    * stopped counts).
    */
   const waited = (pace: Pace | null, from: number, to: number): boolean => pace !== null && pace.kept && (to < ticks || to - from < pace.interval);
