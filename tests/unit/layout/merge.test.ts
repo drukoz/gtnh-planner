@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mergeLayoutIntoPlan, mergeBuildSteps, mergeBom } from '../../../src/server/layout/merge.ts';
 import { makePlan, IDS } from '../../helpers/layout-fixtures.ts';
 import type { Layout } from '../../../src/shared/types/layout.ts';
+import type { BuildStep } from '../../../src/shared/types/plan.ts';
 
 const layout = (over: Partial<Layout> = {}): Layout => ({ dim: 0, origin: [0, 64, 0], size: [4, 1, 5], rotation: 0, mode: 'direct', blocks: [], hookups: [], pins: [],
   buildSteps: [{ id: 'layout:site', order: 1, text: 'Clear', kind: 'place', pin: 1 }, { id: 'layout:test', order: 2, text: 'Check', kind: 'test', pin: 1 }],
@@ -31,6 +32,14 @@ describe('mergeLayoutIntoPlan', () => {
     expect(mergeLayoutIntoPlan(empty, layout(), null, (k) => k)).toBe(empty);
     const steps = makePlan([{ id: 's1', mteId: IDS.MACERATOR, count: 1 }]).buildSteps;
     expect(mergeBuildSteps(steps, [])).toEqual(steps);
+  });
+
+  it('keeps make steps before the layout steps', () => {
+    // Architecture §11 entry 41 (5): the build parts' make steps come with the gather and craft steps, before the layout's.
+    const plan: BuildStep[] = [{ id: 'gather', order: 1, text: 'Gather', kind: 'gather' }, { id: 'make:t:x@0', order: 2, text: 'Make X', kind: 'make' },
+      { id: 'craft:t:y@0', order: 3, text: 'Craft Y', kind: 'craft' }, { id: 'test', order: 4, text: 'Run', kind: 'test' }];
+    expect(mergeBuildSteps(plan, [{ id: 'layout:site', order: 1, text: 'Clear', kind: 'place', pin: 1 }]).map((s) => [s.order, s.id])).toEqual([
+      [1, 'gather'], [2, 'make:t:x@0'], [3, 'craft:t:y@0'], [4, 'layout:site'], [5, 'test']]);
   });
 
   it('carries the layout parts into the plan cost', () => {

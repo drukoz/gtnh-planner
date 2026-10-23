@@ -1,6 +1,7 @@
 // The one number format (fix spec §6.1) for every rate, amount, time and share people read, so the server's warning
 // texts (`issueText`) and the client print numbers the same way: a positive rate never reads 0 (a tiny one reads
-// "1 every 526 days"), fluids carry their litres, a running machine is never "0% busy" and a part never "100%".
+// "1 every 526 days"), fluids carry their litres, a running machine is never "0% busy" and a part never "100%". And
+// the article before a machine's name (`withArticle`), which the build steps and the Materials page share.
 // Pure TypeScript shared by server and browser: nothing from node:* and no DOM.
 
 /** Under this many per minute or hour, a rate is written as how often one unit comes. */
@@ -62,4 +63,9 @@ export function formatPercent(f: number): string {
   if (f > 0.999 && f < 1) return '>99.9%';
   if (f > 0.99 && f < 1) return `${(f * 100).toFixed(1)}%`;
   return `${Math.round(f * 100)}%`;
+}
+
+/** "a Basic Wiremill", "an Advanced Assembler": `an` before a name that starts with a vowel (any case), else `a`. */
+export function withArticle(name: string): string {
+  return `${'aeiou'.includes(name.charAt(0).toLowerCase()) && name !== '' ? 'an' : 'a'} ${name}`;
 }

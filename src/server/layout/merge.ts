@@ -129,12 +129,12 @@ function addOptional(lines: readonly BomLine[], optional: readonly BomLine[]): B
 
 // ---- Build steps ----
 
-const BEFORE_LAYOUT: ReadonlySet<BuildStep['kind']> = new Set<BuildStep['kind']>(['gather', 'craft']);
+const BEFORE_LAYOUT: ReadonlySet<BuildStep['kind']> = new Set<BuildStep['kind']>(['gather', 'craft', 'make']);
 const AFTER_LAYOUT: ReadonlySet<BuildStep['kind']> = new Set<BuildStep['kind']>(['configure', 'handcraft', 'test']);
 
 /**
- * With layout steps: the plan's gather and craft steps, the layout steps, then the plan's configure, handcraft and
- * test steps — Plan 2's generic place, power and logistics steps are left out, since the layout's say where — with
+ * With layout steps: the plan's gather, craft and make steps, the layout steps, then the plan's configure, handcraft
+ * and test steps — Plan 2's generic place, power and logistics steps are left out, since the layout's say where — with
  * `order` renumbered from 1. Without layout steps the plan's steps as they are.
  */
 export function mergeBuildSteps(planSteps: readonly BuildStep[], layoutSteps: readonly BuildStep[]): BuildStep[] {

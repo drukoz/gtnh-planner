@@ -41,8 +41,8 @@ describe('projector payload on the real layout', () => {
     expect(ordersById(p.steps)).toEqual(ordersById(plan.buildSteps));
     expect(p.steps.map((x) => x.text)).toEqual([...plan.buildSteps].sort((a, b) => a.order - b.order).map((x) => x.text));
 
-    // Plan 2's gather and craft steps come first and place nothing, so the layout's steps get later numbers
-    const before = p.steps.filter((x) => x.kind === 'gather' || x.kind === 'craft');
+    // Plan 2's gather, craft and make steps come first and place nothing, so the layout's steps get later numbers
+    const before = p.steps.filter((x) => x.kind === 'gather' || x.kind === 'craft' || x.kind === 'make');
     expect(before.length).toBeGreaterThan(0);
     expect(before.every((x) => x.blocks.length === 0 && x.order <= before.length)).toBe(true);
     const place = p.steps.find((x) => x.id.startsWith('layout:place:'))!;

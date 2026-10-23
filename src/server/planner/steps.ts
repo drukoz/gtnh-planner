@@ -1,14 +1,17 @@
-// Build steps (spec §3.6, §3.10; architecture §11.14): the ordered list a group follows to build and start a line —
-// gather, craft, place, power, logistics, configure, hand-craft, test. Step ids name what a step is about (a build-list
-// key, a plan step id, the logistics mode), never its position, so the marks people tick survive a re-plan.
+// Build steps (spec §3.6, §3.10; architecture §11.14, §11 entry 41 (5)): the ordered list a group follows to build and
+// start a line — gather, make or craft each build part, place, power, logistics, configure, hand-craft, test. Step ids
+// name what a step is about (a build-list key, a plan step id, the logistics mode), never its position, so the marks
+// people tick survive a re-plan.
 
+import { withArticle } from '../../shared/format.ts';
 import { PSEUDO_IDS, tierName } from '../../shared/gt/tiers.ts';
 import { isFluidKey, parseItemKey, type StuffKey } from '../../shared/keys.ts';
 import { machineGroups } from '../../shared/plan/pools.ts';
 import type { Pack } from '../../shared/types/pack.ts';
-import type { BuildStep, LogisticsMode, PlanSettings, PlanStep, PowerSummary } from '../../shared/types/plan.ts';
+import type { BomLine, BuildStep, LogisticsMode, PlanSettings, PlanStep, PowerSummary } from '../../shared/types/plan.ts';
 import { PROGRAMMED_CIRCUIT_ID } from '../pack/recipes.ts';
-import { cleanroomMachine, partName, stepOneOffs, stepProductName, stepTools, type Bom } from './bom.ts';
+import { cleanroomMachine, partName, stepOneOffs, stepProductName, stepTools, type Bom, type BomMake } from './bom.ts';
+import { structureParts } from './build-cost.ts';
 import type { HeldAvoid } from './candidates.ts';
 
 /** The gather step names this many base materials. */
@@ -145,9 +148,126 @@ function testText(pack: Pack, settings: PlanSettings, target: StuffKey, totalSec
   return `Run the line and check it makes ${amount} ${pack.nameOf(target)} per ${PER_WORD[settings.per]}`;
 }
 
+function byString(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 /**
- * The build steps in order (`order` = position + 1): gather the build's base materials; craft each top-level build
- * line in build-list order; place the machines; connect power; hook up logistics for the project's mode; configure
+ * The build steps of the build list's parts (architecture §11 entry 41 (5), the copy table of add-on 14's Task 5): the
+ * gather step for the totals that are not unmade, then one step per part — every make, every unmade total, every other
+ * top-level line (a key's first top-level line carries its step and id) — in Kahn's order of their waits (`BomMake.after`),
+ * batched by machine; a cycle through machines this line builds drops the machine waits of its smallest node and words
+ * that job's machine as `first`.
+ */
+export function partSteps(
+  pack: Pack, input: { steps: readonly PlanStep[]; bom: { lines: BomLine[]; totals: BomLine[]; makes?: readonly BomMake[] }; tier: number; avoid?: HeldAvoid },
+): Array<Omit<BuildStep, 'order'>> {
+  const { steps, bom, tier, avoid } = input;
+  const qty = (key: StuffKey, n: number): string => amountOf(pack, key, n);
+  const out: Array<Omit<BuildStep, 'order'>> = [];
+  const gathered = bom.totals.filter((t) => t.unmade === undefined);
+  if (gathered.length > 0) {
+    const shown = gathered.slice(0, GATHER_SHOWN).map((l) => qty(l.key, l.amount)).join(', ');
+    const more = gathered.length - GATHER_SHOWN;
+    out.push({ id: 'gather', kind: 'gather', text: `Gather the base materials: ${shown}${more > 0 ? ` (and ${more} more)` : ''}` });
+  }
+  const roomKey = cleanroomMachine(pack)?.itemKey;
+  // Task 13 ruling: a one-off that is only a hand-crafting tool (no step keeps it in a machine) is worded as a tool.
+  const machineParts = new Set(steps.flatMap((s) => stepOneOffs(pack, s, avoid).map((o) => o.key)));
+  const toolsOnly = new Set(steps.flatMap((s) => stepTools(pack, s, avoid)).filter((key) => !machineParts.has(key)));
+  const firstTop = new Map<StuffKey, BomLine>();
+  /** What all the top-level lines of a key ask for: a bought part's one step names every group's amount. */
+  const topAmount = new Map<StuffKey, number>();
+  for (const l of bom.lines) {
+    if (!firstTop.has(l.key)) firstTop.set(l.key, l);
+    topAmount.set(l.key, (topAmount.get(l.key) ?? 0) + l.amount);
+  }
+  const suffix = (key: StuffKey): string => {
+    const top = firstTop.get(key);
+    if (top === undefined || (top.group ?? 'machines') !== 'one-off') return '';
+    return toolsOnly.has(key) ? ' (a tool for hand-crafting)' : ' (stays in the machine)';
+  };
+  const idOf = (key: StuffKey): string => (firstTop.has(key) ? `craft:${key}` : `make:${key}`);
+  type Node = {
+    key: StuffKey; id: string; kind: BuildStep['kind']; machineKey: string; name: string;
+    waits: Set<StuffKey>; machineWaits: Set<StuffKey>; text(first: boolean): string;
+  };
+  const nodes = new Map<StuffKey, Node>();
+  for (const m of bom.makes ?? []) {
+    const machine = m.made.machine;
+    const name = partName(pack, m.key);
+    const what = `${qty(m.key, m.amount)}${suffix(m.key)}`;
+    const from = m.inputs.length === 0 ? '' : ` from ${m.inputs.map((i) => qty(i.key, i.amount)).join(', ')}`;
+    const held = (m.made.nonConsumed ?? []).map((k) => partName(pack, k));
+    const machineWaits = new Set<StuffKey>();
+    if (typeof machine === 'object' && machine.source === 'line') {
+      const own = pack.machines.get(machine.mteId);
+      if (own !== undefined) for (const k of [own.itemKey, ...structureParts(pack, own).keys()]) if (m.after.includes(k)) machineWaits.add(k);
+    }
+    const text = (first: boolean): string => {
+      if (machine === 'crafting table') return `Craft ${what}${from} at a crafting table${held.length > 0 ? ` (tools: ${held.join(', ')})` : ''}`;
+      const source = first ? 'first' : machine.source;
+      const where = source === 'owned' ? `your ${machine.name}` : source === 'line' ? `the ${machine.name} this line builds` : withArticle(machine.name);
+      const config: string[] = [];
+      if (m.made.circuit !== undefined) config.push(`circuit ${m.made.circuit}`);
+      if (held.length > 0) config.push(`with ${held.join(', ')} in it`);
+      if (m.made.cleanroom === true) config.push('in a cleanroom');
+      if (source === 'line') config.push('place and power it first');
+      if (source === 'new') config.push(`you have none and this line builds none: build one, or import the ${name}`);
+      if (source === 'first') config.push(`the one this line builds needs it first: use another one, or import the ${name}`);
+      return `Make ${what}${from} in ${where}${config.length > 0 ? ` (${config.join('; ')})` : ''}`;
+    };
+    nodes.set(m.key, {
+      key: m.key, id: idOf(m.key), kind: machine === 'crafting table' ? 'craft' : 'make',
+      machineKey: machine === 'crafting table' ? 'crafting table' : machine.name, name, waits: new Set(m.after), machineWaits, text,
+    });
+  }
+  for (const t of bom.totals) {
+    if (t.unmade === undefined || nodes.has(t.key)) continue;
+    const what = `${qty(t.key, t.amount)}${suffix(t.key)}`;
+    const text = t.unmade === 'own-chain'
+      ? `Get ${what}: every recipe for it here needs a part of its own chain, so swap the recipe of a part it goes into, or import it (mark it "we already make this")`
+      : `Get ${what}: nothing at ${tierName(tier)} can make it, so import it (mark it "we already make this")`;
+    nodes.set(t.key, { key: t.key, id: idOf(t.key), kind: 'gather', machineKey: '', name: partName(pack, t.key), waits: new Set(), machineWaits: new Set(), text: () => text });
+  }
+  for (const l of firstTop.values()) {
+    if (nodes.has(l.key)) continue;
+    const group = l.group ?? 'machines';
+    const amount = qty(l.key, topAmount.get(l.key) ?? l.amount);
+    const text = group === 'one-off' && toolsOnly.has(l.key) ? `Make ${amount} (a tool for hand-crafting)`
+      : group === 'one-off' ? `Make ${amount} (stays in the machine)`
+      : group === 'machines' && l.key === roomKey ? `Build a cleanroom (${partName(pack, l.key)}) around the steps that need it`
+      : `Craft ${amount}`;
+    nodes.set(l.key, { key: l.key, id: `craft:${l.key}`, kind: 'craft', machineKey: '', name: partName(pack, l.key), waits: new Set(), machineWaits: new Set(), text: () => text });
+  }
+  for (const n of nodes.values()) {
+    for (const w of [...n.waits]) if (!nodes.has(w)) n.waits.delete(w);
+    for (const w of [...n.machineWaits]) if (!nodes.has(w)) n.machineWaits.delete(w);
+  }
+  const order = (a: Node, b: Node): number => byString(a.machineKey, b.machineKey) || byString(a.name, b.name) || byString(a.key, b.key);
+  const done = new Set<StuffKey>();
+  let last: Node | undefined;
+  while (done.size < nodes.size) {
+    const left = [...nodes.values()].filter((n) => !done.has(n.key)).sort(order);
+    const ready = left.filter((n) => [...n.waits].every((w) => done.has(w)));
+    let pick = ready.find((n) => last !== undefined && n.machineKey === last.machineKey) ?? ready[0];
+    let first = false;
+    if (pick === undefined) {
+      pick = left.find((n) => [...n.waits].filter((w) => !done.has(w)).every((w) => n.machineWaits.has(w)));
+      if (pick !== undefined) first = true;
+      else pick = left[0] as Node;
+      pick.waits.clear();
+    }
+    done.add(pick.key);
+    last = pick;
+    out.push({ id: pick.id, kind: pick.kind, text: pick.text(first) });
+  }
+  return out;
+}
+
+/**
+ * The build steps in order (`order` = position + 1): gather the build's base materials and make each build part in
+ * order (`partSteps`); place the machines; connect power; hook up logistics for the project's mode; configure
  * each step with a programmed circuit or other parts that stay in the machine (hand-crafting tools are none of these,
  * Task 13 ruling), and each supply step where its machine must stand (`supplyText`) — a sharing pool once, by its first
  * step, naming every product of the pool (plan 12); hand-craft each hand-crafting step,
@@ -165,32 +285,12 @@ export function buildSteps(
   const { steps, bom, power, settings, target, totalSeconds, avoid } = input;
   const makeN = settings.mode === 'makeN';
   const out: Array<Omit<BuildStep, 'order'>> = [];
-  const ids = new Set<string>();
   const add = (id: string, kind: BuildStep['kind'], text: string): void => {
-    ids.add(id);
     out.push({ id, kind, text });
   };
 
-  if (bom.totals.length > 0) {
-    const shown = bom.totals.slice(0, GATHER_SHOWN).map((l) => amountOf(pack, l.key, l.amount)).join(', ');
-    const more = bom.totals.length - GATHER_SHOWN;
-    add('gather', 'gather', `Gather the base materials: ${shown}${more > 0 ? ` (and ${more} more)` : ''}`);
-  }
-
-  const roomKey = cleanroomMachine(pack)?.itemKey;
-  // Task 13 ruling: a one-off that is only a hand-crafting tool (no step keeps it in a machine) is worded as a tool.
-  const machineParts = new Set(steps.flatMap((s) => stepOneOffs(pack, s, avoid).map((o) => o.key)));
-  const toolsOnly = new Set(steps.flatMap((s) => stepTools(pack, s, avoid)).filter((key) => !machineParts.has(key)));
-  for (const line of bom.lines) {
-    const group = line.group ?? 'machines';
-    // A key can only repeat in another group; that line gets the group in its id.
-    const id = ids.has(`craft:${line.key}`) ? `craft:${group}:${line.key}` : `craft:${line.key}`;
-    const amount = amountOf(pack, line.key, line.amount);
-    if (group === 'one-off' && toolsOnly.has(line.key)) add(id, 'craft', `Make ${amount} (a tool for hand-crafting)`);
-    else if (group === 'one-off') add(id, 'craft', `Make ${amount} (stays in the machine)`);
-    else if (group === 'machines' && line.key === roomKey) add(id, 'craft', `Build a cleanroom (${partName(pack, line.key)}) around the steps that need it`);
-    else add(id, 'craft', `Craft ${amount}`);
-  }
+  // The build's parts (architecture §11 entry 41 (5)): gather, then one step per part, inputs first, batched by machine.
+  for (const s of partSteps(pack, { steps, bom, tier: input.tier, ...(avoid === undefined ? {} : { avoid }) })) add(s.id, s.kind, s.text);
 
   const place = placeText(steps, makeN);
   if (place !== null) add('place', 'place', place);
