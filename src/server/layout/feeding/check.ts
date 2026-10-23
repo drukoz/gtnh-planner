@@ -95,8 +95,9 @@ function scenarioFindings(runs: readonly ScenarioRun[]): FeedFinding[] {
 /**
  * Rule 5: one report per machine node and item its steps plan (node order, then key): the plan's rate (a shared machine's
  * steps summed, under the first step that plans the item), what each scenario handed over in `[⌊ticks/2⌋, ticks)` per second
- * (a multiblock gets its items through its input buses), and in `restart` what came in `[restartAt − BURST_TICKS, restartAt)`
- * and in `[restartAt, restartAt + BURST_TICKS)`.
+ * (a multiblock gets its items through its input buses) — that window cut where an AE2 job had no more of the item for the
+ * machine (`ScenarioRun.jobEnds`), and no rate where that came before the window — and in `restart` what came in
+ * `[restartAt − BURST_TICKS, restartAt)` and in `[restartAt, restartAt + BURST_TICKS)`.
  */
 function inputReports(model: FeedModel, runs: readonly ScenarioRun[], ticks: number, restartAt: number): InputReport[] {
   const half = Math.floor(ticks / 2);
@@ -118,15 +119,18 @@ function inputReports(model: FeedModel, runs: readonly ScenarioRun[], ticks: num
       const deliveredPerSecond: Partial<Record<ScenarioName, number>> = {};
       let burst: { before: number; after: number } | null = null;
       for (let i = 0; i < runs.length; i++) {
+        const end = Math.min(ticks, runs[i]!.jobEnds[node.id]?.[key] ?? ticks);
         let late = 0, before = 0, after = 0;
         for (const [t, k, n] of given[i]!) {
           if (k !== key) continue;
-          if (t >= half && t < ticks) late += n;
+          if (t >= half && t < end) late += n;
           if (t >= restartAt - BURST_TICKS && t < restartAt) before += n;
           else if (t >= restartAt && t < restartAt + BURST_TICKS) after += n;
         }
         const name = runs[i]!.name;
-        deliveredPerSecond[name] = seconds > 0 ? late / seconds : 0;
+        if (end < ticks) {
+          if (end > half) deliveredPerSecond[name] = late / ((end - half) / TICKS_PER_SECOND);
+        } else deliveredPerSecond[name] = seconds > 0 ? late / seconds : 0;
         if (name === 'restart') burst = { before, after };
       }
       reports.push({

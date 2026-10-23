@@ -73,6 +73,11 @@ export interface FeedFinding {
  * `pr_queue_lost`, `pr_wander_path`); the model's unknowns are one per code and block, and name their items in `text`.
  */
 export interface FeedUnknown { code: string; text: string; pos?: Vec3; stepId?: string; key?: StuffKey }
+/**
+ * What one machine input was planned to get and got. `deliveredPerSecond[scenario]`: what the scenario handed over in the run's
+ * second half, per second; for an input an AE2 job pushes, that half cut at the tick from which the job had no more of the item
+ * for the machine (a machine that runs ahead of its plan's rate pushes its share and waits), and absent when that came first.
+ */
 export interface InputReport {
   stepId: string; machine: string; pos: Vec3; key: StuffKey; plannedPerSecond: number;
   deliveredPerSecond: Partial<Record<ScenarioName, number>>; burst?: { before: number; after: number };

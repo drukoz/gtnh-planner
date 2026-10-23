@@ -263,12 +263,12 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('the feeding checker on the rese
   it('runs Red Alloy on AE2 cleanly and finds the others stuck', () => {
     // Research §4.2 items 1 and 3 are gone on today's main: fix/feeding writes each pattern with item inputs and whole,
     // guaranteed item outputs only, so R8 has nothing to find and ME's fluid stock changes nothing. What stops the lines now is
-    // item 2 in its fixed form. The AE2 job (twice the run's worth of the line's product) crafts only what the product needs
-    // through the patterns, which carry no fluid: a step whose only product is a piped fluid has no pattern, and its ME Export
-    // Bus asks ME for items that ME holds only as stock, which no job crafts; a machine whose pattern makes only what no job
-    // needs, while it pipes a fluid to another (fix/feeding's own `ae2_fluid_short`), never runs. Either way the fluid never
-    // comes, and the product never runs. Only where an item the job needs comes only by chance can AE2 not plan it at all.
-    const unplanned: Partial<Record<LineName, StuffKey>> = { 'ec-user-auto': STICKY_RESIN };
+    // item 2 in its fixed form. The AE2 job (twice the run's worth of what the laid part of the line sends out: its product, and
+    // what it hands steps made by hand) crafts only what those requests need through the patterns, which carry no fluid: a step
+    // whose only product is a piped fluid has no pattern, and its ME Export Bus asks ME for items that ME holds only as stock,
+    // which no job crafts; a machine whose pattern makes only what no job needs, while it pipes a fluid to another (fix/feeding's
+    // own `ae2_fluid_short`), never runs. Either way the fluid never comes, and the product never runs. Only a request whose item
+    // comes only by chance cannot be planned at all, and it is left out of the job alone.
     for (const line of of('ae2')) {
       const { report, model, layout } = line.main;
       const laid = layout.blocks.flatMap((b) => b.feed?.interface?.patterns ?? []).flatMap((p) => [...p.inputs, ...p.outputs]);
@@ -306,13 +306,18 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('the feeding checker on the rese
         }
       }
 
-      // the job: only where an item it needs comes only by chance can AE2 not plan it at all, and then nothing is pushed anywhere
+      // the job: AE2 cannot plan only a request whose item comes only by chance (a by-product that no pattern of whole, guaranteed
+      // outputs lists), and that request alone is left out. The Electronic Circuit lines' Sticky Resin is one: their product's
+      // bench takes it with crafting automated, the Resistors made by hand without (compared, not printed: a reason names items)
       const cannot = [...new Set(steady.map((f) => /the AE2 job cannot be planned: (.*)$/.exec(f.text)?.[1]).filter((x) => x !== undefined))];
-      const missing = unplanned[line.name];
-      // compared, not printed: a reason names items
-      expect(isDeepStrictEqual(cannot, missing === undefined ? [] : [`nothing makes ${model.nameOf(missing)} and ME holds none`]),
-        `${line.name}: why its job cannot be planned (${cannot.length} reasons)`).toBe(true);
-      if (missing !== undefined) {
+      const lacking = cannot.map((why) => /^nothing makes (.*) and ME holds none$/.exec(why)?.[1]);
+      const byChance = new Set(machines(model).flatMap((n) => n.recipes.flatMap((r) => r.outputs.filter((o) => o.chance < 1).map((o) => model.nameOf(o.key)))));
+      expect(lacking.every((name) => name !== undefined && byChance.has(name)), `${line.name}: ${cannot.length} unplanned requests, each an item made only by chance`).toBe(true);
+      expect(lacking.includes(model.nameOf(STICKY_RESIN)), `${line.name}: Sticky Resin unplanned`).toBe(line.name === 'ec-user' || line.name === 'ec-user-auto');
+      // by hand, the line's other requests are planned and pushed: some machine runs
+      if (line.name === 'ec-user') expect(Object.values(made.runs).some((n) => n > 0), 'ec-user: a machine the job pushes into runs').toBe(true);
+      // with crafting automated, the line's one request (its product) needs it, and then nothing is pushed anywhere
+      if (line.name === 'ec-user-auto') {
         const pushed = new Set(model.networks.flatMap((n) => (n.kind === 'ae2' ? n.interfaces.flatMap((i) => i.targets.map((t) => t.node)) : [])));
         for (const node of machines(model).filter((n) => pushed.has(n.id))) {
           const starved = new Set(steady.filter((f) => f.code === 'feed_starved' && f.machine === node.label && f.text.includes(`: the AE2 job cannot be planned: ${cannot[0]}`)).map((f) => f.key));

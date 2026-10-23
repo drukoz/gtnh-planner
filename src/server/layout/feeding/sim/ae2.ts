@@ -8,11 +8,15 @@
 //   by hand (E17), are injected the same way as each of its runs ends.
 // - Patterns. Only a pattern of whole amounts that lists nothing its machine keeps (a held item, a programmed circuit) can be
 //   encoded; the others are left out (Review Focus 5). Equal patterns on several interfaces are one task with all of them.
-// - The job, planned at tick 0: twice the run's worth of each item the plan sends out of the line. A supply item or a stocked
-//   fluid comes from storage; else the first encodable pattern (interface order) that makes it is crafted as often as needed,
-//   its inputs needed in turn; else, when a laid step that an ME Export Bus feeds makes it, the job counts on what that step
-//   makes; else the job cannot be planned and nothing is pushed for the whole run. Tasks of raw-fed steps come first
-//   (`stepDepths`), then interface order.
+// - The job, planned at tick 0: twice the run's worth of each item the laid part of the line sends out (to `out`, or to a plan
+//   step that is not laid: one made by hand, a hand-run machine). A supply item or a stocked fluid comes from storage; else the
+//   first encodable pattern (interface order) that makes it is crafted as often as needed, its inputs needed in turn; else,
+//   when a laid step that an ME Export Bus feeds makes it, the job counts on what that step makes; else that item cannot be
+//   planned. Each item is planned on its own, as the player requests each: one that cannot be planned is left out of the job
+//   with its reason, and the others are not. Tasks of raw-fed steps come first (`stepDepths`), then interface order.
+// - The job is what the plan's rates ask for, so a machine that runs faster than its plan's rate pushes its share before the
+//   run ends and waits: from the push of its last craft of an item, the job has no more of that item for it, and rates are
+//   read only before then (`ends`: `detect`'s `feed_slow` and the report's rates cut the run's second half there).
 // - The CPU (phase `grid`), each tick: at most `c + 1 − (its pushes of its last three updates)` pushes. It walks the tasks with
 //   crafts left whose inputs are in its store and each task's interfaces in order, skipping a busy one (its send list holds
 //   something, it is locked, or blocking mode finds none of its targets empty). A push takes the inputs out of the store and
@@ -117,8 +121,8 @@ interface Task {
   readonly depth: number; readonly order: number;
   /** Its first interface's machine, in texts. */
   readonly maker: string;
-  /** The crafts the job plans, and those not pushed yet. */
-  crafts: number; left: number;
+  /** The crafts the job plans, those not pushed yet, and the tick of its last push (−1: none yet). */
+  crafts: number; left: number; lastPush: number;
 }
 
 /**
@@ -232,7 +236,7 @@ export function ae2Model(net: Ae2Net, env: SimEnv): NetworkModel {
             ? { key: packet(), n: 1, fluid: keys.id(e.key), tank: false } : { key: keys.id(e.key), n: e.amount, fluid: -1, tank: false })),
           tanks: p.inputs.map((e): Parcel => (isFluidKey(e.key)
             ? { key: keys.id(e.key), n: e.amount, fluid: keys.id(e.key), tank: true } : { key: keys.id(e.key), n: e.amount, fluid: -1, tank: false })),
-          ifaces: [], depth: stepId === undefined ? 0 : model.depths[stepId] ?? 0, order, maker: f.maker, crafts: 0, left: 0,
+          ifaces: [], depth: stepId === undefined ? 0 : model.depths[stepId] ?? 0, order, maker: f.maker, crafts: 0, left: 0, lastPush: -1,
         };
         tasks.set(content, task);
       }
@@ -251,8 +255,9 @@ export function ae2Model(net: Ae2Net, env: SimEnv): NetworkModel {
     if (node === undefined || node.kind === 'chest') continue;
     for (const r of node.recipes) if (laid.has(r.stepId)) for (const o of r.outputs) countedOn.add(keys.id(o.key));
   }
-  /** Why the job cannot be planned (rule 9's words), or null. */
+  /** Why the item being planned cannot be (rule 9's words), and the item that failed it; null while all goes well. */
   let failed = null as string | null;
+  let failedKey = -1;
   const spare = new Map<number, number>();
   const making = new Set<number>();
   /** The job needs `n` of key `k`: from storage, from the crafts of the task that makes it (and what it makes over), from a step ME feeds, or the plan fails. */
@@ -282,14 +287,32 @@ export function ae2Model(net: Ae2Net, env: SimEnv): NetworkModel {
       return;
     }
     failed = unencodableFor.get(k) ?? `nothing makes ${nameOf(k)} and ME holds none`;
+    failedKey = k;
   };
+  // what the laid part of the line sends out: every item flow from a laid step to `out` or to a plan step that is not laid (made
+  // by hand, or by a machine the line runs by hand), at its rate; a by-product sent to a sink is no request
   const rates = new Map<StuffKey, number>();
-  for (const f of model.itemFlows) if (f.to === 'out') rates.set(f.key, (rates.get(f.key) ?? 0) + f.perSecond);
-  for (const [key, rate] of [...rates].sort((a, b) => compareText(a[0], b[0]))) {
-    need(keys.id(key), Math.ceil((rate * env.opts.ticks * 2) / TICKS_PER_SECOND - 1e-9));
+  for (const f of model.itemFlows) {
+    if (laid.has(f.from) && (f.to === 'out' || (Object.hasOwn(model.made, f.to) && !laid.has(f.to)))) rates.set(f.key, (rates.get(f.key) ?? 0) + f.perSecond);
   }
-  const job: Task[] = failed !== null ? [] : [...tasks.values()].filter((t) => t.crafts > 0).sort((a, b) => a.depth - b.depth || a.order - b.order);
-  if (failed !== null) waiting.fill(0);
+  // each twice the run's worth, planned on its own: one that cannot be planned is left out (what its planning added undone), with
+  // its reason, the item that failed it and the tasks it would have needed, and fails none of the others
+  const failures: Array<{ why: string; key: number; tasks: ReadonlySet<Task> }> = [];
+  const all = [...tasks.values()];
+  for (const [key, rate] of [...rates].sort((a, b) => compareText(a[0], b[0]))) {
+    const crafts = all.map((t) => t.crafts);
+    const spared = new Map(spare);
+    const waited = Float64Array.from(waiting);
+    need(keys.id(key), Math.ceil((rate * env.opts.ticks * 2) / TICKS_PER_SECOND - 1e-9));
+    if (failed === null) continue;
+    failures.push({ why: failed, key: failedKey, tasks: new Set(all.filter((t, i) => t.crafts !== crafts[i])) });
+    all.forEach((t, i) => { t.crafts = crafts[i]!; });
+    spare.clear();
+    for (const [k, n] of spared) spare.set(k, n);
+    waiting.set(waited);
+    failed = null;
+  }
+  const job: Task[] = all.filter((t) => t.crafts > 0).sort((a, b) => a.depth - b.depth || a.order - b.order);
   for (const task of job) task.left = task.crafts;
 
   // ---- Rule 1: what enters ME, and rule 5's Locking Cards ----
@@ -442,6 +465,7 @@ export function ae2Model(net: Ae2Net, env: SimEnv): NetworkModel {
             for (const [k, n] of task.need) if (!inStock(k, t)) store[k]! -= n;
             for (const [k, n] of task.items) waiting[k]! += n;
             task.left -= 1;
+            task.lastPush = t;
             ops -= 1;
             // a blocking interface gives the turn to the next; a non-blocking one is pushed again
             if (f.spec.spec.blocking) break;
@@ -497,7 +521,15 @@ export function ae2Model(net: Ae2Net, env: SimEnv): NetworkModel {
     if (kind !== 'in') return null;
     const toward = ifaces.filter((f) => f.targets.some((x) => x.node.id === node));
     if (toward.length === 0) return null;
-    if (failed !== null) return `the AE2 job cannot be planned: ${failed}`;
+    // an item of the job that cannot be planned, for a node the job pushes nothing into: the one whose planning needed a task of
+    // its interfaces, else one it makes (a by-product no pattern lists), else, when the job holds nothing at all, the first
+    const target = byId.get(node);
+    if (failures.length > 0 && !job.some((task) => task.ifaces.some((f) => toward.includes(f)))) {
+      const mine = all.filter((task) => task.ifaces.some((f) => toward.includes(f)));
+      const makes = (k: number): boolean => target !== undefined && target.kind !== 'chest' && target.recipes.some((r) => r.outputs.some((o) => o.key === keys.key(k)));
+      const hit = failures.find((x) => mine.some((task) => x.tasks.has(task))) ?? failures.find((x) => makes(x.key)) ?? (job.length === 0 ? failures[0] : undefined);
+      if (hit !== undefined) return `the AE2 job cannot be planned: ${hit.why}`;
+    }
     // a task for it waits for a fluid another pattern makes, which never comes back to ME
     for (const task of job) {
       if (!task.ifaces.some((f) => toward.includes(f))) continue;
@@ -508,7 +540,6 @@ export function ae2Model(net: Ae2Net, env: SimEnv): NetworkModel {
     }
     // R9: blocking mode toward a bench, or toward a machine that holds what blocking mode does not ignore (the model's test, as
     // the machine's `countsAsEmpty` asks it: the pack's list, GT's lenses among them)
-    const target = byId.get(node);
     for (const f of toward) {
       if (!f.spec.spec.blocking || target === undefined) continue;
       if (target.kind === 'bench') return `${f.spec.label} has blocking mode on and ${target.label}'s crafting grid counts as items: it never pushes into it`;
@@ -534,9 +565,33 @@ export function ae2Model(net: Ae2Net, env: SimEnv): NetworkModel {
     return list;
   };
 
+  /**
+   * Where the job ran out of an item for a machine: for each machine and item the job's tasks push into it, once every one of
+   * them has pushed its last craft, the tick after the last such push (each in the order first met); the job has no more of the
+   * item for the machine from then, so rates are read only before it.
+   */
+  const ends = (): Array<[NodeId, StuffKey, number]> => {
+    const at = new Map<string, { node: NodeId; key: number; end: number; open: boolean }>();
+    for (const task of job) {
+      for (const f of task.ifaces) {
+        for (const x of f.targets) {
+          if (!x.machine) continue;
+          for (const k of task.need.keys()) {
+            const id = `${x.node.id}\n${k}`;
+            const e = at.get(id) ?? { node: x.node.id, key: k, end: -1, open: false };
+            if (task.left > 0) e.open = true;
+            else e.end = Math.max(e.end, task.lastPush + 1);
+            at.set(id, e);
+          }
+        }
+      }
+    }
+    return [...at.values()].filter((e) => !e.open && e.end >= 0).map((e) => [e.node, keys.key(e.key), e.end]);
+  };
+
   const receivers: NetworkModel['receivers'] = [];
   for (const f of ifaces) for (let side = 0; side < 6; side++) receivers.push({ at: f.spec.id, side, target: into });
   return {
-    entities: [...(job.length > 0 ? [cpu] : []), ...ifaces.map((f) => f.entity), ...buses], explain, receivers, unknowns, out,
+    entities: [...(job.length > 0 ? [cpu] : []), ...ifaces.map((f) => f.entity), ...buses], explain, receivers, unknowns, out, ends,
   };
 }

@@ -158,6 +158,33 @@ describe('checkFeeding', () => {
     expect(report.unknowns.filter((u) => u.code === 'hand_run').map((u) => u.stepId)).toEqual(['b']);
   });
 
+  it('runs main\'s AE2 line into a step made by hand, and reads a rate only while the job has crafts for it', async () => {
+    // a macerator whose Ex goes to a step made by hand (Ex → Why → out): the job asks for the Ex the laid part sends out, not for
+    // the Why no machine makes, so the macerator is pushed in every scenario (the job used to fail: nothing makes Why)
+    const flows: PlanFlow[] = [
+      { from: 'raw', to: 's1', key: 't:a@0', perSecond: 0.2 }, { from: 's1', to: 'h', key: 't:x@0', perSecond: 0.2 }, { from: 'h', to: 'out', key: 't:y@0', perSecond: 0.2 },
+    ];
+    const toHand = feedPlan([
+      { id: 's1', mteId: IDS.MACERATOR, count: 1, inputs: [['t:a@0', 1]], outputs: [['t:x@0', 1]] },
+      { id: 'h', mteId: -1, count: 1, handCraft: true, inputs: [['t:x@0', 1]], outputs: [['t:y@0', 1]] },
+    ], flows);
+    const handed = checkFeeding({ ...toHand, layout: await layFeed(toHand.pack, toHand.plan, 'ae2') });
+    expect([handed.ok, handed.findings]).toEqual([true, []]);
+    expect(handed.scenarios.map((s) => s.runs.s1)).toEqual([480, 480, 480, 480, 480]);
+    // a lone macerator (1 Alpha a second at most) planned at 0.3 and 0.1 a second: the job, twice the run's worth at the plan's rate,
+    // has pushed its last craft before the run ends, at 0.1 a second before its second half begins; rates are read only before
+    const lone = async (rate: number) => {
+      const { pack, plan } = feedPlan([{ id: 'm', mteId: IDS.MACERATOR, count: 1, inputs: [['t:a@0', 1]], outputs: [['t:x@0', 1]] }],
+        [{ from: 'raw', to: 'm', key: 't:a@0', perSecond: rate }, { from: 'm', to: 'out', key: 't:x@0', perSecond: rate }]);
+      return checkFeeding({ pack, plan, layout: await layFeed(pack, plan, 'ae2'), options: { scenarios: ['steady'] } });
+    };
+    // no feed_slow (it gave 0.2 and 0 a second over the whole second half), and a rate near its speed, or none
+    const fast = await lone(0.3);
+    expect([fast.findings, fast.inputs[0]!.deliveredPerSecond.steady! > 0.9]).toEqual([[], true]);
+    const faster = await lone(0.1);
+    expect([faster.findings, faster.inputs[0]!.deliveredPerSecond]).toEqual([[], {}]);
+  });
+
   it('passes the routed line main lays for a bench beside a machine', async () => {
     // the input chest's Item Broadcaster Chip sends Alpha and Beta, which only the bench takes, on its Item Stock Keeper Chip's
     // orders; its Item Extractor Chip sends the macerator's Gamma: R5d has nothing to find, and every scenario keeps the plan's pace

@@ -603,7 +603,11 @@ function withBuses(stats: SimStats, node: MultiNode, own: Readonly<NodeRecord>):
  * networks' reasons for an item that never arrives or never leaves; `slowTolerance` is `feed_slow`'s (default
  * `SLOW_TOLERANCE`).
  */
-export function detect(model: FeedModel, stats: SimStats, run: { scenario: ScenarioName; ticks: number; explain: Explain; slowTolerance?: number }): FeedFinding[] {
+export function detect(model: FeedModel, stats: SimStats, run: {
+  scenario: ScenarioName; ticks: number; explain: Explain; slowTolerance?: number;
+  /** By machine and item, the tick from which an AE2 job had no more of the item for the machine: `feed_slow` reads its rate only before it. */
+  jobEnds?: Readonly<Record<NodeId, Readonly<Record<StuffKey, number>>>>;
+}): FeedFinding[] {
   const { ticks, scenario } = run;
   const found: Pending[] = [];
   const keyOf = (id: number) => stats.keys.key(id);
@@ -781,29 +785,33 @@ export function detect(model: FeedModel, stats: SimStats, run: { scenario: Scena
     }
     for (const [key, p] of [...planned].sort((a, b) => compareText(a[0], b[0]))) {
       const id = stats.keys.id(key);
+      // the second half, cut where an AE2 job had no more of the item for the machine (Task 9 rule 3): a machine that ran ahead
+      // of the plan's rate pushed its share and waits, which says nothing of its pace
+      const end = Math.min(ticks, run.jobEnds?.[node.id]?.[key] ?? ticks);
       let total = 0, late = 0;
       rec.given.key.forEach((k, i) => {
         if (k !== id) return;
         total += rec.given.n[i]!;
-        if (rec.given.t[i]! >= half) late += rec.given.n[i]!;
+        if (rec.given.t[i]! >= half && rec.given.t[i]! < end) late += rec.given.n[i]!;
       });
       if (total === 0) {
         emit(at, node, 'feed_starved', `${node.label} never gets ${model.nameOf(key)}: ${run.explain('in', node.id, key) ?? 'nothing on the line hands it over'}`,
           { key, stepId: p.stepId, tick: 0 });
         continue;
       }
-      if (seconds <= 0 || late >= (1 - tolerance) * p.rate * seconds) continue;
-      // how long the second half's checks left the recipe waiting for it
+      const span = (end - half) / TICKS_PER_SECOND;
+      if (span <= 0 || late >= (1 - tolerance) * p.rate * span) continue;
+      // how long that window's checks left the recipe waiting for it
       let waited = 0, since = -1;
       rec.checks.forEach((c, i) => {
         if (c.kind !== WAIT || !c.missing.includes(id)) return;
-        const from = Math.max(c.t, half), to = Math.min(endOf(rec.checks, i, ticks), ticks);
+        const from = Math.max(c.t, half), to = Math.min(endOf(rec.checks, i, ticks), end);
         if (to <= from) return;
         waited += to - from;
         if (since < 0) since = from;
       });
-      if (waited <= 0.1 * (ticks - half)) continue;
-      emit(at, node, 'feed_slow', `${node.label} gets ${model.nameOf(key)} at ${fmtRate(late / seconds)}/s, below the ${fmtRate(p.rate)}/s the plan needs`,
+      if (waited <= 0.1 * (end - half)) continue;
+      emit(at, node, 'feed_slow', `${node.label} gets ${model.nameOf(key)} at ${fmtRate(late / span)}/s, below the ${fmtRate(p.rate)}/s the plan needs`,
         { key, stepId: p.stepId, tick: since });
     }
 

@@ -43,12 +43,15 @@ import { inputChest, outputChest } from './storage.ts';
 
 /**
  * What a network kind's model gives a run: its entities, its reasons, the push targets it registers at cells, what a restart
- * resets, what the run left it unable to know, and what entered ME, by item (both read once the run is over).
+ * resets, what the run left it unable to know, what entered ME, by item, and where an AE2 job ran out of an item for a machine
+ * (the three read once the run is over).
  */
 export interface NetworkModel {
   entities: SimEntity[]; explain: Explain; receivers: Array<{ at: NodeId; side: number; target: PushTarget }>; restart?: () => void;
   unknowns?: () => FeedUnknown[];
   out?: () => Array<[StuffKey, number]>;
+  /** For a machine and an item, the tick from which the job had no more of the item for it: rates are read only before it. */
+  ends?: () => Array<[NodeId, StuffKey, number]>;
 }
 
 type NetworkModels = { [K in FeedNetwork['kind']]?: (net: Extract<FeedNetwork, { kind: K }>, env: SimEnv) => NetworkModel };
@@ -64,10 +67,14 @@ export interface ScenarioOptions {
   initial?: Record<NodeId, Array<[slot: number, key: StuffKey, count: number]>>;
 }
 
-/** One scenario's result; its `unknowns` in the order first met, which `checkFeeding` merges over the scenarios (Task 11 rule 6). */
+/**
+ * One scenario's result; its `unknowns` in the order first met, which `checkFeeding` merges over the scenarios (Task 11 rule 6);
+ * `jobEnds`, by machine and item, the tick from which an AE2 job had no more of the item for the machine, before which alone its
+ * rate is read (Task 9 rule 3).
+ */
 export interface ScenarioRun {
   name: ScenarioName; ticks: number; findings: FeedFinding[]; stats: SimStats; runs: Record<string, number>; out: Record<StuffKey, number>;
-  unknowns: FeedUnknown[];
+  unknowns: FeedUnknown[]; jobEnds: Record<NodeId, Record<StuffKey, number>>;
 }
 
 /**
@@ -293,6 +300,14 @@ export function runScenario(model: FeedModel, scenario: ScenarioName, opts: Scen
     node.recipes.forEach((r, i) => { runs[r.stepId] = (runs[r.stepId] ?? 0) + (counts[i] ?? 0); });
   }
   for (const m of models) for (const [key, n] of m.out?.() ?? []) out.set(key, (out.get(key) ?? 0) + n);
+  // where an AE2 job ran out of an item for a machine (the latest, should two networks say so)
+  const jobEnds: Record<NodeId, Record<StuffKey, number>> = {};
+  for (const m of models) {
+    for (const [node, key, end] of m.ends?.() ?? []) {
+      const at = (jobEnds[node] ??= {});
+      at[key] = Math.max(at[key] ?? end, end);
+    }
+  }
   const explain: Explain = (kind, node, key) => {
     for (const ex of explains) {
       const why = ex(kind, node, key);
@@ -300,7 +315,7 @@ export function runScenario(model: FeedModel, scenario: ScenarioName, opts: Scen
     }
     return null;
   };
-  const findings = detect(model, stats, { scenario, ticks: opts.ticks, explain, slowTolerance: env.opts.slowTolerance });
+  const findings = detect(model, stats, { scenario, ticks: opts.ticks, explain, slowTolerance: env.opts.slowTolerance, jobEnds });
   const byId = new Map(model.nodes.map((n) => [n.id, n]));
   for (const [id, key, n] of stats.spillsInOrder()) {
     const node = byId.get(id);
@@ -311,6 +326,6 @@ export function runScenario(model: FeedModel, scenario: ScenarioName, opts: Scen
   for (const m of models) unknowns.push(...(m.unknowns?.() ?? []));
   return {
     name: scenario, ticks: opts.ticks, findings, stats, runs,
-    out: Object.fromEntries([...out].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))), unknowns,
+    out: Object.fromEntries([...out].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))), unknowns, jobEnds,
   };
 }

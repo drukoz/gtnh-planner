@@ -280,6 +280,42 @@ describe('AE2', () => {
       + 'makes but the line pipes away, so it never comes back to ME']]);
   });
 
+  it('plans each item the line sends out on its own, so one that cannot be planned fails no other', () => {
+    // M (Alpha → Ex) sends Ex out of the line; N (Beta → Why, and Gamma by chance) hands its Gamma to a step made by hand, h, which
+    // no pattern lists (a pattern holds what comes every run): that request cannot be planned, and M's is planned all the same
+    const n = oneSlotNode('2,0,0', { outSlots: 2, recipes: [simRecipe('n', 20, [['t:b@0', 1]], [['t:y@0', 1], ['t:c@0', 1, 0.5]])] });
+    const model = ae2Model([oneSlotNode('0,0,0'), n], [
+      { id: '0,0,1', targets: [{ node: '0,0,0', side: 3 }], spec: { patterns: [pattern([['t:a@0', 1]], [['t:x@0', 1]])], blocking: true } },
+      { id: '2,0,1', targets: [{ node: '2,0,0', side: 3 }], spec: { patterns: [pattern([['t:b@0', 1]], [['t:y@0', 1]])], blocking: true } },
+    ], {
+      supply: ['t:a@0', 't:b@0'], covers: [hvExport('0,0,0', 3)], made: { one: ['t:x@0'], n: ['t:c@0', 't:y@0'], h: ['t:z@0'] },
+      itemFlows: [{ from: 'one', to: 'out', key: 't:x@0', perSecond: 1 }, { from: 'n', to: 'h', key: 't:c@0', perSecond: 0.25 }],
+      planned: { one: { 't:a@0': 1 }, n: { 't:b@0': 0.5 } },
+    });
+    const run = same(model, { ticks: 400, restartAt: 400 });
+    expect(run.stats.ae2Pushes('0,0,1').slice(0, 5)).toEqual([0, 4, 21, 41, 61]);
+    expect(run.stats.ae2Pushes('2,0,1')).toEqual([]);
+    // N, which makes the item no pattern lists, is told why
+    expect(brief(run)).toEqual([['feed_starved', 't:b@0', 0, 'Basic Macerator at 2 0 0 never gets Beta: the AE2 job cannot be planned: nothing makes Gamma and ME holds none']]);
+  });
+
+  it('asks for what the line hands a step made by hand, and reads a rate only while the job has crafts for it', () => {
+    // M (Alpha → Ex, 1 a second at most) hands Ex to a step made by hand that sends Why out of the line: the job asks for M's Ex
+    // (the laid part's output), not for the Why no machine makes, so M is pushed
+    const byHand: FeedModel = {
+      ...line(true), made: { one: ['t:x@0'], h: ['t:y@0'] }, planned: { one: { 't:a@0': 0.1 } },
+      itemFlows: [{ from: 'one', to: 'h', key: 't:x@0', perSecond: 0.1 }, { from: 'h', to: 'out', key: 't:y@0', perSecond: 0.1 }],
+    };
+    const run = same(byHand, { ticks: 2_000, restartAt: 1_000 });
+    // twice the run's worth at 0.1 a second, 20 crafts: M runs them at its own pace and has them pushed by tick 400
+    expect(run.stats.ae2Pushes('0,0,1')).toHaveLength(20);
+    expect(run.stats.ae2Pushes('0,0,1').at(-1)).toBeLessThan(400);
+    // so from the tick after its last push the job has no more Alpha for it, and the second half, which comes after, reads no rate
+    // (no feed_slow, though M waits for Alpha there)
+    expect(run.jobEnds).toEqual({ '0,0,0': { 't:a@0': run.stats.ae2Pushes('0,0,1').at(-1)! + 1 } });
+    expect(run.findings).toEqual([]);
+  });
+
   it('holds a late input back from the job until it comes', () => {
     // late_input: ME holds no Alpha before the hold ends; the job is planned, and its task waits for it
     const run = same(line(true), { ticks: 200, restartAt: 200, extra: (env) => { env.heldBack = new Set(['t:a@0']); env.heldUntil = 100; return []; } });
