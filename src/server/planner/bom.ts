@@ -376,7 +376,7 @@ type How = { lp: LpRecipe; perRun: number } | 'no-recipe' | 'own-chain' | undefi
  * (`ownedForParts`), the types the line builds (`x.steps` with new machines), and per good the line types whose own build
  * reaches it (from a top-level line of the type's item or structure parts), which `partMachine` then sets aside. `how`
  * gives a good's recipe, `no-recipe` when no machine runs its recipe here, or its unmade cause; `madeOf` a node's `BomMade`;
- * `alternatives` the swap list of every good the lines make.
+ * `alternatives` the swap list of every good the lines make, its recipes at a finite gross cost.
  */
 function madeParts(pack: Pack, lines: readonly BomLine[], x: Expansion, book: RecipeBook, isLeaf: (key: StuffKey) => boolean): {
   how(key: StuffKey): How; madeOf(key: StuffKey, lp: LpRecipe, runs: number): BomMade; alternatives(): Map<StuffKey, PlanStep['alternatives']>;
@@ -454,7 +454,9 @@ function madeParts(pack: Pack, lines: readonly BomLine[], x: Expansion, book: Re
       for (const [input] of book.inputsOf(h.lp)) stack.push(input);
     }
     for (const key of [...made].sort(byString)) {
-      const list = book.producersOf(key);
+      // Finite costs only, as a step's swap list (entry 41 (3)): a recipe above a base material out of reach costs
+      // Infinity, which JSON sends as null; a good left with no row gets no swap list.
+      const list = book.producersOf(key).filter((p) => Number.isFinite(p.cost));
       if (list.length > 0) out.set(key, list.map((p) => ({ recipeId: p.lp.id, rawCost: round6(p.cost), mapId: p.lp.mapId as string, ...recipeParts(pack, p.lp.id, new Set()) })));
     }
     return out;

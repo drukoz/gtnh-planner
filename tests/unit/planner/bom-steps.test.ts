@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { MINI_GT, miniGt } from '../../helpers/mini-gt.ts';
-import { packFromSpec, type IngredientSpec } from '../../helpers/pack-spec.ts';
+import { packFromSpec, type IngredientSpec, type RecipeSpec } from '../../helpers/pack-spec.ts';
 import { ANY_LV_CIRCUIT, largeBenderSpec } from '../../helpers/build-fixtures.ts';
 import { deepSpec, loopSpec, packedTableSpec, standInPressSpec, variantCellSpec } from '../../helpers/howto-fixtures.ts';
 import { buildBom, expandBomLines, partName } from '../../../src/server/planner/bom.ts';
@@ -396,6 +396,36 @@ describe('how each build part is made', () => {
     const plan = await planLine(pack, { ...defaultSettings(), target: 't:copper_wire@0', tier: 1, amount: 1, per: 'min' }, emptyContext());
     expect(plan.buildAlternatives?.['t:iron_plate@0']?.map((a) => a.recipeId)).toEqual(['bend-plate', 'hammer-plate']);
     expect(plan.names?.['map:gt.recipe.metalbender']).toBe('Bending Machine');
+  });
+
+  it('leaves a recipe above a material out of reach off the swap list', async () => {
+    // Titanium comes from the Moon, which is off: the Titanium Ingot settles at Infinity (architecture §11 entry 41 (1)),
+    // and so does every recipe above it. The swap list keeps only the rows at a finite gross cost (entry 41 (3)), as a
+    // step's does: JSON would send an Infinity as null. A Basic Centrifuge crafted from one Titanium Plate is still made
+    // that way, and neither it nor the plate gets a swap list.
+    const settings = (p: Partial<PlanSettings> = {}): PlanSettings => at(3, { coilHeat: 2701, dims: { policy: 'progression', overrides: { moon: 'off' } }, ...p });
+    const centrifuge = [step({ id: 'lava-copper', recipeId: 'lava-copper', machine: { mteId: 161, name: 'Basic Centrifuge', tier: 1 } })];
+    const bomOf = async (p: ReturnType<typeof packFromSpec>, s: PlanSettings) => {
+      const b = planBasis(p, s, emptyContextForTest());
+      return buildBom(p, centrifuge, { settings: s, env: b.env, leaf: b.leaf, ctx: emptyContextForTest() });
+    };
+    const rawCosts = (bom: Awaited<ReturnType<typeof buildBom>>): number[] => [...(bom.alternatives?.values() ?? [])].flat().map((a) => a.rawCost);
+    const fromTitanium: RecipeSpec = { id: 'make-161', map: 'crafting', in: [['t:titanium_plate@0', 1]], out: [['machine:161@0', 1]] };
+    const bom = await bomOf(packFromSpec({ ...MINI_GT, recipes: [...MINI_GT.recipes!, fromTitanium] }), settings());
+    expect(bom.lines[0]?.made?.recipeId).toBe('make-161');
+    expect(bom.totals.map((l) => [l.key, l.amount])).toEqual([['t:titanium_ingot@0', 1]]);
+    expect(bom.alternatives?.get('t:titanium_plate@0')).toBeUndefined();
+    expect(bom.alternatives?.get('machine:161@0')).toBeUndefined();
+    expect(rawCosts(bom).every(Number.isFinite)).toBe(true);
+
+    // Pinned beside a recipe from three Iron Plates (`pinnedBeside` keeps both in the book), the Titanium Plate recipe
+    // still settles the Centrifuge, at Infinity, and the build follows it; its row leaves the list, the other one stays.
+    const pinned = await bomOf(packFromSpec({ ...MINI_GT, recipes: [...MINI_GT.recipes!, fromTitanium,
+      { id: 'make-161b', map: 'crafting', in: [['t:iron_plate@0', 3]], out: [['machine:161@0', 1]] }] }), settings({ recipeChoice: { 'machine:161@0': 'make-161' } }));
+    expect(pinned.lines[0]?.made?.recipeId).toBe('make-161');
+    expect(pinned.alternatives?.get('machine:161@0')?.map((a) => [a.recipeId, a.rawCost])).toEqual([['make-161b', 3]]);
+    expect(pinned.alternatives?.get('t:titanium_plate@0')).toBeUndefined();
+    expect(rawCosts(pinned)).toEqual([3]);
   });
 
   it('uses a pinned recipe for every node of that good', async () => {
