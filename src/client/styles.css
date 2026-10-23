@@ -139,6 +139,22 @@ button.banner-chip {
 .banner-cost { color: var(--muted); }
 /* What the plan costs to run and to build (plan 12), above the banner. */
 .plan-cost { color: var(--muted); margin: 0 0 var(--gap); }
+/* The Compare card (add-on 17): the three planning modes side by side, under the banner. */
+.compare-card { margin: 0 0 var(--gap); }
+section.compare-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px; }
+.compare-card > p { margin: 6px 0 0; }
+.compare-head { display: flex; align-items: center; gap: 8px; }
+.compare-head h3 { flex: 1; margin: 0; font-size: 1rem; }
+.compare-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-top: 8px; }
+.compare-column { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; min-width: 0; }
+.compare-column.current { border-color: var(--accent); }
+.compare-column h4 { margin: 0; font-size: 0.95rem; }
+.compare-column p { margin: 0; overflow-wrap: anywhere; }
+.compare-column > button { align-self: flex-start; margin-top: auto; }
+.compare-rows { margin: 0; display: flex; flex-direction: column; gap: 2px; font-size: 0.9rem; }
+.compare-row { display: flex; justify-content: space-between; gap: 10px; }
+.compare-row dt { color: var(--muted); }
+.compare-row dd { margin: 0; font-variant-numeric: tabular-nums; }
 
 /* What changed with the last settings change (fix spec §6.4), above the flow diagram and the materials. */
 .what-changed { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; }
@@ -224,6 +240,11 @@ details.settings-section > summary h3 { display: inline; margin-right: 8px; }
 .amount-input { width: 9em; }
 .settings-target { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .settings-target-name { flex: 1; min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
+/* "Plan for" (add-on 17): each mode's radio with what it counts below it; the farm kinds' own fields indented under them. */
+.objective-choice { display: flex; flex-direction: column; gap: 1px; }
+.settings-section p.choice-hint { margin: 0 0 2px 24px; }
+.farm-fields { display: flex; flex-direction: column; gap: 8px; padding-left: 24px; }
+.stat-input { width: 4em; padding: 3px 6px; }
 
 .item-search { display: flex; flex-direction: column; gap: 4px; }
 .item-search input { width: 100%; }
@@ -454,6 +475,8 @@ button.link:hover:not(:disabled) { background: none; text-decoration: none; }
 .mat-toggle { width: 1.6em; flex-shrink: 0; padding: 0; border: none; background: none; text-align: center; color: var(--muted); }
 span.mat-toggle { display: inline-block; }
 .mat-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+/* A byproduct another project takes or is credited for (add-on 17), under that byproduct. */
+.mat-taken { padding-left: 28px; color: var(--muted); }
 .mat-amount { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
 .mat-have summary { cursor: pointer; }
 .mat-where { margin: 2px 0 0; padding-left: 18px; }

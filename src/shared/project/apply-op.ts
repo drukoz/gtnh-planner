@@ -44,11 +44,11 @@ export const MAX_FARM_PER_MINUTE = 1e6;
  */
 export const MAX_CROP_LAYERS = 3;
 /** Crop Managers exist for LV to UMV only (mteIds 28001–28012). */
-const MAX_CROP_MANAGER_TIER = 12;
+export const MAX_CROP_MANAGER_TIER = 12;
 /** A crop seed's growth, gain and resistance (farms.md §2.2). */
-const MAX_CROP_STAT = 31;
+export const MAX_CROP_STAT = 31;
 /** The crop's liked biome tags the farm's biome may have (`FarmSettings.crops.likedTags`). */
-const MAX_LIKED_TAGS = 2;
+export const MAX_LIKED_TAGS = 2;
 
 const MAX_TIER = 14;
 const MAX_AMOUNT = 1e9;

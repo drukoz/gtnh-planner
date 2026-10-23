@@ -1,12 +1,13 @@
 // The panel beside the flow diagram (spec §3.9, fix spec §6.3). A step's panel: what it takes and makes and from or to
 // which step (hovering a row lights the item in the diagram, clicking a step selects it), the machine it shares with
-// other steps (plan 12), who else makes its product, why it uses the ingredient option it does (pin another), the free
-// input it supplies or the supporting line it belongs to, the group's machines it reuses and where they stand (those of
-// other tiers, and the steps a machine is shared with, included), the machine tier it runs at (pin another, plan 12),
-// its overclock math, every way to make its product (swap its
-// recipe, or import the product instead) and its warnings. A raw material's panel: what kind of import it is, which
-// steps use it, what a bought one stands for, and making it in the line instead. Every choice sends one `settings` op
-// with whole field values.
+// other steps (plan 12), a farm step's farm (add-on 17: what it plants and holds; its recipe is a synthetic one the
+// export does not have, and the panel asks the pack nothing about it), who else makes its product, why it uses the
+// ingredient option it does (pin another), the free input it supplies or the supporting line it belongs to, the group's
+// machines it reuses and where they stand (those of other tiers, and the steps a machine is shared with, included), the
+// machine tier it runs at (pin another, plan 12), its overclock math, every way to make its product (swap its
+// recipe, or import the product instead) and its warnings. A raw material's panel: what kind of import it is and what
+// the line takes of it from a farm the group runs or another project (add-on 17), which steps use it, what a bought one
+// stands for, and making it in the line instead. Every choice sends one `settings` op with whole field values.
 
 import { useId, useState, type ReactElement, type ReactNode } from 'react';
 import { tierName } from '../../shared/gt/tiers.ts';
@@ -21,7 +22,8 @@ import { ItemIcon } from '../components/ItemIcon.tsx';
 import { formatNumber, formatPercent, formatRate } from '../format.ts';
 import { endHoverFlowFocus, hoverFlowFocus } from '../state/flow-focus.ts';
 import {
-  flowEdgeId, haveSupplyPatch, importInsteadPatch, LEAF_WORD, makeHerePatch, ocLines, optionPatch, optionSlotKey, reusePatch, tierText, useOnlyPatch,
+  flowEdgeId, haveSupplyPatch, importInsteadPatch, importWords, LEAF_WORD, makeHerePatch, ocLines, optionPatch, optionSlotKey, reusePatch, tierText,
+  useOnlyPatch,
 } from './flow-model.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
 
@@ -160,7 +162,7 @@ export function PortsSection(props: { step: PlanStep; plan: Plan; per: Per; onSe
   const index = props.index ?? indexPlan(plan);
   const nameOf = namesOf(plan);
   const steps = new Map(plan.steps.map((s) => [s.id, s]));
-  const leafOf = new Map(plan.rawInputs.map((r) => [r.key, r.leafClass]));
+  const imports = importWords(plan);
   // Flows carry net amounts (balance.ts), so a step makes of a good what it makes per run less what it takes of it; a
   // good it takes and hands back in full (a cell, a catalyst) has neither a Takes nor a Makes row.
   const perRun = (products: PlanStep['inputs']): Map<StuffKey, number> => {
@@ -189,8 +191,8 @@ export function PortsSection(props: { step: PlanStep; plan: Plan; per: Per; onSe
       );
     }
     if (node === RAW) {
-      const leaf = leafOf.get(key);
-      return `import${leaf === undefined ? '' : ` (${LEAF_WORD[leaf]})`} ${rate}`;
+      const words = imports.get(key);
+      return `import${words === undefined ? '' : ` (${words})`} ${rate}`;
     }
     if (node === OUT) return `the target ${rate}`;
     if (node === SINK) return `left over ${rate}`;
@@ -673,6 +675,12 @@ export function StepPanel(props: {
       </p>
       {shared !== null && <p>{shared}</p>}
       <PortsSection step={step} plan={plan} per={per} index={index} onSelect={onSelect} />
+      {step.farm !== undefined && (
+        <section className="flow-panel-section">
+          <h4 className="flow-panel-title">Farm</h4>
+          <p>{step.farm.text}</p>
+        </section>
+      )}
       <AlsoMadeBySection step={step} plan={plan} index={index} settings={settings} nameOf={nameOf} patch={patch} />
       <SupplySection step={step} plan={plan} settings={settings} nameOf={nameOf} patch={patch} />
       <LineSection step={step} settings={settings} patch={patch} />
@@ -722,11 +730,15 @@ function pricedViaText(input: RawInput, nameOf: NameOf): string | null {
   return `${head}: usually made by ${mapName(via.mapId, nameOf)}${from} (${via.steps} ${via.steps === 1 ? 'recipe' : 'recipes'})`;
 }
 
+/** Where a raw input taken from beyond the line comes from, in words (add-on 17). */
+const TAKEN_FROM: Record<NonNullable<RawInput['from']>['kind'], string> = { project: "another project's surplus", farm: 'a farm the group runs' };
+
 /**
- * The panel of a raw-material box (fix spec §6.3): what kind of import it is and how much, which steps use it (hovering
- * one lights its arrow, clicking selects the step), what a bought one stands for, where it comes from and what is in
- * storage; for a base material "Make it here instead" (greyed when nothing at the tier makes it), for a free input the
- * group said it supplies "Plan its generator again".
+ * The panel of a raw-material box (fix spec §6.3): what kind of import it is and how much, and how much the line takes
+ * of it from a farm the group runs or another project (add-on 17: "From Rubber line, another project's surplus · 15/min"),
+ * which steps use it (hovering one lights its arrow, clicking selects the step), what a bought one stands for, where it
+ * comes from (when the line buys some) and what is in storage; for a base material "Make it here instead" (greyed when
+ * nothing at the tier makes it), for a free input the group said it supplies "Plan its generator again".
  */
 export function RawPanel(props: {
   itemKey: StuffKey; plan: Plan; settings: PlanSettings; per: Per; send: Send; onClose(): void; onSelect?(stepId: string): void;
@@ -736,7 +748,10 @@ export function RawPanel(props: {
   const patch = settingsSender(send);
   const name = nameOf(itemKey);
   const fluid = isFluidKey(itemKey);
-  const input: RawInput | undefined = plan.rawInputs.find((r) => r.key === itemKey);
+  const rows = plan.rawInputs.filter((r) => r.key === itemKey);
+  // What the line buys of it (its row without `from`), and what it takes from farms the group runs or other projects.
+  const input: RawInput | undefined = rows.find((r) => r.from === undefined);
+  const takenFrom = rows.flatMap((r) => (r.from === undefined ? [] : [{ from: r.from, perSecond: r.perSecond }]));
   const sources = input?.sources ?? [];
   const leaf = input?.leafClass;
   const steps = new Map(plan.steps.map((s) => [s.id, s]));
@@ -755,6 +770,9 @@ export function RawPanel(props: {
           {input.total !== undefined && ` · ${formatNumber(input.total)}${fluid ? ' L' : ''} for the whole batch`}
         </p>
       )}
+      {takenFrom.map(({ from, perSecond }) => (
+        <p key={`${from.kind}:${from.id}`} className="muted">{`From ${from.name}, ${TAKEN_FROM[from.kind]} · ${formatRate(perSecond, per, { fluid })}`}</p>
+      ))}
       {leaf !== undefined && <p>{LEAF_TEXT[leaf]}</p>}
       {input !== undefined && !input.available && leaf !== 'unavailable' && <p className="error">{LEAF_TEXT.unavailable}</p>}
       {via !== null && <p>{via}</p>}
@@ -779,23 +797,26 @@ export function RawPanel(props: {
           </ul>
         </section>
       )}
-      <section className="flow-panel-section">
-        <h4 className="flow-panel-title">Sources</h4>
-        {sources.length === 0 ? (
-          <p className="muted">No known source in the pack.</p>
-        ) : (
-          <ul className="sources">
-            {sources.map((source, i) => (
-              <li key={`${source.kind}:${i}`}>
-                {sourceText(source, plan.names)}
-                {source.foundAt !== undefined && source.foundAt.length > 0 && (
-                  <span className="muted small">{` · ${foundText(source.foundAt, plan.names)}`}</span>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+      {/* Where a bought good comes from: nothing to say of one the line only takes from a farm or another project. */}
+      {(input !== undefined || takenFrom.length === 0) && (
+        <section className="flow-panel-section">
+          <h4 className="flow-panel-title">Sources</h4>
+          {sources.length === 0 ? (
+            <p className="muted">No known source in the pack.</p>
+          ) : (
+            <ul className="sources">
+              {sources.map((source, i) => (
+                <li key={`${source.kind}:${i}`}>
+                  {sourceText(source, plan.names)}
+                  {source.foundAt !== undefined && source.foundAt.length > 0 && (
+                    <span className="muted small">{` · ${foundText(source.foundAt, plan.names)}`}</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
       {canExpand && (
         <section className="flow-panel-section">
           <p className="muted small">Plan its own recipe in this line instead of importing it.</p>

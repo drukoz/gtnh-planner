@@ -123,9 +123,9 @@ describe('plan banner', () => {
   });
   it('says how much more raw material the plan uses than the least, and why', () => {
     const costly = planOf({ rawCost: { perSecond: 1.21, leastPerSecond: 1 } });
-    expect(text(html(costly))).toContain('Uses 21% more raw material than the least possible to save machines (Steps vs raw material: Fewest machines)');
-    expect(text(html(costly, S({ stepCharge: 0.02 })))).toContain('(Steps vs raw material: Some machines)');
-    expect(text(html(costly, S({ stepCharge: 0.07 })))).toContain('(Steps vs raw material: Custom (7%))');
+    expect(text(html(costly))).toContain('Uses 21% more raw material than the least possible to save machines (Machines vs raw material: Fewest machines)');
+    expect(text(html(costly, S({ stepCharge: 0.02 })))).toContain('(Machines vs raw material: Some machines)');
+    expect(text(html(costly, S({ stepCharge: 0.07 })))).toContain('(Machines vs raw material: Custom (7%))');
     expect(html(planOf({ rawCost: { perSecond: 1, leastPerSecond: 1 } }))).toBe('');
     expect(html(planOf({ rawCost: { perSecond: 0, leastPerSecond: 0 } }))).toBe('');
   });
@@ -144,8 +144,8 @@ describe('plan banner', () => {
   it('says a line whose least raw material is 0 uses raw material free inputs could replace, without a percentage', () => {
     // A glass line digging sand that rock-breaker cobblestone and forge hammers could make (plan 12, D1).
     const line = (html(planOf({ rawCost: { perSecond: 0.01, leastPerSecond: 0 } }))).match(/<p class="banner-cost">(.*?)<\/p>/)?.[1] ?? '';
-    expect(text(line)).toBe('Uses raw material that free inputs could replace, to save machines (Steps vs raw material: Fewest machines)');
+    expect(text(line)).toBe('Uses raw material that free inputs could replace, to save machines (Machines vs raw material: Fewest machines)');
     expect(line).not.toContain('%');
-    expect(text(html(planOf({ rawCost: { perSecond: 0.01, leastPerSecond: 0 } }), S({ stepCharge: 0.02 })))).toContain('(Steps vs raw material: Some machines)');
+    expect(text(html(planOf({ rawCost: { perSecond: 0.01, leastPerSecond: 0 } }), S({ stepCharge: 0.02 })))).toContain('(Machines vs raw material: Some machines)');
   });
 });
