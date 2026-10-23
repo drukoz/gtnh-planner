@@ -26,7 +26,7 @@
   --font-pixel: 'Pixelify Sans', Inter, sans-serif; --font-ui: Inter, system-ui, sans-serif;
   --font-diagram: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --ink: #dddddd; --ink-muted: #aaaaaa; --ink-title: #ffffff; --ink-link: #ffff55;
-  --ink-error: #ff5555; --ink-ok: #55ff55; --ink-warn: #ffaa00;
+  --ink-error: #ff5555; --ink-ok: #55ff55; --ink-warn: #ffaa00; --ink-focus: #ffff55;
   --gap: 12px;
   /* Old names, still read by inline styles and older rules; Task 9 removes them. */
   --bg: var(--page); --surface: var(--panel); --surface-2: #b5b5b5; --border: #555555; --radius: 0;
@@ -60,7 +60,7 @@ h2 { font-size: 1.2rem; margin: 0 0 var(--gap); }
 .card, .modal, .settings-panel, .flow-panel, .conn-panel, .tab-panel,
 .plan-banner, .banner, .what-changed, .flow-issues, .flow-infeasible, .delete-confirm {
   --ink: #303030; --ink-muted: #4a4a4a; --ink-title: #404040; --ink-link: #1a3fa0;
-  --ink-error: #aa0000; --ink-ok: #1e5a1e; --ink-warn: #6a4000; --muted: #4a4a4a;
+  --ink-error: #aa0000; --ink-ok: #1e5a1e; --ink-warn: #6a4000; --ink-focus: #1b1b1b; --muted: #4a4a4a;
   color: var(--ink);
 }
 a, button.link { color: var(--ink-link); }
@@ -224,6 +224,10 @@ details.settings-section > summary .muted { color: inherit; }
 
 /* The keyboard focus: a 3px ring that touches the control, whose own dark border keeps it readable on the light panels. */
 :focus-visible { outline: 3px solid var(--accent); outline-offset: 0; }
+/* A link has no dark edge of its own for that ring to touch, and yellow on the light grey of a panel measures 1.6:1: its ring
+   takes the focus ink of the surface it is on (yellow on the stone, near black on a panel). Same specificity as the ring
+   above, so it recolours it by coming after; the width and the offset stay the ring's. */
+:where(a, button.link):focus-visible { outline-color: var(--ink-focus); }
 
 .field { display: flex; flex-direction: column; gap: 4px; }
 .field > span { font-size: 0.9rem; color: var(--muted); }

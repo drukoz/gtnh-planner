@@ -430,6 +430,21 @@ describe('the Machine GUI controls', () => {
     expectDeclared([[':focus-visible', 'outline', '3px solid var(--accent)'], [':focus-visible', 'outline-offset', '0']]);
   });
 
+  it('rings a link in the focus ink of its surface: yellow on the stone, near black on a panel', () => {
+    // a button, a field and a tick have a dark edge of their own for the yellow ring to touch; a link has none, and yellow
+    // on the light grey of a panel measures 1.6:1 where near black measures 10:1
+    expect(rootTokens().get('--ink-focus')).toBe('#ffff55');
+    const panels = blocks.find((b) => !b.nested && b.prelude.split(', ').includes('.tab-panel') && b.inner.includes('--ink:'));
+    if (panels === undefined) throw new Error('styles.css has no rule that sets the panel ink');
+    expect(declarations(panels.inner).filter(([name]) => name === '--ink-focus').map(([, value]) => value)).toEqual(['#1b1b1b']);
+    const link = ':where(a, button.link):focus-visible';
+    expect(declared(link, 'outline-color')).toBe('var(--ink-focus)');
+    // only the colour: the width and the offset stay the base ring's
+    expect(declarations(ruleBody(link)).map(([name]) => name)).toEqual(['outline-color']);
+    // it has the base ring's specificity (0,1,0), so it is its place after the base ring that lets it recolour it
+    expect(position(link)).toBeGreaterThan(position(':focus-visible'));
+  });
+
   it('draws badges and chips as dark rectangles with pixel text', () => {
     expectDeclared([
       ['.badge, .chip', 'background', 'var(--screen)'], ['.badge, .chip', 'color', '#ffffff'], ['.badge, .chip', 'border-radius', '0'],
