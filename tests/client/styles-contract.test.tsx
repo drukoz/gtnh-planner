@@ -1494,3 +1494,198 @@ describe('the Machine GUI Connections tab', () => {
     }
   });
 });
+
+// The Map tab (restyle plan Phase 1 Task 8, design spec §6 and §8): the controls on the tab's panel, the map in a frame of its own
+// under a toolbar of Minecraft buttons, the new line and what the scan found in two panels beside it, and an NEI tooltip over the
+// map. The inline styles of the five files are classes now, and the rules below carry the values they had; what stays inline is the
+// canvas's style, the tooltip's position and pointer events and the colour of a pin's dot. map-view.test.tsx and the other markup
+// tests pin the classes in the markup, world.spec.ts and layout.spec.ts the canvas that must stay where it was.
+
+const MAP_FILES = ['views/MapTab.tsx', 'views/MapView.tsx', 'map/MapTooltip.tsx', 'map/LinePanel.tsx', 'map/FoundPanel.tsx'];
+/** The old palette's names, by prefix (`var(--surface` is `--surface-2` too): none of the five files reads one any more. */
+const OLD_PALETTE = ['var(--surface', 'var(--border', 'var(--radius', 'var(--accent', 'var(--ok', 'var(--warn-', 'var(--error'];
+const TIP = '.map-tooltip';
+const PANELS = '.line-panel, .found-panel';
+const MAP_BULLETS = '.line-panel ul, .found-panel ul';
+const MAP_LISTS = '.line-panel .map-list, .found-panel .map-list';
+const ROW = '.map-row-button';
+const PICKED_ROW = ".map-list > li[aria-current='true'] > .map-row-button";
+/** A selector of this tab: the class it styles is one of the tab's own. */
+const MAP_RULE = /\.(map-(tab-status|tab|picker-actions|picker-line|picker|controls|layers|body|main|side|view|toolbar|zoom|y|box|tooltip|list|row-button)|line-panel|line-actions|found-(panel|section|item-label|item-name|show-all)|pin-dot)(?![\w-])/;
+/** What the canvas sits in, and the tab the note dialog's fixed backdrop is drawn in. */
+const MAP_ANCESTORS = ['.map-tab', '.map-body', '.map-main', '.map-view', '.map-box'];
+
+describe('the Machine GUI Map tab', () => {
+  it('has moved the inline styles of the five Map files to classes, and left the old palette', () => {
+    const inline: Record<string, number> = {};
+    for (const file of MAP_FILES) {
+      const source = read(file);
+      for (const name of OLD_PALETTE) expect(source.includes(name), `${file} reads ${name}`).toBe(false);
+      expect(source, file).not.toMatch(/\b(MAP_STYLE|PANEL_STYLE|FITS_STYLE|LIST_STYLE|PLAIN_LIST_STYLE|SUBHEAD_STYLE|DOT_STYLE)\b/);
+      inline[file] = (source.match(/\bstyle=\{/g) ?? []).length;
+    }
+    // what stays inline: the canvas's (its cursor is written from code), the tooltip's position and pointer events, and a pin's dot
+    // (the colour of its marker on the map, as the 3D view's legend swatch)
+    expect(inline).toEqual({ 'views/MapTab.tsx': 0, 'views/MapView.tsx': 1, 'map/MapTooltip.tsx': 1, 'map/LinePanel.tsx': 1, 'map/FoundPanel.tsx': 0 });
+    expect(read('map/MapTooltip.tsx')).toContain("const TOOLTIP_STYLE: CSSProperties = { position: 'absolute', pointerEvents: 'none' };");
+    expect(read('map/LinePanel.tsx')).toContain('style={{ background: PIN_COLORS[p.kind] }}');
+  });
+
+  it('draws the tooltip as an NEI tooltip: a dark box with a violet edge, a white first line and grey details, that rises in', () => {
+    expectDeclared([
+      [TIP, 'background', 'var(--tip-bg)'], [TIP, 'border', '2px solid var(--tip-border)'],
+      [TIP, 'box-shadow', '0 0 0 1px #100010, inset 0 0 0 1px var(--tip-inner)'],
+      [TIP, 'color', '#aaaaaa'], [TIP, 'font', '14px/1.35 var(--font-pixel)'], [TIP, 'animation', 'rise-in 120ms var(--ease-out)'],
+      // what the inline style used to carry, but the position and the pointer events (they stay inline)
+      [TIP, 'width', 'max-content'], [TIP, 'max-width', '360px'], [TIP, 'padding', '6px 8px'], [TIP, 'overflow-wrap', 'anywhere'],
+      ['.map-tooltip > :first-child', 'color', '#ffffff'],
+    ]);
+    expect(ruleBody(TIP)).toContain('background: var(--tip-bg)');
+    expect(ruleBody(TIP)).toContain('border: 2px solid var(--tip-border)');
+    expect(declared(TIP, 'border-radius') ?? '0').toBe('0');
+    // the first line of a tooltip is the one the hover code puts first (the block's name, else its position, else the base)
+    expect(position('.map-tooltip > :first-child')).toBeGreaterThan(position(TIP));
+  });
+
+  it('frames the map on its box, and never on the canvas or on anything laid over it', () => {
+    expectDeclared([
+      ['.map-box', 'position', 'relative'], ['.map-box', 'overflow', 'hidden'], ['.map-box', 'flex', '1'], ['.map-box', 'min-height', '360px'],
+      ['.map-box', 'background', 'var(--well)'], ['.map-box', 'border', '3px solid'],
+      ['.map-box', 'border-color', 'var(--slot-lo) var(--slot-hi) var(--slot-hi) var(--slot-lo)'],
+      ['.map-box', 'outline', '2px solid var(--outline)'],
+    ]);
+    // the canvas fills the box's padding box: the tests aim at its centre, read its bitmap and measure the box
+    expect(blocks.filter((b) => /(^|[\s,>+~])canvas\b/.test(b.prelude) || /\.map-[a-z-]+[^,{]*\bcanvas\b/.test(b.prelude)).map((b) => b.prelude), 'a rule for the canvas').toEqual([]);
+    expect(blocks.filter((b) => /\.map-(box|view|main)[^,{]*::?(before|after)/.test(b.prelude)).map((b) => b.prelude), 'a pseudo-element over the canvas').toEqual([]);
+  });
+
+  it('lays the tab out as its inline styles did: the controls, the picker, the map, and the side column that scrolls', () => {
+    expectDeclared([
+      ['.map-tab', 'display', 'flex'], ['.map-tab', 'flex-direction', 'column'], ['.map-tab', 'gap', '10px'],
+      ['.map-tab-status, .map-picker, .map-picker-line', 'max-width', '560px'],
+      ['.map-picker', 'display', 'flex'], ['.map-picker', 'flex-direction', 'column'], ['.map-picker', 'gap', '12px'],
+      ['.map-picker > h2, .map-picker > p', 'margin', '0'], ['.map-picker-actions', 'gap', '16px'], ['.map-picker-line', 'margin-top', '14px'],
+      ['.map-controls', 'display', 'flex'], ['.map-controls', 'flex-wrap', 'wrap'], ['.map-controls', 'gap', '12px'],
+      ['.map-controls', 'align-items', 'flex-end'],
+      ['.map-layers', 'display', 'flex'], ['.map-layers', 'flex-wrap', 'wrap'], ['.map-layers', 'gap', '12px'], ['.map-layers', 'border', '0'],
+      ['.map-layers', 'margin', '0'], ['.map-layers', 'padding', '0'],
+      ['.map-body', 'display', 'flex'], ['.map-body', 'flex-wrap', 'wrap'], ['.map-body', 'gap', '12px'], ['.map-body', 'align-items', 'stretch'],
+      ['.map-main', 'flex', '3 1 420px'], ['.map-main', 'min-width', '0'], ['.map-main', 'height', 'min(72vh, 760px)'],
+      ['.map-main', 'min-height', '420px'],
+      ['.map-side', 'flex', '1 1 300px'], ['.map-side', 'max-width', '400px'], ['.map-side', 'max-height', 'min(72vh, 760px)'],
+      ['.map-side', 'overflow-y', 'auto'], ['.map-side', 'padding-right', '4px'], ['.map-side', 'display', 'flex'],
+      ['.map-side', 'flex-direction', 'column'], ['.map-side', 'gap', '14px'], ['.map-side', 'scrollbar-color', 'var(--btn) var(--well)'],
+      ['.map-view', 'display', 'flex'], ['.map-view', 'flex-direction', 'column'], ['.map-view', 'gap', '8px'], ['.map-view', 'min-width', '0'],
+      ['.map-view', 'height', '100%'],
+    ]);
+    // `.row` sets the picker's actions a gap of 8px: theirs is wider, so it comes after
+    expect(position('.map-picker-actions')).toBeGreaterThan(position('.row'));
+  });
+
+  it('puts the new line and what the scan found in panels, in the ink of a panel, with pixel titles and no bare lists', () => {
+    expectDeclared([
+      [PANELS, 'display', 'flex'], [PANELS, 'flex-direction', 'column'], [PANELS, 'background', 'var(--panel)'],
+      [PANELS, 'border', '2px solid var(--outline)'], [PANELS, 'border-radius', '0'], [PANELS, 'box-shadow', 'var(--bevel-panel)'],
+      ['.line-panel', 'gap', '6px'], ['.found-panel', 'gap', '10px'],
+      ['.line-panel > h3, .found-section > h3', 'font', '600 16px/1.3 var(--font-pixel)'], ['.line-panel > h3, .found-section > h3', 'margin', '0'],
+      // the micro heading of a group stays Inter, as in the settings and in Materials
+      ['.line-panel h4', 'font-size', '0.75rem'], ['.line-panel h4', 'color', 'var(--ink-muted)'], ['.line-panel h4', 'margin', '4px 0 0'],
+      ['.line-panel p, .found-panel p', 'margin', '0'], [MAP_BULLETS, 'margin', '0'], [MAP_BULLETS, 'padding-left', '18px'],
+      ['.found-section', 'display', 'flex'], ['.found-section', 'flex-direction', 'column'], ['.found-section', 'gap', '4px'],
+      ['.found-section + .found-section', 'border-top', '1px solid #8b8b8b'], ['.found-section + .found-section', 'padding-top', '10px'],
+      ['.line-actions', 'gap', '6px'], ['.found-panel summary', 'cursor', 'pointer'],
+      ['.found-item-label', 'display', 'inline-flex'], ['.found-item-label', 'align-items', 'center'], ['.found-item-label', 'gap', '6px'],
+      ['.found-item-label', 'vertical-align', 'middle'], ['.found-item-name', 'overflow-wrap', 'anywhere'], ['.found-show-all', 'align-self', 'flex-start'],
+    ]);
+    expect(declared('.line-panel h4', 'font-family'), 'a micro heading is under the 13px the pixel font may be').toBeUndefined();
+    // the panel group sets the panel ink, and the panels are in it (so are a panel's rules wherever it sits), not in the dark box group
+    expect(inkGroup('.line-panel')).toBe(inkGroup('.tab-panel'));
+    expect(inkGroup('.found-panel')).toBe(inkGroup('.tab-panel'));
+    expect(inkGroup('.banner').prelude.split(', ')).not.toContain('.line-panel');
+    expect(inkGroup('.banner').prelude.split(', ')).not.toContain('.found-panel');
+    expect(blocks.indexOf(inkGroup('.line-panel'))).toBeLessThan(position('.muted'));
+  });
+
+  it('lists the pins, the notes and the items as flat rows, and the picked row as a dark one with yellow text', () => {
+    expectDeclared([
+      [MAP_LISTS, 'list-style', 'none'], [MAP_LISTS, 'padding', '0'], [MAP_LISTS, 'display', 'flex'], [MAP_LISTS, 'flex-direction', 'column'],
+      ['.map-list > li + li', 'border-top', '1px solid #8b8b8b'], ['.map-list > li > details', 'padding', '4px 0'],
+      // a flat row on the panel, not a button face: the muted coordinates of a note are 1.7:1 on a button's grey
+      [ROW, 'width', '100%'], [ROW, 'text-align', 'left'], [ROW, 'padding', '4px 8px'], [ROW, 'background', 'transparent'], [ROW, 'border', '0'],
+      [ROW, 'box-shadow', 'none'], [ROW, 'text-shadow', 'none'], [ROW, 'color', 'var(--ink)'],
+      // a label that wraps needs more than the button's line height of 1, and it is a sentence: Inter, at the size of the lists beside it
+      [ROW, 'font', '0.85rem/1.3 var(--font-ui)'],
+      [`${ROW}:hover`, 'background', 'rgb(255 255 255 / 0.35)'],
+      [PICKED_ROW, 'background', 'var(--screen)'], [PICKED_ROW, 'color', 'var(--accent)'], [`${PICKED_ROW} .muted`, 'color', 'var(--screen-muted)'],
+      // a flat row has no dark edge for a yellow ring to touch, a dark row has
+      [`${ROW}:focus-visible`, 'outline-color', 'var(--ink-focus)'], [`${PICKED_ROW}:focus-visible`, 'outline-color', 'var(--accent)'],
+    ]);
+    expect(Number(/\/([\d.]+) /.exec(declared(ROW, 'font') ?? '')?.[1])).toBeGreaterThanOrEqual(1.3);
+    // `.found-panel ul` (0,1,1) would put the bullets back on a list: the resets have two classes, and come after it
+    expect(position(MAP_LISTS)).toBeGreaterThan(position(MAP_BULLETS));
+    // the picked row beats the pointed-at one by its own specificity, and the dark row's ring beats the flat row's
+    expect(position(PICKED_ROW)).toBeGreaterThan(position(`${ROW}:hover`));
+    expect(position(`${PICKED_ROW}:focus-visible`)).toBeGreaterThan(position(`${ROW}:focus-visible`));
+  });
+
+  it('tints the fits badge by its data-fits in the colours of a dark box, and nothing else of it', () => {
+    for (const [fits, colour] of [['yes', '#55ff55'], ['tight', '#ffaa00'], ['no', '#ff5555'], ['unknown', '#aaaaaa']] as const) {
+      const selector = `.badge[data-fits='${fits}']`;
+      expect(declarations(ruleBody(selector)), selector).toEqual([['color', colour]]);
+      expect(position(selector), selector).toBeGreaterThan(position('.badge, .chip'));
+    }
+    // the note badge is the plain one (`<span class="badge">N1</span>`): nothing of the panel tints it
+    expect(blocks.filter((b) => /\.found-panel[^,{]*\.badge|\.map-row-button[^,{]*\.badge/.test(b.prelude)).map((b) => b.prelude)).toEqual([]);
+  });
+
+  // Pixelify Sans draws its lowercase "fi" and "fl" as ligatures that look like an A at 13 and 14px ("Does not fit" read "Does not At",
+  // "minecraft:fire" read "minecraft:Are": measured in a browser). The `font` shorthand resets the setting, so it comes after the
+  // shorthand in a rule of its own, or in the same rule below it.
+  it('keeps the pixel font\'s fi and fl ligatures off in the text of the fit and of the tooltip', () => {
+    expect(declarations(ruleBody('.badge[data-fits]'))).toEqual([['font-variant-ligatures', 'none']]);
+    expect(position('.badge[data-fits]')).toBeGreaterThan(position('.badge, .chip'));
+    const tooltip = declarations(ruleBody(TIP)).map(([name]) => name);
+    expect(declared(TIP, 'font-variant-ligatures')).toBe('none');
+    expect(tooltip.indexOf('font-variant-ligatures')).toBeGreaterThan(tooltip.indexOf('font'));
+  });
+
+  it('keeps the pin dot the one round shape, with the thin ring of the map\'s own markers', () => {
+    expectDeclared([
+      ['.pin-dot', 'display', 'inline-block'], ['.pin-dot', 'width', '10px'], ['.pin-dot', 'height', '10px'], ['.pin-dot', 'border-radius', '50%'],
+      ['.pin-dot', 'margin-right', '6px'], ['.pin-dot', 'vertical-align', 'middle'], ['.pin-dot', 'box-shadow', '0 0 0 1px rgb(0 0 0 / 0.7)'],
+    ]);
+    for (const block of blocks.filter((b) => MAP_RULE.test(b.prelude) && !b.prelude.includes('.pin-dot'))) {
+      expect(declared(block.prelude, 'border-radius') ?? '0', block.prelude).toBe('0');
+    }
+  });
+
+  it('draws the toolbar as buttons and a readout of fixed height, so a late font cannot resize the box under it', () => {
+    expectDeclared([
+      ['.map-toolbar > button', 'min-height', '32px'], ['.map-zoom', 'min-width', '32px'], ['.map-zoom', 'padding', '0'],
+      ['.map-y', 'display', 'inline-flex'], ['.map-y', 'min-width', '6em'], ['.map-y', 'min-height', '32px'], ['.map-y', 'background', 'var(--screen)'],
+      ['.map-y', 'color', 'var(--screen-text)'], ['.map-y', 'font', '13px/1 var(--font-pixel)'], ['.map-y', 'box-shadow', 'var(--bevel-well)'],
+    ]);
+    // the readout reads "surface" or "Y ≤ n" as the slider moves: the same width for both
+    expect(declared('.map-y', 'justify-content')).toBe('center');
+  });
+
+  it('gives the canvas and the note dialog nothing to move: no transform, filter, containment or animation round them', () => {
+    // a transform, a filter, a containment or a will-change on an ancestor makes it the containing block of the dialog's fixed backdrop,
+    // and an animated transform shifts the box the end-to-end tests read the canvas's centre from
+    const traps = /^(transform|translate|scale|rotate|filter|backdrop-filter|perspective|will-change|contain|container-type|animation|clip-path|mask)/;
+    const ancestors = blocks.filter((b) => b.prelude.split(', ').some((selector) => MAP_ANCESTORS.includes(selector)));
+    expect(ancestors.length, 'the rules of the canvas\'s ancestors').toBeGreaterThanOrEqual(MAP_ANCESTORS.length);
+    for (const block of ancestors) {
+      for (const [name] of declarations(block.inner)) expect(name, block.prelude).not.toMatch(traps);
+    }
+    // nothing in the tab animates but the tooltip, which rises on its own (opacity and a few pixels) and holds nothing
+    for (const block of blocks.filter((b) => MAP_RULE.test(b.prelude) && b.prelude !== TIP)) expect(block.inner, block.prelude).not.toContain('animation');
+  });
+
+  it('reads no alias of the old palette in the rules of the tab', () => {
+    const rules = blocks.filter((b) => MAP_RULE.test(b.prelude));
+    // the scan sees the tab's rules, so a rule it cannot parse would not pass unnoticed
+    expect(rules.length).toBeGreaterThan(40);
+    for (const block of rules) expect(block.inner, block.prelude).not.toMatch(OLD_ALIASES);
+  });
+});

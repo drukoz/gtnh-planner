@@ -47,11 +47,6 @@ const OVERLAY_TOGGLES = [
 type OverlayId = (typeof OVERLAY_TOGGLES)[number]['id'];
 type OverlayChoice = Record<OverlayId, boolean>;
 const ALL_OVERLAYS: OverlayChoice = { machines: true, cables: true, logistics: true, storage: true, outline: true };
-// The panel sits beside the map while both fit, and below it on a narrow screen.
-const MAP_STYLE = { flex: '3 1 420px', minWidth: 0, height: 'min(72vh, 760px)', minHeight: 420 } as const;
-const PANEL_STYLE = {
-  flex: '1 1 300px', maxWidth: 400, maxHeight: 'min(72vh, 760px)', overflowY: 'auto', paddingRight: 4, display: 'flex', flexDirection: 'column', gap: 14,
-} as const;
 
 function loadOverlayChoice(): OverlayChoice {
   const choice = { ...ALL_OVERLAYS };
@@ -215,9 +210,9 @@ function WorldPicker(props: { project: Project; scans: WorldScanListItem[] | nul
   const bases = picked.scan?.bases ?? [];
   const base = bases.find((b) => b.id === baseId) ?? bases[0] ?? null;
   return (
-    <div className="map-picker" style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 560 }}>
-      <h2 style={{ margin: 0 }}>Choose a world scan</h2>
-      <p className="muted" style={{ margin: 0 }}>
+    <div className="map-picker">
+      <h2>Choose a world scan</h2>
+      <p className="muted">
         Pick a finished scan and the base this line is for. The plan then counts the machines and storage already there, and the map shows them.
       </p>
       {scansError !== null && <p className="error">{`Could not list the scans: ${scansError}`}</p>}
@@ -239,7 +234,7 @@ function WorldPicker(props: { project: Project; scans: WorldScanListItem[] | nul
           {bases.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
         </SelectField>
       ))}
-      <div className="row" style={{ gap: 16, alignItems: 'center' }}>
+      <div className="row map-picker-actions">
         <button
           type="button"
           className="primary"
@@ -407,8 +402,8 @@ function ScanMap(props: { project: Project; scan: WorldScan; scans: WorldScanLis
   };
 
   return (
-    <div className="map-tab" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      <div className="row" style={{ flexWrap: 'wrap', gap: 12, alignItems: 'flex-end' }}>
+    <div className="map-tab">
+      <div className="map-controls">
         <ScanSelect
           scans={scans}
           value={scan.id}
@@ -420,7 +415,7 @@ function ScanMap(props: { project: Project; scan: WorldScan; scans: WorldScanLis
           {base === null && <option value="">{scan.bases.length === 0 ? 'No bases found' : 'Choose a base…'}</option>}
           {scan.bases.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
         </SelectField>
-        <fieldset className="row" style={{ border: 'none', margin: 0, padding: 0, gap: 12, flexWrap: 'wrap' }}>
+        <fieldset className="map-layers">
           <legend className="visually-hidden">Map layers</legend>
           {OVERLAY_TOGGLES.map(({ id, label }) => (
             <label key={id} className="check">
@@ -432,12 +427,12 @@ function ScanMap(props: { project: Project; scan: WorldScan; scans: WorldScanLis
         {shown !== null && base !== null && <button type="button" className="small" onClick={() => showSpot(null)}>Back to the base</button>}
         <WorldLink />
       </div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'stretch' }}>
-        <div style={MAP_STYLE}>
+      <div className="map-body">
+        <div className="map-main">
           <MapView scanId={scan.id} scan={scan} dim={dim} focus={focus} overlays={overlays} markers={markers} onMarkerClick={clickMarker} />
         </div>
         {/* the new line first: its summary and buttons stay in reach above a long list of what the scan found (spec §3.7) */}
-        <div style={PANEL_STYLE}>
+        <div className="map-side">
           <aside aria-label="New line">
             <LinePanel
               layout={layout}
@@ -454,7 +449,7 @@ function ScanMap(props: { project: Project; scan: WorldScan; scans: WorldScanLis
               focusedPin={focusedPin}
             />
           </aside>
-          <aside aria-label="Found in world" style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+          <aside aria-label="Found in world">
             <FoundPanel
               summary={summary}
               notes={project.notes}
@@ -478,7 +473,7 @@ function ProjectMap(props: { project: Project; scanId: string; scans: WorldScanL
     return <ScanMap project={project} scan={loaded.scan} scans={scans} send={send} plan={plan} line={line} focusedPin={focusedPin} />;
   }
   return (
-    <div className="map-tab" style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 560 }}>
+    <div className="map-tab map-tab-status">
       {loaded.error === null ? <p className="muted">Loading the world scan…</p> : <p className="error">{`Could not load the world scan: ${loaded.error}`}</p>}
       {loaded.error !== null && (
         <>
@@ -507,7 +502,7 @@ export function MapTab(props: ProjectViewProps): ReactElement {
     return (
       <>
         <WorldPicker project={project} scans={scans} scansError={error} send={send} />
-        <div style={{ maxWidth: 560 }}>
+        <div className="map-picker-line">
           <LinePanel
             layout={line.layout}
             plan={plan}

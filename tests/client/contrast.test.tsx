@@ -128,3 +128,30 @@ describe('contrast of the Connections tab', () => {
     expect(ratio(colour, under)).toBeGreaterThanOrEqual(GRAPHICS);
   });
 });
+
+// The Map tab (restyle plan Phase 1 Task 8, design spec §6): the fits badge's four colours on the badge's screen, the NEI tooltip's
+// two greys of text on its box (94% of #100010 over the lightest a map can be, white), the rows of the pin and note lists on the panel
+// and under the pointer (the panel's grey under a 35% white veil), and the picked row (yellow and the screen's grey on a screen).
+const SCREEN = '#1b1b1b';
+const PANEL = '#c6c6c6';
+const TIP_OVER_WHITE = '#1e0f1e';
+const VEILED_PANEL = '#dadada';
+const MAP_PAIRS: [string, string, string][] = [
+  ['fits badge: fits', '#55ff55', SCREEN], ['fits badge: tight', '#ffaa00', SCREEN], ['fits badge: does not fit', '#ff5555', SCREEN],
+  ['fits badge: unknown', '#aaaaaa', SCREEN],
+  ['tooltip first line', '#ffffff', TIP_OVER_WHITE], ['tooltip detail lines', '#aaaaaa', TIP_OVER_WHITE],
+  ['row label', '#303030', PANEL], ['row coordinates', '#4a4a4a', PANEL],
+  ['row label under the pointer', '#303030', VEILED_PANEL], ['row coordinates under the pointer', '#4a4a4a', VEILED_PANEL],
+  ['picked row', '#ffff55', SCREEN], ['picked row coordinates', '#aaaaaa', SCREEN], ['Y level readout', '#55ff55', SCREEN],
+];
+
+describe('contrast of the Map tab', () => {
+  it.each(MAP_PAIRS)('%s: %s on %s meets AA', (_what, text, background) => {
+    expect(ratio(text, background)).toBeGreaterThanOrEqual(AA);
+  });
+
+  it('needs a flat row: the coordinates of a note would fall short on a button\'s grey', () => {
+    expect(ratio('#4a4a4a', '#6b6b6b')).toBeLessThan(AA);                             // the panel's quiet grey on a button face
+    expect(ratio('#aaaaaa', '#6b6b6b')).toBeLessThan(AA);                             // and the dark box's
+  });
+});

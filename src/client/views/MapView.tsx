@@ -502,10 +502,10 @@ export function MapView(props: MapViewProps): ReactElement {
   const tooWide = visibleTiles(view).length > WANTED_TILES;
 
   return (
-    <div className="map-view" style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0, height: '100%' }}>
-      <div className="row">
-        <button type="button" className="small" aria-label="Zoom in" onClick={() => zoomCentre(ZOOM_STEP)}>+</button>
-        <button type="button" className="small" aria-label="Zoom out" onClick={() => zoomCentre(1 / ZOOM_STEP)}>−</button>
+    <div className="map-view">
+      <div className="row map-toolbar">
+        <button type="button" className="small map-zoom" aria-label="Zoom in" onClick={() => zoomCentre(ZOOM_STEP)}>+</button>
+        <button type="button" className="small map-zoom" aria-label="Zoom out" onClick={() => zoomCentre(1 / ZOOM_STEP)}>−</button>
         {focusX !== undefined && focusZ !== undefined && (
           <button type="button" className="small" onClick={() => setView((v) => ({ ...v, centerX: focusX, centerZ: focusZ }))}>Re-centre</button>
         )}
@@ -516,17 +516,11 @@ export function MapView(props: MapViewProps): ReactElement {
             setView((v) => ({ ...v, y }));
           }}
         />
-        <span>{yLabel}</span>
+        <span className="map-y">{yLabel}</span>
         {tooWide && <span className="muted">Zoom in to load the rest of the map</span>}
         {paletteError !== null && <span className="error">Map colours could not be loaded: {paletteError}</span>}
       </div>
-      <div
-        ref={boxRef}
-        style={{
-          position: 'relative', flex: 1, minHeight: 360, overflow: 'hidden', borderRadius: 'var(--radius)',
-          border: '1px solid var(--border)', background: 'var(--surface-2)',
-        }}
-      >
+      <div ref={boxRef} className="map-box">
         <canvas
           ref={canvasRef}
           role="img"

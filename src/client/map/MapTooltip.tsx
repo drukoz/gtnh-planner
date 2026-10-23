@@ -35,18 +35,16 @@ export function tooltipPosition(
   };
 }
 
-// No left/top here: the map sets them on the element before it is painted.
-const TOOLTIP_STYLE: CSSProperties = {
-  position: 'absolute', width: 'max-content', maxWidth: 360, padding: '4px 8px', pointerEvents: 'none', lineHeight: 1.35, overflowWrap: 'anywhere',
-  background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, boxShadow: '0 4px 14px rgb(0 0 0 / 0.25)',
-};
+// No left/top here: the map sets them on the element before it is painted. Everything else is `.map-tooltip` in the stylesheet (the NEI
+// look, design spec §6); what stays here is what the map and the pointer need whatever the stylesheet says.
+const TOOLTIP_STYLE: CSSProperties = { position: 'absolute', pointerEvents: 'none' };
 
 export interface MapTooltipProps { id: string; lines: readonly string[]; ref?: Ref<HTMLDivElement> }
 
 /** The tooltip box, one line per entry of `lines`; the map points its canvas's `aria-describedby` at `id` while it shows. */
 export function MapTooltip(props: MapTooltipProps): ReactElement {
   return (
-    <div ref={props.ref} id={props.id} role="tooltip" className="small" style={TOOLTIP_STYLE}>
+    <div ref={props.ref} id={props.id} role="tooltip" className="map-tooltip" style={TOOLTIP_STYLE}>
       {props.lines.map((line, i) => <div key={i}>{line}</div>)}
     </div>
   );

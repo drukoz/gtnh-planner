@@ -3,7 +3,7 @@
 // turn or re-place the line, its numbered pins (a click shows that pin on the map) and its warnings. A line that is not
 // placed in the world, or that has nothing new to build, says so in place of the summary.
 
-import { useId, type CSSProperties, type ReactElement } from 'react';
+import { useId, type ReactElement } from 'react';
 import { fmtInt } from '../../shared/layout/format.ts';
 import type { Layout } from '../../shared/types/layout.ts';
 import type { Plan } from '../../shared/types/plan.ts';
@@ -18,23 +18,13 @@ export interface LinePanelProps {
   focusedPin?: number | null;
 }
 
+// The badge's colour is the stylesheet's, from its `data-fits` (`.badge[data-fits=…]`).
 const FITS_TEXT: Readonly<Record<LineSummary['fitsClass'], string>> = { yes: 'Fits', tight: 'Tight in rain', no: 'Does not fit', unknown: 'Unknown' };
-const FITS_STYLE: Readonly<Record<LineSummary['fitsClass'], CSSProperties>> = {
-  yes: { color: 'var(--ok)', borderColor: 'var(--ok)' },
-  tight: { background: 'var(--warn-bg)', borderColor: 'var(--warn-border)' },
-  no: { color: 'var(--error)', background: 'var(--error-bg)', borderColor: 'var(--error)' },
-  unknown: {},
-};
 const LOADING_TEXT = 'Laying out the line…';
 const NO_WORLD_TEXT = 'Pick a world scan and base to place the line';
 const ALL_OWNED_TEXT = 'Nothing new to build — every step runs on machines you own';
 /** An `empty` layout of a plan without steps (no target yet, or none it can make): nobody owns steps that do not exist. */
 const NO_STEPS_TEXT = 'Nothing to lay out yet — the plan makes nothing';
-
-const LIST_STYLE = { margin: 0, paddingLeft: 18 } as const;
-const PLAIN_LIST_STYLE = { margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 2 } as const;
-const SUBHEAD_STYLE = { margin: '4px 0 0', fontSize: '0.85rem' } as const;
-const DOT_STYLE = { display: 'inline-block', width: 10, height: 10, borderRadius: '50%', marginRight: 6, verticalAlign: 'middle' } as const;
 
 /**
  * The owned machines the plan's machine steps reuse, each once (plan 12): the distinct (type, unit) pairs of the steps'
@@ -79,16 +69,16 @@ function Summary(props: { layout: Layout; plan: Plan | null }): ReactElement {
   const suggestions = layout.power?.suggestions ?? [];
   return (
     <>
-      <p style={{ margin: 0 }}>{`Machines: ${fmtInt(s.newMachines)} new, ${fmtInt(s.reused)} reused`}</p>
-      <p style={{ margin: 0 }}>{`Footprint: ${s.footprint}`} <span className="muted small">(W×L×H)</span></p>
-      <p style={{ margin: 0 }}>{`Peak: ${s.peak}`}</p>
-      <p style={{ margin: 0 }}>
+      <p>{`Machines: ${fmtInt(s.newMachines)} new, ${fmtInt(s.reused)} reused`}</p>
+      <p>{`Footprint: ${s.footprint}`} <span className="muted small">(W×L×H)</span></p>
+      <p>{`Peak: ${s.peak}`}</p>
+      <p>
         {'Power: '}
-        <span className="badge" data-fits={s.fitsClass} style={FITS_STYLE[s.fitsClass]}>{s.fits}</span>
+        <span className="badge" data-fits={s.fitsClass}>{s.fits}</span>
       </p>
-      {layout.power?.detail !== undefined && <p className="muted small" style={{ margin: 0 }}>{layout.power.detail}</p>}
+      {layout.power?.detail !== undefined && <p className="muted small">{layout.power.detail}</p>}
       {suggestions.length > 0 && (
-        <ul className="small" style={LIST_STYLE}>
+        <ul className="small">
           {suggestions.map((text, i) => <li key={`${i}|${text}`}>{text}</li>)}
         </ul>
       )}
@@ -102,19 +92,14 @@ function Pins(props: { layout: Layout; focusedPin: number | null; onPin(n: numbe
   const pins = [...layout.pins].sort((a, b) => a.n - b.n);
   return (
     <>
-      <h4 style={SUBHEAD_STYLE}>Pins</h4>
-      <ol className="small" style={PLAIN_LIST_STYLE}>
+      <h4>Pins</h4>
+      <ol className="small map-list">
         {pins.map((p) => {
           const focused = p.n === focusedPin;
           return (
             <li key={p.n} data-testid={`pin-${p.n}`} className={focused ? 'focused' : undefined} aria-current={focused ? 'true' : undefined}>
-              <button
-                type="button"
-                className="small"
-                style={{ width: '100%', textAlign: 'left', ...(focused ? { borderColor: 'var(--accent)', background: 'var(--surface-2)' } : {}) }}
-                onClick={() => onPin(p.n)}
-              >
-                <span aria-hidden="true" style={{ ...DOT_STYLE, background: PIN_COLORS[p.kind] }} />
+              <button type="button" className="small map-row-button" onClick={() => onPin(p.n)}>
+                <span aria-hidden="true" className="pin-dot" style={{ background: PIN_COLORS[p.kind] }} />
                 {`${p.n}. ${p.text}`}
               </button>
             </li>
@@ -130,8 +115,8 @@ function Warnings(props: { layout: Layout }): ReactElement | null {
   if (warnings.length === 0) return null;
   return (
     <>
-      <h4 style={SUBHEAD_STYLE}>Warnings</h4>
-      <ul className="small" style={LIST_STYLE}>
+      <h4>Warnings</h4>
+      <ul className="small">
         {warnings.map((w, i) => <li key={`${w.code}:${i}`}>{w.text}</li>)}
       </ul>
     </>
@@ -140,12 +125,12 @@ function Warnings(props: { layout: Layout }): ReactElement | null {
 
 function Body(props: LinePanelProps & { layout: Layout }): ReactElement {
   const { layout, plan, moving, onToggleMove, onRotate, onAutoPlace, onPin } = props;
-  if (layout.status === 'no-world') return <p className="muted" style={{ margin: 0 }}>{NO_WORLD_TEXT}</p>;
+  if (layout.status === 'no-world') return <p className="muted">{NO_WORLD_TEXT}</p>;
   const pins = <Pins layout={layout} focusedPin={props.focusedPin ?? null} onPin={onPin} />;
   if (layout.status === 'empty') {
     return (
       <>
-        <p className="muted" style={{ margin: 0 }}>{plan !== null && plan.steps.length === 0 ? NO_STEPS_TEXT : ALL_OWNED_TEXT}</p>
+        <p className="muted">{plan !== null && plan.steps.length === 0 ? NO_STEPS_TEXT : ALL_OWNED_TEXT}</p>
         {pins}
         <Warnings layout={layout} />
       </>
@@ -154,12 +139,12 @@ function Body(props: LinePanelProps & { layout: Layout }): ReactElement {
   return (
     <>
       <Summary layout={layout} plan={plan} />
-      <div className="row" style={{ gap: 6 }}>
+      <div className="row line-actions">
         <button type="button" className={moving ? 'small primary' : 'small'} aria-pressed={moving} onClick={onToggleMove}>Move line</button>
         <button type="button" className="small" onClick={onRotate}>Rotate 90°</button>
         <button type="button" className="small" onClick={onAutoPlace}>Auto place</button>
       </div>
-      {moving && <p className="muted small" style={{ margin: 0 }}>Drag the line on the map to where it should go.</p>}
+      {moving && <p className="muted small">Drag the line on the map to where it should go.</p>}
       {pins}
       <Warnings layout={layout} />
     </>
@@ -170,15 +155,10 @@ export function LinePanel(props: LinePanelProps): ReactElement {
   const { layout, loading, error } = props;
   const headingId = useId();
   return (
-    <section
-      className="line-panel"
-      data-testid="line-panel"
-      aria-labelledby={headingId}
-      style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}
-    >
-      <h3 id={headingId} style={{ margin: 0, fontSize: '0.95rem' }}>New line</h3>
-      {error !== null && <p className="error small" style={{ margin: 0 }}>{error}</p>}
-      {loading && <p className="muted small" style={{ margin: 0 }}>{LOADING_TEXT}</p>}
+    <section className="line-panel" data-testid="line-panel" aria-labelledby={headingId}>
+      <h3 id={headingId}>New line</h3>
+      {error !== null && <p className="error small">{error}</p>}
+      {loading && <p className="muted small">{LOADING_TEXT}</p>}
       {layout !== null && <Body {...props} layout={layout} />}
     </section>
   );

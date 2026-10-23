@@ -219,6 +219,28 @@ describe('the line on the map: the rules in detail', () => {
     expect(html({})).not.toContain('aria-current');
   });
 
+  // The panel wears classes (restyle plan Phase 1 Task 8): the fits badge is the shared badge, tinted by the stylesheet from its
+  // data-fits (it carried an inline colour), a pin is a row button, the focused row looks different by the stylesheet alone
+  // (`aria-current` is on its li), and the one inline style left is the dot, which has the colour of its marker on the map.
+  it('dresses the panel with classes, and keeps the inline style of a pin\'s dot alone', () => {
+    const html = panel(layout);
+    expect(html).toContain('<span class="badge" data-fits="tight">Tight in rain</span>');
+    expect(panel({ ...layout, power: { ...layout.power!, fits: 'yes' } })).toContain('<span class="badge" data-fits="yes">Fits</span>');
+    expect(panel({ ...layout, power: { ...layout.power!, fits: 'no' } })).toContain('<span class="badge" data-fits="no">Does not fit</span>');
+    expect(panel({ ...layout, power: undefined })).toContain('<span class="badge" data-fits="unknown">Unknown</span>');
+    expect(html).toContain('<div class="row line-actions">');
+    expect(html).toContain('<ol class="small map-list">');
+    expect(html).toContain('<button type="button" class="small map-row-button">');
+    expect(html).toContain(`<span aria-hidden="true" class="pin-dot" style="background:${PIN_COLORS.site}"></span>1. Build the line here`);
+    expect(html.match(/ style="/g)).toHaveLength(layout.pins.length);   // a dot per pin, and nothing else
+    // a focused row is marked on its li only: no border or fill of its own on the button
+    const focused = renderToStaticMarkup(<LinePanel layout={layout} plan={plan} loading={false} error={null} moving={false} focusedPin={2}
+      onToggleMove={() => {}} onRotate={() => {}} onAutoPlace={() => {}} onPin={() => {}} />);
+    expect(focused).toContain('<li data-testid="pin-2" class="focused" aria-current="true"><button type="button" class="small map-row-button">');
+    expect(focused).not.toContain('border-color');
+    expect(focused.match(/ style="/g)).toHaveLength(layout.pins.length);
+  });
+
   it('fetches once per burst of changes, keeps the last layout when a fetch fails and stops when closed', async () => {
     vi.useFakeTimers();
     let fetches = 0;

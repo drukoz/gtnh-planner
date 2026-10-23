@@ -79,14 +79,12 @@ export function useItemNames(keys: readonly StuffKey[]): ReadonlyMap<StuffKey, s
 /** A titled section; when `empty`, "None found" (and `hint`) instead of its content. */
 function Section(props: { title: string; empty: boolean; hint?: string; children?: ReactNode }): ReactElement {
   return (
-    <section className="found-section" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-      <h3 style={{ margin: 0, fontSize: '0.95rem' }}>{props.title}</h3>
-      {props.empty ? <p className="muted small" style={{ margin: 0 }}>{props.hint === undefined ? NONE : `${NONE}. ${props.hint}`}</p> : props.children}
+    <section className="found-section">
+      <h3>{props.title}</h3>
+      {props.empty ? <p className="muted small">{props.hint === undefined ? NONE : `${NONE}. ${props.hint}`}</p> : props.children}
     </section>
   );
 }
-
-const LIST_STYLE = { margin: 0, paddingLeft: 18 } as const;
 
 /**
  * What the scan could not read or work out, so the counts and the power estimate below are read with it in mind
@@ -97,7 +95,7 @@ function ScanNotes(props: { notes: readonly string[] }): ReactElement | null {
   if (props.notes.length === 0) return null;
   return (
     <Section title="Scan notes" empty={false}>
-      <ul className="small" data-testid="scan-notes" style={LIST_STYLE}>
+      <ul className="small" data-testid="scan-notes">
         {props.notes.map((note, i) => <li key={`${i}|${note}`}>{note}</li>)}
       </ul>
     </Section>
@@ -108,12 +106,12 @@ function Machines(props: { summary: FoundSummary }): ReactElement {
   const { machineCount, topTier, machines } = props.summary;
   return (
     <Section title="Machines" empty={machineCount === 0}>
-      <p style={{ margin: 0 }}>
+      <p>
         <span data-testid="machine-count">{int(machineCount)}</span>
         {` ${machineCount === 1 ? 'machine' : 'machines'}`}
         {` · Top tier: ${topTier === null ? 'unknown' : tierName(topTier)}`}
       </p>
-      <ul className="small" style={LIST_STYLE}>
+      <ul className="small">
         {machines.map((m) => <li key={`${m.tier}|${m.name}`}>{`${int(m.count)} × ${m.name}${m.tier === null ? '' : ` (${tierName(m.tier)})`}`}</li>)}
       </ul>
     </Section>
@@ -124,7 +122,7 @@ function Power(props: { power: FoundSummary['power'] }): ReactElement {
   const { power } = props;
   return (
     <Section title="Power" empty={power.length === 0}>
-      <ul className="small" style={LIST_STYLE}>
+      <ul className="small">
         {power.map((p) => (
           <li key={p.id}>
             <strong>{`${tierName(p.voltageTier)} network`}</strong>
@@ -133,7 +131,7 @@ function Power(props: { power: FoundSummary['power'] }): ReactElement {
           </li>
         ))}
       </ul>
-      <p className="muted small" style={{ margin: 0 }}>{RAIN_CAVEAT}</p>
+      <p className="muted small">{RAIN_CAVEAT}</p>
     </Section>
   );
 }
@@ -142,7 +140,7 @@ function Logistics(props: { logistics: FoundSummary['logistics'] }): ReactElemen
   const { logistics } = props;
   return (
     <Section title="Logistics" empty={logistics.length === 0}>
-      <ul className="small" style={LIST_STYLE}>
+      <ul className="small">
         {logistics.map((n) => (
           <li key={n.id}>
             <strong>{LOGISTICS_LABELS[n.kind]}</strong>
@@ -160,15 +158,15 @@ function ItemRow(props: { item: FoundSummary['storage']['items'][number]; name: 
   return (
     <li data-key={item.key}>
       <details>
-        <summary style={{ cursor: 'pointer' }}>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, verticalAlign: 'middle' }}>
+        <summary>
+          <span className="found-item-label">
             <ItemIcon itemKey={item.key} size={ICON_SIZE} name={name} />
-            <span style={{ overflowWrap: 'anywhere' }}>{name}</span>
+            <span className="found-item-name">{name}</span>
           </span>
           {` · ${int(item.total)} · `}
           <span className="muted">{`${int(item.reachable)} reachable`}</span>
         </summary>
-        <ul style={LIST_STYLE}>
+        <ul>
           {item.where.map((w) => (
             <li key={posText(w.pos)}>
               {`${int(w.count)} in ${STORAGE_LABELS[w.kind]} at ${posText(w.pos)}${w.reachable ? '' : ' (not reachable)'}`}
@@ -193,7 +191,7 @@ function Storage(props: { storage: FoundSummary['storage']; showAll: boolean; on
   return (
     <Section title="Storage" empty={storage.blocks.length === 0 && storage.items.length === 0}>
       {storage.blocks.length > 0 && (
-        <ul className="small" style={LIST_STYLE}>
+        <ul className="small">
           {storage.blocks.map((b) => (
             <li key={b.kind}>{`${plural(b.count, STORAGE_LABELS[b.kind])}${b.unknown === 0 ? '' : ` (${int(b.unknown)} with contents unknown)`}`}</li>
           ))}
@@ -203,12 +201,12 @@ function Storage(props: { storage: FoundSummary['storage']; showAll: boolean; on
         </ul>
       )}
       {storage.items.length > 0 && (
-        <ul className="small" style={{ ...LIST_STYLE, listStyle: 'none', paddingLeft: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <ul className="small map-list">
           {items.map((item) => <ItemRow key={item.key} item={item} name={names.get(item.key) ?? item.key} onShowOnMap={onShowOnMap} />)}
         </ul>
       )}
       {!showAll && storage.items.length > ITEMS_PAGE && (
-        <button type="button" className="small" style={{ alignSelf: 'flex-start' }} onClick={onShowAll}>{`Show all ${int(storage.items.length)} items`}</button>
+        <button type="button" className="small found-show-all" onClick={onShowAll}>{`Show all ${int(storage.items.length)} items`}</button>
       )}
     </Section>
   );
@@ -218,7 +216,7 @@ function Dimensions(props: { dims: FoundSummary['dims'] }): ReactElement {
   const { dims } = props;
   return (
     <Section title="Dimensions" empty={dims.length === 0}>
-      <ul className="small" style={LIST_STYLE}>
+      <ul className="small">
         {dims.map((d) => (
           <li key={d.name}>{`${d.name}: ${d.visited ? 'visited' : 'not visited'}${d.evidence.length === 0 ? '' : ` (${d.evidence.join(', ')})`}`}</li>
         ))}
@@ -231,7 +229,7 @@ function Veins(props: { prospected: FoundSummary['prospected'] }): ReactElement 
   const { prospected } = props;
   return (
     <Section title="Prospected veins" empty={prospected.length === 0}>
-      <ul className="small" style={LIST_STYLE}>
+      <ul className="small">
         {prospected.map((v) => <li key={`${v.vein}|${v.x}|${v.z}`}>{`${v.vein} at ${v.x} ${v.z} · ${plural(v.distance, 'block')} away`}</li>)}
       </ul>
     </Section>
@@ -246,15 +244,10 @@ function Notes(props: { notes: readonly Note[]; focusedNote: number | null; onFo
   }, [focusedNote]);
   return (
     <Section title="Notes" empty={pins.length === 0} hint="Click the map to pin a note there.">
-      <ol className="small" style={{ ...LIST_STYLE, listStyle: 'none', paddingLeft: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <ol className="small map-list">
         {pins.map(({ n, note }) => (
           <li key={note.id} id={`found-note-${n}`} data-testid={`note-${n}`} aria-current={n === focusedNote ? 'true' : undefined}>
-            <button
-              type="button"
-              className="small"
-              style={{ width: '100%', textAlign: 'left', ...(n === focusedNote ? { borderColor: 'var(--accent)', background: 'var(--surface-2)' } : {}) }}
-              onClick={() => onFocusNote(n)}
-            >
+            <button type="button" className="small map-row-button" onClick={() => onFocusNote(n)}>
               {/* N<n>, as the map draws note pins: a plain number is a layout pin (a build step's "pin 1") */}
               <span className="badge">{`N${n}`}</span>
               {` ${note.text} `}
@@ -279,7 +272,7 @@ export function FoundPanel(props: FoundPanelProps): ReactElement {
   const { summary, notes, onFocusNote, onShowOnMap } = props;
   const [showAllItems, setShowAllItems] = useState(false);
   return (
-    <div className="found-panel" data-testid="found-panel" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+    <div className="found-panel" data-testid="found-panel">
       <ScanNotes notes={summary.scanNotes} />
       <Machines summary={summary} />
       <Power power={summary.power} />
