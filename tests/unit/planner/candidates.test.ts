@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { smeltSpec } from '../../helpers/howto-fixtures.ts';
 import { miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec, type IngredientSpec, type RecipeSpec } from '../../helpers/pack-spec.ts';
-import { acceptRecipe, buildCandidates, MAX_RECIPES, virtualKey, type PlanEnv, type LeafOracle } from '../../../src/server/planner/candidates.ts';
+import { emptyContextForTest } from '../../helpers/plan-context.ts';
+import { acceptRecipe, buildCandidates, MAX_RECIPES, virtualKey, type CandidateGraph, type PlanEnv, type LeafOracle } from '../../../src/server/planner/candidates.ts';
+import { planBasis } from '../../../src/server/planner/basis.ts';
 import { solveLine } from '../../../src/server/planner/solve.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import { EXCLUSION_RULES } from '../../../src/server/planner/candidates.ts';
@@ -77,6 +79,19 @@ describe('buildCandidates', () => {
     const stale = buildCandidates(pack, { ...s, recipeChoice: { 't:iron_plate@0': 'gone' } }, env(1), oracle, ['t:iron_plate@0']);
     expect(stale.recipes.map((r) => r.id)).toEqual(['bend-plate', 'hammer-plate']);
     expect(stale.warnings).toEqual([expect.objectContaining({ code: 'stale-choice', key: 't:iron_plate@0', text: expect.stringContaining('Iron Plate') })]);
+  });
+  it('keeps the other producers beside a pin when asked', () => {
+    // Architecture §11 entry 41 (1): the build list's recipe book holds a pinned good's other producers beside the pin,
+    // so it can fall back from a pin its breakdown cannot use; the line's own graph keeps only the pin.
+    const x = { ...defaultSettings(), tier: 1, recipeChoice: { 't:iron_plate@0': 'hammer-plate' } };
+    const b = planBasis(pack, x, emptyContextForTest());
+    const plateMakers = (g: CandidateGraph): string[] =>
+      g.recipes.filter((r) => r.coeffs.some(([key, c]) => key === 't:iron_plate@0' && c > 0)).map((r) => r.id);
+    const plain = buildCandidates(pack, x, b.env, b.leaf, ['t:iron_plate@0']);
+    const beside = buildCandidates(pack, x, b.env, b.leaf, ['t:iron_plate@0'], { pinnedBeside: true });
+    expect(plateMakers(plain)).toEqual(['hammer-plate']);
+    expect(plateMakers(beside)).toEqual(['bend-plate', 'hammer-plate']);
+    expect(beside.warnings).toEqual(plain.warnings);
   });
   it('turns ore-dictionary slots into a virtual good with free conversions', () => {
     const p = packFromSpec({ machines: [{ mteId: 1, name: 'A', maps: ['gt.recipe.assembler'], tier: 1 }],

@@ -853,6 +853,13 @@ export interface CandidateOptions {
    * `LpRecipe.byHand` with why. Absent: no variant is a candidate and nothing is marked (the cost model, prices, breakdowns).
    */
   bench?: BenchLine;
+  // optional addition (add-on 14, architecture §11 entry 41 (1))
+  /**
+   * The build list's recipe book: a pinned recipe that still makes the good and runs here is added beside the producers
+   * the walk keeps for the good, not instead of them, so the book can fall back from a pin its breakdown cannot use.
+   * Absent: only the pin (the line's own graph and the cost model).
+   */
+  pinnedBeside?: boolean;
 }
 
 /**
@@ -880,6 +887,7 @@ export interface CandidateOptions {
  * dug sand makes worth keeping. Without such a leaf, one estimate as before. Plan 12, controller ruling 214: with the
  * line's Auto Workbenches (`opts.bench`), the GGFab single-use variants of tool recipes they run are candidates, each
  * kept with its original as one producer, and a crafting-table recipe none of them runs is marked `LpRecipe.byHand`.
+ * With `opts.pinnedBeside` (the build list's recipe book) a pinned recipe joins the kept producers instead of replacing them.
  */
 export function buildCandidates(
   pack: Pack, settings: PlanSettings, env: PlanEnv, leaf: LeafOracle, targets: StuffKey[], opts: CandidateOptions = {},
@@ -1164,14 +1172,15 @@ export function buildCandidates(
       const pinned = pinnedFor(key, pin);
       if (pinned !== null && !usesAvoided(pinned.r, avoid)) {
         addRecipe(pinned.r, pinned.mapId);
-        return;
+        if (opts.pinnedBeside !== true) return;
+      } else {
+        warnings.push({
+          code: 'stale-choice', key,
+          text: pinned === null
+            ? `${pack.nameOf(key)}: the chosen recipe is gone or cannot run at ${tierName(env.tier)}; using the best one available`
+            : `${pack.nameOf(key)}: the chosen recipe uses a material on the avoid list; using the best one that avoids it`,
+        });
       }
-      warnings.push({
-        code: 'stale-choice', key,
-        text: pinned === null
-          ? `${pack.nameOf(key)}: the chosen recipe is gone or cannot run at ${tierName(env.tier)}; using the best one available`
-          : `${pack.nameOf(key)}: the chosen recipe uses a material on the avoid list; using the best one that avoids it`,
-      });
     }
     const rejected: Array<{ recipeId: string; why: Rejection; needTier?: number; machine?: string }> = [];
     const accepted: Producer[] = [];

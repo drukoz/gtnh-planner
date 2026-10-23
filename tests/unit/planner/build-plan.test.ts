@@ -83,11 +83,12 @@ describe('build cost in the plan', () => {
   it('breaks its machines down at the prices the layout parts break down at, also after a walk around', async () => {
     // Architecture §11.15: the build list breaks down at the plain pricing's prices (the one `expandBomLines` reads for
     // the layout's parts), also after the walk around circuit-mv and extract-iron (the controller's ruling after Task 5,
-    // item (a)); the same top-level lines broken down again give the same list and totals.
+    // item (a)); the same top-level lines broken down again give the same list and totals. The same steps give the same
+    // machines (architecture §11 entry 41 (9)): without them the line's wiremill reads `new`, not `first`.
     const settings = S({ tier: 2, amount: 30 });
     const plan = await planLine(miniGt(), settings, emptyContext());
     const tops = plan.buildList.map(({ key, amount, why, group }) => ({ key, amount, why, ...(group === undefined ? {} : { group }) }));
-    const again = await expandBomLines(miniGt(), tops, settings, emptyContext());
+    const again = await expandBomLines(miniGt(), tops, settings, emptyContext(), { steps: plan.steps });
     expect(again.lines).toEqual(plan.buildList);
     expect(again.totals).toEqual(plan.buildTotals);
   });

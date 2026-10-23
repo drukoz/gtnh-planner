@@ -18,7 +18,7 @@ import {
 import { GATHERED_BLOCKS, isBaseItem, unlockText, type Availability } from './availability.ts';
 import { gatheredRecipesOn, planBasis, resolveAvoid, settingsHash, type PlanBasis } from './basis.ts';
 import { benchLine, type BenchLine } from './benches.ts';
-import { buildBom, partName, stepProductName } from './bom.ts';
+import { buildBom, partName, recipeParts, stepProductName } from './bom.ts';
 import { machineBuildCost } from './build-cost.ts';
 import {
   EXCLUSION_RULES, acceptRecipe, buildCandidates, heldOption, keptOptions, usesAvoided, type Acceptance, type CandidateGraph, type HeldAvoid,
@@ -205,43 +205,6 @@ export class PlanCache {
 }
 
 type Alternative = PlanStep['alternatives'][number];
-type AlternativeInput = NonNullable<Alternative['inputs']>[number];
-
-/** Items before fluids, each largest amount first, then by key: the order a swap-list row lists goods in. */
-function byPartOrder(a: { key: StuffKey; amount: number }, b: { key: StuffKey; amount: number }): number {
-  return Number(isFluidKey(a.key)) - Number(isFluidKey(b.key)) || b.amount - a.amount || byString(a.key, b.key);
-}
-
-/**
- * What one run of a recipe takes and makes, as its swap-list row shows it (controller rulings, plan 09): every consumed
- * slot the line may take (`keptOptions`), a slot of one option summed with the others of that good, a slot of several
- * as one entry that lists them all in its `options` (its key and amount are the first); and every output, summed per
- * key. Items before fluids, each largest first (`byPartOrder`).
- */
-function recipeParts(
-  pack: Pack, recipeId: string, avoid: ReadonlySet<StuffKey>,
-): { inputs: AlternativeInput[]; outputs: Array<{ key: StuffKey; amount: number }> } {
-  const r = pack.recipeById.get(recipeId);
-  if (r === undefined) return { inputs: [], outputs: [] };
-  const summed = (entries: ReadonlyArray<[StuffKey, number]>): Array<{ key: StuffKey; amount: number }> => {
-    const totals = new Map<StuffKey, number>();
-    for (const [key, amount] of entries) totals.set(key, (totals.get(key) ?? 0) + amount);
-    return [...totals].map(([key, amount]) => ({ key, amount: round6(amount) }));
-  };
-  const single: Array<[StuffKey, number]> = [];
-  const several: AlternativeInput[] = [];
-  for (const ing of r.inputs) {
-    const options = ing.consumed ? keptOptions(ing.options, avoid) : [];
-    const first = options[0];
-    if (first === undefined) continue;
-    if (options.length === 1) single.push([first.key, first.amount]);
-    else several.push({ key: first.key, amount: round6(first.amount), options: options.map((o) => ({ key: o.key, amount: round6(o.amount) })) });
-  }
-  return {
-    inputs: [...summed(single), ...several].sort(byPartOrder),
-    outputs: summed(r.outputs.map((p): [StuffKey, number] => [p.key, p.amount])).sort(byPartOrder),
-  };
-}
 
 function byRawCostThenId(a: Alternative, b: Alternative): number {
   return a.rawCost - b.rawCost || byString(a.recipeId, b.recipeId);
@@ -963,6 +926,8 @@ interface PlanBody {
   rawCost?: Plan['rawCost'];
   /** `Plan.cost` (plan 12): every line that plans. */
   cost?: Plan['cost'];
+  /** `Plan.buildAlternatives` (architecture §11 entry 41 (3)): the swap lists of the build list's made parts. */
+  buildAlternatives?: Plan['buildAlternatives'];
 }
 
 function bodyWithout(status: PlanBody['status'], warnings: PlanWarning[], unlocks: Plan['unlocks'] = []): PlanBody {
@@ -1025,6 +990,14 @@ function planNames(pack: Pack, plan: Plan, settings: PlanSettings): Record<strin
   for (const p of plan.byproducts) add(p.key);
   addLines(plan.buildList);
   addLines(plan.buildTotals ?? []);
+  // The build parts' swap lists (architecture §11 entry 41 (3)): their maps and goods, as a step's.
+  for (const list of Object.values(plan.buildAlternatives ?? {})) {
+    for (const a of list) {
+      addMap(a.mapId);
+      for (const p of a.inputs ?? []) for (const o of p.options ?? [p]) add(o.key);
+      for (const p of a.outputs ?? []) add(p.key);
+    }
+  }
   for (const u of plan.unlocks) add(u.key);
   for (const w of plan.warnings) add(w.key);
   for (const a of plan.avoided ?? []) for (const key of [a.key, ...(a.madeFrom ?? [])]) add(key);
@@ -1080,6 +1053,7 @@ function assemble(pack: Pack, settings: PlanSettings, basis: PlanBasis, body: Pl
   if (body.makeN !== undefined) plan.makeN = body.makeN;
   plan.status = body.status;
   plan.buildTotals = body.buildTotals;
+  if (body.buildAlternatives !== undefined) plan.buildAlternatives = body.buildAlternatives;
   if (body.avoided !== undefined) plan.avoided = body.avoided;
   if (body.target !== undefined) plan.target = body.target;
   if (body.targetPerSecond !== undefined) plan.targetPerSecond = body.targetPerSecond;
@@ -1770,6 +1744,7 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
   const body: PlanBody = {
     status: 'ok', unlocks: [], steps, flows, rawInputs: raw.rawInputs, byproducts: byproductsOf(graph, sinks, target), power,
     buildList: bom.lines, buildTotals: bom.totals,
+    ...(bom.alternatives === undefined || bom.alternatives.size === 0 ? {} : { buildAlternatives: Object.fromEntries(bom.alternatives) }),
     buildSteps: buildSteps(pack, { steps, bom, power, settings, tier: basis.tier, target, totalSeconds: made?.totalSeconds, avoid: held }),
     warnings: [
       ...graph.warnings, ...solverWarnings, ...stepWarnings, ...batchWarnings, ...raw.warnings, ...cost.warnings, ...bom.warnings, ...avoid.warnings,

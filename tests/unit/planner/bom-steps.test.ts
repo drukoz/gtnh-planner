@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { MINI_GT, miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec, type IngredientSpec } from '../../helpers/pack-spec.ts';
-import { largeBenderSpec } from '../../helpers/build-fixtures.ts';
-import { variantCellSpec } from '../../helpers/howto-fixtures.ts';
+import { ANY_LV_CIRCUIT, largeBenderSpec } from '../../helpers/build-fixtures.ts';
+import { deepSpec, loopSpec, packedTableSpec, standInPressSpec, variantCellSpec } from '../../helpers/howto-fixtures.ts';
 import { buildBom, expandBomLines, partName } from '../../../src/server/planner/bom.ts';
 import { buildSteps } from '../../../src/server/planner/steps.ts';
 import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
@@ -10,7 +10,7 @@ import { planBasis, effectiveTier } from '../../../src/server/planner/basis.ts';
 import { computeAvailability, reachableDims } from '../../../src/server/planner/availability.ts';
 import { makeLeafOracle, makePrices } from '../../../src/server/planner/costs.ts';
 import { MAX_RECIPES, type PlanEnv } from '../../../src/server/planner/candidates.ts';
-import type { PlanContext, PlanStep } from '../../../src/shared/types/plan.ts';
+import type { BomLine, PlanContext, PlanSettings, PlanStep } from '../../../src/shared/types/plan.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import { emptyContextForTest } from '../../helpers/plan-context.ts';
 
@@ -137,7 +137,8 @@ describe('buildBom', () => {
     const steps = [step({ id: 'make-b', recipeId: 'make-b', machine: { mteId: 121, name: 'Basic Assembler', tier: 1 } })];
     const bom = await buildBom(p, steps, { settings, env: b.env, leaf: b.leaf, ctx: emptyContextForTest() });
     expect(bom.warnings).toEqual([{ code: 'graph-too-big', text: 'The build list is too large to break down fully; mark some parts as "we already make this"' }]);
-    expect(bom.totals.map((l) => [l.key, l.amount])).toContainEqual(['t:b@0', 1]);   // never expanded, so it reads as a base material
+    // t:b was never expanded, so nothing above it settles: the assembler is unmade, and the warning says why
+    expect(bom.totals.map((l) => [l.key, l.amount, l.unmade])).toEqual([['machine:121@0', 1, 'no-recipe']]);
     const r = await expandBomLines(p, bom.lines.map(({ key, amount, why, group }) => ({ key, amount, why, ...(group === undefined ? {} : { group }) })), settings, emptyContextForTest());
     expect(Object.keys(r).sort()).toEqual(['lines', 'totals']);
     expect(r.totals).toEqual(bom.totals);
@@ -335,6 +336,172 @@ describe('expandBomLines', () => {
     const r = await expandBomLines(pack, [{ key: 't:titanium_plate@0', amount: 1, why: 'plate' }], settings, emptyContextForTest());
     expect(r.lines[0]?.children).toEqual([{ key: 't:titanium_ingot@0', amount: 1, why: 'for Titanium Plate' }]);
     expect(r.totals.map((l) => [l.key, l.amount])).toEqual([['t:titanium_ingot@0', 1]]);
+  });
+});
+
+describe('how each build part is made', () => {
+  // Architecture §11 entry 41 (1)–(3): one recipe per good across the list, settled cheapest first, the machine of each
+  // job, the parts nothing here makes, and the swap list.
+  const at = (tier: number, p: Partial<PlanSettings> = {}): PlanSettings => ({ ...defaultSettings(), tier, ...p });
+  /** Every node, depth first. */
+  const all = (lines: readonly BomLine[]): BomLine[] => lines.flatMap((l) => [l, ...all(l.children ?? [])]);
+  const unmade = (lines: readonly BomLine[]): BomLine[] => all(lines).filter((l) => l.unmade !== undefined);
+  const childOf = (line: BomLine | undefined, key: string): BomLine | undefined => line?.children?.find((c) => c.key === key);
+  const wiremillStep = step({ id: 'wire', recipeId: 'wire', machine: { mteId: 111, name: 'Basic Wiremill', tier: 1 } });
+
+  it('says how each part of a machine is made', async () => {
+    const wiremill = [{ key: 'machine:111@0', amount: 1, why: 'wiremill' }];
+    const r = await expandBomLines(pack, wiremill, at(1), emptyContextForTest());
+    const top = r.lines[0];
+    expect(top?.made).toEqual({ recipeId: 'make-111', mapId: 'crafting', machine: 'crafting table', runs: 1 });
+    // the programmed circuit is the circuit's only held part
+    expect(childOf(top, 't:circuit@0')?.amount).toBe(2);
+    expect(childOf(top, 't:circuit@0')?.made).toEqual({
+      recipeId: 'circuit-lv', mapId: 'gt.recipe.assembler', machine: { mteId: 121, name: 'Basic Assembler', tier: 1, source: 'new' }, runs: 2, circuit: 2 });
+    expect(childOf(top, 't:copper_wire@0')?.amount).toBe(4);
+    expect(childOf(top, 't:copper_wire@0')?.made).toEqual({
+      recipeId: 'wire', mapId: 'gt.recipe.wiremill', machine: { mteId: 111, name: 'Basic Wiremill', tier: 1, source: 'new' }, runs: 2 });
+    expect(childOf(top, 't:hull_lv@0')?.amount).toBe(1);
+    expect(childOf(top, 't:hull_lv@0')?.made).toEqual({ recipeId: 'hull-lv', mapId: 'crafting', machine: 'crafting table', runs: 1 });
+    const ingot = childOf(childOf(top, 't:copper_wire@0'), 't:copper_ingot@0');
+    expect(ingot?.amount).toBe(2);
+    expect([ingot?.made, ingot?.unmade]).toEqual([undefined, undefined]);
+    // an assembler the group has
+    const owned = await expandBomLines(pack, wiremill, at(1), { ...emptyContextForTest(), ownedMachines: [{ mteId: 121, count: 1 }] });
+    expect(childOf(owned.lines[0], 't:circuit@0')?.made?.machine).toEqual({ mteId: 121, name: 'Basic Assembler', tier: 1, source: 'owned' });
+    // At MV circuit-mv is the cheaper circuit: 2 × 0.5 + 1 + 72 L × 1/144 = 2.5 against circuit-lv's 1 + 2 × 0.5 + 1 = 3.
+    const mv = await expandBomLines(pack, wiremill, at(2), emptyContextForTest());
+    const circuit = childOf(mv.lines[0], 't:circuit@0');
+    expect(circuit?.made).toEqual({
+      recipeId: 'circuit-mv', mapId: 'gt.recipe.assembler', machine: { mteId: 122, name: 'Advanced Assembler', tier: 2, source: 'new' }, runs: 2 });
+    const molten = childOf(circuit, 'fluid:molten.iron');
+    expect(molten?.amount).toBe(144);
+    expect(molten?.made).toEqual({
+      recipeId: 'extract-iron', mapId: 'gt.recipe.fluidextractor', machine: { mteId: 131, name: 'Basic Fluid Extractor', tier: 1, source: 'new' }, runs: 1 });
+  });
+
+  it('marks the wiremill a line builds when its own build needs the wires', async () => {
+    const bom = await buildBom(pack, [wiremillStep], opts);
+    const wires = all(bom.lines).filter((l) => l.key === 't:copper_wire@0');
+    expect(wires).toHaveLength(2);   // the wiremill's own 4, and the 4 of its 2 circuits
+    for (const wire of wires) expect(wire.made?.machine).toEqual({ mteId: 111, name: 'Basic Wiremill', tier: 1, source: 'first' });
+  });
+
+  it('lists every recipe of a build part for the swap', async () => {
+    const bom = await buildBom(pack, [wiremillStep], opts);
+    expect(bom.alternatives?.get('t:iron_plate@0')).toEqual([
+      { recipeId: 'bend-plate', rawCost: 1, mapId: 'gt.recipe.metalbender', inputs: [{ key: 't:iron_ingot@0', amount: 1 }], outputs: [{ key: 't:iron_plate@0', amount: 1 }] },
+      { recipeId: 'hammer-plate', rawCost: 2, mapId: 'crafting', inputs: [{ key: 't:iron_ingot@0', amount: 2 }], outputs: [{ key: 't:iron_plate@0', amount: 1 }] },
+    ]);
+    const plan = await planLine(pack, { ...defaultSettings(), target: 't:copper_wire@0', tier: 1, amount: 1, per: 'min' }, emptyContext());
+    expect(plan.buildAlternatives?.['t:iron_plate@0']?.map((a) => a.recipeId)).toEqual(['bend-plate', 'hammer-plate']);
+    expect(plan.names?.['map:gt.recipe.metalbender']).toBe('Bending Machine');
+  });
+
+  it('uses a pinned recipe for every node of that good', async () => {
+    const pinned = { ...opts, settings: { ...defaultSettings(), recipeChoice: { 't:iron_plate@0': 'hammer-plate' } } };
+    const bom = await buildBom(pack, [wiremillStep], pinned);
+    const plates = all(bom.lines).filter((l) => l.key === 't:iron_plate@0');
+    expect(plates).toHaveLength(2);
+    for (const plate of plates) expect([plate.made?.recipeId, plate.made?.machine]).toEqual(['hammer-plate', 'crafting table']);
+    // the book keeps the plate's other producer beside the pin (`pinnedBeside`)
+    expect(bom.alternatives?.get('t:iron_plate@0')?.map((a) => a.recipeId)).toEqual(['bend-plate', 'hammer-plate']);
+    // 10 plates × 2 ingots: 8 in the hull, 2 in the circuits
+    expect(bom.totals.find((t) => t.key === 't:iron_ingot@0')?.amount).toBe(20);
+
+    // The pin settles X once Z settles from copper, so Z takes z2 rather than the z1 its X would loop through.
+    const r = await expandBomLines(packFromSpec(loopSpec()), [{ key: 't:x@0', amount: 1, why: 'x' }], at(1, { recipeChoice: { 't:x@0': 'x1' } }), emptyContextForTest());
+    const x = r.lines[0];
+    expect(x?.made?.recipeId).toBe('x1');
+    expect(childOf(x, 't:y@0')?.made?.recipeId).toBe('y1');
+    expect(childOf(childOf(x, 't:y@0'), 't:z@0')?.made?.recipeId).toBe('z2');
+    expect(r.totals.map((l) => [l.key, l.amount])).toEqual([['t:copper_ingot@0', 5]]);
+  });
+
+  it('falls back from a pin that needs the good itself', async () => {
+    // X by Y, Y by Z, Z by X: neither pin settles, so the first pin by key, X's, is dropped; Z's pin z1 stands.
+    const r = await expandBomLines(packFromSpec(loopSpec()), [{ key: 't:x@0', amount: 1, why: 'x' }],
+      at(1, { recipeChoice: { 't:x@0': 'x1', 't:z@0': 'z1' } }), emptyContextForTest());
+    expect(r.lines[0]?.made?.recipeId).toBe('x2');
+    expect(r.totals.map((l) => [l.key, l.amount])).toEqual([['t:copper_ingot@0', 3]]);
+    expect(unmade(r.lines)).toEqual([]);
+  });
+
+  it('makes each good one way across the build list', async () => {
+    // X settles at 3 by x2, then Z at 3 by z1 before z2's 5; Y and x1 come after.
+    const r = await expandBomLines(packFromSpec(loopSpec()), [{ key: 't:z@0', amount: 1, why: 'z' }, { key: 't:x@0', amount: 1, why: 'x' }], at(1), emptyContextForTest());
+    expect(r.lines[0]?.made?.recipeId).toBe('z1');
+    expect(all(r.lines).filter((l) => l.key === 't:x@0').map((l) => l.made?.recipeId)).toEqual(['x2', 'x2']);
+    expect(r.totals.map((l) => [l.key, l.amount])).toEqual([['t:copper_ingot@0', 6]]);
+  });
+
+  it('marks a part nothing at the tier makes', async () => {
+    const r = await expandBomLines(pack, [{ key: 'machine:1000@0', amount: 1, why: 'ebf' }], at(1), emptyContextForTest());
+    expect(r.lines[0]).toEqual({ key: 'machine:1000@0', amount: 1, why: 'ebf', unmade: 'no-recipe' });
+    expect(r.totals).toEqual([
+      { key: 'machine:1000@0', amount: 1, why: 'for machine:1000@0', neededFor: [{ key: 'machine:1000@0', amount: 1 }], unmade: 'no-recipe' }]);
+  });
+
+  it('marks a part whose every recipe needs its own chain', async () => {
+    // W's only recipe takes V, whose only recipe takes W.
+    const r = await expandBomLines(packFromSpec(loopSpec()), [{ key: 't:w@0', amount: 1, why: 'w' }], at(1), emptyContextForTest());
+    expect(r.lines[0]).toEqual({ key: 't:w@0', amount: 1, why: 'w', unmade: 'own-chain' });
+    expect(r.totals).toEqual([{ key: 't:w@0', amount: 1, why: 'for Part W', neededFor: [{ key: 't:w@0', amount: 1 }], unmade: 'own-chain' }]);
+  });
+
+  it('chooses the recipes below the depth the list shows', async () => {
+    const r = await expandBomLines(packFromSpec(deepSpec()), [{ key: 't:d0@0', amount: 1, why: 'deep' }], at(1), emptyContextForTest());
+    let node = r.lines[0];
+    for (let depth = 0; depth < 12; depth++) {
+      expect(node?.key).toBe(`t:d${depth}@0`);
+      node = node?.children?.[0];
+    }
+    expect(node?.key).toBe('t:d12@0');
+    expect(node?.made).toEqual({ recipeId: 'deep-12', mapId: 'crafting', machine: 'crafting table', runs: 1 });
+    expect(node?.children).toBeUndefined();
+    expect(unmade(r.lines)).toEqual([]);
+  });
+
+  it('never makes a part by unpacking its own packed form', async () => {
+    const r = await expandBomLines(packFromSpec(packedTableSpec()), [{ key: 't:table@0', amount: 1, why: 'table' }], at(1), emptyContextForTest());
+    expect(r.lines[0]?.made?.recipeId).toBe('table');
+    expect(r.totals.map((l) => [l.key, l.amount])).toEqual([['t:copper_ingot@0', 4]]);
+    expect(unmade(r.lines)).toEqual([]);
+  });
+
+  it('never takes a circuit stand-in where the real circuits will do', async () => {
+    const r = await expandBomLines(packFromSpec(standInPressSpec()), [{ key: 'machine:102@0', amount: 1, why: 'bender' }], at(1), emptyContextForTest());
+    const sensor = childOf(r.lines[0], 't:sensor@0');
+    expect(sensor?.children?.map((c) => [c.key, c.amount, c.made?.recipeId])).toEqual([['t:circuit@0', 2, 'circuit-lv'], ['t:iron_plate@0', 1, 'bend-plate']]);
+    expect(all(r.lines).map((l) => l.key)).not.toContain(ANY_LV_CIRCUIT);
+    expect(r.totals.map((l) => l.key)).not.toContain(ANY_LV_CIRCUIT);
+    expect(unmade(r.lines)).toEqual([]);
+  });
+
+  it('settles a cost tie by the route that burns less free input', async () => {
+    // Architecture §11 entry 41 (1): a Shield Plate is assembled from Iron Dust with 1,000 L of Helium (centrifuged from
+    // free Air) or without; both cost 1, and the plain one wins, though a-gas sorts first by id. (The 2.9 export's
+    // Aluminium Ingot: its plain EBF recipe ties its gas variants, so ties settled by id asked for millions of litres of
+    // Air.) A Basic Centrifuge crafted from one Shield Plate shows the swap list, which expandBomLines does not return.
+    const p = packFromSpec({
+      ...MINI_GT,
+      items: [...MINI_GT.items!, { key: 't:shield@0', name: 'Shield Plate' }],
+      fluids: [...MINI_GT.fluids!, { key: 'fluid:helium', name: 'Helium' }],
+      recipes: [...MINI_GT.recipes!,
+                { id: 'air-helium', map: 'gt.recipe.centrifuge', in: [['fluid:air', 8000]], out: [['fluid:helium', 10]], eut: 16 },
+                { id: 'a-gas', map: 'gt.recipe.assembler', in: [['t:iron_dust@0', 1], ['fluid:helium', 1000]], out: [['t:shield@0', 1]], eut: 16 },
+                { id: 'b-plain', map: 'gt.recipe.assembler', in: [['t:iron_dust@0', 1]], out: [['t:shield@0', 1]], eut: 16 },
+                { id: 'make-161', map: 'crafting', in: [['t:shield@0', 1]], out: [['machine:161@0', 1]] }],
+    });
+    const r = await expandBomLines(p, [{ key: 't:shield@0', amount: 1, why: 'shield' }], at(1), emptyContextForTest());
+    expect(r.lines[0]?.made?.recipeId).toBe('b-plain');
+    expect(r.totals.map((l) => [l.key, l.amount])).toEqual([['t:iron_dust@0', 1]]);
+    const settings = at(1);
+    const b = planBasis(p, settings, emptyContextForTest());
+    const bom = await buildBom(p, [step({ id: 'air-helium', recipeId: 'air-helium', machine: { mteId: 161, name: 'Basic Centrifuge', tier: 1 } })],
+      { settings, env: b.env, leaf: b.leaf, ctx: emptyContextForTest() });
+    expect(childOf(bom.lines[0], 't:shield@0')?.made?.recipeId).toBe('b-plain');
+    expect(bom.alternatives?.get('t:shield@0')?.map((a) => [a.recipeId, a.rawCost])).toEqual([['a-gas', 1], ['b-plain', 1]]);
   });
 });
 
