@@ -25,6 +25,9 @@
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1); --ease-pop: cubic-bezier(0.34, 1.56, 0.64, 1); --ease-in: cubic-bezier(0.4, 0, 1, 1);
   --font-pixel: 'Pixelify Sans', Inter, sans-serif; --font-ui: Inter, system-ui, sans-serif;
   --font-diagram: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  /* The brand's 8 x 8 pixel mark (design spec §6), one image for the top bar and the login card: a URL-encoded SVG (%3C %3E are the
+     angle brackets, %23 the hash) whose four paths are the outline, the gold rim, the dark gold and the white of the mockup's map. */
+  --brand-mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8' shape-rendering='crispEdges'%3E%3Cpath fill='%23000' d='M2 0h4v1H2zM1 1h1v1H1zM6 1h1v1H6zM0 2h1v4H0zM7 2h1v4H7zM1 6h1v1H1zM6 6h1v1H6zM2 7h4v1H2z'/%3E%3Cpath fill='%23ffd84a' d='M2 1h4v1H2zM1 2h1v4H1zM6 2h1v4H6zM2 6h4v1H2z'/%3E%3Cpath fill='%23c98a00' d='M2 2h4v1H2zM2 3h1v2H2zM5 3h1v2H5zM2 5h4v1H2z'/%3E%3Cpath fill='%23fff' d='M3 3h2v2H3z'/%3E%3C/svg%3E");
   --ink: #dddddd; --ink-muted: #aaaaaa; --ink-title: #ffffff; --ink-link: #ffff55;
   --ink-error: #ff5555; --ink-ok: #55ff55; --ink-warn: #ffaa00; --ink-focus: #ffff55;
   --gap: 12px;
@@ -54,13 +57,20 @@ h2 { font-size: 1.2rem; margin: 0 0 var(--gap); }
 
 /*
  * Ink on a panel (design spec §4): dark text on the light grey. The surfaces that are panels are listed here and what they
- * hold inherits it; a dark box (chat, screen, well) sets the light ink of the same table instead. The group comes before
- * .muted and .error, so those two still win on an element that is both (.banner.error).
+ * hold inherits it; a dark box (chat, screen, well) sets the light ink of the same table instead, in the group below. Both
+ * groups come before .muted and .error, so those two still win on an element that is both (.banner.error).
  */
-.card, .modal, .settings-panel, .flow-panel, .conn-panel, .tab-panel,
-.plan-banner, .banner, .what-changed, .flow-issues, .flow-infeasible, .delete-confirm {
+.card, .modal, .settings-panel, .flow-panel, .conn-panel, .tab-panel, .note, .note-add,
+.flow-issues, .flow-infeasible {
   --ink: #303030; --ink-muted: #4a4a4a; --ink-title: #404040; --ink-link: #1a3fa0;
   --ink-error: #aa0000; --ink-ok: #1e5a1e; --ink-warn: #6a4000; --ink-focus: #1b1b1b; --muted: #4a4a4a;
+  color: var(--ink);
+}
+/* Ink on a dark box (a chat box, a screen, a chip): light text on near black. It sets the focus ink too, so a dark box inside a
+   panel does not take the panel's dark ring. */
+.banner, .plan-banner, .what-changed, .delete-confirm, .connection, .badge, .chip {
+  --ink: #ffffff; --ink-muted: #aaaaaa; --ink-title: #ffff55; --ink-link: #ffff55;
+  --ink-error: #ff5555; --ink-ok: #55ff55; --ink-warn: #ffaa00; --ink-focus: #ffff55; --muted: #aaaaaa;
   color: var(--ink);
 }
 a, button.link { color: var(--ink-link); }
@@ -224,43 +234,71 @@ details.settings-section > summary .muted { color: inherit; }
 
 /* The keyboard focus: a 3px ring that touches the control, whose own dark border keeps it readable on the light panels. */
 :focus-visible { outline: 3px solid var(--accent); outline-offset: 0; }
-/* A link has no dark edge of its own for that ring to touch, and yellow on the light grey of a panel measures 1.6:1: its ring
-   takes the focus ink of the surface it is on (yellow on the stone, near black on a panel). Same specificity as the ring
+/* A link has no dark edge of its own for that ring to touch, and neither has the summary of an inline disclosure or a tick (a
+   dark well with a bevel but no border), and yellow on the light grey of a panel measures 1.6:1: their ring takes the focus ink
+   of the surface they are on (yellow on the stone and in a dark box, near black on a panel). Same specificity as the ring
    above, so it recolours it by coming after; the width and the offset stay the ring's. */
-:where(a, button.link):focus-visible { outline-color: var(--ink-focus); }
+:where(a, button.link, summary, input[type=checkbox], input[type=radio]):focus-visible { outline-color: var(--ink-focus); }
 
 .field { display: flex; flex-direction: column; gap: 4px; }
 .field > span { font-size: 0.9rem; color: var(--muted); }
 
+/*
+ * The top bar (design spec §6): a dark strip with a black edge and a grey line inside it, the brand and the pages as Minecraft
+ * buttons. Every height in it is fixed (a minimum height, a line-height of 1), so the bar measures the same before the pixel
+ * font has arrived as after, and nothing below it moves: the end-to-end tests aim at canvas centres under it.
+ */
 .top-nav {
-  display: flex; align-items: center; gap: 24px; padding: 10px 20px;
-  background: var(--surface); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; flex-wrap: wrap; gap: 20px; min-height: 50px; padding: 6px 20px;
+  background: var(--bar); border-bottom: 2px solid #000; box-shadow: inset 0 -2px 0 #3c3c3c;
 }
-.top-nav .brand { font-weight: 600; }
-.top-nav nav { display: flex; gap: 16px; }
-.top-nav a { text-decoration: none; color: var(--muted); padding: 4px 0; border-bottom: 2px solid transparent; }
-.top-nav a[aria-current='page'] { color: var(--text); border-bottom-color: var(--accent); }
+.brand {
+  display: inline-flex; align-items: center; gap: 10px;
+  color: #ffd84a; font: 700 20px/1 var(--font-pixel); letter-spacing: 0.02em; text-shadow: 2px 2px 0 #3f3300;
+}
+.brand-mark { flex: none; width: 32px; height: 32px; background: var(--brand-mark) center / contain no-repeat; }
+.top-nav nav { display: flex; gap: 6px; }
+/* The links of the nav only (a bare `.top-nav a` would dress every link in the header). They are links, so the button rules do not
+   reach them: this is the button look again, with the current page in yellow. */
+.top-nav nav a {
+  display: flex; align-items: center; min-height: 36px; padding: 0 14px;
+  background: var(--btn); border: 2px solid var(--outline); box-shadow: var(--bevel-btn);
+  color: #ffffff; font: 15px/1 var(--font-pixel); text-decoration: none; text-shadow: 2px 2px 0 #3f3f3f;
+  transition: background-color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+}
+.top-nav nav a:hover { background: var(--btn-hover); }
+.top-nav nav a:active { transform: translateY(1px); box-shadow: var(--bevel-btn-down); }
+.top-nav nav a[aria-current='page'] { color: var(--accent); text-shadow: 2px 2px 0 #3f3f15; }
 
 .page { max-width: 1200px; margin: 0 auto; padding: 20px; }
 /* The project page uses the full window width so the flow diagram, map and 3D view get room. */
 .page.project-page { max-width: none; padding: 16px 24px; }
-.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; }
+.card { padding: 14px 16px; background: var(--panel); border: 2px solid var(--outline); border-radius: 0; box-shadow: var(--bevel-panel); }
 .cards { list-style: none; padding: 0; margin: 0 0 20px; display: grid; gap: 10px; }
-.banner { padding: 10px 14px; border-radius: var(--radius); margin: 0 0 var(--gap); }
-.banner.error { background: var(--error-bg); }
-.banner.notice { background: var(--surface-2); border: 1px solid var(--border); }
+/* A notice or an error is a chat box on the page (design spec §6): near black with a black edge, in the yellow or the red of its
+   ink. It rises in when it appears. */
+.banner {
+  margin: 0 0 var(--gap); padding: 10px 14px; background: var(--chat); border: 2px solid var(--outline); border-radius: 0;
+  animation: rise-in var(--dur-base) var(--ease-out);
+}
+.banner.notice { color: var(--ink-title); }
+.banner.error { color: var(--ink-error); }
 
 .project-card { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 2fr) auto auto; gap: 12px; align-items: center; }
-.project-card .delete-open { justify-self: start; }
+/* A row's Delete is the small danger button: the size of `button.small` (which its markup does not carry) on the danger face. */
+.project-card .delete-open { justify-self: start; min-height: 28px; padding: 0 10px; font-size: 13px; background: var(--danger-face); }
+.project-card .delete-open:hover { background: var(--danger-face-hover); }
 .project-card .delete-confirm { grid-column: 1 / -1; }
-.project-link { font-weight: 600; text-decoration: none; }
+/* The project's name is the card's title, in the ink of the card (a link would be blue), underlined when pointed at. */
+.project-link { color: var(--ink); font-family: var(--font-pixel); font-size: 16px; font-weight: 600; text-decoration: none; }
+.project-link:hover { text-decoration: underline; }
 .project-target { display: flex; gap: 8px; align-items: center; min-width: 0; }
 .new-project { display: flex; gap: 12px; align-items: flex-end; max-width: 520px; }
 .new-project .field { flex: 1; }
 
 .delete-confirm {
   display: flex; flex-direction: column; gap: 10px; padding: 12px 14px;
-  border: 1px solid var(--error); border-radius: var(--radius); background: var(--error-bg);
+  background: var(--chat); border: 2px solid var(--outline); border-radius: 0;
 }
 .delete-confirm p { margin: 0; }
 .delete-confirm .field { max-width: 360px; }
@@ -274,77 +312,115 @@ details.settings-section > summary .muted { color: inherit; }
 
 .login-page { min-height: 100vh; display: grid; place-items: center; padding: 20px; }
 .login { width: min(360px, 100%); display: flex; flex-direction: column; gap: 14px; }
+/* The brand mark, 64px and centred, above the title. */
+.login::before { content: ''; align-self: center; flex: none; width: 64px; height: 64px; background: var(--brand-mark) center / contain no-repeat; }
 .login .error { margin: 0; }
 
 .project-head { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin-bottom: var(--gap); }
 .project-head .delete-confirm { flex-basis: 100%; }
+/* The name is an input that reads as a pixel heading on the stone until it is pointed at (a grey edge) or edited (a black field with
+   a yellow edge). Its height is a minimum, so the head keeps its 36px whichever font is in. The focus rule comes after the hover
+   one: a field that is both is a focused one. */
 .project-name {
-  flex: 1; font-size: 1.4rem; font-weight: 600; padding: 4px 8px;
-  border-color: transparent; background: transparent;
+  flex: 1; min-height: 36px; padding: 0 8px; border-color: transparent; background: transparent;
+  color: var(--ink); font: 600 22px/1.2 var(--font-pixel);
 }
-.project-name:hover, .project-name:focus { border-color: var(--border); background: var(--surface); }
-.connection { font-size: 0.85rem; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
-.connection::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
-.connection.live::before { background: var(--ok); }
+.project-name:hover { border-color: var(--btn-hi); }
+.project-name:focus { border-color: var(--accent); background: #000000; }
+/* The connection is a readout with a square dot: green and breathing while live (opacity only), amber and blinking while the
+   page reconnects. No panel is drawn around the head: its height is the chrome's budget. */
+.connection {
+  display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px; white-space: nowrap;
+  background: var(--screen); color: #ffaa00; font: 14px/1 var(--font-pixel);
+}
+.connection::before { content: ''; flex: none; width: 8px; height: 8px; background: #ffaa00; animation: blink 1.6s steps(2) infinite; }
+.connection.live { color: #55ff55; }
+.connection.live::before { background: #55ff55; animation: breathe 2s ease-in-out infinite; }
 
+/* The plan banner is a chat box too (design spec §6). A problem is red in the pixel font, with its items in a paler red; anything
+   else it says (another warning, a hint, what unlocks) is yellow, and the busy line grey. Hints and problems no longer share
+   one look. */
 .plan-banner {
-  background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: var(--radius);
-  padding: 10px 14px; margin-bottom: var(--gap);
+  margin-bottom: var(--gap); padding: 10px 14px; color: var(--ink-title);
+  background: var(--chat); border: 2px solid var(--outline); border-radius: 0;
+  animation: rise-in var(--dur-base) var(--ease-out);
 }
+/* The busy line alone is on screen for every replan, so it appears without the entrance. */
+.plan-banner:has(> p.muted:only-child) { animation: none; }
 .plan-banner p { margin: 0 0 4px; }
 .plan-banner ul { margin: 0 0 4px; padding-left: 20px; }
-.plan-banner .banner-heading { font-weight: 600; margin-top: 6px; }
-.plan-banner .banner-heading.error { color: var(--error); }
-.plan-banner .banner-heading button { margin-left: 6px; font-weight: 400; }
+.plan-banner .banner-heading { margin-top: 6px; font: 600 14px/1.45 var(--font-pixel); }
+.plan-banner > .error, .banner-integrity, .banner-heading.error { color: var(--ink-error); font-family: var(--font-pixel); }
+.banner-integrity li { color: #ffaaaa; font-family: var(--font-ui); }
+.plan-banner .banner-heading button { margin-left: 6px; }
 .banner-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 6px; }
-button.banner-chip {
-  display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px 2px 4px; border-radius: 999px; font-size: 0.85rem;
-}
-.banner-cost { color: var(--muted); }
-/* What the plan costs to run and to build (plan 12), above the banner. */
-.plan-cost { color: var(--muted); margin: 0 0 var(--gap); }
+/* A derived material's chip is a small button with its 16px icon: the size of `button.small`, which its markup does not carry. */
+button.banner-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 0 10px 0 4px; font-size: 13px; }
+/* What the plan costs to run and to build (plan 12), above the banner. It is a line on the stone: the ink of the page, with
+   figures that line up. */
+.plan-cost { margin: 0 0 var(--gap); color: var(--ink); font-family: var(--font-ui); font-size: 14px; font-variant-numeric: tabular-nums; }
 
-/* What changed with the last settings change (fix spec §6.4), above the flow diagram and the materials. */
-.what-changed { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; }
+/* What changed with the last settings change (fix spec §6.4), above the flow diagram and the materials: a chat box. */
+.what-changed {
+  padding: 8px 12px; background: var(--chat); border: 2px solid var(--outline); border-radius: 0;
+  animation: rise-in var(--dur-base) var(--ease-out);
+}
 .what-changed-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.what-changed h4 { margin: 0; font-size: 0.95rem; }
+.what-changed h4 { margin: 0; color: var(--ink-title); font: 600 14px/1.45 var(--font-pixel); }
 .what-changed ul { margin: 4px 0 0; padding-left: 20px; font-size: 0.9rem; }
 .what-changed li { overflow-wrap: anywhere; }
 
-.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin: 0; }
+/* Creative-inventory tabs (design spec §6): grey tabs with dark text that sit 2px down over the top edge of the panel, the selected
+   one in the panel's own colour so that it joins it. The height is a minimum and the line-height 1, so the strip is 38px
+   whichever font is in. The six tabs wrap onto a second row on a narrow screen (as the mockup's do) rather than scroll the page. */
+.tabs { display: flex; flex-wrap: wrap; gap: 2px; padding-left: 6px; border: 0; margin: 0; }
 .tabs [role='tab'] {
-  border: none; border-bottom: 2px solid transparent; border-radius: 0; background: none;
-  padding: 8px 14px; color: var(--muted);
+  position: relative; top: 2px; min-height: 38px; padding: 0 14px;
+  background: #8b8b8b; border: 2px solid #000; box-shadow: inset 2px 2px 0 #a8a8a8;
+  color: #1b1b1b; font: 15px/1 var(--font-pixel); text-shadow: none;
 }
-.tabs [role='tab'][aria-selected='true'] { color: var(--text); border-bottom-color: var(--accent); }
+/* The button rules that light a hovered button have no specificity, so they do not reach a tab: this is its own. */
+.tabs [role='tab']:hover:not([aria-selected='true']) { background: #9a9a9a; }
+.tabs [role='tab'][aria-selected='true'] {
+  background: var(--panel); box-shadow: inset 2px 2px 0 #fff; border-bottom-color: var(--panel); color: #303030;
+}
 /* What a tab shows sits on a panel. The strip above has no margin and the padding stays at 8 px, so the chrome keeps its height:
-   the e2e tests aim at canvas centres. */
-.tab-panel { background: var(--panel); border: 2px solid var(--outline); box-shadow: var(--bevel-panel); padding: 8px; }
+   the e2e tests aim at canvas centres. The panel fades in on a tab switch (its section is keyed by the tab). */
+.tab-panel {
+  background: var(--panel); border: 2px solid var(--outline); box-shadow: var(--bevel-panel); padding: 8px;
+  animation: fade-in var(--dur-base) var(--ease-out);
+}
 
+/* A modal is a panel over a dimmed page: the backdrop fades in, the panel scales up from 0.96 (entrances only; the name prompt is
+   unmounted when it is done). Its title is the global pixel h2 in the panel's title ink. It also frames the map's pin dialog. */
 .modal-backdrop {
-  position: fixed; inset: 0; background: rgb(0 0 0 / 0.45);
+  position: fixed; inset: 0; background: rgba(0, 0, 0, 0.6);
   display: grid; place-items: center; padding: 20px; z-index: 100;
+  animation: fade-in var(--dur-base) var(--ease-out);
 }
 .modal {
-  width: min(400px, 100%); background: var(--surface); border-radius: var(--radius);
-  padding: 20px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 10px 30px rgb(0 0 0 / 0.3);
+  width: min(400px, 100%); padding: 20px; display: flex; flex-direction: column; gap: 12px;
+  background: var(--panel); border: 2px solid var(--outline); border-radius: 0;
+  box-shadow: var(--bevel-panel), 0 2px 0 #000; animation: scale-in var(--dur-slow) var(--ease-out);
 }
 .modal h2, .modal p { margin: 0; }
 
 .notes { max-width: 760px; display: flex; flex-direction: column; gap: 16px; }
 .note-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 10px; }
-.note { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px; }
+.note, .note-add { padding: 10px 14px; background: var(--panel); border: 2px solid var(--outline); border-radius: 0; box-shadow: var(--bevel-panel); }
 .note-text { margin: 0 0 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .note-meta { margin: 0 0 6px; font-size: 0.85rem; }
 .note-edit { display: flex; flex-direction: column; gap: 8px; margin-bottom: 6px; }
-.note-actions button { padding: 2px 10px; font-size: 0.85rem; }
+/* Edit and Delete are small buttons: the size of `button.small`, which their markup does not carry. */
+.note-actions button { min-height: 28px; padding: 0 10px; font-size: 13px; }
 .note-add { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
 .note-add .field { width: 100%; }
 
 .tick { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .tick-check { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
-.tick.marked .tick-label { text-decoration: line-through; color: var(--muted); }
-.tick-by { font-size: 0.8rem; color: var(--ok); }
+.tick.marked .tick-label { text-decoration: line-through; color: var(--ink-muted); }
+/* Who ticked a row and when: the ✓ text in it is the markup's; the line pops in (opacity and scale) when a tick is made. */
+.tick-by { font-size: 0.8rem; color: var(--ink-ok); animation: pop var(--dur-fast) var(--ease-pop); }
 
 .item-icon {
   display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
@@ -723,5 +799,5 @@ span.mat-toggle { display: inline-block; }
 @media (max-width: 640px) {
   .project-card, .deleted-card { grid-template-columns: 1fr; }
   .new-project { flex-direction: column; align-items: stretch; }
-  .top-nav { gap: 12px; padding: 10px 14px; }
+  .top-nav { gap: 12px; padding: 6px 14px; }
 }

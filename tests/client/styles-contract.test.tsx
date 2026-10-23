@@ -422,8 +422,9 @@ describe('the Machine GUI controls', () => {
       ['details.settings-section[open] > summary::before, details.disclosure[open] > summary::before', 'transform', 'rotate(90deg)'],
     ]);
     expect(declared(SUMMARY.replace(/summary/g, 'summary::before'), 'clip-path'), 'a pixel caret').toMatch(/^polygon\(/);
-    // a global `summary` rule would also hit Materials' two inline disclosures and the thousands of storage rows
-    expect(blocks.filter((b) => b.prelude.split(',').some((s) => /^\s*summary\b/.test(s))).map((b) => b.prelude)).toEqual([]);
+    // a global `summary` rule would also hit Materials' two inline disclosures and the thousands of storage rows (the focus ring's
+    // colour rule lists `summary` too, ruling R13: it recolours a ring and dresses nothing)
+    expect(blocks.filter((b) => !b.prelude.endsWith(':focus-visible') && b.prelude.split(',').some((s) => /^\s*summary\b/.test(s))).map((b) => b.prelude)).toEqual([]);
   });
 
   it('shows the keyboard focus as a 3px yellow ring that touches the control', () => {
@@ -437,7 +438,7 @@ describe('the Machine GUI controls', () => {
     const panels = blocks.find((b) => !b.nested && b.prelude.split(', ').includes('.tab-panel') && b.inner.includes('--ink:'));
     if (panels === undefined) throw new Error('styles.css has no rule that sets the panel ink');
     expect(declarations(panels.inner).filter(([name]) => name === '--ink-focus').map(([, value]) => value)).toEqual(['#1b1b1b']);
-    const link = ':where(a, button.link):focus-visible';
+    const link = ':where(a, button.link, summary, input[type=checkbox], input[type=radio]):focus-visible';   // ruling R13: a summary and a tick have no dark edge either
     expect(declared(link, 'outline-color')).toBe('var(--ink-focus)');
     // only the colour: the width and the offset stay the base ring's
     expect(declarations(ruleBody(link)).map(([name]) => name)).toEqual(['outline-color']);
@@ -465,5 +466,222 @@ describe('the Machine GUI controls', () => {
     for (const block of drawn) {
       for (const [name, value] of declarations(block.inner)) if (name === 'content') expect(value, block.prelude).toMatch(/^(''|none)$/);
     }
+  });
+});
+
+// The app chrome (restyle plan Phase 1 Task 3, design spec §6 and §7a): the top bar, the login card, the modal, the project
+// head, the banners, the tabs, the project list and the notes. These cases pin the values of the brief; chrome.spec.ts measures
+// what a stylesheet cannot say in text (that the bar and the tabs keep their height when the fonts arrive late, that reduced
+// motion stops the live dot).
+
+/** The rule that sets a surface's ink (it declares `--ink:`) and lists `member` among its selectors. */
+function inkGroup(member: string): Block {
+  const group = blocks.find((b) => !b.nested && b.prelude.split(', ').includes(member) && b.inner.includes('--ink:'));
+  if (group === undefined) throw new Error(`styles.css has no rule that sets the ink of "${member}"`);
+  return group;
+}
+
+/** The brand mark as a background: centred, contained, drawn once. */
+const MARK = 'var(--brand-mark) center / contain no-repeat';
+const TAB = ".tabs [role='tab']";
+const SELECTED = `${TAB}[aria-selected='true']`;
+/** The chrome rules whose colours, edges and radii this task replaced: none may read an alias of the old palette any more. */
+const CHROME_RULES = [
+  '.top-nav', '.brand', '.brand-mark', '.top-nav nav', '.top-nav nav a', '.card', '.banner', '.delete-confirm', '.project-name',
+  '.connection', '.plan-banner', '.plan-cost', '.what-changed', '.tabs', TAB, '.tab-panel', '.modal-backdrop', '.modal',
+  '.note, .note-add', '.tick.marked .tick-label', '.tick-by',
+];
+const OLD_ALIASES = /var\(--(bg|surface|surface-2|border|radius|muted|ok|error|error-bg|warn-bg|warn-border|accent-text)\)/;
+
+describe('the Machine GUI chrome', () => {
+  it('gives a dark box the light ink of its own group, and the notes the ink of a panel', () => {
+    const dark = inkGroup('.banner');
+    // the group starts with the surfaces Task 3 moved out of the panel group and the screens; later tasks append to it
+    expect(dark.prelude.split(', ').slice(0, 7)).toEqual(['.banner', '.plan-banner', '.what-changed', '.delete-confirm', '.connection', '.badge', '.chip']);
+    const INK: [string, string][] = [
+      ['--ink', '#ffffff'], ['--ink-muted', '#aaaaaa'], ['--ink-title', '#ffff55'], ['--ink-link', '#ffff55'],
+      ['--ink-error', '#ff5555'], ['--ink-ok', '#55ff55'], ['--ink-warn', '#ffaa00'],
+      ['--ink-focus', '#ffff55'],                                                      // ruling R12: not the dark ring of a panel it may sit in
+      ['--muted', '#aaaaaa'], ['color', 'var(--ink)'],
+    ];
+    const set = new Map(declarations(dark.inner));
+    for (const [name, value] of INK) expect(set.get(name), name).toBe(value);
+    // moved, not copied: the panel group no longer lists them, and lists the notes
+    const panels = inkGroup('.tab-panel');
+    for (const member of ['.banner', '.plan-banner', '.what-changed', '.delete-confirm']) expect(panels.prelude.split(', '), member).not.toContain(member);
+    for (const member of ['.note', '.note-add']) expect(panels.prelude.split(', '), member).toContain(member);
+    // both groups come before `.muted` and `.error`, which still win on an element that is both (a `.banner.error`)
+    for (const group of [dark, panels]) {
+      expect(blocks.indexOf(group), group.prelude).toBeLessThan(position('.muted'));
+      expect(blocks.indexOf(group), group.prelude).toBeLessThan(position('.error'));
+    }
+  });
+
+  it('draws the pixel brand mark from one token, on the top bar and above the login title', () => {
+    const mark = decodeURIComponent(rootTokens().get('--brand-mark') ?? '');
+    for (const part of [
+      'data:image/svg+xml', "viewBox='0 0 8 8'", "shape-rendering='crispEdges'",
+      "fill='#000' d='M2 0h4v1H2zM1 1h1v1H1zM6 1h1v1H6zM0 2h1v4H0zM7 2h1v4H7zM1 6h1v1H1zM6 6h1v1H6zM2 7h4v1H2z'",
+      "fill='#ffd84a' d='M2 1h4v1H2zM1 2h1v4H1zM6 2h1v4H6zM2 6h4v1H2z'",
+      "fill='#c98a00' d='M2 2h4v1H2zM2 3h1v2H2zM5 3h1v2H5zM2 5h4v1H2z'",
+      "fill='#fff' d='M3 3h2v2H3z'",
+    ]) expect(mark, part).toContain(part);
+    expectDeclared([
+      ['.brand-mark', 'width', '32px'], ['.brand-mark', 'height', '32px'], ['.brand-mark', 'background', MARK],
+      ['.login::before', 'content', "''"], ['.login::before', 'width', '64px'], ['.login::before', 'height', '64px'],
+      ['.login::before', 'background', MARK], ['.login::before', 'align-self', 'center'],
+    ]);
+  });
+
+  it('draws the top bar as a dark strip of fixed height, with the pages as buttons and the current one yellow', () => {
+    expectDeclared([
+      ['.top-nav', 'display', 'flex'], ['.top-nav', 'align-items', 'center'], ['.top-nav', 'flex-wrap', 'wrap'],
+      ['.top-nav', 'gap', '20px'], ['.top-nav', 'min-height', '50px'], ['.top-nav', 'padding', '6px 20px'],
+      ['.top-nav', 'background', 'var(--bar)'], ['.top-nav', 'border-bottom', '2px solid #000'],
+      ['.top-nav', 'box-shadow', 'inset 0 -2px 0 #3c3c3c'],
+      ['.brand', 'display', 'inline-flex'], ['.brand', 'gap', '10px'], ['.brand', 'align-items', 'center'],
+      ['.brand', 'font', '700 20px/1 var(--font-pixel)'], ['.brand', 'color', '#ffd84a'], ['.brand', 'text-shadow', '2px 2px 0 #3f3300'],
+      ['.top-nav nav a', 'display', 'flex'], ['.top-nav nav a', 'min-height', '36px'], ['.top-nav nav a', 'padding', '0 14px'],
+      ['.top-nav nav a', 'background', 'var(--btn)'], ['.top-nav nav a', 'border', '2px solid var(--outline)'],
+      ['.top-nav nav a', 'box-shadow', 'var(--bevel-btn)'], ['.top-nav nav a', 'color', '#ffffff'],
+      ['.top-nav nav a', 'font', '15px/1 var(--font-pixel)'], ['.top-nav nav a', 'text-decoration', 'none'],
+      ['.top-nav nav a', 'text-shadow', '2px 2px 0 #3f3f3f'],
+      ['.top-nav nav a:hover', 'background', 'var(--btn-hover)'],
+      ['.top-nav nav a:active', 'transform', 'translateY(1px)'], ['.top-nav nav a:active', 'box-shadow', 'var(--bevel-btn-down)'],
+      [".top-nav nav a[aria-current='page']", 'color', 'var(--accent)'],
+    ]);
+    // the links of the nav only: a bare `.top-nav a` would dress every link in the header. The bar scrolls with the page.
+    expect(position('.top-nav a'), 'a bare .top-nav a rule').toBe(-1);
+    expect(declared('.top-nav', 'position'), 'the top bar is not sticky').toBeUndefined();
+    // on a narrow screen the bar keeps its 6 px of padding, so it stays 50 px tall
+    const narrow = blocks.find((b) => b.nested && b.prelude === '.top-nav');
+    expect(narrow === undefined ? [] : declarations(narrow.inner)).toEqual([['gap', '12px'], ['padding', '6px 14px']]);
+  });
+
+  it('fades the modal backdrop in and scales the modal up, once', () => {
+    expectDeclared([
+      ['.modal-backdrop', 'background', 'rgba(0, 0, 0, 0.6)'],
+      ['.modal-backdrop', 'animation', 'fade-in var(--dur-base) var(--ease-out)'],
+      ['.modal', 'background', 'var(--panel)'], ['.modal', 'border', '2px solid var(--outline)'], ['.modal', 'border-radius', '0'],
+      ['.modal', 'box-shadow', 'var(--bevel-panel), 0 2px 0 #000'],
+      ['.modal', 'animation', 'scale-in var(--dur-slow) var(--ease-out)'],
+    ]);
+    expect(ruleBody('.modal')).toContain('animation: scale-in var(--dur-slow) var(--ease-out)');
+    // the title is the heading of a panel: the pixel font and the title ink come from the global h2 and `h1, h2, h3` rules, and
+    // no rule of the modal takes them away
+    expect(ruleBody('.modal h2, .modal p')).not.toMatch(/font|color/);
+  });
+
+  it('draws the project name as a pixel heading that turns into a field when it is hovered or focused', () => {
+    expectDeclared([
+      ['.project-name', 'min-height', '36px'], ['.project-name', 'border-color', 'transparent'],
+      ['.project-name', 'background', 'transparent'], ['.project-name', 'color', 'var(--ink)'],
+      ['.project-name', 'font', '600 22px/1.2 var(--font-pixel)'],
+      ['.project-name:hover', 'border-color', 'var(--btn-hi)'],
+      ['.project-name:focus', 'border-color', 'var(--accent)'], ['.project-name:focus', 'background', '#000000'],
+    ]);
+    // both are one class and one pseudo-class: the one that comes later wins, and a field being typed in is a focused one
+    expect(position('.project-name:focus')).toBeGreaterThan(position('.project-name:hover'));
+  });
+
+  it('shows the connection as a readout whose square dot breathes while live and blinks while not', () => {
+    expectDeclared([
+      ['.connection', 'background', 'var(--screen)'], ['.connection', 'font', '14px/1 var(--font-pixel)'],
+      ['.connection', 'color', '#ffaa00'], ['.connection.live', 'color', '#55ff55'],
+      ['.connection::before', 'content', "''"], ['.connection::before', 'width', '8px'], ['.connection::before', 'height', '8px'],
+      ['.connection::before', 'background', '#ffaa00'], ['.connection::before', 'animation', 'blink 1.6s steps(2) infinite'],
+      ['.connection.live::before', 'background', '#55ff55'],
+      ['.connection.live::before', 'animation', 'breathe 2s ease-in-out infinite'],
+    ]);
+    expect(ruleBody('.connection.live::before')).toContain('animation: breathe 2s');
+    // opacity only (the keyframes), and no transform: a test waits for what it clicks to hold still, and this is a square
+    for (const dot of ['.connection::before', '.connection.live::before']) {
+      expect(ruleBody(dot), dot).not.toContain('transform');
+      expect(ruleBody(dot), dot).not.toContain('radius');
+    }
+    // the head has no panel around it: it is the height budget's
+    expect(declarations(ruleBody('.project-head')).map(([name]) => name)).not.toContain('background');
+  });
+
+  it('draws a notice, an error, the plan banner and what changed as chat boxes that rise in', () => {
+    for (const selector of ['.banner', '.plan-banner', '.what-changed']) {
+      expectDeclared([
+        [selector, 'background', 'var(--chat)'], [selector, 'border', '2px solid var(--outline)'], [selector, 'border-radius', '0'],
+        [selector, 'animation', 'rise-in var(--dur-base) var(--ease-out)'],
+      ]);
+    }
+    expectDeclared([
+      ['.banner.notice', 'color', 'var(--ink-title)'], ['.banner.error', 'color', 'var(--ink-error)'],
+      // the busy line shows on every replan: it appears without the entrance
+      ['.plan-banner:has(> p.muted:only-child)', 'animation', 'none'],
+      // a hint or a warning is yellow, a problem is red in the pixel font with its items in a paler red
+      ['.plan-banner', 'color', 'var(--ink-title)'],
+      ['.plan-banner > .error, .banner-integrity, .banner-heading.error', 'color', 'var(--ink-error)'],
+      ['.plan-banner > .error, .banner-integrity, .banner-heading.error', 'font-family', 'var(--font-pixel)'],
+      ['.banner-integrity li', 'color', '#ffaaaa'], ['.banner-integrity li', 'font-family', 'var(--font-ui)'],
+      ['.plan-banner .banner-heading', 'font', '600 14px/1.45 var(--font-pixel)'],
+      ['.what-changed h4', 'font', '600 14px/1.45 var(--font-pixel)'], ['.what-changed h4', 'color', 'var(--ink-title)'],
+      // a derived material's chip is a small button with its 16px icon
+      ['button.banner-chip', 'min-height', '28px'], ['button.banner-chip', 'padding', '0 10px 0 4px'],
+      ['button.banner-chip', 'font-size', '13px'], ['button.banner-chip', 'display', 'inline-flex'],
+    ]);
+    // what the plan costs sits on the page, in its ink, with figures that line up
+    expectDeclared([
+      ['.plan-cost', 'color', 'var(--ink)'], ['.plan-cost', 'font-family', 'var(--font-ui)'], ['.plan-cost', 'font-size', '14px'],
+      ['.plan-cost', 'font-variant-numeric', 'tabular-nums'],
+    ]);
+  });
+
+  it('draws the tabs as creative-inventory tabs that join the panel below, and fades the panel in', () => {
+    expectDeclared([
+      ['.tabs', 'gap', '2px'], ['.tabs', 'padding-left', '6px'], ['.tabs', 'border', '0'], ['.tabs', 'margin', '0'],
+      ['.tabs', 'flex-wrap', 'wrap'],                                                  // as the mockup's: six pixel tabs are wider than a phone
+      [TAB, 'position', 'relative'], [TAB, 'top', '2px'], [TAB, 'min-height', '38px'], [TAB, 'padding', '0 14px'],
+      [TAB, 'border', '2px solid #000'], [TAB, 'font', '15px/1 var(--font-pixel)'], [TAB, 'text-shadow', 'none'],
+      [TAB, 'background', '#8b8b8b'], [TAB, 'box-shadow', 'inset 2px 2px 0 #a8a8a8'], [TAB, 'color', '#1b1b1b'],
+      [`${TAB}:hover:not([aria-selected='true'])`, 'background', '#9a9a9a'],
+      [SELECTED, 'background', 'var(--panel)'], [SELECTED, 'box-shadow', 'inset 2px 2px 0 #fff'],
+      [SELECTED, 'border-bottom-color', 'var(--panel)'], [SELECTED, 'color', '#303030'],
+    ]);
+    // the plan's own words, and the order the selected look needs to beat the unselected one
+    expect(ruleBody(TAB)).toContain('min-height: 38px');
+    expect(ruleBody(TAB)).toContain('font: 15px/1 var(--font-pixel)');
+    expect(position(SELECTED)).toBeGreaterThan(position(TAB));
+    // ruling R1: the fade is in the one rule the panel has
+    expect(ruleBody('.tab-panel')).toContain('animation: fade-in var(--dur-base) var(--ease-out)');
+    expect(blocks.filter((b) => b.prelude === '.tab-panel')).toHaveLength(1);
+  });
+
+  it('draws the project list: panel cards, a pixel link, a small danger button and a chat box to confirm in', () => {
+    expectDeclared([
+      ['.card', 'background', 'var(--panel)'], ['.card', 'border', '2px solid var(--outline)'], ['.card', 'border-radius', '0'],
+      ['.card', 'box-shadow', 'var(--bevel-panel)'],
+      ['.project-link', 'color', 'var(--ink)'], ['.project-link', 'font-family', 'var(--font-pixel)'],
+      ['.project-link', 'font-size', '16px'],
+      ['.project-card .delete-open', 'min-height', '28px'], ['.project-card .delete-open', 'padding', '0 10px'],
+      ['.project-card .delete-open', 'font-size', '13px'], ['.project-card .delete-open', 'background', 'var(--danger-face)'],
+      ['.project-card .delete-open:hover', 'background', 'var(--danger-face-hover)'],
+      ['.delete-confirm', 'background', 'var(--chat)'], ['.delete-confirm', 'border', '2px solid var(--outline)'],
+      ['.delete-confirm', 'border-radius', '0'],
+    ]);
+    // the headings of the list sit on the stone: no ink group gives the page a panel's ink, so they read the page's own
+    for (const group of blocks.filter((b) => !b.nested && b.inner.includes('--ink:'))) {
+      expect(group.prelude, 'an ink group that lists the stone').not.toMatch(/recently-deleted|project-list|\.page\b/);
+    }
+  });
+
+  it('draws the notes as panels with small buttons, and a ticked row in the muted ink with a signature that pops', () => {
+    expectDeclared([
+      ['.note, .note-add', 'background', 'var(--panel)'], ['.note, .note-add', 'border', '2px solid var(--outline)'],
+      ['.note, .note-add', 'border-radius', '0'], ['.note, .note-add', 'box-shadow', 'var(--bevel-panel)'],
+      ['.note-actions button', 'min-height', '28px'], ['.note-actions button', 'padding', '0 10px'],
+      ['.note-actions button', 'font-size', '13px'],
+      ['.tick.marked .tick-label', 'color', 'var(--ink-muted)'],
+      ['.tick-by', 'color', 'var(--ink-ok)'], ['.tick-by', 'animation', 'pop var(--dur-fast) var(--ease-pop)'],
+    ]);
+  });
+
+  it('reads no alias of the old palette in the chrome rules', () => {
+    for (const selector of CHROME_RULES) expect(ruleBody(selector), selector).not.toMatch(OLD_ALIASES);
   });
 });

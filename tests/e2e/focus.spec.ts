@@ -1,7 +1,7 @@
 // Keyboard focus is always visible (restyle plan Phase 1 Task 2, design spec §4 and §6): one 3 px ring with no gap. On a
 // button inside a light panel and on a link in the top bar it is yellow: the ring touches the control's own dark border or
 // sits on the dark page, which is what keeps it readable. A link inside a light panel has no dark border of its own, so
-// there the ring is near black (the panel's focus ink, ruling R12).
+// there the ring is near black (the panel's focus ink, ruling R12), and so it is on a tick or a summary (ruling R13).
 
 import { test, expect, type Locator } from '@playwright/test';
 import { login, setName, createProject } from './helpers.ts';
@@ -47,4 +47,20 @@ test('the focus ring shows on panels and on the top bar', async ({ page }) => {
   await page.keyboard.press('Tab');
   await expect(link).toBeFocused();
   expect(await ring(link)).toEqual(PANEL_LINK_RING);
+});
+
+test('the focus ring of a tick and of a disclosure on a panel is near black too', async ({ page }) => {
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Focus tick', { target: 't:circuit@0', amount: 30, per: 'min', tier: 1 });   // a plan, so the Flow toolbar is there
+  // A tick (the Flow toolbar's, inside the tab panel) and a summary (the settings column's) sit on a light panel. Neither has a dark
+  // edge of its own for a yellow ring to touch, so both take the focus ink of the panel, like a link there (ruling R13).
+  const controls = [page.getByRole('checkbox', { name: 'Imports in one column' }), page.locator('details.settings-section > summary').first()];
+  for (const control of controls) {
+    await expect(control).toBeVisible();
+    await control.focus();
+    await page.keyboard.press('Shift+Tab');                                            // stepping off and back on is a keyboard focus
+    await page.keyboard.press('Tab');
+    await expect(control).toBeFocused();
+    expect(await ring(control)).toEqual(PANEL_LINK_RING);
+  }
 });
