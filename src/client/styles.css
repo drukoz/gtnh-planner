@@ -1298,3 +1298,30 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
   .new-project { flex-direction: column; align-items: stretch; }
   .top-nav { gap: 12px; padding: 6px 14px; }
 }
+
+/*
+ * Forced colours, a Windows contrast theme (final review I1). The browser paints every background in the theme's Canvas colour and drops
+ * every shadow, so what is drawn with those alone vanishes: the wells and marks of the ticks and radios (and with them whether they are
+ * ticked), the carets, a slider's track and a progress bar's fill. They take a system colour of the theme instead, the one kind of colour
+ * forced colours keep: a tick or a radio gets an edge and its mark the Highlight, a caret the text colour of what it sits on, the track an
+ * edge, the fill the Highlight. A select and a search field get the browser's own arrow and cross back, which the theme draws (the pixel
+ * ones are white images, lost on a light theme's field). The selected tab, the highlighted search hit and the picked map row, which no
+ * theme shows, get a cue it keeps. At the end of the file: each rule repaints a rule above with its specificity, so it is its place after
+ * that rule that lets it win. A WebKit and a Gecko pseudo-element never share a rule (a browser drops a list with one it does not know).
+ */
+@media (forced-colors: active) {
+  :where(input[type=checkbox], input[type=radio]) { border: 1px solid ButtonText; }
+  :where(input[type=checkbox], input[type=radio])::before { background: Highlight; }
+  details.settings-section > summary::before, details.disclosure > summary::before { background: ButtonText; }
+  button.mat-toggle::before, .mat-have summary::before, .mat-needed summary::before { background: CanvasText; }
+  :where(input[type=range])::-webkit-slider-runnable-track { border: 1px solid ButtonText; }
+  :where(input[type=range])::-moz-range-track { border: 1px solid ButtonText; }
+  :where(progress)::-webkit-progress-value { background: Highlight; }
+  :where(progress)::-moz-progress-bar { background: Highlight; }
+  .scan-row[data-state='failed'] progress::-webkit-progress-value { background: Highlight; }
+  .scan-row[data-state='failed'] progress::-moz-progress-bar { background: Highlight; }
+  :where(select) { appearance: auto; background-image: none; }
+  :where(input[type=search])::-webkit-search-cancel-button { appearance: auto; background: none; }
+  .tabs [role='tab'][aria-selected='true'] { text-decoration: underline; }
+  .search-hit.active, .search-hit[aria-selected='true'], .map-list > li[aria-current='true'] > .map-row-button { outline: 2px solid Highlight; outline-offset: -2px; }
+}

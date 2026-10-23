@@ -2044,3 +2044,84 @@ describe('the end of the old palette', () => {
     for (const block of rules.filter((b) => !b.prelude.startsWith('@'))) expect(declared(block.prelude, 'border-radius') ?? '0', block.prelude).toBe('0');
   });
 });
+
+// Forced colours, a Windows contrast theme (final review I1): the browser paints every background in the theme's Canvas colour and
+// drops every shadow, so a control drawn with those alone vanishes there, and with it whether it is ticked. Native controls were drawn by
+// the browser in the theme's colours, so this was a regression of the restyle. One block at the end of the stylesheet repaints the custom
+// controls in system colours, the one kind of colour forced colours keep. forced-colors.spec.ts asks Chromium's emulation what it computes;
+// these cases pin the block.
+
+const FORCED = '@media (forced-colors: active)';
+/** The system colours of CSS Color 4: what a theme sets and a forced-colours page may still name. */
+const SYSTEM_COLOUR = /^(Canvas|CanvasText|LinkText|VisitedText|ActiveText|ButtonFace|ButtonText|ButtonBorder|Field|FieldText|Highlight|HighlightText|SelectedItem|SelectedItemText|Mark|MarkText|GrayText|AccentColor|AccentColorText)$/;
+const FAILED_FILLS = [".scan-row[data-state='failed'] progress::-webkit-progress-value", ".scan-row[data-state='failed'] progress::-moz-progress-bar"];
+const PICKED_CUES = `${ACTIVE_HIT}, ${PICKED_ROW}`;
+
+/** The one forced-colours block, and the rules inside it. */
+function forcedBlock(): { block: Block; rules: Block[] } {
+  const found = blocks.filter((b) => b.prelude === FORCED);
+  expect(found, 'one forced-colours block').toHaveLength(1);
+  return { block: found[0]!, rules: scan(found[0]!.inner, true, []) };
+}
+
+describe('the Machine GUI in forced colours', () => {
+  it('edges a tick and a radio, and fills their mark in the Highlight, so the box and whether it is ticked both show', () => {
+    expect(inQuery(FORCED, TICK)).toEqual([['border', '1px solid ButtonText']]);
+    expect(inQuery(FORCED, `${TICK}::before`)).toEqual([['background', 'Highlight']]);
+    // the mark keeps its pixel shape and its state: only its paint changes, so an unticked box still shows no mark
+    expect(declared(`${TICK}::before`, 'opacity')).toBe('0');
+    expect(declared(`${TICK}:checked::before`, 'opacity')).toBe('1');
+  });
+
+  it('draws the carets in the text colour of what they sit on: a summary\'s button, the materials list', () => {
+    expect(inQuery(FORCED, SUMMARY.replace(/summary/g, 'summary::before'))).toEqual([['background', 'ButtonText']]);
+    expect(inQuery(FORCED, CARETS)).toEqual([['background', 'CanvasText']]);
+  });
+
+  it('edges a slider\'s track and fills a progress bar in the Highlight, with a rule per engine', () => {
+    for (const track of ['::-webkit-slider-runnable-track', '::-moz-range-track']) {
+      expect(inQuery(FORCED, `:where(input[type=range])${track}`), track).toEqual([['border', '1px solid ButtonText']]);
+    }
+    // a failed scan's red bar is a rule of its own, which out-ranks the base fill: it is repainted too
+    for (const fill of [':where(progress)::-webkit-progress-value', ':where(progress)::-moz-progress-bar', ...FAILED_FILLS]) {
+      expect(inQuery(FORCED, fill), fill).toEqual([['background', 'Highlight']]);
+    }
+    const { rules } = forcedBlock();
+    expect(rules.filter((b) => b.prelude.includes('-webkit-') && b.prelude.includes('-moz-')).map((b) => b.prelude)).toEqual([]);
+  });
+
+  it('gives a select and a search field back the browser\'s own arrow and cross, which the theme draws', () => {
+    // the pixel caret and cross are white images: a light theme's field is white
+    expect(inQuery(FORCED, ':where(select)')).toEqual([['appearance', 'auto'], ['background-image', 'none']]);
+    expect(inQuery(FORCED, ':where(input[type=search])::-webkit-search-cancel-button')).toEqual([['appearance', 'auto'], ['background', 'none']]);
+  });
+
+  it('marks the selected tab, the highlighted search hit and the picked map row with cues the theme keeps', () => {
+    expect(inQuery(FORCED, SELECTED)).toEqual([['text-decoration', 'underline']]);
+    expect(inQuery(FORCED, PICKED_CUES)).toEqual([['outline', '2px solid Highlight'], ['outline-offset', '-2px']]);
+  });
+
+  it('names system colours only, keeps the theme, and comes after every rule it repaints', () => {
+    const { block, rules } = forcedBlock();
+    expect(rules.length).toBeGreaterThanOrEqual(13);
+    for (const rule of rules) {
+      for (const [name, value] of declarations(rule.inner)) {
+        expect(value, `${rule.prelude} { ${name} }`).not.toMatch(/#|rgb|hsl|var\(|currentColor/i);
+        if (/^(background|border|outline)$/.test(name) && value !== 'none') expect(value.split(' ').pop(), `${rule.prelude} { ${name} }`).toMatch(SYSTEM_COLOUR);
+      }
+    }
+    // the user's palette is the point: nothing opts out of it
+    expect(css).not.toContain('forced-color-adjust');
+    // each rule has the specificity of the rule it repaints, so it is the block's place after them that lets it win
+    const repainted = [
+      TICK, ':where(input[type=checkbox])::before', ':where(input[type=radio])::before', SUMMARY.replace(/summary/g, 'summary::before'), CARETS,
+      ':where(input[type=range])::-webkit-slider-runnable-track', ':where(input[type=range])::-moz-range-track',
+      ':where(progress)::-webkit-progress-value', ':where(progress)::-moz-progress-bar', ...FAILED_FILLS, ':where(select)',
+      ':where(input[type=search])::-webkit-search-cancel-button', SELECTED, ACTIVE_HIT, PICKED_ROW,
+    ];
+    for (const selector of repainted) {
+      expect(position(selector), selector).toBeGreaterThan(-1);
+      expect(position(selector), selector).toBeLessThan(blocks.indexOf(block));
+    }
+  });
+});
