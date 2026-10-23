@@ -70,6 +70,8 @@ installed with npm's `--before` flag, so **transitive** dependencies obey the ru
 | fflate | 0.8.3 | 2026-05-16 | MIT | test fixtures only |
 | hono / @hono/node-server | 4.13.12 / 2.1.3 | 2026-09-30 / 09-29 | MIT | evaluated, not recommended |
 | @fastify/busboy | 3.2.2 | 2026-08-21 | MIT | evaluated; keeps the old busboy 0.x API |
+| @fontsource/pixelify-sans | 5.3.0 | 2026-07-19 | OFL-1.1 | Machine GUI restyle (design spec §5): headings, tabs, buttons; weights 400/600/700, bundled by Vite, no CDN; added 2026-10-23 with `--before=2026-10-09`, no transitive dependencies |
+| @fontsource/inter | 5.3.0 | 2026-07-19 | OFL-1.1 | Machine GUI restyle (design spec §5): body text; weights 400/500/600/700; installed with the line above |
 
 Evidence:
 ```text

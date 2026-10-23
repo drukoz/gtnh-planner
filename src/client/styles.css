@@ -1,51 +1,92 @@
+/*
+ * The Machine GUI look (design spec §4): light-grey bevelled panels on a dark stone page, one theme whatever the browser or
+ * the OS prefers. The palette, bevels, motion and fonts are tokens on :root. Text colour depends on the surface it sits
+ * on, so each surface sets its own ink (--ink and its siblings) and the generic classes below read those.
+ */
 :root {
-  --bg: #f4f5f7;
-  --surface: #ffffff;
-  --surface-2: #eceef2;
-  --text: #1c1f24;
-  --muted: #5d6470;
-  --border: #d5d9e0;
-  --accent: #2f6fd6;
-  --accent-text: #ffffff;
-  --ok: #2e8b57;
-  --warn-bg: #fff4d6;
-  --warn-border: #e6c25a;
-  --error: #b3261e;
-  --error-bg: #fde8e6;
-  --radius: 8px;
+  --page: #2b2b2b; --page-check: #262626; --bar: #1a1a1a;
+  --panel: #c6c6c6; --panel-hi: #ffffff; --panel-lo: #555555; --outline: #000000;
+  --slot: #8b8b8b; --slot-hi: #ffffff; --slot-lo: #373737; --well: #373737; --screen: #1b1b1b;
+  --text: #303030; --text-muted: #4a4a4a; --title: #404040;
+  --btn: #6b6b6b; --btn-hi: #a0a0a0; --btn-lo: #3c3c3c; --btn-hover: #4a5499;
+  --danger-face: #aa0000; --danger-face-hover: #c62828; --link: #1a3fa0;
+  --accent: #ffff55; --screen-text: #55ff55; --screen-muted: #aaaaaa; --chat: rgba(0, 0, 0, 0.82);
+  --tip-bg: rgba(16, 0, 16, 0.94); --tip-border: #5000ff; --tip-inner: #28007f;
+  --item: #ffff55; --fluid: #55ffff;
+  --bevel-panel: inset 3px 3px 0 var(--panel-hi), inset -3px -3px 0 var(--panel-lo);
+  --bevel-btn: inset 2px 2px 0 var(--btn-hi), inset -2px -2px 0 var(--btn-lo);
+  --bevel-btn-down: inset 2px 2px 0 var(--btn-lo), inset -2px -2px 0 var(--btn-hi);
+  --bevel-slot: inset 2px 2px 0 var(--slot-lo), inset -2px -2px 0 var(--slot-hi);
+  --bevel-well: inset 2px 2px 0 #000000, inset -2px -2px 0 var(--panel-lo);
+  --tier-ulv: #9a9a9a; --tier-lv: #dddddd; --tier-mv: #55ffff; --tier-hv: #ffaa00; --tier-ev: #ff55ff;
+  --tier-iv: #8c9cff; --tier-luv: #ff8cff; --tier-zpm: #ff5555; --tier-uv: #55dddd; --tier-uhv: #ff6b6b;
+  --tier-uev: #55ff55; --tier-uiv: #00cc00; --tier-umv: #ffff55; --tier-uxv: #8080ff; --tier-max: #ff5555;
+  --dur-fast: 90ms; --dur-base: 160ms; --dur-slow: 260ms; --dur-exit: 180ms;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1); --ease-pop: cubic-bezier(0.34, 1.56, 0.64, 1); --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --font-pixel: 'Pixelify Sans', Inter, sans-serif; --font-ui: Inter, system-ui, sans-serif;
+  --font-diagram: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --ink: #dddddd; --ink-muted: #aaaaaa; --ink-title: #ffffff; --ink-link: #ffff55;
+  --ink-error: #ff5555; --ink-ok: #55ff55; --ink-warn: #ffaa00;
   --gap: 12px;
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  line-height: 1.45;
-  color: var(--text);
-  background: var(--bg);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #15171b;
-    --surface: #1e2127;
-    --surface-2: #272b33;
-    --text: #e6e8ec;
-    --muted: #9aa1ad;
-    --border: #363b45;
-    --accent: #5b93ec;
-    --accent-text: #0c1220;
-    --ok: #4fbf7f;
-    --warn-bg: #3a3218;
-    --warn-border: #8a7330;
-    --error: #ff8a80;
-    --error-bg: #3d1f1d;
-  }
+  /* Old names, still read by inline styles and older rules; Task 9 removes them. */
+  --bg: var(--page); --surface: var(--panel); --surface-2: #b5b5b5; --border: #555555; --radius: 0;
+  --muted: #4a4a4a; --ok: #1e5a1e; --error: #aa0000; --error-bg: #e3b0b0;
+  --warn-bg: #e6d9a8; --warn-border: #6a4000; --accent-text: #1b1b1b;
+  color-scheme: dark; scrollbar-color: var(--btn) var(--screen);
+  font-family: var(--font-ui); font-size: 14px; line-height: 1.45; color: var(--ink); background: var(--page);
 }
 
 * { box-sizing: border-box; }
-body { margin: 0; min-height: 100vh; background: var(--bg); }
-h1 { font-size: 1.5rem; margin: 0 0 var(--gap); }
-h2 { font-size: 1.15rem; margin: 0 0 var(--gap); }
-a { color: var(--accent); }
-.muted { color: var(--muted); }
-.error { color: var(--error); }
+/* The stone is the body's own background, never an overlay element: the diagrams' hit tests need nothing laid over them. */
+body {
+  margin: 0; min-height: 100vh;
+  background-color: var(--page);
+  background-image:
+    linear-gradient(45deg, var(--page-check) 25%, transparent 25%, transparent 75%, var(--page-check) 75%),
+    linear-gradient(45deg, var(--page-check) 25%, transparent 25%, transparent 75%, var(--page-check) 75%);
+  background-size: 16px 16px; background-position: 0 0, 8px 8px;
+}
+h1, h2, h3 { color: var(--ink-title); }
+h1, h2 { font-family: var(--font-pixel); font-weight: 600; }
+h1 { font-size: 1.6rem; margin: 0 0 var(--gap); }
+h2 { font-size: 1.2rem; margin: 0 0 var(--gap); }
+
+/*
+ * Ink on a panel (design spec §4): dark text on the light grey. The surfaces that are panels are listed here and what they
+ * hold inherits it; a dark box (chat, screen, well) sets the light ink of the same table instead. The group comes before
+ * .muted and .error, so those two still win on an element that is both (.banner.error).
+ */
+.card, .modal, .settings-panel, .flow-panel, .conn-panel, .tab-panel,
+.plan-banner, .banner, .what-changed, .flow-issues, .flow-infeasible, .delete-confirm {
+  --ink: #303030; --ink-muted: #4a4a4a; --ink-title: #404040; --ink-link: #1a3fa0;
+  --ink-error: #aa0000; --ink-ok: #1e5a1e; --ink-warn: #6a4000; --muted: #4a4a4a;
+  color: var(--ink);
+}
+a, button.link { color: var(--ink-link); }
+.muted { color: var(--ink-muted); }
+.error { color: var(--ink-error); }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+/*
+ * Motion (design spec §7a): the entrances the later rules ask for by name, on transform and opacity only (the pipes' dash
+ * offset and brightness pulse aside), and the dots that breathe or blink on opacity alone. Under reduced motion every
+ * duration is zero and an animation runs once, for a millisecond: nothing moves.
+ */
+@keyframes fade-in { from { opacity: 0; } }
+@keyframes rise-in { from { opacity: 0; transform: translateY(-4px); } }
+@keyframes scale-in { from { opacity: 0; transform: scale(0.96); } }
+@keyframes slide-in-right { from { opacity: 0; transform: translateX(24px); } }
+@keyframes pop { from { opacity: 0; transform: scale(0.6); } }
+@keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+@keyframes blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0.25; } }
+@keyframes pipe-flow { to { stroke-dashoffset: -16; } }
+@keyframes pipe-pulse { from { filter: brightness(1.6); } }
+@media (prefers-reduced-motion: reduce) {
+  :root { --dur-fast: 0ms; --dur-base: 0ms; --dur-slow: 0ms; --dur-exit: 0ms; }
+  *, *::before, *::after {
+    animation-duration: 1ms !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important;
+  }
+}
 
 button, input, textarea, select { font: inherit; color: inherit; }
 button {
@@ -147,12 +188,15 @@ button.banner-chip {
 .what-changed ul { margin: 4px 0 0; padding-left: 20px; font-size: 0.9rem; }
 .what-changed li { overflow-wrap: anywhere; }
 
-.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin: 0; }
 .tabs [role='tab'] {
   border: none; border-bottom: 2px solid transparent; border-radius: 0; background: none;
   padding: 8px 14px; color: var(--muted);
 }
 .tabs [role='tab'][aria-selected='true'] { color: var(--text); border-bottom-color: var(--accent); }
+/* What a tab shows sits on a panel. The strip above has no margin and the padding stays at 8 px, so the chrome keeps its height:
+   the e2e tests aim at canvas centres. */
+.tab-panel { background: var(--panel); border: 2px solid var(--outline); box-shadow: var(--bevel-panel); padding: 8px; }
 
 .modal-backdrop {
   position: fixed; inset: 0; background: rgb(0 0 0 / 0.45);
@@ -290,21 +334,6 @@ button.avoid-chip-remove:hover:not(:disabled) { background: var(--surface-2); }
   --flow-edge: #7d8593;
   --flow-hover: rgb(47 111 214 / 0.12);
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --flow-owned: #1d3a2a; --flow-owned-line: #4fbf7f;
-    --flow-new: #1d2c47; --flow-new-line: #5b93ec;
-    --flow-raw: #272b33; --flow-raw-line: #6f7785;
-    --flow-out: #3a3218; --flow-out-line: #c7a447;
-    --flow-import: #26301e; --flow-import-line: #8fb36a;
-    --flow-free: #23262c;
-    --flow-missing: #3d1f1d; --flow-missing-line: #ff8a80;
-    --flow-line: #2a2338; --flow-line-line: #a98be6;
-    --flow-amber: #e0a85a;
-    --flow-edge: #8a92a0;
-    --flow-hover: rgb(91 147 236 / 0.18);
-  }
-}
 .flow { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
 .flow.has-panel { grid-template-columns: minmax(0, 1fr) minmax(260px, 340px); }
 .flow-main { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
@@ -420,7 +449,7 @@ fieldset.flow-panel-section > legend.flow-panel-title { float: left; width: 100%
 .swap-option.unusable, .option-choice.unusable { color: var(--muted); padding-left: 24px; font-size: 0.9rem; overflow-wrap: anywhere; }
 abbr.unit-hint { text-decoration: underline dotted; cursor: help; }
 button.link {
-  padding: 0; border: none; border-radius: 0; background: none; color: var(--accent); text-decoration: underline; font: inherit;
+  padding: 0; border: none; border-radius: 0; background: none; text-decoration: underline; font: inherit;
 }
 button.link:hover:not(:disabled) { background: none; text-decoration: none; }
 /* Takes / Makes: per good its rate, and the steps it comes from or goes to (fix spec §6.3). */
@@ -476,9 +505,6 @@ span.mat-toggle { display: inline-block; }
    EnderIO channel's colour (its stroke attribute), else the colour of what carries it, the same as the map's
    LOGISTICS_COLORS (src/client/map/overlays.ts); a hookup is dashed, like everything still to build to hook the line up. */
 :root { --conn-halo: rgb(0 0 0 / 0.55); }
-@media (prefers-color-scheme: dark) {
-  :root { --conn-halo: rgb(255 255 255 / 0.55); }
-}
 .conn-view { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
 .conn-view.has-panel { grid-template-columns: minmax(0, 1fr) minmax(260px, 340px); }
 .conn-main { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
