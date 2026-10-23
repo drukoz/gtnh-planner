@@ -1,9 +1,13 @@
 // Keyboard focus is always visible (restyle plan Phase 1 Task 2, design spec §4 and §6): one 3 px ring with no gap. On a
 // button inside a light panel and on a link in the top bar it is yellow: the ring touches the control's own dark border or
 // sits on the dark page, which is what keeps it readable. A link inside a light panel has no dark border of its own, so
-// there the ring is near black (the panel's focus ink, ruling R12), and so it is on a tick or a summary (ruling R13).
+// there the ring is near black (the panel's focus ink, ruling R12), and so it is on a tick or a summary (ruling R13) and on a slider (R30).
 
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test, expect, type Locator } from '@playwright/test';
+import { makeSampleWorld } from '../helpers/sample-world.ts';
 import { login, setName, createProject } from './helpers.ts';
 
 /** The focus ring of an element as the browser computes it. */
@@ -62,5 +66,27 @@ test('the focus ring of a tick and of a disclosure on a panel is near black too'
     await page.keyboard.press('Tab');
     await expect(control).toBeFocused();
     expect(await ring(control)).toEqual(PANEL_LINK_RING);
+  }
+});
+
+test('the focus ring of a slider on a panel is near black too', async ({ page }) => {
+  // The smart upload's radius slider sits on the World page's panel. Like a tick and a summary it has no dark edge of its own (its track is a
+  // well inside a box with no border), so a yellow ring on that light grey would read 1.6:1: it takes the focus ink of the panel (ruling R30).
+  // The same rule rings the 3D tab's layer slider and the map's Y level, which sit on a panel too.
+  const tmp = await mkdtemp(join(tmpdir(), 'gp-e2e-focus-'));
+  try {
+    const { worldDir } = await makeSampleWorld(tmp);
+    await login(page); await setName(page, 'Ann');
+    await page.goto('/world');
+    await page.setInputFiles('[data-testid=world-folder-input]', worldDir);
+    const slider = page.getByRole('slider', { name: 'Radius in chunks' });
+    await expect(slider).toBeVisible();
+    await slider.focus();
+    await page.keyboard.press('Shift+Tab');                                            // stepping off and back on is a keyboard focus
+    await page.keyboard.press('Tab');
+    await expect(slider).toBeFocused();
+    expect(await ring(slider)).toEqual(PANEL_LINK_RING);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
   }
 });

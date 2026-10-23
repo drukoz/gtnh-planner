@@ -439,7 +439,7 @@ describe('the Machine GUI controls', () => {
     const panels = blocks.find((b) => !b.nested && b.prelude.split(', ').includes('.tab-panel') && b.inner.includes('--ink:'));
     if (panels === undefined) throw new Error('styles.css has no rule that sets the panel ink');
     expect(declarations(panels.inner).filter(([name]) => name === '--ink-focus').map(([, value]) => value)).toEqual(['#1b1b1b']);
-    const link = ':where(a, button.link, summary, input[type=checkbox], input[type=radio]):focus-visible';   // ruling R13: a summary and a tick have no dark edge either
+    const link = ':where(a, button.link, summary, input[type=checkbox], input[type=radio], input[type=range]):focus-visible';   // ruling R13: a summary and a tick have no dark edge either; R30: nor has a slider
     expect(declared(link, 'outline-color')).toBe('var(--ink-focus)');
     // only the colour: the width and the offset stay the base ring's
     expect(declarations(ruleBody(link)).map(([name]) => name)).toEqual(['outline-color']);

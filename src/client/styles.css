@@ -245,11 +245,12 @@ details.settings-section > summary .muted { color: inherit; }
 
 /* The keyboard focus: a 3px ring that touches the control, whose own dark border keeps it readable on the light panels. */
 :focus-visible { outline: 3px solid var(--accent); outline-offset: 0; }
-/* A link has no dark edge of its own for that ring to touch, and neither has the summary of an inline disclosure or a tick (a
-   dark well with a bevel but no border), and yellow on the light grey of a panel measures 1.6:1: their ring takes the focus ink
-   of the surface they are on (yellow on the stone and in a dark box, near black on a panel). Same specificity as the ring
-   above, so it recolours it by coming after; the width and the offset stay the ring's. */
-:where(a, button.link, summary, input[type=checkbox], input[type=radio]):focus-visible { outline-color: var(--ink-focus); }
+/* A link has no dark edge of its own for that ring to touch, and neither has the summary of an inline disclosure, a tick (a
+   dark well with a bevel but no border) or a slider (a track inside a box with no border, and a transparent one), and yellow on
+   the light grey of a panel measures 1.6:1: their ring takes the focus ink of the surface they are on (yellow on the stone and in
+   a dark box, near black on a panel). Same specificity as the ring above, so it recolours it by coming after; the width and the
+   offset stay the ring's. */
+:where(a, button.link, summary, input[type=checkbox], input[type=radio], input[type=range]):focus-visible { outline-color: var(--ink-focus); }
 
 .field { display: flex; flex-direction: column; gap: 4px; }
 .field > span { font-size: 0.9rem; color: var(--ink-muted); }
