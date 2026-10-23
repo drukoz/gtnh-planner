@@ -467,6 +467,11 @@ span.mat-toggle { display: inline-block; }
 .mat-needed summary { cursor: pointer; }
 .mat-missing .tick-label { color: var(--error); font-weight: 600; }
 .missing-badge { color: var(--error); border-color: var(--error); background: var(--error-bg); }
+/* A made build part: how it is made and its recipe swap, each on a line of its own; a part to import is a warning. */
+.mat-made { flex-basis: 100%; overflow-wrap: anywhere; }
+.mat-swap { flex-basis: 100%; }
+.mat-swap summary { cursor: pointer; }
+.unmade-badge { background: var(--warn-bg); border-color: var(--warn-border); }
 .step-list { margin: 0; padding-left: 24px; display: flex; flex-direction: column; gap: 4px; }
 .step-row { padding: 3px 0; }
 .step-row .tick-label { overflow-wrap: anywhere; }

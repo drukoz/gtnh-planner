@@ -4,12 +4,14 @@
 // from (spec §3.3b), what unlocks them and which steps use them, the inputs nothing in the plan supplies (fix spec
 // §6.4), and the amount, stock and storage texts next to each row (spec §3.4, architecture §11.20). Amounts never read
 // 0: tiny rates read "1 every N days" (fix spec §6.1).
+// A made build part says how it is made and carries its swap list; a part nothing here can make says why (§11 entry 41).
 
 import { tierName } from '../../shared/gt/tiers.ts';
 import { isFluidKey, parseItemKey, type StuffKey } from '../../shared/keys.ts';
 import type { PlanIndex } from '../../shared/plan/balance.ts';
 import type { BomLine, LeafClass, Plan, PlanStep, RawInput, SourceInfo, StorageWhere } from '../../shared/types/plan.ts';
-import { formatNumber, formatPercent, formatRate } from '../format.ts';
+import type { Alternative } from '../components/SwapRecipe.tsx';
+import { formatNumber, formatPercent, formatRate, withArticle } from '../format.ts';
 
 type BuildGroup = NonNullable<BomLine['group']>;
 type Have = { total: number; reachable: number; where?: StorageWhere[] };
@@ -45,6 +47,8 @@ const WHOLE_TOLERANCE = 1e-9;
 const SMALLEST_TWO_DECIMALS = 0.01;
 /** The pack's Programmed Circuit (the loader's PROGRAMMED_CIRCUIT_ID): one item per configuration, the meta. */
 const PROGRAMMED_CIRCUIT_ID = 'gregtech:gt.integrated_circuit';
+/** How the ids of a placed line's own build steps start (Plan 5's layout steps: `layout:site`, `layout:place:<step>`, …). */
+const LAYOUT_STEP_PREFIX = 'layout:';
 
 // A fixed locale, so every friend's browser (and the tests) writes `1,440` the same way.
 const WHOLE = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
@@ -110,6 +114,13 @@ export interface BuildRow {
   avoid?: true;
   /** On a total of base materials (`BomLine.neededFor`, fix spec D15): each build line that needs it, and how much. */
   neededFor?: Array<{ key: StuffKey; name: string; amount: string }>;
+  /**
+   * How the build list makes it (`BomLine.made`, architecture §11 entry 41 (1)): in words (`madeText`), its recipe, and
+   * every way to make it (`Plan.buildAlternatives`) for the recipe swap.
+   */
+  made?: { text: string; recipeId: string; alternatives: Alternative[] };
+  /** A part the line cannot buy and the breakdown cannot make here, and why (`BomLine.unmade`, entry 41 (2)): the row says to import it. */
+  unmade?: 'no-recipe' | 'own-chain';
 }
 
 const NONE: ReadonlySet<StuffKey> = new Set();
@@ -130,11 +141,43 @@ function stockOf(have: Have | undefined): { have?: string; where?: string[] } {
 }
 
 /**
+ * How the build list makes a part, in words (architecture §11 entry 41 (1)): "made at a crafting table from LV Machine
+ * Hull, Basic Circuit", else "made in" the group's own machine ("your Basic Wiremill"), the one this line builds ("the
+ * Basic Assembler this line builds") or one still to get ("a Basic Fluid Extractor"); from what goes in (its children,
+ * in their order: none for a node the tree cuts at its depth cap or a recipe that consumes nothing); then the recipe's
+ * programmed circuit and cleanroom, those it needs ("(circuit 8; in a cleanroom)"). Undefined for a part that is not made.
+ */
+export function madeText(line: BomLine, names: Record<string, string>): string | undefined {
+  const { made } = line;
+  if (made === undefined) return undefined;
+  const { machine } = made;
+  let where: string;
+  if (machine === 'crafting table') where = 'at a crafting table';
+  else if (machine.source === 'owned') where = `in your ${machine.name}`;
+  else if (machine.source === 'line') where = `in the ${machine.name} this line builds`;
+  else where = `in ${withArticle(machine.name)}`;
+  const inputs = (line.children ?? []).map((child) => names[child.key] ?? child.key);
+  const notes = [...(made.circuit === undefined ? [] : [`circuit ${made.circuit}`]), ...(made.cleanroom === true ? ['in a cleanroom'] : [])];
+  return `made ${where}${inputs.length > 0 ? ` from ${inputs.join(', ')}` : ''}${notes.length > 0 ? ` (${notes.join('; ')})` : ''}`;
+}
+
+/**
+ * The build counts the placed line's parts (the controller's ruling on open question 3): the plan's build steps hold a
+ * layout step, as they do once Plan 5 merged the layout's parts into the build list and pooled them into its breakdown
+ * (architecture §11 entry 41 (9)), so a part's recipe or amount can differ from the unplaced line's.
+ */
+export function withLinePlaced(plan: Plan): boolean {
+  return plan.buildSteps.some((step) => step.id.startsWith(LAYOUT_STEP_PREFIX));
+}
+
+/**
  * The build tree as rows, depth first: each line, then its children when its `path` (`<parent path>/<key>`, a top-level
- * line's path is its key) is in `expanded`; a row of a good in `unavoidable` is marked `avoid`.
+ * line's path is its key) is in `expanded`; a row of a good in `unavoidable` is marked `avoid`. A made part says how it
+ * is made, with its swap list from `alternatives` (`Plan.buildAlternatives`); a part to import says why.
  */
 export function buildRows(
   lines: BomLine[], names: Record<string, string>, expanded: ReadonlySet<string>, unavoidable: ReadonlySet<StuffKey> = NONE,
+  alternatives?: Record<StuffKey, Alternative[]>,
 ): BuildRow[] {
   const rows: BuildRow[] = [];
   const visit = (line: BomLine, parentPath: string | null, depth: number, group: BuildGroup): void => {
@@ -148,6 +191,9 @@ export function buildRows(
     if (line.neededFor !== undefined && line.neededFor.length > 0) {
       row.neededFor = line.neededFor.map((n) => ({ key: n.key, name: buildName(n.key, names), amount: amountText(n.amount) }));
     }
+    const text = madeText(line, names);
+    if (line.made !== undefined && text !== undefined) row.made = { text, recipeId: line.made.recipeId, alternatives: alternatives?.[line.key] ?? [] };
+    if (line.unmade !== undefined) row.unmade = line.unmade;
     rows.push(row);
     if (expanded.has(path)) for (const child of children) visit(child, path, depth + 1, group);
   };
@@ -158,9 +204,10 @@ export function buildRows(
 /** The build list split into its groups (a line without one is a machine), in `BUILD_GROUPS` order; empty groups are left out. */
 export function groupBuildRows(
   lines: BomLine[], names: Record<string, string>, expanded: ReadonlySet<string>, unavoidable: ReadonlySet<StuffKey> = NONE,
+  alternatives?: Record<StuffKey, Alternative[]>,
 ): Array<{ id: BuildGroup; label: string; rows: BuildRow[] }> {
   return BUILD_GROUPS
-    .map(({ id, label }) => ({ id, label, rows: buildRows(lines.filter((line) => (line.group ?? DEFAULT_GROUP) === id), names, expanded, unavoidable) }))
+    .map(({ id, label }) => ({ id, label, rows: buildRows(lines.filter((line) => (line.group ?? DEFAULT_GROUP) === id), names, expanded, unavoidable, alternatives) }))
     .filter((group) => group.rows.length > 0);
 }
 
