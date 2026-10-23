@@ -12,7 +12,7 @@ import { PROGRAMMED_CIRCUIT_ID } from '../pack/recipes.ts';
 import { structureParts } from './build-cost.ts';
 import { buildCandidates, heldOption, keptOptions, type HeldAvoid, type LeafOracle, type LpRecipe, type PlanEnv } from './candidates.ts';
 import { makePrices } from './costs.ts';
-import { madePerRun, makersOf, ownedForParts, partMachine, settleRecipes, unmadeCause } from './howto.ts';
+import { madePerRun, makersOf, ownedForParts, partMachine, poolMakes, settleRecipes, unmadeCause } from './howto.ts';
 import { yieldToEventLoop } from './lp.ts';
 import { ownedPools, recipeCircuit } from './owned.ts';
 import { lineLeaf } from './pricing.ts';
@@ -22,6 +22,22 @@ export interface Bom {
   // optional addition
   /** The swap list of every good the lines make (architecture §11 entry 41 (3)), by key. */
   alternatives?: Map<StuffKey, PlanStep['alternatives']>;
+  // optional addition
+  /** The make plan: one job per made good at its pooled runs (architecture §11 entry 41 (4)), by key. */
+  makes?: BomMake[];
+}
+
+/** One machine or crafting job of the build: the pooled runs of one made good (architecture §11 entry 41 (4)). */
+export interface BomMake {
+  key: StuffKey;
+  /** `runs` = the pooled whole runs. */
+  made: BomMade;
+  /** Runs × what one run makes. */
+  amount: number;
+  /** Consumed by all the runs, by key. */
+  inputs: Array<{ key: StuffKey; amount: number }>;
+  /** The made or unmade inputs but the input of a back edge from this good, and for a `line` machine its own key and structure parts that are top-level lines; sorted. */
+  after: StuffKey[];
 }
 
 type Group = NonNullable<BomLine['group']>;
@@ -237,7 +253,7 @@ export async function buildBom(
     .map((d) => ({ key: d.key, amount: round9(d.amount), why: d.whys.join('; '), group: d.group }))
     .sort((a, b) => GROUP_ORDER.indexOf(a.group) - GROUP_ORDER.indexOf(b.group) || byString(a.key, b.key));
   const expanded = await expandWith(pack, lines, { ...opts, steps });
-  return { lines: expanded.lines, totals: expanded.totals, warnings: [...warnings, ...expanded.warnings], alternatives: expanded.alternatives };
+  return { lines: expanded.lines, totals: expanded.totals, warnings: [...warnings, ...expanded.warnings], alternatives: expanded.alternatives, makes: expanded.makes };
 }
 
 /**
@@ -245,16 +261,22 @@ export async function buildBom(
  * does for the line's plan: in its environment and at its prices (`lineLeaf`: stop items at their cost-model price,
  * derived leaves at their own chain's cost; the plain prices of `planBasis` when the settings name no target the export
  * knows), so the same lines break down the same way in both. One output line per input line, in input order. The return
- * shape is architecture §11.15's, so the breakdown's warnings are not passed on here. With `opts.steps` the machine pass
- * knows the line's machines and the owned ones as `buildBom` does; without them, no line machines and only the
- * context's owned ones.
+ * shape is architecture §11.15's plus the build's make plan (`Bom.makes`), so the breakdown's warnings are not passed on
+ * here. With `opts.steps` the machine pass knows the line's machines and the owned ones as `buildBom` does; without them,
+ * no line machines and only the context's owned ones.
  */
 export async function expandBomLines(
-  pack: Pack, lines: BomLine[], settings: PlanSettings, ctx: PlanContext, opts?: { steps?: readonly PlanStep[] },
-): Promise<{ lines: BomLine[]; totals: BomLine[] }> {
+  pack: Pack, lines: BomLine[], settings: PlanSettings, ctx: PlanContext,
+  // optional addition
+  opts?: { steps?: readonly PlanStep[] },
+): Promise<{
+  lines: BomLine[]; totals: BomLine[];
+  // optional addition
+  makes?: BomMake[];
+}> {
   const { env, leaf } = await lineLeaf(pack, settings, ctx);
   const expanded = await expandWith(pack, lines, { settings, env, leaf, ctx, ...(opts?.steps === undefined ? {} : { steps: opts.steps }) });
-  return { lines: expanded.lines, totals: expanded.totals };
+  return { lines: expanded.lines, totals: expanded.totals, makes: expanded.makes };
 }
 
 interface Expansion {
@@ -465,22 +487,27 @@ function madeParts(pack: Pack, lines: readonly BomLine[], x: Expansion, book: Re
 }
 
 /**
- * The breakdown `buildBom` and `expandBomLines` share, so the two can never differ (architecture §11 entry 41 (1)–(3)).
+ * The breakdown `buildBom` and `expandBomLines` share, so the two can never differ (architecture §11 entry 41 (1)–(4)).
  * Each line keeps its key, amount, why and group and gets what storage holds of it. A good is a leaf when it is a free
  * input (`freeLeaves`: always, even where the line itself plans its generator), when the line can buy it, or when it is a
  * base material out of reach (the material itself is what the group must unlock, as solve.ts names it). Every other good
  * is made one way across the whole list, by the recipe the book settled for it (`settleRecipes`: cheapest first from the
  * leaves, at gross cost, a pinned good by its pin while that settles it), on the machine `madeParts` picks — or it is
  * `unmade`, by cause. A made node has `made` and `ceil(amount / made per run)` runs, whose consumed inputs × runs are its
- * children (sorted by key, ruling R7); the tree stops at `MAX_DEPTH`, where a node keeps its `made` and has no children.
- * `totals` sums the leaves and unmade nodes per key, sorted by key, each with the top-level lines that need it
- * (`neededFor`, fix spec D15: by key, in the order of the lines) and the why "for <their names>", each name once (ruling
- * P18); `alternatives` the swap list of every made good. `warnings` holds the graph's `graph-too-big`, in the build list's
- * words, when the graph hit its recipe cap.
+ * children (sorted by key, ruling R7); the tree stops at `MAX_DEPTH`, where a node keeps its `made` and has no children,
+ * and rounds whole runs per node. `totals` are the pooled leaves (`poolMakes`): every made good's demand summed over the
+ * choices' DAG for the whole list, below the tree's depth cap too, before whole runs are rounded, so a good several parts
+ * need is made in whole runs once; the leaves and unmade goods per key, sorted by key, each with the top-level lines that
+ * need it (`neededFor`, fix spec D15: by key, in the order of the lines, each one's exact share scaled to the pooled
+ * amount, the last taking the remainder, so they add up to it) and the why "for <their names>", each name once (ruling
+ * P18). `makes` is one job per made good at its pooled runs (`BomMake`); `alternatives` the swap list of every made good.
+ * `warnings` holds the graph's `graph-too-big`, in the build list's words, when the graph hit its recipe cap.
  */
 async function expandWith(
   pack: Pack, lines: readonly BomLine[], expansion: Expansion,
-): Promise<{ lines: BomLine[]; totals: BomLine[]; warnings: PlanWarning[]; alternatives: Map<StuffKey, PlanStep['alternatives']> }> {
+): Promise<{
+  lines: BomLine[]; totals: BomLine[]; makes: BomMake[]; warnings: PlanWarning[]; alternatives: Map<StuffKey, PlanStep['alternatives']>;
+}> {
   const x: Expansion = { ...expansion, leaf: freeLeaves(pack, expansion) };
   const leafKeys = new Map<StuffKey, boolean>();
   const isLeaf = (key: StuffKey): boolean => {
@@ -495,10 +522,7 @@ async function expandWith(
   const targets = [...new Set(lines.map((l) => l.key))].filter((key) => !isLeaf(key));
   const book = targets.length > 0 ? await recipeBook(pack, x, targets, isLeaf) : NO_RECIPES;
   const parts = madeParts(pack, lines, x, book, isLeaf);
-  const totals = new Map<StuffKey, number>();
-  /** Per total, what each top-level line (by key, first need first) needs of it. */
-  const neededBy = new Map<StuffKey, Map<StuffKey, number>>();
-  const node = (line: BomLine, depth: number, top: StuffKey): BomLine => {
+  const node = (line: BomLine, depth: number): BomLine => {
     const out: BomLine = { key: line.key, amount: line.amount, why: line.why };
     if (line.group !== undefined) out.group = line.group;
     const have = haveOf(x.ctx, line.key);
@@ -507,35 +531,53 @@ async function expandWith(
     const how = parts.how(line.key);
     if (typeof how !== 'object') {
       if (how !== undefined) out.unmade = how;
-      totals.set(line.key, (totals.get(line.key) ?? 0) + line.amount);
-      const byTop = neededBy.get(line.key) ?? new Map<StuffKey, number>();
-      byTop.set(top, (byTop.get(top) ?? 0) + line.amount);
-      neededBy.set(line.key, byTop);
       return out;
     }
     const runs = Math.ceil(line.amount / how.perRun - TINY);
     out.made = parts.madeOf(line.key, how.lp, runs);
     if (depth >= MAX_DEPTH) return out;   // the tree stops here; the choices below it still stand
     const why = `for ${pack.nameOf(line.key)}`;
-    const children = book.inputsOf(how.lp).map(([input, perRun]) => node({ key: input, amount: round9(perRun * runs), why }, depth + 1, top));
+    const children = book.inputsOf(how.lp).map(([input, perRun]) => node({ key: input, amount: round9(perRun * runs), why }, depth + 1));
     if (children.length > 0) out.children = children;
     return out;
   };
-  const expanded = lines.map((line) => node(line, 0, line.key));
-  return {
-    warnings: book.warnings,
-    lines: expanded,
-    totals: [...totals].sort(([a], [b]) => byString(a, b)).map(([key, amount]) => {
-      const neededFor = [...(neededBy.get(key) ?? [])].map(([top, n]) => ({ key: top, amount: round9(n) }));
-      // Each name once: the programmed circuits of several configurations are all "Programmed Circuit".
-      const names = [...new Set(neededFor.map((n) => pack.nameOf(n.key)))];
-      const total: BomLine = { key, amount: round9(amount), why: `for ${names.join(', ')}`, neededFor };
-      const how = parts.how(key);
-      if (typeof how === 'string') total.unmade = how;
-      const have = haveOf(x.ctx, key);
-      if (have !== undefined) total.have = have;
-      return total;
-    }),
-    alternatives: parts.alternatives(),
-  };
+  const expanded = lines.map((line) => node(line, 0));
+  // The pooled pass (architecture §11 entry 41 (4)): every made good's demand summed over the choices' DAG for the whole
+  // list, below the tree's depth cap too, before whole runs are rounded.
+  const pooled = poolMakes(lines.map((l) => ({ key: l.key, amount: l.amount })), (key) => {
+    const how = parts.how(key);
+    return typeof how === 'object' ? { perRun: how.perRun, inputs: book.inputsOf(how.lp) } : null;
+  });
+  const totals = [...pooled.leaves].sort(([a], [b]) => byString(a, b)).map(([key, amount]): BomLine => {
+    const shares = [...(pooled.shares.get(key) ?? [])];
+    const sum = shares.reduce((s, [, n]) => s + n, 0);
+    let left = amount;
+    const neededFor = shares.map(([top, n], i) => {
+      const part = i === shares.length - 1 ? round9(left) : round9(sum > 0 ? (n * amount) / sum : 0);
+      left -= part;
+      return { key: top, amount: part };
+    });
+    // Each name once: the programmed circuits of several configurations are all "Programmed Circuit".
+    const names = [...new Set(neededFor.map((n) => pack.nameOf(n.key)))];
+    const total: BomLine = { key, amount, why: `for ${names.join(', ')}`, neededFor };
+    const how = parts.how(key);
+    if (typeof how === 'string') total.unmade = how;
+    const have = haveOf(x.ctx, key);
+    if (have !== undefined) total.have = have;
+    return total;
+  });
+  const makes = [...pooled.runs].sort(([a], [b]) => byString(a, b)).map(([key, runs]): BomMake => {
+    const how = parts.how(key) as { lp: LpRecipe; perRun: number };
+    const inputs = book.inputsOf(how.lp).map(([input, per]) => ({ key: input, amount: round9(per * runs) }));
+    const back = new Set(pooled.backEdges.filter(([from]) => from === key).map(([, to]) => to));
+    const after = new Set(inputs.filter((i) => !isLeaf(i.key) && !back.has(i.key)).map((i) => i.key));
+    const made = parts.madeOf(key, how.lp, runs);
+    // A machine this line builds runs the job once it stands: after its own craft and structure steps.
+    if (typeof made.machine === 'object' && made.machine.source === 'line') {
+      const m = pack.machines.get(made.machine.mteId);
+      if (m !== undefined) for (const k of [m.itemKey, ...structureParts(pack, m).keys()]) if (lines.some((l) => l.key === k)) after.add(k);
+    }
+    return { key, made, amount: round9(runs * how.perRun), inputs, after: [...after].sort(byString) };
+  });
+  return { warnings: book.warnings, lines: expanded, totals, makes, alternatives: parts.alternatives() };
 }

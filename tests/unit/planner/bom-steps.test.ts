@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { MINI_GT, miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec, type IngredientSpec, type RecipeSpec } from '../../helpers/pack-spec.ts';
-import { ANY_LV_CIRCUIT, largeBenderSpec } from '../../helpers/build-fixtures.ts';
-import { deepSpec, loopSpec, packedTableSpec, standInPressSpec, variantCellSpec } from '../../helpers/howto-fixtures.ts';
+import { ANY_LV_CIRCUIT, largeBenderSpec, withBuildRecipes } from '../../helpers/build-fixtures.ts';
+import { COIL_MV, coilSpec, deepSpec, ebfStep, loopSpec, packedTableSpec, standInPressSpec, variantCellSpec } from '../../helpers/howto-fixtures.ts';
 import { buildBom, expandBomLines, partName } from '../../../src/server/planner/bom.ts';
 import { buildSteps } from '../../../src/server/planner/steps.ts';
 import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
@@ -140,7 +140,7 @@ describe('buildBom', () => {
     // t:b was never expanded, so nothing above it settles: the assembler is unmade, and the warning says why
     expect(bom.totals.map((l) => [l.key, l.amount, l.unmade])).toEqual([['machine:121@0', 1, 'no-recipe']]);
     const r = await expandBomLines(p, bom.lines.map(({ key, amount, why, group }) => ({ key, amount, why, ...(group === undefined ? {} : { group }) })), settings, emptyContextForTest());
-    expect(Object.keys(r).sort()).toEqual(['lines', 'totals']);
+    expect(Object.keys(r).sort()).toEqual(['lines', 'makes', 'totals']);
     expect(r.totals).toEqual(bom.totals);
   });
   it('breaks the build list down at the line\'s prices, the same in expandBomLines, with a derived leaf and a stop item', async () => {
@@ -532,6 +532,76 @@ describe('how each build part is made', () => {
       { settings, env: b.env, leaf: b.leaf, ctx: emptyContextForTest() });
     expect(childOf(bom.lines[0], 't:shield@0')?.made?.recipeId).toBe('b-plain');
     expect(bom.alternatives?.get('t:shield@0')?.map((a) => [a.recipeId, a.rawCost])).toEqual([['a-gas', 1], ['b-plain', 1]]);
+  });
+});
+
+describe('the pooled build totals and the make plan', () => {
+  // Architecture §11 entry 41 (4): each made good's demand over the whole list, below the tree's depth too, summed before
+  // whole runs are rounded; the tree itself keeps whole runs per node.
+  const coilPack = packFromSpec(coilSpec());
+
+  it('pools each part\'s demand before rounding whole runs', async () => {
+    const b = planBasis(coilPack, COIL_MV, emptyContextForTest());
+    const bom = await buildBom(coilPack, [ebfStep()], { settings: COIL_MV, env: b.env, leaf: b.leaf, ctx: emptyContextForTest() });
+    // 4 coils take 32 wires <- 32 cupronickel ingots <- 16 alloy runs (16 copper, 16 nickel) and 32 foils <- 8 mica dust and
+    // 576 L of molten tin; the casing and the pipe take 72 L and an iron ingot each; 720 L <- 5 tin dust
+    expect(bom.totals.map((t) => [t.key, t.amount, t.unmade])).toEqual([
+      ['machine:1000@0', 1, 'no-recipe'], ['t:copper_ingot@0', 16, undefined], ['t:iron_ingot@0', 2, undefined],
+      ['t:mica_dust@0', 8, undefined], ['t:nickel_dust@0', 16, undefined], ['t:tin_dust@0', 5, undefined]]);
+    // the tree still rounds per node: its tin dust adds up to 4 + 1 + 1 = 6
+    const dustIn = (lines: readonly BomLine[]): number => lines.reduce((sum, l) => sum + (l.key === 't:tin_dust@0' ? l.amount : 0) + dustIn(l.children ?? []), 0);
+    expect(dustIn(bom.lines)).toBe(6);
+    const molten = bom.lines.find((l) => l.key === 't:tin_casing@0')?.children?.find((c) => c.key === 'fluid:molten.tin');
+    expect([molten?.amount, molten?.made?.runs, molten?.children?.map((c) => [c.key, c.amount])]).toEqual([72, 1, [['t:tin_dust@0', 1]]]);
+    expect(bom.makes?.map((m) => [m.key, m.made.runs, m.amount])).toEqual([
+      ['fluid:molten.tin', 5, 720], ['t:coil@0', 4, 4], ['t:cupro_wire@0', 32, 32], ['t:cupronickel_ingot@0', 16, 32],
+      ['t:mica_foil@0', 8, 32], ['t:tin_casing@0', 1, 1], ['t:tin_pipe@0', 1, 1]]);
+    const make = (key: string) => bom.makes?.find((m) => m.key === key);
+    expect([make('fluid:molten.tin')?.inputs, make('fluid:molten.tin')?.after]).toEqual([[{ key: 't:tin_dust@0', amount: 5 }], []]);
+    expect([make('t:coil@0')?.inputs, make('t:coil@0')?.after]).toEqual([
+      [{ key: 'fluid:molten.tin', amount: 576 }, { key: 't:cupro_wire@0', amount: 32 }, { key: 't:mica_foil@0', amount: 32 }],
+      ['fluid:molten.tin', 't:cupro_wire@0', 't:mica_foil@0']]);
+    const tin = bom.totals.find((t) => t.key === 't:tin_dust@0');
+    expect(tin?.neededFor).toEqual([{ key: 't:coil@0', amount: 4 }, { key: 't:tin_casing@0', amount: 0.5 }, { key: 't:tin_pipe@0', amount: 0.5 }]);
+    expect(tin?.why).toBe('for Cupronickel Coil Block, Tinned Casing, Tin Pipe');
+  });
+
+  it('shares a whole run\'s leftover among the lines that need it', async () => {
+    const r = await expandBomLines(coilPack, [{ key: 't:coil@0', amount: 4, why: 'a' }, { key: 't:tin_casing@0', amount: 1, why: 'b' }], COIL_MV, emptyContextForTest());
+    // ceil(648 / 144) = 5 tin dust: the coils' share is 4 × 5 / 4.5, the casing takes the remainder
+    const tin = r.totals.find((t) => t.key === 't:tin_dust@0');
+    expect(tin?.amount).toBe(5);
+    expect(tin?.neededFor).toEqual([{ key: 't:coil@0', amount: 4.444444444 }, { key: 't:tin_casing@0', amount: 0.555555556 }]);
+  });
+
+  it('keeps what storage holds of a pooled total', async () => {
+    const ctx = { ...emptyContextForTest(), storage: new Map([['t:tin_dust@0', { total: 7, reachable: 3 }]]) };
+    const r = await expandBomLines(coilPack, [{ key: 't:tin_casing@0', amount: 1, why: 'casing' }], COIL_MV, ctx);
+    expect(r.totals.find((t) => t.key === 't:tin_dust@0')).toMatchObject({ amount: 1, have: { total: 7, reachable: 3 } });
+  });
+
+  it('pools the parts below the depth the list shows', async () => {
+    const r = await expandBomLines(packFromSpec(deepSpec()), [{ key: 't:d0@0', amount: 1, why: 'deep' }], { ...defaultSettings(), tier: 1 }, emptyContextForTest());
+    expect(r.totals.map((l) => [l.key, l.amount])).toEqual([['t:copper_ingot@0', 2]]);   // the tree cuts the chain at Deep 12
+    expect(r.makes?.map((m) => m.key)).toEqual(Array.from({ length: 15 }, (_, i) => `t:d${i}@0`).sort());
+    expect(r.makes?.map((m) => m.made.runs)).toEqual(Array.from({ length: 15 }, () => 1));
+  });
+
+  it('runs a job on a machine the line builds after that machine\'s own craft and structure parts', async () => {
+    // A Hot Plate is blasted from an Iron Ingot, in the EBF the line builds (`opts.steps`; the pack crafts the EBF from two
+    // ingots, so its multiblock is one the group can build): the job waits for the EBF's item and for the structure part
+    // among the lines (the casing), not for the structure parts that are no lines (the coils, the pipe) or the ingot (a leaf).
+    const spec = withBuildRecipes(coilSpec(), [1000], [['t:iron_ingot@0', 2]]);
+    spec.items?.push({ key: 't:hot_plate@0', name: 'Hot Plate' });
+    spec.recipes?.push({ id: 'ebf-plate', map: 'gt.recipe.blastfurnace', in: [['t:iron_ingot@0', 1]], out: [['t:hot_plate@0', 1]], eut: 120, dur: 1000, sv: 1000, meta: { coilHeat: 1000 } });
+    const lines = [{ key: 't:hot_plate@0', amount: 1, why: 'plate' }, { key: 'machine:1000@0', amount: 1, why: 'ebf' }, { key: 't:tin_casing@0', amount: 1, why: 'casing' }];
+    const blastOf = (r: Awaited<ReturnType<typeof expandBomLines>>) => r.makes?.find((m) => m.key === 't:hot_plate@0');
+    const line = blastOf(await expandBomLines(packFromSpec(spec), lines, COIL_MV, emptyContextForTest(), { steps: [ebfStep()] }));
+    expect(line?.made.machine).toMatchObject({ mteId: 1000, source: 'line' });
+    expect(line?.after).toEqual(['machine:1000@0', 't:tin_casing@0']);
+    // without the line's steps no machine is the line's: the job runs on a new EBF and waits for nothing
+    const none = blastOf(await expandBomLines(packFromSpec(spec), lines, COIL_MV, emptyContextForTest()));
+    expect([none?.made.machine, none?.after]).toEqual([expect.objectContaining({ mteId: 1000, source: 'new' }), []]);
   });
 });
 
