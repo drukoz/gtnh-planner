@@ -340,14 +340,16 @@ details.settings-section > summary .muted { color: inherit; }
 .project-name:hover { border-color: var(--btn-hi); }
 .project-name:focus { border-color: var(--accent); background: #000000; }
 /* The connection is a readout with a square dot: green and breathing while live (opacity only), amber and blinking while the
-   page reconnects. No panel is drawn around the head: its height is the chrome's budget. */
+   page reconnects. Twice and three times, then the dot holds still at its full opacity (no fill mode): what moves by itself beside
+   the content stops within 5 s (ruling R31, WCAG 2.2.2); the word says the state. No panel is drawn around the head: its height is
+   the chrome's budget. */
 .connection {
   display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px; white-space: nowrap;
   background: var(--screen); color: #ffaa00; font: 14px/1 var(--font-pixel);
 }
-.connection::before { content: ''; flex: none; width: 8px; height: 8px; background: #ffaa00; animation: blink 1.6s steps(2) infinite; }
+.connection::before { content: ''; flex: none; width: 8px; height: 8px; background: #ffaa00; animation: blink 1.6s steps(2) 3; }
 .connection.live { color: #55ff55; }
-.connection.live::before { background: #55ff55; animation: breathe 2s ease-in-out infinite; }
+.connection.live::before { background: #55ff55; animation: breathe 2s ease-in-out 2; }
 
 /* The plan banner is a chat box too (design spec §6). A problem is red in the pixel font, with its items in a paler red; anything
    else it says (another warning, a hint, what unlocks) is yellow, and the busy line grey. Hints and problems no longer share
@@ -727,8 +729,10 @@ button.avoid-chip-remove { width: 24px; height: 24px; min-height: 0; padding: 0;
 .flow-edge.hl .flow-edge-flow { stroke: #ffffff; animation: pipe-flow var(--pipe-dur, 1s) linear infinite; }
 .flow-edge.dim .flow-edge-flow { animation-play-state: paused; }
 /* Panning stays smooth (design spec §7 "Motion budget"): the pipes stand still while the diagram is dragged, and above 200 edges
-   only the lit ones move (pipe-motion.ts). After the lit rule, which sets the whole animation, its play state too. */
+   only the lit ones move (pipe-motion.ts). While this browser has the pipes paused (the toolbar's Pause pipes, ruling R31: WCAG
+   2.2.2) they stand still where they are, their dashes showing. After the lit rule, which sets the whole animation, its play state too. */
 .flow-canvas.dragging .flow-edge-flow { animation-play-state: paused; }
+.flow-canvas.pipes-paused .flow-edge-flow { animation-play-state: paused; }
 .flow-canvas.many-edges .flow-edge:not(.hl) .flow-edge-flow { animation: none; }
 /* A lit arrow's good and rate, on an NEI tag above the boxes; it never takes the pointer from what is under it. Its text stays the
    diagram font at 11px: edgeTag sizes the tag at 6.5px per character. */
@@ -1085,9 +1089,11 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
 .conn-edge.selected .conn-edge-rim { stroke: var(--accent); animation: pipe-pulse 400ms var(--ease-out); }
 .conn-via-hand:hover .conn-edge-line, .conn-via-hand.selected .conn-edge-line { stroke: #1b1b1b; }
 /* Panning stays smooth (design spec §7 "Motion budget"): the pipes stand still while the picture is dragged, and above 200 links
-   only the picked one moves (pipe-motion.ts, `data-pipes` on the area). */
+   only the picked one moves (pipe-motion.ts, `data-pipes` on the area). While this browser has the pipes paused (`data-pipes` is
+   `paused`, ruling R31) every pipe stands still where it is. */
 .connections > svg.dragging .conn-edge-flow { animation-play-state: paused; }
 .connections[data-pipes='lit'] .conn-edge:not(.selected) .conn-edge-flow { animation: none; }
+.connections[data-pipes='paused'] .conn-edge-flow { animation-play-state: paused; }
 /* a link's label, in white on a dark halo over the well; 11px of the diagram font, as ELK sizes it */
 .conn-label {
   fill: #ffffff; font-size: 11px; paint-order: stroke; stroke: #1b1b1b; stroke-width: 3px; stroke-linejoin: round;

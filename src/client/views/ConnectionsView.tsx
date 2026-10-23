@@ -16,10 +16,12 @@ import { DYE_HEX } from '../../shared/layout/enderio.ts';
 import type { DyeColor, Layout } from '../../shared/types/layout.ts';
 import type { Plan } from '../../shared/types/plan.ts';
 import { messageOf } from '../api/client.ts';
+import { PipesButton } from '../components/PipesButton.tsx';
 import {
   CONN_LINE_HEIGHT, CONN_TITLE_HEIGHT, connectionsElk, connectionsFromElk, connectionsGraph, faceLines, faceModeText, hasLine, pickDetails,
   type ConnEdge, type ConnFace, type ConnGraph, type ConnLayout, type ConnPick, type ConnVia,
 } from '../connections/model.ts';
+import { usePipesPaused } from '../state/pipes-paused.ts';
 import { useLayout } from '../state/use-layout.ts';
 import { layoutFlow } from '../workers/elk.worker.ts';
 import { DRAG_THRESHOLD, fitView, resizeView, sameView, wheelFactor, zoomAround, type Size, type View } from './pan-zoom.ts';
@@ -194,7 +196,8 @@ function EdgeShape(props: { edge: PlacedEdge; selected: boolean; onPick(pick: Co
 }
 
 /**
- * The picture, under a Fit button, in an area as tall as the picture at its own size (at most 75vh) that moves and
+ * The picture, under a Fit button and the Pause pipes button (ruling R31: paused, the area's `data-pipes` is `paused` and no pipe
+ * moves), in an area as tall as the picture at its own size (at most 75vh) that moves and
  * zooms it as the flow diagram does: a drag moves it, from a box too once the pointer has moved DRAG_THRESHOLD px (a
  * plain click still picks, and the click that ends a drag picks nothing), the wheel or a pinch zooms around the
  * pointer, and the arrow keys move it while the area has focus. Fit, also when the picture first shows and whenever its
@@ -214,6 +217,8 @@ function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: bool
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [view, setView] = useState<View>({ x: PAD, y: PAD, k: 1 });
   const [dragging, setDragging] = useState(false);
+  /** The pipes stand still where they are: this browser's Pause pipes (ruling R31). */
+  const pipesPaused = usePipesPaused();
   const drag = useRef<{ pointer: number; sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null);
   const dragged = useRef(false);
   // The view is fitted again only when the boxes change, not when someone else's change only moves a rate.
@@ -316,10 +321,12 @@ function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: bool
     <>
       <div className="conn-toolbar row">
         <button type="button" className="small" onClick={() => fit()}>Fit</button>
+        <PipesButton paused={pipesPaused} />
         <span className="muted small">{HINT_TEXT}</span>
       </div>
-      {/* above PIPE_ANIMATION_LIMIT links only the picked link's pipe moves, so a huge line still pans smoothly (pipe-motion.ts) */}
-      <div className="connections" data-testid="connections" aria-busy={busy} data-pipes={pipeAnimationMode(picture.edges.length)}>
+      {/* above PIPE_ANIMATION_LIMIT links only the picked link's pipe moves, so a huge line still pans smoothly (pipe-motion.ts);
+          while this browser has the pipes paused, none moves */}
+      <div className="connections" data-testid="connections" aria-busy={busy} data-pipes={pipesPaused ? 'paused' : pipeAnimationMode(picture.edges.length)}>
         <svg
           ref={svgRef}
           role="group"

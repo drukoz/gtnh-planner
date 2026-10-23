@@ -155,3 +155,43 @@ test('connections pipes move', async ({ page }) => {
   expect(name).toBe('pipe-flow');
   expect(after, 'the dashes have moved along the pipe in a quarter of a second').not.toBe(before);
 });
+
+// Ruling R31 (WCAG 2.2.2 Pause, Stop, Hide): the pipes move for as long as a diagram is shown, so the toolbars of both diagrams have a
+// button that stops them where they are. It is one setting for this browser: it holds when the page is loaded again and on the other
+// diagram, until Play pipes.
+test('a Pause pipes button stops the pipes of both diagrams, and this browser remembers it', async ({ page }) => {
+  const view = await openConnections(page);
+  const playState = (selector: string): Promise<string> => page.locator(selector).first().evaluate((el) => getComputedStyle(el).animationPlayState);
+
+  // the line's Flow diagram: its pipes move until the button stops them
+  await page.getByRole('tab', { name: 'Flow' }).click();
+  const canvas = page.locator('svg.flow-canvas');
+  await expect(canvas.locator('.flow-edge-flow').first()).toBeAttached();
+  expect(await playState('.flow-edge-flow')).toBe('running');
+  const pause = page.getByRole('button', { name: 'Pause pipes' });
+  await expect(pause).toHaveAttribute('aria-pressed', 'false');
+  await pause.click();
+  await expect(page.getByRole('button', { name: 'Play pipes' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(canvas).toHaveClass(/\bpipes-paused\b/);
+  expect(await playState('.flow-edge-flow')).toBe('paused');
+
+  // loaded again, the page keeps them paused
+  await page.reload();
+  await expect(page.locator('svg.flow-canvas .flow-edge-flow').first()).toBeAttached();
+  await expect(page.getByRole('button', { name: 'Play pipes' })).toHaveAttribute('aria-pressed', 'true');
+  expect(await playState('.flow-edge-flow')).toBe('paused');
+
+  // the Connections tab has them paused too, and its Play plays the pipes of both
+  await page.getByRole('tab', { name: 'Connections' }).click();
+  await expect(view.locator('.conn-edge-flow').first()).toBeAttached();
+  await expect(view).toHaveAttribute('data-pipes', 'paused');
+  expect(await playState('.conn-edge-flow')).toBe('paused');
+  await page.getByRole('button', { name: 'Play pipes' }).click();
+  await expect(page.getByRole('button', { name: 'Pause pipes' })).toHaveAttribute('aria-pressed', 'false');
+  await expect(view).toHaveAttribute('data-pipes', 'all');
+  expect(await playState('.conn-edge-flow')).toBe('running');
+  await page.getByRole('tab', { name: 'Flow' }).click();
+  await expect(page.locator('svg.flow-canvas .flow-edge-flow').first()).toBeAttached();
+  await expect(page.locator('svg.flow-canvas')).not.toHaveClass(/\bpipes-paused\b/);
+  expect(await playState('.flow-edge-flow')).toBe('running');
+});

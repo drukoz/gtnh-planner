@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { CONN_NODE_WIDTH, connectionsElk, connectionsFromElk, connectionsGraph, type ConnNode } from '../../src/client/connections/model.ts';
+import { setPipesPaused } from '../../src/client/state/pipes-paused.ts';
 import { ConnectionsShell, ConnectionsView, type ConnectionsShellProps } from '../../src/client/views/ConnectionsView.tsx';
 import { PROJECT_TABS, tabFromHash } from '../../src/client/views/project-tabs.ts';
 import { DYE_HEX } from '../../src/shared/layout/enderio.ts';
@@ -256,5 +257,23 @@ describe('the Connections pipes', () => {
   it('draws square boxes, the face rows\' part starting where the rect ends', () => {
     const box = /<g data-node="step:a"[^>]*>(.*?)<\/g>/s.exec(shell())![1]!;
     expect(box).toMatch(/<\/title><rect width="260" height="46" rx="0"><\/rect><path d="M 0 46 H 260 V 84 /);
+  });
+
+  // ruling R31 (WCAG 2.2.2): the pipes move for as long as the picture is shown, so a text button after Fit stops them all, the one
+  // setting of this browser that the Flow toolbar shares (state/pipes-paused.ts); paused, the area says so in `data-pipes`
+  it('offers a Pause pipes button after Fit, and stops every pipe while the pipes are paused', () => {
+    expect(shell()).toMatch(/<button type="button" class="small">Fit<\/button><button type="button" class="small" aria-pressed="false">Pause pipes<\/button><span class="muted small">/);
+    setPipesPaused(true);
+    try {
+      const html = shell();
+      expect(html).toContain('<button type="button" class="small">Fit</button><button type="button" class="small" aria-pressed="true">Play pipes</button>');
+      expect(html).toContain('<div class="connections" data-testid="connections" aria-busy="false" data-pipes="paused">');
+      // a pause stops the picked link of a huge picture too, the one pipe that moves there
+      const links = Array.from({ length: 201 }, (_, i) => ({ ...redLink, id: `link:${i}` }));
+      expect(withEdges(links)).toContain('aria-busy="false" data-pipes="paused">');
+    } finally {
+      setPipesPaused(false);
+    }
+    expect(shell()).toContain('aria-busy="false" data-pipes="all">');
   });
 });

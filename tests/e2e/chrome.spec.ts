@@ -86,5 +86,7 @@ test('reduced motion stops the live dot', async ({ page }) => {
 
   expect(await dot()).toEqual({ name: 'breathe', count: '1' });                       // the animation is there, run once for a millisecond
   await page.emulateMedia({ reducedMotion: 'no-preference' });
-  expect(await dot(), 'without the preference the dot breathes for ever, so the check above is not vacuous').toEqual({ name: 'breathe', count: 'infinite' });
+  // without the preference the dot breathes twice, so the check above is not vacuous; twice and no more (ruling R31, WCAG 2.2.2: what
+  // moves by itself beside the content stops within 5 s)
+  expect(await dot(), 'without the preference the dot breathes twice').toEqual({ name: 'breathe', count: '2' });
 });

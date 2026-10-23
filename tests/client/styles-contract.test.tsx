@@ -590,9 +590,10 @@ describe('the Machine GUI chrome', () => {
       ['.connection', 'background', 'var(--screen)'], ['.connection', 'font', '14px/1 var(--font-pixel)'],
       ['.connection', 'color', '#ffaa00'], ['.connection.live', 'color', '#55ff55'],
       ['.connection::before', 'content', "''"], ['.connection::before', 'width', '8px'], ['.connection::before', 'height', '8px'],
-      ['.connection::before', 'background', '#ffaa00'], ['.connection::before', 'animation', 'blink 1.6s steps(2) infinite'],
+      // ruling R31 (WCAG 2.2.2): three blinks and two breaths, so each stops within 5 s (the case at the end of this file)
+      ['.connection::before', 'background', '#ffaa00'], ['.connection::before', 'animation', 'blink 1.6s steps(2) 3'],
       ['.connection.live::before', 'background', '#55ff55'],
-      ['.connection.live::before', 'animation', 'breathe 2s ease-in-out infinite'],
+      ['.connection.live::before', 'animation', 'breathe 2s ease-in-out 2'],
     ]);
     expect(ruleBody('.connection.live::before')).toContain('animation: breathe 2s');
     // opacity only (the keyframes), and no transform: a test waits for what it clicks to hold still, and this is a square
@@ -2130,6 +2131,39 @@ describe('the Machine GUI in forced colours', () => {
     for (const selector of repainted) {
       expect(position(selector), selector).toBeGreaterThan(-1);
       expect(position(selector), selector).toBeLessThan(blocks.indexOf(block));
+    }
+  });
+});
+
+// The pause of the pipes (ruling R31, WCAG 2.2.2 Pause, Stop, Hide): the pipes' contents move for as long as a diagram is shown, beside
+// what the page says, so the Flow and Connections toolbars have a button that stops them (state/pipes-paused.ts, one setting for this
+// browser). Paused, the Flow canvas has `pipes-paused` and the Connections area `data-pipes="paused"`, and the dashes stay where they
+// are. The dot of the connection stops by itself within 5 s. pipes.spec.ts presses the button in a browser.
+
+const FLOW_PAUSED = '.flow-canvas.pipes-paused .flow-edge-flow';
+const CONN_PAUSED = ".connections[data-pipes='paused'] .conn-edge-flow";
+
+describe('the Machine GUI pause of the pipes', () => {
+  it('stops the pipes of both diagrams where they are while they are paused', () => {
+    expect(declarations(ruleBody(FLOW_PAUSED))).toEqual([['animation-play-state', 'paused']]);
+    expect(declarations(ruleBody(CONN_PAUSED))).toEqual([['animation-play-state', 'paused']]);
+    // the lit rule sets a lit pipe's whole animation, its play state too, with the same specificity: the pause comes after it, so a lit
+    // pipe stops as well
+    expect(position(FLOW_PAUSED)).toBeGreaterThan(position(LIT_CONTENTS));
+  });
+
+  it('lets nothing but the pipes move for ever, and the button stops those', () => {
+    const endless = blocks.filter((b) => !b.prelude.startsWith('@') && /(^|; )animation: [^;]*\binfinite\b/.test(b.inner)).map((b) => b.prelude);
+    expect(endless.sort()).toEqual([CONTENTS, LIT_CONTENTS, CONN_CONTENTS].sort());
+  });
+
+  it('stops the dot of the connection by itself within 5 s, on the dot\'s full opacity', () => {
+    for (const dot of ['.connection::before', '.connection.live::before']) {
+      const [, duration, , count] = (declared(dot, 'animation') ?? '').split(' ');
+      expect(Number.parseFloat(duration ?? '') * Number(count), dot).toBeLessThanOrEqual(5);
+      // no fill mode: once it has run, the dot is drawn with its own opacity, which no rule lowers
+      expect(declared(dot, 'animation'), dot).not.toMatch(/forwards|backwards|both/);
+      expect(declared(dot, 'opacity'), dot).toBeUndefined();
     }
   });
 });

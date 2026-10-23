@@ -3,10 +3,10 @@
 // step that takes a bought good, a red stub where nothing supplies an input, and supporting lines as groups that
 // collapse. Green boxes are machines the group owns, grey ones are new; a warning badge marks a step that uses a material
 // on the avoid list as nothing at the tier avoids it (spec §3.3). Each arrow is a pipe whose contents move from the output
-// toward the input, ending on the flange of its port (design spec §7). Hovering a row, a box or an arrow lights what it
-// connects (the flow focus); a click pins it, and a click on a box also opens its panel; Esc or a click on the empty
-// canvas clears it. Find item and the Show buttons light a good and centre the step that makes it. ELK lays the diagram
-// out in its own worker (web-stack §7); drag pans and the wheel zooms.
+// toward the input, ending on the flange of its port (design spec §7); Pause pipes stops them (ruling R31). Hovering a row,
+// a box or an arrow lights what it connects (the flow focus); a click pins it, and a click on a box also opens its panel;
+// Esc or a click on the empty canvas clears it. Find item and the Show buttons light a good and centre the step that makes
+// it. ELK lays the diagram out in its own worker (web-stack §7); drag pans and the wheel zooms.
 
 import {
   useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactElement,
@@ -17,9 +17,11 @@ import type { PlanIndex } from '../../shared/plan/balance.ts';
 import type { Plan, PlanSettings } from '../../shared/types/plan.ts';
 import { messageOf } from '../api/client.ts';
 import { ItemIcon } from '../components/ItemIcon.tsx';
+import { PipesButton } from '../components/PipesButton.tsx';
 import {
   endHoverFlowFocus, getFlowFocus, hoverFlowFocus, revealFlowFocus, setFlowFocus, useFlowFocus, useFlowReveal, type Focus,
 } from '../state/flow-focus.ts';
+import { usePipesPaused } from '../state/pipes-paused.ts';
 import { layoutFlow } from '../workers/elk.worker.ts';
 import {
   ICON_SPACE, NODE_LINE_HEIGHT, NODE_TITLE_HEIGHT, PORT_SIZE, ROW_HEIGHT, TEXT_CHAR_WIDTH, TEXT_LEFT, TITLE_CHAR_WIDTH, TOGGLE_SPACE,
@@ -402,6 +404,8 @@ function FlowCanvas(props: {
   const focus = useFlowFocus();
   const reveal = useFlowReveal();
   const seenReveal = useRef(reveal);
+  /** The pipes stand still where they are: this browser's Pause pipes (ruling R31). */
+  const pipesPaused = usePipesPaused();
   const sets = useMemo(() => focusSets(layout, focus), [layout, focus]);
   const byId = useMemo(() => new Map(layout.nodes.map((n) => [n.id, n])), [layout]);
 
@@ -541,11 +545,13 @@ function FlowCanvas(props: {
     e.preventDefault();
     activate(hit);
   };
-  // `focusing` under a focus, `dragging` while the view is dragged, `many-edges` when only the lit pipes move (pipe-motion.ts)
+  // `focusing` under a focus, `dragging` while the view is dragged, `many-edges` when only the lit pipes move (pipe-motion.ts),
+  // `pipes-paused` while this browser has the pipes paused
   const canvasClasses = ['flow-canvas'];
   if (sets !== null) canvasClasses.push('focusing');
   if (dragging) canvasClasses.push('dragging');
   if (pipeAnimationMode(layout.edges.length) === 'lit') canvasClasses.push('many-edges');
+  if (pipesPaused) canvasClasses.push('pipes-paused');
 
   return (
     <div className="flow-diagram">
@@ -553,6 +559,7 @@ function FlowCanvas(props: {
         <button type="button" className="small" aria-label="Zoom in" onClick={() => zoomCentre(ZOOM_STEP)}>+</button>
         <button type="button" className="small" aria-label="Zoom out" onClick={() => zoomCentre(1 / ZOOM_STEP)}>−</button>
         <button type="button" className="small" onClick={() => fit(MIN_ZOOM)}>Fit</button>
+        <PipesButton paused={pipesPaused} />
         <select
           className="flow-find small" aria-label="Find item" value=""
           onChange={(e) => {
