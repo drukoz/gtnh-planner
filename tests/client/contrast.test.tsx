@@ -53,3 +53,34 @@ describe('contrast of the Machine GUI palette', () => {
     expect(ratio(text, background)).toBeGreaterThanOrEqual(AA);
   });
 });
+
+// The text of the Flow diagram (restyle plan Phase 1 Task 6, design spec §7: "text #303030 on all, ≥ 4.5:1"): every box fill with
+// the text a box draws on it, then the light text on the dark canvas and in the chat boxes. A chat box is 82% black over the panel,
+// which is #242424.
+const FLOW_FILLS: [string, string][] = [
+  ['new', '#c6c6c6'], ['owned', '#b9d6b0'], ['import', '#d8cfa8'], ['missing', '#e3b0b0'], ['target', '#f0d870'], ['left over', '#a8a8a8'],
+  ['supporting line', '#cbbbe0'],
+];
+/** The boxes whose rows can show an issue: not a left over, which is never short of anything. */
+const ISSUE_FILLS = FLOW_FILLS.filter(([box]) => box !== 'left over');
+const FLOW_PAIRS: [string, string, string][] = [
+  ...FLOW_FILLS.map(([box, fill]): [string, string, string] => [`${box} box text`, '#303030', fill]),
+  ...ISSUE_FILLS.map(([box, fill]): [string, string, string] => [`${box} box lines and rates`, '#4a4a4a', fill]),
+  ...ISSUE_FILLS.map(([box, fill]): [string, string, string] => [`${box} box row with no source`, '#990000', fill]),
+  ...ISSUE_FILLS.map(([box, fill]): [string, string, string] => [`${box} box row made two ways`, '#6a4000', fill]),
+  ['avoid badge', '#ffaa00', '#1b1b1b'], ['arrow label on the canvas', '#ffffff', '#373737'],
+  ['open line title on the canvas', '#cbbbe0', '#373737'], ['line button', '#ffffff', '#6b6b6b'],
+  ['issues on their chat box', '#ffaa00', '#242424'], ['red issues on their chat box', '#ff5555', '#242424'],
+];
+
+describe('contrast of the Flow diagram', () => {
+  it.each(FLOW_PAIRS)('%s: %s on %s meets AA', (_what, text, background) => {
+    expect(ratio(text, background)).toBeGreaterThanOrEqual(AA);
+  });
+
+  it('needs its own red, and the panel\'s text on a left over: the panel\'s red and quiet grey fall short there', () => {
+    expect(ratio('#aa0000', '#e3b0b0')).toBeLessThan(AA);                             // the panel's error ink on a missing source
+    expect(ratio('#aa0000', '#cbbbe0')).toBeLessThan(AA);                             // and on a collapsed supporting line
+    expect(ratio('#4a4a4a', '#a8a8a8')).toBeLessThan(AA);                             // the quiet grey on a left over
+  });
+});

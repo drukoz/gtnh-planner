@@ -60,8 +60,7 @@ h2 { font-size: 1.2rem; margin: 0 0 var(--gap); }
  * hold inherits it; a dark box (chat, screen, well) sets the light ink of the same table instead, in the group below. Both
  * groups come before .muted and .error, so those two still win on an element that is both (.banner.error).
  */
-.card, .modal, .settings-section, .flow-panel, .conn-panel, .tab-panel, .note, .note-add, .materials-section,
-.flow-issues, .flow-infeasible {
+.card, .modal, .settings-section, .flow-panel, .conn-panel, .tab-panel, .note, .note-add, .materials-section {
   --ink: #303030; --ink-muted: #4a4a4a; --ink-title: #404040; --ink-link: #1a3fa0;
   --ink-error: #aa0000; --ink-ok: #1e5a1e; --ink-warn: #6a4000; --ink-focus: #1b1b1b; --muted: #4a4a4a;
   color: var(--ink);
@@ -69,7 +68,8 @@ h2 { font-size: 1.2rem; margin: 0 0 var(--gap); }
 /* Ink on a dark box (a chat box, a screen, a chip): light text on near black. It sets the focus ink too, so a dark box inside a
    panel does not take the panel's dark ring. */
 .banner, .plan-banner, .what-changed, .delete-confirm, .connection, .badge, .chip, .avoid-chip,
-.search-results, .mat-unlock {
+.search-results, .mat-unlock, .flow-issues, .flow-infeasible,
+.flow-panel .ports, .flow-panel .oc-lines, .flow-panel .warnings, .flow-panel .sources, .flow-panel .used-by, .flow-panel .also-made {
   --ink: #ffffff; --ink-muted: #aaaaaa; --ink-title: #ffff55; --ink-link: #ffff55;
   --ink-error: #ff5555; --ink-ok: #55ff55; --ink-warn: #ffaa00; --ink-focus: #ffff55; --muted: #aaaaaa;
   color: var(--ink);
@@ -585,137 +585,198 @@ button.avoid-chip-remove { width: 24px; height: 24px; min-height: 0; padding: 0;
 .badge.avoid-badge { color: #ffaa00; }
 
 /*
- * Flow diagram (spec §3.9, fix spec §6.2): green = owned machines, blue = new ones, half and half = partly owned; olive
- * import stubs (dashed grey when free), red dashed stubs where nothing supplies an input, violet supporting lines. Under
- * a focus the canvas gets `focusing`, everything not lit `dim`; the boxes that make the good get a solid accent outline,
- * those that take it a dashed one, lit arrows are 3 px accent.
+ * Flow diagram (spec §3.9, fix spec §6.2, design spec §7): Machine GUI blocks on a dark well with a 32px grid. Green = owned
+ * machines, panel grey = new ones, half and half = partly owned; olive import stubs (dashed when free), red dashed stubs where
+ * nothing supplies an input, grey dashed ones for what is left over, violet supporting lines, the target in gold. Every arrow
+ * is a pipe that ends on the flange of its port. Under a focus the canvas gets `focusing`, everything not lit `dim`; the boxes
+ * that make the good get a yellow edge, those that take it a dashed one. The text of a box keeps 4.5:1 on its fill, so a row
+ * that does not add up is in a red and an amber a little darker than a panel's (contrast.test.tsx). The Connections tab reads
+ * this palette too.
  */
 :root {
-  --flow-owned: #d9f0e1; --flow-owned-line: #2e8b57;
-  --flow-new: #dce8fb; --flow-new-line: #2f6fd6;
-  --flow-raw: #eceef2; --flow-raw-line: #8a919d;
-  --flow-out: #fff4d6; --flow-out-line: #c49a2a;
-  --flow-import: #eef3e8; --flow-import-line: #6f8f4e;
-  --flow-free: #f4f5f7;
-  --flow-missing: #fde8e6; --flow-missing-line: #b3261e;
-  --flow-line: #f3eefb; --flow-line-line: #8461c4;
-  --flow-amber: #9a5b00;
-  --flow-edge: #7d8593;
-  --flow-hover: rgb(47 111 214 / 0.12);
+  --flow-owned: #b9d6b0; --flow-owned-line: #2f6b2f;
+  --flow-new: var(--panel); --flow-new-line: #000;
+  --flow-raw: var(--panel); --flow-raw-line: #000;
+  --flow-out: #f0d870; --flow-out-line: #6b5500;
+  --flow-import: #d8cfa8; --flow-import-line: #6b5a20;
+  --flow-missing: #e3b0b0; --flow-missing-line: #aa0000;
+  --flow-sink: #a8a8a8;
+  --flow-line: #cbbbe0; --flow-line-line: #5a3a8a;
+  --flow-error: #990000; --flow-warn: #6a4000;
+  --flow-edge: #1b1b1b;
+  --flow-hover: rgb(255 255 255 / 0.35);
 }
-.flow { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
+/* The side panel slides in from the right: the clip keeps it from flashing a horizontal scroll bar on the way (a clip, not a
+   scroll container, so the panel still sticks). Its margin leaves room for the 3px focus ring of what sits at the edges (the
+   Zoom in button) and for a banner's 4px rise; Chromium applies that margin only when both axes clip, hence `overflow-y`. */
+.flow {
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start;
+  overflow-x: clip; overflow-y: clip; overflow-clip-margin: 4px;
+}
 .flow.has-panel { grid-template-columns: minmax(0, 1fr) minmax(260px, 340px); }
 .flow-main { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
 .flow-diagram { display: flex; flex-direction: column; gap: 8px; }
 .flow-toolbar button { min-width: 2.2em; }
 .flow-toolbar select.flow-find { max-width: 260px; padding: 2px 26px 2px 8px; }
+/* The canvas is a dark well with a 32px grid of two layers of 1px lines. Its edge is the same on every side, so a box centred in it
+   is centred in its border box too (flow-focus.spec.ts). Its text keeps the system font that flow-model measures. */
 .flow-canvas {
-  display: block; width: 100%; min-height: 240px; background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius); cursor: grab; touch-action: none; user-select: none;
+  display: block; width: 100%; min-height: 240px; cursor: grab; touch-action: none; user-select: none;
+  background-color: var(--well);
+  background-image: linear-gradient(#404040 1px, transparent 1px), linear-gradient(90deg, #404040 1px, transparent 1px);
+  background-size: 32px 32px;
+  border: 2px solid var(--outline); border-radius: 0; box-shadow: var(--bevel-well);
+  font-family: var(--font-diagram);
 }
 .flow-canvas:active { cursor: grabbing; }
 .flow-canvas g:focus { outline: none; }
 .flow-hit { fill: transparent; stroke: none; }
-.flow-node-box { stroke-width: 1.5; fill: var(--flow-raw); stroke: var(--flow-raw-line); }
+/* A box: a tinted fill, a 2px edge and a hard shadow under it (the box's alone, so its text stays crisp). */
+.flow-node-box { fill: var(--flow-raw); stroke: var(--flow-raw-line); stroke-width: 2; filter: drop-shadow(0 2px 0 #000); }
 .flow-node.owned > .flow-node-box { fill: var(--flow-owned); stroke: var(--flow-owned-line); }
 .flow-node.new > .flow-node-box { fill: var(--flow-new); stroke: var(--flow-new-line); }
 .flow-node.partly-owned > .flow-node-box { fill: url(#flow-partly); stroke: var(--flow-owned-line); }
 .flow-node.out > .flow-node-box { fill: var(--flow-out); stroke: var(--flow-out-line); }
 .flow-node.import > .flow-node-box { fill: var(--flow-import); stroke: var(--flow-import-line); }
-.flow-node.import.leaf-free > .flow-node-box { fill: var(--flow-free); stroke: var(--flow-raw-line); stroke-dasharray: 2 2; }
+.flow-node.import.leaf-free > .flow-node-box { stroke-dasharray: 2 2; }
 .flow-node.import.leaf-unavailable > .flow-node-box { stroke: var(--flow-missing-line); }
-.flow-node.missing > .flow-node-box { fill: var(--flow-missing); stroke: var(--flow-missing-line); stroke-width: 2; stroke-dasharray: 5 3; }
-.flow-node.sink > .flow-node-box { fill: var(--surface); stroke-dasharray: 4 3; }
+.flow-node.missing > .flow-node-box { fill: var(--flow-missing); stroke: var(--flow-missing-line); stroke-dasharray: 5 3; }
+.flow-node.sink > .flow-node-box { fill: var(--flow-sink); stroke-dasharray: 4 3; }
 .flow-node.line > .flow-node-box { fill: var(--flow-line); stroke: var(--flow-line-line); stroke-dasharray: 6 3; }
 .flow-node-head[role='button'], .flow-row, .flow-edge, .flow-line-toggle { cursor: pointer; }
+/* Pointed at, a box's head or a row takes the white veil of a Minecraft slot. The keyboard's ring is near black: a yellow one on a
+   light box would be lost (1.6:1). */
 .flow-node-head[role='button']:hover > .flow-hit { fill: var(--flow-hover); }
-.flow-node.selected > .flow-node-box { stroke-width: 3; }
-.flow-node-head:focus-visible > .flow-hit, .flow-row:focus-visible > .flow-hit { stroke: var(--accent); stroke-width: 2; }
+.flow-node-head:focus-visible > .flow-hit, .flow-row:focus-visible > .flow-hit { stroke: #1b1b1b; stroke-width: 2; }
 .flow-node text { fill: var(--text); font-size: 11.5px; }
 .flow-node .flow-node-title { font-size: 13px; font-weight: 600; }
-.flow-node .flow-node-line { fill: var(--muted); }
-.flow-node .flow-avoid-badge rect { fill: var(--warn-bg); stroke: var(--warn-border); stroke-width: 1; }
-.flow-node .flow-avoid-badge text { font-size: 11px; }
-/* A row per good: its port on the box's edge, the main output bold, a problem in red (no source, short) or amber. */
+.flow-node .flow-node-line { fill: var(--text-muted); }
+/* A step that uses an avoided material: the amber chip of the settings column. */
+.flow-node .flow-avoid-badge rect { fill: var(--screen); }
+.flow-node .flow-avoid-badge text { fill: #ffaa00; font-size: 11px; }
+/* A row per good: its flange on the box's edge, the main output bold, a problem in red (no source, short) or amber. */
 .flow-row:hover > .flow-hit, .flow-row.hl > .flow-hit { fill: var(--flow-hover); }
-.flow-row-rate { fill: var(--muted); }
+.flow-row-rate { fill: var(--text-muted); }
 .flow-row.main .flow-row-text { font-weight: 700; }
-.flow-row.issue-orphan-input .flow-row-text, .flow-row.issue-short-input .flow-row-text { fill: var(--error); }
-.flow-row.issue-multi-producer .flow-row-text, .flow-row.issue-bought-and-made .flow-row-text { fill: var(--flow-amber); }
-.flow-row.issue-orphan-input .flow-row-rate, .flow-row.issue-short-input .flow-row-rate { fill: var(--error); }
-.flow-port { fill: var(--surface); stroke: var(--flow-edge); stroke-width: 1.5; }
-.flow-row.hl .flow-port { fill: var(--accent); stroke: var(--accent); }
+.flow-row.issue-orphan-input .flow-row-text, .flow-row.issue-short-input .flow-row-text { fill: var(--flow-error); }
+.flow-row.issue-multi-producer .flow-row-text, .flow-row.issue-bought-and-made .flow-row-text { fill: var(--flow-warn); }
+.flow-row.issue-orphan-input .flow-row-rate, .flow-row.issue-short-input .flow-row-rate { fill: var(--flow-error); }
+/* The grey of a left over is darker than a panel: its quieter lines and rates would fall under 4.5:1 there. */
+.flow-node.sink .flow-node-line, .flow-node.sink .flow-row-rate { fill: var(--text); }
+/* A port is a pipe flange (FlowView's FLANGE_DEPTH by FLANGE_HEIGHT): a slot grey with a black edge, yellow when its row is lit. */
+.flow-port { fill: var(--slot); stroke: var(--outline); stroke-width: 1; }
+.flow-row.hl .flow-port { fill: var(--accent); }
 .flow-stop-owned { stop-color: var(--flow-owned); }
 .flow-stop-new { stop-color: var(--flow-new); }
-.flow-edge-line { fill: none; stroke: var(--flow-edge); stroke-width: 1.5; }
-/* What a pointer catches: 10 px of transparent stroke along the arrow. */
+/*
+ * A pipe (design spec §7): what a pointer catches (10px of transparent stroke), the casing, which ends square on the flanges and
+ * bends with mitred corners (no round cap or gap shows at a port or a corner), and the contents on the same path: 6px dashes 16px
+ * apart that travel from the output toward the input (the path runs that way), one cycle per `--pipe-dur` (pipe-motion.ts). The
+ * contents never take the pointer. Pointed at, the casing lightens; it never grows, which would overshoot the flange. From a
+ * missing source the casing is solid red (a dashed one could end in a gap at the flange), with nothing moving in it.
+ */
 .flow-edge-hit { fill: none; stroke: transparent; stroke-width: 10; }
-.flow-edge:hover .flow-edge-line { stroke-width: 2.5; }
-.flow-edge.missing .flow-edge-line { stroke: var(--flow-missing-line); stroke-dasharray: 5 3; }
-.flow-arrow-head { fill: var(--flow-edge); }
-.flow-arrow-head-hl { fill: var(--accent); }
-.flow-edge-label {
-  fill: var(--text); font-size: 11px; paint-order: stroke; stroke: var(--surface); stroke-width: 3px; stroke-linejoin: round;
+.flow-edge-line { fill: none; stroke: var(--flow-edge); stroke-width: 6; stroke-linejoin: miter; stroke-linecap: butt; }
+.flow-edge-flow {
+  fill: none; stroke: var(--item); stroke-width: 2.5; stroke-dasharray: 6 10;
+  animation: pipe-flow var(--pipe-dur, 1s) linear infinite; pointer-events: none;
 }
-/* An open supporting line: a frame around its boxes, its name and its collapse button on top. */
-.flow-group-box { fill: var(--flow-line); fill-opacity: 0.5; stroke: var(--flow-line-line); stroke-width: 1.5; stroke-dasharray: 6 3; }
-.flow-group-title { fill: var(--flow-line-line); font-size: 12.5px; font-weight: 600; }
-.flow-line-toggle rect { fill: var(--surface); stroke: var(--flow-line-line); stroke-width: 1; }
-.flow-line-toggle text { fill: var(--text); font-size: 15px; font-weight: 700; }
-.flow-line-toggle:hover rect { fill: var(--flow-hover); }
+.flow-edge.fluid .flow-edge-flow { stroke: var(--fluid); }
+.flow-edge:hover .flow-edge-line { stroke: #2e2e2e; }
+.flow-edge.missing .flow-edge-line { stroke: #aa0000; }
+/* The head of an arrow is in the colour of what it carries. */
+.flow-arrow-head { fill: var(--item); }
+.flow-arrow-head-fluid { fill: var(--fluid); }
+.flow-arrow-head-hl { fill: var(--accent); }
+.flow-arrow-head-missing { fill: #aa0000; }
+.flow-edge-label {
+  fill: #ffffff; font-size: 11px; paint-order: stroke; stroke: var(--well); stroke-width: 3px; stroke-linejoin: round;
+}
+/* An open supporting line: a light dashed frame around its boxes on the dark canvas, its name, and its open/collapse button on top,
+   a mini Minecraft button (a collapsed line's too). */
+.flow-group-box { fill: var(--flow-line); fill-opacity: 0.08; stroke: var(--flow-line); stroke-width: 1.5; stroke-dasharray: 6 3; }
+.flow-group-title { fill: var(--flow-line); font-size: 12.5px; font-weight: 600; }
+.flow-line-toggle rect { fill: var(--btn); stroke: var(--outline); stroke-width: 2; }
+.flow-line-toggle text { fill: #ffffff; font-size: 15px; font-weight: 700; }
+.flow-line-toggle:hover rect { fill: var(--btn-hover); }
 .flow-line-toggle:focus-visible rect { stroke: var(--accent); stroke-width: 2; }
-/* Focus (fix spec §6.2). */
+/*
+ * Focus (fix spec §6.2, design spec §7a): what is not lit fades (160ms, not a snap) and its pipe stops; the selected box and those
+ * that make the good get a yellow edge, those that take it a dashed one; a lit pipe a 1.5px yellow rim (its hit path, 9px under the
+ * 6px casing) and white contents that flash once.
+ */
+.flow-node, .flow-row, .flow-edge, .flow-group { transition: opacity var(--dur-base) var(--ease-out); }
 .flow-canvas.focusing .dim { opacity: 0.18; }
-.flow-node.producer > .flow-node-box { stroke: var(--accent); stroke-width: 3; }
-.flow-node.consumer > .flow-node-box { stroke: var(--accent); stroke-width: 2.5; stroke-dasharray: 6 3; }
-.flow-edge.hl .flow-edge-line { stroke: var(--accent); stroke-width: 3; }
-/* A lit arrow's good and rate, on a tag above the boxes; it never takes the pointer from what is under it. */
+.flow-node.selected > .flow-node-box, .flow-node.producer > .flow-node-box { stroke: var(--accent); stroke-width: 3; }
+.flow-node.consumer > .flow-node-box { stroke: var(--accent); stroke-width: 3; stroke-dasharray: 6 3; }
+.flow-edge.hl .flow-edge-hit { stroke: var(--accent); stroke-width: 9; }
+.flow-edge.hl .flow-edge-flow {
+  stroke: #ffffff; animation: pipe-flow var(--pipe-dur, 1s) linear infinite, pipe-pulse 400ms var(--ease-out);
+}
+.flow-edge.dim .flow-edge-flow { animation-play-state: paused; }
+/* Panning stays smooth (design spec §7 "Motion budget"): the pipes stand still while the diagram is dragged, and above 200 edges
+   only the lit ones move (pipe-motion.ts). After the lit rule, which sets the whole animation, its play state too. */
+.flow-canvas.dragging .flow-edge-flow { animation-play-state: paused; }
+.flow-canvas.many-edges .flow-edge:not(.hl) .flow-edge-flow { animation: none; }
+/* A lit arrow's good and rate, on an NEI tag above the boxes; it never takes the pointer from what is under it. Its text stays the
+   diagram font at 11px: edgeTag sizes the tag at 6.5px per character. */
 .flow-edge-tag { pointer-events: none; }
-.flow-edge-tag rect { fill: var(--surface); stroke: var(--accent); stroke-width: 1; }
-.flow-edge-tag text { fill: var(--text); font-size: 11px; font-weight: 600; }
-/* What does not add up, above the canvas: red with an input nothing supplies, else amber. */
-.flow-issues { background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: var(--radius); padding: 8px 12px; }
-.flow-issues.error { background: var(--error-bg); border-color: var(--error); }
+.flow-edge-tag rect { fill: var(--tip-bg); stroke: var(--tip-border); stroke-width: 1; }
+.flow-edge-tag text { fill: #ffffff; font-size: 11px; font-weight: 600; }
+/* What does not add up, above the canvas, and why a line cannot be planned: chat boxes (dark boxes, so in the light ink of their
+   group), amber, or red with an input nothing supplies. The issues rise in when they appear, like the banners. */
+.flow-issues {
+  padding: 8px 12px; background: var(--chat); border: 2px solid var(--outline); border-radius: 0; color: var(--ink-warn);
+  animation: rise-in var(--dur-base) var(--ease-out);
+}
+.flow-issues.error { color: var(--ink-error); }
 .flow-issues ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: 0.9rem; }
 .flow-issues li { overflow-wrap: anywhere; }
 .flow-issues li button { margin-left: 6px; }
-.flow-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 0.85rem; color: var(--muted); }
+.flow-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 0.85rem; color: var(--ink-muted); }
 .flow-legend li { display: inline-flex; align-items: center; gap: 6px; }
-.swatch { width: 14px; height: 14px; border-radius: 3px; border: 1.5px solid var(--flow-raw-line); background: var(--flow-raw); }
+.swatch { width: 14px; height: 14px; border: 2px solid var(--flow-raw-line); border-radius: 0; background: var(--flow-raw); }
 .swatch.owned { background: var(--flow-owned); border-color: var(--flow-owned-line); }
 .swatch.new { background: var(--flow-new); border-color: var(--flow-new-line); }
 .swatch.partly-owned { background: linear-gradient(90deg, var(--flow-owned) 50%, var(--flow-new) 50%); border-color: var(--flow-owned-line); }
 .swatch.out { background: var(--flow-out); border-color: var(--flow-out-line); }
 .swatch.import { background: var(--flow-import); border-color: var(--flow-import-line); }
-.swatch.free { background: var(--flow-free); border-style: dashed; }
+.swatch.free { background: var(--flow-import); border-color: var(--flow-import-line); border-style: dashed; }
 .swatch.missing { background: var(--flow-missing); border-color: var(--flow-missing-line); border-style: dashed; }
-.swatch.sink { background: var(--surface); border-style: dashed; }
+.swatch.sink { background: var(--flow-sink); border-style: dashed; }
 .swatch.line { background: var(--flow-line); border-color: var(--flow-line-line); border-style: dashed; }
 .flow-infeasible {
-  background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: var(--radius); padding: 10px 14px; max-width: 760px;
+  max-width: 760px; padding: 10px 14px; background: var(--chat); border: 2px solid var(--outline); border-radius: 0; color: var(--ink-warn);
 }
 .flow-infeasible p { margin: 0 0 4px; }
 .flow-infeasible ul { margin: 0; padding-left: 20px; }
+/* The panel of a box (design spec §6): a Machine GUI panel with pixel titles that slides in from the right, on opacity and transform
+   only (the grid column changes at once: the e2e tests read it). Its lists are dark wells set into it. */
 .flow-panel {
-  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px;
   display: flex; flex-direction: column; gap: 12px; position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto;
+  padding: 12px 14px; background: var(--panel); border: 2px solid var(--outline); border-radius: 0; box-shadow: var(--bevel-panel);
+  animation: slide-in-right var(--dur-slow) var(--ease-out);
 }
 .flow-panel > p { margin: 0; }
 .flow-panel-head { display: flex; align-items: center; gap: 8px; }
-.flow-panel-head h3 { flex: 1; min-width: 0; margin: 0; font-size: 1rem; overflow-wrap: anywhere; }
-.flow-panel-section { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; border-top: 1px solid var(--border); }
+.flow-panel-head h3 { flex: 1; min-width: 0; margin: 0; font: 600 16px/1.3 var(--font-pixel); overflow-wrap: anywhere; }
+.flow-panel-section { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; border-top: 1px solid #8b8b8b; }
 fieldset.flow-panel-section { border-left: none; border-right: none; border-bottom: none; margin: 0; padding: 10px 0 0; min-width: 0; }
 .flow-panel-section p { margin: 0; }
-.flow-panel-title { font-size: 0.95rem; font-weight: 600; margin: 0; padding: 0; color: var(--text); }
+.flow-panel-title { margin: 0; padding: 0; color: var(--ink-title); font: 600 14px/1.3 var(--font-pixel); }
 fieldset.flow-panel-section > legend.flow-panel-title { float: left; width: 100%; margin-bottom: 2px; }
-.oc-lines, .flow-panel .warnings, .flow-panel .sources { margin: 0; padding-left: 18px; font-size: 0.9rem; }
+/* The lists of the panel are dark wells (a screen with the inset bevel of a well), in the light ink of their group: white text, grey
+   notes, yellow links, red warnings. */
+.flow-panel .ports, .flow-panel .oc-lines, .flow-panel .warnings, .flow-panel .sources, .flow-panel .used-by, .flow-panel .also-made {
+  margin: 0; padding: 6px 10px 6px 26px; background: var(--screen); box-shadow: var(--bevel-well); font-size: 0.9rem;
+}
 .oc-lines li, .flow-panel .sources li { overflow-wrap: anywhere; }
-.flow-panel .warnings { color: var(--error); }
+.flow-panel .warnings { color: var(--ink-error); }
 .swap-option { align-items: flex-start; }
-.swap-option input { margin-top: 4px; }
+.swap-option input { margin-top: 2px; }
 .swap-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 /* A way or an option the group cannot use here: greyed, no radio, with why not. */
-.swap-option.unusable, .option-choice.unusable { color: var(--muted); padding-left: 24px; font-size: 0.9rem; overflow-wrap: anywhere; }
+.swap-option.unusable, .option-choice.unusable { color: var(--ink-muted); padding-left: 24px; font-size: 0.9rem; overflow-wrap: anywhere; }
 abbr.unit-hint { text-decoration: underline dotted; cursor: help; }
 /* Its colour is the link ink of `a, button.link` at the top, which follows the surface it sits on: no colour here. */
 button.link {
@@ -723,22 +784,23 @@ button.link {
   transform: none; text-decoration: underline; font: inherit;
 }
 button.link:hover:not(:disabled) { background: none; text-decoration: none; }
-/* Takes / Makes: per good its rate, and the steps it comes from or goes to (fix spec §6.3). */
+/* Takes / Makes: per good its slot, name and rate, and the steps it comes from or goes to (fix spec §6.3), in a well without
+   bullets. The steps sit under the name, past the 20px slot and the gap after it. */
 .ports { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 0.9rem; }
+.flow-panel .ports { padding: 6px 8px; }
 .port-row { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; }
 .port-name { min-width: 0; overflow-wrap: anywhere; }
 .port-name.port-main { font-weight: 700; }
 .port-rate { font-variant-numeric: tabular-nums; }
-.port-peers { flex-basis: 100%; padding-left: 22px; overflow-wrap: anywhere; }
-.port-short .port-rate, .port-warn { color: var(--error); }
-.also-made, .flow-panel .used-by { margin: 0; padding-left: 18px; font-size: 0.9rem; }
+.port-peers { flex-basis: 100%; padding-left: 26px; overflow-wrap: anywhere; }
+.port-short .port-rate, .port-warn { color: var(--ink-error); }
 .option-slot {
-  border: 1px solid var(--border); border-radius: 6px; margin: 0; padding: 6px 8px; display: flex; flex-direction: column; gap: 4px; min-width: 0;
+  border: 1px solid #8b8b8b; border-radius: 0; margin: 0; padding: 6px 8px; display: flex; flex-direction: column; gap: 4px; min-width: 0;
 }
-.option-slot-title { font-size: 0.85rem; color: var(--muted); padding: 0 4px; }
+.option-slot-title { font-size: 0.85rem; color: var(--ink-muted); padding: 0 4px; }
 .option-why { margin: 0; }
 .option-choice { align-items: flex-start; }
-.option-choice input { margin-top: 4px; }
+.option-choice input { margin-top: 2px; }
 .choice-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 
 /* Materials & steps (spec §3.10): the tree indents by depth, unlock texts are warnings, ticked rows are crossed out. Each section is a

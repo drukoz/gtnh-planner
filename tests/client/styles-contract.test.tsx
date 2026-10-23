@@ -1047,3 +1047,240 @@ describe('the Machine GUI Materials & steps tab', () => {
     for (const selector of SLOT_AND_MATERIALS_RULES) expect(ruleBody(selector), selector).not.toMatch(OLD_ALIASES);
   });
 });
+
+// The Flow diagram (restyle plan Phase 1 Task 6, design spec §7 and §7a): every arrow is a pipe, a dark casing with the good moving
+// inside it from the output toward the input, that ends on the flange of its port; the boxes are Machine GUI blocks on a dark well;
+// the panel is a Machine GUI panel that slides in, with its lists as dark wells. pipes.spec.ts watches the pipes move and measures
+// their ends in a browser, flow-pipes.test.tsx pins the markup; these cases pin the values of the brief and the order the cascade
+// needs.
+
+const CASING = '.flow-edge-line';
+const CONTENTS = '.flow-edge-flow';
+const LIT_RIM = '.flow-edge.hl .flow-edge-hit';
+const LIT_CONTENTS = '.flow-edge.hl .flow-edge-flow';
+const DIMMED_CONTENTS = '.flow-edge.dim .flow-edge-flow';
+const DRAGGED_CONTENTS = '.flow-canvas.dragging .flow-edge-flow';
+const MANY_CONTENTS = '.flow-canvas.many-edges .flow-edge:not(.hl) .flow-edge-flow';
+const FADES = '.flow-node, .flow-row, .flow-edge, .flow-group';
+const LIT_BOX = '.flow-node.selected > .flow-node-box, .flow-node.producer > .flow-node-box';
+const TAKER_BOX = '.flow-node.consumer > .flow-node-box';
+/** The lists of the side panel, each a dark well in the light ink. */
+const PANEL_LISTS = ['.flow-panel .ports', '.flow-panel .oc-lines', '.flow-panel .warnings', '.flow-panel .sources', '.flow-panel .used-by', '.flow-panel .also-made'];
+const WELLS = PANEL_LISTS.join(', ');
+const ISSUE_RED = '.flow-row.issue-orphan-input .flow-row-text, .flow-row.issue-short-input .flow-row-text';
+const ISSUE_AMBER = '.flow-row.issue-multi-producer .flow-row-text, .flow-row.issue-bought-and-made .flow-row-text';
+const ISSUE_RED_RATE = '.flow-row.issue-orphan-input .flow-row-rate, .flow-row.issue-short-input .flow-row-rate';
+/** The rules of this task that colour, edge or round something: none may read an alias of the old palette any more. */
+const FLOW_RULES = [
+  '.flow-canvas', '.flow-node-box', '.flow-node.sink > .flow-node-box', '.flow-node-head[role=\'button\']:hover > .flow-hit',
+  '.flow-node-head:focus-visible > .flow-hit, .flow-row:focus-visible > .flow-hit', '.flow-node text', '.flow-node .flow-node-line',
+  '.flow-node .flow-avoid-badge rect', '.flow-row:hover > .flow-hit, .flow-row.hl > .flow-hit', '.flow-row-rate', ISSUE_RED, ISSUE_AMBER,
+  ISSUE_RED_RATE, '.flow-port', CASING, '.flow-edge-label', '.flow-group-box', '.flow-group-title', '.flow-line-toggle rect',
+  '.flow-line-toggle text', '.flow-edge-tag rect', '.flow-edge-tag text', '.flow-issues', '.flow-infeasible', '.flow-legend', '.swatch',
+  '.swatch.free', '.swatch.sink', '.flow-panel', '.flow-panel-section', '.flow-panel-title', WELLS, '.flow-panel .warnings',
+  '.swap-option.unusable, .option-choice.unusable', '.port-short .port-rate, .port-warn', '.option-slot', '.option-slot-title',
+];
+
+describe('the Machine GUI Flow diagram', () => {
+  it('draws each arrow as a pipe: a dark 6px casing with butt ends on the flanges and mitred bends', () => {
+    expectDeclared([
+      [CASING, 'fill', 'none'], [CASING, 'stroke', 'var(--flow-edge)'], [CASING, 'stroke-width', '6'],
+      [CASING, 'stroke-linejoin', 'miter'], [CASING, 'stroke-linecap', 'butt'],
+    ]);
+    expect(rootTokens().get('--flow-edge')).toBe('#1b1b1b');
+    expect(ruleBody(CASING)).toContain('stroke-width: 6');
+    // a dashed casing could end in a gap at a flange
+    expect(ruleBody(CASING)).not.toContain('dasharray');
+  });
+
+  it('moves the contents along the pipe, yellow for an item and cyan for a fluid, at the speed of the arrow', () => {
+    expect(ruleBody(CONTENTS)).toContain('stroke-dasharray: 6 10');
+    expect(ruleBody(CONTENTS)).toContain('animation: pipe-flow var(--pipe-dur, 1s) linear infinite');
+    expectDeclared([
+      [CONTENTS, 'fill', 'none'], [CONTENTS, 'stroke', 'var(--item)'], [CONTENTS, 'stroke-width', '2.5'],
+      // the contents never take the pointer from the arrow (the hit path and the casing do)
+      [CONTENTS, 'pointer-events', 'none'],
+      ['.flow-edge.fluid .flow-edge-flow', 'stroke', 'var(--fluid)'],
+    ]);
+    // a seamless loop: one turn of the keyframes moves the dashes by exactly one dash and its gap
+    const cycle = (declared(CONTENTS, 'stroke-dasharray') ?? '').split(' ').reduce((sum, length) => sum + Number(length), 0);
+    expect(ruleBody('@keyframes pipe-flow')).toContain(`stroke-dashoffset: -${cycle}`);
+  });
+
+  it('keeps a pipe its width under the pointer, and draws one from a missing source as a solid red casing', () => {
+    // pointed at, only the colour of the casing changes: a wider casing would overshoot its flange (the old rule widened it)
+    expect(declarations(ruleBody('.flow-edge:hover .flow-edge-line'))).toEqual([['stroke', '#2e2e2e']]);
+    expect(declarations(ruleBody('.flow-edge.missing .flow-edge-line'))).toEqual([['stroke', '#aa0000']]);
+    // the base rule is the only one that sizes a casing or dashes it, in any state
+    const casings = blocks.filter((b) => b.prelude.includes(CASING) && b.prelude !== CASING);
+    for (const block of casings) expect(block.inner, block.prelude).not.toMatch(/stroke-width|dasharray/);
+    // and the hover comes before the missing rule (both 0,3,0): a missing pipe stays red under the pointer
+    expect(position('.flow-edge.missing .flow-edge-line')).toBeGreaterThan(position('.flow-edge:hover .flow-edge-line'));
+  });
+
+  it('heads each arrow in the colour of what it carries, yellow when lit and red from a missing source', () => {
+    expectDeclared([
+      ['.flow-arrow-head', 'fill', 'var(--item)'], ['.flow-arrow-head-fluid', 'fill', 'var(--fluid)'],
+      ['.flow-arrow-head-hl', 'fill', 'var(--accent)'], ['.flow-arrow-head-missing', 'fill', '#aa0000'],
+    ]);
+  });
+
+  it('lights a focused pipe with an accent rim and white contents that pulse once, and pauses the dimmed ones', () => {
+    expectDeclared([
+      [LIT_RIM, 'stroke', 'var(--accent)'], [LIT_RIM, 'stroke-width', '9'],
+      [LIT_CONTENTS, 'stroke', '#ffffff'],
+      [LIT_CONTENTS, 'animation', 'pipe-flow var(--pipe-dur, 1s) linear infinite, pipe-pulse 400ms var(--ease-out)'],
+      [DIMMED_CONTENTS, 'animation-play-state', 'paused'],
+      // what is not lit fades over 160ms instead of snapping; the dimming rule itself stays
+      [FADES, 'transition', 'opacity var(--dur-base) var(--ease-out)'],
+      ['.flow-canvas.focusing .dim', 'opacity', '0.18'],
+    ]);
+    // the rim is the hit path showing 1.5px past each side of the 6px casing it lies under
+    expect((Number(declared(LIT_RIM, 'stroke-width')) - Number(declared(CASING, 'stroke-width'))) / 2).toBe(1.5);
+    // the casing of a lit pipe keeps its colour and width (the old rule thinned it to a 3px accent line)
+    expect(position('.flow-edge.hl .flow-edge-line')).toBe(-1);
+  });
+
+  it('stops the pipes while the diagram is dragged, and above 200 edges moves only the lit ones', () => {
+    const stops = (selector: string): boolean => /(^|; )(animation: none|animation-play-state: paused)(;|$)/.test(ruleBody(selector));
+    expect(stops(DRAGGED_CONTENTS), DRAGGED_CONTENTS).toBe(true);
+    expect(stops(MANY_CONTENTS), MANY_CONTENTS).toBe(true);
+    expect(declared(DIMMED_CONTENTS, 'animation-play-state')).toBe('paused');
+    // the lit rule sets the whole animation (its play state too) with the same specificity, so the drag rule must come after it
+    // to stop a lit pipe as well
+    expect(position(DRAGGED_CONTENTS)).toBeGreaterThan(position(LIT_CONTENTS));
+  });
+
+  it('ends every port on a flange in a slot grey with a black edge, yellow when its row is lit', () => {
+    expectDeclared([
+      ['.flow-port', 'fill', 'var(--slot)'], ['.flow-port', 'stroke', 'var(--outline)'], ['.flow-port', 'stroke-width', '1'],
+    ]);
+    // lit, only the face turns yellow: the black edge stays, so the flange keeps its outline against a yellow rim
+    expect(declarations(ruleBody('.flow-row.hl .flow-port'))).toEqual([['fill', 'var(--accent)']]);
+  });
+
+  it('sets the diagram on a dark well with a 32px grid, a black edge on every side and the diagram font', () => {
+    expectDeclared([
+      ['.flow-canvas', 'background-color', 'var(--well)'],
+      ['.flow-canvas', 'background-image', 'linear-gradient(#404040 1px, transparent 1px), linear-gradient(90deg, #404040 1px, transparent 1px)'],
+      ['.flow-canvas', 'background-size', '32px 32px'],
+      ['.flow-canvas', 'border', '2px solid var(--outline)'], ['.flow-canvas', 'border-radius', '0'],
+      ['.flow-canvas', 'box-shadow', 'var(--bevel-well)'],
+      // flow-model's text widths (7.4 and 6.2 px per character, 6.5 for a tag) are measured for this font
+      ['.flow-canvas', 'font-family', 'var(--font-diagram)'],
+      ['.flow-canvas', 'cursor', 'grab'],
+    ]);
+    // the same edge all round: flow-focus.spec.ts finds a centred box at the centre of the svg's border box
+    expect(ruleBody('.flow-canvas')).not.toMatch(/border-(top|right|bottom|left)/);
+  });
+
+  it('draws the boxes as Machine GUI blocks: tinted fills, a 2px edge, a hard shadow; the boxes of a focus in yellow', () => {
+    const tokens = rootTokens();
+    for (const [name, value] of [
+      ['--flow-owned', '#b9d6b0'], ['--flow-owned-line', '#2f6b2f'], ['--flow-new', 'var(--panel)'], ['--flow-new-line', '#000'],
+      ['--flow-import', '#d8cfa8'], ['--flow-import-line', '#6b5a20'], ['--flow-missing', '#e3b0b0'], ['--flow-missing-line', '#aa0000'],
+      ['--flow-out', '#f0d870'], ['--flow-out-line', '#6b5500'], ['--flow-sink', '#a8a8a8'],
+      ['--flow-line', '#cbbbe0'], ['--flow-line-line', '#5a3a8a'],
+    ]) expect(tokens.get(name), name).toBe(value);
+    expectDeclared([
+      ['.flow-node-box', 'stroke-width', '2'], ['.flow-node-box', 'filter', 'drop-shadow(0 2px 0 #000)'],
+      ['.flow-node.sink > .flow-node-box', 'fill', 'var(--flow-sink)'],
+      [LIT_BOX, 'stroke', 'var(--accent)'], [LIT_BOX, 'stroke-width', '3'],
+      [TAKER_BOX, 'stroke', 'var(--accent)'], [TAKER_BOX, 'stroke-width', '3'], [TAKER_BOX, 'stroke-dasharray', '6 3'],
+    ]);
+    // a free import, a missing source, a left over and a supporting line are dashed
+    for (const kind of ['.flow-node.import.leaf-free', '.flow-node.missing', '.flow-node.sink', '.flow-node.line']) {
+      expect(declared(`${kind} > .flow-node-box`, 'stroke-dasharray'), kind).toBeDefined();
+    }
+    // the shadow is the box's alone, never its text's
+    expect(blocks.filter((b) => b.prelude.includes('flow') && b.inner.includes('drop-shadow')).map((b) => b.prelude)).toEqual(['.flow-node-box']);
+    // the box text keeps its sizes (flow-model measures them), and the focus outlines come after the kinds they cover
+    expectDeclared([
+      ['.flow-node text', 'font-size', '11.5px'], ['.flow-node .flow-node-title', 'font-size', '13px'],
+      ['.flow-node .flow-node-title', 'font-weight', '600'], ['.flow-edge-label', 'font-size', '11px'],
+    ]);
+    expect(position(LIT_BOX)).toBeGreaterThan(position('.flow-node.line > .flow-node-box'));
+    expect(position(TAKER_BOX)).toBeGreaterThan(position('.flow-node.line > .flow-node-box'));
+  });
+
+  it('keeps every text of a box at 4.5:1 or more: the panel\'s text on the grey of a left over, darker red and amber for issues', () => {
+    expectDeclared([
+      ['.flow-node text', 'fill', 'var(--text)'], ['.flow-node .flow-node-line', 'fill', 'var(--text-muted)'],
+      ['.flow-row-rate', 'fill', 'var(--text-muted)'],
+      ['.flow-node.sink .flow-node-line, .flow-node.sink .flow-row-rate', 'fill', 'var(--text)'],
+      [ISSUE_RED, 'fill', 'var(--flow-error)'], [ISSUE_RED_RATE, 'fill', 'var(--flow-error)'], [ISSUE_AMBER, 'fill', 'var(--flow-warn)'],
+      // the avoid badge is the amber chip of the settings column
+      ['.flow-node .flow-avoid-badge rect', 'fill', 'var(--screen)'], ['.flow-node .flow-avoid-badge text', 'fill', '#ffaa00'],
+    ]);
+    expect(rootTokens().get('--flow-error')).toBe('#990000');
+    expect(rootTokens().get('--flow-warn')).toBe('#6a4000');
+  });
+
+  it('writes the labels, the tags and the open lines in light ink on the dark canvas', () => {
+    expectDeclared([
+      ['.flow-edge-label', 'fill', '#ffffff'], ['.flow-edge-label', 'stroke', 'var(--well)'],
+      ['.flow-edge-tag', 'pointer-events', 'none'],
+      ['.flow-edge-tag rect', 'fill', 'var(--tip-bg)'], ['.flow-edge-tag rect', 'stroke', 'var(--tip-border)'],
+      ['.flow-edge-tag text', 'fill', '#ffffff'], ['.flow-edge-tag text', 'font-size', '11px'], ['.flow-edge-tag text', 'font-weight', '600'],
+      ['.flow-group-box', 'stroke', 'var(--flow-line)'], ['.flow-group-title', 'fill', 'var(--flow-line)'],
+      // the open/collapse button is a mini Minecraft button
+      ['.flow-line-toggle rect', 'fill', 'var(--btn)'], ['.flow-line-toggle rect', 'stroke', 'var(--outline)'],
+      ['.flow-line-toggle text', 'fill', '#ffffff'], ['.flow-line-toggle:hover rect', 'fill', 'var(--btn-hover)'],
+    ]);
+    expect(declared('.flow-group-box', 'stroke-dasharray')).toBeDefined();
+    // the tag stays in the diagram font: edgeTag sizes it at 6.5px per character (flow.test.tsx)
+    expect(declared('.flow-edge-tag text', 'font-family')).toBeUndefined();
+    expect(declared('.flow-edge-tag text', 'font')).toBeUndefined();
+  });
+
+  it('draws what does not add up and a line that cannot be planned as chat boxes in the light ink, the issues rising in', () => {
+    const dark = inkGroup('.banner').prelude.split(', ');
+    const panels = inkGroup('.tab-panel').prelude.split(', ');
+    for (const member of ['.flow-issues', '.flow-infeasible', ...PANEL_LISTS]) {
+      expect(dark, member).toContain(member);
+      expect(panels, member).not.toContain(member);
+    }
+    expect(panels).toContain('.flow-panel');
+    for (const box of ['.flow-issues', '.flow-infeasible']) {
+      expectDeclared([
+        [box, 'background', 'var(--chat)'], [box, 'border', '2px solid var(--outline)'], [box, 'border-radius', '0'], [box, 'color', 'var(--ink-warn)'],
+      ]);
+    }
+    expectDeclared([
+      ['.flow-issues.error', 'color', 'var(--ink-error)'],
+      // ruling R4: the entrance of the banners
+      ['.flow-issues', 'animation', 'rise-in var(--dur-base) var(--ease-out)'],
+    ]);
+    // the legend's swatches are square with a 2px edge
+    expectDeclared([['.swatch', 'border-radius', '0'], ['.swatch', 'border', '2px solid var(--flow-raw-line)'], ['.swatch.sink', 'background', 'var(--flow-sink)']]);
+  });
+
+  it('slides the side panel in as a Machine GUI panel, with its lists as dark wells, and never animates the grid', () => {
+    expectDeclared([
+      ['.flow-panel', 'background', 'var(--panel)'], ['.flow-panel', 'border', '2px solid var(--outline)'], ['.flow-panel', 'border-radius', '0'],
+      ['.flow-panel', 'box-shadow', 'var(--bevel-panel)'], ['.flow-panel', 'animation', 'slide-in-right var(--dur-slow) var(--ease-out)'],
+      ['.flow-panel-head h3', 'font', '600 16px/1.3 var(--font-pixel)'],
+      [WELLS, 'background', 'var(--screen)'], [WELLS, 'box-shadow', 'var(--bevel-well)'],
+      ['.flow-panel .warnings', 'color', 'var(--ink-error)'], ['.port-short .port-rate, .port-warn', 'color', 'var(--ink-error)'],
+      // the panel slides in from the right: no horizontal scroll bar flashes while it does
+      ['.flow', 'overflow-x', 'clip'],
+      // and the focus ring of the Zoom in button, on the clipped edge, keeps its left side: Chromium applies the clip margin only
+      // when both axes clip (measured in a browser for this task)
+      ['.flow', 'overflow-y', 'clip'], ['.flow', 'overflow-clip-margin', '4px'],
+    ]);
+    // the grid column changes at once (the e2e tests read it): nothing animates or transitions the grid or the panel's width
+    for (const block of blocks.filter((b) => b.prelude === '.flow' || b.prelude === '.flow.has-panel')) {
+      expect(block.inner, block.prelude).not.toMatch(/transition|animation/);
+    }
+    expect(ruleBody('.flow-panel')).not.toMatch(/transition|(^|; )width/);
+    // the hand-offs: a 16px tick centred on the first line of its text, and the steps under a port past its 20px slot
+    expectDeclared([['.swap-option input', 'margin-top', '2px'], ['.option-choice input', 'margin-top', '2px'], ['.port-peers', 'padding-left', '26px']]);
+  });
+
+  it('reads no alias of the old palette and rounds no corner in the Flow rules', () => {
+    for (const selector of FLOW_RULES) {
+      expect(ruleBody(selector), selector).not.toMatch(OLD_ALIASES);
+      expect(declared(selector, 'border-radius') ?? '0', selector).toBe('0');
+    }
+  });
+});
