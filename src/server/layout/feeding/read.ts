@@ -400,13 +400,21 @@ export function readLine(input: { pack: Pack; plan: Plan; layout: Layout }): Fee
   const sinks = distinct([
     ...itemFlows.filter((f) => laidSet.has(f.from) && (f.to === 'out' || f.to === 'sink' || !laidSet.has(f.to))).map((f) => f.key), ...strays,
   ]);
-  const planned: Record<string, Record<StuffKey, number>> = {};
-  for (const id of laid) {
+  // what each machine of a laid step takes (`planned`) and gives (`plannedOut`) per second, by the plan's item flows
+  const perMachine = (id: string, way: 'to' | 'from'): Record<StuffKey, number> | null => {
     const sums = new Map<StuffKey, number>();
-    for (const f of itemFlows) if (f.to === id) sums.set(f.key, (sums.get(f.key) ?? 0) + f.perSecond);
-    if (sums.size === 0) continue;
+    for (const f of itemFlows) if (f[way] === id) sums.set(f.key, (sums.get(f.key) ?? 0) + f.perSecond);
+    if (sums.size === 0) return null;
     const count = Math.max(1, steps.get(id)!.count);
-    planned[id] = Object.fromEntries([...sums].sort((a, b) => compareText(a[0], b[0])).map(([key, perSecond]) => [key, perSecond / count]));
+    return Object.fromEntries([...sums].sort((a, b) => compareText(a[0], b[0])).map(([key, perSecond]) => [key, perSecond / count]));
+  };
+  const planned: Record<string, Record<StuffKey, number>> = {};
+  const plannedOut: Record<string, Record<StuffKey, number>> = {};
+  for (const id of laid) {
+    const takes = perMachine(id, 'to');
+    if (takes !== null) planned[id] = takes;
+    const gives = perMachine(id, 'from');
+    if (gives !== null) plannedOut[id] = gives;
   }
   const makerSteps = new Map<StuffKey, Set<string>>();
   for (const f of plan.flows) {
@@ -491,7 +499,7 @@ export function readLine(input: { pack: Pack; plan: Plan; layout: Layout }): Fee
   located.sort((a, b) => (a.local === null ? (b.local === null ? 0 : -1) : b.local === null ? 1 : compareLocal(a.local, b.local)) || a.i - b.i);
 
   return {
-    mode: layout.mode, nodes, networks, covers, supply, sinks, planned, makers, laid,
+    mode: layout.mode, nodes, networks, covers, supply, sinks, planned, plannedOut, makers, laid,
     fed: Object.fromEntries(plan.steps.map((s) => [s.id, stepItemInputs(plan, s.id)])),
     made: Object.fromEntries(plan.steps.map((s) => [s.id, stepItemOutputs(plan, s.id)])),
     itemFlows, depths: Object.fromEntries(stepDepths(plan)), unknowns: located.map(({ u }) => u),

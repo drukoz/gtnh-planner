@@ -72,6 +72,12 @@ export interface FeedModel {
   mode: LogisticsMode; nodes: FeedNode[]; networks: FeedNetwork[]; covers: GtCover[];
   supply: StuffKey[]; sinks: StuffKey[];                      // into the line from outside; out of it (sorted)
   planned: Record<string, Record<StuffKey, number>>;          // stepId → item → per second for each machine of the step
+  /**
+   * stepId → item → per second out of each machine of the step: the plan's item flows from the step, over its machine count.
+   * A blocked output that still leaves its machine at this rate only waits for its takers, which `detect` does not report
+   * (research §7: a push line's machines run ahead of their takers and wait). Absent in a hand-built model: every stall counts.
+   */
+  plannedOut?: Record<string, Record<StuffKey, number>>;
   makers: Record<StuffKey, string[]>;                         // laid-out stepIds whose flows carry the item
   laid: string[];                                             // stepIds with at least one machine node, plan order
   fed: Record<string, StuffKey[]>; made: Record<string, StuffKey[]>;   // stepItemInputs / stepItemOutputs of every plan step (text fallbacks only: "takes 2+ kinds" is `node.kinds`)

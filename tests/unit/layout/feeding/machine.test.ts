@@ -447,6 +447,24 @@ describe('the detectors', () => {
     expect(codes(go([500, 1_500, 2_500]))).toEqual([]);
   });
 
+  it('leaves out an output that only waits for its takers while it gives what the plan asks of it', () => {
+    // research §7: a push line's machines run ahead of their takers and wait, the normal state of the line. Its output slot full
+    // of Gamma (4 a run), a taker takes 4 every 2,000 ticks: each take ends a wait of 2,000 ticks, more than STALL_TICKS
+    const node = smelterNode({ recipes: [simRecipe('sm', 100, [['t:a@0', 1], ['t:b@0', 4]], [['t:c@0', 4]])] });
+    const at = Array.from({ length: 11 }, (_, i) => 2_000 * (i + 1));
+    const go = (plannedOut?: FeedModel['plannedOut']) => both(handModel([node], plannedOut === undefined ? {} : { plannedOut }), {
+      ticks: 24_000, restartAt: 24_000, initial: { '0,0,0': [[2, 't:c@0', 64]] },
+      extra: (env) => [feeder(env, '0,0,0', 3, ['t:a@0', 't:b@0'], 64, NEVER_AGAIN, 0), taker(env, '0,0,0', 3, 4, at)],
+    });
+    // the run's second half takes 6 × 4 Gamma out in 600 s: the 0.04/s the plan asks of it, so it only waits for its takers
+    expect(go({ sm: { 't:c@0': 0.04 } }).findings).toEqual([]);
+    // a plan that asks 0.05/s of it, more than 10 % above what leaves it, and a model that does not say: the stall from tick 0 counts
+    expect(go({ sm: { 't:c@0': 0.05 } }).findings.map((f) => [f.code, f.key, f.tick])).toEqual([['feed_no_route', 't:c@0', 0]]);
+    expect(go().findings.map((f) => [f.code, f.key, f.tick])).toEqual([['feed_no_route', 't:c@0', 0]]);
+    // a plan that sends no Gamma out of it asks nothing of it there: the stall counts
+    expect(go({ sm: { 't:x@0': 1 } }).findings.map((f) => [f.code, f.key, f.tick])).toEqual([['feed_no_route', 't:c@0', 0]]);
+  });
+
   it('looks at the slots, not the side, for what keeps a kind out', () => {
     // its output side takes nothing (Input from Output Side off), so it is fed from the north; Beta never comes, but nothing keeps it out
     const node = smelterNode({ settings: { multiStack: null, inputFilter: null, inputFromOutputSide: false, autoOutput: null } });

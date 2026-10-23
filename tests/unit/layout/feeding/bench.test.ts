@@ -5,7 +5,7 @@ import type { FeedModel } from '../../../../src/server/layout/feeding/model.ts';
 import { bench } from '../../../../src/server/layout/feeding/sim/bench.ts';
 import type { SimEnv } from '../../../../src/server/layout/feeding/sim/machine.ts';
 import { runScenario, type ScenarioOptions, type ScenarioRun } from '../../../../src/server/layout/feeding/sim/run.ts';
-import { benchNode, feeder, handModel, hvExport, outputChestNode } from '../../../helpers/feeding-fixtures.ts';
+import { benchNode, feeder, handModel, hvExport, outputChestNode, taker } from '../../../helpers/feeding-fixtures.ts';
 
 const flood = Array.from({ length: 8 }, (_, slot) => [slot, 't:fine@0', 64] as [number, string, number]);
 
@@ -169,6 +169,23 @@ describe('the Auto Workbench', () => {
     expect(slow.runs).toEqual({ w: 20 });
     // fed at the plan's rate, it keeps up
     expect(both(model, { ticks: 2_000, restartAt: 2_000, extra: fed(20) }).findings).toEqual([]);
+  });
+
+  it('waits for a slow taker behind it without being stuck while it gives what the plan asks of it', () => {
+    // one Alpha makes one Ex; the chest behind it is full of Ex, and a taker frees one every 2,000 ticks: each take lets one push
+    // out and ends a wait of about 2,000 ticks (research §7: a push line's machines run ahead of their takers and wait)
+    const node = benchNode({ grid: ['t:a@0', null, null, null, null, null, null, null, null], result: { key: 't:x@0', amount: 1 } });
+    const full = Array.from({ length: 27 }, (_, slot) => [slot, 't:x@0', 64] as [number, string, number]);
+    const at = Array.from({ length: 11 }, (_, i) => 2_000 * (i + 1));
+    const go = (plannedOut?: FeedModel['plannedOut']) => both(handModel([node, outputChestNode('0,0,1')], plannedOut === undefined ? {} : { plannedOut }), {
+      ticks: 24_000, restartAt: 24_000, initial: { '0,0,1': full },
+      extra: (env) => [feeder(env, '0,0,0', 1, ['t:a@0'], 1, 1_000, 0), taker(env, '0,0,1', 2, 1, at)],
+    });
+    // the run's second half pushes 6 Ex out in 600 s: the 0.01/s the plan asks of it
+    expect(go({ w: { 't:x@0': 0.01 } }).findings).toEqual([]);
+    // a plan that asks 0.02/s of it, and a model that does not say: its first wait, from its first craft at 34, counts
+    expect(go({ w: { 't:x@0': 0.02 } }).findings.map((f) => [f.code, f.key, f.tick])).toEqual([['feed_bench_stuck', 't:x@0', 34]]);
+    expect(go().findings.map((f) => [f.code, f.key, f.tick])).toEqual([['feed_bench_stuck', 't:x@0', 34]]);
   });
 
   it('lets its covers act first in its tick', () => {

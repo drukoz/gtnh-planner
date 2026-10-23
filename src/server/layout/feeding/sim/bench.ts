@@ -180,11 +180,15 @@ class AutoWorkbench implements SimInv, SimEntity, Preloadable {
     const s = this.slots[slot];
     if (s === undefined || s === null || n <= 0) return 0;
     const m = Math.min(n, s.count);
+    const key = s.key;
     s.count -= m;
     if (s.count <= 0) this.slots[slot] = null;
     this.changes++;
-    if (slot === RESULT && this.refusedSince >= 0) {
-      // its result went out, by its own push or by a network: it is not refused any more
+    if (slot !== RESULT) return m;
+    // what leaves its result slot, by its own push or by a network: what it gives
+    if (m > 0) this.env.stats.extracted(this.id, key, m, this.env.sim.t);
+    if (this.refusedSince >= 0) {
+      // its result went out: it is not refused any more
       this.refusedSince = -1;
       this.env.stats.benchFreed(this.id, this.env.sim.t);
     }

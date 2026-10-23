@@ -15,6 +15,9 @@
 //   clean-up of duplicate stacks overwrote there;
 // - `feed_bench_stuck`: a bench whose push left the stack in its result slot where it was for `STALL_TICKS` in a row;
 // - `feed_no_route`: an output blocked for `STALL_TICKS` in a row while nothing is taken out of the machine;
+// - neither of these two where the machine still gave what the plan asks of it of that item over the run's second half
+//   (`model.plannedOut`, within `feed_slow`'s tolerance): it only waited for its takers, as a push line's machines run ahead of
+//   their takers and wait, the line's normal state (research §7);
 // - `feed_pool_starve`: a recipe of a shared machine that never ran while its inputs were there for `STALL_TICKS`;
 // - `feed_fluid_packet`: once per machine and fluid, an ME interface's Fluid Packet that went into one of its input slots,
 //   that it kept in its send list for `STALL_TICKS` because the machine took none, or the CPU's push of a pattern of Fluid
@@ -57,6 +60,7 @@ interface NodeRecord {
   starts: number[];                                           // runs started, by recipe index
   given: { t: number[]; key: number[]; n: number[] };         // `delivered`, in order
   taken: number[];                                            // ticks something left its output slots
+  out: { t: number[]; key: number[]; n: number[] };           // `extracted`, in order: what left its output slots (a bench's result slot)
   slots: Map<number, { most: number; first: number }>;        // input slots a kind filled: the most, the first tick it filled two
   arrived: Array<[number, number, number]>;                   // a chest's arrivals: tick, key, count (one per tick and key)
   spilled: Map<number, number>;                               // items dropped into the world, by key
@@ -64,7 +68,10 @@ interface NodeRecord {
 }
 
 function emptyRecord(): NodeRecord {
-  return { checks: [], starts: [], given: { t: [], key: [], n: [] }, taken: [], slots: new Map(), arrived: [], spilled: new Map(), final: null };
+  return {
+    checks: [], starts: [], given: { t: [], key: [], n: [] }, taken: [], out: { t: [], key: [], n: [] }, slots: new Map(), arrived: [], spilled: new Map(),
+    final: null,
+  };
 }
 
 /**
@@ -218,12 +225,13 @@ export class SimStats {
     g.n.push(n);
   }
 
-  /** `n` of `key` left `node`'s output slots. */
+  /** `n` of `key` left `node`'s output slots (a bench's result slot). */
   extracted(node: NodeId, key: number, n: number, t: number): void {
-    void key;
-    void n;
-    const taken = this.of(node).taken;
-    if (taken.at(-1) !== t) taken.push(t);
+    const r = this.of(node);
+    if (r.taken.at(-1) !== t) r.taken.push(t);
+    r.out.t.push(t);
+    r.out.key.push(key);
+    r.out.n.push(n);
   }
 
   /** A recipe check found no recipe whose inputs are there: recipe `recipe` (its cached one, else its first) misses `missing`. */
@@ -554,24 +562,30 @@ function stretches<T>(checks: readonly Check[], ticks: number, same: (c: Check) 
   return out;
 }
 
-/**
- * A multiblock's record as the detectors read it: its controller's checks and runs, with what its input buses were handed
- * (`given`) and the ticks something left its output buses (`taken`), the buses standing in for a machine's slots.
- */
-function withBuses(stats: SimStats, node: MultiNode, own: Readonly<NodeRecord>): Readonly<NodeRecord> {
-  const given = { t: [...own.given.t], key: [...own.given.key], n: [...own.given.n] };
-  for (const bus of node.inBuses) {
-    const g = stats.recordOf(bus.id)?.given;
+/** `list` with the entries of `more` after its own. */
+function joined(list: NodeRecord['given'], more: ReadonlyArray<NodeRecord['given'] | undefined>): NodeRecord['given'] {
+  const all = { t: [...list.t], key: [...list.key], n: [...list.n] };
+  for (const g of more) {
     if (g === undefined) continue;
     for (let i = 0; i < g.t.length; i++) {
-      given.t.push(g.t[i]!);
-      given.key.push(g.key[i]!);
-      given.n.push(g.n[i]!);
+      all.t.push(g.t[i]!);
+      all.key.push(g.key[i]!);
+      all.n.push(g.n[i]!);
     }
   }
+  return all;
+}
+
+/**
+ * A multiblock's record as the detectors read it: its controller's checks and runs, with what its input buses were handed
+ * (`given`) and what left its output buses and when (`out`, `taken`), the buses standing in for a machine's slots.
+ */
+function withBuses(stats: SimStats, node: MultiNode, own: Readonly<NodeRecord>): Readonly<NodeRecord> {
+  const given = joined(own.given, node.inBuses.map((bus) => stats.recordOf(bus.id)?.given));
+  const out = joined(own.out, node.outBuses.map((bus) => stats.recordOf(bus.id)?.out));
   const taken = new Set(own.taken);
   for (const bus of node.outBuses) for (const t of stats.recordOf(bus.id)?.taken ?? []) taken.add(t);
-  return { ...own, given, taken: [...taken].sort((a, b) => a - b) };
+  return { ...own, given, out, taken: [...taken].sort((a, b) => a - b) };
 }
 
 /**
@@ -605,6 +619,28 @@ export function detect(model: FeedModel, stats: SimStats, run: { scenario: Scena
     }
   }
   const sinks = new Set(model.sinks);
+  // the run's second half, over which rates count, and how far below its plan a rate may fall
+  const half = Math.floor(ticks / 2);
+  const seconds = (ticks - half) / TICKS_PER_SECOND;
+  const tolerance = run.slowTolerance ?? SLOW_TOLERANCE;
+  /**
+   * Whether `node` gave what the plan asks of it of item `key` (an id) over the run's second half, within `feed_slow`'s
+   * tolerance (`model.plannedOut`): then a blocked output, or a result its back refuses, only waits for its takers, as a push
+   * line's machines run ahead of their takers and wait (research §7). False where the plan asks nothing of it there: a
+   * hand-built model, or an item the plan sends nowhere.
+   */
+  const keptUp = (node: FeedNode, rec: Readonly<NodeRecord>, key: number): boolean => {
+    if (node.kind === 'chest' || seconds <= 0) return false;
+    const k = keyOf(key);
+    let rate = 0;
+    for (const stepId of node.stepIds) rate += model.plannedOut?.[stepId]?.[k] ?? 0;
+    if (rate <= 0) return false;
+    let gave = 0;
+    rec.out.key.forEach((x, i) => {
+      if (x === key && rec.out.t[i]! >= half && rec.out.t[i]! < ticks) gave += rec.out.n[i]!;
+    });
+    return gave >= (1 - tolerance) * rate * seconds;
+  };
   // the ME interfaces' names, for the Fluid Packet texts
   const ifaceLabels = new Map<NodeId, string>();
   for (const net of model.networks) if (net.kind === 'ae2') for (const i of net.interfaces) ifaceLabels.set(i.id, i.label);
@@ -660,7 +696,8 @@ export function detect(model: FeedModel, stats: SimStats, run: { scenario: Scena
       }
     }
 
-    // rule 14: feed_no_route, an output blocked with nothing taken out of the machine meanwhile
+    // rule 14: feed_no_route, an output blocked with nothing taken out of the machine meanwhile, and it gave less of the item
+    // than the plan asks of it (`keptUp`)
     const blocked = stretches(rec.checks, ticks, (c) => (c.kind === BLOCK ? c.key : null));
     const stalls = new Map<number, { from: number; recipe: number }>();
     for (const s of blocked) {
@@ -681,6 +718,7 @@ export function detect(model: FeedModel, stats: SimStats, run: { scenario: Scena
       if (stalled >= 0) stalls.set(s.value, { from: stalled, recipe: s.first.recipe });
     }
     for (const [key, s] of [...stalls].sort((a, b) => a[0] - b[0])) {
+      if (keptUp(node, rec, key)) continue;
       const k = keyOf(key);
       emit(at, node, 'feed_no_route', `Nothing takes ${name(key)} out of ${node.label}: ${run.explain('out', node.id, k) ?? 'nothing on the line takes it'}`,
         { key: k, stepId: recipeStep(s.recipe), tick: s.from });
@@ -711,9 +749,6 @@ export function detect(model: FeedModel, stats: SimStats, run: { scenario: Scena
         planned.set(key, { rate: (p?.rate ?? 0) + rate, stepId: p?.stepId ?? stepId });
       }
     }
-    const half = Math.floor(ticks / 2);
-    const seconds = (ticks - half) / TICKS_PER_SECOND;
-    const tolerance = run.slowTolerance ?? SLOW_TOLERANCE;
     for (const [key, p] of [...planned].sort((a, b) => compareText(a[0], b[0]))) {
       const id = stats.keys.id(key);
       let total = 0, late = 0;
@@ -805,7 +840,7 @@ export function detect(model: FeedModel, stats: SimStats, run: { scenario: Scena
    * Task 6 rule 5, a bench: `feed_overfill` (one item in two or more input slots: n the most, from the first tick; an item
    * not in its grid in one), `feed_bench_eject` (what it moved to its result slot that it did not craft), `feed_bench_delete`
    * (what its clean-up overwrote there) and `feed_bench_stuck` (its push left its result for `STALL_TICKS` in a row, once
-   * per item, from the first such stretch).
+   * per item, from the first such stretch, unless it still gave what the plan asks of it: `keptUp`).
    */
   function benchFindings(at: number, node: BenchNode, rec: Readonly<NodeRecord>): void {
     for (const [key, s] of [...rec.slots].sort((a, b) => a[0] - b[0])) {
@@ -833,6 +868,7 @@ export function detect(model: FeedModel, stats: SimStats, run: { scenario: Scena
       stuck.set(r.key, r.from);
     }
     for (const [key, from] of [...stuck].sort((x, y) => x[0] - y[0])) {
+      if (keptUp(node, rec, key)) continue;
       emit(at, node, 'feed_bench_stuck', `${node.label} stopped: ${name(key)} sits in its result slot and the block behind it does not take it`,
         { key: keyOf(key), tick: from });
     }

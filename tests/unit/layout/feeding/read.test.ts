@@ -87,6 +87,8 @@ describe('readLine', () => {
     expect(net.hops['3,0,2']!['6,1,3']).toBe(5);
     expect(m.unknowns.filter((u) => u.code === 'extractor_new').map((u) => u.pos)).toEqual([[3, 64, 2], [4, 64, 2], [5, 64, 2], [6, 65, 1]]);
     expect([m.supply, m.sinks, m.planned]).toEqual([['t:a@0'], ['t:y@0'], { s1: { 't:a@0': 0.5 }, s2: { 't:x@0': 1 } }]);
+    // and what each machine gives: the two macerators share s1's 1 Ex a second
+    expect(m.plannedOut).toEqual({ s1: { 't:x@0': 0.5 }, s2: { 't:y@0': 1 } });
     expect((m.nodes[0] as BasicNode)).toMatchObject({ inSlots: 1, outSlots: 1, outputSide: 3, front: 4, settings: { multiStack: null, inputFromOutputSide: true } });
   });
 
