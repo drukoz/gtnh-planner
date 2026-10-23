@@ -212,6 +212,22 @@ export function chain2(): { pack: Pack; plan: Plan } {
 }
 
 /**
+ * A Basic Macerator on raw Gamma (m: Gamma → Ex) beside an MV Auto Workbench on raw Alpha and Beta (b: a shaped crafting
+ * recipe, Alpha beside Beta in the grid's top row → Why), with the flows raw → m Gamma, m → out Ex, raw → b Alpha and Beta,
+ * b → out Why, 0.2/s each: a line where main lays what only the bench takes apart from what the macerator takes.
+ */
+export function benchBesideMachine(): { pack: Pack; plan: Plan } {
+  return feedPlan([
+    { id: 'm', mteId: IDS.MACERATOR, count: 1, inputs: [['t:c@0', 1]], outputs: [['t:x@0', 1]] },
+    { id: 'b', mteId: FEED_IDS.BENCH, count: 1, inputs: [['t:a@0', 1], ['t:b@0', 1]], outputs: [['t:y@0', 1]], craft: { width: 2, cells: ['t:a@0', 't:b@0', null, null] } },
+  ], [
+    { from: 'raw', to: 'm', key: 't:c@0', perSecond: 0.2 }, { from: 'm', to: 'out', key: 't:x@0', perSecond: 0.2 },
+    { from: 'raw', to: 'b', key: 't:a@0', perSecond: 0.2 }, { from: 'raw', to: 'b', key: 't:b@0', perSecond: 0.2 },
+    { from: 'b', to: 'out', key: 't:y@0', perSecond: 0.2 },
+  ]);
+}
+
+/**
  * `plan` laid out by main's `layoutLine` in `mode`: without a world (at the default origin, rotation 0) unless `at` is
  * given, then on the layout tests' line scan and ground (`lineScan()`, `lineGround()`) at that origin and rotation.
  */

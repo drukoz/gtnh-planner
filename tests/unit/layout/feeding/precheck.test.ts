@@ -11,7 +11,7 @@ import { posKey, type Vec3 } from '../../../../src/shared/layout/geometry.ts';
 import type { Layout } from '../../../../src/shared/types/layout.ts';
 import type { Pack } from '../../../../src/shared/types/pack.ts';
 import type { Plan, PlanFlow } from '../../../../src/shared/types/plan.ts';
-import { chain2, feedPlan, layFeed, layLegacy, layUncapped, FEED_IDS } from '../../../helpers/feeding-fixtures.ts';
+import { benchBesideMachine, chain2, feedPlan, layFeed, layLegacy, layUncapped, FEED_IDS } from '../../../helpers/feeding-fixtures.ts';
 import { IDS } from '../../../helpers/layout-fixtures.ts';
 
 const brief = (f: { code: string; certainty: string; key?: string; machine: string }) => `${f.code} ${f.certainty} ${f.key ?? '-'} ${f.machine}`;
@@ -795,6 +795,32 @@ describe('precheckFeeding on the lines main lays now', () => {
     const layout = await layFeed(f.pack, f.plan, 'ae2');
     expect(precheckFeeding(readLine({ pack: f.pack, plan: f.plan, layout }), f.pack)).toEqual([]);
     expect(layout.warnings.map((w) => w.code)).toContain('ae2_no_pattern');
+  });
+
+  it('leaves to the input chest\'s Item Broadcaster Chip what a bench\'s Item Stock Keeper Chip orders (R5d)', async () => {
+    // main's routed line sends what only the bench takes (Alpha, Beta) out of the input chest through an Item Broadcaster Chip,
+    // on the orders of the bench's Item Stock Keeper Chip, beside the Item Extractor Chip of what the macerator takes (Gamma)
+    const { pack, plan } = benchBesideMachine();
+    const layout = await layFeed(pack, plan, 'routed');
+    const chest = labelled(layout, 'Routed Interface Pipe (input chest)');
+    const bench = labelled(layout, 'Routed Interface Pipe (Auto Workbench (MV))');
+    expect([chest.feed?.chips, bench.feed?.chips?.[0]]).toEqual([
+      [extractorOf('t:c@0'), { kind: 'broadcaster', filter: whitelist('t:a@0', 't:b@0') }],
+      { kind: 'stock_keeper', stock: [{ key: 't:a@0', count: 5 }, { key: 't:b@0', count: 5 }], requestMode: 'when_missing' },
+    ]);
+    const starved = () => precheckFeeding(readLine({ pack, plan, layout }), pack);
+    expect(starved()).toEqual([]);
+    const label = readLine({ pack, plan, layout }).nodes.find((n) => n.kind === 'bench')!.label;
+    const chestLabel = 'Chest (input) at 3 64 1';
+    // a stock keeper that no longer keeps Alpha orders none: then the extractor, which does not list it, is why it stays
+    bench.feed = { chips: [{ kind: 'stock_keeper', stock: [{ key: 't:b@0', count: 5 }] }, ...bench.feed!.chips!.slice(1)] };
+    expect(starved().map((f) => [brief(f), f.text])).toEqual([
+      [`feed_starved certain t:a@0 ${label}`, `${label} never gets Alpha: the Item Extractor Chip on ${chestLabel} does not list it`],
+    ]);
+    // and so it is with a broadcaster that does not offer Beta
+    bench.feed = { chips: [{ kind: 'stock_keeper', stock: [{ key: 't:a@0', count: 5 }, { key: 't:b@0', count: 5 }] }, ...bench.feed.chips!.slice(1)] };
+    chest.feed = { chips: [extractorOf('t:c@0'), { kind: 'broadcaster', filter: whitelist('t:a@0') }] };
+    expect(starved().map(brief)).toEqual([`feed_starved certain t:b@0 ${label}`]);
   });
 });
 

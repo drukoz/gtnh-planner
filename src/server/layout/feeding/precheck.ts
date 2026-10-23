@@ -355,17 +355,25 @@ function r5c(c: Ctx): void {
 }
 
 /**
- * R5d, `feed_starved` certain: a supply item that an input chest stocks, which none of the Item Extractor Chips on that chest's
- * pipes lets out, never reaches the machines that take it. A chest without an extractor chip is left out: the text names the chip.
+ * R5d, `feed_starved` certain: a supply item that an input chest stocks, which none of the chips on that chest's pipes lets out,
+ * never reaches the machines that take it. An Item Extractor Chip lets it out when its filter passes it; so does an Item
+ * Broadcaster Chip whose filter passes it when an Item Stock Keeper Chip on the chest's network keeps it, as the broadcaster
+ * sends it on the stock keeper's orders (research §2.2): main lays what only Auto Workbenches take that way, beside the
+ * extractor of the other supply items, as R5a reads a supplier's broadcaster. Only when neither lets it out is the
+ * extractor to blame; a chest without an extractor chip is left out, as the text names the chip.
  */
 function r5d(c: Ctx): void {
   const stuck = new Map<StuffKey, string>();
   for (const key of c.model.supply) {
     const stocking = c.chests.filter((chest) => chest.side === 'input' && chest.keys.includes(key));
-    const extractors = stocking.map((chest) => ({ chest, chips: chipsOf(c.pipes.get(`${chest.id}\n`) ?? [], 'extractor') }));
-    if (extractors.some(({ chips }) => chips.some((chip) => passes(chip, key)))) continue;
-    const blamed = extractors.find(({ chips }) => chips.length > 0);
-    if (blamed !== undefined) stuck.set(key, `the Item Extractor Chip on ${blamed.chest.label} ${whyNotPassed(blamed.chips)}`);
+    const chips = stocking.map((chest) => {
+      const pipes = c.pipes.get(`${chest.id}\n`) ?? [];
+      return { chest, extractors: chipsOf(pipes, 'extractor'), broadcasters: chipsOf(pipes, 'broadcaster') };
+    });
+    if (chips.some(({ extractors }) => extractors.some((chip) => passes(chip, key)))) continue;
+    if (chips.some(({ chest, broadcasters }) => broadcasters.some((chip) => passes(chip, key)) && stockedOn(c, chest, key))) continue;
+    const blamed = chips.find(({ extractors }) => extractors.length > 0);
+    if (blamed !== undefined) stuck.set(key, `the Item Extractor Chip on ${blamed.chest.label} ${whyNotPassed(blamed.extractors)}`);
   }
   if (stuck.size === 0) return;
   for (const node of c.machines) {
@@ -377,14 +385,14 @@ function r5d(c: Ctx): void {
   }
 }
 
-/** The routed networks `node` is on: those with a pipe that touches it, else all of them. */
-function netsOf(c: Ctx, node: MachineNode): readonly RoutedNet[] {
+/** The routed networks `node` (a machine or a chest) is on: those with a pipe that touches it, else all of them. */
+function netsOf(c: Ctx, node: FeedNode): readonly RoutedNet[] {
   const own = c.routedNets.filter((net) => net.pipes.some((p) => p.target?.node === node.id));
   return own.length > 0 ? own : c.routedNets;
 }
 
 /** Whether an Item Stock Keeper Chip on a routed network `node` is on keeps `key`: it orders it from the network's broadcasters. */
-function stockedOn(c: Ctx, node: MachineNode, key: StuffKey): boolean {
+function stockedOn(c: Ctx, node: FeedNode, key: StuffKey): boolean {
   return netsOf(c, node).some((net) => net.pipes.some((pipe) => pipe.chips.some((chip) => chip.kind === 'stock_keeper' && chip.stock?.some((s) => s.key === key) === true)));
 }
 

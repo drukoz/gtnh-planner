@@ -12,8 +12,8 @@ import type { Layout, LayoutBlock } from '../../../../src/shared/types/layout.ts
 import type { Pack } from '../../../../src/shared/types/pack.ts';
 import type { Plan, PlanFlow } from '../../../../src/shared/types/plan.ts';
 import {
-  benchNode, bigLine, chain2, ebfNode, eioModel, feedPlan, feeder, handModel, inputChestNode, layFeed, layLegacy, outputChestNode, simRecipe, smelterNode,
-  taker, FEED_IDS, type FeedStep,
+  benchBesideMachine, benchNode, bigLine, chain2, ebfNode, eioModel, feedPlan, feeder, handModel, inputChestNode, layFeed, layLegacy, outputChestNode, simRecipe,
+  smelterNode, taker, FEED_IDS, type FeedStep,
 } from '../../../helpers/feeding-fixtures.ts';
 import { IDS } from '../../../helpers/layout-fixtures.ts';
 
@@ -143,6 +143,17 @@ describe('checkFeeding', () => {
     expect(report.findings.filter((f) => f.code === 'feed_starved' || f.code === 'feed_no_route')).toEqual([]);
     expect(report.ok).toBe(true);
     expect(report.inputs.map((i) => [i.machine, i.deliveredPerSecond.steady! > 0])).toEqual(report.inputs.map((i) => [i.machine, true]));
+  });
+
+  it('passes the routed line main lays for a bench beside a machine', async () => {
+    // the input chest's Item Broadcaster Chip sends Alpha and Beta, which only the bench takes, on its Item Stock Keeper Chip's
+    // orders; its Item Extractor Chip sends the macerator's Gamma: R5d has nothing to find, and every scenario keeps the plan's pace
+    const { pack, plan } = benchBesideMachine();
+    const report = checkFeeding({ pack, plan, layout: await layFeed(pack, plan, 'routed') });
+    expect([report.ok, report.findings]).toEqual([true, []]);
+    expect(report.inputs.map((i) => [i.stepId, i.key, Object.values(i.deliveredPerSecond).every((r) => r >= i.plannedPerSecond)])).toEqual([
+      ['b', 't:a@0', true], ['b', 't:b@0', true], ['m', 't:c@0', true],
+    ]);
   });
 
   describe('finds today\'s EnderIO smelter crowded only when Multi Stack Input is On', () => {
