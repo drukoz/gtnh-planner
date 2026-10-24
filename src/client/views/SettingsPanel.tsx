@@ -2,9 +2,9 @@
 // the group can mine, how the line is fed, what materials cost, which materials to avoid, which recipe groups to skip,
 // the planner's options (supporting lines, how much a machine is worth in raw material, how much more raw material
 // fewer machines may cost, what the build cost of new machines is counted against, the tier they are built at and
-// when a multiblock is, reusing the machines the group has), the machines it has that no world scan shows, and the
-// lists the panels fill: what the group already makes, makes itself, already has a supply of, and the ingredient
-// options it pinned.
+// when a multiblock is, reusing the machines the group has), the machines it has that no world scan shows, the base
+// materials its line may buy ("Only these come in", fix wave 3 (B)), and the lists the panels fill: what the group
+// already makes, makes itself, already has a supply of, and the ingredient options it pinned.
 // Everyone sees the same settings: every change sends one `settings` op carrying whole field values, and nothing is
 // sent for an amount or a cost that would be refused.
 
@@ -14,6 +14,7 @@ import { COIL_HEATS } from '../../shared/gt/overclock.ts';
 import { tierName } from '../../shared/gt/tiers.ts';
 import type { PackInfo } from '../../shared/types/api.ts';
 import type { SearchHit } from '../../shared/types/pack.ts';
+import { MAX_INPUTS_ONLY } from '../../shared/project/apply-op.ts';
 import { LogisticsMode, type Plan, type PlanSettings } from '../../shared/types/plan.ts';
 import { AvoidPicker } from '../components/AvoidPicker.tsx';
 import { ItemIcon } from '../components/ItemIcon.tsx';
@@ -24,8 +25,8 @@ import { haveSupplyPatch, optionPatch } from './flow-model.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
 import {
   BUILD_HORIZON_PRESETS, EXCLUSION_LABELS, MULTIBLOCK_CHOICES, buildTierOptions, buildTierPatch, dimOverridePatch, dimRows, groupDimRows, horizonChoice,
-  horizonPatch, isStuffKey, multiblocksPatch, optionPinRows, parseAmount, parseCost, RAW_CAP_PRESETS, rawCapChoice, rawCapOf, rawCapPatch, stepChargeOf,
-  stepChargeOptions, stepChargePatch, toggleList,
+  horizonPatch, inputsOnlyFromPlan, inputsOnlyPatch, isStuffKey, multiblocksPatch, optionPinRows, parseAmount, parseCost, RAW_CAP_PRESETS, rawCapChoice,
+  rawCapOf, rawCapPatch, stepChargeOf, stepChargeOptions, stepChargePatch, toggleList,
 } from './settings-model.ts';
 
 /** Typing pauses this long before the amount is sent (one plan per pause, not one per keystroke). */
@@ -657,6 +658,58 @@ export function HaveSupplySection(props: { settings: PlanSettings; nameOf: NameO
   );
 }
 
+/**
+ * "Only these come in" (`inputsOnly`, plan 12 fix wave 3 (B)): the base materials the line may buy, each removable, one
+ * more from a search, the plan's own raw inputs as a start, or none (off).
+ */
+export function InputsOnlySection(props: {
+  settings: PlanSettings; plan: Plan | null; nameOf: NameOf; patch: Patch; remember(hit: SearchHit): void;
+}): ReactElement {
+  const { settings, plan, nameOf, patch, remember } = props;
+  const keys = settings.inputsOnly ?? [];
+  const send = (p: Partial<PlanSettings> | null): void => {
+    if (p !== null) patch(p);
+  };
+  const raw = plan === null ? [] : inputsOnlyFromPlan(plan);
+  return (
+    <section className="settings-section">
+      <h3>Only these come in</h3>
+      <p className="muted small">
+        With a list the line buys nothing else: it makes every other good, or says what it cannot make from these. Water, lava,
+        air and cobblestone always come in. To buy something the line would make, put it on “We already make” too.
+      </p>
+      {keys.length === 0 ? (
+        <p className="muted">Off: the line buys whatever the planner picks.</p>
+      ) : (
+        <ul className="key-list">
+          {keys.map((key) => (
+            <li key={key} data-item-row={key}>
+              <ItemIcon itemKey={key} size={20} name={nameOf(key)} />
+              <span className="key-name" title={key}>{nameOf(key)}</span>
+              <button type="button" className="small" aria-label={`Remove ${nameOf(key)}`} onClick={() => send(inputsOnlyPatch(settings, key, false))}>Remove</button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {keys.length < MAX_INPUTS_ONLY ? (
+        <ItemSearch
+          placeholder="Add a base material"
+          onPick={(hit) => {
+            remember(hit);
+            send(inputsOnlyPatch(settings, hit.key, true));
+          }}
+        />
+      ) : (
+        <p className="muted small">At most {MAX_INPUTS_ONLY} base materials.</p>
+      )}
+      <div className="row">
+        <button type="button" className="small" disabled={raw.length === 0} onClick={() => patch({ inputsOnly: raw })}>Use this plan&apos;s raw inputs</button>
+        {keys.length > 0 && <button type="button" className="small" onClick={() => patch({ inputsOnly: [] })}>Clear</button>}
+      </div>
+    </section>
+  );
+}
+
 /** The ingredient options the group pinned (`optionChoice`, fix spec R9), by the step that takes them; each can be removed. */
 export function OptionPinsSection(props: { settings: PlanSettings; plan: Plan | null; nameOf: NameOf; patch: Patch }): ReactElement {
   const { settings, plan, nameOf, patch } = props;
@@ -714,6 +767,7 @@ export function SettingsPanel(props: ProjectViewProps & { info: PackInfo | null 
         nameOf={nameOf}
         onRemove={(key) => patch({ stopItems: toggleList(settings.stopItems, key, false) })}
       />
+      <InputsOnlySection settings={settings} plan={plan} nameOf={nameOf} patch={patch} remember={remember} />
       <KeyListSection
         title="We make ourselves"
         keys={settings.expandItems}

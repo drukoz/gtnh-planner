@@ -5,10 +5,12 @@ import {
   dimRows, dimOverridePatch, toggleList, parseAmount, groupDimRows, parseCost, STEP_CHARGE_PRESETS, ownableMachineGroups, ownedMachineLabel, ownedWith,
   ownedWithout, parseOwnedCount, BUILD_HORIZON_PRESETS, horizonChoice, horizonPatch, buildTierOptions, buildTierPatch, MULTIBLOCK_CHOICES, multiblocksPatch,
   RAW_CAP_PRESETS, rawCapChoice, rawCapOf, rawCapPatch,
+  inputsOnlyFromPlan, inputsOnlyPatch,
 } from '../../src/client/views/settings-model.ts';
 import {
-  BuildHorizonField, BuildTierField, HaveSupplySection, MultiblocksField, OptionPinsSection, RawCapField, ReuseOwnedField, SettingsPanel, StepChargeField,
+  BuildHorizonField, BuildTierField, HaveSupplySection, InputsOnlySection, MultiblocksField, OptionPinsSection, RawCapField, ReuseOwnedField, SettingsPanel, StepChargeField,
 } from '../../src/client/views/SettingsPanel.tsx';
+import { ItemSearch } from '../../src/client/components/ItemSearch.tsx';
 import { OwnedMachinesEditor } from '../../src/client/components/OwnedMachinesEditor.tsx';
 import { TierPicker } from '../../src/client/components/TierPicker.tsx';
 import { defaultSettings, validateOp } from '../../src/shared/project/apply-op.ts';
@@ -399,5 +401,51 @@ describe('reusing machines we have', () => {
     expect(ownedWith(full, 5, 1)).toEqual({ owned: full.map((e) => (e.mteId === 5 ? { mteId: 5, count: 2 } : e)) });
     expect(ownedWith([], 121, 0)).toEqual({ error: 'Enter a whole number from 1 to 10,000' });
     expect(ownedWithout([{ mteId: 121, count: 2 }, { mteId: 101, count: 1 }], 121)).toEqual([{ mteId: 101, count: 1 }]);
+  });
+});
+
+describe('only these come in (fix wave 3 (B))', () => {
+  it('takes the plan’s raw inputs as the list: free inputs left out, once each, sorted, at most 50', () => {
+    const raw = (keys: string[]): Pick<Plan, 'rawInputs'> => ({ rawInputs: keys.map((key) => ({ key })) } as unknown as Pick<Plan, 'rawInputs'>);
+    expect(inputsOnlyFromPlan(raw(['t:b@0', 'fluid:water', 't:a@0', 'minecraft:cobblestone@0', 't:b@0']))).toEqual(['t:a@0', 't:b@0']);
+    const many = Array.from({ length: 60 }, (_, i) => `t:k${String(i).padStart(2, '0')}@0`);
+    expect(inputsOnlyFromPlan(raw(many))).toEqual(many.slice(0, 50));
+  });
+
+  it('adds and removes one key, never past 50', () => {
+    const s = { ...defaultSettings(), inputsOnly: ['t:b@0'] };
+    expect(inputsOnlyPatch(s, 't:a@0', true)).toEqual({ inputsOnly: ['t:a@0', 't:b@0'] });
+    expect(inputsOnlyPatch(s, 't:b@0', false)).toEqual({ inputsOnly: [] });
+    const full = { ...defaultSettings(), inputsOnly: Array.from({ length: 50 }, (_, i) => `t:k${i}@0`) };
+    expect(inputsOnlyPatch(full, 't:new@0', true)).toBeNull();
+    expect(inputsOnlyPatch(full, 't:k3@0', true)).toEqual({ inputsOnly: [...full.inputsOnly].sort() });
+    expect(validateOp({ op: 'settings', patch: inputsOnlyPatch(s, 't:a@0', true) })).toBeNull();
+  });
+
+  it('shows "Only these come in" with a chip per key, a search, "Use this plan’s raw inputs" and "Clear"', () => {
+    const p = { ...plan([]), tier: 1, rawInputs: [{ key: 't:a@0' }, { key: 'fluid:water' }, { key: 't:b@0' }],
+      names: { 't:a@0': 'Alpha', 't:b@0': 'Beta' } } as unknown as Plan;
+    const listed = { ...defaultSettings(), inputsOnly: ['t:a@0'] };
+    const html = panelOf(listed, p);
+    expect(html).toContain('<h3>Only these come in</h3>');
+    expect(html).toContain('aria-label="Remove Alpha"');
+    const patch = vi.fn();
+    const remember = vi.fn();
+    const tree = InputsOnlySection({ settings: listed, plan: p, nameOf: (k) => p.names?.[k] ?? k, patch, remember });
+    const button = (label: string): ReactElement<Record<string, unknown>> =>
+      findAll(tree, (e) => e.type === 'button' && (e.props.children === label || e.props['aria-label'] === label))[0]!;
+    (button("Use this plan's raw inputs").props.onClick as () => void)();
+    (button('Clear').props.onClick as () => void)();
+    (button('Remove Alpha').props.onClick as () => void)();
+    const [search] = findAll(tree, (e) => e.type === ItemSearch);
+    (search!.props.onPick as (hit: { key: string; name: string }) => void)({ key: 't:c@0', name: 'Gamma' });
+    expect(remember).toHaveBeenCalledWith({ key: 't:c@0', name: 'Gamma' });
+    expect(patch.mock.calls.map((c) => c[0])).toEqual([
+      { inputsOnly: ['t:a@0', 't:b@0'] }, { inputsOnly: [] }, { inputsOnly: [] }, { inputsOnly: ['t:a@0', 't:c@0'] },
+    ]);
+    const off = panelOf(defaultSettings(), null);
+    expect(off).toContain('Off: the line buys whatever the planner picks.');
+    expect(off).not.toContain('>Clear<');
+    expect(off).toMatch(/<button[^>]*disabled=""[^>]*>Use this plan&#x27;s raw inputs<\/button>/);
   });
 });

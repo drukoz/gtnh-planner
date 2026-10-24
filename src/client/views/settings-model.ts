@@ -3,14 +3,17 @@
 // checks an amount or a cost must pass before anything is sent, the avoid list's suggestions, labels and changes, the
 // "Steps vs raw material" presets (fix spec §3) and the raw cap's ("Raw material for fewer machines", fix wave 3 (A)), the
 // build horizon's presets and the choices of the tier new machines are built at and of when to build a multiblock
-// (plan 12 Task 7, the user's ruling 224), the pinned ingredient options in words (fix spec §6.4) and the "Machines we
-// have" list's machines, counts and changes (architecture §11.29).
+// (plan 12 Task 7, the user's ruling 224), the pinned ingredient options in words (fix spec §6.4), the "Machines we
+// have" list's machines, counts and changes (architecture §11.29) and the start and changes of "Only these come in"
+// (fix wave 3 (B)).
 
 import { TIER_NAMES, tierName } from '../../shared/gt/tiers.ts';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
-import { MAX_AVOID_ENTRIES, MAX_AVOID_ENTRY_LENGTH, MAX_OWNED_MANUAL_COUNT, MAX_OWNED_MANUAL_ENTRIES, MAX_STEP_CHARGE } from '../../shared/project/apply-op.ts';
+import {
+  MAX_AVOID_ENTRIES, MAX_AVOID_ENTRY_LENGTH, MAX_INPUTS_ONLY, MAX_OWNED_MANUAL_COUNT, MAX_OWNED_MANUAL_ENTRIES, MAX_STEP_CHARGE,
+} from '../../shared/project/apply-op.ts';
 import type { PackInfo } from '../../shared/types/api.ts';
-import { DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_RAW_CAP, DEFAULT_STEP_CHARGE, type Plan, type PlanSettings, type ReachableDim } from '../../shared/types/plan.ts';
+import { DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_RAW_CAP, DEFAULT_STEP_CHARGE, FREE_KEYS, type Plan, type PlanSettings, type ReachableDim } from '../../shared/types/plan.ts';
 import { formatNumber } from '../format.ts';
 
 export interface DimRow { key: string; name: string; group: string; state: 'auto' | 'on' | 'off'; reachable: boolean; label: string }
@@ -386,6 +389,22 @@ export function ownedWith(owned: readonly OwnedEntry[], mteId: number, count: nu
   }
   if (entry.count >= MAX_OWNED_MANUAL_COUNT) return { error: `The list already counts ${formatNumber(MAX_OWNED_MANUAL_COUNT)} of this machine` };
   return { owned: owned.map((e) => (e === entry ? { mteId, count: Math.min(MAX_OWNED_MANUAL_COUNT, e.count + count) } : e)) };
+}
+
+/**
+ * "Use this plan's raw inputs" (fix wave 3 (B)): the keys of the plan's raw inputs without the free inputs (`FREE_KEYS`),
+ * once each, sorted, at most `MAX_INPUTS_ONLY`: where "Only these come in" starts from.
+ */
+export function inputsOnlyFromPlan(plan: Pick<Plan, 'rawInputs'>): StuffKey[] {
+  // A plan from before `rawInputs` (or a test's partial one) has none.
+  const keys = new Set((plan.rawInputs ?? []).map((r) => r.key).filter((key) => !FREE_KEYS.includes(key)));
+  return [...keys].sort(byString).slice(0, MAX_INPUTS_ONLY);
+}
+
+/** "Only these come in" with `key` put in (`on`) or taken out, sorted; null when it would hold more than `MAX_INPUTS_ONLY`. */
+export function inputsOnlyPatch(settings: PlanSettings, key: StuffKey, on: boolean): Partial<PlanSettings> | null {
+  const inputsOnly = toggleList(settings.inputsOnly ?? [], key, on);
+  return inputsOnly.length > MAX_INPUTS_ONLY ? null : { inputsOnly };
 }
 
 /** `owned` without machine `mteId`. */
