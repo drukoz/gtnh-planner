@@ -41,6 +41,12 @@ export { effectiveTier, settingsHash } from './basis.ts';
 
 const SECONDS_PER: Readonly<Record<PlanSettings['per'], number>> = { min: 60, hour: 3600 };
 const SECONDS_PER_HOUR = 3600;
+const SECONDS_PER_DAY = 86_400;
+/**
+ * A byproduct-only good counts as bought beyond the group's stock over the horizon (`beyondStockWarnings`) above the
+ * stock by more than this share of it, plus this much: the line's purchases are 9 significant digits of a rate.
+ */
+const BEYOND_STOCK_SLACK = 1e-6;
 const DEFAULT_CACHE_SIZE = 32;
 /** A machine or amp count this little above a whole number stays whole. */
 const TINY = 1e-9;
@@ -72,6 +78,17 @@ export function solveOptions(settings: PlanSettings): SolveOptions {
   // Fix wave 3 (A): the raw cap, wherever build cost counts (the build stage reads it only with a step charge above 0).
   if (buildCostCounts(settings) && settings.rawCap !== null) options.rawCap = settings.rawCap ?? DEFAULT_RAW_CAP;
   return options;
+}
+
+/**
+ * The group's stock for every production solve of a line (`SolveOptions.stock`, fix wave 3 (C), controller OQ2): what
+ * storage holds of each good (`PlanContext.storage`'s `total`; 0 for a good it holds none of, and without a world scan),
+ * spread over the build horizon in rate mode (24 hours where build cost is ignored: `DEFAULT_BUILD_HORIZON_HOURS`) or
+ * over the batch in Make N, whose demand is the batch itself.
+ */
+export function groupStock(settings: PlanSettings, ctx: PlanContext): NonNullable<SolveOptions['stock']> {
+  const over = settings.mode === 'makeN' ? 1 : (settings.buildHorizonHours ?? DEFAULT_BUILD_HORIZON_HOURS) * SECONDS_PER_HOUR;
+  return { over, total: (key) => ctx.storage.get(key)?.total ?? 0 };
 }
 
 /**
@@ -944,6 +961,32 @@ function rawInputsOf(
   return { rawInputs, warnings: derivedLeafWarning(pack, derived) };
 }
 
+/**
+ * Fix wave 3 (C), controller OQ2: one `beyond-stock` warning per byproduct-only good (`leafClass` 'byproduct': no ore,
+ * mob, farm or free supply yields it directly) the line buys more of than the group's stock (`groupStock`: storage's
+ * total, 0 without a scan) over the build horizon (24 hours where build cost is ignored; Make N: the batch), keyed to
+ * the good, in key order: `Buys <N> a day of <good>, beyond the <M> in storage` (Make N: `Buys <N> of <good> for the
+ * batch, beyond the <M> in storage`). `buys` per second, or the batch's in Make N.
+ */
+function beyondStockWarnings(
+  pack: Pack, graph: CandidateGraph, settings: PlanSettings, ctx: PlanContext, buys: ReadonlyMap<StuffKey, number>,
+): PlanWarning[] {
+  const stock = groupStock(settings, ctx);
+  const batch = settings.mode === 'makeN';
+  const warnings: PlanWarning[] = [];
+  for (const [key, amount] of [...buys].sort(([a], [b]) => byString(a, b))) {
+    if (graph.goods.get(key)?.leafClass !== 'byproduct') continue;
+    const have = stock.total(key);
+    if (!(amount * stock.over > have * (1 + BEYOND_STOCK_SLACK) + BEYOND_STOCK_SLACK)) continue;
+    const litres = isFluidKey(key) ? ' L' : '';
+    const bought = batch
+      ? `${formatNumber(amount)}${litres} of ${pack.nameOf(key)} for the batch`
+      : `${formatNumber(amount * SECONDS_PER_DAY)}${litres} a day of ${pack.nameOf(key)}`;
+    warnings.push({ code: 'beyond-stock', key, text: `Buys ${bought}, beyond the ${formatNumber(have)}${litres} in storage` });
+  }
+  return warnings;
+}
+
 /** What the line throws away other than the target, per second; virtual ore-dictionary goods are never byproducts. */
 function byproductsOf(graph: CandidateGraph, sinks: ReadonlyMap<StuffKey, number>, target: StuffKey): Product[] {
   return [...sinks]
@@ -1741,8 +1784,9 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
   const aim: Pick<PlanBody, 'target' | 'targetPerSecond'> = batch
     ? { target } : { target, targetPerSecond: sig9(settings.amount / SECONDS_PER[settings.per]) };
   // Steps vs raw material (fix spec R3) for every solve of the line, the forms of goods that tell twin recipes apart
-  // (`stockForm`), and the build model of each graph solved in full.
-  const options = { ...solveOptions(settings), formRank: stockForm(pack), ...tuning };
+  // (`stockForm`), the group's stock its byproduct-only goods are priced against (`groupStock`, fix wave 3 (C)), and the
+  // build model of each graph solved in full.
+  const options = { ...solveOptions(settings), formRank: stockForm(pack), stock: groupStock(settings, ctx), ...tuning };
   const planned = await plannedLine(pack, settings, ctx, first, demand, options);
   const { priced, avoid, line, model: buildModel, unbuildable } = planned;
   const { graph, sol } = line;
@@ -1829,7 +1873,8 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
     buildList: bom.lines, buildTotals: bom.totals,
     buildSteps: buildSteps(pack, { steps, bom, power, settings, tier: basis.tier, target, totalSeconds: made?.totalSeconds, avoid: held }),
     warnings: [
-      ...graph.warnings, ...solverWarnings, ...stepWarnings, ...batchWarnings, ...raw.warnings, ...cost.warnings, ...bom.warnings, ...avoid.warnings,
+      ...graph.warnings, ...solverWarnings, ...stepWarnings, ...batchWarnings, ...raw.warnings,
+      ...beyondStockWarnings(pack, graph, settings, ctx, buys), ...cost.warnings, ...bom.warnings, ...avoid.warnings,
       ...uses.warnings,
     ],
     ...aim,

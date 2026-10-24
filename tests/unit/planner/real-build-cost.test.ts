@@ -18,7 +18,7 @@ import { benchCapBy } from '../../../src/server/planner/benches.ts';
 import { buildKeys, itemPrices, machineBuildCost, machineGap } from '../../../src/server/planner/build-cost.ts';
 import type { CandidateGraph } from '../../../src/server/planner/candidates.ts';
 import { lineBuildModel, optionMachines, type BuildModel } from '../../../src/server/planner/machine-options.ts';
-import { emptyContext, planLine, solveOptions, stockForm } from '../../../src/server/planner/plan.ts';
+import { emptyContext, groupStock, planLine, solveOptions, stockForm } from '../../../src/server/planner/plan.ts';
 import { linePricing } from '../../../src/server/planner/pricing.ts';
 import { solveLine, type Solution } from '../../../src/server/planner/solve.ts';
 import { tierName, V } from '../../../src/shared/gt/tiers.ts';
@@ -177,9 +177,10 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
   /**
    * The line's build MIP on its own (plan 12 Task 5's walk): its pricing and build model, both made again without the
    * recipes the model blocks (with the pack's alike ones) while it blocks any, as `planLine` does, then `solveLine` with
-   * the model, and the node limit of `GTNH_BUILD_NODES` when set.
+   * the model, the group's stock as `planLine` passes it (`groupStock`, fix wave 3 (C); `stocked` false: none, the
+   * problem fix wave 3 (F) was set on) and the node limit of `GTNH_BUILD_NODES` when set.
    */
-  const buildRun = async (s: PlanSettings): Promise<BuildRun> => {
+  const buildRun = async (s: PlanSettings, stocked = true): Promise<BuildRun> => {
     const unbuildable = new Map<string, string>();
     const blocked = new Set<string>();
     let first: BuildRun['first'] | undefined;
@@ -201,7 +202,8 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
         continue;
       }
       const sol = await solveLine(graph, new Map([[target, s.amount / SECONDS_PER[s.per]]]), {
-        ...solveOptions(s), formRank: stockForm(pack), build: model, ...(NODES === undefined ? {} : { buildMaxNodes: NODES }),
+        ...solveOptions(s), formRank: stockForm(pack), ...(stocked ? { stock: groupStock(s, ctx) } : {}), build: model,
+        ...(NODES === undefined ? {} : { buildMaxNodes: NODES }),
       });
       return { sol, model, graph, first, rounds, blocked: [...blocked].sort(), alike: unbuildable.size - blocked.size };
     }
@@ -448,6 +450,13 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
     const newBlocks = (plan: Plan): number => plan.steps
       .filter((st) => st.machine.mteId >= 0 && (st.pool === undefined || st.pool.steps[0] === st.id))
       .reduce((n, st) => n + Math.max(0, st.count - st.owned), 0);
+    /** New machine blocks of a solve's decision: each sharing pool's new machines once, each other step's own. */
+    const decidedBlocks = (sol: Solution): number => {
+      let n = 0;
+      for (const pool of sol.pools?.values() ?? []) n += pool.added;
+      for (const m of sol.machines?.values() ?? []) if (m.pool === undefined) n += m.added;
+      return n;
+    };
     /**
      * The build-MIP objectives (`buildStats.objective`, nothing owned, empty context) on fix wave 3 (D)'s prices, measured
      * after Task 3 (Task 1 pinned 737bcd0's own, on a5f5100's prices). At "No limit" from fix wave 3 Task 7 on: every pinned
@@ -474,7 +483,7 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
     };
 
     it.each(PINNED)('is no worse by the build MIP than its measured pin on %s', async (name, s, pinned) => {
-      const stats = statsOf(await buildRun({ ...s, rawCap: null }));
+      const stats = statsOf(await buildRun({ ...s, rawCap: null }, false));
       logPick(name, stats);
       expect(stats.approx).toBe(false);
       expect(stats.objective as number).toBeLessThanOrEqual(pinned * (1 + 1e-6));
@@ -482,18 +491,23 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
 
     it('plans 2 Good Electronic Circuits a minute at HV on AE2 in at most 28 new machines, at most 16.371 by the build MIP', async () => {
       const s = at(GOOD_ELECTRONIC_CIRCUIT, 3, 2, { logistics: 'ae2' });
-      const stats = statsOf(await buildRun({ ...s, rawCap: null }));
+      const run = await buildRun({ ...s, rawCap: null }, false);
+      const stats = statsOf(run);
       logPick('Good Electronic Circuit HV x2 on AE2', stats);
       expect(stats.retried).toBe(true);   // its root LP relaxation does not solve at 1e-10
       expect(stats.status === 'optimal' || stats.stop === 'limit', `${stats.status}/${stats.stop}`).toBe(true);
       expect(stats.objective as number).toBeLessThanOrEqual(16.371 + 1e-6);
+      // Its new machines from that same solve (controller ruling on fix wave 3 (C), item 5): planLine also prices
+      // byproduct-only goods beyond the group's stock, which moves its plan past 28 new machines (29); that plan is logged.
+      expect(decidedBlocks(run.sol)).toBeLessThanOrEqual(28);
       const { plan } = await timed({ ...s, rawCap: null });
+      console.log(`real-build-cost pick Good Electronic Circuit HV x2 on AE2, as planLine plans it: ${plan.status}, ${plan.steps.length} steps, `
+        + `${newBlocks(plan)} new machines (the solve's decision ${decidedBlocks(run.sol)})`);
       expect(plan.status, JSON.stringify(plan.warnings)).toBe('ok');
-      expect(newBlocks(plan)).toBeLessThanOrEqual(28);
     }, 300_000);
 
     it('proves its plan of 2 Good Electronic Circuits a minute at HV optimal within its iteration cap', async () => {
-      const stats = statsOf(await buildRun(at(GOOD_ELECTRONIC_CIRCUIT, 3, 2, { rawCap: null })));
+      const stats = statsOf(await buildRun(at(GOOD_ELECTRONIC_CIRCUIT, 3, 2, { rawCap: null }), false));
       logPick('Good Electronic Circuit HV x2', stats);
       expect(stats.status).toBe('optimal');
       expect(stats.objective as number).toBeLessThanOrEqual(17.755272959 * (1 + 1e-6));
@@ -527,10 +541,13 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
       }
     }, 300_000);
 
-    it('plans 2 Good Electronic Circuits a minute at HV in fewer steps than ignoring build cost, from ordinary materials', async () => {
-      // real-acceptance's Good Electronic Circuit case: ignoring build cost the line etches its Good Circuit Board in a
-      // chemical reactor with Iron III Chloride; with it counted it crafts the board from gold wire on an Auto Workbench,
-      // and needs about half the steps, no worse by the build MIP's measure.
+    it('plans 2 Good Electronic Circuits a minute at HV within 5 steps of ignoring build cost, from ordinary materials', async () => {
+      // real-acceptance's Good Electronic Circuit case. Before fix wave 3 the line, with build cost counted, crafted its Good
+      // Circuit Board from gold wire on an Auto Workbench in about half the steps of the plan that ignores build cost, which
+      // etched the board in a chemical reactor with Iron III Chloride. Within the default +25 % raw cap it etches the board
+      // too, in 49 steps against 50. With byproduct-only goods beyond the group's stock at BEYOND_STOCK_FACTOR times their
+      // price (fix wave 3 (C)) it plans 50 steps against 49, the plan that ignores build cost now crafting the board. So it
+      // is held to D1's headroom (STEP_HEADROOM), and no worse by the build MIP's measure where that plan is within the cap.
       const s = at(GOOD_ELECTRONIC_CIRCUIT, 3, 2);
       const { plan, seconds } = await timed(s);
       const without = await timed({ ...s, buildHorizonHours: null });
@@ -542,7 +559,7 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
         + `its Good Circuit Board on ${board?.machine.name ?? 'none'}, build ${plan.cost?.build} (ignoring ${ignored.cost?.build})`);
       expect(plan.status, JSON.stringify(plan.warnings)).toBe('ok');
       expect(seconds).toBeLessThan(PLAN_SECONDS);
-      expect(plan.steps.length).toBeLessThan(ignored.steps.length);
+      expect(plan.steps.length).toBeLessThanOrEqual(ignored.steps.length + STEP_HEADROOM);
       expect(plan.steps.find((st) => st.mainOutput === GOOD_ELECTRONIC_CIRCUIT)?.mapId).toBe('gt.recipe.circuitassembler');
       expect(plan.rawInputs.filter((r) => !r.available)).toEqual([]);
       expect(plan.warnings.map((w) => w.code)).not.toContain('build-cost-approx');

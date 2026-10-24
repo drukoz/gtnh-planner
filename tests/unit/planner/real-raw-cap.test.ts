@@ -3,8 +3,10 @@
 // reuses listed as "Machines we have") keeps its Rubber Wood line, whose least raw material needs a Raw Oil line nobody
 // would build; and the user's MV circuit line (Electronic Circuit 1 a minute at MV on EnderIO) is held within +25 % of
 // its leanest line and buys no more Phosphate Dust over its build horizon than the group has in storage (737bcd0 bought
-// 3,600 a day at 2.67 × the least, against 164 stored). It runs only with GTNH_LOCAL=1 and logs only counts, keys and
-// figures.
+// 3,600 a day at 2.67 × the least, against 164 stored). With nothing in storage (an empty context), neither it nor 2 Good
+// Electronic Circuits a minute at HV buys 1,000 a day or more of any byproduct-only good, which costs BEYOND_STOCK_FACTOR
+// times its price beyond the stock (fix wave 3 (C), controller OQ2), at the default raw cap or at "No limit". It runs
+// only with GTNH_LOCAL=1 and logs only counts, keys and figures.
 
 import { beforeAll, describe, expect, it } from 'vitest';
 import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
@@ -18,10 +20,13 @@ const MOLTEN_POLYETHYLENE = 'fluid:molten.plastic';
 const RUBBER_WOOD = 'IC2:blockRubWood@0';
 const RAW_OIL = 'fluid:liquid_medium_oil';
 const ELECTRONIC_CIRCUIT = 'IC2:itemPartCircuit@0';
+const GOOD_ELECTRONIC_CIRCUIT = 'gregtech:gt.metaitem.01@32702';
 const PHOSPHATE_DUST = 'gregtech:gt.metaitem.01@2833';
 /** The Phosphate Dust in the group's storage at the user's scan the ledger quotes (line 247: "3,600 a day against 164 in storage"). */
 const PHOSPHATE_DUST_STOCK = 164;
 const SECONDS_PER_DAY = 86_400;
+/** Fix wave 3 (C)'s pins (controller OQ2): no byproduct-only good bought beyond the stock at this many a day or more. */
+const BEYOND_STOCK_PER_DAY = 1000;
 /** The machines the user's poly plan reuses (the live scan's): Steam Separator, Advanced Compressor, Basic Chemical Reactor, Pyrolyse Oven. */
 const POLY_OWNED = [{ mteId: 31080, count: 1 }, { mteId: 242, count: 1 }, { mteId: 421, count: 1 }, { mteId: 15546, count: 1 }];
 
@@ -33,6 +38,16 @@ const mvCircuit = (more: Partial<PlanSettings> = {}): PlanSettings => ({
   ...defaultSettings(), target: ELECTRONIC_CIRCUIT, amount: 1, per: 'min', tier: 2, logistics: 'enderio', routeDerived: true,
   stopItems: [ELECTRONIC_CIRCUIT], optionChoice: { 'c0106c4cb6b4b041#100': 'fluid:molten.tin' }, reuseOwned: false, stepCharge: 0.5, ...more,
 });
+
+/** 2 Good Electronic Circuits a minute at HV at the default settings (real-build-cost's `at(GOOD_ELECTRONIC_CIRCUIT, 3, 2)`). */
+const gec = (more: Partial<PlanSettings> = {}): PlanSettings => ({
+  ...defaultSettings(), per: 'min', target: GOOD_ELECTRONIC_CIRCUIT, tier: 3, amount: 2, ...more,
+});
+
+/** The byproduct-only goods `plan` buys at BEYOND_STOCK_PER_DAY a day or more, all beyond the stock of an empty context. */
+const beyondStock = (plan: Plan): string[] => plan.rawInputs
+  .filter((r) => r.leafClass === 'byproduct' && r.perSecond * SECONDS_PER_DAY >= BEYOND_STOCK_PER_DAY)
+  .map((r) => `${r.key} ${(r.perSecond * SECONDS_PER_DAY).toFixed(1)} a day`);
 
 const newBlocks = (plan: Plan): number => {
   const pools = new Set<string>();
@@ -92,7 +107,20 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('the raw cap on the real 2.9 exp
     console.log(`real-raw-cap MV circuit Phosphate Dust: ${dust === undefined ? 'none' : `${(dust.perSecond * horizonSeconds).toFixed(1)} over ${plan.cost?.horizonHours} h`};`
       + ` byproduct-only goods ${plan.rawInputs.filter((r) => r.leafClass === 'byproduct').map((r) => `${r.key} ${(r.perSecond * horizonSeconds).toFixed(1)}`).join(', ') || 'none'}`);
     expect((dust?.perSecond ?? 0) * horizonSeconds).toBeLessThanOrEqual(PHOSPHATE_DUST_STOCK);
-    // "No limit" trades it all back: the 2.67 × line that buys 3,600 Phosphate Dust a day (logged, the user's choice).
-    console.log(line('MV circuit, no limit', await planLine(pack, mvCircuit({ rawCap: null }), emptyContext())));
+    // "No limit" (the user's choice), logged: 737bcd0's 2.67 × line bought 3,600 Phosphate Dust a day, which now costs
+    // BEYOND_STOCK_FACTOR times its price beyond the stock (fix wave 3 (C)).
+    const unlimited = await planLine(pack, mvCircuit({ rawCap: null }), emptyContext());
+    console.log(line('MV circuit, no limit', unlimited));
+    expect(unlimited.status).toBe('ok');
+    for (const p of [plan, unlimited]) expect(beyondStock(p)).toEqual([]);
+  }, 300_000);
+
+  it('buys under 1,000 a day of every byproduct-only good for 2 Good Electronic Circuits a minute at HV, at the default raw cap and at No limit', async () => {
+    for (const [name, settings] of [['GEC 2/min HV', gec()], ['GEC 2/min HV, no limit', gec({ rawCap: null })]] as const) {
+      const plan = await planLine(pack, settings, emptyContext());
+      console.log(line(name, plan));
+      expect(plan.status, name).toBe('ok');
+      expect(beyondStock(plan), name).toEqual([]);
+    }
   }, 300_000);
 });

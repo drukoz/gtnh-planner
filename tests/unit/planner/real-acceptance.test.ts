@@ -91,6 +91,8 @@ const ORDINARY: ReadonlySet<string> = new Set([
   'minecraft:log2@0' /* acacia wood */, 'IC2:blockRubWood@0' /* rubber wood */, 'cropsnh:berry@1' /* sugar beet */, 'gregtech:gt.metaitem.01@11880' /* rubber bar */,
   'gregtech:gt.metaitem.01@2896' /* raw rubber dust */, 'IC2:itemHarz@0' /* sticky resin */, 'minecraft:slime_ball@0', 'IC2:itemDust@2' /* coal dust */,
   'gregtech:gt.metaitem.01@2535' /* coal dust */, 'gregtech:gt.metaitem.01@2010' /* carbon dust */, 'gregtech:gt.metaitem.01@2536' /* charcoal dust */,
+  // the oxygen of a line that no longer buys Phosphate Dust beyond the group's stock: sugar electrolysed (fix wave 3 (C))
+  'minecraft:sugar@0',
   // plastics and the chemistry behind them: oil, and the fluids pumped where a source is in reach
   'gregtech:gt.metaitem.01@11470' /* epoxid bar */, 'gregtech:gt.metaitem.01@11473' /* PTFE bar */, 'fluid:liquid_medium_oil' /* raw oil */,
   'fluid:saltwater', 'fluid:helium', 'fluid:sulfuricacid',
@@ -292,17 +294,20 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
   }, 120_000);
 
   it(`plans 2 Good Electronic Circuits a minute at HV from ordinary materials, build cost ignored, in under ${GEC_HV_MAX_STEPS} steps and 5 s`, async () => {
-    // With build cost counted the line crafts its Good Circuit Board from gold wire on an Auto Workbench rather than etch
-    // it in a chemical reactor with Iron III Chloride, in about half the steps (real-build-cost.test.ts plans that).
+    // Before fix wave 3 (C) the line etched its Good Circuit Board in a chemical reactor with Iron III Chloride. With
+    // byproduct-only goods beyond the group's stock at BEYOND_STOCK_FACTOR times their price it crafts the board from gold
+    // wire on an Auto Workbench, in 49 steps, and makes no Iron III Chloride (real-build-cost.test.ts plans the line with
+    // build cost counted).
     const settings = { target: GOOD_ELECTRONIC_CIRCUIT, amount: 2, tier: 3, buildHorizonHours: null };
     const { plan: p, seconds } = await plan(settings);
     expectSane(p, seconds, GEC_HV_MAX_STEPS);
     await expectSameBreakdown(p, settings);
-    // It adds up but for one good (fix spec R11, D13). The reactor that alone makes its Iron III Chloride and the sodalite
-    // electrolyzer that alone makes its Raw Silicon Dust are named so, not after the Hydrogen Cells and Chlorine other
-    // steps make too ("Hydrogen Cell is made 3 ways", "Chlorine is made 2 ways" before the final review), and no good is
-    // made two ways by a step that runs for an output it alone makes. Measured left: Hydrogen Cell, from the water
-    // electrolysis (97 % of it; it throws away 90 % of the Oxygen it alone makes) and the salt water electrolysis.
+    // It adds up but for one good (fix spec R11, D13). The sodalite electrolyzer that alone makes its Raw Silicon Dust is
+    // named so, as is the reactor that alone makes Iron III Chloride where the line etches its board, not after the
+    // Hydrogen Cells and Chlorine other steps make too ("Hydrogen Cell is made 3 ways", "Chlorine is made 2 ways" before the
+    // final review), and no good is made two ways by a step that runs for an output it alone makes. Measured left:
+    // Hydrogen Cell, from the water electrolysis (97 % of it; it throws away 90 % of the Oxygen it alone makes) and the salt
+    // water electrolysis.
     const issues = indexPlan(p).issues;
     expect(issues.filter((i) => i.code !== 'multi-producer')).toEqual([]);
     expect(issues.length).toBeLessThanOrEqual(1);
@@ -315,7 +320,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
     }
     for (const key of [IRON_III_CHLORIDE, RAW_SILICON_DUST]) {
       const makers = p.steps.filter((s) => s.outputs.some((o) => o.key === key));
-      expect(makers.length, key).toBeGreaterThan(0);
+      if (key === RAW_SILICON_DUST) expect(makers.length, key).toBeGreaterThan(0);   // no Iron III Chloride since (C)
       expect(makers.map((s) => s.mainOutput), key).toEqual(makers.map(() => key));
     }
     expect(p.steps.find((s) => s.mainOutput === GOOD_ELECTRONIC_CIRCUIT)?.mapId).toBe('gt.recipe.circuitassembler');

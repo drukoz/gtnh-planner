@@ -63,10 +63,28 @@ export interface SolveOptions {
    * never read it.
    */
   rawCap?: number | null;
+  // optional addition (fix wave 3 (C), controller OQ2)
+  /**
+   * The group's stock of the goods a line may buy, and what it is spread over: `planLine` fills it on every production
+   * solve (`groupStock`, plan.ts). Each byproduct-only good the line may buy (`GoodInfo.leafClass` 'byproduct': no ore,
+   * mob, farm or free supply yields it directly) is then bought on two columns in every stage (`mainLp`): at its plain
+   * price up to `total(key)` spread over `over`, the demand's time it is to last (the build horizon's seconds in rate
+   * mode, 24 hours where build cost is ignored; 1 in Make N, whose demand is the batch), and beyond that at
+   * BEYOND_STOCK_FACTOR × that price. Absent (machine prices, the price graph, a line solved on its own in a test): one
+   * column at its plain price.
+   */
+  stock?: { over: number; total(key: StuffKey): number };
 }
 
 /** The step charge never lets total raw material go above (1 + this) × the least (S1) (fix spec §3). */
 export const STEP_CHARGE_CAP = 0.25;
+/**
+ * Fix wave 3 (C), controller OQ2: a byproduct-only good the line buys beyond the group's stock spread over the build
+ * horizon (`SolveOptions.stock`) costs this many times its price — a constant, not a setting. Priced like ore at any
+ * rate, the user's MV circuit line bought 3,600 Phosphate Dust a day for its oxygen against 164 in storage, where an
+ * electrolyzer of free water would do.
+ */
+export const BEYOND_STOCK_FACTOR = 10;
 /** A crafting-table step weighs this many steps in a running line with crafting not automated (fix spec D7). */
 export const HAND_STEP_WEIGHT = 3;
 /** In the step-charge MIP a step recipe runs at most this many times the largest run count of S1 (its big-M). */
@@ -98,7 +116,10 @@ export interface Solution {
   runs: Map<string, number>;
   buys: Map<StuffKey, number>;
   sinks: Map<StuffKey, number>;
-  /** Σ cost × buy. */
+  /**
+   * Σ cost × buy; with the group's stock (`SolveOptions.stock`), what a byproduct-only good is bought beyond it at
+   * BEYOND_STOCK_FACTOR × its cost (fix wave 3 (C)), and so `leastRawCost` too.
+   */
   rawCost: number;
   /** The least raw material any plan of this graph needs (S1), never above `rawCost`: what the later stages trade. */
   leastRawCost: number;
@@ -174,14 +195,19 @@ function pushTo<K, V>(map: Map<K, V[]>, key: K, value: V): void {
 /**
  * The main LP (prior-art §3.4 step 3). Columns: one run count per recipe by id, then one purchase per buyable good by
  * key, then one sink per good by key; one row per good by key, `Σ a_rg·x_r + buy_g − sink_g = demand_g`. The goods are
- * the whole graph's, so banning a recipe drops only its column.
+ * the whole graph's, so banning a recipe drops only its column. With the group's stock (fix wave 3 (C),
+ * `SolveOptions.stock`) a byproduct-only good's purchase is bounded by its share of the stock (`upper`) and a second
+ * purchase of it, beyond the stock at BEYOND_STOCK_FACTOR × its price, follows the others: `buyKeys` then names that good
+ * twice, in key order each time.
  */
 export interface MainLp {
   recipes: LpRecipe[]; buyKeys: StuffKey[]; goods: StuffKey[];
   firstBuy: number; firstSink: number; rows: LpRow[];
   /**
    * Per column, its upper bound in every stage: Infinity, but for a step recipe that can only run on owned machines that
-   * cannot be built here (plan 12, `BuildModel.ownedOnly`, rate mode) the runs per unit of demand they do.
+   * cannot be built here (plan 12, `BuildModel.ownedOnly`, rate mode) the runs per unit of demand they do, and for a
+   * byproduct-only good's first purchase with the group's stock (fix wave 3 (C)) its share of that stock per unit of
+   * demand.
    */
   upper: number[];
   /**
@@ -203,13 +229,24 @@ export interface MainLp {
   derivedSteps: number[];
 }
 
-function mainLp(graph: CandidateGraph, recipes: readonly LpRecipe[], demand: ReadonlyMap<StuffKey, number>): MainLp {
+/**
+ * The main LP of `recipes` over `graph`'s goods for `demand`; with `stock` (fix wave 3 (C): `stockShare`) each
+ * byproduct-only good bought up to `stock(key)` per unit of demand at its price and beyond that on a second purchase at
+ * BEYOND_STOCK_FACTOR × it (`MainLp`).
+ */
+function mainLp(
+  graph: CandidateGraph, recipes: readonly LpRecipe[], demand: ReadonlyMap<StuffKey, number>, stock?: (key: StuffKey) => number,
+): MainLp {
   const keys = new Set<StuffKey>([...graph.goods.keys(), ...demand.keys()]);
   for (const r of graph.recipes) for (const [key] of r.coeffs) keys.add(key);
   const goods = [...keys].sort(byString);
   const rowOf = new Map(goods.map((key, g) => [key, g]));
   const sorted = [...recipes].sort((a, b) => byString(a.id, b.id));
-  const buyKeys = goods.filter((key) => graph.goods.get(key)?.buyable === true);
+  const buyable = goods.filter((key) => graph.goods.get(key)?.buyable === true);
+  const byproduct = (key: StuffKey): boolean => graph.goods.get(key)?.leafClass === 'byproduct';
+  // A byproduct-only good's purchase beyond the group's stock (fix wave 3 (C)), after every plain purchase.
+  const beyond = stock === undefined ? [] : buyable.filter(byproduct);
+  const buyKeys = [...buyable, ...beyond];
   const firstBuy = sorted.length;
   const firstSink = firstBuy + buyKeys.length;
   const width = firstSink + goods.length;
@@ -227,7 +264,7 @@ function mainLp(graph: CandidateGraph, recipes: readonly LpRecipe[], demand: Rea
 
   const rawCost = new Array<number>(width).fill(0);
   buyKeys.forEach((key, i) => {
-    rawCost[firstBuy + i] = graph.goods.get(key)?.cost ?? 0;
+    rawCost[firstBuy + i] = (graph.goods.get(key)?.cost ?? 0) * (i < buyable.length ? 1 : BEYOND_STOCK_FACTOR);
   });
   const power = new Array<number>(width).fill(0);
   sorted.forEach((r, j) => {
@@ -256,6 +293,11 @@ function mainLp(graph: CandidateGraph, recipes: readonly LpRecipe[], demand: Rea
     canonical[j] = (canonical[j] as number) + CANON_RANK_S4 * n;
   });
   const upper = new Array<number>(width).fill(Infinity);
+  if (stock !== undefined) {
+    buyable.forEach((key, i) => {
+      if (byproduct(key)) upper[firstBuy + i] = Math.max(0, stock(key));
+    });
+  }
   return { recipes: sorted, buyKeys, goods, firstBuy, firstSink, rows, upper, rawCost, power, canonical, rank, free, derivedSteps };
 }
 
@@ -410,13 +452,18 @@ function lockRow(cost: readonly number[], value: number): LpRow[] {
   return entries.length === 0 ? [] : [{ lower: -Infinity, upper: value, entries }];
 }
 
-/** The values of `keys` (columns from `first` on) above TINY, to 9 significant digits; the keys are already in sorted order. */
+/**
+ * The values of `keys` (columns from `first` on) above TINY, to 9 significant digits; the keys are already in sorted
+ * order. A key named twice (a byproduct-only good's purchase within and beyond the group's stock, `MainLp`) is the sum
+ * of its columns.
+ */
 function kept(keys: readonly string[], x: readonly number[], first: number): Map<string, number> {
-  const out = new Map<string, number>();
+  const sums = new Map<string, number>();
   keys.forEach((key, i) => {
-    const value = x[first + i] ?? 0;
-    if (value > TINY) out.set(key, sig9(value));
+    sums.set(key, (sums.get(key) ?? 0) + (x[first + i] ?? 0));
   });
+  const out = new Map<string, number>();
+  for (const [key, value] of sums) if (value > TINY) out.set(key, sig9(value));
   return out;
 }
 
@@ -862,14 +909,21 @@ export interface TwinRules {
   plan?: Pick<Solution, 'runs' | 'buys'>;
   /** Rule (c): how players stock a good (`SolveOptions.formRank`); absent, every good ranks alike. */
   formRank?: (key: StuffKey) => number;
+  // optional addition (fix wave 3 (C))
+  /**
+   * The stages priced byproduct-only goods beyond the group's stock higher (`SolveOptions.stock`), so buying one weighs
+   * what the plan buys of it: such a good is never swapped for another.
+   */
+  beyondStock?: true;
 }
 
 /**
  * Twin step recipes (the plan 12 fix wave 2 review): two step recipes that differ only in which of two goods they
  * consume, the same amount of it, both goods bought at the same price and with the same weights there (raw cost and
- * canonical rank; never a derived leaf, a free input, a gathered block the line may also make or a demanded good), on the
- * same map, power, held items, cleanroom and outputs and, with a build model, the same options, eligible options, pin
- * fallback and sharing key (never a step only owned machines can run). Every stage rates them alike, so the solver takes
+ * canonical rank; never a derived leaf, a free input, a gathered block the line may also make or a demanded good, nor a
+ * byproduct-only good the stages priced beyond the group's stock, `TwinRules.beyondStock`), on the same map, power, held
+ * items, cleanroom and outputs and, with a build model, the same options, eligible options, pin fallback and sharing key
+ * (never a step only owned machines can run). Every stage rates them alike, so the solver takes
  * one or the other by its numerics: on the 2.9 export the Fluid Extractor makes Molten Tin from Tin Dust or from a Tin
  * Ingot, and the user's reference line ran the ingot's at a 2 % step charge and the dust's at 50 %. A plan that runs a
  * twin whose good no column of `recipes` makes (it is only ever bought) does exactly as well with the other twin, buying
@@ -898,6 +952,7 @@ export function twinMoves(
     const good = graph.goods.get(key);
     if (good === undefined || !good.buyable || good.virtual || good.alsoMade === true || demand.has(key)) return undefined;
     if (good.leafClass === 'derived' || good.leafClass === 'free' || !Number.isFinite(good.cost)) return undefined;
+    if (rules.beyondStock === true && good.leafClass === 'byproduct') return undefined;
     return `${good.cost}|${canonicalRank(key)}`;
   };
   type Member = { r: LpRecipe; key: StuffKey; amount: number };
@@ -1499,6 +1554,16 @@ export async function solveLine(graph: CandidateGraph, demand: ReadonlyMap<Stuff
 }
 
 /**
+ * Fix wave 3 (C): the most of a byproduct-only good a line buys at its plain price per unit of demand (`MainLp.upper`),
+ * from the group's stock (`SolveOptions.stock`) at demand scale `D`; undefined without a stock (or with none to spread
+ * it over).
+ */
+function stockShare(stock: SolveOptions['stock'], D: number): ((key: StuffKey) => number) | undefined {
+  if (stock === undefined || !(stock.over > 0)) return undefined;
+  return (key) => Math.max(0, stock.total(key)) / (stock.over * D);
+}
+
+/**
  * `solveLine` at the demand given (unit demand, or a demand that cannot be scaled), `demandScale` the factor that
  * scales it back.
  */
@@ -1515,7 +1580,7 @@ async function solveUnit(graph: CandidateGraph, demand: ReadonlyMap<StuffKey, nu
   const model = opts.build;
   for (let round = 0; ; round++) {
     const recipes = graph.recipes.filter((r) => !bannedSet.has(r.id));
-    const lp = mainLp(graph, recipes, demand);
+    const lp = mainLp(graph, recipes, demand, stockShare(opts.stock, demandScale));
     const bounded = model !== undefined && model.mode === 'rate' ? boundOwnedOnly(lp, model, demandScale) : [];
     const s1 = await minimize(lp, lp.rawCost, []);
     if (s1.status === 'error') throw new Error('rate solver: the raw-material LP failed');
@@ -1542,7 +1607,9 @@ async function solveUnit(graph: CandidateGraph, demand: ReadonlyMap<StuffKey, nu
       }
       // Of two twins every stage rates alike, the plan runs the same one whichever the solver met (`twinMoves`).
       if (done.status === 'ok') {
-        done = withTwinsMoved(done, twinMoves(graph, recipes, demand, { model, pinned: opts.pinnedRecipes, plan: done, formRank: opts.formRank }));
+        done = withTwinsMoved(done, twinMoves(graph, recipes, demand, {
+          model, pinned: opts.pinnedRecipes, plan: done, formRank: opts.formRank, ...(opts.stock === undefined ? {} : { beyondStock: true as const }),
+        }));
       }
       done.banned = [...banned];
       return done;
