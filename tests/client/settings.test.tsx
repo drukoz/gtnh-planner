@@ -378,3 +378,24 @@ describe('reusing machines we have', () => {
     expect(ownedWithout([{ mteId: 121, count: 2 }, { mteId: 101, count: 1 }], 121)).toEqual([{ mteId: 101, count: 1 }]);
   });
 });
+
+// The page that draws the panel also draws the Settings button of the head, which says what the project makes in the panel's own words,
+// so the page keeps the names of what was picked in the search boxes and hands them to the panel (`usePickedNames`).
+describe('the settings panel and the names a page hands it', () => {
+  const settings = { ...defaultSettings(), target: 't:circuit@0' };
+  const project = { id: 'p', name: 'x', createdAt: '', createdBy: '', rev: 0, settings, world: { scanId: null, baseId: null }, placement: null, marks: {}, notes: [] };
+  const names = { nameOf: (key: string) => (key === 't:circuit@0' ? 'Basic Circuit (the page names it)' : key), remember: () => {} };
+
+  it('names the target with the names it is given, where its own would have only the key', () => {
+    // no plan has named the key yet, and nothing was picked in this panel: it falls back to the key
+    expect(panelOf(settings)).toContain('<span class="settings-target-name">t:circuit@0</span>');
+    const html = renderToStaticMarkup(<SettingsPanel info={info} project={project} plan={null} send={() => {}} me="Ann" names={names} />);
+    expect(html).toContain('<span class="settings-target-name">Basic Circuit (the page names it)</span>');
+    expect(html).not.toContain('t:circuit@0</span>');
+  });
+
+  it('keeps the plan\'s names first when it keeps its own', () => {
+    const html = renderToStaticMarkup(<SettingsPanel info={info} project={project} plan={{ ...plan([]), names: { 't:circuit@0': 'Basic Circuit' }, tier: 1 }} send={() => {}} me="Ann" />);
+    expect(html).toContain('<span class="settings-target-name">Basic Circuit</span>');
+  });
+});

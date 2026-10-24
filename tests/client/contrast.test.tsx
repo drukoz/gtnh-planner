@@ -204,6 +204,17 @@ describe('contrast of the 3D tab, the World page and the projector panel', () =>
   });
 });
 
+// The Settings button's small part, "Make: Basic Circuit" (Inter 13px in --ink-muted): the button's own face is the grey #6b6b6b, and
+// the muted ink (#aaaaaa) measures 2.3:1 on it, and 3.0:1 on the face under the pointer, so the part is a dark readout on the screen
+// (the pair "dark ink" above), where it measures 7.4:1.
+describe('contrast of the Settings button\'s target part', () => {
+  it('reads the muted ink on its dark readout, and needs it: on the button\'s face the ink falls short', () => {
+    expect(ratio('#aaaaaa', SCREEN)).toBeGreaterThanOrEqual(AA);
+    expect(ratio('#aaaaaa', '#6b6b6b')).toBeLessThan(AA);                              // the button's face
+    expect(ratio('#aaaaaa', '#4a5499')).toBeLessThan(AA);                              // and under the pointer
+  });
+});
+
 // Add-on 17 in the Machine GUI: the Compare card's titles on the panel, its readout tiles' grey label and green value on a screen, its
 // notes on their chat box over the panel (white, the grey of "Still planning…" and the red of a failure), the head's button while the card
 // is open (yellow on the button face, and under the pointer), and the hints of "Plan for" on a settings section; and, as graphics (WCAG

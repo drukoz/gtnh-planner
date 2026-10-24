@@ -13,9 +13,9 @@ connected" and "make sure even tho it is machine UI it is also animated and mord
 
 Reference mockup (the look to match, not a pixel spec): the "B · Machine GUI" artboard on the design canvas
 https://claude.ai/artifact/Vc3ePZTxQJeqqzBFhRF5us (source:
-`/private/tmp/claude-501/-Users-drukoz-gtnh-planner/1fda0de6-6cd6-4a4f-ad51-448ca5885d74/scratchpad/restyle-canvas/project/MachineGui.dc.html`).
+`<the design session's scratchpad, not in the repo>/restyle-canvas/project/MachineGui.dc.html`).
 Screenshots of today's app, one per screen and tab:
-`/private/tmp/claude-501/-Users-drukoz-gtnh-planner/1fda0de6-6cd6-4a4f-ad51-448ca5885d74/scratchpad/shots/*.png`
+`<the design session's scratchpad, not in the repo>/shots/*.png`
 (scripts `shoot.mjs`, `shoot2.mjs`, `shoot3.mjs` beside them re-take the whole tour against the e2e server).
 
 **B in one sentence:** the planner looks like a refined GregTech machine interface — light-grey bevelled Minecraft
@@ -279,6 +279,13 @@ Transitions (Phase 1 [CSS]: entrances; exits that need an element kept mounted a
   and the top bar), Escape (one layer per press: an open search list first, R15), a click on the dimmed page, Close
   and the Settings button all close it and give the focus back to the Settings button, and it closes when the window
   grows past 900 px. It slides in with `--dur-slow`/`--ease-out` and out with `--dur-exit`/`--ease-in`.
+  What to make is never out of sight behind it (the make-picker fix, after Phase 1): the Settings button reads
+  "Settings · Make: <target>" or "Settings · Make: nothing yet" (the target part is Inter 13 px in `--ink-muted` on a
+  `--screen` readout, since the muted ink is 2.3:1 on the button's own face; a long name ends in an ellipsis, and above
+  700 px the button takes at most 40% of the head, below it the whole head, which wraps there anyway, so that a short
+  name is never cut on a phone); a project with no target opens the drawer by itself, once per visit (after the
+  name prompt), with the focus in the Make section's item search instead of on Close; and the plan banner's "Pick
+  something to make" is a button that opens the drawer into that search (on a wide window it focuses the search).
 
 Modern UX (Phase 2 unless marked)
 - **Skeletons instead of "Loading…"** [TSX]: project list, plan, Flow, Connections, Map side panels and 3D show

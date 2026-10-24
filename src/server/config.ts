@@ -16,6 +16,12 @@ export interface AppConfig {
   sessionSecret: string;
   /** The Minecraft 1.7.10 client jar (architecture §11.17, read by Plan 3's `extract-assets`). */
   clientJar?: string | null;
+  /**
+   * The GTNH client instance whose enabled resource packs `extract-assets` lays over the jars (add-on 23): the game
+   * folder holding `options.txt` and `resourcepacks/`, or the instance folder holding it as `.minecraft` or `minecraft`.
+   * Only read. Not in `DEFAULT_CONFIG`: unset, the textures come from the jars alone.
+   */
+  clientInstance?: string | null;
 }
 
 export const DEFAULT_CONFIG: Readonly<AppConfig> = Object.freeze({
@@ -61,6 +67,10 @@ function checkFields(c: Record<string, unknown>, file: string): void {
   if (typeof c.dataDir !== 'string' || c.dataDir === '') throw fail('dataDir', 'a non-empty string');
   for (const field of ['serverFolder', 'activeExportId'] as const) {
     if (c[field] !== null && typeof c[field] !== 'string') throw fail(field, 'a string or null');
+  }
+  // Optional keys, not in DEFAULT_CONFIG, so checked only when the file holds them.
+  if (c.clientInstance !== undefined && c.clientInstance !== null && typeof c.clientInstance !== 'string') {
+    throw fail('clientInstance', 'a string or null');
   }
 }
 
