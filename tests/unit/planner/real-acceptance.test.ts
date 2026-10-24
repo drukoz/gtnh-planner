@@ -475,9 +475,11 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
     // Plan 08 wrote this before there was a step charge, so it plans at the least raw material ("Least raw material", 0 %,
     // fix spec R3): there the plain line makes its acetone in the only recipe of the 2.9 export that holds Calcite (from
     // acetic acid, 480 EU/t). At the 2 % default (and at 5 %) the plain line makes no acetone and holds no Calcite, so
-    // there would be nothing to keep out.
+    // there would be nothing to keep out. The least raw material is plan 09's objective, so build cost is ignored, as in
+    // this file's other checks of it: with build cost counted the build MIP's pick at 0 % holds no Calcite since fix wave
+    // 3 Task 7, 2.2 % cheaper by its own measure than the pick that held it.
     const avoid = ['Calcite'];
-    const { plan: p, seconds } = await plan({ target: GOOD_ELECTRONIC_CIRCUIT, amount: 2, tier: 3, avoid, stepCharge: 0 });
+    const { plan: p, seconds } = await plan({ target: GOOD_ELECTRONIC_CIRCUIT, amount: 2, tier: 3, avoid, stepCharge: 0, buildHorizonHours: null });
     expectAvoided(p, seconds, avoid, HV_SLOW_PLAN_SECONDS);
     expect(p.avoided?.map((a) => a.key)).toContain(CALCITE_DUST);   // the plain plan's catalyst
   }, 60_000);
