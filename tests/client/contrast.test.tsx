@@ -216,9 +216,10 @@ describe('contrast of the Settings button\'s target part', () => {
 });
 
 // Add-on 17 in the Machine GUI: the Compare card's titles on the panel, its readout tiles' grey label and green value on a screen, its
-// notes on their chat box over the panel (white, the grey of "Still planning…" and the red of a failure), the head's button while the card
-// is open (yellow on the button face, and under the pointer), and the hints of "Plan for" on a settings section; and, as graphics (WCAG
-// 1.4.11: 3:1), the frame of the mode in use: a black edge on the panel with a yellow ring inside it.
+// notes on their chat box over the panel (white, the grey of "Still planning…" and the red of a failure), its Compare modes button while
+// the card is open (yellow on the button face, and under the pointer; in the head, or in the bar under the banner at 900 px and below),
+// and the hints of "Plan for" on a settings section; and, as graphics (WCAG 1.4.11: 3:1), the frame of the mode in use: a black edge on
+// the panel with a yellow ring inside it.
 const ADDON17_PAIRS: [string, string, string][] = [
   ['card and column titles', '#404040', PANEL], ['"Updating…" beside the title', '#4a4a4a', PANEL],
   ['tile label', '#aaaaaa', SCREEN], ['tile value', '#55ff55', SCREEN],

@@ -169,6 +169,80 @@ describe('compare card', () => {
     expect(loader.getSnapshot()).toMatchObject({ open: false, result: RESULT });
   });
 
+  it('drops the old target\'s answer when another target is picked, staying open on its planning line until the new one comes', async () => {
+    // the review of the merge, T1: a target picked straight from the item search, with no Clear, keeps the card open
+    vi.stubGlobal('fetch', answering(RESULT));
+    const loader = compareLoader('p1');
+    loader.target('t:a@0');
+    loader.open();
+    await settle();
+    expect(loader.getSnapshot().result).toEqual(RESULT);
+    // another target, its compare held on its way: no column, only that it is planning
+    let answer: (r: Response) => void = () => {};
+    const held = vi.fn(() => new Promise<Response>((resolve) => { answer = resolve; }));
+    vi.stubGlobal('fetch', held);
+    loader.target('t:b@0');
+    expect(loader.getSnapshot()).toEqual({ open: true, result: null, error: null, loading: true });
+    expect(held).toHaveBeenCalledTimes(1);
+    expect(markup(loader.getSnapshot())).not.toContain('data-objective');
+    expect(text(markup(loader.getSnapshot()))).toContain('Planning the three modes…');
+    const NEW: CompareResult = { ...RESULT, rev: 4 };
+    answer(new Response(JSON.stringify(NEW), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    await settle();
+    expect(loader.getSnapshot()).toEqual({ open: true, result: NEW, error: null, loading: false });
+
+    // an answer for the old target still on its way when the target changes is dropped, and the new target's comes after it
+    const answers: Array<(r: Response) => void> = [];
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((resolve) => { answers.push(resolve); })));
+    const late = compareLoader('p1');
+    late.target('t:a@0');
+    late.open();                                                                   // the old target's compare, on its way
+    late.target('t:b@0');
+    const json = (body: CompareResult) => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    answers[0]!(json(RESULT));
+    await settle();
+    expect(late.getSnapshot()).toEqual({ open: true, result: null, error: null, loading: true });
+    expect(answers).toHaveLength(2);                                               // asked again for the new target
+    answers[1]!(json(NEW));
+    await settle();
+    expect(late.getSnapshot()).toEqual({ open: true, result: NEW, error: null, loading: false });
+
+    // closed, the old target's answer is dropped too, so the next open starts fresh
+    vi.stubGlobal('fetch', answering(RESULT));
+    const closed = compareLoader('p1');
+    closed.target('t:a@0');
+    closed.open();
+    await settle();
+    closed.close();
+    closed.target('t:b@0');
+    expect(closed.getSnapshot()).toEqual({ open: false, result: null, error: null, loading: false });
+  });
+
+  it('keeps the answer when the same target\'s other settings change: the old figures stay beside "Updating…"', async () => {
+    vi.stubGlobal('fetch', answering(RESULT));
+    const loader = compareLoader('p1');
+    loader.target('t:a@0');
+    loader.open();
+    await settle();
+    // the amount, mode or tier changes: the page tells the loader the same target, and the plan event asks for the compare again
+    loader.target('t:a@0');
+    expect(loader.getSnapshot()).toEqual({ open: true, result: RESULT, error: null, loading: false });
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
+    loader.refresh();
+    expect(loader.getSnapshot()).toEqual({ open: true, result: RESULT, error: null, loading: true });
+    expect(text(markup(loader.getSnapshot()))).toContain('Updating…');
+    expect(markup(loader.getSnapshot())).toContain('data-objective');
+    // a first target (none before it) and a cleared one drop nothing here: Clear closes the card with `forget` instead
+    const fresh = compareLoader('p1');
+    vi.stubGlobal('fetch', answering(RESULT));
+    fresh.target(null);
+    fresh.open();
+    await settle();
+    fresh.target('t:a@0');
+    fresh.target(null);
+    expect(fresh.getSnapshot().result).toEqual(RESULT);
+  });
+
   it('hears the compare event of the project stream the page has open', () => {
     // One EventSource per open project (architecture §8): the store's stream tells the card's page of `plan` and `compare`.
     const sources: FakeEventSource[] = [];
@@ -209,7 +283,8 @@ describe('compare card', () => {
   });
 
   it('shows a button while closed, three columns once open, the mode in use disabled and a mode still planning', () => {
-    // the button is the project head's (the Machine GUI restyle moved it there, so a closed card takes no room): it names the card it
+    // the button is the page's, not the card's (the Machine GUI restyle moved it out, so a closed card takes no room): the page draws it
+    // twice, in the project head and in a bar under the banner at 900 px and below, and the stylesheet shows one. It names the card it
     // controls and says whether it is open, and the closed card draws nothing at all
     expect(renderToStaticMarkup(<CompareToggle open={false} onToggle={() => {}} />)).toBe(
       '<button type="button" class="small compare-toggle" aria-expanded="false" aria-controls="compare-card">Compare modes</button>',

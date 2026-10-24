@@ -383,6 +383,13 @@ export function ProjectPage(props: { id: string }): ReactElement {
   useEffect(() => {
     if (!comparable) compare.close({ forget: true });
   }, [comparable, compare.close]);
+  // What the card shows is of the target it was asked for: another target picked straight from the item search (no Clear) drops it
+  // before the page is painted again, and the card says it is planning until the new target's compare comes (the same target with
+  // another amount, mode or tier keeps it).
+  const target = project?.settings.target ?? null;
+  useLayoutEffect(() => {
+    compare.target(target);
+  }, [target, compare.target]);
   const toggleCompare = (): void => {
     if (compare.state.open) compare.close();
     else compare.open();

@@ -33,6 +33,14 @@ export interface CompareLoader {
   close(options?: { forget?: boolean }): void;
   /** The project's plan may have changed, or a compare finished: fetch again while open (nothing while closed). */
   refresh(): void;
+  /**
+   * The project's target now. Another target than the one before (picked straight from the item search, with no Clear) makes the
+   * answer the old target's: it is dropped, with its error and an answer on its way, and an open card stays open and asks for the
+   * new target's compare, saying it is planning until that comes; a closed one starts fresh when it opens. The same target (its
+   * amount, mode, tier or any other setting changed) keeps the answer, beside "Updating…" while the new one comes. A first target
+   * and a cleared one drop nothing here: a cleared target closes the card with `forget`.
+   */
+  target(key: StuffKey | null): void;
 }
 
 /** `GET /api/projects/:id/compare`. */
@@ -48,9 +56,10 @@ function fetchCompare(projectId: string): Promise<CompareResult> {
 export function compareLoader(projectId: string, get: (id: string) => Promise<CompareResult> = fetchCompare): CompareLoader {
   let state: CompareState = { open: false, result: null, error: null, loading: false };
   const listeners = new Set<() => void>();
-  let request = 0;   // the latest fetch; a close counts too, so an answer for the card before it closed is dropped
+  let request = 0;   // the latest fetch; a close or another target counts too, so an answer for the card before it is dropped
   let inFlight = false;
   let again = false;
+  let shown: StuffKey | null = null;   // the target the answer is of
   const set = (patch: Partial<CompareState>): void => {
     state = { ...state, ...patch };
     for (const fn of [...listeners]) fn();
@@ -99,6 +108,19 @@ export function compareLoader(projectId: string, get: (id: string) => Promise<Co
     },
     refresh() {
       if (state.open) load();
+    },
+    target(key) {
+      const before = shown;
+      shown = key;
+      if (before === null || key === null || key === before) return;
+      request++;
+      again = false;
+      if (state.open) {
+        set({ result: null, error: null });
+        load();
+      } else if (state.result !== null || state.error !== null) {
+        set({ result: null, error: null });
+      }
     },
   };
 }
@@ -174,18 +196,22 @@ export function CompareCardView(props: {
 }
 
 /**
- * Project `projectId`'s compare, for its page, which draws the head's button and the card apart: what the card shows,
- * and opening and closing it. `rev` changes on every `plan` or `compare` event of the project (ProjectPage counts them):
- * open, the compare is fetched again each time. Leaving the page (or another project) closes it.
+ * Project `projectId`'s compare, for its page, which draws the card apart from its "Compare modes" buttons (two of them:
+ * one in the project head and one in a bar under the banner at 900 px and below, of which the stylesheet shows one): what
+ * the card shows, opening and closing it, and telling it the project's target (`target`). `rev` changes on every `plan` or
+ * `compare` event of the project (ProjectPage counts them): open, the compare is fetched again each time. Leaving the page
+ * (or another project) closes it.
  */
-export function useCompare(projectId: string, rev: number): { state: CompareState; open(): void; close: CompareLoader['close'] } {
+export function useCompare(projectId: string, rev: number): {
+  state: CompareState; open(): void; close: CompareLoader['close']; target: CompareLoader['target'];
+} {
   const loader = useMemo(() => compareLoader(projectId), [projectId]);
   const state = useSyncExternalStore(loader.subscribe, loader.getSnapshot);
   useEffect(() => () => loader.close(), [loader]);
   useEffect(() => {
     loader.refresh();
   }, [loader, rev]);
-  return { state, open: loader.open, close: loader.close };
+  return { state, open: loader.open, close: loader.close, target: loader.target };
 }
 
 /**

@@ -176,3 +176,33 @@ for (const [width, height] of [[860, 900], [768, 1024]] as const) {
     await page.unrouteAll({ behavior: 'ignoreErrors' });
   });
 }
+
+// Another target picked straight from the item search, without Clear (the review of the merge, T1): the open card drops the old target's
+// figures at once and says it is planning until the new target's compare comes.
+test('picking another target while the Compare card is open drops the old figures and plans the new ones', async ({ page }) => {
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Swap target', { target: 't:circuit@0', amount: 1, per: 'min', tier: 1 });
+  const settings = page.getByRole('complementary', { name: 'Project settings' });
+  const card = page.getByRole('region', { name: 'Compare modes' });
+  const steps = card.locator('[data-objective="cheapest"] .compare-row', { hasText: 'Steps' }).locator('dd');
+  await page.getByRole('button', { name: 'Compare modes' }).click();
+  await expect(steps).toHaveText('3', { timeout: COMPARE_TIMEOUT_MS });              // Basic Circuit: three steps
+
+  // the next compare held back on its way, Iron Plate picked in the item search with no Clear: the card stays open, with no column
+  // and its planning line, none of Basic Circuit's figures
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  await page.route(/\/api\/projects\/[^/]+\/compare$/, async (route) => {
+    await held;
+    await route.continue();
+  });
+  await settings.getByPlaceholder('Search items and fluids').fill('iron plate');
+  await settings.getByRole('listbox', { name: 'Matches' }).getByRole('option', { name: /Iron Plate/ }).click();   // not the flow's Find item list
+  await expect(settings.locator('.settings-target-name')).toHaveText('Iron Plate');
+  await expect(card).toBeVisible();
+  await expect(card.locator('[data-objective]')).toHaveCount(0);
+  await expect(card.getByText('Planning the three modes…')).toBeVisible();
+  release();
+  await expect(steps).toHaveText('1', { timeout: COMPARE_TIMEOUT_MS });              // Iron Plate: one step
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+});
