@@ -17,10 +17,10 @@ Mini-GT fixture), new: `@fontsource/pixelify-sans`, `@fontsource/inter`.
 
 **Spec:** `docs/superpowers/specs/2026-10-22-machine-gui-restyle-design.md` — §3 constraints, §4 tokens and ink,
 §5 typography, §6 components, §7 pipes, §7a motion, §8 Phase 1. Look reference: mockup B at
-`/private/tmp/claude-501/-Users-drukoz-gtnh-planner/1fda0de6-6cd6-4a4f-ad51-448ca5885d74/scratchpad/restyle-canvas/project/MachineGui.dc.html`.
-Before shots: `/private/tmp/claude-501/-Users-drukoz-gtnh-planner/1fda0de6-6cd6-4a4f-ad51-448ca5885d74/scratchpad/shots/*.png`.
+`<the design session's scratchpad, not in the repo>/restyle-canvas/project/MachineGui.dc.html`.
+Before shots: `<the design session's scratchpad, not in the repo>/shots/*.png`.
 Per-area scout notes (exact markup and test constraints, with line numbers):
-`/private/tmp/claude-501/-Users-drukoz-gtnh-planner/1fda0de6-6cd6-4a4f-ad51-448ca5885d74/scratchpad/recon/`
+`<the design session's scratchpad, not in the repo>/recon/`
 (`6-chrome.md` chrome and base, `2-flow.md` Flow, `3-connections.md` Connections, `5-panels-forms.md` settings and
 lists, `1-chrome.md` Map, `4-chrome.md` 3D/World/projector).
 

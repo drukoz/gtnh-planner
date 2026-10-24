@@ -13,9 +13,9 @@ connected" and "make sure even tho it is machine UI it is also animated and mord
 
 Reference mockup (the look to match, not a pixel spec): the "B · Machine GUI" artboard on the design canvas
 https://claude.ai/artifact/Vc3ePZTxQJeqqzBFhRF5us (source:
-`/private/tmp/claude-501/-Users-drukoz-gtnh-planner/1fda0de6-6cd6-4a4f-ad51-448ca5885d74/scratchpad/restyle-canvas/project/MachineGui.dc.html`).
+`<the design session's scratchpad, not in the repo>/restyle-canvas/project/MachineGui.dc.html`).
 Screenshots of today's app, one per screen and tab:
-`/private/tmp/claude-501/-Users-drukoz-gtnh-planner/1fda0de6-6cd6-4a4f-ad51-448ca5885d74/scratchpad/shots/*.png`
+`<the design session's scratchpad, not in the repo>/shots/*.png`
 (scripts `shoot.mjs`, `shoot2.mjs`, `shoot3.mjs` beside them re-take the whole tour against the e2e server).
 
 **B in one sentence:** the planner looks like a refined GregTech machine interface — light-grey bevelled Minecraft
