@@ -203,3 +203,14 @@ describe('contrast of the 3D tab, the World page and the projector panel', () =>
     expect(ratio('#4a4a4a', STONE)).toBeLessThan(AA);
   });
 });
+
+// The Settings button's small part, "Make: Basic Circuit" (Inter 13px in --ink-muted): the button's own face is the grey #6b6b6b, and
+// the muted ink (#aaaaaa) measures 2.3:1 on it, and 3.0:1 on the face under the pointer, so the part is a dark readout on the screen
+// (the pair "dark ink" above), where it measures 7.4:1.
+describe('contrast of the Settings button\'s target part', () => {
+  it('reads the muted ink on its dark readout, and needs it: on the button\'s face the ink falls short', () => {
+    expect(ratio('#aaaaaa', SCREEN)).toBeGreaterThanOrEqual(AA);
+    expect(ratio('#aaaaaa', '#6b6b6b')).toBeLessThan(AA);                              // the button's face
+    expect(ratio('#aaaaaa', '#4a5499')).toBeLessThan(AA);                              // and under the pointer
+  });
+});

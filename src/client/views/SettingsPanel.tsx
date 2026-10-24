@@ -650,13 +650,26 @@ export function OptionPinsSection(props: { settings: PlanSettings; plan: Plan | 
   );
 }
 
-export function SettingsPanel(props: ProjectViewProps & { info: PackInfo | null }): ReactElement {
-  const { project, plan, send, info } = props;
-  const { settings } = project;
-  // Names of what was picked here, until the plan (which names every key it uses) arrives.
+/** How the panel names a key, and how it learns the name of what was just picked in one of its search boxes. */
+export interface PickedNames { nameOf: NameOf; remember(hit: SearchHit): void }
+
+/**
+ * The names of what was picked in the settings' search boxes, kept until the plan (which names every key it uses) arrives, so that
+ * what was just picked is named at once. The page that draws the panel keeps them and hands them to it, since the Settings button
+ * of the head says what the project makes in the same words; a panel that is given none keeps its own.
+ */
+export function usePickedNames(plan: Plan | null): PickedNames {
   const [picked, setPicked] = useState<Record<string, string>>({});
   const remember = (hit: SearchHit): void => setPicked((names) => (names[hit.key] === hit.name ? names : { ...names, [hit.key]: hit.name }));
   const nameOf: NameOf = (key) => plan?.names?.[key] ?? picked[key] ?? key;
+  return { nameOf, remember };
+}
+
+export function SettingsPanel(props: ProjectViewProps & { info: PackInfo | null; names?: PickedNames }): ReactElement {
+  const { project, plan, send, info } = props;
+  const { settings } = project;
+  const own = usePickedNames(plan);
+  const { nameOf, remember } = props.names ?? own;
   const patch: Patch = (p) => send([{ op: 'settings', patch: p }]);
   return (
     <div className="settings">

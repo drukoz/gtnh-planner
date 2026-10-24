@@ -9,10 +9,12 @@ import { ItemIcon } from './ItemIcon.tsx';
 
 const SEARCH_DELAY_MS = 200;
 const SEARCH_LIMIT = 20;
+/** The placeholder, and so the name, of a search box that asks for none: the Make section's, which the page finds the picker of what to make by. */
+export const ITEM_SEARCH_PLACEHOLDER = 'Search items and fluids';
 
 export function ItemSearch(props: { onPick(hit: SearchHit): void; placeholder?: string }): ReactElement {
   const { onPick } = props;
-  const placeholder = props.placeholder ?? 'Search items and fluids';
+  const placeholder = props.placeholder ?? ITEM_SEARCH_PLACEHOLDER;
   const listId = useId();
   const [query, setQuery] = useState('');
   const [result, setResult] = useState<{ query: string; hits: SearchHit[] } | null>(null);

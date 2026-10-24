@@ -873,6 +873,31 @@ describe('the Machine GUI settings drawer', () => {
     expect(declaredIn(NARROW, '.settings-toggle', 'align-items')).toBe('center');
   });
 
+  it('shows what is being made in the Settings button as a small grey readout, cut with an ellipsis within 40% of the head', () => {
+    // the button holds "Settings" and the target's part; the part gives way (it shrinks and is cut) so that a long name never grows the button
+    expect(declaredIn(NARROW, '.settings-toggle', 'gap')).toBe('8px');
+    expect(declaredIn(NARROW, '.settings-toggle', 'max-width')).toBe('40%');
+    for (const [property, value] of [
+      ['min-width', '0'], ['overflow', 'hidden'], ['text-overflow', 'ellipsis'], ['white-space', 'nowrap'],
+      // Inter 13px in the muted ink, on the dark screen of a readout (the summary's count is one too): the muted ink measures 2.3:1 on the
+      // button's own face (contrast.test.tsx), and the button's drop shadow would smear 13px letters
+      ['font', '13px/1.5 var(--font-ui)'], ['color', 'var(--ink-muted)'], ['background', 'var(--screen)'], ['padding', '2px 6px'],
+      ['text-shadow', 'none'],
+    ] as const) expect(declaredIn(NARROW, '.settings-toggle-target', property), `.settings-toggle-target { ${property} }`).toBe(value);
+    // the pixel font is never below 13px, and this part is small print: it is Inter, and no colour of its own is new
+    expect(declaredIn(NARROW, '.settings-toggle-target', 'font')).not.toContain('--font-pixel');
+    expect(declaredIn(NARROW, '.settings-toggle-target', 'color')).toMatch(/^var\(--/);
+    expect(declaredIn(NARROW, '.settings-toggle-target', 'background')).toMatch(/^var\(--/);
+    // it moves nothing by itself, and it is not drawn on a wide screen, where the whole button is not
+    expect(declaredIn(NARROW, '.settings-toggle-target', 'animation')).toBeUndefined();
+    expect(declaredIn(NARROW, '.settings-toggle-target', 'transition')).toBeUndefined();
+    expect(hasTopLevelRule('.settings-toggle-target'), 'a .settings-toggle-target rule outside the query').toBe(false);
+    // the readout makes the button some 140px wider, so the project's name gives way (to 160px) before the head wraps: at 768 px the head
+    // is still one row, as it was with the bare button (drawer.spec.ts measures it)
+    expect(declaredIn(NARROW, '.project-name', 'flex')).toBe('1 1 160px');
+    expect(declaredIn(NARROW, '.project-name', 'min-width')).toBe('0');
+  });
+
   it('shows the drawer\'s Close settings button in the drawer only, at the top right of it', () => {
     // ruling R36: the drawer's way out, where the focus goes when it opens; a wide column has nothing to close
     expect(declarations(ruleBody('.settings-close'))).toEqual([['display', 'none']]);
