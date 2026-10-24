@@ -1037,7 +1037,9 @@ asset coverage figures may move.
 
 Every step runs in the main checkout's root. From any checkout of the repo, find it with
 `REPO="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"` and start each command with
-`cd "$REPO" &&` (shell state does not persist between commands).
+`cd "$REPO" &&` (shell state does not persist between commands). `REPO` does not persist either, and with it unset
+`cd "$REPO"` succeeds without moving (in zsh and bash alike), so the command would act on the checkout it runs in:
+run the `REPO=` line in the same shell as each command, as step 1 does.
 
 1. **Backup** (an APFS clone, instant; keep it until the user has looked):
    ```bash
@@ -1046,21 +1048,22 @@ Every step runs in the main checkout's root. From any checkout of the repo, find
    ```
 2. **Set the instance** (adds one key and never prints the file, which holds secrets):
    ```bash
-   python3 -I -c "import json,os,sys; p='data/config.json'; c=json.load(open(p)); c['clientInstance']=sys.argv[1]; t=p+'.tmp'; fd=os.open(t, os.O_WRONLY|os.O_CREAT|os.O_EXCL, 0o600); os.write(fd, (json.dumps(c, indent=2)+'\n').encode()); os.close(fd); os.replace(t, p)" "<the GTNH 2.9.0-RC-1 instance's .minecraft folder>"
+   cd "$REPO" && python3 -I -c "import json,os,sys; p='data/config.json'; c=json.load(open(p)); c['clientInstance']=sys.argv[1]; t=p+'.tmp'; fd=os.open(t, os.O_WRONLY|os.O_CREAT|os.O_EXCL, 0o600); os.write(fd, (json.dumps(c, indent=2)+'\n').encode()); os.close(fd); os.replace(t, p)" "<the GTNH 2.9.0-RC-1 instance's .minecraft folder>"
    ```
-3. **Extract**: `npm run extract-assets`. The lines should match Task 5 Step 2's: 3 resource packs, the `added …`
-   lines, the `blockPixieDust` warning. Then `test -f data/assets/nei/index.json && echo nei-kept`.
-4. **Check**: `GTNH_LOCAL=1 npx vitest run tests/unit/assets/real-assets.test.ts` with the main checkout's own
-   config. It reads only.
+3. **Extract**: `cd "$REPO" && npm run extract-assets`. The lines should match Task 5 Step 2's: 3 resource packs, the
+   `added …` lines, the `blockPixieDust` warning. Then
+   `cd "$REPO" && test -f data/assets/nei/index.json && echo nei-kept`.
+4. **Check**: `cd "$REPO" && GTNH_LOCAL=1 npx vitest run tests/unit/assets/real-assets.test.ts` with the main
+   checkout's own config. It reads only.
 5. **Restart the site** on port 8765 the way it runs now, only if the user has it up. The asset service would pick up
    the new index within a second anyway; the restart also clears server-side caches. Tell the user: reload once with
    Cmd+Shift+R (the browser keeps texture files for up to an hour). Open a project's 3D tab and the Map: the blocks
    and colours are the packs'. The Map needs no rescan.
 6. **Rollback**, if the user prefers stock: stop the site, then run
-   `rm -rf data/assets && mv data/assets.pre-packs-<stamp> data/assets`. Then remove `clientInstance` (never prints
-   the file):
+   `cd "$REPO" && rm -rf data/assets && mv data/assets.pre-packs-<stamp> data/assets`. Then remove `clientInstance`
+   (never prints the file):
    ```bash
-   python3 -I -c "import json,os; p='data/config.json'; c=json.load(open(p)); c.pop('clientInstance',None); t=p+'.tmp'; fd=os.open(t, os.O_WRONLY|os.O_CREAT|os.O_EXCL, 0o600); os.write(fd,(json.dumps(c,indent=2)+'\n').encode()); os.close(fd); os.replace(t,p)"
+   cd "$REPO" && python3 -I -c "import json,os; p='data/config.json'; c=json.load(open(p)); c.pop('clientInstance',None); t=p+'.tmp'; fd=os.open(t, os.O_WRONLY|os.O_CREAT|os.O_EXCL, 0o600); os.write(fd,(json.dumps(c,indent=2)+'\n').encode()); os.close(fd); os.replace(t,p)"
    ```
-   or keep it and extract with `--no-packs` instead. Then restart the site. Delete the backup only after the user says
-   the new look is fine.
+   or keep it and extract with `cd "$REPO" && npm run extract-assets -- --no-packs` instead. Then restart the site.
+   Delete the backup only after the user says the new look is fine.
