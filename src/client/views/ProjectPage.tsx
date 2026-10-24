@@ -328,7 +328,11 @@ export function ProjectPage(props: { id: string }): ReactElement {
     };
   }, [settingsOpen]);
   // What lies outside this page while the drawer is open: the top bar, which the App draws above it, goes inert with the rest of the
-  // page behind the drawer; and the drawer closes when the window grows past the width it is a drawer at (the stylesheet's query).
+  // page behind the drawer; and the drawer closes when the window grows past the width it is a drawer at (the stylesheet's query). It
+  // looks once more as it starts to listen: the page's own opening (the auto-open, in an effect) is a task or two older than this
+  // effect, and a window that grew in between fired its change before there was a listener. In a window still narrow that look does
+  // nothing; in one that has grown it closes the drawer at once, and, as for any widening, leaves the focus where it is (on the search,
+  // which sits beside the views then), not on a Settings button that is not drawn.
   useEffect(() => {
     if (!settingsOpen) return;
     const bar = document.querySelector<HTMLElement>('.top-nav');
@@ -338,6 +342,7 @@ export function ProjectPage(props: { id: string }): ReactElement {
       if (!narrow.matches) setSettingsOpen(false);
     };
     narrow.addEventListener('change', onWidth);
+    onWidth();
     return () => {
       narrow.removeEventListener('change', onWidth);
       if (bar !== null) bar.inert = false;

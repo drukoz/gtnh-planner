@@ -358,12 +358,12 @@ test('"Pick something to make" in the banner opens the drawer again, into the it
   const { settings, toggle, search, close, hint } = pieces(page);
   await expect(settings).toBeVisible();                                              // opened by itself
 
-  // scroll the drawer away from the search, and close it with its Close button
-  await settings.evaluate((aside) => { aside.scrollTop = aside.scrollHeight; });
-  await expect(search).not.toBeInViewport();
+  // close it with its Close button (Playwright scrolls that button into view first, which is the top of the drawer), and only then scroll
+  // the drawer, hidden, to its bottom: the search is out of its view, and nothing but the page's own scrolling can bring it back
   await close.click();
   await expect(settings).toBeHidden();
   await expect(toggle).toBeFocused();
+  expect(await settings.evaluate((aside) => { aside.scrollTop = aside.scrollHeight; return aside.scrollTop; }), 'the hidden drawer scrolled').toBeGreaterThan(0);
 
   // the banner says what is missing, and its words are a button that goes there: the drawer opens, the search is in view and has the focus
   await expect(hint).toBeVisible();
@@ -507,6 +507,9 @@ test('a long target name is cut with an ellipsis, and the Settings button stays 
   const { toggle } = pieces(page);
   const target = toggle.locator('.settings-toggle-target');
   await expect(target).toHaveText('· Make: Basic Circuit');
+  // the connection badge starts as "reconnecting…" (137px) and is "live" (58px) once the event stream is open; the head's rows are counted
+  // with the badge it settles on, since the long name below fills 40% of the head and a wider badge wraps it
+  await expect(page.locator('.connection.live')).toBeVisible();
 
   // Inter 13px in the muted ink on a dark readout, with no drop shadow of the button's (the contract's values, as the browser computes them)
   await expect(target).toHaveCSS('font-size', '13px');
@@ -529,7 +532,7 @@ test('a long target name is cut with an ellipsis, and the Settings button stays 
   const short = await measure();
   expect(short.cut, 'a short name is whole').toBe(false);
   expect(short.height).toBe(36);
-  expect(short.rows, 'the head is one row at 800 px, as it was with the bare button').toBe(36);
+  expect(short.rows, 'the head is one row at 800 px while the stream is live, as it was with the bare button').toBe(36);
 
   // the name of a long multiblock in its place (the button is drawn from the project's target; this is its layout)
   await target.evaluate((el) => { el.textContent = '· Make: Large Extremely Long Named Industrial Multiblock Processing Array Controller Casing'; });
@@ -540,4 +543,73 @@ test('a long target name is cut with an ellipsis, and the Settings button stays 
   expect(long.height, 'the button keeps its 36px').toBe(36);
   expect(long.rows, 'and the head stays one row').toBe(36);
   expect(Math.abs(long.nameTop - long.toggleTop), 'the project name stays on the button\'s row').toBeLessThanOrEqual(1);
+});
+
+test('on a phone the Settings button shows the whole of a short name: the 40% cap is for windows wider than 700 px', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await login(page); await setName(page, 'Ann');
+  const { toggle } = pieces(page);
+  const target = toggle.locator('.settings-toggle-target');
+  const measure = (): Promise<{ head: number; toggle: number; partWidth: number; partNeeds: number }> => page.evaluate(async () => {
+    await document.fonts.ready;                                                       // the widths are the pixel font's, not its stand-in's
+    const part = document.querySelector('.settings-toggle-target')!;
+    return {
+      head: document.querySelector('.project-head')!.getBoundingClientRect().width, toggle: document.querySelector('.settings-toggle')!.getBoundingClientRect().width,
+      partWidth: part.clientWidth, partNeeds: part.scrollWidth,
+    };
+  });
+
+  // a project with no target and one making Basic Circuit: the part is whole, where a cap of 40% of the head (136 px) left it a few letters
+  for (const [settings, text] of [[undefined, '· Make: nothing yet'], [TARGET, '· Make: Basic Circuit']] as const) {
+    await createProject(page, 'Phone', settings);
+    await expect(target).toHaveText(text);
+    const whole = await measure();
+    expect(whole.partNeeds, `"${text}" is drawn whole`).toBeLessThanOrEqual(whole.partWidth);
+    expect(whole.toggle, 'the button fits the head').toBeLessThanOrEqual(whole.head + 0.5);
+  }
+
+  // a name too long for the head is still cut, at the width of the head
+  await target.evaluate((el) => { el.textContent = '· Make: Large Extremely Long Named Industrial Multiblock Processing Array Controller Casing'; });
+  const long = await measure();
+  expect(long.partNeeds, 'a long name is cut').toBeGreaterThan(long.partWidth);
+  expect(long.toggle, 'at the width of the head').toBeCloseTo(long.head, 0);
+});
+
+test('a drawer that opened by itself in a window that has grown past 900 px since it looked closes at once, and the focus stays in the search', async ({ page }) => {
+  // The window is 1280 px wide, for real, but the first look the page takes at its width (the auto-open's, in an effect) is told it is narrow:
+  // so the drawer opens, and by the time the drawer's own effect looks again, to hear the window change, it has grown past 900 px. A listener
+  // that only hears the changes after it is attached would never close it, and the page would stay inert beside a column that needs no drawer.
+  await page.addInitScript(() => {
+    const seen = window as unknown as { __looks: number; __opened: boolean };
+    seen.__looks = 0;
+    seen.__opened = false;
+    const real = window.matchMedia.bind(window);
+    window.matchMedia = (query: string): MediaQueryList => {
+      if (query !== '(max-width: 900px)' || ++seen.__looks > 1) return real(query);
+      return {
+        matches: true, media: query, onchange: null, dispatchEvent: () => false,
+        addEventListener: () => {}, removeEventListener: () => {}, addListener: () => {}, removeListener: () => {},
+      };
+    };
+    // whether the button ever said the drawer was open. The page can open it and close it again before a task ends, so what the DOM says by
+    // the time this is told is not enough: the old value of each change is what shows that it was open
+    new MutationObserver((records) => {
+      const wasOpen = records.some((record) => record.oldValue === 'true' && record.target instanceof Element && record.target.classList.contains('settings-toggle'));
+      if (wasOpen || document.querySelector('.settings-toggle[aria-expanded="true"]') !== null) seen.__opened = true;
+    }).observe(document, { subtree: true, attributes: true, attributeFilter: ['aria-expanded'], attributeOldValue: true });
+  });
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Grown');                                                 // no target; the window is the default 1280x720
+  const { settings, search } = pieces(page);
+  const toggle = page.locator('.settings-toggle');                                    // not drawn on a wide window, so not found by its role
+
+  // the page opened the drawer, told the window was narrow, and closed it at once when it looked again and found it wide
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __opened: boolean }).__opened), 'the page opened the drawer by itself').toBe(true);
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.locator('.drawer-backdrop')).toHaveCount(0);
+  for (const behind of BEHIND) await expect(page.locator(behind).first(), behind).not.toHaveAttribute('inert');
+  // the column is beside the views, with the focus where the drawer put it: on the search, and not thrown to a button that is not drawn
+  await expect(settings).toBeVisible();
+  await expect(search).toBeFocused();
+  await expect(toggle).not.toBeFocused();
 });

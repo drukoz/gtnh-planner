@@ -281,8 +281,9 @@ Transitions (Phase 1 [CSS]: entrances; exits that need an element kept mounted a
   grows past 900 px. It slides in with `--dur-slow`/`--ease-out` and out with `--dur-exit`/`--ease-in`.
   What to make is never out of sight behind it (the make-picker fix, after Phase 1): the Settings button reads
   "Settings · Make: <target>" or "Settings · Make: nothing yet" (the target part is Inter 13 px in `--ink-muted` on a
-  `--screen` readout, since the muted ink is 2.3:1 on the button's own face; a long name ends in an ellipsis, and the
-  button takes at most 40% of the head); a project with no target opens the drawer by itself, once per visit (after the
+  `--screen` readout, since the muted ink is 2.3:1 on the button's own face; a long name ends in an ellipsis, and above
+  700 px the button takes at most 40% of the head, below it the whole head, which wraps there anyway, so that a short
+  name is never cut on a phone); a project with no target opens the drawer by itself, once per visit (after the
   name prompt), with the focus in the Make section's item search instead of on Close; and the plan banner's "Pick
   something to make" is a button that opens the drawer into that search (on a wide window it focuses the search).
 

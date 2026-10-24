@@ -732,6 +732,8 @@ describe('the Machine GUI chrome', () => {
 // brief, and the order the cascade needs.
 
 const NARROW = '@media (max-width: 900px)';
+/** Below this the head wraps whatever the Settings button's width: the 40% cap, which keeps it on one row above, protects nothing. */
+const PHONE = '@media (max-width: 700px)';
 /** The title of a section, whichever element carries it: its h3, the Tier label's span and the Logistics legend. */
 const TITLES = '.settings-section h3, .settings-title, .settings .field > span.settings-title, .choice > legend.settings-title';
 const SETTINGS_SUMMARY = 'details.settings-section > summary';
@@ -892,10 +894,21 @@ describe('the Machine GUI settings drawer', () => {
     expect(declaredIn(NARROW, '.settings-toggle-target', 'animation')).toBeUndefined();
     expect(declaredIn(NARROW, '.settings-toggle-target', 'transition')).toBeUndefined();
     expect(hasTopLevelRule('.settings-toggle-target'), 'a .settings-toggle-target rule outside the query').toBe(false);
-    // the readout makes the button some 140px wider, so the project's name gives way (to 160px) before the head wraps: at 768 px the head
-    // is still one row, as it was with the bare button (drawer.spec.ts measures it)
+    // the readout makes the button some 140px wider, so the project's name gives way (to 160px) before the head wraps: while the stream is
+    // live (the connection badge reads "live", 58px; "reconnecting…" is 137px and wraps the head a little earlier, as it already does at
+    // narrower widths) the head is one row at 768 px, as it was with the bare button (drawer.spec.ts measures it)
     expect(declaredIn(NARROW, '.project-name', 'flex')).toBe('1 1 160px');
     expect(declaredIn(NARROW, '.project-name', 'min-width')).toBe('0');
+  });
+
+  it('lets the Settings button take the whole head on a phone, where the head wraps whatever its width', () => {
+    // above 700 px the cap keeps the head on one row; below it the head wraps anyway, and the cap only cut a short name there
+    // ("· Make: Basi…" for "Basic Circuit", an empty readout at 320 px) where the title does not show on a touch screen
+    expect(declaredIn(PHONE, '.settings-toggle', 'max-width')).toBe('100%');
+    expect(inQuery(PHONE, '.settings-toggle'), 'a phone changes the button\'s cap and nothing else').toEqual([['max-width', '100%']]);
+    // the same specificity as the 40% of the drawer's query, so the phone's rule has to come after it
+    expect(position(PHONE)).toBeGreaterThan(position(NARROW));
+    expect(declaredIn(NARROW, '.settings-toggle', 'max-width')).toBe('40%');
   });
 
   it('shows the drawer\'s Close settings button in the drawer only, at the top right of it', () => {
