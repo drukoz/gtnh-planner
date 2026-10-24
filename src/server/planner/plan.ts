@@ -42,6 +42,7 @@ export { effectiveTier, settingsHash } from './basis.ts';
 const SECONDS_PER: Readonly<Record<PlanSettings['per'], number>> = { min: 60, hour: 3600 };
 const SECONDS_PER_HOUR = 3600;
 const SECONDS_PER_DAY = 86_400;
+const HOURS_PER_WEEK = 168;
 /**
  * A byproduct-only good counts as bought beyond the group's stock over the horizon (`beyondStockWarnings`) above the
  * stock by more than this share of it, plus this much: the line's purchases are 9 significant digits of a rate.
@@ -965,8 +966,11 @@ function rawInputsOf(
  * Fix wave 3 (C), controller OQ2: one `beyond-stock` warning per byproduct-only good (`leafClass` 'byproduct': no ore,
  * mob, farm or free supply yields it directly) the line buys more of than the group's stock (`groupStock`: storage's
  * total, 0 without a scan) over the build horizon (24 hours where build cost is ignored; Make N: the batch), keyed to
- * the good, in key order: `Buys <N> a day of <good>, beyond the <M> in storage` (Make N: `Buys <N> of <good> for the
- * batch, beyond the <M> in storage`). `buys` per second, or the batch's in Make N.
+ * the good, in key order: `Buys <N> a day of <good>, beyond the <M> in storage` where the stock is spread over a day
+ * (the default 24-hour horizon, and build cost ignored); at any other horizon the purchase over it too, the amount the
+ * warning tests: `Buys <N> a day of <good>, <T> over <horizon>, beyond the <M> in storage` (`<horizon>` as the plan's
+ * cost line says it: `6 h`, `1 week`); in Make N `Buys <N> of <good> for the batch, beyond the <M> in storage`. `buys`
+ * per second, or the batch's in Make N.
  */
 function beyondStockWarnings(
   pack: Pack, graph: CandidateGraph, settings: PlanSettings, ctx: PlanContext, buys: ReadonlyMap<StuffKey, number>,
@@ -979,12 +983,19 @@ function beyondStockWarnings(
     const have = stock.total(key);
     if (!(amount * stock.over > have * (1 + BEYOND_STOCK_SLACK) + BEYOND_STOCK_SLACK)) continue;
     const litres = isFluidKey(key) ? ' L' : '';
+    const overHorizon = stock.over === SECONDS_PER_DAY ? '' : `, ${formatNumber(amount * stock.over)}${litres} over ${horizonWords(stock.over)}`;
     const bought = batch
       ? `${formatNumber(amount)}${litres} of ${pack.nameOf(key)} for the batch`
-      : `${formatNumber(amount * SECONDS_PER_DAY)}${litres} a day of ${pack.nameOf(key)}`;
+      : `${formatNumber(amount * SECONDS_PER_DAY)}${litres} a day of ${pack.nameOf(key)}${overHorizon}`;
     warnings.push({ code: 'beyond-stock', key, text: `Buys ${bought}, beyond the ${formatNumber(have)}${litres} in storage` });
   }
   return warnings;
+}
+
+/** A build horizon of `seconds` in the words of the plan's cost line (the client's `horizonText`): `<n> h`, a week `1 week`. */
+function horizonWords(seconds: number): string {
+  const hours = seconds / SECONDS_PER_HOUR;
+  return hours === HOURS_PER_WEEK ? '1 week' : `${formatNumber(hours)} h`;
 }
 
 /** What the line throws away other than the target, per second; virtual ore-dictionary goods are never byproducts. */
@@ -1823,11 +1834,12 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
   let batchWarnings: PlanWarning[] = [];
   let spend: Spend;
   if (batch) {
-    const run = await makeN(pack, graph, sol, demand, opts);
+    // Its whole runs buy byproduct-only goods against the stock the solve priced them against (fix wave 3 (C)).
+    const run = await makeN(pack, graph, sol, demand, { ...opts, stock: options.stock });
     batchWarnings = batchShortWarning(pack, run.short, target, settings.amount);
     // The whole runs makeN planned (the same rounding again), spread over the batch's time: flows and byproducts are
     // rates, as in every plan, and the leftovers are what the line sinks.
-    const whole = await wholeRuns(graph, sol, demand);
+    const whole = await wholeRuns(graph, sol, demand, options.stock);
     const perSecond = run.totalSeconds > 0 ? 1 / run.totalSeconds : 0;
     const leftovers = scaled(new Map(whole.leftovers.map((p) => [p.key, p.amount])), perSecond);
     flows = buildFlows(graph, { ...sol, runs: scaled(whole.runs, perSecond), buys: scaled(whole.buys, perSecond), sinks: leftovers }, [target]);

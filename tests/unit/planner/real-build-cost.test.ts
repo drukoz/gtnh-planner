@@ -3,13 +3,13 @@
 // counted over the default 24 hours, nothing owned and with two of every candidate machine owned (`owning`), each timed
 // on a warm pack, its build MIP run again on its own (`buildRun`) to log the MIP's time, nodes, objective, bound and
 // gap — its node and simplex-iteration limits decide, never time (controller ruling 183 (2), fix wave 3 (F)) — and each
-// held to the plan that ignores build cost by the build MIP's own measure (controller ruling 187); what a line adds that
-// cannot be built here or has no price; how it gets its sand and gravel; the step counts against the plan that ignores
-// build cost (D1); the horizon trade; the time guard; the speed of the price table; the build-cost plans of plan 09's
-// checks that build cost legitimately changes (plan 12 Task 8 Step 4); and the build MIP's pick (fix wave 3 (F), ledger
-// 248). It runs only with GTNH_LOCAL=1 and logs only counts, keys and timings; nothing game-derived is read or written
-// otherwise. The user's reference flow joins the calibration plans when its private settings file is there (docs/local,
-// never committed).
+// held by the build MIP's own measure to plan 09's plan of its build-cost graph and, where that is within the raw cap,
+// to the plan that ignores build cost (controller ruling 187); what a line adds that cannot be built here or has no
+// price; how it gets its sand and gravel; the step counts against the plan that ignores build cost (D1); the horizon
+// trade; the time guard; the speed of the price table; the build-cost plans of plan 09's checks that build cost
+// legitimately changes (plan 12 Task 8 Step 4); and the build MIP's pick (fix wave 3 (F), ledger 248). It runs only with
+// GTNH_LOCAL=1 and logs only counts, keys and timings; nothing game-derived is read or written otherwise. The user's
+// reference flow joins the calibration plans when its private settings file is there (docs/local, never committed).
 
 import { beforeAll, describe, expect, it } from 'vitest';
 import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
@@ -116,20 +116,38 @@ const leastDug = (ignored: Plan): number => ignored.rawCost?.leastPerSecond ?? 0
 const leanestOf = (plan: Plan): number => plan.rawCost?.leanestPerSecond ?? 0;
 
 /**
- * Whether controller ruling 187, as the controller restated it for fix wave 3, holds the build-cost `plan` (settings `s`)
- * to `ignored`, the plan that ignores build cost: where that plan is within the project's raw cap, (1 + rawCap) × the
- * leanest line `plan` reports — always at "No limit", at step charge 0 (no cap) and where `plan` reports no leanest line.
- * A Project Red or AE2 line's build-cost graph makes gathered blocks (`gatheredRecipesOn`), so its leanest line can use
- * less raw material than the graph that ignores build cost allows, and that plan can fall outside the cap. Logs a case it
- * does not hold to.
+ * Controller ruling 187 as the controller restated it for fix wave 3 ("never worse by the build MIP's measure than plan
+ * 09's plan where that plan is within the project's cap") on the line's own build-cost graph: the build stage's plan
+ * (`buildStats.objective`) against plan 09's plan of that graph rounded up (`buildStats.ignoredObjective`), both by the
+ * build MIP's own measure. That plan is within STEP_CHARGE_CAP (+25 %) of the graph's least raw material, so within the
+ * default raw cap and at "No limit": every line asserts it. `run` is the line's build MIP as planLine solves it
+ * (`buildRun`). Logs both; returns the failure in words, undefined where the plan holds.
  */
-const heldTo = (label: string, plan: Plan, ignored: Plan, s: PlanSettings): boolean => {
+const worseThanPlan09 = (label: string, run: BuildRun): string | undefined => {
+  const stats = run.sol.buildStats;
+  const [mine, theirs] = [stats?.objective, stats?.ignoredObjective];
+  console.log(`real-build-cost ${label}: ruling 187 on its build-cost graph, by the build MIP ${mine?.toFixed(9) ?? '-'} against plan 09's plan ${theirs?.toFixed(9) ?? '- (beyond the cap)'}`);
+  if (mine === undefined || theirs === undefined) return `${label}: no objective, or plan 09's plan of its graph beyond the cap (${mine} against ${theirs})`;
+  return mine <= theirs * (1 + 1e-9) + 1e-9 ? undefined : `${label}: ${mine} > ${theirs}, plan 09's plan of its graph, by the build MIP`;
+};
+
+/**
+ * Whether ruling 187 also holds the build-cost `plan` (settings `s`) to `ignored`, planLine's plan that ignores build
+ * cost, by `buildObjective` (the build MIP's measure read from the two finished plans): where that plan is within the
+ * project's raw cap, (1 + rawCap) × the leanest line `plan` reports — always at "No limit", at step charge 0 (no cap) and
+ * where `plan` reports no leanest line. That plan is planned on its own graph: on a Project Red or AE2 line it digs the
+ * gathered blocks the build-cost graph makes (`gatheredRecipesOn`), so the build-cost graph's leanest line can use less
+ * raw material and that plan can be beyond the cap, where the build stage cannot take it; the line is then held to plan
+ * 09's plan of its own graph only (`worseThanPlan09`). Logs such a line.
+ */
+const ignoredWithinCap = (label: string, plan: Plan, ignored: Plan, s: PlanSettings): boolean => {
   const cap = s.rawCap === undefined ? DEFAULT_RAW_CAP : s.rawCap;
   const leanest = plan.rawCost?.leanestPerSecond;
   if (cap === null || !((s.stepCharge ?? DEFAULT_STEP_CHARGE) > 0) || leanest === undefined) return true;
   const share = (ignored.rawCost?.perSecond ?? 0) / leanest;
   if (share <= (1 + cap) * (1 + 1e-6)) return true;
-  console.log(`real-build-cost ${label}: ruling 187 not asserted: the plan that ignores build cost uses ${share.toFixed(4)} × the leanest line's raw material, beyond the raw cap`);
+  console.log(`real-build-cost ${label}: the plan that ignores build cost uses ${share.toFixed(4)} × the leanest line's raw material, beyond the raw cap: `
+    + "held to plan 09's plan of its own graph only");
   return false;
 };
 
@@ -315,22 +333,26 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
     const stats = run.sol.buildStats;
     expect(stats?.approx, 'build-cost-approx').toBe(false);
     expect(stats?.status === 'optimal' || (stats?.status === 'feasible' && stats.stop === 'limit'), `${stats?.status}/${stats?.stop}`).toBe(true);
-    // Never worse by the build MIP's own measure than the plan that ignores build cost, where that plan is within the
-    // project's raw cap (controller ruling 187, as restated for fix wave 3: `heldTo`).
-    if (heldTo(c.label, plan, ignored, s)) {
+    // Never worse by the build MIP's own measure than plan 09's plan, which is within the project's raw cap (controller
+    // ruling 187, as restated for fix wave 3): that of its own build-cost graph on every line (`worseThanPlan09`), and the
+    // plan that ignores build cost where that is within the cap too (`ignoredWithinCap`).
+    expect(worseThanPlan09(c.label, run), 'ruling 187 on its build-cost graph').toBeUndefined();
+    if (ignoredWithinCap(c.label, plan, ignored, s)) {
       expect(buildObjective(plan, s, leastDug(ignored), leanestOf(plan))).toBeLessThanOrEqual(buildObjective(ignored, s, leastDug(ignored), leanestOf(plan)) * (1 + 1e-6) + 1e-6);
     }
   }, 300_000);
 
   it('holds Electronic Circuit LV, two of every machine owned, to ruling 187 at "No limit" too', async () => {
-    // The controller's ruling of 2026-10-23 on fix wave 3: plan 09's plan is a start and a pick candidate of the build MIP
-    // at every cap, No limit included. Before it, on fix wave 3's prices with nothing capped, this line read 93,863.8 by
-    // the build MIP's measure against 77,698.9 ignoring build cost.
+    // The controller's rulings on fix wave 3 (2026-10-23, and on Task 7's review): plan 09's plan is a pick candidate of
+    // the build MIP at every cap, No limit included, and one of its starts under the raw cap. Before it, on fix wave 3's
+    // prices with nothing capped, this line read 93,863.8 by the build MIP's measure against 77,698.9 ignoring build cost.
+    const label = 'Electronic Circuit LV, two of every machine owned, at No limit';
     const s: PlanSettings = { ...(await owning(at(ELECTRONIC_CIRCUIT, 1, 1))), rawCap: null };
     const { plan, seconds } = await timed(s);
     const ignored = (await timed({ ...s, buildHorizonHours: null })).plan;
-    await logPlan('Electronic Circuit LV, two of every machine owned, at No limit', s, plan, seconds, ignored);
+    const { run } = await logPlan(label, s, plan, seconds, ignored);
     expect(plan.status, JSON.stringify(plan.warnings)).toBe('ok');
+    expect(worseThanPlan09(label, run), 'ruling 187 on its build-cost graph').toBeUndefined();
     expect(buildObjective(plan, s, leastDug(ignored), leanestOf(plan))).toBeLessThanOrEqual(buildObjective(ignored, s, leastDug(ignored), leanestOf(plan)) * (1 + 1e-6) + 1e-6);
   }, 300_000);
 
@@ -339,8 +361,10 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
     // candidate machine, so only the step charge bounds a free chain. Electronic Circuit at LV directly, on Project Red
     // and on AE2 (ruling P15), and Polyethylene Bar at MV. A count above the bound is a finding for the controller, not a
     // bound to loosen: both step lists are logged. Each owned line is also held to ruling 187 (fix wave 3, the controller's
-    // AE2 owned line): never worse by the build MIP's measure, owned blocks at their share of the step charge, than the
-    // plan that ignores build cost, which is within the default +25 % cap.
+    // AE2 owned line): never worse by the build MIP's measure, owned blocks at their share of the step charge, than plan
+    // 09's plan of its own build-cost graph, which is within the default +25 % cap (`worseThanPlan09`), nor, where it is
+    // within the cap too, than the plan that ignores build cost (`ignoredWithinCap`: on Project Red and AE2 that plan digs
+    // the gathered blocks the build-cost graph makes, and can be beyond the cap). Failures are asserted after the loop.
     const lines: Array<[string, PlanSettings]> = [
       ['Electronic Circuit LV', at(ELECTRONIC_CIRCUIT, 1, 1)], ['Electronic Circuit LV on Project Red', at(ELECTRONIC_CIRCUIT, 1, 1, { logistics: 'routed' })],
       ['Electronic Circuit LV on AE2', at(ELECTRONIC_CIRCUIT, 1, 1, { logistics: 'ae2' })], ['Polyethylene Bar MV', at(POLYETHYLENE_BAR, 2, 1)],
@@ -355,7 +379,7 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
         const withCost = await timed(s);
         const without = await timed(ignoring);
         const [built, ignored] = [withCost.plan, without.plan];
-        await logPlan(`D1 bound, ${label}`, s, built, withCost.seconds, ignored);
+        const { run } = await logPlan(`D1 bound, ${label}`, s, built, withCost.seconds, ignored);
         await logPlan(`D1 bound, ${label}, ignoring build cost`, ignoring, ignored, without.seconds);
         console.log(`real-build-cost steps ${label}: ${built.steps.length} with build cost against ${ignored.steps.length} ignoring it; `
           + `sand ${sourceOf(built, SAND)}, gravel ${sourceOf(built, GRAVEL)} (ignoring: ${sourceOf(ignored, SAND)}, ${sourceOf(ignored, GRAVEL)}); `
@@ -363,7 +387,11 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
         expect(built.status, label).toBe('ok');
         expect(ignored.status, label).toBe('ok');
         if (built.steps.length > ignored.steps.length + STEP_HEADROOM) over.push(`${label}: ${built.steps.length} > ${ignored.steps.length} + ${STEP_HEADROOM}`);
-        if (owned && heldTo(`D1 bound, ${label}`, built, ignored, s)) {
+        if (owned) {
+          const failure = worseThanPlan09(`D1 bound, ${label}`, run);
+          if (failure !== undefined) worse.push(failure);
+        }
+        if (owned && ignoredWithinCap(`D1 bound, ${label}`, built, ignored, s)) {
           const [mine, theirs] = [built, ignored].map((p) => buildObjective(p, s, leastDug(ignored), leanestOf(built))) as [number, number];
           if (mine > theirs * (1 + 1e-6) + 1e-6) worse.push(`${label}: ${mine} > ${theirs} ignoring build cost`);
         }
@@ -460,8 +488,7 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
     /**
      * The build-MIP objectives (`buildStats.objective`, nothing owned, empty context) on fix wave 3 (D)'s prices, measured
      * after Task 3 (Task 1 pinned 737bcd0's own, on a5f5100's prices). At "No limit" from fix wave 3 Task 7 on: every pinned
-     * line's leanest line is within LEAN_BASE_ABOVE × σ, so its MIP is the model Task 4 pinned, from the cheapest of S1, the
-     * sparse plan and plan 09's plan (the controller's ruling of 2026-10-23), which can move its 50-node search.
+     * line's leanest line is within LEAN_BASE_ABOVE × σ, so its MIP is the one Task 4 pinned.
      */
     const PINNED: ReadonlyArray<[string, PlanSettings, number]> = [
       ['Electronic Circuit MV', at(ELECTRONIC_CIRCUIT, 2, 1), 12.451591979],
@@ -527,7 +554,7 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
       const { plan, seconds } = await timed(s);
       const without = await timed({ ...s, buildHorizonHours: null });
       const ignored = without.plan;
-      await logPlan('aluminium HV x10', s, plan, seconds, ignored);
+      const { run } = await logPlan('aluminium HV x10', s, plan, seconds, ignored);
       await logPlan('aluminium HV x10, ignoring build cost', { ...s, buildHorizonHours: null }, ignored, without.seconds);
       const ebf = plan.steps.filter((st) => st.machine.name === 'Electric Blast Furnace');
       console.log(`real-build-cost aluminium HV: ${plan.status}, ${seconds.toFixed(2)} s, ${plan.steps.length} steps (${ebf.map((st) => `${st.count}× EBF on ${st.recipeId}`).join(', ')}), `
@@ -536,34 +563,37 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
       expect(seconds).toBeLessThan(PLAN_SECONDS);
       expect(plan.steps.find((st) => st.mainOutput === ALUMINIUM_INGOT)?.machine.name).toBe('Electric Blast Furnace');
       expect(plan.rawInputs.map((r) => r.key)).toContain('gregtech:gt.metaitem.01@2019');   // the mined aluminium dust
-      if (heldTo('aluminium HV x10', plan, ignored, s)) {
+      expect(worseThanPlan09('aluminium HV x10', run), 'ruling 187 on its build-cost graph').toBeUndefined();
+      if (ignoredWithinCap('aluminium HV x10', plan, ignored, s)) {
         expect(buildObjective(plan, s, leastDug(ignored), leanestOf(plan))).toBeLessThanOrEqual(buildObjective(ignored, s, leastDug(ignored), leanestOf(plan)) * (1 + 1e-6));
       }
     }, 300_000);
 
-    it('plans 2 Good Electronic Circuits a minute at HV within 5 steps of ignoring build cost, from ordinary materials', async () => {
+    it('plans 2 Good Electronic Circuits a minute at HV in at most one step more than ignoring build cost, from ordinary materials', async () => {
       // real-acceptance's Good Electronic Circuit case. Before fix wave 3 the line, with build cost counted, crafted its Good
       // Circuit Board from gold wire on an Auto Workbench in about half the steps of the plan that ignores build cost, which
       // etched the board in a chemical reactor with Iron III Chloride. Within the default +25 % raw cap it etches the board
       // too, in 49 steps against 50. With byproduct-only goods beyond the group's stock at BEYOND_STOCK_FACTOR times their
-      // price (fix wave 3 (C)) it plans 50 steps against 49, the plan that ignores build cost now crafting the board. So it
-      // is held to D1's headroom (STEP_HEADROOM), and no worse by the build MIP's measure where that plan is within the cap.
+      // price (fix wave 3 (C)) it plans 50 steps against 49, the plan that ignores build cost now crafting the board: at
+      // most one step more, and no worse by the build MIP's measure than plan 09's plan of its own graph nor, where it is
+      // within the cap, than the plan that ignores build cost.
       const s = at(GOOD_ELECTRONIC_CIRCUIT, 3, 2);
       const { plan, seconds } = await timed(s);
       const without = await timed({ ...s, buildHorizonHours: null });
       const ignored = without.plan;
-      await logPlan('Good Electronic Circuit HV x2', s, plan, seconds, ignored);
+      const { run } = await logPlan('Good Electronic Circuit HV x2', s, plan, seconds, ignored);
       await logPlan('Good Electronic Circuit HV x2, ignoring build cost', { ...s, buildHorizonHours: null }, ignored, without.seconds);
       const board = plan.steps.find((st) => st.mainOutput === 'gregtech:gt.metaitem.03@32101');
       console.log(`real-build-cost Good Electronic Circuit HV x2: ${plan.status}, ${seconds.toFixed(2)} s, ${plan.steps.length} steps (ignoring build cost ${ignored.steps.length}), `
         + `its Good Circuit Board on ${board?.machine.name ?? 'none'}, build ${plan.cost?.build} (ignoring ${ignored.cost?.build})`);
       expect(plan.status, JSON.stringify(plan.warnings)).toBe('ok');
       expect(seconds).toBeLessThan(PLAN_SECONDS);
-      expect(plan.steps.length).toBeLessThanOrEqual(ignored.steps.length + STEP_HEADROOM);
+      expect(plan.steps.length).toBeLessThanOrEqual(ignored.steps.length + 1);
       expect(plan.steps.find((st) => st.mainOutput === GOOD_ELECTRONIC_CIRCUIT)?.mapId).toBe('gt.recipe.circuitassembler');
       expect(plan.rawInputs.filter((r) => !r.available)).toEqual([]);
       expect(plan.warnings.map((w) => w.code)).not.toContain('build-cost-approx');
-      if (heldTo('Good Electronic Circuit HV x2', plan, ignored, s)) {
+      expect(worseThanPlan09('Good Electronic Circuit HV x2', run), 'ruling 187 on its build-cost graph').toBeUndefined();
+      if (ignoredWithinCap('Good Electronic Circuit HV x2', plan, ignored, s)) {
         expect(buildObjective(plan, s, leastDug(ignored), leanestOf(plan))).toBeLessThanOrEqual(buildObjective(ignored, s, leastDug(ignored), leanestOf(plan)) * (1 + 1e-6));
       }
     }, 300_000);

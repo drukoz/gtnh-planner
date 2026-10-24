@@ -257,6 +257,15 @@ describe("byproduct-only goods beyond the group's stock (fix wave 3 (C), control
     expect(beyond(batch).map((w) => w.text)).toEqual(['Buys 100 of Gold Dust for the batch, beyond the 30 in storage']);
   });
 
+  it('names the purchase over the build horizon the warning tests where that is not a day', async () => {
+    // A week's horizon spreads 2,000 in storage over the week: more than the day's 1,440, less than the week's 10,080.
+    const p = goldPack(false);
+    const week = await planLine(p, foil({ buildHorizonHours: 168 }), stocked(2000));
+    const share = 2000 / (168 * 3600);
+    expect(week.rawCost?.perSecond).toBeCloseTo(share + BEYOND_STOCK_FACTOR * (1 / 60 - share), 9);
+    expect(beyond(week)).toEqual([{ code: 'beyond-stock', key: 't:gold_dust@0', text: 'Buys 1,440 a day of Gold Dust, 10,080 over 1 week, beyond the 2,000 in storage' }]);
+  });
+
   it('makes the rest another way where that costs less than buying it beyond the stock', async () => {
     const p = goldPack(true);
     // Two Iron Dust a foil against 10 for Gold Dust beyond the stock; within the stock, Gold Dust at 1.
@@ -267,5 +276,13 @@ describe("byproduct-only goods beyond the group's stock (fix wave 3 (C), control
     expect(some.rawInputs.map((r) => [r.key, r.perSecond])).toEqual([['t:gold_dust@0', 0.00416666667], ['t:iron_dust@0', 0.025]]);
     expect(some.steps.map((s) => s.id)).toEqual(['foil', 'foil-iron']);
     expect(beyond(some)).toEqual([]);
+    // Make N: the batch's whole runs keep the LP's split (`wholeRuns` with the stock): the 30 Gold Dust in storage, the
+    // other 70 foils from 140 Iron Dust, never 100 Gold Dust at its plain price; its flows come from the same runs.
+    const batch = await planLine(p, foil({ mode: 'makeN', amount: 100 }), stocked(30));
+    expect(batch.status).toBe('ok');
+    expect(batch.rawInputs.map((r) => [r.key, r.total])).toEqual([['t:gold_dust@0', 30], ['t:iron_dust@0', 140]]);
+    expect(batch.steps.map((s) => s.id)).toEqual(['foil', 'foil-iron']);
+    expect(batch.flows.filter((f) => f.from === 'raw').map((f) => [f.key, f.to]).sort()).toEqual([['t:gold_dust@0', 'foil'], ['t:iron_dust@0', 'foil-iron']]);
+    expect(beyond(batch)).toEqual([]);
   });
 });

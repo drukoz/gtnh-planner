@@ -153,6 +153,14 @@ export interface Solution {
     retried?: true;
     /** The decision is an earlier incumbent than HiGHS's last, cheaper by `exactCost` (`pickBuild`). */
     earlier?: true;
+    // optional addition (fix wave 3 (A), controller ruling 187)
+    /**
+     * Plan 09's plan of this graph ("Ignore build cost", `finish`) rounded up, by the measure of `objective` (`rounded`:
+     * every machine at its true build), where it is within the raw cap and leaves no step short: the plan controller
+     * ruling 187 holds the build stage's plan to. Where the decision comes from a whole MIP solution (`approx` false),
+     * `objective` is never above it (`cheaperPlan`). Absent where plan 09's plan is beyond the cap or leaves a step short.
+     */
+    ignoredObjective?: number;
   };
   // optional addition (fix wave 3 (A))
   /**
@@ -1221,9 +1229,10 @@ async function pickBuild(
 /**
  * The build stage (plan 12 Task 4), when the model counts build cost, in place of R3's stages 2–4 (the charge MIP, its
  * fallback and consolidation; or plan 09's fewest recipes when S1 needs no raw material): S1g, then the build-cost MIP
- * started from the cheapest by its own objective of `roundUp` of S1, of plan 09's sparse plan and of plan 09's plan of
- * the line ("Ignore build cost", `finish`), among those within the raw cap (none when all leave a step short; without
- * S1's the MIP has no derived-purchase binaries, whose bound comes from that start: `buildMip`),
+ * started from the cheapest by its own objective of `roundUp` of S1, of plan 09's sparse plan and, where the raw cap
+ * bounds the MIP, of plan 09's plan of the line ("Ignore build cost", `finish`), among those within the cap (none when
+ * all leave a step short; without S1's the MIP has no derived-purchase binaries, whose bound comes from that start:
+ * `buildMip`),
  * solved and picked by `pickBuild`, which its node and simplex-iteration limits decide (BUILD_MIP_MAX_NODES,
  * BUILD_MIP_MAX_LP_ITERATIONS) and a far time guard only backs up. A
  * MIP that ends without a whole solution, or that the guard stops (or `buildTimeLimit ≤ 0`), gives way to the cheapest
@@ -1242,10 +1251,13 @@ async function pickBuild(
  * MIP's to weigh. With a step charge the build MIP at step charge 0 runs first (the leanest line, `leanestLine`); its raw
  * material is the raw cap's measure (`SolveOptions.rawCap`) and, where it is more than LEAN_BASE_ABOVE × σ, the step
  * charge's base, and its plan is kept where it costs less than the MIP's (fix wave 3 (A), (B2)); at No limit it is not
- * solved where its start costs at most LEAN_BASE_ABOVE, as it could then change nothing (controller OQ1 (D)). So is plan
- * 09's plan, at every cap (`cheaperPlan` within the cap; controller ruling 187 as the controller restated it for fix
- * wave 3), so the plan is never dearer by the MIP's measure than the plan that ignores build cost where that one is
- * within the project's cap.
+ * solved where its start costs at most LEAN_BASE_ABOVE, as it could then change nothing (controller OQ1 (D)). Plan 09's
+ * plan is solved at every cap and kept the same way (`cheaperPlan`, within the cap; controller ruling 187 as the
+ * controller restated it for fix wave 3), so the plan is never dearer by the MIP's measure than plan 09's plan of this
+ * graph where that is within the cap (`buildStats.ignoredObjective`): a pick candidate at every cap, a start under the
+ * raw cap only, as a start at No limit moved the 50-node search both ways (Advanced Circuit HV 1/min 22.295 -> 22.416,
+ * 1/h 33.562 -> 34.522, with supporting lines 27.700 -> 28.258; on AE2 2 Good Electronic Circuits a minute at HV 16.074
+ * -> 15.917).
  */
 async function buildStage(
   graph: CandidateGraph, lp: MainLp, s1: LpResult, warnings: PlanWarning[], opts: SolveOptions, model: BuildModel, demandScale: number,
@@ -1273,10 +1285,14 @@ async function buildStage(
   // No limit Electronic Circuit LV, two of every machine owned, 93,864 against 77,699). It is within STEP_CHARGE_CAP of
   // S1, so within any cap of +25 % or more.
   const ignoredPlan = await finish(lp, s1, [], opts);
-  // The MIP's start: the cheapest in its own objective of S1, the sparse plan and plan 09's plan, each rounded up, among
-  // those within the raw cap (S1 always is). Not the leanest line's plan: as a start it moved HiGHS's 50-node search both
-  // ways (Advanced Circuit HV 1/min with supporting lines 27.70 -> 28.10 at "No limit"); it is a pick candidate below.
-  const start = cheapestStart(lp, mip, input.rawBound, [sparse, ignoredPlan.x])?.start;
+  // The MIP's start: the cheapest in its own objective of S1, the sparse plan and, where the raw cap bounds the MIP, plan
+  // 09's plan, each rounded up, among those within the cap (S1 always is). Plan 09's plan is a pick candidate at every
+  // cap and a start under the raw cap only: as a start at "No limit" it moved HiGHS's 50-node search both ways (Advanced
+  // Circuit HV 1/min 22.295 -> 22.416, 1/h 33.562 -> 34.522, with supporting lines 27.700 -> 28.258; on AE2 2 Good
+  // Electronic Circuits a minute at HV 16.074 -> 15.917), so with no cap (and at step charge 0) the MIP is the one fix
+  // wave 3's pick pins measured. Nor is the leanest line's plan a start, for the same reason (Advanced Circuit HV 1/min
+  // with supporting lines 27.70 -> 28.10 at "No limit"); it is a pick candidate below.
+  const start = cheapestStart(lp, mip, input.rawBound, input.rawBound === undefined ? [sparse] : [sparse, ignoredPlan.x])?.start;
   const notes = [...warnings];
   const { result, seconds, picked } = await runBuildMip(mip, start, limit, opts);
   let decision: BuildDecision;
@@ -1326,6 +1342,9 @@ async function buildStage(
     if (result.bound !== undefined) buildStats.bound = result.bound;
   }
   if (keptCost !== undefined) buildStats.objective = keptCost;
+  // Ruling 187's yardstick: plan 09's plan rounded up, where it is within the raw cap and leaves no step short.
+  const yardstick = withinCap(lp, input.rawBound, ignoredPlan.x) ? mip.rounded(ignoredPlan.x).cost : Infinity;
+  if (Number.isFinite(yardstick)) buildStats.ignoredObjective = yardstick;
   if (decision.short !== undefined) {
     const sol = infeasibleLine([...warnings, ...ownedOnlyWarnings(lp, model, ownedOnlyRuns(bounded, s1.x))]);
     sol.buildStats = buildStats;
@@ -1556,9 +1575,9 @@ export async function solveLine(graph: CandidateGraph, demand: ReadonlyMap<Stuff
 /**
  * Fix wave 3 (C): the most of a byproduct-only good a line buys at its plain price per unit of demand (`MainLp.upper`),
  * from the group's stock (`SolveOptions.stock`) at demand scale `D`; undefined without a stock (or with none to spread
- * it over).
+ * it over). Make N's whole runs (make-n.ts `wholeRuns`) read it at the batch's own demand (`D` 1).
  */
-function stockShare(stock: SolveOptions['stock'], D: number): ((key: StuffKey) => number) | undefined {
+export function stockShare(stock: SolveOptions['stock'], D: number): ((key: StuffKey) => number) | undefined {
   if (stock === undefined || !(stock.over > 0)) return undefined;
   return (key) => Math.max(0, stock.total(key)) / (stock.over * D);
 }
