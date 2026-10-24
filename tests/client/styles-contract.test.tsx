@@ -131,6 +131,7 @@ const KEYFRAMES: Record<string, string[]> = {
   'pipe-flow': ['stroke-dashoffset'],
   'pipe-pulse': ['opacity'],
   'tip-in': ['opacity', 'transform'],                                                // ruling R27: a tooltip fades in and rises 2px
+  'brand-flow': ['opacity'],                                                         // Phase 2 spec §5.3: logo C's pipe, frame by frame
 };
 
 const FONT_IMPORTS = [
@@ -525,6 +526,8 @@ function inkGroup(member: string): Block {
 
 /** The brand mark as a background: centred, contained, drawn once. */
 const MARK = 'var(--brand-mark) center / contain no-repeat';
+/** Logo C's two overlays on the top bar's mark (Phase 2 spec §5.3): the pipe with the gaps of frame 1, then of frame 2. */
+const OVERLAYS = '.brand-mark::before, .brand-mark::after';
 const TAB = ".tabs [role='tab']";
 const SELECTED = `${TAB}[aria-selected='true']`;
 /** The chrome rules whose colours, edges and radii this task replaced: none may read an alias of the old palette any more. */
@@ -559,20 +562,58 @@ describe('the Machine GUI chrome', () => {
     }
   });
 
-  it('draws the pixel brand mark from one token, on the top bar and above the login title', () => {
-    const mark = decodeURIComponent(rootTokens().get('--brand-mark') ?? '');
-    for (const part of [
-      'data:image/svg+xml', "viewBox='0 0 8 8'", "shape-rendering='crispEdges'",
-      "fill='#000' d='M2 0h4v1H2zM1 1h1v1H1zM6 1h1v1H6zM0 2h1v4H0zM7 2h1v4H7zM1 6h1v1H1zM6 6h1v1H6zM2 7h4v1H2z'",
-      "fill='#ffd84a' d='M2 1h4v1H2zM1 2h1v4H1zM6 2h1v4H6zM2 6h4v1H2z'",
-      "fill='#c98a00' d='M2 2h4v1H2zM2 3h1v2H2zM5 3h1v2H5zM2 5h4v1H2z'",
-      "fill='#fff' d='M3 3h2v2H3z'",
-    ]) expect(mark, part).toContain(part);
+  it('draws logo C from one token, on the top bar and above the login title', () => {
+    // Phase 2 spec §5.1–§5.2: two machines joined by a pipe, a 16 x 16 pixel map in seven paths in painter's order (the outline and
+    // casing, the lit faces, the shade, the orange and the green contents, the pipe and its dark gaps); the token is frame 0, the still one
+    const tokens = rootTokens();
+    const mark = decodeURIComponent(tokens.get('--brand-mark') ?? '');
+    const PIPE = "fill='#ffd84a' d='M7 3h5v1H7zM11 4h1v6H11z'";
+    const PATHS = [
+      "fill='#141414' d='M1 1h6v6H1zM6 2h7v3H6zM10 5h3v4H10zM9 9h6v6H9z'",
+      "fill='#d8d8d8' d='M2 2h3v1H2zM2 3h1v2H2zM10 10h3v1H10zM10 11h1v2H10z'",
+      "fill='#6e6e6e' d='M5 2h1v3H5zM2 5h4v1H2zM13 10h1v3H13zM10 13h4v1H10z'",
+      "fill='#ff8a1f' d='M3 3h2v2H3z'", "fill='#55ff55' d='M11 11h2v2H11z'", PIPE,
+      "fill='#7a5a10' d='M9 3h1v1H9zM11 4h1v1H11zM11 7h1v1H11z'",
+    ];
+    for (const part of ['data:image/svg+xml', "viewBox='0 0 16 16'", "shape-rendering='crispEdges'", ...PATHS]) expect(mark, part).toContain(part);
+    const at = PATHS.map((path) => mark.indexOf(path));
+    expect(at, 'the seven paths in painter\'s order').toEqual([...at].sort((a, b) => a - b));
+    // each overlay is the pipe alone, with the gaps of frame 1 or of frame 2, on the same 16 x 16 grid
+    const FLOWS: [string, string][] = [
+      ['--brand-flow-1', "fill='#7a5a10' d='M7 3h1v1H7zM10 3h1v1H10zM11 5h1v1H11zM11 8h1v1H11z'"],
+      ['--brand-flow-2', "fill='#7a5a10' d='M8 3h1v1H8zM11 3h1v1H11zM11 6h1v1H11zM11 9h1v1H11z'"],
+    ];
+    for (const [name, gaps] of FLOWS) {
+      const flow = decodeURIComponent(tokens.get(name) ?? '');
+      for (const part of ['data:image/svg+xml', "viewBox='0 0 16 16'", "shape-rendering='crispEdges'", PIPE, gaps]) expect(flow, `${name}: ${part}`).toContain(part);
+    }
     expectDeclared([
       ['.brand-mark', 'width', '32px'], ['.brand-mark', 'height', '32px'], ['.brand-mark', 'background', MARK],
+      ['.brand-mark', 'position', 'relative'],                                          // the overlays' containing block
       ['.login::before', 'content', "''"], ['.login::before', 'width', '64px'], ['.login::before', 'height', '64px'],
       ['.login::before', 'background', MARK], ['.login::before', 'align-self', 'center'],
     ]);
+  });
+
+  it('flows the brand\'s pipe six turns and rests on the still frame', () => {
+    // the mark is frame 0; `::before` shows frame 1's pipe in [220, 440) ms of each 660 ms turn and `::after` frame 2's in [440, 660), so
+    // the gaps move from the orange machine to the green one, as the app's pipes run (spec §5.3). With no fill mode an overlay that has
+    // run falls back to its own opacity 0, the still frame; under reduced motion the negative delays have used up its 1 ms by the first paint
+    expectDeclared([[OVERLAYS, 'content', "''"], [OVERLAYS, 'position', 'absolute'], [OVERLAYS, 'inset', '0'], [OVERLAYS, 'opacity', '0'],
+      [OVERLAYS, 'background', 'var(--brand-flow-1) center / contain no-repeat'], [OVERLAYS, 'animation', 'brand-flow 0.66s step-end 6 -0.44s'],
+      ['.brand-mark::after', 'background-image', 'var(--brand-flow-2)'], ['.brand-mark::after', 'animation-delay', '-0.22s']]);
+    const [, duration, , count] = (declared(OVERLAYS, 'animation') ?? '').split(' ');
+    expect(Number.parseFloat(duration ?? '') * Number(count)).toBeLessThanOrEqual(5);   // WCAG 2.2.2 and ruling R31: it stops within 5 s
+    expect(declared(OVERLAYS, 'animation')).not.toMatch(/forwards|backwards|both|infinite/);
+    expect(ruleBody('@keyframes brand-flow')).toBe('0% { opacity: 1; } 33.333% { opacity: 0; }');
+  });
+
+  it('shows the brand mark as the tab icon', () => {
+    // the same data URI as the token, written out in index.html (spec §5.4): a bundled file would be an asset Vite names, which no
+    // test could check against the token as text
+    const uri = (rootTokens().get('--brand-mark') ?? '').replace(/^url\("/, '').replace(/"\)$/, '');
+    const html = read('index.html');
+    expect(html).toContain(`<link rel="icon" type="image/svg+xml" href="${uri}" />`); expect(html).not.toContain('href="data:,"');
   });
 
   it('draws the top bar as a dark strip of fixed height, with the pages as buttons and the current one yellow', () => {
@@ -2410,6 +2451,7 @@ describe('the Machine GUI planning modes, farms and the Compare card', () => {
 const PHASE2_RULES: string[] = [
   '.theme-button', '.theme-button::before', ".theme-button[data-choice='dark']::before", ".theme-button[data-choice='light']::before",
   '::view-transition-old(root)', '::view-transition-new(root)',
+  OVERLAYS, '.brand-mark::after',                                                    // Task 2: logo C's overlays (spec §5.3)
 ];
 /** The colour literals a Phase 2 rule may write: each is the same in both looks (spec §4.4). */
 const SAME_IN_BOTH = ['#ffffff', '#000000', '#aaaaaa', '#100010', '#ffff55', 'rgb(0 0 0 / 0.4)'];

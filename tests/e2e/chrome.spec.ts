@@ -1,7 +1,8 @@
 // The chrome keeps its size and its stillness (restyle plan Phase 1 Task 3: its chrome height budget and review focuses 2 and 4,
 // design spec §7a). The end-to-end tests aim the mouse at canvas centres, so the top bar and the tab strip must measure the same
 // whether the web fonts have arrived or never do: a font swap would otherwise shift every canvas under them. And a user who asked
-// for reduced motion gets a live dot that holds still.
+// for reduced motion gets a live dot that holds still, and a logo whose pipe never moves (Phase 2 spec §5.3: it flows six turns
+// otherwise, then rests on its still frame).
 
 import { test, expect, type Browser } from '@playwright/test';
 import { login, setName, createProject } from './helpers.ts';
@@ -89,4 +90,25 @@ test('reduced motion stops the live dot', async ({ page }) => {
   // without the preference the dot breathes twice, so the check above is not vacuous; twice and no more (ruling R31, WCAG 2.2.2: what
   // moves by itself beside the content stops within 5 s)
   expect(await dot(), 'without the preference the dot breathes twice').toEqual({ name: 'breathe', count: '2' });
+});
+
+test('the brand\'s pipe flows six turns, then rests; under reduced motion it holds still', async ({ page }) => {
+  await login(page);
+  await page.goto('/');
+  const mark = page.locator('.brand-mark');
+  await expect(mark).toBeVisible();
+  // both pseudo-elements are read, each on its own: the build's minifier has merged a list of them before and lost a half (ruling R28)
+  const overlays = (): Promise<{ animationName: string; animationIterationCount: string }[]> => mark.evaluate((el) =>
+    ['::before', '::after'].map((pseudo) => {
+      const style = getComputedStyle(el, pseudo);
+      return { animationName: style.animationName, animationIterationCount: style.animationIterationCount };
+    }));
+  const turns = (count: string): { animationName: string; animationIterationCount: string }[] =>
+    [{ animationName: 'brand-flow', animationIterationCount: count }, { animationName: 'brand-flow', animationIterationCount: count }];
+
+  // six turns of 0.66 s, and no more (ruling R31, WCAG 2.2.2): then each overlay falls back to its own opacity 0, the still frame
+  expect(await overlays(), 'both overlays flow six turns').toEqual(turns('6'));
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  // the global block's one run of a millisecond, which the overlays' negative delays have used up by the first paint
+  expect(await overlays(), 'under reduced motion both run once').toEqual(turns('1'));
 });
