@@ -68,3 +68,33 @@ test('opens the Compare card from the project head, adds nothing while closed, a
   await toggle.click();
   await expect(page.locator('.compare-card')).toHaveCount(0);
 });
+
+// Below 900 px the head's one row is full: the Settings button says what the line makes there (the Make picker fix), and the head must
+// stay one row on a tablet. So on a narrow window the Compare modes button is in a bar of its own under the banner, and the head's is not
+// drawn; it opens the same card, whose Close gives the focus back to it. The project has a target, so the drawer does not open by itself.
+test('on a narrow window the Compare modes button sits in a bar under the banner, and the head stays one row', async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 900 });
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Narrow compare', { target: 't:circuit@0', amount: 1, per: 'min', tier: 1 });
+  await expect(page.locator('svg [data-step-id]').first()).toBeVisible();          // the plan is in: the drawer would have opened by now
+  await expect(page.locator('aside[aria-label="Project settings"]')).toBeHidden();
+  const toggle = page.getByRole('button', { name: 'Compare modes' });
+  await expect(toggle).toHaveCount(1);                                               // the head's is not drawn here
+  await expect(page.locator('.project-head .compare-toggle')).toBeHidden();
+  expect(await toggle.evaluate((el) => el.parentElement?.classList.contains('compare-bar') === true && el.closest('.project-banners') !== null)).toBe(true);
+  expect((await page.locator('.project-head').boundingBox())!.height, 'the head is one row').toBe(36);
+
+  await toggle.click();
+  const card = page.getByRole('region', { name: 'Compare modes' });
+  await expect(card).toBeVisible();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await card.getByRole('button', { name: 'Close' }).click();
+  await expect(page.locator('.compare-card')).toHaveCount(0);
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(toggle).toBeFocused();
+
+  // wide again, the head's button is the one drawn, and the bar is gone
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await expect(page.locator('.project-head').getByRole('button', { name: 'Compare modes' })).toBeVisible();
+  await expect(page.locator('.compare-bar')).toBeHidden();
+});

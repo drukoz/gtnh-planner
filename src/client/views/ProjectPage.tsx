@@ -370,18 +370,26 @@ export function ProjectPage(props: { id: string }): ReactElement {
     };
   }, [settingsOpen]);
   // The Compare card (add-on 17), once the project makes something: its "Compare modes" button is in the head and the card it opens is
-  // under the plan banner, so a closed card takes no room (the chrome's height budget). It hears every `plan` and `compare` event of the
-  // project (`rev`), so an open card fetches the compare again. Its Close button gives the focus back to the head's button; a project
-  // that stops making something, or is deleted, closes it.
+  // under the plan banner, so a closed card takes no room (the chrome's height budget). Below 900 px the head's one row is full (the
+  // Settings button says what the line makes there), so the button is in a bar of its own under the banner instead: both are drawn here,
+  // and the stylesheet shows the one for the window's width. The card hears every `plan` and `compare` event of the project (`rev`), so
+  // an open card fetches the compare again. Its Close button gives the focus back to the button that is shown; a project that stops
+  // making something, or is deleted, closes it.
   const compare = useCompare(props.id, useProjectEventCount(props.id));
-  const compareToggle = useRef<HTMLButtonElement | null>(null);
+  const compareHeadToggle = useRef<HTMLButtonElement | null>(null);
+  const compareBarToggle = useRef<HTMLButtonElement | null>(null);
   const comparable = project !== null && deleted === null && project.settings.target !== null;
   useEffect(() => {
     if (!comparable) compare.close();
   }, [comparable, compare.close]);
+  const toggleCompare = (): void => {
+    if (compare.state.open) compare.close();
+    else compare.open();
+  };
   const closeCompare = (): void => {
     compare.close();
-    compareToggle.current?.focus();
+    // a button the stylesheet does not show has no box
+    [compareHeadToggle.current, compareBarToggle.current].find((b) => b !== null && b.getClientRects().length > 0)?.focus();
   };
 
   if (project === null) {
@@ -401,17 +409,21 @@ export function ProjectPage(props: { id: string }): ReactElement {
           targetName={project.settings.target === null ? null : names.nameOf(project.settings.target)}
         />
         <ProjectName name={project.name} onRename={(name) => send([{ op: 'rename', name }])} />
-        {comparable && (
-          <CompareToggle open={compare.state.open} onToggle={() => (compare.state.open ? compare.close() : compare.open())} ref={compareToggle} />
-        )}
+        {comparable && <CompareToggle open={compare.state.open} onToggle={toggleCompare} ref={compareHeadToggle} />}
         <span className={view.connected ? 'connection live' : 'connection'}>{view.connected ? 'live' : 'reconnecting…'}</span>
         <DeleteProject id={project.id} name={project.name} label="Delete project" onDeleted={() => view.markDeleted(me)} />
       </div>
       {/* The banners' own box, so the page behind an open drawer can be inert in three pieces (ruling R36); it adds no space.
-          The open Compare card (add-on 17) sits under the plan banner, in the same box, so it goes inert with them. */}
+          The Compare card (add-on 17) sits under the plan banner, in the same box, so it goes inert with them, and so does the bar that
+          holds its button on a narrow window. */}
       <div className="project-banners" inert={settingsOpen}>
         {view.error !== null && <p className="banner error" role="alert">{view.error}</p>}
         <PlanBanner plan={plan} planError={view.planError} planLoading={view.planLoading} settings={project.settings} send={send} onPickTarget={pickTarget} />
+        {comparable && (
+          <div className="compare-bar">
+            <CompareToggle open={compare.state.open} onToggle={toggleCompare} ref={compareBarToggle} />
+          </div>
+        )}
         {comparable && (
           <CompareCard state={compare.state} settings={project.settings} send={send} nameOf={names.nameOf} onClose={closeCompare} />
         )}

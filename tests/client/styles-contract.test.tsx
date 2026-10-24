@@ -2279,6 +2279,16 @@ describe('the Machine GUI planning modes, farms and the Compare card', () => {
     expect(position('section.compare-card'), 'the flat look the card had before the restyle').toBe(-1);
   });
 
+  it('moves the button into a bar under the banner below 900px, where the Settings button fills the head\'s one row', () => {
+    // wide, the head's button is drawn and the bar is not; narrow, the other way round (the bar is in the banners' box, under the banner)
+    expect(declared('.compare-bar', 'display')).toBe('none');
+    expect(declaredIn(NARROW, '.project-head > .compare-toggle', 'display')).toBe('none');
+    expect(declaredIn(NARROW, '.compare-bar', 'display')).toBe('flex');
+    expect(declaredIn(NARROW, '.compare-bar', 'margin')).toBe('0 0 var(--gap)');
+    // the head's button is not hidden on a wide window by any rule outside the query
+    expect(blocks.filter((b) => !b.nested && b.prelude.split(', ').includes('.project-head > .compare-toggle'))).toEqual([]);
+  });
+
   it('sets each mode in an inset frame, and frames the one in use black with a yellow ring, the frame of a selected slot', () => {
     expectDeclared([
       ['.compare-column', 'border-color', 'var(--panel-lo) var(--panel-hi) var(--panel-hi) var(--panel-lo)'],
