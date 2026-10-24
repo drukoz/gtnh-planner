@@ -10,11 +10,21 @@ export const INDEX_FILE = 'index.json';                              // data/ass
 
 export interface AssetFileInfo { w: number; h: number; frames?: number /* only when > 1 */; jar: string /* basename of the winning jar */ }
 export interface AssetConflict { path: string; winner: string; losers: string[]; rule: 'mod-over-client' | 'override-over-home' | 'last-by-name' }
+/** A resource pack the run read from the client instance (add-on 23); `version` comes from its `pack.mcmeta`. */
+export interface PackRecord {
+  name: string; format: 'folder' | 'zip'; version: string;
+  entries: number /* texture entries scanned: PNG + .mcmeta */; bytes: number /* their total size */; files: number /* PNG paths it supplied */;
+}
+/** What the run took from the client instance; the last pack of each list has the highest priority. */
+export interface AssetPacks {
+  enabled: string[] /* options.txt's resourcePacks as read, lowest priority first */; read: PackRecord[] /* the packs read, lowest first */;
+}
 export interface AssetIndexFile {
   format: typeof ASSET_INDEX_FORMAT; createdAt: string;
   sources: Array<{ jar: string; kind: 'client' | 'mod'; files: number /* paths it won */; sha1?: string /* client jar only */ }>;
   files: Record<string /* data/assets-relative PNG path */, AssetFileInfo>;
   conflicts: AssetConflict[] /* sorted by path */; identicalDuplicates: number;
+  packs?: AssetPacks /* only when the run read a client instance */;
 }
 
 /** `index.json` cannot be read, is not valid JSON, or was not written by this version of the extractor. */
