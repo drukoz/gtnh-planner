@@ -732,7 +732,8 @@ describe('the Machine GUI chrome', () => {
 // brief, and the order the cascade needs.
 
 const NARROW = '@media (max-width: 900px)';
-/** Below this the head wraps whatever the Settings button's width: the 40% cap, which keeps it on one row above, protects nothing. */
+/** Below this the head wraps whatever the Settings button's width, so the 40% cap protects nothing (above it, the cap keeps the head to one
+ *  row from about 740 px with a long name, earlier with a short one). */
 const PHONE = '@media (max-width: 700px)';
 /** The title of a section, whichever element carries it: its h3, the Tier label's span and the Logistics legend. */
 const TITLES = '.settings-section h3, .settings-title, .settings .field > span.settings-title, .choice > legend.settings-title';
@@ -902,8 +903,9 @@ describe('the Machine GUI settings drawer', () => {
   });
 
   it('lets the Settings button take the whole head on a phone, where the head wraps whatever its width', () => {
-    // above 700 px the cap keeps the head on one row; below it the head wraps anyway, and the cap only cut a short name there
-    // ("· Make: Basi…" for "Basic Circuit", an empty readout at 320 px) where the title does not show on a touch screen
+    // above 700 px the cap holds the head to one row (from about 740 px with a long name); below it the head wraps anyway, and the cap
+    // only cut a short name there ("· Make: Basi…" for "Basic Circuit", an empty readout at 320 px) where the title does not show on a
+    // touch screen
     expect(declaredIn(PHONE, '.settings-toggle', 'max-width')).toBe('100%');
     expect(inQuery(PHONE, '.settings-toggle'), 'a phone changes the button\'s cap and nothing else').toEqual([['max-width', '100%']]);
     // the same specificity as the 40% of the drawer's query, so the phone's rule has to come after it
