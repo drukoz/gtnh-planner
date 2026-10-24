@@ -1,5 +1,6 @@
-// `data/assets/index.json`: the textures `npm run extract-assets` copied out of the jars (Task 2), and the lookups the
-// resolvers use to turn a texture path into a `TextureLayer` only when the file was extracted.
+// `data/assets/index.json`: the textures `npm run extract-assets` copied out of the jars (Task 2) and the user's
+// resource packs (add-on 23), and the lookups the resolvers use to turn a texture path into a `TextureLayer` only when
+// the file was extracted.
 
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -8,7 +9,10 @@ import type { LayerRegion, Rgb, TextureLayer } from '../../shared/types/assets.t
 export const ASSET_INDEX_FORMAT = 'gtnh-planner-assets/1';
 export const INDEX_FILE = 'index.json';                              // data/assets/index.json
 
-export interface AssetFileInfo { w: number; h: number; frames?: number /* only when > 1 */; jar: string /* basename of the winning jar */ }
+export interface AssetFileInfo {
+  w: number; h: number; frames?: number /* only when > 1 */;
+  jar: string /* the file's source: the winning jar's file name, or the name of the resource pack it came from */;
+}
 export interface AssetConflict { path: string; winner: string; losers: string[]; rule: 'mod-over-client' | 'override-over-home' | 'last-by-name' }
 /** A resource pack the run read from the client instance (add-on 23); `version` comes from its `pack.mcmeta`. */
 export interface PackRecord {
@@ -108,6 +112,17 @@ function isCount(value: unknown, min: number): boolean {
   return typeof value === 'number' && Number.isInteger(value) && value >= min;
 }
 
+function isPackRecord(value: unknown): boolean {
+  return isPlainObject(value) && typeof value.name === 'string' && (value.format === 'folder' || value.format === 'zip')
+    && typeof value.version === 'string' && isCount(value.entries, 0) && isCount(value.bytes, 0) && isCount(value.files, 0);
+}
+
+/** `{ enabled: string[]; read: PackRecord[] }`. */
+function isAssetPacks(value: unknown): boolean {
+  return isPlainObject(value) && Array.isArray(value.enabled) && value.enabled.every((name) => typeof name === 'string')
+    && Array.isArray(value.read) && value.read.every(isPackRecord);
+}
+
 function checkFile(parsed: unknown, file: string): AssetIndexFile {
   const again = 'Run `npm run extract-assets` again.';
   if (!isPlainObject(parsed) || parsed.format !== ASSET_INDEX_FORMAT) {
@@ -120,6 +135,7 @@ function checkFile(parsed: unknown, file: string): AssetIndexFile {
       && (info.frames === undefined || isCount(info.frames, 1));
     if (!ok) throw new AssetIndexError(`${file}: bad entry for ${JSON.stringify(path)}. ${again}`);
   }
+  if (parsed.packs !== undefined && !isAssetPacks(parsed.packs)) throw new AssetIndexError(`${file}: bad "packs". ${again}`);
   return parsed as unknown as AssetIndexFile;
 }
 
