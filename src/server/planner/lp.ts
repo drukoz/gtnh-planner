@@ -1,7 +1,10 @@
 // The LP solver (web-stack §6): HiGHS compiled to WebAssembly, behind one small dense-bounds, sparse-rows model shape.
 // This is the only module that imports `highs`. Rows are scaled before the solve because planner quantities range from
-// 0.05 dust to 20,000 L (prior-art §3.4); scaling a row changes neither the solution nor the objective.
+// 0.05 dust to 20,000 L (prior-art §3.4); scaling a row changes neither the solution nor the objective. A model may also
+// be solved on a worker thread that loads this module with its own HiGHS runtime (`solveLpAside`, the bootstrap at the
+// end), while this thread solves others.
 
+import { isMainThread, parentPort, Worker, workerData } from 'node:worker_threads';
 import highsDefault from 'highs';
 import type { Highs, ModelData } from 'highs';
 
@@ -261,5 +264,91 @@ export async function solveLp(model: LpModel): Promise<LpResult> {
         }
         return withRun(notOptimal('error'));
     }
+  });
+}
+
+// ---- Solving on a worker thread (fix wave 3 Task 7 review, controller OQ1: the user's MV lines under 5 s warm) ----
+
+/** The `workerData` field that makes a worker thread loading this module a solver (`solveLpAside`). */
+const SOLVER_FLAG = 'lpSolver';
+const SOLVER_EXEC_ARGV = ['--disable-warning=ExperimentalWarning'];
+
+interface SolverJob { id: number; model: LpModel }
+type SolverReply = { id: number; result: LpResult } | { id: number; failed: true };
+
+/** The solver thread and the jobs it has not answered yet, each with the callback that settles its promise. */
+interface Solver { worker: Worker; pending: Map<number, (result: LpResult | undefined) => void> }
+
+let solver: Solver | null = null;
+/** A solver thread that could not start or stopped is not started again: every later model solves on this thread. */
+let solverFailed = false;
+let nextJob = 0;
+
+/** The solver thread, started on first use; it holds the process open only while a job is pending (`ref`/`unref`). */
+function solverThread(): Solver {
+  if (solver !== null) return solver;
+  const worker = new Worker(new URL(import.meta.url), { workerData: { [SOLVER_FLAG]: true }, execArgv: SOLVER_EXEC_ARGV });
+  worker.unref();
+  const started: Solver = { worker, pending: new Map() };
+  const stopped = (): void => {
+    solverFailed = true;
+    if (solver === started) solver = null;
+    for (const settle of started.pending.values()) settle(undefined);
+    started.pending.clear();
+  };
+  worker.on('message', (reply: SolverReply) => {
+    const settle = started.pending.get(reply.id);
+    if (settle === undefined) return;
+    started.pending.delete(reply.id);
+    if (started.pending.size === 0) worker.unref();
+    settle('result' in reply ? reply.result : undefined);
+  });
+  worker.on('error', stopped);
+  worker.on('exit', stopped);
+  solver = started;
+  return started;
+}
+
+/** `model` solved on the solver thread; undefined when that thread cannot solve it (it did not start, stopped, or threw). */
+function solvedAside(model: LpModel): Promise<LpResult | undefined> {
+  if (solverFailed) return Promise.resolve(undefined);
+  let thread: Solver;
+  try {
+    thread = solverThread();
+  } catch {
+    solverFailed = true;
+    return Promise.resolve(undefined);
+  }
+  return new Promise((settle) => {
+    const id = nextJob++;
+    thread.pending.set(id, settle);
+    thread.worker.ref();
+    try {
+      thread.worker.postMessage({ id, model } satisfies SolverJob);
+    } catch {
+      thread.pending.delete(id);
+      if (thread.pending.size === 0) thread.worker.unref();
+      settle(undefined);
+    }
+  });
+}
+
+/**
+ * `solveLp` on a worker thread with its own HiGHS runtime, so that this thread can solve other models meanwhile
+ * (`buildStage`: the leanest line's build MIP beside plan 09's plan). HiGHS gives the same model the same answer on
+ * either thread, so the result is `solveLp`'s, bit for bit. Where the solver thread cannot answer (it does not start,
+ * stops, or the solve throws there, as on a malformed model) the model is solved on this thread, which throws the same
+ * errors as `solveLp`. One thread serves every caller, one job at a time, in the order asked.
+ */
+export async function solveLpAside(model: LpModel): Promise<LpResult> {
+  return (await solvedAside(model)) ?? solveLp(model);
+}
+
+// ---- Worker bootstrap: only inside the solver thread `solverThread` starts (`workerData.lpSolver`) ----
+
+if (!isMainThread && (workerData as Record<string, unknown> | null)?.[SOLVER_FLAG] === true) {
+  const reply = (r: SolverReply): void => parentPort?.postMessage(r);
+  parentPort?.on('message', (job: SolverJob) => {
+    solveLp(job.model).then((result) => reply({ id: job.id, result }), () => reply({ id: job.id, failed: true }));
   });
 }

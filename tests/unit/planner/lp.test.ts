@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { highsOptions, MIP_FEASIBILITY_TOLERANCE, solveLp } from '../../../src/server/planner/lp.ts';
+import { highsOptions, MIP_FEASIBILITY_TOLERANCE, solveLp, solveLpAside, yieldToEventLoop, type LpModel } from '../../../src/server/planner/lp.ts';
 
 describe('solveLp', () => {
   it('solves a small minimisation', async () => {
@@ -117,5 +117,49 @@ describe('solveLp', () => {
     await expect(solveLp(model([[1, 1]]))).rejects.toThrow(RangeError);
     await expect(solveLp(model([[0, 1], [0, 2]]))).rejects.toThrow(RangeError);
     await expect(solveLp(model([[0, Infinity]]))).rejects.toThrow(RangeError);
+  });
+});
+
+describe('solveLpAside (fix wave 3 Task 7 review, controller OQ1)', () => {
+  // The build stage solves the leanest line's MIP on the solver thread while plan 09's plan solves on this one, so a
+  // build-cost plan waits for the longer of the two instead of their sum; the plan must not change.
+  const weights = Array.from({ length: 40 }, (_, i) => 1000 + ((i * 7919) % 1000));
+  const values = weights.map((w, i) => w + ((i * 104729) % 97));
+  const knapsack: LpModel = {
+    sense: 'max', colCost: values, colLower: new Array<number>(40).fill(0), colUpper: new Array<number>(40).fill(1),
+    rows: [{ lower: -Infinity, upper: Math.floor(weights.reduce((a, b) => a + b, 0) / 2), entries: weights.map((w, i): [number, number] => [i, w]) }],
+    integer: new Array<boolean>(40).fill(true), start: new Array<number>(40).fill(0),
+  };
+
+  it("gives exactly what solveLp gives: an LP, an infeasible one, and a MIP with its start, limits and improving solutions", async () => {
+    const models: LpModel[] = [
+      { sense: 'min', colCost: [1, 1], colLower: [0, 0], colUpper: [Infinity, Infinity], rows: [{ lower: 4, upper: Infinity, entries: [[0, 1], [1, 2]] }] },
+      { sense: 'min', colCost: [1], colLower: [0], colUpper: [3], rows: [{ lower: 5, upper: Infinity, entries: [[0, 1]] }] },
+      { ...knapsack, maxNodes: 200, maxIterations: 50_000, strongBranching: false, keepImproving: true, stopOnRootLpFailure: true },
+      { ...knapsack, maxNodes: 1 },
+    ];
+    for (const model of models) expect(await solveLpAside(model)).toStrictEqual(await solveLp(model));
+  });
+
+  it('leaves this thread free while it solves', async () => {
+    // Solved here, the knapsack (4,719 nodes, about half a second) would hold this thread for all of it after one turn.
+    let settled = false;
+    const aside = solveLpAside({ ...knapsack, maxNodes: 100_000 }).then((r) => {
+      settled = true;
+      return r;
+    });
+    let turns = 0;
+    while (!settled) {
+      await yieldToEventLoop();
+      turns++;
+    }
+    expect(turns).toBeGreaterThan(10);
+    expect((await aside).status).toBe('optimal');
+  });
+
+  it('throws what solveLp throws on a malformed model', async () => {
+    await expect(solveLpAside({ sense: 'min', colCost: [1, 1], colLower: [0, 0], colUpper: [1, 1], rows: [], start: [1] })).rejects.toThrow(RangeError);
+    await expect(solveLpAside({ sense: 'min', colCost: [1], colLower: [0], colUpper: [1], rows: [{ lower: 0, upper: 1, entries: [[1, 1]] }] }))
+      .rejects.toThrow(RangeError);
   });
 });
