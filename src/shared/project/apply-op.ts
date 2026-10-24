@@ -30,6 +30,8 @@ const OPTION_SLOT = /^[^#]{1,100}#\d{1,4}$/;
 /** Entries of `PlanSettings.ownedManual` ("Machines we have", architecture §11.29), and the machines one may count. */
 export const MAX_OWNED_MANUAL_ENTRIES = 200;
 export const MAX_OWNED_MANUAL_COUNT = 10_000;
+/** Keys of "Only these come in" (`PlanSettings.inputsOnly`, plan 12 fix wave 3 (B)). */
+export const MAX_INPUTS_ONLY = 50;
 
 const MAX_TIER = 14;
 const MAX_AMOUNT = 1e9;
@@ -62,6 +64,7 @@ export function defaultSettings(): PlanSettings {
     avoid: [], declineReuse: [], settingsVersion: SETTINGS_VERSION, haveSupply: [], stepCharge: DEFAULT_STEP_CHARGE,
     optionChoice: {}, reuseOwned: true, ownedManual: [], buildHorizonHours: DEFAULT_BUILD_HORIZON_HOURS, buildTier: null, multiblocks: 'allow',
     rawCap: DEFAULT_RAW_CAP,
+    inputsOnly: [],
   };
 }
 
@@ -79,6 +82,7 @@ export function normalizeSettings(s: Partial<PlanSettings> | undefined): PlanSet
   const merged = { ...defaults, ...definedOnly(s ?? {}) };
   merged.dims = { ...defaults.dims, ...definedOnly(s?.dims ?? {}) };
   merged.avoid = withoutRepeats(merged.avoid);
+  merged.inputsOnly = withoutRepeats(merged.inputsOnly ?? []);
   merged.ownedManual = summedOwned(merged.ownedManual ?? []);
   merged.automateCrafting = true;
   if (s?.settingsVersion === undefined) merged.settingsVersion = FIRST_SETTINGS_VERSION;
@@ -135,6 +139,7 @@ export function applyOp(p: Project, op: ProjectOp, by: string, at: string): Proj
       // and the "Machines we have" list sums the counts of a repeated machine.
       const settings = { ...p.settings, ...op.patch };
       if (op.patch.avoid !== undefined) settings.avoid = withoutRepeats(op.patch.avoid);
+      if (op.patch.inputsOnly !== undefined) settings.inputsOnly = withoutRepeats(op.patch.inputsOnly);
       if (op.patch.ownedManual !== undefined) settings.ownedManual = summedOwned(op.patch.ownedManual);
       return { ...next, settings };
     }
@@ -253,6 +258,9 @@ const SETTING_CHECKS: { readonly [K in keyof PlanSettings]-?: Check } = {
   // null = no limit (fix wave 3 (A)).
   rawCap: (v) => (v === null || (typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= MAX_RAW_CAP)
     ? null : `rawCap must be empty or a number from 0 to ${MAX_RAW_CAP}`),
+  // Counted as sent, repeats included: applyOp drops the repeats.
+  inputsOnly: (v) => (Array.isArray(v) && v.length <= MAX_INPUTS_ONLY && v.every((x) => isStringOfLength(x, 1, MAX_TARGET_LENGTH))
+    ? null : `inputsOnly must be a list of at most ${MAX_INPUTS_ONLY} keys of 1 to ${MAX_TARGET_LENGTH} characters`),
 };
 
 const SETTING_KEYS: ReadonlySet<string> = new Set(Object.keys(defaultSettings()));

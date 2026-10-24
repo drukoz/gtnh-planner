@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  applyOp, defaultSettings, MAX_BUILD_HORIZON_HOURS, MAX_OWNED_MANUAL_COUNT, MAX_OWNED_MANUAL_ENTRIES, MAX_RAW_CAP, MAX_STEP_CHARGE, normalizeSettings,
+  applyOp, defaultSettings, MAX_BUILD_HORIZON_HOURS, MAX_INPUTS_ONLY, MAX_OWNED_MANUAL_COUNT, MAX_OWNED_MANUAL_ENTRIES, MAX_RAW_CAP, MAX_STEP_CHARGE, normalizeSettings,
   SETTINGS_VERSION, settingsUpgrade, validateOp,
 } from '../../../src/shared/project/apply-op.ts';
 import { DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_RAW_CAP, DEFAULT_STEP_CHARGE, NETWORKED_LOGISTICS, STEP_CHARGE_BEFORE_V3 } from '../../../src/shared/types/plan.ts';
@@ -390,5 +390,25 @@ describe('NETWORKED_LOGISTICS', () => {
     expect(NETWORKED_LOGISTICS.has('direct')).toBe(false);
     // EnderIO plans like machine to machine, each step on its own machines (controller ruling).
     expect(NETWORKED_LOGISTICS.has('enderio')).toBe(false);
+  });
+});
+
+// "Only these come in" (plan 12 fix wave 3 (B)): the base materials a line may buy, empty = off.
+describe('inputsOnly', () => {
+  const op = (patch: Record<string, unknown>) => ({ op: 'settings', patch });
+  it('is off by default and for a project stored before it, and keeps one of each key', () => {
+    expect(defaultSettings().inputsOnly).toEqual([]);
+    expect(normalizeSettings({ target: 't:x@0' } as never).inputsOnly).toEqual([]);
+    expect(normalizeSettings({ inputsOnly: ['t:b@0', 't:a@0', 't:b@0'] } as never).inputsOnly).toEqual(['t:b@0', 't:a@0']);
+    const q = applyOp(project(), { op: 'settings', patch: { inputsOnly: ['t:a@0', 't:a@0', 't:b@0'] } }, 'Bob', AT);
+    expect(q.settings.inputsOnly).toEqual(['t:a@0', 't:b@0']);
+  });
+  it('takes at most 50 keys of 1 to 300 characters', () => {
+    const keys = (n: number): string[] => Array.from({ length: n }, (_, i) => `t:k${i}@0`);
+    expect(MAX_INPUTS_ONLY).toBe(50);
+    for (const v of [[], ['t:a@0'], keys(50), ['x'.repeat(300)]]) expect(validateOp(op({ inputsOnly: v })), JSON.stringify(v).slice(0, 40)).toBeNull();
+    for (const v of [keys(51), [''], ['x'.repeat(301)], 't:a@0', [1], null]) {
+      expect(validateOp(op({ inputsOnly: v })), JSON.stringify(v)?.slice(0, 40)).toBe('inputsOnly must be a list of at most 50 keys of 1 to 300 characters');
+    }
   });
 });

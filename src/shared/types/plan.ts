@@ -168,6 +168,17 @@ export interface PlanSettings {
    * `normalizeSettings()` always fill it (`DEFAULT_RAW_CAP`) and keep a stored null.
    */
   rawCap?: number | null;
+  // optional addition (plan 12 fix wave 3 (B))
+  /**
+   * "Only these come in" (fix wave 3 (B)): empty = off. Otherwise the line buys nothing outside these keys and the free
+   * inputs (`FREE_KEYS`, which keep their own rules, `haveSupply` among them): every other good is made, or the plan is
+   * blocked with "Nothing makes <good> from your base materials"; a stop item outside the list is made, with a
+   * `stop-outside-inputs` warning. A listed key keeps its usual decision: the list only takes leaves away, so a good the
+   * line would make (a derived fluid) is still made unless it is a stop item too. Only the line's own graphs read it:
+   * machine prices, the build list and the layout's parts do not (`LinePricing.buildLeaf`). At most `MAX_INPUTS_ONLY`
+   * keys (apply-op.ts), no repeats. `defaultSettings()` and `normalizeSettings()` always fill it; readers use `?? []`.
+   */
+  inputsOnly?: StuffKey[];
 }
 
 /** Where one of the group's machines stands (a world scan's `PlacedMachine`): its dimension id and block position. */
