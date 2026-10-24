@@ -1,11 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { miniGt } from '../../helpers/mini-gt.ts';
+import { benchToolSpec } from '../../helpers/build-fixtures.ts';
+import { MINI_GT, miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec, type IngredientSpec, type RecipeSpec } from '../../helpers/pack-spec.ts';
-import { acceptRecipe, buildCandidates, MAX_RECIPES, virtualKey, type PlanEnv, type LeafOracle } from '../../../src/server/planner/candidates.ts';
+import { ACCEPTANCE_MEMO_SIZE, acceptOf, acceptRecipe, acceptanceMemoStats, buildCandidates, MAX_RECIPES, virtualKey, type PlanEnv, type LeafOracle } from '../../../src/server/planner/candidates.ts';
 import { solveLine } from '../../../src/server/planner/solve.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import { EXCLUSION_RULES } from '../../../src/server/planner/candidates.ts';
 import { DEFAULT_EXCLUDED_CATEGORIES } from '../../../src/shared/types/plan.ts';
+import type { Recipe } from '../../../src/shared/types/pack.ts';
 
 const pack = miniGt();
 const env = (tier: number, extra: Partial<PlanEnv> = {}): PlanEnv => ({ tier, reachable: new Set(['overworld', 'nether']), lowGravity: false,
@@ -47,6 +49,80 @@ describe('acceptRecipe', () => {
   it('checks EBF heat: coil + 100 per tier above MV', () => {
     expect(acceptRecipe(pack, R('ebf-ti'), env(3, { coilHeat: 1801 }))).toMatchObject({ ok: false, why: 'heat' });   // 1901 K < 1941 K
     expect(acceptRecipe(pack, R('ebf-ti'), env(3, { coilHeat: 2701 })).ok).toBe(true);                               // 2801 K
+  });
+});
+
+describe('the shared acceptance memo (fix wave 3 (E))', () => {
+  it("shares recipe acceptance between walks of one context, and still leaves out each walk's own unbuildable recipes", () => {
+    const first = buildCandidates(pack, defaultSettings(), env(1), oracle, ['t:circuit@0']);
+    const kept = first.recipes.find((r) => r.kind === 'recipe')?.id as string;
+    expect(kept).toBeDefined();
+    const before = acceptanceMemoStats(pack).hits;
+    const without = buildCandidates(pack, defaultSettings(), env(1), oracle, ['t:circuit@0'], { unbuildable: new Map([[kept, 'test']]) });
+    expect(without.recipes.map((r) => r.id)).not.toContain(kept);
+    const again = buildCandidates(pack, defaultSettings(), env(1), oracle, ['t:circuit@0']);
+    expect(again.recipes.map((r) => r.id)).toEqual(first.recipes.map((r) => r.id));
+    expect(acceptanceMemoStats(pack).hits).toBeGreaterThan(before);
+    expect(acceptanceMemoStats(pack).contexts).toBeGreaterThanOrEqual(1);
+    buildCandidates(pack, defaultSettings(), env(2), oracle, ['t:circuit@0']);   // another tier: its own context
+    expect(acceptanceMemoStats(pack).contexts).toBeGreaterThanOrEqual(2);
+  });
+  it("answers what acceptRecipe answers in each context, never another context's answer from memory", () => {
+    const p = packFromSpec({ ...MINI_GT,
+      machines: [...(MINI_GT.machines ?? []), { mteId: 9, name: 'Eye of Harmony', maps: ['gt.recipe.eyeofharmony'], kind: 'multiblock' }],
+      recipes: [...(MINI_GT.recipes ?? []),
+        { id: 'eoh', map: 'gt.recipe.eyeofharmony', out: [['t:iron_dust@0', 64]], eut: 0 },
+        { id: 'lowg', map: 'gt.recipe.macerator', in: [['t:iron_ore@0', 1]], out: [['t:iron_dust@0', 2]], meta: { lowGravity: true } },
+        { id: 'nothing', map: 'gt.recipe.centrifuge', in: [['t:iron_dust@0', 1]], out: [['t:tin_ingot@0', 1]], eut: 16 }] });
+    // A recipe and two contexts that judge it differently, for each field of the key but the bench line (below).
+    const pairs: Array<[string, PlanEnv, PlanEnv]> = [
+      ['circuit-mv', env(1), env(2)],
+      ['ebf-ti', env(3, { coilHeat: 1801 }), env(3, { coilHeat: 2701 })],
+      ['lowg', env(1), env(1, { lowGravity: true })],
+      ['lava-copper', env(3), env(3, { excluded: new Set() })],
+      ['eoh', env(1, { multiblocks: new Set() }), env(1, { multiblocks: new Set([9]) })],
+      ['nothing', env(1), env(1, { fromNothing: new Set(['nothing']) })],
+    ];
+    for (const [id, a, b] of pairs) {
+      const r = p.recipeById.get(id) as Recipe;
+      const [first, second] = [acceptRecipe(p, r, a), acceptRecipe(p, r, b)];
+      expect(first, id).not.toEqual(second);
+      expect(acceptOf(p, a)(r), id).toEqual(first);
+      expect(acceptOf(p, b)(r), id).toEqual(second);
+      expect(acceptOf(p, a)(r), id).toEqual(first);   // from memory
+    }
+    // The bench line: none, one without a stock cap and one per logistics that caps it are contexts of their own.
+    const bp = packFromSpec(benchToolSpec());
+    const variant = bp.recipes.find((r) => r.meta.benchVariantOf === 'rod-file') as Recipe;
+    expect(acceptOf(bp, env(1))(variant)).toEqual({ ok: false, why: 'bench' });
+    expect(acceptOf(bp, env(1), {})(variant)).toEqual({ ok: true, mapId: 'crafting' });
+    expect(acceptanceMemoStats(bp).contexts).toBe(2);
+    acceptOf(bp, env(1), { capBy: 'EnderIO' });
+    acceptOf(bp, env(1), { capBy: 'Project Red' });
+    expect(acceptanceMemoStats(bp).contexts).toBe(4);
+  });
+  it('is one context however its sets were built', () => {
+    const p = miniGt();
+    acceptOf(p, env(1, { excluded: new Set(['recycling', 'massfab']), multiblocks: new Set([2, 10, 1]), fromNothing: new Set(['b', 'a']) }));
+    acceptOf(p, env(1, { excluded: new Set(['massfab', 'recycling']), multiblocks: new Set([1, 2, 10]), fromNothing: new Set(['a', 'b']) }));
+    expect(acceptanceMemoStats(p).contexts).toBe(1);
+  });
+  it('keeps at most ACCEPTANCE_MEMO_SIZE contexts per pack, the least recently used going first', () => {
+    const p = miniGt();
+    const r = p.recipeById.get('circuit-lv') as Recipe;
+    const context = (i: number): PlanEnv => env(1, { coilHeat: 1801 + 100 * i });   // a context of its own for each i
+    const remembered = (i: number): boolean => {   // whether context i already answered for r
+      const before = acceptanceMemoStats(p).hits;
+      acceptOf(p, context(i))(r);
+      return acceptanceMemoStats(p).hits > before;
+    };
+    for (let i = 0; i < ACCEPTANCE_MEMO_SIZE; i++) expect(remembered(i)).toBe(false);
+    expect(acceptanceMemoStats(p).contexts).toBe(ACCEPTANCE_MEMO_SIZE);
+    expect(remembered(0)).toBe(true);                       // asked again: the most recent now, and context 1 the oldest
+    expect(remembered(ACCEPTANCE_MEMO_SIZE)).toBe(false);   // one more context drops the oldest ...
+    expect(acceptanceMemoStats(p).contexts).toBe(ACCEPTANCE_MEMO_SIZE);
+    expect(remembered(0)).toBe(true);                       // ... not the one asked again
+    expect(remembered(1)).toBe(false);                      // the dropped one is judged anew
   });
 });
 
