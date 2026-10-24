@@ -5,6 +5,7 @@
 // plan or scan changes no other.
 
 import { parseItemKey, type ItemKey, type StuffKey } from '../../src/shared/keys.ts';
+import { gtMachineId } from '../../src/shared/ids.ts';
 import type { Vec3 } from '../../src/shared/layout/geometry.ts';
 import { defaultSettings } from '../../src/shared/project/apply-op.ts';
 import type { LayoutTap } from '../../src/shared/types/layout.ts';
@@ -77,7 +78,7 @@ export const AIR_MULTI_STRUCTURE: StructureInfo = airMultiStructure();
 // ---- Packs ----
 
 function gtMachine(mteId: number, name: string, metaName: string, kind: MachineKind, cls: string, more: Partial<Machine> = {}): Machine {
-  return { mteId, metaName, name, cls, itemKey: `${GT_BLOCK}@${mteId}`, kind, maps: [], ...more };
+  return { id: gtMachineId(mteId), mteId, metaName, name, cls, itemKey: `${GT_BLOCK}@${mteId}`, kind, maps: [], ...more };
 }
 
 function cable(mteId: number, name: string, metaName: string, voltage: number, amps: number, lossPerBlock: number, insulated: boolean, material: string): Machine {

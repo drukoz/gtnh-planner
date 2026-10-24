@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { tierGroups, transformerStages, lineLossEUt, fitPower, generatorSuggestion, LOSS_WARN_FRACTION, bankLossEUt, deliveredVolts, hookupAllowanceVolts,
 } from '../../../src/server/layout/power.ts';
+import { gtMachineId } from '../../../src/shared/ids.ts';
 import { layoutPack } from '../../helpers/layout-fixtures.ts';
 import { emptyContext } from '../../../src/server/planner/plan.ts';
 import type { LayoutPowerContext } from '../../../src/shared/types/layout.ts';
@@ -74,7 +75,7 @@ describe('power rules', () => {
   it('suggests another generator when the pack has no turbine at that tier', () => {
     const pack = layoutPack();
     pack.machines.delete(1121);                                       // the MV turbine
-    pack.machines.set(1111, { mteId: 1111, metaName: 'generator.combustion.tier.02', name: 'Advanced Combustion Generator',
+    pack.machines.set(1111, { id: gtMachineId(1111), mteId: 1111, metaName: 'generator.combustion.tier.02', name: 'Advanced Combustion Generator',
       cls: 'gregtech.common.tileentities.generators.MTEDieselGenerator', itemKey: 'gregtech:gt.blockmachines@1111', kind: 'generator', tier: 2, voltage: 128, amps: 1, maps: [] });
     expect(generatorSuggestion(pack, 300, 2)).toEqual({ text: 'Add about 3× Advanced Combustion Generator to cover 300 EU/t',
       lines: [{ key: 'gregtech:gt.blockmachines@1111', amount: 3, why: why('300'), group: 'power' }] });   // ceil(300 / (128 × 1))

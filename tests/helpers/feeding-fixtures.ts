@@ -7,6 +7,7 @@
 
 import { TIER_NAMES } from '../../src/shared/gt/tiers.ts';
 import { isFluidKey, parseItemKey, type ItemKey, type StuffKey } from '../../src/shared/keys.ts';
+import { gtMachineId } from '../../src/shared/ids.ts';
 import { DIRS, OPPOSITE, posKey, step, type Rotation, type Vec3 } from '../../src/shared/layout/geometry.ts';
 import { FACES } from '../../src/shared/types/assets.ts';
 import type { ConduitMode, Layout, LayoutBlock } from '../../src/shared/types/layout.ts';
@@ -37,7 +38,7 @@ const BASIC_CLASS = 'gregtech.api.metatileentity.implementations.MTEBasicMachine
 
 /** A machine in the fixture table's own shape (the fields of `layout-fixtures.ts`'s `gtMachine`). */
 function gtMachine(mteId: number, name: string, metaName: string, kind: MachineKind, cls: string, more: Partial<Machine> = {}): Machine {
-  return { mteId, metaName, name, cls, itemKey: `${GT_BLOCK}@${mteId}`, kind, maps: [], ...more };
+  return { id: gtMachineId(mteId), mteId, metaName, name, cls, itemKey: `${GT_BLOCK}@${mteId}`, kind, maps: [], ...more };
 }
 
 function item(key: ItemKey, name: string): Item {

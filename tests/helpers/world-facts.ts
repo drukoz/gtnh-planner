@@ -5,6 +5,7 @@
 
 import type { FactMachine, ScanPackFacts } from '../../src/server/world/facts.ts';
 import { itemKey, type ItemKey } from '../../src/shared/keys.ts';
+import { gtMachineId } from '../../src/shared/ids.ts';
 import type { DimensionInfo, Item, Machine, MachineKind, Pack } from '../../src/shared/types/pack.ts';
 
 const TEST_EXPORT_ID = 'test-export';
@@ -17,7 +18,7 @@ const STORAGE = 'gregtech.common.tileentities.storage.';
 const BASIC_MACHINE = `${IMPLEMENTATIONS}MTEBasicMachineWithRecipe`;
 
 function row(mteId: number, metaName: string, name: string, kind: MachineKind, cls: string, extra: Partial<FactMachine> = {}): FactMachine {
-  return { mteId, metaName, name, cls, itemKey: itemKey(GT_MACHINE_BLOCK, mteId), kind, maps: [], ...extra };
+  return { id: gtMachineId(mteId), mteId, metaName, name, cls, itemKey: itemKey(GT_MACHINE_BLOCK, mteId), kind, maps: [], ...extra };
 }
 
 function cable(material: string, voltage: number): Machine['cable'] {

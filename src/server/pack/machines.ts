@@ -7,6 +7,7 @@
 import { isExportHatchKind } from '../../shared/gt/hatch-kinds.ts';
 import { PSEUDO_MACHINES } from '../../shared/gt/tiers.ts';
 import { itemKey, type ItemKey } from '../../shared/keys.ts';
+import { gtMachineId, machineIdOfLegacy } from '../../shared/ids.ts';
 import type { BlockRef, Machine, StructureElement, StructureInfo } from '../../shared/types/pack.ts';
 import { EXPORT_FILES, type MachineLine, type StructureLine } from './format.ts';
 import type { LoadContext } from './load.ts';
@@ -31,7 +32,7 @@ const BATTERY_BUFFER_NAME_RE = /^battery(buffer|charger|turbocharger)\.(\d+)\.ti
 const CHARGER_SLOTS = 4;
 
 function pseudoMachine(mteId: number, metaName: string, name: string, key: ItemKey, map: string): Machine {
-  return Object.freeze({ mteId, metaName, name, cls: 'pseudo', itemKey: key, kind: 'other', maps: [map] });
+  return Object.freeze({ id: machineIdOfLegacy(mteId), mteId, metaName, name, cls: 'pseudo', itemKey: key, kind: 'other', maps: [map] });
 }
 
 /**
@@ -78,7 +79,7 @@ function slotsFromName(line: MachineLine, ctx: LoadContext): number {
 export function toMachine(line: MachineLine, ctx: LoadContext): Machine {
   if (line.mapsError) ctx.warn(`machine ${line.id} (${line.name}): recipe maps unreadable: ${line.mapsError}`);
   const machine: Machine = {
-    mteId: line.id, metaName: line.name, name: line.dn || line.name, cls: line.cls,
+    id: gtMachineId(line.id), mteId: line.id, metaName: line.name, name: line.dn || line.name, cls: line.cls,
     itemKey: line.item == null ? itemKey(GT_MACHINE_BLOCK, line.id) : (ctx.items.optionsAt(line.item)[0] as ItemKey),
     kind: line.kind, maps: machineMaps(line.maps ?? []),
   };

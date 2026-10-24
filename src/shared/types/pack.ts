@@ -4,6 +4,7 @@
 
 import type { ExportHatchKind } from '../gt/hatch-kinds.ts';
 import type { FluidKey, ItemKey, StuffKey } from '../keys.ts';
+import type { MachineId } from '../ids.ts';
 import type { TgsMode } from './farm.ts';
 
 /** The ore-processing forms an ore material can list in `GtMaterial.parts`. */
@@ -90,6 +91,8 @@ export interface StructureInfo {
 }
 /** A singleblock's `amps` is its mAmperage (thermal centrifuge 2, arc furnace 3, mass fabricator 8). */
 export interface Machine {
+  /** This machine's identity: `gt:<mteId>` for a GT machine, `mc:*` for a pseudo one (ids.ts). */
+  id: MachineId;
   mteId: number; metaName: string; name: string; cls: string; itemKey: ItemKey; kind: MachineKind;
   tier?: number; voltage?: number; amps?: number; maps: string[];
   cable?: { voltage: number; amps: number; lossPerBlock: number; insulated: boolean; material: string };

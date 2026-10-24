@@ -6,6 +6,7 @@
 
 import { elementMap, hatchRuleFor } from '../../src/server/layout/hatch-rules.ts';
 import type { ExportHatchKind } from '../../src/shared/gt/hatch-kinds.ts';
+import { gtMachineId } from '../../src/shared/ids.ts';
 import { posKey, type Vec3 } from '../../src/shared/layout/geometry.ts';
 import type { BlockRef, Machine, Pack, StructureElement, StructureInfo } from '../../src/shared/types/pack.ts';
 import { hatchPack } from './hatch-fixtures.ts';
@@ -71,7 +72,7 @@ export const FRONT_BOX_ELEMENTS: readonly ElementSpec[] = [
 ];
 
 function box(mteId: number, name: string, metaName: string, cls: string): Machine {
-  return { mteId, metaName, name, cls: `${IMPL}${cls}`, itemKey: `${GT_BLOCK}@${mteId}`, kind: 'multiblock', maps: [], structure: boxStructure(mteId) };
+  return { id: gtMachineId(mteId), mteId, metaName, name, cls: `${IMPL}${cls}`, itemKey: `${GT_BLOCK}@${mteId}`, kind: 'multiblock', maps: [], structure: boxStructure(mteId) };
 }
 
 /**

@@ -4,6 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import { deriveSupply, SUPPLY_PUMP_MAP } from '../../../src/server/pack/supply.ts';
 import { nbtHash, recipeId } from '../../../src/server/pack/recipe-id.ts';
+import { gtMachineId } from '../../../src/shared/ids.ts';
 import { itemKey } from '../../../src/shared/keys.ts';
 import type { Ingredient, Machine, Recipe, RecipeMapInfo } from '../../../src/shared/types/pack.ts';
 import { makePack } from '../../helpers/make-pack.ts';
@@ -21,7 +22,7 @@ function slot(key: string, slotNo = 0, consumed = true, amount = 1): Ingredient 
   return { slot: slotNo, consumed, chance: consumed ? 1 : 0, options: [{ key, amount }] };
 }
 function machine(mteId: number, cls: string, maps: string[] = []): Machine {
-  return { mteId, metaName: `m.${mteId}`, name: `Machine ${mteId}`, cls, itemKey: `machine:${mteId}@0`, kind: 'basic', tier: 1, voltage: 32, maps };
+  return { id: gtMachineId(mteId), mteId, metaName: `m.${mteId}`, name: `Machine ${mteId}`, cls, itemKey: `machine:${mteId}@0`, kind: 'basic', tier: 1, voltage: 32, maps };
 }
 const MAPS: ReadonlyMap<string, RecipeMapInfo> = new Map([[ROCK_BREAKER, { id: ROCK_BREAKER, name: 'Rock Breaker', amps: 1, specialValue: 'none', aliases: [] }]]);
 /** The id `recipeId` gives a recipe's content. */

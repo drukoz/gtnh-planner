@@ -4,6 +4,7 @@
 // them. Nothing here reads a real export or world; each call returns fresh objects.
 
 import { parseItemKey, type ItemKey } from '../../src/shared/keys.ts';
+import { gtMachineId } from '../../src/shared/ids.ts';
 import type { BlockRef, Machine, Pack, StructureInfo } from '../../src/shared/types/pack.ts';
 import type { Plan, PlanFlow } from '../../src/shared/types/plan.ts';
 import { IDS, layoutPack, makePlan } from './layout-fixtures.ts';
@@ -46,7 +47,7 @@ function box(size: [number, number, number], controller: [number, number, number
 }
 
 function machine(mteId: number, name: string, metaName: string, cls: string, more: Partial<Machine>): Machine {
-  return { mteId, metaName, name, cls, itemKey: `${GT_BLOCK}@${mteId}`, kind: 'multiblock', maps: [], ...more };
+  return { id: gtMachineId(mteId), mteId, metaName, name, cls, itemKey: `${GT_BLOCK}@${mteId}`, kind: 'multiblock', maps: [], ...more };
 }
 
 /**
@@ -56,7 +57,7 @@ function machine(mteId: number, name: string, metaName: string, cls: string, mor
 export function primitivePack(): Pack {
   const pack = layoutPack();
   const machines: Machine[] = [
-    { ...pack.machines.get(IDS.MACERATOR)!, mteId: STEAM, metaName: 'bronzemachine.macerator', name: 'Steam Macerator', kind: 'steam',
+    { ...pack.machines.get(IDS.MACERATOR)!, id: gtMachineId(STEAM), mteId: STEAM, metaName: 'bronzemachine.macerator', name: 'Steam Macerator', kind: 'steam',
       cls: 'gregtech.common.tileentities.machines.steam.MTESteamMaceratorBronze', itemKey: `${GT_BLOCK}@${STEAM}` },
     machine(BRICKED, 'Bricked Blast Furnace', 'multimachine.brickedblastfurnace', `${MULTI}MTEBrickedBlastFurnace`,
       { structure: box([3, 4, 3], [1, 1, 0], BRICKED, FIREBRICKS, [[1, 1, 1], [1, 2, 1]], [[1, 3, 1]]) }),

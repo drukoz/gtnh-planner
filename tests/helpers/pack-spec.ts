@@ -7,6 +7,7 @@
 
 import { V } from '../../src/shared/gt/tiers.ts';
 import { isFluidKey, parseItemKey, type FluidKey, type ItemKey, type StuffKey } from '../../src/shared/keys.ts';
+import { gtMachineId } from '../../src/shared/ids.ts';
 import type {
   Fluid, GtMaterial, Ingredient, Item, Machine, MachineKind, Pack, PackManifest, Product, Recipe, RecipeMapInfo, RecipeSource,
   StructureInfo, Worldgen,
@@ -116,7 +117,7 @@ function mapFrom(spec: MapSpec): RecipeMapInfo {
 
 function machineFrom(spec: MachineSpec): Machine {
   const machine: Machine = {
-    mteId: spec.mteId, metaName: spec.metaName ?? `test.machine.${spec.mteId}`, name: spec.name, cls: spec.cls ?? 'test.Machine',
+    id: gtMachineId(spec.mteId), mteId: spec.mteId, metaName: spec.metaName ?? `test.machine.${spec.mteId}`, name: spec.name, cls: spec.cls ?? 'test.Machine',
     itemKey: spec.itemKey ?? `machine:${spec.mteId}@0`, kind: spec.kind ?? 'basic', maps: [...spec.maps],
   };
   if (spec.tier !== undefined) {

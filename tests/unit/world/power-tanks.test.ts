@@ -12,6 +12,7 @@ import { classifyTank } from '../../../src/server/world/classify/tanks.ts';
 import type { FactMachine, ScanPackFacts } from '../../../src/server/world/facts.ts';
 import type { RawTe, Vec3 } from '../../../src/server/world/model.ts';
 import { runScanJob } from '../../../src/server/world/scan.worker.ts';
+import { gtMachineId } from '../../../src/shared/ids.ts';
 import { itemKey } from '../../../src/shared/keys.ts';
 import type { WorldScan } from '../../../src/shared/types/world.ts';
 import { makeWorld } from '../../helpers/make-world.ts';
@@ -26,7 +27,7 @@ const LARGE_STEEL_BOILER = 15530, OUTPUT_HATCH_LV = 61, UNTIERED_TURBINE = 1199;
 const ONE_UNFED = '1 steam turbine gets no steam the scan can follow';
 
 function row(mteId: number, metaName: string, name: string, kind: FactMachine['kind'], cls: string, extra: Partial<FactMachine> = {}): FactMachine {
-  return { mteId, metaName, name, cls, itemKey: itemKey('gregtech:gt.blockmachines', mteId), kind, maps: [], ...extra };
+  return { id: gtMachineId(mteId), mteId, metaName, name, cls, itemKey: itemKey('gregtech:gt.blockmachines', mteId), kind, maps: [], ...extra };
 }
 
 /**
