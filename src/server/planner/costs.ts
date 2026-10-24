@@ -144,6 +144,12 @@ function isMaterialLine(pack: Pack, target: StuffKey | null): boolean {
  * Logs, crops and other natural items get no `alsoMade`, and expand and stop items keep their decisions. The cost model,
  * machine prices and build-material breakdowns never pass it: there gathered blocks are dug.
  *
+ * Add-on 17 (farms in the candidate graph, for the line's own graph only: pricing.ts): with `opts.farmMade` (every good
+ * the line's farm recipes make), a buyable leaf among them other than a stop item is `farmMade` too, so the walk and its
+ * estimate also expand its producers, the farms among them, exactly as for `alsoMade`, in every mode (logs and crops
+ * included: a farm makes them). With `opts.fixed` (the tools a tree farm wears, at their tool price), each such good is
+ * `{ buyable: true, cost, leafClass: 'direct' }` whatever it is otherwise, and never walked: tool wear is bought.
+ *
  * `derivedCost` is what making the derived item on its own costs (pricing.ts: `standaloneCosts` over the cost model's
  * graph, where derived materials are routed, never below its price), undefined when that is not known. A flat price of
  * 1 made exotic derived dusts the cheapest way to make ordinary parts (Poly-Si and gallium arsenide wafers for an
@@ -153,10 +159,13 @@ function isMaterialLine(pack: Pack, target: StuffKey | null): boolean {
  */
 export function makeLeafOracle(
   pack: Pack, settings: PlanSettings, avail: Availability, prices: PriceTable, stopCost?: (key: StuffKey) => number,
-  derivedCost?: (key: StuffKey) => Standalone | undefined, opts?: { supplied?: ReadonlySet<StuffKey>; gatheredRecipes?: boolean },
+  derivedCost?: (key: StuffKey) => Standalone | undefined,
+  opts?: { supplied?: ReadonlySet<StuffKey>; gatheredRecipes?: boolean; farmMade?: ReadonlySet<StuffKey>; fixed?: ReadonlyMap<StuffKey, number> },
 ): LeafOracle {
   const supplied = opts?.supplied ?? NO_KEYS;
   const gatheredRecipes = opts?.gatheredRecipes === true;
+  const farmMade = opts?.farmMade ?? NO_KEYS;
+  const fixed = opts?.fixed;
   /** A derived leaf: its price under a cost override, else what making it costs, else its price. */
   const derived = (key: StuffKey): LeafDecision => {
     const made = hasCostOverride(pack, settings.costOverrides, key) ? undefined : derivedCost?.(key);
@@ -167,7 +176,7 @@ export function makeLeafOracle(
   const expand = new Set(settings.expandItems);
   const stop = new Set(settings.stopItems);
   const buysOres = isMaterialLine(pack, settings.target);
-  return (key) => {
+  const decide = (key: StuffKey): LeafDecision => {
     if (expand.has(key)) return NOT_A_LEAF;
     if (stop.has(key)) {
       return { buyable: true, cost: own(settings.costOverrides, key) ?? stopCost?.(key) ?? prices.price(key), leafClass: 'stop' };
@@ -192,6 +201,13 @@ export function makeLeafOracle(
       default:
         return NOT_A_LEAF;
     }
+  };
+  if (fixed === undefined && farmMade.size === 0) return decide;
+  return (key) => {
+    const cost = fixed?.get(key);
+    if (cost !== undefined) return { buyable: true, cost, leafClass: 'direct' };
+    const d = decide(key);
+    return d.buyable && d.leafClass !== 'stop' && farmMade.has(key) ? { ...d, farmMade: true } : d;
   };
 }
 

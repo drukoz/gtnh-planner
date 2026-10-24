@@ -7,7 +7,7 @@ import type { Db, ProjectRow } from '../db/db.ts';
 import type { PlanSettings } from '../../shared/types/plan.ts';
 import type { Project, ProjectOp } from '../../shared/types/project.ts';
 import type { StuffKey } from '../../shared/keys.ts';
-import { applyOp, defaultSettings, normalizeSettings, settingsUpgrade, validateOp } from '../../shared/project/apply-op.ts';
+import { applyOp, defaultSettings, normalizeSettings, settingsUpgrade, validateOp, withObjectiveRules } from '../../shared/project/apply-op.ts';
 
 /** Who the changes the planner makes on its own are recorded as (`migrateSettings`). */
 export const PLANNER_UPDATE = 'Planner update';
@@ -36,11 +36,15 @@ export class ProjectStore {
     this.#newId = deps?.newId ?? (() => randomBytes(8).toString('base64url').slice(0, 10));
   }
 
+  /**
+   * A new project of `settings` over the defaults, as a settings op would patch them (`withObjectiveRules`: a null horizon
+   * without a mode plans least raw, and cheapest or best multi-output always gets a horizon).
+   */
   create(name: string, by: string, settings?: Partial<PlanSettings>): Project {
     const at = this.#now().toISOString();
     const project: Project = {
       id: this.#newId(), name: name.trim(), createdAt: at, createdBy: by, rev: 0,
-      settings: normalizeSettings({ ...defaultSettings(), ...settings }),
+      settings: normalizeSettings(withObjectiveRules(defaultSettings(), settings ?? {})),
       world: { scanId: null, baseId: null }, placement: null, marks: {}, notes: [],
     };
     this.#db.insertProject({ id: project.id, name: project.name, rev: 0, state: JSON.stringify(project), createdAt: at, updatedAt: at });

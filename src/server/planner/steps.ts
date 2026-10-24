@@ -4,12 +4,14 @@
 
 import { PSEUDO_IDS, tierName } from '../../shared/gt/tiers.ts';
 import { isFluidKey, parseItemKey, type StuffKey } from '../../shared/keys.ts';
+import { joinNames } from '../../shared/layout/format.ts';
 import { machineGroups } from '../../shared/plan/pools.ts';
 import type { Pack } from '../../shared/types/pack.ts';
 import type { BuildStep, LogisticsMode, PlanSettings, PlanStep, PowerSummary } from '../../shared/types/plan.ts';
 import { PROGRAMMED_CIRCUIT_ID } from '../pack/recipes.ts';
 import { cleanroomMachine, stepOneOffs, stepProductName, stepTools, type Bom } from './bom.ts';
 import type { HeldAvoid } from './candidates.ts';
+import { plantingParts, soilWork, type PlantingPart } from './farms/recipes.ts';
 
 /** The gather step names this many base materials. */
 const GATHER_SHOWN = 8;
@@ -136,6 +138,42 @@ function handCraftText(
   return `Hand-craft ${rate} ${stepProductName(pack, step)} at a crafting table` + (tools.length > 0 ? ` (tools: ${tools.join(', ')})` : '');
 }
 
+/** A part the line's crop farms plant (add-on 17): which part, and the farms that plant it. */
+interface Planted { part: PlantingPart['part']; farms: string[] }
+
+/**
+ * What the line's crop farm steps plant (`plantingParts`; a farm pack's recipes say it), by key: which part, and each
+ * farm that plants it, in step order, as `the <crop> farm`, followed for a soil placed as another block by what to do to
+ * it (` (hoe it into Farmland)`).
+ */
+function farmPlantings(pack: Pack, steps: readonly PlanStep[]): Map<StuffKey, Planted> {
+  const out = new Map<StuffKey, Planted>();
+  for (const step of steps) {
+    const farm = (step.farm?.sticks ?? 0) > 0 ? pack.recipeById.get(step.recipeId)?.meta.farm : undefined;
+    if (farm?.kind !== 'crop' || farm.crop === undefined) continue;
+    for (const p of plantingParts(farm)) {
+      const work = p.soil === undefined ? undefined : soilWork(p.soil);
+      const name = `the ${farm.crop.name} farm${work === undefined ? '' : ` (${work})`}`;
+      const planted = out.get(p.key);
+      if (planted === undefined) out.set(p.key, { part: p.part, farms: [name] });
+      else if (!planted.farms.includes(name)) planted.farms.push(name);
+    }
+  }
+  return out;
+}
+
+/**
+ * The craft step of a one-off only crop farms plant (the final review of add-on 17): its crop sticks are made and planted
+ * round the Crop Manager, its soil laid under them, its seeds taken from the group's seed bank — never "stays in the
+ * machine".
+ */
+function plantingText(amount: string, planted: Planted): string {
+  const farms = joinNames(planted.farms);
+  if (planted.part === 'sticks') return `Make ${amount} to plant in ${farms}`;
+  if (planted.part === 'soil') return `Get ${amount} as soil for ${farms}`;
+  return `Take ${amount} from your seed bank for ${farms}`;
+}
+
 function testText(pack: Pack, settings: PlanSettings, target: StuffKey, totalSeconds: number | undefined): string {
   if (settings.mode === 'makeN') {
     const time = totalSeconds === undefined ? '' : ` in about ${Math.max(1, Math.round(totalSeconds / 60))} min`;
@@ -147,7 +185,10 @@ function testText(pack: Pack, settings: PlanSettings, target: StuffKey, totalSec
 
 /**
  * The build steps in order (`order` = position + 1): gather the build's base materials; craft each top-level build
- * line in build-list order; place the machines; connect power; hook up logistics for the project's mode; configure
+ * line in build-list order (a one-off that stays in a machine, a hand-crafting tool, or what a crop farm plants:
+ * `Make <n>× Crop Sticks to plant in the <crop> farm`, `Get <n>× Dirt as soil for the <crop> farm (hoe it into
+ * Farmland)`, `Take <n>× <seeds> from your seed bank for the <crop> farm`, add-on 17); place the machines; connect
+ * power; hook up logistics for the project's mode; configure
  * each step with a programmed circuit or other parts that stay in the machine (hand-crafting tools are none of these,
  * Task 13 ruling), and each supply step where its machine must stand (`supplyText`) — a sharing pool once, by its first
  * step, naming every product of the pool (plan 12); hand-craft each hand-crafting step,
@@ -180,13 +221,18 @@ export function buildSteps(
   const roomKey = cleanroomMachine(pack)?.itemKey;
   // Task 13 ruling: a one-off that is only a hand-crafting tool (no step keeps it in a machine) is worded as a tool.
   const machineParts = new Set(steps.flatMap((s) => stepOneOffs(pack, s, avoid).map((o) => o.key)));
-  const toolsOnly = new Set(steps.flatMap((s) => stepTools(pack, s, avoid)).filter((key) => !machineParts.has(key)));
+  const tools = new Set(steps.flatMap((s) => stepTools(pack, s, avoid)));
+  const toolsOnly = new Set([...tools].filter((key) => !machineParts.has(key)));
+  // Add-on 17: one that only crop farms plant (no step keeps it in a machine or crafts with it) is worded as planting.
+  const plantings = farmPlantings(pack, steps);
   for (const line of bom.lines) {
     const group = line.group ?? 'machines';
     // A key can only repeat in another group; that line gets the group in its id.
     const id = ids.has(`craft:${line.key}`) ? `craft:${group}:${line.key}` : `craft:${line.key}`;
     const amount = amountOf(pack, line.key, line.amount);
+    const planted = machineParts.has(line.key) || tools.has(line.key) ? undefined : plantings.get(line.key);
     if (group === 'one-off' && toolsOnly.has(line.key)) add(id, 'craft', `Make ${amount} (a tool for hand-crafting)`);
+    else if (group === 'one-off' && planted !== undefined) add(id, 'craft', plantingText(amount, planted));
     else if (group === 'one-off') add(id, 'craft', `Make ${amount} (stays in the machine)`);
     else if (group === 'machines' && line.key === roomKey) add(id, 'craft', `Build a cleanroom (${pack.nameOf(line.key)}) around the steps that need it`);
     else add(id, 'craft', `Craft ${amount}`);

@@ -60,6 +60,9 @@ export interface LpRecipe {
    * says why.
    */
   byHand?: string;
+  // optional addition (add-on 17)
+  /** A synthetic farm recipe (`Recipe.meta.farm`, farms/recipes.ts): a Tree Growth Simulator's or a crop farm's. */
+  farm?: true;
 }
 export interface LeafDecision {
   buyable: boolean; cost: number; leafClass: LeafClass | null /* null = not a leaf, must be made */;
@@ -74,6 +77,12 @@ export interface LeafDecision {
    * its purchase and also adds its producers, so the LP weighs digging it against making it.
    */
   alsoMade?: true;
+  // optional addition (add-on 17)
+  /**
+   * A buyable leaf a farm of the line makes (`makeLeafOracle`'s `farmMade`): the walk and its estimate also expand its
+   * producers, exactly as for `alsoMade`, in every mode, so the LP weighs buying it against farming it.
+   */
+  farmMade?: true;
 }
 export type LeafOracle = (key: StuffKey) => LeafDecision;
 export interface GoodInfo {
@@ -85,6 +94,9 @@ export interface GoodInfo {
   // optional addition (plan 12, change request 13)
   /** `LeafDecision.alsoMade`: a leaf the graph also makes (its producers are in `recipes`). */
   alsoMade?: true;
+  // optional addition (add-on 17)
+  /** `LeafDecision.farmMade`: a leaf a farm of the line makes (its producers, the farms among them, are in `recipes`). */
+  farmMade?: true;
 }
 export interface CandidateGraph {
   targets: StuffKey[]; recipes: LpRecipe[] /* sorted by id */; goods: Map<StuffKey, GoodInfo>;
@@ -349,11 +361,18 @@ function judgeMap(pack: Pack, r: Recipe, mapId: string, env: PlanEnv): MapVerdic
 /**
  * Whether the group can run `r` at `env.tier` where it is, and on which map (the first that works, by map id). A GGFab
  * single-use variant of a tool recipe runs only on an Auto Workbench of `bench` (the line's, `benchLine`) that can keep
- * its stock (`benchRefusal`), else it is rejected as `bench` (plan 12, controller ruling 214 (a)).
+ * its stock (`benchRefusal`), else it is rejected as `bench` (plan 12, controller ruling 214 (a)). A synthetic farm
+ * recipe (`Recipe.meta.farm`, add-on 17) runs on its first map wherever it has machines (farms/setup.ts chose them for
+ * the line: owned, or buildable at its tier), else `no-machine`; the export's own tree farm rows stay fake.
  */
 export function acceptRecipe(pack: Pack, r: Recipe, env: PlanEnv, bench?: BenchLine): Acceptance {
   if (r.flags.fake === true) return { ok: false, why: 'fake' };
   if (r.flags.opaque === true) return { ok: false, why: 'opaque' };
+  const farm = r.meta.farm;
+  if (farm !== undefined) {
+    const mapId = r.maps[0];
+    return farm.machines.length > 0 && mapId !== undefined ? { ok: true, mapId } : { ok: false, why: 'no-machine' };
+  }
   if (isBenchVariant(r) && (bench === undefined || benchRefusal(pack, r, bench) !== undefined)) return { ok: false, why: 'bench' };
   for (const [name, rule] of Object.entries(EXCLUSION_RULES)) {
     if (env.excluded.has(name) && rule(r, pack)) return { ok: false, why: 'excluded' };
@@ -552,8 +571,16 @@ interface Estimates {
    * each consumed slot it does not hand on, each good once; null when some such slot has no priced option.
    */
   inputsOf: (r: Recipe) => readonly StuffKey[] | null;
-  /** The walk met a leaf the line may also make (`LeafDecision.alsoMade`). */
+  /** The walk met a leaf the line may also make (`LeafDecision.alsoMade`, or `farmMade`: `alsoWalked`). */
   metAlsoMade: boolean;
+}
+
+/**
+ * A buyable leaf the walk also expands (its producers join the graph beside its purchase): a gathered world block the
+ * line may make (`LeafDecision.alsoMade`, plan 12), or a good a farm of the line makes (`farmMade`, add-on 17).
+ */
+function alsoWalked(d: Pick<LeafDecision, 'alsoMade' | 'farmMade'>): boolean {
+  return d.alsoMade === true || d.farmMade === true;
 }
 
 /** What `buildCandidates` ranks a good's producers and a slot's options by, from one estimate pass (`estimateCosts`). */
@@ -579,9 +606,9 @@ interface EstimatePass {
  * its cheapest option, charged in full to each output, except the slots it hands on (`carried`: never charged, never
  * waited for). Goods settle cheapest first and once each (a generalized Dijkstra), so a gain loop in the data (x → 2 y,
  * y → x) cannot drive its goods' estimates to 0. A second pass over the same recipes counts the steps to each good.
- * A leaf the line may also make (`alsoMade`, plan 12) is a plain leaf at its cost, unless `walkMade`: then it is seeded
- * at its cost but its producers are walked too and offer what making it costs, so its estimate is the cheaper of
- * digging and making it (any other leaf keeps its own cost).
+ * A leaf the line may also make (`alsoMade`, plan 12, or `farmMade`, add-on 17: `alsoWalked`) is a plain leaf at its
+ * cost, unless `walkMade`: then it is seeded at its cost but its producers are walked too and offer what making it costs,
+ * so its estimate is the cheaper of buying and making it (any other leaf keeps its own cost).
  */
 function estimateCosts(
   pack: Pack, targets: readonly StuffKey[], decide: (key: StuffKey) => LeafDecision, usable: (r: Recipe) => boolean, optionsOf: SlotOptions,
@@ -599,15 +626,15 @@ function estimateCosts(
   /** Whether a run of a recipe offers its cost to `key`: any good not bought, and with `walkMade` one also made. */
   const offersTo = (key: StuffKey): boolean => {
     const d = decide(key);
-    return !d.buyable || (walkMade && d.alsoMade === true);
+    return !d.buyable || (walkMade && alsoWalked(d));
   };
   for (let i = 0; i < walk.length; i++) {
     const key = walk[i] as StuffKey;
     const d = decide(key);
     if (d.buyable) {
       leaves.push([key, d.cost]);
-      if (d.alsoMade === true) metAlsoMade = true;
-      if (!walkMade || d.alsoMade !== true) continue;
+      if (alsoWalked(d)) metAlsoMade = true;
+      if (!walkMade || !alsoWalked(d)) continue;
     }
     for (const index of pack.producers.get(key) ?? []) {
       const r = pack.recipes[index];
@@ -850,6 +877,9 @@ export interface CandidateOptions {
  * dug sand makes worth keeping. Without such a leaf, one estimate as before. Plan 12, controller ruling 214: with the
  * line's Auto Workbenches (`opts.bench`), the GGFab single-use variants of tool recipes they run are candidates, each
  * kept with its original as one producer, and a crafting-table recipe none of them runs is marked `LpRecipe.byHand`.
+ * Add-on 17: a leaf a farm of the line makes (`LeafDecision.farmMade`) is bought and walked as such a leaf is, and on the
+ * line's farm pack (farms/pack.ts) a good's farm recipes are all kept beside the producers the pruning keeps
+ * (`LpRecipe.farm`).
  */
 export function buildCandidates(
   pack: Pack, settings: PlanSettings, env: PlanEnv, leaf: LeafOracle, targets: StuffKey[], opts: CandidateOptions = {},
@@ -882,11 +912,12 @@ export function buildCandidates(
   const register = (key: StuffKey): GoodInfo => {
     let good = goods.get(key);
     if (good === undefined) {
-      const { buyable, cost, leafClass, steps, free, alsoMade } = decide(key);
+      const { buyable, cost, leafClass, steps, free, alsoMade, farmMade } = decide(key);
       good = { key, buyable, cost, leafClass, virtual: false };
       if (steps !== undefined) good.steps = steps;
       if (free !== undefined) good.free = free;
       if (alsoMade === true) good.alsoMade = true;
+      if (farmMade === true) good.farmMade = true;
       goods.set(key, good);
     }
     return good;
@@ -894,7 +925,7 @@ export function buildCandidates(
   /** A good some recipe consumes: walked unless it is a leaf the line only buys. */
   const need = (key: StuffKey): void => {
     const good = register(key);
-    if ((!good.buyable || good.alsoMade === true) && !queued.has(key)) {
+    if ((!good.buyable || alsoWalked(good)) && !queued.has(key)) {
       queued.add(key);
       queue.push(key);
     }
@@ -1102,6 +1133,7 @@ export function buildCandidates(
     const main = r.outputs[0]?.key;
     if (main !== undefined) lp.main = main;
     if (r.meta.supply !== undefined) lp.supply = true;
+    if (r.meta.farm !== undefined) lp.farm = true;
     // a crafting-table recipe none of the line's Auto Workbenches runs is crafted by hand (controller ruling 214)
     const byHand = opts.bench !== undefined && mapId === 'crafting' && !isBenchVariant(r) ? benchRefusal(pack, r, opts.bench) : undefined;
     if (byHand !== undefined) lp.byHand = byHand;
@@ -1162,10 +1194,15 @@ export function buildCandidates(
       if (machine !== undefined) entry.machine = machine;
       rejected.push(entry);
     }
-    // One pass keeps its picks in its own order; two keep every producer either keeps, in id order.
-    const picks = passes.map((pass) => keptBy(pass, key, accepted));
+    // One pass keeps its picks in its own order; two keep every producer either keeps, in id order. The line's farms
+    // (add-on 17) are kept apart from that pruning, every one: they are chosen per good already (farms/recipes.ts), and an
+    // estimate of raw material alone, blind to the machines and plantings they need, rates them near 0 and would cut
+    // the export's producers and the other farms beside the cheapest.
+    const farms = accepted.filter((x) => x.r.meta.farm !== undefined);
+    const others = farms.length === 0 ? accepted : accepted.filter((x) => x.r.meta.farm === undefined);
+    const picks = passes.map((pass) => keptBy(pass, key, others));
     const kept = picks.length === 1 ? (picks[0] as Producer[]) : [...new Set(picks.flat())].sort((a, b) => byString(a.r.id, b.r.id));
-    for (const { r, mapId } of kept) addRecipe(r, mapId);
+    for (const { r, mapId } of [...kept, ...farms]) addRecipe(r, mapId);
     if (accepted.length === 0 && rejected.length > 0) blocked.set(key, rejected.sort((a, b) => byString(a.recipeId, b.recipeId)));
   };
 

@@ -42,6 +42,16 @@ export interface Db {
   /** Sets the token's `last_used_at`. */
   touchToken(id: string, at: string): void;
   countTokens(projectId: string): number;
+  // Add-on 17 (architecture §11.45 (4)): the `meta` table's other rows, such as the published surplus summaries
+  // (`surplus:<project id>`), with no schema change; `schema_version` stays the migrations' alone.
+  /** The value stored under `key`; undefined when there is none. */
+  getMeta(key: string): string | undefined;
+  /** Stores `value` under `key`, replacing what was there. */
+  setMeta(key: string, value: string): void;
+  /** True when there was a row under `key` and it is gone now. */
+  deleteMeta(key: string): boolean;
+  /** Every row whose key starts with `prefix`, by key. */
+  listMeta(prefix: string): Array<{ key: string; value: string }>;
   backup(toFile: string): Promise<void>;
   close(): void;
 }
@@ -166,6 +176,11 @@ export function openDb(file: string): Db {
   const deleteTokenP = sql.prepare('DELETE FROM project_token WHERE project_id = ? AND id = ?');
   const touchTokenP = sql.prepare('UPDATE project_token SET last_used_at = ? WHERE id = ?');
   const countTokensP = sql.prepare('SELECT COUNT(*) AS n FROM project_token WHERE project_id = ?');
+  const getMetaP = sql.prepare('SELECT value FROM meta WHERE key = ?');
+  const setMetaP = sql.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value');
+  const deleteMetaP = sql.prepare('DELETE FROM meta WHERE key = ?');
+  // a prefix match by characters, as SQLite counts them, with no LIKE wildcards to escape
+  const listMetaP = sql.prepare('SELECT key, value FROM meta WHERE substr(key, 1, length(?)) = ? ORDER BY key');
   let depth = 0;
 
   function tx<T>(fn: () => T): T {
@@ -244,6 +259,19 @@ export function openDb(file: string): Db {
     },
     countTokens(projectId) {
       return Number((countTokensP.get(projectId) as { n: number | bigint }).n);
+    },
+    getMeta(key) {
+      const r = getMetaP.get(key) as { value: string } | undefined;
+      return r === undefined ? undefined : String(r.value);
+    },
+    setMeta(key, value) {
+      setMetaP.run(key, value);
+    },
+    deleteMeta(key) {
+      return Number(deleteMetaP.run(key).changes) > 0;
+    },
+    listMeta(prefix) {
+      return (listMetaP.all(prefix, prefix) as Array<{ key: string; value: string }>).map((r) => ({ key: String(r.key), value: String(r.value) }));
     },
     async backup(toFile) {
       mkdirSync(dirname(toFile), { recursive: true });

@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { openDb, backupDaily, type Db } from '../../../src/server/db/db.ts';
 import { ProjectStore, OpError, PLANNER_UPDATE } from '../../../src/server/projects/store.ts';
+import { defaultFarmSettings } from '../../../src/shared/types/farm.ts';
+import type { PlanSettings } from '../../../src/shared/types/plan.ts';
 
 let dir: string; let db: Db; let store: ProjectStore; let t = 0;
 const now = () => new Date(Date.UTC(2026, 9, 17, 12, 0, t++));
@@ -63,6 +65,22 @@ describe('ProjectStore', () => {
     db.updateProject({ ...stored, state: JSON.stringify(hand) });
     expect(store.get(byHand.id)?.settings.automateCrafting).toBe(true);
     expect(store.get(byHand.id)?.rev).toBe(stored.rev);
+  });
+  // Add-on 17 (architecture §11.45 (1)): creating a project applies a settings op's planning-mode rules to the defaults,
+  // so "Ignore build cost" creates a least-raw project and cheapest or multi-output always gets a horizon.
+  it('applies the same rules when a project is created', () => {
+    const created = (settings?: Partial<PlanSettings>): PlanSettings => {
+      const p = store.create('P', 'ann', settings);
+      expect(store.get(p.id)?.settings).toEqual(p.settings);   // stored as created
+      return p.settings;
+    };
+    expect(created({ buildHorizonHours: null })).toMatchObject({ objective: 'least-raw', buildHorizonHours: null });
+    expect(created({ objective: 'multi-output', buildHorizonHours: null })).toMatchObject({ objective: 'multi-output', buildHorizonHours: 24 });
+    expect(created({ objective: 'least-raw' })).toMatchObject({ objective: 'least-raw', buildHorizonHours: 24 });
+    expect(created({})).toMatchObject({ objective: 'cheapest', buildHorizonHours: 24, useSurplus: true });
+    const plain = created();
+    expect(plain).toMatchObject({ objective: 'cheapest', buildHorizonHours: 24, useSurplus: true });
+    expect(plain.farms).toEqual(defaultFarmSettings());
   });
 });
 

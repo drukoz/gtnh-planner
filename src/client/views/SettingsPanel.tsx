@@ -1,17 +1,20 @@
-// The project's settings beside its views (spec §3.2–§3.3b, §3.6, §3.11): what to make and how much, the tier, where
-// the group can mine, how the line is fed, what materials cost, which materials to avoid, which recipe groups to skip,
-// the planner's options (supporting lines, how much a machine is worth in raw material, what the build cost of new
-// machines is counted against, the tier they are built at and when a multiblock is, reusing the machines the group has),
-// the machines it has that no world scan shows, and the lists the panels fill: what the group already makes, makes
-// itself, already has a supply of, and the ingredient options it pinned.
+// The project's settings beside its views (spec §3.2–§3.3b, §3.6, §3.11): what to make and how much, what to plan for
+// (the planning mode, what build cost is counted against and how much a machine weighs against raw material: add-on
+// 17), the tier, where the group can mine, how the line is fed, what materials cost, which materials to avoid, which
+// recipe groups to skip, the planner's options (supporting lines, the tier new machines are built at and when a
+// multiblock is, reusing the machines the group has), the farms the planner may build or reuse and those the group runs,
+// taking other projects' surplus, the machines it has that no world scan shows, and the lists the panels fill: what the
+// group already makes, makes itself, already has a supply of, and the ingredient options it pinned.
 // Everyone sees the same settings: every change sends one `settings` op carrying whole field values, and nothing is
-// sent for an amount or a cost that would be refused.
+// sent for an amount, a cost or a farm number that would be refused.
 
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactElement } from 'react';
 import type { StuffKey } from '../../shared/keys.ts';
 import { COIL_HEATS } from '../../shared/gt/overclock.ts';
-import { tierName } from '../../shared/gt/tiers.ts';
+import { TIER_NAMES, tierName } from '../../shared/gt/tiers.ts';
+import { MAX_CROP_LAYERS, MAX_CROP_MANAGER_TIER, MAX_LIKED_TAGS } from '../../shared/project/apply-op.ts';
 import type { PackInfo } from '../../shared/types/api.ts';
+import { FERTILIZER_CHOICES, TOOL_MATERIALS, type CropStats, type FarmKind, type FarmSettings, type RunningFarm } from '../../shared/types/farm.ts';
 import type { SearchHit } from '../../shared/types/pack.ts';
 import { LogisticsMode, type Plan, type PlanSettings } from '../../shared/types/plan.ts';
 import { AvoidPicker } from '../components/AvoidPicker.tsx';
@@ -19,17 +22,26 @@ import { ItemIcon } from '../components/ItemIcon.tsx';
 import { ItemSearch } from '../components/ItemSearch.tsx';
 import { OwnedMachinesEditor } from '../components/OwnedMachinesEditor.tsx';
 import { TierPicker } from '../components/TierPicker.tsx';
+import { formatNumber } from '../format.ts';
 import { haveSupplyPatch, optionPatch } from './flow-model.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
 import {
-  BUILD_HORIZON_PRESETS, EXCLUSION_LABELS, MULTIBLOCK_CHOICES, buildTierOptions, buildTierPatch, dimOverridePatch, dimRows, groupDimRows, horizonChoice,
-  horizonPatch, isStuffKey, multiblocksPatch, optionPinRows, parseAmount, parseCost, stepChargeOf, stepChargeOptions, stepChargePatch, toggleList,
+  BUILD_HORIZON_PRESETS, EXCLUSION_LABELS, FERTILIZER_LABELS, MULTIBLOCK_CHOICES, OBJECTIVE_CHOICES, TGS_TOOL_CHOICES, buildTierOptions, buildTierPatch,
+  dimOverridePatch, dimRows, farmKindsWith, farmTierOptions, farmsOf, farmsPatch, groupDimRows, hasCropTable, horizonChoice, horizonPatch, isStuffKey,
+  multiblocksPatch, objectivePatch, optionPinRows, parseAmount, parseCost, parsePerMinute, parseStat, planningMode, runningFarmRows, runningFarmWith,
+  runningFarmWithout, stepChargeOf, stepChargeOptions, stepChargePatch, toggleList,
 } from './settings-model.ts';
 
 /** Typing pauses this long before the amount is sent (one plan per pause, not one per keystroke). */
 const AMOUNT_DELAY_MS = 500;
+/** The highest tier a Tree Growth Simulator's energy hatch can be (MAX). */
+const TOP_TIER = TIER_NAMES.length - 1;
+/** The layers of crop sticks and the liked biome tags a Crop Manager's settings offer (validateOp's limits). */
+const LAYER_CHOICES: readonly number[] = Array.from({ length: MAX_CROP_LAYERS }, (_, i) => i + 1);
+const LIKED_TAG_CHOICES: readonly number[] = Array.from({ length: MAX_LIKED_TAGS + 1 }, (_, i) => i);
 
 type Patch = (patch: Partial<PlanSettings>) => void;
+type Send = ProjectViewProps['send'];
 type NameOf = (key: string) => string;
 
 const MODES: ReadonlyArray<{ value: PlanSettings['mode']; label: string }> = [
@@ -405,17 +417,22 @@ function SkipSection(props: { info: PackInfo | null; settings: PlanSettings; pat
 }
 
 /**
- * "Steps vs raw material" (fix spec §3, §6.4): the presets as "<name> (<n>%)", and a stored value that is none of them
- * as "Custom (<n>%)"; picking one sends `stepCharge`.
+ * "Machines vs raw material" (fix spec §3, §6.4; ruling S17, formerly "Steps vs raw material"): the presets as "<name>
+ * (<n>%)", and a stored value that is none of them as "Custom (<n>%)"; picking one sends `stepCharge`. What the share
+ * weighs follows the mode: in least raw material a recipe step must save it, in the modes that count build cost each new
+ * machine costs it over the horizon (the batch in Make N).
  */
 export function StepChargeField(props: { settings: PlanSettings; patch: Patch }): ReactElement {
   const { settings, patch } = props;
   const charge = stepChargeOf(settings);
+  const hint = planningMode(settings) === 'least-raw'
+    ? "A recipe step is built only when it saves this share of the line's least raw material."
+    : `Each new machine costs this share of the line's least raw material over the ${settings.mode === 'makeN' ? 'batch' : 'horizon'}, on top of its build.`;
   return (
     <label className="field">
-      <span>Steps vs raw material</span>
+      <span>Machines vs raw material</span>
       <select
-        aria-label="Steps vs raw material"
+        aria-label="Machines vs raw material"
         value={String(charge)}
         onChange={(e) => {
           const next = stepChargePatch(e.currentTarget.value);
@@ -424,7 +441,7 @@ export function StepChargeField(props: { settings: PlanSettings; patch: Patch })
       >
         {stepChargeOptions(charge).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select>
-      <span className="muted small">A recipe step is built only when it saves this share of the line&apos;s least raw material.</span>
+      <span className="muted small">{hint}</span>
     </label>
   );
 }
@@ -433,7 +450,7 @@ export function StepChargeField(props: { settings: PlanSettings; patch: Patch })
  * "Count build cost against" (plan 12 Task 7, design spec §3.3): the hours of running the build cost of new machines is
  * weighed against, as a preset ("24 hours" for a project stored before the setting) or a stored value no preset names as
  * "Custom (<n> h)"; picking one sends `buildHorizonHours`. In Make N, which always counts the build cost against the batch
- * (controller ruling OQ6), a note takes its place.
+ * (controller ruling OQ6), a note takes its place. "Plan for" shows it for the modes that count build cost only.
  */
 export function BuildHorizonField(props: { settings: PlanSettings; patch: Patch }): ReactElement {
   const { settings, patch } = props;
@@ -526,10 +543,43 @@ export function ReuseOwnedField(props: { settings: PlanSettings; patch: Patch })
 }
 
 /**
- * The planner's options: supporting lines, how much a machine weighs against raw material, what the build cost is counted
- * against, the tier new machines are built at and when a multiblock is built (plan 12 Task 7, the user's ruling 224),
- * reusing the machines the group has, and the EBF coil. Crafting-table steps always run on an Auto Workbench, so there is
- * no switch for them (the user's ruling 180).
+ * "Plan for" (add-on 17, design spec §3.3, architecture §11.45 (1)): the planning modes as radios, each with what it
+ * counts, the project's mode as the planner reads it checked (`planningMode`); below them, for the modes that count build
+ * cost, what that cost is counted against (the horizon in rate mode, the batch in Make N), and "Machines vs raw material"
+ * (ruling S17), shown in every mode as it was before. Picking a mode sends `objectivePatch`.
+ */
+export function PlanForSection(props: { settings: PlanSettings; send: Send }): ReactElement {
+  const { settings, send } = props;
+  const patch: Patch = (p) => send([{ op: 'settings', patch: p }]);
+  const mode = planningMode(settings);
+  return (
+    <section className="settings-section">
+      <fieldset className="choice">
+        <legend className="settings-title">Plan for</legend>
+        {OBJECTIVE_CHOICES.map((c) => (
+          <div key={c.value} className="objective-choice">
+            <label className="check">
+              <input
+                type="radio" name="objective" value={c.value} checked={c.value === mode} aria-describedby={`objective-hint-${c.value}`}
+                onChange={() => send([{ op: 'settings', patch: objectivePatch(c.value, settings) }])}
+              />
+              {c.label}
+            </label>
+            <p id={`objective-hint-${c.value}`} className="choice-hint muted small">{c.hint}</p>
+          </div>
+        ))}
+      </fieldset>
+      {mode !== 'least-raw' && <BuildHorizonField settings={settings} patch={patch} />}
+      <StepChargeField settings={settings} patch={patch} />
+    </section>
+  );
+}
+
+/**
+ * The planner's options: supporting lines, the tier new machines are built at and when a multiblock is built (plan 12
+ * Task 7, the user's ruling 224), reusing the machines the group has, and the EBF coil. What the line plans for and how
+ * much a machine weighs are under "Plan for". Crafting-table steps always run on an Auto Workbench, so there is no switch
+ * for them (the user's ruling 180).
  */
 function OptionsSection(props: { settings: PlanSettings; plan: Plan | null; patch: Patch }): ReactElement {
   const { settings, plan, patch } = props;
@@ -543,8 +593,6 @@ function OptionsSection(props: { settings: PlanSettings; plan: Plan | null; patc
         <input type="checkbox" checked={settings.routeDerived} onChange={(e) => patch({ routeDerived: e.currentTarget.checked })} />
         Plan supporting lines for alloys, plastics and chemicals (off: buy the shallow ones)
       </label>
-      <StepChargeField settings={settings} patch={patch} />
-      <BuildHorizonField settings={settings} patch={patch} />
       <BuildTierField settings={settings} plan={plan} patch={patch} />
       <MultiblocksField settings={settings} patch={patch} />
       <ReuseOwnedField settings={settings} patch={patch} />
@@ -558,6 +606,298 @@ function OptionsSection(props: { settings: PlanSettings; plan: Plan | null; patc
           {coils.map((c) => <option key={c.heat} value={String(c.heat)}>{c.label}</option>)}
         </select>
       </label>
+    </section>
+  );
+}
+
+/**
+ * "Farms" (add-on 17, design spec §3.3, architecture §11.45 (2)): the farms the planner may build or reuse — the Tree
+ * Growth Simulator, with its energy hatch, the tools in its input bus and their material; CropsNH crop sticks under a
+ * Crop Manager, with its tier, the seeds' stats, the layers, the liked biome tags, open sky and fertilizer — each kind's
+ * fields shown while it is on. While the active export has no crop table (ruling R10), the Crop Manager part says that
+ * crop farms need a newer export instead: the one place this is said. Every change sends the farm settings whole.
+ */
+export function FarmsSection(props: { info: PackInfo | null; settings: PlanSettings; plan: Plan | null; patch: Patch }): ReactElement {
+  const { info, settings, plan, patch } = props;
+  const farms = farmsOf(settings);
+  // The project's tier, else the plan's (the world's, as the planner resolved it); unknown until the plan says it.
+  const projectTier = settings.tier ?? plan?.tier ?? null;
+  const kind = (k: FarmKind, label: string): ReactElement => (
+    <label className="check">
+      <input
+        type="checkbox" name={`farm-${k}`} checked={farms.kinds.includes(k)}
+        onChange={(e) => {
+          const on = e.currentTarget.checked;
+          patch(farmsPatch(settings, (f) => ({ ...f, kinds: farmKindsWith(f.kinds, k, on) })));
+        }}
+      />
+      {label}
+    </label>
+  );
+  return (
+    <section className="settings-section">
+      <h3>Farms</h3>
+      <p className="muted small">Farms the planner may build, or reuse where you have them, as renewable sources.</p>
+      {kind('tgs', 'Tree Growth Simulator')}
+      {farms.kinds.includes('tgs') && <TreeFarmFields settings={settings} projectTier={projectTier} patch={patch} />}
+      {kind('crop-manager', 'CropsNH Crop Manager')}
+      {hasCropTable(info) === false
+        ? <p className="muted small">Crop farms need the crop table of a newer recipe export (exporter 0.5.1 or later).</p>
+        : farms.kinds.includes('crop-manager') && <CropFarmFields settings={settings} projectTier={projectTier} patch={patch} />}
+    </section>
+  );
+}
+
+/**
+ * One select of the farm settings, as elements (no state, so the panel's tests reach its select): `label` above it (its
+ * accessible name too), `options`, the value it has, `onPick` for another one, and a hint below it.
+ */
+function farmSelect(props: {
+  label: string; value: string; options: ReadonlyArray<{ value: string; label: string }>; onPick(value: string): void; hint?: string;
+}): ReactElement {
+  const { label, value, options, onPick, hint } = props;
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <select aria-label={label} value={value} onChange={(e) => { if (e.currentTarget.value !== value) onPick(e.currentTarget.value); }}>
+        {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+      {hint !== undefined && <span className="muted small">{hint}</span>}
+    </label>
+  );
+}
+
+/** Whole numbers as the options of a farm select. */
+function numberOptions(values: readonly number[]): Array<{ value: string; label: string }> {
+  return values.map((n) => ({ value: String(n), label: String(n) }));
+}
+
+/**
+ * A Tree Growth Simulator's settings: its energy hatch (from LV up to the project's tier), the tools its input bus holds,
+ * one per mode, and their material.
+ */
+export function TreeFarmFields(props: { settings: PlanSettings; projectTier: number | null; patch: Patch }): ReactElement {
+  const { settings, projectTier, patch } = props;
+  const { tgs } = farmsOf(settings);
+  const change = (next: Partial<FarmSettings['tgs']>): void => patch(farmsPatch(settings, (f) => ({ ...f, tgs: { ...f.tgs, ...next } })));
+  return (
+    <div className="farm-fields">
+      {farmSelect({
+        label: 'Energy hatch', value: String(tgs.tier), options: farmTierOptions(projectTier, tgs.tier, TOP_TIER), onPick: (v) => change({ tier: Number(v) }),
+      })}
+      <fieldset className="choice">
+        <legend>Tools in its input bus</legend>
+        {TGS_TOOL_CHOICES.map((t) => (
+          <label key={t.mode} className="check">
+            <input type="checkbox" checked={tgs.tools[t.mode]} onChange={(e) => change({ tools: { ...tgs.tools, [t.mode]: e.currentTarget.checked } })} />
+            {t.label}
+          </label>
+        ))}
+      </fieldset>
+      {farmSelect({
+        label: 'Tool material', value: tgs.toolMaterial, options: TOOL_MATERIALS.map((m) => ({ value: m, label: m })), onPick: (v) => change({ toolMaterial: v }),
+      })}
+    </div>
+  );
+}
+
+/**
+ * A Crop Manager's settings: its tier (from LV up to the project's tier, at most UMV), the seeds' growth, gain and
+ * resistance, the layers of crop sticks under it, how many of the crop's liked biome tags the farm's biome has, open sky
+ * and fertilizer.
+ */
+export function CropFarmFields(props: { settings: PlanSettings; projectTier: number | null; patch: Patch }): ReactElement {
+  const { settings, projectTier, patch } = props;
+  const { crops } = farmsOf(settings);
+  const change = (next: Partial<FarmSettings['crops']>): void => patch(farmsPatch(settings, (f) => ({ ...f, crops: { ...f.crops, ...next } })));
+  const stat = (name: keyof CropStats, label: string): ReactElement => (
+    <StatField key={name} label={label} value={crops.stats[name]} onValue={(value) => change({ stats: { ...crops.stats, [name]: value } })} />
+  );
+  return (
+    <div className="farm-fields">
+      {farmSelect({
+        label: 'Crop Manager voltage', value: String(crops.tier), options: farmTierOptions(projectTier, crops.tier, MAX_CROP_MANAGER_TIER),
+        onPick: (v) => change({ tier: Number(v) }),
+      })}
+      <div className="row">{stat('growth', 'Growth')}{stat('gain', 'Gain')}{stat('resistance', 'Resistance')}</div>
+      {farmSelect({
+        label: 'Layers', value: String(crops.layers), options: numberOptions(LAYER_CHOICES), onPick: (v) => change({ layers: Number(v) }),
+        hint: 'Only the top layer sees the sky; with more than one, every layer is planned without it',
+      })}
+      {farmSelect({
+        label: 'Liked biome tags', value: String(crops.likedTags), options: numberOptions(LIKED_TAG_CHOICES), onPick: (v) => change({ likedTags: Number(v) }),
+      })}
+      <label className="check">
+        <input type="checkbox" name="crop-sky" checked={crops.sky} onChange={(e) => change({ sky: e.currentTarget.checked })} />
+        Open sky
+      </label>
+      {farmSelect({
+        label: 'Fertilizer', value: crops.fertilizer, options: FERTILIZER_CHOICES.map((f) => ({ value: f, label: FERTILIZER_LABELS[f] })),
+        onPick: (v) => {
+          const fertilizer = FERTILIZER_CHOICES.find((f) => f === v);
+          if (fertilizer !== undefined) change({ fertilizer });
+        },
+      })}
+    </div>
+  );
+}
+
+/** A crop seed's stat as typed, with what is being typed kept here until it is sent or dropped (`StatInput`). */
+function StatField(props: { label: string; value: number; onValue(value: number): void }): ReactElement {
+  const [draft, setDraft] = useState<string | null>(null);   // null: show the shared value
+  return <StatInput {...props} draft={draft} onDraft={setDraft} />;
+}
+
+/**
+ * A crop seed's growth, gain or resistance: `draft` while one is typed, sent (`onValue`) on Enter or leaving the field
+ * when it is a whole number from 1 to 31 that differs; anything else says so and sends nothing. Escape drops the draft.
+ */
+export function StatInput(props: {
+  label: string; value: number; draft: string | null; onDraft(text: string | null): void; onValue(value: number): void;
+}): ReactElement {
+  const { label, value, draft, onDraft, onValue } = props;
+  const parsed = draft === null ? null : parseStat(draft);
+  const error = parsed !== null && 'error' in parsed ? parsed.error : null;
+  const commit = (text: string): void => {
+    const p = parseStat(text);
+    if (!('value' in p)) return;
+    if (p.value !== value) onValue(p.value);
+    onDraft(null);
+  };
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <input
+        className="stat-input" type="text" inputMode="numeric" autoComplete="off" aria-label={label} aria-invalid={error !== null}
+        value={draft ?? String(value)}
+        onChange={(e) => onDraft(e.currentTarget.value)}
+        onBlur={(e) => commit(e.currentTarget.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') commit(e.currentTarget.value);
+          if (e.key === 'Escape') onDraft(null);
+        }}
+      />
+      {error !== null && <span className="field-error error" role="alert">{error}</span>}
+    </label>
+  );
+}
+
+/**
+ * "Farms we already run" (add-on 17, architecture §11.45 (2); ruling S20): the farms the group runs — Forestry farms and
+ * any other — as what each gives a minute, which a running line takes free up to that rate. A project setting: each
+ * project that should use the group's farm lists it. One row per output with its remove button, and a form that adds a
+ * farm: its name, the item it gives and how many a minute.
+ */
+function RunningFarmsSection(props: { settings: PlanSettings; patch: Patch; nameOf: NameOf; remember(hit: SearchHit): void }): ReactElement {
+  const { settings, patch, nameOf, remember } = props;
+  const { running } = farmsOf(settings);
+  const rows = runningFarmRows(running);
+  const send = (next: RunningFarm[]): void => patch(farmsPatch(settings, (f) => ({ ...f, running: next })));
+  const add = (farm: { name: string; key: StuffKey; perMinute: number }): string | null => {
+    const next = runningFarmWith(running, farm);
+    if ('error' in next) return next.error;
+    send(next.running);
+    return null;
+  };
+  return (
+    <section className="settings-section">
+      <h3>Farms we already run</h3>
+      <p className="muted small">Forestry farms and any other farm the group runs: a running line takes what they give free, up to the rate given here.</p>
+      {settings.mode === 'makeN' && <p className="muted small">A Make N batch takes nothing from them.</p>}
+      {rows.length === 0 ? (
+        <p className="muted">Nothing yet.</p>
+      ) : (
+        <ul className="key-list">
+          {rows.map((row) => {
+            const item = nameOf(row.key);
+            return (
+              <li key={row.id} data-running-farm={row.id}>
+                <ItemIcon itemKey={row.key} size={20} name={item} />
+                <span className="key-name" title={row.key}>{`${row.name}: ${item} · ${formatNumber(row.perMinute)}/min`}</span>
+                <button
+                  type="button" className="small" aria-label={`Remove ${row.name}: ${item}`}
+                  onClick={() => send(runningFarmWithout(running, row.farm, row.output))}
+                >
+                  Remove
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      <AddRunningFarm onAdd={add} remember={remember} />
+    </section>
+  );
+}
+
+/** Adds a farm the group runs: its name, the item it gives (`ItemSearch`) and how many a minute; `onAdd` says why it could not (null once sent). */
+function AddRunningFarm(props: {
+  onAdd(farm: { name: string; key: StuffKey; perMinute: number }): string | null; remember(hit: SearchHit): void;
+}): ReactElement {
+  const { onAdd, remember } = props;
+  const [name, setName] = useState('');
+  const [item, setItem] = useState<SearchHit | null>(null);
+  const [rate, setRate] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const submit = (e: FormEvent<HTMLFormElement>): void => {
+    e.preventDefault();
+    const perMinute = parsePerMinute(rate);
+    const problem = item === null ? 'Pick the item it gives' : 'error' in perMinute ? perMinute.error : onAdd({ name, key: item.key, perMinute: perMinute.value });
+    setError(problem);
+    if (problem === null) {
+      setName('');
+      setItem(null);
+      setRate('');
+    }
+  };
+  return (
+    <form className="cost-add" aria-label="Add a farm" onSubmit={submit}>
+      <label className="field">
+        <span>Farm</span>
+        <input value={name} placeholder="e.g. Rubber tree farm" autoComplete="off" onChange={(e) => setName(e.currentTarget.value)} />
+      </label>
+      {item === null ? (
+        <ItemSearch
+          placeholder="Item it gives"
+          onPick={(hit) => {
+            remember(hit);
+            setItem(hit);
+          }}
+        />
+      ) : (
+        <div className="settings-target">
+          <ItemIcon itemKey={item.key} size={20} name={item.name} />
+          <span className="settings-target-name">{item.name}</span>
+          <button type="button" className="small" onClick={() => setItem(null)}>Change</button>
+        </div>
+      )}
+      <div className="row">
+        <label className="field cost-field">
+          <span>How many a minute</span>
+          <input type="text" inputMode="decimal" autoComplete="off" value={rate} onChange={(e) => setRate(e.currentTarget.value)} />
+        </label>
+        <button type="submit">Add a farm</button>
+      </div>
+      {error !== null && <p className="field-error error" role="alert">{error}</p>}
+    </form>
+  );
+}
+
+/**
+ * "Use other projects' surplus" (add-on 17, architecture §11.45 (4)): on (the default, also for a project stored before
+ * the switch), a running line takes what the group's other projects make and do not need, up to their surplus, before it
+ * buys or makes it. A Make N batch neither takes nor offers surplus, so the switch shows in rate mode only.
+ */
+export function SurplusSection(props: { settings: PlanSettings; patch: Patch }): ReactElement | null {
+  const { settings, patch } = props;
+  if (settings.mode !== 'rate') return null;
+  return (
+    <section className="settings-section">
+      <label className="check">
+        <input type="checkbox" name="useSurplus" checked={settings.useSurplus !== false} onChange={(e) => patch({ useSurplus: e.currentTarget.checked })} />
+        Use other projects&apos; surplus
+      </label>
+      <p className="muted small">The line takes what the group&apos;s other projects make and do not need, up to their surplus, before it buys or makes it.</p>
     </section>
   );
 }
@@ -661,6 +1001,7 @@ export function SettingsPanel(props: ProjectViewProps & { info: PackInfo | null 
   return (
     <div className="settings">
       <MakeSection settings={settings} patch={patch} nameOf={nameOf} remember={remember} />
+      <PlanForSection settings={settings} send={send} />
       <TierSection settings={settings} plan={plan} patch={patch} />
       <DimsSection info={info} settings={settings} plan={plan} patch={patch} />
       <section className="settings-section">
@@ -670,6 +1011,9 @@ export function SettingsPanel(props: ProjectViewProps & { info: PackInfo | null 
       <AvoidSection info={info} settings={settings} send={send} nameOf={nameOf} remember={remember} />
       <SkipSection info={info} settings={settings} patch={patch} />
       <OptionsSection settings={settings} plan={plan} patch={patch} />
+      <FarmsSection info={info} settings={settings} plan={plan} patch={patch} />
+      <RunningFarmsSection settings={settings} patch={patch} nameOf={nameOf} remember={remember} />
+      <SurplusSection settings={settings} patch={patch} />
       <OwnedMachinesSection info={info} settings={settings} patch={patch} />
       <KeyListSection
         title="We already make"

@@ -47,12 +47,13 @@ function reusedMachines(plan: Plan | null): number {
 }
 
 /**
- * Spec §3.7's line summary: machine blocks of the line (a machine shared by several steps is one block), owned machines
- * the plan's machine steps reuse (each once: `reusedMachines`), the line's world size as W×L×H (x, z, y), the plan's peak
- * (the layout's while there is no plan) and the layout's power fit.
+ * Spec §3.7's line summary: machine blocks of the line (a machine shared by several steps is one block) and one new farm
+ * machine per area kept for it (add-on 17: a farm has no blocks, `Layout.reserved`), owned machines the plan's machine
+ * steps reuse (each once: `reusedMachines`), the line's world size as W×L×H (x, z, y), the plan's peak (the layout's
+ * while there is no plan) and the layout's power fit.
  */
 export function lineSummary(layout: Layout, plan: Plan | null): LineSummary {
-  const newMachines = layout.blocks.filter((b) => b.role === 'machine').length;
+  const newMachines = layout.blocks.filter((b) => b.role === 'machine').length + (layout.reserved?.length ?? 0);
   const reused = reusedMachines(plan);
   const [w, h, l] = layout.size;
   const peakEUt = plan?.power.peakEUt ?? layout.power?.peakEUt;

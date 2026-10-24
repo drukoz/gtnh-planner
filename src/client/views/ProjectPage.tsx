@@ -1,5 +1,6 @@
 // One project (spec §3.11): its name (anyone can rename it), whether this tab is live, what the plan warns about or
-// needs unlocked, the settings panel with the in-game projector panel under it (§3.13) and, beside them, the project
+// needs unlocked and what it uses beyond its line (farms, other projects' surplus), the Compare card of its planning
+// modes (add-on 17), the settings panel with the in-game projector panel under it (§3.13) and, beside them, the project
 // tabs. The tab follows the URL hash, so links elsewhere
 // (a build step's map pin sets `#map`) switch it too. Anyone can delete the project; once it is deleted, here or
 // elsewhere, the page goes back to the project list, which says so (§11.24). Below 900 px the settings panel is a drawer
@@ -11,8 +12,9 @@ import type { StuffKey } from '../../shared/keys.ts';
 import { indexPlan, issueText, type PlanIssue, type PlanIssueCode } from '../../shared/plan/balance.ts';
 import type { PackInfo } from '../../shared/types/api.ts';
 import type { Plan, PlanSettings, PlanWarning } from '../../shared/types/plan.ts';
-import type { ProjectOp } from '../../shared/types/project.ts';
+import type { Project, ProjectOp } from '../../shared/types/project.ts';
 import { apiGet, messageOf } from '../api/client.ts';
+import { listenProjectEvents } from '../api/sse.ts';
 import { DeleteProject } from '../components/DeleteProject.tsx';
 import { ItemIcon } from '../components/ItemIcon.tsx';
 import { SettingsToggle } from '../components/SettingsToggle.tsx';
@@ -21,7 +23,9 @@ import { leaveDeletedProject } from '../state/deleted-notice.ts';
 import { setFlowFocus, showInFlow } from '../state/flow-focus.ts';
 import { useName } from '../state/name.ts';
 import { useProject } from '../state/project-store.ts';
+import { CompareCard } from './CompareCard.tsx';
 import { ISSUE_ORDER, problemId } from './flow-model.ts';
+import { sourceNotes } from './materials-model.ts';
 import { costLine } from './plan-cost.ts';
 import { PROJECT_TABS, tabFromHash } from './project-tabs.ts';
 import { ProjectorPanel } from './ProjectorPanel.tsx';
@@ -89,9 +93,12 @@ function issueCount(code: PlanIssueCode, n: number, issues: readonly PlanIssue[]
  * (`indexPlan`: "This plan does not add up: …", with "Show in the flow") and each issue in the server's words, else
  * `issueText`'s (the client re-checks the plan it got); the derived materials the line buys as chips that show their
  * import in the flow, with "Plan them as supporting lines" while those are off; how much more raw material the plan
- * uses than the least to save machines (`Plan.rawCost`, Steps vs raw material); every other server warning (plan 08's
- * avoid list, missing recipes, …) and what unlocks the line. Above that box, and on its own when there is nothing to
- * warn about, what the plan costs to run and to build its new machines (`costLine`, plan 12).
+ * uses than the least to save machines (`Plan.rawCost`, Machines vs raw material); every other server warning (plan
+ * 08's avoid list, missing recipes, add-on 17's `surplus-shared`, …); what the plan uses beyond its line — "This plan
+ * uses a Tree Growth Simulator (Rubber Sapling)", "This plan draws Latex from Rubber line" (`sourceNotes`, ruling R18:
+ * farms and other projects' surplus are on for every project, so their use is said) — and what unlocks the line. Above
+ * that box, and on its own when there is nothing to warn about, what the plan costs to run and to build its new
+ * machines (`costLine`, plan 12).
  */
 export function PlanBanner(props: {
   plan: Plan | null; planError: string | null; planLoading: boolean; settings: PlanSettings; send: (ops: ProjectOp[]) => void;
@@ -122,9 +129,11 @@ export function PlanBanner(props: {
   // What the plan costs to run and to build (plan 12): on every plan that has a cost, outside the warning box.
   const costText = plan === null ? null : costLine(plan);
   const costed = costText === null ? null : <p className="plan-cost">{costText}</p>;
+  const notes = plan === null ? [] : sourceNotes(plan);
 
   const busy = planLoading && plan !== null;
-  if (planError === null && !busy && issues.length === 0 && others.length === 0 && derived.length === 0 && rawText === null && unlocks.length === 0) return costed;
+  if (planError === null && !busy && issues.length === 0 && others.length === 0 && derived.length === 0 && rawText === null && notes.length === 0
+    && unlocks.length === 0) return costed;
   const firstIssue = issues[0];
   const banner = (
     <div className="plan-banner" role="status">
@@ -165,6 +174,11 @@ export function PlanBanner(props: {
         </div>
       )}
       {rawText !== null && <p className="banner-cost">{rawText}</p>}
+      {notes.length > 0 && (
+        <ul className="banner-sources">
+          {notes.map((note) => <li key={note}>{`This plan ${note}`}</li>)}
+        </ul>
+      )}
       {unlocks.length > 0 && (
         <>
           <p className="banner-heading">To unlock</p>
@@ -179,16 +193,35 @@ export function PlanBanner(props: {
 }
 
 /**
- * How much more raw material the plan uses than the least to save machines (`Plan.rawCost`, Steps vs raw material:
+ * How much more raw material the plan uses than the least to save machines (`Plan.rawCost`, Machines vs raw material:
  * `preset`), or null when it uses the least: `Uses <x>% more …`; a line whose least raw material is 0 (a glass line
  * digging sand that rock-breaker cobblestone and forge hammers could make, plan 12) has no percentage: `Uses raw
  * material that free inputs could replace, to save machines (…)`.
  */
 function rawCostText(cost: Plan['rawCost'], preset: string): string | null {
   if (cost === undefined) return null;
-  if (cost.leastPerSecond === 0 && cost.perSecond > 0) return `Uses raw material that free inputs could replace, to save machines (Steps vs raw material: ${preset})`;
+  if (cost.leastPerSecond === 0 && cost.perSecond > 0) return `Uses raw material that free inputs could replace, to save machines (Machines vs raw material: ${preset})`;
   if (!(cost.leastPerSecond > 0) || !(cost.perSecond > cost.leastPerSecond * (1 + COST_GAP_REL))) return null;
-  return `Uses ${formatPercent(cost.perSecond / cost.leastPerSecond - 1)} more raw material than the least possible to save machines (Steps vs raw material: ${preset})`;
+  return `Uses ${formatPercent(cost.perSecond / cost.leastPerSecond - 1)} more raw material than the least possible to save machines (Machines vs raw material: ${preset})`;
+}
+
+/** How many `plan` and `compare` events project `id`'s stream has brought since this page opened it. */
+function useProjectEventCount(id: string): number {
+  const [count, setCount] = useState(0);
+  useEffect(() => listenProjectEvents(id, () => setCount((n) => n + 1)), [id]);
+  return count;
+}
+
+/**
+ * The Compare card under the plan banner (add-on 17), once the project makes something: told of every `plan` and
+ * `compare` event of the project (its `rev`), so an open card fetches the compare again; goods named by the plan.
+ */
+function ProjectCompare(props: { project: Project; plan: Plan | null; send: (ops: ProjectOp[]) => void }): ReactElement | null {
+  const { project, plan, send } = props;
+  const rev = useProjectEventCount(project.id);
+  if (project.settings.target === null) return null;
+  const names = plan?.names ?? {};
+  return <CompareCard projectId={project.id} rev={rev} settings={project.settings} send={send} nameOf={(key) => names[key] ?? key} />;
 }
 
 /** The pack's dimensions, capabilities and recipe groups for the settings panel, fetched once per page. */
@@ -306,10 +339,12 @@ export function ProjectPage(props: { id: string }): ReactElement {
         <span className={view.connected ? 'connection live' : 'connection'}>{view.connected ? 'live' : 'reconnecting…'}</span>
         <DeleteProject id={project.id} name={project.name} label="Delete project" onDeleted={() => view.markDeleted(me)} />
       </div>
-      {/* The banners' own box, so the page behind an open drawer can be inert in three pieces (ruling R36); it adds no space. */}
+      {/* The banners' own box, so the page behind an open drawer can be inert in three pieces (ruling R36); it adds no space.
+          The Compare card (add-on 17) sits under the plan banner, in the same box, so it goes inert with them. */}
       <div className="project-banners" inert={settingsOpen}>
         {view.error !== null && <p className="banner error" role="alert">{view.error}</p>}
         <PlanBanner plan={plan} planError={view.planError} planLoading={view.planLoading} settings={project.settings} send={send} />
+        {deleted === null && <ProjectCompare project={project} plan={plan} send={send} />}
       </div>
       <div className={settingsOpen ? 'project-body settings-open' : 'project-body'}>
         <aside className="settings-panel" id="project-settings" aria-label="Project settings">

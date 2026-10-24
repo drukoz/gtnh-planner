@@ -2,17 +2,30 @@
 // order, one event stream per open tab that starts with the project and then carries every applied op, and the
 // project's plan, cached per settings, export, scan and base, with a `plan` event whenever it may have changed.
 // Anyone may delete a project; it waits in "Recently deleted" until restored or purged (§11.24, spec §3.11).
+// Add-on 17 (§11.45 (4)): a plan reads what the group's other projects published of their surplus and needs, keyed by
+// what it read, and publishes its own, which tells the projects that read it to plan again; and (§11.45 (5)) the Compare
+// card's three planning modes of a project, with a `compare` event when the modes still planning at its answer are done.
 
 import type { IncomingMessage } from 'node:http';
 import type { AppContext } from '../../app.ts';
+import { COMPARE_TIME_LIMIT_SECONDS, compareModes, compareRunnerFor, modeSettings } from '../../planner/compare.ts';
+import { objectiveOf } from '../../planner/objective.ts';
 import { emptyContext, planCacheKey, planLine, PlanCache, settingsHash } from '../../planner/plan.ts';
+import { linePricing } from '../../planner/pricing.ts';
 import { OpError, type ProjectStore } from '../../projects/store.ts';
+import {
+  crossRead, drawsOn, loopWarning, readGoods, readsBoard, sharedWarnings, summaryOf, surplusBoardFor, type BoardChange, type CrossRead,
+  type SurplusBoard,
+} from '../../projects/surplus.ts';
 import { HttpError, readJson, sendJson, type RequestContext, type Route } from '../router.ts';
 import { validateOp } from '../../../shared/project/apply-op.ts';
+import type { StuffKey } from '../../../shared/keys.ts';
 import type {
-  CreateProjectBody, DeletedEvent, DeletedProjectSummary, OpEvent, OpsResult, PlanEvent, ProjectListEntry,
+  CompareEvent, CompareMode, CompareResult, CreateProjectBody, DeletedEvent, DeletedProjectSummary, OpEvent, OpsResult, PlanEvent,
+  ProjectListEntry,
 } from '../../../shared/types/api.ts';
-import type { Plan } from '../../../shared/types/plan.ts';
+import type { Pack } from '../../../shared/types/pack.ts';
+import type { Plan, PlanContext, PlanObjective, PlanSettings } from '../../../shared/types/plan.ts';
 import type { Project, ProjectOp } from '../../../shared/types/project.ts';
 
 const MAX_OPS_PER_REQUEST = 100;
@@ -96,22 +109,156 @@ export function planCacheFor(app: AppContext): PlanCache {
   return cache;
 }
 
+/** The lines' goods kept per app (`lineGoods`), as many as the plan cache keeps plans. */
+const LINE_GOODS_SIZE = 32;
+const LINE_GOODS = new WeakMap<AppContext, Map<string, Promise<ReadonlySet<StuffKey>>>>();
+const NO_GOODS: ReadonlySet<StuffKey> = new Set();
+
+/**
+ * The goods of the line of plan key `key` (add-on 17, data flow step 1): those of its candidate graph, which never reads
+ * other projects, so they hold for every read of the board. Worked out by `compute` once per key and app, at most
+ * LINE_GOODS_SIZE kept, the least recently used dropped first; callers asking while it is worked out share that work,
+ * and one that fails is not kept.
+ */
+function lineGoods(app: AppContext, key: string, compute: () => Promise<ReadonlySet<StuffKey>>): Promise<ReadonlySet<StuffKey>> {
+  let memo = LINE_GOODS.get(app);
+  if (memo === undefined) {
+    memo = new Map();
+    LINE_GOODS.set(app, memo);
+  }
+  const hit = memo.get(key);
+  if (hit !== undefined) {
+    memo.delete(key);
+    memo.set(key, hit);
+    return hit;
+  }
+  const goods = compute();
+  memo.set(key, goods);
+  if (memo.size > LINE_GOODS_SIZE) memo.delete(memo.keys().next().value as string);
+  const kept = memo;
+  goods.catch(() => {
+    if (kept.get(key) === goods) kept.delete(key);
+  });
+  return goods;
+}
+
+/** The world context `project` is planned in: the `app.services.planContext` hook's, read at that moment, or an empty one. */
+async function contextFor(app: AppContext, project: Project): Promise<PlanContext> {
+  const hook = app.services.planContext;
+  return typeof hook === 'function' ? hook(project) : emptyContext();
+}
+
+/**
+ * Sends `event: plan` to every live project that `from`'s change on the board reaches (`SurplusBoard.fanOut`), so its
+ * tabs fetch their plan again and read the new summary; returns the live projects the fan-out left out for its round.
+ */
+function tellReaders(app: AppContext, board: SurplusBoard, from: string, change: BoardChange): Project[] {
+  const { to, skipped } = board.fanOut(from, change);
+  for (const id of to) {
+    const reader = app.projects.get(id);
+    if (reader === null) continue;
+    const event: PlanEvent = { rev: reader.rev };
+    app.sse.send(id, 'plan', event);
+  }
+  return skipped.map((id) => app.projects.get(id)).filter((p): p is Project => p !== null);
+}
+
+/**
+ * Publishes `plan`, `project`'s plan made on what it read, as its summary under its name of now (data flow step 4), or
+ * withdraws its summary when the plan has none (a failed plan, Make N); tells the projects that change reaches; and
+ * returns the plan as served (not cached): with every live project's draw on it (`Plan.drawnBy`, ruling R16) and, when
+ * the fan-out left someone out for its round, `surplus-loop`. A project deleted while it was planned publishes nothing:
+ * its deletion withdraws its summary.
+ */
+function published(app: AppContext, board: SurplusBoard, project: Project, plan: Plan, live: ReadonlySet<string>): Plan {
+  const current = app.projects.get(project.id);
+  if (current === null) return plan;
+  const summary = summaryOf({ ...project, name: current.name }, plan, new Date().toISOString());
+  const left = tellReaders(app, board, project.id, summary === null ? board.remove(project.id) : board.publish(summary));
+  const drawnBy = drawsOn(board, project.id, live, plan.exportId);
+  const served = drawnBy.length === 0 ? plan : { ...plan, drawnBy };
+  return left.length === 0 ? served : { ...served, warnings: [...served.warnings, loopWarning(left.map((p) => p.name))] };
+}
+
+/**
+ * `planned`, made on `read`, as the plan cache keeps it: with the hash of what it read (`Plan.crossHash`, absent when it
+ * read nothing) and a `surplus-shared` warning for each offer older projects cut that it takes in full (ruling R16).
+ */
+function withRead(pack: Pack, settings: PlanSettings, planned: Plan, read: CrossRead): Plan {
+  const shared = sharedWarnings(planned, read.offers, settings.per, (key) => pack.nameOf(key));
+  return {
+    ...planned,
+    ...(shared.length === 0 ? {} : { warnings: [...planned.warnings, ...shared] }),
+    ...(read.hash === '' ? {} : { crossHash: read.hash }),
+  };
+}
+
 /**
  * The project's plan as the planner makes it, before `planFinish` (architecture §11.16), from the app's plan cache:
  * keyed by export, scan, base and settings hash, and computed on a miss in the world context the
  * `app.services.planContext` hook gives (read at that moment; `emptyContext()` without one). The plan names the
  * project's scan when it has one. `HttpError(503, 'no-export')` when no recipe export is active.
+ *
+ * Add-on 17 (architecture §11.45 (4), the data flow of Task 6): `opts.settings` plans those settings instead of the
+ * project's (the Compare card's modes). In rate mode the plan reads the summaries the group's other live projects
+ * published on this export (`crossRead`) — never planning or changing another project — over the goods of its line
+ * (`lineGoods`), and the cache key gains `|x:<hash of what it read>`, so the plan is made again exactly when what it
+ * reads changed. With `opts.publish` (the default) the read, the plan and its publication run one at a time per app
+ * (`SurplusBoard.exclusive`; nothing inside calls this again, so the lock cannot deadlock), the read is noted for the
+ * fan-out, and the plan, cache hit or miss, is published (`published`); without it the plan only reads.
  */
-export async function planForProject(app: AppContext, project: Project): Promise<Plan> {
+export async function planForProject(app: AppContext, project: Project, opts: { settings?: PlanSettings; publish?: boolean } = {}): Promise<Plan> {
+  const settings = opts.settings ?? project.settings;
   const pack = await app.pack();
+  const exportId = pack.manifest.exportId;
   const { scanId, baseId } = project.world;
-  const key = planCacheKey(settingsHash(project.settings), pack.manifest.exportId, scanId, baseId);
-  const plan = await planCacheFor(app).get(key, async () => {
-    const hook = app.services.planContext;
-    const ctx = typeof hook === 'function' ? await hook(project) : emptyContext();
-    return planLine(pack, project.settings, ctx);
+  const planKey = planCacheKey(settingsHash(settings), exportId, scanId, baseId);
+  let context: Promise<PlanContext> | undefined;
+  const contextOf = (): Promise<PlanContext> => (context ??= contextFor(app, project));
+  const goods = !readsBoard(settings) ? NO_GOODS : await lineGoods(app, planKey, async () => {
+    const pricing = linePricing(pack, settings, await contextOf());
+    return pricing === null ? NO_GOODS : new Set((await pricing).graph.goods.keys());
   });
+  const board = surplusBoardFor(app);
+  const publish = opts.publish ?? true;
+  const flow = async (): Promise<Plan> => {
+    const live = new Set(app.projects.list().map((p) => p.id));
+    const read = crossRead(board, project, settings, live, goods, exportId);
+    if (publish) board.noteRead(project.id, readGoods(settings, goods));
+    const key = read.hash === '' ? planKey : `${planKey}|x:${read.hash}`;
+    const plan = await planCacheFor(app).get(key, async () =>
+      withRead(pack, settings, await planLine(pack, settings, await contextOf(), { offers: read.offers, needs: read.needs }), read));
+    return publish ? published(app, board, project, plan, live) : plan;
+  };
+  const plan = publish ? await board.exclusive(flow) : await flow();
   return scanId === null ? plan : { ...plan, scanId };
+}
+
+/**
+ * Republishes the summary of project `id` under its new name (data flow step 5), one at a time with the plans that
+ * publish, so the readers of all its goods follow it ("from <project>"); nothing when it has none or the name is the same.
+ */
+function republishName(app: AppContext, id: string): void {
+  const board = surplusBoardFor(app);
+  void board.exclusive(async () => {
+    const project = app.projects.get(id);
+    const stored = board.get(id);
+    if (project === null || stored === null || stored.name === project.name) return;
+    const renamed = { ...stored, name: project.name, rev: project.rev, at: new Date().toISOString() };
+    tellReaders(app, board, id, board.publish(renamed));
+  }).catch((err: unknown) => console.error(`Publishing the new name of project ${id} failed:`, err));
+}
+
+/**
+ * Withdraws the summary of the deleted project `id` (data flow step 5), one at a time with the plans that publish, so
+ * the projects that took from it plan without it; its deletion starts a new round, as a change the group made to it.
+ */
+function withdrawSummary(app: AppContext, id: string): void {
+  const board = surplusBoardFor(app);
+  void board.exclusive(async () => {
+    board.newRound(id);
+    tellReaders(app, board, id, board.remove(id));
+  }).catch((err: unknown) => console.error(`Withdrawing the surplus of deleted project ${id} failed:`, err));
 }
 
 /** `plan` after the `app.services.planFinish` hook, if one is set; when it fails, `plan` with a `layout-failed` warning. */
@@ -164,6 +311,35 @@ function replanInBackground(app: AppContext, project: Project): void {
   run(project);
 }
 
+/**
+ * The Compare card's modes of `project` (add-on 17, architecture §11.45 (5)): its three planning modes, each planned with
+ * its own settings (`modeSettings`) from the plan cache without publishing (`publish: false`: the board keeps the
+ * summary of the mode the project plans in) and without `planFinish` (the card needs no layout), the current mode first,
+ * within `COMPARE_TIME_LIMIT_SECONDS`; the modes still planning then finish in the background and send the project's tabs
+ * `event: compare`. One compare per project at a time (`compareRunnerFor`), keyed by what its plans read of the project:
+ * its settings and its world (scan and base, as the plan cache key), so a compare of the project's earlier settings or
+ * world is never served for its current ones.
+ */
+function compareProject(app: AppContext, project: Project): Promise<CompareMode[]> {
+  const { scanId, baseId } = project.world;
+  const key = `${settingsHash(project.settings)}|${scanId ?? '-'}|${baseId ?? '-'}`;
+  const planMode = async (objective: PlanObjective): Promise<Plan> => {
+    try {
+      return await planForProject(app, project, { settings: modeSettings(project.settings, objective), publish: false });
+    } catch (err) {
+      if (!(err instanceof HttpError)) console.error(`Planning project ${project.id} in mode ${objective} failed:`, err);
+      throw err;
+    }
+  };
+  const onLate = (): void => {
+    const event: CompareEvent = { rev: project.rev };
+    app.sse.send(project.id, 'compare', event);
+  };
+  return compareRunnerFor(app).run(project.id, key, (stale, planning) => compareModes(planMode, {
+    current: objectiveOf(project.settings), limitSeconds: COMPARE_TIME_LIMIT_SECONDS, onLate, stale, planning,
+  }));
+}
+
 export function projectRoutes(app: AppContext): Route[] {
   return [
     {
@@ -204,6 +380,7 @@ export function projectRoutes(app: AppContext): Route[] {
         // No await since the store marked it: no stream can join the channel between the mark and its end.
         const event: DeletedEvent = { id, by, at: deleted.deletedAt };
         app.sse.end(id, { event: 'deleted', data: event });
+        withdrawSummary(app, id);
         res.writeHead(204, { 'Cache-Control': 'no-store' });
         res.end();
       },
@@ -234,7 +411,12 @@ export function projectRoutes(app: AppContext): Route[] {
           const event: OpEvent = { rev: a.rev, op: a.op, by: a.by, at: a.at };
           app.sse.send(id, 'op', event, a.rev);
         }
-        if (result.applied.some((a) => REPLAN_OPS.has(a.op.op))) replanInBackground(app, result.project);
+        const replans = result.applied.some((a) => REPLAN_OPS.has(a.op.op));
+        const renamed = result.applied.some((a) => a.op.op === 'rename');
+        // Add-on 17: a change the group makes to the project starts a new round of the surplus fan-out for it.
+        if (replans || renamed) surplusBoardFor(app).newRound(id);
+        if (replans) replanInBackground(app, result.project);
+        if (renamed) republishName(app, id);
         const answer: OpsResult = { rev: result.project.rev };
         sendJson(res, 200, answer);
       },
@@ -262,6 +444,16 @@ export function projectRoutes(app: AppContext): Route[] {
           throw new HttpError(500, 'plan-failed', `The planner failed: ${messageOf(err)}`);
         }
         sendJson(res, 200, await finishedPlan(app, plan, project));
+      },
+    },
+    {
+      method: 'GET', path: '/api/projects/:id/compare',
+      handler: async (_req, res, params) => {
+        const project = app.projects.get(params.id!);
+        if (project === null) throw notFound(params.id!);
+        const modes = await compareProject(app, project);
+        const result: CompareResult = { rev: project.rev, current: objectiveOf(project.settings), modes };
+        sendJson(res, 200, result);
       },
     },
   ];

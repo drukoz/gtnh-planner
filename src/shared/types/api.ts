@@ -3,7 +3,7 @@
 
 import type { StuffKey } from '../keys.ts';
 import type { BlockRef, Capability, DimensionInfo, PackManifest, RecipeSource } from './pack.ts';
-import type { PlanSettings } from './plan.ts';
+import type { PlanObjective, PlanSettings } from './plan.ts';
 import type { ProjectOp } from './project.ts';
 
 /** Who is acting; the value is `encodeURIComponent(name)` and the server decodes it. */
@@ -85,3 +85,21 @@ export interface DeletedEvent { id: string; by: string; at: string }
  * key the pack does not hold; at most `ASSET_KEYS_MAX` keys of at most 300 characters each.
  */
 export interface PackNamesRequest { keys: StuffKey[] }
+
+// --- planning modes (add-on 17; architecture §11.45 (5)) ---
+
+/**
+ * One planning mode of a project's compare: `ok` with its plan's summary, `failed` with why, or `pending` (still planning
+ * when the answer went out; SSE `compare` says when it is done). `avoids`: raw goods another mode's plan buys and this one
+ * does not; `adds`: raw goods only this one buys; both sorted.
+ */
+export interface CompareMode {
+  objective: PlanObjective; status: 'ok' | 'failed' | 'pending'; error?: string;
+  summary?: { rawPerHour: number; rawBuild: number; newMachines: number; rawSources: number; steps: number; peakEUt: number };
+  avoids?: StuffKey[]; adds?: StuffKey[];
+  credited?: StuffKey[] /* byproducts of its own line's runs credited to projects that need them, sorted; absent when none */;
+}
+/** `GET /api/projects/:id/compare`: the three modes in `PLAN_OBJECTIVES` order, and the one the project plans for. */
+export interface CompareResult { rev: number; current: PlanObjective; modes: CompareMode[] }
+/** SSE `compare` (§8): the modes still planning in this revision's compare are done; fetch it again. */
+export interface CompareEvent { rev: number }

@@ -1,7 +1,7 @@
 // Numbered pins of a line layout (Plan 5 Task 10; spec §3.7): where to build, where to tap power, where to hook into
-// the base's logistics, which owned machines to reuse, and where a warning applies. Numbers run from 1 in that order,
-// so the build steps can say "at pin <n>". Also the owned machines the line reuses, found in the scanned base. Every
-// order and tie-break is fixed, so the same inputs give the same pins.
+// the base's logistics, which owned machines to reuse, where an area is kept for a new farm (add-on 17), and where a
+// warning applies. Numbers run from 1 in that order, so the build steps can say "at pin <n>". Also the owned machines
+// the line reuses, found in the scanned base. Every order and tie-break is fixed, so the same inputs give the same pins.
 
 import { tierName } from '../../shared/gt/tiers.ts';
 import { fmtInt, NETWORK_NAMES } from '../../shared/layout/format.ts';
@@ -33,6 +33,9 @@ export interface ReuseFind {
 export interface PinInput {
   dim: number; site: { center: Vec3; text: string } | null; power: { pos: Vec3; text: string } | null;
   logistics: { pos: Vec3; text: string } | null; reuse: readonly ReuseFind[]; warnings: ReadonlyArray<{ code: string; text: string; pos: Vec3 }>;
+  // optional addition (add-on 17)
+  /** The areas kept for the plan's new farms (`Layout.reserved`, farms.ts), in their order: one `farm` pin each. */
+  farms?: ReadonlyArray<{ pos: Vec3; text: string }>;
 }
 
 // ---- Small helpers ----
@@ -204,7 +207,8 @@ export function groupSteps(finds: readonly ReuseFind[]): string[] {
  * Pins numbered from 1: the site, the power tap, the logistics tap, one reuse pin per group of reuse finds
  * (`reuseGroups`: finds that share owned machines, at their machine nearest the site, so at most one reuse pin per
  * position; its text `reuseText` of the first find with the group's machine count, plus ` (shared by <n> steps)` when
- * its finds belong to n > 1 steps, controller ruling 215), then the warnings by code and posKey. Every pin carries `dim`.
+ * its finds belong to n > 1 steps, controller ruling 215), one `farm` pin per area kept for a new farm (add-on 17), in
+ * `farms` order, then the warnings by code and posKey. Every pin carries `dim`.
  */
 export function makePins(input: PinInput): Pin[] {
   const pins: Pin[] = [];
@@ -219,6 +223,7 @@ export function makePins(input: PinInput): Pin[] {
     const steps = groupSteps(finds).length;
     add(at, 'reuse', `${reuseText({ ...finds[0]!, count })}${steps > 1 ? ` (shared by ${fmtInt(steps)} steps)` : ''}`);
   }
+  for (const f of input.farms ?? []) add(f.pos, 'farm', f.text);
   const warnings = [...input.warnings].sort((a, b) => compareText(a.code, b.code) || compareText(posKey(a.pos), posKey(b.pos)));
   for (const w of warnings) add(w.pos, 'warning', w.text);
   return pins;
