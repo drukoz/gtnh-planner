@@ -222,6 +222,21 @@ bold. One source of truth used by CSS (custom properties) and TS (the Flow SVG).
 - **Badges / chips:** `.badge`, `.chip`, tier chips = `--screen` rectangle with coloured Pixelify text; avoid
   badge = amber text on `--screen`.
 - **Readout tile:** `--screen` well, label `--screen-muted` 11 px, value Pixelify 24 px `--screen-text`.
+- **Add-on 17 in this look** (planning modes, farms, the Compare card; merged after Phase 1). "Plan for" is a settings
+  section like the others: a `fieldset.choice` whose `legend.settings-title` is the section's title, each mode a radio
+  with what it counts below it, indented to the label's text. A farm kind's own fields hang under its tick on a 2 px
+  `--panel-lo` line. The **Compare card** is a panel under the plan banner with a Pixelify title; each mode is a column
+  set into it as an inset frame (the panel's bevel inverted), its six figures readout tiles (`--screen`, label Inter
+  11 px `--screen-muted`, value Pixelify 24 px `--screen-text`; a tile is at least 160 px, so the tiles of a narrow column
+  stack, and a value never breaks: it stays on one line and a long one shrinks to fit, down to 13 px, before it is cut),
+  its notes chat boxes in the dark ink (the notes'
+  selector keeps one class's specificity, `p` in `:where()`, so `.muted` and `.error` still colour "Still planning…" and
+  a failure), and the mode in use a black edge with a 2 px yellow ring inside, the frame of a selected slot (an outline
+  in `Highlight` in forced colours). Its "Compare modes" button is a `button.small` in the project head, yellow while
+  the card is open (underlined in forced colours), so a closed card takes no height: layout.spec's press on the map
+  canvas stays at y 657 of 720 (with the card's own row it came to 705). Below 900 px the head's one row is full (the
+  Settings button says what the line makes), so there the button is in a bar of its own under the banner. The card's
+  Close gives the focus back to the button that is shown.
 - **Modal:** centred panel over `rgba(0,0,0,0.6)`; title Pixelify.
 - **Empty and loading states:** Phase 1 restyles the existing status lines (ink per surface); the pixel progress
   bar and skeletons arrive in Phase 2 (§7a).

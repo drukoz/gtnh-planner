@@ -306,8 +306,9 @@ function machinesText(n: number, shared = false): string {
 }
 
 /**
- * A step box's lines (fix spec §6.2): tier, EU/t, machines and how busy, or "by hand"; what it supplies; what is owned.
- * A step whose machines a sharing pool shares with other steps (`PlanStep.pool`, plan 12) has "shared" machines.
+ * A step box's lines (fix spec §6.2): tier, EU/t, machines and how busy, or "by hand"; what it supplies; what is owned;
+ * a farm step's words (`PlanStep.farm.text`, add-on 17: what it plants and holds). A step whose machines a sharing pool
+ * shares with other steps (`PlanStep.pool`, plan 12) has "shared" machines.
  */
 function stepLines(step: PlanStep, nameOf: (key: StuffKey) => string): string[] {
   const busy = `${formatPercent(step.utilization)} busy`;
@@ -316,7 +317,44 @@ function stepLines(step: PlanStep, nameOf: (key: StuffKey) => string): string[] 
   const lines = [step.handCraft ? `by hand · ${busy}` : `${tierText(step.machine.tier)} · ${step.euPerTick} EU/t · ${machines} · ${busy}`];
   if (step.supply !== undefined) lines.push(`supplies ${nameOf(step.supply)}`);
   if (step.owned > 0) lines.push(`${step.owned} owned`);
+  if (step.farm !== undefined) lines.push(step.farm.text);
   return lines;
+}
+
+/**
+ * What each raw good's import is, in words (fix spec §6.2), as the flow's import stubs and the step panel say it: the
+ * kind of import of what the line buys (`LEAF_WORD`; "bought" beside a supply for a bought row without a kind), and
+ * `from <names>` for what it takes from farms the group runs and other projects (`RawInput.from`, rows of their own;
+ * add-on 17), the bought kind first when it is both. A good the line only buys without a kind has none (the flow says
+ * "import").
+ */
+export function importWords(plan: Plan): Map<StuffKey, string> {
+  const bought = new Map<StuffKey, LeafClass | undefined>();
+  const from = new Map<StuffKey, string[]>();
+  for (const r of plan.rawInputs) {
+    if (r.from === undefined) {
+      bought.set(r.key, r.leafClass);
+      continue;
+    }
+    const names = from.get(r.key);
+    if (names === undefined) from.set(r.key, [r.from.name]);
+    else if (!names.includes(r.from.name)) names.push(r.from.name);
+  }
+  const words = new Map<StuffKey, string>();
+  for (const [key, leaf] of bought) if (leaf !== undefined) words.set(key, LEAF_WORD[leaf]);
+  for (const [key, names] of from) {
+    const supplied = `from ${joinNames(names)}`;
+    if (!bought.has(key)) words.set(key, supplied);
+    else words.set(key, `${words.get(key) ?? 'bought'} + ${supplied}`);
+  }
+  return words;
+}
+
+/** The kind of leaf of each good the line buys (its row without `from`), for the import stubs' `leaf-<class>`. */
+function boughtLeaves(plan: Plan): Map<StuffKey, LeafClass> {
+  const leaves = new Map<StuffKey, LeafClass>();
+  for (const r of plan.rawInputs) if (r.from === undefined && r.leafClass !== undefined) leaves.set(r.key, r.leafClass);
+  return leaves;
 }
 
 /** Where a step's and a stub's words come from, and how the plan's issues mark its rows. */
@@ -388,6 +426,8 @@ interface GraphContext extends RowContext {
   collapsed: ReadonlySet<StuffKey>;
   /** Of a good both bought and made, the share bought. */
   boughtShare: ReadonlyMap<StuffKey, number>;
+  /** What each raw good's import is, in words (`importWords`). */
+  imports: ReadonlyMap<StuffKey, string>;
 }
 
 /** The supporting lines of a plan, in the order of their first step. */
@@ -460,7 +500,7 @@ function stepBox(ctx: GraphContext, step: PlanStep, unavoidable: readonly PlanWa
 function arrowsAndStubs(ctx: GraphContext, importsInOneColumn: boolean): { arrows: Map<string, Arrow>; stubs: Map<string, Stub> } {
   const arrows = new Map<string, Arrow>();
   const stubs = new Map<string, Stub>();
-  const leafOf = new Map(ctx.plan.rawInputs.map((r) => [r.key, r.leafClass]));
+  const leafOf = boughtLeaves(ctx.plan);
   const addArrow = (from: string, to: string, key: StuffKey, perSecond: number): void => {
     const fromPort = portId(from, 'out', key);
     const toPort = portId(to, 'in', key);
@@ -511,14 +551,14 @@ function arrowsAndStubs(ctx: GraphContext, importsInOneColumn: boolean): { arrow
 }
 
 /**
- * A stub's box: titled by its good, with one row: an import's kind of import (and the share bought of a good also made),
- * "no source in the plan" or "short" with what is missing, or "left over".
+ * A stub's box: titled by its good, with one row: what an import is (`importWords`: its kind, where a supply comes from;
+ * and the share bought of a good also made), "no source in the plan" or "short" with what is missing, or "left over".
  */
 function stubBox(ctx: GraphContext, id: string, stub: Stub): Unsized {
   const base = { key: stub.key, rate: ctx.rateOf(stub.perSecond, stub.key), perSecond: stub.perSecond };
   let row: FlowRow;
   if (stub.kind === 'import') {
-    row = { ...base, side: 'out', port: portId(id, 'out', stub.key), name: stub.leaf === undefined ? 'import' : LEAF_WORD[stub.leaf] };
+    row = { ...base, side: 'out', port: portId(id, 'out', stub.key), name: ctx.imports.get(stub.key) ?? 'import' };
     const bought = ctx.boughtShare.get(stub.key);
     if (bought !== undefined) {
       row.issue = 'bought-and-made';
@@ -602,7 +642,10 @@ function finishArrows(ctx: GraphContext, arrows: Iterable<Arrow>, nodes: readonl
         const main = ctx.stepById.get(id)?.mainOutput;
         return main === undefined ? node.title : `${node.title} (${ctx.nameOf(main)})`;
       }
-      case 'import': return node.leaf === undefined ? 'import' : `import (${LEAF_WORD[node.leaf]})`;
+      case 'import': {
+        const words = ctx.imports.get(node.key ?? '');
+        return words === undefined ? 'import' : `import (${words})`;
+      }
       case 'missing': return node.rows[0]?.name ?? 'no source in the plan';
       case 'sink': return 'left over';
       case 'out': return 'the target';
@@ -654,6 +697,7 @@ export function flowGraph(
     nameOf: (key) => plan.names?.[key] ?? key,
     rateOf: (perSecond, key) => goodRate(perSecond, per, key),
     ...issuesByRow(index),
+    imports: importWords(plan),
   };
   const importsInOneColumn = opts.importsInOneColumn === true;
   const unavoidable = unavoidableByStep(plan);

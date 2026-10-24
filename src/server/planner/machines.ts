@@ -6,6 +6,7 @@
 import { multiblockOverclock, singleblockOverclock, voltageTier, type MachineOc } from '../../shared/gt/overclock.ts';
 import { PSEUDO_IDS, PSEUDO_MACHINES, V, tierName } from '../../shared/gt/tiers.ts';
 import type { StuffKey } from '../../shared/keys.ts';
+import { defaultFarmSettings, type FarmSettings } from '../../shared/types/farm.ts';
 import type { Ingredient, Machine, Pack, Product, Recipe } from '../../shared/types/pack.ts';
 import {
   FREE_KEYS, type MachineWhere, type PlanContext, type PlanFlow, type PlanSettings, type PlanStep, type StepTier,
@@ -13,9 +14,10 @@ import {
 import { suppliedKey } from '../pack/supply.ts';
 import type { StepMachines } from './build-mip.ts';
 import { keptOptions, virtualKey, type CandidateGraph, type LpRecipe } from './candidates.ts';
+import { farmMachineKind, farmOc, farmStepOf } from './farms/recipes.ts';
 import { feedsEither, poolKey, sharesMachines, sharingKey, type BuildModel, type MachineOption, type OwnedPools } from './machine-options.ts';
 import { ownedPools, recipeCircuit } from './owned.ts';
-import { sig9 } from './round.ts';
+import { sig9, wholeMachines, wholeSlack } from './round.ts';
 import type { Solution } from './solve.ts';
 
 export interface MachinePick {
@@ -27,27 +29,10 @@ const TICKS_PER_SECOND = 20;
 /** Ruling R5: one craft per second per crafter, whatever the recipe's duration (0 for crafting recipes, §11.4). */
 const CRAFT_TICKS = 20;
 /**
- * Amounts up to this count as zero, and a machine count this little above a whole number stays whole (prior-art §3.4
- * step 6: a count that is exactly 2 stays 2).
+ * Amounts up to this count as zero. A machine count a little above a whole number stays whole by `wholeMachines`
+ * (round.ts), which the crop sticks of a farm step count by too.
  */
 const TINY = 1e-9;
-/**
- * The share of a load its rate's 9 significant digits can move it by (plan 12 Task 8): a step's runs per second keep 9
- * significant digits (`sig9`), up to 5e-9 of their value off, so a set of machines exactly full can read a little above a
- * whole number — 10 machines' worth at 1/6 a run a second reads 10.00000002 — and stays that whole number, as an exact 2
- * stays 2 (`TINY`).
- */
-const SIG9_SLACK = 1e-8;
-
-/** How little above a whole number `load` machines' worth may read and still stay that number: `TINY` or its 9 digits' slack. */
-function wholeSlack(load: number): number {
-  return Math.max(TINY, SIG9_SLACK * Math.abs(load));
-}
-
-/** The whole machines `load` machines' worth needs (`wholeSlack`); 0 for none. */
-function wholeMachines(load: number): number {
-  return Math.ceil(load - wholeSlack(load));
-}
 const HAND_CRAFT_RUNS_PER_SECOND = 1;
 /**
  * A flow below this share of what its producer makes of the good is dropped (fix spec D3): relative, so a line keeps
@@ -105,7 +90,9 @@ function chooseSingleblock(accepting: Machine[], wantTier: number | undefined, o
  * The machine that runs `r` on `mapId` for a group at `groupTier`: a crafting table (by hand unless crafting is
  * automated), the vanilla furnace, else a singleblock of the map at or below the group's tier that has the voltage for
  * the recipe (the per-recipe `wantTier`, else the best owned one, else the highest tier), else the map's multiblock
- * with one energy hatch at `wantTier ?? groupTier`. Throws when the map has no machine that can run the recipe.
+ * with one energy hatch at `wantTier ?? groupTier`. A synthetic farm recipe (`Recipe.meta.farm`, add-on 17) runs on the
+ * first of its farm's machines the group owns, else its first, at the farm's own tier and never overclocked (`farmOc`),
+ * whatever the group's tier. Throws when the map has no machine that can run the recipe.
  */
 export function pickMachine(
   pack: Pack, r: Recipe, mapId: string,
@@ -115,6 +102,13 @@ export function pickMachine(
     multiblocks?: ReadonlySet<number>;
   },
 ): MachinePick {
+  const farm = r.meta.farm;
+  if (farm !== undefined) {
+    const id = farm.machines.find((mteId) => (opts.owned.get(mteId) ?? 0) > 0) ?? farm.machines[0];
+    const m = id === undefined ? undefined : pack.machines.get(id);
+    if (m === undefined) throw new Error(`pickMachine: no farm machine runs recipe ${r.id}`);
+    return picked({ mteId: m.mteId, name: m.name, tier: farm.tier, kind: farmMachineKind(m), oc: farmOc(r, farm), handCraft: false });
+  }
   if (mapId === 'crafting') {
     const hand = !opts.automateCrafting;
     return picked({
@@ -499,11 +493,12 @@ export type StepSize = Pick<PlanStep, 'count' | 'owned' | 'runsPerSecond' | 'uti
 /**
  * The step of a picked recipe, sized by the caller: the machine and its overclocked speed, per-run inputs (one per
  * good, slots added up) and outputs (expected amounts), the main output, the overclock inputs, the cleanroom flag, the
- * programmed circuit, for a supply recipe the good it supplies (`suppliedKey`, fix spec R2), and the owned machines it
- * runs on (`size.reused`).
+ * programmed circuit, for a supply recipe the good it supplies (`suppliedKey`, fix spec R2), the owned machines it
+ * runs on (`size.reused`), and for a farm recipe its farm (`PlanStep.farm`, add-on 17: `farmStepOf`, worded with
+ * `farms`, the project's farm settings).
  * `alternatives` stays empty here (Task 14 fills it).
  */
-export function describeStep(pack: Pack, p: PickedRecipe, line: StepLine, size: StepSize): PlanStep {
+export function describeStep(pack: Pack, p: PickedRecipe, line: StepLine, size: StepSize, farms?: FarmSettings): PlanStep {
   const { id, recipe: r, pick } = p;
   const step: PlanStep = {
     id, recipeId: id, mapId: p.mapId, machine: { mteId: pick.mteId, name: pick.name, tier: pick.tier },
@@ -526,6 +521,8 @@ export function describeStep(pack: Pack, p: PickedRecipe, line: StepLine, size: 
   const supply = suppliedKey(r, pack.fluidContainers);
   if (supply !== undefined) step.supply = supply;
   if (size.reused !== undefined) step.reused = size.reused;
+  const farm = r.meta.farm === undefined ? undefined : farmStepOf(pack, step, r, farms ?? defaultFarmSettings());
+  if (farm !== undefined) step.farm = farm;
   return step;
 }
 
@@ -794,7 +791,8 @@ function keptApart(pack: Pack, picked: readonly PickedRecipe[]): Set<string> {
  * (`reused.others`); the other steps on any of those machines (`reused.sharedWith`); and its sharing pool (`pool`, with
  * the model's sharing, else on an AE2 rate line: `sharesMachines`). `utilization` counts the others' capacity too, and a pooled step's
  * is its own share of the pool. With a model, `tiers` lists the step's eligible tiers, and on a Project Red line a step
- * kept out of another's machine because one feeds the other says so (ruling P7).
+ * kept out of another's machine because one feeds the other says so (ruling P7). A farm step (add-on 17; `pack` is then
+ * the line's farm pack) says what it plants (`PlanStep.farm`, worded with `settings.farms`).
  */
 export function planSteps(
   pack: Pack, graph: CandidateGraph, sol: Solution,
@@ -841,7 +839,7 @@ export function planSteps(
     if (apart.has(p.id)) warnings.push(ownOutputWarning(p.pick.name));
     if (a === undefined) {
       const count = Math.max(1, wholeMachines(runsPerSecond / perMachine));
-      return describeStep(pack, p, line, { count, owned: 0, runsPerSecond, utilization: runsPerSecond / (count * perMachine), warnings });
+      return describeStep(pack, p, line, { count, owned: 0, runsPerSecond, utilization: runsPerSecond / (count * perMachine), warnings }, settings.farms);
     }
     const count = a.added + a.units.length;
     // The owned machines of the step's other options, matched to the solve's `others` in its order: per type, its claims
@@ -866,7 +864,7 @@ export function planSteps(
       if (others.length > 0) reused.others = others;
       size.reused = reused;
     }
-    const step = describeStep(pack, p, line, size);
+    const step = describeStep(pack, p, line, size, settings.farms);
     if (a.pool !== undefined) step.pool = { id: a.pool, steps: [...(poolSteps.get(a.pool) ?? [p.id])].sort(byString) };
     if (model !== undefined) {
       const pin = Object.hasOwn(settings.machineTier, p.id) ? settings.machineTier[p.id] : undefined;
@@ -892,11 +890,18 @@ function baseDurationTicks(r: Recipe, mapId: string, pick: MachinePick): number 
  * proportion to what each takes. Convert recipes are transparent: what one takes of an option goes on to the recipes
  * that consume its virtual good, in proportion to their use. A flow at most `FLOW_DROP_REL` of what its producer makes
  * of the good is dropped, and a target's `out` flow needs more than that share of what is made of it; values keep 9
- * significant digits and are sorted by `from`, `to`, `key`.
+ * significant digits and are sorted by `from`, `to`, `key`. Add-on 17: what the line takes of a capped free supply (a
+ * farm the group runs, another project's surplus: `Solution.supplied`, by its column's good) reaches it as a bought input
+ * does, from `raw`, so the layout's input chest, the flow diagram's imports and `indexPlan`'s ports count it; what it is
+ * credited for (`Solution.credited`) is already part of what it sinks.
  */
 export function buildFlows(graph: CandidateGraph, sol: Solution, targets: StuffKey[]): PlanFlow[] {
   const { made, used } = recipeAmounts(graph, sol.runs);
   for (const [key, amount] of sol.buys) addAmount(made, key, RAW, amount);
+  for (const [id, amount] of sol.supplied ?? []) {
+    const key = sol.supplyKeys?.get(id);
+    if (key !== undefined) addAmount(made, key, RAW, amount);
+  }
   for (const [key, amount] of sol.sinks) addAmount(used, key, SINK, amount);
   for (const target of new Set(targets)) {
     const total = sum(made.get(target));

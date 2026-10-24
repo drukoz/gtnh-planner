@@ -214,3 +214,30 @@ describe('contrast of the Settings button\'s target part', () => {
     expect(ratio('#aaaaaa', '#4a5499')).toBeLessThan(AA);                              // and under the pointer
   });
 });
+
+// Add-on 17 in the Machine GUI: the Compare card's titles on the panel, its readout tiles' grey label and green value on a screen, its
+// notes on their chat box over the panel (white, the grey of "Still planning…" and the red of a failure), its Compare modes button while
+// the card is open (yellow on the button face, and under the pointer; in the head, or in the bar under the banner at 900 px and below),
+// and the hints of "Plan for" on a settings section; and, as graphics (WCAG 1.4.11: 3:1), the frame of the mode in use: a black edge on
+// the panel with a yellow ring inside it.
+const ADDON17_PAIRS: [string, string, string][] = [
+  ['card and column titles', '#404040', PANEL], ['"Updating…" beside the title', '#4a4a4a', PANEL],
+  ['tile label', '#aaaaaa', SCREEN], ['tile value', '#55ff55', SCREEN],
+  ['note', '#ffffff', CHAT_OVER_PANEL], ['note of a mode still planning', '#aaaaaa', CHAT_OVER_PANEL],
+  ['note of a mode that failed', '#ff5555', CHAT_OVER_PANEL],
+  ['Compare modes while the card is open', '#ffff55', '#6b6b6b'], ['Compare modes while open, under the pointer', '#ffff55', '#4a5499'],
+  ['a hint of Plan for', '#4a4a4a', PANEL],
+];
+
+describe('contrast of the planning modes, farms and the Compare card', () => {
+  it.each(ADDON17_PAIRS)('%s: %s on %s meets AA', (_what, text, background) => {
+    expect(ratio(text, background)).toBeGreaterThanOrEqual(AA);
+  });
+
+  it('frames the mode in use with a black edge the panel shows, and a yellow ring the edge shows', () => {
+    expect(ratio('#000000', PANEL)).toBeGreaterThanOrEqual(GRAPHICS);
+    expect(ratio('#ffff55', '#000000')).toBeGreaterThanOrEqual(GRAPHICS);
+    // the ring alone would be faint on the panel: the black edge is what makes it read
+    expect(ratio('#ffff55', PANEL)).toBeLessThan(GRAPHICS);
+  });
+});

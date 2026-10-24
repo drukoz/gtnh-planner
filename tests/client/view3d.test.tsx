@@ -37,6 +37,12 @@ describe('3D tab', () => {
     expect(shell({ layout: null, loading: true })).toContain('Laying out the line…');
     expect(shell({ layout: { ...sampleLayout, status: 'empty', blocks: [] } })).toContain('Nothing new to build');
     expect(shell({ info: { title: 'Basic Macerator', lines: ['Facing south'] } })).toContain('data-testid="view3d-info"');
+    // a line whose only new machines are farms (add-on 17): no blocks to draw, and it says why rather than nothing
+    const farm = { stepId: 'tgs', pos: [0, 64, 0] as [number, number, number], size: [7, 7, 7] as [number, number, number], text: 'Farm: Tree Growth Simulator' };
+    const farmsOnly = shell({ layout: { ...sampleLayout, status: 'ok', blocks: [], warnings: [], reserved: [farm] } });
+    expect(farmsOnly).toContain('Nothing to draw here — the new machines are farms: build each in the area its build step names');
+    expect(farmsOnly).not.toContain('Nothing new to build');
+    expect(shell()).not.toContain('Nothing to draw here');
   });
 
   it('puts the 3D tab right after the map', () => {

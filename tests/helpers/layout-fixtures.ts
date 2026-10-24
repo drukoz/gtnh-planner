@@ -7,6 +7,7 @@
 import { parseItemKey, type ItemKey, type StuffKey } from '../../src/shared/keys.ts';
 import type { Vec3 } from '../../src/shared/layout/geometry.ts';
 import { defaultSettings } from '../../src/shared/project/apply-op.ts';
+import type { FarmStep } from '../../src/shared/types/farm.ts';
 import type { LayoutTap } from '../../src/shared/types/layout.ts';
 import type { BlockRef, Fluid, Item, Machine, MachineKind, Pack, Product, Recipe, StructureInfo } from '../../src/shared/types/pack.ts';
 import type { BuildStep, LogisticsMode, Plan, PlanFlow, PlanStep } from '../../src/shared/types/plan.ts';
@@ -285,6 +286,8 @@ export interface StepSpec {
   handCraft?: boolean;
   /** The step's sharing pool (plan 12: `PlanStep.pool`); none by default. */
   pool?: PlanStep['pool'];
+  /** The step's farm (add-on 17: `PlanStep.farm`): the layout keeps an area for each of its new machines. None by default. */
+  farm?: FarmStep;
 }
 
 const DEFAULT_INPUT: StuffKey = 't:in@0';
@@ -303,6 +306,7 @@ function planStep(s: StepSpec): PlanStep {
     inputs: products(s.inputs ?? [[DEFAULT_INPUT, 1]]), outputs: products(s.outputs ?? [[defaultOutput(s.id), 1]]),
     alternatives: [], handCraft: s.handCraft ?? false, warnings: [],
     ...(s.pool === undefined ? {} : { pool: { id: s.pool.id, steps: [...s.pool.steps] } }),
+    ...(s.farm === undefined ? {} : { farm: structuredClone(s.farm) }),
   };
 }
 

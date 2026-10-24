@@ -1,9 +1,10 @@
 // Hookups of a line into the base (Plan 5 Task 9; spec §3.5, §3.6, §3.8, §5): which power and logistics network the
 // line joins and at which tap, the route of the hookup through the scanned world from the tap to the line, the cable
 // or logistics parts laid along it, and the existing blocks shown as faint ghosts where the line connects.
-// A hookup goes round the line's box and ends beside it, and touches nothing it must keep away from (another tier's
-// cable, a machine below its tier); its blocks link only to each other, the tap and the port they end at. One that
-// ends on an EnderIO conduit face also keeps off its `keepOff` cells (plan 11, ruling R14).
+// A hookup goes round the line's box and ends beside it, goes round the areas kept for the line's farms (add-on 17), and
+// touches nothing it must keep away from (another tier's cable, a machine below its tier); its blocks link only to each
+// other, the tap and the port they end at. One that ends on an EnderIO conduit face also keeps off its `keepOff` cells
+// (plan 11, ruling R14).
 // A hookup cable is never laid onto a tap whose own cable is rated for fewer amps than the line draws (spec §5): that
 // hookup stays a dashed guide with `power_amps_low`, and Task 10 writes the upgrade step from `blocked`. A route that
 // cannot be found within the node budget becomes a dashed guide round the line (`found: false`, `no_path`). Every
@@ -45,6 +46,12 @@ export interface RouteWorld {
    * face. The route search and the dashed guide's search keep off them; a straight guide, the last resort, does not.
    */
   keepOff?: ReadonlySet<string>;
+  /**
+   * The world boxes, inclusive, of the areas kept for the line's farms (add-on 17, farms.ts): a hookup goes round them as
+   * it goes round the line's box (no cell in their columns, and no block laid there by a straight guide either), so it
+   * never takes the ground a farm's build step sends the group to build on.
+   */
+  areas?: readonly PathBounds[];
 }
 export interface HookupBuild { hookup: Hookup; blocks: LayoutBlock[]; warnings: PlanWarning[]; found: boolean }
 export interface PowerHookupBuild extends HookupBuild {
@@ -87,12 +94,18 @@ function inColumns(p: Vec3, box: PathBounds): boolean {
   return p[0] >= box.min[0] && p[0] <= box.max[0] && p[2] >= box.min[2] && p[2] <= box.max[2];
 }
 
+/** Whether `p` stands in the columns of an area kept for a farm (`RouteWorld.areas`). */
+function inAreas(p: Vec3, world: RouteWorld): boolean {
+  return world.areas?.some((a) => inColumns(p, a)) === true;
+}
+
 /**
- * Whether a hookup may use `p` whatever the terrain: not a line cell, not kept off, outside the line's columns, touching
- * nothing to keep away from.
+ * Whether a hookup may use `p` whatever the terrain: not a line cell, not kept off, outside the line's columns and the
+ * farms' areas' columns, touching nothing to keep away from.
  */
 function clearOfLine(world: RouteWorld, p: Vec3): boolean {
   if (world.line.has(posKey(p)) || world.keepOff?.has(posKey(p)) === true || (world.box !== undefined && inColumns(p, world.box))) return false;
+  if (inAreas(p, world)) return false;
   const keepAway = world.keepAway;
   return keepAway === undefined || !DIRS.some((_, side) => keepAway.has(posKey(step(p, side))));
 }
@@ -352,9 +365,12 @@ function hookupBits(path: readonly Vec3[], laid: ReadonlySet<string>, tap: Vec3,
   return linkBits(links);
 }
 
-/** The cells a hookup lays a block on: every path cell outside the line and its columns (only a straight guide can cross them). */
+/**
+ * The cells a hookup lays a block on: every path cell outside the line, its columns and the farms' areas' columns (only a
+ * straight guide can cross them).
+ */
 function runCells(path: readonly Vec3[], world: RouteWorld): Vec3[] {
-  return path.filter((p) => !world.line.has(posKey(p)) && (world.box === undefined || !inColumns(p, world.box)));
+  return path.filter((p) => !world.line.has(posKey(p)) && (world.box === undefined || !inColumns(p, world.box)) && !inAreas(p, world));
 }
 
 /** The tap as Plan 4 gives it (a `LayoutTap`'s `cableAmps` is the layout's own reading, not part of the hookup). */

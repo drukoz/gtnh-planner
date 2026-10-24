@@ -555,6 +555,8 @@ interface BuildSetup {
   cleanroom?: BuildModel['cleanroom']; alsoMade?: StuffKey[];
   /** Goods of `leafCosts` bought as derived materials (`leafClass` 'derived', a chain of one recipe): R3's derived purchases. */
   derived?: StuffKey[];
+  /** Add-on 17: per step recipe id, what planting one run a second of it costs (`BuildModel.planting`: a crop farm's). */
+  planting?: Record<string, number>;
 }
 
 /**
@@ -565,7 +567,8 @@ interface BuildSetup {
  * graph recipe's held items (AE2's keys: the Project Red split is `lineBuildModel`'s), `owned` and `pools` come from the
  * options' `owned` (per mteId the largest, units without positions), prices price nothing, nothing is blocked or pinned,
  * and `ownedOnly` is the owned machines of a step none of whose options can add machines; defaults rate mode over 24
- * hours, no sharing, no cleanroom. `runs` = the sorted ids of the step recipes that run.
+ * hours, no sharing, no cleanroom, no planting (`build.planting`, add-on 17). `runs` = the sorted ids of the step recipes
+ * that run.
  */
 export async function solvedWithBuild(
   spec: PackSpec, leafCosts: Record<StuffKey, number>, demand: Array<[StuffKey, number]>, build: BuildSetup, opts?: SolveOptions,
@@ -607,6 +610,7 @@ export async function solvedWithBuild(
       return { runsPerSecond, text: `${first.owned}× ${first.name}, which cannot be built here (${first.unbuildable ?? ''})` };
     },
     pinFallback: () => undefined,
+    planting: (id) => (build.planting !== undefined && Object.hasOwn(build.planting, id) ? build.planting[id] : undefined),
     owned,
     pools: new Map([...owned].map(([mteId, n]) => [mteId, new Array<null>(n).fill(null)])),
     prices: { cost: () => Infinity, gap: () => ({ kind: 'no-recipe' }) },

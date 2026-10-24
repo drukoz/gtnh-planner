@@ -121,10 +121,11 @@ describe('settings model', () => {
   });
 });
 
-describe('steps vs raw material, supplies and pinned options', () => {
+describe('machines vs raw material, supplies and pinned options', () => {
   const options = (html: string): string[] => [...html.matchAll(/<option value="([^"]*)"( selected="")?>([^<]*)<\/option>/g)].map((m) => `${m[1]}=${m[3]}${m[2] === undefined ? '' : ' *'}`);
-  const stepCharge = (html: string): string[] => options(/<select[^>]*aria-label="Steps vs raw material"[^>]*>.*?<\/select>/s.exec(html)?.[0] ?? '');
-  it('lists the presets of the Steps vs raw material select and sends the one picked', () => {
+  // Ruling S17: the select is "Machines vs raw material" now, under "Plan for" (formerly "Steps vs raw material" in Options).
+  const stepCharge = (html: string): string[] => options(/<select[^>]*aria-label="Machines vs raw material"[^>]*>.*?<\/select>/s.exec(html)?.[0] ?? '');
+  it('lists the presets of the Machines vs raw material select and sends the one picked', () => {
     // Plan 12 fix wave 2 (the user's answer of 2026-10-20): Least raw material, Some machines, Fewest machines (the default).
     expect(STEP_CHARGE_PRESETS.map((p) => [p.value, p.label])).toEqual([[0, 'Least raw material'], [0.02, 'Some machines'], [0.5, 'Fewest machines']]);
     expect(stepCharge(panelOf({ ...defaultSettings(), stepCharge: 0.02 }))).toEqual([
@@ -182,11 +183,13 @@ describe('steps vs raw material, supplies and pinned options', () => {
 
 // The build horizon (plan 12 Task 7, design spec §3.3), the tier new machines are built at and when a multiblock may be
 // built (the user's ruling 224 of 2026-10-20), and no crafting switch any more (the user's ruling 180: crafting steps are
-// automatic), all in the Options section beside "Steps vs raw material".
+// automatic), in the Options section; the horizon is under "Plan for" beside "Machines vs raw material" since add-on 17,
+// which made "Ignore build cost" the mode "Least raw material" (no horizon preset any more).
 describe('build cost, machine tier and multiblocks', () => {
   const options = (html: string): string[] => [...html.matchAll(/<option value="([^"]*)"( selected="")?>([^<]*)<\/option>/g)].map((m) => `${m[1]}=${m[3]}${m[2] === undefined ? '' : ' *'}`);
   const select = (html: string, label: string): string[] => options(new RegExp(`<select[^>]*aria-label="${label}"[^>]*>.*?</select>`, 's').exec(html)?.[0] ?? '');
   const optionsSection = (html: string): string => /<h3>Options<\/h3>.*?<\/section>/s.exec(html)?.[0] ?? '';
+  const planForSection = (html: string): string => /<legend class="settings-title">Plan for<\/legend>.*?<\/section>/s.exec(html)?.[0] ?? '';
   /** What picking `value` in the select of `field` sends. */
   const sendsOf = (field: (props: { settings: PlanSettings; plan?: Plan | null; patch: (p: Partial<PlanSettings>) => void }) => ReactElement,
     settings: PlanSettings, value: string, plan: Plan | null = null): unknown[] => {
@@ -198,33 +201,35 @@ describe('build cost, machine tier and multiblocks', () => {
 
   it('shows 24 hours for a project without buildHorizonHours', () => {
     expect(BUILD_HORIZON_PRESETS.map((p) => [p.value, p.hours, p.label])).toEqual([
-      ['1', 1, '1 hour'], ['8', 8, '8 hours'], ['24', 24, '24 hours'], ['168', 168, '1 week'], ['none', null, 'Ignore build cost']]);
+      ['1', 1, '1 hour'], ['8', 8, '8 hours'], ['24', 24, '24 hours'], ['168', 168, '1 week']]);
     expect(horizonChoice(undefined)).toEqual({ value: '24', label: '24 hours' });
     const old = { ...defaultSettings() };
     delete old.buildHorizonHours;
-    expect(select(panelOf(old), 'Count build cost against')).toEqual(['1=1 hour', '8=8 hours', '24=24 hours *', '168=1 week', 'none=Ignore build cost']);
-    expect(optionsSection(panelOf(old))).toContain('Count build cost against');
+    expect(select(panelOf(old), 'Count build cost against')).toEqual(['1=1 hour', '8=8 hours', '24=24 hours *', '168=1 week']);
+    expect(planForSection(panelOf(old))).toContain('Count build cost against');
   });
-  it('sends the horizon picked: a week, or ignoring build cost', () => {
+  it('sends the horizon picked: a week', () => {
     expect(sendsOf(BuildHorizonField, defaultSettings(), '168')).toEqual([{ buildHorizonHours: 168 }]);
-    expect(sendsOf(BuildHorizonField, defaultSettings(), 'none')).toEqual([{ buildHorizonHours: null }]);
+    expect(sendsOf(BuildHorizonField, defaultSettings(), 'none')).toEqual([]);                   // no preset any more: least raw material is a mode
     expect(sendsOf(BuildHorizonField, defaultSettings(), '24')).toEqual([]);                     // the value it has: nothing to send
     expect(horizonPatch('1')).toEqual({ buildHorizonHours: 1 });
-    for (const patch of [horizonPatch('168'), horizonPatch('none'), horizonPatch('8')]) expect(validateOp({ op: 'settings', patch })).toBeNull();
-    expect(select(panelOf({ ...defaultSettings(), buildHorizonHours: null }), 'Count build cost against')).toContain('none=Ignore build cost *');
+    expect(horizonPatch('none')).toEqual({});
+    for (const patch of [horizonPatch('168'), horizonPatch('8')]) expect(validateOp({ op: 'settings', patch })).toBeNull();
+    // A running line without a horizon plans least raw material, which counts no build cost: no select.
+    expect(panelOf({ ...defaultSettings(), buildHorizonHours: null })).not.toContain('aria-label="Count build cost against"');
   });
   it('shows a stored horizon that is no preset as Custom', () => {
     expect(horizonChoice(48)).toEqual({ value: 'custom', label: 'Custom (48 h)' });
     expect(horizonChoice(168)).toEqual({ value: '168', label: '1 week' });
-    expect(horizonChoice(null)).toEqual({ value: 'none', label: 'Ignore build cost' });
+    expect(horizonChoice(null)).toEqual({ value: '24', label: '24 hours' });
     expect(select(panelOf({ ...defaultSettings(), buildHorizonHours: 48 }), 'Count build cost against')).toEqual([
-      '1=1 hour', '8=8 hours', '24=24 hours', '168=1 week', 'none=Ignore build cost', 'custom=Custom (48 h) *']);
+      '1=1 hour', '8=8 hours', '24=24 hours', '168=1 week', 'custom=Custom (48 h) *']);
     expect(sendsOf(BuildHorizonField, { ...defaultSettings(), buildHorizonHours: 48 }, 'custom')).toEqual([]);
   });
   it('says in Make N that the batch carries the build cost, with no select', () => {
     const html = panelOf({ ...defaultSettings(), mode: 'makeN', amount: 64 });
     expect(html).not.toContain('aria-label="Count build cost against"');
-    expect(optionsSection(html)).toContain('Make N counts the build cost of new machines against the batch itself.');
+    expect(planForSection(html)).toContain('Make N counts the build cost of new machines against the batch itself.');
     expect(panelOf(defaultSettings())).not.toContain('Make N counts the build cost');
   });
 
