@@ -405,19 +405,22 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
     const newBlocks = (plan: Plan): number => plan.steps
       .filter((st) => st.machine.mteId >= 0 && (st.pool === undefined || st.pool.steps[0] === st.id))
       .reduce((n, st) => n + Math.max(0, st.count - st.owned), 0);
-    /** 737bcd0's build-MIP objectives (`buildStats.objective`, nothing owned, empty context), measured on a5f5100. */
+    /**
+     * The build-MIP objectives (`buildStats.objective`, nothing owned, empty context) on fix wave 3 (D)'s prices, measured
+     * after Task 3 (Task 1 pinned 737bcd0's own, on a5f5100's prices).
+     */
     const PINNED: ReadonlyArray<[string, PlanSettings, number]> = [
-      ['Electronic Circuit MV', at(ELECTRONIC_CIRCUIT, 2, 1), 12.461033224],
-      ['Electronic Circuit MV on Project Red', at(ELECTRONIC_CIRCUIT, 2, 1, { logistics: 'routed' }), 12.461035482],
-      ['Good Electronic Circuit HV', at(GOOD_ELECTRONIC_CIRCUIT, 3, 1), 18.001102870],
-      ['Polyethylene Bar MV', at(POLYETHYLENE_BAR, 2, 1), 8.560959884],
-      ['Steel Ingot MV x10', at(STEEL_INGOT, 2, 10), 11.942477007],
-      ['Electronic Circuit LV', at(ELECTRONIC_CIRCUIT, 1, 1), 17.236946974],
-      ['Electronic Circuit LV on Project Red', at(ELECTRONIC_CIRCUIT, 1, 1, { logistics: 'routed' }), 17.255959337],
-      ['Electronic Circuit LV on AE2', at(ELECTRONIC_CIRCUIT, 1, 1, { logistics: 'ae2' }), 15.853602028],
-      ['Advanced Circuit HV 1/min', at(ADVANCED_CIRCUIT, 3, 1, { routeDerived: false }), 24.120350305],
-      ['Advanced Circuit HV 1/h', at(ADVANCED_CIRCUIT, 3, 1, { routeDerived: false, per: 'hour' }), 33.545086173],
-      ['Advanced Circuit HV 1/min, supporting lines', at(ADVANCED_CIRCUIT, 3, 1), 27.196379291],
+      ['Electronic Circuit MV', at(ELECTRONIC_CIRCUIT, 2, 1), 12.451591979],
+      ['Electronic Circuit MV on Project Red', at(ELECTRONIC_CIRCUIT, 2, 1, { logistics: 'routed' }), 12.451594296],
+      ['Good Electronic Circuit HV', at(GOOD_ELECTRONIC_CIRCUIT, 3, 1), 17.294139328],
+      ['Polyethylene Bar MV', at(POLYETHYLENE_BAR, 2, 1), 8.410411920],
+      ['Steel Ingot MV x10', at(STEEL_INGOT, 2, 10), 11.924229250],
+      ['Electronic Circuit LV', at(ELECTRONIC_CIRCUIT, 1, 1), 17.240499791],
+      ['Electronic Circuit LV on Project Red', at(ELECTRONIC_CIRCUIT, 1, 1, { logistics: 'routed' }), 17.259551046],
+      ['Electronic Circuit LV on AE2', at(ELECTRONIC_CIRCUIT, 1, 1, { logistics: 'ae2' }), 15.856850743],
+      ['Advanced Circuit HV 1/min', at(ADVANCED_CIRCUIT, 3, 1, { routeDerived: false }), 22.294776901],
+      ['Advanced Circuit HV 1/h', at(ADVANCED_CIRCUIT, 3, 1, { routeDerived: false, per: 'hour' }), 33.562427797],
+      ['Advanced Circuit HV 1/min, supporting lines', at(ADVANCED_CIRCUIT, 3, 1), 27.699827544],
     ];
     const statsOf = (run: BuildRun): NonNullable<Solution['buildStats']> => run.sol.buildStats as NonNullable<Solution['buildStats']>;
     const logPick = (name: string, stats: NonNullable<Solution['buildStats']>): void => {
@@ -425,7 +428,7 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
         + `${stats.retried ? ', retried at 1e-9' : ''}${stats.earlier ? ', an earlier incumbent' : ''}, ${stats.seconds.toFixed(2)} s`);
     };
 
-    it.each(PINNED)('is no worse by the build MIP than 737bcd0 on %s', async (name, s, pinned) => {
+    it.each(PINNED)('is no worse by the build MIP than its measured pin on %s', async (name, s, pinned) => {
       const stats = statsOf(await buildRun(s));
       logPick(name, stats);
       expect(stats.approx).toBe(false);
@@ -448,7 +451,7 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
       const stats = statsOf(await buildRun(at(GOOD_ELECTRONIC_CIRCUIT, 3, 2)));
       logPick('Good Electronic Circuit HV x2', stats);
       expect(stats.status).toBe('optimal');
-      expect(stats.objective as number).toBeLessThanOrEqual(17.755002798 * (1 + 1e-6));
+      expect(stats.objective as number).toBeLessThanOrEqual(17.755272959 * (1 + 1e-6));
     }, 300_000);
   });
 
