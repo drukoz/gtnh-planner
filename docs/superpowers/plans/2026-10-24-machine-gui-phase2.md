@@ -233,11 +233,13 @@ edits of Tasks 3a–14 were added the same day, for spec §25.
     × 1.148) and keeps the old line box in px — 13 → 15 px, 14 → 16, 18 → 21, 24 → 28; the step numbers' marker too, 16 px on the
     list's 20.3 px line, which its inherited 1.45 would make 23.2 — and `span.fig` is 1.15 em on a line height of 0. Spec §25's table
     lists every element.
-  - `compare-shrink-vt323` (Task 2b): `.compare-row > dd` `font: 28px/26.4px var(--font-digits)` and `font-size: clamp(14px,
+  - `compare-shrink-vt323` (Task 2b): `.compare-row > dd` `font: 28px/26.390625px var(--font-digits)` and `font-size: clamp(14px,
     calc(100cqi / (var(--glyphs, 1) * 0.41)), 28px)`: 28 px gives the 24 px Pixelify digit height, 14 px is the floor, 0.41 is VT323's
-    0.4 em advance with 2.5 % to spare (at 0.4 a figure measured 213.28 px in a 213.33 px box). The 26.4 px line is the one 24 px/1.1
-    gave, now fixed, so a tile is 54.7 px at every size (it shrank with its figure before) and Task 8's 55 px blocks hold;
-    `objectives.spec.ts:150-178`'s figures fit unshrunk at 860 and 768 px, with the fonts and without. With VT323 missing, a long
+    0.4 em advance with 2.5 % to spare (at 0.4 a figure measured 213.28 px in a 213.33 px box). The 26.390625 px line is the one 24 px/1.1
+    gave as Chromium lays it out (it floors a unitless line height to 1/64 px; `26.4px`, which it rounds, made a tile 1/64 px taller
+    and moved what is below the tiles: ruling P2-R13), now fixed, so a tile is 54.7 px at every size (it shrank with its figure
+    before) and Task 8's 55 px blocks hold; `objectives.spec.ts:150-178`'s figures fit unshrunk at 860 and 768 px, with the fonts and
+    without. With VT323 missing, a long
     figure — 12 glyphs or more in the narrowest, 160 px tile, 15 at 768 px, 17 at 860 px — ends in "…" (the size-adjusted fallback is
     0.46 em a glyph) until VT323 arrives; it still never breaks or spills (measured in the app at 768 and 860 px).
 - Every commit message ends with the trailer line `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` (as a second `-m`).
@@ -819,8 +821,8 @@ these pins change (deliberate, spec §25's table; after Task 1a find them by the
 | `:1117-1129` (the step numbers) | `['.step-list li::marker', 'font-family', 'var(--font-digits)']` and a new row `['.step-list li::marker', 'line-height', '20.3px']` (the list's own line, 14 px × 1.45, in px: a marker takes the list's 1.45, which at 16 px is a 23.2 px line, and that grows every one-line step row from 26.3 to 27.16 px — measured in the app, where a row is a flex `.tick`); `declared('.step-list li::marker', 'font-size')` `toBe('16px')` (was `toBeUndefined()`: VT323 at 16 px is as tall as the list's 14 px Pixelify); the case's name says "the step numbers in VT323" |
 | `:1762-1770` (the map toolbar) | `['.map-y', 'font', '15px/1 var(--font-digits)']` (the `min-width: 6em` row stays: 90 px now) |
 | `:1898-1927` (the 3D controls) | `['.view3d-layer-text', 'font', '15px/1 var(--font-digits)']` (the em `min-width` checks and the `font-variant-numeric`-after-`font` order stay) |
-| `:2037-2046` (the smart upload) | `['.smart-total', 'font', '16px/18.2px var(--font-digits)']` |
-| `:2302-2312` (the Compare tiles' value) | `['.compare-row > dd', 'font', '28px/26.4px var(--font-digits)']`; the case's name ends "over a green VT323 value" |
+| `:2037-2046` (the smart upload) | `['.smart-total', 'font', '16px/18.1875px var(--font-digits)']` (ruling P2-R13) |
+| `:2302-2312` (the Compare tiles' value) | `['.compare-row > dd', 'font', '28px/26.390625px var(--font-digits)']` (ruling P2-R13); the case's name ends "over a green VT323 value" |
 | `:2314-2333` (the shrink, plan ruling `compare-shrink-vt323`) | `['.compare-row > dd', 'font-size', 'clamp(14px, calc(100cqi / (var(--glyphs, 1) * 0.41)), 28px)']`; its comment: "a tile is at least 160px: 12 glyphs of the 28 px VT323 (0.4 em each, 0.41 with the margin) and 16px of padding"; the name ends "to 14px at the least"; the `font-size`-after-`font` order stays |
 
 New case:
@@ -866,7 +868,7 @@ finds each line in `html.replace(/<span class="fig">|<\/span>/g, '')`, and a new
 ```ts
 test('figures in VT323 keep their boxes whether the fonts arrive or not', async ({ browser }) => {
   // spec §25: a VT323 element has its line in px, so a late VT323 moves nothing; measured on the settings column's count of
-  // reachable dimensions and on a Compare tile (54.7 px: 6 + 14.3 + 2 + 26.4 + 6, which Task 8's skeleton blocks copy)
+  // reachable dimensions and on a Compare tile (54.7 px: 6 + 14.3 + 2 + 26.39 + 6, which Task 8's skeleton blocks copy)
   const boxes = async (blockFonts: boolean): Promise<{ count: number; tile: number; loaded: string[] }> => {
     const context = await browser.newContext();
     try {
@@ -916,17 +918,18 @@ test('figures in VT323 keep their boxes whether the fonts arrive or not', async 
     so a fallback is drawn as tall as VT323's digits;
   - after `.badge.muted` (`:534`): `/* A figure inside Pixelify text (Figs.tsx): as tall as the Pixelify digits round it, and a line height of 0, so it never grows or moves a line. */`
     `.fig { font: 1.15em/0 var(--font-digits); font-size-adjust: cap-height 0.56; }`;
-  - `.compare-row > dd` (`:422-425`): `font: 28px/26.4px var(--font-digits); font-size: clamp(14px, calc(100cqi / (var(--glyphs, 1) * 0.41)), 28px); font-size-adjust: cap-height 0.56;`,
+  - `.compare-row > dd` (`:422-425`): `font: 28px/26.390625px var(--font-digits); font-size: clamp(14px, calc(100cqi / (var(--glyphs, 1) * 0.41)), 28px); font-size-adjust: cap-height 0.56;`,
     the rest as it is; the comment `:388-392`: a tile is at least 160px wide, room for 12 glyphs of the 28px VT323 (every glyph 0.4em,
-    0.41 with a margin); a value too long shrinks to fit, down to 14px, before the ellipsis; its line is 26.4px at every size, so a
-    tile is 54.7px;
+    0.41 with a margin); a value too long shrinks to fit, down to 14px, before the ellipsis; its line is 26.390625px at every size, so a
+    tile is 54.7px (ruling P2-R13: the line 24px/1.1 gave as Chromium lays it out; a one-line comment at the value says so);
   - `details.settings-section > summary > .muted` (`:575-578`): `font: 15px/19.5px var(--font-digits); font-size-adjust: cap-height 0.56;` in place of `font: 13px/1.5 var(--font-pixel)`;
   - `.step-list li::marker` (`:939`): `font-family: var(--font-digits); font-size: 16px; line-height: 20.3px; font-size-adjust: cap-height 0.56;`
     (the line in px, the list's 20.3: with the 1.45 it inherits, the 16 px marker's line is 23.2 px and each one-line row grows from
     26.3 to 27.16 px);
   - `.map-y` (`:978-981`): `font: 15px/1 var(--font-digits); font-size-adjust: cap-height 0.56;` (its comment `:974-975` says the box keeps its size "when VT323 arrives late");
   - `.view3d-layer-text` (`:1254-1258`): `font: 15px/1 var(--font-digits); font-variant-numeric: tabular-nums; font-size-adjust: cap-height 0.56;`;
-  - `.smart-total` (`:1326-1329`): `font: 16px/18.2px var(--font-digits); font-size-adjust: cap-height 0.56;`.
+  - `.smart-total` (`:1326-1329`): `font: 16px/18.1875px var(--font-digits); font-size-adjust: cap-height 0.56;` (ruling P2-R13: the line
+    14px/1.3 gave as Chromium lays it out; a one-line comment at the value says so).
 - `Figs.tsx` per the Interfaces: `figureRuns` matches `/(?:(?<![\p{L}\p{N}])[+−-])?\d+(?:(?:[.,:]|[ –])\d+)*/gu` and keeps the text
   between matches as `{ fig: false }` runs (never an empty one); `Figs` maps the runs to text and `<span key={i} className="fig">` (with
   `svg`, `<tspan key={i} className="fig">`).
@@ -2027,7 +2030,7 @@ git commit -m "feat(client): the key-numbers strip, counting up to what changed"
   `.key-numbers > dl` with `52px` blocks, diagram `display: grid; grid-template-columns: repeat(3, 110px); gap: 40px; align-content: center; height: 240px; padding: 20px` with `70px` blocks,
   scene `height: 360px; padding: 20px` with one `100%` block, lines' even blocks `width: 70%`; readouts, the tiles' own grid
   (`display: grid` and the `grid-template-columns` of `.compare-rows`, `repeat(auto-fit, minmax(min(160px, 100%), 1fr))`, so the six blocks
-  fall as the six tiles will), gap `4px`, six `55px` blocks: a `.compare-row` is 6 + 14.3 + 2 + 26.4 + 6 px (26.4 px: the value's line, which Task 2b fixes in px, so a tile
+  fall as the six tiles will), gap `4px`, six `55px` blocks: a `.compare-row` is 6 + 14.3 + 2 + 26.39 + 6 px (26.390625 px: the value's line, which Task 2b fixes in px (ruling P2-R13), so a tile
   keeps it at every size: plan ruling `compare-shrink-vt323`); compare, the
   `.compare-columns` grid (`repeat(auto-fit, minmax(220px, 1fr))`, gap `12px`) of three readouts frames, each framed as a column is —
   `.skeleton-compare > .skeleton-readouts { border: 2px solid; border-color: var(--panel-lo) var(--panel-hi) var(--panel-hi) var(--panel-lo); padding: 35.5px 10px 52px; }`:
@@ -2835,7 +2838,7 @@ task numbers of this plan; the last column says how the plan now settles each ro
 | V1 | 1a, 1b, 2 → 2b | `styles.css` (the first `:root`; the Compare comment and value `:388-425`; `:534`; `:575-578`; `:939`; `:974-981`; `:1254-1258`; `:1326-1329`), `$P2/tour.mjs`, `$P2/maskdiff.py` | 1a turns colours into tokens and proves the light look against `base-a`; 1b adds the dark blocks; 2 the logo; 2b changes the figures' fonts only | Yes | 2b runs after the three, so 1a's identity check stands as made; from 2b on the light figures differ on purpose | 2b's maskdiff takes Task 2's light shots as its reference (`2 base-b 2b`: 1b's Theme button and 2's logo are in the mask) and accepts differences inside the switched elements' boxes and along their lines only, and Task 14 compares the figures with 2b's shots; `--font-digits` is a font token, which 1b's `/^--(…\|font\|…)/` keeps out of the dark blocks |
 | V2 | 2b → 5a, 7 | `styles-contract.test.tsx`: `FONT_IMPORTS`, `TOKENS`, `DIGIT_RULES`, `DIGITS_FLOOR`, the cases at `:805-821`, `:1117-1129`, `:1762-1770`, `:1898-1927`, `:2037-2046`, `:2302-2333` (find them by text after 1a) | 2b defines `DIGIT_RULES`; 5a appends `.stack-count` and `.readout dd`, 7 `.key-number dd` and `.key-number-unit` | Yes | the case asserts the exact list of rules that name `var(--font-digits)`, so each task appends its own in its commit; `contrast.test.tsx` is not touched: 2b changes no colour, so 1a's `PAIRS`, its guard on `contrast-phase1.json` and every later task's pairs stand | — |
 | V3 | 2b → 3a, 4, 5a, 11 | `Figs` (`figureRuns`, `span.fig`, `tspan.fig`) | 3a's `TipLines`; 4's count chip (`svg`); 5a's chance tag, tier and overclock chips; 11's key caps | Yes | their new markup tests are written with `span.fig` from the start | `digits-mixed` |
-| V4 | 2b ↔ 8 | a Compare tile's height (6 + 14.3 + 2 + 26.4 + 6) and `skeleton-readouts`' 55 px blocks | 2b fixes the value's line at 26.4 px | Yes | the old `24px/1.1` line shrank with its figure; the new one keeps 54.7 px, so 8's frames match at every width | `compare-shrink-vt323` |
+| V4 | 2b ↔ 8 | a Compare tile's height (6 + 14.3 + 2 + 26.39 + 6) and `skeleton-readouts`' 55 px blocks | 2b fixes the value's line at 26.390625 px (P2-R13) | Yes | the old `24px/1.1` line shrank with its figure; the new one keeps 54.7 px, so 8's frames match at every width | `compare-shrink-vt323` |
 | V5 | 2b ↔ 4 | `CHIP_CHAR_WIDTH = 9`, `chipWidth`, the box widths | a count's digits in `tspan.fig` (VT323 14.95 px) | Yes | measured: '×5' 13.8 px with the fonts and 14.5 without, against 18; every width as before | `digits-token` (the fallback's `font-size-adjust`) |
 | V6 | 2b → 5a, 6a | `.stack-count` and `144L` in a 36 px slot (5a's e2e 6), the grid's stacks and `+N` slot | 5a sets it VT323 16 px/14 px; 6a draws it | Yes | 25.6 px; 29.6 px with the fonts blocked (38.5 without the adjust) | 5a's e2e checks it side to side, and its premise names a VT323 face |
 | V7 | 2 ↔ 2b ↔ 7 | `chrome.spec.ts` | 2's brand case; 2b's 'figures in VT323 keep their boxes…'; 7's strip case | Yes | separate tests; 2b's and 7's premises name a VT323 face, and the first test's blocked context still loads none | — |

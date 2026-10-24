@@ -2113,7 +2113,9 @@ describe('the Machine GUI World page', () => {
       ['.smart-upload > h3', 'margin', '0'], ['.smart-upload > h3', 'font', '600 14px/1.3 var(--font-pixel)'], ['.smart-upload > p', 'margin', '0'],
       ['.smart-areas', 'margin', '0'], ['.smart-areas', 'padding-left', '20px'], ['.smart-radius', 'gap', '12px'],
       ['.smart-total', 'align-self', 'flex-start'], ['.smart-total', 'padding', '4px 8px'], ['.smart-total', 'background', 'var(--screen)'],
-      ['.smart-total', 'box-shadow', 'var(--bevel-well)'], ['.smart-total', 'color', 'var(--screen-text)'], ['.smart-total', 'font', '16px/18.2px var(--font-digits)'],
+      ['.smart-total', 'box-shadow', 'var(--bevel-well)'], ['.smart-total', 'color', 'var(--screen-text)'],
+      // the line 14px/1.3 gave, as Chromium lays it out (it floors that to 1/64 px and would round 18.2px up): nothing below moves (P2-R13)
+      ['.smart-total', 'font', '16px/18.1875px var(--font-digits)'],
     ]);
     expect(position('.smart-radius')).toBeGreaterThan(position('.row'));
   });
@@ -2377,7 +2379,8 @@ describe('the Machine GUI planning modes, farms and the Compare card', () => {
       ['.compare-rows', 'display', 'grid'], ['.compare-rows', 'margin', '0'],
       ['.compare-row', 'background', 'var(--screen)'], ['.compare-row', 'box-shadow', 'var(--bevel-well)'], ['.compare-row', 'border-radius', '0'],
       ['.compare-row > dt', 'color', 'var(--screen-muted)'], ['.compare-row > dt', 'font-size', '11px'],
-      ['.compare-row > dd', 'color', 'var(--screen-text)'], ['.compare-row > dd', 'font', '28px/26.4px var(--font-digits)'],
+      // the line 24px/1.1 gave, as Chromium lays it out (it floors that to 1/64 px and would round 26.4px up): a tile keeps its height (P2-R13)
+      ['.compare-row > dd', 'color', 'var(--screen-text)'], ['.compare-row > dd', 'font', '28px/26.390625px var(--font-digits)'],
       ['.compare-row > dd', 'margin', '0'],
     ]);
     // the label stays Inter: the pixel font is never below 13px

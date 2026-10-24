@@ -116,7 +116,7 @@ test('the brand\'s pipe flows six turns, then rests; under reduced motion it hol
 
 test('figures in VT323 keep their boxes whether the fonts arrive or not', async ({ browser }) => {
   // spec §25: a VT323 element has its line in px, so a late VT323 moves nothing; measured on the settings column's count of
-  // reachable dimensions and on a Compare tile (54.7 px: 6 + 14.3 + 2 + 26.4 + 6, which Task 8's skeleton blocks copy)
+  // reachable dimensions and on a Compare tile (54.7 px: 6 + 14.3 + 2 + 26.39 + 6, which Task 8's skeleton blocks copy)
   const boxes = async (blockFonts: boolean): Promise<{ count: number; tile: number; loaded: string[] }> => {
     const context = await browser.newContext();
     try {

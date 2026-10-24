@@ -3061,12 +3061,12 @@ whose digits match the Pixelify ones it had, and keeps the line box it had, in p
 
 | Element | Before | After | Line box | Why |
 |---|---|---|---|---|
-| Compare tile value `.compare-row > dd` (add-on 17) | Pixelify 24 px/1.1, shrinking to 13 px at 0.6 em a glyph | VT323 28 px, shrinking to 14 px at 0.41 em a glyph | 26.4 px | 15.68 against 15.43 px digits; 26.4 px is the line 24 px/1.1 gave, now fixed, so a tile is 6 + 14.3 + 2 + 26.4 + 6 = 54.7 px at every size (measured 54.70 at 28 and at 14 px; the old line shrank with its figure, the tile to 42.6 px) and Task 8's 55 px blocks hold |
+| Compare tile value `.compare-row > dd` (add-on 17) | Pixelify 24 px/1.1, shrinking to 13 px at 0.6 em a glyph | VT323 28 px, shrinking to 14 px at 0.41 em a glyph | 26.390625 px | 15.68 against 15.43 px digits; 26.390625 px is the line 24 px/1.1 gave as Chromium lays it out (it floors a unitless line height to 1/64 px, and `26.4px`, which it rounds, made a tile 1/64 px taller and moved what is below it: ruling P2-R13), now fixed, so a tile is 6 + 14.3 + 2 + 26.39 + 6 = 54.7 px at every size (54.6875 px, as before; the old line shrank with its figure, the tile to 42.6 px) and Task 8's 55 px blocks hold |
 | Step number `.step-list li::marker` | Pixelify, the list's 14 px | VT323 16 px/20.3 px | 20.3 px, the list's (14 px × 1.45) in px | 8.96 against 9.00 px. The marker inherits the list's 1.45, a 23.2 px line at 16 px, and in the app (a row is a flex `.tick`) that grew every one-line row from 26.3 to 27.16 px; on the list's 20.3 px every row keeps its height (26.3 px, the longer ones 46.59, 87.19, 127.78) in VT323, its fallback or Pixelify |
 | Map Y readout `.map-y` | Pixelify 13 px/1 | VT323 15 px/1 | 15 px, in its 32 px box | "Y ≤ 255" 44.2 px, "surface" 42.0; its pinned `min-width: 6em` is 90 px now (78 before) |
 | Settings summary count `details.settings-section > summary > .muted` | Pixelify 13 px/1.5 | VT323 15 px/19.5 px | 19.5 px | "3 of 5 reachable" 96.0 px (101.8 before): "Reachable dimensions" (165.4 px) still wraps beside it, with 141 px at 1280 × 720 and 127 px in the drawer, as R37's `drawer.spec.ts:225-266` needs |
 | 3D layer readout `.view3d-layer-text` | Pixelify 13 px/1 | VT323 15 px/1 | 15 px, in its 28 px box | "Layers 1–120 of 255" 114 px; its `min-width: 10em` (the contract asks for em) is 150 px now (130 before) |
-| Smart upload total `.smart-total` | Pixelify 14 px/1.3 | VT323 16 px/18.2 px | 18.2 px | "To send: 5 chunks, 12 KB" 153.6 px (154.3 before) |
+| Smart upload total `.smart-total` | Pixelify 14 px/1.3 | VT323 16 px/18.1875 px | 18.1875 px | the line 14 px/1.3 gave as Chromium lays it out (ruling P2-R13: `18.2px` moved what is below by 1/64 px); "To send: 5 chunks, 12 KB" 153.6 px (154.3 before) |
 | `span.fig` / `tspan.fig` (`Figs`) | the parent's Pixelify, 13–19.2 px | VT323 1.15 em of the parent | 0 | the parent's digit height; it moves no line (previous call) |
 | Flow count chip (Task 4) | Pixelify 13 px | Pixelify 13 px, its digits `tspan.fig` at 14.95 px | — | `CHIP_CHAR_WIDTH` 9 still holds and every box keeps §7.2's width: "×5" 13.8 px with the fonts and 14.5 without, in 28 px less 2 × 5; "×1 shared" 62.6 / 57.9 px in 91; "×128" 25.8 / 28.3 px in 46 |
 | Stack count `.stack-count` (Tasks 5a, 6a) | Pixelify 14 px/1 | VT323 16 px/14 px | 14 px | 8.96 against 9.00 px, in the box Pixelify's 14 px/1 had, its digits 0.75 px lower (measured at 4×); "144L" is 25.6 px, and 29.6 px with the fonts blocked (38.5 without the adjust), in the 36 px slot |
@@ -3079,8 +3079,8 @@ whose digits match the Pixelify ones it had, and keeps the line box it had, in p
 | NEI tooltip (Task 3a), map tooltip, 3D hover label | Pixelify 14 px/1.35 | the same, figures `span.fig` at 16.1 px | 18.9 px | measured: no line grows |
 
 **Builder's call: the Compare tiles' shrink, re-derived** (Task 2b; plan ruling `compare-shrink-vt323`). `.compare-row > dd` takes
-`font: 28px/26.4px var(--font-digits); font-size: clamp(14px, calc(100cqi / (var(--glyphs, 1) * 0.41)), 28px); font-size-adjust:
-cap-height 0.56`, the rest of the rule (`white-space: nowrap`, `overflow: hidden`, `text-overflow: ellipsis`, `overflow-wrap: normal`)
+`font: 28px/26.390625px var(--font-digits); font-size: clamp(14px, calc(100cqi / (var(--glyphs, 1) * 0.41)), 28px); font-size-adjust:
+cap-height 0.56` (the 26.390625 px line: ruling P2-R13), the rest of the rule (`white-space: nowrap`, `overflow: hidden`, `text-overflow: ellipsis`, `overflow-wrap: normal`)
 and the tile's `container-type: inline-size` as they are. The maximum, 28 px, matches the 24 px Pixelify digits; the floor, 14 px, is
 VT323's; the em a glyph is VT323's advance, 0.4, plus 2.5 % so that a figure that just fits is never cut at a subpixel (with 0.4,
 "1,000,000,000,000,000" measured 213.28 px in a 213.33 px box). The old 0.6 was Pixelify's 0.586 rounded up. A 160 px tile (144 px
@@ -3105,9 +3105,9 @@ with `span.fig` from the start):
 
 | Test | Before → after | Task |
 |---|---|---|
-| `styles-contract.test.tsx:2302-2333` (the Compare tiles) | `.compare-row > dd` `font` `24px/1.1 var(--font-pixel)` → `28px/26.4px var(--font-digits)`; `font-size` → `clamp(14px, calc(100cqi / (var(--glyphs, 1) * 0.41)), 28px)`; its comment's "11 glyphs of the 24px pixel font, at most 0.6em each" → "12 glyphs of the 28 px VT323, 0.41 em each"; "to 13px at the least" → "to 14px" | 2b |
+| `styles-contract.test.tsx:2302-2333` (the Compare tiles) | `.compare-row > dd` `font` `24px/1.1 var(--font-pixel)` → `28px/26.390625px var(--font-digits)` (ruling P2-R13); `font-size` → `clamp(14px, calc(100cqi / (var(--glyphs, 1) * 0.41)), 28px)`; its comment's "11 glyphs of the 24px pixel font, at most 0.6em each" → "12 glyphs of the 28 px VT323, 0.41 em each"; "to 13px at the least" → "to 14px" | 2b |
 | `styles-contract.test.tsx:1117-1129` (the step numbers) | `font-family` `var(--font-pixel)` → `var(--font-digits)`; `declared('.step-list li::marker', 'font-size')` `toBeUndefined()` → `toBe('16px')`; a row added, `line-height` `20.3px` | 2b |
-| `styles-contract.test.tsx:805-821`, `:1762-1770`, `:1898-1927`, `:2037-2046` | the `font` rows of the summary count, `.map-y`, `.view3d-layer-text` and `.smart-total` → `15px/19.5px`, `15px/1`, `15px/1` and `16px/18.2px var(--font-digits)` | 2b |
+| `styles-contract.test.tsx:805-821`, `:1762-1770`, `:1898-1927`, `:2037-2046` | the `font` rows of the summary count, `.map-y`, `.view3d-layer-text` and `.smart-total` → `15px/19.5px`, `15px/1`, `15px/1` and `16px/18.1875px var(--font-digits)` (ruling P2-R13) | 2b |
 | `map-hover.test.tsx:360-362` | MapTooltip's lines are found in its markup with the `span.fig` tags taken out | 2b |
 | `view3d.test.tsx:91`, `:356` | the hover label reads `Basic Macerator — programmed circuit <span class="fig">2</span>` | 2b |
 | `map-summary.test.tsx:93`, `:154-155`, `:172-173`, `:176` | `N<span class="fig">1</span>`, `Show all <span class="fig">13</span> items` | 2b |
