@@ -29,6 +29,8 @@ this plan; they build after plan 22. The user approved building this part first 
 - Blocks **and** items with their `.mcmeta`, plus the chest model sheets `textureEntry` already accepts. An `.mcmeta`
   pairs with its PNG as the game pairs them: it comes from the highest pack at or above the PNG's pack. A jar PNG takes
   a pack's `.mcmeta` if one exists, else its own jar's, as today. A pack PNG without such an `.mcmeta` is still.
+  Minecraft reads `.mcmeta` with Gson's lenient parser, which accepts trailing commas and unquoted keys; about 540 of the
+  packs' `.mcmeta` files need that (Task 3 Step 3).
 - Item icons with an NEI dump icon keep it: the resolver order does not change. `data/assets/nei/` survives every
   extraction, and no pack is ever extracted into it.
 - Connected textures (MCPatcher CTM, under `mcpatcher/`) are not drawn. Animated textures show frame 0, as today.
@@ -52,8 +54,8 @@ this plan; they build after plan 22. The user approved building this part first 
   read from the main checkout's `data/config.json`, which holds secrets. Nothing from it is printed.
 - Never write the main checkout or its `data/`. Never start, stop or modify the live Minecraft server. Never send a
   request to 127.0.0.1:8765 or 8766. Never touch the `plan-18-projector-aim-screen` worktree.
-- Architecture §11 entry **54** (53 is reserved for plan 22; 39, 41, 44, 45 and 46 are reserved for add-ons still on
-  branches). It amends entries 17 and 43 (i).
+- Architecture §11 entry **54** (53 is reserved for plan 22; 41, 44, 45 and 46 are reserved for add-ons still on
+  branches; 39 is already in the doc). It amends entries 17 and 43 (i).
 - The live extraction into the main checkout's `data/assets` is a **controller** step after the merge. It is written out
   at the end of this plan and is not an agent task.
 
@@ -68,13 +70,16 @@ this plan; they build after plan 22. The user approved building this part first 
    valid `pack.mcmeta` and a name such as `../x`. Each must be read or skipped with a warning, never crash, and never
    be read outside `resourcepacks/`. Test: Task 1 `readPackSet`.
 3. **A pack "PNG" that is not a PNG.** Modernity's `dreamcraft/textures/blocks/blockPixieDust.png` is a JPEG. It is
-   left out with a warning that names it, as for jars today. It falls back to no jar copy, because the game draws the
-   top pack's file or nothing. Test: Task 3 `not a PNG`.
+   left out with a warning that names it, as a jar's non-PNG winner is left out today, and it does not fall back to a
+   jar copy (fewer moving parts: no second layering pass). The game reads textures with `ImageIO.read`, which detects a
+   JPEG by its content, so the game most likely shows Modernity's image; the planner shows that block's fallback
+   instead. One file on 2026-10-23. Test: Task 3 `not a PNG`.
 4. **The pack changes while the extraction runs** (the client is open and the user switches packs). Each file must be
    copied exactly as scanned. Otherwise the run fails, and the previous textures stay in place. Test: Task 3
    `copyFromFolder refuses a file that changed`.
-5. **A later run that is not the first.** It must say what changed (a pack added, removed, re-ordered, updated, its
-   files edited) and print nothing about packs when nothing changed. `--no-packs` after a packs run must say the packs
+5. **A later run that is not the first.** It must say what changed (a pack added, removed, re-ordered, updated, or a
+   change in its texture file count or total size; an edit that keeps both is not seen) and print nothing about packs
+   when nothing changed. `--no-packs` after a packs run must say the packs
    were removed. Tests: Task 1 `packChanges`, Task 4 `reports pack changes`.
 
 ---
@@ -114,8 +119,11 @@ Facts the tasks rely on, checked on this tree (2026-10-23):
   `options.txt` line 18 reads `resourcePacks:["UU-Tex-main","Modernity-GTNH-Dark-UI","Modernity-GTNH-2026-08-31.zip"]`.
   The `pack.mcmeta` versions by this plan's rule are `2.0` (UU-Tex's `gtnh_resource_pack_updater.pack_version`),
   `Modrenity-GTNH-DARK-UI-v1.2.1` and `Modernity-GTNH-v1.5.6` (BOM-prefixed descriptions, `§b` removed). CTM files
-  live under `assets/<domain>/mcpatcher/`, so `textureEntry` already ignores them. Neither pack has an
-  `assets/nei/textures/` folder. Modernity ships chest sheets (`assets/minecraft/textures/entity/chest/normal.png`).
+  live under `assets/<domain>/mcpatcher/`, so `textureEntry` already ignores them. Modernity-GTNH-Dark-UI ships
+  `assets/nei/textures/` (GUI sprites and `items/cheat_speical.png`, which `textureEntry`'s shape would accept); the
+  `nei` domain is left out of every pack as of every jar, so `data/assets/nei/` is never written. UU-Tex-main and the
+  Modernity zip have no `assets/nei/`. Modernity ships chest sheets (`assets/minecraft/textures/entity/chest/normal.png`).
+  Every domain folder in the two folder packs is lower case.
 - `tests/unit/assets/real-assets.test.ts` already fails on main (backlog): the Iron Ore icon resolves to `nei`
   (`:58-61` expects `gt`), and the icon coverage is 42.3 % against `> 0.9` (`:94`). With packs, the LV Macerator's
   faces (`:45-46`) gain `OVERLAY_FRONT_GLOW` and `OVERLAY_TOP_GLOW`. Both packs ship them, and GT draws its
@@ -133,10 +141,15 @@ No commit. Nothing here changes a tracked file.
 - [ ] **Step 1: Check the base**
 
 ```bash
-git status --short && git log --oneline -2 && git branch --show-current
+git status --short && git branch --show-current && git log --oneline -6
+git merge-base --is-ancestor cfaa05b HEAD && echo base-ok
+git diff --stat cfaa05b HEAD
 ```
-Expected: clean, `21d55b6 docs(spec): your base around the line …` on top of `cfaa05b`, branch
-`plan/23-pack-textures`.
+Expected: a clean tree on branch `plan/23-pack-textures`, and `base-ok`. The log holds this plan's commit(s) (`docs(plan):
+add-on 23 …`) over `ab30e1c docs(spec): base around the line: builder-check calls …` over `21d55b6 docs(spec): your
+base around the line …` over `cfaa05b`; the top commit is not fixed. `git diff --stat cfaa05b HEAD` lists only
+`docs/superpowers/specs/2026-10-23-base-around-the-line-design.md` and
+`docs/superpowers/plans/2026-10-23-23-pack-textures.md`.
 
 - [ ] **Step 2: Install and run the suite**
 
@@ -148,25 +161,39 @@ Expected: green (real-data tests skipped). Write the pass/skip counts at the top
 - [ ] **Step 3: Set up the worktree's data**
 
 ```bash
+set -euo pipefail
+test ! -e data && test ! -L data || { echo 'data/ already exists: stop and report'; exit 1; }
 REPO="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
 mkdir -p data .local
-ln -s "$REPO/data/export" data/export
-ln -s "$REPO/data/scans" data/scans                  # read only: real-coverage reads the newest done scan
+ln -sn "$REPO/data/export" data/export
+ln -sn "$REPO/data/scans" data/scans                 # read only: real-coverage reads the newest done scan
 mkdir data/assets                                    # a REAL folder: the extraction writes it
+test -L data/assets && exit 1
 cp -Rc "$REPO/data/assets/nei" data/assets/nei       # APFS clone of the NEI import; the main checkout is only read
 python3 -I -c "import json,os,sys; c=json.load(open(sys.argv[1])); json.dump({'dataDir': os.path.abspath('data'), 'serverFolder': c.get('serverFolder'), 'activeExportId': c.get('activeExportId'), 'clientJar': c.get('clientJar'), 'host': '127.0.0.1', 'port': 18794}, open('data/real-config.json', 'w'), indent=2)" "$REPO/data/config.json"
 chmod 600 data/real-config.json
 test -L data/assets && echo WRONG || echo ok
 ```
-Expected: `ok`. Nothing is printed from the main config.
+Expected: `ok`. Nothing is printed from the main config. If the guard prints `data/ already exists`, do not remove or
+re-create anything: stop and report to the controller (a retry after a partial failure must not write through an
+existing link into the main checkout's `data/`).
+
+**The extraction preflight.** Run this block, in the same shell command, right before **every** extraction in this
+plan (Task 0 Step 4, Task 5 Step 2, both runs). It stops unless `data/assets` is this worktree's real folder and the
+config's `dataDir` is this worktree's `data/`:
+```bash
+test -d data/assets && ! test -L data/assets && python3 -I -c "import json,os,sys; c=json.load(open('data/real-config.json')); sys.exit(0 if os.path.realpath(c['dataDir'])==os.path.realpath('data') else 1)" || { echo 'not the worktree data: stop'; exit 1; }
+test -e data/assets/nei/index.json || { echo 'no NEI import in data/assets/nei: stop'; exit 1; }
+```
 
 - [ ] **Step 4: A stock extraction with today's code, as the baseline**
 
 ```bash
+# the extraction preflight (above), then:
 time GTNH_PLANNER_CONFIG=$PWD/data/real-config.json npm run extract-assets
+test -e data/assets/nei/index.json && echo nei-kept
 ```
-Expected: exit 0, `Extracted 44… textures (… MB) from 21… jars into …/data/assets`. `data/assets/nei/index.json`
-still exists.
+Expected: exit 0, `Extracted 44… textures (… MB) from 21… jars into …/data/assets`, then `nei-kept`.
 
 - [ ] **Step 5: Baseline the real-data tests and the load time**
 
@@ -182,9 +209,58 @@ const d = await loadTexturesDump(activeExportDir(c), ix); const t2 = performance
 console.log(JSON.stringify({ files: ix.size, indexMs: Math.round(t1 - t0), dumpMs: Math.round(t2 - t1), droppedLayers: d?.stats.droppedLayers }));"
 du -sh data/assets
 ```
+
+Then measure what a page draws (the cost of packs is on the client: the Map palette and the 3D tab download and
+decode every drawn file). Write this script to the gitignored `.local/drawn.mjs` and run it with
+`GTNH_PLANNER_CONFIG=$PWD/data/real-config.json node --disable-warning=ExperimentalWarning .local/drawn.mjs`:
+```js
+// What the newest done scan's palette draws, odd pack sprites, and texture names whose file exists only in another case.
+import { readdir, readFile, stat } from 'node:fs/promises';
+import { join } from 'node:path';
+import { gunzipSync } from 'node:zlib';
+import { loadConfig, activeExportDir } from '../src/server/config.ts';
+import { loadPack } from '../src/server/pack/load.ts';
+import { iconPath, loadAssetIndex } from '../src/server/assets/index.ts';
+import { loadTexturesDump, TEXTURES_FILE } from '../src/server/assets/textures-dump.ts';
+import { loadNeiIndex } from '../src/server/assets/nei.ts';
+import { resolveBlocks } from '../src/server/assets/resolve.ts';
+
+const c = loadConfig(); const assets = join(c.dataDir, 'assets'); const exp = activeExportDir(c);
+const index = await loadAssetIndex(assets);   // as real-assets.test.ts:21-26 loads its sources
+const src = { index, dump: await loadTexturesDump(exp, index), nei: await loadNeiIndex(assets), pack: await loadPack(exp) };
+const scans = join(c.dataDir, 'scans'); let scan;
+for (const id of (await readdir(scans)).sort().reverse()) {   // the newest done scan, as real-coverage.test.ts:176-185 finds it
+  const s = JSON.parse(await readFile(join(scans, id, 'status.json'), 'utf8').catch(() => '{}'));
+  if (s.state === 'done') { scan = id; break; }
+}
+const palette = JSON.parse(await readFile(join(scans, scan, 'palette.json'), 'utf8'));
+const drawn = new Set();
+for (const b of resolveBlocks(src, palette)) for (const layers of Object.values(b.faces)) for (const l of layers) drawn.add(l.path);
+let bytes = 0; const sized = [];
+for (const p of drawn) { bytes += (await stat(join(assets, p))).size; const i = index.info(p); sized.push([p, i?.w ?? 0, i?.h ?? 0]); }
+sized.sort((a, b) => b[1] - a[1]);
+const files = index.file?.files ?? {};
+const packNames = new Set((index.file?.packs?.read ?? []).map((p) => p.name));
+// the game refuses a sprite that is not square and not animated ("broken aspect ratio")
+const odd = Object.entries(files).filter(([, i]) => packNames.has(i.jar) && i.w !== i.h && !i.frames).map(([p, i]) => [p, i.w, i.h, i.jar]);
+const lower = new Map(Object.keys(files).map((k) => [k.toLowerCase(), k]));
+const cands = new Set();
+const walk = (v) => {
+  if (typeof v === 'string') { if (/^[^/]+\/textures\/(blocks|items)\/.+\.png$/.test(v)) cands.add(v); }
+  else if (v !== null && typeof v === 'object') for (const x of Object.values(v)) walk(x);
+};
+const raw = JSON.parse(gunzipSync(await readFile(join(exp, TEXTURES_FILE))).toString('utf8'));   // as real-coverage reads `raw`
+walk(raw);
+for (const atlas of ['blocks', 'items']) for (const n of Object.values(raw.textureNames[atlas])) if (typeof n === 'string') cands.add(iconPath(n, atlas));
+const miss = [...cands].filter((p) => !index.has(p) && lower.has(p.toLowerCase())).map((p) => [p, lower.get(p.toLowerCase()), files[lower.get(p.toLowerCase())].jar]);
+console.log(JSON.stringify({ scan, drawnFiles: drawn.size, totalKB: Math.round(bytes / 1024), largest: sized.slice(0, 5),
+  oddPackSprites: odd.length, oddSample: odd.slice(0, 10), caseMiss: miss.length, caseMissSample: miss.slice(0, 10) }));
+```
+
 Expected: `real-assets` fails exactly the two known ways: `:59` source `nei` and `:94` icon share about 0.42.
-`real-coverage` passes, or its failures are written down. Record in `.local/pack-runs.md`: each failure, the printed
-coverage line(s), the JSON line, `du`, and the extraction's wall time. If anything else fails, stop and report to the
+`real-coverage` passes, or its failures are written down. Record in `.local/pack-runs.md`: each failure, **every**
+printed `real coverage: …` block in full (Task 5 Step 4 compares them line by line), the `reports coverage` line, the
+JSON line, the `drawn.mjs` line, `du`, and the extraction's wall time. If anything else fails, stop and report to the
 controller.
 
 ---
@@ -218,6 +294,9 @@ controller.
     - `export async function readPackSet(gameDir: string): Promise<{ set: PackSet; skipped: SkippedPack[] }>`
     - `export function packChanges(prev: AssetPacks | undefined, next: AssetPacks | undefined): string[]`
 
+`parseResourcePacks` does not strip a byte-order mark: the game reads the first line's key with the BOM too, and
+`options.txt` starts with `version:`, so a BOM never touches the `resourcePacks` line in practice.
+
 `readPackSet` reads `options.txt` once. `enabled` is `parseResourcePacks` of it, as listed. For each name it checks, in
 order:
 - the name is empty, `.` or `..`, or holds `/`, `\` or a control character: skipped with `not a pack name`;
@@ -233,7 +312,7 @@ order:
 Lines, in this order:
 1. For each pack of `next.read`, lowest first, at most one line: `added <name> (<version>)`, or
    `<name>: <old version> → <new version>`, or `<name>: same version, different files` when `entries` or `bytes`
-   differ.
+   differ. An edit that keeps both counts is not seen (no per-file CRC is kept: fewer moving parts).
 2. For each pack of `prev.read` missing from `next`, lowest first: `removed <name>`.
 3. When the names in both keep a different relative order: `order changed, last wins: <next names, highest first,
    joined by ', '>`.
@@ -250,7 +329,7 @@ it('parseResourcePacks', () => {
 
 it('packVersion', () => {
   expect(packVersion('{"pack":{"pack_format":1,"description":"UU-Tex for 2.9.X"},"gtnh_resource_pack_updater":{"pack_version":"2.0"}}')).toBe('2.0');
-  expect(packVersion('﻿{"pack":{"pack_format":1,"description":"§bModernity-GTNH-v1.5.6"}}')).toBe('Modernity-GTNH-v1.5.6');
+  expect(packVersion('\uFEFF{"pack":{"pack_format":1,"description":"§bModernity-GTNH-v1.5.6"}}')).toBe('Modernity-GTNH-v1.5.6');   // keep the escape: a literal BOM is invisible
   expect(packVersion('{"pack":{}}')).toBe('');
   expect(['{}', '{"pack":3}', 'nope', ''].map(packVersion)).toEqual([null, null, null, null]);
 });
@@ -263,13 +342,17 @@ it('gameDirOf', async () => {
 });
 
 it('readPackSet reads the enabled packs read-only and skips the rest', async () => {
-  // <game>/options.txt: 'resourcePacks:["Folder Pack","b.zip","gone","../escape","nometa","b.zip"]\r\n'
-  // resourcepacks/Folder Pack/pack.mcmeta = '﻿{"pack":{"description":"§aF 1"}}'
+  // <game>/options.txt: 'resourcePacks:["Folder Pack","b.zip","gone","../escape","nometa","broken.zip","nested.zip","b.zip"]\r\n'
+  // resourcepacks/Folder Pack/pack.mcmeta = '\uFEFF{"pack":{"description":"§aF 1"}}'   (write the escape, not a literal BOM)
   // resourcepacks/b.zip = makeJar({ 'pack.mcmeta': '{"pack":{"description":"B 2"}}' })
-  // resourcepacks/nometa/ (folder, no pack.mcmeta); a file escape.zip next to resourcepacks/
+  // resourcepacks/nometa/ (folder, no pack.mcmeta)
+  // resourcepacks/broken.zip = the text 'not a zip'
+  // resourcepacks/nested.zip = makeJar({ 'sub/pack.mcmeta': '{"pack":{}}' })   (no top-level pack.mcmeta)
+  // <game>/escape = makeJar({ 'pack.mcmeta': '{"pack":{"description":"E"}}' }): a valid pack exactly where
+  //   resourcepacks/../escape resolves, so only the name check can skip it
   const before = await snapshot(game);
   const { set, skipped } = await readPackSet(game);
-  expect(set.enabled).toEqual(['Folder Pack', 'b.zip', 'gone', '../escape', 'nometa', 'b.zip']);
+  expect(set.enabled).toEqual(['Folder Pack', 'b.zip', 'gone', '../escape', 'nometa', 'broken.zip', 'nested.zip', 'b.zip']);
   expect(set.packs).toEqual([
     { name: 'Folder Pack', path: join(game, 'resourcepacks', 'Folder Pack'), format: 'folder', version: 'F 1' },
     { name: 'b.zip', path: join(game, 'resourcepacks', 'b.zip'), format: 'zip', version: 'B 2' },
@@ -278,6 +361,8 @@ it('readPackSet reads the enabled packs read-only and skips the rest', async () 
     { name: 'gone', reason: 'not in resourcepacks/' },
     { name: '../escape', reason: 'not a pack name' },
     { name: 'nometa', reason: 'no valid pack.mcmeta (the game skips it too)' },
+    { name: 'broken.zip', reason: expect.any(String) },   // yauzl's message
+    { name: 'nested.zip', reason: 'no valid pack.mcmeta (the game skips it too)' },
     { name: 'b.zip', reason: 'listed twice' },
   ]);
   expect(await snapshot(game)).toEqual(before);
@@ -347,6 +432,8 @@ The algorithm. The signature does not fix it, so here it is:
    pack `h` that holds an `.mcmeta`. If the PNG comes from pack `w`, use `h` only when `h >= w`. If the PNG comes from
    jar `j`, use `h` if there is one, else `{ kind: 'jar', jar: j }` when `jarHasMcmeta(j, t)`.
 
+`caseOnly` lists step 2's entries first, then step 3's, each highest pack first and in each pack's entry order.
+
 - [ ] **Step 1: Write the failing tests** (`tests/unit/assets/pack-layer.test.ts`)
 
 ```ts
@@ -356,8 +443,8 @@ const input: LayerInput = {
   jarHasMcmeta: (jar, png) => jar === 1 && (png === B + 'anim.png' || png === B + 'jaranim.png'),
   packs: [
     { format: 'folder', entries: new Set([B + 'fancy.png', B + 'still.png', B + 'still.png.mcmeta', B + 'p0only.png', B + 'stone.png.mcmeta', B + 'jaronly.png.mcmeta']) },
-    { format: 'zip', entries: new Set([B + 'stone.png', B + 'fancy.png', B + 'still.png', B + 'New.png']) },
-    { format: 'folder', entries: new Set([B + 'new.png', B + 'anim.png']) },
+    { format: 'zip', entries: new Set([B + 'stone.png', B + 'fancy.png', B + 'still.png', B + 'New.png', B + 'Still.png.mcmeta']) },
+    { format: 'folder', entries: new Set([B + 'new.png', B + 'anim.png', B + 'p0only.png.mcmeta']) },
   ],
 };
 
@@ -380,12 +467,13 @@ it('pairs an .mcmeta as the game does', () => {
   expect(Object.fromEntries(r.mcmeta)).toEqual({
     [B + 'jaronly.png']: { kind: 'pack', pack: 0, entry: B + 'jaronly.png.mcmeta' },   // a pack's .mcmeta animates a jar PNG
     [B + 'jaranim.png']: { kind: 'jar', jar: 1 },
-  });   // stone and still: the .mcmeta sits below the PNG's pack; anim: a pack PNG without one is still
+    [B + 'p0only.png']: { kind: 'pack', pack: 2, entry: B + 'p0only.png.mcmeta' },     // a higher pack's .mcmeta animates a lower pack's PNG
+  });   // stone and still: the .mcmeta sits below the PNG's pack (the zip's Still.png.mcmeta differs in case: left out); anim: a pack PNG without one is still
 });
 
 it('case', () => {
   const r = layerPacks(input);
-  expect(r.caseOnly).toEqual([{ pack: 1, entry: B + 'fancy.png' }]);
+  expect(r.caseOnly).toEqual([{ pack: 1, entry: B + 'fancy.png' }, { pack: 1, entry: B + 'Still.png.mcmeta' }]);
   const lower = [...r.png.keys()].map((k) => k.toLowerCase());
   expect(new Set(lower).size).toBe(lower.length);
 });
@@ -434,10 +522,11 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Produces (all in `extract.ts`):
   - `ExtractOptions.packs?: PackSet`. When absent, the run, the index and every existing test are exactly today's.
   - `export function folderEntry(name: string): string | null`: for a folder pack's file named relative to the pack
-    folder (`/`-separated). It is `textureEntry` matched without regard to case. Acceptance is decided on the
-    lower-cased name. The result keeps the file's own spelling, except that the domain, the
-    `textures/<blocks|items>/` part and the `.png` / `.png.mcmeta` ending are lower case, and a chest sheet is lower
-    case as a whole.
+    folder (`/`-separated). It is `textureEntry` matched without regard to case, except for the domain: null when the
+    `assets/<domain>/` folder is not lower case as spelled (Minecraft 1.7.10's `FolderResourcePack.getResourceDomains`
+    ignores such a namespace, as `textureEntry` already refuses one in a jar). Acceptance is otherwise decided on the
+    lower-cased name. The result keeps the file's own spelling, except that the `textures/<blocks|items>/` part and the
+    `.png` / `.png.mcmeta` ending are lower case, and a chest sheet is lower case as a whole.
   - `export interface FolderEntry { crc: number; size: number; file: string }`
   - `export async function scanFolderPack(dir: string): Promise<{ entries: Map<string, FolderEntry>; ignored: number }>`:
     walks `<dir>/assets/` (`readdir` with `recursive` and `withFileTypes`). Only regular files count, so symbolic
@@ -459,40 +548,47 @@ How `extractAssets` changes:
   a folder with `scanFolderPack`. A pack that cannot be scanned, or whose name equals a jar's file name, goes to
   `skippedJars` (`{ jar: <pack name>, error }`).
 - **Layer.** `layerPacks` gets `jarPngs` (each PNG path → the jar that won it) and
-  `jarHasMcmeta = (j, p) => scanned[j].entries.has(p + '.mcmeta')`.
+  `jarHasMcmeta = (j, p) => scanned[j]!.entries.has(p + MCMETA)` (`noUncheckedIndexedAccess` is on; `MCMETA` is
+  `extract.ts:47`).
 - **Copy.** Each source gets its copy list. Each list maps entry → target for the PNGs it won and the `.mcmeta`
   files chosen from it. Jars and zip packs go through the existing zip copy, extended with the entry → target map.
   Folder packs go through `copyFromFolder`. At most one zip is open at a time.
 - **Not a PNG.** A pack PNG that is not a PNG goes to `notPngInPacks`, and its path is not indexed: there is no
-  fallback to a jar. A jar's still counts in `ignoredEntries`, as today.
+  fallback to a jar (as a jar's non-PNG winner has none today; one file on real data). A jar's still counts in
+  `ignoredEntries`, as today.
 - **Index.** `files[p].jar` is the source's name (a jar's file name or a pack's name). `sources` lists the jars only,
   with `files` = the PNGs each still supplied. `packs` is written only when `opts.packs` was given:
-  `{ enabled, read: [{ name, format, version, entries: entries.size, bytes: sum of sizes, files }] }`.
+  `{ enabled, read: [{ name, format, version, entries: entries.size, bytes: sum of sizes, files }] }`. `packs.read`
+  lists only packs that were scanned; a pack in `skippedJars` is not in it (it stays in `enabled`).
 - **Swap.** `swapIn` is unchanged.
 
 - [ ] **Step 1: Write the failing tests**
 
-`png.test.ts`, in "counts animation frames":
+`png.test.ts`, in `it('counts animation frames from .mcmeta')` (`png.test.ts:13`):
 ```ts
-expect(animationFrames('﻿{"animation":{}}', { width: 16, height: 32 })).toBe(2);
+expect(animationFrames('\uFEFF{"animation":{}}', { width: 16, height: 32 })).toBe(2);   // keep the escape: a literal BOM is invisible
+expect(animationFrames('{"animation":{"frames":[{index:0,time:3},],}}', { width: 16, height: 32 })).toBe(2);   // Gson-lenient, as the game reads it
 ```
 
-`index.test.ts`:
+`index.test.ts` (add `type AssetPacks` to the existing `index.ts` import):
 ```ts
 it('accepts a packs record and refuses a malformed one', async () => {
-  const packs = { enabled: ['P'], read: [{ name: 'P', format: 'zip', version: '1', entries: 2, bytes: 9, files: 1 }] };
+  const packs: AssetPacks = { enabled: ['P'], read: [{ name: 'P', format: 'zip', version: '1', entries: 2, bytes: 9, files: 1 }] };
   expect((await loadAssetIndex(await writeIndex({ ...FILE, packs }))).file!.packs).toEqual(packs);
-  for (const bad of [{ enabled: 'P', read: [] }, { enabled: [], read: [{ name: 'P' }] }, { enabled: [], read: [{ ...packs.read[0], format: 'tar' }] }])
-    await expect(loadAssetIndex(await writeIndex({ ...FILE, packs: bad }))).rejects.toThrow(/bad "packs"/);
+  for (const bad of [{ enabled: 'P', read: [] }, { enabled: [], read: [{ name: 'P' }] }, { enabled: [], read: [{ ...packs.read[0]!, format: 'tar' }] }])
+    await expect(loadAssetIndex(await writeIndex({ ...FILE, packs: bad } as unknown as AssetIndexFile))).rejects.toThrow(/bad "packs"/);
 });
 ```
-(`writeIndex(file)` is a local helper that writes `index.json` into a fresh temp folder and returns that folder; cast
-the malformed values with `as unknown as AssetIndexFile`.)
+(`writeIndex(file: AssetIndexFile)` is a local helper that writes `index.json` into a fresh temp folder and returns
+that folder.)
 
-`extract.test.ts`, a new `describe('extractAssets with resource packs')`. The fixture `withPacks()` builds:
+`extract.test.ts`, a new `describe('extractAssets with resource packs')`. Its imports: merge `symlink` into the
+existing `node:fs/promises` import; add `import { snapshot } from '../../helpers/fake-server.ts'`; add `folderEntry`,
+`scanFolderPack` and `copyFromFolder` to the `extract.ts` import; add `const GREEN = makePng(16, 16, [0, 255, 0, 255])`
+next to `RED`, `BLUE` and `GREY`. The fixture `withPacks()` builds:
 - `pack()`'s jars;
 - a folder pack `P1` with `pack.mcmeta`, holding:
-  - `assets/minecraft/textures/blocks/STONE.png` (green, 16×16; the client jar's `stone.png` in another case),
+  - `assets/minecraft/textures/blocks/STONE.png` (`GREEN`, 16×16; the client jar's `stone.png` in another case),
   - `assets/gregtech/textures/blocks/fluids/fluid.water.png.mcmeta` (`{"animation":{}}`),
   - `assets/p/textures/items/only.png` (green),
   - `assets/nei/textures/items/n.png`,
@@ -501,9 +597,11 @@ the malformed values with `as unknown as AssetIndexFile`.)
   - `assets/gregtech/textures/blocks/iconsets/OVERLAY_ACCELERATOR.png` (16×32, purple) and its `.mcmeta`
     `{"animation":{}}`,
   - `assets/minecraft/textures/blocks/Sponge.png` (only the case differs from the jars'),
-  - `assets/gregtech/textures/blocks/iconsets/MACHINE_LV_SIDE.png` with JPEG bytes (`'\xff\xd8\xff\xe0 not a png'`);
+  - `assets/gregtech/textures/blocks/iconsets/MACHINE_LV_SIDE.png` with JPEG bytes
+    (`Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.from(' not a png')])`; a JS string would be
+    written as UTF-8);
 - `packs: { enabled: ['P1', 'gone', 'P2.zip'], packs: [<P1 folder, version 'v1'>, <P2.zip zip, version 'v2'>] }`;
-- `assets/nei/index.json` written before the run.
+- `<dir>/assets/nei/index.json` = `'{}'`, written before the run.
 
 ```ts
 it('packs win over every jar, the last listed first', async () => {
@@ -527,9 +625,16 @@ it('packs win over every jar, the last listed first', async () => {
 
 it('writes one file per path', async () => {   // Review Focus 1
   const { dir, jars, packs } = await withPacks();
-  await extractAssets({ jars, packs, dataDir: dir });
-  expect((await readdir(P(dir, 'minecraft/textures/blocks'))).sort()).toEqual(['sponge.png', 'stone.png']);
+  const s = await extractAssets({ jars, packs, dataDir: dir });
+  expect((await readdir(P(dir, 'minecraft/textures/blocks'))).sort()).toEqual(['sponge.png', 'stone.png']);   // the Mac's disk merges case variants, so also:
+  const ix = JSON.parse(await readFile(P(dir, 'index.json'), 'utf8'));
+  const keys = Object.keys(ix.files);
+  expect(new Set(keys.map((k) => k.toLowerCase())).size).toBe(keys.length);
+  expect(ix.files['minecraft/textures/blocks/Sponge.png']).toBeUndefined();
+  expect(ix.files['minecraft/textures/blocks/STONE.png']).toBeUndefined();
+  expect(await readFile(P(dir, 'minecraft/textures/blocks/stone.png'))).toEqual(GREEN);   // P1's STONE.png under the jar's spelling
   expect(await readFile(P(dir, 'minecraft/textures/blocks/sponge.png'))).toEqual(BLUE);   // VillageNames' as before: the zip's Sponge.png is left out
+  expect(s.caseOnly).toBe(1);   // catches a Sponge.png that was written and then overwritten by the jar's copy
 });
 
 it('not a PNG', async () => {   // Review Focus 3
@@ -557,10 +662,11 @@ it('copyFromFolder refuses a file that changed', async () => {   // Review Focus
 });
 
 it('folderEntry', () => {
-  expect(folderEntry('assets/GregTech/Textures/Blocks/iconsets/MACHINE_LV_SIDE.PNG')).toBe('gregtech/textures/blocks/iconsets/MACHINE_LV_SIDE.png');
+  expect(folderEntry('assets/gregtech/Textures/Blocks/iconsets/MACHINE_LV_SIDE.PNG')).toBe('gregtech/textures/blocks/iconsets/MACHINE_LV_SIDE.png');
   expect(folderEntry('assets/gregtech/textures/blocks/a.png.MCMETA')).toBe('gregtech/textures/blocks/a.png.mcmeta');
   expect(folderEntry('assets/minecraft/textures/entity/chest/Normal.png')).toBe('minecraft/textures/entity/chest/normal.png');
-  for (const bad of ['assets/x/textures/gui/a.png', 'assets/x/textures/blocks/../../a.png', 'pack.mcmeta', 'assets/x/mcpatcher/ctm/glass/0.png'])
+  for (const bad of ['assets/x/textures/gui/a.png', 'assets/x/textures/blocks/../../a.png', 'pack.mcmeta', 'assets/x/mcpatcher/ctm/glass/0.png',
+    'assets/GregTech/textures/blocks/a.png'])   // 1.7.10 ignores non-lower-case namespaces
     expect(folderEntry(bad)).toBeNull();
 });
 ```
@@ -570,12 +676,15 @@ Fill in the `conflicts` expectation with the two entries of the existing test at
 
 Run: `npx vitest run tests/unit/assets/extract.test.ts tests/unit/assets/index.test.ts tests/unit/assets/png.test.ts`
 Expected: FAIL: `folderEntry`, `scanFolderPack` and `copyFromFolder` are not exported, `packs` is ignored, and the
-BOM gives 1 frame.
+BOM and the lenient `.mcmeta` each give 1 frame.
 
 - [ ] **Step 3: Implement** as described in Interfaces and the list above. `checkFile` refuses a `packs` that is not
   `{ enabled: string[]; read: PackRecord[] }` (`format` is `folder` or `zip`, counts are integers ≥ 0) with
   `AssetIndexError('<file>: bad "packs". Run \`npm run extract-assets\` again.')`. `animationFrames` drops a leading
-  U+FEFF before `JSON.parse`. Update `extract.ts`'s header comment and `index.ts:11`'s doc of `jar`.
+  U+FEFF before `JSON.parse`. When `JSON.parse` fails, it treats the file as animated if the text matches
+  `/[{,]\s*["']?animation["']?\s*:\s*\{/` (Minecraft's Gson parser is lenient: 516 of UU-Tex-main's and 24 of
+  Modernity's block and item `.mcmeta` files have trailing commas or unquoted keys). Update `extract.ts`'s header
+  comment and `index.ts:11`'s doc of `jar`.
 
 - [ ] **Step 4: Run the asset tests and the suite**
 
@@ -614,19 +723,24 @@ The behaviour, in order:
    there are no packs.
 3. An instance whose `gameDirOf(resolve(instance))` is null → exit 2 with
    `No options.txt in <folder> or its .minecraft folder`.
-4. `readPackSet(gameDir)` runs before the extraction. The previous index's `packs` comes from
-   `loadAssetIndex(<dataDir>/assets)` (any error → none). Remember its `createdAt` too.
-5. After a successful extraction, the existing summary lines and skipped-jar warnings come first, unchanged. Their first line gains
-   ` and 1 resource pack` / ` and <n> resource packs` before ` into` only when packs were read. Then these lines, each only when it applies:
+4. `readPackSet(gameDir)` runs before the extraction. If it throws (for example `options.txt` became unreadable after
+   `gameDirOf` found it), exit 2 with `Cannot read <gameDir>/options.txt: <message>`, before any extraction. The
+   previous index's `packs` comes from `loadAssetIndex(<dataDir>/assets)` (any error → none). Remember its `createdAt`
+   too.
+5. After a successful extraction, the existing summary lines and skipped-jar warnings come first, unchanged. Their first
+   line gains ` and 1 resource pack` / ` and <n> resource packs` before ` into` only when `summary.packs.read.length > 0`.
+   Then these lines, each only when it applies:
    - `<packFiles> of them from resource packs (<packReplaced> replace a jar's texture)`
    - `<caseOnly> files of zip packs left out: their names differ from the game's only in case`
-   - `Resource packs, last wins: <name> (<version>), …` (highest first), or `Resource packs: none enabled in options.txt`
+   - `Resource packs, last wins: <name> (<version>), …` (highest first; a pack with version `''` prints its name
+     alone) when `read` is non-empty; `Resource packs: none enabled in options.txt` when `enabled` is empty;
+     `Resource packs: none usable (all skipped, see warnings)` when `enabled` is non-empty and `read` is empty
    - `Resource packs: off (--no-packs)`
    - `No client instance set: textures from the jars only (set "clientInstance" in data/config.json or pass --instance <folder>)`
    - `Resource packs changed since the last extraction (<previous createdAt>):`, followed by each `packChanges` line
      indented two spaces. This needs a previous index; nothing is printed when no line results.
    - On `err`: `warning: resource pack <name> skipped: <reason>` for each skipped pack, and
-     `warning: <pack>: <path> is not a PNG; left out (the game cannot draw it either)`.
+     `warning: <pack>: <path> is not a PNG (the game may still read it); left out`.
 6. The exit codes are unchanged. An extraction failure still prints only the failure line.
 
 - [ ] **Step 1: Write the failing tests**
@@ -686,7 +800,21 @@ it('explains a bad instance', async () => {
   expect(await main(['--no-client'], deps)).toBe(0);
   expect(lines.at(-1)).toBe('No client instance set: textures from the jars only (set "clientInstance" in data/config.json or pass --instance <folder>)');
 });
+
+it('explains an unreadable options.txt', async () => {
+  const { dir, deps, lines } = await setup();
+  const inst = await instance(dir);
+  const options = join(inst, '.minecraft', 'options.txt');
+  await chmod(options, 0o000);
+  try {
+    expect(await main(['--no-client', '--instance', inst], deps)).toBe(2);
+    expect(lines.at(-1)).toMatch(/^Cannot read .*options\.txt: /);
+  } finally {
+    await chmod(options, 0o644);
+  }
+});
 ```
+(`chmod` from `node:fs/promises`.)
 
 - [ ] **Step 2: Run to verify they fail**
 
@@ -735,7 +863,9 @@ python3 -I -c "import json,sys; p='data/real-config.json'; c=json.load(open(p));
 - [ ] **Step 2: Extract with packs**
 
 ```bash
+# the extraction preflight (Task 0 Step 3), then:
 time GTNH_PLANNER_CONFIG=$PWD/data/real-config.json npm run extract-assets
+test -e data/assets/nei/index.json && echo nei-kept
 ```
 Expected: exit 0. Among the lines:
 - `… from 21… jars and 3 resource packs into …`
@@ -744,19 +874,30 @@ Expected: exit 0. Among the lines:
   `  added UU-Tex-main (2.0)`, `  added Modernity-GTNH-Dark-UI (Modrenity-GTNH-DARK-UI-v1.2.1)` and
   `  added Modernity-GTNH-2026-08-31.zip (Modernity-GTNH-v1.5.6)`
 - a `… files of zip packs left out …` line (7 PNGs were counted on 2026-10-23)
-- `warning: Modernity-GTNH-2026-08-31.zip: dreamcraft/textures/blocks/blockPixieDust.png is not a PNG; left out (the game cannot draw it either)`
+- `warning: Modernity-GTNH-2026-08-31.zip: dreamcraft/textures/blocks/blockPixieDust.png is not a PNG (the game may still read it); left out`
 
-`data/assets/nei/index.json` still exists. `test -L data/assets` prints nothing. Run it a second time: no
-`Resource packs changed` line. Record both wall times.
+Then `nei-kept`. `data/assets/nei/` holds only the NEI import (`icons/` and `index.json`, no `textures/` folder).
+`test -L data/assets` prints nothing. Run it a second time, with the preflight again: no `Resource packs changed`
+line, and `nei-kept`. Record both wall times.
 
 - [ ] **Step 3: Re-baseline `real-assets.test.ts`**
 
 - `:58-61` (Iron Ore). Keep the GT drawing check on a source without NEI: `resolveIcons({ ...src, nei: null }, …)`.
   Add `expect(resolveIcons(src, ['gregtech:gt.blockores2@32'])[0]!.source).toBe('nei')` with the comment
   `// item icons with an NEI dump icon keep it (spec, 2026-10-23)`.
-- `:45-46` (the LV Macerator). The north and up faces gain the pack-provided glow overlay:
-  `[…, GT + 'basicmachines/macerator/OVERLAY_FRONT_GLOW.png']` and `[…, GT + 'basicmachines/macerator/OVERLAY_TOP_GLOW.png']`.
-  Assert that the last layer has `glow: true`. If the run shows anything else, stop and report it; do not guess.
+- `:45-46` (the LV Macerator). The north and up faces gain the pack-provided glow overlay when it was extracted, so
+  the test still passes on a stock extraction (the window before the live run, a rollback, a machine without packs):
+  ```ts
+  const glow = index.has(GT + 'basicmachines/macerator/OVERLAY_FRONT_GLOW.png');
+  expect(mac!.faces.north.map((l) => l.path)).toEqual([GT + 'iconsets/MACHINE_LV_SIDE.png', GT + 'basicmachines/macerator/OVERLAY_FRONT.png',
+    ...(glow ? [GT + 'basicmachines/macerator/OVERLAY_FRONT_GLOW.png'] : [])]);
+  const topGlow = index.has(GT + 'basicmachines/macerator/OVERLAY_TOP_GLOW.png');
+  expect(mac!.faces.up.map((l) => l.path)).toEqual([GT + 'iconsets/MACHINE_LV_TOP.png', GT + 'basicmachines/macerator/OVERLAY_TOP.png',
+    ...(topGlow ? [GT + 'basicmachines/macerator/OVERLAY_TOP_GLOW.png'] : [])]);
+  if (glow) expect(mac!.faces.north.at(-1)!.glow).toBe(true);
+  if (topGlow) expect(mac!.faces.up.at(-1)!.glow).toBe(true);
+  ```
+  On this run both are `true`. If the run shows anything else, stop and report it; do not guess.
 - `:94`. Set the icon bound to the share this run prints, rounded down to the whole percent and minus one point
   (e.g. 42.3 % → `0.41`), with the comment `// measured 2026-10-2x with NEI and the user's packs; the old 0.9 predates the NEI import`.
 - Add a log of `src.dump!.stats.droppedLayers` to the `reports coverage` line.
@@ -768,7 +909,8 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1' || !loadConfig().clientInstance)(
   let index: AssetIndex;
   beforeAll(async () => { index = await loadAssetIndex(join(loadConfig().dataDir, 'assets')); });
 
-  it('recorded the enabled packs and what each supplied', () => {
+  it('recorded the enabled packs and what each supplied', (ctx) => {
+    if (!index.file?.packs) ctx.skip();   // an index made with --no-packs or before the packs run
     const packs = index.file!.packs!;
     expect(packs.read.map((p) => p.name)).toEqual(packs.enabled.filter((n) => packs.read.some((p) => p.name === n)));
     const supplied = new Map<string, number>();
@@ -776,12 +918,13 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1' || !loadConfig().clientInstance)(
     for (const p of packs.read) expect(supplied.get(p.name) ?? 0, p.name).toBe(p.files);
   });
 
-  it('layers the packs as the game does', () => {
+  it('layers the packs as the game does', (ctx) => {
+    if (!index.file?.packs) ctx.skip();
     const read = new Set(index.file!.packs!.read.map((p) => p.name));
     if (read.has(PACKS.mod)) {
       expect(index.info('minecraft/textures/blocks/stone.png')!.jar).toBe(PACKS.mod);
       expect(index.info('ae2fc/textures/blocks/fluid_packet_decoder.png')).toMatchObject({ jar: PACKS.mod, frames: 22 });   // still in the jar
-      expect(index.has('dreamcraft/textures/blocks/blockPixieDust.png')).toBe(false);   // a JPEG named .png
+      expect(index.has('dreamcraft/textures/blocks/blockPixieDust.png')).toBe(false);   // a JPEG named .png: left out, no jar fallback
       expect(index.has('goodgenerator/textures/items/plasticcase.png')).toBe(false);   // the zip's spelling differs only in case
     }
     if (read.has(PACKS.uu)) {
@@ -800,15 +943,35 @@ GTNH_LOCAL=1 GTNH_PLANNER_CONFIG=$PWD/data/real-config.json npx vitest run tests
 ```
 Expected: `real-assets` passes, including the existing `:29-35` (the client sha1, `fluid.autogenerated` 16×512 with 32
 frames from Modernity's file, the jar conflict for `gt.metaitem.01/606.png`), the curated check and the case check.
-`real-coverage` passes as at Task 0. If one of its asset bounds (`:278-279` plain icons, `:306-307` faces) moved
-because of the packs, set it to the measured value plus 2 % head-room with a dated comment. Write down why it moved
-in `.local/pack-runs.md`. Do not touch any other bound.
+`real-coverage` passes as at Task 0. Compare every printed `real coverage: …` block with Task 0's record and write the
+differences in `.local/pack-runs.md` (`names.ts:64` reads the index keys for its file-name rule, so the packs' new
+paths can change icons and faces of items without NEI).
+
+If one of the two asset bounds moved because of the packs (`:278-279` plain item icons falling back, without NEI /
+with NEI; `:306-307` Map storage icons falling back and palette entries without a top face), set it to the measured
+value plus 2 % head-room with a dated comment, and write down why it moved.
+
+If **any other** real-coverage assertion fails or its printed figure differs from Task 0's (for example `:277`
+`[c.nbt, c.fluidsNei.length, c.fluidsNoNei.length]` = `[51_497, 0, 0]`, the plan-page `toEqual([])` checks at
+`:293-294`, `:401` hidden-name share ≤ 1 %), do not edit it. Record the failing line, the old and new value, and 5
+sample keys that changed (each with its new texture path and the source in `files[p].jar`) in `.local/pack-runs.md`,
+then stop and report to the controller.
 
 - [ ] **Step 5: Measure load time and size**
 
-Run Task 0 Step 5's `node` one-liner and `du -sh data/assets` again. Record both next to the baseline. A
-`droppedLayers` drop is expected: the packs' `_GLOW` and overlay files now resolve. The check: `indexMs + dumpMs`
-is within 1.5× of the stock figure. If it is not, report to the controller before the commit.
+Run Task 0 Step 5's `node` one-liner, `.local/drawn.mjs` and `du -sh data/assets` again. Record all three next to
+the baseline. A `droppedLayers` drop is expected: the packs' `_GLOW` and overlay files now resolve. The checks, each
+reported to the controller before the commit when it fails:
+- server: `indexMs + dumpMs` is within 1.5× of the stock figure;
+- client (what the Map palette and the 3D tab download and decode): `totalKB` is at most 2× the stock figure, and no
+  drawn file is wider than 512 px unless the stock run already drew it (Modernity has 32 px and 64 px textures,
+  animated strips download in full while frame 0 is drawn, and the review found pack files up to 2,240 px wide);
+- `oddPackSprites`: record the count and the sample (pack-won PNGs that are not square and have no frames; the game
+  refuses such a sprite, so the planner draws what the game does not);
+- `caseMiss`: texture names the export's dump asks for whose file exists only under another case (the index lookups
+  are exact, so a pack-only file such as a `*_GLOW` overlay spelled differently is extracted but never used). Record
+  the count and the sample with each key's source, for both runs. If the packs run's count is above 0, report it to the
+  controller; do not change the resolver in this plan.
 
 - [ ] **Step 6: Run the suite and commit**
 
@@ -841,14 +1004,19 @@ and after.
 
 - [ ] **Step 2: Architecture entry 54.** Append after entry 52:
 
-  `54. **Textures from the user's resource packs** (spec 2026-10-23-base-around-the-line-design.md, "Textures from the user's resource packs"; plan 2026-10-23-23-pack-textures.md, add-on 23; amends 17 and 43 (i)): (1) AppConfig.clientInstance?: string | null, not in DEFAULT_CONFIG; it is the game folder holding options.txt and resourcepacks/, or an instance folder holding it as .minecraft or minecraft. It replaces 43 (i)'s pair: useResourcePacks is not built, and a set clientInstance turns packs on. extract-assets --instance <folder> sets it for one run, --no-packs turns packs off for one run. (2) src/server/assets/resource-packs.ts reads options.txt's resourcePacks once per run, lowest priority first as 1.7.10 saves it, and each enabled pack's pack.mcmeta. A BOM is tolerated. version = gtnh_resource_pack_updater.pack_version, else the description without § codes. A pack that is missing, listed twice, badly named or without a valid pack.mcmeta is skipped with a warning, as the game skips it. Nothing under the instance is written. (3) src/server/assets/pack-layer.ts layerPacks: the jars keep pickWinner and conflicts (jar-against-jar only); then the last enabled pack holding a path wins over every jar. Spelling is the jars', else the highest zip pack's, else the highest folder pack's. Folder packs match without regard to case, zip packs exactly; a zip entry differing only in case is left out and counted. An .mcmeta comes from the highest pack at or above the PNG's pack, and for a jar PNG with none, from its winning jar. A pack file that is not a PNG is left out with a warning, with no fallback to a jar. Chest model sheets are layered too; nei/ never. (4) index.json keeps format gtnh-planner-assets/1. files[p].jar is the winning source's name, a jar's file name or a pack's name. sources lists jars only. The optional packs: { enabled: string[]; read: Array<{ name, format: 'folder' | 'zip', version, entries, bytes, files }> } is present when the run read an instance; the base view (project 2) may name the packs from it. packChanges(prev, next) lines are printed by the CLI when the packs differ from the previous index's. (5) No CTM, frame 0 as before. Resolvers, routes and client are unchanged. The Map's colours follow at the next page load: scan tiles hold palette indices, not colours. (6) Serving pack textures to anyone but the owner is decided by the user-accounts project, before the site leaves this Mac.`
+  `54. **Textures from the user's resource packs** (spec 2026-10-23-base-around-the-line-design.md, "Textures from the user's resource packs"; plan 2026-10-23-23-pack-textures.md, add-on 23; amends 17 and 43 (i)): (1) AppConfig.clientInstance?: string | null, not in DEFAULT_CONFIG; it is the game folder holding options.txt and resourcepacks/, or an instance folder holding it as .minecraft or minecraft. It replaces 43 (i)'s pair: useResourcePacks is not built, and a set clientInstance turns packs on. extract-assets --instance <folder> sets it for one run, --no-packs turns packs off for one run. (2) src/server/assets/resource-packs.ts reads options.txt's resourcePacks once per run, lowest priority first as 1.7.10 saves it, and each enabled pack's pack.mcmeta. A BOM is tolerated. version = gtnh_resource_pack_updater.pack_version, else the description without § codes. A pack that is missing, listed twice, badly named or without a valid pack.mcmeta is skipped with a warning, as the game skips it. Nothing under the instance is written. (3) src/server/assets/pack-layer.ts layerPacks: the jars keep pickWinner and conflicts (jar-against-jar only); then the last enabled pack holding a path wins over every jar. Spelling is the jars', else the highest zip pack's, else the highest folder pack's. Folder packs match without regard to case (except the assets/<domain>/ folder, which must be lower case, as 1.7.10 requires), zip packs exactly; a zip entry differing only in case is left out and counted. An .mcmeta comes from the highest pack at or above the PNG's pack, and for a jar PNG with none, from its winning jar; it is read leniently, as Gson reads it. A pack file that is not a PNG is left out with a warning, with no fallback to a jar, as for a jar's non-PNG winner (the game may still read it: ImageIO detects a JPEG by content). Chest model sheets are layered too; nei/ never. (4) index.json keeps format gtnh-planner-assets/1. files[p].jar is the winning source's name, a jar's file name or a pack's name. sources lists jars only. The optional packs: { enabled: string[]; read: Array<{ name, format: 'folder' | 'zip', version, entries, bytes, files }> } is present when the run read an instance; the base view (project 2) may name the packs from it. packChanges(prev, next) lines are printed by the CLI when the packs differ from the previous index's. (5) No CTM, frame 0 as before. Resolvers, routes and client are unchanged. The Map's colours follow at the next page load: scan tiles hold palette indices, not colours. (6) Serving pack textures to anyone but the owner is decided by the user-accounts project, before the site leaves this Mac.`
 
 - [ ] **Step 3: Check that nothing private or absolute was written**
 
 ```bash
-git diff main --stat && git diff main -- . ':(exclude)docs/superpowers/plans/2026-10-23-23-pack-textures.md' | grep -nE '/Users/|/private/tmp|PrismLauncher/instances/GT_' || echo clean
+git diff main...HEAD --stat
+git diff main...HEAD -- . ':(exclude)docs/superpowers/plans/2026-10-23-23-pack-textures.md' | grep -nEi '/Users/|/private/tmp|PrismLauncher/instances/GT_|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' || echo clean
+git diff main...HEAD --name-only | grep -vE '^(src|tests)/|^README\.md$|^docs/superpowers/' && echo UNEXPECTED || echo files-ok
+git diff main...HEAD --name-only | grep -Ei '\.(png|mcmeta|zip|jar)$' && echo GAME-FILE || echo no-game-files
 ```
-Expected: `clean` (this plan is excluded because it names the patterns). Only source, tests, README and the two docs changed. No PNG, no `data/`.
+Expected: `clean` (this plan is excluded because it names the patterns), `files-ok`, `no-game-files`. Only source,
+tests, README, the architecture doc, and this branch's spec and plan changed. No `data/`. Also read the added lines of
+the diff once for player names, coordinates and the server address, which no pattern catches.
 
 - [ ] **Step 4: Commit**
 
@@ -867,8 +1035,13 @@ Do this in the main checkout after `plan/23-pack-textures` is merged, with no ot
 worktree symlinks its `data/assets` to the live one, so do it between plan 22's real-data runs. Tell that lane its
 asset coverage figures may move.
 
+Every step runs in the main checkout's root. From any checkout of the repo, find it with
+`REPO="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"` and start each command with
+`cd "$REPO" &&` (shell state does not persist between commands).
+
 1. **Backup** (an APFS clone, instant; keep it until the user has looked):
    ```bash
+   REPO="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
    cd "$REPO" && cp -Rc data/assets "data/assets.pre-packs-$(date +%Y%m%d-%H%M%S)"
    ```
 2. **Set the instance** (adds one key and never prints the file, which holds secrets):
@@ -884,6 +1057,10 @@ asset coverage figures may move.
    Cmd+Shift+R (the browser keeps texture files for up to an hour). Open a project's 3D tab and the Map: the blocks
    and colours are the packs'. The Map needs no rescan.
 6. **Rollback**, if the user prefers stock: stop the site, then run
-   `rm -rf data/assets && mv data/assets.pre-packs-<stamp> data/assets`. Remove `clientInstance` the same way as
-   step 2, or extract with `--no-packs`. Then restart the site. Delete the backup only after the user says the new
-   look is fine.
+   `rm -rf data/assets && mv data/assets.pre-packs-<stamp> data/assets`. Then remove `clientInstance` (never prints
+   the file):
+   ```bash
+   python3 -I -c "import json,os; p='data/config.json'; c=json.load(open(p)); c.pop('clientInstance',None); t=p+'.tmp'; fd=os.open(t, os.O_WRONLY|os.O_CREAT|os.O_EXCL, 0o600); os.write(fd,(json.dumps(c,indent=2)+'\n').encode()); os.close(fd); os.replace(t,p)"
+   ```
+   or keep it and extract with `--no-packs` instead. Then restart the site. Delete the backup only after the user says
+   the new look is fine.
