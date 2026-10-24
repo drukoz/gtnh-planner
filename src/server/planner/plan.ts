@@ -12,11 +12,11 @@ import { indexPlan, issueText, type PlanIssue } from '../../shared/plan/balance.
 import { machineGroups } from '../../shared/plan/pools.ts';
 import type { DimensionInfo, Ingredient, Pack, Product, Recipe } from '../../shared/types/pack.ts';
 import {
-  DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_STEP_CHARGE, type BomLine, type LeafClass, type Plan, type PlanContext, type PlanFlow, type PlanSettings,
+  DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_RAW_CAP, DEFAULT_STEP_CHARGE, type BomLine, type LeafClass, type Plan, type PlanContext, type PlanFlow, type PlanSettings,
   type PlanStep, type PlanWarning, type PowerSummary, type RawInput, type SourceInfo, type StepOption,
 } from '../../shared/types/plan.ts';
 import { GATHERED_BLOCKS, isBaseItem, unlockText, type Availability } from './availability.ts';
-import { gatheredRecipesOn, planBasis, resolveAvoid, settingsHash, type PlanBasis } from './basis.ts';
+import { buildCostCounts, gatheredRecipesOn, planBasis, resolveAvoid, settingsHash, type PlanBasis } from './basis.ts';
 import { benchLine, type BenchLine } from './benches.ts';
 import { buildBom, stepProductName } from './bom.ts';
 import { machineBuildCost } from './build-cost.ts';
@@ -57,7 +57,8 @@ export const PIN_DOMINATED_SHARE = 1.01;
  * before it gets the default), and a crafting-table step weighs HAND_STEP_WEIGHT steps in a running line whose crafting
  * is not automated (fix spec D7; a Make N batch may be crafted by hand), as does one no Auto Workbench runs in a running
  * line whose crafting is (`byHandWeight`, controller ruling 214); with recipe pins, the pinned recipes, which no twin
- * replaces (`twinMoves`, solve.ts).
+ * replaces (`twinMoves`, solve.ts); wherever build cost counts, the project's raw cap (fix wave 3 (A): `DEFAULT_RAW_CAP`
+ * for a project stored without one, none at "No limit").
  */
 export function solveOptions(settings: PlanSettings): SolveOptions {
   const options: SolveOptions = {
@@ -68,6 +69,8 @@ export function solveOptions(settings: PlanSettings): SolveOptions {
   if (settings.mode === 'rate' && settings.automateCrafting) options.byHandWeight = HAND_STEP_WEIGHT;
   const pinned = Object.values(settings.recipeChoice);
   if (pinned.length > 0) options.pinnedRecipes = new Set(pinned);
+  // Fix wave 3 (A): the raw cap, wherever build cost counts (the build stage reads it only with a step charge above 0).
+  if (buildCostCounts(settings) && settings.rawCap !== null) options.rawCap = settings.rawCap ?? DEFAULT_RAW_CAP;
   return options;
 }
 
@@ -1834,7 +1837,10 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
   };
   if (made !== undefined) body.makeN = made;
   // The raw material the plan uses against the least any plan of its graph needs (fix spec R3): a rate's trade-off.
-  if (!batch) body.rawCost = { perSecond: sol.rawCost, leastPerSecond: sol.leastRawCost };
+  if (!batch) {
+    body.rawCost = { perSecond: sol.rawCost, leastPerSecond: sol.leastRawCost };
+    if (sol.leanRawCost !== undefined) body.rawCost.leanestPerSecond = sol.leanRawCost;
+  }
   // Supporting lines come from the finished steps and flows (fix spec R6).
   return withLines(pack, basis, assemble(pack, settings, basis, withAvoided(body, avoid, uses.avoided)));
 }

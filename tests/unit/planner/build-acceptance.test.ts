@@ -43,6 +43,21 @@ describe('the horizon flip on boards from tin or soldering alloy', () => {
     expect(week.cost).toEqual({ runPerHour: 1.5, build: 48, horizonHours: 168 });
   });
 
+  it('keeps Fewest machines within +25 % of the leanest line by default, and says what that line uses', async () => {
+    // A week at Fewest machines (fix wave 3 (A)): tin trades 4/3 of soldering alloy's raw material for one block less
+    // (616 < 678 by the build MIP's measure); the default cap keeps soldering alloy, "No limit" (null) takes tin.
+    const capped = await boards({ amount: 1, per: 'hour', buildHorizonHours: 168, stepCharge: 0.5 });
+    expect(ids(capped)).toEqual(['alloy-solder', 'board-solder', 'x-solder']);
+    expect(capped.rawCost).toEqual({ perSecond: 0.000416666667, leastPerSecond: 0.000416666667, leanestPerSecond: 0.000416666667 });
+    // At "No limit" the week's charge-0 start costs 1.19 σ, within LEAN_BASE_ABOVE: its leanest line could not change the
+    // step charge, so none is solved or reported (controller OQ1 (D)).
+    const unlimited = await boards({ amount: 1, per: 'hour', buildHorizonHours: 168, stepCharge: 0.5, rawCap: null });
+    expect(ids(unlimited)).toEqual(['board-tin', 'x-tin']);
+    expect(unlimited.rawCost).toEqual({ perSecond: 0.000555555556, leastPerSecond: 0.000416666667 });
+    // With build cost ignored there is no leanest line to report.
+    expect((await boards({ amount: 1, per: 'hour', buildHorizonHours: null, stepCharge: 0.5 })).rawCost?.leanestPerSecond).toBeUndefined();
+  });
+
   it('flips it with the batch in Make N', async () => {
     // 10: tin 20 + 28 = 48 < solder 15 + 48 = 63; 100: tin 200 + 28 = 228 > solder 150 + 48 = 198 (5 whole alloy runs).
     const few = await boards({ mode: 'makeN', amount: 10 });

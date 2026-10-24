@@ -544,6 +544,34 @@ export function hammerSpec(): PackSpec {
   };
 }
 
+/**
+ * Fix wave 3's poly line in small: a Tank (`t:tank@0`) pressed in one step from a Rubber Log (`t:log@0`, `w-tank`, on the
+ * assembler map), or in three from Raw Ore (`t:ore@0`): `s-grit` (1 ore → 100 grit, forge hammer), `s-paste` (1 grit →
+ * 1 paste, wiremill), `s-tank` (1 paste → 1 tank, bender) — each 16 EU/t × 100 t. With ore and log at 1 a tank takes 0.01
+ * raw the long way (the least raw material, S1) and 1 raw from the log; the walk keeps the log as the simplest producer
+ * (fix spec R4). Machines 121 and 122 (assembler map), 481 (hammer), 351 (wiremill) and 101 (bender), all LV.
+ */
+export function woodSpec(): PackSpec {
+  return {
+    maps: [
+      { id: ASSEMBLER, name: 'Assembler' }, { id: HAMMER, name: 'Forge Hammer' }, { id: WIREMILL, name: 'Wiremill' }, { id: BENDER, name: 'Bending Machine' },
+    ],
+    machines: [
+      { mteId: 121, name: 'Basic Assembler', tier: 1, maps: [ASSEMBLER] },
+      { mteId: 122, name: 'Large Assembler', tier: 1, maps: [ASSEMBLER] },
+      { mteId: 481, name: 'Basic Forge Hammer', tier: 1, maps: [HAMMER] },
+      { mteId: 351, name: 'Basic Wiremill', tier: 1, maps: [WIREMILL] },
+      { mteId: 101, name: 'Basic Bending Machine', tier: 1, maps: [BENDER] },
+    ],
+    recipes: [
+      { id: 'w-tank', map: ASSEMBLER, in: [['t:log@0', 1]], out: [['t:tank@0', 1]], eut: 16, dur: 100 },
+      { id: 's-grit', map: HAMMER, in: [['t:ore@0', 1]], out: [['t:grit@0', 100]], eut: 16, dur: 100 },
+      { id: 's-paste', map: WIREMILL, in: [['t:grit@0', 1]], out: [['t:paste@0', 1]], eut: 16, dur: 100 },
+      { id: 's-tank', map: BENDER, in: [['t:paste@0', 1]], out: [['t:tank@0', 1]], eut: 16, dur: 100 },
+    ],
+  };
+}
+
 /** `fast` (bending map, 301 Fast Press: 1 a → 1 t) and `slow` (wiremill map, 302 Slow Press: 2 a → 1 t), each 16 EU/t × 100 t. */
 export function fastSlowSpec(): PackSpec {
   return {

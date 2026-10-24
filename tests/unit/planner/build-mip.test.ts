@@ -4,14 +4,18 @@
 // that cannot be built, Make N against the batch, the step charge against the raw material with gathered blocks dug and
 // paid per new machine block, the cleanroom, the cheapest of plan 09's plan, the relaxation and S1 rounded up when the
 // time guard stops the MIP, and with build cost ignored plan 09's stages
-// within the owned-only bounds, their machines sized by plan 09's pick (ruling P2).
+// within the owned-only bounds, their machines sized by plan 09's pick (ruling P2); the raw cap against the leanest line
+// and the step charge measured on that line (fix wave 3 (A), (B2)).
 
 import { describe, it, expect } from 'vitest';
 import {
   cleanSpec, fastSlowSpec, freeSpec, hammerSpec, handSpec, opt, pressSpec, solderSpec, solvedWithBuild, twinSpec, twoFreeSpec, twoPressSpec,
+  woodSpec,
 } from '../../helpers/build-fixtures.ts';
 import type { StuffKey } from '../../../src/shared/keys.ts';
-import { BUILD_MIP_MAX_LP_ITERATIONS, BUILD_MIP_MAX_NODES, BUILD_MIP_RETRY_TOLERANCE, BUILD_MIP_TIME_LIMIT_SECONDS, type StepMachines } from '../../../src/server/planner/build-mip.ts';
+import {
+  BUILD_MIP_MAX_LP_ITERATIONS, BUILD_MIP_MAX_NODES, BUILD_MIP_RETRY_TOLERANCE, BUILD_MIP_TIME_LIMIT_SECONDS, LEAN_BASE_ABOVE, type StepMachines,
+} from '../../../src/server/planner/build-mip.ts';
 import type { MachineOption } from '../../../src/server/planner/machine-options.ts';
 import type { Solution, SolveOptions } from '../../../src/server/planner/solve.ts';
 
@@ -510,5 +514,92 @@ describe('the build-cost MIP', () => {
     // On other machines they are no twins: the extractor that builds for less runs, whatever its id (12 < 40).
     const dearer = { ...options, 'x-dust': [opt(132, 1, 0.5, 40)] };
     expect((await solvedWithBuild(twinSpec(), costs, [['t:board@0', 0.1]], { options: dearer })).runs).toEqual(['board-tin', 'x-ingot']);
+  });
+});
+
+describe('the raw cap and the leanest line (fix wave 3 (A), (B2))', () => {
+  // The leanest line is the build MIP's plan at step charge 0 (what "Least raw material" plans): the least raw material
+  // over the horizon plus the build of its machines. The cap holds the plan's raw material within (1 + rawCap) × that
+  // line's, and the step charge is measured against that line's raw material where it is more than LEAN_BASE_ABOVE × σ
+  // (S1g's over the horizon).
+  const WEEK = { options: SOLDER, horizonSeconds: 604800 };
+  const TIN = ['board-tin', 'x-tin'];
+  const SOLDERED = ['alloy-solder', 'board-solder', 'x-solder'];
+  const week = (opts: SolveOptions) => solvedWithBuild(solderSpec(), COSTS, [['t:board@0', 1 / 3600]], WEEK, { stepCharge: 0.5, ...opts });
+
+  it('caps the raw material at (1 + rawCap) × the leanest line\'s, where Fewest machines would trade more', async () => {
+    // A board an hour for a week: soldering alloy is the leanest line (252 raw + 48 to build = 300 < tin's 336 + 28 =
+    // 364), and at Fewest machines (0.5 × 252 = 126 a new block) tin's two blocks win (616 < 678) at 4/3 its raw.
+    for (const rawCap of [undefined, null, 0.34]) expect((await week({ rawCap })).runs, `cap ${rawCap}`).toEqual(TIN);
+    for (const rawCap of [0.33, 0.25, 0]) {
+      const capped = await week({ rawCap });
+      expect(capped.runs, `cap ${rawCap}`).toEqual(SOLDERED);
+      expect(capped.sol.leanRawCost).toBe(0.000416666667);   // 1.5 raw a board, an hour
+      expect(capped.sol.rawCost).toBeLessThanOrEqual((capped.sol.leanRawCost as number) * (1 + rawCap) * (1 + 1e-6));
+    }
+  });
+
+  it('measures the cap against the leanest line, not the least raw material: the poly line keeps its log', async () => {
+    // A tank an hour: the long way takes 0.01 raw a tank but three machines of 100 (300 to build); the log takes 1 raw a
+    // tank on one machine of 10, 24 + 10 = 34 over the day against 300.24, so it is the leanest line. At 0.5 and the
+    // default +25 % the line keeps it, 100 × S1: a cap on S1 (0.24 × 1.25 = 0.3 a day) would force the long way.
+    const options = { 'w-tank': [opt(121, 1, 0.2, 10)], 's-grit': [opt(481, 1, 0.2, 100)], 's-paste': [opt(351, 1, 0.2, 100)], 's-tank': [opt(101, 1, 0.2, 100)] };
+    for (const stepCharge of [0, 0.5]) {
+      const { runs, sol } = await solvedWithBuild(woodSpec(), { 't:log@0': 1, 't:ore@0': 1 }, [['t:tank@0', 1 / 3600]], { options }, { stepCharge, rawCap: 0.25 });
+      expect(runs, `charge ${stepCharge}`).toEqual(['w-tank']);
+      expect(sol.leastRawCost).toBe(0.00000277777778);   // S1: 0.01 raw a tank
+      expect(sol.leanRawCost).toBe(0.000277777778);       // the log line's 1 raw a tank
+      expect(sol.rawCost).toBe(0.000277777778);
+    }
+  });
+
+  it('weighs Fewest machines against the leanest line\'s raw material where S1\'s needs machines nobody would build (T2)', async () => {
+    // The log line on three slow assemblers (2 each, 6) or one fast one (7.5): at step charge 0 the slow ones, 1.5 less
+    // to build. σ = max(S1g × 24 h, 1) = 1 raw (0.24 a day the long way). With Rubber Log at 1 the leanest line takes 24
+    // raw a day, more than LEAN_BASE_ABOVE × σ: Fewest machines charges 0.5 × 24 = 12 a block and one fast assembler wins
+    // (19.5 < 42; before fix wave 3 (B2) it charged 0.5 and kept the three, 7.5 < 8). With Rubber Log at 0.075 (1.8 a
+    // day, within twice σ) the charge stays 0.5 and the three stay (7.5 < 8), where 1.8 as the base would charge 0.9 and
+    // take the fast one (8.4 < 8.7).
+    const options = {
+      'w-tank': [opt(121, 1, 1 / 10800, 2), opt(122, 1, 1 / 3600, 7.5)],
+      's-grit': [opt(481, 1, 0.2, 100)], 's-paste': [opt(351, 1, 0.2, 100)], 's-tank': [opt(101, 1, 0.2, 100)],
+    };
+    const tanks = (log: number, stepCharge: number) => solvedWithBuild(woodSpec(), { 't:log@0': log, 't:ore@0': 1 }, [['t:tank@0', 1 / 3600]], { options }, { stepCharge });
+    for (const [log, mteId, added, lean] of [[1, 122, 1, 0.000277777778], [0.075, 121, 3, 0.0000208333333]] as const) {
+      const least = await tanks(log, 0);
+      expect(least.runs).toEqual(['w-tank']);
+      expect(least.sol.machines?.get('w-tank'), `Rubber Log at ${log}, step charge 0`).toMatchObject({ option: { mteId: 121 }, added: 3 });
+      const fewest = await tanks(log, 0.5);
+      expect(fewest.runs).toEqual(['w-tank']);
+      expect(fewest.sol.machines?.get('w-tank'), `Rubber Log at ${log}`).toMatchObject({ option: { mteId }, added });
+      expect(fewest.sol.leanRawCost).toBe(lean);
+    }
+  });
+
+  it('measures the cap against the least raw material when the leanest line has no plan (the fallback)', async () => {
+    // With the MIP skipped (`buildTimeLimit` 0) neither MIP runs: the cap falls back to S1 (1.875 raw a board at +25 %),
+    // which only the soldering alloy meets, and the plan says it was rounded up from an estimate.
+    const { runs, sol } = await week({ rawCap: 0.25, buildTimeLimit: 0 });
+    expect(runs).toEqual(SOLDERED);
+    expect(sol.buildStats?.approx).toBe(true);
+    expect(sol.leanRawCost).toBe(sol.leastRawCost);
+  });
+
+  it('solves no leanest line at "No limit" where its start costs at most LEAN_BASE_ABOVE (controller OQ1 (D))', async () => {
+    // The solder week's charge-0 start (S1 rounded up) costs (252 + 48) / 252 = 1.19 σ, so its leanest line could not
+    // re-base the charge and, with no cap, nothing else reads it: none is solved, the plan reports none, and its runs are
+    // those it had before the cap.
+    expect(LEAN_BASE_ABOVE).toBe(2);
+    for (const rawCap of [undefined, null]) {
+      const { runs, sol } = await week({ rawCap });
+      expect(runs, `cap ${rawCap}`).toEqual(TIN);
+      expect(sol.leanRawCost, `cap ${rawCap}`).toBeUndefined();
+    }
+    // Poly in small at "No limit": its charge-0 start runs the long way on three machines of 100 (300.24 σ), so its
+    // leanest line is solved, re-bases the charge and is reported.
+    const options = { 'w-tank': [opt(121, 1, 0.2, 10)], 's-grit': [opt(481, 1, 0.2, 100)], 's-paste': [opt(351, 1, 0.2, 100)], 's-tank': [opt(101, 1, 0.2, 100)] };
+    const wood = await solvedWithBuild(woodSpec(), { 't:log@0': 1, 't:ore@0': 1 }, [['t:tank@0', 1 / 3600]], { options }, { stepCharge: 0.5 });
+    expect(wood.runs).toEqual(['w-tank']);
+    expect(wood.sol.leanRawCost).toBe(0.000277777778);
   });
 });
