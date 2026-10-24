@@ -4,7 +4,9 @@
 // (a build step's map pin sets `#map`) switch it too. Anyone can delete the project; once it is deleted, here or
 // elsewhere, the page goes back to the project list, which says so (§11.24). Below 900 px the settings panel is a drawer
 // that the Settings button in the head slides in over a dimmed page (design spec §7a), a layer of its own while it is
-// open (ruling R36).
+// open (ruling R36). What to make is the first of its sections, so it is never left out of sight: a project with no target
+// opens the drawer by itself, once, into the item search; the plan banner's hint to pick something to make goes there too;
+// and the Settings button says what the line makes.
 
 import { useEffect, useLayoutEffect, useRef, useState, type ReactElement } from 'react';
 import type { StuffKey } from '../../shared/keys.ts';
@@ -15,6 +17,7 @@ import type { ProjectOp } from '../../shared/types/project.ts';
 import { apiGet, messageOf } from '../api/client.ts';
 import { DeleteProject } from '../components/DeleteProject.tsx';
 import { ItemIcon } from '../components/ItemIcon.tsx';
+import { ITEM_SEARCH_PLACEHOLDER } from '../components/ItemSearch.tsx';
 import { SettingsToggle } from '../components/SettingsToggle.tsx';
 import { formatPercent } from '../format.ts';
 import { leaveDeletedProject } from '../state/deleted-notice.ts';
@@ -26,7 +29,7 @@ import { costLine } from './plan-cost.ts';
 import { PROJECT_TABS, tabFromHash } from './project-tabs.ts';
 import { ProjectorPanel } from './ProjectorPanel.tsx';
 import { stepChargeLabel, stepChargeOf } from './settings-model.ts';
-import { SettingsPanel } from './SettingsPanel.tsx';
+import { SettingsPanel, usePickedNames } from './SettingsPanel.tsx';
 
 function ProjectName(props: { name: string; onRename(name: string): void }): ReactElement {
   const { name, onRename } = props;
@@ -64,8 +67,13 @@ function ProjectName(props: { name: string; onRename(name: string): void }): Rea
   );
 }
 
+/** The windows the settings column is a drawer in (the stylesheet's query, `max-width: 900px`). */
+const NARROW = '(max-width: 900px)';
+
 /** The integrity issue codes (fix spec R11), to tell a server's integrity warnings from its other warnings. */
 const ISSUE_CODES: ReadonlySet<string> = new Set(ISSUE_ORDER);
+/** The code of the server's hint for a project with no target ("Pick something to make"). */
+const NO_TARGET = 'no-target';
 /** A plan uses more raw material than the least only when it does by more than this share (not by rounding). */
 const COST_GAP_REL = 1e-6;
 
@@ -92,11 +100,17 @@ function issueCount(code: PlanIssueCode, n: number, issues: readonly PlanIssue[]
  * uses than the least to save machines (`Plan.rawCost`, Steps vs raw material); every other server warning (plan 08's
  * avoid list, missing recipes, …) and what unlocks the line. Above that box, and on its own when there is nothing to
  * warn about, what the plan costs to run and to build its new machines (`costLine`, plan 12).
+ *
+ * The server's hint for a project with no target, "Pick something to make" (`no-target`), is a button when the page gives an
+ * `onPickTarget` to answer it: the picker is in the settings, which a narrow window keeps in a drawer, so the hint is the way in.
+ * Without one it stays text. This is a plain function, with no hook, which the tests call.
  */
 export function PlanBanner(props: {
   plan: Plan | null; planError: string | null; planLoading: boolean; settings: PlanSettings; send: (ops: ProjectOp[]) => void;
+  /** Takes the reader to the picker of what to make (the item search of the Make section). */
+  onPickTarget?: () => void;
 }): ReactElement | null {
-  const { plan, planError, planLoading, settings, send } = props;
+  const { plan, planError, planLoading, settings, send, onPickTarget } = props;
   const warnings = plan?.warnings ?? [];
   const unlocks = plan?.unlocks ?? [];
   const names = plan?.names ?? {};
@@ -143,7 +157,11 @@ export function PlanBanner(props: {
       )}
       {others.length > 0 && (
         <ul className="warnings">
-          {others.map((w, i) => <li key={`${w.code}:${i}`}>{w.text}</li>)}
+          {others.map((w, i) => (
+            <li key={`${w.code}:${i}`}>
+              {w.code === NO_TARGET && onPickTarget !== undefined ? <button type="button" className="link" onClick={onPickTarget}>{w.text}</button> : w.text}
+            </li>
+          ))}
         </ul>
       )}
       {derived.length > 0 && (
@@ -236,21 +254,58 @@ export function ProjectPage(props: { id: string }): ReactElement {
   // its Close button or the Settings button, goes through `closeSettings`, which gives the focus back to the Settings button. A window
   // that grows past 900 px closes it too, without moving the focus: the column is beside the views again and the button is not drawn.
   // The focus moves in a layout effect, after the commit: until then the page behind is still inert, and an inert button takes no focus.
-  // These hooks sit above the early return below; the listeners are removed when the drawer closes, and between StrictMode's two runs.
+  // It opens into its Close button when the Settings button opens it, and into the item search when the page opens it to pick what to make
+  // (below). These hooks sit above the early return below; the listeners are removed when the drawer closes, and between StrictMode's two runs.
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsToggle = useRef<HTMLButtonElement | null>(null);
   const settingsClose = useRef<HTMLButtonElement | null>(null);
+  const settingsPanel = useRef<HTMLElement | null>(null);
   /** The drawer is being closed by a way out of it: the focus goes back to the Settings button. */
   const refocusToggle = useRef(false);
+  /** Where the focus goes when the drawer opens: its Close button, or the item search of its Make section. */
+  const focusOnOpen = useRef<'close' | 'search'>('close');
   const closeSettings = (): void => {
     refocusToggle.current = true;
     setSettingsOpen(false);
   };
+  const openSettings = (focus: 'close' | 'search'): void => {
+    focusOnOpen.current = focus;
+    setSettingsOpen(true);
+  };
+  /** Moves the focus into the item search of the Make section and scrolls it into view; false when the panel has none drawn. */
+  const focusSearch = (): boolean => {
+    const search = settingsPanel.current?.querySelector<HTMLInputElement>(`input[role="combobox"][placeholder="${ITEM_SEARCH_PLACEHOLDER}"]`);
+    if (search === null || search === undefined) return false;
+    search.focus();
+    search.scrollIntoView({ block: 'nearest' });
+    return true;
+  };
   useLayoutEffect(() => {
-    if (settingsOpen) settingsClose.current?.focus();
-    else if (refocusToggle.current) settingsToggle.current?.focus();
+    if (settingsOpen) {
+      const intoSearch = focusOnOpen.current === 'search';
+      focusOnOpen.current = 'close';
+      if (!intoSearch || !focusSearch()) settingsClose.current?.focus();
+    } else if (refocusToggle.current) settingsToggle.current?.focus();
     refocusToggle.current = false;
   }, [settingsOpen]);
+  // What to make is the first thing a project needs, and it is in the drawer on a narrow window: so a project with no target opens the
+  // drawer by itself, into the item search, once per visit (this page is new for each visit to a project: the route keys it by the id).
+  // It waits for the project, and for the name prompt, which covers the page until this browser has a name and must keep the focus it
+  // asks for. It decides once, whatever happens to the project after: the reader closes the drawer, and nothing opens it again.
+  const ready = project !== null && me !== '';
+  const autoOpenDecided = useRef(false);
+  useEffect(() => {
+    if (!ready || autoOpenDecided.current) return;
+    autoOpenDecided.current = true;
+    if (project?.settings.target === null && matchMedia(NARROW).matches) openSettings('search');
+  }, [ready]);
+  /** The plan banner's "Pick something to make": the drawer opens into the item search on a narrow window; beside the views the search takes the focus. */
+  const pickTarget = (): void => {
+    if (!settingsOpen && matchMedia(NARROW).matches) openSettings('search');
+    else focusSearch();
+  };
+  // The settings panel and the Settings button name the target in the same words, and what was just picked before the plan names it.
+  const names = usePickedNames(plan);
   // While it is open, Escape closes it, one layer per press: a key that something inside has already handled (`defaultPrevented`) is not
   // the drawer's, and neither is the key that closes a search list open in it (the item search and the avoid box close on Escape without
   // preventing the default). React has drawn such a list closed by the time the key reaches the document, so `look` reads whether one is
@@ -273,16 +328,21 @@ export function ProjectPage(props: { id: string }): ReactElement {
     };
   }, [settingsOpen]);
   // What lies outside this page while the drawer is open: the top bar, which the App draws above it, goes inert with the rest of the
-  // page behind the drawer; and the drawer closes when the window grows past the width it is a drawer at (the stylesheet's query).
+  // page behind the drawer; and the drawer closes when the window grows past the width it is a drawer at (the stylesheet's query). It
+  // looks once more as it starts to listen: the page's own opening (the auto-open, in an effect) is a task or two older than this
+  // effect, and a window that grew in between fired its change before there was a listener. In a window still narrow that look does
+  // nothing; in one that has grown it closes the drawer at once, and, as for any widening, leaves the focus where it is (on the search,
+  // which sits beside the views then), not on a Settings button that is not drawn.
   useEffect(() => {
     if (!settingsOpen) return;
     const bar = document.querySelector<HTMLElement>('.top-nav');
     if (bar !== null) bar.inert = true;
-    const narrow = matchMedia('(max-width: 900px)');
+    const narrow = matchMedia(NARROW);
     const onWidth = (): void => {
       if (!narrow.matches) setSettingsOpen(false);
     };
     narrow.addEventListener('change', onWidth);
+    onWidth();
     return () => {
       narrow.removeEventListener('change', onWidth);
       if (bar !== null) bar.inert = false;
@@ -301,7 +361,10 @@ export function ProjectPage(props: { id: string }): ReactElement {
   return (
     <main className="page project-page">
       <div className="project-head" inert={settingsOpen}>
-        <SettingsToggle open={settingsOpen} onToggle={() => (settingsOpen ? closeSettings() : setSettingsOpen(true))} ref={settingsToggle} />
+        <SettingsToggle
+          open={settingsOpen} onToggle={() => (settingsOpen ? closeSettings() : openSettings('close'))} ref={settingsToggle}
+          targetName={project.settings.target === null ? null : names.nameOf(project.settings.target)}
+        />
         <ProjectName name={project.name} onRename={(name) => send([{ op: 'rename', name }])} />
         <span className={view.connected ? 'connection live' : 'connection'}>{view.connected ? 'live' : 'reconnecting…'}</span>
         <DeleteProject id={project.id} name={project.name} label="Delete project" onDeleted={() => view.markDeleted(me)} />
@@ -309,14 +372,14 @@ export function ProjectPage(props: { id: string }): ReactElement {
       {/* The banners' own box, so the page behind an open drawer can be inert in three pieces (ruling R36); it adds no space. */}
       <div className="project-banners" inert={settingsOpen}>
         {view.error !== null && <p className="banner error" role="alert">{view.error}</p>}
-        <PlanBanner plan={plan} planError={view.planError} planLoading={view.planLoading} settings={project.settings} send={send} />
+        <PlanBanner plan={plan} planError={view.planError} planLoading={view.planLoading} settings={project.settings} send={send} onPickTarget={pickTarget} />
       </div>
       <div className={settingsOpen ? 'project-body settings-open' : 'project-body'}>
-        <aside className="settings-panel" id="project-settings" aria-label="Project settings">
+        <aside className="settings-panel" id="project-settings" aria-label="Project settings" ref={settingsPanel}>
           {/* The drawer's way out, and where the focus goes when it opens; the stylesheet draws it in the drawer only. */}
           <button type="button" className="settings-close" onClick={closeSettings} ref={settingsClose}>Close settings</button>
           {pack.error !== null && <p className="error small">{`Could not load the pack: ${pack.error}`}</p>}
-          <SettingsPanel project={project} plan={plan} send={send} me={me} info={pack.info} />
+          <SettingsPanel project={project} plan={plan} send={send} me={me} info={pack.info} names={names} />
           {deleted === null && <ProjectorPanel projectId={project.id} />}
         </aside>
         <div className="project-views" inert={settingsOpen}>

@@ -732,6 +732,9 @@ describe('the Machine GUI chrome', () => {
 // brief, and the order the cascade needs.
 
 const NARROW = '@media (max-width: 900px)';
+/** Below this the head wraps whatever the Settings button's width, so the 40% cap protects nothing (above it, the cap keeps the head to one
+ *  row from about 740 px with a long name, earlier with a short one). */
+const PHONE = '@media (max-width: 700px)';
 /** The title of a section, whichever element carries it: its h3, the Tier label's span and the Logistics legend. */
 const TITLES = '.settings-section h3, .settings-title, .settings .field > span.settings-title, .choice > legend.settings-title';
 const SETTINGS_SUMMARY = 'details.settings-section > summary';
@@ -871,6 +874,43 @@ describe('the Machine GUI settings drawer', () => {
     expect(declared('.settings-toggle', 'display')).toBe('none');
     expect(declaredIn(NARROW, '.settings-toggle', 'display')).toBe('inline-flex');
     expect(declaredIn(NARROW, '.settings-toggle', 'align-items')).toBe('center');
+  });
+
+  it('shows what is being made in the Settings button as a small grey readout, cut with an ellipsis within 40% of the head', () => {
+    // the button holds "Settings" and the target's part; the part gives way (it shrinks and is cut) so that a long name never grows the button
+    expect(declaredIn(NARROW, '.settings-toggle', 'gap')).toBe('8px');
+    expect(declaredIn(NARROW, '.settings-toggle', 'max-width')).toBe('40%');
+    for (const [property, value] of [
+      ['min-width', '0'], ['overflow', 'hidden'], ['text-overflow', 'ellipsis'], ['white-space', 'nowrap'],
+      // Inter 13px in the muted ink, on the dark screen of a readout (the summary's count is one too): the muted ink measures 2.3:1 on the
+      // button's own face (contrast.test.tsx), and the button's drop shadow would smear 13px letters
+      ['font', '13px/1.5 var(--font-ui)'], ['color', 'var(--ink-muted)'], ['background', 'var(--screen)'], ['padding', '2px 6px'],
+      ['text-shadow', 'none'],
+    ] as const) expect(declaredIn(NARROW, '.settings-toggle-target', property), `.settings-toggle-target { ${property} }`).toBe(value);
+    // the pixel font is never below 13px, and this part is small print: it is Inter, and no colour of its own is new
+    expect(declaredIn(NARROW, '.settings-toggle-target', 'font')).not.toContain('--font-pixel');
+    expect(declaredIn(NARROW, '.settings-toggle-target', 'color')).toMatch(/^var\(--/);
+    expect(declaredIn(NARROW, '.settings-toggle-target', 'background')).toMatch(/^var\(--/);
+    // it moves nothing by itself, and it is not drawn on a wide screen, where the whole button is not
+    expect(declaredIn(NARROW, '.settings-toggle-target', 'animation')).toBeUndefined();
+    expect(declaredIn(NARROW, '.settings-toggle-target', 'transition')).toBeUndefined();
+    expect(hasTopLevelRule('.settings-toggle-target'), 'a .settings-toggle-target rule outside the query').toBe(false);
+    // the readout makes the button some 140px wider, so the project's name gives way (to 160px) before the head wraps: while the stream is
+    // live (the connection badge reads "live", 58px; "reconnecting…" is 137px and wraps the head a little earlier, as it already does at
+    // narrower widths) the head is one row at 768 px, as it was with the bare button (drawer.spec.ts measures it)
+    expect(declaredIn(NARROW, '.project-name', 'flex')).toBe('1 1 160px');
+    expect(declaredIn(NARROW, '.project-name', 'min-width')).toBe('0');
+  });
+
+  it('lets the Settings button take the whole head on a phone, where the head wraps whatever its width', () => {
+    // above 700 px the cap holds the head to one row (from about 740 px with a long name); below it the head wraps anyway, and the cap
+    // only cut a short name there ("· Make: Basi…" for "Basic Circuit", an empty readout at 320 px) where the title does not show on a
+    // touch screen
+    expect(declaredIn(PHONE, '.settings-toggle', 'max-width')).toBe('100%');
+    expect(inQuery(PHONE, '.settings-toggle'), 'a phone changes the button\'s cap and nothing else').toEqual([['max-width', '100%']]);
+    // the same specificity as the 40% of the drawer's query, so the phone's rule has to come after it
+    expect(position(PHONE)).toBeGreaterThan(position(NARROW));
+    expect(declaredIn(NARROW, '.settings-toggle', 'max-width')).toBe('40%');
   });
 
   it('shows the drawer\'s Close settings button in the drawer only, at the top right of it', () => {

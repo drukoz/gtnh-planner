@@ -1299,10 +1299,25 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
    state's transition is the one it leaves with). Hidden, it is also `visibility: hidden`, so the keyboard cannot reach what is not on
    screen; that is set after the slide when it closes, at once when it opens. Its Close settings button sits at its top right, where the
    focus goes when it opens (the page behind is inert while it is open: ProjectPage). Both layers are under the modal (z-index 100).
-   The backdrop is drawn only here: on a wide window, a drawer left open dims nothing. */
+   The backdrop is drawn only here: on a wide window, a drawer left open dims nothing.
+   The Settings button says what the line makes after its own word, "Settings · Make: Basic Circuit", so that the most important setting is
+   not out of sight behind it. That part is Inter 13px in the muted ink on a dark readout, as a summary's count is: the muted ink is 2.3:1 on
+   the button's own face and 7.4:1 on the screen. It has no drop shadow, which would smear the small letters. The button takes at most 40%
+   of the head, and the part gives way: it shrinks and a long name ends in an ellipsis (the page also gives the name as its title). That
+   part makes the button some 140px wider, so the project's name gives way too, down to 160px, before the head wraps: while the event
+   stream is live (the connection badge is 58px; as "reconnecting…" it is 137px, and the head wraps a little earlier, as it already does at
+   narrower widths) the toggle, the name, the connection and Delete are one row on a tablet (768 px), as they were with the bare button.
+   Below 700 px the head wraps whatever the button's width, so the 40% protects nothing there and only cut a short name ("· Make: Basi…",
+   and an empty readout at 320 px, where the title does not show on a touch screen): the block after this one lets the button take the
+   whole head, and only a name longer than the head is cut. */
 @media (max-width: 900px) {
   .project-body { grid-template-columns: 1fr; }
-  .settings-toggle { display: inline-flex; align-items: center; }
+  .settings-toggle { display: inline-flex; align-items: center; gap: 8px; max-width: 40%; }
+  .settings-toggle-target {
+    min-width: 0; padding: 2px 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    background: var(--screen); color: var(--ink-muted); font: 13px/1.5 var(--font-ui); text-shadow: none;
+  }
+  .project-name { flex: 1 1 160px; min-width: 0; }
   .settings-close { display: inline-flex; align-items: center; align-self: flex-end; }
   .settings-panel {
     position: fixed; inset: 0 auto 0 0; width: min(340px, 88vw); max-height: none; overflow: auto; padding: 12px;
@@ -1313,6 +1328,11 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
   .drawer-backdrop {
     position: fixed; inset: 0; z-index: 50; background: rgba(0, 0, 0, 0.6); animation: fade-in var(--dur-base) var(--ease-out);
   }
+}
+
+/* A phone (see the Settings button above): the same specificity as the 40% of the drawer's block, so this one comes after it. */
+@media (max-width: 700px) {
+  .settings-toggle { max-width: 100%; }
 }
 
 @media (max-width: 640px) {
