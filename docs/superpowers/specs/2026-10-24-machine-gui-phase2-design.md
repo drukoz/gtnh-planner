@@ -2,7 +2,8 @@
 
 Date: 2026-10-24 (drafted 2026-10-23). Status: approved by the user on 2026-10-24 (logo C, all Phase 2 mockups, dark mode with Auto as default); builder-check answers in §23. Nothing is built yet. The base is `main` at `cfaa05b`, with
 Phase 1 merged. Every `file:line` below is at that commit. §24 and the plan were re-checked against `main` at `01da27d` (Phase 1, the
-Make-picker fix, add-on 23 and add-on 17 merged), and their cites are at `01da27d`.
+Make-picker fix, add-on 23 and add-on 17 merged), and their cites are at `01da27d`. On 2026-10-24 the user also chose VT323 for
+figures, Pixelify Sans kept for words: §25 records it, adds its one dependency and overrides anything above that disagrees.
 
 **Inputs**
 - Phase 1 design: `docs/superpowers/specs/2026-10-22-machine-gui-restyle-design.md`, cited as "P1 §n".
@@ -2912,7 +2913,8 @@ under 700. Phase 2 keeps the button where it is and builds nothing for it. `<Key
 `.project-banners`, so the bar and the opened card sit below the strip, and the card stays the box's last child. The strip-row
 button P2-D44 sketched is not built: a sixth item would wrap the five tiles at 752 px.
 
-**Builder's call: the strip's figures beside the Compare tiles'** (Task 7; plan ruling `strip-figures`). `main`'s `4bef36c` lets no
+**Builder's call: the strip's figures beside the Compare tiles'** (Task 7; plan ruling `strip-figures`; §25 measured it again in VT323,
+and its numbers replace the Pixelify ones here). `main`'s `4bef36c` lets no
 Compare figure break: it stays on one line and shrinks to fit, down to 13 px, before it is cut, because those figures are written in
 full (`2,097,152` is 106.9 px in the 24 px pixel font). The strip needs only half of that. Its figures already stay on one line
 (§10.2's `white-space: nowrap; overflow: hidden; text-overflow: ellipsis` on `.key-number dd`, which the plan now pins), as its fixed
@@ -2948,4 +2950,177 @@ column too narrow for two. So its blocks fall as the tiles will, and each frame 
 about 264 px where the tiles sit two a row, about 441 px where they stack. `skeleton-readouts` is six such blocks in that grid alone, the
 figures the mode will show, so a pending column keeps its height when they arrive. The card's "Updating…" keeps its columns drawn, as
 Connections' busy state does, and its failed-fetch alert is no loading line, so neither gets a skeleton.
+
+## 25. Figures in VT323 (2026-10-24)
+
+On 2026-10-24 the user found the figures hard to read: Pixelify Sans draws 5 almost like S, 2 like Z and 0 like O, so "2,097,152"
+reads "2,097,1S2" and "5.4M" reads "S.4M". Shown the same Compare tiles in six faces (`$SCRATCH/glyphs/number-fonts.png`; `$SCRATCH`
+is the design session's scratchpad, the folder of the reports and mockups under Inputs, as the plan names it), the user
+chose the recommended one: **VT323** (Google Fonts, OFL 1.1; npm `@fontsource/vt323` at exactly 5.3.0, published 2026-07-19, the
+version of the two @fontsource packages already bundled, with no dependencies of its own) for figures, and kept **Pixelify Sans for
+words**. This section records that choice, the controller's scope ruling and the builder's calls that size it. It adds that one
+dependency, against §3.1's and P2-D38's "no new dependencies", and it overrides anything above that disagrees: §7.3's chip,
+§8.1's readout, §8.2's stack count and §10.2's `.key-number dd` fonts, §6.3's bare tooltip lines, and §24's `strip-figures`
+measures. Task 2b builds it on what Phase 1 and add-on 17 draw; in §19's order it comes after the logo and before the shared
+tooltip, so Tasks 3a, 4, 5a, 6a, 7, 8, 11 and 14 carry it.
+
+Every measure below was taken in Chromium 153 (Playwright 1.63, the e2e browser) with the package's own
+`vt323-latin-400-normal.woff2` and the repo's Pixelify Sans and Inter files, at device scales 1 and 2; the pages, scripts and shots are
+in `$SCRATCH/vt323/` (`page/`, `scripts/`, `shots/`). The review measured the Compare tiles, the step rows, the settings count and
+`span.fig` again in the app itself (the built client of `01da27d` with these rules injected; `$SCRATCH/critic/`).
+
+**The scope** (plan ruling `figures-vt323`, the controller's, binding):
+1. A token, `--font-digits`: VT323 first, then a fallback whose digits are distinct, never Pixelify.
+2. Every element whose text is a figure or mainly figures uses `var(--font-digits)`: the readout values (add-on 17's Compare tiles,
+   the strip's values, the recipe card's readouts), stack counts, chance tags, count chips, the step list's numbers, Phase 1's figure
+   readouts and badges (the map's Y, any `--screen` readout that shows a number) and key caps that show digits. Words stay in
+   Pixelify: titles, headings, buttons, tabs, labels, the logo and the badges that are words ("live").
+3. Mixed text in a pixel font is decided element by element: the whole element in VT323, or Pixelify with its figures in a
+   `span.fig`, whichever reads best and costs least, measured, each a builder's call. Sentences stay out of the pixel fonts (R35).
+4. Each VT323 size gives digits as tall as the Pixelify ones it replaces (or the size this spec meant), on fixed line heights, so a
+   late font changes no height (§3.6). A floor, VT323's twin of "Pixelify only at 13 px or more", set from legibility shots and
+   pinned by the contract.
+5. The Compare tiles' shrink rule (`4bef36c`) re-derived for VT323 — its maximum, its floor and its em a glyph — keeping its
+   guarantee that a figure never breaks or spills (`objectives.spec.ts:150-178`, at 860 and 768 px).
+6. The strip's `strip-figures` measures (§24) taken again in VT323.
+
+**The two faces, measured.** VT323 has 1000 units an em, ascent 800, descent 200 and no line gap (its normal line height is 1.0 em),
+one weight (400), and one advance for every glyph, 400 units (0.4 em): digits, `,` `.` `%` `×`, letters and the space alike. Its
+digits are 560 units tall and sit on the baseline (0.56 em; its OS/2 cap height is 560 too). Pixelify Sans 400 draws a digit from −12
+to 631 units (0.643 em) on an advance of 586 (`1` 404, `,` 267, `.` 222). So a VT323 digit is as tall as a Pixelify one at 1.148 × the
+size:
+
+| Pixelify size → digit height | VT323 size → digit height |
+|---|---|
+| 13 px → 8.36 px | 15 px → 8.40 px |
+| 13.6 px (`0.85rem`) → 8.74 px | 15.6 px (`span.fig`, 1.15 em) → 8.75 px |
+| 14 px → 9.00 px | 16 px → 8.96 px |
+| 18 px → 11.57 px | 21 px → 11.76 px |
+| 24 px → 15.43 px | 28 px → 15.68 px |
+
+Neither face has `≤` (`Y ≤ 255` takes it from the fallback, as it did). VT323 draws `%` as a slanted cross with two small dots, which
+at 16 px or less on a 1× screen reads as an x, and `×` as tall as a capital, so "×5" reads "X5" and "10%" can read "10X" (shots
+`pct-dpr1.png`, `chance-dpr1-x5.png`, `pct2-dpr1-x4.png`). At 21 px its `%` reads as one.
+
+**Builder's call: the token and its fallback** (Task 2b; plan ruling `digits-token`). `--font-digits: VT323, ui-monospace, Menlo,
+Consolas, monospace` on the first `:root`, beside `--font-pixel`: the projector's monospace stack (`styles.css:1345`) behind VT323,
+every face of it with distinct digits. Chromium knows no `ui-monospace` (measured: alone it fell to Times), so on macOS the fallback is
+Menlo, 0.602 em a glyph. Every rule that sets `var(--font-digits)` also sets `font-size-adjust: cap-height 0.56`, after its `font`
+shorthand (which resets it). VT323's own cap height is 0.56 em, so VT323 is drawn exactly as specified (measured: the same widths with
+and without), while a fallback is scaled until its capitals and digits are as tall as VT323's: Menlo's 16 px "144L" goes from 38.5 to
+29.6 px, its 28 px "2,097,152" from 151.7 to 116.5 px (VT323: 100.8). So a late or missing VT323 keeps its figures the same size, and
+the Flow chips and the slots' counts fit with the fonts blocked (below). The token is a font token, so the dark blocks never name it
+(Task 1b's `/^--(…|font|…)/`). `main.tsx` imports `@fontsource/vt323/400.css` with the other faces, before the stylesheet; of its three
+subsets only the latin face is ever fetched for these texts. Rejected: an `@font-face` with `local()` sources and `size-adjust` for the
+fallback, which needs no property in every rule but loads a face where `chrome.spec.ts:61` wants none.
+
+**Builder's call: the floor** (Task 2b; plan ruling `digits-floor`). VT323 only at 14 px or more (digits 7.84 px tall). From the
+legibility sheets (`legibility-dpr1.png`, `legibility-dpr2.png`: 11–20 px, on a screen and on a panel): at 2× every size from 12 px
+reads; at 1× a VT323 stroke is one font pixel wide, so at 13 px it thins to about half a pixel and blurs, and from 14 px every digit
+stays distinct. The contract pins it as `DIGITS_FLOOR`: every px size a `var(--font-digits)` rule gives, the Compare clamp's lower end
+included, is 14 or more, and `span.fig`'s 1.15 em only ever sits in Pixelify text, which is 13 px or more (14.95 px). Pixelify's own
+13 px floor stays for words.
+
+**Builder's call: whole element or `span.fig`, element by element** (Tasks 2b, 3a, 4, 5a, 11; plan ruling `digits-mixed`). One rule
+decides them all:
+- **Whole VT323** for a readout that is a figure, on a screen or a slot, its unit and its few words with it, as in the comparison the
+  user chose ("0.35 /s"): the Compare tiles, the strip's values and units, the recipe card's readouts, stack counts, the step list's
+  numbers, the map's Y readout, the settings summary's count ("3 of 5 reachable"), the 3D layer readout ("Layers 1–12 of 20") and the
+  smart upload's total ("To send: 5 chunks, 12 KB"). For the Phase 1 ones that is a CSS change only, and their markup is pinned
+  (`map-view.test.tsx:36`, `view3d.test.tsx:358`, `world-smart.test.tsx:221`). Accepted there: VT323's `×` ("×5" in the recipe card's
+  Machines tile reads "X5") and its `%` in the Busy tile, which reads as one at 21 px.
+- **Pixelify with its figures in `span.fig`** (`tspan.fig` in an svg) for every other pixel text that shows a figure among words or
+  signs: the NEI tooltip (Task 3a), the map tooltip and the 3D hover label, the map's note badges ("N5") and "Show all 13 items", the
+  Materials missing badge ("short: gets 45%") and used-by chips ("Assembler (Circuit Board) 259 L/h"), the step list's pin button
+  ("pin 5"), the line panel's "Rotate 90°" and the swap list's "25 more… (55 not shown)" (two buttons whose figures are no name), the
+  note dialog's title ("Add note at 4, 63, 5"), the Connections panel's title (a box's "5× Basic Assembler", a hookup's "Power tap at
+  12 64 7", a link's "Titanium Dust 60/min · Red"), the plan banner's heading ("This plan does not add up: 2 inputs have no
+  source, …"), the Flow count chip ("×5", "×1 shared"; Task 4), the recipe card's chance tag ("10%"), tier chip ("LV · 32 V") and
+  overclock chips (Task 5a), and the shortcuts sheet's digit caps (`1`, `6`; Task 11). One hook-free component writes them, `Figs`
+  (`src/client/components/Figs.tsx`): a figure is a run of digits with what joins them (`1,440`, `0.0586`, `10:00`, a position
+  `1 64 10`, a range `1–6`) and a sign before it (`+3`, `-30`). `Figs` cannot tell a name's digit from a figure, so in a text it writes
+  every digit run is a figure, a name's too ("1x Copper Wire" in a tooltip); a name stays Pixelify, digits and all, where it stands
+  alone (the next point). The `%` and `×` around a figure stay in the words' Pixelify, whose
+  `%` and `×` read where VT323's read as an x: "10%" is a VT323 `10` and a Pixelify `%`, "×5" a Pixelify `×` and a VT323 `5`. The span
+  is `font: 1.15em/0 var(--font-digits)`: 1.15 em of its Pixelify parent gives its digits the parent's digit height (14.95 px in 13 px
+  text, 16.1 px in the 14 px tooltip), and a line height of 0 lets it never grow or move a line. Measured, every tooltip, badge,
+  button, title and chance tag keeps its height with the fonts and without (`lh0.png`, `figspan.png`); with a line height of 1 the
+  chance tag grew from 14 to 16.1 px and dropped its digits.
+- **Pixelify, digits and all**, for names and fixed words: titles and headings that show a name (a step's, an item's, a block's:
+  `.flow-panel-head h3`, `.view3d-box > h3`), the project's name (an `<input>` holds no span, and the project list's link shows the
+  same name), buttons that name an item ("Import X instead"), the avoid chips (an item's name), the tabs ("3D"), the logo and the word
+  badges. A digit there belongs to a name, and rule 2 keeps names in Pixelify. The World page's scan rows change nothing: their state
+  chip shows words only (Queued, Running, Done, Failed).
+
+Rejected: the tooltips and badges set whole in VT323 — CSS only, but their words would leave Pixelify, against the user's choice
+(`el-tips.png`, `el-badges-l.png`); and a composite face whose `unicode-range` sends every digit of the Pixelify text to VT323, which
+would reach the names and the project's input too, where rule 2 keeps Pixelify.
+
+**Builder's call: sizes and line boxes** (Tasks 2b, 4, 5a, 6a, 7, 11; plan ruling `digits-sizes`). Each element takes the VT323 size
+whose digits match the Pixelify ones it had, and keeps the line box it had, in px:
+
+| Element | Before | After | Line box | Why |
+|---|---|---|---|---|
+| Compare tile value `.compare-row > dd` (add-on 17) | Pixelify 24 px/1.1, shrinking to 13 px at 0.6 em a glyph | VT323 28 px, shrinking to 14 px at 0.41 em a glyph | 26.4 px | 15.68 against 15.43 px digits; 26.4 px is the line 24 px/1.1 gave, now fixed, so a tile is 6 + 14.3 + 2 + 26.4 + 6 = 54.7 px at every size (measured 54.70 at 28 and at 14 px; the old line shrank with its figure, the tile to 42.6 px) and Task 8's 55 px blocks hold |
+| Step number `.step-list li::marker` | Pixelify, the list's 14 px | VT323 16 px/20.3 px | 20.3 px, the list's (14 px × 1.45) in px | 8.96 against 9.00 px. The marker inherits the list's 1.45, a 23.2 px line at 16 px, and in the app (a row is a flex `.tick`) that grew every one-line row from 26.3 to 27.16 px; on the list's 20.3 px every row keeps its height (26.3 px, the longer ones 46.59, 87.19, 127.78) in VT323, its fallback or Pixelify |
+| Map Y readout `.map-y` | Pixelify 13 px/1 | VT323 15 px/1 | 15 px, in its 32 px box | "Y ≤ 255" 44.2 px, "surface" 42.0; its pinned `min-width: 6em` is 90 px now (78 before) |
+| Settings summary count `details.settings-section > summary > .muted` | Pixelify 13 px/1.5 | VT323 15 px/19.5 px | 19.5 px | "3 of 5 reachable" 96.0 px (101.8 before): "Reachable dimensions" (165.4 px) still wraps beside it, with 141 px at 1280 × 720 and 127 px in the drawer, as R37's `drawer.spec.ts:225-266` needs |
+| 3D layer readout `.view3d-layer-text` | Pixelify 13 px/1 | VT323 15 px/1 | 15 px, in its 28 px box | "Layers 1–120 of 255" 114 px; its `min-width: 10em` (the contract asks for em) is 150 px now (130 before) |
+| Smart upload total `.smart-total` | Pixelify 14 px/1.3 | VT323 16 px/18.2 px | 18.2 px | "To send: 5 chunks, 12 KB" 153.6 px (154.3 before) |
+| `span.fig` / `tspan.fig` (`Figs`) | the parent's Pixelify, 13–19.2 px | VT323 1.15 em of the parent | 0 | the parent's digit height; it moves no line (previous call) |
+| Flow count chip (Task 4) | Pixelify 13 px | Pixelify 13 px, its digits `tspan.fig` at 14.95 px | — | `CHIP_CHAR_WIDTH` 9 still holds and every box keeps §7.2's width: "×5" 13.8 px with the fonts and 14.5 without, in 28 px less 2 × 5; "×1 shared" 62.6 / 57.9 px in 91; "×128" 25.8 / 28.3 px in 46 |
+| Stack count `.stack-count` (Tasks 5a, 6a) | Pixelify 14 px/1 | VT323 16 px/14 px | 14 px | 8.96 against 9.00 px, in the box Pixelify's 14 px/1 had, its digits 0.75 px lower (measured at 4×); "144L" is 25.6 px, and 29.6 px with the fonts blocked (38.5 without the adjust), in the 36 px slot |
+| Chance tag `.slot-chance` (Task 5a) | Pixelify 14 px/1 | Pixelify 14 px/1, its digits `span.fig` at 16.1 px | 14 px | "10%" keeps Pixelify's `%` (previous call), and the tag its 14 px box |
+| Recipe readout `.readout dd` (Task 5a) | Pixelify 18 px/1.2 | VT323 21 px/21.6 px | 21.6 px | 11.76 against 11.57 px; "1,920" 42 px |
+| Recipe tier and overclock chips (Task 5a) | Pixelify 13 px (`.badge`) | the same, figures `span.fig` at 14.95 px | 19.5 px | |
+| Strip value `.key-number dd` (Task 7) | Pixelify 24 px/26 px | VT323 28 px/26 px | 26 px | the 52 px tile unchanged |
+| Strip unit `.key-number-unit` (Task 7) | Pixelify 13 px/26 px | VT323 15 px/26 px | 26 px | part of the readout, and narrower ("raw/h" 30 px, 40.1 before) |
+| Key caps `.shortcut-list kbd` (Task 11) | Pixelify 14 px/24 px | the same, a digit cap's digit `span.fig` at 16.1 px | 24 px | letter caps unchanged |
+| NEI tooltip (Task 3a), map tooltip, 3D hover label | Pixelify 14 px/1.35 | the same, figures `span.fig` at 16.1 px | 18.9 px | measured: no line grows |
+
+**Builder's call: the Compare tiles' shrink, re-derived** (Task 2b; plan ruling `compare-shrink-vt323`). `.compare-row > dd` takes
+`font: 28px/26.4px var(--font-digits); font-size: clamp(14px, calc(100cqi / (var(--glyphs, 1) * 0.41)), 28px); font-size-adjust:
+cap-height 0.56`, the rest of the rule (`white-space: nowrap`, `overflow: hidden`, `text-overflow: ellipsis`, `overflow-wrap: normal`)
+and the tile's `container-type: inline-size` as they are. The maximum, 28 px, matches the 24 px Pixelify digits; the floor, 14 px, is
+VT323's; the em a glyph is VT323's advance, 0.4, plus 2.5 % so that a figure that just fits is never cut at a subpixel (with 0.4,
+"1,000,000,000,000,000" measured 213.28 px in a 213.33 px box). The old 0.6 was Pixelify's 0.586 rounded up. A 160 px tile (144 px
+inside) holds 12 glyphs at 28 px and 25 at the floor (the old rule: 10 at 24 px, 18 at 13 px). Measured in the card's own grid, at
+tile widths of 160, 198.7 and 229.3 px: every figure the rule can shrink above its floor stays on one line, inside its tile and not
+clipped, and the tile stays 54.7 px. `objectives.spec.ts`'s figures do not shrink at 860 and 768 px (their tiles are 213.3 and
+182.7 px inside; "0.000000123" is 123.2 px, "2,097,152" 100.8) and fit with the fonts blocked too (142.4 and 116.5 px). With the fonts
+blocked a long figure — every one that shrinks, and from 12 glyphs in the narrowest tile, 15 at 768 px and 17 at 860 px — ends in "…"
+(the size-adjusted Menlo is 0.46 em a glyph) until VT323 arrives; it still never breaks or spills (seen in the app at 768 and 860 px: a
+17-glyph "1,234,567,890,123" is whole on one line with VT323, at 26.2 px at 768, and ends in "…" without it).
+
+**Builder's call: the strip's figures, re-measured** (Task 7; plan ruling `strip-figures`, which this updates). In the narrowest tile,
+the grid's 140 px (116 px inside), VT323 28 px takes 11.2 px a glyph: `0.000792` is 89.6 px, `99,999` 67.2, `0.0000792` 100.8. So
+every figure `compactNumber` writes now stays whole, the one under 0.0001 included (it lost its last digit in Pixelify, at 117.8 px),
+and `99,999 raw/h` fits whole with its VT323 unit (101.2 px; 120.8 in Pixelify). Only a unit can still pass the edge (`0.000792 /min`
+117.6 px, `0.0000792 raw/h` 134.8), and the rare rate in words (`1 every 526 days`, Inter 15 px, 119.5 px), and the ellipsis cuts it
+as before. With the fonts blocked, `0.000792` is 103.6 px and `0.0000792` 116.5 px, which can lose its last digit until VT323 arrives.
+The strip still does not shrink, and its tiles stay 52 px.
+
+**Deliberate test changes** (added to §3.9's list; nothing is removed or loosened, and the plan's new tests for Tasks 3a–11 are written
+with `span.fig` from the start):
+
+| Test | Before → after | Task |
+|---|---|---|
+| `styles-contract.test.tsx:2302-2333` (the Compare tiles) | `.compare-row > dd` `font` `24px/1.1 var(--font-pixel)` → `28px/26.4px var(--font-digits)`; `font-size` → `clamp(14px, calc(100cqi / (var(--glyphs, 1) * 0.41)), 28px)`; its comment's "11 glyphs of the 24px pixel font, at most 0.6em each" → "12 glyphs of the 28 px VT323, 0.41 em each"; "to 13px at the least" → "to 14px" | 2b |
+| `styles-contract.test.tsx:1117-1129` (the step numbers) | `font-family` `var(--font-pixel)` → `var(--font-digits)`; `declared('.step-list li::marker', 'font-size')` `toBeUndefined()` → `toBe('16px')`; a row added, `line-height` `20.3px` | 2b |
+| `styles-contract.test.tsx:805-821`, `:1762-1770`, `:1898-1927`, `:2037-2046` | the `font` rows of the summary count, `.map-y`, `.view3d-layer-text` and `.smart-total` → `15px/19.5px`, `15px/1`, `15px/1` and `16px/18.2px var(--font-digits)` | 2b |
+| `map-hover.test.tsx:360-362` | MapTooltip's lines are found in its markup with the `span.fig` tags taken out | 2b |
+| `view3d.test.tsx:91`, `:356` | the hover label reads `Basic Macerator — programmed circuit <span class="fig">2</span>` | 2b |
+| `map-summary.test.tsx:93`, `:154-155`, `:172-173`, `:176` | `N<span class="fig">1</span>`, `Show all <span class="fig">13</span> items` | 2b |
+| `layout-map.test.tsx:319` | `>pin <span class="fig">1<\/span><\/button>` | 2b |
+| `layout-map.test.tsx:182` | `'Rotate 90°'` → `'Rotate <span class="fig">90</span>°'` | 2b |
+| `connections-view.test.tsx:86` | `<h3>Titanium Dust <span class="fig">60</span>/min · Red</h3>` | 2b |
+
+**Costs and risks.**
+- The light look changes on purpose, in the figures only. Task 2b's shots differ from Task 2's there, and along the lines the figures
+  sit on, and nowhere else (Task 2's, not `base-a`: Tasks 1b and 2 changed the top bar); Task 1a, which runs before it, keeps its
+  pixel-identical check as it was made.
+- One dependency more: 73 kB packed, of which the browser fetches the 17.5 kB latin face, and only where a figure is drawn.
+- VT323's strokes are thinner than Pixelify's, so less of a stack count sits on its 2 px shadow (D8's measure). Task 5a's review shots
+  judge it on the light slot; cost if wrong: a 1 px shadow for the counts.
+- A browser without `font-size-adjust` drops the declaration, and only the fallback, while VT323 loads, comes out wider.
 

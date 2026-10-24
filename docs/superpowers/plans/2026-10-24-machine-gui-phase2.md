@@ -5,7 +5,8 @@
 **Goal:** Phase 2 of the Machine GUI restyle: a dark look anyone can choose (Auto by default) and pixel logo C, then the dense text
 becomes Minecraft-native visuals (Flow machine readouts, the NEI recipe card, an opt-in inventory grid, the key-numbers strip), a
 modern feedback layer (one NEI tooltip, skeletons, toasts with Undo, in-app confirms, keyboard shortcuts), goods riding the Flow
-pipes and diagrams that glide — with the light look unchanged and every e2e assertion kept but spec §3.9's deliberate edits.
+pipes and diagrams that glide — with the light look unchanged but for the figures, which the user chose to read in VT323 (spec §25,
+Task 2b), and every e2e assertion kept but spec §3.9's deliberate edits.
 
 **Architecture:** Everything is client-side. The stylesheet gets a token for every themeable colour and one dark declaration list
 written twice (chosen Dark, and Auto with a dark OS); every new rule reads tokens. New behaviour lives in small pure modules
@@ -16,20 +17,22 @@ Transition, each of which checks `prefersReducedMotion()` at every call.
 
 **Tech Stack:** React 19, Vite 8, TypeScript 6, vitest 5 (client project `tests/client/**/*.test.tsx`, node, `renderToStaticMarkup`,
 no DOM), Playwright 1.63 (Desktop Chrome 1280×720 against the real server on 18787 with the Mini-GT fixture; WebKit only for the
-Task 12 spike). No new dependencies.
+Task 12 spike). One new dependency, `@fontsource/vt323` 5.3.0: the figures' face (Task 2b, spec §25).
 
 **Spec:** `docs/superpowers/specs/2026-10-24-machine-gui-phase2-design.md` — binding; its closing "§23 Builder-check answers"
 (P2-D44, P2-D45, P2-D46) and "§24 Re-check against the new main" (the calls made when this plan was re-checked against
-`96e9e99` and then `main` `01da27d`) override anything earlier that disagrees.
+`96e9e99` and then `main` `01da27d`) and "§25 Figures in VT323" (the user's choice of 2026-10-24, which Task 2b builds) override
+anything earlier that disagrees.
 
-**Re-checked** on 2026-10-24 against `main` at `01da27d`; every `file:line` cite in this plan is at that commit.
+**Re-checked** on 2026-10-24 against `main` at `01da27d`; every `file:line` cite in this plan is at that commit. Task 2b and the figure
+edits of Tasks 3a–14 were added the same day, for spec §25.
 
 ## Global Constraints
 
-- Stack unchanged (React 19, Vite 8, TypeScript 6, vitest 5, Playwright 1.63) and **no new dependencies**: `createPortal` is `react-dom`'s; WAAPI, View Transitions and `matchMedia` are browser APIs.
+- Stack unchanged (React 19, Vite 8, TypeScript 6, vitest 5, Playwright 1.63) and **no new dependencies** but `@fontsource/vt323` 5.3.0, exact, the figures' face (Task 2b, spec §25): `createPortal` is `react-dom`'s; WAAPI, View Transitions and `matchMedia` are browser APIs.
 - Client only: no change to planning logic, the server, the API, plan data or the mods. New state is two per-browser settings — `gtnh-planner:theme` (`auto` | `dark` | `light`, anything else reads `auto`) and `gtnh-planner:materials-view` (`list` | `grid`, anything but `grid` reads `list`) — a mod-name table and pure view models.
 - One stylesheet, `src/client/styles.css`, tokens on `:root`; `publicDir: false` (no game assets in `dist/`); fonts bundled, never a CDN.
-- The light look stays exactly as it is today. Auto (no `data-theme` on `<html>`) follows `@media (prefers-color-scheme: dark)` with no JS; Dark is `data-theme="dark"`, Light `data-theme="light"`; `color-scheme: dark` and `<meta name="color-scheme" content="dark">` in **both** looks; `<meta name="theme-color" content="#1a1a1a">` unchanged; map terrain, the 3D scene and its pale sky unchanged; `.flow-canvas.focusing .dim { opacity: 0.18 }` in both looks.
+- The light look stays exactly as it is today, but for the figures, which Task 2b sets in VT323 on purpose (spec §25; plan ruling `figures-vt323`). Auto (no `data-theme` on `<html>`) follows `@media (prefers-color-scheme: dark)` with no JS; Dark is `data-theme="dark"`, Light `data-theme="light"`; `color-scheme: dark` and `<meta name="color-scheme" content="dark">` in **both** looks; `<meta name="theme-color" content="#1a1a1a">` unchanged; map terrain, the 3D scene and its pale sky unchanged; `.flow-canvas.focusing .dim { opacity: 0.18 }` in both looks.
 - Every Phase 2 rule reads tokens; a colour literal only when it is the same in both looks and on the allow-list (`#ffffff`, `#000000`, and the chat, tooltip, tier, pipe and dye literals); the dark blocks redefine existing names only.
 - Contrast in **both** looks: text 4.5:1, graphics and component edges 3:1; the accepted exceptions are spec §3.5 and §4.5's (stack counts measured against their 2 px shadow, the dark tick-well edge 4.21:1, the tooltip not hoverable, aria-hidden decorative shapes — skeleton blocks, the recipe arrow's base, the auto icon's dark half; in dark, button faces on panels 1.30:1, box fills on the well 1.32:1 and the flange on a new box 2.59:1; and the base's two, in dark, which the spec's closing §24 (the re-check) adds: add-on 17's mode-in-use edge on the panel 1.46:1 (its yellow ring carries the frame: 13.46:1 on the panel, 19.69:1 on the edge) and its farm fields' 2 px `--panel-lo` line 1.35:1 (decorative: the indent under the tick and the fields' labels group them; 4.36:1 in light) — plan rulings `compare-frame-dark` and `farm-line-dark`).
 - Animate only `transform` and `opacity`, plus `stroke-dashoffset` (pipes), `offset-distance` (riders), `background-color` on hover and `block-size` (the settings fold, the Materials disclosures). No CSS transform on an SVG `<g>`, except a WAAPI `transform` animation whose last keyframe equals the element's `transform` attribute, with `fill: 'none'`. No JS frame loop drives a diagram; bounded rAF only for the 400 ms count-up and re-anchoring a visible tooltip.
@@ -37,12 +40,12 @@ Task 12 spike). No new dependencies.
 - Nothing the user waits for takes more than 300 ms: the pan is 250 ms, the re-layout 260 ms, the theme fade 260 ms (the 700 ms strip flash is a highlight nobody waits for); no infinite transform animation on anything clickable.
 - Reduced motion: the global CSS block (`styles.css:107-112`), and every JS motion (WAAPI glide, pan and ghosts, SMIL, the rAF count-up, View Transitions) checks `prefersReducedMotion()` from `src/client/state/motion.ts` (a live `matchMedia('(prefers-reduced-motion: reduce)')`) at each call and then does the instant thing.
 - Forced colours: one `@media (forced-colors: active)` block, last, system colours only, never `forced-color-adjust`; every new graphic drawn with a background or an SVG fill gets a rule there, at the specificity of the rule it repaints (the block's own convention, `styles.css:1409-1410`; the block, `:1412-1430`, now ends with add-on 17's `.compare-toggle[aria-expanded='true']` and `.compare-column.current` at `:1428-1429`: Phase 2's forced rules go after them, and R42's edit is the rule at `:1426`), and an e2e under `forcedColors: 'active'` shows it (spec §20); cues use `:not(:focus-visible)` so they never replace the focus ring (R42).
-- Height budget at 1280×720: top bar ≤ 53 px on one row; tab strip ≤ 41 px with no margin below; `.tab-panel` padding ≤ 8 px; everything above `.project-body` adds < 63 px in total (the strip: +27.7 px); the iron-plate line's map canvas centre ≤ 700; at `01da27d` that centre is y 657 of 720 with add-on 17's Compare modes button in the head's row (a `button.small`, 28 px tall: `objectives.spec.ts:50-51`) and the Compare card closed, which draws nothing — never measure with it open; the project head stays one row, 36 px, at 1280 × 720 (`objectives.spec.ts:51`) and, with a target and the badge live, at 800 × 900 (`objectives.spec.ts:91`, measured once the badge is live and the fonts are in, `:86-90`; `drawer.spec.ts:535` and `:544`, short and long target names): below 900 px the Settings button names the target and fills that row (at most 40 % of the head, `styles.css:1371`), so nothing new is drawn in `.project-head` there — add-on 17 moved its button into `.compare-bar` under the banner for this (`:1377-1378`), and Task 11 hides its Shortcuts button there; the open Compare card stays the last child of `.project-banners` (`objectives.spec.ts:59`); the strip, toasts, chips and skeletons have fixed px heights and line heights (a Compare skeleton's frame is the sum of its px blocks, which stack where the tiles stack, Task 8).
+- Height budget at 1280×720: top bar ≤ 53 px on one row; tab strip ≤ 41 px with no margin below; `.tab-panel` padding ≤ 8 px; everything above `.project-body` adds < 63 px in total (the strip: +27.7 px); the iron-plate line's map canvas centre ≤ 700; at `01da27d` that centre is y 657 of 720 with add-on 17's Compare modes button in the head's row (a `button.small`, 28 px tall: `objectives.spec.ts:50-51`) and the Compare card closed, which draws nothing — never measure with it open; the project head stays one row, 36 px, at 1280 × 720 (`objectives.spec.ts:51`) and, with a target and the badge live, at 800 × 900 (`objectives.spec.ts:91`, measured once the badge is live and the fonts are in, `:86-90`; `drawer.spec.ts:535` and `:544`, short and long target names): below 900 px the Settings button names the target and fills that row (at most 40 % of the head, `styles.css:1371`), so nothing new is drawn in `.project-head` there — add-on 17 moved its button into `.compare-bar` under the banner for this (`:1377-1378`), and Task 11 hides its Shortcuts button there; the open Compare card stays the last child of `.project-banners` (`objectives.spec.ts:59`); the strip, toasts, chips and skeletons have fixed px heights and line heights (a Compare skeleton's frame is the sum of its px blocks, which stack where the tiles stack, Task 8), and so has every VT323 element, a `span.fig` taking a line height of 0 (spec §25).
 - Pinned markup (spec §3.2) holds: `[data-node-id] > rect.flow-node-box` a direct child; the node `<g>`'s `class` right before `data-node-id`, an unlit new step exactly `flow-node step new`; no whole word `hl` or `dim` in unlit markup; no `<circle>` in a node; one 4×10 `rect.flow-port` per row, its last child; the Flow edge `<g>` attributes and its child classes exact (`flow-edge item`, `flow-edge-hit`, `flow-edge-line`, `flow-edge-flow`); Connections link tags exact; StepPanel's `<h3>` attribute-less and no `data-port-key` outside PortsSection; RawPanel's `<button type="button">Make it here instead</button>`; `li.mat-row` with `class="mat-row"` first; PlanBanner renders `''` with nothing to warn about and `<p class="plan-cost">` byte for byte; `<div class="map-tab map-tab-status"><p class="muted">Loading the world scan…</p></div>` exact; ItemIcon has no wrapper and no `data-key`; `PortsSection`, `RawPanel`, `RecipeCard`, `BuildGrid` are hook-free. The base's pins hold too: SettingsToggle renders exactly `<button type="button" class="settings-toggle" aria-expanded="false" aria-controls="project-settings">Settings <span class="settings-toggle-target">· Make: nothing yet</span></button>` (`settings-toggle.test.tsx:26-28`), is named by its text alone — no `aria-label`, `-labelledby`, `-hidden` or `-describedby` (`:58`), and so no `data-tip` — and stays the head's first child; CompareToggle renders exactly `<button type="button" class="small compare-toggle" aria-expanded="false" aria-controls="compare-card">Compare modes</button>` (`compare-card.test.tsx:289-290`), and below 900 px its twin is the child of `div.compare-bar` inside `.project-banners` (`objectives.spec.ts:84`); a Compare column holds one button (`objectives.spec.ts:26`, `:31`, `:33`); a card still planning the three modes holds no `[data-objective]` (`objectives.spec.ts:141`, `:203`; `compare-card.test.tsx:157`, `:187`), and an open card with three answers exactly 18 `.compare-row`s, each figure on one line inside its tile, not clipped (`objectives.spec.ts:174-175`); PlanBanner stays a hook-free function and, given `onPickTarget`, draws the server's no-target hint as `<ul class="warnings"><li><button type="button" class="link">Pick something to make</button></li></ul>` (`plan-banner.test.tsx`, describe 'plan banner: the hint to pick something to make'); a byproduct's taken row is an `li` with `class="mat-row mat-taken"`.
 - Stylesheet contract: one rule per selector (R1); never add a selector to a pinned selector list — write a new rule; every `KEYFRAMES` name animates only its listed properties; the `FADES` transition is exact; among Flow rules only `.flow-node-box` has `drop-shadow`; no rule styles `.item-icon img`.
 - Strings (spec §3.8): no new text (shown tooltips, toasts, the sheet, confirms, visually hidden text, chips, aria-labels) contains a string the e2e specs look for — at `01da27d` that includes "Updating the plan…" (`drawer.spec.ts:441` reads the banner's with `getByText`, page-wide, while the drawer is open: the drawer's own status says it otherwise, Task 8) and "Planning the three modes…" (`objectives.spec.ts:142`, `:204` read the card's with `getByText` in the card: its skeleton, Task 8, holds no text); no new button name containing "Fit", "Create", "Pause pipes", "Play pipes", "Save note", "Use this base", "Keep only", "Remove Copper", "Close the panel", "Make it here instead", "Revoke", "Restore", "Move line", "Log in", "Compare modes" (`objectives.spec.ts:18`; `:81-82` counts exactly one at 800 px), "Use this mode" or "Pick something to make" (`drawer.spec.ts:294`), and none that starts with "Settings" (`drawer.spec.ts:19`, `/^Settings/`) — the one exception is the confirm's "Revoke token"; in the settings aside, no new button containing "Close settings" (`drawer.spec.ts:71`, `:293`) or named "Clear" (`:418`, exact) and no new label containing "Count build cost against" (`objectives.spec.ts:16`); no new label containing "Tier", "Base", "Find item", "Rate", "Focus", "Materials", "Projects" or "Project name" (`drawer.spec.ts:331`, page-wide); no link named with "Projects"; nothing named "Recently deleted", "What changed" or "Confirm delete"; no new landmark named with "Project settings" (`objectives.spec.ts:14`) and no region named with "Compare modes" (`:19` finds the card as that region); no second button in a Compare column (`:26`, `:31`, `:33`); no new `role="option"` outside the item search's list (`drawer.spec.ts:405`, `:440` match `/Basic Circuit/` page-wide, and `objectives.spec.ts:127` `/Iron Plate/`); no `role="alert"` on the project list; no hidden `role="tooltip"`.
-- Phase 1 rules: radius 0 but `.pin-dot`; Pixelify Sans only at 13 px or more and never for sentences (R35); decorative `::before`/`::after` use `content: ''`; native inputs stay native; SVG diagram text keeps the system UI stack except the two Flow chips; R1, R9–R13, R15–R19, R21–R25, R27–R37a (R31 as R44 changes it), R40 and I1 stay in force (spec §3.7), and so do the Make-picker fix's review rulings F1–F4 (`$SCRATCH/makefix-review/fix-round-1.md`): the Settings button's 40 % cap only above 700 px (`styles.css:1371`, `:1392-1394`), the drawer effect's one `onWidth()` look as it starts to listen (`ProjectPage.tsx:367`), every e2e that measures the head's rows first waits for `.connection.live` (`drawer.spec.ts:512`; `objectives.spec.ts:86`, which also waits for the fonts at `:88`), and the hint's scroll check that bites (`drawer.spec.ts:366`); R26 now holds for MapTooltip only.
-- Tests: no assertion removed or loosened; the only changed existing assertions are spec §3.9's, the §3.5 rewrite of `contrast.test.tsx` into one token table (Task 1a, whose guard case proves every pair measured before Phase 2 — Phase 1's 142, the Make-picker fix's 1, add-on 17's 12 — is still measured) and helpers moved into `tests/client/css-blocks.ts` / `tests/e2e/helpers.ts`; `npm test` and `npm run e2e` green at the end of every task; e2e polls, never sleeps (R40).
+- Phase 1 rules: radius 0 but `.pin-dot`; Pixelify Sans only at 13 px or more and never for sentences (R35); figures in VT323 and words in Pixelify (spec §25; plan rulings `figures-vt323`, `digits-mixed`) — a figure readout, count or step number whole in `var(--font-digits)`, any other pixel text that shows a figure through `<Figs>` (`span.fig`, `tspan.fig`; the `%` and `×` around it stay Pixelify), names and fixed words in Pixelify, digits and all — and VT323 only at 14 px or more (`digits-floor`), every rule that sets it with `font-size-adjust: cap-height 0.56` after its `font` (`digits-token`); decorative `::before`/`::after` use `content: ''`; native inputs stay native; SVG diagram text keeps the system UI stack except the two Flow chips; R1, R9–R13, R15–R19, R21–R25, R27–R37a (R31 as R44 changes it), R40 and I1 stay in force (spec §3.7), and so do the Make-picker fix's review rulings F1–F4 (`$SCRATCH/makefix-review/fix-round-1.md`): the Settings button's 40 % cap only above 700 px (`styles.css:1371`, `:1392-1394`), the drawer effect's one `onWidth()` look as it starts to listen (`ProjectPage.tsx:367`), every e2e that measures the head's rows first waits for `.connection.live` (`drawer.spec.ts:512`; `objectives.spec.ts:86`, which also waits for the fonts at `:88`), and the hint's scroll check that bites (`drawer.spec.ts:366`); R26 now holds for MapTooltip only.
+- Tests: no assertion removed or loosened; the only changed existing assertions are spec §3.9's, Task 2b's (spec §25's table: the contract's font rows of the figures, and `span.fig` in five markup tests), the §3.5 rewrite of `contrast.test.tsx` into one token table (Task 1a, whose guard case proves every pair measured before Phase 2 — Phase 1's 142, the Make-picker fix's 1, add-on 17's 12 — is still measured) and helpers moved into `tests/client/css-blocks.ts` / `tests/e2e/helpers.ts`; `npm test` and `npm run e2e` green at the end of every task; e2e polls, never sleeps (R40).
 - Narrow windows (the base's Make-picker fix): at a width ≤ 900 px a project with no target opens the settings drawer by itself, once per visit, with the focus in the Make section's item search and the page behind inert (`drawer.spec.ts:298-339`). So every Phase 2 e2e at ≤ 900 px opens its project with a target — `createProject(page, name, LV_CIRCUITS)` (`{ target: 't:circuit@0', amount: 30, per: 'min', tier: 1 }`, drawer.spec.ts's `TARGET`) or `openWithPlan` (its default settings are `LV_CIRCUITS`) — unless that self-opening drawer is what it tests; and every e2e that opens the drawer finds the Settings button by `SETTINGS_BUTTON` (`/^Settings/`, `tests/e2e/helpers.ts`, Task 1b), never by `{ name: 'Settings', exact: true }`: its name goes on with what the line makes ("Settings · Make: Basic Circuit", "Settings · Make: nothing yet"). On a wide window the button is not drawn and is found by `.settings-toggle`.
 
 ## Review Focus
@@ -60,7 +63,10 @@ Task 12 spike). No new dependencies.
 |---|---|---|
 | `src/client/styles.css` | all | tokens, the dark look, every new rule, the forced-colours block, the drawer's 900 px block (Task 11's Shortcuts rule) |
 | `src/client/index.html` | 1b, 2 | the head script, the favicon |
-| `src/client/main.tsx` | 1b | `startTheme()` before the render |
+| `src/client/main.tsx` | 1b, 2b | `startTheme()` before the render; the VT323 import (2b) |
+| `package.json`, `package-lock.json`, `docs/research/web-stack.md` | 2b | `@fontsource/vt323` 5.3.0, exact |
+| `src/client/components/Figs.tsx` (new) | 2b; 3a, 4, 5a, 11 use it | `figureRuns`, `Figs`: the figures of pixel text in `span.fig` / `tspan.fig` |
+| `src/client/map/MapTooltip.tsx`, `map/FoundPanel.tsx`, `map/LinePanel.tsx` (Rotate 90°), `views/View3D.tsx`, `views/StepsView.tsx`, `views/StepPanel.tsx` (the swap list's "more…"), `views/ConnectionsView.tsx` (the details panel's title), `views/MapTab.tsx`, `views/MaterialsView.tsx`, `views/ProjectPage.tsx` (PlanBanner's heading) | 2b | the figures among their words through `<Figs>` (spec §25) |
 | `src/client/state/theme.ts` (new) | 1b | the theme store, `applyTheme`, the cross-fade |
 | `src/client/state/motion.ts` (new) | 1b, 13a | `prefersReducedMotion()`, then the glide constants |
 | `src/client/components/ThemeButton.tsx` (new), `TopNav.tsx` | 1b | the Theme button after `</nav>` |
@@ -69,8 +75,8 @@ Task 12 spike). No new dependencies.
 | `src/client/App.tsx` | 3a, 9a | mounts `TooltipHost` and `Toasts` |
 | `src/client/views/flow-model.ts` | 3b, 4, 5a, 13b | `FlowEdge.route`; the machine readout; the recipe helpers; `layoutChange` |
 | `src/client/views/FlowView.tsx` | 3a, 3b, 4, 5b, 8, 11, 12, 13a, 13b | tips, readout, `.flow-side`, skeletons, Fit markup, riders, glide, ghosts |
-| `src/client/views/ConnectionsView.tsx` | 1a, 3b, 8, 11, 13a, 13b | dye casing, tips, skeletons, Fit markup, glide |
-| `src/client/views/StepPanel.tsx` | 5a, 5b | `RecipeCard`, focusable asides |
+| `src/client/views/ConnectionsView.tsx` | 1a, 2b, 3b, 8, 11, 13a, 13b | dye casing, the details title's figures, tips, skeletons, Fit markup, glide |
+| `src/client/views/StepPanel.tsx` | 2b, 5a, 5b | the "more…" button's figures, `RecipeCard`, focusable asides |
 | `src/client/components/GtArrow.tsx` (new) | 5a, 8 | the GT progress arrow |
 | `src/client/views/materials-model.ts`, `MaterialsGrid.tsx` (new), `MaterialsView.tsx` | 6a, 8 | the inventory grid |
 | `src/client/state/materials-view.ts` (new) | 6a | Grid / List per browser |
@@ -123,8 +129,10 @@ Task 12 spike). No new dependencies.
 - Rulings made while building go into the SDD ledger as `P2-R1`, `P2-R2`, … in the order they are made. This plan names each by its topic
   (the ruling `rider mechanism`), never by a number; Task 14 copies them into "As built".
 - **Plan rulings** — where this plan departs from the spec's letter. Record each in the SDD ledger under its topic before Task 1a starts,
-  for the controller's sign-off (the first four are the plan's own; the rest come from its re-checks against `96e9e99` and `01da27d`,
-  each also a builder's call in the spec's closing §24, "Re-check against the new main"):
+  for the controller's sign-off (the first four are the plan's own; the next twelve come from its re-checks against `96e9e99` and
+  `01da27d`, each also a builder's call in the spec's §24, "Re-check against the new main"; the last six come from the user's choice of
+  VT323 for figures on 2026-10-24 — `figures-vt323` is the controller's, the other five are builder's calls of the spec's §25, "Figures
+  in VT323", which also re-measured `strip-figures`):
   - `baseline-shots`: Task 1a diffs the light look against fresh shots of the base taken by `$P2/tour.mjs`, not against the Phase 1
     after-shots of spec §19 and §20. Those were taken on 2026-10-23 between 18:06 and 18:32, before `fb8445c`, `9dbc4c1` (the Pause pipes
     button) and `c8c5736` (the missing pipe's red) changed the base's pixels, so no diff against them can be zero; `tour.mjs` is
@@ -174,15 +182,17 @@ Task 12 spike). No new dependencies.
     it; the strip-row button P2-D44 sketched is not built (a sixth item would wrap the five tiles at 752 px). `<KeyNumbers>` is the first
     child of `.project-banners`, so the bar and the opened card sit below the strip and the card stays the box's last child
     (`objectives.spec.ts:59`). The §3.6 budget binds Phase 2 and holds: 657 → ≈ 685 < 700.
-  - `strip-figures` (Task 7): `main`'s `4bef36c` lets no Compare figure break: it stays on one line and shrinks to fit, down to 13 px,
-    before it is cut, for those figures are written in full (`2,097,152` is 106.9 px in the 24 px pixel font). The strip keeps spec
-    §10.2's one line (`.key-number dd`: `white-space: nowrap`, `overflow: hidden`, `text-overflow: ellipsis`, now pinned), which its
-    fixed 52 px tile needs, and does not shrink: its figures are `compactNumber`'s, at most 8 glyphs from 0.0001 up (`0.000792`
-    103.8 px, `99,999` 76.7 px, measured in the bundled Pixelify Sans), inside the narrowest tile's 116 px (the grid's 140 px less
-    2 × 2 of edge and 2 × 10 of padding). Only the end of a line can pass the edge — a unit after a long figure (`99,999 raw/h`,
-    120.8 px) or a rare rate in words (`1 every 526 days`, Inter 15 px, 119.5 px) — and the ellipsis cuts that; a To run or Peak power
-    figure under 0.0001 (`0.0000792`, 117.8 px) can lose its last digit there, its tile's visually hidden copy and the `.plan-cost`
-    sentence keeping it whole. Spec §21 leaves the strip's narrow layout to the builder.
+  - `strip-figures` (Task 7; re-measured in VT323 for spec §25, whose numbers replace §24's Pixelify ones): `main`'s `4bef36c` lets
+    no Compare figure break: it stays on one line and shrinks to fit, down to 14 px since Task 2b (`compare-shrink-vt323`), before it is
+    cut, for those figures are written in full (`2,097,152` is 100.8 px in the 28 px VT323). The strip keeps spec §10.2's one line
+    (`.key-number dd`: `white-space: nowrap`, `overflow: hidden`, `text-overflow: ellipsis`, now pinned), which its fixed 52 px tile
+    needs, and does not shrink: its figures are `compactNumber`'s, at most 9 glyphs (`0.0000792`), at 11.2 px a glyph in VT323 28 px
+    (`0.000792` 89.6 px, `99,999` 67.2, `0.0000792` 100.8), so every one stays whole inside the narrowest tile's 116 px (the grid's
+    140 px less 2 × 2 of edge and 2 × 10 of padding). Only the end of a line can pass the edge — a unit after a long figure
+    (`0.000792 /min`, 117.6 px; `99,999 raw/h`, 101.2 px, now fits) or a rare rate in words (`1 every 526 days`, Inter 15 px,
+    119.5 px) — and the ellipsis cuts that, the tile's visually hidden copy and the `.plan-cost` sentence keeping it whole. With the
+    fonts blocked (the size-adjusted Menlo) `0.0000792` is 116.5 px and can lose its last digit until VT323 arrives. Spec §21 leaves
+    the strip's narrow layout to the builder.
   - `drawer-status-words` (Task 8): spec §17 R43's drawer status says `The plan is updating…` while a plan is on its way, not the
     banner's `Updating the plan…`. The Make-picker fix's `drawer.spec.ts:441` finds the banner's line by text with the drawer open, and
     a hidden copy would be its second match (strict mode; §3.8).
@@ -198,6 +208,38 @@ Task 12 spike). No new dependencies.
     tiles will and each frame is as tall as a loaded column at every width. `skeleton-readouts`, six such blocks in that grid, sits under a
     mode's "Still planning…", so a pending column keeps its height. None beside "Updating…" (its columns stay drawn, as Connections'
     busy state) or beside the failed-fetch alert (no loading line).
+  - `figures-vt323` (the controller's, binding; Task 2b, spec §25): the user chose VT323 for figures and kept Pixelify Sans for words,
+    because Pixelify draws 5 like S, 2 like Z and 0 like O ("2,097,1S2", "S.4M"). A token, `--font-digits`, VT323 first and a fallback
+    whose digits are distinct, never Pixelify; every element whose text is a figure or mainly figures (readouts, stack counts, chance
+    tags, count chips, step numbers, figure badges, digit caps) uses it, and titles, headings, buttons, tabs, labels, the logo and word
+    badges stay Pixelify; mixed text is decided element by element (whole VT323, or Pixelify with its figures in `span.fig`); sizes
+    give the Pixelify digit heights, on fixed line heights, above a VT323 floor; the Compare shrink and `strip-figures` re-derived.
+  - `digits-token` (Task 2b): `--font-digits: VT323, ui-monospace, Menlo, Consolas, monospace` (Chromium knows no `ui-monospace`, so
+    the fallback is Menlo, 0.602 em a glyph), and every rule that sets it also sets `font-size-adjust: cap-height 0.56` after its
+    `font`: VT323's own cap height is 0.56 em, so VT323 draws as specified and a fallback as tall (Menlo's 16 px "144L" 38.5 → 29.6
+    px). That keeps `CHIP_CHAR_WIDTH` 9 and the 36 px slot right with the fonts blocked.
+  - `digits-floor` (Task 2b): VT323 only at 14 px or more (digits 7.84 px): in the legibility shots, 13 px thins a stroke to half a
+    pixel at 1×. The contract pins it as `DIGITS_FLOOR`; `span.fig`'s 1.15 em only sits in Pixelify text of 13 px or more (14.95 px).
+  - `digits-mixed` (Tasks 2b, 3a, 4, 5a, 11): a readout that is a figure, on a screen or a slot, is set whole in VT323, its unit and few
+    words too (the Compare tiles, the strip's values and units, the recipe readouts, stack counts, step numbers, the map's Y, the
+    settings count, the 3D layer readout, the smart upload's total); any other pixel text that shows a figure writes it through
+    `<Figs>`, in `span.fig` / `tspan.fig`, and keeps Pixelify for its words and for the `%` and `×` around it, which VT323 draws like
+    an x (the NEI, map and 3D tooltips, the note badges and "Show all", the missing badge and used-by chips, the pin button, the line
+    panel's "Rotate 90°", the swap list's "25 more… (55 not shown)", the note dialog's title, the Connections panel's title ("5× Basic
+    Assembler", "Power tap at 12 64 7", "Titanium Dust 60/min · Red"), the banner's "does not add up" heading, the Flow count chip, the
+    recipe card's chance tag, tier and overclock chips, the digit key caps); names and fixed words (a step's, item's or block's title,
+    the project's name, buttons that name an item, the avoid chips, the tabs, the logo, word badges) stay Pixelify, digits and all.
+  - `digits-sizes` (Tasks 2b, 5a, 7): each VT323 size gives digits as tall as the Pixelify ones it replaces (0.56 em against 0.643:
+    × 1.148) and keeps the old line box in px — 13 → 15 px, 14 → 16, 18 → 21, 24 → 28; the step numbers' marker too, 16 px on the
+    list's 20.3 px line, which its inherited 1.45 would make 23.2 — and `span.fig` is 1.15 em on a line height of 0. Spec §25's table
+    lists every element.
+  - `compare-shrink-vt323` (Task 2b): `.compare-row > dd` `font: 28px/26.4px var(--font-digits)` and `font-size: clamp(14px,
+    calc(100cqi / (var(--glyphs, 1) * 0.41)), 28px)`: 28 px gives the 24 px Pixelify digit height, 14 px is the floor, 0.41 is VT323's
+    0.4 em advance with 2.5 % to spare (at 0.4 a figure measured 213.28 px in a 213.33 px box). The 26.4 px line is the one 24 px/1.1
+    gave, now fixed, so a tile is 54.7 px at every size (it shrank with its figure before) and Task 8's 55 px blocks hold;
+    `objectives.spec.ts:150-178`'s figures fit unshrunk at 860 and 768 px, with the fonts and without. With VT323 missing, a long
+    figure — 12 glyphs or more in the narrowest, 160 px tile, 15 at 768 px, 17 at 860 px — ends in "…" (the size-adjusted fallback is
+    0.46 em a glyph) until VT323 arrives; it still never breaks or spills (measured in the app at 768 and 860 px).
 - Every commit message ends with the trailer line `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` (as a second `-m`).
 
 ---
@@ -716,6 +758,219 @@ git commit -m "feat(client): logo C, six turns of its pipe and then the still fr
 
 ---
 
+### Task 2b: Figures in VT323
+
+The user chose VT323 for figures on 2026-10-24 and kept Pixelify Sans for words (spec §25; plan ruling `figures-vt323`): Pixelify
+draws 5 like S, 2 like Z and 0 like O. This task adds the face, the token and the `Figs` helper, and moves every figure that Phase 1
+and add-on 17 draw; Tasks 3a, 4, 5a, 6a, 7, 8 and 11 build theirs on it. It runs after Tasks 1a, 1b and 2, so Task 1a's
+pixel-identity check against `base-a` stands as it was made. From here on the light look differs from Task 2's in the figures and
+along the lines they sit on — spec §25 changes their font on purpose — and nowhere else (Step 6 checks it).
+
+**Files:**
+- Modify: `package.json` (`dependencies`: `"@fontsource/vt323": "5.3.0"`, exact, after `"@fontsource/pixelify-sans"`), `package-lock.json`, `docs/research/web-stack.md` (a row after `@fontsource/inter`'s, `:74`)
+- Modify: `src/client/main.tsx` (after `:10`, `import '@fontsource/inter/700.css';`, and before `import './styles.css';`)
+- Modify: `src/client/styles.css` — the first `:root` (`--font-pixel`, `:26`); the Compare comment `:388-392` and `.compare-row > dd` `:422-425`; after `.badge.muted` `:534`; `details.settings-section > summary > .muted` `:575-578`; `.step-list li::marker` `:939`; the map toolbar's comment and `.map-y` `:974-981`; `.view3d-layer-text` `:1254-1258`; `.smart-total` `:1326-1329`
+- Create: `src/client/components/Figs.tsx`, `tests/client/figures.test.tsx`
+- Modify: `src/client/map/MapTooltip.tsx:48`, `src/client/views/View3D.tsx:243`, `src/client/map/FoundPanel.tsx:209`, `:252`, `src/client/map/LinePanel.tsx:145` (`Rotate 90°`), `src/client/views/MaterialsView.tsx:171`, `:227`, `src/client/views/StepsView.tsx:31`, `src/client/views/StepPanel.tsx:604` (the swap list's "more…" button), `src/client/views/ConnectionsView.tsx:377` (the details panel's title), `src/client/views/MapTab.tsx:268`, `src/client/views/ProjectPage.tsx:160` (PlanBanner's heading)
+- Modify: `tests/client/styles-contract.test.tsx` (`FONT_IMPORTS` `:146-149`, `TOKENS`, the cases at `:805-821`, `:1117-1129`, `:1762-1770`, `:1898-1927`, `:2037-2046`, `:2302-2333`, a new case), `tests/e2e/chrome.spec.ts` (a new test)
+- Test (deliberate, spec §25's table): `tests/client/map-hover.test.tsx:360-362`, `tests/client/view3d.test.tsx:91`, `:356`, `tests/client/map-summary.test.tsx:93`, `:154-155`, `:172-173`, `:176`, `tests/client/layout-map.test.tsx:182`, `:319`, `tests/client/connections-view.test.tsx:86`, and Step 1's contract rows
+
+**Interfaces:**
+- Consumes: `LV_CIRCUITS` (Task 1b's `tests/e2e/helpers.ts`), `PHASE2_RULES`, `$P2/tour.mjs` and `$P2/maskdiff.py` (Task 1a).
+- Produces:
+  - Token `--font-digits: VT323, ui-monospace, Menlo, Consolas, monospace` (plan ruling `digits-token`); every rule that sets it also sets `font-size-adjust: cap-height 0.56`, after its `font`.
+  - CSS `.fig { font: 1.15em/0 var(--font-digits); font-size-adjust: cap-height 0.56; }`: a figure inside Pixelify text, a `span` in HTML or a `tspan` in an svg.
+  - `src/client/components/Figs.tsx`: `interface FigureRun { text: string; fig: boolean }`; `figureRuns(text: string): FigureRun[]` (a figure is digits with the `,` `.` `:` that join them and the one space or `–` between digit groups, and a `+`, `−` or `-` right before it that follows no letter or digit; the `%` and `×` around it stay in the words); `Figs(props: { text: string; svg?: boolean }): ReactElement` (hook-free: the words as text, each figure in `<span class="fig">`, with `svg` in `<tspan class="fig">`). Tasks 3a, 4, 5a and 11 write their mixed figures with it.
+  - Contract (`styles-contract.test.tsx`): `DIGIT_RULES: string[]` (every rule that names `var(--font-digits)`; Tasks 5a and 7 append theirs) and `DIGITS_FLOOR = 14`.
+
+- [ ] **Step 1: Write the failing unit and contract tests**
+
+`tests/client/figures.test.tsx` (`renderToStaticMarkup`):
+
+```ts
+it('cuts a text into its figures and its words, the signs around a figure staying with the words', () => {
+  expect(figureRuns('need 80× · have 1,440 (64 reachable)')).toEqual([{ text: 'need ', fig: false }, { text: '80', fig: true },
+    { text: '× · have ', fig: false }, { text: '1,440', fig: true }, { text: ' (', fig: false }, { text: '64', fig: true }, { text: ' reachable)', fig: false }]);
+  expect(figureRuns('short: gets 45%')).toEqual([{ text: 'short: gets ', fig: false }, { text: '45', fig: true }, { text: '%', fig: false }]);
+  expect(figureRuns('×1 shared')).toEqual([{ text: '×', fig: false }, { text: '1', fig: true }, { text: ' shared', fig: false }]);
+  expect(figureRuns('1 64 10')).toEqual([{ text: '1 64 10', fig: true }]);                       // a position is one figure
+  expect(figureRuns('-30 64 12')).toEqual([{ text: '-30 64 12', fig: true }]);
+  expect(figureRuns('+3 more below')).toEqual([{ text: '+3', fig: true }, { text: ' more below', fig: false }]);
+  expect(figureRuns('Base: Overworld base (4, 5)').filter((r) => r.fig).map((r) => r.text)).toEqual(['4', '5']);
+  expect(figureRuns('✓ Ann, 10:00').at(-1)).toEqual({ text: '10:00', fig: true });
+  expect(figureRuns('1–6')).toEqual([{ text: '1–6', fig: true }]); expect(figureRuns('0.0586/min in the line')[0]).toEqual({ text: '0.0586', fig: true });
+  expect(figureRuns('Copper Wire')).toEqual([{ text: 'Copper Wire', fig: false }]); expect(figureRuns('')).toEqual([]);
+});
+it('draws each figure in a span.fig, or a tspan.fig in an svg, and nothing else', () => {
+  expect(renderToStaticMarkup(<Figs text="short: gets 45%" />)).toBe('short: gets <span class="fig">45</span>%');
+  expect(renderToStaticMarkup(<Figs text="N5" />)).toBe('N<span class="fig">5</span>');
+  expect(renderToStaticMarkup(<Figs text="Copper Wire" />)).toBe('Copper Wire');
+  expect(renderToStaticMarkup(<svg><text><Figs text="×1 shared" svg /></text></svg>)).toBe('<svg><text>×<tspan class="fig">1</tspan> shared</text></svg>');
+});
+```
+
+Contract — `FONT_IMPORTS` gains `'@fontsource/vt323/400.css'` (so 'loads the fonts before the stylesheet' asks for it before
+`./styles.css`), `TOKENS` gains `['--font-digits', 'VT323, ui-monospace, Menlo, Consolas, monospace']`, `PHASE2_RULES` gains `.fig`, and
+these pins change (deliberate, spec §25's table; after Task 1a find them by their text):
+
+| `styles-contract.test.tsx` | Expected now |
+|---|---|
+| `:805-821` (the settings summary's count) | `` [`${SETTINGS_SUMMARY} > .muted`, 'font', '15px/19.5px var(--font-digits)'] `` |
+| `:1117-1129` (the step numbers) | `['.step-list li::marker', 'font-family', 'var(--font-digits)']` and a new row `['.step-list li::marker', 'line-height', '20.3px']` (the list's own line, 14 px × 1.45, in px: a marker takes the list's 1.45, which at 16 px is a 23.2 px line, and that grows every one-line step row from 26.3 to 27.16 px — measured in the app, where a row is a flex `.tick`); `declared('.step-list li::marker', 'font-size')` `toBe('16px')` (was `toBeUndefined()`: VT323 at 16 px is as tall as the list's 14 px Pixelify); the case's name says "the step numbers in VT323" |
+| `:1762-1770` (the map toolbar) | `['.map-y', 'font', '15px/1 var(--font-digits)']` (the `min-width: 6em` row stays: 90 px now) |
+| `:1898-1927` (the 3D controls) | `['.view3d-layer-text', 'font', '15px/1 var(--font-digits)']` (the em `min-width` checks and the `font-variant-numeric`-after-`font` order stay) |
+| `:2037-2046` (the smart upload) | `['.smart-total', 'font', '16px/18.2px var(--font-digits)']` |
+| `:2302-2312` (the Compare tiles' value) | `['.compare-row > dd', 'font', '28px/26.4px var(--font-digits)']`; the case's name ends "over a green VT323 value" |
+| `:2314-2333` (the shrink, plan ruling `compare-shrink-vt323`) | `['.compare-row > dd', 'font-size', 'clamp(14px, calc(100cqi / (var(--glyphs, 1) * 0.41)), 28px)']`; its comment: "a tile is at least 160px: 12 glyphs of the 28 px VT323 (0.4 em each, 0.41 with the margin) and 16px of padding"; the name ends "to 14px at the least"; the `font-size`-after-`font` order stays |
+
+New case:
+
+```ts
+const DIGIT_RULES = ['.fig', '.compare-row > dd', 'details.settings-section > summary > .muted', '.step-list li::marker', '.map-y', '.view3d-layer-text', '.smart-total'];
+const DIGITS_FLOOR = 14;
+/** The px font sizes a rule gives: its `font`'s size, and every px of its `font-size` (both ends of a clamp). */
+const pxSizes = (selector: string): number[] => [
+  ...(declared(selector, 'font')?.match(/^(?:\S+ )*?([\d.]+)px/)?.slice(1) ?? []), ...(declared(selector, 'font-size')?.match(/[\d.]+(?=px)/g) ?? []),
+].map(Number);
+it('sets every figure in VT323, at 14 px or more, its fallback drawn as tall, and leaves the words in Pixelify', () => {
+  // spec §25: these rules and no other name the digits' face (Tasks 5a and 7 append theirs), and none of them names Pixelify
+  const naming = blocks.filter((b) => !b.prelude.startsWith('@') && b.inner.includes('var(--font-digits)')).map((b) => b.prelude);
+  expect(naming.sort()).toEqual([...DIGIT_RULES].sort());
+  for (const selector of DIGIT_RULES) {
+    expect(ruleBody(selector).includes('--font-pixel'), selector).toBe(false);
+    // a fallback (Menlo, Consolas …) drawn as tall as VT323's 0.56 em digits; `font` resets it, so it comes after
+    expect(declared(selector, 'font-size-adjust'), selector).toBe('cap-height 0.56');
+    const names = declarations(ruleBody(selector)).map(([name]) => name);
+    if (names.includes('font')) expect(names.lastIndexOf('font-size-adjust'), selector).toBeGreaterThan(names.lastIndexOf('font'));
+    for (const px of pxSizes(selector)) expect(px, selector).toBeGreaterThanOrEqual(DIGITS_FLOOR);
+  }
+  // a figure inside Pixelify text: 1.15 em, as tall as the digits around it, on a line height of 0, so it moves no line
+  expect(declared('.fig', 'font')).toBe('1.15em/0 var(--font-digits)');
+  expect(1.15 * 13).toBeGreaterThanOrEqual(DIGITS_FLOOR);   // in the smallest Pixelify there is
+  // the words stay in Pixelify: the badges and chips, the map tooltip and the 3D label keep their rules
+  expectDeclared([['.badge, .chip', 'font', '13px/1.5 var(--font-pixel)'], [TIP, 'font', '14px/1.35 var(--font-pixel)'], [HOVER, 'font', '14px/1.35 var(--font-pixel)']]);
+});
+```
+
+Deliberate markup updates (spec §25's table: a figure's text gains `<span class="fig">…</span>`, nothing else): `map-hover.test.tsx:360`
+finds each line in `html.replace(/<span class="fig">|<\/span>/g, '')`, and a new line asserts `toContain('<div><span class="fig">3 64 3</span></div>')`;
+`view3d.test.tsx:91`'s `'Basic Macerator — programmed circuit 2'` and the `:356` markup read `Basic Macerator — programmed circuit <span class="fig">2</span>`;
+`map-summary.test.tsx:93` and `:176` read `Show all <span class="fig">13</span> items`; `:154`, `:155` read `<span class="badge">N<span class="fig">1<\/span><\/span>`
+(and `2`; `:156`'s guard against a bare number still holds); `:172-173` reads `<span class="badge">N<span class="fig">1</span></span> Build here`;
+`layout-map.test.tsx:319` reads `>pin <span class="fig">1<\/span><\/button>`, and `:182`'s `'Rotate 90°'` reads `'Rotate <span class="fig">90</span>°'`;
+`connections-view.test.tsx:86` reads `<h3>Titanium Dust <span class="fig">60</span>/min · Red</h3>` (`:72`'s title has no figure and stays).
+`plan-banner.test.tsx:57` and `step-panel.test.tsx:246` ("25 more… (55 not shown)") read the text with its tags taken out, so they pass unchanged.
+
+- [ ] **Step 2: Write the failing e2e** — `chrome.spec.ts` (imports `LV_CIRCUITS` from `./helpers.ts`):
+
+```ts
+test('figures in VT323 keep their boxes whether the fonts arrive or not', async ({ browser }) => {
+  // spec §25: a VT323 element has its line in px, so a late VT323 moves nothing; measured on the settings column's count of
+  // reachable dimensions and on a Compare tile (54.7 px: 6 + 14.3 + 2 + 26.4 + 6, which Task 8's skeleton blocks copy)
+  const boxes = async (blockFonts: boolean): Promise<{ count: number; tile: number; loaded: string[] }> => {
+    const context = await browser.newContext();
+    try {
+      const page = await context.newPage();
+      if (blockFonts) await page.route(/\.woff2?$/, (route) => route.abort());
+      const summary = { rawPerHour: 0.000000123, rawBuild: 131072, newMachines: 12, rawSources: 7, steps: 23, peakEUt: 2097152 };   // objectives.spec.ts:155
+      await page.route(/\/api\/projects\/[^/]+\/compare$/, (route) => route.fulfill({ json: { rev: 1, current: 'cheapest',
+        modes: ['least-raw', 'cheapest', 'multi-output'].map((objective) => ({ objective, status: 'ok', summary })) } }));
+      await login(page); await setName(page, 'Ann');
+      await createProject(page, blockFonts ? 'Figures without fonts' : 'Figures with fonts', LV_CIRCUITS);
+      const count = page.locator('aside[aria-label="Project settings"] details.settings-section > summary > .muted').first();
+      await expect(count).toBeVisible();
+      await page.locator('.project-head').getByRole('button', { name: 'Compare modes' }).click();
+      const tiles = page.getByRole('region', { name: 'Compare modes' }).locator('.compare-row');
+      await expect(tiles).toHaveCount(18);
+      await page.evaluate(async () => { await document.fonts.ready; });
+      return {
+        count: (await count.boundingBox())!.height, tile: (await tiles.first().boundingBox())!.height,
+        loaded: await page.evaluate(() => [...document.fonts].filter((face) => face.status === 'loaded').map((face) => face.family)),
+      };
+    } finally {
+      await context.close();
+    }
+  };
+  const without = await boxes(true);
+  const withFonts = await boxes(false);
+  expect(without.loaded, 'the faces that loaded with the font files refused').toEqual([]);
+  expect(withFonts.loaded.some((family) => family.includes('VT323')), 'a VT323 face loaded with the font files served').toBe(true);
+  expect(withFonts.count).toBe(without.count);
+  expect(withFonts.tile).toBe(without.tile);
+  expect(without.tile).toBeCloseTo(54.7, 0);
+});
+```
+
+- [ ] **Step 3: Run them to see them fail** — `npx vitest run tests/client/figures.test.tsx tests/client/styles-contract.test.tsx tests/client/map-hover.test.tsx tests/client/view3d.test.tsx tests/client/map-summary.test.tsx tests/client/layout-map.test.tsx tests/client/connections-view.test.tsx` → FAIL (no `Figs.tsx`, no `--font-digits` or VT323 import, the figures in Pixelify, no `span.fig` in the markup).
+
+- [ ] **Step 4: Implement**
+
+- The face: `npm install --save-exact @fontsource/vt323@5.3.0` (published 2026-07-19, OFL-1.1, no dependencies; the version of
+  `@fontsource/pixelify-sans` and `@fontsource/inter`): `package.json` gains `"@fontsource/vt323": "5.3.0"` after
+  `@fontsource/pixelify-sans`, the lockfile its one entry. `main.tsx` imports `'@fontsource/vt323/400.css'` after the Inter imports and
+  before `./styles.css` (VT323 has weight 400 only; of its three subsets only the latin face is fetched). `docs/research/web-stack.md`
+  gains, after the `@fontsource/inter` row, `| @fontsource/vt323 | 5.3.0 | 2026-07-19 | OFL-1.1 | Machine GUI Phase 2 (spec §25): figures — readouts, counts, step numbers and the digits in pixel text; weight 400, bundled by Vite, no CDN; added 2026-10-24 at the version of the two rows above, no transitive dependencies |`.
+- `styles.css`:
+  - the first `:root`, after `--font-pixel` and `--font-ui`: `--font-digits: VT323, ui-monospace, Menlo, Consolas, monospace;`, with a
+    comment: figures in VT323, words in Pixelify (Phase 2 spec §25); a rule that sets it also sets `font-size-adjust: cap-height 0.56`,
+    so a fallback is drawn as tall as VT323's digits;
+  - after `.badge.muted` (`:534`): `/* A figure inside Pixelify text (Figs.tsx): as tall as the Pixelify digits round it, and a line height of 0, so it never grows or moves a line. */`
+    `.fig { font: 1.15em/0 var(--font-digits); font-size-adjust: cap-height 0.56; }`;
+  - `.compare-row > dd` (`:422-425`): `font: 28px/26.4px var(--font-digits); font-size: clamp(14px, calc(100cqi / (var(--glyphs, 1) * 0.41)), 28px); font-size-adjust: cap-height 0.56;`,
+    the rest as it is; the comment `:388-392`: a tile is at least 160px wide, room for 12 glyphs of the 28px VT323 (every glyph 0.4em,
+    0.41 with a margin); a value too long shrinks to fit, down to 14px, before the ellipsis; its line is 26.4px at every size, so a
+    tile is 54.7px;
+  - `details.settings-section > summary > .muted` (`:575-578`): `font: 15px/19.5px var(--font-digits); font-size-adjust: cap-height 0.56;` in place of `font: 13px/1.5 var(--font-pixel)`;
+  - `.step-list li::marker` (`:939`): `font-family: var(--font-digits); font-size: 16px; line-height: 20.3px; font-size-adjust: cap-height 0.56;`
+    (the line in px, the list's 20.3: with the 1.45 it inherits, the 16 px marker's line is 23.2 px and each one-line row grows from
+    26.3 to 27.16 px);
+  - `.map-y` (`:978-981`): `font: 15px/1 var(--font-digits); font-size-adjust: cap-height 0.56;` (its comment `:974-975` says the box keeps its size "when VT323 arrives late");
+  - `.view3d-layer-text` (`:1254-1258`): `font: 15px/1 var(--font-digits); font-variant-numeric: tabular-nums; font-size-adjust: cap-height 0.56;`;
+  - `.smart-total` (`:1326-1329`): `font: 16px/18.2px var(--font-digits); font-size-adjust: cap-height 0.56;`.
+- `Figs.tsx` per the Interfaces: `figureRuns` matches `/(?:(?<![\p{L}\p{N}])[+−-])?\d+(?:(?:[.,:]|[ –])\d+)*/gu` and keeps the text
+  between matches as `{ fig: false }` runs (never an empty one); `Figs` maps the runs to text and `<span key={i} className="fig">` (with
+  `svg`, `<tspan key={i} className="fig">`).
+- The figures that Phase 1 and add-on 17 draw among words, each through `<Figs text={…} />` in place of the bare text:
+  `MapTooltip.tsx:48` (each line), `View3D.tsx:243` (the hover label), `FoundPanel.tsx:209` (`` `Show all ${int(storage.items.length)} items` ``)
+  and `:252` (`` `N${n}` ``), `MaterialsView.tsx:171` (a used-by chip, `` `${u.label} ${u.rate}` ``) and `:227` (the missing badge),
+  `StepsView.tsx:31` (`` `pin ${pin}` ``), `LinePanel.tsx:145` (`Rotate 90°`), `StepPanel.tsx:604` (the swap list's
+  `` `${hidden} more…` `` or `` `${SWAP_PAGE} more… (${hidden} not shown)` ``), `ConnectionsView.tsx:377` (the details panel's
+  `<h3>`, which stays attribute-less: a box's title "5× Basic Assembler", a hookup's "Power tap at 12 64 7", a link's "Titanium Dust
+  60/min · Red"), `MapTab.tsx:268` (`` `Add note at ${where}` ``) and `ProjectPage.tsx:160` (PlanBanner's
+  `` `This plan does not add up: ${counted.join(', ')} ` ``). Names and fixed words keep their markup (spec §25, plan ruling
+  `digits-mixed`): the panel titles that name a step, an item or a block, the project's name, the avoid chips, buttons that name an
+  item, the tabs, the word badges.
+
+- [ ] **Step 5: Run everything** — `npm test` → PASS; `npm run e2e` → PASS. Watch `objectives.spec.ts:150-178` (the Compare figures at
+  860 and 768 px: they fit at 28 px and do not shrink), `drawer.spec.ts:225-266` (R37: "Reachable dimensions" still wraps beside the
+  96 px count), `world.spec.ts:69-89` (the map tooltip's text, the note dialog's title by `getByText`), `layout.spec.ts:80` and
+  `view3d-links.spec.ts:100` (the 3D readout's and hover label's text), and `chrome.spec.ts`'s first test (its blocked context still
+  loads no face, VT323 included).
+
+- [ ] **Step 6: Review shots** — label `2b`, both looks, at 1440 and 800: `node --disable-warning=ExperimentalWarning $P2/tour.mjs 1440 light 2b`,
+  `… 1440 dark 2b`, `… 800 light 2b`, `… 800 dark 2b`. Then `python3 -I $P2/maskdiff.py` on `2`, `base-b` and `2b` at each width —
+  Task 2's light shots are the reference, not `base-a`: Tasks 1b and 2 changed the top bar of every screen (the Theme button, logo C),
+  and the mask, where `2` and `base-b` differ, covers that besides the clocks and ids. This task does not keep the light look
+  pixel-identical for the figures, so a shot with none of the switched elements must still print `identical`, and a shot with one may
+  differ only inside their boxes and along their lines (a figure narrower or wider than in Pixelify moves what follows it, and
+  `.map-y` and `.view3d-layer-text` grow by 12 and 20 px) — check every bbox the script prints against the element under it, and list
+  them. Look at least at `51-compare-open` (the tiles), `20-settings-panel-all-open` (the dimensions count),
+  `35-materials-with-layout` (step numbers, pin buttons), `14-materials` (used-by chips, a missing badge), `31-map-line` and
+  `32b-map-tooltip-element` (the Y readout, Rotate 90°, the note badges, the tooltip), `33-map-note-modal` (its title),
+  `37-connections-panel` (the panel's title), `34-3d-view` and
+  `38c-3d-hover-element` (the layer readout, the hover label), `27-world-smart-upload` (the total), and a shot whose banner says "This
+  plan does not add up"; against spec §25's sizes and the comparison the user chose (`$SCRATCH/glyphs/number-fonts.png`, row B). Report
+  any figure still drawn in Pixelify outside a name.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add package.json package-lock.json docs/research/web-stack.md src/client tests/client tests/e2e/chrome.spec.ts
+git commit -m "feat(client): figures in VT323, words still in Pixelify" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
 ### Task 3a: One shared NEI tooltip, on item icons first
 
 **Files:**
@@ -725,11 +980,11 @@ git commit -m "feat(client): logo C, six turns of its pipe and then the still fr
 - Test (additions): `tests/client/item-icon.test.tsx`, `tests/client/flow-pipes.test.tsx`, `tests/client/styles-contract.test.tsx`, `tests/client/contrast.test.tsx`, `tests/e2e/theme.spec.ts`
 
 **Interfaces:**
-- Consumes: `--tip-mod`, `PAIRS`, `PHASE2_RULES`, `DARK_TOUR`, `LV_CIRCUITS`, `SETTINGS_BUTTON`, `HOVER_DELAY_MS` (`map/hover.ts:16`), `DRAG_THRESHOLD` (`views/pan-zoom.ts:17`) (the tip's fades are CSS, so the global reduced-motion rule covers them).
+- Consumes: `--tip-mod`, `PAIRS`, `PHASE2_RULES`, `DARK_TOUR`, `LV_CIRCUITS`, `SETTINGS_BUTTON`, `Figs` (Task 2b), `HOVER_DELAY_MS` (`map/hover.ts:16`), `DRAG_THRESHOLD` (`views/pan-zoom.ts:17`) (the tip's fades are CSS, so the global reduced-motion rule covers them).
 - Produces:
   - `tooltip-model.ts`: `TIP_ATTR = 'data-tip'`, `TIP_MOD_ATTR = 'data-tip-mod'`, `TIP_DELAY_MS = HOVER_DELAY_MS`, `TIP_OFFSET = 12`, `TIP_ELEMENT_GAP = 4`, `LONG_PRESS_MS = 500`, `LONG_PRESS_CLICK_MS = 400`, `TIP_EXIT_MS = 100`; `tipText(lines: ReadonlyArray<string | undefined>): string | undefined` (non-empty lines joined by `'\n'`, `undefined` when none); `tipLines(text: string | null): string[]`; `alongAxis(start: number, end: number, size: number, room: number, gap?: number, prefer?: 'after' | 'before'): number`; `interface TipAnchor { left: number; top: number; right: number; bottom: number }`; `interface Size { width: number; height: number }`; `type TipPlacement = 'pointer' | 'below' | 'above'`; `placeTip(anchor: TipAnchor, size: Size, room: Size, placement: TipPlacement): { left: number; top: number }`; `interface RestTimer<T> { move(target: T): void; now(target: T): void; clear(): void }`; `createRestTimer<T>(show: (target: T | null) => void, delayMs?: number, same?: (a: T, b: T) => boolean): RestTimer<T>`; `describes(tip: string, name: string | null): boolean`; `interface TapNode { tag: string; role: string | null; hasHref: boolean; inSvg: boolean }`; `tapActs(path: readonly TapNode[]): boolean`; `hoverFrom(pointerType: string): boolean` (a mouse or a pen); `interface FrameThrottle<T> { push(value: T): void; cancel(): void }`; `frameThrottle<T>(run: (value: T) => void, frames?: { request(cb: () => void): unknown; cancel(handle: unknown): void }): FrameThrottle<T>` (by default the window's `requestAnimationFrame` and `cancelAnimationFrame`).
   - `mod-names.ts`: `MOD_NAMES: Readonly<Record<string, string>>` (spec §6.5's 13, lower-case keys) and `modName(key: StuffKey): string | null`.
-  - `Tooltip.tsx`: `TooltipHost(): ReactElement | null`. Trigger contract for every later task: `data-tip` (lines joined by `\n`, first the title) and optional `data-tip-mod`; the innermost trigger wins.
+  - `Tooltip.tsx`: `TooltipHost(): ReactElement | null` and `TipLines(props: { lines: readonly string[]; mod: string | null }): ReactElement` (hook-free: what the box holds, each line a `<div>` and the mod line a `div.nei-tooltip-mod`, every text through `<Figs>`: spec §25). Trigger contract for every later task: `data-tip` (lines joined by `\n`, first the title) and optional `data-tip-mod`; the innermost trigger wins.
   - `ItemIcon(props: { itemKey: StuffKey; size?: number; name?: string; tip?: false | readonly string[] })`.
   - CSS `.nei-tooltip`, `.nei-tooltip-mod`, `.nei-tooltip[data-state='closing']`, `@keyframes tip-out`.
 
@@ -793,6 +1048,9 @@ it('names the mod of an item key, whatever its case, and nothing for a fluid or 
   expect(Object.keys(MOD_NAMES).length).toBeLessThanOrEqual(15); for (const key of Object.keys(MOD_NAMES)) expect(key).toBe(key.toLowerCase());
 });
 ```
+
+And, in the same file, for what the box holds (spec §25: a tip's figures in VT323, its words and its `%` and `×` in Pixelify):
+`it('writes a tip\'s figures in span.fig', () => expect(renderToStaticMarkup(<TipLines lines={['Copper Wire', 'need 80× · have 1,440', '10% chance']} mod="GregTech" />)).toBe('<div>Copper Wire</div><div>need <span class="fig">80</span>× · have <span class="fig">1,440</span></div><div><span class="fig">10</span>% chance</div><div class="nei-tooltip-mod">GregTech</div>'));`
 
 Deliberate updates (spec §3.9 rows 7–8; [TT] §6.1): `item-icon.test.tsx:18` → `toContain('data-tip="fluid:water"')` and `not.toContain(' title=')`;
 `:28` → `toContain('data-tip="Copper Wire"')`; `:30` → `not.toContain('data-tip="t:copper_wire@0"')` and `not.toContain(' title=')`;
@@ -884,6 +1142,8 @@ farm's item) and `:869` (the item picked in Add a farm).
   hide or closing only our id is removed.
 - Exit: `closing` renders the same box with no `role`, `aria-hidden="true"`, `data-state="closing"`, removed on `animationend` or after `TIP_EXIT_MS`;
   a new tip during the exit replaces it at once.
+- The box holds `<TipLines lines={lines} mod={mod} />`: spec §6.3's lines and mod line, each written through `<Figs>` (Task 2b), so a
+  tip's figures are VT323 `span.fig` and its words Pixelify (spec §25); `.nei-tooltip`'s own rule stays `14px/1.35 var(--font-pixel)`.
 `App.tsx`: `<TooltipHost />` after `<NamePrompt />`.
 
 - [ ] **Step 6: Run everything** — `npm test` → PASS; `npm run e2e` → PASS. Watch `world.spec.ts` (its strict `getByRole('tooltip')`), `drawer.spec.ts`,
@@ -910,7 +1170,7 @@ git commit -m "feat(client): one shared NEI tooltip, on item icons first" -m "Co
 - Test (additions): `tests/client/flow-pipes.test.tsx`, `tests/client/flow.test.tsx`, `tests/client/connections-view.test.tsx`, `tests/client/styles-contract.test.tsx`, `tests/client/materials-from.test.tsx`
 
 **Interfaces:**
-- Consumes: Task 3a's trigger contract, `tipText` and `TooltipHost`; `openWithPlan`, `circuitLv`.
+- Consumes: Task 3a's trigger contract, `tipText` and `TooltipHost` (whose `TipLines` already writes a tip's figures in VT323 `span.fig`, spec §25: a box's or an arrow's rates need nothing here, and the e2e read the tip's text, which the spans leave whole); `openWithPlan`, `circuitLv`.
 - Produces:
   - `FlowEdge.route?: string` (optional addition), `title === \`${name} · ${rate} · ${route}\``.
   - e2e `openConnections(page: Page): Promise<Locator>` in `helpers.ts` (pipes.spec.ts:147-163's, moved; helpers imports `uploadSampleWorld` from `./world-upload.ts`).
@@ -991,11 +1251,11 @@ git commit -m "feat(client): the NEI tooltip on Flow boxes and arrows and on Con
 - Modify: `tests/client/flow.test.tsx`, `tests/client/flow-pipes.test.tsx` (`:59-60` deliberate, R41), `tests/client/styles-contract.test.tsx`, `tests/client/contrast.test.tsx`, `tests/e2e/theme.spec.ts`
 
 **Interfaces:**
-- Consumes: `ItemIcon` `tip={false}` (Task 3a), `PSEUDO_IDS` (`src/shared/gt/tiers.ts:34`), the feature tokens, `PHASE2_RULES`, `FLOW_RULES`, `PAIRS`, `DARK_TOUR`, `openWithPlan`.
+- Consumes: `ItemIcon` `tip={false}` (Task 3a), `Figs` with `svg` (Task 2b), `PSEUDO_IDS` (`src/shared/gt/tiers.ts:34`), the feature tokens, `PHASE2_RULES`, `FLOW_RULES`, `PAIRS`, `DARK_TOUR`, `openWithPlan`.
 - Produces (`flow-model.ts`, pure):
   - `interface MachineReadout { iconKey: StuffKey | null; tier: { name: string; slug: string } | null; count: string | null; power: string | null; busy: number; busyText: string; high: boolean }`
   - `machineIconKey(machine: PlanStep['machine'], handCraft: boolean): StuffKey | null`, `machineReadout(step: PlanStep): MachineReadout` (`tier` null by hand or on a pseudo machine, `PSEUDO_IDS.has(mteId)`: plan ruling `pseudo-tier-chip`; `count` null by hand; `power` null by hand or at 0 EU/t), `tierSlug(t: number): string`, `chipWidth(text: string): number` (`text.length × CHIP_CHAR_WIDTH + 2 × CHIP_PADDING`), `busyTrack(node: Pick<FlowNode, 'width'>): number` (`node.width − 2 × TEXT_LEFT − 6 − textWidth('>99.9%', TEXT_CHAR_WIDTH)`, i.e. width − 60)
-  - `MACHINE_ICON = 32`, `MACHINE_SLOT = 36`, `STEP_HEAD_HEIGHT = 46`, `BUSY_BAND = 16`, `CHIP_HEIGHT = 16`, `CHIP_PADDING = 5`, `CHIP_CHAR_WIDTH = 9`
+  - `MACHINE_ICON = 32`, `MACHINE_SLOT = 36`, `STEP_HEAD_HEIGHT = 46`, `BUSY_BAND = 16`, `CHIP_HEIGHT = 16`, `CHIP_PADDING = 5`, `CHIP_CHAR_WIDTH = 9` (the tier's Pixelify 13 px and a count's digits, VT323 at 14.95 px in `tspan.fig`, both fit it with the fonts and without: spec §25)
   - `FlowNode.machine?: MachineReadout` (optional addition, set by `stepBox` on every step); `rowsTop`/`rowCentre` take `Pick<FlowNode, 'lines' | 'avoidBadge' | 'machine'>`
   - CSS classes `.tier-<slug>` (each sets `--tier-ink: var(--tier-<slug>)`; the recipe card's HTML chips reuse them), `.flow-machine`, `.flow-machine-slot`, `.flow-slot-lo`, `.flow-slot-hi`, `.flow-chip`, `.flow-node-power`, `.flow-busy`, `.flow-busy-track`, `.flow-busy-fill`, `.flow-busy-text`
 
@@ -1033,7 +1293,7 @@ it('draws a readout box\'s machine, chips and busy bar in its head', () => {
   const html = renderToStaticMarkup(<svg><FlowNodeShape node={at0(nodeOf(flowGraph(plan, 'min'), 'circuit-lv'))} /></svg>);
   expect(html).toContain('<g class="flow-machine" aria-hidden="true">'); expect(html).toContain('data-item-key="gregtech:gt.blockmachines@121"');
   expect(html).toMatch(/<g class="flow-chip tier-lv" transform="translate\(52 25\)"><rect width="28" height="16"><\/rect><text x="14" y="12.5">LV<\/text><\/g>/);
-  expect(html).toContain('>×5</text>'); expect(html).toContain('>16 EU/t</text>'); expect(html).toContain('<g class="flow-busy high">');
+  expect(html).toContain('>×<tspan class="fig">5</tspan></text>'); expect(html).toContain('>16 EU/t</text>'); expect(html).toContain('<g class="flow-busy high">');   // a count's digits in VT323 (spec §25)
   const node = at0(nodeOf(flowGraph(plan, 'min'), 'circuit-lv'));
   expect(html).toContain(`<rect class="flow-busy-fill" x="8" y="51" width="${busyTrack(node)}" height="6">`);
   expect(html.match(/<g class="([^"]*)" data-node-id/)?.[1]).toBe('flow-node step new'); expect(html).not.toMatch(/\b(hl|dim)\b/); expect(html).not.toContain('<circle');
@@ -1041,7 +1301,7 @@ it('draws a readout box\'s machine, chips and busy bar in its head', () => {
 it('draws a pseudo machine\'s count chip first, and a hand step\'s "by hand" with no chip', () => {
   const box = (s: PlanStep): string => renderToStaticMarkup(<svg><FlowNodeShape node={at0(nodeOf(flowGraph({ ...plan, steps: [s] } as Plan, 'min'), 'circuit-lv'))} /></svg>);
   const furnace = box({ ...plan.steps[0]!, machine: { mteId: -2, name: 'Furnace', tier: 0 }, euPerTick: 0 });
-  expect(furnace).toContain('<g class="flow-chip" transform="translate(52 25)"><rect width="28" height="16"></rect><text x="14" y="12.5">×5</text></g>');
+  expect(furnace).toContain('<g class="flow-chip" transform="translate(52 25)"><rect width="28" height="16"></rect><text x="14" y="12.5">×<tspan class="fig">5</tspan></text></g>');
   expect(furnace).not.toContain('flow-chip tier-'); expect(furnace).toContain('data-item-key="minecraft:furnace@0"');
   const hand = box({ ...plan.steps[0]!, handCraft: true, machine: { mteId: -1, name: 'Crafting table (by hand)', tier: 0 }, euPerTick: 0 });
   expect(hand).toContain('<text class="flow-node-power" x="52" y="37">by hand</text>'); expect(hand).not.toContain('flow-chip');
@@ -1070,7 +1330,7 @@ and `toContain('marker-end="url(#flow-arrow-missing)"')`; the flange case repeat
 `x="198" y="${rowCentre(node, 1) - 5}"` and the two node pins still hold.
 Contract `'draws a step\'s machine in a slot, its tier and count on Pixelify chips, and how busy it is'`: spec §7.3's CSS (`.tier-lv`
 `--tier-ink: var(--tier-lv)` for each of the 15 slugs, `.flow-node .flow-chip.tier-max text` `font-weight: 700`, `.flow-machine-slot` `fill: var(--slot)`,
-`.flow-slot-lo`/`-hi`, `.flow-chip rect` `fill: var(--flow-chip)`, `.flow-node .flow-chip text` `fill: var(--tier-ink, var(--stack-ink))`, `font: 13px/1 var(--font-pixel)`,
+`.flow-slot-lo`/`-hi`, `.flow-chip rect` `fill: var(--flow-chip)`, `.flow-node .flow-chip text` `fill: var(--tier-ink, var(--stack-ink))`, `font: 13px/1 var(--font-pixel)` (a count's digits ride in Task 2b's `tspan.fig`, so no chip rule names `var(--font-digits)`),
 `text-anchor: middle`, `.flow-node .flow-node-power` `fill: var(--text-muted)` and `font-size: 11px`, the three busy fills, `.flow-node .flow-busy-text`
 `font-size: 11px`, `tabular-nums`, `text-anchor: end`); forced colours `inQuery(FORCED, '.flow-busy-fill, .flow-busy.high .flow-busy-fill')`
 `[['fill', 'Highlight']]` (the high fill's own rule outranks a bare `.flow-busy-fill`, and the block repaints at the specificity of
@@ -1085,7 +1345,8 @@ Contrast: `['count chip', '--stack-ink', '--flow-chip', AA]`, each `TIERS` ink o
    `[data-step-id="wire"] .flow-chip text` texts `['LV', '×2']`; fill `getBBox().width` / track `getBBox().width` `toBeCloseTo(0.625, 2)`.
 2. `'every chip\'s text fits its chip, with the fonts and without them'` — for a context with `page.route(/\.woff2?$/, (r) => r.abort())` and one without,
    each read after `await document.fonts.ready` and with `chrome.spec.ts`'s premise (the blocked context loaded no face, the other a
-   Pixelify one): every `.flow-chip` has `text.getComputedTextLength() ≤ rect.width − 2 × 5`.
+   Pixelify and a VT323 one, for a count's digits are VT323): every `.flow-chip` has `text.getComputedTextLength() ≤ rect.width − 2 × 5`
+   (measured for spec §25: '×2' and '×5' 13.8 px with the fonts, 14.5 px without, against 18).
 3. `'in forced colours the busy fill and track differ and the chips stay visible'` — `emulateMedia({ forcedColors: 'active' })`: the computed `fill` of
    `[data-step-id="wire"] .flow-busy-fill` ≠ that of its `.flow-busy-track`, and `[data-step-id="circuit-lv"] .flow-busy-fill` (100 % busy:
    `high`) computes the wire's fill; `.flow-chip rect` computes a `stroke` ≠ `none`.
@@ -1100,7 +1361,8 @@ Contrast: `['count chip', '--stack-ink', '--flow-chip', AA]`, each `TIERS` ink o
   `52 + textWidth('by hand', 6.2) + 8`), the busy band `8 + 60 + 6 + textWidth('>99.9%', 6.2) + 8` and `lines.slice(1)` instead of `lines`, clamped
   to 190–330. `FlowView.tsx`: a `MachineReadoutShape(props: { node: PlacedNode; machine: MachineReadout }): ReactElement` drawing spec §7.3's
   markup (icon `itemKey={machine.iconKey ?? node.key}` with `tip={false}`, none when both are null; a hand step's chip row is `<text className="flow-node-power" x={52} y={37}>by hand</text>`;
-  the chips from x = 52, each 4 px after the one before, and the power text 6 px after the last chip, `x = 52 + chipWidth(tier) + 4 + chipWidth(count) + 6`
+  the chips from x = 52, each 4 px after the one before, each chip's text `<Figs text={…} svg />` (a count's digits in `tspan.fig`,
+  its `×` Pixelify: spec §25, plan ruling `digits-mixed`), and the power text 6 px after the last chip, `x = 52 + chipWidth(tier) + 4 + chipWidth(count) + 6`
   with both); in `FlowNodeShape` a box with `machine` draws it inside the head's nested svg in
   place of the 16 px head icon and `lines[0]`, the title at `x = 52`, `lines[1…]` at `62 + 16 i + 11` (`i` = 0 at `lines[1]`), each drawn as
   `clipText(line, node.width − 2 × TEXT_LEFT, TEXT_CHAR_WIDTH)`, so a long one (add-on 17's farm words) ends in "…" as the title does;
@@ -1133,7 +1395,7 @@ git commit -m "feat(flow): step boxes as machine readouts; a lit missing-source 
 - Modify: `tests/client/flow.test.tsx`, `tests/client/step-panel.test.tsx`, `tests/client/styles-contract.test.tsx`, `tests/client/contrast.test.tsx`, `tests/e2e/theme.spec.ts`
 
 **Interfaces:**
-- Consumes: `tierSlug` and `machineReadout` (Task 4: the card's head chip shows when `machineReadout(step).tier !== null`, one rule with the Flow readout), the `.tier-<slug>` classes, ItemIcon `tip` lines (Task 3a), `hoverFlowFocus`/`endHoverFlowFocus`, the feature tokens, `PAIRS`, `PHASE2_RULES`, `FLOW_RULES`, `DARK_TOUR`, `openWithPlan`.
+- Consumes: `tierSlug` and `machineReadout` (Task 4: the card's head chip shows when `machineReadout(step).tier !== null`, one rule with the Flow readout), the `.tier-<slug>` classes, `Figs` and `DIGIT_RULES` (Task 2b), ItemIcon `tip` lines (Task 3a), `hoverFlowFocus`/`endHoverFlowFocus`, the feature tokens, `PAIRS`, `PHASE2_RULES`, `FLOW_RULES`, `DARK_TOUR`, `openWithPlan`.
 - Produces:
   - `flow-model.ts`: `interface RecipeSlot { key: StuffKey; amount: number; chance: number }`, `recipeSlots(products: readonly Product[]): RecipeSlot[]`, `stackText(key: StuffKey, amount: number): string`, `interface RecipeStat { label: string; value: string }`, `recipeStats(step: PlanStep): RecipeStat[]`, `interface OcChip { text: string; tone: 'now' | 'note' }`, `ocChips(step: PlanStep): OcChip[]`, `powerShare(step: PlanStep): number | null`.
   - `StepPanel.tsx`: `export function RecipeCard(props: { step: PlanStep; plan: Plan; index: PlanIndex; per: Per }): ReactElement` (hook-free).
@@ -1184,19 +1446,19 @@ it('fills the energy bar to the share of what the machine can draw', () => {
 - the card sits after the summary `<p>` and before `class="ports"`; slots `data-recipe-key="t:copper_wire@0"` with `<span class="stack-count" aria-hidden="true">2</span>`,
   the fluid `72L`, the circuit no count; `html.match(/data-port-key=/g)` has the same length as the panel's without the card (render `PortsSection` alone and count);
 - a slot's icon is named by its good and carries spec §8.3's tip lines (P2-D39): the wire slot's `aria-label="1x Copper Wire"` and
-  `data-tip="1x Copper Wire\n2× 1x Copper Wire per run\n30/min in the line"`; a `chance: 0.1` output draws `<span class="slot-chance" aria-hidden="true">10%</span>`
+  `data-tip="1x Copper Wire\n2× 1x Copper Wire per run\n30/min in the line"`; a `chance: 0.1` output draws `<span class="slot-chance" aria-hidden="true"><span class="fig">10</span>%</span>` (spec §25: the digits VT323, the `%` Pixelify)
   and its `data-tip` holds `\n10% chance`; on `wires` without its wire flows (`:89`'s short plan) the wire slot's `li` is `class="recipe-slot slot-short"` and
   its `aria-label` ends `, not supplied in full`;
-- `<span class="gt-arrow" aria-hidden="true"><span class="gt-arrow-fill"></span></span>`; the time `5 s` and `16 EU/t`; the chip `<span class="badge tier-chip tier-lv">LV · 32 V</span>`;
+- `<span class="gt-arrow" aria-hidden="true"><span class="gt-arrow-fill"></span></span>`; the time `5 s` and `16 EU/t`; the chip `<span class="badge tier-chip tier-lv">LV · <span class="fig">32</span> V</span>`;
 - a hand step and a furnace step (`machine: { mteId: -2, … }`): no `tier-chip`; a hand step no `energy-bar`; a step with no inputs or outputs: no `recipe-strip`, the `recipe-stats` still there;
 - farm steps (add-on 17, plan ruling `farm-step-card`), each drawn with `renderToStaticMarkup(<RecipeCard step={s} plan={p} index={indexPlan(p)} per="min" />)`:
   `tgs = step({ id: 'tgs', mapId: 'gt.recipe.treefarm', machine: { mteId: 15541, name: 'Tree Growth Simulator', tier: 1 }, euPerTick: 30, mainOutput: 't:rubber_wood@0', inputs: [{ key: 'gregtech:gt.metatool.01@10', amount: 1 / 512, chance: 1 / 512 }], outputs: [{ key: 't:rubber_wood@0', amount: 25, chance: 1 }], farm: { kind: 'tgs', tier: 1, footprint: [7, 7, 7], text: 'Tree Growth Simulator (LV): Rubber Sapling in the controller; Saw (Steel) in an input bus', tools: ['gregtech:gt.metatool.01@10'] } })`
   on `planOf({ steps: [tgs], names: { 'gregtech:gt.metatool.01@10': 'Saw', 't:rubber_wood@0': 'Rubber Wood' }, flows: [{ from: 'raw', to: 'tgs', key: 'gregtech:gt.metatool.01@10', perSecond: 0.5 / 512 }, { from: 'tgs', to: 'out', key: 't:rubber_wood@0', perSecond: 12.5 }] })`:
   the saw slot (the `li` with `data-recipe-key="gregtech:gt.metatool.01@10"`) has no `slot-chance` and no `stack-count`, and its `data-tip` is
   `"Saw\nwears 1 of its 512 uses per run\n0.0586/min in the line"`; the wood slot has `<span class="stack-count" aria-hidden="true">25</span>`; the chip
-  `<span class="badge tier-chip tier-lv">LV · 32 V</span>`. And `cane = step({ id: 'cane', mapId: 'farm:crops', machine: { mteId: 28001, name: 'Basic Crop Manager', tier: 1 }, euPerTick: 0.107, durationTicks: 5120, mainOutput: 't:resin@0', inputs: [{ key: 'fluid:water', amount: 20, chance: 1 }], outputs: [{ key: 't:resin@0', amount: 0.9, chance: 1 }] })`
+  `<span class="badge tier-chip tier-lv">LV · <span class="fig">32</span> V</span>`. And `cane = step({ id: 'cane', mapId: 'farm:crops', machine: { mteId: 28001, name: 'Basic Crop Manager', tier: 1 }, euPerTick: 0.107, durationTicks: 5120, mainOutput: 't:resin@0', inputs: [{ key: 'fluid:water', amount: 20, chance: 1 }], outputs: [{ key: 't:resin@0', amount: 0.9, chance: 1 }] })`
   on `planOf({ steps: [cane], names: { 't:resin@0': 'Sticky Resin', 'fluid:water': 'Water' }, flows: [{ from: 'raw', to: 'cane', key: 'fluid:water', perSecond: 10 }, { from: 'cane', to: 'out', key: 't:resin@0', perSecond: 0.45 }] })`:
-  the resin slot has `<span class="slot-chance" aria-hidden="true">90%</span>` and no `stack-count`, its `data-tip` holds `\n90% chance`; the water slot
+  the resin slot has `<span class="slot-chance" aria-hidden="true"><span class="fig">90</span>%</span>` and no `stack-count`, its `data-tip` holds `\n90% chance`; the water slot
   `<span class="stack-count" aria-hidden="true">20L</span>`; the time reads `4.27 min` and `0.107 EU/t`;
 - hover: `findAll(RecipeCard({ step: circuit, plan: wires, index: indexPlan(wires), per: 'min' }), (e) => e.props['data-recipe-key'] === 't:copper_wire@0')` (`indexPlan` from `src/shared/plan/balance.ts`),
   `onMouseEnter` sets `getFlowFocus()` to `{ kind: 'item', key: 't:copper_wire@0' }`, `onMouseLeave` restores `{ kind: 'node', id: 'wire' }` (as `:94-106`);
@@ -1204,8 +1466,11 @@ it('fills the energy bar to the share of what the machine can draw', () => {
 - `GtArrow`: `tone="chat" still` → `class="gt-arrow on-chat still"`.
 Contract `'draws one run as NEI does: slots with stack counts, an arrow that runs three times, readouts'`: `.recipe-strip` `background: var(--panel)` and
 `box-shadow: var(--bevel-inset)`; `.recipe-slot` `position: relative` (what the counts sit in); `.stack-count` `position: absolute`, `right: 1px`, `bottom: -2px`,
-`z-index: 1`, `pointer-events: none`, `font: 14px/1 var(--font-pixel)`, `color: var(--stack-ink)`, `text-shadow: 2px 2px 0 var(--stack-shadow)`; `.readout` in
-`inkGroup('.banner')` (after its first 7) with `box-shadow: var(--bevel-screen)`; `.gt-arrow-fill` `animation: gt-arrow 1.6s steps(8) 3`, duration × count ≤ 5, no fill
+`z-index: 1`, `pointer-events: none`, `font: 16px/14px var(--font-digits)` and `font-size-adjust: cap-height 0.56` (spec §25: VT323 as tall as
+the 14 px Pixelify it replaces, in its 14 px box), `color: var(--stack-ink)`, `text-shadow: 2px 2px 0 var(--stack-shadow)`; `.readout` in
+`inkGroup('.banner')` (after its first 7) with `box-shadow: var(--bevel-screen)`; `.readout dd` `font: 21px/21.6px var(--font-digits)` and
+`font-size-adjust: cap-height 0.56`; `DIGIT_RULES` gains `.stack-count` and `.readout dd` (`.slot-chance` keeps Step 4's Pixelify: its
+digits are `span.fig`); `.gt-arrow-fill` `animation: gt-arrow 1.6s steps(8) 3`, duration × count ≤ 5, no fill
 mode; `.energy-bar` `position: relative`, `width: 10px`, `height: 36px`, `overflow: hidden`, `background: var(--screen)`, `box-shadow: inset 1px 1px 0 #000000` ([SR] §4.4);
 `.energy-fill` `transform: scaleY(var(--share))`, `transform-origin: bottom`, `background: var(--energy)`; `KEYFRAMES` gains `'gt-arrow': ['transform']`; forced
 colours `inQuery(FORCED, '.gt-arrow-fill, .gt-arrow.on-chat .gt-arrow-fill, .energy-fill')` `[['background', 'Highlight']]` (the chat arrow's own fill rule outranks a bare
@@ -1221,7 +1486,9 @@ Contrast: `['stack count on its shadow', '--stack-ink', '--stack-shadow', AA]`, 
 3. `'the arrow runs three times, and is still under reduced motion'` — `.gt-arrow-fill` `animationIterationCount` `'3'`; reduced motion → `animationDuration` `0.001s`.
 6. `'"144L" fits its slot with the fonts and without them'` — `openWithPlan(page, circuitMvPerHour(), { …LV_CIRCUITS, tier: 2 })`, open the Basic Fluid Extractor: its output `.stack-count` reads `144L`,
    and in a context with `/\.woff2?$/` aborted and one without, each read after `await document.fonts.ready` and with `chrome.spec.ts`'s premise (the blocked context loaded
-   no face, the other a Pixelify one), the count's box stays inside the slot's `.item-icon` box (±1 px).
+   no face, the other a VT323 one), the count's box stays inside the slot's `.item-icon` box from side to side (±1 px; it sits 2 px
+   below the slot by design, `bottom: -2px`). Measured for spec §25: VT323 16 px writes `144L` in 25.6 px, the size-adjusted Menlo of
+   the blocked context in 29.6 px (38.5 px without `font-size-adjust`), in the 36 px slot.
 7. `'in forced colours the arrow and the energy bar keep their fills'` — `emulateMedia({ forcedColors: 'active' })`: `.gt-arrow-fill` and `.energy-fill` each compute a
    `background-color` that is not `rgba(0, 0, 0, 0)` and not that of their base (`.gt-arrow`, `.energy-bar`).
 8. `'a new plan for the same step does not run the arrow again'` (spec §8.7) — mark the arrow: `.gt-arrow-fill` `evaluate((el) => el.setAttribute('data-was-here', ''))`; then serve
@@ -1242,7 +1509,9 @@ Contrast: `['stack count on its shadow', '--stack-ink', '--stack-shadow', AA]`, 
   `recipeStats` labels `Machines` (`Shared machines` for a pool), `Busy`, `EU/t each`, `EU/t total` (`count × euPerTick + Σ reused.others[].count × euPerTick`),
   values `×${count}`, `formatPercent`, `formatNumber`; a hand step only Busy; `ocChips` per Step 1 (`${formatNumber(recipeDurationTicks / durationTicks)}× faster`);
   `powerShare` = `euPerTick / (oc.machineVoltage × oc.machineAmps)`, else `/ (V[tier] × 1)`, clamped to 0..1, `null` by hand or at 0 EU/t.
-- `StepPanel.tsx`: `RecipeCard` as spec §8.3 (no hooks; `data-recipe-key`, `slot-short`, index in keys). A slot's ItemIcon takes `name={slotLabel}` — its good's
+- `StepPanel.tsx`: `RecipeCard` as spec §8.3 (no hooks; `data-recipe-key`, `slot-short`, index in keys). Its chance tag, head chip
+  and overclock chips write their text through `<Figs>` (Task 2b), so their figures are VT323 and their words, `%` and `×` Pixelify
+  (spec §25, plan ruling `digits-mixed`); a stack count and a readout are VT323 whole, by their rules. A slot's ItemIcon takes `name={slotLabel}` — its good's
   name, then `, not supplied in full` when short (`SHORT_INPUT_SHARE`, as `:230-231`) — and `tip` = spec §8.3's lines in order, each left out where it does not
   apply: ``${amountWords(key, amount, nameOf)} per run``, ``${formatPercent(chance)} chance`` when `chance < 1`, ``${rateOf(port.perSecond, per, key)} in the line``
   when `index.inputs` / `index.outputs` holds the port. A tool a tree farm wears (an input whose key `step.farm?.tools` lists) draws no
@@ -1256,7 +1525,9 @@ Contrast: `['stack count on its shadow', '--stack-ink', '--stack-shadow', AA]`, 
 - `GtArrow.tsx` per the Interfaces.
 - `styles.css`: `.readout` appended to the dark ink group; after `:878` the recipe rules of [SR] §4.4 with spec §8.4's changes (`.recipe-strip` on `--panel` with
   `--bevel-inset`; `.readout { padding: 5px 7px; background: var(--screen); box-shadow: var(--bevel-screen) }`; `.readout dt { font-size: 11px; color: var(--ink-muted) }`;
-  `.readout dd { margin: 0; font: 18px/1.2 var(--font-pixel); color: var(--screen-text); font-variant-numeric: tabular-nums }`; `.stack-count` as spec §8.2;
+  `.readout dd { margin: 0; font: 21px/21.6px var(--font-digits); color: var(--screen-text); font-variant-numeric: tabular-nums; font-size-adjust: cap-height 0.56 }`
+  (spec §25: VT323 as tall as the 18 px Pixelify, in its 21.6 px line); `.stack-count` as spec §8.2 but `font: 16px/14px var(--font-digits)`
+  and `font-size-adjust: cap-height 0.56` after it (spec §25);
   `.slot-chance { position: absolute; left: 2px; top: 2px; z-index: 1; pointer-events: none; font: 14px/1 var(--font-pixel); color: #ffff55; text-shadow: 2px 2px 0 var(--stack-shadow) }`;
   `.energy-bar` per the Step 1 contract; `.energy-fill` as spec §8.4; `.badge.tier-chip { color: var(--tier-ink) }`, `.badge.tier-chip.tier-max { font-weight: 700 }`;
   `.oc-chip.now { color: var(--ink-ok) }`, `.oc-chip.note { color: var(--ink-warn) }`), `.gt-arrow*` and `@keyframes gt-arrow` exactly as spec §11.3; the 1100 px
@@ -1331,7 +1602,7 @@ git commit -m "fix(flow): the step panel slides in only once, and a pick inside 
 - Modify: `tests/client/materials.test.tsx` (`afterEach` `:25`, new describe), `tests/client/styles-contract.test.tsx` (a new case), `tests/client/contrast.test.tsx`, `tests/e2e/theme.spec.ts`
 
 **Interfaces:**
-- Consumes: `.stack-count` (Task 5a), ItemIcon `tip={false}` and the trigger contract (Task 3a), `localTime`, `PAIRS`, `PHASE2_RULES`, `DARK_TOUR`, `LV_CIRCUITS`.
+- Consumes: `.stack-count` (Task 5a: VT323 16 px/14 px, spec §25, also on the `+N` slot), ItemIcon `tip={false}` and the trigger contract (Task 3a), `localTime`, `PAIRS`, `PHASE2_RULES`, `DARK_TOUR`, `LV_CIRCUITS`.
 - Produces:
   - `materials-model.ts`: `quantity(key: StuffKey, amount: string, rate?: boolean): string` (moved, exported), `STACK_SIZE = 64`, `stackSplit(amount: number, size?: number): number[]`,
     `interface SlotItem { row: string; key: StuffKey; name: string; group: BuildGroup; amount: string; stacks: number[]; why: string; have?: string; where?: string[]; avoid?: true; fluid: boolean }`,
@@ -1565,8 +1836,9 @@ it('draws the final values for a screen reader and the page, no live region', ()
 });
 ```
 `plan-banner.test.tsx` passes unchanged. Contract `'shows the key numbers on 52 px readout tiles, and hides the cost sentence beside them'`: `.key-number` `height: 52px`, `padding: 4px 10px`,
-`background: var(--screen)`, `border: 2px solid var(--outline)`, `box-shadow: var(--bevel-screen)`; `.key-number dt` `font: 11px/14px var(--font-ui)`; `.key-number dd` `font: 24px/26px var(--font-pixel)`,
+`background: var(--screen)`, `border: 2px solid var(--outline)`, `box-shadow: var(--bevel-screen)`; `.key-number dt` `font: 11px/14px var(--font-ui)`; `.key-number dd` `font: 28px/26px var(--font-digits)` and `font-size-adjust: cap-height 0.56` (spec §25: VT323 as tall as the 24 px Pixelify, in the same 26 px line),
 `white-space: nowrap`, `overflow: hidden` and `text-overflow: ellipsis` (a figure on one line, as the Compare tiles' since `4bef36c`, with no shrink: plan ruling `strip-figures`);
+`.key-number-unit` `font: 15px/26px var(--font-digits)` and `font-size-adjust: cap-height 0.56` (the unit belongs to the readout: plan ruling `digits-mixed`); `DIGIT_RULES` gains `.key-number dd` and `.key-number-unit`;
 `.key-numbers` `margin: 0 0 8px`; `.key-numbers-wait` `height: 52px`, `margin: 0 0 8px`; `.key-number-flash` (spec §10.1's 2 px `--accent` frame over the
 tile's edge) `position: absolute`, `inset: -2px`, `border: 2px solid var(--accent)`, `pointer-events: none`, `animation: flash-out 700ms var(--ease-out)` and `opacity: 0`; `KEYFRAMES` gains
 `'flash-out': ['opacity']`; `.project-banners > .key-numbers ~ .plan-cost` declares `position: absolute`, `width: 1px`, `height: 1px`, `overflow: hidden`, `clip-path: inset(50%)`, `white-space: nowrap`;
@@ -1575,7 +1847,7 @@ tile's edge) `position: absolute`, `inset: -2px`, `border: 2px solid var(--accen
 - [ ] **Step 2: Write the failing e2e**
 - `build-cost.spec.ts` (every `.plan-cost` assertion kept): `.key-numbers` contains `To build` and `raw`; `[data-key-number="build"] .key-number-sub` `over 24 h`, then after the horizon select `over 1 h`.
 - `chrome.spec.ts`: `'the key-numbers strip keeps its height whether the fonts arrive or not, within 60 px'` — `measure`'s pattern on a project with `LV_CIRCUITS`: `.key-numbers` box height
-  equal in both contexts, and height + `margin-bottom` ≤ 60.
+  equal in both contexts, and height + `margin-bottom` ≤ 60 (the served context loaded a VT323 face, the strip's figures being VT323: spec §25).
 - `layout.spec.ts` after `:52`: `expect(box.y + box.height / 2).toBeLessThan(700)`.
 - `tests/e2e/key-numbers.spec.ts`: `'under reduced motion a new value shows at once, with nothing in between'` — reduced motion, `LV_CIRCUITS`, a `MutationObserver` on
   `[data-key-number="output"] dd > span[aria-hidden]` recording every text; set Amount to `60` → `expect.poll` the text `60`; the record ⊆ `['30', '60']`.
@@ -1593,7 +1865,8 @@ tile's edge) `position: absolute`, `inset: -2px`, `border: 2px solid var(--accen
   `'keeps each figure of the strip whole and on one line at 800 px'` (plan ruling `strip-figures`) — 800 × 900,
   `openWithPlan(page, { ...circuitLv(), cost: { runPerHour: 99_999, build: 99_999, horizonHours: 24 } })` (a target, so the drawer
   stays shut); after `document.fonts.ready`, each of the five `.key-number`s is 52 px tall, and a Range over its
-  `dd > span[aria-hidden='true']` has one client rect, inside the tile's box (the unit after `99,999` may end in "…").
+  `dd > span[aria-hidden='true']` has one client rect, inside the tile's box (in VT323 `99,999 raw/h` is 101.2 px and fits whole; a
+  longer unit may still end in "…": plan ruling `strip-figures`).
 `DARK_TOUR` `'the Flow tab'` gains `.key-number` `background-color` `rgb(11, 11, 11)`.
 
 - [ ] **Step 3: Run them to see them fail** — `npx vitest run tests/client/key-numbers.test.tsx tests/client/styles-contract.test.tsx tests/client/contrast.test.tsx` → FAIL.
@@ -1619,8 +1892,9 @@ tile's edge) `position: absolute`, `inset: -2px`, `border: 2px solid var(--accen
   tiles at 752 px (plan ruling `p2-d44-landed`). At 1280 × 720 add-on 17 adds no height (the head button takes no row, the closed card
   draws nothing), so the iron-plate map centre goes from 657 to ≈ 684.7 as planned.
   `styles.css`: spec §10.2's rules (its `.key-number dd` keeps `white-space: nowrap; overflow: hidden; text-overflow: ellipsis` and takes
-  no `container-type` or `--glyphs` clamp: plan ruling `strip-figures`) plus `.key-number-sub { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-transform: none; letter-spacing: 0 }`,
-  `.key-number-unit { margin-left: 4px; font: 13px/26px var(--font-pixel); color: var(--screen-muted) }`, `.key-number dd.key-number-words { font: 15px/26px var(--font-ui) }`,
+  no `container-type` or `--glyphs` clamp: plan ruling `strip-figures`; its font is `28px/26px var(--font-digits)` with
+  `font-size-adjust: cap-height 0.56` after it, spec §25) plus `.key-number-sub { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-transform: none; letter-spacing: 0 }`,
+  `.key-number-unit { margin-left: 4px; font: 15px/26px var(--font-digits); color: var(--screen-muted); font-size-adjust: cap-height 0.56 }`, `.key-number dd.key-number-words { font: 15px/26px var(--font-ui) }`,
   `.key-number.changed .key-number-sub { color: var(--accent) }`, the flash and `@keyframes flash-out { from { opacity: 1; } }`, `.key-numbers-wait`, the sibling hide rule.
 
 - [ ] **Step 5: Run everything** — `npm test` → PASS; `npm run e2e` → PASS. Before committing, read the measured centres: `layout.spec.ts` (< 700),
@@ -1753,7 +2027,8 @@ git commit -m "feat(client): the key-numbers strip, counting up to what changed"
   `.key-numbers > dl` with `52px` blocks, diagram `display: grid; grid-template-columns: repeat(3, 110px); gap: 40px; align-content: center; height: 240px; padding: 20px` with `70px` blocks,
   scene `height: 360px; padding: 20px` with one `100%` block, lines' even blocks `width: 70%`; readouts, the tiles' own grid
   (`display: grid` and the `grid-template-columns` of `.compare-rows`, `repeat(auto-fit, minmax(min(160px, 100%), 1fr))`, so the six blocks
-  fall as the six tiles will), gap `4px`, six `55px` blocks: a `.compare-row` is 6 + 14.3 + 2 + 26.4 + 6 px; compare, the
+  fall as the six tiles will), gap `4px`, six `55px` blocks: a `.compare-row` is 6 + 14.3 + 2 + 26.4 + 6 px (26.4 px: the value's line, which Task 2b fixes in px, so a tile
+  keeps it at every size: plan ruling `compare-shrink-vt323`); compare, the
   `.compare-columns` grid (`repeat(auto-fit, minmax(220px, 1fr))`, gap `12px`) of three readouts frames, each framed as a column is —
   `.skeleton-compare > .skeleton-readouts { border: 2px solid; border-color: var(--panel-lo) var(--panel-hi) var(--panel-hi) var(--panel-lo); padding: 35.5px 10px 52px; }`:
   the column's 8 px padding, 19.5 px title and 8 px gap above its tiles, its 8 px gap, 36 px button and 8 px padding below, 10 px at
@@ -2024,7 +2299,7 @@ git commit -m "feat(client): revoking a token asks in the panel, and no browser 
 - Docs: `docs/superpowers/specs/2026-10-22-machine-gui-restyle-design.md:291-296`, `:395-397`; the Phase 1 plan's R31 line (`:905-908`)
 
 **Interfaces:**
-- Consumes: the trigger contract (`data-tip`, Task 3a), `PROJECT_TABS`, `openConnections` (Task 3b), `openWithPlan`, `SETTINGS_BUTTON`, `PHASE2_RULES`, `DARK_TOUR`; the Make-picker fix's `NARROW`, `settingsPanel`, `focusOnOpen`, `openSettings`, `focusSearch` and `pickTarget` (`ProjectPage.tsx:76`, `:284-328`).
+- Consumes: the trigger contract (`data-tip`, Task 3a), `Figs` (Task 2b), `PROJECT_TABS`, `openConnections` (Task 3b), `openWithPlan`, `SETTINGS_BUTTON`, `PHASE2_RULES`, `DARK_TOUR`; the Make-picker fix's `NARROW`, `settingsPanel`, `focusOnOpen`, `openSettings`, `focusSearch` and `pickTarget` (`ProjectPage.tsx:76`, `:284-328`).
 - Produces:
   - `shortcuts.ts`: `type Shortcut = { kind: 'tab'; index: 0 | 1 | 2 | 3 | 4 | 5 } | { kind: 'search' } | { kind: 'fit' } | { kind: 'pipes' } | { kind: 'sheet' }`;
     `interface KeyLike { key: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean; defaultPrevented: boolean; isComposing: boolean; repeat: boolean }`;
@@ -2066,13 +2341,13 @@ it('lists the mockup\'s rows, and draws them in a dialog named by its title', ()
     [['P'], 'Pause or play the pipes'], [['Esc'], 'Close a panel, clear the highlight, close the drawer'], [['?'], 'Show this sheet']]);
   const html = renderToStaticMarkup(<ShortcutsDialog onClose={() => {}} />);
   expect(html).toMatch(/<div class="modal shortcuts-sheet" role="dialog" aria-modal="true" aria-labelledby="([^"]+)"><h2 id="\1">Keyboard shortcuts<\/h2>/);
-  expect(html).toContain('<dt><kbd>1</kbd>–<kbd>6</kbd></dt>'); expect(html.match(/<dt>/g)).toHaveLength(6); expect(html).toContain('<button type="button">Close</button>');
+  expect(html).toContain('<dt><kbd><span class="fig">1</span></kbd>–<kbd><span class="fig">6</span></kbd></dt>'); expect(html.match(/<dt>/g)).toHaveLength(6); expect(html).toContain('<button type="button">Close</button>');   // a digit cap's digit in VT323 (spec §25)
 });
 ```
 Deliberate updates (spec §3.9 rows 12–13, R44): `pipes-paused.test.tsx:88-89` → the two PipesButton strings of the Interfaces; `connections-view.test.tsx:49` →
 `/<button type="button" class="small" aria-keyshortcuts="F" data-tip="Fit · F">Fit<\/button>.*<div class="connections" data-testid="connections"/s`; `:265` →
 `/<button type="button" class="small" aria-keyshortcuts="F" data-tip="Fit · F">Fit<\/button><button type="button" class="small" aria-keyshortcuts="P" data-tip="Pause pipes · P">Pause pipes<\/button><span class="muted small">/`;
-`:269` → the `Play pipes · P` twin. Contract: `kbd` caps `.shortcut-list kbd` `font: 14px/24px var(--font-pixel)`, `min-height: 28px`, `background: var(--btn)`, `box-shadow: var(--bevel-btn)`, `border: 2px solid var(--outline)`, `color: #ffffff`; `PHASE2_RULES` gains them. Contrast `['shortcut key cap', '#ffffff', '--btn', AA]`.
+`:269` → the `Play pipes · P` twin. Contract: `kbd` caps `.shortcut-list kbd` `font: 14px/24px var(--font-pixel)` (a digit cap's digit is Task 2b's `span.fig`, 16.1 px on a line of 0, so the cap keeps its 24 px line), `min-height: 28px`, `background: var(--btn)`, `box-shadow: var(--bevel-btn)`, `border: 2px solid var(--outline)`, `color: #ffffff`; `PHASE2_RULES` gains them. Contrast `['shortcut key cap', '#ffffff', '--btn', AA]`.
 Contract (plan ruling `shortcuts-button-wide`; `NARROW` is at `styles-contract.test.tsx:734`, and the pattern is the case 'moves the button
 into a bar under the banner below 900px', `:2282`): `it('draws no Shortcuts button in the head below 900 px, where its one row is full', () => { expect(inQuery(NARROW, '.project-head > .shortcuts-open')).toEqual([['display', 'none']]); expect(blocks.filter((b) => !b.nested && b.prelude.split(', ').includes('.project-head > .shortcuts-open'))).toEqual([]); })`;
 `PHASE2_RULES` gains `.project-head > .shortcuts-open`.
@@ -2118,7 +2393,7 @@ Close settings button the click focused is not drawn at 1280) and `expect(await 
 - [ ] **Step 4: Implement**
 
 - `shortcuts.ts` per the Interfaces (Shift is never a reason to skip; `isTypingTarget` checks `closest('[role="combobox"], [role="listbox"]')`). `ShortcutsSheet.tsx`: `.modal-backdrop`
-  (backdrop `mousedown` on itself closes) holding `ShortcutsDialog` (`useId` for the title; a `<dl className="shortcut-list">` of `<div><dt>{caps as <kbd>, '–' as text}</dt><dd>{what}</dd></div>`;
+  (backdrop `mousedown` on itself closes) holding `ShortcutsDialog` (`useId` for the title; a `<dl className="shortcut-list">` of `<div><dt>{caps as <kbd><Figs text={cap} /></kbd>, '–' as text}</dt><dd>{what}</dd></div>`;
   a `Close` button); on mount `#root` gets `inert` and the Close button the focus, on unmount `inert` goes; `onKeyDown` Escape → `preventDefault()` + `stopPropagation()` + `onClose()` (P2-D22).
 - `PipesButton.tsx`: R44 — no `aria-pressed`, the Interfaces' markup (`type`, `className`, `aria-keyshortcuts`, `data-tip` in that prop order), comment `:1-4` reworded (the label says what a press does).
   Fit in `FlowView.tsx:562` and `ConnectionsView.tsx:323` per the Interfaces; the hints (`FlowView.tsx:578`, `ConnectionsView.tsx:46`) end `? shows the shortcuts.`
@@ -2429,7 +2704,7 @@ git commit -m "feat(client): a new layout glides into place; removed boxes fade 
 
 **Files:**
 - Scratch: `$SCRATCH/shots-p2/final/`, `$P2/probe-motion.mjs`, `$P2/probe-contrast.mjs`, `$P2/probe-perf.mjs` (adapted from `$SCRATCH/t10/probe-motion.mjs`, `probe-contrast-fonts.mjs`, `probe-perf.mjs`, `REPO` the worktree)
-- Modify: `README.md` ("Using the planner", `:36-52`), `docs/superpowers/specs/2026-10-22-machine-gui-restyle-design.md` (`:93-95`, `:476`), `docs/superpowers/plans/2026-10-23-machine-gui-restyle-phase1.md` (`:30`, `:53-54`), `docs/superpowers/specs/2026-10-24-machine-gui-phase2-design.md` (status, as-built notes), this plan ("As built")
+- Modify: `README.md` ("Using the planner", `:36-52`), `docs/superpowers/specs/2026-10-22-machine-gui-restyle-design.md` (`:93-95`, `:152`, `:476`), `docs/superpowers/plans/2026-10-23-machine-gui-restyle-phase1.md` (`:30`, `:31-33`, `:53-54`), `docs/superpowers/specs/2026-10-24-machine-gui-phase2-design.md` (status, as-built notes), this plan ("As built")
 
 **Interfaces:**
 - Consumes: everything above; the rulings in the SDD ledger, the plan rulings among them.
@@ -2438,10 +2713,14 @@ git commit -m "feat(client): a new layout glides into place; removed boxes fade 
 - [ ] **Step 1: The suites** — `npm test` → PASS; `npm run e2e` → PASS; paste the summary lines. Read `git diff main -- tests/` (`main` contains `01da27d`, so the base's own deliberate edits — drawer.spec's `SETTINGS_BUTTON` and `TARGET`, compare-card.test's toggle, objectives.spec's head measured once the badge is live — are not in it): every changed or removed existing line is
   one of spec §3.9's rows; or the §3.5 rewrite of `contrast.test.tsx` (Task 1a: its old rows — the 155 of `contrast-phase1.json`: Phase 1's, the Make-picker fix's and add-on 17's —
   all in `PAIRS`, which the guard case against `contrast-phase1.json` proves; the calibration case and every reason case's `toBeLessThan` lines unchanged, the base's two
-  cases among them); or R45's ring-rule string moved into `RING_RULE` (Task 6b, its value unchanged); or a helper moved to `tests/e2e/helpers.ts` /
+  cases among them); or R45's ring-rule string moved into `RING_RULE` (Task 6b, its value unchanged); or one of Task 2b's rows (spec §25's
+  table: the contract's font rows of the figures, and a figure's text gaining `<span class="fig">` in `map-hover`, `view3d`, `map-summary`,
+  `layout-map` and `connections-view`); or a helper moved to `tests/e2e/helpers.ts` /
   `tests/client/css-blocks.ts` (`openConnections`, `loosePipeEnds`, the scanner). Everything else is an addition.
 - [ ] **Step 2: The screenshot tour in both looks** — `$P2/tour.mjs` at `1440 light final`, `1440 dark final`, `800 light final`, `800 dark final`; compare every screen with the mockups (`Phase2Project`,
-  `Phase2Inventory`, `Phase2Feedback`, `DarkMode`, `Main`) and the light ones with Task 1a's `base-a` shots (`$P2/maskdiff.py`); the base's screens with no Phase 2 mockup
+  `Phase2Inventory`, `Phase2Feedback`, `DarkMode`, `Main`) and the light ones with Task 1a's `base-a` shots (`$P2/maskdiff.py`; the figures differ from those on purpose since Task 2b — spec §25,
+  plan ruling `figures-vt323` — so they are compared with Task 2b's shots instead, and any figure still drawn in Pixelify outside a name is
+  listed); the base's screens with no Phase 2 mockup
   (`51`, `51b`, `52`, `52b`, `53`, and `24`/`24b` at 800: the Compare card, Plan for and Farms, the narrow compare bar, the Settings button's target, the drawer that opens by
   itself; plan ruling `base-surfaces-dark`) go against the add-on 17 restyle's own shots in `$SCRATCH/addon17/` (`compare-open-1440x900.png`,
   `settings-plan-for-1440x900.png`, `settings-farms-1440x900.png`, `narrow-compare-bar-860x900.png`, `narrow-compare-open-860x900.png`) and the Make-picker fix's in
@@ -2464,16 +2743,19 @@ git commit -m "feat(client): a new layout glides into place; removed boxes fade 
 - [ ] **Step 7: Keyboard only, both looks** — the Theme button; the shortcuts and the sheet; one tab stop per item in the grid; the confirms; the toasts' Undo; the base's ways in — the drawer that opens by itself into the item search on a narrow window, the banner's "Pick something to make", the Compare modes button and its card's Close (the focus back on the button that is shown); visible focus rings everywhere.
 - [ ] **Step 8: VoiceOver smoke test** — tooltip descriptions on a focused Flow row; each toast announced once; the strip read as its final values only; the grid checkboxes; the drawer's status (R43): silent when it opens by itself for a project with no target, "The plan is updating…" while a plan is on its way.
 - [ ] **Step 9: Docs as built** — README "Using the planner": the Theme button (Auto follows the OS, Dark, Light; this browser remembers it) and logo C (top bar, login, tab icon). The Phase 1 spec `:93-95` and `:476`,
-  and the Phase 1 plan `:30` and `:53-54`: a "Superseded by Phase 2 (2026-10-24 spec §4): two looks, Auto by default" note at each. The Phase 2 spec: status "approved and built"; an "as built" note where a
+  and the Phase 1 plan `:30` and `:53-54`: a "Superseded by Phase 2 (2026-10-24 spec §4): two looks, Auto by default" note at each; the Phase 1
+  spec `:152` and the Phase 1 plan `:31-33` (where the pixel font draws readouts, chips and stack counts): a "Superseded by Phase 2 (2026-10-24
+  spec §25): figures in VT323, words in Pixelify" note. The Phase 2 spec: status "approved and built"; an "as built" note where a
   ruling changed the design (the rulings `rider mechanism` and `WebKit glide`, the strip's fallbacks if any). This plan: an "## As built" section with every ruling of the
   ledger and the plan rulings (`baseline-shots`, `view-transition-split`, `motion-in-1b`, `pseudo-tier-chip`, and the re-checks'
   `base-surfaces-dark`, `compare-frame-dark`, `farm-line-dark`, `aside-refocus`, `shortcuts-button-wide`, `farm-step-readout`,
-  `farm-step-card`, `p2-d44-landed`, `strip-figures`, `drawer-status-words`, `drawer-status-count`, `compare-skeletons`), one line each, and the decisions this plan made that the
+  `farm-step-card`, `p2-d44-landed`, `strip-figures`, `drawer-status-words`, `drawer-status-count`, `compare-skeletons`, and the VT323 ones,
+  `figures-vt323`, `digits-token`, `digits-floor`, `digits-mixed`, `digits-sizes`, `compare-shrink-vt323`), one line each, and the decisions this plan made that the
   spec left open (no shared `browser-setting.ts`; the recipe card without the circuit slot or the main-output frame; no tips on the Theme button or the strip tiles; F7 and
   F8 done; Connections' re-layout glide in Task 13b, without ghosts).
 - [ ] **Step 10: Commit the docs** — before the commit, replace every local scratch path in the two Phase 2 docs with
   `<the design session's scratchpad, not in the repo>`, as `47e35bc` did for the Phase 1 restyle docs: this plan's `$SCRATCH` definition
-  (under Conventions) and the spec's `:13`, `:25` and `:37`; `$SCRATCH` and `$P2` stay as names, and the "As built" additions name no new
+  (under Conventions) and the spec's `:14`, `:26` and `:38` (one line lower since its status names §25); `$SCRATCH` and `$P2` stay as names, and the "As built" additions name no new
   local path. Check: `grep -n '/private/[t]mp' docs/superpowers/plans/2026-10-24-machine-gui-phase2.md docs/superpowers/specs/2026-10-24-machine-gui-phase2-design.md`
   prints nothing (the bracket keeps the check from finding its own line in this plan).
 
@@ -2482,7 +2764,7 @@ git add README.md docs/superpowers/specs/2026-10-22-machine-gui-restyle-design.m
 git commit -m "docs: the Machine GUI restyle, phase 2, as built" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-- [ ] **Step 11: Report** to the user with the final shots of both looks, the motion and performance findings, and the departures from the mockups (the logo's 6 turns, finite sheen and arrows, one row per good,
+- [ ] **Step 11: Report** to the user with the final shots of both looks, the motion and performance findings, and the departures from the mockups (the figures in VT323, the user's choice of 2026-10-24, spec §25; the logo's 6 turns, finite sheen and arrows, one row per good,
   no Swap/3D buttons, two-line tiles, the opacity flash, `scaleX` arrows and meter, tips below the pointer); then superpowers:finishing-a-development-branch.
 
 ---
@@ -2491,7 +2773,7 @@ git commit -m "docs: the Machine GUI restyle, phase 2, as built" -m "Co-Authored
 
 The critic's scan of this plan against spec §20 (Verification) and §23 (Builder-check answers) and the code at `cfaa05b` (the CSS
 scanner, the contract and contrast tests, FlowView, ConnectionsView, the e2e helpers and fixtures, the scratch scripts), re-checked against
-`96e9e99` and then `main` `01da27d` (every anchor below is at `01da27d`; rows B1–B13 are the first re-check's, B14 the second's), with the
+`96e9e99` and then `main` `01da27d` (every anchor below is at `01da27d`; rows B1–B13 are the first re-check's, B14 the second's, V1–V10 Task 2b's, for spec §25), with the
 task numbers of this plan; the last column says how the plan now settles each row that needed it.
 
 | # | Tasks | Shared file / interface | Produced → consumed | Agree? | Note | Resolution |
@@ -2550,12 +2832,23 @@ task numbers of this plan; the last column says how the plan now settles each ro
 | B12 | 9a ↔ Make-picker fix | the drawer effect (`ProjectPage.tsx:358-372`) | `.toasts` inert on every opening, the auto-open included | Yes | toasts.spec (7) needs a target, or the drawer opens by itself and the head is inert | (8) proves the auto-open |
 | B13 | 7 ↔ add-on 17 | the Machines tile vs the Compare card's New machines (`src/server/planner/compare.ts:73-84`) | `machineCount` | Yes (was No) | Make N shares a type's machines across its steps | `machineCount` counts a Make N type once, as `src/server/planner/bom.ts:122-131` |
 | B14 | 1a, 7, 8, 11, 14 ↔ `main`'s three fixes | `0c08dba` (server: `wholeMachines` moved to `src/server/planner/round.ts`, crop sticks counted by it); `4bef36c` (the Compare tiles' grid and no-break figures, `styles.css:416-425`; `close({ forget: true })` on a cleared target, `ProjectPage.tsx:383-385`); `68c06c1` (the target's layout effect, `ProjectPage.tsx:389-392`) | 8's Compare skeletons, 7's strip tiles, 11's focus rules, 1a's and 14's counts | Yes (was No) | the first re-check read none of them: three fixed 264 px skeleton blocks disagreed with tiles stacked one a row (about 760–1100 px); "Planning the three modes…" now also follows a cleared or swapped target; the strip's one line had no pin | 8's skeletons lay their blocks in `.compare-rows`' grid, and its tests take the swap (`compare-skeletons`); 7 pins its one line and does not shrink (`strip-figures`); 11's hooks need no order against the layout effect, which moves no focus; 1a counts 3300 / 188 and 71, and 155 contrast pairs still; `0c08dba` is server only (a farm step's `farm.sticks` and words can read one less, drawn as sent) |
+| V1 | 1a, 1b, 2 → 2b | `styles.css` (the first `:root`; the Compare comment and value `:388-425`; `:534`; `:575-578`; `:939`; `:974-981`; `:1254-1258`; `:1326-1329`), `$P2/tour.mjs`, `$P2/maskdiff.py` | 1a turns colours into tokens and proves the light look against `base-a`; 1b adds the dark blocks; 2 the logo; 2b changes the figures' fonts only | Yes | 2b runs after the three, so 1a's identity check stands as made; from 2b on the light figures differ on purpose | 2b's maskdiff takes Task 2's light shots as its reference (`2 base-b 2b`: 1b's Theme button and 2's logo are in the mask) and accepts differences inside the switched elements' boxes and along their lines only, and Task 14 compares the figures with 2b's shots; `--font-digits` is a font token, which 1b's `/^--(…\|font\|…)/` keeps out of the dark blocks |
+| V2 | 2b → 5a, 7 | `styles-contract.test.tsx`: `FONT_IMPORTS`, `TOKENS`, `DIGIT_RULES`, `DIGITS_FLOOR`, the cases at `:805-821`, `:1117-1129`, `:1762-1770`, `:1898-1927`, `:2037-2046`, `:2302-2333` (find them by text after 1a) | 2b defines `DIGIT_RULES`; 5a appends `.stack-count` and `.readout dd`, 7 `.key-number dd` and `.key-number-unit` | Yes | the case asserts the exact list of rules that name `var(--font-digits)`, so each task appends its own in its commit; `contrast.test.tsx` is not touched: 2b changes no colour, so 1a's `PAIRS`, its guard on `contrast-phase1.json` and every later task's pairs stand | — |
+| V3 | 2b → 3a, 4, 5a, 11 | `Figs` (`figureRuns`, `span.fig`, `tspan.fig`) | 3a's `TipLines`; 4's count chip (`svg`); 5a's chance tag, tier and overclock chips; 11's key caps | Yes | their new markup tests are written with `span.fig` from the start | `digits-mixed` |
+| V4 | 2b ↔ 8 | a Compare tile's height (6 + 14.3 + 2 + 26.4 + 6) and `skeleton-readouts`' 55 px blocks | 2b fixes the value's line at 26.4 px | Yes | the old `24px/1.1` line shrank with its figure; the new one keeps 54.7 px, so 8's frames match at every width | `compare-shrink-vt323` |
+| V5 | 2b ↔ 4 | `CHIP_CHAR_WIDTH = 9`, `chipWidth`, the box widths | a count's digits in `tspan.fig` (VT323 14.95 px) | Yes | measured: '×5' 13.8 px with the fonts and 14.5 without, against 18; every width as before | `digits-token` (the fallback's `font-size-adjust`) |
+| V6 | 2b → 5a, 6a | `.stack-count` and `144L` in a 36 px slot (5a's e2e 6), the grid's stacks and `+N` slot | 5a sets it VT323 16 px/14 px; 6a draws it | Yes | 25.6 px; 29.6 px with the fonts blocked (38.5 without the adjust) | 5a's e2e checks it side to side, and its premise names a VT323 face |
+| V7 | 2 ↔ 2b ↔ 7 | `chrome.spec.ts` | 2's brand case; 2b's 'figures in VT323 keep their boxes…'; 7's strip case | Yes | separate tests; 2b's and 7's premises name a VT323 face, and the first test's blocked context still loads none | — |
+| V8 | 1b ↔ 2b | `src/client/main.tsx` | 1b's `startTheme()` (`:12-19`); 2b's import after `:10` | Yes | separate lines | — |
+| V9 | 2b ↔ 3a, 3b, 5a, 5b, 6a, 8, 9a, 11 | the Phase 1 files 2b touches: `MapTooltip.tsx:48` (3a: `alongAxis`, `:12-17`), `View3D.tsx:243` (8: `:233`), `MaterialsView.tsx:171`, `:227` (6a: `:40-43`, `:114-145`; 8: `:307`), `MapTab.tsx:268` (8: `:475-490`; 9a: `:396-401`), `ProjectPage.tsx:160` (8: `:156`; 3a: `:183`), `LinePanel.tsx:145` (8: `:162`), `StepPanel.tsx:604` (5a: `:676-677`; 5b: `:668`, `:765`), `ConnectionsView.tsx:377` (3b: `:66-132`; 8: `:397-402`; 11: `:323`), `FoundPanel.tsx`, `StepsView.tsx`; the tests `map-hover`, `view3d`, `map-summary`, `layout-map` (`:182`, `:319`), `connections-view` (`:86`; 3b edits `:119-124`, `:138`, `:259`, 11 `:49`, `:265`, `:269`) | 2b writes a figure's text through `<Figs>` | Yes | separate lines; 3a's watch list (spec §6.7: `map-hover`, `map-summary`) holds 2b's `span.fig` | later tasks find the code by its text |
+| V10 | 2b | `package.json`, `package-lock.json`, `docs/research/web-stack.md` | the one new dependency | Yes | `@fontsource/vt323` 5.3.0, exact, OFL-1.1, no transitive dependencies | Global Constraints, stack |
 
 | Task | Does its own text agree with itself? | Resolution |
 |---|---|---|
 | 1a | Yes: Step 3 pins match Step 6 edits, and the literal-to-token map is consistent. Gaps: findings 4, 5, 14. | The guard case and `contrast-phase1.json`, the calibration case kept (4); the eight `>=` lines in `PAIRS` (5); masked diffs, the OS-dark contexts dropped from the tour, plan ruling `baseline-shots` (14) |
 | 1b | Yes: Interfaces repeat spec §4.7, and the tests match Step 4. Hazards: finding 19. | `globalThis.document?.startViewTransition`, and `startTheme` listens to `storage` itself (19); the dark-only pairs (5); one dark-tour test per stop (16); the storage case written out (10) |
 | 2 | Yes: the timing works out (−0.44/−0.22 s; 3.96 s total). | — |
+| 2b | Partly: its sizes, line boxes and Compare constants are spec §25's measures, its `DIGIT_RULES` list matches Step 4's rules, and its e2e premise needs a VT323 face, which the settings count and the tiles load; but the step numbers' marker had no line in px (measured in the app: each one-line row grew from 26.3 to 27.16 px), three Phase 1 texts with figures were left in Pixelify, and Step 6 diffed against `base-a`, whose top bar Tasks 1b and 2 already changed. | The marker's `line-height: 20.3px`; `Rotate 90°`, the swap list's "more…" and the Connections panel's title through `<Figs>` (two more deliberate markup rows); Step 6 diffs against Task 2's light shots |
 | 3a | Yes: the `alongAxis` and `placeTip` cases match `MapTooltip.along` (checked). | The rest-timer case written out (10); the long-press guard expires and (11) proves it (7); `hoverFrom` and `frameThrottle` unit-tested (27) |
 | 3b | Partly: e2e (3)'s locator, and `:119-124` against `:122-124`. | (3) hovers the head and asserts `focusing` before the Escape (1); (5) tabs out of the canvas, (6) reads "In / Out" (12); (12) a tap on a box only picks; the cites agree |
 | 4 | Yes: `busyTrack = width − 60`; `PSEUDO_MACHINE_ENTRIES` has `mteId`, `name` and `itemKey`; '63%'; the 'LV' chip is 28 px. Gap: finding 13. | The fonts premise (13); the pseudo-machine chip rule and the hand step's "by hand" pinned (22, 23); the high fill in forced colours |
