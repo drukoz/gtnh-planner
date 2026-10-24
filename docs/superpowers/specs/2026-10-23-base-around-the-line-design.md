@@ -1,6 +1,6 @@
 # Your base around the line, in the 3D tab — design
 
-Status: draft for the user's review (2026-10-23). Project 2 of the four agreed on 2026-10-23 (1 shorter layouts,
+Status: APPROVED by the user (2026-10-23), with the designer calls below and the answer on drops. Project 2 of the four agreed on 2026-10-23 (1 shorter layouts,
 2 this, 3 the flow builder, 4 the whole base on the World map).
 
 ## Why
