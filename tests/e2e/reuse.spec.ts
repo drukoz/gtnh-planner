@@ -7,7 +7,8 @@ import { createProject, login, setName } from './helpers.ts';
 
 test('turning "Reuse machines we have" off takes the owned colouring off every flow box', async ({ page }) => {
   await login(page); await setName(page, 'Ann');
-  const id = await createProject(page, 'Reuse', { target: 't:circuit@0', amount: 30, tier: 1 });
+  // No raw cap (fix wave 3 (A)): at the default +25 % some plates come from a Basic Bending Machine, a fourth step.
+  const id = await createProject(page, 'Reuse', { target: 't:circuit@0', amount: 30, tier: 1, rawCap: null });
   const steps = page.locator('svg.flow-canvas [data-step-id]');
   const owned = page.locator('svg.flow-canvas [data-step-id].owned, svg.flow-canvas [data-step-id].partly-owned');
   await expect(steps).toHaveCount(3);

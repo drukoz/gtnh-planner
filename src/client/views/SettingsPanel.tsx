@@ -1,9 +1,10 @@
 // The project's settings beside its views (spec §3.2–§3.3b, §3.6, §3.11): what to make and how much, the tier, where
 // the group can mine, how the line is fed, what materials cost, which materials to avoid, which recipe groups to skip,
-// the planner's options (supporting lines, how much a machine is worth in raw material, what the build cost of new
-// machines is counted against, the tier they are built at and when a multiblock is, reusing the machines the group has),
-// the machines it has that no world scan shows, and the lists the panels fill: what the group already makes, makes
-// itself, already has a supply of, and the ingredient options it pinned.
+// the planner's options (supporting lines, how much a machine is worth in raw material, how much more raw material
+// fewer machines may cost, what the build cost of new machines is counted against, the tier they are built at and
+// when a multiblock is, reusing the machines the group has), the machines it has that no world scan shows, and the
+// lists the panels fill: what the group already makes, makes itself, already has a supply of, and the ingredient
+// options it pinned.
 // Everyone sees the same settings: every change sends one `settings` op carrying whole field values, and nothing is
 // sent for an amount or a cost that would be refused.
 
@@ -23,7 +24,8 @@ import { haveSupplyPatch, optionPatch } from './flow-model.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
 import {
   BUILD_HORIZON_PRESETS, EXCLUSION_LABELS, MULTIBLOCK_CHOICES, buildTierOptions, buildTierPatch, dimOverridePatch, dimRows, groupDimRows, horizonChoice,
-  horizonPatch, isStuffKey, multiblocksPatch, optionPinRows, parseAmount, parseCost, stepChargeOf, stepChargeOptions, stepChargePatch, toggleList,
+  horizonPatch, isStuffKey, multiblocksPatch, optionPinRows, parseAmount, parseCost, RAW_CAP_PRESETS, rawCapChoice, rawCapOf, rawCapPatch, stepChargeOf,
+  stepChargeOptions, stepChargePatch, toggleList,
 } from './settings-model.ts';
 
 /** Typing pauses this long before the amount is sent (one plan per pause, not one per keystroke). */
@@ -430,6 +432,39 @@ export function StepChargeField(props: { settings: PlanSettings; patch: Patch })
 }
 
 /**
+ * "Raw material for fewer machines" (fix wave 3 (A)): the raw cap's presets, and a stored value none of them has as
+ * "At most +<n> %"; picking one sends `rawCap`. Its note says what it is measured against, or that build cost ignored
+ * leaves it unread.
+ */
+export function RawCapField(props: { settings: PlanSettings; patch: Patch }): ReactElement {
+  const { settings, patch } = props;
+  const choice = rawCapChoice(rawCapOf(settings));
+  const options = RAW_CAP_PRESETS.map((p): { value: string; label: string } => ({ value: p.value, label: p.label }));
+  if (!RAW_CAP_PRESETS.some((p) => p.value === choice.value)) options.push(choice);
+  const ignored = settings.mode === 'rate' && settings.buildHorizonHours === null;
+  return (
+    <label className="field">
+      <span>Raw material for fewer machines</span>
+      <select
+        aria-label="Raw material for fewer machines"
+        value={choice.value}
+        onChange={(e) => {
+          const next = rawCapPatch(e.currentTarget.value);
+          if ('rawCap' in next && e.currentTarget.value !== choice.value) patch(next);
+        }}
+      >
+        {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+      <span className="muted small">
+        {ignored
+          ? 'With build cost ignored the plan stays within 25 % of the least raw material instead.'
+          : 'Fewer machines never cost more raw material than this over the leanest line (what Least raw material plans).'}
+      </span>
+    </label>
+  );
+}
+
+/**
  * "Count build cost against" (plan 12 Task 7, design spec §3.3): the hours of running the build cost of new machines is
  * weighed against, as a preset ("24 hours" for a project stored before the setting) or a stored value no preset names as
  * "Custom (<n> h)"; picking one sends `buildHorizonHours`. In Make N, which always counts the build cost against the batch
@@ -526,10 +561,10 @@ export function ReuseOwnedField(props: { settings: PlanSettings; patch: Patch })
 }
 
 /**
- * The planner's options: supporting lines, how much a machine weighs against raw material, what the build cost is counted
- * against, the tier new machines are built at and when a multiblock is built (plan 12 Task 7, the user's ruling 224),
- * reusing the machines the group has, and the EBF coil. Crafting-table steps always run on an Auto Workbench, so there is
- * no switch for them (the user's ruling 180).
+ * The planner's options: supporting lines, how much a machine weighs against raw material and how much more raw material
+ * fewer machines may cost (fix wave 3 (A)), what the build cost is counted against, the tier new machines are built at
+ * and when a multiblock is built (plan 12 Task 7, the user's ruling 224), reusing the machines the group has, and the EBF
+ * coil. Crafting-table steps always run on an Auto Workbench, so there is no switch for them (the user's ruling 180).
  */
 function OptionsSection(props: { settings: PlanSettings; plan: Plan | null; patch: Patch }): ReactElement {
   const { settings, plan, patch } = props;
@@ -544,6 +579,7 @@ function OptionsSection(props: { settings: PlanSettings; plan: Plan | null; patc
         Plan supporting lines for alloys, plastics and chemicals (off: buy the shallow ones)
       </label>
       <StepChargeField settings={settings} patch={patch} />
+      <RawCapField settings={settings} patch={patch} />
       <BuildHorizonField settings={settings} patch={patch} />
       <BuildTierField settings={settings} plan={plan} patch={patch} />
       <MultiblocksField settings={settings} patch={patch} />

@@ -22,7 +22,7 @@ import { ISSUE_ORDER, problemId } from './flow-model.ts';
 import { costLine } from './plan-cost.ts';
 import { PROJECT_TABS, tabFromHash } from './project-tabs.ts';
 import { ProjectorPanel } from './ProjectorPanel.tsx';
-import { stepChargeLabel, stepChargeOf } from './settings-model.ts';
+import { rawCapChoice, rawCapOf, stepChargeLabel, stepChargeOf } from './settings-model.ts';
 import { SettingsPanel } from './SettingsPanel.tsx';
 
 function ProjectName(props: { name: string; onRename(name: string): void }): ReactElement {
@@ -86,9 +86,10 @@ function issueCount(code: PlanIssueCode, n: number, issues: readonly PlanIssue[]
  * (`indexPlan`: "This plan does not add up: …", with "Show in the flow") and each issue in the server's words, else
  * `issueText`'s (the client re-checks the plan it got); the derived materials the line buys as chips that show their
  * import in the flow, with "Plan them as supporting lines" while those are off; how much more raw material the plan
- * uses than the least to save machines (`Plan.rawCost`, Steps vs raw material); every other server warning (plan 08's
- * avoid list, missing recipes, …) and what unlocks the line. Above that box, and on its own when there is nothing to
- * warn about, what the plan costs to run and to build its new machines (`costLine`, plan 12).
+ * uses than the least (where build cost counts, the leanest line's) to save machines (`Plan.rawCost`, Steps vs raw
+ * material and the raw cap: `rawCostText`); every other server warning (plan 08's avoid list, missing recipes, …) and
+ * what unlocks the line. Above that box, and on its own when there is nothing to warn about, what the plan costs to run
+ * and to build its new machines (`costLine`, plan 12).
  */
 export function PlanBanner(props: {
   plan: Plan | null; planError: string | null; planLoading: boolean; settings: PlanSettings; send: (ops: ProjectOp[]) => void;
@@ -115,7 +116,7 @@ export function PlanBanner(props: {
   // the derived-leaf warning becomes chips when the plan lists its leaves.
   const others = warnings.filter((w) => !(ISSUE_CODES.has(w.code) && shownIssues.has(problemId(w))) && !(w === derivedWarning && derived.length > 0));
 
-  const rawText = rawCostText(plan?.rawCost, stepChargeLabel(stepChargeOf(settings)));
+  const rawText = rawCostText(plan?.rawCost, stepChargeLabel(stepChargeOf(settings)), rawCapChoice(rawCapOf(settings)).label.toLowerCase());
   // What the plan costs to run and to build (plan 12): on every plan that has a cost, outside the warning box.
   const costText = plan === null ? null : costLine(plan);
   const costed = costText === null ? null : <p className="plan-cost">{costText}</p>;
@@ -179,13 +180,18 @@ export function PlanBanner(props: {
  * How much more raw material the plan uses than the least to save machines (`Plan.rawCost`, Steps vs raw material:
  * `preset`), or null when it uses the least: `Uses <x>% more …`; a line whose least raw material is 0 (a glass line
  * digging sand that rock-breaker cobblestone and forge hammers could make, plan 12) has no percentage: `Uses raw
- * material that free inputs could replace, to save machines (…)`.
+ * material that free inputs could replace, to save machines (…)`. Where build cost counts (`leanestPerSecond`, fix wave
+ * 3 (A)) the least is the leanest line's — what "Least raw material" plans, its machines paid for — and `cap` (the raw
+ * cap in words) closes the parentheses.
  */
-function rawCostText(cost: Plan['rawCost'], preset: string): string | null {
+function rawCostText(cost: Plan['rawCost'], preset: string, cap?: string): string | null {
   if (cost === undefined) return null;
-  if (cost.leastPerSecond === 0 && cost.perSecond > 0) return `Uses raw material that free inputs could replace, to save machines (Steps vs raw material: ${preset})`;
-  if (!(cost.leastPerSecond > 0) || !(cost.perSecond > cost.leastPerSecond * (1 + COST_GAP_REL))) return null;
-  return `Uses ${formatPercent(cost.perSecond / cost.leastPerSecond - 1)} more raw material than the least possible to save machines (Steps vs raw material: ${preset})`;
+  const least = cost.leanestPerSecond ?? cost.leastPerSecond;
+  const why = `(Steps vs raw material: ${preset}${cost.leanestPerSecond === undefined || cap === undefined ? '' : `; ${cap}`})`;
+  if (least === 0 && cost.perSecond > 0) return `Uses raw material that free inputs could replace, to save machines ${why}`;
+  if (!(least > 0) || !(cost.perSecond > least * (1 + COST_GAP_REL))) return null;
+  const than = cost.leanestPerSecond === undefined ? 'the least possible' : 'the leanest line';
+  return `Uses ${formatPercent(cost.perSecond / least - 1)} more raw material than ${than} to save machines ${why}`;
 }
 
 /** The pack's dimensions, capabilities and recipe groups for the settings panel, fetched once per page. */

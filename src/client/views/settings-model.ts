@@ -1,15 +1,16 @@
 // What the settings panel shows and sends (spec §3.2–§3.3b, §3.6), as pure functions: the reachable-dimension rows
 // and their labels, the patches the panel sends (each a whole field value, so one `settings` op says everything), the
 // checks an amount or a cost must pass before anything is sent, the avoid list's suggestions, labels and changes, the
-// "Steps vs raw material" presets (fix spec §3), the build horizon's presets and the choices of the tier new machines are
-// built at and of when to build a multiblock (plan 12 Task 7, the user's ruling 224), the pinned ingredient options in
-// words (fix spec §6.4) and the "Machines we have" list's machines, counts and changes (architecture §11.29).
+// "Steps vs raw material" presets (fix spec §3) and the raw cap's ("Raw material for fewer machines", fix wave 3 (A)), the
+// build horizon's presets and the choices of the tier new machines are built at and of when to build a multiblock
+// (plan 12 Task 7, the user's ruling 224), the pinned ingredient options in words (fix spec §6.4) and the "Machines we
+// have" list's machines, counts and changes (architecture §11.29).
 
 import { TIER_NAMES, tierName } from '../../shared/gt/tiers.ts';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import { MAX_AVOID_ENTRIES, MAX_AVOID_ENTRY_LENGTH, MAX_OWNED_MANUAL_COUNT, MAX_OWNED_MANUAL_ENTRIES, MAX_STEP_CHARGE } from '../../shared/project/apply-op.ts';
 import type { PackInfo } from '../../shared/types/api.ts';
-import { DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_STEP_CHARGE, type Plan, type PlanSettings, type ReachableDim } from '../../shared/types/plan.ts';
+import { DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_RAW_CAP, DEFAULT_STEP_CHARGE, type Plan, type PlanSettings, type ReachableDim } from '../../shared/types/plan.ts';
 import { formatNumber } from '../format.ts';
 
 export interface DimRow { key: string; name: string; group: string; state: 'auto' | 'on' | 'off'; reachable: boolean; label: string }
@@ -215,6 +216,35 @@ export function stepChargeOptions(charge: number): Array<{ value: string; label:
 export function stepChargePatch(value: string): Partial<PlanSettings> | null {
   const charge = value.trim() === '' ? Number.NaN : Number(value);
   return Number.isFinite(charge) && charge >= 0 && charge <= MAX_STEP_CHARGE ? { stepCharge: charge } : null;
+}
+
+/**
+ * "Raw material for fewer machines" (fix wave 3 (A), the user's answer of 2026-10-22): the presets of `PlanSettings.rawCap`,
+ * how much more raw material than the leanest line (what "Least raw material" plans) the plan may use to build fewer
+ * machines — at most +10, +25 (the default) or +50 %, or no limit.
+ */
+export const RAW_CAP_PRESETS: ReadonlyArray<{ value: string; cap: number | null; label: string }> = [
+  { value: '0.1', cap: 0.1, label: 'At most +10 %' },
+  { value: '0.25', cap: 0.25, label: 'At most +25 %' },
+  { value: '0.5', cap: 0.5, label: 'At most +50 %' },
+  { value: 'off', cap: null, label: 'No limit' },
+];
+
+/** The raw cap a project plans with: its own, else the default (a project stored before the setting). */
+export function rawCapOf(settings: PlanSettings): number | null {
+  return settings.rawCap === undefined ? DEFAULT_RAW_CAP : settings.rawCap;
+}
+
+/** A raw cap in words: its preset's name, else `At most +<n> %` (`custom` in the select). */
+export function rawCapChoice(cap: number | null): { value: string; label: string } {
+  const preset = RAW_CAP_PRESETS.find((p) => p.cap === cap);
+  return preset === undefined ? { value: 'custom', label: `At most +${formatNumber((cap ?? 0) * 100)} %` } : { value: preset.value, label: preset.label };
+}
+
+/** The patch for a value picked in that select: its preset's cap; nothing for `custom` or any other value. */
+export function rawCapPatch(value: string): Partial<PlanSettings> {
+  const preset = RAW_CAP_PRESETS.find((p) => p.value === value);
+  return preset === undefined ? {} : { rawCap: preset.cap };
 }
 
 /**

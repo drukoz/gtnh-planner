@@ -129,6 +129,13 @@ describe('plan banner', () => {
     expect(html(planOf({ rawCost: { perSecond: 1, leastPerSecond: 1 } }))).toBe('');
     expect(html(planOf({ rawCost: { perSecond: 0, leastPerSecond: 0 } }))).toBe('');
   });
+  it('measures against the leanest line where build cost counts, and names the raw cap (fix wave 3 (A))', () => {
+    const capped = planOf({ rawCost: { perSecond: 1.2, leastPerSecond: 0.5, leanestPerSecond: 1 } });
+    expect(text(html(capped))).toContain('Uses 20% more raw material than the leanest line to save machines (Steps vs raw material: Fewest machines; at most +25 %)');
+    expect(text(html(capped, S({ rawCap: null })))).toContain('(Steps vs raw material: Fewest machines; no limit)');
+    // The poly line: 135 × the least, but the leanest line itself (its machines paid for), so nothing to say.
+    expect(html(planOf({ rawCost: { perSecond: 0.000987654322, leastPerSecond: 0.0000072965006, leanestPerSecond: 0.000987654322 } }))).toBe('');
+  });
   it('says what the plan costs to run and to build (plan 12)', () => {
     const costed = planOf({ cost: { runPerHour: 5400, build: 182, horizonHours: 24 } });
     const out = html(costed);

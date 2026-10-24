@@ -4,9 +4,10 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import {
   dimRows, dimOverridePatch, toggleList, parseAmount, groupDimRows, parseCost, STEP_CHARGE_PRESETS, ownableMachineGroups, ownedMachineLabel, ownedWith,
   ownedWithout, parseOwnedCount, BUILD_HORIZON_PRESETS, horizonChoice, horizonPatch, buildTierOptions, buildTierPatch, MULTIBLOCK_CHOICES, multiblocksPatch,
+  RAW_CAP_PRESETS, rawCapChoice, rawCapOf, rawCapPatch,
 } from '../../src/client/views/settings-model.ts';
 import {
-  BuildHorizonField, BuildTierField, HaveSupplySection, MultiblocksField, OptionPinsSection, ReuseOwnedField, SettingsPanel, StepChargeField,
+  BuildHorizonField, BuildTierField, HaveSupplySection, MultiblocksField, OptionPinsSection, RawCapField, ReuseOwnedField, SettingsPanel, StepChargeField,
 } from '../../src/client/views/SettingsPanel.tsx';
 import { OwnedMachinesEditor } from '../../src/client/components/OwnedMachinesEditor.tsx';
 import { TierPicker } from '../../src/client/components/TierPicker.tsx';
@@ -196,6 +197,33 @@ describe('build cost, machine tier and multiblocks', () => {
     return patch.mock.calls.map((c) => c[0]);
   };
 
+  it('offers the raw cap beside Steps vs raw material: at most +10, +25 or +50 %, or no limit (fix wave 3 (A))', () => {
+    const label = 'Raw material for fewer machines';
+    expect(RAW_CAP_PRESETS.map((p) => [p.value, p.cap, p.label])).toEqual([
+      ['0.1', 0.1, 'At most +10 %'], ['0.25', 0.25, 'At most +25 %'], ['0.5', 0.5, 'At most +50 %'], ['off', null, 'No limit'],
+    ]);
+    expect(select(panelOf(defaultSettings()), label)).toEqual(['0.1=At most +10 %', '0.25=At most +25 % *', '0.5=At most +50 %', 'off=No limit']);
+    const old = { ...defaultSettings() };
+    delete old.rawCap;
+    expect(rawCapOf(old)).toBe(0.25);
+    expect(select(panelOf(old), label)).toContain('0.25=At most +25 % *');
+    expect(select(panelOf({ ...defaultSettings(), rawCap: null }), label)).toContain('off=No limit *');
+    expect(rawCapChoice(0.3)).toEqual({ value: 'custom', label: 'At most +30 %' });
+    expect(select(panelOf({ ...defaultSettings(), rawCap: 0.3 }), label)).toEqual([
+      '0.1=At most +10 %', '0.25=At most +25 %', '0.5=At most +50 %', 'off=No limit', 'custom=At most +30 % *']);
+    expect(sendsOf(RawCapField, defaultSettings(), 'off')).toEqual([{ rawCap: null }]);
+    expect(sendsOf(RawCapField, defaultSettings(), '0.5')).toEqual([{ rawCap: 0.5 }]);
+    expect(sendsOf(RawCapField, defaultSettings(), '0.25')).toEqual([]);                                // the value it has
+    expect(sendsOf(RawCapField, { ...defaultSettings(), rawCap: 0.3 }, 'custom')).toEqual([]);
+    expect([rawCapPatch('0.1'), rawCapPatch('off'), rawCapPatch('custom')]).toEqual([{ rawCap: 0.1 }, { rawCap: null }, {}]);
+    for (const patch of [rawCapPatch('0.1'), rawCapPatch('off')]) expect(validateOp({ op: 'settings', patch })).toBeNull();
+    const options = optionsSection(panelOf(defaultSettings()));
+    expect(options.indexOf(label)).toBeGreaterThan(options.indexOf('Steps vs raw material'));
+    expect(options.indexOf(label)).toBeLessThan(options.indexOf('Count build cost against'));
+    expect(options).toContain('Fewer machines never cost more raw material than this over the leanest line (what Least raw material plans).');
+    expect(optionsSection(panelOf({ ...defaultSettings(), buildHorizonHours: null })))
+      .toContain('With build cost ignored the plan stays within 25 % of the least raw material instead.');
+  });
   it('shows 24 hours for a project without buildHorizonHours', () => {
     expect(BUILD_HORIZON_PRESETS.map((p) => [p.value, p.hours, p.label])).toEqual([
       ['1', 1, '1 hour'], ['8', 8, '8 hours'], ['24', 24, '24 hours'], ['168', 168, '1 week'], ['none', null, 'Ignore build cost']]);
