@@ -222,12 +222,18 @@ it('reads the light tokens as the literals Phase 1 measured', () => {
   expect(colour('light', { over: '--veil', on: '--panel' })).toBe('#dadada');
 });
 
-/** The 155 light pairs measured before Phase 2: Phase 1's 142, the Make-picker fix's 1, add-on 17's 12. */
-const PHASE1_PAIRS = JSON.parse(readFileSync(new URL('./contrast-phase1.json', import.meta.url), 'utf8')) as Array<[string, string, string]>;
-it('still measures every pair measured before Phase 2, at the same light colours', () => {   // the guard of the rewrite (spec §3.5)
+/**
+ * The 155 light pairs measured before Phase 2 (Phase 1's 142, the Make-picker fix's 1, add-on 17's 12), each with the least ratio the
+ * base held it to: 4.5 for text, 3 for a graphic (ruling P2-R7).
+ */
+const PHASE1_PAIRS = JSON.parse(readFileSync(new URL('./contrast-phase1.json', import.meta.url), 'utf8')) as Array<[string, string, string, number]>;
+// the guard of the rewrite (spec §3.5): no pair measured before Phase 2 is dropped, moved out of the light run or held to less (P2-R7)
+it('still measures every pair measured before Phase 2 in the light look, at the same light colours and at least as strictly', () => {
   expect(PHASE1_PAIRS).toHaveLength(155); expect(PAIRS.length).toBeGreaterThanOrEqual(PHASE1_PAIRS.length);
-  for (const [what, fg, bg] of PHASE1_PAIRS) {
-    expect(PAIRS.some(([w, f, b]) => w === what && colour('light', f) === fg && colour('light', b) === bg), `${what}: ${fg} on ${bg}`).toBe(true);
+  for (const [what, fg, bg, min] of PHASE1_PAIRS) {
+    const kept = PAIRS.some(([w, f, b, m, looks]) => w === what && (looks === undefined || looks.includes('light')) && m >= min
+      && colour('light', f) === fg && colour('light', b) === bg);
+    expect(kept, `${what}: ${fg} on ${bg}, at ${min}:1 or more, in the light look`).toBe(true);
   }
 });
 
@@ -248,9 +254,9 @@ describe('contrast of the Flow diagram', () => {
 });
 
 describe('contrast of the Connections tab', () => {
-  it('shows every channel dye at 3:1 on its casing: the seven too dark for the dark casing on the panel grey', () => {
-    // every dye at 3:1 on its casing is the table's `channel dye …` rows; and those seven do need the panel grey: Red, the line's first
-    // channel, would be 2.8:1 on the dark casing
+  it('needs the panel grey for seven dyes: on the dark casing they fall under 3:1', () => {
+    // Red, the line's first channel, would be 2.8:1 on the dark casing; every dye at 3:1 on the casing it gets is the table's
+    // `channel dye …` rows
     for (const dye of DARK_DYES) expect(ratio(DYE_HEX[dye], DARK_CASING), dye).toBeLessThan(GRAPHICS);
   });
 });
@@ -258,12 +264,12 @@ describe('contrast of the Connections tab', () => {
 // A Flow pipe from a missing source (ruling R34, over R20): its casing and its white head read at 3:1 (the table's rows); the panel's red
 // would not, and neither would a head in the casing's own red.
 describe('contrast of a Flow pipe from a missing source', () => {
-  it('reads its red casing at 3:1 on the well, where the panel\'s red read 1.54:1', () => {
+  it('needs a red of its own for the casing: the panel\'s red reads 1.54:1 on the well', () => {
     expect(ratio('#aa0000', WELL)).toBeLessThan(GRAPHICS);
   });
 
-  it('reads its white head at 3:1 on the casing and on the well', () => {
-    // the head of R20, in the casing's own red now, would not show on it
+  it('needs a head of another colour than the casing: one in the casing\'s own red would not show on it', () => {
+    // ruling R20 gave the head the casing's red, before R34 made the casing that red
     expect(ratio('#ff5555', '#ff5555')).toBeLessThan(GRAPHICS);
   });
 });
@@ -285,7 +291,7 @@ describe('contrast of the 3D tab, the World page and the projector panel', () =>
 // the muted ink (#aaaaaa) measures 2.3:1 on it, and 3.0:1 on the face under the pointer, so the part is a dark readout on the screen
 // (the table's "Settings target part on its readout"), where it measures 7.4:1.
 describe('contrast of the Settings button\'s target part', () => {
-  it('reads the muted ink on its dark readout, and needs it: on the button\'s face the ink falls short', () => {
+  it('needs the dark readout: on the button\'s face, and on that face under the pointer, the muted ink falls short', () => {
     expect(ratio('#aaaaaa', '#6b6b6b')).toBeLessThan(AA);                              // the button's face
     expect(ratio('#aaaaaa', '#4a5499')).toBeLessThan(AA);                              // and under the pointer
   });
@@ -294,7 +300,7 @@ describe('contrast of the Settings button\'s target part', () => {
 // Add-on 17's frame of the mode in use: a black edge the panel shows, with a yellow ring the edge shows (the table's two "mode-in-use"
 // rows); the ring alone would be faint on the light panel.
 describe('contrast of the planning modes, farms and the Compare card', () => {
-  it('frames the mode in use with a black edge the panel shows, and a yellow ring the edge shows', () => {
+  it('needs the black edge round the mode in use: its yellow ring alone is faint on the panel', () => {
     // the ring alone would be faint on the panel: the black edge is what makes it read
     expect(ratio('#ffff55', PANEL)).toBeLessThan(GRAPHICS);
   });

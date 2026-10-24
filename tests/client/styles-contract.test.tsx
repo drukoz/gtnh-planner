@@ -5,7 +5,7 @@
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
-import { cssBlocks, declarations, scan, type Block } from './css-blocks.ts';
+import { cssBlocks, declarations, scan, themeTokens, type Block } from './css-blocks.ts';
 
 const read = (file: string): string => readFileSync(new URL(`../../src/client/${file}`, import.meta.url), 'utf8');
 
@@ -27,18 +27,11 @@ function ruleBody(selector: string): string {
 }
 
 /**
- * Every declaration of the `:root` blocks that apply always, later ones replacing earlier ones as in the cascade. A
- * `:root` inside an `@media` (the reduced-motion override of the `--dur-*` tokens) is conditional, so it is left out:
- * otherwise it would hide the values the tokens really have.
+ * Every declaration of the `:root` blocks that apply always, later ones replacing earlier ones as in the cascade: the light
+ * look's tokens (css-blocks.ts). A `:root` inside an `@media` (the reduced-motion override of the `--dur-*` tokens) is
+ * conditional, so it is left out: otherwise it would hide the values the tokens really have.
  */
-function rootTokens(): Map<string, string> {
-  const tokens = new Map<string, string>();
-  for (const block of blocks) {
-    if (block.prelude !== ':root' || block.nested) continue;
-    for (const [name, value] of declarations(block.inner)) tokens.set(name, value);
-  }
-  return tokens;
-}
+const rootTokens = (): Map<string, string> => themeTokens(blocks, 'light');
 
 // The `:root` block (the values of design spec §4), row for row. The old names it once kept as aliases for the inline styles
 // are gone (Task 9), and a case at the end of this file says so.
