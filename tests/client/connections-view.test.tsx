@@ -83,7 +83,7 @@ describe('the Connections tab', () => {
 
   it('marks the picked box or link, and titles a picked link by its label', () => {
     const link = shell({ pick: { edge: 'flow:step:a>step:b:t:dust@0' } });
-    expect(link).toContain('<h3>Titanium Dust 60/min · Red</h3>');
+    expect(link).toContain('<h3>Titanium Dust <span class="fig">60</span>/min · Red</h3>');
     expect(link).toContain('data-edge="flow:step:a&gt;step:b:t:dust@0" class="conn-edge conn-via-item_conduit selected"');
     expect(shell({ pick: { node: 'step:b' } })).toContain('data-node="step:b" class="conn-node conn-machine selected"');
     expect(shell({ pick: { node: 'nope' } })).not.toContain('selected');

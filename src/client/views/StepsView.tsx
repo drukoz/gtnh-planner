@@ -2,6 +2,7 @@
 // when. A step with a map pin links to it: the link focuses the pin and opens the Map tab, which centres on it.
 
 import type { ReactElement } from 'react';
+import { Figs } from '../components/Figs.tsx';
 import { Tick } from '../components/Tick.tsx';
 import { focusPin } from '../state/pin-focus.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
@@ -28,7 +29,7 @@ export function StepsView(props: ProjectViewProps): ReactElement {
               <li key={step.id} className="step-row">
                 <Tick row={row} mark={project.marks[row]} label={step.text} onToggle={(on) => send([{ op: 'mark', row, on }])}>
                   {pin !== undefined && (
-                    <button type="button" className="pin-link" data-pin={pin} onClick={() => showPin(pin)}>{`pin ${pin}`}</button>
+                    <button type="button" className="pin-link" data-pin={pin} onClick={() => showPin(pin)}><Figs text={`pin ${pin}`} /></button>
                   )}
                 </Tick>
               </li>

@@ -88,7 +88,7 @@ describe('3D tab: the rules in detail', () => {
     const html = shell({ layout: warned, hover: 'Basic Macerator — programmed circuit 2', info: { title: 'Input Bus (LV)', lines: ['programmed circuit 2'] } });
     expect(html).toMatch(/data-testid="view3d-canvas"[^>]*><canvas/);
     expect(html).toMatch(/<input type="range" aria-label="Layer" min="0" max="2" step="1" value="2"\/>/);
-    for (const text of ['data-testid="view3d-hover"', 'Basic Macerator — programmed circuit 2', 'Input Bus (LV)', 'Pick a world scan and base on the Map tab'])
+    for (const text of ['data-testid="view3d-hover"', 'Basic Macerator — programmed circuit <span class="fig">2</span>', 'Input Bus (LV)', 'Pick a world scan and base on the Map tab'])
       expect(html).toContain(text);
     expect(shell()).not.toContain('data-testid="view3d-hover"');
     expect(shell()).not.toContain('data-testid="view3d-info"');
@@ -353,7 +353,7 @@ describe('3D tab: the Machine GUI chrome', () => {
     expect(html).not.toContain('style=');
     for (const markup of [
       '<div class="view3d" data-testid="view3d"><div class="view3d-body"><div class="view3d-main">',
-      '<div data-testid="view3d-canvas" class="view3d-viewport"><canvas></canvas><p data-testid="view3d-hover" class="view3d-hover">Basic Macerator — programmed circuit 2</p></div>',
+      '<div data-testid="view3d-canvas" class="view3d-viewport"><canvas></canvas><p data-testid="view3d-hover" class="view3d-hover">Basic Macerator — programmed circuit <span class="fig">2</span></p></div>',
       '<div class="row view3d-controls"><label class="check"><input type="range" aria-label="Layer"',
       '<span class="view3d-layer-text">All layers</span>',
       '<p class="muted small">Drag to turn, right-drag to pan, scroll to zoom; click a block for its details.</p>',

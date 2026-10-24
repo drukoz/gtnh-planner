@@ -14,6 +14,7 @@ import type { Plan, PlanFlow } from '../../shared/types/plan.ts';
 import type { Note, Project, ProjectOp } from '../../shared/types/project.ts';
 import { findBase, type WorldScan, type WorldSource } from '../../shared/types/world.ts';
 import { messageOf } from '../api/client.ts';
+import { Figs } from '../components/Figs.tsx';
 import { localTime } from '../format.ts';
 import { worldApi } from '../map/api.ts';
 import { FoundPanel } from '../map/FoundPanel.tsx';
@@ -265,7 +266,7 @@ function NoteDialog(props: { pin: Pick; onSave(text: string): void; onCancel(): 
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onCancel()}>
       {/* The accessible name avoids the word "note": the text field is the one thing labelled "Note" (ruling M-R5). */}
       <form className="modal" role="dialog" aria-modal="true" aria-label={`Pin at ${where}`} onSubmit={save} onKeyDown={(e) => e.key === 'Escape' && onCancel()}>
-        <h2>{`Add note at ${where}`}</h2>
+        <h2><Figs text={`Add note at ${where}`} /></h2>
         <label className="field">
           <span>Note</span>
           <textarea autoFocus rows={3} maxLength={MAX_NOTE_LENGTH} value={text} onChange={(e) => setText(e.currentTarget.value)} />

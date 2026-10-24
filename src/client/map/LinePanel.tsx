@@ -7,6 +7,7 @@ import { useId, type ReactElement } from 'react';
 import { fmtInt } from '../../shared/layout/format.ts';
 import type { Layout } from '../../shared/types/layout.ts';
 import type { Plan } from '../../shared/types/plan.ts';
+import { Figs } from '../components/Figs.tsx';
 import { PIN_COLORS } from './layout-overlay.ts';
 
 export interface LineSummary { newMachines: number; reused: number; footprint: string; peak: string; fits: string; fitsClass: 'yes' | 'tight' | 'no' | 'unknown' }
@@ -142,7 +143,7 @@ function Body(props: LinePanelProps & { layout: Layout }): ReactElement {
       <Summary layout={layout} plan={plan} />
       <div className="row line-actions">
         <button type="button" className={moving ? 'small primary' : 'small'} aria-pressed={moving} onClick={onToggleMove}>Move line</button>
-        <button type="button" className="small" onClick={onRotate}>Rotate 90°</button>
+        <button type="button" className="small" onClick={onRotate}><Figs text="Rotate 90°" /></button>
         <button type="button" className="small" onClick={onAutoPlace}>Auto place</button>
       </div>
       {moving && <p className="muted small">Drag the line on the map to where it should go.</p>}

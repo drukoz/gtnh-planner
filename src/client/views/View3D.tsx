@@ -16,6 +16,7 @@ import type { Rgb } from '../../shared/types/assets.ts';
 import type { DyeColor, Layout } from '../../shared/types/layout.ts';
 import type { LogisticsMode } from '../../shared/types/plan.ts';
 import { messageOf } from '../api/client.ts';
+import { Figs } from '../components/Figs.tsx';
 import { SPANS_PER_LINK, connectionPieces, connectionsGraph, hasLine, pickDetails, spanDetails } from '../connections/model.ts';
 import { useLayout } from '../state/use-layout.ts';
 import {
@@ -240,7 +241,7 @@ export function View3DShell(props: View3DShellProps): ReactElement {
             <div className="view3d-main">
               <div data-testid="view3d-canvas" className="view3d-viewport">
                 {canvas}
-                {hover !== null && <p data-testid="view3d-hover" className="view3d-hover">{hover}</p>}
+                {hover !== null && <p data-testid="view3d-hover" className="view3d-hover"><Figs text={hover} /></p>}
               </div>
               <Controls maxLayer={props.maxLayer} onLayer={props.onLayer} show={props.show} onShow={props.onShow} showLinks={props.showLinks}
                 onShowLinks={props.onShowLinks} height={layout.size[1]} {...(props.onFocus === undefined ? {} : { focus: props.focus === true, onFocus: props.onFocus })} />

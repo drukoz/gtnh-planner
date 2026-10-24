@@ -18,6 +18,7 @@ import {
   FREE_KEYS, type LeafClass, type MachineWhere, type Plan, type PlanFlow, type PlanSettings, type PlanStep, type RawInput, type SourceInfo, type StepOption,
   type StepTier,
 } from '../../shared/types/plan.ts';
+import { Figs } from '../components/Figs.tsx';
 import { ItemIcon } from '../components/ItemIcon.tsx';
 import { formatNumber, formatPercent, formatRate } from '../format.ts';
 import { endHoverFlowFocus, hoverFlowFocus } from '../state/flow-focus.ts';
@@ -602,7 +603,7 @@ function SwapSection(props: { step: PlanStep; settings: PlanSettings; nameOf: Na
       {hidden > 0 && (
         <div className="row">
           <button type="button" className="small" onClick={() => setLimit((n) => n + SWAP_PAGE)}>
-            {hidden <= SWAP_PAGE ? `${hidden} more…` : `${SWAP_PAGE} more… (${hidden} not shown)`}
+            <Figs text={hidden <= SWAP_PAGE ? `${hidden} more…` : `${SWAP_PAGE} more… (${hidden} not shown)`} />
           </button>
         </div>
       )}

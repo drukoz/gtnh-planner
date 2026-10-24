@@ -3,6 +3,7 @@
 // pointer events, so the map under it keeps getting them; the map moves it (`tooltipPosition`) as the pointer moves.
 
 import type { CSSProperties, ReactElement, Ref } from 'react';
+import { Figs } from '../components/Figs.tsx';
 import { worldToScreen } from './render.ts';
 import type { MapViewport } from './types.ts';
 
@@ -45,7 +46,7 @@ export interface MapTooltipProps { id: string; lines: readonly string[]; ref?: R
 export function MapTooltip(props: MapTooltipProps): ReactElement {
   return (
     <div ref={props.ref} id={props.id} role="tooltip" className="map-tooltip" style={TOOLTIP_STYLE}>
-      {props.lines.map((line, i) => <div key={i}>{line}</div>)}
+      {props.lines.map((line, i) => <div key={i}><Figs text={line} /></div>)}
     </div>
   );
 }

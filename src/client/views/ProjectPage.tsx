@@ -19,6 +19,7 @@ import type { ProjectOp } from '../../shared/types/project.ts';
 import { apiGet, messageOf } from '../api/client.ts';
 import { listenProjectEvents } from '../api/sse.ts';
 import { DeleteProject } from '../components/DeleteProject.tsx';
+import { Figs } from '../components/Figs.tsx';
 import { ItemIcon } from '../components/ItemIcon.tsx';
 import { ITEM_SEARCH_PLACEHOLDER } from '../components/ItemSearch.tsx';
 import { SettingsToggle } from '../components/SettingsToggle.tsx';
@@ -157,7 +158,7 @@ export function PlanBanner(props: {
       {firstIssue !== undefined && (
         <div className="banner-integrity">
           <p className="banner-heading error">
-            {`This plan does not add up: ${counted.join(', ')} `}
+            <Figs text={`This plan does not add up: ${counted.join(', ')} `} />
             <button type="button" className="small" onClick={() => showInFlow({ kind: 'item', key: firstIssue.key })}>Show in the flow</button>
           </p>
           <ul className="warnings">

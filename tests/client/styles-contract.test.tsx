@@ -56,6 +56,8 @@ const TOKENS: [string, string][] = [
   ['--dur-fast', '90ms'], ['--dur-base', '160ms'], ['--dur-slow', '260ms'], ['--dur-exit', '180ms'],
   ['--ease-out', 'cubic-bezier(0.2, 0.8, 0.2, 1)'], ['--ease-pop', 'cubic-bezier(0.34, 1.56, 0.64, 1)'], ['--ease-in', 'cubic-bezier(0.4, 0, 1, 1)'],
   ['--font-pixel', "'Pixelify Sans', Inter, sans-serif"], ['--font-ui', 'Inter, system-ui, sans-serif'],
+  // Phase 2 Task 2b (Phase 2 spec §25, plan ruling digits-token): the figures' face, then a fallback whose digits are distinct
+  ['--font-digits', 'VT323, ui-monospace, Menlo, Consolas, monospace'],
   ['--font-diagram', "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif"],
   ['--ink', '#dddddd'], ['--ink-muted', '#aaaaaa'], ['--ink-title', '#ffffff'], ['--ink-link', '#ffff55'],
   ['--ink-error', '#ff5555'], ['--ink-ok', '#55ff55'], ['--ink-warn', '#ffaa00'],
@@ -137,6 +139,7 @@ const KEYFRAMES: Record<string, string[]> = {
 const FONT_IMPORTS = [
   '@fontsource/pixelify-sans/400.css', '@fontsource/pixelify-sans/600.css', '@fontsource/pixelify-sans/700.css',
   '@fontsource/inter/400.css', '@fontsource/inter/500.css', '@fontsource/inter/600.css', '@fontsource/inter/700.css',
+  '@fontsource/vt323/400.css',                                                       // Phase 2 spec §25: the figures' face, one weight
 ];
 
 describe('the Machine GUI stylesheet', () => {
@@ -863,7 +866,7 @@ describe('the Machine GUI settings column', () => {
     expectDeclared([
       [SETTINGS_SUMMARY, 'font-size', '16px'],
       [`${SETTINGS_SUMMARY} > .muted`, 'background', 'var(--screen)'], [`${SETTINGS_SUMMARY} > .muted`, 'color', 'var(--screen-text)'],
-      [`${SETTINGS_SUMMARY} > .muted`, 'font', '13px/1.5 var(--font-pixel)'], [`${SETTINGS_SUMMARY} > .muted`, 'margin-left', 'auto'],
+      [`${SETTINGS_SUMMARY} > .muted`, 'font', '15px/19.5px var(--font-digits)'], [`${SETTINGS_SUMMARY} > .muted`, 'margin-left', 'auto'],
       // ruling R37: the readout keeps its size, and the title beside it wraps (drawer.spec.ts measures a title that does)
       [`${SETTINGS_SUMMARY} > .muted`, 'flex', 'none'], [`${SETTINGS_SUMMARY} > .muted`, 'white-space', 'nowrap'],
     ]);
@@ -1170,18 +1173,21 @@ describe('the Machine GUI Materials & steps tab', () => {
     }
   });
 
-  it('draws what unlocks a row as an amber chat box, the step numbers in the pixel font, and a pin as a small button', () => {
+  it('draws what unlocks a row as an amber chat box, the step numbers in VT323, and a pin as a small button', () => {
     expectDeclared([
       ['.mat-unlock', 'background', 'var(--chat)'], ['.mat-unlock', 'color', 'var(--ink-warn)'], ['.mat-unlock', 'border-radius', '0'],
-      ['.step-list li::marker', 'font-family', 'var(--font-pixel)'],
+      ['.step-list li::marker', 'font-family', 'var(--font-digits)'],
+      // the list's own line (14px × 1.45) in px: the 1.45 it would inherit gives the 16px marker a 23.2px line, which grew every one-line
+      // step row from 26.3 to 27.16px (Phase 2 spec §25, measured in the app)
+      ['.step-list li::marker', 'line-height', '20.3px'],
       // the inline style the pin used to carry (StepsView's PIN_LINK_STYLE), plus the height of `button.small`, which its class is not
       ['button.pin-link', 'padding', '2px 10px'], ['button.pin-link', 'font-size', '0.85rem'], ['button.pin-link', 'min-height', '28px'],
     ]);
     // a dark box, so the light ink of its group (amber is `--ink-warn` there), and its own colour comes after the group's
     expect(inkGroup('.banner').prelude.split(', ')).toContain('.mat-unlock');
     expect(blocks.indexOf(inkGroup('.banner'))).toBeLessThan(position('.mat-unlock'));
-    // the pixel font is never below 13px: the marker takes the 14px of the list
-    expect(declared('.step-list li::marker', 'font-size')).toBeUndefined();
+    // VT323 at 16px is as tall as the list's 14px Pixelify (digits 8.96 against 9.00px; Phase 2 spec §25)
+    expect(declared('.step-list li::marker', 'font-size')).toBe('16px');
   });
 
   it('reads no alias of the old palette in the rules of the slots, the search list and Materials', () => {
@@ -1830,7 +1836,7 @@ describe('the Machine GUI Map tab', () => {
     expectDeclared([
       ['.map-toolbar > button', 'min-height', '32px'], ['.map-zoom', 'min-width', '32px'], ['.map-zoom', 'padding', '0'],
       ['.map-y', 'display', 'inline-flex'], ['.map-y', 'min-width', '6em'], ['.map-y', 'min-height', '32px'], ['.map-y', 'background', 'var(--screen)'],
-      ['.map-y', 'color', 'var(--screen-text)'], ['.map-y', 'font', '13px/1 var(--font-pixel)'], ['.map-y', 'box-shadow', 'var(--bevel-well)'],
+      ['.map-y', 'color', 'var(--screen-text)'], ['.map-y', 'font', '15px/1 var(--font-digits)'], ['.map-y', 'box-shadow', 'var(--bevel-well)'],
     ]);
     // the readout reads "surface" or "Y ≤ n" as the slider moves: the same width for both
     expect(declared('.map-y', 'justify-content')).toBe('center');
@@ -1980,7 +1986,7 @@ describe('the Machine GUI 3D tab', () => {
       [LAYER_GROUP, 'align-items', 'center'],
       ['.view3d-layer-text', 'display', 'inline-flex'], ['.view3d-layer-text', 'justify-content', 'center'], ['.view3d-layer-text', 'min-height', '28px'],
       ['.view3d-layer-text', 'padding', '0 8px'], ['.view3d-layer-text', 'background', 'var(--screen)'], ['.view3d-layer-text', 'box-shadow', 'var(--bevel-well)'],
-      ['.view3d-layer-text', 'color', 'var(--screen-text)'], ['.view3d-layer-text', 'font', '13px/1 var(--font-pixel)'],
+      ['.view3d-layer-text', 'color', 'var(--screen-text)'], ['.view3d-layer-text', 'font', '15px/1 var(--font-digits)'],
       ['.view3d-layer-text', 'font-variant-numeric', 'tabular-nums'],
     ]);
     // "All layers" and "Layers 1–12 of 12" are the same readout: it does not narrow, so the toggles beside it stay where they are
@@ -2107,7 +2113,7 @@ describe('the Machine GUI World page', () => {
       ['.smart-upload > h3', 'margin', '0'], ['.smart-upload > h3', 'font', '600 14px/1.3 var(--font-pixel)'], ['.smart-upload > p', 'margin', '0'],
       ['.smart-areas', 'margin', '0'], ['.smart-areas', 'padding-left', '20px'], ['.smart-radius', 'gap', '12px'],
       ['.smart-total', 'align-self', 'flex-start'], ['.smart-total', 'padding', '4px 8px'], ['.smart-total', 'background', 'var(--screen)'],
-      ['.smart-total', 'box-shadow', 'var(--bevel-well)'], ['.smart-total', 'color', 'var(--screen-text)'], ['.smart-total', 'font', '14px/1.3 var(--font-pixel)'],
+      ['.smart-total', 'box-shadow', 'var(--bevel-well)'], ['.smart-total', 'color', 'var(--screen-text)'], ['.smart-total', 'font', '16px/18.2px var(--font-digits)'],
     ]);
     expect(position('.smart-radius')).toBeGreaterThan(position('.row'));
   });
@@ -2366,31 +2372,32 @@ describe('the Machine GUI planning modes, farms and the Compare card', () => {
     expect(position('.compare-column.current')).toBeGreaterThan(position('.compare-column'));
   });
 
-  it('shows a mode\'s figures as readout tiles on a screen: a quiet Inter label over a green pixel value', () => {
+  it('shows a mode\'s figures as readout tiles on a screen: a quiet Inter label over a green VT323 value', () => {
     expectDeclared([
       ['.compare-rows', 'display', 'grid'], ['.compare-rows', 'margin', '0'],
       ['.compare-row', 'background', 'var(--screen)'], ['.compare-row', 'box-shadow', 'var(--bevel-well)'], ['.compare-row', 'border-radius', '0'],
       ['.compare-row > dt', 'color', 'var(--screen-muted)'], ['.compare-row > dt', 'font-size', '11px'],
-      ['.compare-row > dd', 'color', 'var(--screen-text)'], ['.compare-row > dd', 'font', '24px/1.1 var(--font-pixel)'],
+      ['.compare-row > dd', 'color', 'var(--screen-text)'], ['.compare-row > dd', 'font', '28px/26.4px var(--font-digits)'],
       ['.compare-row > dd', 'margin', '0'],
     ]);
     // the label stays Inter: the pixel font is never below 13px
     expect(declared('.compare-row > dt', 'font-family')).toBeUndefined();
   });
 
-  it('never breaks a figure: the tiles reflow at 160px, a value stays on one line and shrinks to fit, to 13px at the least', () => {
+  it('never breaks a figure: the tiles reflow at 160px, a value stays on one line and shrinks to fit, to 14px at the least', () => {
     // the review of the merge, C4: three columns at 760 to 915px left a tile 81 to 94px, and "2,097,152" broke over two lines. A tile is
-    // at least 160px (11 glyphs of the 24px pixel font, at most 0.6em each, and 16px of padding), never wider than its column
+    // at least 160px: 12 glyphs of the 28 px VT323 (0.4 em each, 0.41 with the margin) and 16px of padding, never wider than its column
+    // (Phase 2 spec §25, plan ruling compare-shrink-vt323)
     expectDeclared([
       ['.compare-rows', 'grid-template-columns', 'repeat(auto-fit, minmax(min(160px, 100%), 1fr))'],
       ['.compare-row > dd', 'white-space', 'nowrap'], ['.compare-row > dd', 'overflow-wrap', 'normal'],
       // a value too long for its tile shrinks (the tile is the container; the page gives the value's length in glyphs) ...
       ['.compare-row', 'container-type', 'inline-size'],
-      ['.compare-row > dd', 'font-size', 'clamp(13px, calc(100cqi / (var(--glyphs, 1) * 0.6)), 24px)'],
-      // ... and is cut only past 13px, so the tile never spills out of its column
+      ['.compare-row > dd', 'font-size', 'clamp(14px, calc(100cqi / (var(--glyphs, 1) * 0.41)), 28px)'],
+      // ... and is cut only past 14px, so the tile never spills out of its column
       ['.compare-row > dd', 'overflow', 'hidden'], ['.compare-row > dd', 'text-overflow', 'ellipsis'],
     ]);
-    // the size comes after the shorthand that sets the 24px it shrinks from
+    // the size comes after the shorthand that sets the 28px it shrinks from
     const dd = declarations(ruleBody('.compare-row > dd')).map(([name]) => name);
     expect(dd.indexOf('font-size')).toBeGreaterThan(dd.indexOf('font'));
     // the review of the merge, C5: the label at the top of a tile and the value at its foot, so the values of a row line up when a
@@ -2453,6 +2460,7 @@ const PHASE2_RULES: string[] = [
   '.theme-button', '.theme-button::before', ".theme-button[data-choice='dark']::before", ".theme-button[data-choice='light']::before",
   '::view-transition-old(root)', '::view-transition-new(root)',
   OVERLAYS, '.brand-mark::after',                                                    // Task 2: logo C's overlays (spec §5.3)
+  '.fig',                                                                            // Task 2b: a figure in pixel text (spec §25)
 ];
 /** The colour literals a Phase 2 rule may write: each is the same in both looks (spec §4.4). */
 const SAME_IN_BOTH = ['#ffffff', '#000000', '#aaaaaa', '#100010', '#ffff55', 'rgb(0 0 0 / 0.4)'];
@@ -2503,5 +2511,41 @@ describe('the Machine GUI Phase 2: the dark look and the Theme button', () => {
         for (const part of selectorList(value)) expect(part.split(' ')[0], `${selector} { transition: ${part} }`).toMatch(MAY_MOVE);
       }
     }
+  });
+});
+
+// Figures in VT323 (Phase 2 spec §25, plan rulings figures-vt323, digits-token, digits-floor, digits-mixed and digits-sizes): Pixelify Sans
+// draws 5 like S, 2 like Z and 0 like O, so a readout that is a figure is set whole in VT323, and the figures of other pixel text in a
+// `span.fig` (Figs.tsx); words stay Pixelify. Each VT323 size gives digits as tall as the Pixelify ones it replaces, on the line it had.
+
+/** Every rule that names the digits' face (Tasks 5a and 7 append theirs). */
+const DIGIT_RULES: string[] = [
+  '.fig', '.compare-row > dd', 'details.settings-section > summary > .muted', '.step-list li::marker', '.map-y', '.view3d-layer-text', '.smart-total',
+];
+/** VT323 only at 14px or more (plan ruling digits-floor): at 13px a stroke thins to half a pixel on a 1x screen. */
+const DIGITS_FLOOR = 14;
+/** The px font sizes a rule gives: its `font`'s size, and every px of its `font-size` (both ends of a clamp). */
+const pxSizes = (selector: string): number[] => [
+  ...(declared(selector, 'font')?.match(/^(?:\S+ )*?([\d.]+)px/)?.slice(1) ?? []), ...(declared(selector, 'font-size')?.match(/[\d.]+(?=px)/g) ?? []),
+].map(Number);
+
+describe('the Machine GUI Phase 2: figures in VT323', () => {
+  it('sets every figure in VT323, at 14 px or more, its fallback drawn as tall, and leaves the words in Pixelify', () => {
+    // spec §25: these rules and no other name the digits' face (Tasks 5a and 7 append theirs), and none of them names Pixelify
+    const naming = blocks.filter((b) => !b.prelude.startsWith('@') && b.inner.includes('var(--font-digits)')).map((b) => b.prelude);
+    expect(naming.sort()).toEqual([...DIGIT_RULES].sort());
+    for (const selector of DIGIT_RULES) {
+      expect(ruleBody(selector).includes('--font-pixel'), selector).toBe(false);
+      // a fallback (Menlo, Consolas …) drawn as tall as VT323's 0.56 em digits; `font` resets it, so it comes after
+      expect(declared(selector, 'font-size-adjust'), selector).toBe('cap-height 0.56');
+      const names = declarations(ruleBody(selector)).map(([name]) => name);
+      if (names.includes('font')) expect(names.lastIndexOf('font-size-adjust'), selector).toBeGreaterThan(names.lastIndexOf('font'));
+      for (const px of pxSizes(selector)) expect(px, selector).toBeGreaterThanOrEqual(DIGITS_FLOOR);
+    }
+    // a figure inside Pixelify text: 1.15 em, as tall as the digits around it, on a line height of 0, so it moves no line
+    expect(declared('.fig', 'font')).toBe('1.15em/0 var(--font-digits)');
+    expect(1.15 * 13).toBeGreaterThanOrEqual(DIGITS_FLOOR);   // in the smallest Pixelify there is
+    // the words stay in Pixelify: the badges and chips, the map tooltip and the 3D label keep their rules
+    expectDeclared([['.badge, .chip', 'font', '13px/1.5 var(--font-pixel)'], [TIP, 'font', '14px/1.35 var(--font-pixel)'], [HOVER, 'font', '14px/1.35 var(--font-pixel)']]);
   });
 });

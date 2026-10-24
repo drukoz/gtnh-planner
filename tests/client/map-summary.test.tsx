@@ -90,7 +90,7 @@ describe('summarize', () => {
     expect([s.storage.items.length, s.storage.items.find((i) => i.key === 'test:item@0')!.where.length]).toEqual([13, 7]);   // 12 + iron
     expect(s.storage.items.map((i) => i.total)).toEqual([...s.storage.items.map((i) => i.total)].sort((a, b) => b - a));
     const html = renderToStaticMarkup(<FoundPanel summary={s} notes={[]} onFocusNote={() => {}} />);
-    expect(html).toContain('Show all 13 items');
+    expect(html).toContain('Show all <span class="fig">13</span> items');
     expect(html.match(/data-key="/g)).toHaveLength(10);   // ITEMS_PAGE rows until "Show all"
   });
 
@@ -151,8 +151,8 @@ describe('FoundPanel', () => {
     expect(html).toMatch(/data-testid="note-1"[^]*Build here/);
     expect(html).toMatch(/data-testid="note-2"[^]*Nether portal/);
     // N1, N2 as the map draws note pins: a plain number is a layout pin (a build step's "pin 1")
-    expect(html).toMatch(/data-testid="note-1"[^]*?<span class="badge">N1<\/span>/);
-    expect(html).toMatch(/data-testid="note-2"[^]*?<span class="badge">N2<\/span>/);
+    expect(html).toMatch(/data-testid="note-1"[^]*?<span class="badge">N<span class="fig">1<\/span><\/span>/);
+    expect(html).toMatch(/data-testid="note-2"[^]*?<span class="badge">N<span class="fig">2<\/span><\/span>/);
     expect(html).not.toMatch(/<span class="badge">\d+<\/span>/);
     expect(html).toMatch(/id="found-note-2" data-testid="note-2" aria-current="true"/);   // the note whose marker was clicked
     expect(html).not.toContain('not pinned');
@@ -170,10 +170,10 @@ describe('FoundPanel', () => {
     expect(html).toContain('<span class="found-item-name">minecraft:iron_ingot@0</span>');
     expect(html).toContain('<ul class="small map-list"><li data-key="minecraft:iron_ingot@0">');
     expect(html).toContain('<ol class="small map-list"><li id="found-note-1" data-testid="note-1">'
-      + '<button type="button" class="small map-row-button"><span class="badge">N1</span> Build here <span class="muted">at 4 63 5 (Overworld)</span></button></li>');
+      + '<button type="button" class="small map-row-button"><span class="badge">N<span class="fig">1</span></span> Build here <span class="muted">at 4 63 5 (Overworld)</span></button></li>');
     expect(html).toContain('<li id="found-note-2" data-testid="note-2" aria-current="true"><button type="button" class="small map-row-button">');
     const many = renderToStaticMarkup(<FoundPanel summary={summarize(manyItems(12, 7), '0:0:0')} notes={[]} onFocusNote={() => {}} />);
-    expect(many).toContain('<button type="button" class="small found-show-all">Show all 13 items</button>');
+    expect(many).toContain('<button type="button" class="small found-show-all">Show all <span class="fig">13</span> items</button>');
     for (const markup of [html, many]) expect(markup.replace(/<span class="item-icon[^>]*>/g, '')).not.toContain('style=');
   });
 

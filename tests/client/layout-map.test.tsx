@@ -179,7 +179,7 @@ describe('the line on the map', () => {
     expect(lineSummary({ ...layout, reserved: farmsOnly.reserved }, plan).newMachines).toBe(3);
     const html = panel(farmsOnly);
     expect(html).not.toContain('Nothing new to build');
-    for (const text of ['Machines: 1 new', 'Move line', 'Rotate 90°', 'Auto place', '2. Farm: Tree Growth Simulator']) expect(html).toContain(text);
+    for (const text of ['Machines: 1 new', 'Move line', 'Rotate <span class="fig">90</span>°', 'Auto place', '2. Farm: Tree Growth Simulator']) expect(html).toContain(text);
   });
 });
 
@@ -316,7 +316,7 @@ describe('the line on the map: the rules in detail', () => {
       placement: null, marks: {}, notes: [] } as unknown as Project;
     const withGather = { ...plan, buildSteps: [...plan.buildSteps, { id: 'gather', order: 2, text: 'Gather', kind: 'gather' }] } as unknown as Plan;
     const html = renderToStaticMarkup(<StepsView project={project} plan={withGather} send={() => {}} me="Ann" />);
-    expect(html).toMatch(/data-row="step:layout:site"[^]*<button type="button" class="pin-link" data-pin="1"[^>]*>pin 1<\/button>/);
+    expect(html).toMatch(/data-row="step:layout:site"[^]*<button type="button" class="pin-link" data-pin="1"[^>]*>pin <span class="fig">1<\/span><\/button>/);
     expect(html.match(/class="pin-link"/g)).toHaveLength(1);
   });
 

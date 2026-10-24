@@ -16,6 +16,7 @@ import { DYE_HEX } from '../../shared/layout/enderio.ts';
 import type { DyeColor, Layout } from '../../shared/types/layout.ts';
 import type { Plan } from '../../shared/types/plan.ts';
 import { messageOf } from '../api/client.ts';
+import { Figs } from '../components/Figs.tsx';
 import { PipesButton } from '../components/PipesButton.tsx';
 import {
   CONN_LINE_HEIGHT, CONN_TITLE_HEIGHT, connectionsElk, connectionsFromElk, connectionsGraph, faceLines, faceModeText, hasLine, pickDetails,
@@ -374,7 +375,7 @@ function Panel(props: { details: Details; onClose(): void }): ReactElement {
   return (
     <aside className="conn-panel" data-testid="conn-panel" aria-label="Connection details">
       <header className="conn-panel-head">
-        <h3>{details.title}</h3>
+        <h3><Figs text={details.title} /></h3>
         <button type="button" className="small" aria-label="Close the panel" onClick={onClose}>Close</button>
       </header>
       {details.lines.length > 0 && (

@@ -11,6 +11,7 @@ import type { PackNamesRequest } from '../../shared/types/api.ts';
 import type { Note } from '../../shared/types/project.ts';
 import type { LogisticsNetwork, StorageBlock } from '../../shared/types/world.ts';
 import { apiPost } from '../api/client.ts';
+import { Figs } from '../components/Figs.tsx';
 import { ItemIcon } from '../components/ItemIcon.tsx';
 import { createNameBatcher } from './name-batcher.ts';
 import { numberedPins } from './overlays.ts';
@@ -206,7 +207,7 @@ function Storage(props: { storage: FoundSummary['storage']; showAll: boolean; on
         </ul>
       )}
       {!showAll && storage.items.length > ITEMS_PAGE && (
-        <button type="button" className="small found-show-all" onClick={onShowAll}>{`Show all ${int(storage.items.length)} items`}</button>
+        <button type="button" className="small found-show-all" onClick={onShowAll}><Figs text={`Show all ${int(storage.items.length)} items`} /></button>
       )}
     </Section>
   );
@@ -249,7 +250,7 @@ function Notes(props: { notes: readonly Note[]; focusedNote: number | null; onFo
           <li key={note.id} id={`found-note-${n}`} data-testid={`note-${n}`} aria-current={n === focusedNote ? 'true' : undefined}>
             <button type="button" className="small map-row-button" onClick={() => onFocusNote(n)}>
               {/* N<n>, as the map draws note pins: a plain number is a layout pin (a build step's "pin 1") */}
-              <span className="badge">{`N${n}`}</span>
+              <span className="badge"><Figs text={`N${n}`} /></span>
               {` ${note.text} `}
               <span className="muted">{`at ${note.pin.x} ${note.pin.y} ${note.pin.z} (${dimLabel(note.pin.dim)})`}</span>
             </button>

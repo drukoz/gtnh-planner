@@ -14,6 +14,7 @@ import { indexPlan } from '../../shared/plan/balance.ts';
 import type { Product } from '../../shared/types/pack.ts';
 import type { Plan, PlanSettings } from '../../shared/types/plan.ts';
 import type { Mark } from '../../shared/types/project.ts';
+import { Figs } from '../components/Figs.tsx';
 import { ItemIcon } from '../components/ItemIcon.tsx';
 import { Tick } from '../components/Tick.tsx';
 import { formatRate } from '../format.ts';
@@ -168,7 +169,7 @@ export function UsedByChips(props: { itemKey: StuffKey; usedBy: readonly UsedBy[
   return (
     <div className="mat-used-by small">
       <span className="muted">Used by</span>
-      {usedBy.map((u) => <span key={u.stepId} className="chip">{`${u.label} ${u.rate}`}</span>)}
+      {usedBy.map((u) => <span key={u.stepId} className="chip"><Figs text={`${u.label} ${u.rate}`} /></span>)}
       <button type="button" className="small" onClick={() => showInFlow({ kind: 'item', key: itemKey })}>Show in flow</button>
     </div>
   );
@@ -224,7 +225,7 @@ function MissingItem(props: { row: MissingRow; mode: 'rate' | 'makeN' }): ReactE
       <div className="tick" data-row={row.row}>
         <span className="tick-label">{row.name}</span>
         <span className="mat-amount">{quantity(row.key, row.amount, mode === 'rate')}</span>
-        <span className="badge missing-badge">{row.badge}</span>
+        <span className="badge missing-badge"><Figs text={row.badge} /></span>
         <UsedByChips itemKey={row.key} usedBy={row.usedBy} />
       </div>
     </li>
