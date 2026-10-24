@@ -182,6 +182,8 @@ export function machineIdsForMap(pack: Pack, mapId: string): readonly MachineId[
 export function machinesForMap(pack: Pack, mapId: string): Machine[];
 /** Every machine id in `compareMachineId` order. */
 export function allMachineIds(pack: Pack): MachineId[];
+/** True when the pack has a machine with that id. */
+export function hasMachine(pack: Pack, id: MachineId): boolean;
 ```
 
 Rules: `machineOf` converts with `legacyMteId` and returns `undefined` (never throws) for an id the pack cannot hold —
