@@ -545,17 +545,36 @@ describe('one source at a tie', () => {
     }
   });
 
-  it('makes the rest on owned machines the build stage left idle, in every mode', async () => {
-    // Four owned centrifuges (each 0.05 runs a second, priced at an iron ingot): the build MIP needed two of them for the
-    // gas and broke the raw-material tie towards buying the other ingot, two owned machines idle. Owned machines cost
-    // nothing, so the tie stage may run burn on them: all four, no copper bought, nothing new built (ignore mode's answer).
+  it('makes the rest on owned machines the build stage left idle at step charge 0, in every mode', async () => {
+    // Four owned centrifuges (each 0.05 runs a second, priced at an iron ingot): the gas takes two of them, all of the
+    // copper four, at the same raw material. At step charge 0 ("Least raw material") an owned machine costs nothing, so
+    // where the build MIP broke the tie towards buying the other ingot, the tie stage may run burn on the idle ones: all
+    // four, no copper bought, nothing new built (ignore mode's answer).
     for (const logistics of ['direct', 'enderio', 'ae2', 'routed'] as const) {
       for (const buildHorizonHours of [24, null]) {
-        const plan = await planLine(packFromSpec(gasSpec(400, [['t:iron_ingot@0', 1]])), thing({ logistics, buildHorizonHours }), owning({ mteId: 161, count: 4 }));
+        const plan = await planLine(packFromSpec(gasSpec(400, [['t:iron_ingot@0', 1]])), thing({ logistics, buildHorizonHours, stepCharge: 0 }), owning({ mteId: 161, count: 4 }));
         expect(plan.status).toBe('ok');
         expect(plan.steps.map((s) => [s.id, s.runsPerSecond, s.count, s.owned])).toEqual([['burn', 0.2, 4, 4], ['make-thing', 0.1, 1, 0]]);
         expect(plan.rawInputs.map((r) => [r.key, r.perSecond])).toEqual([['t:raw_dust@0', 0.2]]);
       }
+    }
+  });
+
+  it('buys the rest rather than run more owned machines at Fewest machines, where each owned block pays its share', async () => {
+    // Ledger 265 (controller OQ24): a step on an owned machine counts toward Fewest machines, each owned block paying
+    // OWNED_STEP_SHARE of the step charge, though it costs no build. The build MIP runs burn on two of the four owned
+    // centrifuges and buys the other ingot, and the tie stage no longer grows the step by the two it left idle (as fix
+    // wave 2 (a) stopped it growing by new machines that build for nothing). With build cost ignored there are no machines
+    // to weigh, and plan 09's one source makes all of it on the four.
+    for (const logistics of ['direct', 'enderio', 'ae2', 'routed'] as const) {
+      const plan = await planLine(packFromSpec(gasSpec(400, [['t:iron_ingot@0', 1]])), thing({ logistics }), owning({ mteId: 161, count: 4 }));
+      expect(plan.status).toBe('ok');
+      expect(plan.steps.map((s) => [s.id, s.runsPerSecond, s.count, s.owned])).toEqual([['burn', 0.1, 2, 2], ['make-thing', 0.1, 1, 0]]);
+      expect(plan.rawInputs.map((r) => [r.key, r.perSecond])).toEqual([['t:copper_ingot@0', 0.1], ['t:raw_dust@0', 0.1]]);
+      expect(plan.cost?.build).toBe(16);   // the assembler's: the owned centrifuges build for nothing
+      const ignored = await planLine(packFromSpec(gasSpec(400, [['t:iron_ingot@0', 1]])), thing({ logistics, buildHorizonHours: null }), owning({ mteId: 161, count: 4 }));
+      expect(ignored.steps.map((s) => [s.id, s.runsPerSecond, s.count, s.owned])).toEqual([['burn', 0.2, 4, 4], ['make-thing', 0.1, 1, 0]]);
+      expect(ignored.rawInputs.map((r) => [r.key, r.perSecond])).toEqual([['t:raw_dust@0', 0.2]]);
     }
   });
 

@@ -910,7 +910,9 @@ function fullness(plan: Plan, step: PlanStep): number {
 /**
  * Whether dropping `step` saves a machine block the build MIP pays for (fix wave 2 (a)): its new machines, one of its
  * sharing pool's (the pool's other steps keep `Σ utilization × count` of its machines busy), or, by hand or on a pseudo
- * machine, its step charge. Not where it runs on owned machines only, nor where its pool keeps its count without it.
+ * machine, its step charge. Not where it runs on owned machines only, nor where its pool keeps its count without it —
+ * although since ledger 265 (fix wave 3, controller OQ24) the build MIP charges an owned block OWNED_STEP_SHARE of a
+ * new one's step charge, which this rule does not count yet (its severity is the final review's).
  */
 function savesBlock(plan: Plan, step: PlanStep): boolean {
   if (onPseudo(step)) return true;
@@ -1031,7 +1033,9 @@ export interface DeepOptions extends InvariantOptions {
  * with nothing dropped; for a purchase, where the steps making the good are full (making the rest needs another
  * machine; ruling 183 (4) forbids a tie purchase beside a step with room). A producer the line can drop within its
  * machines keeps the `error` where that saves a machine block the build cost counts (`savesBlock`) and is a `warn`
- * where it saves none (owned machines, or a pool that keeps its count): a tie the objective cannot see.
+ * where it saves none (owned machines, or a pool that keeps its count): a tie the objective cannot see — for owned
+ * machines no longer quite so since ledger 265, under which each owned block pays OWNED_STEP_SHARE of the step charge
+ * (build-mip.ts); this severity rule is left to the final review.
  */
 export async function checkPlanInvariantsDeep(pack: Pack, settings: PlanSettings, plan: Plan, opts: DeepOptions = {}): Promise<Violation[]> {
   const base = checkPlanInvariants(pack, settings, plan, opts);

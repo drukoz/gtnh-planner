@@ -5,7 +5,8 @@
 // paid per new machine block, the cleanroom, the cheapest of plan 09's plan, the relaxation and S1 rounded up when the
 // time guard stops the MIP, and with build cost ignored plan 09's stages
 // within the owned-only bounds, their machines sized by plan 09's pick (ruling P2); the raw cap against the leanest line
-// and the step charge measured on that line (fix wave 3 (A), (B2)).
+// and the step charge measured on that line (fix wave 3 (A), (B2)), and an owned block's share of the step charge (ledger
+// 265).
 
 import { describe, it, expect } from 'vitest';
 import {
@@ -14,7 +15,7 @@ import {
 } from '../../helpers/build-fixtures.ts';
 import type { StuffKey } from '../../../src/shared/keys.ts';
 import {
-  BUILD_MIP_MAX_LP_ITERATIONS, BUILD_MIP_MAX_NODES, BUILD_MIP_RETRY_TOLERANCE, BUILD_MIP_TIME_LIMIT_SECONDS, LEAN_BASE_ABOVE, type StepMachines,
+  BUILD_MIP_MAX_LP_ITERATIONS, BUILD_MIP_MAX_NODES, BUILD_MIP_RETRY_TOLERANCE, BUILD_MIP_TIME_LIMIT_SECONDS, LEAN_BASE_ABOVE, OWNED_STEP_SHARE, type StepMachines,
 } from '../../../src/server/planner/build-mip.ts';
 import type { MachineOption } from '../../../src/server/planner/machine-options.ts';
 import type { Solution, SolveOptions } from '../../../src/server/planner/solve.ts';
@@ -55,7 +56,7 @@ describe('the build-cost MIP', () => {
     expect(slow.sol.machines?.get('press')).toMatchObject({ option: { mteId: 101 }, added: 1 });
   });
 
-  it('pays the step charge once per new machine block, owned machines free', async () => {
+  it('pays the step charge once per new machine block, an owned block OWNED_STEP_SHARE of it', async () => {
     // Fix wave 2 (a): σ = 100 raw (1 raw a run at 0.5 runs a second over 200 s, or 0.4 over 250 s), so a charge of 0.06
     // is 6 raw a new machine and one of 0.04 is 4. The work of 2.5 Basic presses (3 × 10) or one Advanced (40): 3 × 16 =
     // 48 > 46 at 6, 3 × 14 = 42 < 44 at 4. Two LV presses (2 × 10) or one MV that does both (25): 2 × 16 = 32 > 31 at 6,
@@ -73,7 +74,8 @@ describe('the build-cost MIP', () => {
       const doubled = [opt(101, 1, 0.2, 10), opt(102, 2, 0.4, 25)];
       expect(built(await press(doubled, 0.4, 250, 0.06, share)), `share ${share}`).toEqual([102, 1]);
       expect(built(await press(doubled, 0.4, 250, 0.04, share)), `share ${share}`).toEqual([101, 2]);
-      // Three owned Basic presses cost no build and no charge: they do the work rather than one new Advanced (46).
+      // Three owned Basic presses cost no build and OWNED_STEP_SHARE of the charge each (ledger 265; with sharing their pool
+      // holds three whole ones): 3 × 3 = 9 < one new Advanced 46, or two of them beside a new Basic 6 + 16 = 22.
       const owned = await press([opt(101, 1, 0.2, 10, 3), opt(102, 2, 0.5, 40)], 0.5, 200, 0.06, share);
       expect(owned.machines?.get('press')).toMatchObject({ option: { mteId: 101 }, added: 0, newLoad: 0, ownedLoad: share ? 2.5 : 3 });
     }
@@ -601,5 +603,54 @@ describe('the raw cap and the leanest line (fix wave 3 (A), (B2))', () => {
     const wood = await solvedWithBuild(woodSpec(), { 't:log@0': 1, 't:ore@0': 1 }, [['t:tank@0', 1 / 3600]], { options }, { stepCharge: 0.5 });
     expect(wood.runs).toEqual(['w-tank']);
     expect(wood.sol.leanRawCost).toBe(0.000277777778);
+  });
+});
+
+describe('the owned-step charge (ledger 265, controller OQ24)', () => {
+  // A step on a machine the group owns still counts toward Fewest machines: it costs no build, but each owned machine it
+  // runs on pays OWNED_STEP_SHARE of a new machine block's step charge, whole machines per step and option (per sharing
+  // pool on a network). A tank a minute (F = 1,440 a day): Raw Ore's three steps, one owned machine each (0.01 raw a
+  // tank, S1 = σ = 14.4 raw a day), or Rubber Log's one step on a new assembler that builds for nothing.
+  const LONG = ['s-grit', 's-paste', 's-tank'];
+  const options = {
+    'w-tank': [opt(121, 1, 0.2, 0)], 's-grit': [opt(481, 1, 0.2, 100, 1)], 's-paste': [opt(351, 1, 0.2, 100, 1)], 's-tank': [opt(101, 1, 0.2, 100, 1)],
+  };
+  const tanks = (log: number, stepCharge: number) =>
+    solvedWithBuild(woodSpec(), { 't:log@0': log, 't:ore@0': 1 }, [['t:tank@0', 1 / 60]], { options }, { stepCharge });
+
+  it('weighs a step on an owned machine at OWNED_STEP_SHARE of a new machine block, its build still 0', async () => {
+    expect(OWNED_STEP_SHARE).toBe(0.5);
+    // Rubber Log at 0.011 (15.84 raw a day). At Fewest machines a new block weighs 0.5 × 14.4 = 7.2 raw and an owned one
+    // 3.6: the three owned steps 14.4 + 3 × 3.6 = 25.2 > the log's 15.84 + 7.2 = 23.04 (with owned machines free, fix wave
+    // 2 (a), they cost 14.4 and kept the line on three steps).
+    const fewest = await tanks(0.011, 0.5);
+    expect(fewest.runs).toEqual(['w-tank']);
+    expect(fewest.sol.machines?.get('w-tank')).toMatchObject({ option: { mteId: 121 }, added: 1 });
+    // At step charge 0 no block pays a charge: the least raw material on the three owned machines, none of them built.
+    const least = await tanks(0.011, 0);
+    expect(least.runs).toEqual(LONG);
+    for (const id of LONG) expect(least.sol.machines?.get(id), id).toMatchObject({ added: 0, newLoad: 0, ownedLoad: 1 });
+    // Rubber Log at 0.02 (28.8 + 7.2 = 36 > 25.2): the owned steps win at Fewest machines too, nothing built, and the
+    // build MIP's objective counts their three owned blocks (in σ: 1 + 3 × 3.6 / 14.4).
+    const dearer = await tanks(0.02, 0.5);
+    expect(dearer.runs).toEqual(LONG);
+    for (const id of LONG) expect(dearer.sol.machines?.get(id), id).toMatchObject({ added: 0, newLoad: 0, ownedLoad: 1 });
+    expect(dearer.sol.buildStats?.objective).toBeCloseTo(1.75, 4);
+  });
+
+  it('charges an owned machine two steps share once, as a sharing pool\'s new machines', async () => {
+    // Two presses at 0.1 runs a second, half an owned bender each (σ = 2 raw × 8,640 = 17,280, a new block 8,640, an owned
+    // one 4,320): on a network they share it and pay one owned block, 1 + 0.25 in σ; without sharing one step has it
+    // and the other a new bender (10 to build), 1 + 0.25 + 8,650 / 17,280.
+    const presses = { 'press-a': [opt(101, 1, 0.2, 10, 1)], 'press-b': [opt(101, 1, 0.2, 10, 1)] };
+    const demand: Array<[StuffKey, number]> = [['t:t1@0', 0.1], ['t:t2@0', 0.1]];
+    const shared = await solvedWithBuild(twoPressSpec(), COSTS, demand, { options: presses, share: true }, { stepCharge: 0.5 });
+    for (const id of ['press-a', 'press-b']) expect(shared.sol.machines?.get(id), id).toMatchObject({ added: 0, newLoad: 0, ownedLoad: 0.5 });
+    expect(shared.sol.buildStats?.objective).toBeCloseTo(1.25, 4);
+    const direct = await solvedWithBuild(twoPressSpec(), COSTS, demand, { options: presses }, { stepCharge: 0.5 });
+    const steps = [...(direct.sol.machines?.values() ?? [])];
+    expect(steps.filter((m) => m.ownedLoad === 1 && m.added === 0)).toHaveLength(1);
+    expect(steps.filter((m) => m.added === 1 && m.ownedLoad === 0)).toHaveLength(1);
+    expect(direct.sol.buildStats?.objective).toBeCloseTo(1.25 + 8650 / 17280, 4);
   });
 });

@@ -704,12 +704,13 @@ async function consolidated(
  * a line's copper ingots while the line bought the rest (plan 09 Task 8). A purchase the base does not use stays shut;
  * one it uses, when an LP without it is not dearer. Goods in key order; free goods (no raw cost) are left alone.
  *
- * In the build stage (`room`: plan 12, `laterRoom`) every LP stays within the machines the decision bought, and a step
- * that makes the good may also run on machines that cost nothing more — owned ones the decision leaves idle — taking
- * whole machines of them (`LaterRoom.widen`, then `trim` to what it uses): making the rest there costs no more raw
- * material, no machine to build and no machine block, so buying it beside the step is only the power or canonical
- * tie-break's choice. A new machine always costs a block's step charge (fix wave 2 (a)), so a tie that needs one is the
- * build MIP's to weigh. `locks` are the rows the later stages keep (none without `room`).
+ * In the build stage (`room`: plan 12, `laterRoom`) every LP stays within the machines the decision bought, and at step
+ * charge 0 a step that makes the good may also run on machines that cost nothing more — owned ones the decision leaves
+ * idle — taking whole machines of them (`LaterRoom.widen`, then `trim` to what it uses): making the rest there costs no
+ * more raw material, no machine to build and no machine block, so buying it beside the step is only the power or
+ * canonical tie-break's choice. A new machine always costs a block's step charge (fix wave 2 (a)), and with a step
+ * charge an owned one OWNED_STEP_SHARE of it (ledger 265), so a tie that needs another machine is the build MIP's to
+ * weigh. `locks` are the rows the later stages keep (none without `room`).
  */
 async function withoutTiedPurchases(
   lp: MainLp, start: Set<number>, from: LpResult, room?: LaterRoom,
