@@ -135,8 +135,11 @@ const TICKS_PER_SECOND = 20;
 const LABEL_CHAR_WIDTH = 6.5;
 const LABEL_PADDING = 8;
 const LABEL_HEIGHT = 14;
-/** An ELK port is a tiny box on the edge of its box, centred on its row, so ELK ends the arrow on that row. */
-const PORT_SIZE = 2;
+/**
+ * An ELK port is a tiny box on the edge of its box, centred on its row, so ELK ends the arrow on that row: on the port's
+ * outer face, `PORT_SIZE` outside the box (where FlowView's flange has its outer face too).
+ */
+export const PORT_SIZE = 2;
 /** Room around the boxes of an open supporting line; its title sits in the top band. */
 const GROUP_PADDING = '[top=36,left=12,bottom=12,right=12]';
 

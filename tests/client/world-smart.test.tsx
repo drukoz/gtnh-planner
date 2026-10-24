@@ -209,3 +209,21 @@ describe('SmartUploadPanel', () => {
       expect(html).toMatch(/<button[^>]*disabled=""[^>]*data-testid="upload-button"/);
   });
 });
+
+// The Machine GUI restyle (restyle plan Phase 1 Task 9): the panel's inline styles are classes of the stylesheet now.
+describe('the Machine GUI smart upload panel', () => {
+  it('draws the panel, its areas, its radius and its total with the stylesheet, and no inline style', () => {
+    const html = renderToStaticMarkup(<SmartUploadPanel reading={null} plan={PLAN} radius={8} busy={false} onRadius={() => {}} onUpload={() => {}} />);
+    expect(html).not.toContain('style=');
+    for (const markup of [
+      '<div class="smart-upload"><h3>Smart upload (recommended)</h3><p class="muted">', '<ul class="smart-areas"><li data-testid="smart-area">',
+      '<div class="row smart-radius"><input type="range" min="2" max="32" step="1" aria-label="Radius in chunks" value="8"/>',
+      '<p data-testid="smart-total" class="smart-total">To send: 5 chunks, 12 KB</p>',
+    ]) expect(html, markup).toContain(markup);
+    // nothing is added after an area's text, and the status lines are the same muted lines
+    expect(html).toContain('Nether around -40, 296 — player — 1 chunk</li>');
+    const reading = renderToStaticMarkup(<SmartUploadPanel reading={{ done: 3, total: 10 }} plan={null} radius={8} busy={false} onRadius={() => {}} onUpload={() => {}} />);
+    expect(reading).toContain('<p class="muted" role="status">Reading your world… 3 / 10 region files</p>');
+    expect(reading).not.toContain('style=');
+  });
+});

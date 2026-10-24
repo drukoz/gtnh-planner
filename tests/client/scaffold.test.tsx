@@ -33,6 +33,13 @@ describe('router and top pages', () => {
       TOP_PAGES.pop();
     }
   });
+  it('draws the pixel brand mark before the name, as decoration only', () => {
+    // the mark is a CSS background (styles.css `--brand-mark`): the span is empty and hidden from screen readers, so the
+    // brand reads as "GTNH Line Planner" and is still no link (flow-focus.spec.ts looks up the link named "Projects")
+    expect(renderToStaticMarkup(<TopNav current="/" />)).toContain(
+      '<span class="brand"><span class="brand-mark" aria-hidden="true"></span>GTNH Line Planner</span>',
+    );
+  });
 });
 
 describe('project tabs', () => {

@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { CONN_NODE_WIDTH, connectionsElk, connectionsFromElk, connectionsGraph, type ConnNode } from '../../src/client/connections/model.ts';
+import { setPipesPaused } from '../../src/client/state/pipes-paused.ts';
 import { ConnectionsShell, ConnectionsView, type ConnectionsShellProps } from '../../src/client/views/ConnectionsView.tsx';
 import { PROJECT_TABS, tabFromHash } from '../../src/client/views/project-tabs.ts';
+import { DYE_HEX } from '../../src/shared/layout/enderio.ts';
+import type { DyeColor, Layout } from '../../src/shared/types/layout.ts';
 import { connLayout, connPlan } from './connections-fixture.ts';
 
 const graph = connectionsGraph(connLayout('enderio'), connPlan, 'min');
@@ -137,5 +140,140 @@ describe('the Connections tab', () => {
   it('lays the line out before it draws it', () => {
     const project = { id: 'P1', settings: { mode: 'rate', per: 'min', logistics: 'enderio' }, placement: null, world: { scanId: null, baseId: null } } as never;
     expect(renderToStaticMarkup(<ConnectionsView project={project} plan={connPlan} send={() => {}} me="Ann" />)).toContain('Laying out the line…');
+  });
+});
+
+// The pipes (restyle plan Phase 1 Task 7, design spec §7): a link is a pipe, a casing with what it carries moving inside it toward
+// the box it enters, in its channel's colour or else in the colour of what carries it (the stylesheet's), at the speed of its rate
+// (`--pipe-dur`, pipe-motion.ts); a channel too dark to read on the dark casing gets a panel-grey one. A link that carries nothing
+// is a still line. pipes.spec.ts watches them move in a browser; these cases pin the markup.
+
+/** The line in `layout` with its boxes side by side and straight links, the way the cases above draw it. */
+function drawn(layout: Layout): string {
+  const g = connectionsGraph(layout, connPlan, 'min');
+  const e = connectionsElk(g);
+  const pic = connectionsFromElk(g, { ...e, width: 900, height: 300, children: e.children!.map((c, i) => ({ ...c, x: i * 300, y: 10 })), edges: [] });
+  return shell({ layout, graph: g, picture: pic });
+}
+
+/** The opening tag of the link `id` (as the markup escapes it) and what its group holds. */
+function edgeOf(html: string, id: string): { tag: string; inner: string } {
+  const literal = id.replace(/[.*+?^$()|[\]\\]/g, '\\$&');
+  const at = new RegExp(`(<g data-edge="${literal}"[^>]*>)(.*?)</g>`, 's').exec(html);
+  if (at === null) throw new Error(`the picture has no link ${id}`);
+  return { tag: at[1]!, inner: at[2]! };
+}
+
+/** The Red link from the Macerator to the Assembler, to copy with other channels, rates or goods. */
+const redLink = picture.edges.find((e) => e.id === 'flow:step:a>step:b:t:dust@0')!;
+const withEdges = (edges: typeof picture.edges): string => shell({ picture: { ...picture, edges } });
+
+/** A link's rim, casing and moving contents on the same points, the contents with `attributes` after them, then its label. */
+const pipeMarkup = (attributes: string): RegExp => new RegExp(
+  `^<polyline class="conn-edge-rim" points="([^"]+)"></polyline><polyline class="conn-edge-line" points="\\1"></polyline>` +
+  `<polyline class="conn-edge-flow" points="\\1"${attributes}></polyline><text class="conn-label" `,
+);
+
+describe('the Connections pipes', () => {
+  it('draws a link as a pipe whose contents move at its rate in its channel colour, the head on them', () => {
+    const red = edgeOf(shell(), 'flow:step:a&gt;step:b:t:dust@0');
+    // the group keeps what the tests and the e2e specs read first, the pipe's custom properties after them: 1 item/s, a second a cycle
+    expect(red.tag).toMatch(/^<g data-edge="flow:step:a&gt;step:b:t:dust@0" class="conn-edge conn-via-item_conduit" style="--pipe-dur:1s;/);
+    // Red is too dark to read on the dark casing, so its casing is panel grey
+    expect(red.tag).toContain('--pipe-casing:var(--panel)');
+    // under the casing the rim a hovered or picked link shows; the casing never has a stroke attribute (the stylesheet colours it),
+    // the contents carry the channel's colour and the arrow head
+    expect(red.inner).toMatch(pipeMarkup(' stroke="#b3312c" marker-end="url\\(#conn-arrow\\)"'));
+  });
+
+  it('gives the seven dyes too dark for the dark casing a panel-grey one, and every other dye the dark casing', () => {
+    const html = shell();
+    expect(edgeOf(html, 'flow:chest:2,64,0&gt;step:a:t:in@0').tag).toContain('--pipe-casing:var(--panel)');      // Blue
+    expect(edgeOf(html, 'flow:step:b&gt;chest:2,64,2:t:ingot@0').tag).not.toContain('--pipe-casing');            // Yellow
+    const dyes = Object.keys(DYE_HEX) as DyeColor[];
+    const every = withEdges(dyes.map((color) => ({ ...redLink, id: `dye:${color}`, color })));
+    for (const color of dyes) expect(edgeOf(every, `dye:${color}`).inner, color).toContain(`<polyline class="conn-edge-flow" points="260,52 300,52" stroke="${DYE_HEX[color]}"`);
+    const panelGrey = dyes.filter((color) => edgeOf(every, `dye:${color}`).tag.includes('--pipe-casing:var(--panel)'));
+    expect(panelGrey.sort()).toEqual(['black', 'blue', 'brown', 'gray', 'green', 'purple', 'red']);           // design spec §7
+  });
+
+  it('moves the good of a link without a channel in the colour of what carries it, from the stylesheet', () => {
+    const ae2 = drawn(connLayout('ae2'));
+    for (const id of ['flow:raw&gt;step:a:t:in@0', 'flow:step:a&gt;step:b:t:dust@0', 'flow:step:b&gt;out:t:ingot@0']) {
+      const { tag, inner } = edgeOf(ae2, id);
+      expect(tag, id).toBe(`<g data-edge="${id}" class="conn-edge conn-via-ae2" style="--pipe-dur:1s">`);
+      expect(inner, id).toMatch(pipeMarkup(' marker-end="url\\(#conn-arrow\\)"'));
+    }
+    expect(ae2).not.toContain('stroke="#');
+    // a flow carried by hand moves too: its dash-dot and its missing casing are the stylesheet's
+    const layout = { ...connLayout('routed'), buildSteps: [{ id: 'layout:hand:b:fill', order: 1, kind: 'logistics' as const,
+      text: 'Fill the Advanced Assembler by hand: 1× Titanium Dust a run (from the output chest)' }] };
+    const hand = edgeOf(drawn(layout), 'flow:step:a&gt;step:b:t:dust@0');
+    expect(hand.tag).toBe('<g data-edge="flow:step:a&gt;step:b:t:dust@0" class="conn-edge conn-via-hand" style="--pipe-dur:1s">');
+    expect(hand.inner).toMatch(pipeMarkup(' marker-end="url\\(#conn-arrow\\)"'));
+  });
+
+  it('draws a link that carries nothing as a still line: a hookup with the head on its casing, an interface on its machine with none', () => {
+    const ae2 = drawn(connLayout('ae2'));
+    const hookup = edgeOf(ae2, 'hookup:0&gt;raw');
+    expect(hookup.tag).toBe('<g data-edge="hookup:0&gt;raw" class="conn-edge conn-via-hookup">');                 // nothing moves: no speed
+    expect(hookup.inner).not.toContain('conn-edge-flow');
+    expect(hookup.inner).toMatch(/^<polyline class="conn-edge-rim" points="([^"]+)"><\/polyline><polyline class="conn-edge-line" points="\1" marker-end="url\(#conn-arrow\)"><\/polyline><text /);
+    for (const id of ['attach:iface:0,64,1&gt;step:a', 'attach:iface:1,64,1&gt;step:b']) {
+      const attached = edgeOf(ae2, id);
+      expect(attached.tag, id).toBe(`<g data-edge="${id}" class="conn-edge conn-via-attached">`);
+      expect(attached.inner, id).toMatch(/^<polyline class="conn-edge-rim" points="([^"]+)"><\/polyline><polyline class="conn-edge-line" points="\1"><\/polyline>$/);
+    }
+  });
+
+  it('moves a pipe faster the more it carries, a fluid by the bucket', () => {
+    const html = withEdges([
+      { ...redLink, id: 'trickle', color: null, perSecond: 0.5 }, { ...redLink, id: 'torrent', color: null, perSecond: 100 },
+      { ...redLink, id: 'water', color: null, key: 'fluid:water', perSecond: 100_000 },
+    ]);
+    expect(edgeOf(html, 'trickle').tag).toContain('style="--pipe-dur:1.08s"');
+    expect(edgeOf(html, 'torrent').tag).toContain('style="--pipe-dur:0.5s"');
+    expect(edgeOf(html, 'water').tag).toContain('style="--pipe-dur:0.5s"');                                    // 100 buckets a second, not 100,000 items
+  });
+
+  it('heads every pipe with one 8 x 8 arrow in the picture\'s units, its tip on the end of the pipe', () => {
+    const html = shell();
+    const markers = html.match(/<marker [^>]*>/g) ?? [];
+    expect(markers).toHaveLength(1);
+    for (const attribute of ['id="conn-arrow"', 'viewBox="0 0 10 10"', 'refX="10"', 'refY="5"', 'markerWidth="8"', 'markerHeight="8"', 'markerUnits="userSpaceOnUse"']) {
+      expect(markers[0], attribute).toContain(attribute);
+    }
+    // the tip is the point (10, 5) that refX and refY put on the end of the pipe; the stylesheet fills it in the colour of the pipe
+    expect(html).toContain('<path class="conn-arrow-head" d="M 0 0 L 10 5 L 0 10 z"></path></marker>');
+  });
+
+  it('moves every pipe of a picture of up to 200 links, and above that only the picked one', () => {
+    expect(shell()).toContain('<div class="connections" data-testid="connections" aria-busy="false" data-pipes="all">');
+    const links = Array.from({ length: 201 }, (_, i) => ({ ...redLink, id: `link:${i}` }));
+    expect(withEdges(links.slice(0, 200))).toContain('aria-busy="false" data-pipes="all">');
+    expect(withEdges(links)).toContain('aria-busy="false" data-pipes="lit">');
+  });
+
+  it('draws square boxes, the face rows\' part starting where the rect ends', () => {
+    const box = /<g data-node="step:a"[^>]*>(.*?)<\/g>/s.exec(shell())![1]!;
+    expect(box).toMatch(/<\/title><rect width="260" height="46" rx="0"><\/rect><path d="M 0 46 H 260 V 84 /);
+  });
+
+  // ruling R31 (WCAG 2.2.2): the pipes move for as long as the picture is shown, so a text button after Fit stops them all, the one
+  // setting of this browser that the Flow toolbar shares (state/pipes-paused.ts); paused, the area says so in `data-pipes`
+  it('offers a Pause pipes button after Fit, and stops every pipe while the pipes are paused', () => {
+    expect(shell()).toMatch(/<button type="button" class="small">Fit<\/button><button type="button" class="small" aria-pressed="false">Pause pipes<\/button><span class="muted small">/);
+    setPipesPaused(true);
+    try {
+      const html = shell();
+      expect(html).toContain('<button type="button" class="small">Fit</button><button type="button" class="small" aria-pressed="true">Play pipes</button>');
+      expect(html).toContain('<div class="connections" data-testid="connections" aria-busy="false" data-pipes="paused">');
+      // a pause stops the picked link of a huge picture too, the one pipe that moves there
+      const links = Array.from({ length: 201 }, (_, i) => ({ ...redLink, id: `link:${i}` }));
+      expect(withEdges(links)).toContain('aria-busy="false" data-pipes="paused">');
+    } finally {
+      setPipesPaused(false);
+    }
+    expect(shell()).toContain('aria-busy="false" data-pipes="all">');
   });
 });

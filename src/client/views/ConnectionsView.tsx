@@ -1,24 +1,31 @@
 // The Connections tab (plan 11 Task 8; spec §3.8c; architecture §7.2 and "EnderIO conduits, granted change requests
 // (add-on 11)"): the laid-out line as a schematic of boxes and links, from the pure model in ../connections/model.ts.
 // Every placed machine, chest, interface and hookup is a box whose rows name its configured faces (a conduit face with
-// its mode and channels under it), and every flow is a link drawn in the colour of what carries it, or of its EnderIO
-// channel. ELK lays the boxes out in its worker, and a drag moves the picture, the wheel zooms it and Fit shows all of it
-// (./pan-zoom.ts), as for the flow diagram; a click on a box, one of its face rows or a link shows its full configuration
-// in the side panel, and a picked link marks the face rows it leaves and enters. When the panel opens or closes beside
-// it, the picture is fitted again if it still is the fitted one, else keeps its middle (the review of 401d0ca).
+// its mode and channels under it), and every flow is a pipe whose contents move toward the box it enters, in the colour
+// of what carries it or of its EnderIO channel (design spec §7). ELK lays the boxes out in its worker, and a drag moves
+// the picture, the wheel zooms it and Fit shows all of it (./pan-zoom.ts), as for the flow diagram; a click on a box, one
+// of its face rows or a link shows its full configuration in the side panel, and a picked link marks the face rows it
+// leaves and enters. When the panel opens or closes beside it, the picture is fitted again if it still is the fitted one,
+// else keeps its middle (the review of 401d0ca).
 
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactElement } from 'react';
+import {
+  Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactElement,
+} from 'react';
+import { isFluidKey } from '../../shared/keys.ts';
 import { DYE_HEX } from '../../shared/layout/enderio.ts';
-import type { Layout } from '../../shared/types/layout.ts';
+import type { DyeColor, Layout } from '../../shared/types/layout.ts';
 import type { Plan } from '../../shared/types/plan.ts';
 import { messageOf } from '../api/client.ts';
+import { PipesButton } from '../components/PipesButton.tsx';
 import {
   CONN_LINE_HEIGHT, CONN_TITLE_HEIGHT, connectionsElk, connectionsFromElk, connectionsGraph, faceLines, faceModeText, hasLine, pickDetails,
   type ConnEdge, type ConnFace, type ConnGraph, type ConnLayout, type ConnPick, type ConnVia,
 } from '../connections/model.ts';
+import { usePipesPaused } from '../state/pipes-paused.ts';
 import { useLayout } from '../state/use-layout.ts';
 import { layoutFlow } from '../workers/elk.worker.ts';
 import { DRAG_THRESHOLD, fitView, resizeView, sameView, wheelFactor, zoomAround, type Size, type View } from './pan-zoom.ts';
+import { pipeAnimationMode, pipeSeconds } from './pipe-motion.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
 
 export interface ConnectionsShellProps {
@@ -51,8 +58,8 @@ const LEGEND: ReadonlyArray<readonly [Exclude<ConnVia, 'attached'>, string]> = [
 const TEXT_LEFT = 8;
 const TITLE_BASELINE = 19;
 const ROW_BASELINE = 11;
-/** The boxes' corner radius. */
-const CORNER = 6;
+/** The boxes' corner radius: none, as every Machine GUI box (design spec §4). */
+const CORNER = 0;
 /** A box's face rows start below a divider this far under its last line, and this far below the divider. */
 const DIVIDER_GAP = 2;
 /**
@@ -70,6 +77,11 @@ const PAD = 16;
 /** An arrow key moves the picture this far (px), the way it scrolls a page: → shows more of its right. */
 const KEY_PAN = 40;
 const PAN_KEYS: Readonly<Record<string, readonly [number, number]>> = { ArrowLeft: [1, 0], ArrowRight: [-1, 0], ArrowUp: [0, 1], ArrowDown: [0, -1] };
+/**
+ * The channel dyes too dark to read on a pipe's dark casing (under 3:1 on #1b1b1b; Red, the line's first channel, is
+ * 2.8:1): their pipes get a panel-grey casing instead, on which each reads at 3.6:1 or more (design spec §7).
+ */
+const DARK_DYES: ReadonlySet<DyeColor> = new Set(['black', 'brown', 'blue', 'gray', 'green', 'purple', 'red']);
 
 /** `text`, or its first `max` characters and '…' when it is longer, so the box shows where its text is cut. */
 function cut(text: string, max: number): string {
@@ -82,7 +94,7 @@ function facesTop(node: PlacedNode): number {
   return CONN_TITLE_HEIGHT + CONN_LINE_HEIGHT * node.lines.length + DIVIDER_GAP;
 }
 
-/** The face rows' part of a box, from `top` down to its rounded bottom corners. */
+/** The face rows' part of a box, from `top` down to its bottom corners (rounded by CORNER, square while it is 0). */
 function facesOutline(width: number, top: number, bottom: number): string {
   const r = CORNER;
   return `M 0 ${top} H ${width} V ${bottom - r} A ${r} ${r} 0 0 1 ${width - r} ${bottom} H ${r} A ${r} ${r} 0 0 1 0 ${bottom - r} Z`;
@@ -118,7 +130,7 @@ function NodeShape(props: { node: PlacedNode; pick: ConnPick | null; linked: Rea
   return (
     <g data-node={node.id} className={`conn-node conn-${node.kind}${picked === null ? '' : ' selected'}`} transform={`translate(${node.x} ${node.y})`}>
       <title>{[node.title, ...node.lines, ...node.faces.map(faceTip)].join('\n')}</title>
-      {/* the face rows' part, drawn over the rect's rounded lower corners, gives the box one outline */}
+      {/* the face rows' part, drawn over the rect's lower edge (and its corners, were they rounded), gives the box one outline */}
       <rect width={node.width} height={node.faces.length === 0 ? node.height : top + CORNER} rx={CORNER} onClick={pickBox} />
       {node.faces.length > 0 && <path d={facesOutline(node.width, top, node.height)} onClick={pickBox} />}
       <svg width={node.width} height={node.height}>
@@ -155,27 +167,37 @@ function labelPoint(points: ReadonlyArray<[number, number]>): [number, number] {
 }
 
 /**
- * One link: its line, in its channel's colour when it has one (else its class colours it by what carries it), with an
- * arrow into the box it goes to (none for an interface attached to what it serves), and its label; a click picks it.
+ * One link, drawn as a pipe (design spec §7): the rim a hovered or picked link shows round it, the casing, and what the
+ * link carries moving inside from the box it leaves toward the box it enters (the points run that way), at the speed of
+ * its rate (`--pipe-dur` from `pipeSeconds`), in its channel's colour when it has one (else its class colours it by what
+ * carries it), ending in the arrow head into that box; then its label. A channel too dark for the dark casing gets a
+ * panel-grey one (`--pipe-casing`). A link that carries nothing (an interface attached to what it serves, a hookup) is
+ * its casing alone, a thin still line, which ends in the arrow head but for an interface's. A click picks it.
  */
 function EdgeShape(props: { edge: PlacedEdge; selected: boolean; onPick(pick: ConnPick): void }): ReactElement | null {
   const { edge, selected, onPick } = props;
   if (edge.points.length < 2) return null;
   const [lx, ly] = edge.labelAt ?? labelPoint(edge.points);
+  const points = edge.points.map(([x, y]) => `${x},${y}`).join(' ');
+  const moving = edge.perSecond > 0;
+  const arrow = edge.via === 'attached' ? {} : { markerEnd: 'url(#conn-arrow)' };
+  const pipeVars = {
+    ...(moving ? { '--pipe-dur': `${pipeSeconds(edge.perSecond, edge.key !== null && isFluidKey(edge.key))}s` } : {}),
+    ...(edge.color !== null && DARK_DYES.has(edge.color) ? { '--pipe-casing': 'var(--panel)' } : {}),
+  } as CSSProperties;
   return (
-    <g data-edge={edge.id} className={`conn-edge conn-via-${edge.via}${selected ? ' selected' : ''}`} onClick={() => onPick({ edge: edge.id })}>
-      <polyline
-        points={edge.points.map(([x, y]) => `${x},${y}`).join(' ')}
-        {...(edge.color === null ? {} : { stroke: DYE_HEX[edge.color] })}
-        {...(edge.via === 'attached' ? {} : { markerEnd: 'url(#conn-arrow)' })}
-      />
+    <g data-edge={edge.id} className={`conn-edge conn-via-${edge.via}${selected ? ' selected' : ''}`} style={pipeVars} onClick={() => onPick({ edge: edge.id })}>
+      <polyline className="conn-edge-rim" points={points} />
+      <polyline className="conn-edge-line" points={points} {...(moving ? {} : arrow)} />
+      {moving && <polyline className="conn-edge-flow" points={points} {...(edge.color === null ? {} : { stroke: DYE_HEX[edge.color] })} {...arrow} />}
       {edge.label !== '' && <text className="conn-label" x={lx} y={ly} textAnchor="middle" dominantBaseline="central">{edge.label}</text>}
     </g>
   );
 }
 
 /**
- * The picture, under a Fit button, in an area as tall as the picture at its own size (at most 75vh) that moves and
+ * The picture, under a Fit button and the Pause pipes button (ruling R31: paused, the area's `data-pipes` is `paused` and no pipe
+ * moves), in an area as tall as the picture at its own size (at most 75vh) that moves and
  * zooms it as the flow diagram does: a drag moves it, from a box too once the pointer has moved DRAG_THRESHOLD px (a
  * plain click still picks, and the click that ends a drag picks nothing), the wheel or a pinch zooms around the
  * pointer, and the arrow keys move it while the area has focus. Fit, also when the picture first shows and whenever its
@@ -195,6 +217,8 @@ function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: bool
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [view, setView] = useState<View>({ x: PAD, y: PAD, k: 1 });
   const [dragging, setDragging] = useState(false);
+  /** The pipes stand still where they are: this browser's Pause pipes (ruling R31). */
+  const pipesPaused = usePipesPaused();
   const drag = useRef<{ pointer: number; sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null);
   const dragged = useRef(false);
   // The view is fitted again only when the boxes change, not when someone else's change only moves a rate.
@@ -297,9 +321,12 @@ function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: bool
     <>
       <div className="conn-toolbar row">
         <button type="button" className="small" onClick={() => fit()}>Fit</button>
+        <PipesButton paused={pipesPaused} />
         <span className="muted small">{HINT_TEXT}</span>
       </div>
-      <div className="connections" data-testid="connections" aria-busy={busy}>
+      {/* above PIPE_ANIMATION_LIMIT links only the picked link's pipe moves, so a huge line still pans smoothly (pipe-motion.ts);
+          while this browser has the pipes paused, none moves */}
+      <div className="connections" data-testid="connections" aria-busy={busy} data-pipes={pipesPaused ? 'paused' : pipeAnimationMode(picture.edges.length)}>
         <svg
           ref={svgRef}
           role="group"
@@ -313,8 +340,10 @@ function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: bool
           onPointerCancel={onPointerEnd}
           onKeyDown={onKeyDown}
         >
+          {/* the arrow head: a fixed 8 x 8 in the picture's units (in user space, so a 6 px casing does not scale it up), its
+              tip (10, 5) on the end of the pipe, on the box's edge; the stylesheet fills it in the colour of what it sits on */}
           <defs>
-            <marker id="conn-arrow" viewBox="0 0 10 10" refX={10} refY={5} markerWidth={9} markerHeight={9} markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+            <marker id="conn-arrow" viewBox="0 0 10 10" refX={10} refY={5} markerWidth={8} markerHeight={8} markerUnits="userSpaceOnUse" orient="auto-start-reverse">
               <path className="conn-arrow-head" d="M 0 0 L 10 5 L 0 10 z" />
             </marker>
           </defs>

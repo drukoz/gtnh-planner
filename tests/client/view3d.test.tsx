@@ -335,3 +335,46 @@ describe('3D tab: Show connections', () => {
     }
   });
 });
+
+// The Machine GUI restyle (restyle plan Phase 1 Task 9): the chrome's inline styles are classes of the stylesheet now. What stays inline is
+// the legend swatch's colour (the colour of its link in the scene) and the real canvas's cursor, which this shell is given a plain canvas for.
+describe('3D tab: the Machine GUI chrome', () => {
+  const warned: Layout = { ...sampleLayout, warnings: [{ code: 'no_scan', text: 'Pick a world scan and base on the Map tab to place the line' }] };
+  const legend = [{ rgb: [156, 204, 101] as [number, number, number], label: 'Shared GT item pipe' }, { rgb: [30, 136, 229] as [number, number, number], label: 'GT fluid pipe' }];
+
+  it('is drawn with the classes of the stylesheet and no inline style of its own', () => {
+    const html = shell({ layout: warned, hover: 'Basic Macerator — programmed circuit 2', info: { title: 'Input Bus (LV)', lines: ['programmed circuit 2'] } });
+    expect(html).not.toContain('style=');
+    for (const markup of [
+      '<div class="view3d" data-testid="view3d"><div class="view3d-body"><div class="view3d-main">',
+      '<div data-testid="view3d-canvas" class="view3d-viewport"><canvas></canvas><p data-testid="view3d-hover" class="view3d-hover">Basic Macerator — programmed circuit 2</p></div>',
+      '<div class="row view3d-controls"><label class="check"><input type="range" aria-label="Layer"',
+      '<span class="view3d-layer-text">All layers</span>',
+      '<p class="muted small">Drag to turn, right-drag to pan, scroll to zoom; click a block for its details.</p>',
+      '<div class="view3d-side"><section data-testid="view3d-info" aria-live="polite" class="view3d-box view3d-details"><h3>Input Bus (LV)</h3><ul class="small"><li>programmed circuit 2</li></ul></section>',
+      '<section aria-label="Warnings" class="view3d-box view3d-warnings"><h3>Warnings</h3><ul class="small"><li>Pick a world scan and base on the Map tab to place the line</li></ul></section>',
+      '<h4>Hookups</h4><ul class="small">', '<p class="small view3d-size">Size: 3×2×2',
+    ]) expect(html, markup).toContain(markup);
+    expect(html).toMatch(/<section data-testid="block-list" aria-labelledby="[^"]+" class="view3d-box"><h3 id="[^"]+">Blocks to place<\/h3><ul class="small">/);
+  });
+
+  it('keeps the toggles, the slider and the links note bare, so that what they look like comes from their parent', () => {
+    // no class on the toggle labels, the range, or the links note: the cases above pin their exact markup; this one that no class crept in
+    const html = shell({ showLinks: true, linksNote: '3 connections drawn', linksLegend: legend, focus: false, onFocus: () => {} });
+    expect(html.match(/<label class="check">/g)).toHaveLength(4);                     // the layer slider, Ghosts, Hookups, Show connections
+    expect(html.match(/<label class="check" title="[^"]+">/g)).toHaveLength(1);       // Focus
+    expect(html).toContain('<p data-testid="view3d-links" class="muted small">3 connections drawn</p>');
+    expect(html).toContain('<ul data-testid="view3d-links-legend" class="muted small view3d-legend">');
+    // the swatches' colours are all the inline style there is
+    expect(html.match(/style="/g)).toHaveLength(legend.length);
+    expect(html).toContain('<li><span aria-hidden="true" style="background:rgb(30, 136, 229)"></span>GT fluid pipe</li>');
+  });
+
+  it('puts no class of the view in the shell without WebGL, and nothing of the links or of Focus while they are off', () => {
+    const html = shell({ webgl: false });
+    for (const name of ['view3d-viewport', 'view3d-controls', 'view3d-main', 'view3d-hover']) expect(html, name).not.toContain(name);
+    // a class or a title of the shell never names what is off: the legend and Focus are only there while the links are
+    const off = shell({ showLinks: false, linksLegend: legend, focus: true, onFocus: () => {} });
+    expect([off.includes('Focus'), off.includes('view3d-links-legend')]).toEqual([false, false]);
+  });
+});

@@ -162,6 +162,21 @@ describe('FoundPanel', () => {
     expect(renderToStaticMarkup(<FoundPanel summary={s} notes={[]} onFocusNote={() => {}} />)).not.toContain('show on map');
   });
 
+  // The panel wears classes (restyle plan Phase 1 Task 8): a section, an item's label, a note's row; the selected note is marked
+  // on its li alone, and the only inline style left in the panel is each icon's own size and colour.
+  it('dresses the sections and rows with classes, and leaves no inline style but the icons\'', () => {
+    expect(html).toContain('<div class="found-panel" data-testid="found-panel"><section class="found-section"><h3>Machines</h3>');
+    expect(html).toContain('<summary><span class="found-item-label"><span class="item-icon');
+    expect(html).toContain('<span class="found-item-name">minecraft:iron_ingot@0</span>');
+    expect(html).toContain('<ul class="small map-list"><li data-key="minecraft:iron_ingot@0">');
+    expect(html).toContain('<ol class="small map-list"><li id="found-note-1" data-testid="note-1">'
+      + '<button type="button" class="small map-row-button"><span class="badge">N1</span> Build here <span class="muted">at 4 63 5 (Overworld)</span></button></li>');
+    expect(html).toContain('<li id="found-note-2" data-testid="note-2" aria-current="true"><button type="button" class="small map-row-button">');
+    const many = renderToStaticMarkup(<FoundPanel summary={summarize(manyItems(12, 7), '0:0:0')} notes={[]} onFocusNote={() => {}} />);
+    expect(many).toContain('<button type="button" class="small found-show-all">Show all 13 items</button>');
+    for (const markup of [html, many]) expect(markup.replace(/<span class="item-icon[^>]*>/g, '')).not.toContain('style=');
+  });
+
   it('shows the scan notes first, and no such section when the scan read everything', () => {
     const degraded = renderToStaticMarkup(<FoundPanel summary={summarize(DEGRADED, '0:0:0')} notes={[]} onFocusNote={() => {}} />);
     expect(degraded.indexOf('>Scan notes<')).toBeGreaterThan(-1);

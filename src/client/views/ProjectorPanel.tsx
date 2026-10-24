@@ -21,15 +21,8 @@ export interface ProjectorPanelViewProps {
   onToggle?(open: boolean): void;
 }
 
-// The summary looks like the other settings sections' titles; the body sets the text back.
-const PANEL_STYLE: CSSProperties = { marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)', fontSize: '0.95rem', fontWeight: 600 };
-const BODY_STYLE: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 10, fontSize: '1rem', fontWeight: 'normal' };
-// A token never fits the panel's width on one line; one click selects the whole command.
-const COMMAND_STYLE: CSSProperties = {
-  flex: 1, minWidth: 0, padding: '3px 8px', fontSize: '0.85rem', overflowWrap: 'anywhere', userSelect: 'all', WebkitUserSelect: 'all',
-  background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 6,
-};
-const LIST_STYLE: CSSProperties = { margin: 0, paddingLeft: 18 };
+// The panel, the form, a command (a token never fits the panel's width on one line, and one click selects the whole command) and the list
+// of commands are the stylesheet's (`.projector-*`, `.command-*`); what stays here is the hint's margin, which a test pins.
 const HINT_STYLE: CSSProperties = { marginTop: 4 };
 /** How long a copied command's button says "Copied". */
 const COPIED_MS = 2000;
@@ -40,8 +33,8 @@ function CommandLine(props: { text: string; copied: CopyOutcome | null; onCopy(t
   const outcome = copied?.text === text ? copied : null;
   return (
     <div className="command-line">
-      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-        <span style={COMMAND_STYLE}><code>{text}</code></span>
+      <div className="command-row">
+        <span className="command-text"><code>{text}</code></span>
         <button type="button" className="small" onClick={() => onCopy(text)}>{outcome?.copied === true ? 'Copied' : 'Copy'}</button>
       </div>
       {outcome?.copied === false && <p className="small" role="status" style={HINT_STYLE}>{COPY_HINT}</p>}
@@ -70,15 +63,15 @@ export function ProjectorPanelView(props: ProjectorPanelViewProps): ReactElement
   const { projectId, origin, now, tokens, created, label, busy, error, onLabel, onCreate, onRevoke, onCopy, onToggle } = props;
   const copied = props.copied ?? null;
   return (
-    <details className="settings-section" style={PANEL_STYLE} onToggle={(e) => onToggle?.(e.currentTarget.open)}>
+    <details className="settings-section projector-panel" onToggle={(e) => onToggle?.(e.currentTarget.open)}>
       <summary>In-game projector</summary>
-      <div style={BODY_STYLE}>
+      <div className="projector-body">
         <p className="muted small">
           See this line as ghost blocks in Minecraft and tick off build steps as you place them. Each player installs the GTNH
           Planner Projector mod in their own game (nothing goes on the server) and runs one command.
         </p>
-        <form className="row" style={{ alignItems: 'flex-end' }} onSubmit={(e) => { e.preventDefault(); onCreate(); }}>
-          <label className="field" style={{ flex: 1, minWidth: 0 }}>
+        <form className="row projector-form" onSubmit={(e) => { e.preventDefault(); onCreate(); }}>
+          <label className="field">
             <span>Who is it for?</span>
             <input value={label} placeholder="e.g. Steve" maxLength={TOKEN_LABEL_MAX} onChange={(e) => onLabel(e.currentTarget.value)} />
           </label>
@@ -102,7 +95,7 @@ export function ProjectorPanelView(props: ProjectorPanelViewProps): ReactElement
         </div>
         <div>
           <h4>Commands</h4>
-          <ul className="small" style={LIST_STYLE}>
+          <ul className="small projector-commands">
             {PROJECTOR_COMMANDS.map(([command, what]) => <li key={command}><code>{command}</code>{` — ${what}`}</li>)}
           </ul>
         </div>

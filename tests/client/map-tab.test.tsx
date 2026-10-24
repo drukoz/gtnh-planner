@@ -30,6 +30,23 @@ describe('MapTab (server-side render only: effects do not run)', () => {
     expect(html).not.toContain('Choose a world scan');
   });
 
+  // The picker and the status lines wear classes (restyle plan Phase 1 Task 8), not inline styles; the new line's panel under the
+  // picker sits in a wrapper of its own, so it stays under the picker and inside its width.
+  it('lays the picker out with classes, and keeps the new line under it', () => {
+    const html = renderToStaticMarkup(<MapTab project={projectWithWorld(null, null)} plan={null} send={() => {}} me="Ann" />);
+    expect(html).toContain('<div class="map-picker"><h2>Choose a world scan</h2><p class="muted">Pick a finished scan');
+    expect(html).toContain('<div class="row map-picker-actions"><button type="button" class="primary" disabled="">Use this base</button><a href="/world">Scan the world</a></div>');
+    expect(html).toContain('<div class="map-picker-line"><section class="line-panel" data-testid="line-panel"');
+    expect(html.indexOf('class="map-picker"')).toBeLessThan(html.indexOf('class="map-picker-line"'));
+    expect(html).not.toContain('style=');
+  });
+
+  it('shows the loading line in a status box with a class', () => {
+    const html = renderToStaticMarkup(<MapTab project={projectWithWorld('20261017T120000Z-000016', '0:0:0')} plan={null} send={() => {}} me="Ann" />);
+    expect(html).toContain('<div class="map-tab map-tab-status"><p class="muted">Loading the world scan…</p></div>');
+    expect(html).not.toContain('style=');
+  });
+
   it('is the first project tab', () => expect(PROJECT_TABS[0]).toMatchObject({ id: 'map', label: 'Map' }));
 
   it('says a scan without bases has no map, and that the plan then counts the whole world', () => {

@@ -171,3 +171,46 @@ describe('useSmartPlan: what the smart upload shows', () => {
     expect(smartView({ ...AT_8, found: { world: WORLD, hotspots: [...HOTSPOTS] } }, WORLD, 8).plan).toBeNull();   // found again: plan anew
   });
 });
+
+// The Machine GUI restyle (restyle plan Phase 1 Task 9): the page's inline styles are classes of the stylesheet now, and nothing inline is left.
+describe('the Machine GUI World page', () => {
+  it('draws the page, its three sections and its pickers with the stylesheet, the pickers neither wrapped nor reordered', () => {
+    const html = renderToStaticMarkup(<WorldPage />);
+    expect(html).not.toContain('style=');
+    expect(html).toContain('<main class="page world-page"><h1>World</h1>');
+    expect(html.match(/<section class="card world-section" aria-labelledby=/g)).toHaveLength(3);
+    expect(html).toMatch(/<div class="row world-pickers"><label class="field"><span>World folder \(recommended\)<\/span><input type="file" webkitdirectory="" multiple="" data-testid="world-folder-input"[^>]*\/><\/label><label class="field"><span>Or a zip of the world folder<\/span><input type="file" accept="\.zip" data-testid="world-zip-input"[^>]*\/><\/label><\/div>/);
+    expect(html).toContain('<footer class="muted">Scans never touch the live server');
+  });
+
+  it('sets the scans in a list of rows, each with a head, and the warnings of a finished one under it', () => {
+    const warned = scanItem('20261017T140000Z-000004', 'done', { progress: 1, message: 'Done: 1 base, 3 machines', warnings: ['1 boiler with unknown steam output'] });
+    const running = scanItem('20261017T130000Z-000003', 'running');
+    const html = renderToStaticMarkup(<ScanList scans={[warned, running]} error={null} onCancel={() => {}} />);
+    expect(html).not.toContain('style=');
+    expect(html).toContain('<ul class="cards scan-list">');
+    expect(html.match(/<li class="scan-row" data-testid="scan-row" data-state="(done|running)">/g)).toHaveLength(2);
+    expect(html.match(/<div class="row scan-row-head">/g)).toHaveLength(2);
+    expect(html).toContain('<div class="small scan-notes" data-testid="scan-row-notes"><strong>Scan notes</strong><ul><li>1 boiler with unknown steam output</li></ul></div>');
+    // the state's chip is the bare strong the page's tests read, and the bar takes its width from the stylesheet
+    expect(html).toContain('<strong>Running</strong>');
+    expect(html).toContain('<progress max="1" value="0.4" aria-label="Running, 40%"></progress>');
+  });
+
+  it('opens the whole-dimensions disclosure into a body, its dimensions in a fieldset of the settings', () => {
+    const html = renderToStaticMarkup(<WholeDimensions pick={PICK} chosen={[0]} upload={IDLE} onChoose={() => {}} onUpload={() => {}} onStop={() => {}} />);
+    expect(html).not.toContain('style=');
+    expect(html).toMatch(/^<details class="disclosure"><summary>Advanced: whole dimensions<\/summary><div class="disclosure-body"><p class="muted">Sends level\.dat/);
+    expect(html).toContain('<fieldset class="choice"><legend class="visually-hidden">Dimensions to upload</legend>');
+  });
+
+  it('shows an upload\'s progress and its end in a column of its own, and nothing before one', () => {
+    const progress = { done: 2, total: 5, bytesDone: 2 * 1_048_576, bytesTotal: 6 * 1_048_576, current: 'DIM-1/region/r.0.0.mca' };
+    for (const upload of [{ ...IDLE, running: true, progress }, { ...IDLE, error: 'too large' }, { ...IDLE, outcome: 'Sent 3 files.' }]) {
+      const html = renderToStaticMarkup(<UploadStatus upload={upload} onStop={() => {}} />);
+      expect(html).toMatch(/^<div class="upload-status">/);
+      expect(html).not.toContain('style=');
+    }
+    expect(renderToStaticMarkup(<UploadStatus upload={IDLE} onStop={() => {}} />)).toBe('');
+  });
+});

@@ -121,3 +121,31 @@ describe('projector panel container', () => {
     expect(fetch).toHaveBeenLastCalledWith('/api/projects/p%201/tokens/T1%2Fa', expect.objectContaining({ method: 'DELETE' }));
   });
 });
+
+// The Machine GUI restyle (restyle plan Phase 1 Task 9): the panel's inline styles are classes of the stylesheet now. The one that stays is
+// the copy hint's top margin (pinned above, byte for byte).
+describe('the Machine GUI projector panel', () => {
+  const created = { token: 'gpt_SECRET', tokenId: 'T1aaaaaaaa', info: tok() };
+
+  it('is a settings panel, with its body, form, command lines and command list drawn by the stylesheet and no inline style', () => {
+    const html = renderToStaticMarkup(<ProjectorPanelView {...props({ created, tokens: [tok()] })} />);
+    expect(html).not.toContain('style=');
+    expect(html).toMatch(/^<details class="settings-section projector-panel"><summary>In-game projector<\/summary><div class="projector-body"><p class="muted small">/);
+    for (const markup of [
+      '<form class="row projector-form"><label class="field"><span>Who is it for?</span><input ',
+      '<div class="command-line"><div class="command-row"><span class="command-text"><code>/planner load P1 gpt_SECRET</code></span><button type="button" class="small">Copy</button></div></div>',
+      '<ul class="small projector-commands"><li><code>/planner layer &lt;y|all&gt;</code> — ',
+    ]) expect(html, markup).toContain(markup);
+    // what the stylesheet reads stays unmarked: the summary, the headings, the alert and the code carry no class
+    expect(renderToStaticMarkup(<ProjectorPanelView {...props({ error: 'boom', tokens: [tok()] })} />)).toContain('<div class="error small"><p role="alert">boom</p></div>');
+    expect(html).toContain('<h4>Tokens</h4>');
+    expect(html).toContain('<h4>Commands</h4>');
+  });
+
+  it('keeps the hint\'s margin as the one inline style of the panel', () => {
+    const url = urlCommand('http://mc.example.org:8765');
+    const byHand = renderToStaticMarkup(<ProjectorPanelView {...props({ created, copied: { text: url, copied: false } })} />);
+    expect(byHand.match(/style="/g)).toHaveLength(1);
+    expect(byHand).toContain('<p class="small" role="status" style="margin-top:4px">');
+  });
+});

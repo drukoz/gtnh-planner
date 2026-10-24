@@ -23,8 +23,8 @@ const POLL_MS = 1000;
 function Section(props: { title: string; children: ReactNode }): ReactElement {
   const id = useId();
   return (
-    <section className="card" aria-labelledby={id} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      <h2 id={id} style={{ margin: 0 }}>{props.title}</h2>
+    <section className="card world-section" aria-labelledby={id}>
+      <h2 id={id}>{props.title}</h2>
       {props.children}
     </section>
   );
@@ -69,9 +69,9 @@ const STATE_TEXT: Record<WorldScanListItem['state'], string> = { queued: 'Queued
  */
 function ScanRowNotes(props: { notes: readonly string[] }): ReactElement {
   return (
-    <div className="small" data-testid="scan-row-notes">
+    <div className="small scan-notes" data-testid="scan-row-notes">
       <strong>Scan notes</strong>
-      <ul style={{ margin: '2px 0 0', paddingLeft: 18 }}>
+      <ul>
         {props.notes.map((note, i) => <li key={`${i}|${note}`}>{note}</li>)}
       </ul>
     </div>
@@ -84,14 +84,14 @@ function ScanRow(props: { scan: WorldScanListItem; onCancel(id: string): void })
   const state = STATE_TEXT[scan.state];
   const notes = scan.state === 'done' ? scan.warnings ?? [] : [];
   return (
-    <li className="card" data-testid="scan-row" data-state={scan.state} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <div className="row" style={{ gap: 12 }}>
+    <li className="scan-row" data-testid="scan-row" data-state={scan.state}>
+      <div className="row scan-row-head">
         {!scan.message.startsWith(state) && <strong>{state}</strong>}{/* "Queued" and "Done: …" say it already */}
         <span>{localTime(scan.startedAt)}</span>
         <span className="muted">{scan.levelName === null ? sourceText(scan.source) : `${scan.levelName} · ${sourceText(scan.source)}`}</span>
-        {active && <button type="button" className="small" style={{ marginLeft: 'auto' }} onClick={() => onCancel(scan.id)}>Cancel</button>}
+        {active && <button type="button" className="small" onClick={() => onCancel(scan.id)}>Cancel</button>}
       </div>
-      <progress max={1} value={scan.progress} aria-label={`${state}, ${Math.round(scan.progress * 100)}%`} style={{ width: '100%' }} />
+      <progress max={1} value={scan.progress} aria-label={`${state}, ${Math.round(scan.progress * 100)}%`} />
       <span className={scan.state === 'failed' ? 'error' : 'muted'}>{scan.message}</span>
       {notes.length > 0 && <ScanRowNotes notes={notes} />}
     </li>
@@ -108,7 +108,7 @@ export function ScanList(props: { scans: WorldScanListItem[] | null; error: stri
       ) : scans.length === 0 ? (
         <p className="muted">No scans yet. Scan the server folder or upload a world below.</p>
       ) : (
-        <ul className="cards" style={{ margin: 0 }}>
+        <ul className="cards scan-list">
           {scans.map((s) => <ScanRow key={s.id} scan={s} onCancel={onCancel} />)}
         </ul>
       )}
@@ -165,16 +165,16 @@ function ServerFolder(props: { onStarted(): void }): ReactElement {
     const [newest] = sources.backups;
     body = (
       <>
-        <div className="row" style={{ gap: 12 }}>
+        <div className="row">
           <button type="button" className="primary" disabled={starting} onClick={() => start({ kind: 'server' })}>Scan newest backup</button>
           <span className="muted">
             {newest === undefined ? 'No complete backup yet: the scan copies the world folder and reads the copy.' : `Reads ${newest}, the newest complete backup.`}
           </span>
         </div>
         {sources.backups.length > 0 && (
-          <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <ul className="backup-list">
             {sources.backups.map((file) => (   // newest first, as the server lists them
-              <li key={file} className="row" style={{ gap: 12 }}>
+              <li key={file} className="row">
                 <span>{file}</span>
                 <button type="button" className="small" disabled={starting} aria-label={`Scan ${file}`} onClick={() => start({ kind: 'backup', file })}>Scan</button>
               </li>
@@ -203,18 +203,18 @@ export function UploadStatus(props: { upload: UploadState; onStop(): void }): Re
   const { upload: { running, progress, error, outcome }, onStop } = props;
   if (!running && error === null && outcome === null) return null;
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+    <div className="upload-status">
       {running && (progress === null ? <span className="muted">Starting the upload…</span> : (
         <>
-          <progress max={progress.bytesTotal} value={progress.bytesDone} aria-label="Upload progress" style={{ width: '100%' }} />
+          <progress max={progress.bytesTotal} value={progress.bytesDone} aria-label="Upload progress" />
           <span className="muted">
             {`${progress.done} of ${plural(progress.total, 'file')}, ${formatSize(progress.bytesDone)} of ${formatSize(progress.bytesTotal)} — sending ${progress.current}`}
           </span>
         </>
       ))}
       {running && <div><button type="button" className="small" onClick={onStop}>Stop upload</button></div>}
-      {error !== null && <p className="error" role="alert" style={{ margin: 0 }}>{error}</p>}
-      {outcome !== null && <p role="status" style={{ margin: 0 }}>{outcome}</p>}
+      {error !== null && <p className="error" role="alert">{error}</p>}
+      {outcome !== null && <p role="status">{outcome}</p>}
     </div>
   );
 }
@@ -229,12 +229,12 @@ export function WholeDimensions(props: {
   const bytes = files.reduce((n, f) => n + f.size, 0);
   const toggle = (dim: number, on: boolean): void => onChoose(on ? [...chosen, dim].sort((a, b) => a - b) : chosen.filter((d) => d !== dim));
   return (
-    <details>
-      <summary style={{ cursor: 'pointer' }}>Advanced: whole dimensions</summary>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
-        <p className="muted" style={{ margin: 0 }}>Sends level.dat and every region file of the dimensions you tick, unchanged. Player files are never sent.</p>
+    <details className="disclosure">
+      <summary>Advanced: whole dimensions</summary>
+      <div className="disclosure-body">
+        <p className="muted">Sends level.dat and every region file of the dimensions you tick, unchanged. Player files are never sent.</p>
         {pick.dims.length === 0 ? <p className="muted">There are no region files next to level.dat.</p> : (
-          <fieldset style={{ border: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <fieldset className="choice">
             <legend className="visually-hidden">Dimensions to upload</legend>
             {pick.dims.map((d) => (
               <label key={d.dim} className="check">
@@ -244,7 +244,7 @@ export function WholeDimensions(props: {
             ))}
           </fieldset>
         )}
-        <p style={{ margin: 0 }}>{`Total: level.dat and ${plural(regionFiles, 'region file')}, ${formatSize(bytes)}`}</p>
+        <p>{`Total: level.dat and ${plural(regionFiles, 'region file')}, ${formatSize(bytes)}`}</p>
         <div>
           <button type="button" className="primary" disabled={upload.running || regionFiles === 0} data-testid="upload-dims-button" onClick={onUpload}>
             Upload whole dimensions and scan
@@ -516,11 +516,11 @@ function UploadSection(props: { onUploaded(): void }): ReactElement {
 
   return (
     <Section title="Upload a world">
-      <p className="muted" style={{ margin: 0 }}>
+      <p className="muted">
         For a world that is not in the server folder. Pick the world folder (the one holding level.dat) or a zip of it: this browser reads it and
         sends only what a scan needs. Your browser may say it is uploading the folder; nothing is sent until you press an upload button.
       </p>
-      <div className="row" style={{ gap: 24, alignItems: 'flex-end' }}>
+      <div className="row world-pickers">
         <label className="field">
           <span>World folder (recommended)</span>
           <input type="file" {...{ webkitdirectory: '' }} multiple data-testid="world-folder-input" disabled={upload.running} onChange={onFolder} />
@@ -530,13 +530,13 @@ function UploadSection(props: { onUploaded(): void }): ReactElement {
           <input type="file" accept=".zip" data-testid="world-zip-input" disabled={upload.running} onChange={onZip} />
         </label>
       </div>
-      {reading !== null && <p className="muted" role="status" style={{ margin: 0 }}>{reading}</p>}
-      {pickError !== null && <p className="error" role="alert" style={{ margin: 0 }}>{pickError}</p>}
+      {reading !== null && <p className="muted" role="status">{reading}</p>}
+      {pickError !== null && <p className="error" role="alert">{pickError}</p>}
       {picked !== null && (
         <>
-          <p style={{ margin: 0 }}>{pickText(picked)}</p>
+          <p>{pickText(picked)}</p>
           <SmartUploadPanel reading={smart.reading} plan={smart.plan} radius={radius} busy={upload.running} onRadius={setRadius} onUpload={uploadSmart} />
-          {smart.error !== null && <p className="error" role="alert" style={{ margin: 0 }}>{smart.error}</p>}
+          {smart.error !== null && <p className="error" role="alert">{smart.error}</p>}
           {via === 'smart' && <UploadStatus upload={upload} onStop={stop} />}
           <WholeDimensions
             pick={picked.pick}
@@ -565,11 +565,11 @@ export function WorldPage(): ReactElement {
     });
   };
   return (
-    <main className="page world-page" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <h1 style={{ margin: 0 }}>World</h1>
+    <main className="page world-page">
+      <h1>World</h1>
       <ServerFolder onStarted={reload} />
       <Section title="Scans">
-        {cancelError !== null && <p className="error" role="alert" style={{ margin: 0 }}>{cancelError}</p>}
+        {cancelError !== null && <p className="error" role="alert">{cancelError}</p>}
         <ScanList scans={scans} error={error} onCancel={cancel} />
       </Section>
       <UploadSection onUploaded={reload} />

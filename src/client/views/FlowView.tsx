@@ -1,29 +1,35 @@
 // The flow diagram (spec §3.9, fix spec §6.2): base materials on the left, the target on the right, one box per recipe
 // step (machine; tier, EU/t, machines, how busy) listing the goods it takes and makes as rows, an import stub beside each
 // step that takes a bought good, a red stub where nothing supplies an input, and supporting lines as groups that
-// collapse. Green boxes are machines the group owns, blue ones are new; a warning badge marks a step that uses a material
-// on the avoid list as nothing at the tier avoids it (spec §3.3). Hovering a row, a box or an arrow lights what it
-// connects (the flow focus); a click pins it, and a click on a box also opens its panel; Esc or a click on the empty
-// canvas clears it. Find item and the Show buttons light a good and centre the step that makes it. ELK lays the diagram
-// out in its own worker (web-stack §7); drag pans and the wheel zooms.
+// collapse. Green boxes are machines the group owns, grey ones are new; a warning badge marks a step that uses a material
+// on the avoid list as nothing at the tier avoids it (spec §3.3). Each arrow is a pipe whose contents move from the output
+// toward the input, ending on the flange of its port (design spec §7); Pause pipes stops them (ruling R31). Hovering a row,
+// a box or an arrow lights what it connects (the flow focus); a click pins it, and a click on a box also opens its panel;
+// Esc or a click on the empty canvas clears it. Find item and the Show buttons light a good and centre the step that makes
+// it. ELK lays the diagram out in its own worker (web-stack §7); drag pans and the wheel zooms.
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactElement } from 'react';
+import {
+  useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactElement,
+} from 'react';
 import { TIER_NAMES } from '../../shared/gt/tiers.ts';
-import type { StuffKey } from '../../shared/keys.ts';
+import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import type { PlanIndex } from '../../shared/plan/balance.ts';
 import type { Plan, PlanSettings } from '../../shared/types/plan.ts';
 import { messageOf } from '../api/client.ts';
 import { ItemIcon } from '../components/ItemIcon.tsx';
+import { PipesButton } from '../components/PipesButton.tsx';
 import {
   endHoverFlowFocus, getFlowFocus, hoverFlowFocus, revealFlowFocus, setFlowFocus, useFlowFocus, useFlowReveal, type Focus,
 } from '../state/flow-focus.ts';
+import { usePipesPaused } from '../state/pipes-paused.ts';
 import { layoutFlow } from '../workers/elk.worker.ts';
 import {
-  ICON_SPACE, NODE_LINE_HEIGHT, NODE_TITLE_HEIGHT, ROW_HEIGHT, TEXT_CHAR_WIDTH, TEXT_LEFT, TITLE_CHAR_WIDTH, TOGGLE_SPACE,
+  ICON_SPACE, NODE_LINE_HEIGHT, NODE_TITLE_HEIGHT, PORT_SIZE, ROW_HEIGHT, TEXT_CHAR_WIDTH, TEXT_LEFT, TITLE_CHAR_WIDTH, TOGGLE_SPACE,
   centreOn, clipText, collapsedLines, edgeTag, findableGoods, flowGraph, flowIssueLines, focusAnchor, focusSets, fromElk, lineNodeId,
   problemId, rowCentre, rowHasIcon, rowNameRoom, rowRate, rowsTop, toElk, useOnlyPatch,
   type FlowLayout, type FlowNode, type FlowRow, type FocusSets,
 } from './flow-model.ts';
+import { pipeAnimationMode, pipeSeconds } from './pipe-motion.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
 import { RawPanel, StepPanel } from './StepPanel.tsx';
 import { WhatChanged } from './WhatChanged.tsx';
@@ -49,7 +55,12 @@ const ICON_SIZE = 16;
 const ICON_TOP = 6;
 /** The avoid badge's background starts this far in from the box's sides. */
 const BADGE_LEFT = 4;
-const PORT_RADIUS = 3.5;
+/**
+ * A port is a pipe flange centred on the box's edge (design spec §7): as deep as ELK's port box on each side of that edge, so
+ * its outer face is where ELK ends an arrow and a pipe meets it at any zoom; taller than the 6 px pipe, so no notch shows.
+ */
+const FLANGE_DEPTH = 2 * PORT_SIZE;
+const FLANGE_HEIGHT = 10;
 /** The open/collapse button of a supporting line, and its room from the top right corner of its box. */
 const TOGGLE_SIZE = 20;
 const TOGGLE_MARGIN = 8;
@@ -121,15 +132,16 @@ function LineToggle(props: { lineKey: StuffKey; title: string; open: boolean; x:
       aria-label={`${open ? 'Collapse' : 'Open'} the ${title}`} transform={`translate(${x} ${y})`}
     >
       <title>{`${open ? 'Collapse' : 'Open'} the ${title}`}</title>
-      <rect width={TOGGLE_SIZE} height={TOGGLE_SIZE} rx={4} />
+      <rect width={TOGGLE_SIZE} height={TOGGLE_SIZE} />
       <text x={TOGGLE_SIZE / 2} y={15} textAnchor="middle">{open ? '−' : '+'}</text>
     </g>
   );
 }
 
 /**
- * One row of a box (fix spec §6.2): the good's icon (steps and lines), its name and rate, the port on the box's edge,
- * lit or dimmed under a focus. A button: hovering lights the good, a click or Enter pins it.
+ * One row of a box (fix spec §6.2): the good's icon (steps and lines), its name and rate, the port's flange on the box's
+ * edge (last, so it is painted over the end of the pipe), lit or dimmed under a focus. A button: hovering lights the good, a
+ * click or Enter pins it.
  */
 function FlowRowShape(props: { node: PlacedNode; row: FlowRow; index: number; sets: FocusSets | null }): ReactElement {
   const { node, row, index, sets } = props;
@@ -160,7 +172,7 @@ function FlowRowShape(props: { node: PlacedNode; row: FlowRow; index: number; se
           <tspan className="flow-row-rate">{rate}</tspan>
         </text>
       </svg>
-      <circle className="flow-port" cx={left ? 0 : node.width} cy={y} r={PORT_RADIUS} />
+      <rect className="flow-port" x={(left ? 0 : node.width) - FLANGE_DEPTH / 2} y={y - FLANGE_HEIGHT / 2} width={FLANGE_DEPTH} height={FLANGE_HEIGHT} />
     </g>
   );
 }
@@ -199,7 +211,7 @@ export function FlowNodeShape(props: { node: PlacedNode; selected?: boolean; set
       transform={`translate(${node.x} ${node.y})`}
     >
       <title>{[...described, ...node.rows.map((r) => rowWords(node, r))].join('\n')}</title>
-      <rect className="flow-node-box" width={node.width} height={node.height} rx={6} />
+      <rect className="flow-node-box" width={node.width} height={node.height} />
       <g className="flow-node-head" {...(opens ? { role: 'button', tabIndex: 0, 'aria-label': described.join(', '), 'aria-pressed': selected } : {})}>
         <rect className="flow-hit" width={node.width} height={head} />
         {icon !== null && (
@@ -215,7 +227,7 @@ export function FlowNodeShape(props: { node: PlacedNode; selected?: boolean; set
           ))}
           {badge !== undefined && (
             <g className="flow-avoid-badge" data-avoid-badge="" transform={`translate(${BADGE_LEFT} ${NODE_TITLE_HEIGHT + NODE_LINE_HEIGHT * node.lines.length})`}>
-              <rect width={node.width - 2 * BADGE_LEFT} height={NODE_LINE_HEIGHT - 2} rx={4} />
+              <rect width={node.width - 2 * BADGE_LEFT} height={NODE_LINE_HEIGHT - 2} />
               <text x={TEXT_LEFT - BADGE_LEFT} y={11}>{badge.text}</text>
             </g>
           )}
@@ -230,22 +242,31 @@ export function FlowNodeShape(props: { node: PlacedNode; selected?: boolean; set
 }
 
 /**
- * One arrow: a 10 px transparent path to hover and click, the line (red dashed from a stub of what is missing), its
- * tooltip "name · rate · From → To", and the rate as its label where a port has other arrows. A lit arrow writes
- * "name · rate" in its tag above the boxes instead (`EdgeTagShape`).
+ * One arrow, drawn as a pipe (design spec §7): a 10 px transparent path to hover and click, the casing with its head (a
+ * red casing with a white head from a stub of what is missing, ruling R34), the good moving inside it from the output
+ * toward the input (`fluid` or `item`, at the speed of its rate: `--pipe-dur` from `pipeSeconds`; nothing moves from a
+ * missing source), its tooltip "name · rate · From → To", and the rate as its label where a port has other arrows. Under a
+ * focus the group alone is lit (`hl`) or dimmed (`dim`). A lit arrow writes "name · rate" in its tag above the boxes
+ * instead (`EdgeTagShape`).
  */
-function FlowEdgeShape(props: { edge: PlacedEdge; lit: boolean | null; missing: boolean }): ReactElement | null {
+export function FlowEdgeShape(props: { edge: PlacedEdge; lit: boolean | null; missing: boolean }): ReactElement | null {
   const { edge, lit, missing } = props;
   if (edge.points.length < 2) return null;
   const d = edge.points.map(([x, y], i) => `${i === 0 ? 'M' : 'L'} ${x} ${y}`).join(' ');
-  const classes = ['flow-edge'];
+  const fluid = isFluidKey(edge.key);
+  const classes = ['flow-edge', fluid ? 'fluid' : 'item'];
   if (missing) classes.push('missing');
   if (lit !== null) classes.push(lit ? 'hl' : 'dim');
+  const arrow = lit === true ? 'flow-arrow-hl' : missing ? 'flow-arrow-missing' : fluid ? 'flow-arrow-fluid' : 'flow-arrow';
   return (
-    <g className={classes.join(' ')} data-edge-id={edge.id} data-key={edge.key}>
+    <g
+      className={classes.join(' ')} data-edge-id={edge.id} data-key={edge.key}
+      style={{ '--pipe-dur': `${pipeSeconds(edge.perSecond, fluid)}s` } as CSSProperties}
+    >
       <title>{edge.title}</title>
       <path className="flow-edge-hit" d={d} />
-      <path className="flow-edge-line" d={d} markerEnd={lit === true ? 'url(#flow-arrow-hl)' : 'url(#flow-arrow)'} />
+      <path className="flow-edge-line" d={d} markerEnd={`url(#${arrow})`} />
+      {!missing && <path className="flow-edge-flow" d={d} />}
       {lit !== true && edge.label !== undefined && edge.labelAt !== undefined && (
         <text className="flow-edge-label" x={edge.labelAt[0]} y={edge.labelAt[1]} textAnchor="middle" dominantBaseline="central">{edge.label}</text>
       )}
@@ -259,9 +280,36 @@ function EdgeTagShape(props: { edge: PlacedEdge }): ReactElement | null {
   if (tag === undefined) return null;
   return (
     <g className="flow-edge-tag" data-edge-tag={props.edge.id}>
-      <rect x={tag.x} y={tag.y} width={tag.width} height={tag.height} rx={4} />
+      <rect x={tag.x} y={tag.y} width={tag.width} height={tag.height} />
       <text x={tag.x + tag.width / 2} y={tag.y + tag.height / 2} textAnchor="middle" dominantBaseline="central">{tag.text}</text>
     </g>
+  );
+}
+
+/** Each arrow head, `[marker id, head class]`: one per colour, since CSS cannot pass an arrow's colour into its marker. */
+const ARROW_HEADS: Array<[string, string]> = [
+  ['flow-arrow', 'flow-arrow-head'], ['flow-arrow-fluid', 'flow-arrow-head-fluid'], ['flow-arrow-hl', 'flow-arrow-head-hl'],
+  ['flow-arrow-missing', 'flow-arrow-head-missing'],
+];
+
+/**
+ * What the arrows and boxes refer to: the arrow heads, a fixed 8 × 8 triangle in the diagram's units (in user space, so a
+ * 6 px casing does not scale it up) whose tip is the end of the pipe, on the port's flange; and the half-and-half fill of a
+ * partly owned box.
+ */
+export function FlowDefs(): ReactElement {
+  return (
+    <defs>
+      {ARROW_HEADS.map(([id, head]) => (
+        <marker key={id} id={id} viewBox="0 0 10 10" refX={10} refY={5} markerWidth={8} markerHeight={8} markerUnits="userSpaceOnUse" orient="auto">
+          <path className={head} d="M 0 0 L 10 5 L 0 10 z" />
+        </marker>
+      ))}
+      <linearGradient id="flow-partly" x1="0" x2="1" y1="0" y2="0">
+        <stop className="flow-stop-owned" offset="0.5" />
+        <stop className="flow-stop-new" offset="0.5" />
+      </linearGradient>
+    </defs>
   );
 }
 
@@ -270,7 +318,7 @@ function FlowGroupShape(props: { group: PlacedGroup; dim: boolean }): ReactEleme
   const { group, dim } = props;
   return (
     <g className={dim ? 'flow-group dim' : 'flow-group'} data-group-id={group.id} transform={`translate(${group.x} ${group.y})`}>
-      <rect className="flow-group-box" width={group.width} height={group.height} rx={10} />
+      <rect className="flow-group-box" width={group.width} height={group.height} />
       <svg width={Math.max(0, group.width - TOGGLE_SIZE - 2 * TOGGLE_MARGIN)} height={32}>
         <text className="flow-group-title" x={12} y={22}>{group.title}</text>
       </svg>
@@ -348,6 +396,8 @@ function FlowCanvas(props: {
   const [view, setView] = useState<View>({ zoom: 1, x: PAD, y: PAD });
   const drag = useRef<{ pointer: number; sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null);
   const dragged = useRef(false);
+  /** A drag past `DRAG_THRESHOLD` is under way: the pipes stand still while it is (`dragging` on the svg). */
+  const [dragging, setDragging] = useState(false);
   /** What the pointer last lit (`focusText`), so a move within one thing changes nothing. */
   const hovered = useRef('');
   /** A line just opened or closed: its box, to centre once the new layout has it. */
@@ -355,6 +405,8 @@ function FlowCanvas(props: {
   const focus = useFlowFocus();
   const reveal = useFlowReveal();
   const seenReveal = useRef(reveal);
+  /** The pipes stand still where they are: this browser's Pause pipes (ruling R31). */
+  const pipesPaused = usePipesPaused();
   const sets = useMemo(() => focusSets(layout, focus), [layout, focus]);
   const byId = useMemo(() => new Map(layout.nodes.map((n) => [n.id, n])), [layout]);
 
@@ -445,9 +497,15 @@ function FlowCanvas(props: {
     if (hit?.node !== undefined) onOpen(hit.node);
   };
 
+  /**
+   * After any press or release, by whatever pointer: `dragging` while the drag under way has passed the threshold, else not.
+   * A second pointer that takes the drag over, a release that is not the drag's, or a press that never moves would otherwise
+   * leave every pipe stopped until some later drag ended.
+   */
+  const settleDragging = (): void => setDragging(drag.current?.moved === true);
   const onPointerDown = (e: PointerEvent<SVGSVGElement>): void => {
-    if (e.button !== 0) return;
-    drag.current = { pointer: e.pointerId, sx: e.clientX, sy: e.clientY, ox: view.x, oy: view.y, moved: false };
+    if (e.button === 0) drag.current = { pointer: e.pointerId, sx: e.clientX, sy: e.clientY, ox: view.x, oy: view.y, moved: false };
+    settleDragging();
   };
   const onPointerMove = (e: PointerEvent<SVGSVGElement>): void => {
     const d = drag.current;
@@ -461,18 +519,22 @@ function FlowCanvas(props: {
       if (Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
       d.moved = true;
       e.currentTarget.setPointerCapture(e.pointerId);   // only now: a plain click must still reach the box under it
+      setDragging(true);
     }
     setView((v) => ({ ...v, x: d.ox + dx, y: d.oy + dy }));
   };
   const onPointerEnd = (e: PointerEvent<SVGSVGElement>): void => {
     const d = drag.current;
-    if (d === null || d.pointer !== e.pointerId) return;
-    drag.current = null;
-    if (!d.moved) return;
-    dragged.current = true;   // the click that ends a drag picks nothing
-    setTimeout(() => {
-      dragged.current = false;
-    }, 0);
+    if (d !== null && d.pointer === e.pointerId) {
+      drag.current = null;
+      if (d.moved) {
+        dragged.current = true;   // the click that ends a drag picks nothing
+        setTimeout(() => {
+          dragged.current = false;
+        }, 0);
+      }
+    }
+    settleDragging();
   };
   const onClick = (e: MouseEvent<SVGSVGElement>): void => {
     if (!dragged.current) activate(hitOf(e.target));
@@ -484,6 +546,13 @@ function FlowCanvas(props: {
     e.preventDefault();
     activate(hit);
   };
+  // `focusing` under a focus, `dragging` while the view is dragged, `many-edges` when only the lit pipes move (pipe-motion.ts),
+  // `pipes-paused` while this browser has the pipes paused
+  const canvasClasses = ['flow-canvas'];
+  if (sets !== null) canvasClasses.push('focusing');
+  if (dragging) canvasClasses.push('dragging');
+  if (pipeAnimationMode(layout.edges.length) === 'lit') canvasClasses.push('many-edges');
+  if (pipesPaused) canvasClasses.push('pipes-paused');
 
   return (
     <div className="flow-diagram">
@@ -491,6 +560,7 @@ function FlowCanvas(props: {
         <button type="button" className="small" aria-label="Zoom in" onClick={() => zoomCentre(ZOOM_STEP)}>+</button>
         <button type="button" className="small" aria-label="Zoom out" onClick={() => zoomCentre(1 / ZOOM_STEP)}>−</button>
         <button type="button" className="small" onClick={() => fit(MIN_ZOOM)}>Fit</button>
+        <PipesButton paused={pipesPaused} />
         <select
           className="flow-find small" aria-label="Find item" value=""
           onChange={(e) => {
@@ -509,7 +579,7 @@ function FlowCanvas(props: {
       </div>
       <svg
         ref={svgRef}
-        className={sets === null ? 'flow-canvas' : 'flow-canvas focusing'}
+        className={canvasClasses.join(' ')}
         role="group"
         aria-label="Flow diagram"
         style={{ height: `min(${Math.ceil(layout.height + 2 * PAD)}px, 75vh)` }}
@@ -521,18 +591,7 @@ function FlowCanvas(props: {
         onClick={onClick}
         onKeyDown={onKeyDown}
       >
-        <defs>
-          <marker id="flow-arrow" viewBox="0 0 10 10" refX={10} refY={5} markerWidth={7} markerHeight={7} orient="auto-start-reverse">
-            <path className="flow-arrow-head" d="M 0 0 L 10 5 L 0 10 z" />
-          </marker>
-          <marker id="flow-arrow-hl" viewBox="0 0 10 10" refX={10} refY={5} markerWidth={5} markerHeight={5} orient="auto-start-reverse">
-            <path className="flow-arrow-head-hl" d="M 0 0 L 10 5 L 0 10 z" />
-          </marker>
-          <linearGradient id="flow-partly" x1="0" x2="1" y1="0" y2="0">
-            <stop className="flow-stop-owned" offset="0.5" />
-            <stop className="flow-stop-new" offset="0.5" />
-          </linearGradient>
-        </defs>
+        <FlowDefs />
         <g transform={`translate(${view.x} ${view.y}) scale(${view.zoom})`}>
           {layout.groups.map((group) => (
             <FlowGroupShape key={group.id} group={group} dim={sets !== null && !group.nodes.some((id) => sets.nodes.has(id))} />

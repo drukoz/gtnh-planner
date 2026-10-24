@@ -353,6 +353,10 @@ describe('MapTooltip', () => {
     expect(html).toContain('role="tooltip"');
     expect(html).toContain('id="map-tip"');
     expect(html).toContain('pointer-events:none');
+    // the NEI look is the stylesheet's (`.map-tooltip`); the inline style keeps only what the map and the pointer need
+    expect(html).toContain('class="map-tooltip"');
+    expect(html).not.toMatch(/class="[^"]*\bsmall\b/);
+    expect(html).toMatch(/style="position:absolute;pointer-events:none"/);
     const at = ['Basic Macerator', '3 64 3', BASE_LINE].map((line) => html.indexOf(`>${line}<`));
     expect(at.every((i) => i > 0)).toBe(true);
     expect([...at].sort((a, b) => a - b)).toEqual(at);
