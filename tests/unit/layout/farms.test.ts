@@ -360,6 +360,31 @@ describe('farms in the layout', () => {
     expect(stepDepths(plan).get('s1')).toBe(0);
   });
 
+  it('starts the power hookup from a tap whose way out does not run through a farm\'s area', async () => {
+    // the merge of add-on 17 into main (architecture §11 entries 52 and 45 (7)): the power tap is taken only when a route leaves it
+    // as the hookup then searches it, and the hookup keeps out of the columns of an area kept for a farm, so the search that picks
+    // the tap keeps out of them too. The nearest tap is walled in on every face but one, which opens into the farm's area; the
+    // network's other tap, further off, has a clear way to the line.
+    const pack = farmPack();
+    const area = (await layoutLine(pack, tgsPlan(), scan(), placedAt(), ground())).reserved![0]!;
+    const walled: Vec3 = [area.pos[0] + 3, 64, area.pos[2] - 1];                   // north of the area: its south face is in the area's columns
+    const open: Vec3 = [9, 64, 32];
+    const network = makeScan({
+      base: BASE, power: [{ voltageTier: 2, average: 1000, loadEUt: 100, storedEU: 10_000_000, taps: [walled, open].map((pos) => ({ pos, freeAmps: 8, cableAmps: 8 })) }],
+    });
+    const [x, y, z] = walled;
+    const walls: Vec3[] = [[x - 1, y, z], [x + 1, y, z], [x, y + 1, z], [x, y - 1, z], [x, y, z - 1]];
+    const cell = (pos: Vec3, block: ReturnType<typeof GT> | typeof STONE) => ({ from: pos, to: pos, block });
+    const layout = await layoutLine(pack, tgsPlan(), network, placedAt(),
+      ground([...walls.map((p) => cell(p, STONE)), cell(walled, GT(IDS.ANNEALED_2X)), cell(open, GT(IDS.ANNEALED_2X))]));
+    expect(layout.reserved).toEqual([area]);
+    const hookup = layout.hookups.find((h) => h.kind === 'power')!;
+    expect(layout.warnings.map((w) => w.code)).not.toContain('no_path');
+    expect(hookup.found).toBe(true);
+    expect(hookup.from.pos).toEqual(open);
+    expect(hookup.path.filter((p) => inColumns(p, area.pos, area.size))).toEqual([]);
+  });
+
   it('lays out a crop farm watered from a placed pump, and routes nothing into its area', async () => {
     // ruling R20: the pump's water for the farm stays unrouted, as flows into steps the layout never places are (the farm's
     // build step says to keep water in its tank); a power hookup from a tap beyond the farm goes round its area

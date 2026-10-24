@@ -14,6 +14,7 @@ import { recipeId } from '../../pack/recipe-id.ts';
 import { TREE_FARM_MAP } from '../../pack/recipes.ts';
 import { canonicalRank, type CandidateGraph } from '../candidates.ts';
 import type { PriceTable } from '../costs.ts';
+import { wholeMachines } from '../round.ts';
 import { cropHarvest, managerSide, type CropHarvest } from './crops.ts';
 import { CROP_MANAGER_MAP } from './pack.ts';
 import type { FarmSetup } from './setup.ts';
@@ -29,8 +30,6 @@ const WATER: StuffKey = 'fluid:water';
 /** Fluid ingredient slots start here (architecture §11.4). */
 const FLUID_SLOT = 100;
 const TICKS_PER_SECOND = 20;
-/** A stick count this little above a whole number stays whole. */
-const TINY = 1e-9;
 
 /** The mode of each offered tool, by its item. */
 const TOOL_MODES: ReadonlyMap<StuffKey, TgsMode> = new Map(TGS_MODE_ORDER.map((mode) => [TGS_TOOLS[mode].key, mode]));
@@ -334,7 +333,7 @@ export function unpricedPlantings(farm: FarmRecipeMeta, cost: (key: StuffKey) =>
 
 /** The crop sticks a crop farm step tends: its runs a second × seconds a run (one harvest of one stick a run), whole. */
 export function sticksOf(runsPerSecond: number, r: Recipe): number {
-  return Math.max(0, Math.ceil((runsPerSecond * r.durationTicks) / TICKS_PER_SECOND - TINY));
+  return Math.max(0, wholeMachines((runsPerSecond * r.durationTicks) / TICKS_PER_SECOND));
 }
 
 /** "a", "a and b": the tool names of a tree farm's input bus. */

@@ -9,7 +9,7 @@ import { describe, it, expect } from 'vitest';
 import type { StuffKey } from '../../../src/shared/keys.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import { defaultFarmSettings, type FarmSettings } from '../../../src/shared/types/farm.ts';
-import type { Pack } from '../../../src/shared/types/pack.ts';
+import type { Pack, Recipe } from '../../../src/shared/types/pack.ts';
 import type { Plan, PlanContext, PlanSettings } from '../../../src/shared/types/plan.ts';
 import { recipeId } from '../../../src/server/pack/recipe-id.ts';
 import { planBasis } from '../../../src/server/planner/basis.ts';
@@ -22,9 +22,10 @@ import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
 import { linePricing, type LinePricing } from '../../../src/server/planner/pricing.ts';
 import { CROP_MANAGER_MAP, exportPack, withFarms } from '../../../src/server/planner/farms/pack.ts';
 import {
-  CROP_STICKS, FARM_SOURCES_PER_GOOD, PLAIN_SOILS, cropSoil, farmRecipes, plantingKeys, plantingParts, soilItem, soilsToPrice, wantedGoods,
+  CROP_STICKS, FARM_SOURCES_PER_GOOD, PLAIN_SOILS, cropSoil, farmRecipes, plantingKeys, plantingParts, soilItem, soilsToPrice, sticksOf, wantedGoods,
   type SoilSource,
 } from '../../../src/server/planner/farms/recipes.ts';
+import { sig9 } from '../../../src/server/planner/round.ts';
 import { farmSetup, type FarmSetup } from '../../../src/server/planner/farms/setup.ts';
 import { opt, solvedWithBuild, twoFreeSpec } from '../../helpers/build-fixtures.ts';
 import { FIELD_FLAX, RESIN_CANE, RUBBER_BONSAI, ORE_FERN, farmPack, farmSpec } from '../../helpers/farm-fixtures.ts';
@@ -509,6 +510,17 @@ describe('farms in the line', () => {
     expect(plan.warnings.filter((w) => INTEGRITY.includes(w.code))).toEqual([]);
   });
 
+  it('counts crop sticks as it counts machines: an exactly full Crop Manager keeps its 121 sticks', () => {
+    // 121 sticks under one Crop Manager at 1792 ticks a run run 2420/1792 times a second, a rate the plan keeps to 9 significant digits
+    // (sig9: 1.35044643), which reads 121.00000013 sticks. A machine count takes that slack of 9 digits as the whole number it is
+    // (wholeMachines, plan 12 Task 8), and so do the crop sticks: 121, not 122 for a Crop Manager that tends 121
+    const cycle = { durationTicks: 1792 } as Recipe;
+    expect(sticksOf(sig9(2420 / 1792), cycle)).toBe(121);
+    // a load really above a whole number still takes one more stick, and no runs take none
+    expect(sticksOf(sig9(2421 / 1792), cycle)).toBe(122);
+    expect(sticksOf(0, cycle)).toBe(0);
+  });
+
   it("keeps a new tree farm's sapling in its controller", async () => {
     // HV, cheapest, nothing owned: the line builds a Tree Growth Simulator, whose sapling does stay in the machine
     const plan = await planLine(farmPack(), settingsOf(RESIN_BOARD, { tier: 3, objective: 'cheapest', farms: farmsWith({ kinds: ['tgs'] }) }), emptyContext());
@@ -516,6 +528,20 @@ describe('farms in the line', () => {
     expect(farmStep(plan, 'tgs')).toMatchObject({ count: 1, owned: 0 });
     expect(plan.buildList.filter((l) => l.group === 'one-off').map((l) => [l.key, l.amount, l.why])).toEqual([['t:rubber_sapling@0', 1, 'Rubber Sapling farm']]);
     expect(plan.buildSteps.find((b) => b.id === 'craft:t:rubber_sapling@0')?.text).toBe('Make 1× Rubber Sapling (stays in the machine)');
+  });
+
+  it("words a new farm with the project's own farm settings, not the defaults", async () => {
+    // a farm step on machines the line builds (none owned: no world, no machines we have) is described with the project's farm
+    // settings, not the defaults: Bronze tools, not the default Steel, on a new Tree Growth Simulator. machines.ts's other call of
+    // describeStep, the one the merge of add-on 17 into main resolved, serves only hand-crafted and pseudo-machine steps, never a farm
+    const farms = farmsWith({ kinds: ['tgs'], tgs: { ...defaultFarmSettings().tgs, toolMaterial: 'Bronze' } });
+    expect(defaultFarmSettings().tgs.toolMaterial).toBe('Steel');
+    const plan = await planLine(farmPack(), settingsOf(RESIN_BOARD, { tier: 3, objective: 'cheapest', farms }), emptyContext());
+    expect(plan.status).toBe('ok');
+    const tgs = farmStep(plan, 'tgs');
+    expect([tgs.count, tgs.owned]).toEqual([1, 0]);
+    expect(tgs.farm?.text).toContain('(Bronze) in an input bus');
+    expect(tgs.farm?.text).not.toContain('(Steel)');
   });
 
   it('weighs what a crop farm plants in the build MIP, in rate mode only', async () => {

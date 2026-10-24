@@ -17,7 +17,7 @@ import { keptOptions, virtualKey, type CandidateGraph, type LpRecipe } from './c
 import { farmMachineKind, farmOc, farmStepOf } from './farms/recipes.ts';
 import { feedsEither, poolKey, sharesMachines, sharingKey, type BuildModel, type MachineOption, type OwnedPools } from './machine-options.ts';
 import { ownedPools, recipeCircuit } from './owned.ts';
-import { sig9 } from './round.ts';
+import { sig9, wholeMachines, wholeSlack } from './round.ts';
 import type { Solution } from './solve.ts';
 
 export interface MachinePick {
@@ -29,27 +29,10 @@ const TICKS_PER_SECOND = 20;
 /** Ruling R5: one craft per second per crafter, whatever the recipe's duration (0 for crafting recipes, §11.4). */
 const CRAFT_TICKS = 20;
 /**
- * Amounts up to this count as zero, and a machine count this little above a whole number stays whole (prior-art §3.4
- * step 6: a count that is exactly 2 stays 2).
+ * Amounts up to this count as zero. A machine count a little above a whole number stays whole by `wholeMachines`
+ * (round.ts), which the crop sticks of a farm step count by too.
  */
 const TINY = 1e-9;
-/**
- * The share of a load its rate's 9 significant digits can move it by (plan 12 Task 8): a step's runs per second keep 9
- * significant digits (`sig9`), up to 5e-9 of their value off, so a set of machines exactly full can read a little above a
- * whole number — 10 machines' worth at 1/6 a run a second reads 10.00000002 — and stays that whole number, as an exact 2
- * stays 2 (`TINY`).
- */
-const SIG9_SLACK = 1e-8;
-
-/** How little above a whole number `load` machines' worth may read and still stay that number: `TINY` or its 9 digits' slack. */
-function wholeSlack(load: number): number {
-  return Math.max(TINY, SIG9_SLACK * Math.abs(load));
-}
-
-/** The whole machines `load` machines' worth needs (`wholeSlack`); 0 for none. */
-function wholeMachines(load: number): number {
-  return Math.ceil(load - wholeSlack(load));
-}
 const HAND_CRAFT_RUNS_PER_SECOND = 1;
 /**
  * A flow below this share of what its producer makes of the good is dropped (fix spec D3): relative, so a line keeps
