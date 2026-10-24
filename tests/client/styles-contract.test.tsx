@@ -1,7 +1,7 @@
-// The Machine GUI stylesheet contract (restyle plan Phase 1 Task 1, design spec §3–§5 and §7a): the tokens, the one
-// theme, the motion foundation, the font imports and the first rules every later rule builds on. The client project runs
-// in node, so the stylesheet is read as text and cut into blocks by the scanner of css-blocks.ts, which the contrast test
-// shares. Later tasks add cases here and reuse `css`, `rootTokens` and `ruleBody`.
+// The Machine GUI stylesheet contract (restyle plan Phase 1 Task 1, design spec §3–§5 and §7a): the tokens, the light and
+// the dark look (Phase 2 spec §4), the motion foundation, the font imports and the first rules every later rule builds on.
+// The client project runs in node, so the stylesheet is read as text and cut into blocks by the scanner of css-blocks.ts,
+// which the contrast test shares. Later tasks add cases here and reuse `css`, `rootTokens` and `ruleBody`.
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
@@ -71,9 +71,53 @@ const TOKENS: [string, string][] = [
   ['--conn-box', 'var(--panel)'], ['--conn-face', '#e0e0e0'], ['--conn-face-link', '#1d3b9a'],
   ['--conn-chest', '#f0d870'], ['--conn-chest-line', '#6b5500'], ['--conn-interface', '#cbbbe0'], ['--conn-interface-line', '#5a3a8a'],
   ['--conn-source', '#d8cfa8'], ['--conn-source-line', '#6b5a20'], ['--conn-hookup', '#a8a8a8'], ['--conn-hookup-line', 'var(--outline)'],
+  // Phase 2 Task 1b (Phase 2 spec §4.3): the tokens of the features to come, at their light values, so the dark look can give each its
+  // own value now and the later tasks never edit the dark blocks; and the Theme button's three icons (§4.8)
+  ['--screen-lo', '#555555'], ['--thumb', 'var(--btn)'], ['--flow-chip', 'var(--screen)'], ['--flow-busy-track', 'var(--screen)'],
+  ['--flow-busy', '#55ff55'], ['--flow-busy-high', '#ffaa00'], ['--stack-ink', '#ffffff'], ['--stack-shadow', '#3f3f3f'],
+  ['--bevel-inset', 'inset 2px 2px 0 var(--panel-lo), inset -2px -2px 0 var(--panel-hi)'],
+  ['--bevel-screen', 'inset 2px 2px 0 #000000, inset -2px -2px 0 var(--screen-lo)'],
+  ['--energy', '#e03c3c'], ['--progress-base', '#555555'], ['--skeleton', '#b5b5b5'], ['--skeleton-well', '#4a4a4a'],
+  ['--sheen', 'rgb(255 255 255 / 0.1)'], ['--tip-mod', '#8080ff'],
+  ['--icon-auto', `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8' shape-rendering='crispEdges'%3E%3Cpath fill='%23c6c6c6' d='M0 0h4v8H0z'/%3E%3Cpath fill='%232a2a2a' d='M4 0h4v8H4z'/%3E%3C/svg%3E")`],
+  ['--icon-moon', `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8' shape-rendering='crispEdges'%3E%3Cpath fill='%23c8d4ff' d='M2 0h3v1H2zM1 1h2v1H1zM0 2h2v3H0zM1 5h2v1H1zM6 5h1v1H6zM2 6h4v1H2z'/%3E%3C/svg%3E")`],
+  ['--icon-sun', `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8' shape-rendering='crispEdges'%3E%3Cpath fill='%23ffd84a' d='M3 0h1v7H3zM0 3h7v1H0zM2 2h3v3H2zM1 1h1v1H1zM5 1h1v1H5zM1 5h1v1H1zM5 5h1v1H5z'/%3E%3C/svg%3E")`],
   ['--gap', '12px'],
   ['color-scheme', 'dark'], ['scrollbar-color', 'var(--btn) var(--screen)'],
   ['font-family', 'var(--font-ui)'], ['line-height', '1.45'], ['color', 'var(--ink)'], ['background', 'var(--page)'],
+];
+
+/** The dark look's block (Phase 2 spec §4.2): chosen with the Theme button. */
+const DARK = ":root[data-theme='dark']";
+/** The OS's dark setting, which Auto follows with no JS ... */
+const AUTO_DARK = '@media (prefers-color-scheme: dark)';
+/** ... unless Light is chosen. */
+const AUTO_ROOT = ":root:not([data-theme='light'])";
+
+// The dark look (Phase 2 spec §4.3), row for row: the dark value of every token a look changes. The rest is the same in both looks: the
+// edge, the accent, the screens' inks, the chat and tooltip colours, the tiers, the motion and the fonts, and every token built on others
+// (the bevels, `--flow-chip`), which follow the values they read.
+const DARK_TOKENS: [string, string][] = [
+  ['--page', '#141414'], ['--page-check', '#181818'], ['--bar', '#0b0b0b'], ['--bar-line', '#2a2a2a'],
+  ['--panel', '#2a2a2a'], ['--panel-hi', '#474747'], ['--panel-lo', '#0d0d0d'],
+  ['--slot', '#1d1d1d'], ['--slot-hi', '#4a4a4a'], ['--slot-lo', '#070707'],
+  ['--well', '#1a1a1a'], ['--grid', '#242424'], ['--screen', '#0b0b0b'], ['--screen-lo', '#2f2f2f'],
+  ['--text', '#e6e6e6'], ['--text-muted', '#a8a8a8'], ['--title', '#ffffff'], ['--link', '#8fb4ff'],
+  ['--ink', '#e6e6e6'], ['--ink-muted', '#a8a8a8'],
+  ['--btn', '#3c3c3c'], ['--btn-hi', '#5a5a5a'], ['--btn-lo', '#1e1e1e'], ['--btn-off', '#262626'], ['--btn-off-ink', '#8a8a8a'],
+  ['--tab-face', '#1f1f1f'], ['--tab-face-hi', '#2f2f2f'], ['--tab-ink', '#c8c8c8'], ['--tab-face-hover', '#2a2a2a'],
+  ['--rule', '#474747'], ['--veil', 'rgb(0 0 0 / 0.3)'], ['--press', 'rgb(255 255 255 / 0.08)'],
+  ['--bevel-tick', 'inset 2px 2px 0 #000000, inset -2px -2px 0 #8b8b8b'], ['--thumb', '#7a7a7a'],
+  ['--panel-error', '#ff6b6b'], ['--panel-ok', '#55ff55'], ['--panel-warn', '#ffaa00'], ['--panel-focus', '#ffff55'],
+  ['--flow-owned', '#22402a'], ['--flow-owned-line', '#55c06a'], ['--flow-new', '#303030'], ['--flow-raw', '#303030'],
+  ['--flow-out', '#3b3313'], ['--flow-out-line', '#d9b43a'], ['--flow-import', '#34301e'], ['--flow-import-line', '#a89a5c'],
+  ['--flow-missing', '#3e1e1e'], ['--flow-missing-line', '#ff5555'], ['--flow-sink', '#242424'], ['--flow-sink-line', '#6e6e6e'],
+  ['--flow-line', '#2d2740'], ['--flow-line-line', '#a58bd6'], ['--flow-error', '#ff8080'], ['--flow-warn', '#ffb84d'],
+  ['--flow-edge', '#050505'], ['--casing', '#050505'], ['--flow-hover', 'rgb(0 0 0 / 0.3)'], ['--flow-focus', '#ffffff'], ['--flange', '#6e6e6e'],
+  ['--conn-box', '#303030'], ['--conn-face', '#3a3a3a'], ['--conn-face-link', '#8fb4ff'],
+  ['--conn-chest', '#3b3313'], ['--conn-chest-line', '#d9b43a'], ['--conn-interface', '#2d2740'], ['--conn-interface-line', '#a58bd6'],
+  ['--conn-source', '#34301e'], ['--conn-source-line', '#a89a5c'], ['--conn-hookup', '#242424'], ['--conn-hookup-line', '#6e6e6e'],
+  ['--stack-shadow', '#000000'], ['--skeleton', '#383838'], ['--skeleton-well', '#2a2a2a'],
 ];
 
 const KEYFRAMES: Record<string, string[]> = {
@@ -100,8 +144,27 @@ describe('the Machine GUI stylesheet', () => {
     for (const [name, value] of TOKENS) expect(tokens.get(name), name).toBe(value);
   });
 
-  it('has one theme', () => {
-    expect(css.includes('prefers-color-scheme'), 'styles.css mentions prefers-color-scheme').toBe(false);
+  it('has a light and a dark look; Auto follows the OS', () => {
+    // one dark list, written twice (spec §4.2): for the chosen Dark, and for Auto with the OS in dark, unless Light is chosen
+    const dark = blocks.filter((b) => !b.nested && b.prelude === DARK);
+    const auto = blocks.filter((b) => b.prelude === AUTO_DARK);
+    expect(dark, DARK).toHaveLength(1);
+    expect(auto, AUTO_DARK).toHaveLength(1);
+    expect(scan(auto[0]!.inner, true, []).map((b) => b.prelude), `the rules inside ${AUTO_DARK}`).toEqual([AUTO_ROOT]);
+    const list = declarations(dark[0]!.inner);
+    expect(list, 'the two lists are the same, in the same order').toEqual(inQuery(AUTO_DARK, AUTO_ROOT));
+    // it redefines tokens the light look has, and none of those that are the same in both looks
+    const light = rootTokens();
+    for (const [name] of list) {
+      expect(light.has(name), `${name} is a token of the light look`).toBe(true);
+      expect(name).not.toMatch(/^--(dur|ease|font|gap|tier|accent|item|fluid|chat|tip)/);
+    }
+    expect(list.map(([name]) => name).sort()).toEqual(DARK_TOKENS.map(([name]) => name).sort());
+    const values = new Map(list);
+    for (const [name, value] of DARK_TOKENS) expect(values.get(name), name).toBe(value);
+    // nothing else asks for the OS's look or for the choice
+    expect(blocks.filter((b) => /prefers-color-scheme|data-theme/.test(b.prelude)).map((b) => b.prelude)).toEqual([DARK, AUTO_DARK, AUTO_ROOT]);
+    // both looks keep a dark page and black fields, so the browser's own popups, autofill and scroll bars stay dark (spec §4.1)
     const html = read('index.html');
     expect(html).toContain('<meta name="color-scheme" content="dark" />');
     expect(html).toContain('<meta name="theme-color" content="#1a1a1a" />');
@@ -349,7 +412,8 @@ describe('the Machine GUI controls', () => {
     for (const thumb of ['::-webkit-slider-thumb', '::-moz-range-thumb']) {
       expectDeclared([
         [`:where(input[type=range])${thumb}`, 'width', '12px'], [`:where(input[type=range])${thumb}`, 'height', '20px'],
-        [`:where(input[type=range])${thumb}`, 'background', 'var(--btn)'], [`:where(input[type=range])${thumb}`, 'border', '2px solid var(--outline)'],
+        // the button's face, through a token of its own (TOKENS: `--thumb` is `var(--btn)`), which the dark look lightens (P2-D24)
+        [`:where(input[type=range])${thumb}`, 'background', 'var(--thumb)'], [`:where(input[type=range])${thumb}`, 'border', '2px solid var(--outline)'],
         [`:where(input[type=range])${thumb}`, 'box-shadow', 'var(--bevel-btn)'], [`:where(input[type=range])${thumb}`, 'border-radius', '0'],
       ]);
     }
@@ -2334,6 +2398,67 @@ describe('the Machine GUI planning modes, farms and the Compare card', () => {
     for (const block of rules) {
       expect(block.inner, block.prelude).not.toMatch(OLD_ALIASES);
       expect(declared(block.prelude, 'border-radius') ?? '0', block.prelude).toBe('0');
+    }
+  });
+});
+
+// Phase 2 (Phase 2 spec §4.11, D1): every rule Phase 2 adds reads tokens, so it is drawn in both looks, and writes a colour as a literal only
+// when that colour is the same in both. The Theme button (§4.8) sits at the end of the top bar, its pixel icon a background its choice picks;
+// a switch cross-fades the whole page over `--dur-slow` (§4.9), which the reduced-motion block sets to 0 ms (and the JS starts no fade then).
+
+/** The selectors of every rule Phase 2 adds; each later task appends its own. */
+const PHASE2_RULES: string[] = [
+  '.theme-button', '.theme-button::before', ".theme-button[data-choice='dark']::before", ".theme-button[data-choice='light']::before",
+  '::view-transition-old(root)', '::view-transition-new(root)',
+];
+/** The colour literals a Phase 2 rule may write: each is the same in both looks (spec §4.4). */
+const SAME_IN_BOTH = ['#ffffff', '#000000', '#aaaaaa', '#100010', '#ffff55', 'rgb(0 0 0 / 0.4)'];
+/** What a Phase 2 transition may animate (spec §3.3): the compositor's two, a hover's face, and the height of what folds. */
+const MAY_MOVE = /^(transform|opacity|background-color|block-size|content-visibility)$/;
+
+describe('the Machine GUI Phase 2: the dark look and the Theme button', () => {
+  it('draws the look switch with its pixel icon, and cross-fades a switch over --dur-slow', () => {
+    expectDeclared([
+      ['.theme-button', 'margin-left', 'auto'], ['.theme-button', 'display', 'inline-flex'], ['.theme-button', 'align-items', 'center'],
+      ['.theme-button', 'gap', '8px'], ['.theme-button', 'padding', '0 12px'],
+      ['.theme-button::before', 'content', "''"], ['.theme-button::before', 'flex', 'none'], ['.theme-button::before', 'width', '16px'],
+      ['.theme-button::before', 'height', '16px'], ['.theme-button::before', 'background', 'var(--icon-auto) center / contain no-repeat'],
+      [".theme-button[data-choice='dark']::before", 'background-image', 'var(--icon-moon)'],
+      [".theme-button[data-choice='light']::before", 'background-image', 'var(--icon-sun)'],
+    ]);
+    // each icon is an 8 x 8 pixel SVG drawn at 2x: a sun, a moon, and for Auto a square half light and half dark
+    const ICONS: [string, string[]][] = [
+      ['--icon-sun', ["fill='#ffd84a' d='M3 0h1v7H3zM0 3h7v1H0zM2 2h3v3H2zM1 1h1v1H1zM5 1h1v1H5zM1 5h1v1H1zM5 5h1v1H5z'"]],
+      ['--icon-moon', ["fill='#c8d4ff' d='M2 0h3v1H2zM1 1h2v1H1zM0 2h2v3H0zM1 5h2v1H1zM6 5h1v1H6zM2 6h4v1H2z'"]],
+      ['--icon-auto', ["fill='#c6c6c6' d='M0 0h4v8H0z'", "fill='#2a2a2a' d='M4 0h4v8H4z'"]],
+    ];
+    for (const [name, paths] of ICONS) {
+      const icon = decodeURIComponent(rootTokens().get(name) ?? '');
+      for (const part of ['data:image/svg+xml', "viewBox='0 0 8 8'", "shape-rendering='crispEdges'", ...paths]) expect(icon, `${name}: ${part}`).toContain(part);
+    }
+    // the cross-fade: two rules, not spec §4.9's one list, whose pseudo-element half the minifier once dropped (R28; plan ruling
+    // view-transition-split)
+    for (const half of ['::view-transition-old(root)', '::view-transition-new(root)']) {
+      expectDeclared([[half, 'animation-duration', 'var(--dur-slow)'], [half, 'animation-timing-function', 'var(--ease-out)']]);
+    }
+    expect(position('::view-transition-old(root), ::view-transition-new(root)')).toBe(-1);
+    // the button's face is the base button's 36px, so the top bar stays one row of the same height
+    expectDeclared([['.top-nav', 'min-height', '50px']]);
+    // the slider's thumb takes a token of its own, which the dark look lightens: the button's face would be 1.30:1 on a dark panel
+    expectDeclared([
+      [':where(input[type=range])::-webkit-slider-thumb', 'background', 'var(--thumb)'],
+      [':where(input[type=range])::-moz-range-thumb', 'background', 'var(--thumb)'],
+    ]);
+  });
+
+  it('builds every Phase 2 rule on tokens, and transitions only what may move', () => {
+    for (const selector of PHASE2_RULES) {
+      const body = ruleBody(selector);
+      for (const literal of body.match(/#[0-9a-f]+\b|rgba?\([^)]*\)|hsla?\([^)]*\)/gi) ?? []) expect(SAME_IN_BOTH, `${selector}: ${literal}`).toContain(literal);
+      for (const [name, value] of declarations(body)) {
+        if (name !== 'transition') continue;
+        for (const part of selectorList(value)) expect(part.split(' ')[0], `${selector} { transition: ${part} }`).toMatch(MAY_MOVE);
+      }
     }
   });
 });

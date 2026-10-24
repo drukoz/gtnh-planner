@@ -1,7 +1,9 @@
 /*
- * The Machine GUI look (design spec §4): light-grey bevelled panels on a dark stone page, one theme whatever the browser or
- * the OS prefers. The palette, bevels, motion and fonts are tokens on :root. Text colour depends on the surface it sits
- * on, so each surface sets its own ink (--ink and its siblings) and the generic classes below read those.
+ * The Machine GUI look (design spec §4): bevelled panels on a stone page, in two looks (Phase 2 spec §4): Light, the light-grey panels
+ * on a dark stone, and Dark, dark-steel panels on a darker stone. Auto, the default, follows the OS with no JS: with no data-theme on
+ * <html>, the dark look applies while the OS is in dark. The Theme button sets data-theme="dark" or "light", which outranks the OS.
+ * The palette, bevels, motion and fonts are tokens on :root, and the dark look redefines the palette's. Text colour depends on the
+ * surface it sits on, so each surface sets its own ink (--ink and its siblings) and the generic classes below read those.
  */
 :root {
   --page: #2b2b2b; --page-check: #262626; --bar: #1a1a1a;
@@ -37,9 +39,74 @@
   --tab-face: #8b8b8b; --tab-face-hi: #a8a8a8; --tab-ink: #1b1b1b; --tab-face-hover: #9a9a9a;
   --rule: #8b8b8b; --veil: rgb(255 255 255 / 0.35); --press: rgb(0 0 0 / 0.15); --field-edge: #a0a0a0; --bevel-tick: var(--bevel-slot);
   --panel-error: #aa0000; --panel-ok: #1e5a1e; --panel-warn: #6a4000; --panel-focus: #1b1b1b;
+  /* The features of Phase 2, at their light values (Phase 2 spec §4.3), so the dark look can give each its own now: a readout tile's
+     lower bevel, the slider's thumb, the Flow chips and busy band, a stack's count and its shadow, the bevels of a recessed slot area and
+     of a readout tile, the energy bar, the progress arrow's base on a chat box, the skeletons and their sheen, the tooltip's mod line;
+     then the Theme button's 8 x 8 icons (§4.8, URL-encoded as the brand mark is): Auto's square half light and half dark, a moon, a sun. */
+  --screen-lo: #555555; --thumb: var(--btn); --flow-chip: var(--screen); --flow-busy-track: var(--screen);
+  --flow-busy: #55ff55; --flow-busy-high: #ffaa00; --stack-ink: #ffffff; --stack-shadow: #3f3f3f;
+  --bevel-inset: inset 2px 2px 0 var(--panel-lo), inset -2px -2px 0 var(--panel-hi);
+  --bevel-screen: inset 2px 2px 0 #000000, inset -2px -2px 0 var(--screen-lo);
+  --energy: #e03c3c; --progress-base: #555555; --skeleton: #b5b5b5; --skeleton-well: #4a4a4a; --sheen: rgb(255 255 255 / 0.1);
+  --tip-mod: #8080ff;
+  --icon-auto: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8' shape-rendering='crispEdges'%3E%3Cpath fill='%23c6c6c6' d='M0 0h4v8H0z'/%3E%3Cpath fill='%232a2a2a' d='M4 0h4v8H4z'/%3E%3C/svg%3E");
+  --icon-moon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8' shape-rendering='crispEdges'%3E%3Cpath fill='%23c8d4ff' d='M2 0h3v1H2zM1 1h2v1H1zM0 2h2v3H0zM1 5h2v1H1zM6 5h1v1H6zM2 6h4v1H2z'/%3E%3C/svg%3E");
+  --icon-sun: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8' shape-rendering='crispEdges'%3E%3Cpath fill='%23ffd84a' d='M3 0h1v7H3zM0 3h7v1H0zM2 2h3v3H2zM1 1h1v1H1zM5 1h1v1H5zM1 5h1v1H1zM5 5h1v1H5z'/%3E%3C/svg%3E");
   --gap: 12px;
   color-scheme: dark; scrollbar-color: var(--btn) var(--screen);
   font-family: var(--font-ui); line-height: 1.45; color: var(--ink); background: var(--page);
+}
+
+/* The dark look (Phase 2 §4): chosen, or Auto with the OS in dark. The two lists are identical (a contract case checks it).
+   They redefine tokens of the light look, and none of those the same in both looks (the edge, the accent, the screens' inks, the chat
+   and tooltip colours, the tiers, motion and fonts); a token built on others (the bevels, --flow-chip) follows the values it reads. Both
+   selectors are (0,2,0), so they outrank every :root block, the Flow one further down included. The base's own surfaces read these
+   tokens too (add-on 17's Compare card, Plan for and farm fields, the Make picker's Settings readout and its drawer), and follow. */
+:root[data-theme='dark'] {
+  --page: #141414; --page-check: #181818; --bar: #0b0b0b; --bar-line: #2a2a2a;
+  --panel: #2a2a2a; --panel-hi: #474747; --panel-lo: #0d0d0d;
+  --slot: #1d1d1d; --slot-hi: #4a4a4a; --slot-lo: #070707;
+  --well: #1a1a1a; --grid: #242424; --screen: #0b0b0b; --screen-lo: #2f2f2f;
+  --text: #e6e6e6; --text-muted: #a8a8a8; --title: #ffffff; --link: #8fb4ff;
+  --ink: #e6e6e6; --ink-muted: #a8a8a8;
+  --btn: #3c3c3c; --btn-hi: #5a5a5a; --btn-lo: #1e1e1e; --btn-off: #262626; --btn-off-ink: #8a8a8a;
+  --tab-face: #1f1f1f; --tab-face-hi: #2f2f2f; --tab-ink: #c8c8c8; --tab-face-hover: #2a2a2a;
+  --rule: #474747; --veil: rgb(0 0 0 / 0.3); --press: rgb(255 255 255 / 0.08);
+  --bevel-tick: inset 2px 2px 0 #000000, inset -2px -2px 0 #8b8b8b; --thumb: #7a7a7a;
+  --panel-error: #ff6b6b; --panel-ok: #55ff55; --panel-warn: #ffaa00; --panel-focus: #ffff55;
+  --flow-owned: #22402a; --flow-owned-line: #55c06a; --flow-new: #303030; --flow-raw: #303030;
+  --flow-out: #3b3313; --flow-out-line: #d9b43a; --flow-import: #34301e; --flow-import-line: #a89a5c;
+  --flow-missing: #3e1e1e; --flow-missing-line: #ff5555; --flow-sink: #242424; --flow-sink-line: #6e6e6e;
+  --flow-line: #2d2740; --flow-line-line: #a58bd6; --flow-error: #ff8080; --flow-warn: #ffb84d;
+  --flow-edge: #050505; --casing: #050505; --flow-hover: rgb(0 0 0 / 0.3); --flow-focus: #ffffff; --flange: #6e6e6e;
+  --conn-box: #303030; --conn-face: #3a3a3a; --conn-face-link: #8fb4ff;
+  --conn-chest: #3b3313; --conn-chest-line: #d9b43a; --conn-interface: #2d2740; --conn-interface-line: #a58bd6;
+  --conn-source: #34301e; --conn-source-line: #a89a5c; --conn-hookup: #242424; --conn-hookup-line: #6e6e6e;
+  --stack-shadow: #000000; --skeleton: #383838; --skeleton-well: #2a2a2a;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --page: #141414; --page-check: #181818; --bar: #0b0b0b; --bar-line: #2a2a2a;
+    --panel: #2a2a2a; --panel-hi: #474747; --panel-lo: #0d0d0d;
+    --slot: #1d1d1d; --slot-hi: #4a4a4a; --slot-lo: #070707;
+    --well: #1a1a1a; --grid: #242424; --screen: #0b0b0b; --screen-lo: #2f2f2f;
+    --text: #e6e6e6; --text-muted: #a8a8a8; --title: #ffffff; --link: #8fb4ff;
+    --ink: #e6e6e6; --ink-muted: #a8a8a8;
+    --btn: #3c3c3c; --btn-hi: #5a5a5a; --btn-lo: #1e1e1e; --btn-off: #262626; --btn-off-ink: #8a8a8a;
+    --tab-face: #1f1f1f; --tab-face-hi: #2f2f2f; --tab-ink: #c8c8c8; --tab-face-hover: #2a2a2a;
+    --rule: #474747; --veil: rgb(0 0 0 / 0.3); --press: rgb(255 255 255 / 0.08);
+    --bevel-tick: inset 2px 2px 0 #000000, inset -2px -2px 0 #8b8b8b; --thumb: #7a7a7a;
+    --panel-error: #ff6b6b; --panel-ok: #55ff55; --panel-warn: #ffaa00; --panel-focus: #ffff55;
+    --flow-owned: #22402a; --flow-owned-line: #55c06a; --flow-new: #303030; --flow-raw: #303030;
+    --flow-out: #3b3313; --flow-out-line: #d9b43a; --flow-import: #34301e; --flow-import-line: #a89a5c;
+    --flow-missing: #3e1e1e; --flow-missing-line: #ff5555; --flow-sink: #242424; --flow-sink-line: #6e6e6e;
+    --flow-line: #2d2740; --flow-line-line: #a58bd6; --flow-error: #ff8080; --flow-warn: #ffb84d;
+    --flow-edge: #050505; --casing: #050505; --flow-hover: rgb(0 0 0 / 0.3); --flow-focus: #ffffff; --flange: #6e6e6e;
+    --conn-box: #303030; --conn-face: #3a3a3a; --conn-face-link: #8fb4ff;
+    --conn-chest: #3b3313; --conn-chest-line: #d9b43a; --conn-interface: #2d2740; --conn-interface-line: #a58bd6;
+    --conn-source: #34301e; --conn-source-line: #a89a5c; --conn-hookup: #242424; --conn-hookup-line: #6e6e6e;
+    --stack-shadow: #000000; --skeleton: #383838; --skeleton-well: #2a2a2a;
+  }
 }
 
 * { box-sizing: border-box; }
@@ -197,11 +264,11 @@ textarea { resize: vertical; width: 100%; }
 :where(input[type=range])::-moz-range-track { height: 6px; background: var(--screen); box-shadow: var(--bevel-well); border-radius: 0; }
 :where(input[type=range])::-webkit-slider-thumb {
   appearance: none; box-sizing: border-box; width: 12px; height: 20px; margin-top: -7px;
-  background: var(--btn); border: 2px solid var(--outline); border-radius: 0; box-shadow: var(--bevel-btn);
+  background: var(--thumb); border: 2px solid var(--outline); border-radius: 0; box-shadow: var(--bevel-btn);
 }
 :where(input[type=range])::-moz-range-thumb {
   box-sizing: border-box; width: 12px; height: 20px;
-  background: var(--btn); border: 2px solid var(--outline); border-radius: 0; box-shadow: var(--bevel-btn);
+  background: var(--thumb); border: 2px solid var(--outline); border-radius: 0; box-shadow: var(--bevel-btn);
 }
 :where(input[type=range]:disabled) { opacity: 0.5; cursor: default; }
 
@@ -291,6 +358,17 @@ details.settings-section > summary .muted { color: inherit; }
 .top-nav nav a:hover { background: var(--btn-hover); }
 .top-nav nav a:active { transform: translateY(1px); box-shadow: var(--bevel-btn-down); }
 .top-nav nav a[aria-current='page'] { color: var(--accent); text-shadow: 2px 2px 0 #3f3f15; }
+/* The Theme button (Phase 2 spec §4.8): the base button at the end of the bar, after the nav (so the keyboard reaches the pages first),
+   with an 8 x 8 pixel icon drawn at 2x before its words: Auto's square, the moon or the sun. Its face is the base button's 36px, so the
+   bar stays one row of the same height down to about 655px. */
+.theme-button { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; padding: 0 12px; }
+.theme-button::before { content: ''; flex: none; width: 16px; height: 16px; background: var(--icon-auto) center / contain no-repeat; }
+.theme-button[data-choice='dark']::before { background-image: var(--icon-moon); }
+.theme-button[data-choice='light']::before { background-image: var(--icon-sun); }
+/* A switch of look cross-fades the page over --dur-slow (Phase 2 spec §4.9), 0ms under reduced motion, where the JS starts no fade
+   anyway. Two rules, not one list: the minifier once dropped the pseudo-element half of such a list (R28). */
+::view-transition-old(root) { animation-duration: var(--dur-slow); animation-timing-function: var(--ease-out); }
+::view-transition-new(root) { animation-duration: var(--dur-slow); animation-timing-function: var(--ease-out); }
 
 .page { max-width: 1200px; margin: 0 auto; padding: 20px; }
 /* The project page uses the full window width so the flow diagram, map and 3D view get room. */

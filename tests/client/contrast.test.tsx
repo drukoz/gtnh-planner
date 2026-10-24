@@ -184,8 +184,8 @@ const PAIRS: Pair[] = [
   // add-on 17: the Compare card's titles on the panel, its readout tiles' label and value on a screen (a value shrunk toward 13px, or cut
   // with its ellipsis, is the same ink on the same screen), its notes in the dark-box group's literals on their chat box over the panel,
   // its Compare modes button while the card is open (yellow on the button face, and under the pointer), the hints of "Plan for"; and, as
-  // graphics, the frame of the mode in use: a black edge on the panel (in the light look: the dark one is Task 1b's, plan ruling
-  // compare-frame-dark) with a yellow ring inside it
+  // graphics, the frame of the mode in use: a black edge on the panel with a yellow ring inside it. The edge's row is the light look's: on
+  // the dark panel the black all but vanishes, and the ring carries the frame (its row on the panel below; plan ruling compare-frame-dark)
   ['card and column titles', '--title', '--panel', AA], ['"Updating…" beside the title', '--text-muted', '--panel', AA],
   ['tile label', '--screen-muted', '--screen', AA], ['tile value', '--screen-text', '--screen', AA],
   ['note', '#ffffff', CHAT_ON_PANEL, AA], ['note of a mode still planning', '#aaaaaa', CHAT_ON_PANEL, AA],
@@ -194,6 +194,19 @@ const PAIRS: Pair[] = [
   ['a hint of Plan for', '--text-muted', '--panel', AA],
   ['mode-in-use edge on the panel', '--outline', '--panel', GRAPHICS, ['light']],
   ['mode-in-use ring on the edge', '--accent', '--outline', GRAPHICS],
+
+  // the dark look and its switch (Phase 2 Task 1b, spec §4.5), as graphics: the slider's thumb on the dark panel (P2-D24: the button's
+  // face would be 1.30:1 there), the Theme button's sun and moon on its face, the light edge of the dark tick well (4.21:1, D2), the yellow
+  // ring that carries the mode in use on the dark panel (plan ruling compare-frame-dark), and add-on 17's farm fields' line, which the light
+  // look keeps at 3:1 (in dark it is a groove: plan ruling farm-line-dark, the reason case below)
+  ['slider thumb', '--thumb', '--panel', GRAPHICS, ['dark']],
+  ['sun icon', '#ffd84a', '--btn', GRAPHICS], ['moon icon', '#c8d4ff', '--btn', GRAPHICS],
+  ['tick-well edge', '#8b8b8b', '--panel', GRAPHICS, ['dark']],
+  ['mode-in-use ring on the panel', '--accent', '--panel', GRAPHICS, ['dark']],
+  ['farm fields line on the panel', '--panel-lo', '--panel', GRAPHICS, ['light']],
+  // and a Flow box under the pointer, whose veil (--flow-hover) lightens it in light and darkens it in dark: its text and its lines
+  ...FLOW_FILLS.map(([box, fill]): Pair => [`${box} box text under the pointer`, '--text', { over: '--flow-hover', on: fill }, AA]),
+  ...ISSUE_FILLS.map(([box, fill]): Pair => [`${box} box lines under the pointer`, '--text-muted', { over: '--flow-hover', on: fill }, AA]),
 ];
 
 describe('contrast of the Machine GUI palette', () => {
@@ -205,8 +218,7 @@ describe('contrast of the Machine GUI palette', () => {
   });
 });
 
-// One table, run for both looks (Phase 2 spec §3.5). Until the dark look's block exists (Task 1b), the dark look reads the light tokens,
-// so it repeats the light results.
+// One table, run for both looks (Phase 2 spec §3.5): the dark look reads the light tokens with the dark block's over them (Task 1b).
 const LOOKS: readonly Look[] = ['light', 'dark'];
 describe.each(LOOKS)('contrast in the %s look', (look) => {
   it.each(PAIRS.filter(([, , , , looks]) => looks === undefined || looks.includes(look)))('%s', (_what, fg, bg, min) => {
@@ -297,11 +309,42 @@ describe('contrast of the Settings button\'s target part', () => {
   });
 });
 
-// Add-on 17's frame of the mode in use: a black edge the panel shows, with a yellow ring the edge shows (the table's two "mode-in-use"
-// rows); the ring alone would be faint on the light panel.
+// Add-on 17's frame of the mode in use: a black edge the panel shows, with a yellow ring the edge shows (the table's "mode-in-use" rows);
+// the ring alone would be faint on the light panel. In the dark look it is the other way round, and the ring carries the frame.
 describe('contrast of the planning modes, farms and the Compare card', () => {
   it('needs the black edge round the mode in use: its yellow ring alone is faint on the panel', () => {
     // the ring alone would be faint on the panel: the black edge is what makes it read
     expect(ratio('#ffff55', PANEL)).toBeLessThan(GRAPHICS);
+  });
+
+  it('lets the yellow ring carry the mode in use in the dark look, where the black edge all but vanishes on the panel', () => {
+    // 1.46:1, which is why the edge's row runs in the light look only; the ring, 13.46:1 on the panel and 19.69:1 on the edge (the table),
+    // carries the frame, as the green carries the grid tick (Phase 2 spec §4.5; plan ruling compare-frame-dark: no rule or token changes)
+    expect(ratio(colour('dark', '--outline'), colour('dark', '--panel'))).toBeLessThan(GRAPHICS);
+  });
+
+  it('hangs a farm\'s fields on a decorative line, a groove in the dark look like the dark panel\'s own bevel shadow', () => {
+    // add-on 17's farm fields hang on a 2 px --panel-lo line: 4.36:1 in light (the table), 1.35:1 in dark. It is a decorative connector:
+    // the indent under the tick and the fields' own labels carry the grouping (plan ruling farm-line-dark: no rule or token changes)
+    expect(ratio(colour('dark', '--panel-lo'), colour('dark', '--panel'))).toBeLessThan(GRAPHICS);
+  });
+});
+
+// The dark look's own exceptions (Phase 2 spec §4.3, §4.5): what falls short is identified some other way, and the dark hover darkens a
+// box because a light veil would leave its quiet text short.
+describe('contrast of the dark look', () => {
+  it('accepts button faces on the panel and box fills on the well below 3:1: their labels and text identify them', () => {
+    expect(ratio(colour('dark', '--btn'), colour('dark', '--panel'))).toBeLessThan(GRAPHICS);              // 1.30:1
+    expect(ratio(colour('dark', '--flow-new'), colour('dark', '--well'))).toBeLessThan(GRAPHICS);          // 1.32:1
+  });
+
+  it('accepts the flange on a new box below 3:1 in both looks: a shape detail with a black edge', () => {
+    // 2.59:1 in dark, and less in light
+    for (const look of ['light', 'dark'] as const) expect(ratio(colour(look, '--flange'), colour(look, '--flow-new')), look).toBeLessThan(GRAPHICS);
+  });
+
+  it('darkens a box under the pointer: an 8 % white veil would leave the muted text short on an owned box', () => {
+    // 3.79:1; the dark --flow-hover, 30 % black, keeps it at 4.5:1 or more (the table's "under the pointer" rows)
+    expect(ratio(colour('dark', '--text-muted'), colour('dark', { over: 'rgb(255 255 255 / 0.08)', on: '--flow-owned' }))).toBeLessThan(AA);
   });
 });

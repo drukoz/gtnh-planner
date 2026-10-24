@@ -7,6 +7,9 @@
     <meta name="theme-color" content="#1a1a1a" />
     <link rel="icon" href="data:," />
     <title>GTNH Line Planner</title>
+    <script>
+      try { var t = localStorage.getItem('gtnh-planner:theme'); if (t === 'dark' || t === 'light') document.documentElement.setAttribute('data-theme', t); } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>
