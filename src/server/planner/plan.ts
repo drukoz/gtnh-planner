@@ -8,12 +8,12 @@
 import { formatNumber, formatRate } from '../../shared/format.ts';
 import { PSEUDO_IDS, V, tierName } from '../../shared/gt/tiers.ts';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
-import { indexPlan, issueText, type PlanIssue } from '../../shared/plan/balance.ts';
+import { indexPlan, issueText, noteWarningCode, type PlanIssue } from '../../shared/plan/balance.ts';
 import { machineGroups } from '../../shared/plan/pools.ts';
 import type { DimensionInfo, Ingredient, Pack, Product, Recipe } from '../../shared/types/pack.ts';
 import {
-  DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_RAW_CAP, DEFAULT_STEP_CHARGE, FREE_KEYS, type BomLine, type LeafClass, type Plan, type PlanContext, type PlanFlow, type PlanSettings,
-  type PlanStep, type PlanWarning, type PowerSummary, type RawInput, type SourceInfo, type StepOption,
+  DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_RAW_CAP, DEFAULT_STEP_CHARGE, FREE_KEYS, type BomLine, type DeliberateSplit, type LeafClass, type Plan, type PlanContext,
+  type PlanFlow, type PlanSettings, type PlanStep, type PlanWarning, type PowerSummary, type RawInput, type SourceInfo, type StepOption,
 } from '../../shared/types/plan.ts';
 import { GATHERED_BLOCKS, isBaseItem, unlockText, type Availability } from './availability.ts';
 import { buildCostCounts, gatheredRecipesOn, planBasis, resolveAvoid, settingsHash, type PlanBasis } from './basis.ts';
@@ -1066,6 +1066,8 @@ interface PlanBody {
   rawCost?: Plan['rawCost'];
   /** `Plan.cost` (plan 12): every line that plans. */
   cost?: Plan['cost'];
+  /** `Plan.deliberate` (plan 12's final review): a rate line with build cost counted (`deliberateSplits`). */
+  deliberate?: DeliberateSplit[];
 }
 
 function bodyWithout(status: PlanBody['status'], warnings: PlanWarning[], unlocks: Plan['unlocks'] = []): PlanBody {
@@ -1159,9 +1161,14 @@ function planNames(pack: Pack, plan: Plan, settings: PlanSettings): Record<strin
   return Object.fromEntries([...names].sort(([a], [b]) => byString(a, b)));
 }
 
-/** The warning of an integrity issue (fix spec R11): its code, its §6.4 text, the good and the steps it is about. */
+/**
+ * The warning of an integrity issue (fix spec R11): its code, its §6.4 text, the good and the steps it is about. A note
+ * (`PlanIndex.notes`, plan 12's final review) takes its note code (`noteWarningCode`: `deliberate-split`,
+ * `deliberate-purchase`), not an integrity code, and words why.
+ */
 function integrityWarning(issue: PlanIssue, plan: Plan): PlanWarning {
-  const w: PlanWarning = { code: issue.code, key: issue.key, text: issueText(issue, plan) };
+  const code = issue.deliberate === undefined ? issue.code : noteWarningCode(issue);
+  const w: PlanWarning = { code, key: issue.key, text: issueText(issue, plan) };
   if (issue.stepId !== undefined) w.stepId = issue.stepId;
   if (issue.stepIds !== undefined) w.stepIds = [...issue.stepIds];
   if (issue.share !== undefined) w.share = [...issue.share];
@@ -1170,8 +1177,9 @@ function integrityWarning(issue: PlanIssue, plan: Plan): PlanWarning {
 
 /**
  * The plan of `body`, named (`planNames`), with one warning per integrity issue of its flows (`indexPlan`: an input
- * nothing supplies or supplies short, a good made two ways, a good both bought and made). A correct plan has none; a
- * plan that has one says so instead of reading as if it added up.
+ * nothing supplies or supplies short, a good made two ways, a good both bought and made), then one per note (a good the
+ * plan makes two ways, or buys beside its makers, on purpose: `Plan.deliberate`). A correct plan has no issue; a plan
+ * that has one says so instead of reading as if it added up.
  */
 function assemble(pack: Pack, settings: PlanSettings, basis: PlanBasis, body: PlanBody): Plan {
   const plan: Plan = {
@@ -1187,9 +1195,11 @@ function assemble(pack: Pack, settings: PlanSettings, basis: PlanBasis, body: Pl
   if (body.targetPerSecond !== undefined) plan.targetPerSecond = body.targetPerSecond;
   if (body.rawCost !== undefined) plan.rawCost = body.rawCost;
   if (body.cost !== undefined) plan.cost = body.cost;
+  if (body.deliberate !== undefined && body.deliberate.length > 0) plan.deliberate = body.deliberate;
   plan.names = planNames(pack, plan, settings);
-  const issues = indexPlan(plan).issues;
-  if (issues.length > 0) plan.warnings = [...plan.warnings, ...issues.map((issue) => integrityWarning(issue, plan))];
+  const { issues, notes } = indexPlan(plan);
+  const found = [...issues, ...notes];
+  if (found.length > 0) plan.warnings = [...plan.warnings, ...found.map((issue) => integrityWarning(issue, plan))];
   return plan;
 }
 
@@ -1546,15 +1556,16 @@ function unavoidableUses(
     return `${pack.nameOf(key)} (made from ${shown})`;
   };
   /**
-   * Whether a use of an allowed-back good of the list is one its step could do without: a consumed slot of its recipe
-   * that takes the good also takes a good the list does not cover (the step then takes it only because the line allows it
-   * back for another step: plan 12's build cost may pick it over adding the machines of the other option). A part the
-   * machine holds, and a derived leaf, it needs.
+   * Whether a use of an allowed-back good of the list is one its step could do without: every slot of its recipe that
+   * takes the good, consumed or held, also takes a good the list does not cover (the step then takes it only because the
+   * line allows it back: plan 12's build cost may pick it over adding the machines of the other option). A step with one
+   * such slot that takes nothing else needs the good (plan 12's final review), as it does a part its machine holds, and a
+   * derived leaf.
    */
   const couldAvoid = (use: { stepId: string; key: StuffKey; holds: boolean }): boolean => {
     const recipe = pack.recipeById.get(stepOf.get(use.stepId)?.recipeId ?? '');
-    return !use.holds && !derived(use.key) && (recipe?.inputs ?? []).some((ing) =>
-      ing.consumed && ing.options.some((o) => o.key === use.key) && keptOptions(ing.options, request.goods).length > 0);
+    const slots = (recipe?.inputs ?? []).filter((ing) => ing.options.some((o) => o.key === use.key));
+    return !use.holds && !derived(use.key) && slots.length > 0 && slots.every((ing) => keptOptions(ing.options, request.goods).length > 0);
   };
   /** Per good, the steps that need it: those whose use of it is no `couldAvoid` one. */
   const neededBy = new Map<StuffKey, string[]>();
@@ -1568,12 +1579,16 @@ function unavoidableUses(
     .map((use): PlanWarning => {
       const { stepId, key, machine, holds } = use;
       // the controller's ruling after the verify of 5e3820f, (b): a step that takes the good although it could do
-      // without it says that the line allows it back for the steps that need it, not that no recipe avoids it
-      const neededFor = couldAvoid(use) ? [...new Set(neededBy.get(key) ?? [])].sort(byString) : [];
+      // without it says that the line allows it back, for the steps that need it, not that no recipe avoids it; where no
+      // step of the plan needs it (the avoid trial's that did is not in this plan), allowed back by the line alone
+      // (plan 12's final review)
+      if (!couldAvoid(use)) {
+        return { code: 'avoid-unavoidable', key, stepId, text: `${machine} ${holds ? 'needs' : 'uses'} ${named(key)} — no recipe at ${tierName(tier)} avoids it` };
+      }
+      const neededFor = [...new Set(neededBy.get(key) ?? [])].sort(byString);
       return {
-        code: 'avoid-unavoidable', key, stepId, text: neededFor.length > 0
-          ? `${machine} uses ${named(key)}, which the line allows back for ${listed(neededFor)}`
-          : `${machine} ${holds ? 'needs' : 'uses'} ${named(key)} — no recipe at ${tierName(tier)} avoids it`,
+        code: 'avoid-unavoidable', key, stepId,
+        text: `${machine} uses ${named(key)}, which the line allows back${neededFor.length > 0 ? ` for ${listed(neededFor)}` : ''}`,
       };
     });
   const avoided = line.used.map((key): NonNullable<Plan['avoided']>[number] => {
@@ -1710,6 +1725,71 @@ function addBuildNotes(pack: Pack, settings: PlanSettings, model: BuildModel, st
       step.warnings.push(`A multiblock is needed: nothing else makes ${stepProductName(pack, step)}`);
     }
   }
+}
+
+/** A maker is full where its machines (its sharing pool's) run at least this share of their time: the deep check's `relTol`. */
+const FULL_SHARE = 1 - 1e-6;
+/** Two ways of a good differ in raw material a unit only beyond this share and amount (the swap list rounds to 6 decimals). */
+const RAW_UNIT_TIE = 1e-6;
+
+/**
+ * The goods a rate line with build cost counted makes two or more ways (`multi-producer`), or buys beside the steps that
+ * make them (`bought-and-made`), on purpose (`Plan.deliberate`; plan 12's final review: the plan's side of controller
+ * ruling 249's `needsMachine`, which the deep check reads), in the plan index's order. A step by hand or on a pseudo
+ * machine has room for any share, any other for what its machines (its sharing pool's) leave idle, and makes a unit of
+ * its main output for its swap list's raw cost (its own row, `addAlternatives`). Two or more makers: `full` where some
+ * maker's machines are full and no maker can go within the plan's machines — the other makers that make the good for no
+ * more raw material a unit have too little room for its share, so making it all one way needs another machine, which the
+ * build stage weighed as dearer than the raw material it saves; a purchase: `full` where every step making the good
+ * (as its main output or not) is full. Else `raw-cap` where the build stage's decision uses all the raw material the raw
+ * cap allows (`Solution.atRawCap`) and the ways differ in raw material a unit (a purchase at what it costs a unit,
+ * `rawInputs`), so the cap, not a tie, sets their shares. Every other finding stays an integrity issue.
+ */
+export function deliberateSplits(steps: readonly PlanStep[], flows: readonly PlanFlow[], rawInputs: readonly RawInput[], atRawCap: boolean): DeliberateSplit[] {
+  const index = indexPlan({ steps, flows, warnings: [] });
+  const byId = new Map(steps.map((s) => [s.id, s]));
+  const stepOf = (id: string): PlanStep => byId.get(id) as PlanStep;
+  const onNoMachine = (s: PlanStep): boolean => s.handCraft || s.machine.mteId < 0;
+  const fullness = (s: PlanStep): number => {
+    const pool = s.pool;
+    return pool === undefined ? s.utilization : steps.filter((t) => t.pool?.id === pool.id).reduce((sum, t) => sum + t.utilization, 0);
+  };
+  const isFull = (s: PlanStep): boolean => !onNoMachine(s) && fullness(s) >= FULL_SHARE;
+  /** How much more of a good `s` could make a second within its machines, making `perSecond` of it now. */
+  const room = (s: PlanStep, perSecond: number): number =>
+    (onNoMachine(s) || !(s.utilization > 0) ? Infinity : (Math.max(0, 1 - fullness(s)) * perSecond) / s.utilization);
+  /** Raw material a unit of its main output; NaN where its swap list lacks its own recipe (then it may take any share). */
+  const unitRaw = (s: PlanStep): number => s.alternatives.find((a) => a.recipeId === s.recipeId)?.rawCost ?? NaN;
+  const dearer = (a: number, b: number): boolean => a > b * (1 + RAW_UNIT_TIE) + RAW_UNIT_TIE;
+  const differ = (costs: readonly number[]): boolean => {
+    const known = costs.filter((c) => Number.isFinite(c));
+    return known.length >= 2 && dearer(Math.max(...known), Math.min(...known));
+  };
+  const out: DeliberateSplit[] = [];
+  for (const issue of index.issues) {
+    if (issue.code !== 'multi-producer' && issue.code !== 'bought-and-made') continue;
+    const makers = index.producers.get(issue.key) ?? [];
+    const mains = makers.filter((p) => p.main);
+    if (issue.code === 'multi-producer') {
+      const full = mains.filter((p) => isFull(stepOf(p.stepId))).map((p) => p.stepId);
+      const canGo = mains.some((p) => {
+        let spare = 0;
+        for (const q of mains) {
+          if (q !== p && !dearer(unitRaw(stepOf(q.stepId)), unitRaw(stepOf(p.stepId)))) spare += room(stepOf(q.stepId), q.perSecond);
+        }
+        return spare >= p.perSecond * FULL_SHARE;
+      });
+      if (full.length > 0 && !canGo) out.push({ key: issue.key, code: issue.code, why: 'full', full });
+      else if (atRawCap && differ(mains.map((p) => unitRaw(stepOf(p.stepId))))) out.push({ key: issue.key, code: issue.code, why: 'raw-cap' });
+      continue;
+    }
+    const full = makers.filter((p) => isFull(stepOf(p.stepId))).map((p) => p.stepId);
+    const bought = rawInputs.find((r) => r.key === issue.key);
+    const price = bought !== undefined && bought.perSecond > 0 ? bought.cost / bought.perSecond : NaN;
+    if (makers.length > 0 && full.length === makers.length) out.push({ key: issue.key, code: issue.code, why: 'full', full });
+    else if (atRawCap && differ([price, ...mains.map((p) => unitRaw(stepOf(p.stepId)))])) out.push({ key: issue.key, code: issue.code, why: 'raw-cap' });
+  }
+  return out;
 }
 
 /** The line `planLine` plans: its pricing and avoid list, its graph solved, and the build model it was solved with. */
@@ -1888,6 +1968,9 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
   const cost = planCost(pack, settings, buildModel, steps, spend);
 
   const raw = rawInputsOf(pack, graph, basis, priced.chains, ctx, buys, made?.totalSeconds ?? null, gatheredRecipesOn(settings));
+  // What a rate line with build cost counted makes two ways, or buys beside its makers, on purpose (plan 12's final
+  // review): the plan index gives those as notes, not as integrity issues.
+  const deliberate = !batch && sol.buildStats !== undefined ? deliberateSplits(steps, flows, raw.rawInputs, sol.atRawCap === true) : [];
   // Make N steps of one machine type share that type's machines (makeN), so they draw at most once per type.
   const power = powerSummary(steps, { sharedByType: batch });
   // The parts the machines hold are ones the line may use (ruling R7): never an option it still avoids.
@@ -1909,6 +1992,7 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
     ...aim,
     cost: cost.cost,
   };
+  if (deliberate.length > 0) body.deliberate = deliberate;
   if (made !== undefined) body.makeN = made;
   // The raw material the plan uses against the least any plan of its graph needs (fix spec R3): a rate's trade-off.
   if (!batch) {

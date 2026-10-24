@@ -423,6 +423,32 @@ export interface Plan {
     /** New machines (a cleanroom included) that can be made here but that `build` leaves out: no price could be worked out. Set only when above 0. */
     unpriced?: number;
   };
+  // optional addition (plan 12's final review)
+  /**
+   * The goods a rate plan with build cost counted makes two or more ways, or buys beside the steps that make them, on
+   * purpose (`planLine`), by code, then key: the plan index (`indexPlan`) gives such a good's `multi-producer` or
+   * `bought-and-made` as a note (`PlanIndex.notes`), not as an integrity issue. Absent where there is none.
+   */
+  deliberate?: DeliberateSplit[];
+}
+
+/**
+ * A good a build-cost plan makes two or more ways, or buys beside the steps that make it, on purpose (`Plan.deliberate`;
+ * plan 12's final review, the plan-side counterpart of controller ruling 249's `needsMachine`). `full`: the machines of
+ * the steps in `full` are full, and no maker can be dropped within the plan's machines — the other makers have too little
+ * room for its share at no more raw material a unit (a step by hand or on a pseudo machine has room for any share); a
+ * purchase: every step making the good is full — so making the rest one way, or making what it buys, needs another
+ * machine, which the build stage weighed as dearer than the raw material it saves. `raw-cap`: the build stage's plan
+ * uses all the raw material the raw cap allows (`PlanSettings.rawCap`) and its ways (a purchase: the purchase and its
+ * makers) differ in raw material a unit, so the cap, not a tie, sets how much each makes.
+ */
+export interface DeliberateSplit {
+  key: StuffKey;
+  /** The integrity issue it would otherwise be (balance.ts `PlanIssueCode`). */
+  code: 'multi-producer' | 'bought-and-made';
+  why: 'full' | 'raw-cap';
+  /** With `full`: the steps whose machines are full, in the order the plan index lists the good's makers (largest first). */
+  full?: string[];
 }
 
 export interface PlanContext {           // filled from a world scan by Plan 4; Plan 2 works with an empty one

@@ -53,6 +53,12 @@ const REFERENCE_RAW_KINDS: ReadonlySet<string> = new Set([
   'IC2:blockRubWood@0', 'gregtech:gt.metaitem.01@11035', STEEL_INGOT, 'gregtech:gt.metaitem.01@2057', 'gregtech:gt.metaitem.01@11057', 'minecraft:redstone@0',
   'minecraft:sand@0', ...FREE_KEYS,
 ]);
+/**
+ * The reference's machine blocks (the acceptance spec's R1: its 12 machine steps, one of them 3 Centrifuges, and its 4
+ * crafting steps on Auto Workbenches), the bound of the user's ruling 179: fixed, not the planner's re-plan of the pinned
+ * reference at each horizon, which moves across the sweep (add-on 12 ledger :243, plan 12's final review).
+ */
+const REFERENCE_BLOCKS = 18;
 /** Its raw material per minute (the acceptance spec's REF_RAW): tin as dust or ingot (controller ruling 201). */
 const REF_RAW: Readonly<Record<string, number>> = {
   'IC2:blockRubWood@0': 32, 'gregtech:gt.metaitem.01@11035': 11.25, [STEEL_INGOT]: 4, tin: 1, 'minecraft:redstone@0': 5, 'minecraft:sand@0': 2,
@@ -175,7 +181,7 @@ describe.skipIf(path === undefined)("the user's reference Electronic Circuit flo
     expect(crafting.map((s) => s.recipeId).sort()).toEqual(['551a7e121b83f8a5', '81809934c9e573da', '922523df6bc22ca3', 'd25f29069b92783e']);
     for (const s of crafting) expect(s.count, s.recipeId).toBe(1);
     expect(plan.steps.filter((s) => s.handCraft)).toEqual([]);
-    expect(machineBlocks(plan)).toBe(18);
+    expect(machineBlocks(plan)).toBe(REFERENCE_BLOCKS);
   }, 120_000);
 
   it('probes R1 with its new machines at MV, and with new multiblocks only where nothing else can do it', async () => {
@@ -230,7 +236,11 @@ describe.skipIf(path === undefined)("the user's reference Electronic Circuit flo
     // steps, one of them 3 Centrifuges, and its 4 crafting steps on Auto Workbenches: the reference at the same settings),
     // and no raw material outside the reference's unless the plan is cheaper than the reference by the build MIP's measure.
     // Where the 24-hour horizon does not achieve it, the other horizons are tried and logged for the controller, and the
-    // case fails rather than loosen (the ruling: a controller ruling is needed then).
+    // case fails rather than loosen (the ruling: a controller ruling is needed then). The blocks are held to the
+    // reference's own 18 (`REFERENCE_BLOCKS`), at every horizon; the re-plan of the pinned reference is logged beside it.
+    // Since fix wave 3 the plan has 25 blocks at 24 h and no horizon from 1 h to 8,760 h meets the bound: the raw cap
+    // (the user's ruling 247 (A)) and this bound do not both hold on this line, so the case stays red until the user
+    // amends one of the two (add-on 12 ledger :267, plan 12's final review), never loosened here.
     const defaults: Partial<PlanSettings> = { stepCharge: DEFAULT_STEP_CHARGE, buildHorizonHours: DEFAULT_BUILD_HORIZON_HOURS, automateCrafting: true };
     const judge = async (hours: number): Promise<{ text: string; ok: boolean; blocks: boolean; raw: boolean }> => {
       const own: PlanSettings = { ...stored, ...defaults, recipeChoice: {}, stopItems: [], buildHorizonHours: hours };
@@ -241,12 +251,13 @@ describe.skipIf(path === undefined)("the user's reference Electronic Circuit flo
       const leanest = mine.plan.rawCost?.leanestPerSecond ?? 0;   // fix wave 3 (B2): the step charge's other base
       const outside = mine.plan.rawInputs.map((r) => r.key).filter((key) => !REFERENCE_RAW_KINDS.has(key)).sort();
       const cheaper = buildObjective(mine.plan, own, least, leanest) < buildObjective(theirs.plan, reference, least, leanest);
-      const blocks = machineBlocks(mine.plan) <= machineBlocks(theirs.plan);
+      const blocks = machineBlocks(mine.plan) <= REFERENCE_BLOCKS;
       const raw = outside.length === 0 || cheaper;
       return {
         ok: mine.plan.status === 'ok' && blocks && raw, blocks, raw,
         text: `${hours} h: ${mine.plan.status}, ${mine.seconds.toFixed(2)} s, ${mine.plan.steps.length} steps, ${machineBlocks(mine.plan)} machine blocks `
-          + `against the reference's ${machineBlocks(theirs.plan)}; raw ${(((mine.plan.rawCost?.perSecond ?? 0) * 60)).toFixed(3)} a minute, build ${mine.plan.cost?.build}, `
+          + `against the reference's ${REFERENCE_BLOCKS} (its re-plan at ${hours} h: ${machineBlocks(theirs.plan)}); `
+          + `raw ${(((mine.plan.rawCost?.perSecond ?? 0) * 60)).toFixed(3)} a minute, build ${mine.plan.cost?.build}, `
           + `outside the reference's raw materials ${outside.join(' ') || 'none'}; by the build MIP's measure ${buildObjective(mine.plan, own, least, leanest).toFixed(1)} `
           + `against the reference's ${buildObjective(theirs.plan, reference, least, leanest).toFixed(1)}; raw kinds ${mine.plan.rawInputs.map((r) => r.key).join(' ')}; `
           + `the reference: raw ${(((theirs.plan.rawCost?.perSecond ?? 0) * 60)).toFixed(3)} a minute, build ${theirs.plan.cost?.build}, raw kinds ${theirs.plan.rawInputs.map((r) => r.key).join(' ')}`,
@@ -263,7 +274,7 @@ describe.skipIf(path === undefined)("the user's reference Electronic Circuit flo
       }
       console.log(`real-reference without pins and stops: the largest horizon that achieves it: ${largest === undefined ? 'none of 1 h to 8,760 h' : `${largest} h`}`);
     }
-    expect(day.blocks, 'no more machine blocks than the reference').toBe(true);
+    expect(day.blocks, `no more machine blocks than the reference's ${REFERENCE_BLOCKS}`).toBe(true);
     expect(day.raw, "the reference's raw materials, unless dearer").toBe(true);
   }, 600_000);
 

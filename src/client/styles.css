@@ -410,8 +410,8 @@ fieldset.flow-panel-section { border-left: none; border-right: none; border-bott
 .flow-panel-section p { margin: 0; }
 .flow-panel-title { font-size: 0.95rem; font-weight: 600; margin: 0; padding: 0; color: var(--text); }
 fieldset.flow-panel-section > legend.flow-panel-title { float: left; width: 100%; margin-bottom: 2px; }
-.oc-lines, .flow-panel .warnings, .flow-panel .sources { margin: 0; padding-left: 18px; font-size: 0.9rem; }
-.oc-lines li, .flow-panel .sources li { overflow-wrap: anywhere; }
+.oc-lines, .flow-panel .warnings, .flow-panel .sources, .flow-panel .notes { margin: 0; padding-left: 18px; font-size: 0.9rem; }
+.oc-lines li, .flow-panel .sources li, .flow-panel .notes li { overflow-wrap: anywhere; }
 .flow-panel .warnings { color: var(--error); }
 .swap-option { align-items: flex-start; }
 .swap-option input { margin-top: 4px; }

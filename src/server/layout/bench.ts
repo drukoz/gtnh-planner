@@ -13,11 +13,15 @@
 
 import { BENCH_LEAST_CRAFTS, BENCH_SAFE_SLOTS, benchSlots } from '../../shared/gt/feeding.ts';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
+import { conduitFilterText, feedTexts } from '../../shared/layout/configure-text.ts';
+import { joinNames } from '../../shared/layout/format.ts';
 import type { BenchSpec, PatternSpec } from '../../shared/types/feed.ts';
 import type { Pack } from '../../shared/types/pack.ts';
-import type { PlanStep, PlanWarning } from '../../shared/types/plan.ts';
+import type { LogisticsMode, PlanStep, PlanWarning } from '../../shared/types/plan.ts';
 import { stepProductName } from '../planner/bom.ts';
 import { heldOption } from '../planner/candidates.ts';
+import { limitedFilterFor } from './conduits.ts';
+import { resolveParts } from './parts.ts';
 
 /** The Auto Workbench's crafting grid: 3 × 3 cells, top row first. */
 export const BENCH_GRID_WIDTH = 3;
@@ -155,4 +159,37 @@ export function benchCapWarning(pack: Pack, unit: { name: string }, step: PlanSt
   return { code: 'bench_cap', stepId: step.id, text: `${unit.name} crafting ${product} cannot keep its ingredients within the ${BENCH_SAFE_SLOTS} `
     + `input slots it fills safely at its planned rate on this line (it would take ${slots}): when one runs short it throws a stack out of its `
     + `back and stops — give it more Auto Workbenches so each crafts less, craft ${product} by hand, or plan the line on AE2` };
+}
+
+/**
+ * What to set on an owned Auto Workbench a line reuses (plan 12's final review; controller rulings 188 and 181, item (5)
+ * of the Auto Workbench ruling): the layout lays nothing beside it, so its hook step says it all, as a placed bench's
+ * configure steps word it: its mode, grid and button (`benchPlan`), then the cap its line's logistics put on each
+ * ingredient — on AE2 the ME Interface it hooks to holds one pattern exactly equal to its grid with blocking mode off and
+ * a Locking Card (`benchPattern`); on Project Red the interface pipe it hooks with holds an Item Stock Keeper Chip at
+ * `routedStock` (`craftsPerSecond`: one bench's) and an Item Extractor Chip for what it makes and hands back, and no Item
+ * Responder Chip; on EnderIO the item conduit face to it inserts through a Limited Item Filter at `enderioStock`; on a
+ * machine-to-machine line you fill it by hand, as `bench_by_hand` says of a placed one.
+ */
+export function reusedBenchText(pack: Pack, step: PlanStep, mode: LogisticsMode, nameOf: (k: StuffKey) => string, craftsPerSecond: number): string {
+  const bench = benchPlan(pack, step);
+  const set = `set it to ${feedTexts({ bench: bench.spec }, nameOf).join('; ')}`;
+  const made = [...new Set([...bench.returns.map((r) => r.key), ...bench.result.map((r) => r.key)])].sort();
+  switch (mode) {
+    case 'ae2':
+      return `${set}; on the ME Interface you hook it to: ${feedTexts({ interface: { patterns: [benchPattern(bench)], blocking: false, lock: 'until_result' } }, nameOf).join('; ')}`;
+    case 'routed': {
+      const chips = feedTexts({ chips: [{ kind: 'stock_keeper', stock: routedStock(bench, craftsPerSecond).stock, requestMode: 'when_missing' },
+        { kind: 'extractor', filter: { mode: 'whitelist', keys: made } }] }, nameOf);
+      return `${set}; on the routed interface pipe you hook it with, ${chips.join('; ')}, and no Item Responder Chip: it takes any item it is sent`;
+    }
+    case 'enderio': {
+      const stock = enderioStock(bench);
+      const limits = new Map(bench.ingredients.map((i, k) => [i.key, stock.limits[k] ?? 0]));
+      return `${set}; on the item conduit face to it, In / Out: insert with a ${conduitFilterText(limitedFilterFor(resolveParts(pack), limits), nameOf)}, `
+        + `extract ${joinNames(made.map(nameOf))}`;
+    }
+    default:
+      return `${set}; fill it by hand: machine-to-machine lines cannot cap its ingredients yet`;
+  }
 }

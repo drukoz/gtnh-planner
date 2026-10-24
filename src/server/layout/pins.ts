@@ -6,11 +6,14 @@
 import { tierName } from '../../shared/gt/tiers.ts';
 import { fmtInt, NETWORK_NAMES } from '../../shared/layout/format.ts';
 import { manhattan, posKey, type Vec3 } from '../../shared/layout/geometry.ts';
+import type { StuffKey } from '../../shared/keys.ts';
 import type { Pin } from '../../shared/types/layout.ts';
 import type { Pack } from '../../shared/types/pack.ts';
-import type { Plan, PlanStep } from '../../shared/types/plan.ts';
+import type { LogisticsMode, Plan, PlanStep } from '../../shared/types/plan.ts';
 import type { Base, LogisticsNetwork, TapPoint, WorldScan } from '../../shared/types/world.ts';
 import { stepProductName } from '../planner/bom.ts';
+import { isAutoWorkbench } from '../planner/machine-options.ts';
+import { reusedBenchText } from './bench.ts';
 
 // ---- Types ----
 
@@ -28,6 +31,12 @@ export interface ReuseFind {
    * machines (`reuseGroups`) counts each of its machines once, these too (controller ruling 215).
    */
   elsewhere?: number[];
+  // optional addition (plan 12's final review)
+  /**
+   * For owned Auto Workbenches, when `findReuse` knows the line's logistics: their grid and the cap the line's logistics
+   * put on each ingredient (`reusedBenchText`), which their hook step gives, as no configure step of the layout does.
+   */
+  bench?: string;
 }
 
 export interface PinInput {
@@ -55,9 +64,11 @@ function compareText(a: string, b: string): number {
  * machine here (`elsewhere`, when it has any); a find without positions is left out, and such a step never takes
  * another machine of the base. A step without units takes, as Plan 2 lets each
  * owned machine serve one step, at most `owned` of the type's machines no other step has, nearest first. Steps by id;
- * a step with no machine found is left out: the planner may count owned machines that stand outside this base.
+ * a step with no machine found is left out: the planner may count owned machines that stand outside this base. Given
+ * the line's logistics (`mode`), a find of Auto Workbenches carries what to set on them (`bench`, plan 12's final
+ * review), each crafting an equal share of the step's runs over all the machines it runs on.
  */
-export function findReuse(pack: Pack, plan: Plan, scan: WorldScan, base: Base | null, near: Vec3): ReuseFind[] {
+export function findReuse(pack: Pack, plan: Plan, scan: WorldScan, base: Base | null, near: Vec3, mode?: LogisticsMode): ReuseFind[] {
   if (base === null) return [];
   const nearest = (a: Vec3, b: Vec3) => manhattan(a, near) - manhattan(b, near) || compareText(posKey(a), posKey(b));
   const pools = new Map<number, Vec3[]>();
@@ -107,19 +118,29 @@ export function findReuse(pack: Pack, plan: Plan, scan: WorldScan, base: Base | 
     return list;
   };
   const nameOf = (mteId: number, fallback: string): string => pack.machines.get(mteId)?.name ?? fallback;
+  const itemName = (k: StuffKey): string => plan.names?.[k] ?? pack.nameOf(k);
+  /** A find, with what to set on its machines where they are Auto Workbenches and the line's logistics are known. */
+  const withBench = (find: ReuseFind, s: PlanStep, mteId: number): ReuseFind => {
+    if (mode === undefined || !isAutoWorkbench(pack.machines.get(mteId))) return find;
+    const machines = s.count + (s.reused?.others ?? []).reduce((sum, o) => sum + o.count, 0);
+    return { ...find, bench: reusedBenchText(pack, s, mode, itemName, s.runsPerSecond / Math.max(1, machines)) };
+  };
   const out: ReuseFind[] = [];
   for (const s of steps) {
     if (s.reused?.units !== undefined) {
       const product = stepProductName(pack, s);
       const own = machinesOf(s.machine.mteId, s.reused.units);
       if (own.at.length > 0) {
-        out.push(unitFind({ stepId: s.id, name: nameOf(s.machine.mteId, s.machine.name), count: s.owned, positions: own.at, product }, own.elsewhere));
+        const find = unitFind({ stepId: s.id, name: nameOf(s.machine.mteId, s.machine.name), count: s.owned, positions: own.at, product }, own.elsewhere);
+        out.push(withBench(find, s, s.machine.mteId));
       }
       for (const o of s.reused.others ?? []) {
         const units = o.units ?? [];
         const other = machinesOf(o.mteId, units);
         if (other.at.length > 0) {
-          out.push(unitFind({ stepId: s.id, name: nameOf(o.mteId, o.name), count: units.length, positions: other.at, product, otherMteId: o.mteId }, other.elsewhere));
+          const find = unitFind({ stepId: s.id, name: nameOf(o.mteId, o.name), count: units.length, positions: other.at, product, otherMteId: o.mteId },
+            other.elsewhere);
+          out.push(withBench(find, s, o.mteId));
         }
       }
       continue;
@@ -127,7 +148,7 @@ export function findReuse(pack: Pack, plan: Plan, scan: WorldScan, base: Base | 
     if (s.owned <= 0) continue;
     const positions = freeOf(s.machine.mteId).splice(0, s.owned);
     if (positions.length === 0) continue;
-    out.push({ stepId: s.id, name: nameOf(s.machine.mteId, s.machine.name), count: s.owned, positions });
+    out.push(withBench({ stepId: s.id, name: nameOf(s.machine.mteId, s.machine.name), count: s.owned, positions }, s, s.machine.mteId));
   }
   return out;
 }

@@ -61,6 +61,26 @@ describe('plan banner', () => {
     expect(out).toContain('Nothing supplies Resin to Mixer (Glue): it needs 1,800/h and the plan neither makes nor buys it.');
     expect(out).toContain('Plate is made 2 ways: Fluid Solidifier (99.9%) and Cutting Machine (0.1%).');
   });
+  it('shows a good a build-cost plan makes two ways on purpose as a plain note, not as a problem (plan 12 final review)', () => {
+    // The raw cap keeps 40 % of the plates on one full machine and the rest on the other way: the plan marks the split
+    // (`Plan.deliberate`), so the banner shows its note plainly, once, in the server's words, else the client's.
+    const plate = (id: string, name: string, runsPerSecond: number) => step({ id, machine: { mteId: 521, name, tier: 1 }, mainOutput: 't:plate@0', runsPerSecond,
+      utilization: 1, outputs: [{ key: 't:plate@0', amount: 1, chance: 1 }] });
+    const split = planOf({
+      steps: [plate('solid', 'Fluid Solidifier', 0.6), plate('saw', 'Cutting Machine', 0.4)],
+      flows: [{ from: 'solid', to: 'out', key: 't:plate@0', perSecond: 0.6 }, { from: 'saw', to: 'out', key: 't:plate@0', perSecond: 0.4 }],
+      names: { 't:plate@0': 'Plate' }, deliberate: [{ key: 't:plate@0', code: 'multi-producer', why: 'full', full: ['saw'] }],
+      warnings: [{ code: 'deliberate-split', key: 't:plate@0', stepId: 'solid', text: 'Plates come two ways on purpose (as the server says it).' }],
+    });
+    const out = text(html(split));
+    expect(out).not.toContain('does not add up');
+    expect(out.split('Plates come two ways on purpose').length).toBe(2);
+    expect(findAll(banner(split), (e) => e.type === 'ul' && e.props.className === 'banner-notes')).toHaveLength(1);
+    expect(text(html({ ...split, warnings: [] }))).toContain('Plate is made 2 ways: Fluid Solidifier (60%) and Cutting Machine (40%). The Cutting Machine '
+      + 'is full, and one more would cost more than the raw material it saves.');
+    // Unmarked, the same split is a problem.
+    expect(text(html({ ...split, deliberate: undefined, warnings: [] }))).toContain('This plan does not add up: 1 good is made two ways');
+  });
   it('shows the first problem in the flow', () => {
     vi.stubGlobal('location', { hash: '#materials' });
     const [show] = findAll(banner(broken), (e) => e.type === 'button' && e.props.children === 'Show in the flow');

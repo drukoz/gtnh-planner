@@ -583,7 +583,7 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
 
   if (units.length === 0) {
     // owned machines only: hook them up, with the plan's power fitted as it is
-    const reuse = base === null ? [] : findReuse(pack, plan, scan, base, base.center);
+    const reuse = base === null ? [] : findReuse(pack, plan, scan, base, base.center, mode);
     const pins = makePins({ dim, site: null, power: null, logistics: null, reuse, warnings: [] });
     const buildSteps = layoutSteps({
       status: 'empty', pins, size: [0, 0, 0], site: null, units: [], stages: [], transformerName, cables: [], power: null, supplyTier: null,
@@ -644,7 +644,7 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
     finish = { status: 'no-world', pins: null, reuse: [], site: null, power: null, supplyTier: null, logistics: null };
   } else {
     const centre: Vec3 = [frame.origin[0] + Math.floor(worldSize[0] / 2), frame.origin[1], frame.origin[2] + Math.floor(worldSize[2] / 2)];
-    const reuse = findReuse(pack, plan, scan, base, centre);
+    const reuse = findReuse(pack, plan, scan, base, centre, mode);
     const placed = warnings.flatMap((w) => {
       if (SITE_PINNED.has(w.code)) return [{ code: w.code, text: w.text, pos: centre }];
       const at = w.code === 'no_path' ? hooked.noPathAt.get(w.text) ?? centre : null;

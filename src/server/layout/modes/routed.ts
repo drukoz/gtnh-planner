@@ -21,7 +21,10 @@
 // takes any item into any input slot, so its pipe holds an Item Stock Keeper Chip, which orders each ingredient up to a
 // stock (bench.ts), instead of a responder; its suppliers and the input chest fill those orders with Item Broadcaster
 // Chips, an item only benches take is on no Item Extractor Chip, and the output chest's Terminator also catches those
-// items, lost after a restart, and what a bench hands back (its empty containers). A machine run by hand (architecture §11 entry 48) gets nothing:
+// items, lost after a restart, and what a bench hands back (its empty containers). An item a bench takes that also leaves
+// the line (the output, a sink, or a step on owned machines the line does not place, owned benches among them) is on its
+// maker's Extractor, which sends it on to the output chest before a Stock Keeper orders it, so the output chest offers it
+// back on a Broadcaster (plan 12's final review; feed rule R10 checks it). A machine run by hand (architecture §11 entry 48) gets nothing:
 // what the line makes for it waits in the output chest, and what it makes for the line goes in the input chest. A
 // venting steam machine's interface pipe meets it on its middle-row side, not its output side (which faces up), and its
 // extractor chip pulls its output there (GT gives it on any side but the front).
@@ -36,6 +39,7 @@ import type { LocalBlock } from '../arrange.ts';
 import { benchCapWarning, routedStock } from '../bench.ts';
 import { linkBits } from '../path.ts';
 import type { Part, PartId } from '../parts.ts';
+import { isAutoWorkbench } from '../../planner/machine-options.ts';
 import { crossing } from './enderio.ts';
 import {
   emptyModeResult, feedSettings, itemPorts, itemRisers, lineExceptions, mergeHostConfigs, nameList, outputSideInputs, placedStepIds, RISER_WORDS,
@@ -133,7 +137,10 @@ export function routedMode(input: ModeInput): ModeResult {
   const items = plan.flows.filter((f) => !isFluidKey(f.key));
   const edge = crossing(plan, items, placed);
   const benches = placement.units.filter((u) => u.bench !== undefined);
-  const benchSteps = new Set(benches.map((u) => u.stepId));
+  // a step on owned Auto Workbenches the line does not place orders what it takes as a placed one does: its hook step
+  // gives it an Item Stock Keeper Chip (plan 12's final review)
+  const owned = plan.steps.filter((s) => !placed.has(s.id) && isAutoWorkbench(pack.machines.get(s.machine.mteId))).map((s) => s.id);
+  const benchSteps = new Set([...benches.map((u) => u.stepId), ...owned]);
   const returns = sorted(benches.flatMap((u) => u.bench!.returns.map((r) => r.key)));
   const entering = sorted(edge.entering.map((f) => f.key));
   const leaving = sorted([...edge.leaving.map((f) => f.key), ...edge.strays.map((s) => s.key), ...returns]);
@@ -186,7 +193,9 @@ export function routedMode(input: ModeInput): ModeResult {
 
   // the tail: the request pipe on the spine fills the input chest beside it; the chests' interface pipes sit above them,
   // joined to the request pipe by a junction. The output chest's Terminator also catches what only benches take, which
-  // loses its way after a restart (research §2.2: destinations are not saved), below every machine's Responder
+  // loses its way after a restart (research §2.2: destinations are not saved), below every machine's Responder; and its
+  // Broadcaster offers back what benches take that also leaves the line, which their makers' Extractors send there before
+  // a Stock Keeper orders it (plan 12's final review)
   const request: Vec3 = [tailX, 0, spineZ];
   const inputChest: Vec3 = [tailX, 0, spineZ - 1];
   const outputChest: Vec3 = [tailX, 0, spineZ + 1];
@@ -196,7 +205,9 @@ export function routedMode(input: ModeInput): ModeResult {
   layChest(outputChest, 'Chest (output)', { side: 'output', keys: [...leaving] });
   lay(step(request, UP), parts.pr_junction, 'pipe', parts.pr_junction.name);
   layInterface(step(inputChest, UP), inputChest, 'input chest', outgoing(entering), 'the input chest');
-  layInterface(step(outputChest, UP), outputChest, 'output chest', chipsFor('terminator', sorted([...leaving, ...[...benchTakes].filter(benchOnly)])), 'the output chest');
+  layInterface(step(outputChest, UP), outputChest, 'output chest', [
+    ...chipsFor('broadcaster', leaving.filter((k) => benchTakes.has(k))), ...chipsFor('terminator', sorted([...leaving, ...[...benchTakes].filter(benchOnly)])),
+  ], 'the output chest');
 
   // every pair of face-adjacent pipe cells is joined
   const pipeCells = new Set(blocks.filter((b) => PIPE_ROLES.has(b.role)).map((b) => posKey(b.pos)));

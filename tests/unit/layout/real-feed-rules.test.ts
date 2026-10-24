@@ -121,13 +121,16 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('the feeding fix on the research
           expect(listed('extractor', 'broadcaster'), `${p.label} sends on what it makes`).toEqual([...new Set(makes)].sort());
         }
         if (t.tail !== undefined) {
-          const allowed: readonly ChipKind[] = t.tail.side === 'input' ? ['extractor', 'broadcaster'] : ['terminator'];
+          // the output chest also offers back on a Broadcaster what benches take that also leaves the line, which its makers'
+          // Extractors send there before a Stock Keeper orders it (plan 12's final review)
+          const allowed: readonly ChipKind[] = t.tail.side === 'input' ? ['extractor', 'broadcaster'] : ['terminator', 'broadcaster'];
           expect(kinds.every((k) => allowed.includes(k)), `${t.label} chips`).toBe(true);
-          const keys = listed(...allowed);
-          if (t.tail.side === 'input') expect(keys, `${t.label} whitelist`).toEqual([...t.tail.keys].sort());
+          if (t.tail.side === 'input') expect(listed(...allowed), `${t.label} whitelist`).toEqual([...t.tail.keys].sort());
           else {
+            const keys = listed('terminator');
             expect(keys, `${t.label} whitelist`).toEqual(expect.arrayContaining([...t.tail.keys]));
             expect(keys.filter((k) => !t.tail!.keys.includes(k)).filter((k) => !benchTakes.has(k)), `${t.label} catches only what benches take besides`).toEqual([]);
+            expect(listed('broadcaster'), `${t.label} offers back what benches take that leaves the line`).toEqual([...t.tail.keys].filter((k) => benchTakes.has(k)).sort());
           }
         }
       }

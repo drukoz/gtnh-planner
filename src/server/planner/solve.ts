@@ -170,6 +170,14 @@ export interface Solution {
    * its MIP's start costs at most LEAN_BASE_ABOVE, so it is not solved).
    */
   leanRawCost?: number;
+  // optional addition (plan 12's final review)
+  /**
+   * With build cost counted and a raw cap: the build stage's decision uses all the raw material the cap allows (its runs
+   * within S3_TOLERANCE of `(1 + rawCap)` × the leanest line's), so the cap, not the build cost alone, set how far the line
+   * trades raw material for fewer machines; `planLine` reads it for the goods it makes two ways on purpose
+   * (`Plan.deliberate`).
+   */
+  atRawCap?: true;
 }
 
 /**
@@ -1395,6 +1403,8 @@ async function buildStage(
   // the leanest line); none where controller OQ1 (D) did not solve it.
   if (lean !== undefined) sol.leanRawCost = sig9(lean.raw);
   else if (!(plain.stepCharge > 0)) sol.leanRawCost = sig9(ownRaw);
+  // The decision at its raw cap (plan 12's final review): the cap, not a tie, set how much each way of a good makes.
+  if (input.rawBound !== undefined && ownRaw >= input.rawBound * (1 - S3_TOLERANCE) - TINY) sol.atRawCap = true;
   return sol;
 }
 

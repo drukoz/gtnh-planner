@@ -23,6 +23,21 @@ test('a planned line renders as a flow diagram and a materials list', async ({ p
   await expect(page.getByRole('tab', { name: 'Notes' })).toHaveAttribute('aria-selected', 'true');
 });
 
+test('at the default raw cap a good made two ways on purpose is a plain note, not a problem', async ({ page }) => {
+  await login(page); await setName(page, 'Ann');
+  // Plan 12's final review: at the default +25 % raw cap the line makes 40 % of its plates on one full Basic Bending
+  // Machine and the rest on the automated crafting table, the plan the settings ask for: the plan marks the split, so the
+  // banner notes it plainly and the flow lists nothing that does not add up.
+  await createProject(page, 'Capped circuits', { target: 't:circuit@0', amount: 30, tier: 1 });
+  await expect(page.locator('svg.flow-canvas [data-step-id]')).toHaveCount(4);
+  await expect(page.locator('.plan-banner .banner-notes')).toHaveText('Iron Plate is made 2 ways: Crafting table (automated) (60%) and Basic Bending '
+    + 'Machine (40%). The Basic Bending Machine is full, and one more would cost more than the raw material it saves.');
+  await expect(page.getByText('This plan does not add up')).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'What does not add up' })).toHaveCount(0);
+  await page.getByRole('tab', { name: 'Materials & steps' }).click();
+  await expect(page.locator('[data-row="run:t:iron_ingot@0"]')).toContainText('2,880/h');
+});
+
 test('an impossible target explains what unlocks it', async ({ page }) => {
   await login(page); await setName(page, 'Ann');
   const id = await createProject(page, 'Titanium');
