@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
-  applyOp, defaultSettings, MAX_BUILD_HORIZON_HOURS, MAX_OWNED_MANUAL_COUNT, MAX_OWNED_MANUAL_ENTRIES, MAX_STEP_CHARGE, normalizeSettings,
+  applyOp, defaultSettings, MAX_BUILD_HORIZON_HOURS, MAX_OWNED_MANUAL_COUNT, MAX_OWNED_MANUAL_ENTRIES, MAX_RAW_CAP, MAX_STEP_CHARGE, normalizeSettings,
   SETTINGS_VERSION, settingsUpgrade, validateOp,
 } from '../../../src/shared/project/apply-op.ts';
-import { DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_STEP_CHARGE, NETWORKED_LOGISTICS, STEP_CHARGE_BEFORE_V3 } from '../../../src/shared/types/plan.ts';
+import { DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_RAW_CAP, DEFAULT_STEP_CHARGE, NETWORKED_LOGISTICS, STEP_CHARGE_BEFORE_V3 } from '../../../src/shared/types/plan.ts';
 import type { Project } from '../../../src/shared/types/project.ts';
 
 const AT = '2026-10-17T12:00:00.000Z';
@@ -59,12 +59,15 @@ describe('defaultSettings / normalizeSettings', () => {
   it('has the decided defaults', () => {
     const s = defaultSettings();
     expect(s).toMatchObject({ target: null, mode: 'rate', amount: 1, per: 'min', tier: null, routeDerived: true,
-      logistics: 'direct', coilHeat: null, automateCrafting: true, dims: { policy: 'progression', overrides: {} }, settingsVersion: 3,
-      stepCharge: 0.5, reuseOwned: true });
+      logistics: 'direct', coilHeat: null, automateCrafting: true, dims: { policy: 'progression', overrides: {} }, settingsVersion: 4,
+      stepCharge: 0.5, reuseOwned: true, rawCap: 0.25 });
     expect(s.excludedCategories).toEqual(['recycling', 'massfab', 'replicator', 'scrap', 'lava-centrifuge', 'programmed-circuit-conversion']);
     expect(s.declineReuse).toEqual([]);
     expect(s.ownedManual).toEqual([]);
-    expect(SETTINGS_VERSION).toBe(3);
+    expect(SETTINGS_VERSION).toBe(4);
+    // The raw cap, the user's answer of 2026-10-22 (fix wave 3 (A)): +25 % over the leanest line, null = no limit, at most 10.
+    expect(DEFAULT_RAW_CAP).toBe(0.25);
+    expect(MAX_RAW_CAP).toBe(10);
     // "Fewest machines", the user's answer of 2026-10-20 (plan 12 fix wave 2): each new machine block costs half the least
     // raw material over the horizon (with build cost ignored, each step must save half of it); at most 50 %.
     expect(DEFAULT_STEP_CHARGE).toBe(0.5);
@@ -90,16 +93,23 @@ describe('defaultSettings / normalizeSettings', () => {
     expect(s).toMatchObject({ stepCharge: 0.5, haveSupply: [], optionChoice: {}, reuseOwned: true, ownedManual: [], routeDerived: false, settingsVersion: 1 });
     expect(normalizeSettings({ stepCharge: 0.15 } as never).stepCharge).toBe(0.15);
   });
-  it('brings older settings to this version: supporting lines from before 2, Fewest machines from the old default before 3', () => {
-    // Plan 09's switch (ruling P10) and plan 12 fix wave 2's (the user's answer of 2026-10-20): a stored step charge of
-    // exactly the old default 0.02 becomes 0.5, any other stored value stays; settings of this version are never touched.
+  it('brings older settings to this version: supporting lines from before 2, Fewest machines from the old default before 3, the raw cap before 4', () => {
+    // Plan 09's switch (ruling P10), plan 12 fix wave 2's (the user's answer of 2026-10-20: a stored step charge of exactly
+    // the old default 0.02 becomes 0.5, any other stored value stays) and fix wave 3's (the user's answer of 2026-10-22: the
+    // raw cap at +25 %); settings of this version are never touched, so a later 2 % or "No limit" sticks.
     const at = (s: object) => settingsUpgrade(normalizeSettings(s as never));
-    expect(at({ routeDerived: false })).toEqual({ routeDerived: true, settingsVersion: 3 });   // no stepCharge stored: 0.5 already
-    expect(at({ routeDerived: false, stepCharge: 0.02 })).toEqual({ routeDerived: true, stepCharge: 0.5, settingsVersion: 3 });
-    expect(at({ routeDerived: false, settingsVersion: 2, stepCharge: 0.02 })).toEqual({ stepCharge: 0.5, settingsVersion: 3 });
-    for (const stepCharge of [0, 0.05, 0.15, 0.5]) expect(at({ settingsVersion: 2, stepCharge })).toEqual({ settingsVersion: 3 });
-    expect(at({ settingsVersion: 3, stepCharge: 0.02 })).toBeNull();
+    expect(at({ routeDerived: false })).toEqual({ routeDerived: true, rawCap: 0.25, settingsVersion: 4 });   // no stepCharge stored: 0.5 already
+    expect(at({ routeDerived: false, stepCharge: 0.02 })).toEqual({ routeDerived: true, stepCharge: 0.5, rawCap: 0.25, settingsVersion: 4 });
+    expect(at({ routeDerived: false, settingsVersion: 2, stepCharge: 0.02 })).toEqual({ stepCharge: 0.5, rawCap: 0.25, settingsVersion: 4 });
+    for (const stepCharge of [0, 0.05, 0.15, 0.5]) expect(at({ settingsVersion: 2, stepCharge })).toEqual({ rawCap: 0.25, settingsVersion: 4 });
+    expect(at({ settingsVersion: 3, stepCharge: 0.02 })).toEqual({ rawCap: 0.25, settingsVersion: 4 });   // a deliberate 2 % at version 3 stays
+    expect(at({ settingsVersion: 4, stepCharge: 0.02, rawCap: null })).toBeNull();
     expect(settingsUpgrade(defaultSettings())).toBeNull();
+  });
+  it('fills the raw cap of an older project and keeps a stored "No limit"', () => {
+    expect(normalizeSettings({} as never).rawCap).toBe(0.25);
+    expect(normalizeSettings({ rawCap: null } as never).rawCap).toBeNull();
+    expect(normalizeSettings({ rawCap: 0.5 } as never).rawCap).toBe(0.5);
   });
 });
 
@@ -156,8 +166,12 @@ describe('validateOp', () => {
   it('accepts a normal settings patch and a tick', () => {
     expect(validateOp({ op: 'settings', patch: { mode: 'makeN', amount: 64, tier: 2 } })).toBeNull();
     expect(validateOp({ op: 'settings', patch: { declineReuse: [121, 1000] } })).toBeNull();
-    expect(validateOp({ op: 'settings', patch: { routeDerived: true, settingsVersion: 3 } })).toBeNull();
-    expect(validateOp({ op: 'settings', patch: { settingsVersion: 2 } })).toEqual('settingsVersion must be a whole number of at least 3');
+    expect(validateOp({ op: 'settings', patch: { routeDerived: true, settingsVersion: 4 } })).toBeNull();
+    expect(validateOp({ op: 'settings', patch: { settingsVersion: 3 } })).toEqual('settingsVersion must be a whole number of at least 4');
+    for (const rawCap of [null, 0, 0.1, 0.25, 10]) expect(validateOp({ op: 'settings', patch: { rawCap } }), `${rawCap}`).toBeNull();
+    for (const rawCap of [-0.1, 10.5, '0.25', Number.POSITIVE_INFINITY, Number.NaN]) {
+      expect(validateOp({ op: 'settings', patch: { rawCap } } as never), `${rawCap}`).toEqual('rawCap must be empty or a number from 0 to 10');
+    }
     expect(validateOp({ op: 'mark', row: 'build:gregtech:gt.metaitem.01@2032', on: true })).toBeNull();
     for (const stepCharge of [0, 0.02, 0.15, 0.5]) expect(validateOp({ op: 'settings', patch: { stepCharge } })).toBeNull();
   });

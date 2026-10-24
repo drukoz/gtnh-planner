@@ -4,7 +4,8 @@
 // Pure TypeScript shared by server and browser: nothing from node:* may be imported here.
 
 import {
-  DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_EXCLUDED_CATEGORIES, DEFAULT_STEP_CHARGE, LogisticsMode, STEP_CHARGE_BEFORE_V3, type PlanSettings,
+  DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_EXCLUDED_CATEGORIES, DEFAULT_RAW_CAP, DEFAULT_STEP_CHARGE, LogisticsMode, STEP_CHARGE_BEFORE_V3,
+  type PlanSettings,
 } from '../types/plan.ts';
 import type { Note, Project, ProjectOp } from '../types/project.ts';
 
@@ -18,6 +19,8 @@ export const MAX_AVOID_ENTRY_LENGTH = 300;
  * build cost counted a new machine block costs half of it over the horizon ("Fewest machines", the default).
  */
 export const MAX_STEP_CHARGE = 0.5;
+/** The largest `PlanSettings.rawCap` (fix wave 3 (A)): ten times the leanest line's raw material on top of it. */
+export const MAX_RAW_CAP = 10;
 /** The longest `PlanSettings.buildHorizonHours` (architecture §11.39): a year of running. */
 export const MAX_BUILD_HORIZON_HOURS = 8760;
 /** Characters of a pinned option (`PlanSettings.optionChoice` values, fix spec §3). */
@@ -44,9 +47,10 @@ const MULTIBLOCK_CHOICES: readonly unknown[] = ['allow', 'only-required'] satisf
 /**
  * The version of the defaults new settings are made under (`PlanSettings.settingsVersion`, architecture §11.32): 2 since
  * supporting lines (`routeDerived: true`) became the default (plan 09), 3 since "Fewest machines" (`DEFAULT_STEP_CHARGE`
- * 0.5) did (plan 12 fix wave 2, the user's answer of 2026-10-20). Settings stored before 2 read as version 1.
+ * 0.5) did (plan 12 fix wave 2, the user's answer of 2026-10-20), 4 since the raw cap (`DEFAULT_RAW_CAP`, fix wave 3 (A),
+ * the user's answer of 2026-10-22). Settings stored before 2 read as version 1.
  */
-export const SETTINGS_VERSION = 3;
+export const SETTINGS_VERSION = 4;
 /** What `normalizeSettings` gives settings stored before `settingsVersion` existed. */
 const FIRST_SETTINGS_VERSION = 1;
 
@@ -57,6 +61,7 @@ export function defaultSettings(): PlanSettings {
     machineTier: {}, excludedCategories: [...DEFAULT_EXCLUDED_CATEGORIES], coilHeat: null, automateCrafting: true,
     avoid: [], declineReuse: [], settingsVersion: SETTINGS_VERSION, haveSupply: [], stepCharge: DEFAULT_STEP_CHARGE,
     optionChoice: {}, reuseOwned: true, ownedManual: [], buildHorizonHours: DEFAULT_BUILD_HORIZON_HOURS, buildTier: null, multiblocks: 'allow',
+    rawCap: DEFAULT_RAW_CAP,
   };
 }
 
@@ -99,15 +104,17 @@ function summedOwned(list: NonNullable<PlanSettings['ownedManual']>): NonNullabl
  * The settings patch that brings `s` (as `normalizeSettings` reads it) from its `settingsVersion` to `SETTINGS_VERSION`
  * (`ProjectStore.migrateSettings` records it once, as the planner): from before 2, supporting lines on (plan 09); from
  * before 3, a step charge of exactly the old default (`STEP_CHARGE_BEFORE_V3`, 0.02) becomes the new one (0.5, "Fewest
- * machines"), any other stored value staying; and the version. Null for settings of this version, which it never
- * touches, so a later deliberate value sticks.
+ * machines"), any other stored value staying; from before 4, the raw cap at its default (`DEFAULT_RAW_CAP`, fix wave 3
+ * (A)) where none is stored; and the version. Null for settings of this version, which it never touches, so a later
+ * deliberate value (a 2 % step charge, "No limit") sticks.
  */
 export function settingsUpgrade(s: PlanSettings): Partial<PlanSettings> | null {
   const from = s.settingsVersion ?? FIRST_SETTINGS_VERSION;
   if (from >= SETTINGS_VERSION) return null;
   const patch: Partial<PlanSettings> = {};
   if (from < 2) patch.routeDerived = true;
-  if (s.stepCharge === STEP_CHARGE_BEFORE_V3) patch.stepCharge = DEFAULT_STEP_CHARGE;
+  if (from < 3 && s.stepCharge === STEP_CHARGE_BEFORE_V3) patch.stepCharge = DEFAULT_STEP_CHARGE;
+  if (from < 4) patch.rawCap = s.rawCap === undefined ? DEFAULT_RAW_CAP : s.rawCap;
   patch.settingsVersion = SETTINGS_VERSION;
   return patch;
 }
@@ -243,6 +250,9 @@ const SETTING_CHECKS: { readonly [K in keyof PlanSettings]-?: Check } = {
   // null = the cheapest tier; a tier above the project's is kept and clamped by the planner.
   buildTier: (v) => (v === null || (isTier(v) && (v as number) >= 1) ? null : `buildTier must be empty or a whole number from 1 to ${MAX_TIER}`),
   multiblocks: oneOf('multiblocks', MULTIBLOCK_CHOICES),
+  // null = no limit (fix wave 3 (A)).
+  rawCap: (v) => (v === null || (typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= MAX_RAW_CAP)
+    ? null : `rawCap must be empty or a number from 0 to ${MAX_RAW_CAP}`),
 };
 
 const SETTING_KEYS: ReadonlySet<string> = new Set(Object.keys(defaultSettings()));

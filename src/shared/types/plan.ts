@@ -53,6 +53,12 @@ export const STEP_CHARGE_BEFORE_V3 = 0.02;
  */
 export const DEFAULT_BUILD_HORIZON_HOURS = 24;
 
+/**
+ * The default `PlanSettings.rawCap` (fix wave 3 (A), the user's answer of 2026-10-22: "still pick fewest machines, but
+ * never more than 25 % more raw material than the leanest line; a setting you can change per project").
+ */
+export const DEFAULT_RAW_CAP = 0.25;
+
 export interface PlanSettings {
   target: StuffKey | null; mode: 'rate' | 'makeN'; amount: number; per: 'min' | 'hour';   // per ignored for makeN
   tier: number | null;                     // null = from world scan (fallback LV = 1)
@@ -82,8 +88,9 @@ export interface PlanSettings {
   /**
    * Which defaults the settings were made under (`SETTINGS_VERSION` in apply-op.ts; architecture §11.32): 2 from plan 09,
    * when supporting lines (`routeDerived: true`) became the default, 3 from plan 12's fix wave 2, when "Fewest machines"
-   * (`DEFAULT_STEP_CHARGE` 0.5) did. `defaultSettings()` sets the current version and `normalizeSettings()` fills a
-   * missing one with 1 (a project stored before it), which the server switches once.
+   * (`DEFAULT_STEP_CHARGE` 0.5) did, 4 from its fix wave 3 (A), when the raw cap (`DEFAULT_RAW_CAP`) was added.
+   * `defaultSettings()` sets the current version and `normalizeSettings()` fills a missing one with 1 (a project stored
+   * before it), which the server switches once.
    */
   settingsVersion?: number;
   // optional addition
@@ -152,6 +159,15 @@ export interface PlanSettings {
    * `defaultSettings()` and `normalizeSettings()` always fill it; readers treat only `only-required` as on.
    */
   multiblocks?: 'allow' | 'only-required';
+  // optional addition (fix wave 3 (A))
+  /**
+   * "Raw material for fewer machines": wherever build cost counts and the step charge is above 0, the plan uses at most
+   * (1 + this) × the raw material of the leanest line — the plan "Least raw material" makes with the same settings, the
+   * raw material over the horizon plus its machines' build at its least — and within that the step charge decides; null =
+   * no limit. 0 to `MAX_RAW_CAP` (apply-op.ts). With build cost ignored it is not read. `defaultSettings()` and
+   * `normalizeSettings()` always fill it (`DEFAULT_RAW_CAP`) and keep a stored null.
+   */
+  rawCap?: number | null;
 }
 
 /** Where one of the group's machines stands (a world scan's `PlacedMachine`): its dimension id and block position. */
@@ -369,7 +385,16 @@ export interface Plan {
   // it uses a second against the least any plan of its graph needs (rate mode)
   target?: StuffKey;
   targetPerSecond?: number;
-  rawCost?: { perSecond: number; leastPerSecond: number };
+  rawCost?: {
+    perSecond: number; leastPerSecond: number;
+    // optional addition (fix wave 3 (A))
+    /**
+     * Where build cost counts: the raw material a second of the leanest line (the plan the build stage makes at step
+     * charge 0, what "Least raw material" plans), which `PlanSettings.rawCap` and the step charge are measured against;
+     * absent at No limit where the leanest line cannot change the step charge.
+     */
+    leanestPerSecond?: number;
+  };
   // optional addition
   /**
    * What the plan costs in raw material (architecture §11.28, §11.39; every `ok` plan): to run it an hour (Make N: the
