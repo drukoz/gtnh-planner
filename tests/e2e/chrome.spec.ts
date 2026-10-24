@@ -106,8 +106,9 @@ test('the brand\'s pipe flows six turns, then rests; under reduced motion it hol
   const turns = (count: string): { animationName: string; animationIterationCount: string }[] =>
     [{ animationName: 'brand-flow', animationIterationCount: count }, { animationName: 'brand-flow', animationIterationCount: count }];
 
-  // six turns of 0.66 s, and no more (ruling R31, WCAG 2.2.2): then each overlay falls back to its own opacity 0, the still frame
-  expect(await overlays(), 'both overlays flow six turns').toEqual(turns('6'));
+  // seven runs of 0.66 s, the first spent before the first paint by the negative delays: six turns show, and no more (rulings R31 and
+  // P2-R12, WCAG 2.2.2); then each overlay falls back to its own opacity 0, the still frame
+  expect(await overlays(), 'both overlays run seven times: six turns on screen').toEqual(turns('7'));
   await page.emulateMedia({ reducedMotion: 'reduce' });
   // the global block's one run of a millisecond, which the overlays' negative delays have used up by the first paint
   expect(await overlays(), 'under reduced motion both run once').toEqual(turns('1'));

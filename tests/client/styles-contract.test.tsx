@@ -598,9 +598,10 @@ describe('the Machine GUI chrome', () => {
   it('flows the brand\'s pipe six turns and rests on the still frame', () => {
     // the mark is frame 0; `::before` shows frame 1's pipe in [220, 440) ms of each 660 ms turn and `::after` frame 2's in [440, 660), so
     // the gaps move from the orange machine to the green one, as the app's pipes run (spec §5.3). With no fill mode an overlay that has
-    // run falls back to its own opacity 0, the still frame; under reduced motion the negative delays have used up its 1 ms by the first paint
+    // run falls back to its own opacity 0, the still frame; under reduced motion the negative delays have used up its 1 ms by the first paint.
+    // Seven runs, for six turns on screen: the negative delays spend each overlay's first run before the first paint (ruling P2-R12)
     expectDeclared([[OVERLAYS, 'content', "''"], [OVERLAYS, 'position', 'absolute'], [OVERLAYS, 'inset', '0'], [OVERLAYS, 'opacity', '0'],
-      [OVERLAYS, 'background', 'var(--brand-flow-1) center / contain no-repeat'], [OVERLAYS, 'animation', 'brand-flow 0.66s step-end 6 -0.44s'],
+      [OVERLAYS, 'background', 'var(--brand-flow-1) center / contain no-repeat'], [OVERLAYS, 'animation', 'brand-flow 0.66s step-end 7 -0.44s'],
       ['.brand-mark::after', 'background-image', 'var(--brand-flow-2)'], ['.brand-mark::after', 'animation-delay', '-0.22s']]);
     const [, duration, , count] = (declared(OVERLAYS, 'animation') ?? '').split(' ');
     expect(Number.parseFloat(duration ?? '') * Number(count)).toBeLessThanOrEqual(5);   // WCAG 2.2.2 and ruling R31: it stops within 5 s

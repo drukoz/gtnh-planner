@@ -354,9 +354,10 @@ details.settings-section > summary .muted { color: inherit; }
 }
 .brand-mark { position: relative; flex: none; width: 32px; height: 32px; background: var(--brand-mark) center / contain no-repeat; }
 /* The pipe flows six turns and rests on the still frame (WCAG 2.2.2, ruling R31); reduced motion: never moves. */
+/* Seven runs for six turns on screen: the negative delays spend each overlay's first run before the first paint (P2-R12). */
 .brand-mark::before, .brand-mark::after {
   content: ''; position: absolute; inset: 0; opacity: 0; background: var(--brand-flow-1) center / contain no-repeat;
-  animation: brand-flow 0.66s step-end 6 -0.44s;
+  animation: brand-flow 0.66s step-end 7 -0.44s;
 }
 .brand-mark::after { background-image: var(--brand-flow-2); animation-delay: -0.22s; }
 .top-nav nav { display: flex; gap: 6px; }
