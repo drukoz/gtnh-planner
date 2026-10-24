@@ -1,11 +1,15 @@
 // The resource packs a Minecraft 1.7.10 client has switched on (add-on 23): the names on the `resourcePacks` line of the
 // game folder's `options.txt`, lowest priority first as the game saves them, each matched to a folder or a zip in
-// `resourcepacks/` and read for the version in its `pack.mcmeta`. It follows 1.7.10's `ResourcePackRepository`: a listed
-// name is a pack's file name in `resourcepacks/`, and the game applies neither a name that is not there nor a pack whose
-// `pack.mcmeta` it cannot read, so those are skipped here too, with the reason. This module only reads: `options.txt`
-// and a folder's `pack.mcmeta` with `readFile`, zips with yauzl (it opens them with flag 'r', as the extractor opens
-// jars). Nothing under the instance is written, renamed or locked, and a listed name that is not a plain file name
-// (`../x`) is never opened. The packs' textures are not read here: the extractor takes them from the `PackSet`.
+// `resourcepacks/` and read for the version in its `pack.mcmeta`. A listed name is a pack's file name in
+// `resourcepacks/`, as in 1.7.10's `ResourcePackRepository`, and a name that is not there, or a pack whose `pack.mcmeta`
+// is missing or cannot be read, is skipped as the game skips it. Every other skip is this reader's own rule, and the
+// game does not always agree: `pack.mcmeta` has to be strict JSON holding a `pack` object (1.7.10 parses it leniently
+// with Gson and keeps a pack without a `pack` section, though it skips a `pack` object without `pack_format`, which this
+// reader keeps), and a name listed twice is read at its first place only (the game ranks the pack at its last listing).
+// Each skip comes with its reason. This module only reads: `options.txt` and a folder's `pack.mcmeta` with `readFile`,
+// zips with yauzl (it opens them with flag 'r', as the extractor opens jars). Nothing under the instance is written,
+// renamed or locked, and a listed name that is not a plain file name (`../x`) is never opened. The packs' textures are
+// not read here: the extractor takes them from the `PackSet`.
 
 import { statSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
@@ -19,14 +23,17 @@ import type { AssetPacks } from './index.ts';
 export interface PackSource { name: string; path: string; format: 'folder' | 'zip'; version: string }
 /** Both lowest priority first: `enabled` is `options.txt`'s list as read (repeats and skipped names included). */
 export interface PackSet { enabled: string[]; packs: PackSource[] }
-/** A listed pack that the game would not apply either, and why. */
+/** A listed name that this reader skips, and why. */
 export interface SkippedPack { name: string; reason: string }
 
 const OPTIONS_TXT = 'options.txt';
 const PACK_DIR = 'resourcepacks';
 const PACK_MCMETA = 'pack.mcmeta';
 const RESOURCE_PACKS_KEY = 'resourcePacks:';
+/** The reason for a `pack.mcmeta` that is missing or cannot be read: the game skips such a pack too. */
 const NO_MCMETA = 'no valid pack.mcmeta (the game skips it too)';
+/** The reason for a `pack.mcmeta` that fails this reader's own rule; the game applies some such packs. */
+const BAD_MCMETA = 'pack.mcmeta is not strict JSON with a "pack" object';
 /**
  * As the extractor opens jars: entry names stay raw, because with `decodeStrings: true` yauzl refuses a whole zip for
  * one entry name holding `..` or `\`, which would skip a pack that the extraction itself can read.
@@ -68,10 +75,11 @@ export function parseResourcePacks(optionsTxt: string): string[] {
 }
 
 /**
- * A pack's version from the text of its `pack.mcmeta`; null when the game would skip the pack, which is when the text
- * (without a leading U+FEFF, which real packs have) is not an object holding a `pack` object. The version is the GTNH
- * resource pack updater's `pack_version` when it is a non-empty string, else the pack's `description` without its
- * `§x` codes and trimmed, else ''.
+ * A pack's version from the text of its `pack.mcmeta`; null when this reader skips the pack, which is when the text
+ * (without a leading U+FEFF, which real packs have) is not strict JSON for an object holding a `pack` object: this
+ * reader's rule, not the game's (the module comment says where they differ). The version is the GTNH resource pack
+ * updater's `pack_version` when it is a non-empty string, else the pack's `description` without its `§x` codes and
+ * trimmed, else ''.
  */
 export function packVersion(mcmetaText: string): string | null {
   let meta: unknown;
@@ -135,7 +143,7 @@ async function zipMcmeta(zip: ZipFile): Promise<string | null> {
   return null;
 }
 
-/** The pack `name` in `<gameDir>/resourcepacks/`, or why the game would not apply it. `name` is a plain file name. */
+/** The pack `name` in `<gameDir>/resourcepacks/`, or why this reader skips it. `name` is a plain file name. */
 async function inspectPack(gameDir: string, name: string): Promise<{ pack: PackSource } | { reason: string }> {
   const path = join(gameDir, PACK_DIR, name);
   const format = await packFormat(path);
@@ -156,16 +164,18 @@ async function inspectPack(gameDir: string, name: string): Promise<{ pack: PackS
       zip.close();
     }
   }
-  const version = mcmeta === null ? null : packVersion(mcmeta);
-  return version === null ? { reason: NO_MCMETA } : { pack: { name, path, format, version } };
+  if (mcmeta === null) return { reason: NO_MCMETA };
+  const version = packVersion(mcmeta);
+  return version === null ? { reason: BAD_MCMETA } : { pack: { name, path, format, version } };
 }
 
 /**
  * Reads `<gameDir>/options.txt` once and the packs it lists. `set.enabled` is the list as read; `set.packs` are the packs
- * the game would apply, with their versions. Every other listed name is in `skipped` with its reason, in the order
+ * this reader keeps, with their versions. Every other listed name is in `skipped` with its reason, in the order
  * listed: a name that is not a file name (so `../x` never leaves `resourcepacks/`), one listed before, one not in
- * `resourcepacks/`, a zip yauzl cannot open, or a pack without a valid `pack.mcmeta`. The read of `options.txt` is the
- * only thing that throws; whatever goes wrong with one pack is a skip.
+ * `resourcepacks/`, a zip yauzl cannot open, a pack whose `pack.mcmeta` is missing or cannot be read, or one whose
+ * `pack.mcmeta` is not strict JSON holding a `pack` object. The read of `options.txt` is the only thing that throws;
+ * whatever goes wrong with one pack is a skip.
  */
 export async function readPackSet(gameDir: string): Promise<{ set: PackSet; skipped: SkippedPack[] }> {
   const enabled = parseResourcePacks(await readFile(join(gameDir, OPTIONS_TXT), 'utf8'));

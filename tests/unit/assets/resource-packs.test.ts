@@ -99,6 +99,23 @@ describe('resource packs of a client instance', () => {
     expect(await snapshot(game)).toEqual(before);
   });
 
+  it('readPackSet skips a pack.mcmeta that is not strict JSON with a "pack" object for its own reason, by its own rule', async () => {
+    const game = await scratch();
+    const packs = join(game, 'resourcepacks');
+    await writeFile(join(game, 'options.txt'), 'resourcePacks:["Lenient","NoSection.zip","Listless","Bare"]\n');
+    await mkdir(join(packs, 'Lenient'), { recursive: true });
+    await writeFile(join(packs, 'Lenient', 'pack.mcmeta'), '{pack:{pack_format:1,description:"x"}}');   // Gson-lenient: the game applies it
+    await makeJar(join(packs, 'NoSection.zip'), { 'pack.mcmeta': '{"gtnh_resource_pack_updater":{"pack_version":"2.0"}}' });   // the game applies it too
+    await mkdir(join(packs, 'Listless'));
+    await writeFile(join(packs, 'Listless', 'pack.mcmeta'), '[]');
+    await mkdir(join(packs, 'Bare'));
+    await writeFile(join(packs, 'Bare', 'pack.mcmeta'), '{"pack":{}}');   // a `pack` object is all this reader asks (the game also wants pack_format)
+    const { set, skipped } = await readPackSet(game);
+    const reason = 'pack.mcmeta is not strict JSON with a "pack" object';
+    expect(skipped).toEqual([{ name: 'Lenient', reason }, { name: 'NoSection.zip', reason }, { name: 'Listless', reason }]);
+    expect(set.packs).toEqual([{ name: 'Bare', path: join(packs, 'Bare'), format: 'folder', version: '' }]);
+  });
+
   it('readPackSet refuses names that are not file names, and a name listed again after it was skipped', async () => {
     const game = await scratch();
     const names = ['', '.', '..', 'a/b', 'a\\b', 'ctl\u0001', 'nul\u0000', '/abs', 'gone', 'gone'];
