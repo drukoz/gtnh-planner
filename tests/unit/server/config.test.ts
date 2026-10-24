@@ -33,6 +33,21 @@ it('refuses a damaged file and leaves it untouched', () => {
   expect(readFileSync(f, 'utf8')).toBe('{oops');
 });
 
+it('checks clientInstance when present', () => {
+  const f = file();
+  saveConfig({ ...DEFAULT_CONFIG }, f);
+  writeFileSync(f, JSON.stringify({ dataDir: 'd', clientInstance: 5 }));
+  expect(() => loadConfig(f)).toThrow(/clientInstance must be a string or null/);
+  writeFileSync(f, JSON.stringify({ dataDir: 'd', clientInstance: '/x/inst' }));
+  expect(loadConfig(f).clientInstance).toBe('/x/inst');
+});
+
+it('keeps a null clientInstance (unset)', () => {
+  const f = file();
+  saveConfig({ ...DEFAULT_CONFIG, clientInstance: null }, f);
+  expect(loadConfig(f).clientInstance).toBeNull();
+});
+
 it('resolves the active export directory', () => {
   expect(activeExportDir({ ...DEFAULT_CONFIG, activeExportId: 'abc' })).toBe(resolve('data/export/abc'));
   expect(() => activeExportDir({ ...DEFAULT_CONFIG })).toThrow(NoActiveExportError);

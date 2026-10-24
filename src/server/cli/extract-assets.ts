@@ -1,7 +1,11 @@
-// `npm run extract-assets -- [--server <folder>] [--client-jar <path> | --no-client]`: copies the block and item
-// textures of the server pack's mod jars and of the official Minecraft 1.7.10 client jar into `<dataDir>/assets/`
-// (Task 3). The server folder is only read. Exit 0 extracted; 1 the extraction failed, also when no mod jar could be
-// read (the previous textures stay in place); 2 bad arguments or settings, or no usable client jar. Every path is
+// `npm run extract-assets -- [--server <folder>] [--client-jar <path> | --no-client] [--instance <folder> | --no-packs]`:
+// copies the block and item textures of the server pack's mod jars and of the official Minecraft 1.7.10 client jar
+// into `<dataDir>/assets/` (Task 3), with the resource packs enabled in the GTNH client instance over every jar
+// (add-on 23). The instance is `--instance`, else `clientInstance` in the settings; `--no-packs` leaves the packs out
+// for one run, and with neither the textures come from the jars alone. The server folder and the instance are only
+// read. Each run lists the packs it used and what changed in them since the previous extraction. Exit 0 extracted;
+// 1 the extraction failed, also when no mod jar could be read (the previous textures stay in place); 2 bad arguments
+// or settings, no usable client jar, or an instance whose `options.txt` cannot be found or read. Every path is
 // resolved from the working directory, which is the repo root under npm.
 
 import { createHash } from 'node:crypto';
@@ -11,6 +15,8 @@ import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { ExtractError, extractAssets, type ExtractSummary, type JarSource } from '../assets/extract.ts';
+import { loadAssetIndex, type AssetPacks, type PackRecord } from '../assets/index.ts';
+import { gameDirOf, packChanges, readPackSet, type PackSet, type SkippedPack } from '../assets/resource-packs.ts';
 import { ConfigError, loadConfig, type AppConfig } from '../config.ts';
 
 /** The SHA-1 of Mojang's `1.7.10.jar` client download. */
@@ -21,12 +27,16 @@ export const CLIENT_JAR_CANDIDATES: readonly string[] = Object.freeze([
   'Library/Application Support/minecraft/versions/1.7.10/1.7.10.jar',
 ]);
 
-const USAGE = 'Usage: npm run extract-assets -- [--server <folder>] [--client-jar <path> | --no-client]';
+const USAGE = 'Usage: npm run extract-assets -- [--server <folder>] [--client-jar <path> | --no-client] '
+  + '[--instance <folder> | --no-packs]';
 const NO_SERVER = 'No server folder: set "serverFolder" in data/config.json or pass --server <folder>';
 const NO_CLIENT = 'No Minecraft 1.7.10 client jar found. Pass --client-jar <path> or set "clientJar" in data/config.json '
   + `(Prism Launcher keeps it at ~/${CLIENT_JAR_CANDIDATES[0]}), or use --no-client.`;
 const NO_CLIENT_WARNING = 'warning: no client jar - vanilla block and item textures will be missing';
 const WINNER_RULE = 'winner: mod over vanilla, then an overriding jar over the texture\'s own mod, then the last jar by name';
+const PACKS_OFF = 'Resource packs: off (--no-packs)';
+const NO_INSTANCE = 'No client instance set: textures from the jars only '
+  + '(set "clientInstance" in data/config.json or pass --instance <folder>)';
 const SHOWN_CONFLICTS = 20;
 const BYTES_PER_MB = 1_000_000;
 
@@ -42,29 +52,44 @@ export function clientJarOf(c: AppConfig): string | null {
   return typeof value === 'string' && value !== '' ? value : null;
 }
 
+/**
+ * The `clientInstance` setting when it holds more than white space, else null: like an empty `clientJar`, an empty
+ * value means none is set.
+ */
+function clientInstanceOf(c: AppConfig): string | null {
+  const value = c.clientInstance;
+  return typeof value === 'string' && value.trim() !== '' ? value : null;
+}
+
 class UsageError extends Error {}
 
-interface Options { help: boolean; server?: string; clientJar?: string; noClient: boolean }
+interface Options { help: boolean; server?: string; clientJar?: string; noClient: boolean; instance?: string; noPacks: boolean }
 
 function parseOptions(argv: string[]): Options {
-  let values: { help?: boolean; server?: string; 'client-jar'?: string; 'no-client'?: boolean };
+  let values: {
+    help?: boolean; server?: string; 'client-jar'?: string; 'no-client'?: boolean; instance?: string; 'no-packs'?: boolean;
+  };
   try {
     ({ values } = parseArgs({
       args: argv, strict: true, allowPositionals: false,
       options: {
         help: { type: 'boolean', short: 'h' }, server: { type: 'string' }, 'client-jar': { type: 'string' },
-        'no-client': { type: 'boolean' },
+        'no-client': { type: 'boolean' }, instance: { type: 'string' }, 'no-packs': { type: 'boolean' },
       },
     }));
   } catch (err) {
     throw new UsageError(err instanceof Error ? err.message : String(err));
   }
-  for (const flag of ['server', 'client-jar'] as const) {
+  for (const flag of ['server', 'client-jar', 'instance'] as const) {
     if (values[flag] !== undefined && values[flag].trim() === '') throw new UsageError(`--${flag} needs a value`);
   }
   const noClient = values['no-client'] === true;
   if (noClient && values['client-jar'] !== undefined) throw new UsageError('--client-jar and --no-client cannot be used together');
-  return { help: values.help === true, server: values.server, clientJar: values['client-jar'], noClient };
+  const noPacks = values['no-packs'] === true;
+  if (noPacks && values.instance !== undefined) throw new UsageError('--instance and --no-packs cannot be used together');
+  return {
+    help: values.help === true, server: values.server, clientJar: values['client-jar'], noClient, instance: values.instance, noPacks,
+  };
 }
 
 function messageOf(err: unknown): string {
@@ -120,13 +145,61 @@ export async function sha1File(path: string): Promise<string> {
 
 function summaryLines(s: ExtractSummary, dataDir: string): string[] {
   const assets = join(dataDir, 'assets');
+  const packCount = s.packs?.read.length ?? 0;
+  const fromPacks = packCount === 0 ? '' : ` and ${packCount} resource pack${packCount === 1 ? '' : 's'}`;
   const lines = [
-    `Extracted ${s.files} textures (${(s.bytes / BYTES_PER_MB).toFixed(1)} MB) from ${s.jars} jars into ${assets}`,
+    `Extracted ${s.files} textures (${(s.bytes / BYTES_PER_MB).toFixed(1)} MB) from ${s.jars} jars${fromPacks} into ${assets}`,
     `${s.identicalDuplicates} identical duplicates, ${s.conflicts.length} conflicting paths (${WINNER_RULE}):`,
     ...s.conflicts.slice(0, SHOWN_CONFLICTS).map((c) => `  ${c.path}: ${c.winner} over ${c.losers.join(', ')}`),
   ];
   if (s.conflicts.length > SHOWN_CONFLICTS) {
     lines.push(`  … ${s.conflicts.length - SHOWN_CONFLICTS} more in ${join(assets, 'index.json')}`);
+  }
+  return lines;
+}
+
+/** What the previous extraction's `index.json` says about its resource packs (`packs` absent: it read none). */
+interface PreviousRun { createdAt: string; packs?: AssetPacks }
+
+/** The previous extraction, read before this run replaces its index; null when there is none or it cannot be read. */
+async function previousRun(dataDir: string): Promise<PreviousRun | null> {
+  try {
+    const file = (await loadAssetIndex(join(dataDir, 'assets'))).file;
+    return file === null ? null : { createdAt: file.createdAt, packs: file.packs };
+  } catch {
+    return null;   // an index this version cannot read: nothing to compare the packs with
+  }
+}
+
+/** `<name> (<version>)`, or the name alone when its `pack.mcmeta` gives no version. */
+function packLabel(pack: PackRecord): string {
+  return pack.version === '' ? pack.name : `${pack.name} (${pack.version})`;
+}
+
+/**
+ * The lines about resource packs that follow the summary, each only when it applies: what the packs supplied, the zip
+ * entries left out for their case, the packs read (the winner first) or why none was, and what changed in the packs
+ * since the previous extraction.
+ */
+function packLines(s: ExtractSummary, noPacks: boolean, previous: PreviousRun | null): string[] {
+  const lines: string[] = [];
+  const read = s.packs?.read ?? [];
+  if (read.length > 0) lines.push(`${s.packFiles} of them from resource packs (${s.packReplaced} replace a jar's texture)`);
+  if (s.caseOnly > 0) lines.push(`${s.caseOnly} files of zip packs left out: their names differ from the game's only in case`);
+  if (s.packs === null) {
+    lines.push(noPacks ? PACKS_OFF : NO_INSTANCE);   // no instance was read
+  } else if (read.length > 0) {
+    lines.push(`Resource packs, last wins: ${read.toReversed().map(packLabel).join(', ')}`);
+  } else {
+    lines.push(s.packs.enabled.length === 0
+      ? 'Resource packs: none enabled in options.txt'
+      : 'Resource packs: none usable (all skipped, see warnings)');
+  }
+  if (previous !== null) {
+    const changes = packChanges(previous.packs, s.packs ?? undefined);
+    if (changes.length > 0) {
+      lines.push(`Resource packs changed since the last extraction (${previous.createdAt}):`, ...changes.map((line) => `  ${line}`));
+    }
   }
   return lines;
 }
@@ -186,19 +259,47 @@ export async function main(
     client = { path, sha1 };
   }
 
+  let packs: { set: PackSet; skipped: SkippedPack[] } | null = null;   // the client instance's, when one is read
+  const instance = opts.noPacks ? null : (opts.instance ?? clientInstanceOf(config));
+  if (instance !== null) {
+    const folder = resolve(instance);
+    let gameDir: string | null;
+    try {
+      gameDir = gameDirOf(folder);
+    } catch (e) {
+      return fail(`Cannot read ${folder}: ${messageOf(e)}`, USAGE_ERROR);   // e.g. EACCES: a folder on the way is closed to us
+    }
+    if (gameDir === null) return fail(`No options.txt in ${folder} or its .minecraft folder`, USAGE_ERROR);
+    try {
+      packs = await readPackSet(gameDir);   // reads options.txt once; a pack it cannot use is skipped, not thrown
+    } catch (e) {
+      return fail(`Cannot read ${join(gameDir, 'options.txt')}: ${messageOf(e)}`, USAGE_ERROR);
+    }
+  }
+
   const jars: JarSource[] = [
     ...(client === null ? [] : [{ path: client.path, kind: 'client' as const }]),
     ...(await listModJars(server)).map((path) => ({ path, kind: 'mod' as const })),
   ];
+  const previous = await previousRun(config.dataDir);
   let summary: ExtractSummary;
   try {
-    summary = await extractAssets({ jars, dataDir: config.dataDir, ...(client === null ? {} : { clientSha1: client.sha1 }) });
+    summary = await extractAssets({
+      jars, dataDir: config.dataDir,
+      ...(client === null ? {} : { clientSha1: client.sha1 }),
+      ...(packs === null ? {} : { packs: packs.set }),
+    });
   } catch (e) {
     if (e instanceof ExtractError) return fail(`Extraction failed; the previous textures are still in place: ${e.message}`, FAILED);
     throw e;
   }
   for (const line of summaryLines(summary, config.dataDir)) out(line);
   for (const skipped of summary.skippedJars) err(`warning: skipped ${skipped.jar}: ${skipped.error}`);
+  for (const line of packLines(summary, opts.noPacks, previous)) out(line);
+  for (const pack of packs?.skipped ?? []) err(`warning: resource pack ${pack.name} skipped: ${pack.reason}`);
+  for (const { pack, path } of summary.notPngInPacks) {
+    err(`warning: ${pack}: ${path} is not a PNG (the game may still read it); left out`);
+  }
   return 0;
 }
 
