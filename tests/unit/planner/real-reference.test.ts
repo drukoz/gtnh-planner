@@ -260,4 +260,36 @@ describe.skipIf(path === undefined)("the user's reference Electronic Circuit flo
     expect(day.blocks, 'no more machine blocks than the reference').toBe(true);
     expect(day.raw, "the reference's raw materials, unless dearer").toBe(true);
   }, 600_000);
+
+  it('A1 and V4 from the base materials only ("Only these come in", fix wave 3 (B))', async () => {
+    // The acceptance spec's BASE (REFERENCE_RAW_KINDS without the free inputs). V4: the stored settings without pins (its
+    // stops include Molten Redstone Alloy, which BASE leaves out). A1: no pins, stops Copper Ingot + Steel Ingot, Rubber Wood
+    // at 0 (add-on 17's farm stand-in), crafting automated, the stored step charge. This fix owns A1 (b); (c) and (e) hold
+    // too and are asserted; (a)'s time, (d)'s machine blocks and (f) belong to other lanes and are logged only.
+    const base = [...REFERENCE_RAW_KINDS].filter((key) => !FREE_KEYS.includes(key));
+    const outside = (plan: Plan): string[] => plan.rawInputs.map((r) => r.key).filter((key) => !REFERENCE_RAW_KINDS.has(key));
+    const v4 = await timed({ ...stored, recipeChoice: {}, inputsOnly: base });
+    logPlan('V4 + BASE', v4.plan, v4.seconds);
+    expect(v4.plan.status, JSON.stringify(v4.plan.warnings)).toBe('ok');
+    expect(outside(v4.plan)).toEqual([]);
+    expect(v4.plan.warnings.filter((w) => w.code === 'stop-outside-inputs').map((w) => w.key)).toEqual(['fluid:molten.redstonealloy']);
+    const a1: PlanSettings = {
+      ...stored, recipeChoice: {}, stopItems: ['gregtech:gt.metaitem.01@11035', STEEL_INGOT], inputsOnly: base, automateCrafting: true,
+      costOverrides: { ...stored.costOverrides, 'IC2:blockRubWood@0': 0 },
+    };
+    const mine = await timed(a1);
+    const pinned = await timed({ ...a1, recipeChoice: stored.recipeChoice });
+    logPlan('A1', mine.plan, mine.seconds);
+    logPlan('A1 with the reference pins', pinned.plan, pinned.seconds);
+    const least = mine.plan.rawCost?.leastPerSecond ?? 0;
+    const leanest = mine.plan.rawCost?.leanestPerSecond ?? 0;   // the step charge's other base (fix wave 3 (B2), Task 7)
+    console.log(`real-reference A1: ${machineBlocks(mine.plan)} machine blocks (A1 (d): at most 18), approx ${mine.plan.warnings.some((w) => w.code === 'build-cost-approx')}, `
+      + `raw ${((mine.plan.rawCost?.perSecond ?? 0) / least).toFixed(4)} x the least; by the build MIP's measure ${buildObjective(mine.plan, a1, least, leanest).toFixed(1)} `
+      + `against the reference pins' ${buildObjective(pinned.plan, a1, least, leanest).toFixed(1)}`);
+    expect(mine.plan.status, JSON.stringify(mine.plan.warnings)).toBe('ok');
+    expect(outside(mine.plan)).toEqual([]);                                   // (b)
+    expect(mine.plan.steps.filter((s) => s.handCraft)).toEqual([]);           // (c)
+    const raw = rawPerMinute(mine.plan);                                      // (e): at most the reference's, per base input
+    for (const [key, most] of Object.entries(REF_RAW)) expect(raw[key] ?? 0, key).toBeLessThanOrEqual(most + 1e-6);
+  }, 300_000);
 });

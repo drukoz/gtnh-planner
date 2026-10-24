@@ -33,6 +33,12 @@ export interface CostModel { graph: CandidateGraph; costs: CostAnalysis; stopIte
 export interface LinePricing {
   target: StuffKey; basis: PlanBasis; model: CostModel; leaf: LeafOracle; graph: CandidateGraph; chains: ReadonlyMap<StuffKey, Standalone>;
   unbuildable?: ReadonlyMap<string, string>;
+  /**
+   * The leaf oracle the build list and the layout's parts break down with (plan 12 fix wave 3 (B)): `leaf` without the
+   * project's "Only these come in", which only the line's own graphs read (machine prices never do); `leaf` itself when
+   * the list is empty.
+   */
+  buildLeaf: LeafOracle;
 }
 
 /**
@@ -203,8 +209,11 @@ async function computePricing(
   // uses (sand from rock-breaker cobblestone), beside digging them; the cost model, machine prices and build-material
   // breakdowns keep them plain leaves.
   const gatheredRecipes = gatheredRecipesOn(settings);
-  const leafWith = (): LeafOracle =>
-    makeLeafOracle(pack, settings, basis.avail, basis.prices, stopCost, (key) => priced.get(key), { supplied: basis.supplied, gatheredRecipes });
+  // Fix wave 3 (B): "Only these come in" holds for the line's own graphs (`LinePricing.buildLeaf` is the same oracle without it).
+  const inputsOnly: ReadonlySet<StuffKey> = new Set(settings.inputsOnly ?? []);
+  const leafWith = (only: ReadonlySet<StuffKey> = inputsOnly): LeafOracle => makeLeafOracle(
+    pack, settings, basis.avail, basis.prices, stopCost, (key) => priced.get(key), { supplied: basis.supplied, gatheredRecipes, inputsOnly: only },
+  );
   // Plan 12 (controller ruling OQ5 a): the step recipes no machine can run here are left out of every walk of the line;
   // and with crafting automated (controller ruling 214) its walks offer the Auto Workbench's single-use tool variants and
   // mark the crafting recipes no bench runs as crafted by hand (`lineWalk`).
@@ -226,7 +235,8 @@ async function computePricing(
   const stops = [...graph.goods.values()].filter((g) => g.leafClass === 'stop' && g.buyable).map((g) => g.key);
   const chains = new Map(priced);
   for (const [key, made] of await derivedCosts(pack, settings, shared, target, stops)) chains.set(key, made);
-  const pricing: LinePricing = { target, basis, model, leaf, graph, chains };
+  const buildLeaf = inputsOnly.size === 0 ? leaf : leafWith(new Set());
+  const pricing: LinePricing = { target, basis, model, leaf, graph, chains, buildLeaf };
   if (unbuildable !== undefined) pricing.unbuildable = unbuildable;
   return pricing;
 }
@@ -302,6 +312,6 @@ export function linePricing(
 export async function lineLeaf(pack: Pack, settings: PlanSettings, ctx: PlanContext): Promise<Pick<PlanBasis, 'env' | 'leaf'>> {
   const pricing = linePricing(pack, settings, ctx);
   if (pricing === null) return planBasis(pack, settings, ctx);
-  const { basis, leaf } = await pricing;
-  return { env: basis.env, leaf };
+  const { basis, buildLeaf } = await pricing;
+  return { env: basis.env, leaf: buildLeaf };
 }

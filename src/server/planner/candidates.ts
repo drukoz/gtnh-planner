@@ -74,6 +74,9 @@ export interface LeafDecision {
    * its purchase and also adds its producers, so the LP weighs digging it against making it.
    */
   alsoMade?: true;
+  // optional addition (plan 12 fix wave 3 (B))
+  /** No leaf only because the project's "Only these come in" leaves it out (`makeLeafOracle`'s `inputsOnly`). */
+  outsideInputs?: true;
 }
 export type LeafOracle = (key: StuffKey) => LeafDecision;
 export interface GoodInfo {
@@ -85,6 +88,9 @@ export interface GoodInfo {
   // optional addition (plan 12, change request 13)
   /** `LeafDecision.alsoMade`: a leaf the graph also makes (its producers are in `recipes`). */
   alsoMade?: true;
+  // optional addition (plan 12 fix wave 3 (B))
+  /** `LeafDecision.outsideInputs`: the line makes it, as "Only these come in" leaves it out; blockers say so. */
+  outsideInputs?: true;
 }
 export interface CandidateGraph {
   targets: StuffKey[]; recipes: LpRecipe[] /* sorted by id */; goods: Map<StuffKey, GoodInfo>;
@@ -882,11 +888,12 @@ export function buildCandidates(
   const register = (key: StuffKey): GoodInfo => {
     let good = goods.get(key);
     if (good === undefined) {
-      const { buyable, cost, leafClass, steps, free, alsoMade } = decide(key);
+      const { buyable, cost, leafClass, steps, free, alsoMade, outsideInputs } = decide(key);
       good = { key, buyable, cost, leafClass, virtual: false };
       if (steps !== undefined) good.steps = steps;
       if (free !== undefined) good.free = free;
       if (alsoMade === true) good.alsoMade = true;
+      if (outsideInputs === true) good.outsideInputs = true;
       goods.set(key, good);
     }
     return good;

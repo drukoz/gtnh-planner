@@ -100,7 +100,7 @@ export const CANON_RANK_S3 = 1e-6;
 export const CANON_RANK_S4 = 1e-3;
 
 export interface Blocker {
-  key: StuffKey; reason: 'unavailable' | 'rejected' | 'no-recipe'; needTier?: number;
+  key: StuffKey; reason: 'unavailable' | 'rejected' | 'no-recipe' | 'outside-inputs'; needTier?: number;
   // optional addition (plan 12, controller ruling OQ5 a)
   /** With reason `rejected`: why a machine its recipes need cannot be built here (`<machine> cannot be built here (<why>)`). */
   machine?: string;
@@ -1879,12 +1879,13 @@ export function makeableGoods(graph: CandidateGraph, given: readonly StuffKey[] 
 /**
  * Why `key` blocks: out of reach (`unavailable`), its recipes cannot run here (`rejected`, with the lowest tier one of
  * them names and, plan 12, the first reason by recipe id that a machine one needs cannot be built here), else none
- * makes it (`no-recipe`).
+ * makes it (`no-recipe`, or `outside-inputs` for a good only "Only these come in" keeps the line from buying: plan 12
+ * fix wave 3 (B)).
  */
 function blockerFor(graph: CandidateGraph, key: StuffKey): Blocker {
   if (graph.goods.get(key)?.leafClass === 'unavailable') return { key, reason: 'unavailable' };
   const rejected = graph.blocked.get(key);
-  if (rejected === undefined) return { key, reason: 'no-recipe' };
+  if (rejected === undefined) return { key, reason: graph.goods.get(key)?.outsideInputs === true ? 'outside-inputs' : 'no-recipe' };
   const tiers = rejected.flatMap((b) => (b.needTier === undefined ? [] : [b.needTier]));
   const blocker: Blocker = tiers.length > 0 ? { key, reason: 'rejected', needTier: Math.min(...tiers) } : { key, reason: 'rejected' };
   const machine = [...rejected].sort((a, b) => byString(a.recipeId, b.recipeId)).find((b) => b.machine !== undefined)?.machine;

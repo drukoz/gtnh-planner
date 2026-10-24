@@ -767,6 +767,19 @@ function withLines(pack: Pack, basis: PlanBasis, plan: Plan): Plan {
   return plan;
 }
 
+/**
+ * One `stop-outside-inputs` warning per stop item outside the project's non-empty "Only these come in" (plan 12 fix wave
+ * 3 (B)), in list order, whether the line meets it or not: the planner never buys it (`makeLeafOracle`'s `inputsOnly`).
+ */
+function stopsOutsideInputs(pack: Pack, settings: PlanSettings): PlanWarning[] {
+  const only = new Set(settings.inputsOnly ?? []);
+  if (only.size === 0) return [];
+  return settings.stopItems.filter((key) => !only.has(key)).map((key) => ({
+    code: 'stop-outside-inputs', key,
+    text: `${pack.nameOf(key)} is on “We already make” but not on “Only these come in”, so the planner does not buy it`,
+  }));
+}
+
 /** "<machine> making <product>" for a recipe of the graph (a convert recipe: "any of <product>"). */
 function recipeLabel(pack: Pack, recipe: LpRecipe | undefined, id: string): string {
   if (recipe === undefined) return id;
@@ -841,6 +854,8 @@ function blockerWarnings(
       const needs = b.needTier === undefined ? '' : ` (needs ${tierName(b.needTier)})`;
       const machine = b.machine === undefined ? '' : `: ${b.machine}`;
       warnings.push({ code: 'no-recipe', key: b.key, text: `Nothing at ≤ ${tierName(basis.tier)} makes ${name}${needs}${machine}` });
+    } else if (b.reason === 'outside-inputs') {
+      warnings.push({ code: 'no-recipe', key: b.key, text: `Nothing makes ${name} from your base materials` });
     } else {
       warnings.push({ code: 'no-recipe', key: b.key, text: `Nothing in this pack makes ${name}` });
     }
@@ -1807,7 +1822,7 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
   if (sol.status === 'infeasible' || buildModel === undefined) {
     // A graph cut short at its recipe cap names no blockers (solve.ts): its `graph-too-big` warning says why.
     const blocked = blockerWarnings(pack, sol, basis, settings, ctx);
-    const warnings = [...graph.warnings, ...solverWarnings, ...blocked.warnings, ...avoid.warnings];
+    const warnings = [...graph.warnings, ...solverWarnings, ...blocked.warnings, ...avoid.warnings, ...stopsOutsideInputs(pack, settings)];
     return assemble(pack, settings, basis, { ...withAvoided(bodyWithout('infeasible', warnings, blocked.unlocks), avoid, []), ...aim });
   }
 
@@ -1878,7 +1893,7 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
   // The build list breaks down at the plain pricing's prices (`first`, the one `expandBomLines` reads for the layout's
   // parts), also after a walk around machines that cannot be built, so a line's machines and its layout parts break down
   // alike (architecture §11.15; the controller's ruling after plan 12 Task 5, item (a)).
-  const bom = await buildBom(pack, steps, { settings, env: basis.env, leaf: first.leaf, ctx, avoid: held });
+  const bom = await buildBom(pack, steps, { settings, env: basis.env, leaf: first.buildLeaf, ctx, avoid: held });
   const uses = unavoidableUses(pack, avoid, line, steps, flows, buys, basis.tier);
   const body: PlanBody = {
     status: 'ok', unlocks: [], steps, flows, rawInputs: raw.rawInputs, byproducts: byproductsOf(graph, sinks, target), power,
@@ -1887,7 +1902,7 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
     warnings: [
       ...graph.warnings, ...solverWarnings, ...stepWarnings, ...batchWarnings, ...raw.warnings,
       ...beyondStockWarnings(pack, graph, settings, ctx, buys), ...cost.warnings, ...bom.warnings, ...avoid.warnings,
-      ...uses.warnings,
+      ...uses.warnings, ...stopsOutsideInputs(pack, settings),
     ],
     ...aim,
     cost: cost.cost,
