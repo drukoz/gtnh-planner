@@ -222,7 +222,7 @@ export function packChanges(prev: AssetPacks | undefined, next: AssetPacks | und
   const keptBefore = before.filter((pack) => afterNames.has(pack.name)).map((pack) => pack.name);
   const keptAfter = after.filter((pack) => beforeByName.has(pack.name)).map((pack) => pack.name);
   if (keptBefore.length !== keptAfter.length || keptBefore.some((name, i) => name !== keptAfter[i])) {
-    lines.push(`order changed, last wins: ${after.map((pack) => pack.name).reverse().join(', ')}`);
+    lines.push(`order changed, first wins: ${after.map((pack) => pack.name).reverse().join(', ')}`);
   }
   return lines;
 }

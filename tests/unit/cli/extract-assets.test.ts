@@ -116,14 +116,14 @@ describe('extract-assets CLI', () => {
     const inst = await instance(dir);
     const before = await snapshot(inst);
     expect(await main(['--no-client', '--instance', inst], deps)).toBe(0);
-    expect(lines).toContain('Resource packs, last wins: P.zip (P 1)');
+    expect(lines).toContain('Resource packs, first wins (as in the game\'s menu): P.zip (P 1)');
     expect(lines.find((l) => l.startsWith('Extracted '))).toMatch(/ from 2 jars and 1 resource pack into /);
     const ix = JSON.parse(await readFile(join(config.dataDir, 'assets', 'index.json'), 'utf8'));
     expect(ix.files['extra/textures/items/thing.png'].jar).toBe('P.zip');
     expect(await snapshot(inst)).toEqual(before);
     lines.length = 0;
     expect(await main(['--no-client'], { ...deps, config: { ...config, clientInstance: inst } })).toBe(0);
-    expect(lines).toContain('Resource packs, last wins: P.zip (P 1)');
+    expect(lines).toContain('Resource packs, first wins (as in the game\'s menu): P.zip (P 1)');
   });
 
   it('reports pack changes', async () => {   // Review Focus 5
@@ -167,7 +167,7 @@ describe('extract-assets CLI', () => {
       expect.stringMatching(/^warning: skipped broken\.jar: /),
       '2 of them from resource packs (2 replace a jar\'s texture)',   // P.zip's thing.png; Q's file as the jar's MACHINE_LV_SIDE.png
       '1 files of zip packs left out: their names differ from the game\'s only in case',
-      'Resource packs, last wins: Q, P.zip (P 1)',
+      'Resource packs, first wins (as in the game\'s menu): Q, P.zip (P 1)',
       `Resource packs changed since the last extraction (${createdAt}):`,
       '  added P.zip (P 1)',
       '  added Q ()',
@@ -204,7 +204,7 @@ describe('extract-assets CLI', () => {
     await mkdir(join(config.dataDir, 'assets'), { recursive: true });
     await writeFile(join(config.dataDir, 'assets', 'index.json'), '{oops');
     expect(await main(['--no-client', '--instance', inst], deps)).toBe(0);
-    expect(lines.at(-1)).toBe('Resource packs, last wins: P.zip (P 1)');   // and no "changed since" line
+    expect(lines.at(-1)).toBe('Resource packs, first wins (as in the game\'s menu): P.zip (P 1)');   // and no "changed since" line
   });
 
   it('needs a value for --instance', async () => {

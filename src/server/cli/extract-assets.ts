@@ -189,7 +189,7 @@ function packLines(s: ExtractSummary, noPacks: boolean, previous: PreviousRun | 
   if (s.packs === null) {
     lines.push(noPacks ? PACKS_OFF : NO_INSTANCE);   // no instance was read
   } else if (read.length > 0) {
-    lines.push(`Resource packs, last wins: ${read.toReversed().map(packLabel).join(', ')}`);
+    lines.push(`Resource packs, first wins (as in the game's menu): ${read.toReversed().map(packLabel).join(', ')}`);
   } else {
     lines.push(s.packs.enabled.length === 0
       ? 'Resource packs: none enabled in options.txt'

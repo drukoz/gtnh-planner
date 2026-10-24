@@ -172,12 +172,12 @@ describe('resource packs of a client instance', () => {
     expect(packChanges(undefined, a)).toEqual(['added A (1)', 'added B (1)']);
     expect(packChanges(a, undefined)).toEqual(['removed A', 'removed B']);
     expect(packChanges(a, { enabled: ['B', 'A', 'C'], read: [rec('B', '2'), rec('A', '1', 11), rec('C', 'x')] }))
-      .toEqual(['B: 1 → 2', 'A: same version, different files', 'added C (x)', 'order changed, last wins: C, A, B']);
+      .toEqual(['B: 1 → 2', 'A: same version, different files', 'added C (x)', 'order changed, first wins: C, A, B']);
     expect(packChanges(a, { enabled: ['A'], read: [rec('A', '1')] })).toEqual(['removed B']);
     // bytes alone count, an empty version prints as it is, and a pack that was only added or removed is no reorder
     expect(packChanges(a, { enabled: ['A', 'B'], read: [rec('A', '1'), rec('B', '1', 10, 101)] })).toEqual(['B: same version, different files']);
     expect(packChanges({ enabled: ['A'], read: [rec('A', '')] }, { enabled: ['A', 'N'], read: [rec('A', ''), rec('N', '')] })).toEqual(['added N ()']);
     expect(packChanges(a, { enabled: ['A', 'C', 'B'], read: [rec('A', '1'), rec('C', '1'), rec('B', '1')] })).toEqual(['added C (1)']);
-    expect(packChanges(a, { enabled: ['B', 'A'], read: [rec('B', '1'), rec('A', '1')] })).toEqual(['order changed, last wins: A, B']);
+    expect(packChanges(a, { enabled: ['B', 'A'], read: [rec('B', '1'), rec('A', '1')] })).toEqual(['order changed, first wins: A, B']);
   });
 });
