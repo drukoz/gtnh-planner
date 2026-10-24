@@ -180,7 +180,7 @@ describe('the Connections pipes', () => {
     // the group keeps what the tests and the e2e specs read first, the pipe's custom properties after them: 1 item/s, a second a cycle
     expect(red.tag).toMatch(/^<g data-edge="flow:step:a&gt;step:b:t:dust@0" class="conn-edge conn-via-item_conduit" style="--pipe-dur:1s;/);
     // Red is too dark to read on the dark casing, so its casing is panel grey
-    expect(red.tag).toContain('--pipe-casing:var(--panel)');
+    expect(red.tag).toContain('--pipe-casing:var(--dye-casing)');
     // under the casing the rim a hovered or picked link shows; the casing never has a stroke attribute (the stylesheet colours it),
     // the contents carry the channel's colour and the arrow head
     expect(red.inner).toMatch(pipeMarkup(' stroke="#b3312c" marker-end="url\\(#conn-arrow\\)"'));
@@ -188,12 +188,12 @@ describe('the Connections pipes', () => {
 
   it('gives the seven dyes too dark for the dark casing a panel-grey one, and every other dye the dark casing', () => {
     const html = shell();
-    expect(edgeOf(html, 'flow:chest:2,64,0&gt;step:a:t:in@0').tag).toContain('--pipe-casing:var(--panel)');      // Blue
+    expect(edgeOf(html, 'flow:chest:2,64,0&gt;step:a:t:in@0').tag).toContain('--pipe-casing:var(--dye-casing)');      // Blue
     expect(edgeOf(html, 'flow:step:b&gt;chest:2,64,2:t:ingot@0').tag).not.toContain('--pipe-casing');            // Yellow
     const dyes = Object.keys(DYE_HEX) as DyeColor[];
     const every = withEdges(dyes.map((color) => ({ ...redLink, id: `dye:${color}`, color })));
     for (const color of dyes) expect(edgeOf(every, `dye:${color}`).inner, color).toContain(`<polyline class="conn-edge-flow" points="260,52 300,52" stroke="${DYE_HEX[color]}"`);
-    const panelGrey = dyes.filter((color) => edgeOf(every, `dye:${color}`).tag.includes('--pipe-casing:var(--panel)'));
+    const panelGrey = dyes.filter((color) => edgeOf(every, `dye:${color}`).tag.includes('--pipe-casing:var(--dye-casing)'));
     expect(panelGrey.sort()).toEqual(['black', 'blue', 'brown', 'gray', 'green', 'purple', 'red']);           // design spec §7
   });
 

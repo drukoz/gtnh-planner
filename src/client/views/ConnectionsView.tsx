@@ -183,7 +183,7 @@ function EdgeShape(props: { edge: PlacedEdge; selected: boolean; onPick(pick: Co
   const arrow = edge.via === 'attached' ? {} : { markerEnd: 'url(#conn-arrow)' };
   const pipeVars = {
     ...(moving ? { '--pipe-dur': `${pipeSeconds(edge.perSecond, edge.key !== null && isFluidKey(edge.key))}s` } : {}),
-    ...(edge.color !== null && DARK_DYES.has(edge.color) ? { '--pipe-casing': 'var(--panel)' } : {}),
+    ...(edge.color !== null && DARK_DYES.has(edge.color) ? { '--pipe-casing': 'var(--dye-casing)' } : {}),
   } as CSSProperties;
   return (
     <g data-edge={edge.id} className={`conn-edge conn-via-${edge.via}${selected ? ' selected' : ''}`} style={pipeVars} onClick={() => onPick({ edge: edge.id })}>

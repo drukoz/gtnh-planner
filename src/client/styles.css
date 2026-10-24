@@ -30,6 +30,13 @@
   --brand-mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8' shape-rendering='crispEdges'%3E%3Cpath fill='%23000' d='M2 0h4v1H2zM1 1h1v1H1zM6 1h1v1H6zM0 2h1v4H0zM7 2h1v4H7zM1 6h1v1H1zM6 6h1v1H6zM2 7h4v1H2z'/%3E%3Cpath fill='%23ffd84a' d='M2 1h4v1H2zM1 2h1v4H1zM6 2h1v4H6zM2 6h4v1H2z'/%3E%3Cpath fill='%23c98a00' d='M2 2h4v1H2zM2 3h1v2H2zM5 3h1v2H5zM2 5h4v1H2z'/%3E%3Cpath fill='%23fff' d='M3 3h2v2H3z'/%3E%3C/svg%3E");
   --ink: #dddddd; --ink-muted: #aaaaaa; --ink-title: #ffffff; --ink-link: #ffff55;
   --ink-error: #ff5555; --ink-ok: #55ff55; --ink-warn: #ffaa00; --ink-focus: #ffff55;
+  /* What the rules once wrote as literals, a token each so that a look can change it (Phase 2 spec §4.3): the top bar's inner line, the
+     canvas grids, a disabled face and its ink, the tabs, the 1px rules, a flat row's hover veil and a bare caret's press, the edge of a
+     field, the well of a tick, and the panel ink the panel group reads. */
+  --bar-line: #3c3c3c; --grid: #404040; --btn-off: #4a4a4a; --btn-off-ink: #a0a0a0;
+  --tab-face: #8b8b8b; --tab-face-hi: #a8a8a8; --tab-ink: #1b1b1b; --tab-face-hover: #9a9a9a;
+  --rule: #8b8b8b; --veil: rgb(255 255 255 / 0.35); --press: rgb(0 0 0 / 0.15); --field-edge: #a0a0a0; --bevel-tick: var(--bevel-slot);
+  --panel-error: #aa0000; --panel-ok: #1e5a1e; --panel-warn: #6a4000; --panel-focus: #1b1b1b;
   --gap: 12px;
   color-scheme: dark; scrollbar-color: var(--btn) var(--screen);
   font-family: var(--font-ui); line-height: 1.45; color: var(--ink); background: var(--page);
@@ -64,12 +71,13 @@ h2 { font-size: 1.2rem; margin: 0 0 var(--gap); }
 /*
  * Ink on a panel (design spec §4): dark text on the light grey. The surfaces that are panels are listed here and what they
  * hold inherits it; a dark box (chat, screen, well) sets the light ink of the same table instead, in the group below. Both
- * groups come before .muted and .error, so those two still win on an element that is both (.banner.error).
+ * groups come before .muted and .error, so those two still win on an element that is both (.banner.error). The panel ink reads
+ * the tokens of :root, so a look changes it there and never repeats this list (Phase 2 spec §4.2).
  */
 .card, .modal, .settings-section, .flow-panel, .conn-panel, .tab-panel, .note, .note-add, .materials-section, .line-panel, .found-panel,
 .view3d-box, .compare-card {
-  --ink: #303030; --ink-muted: #4a4a4a; --ink-title: #404040; --ink-link: #1a3fa0;
-  --ink-error: #aa0000; --ink-ok: #1e5a1e; --ink-warn: #6a4000; --ink-focus: #1b1b1b;
+  --ink: var(--text); --ink-muted: var(--text-muted); --ink-title: var(--title); --ink-link: var(--link);
+  --ink-error: var(--panel-error); --ink-ok: var(--panel-ok); --ink-warn: var(--panel-warn); --ink-focus: var(--panel-focus);
   color: var(--ink);
 }
 /* Ink on a dark box (a chat box, a screen, a chip): light text on near black. It sets the focus ink too, so a dark box inside a
@@ -131,11 +139,11 @@ a, button.link { color: var(--ink-link); }
 :where(button.danger:hover:not(:disabled)) { background: var(--danger-face-hover); }
 /* 13px is the smallest the pixel font goes; the .small utility below leaves a button's size to this rule. */
 :where(button.small) { min-height: 28px; padding: 0 10px; font-size: 13px; }
-:where(button:disabled) { background: #4a4a4a; color: #a0a0a0; text-shadow: none; box-shadow: none; cursor: default; }
+:where(button:disabled) { background: var(--btn-off); color: var(--btn-off-ink); text-shadow: none; box-shadow: none; cursor: default; }
 
 /* A text field, a text area and a select are black fields. A tick, a slider and a file input get no such box. */
 :where(input:not([type=checkbox], [type=radio], [type=range], [type=file]), textarea, select) {
-  min-height: 36px; padding: 6px 10px; background: #000000; border: 2px solid var(--btn-hi); border-radius: 0;
+  min-height: 36px; padding: 6px 10px; background: #000000; border: 2px solid var(--field-edge); border-radius: 0;
   color: #ffffff; font: 14px var(--font-ui);
 }
 :where(input:not([type=checkbox], [type=radio], [type=range], [type=file]):focus, textarea:focus, select:focus) {
@@ -164,7 +172,7 @@ textarea { resize: vertical; width: 100%; }
 /* A checkbox or a radio is a 16px well. Its mark pops in (scale 0.6 to 1) when it is checked: a pixel tick, a square dot. */
 :where(input[type=checkbox], input[type=radio]) {
   appearance: none; display: inline-grid; place-content: center; flex: none; width: 16px; height: 16px; margin: 0;
-  background: var(--screen); box-shadow: var(--bevel-slot); cursor: pointer;
+  background: var(--screen); box-shadow: var(--bevel-tick); cursor: pointer;
 }
 :where(input[type=checkbox], input[type=radio])::before {
   content: ''; width: 10px; height: 10px; opacity: 0; transform: scale(0.6);
@@ -215,7 +223,7 @@ textarea { resize: vertical; width: 100%; }
 }
 :where(input[type=file]:not(:disabled))::file-selector-button:hover { background: var(--btn-hover); }
 :where(input[type=file]:not(:disabled))::file-selector-button:active { transform: translateY(1px); box-shadow: var(--bevel-btn-down); }
-:where(input[type=file]:disabled)::file-selector-button { background: #4a4a4a; color: #a0a0a0; text-shadow: none; box-shadow: none; cursor: default; }
+:where(input[type=file]:disabled)::file-selector-button { background: var(--btn-off); color: var(--btn-off-ink); text-shadow: none; box-shadow: none; cursor: default; }
 
 /*
  * The summary of a settings section or of a disclosure is a full-width Minecraft button with a pixel caret that turns down
@@ -264,7 +272,7 @@ details.settings-section > summary .muted { color: inherit; }
  */
 .top-nav {
   display: flex; align-items: center; flex-wrap: wrap; gap: 20px; min-height: 50px; padding: 6px 20px;
-  background: var(--bar); border-bottom: 2px solid #000; box-shadow: inset 0 -2px 0 #3c3c3c;
+  background: var(--bar); border-bottom: 2px solid #000; box-shadow: inset 0 -2px 0 var(--bar-line);
 }
 .brand {
   display: inline-flex; align-items: center; gap: 10px;
@@ -339,7 +347,7 @@ details.settings-section > summary .muted { color: inherit; }
   flex: 1; min-height: 36px; padding: 0 8px; border-color: transparent; background: transparent;
   color: var(--ink); font: 600 22px/1.2 var(--font-pixel);
 }
-.project-name:hover { border-color: var(--btn-hi); }
+.project-name:hover { border-color: var(--field-edge); }
 .project-name:focus { border-color: var(--accent); background: #000000; }
 /* The connection is a readout with a square dot: green and breathing while live (opacity only), amber and blinking while the
    page reconnects. Twice and three times, then the dot holds still at its full opacity (no fill mode): what moves by itself beside
@@ -442,13 +450,13 @@ button.banner-chip { display: inline-flex; align-items: center; gap: 6px; min-he
    its black top edge would cover the selected tab's 2px foot and cut the tab off the panel on every switch. 1 is under the modal. */
 .tabs [role='tab'] {
   position: relative; top: 2px; z-index: 1; min-height: 38px; padding: 0 14px;
-  background: #8b8b8b; border: 2px solid #000; box-shadow: inset 2px 2px 0 #a8a8a8;
-  color: #1b1b1b; font: 15px/1 var(--font-pixel); text-shadow: none;
+  background: var(--tab-face); border: 2px solid #000; box-shadow: inset 2px 2px 0 var(--tab-face-hi);
+  color: var(--tab-ink); font: 15px/1 var(--font-pixel); text-shadow: none;
 }
 /* The button rules that light a hovered button have no specificity, so they do not reach a tab: this is its own. */
-.tabs [role='tab']:hover:not([aria-selected='true']) { background: #9a9a9a; }
+.tabs [role='tab']:hover:not([aria-selected='true']) { background: var(--tab-face-hover); }
 .tabs [role='tab'][aria-selected='true'] {
-  background: var(--panel); box-shadow: inset 2px 2px 0 #fff; border-bottom-color: var(--panel); color: #303030;
+  background: var(--panel); box-shadow: inset 2px 2px 0 var(--panel-hi); border-bottom-color: var(--panel); color: var(--text);
 }
 /* What a tab shows sits on a panel. The strip above has no margin and the padding stays at 8 px, so the chrome keeps its height:
    the e2e tests aim at canvas centres. The panel fades in on a tab switch (its section is keyed by the tab). */
@@ -608,7 +616,7 @@ details.settings-section > summary > .muted {
    light ink of its group. A hit is a row of it with square corners. */
 .search-results {
   list-style: none; margin: 0; padding: 4px; max-height: 320px; overflow-y: auto;
-  background: var(--screen); border: 2px solid #a0a0a0; border-radius: 0;
+  background: var(--screen); border: 2px solid var(--field-edge); border-radius: 0;
 }
 .search-hit { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 0; cursor: pointer; }
 /* The highlighted hit (the arrow keys' and the pointer's, which moves it) wears the yellow frame of a selected slot. Inset, so the list's own
@@ -677,6 +685,14 @@ button.avoid-chip-remove { width: 24px; height: 24px; min-height: 0; padding: 0;
   --flow-error: #990000; --flow-warn: #6a4000;
   --flow-edge: #1b1b1b;
   --flow-hover: rgb(255 255 255 / 0.35);
+  /* Phase 2 spec §4.3: a left over's dashed edge, an open line's frame and title, the dark casing of a Connections pipe (its fallback,
+     a hand's lit link, the labels' halo, the legend), the keyboard's ring on a box, a port's flange, and the casing the view gives a
+     channel dye too dark for the dark one; then the Connections boxes' own colours (no Connections rule reads `--flow-`). */
+  --flow-sink-line: var(--flow-raw-line); --flow-group: #cbbbe0; --casing: #1b1b1b; --flow-focus: #1b1b1b;
+  --flange: var(--slot); --dye-casing: #c6c6c6;
+  --conn-box: var(--panel); --conn-face: #e0e0e0; --conn-face-link: #1d3b9a;
+  --conn-chest: #f0d870; --conn-chest-line: #6b5500; --conn-interface: #cbbbe0; --conn-interface-line: #5a3a8a;
+  --conn-source: #d8cfa8; --conn-source-line: #6b5a20; --conn-hookup: #a8a8a8; --conn-hookup-line: var(--outline);
 }
 /* The side panel slides in from the right: the clip keeps it from flashing a horizontal scroll bar on the way (a clip, not a
    scroll container, so the panel still sticks). Its margin leaves room for the 3px focus ring of what sits at the edges (the
@@ -695,7 +711,7 @@ button.avoid-chip-remove { width: 24px; height: 24px; min-height: 0; padding: 0;
 .flow-canvas {
   display: block; width: 100%; min-height: 240px; cursor: grab; touch-action: none; user-select: none;
   background-color: var(--well);
-  background-image: linear-gradient(#404040 1px, transparent 1px), linear-gradient(90deg, #404040 1px, transparent 1px);
+  background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px);
   background-size: 32px 32px;
   border: 2px solid var(--outline); border-radius: 0; box-shadow: var(--bevel-well);
   font-family: var(--font-diagram);
@@ -713,13 +729,13 @@ button.avoid-chip-remove { width: 24px; height: 24px; min-height: 0; padding: 0;
 .flow-node.import.leaf-free > .flow-node-box { stroke-dasharray: 2 2; }
 .flow-node.import.leaf-unavailable > .flow-node-box { stroke: var(--flow-missing-line); }
 .flow-node.missing > .flow-node-box { fill: var(--flow-missing); stroke: var(--flow-missing-line); stroke-dasharray: 5 3; }
-.flow-node.sink > .flow-node-box { fill: var(--flow-sink); stroke-dasharray: 4 3; }
+.flow-node.sink > .flow-node-box { fill: var(--flow-sink); stroke: var(--flow-sink-line); stroke-dasharray: 4 3; }
 .flow-node.line > .flow-node-box { fill: var(--flow-line); stroke: var(--flow-line-line); stroke-dasharray: 6 3; }
 .flow-node-head[role='button'], .flow-row, .flow-edge, .flow-line-toggle { cursor: pointer; }
 /* Pointed at, a box's head or a row takes the white veil of a Minecraft slot. The keyboard's ring is near black: a yellow one on a
    light box would be lost (1.6:1). */
 .flow-node-head[role='button']:hover > .flow-hit { fill: var(--flow-hover); }
-.flow-node-head:focus-visible > .flow-hit, .flow-row:focus-visible > .flow-hit { stroke: #1b1b1b; stroke-width: 2; }
+.flow-node-head:focus-visible > .flow-hit, .flow-row:focus-visible > .flow-hit { stroke: var(--flow-focus); stroke-width: 2; }
 .flow-node text { fill: var(--text); font-size: 11.5px; }
 .flow-node .flow-node-title { font-size: 13px; font-weight: 600; }
 .flow-node .flow-node-line { fill: var(--text-muted); }
@@ -736,7 +752,7 @@ button.avoid-chip-remove { width: 24px; height: 24px; min-height: 0; padding: 0;
 /* The grey of a left over is darker than a panel: its quieter lines and rates would fall under 4.5:1 there. */
 .flow-node.sink .flow-node-line, .flow-node.sink .flow-row-rate { fill: var(--text); }
 /* A port is a pipe flange (FlowView's FLANGE_DEPTH by FLANGE_HEIGHT): a slot grey with a black edge, yellow when its row is lit. */
-.flow-port { fill: var(--slot); stroke: var(--outline); stroke-width: 1; }
+.flow-port { fill: var(--flange); stroke: var(--outline); stroke-width: 1; }
 .flow-row.hl .flow-port { fill: var(--accent); }
 .flow-stop-owned { stop-color: var(--flow-owned); }
 .flow-stop-new { stop-color: var(--flow-new); }
@@ -768,8 +784,8 @@ button.avoid-chip-remove { width: 24px; height: 24px; min-height: 0; padding: 0;
 }
 /* An open supporting line: a light dashed frame around its boxes on the dark canvas, its name, and its open/collapse button on top,
    a mini Minecraft button (a collapsed line's too). */
-.flow-group-box { fill: var(--flow-line); fill-opacity: 0.08; stroke: var(--flow-line); stroke-width: 1.5; stroke-dasharray: 6 3; }
-.flow-group-title { fill: var(--flow-line); font-size: 12.5px; font-weight: 600; }
+.flow-group-box { fill: var(--flow-group); fill-opacity: 0.08; stroke: var(--flow-group); stroke-width: 1.5; stroke-dasharray: 6 3; }
+.flow-group-title { fill: var(--flow-group); font-size: 12.5px; font-weight: 600; }
 .flow-line-toggle rect { fill: var(--btn); stroke: var(--outline); stroke-width: 2; }
 .flow-line-toggle text { fill: #ffffff; font-size: 15px; font-weight: 700; }
 .flow-line-toggle:hover rect { fill: var(--btn-hover); }
@@ -817,7 +833,7 @@ button.avoid-chip-remove { width: 24px; height: 24px; min-height: 0; padding: 0;
 .swatch.import { background: var(--flow-import); border-color: var(--flow-import-line); }
 .swatch.free { background: var(--flow-import); border-color: var(--flow-import-line); border-style: dashed; }
 .swatch.missing { background: var(--flow-missing); border-color: var(--flow-missing-line); border-style: dashed; }
-.swatch.sink { background: var(--flow-sink); border-style: dashed; }
+.swatch.sink { background: var(--flow-sink); border-color: var(--flow-sink-line); border-style: dashed; }
 .swatch.line { background: var(--flow-line); border-color: var(--flow-line-line); border-style: dashed; }
 .flow-infeasible {
   max-width: 760px; padding: 10px 14px; background: var(--chat); border: 2px solid var(--outline); border-radius: 0; color: var(--ink-warn);
@@ -834,7 +850,7 @@ button.avoid-chip-remove { width: 24px; height: 24px; min-height: 0; padding: 0;
 .flow-panel > p { margin: 0; }
 .flow-panel-head { display: flex; align-items: center; gap: 8px; }
 .flow-panel-head h3 { flex: 1; min-width: 0; margin: 0; font: 600 16px/1.3 var(--font-pixel); overflow-wrap: anywhere; }
-.flow-panel-section { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; border-top: 1px solid #8b8b8b; }
+.flow-panel-section { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; border-top: 1px solid var(--rule); }
 fieldset.flow-panel-section { border-left: none; border-right: none; border-bottom: none; margin: 0; padding: 10px 0 0; min-width: 0; }
 .flow-panel-section p { margin: 0; }
 .flow-panel-title { margin: 0; padding: 0; color: var(--ink-title); font: 600 14px/1.3 var(--font-pixel); }
@@ -869,7 +885,7 @@ button.link:hover:not(:disabled) { background: none; text-decoration: none; }
 .port-peers { flex-basis: 100%; padding-left: 26px; overflow-wrap: anywhere; }
 .port-short .port-rate, .port-warn { color: var(--ink-error); }
 .option-slot {
-  border: 1px solid #8b8b8b; border-radius: 0; margin: 0; padding: 6px 8px; display: flex; flex-direction: column; gap: 4px; min-width: 0;
+  border: 1px solid var(--rule); border-radius: 0; margin: 0; padding: 6px 8px; display: flex; flex-direction: column; gap: 4px; min-width: 0;
 }
 .option-slot-title { font-size: 0.85rem; color: var(--ink-muted); padding: 0 4px; }
 .option-why { margin: 0; }
@@ -888,7 +904,7 @@ button.link:hover:not(:disabled) { background: none; text-decoration: none; }
 .materials-section > p { margin: 0; }
 .mat-group h4 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-muted); margin: 8px 0 2px; }
 .mat-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
-.mat-row { display: flex; align-items: flex-start; gap: 8px; padding: 5px 0; border-bottom: 1px solid #8b8b8b; }
+.mat-row { display: flex; align-items: flex-start; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--rule); }
 /* The first line of text is 20.3px tall (14px at 1.45) and the slot 24px: it starts 2px above the line to be centred on it. */
 .mat-row > .item-icon { margin-top: -2px; }
 .mat-row > .tick { flex: 1; min-width: 0; gap: 4px 10px; }
@@ -901,7 +917,7 @@ button.link:hover:not(:disabled) { background: none; text-decoration: none; }
 }
 span.mat-toggle { display: inline-block; }
 button.mat-toggle { display: inline-grid; place-content: center; }
-button.mat-toggle:hover { background: rgb(0 0 0 / 0.15); }
+button.mat-toggle:hover { background: var(--press); }
 /* Like a link, it has no dark edge for the yellow ring to touch, so its ring takes the focus ink of the surface it is on. */
 button.mat-toggle:focus-visible { outline-color: var(--ink-focus); }
 /* The caret of the toggle and of the two inline disclosures below: the pixel caret of a settings summary, in the colour of the text it
@@ -1008,7 +1024,7 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
 .line-panel ul, .found-panel ul { margin: 0; padding-left: 18px; }
 .line-actions { gap: 6px; }
 .found-section { display: flex; flex-direction: column; gap: 4px; }
-.found-section + .found-section { padding-top: 10px; border-top: 1px solid #8b8b8b; }
+.found-section + .found-section { padding-top: 10px; border-top: 1px solid var(--rule); }
 .found-panel summary { cursor: pointer; }
 .found-item-label { display: inline-flex; align-items: center; gap: 6px; vertical-align: middle; }
 .found-item-name { overflow-wrap: anywhere; }
@@ -1016,7 +1032,7 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
 /* The pins, the notes and the stored items are lists of rows, not bullets. The reset has two classes, which out-rank `.found-panel ul`
    (a class and an element), and it comes after it. */
 .line-panel .map-list, .found-panel .map-list { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
-.map-list > li + li { border-top: 1px solid #8b8b8b; }
+.map-list > li + li { border-top: 1px solid var(--rule); }
 .map-list > li > details { padding: 4px 0; }
 /* A row of the pins or the notes is a button with no face of its own: flat on the panel, in its ink, and it does not sink when it is
    pressed (a row of a list is not a key). A button's face would put the muted coordinates of a note at 1.7:1, and its line height of 1
@@ -1027,7 +1043,7 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
   width: 100%; padding: 4px 8px; background: transparent; border: 0; box-shadow: none; transform: none;
   color: var(--ink); font: 0.85rem/1.3 var(--font-ui); text-align: left; text-shadow: none;
 }
-.map-row-button:hover { background: rgb(255 255 255 / 0.35); }
+.map-row-button:hover { background: var(--veil); }
 .map-list > li[aria-current='true'] > .map-row-button { background: var(--screen); color: var(--accent); }
 .map-list > li[aria-current='true'] > .map-row-button .muted { color: var(--screen-muted); }
 /* A flat row has no dark edge for the yellow ring to touch, so its ring takes the focus ink of the panel, as a link's does; a dark row has. */
@@ -1065,7 +1081,7 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
 .connections {
   overflow: hidden; border: 2px solid var(--outline); border-radius: 0; box-shadow: var(--bevel-well);
   background-color: var(--well);
-  background-image: linear-gradient(#404040 1px, transparent 1px), linear-gradient(90deg, #404040 1px, transparent 1px);
+  background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px);
   background-size: 32px 32px;
 }
 .connections > svg {
@@ -1084,17 +1100,17 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
    Pointed at, a box's edge turns white; it never moves or grows (connections.spec.ts measures a hovered box). Picked, its edge
    is yellow and 3px. */
 .conn-node > rect, .conn-node > path {
-  fill: var(--panel); stroke: var(--outline); stroke-width: 2; filter: drop-shadow(0 2px 0 #000); cursor: pointer;
+  fill: var(--conn-box); stroke: var(--outline); stroke-width: 2; filter: drop-shadow(0 2px 0 #000); cursor: pointer;
 }
-.conn-node > path { fill: #e0e0e0; }
-.conn-chest > rect { fill: #f0d870; }
-.conn-chest > rect, .conn-chest > path { stroke: #6b5500; }
-.conn-interface > rect { fill: #cbbbe0; }
-.conn-interface > rect, .conn-interface > path { stroke: #5a3a8a; }
-.conn-source > rect { fill: #d8cfa8; }
-.conn-source > rect, .conn-source > path { stroke: #6b5a20; }
-.conn-hookup > rect, .conn-sink > rect { fill: #a8a8a8; }
-.conn-hookup > rect, .conn-hookup > path, .conn-sink > rect, .conn-sink > path { stroke-dasharray: 4 3; }
+.conn-node > path { fill: var(--conn-face); }
+.conn-chest > rect { fill: var(--conn-chest); }
+.conn-chest > rect, .conn-chest > path { stroke: var(--conn-chest-line); }
+.conn-interface > rect { fill: var(--conn-interface); }
+.conn-interface > rect, .conn-interface > path { stroke: var(--conn-interface-line); }
+.conn-source > rect { fill: var(--conn-source); }
+.conn-source > rect, .conn-source > path { stroke: var(--conn-source-line); }
+.conn-hookup > rect, .conn-sink > rect { fill: var(--conn-hookup); }
+.conn-hookup > rect, .conn-hookup > path, .conn-sink > rect, .conn-sink > path { stroke: var(--conn-hookup-line); stroke-dasharray: 4 3; }
 .conn-node:hover > rect, .conn-node:hover > path { stroke: #ffffff; }
 .conn-node.selected > rect, .conn-node.selected > path { stroke: var(--accent); stroke-width: 3; }
 /* only the face rows take clicks among a box's texts; a click anywhere else on the box picks the box. Every text keeps 4.5:1 on
@@ -1104,7 +1120,7 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
 .conn-node .conn-line { fill: var(--text-muted); }
 /* the grey of a hookup or a left over is darker than a panel: its quieter lines would fall under 4.5:1 there */
 .conn-hookup .conn-line, .conn-sink .conn-line { fill: var(--text); }
-.conn-node .conn-face { fill: #1d3b9a; cursor: pointer; pointer-events: auto; }
+.conn-node .conn-face { fill: var(--conn-face-link); cursor: pointer; pointer-events: auto; }
 .conn-node .conn-face:hover, .conn-node .conn-face.selected { text-decoration: underline; }
 .conn-node .conn-face.selected { font-weight: 600; }
 /* a conduit face's mode and channels, under its row's title; a row a picked link passes through is linked */
@@ -1119,8 +1135,9 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
  * way), one cycle per `--pipe-dur` (pipe-motion.ts). The good takes its EnderIO channel's dye (the contents' stroke attribute),
  * else the colour of what carries it (`--conn-link`, the same as the map's LOGISTICS_COLORS and the 3D view's VIA_RGB); the
  * arrow head on it takes the same colour. A dye too dark for the dark casing gets a panel-grey one from the view
- * (`--pipe-casing`). A flow carried by hand has no pipe, only its good in a dash-dot (whose lengths add up to the same 16px, so
- * the loop is seamless); what carries nothing (an interface on its machine, a hookup) is a thin still grey line, dashed.
+ * (`--pipe-casing: var(--dye-casing)`). A flow carried by hand has no pipe, only its good in a dash-dot (whose lengths add up to
+ * the same 16px, so the loop is seamless); what carries nothing (an interface on its machine, a hookup) is a thin still grey line,
+ * dashed.
  */
 .conn-via-gt_pipe { --conn-link: #9ccc65; }
 .conn-via-fluid_pipe { --conn-link: #1e88e5; }
@@ -1131,7 +1148,7 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
 .conn-via-attached, .conn-via-hookup { --conn-link: #8a92a0; }
 .conn-edge { cursor: pointer; }
 .conn-edge polyline { fill: none; stroke-linejoin: miter; }
-.conn-edge-line { stroke: var(--pipe-casing, #1b1b1b); stroke-width: 6; stroke-linecap: butt; }
+.conn-edge-line { stroke: var(--pipe-casing, var(--casing)); stroke-width: 6; stroke-linecap: butt; }
 .conn-edge-flow { stroke-width: 2.5; stroke-dasharray: 6 10; animation: pipe-flow var(--pipe-dur, 0.8s) linear infinite; }
 .conn-edge-flow:not([stroke]) { stroke: var(--conn-link); }
 /* the marker sits on the contents (on the casing where nothing moves), and its head takes that element's stroke where the browser knows
@@ -1154,7 +1171,7 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
 .conn-via-attached .conn-edge-rim, .conn-via-hookup .conn-edge-rim { stroke-width: 5; }
 .conn-edge:hover .conn-edge-rim { stroke: #ffffff; }
 .conn-edge.selected .conn-edge-rim { stroke: var(--accent); animation: pipe-pulse 400ms var(--ease-out); }
-.conn-via-hand:hover .conn-edge-line, .conn-via-hand.selected .conn-edge-line { stroke: #1b1b1b; }
+.conn-via-hand:hover .conn-edge-line, .conn-via-hand.selected .conn-edge-line { stroke: var(--casing); }
 /* Panning stays smooth (design spec §7 "Motion budget"): the pipes stand still while the picture is dragged, and above 200 links
    only the picked one moves (pipe-motion.ts, `data-pipes` on the area). While this browser has the pipes paused (`data-pipes` is
    `paused`, ruling R31) every pipe stands still where it is. */
@@ -1163,7 +1180,7 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
 .connections[data-pipes='paused'] .conn-edge-flow { animation-play-state: paused; }
 /* a link's label, in white on a dark halo over the well; 11px of the diagram font, as ELK sizes it */
 .conn-label {
-  fill: #ffffff; font-size: 11px; paint-order: stroke; stroke: #1b1b1b; stroke-width: 3px; stroke-linejoin: round;
+  fill: #ffffff; font-size: 11px; paint-order: stroke; stroke: var(--casing); stroke-width: 3px; stroke-linejoin: round;
 }
 .conn-edge.selected .conn-label { font-weight: 600; }
 /* The legend, on the panel: per kind of link a mini pipe drawn on its one empty span (a dark casing with the link's dashes), so the
@@ -1171,7 +1188,7 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
 .conn-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 0.85rem; color: var(--ink-muted); }
 .conn-legend li { display: inline-flex; align-items: center; gap: 6px; }
 .conn-swatch {
-  flex: none; width: 26px; height: 6px; background-color: #1b1b1b;
+  flex: none; width: 26px; height: 6px; background-color: var(--casing);
   background-image: linear-gradient(90deg, var(--conn-link) 6px, transparent 6px);
   background-size: 16px 2px; background-position: 2px 50%; background-repeat: repeat-x;
 }

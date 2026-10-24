@@ -1,54 +1,18 @@
 // The Machine GUI stylesheet contract (restyle plan Phase 1 Task 1, design spec §3–§5 and §7a): the tokens, the one
 // theme, the motion foundation, the font imports and the first rules every later rule builds on. The client project runs
-// in node, so the stylesheet is read as text and cut into blocks by the small scanner below. Later tasks add cases here
-// and reuse `css`, `rootTokens` and `ruleBody`.
+// in node, so the stylesheet is read as text and cut into blocks by the scanner of css-blocks.ts, which the contrast test
+// shares. Later tasks add cases here and reuse `css`, `rootTokens` and `ruleBody`.
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
+import { cssBlocks, declarations, scan, type Block } from './css-blocks.ts';
 
 const read = (file: string): string => readFileSync(new URL(`../../src/client/${file}`, import.meta.url), 'utf8');
 
 /** The stylesheet text. */
 const css = read('styles.css');
 
-/** One `prelude { inner }` block of the stylesheet; `nested` when it sits inside an `@media`-like block. */
-interface Block { prelude: string; inner: string; nested: boolean }
-
-/** The index of the `}` that closes the `{` at `open`; quoted text is skipped. */
-function closingBrace(src: string, open: number): number {
-  let depth = 0;
-  let quote = '';
-  for (let i = open; i < src.length; i++) {
-    const c = src.charAt(i);
-    if (quote !== '') {
-      if (c === '\\') i++;
-      else if (c === quote) quote = '';
-    } else if (c === '"' || c === "'") quote = c;
-    else if (c === '{') depth++;
-    else if (c === '}' && --depth === 0) return i;
-  }
-  throw new Error('styles.css has a block that is never closed');
-}
-
-/**
- * Every block of `src` in source order, the blocks inside an `@media` (or similar) right after it. The steps of a
- * `@keyframes` are not rules, so they stay inside it.
- */
-function scan(src: string, nested: boolean, into: Block[]): Block[] {
-  for (let at = 0; at < src.length;) {
-    const open = src.indexOf('{', at);
-    if (open < 0) break;
-    const close = closingBrace(src, open);
-    const prelude = src.slice(at, open).replace(/\s+/g, ' ').trim();
-    const inner = src.slice(open + 1, close);
-    into.push({ prelude, inner: inner.replace(/\s+/g, ' ').trim(), nested });
-    if (/^@(media|supports|layer|container)\b/.test(prelude)) scan(inner, true, into);
-    at = close + 1;
-  }
-  return into;
-}
-
-const blocks = scan(css.replace(/\/\*[\s\S]*?\*\//g, ''), false, []);
+const blocks = cssBlocks(css);
 
 /**
  * The declarations of the first rule whose selector list is exactly `selector` (whitespace collapsed); throws when there
@@ -60,29 +24,6 @@ function ruleBody(selector: string): string {
   const block = blocks.find((b) => b.prelude === wanted);
   if (block === undefined) throw new Error(`styles.css has no rule for "${selector}"`);
   return block.inner;
-}
-
-/** The `[name, value]` pairs of a block body; a `;` inside quotes or parentheses (a data URI) does not end a declaration. */
-function declarations(body: string): [string, string][] {
-  const out: [string, string][] = [];
-  let start = 0;
-  let parens = 0;
-  let quote = '';
-  for (let i = 0; i <= body.length; i++) {
-    const c = body.charAt(i);
-    if (quote !== '') {
-      if (c === quote) quote = '';
-    } else if (c === '"' || c === "'") quote = c;
-    else if (c === '(') parens++;
-    else if (c === ')') parens--;
-    else if ((c === ';' && parens === 0) || i === body.length) {
-      const declaration = body.slice(start, i).trim();
-      start = i + 1;
-      const colon = declaration.indexOf(':');
-      if (colon > 0) out.push([declaration.slice(0, colon).trim(), declaration.slice(colon + 1).trim()]);
-    }
-  }
-  return out;
 }
 
 /**
@@ -125,6 +66,18 @@ const TOKENS: [string, string][] = [
   ['--font-diagram', "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif"],
   ['--ink', '#dddddd'], ['--ink-muted', '#aaaaaa'], ['--ink-title', '#ffffff'], ['--ink-link', '#ffff55'],
   ['--ink-error', '#ff5555'], ['--ink-ok', '#55ff55'], ['--ink-warn', '#ffaa00'],
+  // Phase 2 Task 1a (Phase 2 spec §4.3): a token for every colour a look can change, at the light value the rule wrote before; the
+  // Flow and Connections ones are the Flow `:root`'s
+  ['--bar-line', '#3c3c3c'], ['--grid', '#404040'], ['--btn-off', '#4a4a4a'], ['--btn-off-ink', '#a0a0a0'],
+  ['--tab-face', '#8b8b8b'], ['--tab-face-hi', '#a8a8a8'], ['--tab-ink', '#1b1b1b'], ['--tab-face-hover', '#9a9a9a'],
+  ['--rule', '#8b8b8b'], ['--veil', 'rgb(255 255 255 / 0.35)'], ['--press', 'rgb(0 0 0 / 0.15)'],
+  ['--field-edge', '#a0a0a0'], ['--bevel-tick', 'var(--bevel-slot)'],
+  ['--panel-error', '#aa0000'], ['--panel-ok', '#1e5a1e'], ['--panel-warn', '#6a4000'], ['--panel-focus', '#1b1b1b'],
+  ['--flow-sink-line', 'var(--flow-raw-line)'], ['--flow-group', '#cbbbe0'], ['--casing', '#1b1b1b'], ['--flow-focus', '#1b1b1b'],
+  ['--flange', 'var(--slot)'], ['--dye-casing', '#c6c6c6'],
+  ['--conn-box', 'var(--panel)'], ['--conn-face', '#e0e0e0'], ['--conn-face-link', '#1d3b9a'],
+  ['--conn-chest', '#f0d870'], ['--conn-chest-line', '#6b5500'], ['--conn-interface', '#cbbbe0'], ['--conn-interface-line', '#5a3a8a'],
+  ['--conn-source', '#d8cfa8'], ['--conn-source-line', '#6b5a20'], ['--conn-hookup', '#a8a8a8'], ['--conn-hookup-line', 'var(--outline)'],
   ['--gap', '12px'],
   ['color-scheme', 'dark'], ['scrollbar-color', 'var(--btn) var(--screen)'],
   ['font-family', 'var(--font-ui)'], ['line-height', '1.45'], ['color', 'var(--ink)'], ['background', 'var(--page)'],
@@ -226,9 +179,10 @@ describe('the Machine GUI stylesheet', () => {
     const panels = blocks.find((b) => !b.nested && b.prelude.split(', ').includes('.tab-panel') && b.inner.includes('--ink:'));
     if (panels === undefined) throw new Error('styles.css has no rule that sets the panel ink');
     expect(panels.prelude.split(', ')).toContain('.card');
+    // it reads tokens (Phase 2 spec §4.2), so a look redefines `:root` alone and never repeats this selector list
     for (const declaration of [
-      '--ink: #303030', '--ink-muted: #4a4a4a', '--ink-title: #404040', '--ink-link: #1a3fa0',
-      '--ink-error: #aa0000', '--ink-ok: #1e5a1e', '--ink-warn: #6a4000', 'color: var(--ink)',
+      '--ink: var(--text)', '--ink-muted: var(--text-muted)', '--ink-title: var(--title)', '--ink-link: var(--link)',
+      '--ink-error: var(--panel-error)', '--ink-ok: var(--panel-ok)', '--ink-warn: var(--panel-warn)', 'color: var(--ink)',
     ]) expect(panels.inner, declaration).toContain(declaration);
   });
 });
@@ -314,7 +268,7 @@ describe('the Machine GUI controls', () => {
       [':where(button.danger:hover:not(:disabled))', 'background', 'var(--danger-face-hover)'],
       [':where(button.small)', 'min-height', '28px'], [':where(button.small)', 'padding', '0 10px'],
       [':where(button.small)', 'font-size', '13px'],
-      [':where(button:disabled)', 'background', '#4a4a4a'], [':where(button:disabled)', 'color', '#a0a0a0'],
+      [':where(button:disabled)', 'background', 'var(--btn-off)'], [':where(button:disabled)', 'color', 'var(--btn-off-ink)'],
       [':where(button:disabled)', 'text-shadow', 'none'], [':where(button:disabled)', 'box-shadow', 'none'],
       [':where(button:disabled)', 'cursor', 'default'],
     ]);
@@ -350,7 +304,7 @@ describe('the Machine GUI controls', () => {
     expect(position(':where(input:not([type=checkbox], [type=radio], [type=range], [type=file]), textarea, select)')).toBeGreaterThan(-1);
     expectDeclared([
       [FIELDS, 'min-height', '36px'], [FIELDS, 'padding', '6px 10px'], [FIELDS, 'background', '#000000'],
-      [FIELDS, 'border', '2px solid var(--btn-hi)'], [FIELDS, 'border-radius', '0'], [FIELDS, 'color', '#ffffff'],
+      [FIELDS, 'border', '2px solid var(--field-edge)'], [FIELDS, 'border-radius', '0'], [FIELDS, 'color', '#ffffff'],
       [FIELDS, 'font', '14px var(--font-ui)'], ['::placeholder', 'color', '#8b8b8b'],
       [`:where(${FIELD}:focus, textarea:focus, select:focus)`, 'border-color', 'var(--accent)'],
     ]);
@@ -378,7 +332,7 @@ describe('the Machine GUI controls', () => {
     expectDeclared([
       [TICK, 'appearance', 'none'], [TICK, 'display', 'inline-grid'], [TICK, 'place-content', 'center'], [TICK, 'flex', 'none'],
       [TICK, 'width', '16px'], [TICK, 'height', '16px'], [TICK, 'margin', '0'],
-      [TICK, 'background', 'var(--screen)'], [TICK, 'box-shadow', 'var(--bevel-slot)'],
+      [TICK, 'background', 'var(--screen)'], [TICK, 'box-shadow', 'var(--bevel-tick)'],
       [`${TICK}::before`, 'content', "''"], [`${TICK}::before`, 'width', '10px'], [`${TICK}::before`, 'height', '10px'],
       [`${TICK}::before`, 'opacity', '0'], [`${TICK}::before`, 'transform', 'scale(0.6)'],
       [`${TICK}::before`, 'transition', 'opacity var(--dur-fast) var(--ease-pop), transform var(--dur-fast) var(--ease-pop)'],
@@ -430,7 +384,8 @@ describe('the Machine GUI controls', () => {
       [':where(input[type=file])::file-selector-button', 'background', 'var(--btn)'],
       [':where(input[type=file])::file-selector-button', 'box-shadow', 'var(--bevel-btn)'],
       [':where(input[type=file])::file-selector-button', 'font', '13px/1 var(--font-pixel)'],
-      [':where(input[type=file]:disabled)::file-selector-button', 'background', '#4a4a4a'],
+      [':where(input[type=file]:disabled)::file-selector-button', 'background', 'var(--btn-off)'],
+      [':where(input[type=file]:disabled)::file-selector-button', 'color', 'var(--btn-off-ink)'],
     ]);
   });
 
@@ -467,7 +422,7 @@ describe('the Machine GUI controls', () => {
     expect(rootTokens().get('--ink-focus')).toBe('#ffff55');
     const panels = blocks.find((b) => !b.nested && b.prelude.split(', ').includes('.tab-panel') && b.inner.includes('--ink:'));
     if (panels === undefined) throw new Error('styles.css has no rule that sets the panel ink');
-    expect(declarations(panels.inner).filter(([name]) => name === '--ink-focus').map(([, value]) => value)).toEqual(['#1b1b1b']);
+    expect(declarations(panels.inner).filter(([name]) => name === '--ink-focus').map(([, value]) => value)).toEqual(['var(--panel-focus)']);
     const link = ':where(a, button.link, summary, input[type=checkbox], input[type=radio], input[type=range], input[type=file]):focus-visible';   // ruling R13: a summary and a tick have no dark edge either; R30: nor has a slider; R33: nor a file input
     expect(declared(link, 'outline-color')).toBe('var(--ink-focus)');
     // only the colour: the width and the offset stay the base ring's
@@ -568,7 +523,7 @@ describe('the Machine GUI chrome', () => {
       ['.top-nav', 'display', 'flex'], ['.top-nav', 'align-items', 'center'], ['.top-nav', 'flex-wrap', 'wrap'],
       ['.top-nav', 'gap', '20px'], ['.top-nav', 'min-height', '50px'], ['.top-nav', 'padding', '6px 20px'],
       ['.top-nav', 'background', 'var(--bar)'], ['.top-nav', 'border-bottom', '2px solid #000'],
-      ['.top-nav', 'box-shadow', 'inset 0 -2px 0 #3c3c3c'],
+      ['.top-nav', 'box-shadow', 'inset 0 -2px 0 var(--bar-line)'],
       ['.brand', 'display', 'inline-flex'], ['.brand', 'gap', '10px'], ['.brand', 'align-items', 'center'],
       ['.brand', 'font', '700 20px/1 var(--font-pixel)'], ['.brand', 'color', '#ffd84a'], ['.brand', 'text-shadow', '2px 2px 0 #3f3300'],
       ['.top-nav nav a', 'display', 'flex'], ['.top-nav nav a', 'min-height', '36px'], ['.top-nav nav a', 'padding', '0 14px'],
@@ -607,7 +562,7 @@ describe('the Machine GUI chrome', () => {
       ['.project-name', 'min-height', '36px'], ['.project-name', 'border-color', 'transparent'],
       ['.project-name', 'background', 'transparent'], ['.project-name', 'color', 'var(--ink)'],
       ['.project-name', 'font', '600 22px/1.2 var(--font-pixel)'],
-      ['.project-name:hover', 'border-color', 'var(--btn-hi)'],
+      ['.project-name:hover', 'border-color', 'var(--field-edge)'],
       ['.project-name:focus', 'border-color', 'var(--accent)'], ['.project-name:focus', 'background', '#000000'],
     ]);
     // both are one class and one pseudo-class: the one that comes later wins, and a field being typed in is a focused one
@@ -673,10 +628,10 @@ describe('the Machine GUI chrome', () => {
       ['.tabs', 'flex-wrap', 'wrap'],                                                  // as the mockup's: six pixel tabs are wider than a phone
       [TAB, 'position', 'relative'], [TAB, 'top', '2px'], [TAB, 'z-index', '1'], [TAB, 'min-height', '38px'], [TAB, 'padding', '0 14px'],
       [TAB, 'border', '2px solid #000'], [TAB, 'font', '15px/1 var(--font-pixel)'], [TAB, 'text-shadow', 'none'],
-      [TAB, 'background', '#8b8b8b'], [TAB, 'box-shadow', 'inset 2px 2px 0 #a8a8a8'], [TAB, 'color', '#1b1b1b'],
-      [`${TAB}:hover:not([aria-selected='true'])`, 'background', '#9a9a9a'],
-      [SELECTED, 'background', 'var(--panel)'], [SELECTED, 'box-shadow', 'inset 2px 2px 0 #fff'],
-      [SELECTED, 'border-bottom-color', 'var(--panel)'], [SELECTED, 'color', '#303030'],
+      [TAB, 'background', 'var(--tab-face)'], [TAB, 'box-shadow', 'inset 2px 2px 0 var(--tab-face-hi)'], [TAB, 'color', 'var(--tab-ink)'],
+      [`${TAB}:hover:not([aria-selected='true'])`, 'background', 'var(--tab-face-hover)'],
+      [SELECTED, 'background', 'var(--panel)'], [SELECTED, 'box-shadow', 'inset 2px 2px 0 var(--panel-hi)'],
+      [SELECTED, 'border-bottom-color', 'var(--panel)'], [SELECTED, 'color', 'var(--text)'],
     ]);
     // the plan's own words, and the order the selected look needs to beat the unselected one
     expect(ruleBody(TAB)).toContain('min-height: 38px');
@@ -1026,7 +981,7 @@ describe('the Machine GUI item slots', () => {
 
   it('makes the search list a dark well, with a hit that squares its corners and wears a yellow frame when it is highlighted', () => {
     expectDeclared([
-      ['.search-results', 'background', 'var(--screen)'], ['.search-results', 'border', '2px solid #a0a0a0'],
+      ['.search-results', 'background', 'var(--screen)'], ['.search-results', 'border', '2px solid var(--field-edge)'],
       ['.search-results', 'border-radius', '0'], ['.search-hit', 'border-radius', '0'],
       // inset, so the list's own scrolling does not clip it; a frame, not a fill: the hit's text stays white on the well
       [ACTIVE_HIT, 'box-shadow', 'inset 0 0 0 2px var(--accent)'],
@@ -1073,7 +1028,7 @@ describe('the Machine GUI Materials & steps tab', () => {
 
   it('separates the rows with a grey line, and centres the framed icon on the first line of text', () => {
     expectDeclared([
-      ['.mat-row', 'border-bottom', '1px solid #8b8b8b'],
+      ['.mat-row', 'border-bottom', '1px solid var(--rule)'],
       // the text line is 20.3px (14px at 1.45) and the framed icon 24px: half of the 4px difference, above the line
       ['.mat-row > .item-icon', 'margin-top', '-2px'],
     ]);
@@ -1088,6 +1043,8 @@ describe('the Machine GUI Materials & steps tab', () => {
       [CARETS, 'content', "''"], [CARETS, 'width', '9px'], [CARETS, 'height', '9px'], [CARETS, 'background', 'currentColor'],
       [CARETS, 'transition', 'transform var(--dur-fast) var(--ease-out)'],
       [CARETS_DOWN, 'transform', 'rotate(90deg)'],
+      // pointed at, the bare caret is pressed into the panel
+      ['button.mat-toggle:hover', 'background', 'var(--press)'],
     ]);
     expect(declared(CARETS, 'clip-path'), 'a pixel caret').toMatch(/^polygon\(/);
     // a borderless button has no dark edge for the yellow ring to touch: its ring takes the focus ink of the surface, like a link's
@@ -1247,7 +1204,7 @@ describe('the Machine GUI Flow diagram', () => {
 
   it('ends every port on a flange in a slot grey with a black edge, yellow when its row is lit', () => {
     expectDeclared([
-      ['.flow-port', 'fill', 'var(--slot)'], ['.flow-port', 'stroke', 'var(--outline)'], ['.flow-port', 'stroke-width', '1'],
+      ['.flow-port', 'fill', 'var(--flange)'], ['.flow-port', 'stroke', 'var(--outline)'], ['.flow-port', 'stroke-width', '1'],
     ]);
     // lit, only the face turns yellow: the black edge stays, so the flange keeps its outline against a yellow rim
     expect(declarations(ruleBody('.flow-row.hl .flow-port'))).toEqual([['fill', 'var(--accent)']]);
@@ -1256,7 +1213,7 @@ describe('the Machine GUI Flow diagram', () => {
   it('sets the diagram on a dark well with a 32px grid, a black edge on every side and the diagram font', () => {
     expectDeclared([
       ['.flow-canvas', 'background-color', 'var(--well)'],
-      ['.flow-canvas', 'background-image', 'linear-gradient(#404040 1px, transparent 1px), linear-gradient(90deg, #404040 1px, transparent 1px)'],
+      ['.flow-canvas', 'background-image', 'linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px)'],
       ['.flow-canvas', 'background-size', '32px 32px'],
       ['.flow-canvas', 'border', '2px solid var(--outline)'], ['.flow-canvas', 'border-radius', '0'],
       ['.flow-canvas', 'box-shadow', 'var(--bevel-well)'],
@@ -1279,6 +1236,9 @@ describe('the Machine GUI Flow diagram', () => {
     expectDeclared([
       ['.flow-node-box', 'stroke-width', '2'], ['.flow-node-box', 'filter', 'drop-shadow(0 2px 0 #000)'],
       ['.flow-node.sink > .flow-node-box', 'fill', 'var(--flow-sink)'],
+      // a left over's dashed edge and the keyboard's ring on a box have colours of their own, which a look can lighten on its dark well
+      ['.flow-node.sink > .flow-node-box', 'stroke', 'var(--flow-sink-line)'],
+      ['.flow-node-head:focus-visible > .flow-hit, .flow-row:focus-visible > .flow-hit', 'stroke', 'var(--flow-focus)'],
       [LIT_BOX, 'stroke', 'var(--accent)'], [LIT_BOX, 'stroke-width', '3'],
       [TAKER_BOX, 'stroke', 'var(--accent)'], [TAKER_BOX, 'stroke-width', '3'], [TAKER_BOX, 'stroke-dasharray', '6 3'],
     ]);
@@ -1316,7 +1276,9 @@ describe('the Machine GUI Flow diagram', () => {
       ['.flow-edge-tag', 'pointer-events', 'none'],
       ['.flow-edge-tag rect', 'fill', 'var(--tip-bg)'], ['.flow-edge-tag rect', 'stroke', 'var(--tip-border)'],
       ['.flow-edge-tag text', 'fill', '#ffffff'], ['.flow-edge-tag text', 'font-size', '11px'], ['.flow-edge-tag text', 'font-weight', '600'],
-      ['.flow-group-box', 'stroke', 'var(--flow-line)'], ['.flow-group-title', 'fill', 'var(--flow-line)'],
+      // the open line's frame and title have a colour of their own, no longer the box fill of a supporting line (Phase 2 spec §4.3)
+      ['.flow-group-box', 'stroke', 'var(--flow-group)'], ['.flow-group-title', 'fill', 'var(--flow-group)'],
+      ['.flow-group-box', 'fill', 'var(--flow-group)'],
       // the open/collapse button is a mini Minecraft button
       ['.flow-line-toggle rect', 'fill', 'var(--btn)'], ['.flow-line-toggle rect', 'stroke', 'var(--outline)'],
       ['.flow-line-toggle text', 'fill', '#ffffff'], ['.flow-line-toggle:hover rect', 'fill', 'var(--btn-hover)'],
@@ -1347,6 +1309,8 @@ describe('the Machine GUI Flow diagram', () => {
     ]);
     // the legend's swatches are square with a 2px edge
     expectDeclared([['.swatch', 'border-radius', '0'], ['.swatch', 'border', '2px solid var(--flow-raw-line)'], ['.swatch.sink', 'background', 'var(--flow-sink)']]);
+    // a left over's swatch has the dashed edge of its box
+    expectDeclared([['.swatch.sink', 'border-color', 'var(--flow-sink-line)']]);
   });
 
   it('slides the side panel in as a Machine GUI panel, with its lists as dark wells, and never animates the grid', () => {
@@ -1356,6 +1320,8 @@ describe('the Machine GUI Flow diagram', () => {
       ['.flow-panel-head h3', 'font', '600 16px/1.3 var(--font-pixel)'],
       [WELLS, 'background', 'var(--screen)'], [WELLS, 'box-shadow', 'var(--bevel-well)'],
       ['.flow-panel .warnings', 'color', 'var(--ink-error)'], ['.port-short .port-rate, .port-warn', 'color', 'var(--ink-error)'],
+      // its sections and an option's slot are set apart by the 1px rule of the panels
+      ['.flow-panel-section', 'border-top', '1px solid var(--rule)'], ['.option-slot', 'border', '1px solid var(--rule)'],
       // the panel slides in from the right: no horizontal scroll bar flashes while it does
       ['.flow', 'overflow-x', 'clip'],
       // and the focus ring of the Zoom in button, on the clipped edge, keeps its left side: Chromium applies the clip margin only
@@ -1412,7 +1378,7 @@ describe('the Machine GUI Connections tab', () => {
   it('draws each link as a pipe: a 6px casing, dark or the panel grey the view asks for, with butt ends on the boxes and mitred bends', () => {
     expectDeclared([
       ['.conn-edge polyline', 'fill', 'none'], ['.conn-edge polyline', 'stroke-linejoin', 'miter'],
-      [CONN_CASING, 'stroke', 'var(--pipe-casing, #1b1b1b)'], [CONN_CASING, 'stroke-width', '6'], [CONN_CASING, 'stroke-linecap', 'butt'],
+      [CONN_CASING, 'stroke', 'var(--pipe-casing, var(--casing))'], [CONN_CASING, 'stroke-width', '6'], [CONN_CASING, 'stroke-linecap', 'butt'],
     ]);
     // the old rules styled the bare polyline, so the contents would have taken the casing's width and the hand's dashes
     expect(blocks.filter((b) => /\.conn-edge(\.selected|:hover)? polyline(:|\[|,|$)/.test(b.prelude)).map((b) => b.prelude)).toEqual(['.conn-edge polyline']);
@@ -1462,7 +1428,7 @@ describe('the Machine GUI Connections tab', () => {
       // ruling R19: a pulse is the rim's, on opacity, never the contents'
       [CONN_PICKED_RIM, 'animation', 'pipe-pulse 400ms var(--ease-out)'],
       // a hand's link shows a casing only while it is rimmed, so its amber does not lie on the white or the yellow
-      [CONN_HAND_LIT, 'stroke', '#1b1b1b'],
+      [CONN_HAND_LIT, 'stroke', 'var(--casing)'],
       ['.conn-edge.selected .conn-label', 'font-weight', '600'],
     ]);
     // 1.5px of rim past each side of a 6px casing and of a 2px line
@@ -1484,7 +1450,7 @@ describe('the Machine GUI Connections tab', () => {
   it('sets the picture on a dark well with a 32px grid that is the area\'s own background, and nothing over the svg', () => {
     expectDeclared([
       ['.connections', 'background-color', 'var(--well)'],
-      ['.connections', 'background-image', 'linear-gradient(#404040 1px, transparent 1px), linear-gradient(90deg, #404040 1px, transparent 1px)'],
+      ['.connections', 'background-image', 'linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px)'],
       ['.connections', 'background-size', '32px 32px'],
       ['.connections', 'border', '2px solid var(--outline)'], ['.connections', 'border-radius', '0'],
       ['.connections', 'box-shadow', 'var(--bevel-well)'], ['.connections', 'overflow', 'hidden'],
@@ -1500,12 +1466,14 @@ describe('the Machine GUI Connections tab', () => {
 
   it('draws the boxes as Machine GUI blocks that never move or grow under the pointer', () => {
     expectDeclared([
-      [CONN_BOX, 'fill', 'var(--panel)'], [CONN_BOX, 'stroke', 'var(--outline)'], [CONN_BOX, 'stroke-width', '2'],
-      [CONN_BOX, 'filter', 'drop-shadow(0 2px 0 #000)'], ['.conn-node > path', 'fill', '#e0e0e0'],
-      ['.conn-chest > rect', 'fill', '#f0d870'], ['.conn-chest > rect, .conn-chest > path', 'stroke', '#6b5500'],
-      ['.conn-interface > rect', 'fill', '#cbbbe0'], ['.conn-interface > rect, .conn-interface > path', 'stroke', '#5a3a8a'],
-      ['.conn-source > rect', 'fill', '#d8cfa8'], ['.conn-source > rect, .conn-source > path', 'stroke', '#6b5a20'],
-      ['.conn-hookup > rect, .conn-sink > rect', 'fill', '#a8a8a8'], [CONN_DASHED, 'stroke-dasharray', '4 3'],
+      [CONN_BOX, 'fill', 'var(--conn-box)'], [CONN_BOX, 'stroke', 'var(--outline)'], [CONN_BOX, 'stroke-width', '2'],
+      [CONN_BOX, 'filter', 'drop-shadow(0 2px 0 #000)'], ['.conn-node > path', 'fill', 'var(--conn-face)'],
+      ['.conn-chest > rect', 'fill', 'var(--conn-chest)'], ['.conn-chest > rect, .conn-chest > path', 'stroke', 'var(--conn-chest-line)'],
+      ['.conn-interface > rect', 'fill', 'var(--conn-interface)'], ['.conn-interface > rect, .conn-interface > path', 'stroke', 'var(--conn-interface-line)'],
+      ['.conn-source > rect', 'fill', 'var(--conn-source)'], ['.conn-source > rect, .conn-source > path', 'stroke', 'var(--conn-source-line)'],
+      ['.conn-hookup > rect, .conn-sink > rect', 'fill', 'var(--conn-hookup)'], [CONN_DASHED, 'stroke-dasharray', '4 3'],
+      // the dashed edge of a hookup or a left over has a colour of its own, which a look can lighten on its dark well
+      [CONN_DASHED, 'stroke', 'var(--conn-hookup-line)'],
       [CONN_BOX_PICKED, 'stroke', 'var(--accent)'], [CONN_BOX_PICKED, 'stroke-width', '3'],
     ]);
     // pointed at, a box only changes the colour of its edge (connections.spec.ts measures it hovered)
@@ -1524,11 +1492,11 @@ describe('the Machine GUI Connections tab', () => {
     expectDeclared([
       ['.conn-node text', 'fill', 'var(--text)'], ['.conn-node text', 'font-size', '11.5px'], ['.conn-node text', 'pointer-events', 'none'],
       ['.conn-node .conn-title', 'font-size', '13px'], ['.conn-node .conn-title', 'font-weight', '600'],
-      ['.conn-node .conn-line', 'fill', 'var(--text-muted)'], ['.conn-node .conn-face', 'fill', '#1d3b9a'],
+      ['.conn-node .conn-line', 'fill', 'var(--text-muted)'], ['.conn-node .conn-face', 'fill', 'var(--conn-face-link)'],
       ['.conn-node .conn-face-mode', 'fill', 'var(--text-muted)'], ['.conn-node .conn-face-mode', 'font-size', '10.5px'],
       // the grey of a hookup or a left over is darker than a panel: its quieter lines would fall under 4.5:1 there
       ['.conn-hookup .conn-line, .conn-sink .conn-line', 'fill', 'var(--text)'],
-      ['.conn-label', 'fill', '#ffffff'], ['.conn-label', 'stroke', '#1b1b1b'], ['.conn-label', 'font-size', '11px'],
+      ['.conn-label', 'fill', '#ffffff'], ['.conn-label', 'stroke', 'var(--casing)'], ['.conn-label', 'font-size', '11px'],
       ['.conn-label', 'paint-order', 'stroke'],
     ]);
     expect(position('.conn-hookup .conn-line, .conn-sink .conn-line')).toBeGreaterThan(position('.conn-node .conn-line'));
@@ -1541,7 +1509,7 @@ describe('the Machine GUI Connections tab', () => {
   it('draws the legend\'s swatch as a mini pipe on its one empty span, and its text in the quiet ink of the panel', () => {
     expectDeclared([
       ['.conn-legend', 'color', 'var(--ink-muted)'],
-      ['.conn-swatch', 'height', '6px'], ['.conn-swatch', 'background-color', '#1b1b1b'],
+      ['.conn-swatch', 'height', '6px'], ['.conn-swatch', 'background-color', 'var(--casing)'],
       ['.conn-swatch', 'background-image', 'linear-gradient(90deg, var(--conn-link) 6px, transparent 6px)'],
       ['.conn-swatch', 'background-size', '16px 2px'],
     ]);
@@ -1684,7 +1652,7 @@ describe('the Machine GUI Map tab', () => {
       ['.line-panel h4', 'font-size', '0.75rem'], ['.line-panel h4', 'color', 'var(--ink-muted)'], ['.line-panel h4', 'margin', '4px 0 0'],
       ['.line-panel p, .found-panel p', 'margin', '0'], [MAP_BULLETS, 'margin', '0'], [MAP_BULLETS, 'padding-left', '18px'],
       ['.found-section', 'display', 'flex'], ['.found-section', 'flex-direction', 'column'], ['.found-section', 'gap', '4px'],
-      ['.found-section + .found-section', 'border-top', '1px solid #8b8b8b'], ['.found-section + .found-section', 'padding-top', '10px'],
+      ['.found-section + .found-section', 'border-top', '1px solid var(--rule)'], ['.found-section + .found-section', 'padding-top', '10px'],
       ['.line-actions', 'gap', '6px'], ['.found-panel summary', 'cursor', 'pointer'],
       ['.found-item-label', 'display', 'inline-flex'], ['.found-item-label', 'align-items', 'center'], ['.found-item-label', 'gap', '6px'],
       ['.found-item-label', 'vertical-align', 'middle'], ['.found-item-name', 'overflow-wrap', 'anywhere'], ['.found-show-all', 'align-self', 'flex-start'],
@@ -1701,13 +1669,13 @@ describe('the Machine GUI Map tab', () => {
   it('lists the pins, the notes and the items as flat rows, and the picked row as a dark one with yellow text', () => {
     expectDeclared([
       [MAP_LISTS, 'list-style', 'none'], [MAP_LISTS, 'padding', '0'], [MAP_LISTS, 'display', 'flex'], [MAP_LISTS, 'flex-direction', 'column'],
-      ['.map-list > li + li', 'border-top', '1px solid #8b8b8b'], ['.map-list > li > details', 'padding', '4px 0'],
+      ['.map-list > li + li', 'border-top', '1px solid var(--rule)'], ['.map-list > li > details', 'padding', '4px 0'],
       // a flat row on the panel, not a button face: the muted coordinates of a note are 1.7:1 on a button's grey
       [ROW, 'width', '100%'], [ROW, 'text-align', 'left'], [ROW, 'padding', '4px 8px'], [ROW, 'background', 'transparent'], [ROW, 'border', '0'],
       [ROW, 'box-shadow', 'none'], [ROW, 'text-shadow', 'none'], [ROW, 'color', 'var(--ink)'],
       // a label that wraps needs more than the button's line height of 1, and it is a sentence: Inter, at the size of the lists beside it
       [ROW, 'font', '0.85rem/1.3 var(--font-ui)'],
-      [`${ROW}:hover`, 'background', 'rgb(255 255 255 / 0.35)'],
+      [`${ROW}:hover`, 'background', 'var(--veil)'],
       [PICKED_ROW, 'background', 'var(--screen)'], [PICKED_ROW, 'color', 'var(--accent)'], [`${PICKED_ROW} .muted`, 'color', 'var(--screen-muted)'],
       // a flat row has no dark edge for a yellow ring to touch, a dark row has
       [`${ROW}:focus-visible`, 'outline-color', 'var(--ink-focus)'], [`${PICKED_ROW}:focus-visible`, 'outline-color', 'var(--accent)'],
@@ -2352,6 +2320,11 @@ describe('the Machine GUI planning modes, farms and the Compare card', () => {
     expect(indent).toBe(px(declared('.settings-section p.choice-hint', 'margin')?.split(' ')[3]));
     // the legend is a section title: the rule of the titles names it
     expect(TITLES.split(', ')).toContain('.choice > legend.settings-title');
+  });
+
+  it('writes who takes a left-over byproduct, in the rows under it, in the quiet ink of the Materials panel', () => {
+    // the panel group's `--ink-muted`, which reads `--text-muted`: a look reaches these rows through the token
+    expectDeclared([['.mat-taken', 'color', 'var(--ink-muted)']]);
   });
 
   it('keeps the cues of the open button and of the mode in use in forced colours, where the yellow is gone', () => {

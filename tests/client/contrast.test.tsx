@@ -1,12 +1,18 @@
-// WCAG AA contrast of every text pair of the Machine GUI palette (restyle plan Phase 1 Task 1, design spec §4 and §6): the
-// ink of each surface, the button faces, the tabs and the tier chips. Plain arithmetic on the spec's values, so these pass
-// from the start and stay as the guard for every later edit of a colour.
+// WCAG contrast of the Machine GUI palette (restyle plan Phase 1 Task 1, design spec §4 and §6; Phase 2 spec §3.5): every pair of
+// a text and what it sits on, and of a graphic and what it lies on, in one table by token name. The tokens are read from styles.css
+// itself, for the light look and for the dark one, so a pair is measured at the colours the page draws in each (this closes Phase 1's
+// F4, "pairs hand-copied"): text needs 4.5:1 (AA), a graphic or a component's edge 3:1 (WCAG 1.4.11). A guard checks that every pair
+// measured before Phase 2 is still measured, at the same light colours (contrast-phase1.json). The reason cases further down keep the
+// pairs that fall short, as literals: they say why the palette is what it is.
 
+import { readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
 import { DYE_HEX } from '../../src/shared/layout/enderio.ts';
 import type { DyeColor } from '../../src/shared/types/layout.ts';
+import { cssBlocks, resolveToken, themeTokens, type Look } from './css-blocks.ts';
 
 const AA = 4.5;
+const GRAPHICS = 3;
 
 /** One 8-bit channel of `#rrggbb` (the pair of hex digits at `from`) as linear light. */
 function channel(hex: string, from: number): number {
@@ -30,17 +36,164 @@ const TIERS: [string, string][] = [
   ['IV', '#8c9cff'], ['LuV', '#ff8cff'], ['ZPM', '#ff5555'], ['UV', '#55dddd'], ['UHV', '#ff6b6b'],
   ['UEV', '#55ff55'], ['UIV', '#00cc00'], ['UMV', '#ffff55'], ['UXV', '#8080ff'], ['MAX', '#ff5555'],
 ];
+/** The channel dyes too dark for the dark casing, which the view puts in a panel-grey one (design spec §7). */
+const DARK_DYES: readonly DyeColor[] = ['black', 'brown', 'blue', 'gray', 'green', 'purple', 'red'];
 
-/** [what it is, text, background] */
-const PAIRS: [string, string, string][] = [
-  ...['#dddddd', '#aaaaaa', '#ffffff', '#ffff55', '#ff5555', '#55ff55', '#ffaa00'].map((text): [string, string, string] => ['page ink', text, '#2b2b2b']),
-  ...['#303030', '#4a4a4a', '#404040', '#1a3fa0', '#aa0000', '#1e5a1e', '#6a4000'].map((text): [string, string, string] => ['panel ink', text, '#c6c6c6']),
-  ...['#ffffff', '#aaaaaa', '#ffff55', '#ff5555', '#55ff55', '#ffaa00'].map((text): [string, string, string] => ['dark ink', text, '#1b1b1b']),
-  ...TIERS.map(([tier, text]): [string, string, string] => [`tier ${tier}`, text, '#1b1b1b']),
-  ['button', '#ffffff', '#6b6b6b'], ['button hover', '#ffffff', '#4a5499'],
-  ['danger button', '#ffffff', '#aa0000'], ['danger button hover', '#ffffff', '#c62828'],
-  ['primary button', '#ffff55', '#6b6b6b'],
-  ['unselected tab', '#1b1b1b', '#8b8b8b'], ['selected tab', '#303030', '#c6c6c6'],
+// ---- what the page draws, in each look ----
+
+const blocks = cssBlocks(readFileSync(new URL('../../src/client/styles.css', import.meta.url), 'utf8'));
+/** Each look's tokens, as the stylesheet declares them. */
+const LOOK_TOKENS: Readonly<Record<Look, ReadonlyMap<string, string>>> = { light: themeTokens(blocks, 'light'), dark: themeTokens(blocks, 'dark') };
+
+/**
+ * What a pair measures: a token `--x`; a literal `#rrggbb`, which the stylesheet draws the same in both looks; or `over`, a translucent
+ * colour, alpha-composited on `on`.
+ */
+type Paint = string | { over: Paint; on: Paint };
+/** [what it is, the text or graphic, what it sits on, the least ratio it needs, the looks it holds in (both when absent)] */
+type Pair = [what: string, fg: Paint, bg: Paint, min: number, looks?: readonly Look[]];
+
+/** The channels and the alpha of a CSS colour: `#rgb`, `#rrggbb`, `rgb(r g b / a)` or `rgba(r, g, b, a)`. */
+function parse(css: string): [number, number, number, number] {
+  const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(css)?.[1];
+  if (hex !== undefined) {
+    const digits = hex.length === 3 ? [...hex].map((d) => d + d).join('') : hex;
+    return [Number.parseInt(digits.slice(0, 2), 16), Number.parseInt(digits.slice(2, 4), 16), Number.parseInt(digits.slice(4, 6), 16), 1];
+  }
+  const fn = /^rgba?\(\s*([\d.]+)(?:\s*,\s*|\s+)([\d.]+)(?:\s*,\s*|\s+)([\d.]+)\s*(?:[,/]\s*([\d.]+)\s*)?\)$/.exec(css);
+  if (fn !== null) return [Number(fn[1]), Number(fn[2]), Number(fn[3]), fn[4] === undefined ? 1 : Number(fn[4])];
+  throw new Error(`"${css}" is not a colour this test can read`);
+}
+
+/** A paint's channels and alpha in a look: a token through that look's tokens, a composite channel by channel (and so opaque). */
+function channels(look: Look, paint: Paint): [number, number, number, number] {
+  if (typeof paint === 'string') return parse(resolveToken(LOOK_TOKENS[look], paint.startsWith('--') ? `var(${paint})` : paint));
+  const [r, g, b, a] = channels(look, paint.over);
+  const under = channels(look, paint.on);
+  if (under[3] !== 1) throw new Error(`${JSON.stringify(paint.on)} is translucent: composite it on what it lies over`);
+  const over = (c: number, i: 0 | 1 | 2): number => Math.round(c * a + under[i] * (1 - a));
+  return [over(r, 0), over(g, 1), over(b, 2), 1];
+}
+
+/** A paint as the `#rrggbb` it is in a look; a translucent one must be composited on what it lies over. */
+function colour(look: Look, paint: Paint): string {
+  const [r, g, b, a] = channels(look, paint);
+  if (a !== 1) throw new Error(`${JSON.stringify(paint)} is translucent: composite it on what it lies over`);
+  return `#${[r, g, b].map((c) => Math.round(c).toString(16).padStart(2, '0')).join('')}`;
+}
+
+/** A paint for a failure message: `--chat over --panel`. */
+const named = (paint: Paint): string => (typeof paint === 'string' ? paint : `${named(paint.over)} over ${named(paint.on)}`);
+
+// ---- the pairs ----
+
+/** A chat box (82 % black) over the panel it sits on. */
+const CHAT_ON_PANEL: Paint = { over: '--chat', on: '--panel' };
+/** The NEI tooltip (94 % of #100010) over the lightest a map or the 3D scene and its sky can put under it, white. */
+const TIP_ON_WHITE: Paint = { over: '--tip-bg', on: '#ffffff' };
+/** The panel under the white veil of a pointed-at map row. */
+const VEILED_PANEL: Paint = { over: '--veil', on: '--panel' };
+/** The ink of the stone: the page's, set on :root. */
+const PAGE_INKS = ['--ink', '--ink-muted', '--ink-title', '--ink-link', '--ink-error', '--ink-ok', '--ink-warn'];
+/** The ink of a panel: the tokens the panel group reads. */
+const PANEL_INKS = ['--text', '--text-muted', '--title', '--link', '--panel-error', '--panel-ok', '--panel-warn'];
+/** The ink of a dark box (a chat box, a screen, a chip): the literals of the dark-box group, the same in both looks. */
+const DARK_INKS = ['#ffffff', '#aaaaaa', '#ffff55', '#ff5555', '#55ff55', '#ffaa00'];
+const FLOW_FILLS: [string, string][] = [
+  ['new', '--flow-new'], ['owned', '--flow-owned'], ['import', '--flow-import'], ['missing', '--flow-missing'], ['target', '--flow-out'],
+  ['left over', '--flow-sink'], ['supporting line', '--flow-line'],
+];
+/** The boxes whose rows can show an issue: not a left over, which is never short of anything. */
+const ISSUE_FILLS = FLOW_FILLS.filter(([box]) => box !== 'left over');
+const CONN_FILLS: [string, string][] = [
+  ['machine', '--conn-box'], ['chest', '--conn-chest'], ['interface', '--conn-interface'], ['source', '--conn-source'], ['hookup', '--conn-hookup'],
+];
+
+/** Every pair of the page, by token name; each later task appends its own. */
+const PAIRS: Pair[] = [
+  // the palette (Phase 1 Task 1): the ink of each surface, the button faces, the tabs and the tier chips
+  ...PAGE_INKS.map((ink): Pair => ['page ink', ink, '--page', AA]),
+  ...PAGE_INKS.map((ink): Pair => ['page ink on the check squares of the stone', ink, '--page-check', AA]),
+  ...PANEL_INKS.map((ink): Pair => ['panel ink', ink, '--panel', AA]),
+  ...DARK_INKS.map((ink): Pair => ['dark ink', ink, '--screen', AA]),
+  ...TIERS.map(([tier, text]): Pair => [`tier ${tier}`, text, '--screen', AA]),
+  ['button', '#ffffff', '--btn', AA], ['button hover', '#ffffff', '--btn-hover', AA],
+  ['danger button', '#ffffff', '--danger-face', AA], ['danger button hover', '#ffffff', '--danger-face-hover', AA],
+  ['primary button', '--accent', '--btn', AA],
+  ['unselected tab', '--tab-ink', '--tab-face', AA], ['hovered tab', '--tab-ink', '--tab-face-hover', AA], ['selected tab', '--text', '--panel', AA],
+
+  // the Flow diagram (Phase 1 Task 6, design spec §7: "text #303030 on all, ≥ 4.5:1"): every box fill with the text a box draws on it,
+  // then the light text on the dark canvas and in the chat boxes
+  ...FLOW_FILLS.map(([box, fill]): Pair => [`${box} box text`, '--text', fill, AA]),
+  ...ISSUE_FILLS.map(([box, fill]): Pair => [`${box} box lines and rates`, '--text-muted', fill, AA]),
+  ...ISSUE_FILLS.map(([box, fill]): Pair => [`${box} box row with no source`, '--flow-error', fill, AA]),
+  ...ISSUE_FILLS.map(([box, fill]): Pair => [`${box} box row made two ways`, '--flow-warn', fill, AA]),
+  ['avoid badge', '#ffaa00', '--screen', AA], ['arrow label on the canvas', '#ffffff', '--well', AA],
+  ['open line title on the canvas', '--flow-group', '--well', AA], ['line button', '#ffffff', '--btn', AA],
+  ['issues on their chat box', '#ffaa00', CHAT_ON_PANEL, AA], ['red issues on their chat box', '#ff5555', CHAT_ON_PANEL, AA],
+
+  // the Connections tab (Phase 1 Task 7, design spec §7): the text of each kind of box on its fill and of the face rows on their lighter
+  // grey, the links' white labels on their dark halo; and, as graphics, what moves in each pipe on the casing it moves in, a channel's
+  // dye (the seven too dark for the dark casing on the panel grey the view gives them) or the colour of what carries a link without one
+  ...CONN_FILLS.map(([box, fill]): Pair => [`${box} box text`, '--text', fill, AA]),
+  // a hookup's and a left over's lines take the box text's colour instead, as in the flow diagram
+  ...CONN_FILLS.filter(([box]) => box !== 'hookup').map(([box, fill]): Pair => [`${box} box lines`, '--text-muted', fill, AA]),
+  ['face row', '--text', '--conn-face', AA], ['face row link', '--conn-face-link', '--conn-face', AA],
+  ['face row mode', '--text-muted', '--conn-face', AA],
+  ['link label on its halo', '#ffffff', '--casing', AA], ['link label on the well', '#ffffff', '--well', AA],
+  ...(Object.entries(DYE_HEX) as [DyeColor, string][]).map(([dye, hex]): Pair => [
+    `channel dye ${dye}`, hex, DARK_DYES.includes(dye) ? '--dye-casing' : '--casing', GRAPHICS,
+  ]),
+  ['GT item pipe', '#9ccc65', '--casing', GRAPHICS], ['GT fluid pipe', '#1e88e5', '--casing', GRAPHICS],
+  ['Project Red network', '#ff7043', '--casing', GRAPHICS], ['ME network', '#7e57c2', '--casing', GRAPHICS],
+  ['EnderIO conduit', '#26c6da', '--casing', GRAPHICS], ['by hand', '#ffca28', '--well', GRAPHICS],
+  ['an interface on its machine or a hookup', '#8a92a0', '--well', GRAPHICS],
+
+  // a Flow pipe from a missing source (ruling R34, over R20), as graphics: nothing moves in it, so its red casing is all there is to see
+  // of it, on the well; its white head reads on that red and on the well beside it
+  ['missing casing on the well', '#ff5555', '--well', GRAPHICS],
+  ['white head on the missing casing', '#ffffff', '#ff5555', GRAPHICS], ['white head on the well', '#ffffff', '--well', GRAPHICS],
+
+  // the Map tab (Phase 1 Task 8, design spec §6): the fits badge's four colours on the badge's screen, the NEI tooltip's two greys of
+  // text, the rows of the pin and note lists on the panel and under the pointer, and the picked row (yellow and grey on a screen)
+  ['fits badge: fits', '--screen-text', '--screen', AA], ['fits badge: tight', '#ffaa00', '--screen', AA],
+  ['fits badge: does not fit', '#ff5555', '--screen', AA], ['fits badge: unknown', '--screen-muted', '--screen', AA],
+  ['tooltip first line', '#ffffff', TIP_ON_WHITE, AA], ['tooltip detail lines', '#aaaaaa', TIP_ON_WHITE, AA],
+  ['row label', '--text', '--panel', AA], ['row coordinates', '--text-muted', '--panel', AA],
+  ['row label under the pointer', '--text', VEILED_PANEL, AA], ['row coordinates under the pointer', '--text-muted', VEILED_PANEL, AA],
+  ['picked row', '--accent', '--screen', AA], ['picked row coordinates', '--screen-muted', '--screen', AA],
+  ['Y level readout', '--screen-text', '--screen', AA],
+
+  // the 3D tab, the World page and the projector panel (Phase 1 Task 9, design spec §6): the hover label on the NEI tooltip, the
+  // toggles' two texts on a button under the pointer, the warnings' chat box, the World page's gold title and grey footer on the stone,
+  // the scans' four state chips and the green readouts on a screen; and, as graphics, the fills of a scan's bar on its screen
+  ['3D hover label', '#ffffff', TIP_ON_WHITE, AA],
+  ['toggle that is on, under the pointer', '--accent', '--btn-hover', AA], ['toggle that is off, under the pointer', '#ffffff', '--btn-hover', AA],
+  ['warnings title on its chat box', '#ffff55', CHAT_ON_PANEL, AA], ['warnings text on its chat box', '#ffaa00', CHAT_ON_PANEL, AA],
+  ['World page title', '#ffd84a', '--page', AA], ['World page footer', '--ink-muted', '--page', AA],
+  ['scan state: queued', '--screen-muted', '--screen', AA], ['scan state: running', '#ffaa00', '--screen', AA],
+  ['scan state: done', '--screen-text', '--screen', AA], ['scan state: failed', '#ff5555', '--screen', AA],
+  ['layer readout', '--screen-text', '--screen', AA], ['smart upload total', '--screen-text', '--screen', AA],
+  ['command', '--screen-text', '--screen', AA],
+  ['failed scan bar', '#e03c3c', '--screen', GRAPHICS], ['scan bar', '--screen-text', '--screen', GRAPHICS],
+
+  // the Settings button's small part, "Make: Basic Circuit" (the Make-picker fix): Inter 13px in the page's muted ink, on a dark readout
+  // in the head (it sits on the stone); on the button's own face that ink falls short (the reason case below)
+  ['Settings target part on its readout', '--ink-muted', '--screen', AA],
+
+  // add-on 17: the Compare card's titles on the panel, its readout tiles' label and value on a screen (a value shrunk toward 13px, or cut
+  // with its ellipsis, is the same ink on the same screen), its notes in the dark-box group's literals on their chat box over the panel,
+  // its Compare modes button while the card is open (yellow on the button face, and under the pointer), the hints of "Plan for"; and, as
+  // graphics, the frame of the mode in use: a black edge on the panel (in the light look: the dark one is Task 1b's, plan ruling
+  // compare-frame-dark) with a yellow ring inside it
+  ['card and column titles', '--title', '--panel', AA], ['"Updating…" beside the title', '--text-muted', '--panel', AA],
+  ['tile label', '--screen-muted', '--screen', AA], ['tile value', '--screen-text', '--screen', AA],
+  ['note', '#ffffff', CHAT_ON_PANEL, AA], ['note of a mode still planning', '#aaaaaa', CHAT_ON_PANEL, AA],
+  ['note of a mode that failed', '#ff5555', CHAT_ON_PANEL, AA],
+  ['Compare modes while the card is open', '--accent', '--btn', AA], ['Compare modes while open, under the pointer', '--accent', '--btn-hover', AA],
+  ['a hint of Plan for', '--text-muted', '--panel', AA],
+  ['mode-in-use edge on the panel', '--outline', '--panel', GRAPHICS, ['light']],
+  ['mode-in-use ring on the edge', '--accent', '--outline', GRAPHICS],
 ];
 
 describe('contrast of the Machine GUI palette', () => {
@@ -50,36 +203,43 @@ describe('contrast of the Machine GUI palette', () => {
     expect(ratio('#ffffff', '#4a5499')).toBeCloseTo(6.96, 1);
     expect(ratio('#ff5555', '#2b2b2b')).toBeCloseTo(4.5, 1);                          // the tightest pair of all
   });
+});
 
-  it.each(PAIRS)('%s: %s on %s meets AA', (_what, text, background) => {
-    expect(ratio(text, background)).toBeGreaterThanOrEqual(AA);
+// One table, run for both looks (Phase 2 spec §3.5). Until the dark look's block exists (Task 1b), the dark look reads the light tokens,
+// so it repeats the light results.
+const LOOKS: readonly Look[] = ['light', 'dark'];
+describe.each(LOOKS)('contrast in the %s look', (look) => {
+  it.each(PAIRS.filter(([, , , , looks]) => looks === undefined || looks.includes(look)))('%s', (_what, fg, bg, min) => {
+    expect(ratio(colour(look, fg), colour(look, bg)), `${named(fg)} on ${named(bg)}`).toBeGreaterThanOrEqual(min);
   });
 });
 
-// The text of the Flow diagram (restyle plan Phase 1 Task 6, design spec §7: "text #303030 on all, ≥ 4.5:1"): every box fill with
-// the text a box draws on it, then the light text on the dark canvas and in the chat boxes. A chat box is 82% black over the panel,
-// which is #242424.
-const FLOW_FILLS: [string, string][] = [
-  ['new', '#c6c6c6'], ['owned', '#b9d6b0'], ['import', '#d8cfa8'], ['missing', '#e3b0b0'], ['target', '#f0d870'], ['left over', '#a8a8a8'],
-  ['supporting line', '#cbbbe0'],
-];
-/** The boxes whose rows can show an issue: not a left over, which is never short of anything. */
-const ISSUE_FILLS = FLOW_FILLS.filter(([box]) => box !== 'left over');
-const FLOW_PAIRS: [string, string, string][] = [
-  ...FLOW_FILLS.map(([box, fill]): [string, string, string] => [`${box} box text`, '#303030', fill]),
-  ...ISSUE_FILLS.map(([box, fill]): [string, string, string] => [`${box} box lines and rates`, '#4a4a4a', fill]),
-  ...ISSUE_FILLS.map(([box, fill]): [string, string, string] => [`${box} box row with no source`, '#990000', fill]),
-  ...ISSUE_FILLS.map(([box, fill]): [string, string, string] => [`${box} box row made two ways`, '#6a4000', fill]),
-  ['avoid badge', '#ffaa00', '#1b1b1b'], ['arrow label on the canvas', '#ffffff', '#373737'],
-  ['open line title on the canvas', '#cbbbe0', '#373737'], ['line button', '#ffffff', '#6b6b6b'],
-  ['issues on their chat box', '#ffaa00', '#242424'], ['red issues on their chat box', '#ff5555', '#242424'],
-];
+it('reads the light tokens as the literals Phase 1 measured', () => {
+  expect(colour('light', '--panel')).toBe('#c6c6c6');
+  expect(colour('light', '--flow-new')).toBe('#c6c6c6');
+  expect(colour('light', { over: '--tip-bg', on: '#ffffff' })).toBe('#1e0f1e');
+  expect(colour('light', { over: '--chat', on: '--panel' })).toBe('#242424');
+  expect(colour('light', { over: '--veil', on: '--panel' })).toBe('#dadada');
+});
+
+/** The 155 light pairs measured before Phase 2: Phase 1's 142, the Make-picker fix's 1, add-on 17's 12. */
+const PHASE1_PAIRS = JSON.parse(readFileSync(new URL('./contrast-phase1.json', import.meta.url), 'utf8')) as Array<[string, string, string]>;
+it('still measures every pair measured before Phase 2, at the same light colours', () => {   // the guard of the rewrite (spec §3.5)
+  expect(PHASE1_PAIRS).toHaveLength(155); expect(PAIRS.length).toBeGreaterThanOrEqual(PHASE1_PAIRS.length);
+  for (const [what, fg, bg] of PHASE1_PAIRS) {
+    expect(PAIRS.some(([w, f, b]) => w === what && colour('light', f) === fg && colour('light', b) === bg), `${what}: ${fg} on ${bg}`).toBe(true);
+  }
+});
+
+// ---- why the palette is what it is: the pairs that fall short, as literals ----
+
+/** The dark casing of a Connections pipe, the well under the diagrams, the stone and the panel, as Phase 1 measured them. */
+const DARK_CASING = '#1b1b1b';
+const WELL = '#373737';
+const STONE = '#2b2b2b';
+const PANEL = '#c6c6c6';
 
 describe('contrast of the Flow diagram', () => {
-  it.each(FLOW_PAIRS)('%s: %s on %s meets AA', (_what, text, background) => {
-    expect(ratio(text, background)).toBeGreaterThanOrEqual(AA);
-  });
-
   it('needs its own red, and the panel\'s text on a left over: the panel\'s red and quiet grey fall short there', () => {
     expect(ratio('#aa0000', '#e3b0b0')).toBeLessThan(AA);                             // the panel's error ink on a missing source
     expect(ratio('#aa0000', '#cbbbe0')).toBeLessThan(AA);                             // and on a collapsed supporting line
@@ -87,118 +247,35 @@ describe('contrast of the Flow diagram', () => {
   });
 });
 
-// The Connections tab (restyle plan Phase 1 Task 7, design spec §7): the text of each kind of box on its fill and of the face rows on
-// their lighter grey, the links' white labels on their dark halo; and, as graphics (WCAG 1.4.11: 3:1), what moves in each pipe
-// against the casing it moves in. Design spec §7 names the seven dyes too dark for the dark casing, which get the panel grey.
-const GRAPHICS = 3;
-const DARK_CASING = '#1b1b1b';
-const PANEL_CASING = '#c6c6c6';
-const WELL = '#373737';
-const CONN_FILLS: [string, string][] = [['machine', '#c6c6c6'], ['chest', '#f0d870'], ['interface', '#cbbbe0'], ['source', '#d8cfa8'], ['hookup', '#a8a8a8']];
-const CONN_PAIRS: [string, string, string][] = [
-  ...CONN_FILLS.map(([box, fill]): [string, string, string] => [`${box} box text`, '#303030', fill]),
-  // a hookup's and a left over's lines take the box text's colour instead, as in the flow diagram
-  ...CONN_FILLS.filter(([box]) => box !== 'hookup').map(([box, fill]): [string, string, string] => [`${box} box lines`, '#4a4a4a', fill]),
-  ['face row', '#303030', '#e0e0e0'], ['face row link', '#1d3b9a', '#e0e0e0'], ['face row mode', '#4a4a4a', '#e0e0e0'],
-  ['link label on its halo', '#ffffff', DARK_CASING], ['link label on the well', '#ffffff', WELL],
-];
-const DARK_DYES: readonly DyeColor[] = ['black', 'brown', 'blue', 'gray', 'green', 'purple', 'red'];
-/** What carries a link without a channel (styles.css `.conn-via-*`), and what it moves on: by hand there is no casing. */
-const CARRIERS: [string, string, string][] = [
-  ['GT item pipe', '#9ccc65', DARK_CASING], ['GT fluid pipe', '#1e88e5', DARK_CASING], ['Project Red network', '#ff7043', DARK_CASING],
-  ['ME network', '#7e57c2', DARK_CASING], ['EnderIO conduit', '#26c6da', DARK_CASING], ['by hand', '#ffca28', WELL],
-  ['an interface on its machine or a hookup', '#8a92a0', WELL],
-];
-
 describe('contrast of the Connections tab', () => {
-  it.each(CONN_PAIRS)('%s: %s on %s meets AA', (_what, text, background) => {
-    expect(ratio(text, background)).toBeGreaterThanOrEqual(AA);
-  });
-
   it('shows every channel dye at 3:1 on its casing: the seven too dark for the dark casing on the panel grey', () => {
-    for (const [dye, hex] of Object.entries(DYE_HEX) as [DyeColor, string][]) {
-      const casing = DARK_DYES.includes(dye) ? PANEL_CASING : DARK_CASING;
-      expect(ratio(hex, casing), dye).toBeGreaterThanOrEqual(GRAPHICS);
-    }
-    // and those seven do need it: Red, the line's first channel, would be 2.8:1 on the dark casing
+    // every dye at 3:1 on its casing is the table's `channel dye …` rows; and those seven do need the panel grey: Red, the line's first
+    // channel, would be 2.8:1 on the dark casing
     for (const dye of DARK_DYES) expect(ratio(DYE_HEX[dye], DARK_CASING), dye).toBeLessThan(GRAPHICS);
-  });
-
-  it.each(CARRIERS)('what carries a link without a channel, %s: %s on %s, reads at 3:1', (_what, colour, under) => {
-    expect(ratio(colour, under)).toBeGreaterThanOrEqual(GRAPHICS);
   });
 });
 
-// A Flow pipe from a missing source (ruling R34, over R20): nothing moves in it, so its casing is all there is to see of it, and as a
-// graphic it reads at 3:1 on the well; its arrow head is white, which reads on that red (and on the well beside it).
+// A Flow pipe from a missing source (ruling R34, over R20): its casing and its white head read at 3:1 (the table's rows); the panel's red
+// would not, and neither would a head in the casing's own red.
 describe('contrast of a Flow pipe from a missing source', () => {
   it('reads its red casing at 3:1 on the well, where the panel\'s red read 1.54:1', () => {
-    expect(ratio('#ff5555', WELL)).toBeGreaterThanOrEqual(GRAPHICS);
     expect(ratio('#aa0000', WELL)).toBeLessThan(GRAPHICS);
   });
 
   it('reads its white head at 3:1 on the casing and on the well', () => {
-    expect(ratio('#ffffff', '#ff5555')).toBeGreaterThanOrEqual(GRAPHICS);
-    expect(ratio('#ffffff', WELL)).toBeGreaterThanOrEqual(GRAPHICS);
     // the head of R20, in the casing's own red now, would not show on it
     expect(ratio('#ff5555', '#ff5555')).toBeLessThan(GRAPHICS);
   });
 });
 
-// The Map tab (restyle plan Phase 1 Task 8, design spec §6): the fits badge's four colours on the badge's screen, the NEI tooltip's
-// two greys of text on its box (94% of #100010 over the lightest a map can be, white), the rows of the pin and note lists on the panel
-// and under the pointer (the panel's grey under a 35% white veil), and the picked row (yellow and the screen's grey on a screen).
-const SCREEN = '#1b1b1b';
-const PANEL = '#c6c6c6';
-const TIP_OVER_WHITE = '#1e0f1e';
-const VEILED_PANEL = '#dadada';
-const MAP_PAIRS: [string, string, string][] = [
-  ['fits badge: fits', '#55ff55', SCREEN], ['fits badge: tight', '#ffaa00', SCREEN], ['fits badge: does not fit', '#ff5555', SCREEN],
-  ['fits badge: unknown', '#aaaaaa', SCREEN],
-  ['tooltip first line', '#ffffff', TIP_OVER_WHITE], ['tooltip detail lines', '#aaaaaa', TIP_OVER_WHITE],
-  ['row label', '#303030', PANEL], ['row coordinates', '#4a4a4a', PANEL],
-  ['row label under the pointer', '#303030', VEILED_PANEL], ['row coordinates under the pointer', '#4a4a4a', VEILED_PANEL],
-  ['picked row', '#ffff55', SCREEN], ['picked row coordinates', '#aaaaaa', SCREEN], ['Y level readout', '#55ff55', SCREEN],
-];
-
 describe('contrast of the Map tab', () => {
-  it.each(MAP_PAIRS)('%s: %s on %s meets AA', (_what, text, background) => {
-    expect(ratio(text, background)).toBeGreaterThanOrEqual(AA);
-  });
-
   it('needs a flat row: the coordinates of a note would fall short on a button\'s grey', () => {
     expect(ratio('#4a4a4a', '#6b6b6b')).toBeLessThan(AA);                             // the panel's quiet grey on a button face
     expect(ratio('#aaaaaa', '#6b6b6b')).toBeLessThan(AA);                             // and the dark box's
   });
 });
 
-// The 3D tab, the World page and the projector panel (restyle plan Phase 1 Task 9, design spec §6): the hover label's white on the NEI tooltip
-// (over white, the lightest the scene or its sky can put under it: the Map's pair above), the toggles' two texts on a button under the
-// pointer, the warnings' chat box, the World page's gold title and grey footer on the stone, the scans' four state chips, and the green
-// readouts (the layer, the smart upload's total and the commands) on a screen; and, as graphics (WCAG 1.4.11: 3:1), the red fill of a failed
-// scan's bar.
-const CHAT_OVER_PANEL = '#242424';
-const STONE = '#2b2b2b';
-const SCREEN_PAIRS: [string, string, string][] = [
-  ['3D hover label', '#ffffff', TIP_OVER_WHITE],
-  ['toggle that is on, under the pointer', '#ffff55', '#4a5499'], ['toggle that is off, under the pointer', '#ffffff', '#4a5499'],
-  ['warnings title on its chat box', '#ffff55', CHAT_OVER_PANEL], ['warnings text on its chat box', '#ffaa00', CHAT_OVER_PANEL],
-  ['World page title', '#ffd84a', STONE], ['World page footer', '#aaaaaa', STONE],
-  ['scan state: queued', '#aaaaaa', SCREEN], ['scan state: running', '#ffaa00', SCREEN], ['scan state: done', '#55ff55', SCREEN],
-  ['scan state: failed', '#ff5555', SCREEN],
-  ['layer readout', '#55ff55', SCREEN], ['smart upload total', '#55ff55', SCREEN], ['command', '#55ff55', SCREEN],
-];
-
 describe('contrast of the 3D tab, the World page and the projector panel', () => {
-  it.each(SCREEN_PAIRS)('%s: %s on %s meets AA', (_what, text, background) => {
-    expect(ratio(text, background)).toBeGreaterThanOrEqual(AA);
-  });
-
-  it('reads the red fill of a failed scan\'s bar at 3:1 on its screen, as the green of the others', () => {
-    expect(ratio('#e03c3c', SCREEN)).toBeGreaterThanOrEqual(GRAPHICS);
-    expect(ratio('#55ff55', SCREEN)).toBeGreaterThanOrEqual(GRAPHICS);
-  });
-
   it('needs the stone\'s own ink: the panel\'s grey footer would be dark on dark', () => {
     expect(ratio('#4a4a4a', STONE)).toBeLessThan(AA);
   });
@@ -206,37 +283,18 @@ describe('contrast of the 3D tab, the World page and the projector panel', () =>
 
 // The Settings button's small part, "Make: Basic Circuit" (Inter 13px in --ink-muted): the button's own face is the grey #6b6b6b, and
 // the muted ink (#aaaaaa) measures 2.3:1 on it, and 3.0:1 on the face under the pointer, so the part is a dark readout on the screen
-// (the pair "dark ink" above), where it measures 7.4:1.
+// (the table's "Settings target part on its readout"), where it measures 7.4:1.
 describe('contrast of the Settings button\'s target part', () => {
   it('reads the muted ink on its dark readout, and needs it: on the button\'s face the ink falls short', () => {
-    expect(ratio('#aaaaaa', SCREEN)).toBeGreaterThanOrEqual(AA);
     expect(ratio('#aaaaaa', '#6b6b6b')).toBeLessThan(AA);                              // the button's face
     expect(ratio('#aaaaaa', '#4a5499')).toBeLessThan(AA);                              // and under the pointer
   });
 });
 
-// Add-on 17 in the Machine GUI: the Compare card's titles on the panel, its readout tiles' grey label and green value on a screen, its
-// notes on their chat box over the panel (white, the grey of "Still planning…" and the red of a failure), its Compare modes button while
-// the card is open (yellow on the button face, and under the pointer; in the head, or in the bar under the banner at 900 px and below),
-// and the hints of "Plan for" on a settings section; and, as graphics (WCAG 1.4.11: 3:1), the frame of the mode in use: a black edge on
-// the panel with a yellow ring inside it.
-const ADDON17_PAIRS: [string, string, string][] = [
-  ['card and column titles', '#404040', PANEL], ['"Updating…" beside the title', '#4a4a4a', PANEL],
-  ['tile label', '#aaaaaa', SCREEN], ['tile value', '#55ff55', SCREEN],
-  ['note', '#ffffff', CHAT_OVER_PANEL], ['note of a mode still planning', '#aaaaaa', CHAT_OVER_PANEL],
-  ['note of a mode that failed', '#ff5555', CHAT_OVER_PANEL],
-  ['Compare modes while the card is open', '#ffff55', '#6b6b6b'], ['Compare modes while open, under the pointer', '#ffff55', '#4a5499'],
-  ['a hint of Plan for', '#4a4a4a', PANEL],
-];
-
+// Add-on 17's frame of the mode in use: a black edge the panel shows, with a yellow ring the edge shows (the table's two "mode-in-use"
+// rows); the ring alone would be faint on the light panel.
 describe('contrast of the planning modes, farms and the Compare card', () => {
-  it.each(ADDON17_PAIRS)('%s: %s on %s meets AA', (_what, text, background) => {
-    expect(ratio(text, background)).toBeGreaterThanOrEqual(AA);
-  });
-
   it('frames the mode in use with a black edge the panel shows, and a yellow ring the edge shows', () => {
-    expect(ratio('#000000', PANEL)).toBeGreaterThanOrEqual(GRAPHICS);
-    expect(ratio('#ffff55', '#000000')).toBeGreaterThanOrEqual(GRAPHICS);
     // the ring alone would be faint on the panel: the black edge is what makes it read
     expect(ratio('#ffff55', PANEL)).toBeLessThan(GRAPHICS);
   });
