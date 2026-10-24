@@ -1166,8 +1166,9 @@ async function pickBuild(
 /**
  * The build stage (plan 12 Task 4), when the model counts build cost, in place of R3's stages 2–4 (the charge MIP, its
  * fallback and consolidation; or plan 09's fewest recipes when S1 needs no raw material): S1g, then the build-cost MIP
- * started from the cheaper by its own objective of `roundUp` of S1 and of plan 09's sparse plan (none when both leave a
- * step short; without S1's the MIP has no derived-purchase binaries, whose bound comes from that start: `buildMip`),
+ * started from the cheapest by its own objective of `roundUp` of S1, of plan 09's sparse plan and of plan 09's plan of
+ * the line ("Ignore build cost", `finish`), among those within the raw cap (none when all leave a step short; without
+ * S1's the MIP has no derived-purchase binaries, whose bound comes from that start: `buildMip`),
  * solved and picked by `pickBuild`, which its node and simplex-iteration limits decide (BUILD_MIP_MAX_NODES,
  * BUILD_MIP_MAX_LP_ITERATIONS) and a far time guard only backs up. A
  * MIP that ends without a whole solution, or that the guard stops (or `buildTimeLimit ≤ 0`), gives way to the cheapest
@@ -1186,7 +1187,10 @@ async function pickBuild(
  * MIP's to weigh. With a step charge the build MIP at step charge 0 runs first (the leanest line, `leanestLine`); its raw
  * material is the raw cap's measure (`SolveOptions.rawCap`) and, where it is more than LEAN_BASE_ABOVE × σ, the step
  * charge's base, and its plan is kept where it costs less than the MIP's (fix wave 3 (A), (B2)); at No limit it is not
- * solved where its start costs at most LEAN_BASE_ABOVE, as it could then change nothing (controller OQ1 (D)).
+ * solved where its start costs at most LEAN_BASE_ABOVE, as it could then change nothing (controller OQ1 (D)). So is plan
+ * 09's plan, at every cap (`cheaperPlan` within the cap; controller ruling 187 as the controller restated it for fix
+ * wave 3), so the plan is never dearer by the MIP's measure than the plan that ignores build cost where that one is
+ * within the project's cap.
  */
 async function buildStage(
   graph: CandidateGraph, lp: MainLp, s1: LpResult, warnings: PlanWarning[], opts: SolveOptions, model: BuildModel, demandScale: number,
@@ -1207,11 +1211,17 @@ async function buildStage(
     ...plain, leanRaw: lean.raw, ...(uncapped ? {} : { rawBound: (1 + cap) * lean.raw }),
   };
   const mip = buildMip(input);
-  // The MIP's start: the cheaper in its own objective of S1 and the sparse plan rounded up, among those within the raw
-  // cap (S1 always is). Not the leanest line's plan: as a start it moved HiGHS's 50-node search both ways (Advanced
-  // Circuit HV 1/min with supporting lines 27.70 -> 28.10 at "No limit"); it is a pick candidate below instead, so where
-  // the leanest line is within LEAN_BASE_ABOVE × σ and there is no cap the MIP solves exactly what it solved before.
-  const start = cheapestStart(lp, mip, input.rawBound, [sparse])?.start;
+  // Plan 09's plan ("Ignore build cost", `finish`) too, at every cap, No limit included (the controller's ruling of
+  // 2026-10-23 on fix wave 3): the build-cost plan is never to be dearer than it by the MIP's measure where it is within
+  // the project's cap (controller ruling 187), which the MIP alone misses (fix wave 3 review, with (F), under the cap:
+  // Good Electronic Circuit HV 736,585 against 685,884, Electronic Circuit LV on Project Red 439,305 against 438,825; at
+  // No limit Electronic Circuit LV, two of every machine owned, 93,864 against 77,699). It is within STEP_CHARGE_CAP of
+  // S1, so within any cap of +25 % or more.
+  const ignoredPlan = await finish(lp, s1, [], opts);
+  // The MIP's start: the cheapest in its own objective of S1, the sparse plan and plan 09's plan, each rounded up, among
+  // those within the raw cap (S1 always is). Not the leanest line's plan: as a start it moved HiGHS's 50-node search both
+  // ways (Advanced Circuit HV 1/min with supporting lines 27.70 -> 28.10 at "No limit"); it is a pick candidate below.
+  const start = cheapestStart(lp, mip, input.rawBound, [sparse, ignoredPlan.x])?.start;
   const notes = [...warnings];
   const { result, seconds, picked } = await runBuildMip(mip, start, limit, opts);
   let decision: BuildDecision;
@@ -1221,10 +1231,11 @@ async function buildStage(
   if (wholePlan(result)) {
     decision = mip.decode(result.x);
     from = result.x;
-    // Fix wave 3 (A): the leanest line's plan rounded up where it costs less than the MIP's answer, both with every
-    // machine at its true build (`exactCost`, `rounded`): within the cap by definition, so the plan is never dearer by
-    // the MIP's measure than the leanest line's.
-    const better = cheaperPlan(lp, mip, input.rawBound, mip.exactCost(result.x), [lean?.x]);
+    // Fix wave 3 (A): the leanest line's plan and plan 09's plan, each rounded up, where one costs less than the MIP's
+    // answer, all with every machine at its true build (`exactCost`, `rounded`): the MIP's model prices light steps within
+    // a machine of the truth, so the plan is never dearer by the MIP's measure than either where it is within the cap
+    // (ruling 187; the leanest line's always is).
+    const better = cheaperPlan(lp, mip, input.rawBound, mip.exactCost(result.x), [lean?.x, ignoredPlan.x]);
     if (better !== undefined) ({ decision, from, cost: keptCost } = better);
   } else {
     approx = true;
@@ -1237,7 +1248,7 @@ async function buildStage(
     // capacity, the others at each step's cheapest option — and the one the build MIP's objective rates lowest kept (ties:
     // plan 09's, which has the fewest steps, then the relaxation's, then S1's). The relaxation spreads a step's fixed
     // costs over runs far below one machine's, so its rounding can build machines a plan of fewer steps does without.
-    const ignored = await finish(lp, s1, [], opts);
+    const ignored = ignoredPlan;   // solved above, at every cap
     const candidates: Array<{ decision: BuildDecision; cost: number; from: readonly number[] }> = [
       { ...mip.rounded(ignored.x), from: ignored.x },
       ...(relaxed.status === 'optimal' ? [{ ...mip.rounded(relaxed.x, mip.prefer(relaxed.x)), from: relaxed.x }] : []),

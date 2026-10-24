@@ -78,6 +78,7 @@ const ORDINARY: ReadonlySet<string> = new Set([
   'gregtech:gt.metaitem.01@2305' /* steel dust */, 'gregtech:gt.metaitem.01@11308' /* red alloy ingot */, 'gregtech:gt.metaitem.01@2308' /* red alloy dust */,
   'gregtech:gt.metaitem.01@11381' /* redstone alloy ingot */, 'minecraft:redstone@0', 'minecraft:gold_ingot@0', 'gregtech:gt.metaitem.01@2086' /* gold dust */,
   'gregtech:gt.metaitem.01@11080' /* tantalum ingot */, 'gregtech:gt.metaitem.01@11314' /* soldering alloy ingot */,
+  'gregtech:gt.metaitem.01@11058' /* antimony ingot: the soldering alloy of a line within the raw cap (fix wave 3 (A)) */,
   'minecraft:iron_ingot@0', 'minecraft:coal@0', 'gregtech:gt.metaitem.01@11304' /* cast iron ingot */,
   // ores' dusts the supporting lines smelt, mix or electrolyse
   'gregtech:gt.metaitem.01@2058' /* antimony dust */, 'gregtech:gt.metaitem.01@2855' /* chalcopyrite dust */, 'gregtech:gt.metaitem.01@2871' /* malachite dust */,

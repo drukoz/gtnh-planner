@@ -232,16 +232,18 @@ describe.skipIf(path === undefined)("the user's reference Electronic Circuit flo
       const mine = await timed(own);
       const theirs = await timed(reference);
       const least = mine.plan.rawCost?.leastPerSecond ?? 0;
+      const leanest = mine.plan.rawCost?.leanestPerSecond ?? 0;   // fix wave 3 (B2): the step charge's other base
       const outside = mine.plan.rawInputs.map((r) => r.key).filter((key) => !REFERENCE_RAW_KINDS.has(key)).sort();
-      const cheaper = buildObjective(mine.plan, own, least) < buildObjective(theirs.plan, reference, least);
+      const cheaper = buildObjective(mine.plan, own, least, leanest) < buildObjective(theirs.plan, reference, least, leanest);
       const blocks = machineBlocks(mine.plan) <= machineBlocks(theirs.plan);
       const raw = outside.length === 0 || cheaper;
       return {
         ok: mine.plan.status === 'ok' && blocks && raw, blocks, raw,
         text: `${hours} h: ${mine.plan.status}, ${mine.seconds.toFixed(2)} s, ${mine.plan.steps.length} steps, ${machineBlocks(mine.plan)} machine blocks `
           + `against the reference's ${machineBlocks(theirs.plan)}; raw ${(((mine.plan.rawCost?.perSecond ?? 0) * 60)).toFixed(3)} a minute, build ${mine.plan.cost?.build}, `
-          + `outside the reference's raw materials ${outside.join(' ') || 'none'}; by the build MIP's measure ${buildObjective(mine.plan, own, least).toFixed(1)} `
-          + `against the reference's ${buildObjective(theirs.plan, reference, least).toFixed(1)}`,
+          + `outside the reference's raw materials ${outside.join(' ') || 'none'}; by the build MIP's measure ${buildObjective(mine.plan, own, least, leanest).toFixed(1)} `
+          + `against the reference's ${buildObjective(theirs.plan, reference, least, leanest).toFixed(1)}; raw kinds ${mine.plan.rawInputs.map((r) => r.key).join(' ')}; `
+          + `the reference: raw ${(((theirs.plan.rawCost?.perSecond ?? 0) * 60)).toFixed(3)} a minute, build ${theirs.plan.cost?.build}, raw kinds ${theirs.plan.rawInputs.map((r) => r.key).join(' ')}`,
       };
     };
     const day = await judge(DEFAULT_BUILD_HORIZON_HOURS);
