@@ -227,7 +227,9 @@ bold. One source of truth used by CSS (custom properties) and TS (the Flow SVG).
   with what it counts below it, indented to the label's text. A farm kind's own fields hang under its tick on a 2 px
   `--panel-lo` line. The **Compare card** is a panel under the plan banner with a Pixelify title; each mode is a column
   set into it as an inset frame (the panel's bevel inverted), its six figures readout tiles (`--screen`, label Inter
-  11 px `--screen-muted`, value Pixelify 24 px `--screen-text`), its notes chat boxes in the dark ink (the notes'
+  11 px `--screen-muted`, value Pixelify 24 px `--screen-text`; a tile is at least 160 px, so the tiles of a narrow column
+  stack, and a value never breaks: it stays on one line and a long one shrinks to fit, down to 13 px, before it is cut),
+  its notes chat boxes in the dark ink (the notes'
   selector keeps one class's specificity, `p` in `:where()`, so `.muted` and `.error` still colour "Still planning…" and
   a failure), and the mode in use a black edge with a 2 px yellow ring inside, the frame of a selected slot (an outline
   in `Highlight` in forced colours). Its "Compare modes" button is a `button.small` in the project head, yellow while

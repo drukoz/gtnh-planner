@@ -1,12 +1,13 @@
-// The Compare card under the plan banner (add-on 17, design spec §3.3, architecture §11.45 (5)): the "Compare modes"
-// button in the project head opens and closes it; open, it plans the project's three planning modes side by side
-// (`GET /api/projects/:id/compare`) and fetches them again on every `plan` or `compare` event of the project, so a mode
-// still planning fills in when it is done; each column has "Use this mode", which sends the project's settings with that
-// mode ("In use" on the mode the project plans in). Closed, it fetches nothing and draws nothing: the button is in the
-// head, so a closed card takes no room (the Machine GUI's height budget). One compare request is on its way at a time: a
-// compare can take the server's time limit (20 s), and a browser keeps only six connections per origin open.
+// The Compare card under the plan banner (add-on 17, design spec §3.3, architecture §11.45 (5)): a "Compare modes" button
+// opens and closes it, in the project head on a wide window and in a bar of its own under the banner at 900 px and below
+// (the page draws both, and the stylesheet shows only the one for the window's width); open, it plans the project's three
+// planning modes side by side (`GET /api/projects/:id/compare`) and fetches them again on every `plan` or `compare` event
+// of the project, so a mode still planning fills in when it is done; each column has "Use this mode", which sends the
+// project's settings with that mode ("In use" on the mode the project plans in). Closed, it fetches nothing and draws
+// nothing, so a closed card takes no room (the Machine GUI's height budget). One compare request is on its way at a time:
+// a compare can take the server's time limit (20 s), and a browser keeps only six connections per origin open.
 
-import { useEffect, useMemo, useSyncExternalStore, type ReactElement, type Ref } from 'react';
+import { useEffect, useMemo, useSyncExternalStore, type CSSProperties, type ReactElement, type Ref } from 'react';
 import type { StuffKey } from '../../shared/keys.ts';
 import type { CompareResult } from '../../shared/types/api.ts';
 import type { PlanObjective, PlanSettings } from '../../shared/types/plan.ts';
@@ -25,8 +26,11 @@ export interface CompareLoader {
   getSnapshot(): CompareState;
   /** Opens the card and fetches the compare. */
   open(): void;
-  /** Closes the card; an answer still on its way is dropped. */
-  close(): void;
+  /**
+   * Closes the card; an answer still on its way is dropped. With `forget` (the project makes nothing now, or is gone) it drops what it
+   * last showed too, closed already or not, so the card of a new target never opens on the old target's figures.
+   */
+  close(options?: { forget?: boolean }): void;
   /** The project's plan may have changed, or a compare finished: fetch again while open (nothing while closed). */
   refresh(): void;
 }
@@ -86,11 +90,12 @@ export function compareLoader(projectId: string, get: (id: string) => Promise<Co
       set({ open: true });
       load();
     },
-    close() {
-      if (!state.open) return;
+    close(options) {
+      const forget = options?.forget === true;
+      if (!state.open && !(forget && (state.result !== null || state.error !== null))) return;
       request++;
       again = false;
-      set({ open: false, loading: false });
+      set(forget ? { open: false, loading: false, result: null, error: null } : { open: false, loading: false });
     },
     refresh() {
       if (state.open) load();
@@ -99,9 +104,10 @@ export function compareLoader(projectId: string, get: (id: string) => Promise<Co
 }
 
 /**
- * The "Compare modes" button of the project head: a small button that opens and closes the card (`onToggle`), names the
- * card it controls and says whether it is open. The page passes a `ref` (React 19 hands it to a function component as a
- * prop) to give the focus back to the button when the card's own Close button closes it.
+ * A "Compare modes" button: a small button that opens and closes the card (`onToggle`), names the card it controls and
+ * says whether it is open. The page draws two, one in the project head (wide windows) and one in a bar under the banner
+ * (900 px and below), and the stylesheet shows only one of them. The page passes a `ref` (React 19 hands it to a function
+ * component as a prop) to give the focus back to the shown one when the card's own Close button closes the card.
  */
 export function CompareToggle(props: { open: boolean; onToggle: () => void; ref?: Ref<HTMLButtonElement> }): ReactElement {
   const { open, onToggle, ref } = props;
@@ -113,11 +119,12 @@ export function CompareToggle(props: { open: boolean; onToggle: () => void; ref?
 }
 
 /**
- * The card as its state shows it: closed, nothing (the head's `CompareToggle` opens it); open, its title with "Close"
- * (`onClose`), "Updating…" while a fetch is on its way, why the last one failed, and one column per mode (`compareColumns`):
- * its name, what its plan comes to or that it is still planning or why it failed, what it avoids, adds and makes for
- * other projects, and "Use this mode", which sends `objectivePatch` of the project's `settings` — disabled and reading
- * "In use" on the mode the project plans in.
+ * The card as its state shows it: closed, nothing (a `CompareToggle` opens it); open, its title with "Close" (`onClose`),
+ * "Updating…" while a fetch is on its way, why the last one failed, and one column per mode (`compareColumns`): its name,
+ * what its plan comes to (each figure with its length in glyphs, `--glyphs`, by which the stylesheet fits a long one to its
+ * tile) or that it is still planning or why it failed, what it avoids, adds and makes for other projects, and "Use this
+ * mode", which sends `objectivePatch` of the project's `settings` — disabled and reading "In use" on the mode the project
+ * plans in.
  */
 export function CompareCardView(props: {
   state: CompareState; settings: PlanSettings; send: (ops: ProjectOp[]) => void; nameOf: (k: StuffKey) => string; onClose(): void;
@@ -147,7 +154,7 @@ export function CompareCardView(props: {
                   {c.rows.map((r) => (
                     <div key={r.label} className="compare-row">
                       <dt>{r.label}</dt>
-                      <dd>{r.value}</dd>
+                      <dd style={{ '--glyphs': r.value.length } as CSSProperties}>{r.value}</dd>
                     </div>
                   ))}
                 </dl>
@@ -171,7 +178,7 @@ export function CompareCardView(props: {
  * and opening and closing it. `rev` changes on every `plan` or `compare` event of the project (ProjectPage counts them):
  * open, the compare is fetched again each time. Leaving the page (or another project) closes it.
  */
-export function useCompare(projectId: string, rev: number): { state: CompareState; open(): void; close(): void } {
+export function useCompare(projectId: string, rev: number): { state: CompareState; open(): void; close: CompareLoader['close'] } {
   const loader = useMemo(() => compareLoader(projectId), [projectId]);
   const state = useSyncExternalStore(loader.subscribe, loader.getSnapshot);
   useEffect(() => () => loader.close(), [loader]);

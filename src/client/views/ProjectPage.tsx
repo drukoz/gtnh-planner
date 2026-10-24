@@ -1,7 +1,8 @@
 // One project (spec §3.11): its name (anyone can rename it), whether this tab is live, what the plan warns about or
 // needs unlocked and what it uses beyond its line (farms, other projects' surplus), the Compare card of its planning
-// modes, which the head's "Compare modes" button opens (add-on 17), the settings panel with the in-game projector panel
-// under it (§3.13) and, beside them, the project tabs. The tab follows the URL hash, so links elsewhere
+// modes (add-on 17), which a "Compare modes" button opens, in the head on a wide window and in a bar of its own under the
+// banner at 900 px and below (the stylesheet shows only one of the two), the settings panel with the in-game projector
+// panel under it (§3.13) and, beside them, the project tabs. The tab follows the URL hash, so links elsewhere
 // (a build step's map pin sets `#map`) switch it too. Anyone can delete the project; once it is deleted, here or
 // elsewhere, the page goes back to the project list, which says so (§11.24). Below 900 px the settings panel is a drawer
 // that the Settings button in the head slides in over a dimmed page (design spec §7a), a layer of its own while it is
@@ -374,13 +375,13 @@ export function ProjectPage(props: { id: string }): ReactElement {
   // Settings button says what the line makes there), so the button is in a bar of its own under the banner instead: both are drawn here,
   // and the stylesheet shows the one for the window's width. The card hears every `plan` and `compare` event of the project (`rev`), so
   // an open card fetches the compare again. Its Close button gives the focus back to the button that is shown; a project that stops
-  // making something, or is deleted, closes it.
+  // making something, or is deleted, closes it and forgets its figures, so the card of the next target never opens on them.
   const compare = useCompare(props.id, useProjectEventCount(props.id));
   const compareHeadToggle = useRef<HTMLButtonElement | null>(null);
   const compareBarToggle = useRef<HTMLButtonElement | null>(null);
   const comparable = project !== null && deleted === null && project.settings.target !== null;
   useEffect(() => {
-    if (!comparable) compare.close();
+    if (!comparable) compare.close({ forget: true });
   }, [comparable, compare.close]);
   const toggleCompare = (): void => {
     if (compare.state.open) compare.close();

@@ -140,6 +140,35 @@ describe('compare card', () => {
     expect(text(markup(loader.getSnapshot()))).toContain('Could not compare the modes: The planner failed');
   });
 
+  it('forgets its answer when it closes because the project makes nothing, so a new target never shows the old figures', async () => {
+    vi.stubGlobal('fetch', answering(RESULT));
+    const loader = compareLoader('p1');
+    loader.open();
+    await settle();
+    expect(loader.getSnapshot().result).toEqual(RESULT);
+    // the target is cleared (or the project deleted): the card closes and drops what it showed, and an answer on its way too
+    loader.close({ forget: true });
+    expect(loader.getSnapshot()).toEqual({ open: false, result: null, error: null, loading: false });
+    // a new target, the card opened again: while its compare is on its way it shows no column, only that it is planning
+    let answer: (r: Response) => void = () => {};
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((resolve) => { answer = resolve; })));
+    loader.open();
+    expect(loader.getSnapshot()).toEqual({ open: true, result: null, error: null, loading: true });
+    expect(markup(loader.getSnapshot())).not.toContain('data-objective');
+    expect(text(markup(loader.getSnapshot()))).toContain('Planning the three modes…');
+    // forgotten while that answer was on its way: it is dropped
+    loader.close({ forget: true });
+    answer(new Response(JSON.stringify(RESULT), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    await settle();
+    expect(loader.getSnapshot()).toEqual({ open: false, result: null, error: null, loading: false });
+    // a plain close keeps the answer, so the card reopens on it while it fetches again
+    vi.stubGlobal('fetch', answering(RESULT));
+    loader.open();
+    await settle();
+    loader.close();
+    expect(loader.getSnapshot()).toMatchObject({ open: false, result: RESULT });
+  });
+
   it('hears the compare event of the project stream the page has open', () => {
     // One EventSource per open project (architecture §8): the store's stream tells the card's page of `plan` and `compare`.
     const sources: FakeEventSource[] = [];
@@ -197,6 +226,9 @@ describe('compare card', () => {
     expect(cheapest).toMatch(/<button[^>]*disabled=""[^>]*>In use<\/button>/);
     expect(least).toMatch(/<button type="button">Use this mode<\/button>/);
     expect(text(least!)).toContain('Raw per hour 10');
+    // each figure carries its length in glyphs, by which the stylesheet fits a long one to its tile (the review of the merge, C4)
+    expect(least).toContain('<dd style="--glyphs:2">10</dd>');
+    expect(least).toContain('<dd style="--glyphs:3">900</dd>');
     expect(text(least!)).toContain('Avoids: A, B');
     expect(text(cheapest!)).toContain('Adds: A');
     expect(text(multi!)).toContain('Still planning…');

@@ -2311,6 +2311,26 @@ describe('the Machine GUI planning modes, farms and the Compare card', () => {
     expect(declared('.compare-row > dt', 'font-family')).toBeUndefined();
   });
 
+  it('never breaks a figure: the tiles reflow at 160px, a value stays on one line and shrinks to fit, to 13px at the least', () => {
+    // the review of the merge, C4: three columns at 760 to 915px left a tile 81 to 94px, and "2,097,152" broke over two lines. A tile is
+    // at least 160px (11 glyphs of the 24px pixel font, at most 0.6em each, and 16px of padding), never wider than its column
+    expectDeclared([
+      ['.compare-rows', 'grid-template-columns', 'repeat(auto-fit, minmax(min(160px, 100%), 1fr))'],
+      ['.compare-row > dd', 'white-space', 'nowrap'], ['.compare-row > dd', 'overflow-wrap', 'normal'],
+      // a value too long for its tile shrinks (the tile is the container; the page gives the value's length in glyphs) ...
+      ['.compare-row', 'container-type', 'inline-size'],
+      ['.compare-row > dd', 'font-size', 'clamp(13px, calc(100cqi / (var(--glyphs, 1) * 0.6)), 24px)'],
+      // ... and is cut only past 13px, so the tile never spills out of its column
+      ['.compare-row > dd', 'overflow', 'hidden'], ['.compare-row > dd', 'text-overflow', 'ellipsis'],
+    ]);
+    // the size comes after the shorthand that sets the 24px it shrinks from
+    const dd = declarations(ruleBody('.compare-row > dd')).map(([name]) => name);
+    expect(dd.indexOf('font-size')).toBeGreaterThan(dd.indexOf('font'));
+    // the review of the merge, C5: the label at the top of a tile and the value at its foot, so the values of a row line up when a
+    // label wraps and another does not
+    expectDeclared([['.compare-row', 'justify-content', 'space-between'], ['.compare-row', 'flex-direction', 'column']]);
+  });
+
   it('writes the notes in chat boxes in the light ink, at one class\'s specificity, so .muted and .error still win on them', () => {
     expectDeclared([[COMPARE_NOTES, 'background', 'var(--chat)'], [COMPARE_NOTES, 'border', '2px solid var(--outline)']]);
     expect(declared(COMPARE_NOTES, 'color'), 'a colour here would outrank .muted and .error').toBeUndefined();

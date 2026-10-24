@@ -82,7 +82,13 @@ test('on a narrow window the Compare modes button sits in a bar under the banner
   await expect(toggle).toHaveCount(1);                                               // the head's is not drawn here
   await expect(page.locator('.project-head .compare-toggle')).toBeHidden();
   expect(await toggle.evaluate((el) => el.parentElement?.classList.contains('compare-bar') === true && el.closest('.project-banners') !== null)).toBe(true);
-  expect((await page.locator('.project-head').boundingBox())!.height, 'the head is one row').toBe(36);
+  // measured once the stream is live (as "reconnecting…" the badge is wider, and the head wraps earlier) and the fonts are in (main's F3)
+  await expect(page.locator('.connection.live')).toBeVisible();
+  const head = await page.evaluate(async () => {
+    await document.fonts.ready;
+    return document.querySelector('.project-head')!.getBoundingClientRect().height;
+  });
+  expect(head, 'the head is one row').toBe(36);
 
   await toggle.click();
   const card = page.getByRole('region', { name: 'Compare modes' });
@@ -98,3 +104,75 @@ test('on a narrow window the Compare modes button sits in a bar under the banner
   await expect(page.locator('.project-head').getByRole('button', { name: 'Compare modes' })).toBeVisible();
   await expect(page.locator('.compare-bar')).toBeHidden();
 });
+
+// A target's card never shows another's figures (the review of the merge, C1): clearing the target closes the card and forgets what it
+// showed, so when the next target's card opens it says it is planning until its own compare comes.
+test('clearing the target closes the Compare card and forgets its figures, so the next target\'s card never shows them', async ({ page }) => {
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'New target', { target: 't:circuit@0', amount: 1, per: 'min', tier: 1 });
+  const settings = page.getByRole('complementary', { name: 'Project settings' });
+  const toggle = page.getByRole('button', { name: 'Compare modes' });
+  const card = page.getByRole('region', { name: 'Compare modes' });
+  const steps = card.locator('[data-objective="cheapest"] .compare-row', { hasText: 'Steps' }).locator('dd');
+  await toggle.click();
+  await expect(steps).toHaveText('3', { timeout: COMPARE_TIMEOUT_MS });              // Basic Circuit: three steps
+
+  // Clear: nothing to compare, so no card and no button
+  await settings.getByRole('button', { name: 'Clear', exact: true }).click();
+  await expect(page.locator('.compare-card')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Compare modes' })).toHaveCount(0);
+
+  // another target: the button is back, closed, and there is still no card
+  await settings.getByPlaceholder('Search items and fluids').fill('iron plate');
+  await page.getByRole('option', { name: /Iron Plate/ }).click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.locator('.compare-card')).toHaveCount(0);
+
+  // opened, with its compare held back on the way: the card says it is planning and shows no column, none of Basic Circuit's figures
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  await page.route(/\/api\/projects\/[^/]+\/compare$/, async (route) => {
+    await held;
+    await route.continue();
+  });
+  const asked = page.waitForRequest(/\/api\/projects\/[^/]+\/compare$/);
+  await toggle.click();
+  await asked;
+  await expect(card.locator('[data-objective]')).toHaveCount(0);
+  await expect(card.getByText('Planning the three modes…')).toBeVisible();
+  release();
+  await expect(steps).toHaveText('1', { timeout: COMPARE_TIMEOUT_MS });              // Iron Plate: one step
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+});
+
+// A figure is never split across lines (the review of the merge, C4): where three columns leave a tile little room, its tiles stack in
+// one column, and each value stays on one line inside its tile. A crafted compare answer gives long figures: 11 glyphs, 7 and 9.
+for (const [width, height] of [[860, 900], [768, 1024]] as const) {
+  test(`keeps each figure of the Compare card on one line inside its tile at ${width} px`, async ({ page }) => {
+    await page.setViewportSize({ width, height });
+    await login(page); await setName(page, 'Ann');
+    await createProject(page, `Figures at ${width}`, { target: 't:circuit@0', amount: 1, per: 'min', tier: 1 });
+    const summary = { rawPerHour: 0.000000123, rawBuild: 131072, newMachines: 12, rawSources: 7, steps: 23, peakEUt: 2097152 };
+    const answer = { rev: 1, current: 'cheapest', modes: ['least-raw', 'cheapest', 'multi-output'].map((objective) => ({ objective, status: 'ok', summary })) };
+    await page.route(/\/api\/projects\/[^/]+\/compare$/, (route) => route.fulfill({ json: answer }));
+    await page.getByRole('button', { name: 'Compare modes' }).click();
+    const card = page.getByRole('region', { name: 'Compare modes' });
+    await expect(card.locator('[data-objective="multi-output"] dd').last()).toHaveText('2,097,152');
+    const figures = await card.locator('.compare-row').evaluateAll(async (rows) => {
+      await document.fonts.ready;
+      return rows.map((row) => {
+        const dd = row.querySelector('dd')!;
+        const text = document.createRange();
+        text.selectNodeContents(dd);
+        const tile = row.getBoundingClientRect(), drawn = text.getBoundingClientRect();
+        return {
+          value: dd.textContent ?? '', lines: text.getClientRects().length, inside: drawn.left >= tile.left && drawn.right <= tile.right,
+          clipped: dd.scrollWidth > dd.clientWidth,
+        };
+      });
+    });
+    expect(figures).toHaveLength(18);
+    for (const figure of figures) expect(figure, figure.value).toMatchObject({ lines: 1, inside: true, clipped: false });
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+  });
+}
