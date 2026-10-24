@@ -166,6 +166,21 @@ describe('the line on the map', () => {
     expect(layoutMarkers({ ...farmed, pins: [{ n: 3, dim: 0, pos: [17, 64, 22], kind: 'farm', text: 'Farm: Tree Growth Simulator' }] }))
       .toEqual([{ n: 3, pos: [17, 64, 22], color: PIN_COLORS.farm, label: 'Pin 3: Farm: Tree Growth Simulator' }]);
   });
+
+  it('sums up and moves a line whose only new machines are farms (the final review of add-on 17)', () => {
+    // every other machine owned: no block to place, one area kept for the new Tree Growth Simulator, and the layout `ok`
+    const farmsOnly: Layout = {
+      ...layout, blocks: [], hookups: [], size: [7, 7, 7], origin: [30, 64, 30],
+      pins: [{ n: 1, dim: 0, pos: [18, 64, 18], kind: 'reuse', text: 'Reuse your 1× Basic Macerator' }, { n: 2, dim: 0, pos: [33, 64, 33], kind: 'farm', text: 'Farm: Tree Growth Simulator' }],
+      reserved: [{ stepId: 'tgs', pos: [30, 64, 30], size: [7, 7, 7], pin: 2, text: 'Farm: Tree Growth Simulator' }],
+    };
+    expect(lineSummary(farmsOnly, null)).toMatchObject({ newMachines: 1, footprint: '7×7×7' });
+    // and a line with farms counts each area beside its machine blocks
+    expect(lineSummary({ ...layout, reserved: farmsOnly.reserved }, plan).newMachines).toBe(3);
+    const html = panel(farmsOnly);
+    expect(html).not.toContain('Nothing new to build');
+    for (const text of ['Machines: 1 new', 'Move line', 'Rotate 90°', 'Auto place', '2. Farm: Tree Growth Simulator']) expect(html).toContain(text);
+  });
 });
 
 describe('the line on the map: the rules in detail', () => {

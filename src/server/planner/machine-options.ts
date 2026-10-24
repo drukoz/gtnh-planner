@@ -146,9 +146,10 @@ export interface BuildModel {
   // optional addition (add-on 17)
   /**
    * A crop farm's step recipe (`Recipe.meta.farm` of kind `crop`): the raw material to plant the crop sticks one run a
-   * second of it needs — `cycleTicks / 20` sticks (one harvest of one stick a run), each a Crop Sticks and its soil at
-   * `prices` (`stickCost`) — which the build MIP weighs in rate mode (`BuildMipInput.plantings`); undefined for any other
-   * recipe.
+   * second of it needs — `cycleTicks / 20` sticks (one harvest of one stick a run), each a Crop Sticks and the item
+   * placed for its soil (`plantingKeys`; the soil one the line can get, farms/recipes.ts `cropSoil`) at `prices`
+   * (`stickCost`: a part without a price counts nothing, and the plan names it in `build-cost-unknown`) — which the
+   * build MIP weighs in rate mode (`BuildMipInput.plantings`); undefined for any other recipe.
    */
   planting?: (recipeId: string) => number | undefined;
   owned: ReadonlyMap<number, number>; pools: OwnedPools; prices: ItemPrices;
@@ -645,7 +646,7 @@ export async function lineBuildModel(pack: Pack, graph: CandidateGraph, basis: P
   const steps = stepRecipes(pack, graph);
   const machines = optionMachines(pack, graph, offerEnv, owned);
   const room = steps.some((s) => s.lp.needsCleanroom) ? cleanroomMachine(base) : undefined;
-  // what a crop farm plants (a Crop Sticks and its soil per stick) is priced with the machines
+  // what a crop farm plants (a Crop Sticks and the item placed for its soil, per stick) is priced with the machines
   const planted = steps.flatMap(({ r }) => (r.meta.farm === undefined ? [] : plantingKeys(r.meta.farm)));
   const prices = await itemPrices(base, settings, ctx, [...buildKeys(base, room === undefined ? machines : [...machines, room]), ...planted]);
   const env: MachineOptionEnv = { ...offerEnv, coilHeat: basis.coilHeat, owned, prices };

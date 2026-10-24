@@ -2,11 +2,13 @@
 // Simulator's map (fake rows with the modes of their outputs, as the loader keeps the export's), the centrifuge,
 // macerator and assembler rows that turn rubber wood and resin into a Resin Board, the Tree Growth Simulator and two Crop
 // Managers with what crafts them, crop sticks, and three crop cards in the shapes of farms.md §2.8's Sticky Cane, Rubber
-// Bonsai and Ferrofern. Names and numbers are invented, nothing is game data, except the keys the farm code names (GT's
-// tools, CropsNH's crop sticks and fertilizer, vanilla bone meal and dirt), as Mini-GT keeps the real programmed-circuit
-// key. `farmSpec()` and `farmPack()` return fresh objects, so a test that changes one changes no other (and never
-// MINI_GT); the cards are shared constants, which a test copies to change (`{ ...RESIN_CANE, tier: 12 }`). Also the
-// small pack of the cross-project tests (`crossSpec()`, Task 6): one line's byproduct another line uses.
+// Bonsai and Ferrofern, and a fourth in the shape of a farmland crop whose soils start with an exotic block (the final
+// review), with the assembler row that weaves its drop into Linen. Names and numbers are invented, nothing is game data,
+// except the keys the farm code names (GT's tools, CropsNH's crop sticks and fertilizer, vanilla bone meal, dirt and
+// farmland), as Mini-GT keeps the real programmed-circuit key. `farmSpec()` and `farmPack()` return fresh objects, so a
+// test that changes one changes no other (and never MINI_GT); the cards are shared constants, which a test copies to
+// change (`{ ...RESIN_CANE, tier: 12 }`). Also the small pack of the cross-project tests (`crossSpec()`, Task 6): one
+// line's byproduct another line uses.
 
 import type { CropCard, Pack } from '../../src/shared/types/pack.ts';
 import { MINI_GT } from './mini-gt.ts';
@@ -34,6 +36,18 @@ export const ORE_FERN: CropCard = {
   id: 'cropsnh:testFern', name: 'Ore Fern', tier: 6, growthDuration: 2800, dropChance: 0.735091890625,
   drops: [{ key: 't:iron_dust@0', chance: 1, stackSize: 1 }], likedBiomes: [], soils: ['minecraft:dirt@0'],
   requirements: ['sub-soil'], seed: null, minSeedBedTier: 0,
+};
+
+/**
+ * A farmland crop's shape (CropsNH's Flax, Sugar Beet and 27 more on the 2.9 export, the final review of add-on 17): tier
+ * 2, 400 growth points, the default drop chance 0.95², one Flax a round; its soils an exotic block nothing makes first
+ * (MagicBees' Enchanted Earth there), then one crafted from dirt (Garden Soil), then vanilla farmland, which the group
+ * hoes from dirt. So a farm of it is planted on Farmland, never on its first soil.
+ */
+export const FIELD_FLAX: CropCard = {
+  id: 'cropsnh:testFlax', name: 'Field Flax', tier: 2, growthDuration: 400, dropChance: 0.9025,
+  drops: [{ key: 't:flax@0', chance: 1, stackSize: 1 }], likedBiomes: [],
+  soils: ['t:enchanted_earth@0', 't:garden_soil@0', 'minecraft:farmland@0'], requirements: [], seed: 't:flax_seed@0', minSeedBedTier: 0,
 };
 
 /**
@@ -72,6 +86,13 @@ export function farmSpec(): PackSpec {
       { key: 'cropsnh:fertilizer@0', name: 'Fertilizer' },
       { key: 'minecraft:dye@15', name: 'Bone Meal' },
       { key: 'minecraft:dirt@0', name: 'Dirt' },
+      // the farmland crop (`FIELD_FLAX`): its drop (gathered, as a crop's ore name says), what is woven of it, its seeds and soils
+      { key: 't:flax@0', name: 'Flax', oreDict: ['cropFlax'] },
+      { key: 't:linen@0', name: 'Linen' },
+      { key: 't:flax_seed@0', name: 'Field Flax Seeds' },
+      { key: 't:enchanted_earth@0', name: 'Enchanted Earth' },
+      { key: 't:garden_soil@0', name: 'Garden Soil' },
+      { key: 'minecraft:farmland@0', name: 'Farmland' },
     ],
     fluids: [...(spec.fluids ?? []), { key: 'fluid:refinedglue', name: 'Refined Glue' }, { key: 'fluid:methane', name: 'Methane' }],
     maps: [...(spec.maps ?? []), { id: 'gt.recipe.treefarm', name: 'Tree Growth Simulator' }],
@@ -117,14 +138,16 @@ export function farmSpec(): PackSpec {
       { id: 'make-141', map: 'crafting', in: [['t:hull_lv@0', 1], ['t:circuit@0', 2], ['t:iron_plate@0', 2]], out: [['machine:141@0', 1]] },
       { id: 'make-161', map: 'crafting', in: [['t:hull_lv@0', 1], ['t:circuit@0', 2], ['t:copper_wire@0', 4]], out: [['machine:161@0', 1]] },
       { id: 'sticks', map: 'crafting', in: [['minecraft:planks@0', 1]], out: [['cropsnh:cropSticks@0', 2]] },
+      { id: 'weave', map: 'gt.recipe.assembler', in: [['t:flax@0', 4]], out: [['t:linen@0', 1]], eut: 16, dur: 100 },
+      { id: 'garden-soil', map: 'crafting', in: [['minecraft:dirt@0', 2]], out: [['t:garden_soil@0', 1]] },
     ],
   };
 }
 
-/** `farmSpec()` as a pack, with the crop table `[RESIN_CANE, RUBBER_BONSAI, ORE_FERN]` (copies). */
+/** `farmSpec()` as a pack, with the crop table `[RESIN_CANE, RUBBER_BONSAI, ORE_FERN, FIELD_FLAX]` (copies). */
 export function farmPack(): Pack {
   const pack = packFromSpec(farmSpec());
-  pack.crops = structuredClone([RESIN_CANE, RUBBER_BONSAI, ORE_FERN]);
+  pack.crops = structuredClone([RESIN_CANE, RUBBER_BONSAI, ORE_FERN, FIELD_FLAX]);
   return pack;
 }
 

@@ -600,8 +600,8 @@ interface Finish {
  * `scan` (or at the dragged placement), hooked up to the base's networks. A plan with nothing to build gives an empty
  * layout; a project without a scan or base gets the line at `DEFAULT_ORIGIN` with no pins or hookups. Each new farm
  * machine gets an area kept for it (`Layout.reserved`, add-on 17), found clear with the line (or alone, when every other
- * machine is owned), turned with it and counted in `Layout.size`, with a `farm` pin when the layout has pins and one
- * build step; the hookups go round the areas.
+ * machine is owned: then the layout is `ok` with a base, `no-world` without), turned with it and counted in
+ * `Layout.size`, with a `farm` pin when the layout has pins and one build step; the hookups go round the areas.
  */
 export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, project: Project, deps: LayoutDeps = {}): Promise<Layout> {
   // stage 1
@@ -642,8 +642,11 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
 
   if (units.length === 0) {
     // owned machines only: hook them up, with the plan's power fitted as it is; a new farm still gets its areas, found
-    // clear and flat near the base as a line's site is (add-on 17, ruling S12), what is in their way pinned at their middle
+    // clear and flat near the base as a line's site is (add-on 17, ruling S12), what is in their way pinned at their middle.
+    // Its areas are what there is to build, so such a layout is `ok` with a base and `no-world` without, as any line (the
+    // final review's T8-b), and `empty` only with no farm to build either.
     const areas = farmAreas(plan, [0, 0, 0]);
+    const status: LayoutStatus = areas.length === 0 ? 'empty' : base === null ? 'no-world' : 'ok';
     const extent = farmExtent([0, 0, 0], areas);
     const chosen = base === null || areas.length === 0 ? null
       : await chooseSite({ scan, project, base, line: null, size: extent, powerTaps: null, logisticsNet: null, deps });
@@ -658,6 +661,7 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
       warnings: base === null ? [] : warnings.filter((w) => SITE_PINNED.has(w.code)).map((w) => ({ code: w.code, text: w.text, pos: middle })),
     });
     const reserved = pinnedAreas(kept, pins);
+    // the steps of a line with nothing of its own to place (`empty`): its farms' areas and the owned machines' hook steps
     const buildSteps = layoutSteps({
       status: 'empty', pins, size: [0, 0, 0], site: null, units: [], stages: [], transformerName, cables: [], power: null, supplyTier: null,
       drafts: [], fluids: [], logistics: null, reuse, blocks: [], origin: [...frame.origin], rotation: frame.rotation, nameOf,
@@ -666,7 +670,7 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
     const fit = base === null ? null : fitPower({ power: plan.power, ctx: fitCtx, extraLossEUt: 0, pack, tier: supplyTier });
     return {
       dim, origin: [...frame.origin], size: worldSize, rotation: frame.rotation, mode, blocks: [], hookups: [], pins, buildSteps,
-      bom: bomFromBlocks([], fit?.optional ?? []), warnings, status: 'empty',
+      bom: bomFromBlocks([], fit?.optional ?? []), warnings, status,
       power: fit?.power ?? { ...plan.power },
       ...(reserved.length === 0 ? {} : { reserved }),
     };

@@ -74,6 +74,7 @@ export interface FarmRecipeMeta {
   kind: 'tgs' | 'crop'; tier: number; machines: number[] /* usable mteIds, owned first, then ascending */;
   parallel: number /* crop sticks one machine tends; 1 for a TGS */; footprint: [number, number, number] /* x, height, z, as every layout size */;
   sapling?: StuffKey; tools?: StuffKey[];
+  /** `soil`: the soil block the crop sticks stand on, one the line can get (dirt, farmland or grass first; not the card's first soil by rote). */
   crop?: { id: string; name: string; growthTicks: number; stats: CropStats; soil: StuffKey | null; seed: StuffKey | null };
 }
 

@@ -12,7 +12,7 @@ import { structureParts } from './build-cost.ts';
 import { buildCandidates, heldOption, type HeldAvoid, type LeafOracle, type LpRecipe, type PlanEnv } from './candidates.ts';
 import { analyzeCosts, makePrices, type CostAnalysis } from './costs.ts';
 import { exportPack } from './farms/pack.ts';
-import { CROP_STICKS } from './farms/recipes.ts';
+import { plantingParts, soilWork } from './farms/recipes.ts';
 import { yieldToEventLoop } from './lp.ts';
 import { ownedPools } from './owned.ts';
 import { lineLeaf } from './pricing.ts';
@@ -97,9 +97,11 @@ export function stepProductName(pack: Pack, step: PlanStep): string {
  * may use (`heldOption`); the breakdown itself avoids nothing (ruling R6).
  *
  * Add-on 17: `pack` may be the line's farm pack (farms/pack.ts), whose farm recipes say what each farm step plants: a crop
- * farm its Crop Sticks, soil and seeds, one each per crop stick it tends (`FarmStep.sticks`; the seeds come from the
- * group's own seed bank, so the build cost leaves them out), a new Tree Growth Simulator its sapling, one per new machine;
- * each a one-off line `<crop or sapling name> farm`. The breakdown reads the export pack (`exportPack`, ruling S5).
+ * farm its Crop Sticks, soil and seeds, one each per crop stick it tends (`FarmStep.sticks`, `plantingParts`: the soil
+ * as the item placed for it, so a farm on farmland lists dirt, `<crop name> farm (hoe it into Farmland)`; the seeds come
+ * from the group's own seed bank, so the build cost leaves them out), a new Tree Growth Simulator its sapling, one per
+ * new machine; each a one-off line `<crop or sapling name> farm`, which the build steps word as planting
+ * (steps.ts). The breakdown reads the export pack (`exportPack`, ruling S5).
  */
 export async function buildBom(
   pack: Pack, steps: PlanStep[],
@@ -149,13 +151,16 @@ export async function buildBom(
   for (const [key, products] of toolUses) {
     add(key, 1, `1× ${pack.nameOf(key)} (tool for hand-crafting ${[...products].join(', ')})`, 'one-off');
   }
-  // What the line's farms plant (add-on 17).
+  // What the line's farms plant (add-on 17): a crop farm's parts (`plantingParts`), its soil as the item placed for it.
   for (const step of steps) {
     const farm = step.farm === undefined ? undefined : pack.recipeById.get(step.recipeId)?.meta.farm;
     if (farm?.kind === 'crop' && farm.crop !== undefined) {
       const sticks = step.farm?.sticks ?? 0;
       const why = `${farm.crop.name} farm`;
-      if (sticks > 0) for (const key of [CROP_STICKS, farm.crop.soil, farm.crop.seed]) if (key !== null) add(key, sticks, why, 'one-off');
+      for (const p of sticks > 0 ? plantingParts(farm) : []) {
+        const work = p.soil === undefined ? undefined : soilWork(p.soil);
+        add(p.key, sticks, work === undefined ? why : `${why} (${work})`, 'one-off');
+      }
     } else if (farm?.kind === 'tgs' && farm.sapling !== undefined) {
       const n = step.count - step.owned;
       if (n > 0) add(farm.sapling, n, `${pack.nameOf(farm.sapling)} farm`, 'one-off');

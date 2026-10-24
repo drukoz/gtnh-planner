@@ -26,7 +26,7 @@ import {
 } from './candidates.ts';
 import { analyzeCosts, moltenMaterial, type CostAnalysis } from './costs.ts';
 import { exportPack } from './farms/pack.ts';
-import { stickCost } from './farms/recipes.ts';
+import { stickCost, unpricedPlantings } from './farms/recipes.ts';
 import { supportingLines } from './lines.ts';
 import { buildCounts, lineBuildModel, type BuildModel } from './machine-options.ts';
 import { buildFlows, emptyContainers, optionShares, planSteps, stepLine, type OptionShare, type StepLine } from './machines.ts';
@@ -1499,15 +1499,21 @@ function unitBuild(pack: Pack, model: BuildModel, step: PlanStep): number | null
 
 /**
  * What the crop farm steps of a plan plant (add-on 17): their crop sticks (`FarmStep.sticks`), each a Crop Sticks and
- * its soil block at the build model's prices (`stickCost`; the seeds are the group's own); 0 without one.
+ * the item placed for its soil at the build model's prices (`stickCost`; the seeds are the group's own), 0 without one;
+ * and the parts it could not price (`unpricedPlantings`), each once, as `<part> for the <crop> farm`, which the
+ * `build-cost-unknown` warning names (the final review of add-on 17).
  */
-function plantingsOf(pack: Pack, model: BuildModel, steps: readonly PlanStep[]): number {
-  let total = 0;
+function plantingsOf(pack: Pack, model: BuildModel, steps: readonly PlanStep[]): { build: number; unpriced: string[] } {
+  let build = 0;
+  const unpriced = new Set<string>();
+  const cost = (key: StuffKey): number => model.prices.cost(key);
   for (const step of steps) {
     const farm = pack.recipeById.get(step.recipeId)?.meta.farm;
-    if (farm?.kind === 'crop' && step.farm?.sticks !== undefined) total += step.farm.sticks * stickCost(farm, (key) => model.prices.cost(key));
+    if (farm?.kind !== 'crop' || step.farm?.sticks === undefined || step.farm.sticks <= 0) continue;
+    build += step.farm.sticks * stickCost(farm, cost);
+    for (const key of unpricedPlantings(farm, cost)) unpriced.add(`${pack.nameOf(key)} for the ${farm.crop?.name ?? stepProductName(pack, step)} farm`);
   }
-  return total;
+  return { build, unpriced: [...unpriced] };
 }
 
 /** New machines of one type a plan adds, and what building one costs (`each`; null: no price could be worked out). */
@@ -1546,13 +1552,16 @@ type Spend = { mode: 'rate'; rawPerSecond: number } | { mode: 'makeN'; run: Make
  * more`. Rate: `runPerHour` = the raw material a second × 3,600, `horizonHours` what build cost was weighed against
  * (`horizonHoursOf`, add-on 17: null in least raw material, which counts no build cost, whatever horizon is stored).
  * Make N: `batch` = Σ bought × leaf cost, `runPerHour` that spread over the batch's time an hour,
- * `horizonHours` null. `build` also holds what the line's crop farms plant (`plantingsOf`, add-on 17), in every mode.
+ * `horizonHours` null. `build` also holds what the line's crop farms plant (`plantingsOf`, add-on 17), in every mode; a
+ * planting part it could not price is named in the warning after the machines (`<part> for the <crop> farm`), and
+ * `unpriced` keeps counting machines only.
  */
 function planCost(
   pack: Pack, settings: PlanSettings, model: BuildModel, steps: readonly PlanStep[], spend: Spend,
 ): { cost: NonNullable<Plan['cost']>; warnings: PlanWarning[] } {
   const machines = newMachinesOf(pack, model, steps, spend.mode === 'makeN' ? spend.run : undefined);
-  let build = plantingsOf(pack, model, steps);
+  const planted = plantingsOf(pack, model, steps);
+  let build = planted.build;
   let unpriced = 0;
   const names = new Map<number, string>();
   for (const m of machines) {
@@ -1562,7 +1571,7 @@ function planCost(
       if (!names.has(m.mteId)) names.set(m.mteId, m.name);
     }
   }
-  const unknown = [...names.values()];
+  const unknown = [...names.values(), ...planted.unpriced];
   const room = model.cleanroom;
   if (room !== null && room.owned === 0 && steps.some((s) => s.needsCleanroom === true)) {
     if (room.build !== null) build += room.build;

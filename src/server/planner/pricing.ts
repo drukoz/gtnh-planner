@@ -11,10 +11,11 @@ import type { PlanContext, PlanSettings } from '../../shared/types/plan.ts';
 import { isBaseItem } from './availability.ts';
 import { basisContextKey, gatheredRecipesOn, planBasis, pricingHash, resolveAvoid, type PlanBasis } from './basis.ts';
 import { benchLine } from './benches.ts';
+import { itemPrices } from './build-cost.ts';
 import { buildCandidates, type CandidateGraph, type CandidateOptions, type LeafOracle } from './candidates.ts';
 import { analyzeCosts, makeLeafOracle, type CostAnalysis, type PriceTable } from './costs.ts';
 import { exportPack, withFarms } from './farms/pack.ts';
-import { farmRecipes, wantedGoods } from './farms/recipes.ts';
+import { farmRecipes, soilsToPrice, wantedGoods, type SoilSource } from './farms/recipes.ts';
 import { farmSetup, ownedFarmMachines, type FarmSetup } from './farms/setup.ts';
 import { yieldToEventLoop } from './lp.ts';
 import { runningSupplies } from './objective.ts';
@@ -197,6 +198,21 @@ function avoidedPins(pack: Pack, settings: PlanSettings, target: StuffKey): Stuf
   return [...new Set(pinned.filter((key) => goods.has(key)))].sort();
 }
 
+/**
+ * The soils a line can plant its crop farms on (`SoilSource`, the final review of add-on 17): what its basis makes
+ * available at its tier (`basis.avail`), at the prices machines and plantings are built at (`itemPrices`), so the build
+ * cost then charges the soil the farm was chosen at. Only the soils the choice must weigh are priced (`soilsToPrice`):
+ * on most lines none.
+ */
+async function soilSource(
+  pack: Pack, settings: PlanSettings, ctx: PlanContext, basis: PlanBasis, setup: FarmSetup, wanted: ReadonlySet<StuffKey>,
+): Promise<SoilSource> {
+  const canGet = (key: StuffKey): boolean => basis.avail.available.has(key);
+  const keys = soilsToPrice(pack, setup, wanted, canGet);
+  const prices = keys.length === 0 ? null : await itemPrices(pack, settings, ctx, keys);
+  return { canGet, cost: (key) => prices?.cost(key) ?? Infinity };
+}
+
 /** A line's `PricingCore`: its basis and cost model, no derived material priced yet. */
 async function computeCore(pack: Pack, settings: PlanSettings, ctx: PlanContext, target: StuffKey): Promise<PricingCore> {
   await yieldToEventLoop();
@@ -256,13 +272,15 @@ async function computePricing(
   };
   let { leaf, graph } = await settle(pack);
   // Add-on 17: the farms the line may use (`farmSetup`) make the goods its farm-free graph wants (`wantedGoods`) as
-  // synthetic recipes (`farmRecipes`); when there are any, the line is walked once more on the pack that holds them
-  // (`withFarms`), what they make walked beside buying it (`farmMade`) and the tools they wear bought at their price
-  // (`fixed`). That graph, its pack and the farms are the line's; the cost model stays farm-free.
+  // synthetic recipes (`farmRecipes`), each crop on a soil the line can get (`soilSource`); when there are any, the line
+  // is walked once more on the pack that holds them (`withFarms`), what they make walked beside buying it (`farmMade`)
+  // and the tools they wear bought at their price (`fixed`). That graph, its pack and the farms are the line's; the cost
+  // model stays farm-free.
   const setup = farmSetup(pack, settings, ctx, basis);
   let farms: Pick<LinePricing, 'pack' | 'farm'> = {};
   if (setup.tgs !== null || setup.crops !== null) {
-    const made = farmRecipes(pack, setup, wantedGoods(graph), basis.prices);
+    const wanted = wantedGoods(graph);
+    const made = farmRecipes(pack, setup, wanted, basis.prices, await soilSource(pack, settings, ctx, basis, setup, wanted));
     if (made.recipes.length > 0) {
       const farmPack = withFarms(pack, made.recipes);
       farmed = { farmMade: new Set(made.recipes.flatMap((r) => r.outputs.map((p) => p.key))), fixed: made.tools };

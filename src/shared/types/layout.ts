@@ -137,7 +137,10 @@ export interface ReservedArea {
   pin?: number; text: string;
 }
 
-/** `empty`: nothing to place; `no-world`: laid out without a scan or base, at a default origin. */
+/**
+ * `empty`: nothing new to place; `no-world`: laid out without a scan or base, at a default origin. A line whose only new
+ * machines are farms (add-on 17) has its farm areas to build: `ok` with a base, `no-world` without, as any line.
+ */
 export type LayoutStatus = 'ok' | 'empty' | 'no-world';
 
 export interface Layout {

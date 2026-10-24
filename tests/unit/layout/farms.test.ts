@@ -10,6 +10,7 @@ import { DEFAULT_ORIGIN, emptyScan, layoutLine } from '../../../src/server/layou
 import { edgeFlows } from '../../../src/server/layout/modes/enderio.ts';
 import { makePins } from '../../../src/server/layout/pins.ts';
 import { layoutSteps, type StepsInput } from '../../../src/server/layout/steps.ts';
+import { projectorPayload } from '../../../src/server/projector/payload.ts';
 import type { Vec3 } from '../../../src/shared/layout/geometry.ts';
 import type { FarmStep } from '../../../src/shared/types/farm.ts';
 import type { Layout } from '../../../src/shared/types/layout.ts';
@@ -159,9 +160,19 @@ describe('farm areas', () => {
       'layout:reuse:m', 'layout:test']);
     expect(ok.filter((s) => s.id.startsWith('layout:farm:')).map((s) => [s.kind, s.pin, s.text]))
       .toEqual([['place', 3, 'Lay out A'], ['place', 4, 'Lay out B'], ['place', undefined, 'Build C']]);
-    // the clear step names the box the site search found clear; the roof stays the line's own
-    expect(ok[0]!.text).toBe('Clear a 20×13 spot (7 high) and keep a 1-block path around it');
+    // the clear step names the box the site search found clear, the line's and its farm areas' (the site pin stays in
+    // the middle of the line's own box: the final review's T8-a); the roof stays the line's own
+    expect(ok[0]!.text).toBe('Clear a 20×13 spot for the line and its farm areas (7 high) and keep a 1-block path around it');
     expect(ok[1]!.text).toBe('Roof the line: GT machines left in the rain can catch fire or explode');
+    // with pins, from the line at its pin to the farm areas at theirs
+    const site = { n: 1, dim: 0, pos: [3, 64, 2] as Vec3, kind: 'site' as const, text: 'Build the line here' };
+    const pinned = farms.map((f, i) => ({ ...f, pin: 3 + i }));
+    expect(layoutSteps(input({ pins: [site], farms: pinned, siteSize: [20, 7, 13] }))[0]!.text)
+      .toBe('Clear a 20×13 spot from the line at pin 1 to the farm areas at pins 3, 4 and 5 (7 high) and keep a 1-block path around it');
+    expect(layoutSteps(input({ pins: [site], farms: pinned.slice(0, 1), siteSize: [20, 7, 13] }))[0]!.text)
+      .toBe('Clear a 20×13 spot from the line at pin 1 to the farm area at pin 3 (7 high) and keep a 1-block path around it');
+    // without farms, the line's own spot at its pin
+    expect(layoutSteps(input({ pins: [site] }))[0]!.text).toBe('Clear a 6×5 spot at pin 1 (1 high) and keep a 1-block path around it');
     // nothing of the line to place: the areas still get their steps, before the owned machines' hook steps
     expect(layoutSteps(input({ status: 'empty', farms })).map((s) => s.id))
       .toEqual(['layout:farm:crop', 'layout:farm:crop:2', 'layout:farm:tgs', 'layout:reuse:m']);
@@ -218,11 +229,12 @@ describe('farms in the layout', () => {
     expect(layout.buildSteps.find((s) => s.id === 'layout:farm:tgs')).toMatchObject({ kind: 'place', pin: 3, text: TGS_BUILD(' at pin 3') });
     expect(layout.buildSteps.find((s) => s.id === 'layout:farm:tgs')!.text.startsWith('Build the Tree Growth Simulator in the 7×7×7 area at pin ')).toBe(true);
     expect(layout.size).toEqual([width + 2 + 7, Math.max(height, 7), Math.max(length, 7)]);
-    // the site pin, its words and the roof stay the line's own; the clear step names the line and its farm's area together
+    // the site pin, its words and the roof stay the line's own; the clear step names the line and its farm's area together,
+    // from the line at its pin to the area at its own (the final review's T8-a: pin 1 is not the spot's middle)
     expect(layout.pins.find((p) => p.kind === 'site')).toEqual(bare.pins.find((p) => p.kind === 'site'));
     expect(layout.buildSteps.find((s) => s.id === 'layout:roof')!.text).toBe(bare.buildSteps.find((s) => s.id === 'layout:roof')!.text);
-    expect(layout.buildSteps.find((s) => s.id === 'layout:site')!.text)
-      .toBe(`Clear a ${width + 9}×${Math.max(length, 7)} spot at pin 1 (${Math.max(height, 7)} high) and keep a 1-block path around it`);
+    expect(layout.buildSteps.find((s) => s.id === 'layout:site')!.text).toBe(`Clear a ${width + 9}×${Math.max(length, 7)} spot from the line at pin 1 `
+      + `to the farm area at pin 3 (${Math.max(height, 7)} high) and keep a 1-block path around it`);
     // the chosen spot is checked over the farm's area too
     const stone = await layoutLine(pack, tgsPlan(), scan(), placedAt(), ground([{ from: [30 + width + 5, 64, 33], to: [30 + width + 5, 64, 33], block: STONE }]));
     expect(stone.warnings).toContainEqual({ code: 'placement_blocked', text: '1 block is in the way at the chosen spot' });
@@ -293,17 +305,19 @@ describe('farms in the layout', () => {
   });
 
   it('lays out the farms of a line whose other machines are all owned', async () => {
-    // ruling S12: no unit to place, but the new farm still gets its area and its build step
+    // ruling S12: no unit to place, but the new farm still gets its area and its build step; and the final review's T8-b:
+    // the farm is something new to build, so the layout is no `empty` one (which says every step runs on owned machines)
+    // but, as any line, `no-world` without a base and `ok` with one
     const pack = farmPack();
     const plan = tgsPlan({}, { owned: 1 });
     const bare = await layoutLine(pack, plan, emptyScan(), makeProject());
-    expect([bare.status, bare.blocks, bare.pins, bare.origin, bare.size]).toEqual(['empty', [], [], DEFAULT_ORIGIN, [7, 7, 7]]);
+    expect([bare.status, bare.blocks, bare.pins, bare.origin, bare.size]).toEqual(['no-world', [], [], DEFAULT_ORIGIN, [7, 7, 7]]);
     expect(bare.reserved).toEqual([{ stepId: 'tgs', pos: DEFAULT_ORIGIN, size: [7, 7, 7], text: `Farm: ${TGS_TEXT}` }]);
     expect(bare.buildSteps.map((s) => [s.id, s.kind, s.text])).toEqual([['layout:farm:tgs', 'place', TGS_BUILD('')]]);
     // with a base: the farm's ground is found near it, its pin after the owned machine's
     const placed = await layoutLine(pack, plan, scan([{ pos: [18, 64, 18], mteId: IDS.MACERATOR }]), makeProject(),
       ground([{ from: [18, 64, 18], to: [18, 64, 18], block: GT(IDS.MACERATOR) }]));
-    expect(placed.status).toBe('empty');
+    expect(placed.status).toBe('ok');
     expect(placed.pins.map((p) => [p.n, p.kind])).toEqual([[1, 'reuse'], [2, 'farm']]);
     expect(placed.reserved).toEqual([{ stepId: 'tgs', pos: placed.origin, size: [7, 7, 7], pin: 2, text: `Farm: ${TGS_TEXT}` }]);
     expect(placed.size).toEqual([7, 7, 7]);
@@ -313,8 +327,18 @@ describe('farms in the layout', () => {
     const blocked = await layoutLine(pack, plan, scan([{ pos: [18, 64, 18], mteId: IDS.MACERATOR }]), placedAt(),
       ground([{ from: [18, 64, 18], to: [18, 64, 18], block: GT(IDS.MACERATOR) }, { from: [31, 64, 31], to: [31, 64, 31], block: STONE }]));
     expect(blocked.reserved!.map((a) => a.pos)).toEqual([[30, 64, 30]]);
+    expect(blocked.status).toBe('ok');
     expect(blocked.warnings).toContainEqual({ code: 'placement_blocked', text: '1 block is in the way at the chosen spot' });
     expect(blocked.pins.at(-1)).toMatchObject({ kind: 'warning', pos: [33, 64, 33], text: '1 block is in the way at the chosen spot' });
+    // the projector sends that layout's steps, the farm's among them (no blocks: a farm has none), and no "nothing to
+    // build" message
+    const payload = projectorPayload(makeProject(), placed, pack);
+    expect([payload.status, payload.message, payload.blocks]).toEqual(['ok', null, []]);
+    expect(payload.steps.map((s) => [s.id, s.blocks])).toEqual([['layout:farm:tgs', []], ['layout:reuse:s1', []]]);
+    // with every machine owned, the farm too, there is nothing new to build: `empty`
+    const owned = await layoutLine(pack, tgsPlan({ owned: 1 }, { owned: 1 }), scan([{ pos: [18, 64, 18], mteId: IDS.MACERATOR }]), makeProject(),
+      ground([{ from: [18, 64, 18], to: [18, 64, 18], block: GT(IDS.MACERATOR) }]));
+    expect([owned.status, owned.reserved]).toEqual(['empty', undefined]);
   });
 
   it('takes what a farm sends to the line in through the input chest', async () => {

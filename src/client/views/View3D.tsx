@@ -64,6 +64,8 @@ const LOADING_TEXT = 'Laying out the line…';
 const NO_WEBGL_TEXT = 'The 3D view needs WebGL2 — the block list below still works';
 const ALL_OWNED_TEXT = 'Nothing new to build — every step runs on machines you own';
 const NO_STEPS_TEXT = 'Nothing to lay out yet — the plan makes nothing';
+/** A line whose only new machines are farms (add-on 17): they have no blocks to draw, only areas kept for them. */
+const FARMS_ONLY_TEXT = 'Nothing to draw here — the new machines are farms: build each in the area its build step names';
 /** Set to '1' (by the end-to-end test) to keep the canvas readable with readPixels. */
 const PRESERVE_BUFFER_KEY = 'gp.test.preserveDrawingBuffer';
 /** A pointer that moved further than this between press and release was turning the view, not clicking a block. */
@@ -235,7 +237,8 @@ function Warnings(props: { layout: Layout }): ReactElement | null {
 }
 
 /**
- * The tab without the viewer: what is happening (an error, laying out, no WebGL2, nothing to build), the canvas with
+ * The tab without the viewer: what is happening (an error, laying out, no WebGL2, nothing to build, only farms to build,
+ * which have no blocks), the canvas with
  * the hover label over it, the layer slider and the Ghosts, Hookups and Show connections toggles (with what the drawn
  * links are while they show), and beside them the clicked block's or link's details (where they show without
  * scrolling), the side list and the layout's warnings below it. Without WebGL2 only the side list and the warnings show.
@@ -244,12 +247,14 @@ export function View3DShell(props: View3DShellProps): ReactElement {
   const { layout, loading, error, webgl, hover, info, canvas, names } = props;
   const blocks = layout !== null && layout.blocks.length > 0;
   const warned = layout !== null && layout.warnings.length > 0;
+  const farmsOnly = layout !== null && layout.status !== 'empty' && !blocks && (layout.reserved?.length ?? 0) > 0;
   return (
     <div className="view3d" data-testid="view3d" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       {error !== null && <p className="error" style={{ margin: 0 }}>{error}</p>}
       {loading && <p className="muted" style={{ margin: 0 }}>{LOADING_TEXT}</p>}
       {!webgl && <p className="muted" style={{ margin: 0 }}>{NO_WEBGL_TEXT}</p>}
       {layout?.status === 'empty' && <p className="muted" style={{ margin: 0 }}>{props.noSteps === true ? NO_STEPS_TEXT : ALL_OWNED_TEXT}</p>}
+      {farmsOnly && <p className="muted" style={{ margin: 0 }}>{FARMS_ONLY_TEXT}</p>}
       {layout !== null && (blocks || warned) && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-start' }}>
           {blocks && webgl && (

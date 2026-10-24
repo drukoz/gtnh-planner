@@ -2,7 +2,8 @@
 // machines a line may use (`farmSetup`), the goods it wants (`wantedGoods`), the synthetic Tree Growth Simulator and crop
 // recipes for them (`farmRecipes`) and the pack that holds them (`withFarms`); the line's pricing walking the farms'
 // products in every mode, a farm running at its own tier without overclocking, and whole plans: an owned tree farm, crop
-// sticks under a new Crop Manager with their plantings in the build cost and the build list, and Make N on owned farms only.
+// sticks under a new Crop Manager with their plantings in the build cost, the build list and the build steps, and Make N
+// on owned farms only. The final review: the soil each crop is planted on (`cropSoil`), one the line can get.
 
 import { describe, it, expect } from 'vitest';
 import type { StuffKey } from '../../../src/shared/keys.ts';
@@ -20,11 +21,14 @@ import { pickMachine } from '../../../src/server/planner/machines.ts';
 import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
 import { linePricing, type LinePricing } from '../../../src/server/planner/pricing.ts';
 import { CROP_MANAGER_MAP, exportPack, withFarms } from '../../../src/server/planner/farms/pack.ts';
-import { CROP_STICKS, FARM_SOURCES_PER_GOOD, farmRecipes, wantedGoods } from '../../../src/server/planner/farms/recipes.ts';
+import {
+  CROP_STICKS, FARM_SOURCES_PER_GOOD, PLAIN_SOILS, cropSoil, farmRecipes, plantingKeys, plantingParts, soilItem, soilsToPrice, wantedGoods,
+  type SoilSource,
+} from '../../../src/server/planner/farms/recipes.ts';
 import { farmSetup, type FarmSetup } from '../../../src/server/planner/farms/setup.ts';
 import { opt, solvedWithBuild, twoFreeSpec } from '../../helpers/build-fixtures.ts';
-import { farmPack, farmSpec } from '../../helpers/farm-fixtures.ts';
-import { packFromSpec } from '../../helpers/pack-spec.ts';
+import { FIELD_FLAX, RESIN_CANE, RUBBER_BONSAI, ORE_FERN, farmPack, farmSpec } from '../../helpers/farm-fixtures.ts';
+import { packFromSpec, type PackSpec } from '../../helpers/pack-spec.ts';
 
 const SAW = 'gregtech:gt.metatool.01@10';
 const KNIFE = 'gregtech:gt.metatool.01@34';
@@ -34,6 +38,10 @@ const DIRT = 'minecraft:dirt@0';
 const TREE_FARM = 'gt.recipe.treefarm';
 const RESIN_BOARD = 't:resin_board@0';
 const RUBBER_DUST = 't:rubber_dust@0';
+const LINEN = 't:linen@0';
+const FARMLAND = 'minecraft:farmland@0';
+const ENCHANTED_EARTH = 't:enchanted_earth@0';
+const GARDEN_SOIL = 't:garden_soil@0';
 /** The integrity warnings of a plan's flows (`indexPlan`): none in a plan that adds up. */
 const INTEGRITY = ['orphan-input', 'short-input', 'multi-producer', 'bought-and-made'];
 
@@ -49,6 +57,15 @@ function farmsWith(patch: Partial<FarmSettings>): FarmSettings {
 
 /** A pack-free price table for machine options: every key costs 1. */
 const FLAT: ItemPrices = { cost: () => 1, gap: () => undefined };
+
+/** The soils a line of `pack` at `s` can get (its basis's availability), each priced 1: what `farmRecipes` plants on here. */
+function soilsAt(pack: Pack, s: PlanSettings): SoilSource {
+  const { avail } = planBasis(pack, s, emptyContext());
+  return { canGet: (key) => avail.available.has(key), cost: () => 1 };
+}
+
+/** The soils of a tree farm's tests, which plant no crop. */
+const NO_SOILS: SoilSource = { canGet: () => false, cost: () => Infinity };
 
 /** The line's pricing (it has a target the farm pack knows). */
 async function pricingOf(pack: Pack, s: PlanSettings, ctx: PlanContext = emptyContext()): Promise<LinePricing> {
@@ -141,7 +158,7 @@ describe('the synthetic farm recipes', () => {
     const pack = farmPack();
     const prices = makePrices(pack, {});
     const setup: FarmSetup = { settings: defaultFarmSettings(), tgs: { tier: 1, machines: [15541] }, crops: null };
-    const { recipes, tools } = farmRecipes(pack, setup, new Set([RESIN]), prices);
+    const { recipes, tools } = farmRecipes(pack, setup, new Set([RESIN]), prices, NO_SOILS);
     expect(recipes).toHaveLength(1);
     const r = recipes[0]!;
     expect(r.inputs).toEqual([
@@ -157,10 +174,10 @@ describe('the synthetic farm recipes', () => {
     expect(r.id).toBe(recipeId({ source: r.source, inputs: r.inputs, outputs: r.outputs, euPerTick: 30, durationTicks: 100, specialValue: 0, meta: r.meta }));
     expect(tools).toEqual(new Map([[SAW, 2], [KNIFE, 1]]));
     // A row makes one recipe, however many of its products the line wants; no setup, no recipe.
-    expect(farmRecipes(pack, setup, new Set([RESIN, RUBBER_WOOD]), prices).recipes.map((x) => x.id)).toEqual([r.id]);
-    expect(farmRecipes(pack, { ...setup, tgs: null }, new Set([RESIN]), prices)).toEqual({ recipes: [], tools: new Map() });
+    expect(farmRecipes(pack, setup, new Set([RESIN, RUBBER_WOOD]), prices, NO_SOILS).recipes.map((x) => x.id)).toEqual([r.id]);
+    expect(farmRecipes(pack, { ...setup, tgs: null }, new Set([RESIN]), prices, NO_SOILS)).toEqual({ recipes: [], tools: new Map() });
 
-    const oak = farmRecipes(pack, setup, new Set(['minecraft:log@0']), prices).recipes;
+    const oak = farmRecipes(pack, setup, new Set(['minecraft:log@0']), prices, NO_SOILS).recipes;
     expect(oak.map((x) => x.outputs)).toEqual([[{ key: 'minecraft:log@0', amount: 25, chance: 1 }, { key: 't:apple@0', amount: 5, chance: 1 }]]);
     expect(oak[0]?.meta.farm?.sapling).toBe('t:oak_sapling@0');
 
@@ -174,7 +191,7 @@ describe('the synthetic farm recipes', () => {
       });
     }
     const more = packFromSpec(spec);
-    const kept = farmRecipes(more, setup, new Set(['minecraft:log@0']), makePrices(more, {})).recipes;
+    const kept = farmRecipes(more, setup, new Set(['minecraft:log@0']), makePrices(more, {}), NO_SOILS).recipes;
     expect(kept.map((x) => x.meta.farm?.sapling).sort()).toEqual(['t:oak_sapling@0', 't:tgs-ten_sapling@0']);
     expect(kept.map((x) => x.id)).toEqual([...kept.map((x) => x.id)].sort());
   });
@@ -186,7 +203,8 @@ describe('the synthetic farm recipes', () => {
       const s = settingsOf(RUBBER_DUST, { tier: 1, farms });
       return farmSetup(pack, s, emptyContext(), planBasis(pack, s, emptyContext()));
     };
-    const { recipes, tools } = farmRecipes(pack, setupOf(defaultFarmSettings()), new Set([RESIN]), prices);
+    const soils = soilsAt(pack, settingsOf(RUBBER_DUST, { tier: 1 }));
+    const { recipes, tools } = farmRecipes(pack, setupOf(defaultFarmSettings()), new Set([RESIN]), prices, soils);
     expect(tools.size).toBe(0);
     expect(recipes.map((r) => r.meta.farm?.crop?.name).sort()).toEqual(['Resin Cane', 'Rubber Bonsai']);
     const cane = recipes.find((r) => r.meta.farm?.crop?.id === 'cropsnh:testCane')!;
@@ -205,14 +223,14 @@ describe('the synthetic farm recipes', () => {
     });
     expect(recipes.map((r) => r.id)).toEqual([...recipes.map((r) => r.id)].sort());
     // Ore Fern needs a sub-soil block: never a recipe
-    expect(farmRecipes(pack, setupOf(defaultFarmSettings()), new Set(['t:iron_dust@0']), prices).recipes).toEqual([]);
+    expect(farmRecipes(pack, setupOf(defaultFarmSettings()), new Set(['t:iron_dust@0']), prices, soils).recipes).toEqual([]);
 
     const crops = defaultFarmSettings().crops;
-    const layered = farmRecipes(pack, setupOf(farmsWith({ crops: { ...crops, layers: 3 } })), new Set([RESIN]), prices).recipes;
+    const layered = farmRecipes(pack, setupOf(farmsWith({ crops: { ...crops, layers: 3 } })), new Set([RESIN]), prices, soils).recipes;
     const deep = layered.find((r) => r.meta.farm?.crop?.id === 'cropsnh:testCane')!;
     expect(deep.meta.farm).toMatchObject({ footprint: [11, 6, 11], parallel: 363 });
 
-    const fed = farmRecipes(pack, setupOf(farmsWith({ crops: { ...crops, fertilizer: 'fertilizer' } })), new Set([RESIN]), prices).recipes;
+    const fed = farmRecipes(pack, setupOf(farmsWith({ crops: { ...crops, fertilizer: 'fertilizer' } })), new Set([RESIN]), prices, soils).recipes;
     const fertilized = fed.find((r) => r.meta.farm?.crop?.id === 'cropsnh:testCane')!;
     expect(fertilized.inputs).toEqual([
       { options: [{ key: 'cropsnh:fertilizer@0', amount: 0.32 }], consumed: true, chance: 1, slot: 0 },
@@ -247,6 +265,109 @@ describe('the synthetic farm recipes', () => {
     expect(farms.machines.get(28001)).toMatchObject({ kind: 'basic', maps: [CROP_MANAGER_MAP], tier: 1, name: 'Basic Crop Manager' });
     expect(pack.machines.get(28001)).toMatchObject({ kind: 'other', maps: [] });
     expect(farms.machines.get(15541)).toBe(pack.machines.get(15541));
+  });
+});
+
+// The final review of add-on 17: CropsNH lists a crop's soils by key, so its first soil is often an exotic block (on the
+// 2.9 export MagicBees' Enchanted Earth for 29 crops, Chisel's dirt for 27). A crop is planted on one the line can get.
+describe('the soil a crop is planted on', () => {
+  /** A soil source that can get `have`, at `costs` (Infinity for any other key). */
+  const source = (have: readonly string[], costs: Readonly<Record<string, number>> = {}): SoilSource => ({
+    canGet: (key) => have.includes(key), cost: (key) => costs[key] ?? Infinity,
+  });
+  const card = (soils: string[]) => ({ soils });
+
+  it('plants on dirt, farmland or grass first, else on the cheapest soil the line can get', () => {
+    expect(PLAIN_SOILS).toEqual([DIRT, FARMLAND, 'minecraft:grass@0']);
+    // the card's exotic first soil is passed over wherever the line can get dirt: farmland is hoed dirt
+    expect(cropSoil(card([ENCHANTED_EARTH, GARDEN_SOIL, FARMLAND]), source([DIRT, GARDEN_SOIL], { [GARDEN_SOIL]: 2 }))).toBe(FARMLAND);
+    expect(cropSoil(card(['minecraft:grass@0', FARMLAND, DIRT]), source([DIRT]))).toBe(DIRT);
+    expect(cropSoil(card(['minecraft:grass@0', FARMLAND]), source([DIRT]))).toBe(FARMLAND);
+    expect(cropSoil(card(['minecraft:grass@0']), source([DIRT]))).toBe('minecraft:grass@0');
+    // without dirt there is no farmland either: the cheapest other soil the line can get
+    expect(cropSoil(card([ENCHANTED_EARTH, GARDEN_SOIL, FARMLAND]), source([GARDEN_SOIL], { [GARDEN_SOIL]: 2 }))).toBe(GARDEN_SOIL);
+    // a priced soil before an unpriced one, the cheaper first, ties by key
+    const three = source(['t:a@0', 't:b@0', 't:c@0'], { 't:a@0': 3, 't:b@0': 2, 't:c@0': 2 });
+    expect(cropSoil(card(['t:c@0', 't:a@0', 't:b@0']), three)).toBe('t:b@0');
+    expect(cropSoil(card(['t:b@0', 't:a@0']), source(['t:a@0', 't:b@0'], { 't:b@0': 5 }))).toBe('t:b@0');
+    expect(cropSoil(card(['t:b@0', 't:a@0']), source(['t:a@0', 't:b@0']))).toBe('t:a@0');
+    // none the line can get, or none listed: no soil, so the crop is not offered
+    expect(cropSoil(card([ENCHANTED_EARTH]), source([DIRT]))).toBeNull();
+    expect(cropSoil(card([]), source([DIRT]))).toBeNull();
+    // what is placed for a soil: dirt for farmland and grass
+    expect([DIRT, FARMLAND, 'minecraft:grass@0', GARDEN_SOIL].map(soilItem)).toEqual([DIRT, DIRT, DIRT, GARDEN_SOIL]);
+    // planting a farmland crop: its crop sticks, the dirt hoed into its farmland and its seeds; the build cost leaves the seeds out
+    const meta = { kind: 'crop' as const, tier: 1, machines: [28001], parallel: 121, footprint: [11, 2, 11] as [number, number, number],
+      crop: { id: FIELD_FLAX.id, name: FIELD_FLAX.name, growthTicks: 20, stats: { growth: 1, gain: 1, resistance: 1 }, soil: FARMLAND, seed: 't:flax_seed@0' } };
+    expect(plantingParts(meta)).toEqual([
+      { key: CROP_STICKS, part: 'sticks' }, { key: DIRT, part: 'soil', soil: FARMLAND }, { key: 't:flax_seed@0', part: 'seed' }]);
+    expect(plantingKeys(meta)).toEqual([CROP_STICKS, DIRT]);
+  });
+
+  it('plants a farmland crop on Farmland hoed from dirt, never on the first soil its card lists', async () => {
+    const plan = await planLine(farmPack(), settingsOf(LINEN, { tier: 1, objective: 'least-raw', buildHorizonHours: null }), emptyContext());
+    expect(plan.status).toBe('ok');
+    const crop = farmStep(plan, 'crop');
+    expect(crop.farm?.crop?.id).toBe(FIELD_FLAX.id);
+    const sticks = crop.farm?.sticks ?? 0;
+    expect(sticks).toBeGreaterThan(0);
+    expect(crop.farm?.planting).toBe('of Field Flax (growth 1, gain 1, resistance 1) on Farmland, watering on');
+    expect(plan.rawInputs.some((r) => r.key === 't:flax@0')).toBe(false);
+    // the build list names the dirt the group hoes into farmland, never the card's first soil nor farmland itself
+    expect(plan.buildList.filter((l) => l.group === 'one-off').map((l) => [l.key, l.amount, l.why])).toEqual([
+      [CROP_STICKS, sticks, 'Field Flax farm'], [DIRT, sticks, 'Field Flax farm (hoe it into Farmland)'], ['t:flax_seed@0', sticks, 'Field Flax farm'],
+    ]);
+    expect((plan.buildTotals ?? []).some((l) => l.key === ENCHANTED_EARTH || l.key === FARMLAND)).toBe(false);
+    expect(plan.buildSteps.find((b) => b.id === `craft:${DIRT}`)?.text).toBe(`Get ${sticks}× Dirt as soil for the Field Flax farm (hoe it into Farmland)`);
+    // and its build cost charges that dirt and the crop sticks at the machines' prices, every part priced
+    const prices = await itemPrices(exportPack(farmPack()), settingsOf(LINEN, { tier: 1 }), emptyContext(), [CROP_STICKS, DIRT]);
+    expect([prices.cost(CROP_STICKS), prices.cost(DIRT)].every((c) => Number.isFinite(c) && c > 0)).toBe(true);
+    expect(plan.warnings.map((w) => w.code)).not.toContain('build-cost-unknown');
+  });
+
+  it('offers a crop only on a soil the line can get, and names a planting it cannot price', async () => {
+    /** The farm pack, Field Flax listing `soils`, plus Fine Soil (crafted from four dirt, so dearer than Garden Soil's two). */
+    const withFlax = (soils: string[]): Pack => {
+      const spec: PackSpec = farmSpec();
+      spec.items?.push({ key: 't:fine_soil@0', name: 'Fine Soil' });
+      spec.recipes?.push({ id: 'fine-soil', map: 'crafting', in: [[DIRT, 4]], out: [['t:fine_soil@0', 1]] });
+      const pack = packFromSpec(spec);
+      pack.crops = structuredClone([RESIN_CANE, RUBBER_BONSAI, ORE_FERN, { ...FIELD_FLAX, soils }]);
+      return pack;
+    };
+    const s = settingsOf(LINEN, { tier: 1, objective: 'least-raw', buildHorizonHours: null });
+    const flaxSoil = async (pack: Pack) => (await pricingOf(pack, s)).pack?.recipes.find((r) => r.meta.farm?.crop?.id === FIELD_FLAX.id)?.meta.farm?.crop?.soil;
+    /** The soils the line prices to choose its crops' (`soilsToPrice`). */
+    const priced = (pack: Pack): string[] => {
+      const basis = planBasis(pack, s, emptyContext());
+      return soilsToPrice(pack, farmSetup(pack, s, emptyContext(), basis), new Set(['t:flax@0']), (key) => basis.avail.available.has(key));
+    };
+    // with farmland it can get, nothing to price
+    expect(priced(farmPack())).toEqual([]);
+    // no plain soil: the one other soil the line can get (Garden Soil, crafted from two dirt), not the exotic first one
+    const garden = withFlax([ENCHANTED_EARTH, GARDEN_SOIL]);
+    expect(priced(garden)).toEqual([]);
+    expect(await flaxSoil(garden)).toBe(GARDEN_SOIL);
+    // two it can get: priced as machines are, the cheaper wins, not the first by key
+    const two = withFlax([ENCHANTED_EARTH, 't:fine_soil@0', GARDEN_SOIL]);
+    expect(priced(two)).toEqual(['t:fine_soil@0', GARDEN_SOIL]);
+    expect(await flaxSoil(two)).toBe(GARDEN_SOIL);
+    // only a soil nothing makes: no crop farm of it, and the line buys its flax
+    const exotic = withFlax([ENCHANTED_EARTH]);
+    expect(await flaxSoil(exotic)).toBeUndefined();
+    const bought = await planLine(exotic, s, emptyContext());
+    expect(bought.status).toBe('ok');
+    expect(bought.steps.some((st) => st.farm !== undefined)).toBe(false);
+    expect(bought.rawInputs.some((r) => r.key === 't:flax@0')).toBe(true);
+    // a soil the line can get but nobody can price (an ore block, which machine prices never buy): planted, and the
+    // build cost says it leaves it out
+    const ore = withFlax([ENCHANTED_EARTH, 't:iron_ore@0']);
+    expect(await flaxSoil(ore)).toBe('t:iron_ore@0');
+    const unpriced = await planLine(ore, s, emptyContext());
+    expect(farmStep(unpriced, 'crop').farm?.planting).toBe('of Field Flax (growth 1, gain 1, resistance 1) on Iron Ore, watering on');
+    expect(unpriced.warnings.filter((w) => w.code === 'build-cost-unknown')).toEqual([
+      { code: 'build-cost-unknown', text: 'Not counted in the build cost: Iron Ore for the Field Flax farm (its price could not be worked out)' },
+    ]);
   });
 });
 
@@ -374,9 +495,27 @@ describe('farms in the line', () => {
     expect(plan.buildList.filter((l) => l.group === 'one-off').map((l) => [l.key, l.amount, l.why])).toEqual([
       [CROP_STICKS, 2, 'Resin Cane farm'], [DIRT, 2, 'Resin Cane farm'], ['t:cane_seed@0', 2, 'Resin Cane farm'],
     ]);
+    // the final review (T4-a): the sticks and soil are planted round the Crop Manager and the seeds come from the seed
+    // bank, so none of them "stays in the machine"
+    const craft = (key: string) => plan.buildSteps.find((b) => b.id === `craft:${key}`);
+    expect([CROP_STICKS, DIRT, 't:cane_seed@0'].map((key) => [craft(key)?.kind, craft(key)?.text])).toEqual([
+      ['craft', 'Make 2× Crop Sticks to plant in the Resin Cane farm'],
+      ['craft', 'Get 2× Dirt as soil for the Resin Cane farm'],
+      ['craft', 'Take 2× Resin Cane Seeds from your seed bank for the Resin Cane farm'],
+    ]);
+    expect(plan.buildSteps.some((b) => b.text.includes('stays in the machine'))).toBe(false);
     expect(plan.buildList.find((l) => l.key === 'machine:28001@0')).toMatchObject({ amount: 1, group: 'machines' });
     expect(plan.names?.[`map:${CROP_MANAGER_MAP}`]).toBe('Crop Manager');
     expect(plan.warnings.filter((w) => INTEGRITY.includes(w.code))).toEqual([]);
+  });
+
+  it("keeps a new tree farm's sapling in its controller", async () => {
+    // HV, cheapest, nothing owned: the line builds a Tree Growth Simulator, whose sapling does stay in the machine
+    const plan = await planLine(farmPack(), settingsOf(RESIN_BOARD, { tier: 3, objective: 'cheapest', farms: farmsWith({ kinds: ['tgs'] }) }), emptyContext());
+    expect(plan.status).toBe('ok');
+    expect(farmStep(plan, 'tgs')).toMatchObject({ count: 1, owned: 0 });
+    expect(plan.buildList.filter((l) => l.group === 'one-off').map((l) => [l.key, l.amount, l.why])).toEqual([['t:rubber_sapling@0', 1, 'Rubber Sapling farm']]);
+    expect(plan.buildSteps.find((b) => b.id === 'craft:t:rubber_sapling@0')?.text).toBe('Make 1× Rubber Sapling (stays in the machine)');
   });
 
   it('weighs what a crop farm plants in the build MIP, in rate mode only', async () => {
