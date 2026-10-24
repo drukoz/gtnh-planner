@@ -1,10 +1,11 @@
 // Real-data check of the feeding fix (architecture §11 entry 51; research docs/research/machine-feeding.md §4, §6.4): the
 // research's five probe lines — the Electronic Circuit at MV (1 a minute, by hand and with crafting automated), Red
 // Alloy Ingot (60 a minute), the LV Electric Motor (6 a minute) and the Vacuum Tube (30 a minute) — and Steel Plate (10
-// a minute, whose EBF takes its Oxygen piped from another machine: a Canning Machine on main's planner, an Electrolyzer
-// on Phosphate Dust on plan 12's), planned on the active export and laid out with no world in the routed, AE2 and
-// EnderIO modes, as the app does. It runs only with GTNH_LOCAL=1 (and GTNH_PLANNER_CONFIG naming a config whose data
-// folder holds the export) and is skipped everywhere else. It prints counts and codes only.
+// a minute, whose EBF takes its Oxygen piped from another machine: a Canning Machine on main's planner and on plan 12's
+// since fix wave 3's raw cap, an Electrolyzer on Phosphate Dust on plan 12's before it), planned on the active export
+// and laid out with no world in the routed, AE2 and EnderIO modes, as the app does. It runs only with GTNH_LOCAL=1 (and
+// GTNH_PLANNER_CONFIG naming a config whose data folder holds the export) and is skipped everywhere else. It prints
+// counts and codes only.
 
 import { beforeAll, describe, expect, it } from 'vitest';
 import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
@@ -38,18 +39,20 @@ const MODES: readonly LogisticsMode[] = ['routed', 'ae2', 'enderio'];
  * The machines (GT basic machine kind) AE2 runs too seldom for the fluid they pipe to another machine, per line: no job
  * of the line needs what their patterns make (research §4.2 item 2: the Refined Glue the Resistor and Wood Plank
  * assemblers wait for, the Polyethylene for the Circuit Board assembler, the EBF's Oxygen). These are the lines as plan
- * 12's planner plans them at its defaults (the merge of fix/feeding b4f5602): the EBF's Oxygen comes from an Electrolyzer
- * on Phosphate Dust, whose pattern makes Phosphorus Dust, which no job of the line needs, on the circuit, Vacuum Tube and
- * Steel Plate lines, and the circuit's Circuit Board is the wood one, which takes no Polyethylene. Main's planner made
- * the Steel Plate EBF's Oxygen in a Canning Machine (its pattern makes Empty Cells) and the circuit's Polyethylene in a
- * Chemical Reactor. When the planner picks another route for these lines (plan 12 Task 8's Phosphate Dust cases), this
- * table follows it.
+ * 12's planner plans them at its defaults, fix wave 3's raw cap included: the Oxygen of the circuit lines' Arc Furnace
+ * and EBF and of the Steel Plate EBF comes from a Canning Machine that empties Oxygen Cells (a Centrifuge separates them
+ * from compressed air on the circuit lines, an Electrolyzer fills them from pumped Water on Steel Plate), whose pattern
+ * makes Empty Cells, which no job of the line asks for as often as the Oxygen is needed; the Vacuum Tube's Oxygen comes
+ * from an Electrolyzer on Ferrosilite Dust, which AE2 runs often enough; and the circuit's Circuit Board is the wood one,
+ * which takes no Polyethylene. From the merge of fix/feeding (b4f5602) until the raw cap the Oxygen of the circuit,
+ * Vacuum Tube and Steel Plate lines came from an Electrolyzer on bought Phosphate Dust, whose pattern makes Phosphorus
+ * Dust; main's planner made the Steel Plate EBF's Oxygen in a Canning Machine too and the circuit's Polyethylene in a
+ * Chemical Reactor. When the planner picks another route for these lines, this table follows it.
  */
 const FLUID_SHORT: Readonly<Record<string, ReadonlyArray<readonly [string, string]>>> = {
-  'Electronic Circuit MV': [['centrifuge', 'fluid:refinedglue'], ['electrolyzer', 'fluid:oxygen']],
-  'Electronic Circuit MV, crafting automated': [['centrifuge', 'fluid:refinedglue'], ['electrolyzer', 'fluid:oxygen']],
-  'Vacuum Tube': [['electrolyzer', 'fluid:oxygen']],
-  'Steel Plate': [['electrolyzer', 'fluid:oxygen']],
+  'Electronic Circuit MV': [['centrifuge', 'fluid:refinedglue'], ['canner', 'fluid:oxygen']],
+  'Electronic Circuit MV, crafting automated': [['centrifuge', 'fluid:refinedglue'], ['canner', 'fluid:oxygen']],
+  'Steel Plate': [['canner', 'fluid:oxygen']],
 };
 
 /** The blocks beside `b` (all six sides), by the layout's own index of positions. */
