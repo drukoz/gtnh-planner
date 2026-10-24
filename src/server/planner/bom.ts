@@ -12,7 +12,7 @@ import { PROGRAMMED_CIRCUIT_ID } from '../pack/recipes.ts';
 import { structureParts } from './build-cost.ts';
 import { buildCandidates, heldOption, keptOptions, type HeldAvoid, type LeafOracle, type LpRecipe, type PlanEnv } from './candidates.ts';
 import { makePrices } from './costs.ts';
-import { madePerRun, makersOf, ownedForParts, partMachine, poolMakes, settleRecipes, unmadeCause } from './howto.ts';
+import { madePerRun, makersOf, orderJobs, ownedForParts, partMachine, poolMakes, settleRecipes, unmadeCause } from './howto.ts';
 import { yieldToEventLoop } from './lp.ts';
 import { ownedPools, recipeCircuit } from './owned.ts';
 import { lineLeaf } from './pricing.ts';
@@ -507,8 +507,10 @@ function madeParts(pack: Pack, lines: readonly BomLine[], x: Expansion, book: Re
  * need is made in whole runs once; the leaves and unmade goods per key, sorted by key, each with the top-level lines that
  * need it (`neededFor`, fix spec D15: by key, in the order of the lines, each one's exact share scaled to the pooled
  * amount, the last taking the remainder, so they add up to it) and the why "for <their names>", each name once (ruling
- * P18). `makes` is one job per made good at its pooled runs (`BomMake`); `alternatives` the swap list of every made good.
- * `warnings` holds the graph's `graph-too-big`, in the build list's words, when the graph hit its recipe cap.
+ * P18). `makes` is one job per made good at its pooled runs (`BomMake`); where the steps' order (`orderJobs`) breaks a
+ * cycle of waits for machines this line builds, the job it breaks it at runs on another machine of its type: `first` on
+ * its make and on every node of it, its make waiting for its materials only. `alternatives` the swap list of every made
+ * good. `warnings` holds the graph's `graph-too-big`, in the build list's words, when the graph hit its recipe cap.
  */
 async function expandWith(
   pack: Pack, lines: readonly BomLine[], expansion: Expansion,
@@ -573,6 +575,8 @@ async function expandWith(
     if (have !== undefined) total.have = have;
     return total;
   });
+  /** The makes on a machine this line builds: that machine's own key and structure parts, and the make's material waits. */
+  const onLine = new Map<StuffKey, { own: ReadonlySet<StuffKey>; material: ReadonlySet<StuffKey> }>();
   const makes = [...pooled.runs].sort(([a], [b]) => byString(a, b)).map(([key, runs]): BomMake => {
     const how = parts.how(key) as { lp: LpRecipe; perRun: number };
     const inputs = book.inputsOf(how.lp).map(([input, per]) => ({ key: input, amount: round9(per * runs) }));
@@ -582,9 +586,37 @@ async function expandWith(
     // A machine this line builds runs the job once it stands: after its own craft and structure steps.
     if (typeof made.machine === 'object' && made.machine.source === 'line') {
       const m = pack.machines.get(made.machine.mteId);
-      if (m !== undefined) for (const k of [m.itemKey, ...structureParts(pack, m).keys()]) if (lines.some((l) => l.key === k)) after.add(k);
+      if (m !== undefined) {
+        const own = new Set([m.itemKey, ...structureParts(pack, m).keys()]);
+        onLine.set(key, { own, material: new Set(after) });
+        for (const k of own) if (lines.some((l) => l.key === k)) after.add(k);
+      }
     }
     return { key, made, amount: round9(runs * how.perRun), inputs, after: [...after].sort(byString) };
   });
+  // The steps' order (`orderJobs`) breaks a cycle of machine waits at a job, which then runs on another machine of its
+  // type: decided here, where `made` is set, so its make, every node of it and its step all say `first`, and its make
+  // waits for its materials only (architecture §11 entry 41 (1), (5)).
+  const { first } = orderJobs(makes.map((m) => {
+    const own = onLine.get(m.key)?.own;
+    return {
+      key: m.key, machineKey: m.made.machine === 'crafting table' ? 'crafting table' : m.made.machine.name, name: partName(pack, m.key),
+      waits: m.after, machineWaits: own === undefined ? [] : m.after.filter((k) => own.has(k)),
+    };
+  }));
+  if (first.size > 0) {
+    const elsewhere = (made: BomMade): BomMade => (made.machine === 'crafting table' ? made : { ...made, machine: { ...made.machine, source: 'first' } });
+    for (const m of makes) {
+      if (!first.has(m.key)) continue;
+      const material = onLine.get(m.key)?.material;
+      m.made = elsewhere(m.made);
+      m.after = m.after.filter((k) => material?.has(k) === true);
+    }
+    const retag = (l: BomLine): void => {
+      if (l.made !== undefined && first.has(l.key)) l.made = elsewhere(l.made);
+      for (const c of l.children ?? []) retag(c);
+    };
+    for (const l of expanded) retag(l);
+  }
   return { warnings: book.warnings, lines: expanded, totals, makes, alternatives: parts.alternatives() };
 }

@@ -5,6 +5,7 @@ import { ANY_LV_CIRCUIT, largeBenderSpec, withBuildRecipes } from '../../helpers
 import { COIL_MV, coilSpec, deepSpec, ebfStep, loopSpec, packedTableSpec, partStep, standInPressSpec, variantCellSpec } from '../../helpers/howto-fixtures.ts';
 import { buildBom, expandBomLines, partName, type Bom, type BomMake } from '../../../src/server/planner/bom.ts';
 import { buildSteps, partSteps } from '../../../src/server/planner/steps.ts';
+import { madeText } from '../../../src/client/views/materials-model.ts';
 import { withArticle } from '../../../src/shared/format.ts';
 import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
 import { planBasis, effectiveTier } from '../../../src/server/planner/basis.ts';
@@ -748,15 +749,36 @@ describe('the build steps of the build parts', () => {
     const press = spec.recipes?.find((r) => r.id === 'press-foil');
     if (press === undefined) throw new Error('coilSpec changed: no press-foil');
     press.meta = { cleanroom: true };
+    // The pack's cleanroom (architecture §11.19: the class MTECleanroom); `crafted` also crafts it from 4 iron ingots.
+    spec.machines?.push({ mteId: 1172, name: 'Cleanroom', maps: [], kind: 'multiblock', cls: 'gregtech.common.tileentities.machines.multi.MTECleanroom' });
+    const unmadeRoom = packFromSpec(spec);
+    spec.recipes?.push({ id: 'make-cleanroom', map: 'crafting', in: [['t:iron_ingot@0', 4]], out: [['machine:1172@0', 1]] });
     const p = packFromSpec(spec);
     const bom = await coilBom(p);
     const foils = all(bom.lines).filter((l) => l.key === 't:mica_foil@0');
     expect(foils.length).toBeGreaterThan(0);
     for (const foil of foils) expect(foil.made?.cleanroom).toBe(true);
-    expect(textOf(run([ebfStep()], bom, p), 'make:t:mica_foil@0')).toBe('Make 32× Mica Insulator Foil from 8× Mica Dust in a Basic Bending Machine '
+    const out = run([ebfStep()], bom, p);
+    expect(textOf(out, 'make:t:mica_foil@0')).toBe('Make 32× Mica Insulator Foil from 8× Mica Dust in a Basic Bending Machine '
       + '(in a cleanroom; you have none and this line builds none: build one, or import the Mica Insulator Foil)');
-    // no plan step needs a cleanroom, so the build list has none: the EBF and its structure only
+    // A job in a cleanroom adds no cleanroom line, though the pack has one: no plan step needs one, so the build list holds
+    // the EBF and its structure only, with no warning and no cleanroom step.
     expect(bom.lines.map((l) => l.key)).toEqual(['machine:1000@0', 't:coil@0', 't:tin_casing@0', 't:tin_pipe@0']);
+    expect(bom.warnings.map((w) => w.code)).not.toContain('no-cleanroom');
+    expect(out.map((s) => s.id)).not.toContain('craft:machine:1172@0');
+    // A plan step that needs one adds the cleanroom line, whose own step says how it is made and where it goes: made,
+    // unmade, or bought ("we already make this", the copy table's own text).
+    const room = ebfStep({ needsCleanroom: true });
+    const roomText = async (q: Pack, settings: PlanSettings = COIL_MV): Promise<string | undefined> => {
+      const b = planBasis(q, settings, emptyContextForTest());
+      const withRoom = await buildBom(q, [room], { settings, env: b.env, leaf: b.leaf, ctx: emptyContextForTest() });
+      expect(withRoom.lines.map((l) => [l.key, l.group])).toContainEqual(['machine:1172@0', 'machines']);
+      return textOf(run([room], withRoom, q), 'craft:machine:1172@0');
+    };
+    expect(await roomText(p)).toBe('Craft 1× Cleanroom from 4× Iron Ingot at a crafting table; build it around the steps that need it');
+    expect(await roomText(unmadeRoom))
+      .toBe('Get 1× Cleanroom: nothing at MV can make it, so import it (mark it "we already make this"); build it around the steps that need it');
+    expect(await roomText(p, { ...COIL_MV, stopItems: ['machine:1172@0'] })).toBe('Build a cleanroom (Cleanroom) around the steps that need it');
   });
 
   it('says when every recipe of a part needs its own chain', async () => {
@@ -813,29 +835,42 @@ describe('the build steps of the build parts', () => {
     expect(partSteps(coilPack, { steps: [], bom: { lines: [], totals: [], makes }, tier: 2 }).map((s) => s.id)).toEqual(['make:t:coil@0', 'make:t:mica_foil@0']);
   });
 
-  it('sends the job that breaks a cycle through the line\'s machines to another machine', () => {
-    // The line builds a Basic Bending Machine assembled from wires and a Basic Wiremill crafted from foils, and each of the
-    // two makes the other's part, so nothing is ready. The smallest node, the bender's assembly, waits for a material; the
-    // next, the foil's job, waits only for its machine: it drops that wait and goes to another bender (`first`).
-    const line = (mteId: number, name: string): BomMake['made']['machine'] => ({ mteId, name, tier: 1, source: 'line' });
-    const makes: BomMake[] = [
-      { key: 'machine:101@0', made: { recipeId: 'assemble-101', mapId: 'gt.recipe.assembler', machine: { mteId: 121, name: 'Basic Assembler', tier: 1, source: 'new' }, runs: 1 },
-        amount: 1, inputs: [{ key: 't:cupro_wire@0', amount: 8 }], after: ['t:cupro_wire@0'] },
-      { key: 'machine:111@0', made: { recipeId: 'craft-111', mapId: 'crafting', machine: 'crafting table', runs: 1 },
-        amount: 1, inputs: [{ key: 't:mica_foil@0', amount: 32 }], after: ['t:mica_foil@0'] },
-      { key: 't:cupro_wire@0', made: { recipeId: 'wire-cupro', mapId: 'gt.recipe.wiremill', machine: line(111, 'Basic Wiremill'), runs: 8 },
-        amount: 8, inputs: [{ key: 't:cupronickel_ingot@0', amount: 8 }], after: ['machine:111@0'] },
-      { key: 't:mica_foil@0', made: { recipeId: 'press-foil', mapId: 'gt.recipe.metalbender', machine: line(101, 'Basic Bending Machine'), runs: 8 },
-        amount: 32, inputs: [{ key: 't:mica_dust@0', amount: 8 }], after: ['machine:101@0'] },
-    ];
+  it('sends the job that breaks a cycle through the line\'s machines to another machine, in the build list and its step alike', async () => {
+    // The line builds a Basic Bending Machine crafted from wires and a Basic Wiremill crafted from foils, and each of the
+    // two makes the other's part, so the order meets a cycle of machine waits. Of the jobs that wait only for their machine,
+    // the foil's comes first (Bending Machine before Wiremill): it goes to another bender. The breakdown decides so where
+    // `made` is set, so the foil's make and every node of it say `first`, its make no longer waits for the bender, and the
+    // Materials page (`madeText`) and the step name the same machine for every part (spec §3.10).
+    const spec = coilSpec();
+    spec.recipes?.push({ id: 'craft-101', map: 'crafting', in: [['t:cupro_wire@0', 8]], out: [['machine:101@0', 1]] },
+      { id: 'craft-111', map: 'crafting', in: [['t:mica_foil@0', 32]], out: [['machine:111@0', 1]] });
+    const p = packFromSpec(spec);
+    const steps = [partStep({ id: 'press-foil', recipeId: 'press-foil', machine: { mteId: 101, name: 'Basic Bending Machine', tier: 1 } }),
+      partStep({ id: 'wire-cupro', recipeId: 'wire-cupro', machine: { mteId: 111, name: 'Basic Wiremill', tier: 1 } })];
     const lines = [{ key: 'machine:101@0', amount: 1, why: 'bender' }, { key: 'machine:111@0', amount: 1, why: 'wiremill' }];
-    const out = partSteps(coilPack, { steps: [], bom: { lines, totals: [], makes }, tier: 2 });
-    expect(out.map((s) => s.id)).toEqual(['make:t:mica_foil@0', 'craft:machine:111@0', 'make:t:cupro_wire@0', 'craft:machine:101@0']);
-    expect(out.map((s) => s.text)).toEqual([
-      'Make 32× Mica Insulator Foil from 8× Mica Dust in a Basic Bending Machine (the one this line builds needs it first: use another one, or import the Mica Insulator Foil)',
-      'Craft 1× Basic Wiremill from 32× Mica Insulator Foil at a crafting table',
-      'Make 8× 2x Cupronickel Wire from 8× Cupronickel Ingot in the Basic Wiremill this line builds (place and power it first)',
-      'Make 1× Basic Bending Machine from 8× 2x Cupronickel Wire in a Basic Assembler (you have none and this line builds none: build one, or import the Basic Bending Machine)']);
+    const r = await expandBomLines(p, lines, COIL_MV, emptyContextForTest(), { steps });
+    const makes = r.makes ?? [];
+    const make = (key: string): BomMake | undefined => makes.find((m) => m.key === key);
+    expect([make('t:mica_foil@0')?.made.machine, make('t:mica_foil@0')?.after]).toEqual([{ mteId: 101, name: 'Basic Bending Machine', tier: 1, source: 'first' }, []]);
+    expect([make('t:cupro_wire@0')?.made.machine, make('t:cupro_wire@0')?.after])
+      .toEqual([{ mteId: 111, name: 'Basic Wiremill', tier: 1, source: 'line' }, ['machine:111@0', 't:cupronickel_ingot@0']]);
+    // every node of a made part has its make's machine
+    const nodes = all(r.lines);
+    for (const m of makes) {
+      const ofKey = nodes.filter((l) => l.key === m.key);
+      expect(ofKey.length, m.key).toBeGreaterThan(0);
+      for (const l of ofKey) expect(l.made?.machine, m.key).toEqual(m.made.machine);
+    }
+    const out = partSteps(p, { steps, bom: { lines: r.lines, totals: r.totals, makes }, tier: 2 });
+    expect(out.map((s) => s.id)).toEqual(['gather', 'make:t:cupronickel_ingot@0', 'make:t:mica_foil@0', 'craft:machine:111@0', 'make:t:cupro_wire@0', 'craft:machine:101@0']);
+    const names = Object.fromEntries(nodes.map((l) => [l.key, partName(p, l.key)]));
+    const madeOf = (key: string): string | undefined => madeText(nodes.find((l) => l.key === key) as BomLine, names);
+    expect([madeOf('t:mica_foil@0'), textOf(out, 'make:t:mica_foil@0')]).toEqual(['made in a Basic Bending Machine from Mica Dust',
+      'Make 32× Mica Insulator Foil from 8× Mica Dust in a Basic Bending Machine (the one this line builds needs it first: use another one, or import the Mica Insulator Foil)']);
+    expect([madeOf('t:cupro_wire@0'), textOf(out, 'make:t:cupro_wire@0')]).toEqual(['made in the Basic Wiremill this line builds from Cupronickel Ingot (circuit 2)',
+      'Make 8× 2x Cupronickel Wire from 8× Cupronickel Ingot in the Basic Wiremill this line builds (circuit 2; place and power it first)']);
+    expect([madeOf('machine:111@0'), textOf(out, 'craft:machine:111@0')])
+      .toEqual(['made at a crafting table from Mica Insulator Foil', 'Craft 1× Basic Wiremill from 32× Mica Insulator Foil at a crafting table']);
   });
 
   it('names the parts a job holds and the tools a craft takes', async () => {

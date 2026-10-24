@@ -9,9 +9,11 @@
 // that fails is a regression to investigate and report, never a number to raise.
 //
 // Measured on export 2.9.0-RC-1_20261020-204809 (2026-10-23): the Electronic Circuit line has 94 make, 31 craft and 0
-// gather part steps and 0 unmade parts, and every bound of its cases held. Of the 5 live projects of the database copy,
-// every bound held for 4; project 1's build breaks three fluid ceilings, in its plan and finished alike (reported to the
-// controller, not raised); every finished plan's gather step named exactly its totals.
+// gather part steps and 0 unmade parts, and every bound of its cases held. The live projects' builds keep the EC line's
+// bounds but its two fluid ceilings: there a fluid total, free or not, fails above LIVE_FLUID_MAX (the controller's
+// ruling on ruling 94's bounds), as a live build may take more of a free fluid, or of another fluid, than the EC line's
+// ceilings by a strictly cheaper route (free inputs cost nothing, spec §3.3); a live total above the EC line's free-fluid
+// or other-fluid ceiling is printed and written to the audit file per project and view, by bound and fluid, never failed.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -63,6 +65,12 @@ const FREE_FLUID_MAX = 400_000;
 const FLUID_MAX = 50_000;
 const ITEM_MAX = 2_000;
 const EMPTY_CELL_MAX = 64;
+/**
+ * Litres of any one fluid, free or not, a live project's build may call for (the controller's ruling on ruling 94's
+ * bounds): above the real needs of the live builds, below the Air an exact cost tie asks for without ruling 93's
+ * tie-break, which this block still catches on real data.
+ */
+const LIVE_FLUID_MAX = 10_000_000;
 /** The gather step names this many base materials (steps.ts), then "(and N more)". */
 const GATHER_SHOWN = 8;
 /** How a make step words a machine the line builds whose own build needs the part. */
@@ -148,11 +156,23 @@ function poolingViolations(pack: Pack, totals: readonly BomLine[], makes: readon
   return out;
 }
 
-/** Each total above its ceiling: a free fluid, any other fluid, an item, Empty Cells. */
-function ceilingViolations(pack: Pack, totals: readonly BomLine[]): string[] {
+/** Each total above its ceiling: Empty Cells, an item, a free fluid (`freeFluidMax`), any other fluid (`fluidMax`). */
+function ceilingViolations(pack: Pack, totals: readonly BomLine[], freeFluidMax = FREE_FLUID_MAX, fluidMax = FLUID_MAX): string[] {
   return totals.flatMap((t) => {
-    const max = t.key === EMPTY_CELL ? EMPTY_CELL_MAX : !isFluidKey(t.key) ? ITEM_MAX : FREE.has(t.key) ? FREE_FLUID_MAX : FLUID_MAX;
+    const max = t.key === EMPTY_CELL ? EMPTY_CELL_MAX : !isFluidKey(t.key) ? ITEM_MAX : FREE.has(t.key) ? freeFluidMax : fluidMax;
     return t.amount > max ? [`${qty(pack, t.key, t.amount)} above ${amountText(max)}`] : [];
+  });
+}
+
+/**
+ * The fluid totals above the EC line's ceiling of their class, by bound, then fluid: a live build reports them and never
+ * fails on them (the controller's ruling on ruling 94's bounds).
+ */
+function fluidReports(pack: Pack, totals: readonly BomLine[]): string[] {
+  const fluids = totals.filter((t) => isFluidKey(t.key));
+  return ([['free', FREE_FLUID_MAX, true], ['other', FLUID_MAX, false]] as const).flatMap(([kind, max, free]) => {
+    const above = fluids.filter((t) => FREE.has(t.key) === free && t.amount > max).map((t) => qty(pack, t.key, t.amount));
+    return above.length === 0 ? [] : [`${kind} fluid above ${amountText(max)} L: ${above.join(', ')}`];
   });
 }
 
@@ -200,10 +220,11 @@ function buildFigures(pack: Pack, totals: readonly BomLine[], steps: readonly Bu
 
 /**
  * The order of a build's make steps against what each waits for (`BomMake.after`): its material waits, and for a machine
- * this line builds the machine's own key and structure parts (its machine waits).
+ * this line builds the machine's own key and structure parts (its machine waits); and each make whose step words a
+ * `first` machine (`FIRST`) otherwise than its `made` has it.
  */
 function waitOrder(pack: Pack, steps: readonly BuildStep[], makes: readonly BomMake[]): {
-  lateMaterial: string[]; lateMachine: Array<{ key: StuffKey; worded: boolean }>; machinePassFirst: number;
+  lateMaterial: string[]; lateMachine: string[]; firstWording: string[]; firstMachines: number;
 } {
   const byKey = partStepsByKey(steps);
   const index = new Map(steps.map((s, i) => [s.id, i]));
@@ -212,7 +233,8 @@ function waitOrder(pack: Pack, steps: readonly BuildStep[], makes: readonly BomM
     return s === undefined ? undefined : index.get(s.id);
   };
   const lateMaterial: string[] = [];
-  const lateMachine: Array<{ key: StuffKey; worded: boolean }> = [];
+  const lateMachine: string[] = [];
+  const firstWording: string[] = [];
   for (const m of makes) {
     const machine = m.made.machine;
     const unit = typeof machine === 'object' && machine.source === 'line' ? pack.machines.get(machine.mteId) : undefined;
@@ -226,10 +248,29 @@ function waitOrder(pack: Pack, steps: readonly BuildStep[], makes: readonly BomM
       else if (own.has(w)) machineLater ||= at > me;
       else if (at > me) lateMaterial.push(`${partName(pack, m.key)} comes before ${partName(pack, w)}`);
     }
-    if (machineLater) lateMachine.push({ key: m.key, worded: (steps[me] as BuildStep).text.includes(FIRST) });
+    if (machineLater) lateMachine.push(partName(pack, m.key));
+    const first = typeof machine === 'object' && machine.source === 'first';
+    if ((steps[me] as BuildStep).text.includes(FIRST) !== first) {
+      firstWording.push(`${partName(pack, m.key)}: ${first ? 'on a first machine, not worded so' : `worded "${FIRST}", on a ${typeof machine === 'object' ? machine.source : machine} machine`}`);
+    }
   }
-  const machinePassFirst = makes.filter((m) => typeof m.made.machine === 'object' && m.made.machine.source === 'first').length;
-  return { lateMaterial, lateMachine, machinePassFirst };
+  const firstMachines = makes.filter((m) => typeof m.made.machine === 'object' && m.made.machine.source === 'first').length;
+  return { lateMaterial, lateMachine, firstWording, firstMachines };
+}
+
+/**
+ * Each node of a build list whose machine is not its make's (spec §3.10): its row on the Materials page (`madeText`)
+ * would name another machine than its step.
+ */
+function machineDisagreements(pack: Pack, tree: readonly BomLine[], makes: readonly BomMake[]): string[] {
+  const byKey = new Map(makes.map((m) => [m.key, m]));
+  return tree.flatMap((l) => {
+    if (l.made === undefined) return [];
+    const m = byKey.get(l.key);
+    if (m === undefined) return [`${partName(pack, l.key)} is made, but has no make`];
+    const [node, job] = [JSON.stringify(l.made.machine), JSON.stringify(m.made.machine)];
+    return node === job ? [] : [`${partName(pack, l.key)}: ${node} in the build list, ${job} in its make`];
+  });
 }
 
 describe.skipIf(process.env.GTNH_LOCAL !== '1')("the build list of the user's Electronic Circuit line", () => {
@@ -295,12 +336,19 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')("the build list of the user's El
     expect(wrong).toEqual([]);
     const waits = waitOrder(pack, plan.buildSteps, makes);
     expect(waits.lateMaterial).toEqual([]);
-    expect(waits.lateMachine.filter((m) => !m.worded).map((m) => partName(pack, m.key))).toEqual([]);
+    // A job on a machine this line builds comes after that machine's own steps: where their waits form a cycle, the job
+    // the order breaks it at runs on another machine (`first`), decided where `made` is set, so its step and its row on the
+    // Materials page say the same.
+    expect(waits.lateMachine).toEqual([]);
+    expect(waits.firstWording).toEqual([]);
+    expect(machineDisagreements(pack, tree, makes)).toEqual([]);
   });
 
   it('falls back from a pin the build list cannot use', () => {
     const pinned = new Set(Object.keys(settings.recipeChoice));
-    expect(tree.filter((l) => pinned.has(l.key) && l.unmade !== undefined).map((l) => partName(pack, l.key))).toEqual([]);
+    const found = tree.filter((l) => pinned.has(l.key));
+    expect(found.length, 'the build list holds a pinned good (if not, the line changed: stop and report)').toBeGreaterThan(0);
+    expect(found.filter((l) => l.unmade !== undefined).map((l) => partName(pack, l.key))).toEqual([]);
   });
 
   it('prices stopped items honestly and never smelts them back', async () => {
@@ -340,7 +388,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')("the build list of the user's El
       const r = pack.recipeById.get(s.recipeId);
       return r !== undefined && recycling(r, pack);
     }).map((s) => s.id)).toEqual([]);
-  });
+  }, 60_000);   // a fresh machine-price walk (`itemPrices`), as the repo's other real-data async cases allow
 
   it('lists no fluid cell and names every part', () => {
     const keys = [...new Set([...tree, ...(plan.buildTotals ?? [])].map((l) => l.key))];
@@ -352,7 +400,9 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')("the build list of the user's El
   it('builds no hatch above what the structure needs', () => {
     const hatches = new Map<StuffKey, Machine[]>();
     for (const m of pack.machines.values()) if (m.kind === 'hatch') hatches.set(m.itemKey, [...(hatches.get(m.itemKey) ?? []), m]);
-    const above = [...new Set(tree.map((l) => l.key))].filter((key) => (hatches.get(key) ?? [])
+    const keys = [...new Set(tree.map((l) => l.key))];
+    expect(keys.filter((key) => hatches.has(key)).length, 'the build list holds a hatch (if not, the line changed: stop and report)').toBeGreaterThan(0);
+    const above = keys.filter((key) => (hatches.get(key) ?? [])
       .some((m) => !((m.tier ?? Infinity) <= plan.tier || minimalHatch(pack, m).mteId === m.mteId)));
     expect(above.map((key) => partName(pack, key))).toEqual([]);
     const everywhere = [...tree, ...(plan.buildTotals ?? [])].map((l) => l.key).concat(makes.flatMap((m) => [m.key, ...m.inputs.map((i) => i.key)]));
@@ -368,8 +418,8 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')("the build list of the user's El
     record('the Electronic Circuit line', [
       `planned in ${seconds.toFixed(2)} s on a warm pack (status ${plan.status})`,
       ...buildFigures(pack, totals, plan.buildSteps, plan.buildList),
-      `makes: ${makes.length}; machine waits later than their make: ${waits.lateMachine.length} (worded "${FIRST}": `
-        + `${waits.lateMachine.filter((m) => m.worded).length}); made with a first machine by the machine pass: ${waits.machinePassFirst}; `
+      `makes: ${makes.length}; machine waits later than their make: ${waits.lateMachine.length}; made on a first machine `
+        + `(worded "${FIRST}"; by the machine pass or a broken cycle of machine waits): ${waits.firstMachines}; `
         + `material waits later: ${waits.lateMaterial.length}; filled cells of free fluids or steam: ${totals.filter((t) => filled.has(t.key)).length}; `
         + `circuit stand-ins: ${standIns}`,
     ]);
@@ -451,13 +501,16 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1' || !existsSync(DB_COPY))("the bui
     db?.close();
   });
 
-  /** Every bound a build of project `p` breaks: `label` names the plan or the finished plan. */
+  /**
+   * Every bound a build of project `p` breaks: `label` names the plan or the finished plan. Its fluids are held to
+   * LIVE_FLUID_MAX, free or not; above the EC line's ceilings they are reported (`fluidReports`), not failed.
+   */
   const violations = (
     p: LiveProject, label: string, totals: readonly BomLine[], tree: readonly BomLine[], lines: readonly BomLine[], makes: readonly BomMake[],
   ): string[] => {
     const filled = filledContainers(pack);
     return [
-      ...ceilingViolations(pack, totals),
+      ...ceilingViolations(pack, totals, LIVE_FLUID_MAX, LIVE_FLUID_MAX),
       ...totals.filter((t) => filled.has(t.key) && !p.stops.has(t.key)).map((t) => `${qty(pack, t.key, t.amount)} is a filled container`),
       ...tree.filter((l) => itemIn(l.key, CIRCUIT_STAND_IN_IDS)).map((l) => `${partName(pack, l.key)} is a circuit stand-in in the build list`),
       ...leafViolations(pack, totals, p.leaf),
@@ -476,6 +529,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1' || !existsSync(DB_COPY))("the bui
           `project ${p.index}, ${label}:`,
           ...buildFigures(pack, totals, plan.buildSteps, plan.buildList),
           `Empty Cells: ${amountText(demand)} needed, ${amountText(made)} made, ${amountText(bought)} bought`,
+          `above the EC line's fluid ceilings (reported, not failed): ${fluidReports(pack, totals).join('; ') || 'none'}`,
         ].map((row, i) => (i === 0 ? row : `  ${row}`));
       };
       const f = p.finished;

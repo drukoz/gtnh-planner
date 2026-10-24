@@ -23,8 +23,9 @@ const MEMO_SIZE = 8;
 export interface CostModel { graph: CandidateGraph; costs: CostAnalysis; stopItems: StuffKey[] }
 
 /**
- * A line's prices: its basis, the cost model, the leaf oracle with stop items (never below `stopFloor`) and derived
- * leaves at their own chain's cost, and the line's candidate graph over that oracle (the graph `planLine` solves).
+ * A line's prices: its basis; the cost model; the leaf oracle, with stop items at their key override, else what making
+ * them on their own costs, never below `stopFloor`, and derived leaves at their own chain's cost; and the line's
+ * candidate graph over that oracle (the graph `planLine` solves).
  * `chains` holds what making each priced derived material and each stop item of that graph on its own runs
  * (`Standalone`, fix spec R7): the chain a bought one stands for (`RawInput.pricedVia`). `unbuildable` (plan 12) holds
  * the step recipes the graph was walked without (`linePricing`'s `opts`), which every other walk of the line leaves out

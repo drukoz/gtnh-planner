@@ -10,10 +10,11 @@ import { tierName } from '../../shared/gt/tiers.ts';
 import { isFluidKey, parseItemKey, type StuffKey } from '../../shared/keys.ts';
 import type { PlanIndex } from '../../shared/plan/balance.ts';
 import type { BomLine, LeafClass, Plan, PlanStep, RawInput, SourceInfo, StorageWhere } from '../../shared/types/plan.ts';
-import type { Alternative } from '../components/SwapRecipe.tsx';
 import { formatNumber, formatPercent, formatRate, withArticle } from '../format.ts';
 
 type BuildGroup = NonNullable<BomLine['group']>;
+/** A row of a swap list (`SwapRecipe`'s `Alternative`), on the shared type: this model imports no `.tsx`, so server tests can check it. */
+type Alternative = PlanStep['alternatives'][number];
 type Have = { total: number; reachable: number; where?: StorageWhere[] };
 
 /** The short word next to each base material: what kind of leaf of the plan it is. */

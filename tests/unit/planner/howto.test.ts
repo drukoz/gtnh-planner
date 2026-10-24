@@ -9,7 +9,7 @@ import { packFromSpec } from '../../helpers/pack-spec.ts';
 import { emptyContextForTest } from '../../helpers/plan-context.ts';
 import { planBasis } from '../../../src/server/planner/basis.ts';
 import { buildCandidates } from '../../../src/server/planner/candidates.ts';
-import { ownedForParts, partMachine, poolMakes, settleRecipes, type PoolGood } from '../../../src/server/planner/howto.ts';
+import { orderJobs, ownedForParts, partMachine, poolMakes, settleRecipes, type OrderJob, type PoolGood } from '../../../src/server/planner/howto.ts';
 import { PSEUDO_MACHINES } from '../../../src/shared/gt/tiers.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import type { StuffKey } from '../../../src/shared/keys.ts';
@@ -102,5 +102,39 @@ describe('poolMakes', () => {
     expect(Object.fromEntries(pooled.runs)).toEqual({ a: 1, b: 1 });
     expect(pooled.leaves.get('a')).toBe(1);
     expect(pooled.backEdges).toEqual([['b', 'a']]);
+  });
+});
+
+describe('orderJobs', () => {
+  /** A job of the order: no machine waits unless given. */
+  const job = (key: string, machineKey: string, name: string, waits: string[] = [], machineWaits: string[] = []): OrderJob =>
+    ({ key, machineKey, name, waits, machineWaits });
+
+  it('takes the inputs first, then the machine just used, then the smallest by machine, name and key', () => {
+    // Once the wire is drawn, the fine wire (Wiremill) and the board (Assembler) are both ready: the wiremill goes on.
+    const jobs = [job('panel', 'crafting table', 'Control Panel', ['fine', 'board']), job('board', 'Basic Assembler', 'Circuit Board', ['wire']),
+      job('fine', 'Basic Wiremill', 'Fine Wire', ['wire']), job('wire', 'Basic Wiremill', 'Copper Wire', ['ingot'])];
+    // `ingot` is no job: it holds nothing up
+    expect(orderJobs(jobs)).toEqual({ order: ['wire', 'fine', 'board', 'panel'], first: new Set() });
+  });
+
+  it('breaks a cycle through the line\'s machines at the smallest job that waits only for its machine', () => {
+    // The bender is crafted from wires, the wiremill from foils, the wires drawn in the wiremill and the foils pressed in the
+    // bender that the line builds: nothing is ready. The bender's and the wiremill's crafts wait for a material; of the two
+    // jobs that wait only for their machine, the foil's sorts first (Bending Machine before Wiremill), so it drops that wait.
+    const jobs = [
+      job('machine:101@0', 'crafting table', 'Basic Bending Machine', ['wire']), job('machine:111@0', 'crafting table', 'Basic Wiremill', ['foil']),
+      job('wire', 'Basic Wiremill', '2x Cupronickel Wire', ['machine:111@0', 'ingot'], ['machine:111@0']),
+      job('foil', 'Basic Bending Machine', 'Mica Insulator Foil', ['machine:101@0'], ['machine:101@0']), job('ingot', 'Basic Alloy Smelter', 'Cupronickel Ingot'),
+    ];
+    expect(orderJobs(jobs)).toEqual({ order: ['ingot', 'foil', 'machine:111@0', 'wire', 'machine:101@0'], first: new Set(['foil']) });
+    // Without the foil's machine wait (as the breakdown passes its make once it is `first`) the order is the same, with no break.
+    const broken = jobs.map((j) => (j.key === 'foil' ? job('foil', 'Basic Bending Machine', 'Mica Insulator Foil') : j));
+    expect(orderJobs(broken)).toEqual({ order: ['ingot', 'foil', 'machine:111@0', 'wire', 'machine:101@0'], first: new Set() });
+  });
+
+  it('ends a cycle of material waits at the smallest job, with no machine to send elsewhere', () => {
+    const jobs = [job('coil', 'Basic Assembler', 'Coil', ['wire']), job('wire', 'Basic Wiremill', 'Wire', ['coil'])];
+    expect(orderJobs(jobs)).toEqual({ order: ['coil', 'wire'], first: new Set() });
   });
 });

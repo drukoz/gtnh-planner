@@ -13,6 +13,7 @@ import { PROGRAMMED_CIRCUIT_ID } from '../pack/recipes.ts';
 import { cleanroomMachine, partName, stepOneOffs, stepProductName, stepTools, type Bom, type BomMake } from './bom.ts';
 import { structureParts } from './build-cost.ts';
 import type { HeldAvoid } from './candidates.ts';
+import { orderJobs, type OrderJob } from './howto.ts';
 
 /** The gather step names this many base materials. */
 const GATHER_SHOWN = 8;
@@ -148,16 +149,13 @@ function testText(pack: Pack, settings: PlanSettings, target: StuffKey, totalSec
   return `Run the line and check it makes ${amount} ${pack.nameOf(target)} per ${PER_WORD[settings.per]}`;
 }
 
-function byString(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0;
-}
-
 /**
  * The build steps of the build list's parts (architecture §11 entry 41 (5), the copy table of add-on 14's Task 5): the
  * gather step for the totals that are not unmade, then one step per part — every make, every unmade total, every other
  * top-level line (a key's first top-level line carries its step and id) — in Kahn's order of their waits (`BomMake.after`),
- * batched by machine; a cycle through machines this line builds drops the machine waits of its smallest node and words
- * that job's machine as `first`.
+ * batched by machine (`orderJobs`). Each job is worded by its `made`, as the build list words it: the breakdown breaks a
+ * cycle through machines this line builds where `made` is set (`expandWith`), so a caller's own cycle is broken for the
+ * order alone. The cleanroom line's own step, made or not, says to build it around the steps that need it.
  */
 export function partSteps(
   pack: Pack, input: { steps: readonly PlanStep[]; bom: { lines: BomLine[]; totals: BomLine[]; makes?: readonly BomMake[] }; tier: number; avoid?: HeldAvoid },
@@ -188,10 +186,12 @@ export function partSteps(
     return toolsOnly.has(key) ? ' (a tool for hand-crafting)' : ' (stays in the machine)';
   };
   const idOf = (key: StuffKey): string => (firstTop.has(key) ? `craft:${key}` : `make:${key}`);
-  type Node = {
-    key: StuffKey; id: string; kind: BuildStep['kind']; machineKey: string; name: string;
-    waits: Set<StuffKey>; machineWaits: Set<StuffKey>; text(first: boolean): string;
+  /** The cleanroom line's own step, made or not, says where it goes (the copy table's last row). */
+  const roomHint = (key: StuffKey): string => {
+    const top = firstTop.get(key);
+    return key === roomKey && top !== undefined && (top.group ?? 'machines') === 'machines' ? '; build it around the steps that need it' : '';
   };
+  type Node = OrderJob & { id: string; kind: BuildStep['kind']; text(): string };
   const nodes = new Map<StuffKey, Node>();
   for (const m of bom.makes ?? []) {
     const machine = m.made.machine;
@@ -199,14 +199,14 @@ export function partSteps(
     const what = `${qty(m.key, m.amount)}${suffix(m.key)}`;
     const from = m.inputs.length === 0 ? '' : ` from ${m.inputs.map((i) => qty(i.key, i.amount)).join(', ')}`;
     const held = (m.made.nonConsumed ?? []).map((k) => partName(pack, k));
-    const machineWaits = new Set<StuffKey>();
+    const machineWaits: StuffKey[] = [];
     if (typeof machine === 'object' && machine.source === 'line') {
       const own = pack.machines.get(machine.mteId);
-      if (own !== undefined) for (const k of [own.itemKey, ...structureParts(pack, own).keys()]) if (m.after.includes(k)) machineWaits.add(k);
+      if (own !== undefined) for (const k of [own.itemKey, ...structureParts(pack, own).keys()]) if (m.after.includes(k)) machineWaits.push(k);
     }
-    const text = (first: boolean): string => {
-      if (machine === 'crafting table') return `Craft ${what}${from} at a crafting table${held.length > 0 ? ` (tools: ${held.join(', ')})` : ''}`;
-      const source = first ? 'first' : machine.source;
+    const text = (): string => {
+      if (machine === 'crafting table') return `Craft ${what}${from} at a crafting table${held.length > 0 ? ` (tools: ${held.join(', ')})` : ''}${roomHint(m.key)}`;
+      const { source } = machine;
       const where = source === 'owned' ? `your ${machine.name}` : source === 'line' ? `the ${machine.name} this line builds` : withArticle(machine.name);
       const config: string[] = [];
       if (m.made.circuit !== undefined) config.push(`circuit ${m.made.circuit}`);
@@ -215,20 +215,20 @@ export function partSteps(
       if (source === 'line') config.push('place and power it first');
       if (source === 'new') config.push(`you have none and this line builds none: build one, or import the ${name}`);
       if (source === 'first') config.push(`the one this line builds needs it first: use another one, or import the ${name}`);
-      return `Make ${what}${from} in ${where}${config.length > 0 ? ` (${config.join('; ')})` : ''}`;
+      return `Make ${what}${from} in ${where}${config.length > 0 ? ` (${config.join('; ')})` : ''}${roomHint(m.key)}`;
     };
     nodes.set(m.key, {
       key: m.key, id: idOf(m.key), kind: machine === 'crafting table' ? 'craft' : 'make',
-      machineKey: machine === 'crafting table' ? 'crafting table' : machine.name, name, waits: new Set(m.after), machineWaits, text,
+      machineKey: machine === 'crafting table' ? 'crafting table' : machine.name, name, waits: m.after, machineWaits, text,
     });
   }
   for (const t of bom.totals) {
     if (t.unmade === undefined || nodes.has(t.key)) continue;
     const what = `${qty(t.key, t.amount)}${suffix(t.key)}`;
-    const text = t.unmade === 'own-chain'
+    const text = (t.unmade === 'own-chain'
       ? `Get ${what}: every recipe for it here needs a part of its own chain, so swap the recipe of a part it goes into, or import it (mark it "we already make this")`
-      : `Get ${what}: nothing at ${tierName(tier)} can make it, so import it (mark it "we already make this")`;
-    nodes.set(t.key, { key: t.key, id: idOf(t.key), kind: 'gather', machineKey: '', name: partName(pack, t.key), waits: new Set(), machineWaits: new Set(), text: () => text });
+      : `Get ${what}: nothing at ${tierName(tier)} can make it, so import it (mark it "we already make this")`) + roomHint(t.key);
+    nodes.set(t.key, { key: t.key, id: idOf(t.key), kind: 'gather', machineKey: '', name: partName(pack, t.key), waits: [], machineWaits: [], text: () => text });
   }
   for (const l of firstTop.values()) {
     if (nodes.has(l.key)) continue;
@@ -238,29 +238,11 @@ export function partSteps(
       : group === 'one-off' ? `Make ${amount} (stays in the machine)`
       : group === 'machines' && l.key === roomKey ? `Build a cleanroom (${partName(pack, l.key)}) around the steps that need it`
       : `Craft ${amount}`;
-    nodes.set(l.key, { key: l.key, id: `craft:${l.key}`, kind: 'craft', machineKey: '', name: partName(pack, l.key), waits: new Set(), machineWaits: new Set(), text: () => text });
+    nodes.set(l.key, { key: l.key, id: `craft:${l.key}`, kind: 'craft', machineKey: '', name: partName(pack, l.key), waits: [], machineWaits: [], text: () => text });
   }
-  for (const n of nodes.values()) {
-    for (const w of [...n.waits]) if (!nodes.has(w)) n.waits.delete(w);
-    for (const w of [...n.machineWaits]) if (!nodes.has(w)) n.machineWaits.delete(w);
-  }
-  const order = (a: Node, b: Node): number => byString(a.machineKey, b.machineKey) || byString(a.name, b.name) || byString(a.key, b.key);
-  const done = new Set<StuffKey>();
-  let last: Node | undefined;
-  while (done.size < nodes.size) {
-    const left = [...nodes.values()].filter((n) => !done.has(n.key)).sort(order);
-    const ready = left.filter((n) => [...n.waits].every((w) => done.has(w)));
-    let pick = ready.find((n) => last !== undefined && n.machineKey === last.machineKey) ?? ready[0];
-    let first = false;
-    if (pick === undefined) {
-      pick = left.find((n) => [...n.waits].filter((w) => !done.has(w)).every((w) => n.machineWaits.has(w)));
-      if (pick !== undefined) first = true;
-      else pick = left[0] as Node;
-      pick.waits.clear();
-    }
-    done.add(pick.key);
-    last = pick;
-    out.push({ id: pick.id, kind: pick.kind, text: pick.text(first) });
+  for (const key of orderJobs([...nodes.values()]).order) {
+    const n = nodes.get(key) as Node;
+    out.push({ id: n.id, kind: n.kind, text: n.text() });
   }
   return out;
 }

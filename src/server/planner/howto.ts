@@ -1,7 +1,8 @@
 // How the build list's parts are made (spec §3.10, architecture §11 entry 41; add-on 14): one recipe per good, settled
 // cheapest first over the breakdown's recipe book (`settleRecipes`), with why a good the book cannot settle stays unmade
-// (`unmadeCause`); the machine a one-off job of each recipe runs on (`partMachine`, over `ownedForParts`); and the pooled
-// make plan of a whole build list (`poolMakes`), so whole runs are rounded once per good, not once per part needing it.
+// (`unmadeCause`); the machine a one-off job of each recipe runs on (`partMachine`, over `ownedForParts`); the pooled
+// make plan of a whole build list (`poolMakes`), so whole runs are rounded once per good, not once per part needing it;
+// and the order of its jobs (`orderJobs`), which also says where a cycle of machine waits is broken.
 
 import { PSEUDO_MACHINES, V } from '../../shared/gt/tiers.ts';
 import type { StuffKey } from '../../shared/keys.ts';
@@ -380,4 +381,55 @@ export function poolMakes(tops: ReadonlyArray<{ key: StuffKey; amount: number }>
   const rounded = (map: Map<StuffKey, number>): Map<StuffKey, number> => new Map([...map].map(([k, v]) => [k, round9(v)]));
   backEdges.sort(([a, b], [c, d]) => byString(a, c) || byString(b, d));
   return { runs: rounded(pooled.runs), demand: rounded(pooled.demand), leaves: rounded(pooled.leaves), shares, backEdges };
+}
+
+/** A part step of a build in the terms of its order (`orderJobs`). */
+export interface OrderJob {
+  key: StuffKey;
+  /**
+   * The order sorts by it, then by `name`, then by `key` (plain string order), and batches by it: a job's machine name,
+   * `crafting table` for a craft, `''` for a part no job makes.
+   */
+  machineKey: string;
+  name: string;
+  /** The keys it waits for (`BomMake.after`); a key that is no job of the order holds nothing up. */
+  waits: readonly StuffKey[];
+  /** Those of `waits` that are its machine's: a `line` machine's own key and structure parts. */
+  machineWaits: readonly StuffKey[];
+}
+
+/**
+ * The order of a build's part steps (architecture §11 entry 41 (5); add-on 14 Task 5's order): Kahn's walk over the jobs'
+ * waits, taking of the ready jobs the one with the machine key of the job just taken, else the smallest by machine key,
+ * name and key. When nothing is ready while jobs remain — a cycle through machines this line builds — the smallest
+ * remaining job whose unmet waits are all machine waits drops them: another machine of its type makes it, as the one
+ * this line builds needs it first (`first`); when none qualifies — a cycle of material waits, which the breakdown never
+ * makes, as `BomMake.after` leaves out back edges — the smallest remaining job drops all its waits. Every round takes one
+ * job, so the walk always ends. `expandWith` runs it over its makes and gives each job of `first` a `first` machine where
+ * `made` is set, so the build list and the steps say the same; `partSteps` runs it for the order of the steps.
+ */
+export function orderJobs(jobs: readonly OrderJob[]): { order: StuffKey[]; first: Set<StuffKey> } {
+  const byKey = new Map<StuffKey, OrderJob>();
+  for (const j of jobs) if (!byKey.has(j.key)) byKey.set(j.key, j);
+  const waits = new Map([...byKey.values()].map((j) => [j.key, j.waits.filter((w) => byKey.has(w))]));
+  const sorted = [...byKey.values()].sort((a, b) => byString(a.machineKey, b.machineKey) || byString(a.name, b.name) || byString(a.key, b.key));
+  const done = new Set<StuffKey>();
+  const order: StuffKey[] = [];
+  const first = new Set<StuffKey>();
+  const unmet = (j: OrderJob): StuffKey[] => (waits.get(j.key) as StuffKey[]).filter((w) => !done.has(w));
+  let last: OrderJob | undefined;
+  while (order.length < sorted.length) {
+    const left = sorted.filter((j) => !done.has(j.key));
+    const ready = left.filter((j) => unmet(j).length === 0);
+    let pick = ready.find((j) => last !== undefined && j.machineKey === last.machineKey) ?? ready[0];
+    if (pick === undefined) {
+      pick = left.find((j) => unmet(j).every((w) => j.machineWaits.includes(w)));
+      if (pick !== undefined) first.add(pick.key);
+      else pick = left[0] as OrderJob;
+    }
+    done.add(pick.key);
+    order.push(pick.key);
+    last = pick;
+  }
+  return { order, first };
 }

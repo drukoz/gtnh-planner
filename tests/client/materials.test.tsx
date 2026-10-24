@@ -283,6 +283,7 @@ describe('how the build parts are made', () => {
     const html = view(swapping);
     const made = row(html, 'build:t:coil@0');
     expect(made).toContain(`<span class="mat-made muted small">${coilText}</span>`);
+    expect(made).toContain('>16× Cupronickel Coil Block<');
     expect(made.indexOf('>16× Cupronickel Coil Block<')).toBeLessThan(made.indexOf('mat-made'));   // after its why
     expect(made).toContain('<details class="mat-swap">');
     expect(made).toContain('<summary>Swap recipe</summary>');

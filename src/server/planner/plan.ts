@@ -569,7 +569,8 @@ function viaOf(pack: Pack, graph: CandidateGraph, chain: Standalone | undefined)
 /**
  * What one unit of each option of `keys` costs (fix spec R9; controller ruling: every option, also those the line's walk
  * left out): one the group cannot get here (`obtainableIn`) at its plain price, with why (`unobtainableReason`); an
- * option the line would buy (its leaf oracle) at its cost-model cost, else its leaf cost, in 0 steps; one the cost
+ * option the line would buy (its leaf oracle) at its cost-model cost, else its leaf cost — a stopped one always at its
+ * leaf cost, what the line buys it at (architecture §11 entry 41 (6)) — in 0 steps; one the cost
  * model's graph prices at that cost, with the recipes of making it on its own there (`standaloneCosts`, never through
  * the target); one that graph never reached (the walk found it far dearer) priced the same way over the graph walked
  * from those options alone (`aloneGraph`), else at its plain price. Those chains ignore the avoid list: one that cannot do
@@ -593,7 +594,8 @@ async function optionPrices(
     if (!obtainable.has(key)) {
       prices.set(key, { cost: basis.prices.price(key), steps: 0, via: [], unusable: [obtainable.why(key) ?? 'you cannot get it here'] });
     } else if (d.buyable) {
-      prices.set(key, { cost: Number.isFinite(cost) ? cost : d.cost, steps: 0, via: [] });
+      // A stopped option costs what the line buys it at (architecture §11 entry 41 (6)), not the cost model's price.
+      prices.set(key, { cost: d.leafClass !== 'stop' && Number.isFinite(cost) ? cost : d.cost, steps: 0, via: [] });
     } else if (Number.isFinite(cost)) {
       inModel.push(key);
     } else {

@@ -66,6 +66,26 @@ describe('"we already make this" prices', () => {
     expect(overridden.cost(ROD)).toBe(0.25);
   });
 
+  it('shows a stopped option of a slot at what the line buys it for', async () => {
+    // The tube takes either rod in one slot. The stopped Steel Rod costs its key override, not the cost model's price of
+    // extruding it (1): the step panel shows each option at what the line pays for it, so pinning one costs what it shows.
+    const spec = rodSpec();
+    const tube = spec.recipes?.find((r) => r.id === 'tube');
+    if (tube === undefined) throw new Error('rodSpec changed: no tube');
+    tube.in = [{ any: [[ROD, 1], [FANCY, 1]] }, ['t:steel_casing@0', 1]];
+    const either = packFromSpec(spec);
+    const options = async (x: PlanSettings) => (await planLine(either, x, emptyContext())).steps.find((st) => st.recipeId === 'tube')?.options;
+    // At 0.25 the line buys the rod, and it shows so.
+    expect(await options({ ...s, costOverrides: { [ROD]: 0.25 } })).toMatchObject([{ slot: 0, choices: [
+      { key: ROD, rawPerRun: 0.25, steps: 0, share: 1 }, { key: FANCY, rawPerRun: 0.5, steps: 0, share: 0 }] }]);
+    // At 3 it takes the Fancy Steel Rod, and the Steel Rod shows 3, what a pin on it costs.
+    expect(await options({ ...s, costOverrides: { [ROD]: 3 } })).toMatchObject([{ slot: 0, choices: [
+      { key: FANCY, rawPerRun: 0.5, steps: 0, share: 1 }, { key: ROD, rawPerRun: 3, steps: 0, share: 0 }] }]);
+    const pinned = (await planLine(either, { ...s, costOverrides: { [ROD]: 3 }, optionChoice: { 'tube#0': ROD } }, emptyContext())).rawInputs
+      .find((r) => r.key === ROD);
+    expectNear(pinned === undefined ? undefined : pinned.cost / pinned.perSecond, 3, 1e-6);
+  });
+
   it('never smelts a stopped part back into its own metal', async () => {
     // Per tube the alloy route takes half an ingot, 1 raw, beside the rod; with honest prices alone, recycling a second
     // rod into that half ingot would cost the same 1, a tie that fewer recipes break.
