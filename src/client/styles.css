@@ -67,17 +67,18 @@ h2 { font-size: 1.2rem; margin: 0 0 var(--gap); }
  * groups come before .muted and .error, so those two still win on an element that is both (.banner.error).
  */
 .card, .modal, .settings-section, .flow-panel, .conn-panel, .tab-panel, .note, .note-add, .materials-section, .line-panel, .found-panel,
-.view3d-box {
+.view3d-box, .compare-card {
   --ink: #303030; --ink-muted: #4a4a4a; --ink-title: #404040; --ink-link: #1a3fa0;
   --ink-error: #aa0000; --ink-ok: #1e5a1e; --ink-warn: #6a4000; --ink-focus: #1b1b1b;
   color: var(--ink);
 }
 /* Ink on a dark box (a chat box, a screen, a chip): light text on near black. It sets the focus ink too, so a dark box inside a
-   panel does not take the panel's dark ring. */
+   panel does not take the panel's dark ring. The Compare card's notes are named by their place with the `p` in `:where()`, which keeps
+   them at the specificity of one class, so .muted and .error still win on them. */
 .banner, .plan-banner, .what-changed, .delete-confirm, .connection, .badge, .chip, .avoid-chip,
 .search-results, .mat-unlock, .flow-issues, .flow-infeasible,
 .flow-panel .ports, .flow-panel .oc-lines, .flow-panel .warnings, .flow-panel .sources, .flow-panel .used-by, .flow-panel .also-made,
-.view3d-warnings {
+.view3d-warnings, .compare-card > :where(p), .compare-column > :where(p) {
   --ink: #ffffff; --ink-muted: #aaaaaa; --ink-title: #ffff55; --ink-link: #ffff55;
   --ink-error: #ff5555; --ink-ok: #55ff55; --ink-warn: #ffaa00; --ink-focus: #ffff55;
   color: var(--ink);
@@ -376,22 +377,40 @@ button.banner-chip { display: inline-flex; align-items: center; gap: 6px; min-he
 /* What the plan costs to run and to build (plan 12), above the banner. It is a line on the stone: the ink of the page, with
    figures that line up. */
 .plan-cost { margin: 0 0 var(--gap); color: var(--ink); font-family: var(--font-ui); font-size: 14px; font-variant-numeric: tabular-nums; }
-/* The Compare card (add-on 17): the three planning modes side by side, under the banner. */
-.compare-card { margin: 0 0 var(--gap); }
-section.compare-card { background: var(--panel); border: 1px solid var(--panel-lo); border-radius: 0; padding: 10px 14px; }
-.compare-card > p { margin: 6px 0 0; }
+/*
+ * The Compare card (add-on 17): the three planning modes side by side, under the plan banner. Its button is a small button in the
+ * project head, yellow while the card is open, so a closed card takes no room. The card is a panel with a pixel title; each mode is a
+ * column set into it as an inset frame (the panel's bevel inverted), its figures readout tiles on a screen, its notes (what it avoids,
+ * adds and makes for other projects, that it is still planning or why it failed) chat boxes in the light ink. The mode the project
+ * plans in has a black edge with a yellow ring inside it, the frame of a selected slot, besides its "In use" button. The card rises in
+ * as the banners do, once.
+ */
+.compare-toggle[aria-expanded='true'] { color: var(--accent); text-shadow: 2px 2px 0 #3f3f15; }
+.compare-card {
+  display: flex; flex-direction: column; gap: 8px; margin: 0 0 var(--gap); padding: 12px;
+  background: var(--panel); border: 2px solid var(--outline); border-radius: 0; box-shadow: var(--bevel-panel);
+  animation: rise-in var(--dur-base) var(--ease-out);
+}
 .compare-head { display: flex; align-items: center; gap: 8px; }
-.compare-head h3 { flex: 1; margin: 0; font-size: 1rem; }
-.compare-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-top: 8px; }
-.compare-column { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--panel-lo); border-radius: 0; min-width: 0; }
-.compare-column.current { border-color: var(--accent); }
-.compare-column h4 { margin: 0; font-size: 0.95rem; }
-.compare-column p { margin: 0; overflow-wrap: anywhere; }
+.compare-head > h3 { flex: 1; min-width: 0; margin: 0; font: 600 16px/1.3 var(--font-pixel); color: var(--ink-title); }
+.compare-card > p, .compare-column > p {
+  margin: 0; padding: 4px 8px; background: var(--chat); border: 2px solid var(--outline); border-radius: 0; overflow-wrap: anywhere;
+}
+.compare-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.compare-column {
+  display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 8px 10px;
+  border: 2px solid; border-color: var(--panel-lo) var(--panel-hi) var(--panel-hi) var(--panel-lo);
+}
+.compare-column.current { border-color: var(--outline); box-shadow: inset 0 0 0 2px var(--accent); }
+.compare-column > h4 { margin: 0; font: 600 15px/1.3 var(--font-pixel); color: var(--ink-title); }
 .compare-column > button { align-self: flex-start; margin-top: auto; }
-.compare-rows { margin: 0; display: flex; flex-direction: column; gap: 2px; font-size: 0.9rem; }
-.compare-row { display: flex; justify-content: space-between; gap: 10px; }
-.compare-row dt { color: var(--ink-muted); }
-.compare-row dd { margin: 0; font-variant-numeric: tabular-nums; }
+.compare-rows { margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }
+.compare-row {
+  display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 6px 8px;
+  background: var(--screen); border-radius: 0; box-shadow: var(--bevel-well);
+}
+.compare-row > dt { color: var(--screen-muted); font-size: 11px; line-height: 1.3; overflow-wrap: anywhere; }
+.compare-row > dd { margin: 0; color: var(--screen-text); font: 24px/1.1 var(--font-pixel); overflow-wrap: anywhere; }
 
 /* What changed with the last settings change (fix spec §6.4), above the flow diagram and the materials: a chat box. */
 .what-changed {
@@ -564,10 +583,11 @@ details.settings-section > summary > .muted {
 .amount-input { width: 9em; }
 .settings-target { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .settings-target-name { flex: 1; min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
-/* "Plan for" (add-on 17): each mode's radio with what it counts below it; the farm kinds' own fields indented under them. */
+/* "Plan for" (add-on 17): each mode's radio with what it counts below it, under the text of its label (the 16px well and the 8px gap).
+   A farm kind's own fields hang under its tick on a grey line down from the well's middle, indented as far as the hints. */
 .objective-choice { display: flex; flex-direction: column; gap: 1px; }
 .settings-section p.choice-hint { margin: 0 0 2px 24px; }
-.farm-fields { display: flex; flex-direction: column; gap: 8px; padding-left: 24px; }
+.farm-fields { display: flex; flex-direction: column; gap: 8px; margin-left: 7px; padding-left: 15px; border-left: 2px solid var(--panel-lo); }
 .stat-input { width: 4em; padding: 3px 6px; }
 
 .item-search { display: flex; flex-direction: column; gap: 4px; }
@@ -884,8 +904,9 @@ button.mat-toggle[aria-expanded='true']::before, .mat-have[open] summary::before
   transform: rotate(90deg);
 }
 .mat-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-/* A byproduct another project takes or is credited for (add-on 17), under that byproduct. */
-.mat-taken { padding-left: 28px; color: var(--ink-muted); }
+/* A byproduct another project takes or is credited for (add-on 17), under that byproduct, its text under the byproduct's name: past the
+   24px slot of the icon and the row's 8px gap. */
+.mat-taken { padding-left: 32px; color: var(--ink-muted); }
 .mat-amount { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
 /* The stock and the why of a row stay inline text that opens: the caret above sits before the line, in place of the browser's own
    marker, which is dropped. Not the full-width button of a settings section. */
@@ -1369,4 +1390,7 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
   :where(input[type=search])::-webkit-search-cancel-button { appearance: auto; background: none; }
   .tabs [role='tab'][aria-selected='true'] { text-decoration: underline; }
   .search-hit.active, .search-hit[aria-selected='true'], .map-list > li[aria-current='true'] > .map-row-button { outline: 2px solid Highlight; outline-offset: -2px; }
+  /* add-on 17: the open Compare card's button, and the mode the project plans in, whose yellow is gone in a contrast theme */
+  .compare-toggle[aria-expanded='true'] { text-decoration: underline; }
+  .compare-column.current { outline: 2px solid Highlight; outline-offset: -4px; }
 }

@@ -3,10 +3,10 @@
 // "Use this mode".
 
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import { isValidElement, type ReactElement, type ReactNode } from 'react';
+import { createRef, isValidElement, type ReactElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { compareColumns, compareKeys } from '../../src/client/views/compare-model.ts';
-import { CompareCardView, compareLoader, type CompareState } from '../../src/client/views/CompareCard.tsx';
+import { CompareCardView, CompareToggle, compareLoader, type CompareState } from '../../src/client/views/CompareCard.tsx';
 import { objectivePatch } from '../../src/client/views/settings-model.ts';
 import { listenProjectEvents, openProjectEvents, type ProjectEventHandlers } from '../../src/client/api/sse.ts';
 import { defaultSettings } from '../../src/shared/project/apply-op.ts';
@@ -43,7 +43,7 @@ const CLOSED: CompareState = { open: false, result: null, error: null, loading: 
 type ViewProps = Parameters<typeof CompareCardView>[0];
 /** The card's props around `state`: the project's default settings, no-op handlers unless given. */
 const props = (state: CompareState, p: Partial<ViewProps> = {}): ViewProps =>
-  ({ state, settings: defaultSettings(), send: () => {}, nameOf, onOpen: () => {}, onClose: () => {}, ...p });
+  ({ state, settings: defaultSettings(), send: () => {}, nameOf, onClose: () => {}, ...p });
 const markup = (state: CompareState, p: Partial<ViewProps> = {}): string => renderToStaticMarkup(<CompareCardView {...props(state, p)} />);
 
 /** A `fetch` that answers every request with `body` as JSON. */
@@ -180,9 +180,14 @@ describe('compare card', () => {
   });
 
   it('shows a button while closed, three columns once open, the mode in use disabled and a mode still planning', () => {
-    const closed = markup(CLOSED);
-    expect(closed).toMatch(/<button[^>]*>Compare modes<\/button>/);
-    expect(closed).not.toContain('Raw per hour');
+    // the button is the project head's (the Machine GUI restyle moved it there, so a closed card takes no room): it names the card it
+    // controls and says whether it is open, and the closed card draws nothing at all
+    expect(renderToStaticMarkup(<CompareToggle open={false} onToggle={() => {}} />)).toBe(
+      '<button type="button" class="small compare-toggle" aria-expanded="false" aria-controls="compare-card">Compare modes</button>',
+    );
+    expect(renderToStaticMarkup(<CompareToggle open onToggle={() => {}} />)).toContain('aria-expanded="true"');
+    expect(markup(CLOSED)).toBe('');
+    expect(markup(open(RESULT))).toContain('<section class="compare-card" id="compare-card" aria-labelledby="compare-title">');
     expect(text(markup(open(null, { loading: true })))).toContain('Planning the three modes…');
     const html = markup(open(RESULT));
     const columns = [...html.matchAll(/<section[^>]*data-objective="([^"]*)"[^>]*>(.*?)<\/section>/gs)].map((m) => [m[1], m[2] ?? '']);
@@ -210,11 +215,13 @@ describe('compare card', () => {
       (use!.props.onClick as () => void)();
       expect(send).toHaveBeenCalledWith([{ op: 'settings', patch: objectivePatch('multi-output', settings) }]);
     }
-    const onOpen = vi.fn();
+    const onToggle = vi.fn();
     const onClose = vi.fn();
-    const [openButton] = findAll(CompareCardView(props(CLOSED, { onOpen })), (e) => e.type === 'button');
+    const ref = createRef<HTMLButtonElement>();
+    const [openButton] = findAll(CompareToggle({ open: false, onToggle, ref }), (e) => e.type === 'button');
     (openButton!.props.onClick as () => void)();
-    expect(onOpen).toHaveBeenCalled();
+    expect(onToggle).toHaveBeenCalled();
+    expect(openButton!.props.ref).toBe(ref);                                   // the page's, which the card's Close gives the focus back to
     const [closeButton] = findAll(CompareCardView(props(open(RESULT), { onClose })), (e) => e.type === 'button' && e.props.children === 'Close');
     (closeButton!.props.onClick as () => void)();
     expect(onClose).toHaveBeenCalled();

@@ -1,7 +1,7 @@
 // One project (spec §3.11): its name (anyone can rename it), whether this tab is live, what the plan warns about or
 // needs unlocked and what it uses beyond its line (farms, other projects' surplus), the Compare card of its planning
-// modes (add-on 17), the settings panel with the in-game projector panel under it (§3.13) and, beside them, the project
-// tabs. The tab follows the URL hash, so links elsewhere
+// modes, which the head's "Compare modes" button opens (add-on 17), the settings panel with the in-game projector panel
+// under it (§3.13) and, beside them, the project tabs. The tab follows the URL hash, so links elsewhere
 // (a build step's map pin sets `#map`) switch it too. Anyone can delete the project; once it is deleted, here or
 // elsewhere, the page goes back to the project list, which says so (§11.24). Below 900 px the settings panel is a drawer
 // that the Settings button in the head slides in over a dimmed page (design spec §7a), a layer of its own while it is
@@ -12,7 +12,7 @@ import type { StuffKey } from '../../shared/keys.ts';
 import { indexPlan, issueText, type PlanIssue, type PlanIssueCode } from '../../shared/plan/balance.ts';
 import type { PackInfo } from '../../shared/types/api.ts';
 import type { Plan, PlanSettings, PlanWarning } from '../../shared/types/plan.ts';
-import type { Project, ProjectOp } from '../../shared/types/project.ts';
+import type { ProjectOp } from '../../shared/types/project.ts';
 import { apiGet, messageOf } from '../api/client.ts';
 import { listenProjectEvents } from '../api/sse.ts';
 import { DeleteProject } from '../components/DeleteProject.tsx';
@@ -23,7 +23,7 @@ import { leaveDeletedProject } from '../state/deleted-notice.ts';
 import { setFlowFocus, showInFlow } from '../state/flow-focus.ts';
 import { useName } from '../state/name.ts';
 import { useProject } from '../state/project-store.ts';
-import { CompareCard } from './CompareCard.tsx';
+import { CompareCard, CompareToggle, useCompare } from './CompareCard.tsx';
 import { ISSUE_ORDER, problemId } from './flow-model.ts';
 import { sourceNotes } from './materials-model.ts';
 import { costLine } from './plan-cost.ts';
@@ -212,18 +212,6 @@ function useProjectEventCount(id: string): number {
   return count;
 }
 
-/**
- * The Compare card under the plan banner (add-on 17), once the project makes something: told of every `plan` and
- * `compare` event of the project (its `rev`), so an open card fetches the compare again; goods named by the plan.
- */
-function ProjectCompare(props: { project: Project; plan: Plan | null; send: (ops: ProjectOp[]) => void }): ReactElement | null {
-  const { project, plan, send } = props;
-  const rev = useProjectEventCount(project.id);
-  if (project.settings.target === null) return null;
-  const names = plan?.names ?? {};
-  return <CompareCard projectId={project.id} rev={rev} settings={project.settings} send={send} nameOf={(key) => names[key] ?? key} />;
-}
-
 /** The pack's dimensions, capabilities and recipe groups for the settings panel, fetched once per page. */
 function usePackInfo(): { info: PackInfo | null; error: string | null } {
   const [state, setState] = useState<{ info: PackInfo | null; error: string | null }>({ info: null, error: null });
@@ -321,6 +309,20 @@ export function ProjectPage(props: { id: string }): ReactElement {
       if (bar !== null) bar.inert = false;
     };
   }, [settingsOpen]);
+  // The Compare card (add-on 17), once the project makes something: its "Compare modes" button is in the head and the card it opens is
+  // under the plan banner, so a closed card takes no room (the chrome's height budget). It hears every `plan` and `compare` event of the
+  // project (`rev`), so an open card fetches the compare again. Its Close button gives the focus back to the head's button; a project
+  // that stops making something, or is deleted, closes it.
+  const compare = useCompare(props.id, useProjectEventCount(props.id));
+  const compareToggle = useRef<HTMLButtonElement | null>(null);
+  const comparable = project !== null && deleted === null && project.settings.target !== null;
+  useEffect(() => {
+    if (!comparable) compare.close();
+  }, [comparable, compare.close]);
+  const closeCompare = (): void => {
+    compare.close();
+    compareToggle.current?.focus();
+  };
 
   if (project === null) {
     return (
@@ -336,15 +338,20 @@ export function ProjectPage(props: { id: string }): ReactElement {
       <div className="project-head" inert={settingsOpen}>
         <SettingsToggle open={settingsOpen} onToggle={() => (settingsOpen ? closeSettings() : setSettingsOpen(true))} ref={settingsToggle} />
         <ProjectName name={project.name} onRename={(name) => send([{ op: 'rename', name }])} />
+        {comparable && (
+          <CompareToggle open={compare.state.open} onToggle={() => (compare.state.open ? compare.close() : compare.open())} ref={compareToggle} />
+        )}
         <span className={view.connected ? 'connection live' : 'connection'}>{view.connected ? 'live' : 'reconnecting…'}</span>
         <DeleteProject id={project.id} name={project.name} label="Delete project" onDeleted={() => view.markDeleted(me)} />
       </div>
       {/* The banners' own box, so the page behind an open drawer can be inert in three pieces (ruling R36); it adds no space.
-          The Compare card (add-on 17) sits under the plan banner, in the same box, so it goes inert with them. */}
+          The open Compare card (add-on 17) sits under the plan banner, in the same box, so it goes inert with them. */}
       <div className="project-banners" inert={settingsOpen}>
         {view.error !== null && <p className="banner error" role="alert">{view.error}</p>}
         <PlanBanner plan={plan} planError={view.planError} planLoading={view.planLoading} settings={project.settings} send={send} />
-        {deleted === null && <ProjectCompare project={project} plan={plan} send={send} />}
+        {comparable && (
+          <CompareCard state={compare.state} settings={project.settings} send={send} nameOf={(key) => plan?.names?.[key] ?? key} onClose={closeCompare} />
+        )}
       </div>
       <div className={settingsOpen ? 'project-body settings-open' : 'project-body'}>
         <aside className="settings-panel" id="project-settings" aria-label="Project settings">

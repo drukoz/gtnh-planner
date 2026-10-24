@@ -34,3 +34,37 @@ test('compares the three planning modes and uses one', async ({ page }) => {
   await expect(settings.getByRole('radio', { name: 'Least raw material', exact: true })).toBeChecked();
   await expect(settings.getByRole('combobox', { name: 'Count build cost against' })).toHaveCount(0);
 });
+
+// The Machine GUI restyle moved the card's button into the project head, so a closed card takes no room under the banner (the chrome's
+// height budget, which layout.spec.ts's press on the map canvas needs): the button opens and closes the card, which opens under the plan
+// banner in the banners' box (inert with it while the settings drawer is open), and the card's Close gives the focus back to the button.
+test('opens the Compare card from the project head, adds nothing while closed, and gives the focus back on Close', async ({ page }) => {
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Head button', { target: 't:circuit@0', amount: 1, per: 'min', tier: 1 });
+  const head = page.locator('.project-head');
+  const toggle = head.getByRole('button', { name: 'Compare modes' });
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(toggle).toHaveAttribute('aria-controls', 'compare-card');
+  await expect(page.locator('.compare-card')).toHaveCount(0);
+  // a small button in a head that keeps its 36px
+  expect((await toggle.boundingBox())!.height).toBe(28);
+  expect((await head.boundingBox())!.height).toBe(36);
+
+  await toggle.click();
+  const card = page.getByRole('region', { name: 'Compare modes' });
+  await expect(card).toBeVisible();
+  await expect(card).toHaveAttribute('id', 'compare-card');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  // the last of the banners' box: under the plan's cost and banner
+  expect(await card.evaluate((el) => el.parentElement?.classList.contains('project-banners') === true && el.parentElement.lastElementChild === el)).toBe(true);
+
+  await card.getByRole('button', { name: 'Close' }).click();
+  await expect(page.locator('.compare-card')).toHaveCount(0);
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(toggle).toBeFocused();
+  // the head's button closes it as well
+  await toggle.click();
+  await expect(card).toBeVisible();
+  await toggle.click();
+  await expect(page.locator('.compare-card')).toHaveCount(0);
+});

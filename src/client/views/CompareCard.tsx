@@ -1,11 +1,12 @@
-// The Compare card under the plan banner (add-on 17, design spec §3.3, architecture §11.45 (5)): a "Compare modes"
-// button that opens it; open, it plans the project's three planning modes side by side (`GET /api/projects/:id/compare`)
-// and fetches them again on every `plan` or `compare` event of the project, so a mode still planning fills in when it
-// is done; each column has "Use this mode", which sends the project's settings with that mode ("In use" on the mode
-// the project plans in). Closed, it fetches nothing. One compare request is on its way at a time: a compare can take
-// the server's time limit (20 s), and a browser keeps only six connections per origin open.
+// The Compare card under the plan banner (add-on 17, design spec §3.3, architecture §11.45 (5)): the "Compare modes"
+// button in the project head opens and closes it; open, it plans the project's three planning modes side by side
+// (`GET /api/projects/:id/compare`) and fetches them again on every `plan` or `compare` event of the project, so a mode
+// still planning fills in when it is done; each column has "Use this mode", which sends the project's settings with that
+// mode ("In use" on the mode the project plans in). Closed, it fetches nothing and draws nothing: the button is in the
+// head, so a closed card takes no room (the Machine GUI's height budget). One compare request is on its way at a time: a
+// compare can take the server's time limit (20 s), and a browser keeps only six connections per origin open.
 
-import { useEffect, useMemo, useSyncExternalStore, type ReactElement } from 'react';
+import { useEffect, useMemo, useSyncExternalStore, type ReactElement, type Ref } from 'react';
 import type { StuffKey } from '../../shared/keys.ts';
 import type { CompareResult } from '../../shared/types/api.ts';
 import type { PlanObjective, PlanSettings } from '../../shared/types/plan.ts';
@@ -98,27 +99,35 @@ export function compareLoader(projectId: string, get: (id: string) => Promise<Co
 }
 
 /**
- * The card as its state shows it: closed, the "Compare modes" button (`onOpen`); open, its title with "Close"
+ * The "Compare modes" button of the project head: a small button that opens and closes the card (`onToggle`), names the
+ * card it controls and says whether it is open. The page passes a `ref` (React 19 hands it to a function component as a
+ * prop) to give the focus back to the button when the card's own Close button closes it.
+ */
+export function CompareToggle(props: { open: boolean; onToggle: () => void; ref?: Ref<HTMLButtonElement> }): ReactElement {
+  const { open, onToggle, ref } = props;
+  return (
+    <button type="button" className="small compare-toggle" aria-expanded={open} aria-controls="compare-card" onClick={onToggle} ref={ref}>
+      Compare modes
+    </button>
+  );
+}
+
+/**
+ * The card as its state shows it: closed, nothing (the head's `CompareToggle` opens it); open, its title with "Close"
  * (`onClose`), "Updating…" while a fetch is on its way, why the last one failed, and one column per mode (`compareColumns`):
  * its name, what its plan comes to or that it is still planning or why it failed, what it avoids, adds and makes for
  * other projects, and "Use this mode", which sends `objectivePatch` of the project's `settings` — disabled and reading
  * "In use" on the mode the project plans in.
  */
 export function CompareCardView(props: {
-  state: CompareState; settings: PlanSettings; send: (ops: ProjectOp[]) => void; nameOf: (k: StuffKey) => string; onOpen(): void; onClose(): void;
-}): ReactElement {
-  const { state, settings, send, nameOf, onOpen, onClose } = props;
-  if (!state.open) {
-    return (
-      <div className="compare-card closed">
-        <button type="button" onClick={onOpen}>Compare modes</button>
-      </div>
-    );
-  }
+  state: CompareState; settings: PlanSettings; send: (ops: ProjectOp[]) => void; nameOf: (k: StuffKey) => string; onClose(): void;
+}): ReactElement | null {
+  const { state, settings, send, nameOf, onClose } = props;
+  if (!state.open) return null;
   const { result, error, loading } = state;
   const use = (objective: PlanObjective): void => send([{ op: 'settings', patch: objectivePatch(objective, settings) }]);
   return (
-    <section className="compare-card" aria-labelledby="compare-title">
+    <section className="compare-card" id="compare-card" aria-labelledby="compare-title">
       <div className="compare-head">
         <h3 id="compare-title">Compare modes</h3>
         {loading && result !== null && <span className="muted small" role="status">Updating…</span>}
@@ -158,25 +167,33 @@ export function CompareCardView(props: {
 }
 
 /**
- * The card of project `projectId`, under the plan banner. `rev` changes on every `plan` or `compare` event of the project
- * (ProjectPage counts them): open, the card fetches the compare again each time. `settings` are the project's, which
- * "Use this mode" sends a mode of; `nameOf` names a good by the plan's names, and a good the plan does not use (one only
- * another mode buys) by the pack's (`useItemNames`).
+ * Project `projectId`'s compare, for its page, which draws the head's button and the card apart: what the card shows,
+ * and opening and closing it. `rev` changes on every `plan` or `compare` event of the project (ProjectPage counts them):
+ * open, the compare is fetched again each time. Leaving the page (or another project) closes it.
  */
-export function CompareCard(props: {
-  projectId: string; rev: number; settings: PlanSettings; send: (ops: ProjectOp[]) => void; nameOf: (k: StuffKey) => string;
-}): ReactElement {
-  const { projectId, rev, settings, send, nameOf } = props;
+export function useCompare(projectId: string, rev: number): { state: CompareState; open(): void; close(): void } {
   const loader = useMemo(() => compareLoader(projectId), [projectId]);
   const state = useSyncExternalStore(loader.subscribe, loader.getSnapshot);
   useEffect(() => () => loader.close(), [loader]);
   useEffect(() => {
     loader.refresh();
   }, [loader, rev]);
+  return { state, open: loader.open, close: loader.close };
+}
+
+/**
+ * The card under the plan banner, as `state` (`useCompare`) shows it. `settings` are the project's, which "Use this mode"
+ * sends a mode of; `nameOf` names a good by the plan's names, and a good the plan does not use (one only another mode
+ * buys) by the pack's (`useItemNames`).
+ */
+export function CompareCard(props: {
+  state: CompareState; settings: PlanSettings; send: (ops: ProjectOp[]) => void; nameOf: (k: StuffKey) => string; onClose(): void;
+}): ReactElement | null {
+  const { state, settings, send, nameOf, onClose } = props;
   const packNames = useItemNames(state.result === null ? [] : compareKeys(state.result).filter((key) => nameOf(key) === key));
   const named = (key: StuffKey): string => {
     const name = nameOf(key);
     return name !== key ? name : packNames.get(key) ?? key;
   };
-  return <CompareCardView state={state} settings={settings} send={send} nameOf={named} onOpen={loader.open} onClose={loader.close} />;
+  return <CompareCardView state={state} settings={settings} send={send} nameOf={named} onClose={onClose} />;
 }
