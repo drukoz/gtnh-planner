@@ -3,7 +3,8 @@
 // (the audit's copy of the project, through normalizeSettings: only the settings, never the project's name, id, author,
 // marks or notes, ruling P27) per hour (P), per minute (P1m) and with supporting lines (PR), one test per complaint. It
 // runs only with GTNH_LOCAL=1 and is skipped everywhere else; nothing game-derived is read or written otherwise. The
-// export is loaded once for the whole file, and each plan is timed on a warm pack (a first, unrelated plan warms it).
+// export is loaded once for the whole file, and each plan is timed on a warm pack (a first, unrelated plan at the line's
+// tier warms it).
 //
 // Plan 12 (Task 8): the settings fill to build cost counted over 24 hours at "Fewest machines" (0.5), so the checks
 // that assume plan 09's scale-free objective — the same line per minute as per hour, raw material within the step
@@ -43,9 +44,21 @@ const GRAVEL = 'minecraft:gravel@0';
 const GLASS_DUST = 'gregtech:gt.metaitem.01@2890';
 const COBBLESTONE = 'minecraft:cobblestone@0';
 const HAMMER_MAP = 'gt.recipe.hammer';
+/**
+ * The user's MV lines, this project's among them: plan 09's bound, timed after a plan at their tier (fix wave 3 (E),
+ * controller OQ1: "the user's MV lines must stay under 5 s warm").
+ */
 const PLAN_SECONDS = 5;
-/** HV lines at 0 % step charge may take this long (controller ruling 187). */
-const HV_SLOW_PLAN_SECONDS = 8;
+/**
+ * A plan at step charge 0 or with build cost ignored, which prices its line's candidate machines cold as the first plan
+ * of its tier (fix wave 3 (E), the controller's ruling of 2026-10-23 on Task 3's finding (2): "every real-data plan-time
+ * assertion of a plan at step charge 0 or with build cost ignored that prices its own line's candidate machines cold
+ * […] gets the OQ1 (A) bound the same way as the build-cost plans: the next whole second above 1.25 x the slowest
+ * quiet-host median of Step 1, measured as the first plan of its tier in a whole-file run"). The Advanced Circuit at HV,
+ * the file's first HV plan, took 5.45 s, the median of three on 2026-10-24 (each run started at a 1-minute load under 4):
+ * 1.25 × 5.45 = 6.81.
+ */
+const COLD_PRICES_PLAN_SECONDS = 7;
 /**
  * Step caps of complaint 6 at the 2 % default step charge (ruling P14: the spec's 20 and 32 came from its 5 %
  * prototype): P's is the ruling's 22 + 5 (the 2 % count of spec §10; P has 24 steps), PR's its 37 steps + 5.
@@ -208,7 +221,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')("the user's Electronic Circuit p
 
   beforeAll(async () => {
     pack = await loadPack(activeExportDir(loadConfig()));
-    await planLine(pack, { ...settings, target: GLASS_TUBE, per: 'min', tier: 1 }, emptyContext());
+    await planLine(pack, { ...settings, target: GLASS_TUBE, per: 'min' }, emptyContext());   // warm the pack at the line's tier
     P = await timed(settings);
     P1m = await timed({ ...settings, per: 'min' });
     PR = await timed({ ...settings, routeDerived: true });
@@ -381,11 +394,11 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')("the user's Electronic Circuit p
 
   it('plans the same settings for an Advanced Circuit at HV on "Least raw material", build cost ignored, at the least raw material', async () => {
     // Spec §7.3: 181 s before the Task 4 review gave the 0 % stage its root-node MIP. With build cost counted the line may
-    // use more raw material to build fewer machines (real-build-cost.test.ts plans that); ignoring it, the least. An HV
-    // line at 0 % may take up to 8 s (controller ruling 187).
+    // use more raw material to build fewer machines (real-build-cost.test.ts plans that); ignoring it, the least. The
+    // file's first HV plan, it prices its tier's machines cold (COLD_PRICES_PLAN_SECONDS).
     const { plan, seconds } = await timed({ ...settings, target: ADVANCED_CIRCUIT, tier: 3, stepCharge: 0, buildHorizonHours: null });
     expect(plan.status, JSON.stringify(plan.warnings)).toBe('ok');
-    expect(seconds).toBeLessThan(HV_SLOW_PLAN_SECONDS);
+    expect(seconds).toBeLessThan(COLD_PRICES_PLAN_SECONDS);
     const raw = plan.rawCost as NonNullable<Plan['rawCost']>;
     expect(Math.abs(raw.perSecond - raw.leastPerSecond)).toBeLessThanOrEqual(1e-6 * raw.leastPerSecond);
     expect(codesOf(plan)).not.toContain('simplify-skipped');

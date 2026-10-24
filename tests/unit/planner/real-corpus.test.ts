@@ -23,7 +23,14 @@ import { DEFAULT_STEP_CHARGE, type Plan, type PlanSettings } from '../../../src/
 import { checkPlanInvariantsDeep, type ProducerInfo, type Violation } from '../../helpers/plan-invariants.ts';
 import { CORPUS, VARIANTS } from '../../helpers/real-corpus.ts';
 
-const PLAN_SECONDS = 5;
+/**
+ * A plan with build cost counted at a step charge above 0, as every corpus plan: such a plan also solves the raw cap's
+ * leanest line and plan 09's plan (fix wave 3 (E), controller OQ1 (A): "each real-data file keeps its own bound for
+ * build-cost plans with a step charge, which Task 13 sets to the next whole second above 1.25 x the slowest quiet-host
+ * median"). The slowest, Advanced Circuit per minute (the corpus's first HV plan), took 11.50 s, the median of three on
+ * 2026-10-24 (each run started at a 1-minute load under 4): 1.25 × 11.50 = 14.38.
+ */
+const BUILD_COST_PLAN_SECONDS = 15;
 const NEVER = ['numerics', 'simplify-skipped', 'free-loop', 'graph-too-big'];
 /** Invariant kinds (a), (b), (d), (e), (f): no error and no warning of these, only `info`. */
 const EXACT_KINDS = ['balance', 'orphan-input', 'flow', 'machines', 'raw-source', 'byproduct'];
@@ -84,8 +91,9 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('the plan 09 corpus on the real 
     const started = performance.now();
     const plan = await planLine(pack, settings, emptyContext());
     const seconds = (performance.now() - started) / 1000;
+    console.log(`real-corpus ${name}: ${plan.status}, ${seconds.toFixed(2)} s, ${plan.steps.length} steps`);
     expect(plan.status, `${name}: ${JSON.stringify(plan.warnings)}`).toBe('ok');
-    expect(seconds, name).toBeLessThan(PLAN_SECONDS);
+    expect(seconds, name).toBeLessThan(BUILD_COST_PLAN_SECONDS);
     expect(plan.warnings.map((w) => w.code).filter((c) => NEVER.includes(c)), name).toEqual([]);
     const stepCharge = settings.stepCharge ?? DEFAULT_STEP_CHARGE;
     const buildCost = settings.buildHorizonHours !== null;

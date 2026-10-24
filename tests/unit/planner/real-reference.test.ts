@@ -16,8 +16,14 @@ import { buildObjective } from '../../helpers/build-objective.ts';
 import { REFERENCE, localDocPath, storedSettings } from '../../helpers/local-docs.ts';
 
 const GLASS_TUBE = 'gregtech:gt.metaitem.03@32012';
-/** Plan 09's bound on a real-data plan with a warm pack (an MV line; ruling 187). */
-const PLAN_SECONDS = 5;
+/**
+ * A plan with build cost counted at a step charge above 0, as R0 and R1 at the reference's stored 2 %: such a plan also
+ * solves the raw cap's leanest line and plan 09's plan (fix wave 3 (E), controller OQ1 (A): "each real-data file keeps
+ * its own bound for build-cost plans with a step charge, which Task 13 sets to the next whole second above 1.25 x the
+ * slowest quiet-host median"). The slower, R0, took 3.55 s, the median of three on 2026-10-24 (each run started at a
+ * 1-minute load under 4): 1.25 × 3.55 = 4.44.
+ */
+const BUILD_COST_PLAN_SECONDS = 5;
 
 /** The reference's 16 step recipes (the acceptance spec's REF_IDS). */
 const REF_IDS: readonly string[] = [
@@ -137,7 +143,7 @@ describe.skipIf(path === undefined)("the user's reference Electronic Circuit flo
     const { plan, seconds } = await timed(byHand);
     logPlan('R0', plan, seconds);
     expect(plan.status, JSON.stringify(plan.warnings)).toBe('ok');
-    expect(seconds).toBeLessThan(PLAN_SECONDS);
+    expect(seconds).toBeLessThan(BUILD_COST_PLAN_SECONDS);
     expect(plan.warnings.map((w) => w.code)).not.toContain('build-cost-approx');
     expect(referenceIds(plan)).toEqual([...REF_IDS].sort());
     expectReferenceRaw(plan, 'R0');
@@ -161,7 +167,7 @@ describe.skipIf(path === undefined)("the user's reference Electronic Circuit flo
     const { plan, seconds } = await timed({ ...stored, automateCrafting: true });
     logPlan('R1', plan, seconds);
     expect(plan.status, JSON.stringify(plan.warnings)).toBe('ok');
-    expect(seconds).toBeLessThan(PLAN_SECONDS);
+    expect(seconds).toBeLessThan(BUILD_COST_PLAN_SECONDS);
     expect(plan.warnings.map((w) => w.code)).not.toContain('build-cost-approx');
     expect(referenceIds(plan)).toEqual([...REF_IDS].sort());
     expectReferenceRaw(plan, 'R1');

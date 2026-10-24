@@ -41,10 +41,30 @@ const GLASS_TUBE = 'gregtech:gt.metaitem.03@32012';
 const SAND = 'minecraft:sand@0';
 const GRAVEL = 'minecraft:gravel@0';
 const HAMMER_MAP = 'gt.recipe.hammer';
-/** Plan 09's bound on a real-data plan with a warm pack (its real-data files' own constant, which plan 09 does not export: ruling P13). */
+/**
+ * Plan 09's bound on a real-data plan with a warm pack (its real-data files' own constant, which plan 09 does not export:
+ * ruling P13), which the user's MV lines keep, timed after a plan at their tier (fix wave 3 (E), controller OQ1: "the
+ * user's MV lines must stay under 5 s warm").
+ */
 const PLAN_SECONDS = 5;
-/** HV acceptance lines at 0 % step charge or with avoid lists may take this long (controller ruling 187). */
-const HV_SLOW_PLAN_SECONDS = 8;
+/**
+ * A plan with build cost counted at a step charge above 0: such a plan also solves the raw cap's leanest line and plan
+ * 09's plan (fix wave 3 (E), controller OQ1 (A): "each real-data file keeps its own bound for build-cost plans with a
+ * step charge, which Task 13 sets to the next whole second above 1.25 x the slowest quiet-host median"). The slowest,
+ * Good Electronic Circuit HV (the file's first HV plan), took 12.50 s, the median of three on 2026-10-24 (each run
+ * started at a 1-minute load under 4): 1.25 × 12.50 = 15.62.
+ */
+const BUILD_COST_PLAN_SECONDS = 16;
+/**
+ * A plan at step charge 0 or with build cost ignored, which prices its line's candidate machines cold as the first plan
+ * of its tier (fix wave 3 (E), the controller's ruling of 2026-10-23 on Task 3's finding (2): "every real-data plan-time
+ * assertion of a plan at step charge 0 or with build cost ignored that prices its own line's candidate machines cold
+ * […] gets the OQ1 (A) bound the same way as the build-cost plans: the next whole second above 1.25 x the slowest
+ * quiet-host median of Step 1, measured as the first plan of its tier in a whole-file run"). Each Advanced Circuit HV
+ * at 0 % timed alone, as the first HV plan of its run: the slowest, the user's project, took 10.80 s, the median of three
+ * on 2026-10-24 (each run started at a 1-minute load under 4): 1.25 × 10.80 = 13.50.
+ */
+const COLD_PRICES_PLAN_SECONDS = 14;
 /** D1's headroom over the plan that ignores build cost (plan 09's headroom over a measured count). */
 const STEP_HEADROOM = 5;
 /** Steps one AE2 pool runs at most (controller Amendment OQ6, ruling P15): one ME Interface's patterns. */
@@ -303,7 +323,7 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
     expect(plan.status, JSON.stringify(plan.warnings)).toBe('ok');
     expect(plan.cost?.horizonHours).toBe(DEFAULT_BUILD_HORIZON_HOURS);
     if (!c.owned) expect(plan.cost?.build).toBeGreaterThan(0);
-    expect(seconds).toBeLessThan(PLAN_SECONDS);
+    expect(seconds).toBeLessThan(BUILD_COST_PLAN_SECONDS);
     expect(plan.warnings.map((w) => w.code)).not.toContain('build-cost-approx');
     // No step adds a machine that cannot be built here (OQ5 a): each new machine has a build, or is a pricing gap (OQ5 b),
     // which the build-cost-unknown warning names.
@@ -431,14 +451,14 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
   }, 300_000);
 
   it('keeps the time guard', async () => {
-    // A Microprocessor a minute at HV: under plan 09's bound, the build MIP decided by its limits; whether it fell back
-    // to the relaxation (build-cost-approx) is logged, not asserted.
+    // A Microprocessor a minute at HV: within the build-cost plans' bound, the build MIP decided by its limits; whether it
+    // fell back to the relaxation (build-cost-approx) is logged, not asserted.
     const s = at(MICROPROCESSOR, 3, 1);
     const { plan, seconds } = await timed(s);
     await logPlan('time guard, Microprocessor HV', s, plan, seconds);
     console.log(`real-build-cost time guard: Microprocessor HV build-cost-approx ${plan.warnings.some((w) => w.code === 'build-cost-approx') ? 'yes' : 'no'}`);
     expect(plan.status, JSON.stringify(plan.warnings)).toBe('ok');
-    expect(seconds).toBeLessThan(PLAN_SECONDS);
+    expect(seconds).toBeLessThan(BUILD_COST_PLAN_SECONDS);
   }, 180_000);
 
   it('prices a part the same whatever else is asked, and never dearer than without the override when an override makes a good cheaper', async () => {
@@ -560,7 +580,7 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
       console.log(`real-build-cost aluminium HV: ${plan.status}, ${seconds.toFixed(2)} s, ${plan.steps.length} steps (${ebf.map((st) => `${st.count}× EBF on ${st.recipeId}`).join(', ')}), `
         + `raw ${plan.rawInputs.map((r) => r.key).join(' ')}; ignoring build cost ${ignored.steps.length} steps`);
       expect(plan.status, JSON.stringify(plan.warnings)).toBe('ok');
-      expect(seconds).toBeLessThan(PLAN_SECONDS);
+      expect(seconds).toBeLessThan(BUILD_COST_PLAN_SECONDS);
       expect(plan.steps.find((st) => st.mainOutput === ALUMINIUM_INGOT)?.machine.name).toBe('Electric Blast Furnace');
       expect(plan.rawInputs.map((r) => r.key)).toContain('gregtech:gt.metaitem.01@2019');   // the mined aluminium dust
       expect(worseThanPlan09('aluminium HV x10', run), 'ruling 187 on its build-cost graph').toBeUndefined();
@@ -587,7 +607,7 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
       console.log(`real-build-cost Good Electronic Circuit HV x2: ${plan.status}, ${seconds.toFixed(2)} s, ${plan.steps.length} steps (ignoring build cost ${ignored.steps.length}), `
         + `its Good Circuit Board on ${board?.machine.name ?? 'none'}, build ${plan.cost?.build} (ignoring ${ignored.cost?.build})`);
       expect(plan.status, JSON.stringify(plan.warnings)).toBe('ok');
-      expect(seconds).toBeLessThan(PLAN_SECONDS);
+      expect(seconds).toBeLessThan(BUILD_COST_PLAN_SECONDS);
       expect(plan.steps.length).toBeLessThanOrEqual(ignored.steps.length + 1);
       expect(plan.steps.find((st) => st.mainOutput === GOOD_ELECTRONIC_CIRCUIT)?.mapId).toBe('gt.recipe.circuitassembler');
       expect(plan.rawInputs.filter((r) => !r.available)).toEqual([]);
@@ -608,7 +628,7 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
         const raw = plan.rawCost as NonNullable<Plan['rawCost']>;
         console.log(`real-build-cost Advanced Circuit HV at 0 %, ${name}: ${plan.status}, ${seconds.toFixed(2)} s, ${plan.steps.length} steps, raw ${raw.perSecond} against the least ${raw.leastPerSecond}, build ${plan.cost?.build}`);
         expect(plan.status, `${name}: ${JSON.stringify(plan.warnings)}`).toBe('ok');
-        expect(seconds, name).toBeLessThan(HV_SLOW_PLAN_SECONDS);
+        expect(seconds, name).toBeLessThan(COLD_PRICES_PLAN_SECONDS);
         expect(raw.perSecond, name).toBeGreaterThanOrEqual(raw.leastPerSecond * (1 - 1e-6));
         expect(plan.warnings.map((w) => w.code), name).not.toContain('build-cost-approx');
       }

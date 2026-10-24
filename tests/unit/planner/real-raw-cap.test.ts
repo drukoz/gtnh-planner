@@ -5,8 +5,9 @@
 // its leanest line and buys no more Phosphate Dust over its build horizon than the group has in storage (737bcd0 bought
 // 3,600 a day at 2.67 × the least, against 164 stored). With nothing in storage (an empty context), neither it nor 2 Good
 // Electronic Circuits a minute at HV buys 1,000 a day or more of any byproduct-only good, which costs BEYOND_STOCK_FACTOR
-// times its price beyond the stock (fix wave 3 (C), controller OQ2), at the default raw cap or at "No limit". It runs
-// only with GTNH_LOCAL=1 and logs only counts, keys and figures.
+// times its price beyond the stock (fix wave 3 (C), controller OQ2), at the default raw cap or at "No limit". The MV
+// circuit line is planned in under 5 s after a plan at MV (fix wave 3 (E)). It runs only with GTNH_LOCAL=1 and logs only
+// counts, keys and figures.
 
 import { beforeAll, describe, expect, it } from 'vitest';
 import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
@@ -21,12 +22,18 @@ const RUBBER_WOOD = 'IC2:blockRubWood@0';
 const RAW_OIL = 'fluid:liquid_medium_oil';
 const ELECTRONIC_CIRCUIT = 'IC2:itemPartCircuit@0';
 const GOOD_ELECTRONIC_CIRCUIT = 'gregtech:gt.metaitem.01@32702';
+const GLASS_TUBE = 'gregtech:gt.metaitem.03@32012';
 const PHOSPHATE_DUST = 'gregtech:gt.metaitem.01@2833';
 /** The Phosphate Dust in the group's storage at the user's scan the ledger quotes (line 247: "3,600 a day against 164 in storage"). */
 const PHOSPHATE_DUST_STOCK = 164;
 const SECONDS_PER_DAY = 86_400;
 /** Fix wave 3 (C)'s pins (controller OQ2): no byproduct-only good bought beyond the stock at this many a day or more. */
 const BEYOND_STOCK_PER_DAY = 1000;
+/**
+ * The user's MV lines keep plan 09's 5 s, timed warm: after a plan of another line at their tier in the same process (fix
+ * wave 3 (E), the controller's answer to open question 1: "the user's MV lines must stay under 5 s warm").
+ */
+const PLAN_SECONDS = 5;
 /** The machines the user's poly plan reuses (the live scan's): Steam Separator, Advanced Compressor, Basic Chemical Reactor, Pyrolyse Oven. */
 const POLY_OWNED = [{ mteId: 31080, count: 1 }, { mteId: 242, count: 1 }, { mteId: 421, count: 1 }, { mteId: 15546, count: 1 }];
 
@@ -95,9 +102,13 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('the raw cap on the real 2.9 exp
   }, 300_000);
 
   it("holds the user's MV circuit line within +25 % of its leanest line, buying no more Phosphate Dust than the group has", async () => {
+    await planLine(pack, mvCircuit({ target: GLASS_TUBE }), emptyContext());   // warm the pack at MV: the user's MV lines are timed warm
+    const started = performance.now();
     const plan = await planLine(pack, mvCircuit(), emptyContext());
-    console.log(line('MV circuit', plan));
+    const seconds = (performance.now() - started) / 1000;
+    console.log(`${line('MV circuit', plan)}; ${seconds.toFixed(2)} s`);
     expect(plan.status).toBe('ok');
+    expect(seconds).toBeLessThan(PLAN_SECONDS);
     const raw = plan.rawCost as NonNullable<Plan['rawCost']>;
     expect(raw.perSecond).toBeLessThanOrEqual((raw.leanestPerSecond as number) * 1.25 * (1 + 1e-6));
     // (C): over the build horizon (24 h) the line buys at most the group's stock (fix wave 3 review: a pick of 549 a day
