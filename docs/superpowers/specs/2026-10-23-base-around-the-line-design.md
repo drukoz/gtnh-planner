@@ -180,9 +180,9 @@ On this Mac, with the user's 5 projects and their newest scan:
 15. **Fluids.** A water or lava cell (source or flowing, vanilla or modded) inside the line counts with "dig" (drain
     or fill it); a fluid under the line counts as "no floor".
 16. **Only red cells can stop a drop.** Dig, fluid, no-floor and not-scanned cells never refuse or move a dropped line:
-    they are reported (dig and fill as a build step, as today; no floor and not scanned as warnings). What happens on
-    red is the open question below. Plan 22 Task 13's refit rule ("any blocked cell moves the line") is narrowed the
-    same way by this project's plan.
+    they are reported (dig and fill as a build step, as today; no floor and not scanned as warnings). Red is kept too
+    (the user's answer below). Plan 22 Task 13's refit rule ("any blocked cell moves the line") is replaced by the
+    same rule in plan 22's own run (controller ruling of 2026-10-23).
 17. **Auto place never picks a spot with red cells.** Today `findSite` treats the user's own walls and floors as
     terrain it may level; with the classes it must not build into them. Dig keeps today's scoring. This changes site
     choice and pinned figures, which are re-measured after plan 22.
@@ -211,7 +211,9 @@ On this Mac, with the user's 5 projects and their newest scan:
   block-name functions merge into it.
 - How the extraction finds the client instance (a config key next to the existing client jar, plus a CLI flag).
 
-## Open question for the user
+## Decided by the user after the builder check (2026-10-23)
 
-- When you drop the line where it hits some of your blocks (red), should the planner keep it there and list the
-  blocks to clear in the build steps, or refuse the drop and leave the line where it was?
+- **A drop on red is kept.** When the user drops the line where it hits their own blocks, the line stays where it was
+  dropped. The build steps start with "clear these N blocks first", listing them, and the red stays visible until a
+  rescan shows them gone. The same holds for a drop on the Map tab, a Page Up / Page Down move, a Rotate and "Use
+  newest scan": the planner never moves a line the user placed because of their own blocks.
