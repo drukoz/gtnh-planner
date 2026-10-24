@@ -22,6 +22,14 @@ describe('the figures of pixel text', () => {
     expect(figureRuns('Copper Wire')).toEqual([{ text: 'Copper Wire', fig: false }]); expect(figureRuns('')).toEqual([]);
   });
 
+  it('signs a figure with a minus sign, leaves a sign after a digit or a letter in the words, and takes a name\'s digit as a figure', () => {
+    expect(figureRuns('−5 left')).toEqual([{ text: '−5', fig: true }, { text: ' left', fig: false }]);                     // U+2212, the minus sign
+    expect(figureRuns('1-2')).toEqual([{ text: '1', fig: true }, { text: '-', fig: false }, { text: '2', fig: true }]);   // a hyphen between figures
+    expect(figureRuns('N-1')).toEqual([{ text: 'N-', fig: false }, { text: '1', fig: true }]);                           // after a letter: no sign
+    // a digit inside a name is a figure too: Figs cannot tell them apart, which spec §25 accepts
+    expect(figureRuns('1x Copper Wire')).toEqual([{ text: '1', fig: true }, { text: 'x Copper Wire', fig: false }]);
+  });
+
   it('draws each figure in a span.fig, or a tspan.fig in an svg, and nothing else', () => {
     expect(renderToStaticMarkup(<Figs text="short: gets 45%" />)).toBe('short: gets <span class="fig">45</span>%');
     expect(renderToStaticMarkup(<Figs text="N5" />)).toBe('N<span class="fig">5</span>');

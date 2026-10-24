@@ -55,6 +55,8 @@ describe('plan banner', () => {
     const served = { ...broken, warnings: [{ code: 'orphan-input', key: 'fluid:pva', stepId: 'mixer', text: 'Nothing supplies the PVA (as the server says it).' }] };
     const out = text(html(served));
     expect(out).toContain('This plan does not add up: 2 inputs have no source, 1 good is made two ways');
+    // its figures are VT323 (span.fig), its words Pixelify (Phase 2 spec §25)
+    expect(html(served)).toContain('This plan does not add up: <span class="fig">2</span> inputs have no source, <span class="fig">1</span> good is made two ways');
     expect(out).toContain('Show in the flow');
     expect(out).toContain('Nothing supplies the PVA (as the server says it).');
     expect(out).not.toContain('Nothing supplies Polyvinyl Acetate');             // the server's text, not the client's

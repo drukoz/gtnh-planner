@@ -254,7 +254,8 @@ function WorldPicker(props: { project: Project; scans: WorldScanListItem[] | nul
 
 interface Pick { dim: number; x: number; y: number; z: number }
 
-function NoteDialog(props: { pin: Pick; onSave(text: string): void; onCancel(): void }): ReactElement {
+/** The dialog that pins a note to the block clicked on the map, titled with its position (exported for its markup test). */
+export function NoteDialog(props: { pin: Pick; onSave(text: string): void; onCancel(): void }): ReactElement {
   const { pin, onSave, onCancel } = props;
   const [text, setText] = useState('');
   const where = `${pin.x}, ${pin.y}, ${pin.z}`;

@@ -139,6 +139,10 @@ describe('materials rows', () => {
     expect(html.indexOf('data-row="missing:fluid:solder@asm"')).toBeGreaterThan(-1);
     expect(html.indexOf('data-row="missing:fluid:solder@asm"')).toBeLessThan(html.indexOf('data-row="run:fluid:pva"'));
     expect(missingRows(plan, indexPlan(plan))).toEqual([]);
+    // the figures of a used-by chip and of a short input's badge are VT323 (span.fig), the words and the % Pixelify (Phase 2 spec §25)
+    expect(html).toContain('<span class="chip">Assembler (Circuit Board) <span class="fig">259</span> L/h</span>');
+    const halfGlue = { ...tiny, flows: tiny.flows.map((f) => (f.key === 't:glue@0' ? { ...f, perSecond: f.perSecond / 2 } : f)) } as Plan;
+    expect(view(halfGlue)).toContain('<span class="badge missing-badge">short: gets <span class="fig">50</span>%</span>');
   });
   it('opens a total of base materials to the build lines that need it', () => {
     const [row] = buildRows(tiny.buildTotals!, tiny.names!, new Set());

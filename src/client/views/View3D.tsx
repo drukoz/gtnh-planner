@@ -170,7 +170,8 @@ function BlockInfo(props: { info: Info }): ReactElement {
   const { title, lines } = props.info;
   return (
     <section data-testid="view3d-info" aria-live="polite" className="view3d-box view3d-details">
-      <h3>{title}</h3>
+      {/* a picked link is titled with its rate ("Titanium Dust 60/min · Red"): its figures are VT323 (Phase 2 spec §25, ruling P2-R15) */}
+      <h3><Figs text={title} /></h3>
       {lines.length > 0 && (
         <ul className="small">
           {lines.map((line, i) => <li key={`${i}|${line}`}>{line}</li>)}

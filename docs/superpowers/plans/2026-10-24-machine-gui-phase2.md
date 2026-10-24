@@ -940,9 +940,11 @@ test('figures in VT323 keep their boxes whether the fonts arrive or not', async 
   `` `${hidden} more…` `` or `` `${SWAP_PAGE} more… (${hidden} not shown)` ``), `ConnectionsView.tsx:377` (the details panel's
   `<h3>`, which stays attribute-less: a box's title "5× Basic Assembler", a hookup's "Power tap at 12 64 7", a link's "Titanium Dust
   60/min · Red"), `MapTab.tsx:268` (`` `Add note at ${where}` ``) and `ProjectPage.tsx:160` (PlanBanner's
-  `` `This plan does not add up: ${counted.join(', ')} ` ``). Names and fixed words keep their markup (spec §25, plan ruling
-  `digits-mixed`): the panel titles that name a step, an item or a block, the project's name, the avoid chips, buttons that name an
-  item, the tabs, the word badges.
+  `` `This plan does not add up: ${counted.join(', ')} ` ``); and, from the fix round, the step panel's option badge
+  (`StepPanel.tsx`, `` `in use (${formatPercent(share)})` ``) and the 3D details box's `<h3>` (`View3D.tsx`, ruling P2-R15). Names and
+  fixed words keep their markup (spec §25, plan ruling `digits-mixed`): the panel titles that name a step, an item or a block, the
+  project's name, the avoid chips, buttons that name an item, the tabs, the word badges; but a title or heading that can carry a figure
+  writes it through `<Figs>` (ruling P2-R15: the 3D details box's, whose picked link carries its rate).
 
 - [ ] **Step 5: Run everything** — `npm test` → PASS; `npm run e2e` → PASS. Watch `objectives.spec.ts:150-178` (the Compare figures at
   860 and 768 px: they fit at 28 px and do not shrink), `drawer.spec.ts:225-266` (R37: "Reachable dimensions" still wraps beside the

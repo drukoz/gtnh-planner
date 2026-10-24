@@ -159,6 +159,21 @@ describe('step panel: sections', () => {
     expect(pinnedHtml).toMatch(/<input type="radio"[^>]*checked=""[^>]*><span[^>]*>144 L Molten Tin/);
     expect(text(pinnedHtml)).not.toContain('is not usable now');
   });
+  it('writes a shared option\'s share in its badge with the figure in a span.fig and the % in the words (Phase 2 spec §25, digits-mixed)', () => {
+    const choices = [
+      { key: 'fluid:molten.solderingalloy', amount: 72, share: 0.45, rawPerRun: 0.5, steps: 2 },
+      { key: 'fluid:molten.tin', amount: 144, share: 0.55, rawPerRun: 1, steps: 1 },
+    ];
+    const ca = step({
+      id: 'ca', mapId: 'gt.recipe.circuitassembler', machine: { mteId: 1180, name: 'Circuit Assembler', tier: 1 }, runsPerSecond: 0.1, mainOutput: 't:ec@0',
+      inputs: [{ key: 't:part@0', amount: 1, chance: 1 }, { key: 'fluid:molten.solderingalloy', amount: 72, chance: 1 }],
+      outputs: [{ key: 't:ec@0', amount: 1, chance: 1 }], options: [{ slot: 100, choices }],
+    });
+    const html = panelHtml(ca, planOf({ steps: [ca], names: { 't:ec@0': 'Electronic Circuit', 't:part@0': 'Part',
+      'fluid:molten.solderingalloy': 'Molten Soldering Alloy', 'fluid:molten.tin': 'Molten Tin' } }));
+    expect(html).toContain('<span class="badge">in use (<span class="fig">45</span>%)</span>');
+    expect(html).toContain('<span class="badge">in use (<span class="fig">55</span>%)</span>');
+  });
   it('says a pinned option is not usable only when the plan cannot use it, not while the next plan is on its way', () => {
     // The project store applies the pin at once; the plan that honours it (`slot.pinned`) comes seconds later.
     const choices = [
@@ -240,10 +255,12 @@ describe('step panel: sections', () => {
   it('pages a long swap list', () => {
     const ways = Array.from({ length: 60 }, (_, i) => ({ recipeId: `r${String(i).padStart(2, '0')}`, rawCost: i + 1, mapId: 'gt.recipe.assembler' }));
     const many = step({ id: 'r00', mainOutput: 't:circuit@0', outputs: [{ key: 't:circuit@0', amount: 1, chance: 1 }], alternatives: ways, ways: { total: 60, usable: 60 } });
-    const html = text(panelHtml(many, planOf({ steps: [many], names: { 't:circuit@0': 'Basic Circuit' } })));
+    const markup = panelHtml(many, planOf({ steps: [many], names: { 't:circuit@0': 'Basic Circuit' } }));
+    const html = text(markup);
     expect(html).toContain('· 5 raw/unit');
     expect(html).not.toContain('· 6 raw/unit');
     expect(html).toContain('25 more… (55 not shown)');
+    expect(markup).toContain('<span class="fig">25</span> more… (<span class="fig">55</span> not shown)');   // its figures in VT323 (spec §25)
     // Each "more…" opens a page more, until every way is listed; the one in use and a pinned one always show.
     expect([5, 30, 55, 80].map((limit) => shownWays(ways, limit, 'r00', undefined).length)).toEqual([5, 30, 55, 60]);
     expect(shownWays(ways, 5, 'r40', 'r59').map((a) => a.recipeId)).toEqual(['r00', 'r01', 'r02', 'r03', 'r04', 'r40', 'r59']);

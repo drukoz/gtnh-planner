@@ -342,7 +342,7 @@ function OptionSlot(props: { step: PlanStep; slot: StepOption; settings: PlanSet
           <input type="radio" name={group} checked={pin === c.key} onChange={() => choose(c.key)} />
           <span className="choice-text">
             {`${choiceText(c)} `}
-            <span className={c.share > 0 ? 'badge' : 'badge muted'}>{use(c.share)}</span>
+            <span className={c.share > 0 ? 'badge' : 'badge muted'}><Figs text={use(c.share)} /></span>
           </span>
         </label>
       ) : (

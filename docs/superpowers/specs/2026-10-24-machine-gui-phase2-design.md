@@ -3031,23 +3031,25 @@ decides them all:
   Machines tile reads "X5") and its `%` in the Busy tile, which reads as one at 21 px.
 - **Pixelify with its figures in `span.fig`** (`tspan.fig` in an svg) for every other pixel text that shows a figure among words or
   signs: the NEI tooltip (Task 3a), the map tooltip and the 3D hover label, the map's note badges ("N5") and "Show all 13 items", the
-  Materials missing badge ("short: gets 45%") and used-by chips ("Assembler (Circuit Board) 259 L/h"), the step list's pin button
-  ("pin 5"), the line panel's "Rotate 90°" and the swap list's "25 more… (55 not shown)" (two buttons whose figures are no name), the
-  note dialog's title ("Add note at 4, 63, 5"), the Connections panel's title (a box's "5× Basic Assembler", a hookup's "Power tap at
-  12 64 7", a link's "Titanium Dust 60/min · Red"), the plan banner's heading ("This plan does not add up: 2 inputs have no
-  source, …"), the Flow count chip ("×5", "×1 shared"; Task 4), the recipe card's chance tag ("10%"), tier chip ("LV · 32 V") and
-  overclock chips (Task 5a), and the shortcuts sheet's digit caps (`1`, `6`; Task 11). One hook-free component writes them, `Figs`
-  (`src/client/components/Figs.tsx`): a figure is a run of digits with what joins them (`1,440`, `0.0586`, `10:00`, a position
-  `1 64 10`, a range `1–6`) and a sign before it (`+3`, `-30`). `Figs` cannot tell a name's digit from a figure, so in a text it writes
-  every digit run is a figure, a name's too ("1x Copper Wire" in a tooltip); a name stays Pixelify, digits and all, where it stands
-  alone (the next point). The `%` and `×` around a figure stay in the words' Pixelify, whose
-  `%` and `×` read where VT323's read as an x: "10%" is a VT323 `10` and a Pixelify `%`, "×5" a Pixelify `×` and a VT323 `5`. The span
-  is `font: 1.15em/0 var(--font-digits)`: 1.15 em of its Pixelify parent gives its digits the parent's digit height (14.95 px in 13 px
-  text, 16.1 px in the 14 px tooltip), and a line height of 0 lets it never grow or move a line. Measured, every tooltip, badge,
-  button, title and chance tag keeps its height with the fonts and without (`lh0.png`, `figspan.png`); with a line height of 1 the
-  chance tag grew from 14 to 16.1 px and dropped its digits.
+  Materials missing badge ("short: gets 45%") and used-by chips ("Assembler (Circuit Board) 259 L/h"), the step panel's option badge
+  ("in use (45%)"), the step list's pin button ("pin 5"), the line panel's "Rotate 90°" and the swap list's "25 more… (55 not shown)"
+  (two buttons whose figures are no name), the note dialog's title ("Add note at 4, 63, 5"), the Connections panel's title (a box's
+  "5× Basic Assembler", a hookup's "Power tap at 12 64 7", a link's "Titanium Dust 60/min · Red"), the 3D details box's title (a
+  picked link's, the same "Titanium Dust 60/min · Red"; ruling P2-R15), the plan banner's heading ("This plan does not add up: 2
+  inputs have no source, …"), the Flow count chip ("×5", "×1 shared"; Task 4), the recipe card's chance tag ("10%"), tier chip ("LV ·
+  32 V") and overclock chips (Task 5a), and the shortcuts sheet's digit caps (`1`, `6`; Task 11). One hook-free component writes them,
+  `Figs` (`src/client/components/Figs.tsx`): a figure is a run of digits with what joins them (`1,440`, `0.0586`, `10:00`, a position
+  `1 64 10`, a range `1–6`) and a sign before it (`+3`, `-30`). `Figs` cannot tell a name's digit from a figure, so in a text it
+  writes every digit run is a figure, a name's too ("1x Copper Wire" in a tooltip); a name stays Pixelify, digits and all, where it
+  stands alone (the next point). The `%` and `×` around a figure stay in the words' Pixelify, whose `%` and `×` read where VT323's
+  read as an x: "10%" is a VT323 `10` and a Pixelify `%`, "×5" a Pixelify `×` and a VT323 `5`. The span is `font: 1.15em/0
+  var(--font-digits)`: 1.15 em of its Pixelify parent gives its digits the parent's digit height (14.95 px in 13 px text, 16.1 px in
+  the 14 px tooltip), and a line height of 0 lets it never grow or move a line. Measured, every tooltip, badge, button, title and
+  chance tag keeps its height with the fonts and without (`lh0.png`, `figspan.png`); with a line height of 1 the chance tag grew from
+  14 to 16.1 px and dropped its digits.
 - **Pixelify, digits and all**, for names and fixed words: titles and headings that show a name (a step's, an item's, a block's:
-  `.flow-panel-head h3`, `.view3d-box > h3`), the project's name (an `<input>` holds no span, and the project list's link shows the
+  `.flow-panel-head h3`, the 3D side boxes' `.view3d-box > h3`; ruling P2-R15: a title or heading that can carry a figure writes it
+  through `<Figs>`, as the 3D details box's does), the project's name (an `<input>` holds no span, and the project list's link shows the
   same name), buttons that name an item ("Import X instead"), the avoid chips (an item's name), the tabs ("3D"), the logo and the word
   badges. A digit there belongs to a name, and rule 2 keeps names in Pixelify. The World page's scan rows change nothing: their state
   chip shows words only (Queued, Running, Done, Failed).

@@ -19,6 +19,9 @@ import { LINKS_STORAGE_KEY, loadShowLinks, saveShowLinks } from '../../src/clien
 import { linksNoteText } from '../../src/client/views/View3D.tsx';
 // the review of f82c98c: Focus, the colour legend and the note in each mode's words
 import { FOCUS_STORAGE_KEY } from '../../src/client/views/View3D.tsx';
+// Phase 2 Task 2b's fix round 1 (ruling P2-R15): a picked link's title, from the Connections model, carries its figures in span.fig
+import { connectionSpans, connectionsGraph, spanDetails } from '../../src/client/connections/model.ts';
+import { connLayout, connPlan } from './connections-fixture.ts';
 
 const shell = (over: Partial<View3DShellProps> = {}) => renderToStaticMarkup(<View3DShell layout={sampleLayout} loading={false} error={null} webgl
   maxLayer={null} onLayer={() => {}} show={{ ghosts: true, hookups: true }} onShow={() => {}} hover={null} info={null} canvas={<canvas />}
@@ -382,5 +385,22 @@ describe('3D tab: the Machine GUI chrome', () => {
     // a class or a title of the shell never names what is off: the legend and Focus are only there while the links are
     const off = shell({ showLinks: false, linksLegend: legend, focus: true, onFocus: () => {} });
     expect([off.includes('Focus'), off.includes('view3d-links-legend')]).toEqual([false, false]);
+  });
+});
+
+// Ruling P2-R15 (Phase 2 Task 2b's fix round 1): a title that can carry a figure writes it through Figs. A picked link's details box is
+// titled with the link's label and rate, as the hover label and the Connections panel are, so its figures are VT323 too; a block's name
+// with no digit is unchanged.
+describe('3D tab: the details box title of a picked link (ruling P2-R15)', () => {
+  it('writes the figures of a picked link\'s title in span.fig, and leaves a name with no digit as it is', () => {
+    const layout = connLayout('enderio');
+    const graph = connectionsGraph(layout, connPlan, 'min');
+    const span = connectionSpans(layout, graph).find((s) => s.edge === 'flow:step:a>step:b:t:dust@0');
+    if (span === undefined) throw new Error('the fixture has no Titanium Dust link');
+    const details = spanDetails(graph, span);
+    if (details === null) throw new Error('the Titanium Dust link has no details');
+    expect(shell({ info: details })).toContain(
+      '<section data-testid="view3d-info" aria-live="polite" class="view3d-box view3d-details"><h3>Titanium Dust <span class="fig">60</span>/min · Red</h3>');
+    expect(shell({ info: { title: 'Input Bus (LV)', lines: [] } })).toContain('<h3>Input Bus (LV)</h3>');
   });
 });
