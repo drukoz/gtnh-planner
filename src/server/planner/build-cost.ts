@@ -1,37 +1,44 @@
 // Machine build cost (spec §3.3 "material use includes the machines the group does not have yet", architecture §11.28 as
-// entry 39 amends it): the raw material to build one machine, at the same pricing as derived materials (pricing.ts's
-// cost model: a candidate graph walked back to buyable leaves, priced by the cost analysis) — its item's crafting chain,
+// entry 39 amends it): the raw material to build one machine, each part at the least that makes one on its own
+// (the standalone LP on a graph walked back to buyable leaves: fix wave 3 (D), below) — its item's crafting chain,
 // and for a multiblock also its exported structure, every structure hatch at the lowest tier of its class, plus the
 // hatches it needs to run less the casings they stand on. It also says why a price is missing (controller ruling OQ5):
 // a machine no recipe of the pack makes, or whose chain needs an item out of reach, cannot be built here; one that can be
-// made, but that the cost analysis finds no price for, is a pricing gap.
+// made, but that the pricing finds no price for, is a pricing gap.
 //
-// Memo key (`itemPrices`): `machinePricingKey(settings, ctx)` — `settingsHash(pricingSettings(settings, ctx))`, the hash
-// of the very settings `planBasis` and the walk get, then `|` and `basisContextKey(ctx)` — then `|` and the SHA-1 of the
-// sorted, deduplicated keys asked, joined by `\n`. The pricing reads no setting that key leaves out (it reads the tier,
-// coil heat, dimensions, excluded categories, cost overrides, stop and expand items), so a project's target, amount,
-// mode, logistics, build horizon, reuse settings, recipe and option pins and avoid list neither invalidate the memo nor
-// change a price (machine prices avoid nothing, plan 08's ruling R6), and no price depends on which keys were priced
-// before (the keys asked are part of the key).
+// Memo keys: a pricing context is `machinePricingKey(settings, ctx)` — `settingsHash(pricingSettings(settings, ctx))`,
+// the hash of the very settings `planBasis` and the walk get, then `|` and `basisContextKey(ctx)`; `itemPrices` adds `|`
+// and the SHA-1 of the sorted, deduplicated keys asked, joined by `\n`, for the table it hands out. The pricing reads no
+// setting the context leaves out (it reads the tier, coil heat, dimensions, excluded categories, cost overrides, stop and
+// expand items), so a project's target, amount, mode, logistics, build horizon, reuse settings, recipe and option pins
+// and avoid list neither invalidate the memo nor change a price (machine prices avoid nothing, plan 08's ruling R6).
+// Fix wave 3 (D): one price graph per context (`priceGraph`) and one price per context and key (`computePrices`), so no
+// price depends on the other keys asked or on which keys were priced before, and an override that makes a good cheaper
+// never makes a key dearer than without it.
 
 import { createHash } from 'node:crypto';
-import { PSEUDO_IDS, tierName } from '../../shared/gt/tiers.ts';
+import { PSEUDO_IDS, tierName, V } from '../../shared/gt/tiers.ts';
 import { isFluidKey, itemKey, type StuffKey } from '../../shared/keys.ts';
 import { defaultSettings } from '../../shared/project/apply-op.ts';
 import type { Machine, Pack, Recipe } from '../../shared/types/pack.ts';
 import type { HatchKind } from '../../shared/types/layout.ts';
 import type { BomLine, PlanContext, PlanSettings } from '../../shared/types/plan.ts';
+import { COVER_RATES, resolveParts } from '../layout/parts.ts';
 // GT's structure rules the layout lays a multiblock's hatches by (entries 47 and 49 (3): `hatchRulesOf`, which reads
 // only the machine and its export), read here so a multiblock's build holds the hatches its layout lays
 import { hatchRulesOf, KIND_CLASS, ruleNeeds, rulePower, ruleTakes, type HatchRule, type HatchSource } from '../layout/hatch-rules.ts';
 import { basisContextKey, effectiveTier, planBasis, settingsHash } from './basis.ts';
-import { buildCandidates, type CandidateGraph, type LeafOracle } from './candidates.ts';
-import { analyzeCosts, isOreBlock, makeLeafOracle } from './costs.ts';
+import { buildCandidates, type CandidateGraph, type LeafDecision, type LeafOracle } from './candidates.ts';
+import { isOreBlock, makeLeafOracle } from './costs.ts';
 import { yieldToEventLoop } from './lp.ts';
 import { sig9 } from './round.ts';
-import { deadEnds, deadEndsAlone, makeableWith } from './solve.ts';
+import { deadEnds, deadEndsAlone, makeableGoods, makeableWith, standalonePrices } from './solve.ts';
 
-/** Machine pricings kept per pack (`itemPrices`), the least recently used dropped first. */
+/**
+ * The most entries each of the two per-pack pricing memos keeps, the least recently used dropped first: the price
+ * graphs (`priceGraph`, where a context with cost overrides also keeps the one without them in use) and the price
+ * tables (`itemPrices`).
+ */
 export const MACHINE_PRICE_MEMO_SIZE = 8;
 /**
  * Block ids of structure cells nothing is placed in: air, and the fluids an exported structure holds where the machine or
@@ -54,8 +61,8 @@ export const HATCH_CLASSES: readonly string[] = Object.freeze([
 /**
  * Why a good has no price (controller ruling OQ5): `no-recipe`, no recipe of the pack makes it; `unavailable`, its chain
  * needs `item` — a good nothing in the price graph makes (the good itself when every recipe for it is rejected at the
- * tier) or a base material out of reach; `gap`, it is made and nothing in its chain is out of reach, yet the cost
- * analysis finds no price (its chain only meets loops with no way in).
+ * tier) or a base material out of reach; `gap`, no price is found, yet nothing out of reach is what it lacks (its chain
+ * only meets loops with no way in, or dead ends that even all made available would not let it be made: `gapOf`).
  */
 export type PriceGap = { kind: 'no-recipe' } | { kind: 'unavailable'; item: StuffKey } | { kind: 'gap' };
 
@@ -93,12 +100,15 @@ export function machinePricingKey(settings: PlanSettings, ctx: PlanContext): str
 }
 
 /**
- * Why `key`, priced Infinity in `graph` (null: no graph was walked) and by `oreProcessed`, has no price: `no-recipe` when
+ * Why `key`, priced Infinity on `graph` and by `orePrice`, has no price: `no-recipe` when
  * no recipe of the pack makes it, else a pricing gap when the ore blocks among its dead ends that the group can mine
  * (`mined`) would let it be made — its chain is available, only its price is missing (controller ruling OQ5 b; such a
- * key `oreProcessed` usually prices, as it did the Advanced Lathe and Advanced Macerator of the 2.9 export at MV, which
+ * key `orePrice` usually prices, as it did the Advanced Lathe and Advanced Macerator of the 2.9 export at MV, which
  * read "needs Native Diamond Cluster, not available at MV" before, a mod item that sorted first among such dead ends) —
- * else a good `deadEnds` names, else a pricing gap. The good named is one that alone,
+ * else, where its dead ends all made available would let it be made, a good `deadEnds` names, else a pricing gap (fix
+ * wave 3 (D): on the 2.9 export's price graph the Steam Hatch, 31040, meets two bee combs that would not let it be made,
+ * and read "needs Brown Tinted Comb", which walked six GT++ steam multiblocks' recipes out of every line). The good
+ * named is one that alone,
  * made available, would let `key` be made (`deadEndsAlone`), else any dead end; among those a base material out of reach
  * first, then a good whose recipes cannot run here (it has a `blocked` entry), then any other (a good nothing makes),
  * each by key, and an ore the group can mine last (it is what the machine lacks only where nothing else is). Of the dead ends of every route sorted by key, the first was often one route's oddity — on the 2.9 export
@@ -107,121 +117,230 @@ export function machinePricingKey(settings: PlanSettings, ctx: PlanContext): str
  * was another good. A walk stopped at its recipe cap left goods unexpanded that would look out of reach, so there every
  * such key is a pricing gap, never a machine that cannot be built.
  */
-function gapOf(pack: Pack, graph: CandidateGraph | null, key: StuffKey, mined: (key: StuffKey) => boolean): PriceGap {
+function gapOf(pack: Pack, graph: CandidateGraph, key: StuffKey, mined: (key: StuffKey) => boolean): PriceGap {
   if ((pack.producers.get(key) ?? []).length === 0) return { kind: 'no-recipe' };
-  if (graph?.truncated === true) return { kind: 'gap' };
-  if (graph === null) return { kind: 'unavailable', item: key };
+  if (graph.truncated === true) return { kind: 'gap' };
   const rank = (end: StuffKey): number => (mined(end) ? 3 : graph.goods.get(end)?.leafClass === 'unavailable' ? 0 : graph.blocked.has(end) ? 1 : 2);
   const first = (ends: readonly StuffKey[]): StuffKey | undefined => [...ends].sort((a, b) => rank(a) - rank(b) || byString(a, b))[0];
   const ends = deadEnds(graph, key);
   const ores = ends.filter(mined);
   if (ores.length > 0 && makeableWith(graph, key, ores)) return { kind: 'gap' };
+  // dead ends that, all made available, still leave `key` unmade are not what it lacks: its chain only meets loops
+  if (ends.length > 0 && !makeableWith(graph, key, ends)) return { kind: 'gap' };
   const item = first(deadEndsAlone(graph, key, ends)) ?? first(ends);
   return item === undefined ? { kind: 'gap' } : { kind: 'unavailable', item };
 }
 
 /**
- * The prices of `keys` at `s` (`pricingSettings`): the leaf oracle of its basis with no `supplied` option, so water, air,
- * cobblestone and lava stay leaves at 0 as in every build-material breakdown (plan 09 Task 3), and without gathered
- * recipes, so sand and gravel are dug at their price (the cost analysis counts no machines: free cobblestone and hammers
- * would price them at 0); stop items are leaves at their override or price. A buyable key costs its leaf's cost; the
- * others are the targets of one candidate graph, and cost what its cost analysis gives them, or for a part only ore
- * processing makes what the walk from the ores the group can mine gives it (`oreProcessed`).
+ * Every key a build or a layout prices at `tier` (fix wave 3 (D)): `buildKeys` of every machine at or below it (one
+ * without a tier counts) other than cables and pipes, every cable rated up to one tier above it, every item and fluid
+ * pipe, every hatch and transformer up to it, the conveyor and pump covers up to it (LV at least) and every layout part
+ * (`resolveParts`); sorted, without repeats. A pricing context's price graph is walked from these (`priceGraph`).
  */
-async function computePrices(pack: Pack, s: PlanSettings, ctx: PlanContext, keys: readonly StuffKey[]): Promise<ItemPrices> {
-  await yieldToEventLoop();
-  const basis = planBasis(pack, s, ctx);
-  const leaf = makeLeafOracle(pack, s, basis.avail, basis.prices);
-  const made = keys.filter((key) => !leaf(key).buyable);
-  const graph = made.length > 0 ? buildCandidates(pack, s, basis.env, leaf, made) : null;
-  const costs = graph === null ? null : await analyzeCosts(graph);
-  const first = (key: StuffKey): number => {
-    const decision = leaf(key);
-    return decision.buyable ? decision.cost : (costs?.cost(key) ?? Infinity);
-  };
-  // An ore block a material line would buy here (makeLeafOracle's direct and byproduct ores).
-  const mined = (key: StuffKey): boolean => {
-    const reach = basis.avail.classOf(key);
-    return (reach === 'direct' || reach === 'byproduct') && isOreBlock(pack, key);
-  };
-  const ores = await oreProcessed(pack, s, basis, graph, made, first, mined);
-  const cost = (key: StuffKey): number => {
-    const price = first(key);
-    return Number.isFinite(price) ? price : (ores?.cost(key) ?? Infinity);
-  };
-  const gaps = new Map<StuffKey, PriceGap | undefined>();
-  return {
-    cost,
-    gap(key) {
-      if (!gaps.has(key)) gaps.set(key, Number.isFinite(cost(key)) ? undefined : gapOf(pack, graph, key, mined));
-      return gaps.get(key);
-    },
-  };
-}
-
-/**
- * Fix wave 2 (c), controller ruling 187: the parts only ore processing makes, priced from the ore blocks the group can
- * mine (`mined`). Machine prices buy no ore blocks (plan 09's R8: only a material line does), so a part only sifting or
- * washing an ore makes had no price — on the 2.9 export the Flawless Diamond of the Advanced Lathe (292) and the Advanced
- * Macerator (302), so neither machine could be weighed at MV. Each key of `made` the first price graph left unpriced,
- * which a recipe of the pack makes and which the ores among its dead ends would let be made (`makeableWith`), is walked
- * again with those ores as leaves at their price and every good the first graph priced a leaf at that price (so an ore
- * stands in only where nothing else makes the part, and no other price moves); the cost analysis of that walk prices
- * them. Null when no key needs it (or the first walk was cut short at its recipe cap: then such keys stay gaps).
- */
-async function oreProcessed(
-  pack: Pack, s: PlanSettings, basis: ReturnType<typeof planBasis>, graph: CandidateGraph | null, made: readonly StuffKey[],
-  first: (key: StuffKey) => number, mined: (key: StuffKey) => boolean,
-): Promise<{ cost(key: StuffKey): number } | null> {
-  if (graph === null || graph.truncated === true) return null;
-  const targets = made.filter((key) => {
-    if (Number.isFinite(first(key)) || (pack.producers.get(key) ?? []).length === 0) return false;
-    const ends = deadEnds(graph, key).filter(mined);
-    return ends.length > 0 && makeableWith(graph, key, ends);
-  });
-  if (targets.length === 0) return null;
-  const leaf = makeLeafOracle(pack, s, basis.avail, basis.prices);
-  const oreLeaf: LeafOracle = (key) => {
-    if (mined(key)) return { buyable: true, cost: basis.prices.price(key), leafClass: basis.avail.classOf(key) };
-    const decision = leaf(key);
-    if (decision.buyable) return decision;
-    const price = first(key);
-    return Number.isFinite(price) ? { buyable: true, cost: price, leafClass: 'derived' } : decision;
-  };
-  return analyzeCosts(buildCandidates(pack, s, basis.env, oreLeaf, targets));
-}
-
-const MEMOS = new WeakMap<Pack, Map<string, Promise<ItemPrices>>>();
-
-/**
- * The prices for building `keys` (`buildKeys`) in the pricing context of `settings` in `ctx`, computed once per pack and
- * memo key (module doc), for at most MACHINE_PRICE_MEMO_SIZE keys per pack, the least recently used dropped first.
- * Callers asking while it is computed share that computation; one that fails is not kept. The keys asked, and the goods
- * their chains walk, are priced; any other key that is no leaf reads Infinity, so a caller asks for every key it prices.
- * `gap` is worked out per key when first asked, from the same price graph.
- */
-export function itemPrices(pack: Pack, settings: PlanSettings, ctx: PlanContext, keys: readonly StuffKey[]): Promise<ItemPrices> {
-  const asked = [...new Set(keys)].sort(byString);
-  const key = `${machinePricingKey(settings, ctx)}|${createHash('sha1').update(asked.join('\n')).digest('hex')}`;
-  let memo = MEMOS.get(pack);
-  if (memo === undefined) {
-    memo = new Map();
-    MEMOS.set(pack, memo);
+export function priceKeys(pack: Pack, tier: number): StuffKey[] {
+  const keys = new Set<StuffKey>(buildKeys(pack, [...pack.machines.values()].filter((m) =>
+    m.kind !== 'cable' && m.kind !== 'item_pipe' && m.kind !== 'fluid_pipe' && (m.tier === undefined || m.tier <= tier))));
+  const rated = V[Math.min(tier + 1, V.length - 1)] as number;
+  for (const m of pack.machines.values()) {
+    if (m.kind === 'cable' && m.cable !== undefined && m.cable.voltage <= rated) keys.add(m.itemKey);
+    if (m.kind === 'item_pipe' || m.kind === 'fluid_pipe') keys.add(m.itemKey);
+    if ((m.kind === 'hatch' || m.kind === 'transformer') && m.tier !== undefined && m.tier <= tier) keys.add(m.itemKey);
   }
+  for (const row of [...COVER_RATES.conveyor, ...COVER_RATES.pump]) if (row.tier <= Math.max(1, tier)) keys.add(row.key);
+  for (const part of Object.values(resolveParts(pack))) keys.add(part.key);
+  return [...keys].sort(byString);
+}
+
+/** One pricing context's price graph (`priceGraph`) and the prices worked out on it so far. */
+interface PriceGraph {
+  s: PlanSettings; basis: ReturnType<typeof planBasis>; leaf: LeafOracle; graph: CandidateGraph;
+  /** Per key asked so far: its price and the graph it was priced on (the price graph, or the key's own walk). */
+  priced: Map<StuffKey, Promise<{ cost: number; graph: CandidateGraph }>>;
+  /** The goods `graph` can make (`makeableGoods`), worked out when first needed. */
+  makeable?: ReadonlySet<StuffKey>;
+}
+
+const GRAPHS = new WeakMap<Pack, Map<string, Promise<PriceGraph>>>();
+
+/** `memo.get(key)`, made the most recently used; else `make()` kept, at most MACHINE_PRICE_MEMO_SIZE, dropped when it fails. */
+function memoized<T>(memo: Map<string, Promise<T>>, key: string, make: () => Promise<T>): Promise<T> {
   const hit = memo.get(key);
   if (hit !== undefined) {
     memo.delete(key);
     memo.set(key, hit);
     return hit;
   }
-  const prices = computePrices(pack, pricingSettings(settings, ctx), ctx, asked);
-  memo.set(key, prices);
+  const made = make();
+  memo.set(key, made);
   if (memo.size > MACHINE_PRICE_MEMO_SIZE) memo.delete(memo.keys().next().value as string);
-  const kept = memo;
-  prices.catch(() => {
-    if (kept.get(key) === prices) kept.delete(key);
+  made.catch(() => {
+    if (memo.get(key) === made) memo.delete(key);
   });
-  return prices;
+  return made;
+}
+
+/**
+ * `a` with the recipes of `b` it lacks; the goods `b` adds take `leaf`'s decision (a virtual good its own). The price
+ * graph of a context with cost overrides is its walk united with the walk at no overrides (`priceGraph`).
+ */
+function unitedGraph(a: CandidateGraph, b: CandidateGraph, leaf: LeafOracle): CandidateGraph {
+  const recipes = new Map(a.recipes.map((r) => [r.id, r]));
+  for (const r of b.recipes) if (!recipes.has(r.id)) recipes.set(r.id, r);
+  const goods = new Map(a.goods);
+  for (const [key, good] of b.goods) {
+    if (goods.has(key)) continue;
+    if (good.virtual) {
+      goods.set(key, good);
+      continue;
+    }
+    const { buyable, cost, leafClass } = leaf(key);
+    goods.set(key, { key, buyable, cost, leafClass, virtual: false });
+  }
+  const united: CandidateGraph = { ...a, recipes: [...recipes.values()].sort((x, y) => byString(x.id, y.id)), goods };
+  if (b.truncated === true) united.truncated = true;
+  return united;
+}
+
+/**
+ * The price graph of the pricing context of `settings` in `ctx` (fix wave 3 (D)), once per pack and context
+ * (`machinePricingKey`), at most MACHINE_PRICE_MEMO_SIZE per pack: one candidate walk from every key of `priceKeys` at
+ * the context's tier that is no leaf, with the leaf oracle of its basis (no `supplied` option, no gathered recipes: see
+ * `computePrices`). With cost overrides it is united with the price graph of the same context without them
+ * (`unitedGraph`), so an override that makes a good cheaper never drops the producers the pack's own prices keep — the
+ * walk keeps each good's cheapest producers by an estimate, and on the 2.9 export at HV Rubber Wood at 0.01 instead of 1
+ * dropped the chemical reactors' Raw Rubber Dust and the SBR route of 1x Annealed Copper Cable, whose price rose from
+ * 0.4133 to 0.4511.
+ */
+function priceGraph(pack: Pack, settings: PlanSettings, ctx: PlanContext): Promise<PriceGraph> {
+  let memo = GRAPHS.get(pack);
+  if (memo === undefined) {
+    memo = new Map();
+    GRAPHS.set(pack, memo);
+  }
+  return memoized(memo, machinePricingKey(settings, ctx), async () => {
+    await yieldToEventLoop();
+    const s = pricingSettings(settings, ctx);
+    const basis = planBasis(pack, s, ctx);
+    const leaf = makeLeafOracle(pack, s, basis.avail, basis.prices);
+    let graph = buildCandidates(pack, s, basis.env, leaf, priceKeys(pack, basis.tier).filter((key) => !leaf(key).buyable));
+    if (Object.keys(s.costOverrides).length > 0) graph = unitedGraph(graph, (await priceGraph(pack, { ...settings, costOverrides: {} }, ctx)).graph, leaf);
+    return { s, basis, leaf, graph, priced: new Map() };
+  });
+}
+
+/** A good the price graph makes, as a leaf of an ore walk (`orePrice`): it stops the walk there, and is no leaf in the LP. */
+const MADE_IN_PRICE_GRAPH: LeafDecision = { buyable: true, cost: 0, leafClass: 'derived' };
+const NOT_A_PRICE_LEAF: LeafDecision = { buyable: false, cost: 0, leafClass: null };
+
+/**
+ * Fix wave 2 (c), controller ruling 187, per key (fix wave 3 (D)): the price of `key`, which `graph` cannot make, when
+ * the ore blocks among its dead ends that the group can mine (`mined`) would let it be made (`makeableWith`) — on the
+ * 2.9 export the Flawless Diamond of the Advanced Lathe (292) and the Advanced Macerator (302), so neither machine could
+ * be weighed at MV. `key` is walked on its own with those ores as leaves at their price and every good `graph` makes as a
+ * leaf that stops the walk; that walk's recipes join `graph`, where the mined ores are bought at their price, and the
+ * standalone LP prices `key` there (no other key sees the ores). Infinity otherwise, and when `graph` was cut short at its
+ * recipe cap (such keys stay pricing gaps).
+ */
+async function orePrice(pack: Pack, entry: PriceGraph, graph: CandidateGraph, key: StuffKey, mined: (key: StuffKey) => boolean): Promise<number> {
+  if (graph.truncated === true || (pack.producers.get(key) ?? []).length === 0) return Infinity;
+  const ores = deadEnds(graph, key).filter(mined);
+  if (ores.length === 0 || !makeableWith(graph, key, ores)) return Infinity;
+  const { s, basis, leaf } = entry;
+  const made = graph === entry.graph && entry.makeable !== undefined ? entry.makeable : makeableGoods(graph);
+  const bought = (k: StuffKey): LeafDecision => ({ buyable: true, cost: basis.prices.price(k), leafClass: basis.avail.classOf(k) });
+  const oreLeaf: LeafOracle = (k) => (mined(k) ? bought(k) : made.has(k) ? MADE_IN_PRICE_GRAPH : leaf(k));
+  const walk = buildCandidates(pack, s, basis.env, oreLeaf, [key]);
+  const united = unitedGraph(graph, walk, (k) => (mined(k) ? bought(k) : made.has(k) ? NOT_A_PRICE_LEAF : leaf(k)));
+  for (const [k, good] of united.goods) if (mined(k)) united.goods.set(k, { ...good, ...bought(k) });
+  return (await standalonePrices(united, [key])).get(key) ?? Infinity;
+}
+
+/**
+ * The prices of `keys` in the pricing context of `settings` in `ctx` (fix wave 3 (D)): a buyable key costs its leaf's
+ * cost (the leaf oracle of the context's basis with no `supplied` option, so water, air, cobblestone and lava stay leaves
+ * at 0 as in every build-material breakdown (plan 09 Task 3), and without gathered recipes, so sand and gravel are dug at
+ * their price — the analysis counts no machines: free cobblestone and hammers would price them at 0); stop items are
+ * leaves at their override or price. Any other key costs the least raw material that makes one unit of it on its own
+ * (`standalonePrices`: its byproducts sunk) on the context's price graph (`priceGraph`), or on its own walk when the
+ * price graph never reached it — with cost overrides united with its own walk in the same context without them, as the
+ * price graph is, so there too an override that makes a good cheaper never drops the producers the walk without it
+ * keeps — or, for a part only ore processing makes, what `orePrice` gives. Each price is worked out once per context
+ * and key, so it never depends on the other keys asked: the cost analysis of one candidate graph per key set that this
+ * replaced (`analyzeCosts`, which shares a recipe's cost among its outputs by what else the graph holds) priced the
+ * Advanced Distillery at HV at 33.39 alone, 34.59 beside the Large Chemical Reactor and 42.40 beside it and the
+ * Distillation Tower (all 42.59 now), and 16x Redstone Alloy Cable at MV at 12.38 alone and 6.48 beside every cable
+ * (13.05 now).
+ */
+async function computePrices(pack: Pack, settings: PlanSettings, ctx: PlanContext, keys: readonly StuffKey[]): Promise<ItemPrices> {
+  const entry = await priceGraph(pack, settings, ctx);
+  const { s, basis, leaf, graph, priced } = entry;
+  // An ore block a material line would buy here (makeLeafOracle's direct and byproduct ores).
+  const mined = (key: StuffKey): boolean => {
+    const reach = basis.avail.classOf(key);
+    return (reach === 'direct' || reach === 'byproduct') && isOreBlock(pack, key);
+  };
+  const fresh = keys.filter((key) => !leaf(key).buyable && !priced.has(key));
+  // a good the price graph cannot make costs Infinity without an LP (its makeable fixpoint, once per context)
+  entry.makeable ??= makeableGoods(graph);
+  const makeable = entry.makeable;
+  const onGraph = fresh.filter((key) => graph.goods.has(key) && makeable.has(key));
+  const batch = onGraph.length > 0 ? standalonePrices(graph, onGraph) : null;
+  const withOre = async (key: StuffKey, cost: number, on: CandidateGraph): Promise<{ cost: number; graph: CandidateGraph }> =>
+    ({ cost: Number.isFinite(cost) ? cost : await orePrice(pack, entry, on, key, mined), graph: on });
+  for (const key of fresh) {
+    const price = graph.goods.has(key)
+      ? (batch !== null && makeable.has(key) ? batch.then((m) => withOre(key, m.get(key) ?? Infinity, graph)) : withOre(key, Infinity, graph))
+      : (async () => {
+        let own = buildCandidates(pack, s, basis.env, leaf, [key]);
+        if (Object.keys(s.costOverrides).length > 0) {
+          // united with the key's own walk in the same context without them, as `priceGraph` unites the price graphs
+          const plain = await priceGraph(pack, { ...settings, costOverrides: {} }, ctx);
+          own = unitedGraph(own, buildCandidates(pack, plain.s, plain.basis.env, plain.leaf, [key]), leaf);
+        }
+        return withOre(key, (await standalonePrices(own, [key])).get(key) ?? Infinity, own);
+      })();
+    priced.set(key, price);
+    price.catch(() => {
+      if (priced.get(key) === price) priced.delete(key);
+    });
+  }
+  const asked = new Map<StuffKey, { cost: number; graph: CandidateGraph }>();
+  for (const key of keys) {
+    const price = priced.get(key);
+    if (price !== undefined) asked.set(key, await price);
+  }
+  const cost = (key: StuffKey): number => {
+    const decision = leaf(key);
+    return decision.buyable ? decision.cost : (asked.get(key)?.cost ?? Infinity);
+  };
+  const gaps = new Map<StuffKey, PriceGap | undefined>();
+  return {
+    cost,
+    gap(key) {
+      if (!gaps.has(key)) gaps.set(key, Number.isFinite(cost(key)) ? undefined : gapOf(pack, asked.get(key)?.graph ?? graph, key, mined));
+      return gaps.get(key);
+    },
+  };
+}
+
+const MEMOS = new WeakMap<Pack, Map<string, Promise<ItemPrices>>>();
+
+/**
+ * The prices for building `keys` (`buildKeys`) in the pricing context of `settings` in `ctx` (`computePrices`): one
+ * table per pack and memo key (module doc), for at most MACHINE_PRICE_MEMO_SIZE keys per pack, the least recently used
+ * dropped first; each key's price is worked out once per context, whatever else was asked with it. Callers asking while
+ * it is computed share that computation; one that fails is not kept. Any key not asked that is no leaf reads Infinity,
+ * so a caller asks for every key it prices. `gap` is worked out per key when first asked.
+ */
+export function itemPrices(pack: Pack, settings: PlanSettings, ctx: PlanContext, keys: readonly StuffKey[]): Promise<ItemPrices> {
+  const asked = [...new Set(keys)].sort(byString);
+  let memo = MEMOS.get(pack);
+  if (memo === undefined) {
+    memo = new Map();
+    MEMOS.set(pack, memo);
+  }
+  const key = `${machinePricingKey(settings, ctx)}|${createHash('sha1').update(asked.join('\n')).digest('hex')}`;
+  return memoized(memo, key, () => computePrices(pack, settings, ctx, asked));
 }
 
 const HATCHES = new WeakMap<Pack, ReadonlyMap<string, readonly Machine[]>>();

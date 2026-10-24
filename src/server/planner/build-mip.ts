@@ -2,15 +2,19 @@
 // `solveLine`, when build cost counts, it weighs the raw material a line consumes over the build horizon (Make N: the
 // batch) against the raw material to build the machines it adds beyond those the group owns — whole new machines per
 // sharing pool (with `BuildModel.share`, the steps of one machine option and sharing key share them; else every step has
-// its own), all of one option per step, owned machines of every eligible option free beside them (an owned machine
+// its own), all of one option per step, owned machines of every eligible option beside them at no build (an owned machine
 // serves one sharing key), Make N's one added machine per type, the cleanroom as one more machine, and plan 09's step
-// charge measured against the raw material with gathered world blocks dug, never below the charge on one raw unit, paid
-// per new machine block (fix wave 2 (a): each new machine of a step or a sharing pool, an Auto Workbench included, once;
-// owned machines none; a step by hand or on another pseudo machine once, a crafting-table one HAND_STEP_WEIGHT times). Its
+// charge measured against the raw material with gathered world blocks dug, never below the charge on one raw unit (or
+// against the leanest line's raw material where that is more than LEAN_BASE_ABOVE times it: fix wave 3 (B2)), paid per
+// machine block (fix wave 2 (a): each new machine of a step or a sharing pool, an Auto Workbench included, once; an
+// owned one OWNED_STEP_SHARE of it in a running line, ledger 265; a step by hand or on another pseudo machine once, a
+// crafting-table one HAND_STEP_WEIGHT times), within the raw cap where one is given (fix wave 3 (A), `rawBound`). Its
 // decision (`decode`, or `roundUp` of the LP relaxation or of S1 when the far time guard stops it) keeps the later stages
-// within the machines it bought (`laterRoom`). The plan fix wave (controller ruling 183 (2)) made its node limit the
-// one thing that decides it — no plan depends on time or load — and its model strong and small enough that its root node
-// plans real lines within plan 09's 5 s: valid rows that bring the fixed costs of the steps a line cannot do without into
+// within the machines it bought (`laterRoom`). The plan fix wave (controller ruling 183 (2)) made its node and
+// simplex-iteration limits the one thing that decides it — no plan depends on time or load — and its model strong and
+// small enough that it plans real lines within plan 09's 5 s (fix wave 3 (F): 50 nodes without strong branching, a retry
+// at 1e-9 when its root LP fails, the cheapest incumbent by `exactCost`: solve.ts `pickBuild`): valid rows that bring the
+// fixed costs of the steps a line cannot do without into
 // the relaxation, a step whose machines one binary prices where that is exact up to one machine, no columns for options
 // another builds for less, and a start from plan 09's sparse plan (`solveLine`).
 
@@ -21,15 +25,22 @@ import { sig9 } from './round.ts';
 import { STEP_BIG_M, type MainLp } from './solve.ts';
 
 /**
- * The build MIP stops after its root node (deterministic, as plan 09's STEP_MIP_MAX_NODES), with its best whole solution,
- * which may be the start. Measured on 26 lines of the 2.9 export (plan fix wave, load 3–6 of 16 cores): the root takes
- * 0.04–4 s and plans 15 of them at the model's proven optimum (Electronic Circuit MV, the user's line, Robot Arm MV among
- * them; the model prices a light step's machines as `Light` says), the others within 1.3–6.9 % of the optimum or best
- * known by the MIP's objective (the most on Microprocessor HV and the routed Electronic Circuit MV); 10 nodes cost up to
- * 7 s more on Good Electronic Circuit HV (strong branching), and 100 cheap ones found nothing better on the five largest
- * lines.
+ * The build MIP's node limit (fix wave 3 (F), ledger 248; strong branching off, so BUILD_MIP_MAX_LP_ITERATIONS bounds
+ * every node): deterministic, like plan 09's STEP_MIP_MAX_NODES. The root alone (the fix wave's 1, controller ruling 183
+ * (2)) left Good Electronic Circuit 2/min HV `feasible` at bound 17.12 against 17.41 where one more node proves it; 50
+ * prove it at 33,968 iterations (37 nodes). On 66 lines of the 2.9 export (a5f5100's 48-plan corpus, the 8 calibration
+ * plans, the reference R0, R1, V1 and V4, GEC 2/min HV default and on AE2, 4 live projects) it plans none worse by
+ * `exactCost` than the root alone, 48 of them proven optimal against 44, for 7 s more MIP time in all (+13 %, loaded
+ * host); 3 or 10 nodes with strong branching took 35-62 s on AE2 (its iterations escape the cap).
  */
-export const BUILD_MIP_MAX_NODES = 1;
+export const BUILD_MIP_MAX_NODES = 50;
+/**
+ * The tolerance a build MIP whose root LP relaxation did not solve at MIP_FEASIBILITY_TOLERANCE (lp.ts
+ * `stopOnRootLpFailure`) runs again at (fix wave 3 (F)): Good Electronic Circuit 2/min HV on AE2 (10,001 rows, 5,321
+ * integers) has no bound at 1e-10, its incumbent a lottery of LP-free heuristics (21.41 at seed 0, 15.45-25.39 at seeds
+ * 1-4), and at 1e-9 a bound of 13.15 and 15.95 (seeds 1-4: 15.45-15.55).
+ */
+export const BUILD_MIP_RETRY_TOLERANCE = 1e-9;
 /**
  * The build MIP also stops once its simplex iterations reach this (deterministic, `LpModel.maxIterations`), so a root
  * node far larger than the real lines' — at most 32,000 iterations on 26 of them, 0.05–4 s — ends with the best plan it
@@ -131,6 +142,15 @@ export interface BuildMipInput {
    * objective.
    */
   start?: readonly number[];
+  // optional additions (fix wave 3 (A), (B2))
+  /**
+   * The leanest line's raw material per unit of demand: what the build stage's plan at step charge 0 (`solveLine`, what
+   * "Least raw material" plans) uses, else S1. Over the horizon it is the step charge's base where it is more than
+   * LEAN_BASE_ABOVE × σ (`scaleOf`); absent: σ alone.
+   */
+  leanRaw?: number;
+  /** The raw cap: the most raw material per unit of demand (Σ rawCost·x) the plan may use (`layoutOf`); absent: none. */
+  rawBound?: number;
 }
 
 function byString(a: string, b: string): number {
@@ -167,18 +187,43 @@ function adds(o: MachineOption): boolean {
 }
 
 /**
+ * Fix wave 3 (B2): the step charge is measured against the leanest line's raw material over the horizon only where that
+ * is more than this many times σ — a line whose least raw material needs machines nobody would build (the user's poly
+ * line: 135 times S1g's). Where the leanest line stays near S1 (Good Electronic Circuit 2/min HV 1.03 times, the user's MV
+ * circuit 1.05) σ already measures the plan, and the build MIP stays the one it was before the cap: re-based there, the
+ * 2.6 % larger charge cost Good Electronic Circuit 2/min HV its optimality proof within 50 nodes (fix wave 3 review).
+ */
+export const LEAN_BASE_ABOVE = 2;
+
+/**
+ * The share of a new machine block's step charge a block the group owns pays in a running line (the user's ruling of
+ * 2026-10-23, ledger 265, controller OQ24): a step on an owned machine still counts toward "Fewest machines" — pipes,
+ * power, space — at a smaller weight than a new one, and costs no build. Whole machines per holder: per step and option
+ * without sharing, per sharing pool with it (an owned machine two steps share pays once). Make N pays none.
+ */
+export const OWNED_STEP_SHARE = 0.5;
+
+/**
  * The build MIP's scale (`buildMip`): F = D × horizon (rate) or D (Make N), σ = max(s1g × F, 1) — the raw material one
  * unit of the objective stands for — k = s1 × F / σ (0 when s1 ≤ 1e-9), and `charge`, the step charge on one new machine
- * block in raw material, `stepCharge × σ` (fix wave 2 (a): the charge is paid per new machine block, not per step).
+ * block in raw material, `stepCharge × σ` (fix wave 2 (a): the charge is paid per new machine block, not per step), or
+ * `stepCharge × leanRaw × F` where that base is more than LEAN_BASE_ABOVE × σ (fix wave 3 (B2): a line whose least raw
+ * material needs machines nobody would build — the user's poly line, S1g × F = 0.63 raw a day against builds of 17 to
+ * 1,441 — still weighs a machine block at a share of what it really runs on). `perBlock` is `charge` in units of σ, the
+ * objective's: exactly `stepCharge` where the charge is not re-based. A block the group owns pays OWNED_STEP_SHARE of
+ * it in rate mode (`layoutOf`).
  */
-export interface Scale { F: number; sigma: number; k: number; charge: number }
+export interface Scale { F: number; sigma: number; k: number; charge: number; perBlock: number }
 
 /** The MIP's scale of `input` (`Scale`); solve.ts weighs best multi-output's raw sources in its units (`sourceWeight`). */
 export function scaleOf(input: BuildMipInput): Scale {
   const D = input.demandScale;
   const F = input.model.mode === 'rate' ? D * (input.model.horizonSeconds ?? 0) : D;
   const sigma = Math.max(input.s1g * F, 1);
-  return { F, sigma, k: input.s1 > TINY ? (input.s1 * F) / sigma : 0, charge: input.stepCharge * sigma };
+  const lean = (input.leanRaw ?? 0) * F;
+  const base = lean > LEAN_BASE_ABOVE * sigma ? lean : sigma;
+  const perBlock = base === sigma ? input.stepCharge : (input.stepCharge * base) / sigma;
+  return { F, sigma, k: input.s1 > TINY ? (input.s1 * F) / sigma : 0, charge: input.stepCharge * base, perBlock };
 }
 
 /** What one new machine of `o` costs the MIP, in raw material: its build and the step charge on one machine block. */
@@ -455,7 +500,10 @@ function allocate(input: BuildMipInput, x: readonly number[], prefer?: (j: numbe
  * steps' load needs (at least one for any load). A step with runs left and no option that can add is `short`;
  * `machines` lists the steps in id order. Make N: an owned option (highest tier, then lowest mteId), else a type an
  * earlier step added, else the option with the lowest build (then most runs a second, lowest mteId). Runs per second up
- * to 1e-9 × D count as none (per unit of target).
+ * to 1e-9 × D count as none (per unit of target). Owned machines go first: one costs no build and, in a running line,
+ * OWNED_STEP_SHARE of a block's step charge (ledger 265), less than a new machine of its option; where many slow owned
+ * machines cost more than a few new fast ones, the rounding is an upper bound that `rounded` and `startAt` price with
+ * that share and the MIP's search improves on.
  */
 export function roundUp(input: BuildMipInput, x: readonly number[], prefer?: (j: number) => number | undefined): BuildDecision {
   return allocate(input, x, prefer).decision;
@@ -476,7 +524,8 @@ export interface LaterRoom {
    * `grants`, and for the holder of each step column of `makers` that runs on one holder and may grow for nothing what it
    * may take more: the owned machines of its type that neither the decision nor `grants` uses, whole. Steps by column; the
    * first takes all of a type's. A new machine never comes for nothing (fix wave 2 (a): its block pays the step charge,
-   * whatever it costs to build), so only owned ones grow a holder here.
+   * whatever it costs to build), so only owned ones grow a holder here, and only at step charge 0: with a step charge an
+   * owned block pays OWNED_STEP_SHARE of it (ledger 265), so none grows one and `grants` come back as they are.
    */
   widen(makers: readonly number[], grants: ReadonlyMap<string, number>): Map<string, number>;
   /** `grants` cut to the whole machines `x` uses beyond each holder's own (left out where it uses no more). */
@@ -496,14 +545,18 @@ interface Holder {
  * (each step's own share of it held the base and the tie stage to the decision's split, and a tie its pool had room for
  * went to buying); without, each step's own machines of one option. A step on several holders (owned machines of another
  * option beside its own, `others`) keeps what its machines do. In the tie stage a holder may grow for nothing (`widen`):
- * by the owned machines of its type the decision leaves idle, a whole number of them (`trim`), so the plan's own machine
- * assignment (machines.ts `assignOwned`) adds no new machine — every new one pays the step charge on its block (fix
- * wave 2 (a); 1c794df also let it grow by machines that build for nothing).
+ * at step charge 0, by the owned machines of its type the decision leaves idle, a whole number of them (`trim`), so the
+ * plan's own machine assignment (machines.ts `assignOwned`) adds no new machine — every new one pays the step charge on
+ * its block (fix wave 2 (a); 1c794df also let it grow by machines that build for nothing), and with a step charge so does
+ * every owned one, OWNED_STEP_SHARE of it (ledger 265), so a tie that needs another machine, new or owned, is the build
+ * MIP's to weigh.
  */
 export function laterRoom(input: BuildMipInput, decision: BuildDecision): LaterRoom {
   const { lp, model } = input;
   const D = input.demandScale;
   if (model.mode !== 'rate') return { rows: () => [], widen: (_, grants) => new Map(grants), trim: () => new Map() };
+  /** Whether an owned block pays its share of the step charge (ledger 265), so no machine comes for nothing. */
+  const charged = input.stepCharge > 0;
   const holders = new Map<string, Holder>();
   const holderOf = new Map<number, Holder>();
   const bounded: Array<{ j: number; capacity: number }> = [];
@@ -562,6 +615,7 @@ export function laterRoom(input: BuildMipInput, decision: BuildDecision): LaterR
     },
     widen: (makers, grants) => {
       const out = new Map(grants);
+      if (charged) return out;
       for (const j of [...makers].sort((a, b) => a - b)) {
         const h = holderOf.get(j);
         if (h === undefined) continue;
@@ -622,7 +676,8 @@ interface Layout {
  * dearer, one of the two strictly; or `other` is a whole number r ≥ 2 of times as fast and dearer than r of `o` (r of
  * `o` then do the work of one of `other` for less) — a machine's cost being its build and the step charge on its block
  * (`blockCost`), so r machines pay r charges. `roundUp` never picks such an `other` either: it takes the option that
- * adds the least of that cost to the step, then the faster.
+ * adds the least of that cost to the step, then the faster. Owned machines of `other` keep their own column (`q`), which
+ * this never prunes, so an owned block's share of the charge (ledger 265) leaves the rule as it is.
  */
 function cheaperToAdd(o: MachineOption, other: MachineOption, charge: number): boolean {
   if (o.perMachine >= other.perMachine && o.solveBuild <= other.solveBuild) return o.perMachine > other.perMachine || o.solveBuild < other.solveBuild;
@@ -638,7 +693,8 @@ function cheaperToAdd(o: MachineOption, other: MachineOption, charge: number): b
  * each of them, and r of the other cost less than one of its own (with r = 1: no dearer and slower for none, one of the
  * two strictly). Moving a solution's new loads from such a pool to the other never costs more (ceil(a + b) ≤ ceil(a) +
  * ceil(b)), so the MIP gives it no new-machine columns, and `roundUp`, which takes the option that adds the least of
- * that cost, never puts load there either.
+ * that cost, never puts load there either. The owned machines a pool holds (`u`, at ledger 265's share of the charge)
+ * stay where they are, so that move leaves their cost alone.
  */
 function outdonePools(steps: readonly Step[], charge: number): Set<string> {
   const byPool = new Map<string, Array<{ step: Step; u: Usable }>>();
@@ -748,7 +804,7 @@ function layoutOf(input: BuildMipInput, withDerived: boolean): Layout {
   const D = input.demandScale;
   const width = lp.rawCost.length;
   const rate = model.mode === 'rate';
-  const { F, sigma, k, charge } = scaleOf(input);
+  const { F, sigma, k, charge, perBlock } = scaleOf(input);
   let largest = 0;
   for (let j = 0; j < lp.firstBuy; j++) largest = Math.max(largest, input.x1[j] ?? 0);
   const X = STEP_BIG_M * largest;
@@ -767,11 +823,20 @@ function layoutOf(input: BuildMipInput, withDerived: boolean): Layout {
     return colCost.length - 1;
   };
   const rows: LpRow[] = [...lp.rows];
+  // Fix wave 3 (A): the raw cap. Every start the build stage gives is within it (S1, the leanest line, the sparse plan
+  // where it is), so the MIP always has a plan.
+  if (input.rawBound !== undefined) {
+    const entries = lp.rawCost.flatMap((c, j): Array<[number, number]> => (c === 0 ? [] : [[j, c]]));
+    if (entries.length > 0) rows.push({ lower: -Infinity, upper: input.rawBound * (1 + BIG_M_SLACK) + TINY, entries });
+  }
   const steps = stepsOf(input);
 
   // Rate mode: new and owned machines per (step, option), the option binaries, then per pool its new machines and, with
   // `model.share`, the owned machines it holds. An option whose new machines another of the step's options always builds
-  // for less (`cheaperToAdd`; with sharing a whole pool another pool outdoes, `outdonePools`) gets none.
+  // for less (`cheaperToAdd`; with sharing a whole pool another pool outdoes, `outdonePools`) gets none. A whole owned
+  // machine costs OWNED_STEP_SHARE of a new block's step charge (ledger 265; `ownedBlock`, 0 at step charge 0): on its
+  // step's column without sharing, on the owned machines its pool holds with it.
+  const ownedBlock = rate ? OWNED_STEP_SHARE * perBlock : 0;
   const members = new Map<number, Member[]>();
   const light = new Map<number, Light>();
   const pools = new Map<string, Pool>();
@@ -804,7 +869,7 @@ function layoutOf(input: BuildMipInput, withDerived: boolean): Layout {
         const member: Member = { u, cap: (X * D) / u.o.perMachine };
         const beaten = model.share ? outdone.has(u.pool) : step.usable.some((v) => v !== u && adds(v.o) && cheaperToAdd(v.o, u.o, charge));
         if (adds(u.o) && !beaten) member.a = column(0, member.cap, false);
-        if (u.o.owned > 0) member.q = column(0, u.o.owned, !model.share);
+        if (u.o.owned > 0) member.q = column(model.share ? 0 : ownedBlock, u.o.owned, !model.share);
         if (member.a === undefined && member.q === undefined) continue;
         list.push(member);
         pushTo(byPool, u.pool, member);
@@ -834,7 +899,8 @@ function layoutOf(input: BuildMipInput, withDerived: boolean): Layout {
       pools.set(key, pool);
     }
     // Owned machines: per type, whole machines per step without sharing; with it, per pool of the type the owned
-    // machines it holds (a column when two or more pools of the type have steps, else all of them).
+    // machines it holds (a column when two or more pools of the type have steps, or when owned machines pay their
+    // share of the step charge, else all of them).
     const byType = new Map<number, Pool[]>();
     for (const pool of pools.values()) if (pool.members.some((m) => m.q !== undefined)) pushTo(byType, pool.option.mteId, pool);
     for (const mteId of [...byType.keys()].sort((a, b) => a - b)) {
@@ -846,10 +912,11 @@ function layoutOf(input: BuildMipInput, withDerived: boolean): Layout {
         continue;
       }
       const several = typePools.length >= 2;
+      const held = several || ownedBlock > 0;
       for (const pool of typePools) {
         const entries = pool.members.flatMap((m): Array<[number, number]> => (m.q === undefined ? [] : [[m.q, 1]]));
-        if (several) pool.u = column(0, total, true);
-        rows.push({ lower: -Infinity, upper: several ? 0 : total, entries: several ? [...entries, [pool.u as number, -1]] : entries });
+        if (held) pool.u = column(ownedBlock, total, true);
+        rows.push({ lower: -Infinity, upper: held ? 0 : total, entries: held ? [...entries, [pool.u as number, -1]] : entries });
       }
       if (several) rows.push({ lower: -Infinity, upper: total, entries: typePools.map((p): [number, number] => [p.u as number, 1]) });
     }
@@ -866,17 +933,18 @@ function layoutOf(input: BuildMipInput, withDerived: boolean): Layout {
     }
   }
 
-  // One binary per step recipe, 1 where it runs. The step charge is paid per new machine block (fix wave 2 (a): on a
-  // pool's new machines, a light step's machines and Make N's added types above; owned machines pay none), so a step's
-  // binary carries it only where the step runs on no machine the MIP counts — by hand or on another pseudo machine —
-  // once, a crafting-table step `handWeight` times (one no Auto Workbench runs, `LpRecipe.byHand`, `byHandWeight` times:
-  // controller ruling 214). (A fewest-recipes tie-break of 1e-6 on every binary made the root
+  // One binary per step recipe, 1 where it runs. The step charge is paid per machine block (fix wave 2 (a): on a pool's
+  // new machines, a light step's machines and Make N's added types above; owned machines OWNED_STEP_SHARE of it, ledger
+  // 265), so a step's binary carries it only where the step runs on no machine the MIP counts — by hand or on another
+  // pseudo machine — once, a crafting-table step `handWeight` times (one no Auto Workbench runs, `LpRecipe.byHand`,
+  // `byHandWeight` times: controller ruling 214), at a block's charge in σ (`perBlock`: `stepCharge`, or more where fix
+  // wave 3 (B2) re-bases it). (A fewest-recipes tie-break of 1e-6 on every binary made the root
   // node of Good Electronic Circuit HV take 3.9 s instead of 2.5 s for the same plan, and decided no plan.)
   const y = new Map<number, number>();
   for (const s of steps) {
     const first = light.get(s.j)?.first ?? 0;
     const pseudo = s.usable.length === 0
-      ? input.stepCharge * stepWeight(s.r, { hand: input.handWeight, byHand: input.byHandWeight ?? 1 }) : 0;
+      ? perBlock * stepWeight(s.r, { hand: input.handWeight, byHand: input.byHandWeight ?? 1 }) : 0;
     const col = column(pseudo + first / sigma, 1, true);
     y.set(s.j, col);
     rows.push({ lower: -Infinity, upper: 0, entries: [[s.j, 1], [col, -X]] });
@@ -1103,13 +1171,15 @@ function decodeMakeN(input: BuildMipInput, layout: Layout, x: readonly number[])
  * k = s1 × F / σ, it minimizes `k × columnCost` on the main columns (with s1 ≤ 1e-9: F × rawCost / σ, the raw over the
  * horizon; in rate mode a crop farm's column also pays its planting, `perRun × D / σ`: `BuildMipInput.plantings`, add-on
  * 17) plus each new machine's build and step charge (`blockCost`) / σ — so a new machine block costs
- * `stepCharge × σ` raw beside its build — per pool whole new machines over the steps' new loads, owned machines free
- * (whole per step without sharing; with it per pool, one sharing key per owned machine), one load row per step, one
- * option for a step's new machines, Make N's one machine per type, one binary per step where it runs (with the step
- * charge × its weight as its cost only for a step on no machine the MIP counts, by hand or on another pseudo machine),
- * the cleanroom and R3's
- * derived-purchase binaries (`M_d` = what a plan no dearer than the start can buy of it), and the valid rows of
- * `layoutOf` that tie the steps' binaries to their machines and to the steps that supply what they take. `start` =
+ * `stepCharge × σ` raw beside its build, or the leanest line's raw where that is more than LEAN_BASE_ABOVE × σ
+ * (`scaleOf`) — within the raw cap (`rawBound`: Σ rawCost·x at most it, fix wave 3 (A)), per pool whole new machines
+ * over the steps' new loads, owned machines at no build and, in rate mode, OWNED_STEP_SHARE of a block's charge each
+ * (ledger 265; whole per step without sharing; with it per pool, one sharing key per owned machine), one load row per
+ * step, one option for a step's new machines, Make N's one machine per type, one binary per step where it runs (with
+ * the step charge × its weight as its cost only for a step on no machine the MIP counts, by hand or on another pseudo
+ * machine), the cleanroom and R3's derived-purchase binaries (`M_d` = what a plan no dearer than the start can buy of
+ * it), and the valid rows of `layoutOf` that tie the steps' binaries to their machines and to the steps that supply what
+ * they take. `start` =
  * `roundUp(input, x1)` in the columns (every step S1 runs at all with machines); `startAt(x)` the same for other runs,
  * with its objective; `decode` reads a whole solution's decision; `prefer` gives, per step column, the option with the
  * most new capacity in `x` (the relaxation's), for `roundUp`; `exactCost` is the objective of a whole solution with its

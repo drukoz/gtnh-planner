@@ -7,7 +7,8 @@ import { login, setName, createProject } from './helpers.ts';
 
 test('avoiding a material flags the steps that cannot do without it, and removing it plans as before', async ({ page }) => {
   await login(page); await setName(page, 'Ann');
-  await createProject(page, 'No copper', { target: 't:circuit@0', amount: 30, tier: 1 });
+  // No raw cap (fix wave 3 (A)): at the default +25 % some plates come from a Basic Bending Machine, a fourth step.
+  await createProject(page, 'No copper', { target: 't:circuit@0', amount: 30, tier: 1, rawCap: null });
   const steps = page.locator('svg [data-step-id]');
   const badges = page.locator('svg [data-step-id] [data-avoid-badge]');
   await expect(steps).toHaveCount(3);

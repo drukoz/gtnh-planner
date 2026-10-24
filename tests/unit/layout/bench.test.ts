@@ -221,6 +221,32 @@ describe('the Auto Workbench in a line', () => {
   });
 });
 
+describe('a bench ingredient that also leaves the line, on Project Red (plan 12 final review)', () => {
+  it('is offered back from the output chest, and the feeding rules name the bench and the good where it is not (R10)', async () => {
+    // The macerator's Fine Wire goes to the bench and, 1 a second, out of the line. Its Item Extractor Chip sends every
+    // wire on as soon as it is made, past the bench (a Stock Keeper only orders) to the output chest's Terminator, so the
+    // bench orders its wire from there: the output chest broadcasts it (research machine-feeding §2.2, §3.6).
+    const pack = benchPack();
+    const plan = resistorLine();
+    plan.steps.find((s) => s.id === 'm')!.runsPerSecond = 3;
+    plan.flows = [...plan.flows.map((f) => (f.from === 'raw' && f.to === 'm' ? { ...f, perSecond: 3 } : f)), { from: 'm', to: 'out', key: B, perSecond: 1 }];
+    const { r } = laid('routed', plan, pack);
+    const chips = (label: string) => r.blocks.find((b) => b.label === label)?.feed?.chips;
+    expect(chips('Routed Interface Pipe (Basic Macerator)')).toEqual([whitelist('responder', ['t:in@0']), whitelist('extractor', [B]), whitelist('broadcaster', [B])]);
+    expect(chips('Routed Interface Pipe (output chest)')).toEqual([whitelist('broadcaster', [B]), whitelist('terminator', [A, B, C, D, R])]);
+    const layout = await layoutLine(pack, plan, emptyScan(), makeProject({ logistics: 'routed', scanId: null, baseId: null }));
+    expect(layout.warnings.filter((w) => w.code.startsWith('feed_'))).toEqual([]);
+    // Without that Broadcaster the bench starves, and R10 says so.
+    const bare = { ...layout, blocks: layout.blocks.map((b) => (b.label !== 'Routed Interface Pipe (output chest)' ? b
+      : { ...b, feed: { chips: b.feed!.chips!.filter((c) => c.kind !== 'broadcaster') } })) };
+    const chest = bare.blocks.find((b) => b.label === 'Chest (output)')!;
+    const bench = benchBlock(bare.blocks);
+    expect(feedingWarnings({ pack, plan, layout: bare })).toEqual([{ code: 'feed_starved', stepId: 'r', key: B,
+      text: `${bench.label} at ${bench.pos.join(' ')} may never get Fine Wire: an Item Extractor Chip sends it on as soon as it is made, and the `
+        + `Item Terminator Chip on ${chest.label} at ${chest.pos.join(' ')} takes it in with no Item Broadcaster Chip there to fill the bench's orders` }]);
+  });
+});
+
 describe('the feeding rules on a bench', () => {
   it('find nothing on the lines the layout lays, and flag blocking mode toward a bench (R9)', async () => {
     const pack = benchPack();

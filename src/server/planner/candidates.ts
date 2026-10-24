@@ -83,6 +83,9 @@ export interface LeafDecision {
    * producers, exactly as for `alsoMade`, in every mode, so the LP weighs buying it against farming it.
    */
   farmMade?: true;
+  // optional addition (plan 12 fix wave 3 (B))
+  /** No leaf only because the project's "Only these come in" leaves it out (`makeLeafOracle`'s `inputsOnly`). */
+  outsideInputs?: true;
 }
 export type LeafOracle = (key: StuffKey) => LeafDecision;
 export interface GoodInfo {
@@ -97,6 +100,9 @@ export interface GoodInfo {
   // optional addition (add-on 17)
   /** `LeafDecision.farmMade`: a leaf a farm of the line makes (its producers, the farms among them, are in `recipes`). */
   farmMade?: true;
+  // optional addition (plan 12 fix wave 3 (B))
+  /** `LeafDecision.outsideInputs`: the line makes it, as "Only these come in" leaves it out; blockers say so. */
+  outsideInputs?: true;
 }
 export interface CandidateGraph {
   targets: StuffKey[]; recipes: LpRecipe[] /* sorted by id */; goods: Map<StuffKey, GoodInfo>;
@@ -401,6 +407,57 @@ export function acceptRecipe(pack: Pack, r: Recipe, env: PlanEnv, bench?: BenchL
   if (heat) return { ok: false, why: 'heat' };   // better coils fix it at this tier
   if (Number.isFinite(needTier)) return { ok: false, why: 'tier', needTier };
   return unbuilt ? { ok: false, why: 'multiblock' } : { ok: false, why: 'tier' };
+}
+
+/** Acceptance contexts kept per pack (fix wave 3 (E)): a plan's walks use one or two, a line with an avoid list a few more. */
+export const ACCEPTANCE_MEMO_SIZE = 8;
+/** Per pack, per acceptance context (`acceptanceContext`), each recipe's `acceptRecipe` answer; least recently used context dropped first. */
+const ACCEPTANCES = new WeakMap<Pack, Map<string, Map<string, Acceptance>>>();
+let acceptanceHits = 0;
+
+function sortedList(values: Iterable<string | number> | undefined): Array<string | number> | null {
+  return values === undefined ? null : [...values].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+/** What `acceptRecipe` reads of `env` and `bench`, as a key: tier, coil heat, low gravity, excluded categories, multiblocks, from-nothing recipes, the bench line. */
+function acceptanceContext(env: PlanEnv, bench: BenchLine | undefined): string {
+  return JSON.stringify([env.tier, env.coilHeat, env.lowGravity, sortedList(env.excluded), sortedList(env.multiblocks), sortedList(env.fromNothing),
+    bench === undefined ? null : bench.capBy ?? '']);
+}
+
+/**
+ * `acceptRecipe` of `pack` at `env` and `bench`, remembered per pack and acceptance context (fix wave 3 (E)): a plan
+ * walks its graph five times or more (cost model, line, machine prices, build list, ingredient options; an avoid list's
+ * trials more), each of which judged every recipe it reached again.
+ */
+export function acceptOf(pack: Pack, env: PlanEnv, bench?: BenchLine): (r: Recipe) => Acceptance {
+  let contexts = ACCEPTANCES.get(pack);
+  if (contexts === undefined) ACCEPTANCES.set(pack, (contexts = new Map()));
+  const key = acceptanceContext(env, bench);
+  let memo = contexts.get(key);
+  if (memo === undefined) {
+    memo = new Map();
+    if (contexts.size >= ACCEPTANCE_MEMO_SIZE) contexts.delete(contexts.keys().next().value as string);
+  } else {
+    contexts.delete(key);
+  }
+  contexts.set(key, memo);
+  const known = memo;
+  return (r) => {
+    let a = known.get(r.id);
+    if (a === undefined) {
+      a = acceptRecipe(pack, r, env, bench);
+      known.set(r.id, a);
+    } else {
+      acceptanceHits++;
+    }
+    return a;
+  };
+}
+
+/** For tests: the acceptance contexts `pack` keeps and the answers given from memory so far (this process). */
+export function acceptanceMemoStats(pack: Pack): { contexts: number; hits: number } {
+  return { contexts: ACCEPTANCES.get(pack)?.size ?? 0, hits: acceptanceHits };
 }
 
 /**
@@ -912,12 +969,13 @@ export function buildCandidates(
   const register = (key: StuffKey): GoodInfo => {
     let good = goods.get(key);
     if (good === undefined) {
-      const { buyable, cost, leafClass, steps, free, alsoMade, farmMade } = decide(key);
+      const { buyable, cost, leafClass, steps, free, alsoMade, farmMade, outsideInputs } = decide(key);
       good = { key, buyable, cost, leafClass, virtual: false };
       if (steps !== undefined) good.steps = steps;
       if (free !== undefined) good.free = free;
       if (alsoMade === true) good.alsoMade = true;
       if (farmMade === true) good.farmMade = true;
+      if (outsideInputs === true) good.outsideInputs = true;
       goods.set(key, good);
     }
     return good;
@@ -931,10 +989,11 @@ export function buildCandidates(
     }
   };
   const unbuildable = opts.unbuildable;
+  const shared = acceptOf(pack, env, opts.bench);
   const accept = (r: Recipe): Acceptance => {
     let a = acceptance.get(r.id);
     if (a === undefined) {
-      a = unbuildable?.has(r.id) === true ? { ok: false, why: 'machine' } : acceptRecipe(pack, r, env, opts.bench);
+      a = unbuildable?.has(r.id) === true ? { ok: false, why: 'machine' } : shared(r);
       acceptance.set(r.id, a);
     }
     return a;

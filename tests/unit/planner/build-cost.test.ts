@@ -359,7 +359,7 @@ describe('machineGap', () => {
     const minedPrices = await pricesOf(mined, lv);
     expect(machineBuildCost(mined, minedPrices, machine(mined, 102))).toBe(10);
     expect(machineGap(mined, minedPrices, machine(mined, 102))).toBeNull();
-    expect(minedPrices.cost('t:gem_flawless@0')).toBe(1);
+    expect((await itemPrices(mined, lv, ctx, ['t:gem_flawless@0'])).cost('t:gem_flawless@0')).toBe(1);
     // A part another route makes keeps that route's price (5 iron ingots, so 9 + 5): the ore is a leaf only where
     // nothing else makes the part.
     const pressed = packFromSpec(gemSpec(['overworld'], { press: true }));
@@ -536,6 +536,120 @@ describe('itemPrices', () => {
     expect(machineBuildCost(pack, await first, machine(pack, 151))).toBe(10);
     expect(pricingSettings(project, ctx)).toEqual(pricingSettings(lv, ctx));
     expect(itemPrices(pack, lv, ctx, keys)).toBe(first);
+  });
+});
+
+/**
+ * Mini-GT where one centrifuge run splits a Tin Ingot (1) into Part A and Part B, and Part B2 is crafted from Part B;
+ * with `machines`, three LV machines crafted from one part each: 171 from Part A, 172 from Part B, 173 from Part B2.
+ */
+function splitPack(machines: boolean): Pack {
+  const spec = structuredClone(MINI_GT);
+  spec.items?.push({ key: 't:part_a@0', name: 'Part A' }, { key: 't:part_b@0', name: 'Part B' }, { key: 't:part_b2@0', name: 'Part B2' });
+  spec.recipes?.push(
+    { id: 'split', map: 'gt.recipe.centrifuge', in: [['t:tin_ingot@0', 1]], out: [['t:part_a@0', 1], ['t:part_b@0', 1]], eut: 8, dur: 100 },
+    { id: 'make-b2', map: 'crafting', in: [['t:part_b@0', 1]], out: [['t:part_b2@0', 1]] },
+  );
+  if (machines) {
+    spec.machines?.push(
+      { mteId: 171, name: 'Part A Machine', maps: [], tier: 1 }, { mteId: 172, name: 'Part B Machine', maps: [], tier: 1 },
+      { mteId: 173, name: 'Part B2 Machine', maps: [], tier: 1 },
+    );
+    spec.recipes?.push(
+      { id: 'make-171', map: 'crafting', in: [['t:part_a@0', 1]], out: [['machine:171@0', 1]] },
+      { id: 'make-172', map: 'crafting', in: [['t:part_b@0', 1]], out: [['machine:172@0', 1]] },
+      { id: 'make-173', map: 'crafting', in: [['t:part_b2@0', 1]], out: [['machine:173@0', 1]] },
+    );
+  }
+  return packFromSpec(spec);
+}
+
+/**
+ * Mini-GT where Part P is joined in an assembler from the four quarters one centrifuge run of a Tin Ingot (1) makes, or
+ * carved from three Oak Wood logs; with `withMachine`, machine 174 (LV) is crafted from it (without it no price key
+ * needs Part P, so no price graph reaches it).
+ */
+function quarterPack(withMachine: boolean): Pack {
+  const spec = structuredClone(MINI_GT);
+  const quarters = [1, 2, 3, 4].map((i) => `t:quarter_${i}@0`);
+  spec.items?.push(...quarters.map((key, i) => ({ key, name: `Quarter ${i + 1}` })), { key: 't:part_p@0', name: 'Part P' });
+  spec.recipes?.push(
+    { id: 'quarter', map: 'gt.recipe.centrifuge', in: [['t:tin_ingot@0', 1]], out: quarters.map((key): [string, number] => [key, 1]), eut: 8, dur: 100 },
+    { id: 'join', map: 'gt.recipe.assembler', in: quarters.map((key): [string, number] => [key, 1]), out: [['t:part_p@0', 1]], eut: 16, dur: 100 },
+    { id: 'carve', map: 'crafting', in: [['minecraft:log@0', 3]], out: [['t:part_p@0', 1]] },
+  );
+  if (withMachine) {
+    spec.machines?.push({ mteId: 174, name: 'Part P Machine', maps: [], tier: 1 });
+    spec.recipes?.push({ id: 'make-174', map: 'crafting', in: [['t:part_p@0', 1]], out: [['machine:174@0', 1]] });
+  }
+  return packFromSpec(spec);
+}
+
+/**
+ * Mini-GT where Part X is crafted from Part Y and Part Y from Part X (a loop with no way in), Part X also from a Comb
+ * nothing makes and Part Y, and machine 175 (LV) from Part X.
+ */
+function loopPack(): Pack {
+  const spec = structuredClone(MINI_GT);
+  spec.items?.push({ key: 't:part_x@0', name: 'Part X' }, { key: 't:part_y@0', name: 'Part Y' }, { key: 't:comb@0', name: 'Comb' });
+  spec.machines?.push({ mteId: 175, name: 'Part X Machine', maps: [], tier: 1 });
+  spec.recipes?.push(
+    { id: 'a-comb-x', map: 'crafting', in: [['t:comb@0', 1], ['t:part_y@0', 1]], out: [['t:part_x@0', 1]] },
+    { id: 'loop-x', map: 'crafting', in: [['t:part_y@0', 1]], out: [['t:part_x@0', 1]] },
+    { id: 'loop-y', map: 'crafting', in: [['t:part_x@0', 1]], out: [['t:part_y@0', 1]] },
+    { id: 'make-175', map: 'crafting', in: [['t:part_x@0', 1]], out: [['machine:175@0', 1]] },
+  );
+  return packFromSpec(spec);
+}
+
+describe('prices independent of the keys asked (fix wave 3 (D))', () => {
+  it('prices a key the same whatever else is asked with it', async () => {
+    // The cost analysis of one graph per key set shared the split's cost among its parts by what else the graph held:
+    // Part A Machine cost 1 asked alone and 0 beside the machines made from Part B and B2. Each now costs what making it
+    // on its own costs: one Tin Ingot, the other part sunk.
+    const pack = splitPack(true);
+    const together = await itemPrices(pack, lv, ctx, buildKeys(pack, [171, 172, 173].map((id) => machine(pack, id))));
+    expect([171, 172, 173].map((id) => machineBuildCost(pack, together, machine(pack, id)))).toEqual([1, 1, 1]);
+    // Alone, asked at MV: another pricing context, so no price comes from the memo of the first.
+    expect(machineBuildCost(pack, await itemPrices(pack, mv, ctx, ['machine:171@0']), machine(pack, 171))).toBe(1);
+    // Keys no machine of the pack is built from are each walked on their own, alike.
+    const parts = splitPack(false);
+    const asked = ['t:part_a@0', 't:part_b@0', 't:part_b2@0'];
+    const all = await itemPrices(parts, lv, ctx, asked);
+    expect(asked.map((key) => all.cost(key))).toEqual([1, 1, 1]);
+    expect((await itemPrices(parts, mv, ctx, ['t:part_a@0'])).cost('t:part_a@0')).toBe(1);
+  });
+
+  it('calls a part whose dead ends would not let it be made a pricing gap, never one of those ends', async () => {
+    // Given the Comb, Part X still cannot be made (Part Y only comes from Part X), so the Comb is not what Part X Machine
+    // lacks: a pricing gap. On the 2.9 export's price graph the Steam Hatch (31040) meets two bee combs so, and read
+    // "needs Brown Tinted Comb", which walked six GT++ steam multiblocks' recipes out of every line.
+    const pack = loopPack();
+    const prices = await itemPrices(pack, lv, ctx, ['machine:175@0']);
+    expect(machineBuildCost(pack, prices, machine(pack, 175))).toBeNull();
+    expect(machineGap(pack, prices, machine(pack, 175))).toEqual({ kind: 'gap' });
+  });
+
+  it('never prices a key above its price without the override when an override makes a good cheaper', async () => {
+    // The walk keeps a good's producers within twice its cheapest estimate and charges a recipe's whole input to each
+    // output, so joining the quarters is estimated at 4 against carving at 3 logs. With logs at 0.4 (carving 1.2) it
+    // dropped the join, and Part P Machine rose from 1 to 1.2 when the logs got cheaper. A context with cost overrides
+    // also keeps the producers of the same context without them.
+    const pack = quarterPack(true);
+    const at = async (log: number): Promise<number | null> => machineBuildCost(
+      pack, await itemPrices(pack, { ...lv, costOverrides: { 'minecraft:log@0': log } }, ctx, ['machine:174@0']), machine(pack, 174));
+    expect([await at(1), await at(0.4), await at(0.2)]).toEqual([1, 1, 0.6]);
+  });
+
+  it('never prices a key the price graph never reached above its price without the override either', async () => {
+    // Without machine 174 no price graph reaches Part P, so it is priced on its own walk, which at logs 0.4 dropped the
+    // join as the price graph's walk did, and Part P rose from 1 to 1.2 when the logs got cheaper. With cost overrides
+    // that walk is united with the key's own walk in the same context without them, as a price graph is with the one
+    // without them.
+    const pack = quarterPack(false);
+    const at = async (log: number): Promise<number> =>
+      (await itemPrices(pack, { ...lv, costOverrides: { 'minecraft:log@0': log } }, ctx, ['t:part_p@0'])).cost('t:part_p@0');
+    expect([await at(1), await at(0.4), await at(0.2)]).toEqual([1, 1, 0.6]);
   });
 });
 

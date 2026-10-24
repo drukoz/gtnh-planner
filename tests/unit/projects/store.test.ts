@@ -120,8 +120,8 @@ describe('ProjectStore.migrateSettings', () => {
     const id = storedBeforePlan09('Old');
     expect(store.get(id)?.settings).toMatchObject({ routeDerived: false, settingsVersion: 1 });
     expect(store.migrateSettings(PLANNER_UPDATE)).toEqual([id]);
-    expect(store.get(id)).toMatchObject({ rev: 1, settings: { routeDerived: true, settingsVersion: 3 } });
-    expect(opsOf(id)).toEqual([{ rev: 1, op: { op: 'settings', patch: { routeDerived: true, settingsVersion: 3 } }, by: 'Planner update' }]);
+    expect(store.get(id)).toMatchObject({ rev: 1, settings: { routeDerived: true, rawCap: 0.25, settingsVersion: 4 } });
+    expect(opsOf(id)).toEqual([{ rev: 1, op: { op: 'settings', patch: { routeDerived: true, rawCap: 0.25, settingsVersion: 4 } }, by: 'Planner update' }]);
     // Run again (the next start): nothing left to switch.
     expect(store.migrateSettings(PLANNER_UPDATE)).toEqual([]);
     expect(store.get(id)?.rev).toBe(1);
@@ -131,7 +131,7 @@ describe('ProjectStore.migrateSettings', () => {
     const p = store.create('New', 'Ann', { routeDerived: false });
     const migratedOld = storedBeforePlan09('Old');
     expect(store.migrateSettings(PLANNER_UPDATE)).toEqual([migratedOld]);
-    expect(store.get(p.id)).toMatchObject({ rev: 0, settings: { routeDerived: false, settingsVersion: 3 } });
+    expect(store.get(p.id)).toMatchObject({ rev: 0, settings: { routeDerived: false, settingsVersion: 4 } });
     expect(db.countOps(p.id)).toBe(0);
   });
   // Plan 12 fix wave 2 (the user's answer of 2026-10-20): "Fewest machines" (0.5) is the default, and a project still at
@@ -141,18 +141,35 @@ describe('ProjectStore.migrateSettings', () => {
     const kept = new Map([0, 0.05, 0.15, 0.5].map((charge) => [storedAtVersion2(`Chose ${charge}`, charge), charge]));
     expect(store.get(old)?.settings).toMatchObject({ stepCharge: 0.02, settingsVersion: 2 });
     expect(store.migrateSettings(PLANNER_UPDATE).sort()).toEqual([old, ...kept.keys()].sort());
-    expect(store.get(old)).toMatchObject({ rev: 1, settings: { stepCharge: 0.5, routeDerived: true, settingsVersion: 3 } });
-    expect(opsOf(old)).toEqual([{ rev: 1, op: { op: 'settings', patch: { stepCharge: 0.5, settingsVersion: 3 } }, by: 'Planner update' }]);
+    expect(store.get(old)).toMatchObject({ rev: 1, settings: { stepCharge: 0.5, routeDerived: true, rawCap: 0.25, settingsVersion: 4 } });
+    expect(opsOf(old)).toEqual([{ rev: 1, op: { op: 'settings', patch: { stepCharge: 0.5, rawCap: 0.25, settingsVersion: 4 } }, by: 'Planner update' }]);
     for (const [id, charge] of kept) {
-      expect(store.get(id)).toMatchObject({ rev: 1, settings: { stepCharge: charge, settingsVersion: 3 } });
-      expect(opsOf(id)).toEqual([{ rev: 1, op: { op: 'settings', patch: { settingsVersion: 3 } }, by: 'Planner update' }]);
+      expect(store.get(id)).toMatchObject({ rev: 1, settings: { stepCharge: charge, rawCap: 0.25, settingsVersion: 4 } });
+      expect(opsOf(id)).toEqual([{ rev: 1, op: { op: 'settings', patch: { rawCap: 0.25, settingsVersion: 4 } }, by: 'Planner update' }]);
     }
     // Idempotent: the next start changes nothing, and a later deliberate 2 % ("Some machines") sticks.
     expect(store.migrateSettings(PLANNER_UPDATE)).toEqual([]);
     store.apply(old, [{ op: 'settings', patch: { stepCharge: 0.02 } }], 'Ann');
     expect(store.migrateSettings(PLANNER_UPDATE)).toEqual([]);
-    expect(store.get(old)).toMatchObject({ rev: 2, settings: { stepCharge: 0.02, settingsVersion: 3 } });
+    expect(store.get(old)).toMatchObject({ rev: 2, settings: { stepCharge: 0.02, settingsVersion: 4 } });
     expect(db.countOps(old)).toBe(2);
+  });
+  // Fix wave 3 (A), the user's answer of 2026-10-22: the raw cap at +25 % for every project stored before it, once; a
+  // project at version 3 keeps a deliberate 2 % step charge, and a later "No limit" sticks.
+  it('gives a project stored before the raw cap its default once, and keeps what is chosen after', () => {
+    const p = store.create('At 3', 'Ann');
+    const row = db.getProject(p.id)!;
+    const state = JSON.parse(row.state);
+    state.settings.settingsVersion = 3;
+    state.settings.stepCharge = 0.02;
+    delete state.settings.rawCap;
+    db.updateProject({ ...row, state: JSON.stringify(state) });
+    expect(store.migrateSettings(PLANNER_UPDATE)).toEqual([p.id]);
+    expect(store.get(p.id)).toMatchObject({ rev: 1, settings: { stepCharge: 0.02, rawCap: 0.25, settingsVersion: 4 } });
+    expect(opsOf(p.id)).toEqual([{ rev: 1, op: { op: 'settings', patch: { rawCap: 0.25, settingsVersion: 4 } }, by: 'Planner update' }]);
+    store.apply(p.id, [{ op: 'settings', patch: { rawCap: null } }], 'Ann');
+    expect(store.migrateSettings(PLANNER_UPDATE)).toEqual([]);
+    expect(store.get(p.id)).toMatchObject({ rev: 2, settings: { rawCap: null, settingsVersion: 4 } });
   });
   it('leaves deleted projects for the start after they are restored', () => {
     const id = storedBeforePlan09('Old');

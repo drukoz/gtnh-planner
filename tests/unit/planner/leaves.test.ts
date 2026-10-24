@@ -1,6 +1,7 @@
 // Leaf rules and import provenance (plan 09 Task 2; fix spec R1, R5–R8): gathered world blocks are natural leaves,
 // fluids are bought only where a source is reachable, ore blocks only for material lines, derived materials only when
-// shallow and never below their plain price, and every bought one names the chain it stands for.
+// shallow and never below their plain price, and every bought one names the chain it stands for; a byproduct-only good
+// costs BEYOND_STOCK_FACTOR times its price beyond the group's stock (fix wave 3 (C)).
 
 import { describe, it, expect } from 'vitest';
 import { withBuildRecipes } from '../../helpers/build-fixtures.ts';
@@ -8,9 +9,10 @@ import { miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec, type IngredientSpec, type ItemSpec, type RecipeSpec } from '../../helpers/pack-spec.ts';
 import { planBasis } from '../../../src/server/planner/basis.ts';
 import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
+import { BEYOND_STOCK_FACTOR } from '../../../src/server/planner/solve.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
-import type { DimensionInfo, FluidSource, OreVein } from '../../../src/shared/types/pack.ts';
-import type { PlanSettings } from '../../../src/shared/types/plan.ts';
+import type { DimensionInfo, FluidSource, OreVein, Pack } from '../../../src/shared/types/pack.ts';
+import type { Plan, PlanContext, PlanSettings, PlanWarning } from '../../../src/shared/types/plan.ts';
 
 /**
  * Build cost ignored (plan 12): these cases predate it. Their packs' machines get a build recipe (`withBuildRecipes`,
@@ -205,5 +207,82 @@ describe('derived materials (R6, R7)', () => {
     const canMake = (key: string) => plan.rawInputs.find((r) => r.key === key)?.canMake;
     expect(canMake('t:copper_ingot@0')).toBe(false);   // only lava-copper makes it, and that needs an MV centrifuge
     expect(canMake('t:iron_ingot@0')).toBe(true);
+  });
+});
+
+describe("byproduct-only goods beyond the group's stock (fix wave 3 (C), controller OQ2)", () => {
+  /**
+   * Gold Dust only as a byproduct of iron ore (an ore washer finds a little in it: `leafClass` 'byproduct'), bent into
+   * foil; with `iron`, foil is also bent from two Iron Dust (mined: 2 raw a foil, within the candidate walk's reach of
+   * the gold foil's 1, `KEEP_WITHIN`).
+   */
+  const goldPack = (iron: boolean): Pack => packFromSpec(withBuildRecipes({
+    items: [{ key: 't:iron_ore@0', name: 'Iron Ore', gt: { prefix: 'ore', material: 'Iron' } }, dust('t:iron_dust@0', 'Iron Dust', 'Iron'),
+            dust('t:gold_dust@0', 'Gold Dust', 'Gold'), { key: 't:foil@0', name: 'Foil' }],
+    maps: [{ id: 'gt.recipe.orewasher', name: 'Ore Washer' }, { id: 'gt.recipe.metalbender', name: 'Bending Machine' }],
+    machines: [{ mteId: 1, name: 'Basic Ore Washer', maps: ['gt.recipe.orewasher'], tier: 1 },
+               { mteId: 2, name: 'Basic Bending Machine', maps: ['gt.recipe.metalbender'], tier: 1 }],
+    recipes: [{ id: 'wash', map: 'gt.recipe.orewasher', in: [['t:iron_ore@0', 1]], out: [['t:gold_dust@0', 1, 0.05]], eut: 16 },
+              { id: 'foil', map: 'gt.recipe.metalbender', in: [['t:gold_dust@0', 1]], out: [['t:foil@0', 1]], eut: 16 },
+              ...(iron ? [{ id: 'foil-iron', map: 'gt.recipe.metalbender', in: [['t:iron_dust@0', 2]], out: [['t:foil@0', 1]], eut: 16 } satisfies RecipeSpec] : [])],
+    worldgen: { veins: [vein('Iron')], byproducts: { Iron: ['Gold'] } },
+  }));
+  /** A context whose storage holds `gold` Gold Dust. */
+  const stocked = (gold: number): PlanContext => ({ ...emptyContext(), storage: new Map([['t:gold_dust@0', { total: gold, reachable: gold }]]) });
+  /** A foil a minute at "Least raw material", build cost ignored (the stock spread over 24 hours): 1,440 Gold Dust a day. */
+  const foil = (more: Partial<PlanSettings> = {}): PlanSettings => S({ target: 't:foil@0', tier: 1, amount: 1, per: 'min', stepCharge: 0, ...more });
+  const beyond = (plan: Plan): PlanWarning[] => plan.warnings.filter((w) => w.code === 'beyond-stock');
+
+  it('buys the stock spread over the horizon at its price and the rest at BEYOND_STOCK_FACTOR times it, and says so', async () => {
+    const p = goldPack(false);
+    const enough = await planLine(p, foil(), stocked(1440));
+    expect(enough.rawCost?.perSecond).toBeCloseTo(1 / 60, 9);
+    expect(beyond(enough)).toEqual([]);
+    // 360 in storage: a quarter of the day's dust at its price, three quarters at 10 times it.
+    const short = await planLine(p, foil(), stocked(360));
+    expect(short.rawInputs.map((r) => [r.key, r.perSecond, r.leafClass])).toEqual([['t:gold_dust@0', 0.0166666667, 'byproduct']]);
+    expect(short.rawCost?.perSecond).toBeCloseTo((1 + 3 * BEYOND_STOCK_FACTOR) / 240, 9);
+    expect(beyond(short)).toEqual([{ code: 'beyond-stock', key: 't:gold_dust@0', text: 'Buys 1,440 a day of Gold Dust, beyond the 360 in storage' }]);
+    // Nothing in storage, or no world scan: all of it beyond.
+    const none = await planLine(p, foil(), emptyContext());
+    expect(none.rawCost?.perSecond).toBeCloseTo(BEYOND_STOCK_FACTOR / 60, 9);
+    expect(beyond(none).map((w) => w.text)).toEqual(['Buys 1,440 a day of Gold Dust, beyond the 0 in storage']);
+    // Spread over a build horizon of 6 hours, 360 last the line those 6 hours.
+    const sixHours = await planLine(p, foil({ buildHorizonHours: 6 }), stocked(360));
+    expect(sixHours.rawCost?.perSecond).toBeCloseTo(1 / 60, 9);
+    expect(beyond(sixHours)).toEqual([]);
+    // Make N: the batch.
+    const batch = await planLine(p, foil({ mode: 'makeN', amount: 100 }), stocked(30));
+    expect(batch.status).toBe('ok');
+    expect(beyond(batch).map((w) => w.text)).toEqual(['Buys 100 of Gold Dust for the batch, beyond the 30 in storage']);
+  });
+
+  it('names the purchase over the build horizon the warning tests where that is not a day', async () => {
+    // A week's horizon spreads 2,000 in storage over the week: more than the day's 1,440, less than the week's 10,080.
+    const p = goldPack(false);
+    const week = await planLine(p, foil({ buildHorizonHours: 168 }), stocked(2000));
+    const share = 2000 / (168 * 3600);
+    expect(week.rawCost?.perSecond).toBeCloseTo(share + BEYOND_STOCK_FACTOR * (1 / 60 - share), 9);
+    expect(beyond(week)).toEqual([{ code: 'beyond-stock', key: 't:gold_dust@0', text: 'Buys 1,440 a day of Gold Dust, 10,080 over 1 week, beyond the 2,000 in storage' }]);
+  });
+
+  it('makes the rest another way where that costs less than buying it beyond the stock', async () => {
+    const p = goldPack(true);
+    // Two Iron Dust a foil against 10 for Gold Dust beyond the stock; within the stock, Gold Dust at 1.
+    const none = await planLine(p, foil(), emptyContext());
+    expect(none.rawInputs.map((r) => [r.key, r.perSecond])).toEqual([['t:iron_dust@0', 0.0333333333]]);
+    expect(beyond(none)).toEqual([]);
+    const some = await planLine(p, foil(), stocked(360));
+    expect(some.rawInputs.map((r) => [r.key, r.perSecond])).toEqual([['t:gold_dust@0', 0.00416666667], ['t:iron_dust@0', 0.025]]);
+    expect(some.steps.map((s) => s.id)).toEqual(['foil', 'foil-iron']);
+    expect(beyond(some)).toEqual([]);
+    // Make N: the batch's whole runs keep the LP's split (`wholeRuns` with the stock): the 30 Gold Dust in storage, the
+    // other 70 foils from 140 Iron Dust, never 100 Gold Dust at its plain price; its flows come from the same runs.
+    const batch = await planLine(p, foil({ mode: 'makeN', amount: 100 }), stocked(30));
+    expect(batch.status).toBe('ok');
+    expect(batch.rawInputs.map((r) => [r.key, r.total])).toEqual([['t:gold_dust@0', 30], ['t:iron_dust@0', 140]]);
+    expect(batch.steps.map((s) => s.id)).toEqual(['foil', 'foil-iron']);
+    expect(batch.flows.filter((f) => f.from === 'raw').map((f) => [f.key, f.to]).sort()).toEqual([['t:gold_dust@0', 'foil'], ['t:iron_dust@0', 'foil-iron']]);
+    expect(beyond(batch)).toEqual([]);
   });
 });

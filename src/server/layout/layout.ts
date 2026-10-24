@@ -710,7 +710,7 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
     const kept = areas.map((a) => reservedArea(a, (p) => worldPos(p, frame)));
     const warnings = dedupeWarnings([...unitWarnings, ...(chosen?.warnings ?? worldWarnings)]);
     const middle: Vec3 = [frame.origin[0] + Math.floor(worldSize[0] / 2), frame.origin[1], frame.origin[2] + Math.floor(worldSize[2] / 2)];
-    const reuse = base === null ? [] : findReuse(pack, plan, scan, base, base.center);
+    const reuse = base === null ? [] : findReuse(pack, plan, scan, base, base.center, mode);
     const pins = makePins({
       dim, site: null, power: null, logistics: null, reuse, ...(base === null ? {} : { farms: farmPins(kept) }),
       warnings: base === null ? [] : warnings.filter((w) => SITE_PINNED.has(w.code)).map((w) => ({ code: w.code, text: w.text, pos: middle })),
@@ -786,7 +786,7 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
     finish = { status: 'no-world', pins: null, reuse: [], site: null, power: null, supplyTier: null, logistics: null };
   } else {
     const centre: Vec3 = [lineBox.min[0] + Math.floor(lineSize[0] / 2), frame.origin[1], lineBox.min[2] + Math.floor(lineSize[2] / 2)];
-    const reuse = findReuse(pack, plan, scan, base, centre);
+    const reuse = findReuse(pack, plan, scan, base, centre, mode);
     const placed = warnings.flatMap((w) => {
       if (SITE_PINNED.has(w.code)) return [{ code: w.code, text: w.text, pos: centre }];
       const at = w.code === 'no_path' ? hooked.noPathAt.get(w.text) ?? centre : null;

@@ -393,7 +393,8 @@ function reusePin(pins: readonly Pin[], find: ReuseFind): number | undefined {
  * own), id `layout:reuse:<step>` of its first find (`:<mteId>` added for an owned machine of another option,
  * `ReuseFind.otherMteId`, so ids stay unique): hook the group's machines, each counted once (controller ruling 215), into
  * the line's logistics; for machines several steps share (plan 12), which steps they serve, by what they make, in find
- * order.
+ * order; for Auto Workbenches (plan 12's final review), what to set on them — their grid and the cap the line's
+ * logistics put on each ingredient (`ReuseFind.bench`), each distinct text once.
  */
 function reuseSteps(finds: readonly ReuseFind[], pins: readonly Pin[]): Draft[] {
   return reuseGroups(finds).map(({ finds: group, count }) => {
@@ -402,8 +403,9 @@ function reuseSteps(finds: readonly ReuseFind[], pins: readonly Pin[]): Draft[] 
     const steps = groupSteps(group);
     const products = steps.map((id) => group.find((f) => f.stepId === id)?.product ?? id);
     const serves = steps.length > 1 ? `; it serves ${fmtInt(steps.length)} steps: ${products.join(', ')}` : '';
+    const benches = [...new Set(group.flatMap((f) => (f.bench === undefined ? [] : [f.bench])))].map((text) => `; ${text}`).join('');
     return draft(`layout:reuse:${first.stepId}${first.otherMteId === undefined ? '' : `:${first.otherMteId}`}`, 'logistics', pin,
-      `Hook your ${fmtInt(count)}× ${first.name}${atPin(pin)} into the line's logistics${serves}`);
+      `Hook your ${fmtInt(count)}× ${first.name}${atPin(pin)} into the line's logistics${serves}${benches}`);
   });
 }
 

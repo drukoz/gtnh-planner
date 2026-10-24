@@ -7,6 +7,12 @@
 // default, derived fluids always made, glass from gathered sand, free inputs from rock breakers, pumps and compressors):
 // copper, tin and antimony, iron, gold, tantalum, the ores' dusts, redstone, sand, wood, rubber, coal, raw oil and the
 // other base materials the chains behind them start from.
+//
+// Plan 12 (Task 8): the plans count build cost over 24 hours at "Fewest machines" by default. The checks that assume
+// plan 09's objective (the aluminium line's one blast furnace step, the least raw material at 0 %) read the same
+// settings with build cost ignored; real-build-cost.test.ts plans them with build cost counted. Plan times keep the
+// bounds fix wave 3 (E) measured on a quiet host: BUILD_COST_PLAN_SECONDS with build cost counted at a step charge,
+// COLD_PRICES_PLAN_SECONDS at 0 % or with build cost ignored.
 
 import { beforeAll, describe, expect, it } from 'vitest';
 import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
@@ -39,6 +45,9 @@ const RED_ALLOY_INGOT = 'gregtech:gt.metaitem.01@11308';
 const IRON_III_CHLORIDE = 'fluid:ironiiichloride';
 const RAW_SILICON_DUST = 'gregtech:gt.metaitem.01@2020';
 const SAND = 'minecraft:sand@0';
+const GRAVEL = 'minecraft:gravel@0';
+const COBBLESTONE = 'minecraft:cobblestone@0';
+const FORGE_HAMMER_MAP = 'gt.recipe.hammer';
 const GLASS_DUST = 'gregtech:gt.metaitem.01@2890';
 const ANTIMONY_INGOT = 'gregtech:gt.metaitem.01@11058';
 /**
@@ -70,15 +79,21 @@ const ORDINARY: ReadonlySet<string> = new Set([
   'gregtech:gt.metaitem.01@2305' /* steel dust */, 'gregtech:gt.metaitem.01@11308' /* red alloy ingot */, 'gregtech:gt.metaitem.01@2308' /* red alloy dust */,
   'gregtech:gt.metaitem.01@11381' /* redstone alloy ingot */, 'minecraft:redstone@0', 'minecraft:gold_ingot@0', 'gregtech:gt.metaitem.01@2086' /* gold dust */,
   'gregtech:gt.metaitem.01@11080' /* tantalum ingot */, 'gregtech:gt.metaitem.01@11314' /* soldering alloy ingot */,
+  'gregtech:gt.metaitem.01@11058' /* antimony ingot: the soldering alloy of a line within the raw cap (fix wave 3 (A)) */,
   'minecraft:iron_ingot@0', 'minecraft:coal@0', 'gregtech:gt.metaitem.01@11304' /* cast iron ingot */,
   // ores' dusts the supporting lines smelt, mix or electrolyse
   'gregtech:gt.metaitem.01@2058' /* antimony dust */, 'gregtech:gt.metaitem.01@2855' /* chalcopyrite dust */, 'gregtech:gt.metaitem.01@2871' /* malachite dust */,
   'gregtech:gt.metaitem.01@2525' /* sodalite dust */, 'gregtech:gt.metaitem.01@2913' /* realgar dust */, 'gregtech:gt.metaitem.01@2022' /* sulfur dust */,
+  // a mined ore's dust "Fewest machines" buys for its phosphorus and oxygen rather than build the machines that make them
+  // (plan 12 fix wave 2, controller ruling 197 (6))
+  'gregtech:gt.metaitem.01@2833' /* phosphate dust */,
   // glass, wood, crops, rubber, carbon
   SAND, 'minecraft:sand@1', GLASS_DUST, 'gregtech:gt.metaitem.01@2809' /* wood pulp */, 'minecraft:log@0' /* oak wood */,
   'minecraft:log2@0' /* acacia wood */, 'IC2:blockRubWood@0' /* rubber wood */, 'cropsnh:berry@1' /* sugar beet */, 'gregtech:gt.metaitem.01@11880' /* rubber bar */,
   'gregtech:gt.metaitem.01@2896' /* raw rubber dust */, 'IC2:itemHarz@0' /* sticky resin */, 'minecraft:slime_ball@0', 'IC2:itemDust@2' /* coal dust */,
   'gregtech:gt.metaitem.01@2535' /* coal dust */, 'gregtech:gt.metaitem.01@2010' /* carbon dust */, 'gregtech:gt.metaitem.01@2536' /* charcoal dust */,
+  // the oxygen of a line that no longer buys Phosphate Dust beyond the group's stock: sugar electrolysed (fix wave 3 (C))
+  'minecraft:sugar@0',
   // plastics and the chemistry behind them: oil, and the fluids pumped where a source is in reach
   'gregtech:gt.metaitem.01@11470' /* epoxid bar */, 'gregtech:gt.metaitem.01@11473' /* PTFE bar */, 'fluid:liquid_medium_oil' /* raw oil */,
   'fluid:saltwater', 'fluid:helium', 'fluid:sulfuricacid',
@@ -91,7 +106,25 @@ const NEVER_HERE: readonly string[] = [
   'gt.recipe.eyeofharmony', 'gt.recipe.fog_molten', 'kubatech.htgrrecipes', 'gt.recipe.pcbfactory', 'gt.recipe.thermalboiler',
   'gt.recipe.fishpond', 'gt.recipe.algae_pond', 'gg.recipe.extreme_heat_exchanger',
 ];
-const PLAN_SECONDS = 5;
+/**
+ * A plan with build cost counted at a step charge above 0: such a plan also solves the raw cap's leanest line and plan
+ * 09's plan (fix wave 3 (E), controller OQ1 (A): "each real-data file keeps its own bound for build-cost plans with a
+ * step charge, which Task 13 sets to the next whole second above 1.25 x the slowest quiet-host median"). The slowest,
+ * 2 Good Electronic Circuits a minute at HV around Gold, took 9.89 s, the median of three on 2026-10-24 (each run started
+ * at a 1-minute load under 4): 1.25 × 9.89 = 12.36.
+ */
+const BUILD_COST_PLAN_SECONDS = 13;
+/**
+ * A plan at step charge 0 or with build cost ignored, which prices its line's candidate machines cold as the first plan
+ * of its tier (fix wave 3 (E), the controller's ruling of 2026-10-23 on Task 3's finding (2): "every real-data plan-time
+ * assertion of a plan at step charge 0 or with build cost ignored that prices its own line's candidate machines cold
+ * […] gets the OQ1 (A) bound the same way as the build-cost plans: the next whole second above 1.25 x the slowest
+ * quiet-host median of Step 1, measured as the first plan of its tier in a whole-file run"). Each timed so: 2 Good
+ * Electronic Circuits a minute at HV with build cost ignored in this file's runs (its first HV plan), the other three
+ * run alone. The slowest, the Calcite case alone, took 8.22 s, the median of three on 2026-10-24 (each run started at a
+ * 1-minute load under 4): 1.25 × 8.22 = 10.28.
+ */
+const COLD_PRICES_PLAN_SECONDS = 11;
 /**
  * Step caps re-measured at the 2 % default step charge with supporting lines (ruling P14; the old caps came from plans of
  * the old rules, fix spec §2's from its 5 % prototype without supporting lines): measured + 5.
@@ -101,6 +134,20 @@ const GEC_HV_MAX_STEPS = 56;   // 51 steps
 const STEEL_MV_MAX_STEPS = 14; // 9 steps at default settings, the cast iron made from ore too
 
 const perMinute = (plan: Plan, key: string): number => 60 * (plan.rawInputs.find((r) => r.key === key)?.perSecond ?? 0);
+
+/**
+ * Whether the plan's flows run Sand ← a forge hammer ← Gravel ← a forge hammer ← Cobblestone ← the rock breaker's supply
+ * step (plan 12, D1: sand made from free cobblestone): a `gt.recipe.hammer` step making Sand takes Gravel from a
+ * `gt.recipe.hammer` step that takes Cobblestone from the step supplying it (`PlanStep.supply`).
+ */
+function sandFromBreaker(plan: Plan): boolean {
+  const byId = new Map(plan.steps.map((s) => [s.id, s]));
+  /** The steps that send `key` into step `id`. */
+  const feeding = (id: string, key: string): PlanStep[] => plan.flows.filter((f) => f.to === id && f.key === key).flatMap((f) => byId.get(f.from) ?? []);
+  return plan.steps.some((sand) => sand.mapId === FORGE_HAMMER_MAP && sand.outputs.some((o) => o.key === SAND)
+    && feeding(sand.id, GRAVEL).some((gravel) => gravel.mapId === FORGE_HAMMER_MAP
+      && feeding(gravel.id, COBBLESTONE).some((breaker) => breaker.supply === COBBLESTONE)));
+}
 /** What the line's steps take of `key` a minute, bought or made in the line. */
 const takenPerMinute = (plan: Plan, key: string): number =>
   60 * plan.steps.reduce((sum, s) => sum + s.inputs.filter((i) => i.key === key).reduce((a, i) => a + i.amount, 0) * s.runsPerSecond, 0);
@@ -122,13 +169,16 @@ function soleTakenOutputs(plan: Plan, step: PlanStep, empties: ReadonlySet<strin
   });
 }
 
-/** The checks every plan of this file must pass; `alsoRaw` are further raw inputs the target itself is made of. */
-function expectSane(plan: Plan, seconds: number, maxSteps: number, alsoRaw: readonly string[] = []): void {
+/**
+ * The checks every plan of this file must pass, planned in under `limit` seconds; `alsoRaw` are further raw inputs the
+ * target itself is made of.
+ */
+function expectSane(plan: Plan, seconds: number, limit: number, maxSteps: number, alsoRaw: readonly string[] = []): void {
   const codes = plan.warnings.map((w) => w.code);
   expect(plan.status, JSON.stringify(plan.warnings)).toBe('ok');
   expect(codes).not.toContain('graph-too-big');
   expect(codes).not.toContain('free-loop');
-  expect(seconds).toBeLessThan(PLAN_SECONDS);
+  expect(seconds).toBeLessThan(limit);
   expect(plan.steps.length).toBeGreaterThan(0);
   expect(plan.steps.length).toBeLessThanOrEqual(maxSteps);
   expect(plan.rawInputs.filter((r) => !r.available)).toEqual([]);
@@ -174,10 +224,10 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
     pack = await loadPack(activeExportDir(loadConfig()));
   }, 120_000);
 
-  it(`plans 1 Electronic Circuit a minute at MV from ordinary materials, in under ${EC_MV_MAX_STEPS} steps and 5 s`, async () => {
+  it(`plans 1 Electronic Circuit a minute at MV from ordinary materials, in under ${EC_MV_MAX_STEPS} steps and ${BUILD_COST_PLAN_SECONDS} s`, async () => {
     const settings = { target: ELECTRONIC_CIRCUIT, amount: 1, tier: 2 };
     const { plan: p, seconds } = await plan(settings);
-    expectSane(p, seconds, EC_MV_MAX_STEPS);
+    expectSane(p, seconds, BUILD_COST_PLAN_SECONDS, EC_MV_MAX_STEPS);
     await expectSameBreakdown(p, settings);
     // It adds up (fix spec R11): its Bricked Blast Furnace, run for its Ferrosilite beside bought copper, is named so (D13).
     expect(indexPlan(p).issues).toEqual([]);
@@ -194,7 +244,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
     const settings = { target: ELECTRONIC_CIRCUIT, amount: 1, tier: 2 };
     const { plan: p, seconds } = await plan(settings);
     expect(p.status, JSON.stringify(p.warnings)).toBe('ok');
-    expect(seconds).toBeLessThan(PLAN_SECONDS);
+    expect(seconds).toBeLessThan(BUILD_COST_PLAN_SECONDS);
     const ec = p.steps.find((s) => s.mainOutput === ELECTRONIC_CIRCUIT);
     expect(ec?.recipeId).toBe(EC_CIRCUIT_ASSEMBLER);
     const solder = ec?.options?.find((o) => o.slot === SOLDER_SLOT);
@@ -212,7 +262,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
     // Pinning Molten Tin plans tin, and no soldering alloy.
     const tin = await plan({ ...settings, optionChoice: { [`${EC_CIRCUIT_ASSEMBLER}#${SOLDER_SLOT}`]: 'fluid:molten.tin' } });
     expect(tin.plan.status, JSON.stringify(tin.plan.warnings)).toBe('ok');
-    expect(tin.seconds).toBeLessThan(PLAN_SECONDS);
+    expect(tin.seconds).toBeLessThan(BUILD_COST_PLAN_SECONDS);
     expect(tin.plan.steps.find((s) => s.recipeId === EC_CIRCUIT_ASSEMBLER)?.options?.find((o) => o.slot === SOLDER_SLOT)?.pinned).toBe('fluid:molten.tin');
     expect(tin.plan.steps.some((s) => s.mainOutput === 'fluid:molten.tin')).toBe(true);
     expect(tin.plan.steps.filter((s) => s.mainOutput !== undefined && SOLDERING_ALLOY.includes(s.mainOutput)).map((s) => s.id)).toEqual([]);
@@ -263,16 +313,21 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
     expect(cast.map((a) => [a.mapId, a.unusable])).toEqual([['gt.recipe.fluidsolidifier', ['needs MV (your tier is LV)']]]);
   }, 120_000);
 
-  it(`plans 2 Good Electronic Circuits a minute at HV from ordinary materials, in under ${GEC_HV_MAX_STEPS} steps and 5 s`, async () => {
-    const settings = { target: GOOD_ELECTRONIC_CIRCUIT, amount: 2, tier: 3 };
+  it(`plans 2 Good Electronic Circuits a minute at HV from ordinary materials, build cost ignored, in under ${GEC_HV_MAX_STEPS} steps and ${COLD_PRICES_PLAN_SECONDS} s`, async () => {
+    // Before fix wave 3 (C) the line etched its Good Circuit Board in a chemical reactor with Iron III Chloride. With
+    // byproduct-only goods beyond the group's stock at BEYOND_STOCK_FACTOR times their price it crafts the board from gold
+    // wire on an Auto Workbench, in 49 steps, and makes no Iron III Chloride (real-build-cost.test.ts plans the line with
+    // build cost counted).
+    const settings = { target: GOOD_ELECTRONIC_CIRCUIT, amount: 2, tier: 3, buildHorizonHours: null };
     const { plan: p, seconds } = await plan(settings);
-    expectSane(p, seconds, GEC_HV_MAX_STEPS);
+    expectSane(p, seconds, COLD_PRICES_PLAN_SECONDS, GEC_HV_MAX_STEPS);
     await expectSameBreakdown(p, settings);
-    // It adds up but for one good (fix spec R11, D13). The reactor that alone makes its Iron III Chloride and the sodalite
-    // electrolyzer that alone makes its Raw Silicon Dust are named so, not after the Hydrogen Cells and Chlorine other
-    // steps make too ("Hydrogen Cell is made 3 ways", "Chlorine is made 2 ways" before the final review), and no good is
-    // made two ways by a step that runs for an output it alone makes. Measured left: Hydrogen Cell, from the water
-    // electrolysis (97 % of it; it throws away 90 % of the Oxygen it alone makes) and the salt water electrolysis.
+    // It adds up but for one good (fix spec R11, D13). The sodalite electrolyzer that alone makes its Raw Silicon Dust is
+    // named so, as is the reactor that alone makes Iron III Chloride where the line etches its board, not after the
+    // Hydrogen Cells and Chlorine other steps make too ("Hydrogen Cell is made 3 ways", "Chlorine is made 2 ways" before the
+    // final review), and no good is made two ways by a step that runs for an output it alone makes. Measured left:
+    // Hydrogen Cell, from the water electrolysis (97 % of it; it throws away 90 % of the Oxygen it alone makes) and the salt
+    // water electrolysis.
     const issues = indexPlan(p).issues;
     expect(issues.filter((i) => i.code !== 'multi-producer')).toEqual([]);
     expect(issues.length).toBeLessThanOrEqual(1);
@@ -285,7 +340,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
     }
     for (const key of [IRON_III_CHLORIDE, RAW_SILICON_DUST]) {
       const makers = p.steps.filter((s) => s.outputs.some((o) => o.key === key));
-      expect(makers.length, key).toBeGreaterThan(0);
+      if (key === RAW_SILICON_DUST) expect(makers.length, key).toBeGreaterThan(0);   // no Iron III Chloride since (C)
       expect(makers.map((s) => s.mainOutput), key).toEqual(makers.map(() => key));
     }
     expect(p.steps.find((s) => s.mainOutput === GOOD_ELECTRONIC_CIRCUIT)?.mapId).toBe('gt.recipe.circuitassembler');
@@ -294,21 +349,23 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
 
   it("follows GTNH's own Electronic Circuit recipe when the group pins it: red alloy, vacuum tubes from sand glass, steel", async () => {
     const { plan: p, seconds } = await plan({ target: ELECTRONIC_CIRCUIT, amount: 1, tier: 2, recipeChoice: { [ELECTRONIC_CIRCUIT]: EC_CIRCUIT_ASSEMBLER } });
-    expectSane(p, seconds, 40);
+    expectSane(p, seconds, BUILD_COST_PLAN_SECONDS, 40);
     expect(indexPlan(p).issues).toEqual([]);
     expect(p.steps.find((s) => s.mainOutput === ELECTRONIC_CIRCUIT)?.recipeId).toBe(EC_CIRCUIT_ASSEMBLER);
     // Its red alloy and steel come from supporting lines now (routeDerived on): what the line takes, bought or made.
     expect(takenPerMinute(p, RED_ALLOY_INGOT)).toBeCloseTo(1, 6);   // 2 × 1x red alloy wire = 1 ingot
     expect(takenPerMinute(p, STEEL_INGOT)).toBeGreaterThan(0);      // steel rods of the vacuum tubes
-    // The glass tubes' glass comes from sand (gathered, or bought as glass dust), never cobblestone (fix spec §7.2).
-    expect(perMinute(p, SAND) + perMinute(p, GLASS_DUST)).toBeGreaterThan(0);
-    expect(perMinute(p, 'minecraft:cobblestone@0')).toBe(0);
+    // The glass tubes' glass comes from sand: gathered, or bought as glass dust, or (plan 12, D1) made on a forge hammer
+    // from gravel that a forge hammer makes from the rock breaker's cobblestone, as the plan's flows say; cobblestone is
+    // never bought (fix spec §7.2).
+    expect(perMinute(p, SAND) + perMinute(p, GLASS_DUST) > 0 || sandFromBreaker(p)).toBe(true);
+    expect(perMinute(p, COBBLESTONE)).toBe(0);
   }, 60_000);
 
   it('plans an LV Machine Hull at LV on LV machines: 8 steel plates, tin cable', async () => {
     const settings = { target: LV_MACHINE_HULL, amount: 1, tier: 1 };
     const { plan: p, seconds } = await plan(settings);
-    expectSane(p, seconds, 12);
+    expectSane(p, seconds, BUILD_COST_PLAN_SECONDS, 12);
     await expectSameBreakdown(p, settings);
     expect(p.steps.every((s) => s.machine.tier <= 1)).toBe(true);
     // The casing's 8 steel plates, bent from steel its steel line makes (supporting lines on), and the hull's tin cables.
@@ -326,21 +383,23 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
     // Oxygen), Cast Iron Dust being iron nuggets smelted into cast iron. Its oxygen is made, never bought (fix spec R5):
     // the supply steps.
     const { plan: p, seconds } = await plan({ target: STEEL_INGOT, amount: 10, tier: 2, routeDerived: false });
-    expectSane(p, seconds, 5, ['gregtech:gt.metaitem.01@2304' /* cast iron dust */]);
+    expectSane(p, seconds, BUILD_COST_PLAN_SECONDS, 5, ['gregtech:gt.metaitem.01@2304' /* cast iron dust */]);
     expect(p.steps.map((s) => s.machine.name)).toContain('Electric Blast Furnace');
     expect(p.rawInputs.map((r) => r.key)).not.toContain('gregtech:gt.metaitem.01@2305' /* steel dust */);
     expect(p.rawInputs.map((r) => r.key)).not.toContain('fluid:oxygen');
     // At default settings the steel still comes from the Electric Blast Furnace, its cast iron made from ore as well.
     const routed = await plan({ target: STEEL_INGOT, amount: 10, tier: 2 });
     expect(routed.plan.status, JSON.stringify(routed.plan.warnings)).toBe('ok');
-    expect(routed.seconds).toBeLessThan(PLAN_SECONDS);
+    expect(routed.seconds).toBeLessThan(BUILD_COST_PLAN_SECONDS);
     expect(routed.plan.steps.map((s) => s.machine.name)).toContain('Electric Blast Furnace');
     expect(routed.plan.steps.length).toBeLessThanOrEqual(STEEL_MV_MAX_STEPS);
   }, 60_000);
 
-  it('makes aluminium, an EBF-only metal, at HV in one EBF step from mined dust; at LV it says MV unlocks it', async () => {
-    const hv = await plan({ target: ALUMINIUM_INGOT, amount: 10, tier: 3 });
-    expectSane(hv.plan, hv.seconds, 1, ['gregtech:gt.metaitem.01@2019']);
+  it('makes aluminium, an EBF-only metal, at HV in one EBF step from mined dust, build cost ignored; at LV it says MV unlocks it', async () => {
+    // With build cost counted the line may take the nitrogen recipe that needs fewer furnaces, with the steps that make
+    // its nitrogen (real-build-cost.test.ts plans that).
+    const hv = await plan({ target: ALUMINIUM_INGOT, amount: 10, tier: 3, buildHorizonHours: null });
+    expectSane(hv.plan, hv.seconds, COLD_PRICES_PLAN_SECONDS, 1, ['gregtech:gt.metaitem.01@2019']);
     expect(hv.plan.steps[0]?.machine.name).toBe('Electric Blast Furnace');
     expect(hv.plan.rawInputs).toMatchObject([{ key: 'gregtech:gt.metaitem.01@2019', leafClass: 'direct' }]);
     const lv = await plan({ target: ALUMINIUM_INGOT, amount: 10, tier: 1 });
@@ -365,11 +424,12 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
     expect(b.rawInputs).toEqual(a.rawInputs);
   }, 60_000);
 
-  it('plans an Advanced Circuit a minute at HV on "Least raw material" in under 5 s, at the least raw material', async () => {
+  it('plans an Advanced Circuit a minute at HV on "Least raw material", build cost ignored, at the least raw material', async () => {
     // Fix spec §7.3: the 0 % preset took 13 s here before the Task 4 review gave it a root-node MIP held at the least.
-    const { plan: p, seconds } = await plan({ target: ADVANCED_CIRCUIT, amount: 1, tier: 3, stepCharge: 0 });
+    // With build cost counted the line may use more raw material to build fewer machines (real-build-cost.test.ts).
+    const { plan: p, seconds } = await plan({ target: ADVANCED_CIRCUIT, amount: 1, tier: 3, stepCharge: 0, buildHorizonHours: null });
     expect(p.status, JSON.stringify(p.warnings)).toBe('ok');
-    expect(seconds).toBeLessThan(PLAN_SECONDS);
+    expect(seconds).toBeLessThan(COLD_PRICES_PLAN_SECONDS);
     const raw = p.rawCost as NonNullable<Plan['rawCost']>;
     expect(Math.abs(raw.perSecond - raw.leastPerSecond)).toBeLessThanOrEqual(1e-6 * raw.leastPerSecond);
     const codes = p.warnings.map((w) => w.code);
@@ -379,13 +439,16 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
 
   // Materials to avoid (plan 2026-10-18-08, ruling R15): no expectSane, as the way round a material may need goods
   // outside ORDINARY.
-  /** Every good the avoid list matches is out of the line, or flagged as unavoidable at each step it goes into. */
-  const expectAvoided = (p: Plan, seconds: number, avoid: string[]): void => {
+  /**
+   * Every good the avoid list matches is out of the line, or flagged as unavoidable at each step it goes into; within
+   * `limit` seconds.
+   */
+  const expectAvoided = (p: Plan, seconds: number, avoid: string[], limit: number): void => {
     const codes = p.warnings.map((w) => w.code);
     expect(p.status, JSON.stringify(p.warnings)).toBe('ok');
     expect(codes).not.toContain('graph-too-big');
     expect(codes).not.toContain('free-loop');
-    expect(seconds).toBeLessThan(PLAN_SECONDS);
+    expect(seconds).toBeLessThan(limit);
     const steps = new Set(p.steps.map((s) => s.id));
     const unavoidable = new Set((p.avoided ?? []).filter((a) => a.unavoidable).map((a) => a.key));
     const goods = resolveAvoid(pack, avoid).goods;
@@ -404,16 +467,16 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
     for (const a of p.avoided ?? []) if (p.rawInputs.some((r) => r.key === a.key)) expect(a.unavoidable, a.key).toBe(true);
   };
 
-  it('keeps Silver out of 2 Good Electronic Circuits a minute at HV, or flags each use, in under 5 s', async () => {
+  it(`keeps Silver out of 2 Good Electronic Circuits a minute at HV, or flags each use, in under ${BUILD_COST_PLAN_SECONDS} s`, async () => {
     const avoid = ['Silver'];
     const { plan: p, seconds } = await plan({ target: GOOD_ELECTRONIC_CIRCUIT, amount: 2, tier: 3, avoid });
-    expectAvoided(p, seconds, avoid);
+    expectAvoided(p, seconds, avoid, BUILD_COST_PLAN_SECONDS);
   }, 60_000);
 
-  it('plans 2 Good Electronic Circuits a minute at HV around Gold, which the plain plan uses, or flags each use, in under 5 s', async () => {
+  it(`plans 2 Good Electronic Circuits a minute at HV around Gold, which the plain plan uses, or flags each use, in under ${BUILD_COST_PLAN_SECONDS} s`, async () => {
     const avoid = ['Gold'];
     const { plan: p, seconds } = await plan({ target: GOOD_ELECTRONIC_CIRCUIT, amount: 2, tier: 3, avoid });
-    expectAvoided(p, seconds, avoid);
+    expectAvoided(p, seconds, avoid, BUILD_COST_PLAN_SECONDS);
     expect(p.avoided?.length).toBeGreaterThan(0);   // the board's gold foil: the restricted plan really ran
   }, 60_000);
 
@@ -422,7 +485,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
   it('keeps the Diamond Lens out of the laser engraver of a Microprocessor at HV: the slot holds another lens it takes', async () => {
     const avoid = ['Diamond'];
     const { plan: p, seconds } = await plan({ target: MICROPROCESSOR, amount: 2, tier: 3, avoid });
-    expectAvoided(p, seconds, avoid);
+    expectAvoided(p, seconds, avoid, BUILD_COST_PLAN_SECONDS);
     expect(p.avoided).toContainEqual({ key: DIAMOND_LENS, name: 'Diamond Lens', unavoidable: false });
     expect(p.buildList.filter((l) => l.group === 'one-off').map((l) => l.key)).not.toContain(DIAMOND_LENS);
     expect(p.buildList.some((l) => l.group === 'one-off' && pack.items.get(l.key)?.gt?.prefix === 'lens')).toBe(true);
@@ -432,17 +495,19 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
     // Plan 08 wrote this before there was a step charge, so it plans at the least raw material ("Least raw material", 0 %,
     // fix spec R3): there the plain line makes its acetone in the only recipe of the 2.9 export that holds Calcite (from
     // acetic acid, 480 EU/t). At the 2 % default (and at 5 %) the plain line makes no acetone and holds no Calcite, so
-    // there would be nothing to keep out.
+    // there would be nothing to keep out. The least raw material is plan 09's objective, so build cost is ignored, as in
+    // this file's other checks of it: with build cost counted the build MIP's pick at 0 % holds no Calcite since fix wave
+    // 3 Task 7, 2.2 % cheaper by its own measure than the pick that held it.
     const avoid = ['Calcite'];
-    const { plan: p, seconds } = await plan({ target: GOOD_ELECTRONIC_CIRCUIT, amount: 2, tier: 3, avoid, stepCharge: 0 });
-    expectAvoided(p, seconds, avoid);
+    const { plan: p, seconds } = await plan({ target: GOOD_ELECTRONIC_CIRCUIT, amount: 2, tier: 3, avoid, stepCharge: 0, buildHorizonHours: null });
+    expectAvoided(p, seconds, avoid, COLD_PRICES_PLAN_SECONDS);
     expect(p.avoided?.map((a) => a.key)).toContain(CALCITE_DUST);   // the plain plan's catalyst
   }, 60_000);
 
   it('never buys Magnetic Steel for an LV Machine Hull avoiding Steel: the steel it is polarized from is flagged instead', async () => {
     const avoid = ['Steel'];
     const { plan: p, seconds } = await plan({ target: LV_MACHINE_HULL, amount: 1, tier: 1, avoid });
-    expectAvoided(p, seconds, avoid);
+    expectAvoided(p, seconds, avoid, BUILD_COST_PLAN_SECONDS);
     expect(p.rawInputs.map((r) => r.key)).not.toContain(MAGNETIC_STEEL_INGOT);
     expect(p.avoided).toContainEqual({ key: STEEL_INGOT, name: 'Steel Ingot', unavoidable: true });
   }, 60_000);
@@ -451,7 +516,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
     // A bought derived material, so supporting lines off (fix spec §7.2).
     const avoid = ['Copper'];
     const { plan: p, seconds } = await plan({ target: GOOD_ELECTRONIC_CIRCUIT, amount: 2, tier: 3, avoid, routeDerived: false });
-    expectAvoided(p, seconds, avoid);
+    expectAvoided(p, seconds, avoid, BUILD_COST_PLAN_SECONDS);
     const annealed = p.avoided?.find((a) => a.key === ANNEALED_COPPER_INGOT);
     expect(annealed?.madeFrom?.length).toBeGreaterThan(0);   // made by an arc furnace from copper dust
     const flags = p.warnings.filter((w) => w.code === 'avoid-unavoidable' && w.key === ANNEALED_COPPER_INGOT);

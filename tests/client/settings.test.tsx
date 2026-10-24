@@ -4,10 +4,13 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import {
   dimRows, dimOverridePatch, toggleList, parseAmount, groupDimRows, parseCost, STEP_CHARGE_PRESETS, ownableMachineGroups, ownedMachineLabel, ownedWith,
   ownedWithout, parseOwnedCount, BUILD_HORIZON_PRESETS, horizonChoice, horizonPatch, buildTierOptions, buildTierPatch, MULTIBLOCK_CHOICES, multiblocksPatch,
+  RAW_CAP_PRESETS, rawCapChoice, rawCapOf, rawCapPatch,
+  inputsOnlyFromPlan, inputsOnlyPatch,
 } from '../../src/client/views/settings-model.ts';
 import {
-  BuildHorizonField, BuildTierField, HaveSupplySection, MultiblocksField, OptionPinsSection, ReuseOwnedField, SettingsPanel, StepChargeField,
+  BuildHorizonField, BuildTierField, HaveSupplySection, InputsOnlySection, MultiblocksField, OptionPinsSection, RawCapField, ReuseOwnedField, SettingsPanel, StepChargeField,
 } from '../../src/client/views/SettingsPanel.tsx';
+import { ItemSearch } from '../../src/client/components/ItemSearch.tsx';
 import { OwnedMachinesEditor } from '../../src/client/components/OwnedMachinesEditor.tsx';
 import { TierPicker } from '../../src/client/components/TierPicker.tsx';
 import { defaultSettings, validateOp } from '../../src/shared/project/apply-op.ts';
@@ -199,6 +202,37 @@ describe('build cost, machine tier and multiblocks', () => {
     return patch.mock.calls.map((c) => c[0]);
   };
 
+  it('offers the raw cap beside Machines vs raw material: at most +10, +25 or +50 %, or no limit (fix wave 3 (A))', () => {
+    const label = 'Raw material for fewer machines';
+    expect(RAW_CAP_PRESETS.map((p) => [p.value, p.cap, p.label])).toEqual([
+      ['0.1', 0.1, 'At most +10 %'], ['0.25', 0.25, 'At most +25 %'], ['0.5', 0.5, 'At most +50 %'], ['off', null, 'No limit'],
+    ]);
+    expect(select(panelOf(defaultSettings()), label)).toEqual(['0.1=At most +10 %', '0.25=At most +25 % *', '0.5=At most +50 %', 'off=No limit']);
+    const old = { ...defaultSettings() };
+    delete old.rawCap;
+    expect(rawCapOf(old)).toBe(0.25);
+    expect(select(panelOf(old), label)).toContain('0.25=At most +25 % *');
+    expect(select(panelOf({ ...defaultSettings(), rawCap: null }), label)).toContain('off=No limit *');
+    expect(rawCapChoice(0.3)).toEqual({ value: 'custom', label: 'At most +30 %' });
+    expect(select(panelOf({ ...defaultSettings(), rawCap: 0.3 }), label)).toEqual([
+      '0.1=At most +10 %', '0.25=At most +25 %', '0.5=At most +50 %', 'off=No limit', 'custom=At most +30 % *']);
+    expect(sendsOf(RawCapField, defaultSettings(), 'off')).toEqual([{ rawCap: null }]);
+    expect(sendsOf(RawCapField, defaultSettings(), '0.5')).toEqual([{ rawCap: 0.5 }]);
+    expect(sendsOf(RawCapField, defaultSettings(), '0.25')).toEqual([]);                                // the value it has
+    expect(sendsOf(RawCapField, { ...defaultSettings(), rawCap: 0.3 }, 'custom')).toEqual([]);
+    expect([rawCapPatch('0.1'), rawCapPatch('off'), rawCapPatch('custom')]).toEqual([{ rawCap: 0.1 }, { rawCap: null }, {}]);
+    for (const patch of [rawCapPatch('0.1'), rawCapPatch('off')]) expect(validateOp({ op: 'settings', patch })).toBeNull();
+    // Since add-on 17 the step charge and the horizon are under "Plan for" (the horizon above the step charge), and the
+    // raw cap with them, right after the step charge.
+    const planFor = planForSection(panelOf(defaultSettings()));
+    expect(planFor.indexOf(label)).toBeGreaterThan(planFor.indexOf('Machines vs raw material'));
+    expect(planFor.indexOf(label)).toBeGreaterThan(planFor.indexOf('Count build cost against'));
+    expect(planFor.indexOf('Count build cost against')).toBeGreaterThan(-1);
+    expect(optionsSection(panelOf(defaultSettings()))).not.toContain(label);
+    expect(planFor).toContain('Fewer machines never cost more raw material than this over the leanest line (what Least raw material plans).');
+    expect(planForSection(panelOf({ ...defaultSettings(), buildHorizonHours: null })))
+      .toContain('With build cost ignored the plan stays within 25 % of the least raw material instead.');
+  });
   it('shows 24 hours for a project without buildHorizonHours', () => {
     expect(BUILD_HORIZON_PRESETS.map((p) => [p.value, p.hours, p.label])).toEqual([
       ['1', 1, '1 hour'], ['8', 8, '8 hours'], ['24', 24, '24 hours'], ['168', 168, '1 week']]);
@@ -397,5 +431,51 @@ describe('the settings panel and the names a page hands it', () => {
   it('keeps the plan\'s names first when it keeps its own', () => {
     const html = renderToStaticMarkup(<SettingsPanel info={info} project={project} plan={{ ...plan([]), names: { 't:circuit@0': 'Basic Circuit' }, tier: 1 }} send={() => {}} me="Ann" />);
     expect(html).toContain('<span class="settings-target-name">Basic Circuit</span>');
+  });
+});
+
+describe('only these come in (fix wave 3 (B))', () => {
+  it('takes the plan’s raw inputs as the list: free inputs left out, once each, sorted, at most 50', () => {
+    const raw = (keys: string[]): Pick<Plan, 'rawInputs'> => ({ rawInputs: keys.map((key) => ({ key })) } as unknown as Pick<Plan, 'rawInputs'>);
+    expect(inputsOnlyFromPlan(raw(['t:b@0', 'fluid:water', 't:a@0', 'minecraft:cobblestone@0', 't:b@0']))).toEqual(['t:a@0', 't:b@0']);
+    const many = Array.from({ length: 60 }, (_, i) => `t:k${String(i).padStart(2, '0')}@0`);
+    expect(inputsOnlyFromPlan(raw(many))).toEqual(many.slice(0, 50));
+  });
+
+  it('adds and removes one key, never past 50', () => {
+    const s = { ...defaultSettings(), inputsOnly: ['t:b@0'] };
+    expect(inputsOnlyPatch(s, 't:a@0', true)).toEqual({ inputsOnly: ['t:a@0', 't:b@0'] });
+    expect(inputsOnlyPatch(s, 't:b@0', false)).toEqual({ inputsOnly: [] });
+    const full = { ...defaultSettings(), inputsOnly: Array.from({ length: 50 }, (_, i) => `t:k${i}@0`) };
+    expect(inputsOnlyPatch(full, 't:new@0', true)).toBeNull();
+    expect(inputsOnlyPatch(full, 't:k3@0', true)).toEqual({ inputsOnly: [...full.inputsOnly].sort() });
+    expect(validateOp({ op: 'settings', patch: inputsOnlyPatch(s, 't:a@0', true) })).toBeNull();
+  });
+
+  it('shows "Only these come in" with a chip per key, a search, "Use this plan’s raw inputs" and "Clear"', () => {
+    const p = { ...plan([]), tier: 1, rawInputs: [{ key: 't:a@0' }, { key: 'fluid:water' }, { key: 't:b@0' }],
+      names: { 't:a@0': 'Alpha', 't:b@0': 'Beta' } } as unknown as Plan;
+    const listed = { ...defaultSettings(), inputsOnly: ['t:a@0'] };
+    const html = panelOf(listed, p);
+    expect(html).toContain('<h3>Only these come in</h3>');
+    expect(html).toContain('aria-label="Remove Alpha"');
+    const patch = vi.fn();
+    const remember = vi.fn();
+    const tree = InputsOnlySection({ settings: listed, plan: p, nameOf: (k) => p.names?.[k] ?? k, patch, remember });
+    const button = (label: string): ReactElement<Record<string, unknown>> =>
+      findAll(tree, (e) => e.type === 'button' && (e.props.children === label || e.props['aria-label'] === label))[0]!;
+    (button("Use this plan's raw inputs").props.onClick as () => void)();
+    (button('Clear').props.onClick as () => void)();
+    (button('Remove Alpha').props.onClick as () => void)();
+    const [search] = findAll(tree, (e) => e.type === ItemSearch);
+    (search!.props.onPick as (hit: { key: string; name: string }) => void)({ key: 't:c@0', name: 'Gamma' });
+    expect(remember).toHaveBeenCalledWith({ key: 't:c@0', name: 'Gamma' });
+    expect(patch.mock.calls.map((c) => c[0])).toEqual([
+      { inputsOnly: ['t:a@0', 't:b@0'] }, { inputsOnly: [] }, { inputsOnly: [] }, { inputsOnly: ['t:a@0', 't:c@0'] },
+    ]);
+    const off = panelOf(defaultSettings(), null);
+    expect(off).toContain('Off: the line buys whatever the planner picks.');
+    expect(off).not.toContain('>Clear<');
+    expect(off).toMatch(/<button[^>]*disabled=""[^>]*>Use this plan&#x27;s raw inputs<\/button>/);
   });
 });

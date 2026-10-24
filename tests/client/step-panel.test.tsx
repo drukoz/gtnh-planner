@@ -129,6 +129,14 @@ describe('step panel: sections', () => {
     expect(html).toContain('This step makes 90%');
     expect(html).toContain('Use only this recipe for Iron Plate');
     expect(panel(casing, plates)).not.toContain('Also made by');
+    // Made two ways on purpose (plan 12's final review): the plan's note is a plain note, not one of its warnings.
+    const note = 'Iron Plate is made 2 ways: Bending Machine (90%) and Forge Hammer (10%). The Forge Hammer is full, and one more would cost more than '
+      + 'the raw material it saves.';
+    const noted = planOf({ ...plates, warnings: [{ code: 'deliberate-split', key: 't:iron_plate@0', stepId: 'bend', text: note }] });
+    const markup = panelHtml(bend, noted);
+    expect(text(markup)).toContain(`Notes${note}`);
+    expect(text(markup)).not.toContain('Warnings');
+    expect(markup).toContain('<ul class="notes">');
   });
   it('explains the ingredient option it chose and lets the group pin another', () => {
     const ca = step({

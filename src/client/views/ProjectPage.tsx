@@ -12,7 +12,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, type ReactElement } from 'react';
 import type { StuffKey } from '../../shared/keys.ts';
-import { indexPlan, issueText, type PlanIssue, type PlanIssueCode } from '../../shared/plan/balance.ts';
+import { indexPlan, issueText, NOTE_CODES, noteWarningCode, type PlanIssue, type PlanIssueCode } from '../../shared/plan/balance.ts';
 import type { PackInfo } from '../../shared/types/api.ts';
 import type { Plan, PlanSettings, PlanWarning } from '../../shared/types/plan.ts';
 import type { ProjectOp } from '../../shared/types/project.ts';
@@ -33,7 +33,7 @@ import { sourceNotes } from './materials-model.ts';
 import { costLine } from './plan-cost.ts';
 import { PROJECT_TABS, tabFromHash } from './project-tabs.ts';
 import { ProjectorPanel } from './ProjectorPanel.tsx';
-import { stepChargeLabel, stepChargeOf } from './settings-model.ts';
+import { rawCapChoice, rawCapOf, stepChargeLabel, stepChargeOf } from './settings-model.ts';
 import { SettingsPanel, usePickedNames } from './SettingsPanel.tsx';
 
 function ProjectName(props: { name: string; onRename(name: string): void }): ReactElement {
@@ -79,6 +79,8 @@ const NARROW = '(max-width: 900px)';
 const ISSUE_CODES: ReadonlySet<string> = new Set(ISSUE_ORDER);
 /** The code of the server's hint for a project with no target ("Pick something to make"). */
 const NO_TARGET = 'no-target';
+/** The codes of the notes on goods a build-cost plan makes two ways, or buys beside its makers, on purpose (plan 12's final review). */
+const NOTE_WARNING_CODES: ReadonlySet<string> = new Set(Object.values(NOTE_CODES));
 /** A plan uses more raw material than the least only when it does by more than this share (not by rounding). */
 const COST_GAP_REL = 1e-6;
 
@@ -100,14 +102,16 @@ function issueCount(code: PlanIssueCode, n: number, issues: readonly PlanIssue[]
 /**
  * What the plan warns about (fix spec §6.4), above every project view: a summary of the integrity issues
  * (`indexPlan`: "This plan does not add up: …", with "Show in the flow") and each issue in the server's words, else
- * `issueText`'s (the client re-checks the plan it got); the derived materials the line buys as chips that show their
+ * `issueText`'s (the client re-checks the plan it got); each good a build-cost plan makes two ways, or buys beside its
+ * makers, on purpose as a plain note under them (`PlanIndex.notes`, plan 12's final review: it adds up), in the server's
+ * words, else `issueText`'s; the derived materials the line buys as chips that show their
  * import in the flow, with "Plan them as supporting lines" while those are off; how much more raw material the plan
- * uses than the least to save machines (`Plan.rawCost`, Machines vs raw material); every other server warning (plan
- * 08's avoid list, missing recipes, add-on 17's `surplus-shared`, …); what the plan uses beyond its line — "This plan
- * uses a Tree Growth Simulator (Rubber Sapling)", "This plan draws Latex from Rubber line" (`sourceNotes`, ruling R18:
- * farms and other projects' surplus are on for every project, so their use is said) — and what unlocks the line. Above
- * that box, and on its own when there is nothing to warn about, what the plan costs to run and to build its new
- * machines (`costLine`, plan 12).
+ * uses than the least (where build cost counts, the leanest line's) to save machines (`Plan.rawCost`, Machines vs raw
+ * material and the raw cap: `rawCostText`); every other server warning (plan 08's avoid list, missing recipes, add-on
+ * 17's `surplus-shared`, …); what the plan uses beyond its line — "This plan uses a Tree Growth Simulator (Rubber
+ * Sapling)", "This plan draws Latex from Rubber line" (`sourceNotes`, ruling R18: farms and other projects' surplus are
+ * on for every project, so their use is said) — and what unlocks the line. Above that box, and on its own when there is
+ * nothing to warn about, what the plan costs to run and to build its new machines (`costLine`, plan 12).
  *
  * The server's hint for a project with no target, "Pick something to make" (`no-target`), is a button when the page gives an
  * `onPickTarget` to answer it: the picker is in the settings, which a narrow window keeps in a drawer, so the hint is the way in.
@@ -124,10 +128,15 @@ export function PlanBanner(props: {
   const names = plan?.names ?? {};
   const nameOf = (key: StuffKey): string => names[key] ?? key;
 
-  const issues = plan === null ? [] : [...indexPlan(plan).issues].sort((a, b) => ISSUE_ORDER.indexOf(a.code) - ISSUE_ORDER.indexOf(b.code));
+  const index = plan === null ? null : indexPlan(plan);
+  const issues = index === null ? [] : [...index.issues].sort((a, b) => ISSUE_ORDER.indexOf(a.code) - ISSUE_ORDER.indexOf(b.code));
+  const notes = index === null ? [] : [...index.notes].sort((a, b) => ISSUE_ORDER.indexOf(a.code) - ISSUE_ORDER.indexOf(b.code));
   const served = new Map<string, PlanWarning>();
-  for (const w of warnings) if (ISSUE_CODES.has(w.code)) served.set(problemId(w), w);
+  for (const w of warnings) if (ISSUE_CODES.has(w.code) || NOTE_WARNING_CODES.has(w.code)) served.set(problemId(w), w);
   const issueTexts = issues.map((issue) => served.get(problemId(issue))?.text ?? (plan === null ? '' : issueText(issue, plan)));
+  /** A note's warning identity: its note code, the good and the step. */
+  const noteId = (note: PlanIssue): string => problemId({ ...note, code: noteWarningCode(note) });
+  const noteTexts = notes.map((note) => served.get(noteId(note))?.text ?? (plan === null ? '' : issueText(note, plan)));
   const counted = ISSUE_ORDER.flatMap((code) => {
     const ofCode = issues.filter((i) => i.code === code);
     return ofCode.length === 0 ? [] : [issueCount(code, ofCode.length, ofCode)];
@@ -136,18 +145,21 @@ export function PlanBanner(props: {
   const derivedWarning = warnings.find((w) => w.code === 'derived-leaf');
   const derived = derivedWarning === undefined ? [] : (plan?.rawInputs ?? []).filter((r) => r.leafClass === 'derived').map((r) => r.key);
   const shownIssues = new Set(issues.map(problemId));
-  // Every other warning keeps its own text: a server integrity warning the client finds too is shown once (above), and
-  // the derived-leaf warning becomes chips when the plan lists its leaves.
-  const others = warnings.filter((w) => !(ISSUE_CODES.has(w.code) && shownIssues.has(problemId(w))) && !(w === derivedWarning && derived.length > 0));
+  const shownNotes = new Set(notes.map(noteId));
+  // Every other warning keeps its own text: a server integrity warning or note the client finds too is shown once
+  // (above), and the derived-leaf warning becomes chips when the plan lists its leaves.
+  const others = warnings.filter((w) => !(ISSUE_CODES.has(w.code) && shownIssues.has(problemId(w)))
+    && !(NOTE_WARNING_CODES.has(w.code) && shownNotes.has(problemId(w))) && !(w === derivedWarning && derived.length > 0));
 
-  const rawText = rawCostText(plan?.rawCost, stepChargeLabel(stepChargeOf(settings)));
+  const rawText = rawCostText(plan?.rawCost, stepChargeLabel(stepChargeOf(settings)), rawCapChoice(rawCapOf(settings)).label.toLowerCase());
   // What the plan costs to run and to build (plan 12): on every plan that has a cost, outside the warning box.
   const costText = plan === null ? null : costLine(plan);
   const costed = costText === null ? null : <p className="plan-cost">{costText}</p>;
-  const notes = plan === null ? [] : sourceNotes(plan);
+  const sourceTexts = plan === null ? [] : sourceNotes(plan);
 
   const busy = planLoading && plan !== null;
-  if (planError === null && !busy && issues.length === 0 && others.length === 0 && derived.length === 0 && rawText === null && notes.length === 0
+  if (planError === null && !busy && issues.length === 0 && notes.length === 0 && others.length === 0 && derived.length === 0 && rawText === null
+    && sourceTexts.length === 0
     && unlocks.length === 0) return costed;
   const firstIssue = issues[0];
   const banner = (
@@ -164,6 +176,11 @@ export function PlanBanner(props: {
             {issues.map((issue, i) => <li key={problemId(issue)}>{issueTexts[i]}</li>)}
           </ul>
         </div>
+      )}
+      {notes.length > 0 && (
+        <ul className="banner-notes">
+          {notes.map((note, i) => <li key={noteId(note)}>{noteTexts[i]}</li>)}
+        </ul>
       )}
       {others.length > 0 && (
         <ul className="warnings">
@@ -193,9 +210,9 @@ export function PlanBanner(props: {
         </div>
       )}
       {rawText !== null && <p className="banner-cost">{rawText}</p>}
-      {notes.length > 0 && (
+      {sourceTexts.length > 0 && (
         <ul className="banner-sources">
-          {notes.map((note) => <li key={note}>{`This plan ${note}`}</li>)}
+          {sourceTexts.map((note) => <li key={note}>{`This plan ${note}`}</li>)}
         </ul>
       )}
       {unlocks.length > 0 && (
@@ -215,13 +232,18 @@ export function PlanBanner(props: {
  * How much more raw material the plan uses than the least to save machines (`Plan.rawCost`, Machines vs raw material:
  * `preset`), or null when it uses the least: `Uses <x>% more …`; a line whose least raw material is 0 (a glass line
  * digging sand that rock-breaker cobblestone and forge hammers could make, plan 12) has no percentage: `Uses raw
- * material that free inputs could replace, to save machines (…)`.
+ * material that free inputs could replace, to save machines (…)`. Where build cost counts (`leanestPerSecond`, fix wave
+ * 3 (A)) the least is the leanest line's — what "Least raw material" plans, its machines paid for — and `cap` (the raw
+ * cap in words) closes the parentheses.
  */
-function rawCostText(cost: Plan['rawCost'], preset: string): string | null {
+function rawCostText(cost: Plan['rawCost'], preset: string, cap?: string): string | null {
   if (cost === undefined) return null;
-  if (cost.leastPerSecond === 0 && cost.perSecond > 0) return `Uses raw material that free inputs could replace, to save machines (Machines vs raw material: ${preset})`;
-  if (!(cost.leastPerSecond > 0) || !(cost.perSecond > cost.leastPerSecond * (1 + COST_GAP_REL))) return null;
-  return `Uses ${formatPercent(cost.perSecond / cost.leastPerSecond - 1)} more raw material than the least possible to save machines (Machines vs raw material: ${preset})`;
+  const least = cost.leanestPerSecond ?? cost.leastPerSecond;
+  const why = `(Machines vs raw material: ${preset}${cost.leanestPerSecond === undefined || cap === undefined ? '' : `; ${cap}`})`;
+  if (least === 0 && cost.perSecond > 0) return `Uses raw material that free inputs could replace, to save machines ${why}`;
+  if (!(least > 0) || !(cost.perSecond > least * (1 + COST_GAP_REL))) return null;
+  const than = cost.leanestPerSecond === undefined ? 'the least possible' : 'the leanest line';
+  return `Uses ${formatPercent(cost.perSecond / least - 1)} more raw material than ${than} to save machines ${why}`;
 }
 
 /** How many `plan` and `compare` events project `id`'s stream has brought since this page opened it. */
