@@ -12,7 +12,7 @@ import { indexPlan, issueText, type PlanIssue } from '../../shared/plan/balance.
 import { machineGroups } from '../../shared/plan/pools.ts';
 import type { DimensionInfo, Ingredient, Pack, Product, Recipe } from '../../shared/types/pack.ts';
 import {
-  DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_RAW_CAP, DEFAULT_STEP_CHARGE, type BomLine, type LeafClass, type Plan, type PlanContext, type PlanFlow, type PlanSettings,
+  DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_RAW_CAP, DEFAULT_STEP_CHARGE, FREE_KEYS, type BomLine, type LeafClass, type Plan, type PlanContext, type PlanFlow, type PlanSettings,
   type PlanStep, type PlanWarning, type PowerSummary, type RawInput, type SourceInfo, type StepOption,
 } from '../../shared/types/plan.ts';
 import { GATHERED_BLOCKS, isBaseItem, unlockText, type Availability } from './availability.ts';
@@ -769,12 +769,14 @@ function withLines(pack: Pack, basis: PlanBasis, plan: Plan): Plan {
 
 /**
  * One `stop-outside-inputs` warning per stop item outside the project's non-empty "Only these come in" (plan 12 fix wave
- * 3 (B)), in list order, whether the line meets it or not: the planner never buys it (`makeLeafOracle`'s `inputsOnly`).
+ * 3 (B)) that is no free input, in list order, whether the line meets it or not: the planner never buys it
+ * (`makeLeafOracle`'s `inputsOnly`). A free input (`FREE_KEYS`) keeps its rules there, so a stopped one is still bought
+ * and gets no warning.
  */
 function stopsOutsideInputs(pack: Pack, settings: PlanSettings): PlanWarning[] {
   const only = new Set(settings.inputsOnly ?? []);
   if (only.size === 0) return [];
-  return settings.stopItems.filter((key) => !only.has(key)).map((key) => ({
+  return settings.stopItems.filter((key) => !only.has(key) && !FREE_KEYS.includes(key)).map((key) => ({
     code: 'stop-outside-inputs', key,
     text: `${pack.nameOf(key)} is on “We already make” but not on “Only these come in”, so the planner does not buy it`,
   }));
