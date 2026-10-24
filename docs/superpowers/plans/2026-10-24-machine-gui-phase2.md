@@ -227,8 +227,10 @@ edits of Tasks 3a–14 were added the same day, for spec §25.
     an x (the NEI, map and 3D tooltips, the note badges and "Show all", the missing badge and used-by chips, the pin button, the line
     panel's "Rotate 90°", the swap list's "25 more… (55 not shown)", the note dialog's title, the Connections panel's title ("5× Basic
     Assembler", "Power tap at 12 64 7", "Titanium Dust 60/min · Red"), the banner's "does not add up" heading, the Flow count chip, the
-    recipe card's chance tag, tier and overclock chips, the digit key caps); names and fixed words (a step's, item's or block's title,
-    the project's name, buttons that name an item, the avoid chips, the tabs, the logo, word badges) stay Pixelify, digits and all.
+    recipe card's chance tag, tier and overclock chips, the digit key caps, the step panel's option badge "in use (45%)", and the 3D
+    details box's title, which names a link with its rate — ledger ruling P2-R15: a title or heading that can carry a figure goes
+    through `<Figs>`); names and fixed words (a step's, item's or block's title that carries no figure, the project's name, buttons
+    that name an item, the avoid chips, the tabs, the logo, word badges) stay Pixelify, digits and all.
   - `digits-sizes` (Tasks 2b, 5a, 7): each VT323 size gives digits as tall as the Pixelify ones it replaces (0.56 em against 0.643:
     × 1.148) and keeps the old line box in px — 13 → 15 px, 14 → 16, 18 → 21, 24 → 28; the step numbers' marker too, 16 px on the
     list's 20.3 px line, which its inherited 1.45 would make 23.2 — and `span.fig` is 1.15 em on a line height of 0. Spec §25's table
