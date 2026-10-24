@@ -229,18 +229,19 @@ describe.skipIf(path === undefined)("the user's reference Electronic Circuit flo
     }
   }, 120_000);
 
-  it("plans the line without the reference's pins and stops, at the default build-cost settings, in no more machine blocks than the reference, from its raw materials unless that is dearer", async () => {
+  it("plans the line without the reference's pins and stops, at the default build-cost settings, from its raw materials unless that is dearer, and logs its machine blocks against the reference's", async () => {
     // The user's ruling 179 (2026-10-20): "the fewer machines make a big difference where 3 % more raw material is
     // negligible" — the reference's settings without its recipe pins and stop items, at the defaults of build cost (24
     // hours, "Fewest machines"), crafting on Auto Workbenches: no more machine blocks than the reference (its 12 machine
     // steps, one of them 3 Centrifuges, and its 4 crafting steps on Auto Workbenches: the reference at the same settings),
     // and no raw material outside the reference's unless the plan is cheaper than the reference by the build MIP's measure.
     // Where the 24-hour horizon does not achieve it, the other horizons are tried and logged for the controller, and the
-    // case fails rather than loosen (the ruling: a controller ruling is needed then). The blocks are held to the
-    // reference's own 18 (`REFERENCE_BLOCKS`), at every horizon; the re-plan of the pinned reference is logged beside it.
+    // case fails rather than loosen. The blocks are compared with the reference's own 18 (`REFERENCE_BLOCKS`), and the
+    // re-plan of the pinned reference is logged beside it.
     // Since fix wave 3 the plan has 25 blocks at 24 h and no horizon from 1 h to 8,760 h meets the bound: the raw cap
-    // (the user's ruling 247 (A)) and this bound do not both hold on this line, so the case stays red until the user
-    // amends one of the two (add-on 12 ledger :267, plan 12's final review), never loosened here.
+    // (the user's ruling 247 (A)) and this bound do not both hold on this line. The user's amendment of 2026-10-24
+    // (add-on 12 ledger, 'Ruling (USER, 2026-10-24)'): the raw cap wins, so the reference's block count is a comparison
+    // logged beside the plan, no longer asserted; the reference's raw materials stay asserted.
     const defaults: Partial<PlanSettings> = { stepCharge: DEFAULT_STEP_CHARGE, buildHorizonHours: DEFAULT_BUILD_HORIZON_HOURS, automateCrafting: true };
     const judge = async (hours: number): Promise<{ text: string; ok: boolean; blocks: boolean; raw: boolean }> => {
       const own: PlanSettings = { ...stored, ...defaults, recipeChoice: {}, stopItems: [], buildHorizonHours: hours };
@@ -254,7 +255,7 @@ describe.skipIf(path === undefined)("the user's reference Electronic Circuit flo
       const blocks = machineBlocks(mine.plan) <= REFERENCE_BLOCKS;
       const raw = outside.length === 0 || cheaper;
       return {
-        ok: mine.plan.status === 'ok' && blocks && raw, blocks, raw,
+        ok: mine.plan.status === 'ok' && raw, blocks, raw,
         text: `${hours} h: ${mine.plan.status}, ${mine.seconds.toFixed(2)} s, ${mine.plan.steps.length} steps, ${machineBlocks(mine.plan)} machine blocks `
           + `against the reference's ${REFERENCE_BLOCKS} (its re-plan at ${hours} h: ${machineBlocks(theirs.plan)}); `
           + `raw ${(((mine.plan.rawCost?.perSecond ?? 0) * 60)).toFixed(3)} a minute, build ${mine.plan.cost?.build}, `
@@ -269,12 +270,12 @@ describe.skipIf(path === undefined)("the user's reference Electronic Circuit flo
       let largest: number | undefined;
       for (const hours of [1, 2, 4, 8, 12, 48, 168, 720, 8760]) {
         const other = await judge(hours);
-        console.log(`real-reference without pins and stops, FOR THE CONTROLLER (the user's ruling 179), ${other.text}`);
+        console.log(`real-reference without pins and stops, FOR THE CONTROLLER, ${other.text}`);
         if (other.ok) largest = hours;
       }
       console.log(`real-reference without pins and stops: the largest horizon that achieves it: ${largest === undefined ? 'none of 1 h to 8,760 h' : `${largest} h`}`);
     }
-    expect(day.blocks, `no more machine blocks than the reference's ${REFERENCE_BLOCKS}`).toBe(true);
+    console.log(`real-reference without pins and stops: ${day.blocks ? 'no more' : 'more'} machine blocks than the reference's ${REFERENCE_BLOCKS} (a comparison: the raw cap wins, the user's ruling of 2026-10-24)`);
     expect(day.raw, "the reference's raw materials, unless dearer").toBe(true);
   }, 600_000);
 
