@@ -84,10 +84,11 @@ const SOME_MACHINES = 0.02;
  * The bound of every plan timed here (plan 17 Task 10's three modes, calibration lines and farm-fed least-raw line), not
  * plan 09's flat 5 s: fix wave 3's OQ1 (A)/(D) rule, the integration's ruling R13 — the next whole second above 1.25 x
  * the slowest quiet-host median of three whole-file runs. The slowest, Electronic Circuit MV on Project Red with two of
- * every machine owned in best multi-output (two build MIPs, each ended at its root), took 42.80 s, the median of three on
- * 2026-10-25 (each run started at a 1-minute load under 4): 1.25 × 42.80 = 53.50.
+ * every machine owned in best multi-output (two build MIPs, each stopped by its iteration cap inside its root LP
+ * relaxation, so that neither searches again from nothing since the integration's final review: 42.80 s before), took
+ * 26.53 s, the median of three on 2026-10-25 (each run started at a 1-minute load under 4): 1.25 × 26.53 = 33.16.
  */
-const OBJECTIVE_PLAN_SECONDS = 54;
+const OBJECTIVE_PLAN_SECONDS = 34;
 /** Rates up to this, a second, count as none (the solver's threshold). */
 const TINY = 1e-9;
 const SECONDS_PER_MINUTE = 60;
