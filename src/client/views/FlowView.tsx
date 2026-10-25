@@ -9,7 +9,8 @@
 // Esc or a click on the empty canvas clears it. Find item and the Show buttons light a good and centre the step that makes
 // it. ELK lays the diagram out in its own worker (web-stack §7); drag pans and the wheel zooms.
 // The panel slides in once and each new one fades in; a step picked inside a panel takes the focus to its own (Phase 2 spec §8.6), and
-// its Close gives the focus back to the box head that opened it, or to the canvas once that box is gone (ledger ruling P2-R36).
+// its Close gives the focus back to the box head that opened it, or to the canvas once that box is gone or out of the canvas's view
+// (ledger ruling P2-R36).
 
 import {
   useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactElement,
@@ -477,7 +478,8 @@ interface Hit { focus: Focus; node?: PlacedNode; toggle?: StuffKey }
  * one column" toggle; hovering lights what is under the pointer, a click pins it (a box click also calls `onOpen`),
  * Esc or a click on the empty canvas clears it. It opens on the target (or on what someone asked to see) whenever the
  * plan's steps change (`viewKey`), and centres the focus whenever a view asks (`revealFlowFocus`). The canvas can take the
- * focus from a script, out of the tab order: a panel's Close gives it there once the box that opened the panel is gone (P2-R36).
+ * focus from a script, out of the tab order: a panel's Close gives it there once the box that opened the panel is gone or
+ * panned out of its view (P2-R36). A press focuses it too, with no ring; the keyboard's ring is drawn inside it.
  */
 function FlowCanvas(props: {
   layout: FlowLayout; viewKey: string; selectedId: string | null; goods: Array<{ key: StuffKey; name: string }>;
@@ -709,9 +711,17 @@ function FlowCanvas(props: {
   );
 }
 
+/** A box on the page (a DOMRect is one). */
+interface PageBox { top: number; bottom: number; left: number; right: number }
+
+/** True when the boxes share no area: one lies wholly above, below, left or right of the other. */
+export function disjoint(a: PageBox, b: PageBox): boolean {
+  return a.bottom <= b.top || a.top >= b.bottom || a.right <= b.left || a.left >= b.right;
+}
+
 /** True when the window (`width` × `height`) shows no part of `box`: it lies wholly above, below, left or right of it (ledger ruling P2-R35). */
-export function outsideWindow(box: { top: number; bottom: number; left: number; right: number }, width: number, height: number): boolean {
-  return box.bottom <= 0 || box.top >= height || box.right <= 0 || box.left >= width;
+export function outsideWindow(box: PageBox, width: number, height: number): boolean {
+  return disjoint(box, { top: 0, bottom: height, left: 0, right: width });
 }
 
 /**
@@ -752,7 +762,7 @@ function FlowDiagram(props: {
   const sideRef = useRef<HTMLDivElement | null>(null);
   /** A step picked inside the panel replaced it: the new panel takes the focus, which went with the control that was picked (P2-D33). */
   const focusPanel = useRef(false);
-  /** The diagram's column: its Flow canvas takes the focus when the panel's Close finds the box that opened the panel gone (P2-R36). */
+  /** The diagram's column: its Flow canvas takes the focus when the panel's Close finds the box that opened the panel gone or out of view. */
   const mainRef = useRef<HTMLDivElement | null>(null);
   /** The panel was closed with its Close button: the box whose head takes the focus back (P2-R36), else null. */
   const refocusBox = useRef<string | null>(null);
@@ -776,7 +786,8 @@ function FlowDiagram(props: {
     };
   }, [graph, viewKey]);
   // Before it paints, the focus goes to the panel of a step picked inside the old panel, and the panel's Close gives it back to the head of
-  // the box that opened the panel, or to the canvas once a replan has removed that box; a pick on the canvas leaves the focus where it is.
+  // the box that opened the panel, or to the canvas once a replan has removed that box or a pan has taken it out of the canvas's view; a
+  // pick on the canvas leaves the focus where it is.
   // The new panel stands where the old one stood, so neither moves the page unless the window shows nothing of the panel's head or of the
   // box head (a plain focus would jump the page to show a panel's cut-off end): then that comes in by the least scroll (P2-R35, P2-R36).
   useLayoutEffect(() => {
@@ -790,7 +801,10 @@ function FlowDiagram(props: {
       refocusBox.current = null;
       const canvas = mainRef.current?.querySelector<SVGSVGElement>('svg.flow-canvas') ?? null;
       const node = [...(canvas?.querySelectorAll('[data-node-id]') ?? [])].find((el) => el.getAttribute('data-node-id') === box);
-      const target = node?.querySelector<SVGGElement>('.flow-node-head[tabindex]') ?? canvas;
+      const head = node?.querySelector<SVGGElement>('.flow-node-head[tabindex]') ?? null;
+      // a head panned out of the canvas's own view would take the focus unseen, and scroll the page to it for nothing: the canvas takes it
+      const seen = head !== null && canvas !== null && !disjoint(head.getBoundingClientRect(), canvas.getBoundingClientRect());
+      const target = seen ? head : canvas;
       if (target !== null) focusInWindow(target);
     }
   }, [selected]);
@@ -808,7 +822,7 @@ function FlowDiagram(props: {
   };
   /**
    * The panel's Close: the focus goes back to the head of its box, the one a pick on the canvas opened it from (for a step reached from a
-   * panel, the box of that step), while it is drawn (P2-R36).
+   * panel, the box of that step), while it is drawn in the canvas's view (P2-R36).
    */
   const close = (): void => {
     refocusBox.current = selected === null ? null : selected.kind === 'step' ? selected.id : selected.nodeId;
@@ -824,7 +838,8 @@ function FlowDiagram(props: {
       selectedId = step.id;
     }
   } else if (selected?.kind === 'import' && plan.flows.some((f) => f.from === 'raw' && f.key === selected.key)) {
-    panel = <RawPanel itemKey={selected.key} plan={plan} settings={settings} per={per} send={send} onClose={close} onSelect={selectStep} />;
+    // Keyed by the stub picked, as a step's panel is by its step: another import's pick fades in a new panel, at its top.
+    panel = <RawPanel key={selected.nodeId} itemKey={selected.key} plan={plan} settings={settings} per={per} send={send} onClose={close} onSelect={selectStep} />;
     selectedId = selected.nodeId;
   }
   const open = (node: PlacedNode): void => {

@@ -1352,7 +1352,13 @@ describe('the Machine GUI Flow diagram', () => {
       // flow-model's text widths (7.4 and 6.2 px per character, 6.5 for a tag) are measured for this font
       ['.flow-canvas', 'font-family', 'var(--font-diagram)'],
       ['.flow-canvas', 'cursor', 'grab'],
+      // the canvas can take the focus (ledger ruling P2-R36), so a press focuses it too: no ring then, and the keyboard's accent ring drawn
+      // inside it, as Connections draws its own (Task 5b fix round 1)
+      ['.flow-canvas:focus', 'outline', 'none'],
+      ['.flow-canvas:focus-visible', 'outline', '3px solid var(--accent)'], ['.flow-canvas:focus-visible', 'outline-offset', '-3px'],
     ]);
+    // both are (0,2,0): the keyboard's ring must come after the press's none
+    expect(position('.flow-canvas:focus-visible')).toBeGreaterThan(position('.flow-canvas:focus'));
     // the same edge all round: flow-focus.spec.ts finds a centred box at the centre of the svg's border box
     expect(ruleBody('.flow-canvas')).not.toMatch(/border-(top|right|bottom|left)/);
   });
@@ -2506,6 +2512,7 @@ const PHASE2_RULES: string[] = [
   ...TIER_RULES, ...READOUT_RULES,                                                   // Task 4: the Flow machine readout (spec §7.3)
   ...RECIPE_RULES,                                                                   // Task 5a: the step panel's recipe card (spec §8.4)
   '.flow-side',                                                                      // Task 5b: the panel's wrapper, slid in once (spec §8.6)
+  '.flow-canvas:focus', '.flow-canvas:focus-visible',                                // Task 5b fix round 1: the canvas's focus (P2-R36)
 ];
 /** The colour literals a Phase 2 rule may write: each is the same in both looks (spec §4.4). */
 const SAME_IN_BOTH = ['#ffffff', '#000000', '#aaaaaa', '#100010', '#ffff55', 'rgb(0 0 0 / 0.4)'];

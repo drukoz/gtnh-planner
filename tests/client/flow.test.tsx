@@ -12,7 +12,7 @@ import {
 import { PSEUDO_MACHINE_ENTRIES } from '../../src/server/pack/machines.ts';
 import { TIER_NAMES } from '../../src/shared/gt/tiers.ts';
 import { formatNumber as sharedNumber, formatRate as sharedRate } from '../../src/shared/format.ts';
-import { FlowView, FlowNodeShape, FlowIssues, FlowLegend, outsideWindow } from '../../src/client/views/FlowView.tsx';
+import { FlowView, FlowNodeShape, FlowIssues, FlowLegend, disjoint, outsideWindow } from '../../src/client/views/FlowView.tsx';
 import { StepPanel } from '../../src/client/views/StepPanel.tsx';
 import { defaultSettings } from '../../src/shared/project/apply-op.ts';
 import { settingsHash } from '../../src/shared/project/settings-hash.ts';
@@ -855,5 +855,16 @@ describe('flow diagram: a box outside the window', () => {
     expect(outsideWindow(box(-20, 20), 1000, 600), 'cut by the top edge').toBe(false);
     expect(outsideWindow(box(580, 620), 1000, 600), 'cut by the bottom edge').toBe(false);
     expect(outsideWindow(box(100, 140), 1000, 600), 'inside').toBe(false);
+  });
+  // Task 5b fix round 1 (M2): Close gives the focus to the canvas, not to a box head the canvas no longer shows (panned out of its view)
+  it('shares no area with a box wholly beside it, and shares some with one it overlaps', () => {
+    const canvas = { top: 300, bottom: 700, left: 20, right: 900 };
+    expect(disjoint({ top: 720, bottom: 750, left: 100, right: 300 }, canvas), 'below it').toBe(true);
+    expect(disjoint({ top: 260, bottom: 300, left: 100, right: 300 }, canvas), 'above, its bottom edge on the top').toBe(true);
+    expect(disjoint({ top: 400, bottom: 430, left: 900, right: 1100 }, canvas), 'right of it, its left edge on the right').toBe(true);
+    expect(disjoint({ top: 400, bottom: 430, left: -300, right: -10 }, canvas), 'left of it').toBe(true);
+    expect(disjoint({ top: 690, bottom: 720, left: 100, right: 300 }, canvas), 'cut by its bottom').toBe(false);
+    expect(disjoint({ top: 400, bottom: 430, left: 880, right: 1000 }, canvas), 'cut by its right').toBe(false);
+    expect(disjoint({ top: 400, bottom: 430, left: 100, right: 300 }, canvas), 'inside').toBe(false);
   });
 });
