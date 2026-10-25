@@ -42,10 +42,10 @@ function NoteItem(props: { note: Note; plan: Plan | null; send: ProjectViewProps
     }
     // No op brings a note back (adding it again would make whoever undoes it its author, now, last), so the delete waits in the page's store
     // while the toast offers Undo, and is posted once the toast has gone (Phase 2 spec §12.2), or as the page goes. Posted, it has no Undo
-    // left, so it takes the toast away.
+    // left, so it takes the toast away. Its toast's going posts it, so its time runs on while the page is hidden (ledger ruling P2-R63).
     const key = `note:${note.id}`;
     const later = sendLater(ops, { onFlush: () => dismissToast(key) });
-    showToast('Note deleted', { key, action: { label: 'Undo', run: () => later.cancel() }, onExpire: () => later.flush() });
+    showToast('Note deleted', { key, action: { label: 'Undo', run: () => later.cancel() }, onExpire: () => later.flush(), runsHidden: true });
   };
   return (
     <li className="note" data-note-id={note.id}>

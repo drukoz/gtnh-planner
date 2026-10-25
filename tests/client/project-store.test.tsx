@@ -1,18 +1,21 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import { apiPost } from '../../src/client/api/client.ts';
-import { createProjectStore, type StoreDeps } from '../../src/client/state/project-store.ts';
+import { apiPost, ApiError } from '../../src/client/api/client.ts';
+import {
+  createProjectStore, liveDeps, POST_TIMEOUT_MS, projectPostsSettled, type PostQueues, type StoreDeps,
+} from '../../src/client/state/project-store.ts';
 import { defaultSettings } from '../../src/shared/project/apply-op.ts';
 import type { OpsResult } from '../../src/shared/types/api.ts';
 import type { Project, ProjectOp } from '../../src/shared/types/project.ts';
 
 const P0: Project = { id: 'p1', name: 'Steel', createdAt: 't', createdBy: 'Ann', rev: 0, settings: defaultSettings(), world: { scanId: null, baseId: null }, placement: null, marks: {}, notes: [] };
-function harness(post: StoreDeps['postOps'] = async () => ({ rev: 1 })) {
+/** A store of project p1; its posts queue in `queues`, a map of its own unless a test shares one between stores (M2). */
+function harness(post: StoreDeps['postOps'] = async () => ({ rev: 1 }), queues: PostQueues = new Map()) {
   let on!: Parameters<StoreDeps['openEvents']>[1];
   let hide: () => void = () => {};
   const deps: StoreDeps = { fetchProject: vi.fn(async () => P0), postOps: vi.fn(post), fetchPlan: vi.fn(async () => ({ settingsHash: 'h' }) as never),
     openEvents: (_id, handlers) => { on = handlers; return () => {}; }, me: () => 'Ann', now: () => 'now',
     onPageHide: (fn) => { hide = fn; return () => {}; } };
-  const store = createProjectStore('p1', deps);
+  const store = createProjectStore('p1', deps, queues);
   return { store, deps, events: () => on, hide: () => hide() };
 }
 
@@ -162,7 +165,7 @@ function releasing(post: StoreDeps['postOps']) {
   const off = vi.fn();
   let hide: () => void = () => {};
   const deps: StoreDeps = { ...h.deps, onPageHide: (fn) => { hide = fn; return off; } };
-  const store = createProjectStore('p1', deps);
+  const store = createProjectStore('p1', deps, new Map());
   h.store.close();
   return { store, deps, off, events: h.events, hide: () => hide() };
 }
@@ -261,14 +264,14 @@ describe('project store: one post at a time (ledger ruling P2-R59)', () => {
     expect(postsOf(deps)[2]).toEqual(['p1', [DELETE_N1]]);
     expect(store.getSnapshot().error).toBe('Failed to fetch');
   });
-  it('sends what still waits its turn at once, in order and with keepalive, when the page goes', () => {
+  it('sends what still waits its turn at once, as one post in order and with keepalive, when the page goes (M4)', () => {
     const { store, deps, events, hide } = harness(() => new Promise(() => {}));   // nothing answers: the page is going
     events().snapshot(WITH_NOTE);
     store.send([RENAME]);
     store.send([UNDO]);
     store.sendLater([DELETE_N1]);
     hide();
-    expect(postsOf(deps)).toEqual([['p1', [RENAME]], ['p1', [UNDO], { keepalive: true }], ['p1', [DELETE_N1], { keepalive: true }]]);
+    expect(postsOf(deps)).toEqual([['p1', [RENAME]], ['p1', [UNDO, DELETE_N1], { keepalive: true }]]);
   });
   it('posts in turn what still waits once the store has closed, and hears pagehide until it has', async () => {
     const { answers, post } = heldPosts();
@@ -309,5 +312,139 @@ describe('project store: one post at a time (ledger ruling P2-R59)', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+// ---- Task 9b fix round 1: freeze (ledger ruling P2-R63), the project's delete (M1), a queue per project (M2), a post's 60 s (P2-R64),
+// what waits as the page goes (M4) ----
+
+describe('project store: fix round 1', () => {
+  afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
+
+  it('hears the page frozen as it hears it hidden for good: Chrome may discard a frozen page, and it runs no timer (P2-R63)', () => {
+    const [onWindow, offWindow, onDocument, offDocument] = [vi.fn(), vi.fn(), vi.fn(), vi.fn()];
+    vi.stubGlobal('addEventListener', onWindow); vi.stubGlobal('removeEventListener', offWindow);
+    vi.stubGlobal('document', { addEventListener: onDocument, removeEventListener: offDocument });
+    const fn = (): void => {};
+    const stop = liveDeps().onPageHide!(fn);
+    expect(onWindow).toHaveBeenCalledWith('pagehide', fn);
+    expect(onDocument).toHaveBeenCalledWith('freeze', fn);
+    stop();
+    expect(offWindow).toHaveBeenCalledWith('pagehide', fn);
+    expect(offDocument).toHaveBeenCalledWith('freeze', fn);
+  });
+
+  it('posts what is deferred, and answers once every post of the project has been answered, before the project is deleted (M1)', async () => {
+    const { answers, post } = heldPosts();
+    const queues: PostQueues = new Map();
+    const { store, deps, events } = harness(post, queues);
+    events().snapshot(WITH_NOTE);
+    store.send([MARK]);                                                       // on its way
+    const onFlush = vi.fn();
+    store.sendLater([DELETE_N1], { onFlush });
+    let settled = false;
+    void store.flushDeferred().then(() => { settled = true; });
+    expect(onFlush).toHaveBeenCalledTimes(1);                                 // its toast goes: the delete is posted
+    answers[0]!.ok({ rev: 1 });
+    await vi.waitFor(() => expect(postsOf(deps)).toEqual([['p1', [MARK]], ['p1', [DELETE_N1]]]));   // the page stays: a plain post
+    await new Promise((r) => setTimeout(r, 0));
+    expect(settled).toBe(false);
+    answers[1]!.ok({ rev: 2 });
+    await vi.waitFor(() => expect(settled).toBe(true));
+    await projectPostsSettled('p1', queues);                                  // nothing waits: at once
+    await projectPostsSettled('never posted', queues);
+  });
+
+  it('queues the posts of a project, not of a store: one opened again on it waits for what the closed one still posts (M2)', async () => {
+    const { answers, post } = heldPosts();
+    const queues: PostQueues = new Map();
+    const first = harness(post, queues);
+    first.events().snapshot(WITH_NOTE);
+    first.store.send([RENAME]);
+    first.store.close();                                                      // its rename still on its way
+    const second = harness(post, queues);
+    second.events().snapshot(WITH_NOTE);
+    second.store.send([UNDO]);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(postsOf(first.deps)).toEqual([['p1', [RENAME]]]);
+    expect(postsOf(second.deps)).toEqual([]);                                 // the Undo waits for the rename's answer
+    answers[0]!.ok({ rev: 1 });
+    await vi.waitFor(() => expect(postsOf(second.deps)).toEqual([['p1', [UNDO]]]));
+    // and the page's own queues are the default: two stores of one project share one
+    const held = heldPosts();
+    const deps = (): StoreDeps => ({ fetchProject: vi.fn(async () => ({ ...WITH_NOTE, id: 'm2' })), postOps: vi.fn(held.post),
+      fetchPlan: vi.fn(async () => ({ settingsHash: 'h' }) as never), openEvents: () => () => {}, me: () => 'Ann', now: () => 'now' });
+    const [a, b] = [deps(), deps()];
+    const left = createProjectStore('m2', a);
+    await vi.waitFor(() => expect(left.getSnapshot().project).not.toBeNull());
+    left.send([RENAME]);
+    left.close();
+    const again = createProjectStore('m2', b);
+    await vi.waitFor(() => expect(again.getSnapshot().project).not.toBeNull());
+    again.send([UNDO]);
+    expect(postsOf(b)).toEqual([]);
+    held.answers[0]!.ok({ rev: 1 });
+    await vi.waitFor(() => expect(postsOf(b)).toEqual([['m2', [UNDO]]]));
+    held.answers[1]!.ok({ rev: 2 });
+    await projectPostsSettled('m2');
+    again.close();
+  });
+
+  it('gives each post 60 s, then says the server did not answer (P2-R64)', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn((_url: string, init: RequestInit) => new Promise<Response>((_ok, fail) => {
+      init.signal?.addEventListener('abort', () => fail(new DOMException('The operation was aborted.', 'AbortError')));
+    })));
+    let outcome: unknown = 'waiting';
+    liveDeps().postOps('p1', [DELETE_N1]).then((r) => { outcome = r; }, (err: unknown) => { outcome = err; });
+    await vi.advanceTimersByTimeAsync(POST_TIMEOUT_MS - 1);
+    expect(outcome).toBe('waiting');
+    await vi.advanceTimersByTimeAsync(1);
+    expect(outcome).toBeInstanceOf(ApiError);
+    expect(outcome).toMatchObject({ code: 'timeout', message: 'No answer from the server in 60 s' });
+    expect(POST_TIMEOUT_MS).toBe(60_000);
+  });
+
+  it('counts a post that timed out as failed, takes the project as the server has it, and lets the next go (P2-R64)', async () => {
+    let posts = 0;
+    const { store, deps, events } = harness(async () => {
+      posts += 1;
+      if (posts === 1) throw new ApiError(0, 'timeout', 'No answer from the server in 60 s');
+      return { rev: 1 };
+    });
+    events().snapshot(WITH_NOTE);
+    await vi.waitFor(() => expect(deps.fetchProject).toHaveBeenCalledTimes(1));   // the first load
+    store.send([RENAME]);
+    store.send([UNDO]);
+    await vi.waitFor(() => expect(postsOf(deps)).toHaveLength(2));
+    expect(store.getSnapshot().error).toBe('No answer from the server in 60 s');
+    await vi.waitFor(() => expect(deps.fetchProject).toHaveBeenCalledTimes(2));   // and the resync
+  });
+
+  it('sends what waits as the page goes in posts of whole batches of at most 100 ops, the most the server takes (M4)', () => {
+    const { store, deps, events, hide } = harness(() => new Promise(() => {}));
+    events().snapshot(WITH_NOTE);
+    const marks = (from: number, n: number): ProjectOp[] => Array.from({ length: n }, (_, i) => ({ op: 'mark', row: `step:s${from + i}`, on: true }));
+    store.send([MARK]);                                                       // on its way
+    store.send(marks(0, 60));
+    store.send(marks(60, 50));
+    store.sendLater([DELETE_N1]);
+    hide();
+    expect(postsOf(deps)).toEqual([
+      ['p1', [MARK]],
+      ['p1', marks(0, 60), { keepalive: true }],
+      ['p1', [...marks(60, 50), DELETE_N1], { keepalive: true }],
+    ]);
+  });
+
+  it('sends what waits as the page goes without keepalive when it is more than a keepalive post may carry (M4)', () => {
+    const { store, deps, events, hide } = harness(() => new Promise(() => {}));
+    events().snapshot(WITH_NOTE);
+    const big = Array.from({ length: 16 }, (_, i): ProjectOp => ({ op: 'addNote', note: { id: `big${i}`, text: 'x'.repeat(4000) } }));
+    store.send([MARK]);                                                       // on its way
+    store.send(big);                                                          // 16 notes of 4,000 characters: over 60 KiB
+    store.sendLater([DELETE_N1]);
+    hide();
+    expect(postsOf(deps)).toEqual([['p1', [MARK]], ['p1', [...big, DELETE_N1]]]);   // one post, in order: a best effort
   });
 });

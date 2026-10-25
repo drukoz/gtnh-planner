@@ -605,3 +605,59 @@ test('an Undo pressed while its rename is still on its way lands after it, so th
   await expect(field).toHaveValue('Toasts in turn');
   expect(sent, 'the Undo waited for the rename\'s answer').toBe(1);
 });
+
+// ---- Task 9b fix round 1: a hidden or frozen page (ledger ruling P2-R63), and a note deleted just before its project (M1) ----
+
+// P2-R63: a toast whose going commits a change runs on while the page is hidden (a minimised window, or one the full-screen game this planner
+// is for covers), so a deleted note still goes about 5 s after it was deleted, as others expect; an ordinary toast waits for the page. The
+// page is hidden here as the region hears it: `document.hidden` and a visibilitychange.
+test('a note deleted just before the page is hidden still goes about 5 s later, while it is hidden', async ({ page }) => {
+  await login(page); await setName(page, 'Ann');
+  const id = await oneNote(page, 'Toasts note hidden', 'deleted, then hidden');
+  await rename(page, 'Toasts note hidden, renamed');
+  const renamed = toastOf(page, 'Renamed to “Toasts note hidden, renamed”');
+  await expect(renamed).toBeVisible();
+  await page.locator('.note').getByRole('button', { name: 'Delete' }).click();
+  const deleted = toastOf(page, 'Note deleted');
+  await expect(deleted).toBeVisible();
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await expect.poll(() => notesOf(page, id), { timeout: 8000, message: 'the delete reaches the server while the page is hidden' }).toEqual([]);
+  await expect(deleted).toHaveCount(0);
+  await expect(renamed).toHaveAttribute('data-state', 'open');                            // an ordinary toast waits for the page
+  expect(await page.evaluate(() => document.hidden), 'the page is still hidden').toBe(true);
+});
+
+// P2-R63: Chrome freezes a hidden page it may discard later, and a frozen page runs no timer, so the deferred delete is posted as the page
+// freezes, with keepalive, as on pagehide. Headless, this Chromium dispatches nothing for DevTools' frozen lifecycle state (the fix report's
+// probe), so the page is sent its `freeze` event as Chrome sends it; the check ends well inside the toast's own 5 s.
+test('a note deleted just before the page is frozen is posted as it freezes, with keepalive', async ({ page }) => {
+  await noteKeepalive(page);
+  await login(page); await setName(page, 'Ann');
+  const id = await oneNote(page, 'Toasts note frozen', 'deleted, then frozen');
+  await page.locator('.note').getByRole('button', { name: 'Delete' }).click();
+  const toast = toastOf(page, 'Note deleted');
+  await expect(toast).toBeVisible();
+  await page.evaluate(() => document.dispatchEvent(new Event('freeze')));
+  await expect.poll(() => notesOf(page, id), { timeout: 3000, message: 'posted as the page froze' }).toEqual([]);
+  expect(await keptAlive(page), 'the delete was the one post, made to outlive its page').toEqual([true]);
+  await expect(toast).toHaveCount(0);                                                     // posted, so its Undo has gone
+});
+
+// M1: a note deleted just before its project is posted before the project's own delete, which would otherwise find the project gone (404)
+// and drop it, so the project restored by its toast's Undo comes back without the note
+test('a note deleted just before its project stays deleted when the project is restored', async ({ page }) => {
+  await login(page); await setName(page, 'Ann');
+  const name = runName('Toasts note, then project');
+  const id = await oneNote(page, name, 'deleted, then its project');
+  await page.locator('.note').getByRole('button', { name: 'Delete' }).click();
+  await expect(toastOf(page, 'Note deleted')).toBeVisible();
+  await deleteProject(page, name);                                                        // well inside the note's 5 s
+  await expect(page).toHaveURL(/\/$/);
+  await toastOf(page, `Deleted “${name}”`).getByRole('button', { name: 'Undo' }).click();
+  await expect(page.getByRole('link', { name, exact: true })).toBeVisible();
+  expect(await notesOf(page, id)).toEqual([]);
+});

@@ -6,22 +6,24 @@ import { useState, type FormEvent, type ReactElement } from 'react';
 import { ApiError, messageOf } from '../api/client.ts';
 import { deleteProject, restoreProject } from '../api/projects.ts';
 import { isProjectGone } from '../api/sse.ts';
-import { takeDeletedNotice } from '../state/deleted-notice.ts';
+import { forgetDeletedNotice } from '../state/deleted-notice.ts';
+import { projectPostsSettled } from '../state/project-store.ts';
 import { bumpProjectsChanged } from '../state/projects-changed.ts';
 import { toasts, type ToastStore } from '../state/toasts.ts';
 
 /**
  * Says that this tab deleted project `id` (Phase 2 spec §12.1), with Undo, which restores it: the App's region outlives the page, so the
- * project page's toast is there on the list it leaves for. A project back (or one someone else restored first: `409 not-deleted`) takes
- * the "was deleted" notice the list was to show and tells the list to load again; any other failure (a project purged since: 404) says it
- * could not. The key is the project's, so the list's own Restore takes the toast away. Returns the toast's id.
+ * project page's toast is there on the list it leaves for. A project back (or one someone else restored first: `409 not-deleted`) drops the
+ * "was deleted" notice about it that the list was to show, and tells the list to load again and drop its notice about it (M5: a notice about
+ * another project stays); any other failure (a project purged since: 404) says it could not. The key is the project's, so the list's own
+ * Restore takes the toast away. Returns the toast's id.
  */
 export function showDeletedToast(
   id: string, name: string, deps: { restore(id: string): Promise<unknown>; toasts: ToastStore } = { restore: restoreProject, toasts },
 ): number {
   const back = (): void => {
-    takeDeletedNotice();
-    bumpProjectsChanged();
+    forgetDeletedNotice(id);
+    bumpProjectsChanged(id);
   };
   const undo = {
     label: 'Undo',
@@ -90,10 +92,15 @@ export function DeleteConfirm(props: DeleteConfirmProps): ReactElement {
 
 /**
  * The `label` button, then the confirmation; `onDeleted` runs once the server deleted the project. With `onGone`, a
- * project the server no longer has counts as deleted already: `onGone` runs instead of the error showing.
+ * project the server no longer has counts as deleted already: `onGone` runs instead of the error showing. The delete
+ * is sent once what the page still has to post for the project has been answered (`beforeDelete`, by default the
+ * project's posts on their way: Task 9b fix round 1, M1), for a post that reached the server after it would find the
+ * project gone, and be dropped: a note deleted just before would come back with the project.
  */
-export function DeleteProject(props: { id: string; name: string; label: string; onDeleted(): void; onGone?(): void }): ReactElement {
-  const { id, name, label, onDeleted, onGone } = props;
+export function DeleteProject(props: {
+  id: string; name: string; label: string; onDeleted(): void; onGone?(): void; beforeDelete?(): Promise<unknown>;
+}): ReactElement {
+  const { id, name, label, onDeleted, onGone, beforeDelete } = props;
   const [open, setOpen] = useState(false);
   const [typed, setTyped] = useState('');
   const [busy, setBusy] = useState(false);
@@ -108,8 +115,11 @@ export function DeleteProject(props: { id: string; name: string; label: string; 
       setError(messageOf(err));
       setBusy(false);
     };
-    if (onGone === undefined) deleteProject(id).then(onDeleted, failed);
-    else deleteOrGone(id).then((outcome) => (outcome === 'gone' ? onGone() : onDeleted()), failed);
+    const send = (): void => {
+      if (onGone === undefined) deleteProject(id).then(onDeleted, failed);
+      else deleteOrGone(id).then((outcome) => (outcome === 'gone' ? onGone() : onDeleted()), failed);
+    };
+    void (beforeDelete?.() ?? projectPostsSettled(id)).then(send, send);
   };
   const cancel = (): void => {
     setOpen(false);

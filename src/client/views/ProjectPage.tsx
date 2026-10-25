@@ -322,7 +322,7 @@ export function ProjectPage(props: { id: string }): ReactElement {
   // The store sets `deleted` once, whether this tab deleted the project or was told, so the list says so once. The name
   // is the one this tab showed when the project went.
   useEffect(() => {
-    if (deleted !== null) leaveDeletedProject(project?.name ?? null, deleted.by);
+    if (deleted !== null) leaveDeletedProject(project?.name ?? null, deleted.by, props.id);
   }, [deleted]);
   // What the flow diagram lights belongs to this project: leaving it (for another project or another page) clears it.
   useEffect(() => () => setFlowFocus(null), [props.id]);
@@ -492,7 +492,7 @@ export function ProjectPage(props: { id: string }): ReactElement {
         {comparable && <CompareToggle open={compare.state.open} onToggle={toggleCompare} ref={compareHeadToggle} />}
         <span className={view.connected ? 'connection live' : 'connection'}>{view.connected ? 'live' : 'reconnecting…'}</span>
         <DeleteProject
-          id={project.id} name={project.name} label="Delete project"
+          id={project.id} name={project.name} label="Delete project" beforeDelete={view.flushDeferred}
           onDeleted={() => {
             showDeletedToast(project.id, project.name);
             view.markDeleted(me);

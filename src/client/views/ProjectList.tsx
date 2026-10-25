@@ -3,7 +3,7 @@
 // for 7 days, where anyone can restore them (§11.24). The list has no live channel: it loads on open and after its
 // own deletes and restores (ruling C17), and a row someone else deleted meanwhile counts as deleted when its Delete
 // finds it gone. A delete says so in a toast, whose Undo restores the project (Phase 2 spec §12.1): the list then loads
-// again too, and drops the notice that said it was deleted.
+// again too, and drops the notice that said it was deleted, if that notice is about it (Task 9b, M5).
 
 import { useEffect, useRef, useState, type FormEvent, type ReactElement } from 'react';
 import { MAX_NAME_LENGTH, validateOp } from '../../shared/project/apply-op.ts';
@@ -16,9 +16,9 @@ import { ItemIcon } from '../components/ItemIcon.tsx';
 import { Skeleton } from '../components/Skeleton.tsx';
 import { localTime } from '../format.ts';
 import { followLink, navigate } from '../router.ts';
-import { alreadyDeletedNotice, deletedNotice, takeDeletedNotice } from '../state/deleted-notice.ts';
+import { alreadyDeletedNotice, deletedNotice, takeListNotice, type ListNotice } from '../state/deleted-notice.ts';
 import { useName } from '../state/name.ts';
-import { useProjectsChanged } from '../state/projects-changed.ts';
+import { restoredSince, useProjectsChanged } from '../state/projects-changed.ts';
 import { dismissToast, showToast } from '../state/toasts.ts';
 
 /** Display names of the projects' targets; a key the pack cannot name (or no export yet) shows as the key. */
@@ -41,6 +41,11 @@ function useTargetNames(projects: ProjectListEntry[] | null): Record<string, str
     };
   }, [wanted]);
   return names;
+}
+
+/** The list's notice once the `restored` projects are back: one about any of them no longer holds (M5); any other stays. */
+export function noticeAfterRestores(notice: ListNotice | null, restored: readonly string[]): ListNotice | null {
+  return notice !== null && notice.about !== null && restored.includes(notice.about) ? null : notice;
 }
 
 /** Deleted projects with who deleted them and when, each with Restore; nothing at all while there are none. */
@@ -76,28 +81,29 @@ export function ProjectList(): ReactElement {
   const [projects, setProjects] = useState<ProjectListEntry[] | null>(null);
   const [deleted, setDeleted] = useState<DeletedProjectSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<ListNotice | null>(null);
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const [restoring, setRestoring] = useState<string | null>(null);
   const [loads, setLoads] = useState(0);
   const names = useTargetNames(projects);
   const me = useName();
-  // A project restored from a deleted project's toast (its Undo, which the App draws over any page): load again, and the notice that said
+  // A project restored from a deleted project's toast (its Undo, which the App draws over any page): load again, and a notice that said
   // it was deleted no longer holds.
   const changed = useProjectsChanged();
   const changedSeen = useRef(changed);
 
   useEffect(() => {
     // Taken in an effect, not during render: StrictMode renders twice, and the second render would find it gone.
-    const left = takeDeletedNotice();
+    const left = takeListNotice();
     if (left !== null) setNotice(left);
   }, []);
 
   useEffect(() => {
     if (changed !== changedSeen.current) {
+      const restored = restoredSince(changedSeen.current);
       changedSeen.current = changed;
-      setNotice(null);
+      setNotice((shown) => noticeAfterRestores(shown, restored));
     }
     let live = true;
     apiGet<ProjectListEntry[]>('/api/projects').then(
@@ -158,7 +164,7 @@ export function ProjectList(): ReactElement {
   return (
     <main className="page project-list">
       <h1>Projects</h1>
-      {notice !== null && <p className="banner notice" role="status">{notice}</p>}
+      {notice !== null && <p className="banner notice" role="status">{notice.text}</p>}
       {error !== null && <p className="banner error" role="alert">{error}</p>}
       {projects === null ? (
         error === null && <><p className="muted">Loading…</p><Skeleton shape="cards" /></>
@@ -185,13 +191,13 @@ export function ProjectList(): ReactElement {
                 <DeleteProject
                   id={p.id} name={p.name} label="Delete"
                   onDeleted={() => {
-                    setNotice(deletedNotice(p.name, me));
+                    setNotice({ text: deletedNotice(p.name, me), about: p.id });
                     reload();
                     showDeletedToast(p.id, p.name);
                   }}
                   onGone={() => {
                     // The row was stale (no live channel, ruling C17): someone else deleted it; the reload catches up.
-                    setNotice(alreadyDeletedNotice(p.name));
+                    setNotice({ text: alreadyDeletedNotice(p.name), about: p.id });
                     reload();
                   }}
                 />

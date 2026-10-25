@@ -9,7 +9,9 @@
 //   so an `onExpire` that dismisses its own toast changes nothing.
 // - Its time runs only while nothing holds it (spec §12.1): a pointer that moves over it (P2-D28: one that rests where the toast appeared does
 //   not), the focus inside it, the page hidden, or the settings drawer open over the region (`inert`). Let go, it runs on with the time it had
-//   left.
+//   left. But a toast whose going commits a change (`runsHidden`: a deleted note's, whose delete is posted then) runs on while the page is
+//   hidden, whatever holds it, for no one points at or focuses a hidden page, which may be frozen and discarded meanwhile (ledger ruling P2-R63:
+//   spec §12.1's hidden pause no longer applies to it).
 // - A toast is drawn, so heard, only where it can be seen and reached (ledger ruling P2-R56): one shown while the drawer is open waits behind
 //   it, not drawn and its time still, and is drawn once the drawer closes, with its whole time. One drawn before the drawer opens stays drawn,
 //   paused behind it, and is there with the time it had left once it closes: it is added to the polite list once, so heard once (P2-R56a).
@@ -37,6 +39,11 @@ export interface ToastOptions {
   key?: string;
   /** How long it stays, if not TOAST_MS. */
   ms?: number;
+  /**
+   * Its time runs on while the page is hidden, whatever else holds it then: its going commits a change (a deleted note's delete is posted then),
+   * which must not wait for the page to be shown again, nor be lost with a hidden page the browser discards (ledger ruling P2-R63).
+   */
+  runsHidden?: boolean;
   /** Called once when it goes without its action taken: its time is up, or it is dismissed or replaced. */
   onExpire?(): void;
 }
@@ -53,7 +60,7 @@ export interface ToastStore {
   /** Holds the toast's time for a reason, until it is let go for that reason (`resume`). */
   pause(id: number, why: PauseReason): void;
   resume(id: number, why: PauseReason): void;
-  /** Holds every toast's time while the page is hidden, the ones shown meanwhile too. */
+  /** Holds every toast's time while the page is hidden, the ones shown meanwhile too, but those that run on then (P2-R63). */
   setHidden(hidden: boolean): void;
   /**
    * Holds every toast's time while the drawer is open over the region, the ones drawn staying drawn, and keeps the ones shown meanwhile
@@ -86,6 +93,8 @@ interface Entry {
   holds: Set<PauseReason>;
   /** Not drawn yet: shown while the drawer was open, or past the limit with every toast drawn held. */
   waiting: boolean;
+  /** Its time runs on while the page is hidden (`ToastOptions.runsHidden`). */
+  runsHidden: boolean;
   /** The time it has left: all of it while it is held or waits, from `started` while its timer runs. */
   left: number;
   started: number;
@@ -117,8 +126,8 @@ export function createToastStore(clock: ToastClock = LIVE_CLOCK): ToastStore {
     for (const fn of said) fn?.();
   };
 
-  /** Whether its time runs: drawn, not leaving, and held by nothing. */
-  const runs = (entry: Entry): boolean => !entry.waiting && !entry.toast.leaving && entry.holds.size === 0;
+  /** Whether its time runs: drawn, not leaving, and held by nothing, or the page hidden and it runs on then (P2-R63). */
+  const runs = (entry: Entry): boolean => !entry.waiting && !entry.toast.leaving && (entry.holds.size === 0 || (hidden && entry.runsHidden));
   /** Stops its timer, keeping the time it has left. */
   function stop(entry: Entry): void {
     if (entry.timer === null) return;
@@ -185,11 +194,11 @@ export function createToastStore(clock: ToastClock = LIVE_CLOCK): ToastStore {
 
   return {
     show(text, opts = {}) {
-      const { action, key, ms = TOAST_MS, onExpire } = opts;
+      const { action, key, ms = TOAST_MS, onExpire, runsHidden = false } = opts;
       const said: Array<(() => void) | undefined> = key === undefined ? [] : entries.filter((e) => e.toast.key === key).map(drop);
       const toast: Toast = { id: nextId++, text, ...(action === undefined ? {} : { action }), ...(key === undefined ? {} : { key }), leaving: false };
-      const holds = new Set<PauseReason>([...(hidden ? ['hidden' as const] : []), ...(inert ? ['inert' as const] : [])]);
-      entries = [...entries, { toast, onExpire, holds, waiting: true, left: ms, started: 0, timer: null }];
+      const holds = new Set<PauseReason>([...(hidden && !runsHidden ? ['hidden' as const] : []), ...(inert ? ['inert' as const] : [])]);
+      entries = [...entries, { toast, onExpire, holds, waiting: true, runsHidden, left: ms, started: 0, timer: null }];
       settle(said);
       changed();
       tell(said);
@@ -235,7 +244,7 @@ export function createToastStore(clock: ToastClock = LIVE_CLOCK): ToastStore {
       if (next === hidden) return;
       hidden = next;
       for (const entry of entries) {
-        if (next) entry.holds.add('hidden');
+        if (next && !entry.runsHidden) entry.holds.add('hidden');
         else entry.holds.delete('hidden');
         sync(entry);
       }

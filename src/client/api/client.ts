@@ -29,11 +29,18 @@ async function errorOf(res: Response): Promise<ApiError> {
   return new ApiError(res.status, code, message);
 }
 
-/**
- * How a call is made. `keepalive` lets it outlive the page that makes it: a deferred send posted as the page goes (Phase 2 spec §12.2), which
- * the browser would otherwise cancel with the page.
- */
-export interface CallOptions { keepalive?: boolean }
+/** How a call is made. */
+export interface CallOptions {
+  /** It outlives the page that makes it: a deferred send posted as the page goes (Phase 2 spec §12.2), which the browser would cancel with it. */
+  keepalive?: boolean;
+  /** It gives up after this long, its request aborted, and fails with an ApiError of code `timeout` (ledger ruling P2-R64). */
+  timeoutMs?: number;
+}
+
+/** Whether `err` is a call that gave up waiting for its answer (`CallOptions.timeoutMs`). */
+export function isTimeout(err: unknown): boolean {
+  return err instanceof ApiError && err.code === 'timeout';
+}
 
 async function call<T>(method: 'GET' | 'POST' | 'DELETE', path: string, body?: unknown, opts: CallOptions = {}): Promise<T> {
   const headers: Record<string, string> = { Accept: 'application/json' };
@@ -45,14 +52,25 @@ async function call<T>(method: 'GET' | 'POST' | 'DELETE', path: string, body?: u
     init.body = JSON.stringify(body);
   }
   if (opts.keepalive === true) init.keepalive = true;
-  const res = await fetch(path, init);
-  if (res.status === 401 && location.pathname !== '/login') {
-    // The login form itself gets 401 for a wrong password and shows it; everywhere else it means "log in again".
-    navigate(`/login?next=${encodeURIComponent(currentPath())}`);
+  const { timeoutMs } = opts;
+  const giveUp = timeoutMs === undefined ? null : new AbortController();
+  const timer = giveUp === null ? null : setTimeout(() => giveUp.abort(), timeoutMs);
+  if (giveUp !== null) init.signal = giveUp.signal;
+  try {
+    const res = await fetch(path, init);
+    if (res.status === 401 && location.pathname !== '/login') {
+      // The login form itself gets 401 for a wrong password and shows it; everywhere else it means "log in again".
+      navigate(`/login?next=${encodeURIComponent(currentPath())}`);
+    }
+    if (!res.ok) throw await errorOf(res);
+    if (res.status === 204) return undefined as T;
+    return (await res.json()) as T;
+  } catch (err) {
+    if (giveUp?.signal.aborted === true) throw new ApiError(0, 'timeout', `No answer from the server in ${Math.round((timeoutMs ?? 0) / 1000)} s`);
+    throw err;
+  } finally {
+    if (timer !== null) clearTimeout(timer);
   }
-  if (!res.ok) throw await errorOf(res);
-  if (res.status === 204) return undefined as T;
-  return (await res.json()) as T;
 }
 
 export function apiGet<T>(path: string): Promise<T> {

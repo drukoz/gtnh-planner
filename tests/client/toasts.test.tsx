@@ -12,10 +12,11 @@ import { ApiError } from '../../src/client/api/client.ts';
 import { showDeletedToast } from '../../src/client/components/DeleteProject.tsx';
 import { followVisibility, ToastList } from '../../src/client/components/Toasts.tsx';
 import { leaveDeletedProject, takeDeletedNotice } from '../../src/client/state/deleted-notice.ts';
-import { getProjectsChanged } from '../../src/client/state/projects-changed.ts';
+import { getProjectsChanged, restoredSince } from '../../src/client/state/projects-changed.ts';
 import {
   createToastStore, dismissToast, showToast, TOAST_EXIT_MS, TOAST_LIMIT, TOAST_MS, toasts, type ToastStore,
 } from '../../src/client/state/toasts.ts';
+import { noticeAfterRestores } from '../../src/client/views/ProjectList.tsx';
 
 describe('the toast store', () => {
   let store: ToastStore;
@@ -180,6 +181,29 @@ describe('the toast store', () => {
 
   // ---- Task 9b: the time a toast drawn before the drawer opens has left (the deferred minor of 9a), and Undo for a deleted project ----
 
+  // ---- Task 9b fix round 1: a toast whose going commits a change runs on while the page is hidden (ledger ruling P2-R63) ----
+
+  it('runs a toast whose going commits a change on while the page is hidden, and still holds an ordinary one (P2-R63)', () => {
+    const ordinary = store.show('Note added');
+    const commits = store.show('Note deleted', { runsHidden: true });
+    store.setHidden(true);
+    vi.advanceTimersByTime(TOAST_MS - 1); expect(find(commits)!.leaving).toBe(false);
+    vi.advanceTimersByTime(1); expect(find(commits)!.leaving).toBe(true); expect(find(ordinary)!.leaving).toBe(false);
+    const later = store.show('Note deleted', { runsHidden: true, key: 'note:n2' });                // shown while hidden: it runs from the start
+    vi.advanceTimersByTime(TOAST_MS); expect(find(later)!.leaving).toBe(true); expect(find(ordinary)!.leaving).toBe(false);
+    store.setHidden(false); vi.advanceTimersByTime(TOAST_MS); expect(find(ordinary)!.leaving).toBe(true);
+  });
+
+  it('runs it on while hidden whatever else holds it, for no one points at, focuses or opens a drawer on a hidden page (P2-R63)', () => {
+    const id = store.show('Note deleted', { runsHidden: true });
+    store.pause(id, 'pointer'); store.pause(id, 'focus'); store.setInert(true);
+    vi.advanceTimersByTime(60_000); expect(find(id)!.leaving).toBe(false);                          // held while the page is seen
+    store.setHidden(true); vi.advanceTimersByTime(2000); store.setHidden(false);
+    vi.advanceTimersByTime(60_000); expect(find(id)!.leaving).toBe(false);                          // held again once it is seen
+    store.setHidden(true); vi.advanceTimersByTime(TOAST_MS - 2000 - 1); expect(find(id)!.leaving).toBe(false);
+    vi.advanceTimersByTime(1); expect(find(id)!.leaving).toBe(true);
+  });
+
   it('keeps the time left of a toast drawn before the drawer opens, and runs it out once the drawer closes', () => {
     const id = store.show('Created “Steel”'); vi.advanceTimersByTime(300); store.setInert(true); vi.advanceTimersByTime(30_000);
     expect(find(id)!.leaving).toBe(false);
@@ -204,14 +228,37 @@ describe('the toast store', () => {
     vi.stubGlobal('location', { pathname: '/p/p 1', search: '', hash: '', href: 'http://planner.test/p/p%201' });
     vi.stubGlobal('history', { pushState: () => {} });
     try {
-      leaveDeletedProject('Steel', 'Ann');                                     // the page left for the list, which has not taken it yet
+      leaveDeletedProject('Steel', 'Ann', 'p 1');                              // the page left for the list, which has not taken it yet
       const id = showDeletedToast('p 1', 'Steel', { restore, toasts: store });
       expect(store.getSnapshot().map((t) => [t.id, t.text, t.action?.label])).toEqual([[id, 'Deleted “Steel”', 'Undo']]);
       const before = getProjectsChanged();
       store.act(id);
       await vi.waitFor(() => expect(getProjectsChanged()).toBe(before + 1));
       expect(restore).toHaveBeenCalledWith('p 1');
+      expect(restoredSince(before)).toEqual(['p 1']);
       expect(takeDeletedNotice()).toBeNull();                                  // "Steel was deleted by Ann" no longer holds
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('drops only the notice about the project its Undo restored, on the list and on its way there (M5)', async () => {
+    vi.stubGlobal('location', { pathname: '/p/p2', search: '', hash: '', href: 'http://planner.test/p/p2' });
+    vi.stubGlobal('history', { pushState: () => {} });
+    try {
+      leaveDeletedProject('Iron', 'Bob', 'p2');                                // another project's notice, on its way to the list
+      const before = getProjectsChanged();
+      store.act(showDeletedToast('p1', 'Steel', { restore: async () => ({}), toasts: store }));
+      await vi.waitFor(() => expect(getProjectsChanged()).toBe(before + 1));
+      expect(takeDeletedNotice()).toBe('Iron was deleted by Bob');             // still to be shown
+      const steel = { text: 'Steel was deleted by Ann', about: 'p1' };
+      const iron = { text: 'Iron was deleted by Bob', about: 'p2' };
+      const unknown = { text: 'That project no longer exists', about: null };
+      expect(noticeAfterRestores(steel, restoredSince(before))).toBeNull();
+      expect(noticeAfterRestores(iron, restoredSince(before))).toBe(iron);
+      expect(noticeAfterRestores(unknown, restoredSince(before))).toBe(unknown);
+      expect(noticeAfterRestores(null, restoredSince(before))).toBeNull();
+      expect(restoredSince(getProjectsChanged())).toEqual([]);
     } finally {
       vi.unstubAllGlobals();
     }
