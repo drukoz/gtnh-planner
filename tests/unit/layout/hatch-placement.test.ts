@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { addedBlocks, overlaps, placeUnits, replacedCasings, unitsFromPlan } from '../../../src/server/layout/arrange.ts';
 import { elementMap, elementTakes, hatchRuleFor } from '../../../src/server/layout/hatch-rules.ts';
 import { emptyScan, layoutLine } from '../../../src/server/layout/layout.ts';
+import { machineByMteId } from '../../../src/server/pack/lookup.ts';
 import { OPPOSITE, posKey, step, type Vec3 } from '../../../src/shared/layout/geometry.ts';
 import { FACES } from '../../../src/shared/types/assets.ts';
 import type { Layout, LayoutBlock } from '../../../src/shared/types/layout.ts';
@@ -95,7 +96,7 @@ describe.each(MODES)('a pyrolyse oven, whose input bus GT takes only above its b
     const pack = hatchPack();
     const layout = await lay(pack, [pyroStep], pyroFlows, mode);
     const unit = unitsFromPlan(pack, makePlan([pyroStep], { flows: pyroFlows })).units[0]!;
-    const rule = hatchRuleFor(pack.machines.get(HATCH_IDS.PYRO)!)!;
+    const rule = hatchRuleFor(machineByMteId(pack, HATCH_IDS.PYRO)!)!;
     const map = elementMap(rule, [3, 1, 0], unit.size);
     for (const c of unit.cells.filter((x) => x.hatch !== undefined)) expect(elementTakes(rule, map.get(posKey(c.pos)), c.hatch!), `${c.hatch} at ${c.pos}`).toBe(true);
     // the bus on F facing the spine two blocks up; the muffler on F facing up; the rest on the bottom layer G
@@ -196,7 +197,7 @@ describe('hatches by GregTech\'s rules', () => {
     const plan = makePlan([{ id: 'd', mteId: HATCH_IDS.DT, count: 1, tier: 2, inputs: [['t:in@0', 1]], outputs: [['fluid:zzz', 100], ['fluid:aaa', 100]] }]);
     const { units, warnings } = unitsFromPlan(pack, plan);
     const dt = units[0]!;
-    const map = elementMap(hatchRuleFor(pack.machines.get(HATCH_IDS.DT)!)!, [1, 0, 0], dt.size);
+    const map = elementMap(hatchRuleFor(machineByMteId(pack, HATCH_IDS.DT)!)!, [1, 0, 0], dt.size);
     expect(dt.cells.filter((c) => c.hatch === 'input_hatch').map((c) => [map.get(posKey(c.pos)), c.fluid ?? null])).toEqual([['b', null]]);
     expect(dt.io.fluidIn).toEqual([]);
     expect(placeUnits(units, { headWidth: 1, portSpacing: 0 }).units[0]!.ports.fluidIn).toEqual([]);
@@ -221,7 +222,7 @@ describe('hatches by GregTech\'s rules', () => {
     const plan = makePlan([{ id: 'b', mteId: HATCH_IDS.BOILER, count: 1, tier: 1, inputs: [['fluid:creosote', 100]], outputs: [] }]);
     const { units, warnings } = unitsFromPlan(pack, plan);
     const boiler = units[0]!;
-    const rule = hatchRuleFor(pack.machines.get(HATCH_IDS.BOILER)!)!;
+    const rule = hatchRuleFor(machineByMteId(pack, HATCH_IDS.BOILER)!)!;
     const map = elementMap(rule, [2, 1, 0], boiler.size);
     for (const c of boiler.cells.filter((x) => x.hatch !== undefined)) expect(elementTakes(rule, map.get(posKey(c.pos)), c.hatch!), `${c.hatch} at ${c.pos}`).toBe(true);
     expect(boiler.cells.filter((c) => c.hatch !== undefined).map((c) => [c.hatch, c.fluid ?? null]).sort()).toEqual([
@@ -300,8 +301,8 @@ describe('hatches by GregTech\'s rules', () => {
     // structure hatch at the lowest tier of its class (Task 2's `minimalHatch`), and so does the layout (plan 12 Task 6),
     // so that cell replaces nothing on the list
     const pack = layoutPack();
-    pack.machines.set(99, { ...pack.machines.get(IDS.MUFFLER)!, mteId: 99, name: 'Muffler Hatch (UHV)', tier: 9, itemKey: 'gregtech:gt.blockmachines@99' });
-    const ebf = pack.machines.get(IDS.EBF)!;
+    pack.machines.set(99, { ...machineByMteId(pack, IDS.MUFFLER)!, mteId: 99, name: 'Muffler Hatch (UHV)', tier: 9, itemKey: 'gregtech:gt.blockmachines@99' });
+    const ebf = machineByMteId(pack, IDS.EBF)!;
     ebf.structure = { ...ebf.structure!, blocks: ebf.structure!.blocks.map((b) => (posKey(b.pos) === '1,3,1' ? { pos: b.pos, block: { id: 'gregtech:gt.blockmachines', meta: 3, mteId: 99 } } : b)) };
     const { units, warnings } = unitsFromPlan(pack, makePlan([ebfOxygen]));
     expect(warnings).toEqual([]);
