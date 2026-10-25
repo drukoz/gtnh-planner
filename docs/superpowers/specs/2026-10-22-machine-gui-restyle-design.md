@@ -222,6 +222,21 @@ bold. One source of truth used by CSS (custom properties) and TS (the Flow SVG).
 - **Badges / chips:** `.badge`, `.chip`, tier chips = `--screen` rectangle with coloured Pixelify text; avoid
   badge = amber text on `--screen`.
 - **Readout tile:** `--screen` well, label `--screen-muted` 11 px, value Pixelify 24 px `--screen-text`.
+- **Add-on 17 in this look** (planning modes, farms, the Compare card; merged after Phase 1). "Plan for" is a settings
+  section like the others: a `fieldset.choice` whose `legend.settings-title` is the section's title, each mode a radio
+  with what it counts below it, indented to the label's text. A farm kind's own fields hang under its tick on a 2 px
+  `--panel-lo` line. The **Compare card** is a panel under the plan banner with a Pixelify title; each mode is a column
+  set into it as an inset frame (the panel's bevel inverted), its six figures readout tiles (`--screen`, label Inter
+  11 px `--screen-muted`, value Pixelify 24 px `--screen-text`; a tile is at least 160 px, so the tiles of a narrow column
+  stack, and a value never breaks: it stays on one line and a long one shrinks to fit, down to 13 px, before it is cut),
+  its notes chat boxes in the dark ink (the notes'
+  selector keeps one class's specificity, `p` in `:where()`, so `.muted` and `.error` still colour "Still planning…" and
+  a failure), and the mode in use a black edge with a 2 px yellow ring inside, the frame of a selected slot (an outline
+  in `Highlight` in forced colours). Its "Compare modes" button is a `button.small` in the project head, yellow while
+  the card is open (underlined in forced colours), so a closed card takes no height: layout.spec's press on the map
+  canvas stays at y 657 of 720 (with the card's own row it came to 705). Below 900 px the head's one row is full (the
+  Settings button says what the line makes), so there the button is in a bar of its own under the banner. The card's
+  Close gives the focus back to the button that is shown.
 - **Modal:** centred panel over `rgba(0,0,0,0.6)`; title Pixelify.
 - **Empty and loading states:** Phase 1 restyles the existing status lines (ink per surface); the pixel progress
   bar and skeletons arrive in Phase 2 (§7a).
@@ -279,6 +294,13 @@ Transitions (Phase 1 [CSS]: entrances; exits that need an element kept mounted a
   and the top bar), Escape (one layer per press: an open search list first, R15), a click on the dimmed page, Close
   and the Settings button all close it and give the focus back to the Settings button, and it closes when the window
   grows past 900 px. It slides in with `--dur-slow`/`--ease-out` and out with `--dur-exit`/`--ease-in`.
+  What to make is never out of sight behind it (the make-picker fix, after Phase 1): the Settings button reads
+  "Settings · Make: <target>" or "Settings · Make: nothing yet" (the target part is Inter 13 px in `--ink-muted` on a
+  `--screen` readout, since the muted ink is 2.3:1 on the button's own face; a long name ends in an ellipsis, and above
+  700 px the button takes at most 40% of the head, below it the whole head, which wraps there anyway, so that a short
+  name is never cut on a phone); a project with no target opens the drawer by itself, once per visit (after the
+  name prompt), with the focus in the Make section's item search instead of on Close; and the plan banner's "Pick
+  something to make" is a button that opens the drawer into that search (on a wide window it focuses the search).
 
 Modern UX (Phase 2 unless marked)
 - **Skeletons instead of "Loading…"** [TSX]: project list, plan, Flow, Connections, Map side panels and 3D show

@@ -67,17 +67,18 @@ h2 { font-size: 1.2rem; margin: 0 0 var(--gap); }
  * groups come before .muted and .error, so those two still win on an element that is both (.banner.error).
  */
 .card, .modal, .settings-section, .flow-panel, .conn-panel, .tab-panel, .note, .note-add, .materials-section, .line-panel, .found-panel,
-.view3d-box {
+.view3d-box, .compare-card {
   --ink: #303030; --ink-muted: #4a4a4a; --ink-title: #404040; --ink-link: #1a3fa0;
   --ink-error: #aa0000; --ink-ok: #1e5a1e; --ink-warn: #6a4000; --ink-focus: #1b1b1b;
   color: var(--ink);
 }
 /* Ink on a dark box (a chat box, a screen, a chip): light text on near black. It sets the focus ink too, so a dark box inside a
-   panel does not take the panel's dark ring. */
+   panel does not take the panel's dark ring. The Compare card's notes are named by their place with the `p` in `:where()`, which keeps
+   them at the specificity of one class, so .muted and .error still win on them. */
 .banner, .plan-banner, .what-changed, .delete-confirm, .connection, .badge, .chip, .avoid-chip,
 .search-results, .mat-unlock, .flow-issues, .flow-infeasible,
 .flow-panel .ports, .flow-panel .oc-lines, .flow-panel .warnings, .flow-panel .sources, .flow-panel .used-by, .flow-panel .also-made,
-.view3d-warnings {
+.view3d-warnings, .compare-card > :where(p), .compare-column > :where(p) {
   --ink: #ffffff; --ink-muted: #aaaaaa; --ink-title: #ffff55; --ink-link: #ffff55;
   --ink-error: #ff5555; --ink-ok: #55ff55; --ink-warn: #ffaa00; --ink-focus: #ffff55;
   color: var(--ink);
@@ -376,6 +377,52 @@ button.banner-chip { display: inline-flex; align-items: center; gap: 6px; min-he
 /* What the plan costs to run and to build (plan 12), above the banner. It is a line on the stone: the ink of the page, with
    figures that line up. */
 .plan-cost { margin: 0 0 var(--gap); color: var(--ink); font-family: var(--font-ui); font-size: 14px; font-variant-numeric: tabular-nums; }
+/*
+ * The Compare card (add-on 17): the three planning modes side by side, under the plan banner. Its button is a small button in the
+ * project head (in a bar of its own under the banner at 900 px and below), yellow while the card is open, so a closed card takes no
+ * room. The card is a panel with a pixel title; each mode is a column set into it as an inset frame (the panel's bevel inverted), its
+ * figures readout tiles on a screen, its notes (what it avoids, adds and makes for other projects, that it is still planning or why it
+ * failed) chat boxes in the light ink. The mode the project plans in has a black edge with a yellow ring inside it, the frame of a
+ * selected slot, besides its "In use" button. The card rises in as the banners do, once.
+ *
+ * A tile is at least 160px wide, room for 11 glyphs of the 24px pixel font: two to a row on a wide card, stacked where a column is
+ * narrower (760 to about 1100px, where three columns leave a tile less). A value is never broken: it stays on one line, and one too long
+ * for its tile at 24px shrinks to fit, down to 13px (the page gives each value its length in glyphs, `--glyphs`; a glyph of the pixel
+ * font is at most 0.6em wide), so every digit stays readable; only past 13px is it cut with an ellipsis, so a tile never spills out of
+ * its column. A label sits at the top of its tile and the value at its foot, so the values of a row line up when a label wraps.
+ */
+.compare-toggle[aria-expanded='true'] { color: var(--accent); text-shadow: 2px 2px 0 #3f3f15; }
+/* Below 900 px the head's one row is full (the Settings button says what the line makes there), so the button is in a bar of its own
+   under the banner, and the head's is not drawn (the drawer's query near the end of this file). Wider, the bar is not drawn. */
+.compare-bar { display: none; }
+.compare-card {
+  display: flex; flex-direction: column; gap: 8px; margin: 0 0 var(--gap); padding: 12px;
+  background: var(--panel); border: 2px solid var(--outline); border-radius: 0; box-shadow: var(--bevel-panel);
+  animation: rise-in var(--dur-base) var(--ease-out);
+}
+.compare-head { display: flex; align-items: center; gap: 8px; }
+.compare-head > h3 { flex: 1; min-width: 0; margin: 0; font: 600 16px/1.3 var(--font-pixel); color: var(--ink-title); }
+.compare-card > p, .compare-column > p {
+  margin: 0; padding: 4px 8px; background: var(--chat); border: 2px solid var(--outline); border-radius: 0; overflow-wrap: anywhere;
+}
+.compare-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.compare-column {
+  display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 8px 10px;
+  border: 2px solid; border-color: var(--panel-lo) var(--panel-hi) var(--panel-hi) var(--panel-lo);
+}
+.compare-column.current { border-color: var(--outline); box-shadow: inset 0 0 0 2px var(--accent); }
+.compare-column > h4 { margin: 0; font: 600 15px/1.3 var(--font-pixel); color: var(--ink-title); }
+.compare-column > button { align-self: flex-start; margin-top: auto; }
+.compare-rows { margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(160px, 100%), 1fr)); gap: 4px; }
+.compare-row {
+  display: flex; flex-direction: column; justify-content: space-between; gap: 2px; min-width: 0; padding: 6px 8px;
+  background: var(--screen); border-radius: 0; box-shadow: var(--bevel-well); container-type: inline-size;
+}
+.compare-row > dt { color: var(--screen-muted); font-size: 11px; line-height: 1.3; overflow-wrap: anywhere; }
+.compare-row > dd {
+  margin: 0; overflow: hidden; color: var(--screen-text); white-space: nowrap; overflow-wrap: normal; text-overflow: ellipsis;
+  font: 24px/1.1 var(--font-pixel); font-size: clamp(13px, calc(100cqi / (var(--glyphs, 1) * 0.6)), 24px);
+}
 
 /* What changed with the last settings change (fix spec §6.4), above the flow diagram and the materials: a chat box. */
 .what-changed {
@@ -548,6 +595,12 @@ details.settings-section > summary > .muted {
 .amount-input { width: 9em; }
 .settings-target { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .settings-target-name { flex: 1; min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
+/* "Plan for" (add-on 17): each mode's radio with what it counts below it, under the text of its label (the 16px well and the 8px gap).
+   A farm kind's own fields hang under its tick on a grey line down from the well's middle, indented as far as the hints. */
+.objective-choice { display: flex; flex-direction: column; gap: 1px; }
+.settings-section p.choice-hint { margin: 0 0 2px 24px; }
+.farm-fields { display: flex; flex-direction: column; gap: 8px; margin-left: 7px; padding-left: 15px; border-left: 2px solid var(--panel-lo); }
+.stat-input { width: 4em; padding: 3px 6px; }
 
 .item-search { display: flex; flex-direction: column; gap: 4px; }
 .item-search input { width: 100%; }
@@ -863,6 +916,9 @@ button.mat-toggle[aria-expanded='true']::before, .mat-have[open] summary::before
   transform: rotate(90deg);
 }
 .mat-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+/* A byproduct another project takes or is credited for (add-on 17), under that byproduct, its text under the byproduct's name: past the
+   24px slot of the icon and the row's 8px gap. */
+.mat-taken { padding-left: 32px; color: var(--ink-muted); }
 .mat-amount { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
 /* The stock and the why of a row stay inline text that opens: the caret above sits before the line, in place of the browser's own
    marker, which is dropped. Not the full-width button of a settings section. */
@@ -1299,10 +1355,27 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
    state's transition is the one it leaves with). Hidden, it is also `visibility: hidden`, so the keyboard cannot reach what is not on
    screen; that is set after the slide when it closes, at once when it opens. Its Close settings button sits at its top right, where the
    focus goes when it opens (the page behind is inert while it is open: ProjectPage). Both layers are under the modal (z-index 100).
-   The backdrop is drawn only here: on a wide window, a drawer left open dims nothing. */
+   The backdrop is drawn only here: on a wide window, a drawer left open dims nothing.
+   The Settings button says what the line makes after its own word, "Settings · Make: Basic Circuit", so that the most important setting is
+   not out of sight behind it. That part is Inter 13px in the muted ink on a dark readout, as a summary's count is: the muted ink is 2.3:1 on
+   the button's own face and 7.4:1 on the screen. It has no drop shadow, which would smear the small letters. The button takes at most 40%
+   of the head, and the part gives way: it shrinks and a long name ends in an ellipsis (the page also gives the name as its title). That
+   part makes the button some 140px wider, so the project's name gives way too, down to 160px, before the head wraps: while the event
+   stream is live (the connection badge is 58px; as "reconnecting…" it is 137px, and the head wraps a little earlier, as it already does at
+   narrower widths) the toggle, the name, the connection and Delete are one row on a tablet (768 px), as they were with the bare button.
+   Below 700 px the head wraps whatever the button's width, so the 40% protects nothing there and only cut a short name ("· Make: Basi…",
+   and an empty readout at 320 px, where the title does not show on a touch screen): the block after this one lets the button take the
+   whole head, and only a name longer than the head is cut. */
 @media (max-width: 900px) {
   .project-body { grid-template-columns: 1fr; }
-  .settings-toggle { display: inline-flex; align-items: center; }
+  .settings-toggle { display: inline-flex; align-items: center; gap: 8px; max-width: 40%; }
+  .settings-toggle-target {
+    min-width: 0; padding: 2px 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    background: var(--screen); color: var(--ink-muted); font: 13px/1.5 var(--font-ui); text-shadow: none;
+  }
+  .project-name { flex: 1 1 160px; min-width: 0; }
+  .project-head > .compare-toggle { display: none; }
+  .compare-bar { display: flex; margin: 0 0 var(--gap); }
   .settings-close { display: inline-flex; align-items: center; align-self: flex-end; }
   .settings-panel {
     position: fixed; inset: 0 auto 0 0; width: min(340px, 88vw); max-height: none; overflow: auto; padding: 12px;
@@ -1313,6 +1386,11 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
   .drawer-backdrop {
     position: fixed; inset: 0; z-index: 50; background: rgba(0, 0, 0, 0.6); animation: fade-in var(--dur-base) var(--ease-out);
   }
+}
+
+/* A phone (see the Settings button above): the same specificity as the 40% of the drawer's block, so this one comes after it. */
+@media (max-width: 700px) {
+  .settings-toggle { max-width: 100%; }
 }
 
 @media (max-width: 640px) {
@@ -1346,4 +1424,7 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
   :where(input[type=search])::-webkit-search-cancel-button { appearance: auto; background: none; }
   .tabs [role='tab'][aria-selected='true'] { text-decoration: underline; }
   .search-hit.active, .search-hit[aria-selected='true'], .map-list > li[aria-current='true'] > .map-row-button { outline: 2px solid Highlight; outline-offset: -2px; }
+  /* add-on 17: the open Compare card's button, and the mode the project plans in, whose yellow is gone in a contrast theme */
+  .compare-toggle[aria-expanded='true'] { text-decoration: underline; }
+  .compare-column.current { outline: 2px solid Highlight; outline-offset: -4px; }
 }

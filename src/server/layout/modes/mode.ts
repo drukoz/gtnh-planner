@@ -149,16 +149,27 @@ export function unitItemRate(plan: Plan, of: string | Pick<Unit, 'stepId' | 'ste
   return items / Math.max(1, count);
 }
 
-function rawItemFlows(plan: Plan, placed: ReadonlySet<string>): PlanFlow[] {
-  return itemFlows(plan).filter((f) => f.from === 'raw' && placed.has(f.to));
+/**
+ * Whether a flow comes in as a raw input does: from `raw`, or from a farm step (`PlanStep.farm`, add-on 17), which the
+ * layout never places, so what a farm sends the line goes in through the line's input like a raw input.
+ */
+function fromRaw(plan: Plan): (f: PlanFlow) => boolean {
+  const farms = new Set(plan.steps.filter((s) => s.farm !== undefined).map((s) => s.id));
+  return (f) => f.from === 'raw' || farms.has(f.from);
 }
 
-/** The item keys flowing raw → placed step, sorted. */
+/** The item flows raw → placed step, a farm's into a placed step among them (`fromRaw`). */
+function rawItemFlows(plan: Plan, placed: ReadonlySet<string>): PlanFlow[] {
+  const raw = fromRaw(plan);
+  return itemFlows(plan).filter((f) => raw(f) && placed.has(f.to));
+}
+
+/** The item keys flowing raw → placed step (a farm's included: `rawItemFlows`), sorted. */
 export function rawItemInputs(plan: Plan, placed: ReadonlySet<string>): StuffKey[] {
   return distinctKeys(rawItemFlows(plan, placed));
 }
 
-/** Σ perSecond of the item flows raw → placed step. */
+/** Σ perSecond of the item flows raw → placed step (a farm's included: `rawItemFlows`). */
 export function rawItemRate(plan: Plan, placed: ReadonlySet<string>): number {
   return rawItemFlows(plan, placed).reduce((sum, f) => sum + f.perSecond, 0);
 }
@@ -376,14 +387,16 @@ export function conveyorCover(input: ModeInput, at: { pos: Vec3; side: number },
 /**
  * The items a shared spine pipe carries that a placed step's machine could take although they are not its inputs: a
  * machine with its Input Filter on still takes any item one of its recipes uses (research §3.8). The spine carries
- * every item key of the flows raw → placed, placed → placed and placed → out/sink. A step's inputs are the item keys
- * of the flows into it, or its `step.inputs` item keys when no item flows into it (ruling R4). Key k conflicts with
- * step j when a recipe consuming k shares a map with j's machine (its maps and the step's own non-empty `mapId`).
- * Steps in `placed` order (unit order from `placedStepIds`), keys sorted, steps without conflicts left out.
+ * every item key of the flows raw → placed (a farm's into a placed step among them, which come in through the input
+ * chest: `fromRaw`), placed → placed and placed → out/sink. A step's inputs are the item keys of the flows into it, or
+ * its `step.inputs` item keys when no item flows into it (ruling R4). Key k conflicts with step j when a recipe
+ * consuming k shares a map with j's machine (its maps and the step's own non-empty `mapId`). Steps in `placed` order
+ * (unit order from `placedStepIds`), keys sorted, steps without conflicts left out.
  */
 export function spineConflicts(pack: Pack, plan: Plan, placed: ReadonlySet<string>): Array<{ stepId: string; keys: StuffKey[] }> {
   const flows = itemFlows(plan);
-  const onSpine = (f: PlanFlow) => (f.from === 'raw' && placed.has(f.to)) || (placed.has(f.from) && (placed.has(f.to) || isFinal(f.to)));
+  const raw = fromRaw(plan);
+  const onSpine = (f: PlanFlow) => (raw(f) && placed.has(f.to)) || (placed.has(f.from) && (placed.has(f.to) || isFinal(f.to)));
   const carried = distinctKeys(flows.filter(onSpine));
   const consumerMaps = (key: StuffKey): string[] =>
     (pack.consumers.get(key) ?? []).flatMap((i) => pack.recipes[i]?.maps ?? []);

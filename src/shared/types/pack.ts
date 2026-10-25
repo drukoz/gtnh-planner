@@ -5,7 +5,7 @@
 import type { ExportHatchKind } from '../gt/hatch-kinds.ts';
 import type { FluidKey, ItemKey, StuffKey } from '../keys.ts';
 import type { MachineId } from '../ids.ts';
-import type { TgsMode } from './farm.ts';
+import type { FarmRecipeMeta, TgsMode } from './farm.ts';
 
 /** The ore-processing forms an ore material can list in `GtMaterial.parts`. */
 export type OrePart = 'ore' | 'rawOre' | 'crushed' | 'dust' | 'ingot' | 'gem';
@@ -54,6 +54,9 @@ export interface Recipe {
     // optional addition (add-on 17): on a `gt.recipe.treefarm` row, the Tree Growth Simulator mode of each item output
     /** `tgsModes[k]` is the mode whose tool makes `outputs[k]`: the mode of the output's slot in the export (farm.ts). */
     tgsModes?: TgsMode[];
+    // optional addition (add-on 17): on a synthetic farm recipe, which the planner makes per line (never the loader)
+    /** The farm it runs on and what it plants and wears (farm.ts); a recipe with it runs only on `machines`, at `tier`. */
+    farm?: FarmRecipeMeta;
     // optional addition (plan 12, controller ruling 214 (a)): what the loader made a bench variant (server/pack/bench-tools.ts)
     /**
      * The id of the crafting-table recipe this one is the GGFab single-use variant of: its tool slots are consumed inputs

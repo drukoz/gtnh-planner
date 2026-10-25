@@ -376,7 +376,8 @@ export async function makeN(
       if (others.length > 0) reused.sharedWith = [...others].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
       size.reused = reused;
     }
-    const step = describeStep(pack, p, line, size);
+    // a farm step (add-on 17: an owned farm, the only kind a batch runs on) says what it plants, worded with the settings
+    const step = describeStep(pack, p, line, size, settings.farms);
     step.runs = p.runs;
     return step;
   });

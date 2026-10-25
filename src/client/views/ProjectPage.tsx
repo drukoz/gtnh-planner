@@ -1,10 +1,14 @@
 // One project (spec §3.11): its name (anyone can rename it), whether this tab is live, what the plan warns about or
-// needs unlocked, the settings panel with the in-game projector panel under it (§3.13) and, beside them, the project
-// tabs. The tab follows the URL hash, so links elsewhere
+// needs unlocked and what it uses beyond its line (farms, other projects' surplus), the Compare card of its planning
+// modes (add-on 17), which a "Compare modes" button opens, in the head on a wide window and in a bar of its own under the
+// banner at 900 px and below (the stylesheet shows only one of the two), the settings panel with the in-game projector
+// panel under it (§3.13) and, beside them, the project tabs. The tab follows the URL hash, so links elsewhere
 // (a build step's map pin sets `#map`) switch it too. Anyone can delete the project; once it is deleted, here or
 // elsewhere, the page goes back to the project list, which says so (§11.24). Below 900 px the settings panel is a drawer
 // that the Settings button in the head slides in over a dimmed page (design spec §7a), a layer of its own while it is
-// open (ruling R36).
+// open (ruling R36). What to make is the first of its sections, so it is never left out of sight: a project with no target
+// opens the drawer by itself, once, into the item search; the plan banner's hint to pick something to make goes there too;
+// and the Settings button says what the line makes.
 
 import { useEffect, useLayoutEffect, useRef, useState, type ReactElement } from 'react';
 import type { StuffKey } from '../../shared/keys.ts';
@@ -13,20 +17,24 @@ import type { PackInfo } from '../../shared/types/api.ts';
 import type { Plan, PlanSettings, PlanWarning } from '../../shared/types/plan.ts';
 import type { ProjectOp } from '../../shared/types/project.ts';
 import { apiGet, messageOf } from '../api/client.ts';
+import { listenProjectEvents } from '../api/sse.ts';
 import { DeleteProject } from '../components/DeleteProject.tsx';
 import { ItemIcon } from '../components/ItemIcon.tsx';
+import { ITEM_SEARCH_PLACEHOLDER } from '../components/ItemSearch.tsx';
 import { SettingsToggle } from '../components/SettingsToggle.tsx';
 import { formatPercent } from '../format.ts';
 import { leaveDeletedProject } from '../state/deleted-notice.ts';
 import { setFlowFocus, showInFlow } from '../state/flow-focus.ts';
 import { useName } from '../state/name.ts';
 import { useProject } from '../state/project-store.ts';
+import { CompareCard, CompareToggle, useCompare } from './CompareCard.tsx';
 import { ISSUE_ORDER, problemId } from './flow-model.ts';
+import { sourceNotes } from './materials-model.ts';
 import { costLine } from './plan-cost.ts';
 import { PROJECT_TABS, tabFromHash } from './project-tabs.ts';
 import { ProjectorPanel } from './ProjectorPanel.tsx';
 import { stepChargeLabel, stepChargeOf } from './settings-model.ts';
-import { SettingsPanel } from './SettingsPanel.tsx';
+import { SettingsPanel, usePickedNames } from './SettingsPanel.tsx';
 
 function ProjectName(props: { name: string; onRename(name: string): void }): ReactElement {
   const { name, onRename } = props;
@@ -64,8 +72,13 @@ function ProjectName(props: { name: string; onRename(name: string): void }): Rea
   );
 }
 
+/** The windows the settings column is a drawer in (the stylesheet's query, `max-width: 900px`). */
+const NARROW = '(max-width: 900px)';
+
 /** The integrity issue codes (fix spec R11), to tell a server's integrity warnings from its other warnings. */
 const ISSUE_CODES: ReadonlySet<string> = new Set(ISSUE_ORDER);
+/** The code of the server's hint for a project with no target ("Pick something to make"). */
+const NO_TARGET = 'no-target';
 /** A plan uses more raw material than the least only when it does by more than this share (not by rounding). */
 const COST_GAP_REL = 1e-6;
 
@@ -89,14 +102,23 @@ function issueCount(code: PlanIssueCode, n: number, issues: readonly PlanIssue[]
  * (`indexPlan`: "This plan does not add up: …", with "Show in the flow") and each issue in the server's words, else
  * `issueText`'s (the client re-checks the plan it got); the derived materials the line buys as chips that show their
  * import in the flow, with "Plan them as supporting lines" while those are off; how much more raw material the plan
- * uses than the least to save machines (`Plan.rawCost`, Steps vs raw material); every other server warning (plan 08's
- * avoid list, missing recipes, …) and what unlocks the line. Above that box, and on its own when there is nothing to
- * warn about, what the plan costs to run and to build its new machines (`costLine`, plan 12).
+ * uses than the least to save machines (`Plan.rawCost`, Machines vs raw material); every other server warning (plan
+ * 08's avoid list, missing recipes, add-on 17's `surplus-shared`, …); what the plan uses beyond its line — "This plan
+ * uses a Tree Growth Simulator (Rubber Sapling)", "This plan draws Latex from Rubber line" (`sourceNotes`, ruling R18:
+ * farms and other projects' surplus are on for every project, so their use is said) — and what unlocks the line. Above
+ * that box, and on its own when there is nothing to warn about, what the plan costs to run and to build its new
+ * machines (`costLine`, plan 12).
+ *
+ * The server's hint for a project with no target, "Pick something to make" (`no-target`), is a button when the page gives an
+ * `onPickTarget` to answer it: the picker is in the settings, which a narrow window keeps in a drawer, so the hint is the way in.
+ * Without one it stays text. This is a plain function, with no hook, which the tests call.
  */
 export function PlanBanner(props: {
   plan: Plan | null; planError: string | null; planLoading: boolean; settings: PlanSettings; send: (ops: ProjectOp[]) => void;
+  /** Takes the reader to the picker of what to make (the item search of the Make section). */
+  onPickTarget?: () => void;
 }): ReactElement | null {
-  const { plan, planError, planLoading, settings, send } = props;
+  const { plan, planError, planLoading, settings, send, onPickTarget } = props;
   const warnings = plan?.warnings ?? [];
   const unlocks = plan?.unlocks ?? [];
   const names = plan?.names ?? {};
@@ -122,9 +144,11 @@ export function PlanBanner(props: {
   // What the plan costs to run and to build (plan 12): on every plan that has a cost, outside the warning box.
   const costText = plan === null ? null : costLine(plan);
   const costed = costText === null ? null : <p className="plan-cost">{costText}</p>;
+  const notes = plan === null ? [] : sourceNotes(plan);
 
   const busy = planLoading && plan !== null;
-  if (planError === null && !busy && issues.length === 0 && others.length === 0 && derived.length === 0 && rawText === null && unlocks.length === 0) return costed;
+  if (planError === null && !busy && issues.length === 0 && others.length === 0 && derived.length === 0 && rawText === null && notes.length === 0
+    && unlocks.length === 0) return costed;
   const firstIssue = issues[0];
   const banner = (
     <div className="plan-banner" role="status">
@@ -143,7 +167,11 @@ export function PlanBanner(props: {
       )}
       {others.length > 0 && (
         <ul className="warnings">
-          {others.map((w, i) => <li key={`${w.code}:${i}`}>{w.text}</li>)}
+          {others.map((w, i) => (
+            <li key={`${w.code}:${i}`}>
+              {w.code === NO_TARGET && onPickTarget !== undefined ? <button type="button" className="link" onClick={onPickTarget}>{w.text}</button> : w.text}
+            </li>
+          ))}
         </ul>
       )}
       {derived.length > 0 && (
@@ -165,6 +193,11 @@ export function PlanBanner(props: {
         </div>
       )}
       {rawText !== null && <p className="banner-cost">{rawText}</p>}
+      {notes.length > 0 && (
+        <ul className="banner-sources">
+          {notes.map((note) => <li key={note}>{`This plan ${note}`}</li>)}
+        </ul>
+      )}
       {unlocks.length > 0 && (
         <>
           <p className="banner-heading">To unlock</p>
@@ -179,16 +212,23 @@ export function PlanBanner(props: {
 }
 
 /**
- * How much more raw material the plan uses than the least to save machines (`Plan.rawCost`, Steps vs raw material:
+ * How much more raw material the plan uses than the least to save machines (`Plan.rawCost`, Machines vs raw material:
  * `preset`), or null when it uses the least: `Uses <x>% more …`; a line whose least raw material is 0 (a glass line
  * digging sand that rock-breaker cobblestone and forge hammers could make, plan 12) has no percentage: `Uses raw
  * material that free inputs could replace, to save machines (…)`.
  */
 function rawCostText(cost: Plan['rawCost'], preset: string): string | null {
   if (cost === undefined) return null;
-  if (cost.leastPerSecond === 0 && cost.perSecond > 0) return `Uses raw material that free inputs could replace, to save machines (Steps vs raw material: ${preset})`;
+  if (cost.leastPerSecond === 0 && cost.perSecond > 0) return `Uses raw material that free inputs could replace, to save machines (Machines vs raw material: ${preset})`;
   if (!(cost.leastPerSecond > 0) || !(cost.perSecond > cost.leastPerSecond * (1 + COST_GAP_REL))) return null;
-  return `Uses ${formatPercent(cost.perSecond / cost.leastPerSecond - 1)} more raw material than the least possible to save machines (Steps vs raw material: ${preset})`;
+  return `Uses ${formatPercent(cost.perSecond / cost.leastPerSecond - 1)} more raw material than the least possible to save machines (Machines vs raw material: ${preset})`;
+}
+
+/** How many `plan` and `compare` events project `id`'s stream has brought since this page opened it. */
+function useProjectEventCount(id: string): number {
+  const [count, setCount] = useState(0);
+  useEffect(() => listenProjectEvents(id, () => setCount((n) => n + 1)), [id]);
+  return count;
 }
 
 /** The pack's dimensions, capabilities and recipe groups for the settings panel, fetched once per page. */
@@ -236,21 +276,58 @@ export function ProjectPage(props: { id: string }): ReactElement {
   // its Close button or the Settings button, goes through `closeSettings`, which gives the focus back to the Settings button. A window
   // that grows past 900 px closes it too, without moving the focus: the column is beside the views again and the button is not drawn.
   // The focus moves in a layout effect, after the commit: until then the page behind is still inert, and an inert button takes no focus.
-  // These hooks sit above the early return below; the listeners are removed when the drawer closes, and between StrictMode's two runs.
+  // It opens into its Close button when the Settings button opens it, and into the item search when the page opens it to pick what to make
+  // (below). These hooks sit above the early return below; the listeners are removed when the drawer closes, and between StrictMode's two runs.
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsToggle = useRef<HTMLButtonElement | null>(null);
   const settingsClose = useRef<HTMLButtonElement | null>(null);
+  const settingsPanel = useRef<HTMLElement | null>(null);
   /** The drawer is being closed by a way out of it: the focus goes back to the Settings button. */
   const refocusToggle = useRef(false);
+  /** Where the focus goes when the drawer opens: its Close button, or the item search of its Make section. */
+  const focusOnOpen = useRef<'close' | 'search'>('close');
   const closeSettings = (): void => {
     refocusToggle.current = true;
     setSettingsOpen(false);
   };
+  const openSettings = (focus: 'close' | 'search'): void => {
+    focusOnOpen.current = focus;
+    setSettingsOpen(true);
+  };
+  /** Moves the focus into the item search of the Make section and scrolls it into view; false when the panel has none drawn. */
+  const focusSearch = (): boolean => {
+    const search = settingsPanel.current?.querySelector<HTMLInputElement>(`input[role="combobox"][placeholder="${ITEM_SEARCH_PLACEHOLDER}"]`);
+    if (search === null || search === undefined) return false;
+    search.focus();
+    search.scrollIntoView({ block: 'nearest' });
+    return true;
+  };
   useLayoutEffect(() => {
-    if (settingsOpen) settingsClose.current?.focus();
-    else if (refocusToggle.current) settingsToggle.current?.focus();
+    if (settingsOpen) {
+      const intoSearch = focusOnOpen.current === 'search';
+      focusOnOpen.current = 'close';
+      if (!intoSearch || !focusSearch()) settingsClose.current?.focus();
+    } else if (refocusToggle.current) settingsToggle.current?.focus();
     refocusToggle.current = false;
   }, [settingsOpen]);
+  // What to make is the first thing a project needs, and it is in the drawer on a narrow window: so a project with no target opens the
+  // drawer by itself, into the item search, once per visit (this page is new for each visit to a project: the route keys it by the id).
+  // It waits for the project, and for the name prompt, which covers the page until this browser has a name and must keep the focus it
+  // asks for. It decides once, whatever happens to the project after: the reader closes the drawer, and nothing opens it again.
+  const ready = project !== null && me !== '';
+  const autoOpenDecided = useRef(false);
+  useEffect(() => {
+    if (!ready || autoOpenDecided.current) return;
+    autoOpenDecided.current = true;
+    if (project?.settings.target === null && matchMedia(NARROW).matches) openSettings('search');
+  }, [ready]);
+  /** The plan banner's "Pick something to make": the drawer opens into the item search on a narrow window; beside the views the search takes the focus. */
+  const pickTarget = (): void => {
+    if (!settingsOpen && matchMedia(NARROW).matches) openSettings('search');
+    else focusSearch();
+  };
+  // The settings panel and the Settings button name the target in the same words, and what was just picked before the plan names it.
+  const names = usePickedNames(plan);
   // While it is open, Escape closes it, one layer per press: a key that something inside has already handled (`defaultPrevented`) is not
   // the drawer's, and neither is the key that closes a search list open in it (the item search and the avoid box close on Escape without
   // preventing the default). React has drawn such a list closed by the time the key reaches the document, so `look` reads whether one is
@@ -273,21 +350,55 @@ export function ProjectPage(props: { id: string }): ReactElement {
     };
   }, [settingsOpen]);
   // What lies outside this page while the drawer is open: the top bar, which the App draws above it, goes inert with the rest of the
-  // page behind the drawer; and the drawer closes when the window grows past the width it is a drawer at (the stylesheet's query).
+  // page behind the drawer; and the drawer closes when the window grows past the width it is a drawer at (the stylesheet's query). It
+  // looks once more as it starts to listen: the page's own opening (the auto-open, in an effect) is a task or two older than this
+  // effect, and a window that grew in between fired its change before there was a listener. In a window still narrow that look does
+  // nothing; in one that has grown it closes the drawer at once, and, as for any widening, leaves the focus where it is (on the search,
+  // which sits beside the views then), not on a Settings button that is not drawn.
   useEffect(() => {
     if (!settingsOpen) return;
     const bar = document.querySelector<HTMLElement>('.top-nav');
     if (bar !== null) bar.inert = true;
-    const narrow = matchMedia('(max-width: 900px)');
+    const narrow = matchMedia(NARROW);
     const onWidth = (): void => {
       if (!narrow.matches) setSettingsOpen(false);
     };
     narrow.addEventListener('change', onWidth);
+    onWidth();
     return () => {
       narrow.removeEventListener('change', onWidth);
       if (bar !== null) bar.inert = false;
     };
   }, [settingsOpen]);
+  // The Compare card (add-on 17), once the project makes something: its "Compare modes" button is in the head and the card it opens is
+  // under the plan banner, so a closed card takes no room (the chrome's height budget). Below 900 px the head's one row is full (the
+  // Settings button says what the line makes there), so the button is in a bar of its own under the banner instead: both are drawn here,
+  // and the stylesheet shows the one for the window's width. The card hears every `plan` and `compare` event of the project (`rev`), so
+  // an open card fetches the compare again. Its Close button gives the focus back to the button that is shown; a project that stops
+  // making something, or is deleted, closes it and forgets its figures, so the card of the next target never opens on them.
+  const compare = useCompare(props.id, useProjectEventCount(props.id));
+  const compareHeadToggle = useRef<HTMLButtonElement | null>(null);
+  const compareBarToggle = useRef<HTMLButtonElement | null>(null);
+  const comparable = project !== null && deleted === null && project.settings.target !== null;
+  useEffect(() => {
+    if (!comparable) compare.close({ forget: true });
+  }, [comparable, compare.close]);
+  // What the card shows is of the target it was asked for: another target picked straight from the item search (no Clear) drops it
+  // before the page is painted again, and the card says it is planning until the new target's compare comes (the same target with
+  // another amount, mode or tier keeps it).
+  const target = project?.settings.target ?? null;
+  useLayoutEffect(() => {
+    compare.target(target);
+  }, [target, compare.target]);
+  const toggleCompare = (): void => {
+    if (compare.state.open) compare.close();
+    else compare.open();
+  };
+  const closeCompare = (): void => {
+    compare.close();
+    // a button the stylesheet does not show has no box
+    [compareHeadToggle.current, compareBarToggle.current].find((b) => b !== null && b.getClientRects().length > 0)?.focus();
+  };
 
   if (project === null) {
     return (
@@ -301,22 +412,36 @@ export function ProjectPage(props: { id: string }): ReactElement {
   return (
     <main className="page project-page">
       <div className="project-head" inert={settingsOpen}>
-        <SettingsToggle open={settingsOpen} onToggle={() => (settingsOpen ? closeSettings() : setSettingsOpen(true))} ref={settingsToggle} />
+        <SettingsToggle
+          open={settingsOpen} onToggle={() => (settingsOpen ? closeSettings() : openSettings('close'))} ref={settingsToggle}
+          targetName={project.settings.target === null ? null : names.nameOf(project.settings.target)}
+        />
         <ProjectName name={project.name} onRename={(name) => send([{ op: 'rename', name }])} />
+        {comparable && <CompareToggle open={compare.state.open} onToggle={toggleCompare} ref={compareHeadToggle} />}
         <span className={view.connected ? 'connection live' : 'connection'}>{view.connected ? 'live' : 'reconnecting…'}</span>
         <DeleteProject id={project.id} name={project.name} label="Delete project" onDeleted={() => view.markDeleted(me)} />
       </div>
-      {/* The banners' own box, so the page behind an open drawer can be inert in three pieces (ruling R36); it adds no space. */}
+      {/* The banners' own box, so the page behind an open drawer can be inert in three pieces (ruling R36); it adds no space.
+          The Compare card (add-on 17) sits under the plan banner, in the same box, so it goes inert with them, and so does the bar that
+          holds its button on a narrow window. */}
       <div className="project-banners" inert={settingsOpen}>
         {view.error !== null && <p className="banner error" role="alert">{view.error}</p>}
-        <PlanBanner plan={plan} planError={view.planError} planLoading={view.planLoading} settings={project.settings} send={send} />
+        <PlanBanner plan={plan} planError={view.planError} planLoading={view.planLoading} settings={project.settings} send={send} onPickTarget={pickTarget} />
+        {comparable && (
+          <div className="compare-bar">
+            <CompareToggle open={compare.state.open} onToggle={toggleCompare} ref={compareBarToggle} />
+          </div>
+        )}
+        {comparable && (
+          <CompareCard state={compare.state} settings={project.settings} send={send} nameOf={names.nameOf} onClose={closeCompare} />
+        )}
       </div>
       <div className={settingsOpen ? 'project-body settings-open' : 'project-body'}>
-        <aside className="settings-panel" id="project-settings" aria-label="Project settings">
+        <aside className="settings-panel" id="project-settings" aria-label="Project settings" ref={settingsPanel}>
           {/* The drawer's way out, and where the focus goes when it opens; the stylesheet draws it in the drawer only. */}
           <button type="button" className="settings-close" onClick={closeSettings} ref={settingsClose}>Close settings</button>
           {pack.error !== null && <p className="error small">{`Could not load the pack: ${pack.error}`}</p>}
-          <SettingsPanel project={project} plan={plan} send={send} me={me} info={pack.info} />
+          <SettingsPanel project={project} plan={plan} send={send} me={me} info={pack.info} names={names} />
           {deleted === null && <ProjectorPanel projectId={project.id} />}
         </aside>
         <div className="project-views" inert={settingsOpen}>

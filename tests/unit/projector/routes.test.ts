@@ -1,10 +1,15 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import { startTestServer, type TestServer } from '../../helpers/test-server.ts';
+import { crossSpec } from '../../helpers/farm-fixtures.ts';
 import { packFromSpec } from '../../helpers/pack-spec.ts';
 import { projectorLayout, CONVEYOR } from '../../helpers/projector-fixtures.ts';
 import { HttpError, type TokenVerifier } from '../../../src/server/http/router.ts';
 import { tokenStore } from '../../../src/server/http/routes/projector.ts';
+import { mergeBuildSteps } from '../../../src/server/layout/merge.ts';
+import type { LayoutService } from '../../../src/server/layout/service.ts';
 import { TokenLimitError, TokenStore } from '../../../src/server/projector/tokens.ts';
+import { surplusBoardFor } from '../../../src/server/projects/surplus.ts';
+import type { Plan } from '../../../src/shared/types/plan.ts';
 import type { CreateTokenResult, ProjectorPayload, TokenInfo } from '../../../src/shared/types/projector.ts';
 
 let s: TestServer; let id: string; let fail: Error | null = null;
@@ -139,5 +144,41 @@ describe('projector routes', () => {
     expect(tokenStore(s.app)).toBe(store);
     const verify = s.app.services.verifyToken as TokenVerifier;
     expect([verify(token, id), verify(token, 'nope'), verify('gpt_nope', id)]).toEqual([{ tokenId }, null, null]);
+  });
+
+  it('lays out the plan whose build steps it numbers, planned once', async () => {
+    // add-on 17 Task 6: Q takes P's Wyes. P's summary is withdrawn while Q's line is laid out, as a publish of P landing
+    // then would change it, so a plan made again after the layout would be another line (Q making its own Wyes).
+    const t = await startTestServer({ pack: packFromSpec(crossSpec()) });
+    try {
+      const create = async (name: string, settings: object): Promise<string> => (await (await t.request('/api/projects', {
+        method: 'POST', name: 'Ann', body: { name, settings: { per: 'hour', objective: 'least-raw', ...settings } },
+      })).json()).id;
+      const p = await create('P', { target: 't:t@0', amount: 60 });
+      const q = await create('Q', { target: 't:q@0', amount: 30 });
+      expect((await t.request(`/api/projects/${p}/plan`)).status).toBe(200);
+      const given: Array<Plan | undefined> = [];
+      t.app.services.layout = {
+        layoutFor: async (_project, plan) => {
+          given.push(plan);
+          surplusBoardFor(t.app).remove(p);
+          return projectorLayout();
+        },
+        finishPlan: async (plan) => plan, computations: 0,
+      } satisfies LayoutService;
+      const made = (await (await t.request(`/api/projects/${q}/tokens`, { method: 'POST', body: { label: 'Steve' }, name: 'Ann' })).json()) as CreateTokenResult;
+      const r = await t.request(`/api/projects/${q}/projector`, { cookie: null, headers: { authorization: `Bearer ${made.token}` } });
+      expect(r.status).toBe(200);
+      const payload = (await r.json()) as ProjectorPayload;
+      expect(given).toHaveLength(1);
+      const plan = given[0];
+      expect(plan?.rawInputs.filter((x) => x.from !== undefined).map((x) => x.from?.id)).toEqual([p]);
+      const numbered = mergeBuildSteps(plan!.buildSteps, projectorLayout().buildSteps);
+      expect(payload.steps.map((x) => [x.order, x.id, x.text])).toEqual(numbered.map((x) => [x.order, x.id, x.text]));
+      // the plan's own steps are among them, not only the layout's
+      expect(payload.steps.at(-1)?.id).toBe('test');
+    } finally {
+      await t.close();
+    }
   });
 });

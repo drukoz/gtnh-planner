@@ -123,9 +123,9 @@ describe('plan banner', () => {
   });
   it('says how much more raw material the plan uses than the least, and why', () => {
     const costly = planOf({ rawCost: { perSecond: 1.21, leastPerSecond: 1 } });
-    expect(text(html(costly))).toContain('Uses 21% more raw material than the least possible to save machines (Steps vs raw material: Fewest machines)');
-    expect(text(html(costly, S({ stepCharge: 0.02 })))).toContain('(Steps vs raw material: Some machines)');
-    expect(text(html(costly, S({ stepCharge: 0.07 })))).toContain('(Steps vs raw material: Custom (7%))');
+    expect(text(html(costly))).toContain('Uses 21% more raw material than the least possible to save machines (Machines vs raw material: Fewest machines)');
+    expect(text(html(costly, S({ stepCharge: 0.02 })))).toContain('(Machines vs raw material: Some machines)');
+    expect(text(html(costly, S({ stepCharge: 0.07 })))).toContain('(Machines vs raw material: Custom (7%))');
     expect(html(planOf({ rawCost: { perSecond: 1, leastPerSecond: 1 } }))).toBe('');
     expect(html(planOf({ rawCost: { perSecond: 0, leastPerSecond: 0 } }))).toBe('');
   });
@@ -144,8 +144,60 @@ describe('plan banner', () => {
   it('says a line whose least raw material is 0 uses raw material free inputs could replace, without a percentage', () => {
     // A glass line digging sand that rock-breaker cobblestone and forge hammers could make (plan 12, D1).
     const line = (html(planOf({ rawCost: { perSecond: 0.01, leastPerSecond: 0 } }))).match(/<p class="banner-cost">(.*?)<\/p>/)?.[1] ?? '';
-    expect(text(line)).toBe('Uses raw material that free inputs could replace, to save machines (Steps vs raw material: Fewest machines)');
+    expect(text(line)).toBe('Uses raw material that free inputs could replace, to save machines (Machines vs raw material: Fewest machines)');
     expect(line).not.toContain('%');
-    expect(text(html(planOf({ rawCost: { perSecond: 0.01, leastPerSecond: 0 } }), S({ stepCharge: 0.02 })))).toContain('(Steps vs raw material: Some machines)');
+    expect(text(html(planOf({ rawCost: { perSecond: 0.01, leastPerSecond: 0 } }), S({ stepCharge: 0.02 })))).toContain('(Machines vs raw material: Some machines)');
+  });
+});
+
+// A project with no target says "Pick something to make" (the server's `no-target` warning), and the picker is in the settings column,
+// which is a drawer behind the Settings button on a narrow screen: so the hint is the way in, a button that the page answers by
+// opening the drawer into the item search (or, beside the views, by focusing it). Without a page to answer it, it stays text.
+describe('plan banner: the hint to pick something to make', () => {
+  const hint = { code: 'no-target', text: 'Pick something to make' };
+  const empty = planOf({ status: 'empty', warnings: [hint] });
+  const withPicker = (plan: Plan, onPickTarget: () => void) => PlanBanner({ plan, planError: null, planLoading: false, settings: S(), send: vi.fn(), onPickTarget });
+  const htmlWithPicker = (plan: Plan, onPickTarget: () => void = () => {}): string => renderToStaticMarkup(
+    <PlanBanner plan={plan} planError={null} planLoading={false} settings={S()} send={() => {}} onPickTarget={onPickTarget} />);
+
+  it('is a link-looking button in its own list item when the page can answer it', () => {
+    const out = htmlWithPicker(empty);
+    expect(out).toContain('<ul class="warnings"><li><button type="button" class="link">Pick something to make</button></li></ul>');
+    expect(text(out)).toBe('Pick something to make');
+  });
+
+  it('asks the page to take the reader to the picker when it is clicked', () => {
+    const onPickTarget = vi.fn();
+    const buttons = findAll(withPicker(empty, onPickTarget), (e) => e.type === 'button' && e.props.children === 'Pick something to make');
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0]!.props.type).toBe('button');
+    expect(buttons[0]!.props.className).toBe('link');
+    expect(onPickTarget).not.toHaveBeenCalled();
+    (buttons[0]!.props.onClick as () => void)();
+    expect(onPickTarget).toHaveBeenCalledOnce();
+  });
+
+  it('stays plain text without a page to answer it', () => {
+    const out = html(empty);
+    expect(out).toContain('<ul class="warnings"><li>Pick something to make</li></ul>');
+    expect(out).not.toContain('<button');
+    expect(findAll(banner(empty), (e) => e.type === 'button')).toEqual([]);
+  });
+
+  it('makes only that warning a button: every other server warning keeps its text', () => {
+    const mixed = planOf({ status: 'empty', warnings: [hint, { code: 'no-recipe', text: 'Nothing at ≤ LV makes Glue' }, { code: 'unknown-target', text: 'This item is not in the current recipe export' }] });
+    const out = htmlWithPicker(mixed);
+    expect(out).toContain('<li>Nothing at ≤ LV makes Glue</li>');
+    expect(out).toContain('<li>This item is not in the current recipe export</li>');
+    expect(out.match(/<button/g)).toHaveLength(1);
+    // and it is the hint by its code, not by its words: another warning that says the same is no way into the picker
+    const lookalike = planOf({ warnings: [{ code: 'no-recipe', text: 'Pick something to make' }] });
+    expect(htmlWithPicker(lookalike)).toContain('<li>Pick something to make</li>');
+    expect(htmlWithPicker(lookalike)).not.toContain('<button');
+  });
+
+  it('adds nothing of its own: a plan with nothing to say is still no banner, and a plan not yet loaded is none either', () => {
+    expect(htmlWithPicker(planOf({}))).toBe('');
+    expect(renderToStaticMarkup(<PlanBanner plan={null} planError={null} planLoading={true} settings={S()} send={() => {}} onPickTarget={() => {}} />)).toBe('');
   });
 });

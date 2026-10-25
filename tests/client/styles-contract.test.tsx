@@ -732,6 +732,9 @@ describe('the Machine GUI chrome', () => {
 // brief, and the order the cascade needs.
 
 const NARROW = '@media (max-width: 900px)';
+/** Below this the head wraps whatever the Settings button's width, so the 40% cap protects nothing (above it, the cap keeps the head to one
+ *  row from about 740 px with a long name, earlier with a short one). */
+const PHONE = '@media (max-width: 700px)';
 /** The title of a section, whichever element carries it: its h3, the Tier label's span and the Logistics legend. */
 const TITLES = '.settings-section h3, .settings-title, .settings .field > span.settings-title, .choice > legend.settings-title';
 const SETTINGS_SUMMARY = 'details.settings-section > summary';
@@ -871,6 +874,43 @@ describe('the Machine GUI settings drawer', () => {
     expect(declared('.settings-toggle', 'display')).toBe('none');
     expect(declaredIn(NARROW, '.settings-toggle', 'display')).toBe('inline-flex');
     expect(declaredIn(NARROW, '.settings-toggle', 'align-items')).toBe('center');
+  });
+
+  it('shows what is being made in the Settings button as a small grey readout, cut with an ellipsis within 40% of the head', () => {
+    // the button holds "Settings" and the target's part; the part gives way (it shrinks and is cut) so that a long name never grows the button
+    expect(declaredIn(NARROW, '.settings-toggle', 'gap')).toBe('8px');
+    expect(declaredIn(NARROW, '.settings-toggle', 'max-width')).toBe('40%');
+    for (const [property, value] of [
+      ['min-width', '0'], ['overflow', 'hidden'], ['text-overflow', 'ellipsis'], ['white-space', 'nowrap'],
+      // Inter 13px in the muted ink, on the dark screen of a readout (the summary's count is one too): the muted ink measures 2.3:1 on the
+      // button's own face (contrast.test.tsx), and the button's drop shadow would smear 13px letters
+      ['font', '13px/1.5 var(--font-ui)'], ['color', 'var(--ink-muted)'], ['background', 'var(--screen)'], ['padding', '2px 6px'],
+      ['text-shadow', 'none'],
+    ] as const) expect(declaredIn(NARROW, '.settings-toggle-target', property), `.settings-toggle-target { ${property} }`).toBe(value);
+    // the pixel font is never below 13px, and this part is small print: it is Inter, and no colour of its own is new
+    expect(declaredIn(NARROW, '.settings-toggle-target', 'font')).not.toContain('--font-pixel');
+    expect(declaredIn(NARROW, '.settings-toggle-target', 'color')).toMatch(/^var\(--/);
+    expect(declaredIn(NARROW, '.settings-toggle-target', 'background')).toMatch(/^var\(--/);
+    // it moves nothing by itself, and it is not drawn on a wide screen, where the whole button is not
+    expect(declaredIn(NARROW, '.settings-toggle-target', 'animation')).toBeUndefined();
+    expect(declaredIn(NARROW, '.settings-toggle-target', 'transition')).toBeUndefined();
+    expect(hasTopLevelRule('.settings-toggle-target'), 'a .settings-toggle-target rule outside the query').toBe(false);
+    // the readout makes the button some 140px wider, so the project's name gives way (to 160px) before the head wraps: while the stream is
+    // live (the connection badge reads "live", 58px; "reconnecting…" is 137px and wraps the head a little earlier, as it already does at
+    // narrower widths) the head is one row at 768 px, as it was with the bare button (drawer.spec.ts measures it)
+    expect(declaredIn(NARROW, '.project-name', 'flex')).toBe('1 1 160px');
+    expect(declaredIn(NARROW, '.project-name', 'min-width')).toBe('0');
+  });
+
+  it('lets the Settings button take the whole head on a phone, where the head wraps whatever its width', () => {
+    // above 700 px the cap holds the head to one row (from about 740 px with a long name); below it the head wraps anyway, and the cap
+    // only cut a short name there ("· Make: Basi…" for "Basic Circuit", an empty readout at 320 px) where the title does not show on a
+    // touch screen
+    expect(declaredIn(PHONE, '.settings-toggle', 'max-width')).toBe('100%');
+    expect(inQuery(PHONE, '.settings-toggle'), 'a phone changes the button\'s cap and nothing else').toEqual([['max-width', '100%']]);
+    // the same specificity as the 40% of the drawer's query, so the phone's rule has to come after it
+    expect(position(PHONE)).toBeGreaterThan(position(NARROW));
+    expect(declaredIn(NARROW, '.settings-toggle', 'max-width')).toBe('40%');
   });
 
   it('shows the drawer\'s Close settings button in the drawer only, at the top right of it', () => {
@@ -2207,6 +2247,127 @@ describe('the Machine GUI pause of the pipes', () => {
       // no fill mode: once it has run, the dot is drawn with its own opacity, which no rule lowers
       expect(declared(dot, 'animation'), dot).not.toMatch(/forwards|backwards|both/);
       expect(declared(dot, 'opacity'), dot).toBeUndefined();
+    }
+  });
+});
+
+// Add-on 17 in the Machine GUI (the merge of plan/17-objectives after Phase 1): "Plan for" and the farm settings sit in the settings
+// column's sections and controls, and the Compare card is a panel of its own. Its button is a small button in the project head, so a
+// closed card takes no room (the chrome's height budget: layout.spec.ts presses the map canvas's middle at 1280x720); open, each mode is a
+// column set into the card as an inset frame, its figures readout tiles on a screen and its notes chat boxes. objectives.spec.ts drives the
+// card in a browser; these cases pin the values, and the cascade the notes need.
+
+const COMPARE_NOTES = '.compare-card > p, .compare-column > p';
+/** The rules of add-on 17's own classes. */
+const ADDON17_RULE = /\.(compare-[a-z]+|objective-choice|choice-hint|farm-fields|stat-input|mat-taken)(?![\w-])/;
+
+describe('the Machine GUI planning modes, farms and the Compare card', () => {
+  it('draws the open card as a panel with a pixel title, in the ink of a panel, rising in once as the banners do', () => {
+    expectDeclared([
+      ['.compare-card', 'background', 'var(--panel)'], ['.compare-card', 'border', '2px solid var(--outline)'],
+      ['.compare-card', 'border-radius', '0'], ['.compare-card', 'box-shadow', 'var(--bevel-panel)'],
+      ['.compare-card', 'animation', 'rise-in var(--dur-base) var(--ease-out)'],
+      ['.compare-head > h3', 'font', '600 16px/1.3 var(--font-pixel)'], ['.compare-head > h3', 'color', 'var(--ink-title)'],
+    ]);
+    expect(inkGroup('.tab-panel').prelude.split(', ')).toContain('.compare-card');
+  });
+
+  it('opens it from a small button of the project head that reads yellow while the card is open, and has no closed card to draw', () => {
+    expectDeclared([[".compare-toggle[aria-expanded='true']", 'color', 'var(--accent)']]);
+    // the closed card was a row of its own under the banner; the button is the head's now, and the closed card draws nothing
+    expect(blocks.filter((b) => b.prelude.includes('.compare-card.closed')).map((b) => b.prelude)).toEqual([]);
+    expect(position('section.compare-card'), 'the flat look the card had before the restyle').toBe(-1);
+  });
+
+  it('moves the button into a bar under the banner below 900px, where the Settings button fills the head\'s one row', () => {
+    // wide, the head's button is drawn and the bar is not; narrow, the other way round (the bar is in the banners' box, under the banner)
+    expect(declared('.compare-bar', 'display')).toBe('none');
+    expect(declaredIn(NARROW, '.project-head > .compare-toggle', 'display')).toBe('none');
+    expect(declaredIn(NARROW, '.compare-bar', 'display')).toBe('flex');
+    expect(declaredIn(NARROW, '.compare-bar', 'margin')).toBe('0 0 var(--gap)');
+    // the head's button is not hidden on a wide window by any rule outside the query
+    expect(blocks.filter((b) => !b.nested && b.prelude.split(', ').includes('.project-head > .compare-toggle'))).toEqual([]);
+  });
+
+  it('sets each mode in an inset frame, and frames the one in use black with a yellow ring, the frame of a selected slot', () => {
+    expectDeclared([
+      ['.compare-column', 'border-color', 'var(--panel-lo) var(--panel-hi) var(--panel-hi) var(--panel-lo)'],
+      ['.compare-column.current', 'border-color', 'var(--outline)'], ['.compare-column.current', 'box-shadow', 'inset 0 0 0 2px var(--accent)'],
+      ['.compare-column > h4', 'font', '600 15px/1.3 var(--font-pixel)'], ['.compare-column > h4', 'color', 'var(--ink-title)'],
+    ]);
+    // the frame of the one in use comes after the frame of every column, which it replaces
+    expect(position('.compare-column.current')).toBeGreaterThan(position('.compare-column'));
+  });
+
+  it('shows a mode\'s figures as readout tiles on a screen: a quiet Inter label over a green pixel value', () => {
+    expectDeclared([
+      ['.compare-rows', 'display', 'grid'], ['.compare-rows', 'margin', '0'],
+      ['.compare-row', 'background', 'var(--screen)'], ['.compare-row', 'box-shadow', 'var(--bevel-well)'], ['.compare-row', 'border-radius', '0'],
+      ['.compare-row > dt', 'color', 'var(--screen-muted)'], ['.compare-row > dt', 'font-size', '11px'],
+      ['.compare-row > dd', 'color', 'var(--screen-text)'], ['.compare-row > dd', 'font', '24px/1.1 var(--font-pixel)'],
+      ['.compare-row > dd', 'margin', '0'],
+    ]);
+    // the label stays Inter: the pixel font is never below 13px
+    expect(declared('.compare-row > dt', 'font-family')).toBeUndefined();
+  });
+
+  it('never breaks a figure: the tiles reflow at 160px, a value stays on one line and shrinks to fit, to 13px at the least', () => {
+    // the review of the merge, C4: three columns at 760 to 915px left a tile 81 to 94px, and "2,097,152" broke over two lines. A tile is
+    // at least 160px (11 glyphs of the 24px pixel font, at most 0.6em each, and 16px of padding), never wider than its column
+    expectDeclared([
+      ['.compare-rows', 'grid-template-columns', 'repeat(auto-fit, minmax(min(160px, 100%), 1fr))'],
+      ['.compare-row > dd', 'white-space', 'nowrap'], ['.compare-row > dd', 'overflow-wrap', 'normal'],
+      // a value too long for its tile shrinks (the tile is the container; the page gives the value's length in glyphs) ...
+      ['.compare-row', 'container-type', 'inline-size'],
+      ['.compare-row > dd', 'font-size', 'clamp(13px, calc(100cqi / (var(--glyphs, 1) * 0.6)), 24px)'],
+      // ... and is cut only past 13px, so the tile never spills out of its column
+      ['.compare-row > dd', 'overflow', 'hidden'], ['.compare-row > dd', 'text-overflow', 'ellipsis'],
+    ]);
+    // the size comes after the shorthand that sets the 24px it shrinks from
+    const dd = declarations(ruleBody('.compare-row > dd')).map(([name]) => name);
+    expect(dd.indexOf('font-size')).toBeGreaterThan(dd.indexOf('font'));
+    // the review of the merge, C5: the label at the top of a tile and the value at its foot, so the values of a row line up when a
+    // label wraps and another does not
+    expectDeclared([['.compare-row', 'justify-content', 'space-between'], ['.compare-row', 'flex-direction', 'column']]);
+  });
+
+  it('writes the notes in chat boxes in the light ink, at one class\'s specificity, so .muted and .error still win on them', () => {
+    expectDeclared([[COMPARE_NOTES, 'background', 'var(--chat)'], [COMPARE_NOTES, 'border', '2px solid var(--outline)']]);
+    expect(declared(COMPARE_NOTES, 'color'), 'a colour here would outrank .muted and .error').toBeUndefined();
+    const dark = inkGroup('.banner');
+    expect(dark.prelude.split(', ')).toEqual(expect.arrayContaining(['.compare-card > :where(p)', '.compare-column > :where(p)']));
+    // "Still planning…" is a .muted note and a failed mode's reason an .error one: both come after the group, at its specificity
+    expect(blocks.indexOf(dark)).toBeLessThan(position('.muted'));
+    expect(blocks.indexOf(dark)).toBeLessThan(position('.error'));
+  });
+
+  it('keeps "Plan for" in the section\'s choice pattern, and hangs a farm\'s fields under its tick on a grey line, as far in as the hints', () => {
+    expectDeclared([
+      ['.settings-section p.choice-hint', 'margin', '0 0 2px 24px'],
+      ['.farm-fields', 'border-left', '2px solid var(--panel-lo)'], ['.farm-fields', 'margin-left', '7px'], ['.farm-fields', 'padding-left', '15px'],
+    ]);
+    // the line runs down the middle of the 16px tick (7px in, 2px wide), and the fields start as far in as the hints, under the label's text
+    const px = (value: string | undefined): number => Number.parseFloat(value ?? '');
+    const indent = px(declared('.farm-fields', 'margin-left')) + px(declared('.farm-fields', 'border-left')) + px(declared('.farm-fields', 'padding-left'));
+    expect(indent).toBe(px(declared('.settings-section p.choice-hint', 'margin')?.split(' ')[3]));
+    // the legend is a section title: the rule of the titles names it
+    expect(TITLES.split(', ')).toContain('.choice > legend.settings-title');
+  });
+
+  it('keeps the cues of the open button and of the mode in use in forced colours, where the yellow is gone', () => {
+    expect(inQuery(FORCED, ".compare-toggle[aria-expanded='true']")).toEqual([['text-decoration', 'underline']]);
+    expect(inQuery(FORCED, '.compare-column.current')).toEqual([['outline', '2px solid Highlight'], ['outline-offset', '-4px']]);
+    const { block } = forcedBlock();
+    for (const selector of [".compare-toggle[aria-expanded='true']", '.compare-column.current']) expect(position(selector)).toBeLessThan(blocks.indexOf(block));
+  });
+
+  it('reads no alias of the old palette and rounds no corner in the rules of add-on 17', () => {
+    const rules = blocks.filter((b) => !b.prelude.startsWith('@') && ADDON17_RULE.test(b.prelude));
+    // the scan sees the rules, so a rule it cannot parse would not pass unnoticed
+    expect(rules.length).toBeGreaterThan(15);
+    for (const block of rules) {
+      expect(block.inner, block.prelude).not.toMatch(OLD_ALIASES);
+      expect(declared(block.prelude, 'border-radius') ?? '0', block.prelude).toBe('0');
     }
   });
 });

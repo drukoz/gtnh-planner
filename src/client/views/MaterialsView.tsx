@@ -2,12 +2,13 @@
 // architecture §11.13, expandable down to base materials, with its raw material in all: plan 12's `buildTotalLine`),
 // the base materials that build needs and which build lines
 // need each, what the line runs on (per hour, or for the whole batch in Make N) with where it comes from, what unlocks
-// it and which steps use it (spec §3.3b, fix spec §6.4) — the inputs nothing supplies first — what is left over, and
-// then the build steps. Every row can be ticked off by anyone, and the have-counts from the world scan sit next to each
-// line (spec §3.4, §11.20). A row of a good on the avoid list that nothing at the tier avoids carries a small "avoid"
-// marker (spec §3.3).
+// it and which steps use it (spec §3.3b, fix spec §6.4) — the inputs nothing supplies first; what it takes from a farm
+// the group runs or another project on rows of their own, and tool wear, said so (add-on 17) — what is left over and
+// which of it other projects take (add-on 17), and then the build steps. Every row can be ticked off by anyone, and the
+// have-counts from the world scan sit next to each line (spec §3.4, §11.20). A row of a good on the avoid list that
+// nothing at the tier avoids carries a small "avoid" marker (spec §3.3).
 
-import { useMemo, useState, type ReactElement } from 'react';
+import { Fragment, useMemo, useState, type ReactElement } from 'react';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import { indexPlan } from '../../shared/plan/balance.ts';
 import type { Product } from '../../shared/types/pack.ts';
@@ -18,7 +19,9 @@ import { Tick } from '../components/Tick.tsx';
 import { formatRate } from '../format.ts';
 import { showInFlow } from '../state/flow-focus.ts';
 import { makeHerePatch } from './flow-model.ts';
-import { amountText, buildRows, groupBuildRows, missingRows, runRows, unavoidableKeys, type BuildRow, type MissingRow, type RunRow, type UsedBy } from './materials-model.ts';
+import {
+  amountText, buildRows, groupBuildRows, missingRows, runRows, takenRows, unavoidableKeys, type BuildRow, type MissingRow, type RunRow, type TakenRow, type UsedBy,
+} from './materials-model.ts';
 import { buildTotalLine } from './plan-cost.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
 import { toggleList } from './settings-model.ts';
@@ -248,6 +251,21 @@ function RunSection(props: { plan: Plan; mode: 'rate' | 'makeN'; marks: Marks; s
   );
 }
 
+/**
+ * One of the line's byproducts serving another project (`TakenRow`): under its byproduct, `for <project>` or `taken by
+ * <project>` with its rate; without one (`named`), with the good's icon and name in front.
+ */
+function TakenItem(props: { row: TakenRow; named?: string }): ReactElement {
+  const { row, named } = props;
+  return (
+    <li className={named === undefined ? 'mat-row mat-taken' : 'mat-row'}>
+      {named !== undefined && <ItemIcon itemKey={row.key} size={ICON_SIZE} name={named} />}
+      <span className="mat-name">{named === undefined ? row.text : `${named} ${row.text}`}</span>
+      <span className="mat-amount">{row.amount}</span>
+    </li>
+  );
+}
+
 function LeftOverSection(props: { plan: Plan; names: Record<string, string> }): ReactElement {
   const { plan, names } = props;
   const batch = plan.makeN;
@@ -255,20 +273,28 @@ function LeftOverSection(props: { plan: Plan; names: Record<string, string> }): 
   const amountOf = (p: Product): string => (batch === undefined
     ? formatRate(p.amount, 'hour', { fluid: isFluidKey(p.key) })
     : quantity(p.key, amountText(p.amount)));
+  // Whom the byproducts serve in other projects (add-on 17), under each; one the line leaves none of last, by its name.
+  const taken = takenRows(plan);
+  const left = new Set(goods.map((p) => p.key));
+  const unplaced = taken.filter((t) => !left.has(t.key));
   return (
     <section className="materials-section" aria-labelledby="left-over-title">
       <h3 id="left-over-title">Left over</h3>
-      {goods.length === 0 ? (
+      {goods.length === 0 && unplaced.length === 0 ? (
         <p className="muted">Nothing is left over.</p>
       ) : (
         <ul className="mat-list">
           {goods.map((p) => (
-            <li key={p.key} className="mat-row">
-              <ItemIcon itemKey={p.key} size={ICON_SIZE} name={names[p.key] ?? p.key} />
-              <span className="mat-name">{names[p.key] ?? p.key}</span>
-              <span className="mat-amount">{amountOf(p)}</span>
-            </li>
+            <Fragment key={p.key}>
+              <li className="mat-row">
+                <ItemIcon itemKey={p.key} size={ICON_SIZE} name={names[p.key] ?? p.key} />
+                <span className="mat-name">{names[p.key] ?? p.key}</span>
+                <span className="mat-amount">{amountOf(p)}</span>
+              </li>
+              {taken.filter((t) => t.key === p.key).map((t) => <TakenItem key={`${t.key}|${t.text}`} row={t} />)}
+            </Fragment>
           ))}
+          {unplaced.map((t) => <TakenItem key={`${t.key}|${t.text}`} row={t} named={names[t.key] ?? t.key} />)}
         </ul>
       )}
       {batch !== undefined && <p>{`Takes about ${Math.max(1, Math.round(batch.totalSeconds / 60))} min`}</p>}

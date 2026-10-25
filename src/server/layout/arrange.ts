@@ -194,19 +194,21 @@ function blockKey(b: BlockRef): ItemKey {
 // ---- Steps ----
 
 /**
- * 0 for a step fed only by `raw` (or with no flows), else 1 + the deepest step feeding it. Flows that close a loop are
- * ignored: a depth-first walk along the flows, from the raw-fed steps first (then the others, in `plan.steps` order),
- * drops every flow into a step still in progress, so a loop is cut where it turns back toward the raw inputs whatever
- * order the steps are listed in. Keys in `plan.steps` order.
+ * 0 for a step fed only by `raw` (or with no flows), else 1 + the deepest step feeding it. A farm step (`PlanStep.farm`,
+ * add-on 17), which the layout never lays out, feeds as `raw` does: what it sends enters the line as a raw input. Flows
+ * that close a loop are ignored: a depth-first walk along the flows, from the raw-fed steps first (then the others, in
+ * `plan.steps` order), drops every flow into a step still in progress, so a loop is cut where it turns back toward the
+ * raw inputs whatever order the steps are listed in. Keys in `plan.steps` order.
  */
 export function stepDepths(plan: Plan): Map<string, number> {
   const ids = new Set(plan.steps.map((s) => s.id));
+  const farms = new Set(plan.steps.filter((s) => s.farm !== undefined).map((s) => s.id));
   const next = new Map<string, string[]>();
   const rawFed = new Set<string>();
   for (const f of plan.flows) {
     if (!ids.has(f.to)) continue;                                                     // out, sink
-    if (f.from === 'raw') rawFed.add(f.to);
-    if (!ids.has(f.from)) continue;
+    if (f.from === 'raw' || farms.has(f.from)) rawFed.add(f.to);
+    if (!ids.has(f.from) || farms.has(f.from)) continue;
     const list = next.get(f.from);
     if (list === undefined) next.set(f.from, [f.to]);
     else list.push(f.to);
@@ -815,8 +817,9 @@ function unionIo(ios: readonly StepIo[]): StepIo {
 }
 
 /**
- * One unit per machine still to build (`count − owned`) of every step that is not hand-crafted and runs on a real
- * machine, sorted by (depth, step id, index) — a sharing pool's machines once (plan 12, architecture §11 entry 39:
+ * One unit per machine still to build (`count − owned`) of every step that is not hand-crafted, runs on a real machine
+ * and is no farm step (add-on 17: a farm gets areas kept for it instead, farms.ts, and is passed over before its machine
+ * is looked up), sorted by (depth, step id, index) — a sharing pool's machines once (plan 12, architecture §11 entry 39:
  * `PlanStep.pool`, through `machineGroups`, ruling P18): its first step (`pool.steps[0]`) gives the pool's `count − owned`
  * units, with `stepIds` every step of the pool, and its other steps none. Such a unit moves what its steps move (`io`:
  * the item sides any of them has, and their fluids, the same for every step of a pool, whose sharing key holds them),
@@ -839,7 +842,7 @@ export function unitsFromPlan(pack: Pack, plan: Plan, opts: UnitOptions = {}): {
   for (const { steps: group } of groups) {
     const s = group[0]!;
     const count = s.count - s.owned;
-    if (s.handCraft || s.machine.mteId < 0 || count <= 0) continue;
+    if (s.farm !== undefined || s.handCraft || s.machine.mteId < 0 || count <= 0) continue;
     const m = pack.machines.get(s.machine.mteId);
     if (m === undefined) {
       warnings.push({ code: 'unknown_machine', stepId: s.id, text: `${s.machine.name} (#${s.machine.mteId}) is not in this recipe export` });

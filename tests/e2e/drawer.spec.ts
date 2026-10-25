@@ -2,14 +2,24 @@
 // project head slides it in over a dimmed page, Escape or a click on the page behind closes it, and Escape gives the focus back
 // to the button. A wide screen keeps the column beside the views and never shows the button. The drawer is a layer of its own
 // (ruling R36): opening it moves the focus to its Close settings button, the page behind is inert while it is open, every way out
-// gives the focus back to the Settings button, and a window that grows past 900 px closes it. The Settings button is found by its
-// exact name: "Close settings" has it in its own.
+// gives the focus back to the Settings button, and a window that grows past 900 px closes it. The Settings button says what the line
+// makes ("Settings · Make: nothing yet"), so it is found by a name that starts with Settings: "Close settings" does not.
+//
+// The most important setting, what to make, is in the drawer, so a project with no target opens it by itself, once, with the focus in the
+// item search, and the banner's "Pick something to make" is a way back in (the last block of this file). The tests that start with the
+// drawer closed give their project a target, which keeps it from opening.
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { login, setName, createProject } from './helpers.ts';
 
 /** What the page behind the drawer is made of: inert while the drawer is open. */
 const BEHIND = ['.top-nav', '.project-head', '.project-banners', '.project-views'];
+
+/** The Settings button: its name is "Settings" and then what the line makes, and "Close settings" does not start with it. */
+const SETTINGS_BUTTON = /^Settings/;
+
+/** A target the e2e pack plans. A project without one opens the drawer by itself on a narrow screen, so a test that starts with it closed gives its project this. */
+const TARGET = { target: 't:circuit@0', amount: 30, per: 'min', tier: 1 } as const;
 
 /** Where the keyboard's focus is: in the drawer, nowhere (the end of the page, past which Tab goes round), or the element it escaped to. */
 function focusIsIn(page: Page): Promise<string> {
@@ -24,9 +34,9 @@ function focusIsIn(page: Page): Promise<string> {
 test('narrow screens open the settings as a drawer', async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 900 });
   await login(page); await setName(page, 'Ann');
-  await createProject(page, 'Drawer');
+  await createProject(page, 'Drawer', TARGET);
   const settings = page.locator('aside[aria-label="Project settings"]');
-  const toggle = page.getByRole('button', { name: 'Settings', exact: true });
+  const toggle = page.getByRole('button', { name: SETTINGS_BUTTON });
 
   // closed: the column is slid out of sight, and out of the tab order with it
   await expect(toggle).toHaveAttribute('aria-expanded', 'false');
@@ -55,9 +65,9 @@ test('narrow screens open the settings as a drawer', async ({ page }) => {
 test('the keyboard opens the drawer into it, goes round its controls only, and leaves it on the Settings button', async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 900 });
   await login(page); await setName(page, 'Ann');
-  await createProject(page, 'Keys');
+  await createProject(page, 'Keys', TARGET);
   const settings = page.locator('aside[aria-label="Project settings"]');
-  const toggle = page.getByRole('button', { name: 'Settings', exact: true });
+  const toggle = page.getByRole('button', { name: SETTINGS_BUTTON });
   const close = settings.getByRole('button', { name: 'Close settings' });
   // the button names the drawer it opens
   await expect(toggle).toHaveAttribute('aria-controls', 'project-settings');
@@ -114,7 +124,7 @@ test('the keyboard opens the drawer into it, goes round its controls only, and l
 test('the drawer slides out faster than it slides in', async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 900 });
   await login(page); await setName(page, 'Ann');
-  await createProject(page, 'Exit');
+  await createProject(page, 'Exit', TARGET);
   const settings = page.locator('aside[aria-label="Project settings"]');
   const motion = (): Promise<{ duration: string; easing: string }> => settings.evaluate((el) => {
     const style = getComputedStyle(el);
@@ -122,7 +132,7 @@ test('the drawer slides out faster than it slides in', async ({ page }) => {
   });
   // closed, its transition is the one a closing drawer slides out with: the exit's 180ms, easing in (then it hides at once)
   expect(await motion()).toEqual({ duration: '0.18s, 0s', easing: 'cubic-bezier(0.4, 0, 1, 1), ease' });
-  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.getByRole('button', { name: SETTINGS_BUTTON }).click();
   await expect(settings).toBeVisible();
   // open, the one it slid in with: 260ms, easing out
   expect(await motion()).toEqual({ duration: '0.26s', easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' });
@@ -131,9 +141,9 @@ test('the drawer slides out faster than it slides in', async ({ page }) => {
 test('a window that grows past 900 px closes the drawer, and leaves the page live', async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 900 });
   await login(page); await setName(page, 'Ann');
-  await createProject(page, 'Resize');
+  await createProject(page, 'Resize', TARGET);
   const settings = page.locator('aside[aria-label="Project settings"]');
-  const toggle = page.getByRole('button', { name: 'Settings', exact: true });
+  const toggle = page.getByRole('button', { name: SETTINGS_BUTTON });
   await toggle.click();
   await expect(toggle).toHaveAttribute('aria-expanded', 'true');
 
@@ -151,9 +161,9 @@ test('a window that grows past 900 px closes the drawer, and leaves the page liv
 test('Escape closes one layer per press: an open search list first, then the drawer', async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 900 });
   await login(page); await setName(page, 'Ann');
-  await createProject(page, 'Layers');
+  await createProject(page, 'Layers', TARGET);
   const settings = page.locator('aside[aria-label="Project settings"]');
-  const toggle = page.getByRole('button', { name: 'Settings', exact: true });
+  const toggle = page.getByRole('button', { name: SETTINGS_BUTTON });
   await toggle.click();
   await expect(settings).toBeVisible();
 
@@ -179,9 +189,9 @@ test('Escape closes one layer per press: an open search list first, then the dra
 test('the avoid box\'s list, and a key something inside the drawer has handled, keep the drawer open too', async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 900 });
   await login(page); await setName(page, 'Ann');
-  await createProject(page, 'More layers');
+  await createProject(page, 'More layers', TARGET);
   const settings = page.locator('aside[aria-label="Project settings"]');
-  const toggle = page.getByRole('button', { name: 'Settings', exact: true });
+  const toggle = page.getByRole('button', { name: SETTINGS_BUTTON });
   await toggle.click();
   await expect(settings).toBeVisible();
 
@@ -238,7 +248,7 @@ test('a settings title that wraps grows its button and stays inside it, in the c
 
   for (const [width, height, drawer] of [[1280, 720, false], [800, 900, true]] as const) {
     await page.setViewportSize({ width, height });
-    if (drawer) await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    if (drawer) await page.getByRole('button', { name: SETTINGS_BUTTON }).click();
     await expect(dims).toBeVisible();
     await expect(dims.locator('.muted')).toBeVisible();
     const drawn = await measure(dims);
@@ -265,4 +275,341 @@ test('wide screens keep the settings beside the views and show no button', async
   await expect(page.locator('.settings-toggle')).toBeHidden();
   await expect(page.locator('.settings-close')).toHaveCount(1);
   await expect(page.locator('.settings-close')).toBeHidden();
+});
+
+// A project with no target (the Make picker is never out of sight). What to make is the first section of the settings, and below 900 px
+// the settings are a drawer behind the Settings button, so a person who opens a new project in a narrow window sees "Pick something to
+// make" in the banner and finds no picker. Now the drawer opens by itself when such a project is opened, once per visit, with the focus in
+// the item search; the words in the banner are a button that goes to the search (opening the drawer first on a narrow window); and the
+// Settings button says what the line makes.
+
+/** The drawer, its Settings button, the item search of its Make section, its Close button and the banner's hint, found the same way each time. */
+function pieces(page: Page): { settings: Locator; toggle: Locator; search: Locator; close: Locator; hint: Locator } {
+  const settings = page.locator('aside[aria-label="Project settings"]');
+  return {
+    settings,
+    toggle: page.getByRole('button', { name: SETTINGS_BUTTON }),
+    search: settings.getByPlaceholder('Search items and fluids'),
+    close: settings.getByRole('button', { name: 'Close settings' }),
+    hint: page.getByRole('button', { name: 'Pick something to make' }),
+  };
+}
+
+test('a new project with no target opens the drawer by itself, once, with the focus in the item search', async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 900 });
+  await login(page); await setName(page, 'Ann');
+  const id = await createProject(page, 'Nothing yet');
+  const { settings, toggle, search, close } = pieces(page);
+
+  // open without a click, and the focus is in the search, not on Close: the way to what to make is where the keyboard is
+  await expect(settings).toBeVisible();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(search).toBeFocused();
+  await expect(close).not.toBeFocused();
+  await expect(search).toBeInViewport();
+  expect(await focusIsIn(page)).toBe('the drawer');
+  await expect(page.locator('.drawer-backdrop')).toHaveCount(1);
+  for (const behind of BEHIND) await expect(page.locator(behind).first(), behind).toHaveAttribute('inert', '');
+
+  // it is the same drawer in every other way: typing opens a list, and Escape closes one layer per press, the list first
+  await page.keyboard.type('Iron Ingot');
+  const matches = settings.getByRole('listbox', { name: 'Matches' });
+  await expect(matches).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(matches).toBeHidden();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(search).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(settings).toBeHidden();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(toggle).toBeFocused();
+  for (const behind of BEHIND) await expect(page.locator(behind).first(), behind).not.toHaveAttribute('inert');
+
+  // once closed it stays closed: a change to the project (here, someone renames it) does not open it again
+  const renamed = await page.request.post(`/api/projects/${id}/ops`, { headers: { 'X-Planner-Name': 'e2e' }, data: { ops: [{ op: 'rename', name: 'Still nothing' }] } });
+  expect(renamed.ok()).toBe(true);
+  await expect(page.getByLabel('Project name')).toHaveValue('Still nothing');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(settings).toBeHidden();
+
+  // a new visit is a new chance: the project still has no target
+  await page.reload();
+  await expect(settings).toBeVisible();
+  await expect(search).toBeFocused();
+});
+
+test('a project that has a target does not open the drawer by itself', async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 900 });
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Has a target', TARGET);
+  const { settings, toggle, hint } = pieces(page);
+  // wait for the plan, which is the last thing the page waits for: the drawer would have opened by now
+  await expect(page.locator('svg [data-step-id]').first()).toBeVisible();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(settings).toBeHidden();
+  await expect(page.locator('.drawer-backdrop')).toHaveCount(0);
+  await expect(hint).toHaveCount(0);
+});
+
+test('"Pick something to make" in the banner opens the drawer again, into the item search', async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 900 });
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Hint');
+  const { settings, toggle, search, close, hint } = pieces(page);
+  await expect(settings).toBeVisible();                                              // opened by itself
+
+  // close it with its Close button (Playwright scrolls that button into view first, which is the top of the drawer), and only then scroll
+  // the drawer, hidden, to its bottom: the search is out of its view, and nothing but the page's own scrolling can bring it back
+  await close.click();
+  await expect(settings).toBeHidden();
+  await expect(toggle).toBeFocused();
+  expect(await settings.evaluate((aside) => { aside.scrollTop = aside.scrollHeight; return aside.scrollTop; }), 'the hidden drawer scrolled').toBeGreaterThan(0);
+
+  // the banner says what is missing, and its words are a button that goes there: the drawer opens, the search is in view and has the focus
+  await expect(hint).toBeVisible();
+  await hint.click();
+  await expect(settings).toBeVisible();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(search).toBeFocused();
+  await expect(close).not.toBeFocused();
+  await expect(search).toBeInViewport();
+  for (const behind of BEHIND) await expect(page.locator(behind).first(), behind).toHaveAttribute('inert', '');
+
+  // it is the drawer of every other way in: Escape closes it and gives the focus back to the Settings button
+  await page.keyboard.press('Escape');
+  await expect(settings).toBeHidden();
+  await expect(toggle).toBeFocused();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  // and the hint is still there to use again
+  await hint.click();
+  await expect(settings).toBeVisible();
+  await expect(search).toBeFocused();
+});
+
+test('the Settings button says what the line makes, from nothing yet to the target just picked', async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 900 });
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Named');
+  const { settings, toggle, search, close } = pieces(page);
+  await expect(settings).toBeVisible();                                              // opened by itself
+
+  // what is drawn is what the button is called (WCAG 2.5.3), and it is still the button of the drawer
+  await expect(toggle).toHaveText('Settings · Make: nothing yet');
+  await expect(toggle).toHaveAccessibleName('Settings · Make: nothing yet');
+  await expect(toggle).toHaveAttribute('type', 'button');
+  await expect(toggle).toHaveAttribute('aria-controls', 'project-settings');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+
+  // pick a target: the settings panel names it, and so does the button
+  await search.fill('basic circ');
+  await page.getByRole('option', { name: /Basic Circuit/ }).click();
+  await expect(settings.locator('.settings-target-name')).toHaveText('Basic Circuit');
+  await expect(toggle).toHaveText('Settings · Make: Basic Circuit');
+  await expect(toggle).toHaveAccessibleName('Settings · Make: Basic Circuit');
+
+  // closed, it still says so; and with a target there is no hint to pick one
+  await close.click();
+  await expect(settings).toBeHidden();
+  await expect(toggle).toHaveText('Settings · Make: Basic Circuit');
+  await expect(pieces(page).hint).toHaveCount(0);
+
+  // clear the target: nothing yet again, and the hint is back
+  await toggle.click();
+  await settings.getByRole('button', { name: 'Clear', exact: true }).click();
+  await expect(toggle).toHaveText('Settings · Make: nothing yet');
+  await close.click();
+  await expect(pieces(page).hint).toBeVisible();
+});
+
+test('the Settings button names a target the moment it is picked, before the plan that names it arrives', async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 900 });
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Slow plan');
+  const { settings, toggle, search } = pieces(page);
+  await expect(search).toBeFocused();
+
+  // hold back every plan the server is asked for from here on. Until the plan comes (it names every key it uses), the settings panel
+  // names what was picked from the name the search box gave it, and the button must say the same, not the target's key
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  await page.route(/\/api\/projects\/[^/]+\/plan$/, async (route) => {
+    await held;
+    await route.continue();
+  });
+  await search.fill('basic circ');
+  await page.getByRole('option', { name: /Basic Circuit/ }).click();
+  await expect(page.getByText('Updating the plan…')).toBeVisible();
+  await expect(page.locator('svg [data-step-id]')).toHaveCount(0);                  // the plan of a target is not here
+  await expect(settings.locator('.settings-target-name')).toHaveText('Basic Circuit');
+  await expect(toggle).toHaveText('Settings · Make: Basic Circuit');
+  await expect(toggle).not.toContainText('t:circuit');
+
+  release();
+  await expect(page.locator('svg [data-step-id]').first()).toBeVisible();           // now it is, and the button says the same
+  await expect(toggle).toHaveText('Settings · Make: Basic Circuit');
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+});
+
+test('on a wide window "Pick something to make" focuses the item search, and no drawer opens', async ({ page }) => {
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Wide hint');
+  const { settings, search, hint } = pieces(page);
+  const toggle = page.locator('.settings-toggle');                                    // not drawn on a wide window, so not found by its role
+  await expect(settings).toBeVisible();                                              // beside the views
+  await expect(hint).toBeVisible();
+
+  // nothing opens by itself, and nothing has the focus
+  await expect(page.locator('.drawer-backdrop')).toHaveCount(0);
+  await expect(search).not.toBeFocused();
+  for (const behind of BEHIND) await expect(page.locator(behind).first(), behind).not.toHaveAttribute('inert');
+
+  // the column scrolls inside itself: scroll the search out of it, and the hint brings it back
+  await settings.evaluate((aside) => { aside.scrollTop = aside.scrollHeight; });
+  await expect(search).not.toBeInViewport();
+  await hint.click();
+  await expect(search).toBeFocused();
+  await expect(search).toBeInViewport();
+
+  // and still no drawer: no backdrop, nothing inert, and the button that opens one is not drawn
+  await expect(page.locator('.drawer-backdrop')).toHaveCount(0);
+  await expect(toggle).toBeHidden();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  for (const behind of BEHIND) await expect(page.locator(behind).first(), behind).not.toHaveAttribute('inert');
+});
+
+test('the drawer of a project with no target waits for the name prompt, and opens into the search once the name is saved', async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 900 });
+  await login(page);                                                                  // no name set: the prompt covers the page
+  await createProject(page, 'Prompted');
+  const { settings, toggle, search, hint } = pieces(page);
+  const prompt = page.getByRole('dialog', { name: 'What should we call you?' });
+  const name = prompt.getByLabel('Your name');
+  await expect(prompt).toBeVisible();
+  await expect(name).toBeFocused();
+
+  // the project and its plan are loaded behind the prompt (the hint is drawn once they are), and the drawer has not taken the focus from it
+  await expect(hint).toBeVisible();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.locator('.drawer-backdrop')).toHaveCount(0);
+  await expect(name).toBeFocused();
+
+  await name.fill('Ann');
+  await prompt.getByRole('button', { name: 'Save' }).click();
+  await expect(prompt).toBeHidden();
+  await expect(settings).toBeVisible();
+  await expect(search).toBeFocused();
+});
+
+test('a long target name is cut with an ellipsis, and the Settings button stays within 40% of the head', async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 900 });
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Long name', TARGET);
+  const { toggle } = pieces(page);
+  const target = toggle.locator('.settings-toggle-target');
+  await expect(target).toHaveText('· Make: Basic Circuit');
+  // the connection badge starts as "reconnecting…" (137px) and is "live" (58px) once the event stream is open; the head's rows are counted
+  // with the badge it settles on, since the long name below fills 40% of the head and a wider badge wraps it
+  await expect(page.locator('.connection.live')).toBeVisible();
+
+  // Inter 13px in the muted ink on a dark readout, with no drop shadow of the button's (the contract's values, as the browser computes them)
+  await expect(target).toHaveCSS('font-size', '13px');
+  await expect(target).toHaveCSS('font-family', /^Inter\b/);
+  await expect(target).toHaveCSS('color', 'rgb(170, 170, 170)');
+  await expect(target).toHaveCSS('background-color', 'rgb(27, 27, 27)');
+  await expect(target).toHaveCSS('text-shadow', 'none');
+  await expect(target).toHaveCSS('text-overflow', 'ellipsis');
+
+  const measure = (): Promise<{ head: number; rows: number; toggle: number; height: number; cut: boolean; nameTop: number; toggleTop: number }> => page.evaluate(async () => {
+    await document.fonts.ready;                                                       // the widths are the pixel font's, not its stand-in's
+    const head = document.querySelector('.project-head')!.getBoundingClientRect();
+    const button = document.querySelector('.settings-toggle')!.getBoundingClientRect();
+    const part = document.querySelector('.settings-toggle-target')!;
+    return {
+      head: head.width, rows: head.height, toggle: button.width, height: button.height, cut: part.scrollWidth > part.clientWidth,
+      nameTop: document.querySelector('.project-name')!.getBoundingClientRect().top, toggleTop: button.top,
+    };
+  });
+  const short = await measure();
+  expect(short.cut, 'a short name is whole').toBe(false);
+  expect(short.height).toBe(36);
+  expect(short.rows, 'the head is one row at 800 px while the stream is live, as it was with the bare button').toBe(36);
+
+  // the name of a long multiblock in its place (the button is drawn from the project's target; this is its layout)
+  await target.evaluate((el) => { el.textContent = '· Make: Large Extremely Long Named Industrial Multiblock Processing Array Controller Casing'; });
+  const long = await measure();
+  expect(long.cut, 'a long name is cut').toBe(true);
+  expect(long.toggle).toBeGreaterThan(short.toggle);
+  expect(long.toggle).toBeLessThanOrEqual(long.head * 0.4 + 0.5);
+  expect(long.height, 'the button keeps its 36px').toBe(36);
+  expect(long.rows, 'and the head stays one row').toBe(36);
+  expect(Math.abs(long.nameTop - long.toggleTop), 'the project name stays on the button\'s row').toBeLessThanOrEqual(1);
+});
+
+test('on a phone the Settings button shows the whole of a short name: the 40% cap is for windows wider than 700 px', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await login(page); await setName(page, 'Ann');
+  const { toggle } = pieces(page);
+  const target = toggle.locator('.settings-toggle-target');
+  const measure = (): Promise<{ head: number; toggle: number; partWidth: number; partNeeds: number }> => page.evaluate(async () => {
+    await document.fonts.ready;                                                       // the widths are the pixel font's, not its stand-in's
+    const part = document.querySelector('.settings-toggle-target')!;
+    return {
+      head: document.querySelector('.project-head')!.getBoundingClientRect().width, toggle: document.querySelector('.settings-toggle')!.getBoundingClientRect().width,
+      partWidth: part.clientWidth, partNeeds: part.scrollWidth,
+    };
+  });
+
+  // a project with no target and one making Basic Circuit: the part is whole, where a cap of 40% of the head (136 px) left it a few letters
+  for (const [settings, text] of [[undefined, '· Make: nothing yet'], [TARGET, '· Make: Basic Circuit']] as const) {
+    await createProject(page, 'Phone', settings);
+    await expect(target).toHaveText(text);
+    const whole = await measure();
+    expect(whole.partNeeds, `"${text}" is drawn whole`).toBeLessThanOrEqual(whole.partWidth);
+    expect(whole.toggle, 'the button fits the head').toBeLessThanOrEqual(whole.head + 0.5);
+  }
+
+  // a name too long for the head is still cut, at the width of the head
+  await target.evaluate((el) => { el.textContent = '· Make: Large Extremely Long Named Industrial Multiblock Processing Array Controller Casing'; });
+  const long = await measure();
+  expect(long.partNeeds, 'a long name is cut').toBeGreaterThan(long.partWidth);
+  expect(long.toggle, 'at the width of the head').toBeCloseTo(long.head, 0);
+});
+
+test('a drawer that opened by itself in a window that has grown past 900 px since it looked closes at once, and the focus stays in the search', async ({ page }) => {
+  // The window is 1280 px wide, for real, but the first look the page takes at its width (the auto-open's, in an effect) is told it is narrow:
+  // so the drawer opens, and by the time the drawer's own effect looks again, to hear the window change, it has grown past 900 px. A listener
+  // that only hears the changes after it is attached would never close it, and the page would stay inert beside a column that needs no drawer.
+  await page.addInitScript(() => {
+    const seen = window as unknown as { __looks: number; __opened: boolean };
+    seen.__looks = 0;
+    seen.__opened = false;
+    const real = window.matchMedia.bind(window);
+    window.matchMedia = (query: string): MediaQueryList => {
+      if (query !== '(max-width: 900px)' || ++seen.__looks > 1) return real(query);
+      return {
+        matches: true, media: query, onchange: null, dispatchEvent: () => false,
+        addEventListener: () => {}, removeEventListener: () => {}, addListener: () => {}, removeListener: () => {},
+      };
+    };
+    // whether the button ever said the drawer was open. The page can open it and close it again before a task ends, so what the DOM says by
+    // the time this is told is not enough: the old value of each change is what shows that it was open
+    new MutationObserver((records) => {
+      const wasOpen = records.some((record) => record.oldValue === 'true' && record.target instanceof Element && record.target.classList.contains('settings-toggle'));
+      if (wasOpen || document.querySelector('.settings-toggle[aria-expanded="true"]') !== null) seen.__opened = true;
+    }).observe(document, { subtree: true, attributes: true, attributeFilter: ['aria-expanded'], attributeOldValue: true });
+  });
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Grown');                                                 // no target; the window is the default 1280x720
+  const { settings, search } = pieces(page);
+  const toggle = page.locator('.settings-toggle');                                    // not drawn on a wide window, so not found by its role
+
+  // the page opened the drawer, told the window was narrow, and closed it at once when it looked again and found it wide
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __opened: boolean }).__opened), 'the page opened the drawer by itself').toBe(true);
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.locator('.drawer-backdrop')).toHaveCount(0);
+  for (const behind of BEHIND) await expect(page.locator(behind).first(), behind).not.toHaveAttribute('inert');
+  // the column is beside the views, with the focus where the drawer put it: on the search, and not thrown to a button that is not drawn
+  await expect(settings).toBeVisible();
+  await expect(search).toBeFocused();
+  await expect(toggle).not.toBeFocused();
 });
