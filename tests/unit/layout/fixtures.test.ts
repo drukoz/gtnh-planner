@@ -4,6 +4,7 @@ import { withLineParts } from '../../helpers/line-parts-export.ts';
 import { makePack } from '../../helpers/make-pack.ts';
 import type { Machine } from '../../../src/shared/types/pack.ts';
 import { AIR_INDEX, UNKNOWN_INDEX } from '../../../src/shared/types/world.ts';
+import { allMachines, machineByMteId } from '../../../src/server/pack/lookup.ts';
 
 /** The machine fields the line-parts export must load back exactly (ruling R19). */
 const LOADED_FIELDS = ['mteId', 'metaName', 'name', 'cls', 'kind', 'itemKey', 'tier', 'cable', 'fluidPipe', 'itemPipe', 'steamPerSecondMax'] as const;
@@ -11,8 +12,8 @@ const LOADED_FIELDS = ['mteId', 'metaName', 'name', 'cls', 'kind', 'itemKey', 't
 describe('layout fixtures', () => {
   it('builds a pack with line parts', () => {
     const pack = layoutPack();
-    expect(pack.machines.get(IDS.TIN_2X)!.cable).toEqual({ voltage: 32, amps: 2, lossPerBlock: 1, insulated: true, material: 'Tin' });
-    expect(pack.machines.get(IDS.EBF)!.structure!.blocks).toHaveLength(34);
+    expect(machineByMteId(pack, IDS.TIN_2X)!.cable).toEqual({ voltage: 32, amps: 2, lossPerBlock: 1, insulated: true, material: 'Tin' });
+    expect(machineByMteId(pack, IDS.EBF)!.structure!.blocks).toHaveLength(34);
     expect(EBF_STRUCTURE.air).toEqual([[1, 1, 1], [1, 2, 1]]);
     expect(pack.nameOf('gregtech:gt.metaitem.01@32630')).toBe('Conveyor Module (LV)');
   });
@@ -40,7 +41,7 @@ describe('layout fixtures', () => {
     expect(want.machines.size).toBe(31);
     // toEqual takes an undefined field as missing: a field the fixture leaves out must be missing after loading too
     const fields = (m: Machine | undefined) => Object.fromEntries(LOADED_FIELDS.map((f) => [f, m?.[f]]));
-    for (const m of want.machines.values()) expect(fields(pack.machines.get(m.mteId)), `machine ${m.mteId}`).toEqual(fields(m));
+    for (const m of allMachines(want)) expect(fields(machineByMteId(pack, m.mteId)), `machine ${m.mteId}`).toEqual(fields(m));
     for (const [key, item] of want.items) expect(pack.items.get(key)?.name, key).toBe(item.name);
   });
 });

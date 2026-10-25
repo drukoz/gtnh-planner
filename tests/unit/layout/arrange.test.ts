@@ -7,6 +7,7 @@ import { FRONT_BOX_ELEMENTS, FRONT_BOX_ID, hatchExportPack, withElements } from 
 import { layoutPack, makePlan, IDS, type StepSpec } from '../../helpers/layout-fixtures.ts';
 import { packFromSpec } from '../../helpers/pack-spec.ts';
 import type { Recipe } from '../../../src/shared/types/pack.ts';
+import { machineByMteId } from '../../../src/server/pack/lookup.ts';
 
 const withCircuit = (id: string, circuit: number): Recipe => ({ id, source: 'gt', maps: [], inputs: [], outputs: [], euPerTick: 30, durationTicks: 100,
   amps: 1, specialValue: 0, meta: { circuit }, flags: {} });
@@ -124,7 +125,7 @@ describe('units', () => {
     // architecture §11 entry 49 (3): an export that took no energy hatch keeps a machine whose steps draw EU powered; the
     // first step of this pool draws none, the second does
     const pack = hatchExportPack();
-    const box = pack.machines.get(FRONT_BOX_ID)!;
+    const box = machineByMteId(pack, FRONT_BOX_ID)!;
     box.structure = withElements(box.structure!, FRONT_BOX_ELEMENTS.map((s) => (s.ch === 'k' ? { ...s, hatches: [] } : s)));
     const pool = { id: 'pool:f1', steps: ['f1', 'f2'] };
     const step = { mteId: FRONT_BOX_ID, count: 1, tier: 1, pool, inputs: [['t:in@0', 1]] as Array<[string, number]>, outputs: [['t:dust@0', 1]] as Array<[string, number]> };
@@ -134,7 +135,7 @@ describe('units', () => {
 
   it('draws a multiblock without an exported structure as a 3×3×3 box and says so', () => {
     const pack = layoutPack();
-    delete pack.machines.get(IDS.EBF)!.structure;
+    delete machineByMteId(pack, IDS.EBF)!.structure;
     const { units, warnings } = unitsFromPlan(pack, makePlan([{ id: 'e', mteId: IDS.EBF, count: 1, tier: 2 }]));
     expect(units[0]!.size).toEqual([3, 3, 3]);
     expect(warnings).toEqual([{ code: 'structure_unknown', stepId: 'e',
@@ -204,7 +205,7 @@ describe('placement: tiers apart, front and output side apart', () => {
     // machines (and the tree that crosses the spine to them) standing in front of a lower tier's walled those off
     const STEAM = 2099;
     const pack = layoutPack();
-    pack.machines.set(STEAM, { ...pack.machines.get(IDS.MACERATOR)!, mteId: STEAM, name: 'Steam Macerator', kind: 'steam' });
+    pack.machines.set(STEAM, { ...machineByMteId(pack, IDS.MACERATOR)!, mteId: STEAM, name: 'Steam Macerator', kind: 'steam' });
     const plan = makePlan([
       { id: 'h', mteId: IDS.CHEM_HV, count: 1, tier: 3, euPerTick: 256 },
       { id: 'm', mteId: IDS.ASSEMBLER, count: 2, tier: 2, euPerTick: 64 },

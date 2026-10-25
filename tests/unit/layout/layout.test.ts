@@ -16,6 +16,7 @@ import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import { largeBenderSpec } from '../../helpers/build-fixtures.ts';
 import { packFromSpec } from '../../helpers/pack-spec.ts';
 import { emptyContextForTest } from '../../helpers/plan-context.ts';
+import { machineByMteId } from '../../../src/server/pack/lookup.ts';
 
 const twoStep = () => makePlan([
   { id: 's1', mteId: IDS.MACERATOR, count: 2, euPerTick: 30 },
@@ -292,8 +293,8 @@ describe('layoutLine: mixed-tier lines', () => {
       for (let side = 0; side < 6; side++) {
         const other = at.get(key(step(b.pos, side)));
         if (other === undefined) continue;
-        const energy = other.role === 'machine' || (other.role === 'hatch' && pack.machines.get(other.block.mteId!)?.cls.endsWith('MTEHatchEnergy') === true);
-        const transformer = other.role === 'transformer' ? pack.machines.get(other.block.mteId!)?.tier : undefined;
+        const energy = other.role === 'machine' || (other.role === 'hatch' && machineByMteId(pack, other.block.mteId!)?.cls.endsWith('MTEHatchEnergy') === true);
+        const transformer = other.role === 'transformer' ? machineByMteId(pack, other.block.mteId!)?.tier : undefined;
         if (tier === undefined || (other.role === 'cable' && tierOf(layout, other) !== tier)
           || (energy && other.stepId !== undefined && stepTier.get(other.stepId)! < tier)
           || (transformer !== undefined && tier !== transformer && tier !== transformer + 1)) {

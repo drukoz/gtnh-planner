@@ -12,6 +12,7 @@ import type { PlanFlow } from '../../../../src/shared/types/plan.ts';
 import { busSlots } from '../../../../src/server/layout/parts.ts';
 import { benchBesideMachine, chain2, feedPlan, layFeed, layLegacy, layUncapped, FEED_IDS } from '../../../helpers/feeding-fixtures.ts';
 import { IDS } from '../../../helpers/layout-fixtures.ts';
+import { machineByMteId } from '../../../../src/server/pack/lookup.ts';
 
 /** The line's own block at world cell `pos` (no ghost, no hookup block). */
 function blockAt(layout: Layout, pos: Vec3): FeedBlock {
@@ -302,12 +303,12 @@ describe('readLine', () => {
   it('takes slot counts from the export before the table', async () => {
     // the export's counts (exporter 0.6.0: Machine.itemInSlots and itemOutSlots) replace the table's 9 and 1 of the tier-2 assembler
     const { pack, plan } = chain2();
-    Object.assign(pack.machines.get(IDS.ASSEMBLER)!, { itemInSlots: 5, itemOutSlots: 2 });
+    Object.assign(machineByMteId(pack, IDS.ASSEMBLER)!, { itemInSlots: 5, itemOutSlots: 2 });
     const m = readLine({ pack, plan, layout: await layFeed(pack, plan, 'enderio') });
     expect(m.nodes.find((n): n is BasicNode => n.kind === 'basic' && n.stepIds[0] === 's2')).toMatchObject({ inSlots: 5, outSlots: 2 });
     // such an export counts a steam machine's slots too, so they are known
     const steam = twoSteps(FEED_IDS.STEAM);
-    Object.assign(steam.pack.machines.get(FEED_IDS.STEAM)!, { itemInSlots: 1, itemOutSlots: 1 });
+    Object.assign(machineByMteId(steam.pack, FEED_IDS.STEAM)!, { itemInSlots: 1, itemOutSlots: 1 });
     const sm = readLine({ pack: steam.pack, plan: steam.plan, layout: await layFeed(steam.pack, steam.plan, 'routed') });
     expect(sm.nodes.find((n) => n.id === '1,0,1')).toMatchObject({ kind: 'basic', steam: true, inSlots: 1, outSlots: 1 });
     expect(unknownsAt(sm, 'slots_unknown')).toEqual([]);
@@ -349,7 +350,7 @@ describe('readLine', () => {
     const multi = m.nodes.find((n): n is MultiNode => n.kind === 'multi')!;
     const input = layout.blocks.find((b) => b.hatch === 'input_bus')!;
     expect(multi).toMatchObject({ id: '2,0,3', kinds: ['t:a@0', 't:b@0'], separationDefault: true, inputSeparation: null });
-    expect(multi.inBuses).toEqual([expect.objectContaining({ id: '3,0,3', front: 3, slots: busSlots(pack.machines.get(input.block.mteId!)!.tier!), limited: null })]);
+    expect(multi.inBuses).toEqual([expect.objectContaining({ id: '3,0,3', front: 3, slots: busSlots(machineByMteId(pack, input.block.mteId!)!.tier!), limited: null })]);
     expect(multi.outBuses).toEqual([expect.objectContaining({ id: '1,0,3', front: 3, lock: null })]);
     expect(unknownsAt(m, 'limited_unset')).toEqual([input.pos]);
     // main lays an interface pipe on each bus port: its target is the bus, as part of the multiblock

@@ -4,6 +4,7 @@ import { resolveParts, PART_DEFS, pickCable, pickItemPipe, pickFluidPipe, pickTr
 import { fmtRate, joinNames } from '../../../src/shared/layout/format.ts';
 import { layoutPack, IDS, emptyPack, addLineParts } from '../../helpers/layout-fixtures.ts';
 import type { LayoutBlock } from '../../../src/shared/types/layout.ts';
+import { machineByMteId } from '../../../src/server/pack/lookup.ts';
 
 describe('parts', () => {
   it('resolves parts by key, then by English name, else marks them missing', () => {
@@ -55,7 +56,7 @@ describe('parts', () => {
     expect(pickCable(pack, { volts: 128, amps: 1 })).toMatchObject({ cable: { mteId: IDS.ANNEALED_1X }, ampsShort: false });
     expect(pickCable(pack, { volts: 512, amps: 5 })).toMatchObject({ cable: { mteId: IDS.SILVER_2X }, ampsShort: true });
     expect(pickCable(pack, { volts: 2048, amps: 1 })).toBeNull();
-    expect(machineRef(pack.machines.get(IDS.TIN_1X)!)).toEqual({ id: 'gregtech:gt.blockmachines', meta: 0, mteId: IDS.TIN_1X });
+    expect(machineRef(machineByMteId(pack, IDS.TIN_1X)!)).toEqual({ id: 'gregtech:gt.blockmachines', meta: 0, mteId: IDS.TIN_1X });
   });
 
   it('chooses pipes, transformers and hatches', () => {

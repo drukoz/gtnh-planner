@@ -18,6 +18,7 @@ import { LV_MACHINE_PARTS, withBuildRecipes } from '../../helpers/build-fixtures
 import { addLineParts, IDS, layoutPack, makePlan, makeProject } from '../../helpers/layout-fixtures.ts';
 import { MINI_GT } from '../../helpers/mini-gt.ts';
 import { packFromSpec } from '../../helpers/pack-spec.ts';
+import { machineByMteId } from '../../../src/server/pack/lookup.ts';
 
 const SCHEMATIC = 'gregtech:gt.metaitem.01@32498';
 
@@ -132,9 +133,9 @@ describe('static feeding rules', () => {
     expect(feedingWarnings({ pack, plan: ebf(), layout: changed(twoBuses, (b) => (b.role === 'machine' ? { ...b, config: { inputSeparation: false } } : b)) }))
       .toEqual([]);
     // the Pyrolyse Oven starts with Input Separation on too; a controller without the setting reads all its buses together
-    pack.machines.get(IDS.EBF)!.cls = 'gregtech.common.tileentities.machines.multi.MTEPyrolyseOven';
+    machineByMteId(pack, IDS.EBF)!.cls = 'gregtech.common.tileentities.machines.multi.MTEPyrolyseOven';
     expect(feedingWarnings({ pack, plan: ebf(), layout: twoBuses }).map((w) => w.code)).toEqual(['feed_crowded']);
-    pack.machines.get(IDS.EBF)!.cls = 'gregtech.common.tileentities.machines.multi.MTEVacuumFreezer';
+    machineByMteId(pack, IDS.EBF)!.cls = 'gregtech.common.tileentities.machines.multi.MTEVacuumFreezer';
     expect(feedingWarnings({ pack, plan: ebf(), layout: twoBuses })).toEqual([]);
   });
 

@@ -13,6 +13,7 @@ import type { Pack } from '../../../../src/shared/types/pack.ts';
 import type { Plan, PlanFlow } from '../../../../src/shared/types/plan.ts';
 import { benchBesideMachine, chain2, feedPlan, layFeed, layLegacy, layUncapped, FEED_IDS } from '../../../helpers/feeding-fixtures.ts';
 import { IDS } from '../../../helpers/layout-fixtures.ts';
+import { machineByMteId } from '../../../../src/server/pack/lookup.ts';
 
 const brief = (f: { code: string; certainty: string; key?: string; machine: string }) => `${f.code} ${f.certainty} ${f.key ?? '-'} ${f.machine}`;
 
@@ -79,7 +80,7 @@ describe('precheckFeeding', () => {
     const line = () => feedPlan([{ id: 'st', mteId: FEED_IDS.STEAM, count: 1, inputs: [['t:a@0', 1], ['t:b@0', 1]], outputs: [['t:x@0', 1]] }]);
     const certain = async (counts?: { itemInSlots: number; itemOutSlots: number }) => {
       const { pack, plan } = line();
-      if (counts !== undefined) Object.assign(pack.machines.get(FEED_IDS.STEAM)!, counts);
+      if (counts !== undefined) Object.assign(machineByMteId(pack, FEED_IDS.STEAM)!, counts);
       const m = readLine({ pack, plan, layout: await layFeed(pack, plan, 'enderio') });
       const label = m.nodes.find((n) => n.kind === 'basic')!.label;
       return precheckFeeding(m, pack).filter((f) => f.certainty === 'certain').map((f) => [f.code, f.text.replace(label, '<steam>')]);
