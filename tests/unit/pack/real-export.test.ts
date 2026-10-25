@@ -6,6 +6,7 @@ import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
 import { tableItemCount } from '../../../src/server/pack/crops.ts';
 import { loadPack } from '../../../src/server/pack/load.ts';
 import { machineByMteId } from '../../../src/server/pack/lookup.ts';
+import { gtMachineId } from '../../../src/shared/ids.ts';
 import { canonicalRecipe, recipeId } from '../../../src/server/pack/recipe-id.ts';
 import { searchPack } from '../../../src/server/pack/search.ts';
 import { runCli } from '../../helpers/run-cli.ts';
@@ -41,7 +42,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('real export (GTNH 2.9.0-RC-1)',
     for (const id of [90, 303, 373, 423, 512, 1121, 1122, 1172, 31040]) expect(machineByMteId(pack, id) !== undefined, `mte ${id}`).toBe(true);
     expect(pack.fluids.get('fluid:molten.iron')!.name).toBe('Molten Iron');
     expect(searchPack(pack, 'Iron Dust')[0]!.name).toBe('Iron Dust');
-    expect(pack.machinesByMap.get('gt.recipe.macerator')).toContain(303);
+    expect(pack.machinesByMap.get('gt.recipe.macerator')).toContain(gtMachineId(303));
     expect([...pack.items.values()].some((i) => (i.electric?.maxCharge ?? 0) > 0)).toBe(true);   // IC2 battery data (§11.5)
   });
 
