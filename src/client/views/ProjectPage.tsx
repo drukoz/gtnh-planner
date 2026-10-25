@@ -12,7 +12,8 @@
 // readouts (Phase 2 spec §10): what it makes, its peak power, its machines, and what it costs to build and to run. While a new
 // plan is on its way the banner says so with the GT progress arrow, on a line that moves nothing, on the strip's top-right corner (Phase 2
 // spec §11.3, ledger rulings P2-R18 and P2-R51), and the drawer, behind which the banners are inert, has a status line of its own (R43).
-// A rename here says so in a toast, with Undo (Phase 2 spec §12).
+// A rename here says so in a toast, with Undo (Phase 2 spec §12), and so does a delete, whose Undo restores the project from the list the page
+// leaves for. A deleted note waits in the page's store, which posts its delete once the note's toast has gone, or as the page goes (§12.2).
 
 import { useEffect, useLayoutEffect, useRef, useState, type ReactElement } from 'react';
 import type { StuffKey } from '../../shared/keys.ts';
@@ -23,7 +24,7 @@ import type { Plan, PlanSettings, PlanWarning } from '../../shared/types/plan.ts
 import type { ProjectOp } from '../../shared/types/project.ts';
 import { apiGet, messageOf } from '../api/client.ts';
 import { listenProjectEvents } from '../api/sse.ts';
-import { DeleteProject } from '../components/DeleteProject.tsx';
+import { DeleteProject, showDeletedToast } from '../components/DeleteProject.tsx';
 import { Figs } from '../components/Figs.tsx';
 import { GtArrow } from '../components/GtArrow.tsx';
 import { ItemIcon } from '../components/ItemIcon.tsx';
@@ -490,7 +491,13 @@ export function ProjectPage(props: { id: string }): ReactElement {
         <ProjectName name={project.name} onRename={rename} />
         {comparable && <CompareToggle open={compare.state.open} onToggle={toggleCompare} ref={compareHeadToggle} />}
         <span className={view.connected ? 'connection live' : 'connection'}>{view.connected ? 'live' : 'reconnecting…'}</span>
-        <DeleteProject id={project.id} name={project.name} label="Delete project" onDeleted={() => view.markDeleted(me)} />
+        <DeleteProject
+          id={project.id} name={project.name} label="Delete project"
+          onDeleted={() => {
+            showDeletedToast(project.id, project.name);
+            view.markDeleted(me);
+          }}
+        />
       </div>
       {/* The banners' own box, so the page behind an open drawer can be inert in three pieces (ruling R36); it adds no space.
           The key-numbers strip (Phase 2 spec §10) leads it, the plan's cost sentence beside it hidden from sight by a sibling rule and from a
@@ -544,7 +551,7 @@ export function ProjectPage(props: { id: string }): ReactElement {
           </div>
           {/* The view remounts on a tab switch anyway; the key makes the section new too, so its fade-in plays again. */}
           <section key={active.id} className="tab-panel" role="tabpanel" id={`panel-${active.id}`} aria-labelledby={`tab-${active.id}`}>
-            <View project={project} plan={plan} previousPlan={view.previousPlan} send={send} me={me} />
+            <View project={project} plan={plan} previousPlan={view.previousPlan} send={send} sendLater={view.sendLater} me={me} />
           </section>
         </div>
       </div>

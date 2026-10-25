@@ -2,22 +2,24 @@
 // start a new one. Anyone can delete a project here or on its page; the deleted ones wait under "Recently deleted"
 // for 7 days, where anyone can restore them (§11.24). The list has no live channel: it loads on open and after its
 // own deletes and restores (ruling C17), and a row someone else deleted meanwhile counts as deleted when its Delete
-// finds it gone.
+// finds it gone. A delete says so in a toast, whose Undo restores the project (Phase 2 spec §12.1): the list then loads
+// again too, and drops the notice that said it was deleted.
 
-import { useEffect, useState, type FormEvent, type ReactElement } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type ReactElement } from 'react';
 import { MAX_NAME_LENGTH, validateOp } from '../../shared/project/apply-op.ts';
 import type { CreateProjectBody, DeletedProjectSummary, ProjectListEntry, StuffInfo } from '../../shared/types/api.ts';
 import type { Project } from '../../shared/types/project.ts';
 import { apiGet, apiPost, messageOf } from '../api/client.ts';
 import { listDeletedProjects, restoreProject } from '../api/projects.ts';
-import { DeleteProject } from '../components/DeleteProject.tsx';
+import { DeleteProject, showDeletedToast } from '../components/DeleteProject.tsx';
 import { ItemIcon } from '../components/ItemIcon.tsx';
 import { Skeleton } from '../components/Skeleton.tsx';
 import { localTime } from '../format.ts';
 import { followLink, navigate } from '../router.ts';
 import { alreadyDeletedNotice, deletedNotice, takeDeletedNotice } from '../state/deleted-notice.ts';
 import { useName } from '../state/name.ts';
-import { showToast } from '../state/toasts.ts';
+import { useProjectsChanged } from '../state/projects-changed.ts';
+import { dismissToast, showToast } from '../state/toasts.ts';
 
 /** Display names of the projects' targets; a key the pack cannot name (or no export yet) shows as the key. */
 function useTargetNames(projects: ProjectListEntry[] | null): Record<string, string> {
@@ -81,6 +83,10 @@ export function ProjectList(): ReactElement {
   const [loads, setLoads] = useState(0);
   const names = useTargetNames(projects);
   const me = useName();
+  // A project restored from a deleted project's toast (its Undo, which the App draws over any page): load again, and the notice that said
+  // it was deleted no longer holds.
+  const changed = useProjectsChanged();
+  const changedSeen = useRef(changed);
 
   useEffect(() => {
     // Taken in an effect, not during render: StrictMode renders twice, and the second render would find it gone.
@@ -89,6 +95,10 @@ export function ProjectList(): ReactElement {
   }, []);
 
   useEffect(() => {
+    if (changed !== changedSeen.current) {
+      changedSeen.current = changed;
+      setNotice(null);
+    }
     let live = true;
     apiGet<ProjectListEntry[]>('/api/projects').then(
       (list) => {
@@ -109,10 +119,11 @@ export function ProjectList(): ReactElement {
     return () => {
       live = false;
     };
-  }, [loads]);
+  }, [loads, changed]);
   const reload = (): void => setLoads((n) => n + 1);
 
   const restore = (p: DeletedProjectSummary): void => {
+    dismissToast(`project:${p.id}`);   // its toast's Undo would restore it again
     setRestoring(p.id);
     setError(null);
     setNotice(null);
@@ -176,6 +187,7 @@ export function ProjectList(): ReactElement {
                   onDeleted={() => {
                     setNotice(deletedNotice(p.name, me));
                     reload();
+                    showDeletedToast(p.id, p.name);
                   }}
                   onGone={() => {
                     // The row was stale (no live channel, ruling C17): someone else deleted it; the reload catches up.

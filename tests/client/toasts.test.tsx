@@ -3,11 +3,16 @@
 // most, the oldest leaving first; a newer toast of a key replaces the older at once; an action runs once, and its toast leaves without
 // saying it expired — and the region's markup: polite, never an alert, with Undo and Dismiss. Fix round 1: a toast shown while the drawer is
 // open waits behind it, undrawn and with its time still, and one drawn before stays drawn, paused (P2-R56, P2-R56a); a toast leaves before
-// its action runs (P2-R58); the limit never takes a toast someone holds (M3); the region follows the page's visibility (M2).
+// its action runs (P2-R58); the limit never takes a toast someone holds (M3); the region follows the page's visibility (M2). Task 9b: the time
+// left of a toast drawn before the drawer opens, and a deleted project's toast, whose Undo restores it (a 409 counts as done, a 404 says so).
 
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { ApiError } from '../../src/client/api/client.ts';
+import { showDeletedToast } from '../../src/client/components/DeleteProject.tsx';
 import { followVisibility, ToastList } from '../../src/client/components/Toasts.tsx';
+import { leaveDeletedProject, takeDeletedNotice } from '../../src/client/state/deleted-notice.ts';
+import { getProjectsChanged } from '../../src/client/state/projects-changed.ts';
 import {
   createToastStore, dismissToast, showToast, TOAST_EXIT_MS, TOAST_LIMIT, TOAST_MS, toasts, type ToastStore,
 } from '../../src/client/state/toasts.ts';
@@ -171,6 +176,45 @@ describe('the toast store', () => {
     expect(toasts.getSnapshot().find((t) => t.id === id)).toEqual({ id, text: 'Command copied', leaving: false });
     dismissToast(id); vi.advanceTimersByTime(TOAST_EXIT_MS);
     expect(toasts.getSnapshot().some((t) => t.id === id)).toBe(false);
+  });
+
+  // ---- Task 9b: the time a toast drawn before the drawer opens has left (the deferred minor of 9a), and Undo for a deleted project ----
+
+  it('keeps the time left of a toast drawn before the drawer opens, and runs it out once the drawer closes', () => {
+    const id = store.show('Created “Steel”'); vi.advanceTimersByTime(300); store.setInert(true); vi.advanceTimersByTime(30_000);
+    expect(find(id)!.leaving).toBe(false);
+    store.setInert(false); vi.advanceTimersByTime(TOAST_MS - 300 - 1); expect(find(id)!.leaving).toBe(false);
+    vi.advanceTimersByTime(1); expect(find(id)!.leaving).toBe(true);
+  });
+
+  it('restores a deleted project from its toast; a 409 counts as done, a 404 says it could not', async () => {
+    const before = getProjectsChanged();
+    showDeletedToast('p1', 'Steel', { restore: vi.fn(async () => ({})), toasts: store });
+    expect(store.getSnapshot()[0]).toMatchObject({ text: 'Deleted “Steel”', key: 'project:p1' }); store.act(store.getSnapshot()[0]!.id);
+    await vi.waitFor(() => expect(getProjectsChanged()).toBe(before + 1));
+    showDeletedToast('p2', 'Iron', { restore: vi.fn(async () => { throw new ApiError(409, 'not-deleted', 'not deleted'); }), toasts: store });
+    store.act(store.getSnapshot().find((t) => t.key === 'project:p2')!.id); await vi.waitFor(() => expect(getProjectsChanged()).toBe(before + 2));
+    showDeletedToast('p3', 'Gold', { restore: vi.fn(async () => { throw new ApiError(404, 'not-found', 'gone'); }), toasts: store });
+    store.act(store.getSnapshot().find((t) => t.key === 'project:p3')!.id);
+    await vi.waitFor(() => expect(store.getSnapshot().map((t) => t.text)).toContain('Could not restore “Gold”')); expect(getProjectsChanged()).toBe(before + 2);
+  });
+
+  it('restores the project its toast names, takes the notice the list was to show, and answers the toast\'s id', async () => {
+    const restore = vi.fn(async (_id: string) => ({}));
+    vi.stubGlobal('location', { pathname: '/p/p 1', search: '', hash: '', href: 'http://planner.test/p/p%201' });
+    vi.stubGlobal('history', { pushState: () => {} });
+    try {
+      leaveDeletedProject('Steel', 'Ann');                                     // the page left for the list, which has not taken it yet
+      const id = showDeletedToast('p 1', 'Steel', { restore, toasts: store });
+      expect(store.getSnapshot().map((t) => [t.id, t.text, t.action?.label])).toEqual([[id, 'Deleted “Steel”', 'Undo']]);
+      const before = getProjectsChanged();
+      store.act(id);
+      await vi.waitFor(() => expect(getProjectsChanged()).toBe(before + 1));
+      expect(restore).toHaveBeenCalledWith('p 1');
+      expect(takeDeletedNotice()).toBeNull();                                  // "Steel was deleted by Ann" no longer holds
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 

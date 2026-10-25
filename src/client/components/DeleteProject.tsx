@@ -1,11 +1,37 @@
 // Deleting a project (spec §3.11, architecture §11.24), on the project page and on each row of the project list: a
 // button that opens an inline confirmation (never a browser dialog), whose Delete works only once the typed text is the
-// project's name exactly.
+// project's name exactly. A project deleted here says so in a toast, whose Undo restores it (Phase 2 spec §12.1).
 
 import { useState, type FormEvent, type ReactElement } from 'react';
-import { messageOf } from '../api/client.ts';
-import { deleteProject } from '../api/projects.ts';
+import { ApiError, messageOf } from '../api/client.ts';
+import { deleteProject, restoreProject } from '../api/projects.ts';
 import { isProjectGone } from '../api/sse.ts';
+import { takeDeletedNotice } from '../state/deleted-notice.ts';
+import { bumpProjectsChanged } from '../state/projects-changed.ts';
+import { toasts, type ToastStore } from '../state/toasts.ts';
+
+/**
+ * Says that this tab deleted project `id` (Phase 2 spec §12.1), with Undo, which restores it: the App's region outlives the page, so the
+ * project page's toast is there on the list it leaves for. A project back (or one someone else restored first: `409 not-deleted`) takes
+ * the "was deleted" notice the list was to show and tells the list to load again; any other failure (a project purged since: 404) says it
+ * could not. The key is the project's, so the list's own Restore takes the toast away. Returns the toast's id.
+ */
+export function showDeletedToast(
+  id: string, name: string, deps: { restore(id: string): Promise<unknown>; toasts: ToastStore } = { restore: restoreProject, toasts },
+): number {
+  const back = (): void => {
+    takeDeletedNotice();
+    bumpProjectsChanged();
+  };
+  const undo = {
+    label: 'Undo',
+    run: () => deps.restore(id).then(back, (err: unknown) => {
+      if (err instanceof ApiError && err.code === 'not-deleted') back();
+      else deps.toasts.show(`Could not restore “${name}”`);
+    }),
+  };
+  return deps.toasts.show(`Deleted “${name}”`, { key: `project:${id}`, action: undo });
+}
 
 /**
  * Deletes the project: 'deleted' once the server did, 'gone' when it answers that there is no such project any more

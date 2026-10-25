@@ -1,12 +1,12 @@
 // The project's notes (spec §3.7, §3.11): anyone can add, edit or delete one, and everyone sees who wrote it and when.
-// Notes with a map pin (added from Plan 4's map) show where they point.
+// Notes with a map pin (added from Plan 4's map) show where they point. A deleted note's toast offers Undo (Phase 2 spec §12.2).
 
 import { useState, type FormEvent, type ReactElement } from 'react';
 import { MAX_NOTE_LENGTH } from '../../shared/project/apply-op.ts';
 import type { Plan } from '../../shared/types/plan.ts';
-import type { Note } from '../../shared/types/project.ts';
+import type { Note, ProjectOp } from '../../shared/types/project.ts';
 import { localTime } from '../format.ts';
-import { showToast } from '../state/toasts.ts';
+import { dismissToast, showToast } from '../state/toasts.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
 
 /** A random UUID; crypto.randomUUID exists only on HTTPS and localhost, and friends reach the planner over plain HTTP. */
@@ -24,8 +24,8 @@ function pinText(pin: NonNullable<Note['pin']>, plan: Plan | null): string {
   return `Pin: ${pin.x} ${pin.y} ${pin.z} (${dim})`;
 }
 
-function NoteItem(props: { note: Note; plan: Plan | null; send: ProjectViewProps['send'] }): ReactElement {
-  const { note, plan, send } = props;
+function NoteItem(props: { note: Note; plan: Plan | null; send: ProjectViewProps['send']; sendLater: ProjectViewProps['sendLater'] }): ReactElement {
+  const { note, plan, send, sendLater } = props;
   const [draft, setDraft] = useState<string | null>(null);
   const save = (e: FormEvent<HTMLFormElement>): void => {
     e.preventDefault();
@@ -34,7 +34,18 @@ function NoteItem(props: { note: Note; plan: Plan | null; send: ProjectViewProps
     setDraft(null);
   };
   const remove = (): void => {
-    if (confirm('Delete this note for everyone?')) send([{ op: 'deleteNote', id: note.id }]);
+    if (!confirm('Delete this note for everyone?')) return;
+    const ops: ProjectOp[] = [{ op: 'deleteNote', id: note.id }];
+    if (sendLater === undefined) {
+      send(ops);
+      return;
+    }
+    // No op brings a note back (adding it again would make whoever undoes it its author, now, last), so the delete waits in the page's store
+    // while the toast offers Undo, and is posted once the toast has gone (Phase 2 spec §12.2), or as the page goes. Posted, it has no Undo
+    // left, so it takes the toast away.
+    const key = `note:${note.id}`;
+    const later = sendLater(ops, { onFlush: () => dismissToast(key) });
+    showToast('Note deleted', { key, action: { label: 'Undo', run: () => later.cancel() }, onExpire: () => later.flush() });
   };
   return (
     <li className="note" data-note-id={note.id}>
@@ -66,7 +77,7 @@ function NoteItem(props: { note: Note; plan: Plan | null; send: ProjectViewProps
 }
 
 export function NotesView(props: ProjectViewProps): ReactElement {
-  const { project, plan, send } = props;
+  const { project, plan, send, sendLater } = props;
   const [text, setText] = useState('');
   const add = (e: FormEvent<HTMLFormElement>): void => {
     e.preventDefault();
@@ -82,7 +93,7 @@ export function NotesView(props: ProjectViewProps): ReactElement {
         <p className="muted">No notes yet.</p>
       ) : (
         <ul className="note-list">
-          {project.notes.map((note) => <NoteItem key={note.id} note={note} plan={plan} send={send} />)}
+          {project.notes.map((note) => <NoteItem key={note.id} note={note} plan={plan} send={send} sendLater={sendLater} />)}
         </ul>
       )}
       <form className="note-add" onSubmit={add}>

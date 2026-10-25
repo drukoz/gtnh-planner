@@ -29,7 +29,13 @@ async function errorOf(res: Response): Promise<ApiError> {
   return new ApiError(res.status, code, message);
 }
 
-async function call<T>(method: 'GET' | 'POST' | 'DELETE', path: string, body?: unknown): Promise<T> {
+/**
+ * How a call is made. `keepalive` lets it outlive the page that makes it: a deferred send posted as the page goes (Phase 2 spec §12.2), which
+ * the browser would otherwise cancel with the page.
+ */
+export interface CallOptions { keepalive?: boolean }
+
+async function call<T>(method: 'GET' | 'POST' | 'DELETE', path: string, body?: unknown, opts: CallOptions = {}): Promise<T> {
   const headers: Record<string, string> = { Accept: 'application/json' };
   const name = getName();
   if (name !== null) headers[NAME_HEADER] = encodeURIComponent(name);
@@ -38,6 +44,7 @@ async function call<T>(method: 'GET' | 'POST' | 'DELETE', path: string, body?: u
     headers['Content-Type'] = 'application/json';
     init.body = JSON.stringify(body);
   }
+  if (opts.keepalive === true) init.keepalive = true;
   const res = await fetch(path, init);
   if (res.status === 401 && location.pathname !== '/login') {
     // The login form itself gets 401 for a wrong password and shows it; everywhere else it means "log in again".
@@ -52,8 +59,8 @@ export function apiGet<T>(path: string): Promise<T> {
   return call<T>('GET', path);
 }
 
-export function apiPost<T>(path: string, body: unknown): Promise<T> {
-  return call<T>('POST', path, body);
+export function apiPost<T>(path: string, body: unknown, opts?: CallOptions): Promise<T> {
+  return call<T>('POST', path, body, opts);
 }
 
 /** Same headers, 401 redirect and ApiError as apiPost; resolves on 204 (architecture §11.23). */

@@ -6,9 +6,11 @@
 // project a target, without which the drawer opens by itself and the head, the name with it, is inert. A toast drawn before the drawer opens
 // stays drawn and paused behind it, so it is heard once ("Created", on a narrow window: ledger ruling P2-R56a); a command copied inside the
 // drawer says so in place, and makes no toast (P2-R56). Undo or Dismiss from the keyboard moves the focus on before the toast goes (P2-R57),
-// and a rename's toast goes with its page (P2-R54). Task 9b adds the deleted project and note.
+// and a rename's toast goes with its page (P2-R54). Task 9b adds the deleted project, whose Undo restores it on the list it leaves for, and
+// the deleted note, whose delete waits out its toast in the page's store and is posted then, or at once as the page goes (Phase 2 spec
+// §12.2); and the page posts its changes one at a time, so an Undo never lands before what it undoes (ledger ruling P2-R59).
 
-import { test, expect, type Locator, type Page } from '@playwright/test';
+import { test, expect, type Browser, type Locator, type Page, type Route } from '@playwright/test';
 import { circuitLv } from './fixtures/plans.ts';
 import { createProject, login, LV_CIRCUITS, openWithPlan, setName, SETTINGS_BUTTON } from './helpers.ts';
 
@@ -25,8 +27,8 @@ async function rename(page: Page, name: string): Promise<void> {
 
 /**
  * Waits until project `id` is named `name` on the server. A rename and its Undo are two posts, which the server applies in the order their
- * bodies reach it: an Undo pressed the moment the rename is sent, as a test can and a person hardly does, may land first and be undone by
- * the rename itself (the task 9a report's concerns). So a test that undoes a rename lets the rename land first.
+ * bodies reach it. The page posts them one at a time since Task 9b (ledger ruling P2-R59, pinned below by 'an Undo pressed while its rename
+ * is still on its way…'); the tests that undo a rename for something else still let the rename land first, so each checks one thing.
  */
 async function landed(page: Page, id: string, name: string): Promise<void> {
   await expect.poll(async () => ((await (await page.request.get(`/api/projects/${id}`)).json()) as { name: string }).name).toBe(name);
@@ -379,4 +381,227 @@ test('a pointer\'s Dismiss leaves the focus alone, and the toast beside keeps it
   await expect(older.getByRole('button', { name: 'Dismiss' })).not.toBeFocused();
   await page.mouse.move(5, 5);
   await expect(older).toHaveCount(0, { timeout: 8000 });                                   // nothing holds it: it goes in its time
+});
+
+// ---- Task 9b: Undo for a deleted project or note (Phase 2 spec §12.1, §12.2), and one post at a time (ledger ruling P2-R59) ----
+
+/** Deletes the open project from its page, as a person does: its name typed into the confirmation. */
+async function deleteProject(page: Page, name: string): Promise<void> {
+  await page.getByRole('button', { name: 'Delete project' }).click();
+  const form = page.getByRole('form', { name: 'Confirm delete' });
+  await form.getByLabel('Type the project name to confirm').fill(name);
+  await form.getByRole('button', { name: 'Delete', exact: true }).click();
+}
+
+/** Project `name`'s row under "Recently deleted" on the list (delete.spec.ts's `deletedRow`). */
+const deletedRow = (page: Page, name: string): Locator =>
+  page.getByRole('region', { name: 'Recently deleted' }).getByRole('listitem').filter({ hasText: name });
+
+/** A name for this run's project: the e2e server is shared by every run, and the list finds a project by its name. */
+const runName = (name: string): string => `${name} ${test.info().repeatEachIndex + 1}`;
+
+test('deleting a project from its page offers Undo, which brings it back', async ({ page }) => {
+  await login(page); await setName(page, 'Ann');
+  const name = runName('Toasts deleted');
+  await createProject(page, name);
+  await deleteProject(page, name);
+  await expect(page).toHaveURL(/\/$/);
+  const toast = toastOf(page, `Deleted “${name}”`);
+  await expect(toast).toBeVisible();                                                      // on the list the page left for
+  await expect(page.getByText(`${name} was deleted by Ann`)).toHaveCount(1);
+  await expect(deletedRow(page, name)).toContainText('Deleted by Ann');
+  await toast.getByRole('button', { name: 'Undo' }).click();
+  await expect(page.getByRole('link', { name, exact: true })).toBeVisible();
+  await expect(deletedRow(page, name)).toHaveCount(0);
+  await expect(page.getByText(`${name} was deleted by Ann`)).toHaveCount(0);              // the notice no longer holds
+  await expect(toast).toHaveCount(0);
+});
+
+// Spec §12.1: the toast's key is the project's, so the list's own Restore takes it away (its Undo would restore it again)
+test('a project deleted from its row offers Undo too, and the list\'s own Restore takes that toast away', async ({ page }) => {
+  await login(page); await setName(page, 'Cy');
+  const name = runName('Toasts row deleted');
+  await createProject(page, name);
+  await page.goto('/');
+  const row = page.locator('.project-card').filter({ has: page.getByRole('link', { name, exact: true }) });
+  await row.getByRole('button', { name: 'Delete' }).click();
+  const form = row.getByRole('form', { name: 'Confirm delete' });
+  await form.getByLabel('Type the project name to confirm').fill(name);
+  await form.getByRole('button', { name: 'Delete', exact: true }).click();
+  const toast = toastOf(page, `Deleted “${name}”`);
+  await expect(toast.getByRole('button', { name: 'Undo' })).toBeVisible();
+  await expect(page.getByText(`${name} was deleted by Cy`)).toHaveCount(1);
+  await deletedRow(page, name).getByRole('button', { name: 'Restore' }).click();
+  await expect(toast).toHaveCount(0, { timeout: 2000 });                                  // well inside the 5 s it would have lived
+  await expect(page.getByRole('link', { name, exact: true })).toBeVisible();
+  await expect(deletedRow(page, name)).toHaveCount(0);
+});
+
+/** Adds a note to project `id` through the API, as `by`, the way connections.spec.ts posts its ops. */
+async function addNote(page: Page, id: string, note: { id: string; text: string }, by: string): Promise<void> {
+  const res = await page.request.post(`/api/projects/${id}/ops`, { data: { ops: [{ op: 'addNote', note }] }, headers: { 'X-Planner-Name': by } });
+  expect(res.ok(), await res.text()).toBe(true);
+}
+
+/** Project `id`'s notes on the server. */
+async function notesOf(page: Page, id: string): Promise<Array<{ id: string; text: string; by: string; at: string }>> {
+  return ((await (await page.request.get(`/api/projects/${id}`)).json()) as { notes: Array<{ id: string; text: string; by: string; at: string }> }).notes;
+}
+
+/** A page of its own browser, logged in as `name`. */
+async function browserOf(browser: Browser, name: string): Promise<Page> {
+  const page = await (await browser.newContext()).newPage();
+  await login(page); await setName(page, name);
+  return page;
+}
+
+/** A project of its own with one note, Bob's, open at its Notes tab on a page logged in as Ann; resolves with its id. */
+async function oneNote(page: Page, name: string, text: string): Promise<string> {
+  page.on('dialog', (d) => void d.accept());                                              // the note delete still confirms (Task 10 takes it out)
+  const id = await createProject(page, name);
+  await addNote(page, id, { id: 'n1', text }, 'Bob');
+  await page.goto(`/p/${id}#notes`);
+  await expect(page.locator('.note-text')).toHaveText(text);
+  return id;
+}
+
+test('deleting a note offers Undo, which keeps its author, time and place', async ({ page }) => {
+  page.on('dialog', (d) => void d.accept());                                              // the note delete still confirms (Task 10 takes it out)
+  await login(page); await setName(page, 'Ann');
+  const id = await createProject(page, 'Toasts note undone');
+  await addNote(page, id, { id: 'first', text: 'Bob\'s note, first' }, 'Bob');
+  await addNote(page, id, { id: 'second', text: 'Ann\'s note, second' }, 'Ann');
+  await page.goto(`/p/${id}#notes`);
+  const first = page.locator('.note').first();
+  await expect(first.locator('.note-text')).toHaveText('Bob\'s note, first');
+  const at = await first.locator('time').getAttribute('datetime');
+  await first.getByRole('button', { name: 'Delete' }).click();
+  const toast = toastOf(page, 'Note deleted');
+  await expect(toast).toBeVisible();
+  await expect(page.locator('.note-text')).toHaveText(['Ann\'s note, second']);
+  await toast.getByRole('button', { name: 'Undo' }).click();
+  await expect(page.locator('.note-text')).toHaveText(['Bob\'s note, first', 'Ann\'s note, second']);
+  await page.reload();
+  const back = page.locator('.note').first();
+  await expect(back.locator('.note-text')).toHaveText('Bob\'s note, first');
+  await expect(back.locator('.note-by')).toHaveText('Bob');
+  await expect(back.locator('time')).toHaveAttribute('datetime', at!);
+  expect((await notesOf(page, id)).map((n) => n.id)).toEqual(['first', 'second']);
+});
+
+test('a note deleted without Undo reaches another browser within 7 s', async ({ browser }) => {
+  const pa = await browserOf(browser, 'Ann');
+  const pb = await browserOf(browser, 'Bob');
+  const id = await oneNote(pa, 'Toasts note gone', 'gone in 5 s');
+  await pb.goto(`/p/${id}#notes`);
+  await expect(pb.locator('.note-text')).toHaveText('gone in 5 s');
+  await expect(pb.locator('.connection.live')).toBeVisible();                             // B's event stream is open
+  await pa.locator('.note').getByRole('button', { name: 'Delete' }).click();
+  await expect(toastOf(pa, 'Note deleted')).toBeVisible();
+  await expect(pa.locator('.note')).toHaveCount(0);
+  await expect(pb.locator('.note')).toHaveCount(0, { timeout: 7000 });
+  await expect(toastOf(pa, 'Note deleted')).toHaveCount(0);                               // posted as its toast went, so its Undo has gone
+  await pa.context().close(); await pb.context().close();
+});
+
+/**
+ * Has the page note down, for each op post it makes, whether it asks the browser to keep the post alive past the page (`keepalive`), in the
+ * tab's session storage, which a reload keeps; read with `keptAlive`. On this machine's server a plain post made as the page goes arrives
+ * anyway, so only this shows that the post was made to outlive the page, as it must on a slower network.
+ */
+async function noteKeepalive(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const send = window.fetch.bind(window);
+    window.fetch = (input, init) => {
+      if (init?.method === 'POST' && String(input).endsWith('/ops')) {
+        const kept = JSON.parse(sessionStorage.getItem('test-ops-keepalive') ?? '[]') as boolean[];
+        sessionStorage.setItem('test-ops-keepalive', JSON.stringify([...kept, init.keepalive === true]));
+      }
+      return send(input, init);
+    };
+  });
+}
+const keptAlive = (page: Page): Promise<boolean[]> =>
+  page.evaluate(() => JSON.parse(sessionStorage.getItem('test-ops-keepalive') ?? '[]') as boolean[]);
+
+// Review Focus 3: a note deleted moments before its page goes must still reach the server, or it comes back. A reload hides the page for
+// good (pagehide): the delete is posted then, with keepalive, so it outlives the page that sends it
+test('a note deleted just before a reload stays deleted', async ({ page }) => {
+  await noteKeepalive(page);
+  await login(page); await setName(page, 'Ann');
+  const id = await oneNote(page, 'Toasts note reloaded', 'deleted, then reloaded');
+  await page.locator('.note').getByRole('button', { name: 'Delete' }).click();
+  await expect(toastOf(page, 'Note deleted')).toBeVisible();
+  await page.reload();
+  await expect(page.getByLabel('Add a note')).toBeVisible();                              // the notes are drawn again
+  await expect(page.locator('.note-text')).toHaveCount(0);
+  await expect.poll(() => notesOf(page, id)).toEqual([]);
+  expect(await keptAlive(page), 'the delete was the one post, made to outlive its page').toEqual([true]);
+});
+
+// Review Focus 3, going back to the list: the page's store closes, and posts the delete as it does (spec §12.2). The note's Undo would act
+// through that store, so its toast goes with its page, as a rename's does (ledger ruling P2-R54)
+test('a note deleted just before going back to the list stays deleted, and its toast goes with its page', async ({ page }) => {
+  await noteKeepalive(page);
+  await login(page); await setName(page, 'Ann');
+  const id = await oneNote(page, 'Toasts note left', 'deleted, then left');
+  await page.locator('.note').getByRole('button', { name: 'Delete' }).click();
+  const toast = toastOf(page, 'Note deleted');
+  await expect(toast).toBeVisible();
+  await page.getByRole('navigation', { name: 'Pages' }).getByRole('link', { name: 'Projects' }).click();
+  await expect(page.locator('form.new-project')).toBeVisible();
+  await expect(toast).toHaveCount(0, { timeout: 2000 });                                  // well inside the 5 s it would have lived
+  await expect.poll(() => notesOf(page, id), { timeout: 2000 }).toEqual([]);
+  expect(await keptAlive(page), 'the delete was the one post, made to outlive its page').toEqual([true]);
+});
+
+// Review Focus 3, closing the tab: the page is hidden for good, as for a reload
+test('a note deleted just before its tab closes stays deleted', async ({ browser }) => {
+  const page = await browserOf(browser, 'Ann');
+  const id = await oneNote(page, 'Toasts note closed', 'deleted, then closed');
+  await page.locator('.note').getByRole('button', { name: 'Delete' }).click();
+  await expect(toastOf(page, 'Note deleted')).toBeVisible();
+  const asking = page.context().request;
+  await page.close();
+  await expect.poll(async () => ((await (await asking.get(`/api/projects/${id}`)).json()) as { notes: unknown[] }).notes).toEqual([]);
+  await page.context().close();
+});
+
+// Ledger ruling P2-R59: a project's op batches are posted one at a time, in order, the next once the one before has been answered, so the
+// server, which applies them in the order they reach it, never applies a rename after its own Undo. Every op post of the page is held here
+// until the test lets it go, and the page counts the posts it makes. The rename is held on its way, Undo is pressed, and the posts the page
+// has made are let go newest first, each landing before the next goes: the order in which the old client's Undo, posted at once, landed
+// first and was then undone by its rename.
+test('an Undo pressed while its rename is still on its way lands after it, so the name it gave back stays', async ({ page }) => {
+  await page.addInitScript(() => {
+    const w = window as unknown as { opsPosted: number };
+    w.opsPosted = 0;
+    const send = window.fetch.bind(window);
+    window.fetch = (input, init) => {
+      if (init?.method === 'POST' && String(input).endsWith('/ops')) w.opsPosted += 1;
+      return send(input, init);
+    };
+  });
+  const posted = (): Promise<number> => page.evaluate(() => (window as unknown as { opsPosted: number }).opsPosted);
+  await login(page); await setName(page, 'Ann');
+  const id = await createProject(page, 'Toasts in turn');
+  const field = page.getByRole('textbox', { name: 'Project name' });
+  const held: Route[] = [];
+  let holding = true;
+  await page.route(`**/api/projects/${id}/ops`, (route) => {
+    if (holding) held.push(route);
+    else void route.continue();
+  });
+  await rename(page, 'Toasts in turn, renamed');
+  await expect.poll(() => held.length, { message: 'the rename is held on its way' }).toBe(1);
+  await toastOf(page, 'Renamed to “Toasts in turn, renamed”').getByRole('button', { name: 'Undo' }).click();
+  await expect(field).toHaveValue('Toasts in turn');
+  const sent = await posted();
+  await expect.poll(() => held.length, { message: 'every post the page made has reached the route' }).toBe(sent);
+  holding = false;
+  for (const route of [...held].reverse()) await route.fulfill({ response: await route.fetch() });   // the newest first, each landed
+  await expect.poll(posted, { message: 'the Undo is posted once the rename has landed' }).toBe(2);
+  await landed(page, id, 'Toasts in turn');
+  await expect(field).toHaveValue('Toasts in turn');
+  expect(sent, 'the Undo waited for the rename\'s answer').toBe(1);
 });

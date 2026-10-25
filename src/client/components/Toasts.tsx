@@ -50,8 +50,8 @@ function focusMain(): void {
  * Before the toast of `button` goes from under the focus (its Undo, `acting`, or its Dismiss), the focus moves on (P2-R57): back to where it came
  * into the region from, while that is in the page and not inert, and, for an Undo, not a field that takes typing (a field being edited keeps its
  * draft, so the project's name would keep the name the Undo takes back and send it again on its blur); else to the same button of the next toast
- * still showing, after this one or else before it (Dismiss, which every toast has, for an Undo that one lacks); else to the page's main. A focus
- * that is not in the toast (a pointer's press that took none) is left where it is.
+ * still showing, after this one or else before it (Dismiss, which every toast has, for an Undo that one lacks); else to the page's main. Only a
+ * press with no click count reaches it (the keyboard's, or a script's `click()`, M6), and a focus that is not in the toast is left where it is.
  */
 function moveFocusOff(button: HTMLElement, acting: boolean): void {
   const toast = button.closest('li');
