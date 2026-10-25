@@ -12,9 +12,13 @@ import { emptyContext, planLine, type SolveTuning } from '../../../src/server/pl
 import { normalizeSettings } from '../../../src/shared/project/apply-op.ts';
 import { defaultFarmSettings, type FarmSettings } from '../../../src/shared/types/farm.ts';
 import type { Pack } from '../../../src/shared/types/pack.ts';
-import { DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_STEP_CHARGE, FREE_KEYS, type Plan, type PlanSettings } from '../../../src/shared/types/plan.ts';
+import { DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_STEP_CHARGE, type Plan, type PlanSettings } from '../../../src/shared/types/plan.ts';
 import { buildObjective } from '../../helpers/build-objective.ts';
 import { REFERENCE, localDocPath, storedSettings } from '../../helpers/local-docs.ts';
+import { STEEL_INGOT } from '../../helpers/real-build-cases.ts';
+import {
+  COPPER_INGOT, REFERENCE_BASE, REFERENCE_BLOCKS, REFERENCE_RAW_KINDS, REF_RAW, ROD_EXTRUDER, ROD_LATHE, machineBlocks, rawPerMinute,
+} from '../../helpers/real-reference.ts';
 
 const GLASS_TUBE = 'gregtech:gt.metaitem.03@32012';
 /**
@@ -32,9 +36,6 @@ const REF_IDS: readonly string[] = [
   '85e9bdddf3f2bced', '85eaebd6c5132556', '922523df6bc22ca3', '960dc3ce801a4e96', 'c0106c4cb6b4b041', 'c19837cccfcebc98', 'd25f29069b92783e',
   'd528af67b884c660', 'fd5543a5f831c58b',
 ];
-/** Its Steel Rod on the Lathe, and on the Extruder (2 rods an ingot), which the spec allows in its place. */
-const ROD_LATHE = '3b34f87f2984fe95';
-const ROD_EXTRUDER = '31693ed806ba0a95';
 /**
  * Its Molten Tin from Tin Dust, and the same recipe on a Tin Ingot at the same raw price, which the reference accepts in
  * its place (controller ruling 201, option (i) on the tin twin: the user's base materials are ingots).
@@ -43,27 +44,6 @@ const TIN_FROM_DUST = '1197004ce4210fc5';
 const TIN_FROM_INGOT = 'd4bfdccc8c512446';
 /** Its centrifuge step: Rubber Wood on circuit 2, 3 Centrifuges at MV. */
 const RUBBER_WOOD_CENTRIFUGE = '85e9bdddf3f2bced';
-const TIN_DUST = 'gregtech:gt.metaitem.01@2057';
-const TIN_INGOT = 'gregtech:gt.metaitem.01@11057';
-const STEEL_INGOT = 'gregtech:gt.metaitem.01@11305';
-/**
- * The reference's raw materials (the user's ruling 179: Rubber Wood, Copper Ingot, Steel Ingot, Tin Dust, Redstone, Sand;
- * tin as dust or ingot, controller ruling 201) and the free inputs.
- */
-const REFERENCE_RAW_KINDS: ReadonlySet<string> = new Set([
-  'IC2:blockRubWood@0', 'gregtech:gt.metaitem.01@11035', STEEL_INGOT, 'gregtech:gt.metaitem.01@2057', 'gregtech:gt.metaitem.01@11057', 'minecraft:redstone@0',
-  'minecraft:sand@0', ...FREE_KEYS,
-]);
-/**
- * The reference's machine blocks (the acceptance spec's R1: its 12 machine steps, one of them 3 Centrifuges, and its 4
- * crafting steps on Auto Workbenches), the bound of the user's ruling 179: fixed, not the planner's re-plan of the pinned
- * reference at each horizon, which moves across the sweep (add-on 12 ledger :243, plan 12's final review).
- */
-const REFERENCE_BLOCKS = 18;
-/** Its raw material per minute (the acceptance spec's REF_RAW): tin as dust or ingot (controller ruling 201). */
-const REF_RAW: Readonly<Record<string, number>> = {
-  'IC2:blockRubWood@0': 32, 'gregtech:gt.metaitem.01@11035': 11.25, [STEEL_INGOT]: 4, tin: 1, 'minecraft:redstone@0': 5, 'minecraft:sand@0': 2,
-};
 /** Add-on 17's farms off (its ruling S15: an expectation its farms change keeps its subject, its farms-on plan logged beside it). */
 const FARMS_OFF = { ...defaultFarmSettings(), kinds: [] };
 
@@ -71,23 +51,6 @@ const local = process.env.GTNH_LOCAL === '1';
 /** The reference file: `GTNH_REFERENCE` when set, else in this checkout, else in the main checkout (`localDocPath`). */
 const path = local ? localDocPath(REFERENCE, process.env.GTNH_REFERENCE) : undefined;
 if (local && path === undefined) console.log(`real-reference: skipped, no ${REFERENCE} (the user's private reference settings)`);
-
-/** The acceptance spec's machine blocks: the machines of every step not crafted by hand, a sharing pool once (Auto Workbenches count). */
-function machineBlocks(plan: Plan): number {
-  let blocks = 0;
-  for (const step of plan.steps) if (!step.handCraft && (step.pool === undefined || step.pool.steps[0] === step.id)) blocks += step.count;
-  return blocks;
-}
-
-/** The plan's raw material per minute by key, tin dust and tin ingot as one `tin`. */
-function rawPerMinute(plan: Plan): Record<string, number> {
-  const out: Record<string, number> = {};
-  for (const r of plan.rawInputs) {
-    const key = r.key === TIN_DUST || r.key === TIN_INGOT ? 'tin' : r.key;
-    out[key] = (out[key] ?? 0) + r.perSecond * 60;
-  }
-  return out;
-}
 
 /**
  * The plan's step recipes, sorted, with the Extruder's rods read as the Lathe's (which the spec allows) and the Tin Ingot
@@ -303,7 +266,7 @@ describe.skipIf(path === undefined)("the user's reference Electronic Circuit flo
     // stops include Molten Redstone Alloy, which BASE leaves out). A1: no pins, stops Copper Ingot + Steel Ingot, Rubber Wood
     // at 0 (add-on 17's farm stand-in), crafting automated, the stored step charge. This fix owns A1 (b); (c) and (e) hold
     // too and are asserted; (a)'s time, (d)'s machine blocks and (f) belong to other lanes and are logged only.
-    const base = [...REFERENCE_RAW_KINDS].filter((key) => !FREE_KEYS.includes(key));
+    const base = [...REFERENCE_BASE];
     const outside = (plan: Plan): string[] => plan.rawInputs.map((r) => r.key).filter((key) => !REFERENCE_RAW_KINDS.has(key));
     const v4 = await timed({ ...stored, recipeChoice: {}, inputsOnly: base });
     logPlan('V4 + BASE', v4.plan, v4.seconds);
@@ -311,7 +274,7 @@ describe.skipIf(path === undefined)("the user's reference Electronic Circuit flo
     expect(outside(v4.plan)).toEqual([]);
     expect(v4.plan.warnings.filter((w) => w.code === 'stop-outside-inputs').map((w) => w.key)).toEqual(['fluid:molten.redstonealloy']);
     const a1: PlanSettings = {
-      ...stored, recipeChoice: {}, stopItems: ['gregtech:gt.metaitem.01@11035', STEEL_INGOT], inputsOnly: base, automateCrafting: true,
+      ...stored, recipeChoice: {}, stopItems: [COPPER_INGOT, STEEL_INGOT], inputsOnly: base, automateCrafting: true,
       costOverrides: { ...stored.costOverrides, 'IC2:blockRubWood@0': 0 },
     };
     const mine = await timed(a1);

@@ -1,17 +1,19 @@
 // The build checks the real-data planner tests share (add-on 12 x 17 ruling R10: one copy of each): plan 12's
-// calibration lines (`CASES`, made with `at`), the line's build MIP run on its own as `planLine` solves it (`buildRun`),
-// and the new machine blocks a plan adds (`newBlocks`). real-build-cost.test.ts, real-raw-cap.test.ts and
-// real-board.test.ts import them. Pack keys and settings only, never anything from a world.
+// calibration lines (`CASES`, made with `at`), the machines a line's steps can run on and its settings owning two of each
+// (`candidateMachines`, `owning`: the calibration lines marked `owned`), the line's build MIP run on its own as
+// `planLine` solves it (`buildRun`), and the new machine blocks a plan adds (`newBlocks`). real-build-cost.test.ts,
+// real-raw-cap.test.ts and real-board.test.ts import them. Pack keys and settings only, never anything from a world.
 
+import { benchCapBy } from '../../src/server/planner/benches.ts';
 import type { CandidateGraph } from '../../src/server/planner/candidates.ts';
-import { lineBuildModel, type BuildModel } from '../../src/server/planner/machine-options.ts';
+import { lineBuildModel, optionMachines, type BuildModel } from '../../src/server/planner/machine-options.ts';
 import { runningSupplies } from '../../src/server/planner/objective.ts';
 import { groupStock, solveOptions, stockForm } from '../../src/server/planner/plan.ts';
 import { linePricing } from '../../src/server/planner/pricing.ts';
 import { solveLine, type Solution } from '../../src/server/planner/solve.ts';
 import type { StuffKey } from '../../src/shared/keys.ts';
 import { defaultSettings } from '../../src/shared/project/apply-op.ts';
-import type { Pack } from '../../src/shared/types/pack.ts';
+import type { Machine, Pack } from '../../src/shared/types/pack.ts';
 import type { Plan, PlanContext, PlanSettings } from '../../src/shared/types/plan.ts';
 
 export const ELECTRONIC_CIRCUIT = 'IC2:itemPartCircuit@0';
@@ -45,6 +47,28 @@ export const CASES: readonly Case[] = [
   { name: 'Electronic Circuit LV on Project Red', settings: at(ELECTRONIC_CIRCUIT, 1, 1, { logistics: 'routed' }), owned: true },
   { name: 'Electronic Circuit LV on AE2', settings: at(ELECTRONIC_CIRCUIT, 1, 1, { logistics: 'ae2' }), owned: false },
 ];
+
+/**
+ * The machines the step recipes of `s`'s line on `pack` in `ctx` can run on (`optionMachines`, nothing owned): its
+ * basis's tier and multiblocks, its crafting and bench rules.
+ */
+export async function candidateMachines(pack: Pack, ctx: PlanContext, s: PlanSettings): Promise<Machine[]> {
+  const pricing = linePricing(pack, s, ctx);
+  if (pricing === null) throw new Error(`no line for ${s.target}`);
+  const { graph, basis } = await pricing;
+  const capBy = benchCapBy(s.logistics);
+  return optionMachines(pack, graph, {
+    groupTier: basis.tier, multiblocks: basis.env.multiblocks, automateCrafting: s.automateCrafting, ...(capBy === undefined ? {} : { benchCapBy: capBy }),
+  }, new Map());
+}
+
+/**
+ * `s` with `ownedManual` two of every machine `optionMachines` lists for its line's graph (`candidateMachines`): every
+ * step can run on owned machines at no build cost, so only the step charge bounds a free chain (plan review).
+ */
+export async function owning(pack: Pack, ctx: PlanContext, s: PlanSettings): Promise<PlanSettings> {
+  return { ...s, ownedManual: (await candidateMachines(pack, ctx, s)).map((m) => ({ mteId: m.mteId, count: 2 })) };
+}
 
 /** The line's build MIP run on its own, as `planLine` solves the line when nothing is avoided. */
 export interface BuildRun {

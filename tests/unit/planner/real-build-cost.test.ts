@@ -14,11 +14,9 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
 import { loadPack } from '../../../src/server/pack/load.ts';
-import { benchCapBy } from '../../../src/server/planner/benches.ts';
 import { buildKeys, itemPrices, machineBuildCost, machineGap } from '../../../src/server/planner/build-cost.ts';
-import { optionMachines, sharesMachines } from '../../../src/server/planner/machine-options.ts';
+import { sharesMachines } from '../../../src/server/planner/machine-options.ts';
 import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
-import { linePricing } from '../../../src/server/planner/pricing.ts';
 import type { Solution } from '../../../src/server/planner/solve.ts';
 import { tierName, V } from '../../../src/shared/gt/tiers.ts';
 import { isFluidKey, type StuffKey } from '../../../src/shared/keys.ts';
@@ -29,7 +27,8 @@ import { DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_RAW_CAP, DEFAULT_STEP_CHARGE, type
 import { buildObjective } from '../../helpers/build-objective.ts';
 import { REFERENCE, localDocPath, storedSettings } from '../../helpers/local-docs.ts';
 import {
-  CASES, ELECTRONIC_CIRCUIT, GOOD_ELECTRONIC_CIRCUIT, POLYETHYLENE_BAR, STEEL_INGOT, at, buildRun, newBlocks, type BuildRun, type Case,
+  CASES, ELECTRONIC_CIRCUIT, GOOD_ELECTRONIC_CIRCUIT, POLYETHYLENE_BAR, STEEL_INGOT, at, buildRun, candidateMachines, newBlocks, owning,
+  type BuildRun, type Case,
 } from '../../helpers/real-build-cases.ts';
 import { USER_EC_STORED } from '../../helpers/user-project.ts';
 
@@ -193,24 +192,6 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
     return { plan, seconds: (performance.now() - started) / 1000 };
   };
 
-  /** The machines the step recipes of `s`'s line can run on (`optionMachines`, nothing owned): its basis's tier and multiblocks, its crafting and bench rules. */
-  const candidateMachines = async (s: PlanSettings): Promise<Machine[]> => {
-    const pricing = linePricing(pack, s, ctx);
-    if (pricing === null) throw new Error(`no line for ${s.target}`);
-    const { graph, basis } = await pricing;
-    const capBy = benchCapBy(s.logistics);
-    return optionMachines(pack, graph, {
-      groupTier: basis.tier, multiblocks: basis.env.multiblocks, automateCrafting: s.automateCrafting, ...(capBy === undefined ? {} : { benchCapBy: capBy }),
-    }, new Map());
-  };
-
-  /**
-   * `s` with `ownedManual` two of every machine `optionMachines` lists for its line's graph (`candidateMachines`): every
-   * step can run on owned machines at no build cost, so only the step charge bounds a free chain (plan review).
-   */
-  const owning = async (s: PlanSettings): Promise<PlanSettings> =>
-    ({ ...s, ownedManual: (await candidateMachines(s)).map((m) => ({ mteId: m.mteId, count: 2 })) });
-
   /**
    * The line's build MIP on its own (`buildRun`, tests/helpers/real-build-cases.ts: as `planLine` solves it) on this
    * file's pack and context, with the group's stock (`stocked` false: none, the problem fix wave 3 (F) was set on) and
@@ -242,7 +223,7 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
   let measured = 0;
   /** Seconds the price table of `s`'s line takes on a memo key nothing priced yet (a cost override that matches nothing). */
   const priceTableSeconds = async (s: PlanSettings): Promise<number> => {
-    const machines = await candidateMachines(s);
+    const machines = await candidateMachines(pack, ctx, s);
     const fresh: PlanSettings = { ...s, costOverrides: { ...s.costOverrides, 'gregtech:gt.metaitem.01@99999': ++measured } };
     const started = performance.now();
     await itemPrices(pack, fresh, ctx, buildKeys(pack, machines));
@@ -287,7 +268,7 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
   }, 300_000);
 
   it.each(LABELLED)('plans $label with its build cost', async (c) => {
-    const s = c.owned ? await owning(c.settings) : c.settings;
+    const s = c.owned ? await owning(pack, ctx, c.settings) : c.settings;
     const { plan, seconds } = await timed(s);
     const ignored = (await timed({ ...s, buildHorizonHours: null })).plan;
     const { run } = await logPlan(c.label, s, plan, seconds, ignored);
@@ -338,7 +319,7 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
     // the build MIP at every cap, No limit included, and one of its starts under the raw cap. Before it, on fix wave 3's
     // prices with nothing capped, this line read 93,863.8 by the build MIP's measure against 77,698.9 ignoring build cost.
     const label = 'Electronic Circuit LV, two of every machine owned, at No limit';
-    const s: PlanSettings = { ...(await owning(at(ELECTRONIC_CIRCUIT, 1, 1))), rawCap: null };
+    const s: PlanSettings = { ...(await owning(pack, ctx, at(ELECTRONIC_CIRCUIT, 1, 1))), rawCap: null };
     const { plan, seconds } = await timed(s);
     const ignored = (await timed({ ...s, buildHorizonHours: null })).plan;
     const { run } = await logPlan(label, s, plan, seconds, ignored);
@@ -367,7 +348,7 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
     const worse: string[] = [];
     for (const [name, base] of lines) {
       for (const owned of [false, true]) {
-        const s = owned ? await owning(base) : base;
+        const s = owned ? await owning(pack, ctx, base) : base;
         const ignoring: PlanSettings = { ...s, buildHorizonHours: null };
         const label = `${name}${owned ? ', two of every machine owned' : ''}`;
         const withCost = await timed(s);
@@ -390,7 +371,7 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
           if (mine > theirs * (1 + 1e-6) + 1e-6) worse.push(`${label}: ${mine} > ${theirs} ignoring build cost`);
         }
         const farmsOn = { ...base, farms: defaultFarmSettings() };
-        const on = owned ? await owning(farmsOn) : farmsOn;
+        const on = owned ? await owning(pack, ctx, farmsOn) : farmsOn;
         const [onBuilt, onIgnored] = [(await timed(on)).plan, (await timed({ ...on, buildHorizonHours: null })).plan];
         console.log('real-build-cost farms on (U1: the leanest line counts the farms the group could build, so the cap may force them): '
           + `${label} ${onBuilt.steps.length} steps against ${onIgnored.steps.length}`);
@@ -468,7 +449,7 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
     const s = at(ELECTRONIC_CIRCUIT, 2, 1);
     const { plan, seconds } = await timed(s);
     const { priceSeconds } = await logPlan('price table, Electronic Circuit MV', s, plan, seconds);
-    console.log(`real-build-cost price table: Electronic Circuit MV, ${(await candidateMachines(s)).length} machines, ${priceSeconds.toFixed(2)} s`);
+    console.log(`real-build-cost price table: Electronic Circuit MV, ${(await candidateMachines(pack, ctx, s)).length} machines, ${priceSeconds.toFixed(2)} s`);
     expect(priceSeconds).toBeLessThan(2);
   }, 180_000);
 
