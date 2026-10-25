@@ -310,6 +310,28 @@ describe('the inventory grid', () => {
     // the meter counts every stack, the ones past the ninth too
     expect(gatheredStacks(groupBuildSlots([{ key: 'p:x@0', amount: 640, why: 'x' }], names), { 'build:p:x@0': mark })).toEqual({ done: 10, total: 10 });
   });
+  // spec §9.1, §9.2: the slot past the ninth stack says how many more there are, with no icon; like the item's other stacks it is a hidden copy,
+  // out of the tab order and with no name of its own (the item's one checkbox names it), and it ticks the same row, ticked or not
+  it('draws the +N slot as a hidden copy out of the tab order, with no icon and no name of its own, that ticks the same row', () => {
+    const big = groupBuildSlots([{ key: 'p:x@0', amount: 640, why: 'x' }], names);
+    const html = renderToStaticMarkup(<BuildGrid groups={big} marks={{}} send={() => {}} />);
+    expect(html).toContain('<button type="button" class="mat-slot mat-slot-more" aria-hidden="true" tabindex="-1" data-stack-of="build:p:x@0" '
+      + 'data-tip="p:x@0\nneed 640×\nx"><span class="stack-count" aria-hidden="true">+1</span></button></div>');
+    expect(html.match(/tabindex="-1"/g)).toHaveLength(9);                // the eight other stacks drawn, and the +N slot
+    expect(html.match(/role="checkbox"/g)).toHaveLength(1);
+    const send = vi.fn();
+    const more = (marks: Record<string, typeof mark>) => findAll(BuildGrid({ groups: big, marks, send }), (e) => String(e.props.className).includes('mat-slot-more'));
+    const [plain] = more({});
+    (plain!.props.onClick as () => void)();
+    expect(send).toHaveBeenLastCalledWith([{ op: 'mark', row: 'build:p:x@0', on: true }]);
+    const [ticked] = more({ 'build:p:x@0': mark });
+    expect(ticked!.props.className).toBe('mat-slot marked mat-slot-more');
+    (ticked!.props.onClick as () => void)();
+    expect(send).toHaveBeenLastCalledWith([{ op: 'mark', row: 'build:p:x@0', on: false }]);
+    // ticked, it is dimmed and ticked as every stack of its row
+    expect(renderToStaticMarkup(<BuildGrid groups={big} marks={{ 'build:p:x@0': mark }} send={() => {}} />))
+      .toContain('<span class="stack-count" aria-hidden="true">+1</span><span class="mat-slot-tick" aria-hidden="true"></span></button></div>');
+  });
   it('switches the view from the toggle, in this browser only: the project hears nothing of it', () => {
     vi.stubGlobal('localStorage', keepIn(new Map()));
     const [grid, list] = findAll(ViewToggle({ view: 'list' }), (e) => e.type === 'button');

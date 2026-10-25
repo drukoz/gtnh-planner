@@ -2,11 +2,14 @@
 // chosen with the head's toggle, one choice for this browser (localStorage), which outlives the tab panel's remount on every tab switch and a
 // reload, and a new browser starts on the List again. A slot is a 36 px Minecraft slot; the first stack of an item is its one checkbox, which
 // ticks the row's one mark (the List's tick, and every other page's within the stream's 2 s), from the mouse, the keyboard or a tap, while a
-// long press shows the slot's NEI tip and ticks nothing (P2-D21). In forced colours the slots, the tick, the meter and the pressed toggle keep
-// a cue. materials.test.tsx pins the markup and the model, styles-contract.test.tsx the rules.
+// long press shows the slot's NEI tip and ticks nothing (P2-D21), and a tap only ticks (P2-R20). An item past nine stacks ends in a +N slot out of
+// the tab order that ticks the same row. In forced colours the slots, the tick, the meter and the pressed toggle keep a cue, and a slot's frame
+// is painted over its icon (P2-R41: read in the screen's pixels). materials.test.tsx pins the markup and the model, styles-contract.test.tsx the
+// rules.
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
-import { createProject, login, LV_CIRCUITS, setName } from './helpers.ts';
+import type { Plan } from '../../src/shared/types/plan.ts';
+import { createProject, login, LV_CIRCUITS, markTips, setName } from './helpers.ts';
 
 const TRANSPARENT = 'rgba(0, 0, 0, 0)';
 
@@ -25,6 +28,36 @@ async function openMaterials(page: Page, name: string): Promise<string> {
   await expect(toBuild(page).locator('li.mat-row').first()).toBeVisible();
   return id;
 }
+
+/** The colours the screen shows at `points` (viewport px, the page at a device scale of 1), read from a screenshot of the page. */
+async function painted(page: Page, points: ReadonlyArray<readonly [number, number]>): Promise<string[]> {
+  const png = await page.screenshot({ animations: 'disabled', caret: 'hide' });
+  return page.evaluate(async ([data, at]) => {
+    const image = new Image();
+    image.src = `data:image/png;base64,${data}`;
+    await image.decode();
+    const canvas = document.createElement('canvas');
+    canvas.width = image.width;
+    canvas.height = image.height;
+    const context = canvas.getContext('2d');
+    if (context === null) throw new Error('no 2d context');
+    context.drawImage(image, 0, 0);
+    return at.map(([x, y]) => {
+      const [r, g, b] = context.getImageData(x, y, 1, 1).data;
+      return `rgb(${r}, ${g}, ${b})`;
+    });
+  }, [png.toString('base64'), points] as const);
+}
+
+/** What a system colour of the theme computes to on the page (`CanvasText`, `Canvas` …). */
+const systemColour = (page: Page, name: string): Promise<string> => page.evaluate((colour) => {
+  const probe = document.createElement('span');
+  probe.style.color = colour;
+  document.body.append(probe);
+  const computed = getComputedStyle(probe).color;
+  probe.remove();
+  return computed;
+}, name);
 
 /** Shows the build list as the grid, and waits for its slots. */
 async function showGrid(page: Page): Promise<void> {
@@ -173,6 +206,52 @@ test.describe('on a touch screen', () => {
     // input is handled in order: once the tap has ticked, a click of the long press's would have reached the slot before it, and untick it
     await expect(page.locator('html')).toHaveAttribute('data-test-slot-clicks', '1');
   });
+
+  // ledger ruling P2-R20 (spec §6.1): where a tap acts it only acts. A slot is a button, so a plain tap on a slot nothing has touched yet ticks
+  // its row, and no tip shows at any point, not even for a frame (3a's markTips)
+  test('a tap on an untouched slot ticks its row, and no tip shows at any point', async ({ page }) => {
+    await openMaterials(page, 'Grid tap');
+    await showGrid(page);
+    const slot = firstSlot(page);
+    await expect(slot).toHaveAttribute('data-marked', 'false');
+    await markTips(page);
+    await slot.tap();
+    await expect(slot).toHaveAttribute('data-marked', 'true');
+    await expect(page.getByRole('tooltip')).toHaveCount(0);
+    await expect(page.locator('html')).not.toHaveAttribute('data-test-tip-seen');
+  });
+});
+
+// spec §9.1, §9.2: an item past nine stacks ends in a +N slot that says how many more there are; like the item's other stacks it is a hidden
+// copy, out of the tab order, and it ticks the same row
+test('the +N slot of an item past nine stacks is out of the tab order, and a click on it ticks the row', async ({ page }) => {
+  const id = await openMaterials(page, 'Grid more');
+  // the server's own plan, its power line at 1,000: sixteen stacks, nine drawn and a +7 slot
+  const plan = (await (await page.request.get(`/api/projects/${id}/plan`)).json()) as Plan;
+  const power = plan.buildList.find((line) => line.group === 'power');
+  if (power === undefined) throw new Error('the plan has no power line');
+  const big = { ...plan, buildList: plan.buildList.map((line) => (line === power ? { ...line, amount: 1000 } : line)) };
+  await page.route(`**/api/projects/${id}/plan`, (route) => route.fulfill({ json: big }));
+  await page.reload();
+  await expect(toBuild(page).locator('li.mat-row').first()).toBeVisible();
+  await showGrid(page);
+  const row = `build:${power.key}`;
+  const more = page.locator(`button.mat-slot-more[data-stack-of="${row}"]`);
+  await expect(more).toHaveText('+7');
+  await expect(more).toHaveAttribute('aria-hidden', 'true');
+  await expect(page.locator(`button.mat-slot[data-stack-of="${row}"]`)).toHaveCount(9);   // the eight other stacks drawn, and the +7 slot
+  // Tab goes from the item's one checkbox to the next item's: its other stacks and the +7 slot are passed over
+  const checkbox = page.locator(`button.mat-slot[data-row="${row}"]`);
+  await checkbox.focus();
+  await page.keyboard.press('Tab');
+  const next = await page.evaluate(() => [document.activeElement?.getAttribute('role'), document.activeElement?.getAttribute('data-row')]);
+  expect(next[0]).toBe('checkbox');
+  expect(next[1]).not.toBe(row);
+  // a click on it ticks the row, and every stack of it shows that
+  await more.click();
+  await expect(checkbox).toHaveAttribute('data-marked', 'true');
+  await expect(more).toHaveClass(/\bmarked\b/);
+  await expect(page.locator(`button.mat-slot[data-stack-of="${row}"]:not(.marked)`)).toHaveCount(0);
 });
 
 test('in forced colours the slots, the tick, the meter and the pressed toggle keep a cue', async ({ page }) => {
@@ -213,6 +292,19 @@ test('in forced colours the slots, the tick, the meter and the pressed toggle ke
   expect(paint.fill).not.toBe(TRANSPARENT);
   expect(paint.fill, 'the fill is not the colour of the meter').not.toBe(paint.meter);
   await expect(viewButton(page, 'Grid')).toHaveCSS('text-decoration-line', 'underline');
+  // what the screen shows (ledger ruling P2-R41): the frame is painted over the slot's own icon, whose face, the theme's canvas, fills the slot,
+  // so its edge pixels are the theme's text colour, and the face just inside them is not. A computed outline cannot tell that: one under the
+  // icon computes the same
+  await page.locator('#to-build-title').hover();                                        // no veil on the slot, no tip over it
+  const box = await slot.boundingBox();
+  if (box === null) throw new Error('the slot has no box');
+  const [left, top, right, inside] = await painted(page, [
+    [Math.round(box.x), Math.round(box.y + box.height / 2)], [Math.round(box.x + box.width / 2), Math.round(box.y)],
+    [Math.round(box.x + box.width) - 1, Math.round(box.y + box.height / 2) - 6], [Math.round(box.x) + 1, Math.round(box.y + box.height / 2)],
+  ]);
+  const canvasText = await systemColour(page, 'CanvasText');
+  expect({ left, top, right }, 'the frame\'s edge pixels').toEqual({ left: canvasText, top: canvasText, right: canvasText });
+  expect(inside, 'the face just inside the frame').not.toBe(canvasText);
   // out of forced colours a slot has no frame, its bevel draws it, and the pressed toggle reads by its sunk face and yellow: the
   // forced-colours block is what drew the cues above (an outline's width stays `medium` with no style: CSS UI 4 no longer zeroes it)
   await page.emulateMedia({ forcedColors: 'none' });

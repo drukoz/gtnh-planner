@@ -1168,11 +1168,12 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
  * gathered, a screen in a black edge whose green fill grows on its transform alone. Under the hint each group's head (the pixel font, its
  * count in the quiet Inter) sits over a recess of the panel, where the slots touch as in an inventory. A slot is a button reset to nothing,
  * so the 32 px item icon in it is the 36 px slot, its stack count at the bottom right (the recipe card's .stack-count); a long press shows
- * its tip and selects nothing. Its focus ring is in the panel's focus ink (yellow would be 1.6:1 on the light panel: R12) and above the
- * slots beside it, with the keyboard's veil over its image (a rule of its own: the lit slot's is pinned). A marked row's slots are dimmed by
- * a 40 % black overlay over the image, never by styling it, under the checkbox's pixel tick in green, whose 1 px black edge is four
- * drop-shadows on the tick's own box (on the clipped mark the clip would cut them away); the tick pops in. An item past nine stacks ends in
- * a +N slot, a bare slot face with the count of the stacks not drawn in its middle. The grid fades in once.
+ * its tip and selects nothing. Each slot is a stacking context of its own, which keeps its count and tick in it, so the focused one's ring,
+ * in the panel's focus ink (yellow would be 1.6:1 on the light panel: R12), is lifted over the slots beside it, their counts and ticks too,
+ * with the keyboard's veil over its image (a rule of its own: the lit slot's is pinned). A marked row's slots are dimmed by a 40 % black
+ * overlay over the image, never by styling it, under the checkbox's pixel tick in green, whose 1 px black edge is four drop-shadows on the
+ * tick's own box (on the clipped mark the clip would cut them away); the tick pops in. An item past nine stacks ends in a +N slot, a bare
+ * slot face with the count of the stacks not drawn in its middle. The grid fades in once.
  */
 .mat-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .mat-view-toggle { display: flex; margin-block: -4px; }
@@ -1192,7 +1193,7 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
 .mat-slots { display: grid; grid-template-columns: repeat(auto-fill, 36px); padding: 6px; background: var(--panel); box-shadow: var(--bevel-inset); }
 button.mat-slot {
   position: relative; display: flex; width: 36px; height: 36px; min-height: 0; padding: 0; border: none; background: none; box-shadow: none;
-  text-shadow: none; transform: none; -webkit-touch-callout: none; user-select: none;
+  text-shadow: none; transform: none; isolation: isolate; -webkit-touch-callout: none; user-select: none;
 }
 button.mat-slot:focus-visible { outline-color: var(--ink-focus); z-index: 1; }
 button.mat-slot:focus-visible .item-icon::after { opacity: 1; }
@@ -1734,8 +1735,11 @@ button.mat-slot-more > .stack-count { position: static; }
   /* Phase 2 Task 6a: the inventory grid. A slot's bevel is a shadow the theme drops, so each slot keeps a frame in the buttons' text colour,
      but not while it shows the focus ring (R42's pattern); a marked slot's tick and the meter's fill, backgrounds the theme would paint like
      what they lie on, are the Highlight (two rules: a pseudo-element never shares a list with a plain selector, R28); and the pressed Grid or
-     List, whose sunk face and yellow are gone, is underlined, as the selected tab is */
+     List, whose sunk face and yellow are gone, is underlined, as the selected tab is. The button's frame shows on the +N slot alone: a slot's
+     icon fills it, and the icon's face, the theme's canvas, is painted over the button's outline. So the icon carries its slot's frame, an
+     outline of its own, painted with it over its face (ledger ruling P2-R41) */
   button.mat-slot:not(:focus-visible) { outline: 1px solid ButtonText; outline-offset: -1px; }
+  button.mat-slot > .item-icon { outline: 1px solid CanvasText; outline-offset: -1px; }
   .mat-slot-tick::before { background: Highlight; }
   .mat-meter-fill { background: Highlight; }
   .mat-view-toggle button[aria-pressed='true'] { text-decoration: underline; }

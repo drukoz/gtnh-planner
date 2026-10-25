@@ -72,6 +72,18 @@ export const LV_CIRCUITS: Partial<PlanSettings> = { target: 't:circuit@0', amoun
  */
 export const SETTINGS_BUTTON = /^Settings/;
 
+/**
+ * Marks <html> (`data-test-tip-seen`) when the page holds a shared tip whose words contain `words` once a task's DOM changes have settled:
+ * a tip drawn for a frame, or one that fades, is caught; a box inserted and taken away again before the page is painted is not (Task 3a's,
+ * shared since Task 6a's fix round).
+ */
+export const markTips = (page: Page, words = ''): Promise<void> => page.evaluate((w) => {
+  new MutationObserver(() => {
+    const tip = document.querySelector('.nei-tooltip');
+    if (tip !== null && (tip.textContent ?? '').includes(w)) document.documentElement.setAttribute('data-test-tip-seen', '');
+  }).observe(document.body, { childList: true, subtree: true, characterData: true });
+}, words);
+
 /** Creates a project through the API (throws unless 201), opens its Flow tab and returns its id. */
 export async function createProject(page: Page, name: string, settings?: Partial<PlanSettings>): Promise<string> {
   const res = await page.context().request.post('/api/projects', { headers: { 'X-Planner-Name': 'e2e' }, data: { name, settings } });

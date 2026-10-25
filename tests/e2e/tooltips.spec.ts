@@ -6,7 +6,7 @@
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { circuitLv } from './fixtures/plans.ts';
-import { createProject, login, LV_CIRCUITS, openConnections, openWithPlan, setName, SETTINGS_BUTTON } from './helpers.ts';
+import { createProject, login, LV_CIRCUITS, markTips, openConnections, openWithPlan, setName, SETTINGS_BUTTON } from './helpers.ts';
 import { uploadSampleWorld } from './world-upload.ts';
 
 /** Opens a new project that makes 30 Basic Circuits a minute on its Materials & steps tab, and gives the icons of its rows. */
@@ -44,17 +44,6 @@ async function belowRightOf(tip: Locator, trigger: Locator): Promise<boolean> {
   const [x, y] = [r.x + r.width / 2, r.y + r.height / 2];
   return Math.abs(t.x - (x + 12)) <= 1.5 && t.y >= y + 12 - 1.5 && t.y <= y + 12 + 2 + 1.5;
 }
-
-/**
- * Marks <html> (`data-test-tip-seen`) when the page holds a shared tip whose words contain `words` once a task's DOM changes have settled:
- * a tip drawn for a frame, or one that fades, is caught; a box inserted and taken away again before the page is painted is not.
- */
-const markTips = (page: Page, words = ''): Promise<void> => page.evaluate((w) => {
-  new MutationObserver(() => {
-    const tip = document.querySelector('.nei-tooltip');
-    if (tip !== null && (tip.textContent ?? '').includes(w)) document.documentElement.setAttribute('data-test-tip-seen', '');
-  }).observe(document.body, { childList: true, subtree: true, characterData: true });
-}, words);
 
 test('an item icon shows its name in the NEI tooltip, which takes no pointer and goes when the pointer leaves', async ({ page }) => {
   const icon = (await materialIcons(page, 'Icon tip')).first();

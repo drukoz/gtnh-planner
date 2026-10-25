@@ -2786,6 +2786,8 @@ describe('the Machine GUI Phase 2: the inventory grid', () => {
       ['button.mat-slot', 'position', 'relative'], ['button.mat-slot', 'width', '36px'], ['button.mat-slot', 'height', '36px'], ['button.mat-slot', 'min-height', '0'],
       ['button.mat-slot', 'padding', '0'], ['button.mat-slot', 'border', 'none'], ['button.mat-slot', 'background', 'none'], ['button.mat-slot', 'box-shadow', 'none'],
       ['button.mat-slot', 'transform', 'none'], ['button.mat-slot', '-webkit-touch-callout', 'none'], ['button.mat-slot', 'user-select', 'none'],
+      // each slot a stacking context of its own: a slot's count and tick stay in it, and the focused slot's z-index lifts its ring over them
+      ['button.mat-slot', 'isolation', 'isolate'],
       ['button.mat-slot:focus-visible', 'outline-color', 'var(--ink-focus)'], ['button.mat-slot:focus-visible', 'z-index', '1'],
       ['button.mat-slot:focus-visible .item-icon::after', 'opacity', '1'],
       ['button.mat-slot.marked::after', 'content', "''"], ['button.mat-slot.marked::after', 'background', 'rgb(0 0 0 / 0.4)'],
@@ -2826,6 +2828,10 @@ describe('the Machine GUI Phase 2: the inventory grid', () => {
     // forced colours: a frame each slot keeps, but not while it shows the focus ring (R42's pattern), the tick and the fill in the Highlight (two rules:
     // a pseudo-element never shares a list with a plain selector, R28), the pressed toggle underlined; at the end of the block, each after its base
     expect(inQuery(FORCED, 'button.mat-slot:not(:focus-visible)')).toEqual([['outline', '1px solid ButtonText'], ['outline-offset', '-1px']]);
+    // ledger ruling P2-R41: the slot's icon fills it, and its face (the theme's canvas) is painted over the button's own frame, which only the
+    // +N slot, with no icon, shows; so a slot with an icon is framed by the icon's outline, painted with the icon and over its face
+    expect(inQuery(FORCED, 'button.mat-slot > .item-icon')).toEqual([['outline', '1px solid CanvasText'], ['outline-offset', '-1px']]);
+    expect(position(SLOT)).toBeLessThan(blocks.indexOf(forcedBlock().block));
     expect(inQuery(FORCED, '.mat-slot-tick::before')).toEqual([['background', 'Highlight']]);
     expect(inQuery(FORCED, '.mat-meter-fill')).toEqual([['background', 'Highlight']]);
     expect(inQuery(FORCED, ".mat-view-toggle button[aria-pressed='true']")).toEqual([['text-decoration', 'underline']]);
