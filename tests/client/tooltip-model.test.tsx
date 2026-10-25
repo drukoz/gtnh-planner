@@ -7,7 +7,7 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { HOVER_DELAY_MS } from '../../src/client/map/hover.ts';
 import {
-  alongAxis, createRestTimer, describedLines, describes, frameThrottle, hoverFrom, placeTip, tapActs, TIP_DELAY_MS, tipLines, tipText, type TapNode,
+  alongAxis, createRestTimer, describedLines, describes, frameThrottle, hoverFrom, inView, placeTip, tapActs, TIP_DELAY_MS, tipLines, tipText, type TapNode,
 } from '../../src/client/components/tooltip-model.ts';
 import { MOD_NAMES, modName } from '../../src/client/components/mod-names.ts';
 import { TipLines } from '../../src/client/components/Tooltip.tsx';
@@ -32,6 +32,30 @@ describe('the shared tooltip: placement', () => {
     expect(placeTip({ ...head, top: 30, bottom: 50 }, size, room, 'above')).toEqual({ left: 40, top: 54 });
     expect(placeTip({ ...head, left: 1250, right: 1270 }, size, room, 'below').left).toBe(1080);
     expect(placeTip(head, size, { width: 150, height: 40 }, 'below')).toEqual({ left: 0, top: 0 });
+  });
+
+  // spec §6.2, ledger ruling P2-R23 and Task 3b's fix round (M1, M2): an element tip is placed at what of its element is in view, in its
+  // outermost svg's view and in the window both; a box needs some of its area there, a line (a Flow arrow that runs straight) some of its
+  // length; a box that only touches a view's edge, and a point, are not in view
+  it('places an element tip at what of its element is in its svg\'s view and in the window, a line\'s length counting', () => {
+    const win = { left: 0, top: 0, right: 1280, bottom: 720 }; const svg = { left: 100, top: 200, right: 900, bottom: 600 };
+    const head = { left: 300, top: 300, right: 500, bottom: 340 };
+    expect(inView(head, [win, svg])).toEqual(head);
+    expect(inView({ ...head, left: 850, right: 1050 }, [win, svg])).toEqual({ left: 850, top: 300, right: 900, bottom: 340 });   // cut to the svg
+    expect(inView({ ...head, left: 900, right: 1100 }, [win, svg])).toBeNull();                 // M2: it only touches the svg's edge
+    expect(inView({ ...head, top: 560, bottom: 600 }, [win, svg])).toEqual({ ...head, top: 560, bottom: 600 });   // flush with the edge, inside
+    // M1: the page has scrolled the svg up, so the head is in the svg's box but above the window: no tip (it came back at the window's edge)
+    const scrolled = { left: 100, top: -300, right: 900, bottom: 100 };
+    expect(inView({ ...head, top: -200, bottom: -160 }, [win, scrolled])).toBeNull();
+    expect(inView({ ...head, top: -20, bottom: 20 }, [win, scrolled])).toEqual({ ...head, top: 0, bottom: 20 });
+    // P2-R23: a level line (a straight arrow) is in view where some of its length is; an upright one too; out of view, or a point, it is not
+    const level = { left: 300, top: 400, right: 360, bottom: 400 };
+    expect(inView(level, [win, svg])).toEqual(level);
+    expect(inView({ ...level, left: 880, right: 940 }, [win, svg])).toEqual({ ...level, left: 880, right: 900 });
+    expect(inView({ ...level, top: 650, bottom: 650 }, [win, svg])).toBeNull();
+    expect(inView({ ...level, left: 900, right: 960 }, [win, svg])).toBeNull();                 // only its end touches the edge
+    expect(inView({ left: 300, top: 300, right: 300, bottom: 360 }, [win, svg])).toEqual({ left: 300, top: 300, right: 300, bottom: 360 });
+    expect(inView({ left: 300, top: 300, right: 300, bottom: 300 }, [win, svg])).toBeNull();
   });
 });
 
@@ -112,11 +136,35 @@ describe('the shared tooltip: the mod line and the box', () => {
     expect(describedLines(['Copper  Wire '], null, 'Copper Wire')).toEqual([]);
     expect(describedLines(['Basic Wiremill', 'takes Copper Ingot 1/s'], null, 'Basic Wiremill')).toEqual(['takes Copper Ingot 1/s']);
     expect(describedLines(['Basic Wiremill', 'LV · 32 EU/t'], null, 'Basic Wiremill\nLV · 32 EU/t')).toEqual([]);   // its name is the whole tip
-    expect(describedLines(['Basic Wiremill', 'LV · 32 EU/t'], null, 'Basic Wiremill, LV · 32 EU/t')).toEqual(['Basic Wiremill', 'LV · 32 EU/t']);
+    // ledger ruling P2-R24 turned this one round: a name whose parts the view joins with ", " says those lines too (a Flow head's)
+    expect(describedLines(['Basic Wiremill', 'LV · 32 EU/t'], null, 'Basic Wiremill, LV · 32 EU/t')).toEqual([]);
     expect(describedLines(['Fit · F'], null, null)).toEqual(['Fit · F']);
     expect(renderToStaticMarkup(<TipLines lines={['Copper Wire']} mod="GregTech" name="Copper Wire" />))
       .toBe('<div aria-hidden="true">Copper Wire</div><div class="nei-tooltip-mod">GregTech</div>');
     expect(renderToStaticMarkup(<TipLines lines={['Basic Wiremill', 'LV · 32 EU/t']} mod={null} name="Basic Wiremill" />))
       .toBe('<div aria-hidden="true">Basic Wiremill</div><div>LV · <span class="fig">32</span> EU/t</div>');
+  });
+
+  // ledger ruling P2-R24 (spec §6.6, P2-D36): the description never restates the element's name, whatever its separators: a view joins a
+  // name's parts with " · ", ", " or ": " where the tip gives each a line. The first lines whose parts are all the name's say it, and so
+  // does a line whose parts begin it (a row's name is its words, then what a click on it does)
+  it('drops from the description what restates the name, whatever its separators: an arrow\'s, a step head\'s and a row\'s', () => {
+    // a Flow arrow, named by its title: its tip is the same three parts, a line each, so it has no description
+    expect(describedLines(['Iron Ingot', '1/s', 'A → B'], null, 'Iron Ingot · 1/s · A → B')).toEqual([]);
+    // a step head, named by its title and line joined with ", ": its description is its rows
+    const box = ['Wiremill', 'LV · 32 EU/t · 1 machine', 'takes Copper Ingot 1/s', 'makes Copper Wire 2/s'];
+    expect(describedLines(box, null, 'Wiremill, LV · 32 EU/t · 1 machine')).toEqual(['takes Copper Ingot 1/s', 'makes Copper Wire 2/s']);
+    // a row, named by its words and what a click on it does: the box's title, its line and the other rows
+    expect(describedLines(box, null, 'takes Copper Ingot 1/s: show where it comes from')).toEqual(['Wiremill', 'LV · 32 EU/t · 1 machine', 'makes Copper Wire 2/s']);
+    // an import stub's row, named by the stub's good and its words: the stub's tip says nothing more
+    expect(describedLines(['Iron Ingot', 'Iron Ingot: mined 1/s'], null, 'Iron Ingot, mined 1/s: show where it goes')).toEqual([]);
+    // the lines it drops are the ones TipLines hides
+    const head = renderToStaticMarkup(<TipLines lines={box} mod={null} name="Wiremill, LV · 32 EU/t · 1 machine" />);
+    expect(head.match(/<div aria-hidden="true">/g)).toHaveLength(2);
+    expect(head).toMatch(/^<div aria-hidden="true">Wiremill<\/div><div aria-hidden="true">LV · /);
+    // a part is said whole or not at all: a line that names something longer, or only the start of a part, says nothing of the name
+    expect(describedLines(['Iron Ingot Block', 'Iron'], null, 'Iron Ingot')).toEqual(['Iron Ingot Block', 'Iron']);
+    // and a figure's comma is no separator: "1,440" is not "1 440"
+    expect(describes('1,440', '1 440')).toBe(true); expect(describes('Iron Ingot\n1/s', 'Iron Ingot · 1/s')).toBe(false);
   });
 });

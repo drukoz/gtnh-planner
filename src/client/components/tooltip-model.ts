@@ -57,6 +57,25 @@ export interface Size { width: number; height: number }
 export type TipPlacement = 'pointer' | 'below' | 'above';
 
 /**
+ * What of an element's box `own` is in view, where an element tip is placed: `own` cut to each of `views` (its outermost svg's box and
+ * the window), or null when none of it is, and the tip then does not show (spec §6.2; ledger ruling P2-R23 and Task 3b's fix round, M1
+ * and M2). A box needs some of its area in view, so one that only touches a view's edge is not; a line (a Flow arrow that runs straight
+ * has a box with no height) needs some of its length; a point is never in view.
+ */
+export function inView(own: TipAnchor, views: readonly TipAnchor[]): TipAnchor | null {
+  let box = own;
+  for (const view of views) {
+    box = { left: Math.max(box.left, view.left), top: Math.max(box.top, view.top), right: Math.min(box.right, view.right), bottom: Math.min(box.bottom, view.bottom) };
+  }
+  const across = box.right - box.left, down = box.bottom - box.top;
+  const level = own.top === own.bottom, upright = own.left === own.right;
+  if (level && upright) return null;
+  if (level) return across > 0 && down === 0 ? box : null;
+  if (upright) return down > 0 && across === 0 ? box : null;
+  return across > 0 && down > 0 ? box : null;
+}
+
+/**
  * The top-left corner (window px) of a tip of `size` in a window of `room`: a pointer tip TIP_OFFSET right of and below the pointer,
  * flipped and kept inside the window, so the row under the pointer stays readable (P2-D36); an element tip at the element's left edge
  * (kept inside), TIP_ELEMENT_GAP below it, or above it when there is no room below ('above': above first).
@@ -122,24 +141,47 @@ export function createRestTimer<T>(show: (target: T | null) => void, delayMs: nu
   };
 }
 
-/** `text` with its runs of white space as one space, trimmed. */
-const words = (text: string): string => text.replace(/\s+/g, ' ').trim();
+/**
+ * The parts a text says, in order (ledger ruling P2-R24): split where the views join a name's parts and where a tip starts a line (" · ",
+ * ", ", ": ", a new line), each with its runs of white space as one space; a figure's comma ("1,440") splits nothing.
+ */
+const parts = (text: string): string[] =>
+  text.split(/\s+·\s+|[,:]\s+|\n/).map((part) => part.replace(/\s+/g, ' ').trim()).filter((part) => part !== '');
+
+/** Whether two texts' parts are the same, in the same order. */
+const same = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((part, i) => part === b[i]);
+
+/** Whether `first` are the first parts of `all`, one or more of them. */
+const begins = (all: readonly string[], first: readonly string[]): boolean =>
+  first.length > 0 && first.length <= all.length && first.every((part, i) => part === all[i]);
 
 /**
  * Whether a tip says more than `name`, the accessible name of the element it would describe: only then does that element get the tip as
- * its description (`aria-describedby`), so a screen reader never says a name twice (P2-D36). White space does not count.
+ * its description (`aria-describedby`), so a screen reader never says a name twice (P2-D36). White space and the views' separators do
+ * not count (P2-R24).
  */
 export function describes(tip: string, name: string | null): boolean {
-  return words(tip) !== words(name ?? '');
+  return !same(parts(tip), parts(name ?? ''));
 }
 
 /**
- * Which of a tip's `lines` only repeat `name`, the accessible name of the element the tip describes: each line that says just that name,
- * or all of them when together they are the name (a Flow box is named by its whole tip).
+ * Which of a tip's `lines` only repeat `name`, the accessible name of the element the tip describes (ledger rulings P2-R22, P2-R24): the
+ * first lines, as few as can be, whose parts are all the name's (a Flow box is named by its whole tip, an arrow by its three lines run
+ * together, a step head by its title and line), and each line whose parts are the name's first ones (an icon's own name; a row's words,
+ * which its name goes on from with what a click on it does). White space and the views' separators do not count.
  */
 export function repeatsName(lines: readonly string[], name: string | null): boolean[] {
-  const whole = !describes(lines.join('\n'), name);
-  return lines.map((line) => whole || !describes(line, name));
+  const said = parts(name ?? '');
+  const each = lines.map(parts);
+  const repeats = each.map((own) => begins(said, own));
+  let run: string[] = [];
+  for (let i = 0; i < each.length && run.length < said.length; i++) {
+    run = [...run, ...each[i]!];
+    if (!same(run, said)) continue;
+    for (let j = 0; j <= i; j++) repeats[j] = true;
+    break;
+  }
+  return repeats;
 }
 
 /**

@@ -21,18 +21,19 @@
 //   a still pointer fires no pointerout, and a finger's tip hears no pointer event at all: Review Focus 2), re-reads its lines (a replan
 //   rewrites a box's), and keeps a focus or touch tip at its element.
 // - Its box gives the focused element (focus) or the trigger its id as one more `aria-describedby` token, unless the tip says no more than
-//   the element's own name (P2-D36); the lines that only repeat the name are hidden from assistive technology, so the description is what
-//   the tip adds, an icon's mod line say (P2-R22). Only that token is taken back.
-// - An element out of its svg's view shows no tip, not even for a frame; one never placed is dropped as it is, and only a tip that showed
-//   fades out (spec §6.2).
+//   the element's own name (P2-D36); the lines that only repeat the name, whatever the separators its parts are joined with, are hidden
+//   from assistive technology, so the description is what the tip adds: an icon's mod line, a step head's rows (P2-R22, P2-R24). Only
+//   that token is taken back.
+// - An element out of view (its svg's, or the window's) shows no tip, not even for a frame; one never placed is dropped as it is, and only
+//   a tip that showed fades out (spec §6.2).
 
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactElement } from 'react';
 import { createPortal } from 'react-dom';
 import { DRAG_THRESHOLD } from '../views/pan-zoom.ts';
 import { Figs } from './Figs.tsx';
 import {
-  createRestTimer, describedLines, frameThrottle, hoverFrom, LONG_PRESS_CLICK_MS, LONG_PRESS_MS, placeTip, repeatsName, tapActs, TIP_ATTR,
-  TIP_EXIT_MS, TIP_MOD_ATTR, tipLines, type TapNode, type TipAnchor,
+  createRestTimer, describedLines, frameThrottle, hoverFrom, inView, LONG_PRESS_CLICK_MS, LONG_PRESS_MS, placeTip, repeatsName, tapActs,
+  TIP_ATTR, TIP_EXIT_MS, TIP_MOD_ATTR, tipLines, type TapNode, type TipAnchor,
 } from './tooltip-model.ts';
 
 /** What showed the tip: the mouse or a pen resting on it, the keyboard's focus, or a finger. */
@@ -75,21 +76,19 @@ function outermostSvg(el: Element): SVGSVGElement | null {
   return svg;
 }
 
+/** A box the browser measured, as a tip's anchor. */
+const edgesOf = (r: DOMRect): TipAnchor => ({ left: r.left, top: r.top, right: r.right, bottom: r.bottom });
+
 /**
- * Where an element tip is placed beside: `el`'s box in the window, cut to its outermost svg's (a box panned past the diagram's edge is
- * not there to see); null when nothing of it is left, and the tip then does not show. A line is left: a Flow arrow that runs straight has
- * a box with no height, and is drawn all the same (a box of no size at all is nothing).
+ * Where an element tip is placed beside: what of `el`'s box is in view, in its outermost svg's and in the window (`inView`: a box panned
+ * past the diagram's edge, or scrolled out of the window, is not there to see, and a straight arrow's box, a line, is); null when none of
+ * it is, and the tip then does not show.
  */
 function anchorBox(el: Element): TipAnchor | null {
-  const r = el.getBoundingClientRect();
-  let box: TipAnchor = { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+  const views: TipAnchor[] = [{ left: 0, top: 0, right: document.documentElement.clientWidth, bottom: document.documentElement.clientHeight }];
   const svg = outermostSvg(el);
-  if (svg !== null) {
-    const s = svg.getBoundingClientRect();
-    box = { left: Math.max(box.left, s.left), top: Math.max(box.top, s.top), right: Math.min(box.right, s.right), bottom: Math.min(box.bottom, s.bottom) };
-  }
-  const across = box.right - box.left, down = box.bottom - box.top;
-  return across >= 0 && down >= 0 && across + down > 0 ? box : null;
+  if (svg !== null) views.push(edgesOf(svg.getBoundingClientRect()));
+  return inView(edgesOf(el.getBoundingClientRect()), views);
 }
 
 /** An element as `tapActs` reads it. */
