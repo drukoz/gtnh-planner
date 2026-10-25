@@ -2,8 +2,8 @@
 // acceptance specification of the reference-flow analysis; add-on 12 x 17 ruling R10: one copy of each): its raw
 // materials (the spec's BASE) with the free inputs, its raw material a minute and machine blocks, and a plan's machine
 // blocks and raw material a minute counted as the spec counts them, and the Steel Rod recipes it allows.
-// real-reference.test.ts imports them. Pack keys and recipe ids only: the reference's settings stay in the private
-// docs/local (local-docs.ts).
+// real-reference.test.ts and real-objectives.test.ts import them. Pack keys and recipe ids only: the reference's
+// settings stay in the private docs/local (local-docs.ts).
 
 import { FREE_KEYS, type Plan } from '../../src/shared/types/plan.ts';
 import { STEEL_INGOT } from './real-build-cases.ts';

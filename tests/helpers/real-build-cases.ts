@@ -2,7 +2,8 @@
 // calibration lines (`CASES`, made with `at`), the machines a line's steps can run on and its settings owning two of each
 // (`candidateMachines`, `owning`: the calibration lines marked `owned`), the line's build MIP run on its own as
 // `planLine` solves it (`buildRun`), and the new machine blocks a plan adds (`newBlocks`). real-build-cost.test.ts,
-// real-raw-cap.test.ts and real-board.test.ts import them. Pack keys and settings only, never anything from a world.
+// real-raw-cap.test.ts, real-board.test.ts and real-objectives.test.ts import them. Pack keys and settings only, never
+// anything from a world.
 
 import { benchCapBy } from '../../src/server/planner/benches.ts';
 import type { CandidateGraph } from '../../src/server/planner/candidates.ts';
