@@ -410,3 +410,25 @@ describe('real-data rules (final review)', () => {
     expect(acceptRecipe(p, p.recipeById.get('obsidian')!, env(1, { fromNothing: new Set(['obsidian']) }))).toEqual({ ok: false, why: 'excluded' });
   });
 });
+
+describe('farm-made leaves and the estimate passes (add-on 12 x 17 integration, F2)', () => {
+  // t from a (1) or from l, a leaf at 3 that a farm of the line makes for nothing. Plan 12's second estimate pass walks such
+  // a leaf's producers; it now runs for gathered world blocks only (`alsoMade`). By the dug estimate alone from-l is over
+  // KEEP_WITHIN (2) × from-a and is pruned, so the farm-on graph is the farm-free one (the union of both passes grew the
+  // real farm-on graphs 1.6 to 4.3 times).
+  const M = 'gt.recipe.macerator';
+  const recipes: RecipeSpec[] = [
+    { id: 'from-a', map: M, in: [['a@0', 1]], out: [['t@0', 1]], eut: 2 },
+    { id: 'from-l', map: M, in: [['l@0', 1]], out: [['t@0', 1]], eut: 2 },
+    { id: 'farm-l', map: M, out: [['l@0', 1]], meta: { farm: { kind: 'crop', tier: 1, machines: [1], parallel: 1, footprint: [1, 1, 1] } } },
+  ];
+  const spec = { machines: [{ mteId: 1, name: 'M', maps: [M], tier: 1 }], recipes };
+  const leaf = (mark: 'farmMade' | 'alsoMade'): LeafOracle => (k) => (k === 'a@0' ? { buyable: true, cost: 1, leafClass: 'direct' }
+    : k === 'l@0' ? { buyable: true, cost: 3, leafClass: 'direct', [mark]: true } : { buyable: false, cost: 0, leafClass: null });
+  it('prunes by the dug estimate where only a farm makes a leaf', () => {
+    expect(buildCandidates(packFromSpec(spec), defaultSettings(), env(1), leaf('farmMade'), ['t@0']).recipes.map((r) => r.id)).toEqual(['from-a']);
+  });
+  it('keeps plan 12\'s second pass for a gathered world block', () => {
+    expect(buildCandidates(packFromSpec(spec), defaultSettings(), env(1), leaf('alsoMade'), ['t@0']).recipes.map((r) => r.id)).toContain('from-l');
+  });
+});

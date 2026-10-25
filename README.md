@@ -85,6 +85,7 @@ All data comes from **your own** copy of the pack and world: recipes are exporte
   | Electronic Circuit LV on Project Red, two of every machine owned | 3.52 | 24 (22) | 1988 | 1.58 | 41 | optimal | 9.752 | 9.752 | 0 % |
 
   An "optimal" end can still show a small gap: the model prices a lightly used step's machines approximately, and the gap compares the plan at its true builds.
+- **Known gap (until the next planner fix wave):** a raw material that a farm of the line could make no longer widens the planner's search for routes (it made plans with farms 1.5 to 2.2 times slower), so a line whose best route passes through such a material may plan a few more machines than before (one measured line: 27 new machine blocks against 21) or up to 10 % more raw material.
 
 ## World map
 

@@ -147,9 +147,10 @@ function isMaterialLine(pack: Pack, target: StuffKey | null): boolean {
  * machine prices and build-material breakdowns never pass it: there gathered blocks are dug.
  *
  * Add-on 17 (farms in the candidate graph, for the line's own graph only: pricing.ts): with `opts.farmMade` (every good
- * the line's farm recipes make), a buyable leaf among them other than a stop item is `farmMade` too, so the walk and its
- * estimate also expand its producers, the farms among them, exactly as for `alsoMade`, in every mode (logs and crops
- * included: a farm makes them). With `opts.fixed` (the tools a tree farm wears, at their tool price), each such good is
+ * the line's farm recipes make), a buyable leaf among them other than a stop item is `farmMade` too, so the walk also
+ * expands its producers, the farms among them, as for `alsoMade`, in every mode (logs and crops included: a farm makes
+ * them); unlike `alsoMade` it starts no second estimate pass (candidates.ts `buildCandidates`, add-on 12 × 17
+ * integration, F2). With `opts.fixed` (the tools a tree farm wears, at their tool price), each such good is
  * `{ buyable: true, cost, leafClass: 'direct' }` whatever it is otherwise, and never walked: tool wear is bought.
  * With a non-empty `opts.inputsOnly` (the project's "Only these come in", plan 12 fix wave 3 (B); pricing.ts passes it
  * for the line's own graphs only) every key outside it is no leaf (`outsideInputs`), so the walk adds its producers and

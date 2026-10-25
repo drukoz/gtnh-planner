@@ -79,8 +79,10 @@ export interface LeafDecision {
   alsoMade?: true;
   // optional addition (add-on 17)
   /**
-   * A buyable leaf a farm of the line makes (`makeLeafOracle`'s `farmMade`): the walk and its estimate also expand its
-   * producers, exactly as for `alsoMade`, in every mode, so the LP weighs buying it against farming it.
+   * A buyable leaf a farm of the line makes (`makeLeafOracle`'s `farmMade`): the walk also expands its producers, as for
+   * `alsoMade`, in every mode, and keeps every farm recipe among them, so the LP weighs buying it against farming it.
+   * Unlike `alsoMade` it starts no second estimate pass (`buildCandidates`; add-on 12 × 17 integration, F2): the pruning
+   * estimates it at its price, unless a gathered world block starts that pass.
    */
   farmMade?: true;
   // optional addition (plan 12 fix wave 3 (B))
@@ -628,7 +630,7 @@ interface Estimates {
    * each consumed slot it does not hand on, each good once; null when some such slot has no priced option.
    */
   inputsOf: (r: Recipe) => readonly StuffKey[] | null;
-  /** The walk met a leaf the line may also make (`LeafDecision.alsoMade`, or `farmMade`: `alsoWalked`). */
+  /** The walk met a gathered world block the line may also make (`LeafDecision.alsoMade`); a farm-made leaf does not count. */
   metAlsoMade: boolean;
 }
 
@@ -690,7 +692,7 @@ function estimateCosts(
     const d = decide(key);
     if (d.buyable) {
       leaves.push([key, d.cost]);
-      if (alsoWalked(d)) metAlsoMade = true;
+      if (d.alsoMade === true) metAlsoMade = true;
       if (!walkMade || !alsoWalked(d)) continue;
     }
     for (const index of pack.producers.get(key) ?? []) {
@@ -936,7 +938,8 @@ export interface CandidateOptions {
  * kept with its original as one producer, and a crafting-table recipe none of them runs is marked `LpRecipe.byHand`.
  * Add-on 17: a leaf a farm of the line makes (`LeafDecision.farmMade`) is bought and walked as such a leaf is, and on the
  * line's farm pack (farms/pack.ts) a good's farm recipes are all kept beside the producers the pruning keeps
- * (`LpRecipe.farm`).
+ * (`LpRecipe.farm`); but it starts no second estimate (add-on 12 × 17 integration, F2), so the pruning takes it at its
+ * price unless a gathered world block starts that estimate, which walks it too.
  */
 export function buildCandidates(
   pack: Pack, settings: PlanSettings, env: PlanEnv, leaf: LeafOracle, targets: StuffKey[], opts: CandidateOptions = {},
@@ -1075,7 +1078,9 @@ export function buildCandidates(
     };
   };
   // Plan 09's estimate, with a leaf the line may also make at its price; and when the walk meets such a leaf, the
-  // estimate at the cheaper of digging and making it as well.
+  // estimate at the cheaper of digging and making it as well. A leaf only a farm of the line makes (`farmMade`) starts no
+  // second pass: its farm recipes are kept beside the pruned producers anyway (below), and the union of both passes grew
+  // the farm-on graphs 1.6 to 4.3 times and their plan times 1.5 to 2.2 times (add-on 12 × 17 integration, F2).
   const dug = estimateCosts(pack, targets, decide, usable, optionsOf, carried, false);
   const passes: EstimatePass[] = [passOf(dug)];
   if (dug.metAlsoMade) passes.push(passOf(estimateCosts(pack, targets, decide, usable, optionsOf, carried, true)));

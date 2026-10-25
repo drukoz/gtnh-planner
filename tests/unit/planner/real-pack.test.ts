@@ -7,7 +7,9 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
 import { loadPack } from '../../../src/server/pack/load.ts';
 import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
+import { linePricing } from '../../../src/server/planner/pricing.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
+import { defaultFarmSettings } from '../../../src/shared/types/farm.ts';
 import { FREE_KEYS, type Plan, type PlanSettings } from '../../../src/shared/types/plan.ts';
 import type { Pack } from '../../../src/shared/types/pack.ts';
 
@@ -100,6 +102,23 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('the active export', () => {
     const { plan, seconds } = await timed('Good Electronic Circuit 2/min HV', { target: gt('Good Electronic Circuit'), amount: 2, per: 'min', tier: 3 });
     expectSane(plan, 200);
     expect(seconds).toBeLessThan(BUILD_COST_PLAN_SECONDS);
+  }, 300_000);
+
+  it('keeps the farm walk from growing the candidate graph (add-on 12 x 17 integration, F2)', async () => {
+    // Plan 12's second estimate pass ran for every leaf a farm of the line could make and kept the union of both passes'
+    // producers: 1,543 recipes against 941 with farms off (Good Electronic Circuits at HV), 1,352 against 625, 381 against 88.
+    const lines: Array<[string, Partial<PlanSettings>]> = [
+      ['Good Electronic Circuit 2/min HV', { target: gt('Good Electronic Circuit'), amount: 2, per: 'min', tier: 3 }],
+      ['Electronic Circuit 1/min MV', { target: gt('Electronic Circuit'), amount: 1, per: 'min', tier: 2 }],
+      ['Steel Ingot 10/min MV', { target: gt('Steel Ingot'), amount: 10, per: 'min', tier: 2 }],
+    ];
+    for (const [label, s] of lines) {
+      const settings: PlanSettings = { ...defaultSettings(), ...s };
+      const on = (await linePricing(pack, settings, emptyContext()))!.graph.recipes.length;
+      const off = (await linePricing(pack, { ...settings, farms: { ...defaultFarmSettings(), kinds: [] } }, emptyContext()))!.graph.recipes.length;
+      console.log(`real-pack graph ${label}: ${on} recipes with farms, ${off} without`);
+      expect(on, label).toBeLessThanOrEqual(off + 64);
+    }
   }, 300_000);
 
   it('says what unlocks a titanium part at LV instead of planning one', async () => {
