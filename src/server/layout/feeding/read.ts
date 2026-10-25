@@ -23,6 +23,7 @@ import type { Plan, PlanStep } from '../../../shared/types/plan.ts';
 import { stepDepths } from '../arrange.ts';
 import { stepItemInputs, stepItemOutputs } from '../modes/mode.ts';
 import { manualReasonOf } from '../multiblock-rules.ts';
+import { machineByMteId } from '../../pack/lookup.ts';
 import { busSlots } from '../parts.ts';
 import { CONFIG_KEYS, type FeedBlock, type FeedUnknown } from './contract.ts';
 import { basicSlots, BENCH_CLASS, ignoredByBlocking, INPUT_SEPARATION_DEFAULT, PART_KEYS } from './facts.ts';
@@ -169,7 +170,7 @@ export function readLine(input: { pack: Pack; plan: Plan; layout: Layout }): Fee
     const local = fromWorld(block.pos, layout);
     const id = nodeId(local);
     if (cellMap.has(id)) continue;
-    const machine = block.block.mteId === undefined ? undefined : pack.machines.get(block.block.mteId);
+    const machine = block.block.mteId === undefined ? undefined : machineByMteId(pack, block.block.mteId);
     cellMap.set(id, { block, id, local, pos: [...block.pos], label: `${block.label} at ${where(block.pos)}`, machine });
   }
   const cells = [...cellMap.values()].sort((a, b) => compareLocal(a.local, b.local));
@@ -261,7 +262,7 @@ export function readLine(input: { pack: Pack; plan: Plan; layout: Layout }): Fee
       machines.push(readBench({ ...base, kinds }, cell, machine, tier, steps.get(stepIds[0]!)!));
     } else if (machine.kind === 'multiblock') {
       machines.push({
-        ...base, kinds, kind: 'multi', mteId: machine.mteId, inBuses: [], outBuses: [],
+        ...base, kinds, kind: 'multi', machineId: machine.id, inBuses: [], outBuses: [],
         inputSeparation: flag(block.config, CONFIG_KEYS.inputSeparation), separationDefault: INPUT_SEPARATION_DEFAULT.has(cls),
       });
       multiMaps.set(cell.id, [...machine.maps]);
@@ -271,7 +272,7 @@ export function readLine(input: { pack: Pack; plan: Plan; layout: Layout }): Fee
   }
 
   /** Rules 3–5: a GT basic machine, or a steam machine (pack kind `steam`, E17: GT's basic-machine slot rules). */
-  function readBasic(base: Omit<BasicNode, 'kind' | 'mteId' | 'tier' | 'inSlots' | 'outSlots' | 'outputSide' | 'front' | 'maps' | 'settings' | 'steam'>,
+  function readBasic(base: Omit<BasicNode, 'kind' | 'machineId' | 'tier' | 'inSlots' | 'outSlots' | 'outputSide' | 'front' | 'maps' | 'settings' | 'steam'>,
     cell: Cell, machine: Machine, tier: number): BasicNode {
     const { block } = cell;
     const slots = basicSlots(machine);
@@ -291,12 +292,12 @@ export function readLine(input: { pack: Pack; plan: Plan; layout: Layout }): Fee
         + "a placed machine has its placer's setting", cell, base.stepIds[0]);
     }
     return {
-      ...base, kind: 'basic', mteId: machine.mteId, tier, inSlots, outSlots, outputSide, front, maps: [...machine.maps], settings, steam: machine.kind === 'steam',
+      ...base, kind: 'basic', machineId: machine.id, tier, inSlots, outSlots, outputSide, front, maps: [...machine.maps], settings, steam: machine.kind === 'steam',
     };
   }
 
   /** Rules 4 and 7: an Auto Workbench, its grid from `feed.bench` or its crafting recipe, and the sides whose neighbour connects toward it. */
-  function readBench(base: Omit<BenchNode, 'kind' | 'mteId' | 'tier' | 'front' | 'back' | 'grid' | 'result' | 'containers' | 'throughput' | 'fluidSides'
+  function readBench(base: Omit<BenchNode, 'kind' | 'machineId' | 'tier' | 'front' | 'back' | 'grid' | 'result' | 'containers' | 'throughput' | 'fluidSides'
     | 'powerSides' | 'itemPipeSides'>, cell: Cell, machine: Machine, tier: number, first: PlanStep): BenchNode {
     const { block } = cell;
     const front = isSide(block.facing) ? localSide(block.facing, rotation) : -1;
@@ -330,7 +331,7 @@ export function readLine(input: { pack: Pack; plan: Plan; layout: Layout }): Fee
       if (n.machine?.kind === 'item_pipe' && linked) itemPipeSides.push(side);
     }
     return {
-      ...base, kind: 'bench', mteId: machine.mteId, tier, front, back: front === -1 ? -1 : OPPOSITE[front]!, grid,
+      ...base, kind: 'bench', machineId: machine.id, tier, front, back: front === -1 ? -1 : OPPOSITE[front]!, grid,
       result: made === undefined ? { key: '', amount: 0 } : { key: made.key, amount: made.amount }, containers, throughput: given?.throughput ?? 0,
       fluidSides, powerSides, itemPipeSides,
     };

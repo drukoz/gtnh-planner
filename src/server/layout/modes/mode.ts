@@ -16,6 +16,7 @@ import type { LogisticsNetwork } from '../../../shared/types/world.ts';
 import { comparePos } from '../../world/graph.ts';
 import { placedStepIds, unitSteps, type BlockConfig, type HostConfig, type HostCover, type LocalBlock, type PlacedUnit, type Placement, type Unit } from '../arrange.ts';
 import { hasInputSeparation } from '../multiblock-rules.ts';
+import { machineByMteId } from '../../pack/lookup.ts';
 import { coverRateWarning, pickConveyor, type PartId, type Parts } from '../parts.ts';
 import { ae2Mode } from './ae2.ts';
 import { withHandSteps } from './by-hand.ts';
@@ -300,7 +301,7 @@ export function feedSettings(pack: Pack, plan: Plan, placement: Placement): Host
     const own = placement.blocks.filter((b) => b.stepId === u.stepId && inBox(b.pos, u.at, u.size));
     if (!u.multiblock) {
       const machine = own.find((b) => b.role === 'machine');
-      if (kinds >= 2 && machine !== undefined && MULTI_STACK_KINDS.has(pack.machines.get(u.mteId)?.kind ?? 'other')) {
+      if (kinds >= 2 && machine !== undefined && MULTI_STACK_KINDS.has(machineByMteId(pack, u.mteId)?.kind ?? 'other')) {
         out.push({ pos: [...machine.pos], config: { multiStack: false } });
       }
       continue;
@@ -308,7 +309,7 @@ export function feedSettings(pack: Pack, plan: Plan, placement: Placement): Host
     // only a controller that has the setting (on when built); one without it reads all its buses together
     const controller = own.find((b) => b.role === 'machine');
     const buses = u.cells.filter((c) => c.hatch === 'input_bus').length;
-    if (controller !== undefined && buses >= 2 && hasInputSeparation(pack.machines.get(u.mteId))) {
+    if (controller !== undefined && buses >= 2 && hasInputSeparation(machineByMteId(pack, u.mteId))) {
       out.push({ pos: [...controller.pos], config: { inputSeparation: false } });
     }
     if (kinds >= 2) for (const bus of own.filter((b) => b.hatch === 'input_bus')) out.push({ pos: [...bus.pos], config: { limited: true } });
@@ -405,7 +406,7 @@ export function spineConflicts(pack: Pack, plan: Plan, placed: ReadonlySet<strin
     const planStep = plan.steps.find((s) => s.id === stepId);
     if (planStep === undefined) continue;
     const inputs = new Set(stepItemInputs(plan, stepId));
-    const maps = new Set(pack.machines.get(planStep.machine.mteId)?.maps ?? []);
+    const maps = new Set(machineByMteId(pack, planStep.machine.mteId)?.maps ?? []);
     if (planStep.mapId !== '') maps.add(planStep.mapId);
     const keys = carried.filter((k) => !inputs.has(k) && consumerMaps(k).some((m) => maps.has(m)));
     if (keys.length > 0) out.push({ stepId, keys });

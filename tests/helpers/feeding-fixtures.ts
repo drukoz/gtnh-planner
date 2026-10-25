@@ -436,7 +436,7 @@ export function simRecipe(stepId: string, ticks: number, inputs: Array<[StuffKey
 
 const UNSET: MachineSettings = { multiStack: null, inputFilter: null, inputFromOutputSide: null, autoOutput: null };
 
-type BasicBase = Pick<BasicNode, 'id' | 'mteId' | 'name' | 'tier' | 'inSlots' | 'outSlots' | 'outputSide' | 'front' | 'maps' | 'recipes'>;
+type BasicBase = Pick<BasicNode, 'id' | 'machineId' | 'name' | 'tier' | 'inSlots' | 'outSlots' | 'outputSide' | 'front' | 'maps' | 'recipes'>;
 
 /**
  * A basic node from `base` and the caller's `over`: its local cell and world cell (the same, in a hand-built model) from
@@ -462,7 +462,7 @@ function basicNode(base: BasicBase, over: Partial<BasicNode>): BasicNode {
  */
 export function smelterNode(over: Partial<BasicNode> = {}): BasicNode {
   return basicNode({
-    id: '0,0,0', mteId: FEED_IDS.SMELTER, name: 'Advanced Alloy Smelter', tier: 2, inSlots: 2, outSlots: 1, outputSide: 3, front: 4,
+    id: '0,0,0', machineId: gtMachineId(FEED_IDS.SMELTER), name: 'Advanced Alloy Smelter', tier: 2, inSlots: 2, outSlots: 1, outputSide: 3, front: 4,
     maps: ['gt.recipe.alloysmelter'], recipes: [simRecipe('sm', 100, [['t:a@0', 1], ['t:b@0', 4]], [['t:c@0', 1]])],
   }, over);
 }
@@ -470,7 +470,7 @@ export function smelterNode(over: Partial<BasicNode> = {}): BasicNode {
 /** A Basic Macerator (`IDS.MACERATOR`) at `id`: 1 input and 1 output slot, output side 3, front 4, recipe `one`: 1 `t:a@0` → 1 `t:x@0` in 20 ticks. */
 export function oneSlotNode(id: NodeId, over: Partial<BasicNode> = {}): BasicNode {
   return basicNode({
-    id, mteId: IDS.MACERATOR, name: 'Basic Macerator', tier: 1, inSlots: 1, outSlots: 1, outputSide: 3, front: 4, maps: ['gt.recipe.macerator'],
+    id, machineId: gtMachineId(IDS.MACERATOR), name: 'Basic Macerator', tier: 1, inSlots: 1, outSlots: 1, outputSide: 3, front: 4, maps: ['gt.recipe.macerator'],
     recipes: [simRecipe('one', 20, [['t:a@0', 1]], [['t:x@0', 1]])],
   }, over);
 }
@@ -482,7 +482,7 @@ export function oneSlotNode(id: NodeId, over: Partial<BasicNode> = {}): BasicNod
  */
 export function sinkNode(id: NodeId, inSlots: number, side = 2): BasicNode {
   return basicNode({
-    id, mteId: FEED_IDS.MIXER, name: 'Basic Mixer', tier: 1, inSlots, outSlots: 1, outputSide: side, front: 4, maps: ['gt.recipe.mixer'],
+    id, machineId: gtMachineId(FEED_IDS.MIXER), name: 'Basic Mixer', tier: 1, inSlots, outSlots: 1, outputSide: side, front: 4, maps: ['gt.recipe.mixer'],
     recipes: [simRecipe('n', 20, [['t:z@0', 1]], [['t:c@0', 1]])],
   }, {});
 }
@@ -513,7 +513,7 @@ export function ebfNode(over: Partial<MultiNode> = {}): MultiNode {
   const name = over.name ?? 'Electric Blast Furnace';
   const recipes = over.recipes ?? [simRecipe('e', 100, [['t:a@0', 1], ['t:b@0', 1]], [['t:x@0', 1]])];
   return {
-    kind: 'multi', ...placed(over.id ?? '1,0,0', name, over), name, mteId: IDS.EBF, recipes, stepIds: [...new Set(recipes.map((r) => r.stepId))],
+    kind: 'multi', ...placed(over.id ?? '1,0,0', name, over), name, machineId: gtMachineId(IDS.EBF), recipes, stepIds: [...new Set(recipes.map((r) => r.stepId))],
     kinds: distinctKeys(recipes.flatMap((r) => r.inputs.map((i) => i.key))), inBuses: [busNode('0,0,0')], outBuses: [outBusNode('2,0,0')],
     inputSeparation: null, separationDefault: true, ...over,
   };
@@ -544,7 +544,7 @@ export function benchNode(over: Partial<BenchNode> = {}): BenchNode {
   for (const key of grid) if (key !== null) cells.set(key, (cells.get(key) ?? 0) + 1);
   const recipes = over.recipes ?? [simRecipe('w', 1, [...cells], [[result.key, result.amount]])];
   return {
-    kind: 'bench', id, local, pos, name, label: `${name} at ${pos.join(' ')}`, mteId: FEED_IDS.BENCH, tier, front: 2, back: 3, grid, result,
+    kind: 'bench', id, local, pos, name, label: `${name} at ${pos.join(' ')}`, machineId: gtMachineId(FEED_IDS.BENCH), tier, front: 2, back: 3, grid, result,
     containers: {}, throughput: 0, fluidSides: [], powerSides: [], itemPipeSides: [], recipes, stepIds: [...new Set(recipes.map((r) => r.stepId))],
     kinds: distinctKeys(recipes.flatMap((r) => r.inputs.map((i) => i.key))), ...over,
   };
