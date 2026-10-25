@@ -5,6 +5,7 @@
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { createProject, login, LV_CIRCUITS, setName, SETTINGS_BUTTON } from './helpers.ts';
+import { uploadSampleWorld } from './world-upload.ts';
 
 /** Opens a new project that makes 30 Basic Circuits a minute on its Materials & steps tab, and gives the icons of its rows. */
 async function materialIcons(page: Page, name: string): Promise<Locator> {
@@ -166,6 +167,106 @@ test('over an open search list the first Escape hides the tip, the second closes
   await expect(avoid).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(materials).toBeHidden();
+});
+
+// ledger ruling P2-R21b (spec §6.1, R15): one layer per press, app-wide. With a tip showing, a field's first Escape only hides the tip and
+// keeps what is being typed (and the focus); the second drops the draft. The amount and a cost here; a crop stat is the same kind of field,
+// which the e2e pack, with no crop table, never draws (escape-layers.test.tsx reads every Escape handler)
+test('a field keeps its draft through the Escape that hides a tip, and drops it on the next', async ({ page }) => {
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Drafts', { ...LV_CIRCUITS, costOverrides: { 't:iron_ingot@0': 2 } });
+  const settings = page.locator('aside[aria-label="Project settings"]');
+  const tip = page.getByRole('tooltip');
+  for (const [field, stored] of [[settings.getByLabel('Amount', { exact: true }), '30'], [settings.getByLabel('Cost of Iron Ingot'), '2']] as const) {
+    await field.fill('2x');                                                             // a draft the field refuses, so nothing sends it
+    await page.mouse.move(5, 5);                                                        // off the target's icon, which an Escape keeps quiet
+    await settings.locator('.settings-target .item-icon').hover();
+    await expect(tip).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(tip).toHaveCount(0);
+    await expect(field).toHaveValue('2x');
+    await expect(field).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(field).toHaveValue(stored);
+  }
+});
+
+// the same for the project's name: the first Escape hides the tip and leaves the edit; the second drops the edit and leaves the field
+test('the project name keeps its edit through the Escape that hides a tip, and drops it on the next', async ({ page }) => {
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Named line', LV_CIRCUITS);
+  const name = page.getByRole('textbox', { name: 'Project name' });
+  await name.fill('Renamed line');
+  await page.locator('aside[aria-label="Project settings"] .settings-target .item-icon').hover();
+  const tip = page.getByRole('tooltip');
+  await expect(tip).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(tip).toHaveCount(0);
+  await expect(name).toHaveValue('Renamed line');
+  await expect(name).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(name).toHaveValue('Named line');
+  await expect(name).not.toBeFocused();
+});
+
+// the same for the map's note dialog: a modal, so no pointer reaches a trigger under it; a focus tip in it shows how its Escape waits (a
+// tip on its Note field, given by the test, shown by the keyboard's focus)
+test('the note dialog stays open through the Escape that hides a tip, and closes on the next', async ({ page }) => {
+  await login(page); await setName(page, 'Ann');
+  const scanId = await uploadSampleWorld(page);
+  await createProject(page, 'Note dialog');                                              // no line on the map, so the click is the note's
+  await page.getByText('Map', { exact: true }).first().click();
+  await page.getByLabel('World scan', { exact: true }).selectOption(scanId);
+  await page.getByLabel('Base').selectOption({ label: 'Overworld base (4, 5)' });
+  await page.getByRole('button', { name: 'Use this base' }).click();
+  await expect(page.getByTestId('found-panel').getByTestId('machine-count')).toHaveText('6');
+  const canvas = page.locator('canvas[role=img]');
+  const box = await canvas.boundingBox();
+  if (box === null) throw new Error('the map has no box');
+  const centre = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  await page.mouse.move(centre.x, centre.y);
+  await page.waitForFunction(() => {                                                   // the base centre's tile is drawn: a click picks its block
+    const c = document.querySelector<HTMLCanvasElement>('canvas[role=img]');
+    return c !== null && (c.getContext('2d')?.getImageData(c.width / 2, c.height / 2, 1, 1).data[3] ?? 0) > 0;
+  });
+  await page.mouse.click(centre.x, centre.y);
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  const note = dialog.getByLabel('Note');
+  await note.evaluate((el) => el.setAttribute('data-tip', 'Write what to build here'));
+  await note.focus();
+  await page.keyboard.press('Tab');
+  await page.keyboard.press('Shift+Tab');                                               // back on the field from the keyboard: :focus-visible
+  await expect(note).toBeFocused();
+  const tip = page.locator('.nei-tooltip[role="tooltip"]');                            // the shared tip, not the map's own
+  await expect(tip).toHaveText('Write what to build here');
+  await page.keyboard.press('Escape');
+  await expect(tip).toHaveCount(0);
+  await expect(dialog).toBeVisible();
+  await expect(note).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+});
+
+// and the tip itself is a layer like the others: a key that a layer above it has taken (prevented on its way down) leaves the tip
+test('a tip stays when a layer above it has taken the Escape', async ({ page }) => {
+  const icon = (await materialIcons(page, 'Layer above')).first();
+  await icon.hover();
+  const tip = page.getByRole('tooltip');
+  await expect(tip).toBeVisible();
+  await page.evaluate(() => {
+    document.documentElement.dataset['claimEscape'] = 'yes';
+    addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && document.documentElement.dataset['claimEscape'] === 'yes') e.preventDefault();
+    }, true);
+  });
+  await page.keyboard.press('Escape');
+  await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));   // a hide is drawn
+  await expect(tip).toBeVisible();
+  await expect(tip).toHaveAttribute('data-state', 'open');
+  await page.evaluate(() => { document.documentElement.dataset['claimEscape'] = 'no'; });
+  await page.keyboard.press('Escape');
+  await expect(tip).toHaveCount(0);
 });
 
 // spec §6.2 (the fix round's I2): an element out of its svg's view shows no tip, not even for a frame (its box is never put in the page),

@@ -148,7 +148,8 @@ function AmountField(props: { settings: PlanSettings; patch: Patch }): ReactElem
           }}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && draft !== null) commit(e.currentTarget.value);
-            if (e.key === 'Escape') {
+            // one layer per press: a key a layer above has handled (the shared tooltip's, hiding its tip) is not this one's (P2-R21b)
+            if (e.key === 'Escape' && !e.nativeEvent.defaultPrevented) {
               stopTimer();
               setDraft(null);
             }
@@ -281,7 +282,7 @@ function CostRow(props: { costKey: string; name: string; value: number; onChange
           onBlur={(e) => commit(e.currentTarget.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') commit(e.currentTarget.value);
-            if (e.key === 'Escape') setDraft(null);
+            if (e.key === 'Escape' && !e.nativeEvent.defaultPrevented) setDraft(null);   // one layer per press
           }}
         />
         {error !== null && <span className="field-error error" role="alert">{error}</span>}
@@ -774,7 +775,7 @@ export function StatInput(props: {
         onBlur={(e) => commit(e.currentTarget.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter') commit(e.currentTarget.value);
-          if (e.key === 'Escape') onDraft(null);
+          if (e.key === 'Escape' && !e.nativeEvent.defaultPrevented) onDraft(null);   // one layer per press
         }}
       />
       {error !== null && <span className="field-error error" role="alert">{error}</span>}

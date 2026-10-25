@@ -266,7 +266,7 @@ export function NoteDialog(props: { pin: Pick; onSave(text: string): void; onCan
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onCancel()}>
       {/* The accessible name avoids the word "note": the text field is the one thing labelled "Note" (ruling M-R5). */}
-      <form className="modal" role="dialog" aria-modal="true" aria-label={`Pin at ${where}`} onSubmit={save} onKeyDown={(e) => e.key === 'Escape' && onCancel()}>
+      <form className="modal" role="dialog" aria-modal="true" aria-label={`Pin at ${where}`} onSubmit={save} onKeyDown={(e) => e.key === 'Escape' && !e.nativeEvent.defaultPrevented && onCancel()}>
         <h2><Figs text={`Add note at ${where}`} /></h2>
         <label className="field">
           <span>Note</span>

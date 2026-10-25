@@ -64,7 +64,8 @@ function ProjectName(props: { name: string; onRename(name: string): void }): Rea
       onBlur={(e) => commit(e.currentTarget.value)}
       onKeyDown={(e) => {
         if (e.key === 'Enter') e.currentTarget.blur();
-        if (e.key === 'Escape') {
+        // one layer per press: a key a layer above has handled (the shared tooltip's, hiding its tip) is not this one's (P2-R21b)
+        if (e.key === 'Escape' && !e.nativeEvent.defaultPrevented) {
           cancelled.current = true;
           e.currentTarget.blur();
         }

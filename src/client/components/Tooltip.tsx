@@ -13,8 +13,9 @@
 //   go at the next press or LONG_PRESS_CLICK_MS after the finger lifts, so a browser that sends no click after a long press loses no tap.
 // - A press with a mouse or a pen hides the tip, and its trigger shows nothing until the pointer leaves it, as a native title. Escape
 //   hides a tip that shows, and keeps a hovered or focused trigger quiet the same way (until the focus moves, for a focused one); it then
-//   prevents the key's default, so the drawer, which skips such a key, closes one layer per press (R15), but never stops it, so Flow's own
-//   Escape still clears a highlight (P2-D22).
+//   prevents the key's default, so the drawer, the search lists, the fields and the note dialog, which all skip such a key, close one layer
+//   per press (R15, P2-R21b), but never stops it, so Flow's own Escape still clears a highlight (P2-D22). A key whose default a layer above
+//   the tip has prevented is not the tip's either.
 // - A scroll, the wheel or a resize hide it, and the pointer and the focus then wait again on what they are on; the window's blur and a
 //   hidden page hide it too. While a tip shows, one loop a frame hides it when its trigger has left the document (a list that empties under
 //   a still pointer fires no pointerout, and a finger's tip hears no pointer event at all: Review Focus 2), re-reads its lines (a replan
@@ -412,7 +413,7 @@ function startHost(id: string, draw: (tip: TipState | null) => void, box: () => 
   };
 
   const onKeyDown = (e: KeyboardEvent): void => {
-    if (e.key === 'Escape') {
+    if (e.key === 'Escape' && !e.defaultPrevented) {   // a layer above the tip has taken it: not the tip's either (P2-R21b)
       const t = shown;
       if (t === null) return;                           // no tip shows: the key is not the tip's
       // quiet until the pointer leaves it or the focus moves; a finger leaves nothing, and its next tap may show the tip again
