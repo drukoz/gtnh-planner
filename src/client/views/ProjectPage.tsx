@@ -116,13 +116,20 @@ function issueCount(code: PlanIssueCode, n: number, issues: readonly PlanIssue[]
  * The server's hint for a project with no target, "Pick something to make" (`no-target`), is a button when the page gives an
  * `onPickTarget` to answer it: the picker is in the settings, which a narrow window keeps in a drawer, so the hint is the way in.
  * Without one it stays text. This is a plain function, with no hook, which the tests call.
+ *
+ * Who tells the plan's cost is `cost`'s (fix round 1 of Phase 2 Task 7, M2 and M8): this sentence (the default); the key-numbers strip
+ * above it, which a screen reader hears with every figure and qualifier the sentence gives, so the sentence stays on the page (the stylesheet
+ * hides it from sight) but is hidden from a screen reader; or nothing, for a project with no target, which has no strip either, while the
+ * plan of its old target is still on screen.
  */
 export function PlanBanner(props: {
   plan: Plan | null; planError: string | null; planLoading: boolean; settings: PlanSettings; send: (ops: ProjectOp[]) => void;
   /** Takes the reader to the picker of what to make (the item search of the Make section). */
   onPickTarget?: () => void;
+  /** Who tells the plan's cost: this sentence (the default), the key-numbers strip (the sentence hidden from a screen reader), or nothing. */
+  cost?: 'sentence' | 'strip' | 'none';
 }): ReactElement | null {
-  const { plan, planError, planLoading, settings, send, onPickTarget } = props;
+  const { plan, planError, planLoading, settings, send, onPickTarget, cost = 'sentence' } = props;
   const warnings = plan?.warnings ?? [];
   const unlocks = plan?.unlocks ?? [];
   const names = plan?.names ?? {};
@@ -145,9 +152,9 @@ export function PlanBanner(props: {
   const others = warnings.filter((w) => !(ISSUE_CODES.has(w.code) && shownIssues.has(problemId(w))) && !(w === derivedWarning && derived.length > 0));
 
   const rawText = rawCostText(plan?.rawCost, stepChargeLabel(stepChargeOf(settings)));
-  // What the plan costs to run and to build (plan 12): on every plan that has a cost, outside the warning box.
-  const costText = plan === null ? null : costLine(plan);
-  const costed = costText === null ? null : <p className="plan-cost">{costText}</p>;
+  // What the plan costs to run and to build (plan 12): on every plan that has a cost, outside the warning box, unless nothing tells it.
+  const costText = plan === null || cost === 'none' ? null : costLine(plan);
+  const costed = costText === null ? null : <p className="plan-cost" aria-hidden={cost === 'strip' ? true : undefined}>{costText}</p>;
   const notes = plan === null ? [] : sourceNotes(plan);
 
   const busy = planLoading && plan !== null;
@@ -426,13 +433,17 @@ export function ProjectPage(props: { id: string }): ReactElement {
         <DeleteProject id={project.id} name={project.name} label="Delete project" onDeleted={() => view.markDeleted(me)} />
       </div>
       {/* The banners' own box, so the page behind an open drawer can be inert in three pieces (ruling R36); it adds no space.
-          The key-numbers strip (Phase 2 spec §10) leads it, the plan's cost sentence beside it hidden from sight by a sibling rule.
+          The key-numbers strip (Phase 2 spec §10) leads it, the plan's cost sentence beside it hidden from sight by a sibling rule and from a
+          screen reader, which hears the strip; with no target there is neither.
           The Compare card (add-on 17) sits under the plan banner, in the same box, so it goes inert with them, and so does the bar that
           holds its button on a narrow window: both below the strip, the card the box's last child (plan ruling p2-d44-landed). */}
       <div className="project-banners" inert={settingsOpen}>
         <KeyNumbers plan={plan} settings={project.settings} />
         {view.error !== null && <p className="banner error" role="alert">{view.error}</p>}
-        <PlanBanner plan={plan} planError={view.planError} planLoading={view.planLoading} settings={project.settings} send={send} onPickTarget={pickTarget} />
+        <PlanBanner
+          plan={plan} planError={view.planError} planLoading={view.planLoading} settings={project.settings} send={send} onPickTarget={pickTarget}
+          cost={project.settings.target === null ? 'none' : 'strip'}
+        />
         {comparable && (
           <div className="compare-bar">
             <CompareToggle open={compare.state.open} onToggle={toggleCompare} ref={compareBarToggle} />

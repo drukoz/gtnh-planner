@@ -2,33 +2,31 @@
 // its machines and the raw material to build and to run it (key-numbers.ts) — each a label with its qualifier over a figure in VT323. A
 // changed figure counts up from the one shown over 400 ms, re-rendered from state frame by frame (P2-D41, so the server's markup and React
 // both hold the final figure), and its tile flashes once; it shows at once on its first render, under reduced motion, as a dash or in words,
-// and when its unit changes. A screen reader hears the final figure only: the counting one is aria-hidden beside a visually hidden copy of
-// it, and the strip is no live region (the plan banner's status and What changed say what changed). A project with no target has no strip;
-// while its plan is on its way an empty box keeps the strip's place, so nothing below moves when the figures come (Task 8 draws its skeleton
-// there). It sits in the banners' box, so it goes inert with them behind an open drawer.
+// and when its unit changes. A screen reader hears the final figure only, exact: the counting one is aria-hidden beside a visually hidden
+// copy, with every qualifier of the plan's cost sentence, which is then hidden from a screen reader (fix round 1, I2 and M2); the strip is
+// no live region (the plan banner's status and What changed say what changed). A project with no target has no strip; while its plan is on
+// its way the strip's own grid of five empty blocks keeps its place at every width, so nothing below moves when the figures come (ledger
+// ruling P2-R48; Task 8 draws its skeleton there). It sits in the banners' box, so it goes inert with them behind an open drawer.
 
 import { useEffect, useState, type ReactElement } from 'react';
 import type { Plan, PlanSettings } from '../../shared/types/plan.ts';
 import { prefersReducedMotion } from '../state/motion.ts';
-import { COUNT_UP_MS, compactNumber, countUpAt, keyNumbers, type KeyNumber } from './key-numbers.ts';
+import { COUNT_UP_MS, compactNumber, countUpAt, keyNumbers, nextCount, type Count, type KeyNumber } from './key-numbers.ts';
 
-/** A figure counting up: the figure it set out `from`, the one it goes `to`, the unit it is in, and the figure `shown` now. */
-interface Count { from: number | null; to: number | null; unit: string; shown: number | null }
+/** The blocks of the box that keeps the strip's place, one a tile. */
+const WAIT_BLOCKS = ['output', 'power', 'machines', 'build', 'run'];
 
 /**
  * The figure to show for `target`, which counts up to a new target from the figure shown when it came, over `ms` by animation frames, easing
  * out (`countUpAt`); between two whole figures it shows whole ones. It shows the target at once on its first render, under reduced motion
- * (asked at each change), for a null target or from a null one, and when the unit changes, which makes the two figures different things.
+ * (asked at each change), for a null target or from a null one, and when the unit changes, which makes the two figures different things
+ * (`nextCount`, the step it takes).
  */
 export function useCountUp(target: number | null, unit: string, ms = COUNT_UP_MS): number | null {
   const [count, setCount] = useState<Count>(() => ({ from: target, to: target, unit, shown: target }));
-  let current = count;
-  if (!Object.is(count.to, target) || count.unit !== unit) {
-    // a new target, set while rendering (React renders again at once, before anything is drawn), so no frame shows the old figure as final
-    const instant = target === null || count.shown === null || count.unit !== unit || prefersReducedMotion();
-    current = { from: instant ? target : count.shown, to: target, unit, shown: instant ? target : count.shown };
-    setCount(current);
-  }
+  const current = nextCount(count, target, unit, prefersReducedMotion);
+  // a new target, set while rendering (React renders again at once, before anything is drawn), so no frame shows the old figure as final
+  if (current !== count) setCount(current);
   const { from, to } = current;
   useEffect(() => {
     if (from === null || to === null || Object.is(from, to)) return;
@@ -53,8 +51,10 @@ export function useCountUp(target: number | null, unit: string, ms = COUNT_UP_MS
 interface Flash { text: string; changes: number; running: boolean }
 
 /**
- * One tile: its label and qualifier, then its figure counting up (aria-hidden), the final figure for a screen reader, and its unit. A change
- * of the text it shows (after its first render) flashes it: the tile is `changed` (its qualifier yellow) until its frame's fade ends.
+ * One tile: its label, its qualifier and what else qualifies it (visually hidden), then its figure counting up (aria-hidden), the exact final
+ * figure for a screen reader, and its unit. A change of the text it shows (after its first render) flashes it: the tile is `changed` (its
+ * qualifier yellow) until its frame's fade ends. The frame is the label row's last child, as a dl's group holds only its dt and dd (fix round
+ * 1, M1); it is drawn against the tile, over its edge.
  */
 function KeyNumberTile(props: { n: KeyNumber }): ReactElement {
   const { n } = props;
@@ -64,25 +64,38 @@ function KeyNumberTile(props: { n: KeyNumber }): ReactElement {
   const counting = shown !== null && n.value !== null && shown !== n.value;
   return (
     <div className={flash.running ? 'key-number changed' : 'key-number'} data-key-number={n.id}>
-      <dt><span>{n.label}</span>{n.sub !== '' && <span className="key-number-sub">{n.sub}</span>}</dt>
+      <dt>
+        <span>{n.label}</span>
+        {n.sub !== '' && <span className="key-number-sub">{n.sub}</span>}
+        {n.more !== undefined && <span className="visually-hidden">{n.more}</span>}
+        {flash.changes > 0 && (
+          <span key={flash.changes} className="key-number-flash" aria-hidden="true" onAnimationEnd={() => setFlash((f) => ({ ...f, running: false }))} />
+        )}
+      </dt>
       <dd className={n.words === true ? 'key-number-words' : undefined}>
         <span aria-hidden="true">{counting ? compactNumber(shown) : n.text}</span>
-        <span className="visually-hidden">{n.text}</span>
+        <span className="visually-hidden">{n.spoken}</span>
         {n.unit !== '' && <span className="key-number-unit">{n.unit}</span>}
       </dd>
-      {flash.changes > 0 && (
-        <span key={flash.changes} className="key-number-flash" aria-hidden="true" onAnimationEnd={() => setFlash((f) => ({ ...f, running: false }))} />
-      )}
     </div>
   );
 }
 
-/** The strip for a project's plan: nothing without a target, an empty box of its height while the plan is on its way, else the five tiles. */
+/**
+ * The strip for a project's plan: nothing without a target; while the plan is on its way, its own grid of five empty blocks as tall as a
+ * tile, so it takes the strip's height at every width (ledger ruling P2-R48); else the five tiles.
+ */
 export function KeyNumbers(props: { plan: Plan | null; settings: PlanSettings }): ReactElement | null {
   const { plan, settings } = props;
   if (settings.target === null) return null;
   const numbers = keyNumbers(plan, settings);
-  if (numbers === null) return <div className="key-numbers-wait" aria-hidden="true" />;
+  if (numbers === null) {
+    return (
+      <div className="key-numbers-wait" aria-hidden="true">
+        {WAIT_BLOCKS.map((id) => <div key={id} />)}
+      </div>
+    );
+  }
   return (
     <section className="key-numbers" aria-label="Key numbers">
       <dl>{numbers.map((n) => <KeyNumberTile key={n.id} n={n} />)}</dl>

@@ -11,7 +11,9 @@ test('the plan counts the build cost of new machines over the horizon the settin
   const cost = page.locator('.plan-cost');
   await expect(cost).toContainText('raw per hour to run');
   await expect(cost).toContainText('counted over 24 h');
-  // The key-numbers strip (Phase 2 spec §10) shows the build cost in a tile of its own, whose qualifier says the horizon.
+  // The key-numbers strip (Phase 2 spec §10) shows the build cost in a tile of its own, whose qualifier says the horizon. A screen reader
+  // hears the cost there, with its exact figures, and not again in the sentence, which stays on the page for these lookups (fix round 1, M2).
+  await expect(cost).toHaveAttribute('aria-hidden', 'true');
   const strip = page.locator('.key-numbers');
   await expect(strip).toContainText('To build');
   await expect(strip).toContainText('raw');

@@ -5,8 +5,9 @@
 
 import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { compactNumber, countUpAt, keyNumbers, machineCount } from '../../src/client/views/key-numbers.ts';
+import { compactNumber, countUpAt, keyNumbers, machineCount, nextCount, type Count } from '../../src/client/views/key-numbers.ts';
 import { KeyNumbers } from '../../src/client/views/KeyNumbers.tsx';
+import { PlanBanner } from '../../src/client/views/ProjectPage.tsx';
 import { defaultSettings } from '../../src/shared/project/apply-op.ts';
 import type { Plan, PlanStep } from '../../src/shared/types/plan.ts';
 
@@ -66,11 +67,80 @@ describe('the key-numbers strip', () => {
     // the page still holds the no-target plan while a just-picked target's plan comes: only the Settings button and the panel name the pick
     const waiting = planOf({ status: 'empty', warnings: [{ code: 'no-target', text: 'Pick something to make' }] });
     const html = renderToStaticMarkup(<KeyNumbers plan={waiting} settings={{ ...defaultSettings(), target: 't:plate@0' }} />);
-    expect(html).toContain('<div class="key-number" data-key-number="output"><dt><span>Output</span></dt><dd><span aria-hidden="true">—</span><span class="visually-hidden">—</span></dd></div>');
+    expect(html).toContain('<div class="key-number" data-key-number="output"><dt><span>Output</span></dt><dd><span aria-hidden="true">—</span><span class="visually-hidden">not available</span></dd></div>');
     expect(html).not.toContain('t:plate@0');
+  });
+  // ledger ruling P2-R48 (fix round 1, I1): the wait box is the strip's own grid, so it is as tall as the loaded strip at every width
+  it('keeps the strip\'s place while its plan is on its way: five empty blocks in the strip\'s grid', () => {
+    const wait = renderToStaticMarkup(<KeyNumbers plan={null} settings={{ ...defaultSettings(), target: 't:plate@0' }} />);
+    expect(wait).toBe(`<div class="key-numbers-wait" aria-hidden="true">${'<div></div>'.repeat(5)}</div>`);
+  });
+  // fix round 1, I2 (spec §10.1: the exact figures stay in the visually hidden value): the tile writes 540k, a screen reader hears 540,000
+  it('gives a screen reader the exact figure a tile writes compactly', () => {
+    const big = planOf({ ...plan, power: { peakEUt: 2.5e9, averageEUt: 1, voltageTier: 9, amps: 16 }, cost: { runPerHour: 5400, build: 540_000, horizonHours: 24 } });
+    const tiles = keyNumbers(big, RATE)!;
+    expect([tiles[1], tiles[3], tiles[4]].map((n) => [n!.text, n!.spoken])).toEqual([['2.5G', '2,500,000,000'], ['540k', '540,000'], ['5,400', '5,400']]);
+    const html = renderToStaticMarkup(<KeyNumbers plan={big} settings={{ ...defaultSettings(), target: 't:plate@0', amount: 30, per: 'min' }} />);
+    expect(html).toContain('<span aria-hidden="true">2.5G</span><span class="visually-hidden">2,500,000,000</span><span class="key-number-unit">EU/t</span>');
+    expect(html).toContain('<span aria-hidden="true">540k</span><span class="visually-hidden">540,000</span><span class="key-number-unit">raw</span>');
+  });
+  // fix round 1, M5: a dash has words a screen reader says, where a lone "—" is often skipped
+  it('gives a dash words a screen reader says', () => {
+    expect(keyNumbers(planOf({ status: 'infeasible' }), RATE)!.map((n) => n.spoken)).toEqual(Array(5).fill('not available'));
+    expect(keyNumbers(planOf({}), RATE)![3]).toMatchObject({ text: '—', spoken: 'not available' });   // no cost
+    expect(keyNumbers(planOf({ target: 't:x@0', targetPerSecond: 1 / (526 * 86400) }), RATE)![0]!.spoken).toBe('1 every 526 days');
+  });
+  // fix round 1, M2: the strip is a screen reader's one source of the plan's cost, so the build tile says every qualifier the cost sentence
+  // gives, the one it shows first and those it leaves out; and the sentence itself is hidden from a screen reader while the strip says it,
+  // and gone with no target (M8), where the strip shows nothing either
+  it('says every qualifier of the build cost once, the one shown and those it leaves out', () => {
+    const counted = planOf({ cost: { runPerHour: 1, build: 2, horizonHours: 168, unpriced: 4 } });
+    expect([keyNumbers(counted, RATE)![3]!.sub, keyNumbers(counted, RATE)![3]!.more]).toEqual(['+4 not counted', 'over 1 week']);
+    const ignored = keyNumbers(planOf({ cost: { runPerHour: 1, build: 2, horizonHours: null, unpriced: 4 } }), RATE)![3]!;
+    expect([ignored.sub, ignored.more]).toEqual(['not counted', '+4 not counted']);
+    const batch = keyNumbers(planOf({ makeN: { totalSeconds: 60, leftovers: [] }, cost: { runPerHour: 0, build: 2, horizonHours: null, batch: 9, unpriced: 4 } }),
+      { mode: 'makeN', per: 'min', amount: 1 })![3]!;
+    expect([batch.sub, batch.more]).toEqual(['+4 not counted', 'for the batch']);
+    expect(keyNumbers(plan, RATE)!.map((n) => n.more)).toEqual([undefined, undefined, undefined, undefined, undefined]);
+    const html = renderToStaticMarkup(<KeyNumbers plan={counted} settings={{ ...defaultSettings(), target: 't:plate@0' }} />);
+    expect(html).toContain('<dt><span>To build</span><span class="key-number-sub">+4 not counted</span><span class="visually-hidden">over 1 week</span></dt>');
+  });
+  it('leaves the cost sentence to the strip: hidden from a screen reader while the strip says it, gone with no target', () => {
+    const costed = planOf({ cost: { runPerHour: 5400, build: 182, horizonHours: 24 } });
+    const banner = (cost?: 'sentence' | 'strip' | 'none'): string =>
+      renderToStaticMarkup(<PlanBanner plan={costed} planError={null} planLoading={false} settings={defaultSettings()} send={() => {}} cost={cost} />);
+    expect(banner()).toMatch(/^<p class="plan-cost">5,400 raw per hour to run/);                       // the default, which plan-banner.test.tsx pins
+    expect(banner('strip')).toMatch(/^<p class="plan-cost" aria-hidden="true">5,400 raw per hour to run/);
+    expect(banner('none')).toBe('');
+  });
+  // fix round 1, M3: a rate is shown in the unit its plan was made in. Changing the unit (minutes to hours) leaves the tile as it is until the
+  // plan of the new unit comes, which then shows at once (useCountUp: a new unit counts from nothing); a new amount on its way counts up
+  it('shows a rate in the unit its plan was made in while the plan of another unit is on its way', () => {
+    expect(keyNumbers(plan, { ...RATE, per: 'hour' })![0]).toMatchObject({ value: 30, text: '30', unit: '/min' });   // the plan of 30 a minute
+    expect(keyNumbers(planOf({ ...plan, targetPerSecond: 30 / 3600 }), { ...RATE, per: 'hour' })![0]).toMatchObject({ text: '30', unit: '/h' });
+    expect(keyNumbers(plan, { ...RATE, amount: 60 })![0]).toMatchObject({ value: 30, unit: '/min' });                // a new amount on its way
+    expect(keyNumbers(planOf({ ...plan, targetPerSecond: 60 / 3600 }), { ...RATE, amount: 60 })![0]).toMatchObject({ text: '60', unit: '/h' });   // and back
+  });
+  // fix round 1, M3 and M4: useCountUp's step (`nextCount`), the same target changing nothing, a new one counting on from the figure shown, and
+  // at once from a dash, to a dash, in another unit and under reduced motion
+  it('counts on from the figure shown, and at once from or to a dash, in another unit and under reduced motion', () => {
+    const at = (shown: number | null, unit = '/min'): Count => ({ from: shown, to: shown, unit, shown });
+    const moving = (): boolean => false;
+    const counting: Count = { from: 30, to: 60, unit: '/min', shown: 45 };
+    expect(nextCount(counting, 60, '/min', moving)).toBe(counting);                                            // the same target: nothing changes
+    expect(nextCount(at(30), 60, '/min', moving)).toEqual({ from: 30, to: 60, unit: '/min', shown: 30 });      // counts on from 30
+    expect(nextCount(counting, 90, '/min', moving)).toEqual({ from: 45, to: 90, unit: '/min', shown: 45 });    // from where it stands
+    expect(nextCount(at(null, ''), 30, '/min', moving)).toEqual(at(30));                                     // from a dash: at once
+    expect(nextCount(at(30), null, '', moving)).toEqual(at(null, ''));                                        // to a dash: at once
+    expect(nextCount(at(30), 1800, '/h', moving)).toEqual(at(1800, '/h'));                                    // another unit: never from 30
+    expect(nextCount(at(30), 60, '/min', () => true)).toEqual(at(60));                                       // reduced motion: at once
   });
   it('writes big numbers compactly, three significant digits', () => {
     expect([99_999, 100_000, 540_000, 999_999, 5_400_000, 12_345_678, 2_500_000_000].map(compactNumber)).toEqual(['99,999', '100k', '540k', '1M', '5.4M', '12.3M', '2.5G']);
+  });
+  // fix round 1, M6: the form follows the figure as written, so 99,999.6, which rounds to 100,000, is 100k
+  it('rounds a figure before it picks the compact form', () => {
+    expect([99_999.4, 99_999.6, 999_999.6].map(compactNumber)).toEqual(['99,999', '100k', '1M']);
   });
   it('counts up easing out, from the last value to the new one, never backwards', () => {
     expect([0, 200, 400, 500].map((t) => countUpAt(0, 100, t))).toEqual([0, 87.5, 100, 100]); expect(countUpAt(100, 0, 200)).toBe(12.5);

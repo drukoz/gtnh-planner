@@ -491,9 +491,10 @@ button.banner-chip { display: inline-flex; align-items: center; gap: 6px; min-he
  * tile is narrow; then the figure in VT323 28 px on a 26 px line (its digits as tall as the 24 px Pixelify the strip was first drawn in,
  * §25), on one line, never shrunk and cut with an ellipsis past its tile, its unit in VT323 15 px on the same line, a rate in words in
  * Inter 15 px. A changed tile's qualifier reads yellow while a 2 px yellow frame fades once over its edge (opacity only; the frame rests at
- * its own opacity 0). The strip takes 60 px with its margin, and so does the empty box that keeps its place while the plan is on its way.
- * The plan's cost sentence stays for a screen reader, hidden from sight as `.visually-hidden` hides, by a sibling rule: its paragraph takes
- * no class.
+ * its own opacity 0). The strip takes 60 px with its margin where its five tiles make one row. While the plan is on its way the strip's
+ * place is its own grid of five empty blocks as tall as a tile, so it takes as much at every width, wrapped or not (ledger ruling P2-R48).
+ * The plan's cost sentence stays on the page, hidden from sight as `.visually-hidden` hides, by a sibling rule (its paragraph takes no
+ * class), and from a screen reader by the page, which hears the strip.
  */
 .key-numbers { margin: 0 0 8px; }
 .key-numbers > dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin: 0; }
@@ -517,7 +518,8 @@ button.banner-chip { display: inline-flex; align-items: center; gap: 6px; min-he
   position: absolute; inset: -2px; border: 2px solid var(--accent); pointer-events: none;
   animation: flash-out 700ms var(--ease-out); opacity: 0;
 }
-.key-numbers-wait { height: 52px; margin: 0 0 8px; }
+.key-numbers-wait { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin: 0 0 8px; }
+.key-numbers-wait > div { height: 52px; }
 .project-banners > .key-numbers ~ .plan-cost {
   position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
 }

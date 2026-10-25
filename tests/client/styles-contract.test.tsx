@@ -2600,13 +2600,15 @@ const GRID_RULES = [
 
 /**
  * Phase 2 Task 7 (spec §10.2): the key-numbers strip, five readout tiles at the top of the banners' box, each a label row with its qualifier
- * over a VT323 figure and its unit; a changed tile's frame and qualifier flash once; the place it keeps while its plan is on its way; and the
- * plan's cost sentence beside it, kept for a screen reader and hidden from sight by a sibling rule (`.plan-cost`'s own rule is pinned).
+ * over a VT323 figure and its unit; a changed tile's frame and qualifier flash once; the place it keeps while its plan is on its way, the
+ * strip's own grid of five empty 52 px blocks (ledger ruling P2-R48); and the plan's cost sentence beside it, hidden from sight by a sibling
+ * rule (`.plan-cost`'s own rule is pinned).
  */
 const STRIP_HIDE = '.project-banners > .key-numbers ~ .plan-cost';
 const STRIP_RULES = [
   '.key-numbers', '.key-numbers > dl', '.key-number', '.key-number dt', '.key-number-sub', '.key-number dd', '.key-number-unit',
-  '.key-number dd.key-number-words', '.key-number.changed .key-number-sub', '.key-number-flash', '.key-numbers-wait', STRIP_HIDE,
+  '.key-number dd.key-number-words', '.key-number.changed .key-number-sub', '.key-number-flash', '.key-numbers-wait', '.key-numbers-wait > div',
+  STRIP_HIDE,
 ];
 
 /** The selectors of every rule Phase 2 adds; each later task appends its own. */
@@ -2952,8 +2954,9 @@ describe('the Machine GUI Phase 2: the inventory grid', () => {
 // figure in VT323 28 px on a 26 px line, its digits as tall as the 24 px Pixelify the spec first gave it (§25, plan rulings digits-sizes and
 // strip-figures), on one line and never shrunk, its unit VT323 15 px on the same 26 px line, and a rate in words in Inter 15 px. A changed
 // tile's 2 px yellow frame fades once over its edge (opacity only, no fill mode: the frame rests at its own opacity 0) while its qualifier
-// reads yellow. The strip takes 60 px with its margin, and so does the empty box that keeps its place while the plan is on its way; the
-// plan's cost sentence beside it stays for a screen reader, hidden from sight by a sibling rule, as `.visually-hidden` hides (its own rule,
+// reads yellow. The strip takes 60 px with its margin where its five tiles make one row; the place it keeps while the plan is on its way is
+// the strip's own grid of five empty blocks as tall as a tile, so it is as tall as the loaded strip at every width, wrapped or not (ledger
+// ruling P2-R48). The plan's cost sentence beside it is hidden from sight by a sibling rule, as `.visually-hidden` hides (its own rule,
 // `.plan-cost`, is pinned by the chrome case above and left as it is).
 describe('the Machine GUI Phase 2: the key-numbers strip', () => {
   it('shows the key numbers on 52 px readout tiles, and hides the cost sentence beside them', () => {
@@ -2980,7 +2983,7 @@ describe('the Machine GUI Phase 2: the key-numbers strip', () => {
       ['.key-number.changed .key-number-sub', 'color', 'var(--accent)'],
       ['.key-number-flash', 'position', 'absolute'], ['.key-number-flash', 'inset', '-2px'], ['.key-number-flash', 'border', '2px solid var(--accent)'],
       ['.key-number-flash', 'pointer-events', 'none'], ['.key-number-flash', 'animation', 'flash-out 700ms var(--ease-out)'], ['.key-number-flash', 'opacity', '0'],
-      ['.key-numbers-wait', 'height', '52px'], ['.key-numbers-wait', 'margin', '0 0 8px'],
+      ['.key-numbers-wait', 'display', 'grid'], ['.key-numbers-wait', 'margin', '0 0 8px'], ['.key-numbers-wait > div', 'height', '52px'],
       [STRIP_HIDE, 'position', 'absolute'], [STRIP_HIDE, 'width', '1px'], [STRIP_HIDE, 'height', '1px'], [STRIP_HIDE, 'overflow', 'hidden'],
       [STRIP_HIDE, 'clip-path', 'inset(50%)'], [STRIP_HIDE, 'white-space', 'nowrap'],
     ]);
@@ -2992,10 +2995,14 @@ describe('the Machine GUI Phase 2: the key-numbers strip', () => {
     expect(tile).toBe(px(declared('.key-number', 'height')));
     expect([line('.key-number-unit'), line('.key-number dd.key-number-words')]).toEqual([line('.key-number dd'), line('.key-number dd')]);
     expect(declared('.key-number dd', 'container-type')).toBeUndefined(); expect(declared('.key-number dd', 'font-size')).toBeUndefined();
-    // with its margin the strip takes 60 px (spec §3.6: +27.7 px against the 32.3 px cost line it replaces), and the box that keeps its place
-    // while the plan is on its way takes as much, so the views below never move when the figures come
+    // with its margin the strip takes 60 px where its tiles make one row (spec §3.6: +27.7 px against the 32.3 px cost line it replaces), and
+    // the place it keeps while the plan is on its way is the strip's own grid (its columns and gap) of blocks as tall as a tile, with no height
+    // of its own, so it takes as much at every width and the views below never move when the figures come (ledger ruling P2-R48)
     expect(px(declared('.key-number', 'height')) + px(declared('.key-numbers', 'margin')?.split(' ')[2])).toBe(60);
-    expect(px(declared('.key-numbers-wait', 'height')) + px(declared('.key-numbers-wait', 'margin')?.split(' ')[2])).toBe(60);
+    expect(px(declared('.key-numbers-wait > div', 'height')) + px(declared('.key-numbers-wait', 'margin')?.split(' ')[2])).toBe(60);
+    for (const property of ['grid-template-columns', 'gap']) expect(declared('.key-numbers-wait', property), property).toBe(declared('.key-numbers > dl', property));
+    expect(declared('.key-numbers-wait > div', 'height')).toBe(declared('.key-number', 'height'));
+    expect(declared('.key-numbers-wait', 'height')).toBeUndefined();
     // the flash: once, well under 5 s, and resting at the frame's own opacity, so no fill mode; it fades from full and takes no pointer
     expect(declared('.key-number-flash', 'animation')).not.toMatch(/infinite|forwards|backwards|both/);
     expect(ruleBody('@keyframes flash-out')).toMatch(/^from \{ opacity: 1;? \}$/);
