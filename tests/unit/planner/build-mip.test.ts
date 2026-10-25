@@ -34,8 +34,8 @@ describe('the build-cost MIP', () => {
     // 24 boards: tin 48 + 28 = 76 < solder 36 + 48 = 84; 168 boards: tin 336 + 28 = 364 > solder 252 + 48 = 300.
     const day = await solvedWithBuild(solderSpec(), COSTS, [['t:board@0', 1 / 3600]], { options: SOLDER });
     expect(day.runs).toEqual(['board-tin', 'x-tin']);
-    expect(day.sol.machines?.get('board-tin')).toMatchObject({ option: { mteId: 121 }, added: 1, ownedLoad: 0 });
-    expect(day.sol.machines?.get('x-tin')).toMatchObject({ option: { mteId: 131 }, added: 1 });
+    expect(day.sol.machines?.get('board-tin')).toMatchObject({ option: { id: 'gt:121' }, added: 1, ownedLoad: 0 });
+    expect(day.sol.machines?.get('x-tin')).toMatchObject({ option: { id: 'gt:131' }, added: 1 });
     const week = await solvedWithBuild(solderSpec(), COSTS, [['t:board@0', 1 / 3600]], { options: SOLDER, horizonSeconds: 604800 });
     expect(week.runs).toEqual(['alloy-solder', 'board-solder', 'x-solder']);
     for (const id of week.runs) expect(week.sol.machines?.get(id)).toMatchObject({ added: 1 });
@@ -45,10 +45,10 @@ describe('the build-cost MIP', () => {
     const options = { press: [opt(101, 1, 0.2, 10), opt(102, 2, 0.4, 16)] };
     // LV 5 × 10 = 50 > MV ceil(2.5) × 16 = 48; at 0.2/s one machine either way, 10 < 16.
     const fast = await solvedWithBuild(pressSpec(), COSTS, [['t:t@0', 1]], { options });
-    expect(fast.sol.machines?.get('press')).toMatchObject({ option: { mteId: 102 }, added: 3 });
+    expect(fast.sol.machines?.get('press')).toMatchObject({ option: { id: 'gt:102' }, added: 3 });
     expect((fast.sol.runs.get('press') as number) / 0.4).toBeLessThanOrEqual(3 + 1e-9);
     const slow = await solvedWithBuild(pressSpec(), COSTS, [['t:t@0', 0.2]], { options });
-    expect(slow.sol.machines?.get('press')).toMatchObject({ option: { mteId: 101 }, added: 1 });
+    expect(slow.sol.machines?.get('press')).toMatchObject({ option: { id: 'gt:101' }, added: 1 });
   });
 
   it('pays the step charge once per new machine block, owned machines free', async () => {
@@ -56,22 +56,22 @@ describe('the build-cost MIP', () => {
     // is 6 raw a new machine and one of 0.04 is 4. The work of 2.5 Basic presses (3 × 10) or one Advanced (40): 3 × 16 =
     // 48 > 46 at 6, 3 × 14 = 42 < 44 at 4. Two LV presses (2 × 10) or one MV that does both (25): 2 × 16 = 32 > 31 at 6,
     // 28 < 29 at 4 (with no charge two LV presses always build for less, and the MIP gives the MV no columns).
-    const built = (sol: Solution): [number, number] => {
+    const built = (sol: Solution): [string, number] => {
       const m = sol.machines?.get('press') as StepMachines;
-      return [m.option.mteId, m.pool === undefined ? m.added : (sol.pools?.get(m.pool)?.added ?? 0)];
+      return [m.option.id, m.pool === undefined ? m.added : (sol.pools?.get(m.pool)?.added ?? 0)];
     };
     const press = async (options: MachineOption[], runs: number, horizonSeconds: number, stepCharge: number, share: boolean): Promise<Solution> =>
       (await solvedWithBuild(pressSpec(), COSTS, [['t:t@0', runs]], { options: { press: options }, horizonSeconds, share }, { stepCharge })).sol;
     for (const share of [false, true]) {
       const advanced = [opt(101, 1, 0.2, 10), opt(102, 2, 0.5, 40)];
-      expect(built(await press(advanced, 0.5, 200, 0.06, share)), `share ${share}`).toEqual([102, 1]);
-      expect(built(await press(advanced, 0.5, 200, 0.04, share)), `share ${share}`).toEqual([101, 3]);
+      expect(built(await press(advanced, 0.5, 200, 0.06, share)), `share ${share}`).toEqual(['gt:102', 1]);
+      expect(built(await press(advanced, 0.5, 200, 0.04, share)), `share ${share}`).toEqual(['gt:101', 3]);
       const doubled = [opt(101, 1, 0.2, 10), opt(102, 2, 0.4, 25)];
-      expect(built(await press(doubled, 0.4, 250, 0.06, share)), `share ${share}`).toEqual([102, 1]);
-      expect(built(await press(doubled, 0.4, 250, 0.04, share)), `share ${share}`).toEqual([101, 2]);
+      expect(built(await press(doubled, 0.4, 250, 0.06, share)), `share ${share}`).toEqual(['gt:102', 1]);
+      expect(built(await press(doubled, 0.4, 250, 0.04, share)), `share ${share}`).toEqual(['gt:101', 2]);
       // Three owned Basic presses cost no build and no charge: they do the work rather than one new Advanced (46).
       const owned = await press([opt(101, 1, 0.2, 10, 3), opt(102, 2, 0.5, 40)], 0.5, 200, 0.06, share);
-      expect(owned.machines?.get('press')).toMatchObject({ option: { mteId: 101 }, added: 0, newLoad: 0, ownedLoad: share ? 2.5 : 3 });
+      expect(owned.machines?.get('press')).toMatchObject({ option: { id: 'gt:101' }, added: 0, newLoad: 0, ownedLoad: share ? 2.5 : 3 });
     }
     // Make N pays it once per type it adds: 100 fast runs take 100 raw, 50 to build and the charge on σ = 100 against the
     // owned slow press's 200 raw: 190 < 200 at 0.4, 210 > 200 at 0.6.
@@ -102,12 +102,12 @@ describe('the build-cost MIP', () => {
     expect(shared.runs).toEqual(['h-gravel', 'h-sand', 'smelt']);
     const pools = [...(shared.sol.pools?.values() ?? [])].sort((a, b) => (a.steps[0] as string).localeCompare(b.steps[0] as string));
     expect(pools).toMatchObject([
-      { option: { mteId: 481 }, added: 1, steps: ['h-gravel', 'h-sand'] },
-      { option: { mteId: 151 }, added: 1, steps: ['smelt'] },
+      { option: { id: 'gt:481' }, added: 1, steps: ['h-gravel', 'h-sand'] },
+      { option: { id: 'gt:151' }, added: 1, steps: ['smelt'] },
     ]);
     for (const id of ['h-gravel', 'h-sand']) {
       const m = shared.sol.machines?.get(id);
-      expect(m).toMatchObject({ option: { mteId: 481 }, added: 0, pool: '481:1:|-|' });   // no circuit, nothing held
+      expect(m).toMatchObject({ option: { id: 'gt:481' }, added: 0, pool: 'gt:481:1:|-|' });   // no circuit, nothing held
       expect(Math.abs((m?.newLoad ?? 0) - 1 / 30)).toBeLessThan(1e-9);   // 1/60 runs a second ÷ 0.5
     }
     // The later stages keep to the machines exactly: no hair of dug sand bought, none sold back below 0.
@@ -115,7 +115,7 @@ describe('the build-cost MIP', () => {
     expect(shared.sol.rawCost).toBe(0);
     const direct = await solvedWithBuild(hammerSpec(), GLASS, demand, { options: HAMMERS, alsoMade: GATHERED }, CHARGED);
     expect(direct.runs).toEqual(['h-gravel', 'h-sand', 'smelt']);
-    for (const id of ['h-gravel', 'h-sand']) expect(direct.sol.machines?.get(id)).toMatchObject({ option: { mteId: 481 }, added: 1, newLoad: 1 });
+    for (const id of ['h-gravel', 'h-sand']) expect(direct.sol.machines?.get(id)).toMatchObject({ option: { id: 'gt:481' }, added: 1, newLoad: 1 });
     expect(direct.sol.pools?.size ?? 0).toBe(0);
   });
 
@@ -124,8 +124,8 @@ describe('the build-cost MIP', () => {
     // each new machine block 1,036.8 (2 % of it): 3 shared hammers 3 × 1,053.8 < gravel by hand 3 × 1,036.8 + 2 × 1,053.8.
     const demand: Array<[StuffKey, number]> = [['t:glass@0', 0.6]];
     const shared = await solvedWithBuild(hammerSpec(), GLASS, demand, { options: HAMMERS, alsoMade: GATHERED, share: true }, CHARGED);
-    const pools = new Map([...(shared.sol.pools?.values() ?? [])].map((p) => [p.option.mteId, p.added]));
-    expect(pools).toEqual(new Map([[481, 3], [151, 2]]));
+    const pools = new Map([...(shared.sol.pools?.values() ?? [])].map((p) => [p.option.id, p.added]));
+    expect(pools).toEqual(new Map([['gt:481', 3], ['gt:151', 2]]));
     const direct = await solvedWithBuild(hammerSpec(), GLASS, demand, { options: HAMMERS, alsoMade: GATHERED }, CHARGED);
     for (const id of ['h-gravel', 'h-sand']) expect(direct.sol.machines?.get(id)).toMatchObject({ added: 2 });
   });
@@ -153,10 +153,10 @@ describe('the build-cost MIP', () => {
     const free = { 'p-a': [opt(101, 1, 0.2, 0)], 'p-b': [opt(101, 1, 0.2, 0)] };
     const direct = await solvedWithBuild(twoFreeSpec(), { 't:a@0': 0, 't:b@0': 0 }, [['t:t@0', 0.1]], { options: free }, { stepCharge: 0.02 });
     expect(direct.runs).toHaveLength(1);
-    expect(direct.sol.machines?.get(direct.runs[0] as string)).toMatchObject({ option: { mteId: 101 }, added: 1 });
+    expect(direct.sol.machines?.get(direct.runs[0] as string)).toMatchObject({ option: { id: 'gt:101' }, added: 1 });
     const priced = { 'p-a': [opt(101, 1, 0.2, 10)], 'p-b': [opt(101, 1, 0.2, 10)] };
     const shared = await solvedWithBuild(twoFreeSpec(), { 't:a@0': 0, 't:b@0': 0 }, [['t:t@0', 0.1]], { options: priced, share: true }, { stepCharge: 0.02 });
-    expect([...(shared.sol.pools?.values() ?? [])]).toMatchObject([{ option: { mteId: 101 }, added: 1 }]);
+    expect([...(shared.sol.pools?.values() ?? [])]).toMatchObject([{ option: { id: 'gt:101' }, added: 1 }]);
   });
 
   it('never shares a machine between programmed circuits, held items or fluids', async () => {
@@ -169,12 +169,12 @@ describe('the build-cost MIP', () => {
       });
       return { sol, pools: [...(sol.pools?.values() ?? [])] };
     };
-    expect((await pools(twoPressSpec())).pools).toMatchObject([{ option: { mteId: 101 }, added: 1 }]);
+    expect((await pools(twoPressSpec())).pools).toMatchObject([{ option: { id: 'gt:101' }, added: 1 }]);
     for (const spec of [
       twoPressSpec({ circuits: [1, 2] }), twoPressSpec({ held: ['t:mold_a@0', 't:mold_b@0'] }),
       twoPressSpec({ held: ['t:mold_a@0', 't:mold_a@0'], fluids: ['fluid:molten.iron', 'fluid:molten.tin'] }),   // one input tank holds one fluid
     ]) {
-      expect((await pools(spec)).pools).toMatchObject([{ option: { mteId: 101 }, added: 1 }, { option: { mteId: 101 }, added: 1 }]);
+      expect((await pools(spec)).pools).toMatchObject([{ option: { id: 'gt:101' }, added: 1 }, { option: { id: 'gt:101' }, added: 1 }]);
     }
     expect((await pools(twoPressSpec({ fluids: ['fluid:molten.iron', 'fluid:molten.iron'] }))).pools).toMatchObject([{ added: 1 }]);
     // One owned machine serves one key: one step runs on it, the other on a new one.
@@ -189,7 +189,7 @@ describe('the build-cost MIP', () => {
     // The owned MV press does 0.4 runs a second and 3 new LV presses the other 0.6: 30, against 1 owned + 2 new MV for 32
     // and 5 LV for 50.
     const { sol } = await solvedWithBuild(pressSpec(), COSTS, [['t:t@0', 1]], { options: { press: [opt(101, 1, 0.2, 10), opt(102, 2, 0.4, 16, 1)] } });
-    expect(sol.machines?.get('press')).toMatchObject({ option: { mteId: 101 }, added: 3, ownedLoad: 0, others: [{ option: { mteId: 102 }, ownedLoad: 1 }] });
+    expect(sol.machines?.get('press')).toMatchObject({ option: { id: 'gt:101' }, added: 3, ownedLoad: 0, others: [{ option: { id: 'gt:102' }, ownedLoad: 1 }] });
   });
 
   it('runs a step only on the owned machines it cannot add to', async () => {
@@ -241,15 +241,15 @@ describe('the build-cost MIP', () => {
     for (const { horizonSeconds, opts } of ways) {
       const { sol } = await solvedWithBuild(twoPressSpec(), COSTS, [['t:t1@0', 0.1], ['t:t2@0', 0.1]], { options, horizonSeconds }, opts);
       expect(sol.status).toBe('ok');
-      expect(sol.machines?.get('press-a')).toMatchObject({ option: { mteId: 101 }, added: 1, ownedLoad: 0 });
-      expect(sol.machines?.get('press-b')).toMatchObject({ option: { mteId: 102 }, added: 0, ownedLoad: 1 });
+      expect(sol.machines?.get('press-a')).toMatchObject({ option: { id: 'gt:101' }, added: 1, ownedLoad: 0 });
+      expect(sol.machines?.get('press-b')).toMatchObject({ option: { id: 'gt:102' }, added: 0, ownedLoad: 1 });
       // On a network the two share it: press-b takes 0.75 of it, press-a the other 0.25 beside one new LV press.
       const shared = await solvedWithBuild(twoPressSpec(), COSTS, [['t:t1@0', 0.3], ['t:t2@0', 0.3]], { options, horizonSeconds, share: true }, opts);
       expect(shared.sol.status).toBe('ok');
       expect(shared.sol.machines?.get('press-a'))
-        .toMatchObject({ option: { mteId: 101 }, newLoad: 1, ownedLoad: 0, others: [{ option: { mteId: 102 }, ownedLoad: 0.25 }] });
-      expect(shared.sol.machines?.get('press-b')).toMatchObject({ option: { mteId: 102 }, newLoad: 0, ownedLoad: 0.75 });
-      expect(shared.sol.pools?.get('101:1:|-|')).toMatchObject({ added: 1 });
+        .toMatchObject({ option: { id: 'gt:101' }, newLoad: 1, ownedLoad: 0, others: [{ option: { id: 'gt:102' }, ownedLoad: 0.25 }] });
+      expect(shared.sol.machines?.get('press-b')).toMatchObject({ option: { id: 'gt:102' }, newLoad: 0, ownedLoad: 0.75 });
+      expect(shared.sol.pools?.get('gt:101:1:|-|')).toMatchObject({ added: 1 });
     }
   });
 
@@ -267,14 +267,14 @@ describe('the build-cost MIP', () => {
     expect(sol.status).toBe('ok');
     expect(runs).toEqual(['press-b', 'press-c']);
     expect(sol.machines?.get('press-b')).toMatchObject({ added: 0, ownedLoad: 1 });
-    expect(sol.machines?.get('press-c')).toMatchObject({ option: { mteId: 102 }, added: 1 });
+    expect(sol.machines?.get('press-c')).toMatchObject({ option: { id: 'gt:102' }, added: 1 });
   });
 
   it('builds a multiblock at the hatch tier that is cheaper to build', async () => {
     // Task 3's Large Bender at MV: one machine either way at 0.2/s (the LV energy hatch is cheaper); 2 × 81.5 > 86.5 at 0.4/s.
     const options = { press: [{ ...opt(1100, 1, 0.2, 81.5), kind: 'multiblock' as const }, { ...opt(1100, 2, 0.4, 86.5), kind: 'multiblock' as const }] };
     expect((await solvedWithBuild(pressSpec(), COSTS, [['t:t@0', 0.2]], { options })).sol.machines?.get('press'))
-      .toMatchObject({ option: { mteId: 1100, tier: 1 }, added: 1 });
+      .toMatchObject({ option: { id: 'gt:1100', tier: 1 }, added: 1 });
     expect((await solvedWithBuild(pressSpec(), COSTS, [['t:t@0', 0.4]], { options })).sol.machines?.get('press'))
       .toMatchObject({ option: { tier: 2 }, added: 1 });
   });
@@ -320,7 +320,7 @@ describe('the build-cost MIP', () => {
     // 1/min: 1,440 + 110 < 2,880 + 10; 1/h: 24 + 110 > 48 + 10. A pricing-gap cleanroom weighs its stand-in.
     const options = { clean: [opt(101, 1, 0.2, 10)], dirty: [opt(111, 1, 0.2, 10)] };
     for (const build of [100, null]) {
-      const cleanroom = { mteId: 900, name: 'Cleanroom', build, solveBuild: 100, owned: 0 };
+      const cleanroom = { id: 'gt:900', name: 'Cleanroom', build, solveBuild: 100, owned: 0 };
       const busy = await solvedWithBuild(cleanSpec(), COSTS, [['t:t@0', 1 / 60]], { options, cleanroom });
       expect(busy.runs).toEqual(['clean']);
       expect(busy.sol.cleanroom).toBe(true);
@@ -357,7 +357,7 @@ describe('the build-cost MIP', () => {
     expect(first.buildStats?.status === 'optimal' || first.buildStats?.stop === 'limit').toBe(true);
     const again = await solve();
     expect([...again.runs]).toEqual([...first.runs]);
-    expect([...(again.machines ?? [])].map(([id, m]) => [id, m.option.mteId, m.added])).toEqual([...(first.machines ?? [])].map(([id, m]) => [id, m.option.mteId, m.added]));
+    expect([...(again.machines ?? [])].map(([id, m]) => [id, m.option.id, m.added])).toEqual([...(first.machines ?? [])].map(([id, m]) => [id, m.option.id, m.added]));
   });
 
   it('plans the same machines whatever the time guard, which never decides a plan', async () => {
@@ -365,7 +365,7 @@ describe('the build-cost MIP', () => {
     // stats, on a line of one step per machine and on a network's sharing pools.
     const decided = (sol: Solution): unknown => ({
       runs: [...sol.runs], buys: [...sol.buys],
-      machines: [...(sol.machines ?? [])].map(([id, m]) => [id, m.option.mteId, m.option.tier, m.added, m.newLoad, m.ownedLoad]),
+      machines: [...(sol.machines ?? [])].map(([id, m]) => [id, m.option.id, m.option.tier, m.added, m.newLoad, m.ownedLoad]),
       pools: [...(sol.pools ?? [])].map(([key, p]) => [key, p.added, p.steps]),
       stats: { nodes: sol.buildStats?.nodes, status: sol.buildStats?.status, stop: sol.buildStats?.stop, approx: sol.buildStats?.approx },
     });
@@ -387,7 +387,7 @@ describe('the build-cost MIP', () => {
     const options = { fast: [opt(301, 1, 0.2, 1e6)], slow: [opt(302, 1, 0.2, 10), opt(304, 2, 0.4, 16)] };
     const { runs, sol } = await solvedWithBuild(fastSlowSpec(), COSTS, [['t:t@0', 1]], { options });
     expect(runs).toEqual(['slow']);
-    expect(sol.machines?.get('slow')).toMatchObject({ option: { mteId: 304 }, added: 3, ownedLoad: 0 });
+    expect(sol.machines?.get('slow')).toMatchObject({ option: { id: 'gt:304' }, added: 3, ownedLoad: 0 });
     expect(sol.runs.get('slow') as number).toBeLessThanOrEqual(3 * 0.4 + 1e-9);
     // The model priced those machines at max(10, 40 × 1) = 40 and proved that optimal; the objective it reports is the
     // decision's, with the 48 its machines cost (σ = 1 raw a second over 24 h).
@@ -414,7 +414,7 @@ describe('the build-cost MIP', () => {
     const options = { pa: [opt(401, 1, 0.2, 10), opt(402, 2, 0.4, 16)], pb: [opt(403, 1, 1, 14.5)] };
     const { runs, sol } = await solvedWithBuild(spec, { 't:a@0': 1, 't:b@0': 1.000001 }, [['t:t@0', 0.3]], { options });
     expect(runs).toEqual(['pb']);
-    expect(sol.machines?.get('pb')).toMatchObject({ option: { mteId: 403 }, added: 1 });
+    expect(sol.machines?.get('pb')).toMatchObject({ option: { id: 'gt:403' }, added: 1 });
   });
 
   it('falls back to the relaxation rounded up when the time guard stops the MIP', async () => {
@@ -422,7 +422,7 @@ describe('the build-cost MIP', () => {
     const { sol } = await solvedWithBuild(pressSpec(), COSTS, [['t:t@0', 1]], { options: { press: [opt(101, 1, 0.2, 10), opt(102, 2, 0.4, 16)] } }, { buildTimeLimit: 0 });
     expect(sol.warnings).toContainEqual(expect.objectContaining({ code: 'build-cost-approx' }));
     expect(sol.buildStats).toMatchObject({ status: 'skipped', approx: true });
-    expect(sol.machines?.get('press')).toMatchObject({ option: { mteId: 102 }, added: 3 });
+    expect(sol.machines?.get('press')).toMatchObject({ option: { id: 'gt:102' }, added: 3 });
   });
 
   it('falls back to plan 09\'s plan rounded up where that costs the build MIP less than the relaxation rounded up', async () => {
@@ -447,7 +447,7 @@ describe('the build-cost MIP', () => {
     expect(guarded.sol.buildStats).toMatchObject({ status: 'skipped', approx: true });
     expect(guarded.sol.warnings).toContainEqual(expect.objectContaining({ code: 'build-cost-approx' }));
     expect(guarded.runs).toEqual(['final']);
-    expect(guarded.sol.machines?.get('final')).toMatchObject({ option: { mteId: 101 }, added: 1 });
+    expect(guarded.sol.machines?.get('final')).toMatchObject({ option: { id: 'gt:101' }, added: 1 });
     expect([...guarded.sol.buys.keys()]).toEqual(['t:g@0']);
     expect((await line({})).runs).toEqual(['final']);
   });
@@ -457,16 +457,16 @@ describe('the build-cost MIP', () => {
     const { runs, sol } = await solvedWithBuild(solderSpec(), COSTS, [['t:board@0', 1 / 3600]], { options: SOLDER, horizonSeconds: null });
     expect(runs).toEqual(['alloy-solder', 'board-solder', 'x-solder']);
     expect(sol.buildStats).toBeUndefined();
-    expect(sol.machines?.get('board-solder')).toMatchObject({ option: { mteId: 121 }, added: 1 });
+    expect(sol.machines?.get('board-solder')).toMatchObject({ option: { id: 'gt:121' }, added: 1 });
   });
 
   it('sizes machines by plan 09\'s pick when build cost is ignored', async () => {
     // Ruling P2: the new machines go to the highest tier, or to the owned type; the owned machine runs first.
     const demand: Array<[StuffKey, number]> = [['t:t@0', 1]];
     const none = await solvedWithBuild(pressSpec(), COSTS, demand, { options: { press: [opt(101, 1, 0.2, 10), opt(102, 2, 0.4, 16)] }, horizonSeconds: null });
-    expect(none.sol.machines?.get('press')).toMatchObject({ option: { mteId: 102 }, added: 3, ownedLoad: 0 });
+    expect(none.sol.machines?.get('press')).toMatchObject({ option: { id: 'gt:102' }, added: 3, ownedLoad: 0 });
     const lv = await solvedWithBuild(pressSpec(), COSTS, demand, { options: { press: [opt(101, 1, 0.2, 10, 1), opt(102, 2, 0.4, 16)] }, horizonSeconds: null });
-    expect(lv.sol.machines?.get('press')).toMatchObject({ option: { mteId: 101 }, added: 4, ownedLoad: 1 });
+    expect(lv.sol.machines?.get('press')).toMatchObject({ option: { id: 'gt:101' }, added: 4, ownedLoad: 1 });
   });
 
   it('bounds a step by the owned machines it cannot add to when build cost is ignored', async () => {
@@ -497,7 +497,7 @@ describe('the build-cost MIP', () => {
           expect(runs, what).toEqual(['board-tin', 'x-dust']);
           expect([...sol.buys.keys()], what).toEqual(['t:part@0', 't:tin_dust@0']);
           expect([...(sol.machines?.keys() ?? [])], what).toEqual(['board-tin', 'x-dust']);
-          expect(sol.machines?.get('x-dust'), what).toMatchObject({ option: { mteId: 131 } });
+          expect(sol.machines?.get('x-dust'), what).toMatchObject({ option: { id: 'gt:131' } });
           expect([...(sol.pools?.values() ?? [])].flatMap((p) => p.steps).sort(), what).toEqual(share ? ['board-tin', 'x-dust'] : []);
         }
       }

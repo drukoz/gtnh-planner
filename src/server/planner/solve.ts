@@ -5,6 +5,7 @@
 // dead ends of one good's chain, for machine prices).
 
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
+import { legacyMteId } from '../../shared/ids.ts';
 import type { PlanWarning } from '../../shared/types/plan.ts';
 import {
   BUILD_MIP_MAX_LP_ITERATIONS, BUILD_MIP_MAX_NODES, BUILD_MIP_TIME_LIMIT_SECONDS, buildMip, laterRoom, roundUp, stepWeight, type BuildDecision, type BuildMipInput,
@@ -1232,7 +1233,7 @@ async function buildStage(
  */
 function planPick(options: readonly MachineOption[]): number | undefined {
   const before = (a: MachineOption, b: MachineOption): number =>
-    Number(b.kind === 'basic') - Number(a.kind === 'basic') || Number(b.owned > 0) - Number(a.owned > 0) || b.tier - a.tier || a.mteId - b.mteId;
+    Number(b.kind === 'basic') - Number(a.kind === 'basic') || Number(b.owned > 0) - Number(a.owned > 0) || b.tier - a.tier || legacyMteId(a.id) - legacyMteId(b.id);
   return options.map((o, i) => ({ o, i })).filter(({ o }) => o.canAdd).sort((a, b) => before(a.o, b.o))[0]?.i;
 }
 

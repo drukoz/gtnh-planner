@@ -5,6 +5,7 @@ import {
   type StepLine,
 } from '../../../src/server/planner/machines.ts';
 import { buildCandidates, virtualKey, type CandidateGraph, type LeafOracle, type PlanEnv } from '../../../src/server/planner/candidates.ts';
+import { type MachineId } from '../../../src/shared/ids.ts';
 import { computeAvailability, reachableDims } from '../../../src/server/planner/availability.ts';
 import { makeLeafOracle, makePrices } from '../../../src/server/planner/costs.ts';
 import { solveLine } from '../../../src/server/planner/solve.ts';
@@ -16,25 +17,25 @@ import type { PlanSettings } from '../../../src/shared/types/plan.ts';
 
 const pack = miniGt();
 const R = (id: string) => pack.recipeById.get(id)!;
-const none = new Map<number, number>();
+const none = new Map<MachineId, number>();
 const pick = (id: string, map: string, groupTier: number, extra = {}) =>
   pickMachine(pack, R(id), map, { groupTier, coilHeat: 2701, automateCrafting: false, owned: none, ...extra });
 
 describe('pickMachine', () => {
   it('uses the group tier and overclocks', () => {
-    expect(pick('bend-plate', 'gt.recipe.metalbender', 1)).toMatchObject({ mteId: 101, tier: 1, runsPerSecondPerMachine: 0.2, oc: { euPerTick: 24, durationTicks: 100 } });
-    expect(pick('bend-plate', 'gt.recipe.metalbender', 2)).toMatchObject({ mteId: 102, tier: 2, runsPerSecondPerMachine: 0.4, oc: { euPerTick: 96, durationTicks: 50, overclocks: 1 } });
+    expect(pick('bend-plate', 'gt.recipe.metalbender', 1)).toMatchObject({ id: 'gt:101', tier: 1, runsPerSecondPerMachine: 0.2, oc: { euPerTick: 24, durationTicks: 100 } });
+    expect(pick('bend-plate', 'gt.recipe.metalbender', 2)).toMatchObject({ id: 'gt:102', tier: 2, runsPerSecondPerMachine: 0.4, oc: { euPerTick: 96, durationTicks: 50, overclocks: 1 } });
   });
   it('honours a per-recipe tier and prefers owned machines', () => {
-    expect(pick('bend-plate', 'gt.recipe.metalbender', 2, { wantTier: 1 }).mteId).toBe(101);
-    expect(pick('bend-plate', 'gt.recipe.metalbender', 2, { owned: new Map([[101, 2]]) }).mteId).toBe(101);
+    expect(pick('bend-plate', 'gt.recipe.metalbender', 2, { wantTier: 1 }).id).toBe('gt:101');
+    expect(pick('bend-plate', 'gt.recipe.metalbender', 2, { owned: new Map([['gt:101', 2]]) }).id).toBe('gt:101');
   });
   it('crafting is by hand unless automated', () => {
-    expect(pick('hammer-plate', 'crafting', 2)).toMatchObject({ mteId: -3, name: 'Crafting table (by hand)', handCraft: true, runsPerSecondPerMachine: 1 });
-    expect(pick('hammer-plate', 'crafting', 2, { automateCrafting: true })).toMatchObject({ mteId: -1, handCraft: false });
+    expect(pick('hammer-plate', 'crafting', 2)).toMatchObject({ id: 'mc:hand', name: 'Crafting table (by hand)', handCraft: true, runsPerSecondPerMachine: 1 });
+    expect(pick('hammer-plate', 'crafting', 2, { automateCrafting: true })).toMatchObject({ id: 'mc:crafting_table', handCraft: false });
   });
   it('plans multiblocks with one hatch at the group tier', () => {
-    expect(pick('ebf-ti', 'gt.recipe.blastfurnace', 3)).toMatchObject({ mteId: 1000, kind: 'multiblock', tier: 3, oc: { euPerTick: 480, durationTicks: 1000 } });
+    expect(pick('ebf-ti', 'gt.recipe.blastfurnace', 3)).toMatchObject({ id: 'gt:1000', kind: 'multiblock', tier: 3, oc: { euPerTick: 480, durationTicks: 1000 } });
   });
 });
 
@@ -317,8 +318,8 @@ describe('more machine and flow cases', () => {
     expect([at(0), at(2), at(3), at(9)]).toEqual([2, 2, 3, 3]);
   });
   it('clamps a per-recipe singleblock tier and runs vanilla furnace recipes at their own speed', () => {
-    expect([0, 7].map((wantTier) => pick('bend-plate', 'gt.recipe.metalbender', 2, { wantTier }).mteId)).toEqual([101, 102]);
-    expect(pick('smelt-v', 'furnace', 1)).toMatchObject({ mteId: -2, name: 'Furnace', kind: 'furnace', runsPerSecondPerMachine: 0.1,
+    expect([0, 7].map((wantTier) => pick('bend-plate', 'gt.recipe.metalbender', 2, { wantTier }).id)).toEqual(['gt:101', 'gt:102']);
+    expect(pick('smelt-v', 'furnace', 1)).toMatchObject({ id: 'mc:furnace', name: 'Furnace', kind: 'furnace', runsPerSecondPerMachine: 0.1,
       oc: { euPerTick: 0, durationTicks: 200, overclocks: 0 } });
   });
   it('finds the programmed circuit in the recipe meta or a not-consumed input', () => {

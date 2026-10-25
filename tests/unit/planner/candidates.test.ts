@@ -318,7 +318,7 @@ describe('real-data rules (final review)', () => {
     const r = p.recipeById.get('eoh')!;
     expect(acceptRecipe(p, r, env(1)).ok).toBe(true);                                         // no gate given: any multiblock
     expect(acceptRecipe(p, r, env(1, { multiblocks: new Set() }))).toEqual({ ok: false, why: 'multiblock' });
-    expect(acceptRecipe(p, r, env(1, { multiblocks: new Set([9]) })).ok).toBe(true);
+    expect(acceptRecipe(p, r, env(1, { multiblocks: new Set(['gt:9']) })).ok).toBe(true);
   });
   it('leaves out the recipes an env names as making ore from nothing, and smelting parts back into metal', () => {
     const p = packFromSpec({

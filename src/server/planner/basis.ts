@@ -13,6 +13,7 @@ import type { StuffKey } from '../../shared/keys.ts';
 import type { Pack, Recipe } from '../../shared/types/pack.ts';
 import { FREE_KEYS, NETWORKED_LOGISTICS, type PlanContext, type PlanSettings } from '../../shared/types/plan.ts';
 import { suppliedKey } from '../pack/supply.ts';
+import { machineIdOfLegacy } from '../../shared/ids.ts';
 import { computeAvailability, reachableDims, type Availability, type Reachability } from './availability.ts';
 import { acceptRecipe, type LeafOracle, type PlanEnv } from './candidates.ts';
 import { makeLeafOracle, makePrices, type PriceTable } from './costs.ts';
@@ -211,7 +212,7 @@ export function planBasis(pack: Pack, settings: PlanSettings, ctx: PlanContext):
   const avail = computeAvailability(pack, open);
   // Candidate recipes may only use the multiblocks the group can build at this tier, and never mine an ore material
   // from free inputs alone (availability.ts).
-  const env: PlanEnv = { ...open, multiblocks: avail.multiblocks, fromNothing: avail.fromNothing };
+  const env: PlanEnv = { ...open, multiblocks: new Set([...avail.multiblocks].map(machineIdOfLegacy)), fromNothing: avail.fromNothing };
   const prices = makePrices(pack, settings.costOverrides);
   const supplied = suppliedFreeKeys(pack, settings, env);
   const leaf = makeLeafOracle(pack, settings, avail, prices, undefined, undefined, { supplied });

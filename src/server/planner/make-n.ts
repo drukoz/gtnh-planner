@@ -13,8 +13,9 @@ import type { CandidateGraph, LpRecipe } from './candidates.ts';
 import {
   boughtGoods, describeStep, machineWarnings, ownedPools, pickStepMachines, reusedOf, stepLine, type PickedRecipe, type StepLine, type StepSize,
 } from './machines.ts';
+import { legacyMteId, machineIdOfLegacy, type MachineId } from '../../shared/ids.ts';
 import { solveLp, type LpRow } from './lp.ts';
-import type { BuildModel } from './machine-options.ts';
+import type { BuildModel, OwnedPools } from './machine-options.ts';
 import type { Solution } from './solve.ts';
 
 export interface MakeNResult {
@@ -320,7 +321,7 @@ function fillSeconds(graph: CandidateGraph, runs: ReadonlyMap<string, number>, p
 export async function makeN(
   pack: Pack, graph: CandidateGraph, sol: Solution, demand: ReadonlyMap<StuffKey, number>,
   opts: {
-    settings: PlanSettings; groupTier: number; coilHeat: number; ctx: PlanContext; multiblocks?: ReadonlySet<number>;
+    settings: PlanSettings; groupTier: number; coilHeat: number; ctx: PlanContext; multiblocks?: ReadonlySet<MachineId>;
     /** What the line's goods are worth and the pack's empty containers, for each step's main output (`StepLine`). */
     value?: Pick<StepLine, 'valueOf' | 'empties'>;
     /** The line's build model (plan 12): its owned pools. */
@@ -329,16 +330,17 @@ export async function makeN(
 ): Promise<MakeNResult> {
   const { settings, groupTier, coilHeat, ctx, multiblocks } = opts;
   const whole = await wholeRuns(graph, sol, demand);
-  const pools = opts.build?.pools ?? ownedPools(ctx, settings);
-  const owned = new Map([...pools].map(([mteId, units]) => [mteId, units.length]));
+  const rawPools = ownedPools(ctx, settings);
+  const pools: OwnedPools = opts.build?.pools ?? new Map([...rawPools].map(([mteId, units]) => [machineIdOfLegacy(mteId), units]));
+  const owned: ReadonlyMap<MachineId, number> = new Map([...pools].map(([id, units]) => [id, units.length]));
   const picked = pickStepMachines(pack, graph, whole.runs, { settings, groupTier, coilHeat, owned, multiblocks, machines: sol.machines });
 
-  const ownedOf = (mteId: number): number => Math.max(0, owned.get(mteId) ?? 0);
+  const ownedOf = (mteId: number): number => Math.max(0, owned.get(machineIdOfLegacy(mteId)) ?? 0);
   const machinesOf = (mteId: number): number => ownedOf(mteId) || 1;
   const stepsOfType = new Map<number, string[]>();
   const workOfType = new Map<number, number>();
   for (const p of picked) {
-    const mteId = p.pick.mteId;
+    const mteId = legacyMteId(p.pick.id);
     const ids = stepsOfType.get(mteId);
     if (ids === undefined) stepsOfType.set(mteId, [p.id]);
     else ids.push(p.id);
@@ -355,7 +357,7 @@ export async function makeN(
   const lp = stepLine(graph, sol.runs).runsFor;
   if (lp !== undefined) line.runsFor = lp;
   const steps = picked.map((p): PlanStep => {
-    const mteId = p.pick.mteId;
+    const mteId = legacyMteId(p.pick.id);
     const count = machinesOf(mteId);
     // A batch of machines that take no time at all has nothing to spread over; it reads 0 rather than NaN.
     const runsPerSecond = totalSeconds > 0 ? p.runs / totalSeconds : 0;
@@ -371,7 +373,7 @@ export async function makeN(
     if (p.recipe.outputs.some((o) => o.chance < 1)) warnings.push(CHANCED_WARNING);
     const size: StepSize = { count, owned: ownedOf(mteId), runsPerSecond, utilization, warnings };
     if (size.owned > 0) {
-      const reused = reusedOf(pools, mteId, Array.from({ length: size.owned }, (_, u) => u));
+      const reused = reusedOf(pools, p.pick.id, Array.from({ length: size.owned }, (_, u) => u));
       if (others.length > 0) reused.sharedWith = [...others].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
       size.reused = reused;
     }

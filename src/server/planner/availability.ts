@@ -2,6 +2,7 @@
 // and capabilities the group can use at its tier, which goods it can get from them (a forward-chaining fixpoint over the
 // recipes it can run), where each good comes from, and what would unlock a good it cannot get yet.
 
+import { legacyMteId, machineIdOfLegacy } from '../../shared/ids.ts';
 import { defaultCoilHeat } from '../../shared/gt/overclock.ts';
 import { V, tierName } from '../../shared/gt/tiers.ts';
 import { isFluidKey, type ItemKey, type StuffKey } from '../../shared/keys.ts';
@@ -470,7 +471,7 @@ function computeState(pack: Pack, env: PlanEnv): State {
     if (gate === undefined) {
       const r = pack.recipes[i] as Recipe;
       if (!acceptRecipe(pack, r, ungated).ok) gate = null;
-      else gate = acceptRecipe(pack, r, noMultiblock).ok ? [] : multiblocksFor(pack, r, ungated);
+      else gate = acceptRecipe(pack, r, noMultiblock).ok ? [] : multiblocksFor(pack, r, ungated).map(legacyMteId);
       gates[i] = gate;
     }
     return gate;
@@ -598,7 +599,7 @@ function computeState(pack: Pack, env: PlanEnv): State {
     const cell = r === undefined ? undefined : emptiedFrom(r, key);
     if (cell !== undefined) r = pack.recipeById.get(why.get(cell) ?? '') ?? r;
     if (r === undefined) return [];
-    const accepted = acceptRecipe(pack, r, { ...env, multiblocks: built });
+    const accepted = acceptRecipe(pack, r, { ...env, multiblocks: new Set([...built].map(machineIdOfLegacy)) });
     const mapId = accepted.ok ? accepted.mapId : (r.maps[0] ?? '');
     const inputs = firstOptions(r, rank).map((k) => pack.nameOf(k));
     const by = `made by ${pack.maps.get(mapId)?.name ?? mapId}`;

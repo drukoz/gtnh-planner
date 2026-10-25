@@ -22,6 +22,7 @@
 
 import { multiplierUnderOneTick, singleblockOverclock } from '../../src/shared/gt/overclock.ts';
 import { V } from '../../src/shared/gt/tiers.ts';
+import { legacyMteId, machineIdOfLegacy } from '../../src/shared/ids.ts';
 import type { StuffKey } from '../../src/shared/keys.ts';
 import type { Pack } from '../../src/shared/types/pack.ts';
 import { FREE_KEYS, type Plan, type PlanContext, type PlanSettings, type PlanStep } from '../../src/shared/types/plan.ts';
@@ -423,7 +424,8 @@ function checkProducers(pack: Pack, plan: Plan, led: Map<StuffKey, Ledger>): Vio
 
 function checkMachines(pack: Pack, settings: PlanSettings, plan: Plan, basis: PlanBasis, ctx: PlanContext, relTol: number): Violation[] {
   const out: Violation[] = [];
-  const owned = ownedMachineMap(ctx, settings);
+  const rawOwned = ownedMachineMap(ctx, settings);
+  const owned = new Map([...rawOwned].map(([mteId, n]) => [machineIdOfLegacy(mteId), n]));
   for (const step of plan.steps) {
     const label = stepLabel(pack, plan, step);
     const r = pack.recipeById.get(step.recipeId);
@@ -449,7 +451,7 @@ function checkMachines(pack: Pack, settings: PlanSettings, plan: Plan, basis: Pl
     let parallel = 1;
     if (pick !== undefined) {
       parallel = pick.oc.parallel;
-      if (pick.mteId !== step.machine.mteId || pick.tier !== step.machine.tier || pick.oc.euPerTick !== step.euPerTick
+      if (legacyMteId(pick.id) !== step.machine.mteId || pick.tier !== step.machine.tier || pick.oc.euPerTick !== step.euPerTick
         || pick.oc.durationTicks !== step.durationTicks || pick.oc.overclocks !== step.overclocks) {
         out.push({
           kind: 'machines', severity: 'error', stepId: step.id,
