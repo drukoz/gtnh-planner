@@ -2329,6 +2329,8 @@ describe('the Machine GUI in forced colours', () => {
       ':where(input[type=range])::-webkit-slider-runnable-track', ':where(input[type=range])::-moz-range-track',
       ':where(progress)::-webkit-progress-value', ':where(progress)::-moz-progress-bar', ...FAILED_FILLS, ':where(select)',
       ':where(input[type=search])::-webkit-search-cancel-button', SELECTED, ACTIVE_HIT, PICKED_ROW,
+      // Phase 2 Task 6a: the inventory grid's slot, its tick, its meter's fill and the pressed Grid / List (spec §9.3)
+      'button.mat-slot', '.mat-slot-tick::before', '.mat-meter-fill', ".mat-view-toggle button[aria-pressed='true']",
     ];
     for (const selector of repainted) {
       expect(position(selector), selector).toBeGreaterThan(-1);
@@ -2502,6 +2504,18 @@ describe('the Machine GUI planning modes, farms and the Compare card', () => {
 // when that colour is the same in both. The Theme button (§4.8) sits at the end of the top bar, its pixel icon a background its choice picks;
 // a switch cross-fades the whole page over `--dur-slow` (§4.9), which the reduced-motion block sets to 0 ms (and the JS starts no fade then).
 
+/**
+ * Phase 2 Task 6a (spec §9.3): "To build (once)" as an inventory grid. The head holds the title, the Grid / List toggle and, in Grid, the
+ * meter; then the hint, and each group's head over its recessed slot area. A slot is a reset button round its 36 px item slot, with the focus
+ * ring and the keyboard's veil, the dimmed face and pixel tick of a marked row, and the +N slot of an item past nine stacks.
+ */
+const GRID_RULES = [
+  '.mat-head', '.mat-view-toggle', '.mat-view-toggle button + button', ".mat-view-toggle button[aria-pressed='true']", '.mat-meter-box', '.mat-meter-label',
+  '.mat-meter', '.mat-meter-fill', '.mat-grid', '.mat-grid-hint', '.mat-grid-group h4', '.mat-grid-left', '.mat-slots', 'button.mat-slot',
+  'button.mat-slot:focus-visible', 'button.mat-slot:focus-visible .item-icon::after', 'button.mat-slot.marked::after', '.mat-slot-tick', '.mat-slot-tick::before',
+  'button.mat-slot-more', 'button.mat-slot-more > .stack-count',
+];
+
 /** The selectors of every rule Phase 2 adds; each later task appends its own. */
 const PHASE2_RULES: string[] = [
   '.theme-button', '.theme-button::before', ".theme-button[data-choice='dark']::before", ".theme-button[data-choice='light']::before",
@@ -2513,6 +2527,7 @@ const PHASE2_RULES: string[] = [
   ...RECIPE_RULES,                                                                   // Task 5a: the step panel's recipe card (spec §8.4)
   '.flow-side',                                                                      // Task 5b: the panel's wrapper, slid in once (spec §8.6)
   '.flow-canvas:focus', '.flow-canvas:focus-visible',                                // Task 5b fix round 1: the canvas's focus (P2-R36)
+  ...GRID_RULES,                                                                     // Task 6a: the inventory grid (spec §9.3)
 ];
 /** The colour literals a Phase 2 rule may write: each is the same in both looks (spec §4.4). */
 const SAME_IN_BOTH = ['#ffffff', '#000000', '#aaaaaa', '#100010', '#ffff55', 'rgb(0 0 0 / 0.4)'];
@@ -2755,6 +2770,77 @@ describe('the Machine GUI Phase 2: the recipe card', () => {
     for (const selector of [ARROW_FILL, '.gt-arrow.on-chat .gt-arrow-fill', '.energy-fill', '.energy-bar', '.recipe-slot.slot-short > .item-icon', '.gt-arrow', '.gt-arrow.on-chat']) {
       expect(position(selector), selector).toBeGreaterThan(-1);
       expect(position(selector), selector).toBeLessThan(blocks.indexOf(block));
+    }
+  });
+});
+
+// "To build (once)" as an inventory grid (Phase 2 spec §9.3, Task 6a): a slot is a button reset to nothing, so its 32 px item icon is the 36 px
+// slot, which a long press never selects; its ring is in the focus ink of the panel, above the slots beside it, with the keyboard's veil over
+// its image (a rule of its own: LIT_SLOT is pinned); a marked row's slots are dimmed by an overlay, never by styling the image, under a pixel
+// tick, the checkbox's, in green with a 1 px black edge from four drop-shadows on its box. The slots sit in a recess of the panel; the meter
+// fills on transform alone; the pressed Grid / List sinks and reads yellow. In forced colours each slot keeps a frame (but not while it shows
+// the focus ring: R42's pattern), the tick and the meter's fill are the Highlight, and the pressed toggle is underlined, each after its base rule.
+describe('the Machine GUI Phase 2: the inventory grid', () => {
+  it('draws the inventory grid as Minecraft slots', () => {
+    expectDeclared([
+      ['button.mat-slot', 'position', 'relative'], ['button.mat-slot', 'width', '36px'], ['button.mat-slot', 'height', '36px'], ['button.mat-slot', 'min-height', '0'],
+      ['button.mat-slot', 'padding', '0'], ['button.mat-slot', 'border', 'none'], ['button.mat-slot', 'background', 'none'], ['button.mat-slot', 'box-shadow', 'none'],
+      ['button.mat-slot', 'transform', 'none'], ['button.mat-slot', '-webkit-touch-callout', 'none'], ['button.mat-slot', 'user-select', 'none'],
+      ['button.mat-slot:focus-visible', 'outline-color', 'var(--ink-focus)'], ['button.mat-slot:focus-visible', 'z-index', '1'],
+      ['button.mat-slot:focus-visible .item-icon::after', 'opacity', '1'],
+      ['button.mat-slot.marked::after', 'content', "''"], ['button.mat-slot.marked::after', 'background', 'rgb(0 0 0 / 0.4)'],
+      ['.mat-slot-tick', 'animation', 'pop var(--dur-fast) var(--ease-pop)'], ['.mat-slot-tick::before', 'content', "''"],
+      ['.mat-slots', 'grid-template-columns', 'repeat(auto-fill, 36px)'], ['.mat-slots', 'box-shadow', 'var(--bevel-inset)'],
+      ['.mat-meter-fill', 'transform', 'scaleX(var(--done, 0))'], ['.mat-meter-fill', 'transition', 'transform var(--dur-slow) var(--ease-out)'],
+      [".mat-view-toggle button[aria-pressed='true']", 'background', 'var(--btn-lo)'], [".mat-view-toggle button[aria-pressed='true']", 'box-shadow', 'var(--bevel-btn-down)'],
+      [".mat-view-toggle button[aria-pressed='true']", 'color', 'var(--accent)'],
+      ['.mat-grid', 'animation', 'fade-in var(--dur-base) var(--ease-out)'],
+      ['.mat-grid-group h4', 'font', '600 15px/1.3 var(--font-pixel)'], ['.mat-grid-group h4', 'color', 'var(--ink-title)'],
+      // [MG] §4.4: the two buttons of the toggle share one edge, the meter is a screen in a black edge, and the +N slot is a bare slot face with
+      // its count in the middle
+      ['.mat-view-toggle button + button', 'border-left', '0'], ['.mat-meter', 'background', 'var(--screen)'], ['.mat-meter', 'border', '2px solid var(--outline)'],
+      ['.mat-meter-fill', 'transform-origin', 'left'], ['.mat-meter-fill', 'background', 'var(--screen-text)'],
+      ['button.mat-slot-more', 'display', 'grid'], ['button.mat-slot-more', 'place-items', 'center'], ['button.mat-slot-more', 'background', 'var(--slot)'],
+      ['button.mat-slot-more', 'box-shadow', 'var(--bevel-slot)'], ['button.mat-slot-more > .stack-count', 'position', 'static'],
+    ]);
+    // the toggle's negative margins make it no taller than the title's line (16 px at 1.3, which Chromium lays out a 64th of a pixel short,
+    // P2-R13), so the head keeps the title's height and the List's rows stay where they were; centred, its small buttons stand past the line
+    expect(declared('.materials-section h3', 'font')).toBe('600 16px/1.3 var(--font-pixel)');
+    const smallButton = Number.parseFloat(declared(':where(button.small)', 'min-height') ?? '');
+    const margin = Number.parseFloat(declared('.mat-view-toggle', 'margin-block') ?? '');
+    expect(smallButton + 2 * margin).toBeLessThan(Math.floor(16 * 1.3 * 64) / 64);
+    expect(margin).toBe(-4);
+    // the tick's 1 px black edge, one drop-shadow a side, on the tick's own box: on the clipped mark itself the clip would cut it away
+    expect(declared('.mat-slot-tick', 'filter')?.match(/drop-shadow\([^)]*\)/g)).toEqual(
+      ['drop-shadow(1px 0 0 #000000)', 'drop-shadow(-1px 0 0 #000000)', 'drop-shadow(0 1px 0 #000000)', 'drop-shadow(0 -1px 0 #000000)']);
+    expect(declared('.mat-slot-tick::before', 'clip-path'), 'the checkbox\'s pixel tick').toBe(declared(':where(input[type=checkbox])::before', 'clip-path'));
+    expect(declared('.mat-slot-tick::before', 'background')).toBe('var(--screen-text)');
+    // the +N slot's face comes after the reset of every slot, which it would lose to otherwise (one class and one tag each)
+    expect(position('button.mat-slot-more')).toBeGreaterThan(position('button.mat-slot'));
+    // the pins the grid leaves as they are: Phase 1's group heading and the lit slot's veil
+    expect(declared('.mat-group h4', 'font-family')).toBeUndefined(); expect(declared('.mat-group h4', 'color')).toBe('var(--ink-muted)');
+    expect(declarations(ruleBody(LIT_SLOT))).toEqual([['opacity', '1']]);
+    // the meter fills by its transform alone (the mockup's width transition is a layout animation), and the grid moves nothing for ever
+    expect(declared('.mat-meter-fill', 'width')).toBeUndefined();
+    for (const selector of GRID_RULES) expect(declared(selector, 'animation') ?? '', selector).not.toMatch(/infinite/);
+    // forced colours: a frame each slot keeps, but not while it shows the focus ring (R42's pattern), the tick and the fill in the Highlight (two rules:
+    // a pseudo-element never shares a list with a plain selector, R28), the pressed toggle underlined; at the end of the block, each after its base
+    expect(inQuery(FORCED, 'button.mat-slot:not(:focus-visible)')).toEqual([['outline', '1px solid ButtonText'], ['outline-offset', '-1px']]);
+    expect(inQuery(FORCED, '.mat-slot-tick::before')).toEqual([['background', 'Highlight']]);
+    expect(inQuery(FORCED, '.mat-meter-fill')).toEqual([['background', 'Highlight']]);
+    expect(inQuery(FORCED, ".mat-view-toggle button[aria-pressed='true']")).toEqual([['text-decoration', 'underline']]);
+    expect(position('.mat-slot-tick::before, .mat-meter-fill')).toBe(-1);
+    const { block, rules } = forcedBlock();
+    for (const selector of ['button.mat-slot', '.mat-slot-tick::before', '.mat-meter-fill', ".mat-view-toggle button[aria-pressed='true']"]) {
+      expect(position(selector), selector).toBeGreaterThan(-1);
+      expect(position(selector), selector).toBeLessThan(blocks.indexOf(block));
+    }
+    const inBlock = (prelude: string): number => rules.findIndex((rule) => rule.prelude === prelude);
+    expect(inBlock('button.mat-slot:not(:focus-visible)')).toBeGreaterThan(inBlock('.gt-arrow, .gt-arrow.on-chat'));
+    // tokens and square corners, as every rule of the slots and Materials
+    for (const selector of GRID_RULES) {
+      expect(ruleBody(selector), selector).not.toMatch(OLD_ALIASES);
+      expect(declared(selector, 'border-radius') ?? '0', selector).toBe('0');
     }
   });
 });

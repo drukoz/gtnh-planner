@@ -176,6 +176,22 @@ const DARK_TOUR: DarkStop[] = [
       { what: 'a readout', selector: '.readout', property: 'background-color', expected: 'rgb(11, 11, 11)' },
     ],
   },
+  // Task 6a: the inventory grid, its slots' recess the dark panel's #2a2a2a (not a slot's icon: an e2e icon is a placeholder painted
+  // inline), the pressed Grid on the dark --btn-lo and the meter a dark screen (spec §9.3)
+  {
+    name: 'the inventory grid',
+    open: async (page) => {
+      await createProject(page, 'Dark grid', LV_CIRCUITS);
+      await page.getByRole('tab', { name: 'Materials & steps' }).click();
+      await page.locator('section[aria-labelledby="to-build-title"]').getByRole('button', { name: 'Grid', exact: true }).click();
+      await expect(page.locator('button.mat-slot').first()).toBeVisible();
+    },
+    rows: [
+      { what: 'the slots\' recess', selector: '.mat-slots', property: 'background-color', expected: 'rgb(42, 42, 42)' },
+      { what: 'the pressed Grid', selector: ".mat-view-toggle button[aria-pressed='true']", property: 'background-color', expected: 'rgb(30, 30, 30)' },
+      { what: 'the meter', selector: '.mat-meter', property: 'background-color', expected: 'rgb(11, 11, 11)' },
+    ],
+  },
 ];
 
 // a fresh context per test, in a dark OS

@@ -230,6 +230,16 @@ const PAIRS: Pair[] = [
   ['recipe arrow fill on its base', '--stack-ink', '--slot', GRAPHICS], ['energy fill', '--energy', '--screen', GRAPHICS],
   ['readout label', '--screen-muted', '--screen', AA], ['readout value', '--screen-text', '--screen', AA],
   ['ring of a slot not supplied in full, on the recess', '--panel-error', '--panel', GRAPHICS],
+
+  // the inventory grid (Phase 2 Task 6a, spec §9 and §4.5), as graphics: a marked slot's green tick on its 1 px black edge, that edge on the
+  // light slot face, and in dark the green on the dark slot face itself (the edge all but vanishes there: the reason case below); the meter's
+  // fill on its screen; and as text the pressed Grid / List, yellow on the pressed face. Then what the slots draw over and beside: the tick on
+  // the face of a marked slot, which a 40 % black veil dims, and a slot's focus ring on the slot beside it, which it overlaps, and on the recess
+  ['grid tick on its edge', '--screen-text', '#000000', GRAPHICS], ['grid tick edge on the slot', '#000000', '--slot', GRAPHICS, ['light']],
+  ['grid tick on the slot', '--screen-text', '--slot', GRAPHICS, ['dark']], ['meter fill', '--screen-text', '--screen', GRAPHICS],
+  ['pressed Grid / List', '--accent', '--btn-lo', AA],
+  ['grid tick on a marked slot\'s dimmed face', '--screen-text', { over: 'rgb(0 0 0 / 0.4)', on: '--slot' }, GRAPHICS],
+  ['grid slot focus ring on the slot beside it', '--panel-focus', '--slot', GRAPHICS], ['grid slot focus ring on the recess', '--panel-focus', '--panel', GRAPHICS],
 ];
 
 describe('contrast of the Machine GUI palette', () => {
@@ -410,5 +420,21 @@ describe('contrast of the recipe card', () => {
   // state is also in the slot's name and tip, on the condition that the ring reads 3:1 or more against the recess round it (the table)
   it('lets the short ring go below 3:1 against the light slot face inside it (ledger ruling P2-R31)', () => {
     expect(ratio(colour('light', '--panel-error'), colour('light', '--slot'))).toBeLessThan(GRAPHICS);          // 2.27:1
+  });
+});
+
+// The inventory grid (Phase 2 spec §9, §4.5): a marked slot's tick is green with a 1 px black edge. On the light slot face the edge is what
+// reads (the table's "grid tick edge on the slot", 6.16:1); on the dark slot face and on a marked light slot's dimmed face it all but vanishes,
+// and the green itself carries the tick (the table's rows, 12.70:1 and 5.79:1). The meter's empty track is a groove on the dark panel, as the
+// energy bar's is (ledger ruling P2-R30): its fill reads on it in both looks (the table's "meter fill"), and the count beside it says the same.
+describe('contrast of the inventory grid', () => {
+  it('lets the tick\'s black edge vanish on the dark slot face and on a dimmed light one, where the green carries the tick', () => {
+    expect(ratio('#000000', colour('dark', '--slot'))).toBeLessThan(GRAPHICS);                                           // 1.25:1
+    expect(ratio('#000000', colour('light', { over: 'rgb(0 0 0 / 0.4)', on: '--slot' }))).toBeLessThan(GRAPHICS);       // 2.73:1
+  });
+
+  it('lets the meter\'s empty track and its black edge go below 3:1 on the dark panel (ledger ruling P2-R30)', () => {
+    expect(ratio(colour('dark', '--screen'), colour('dark', '--panel'))).toBeLessThan(GRAPHICS);                         // 1.37:1
+    expect(ratio(colour('dark', '--outline'), colour('dark', '--panel'))).toBeLessThan(GRAPHICS);                        // 1.46:1
   });
 });

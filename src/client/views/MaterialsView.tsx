@@ -6,7 +6,8 @@
 // the group runs or another project on rows of their own, and tool wear, said so (add-on 17) — what is left over and
 // which of it other projects take (add-on 17), and then the build steps. Every row can be ticked off by anyone, and the
 // have-counts from the world scan sit next to each line (spec §3.4, §11.20). A row of a good on the avoid list that
-// nothing at the tier avoids carries a small "avoid" marker (spec §3.3).
+// nothing at the tier avoids carries a small "avoid" marker (spec §3.3). "To build (once)" can also be shown as an
+// inventory grid (Phase 2 spec §9, MaterialsGrid.tsx), a choice of this browser's; the List stays the default.
 
 import { Fragment, useMemo, useState, type ReactElement } from 'react';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
@@ -19,9 +20,12 @@ import { ItemIcon } from '../components/ItemIcon.tsx';
 import { Tick } from '../components/Tick.tsx';
 import { formatRate } from '../format.ts';
 import { showInFlow } from '../state/flow-focus.ts';
+import { useMaterialsView } from '../state/materials-view.ts';
 import { makeHerePatch } from './flow-model.ts';
+import { BuildGrid, GatherMeter, ViewToggle } from './MaterialsGrid.tsx';
 import {
-  amountText, buildRows, groupBuildRows, missingRows, runRows, takenRows, unavoidableKeys, type BuildRow, type MissingRow, type RunRow, type TakenRow, type UsedBy,
+  amountText, AVOID_NOTE, buildRows, gatheredStacks, groupBuildRows, groupBuildSlots, missingRows, quantity, runRows, takenRows, unavoidableKeys,
+  type BuildRow, type MissingRow, type RunRow, type TakenRow, type UsedBy,
 } from './materials-model.ts';
 import { buildTotalLine } from './plan-cost.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
@@ -37,12 +41,6 @@ const ICON_SIZE = 20;
 const DEPTH_INDENT = 1.5;
 const NOTHING_EXPANDED: ReadonlySet<string> = new Set();
 
-/** A count with its unit: litres for a fluid, `×` for an item. A rate (`rate`) carries its unit already. */
-function quantity(key: StuffKey, amount: string, rate = false): string {
-  if (rate) return amount;
-  return isFluidKey(key) ? `${amount} L` : `${amount}×`;
-}
-
 function marker(send: Send, row: string): (on: boolean) => void {
   return (on) => send([{ op: 'mark', row, on }]);
 }
@@ -52,7 +50,7 @@ function marker(send: Send, row: string): (on: boolean) => void {
  * line still uses (`BuildRow.avoid`, `RunRow.avoid`).
  */
 function AvoidMarker(): ReactElement {
-  return <span className="badge avoid-badge" title="On the avoid list or made from it, but no recipe at this tier avoids it">avoid</span>;
+  return <span className="badge avoid-badge" title={AVOID_NOTE}>avoid</span>;
 }
 
 /** The have-count; when the scan says where the stock sits, it opens to one line per storage block. */
@@ -112,9 +110,14 @@ function BuildItem(props: { row: BuildRow; marks: Marks; send: Send; expanded?: 
   );
 }
 
+/**
+ * "To build (once)": its head (the title, the Grid / List toggle and, in Grid, the meter of the stacks gathered; neither when there is
+ * nothing to build), the total of what it all takes, and the build list as the List's tree or as the inventory grid (Phase 2 spec §9.2).
+ */
 function BuildSection(props: { plan: Plan; names: Record<string, string>; marks: Marks; send: Send; unavoidable: ReadonlySet<StuffKey> }): ReactElement {
   const { plan, names, marks, send, unavoidable } = props;
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(NOTHING_EXPANDED);
+  const view = useMaterialsView();
   const toggle = (path: string): void => {
     setExpanded((open) => {
       const next = new Set(open);
@@ -124,14 +127,20 @@ function BuildSection(props: { plan: Plan; names: Record<string, string>; marks:
     });
   };
   const groups = groupBuildRows(plan.buildList, names, expanded, unavoidable);
+  const some = groups.length > 0;
+  const slots = some && view === 'grid' ? groupBuildSlots(plan.buildList, names, unavoidable) : null;
   // What it all takes in raw material, the layout's power and logistics parts included (plan 12).
   const total = buildTotalLine(plan);
   return (
     <section className="materials-section" aria-labelledby="to-build-title">
-      <h3 id="to-build-title">To build (once)</h3>
-      {groups.length === 0 && <p className="muted">Nothing new to build: the machines you have cover this line.</p>}
-      {groups.length > 0 && total !== null && <p className="muted">{total}</p>}
-      {groups.map((group) => (
+      <div className="mat-head">
+        <h3 id="to-build-title">To build (once)</h3>
+        {some && <ViewToggle view={view} />}
+        {slots !== null && <GatherMeter {...gatheredStacks(slots, marks)} />}
+      </div>
+      {!some && <p className="muted">Nothing new to build: the machines you have cover this line.</p>}
+      {some && total !== null && <p className="muted">{total}</p>}
+      {slots !== null ? <BuildGrid groups={slots} marks={marks} send={send} /> : groups.map((group) => (
         <div key={group.id} className="mat-group">
           <h4>{group.label}</h4>
           <ul className="mat-list">

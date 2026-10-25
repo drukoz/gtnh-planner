@@ -1161,6 +1161,57 @@ button.mat-toggle[aria-expanded='true']::before, .mat-have[open] summary::before
 button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
 
 /*
+ * "To build (once)" as an inventory grid (Phase 2 spec §9.3, D9), chosen with the Grid / List toggle beside the title (the List stays the
+ * default). The head is a row: the title; the toggle, two small buttons sharing one edge, the one in use sunk with its words yellow, whose
+ * negative margins make it no taller than the title's 20.8 px line (16 px at 1.3), so the head keeps the title's height and the List's rows
+ * stay where they were (centred on the title, its 28 px buttons stand 3.6 px past the line each way); and in Grid the meter of the stacks
+ * gathered, a screen in a black edge whose green fill grows on its transform alone. Under the hint each group's head (the pixel font, its
+ * count in the quiet Inter) sits over a recess of the panel, where the slots touch as in an inventory. A slot is a button reset to nothing,
+ * so the 32 px item icon in it is the 36 px slot, its stack count at the bottom right (the recipe card's .stack-count); a long press shows
+ * its tip and selects nothing. Its focus ring is in the panel's focus ink (yellow would be 1.6:1 on the light panel: R12) and above the
+ * slots beside it, with the keyboard's veil over its image (a rule of its own: the lit slot's is pinned). A marked row's slots are dimmed by
+ * a 40 % black overlay over the image, never by styling it, under the checkbox's pixel tick in green, whose 1 px black edge is four
+ * drop-shadows on the tick's own box (on the clipped mark the clip would cut them away); the tick pops in. An item past nine stacks ends in
+ * a +N slot, a bare slot face with the count of the stacks not drawn in its middle. The grid fades in once.
+ */
+.mat-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.mat-view-toggle { display: flex; margin-block: -4px; }
+.mat-view-toggle button + button { border-left: 0; }
+.mat-view-toggle button[aria-pressed='true'] { background: var(--btn-lo); box-shadow: var(--bevel-btn-down); color: var(--accent); }
+.mat-meter-box { margin-left: auto; display: flex; flex-direction: column; gap: 3px; min-width: 240px; }
+.mat-meter-label { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.mat-meter { position: relative; height: 14px; overflow: hidden; background: var(--screen); border: 2px solid var(--outline); }
+.mat-meter-fill {
+  position: absolute; inset: 0; background: var(--screen-text); transform-origin: left; transform: scaleX(var(--done, 0));
+  transition: transform var(--dur-slow) var(--ease-out);
+}
+.mat-grid { display: flex; flex-direction: column; gap: 12px; animation: fade-in var(--dur-base) var(--ease-out); }
+.mat-grid-hint { margin: 0; }
+.mat-grid-group h4 { margin: 0 0 6px; font: 600 15px/1.3 var(--font-pixel); color: var(--ink-title); }
+.mat-grid-left { font: 400 12px var(--font-ui); color: var(--ink-muted); }
+.mat-slots { display: grid; grid-template-columns: repeat(auto-fill, 36px); padding: 6px; background: var(--panel); box-shadow: var(--bevel-inset); }
+button.mat-slot {
+  position: relative; display: flex; width: 36px; height: 36px; min-height: 0; padding: 0; border: none; background: none; box-shadow: none;
+  text-shadow: none; transform: none; -webkit-touch-callout: none; user-select: none;
+}
+button.mat-slot:focus-visible { outline-color: var(--ink-focus); z-index: 1; }
+button.mat-slot:focus-visible .item-icon::after { opacity: 1; }
+button.mat-slot.marked::after { content: ''; position: absolute; inset: 2px; background: rgb(0 0 0 / 0.4); pointer-events: none; }
+.mat-slot-tick {
+  position: absolute; left: 2px; top: 2px; z-index: 1; width: 10px; height: 10px; pointer-events: none;
+  filter: drop-shadow(1px 0 0 #000000) drop-shadow(-1px 0 0 #000000) drop-shadow(0 1px 0 #000000) drop-shadow(0 -1px 0 #000000);
+  animation: pop var(--dur-fast) var(--ease-pop);
+}
+.mat-slot-tick::before {
+  content: ''; position: absolute; inset: 0; background: var(--screen-text);
+  clip-path: polygon(8px 1px, 10px 1px, 10px 2px, 9px 2px, 9px 3px, 8px 3px, 8px 4px, 7px 4px, 7px 5px, 6px 5px, 6px 7px,
+    5px 7px, 5px 8px, 3px 8px, 3px 7px, 2px 7px, 2px 6px, 1px 6px, 1px 5px, 0px 5px, 0px 4px, 2px 4px, 2px 5px, 3px 5px,
+    3px 6px, 4px 6px, 4px 5px, 5px 5px, 5px 4px, 6px 4px, 6px 3px, 7px 3px, 7px 2px, 8px 2px);
+}
+button.mat-slot-more { display: grid; place-items: center; background: var(--slot); box-shadow: var(--bevel-slot); }
+button.mat-slot-more > .stack-count { position: static; }
+
+/*
  * The Map tab (design spec §6 and §8): the controls on the tab's panel, the map in a frame of its own under a toolbar of Minecraft
  * buttons, and the new line and what the scan found in a panel each beside it. The canvas fills its box's padding box, and the end-to-end
  * tests aim at its centre and read its bitmap: so the frame is the box's (a border and an outline) and never the canvas's, and nothing
@@ -1680,4 +1731,12 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
   .energy-bar { outline: 1px solid CanvasText; outline-offset: -1px; }
   .recipe-slot.slot-short > .item-icon { outline: 2px solid Highlight; outline-offset: -2px; }
   .gt-arrow, .gt-arrow.on-chat { background: GrayText; }
+  /* Phase 2 Task 6a: the inventory grid. A slot's bevel is a shadow the theme drops, so each slot keeps a frame in the buttons' text colour,
+     but not while it shows the focus ring (R42's pattern); a marked slot's tick and the meter's fill, backgrounds the theme would paint like
+     what they lie on, are the Highlight (two rules: a pseudo-element never shares a list with a plain selector, R28); and the pressed Grid or
+     List, whose sunk face and yellow are gone, is underlined, as the selected tab is */
+  button.mat-slot:not(:focus-visible) { outline: 1px solid ButtonText; outline-offset: -1px; }
+  .mat-slot-tick::before { background: Highlight; }
+  .mat-meter-fill { background: Highlight; }
+  .mat-view-toggle button[aria-pressed='true'] { text-decoration: underline; }
 }
