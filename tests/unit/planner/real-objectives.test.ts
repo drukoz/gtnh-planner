@@ -2,7 +2,8 @@
 // add-on 12 x 17 integration's A5; design spec §3.3, §3.11; architecture §11.45): the rubber tree farm as the farm
 // research reads it, the user's Electronic Circuit in the three modes, best multi-output on plan 12's calibration lines,
 // one rubber tree farm covering resin, carbon and wood pulp, a farm-fed least-raw line, the Compare card's modes, another
-// project's surplus and a crop farm on the active export; then the reference flow's A1 under the raw cap (add-on 17
+// project's surplus and a crop farm on the active export (the farm choices and the surplus reader as the integration's
+// Task 11 rulings F-B and F-C re-scope plan 17's); then the reference flow's A1 under the raw cap (add-on 17
 // ruling S13 as the integration's ruling R11 reads it; the user's ruling that the raw cap wins), Polyethylene Bar MV
 // with farms on (the controller's poly ruling at a step charge above 0), and the reference R0's farm price and published
 // by-products (ruling S14, R12). The user's settings are read at run time from the private docs/local (ec-state.json, the
@@ -25,7 +26,7 @@ import { objectiveOf, type Need, type Offer } from '../../../src/server/planner/
 import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
 import { linePricing } from '../../../src/server/planner/pricing.ts';
 import type { Solution } from '../../../src/server/planner/solve.ts';
-import { SurplusBoard, crossRead, summaryOf } from '../../../src/server/projects/surplus.ts';
+import { SurplusBoard, crossRead, summaryOf, type CrossRead } from '../../../src/server/projects/surplus.ts';
 import { tierName } from '../../../src/shared/gt/tiers.ts';
 import type { StuffKey } from '../../../src/shared/keys.ts';
 import { normalizeSettings } from '../../../src/shared/project/apply-op.ts';
@@ -47,6 +48,8 @@ import {
 
 const RUBBER_SAPLING = 'IC2:blockRubSapling@0';
 const STICKY_RESIN = 'IC2:itemHarz@0';
+/** Rubber Wood's item, any meta: "an `IC2:blockRubWood` key" (plan 17 Task 10). */
+const RUBBER_WOOD_ITEM = 'IC2:blockRubWood';
 const RAW_RUBBER_DUST = 'gregtech:gt.metaitem.01@2896';
 const CARBON_DUST = 'gregtech:gt.metaitem.01@2010';
 const WOOD_PULP = 'gregtech:gt.metaitem.01@2809';
@@ -60,7 +63,11 @@ const STEEL_TOOL_USES = 512;
 const CENTRIFUGE_MAP = 'gt.recipe.centrifuge';
 /** The export's Tree Growth Simulator rows (farms.md §1.6: 127 + 110 + 9 + 3 + 2). */
 const TREE_FARM_ROWS = 251;
-/** The materials of the coal-type goods a rubber tree farm's centrifuged wood stands in for (plan 17 Task 10). */
+/**
+ * The materials of the coal-type goods a rubber tree farm's centrifuged wood stands in for (plan 17 Task 10). Beyond
+ * Carbon Dust and Wood Pulp, which that wood makes, what a line buys of them is logged, not asserted (Task 11 ruling F-B:
+ * no farm here makes Coal Dust).
+ */
 const COAL_MATERIALS: ReadonlySet<string> = new Set(['Coal', 'Charcoal', 'Lignite', 'Carbon', 'Wood']);
 const STICKY_CANE = 'cropsnh:stickyCane';
 const RUBBER_BONSAI = 'cropsnh:bonsaiRubber';
@@ -119,6 +126,11 @@ const farmSteps = (plan: Plan): string[] => plan.steps.filter((s) => s.farm !== 
 /** Its Tree Growth Simulator steps on rubber saplings. */
 const rubberTreeFarms = (plan: Plan): string[] =>
   plan.steps.filter((s) => s.farm?.kind === 'tgs' && s.farm.sapling === RUBBER_SAPLING).map((s) => s.id);
+/** Its Tree Growth Simulator steps, whatever sapling they hold. */
+const treeFarms = (plan: Plan): string[] => plan.steps.filter((s) => s.farm?.kind === 'tgs').map((s) => s.id);
+/** Its farm steps of either kind that make Rubber Wood: a Tree Growth Simulator on rubber saplings, a Crop Manager of Rubber Bonsai. */
+const rubberWoodFarms = (plan: Plan): string[] =>
+  plan.steps.filter((s) => s.farm !== undefined && s.outputs.some((p) => p.key.startsWith(RUBBER_WOOD_ITEM))).map((s) => s.id);
 /** Its distinct raw sources, as the Compare card counts them (`Plan.rawSources`, else the raw goods it buys). */
 const sourcesOf = (plan: Plan): number => compareSummary(plan).rawSources;
 /** A build MIP's end: seconds and nodes (best multi-output: both its MIPs'), status and stop, and its pick marks. */
@@ -156,12 +168,16 @@ describe.skipIf(!local)('planning modes, farms and surplus on the real export (a
     return run;
   };
 
-  /** Which of the rubber goods `plan` buys: Carbon Dust, Wood Pulp, Sticky Resin, `logWood` items and coal-type goods. */
-  const rubberGoods = (plan: Plan): StuffKey[] => {
-    const logs = new Set<StuffKey>(pack.oreDict.get('logWood') ?? []);
-    return [...rawKeys(plan)].filter((key) => key === CARBON_DUST || key === WOOD_PULP || key === STICKY_RESIN || logs.has(key)
-      || COAL_MATERIALS.has(pack.items.get(key)?.gt?.material ?? '')).sort();
-  };
+  /**
+   * Whether a rubber tree farm and its centrifuged wood stand in for `key` (plan 17 Task 10): Carbon Dust, Wood Pulp,
+   * Sticky Resin or a `logWood` item.
+   */
+  const farmGood = (key: StuffKey): boolean =>
+    key === CARBON_DUST || key === WOOD_PULP || key === STICKY_RESIN || (pack.oreDict.get('logWood') ?? []).includes(key);
+  /** Whether `key` is a coal-type good, by its material (`COAL_MATERIALS`). */
+  const coalType = (key: StuffKey): boolean => COAL_MATERIALS.has(pack.items.get(key)?.gt?.material ?? '');
+  /** Which of the rubber goods `plan` buys (plan 17 Task 10): those `farmGood` names and the coal-type goods. */
+  const rubberGoods = (plan: Plan): StuffKey[] => [...rawKeys(plan)].filter((key) => farmGood(key) || coalType(key)).sort();
 
   beforeAll(async () => {
     pack = await loadPack(activeExportDir(loadConfig()));
@@ -189,7 +205,11 @@ describe.skipIf(!local)('planning modes, farms and surplus on the real export (a
 
   it.skipIf(owned === undefined)("plans the user's Electronic Circuit in the three modes", async () => {
     // Each mode's plan checked by the rules of its objective (ruling R13: a least-raw plan is plan 09's, so build cost is
-    // not counted there) on the line's own pack, where its farm recipes are (`farmPack`, the integration's F7a).
+    // not counted there) on the line's own pack, where its farm recipes are (`farmPack`, the integration's F7a). Task 11
+    // ruling F-B: plan 17's farm expectations predate the live crop table (add-on 17 S19) and the export's Blood Sapling
+    // row (25 Bloodwood and 5 Redstone an operation at LV). Best multi-output puts the owned Tree Growth Simulator to work
+    // (asserted); which sapling it holds and whether the line buys Sticky Resin are logged, not asserted (plan 17 asked
+    // for rubber saplings and no resin bought).
     const base = given(owned);
     const plans = new Map<PlanObjective, Plan>();
     const slow: string[] = [];
@@ -219,8 +239,7 @@ describe.skipIf(!local)('planning modes, farms and surplus on the real export (a
     expect(PLAN_OBJECTIVES.map((o) => `${o} ${plans.get(o)?.status}`)).toEqual(PLAN_OBJECTIVES.map((o) => `${o} ok`));
     expect(slow, `over ${OBJECTIVE_PLAN_SECONDS} s`).toEqual([]);
     expect(errors).toEqual([]);
-    expect(rubberTreeFarms(multi), 'a Tree Growth Simulator on rubber saplings').not.toEqual([]);
-    expect(rawKeys(multi).has(STICKY_RESIN), 'buys Sticky Resin').toBe(false);
+    expect(treeFarms(multi), 'the owned Tree Growth Simulator at work').not.toEqual([]);
     if (exact) expect(sourcesOf(multi)).toBeLessThanOrEqual(sourcesOf(cheapest));
   }, 600_000);
 
@@ -248,16 +267,24 @@ describe.skipIf(!local)('planning modes, farms and surplus on the real export (a
 
   it.skipIf(owned === undefined)('covers resin, carbon and wood pulp from one rubber tree farm', async () => {
     // The user's example ("1 rubber tree farm with the crop manager could be centrifuged into rubber dust, wood pulp and
-    // carbon which takes care of half of the mats") at a rate where machines matter less, 1 a minute: one rubber tree
-    // farm, its wood centrifuged into Carbon Dust and Wood Pulp, and none of the rubber goods bought; fewer raw sources
-    // than cheapest with farms off. Logged side by side, farms on, at 1 a minute and 1 an hour: each mode's rubber goods,
-    // farm and centrifuge steps, raw sources and cost (with the Tree Growth Simulator owned and free to run, cheapest and
-    // least raw use it too: the log shows where best multi-output differs).
+    // carbon which takes care of half of the mats") at a rate where machines matter less, 1 a minute: one farm of Rubber
+    // Wood, its wood centrifuged into Carbon Dust and Wood Pulp, and none of Sticky Resin, Carbon Dust, Wood Pulp or a
+    // `logWood` item bought; fewer raw sources than cheapest with farms off. Task 11 ruling F-B: plan 17's farm
+    // expectations predate the live crop table (add-on 17 S19) and the export's Blood Sapling row (25 Bloodwood and 5
+    // Redstone an operation at LV). The farm of Rubber Wood may be of either kind: today a Crop Manager of Rubber Bonsai,
+    // the user's own "rubber tree farm with the crop manager", where plan 17 asked for a Tree Growth Simulator on rubber
+    // saplings (logged). The coal-type goods it buys are logged, not asserted: today Coal Dust, which the line buys with
+    // farms off too and no farm makes. Logged side by side, farms on, at 1 a minute and 1 an hour: each mode's rubber
+    // goods, farm and centrifuge steps, raw sources and cost (with the Tree Growth Simulator owned and free to run,
+    // cheapest and least raw use it too: the log shows where best multi-output differs).
     const base = given(owned);
     const perMinute: PlanSettings = { ...base, amount: 1, per: 'min' };
     const s = modeSettings(perMinute, 'multi-output');
     const { plan, seconds } = await timed(s);
     logPlan('one rubber tree farm, best multi-output at 1 a minute', s, plan, seconds);
+    console.log(`real-objectives one rubber tree farm, best multi-output at 1 a minute: farms of Rubber Wood ${rubberWoodFarms(plan).join(' ') || 'none'}; `
+      + `Tree Growth Simulators on rubber saplings (plan 17's farm, logged) ${rubberTreeFarms(plan).join(' ') || 'none'}; `
+      + `coal-type goods bought (logged) ${rubberGoods(plan).filter(coalType).join(' ') || 'none'}`);
     const farmless = modeSettings({ ...perMinute, farms: FARMS_OFF }, 'cheapest');
     const off = await timed(farmless);
     logPlan('one rubber tree farm, cheapest at 1 a minute with farms off', farmless, off.plan, off.seconds);
@@ -271,22 +298,30 @@ describe.skipIf(!local)('planning modes, farms and surplus on the real export (a
       }
     }
     expect(plan.status, JSON.stringify(plan.warnings)).toBe('ok');
-    expect(rubberTreeFarms(plan), 'a Tree Growth Simulator on rubber saplings').not.toEqual([]);
-    const centrifuged = plan.steps.filter((st) => st.mapId === CENTRIFUGE_MAP && st.inputs.some((p) => p.key.startsWith('IC2:blockRubWood'))
+    expect(rubberWoodFarms(plan), 'a farm of Rubber Wood').not.toEqual([]);
+    const centrifuged = plan.steps.filter((st) => st.mapId === CENTRIFUGE_MAP && st.inputs.some((p) => p.key.startsWith(RUBBER_WOOD_ITEM))
       && [CARBON_DUST, WOOD_PULP].every((key) => st.outputs.some((p) => p.key === key)));
     expect(centrifuged.map((st) => st.id), 'Rubber Wood centrifuged into Carbon Dust and Wood Pulp').not.toEqual([]);
-    expect(rubberGoods(plan)).toEqual([]);
+    expect(rubberGoods(plan).filter(farmGood), 'Sticky Resin, Carbon Dust, Wood Pulp or a logWood item bought').toEqual([]);
     expect(sourcesOf(plan)).toBeLessThan(sourcesOf(off.plan));
   }, 600_000);
 
   it.skipIf(owned === undefined)('plans a farm-fed least-raw line in time', async () => {
     // Raw Rubber Dust from the group's Tree Growth Simulator: a line whose least raw material is the tools it wears, which
-    // plan 09's charge MIP still plans (add-on 17 Task 5 keeps its step charge for it).
-    const s = modeSettings({ ...given(owned), target: RAW_RUBBER_DUST, amount: 1, per: 'min' }, 'least-raw');
-    const { plan, seconds } = await timedPlan('Raw Rubber Dust 1 a minute from the owned tree farm, least raw', s);
+    // plan 09's charge MIP still plans (add-on 17 Task 5 keeps its step charge for it). Task 11 ruling F-B: plan 17's farm
+    // expectations predate the live crop table (add-on 17 S19) and the export's Blood Sapling row (25 Bloodwood and 5
+    // Redstone an operation at LV). With both farm kinds least raw plants a Crop Manager of Sticky Cane, which wears no
+    // tools (no raw material at all), so the line is planned with the Crop Manager off: the stored circuit keeps no farm
+    // settings, so this is its normalized default less one kind. The plan with both kinds is logged beside it, not asserted.
+    const line: PlanSettings = { ...given(owned), target: RAW_RUBBER_DUST, amount: 1, per: 'min' };
+    const s = modeSettings({ ...line, farms: { ...defaultFarmSettings(), kinds: ['tgs'] } }, 'least-raw');
+    const { plan, seconds } = await timedPlan('Raw Rubber Dust 1 a minute from the owned tree farm, least raw, the Crop Manager off', s);
+    const bothKinds = modeSettings(line, 'least-raw');
+    const crop = await timed(bothKinds);
+    logPlan('Raw Rubber Dust 1 a minute, least raw with both farm kinds (logged)', bothKinds, crop.plan, crop.seconds);
     expect(plan.status, JSON.stringify(plan.warnings)).toBe('ok');
     expect(seconds).toBeLessThan(OBJECTIVE_PLAN_SECONDS);
-    expect(plan.steps.filter((st) => st.farm?.kind === 'tgs').map((st) => st.id), 'a Tree Growth Simulator step').not.toEqual([]);
+    expect(treeFarms(plan), 'a Tree Growth Simulator step').not.toEqual([]);
   }, 300_000);
 
   it.skipIf(owned === undefined)('compares the three modes within the time limit', async () => {
@@ -306,14 +341,19 @@ describe.skipIf(!local)('planning modes, farms and surplus on the real export (a
 
   it.skipIf(ec === undefined)("takes another project's surplus on real data", async () => {
     // Raw Rubber Dust from centrifuged resin leaves Refined Glue over: published as one project's summary on a board over
-    // a temporary database, the user's circuit reads it as an offer and takes it "from" that project.
+    // a temporary database, the user's circuit without its stop items reads it as an offer and takes it "from" that
+    // project, up to the offer (spec §3.11: "up to their surplus"); its rate is logged, not pinned. Task 11 ruling F-C:
+    // plan 17's reader needs no Refined Glue at its stored settings (it buys its Circuit Board, a stop item, and its own
+    // resin centrifuge leaves glue over), so the stored circuit is read and planned on its offers and logged, not asserted.
     const circuit = given(ec);
+    const noStops: PlanSettings = { ...circuit, stopItems: [] };
     const rubber: PlanSettings = { ...circuit, target: RAW_RUBBER_DUST, amount: 60, per: 'hour', objective: 'cheapest' };
     const made = await timed(rubber);
     logPlan("Raw Rubber Dust 60 an hour, another project's line", rubber, made.plan, made.seconds);
     expect(made.plan.status, JSON.stringify(made.plan.warnings)).toBe('ok');
     const producer = project('rubber-dust', 'Raw Rubber Dust', rubber, '2026-10-01T00:00:00.000Z');
-    const reader = project('circuit', 'Electronic Circuit', circuit, '2026-10-02T00:00:00.000Z');
+    const reader = project('circuit', 'Electronic Circuit without stops', noStops, '2026-10-02T00:00:00.000Z');
+    const storedReader = project('stored-circuit', 'Electronic Circuit', circuit, '2026-10-03T00:00:00.000Z');
     const dir = mkdtempSync(join(tmpdir(), 'real-objectives-'));
     const db = openDb(join(dir, 'planner.sqlite'));
     try {
@@ -322,16 +362,25 @@ describe.skipIf(!local)('planning modes, farms and surplus on the real export (a
       console.log(`real-objectives Raw Rubber Dust's summary: surplus ${(summary?.surplus ?? []).map((e) => `${e.key} ${e.perSecond * SECONDS_PER_MINUTE}/min`).join(', ') || 'none'}`);
       expect(summary).not.toBeNull();
       board.publish(summary!);
-      const goods = new Set((await linePricing(pack, circuit, ctx))?.graph.goods.keys() ?? []);
-      const read = crossRead(board, reader, circuit, new Set([producer.id, reader.id]), goods, made.plan.exportId);
-      console.log(`real-objectives the circuit's read: ${read.offers.map((o) => `${o.key} ${o.perSecond * SECONDS_PER_MINUTE}/min from ${o.name}`).join(', ') || 'no offer'}`);
-      expect(read.offers.filter((o) => o.key === REFINED_GLUE && o.from === producer.id), 'an offer of Refined Glue').not.toEqual([]);
-      const taking = await timed(circuit, { offers: read.offers, needs: read.needs });
-      logPlan('the user\'s Electronic Circuit on that offer', circuit, taking.plan, taking.seconds);
-      const drawn = taking.plan.rawInputs.filter((r) => r.key === REFINED_GLUE && r.from?.kind === 'project');
-      console.log(`real-objectives the circuit takes ${drawn.map((r) => `${r.perSecond * SECONDS_PER_MINUTE}/min of ${r.key} from ${r.from?.name}`).join(', ') || 'nothing from the project'}`);
-      expect(taking.plan.status, JSON.stringify(taking.plan.warnings)).toBe('ok');
-      expect(drawn.map((r) => r.from?.id), 'a Refined Glue row from the project').toEqual([producer.id]);
+      const live = new Set([producer.id, reader.id, storedReader.id]);
+      /** `who`'s read of the board over its line's goods, its plan on that read, and the Refined Glue rows that plan takes from a project. */
+      const takeOn = async (who: Project, label: string): Promise<{ read: CrossRead; plan: Plan; drawn: Plan['rawInputs'] }> => {
+        const goods = new Set((await linePricing(pack, who.settings, ctx))?.graph.goods.keys() ?? []);
+        const read = crossRead(board, who, who.settings, live, goods, made.plan.exportId);
+        console.log(`real-objectives ${label}, its read: ${read.offers.map((o) => `${o.key} ${o.perSecond * SECONDS_PER_MINUTE}/min from ${o.name}`).join(', ') || 'no offer'}`);
+        const taking = await timed(who.settings, { offers: read.offers, needs: read.needs });
+        logPlan(`${label} on that offer`, who.settings, taking.plan, taking.seconds);
+        const drawn = taking.plan.rawInputs.filter((r) => r.key === REFINED_GLUE && r.from?.kind === 'project');
+        console.log(`real-objectives ${label} takes ${drawn.map((r) => `${r.perSecond * SECONDS_PER_MINUTE}/min of ${r.key} from ${r.from?.name}`).join(', ') || 'nothing from the project'}`);
+        return { read, plan: taking.plan, drawn };
+      };
+      const take = await takeOn(reader, "the user's Electronic Circuit without its stop items");
+      await takeOn(storedReader, "the user's Electronic Circuit as stored (logged)");
+      const offered = take.read.offers.filter((o) => o.key === REFINED_GLUE && o.from === producer.id);
+      expect(offered, 'an offer of Refined Glue').not.toEqual([]);
+      expect(take.plan.status, JSON.stringify(take.plan.warnings)).toBe('ok');
+      expect(take.drawn.map((r) => r.from?.id), 'a Refined Glue row from the project').toEqual([producer.id]);
+      expect(take.drawn.reduce((n, r) => n + r.perSecond, 0), 'up to the offer').toBeLessThanOrEqual(offered.reduce((n, o) => n + o.perSecond, 0) + TINY);
     } finally {
       db.close();
       rmSync(dir, { recursive: true, force: true });
