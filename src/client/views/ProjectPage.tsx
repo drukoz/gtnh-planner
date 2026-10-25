@@ -10,8 +10,8 @@
 // opens the drawer by itself, once, into the item search; the plan banner's hint to pick something to make goes there too;
 // and the Settings button says what the line makes. At the top of the banners, the plan's key numbers sit in a strip of
 // readouts (Phase 2 spec §10): what it makes, its peak power, its machines, and what it costs to build and to run. While a new
-// plan is on its way the banner says so with the GT progress arrow (Phase 2 spec §11.3), and the drawer, behind which the banners are
-// inert, has a status line of its own (R43).
+// plan is on its way the banner says so with the GT progress arrow, on a line that moves nothing (Phase 2 spec §11.3, ledger ruling
+// P2-R18), and the drawer, behind which the banners are inert, has a status line of its own (R43).
 
 import { useEffect, useLayoutEffect, useRef, useState, type ReactElement } from 'react';
 import type { StuffKey } from '../../shared/keys.ts';
@@ -144,7 +144,8 @@ export function drawerStatus(plan: Plan | null, planError: string | null, planLo
 
 /**
  * What the plan warns about (fix spec §6.4), above every project view: while a new plan is on its way, "Updating the plan…" after the GT
- * progress arrow (Phase 2 spec §11.3); a summary of the integrity issues
+ * progress arrow (Phase 2 spec §11.3), on a chat box of its own that the stylesheet hangs over the end of the tab strip, out of the flow, so
+ * it moves nothing on the page (ledger ruling P2-R18; a banner that says nothing else then draws no box); a summary of the integrity issues
  * (`indexPlan`: "This plan does not add up: …", with "Show in the flow") and each issue in the server's words, else
  * `issueText`'s (the client re-checks the plan it got); the derived materials the line buys as chips that show their
  * import in the flow, with "Plan them as supporting lines" while those are off; how much more raw material the plan

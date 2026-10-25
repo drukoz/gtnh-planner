@@ -2626,6 +2626,10 @@ const SKELETON_RULES = [
 ];
 /** The Compare card's two (plan ruling compare-skeletons): a mode's six figures in the tiles' own grid, and the three modes framed as columns. */
 const COMPARE_SKELETON_RULES = ['.skeleton-readouts', '.skeleton-readouts .skeleton-block', '.skeleton-compare', '.skeleton-compare > .skeleton-readouts'];
+/** Task 8 (ledger ruling P2-R18): the plan's busy line, out of the flow, hung from the banners' box over the end of the tab strip. */
+const BUSY_LINE = '.plan-banner > p.muted';
+const BUSY_ALONE = '.plan-banner:has(> p.muted:only-child)';
+const BUSY_RULES = ['.project-banners', BUSY_LINE];
 
 /** The selectors of every rule Phase 2 adds; each later task appends its own. */
 const PHASE2_RULES: string[] = [
@@ -2642,6 +2646,7 @@ const PHASE2_RULES: string[] = [
   ...MAT_FOLD_RULES,                                                                 // Task 6b: the Materials disclosures fold (spec §3.3, R16)
   ...STRIP_RULES,                                                                    // Task 7: the key-numbers strip (spec §10.2)
   ...SKELETON_RULES, ...COMPARE_SKELETON_RULES,                                      // Task 8: the skeletons (spec §11.2, compare-skeletons)
+  ...BUSY_RULES,                                                                     // Task 8: the busy line out of the flow (P2-R18)
 ];
 /** The colour literals a Phase 2 rule may write: each is the same in both looks (spec §4.4). */
 const SAME_IN_BOTH = ['#ffffff', '#000000', '#aaaaaa', '#100010', '#ffff55', 'rgb(0 0 0 / 0.4)'];
@@ -3132,5 +3137,31 @@ describe('the Machine GUI Phase 2: skeletons', () => {
     expectDeclared([['.skeleton-strip', 'display', 'contents'], ['.skeleton-strip .skeleton-block', 'height', '52px']]);
     expect(declared('.skeleton-strip .skeleton-block', 'height')).toBe(declared('.key-number', 'height'));
     expect(declared('.skeleton-strip .skeleton-block', 'height')).toBe(declared('.key-numbers-wait > div', 'height'));
+  });
+
+  // ledger ruling P2-R18: a plan event (every replan of the project, and other projects' surplus) shows the busy line until the plan is
+  // fetched again; it pushed everything under the banners down the page and back (24.3 px under the banner's other lines, the whole
+  // banner's 60.3 px alone), which threw drags off the pointer (P2-R16) and made tests race. Out of the flow, it moves nothing.
+  it('hangs the plan\'s busy line from the banners\' box over the end of the tab strip, out of the flow, so a plan event moves nothing', () => {
+    expectDeclared([
+      // the banners' box is the line's containing block and keeps its last child's margin inside it, so its bottom is the top of the tabs
+      ['.project-banners', 'position', 'relative'], ['.project-banners', 'display', 'flow-root'],
+      [BUSY_LINE, 'position', 'absolute'], [BUSY_LINE, 'top', '100%'], [BUSY_LINE, 'right', '0'], [BUSY_LINE, 'pointer-events', 'none'],
+      [BUSY_LINE, 'display', 'flex'], [BUSY_LINE, 'align-items', 'center'], [BUSY_LINE, 'height', '28px'], [BUSY_LINE, 'margin', '7px 0 0'],
+      [BUSY_LINE, 'padding', '0 10px'], [BUSY_LINE, 'white-space', 'nowrap'],
+      // a chat box of its own, as the banner it came from, over the page's colour, so a tab it covers does not show through
+      [BUSY_LINE, 'background', 'linear-gradient(var(--chat), var(--chat)) var(--page)'], [BUSY_LINE, 'border', '2px solid var(--outline)'],
+      // a banner that says nothing else draws no box, and still appears without the entrance
+      [BUSY_ALONE, 'animation', 'none'], [BUSY_ALONE, 'margin', '0'], [BUSY_ALONE, 'padding', '0'], [BUSY_ALONE, 'border', '0'], [BUSY_ALONE, 'background', 'none'],
+    ]);
+    // level with the tabs: its middle where theirs is (a tab sits 2 px down, 38 px tall)
+    const px = (value: string | undefined): number => Number.parseFloat(value ?? '');
+    expect(px(declared(BUSY_LINE, 'margin')) + px(declared(BUSY_LINE, 'height')) / 2).toBe(px(declared(TAB, 'top')) + px(declared(TAB, 'min-height')) / 2);
+    // over the tabs it covers in a narrow window, under the drawer's dimmed page
+    const z = Number(declared(BUSY_LINE, 'z-index'));
+    expect(z).toBeGreaterThan(Number(declared(TAB, 'z-index')));
+    expect(z).toBeLessThan(Number(declaredIn(NARROW, '.drawer-backdrop', 'z-index')));
+    // no entrance: it shows on every replan (opacity and transform would be the only things it could move)
+    expect(declared(BUSY_LINE, 'animation')).toBeUndefined(); expect(declared(BUSY_LINE, 'transition')).toBeUndefined();
   });
 });

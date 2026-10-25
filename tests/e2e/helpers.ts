@@ -1,6 +1,7 @@
 // The shared end-to-end harness (architecture §11.7; Plans 3–5 use it too): log a page's browser context in, give it a
 // display name and a look, open a new project (or one with an EnderIO line laid out on the sample world, on its Connections tab),
-// and move the views under its banners (a replan's busy line, a spacer). All of it but the last works before the first navigation,
+// hold its plan on the way (a replan's busy line), and move the views under its banners (a spacer). All of it but the last two works before
+// the first navigation,
 // because the request context of `page.context()` resolves relative URLs against `use.baseURL` and shares the browser context's
 // cookie jar, so the page and its EventSource send `gp_session` (web-stack §10).
 
@@ -164,13 +165,14 @@ export async function holdPlans(page: Page, id?: string): Promise<PlanHold> {
 }
 
 /**
- * Puts "Updating the plan…" above the tabs of project `id`'s page, and keeps it there until the returned function is called (ledger ruling
- * P2-R16). The page hears a `plan` event whenever the server replans the project (anyone's change to it) or another project's summary
- * changes what it reads, and shows that line until it has fetched the plan again: every view under the banner moves down the page while it
- * shows (24.3 px under the banner's other lines; a whole banner's height when the banner has nothing else to say). Here the server replans
- * the project with its own settings (a settings op that changes nothing), and the page's fetches of its plan wait (`holdPlans`). Resolves
- * once the page has asked and the line shows; the function lets the plan through, which comes back the same (from the server, or from an
- * earlier route such as `openWithPlan`'s), takes the hold down, so no later fetch goes through it, and resolves once the line has gone again.
+ * Shows "Updating the plan…" on project `id`'s page, and keeps it there until the returned function is called (ledger ruling P2-R16). The page
+ * hears a `plan` event whenever the server replans the project (anyone's change to it) or another project's summary changes what it reads, and
+ * shows that line until it has fetched the plan again. It once moved every view under the banner down the page while it showed (24.3 px under
+ * the banner's other lines, a whole banner's height alone); since ledger ruling P2-R18 it hangs over the end of the tab strip and moves nothing.
+ * Here the server replans the project with its own settings (a settings op that changes nothing), and the page's fetches of its plan wait
+ * (`holdPlans`). Resolves once the page has asked and the line shows; the function lets the plan through, which comes back the same (from the
+ * server, or from an earlier route such as `openWithPlan`'s), takes the hold down, so no later fetch goes through it, and resolves once the line
+ * has gone again.
  */
 export async function holdReplan(page: Page, id: string): Promise<() => Promise<void>> {
   const hold = await holdPlans(page, id);
@@ -187,8 +189,8 @@ export async function holdReplan(page: Page, id: string): Promise<() => Promise<
 
 /**
  * Moves every view under the banners `px` down the page until the returned function takes it back up (ledger rulings P2-R16, P2-R18): a
- * spacer above `.project-banners` that none of the page's own markup draws. It is the layout shift a test makes while the pointer is down,
- * as a plan event's busy line makes one, without depending on what the page draws above its tabs.
+ * spacer above `.project-banners` that none of the page's own markup draws. It is the layout shift a test makes while the pointer is down, as
+ * anything that changes height above the tabs makes one (a plan event's busy line did, until P2-R18), without depending on what the page draws.
  */
 export async function shiftViews(page: Page, px: number): Promise<() => Promise<void>> {
   await page.evaluate((height) => {

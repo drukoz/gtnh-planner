@@ -3,11 +3,11 @@
 // own and lists the Item Conduits under logistics, the Connections tab draws the line, moves it with a drag (from a box
 // and from the background) and zooms it with the wheel, keeps its middle or fits it again when the side panel opens,
 // and shows a box's faces in full, and the 3D tab lists the Item Conduits (plan 11, ruling R7's lines, back with Plan
-// 5's 3D tab as merge follow-up F3). A drag keeps the box it started on under the pointer while the banner above the
+// 5's 3D tab as merge follow-up F3). A drag keeps the box it started on under the pointer while the page above the
 // tabs changes height, and a press the page moves under stays a click (ledger ruling P2-R16).
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
-import { createProject, holdReplan, login, setName, shiftViews } from './helpers.ts';
+import { createProject, login, setName, shiftViews } from './helpers.ts';
 import { uploadSampleWorld } from './world-upload.ts';
 
 /** Project `id`'s layout, from the layout route. */
@@ -37,10 +37,11 @@ async function conduitsLine(page: Page): Promise<string> {
 
 /**
  * Opens the line's page again, so that nothing above its tabs changes height while a test measures boxes on the page (ledger ruling
- * P2-R16). A `plan` event shows "Updating the plan…" above the tabs until the page has fetched the plan again, a line that moves every
- * view under it down the page (24.3 px here) and back. The replan of the line's ops sent the page its event before the layout route
- * answered 'ok' (the server plans one at a time, and the replan was asked first), so the page opened now loads the plan the server
- * settled on and hears no `plan` event: `conduitsLine` keeps the other projects' changes from reaching it.
+ * P2-R16). A `plan` event makes the page fetch the plan again, and the plan that comes can say other things in the banner above the tabs,
+ * which moves every view under it (its busy line, "Updating the plan…", once did too, 24.3 px here, and moves nothing since ledger ruling
+ * P2-R18). The replan of the line's ops sent the page its event before the layout route answered 'ok' (the server plans one at a time, and
+ * the replan was asked first), so the page opened now loads the plan the server settled on and hears no `plan` event: `conduitsLine` keeps
+ * the other projects' changes from reaching it.
  */
 async function reopenSettled(page: Page): Promise<void> {
   await page.reload();
@@ -151,18 +152,17 @@ test('plan an EnderIO line, read its conduit faces in the Connections tab and se
   await expect(page.getByTestId('block-list')).toContainText('Item Conduit');
 });
 
-// Ledger ruling P2-R16: a plan event (anyone's change to the project, or another project's surplus) shows "Updating the plan…" above the
-// tabs until the plan is fetched again, and that line moves the view down the page and back. A drag keeps the spot it grabbed under the
-// pointer meanwhile: the box moves on the page with the pointer, and the view's offset by what the pointer moved over the view.
-// TASK 8 RE-POINTS THIS PIN: it is the one pin that moves the view with the real busy line, the user's case (the others make their own
-// shift, `shiftViews`). Ledger ruling P2-R18 has Task 8 stop that line from reflowing; this pin's `shift < -20` precondition fails then.
-test('a drag keeps the box it started on under the pointer while the banner above the tabs changes height', async ({ page }) => {
-  const id = await conduitsLine(page);
+// Ledger ruling P2-R16: when what is above the tabs changes height while the pointer is down, the view moves on the page, and a drag keeps
+// the spot it grabbed under the pointer: the box moves on the page with the pointer, and the view's offset by what the pointer moved over the
+// view. A plan event's "Updating the plan…" once moved the views so (24.3 px); since ledger ruling P2-R18 that line moves nothing, so this pin
+// moves the view as the others do, with a spacer above the banners (`shiftViews`) of the line's height that goes mid-drag, as the line did.
+test('a drag keeps the box it started on under the pointer while the page above the tabs changes height', async ({ page }) => {
+  await conduitsLine(page);
   await reopenSettled(page);
   const view = await showConnections(page);
   const svg = view.locator('svg[role=group]');
   const machine = view.locator('.conn-machine rect').first();
-  const letThrough = await holdReplan(page, id);                             // "Updating the plan…" shows: the view sits lower
+  const unshift = await shiftViews(page, 24);                                 // the view sits 24 px lower
   const [x0, y0, k0] = await viewOf(view);
   const area0 = (await svg.boundingBox())!;
   const from = (await machine.boundingBox())!;
@@ -170,7 +170,7 @@ test('a drag keeps the box it started on under the pointer while the banner abov
   await page.mouse.move(px, py);
   await page.mouse.down();
   await page.mouse.move(px + 50, py + 25, { steps: 5 });
-  await letThrough();                                                         // the plan comes back and the line goes: the view moves up
+  await unshift();                                                            // the spacer goes: the view moves up
   await page.mouse.move(px + 100, py + 50, { steps: 5 });
   await page.mouse.up();
   const area1 = (await svg.boundingBox())!;
@@ -204,6 +204,8 @@ test('a press that the page moves under stays a click: the box is picked and the
   await page.mouse.move(px, py);
   await page.mouse.down();
   const unshift = await shiftViews(page, shift);                              // the view moves 12 px down under the still pointer
+  const after = (await machine.boundingBox())!;
+  expect(after.y - from.y, 'the spacer moved the box down the page under the still pointer').toBeCloseTo(shift, 3);
   await page.mouse.move(px + 1, py);                                           // 1 px of jitter
   await page.mouse.up();
   await expect(page.getByTestId('conn-panel')).toContainText('Basic Bending Machine');

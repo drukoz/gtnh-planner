@@ -470,8 +470,9 @@ details.settings-section > summary .muted { color: inherit; }
   background: var(--chat); border: 2px solid var(--outline); border-radius: 0;
   animation: rise-in var(--dur-base) var(--ease-out);
 }
-/* The busy line alone is on screen for every replan, so it appears without the entrance. */
-.plan-banner:has(> p.muted:only-child) { animation: none; }
+/* The busy line alone is on screen for every replan, so it appears without the entrance; and the line hangs out of the flow (below), so a
+   banner that says nothing else draws no box: no margin, padding, edge or face. */
+.plan-banner:has(> p.muted:only-child) { animation: none; margin: 0; padding: 0; border: 0; background: none; }
 .plan-banner p { margin: 0 0 4px; }
 .plan-banner ul { margin: 0 0 4px; padding-left: 20px; }
 .plan-banner .banner-heading { margin-top: 6px; font: 600 14px/1.45 var(--font-pixel); }
@@ -483,6 +484,22 @@ details.settings-section > summary .muted { color: inherit; }
 .banner-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 6px; }
 /* A derived material's chip is a small button with its 16px icon: the size of `button.small`, which its markup does not carry. */
 button.banner-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 0 10px 0 4px; font-size: 13px; }
+/*
+ * The banner's busy line (Phase 2 spec §11.3, ledger ruling P2-R18): "Updating the plan…" after the GT progress arrow, on a chat box of its
+ * own that hangs from the bottom right of the banners' box over the end of the tab strip, level with the tabs, out of the flow. Every replan
+ * of the project and other projects' surplus send a plan event, and the line in the flow pushed everything under the banners down the page and
+ * back (24.3 px, a whole banner's 60.3 px when it said nothing else), which threw drags off the pointer (P2-R16) and made tests race: now
+ * nothing moves. The banners' box is its containing block, and a block formatting context, so its last child's margin is inside it and its
+ * bottom is the top of the tabs, where it always was. The line's height is fixed, so no late font changes it, and it takes no pointer: where
+ * the tabs fill the strip (a window below about 790 px, or one of 901 to about 1140 px beside the settings) it is drawn over the last of
+ * them, above their z-index of 1 and under the drawer's dimmed page, and a click there still reaches the tab. Its face is the chat box over
+ * the page's colour, as the banner is on the stone, so a tab under it does not show through.
+ */
+.project-banners { position: relative; display: flow-root; }
+.plan-banner > p.muted {
+  position: absolute; top: 100%; right: 0; z-index: 2; display: flex; align-items: center; height: 28px; margin: 7px 0 0; padding: 0 10px;
+  background: linear-gradient(var(--chat), var(--chat)) var(--page); border: 2px solid var(--outline); white-space: nowrap; pointer-events: none;
+}
 /* What the plan costs to run and to build (plan 12), above the banner. It is a line on the stone: the ink of the page, with
    figures that line up. */
 .plan-cost { margin: 0 0 var(--gap); color: var(--ink); font-family: var(--font-ui); font-size: 14px; font-variant-numeric: tabular-nums; }

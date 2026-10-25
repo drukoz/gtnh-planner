@@ -24,15 +24,13 @@ async function openAssembler(page: Page): Promise<{ panel: Locator; id: string }
 }
 
 /**
- * Readies a case that measures the page's scroll once a panel is open:
- * - the plan banner goes out of the page. A plan event (another project's change reaches this one through the surplus board, ledger ruling
- *   P2-R16) shows "Updating the plan…" there for a frame, which moves everything under it (P2-R18, until Task 8) and, through scroll anchoring,
- *   the page's scroll by as much (measured: 25 px and back). The fixture plans put nothing else there;
- * - the panel's entrance ends. While its wrapper slides in, what it holds is not stable, and Playwright retries a click on it with the page
- *   scrolled to other alignments (measured: from 733 to 979 before the press).
+ * Readies a case that measures the page's scroll once a panel is open: the panel's entrance ends. While its wrapper slides in, what it holds is
+ * not stable, and Playwright retries a click on it with the page scrolled to other alignments (measured: from 733 to 979 before the press).
+ * A plan event (another project's change reaches this one through the surplus board, ledger ruling P2-R16) no longer moves the page: its
+ * "Updating the plan…" hangs over the tab strip, out of the flow (ledger ruling P2-R18), where it once moved everything under it and, through
+ * scroll anchoring, the page's scroll by as much (25 px and back), so the banner went out of the page here until Task 8.
  */
 async function holdStill(page: Page): Promise<void> {
-  await page.addStyleTag({ content: '.plan-banner { display: none !important; }' });
   await expect.poll(() => page.locator('.flow-side').evaluate((el) => el.getAnimations().length)).toBe(0);
 }
 

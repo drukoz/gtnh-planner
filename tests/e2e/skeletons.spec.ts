@@ -1,11 +1,13 @@
 // Skeletons and the progress arrow (Phase 2 spec §11, Task 8): every loading line stays as it is, with an aria-hidden skeleton of what is
 // coming beside it, whose sheen passes three times (once, for a millisecond, under reduced motion) and which goes when the data comes; the
 // Compare card's two (plan ruling compare-skeletons) fall as its tiles will. The plan's busy line carries the GT progress arrow, which keeps
-// its fill in forced colours. Chromium draws each; the plan or the compare is held on its way by a route.
+// its fill in forced colours, and it moves nothing on the page (ledger ruling P2-R18): it hangs over the end of the tab strip, out of the
+// flow, so a plan event, which every replan and other projects' surplus send, no longer moves the views under the banners. Chromium draws
+// each; the plan or the compare is held on its way by a route.
 
 import { test, expect, type Page, type Route } from '@playwright/test';
 import { circuitLv } from './fixtures/plans.ts';
-import { createProject, holdPlans, login, LV_CIRCUITS, openWithPlan, setName } from './helpers.ts';
+import { createProject, holdPlans, holdReplan, login, LV_CIRCUITS, openWithPlan, setName } from './helpers.ts';
 
 /** Holds every request for a project's plan until the returned function is called; each then goes on to the server. */
 async function holdPlan(page: Page): Promise<() => void> {
@@ -92,6 +94,42 @@ test('in forced colours a skeleton\'s blocks keep their shape on the well', asyn
   await expect(page.locator('.skeleton')).toHaveCount(0);
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
+
+// ledger ruling P2-R18: a plan event shows the busy line until the plan is fetched again, and the line no longer moves the page: it hangs from
+// the banners' box over the end of the tab strip, so the strip, the views and everything under them stay where they are, whether the banner
+// says nothing else (the line was a whole banner of 60.3 px) or lists the plan's warnings (a line of 24.3 px at their top).
+for (const [what, open] of [
+  ['the banner says nothing else', async (page: Page) => openWithPlan(page, circuitLv(), { ...LV_CIRCUITS, useSurplus: false })],
+  ['the banner lists warnings', async (page: Page) => {
+    await login(page); await setName(page, 'Ann');
+    const id = await createProject(page, 'Busy line', { ...LV_CIRCUITS, useSurplus: false });
+    await expect(page.locator('.plan-banner .warnings li').first()).toBeVisible();
+    return id;
+  }],
+] as const) {
+  test(`a plan event's busy line moves nothing on the page: ${what}`, async ({ page }) => {
+    const id = await open(page);
+    await expect(page.locator('svg.flow-canvas [data-step-id]').first()).toBeVisible();
+    const where = (): Promise<number[]> => page.evaluate(() => ['.tabs', '.tab-panel', '.project-banners', 'svg.flow-canvas']
+      .map((selector) => document.querySelector(selector)!.getBoundingClientRect()).flatMap((r) => [r.top, r.height]));
+    const before = await where();
+    const letThrough = await holdReplan(page, id);                                    // "Updating the plan…" shows
+    const busy = page.getByText('Updating the plan…');
+    expect(await where(), 'nothing moves while the plan is on its way').toEqual(before);
+    // it sits over the tab strip, level with its tabs and at the end of the views, clear of every tab on this window
+    const [line, tabs, views] = await Promise.all([busy.boundingBox(), page.locator('.tabs').boundingBox(), page.locator('.project-views').boundingBox()]);
+    expect(line!.y).toBeGreaterThanOrEqual(tabs!.y);
+    expect(line!.y + line!.height).toBeLessThanOrEqual(tabs!.y + tabs!.height);
+    expect(line!.x + line!.width).toBeCloseTo(views!.x + views!.width, 3);
+    const lastTab = (await page.getByRole('tab').last().boundingBox())!;
+    expect(line!.x, 'clear of the last tab').toBeGreaterThan(lastTab.x + lastTab.width);
+    // it takes no pointer: what is under it is what a click reaches
+    const atLine = await page.evaluate(([x, y]) => document.elementFromPoint(x!, y!)?.closest('.plan-banner') ?? null, [line!.x + 4, line!.y + line!.height / 2]);
+    expect(atLine, 'the busy line takes no pointer').toBeNull();
+    await letThrough();
+    expect(await where(), 'nor when it goes').toEqual(before);
+  });
+}
 
 // plan ruling compare-skeletons: the Compare card's skeleton is three frames in its columns' grid, each framed as a column and holding six blocks
 // in the tiles' own grid, so its blocks fall as the tiles will: two a row on a wide card, stacked where a column is too narrow for two (860 px,

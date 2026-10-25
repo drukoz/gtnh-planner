@@ -1,9 +1,9 @@
-// The flow diagram's drag while the page above it changes height (ledger ruling P2-R16): a plan event (anyone's change to the project, or
-// another project's surplus) shows "Updating the plan…" above the tabs until the plan is fetched again, and that line moves the diagram
-// down the page and back. While the pointer is down, the picture keeps the spot it was grabbed by under the pointer, as the Connections
-// view does (connections.spec.ts, whose pin moves the page with the real busy line); a press stays a click until the pointer itself has
-// moved, whatever moves the page under it. Both cases here move the page with a spacer of their own (`shiftViews`). They open a real
-// project of the Mini-GT e2e server and serve a fixture plan in place of the server's, the way flow-focus.spec.ts does.
+// The flow diagram's drag while the page above it changes height (ledger ruling P2-R16): whatever changes height above the tabs while the
+// pointer is down (a plan event's "Updating the plan…" did, until ledger ruling P2-R18 took that line out of the flow) moves the diagram
+// down the page or up. While the pointer is down, the picture keeps the spot it was grabbed by under the pointer, as the Connections
+// view does (connections.spec.ts); a press stays a click until the pointer itself has moved, whatever moves the page under it. Both cases
+// here move the page with a spacer of their own (`shiftViews`). They open a real project of the Mini-GT e2e server and serve a fixture
+// plan in place of the server's, the way flow-focus.spec.ts does.
 
 import { test, expect } from '@playwright/test';
 import { circuitLv } from './fixtures/plans.ts';
@@ -46,6 +46,8 @@ test('a press that the page moves under stays a click: the step opens and the di
   await page.mouse.move(px, py);
   await page.mouse.down();
   const unshift = await shiftViews(page, shift);                              // the diagram moves 12 px down under the still pointer
+  const after = (await step.boundingBox())!;
+  expect(after.y - from.y, 'the spacer moved the box down the page under the still pointer').toBeCloseTo(shift, 3);
   await page.mouse.move(px + 1, py);                                           // 1 px of jitter
   await page.mouse.up();
   await expect(page.getByRole('complementary', { name: /^Step: / })).toBeVisible();
