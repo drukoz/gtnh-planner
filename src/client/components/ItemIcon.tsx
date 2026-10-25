@@ -8,6 +8,8 @@ import type { ReactElement } from 'react';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import { hashColor, type Rgb } from '../../shared/types/assets.ts';
 import { useItemIcon } from '../assets/icons.ts';
+import { modName } from './mod-names.ts';
+import { tipText } from './tooltip-model.ts';
 
 const FLUID_PREFIX = 'fluid:';
 
@@ -40,9 +42,11 @@ function ownName(key: StuffKey): string {
 
 /**
  * The icon of `itemKey`; `name` (an optional addition to architecture §6.5's props, fix spec §6.4) is the good's name
- * for its tooltip and accessible name, which show the key when no name is given.
+ * for its tip and accessible name, which show the key when no name is given. The tip is the shared NEI tooltip's
+ * (Phase 2 spec §6.4, TooltipHost): `data-tip` holds the name, then the lines of `tip`, and `data-tip-mod` the mod its
+ * key comes from, when known. `tip={false}` gives no tip, for an icon whose parent shows one (a Flow box, a native title).
  */
-export function ItemIcon(props: { itemKey: StuffKey; size?: number; name?: string }): ReactElement {
+export function ItemIcon(props: { itemKey: StuffKey; size?: number; name?: string; tip?: false | readonly string[] }): ReactElement {
   const { itemKey } = props;
   const size = props.size ?? 24;
   const label = props.name ?? itemKey;
@@ -54,7 +58,8 @@ export function ItemIcon(props: { itemKey: StuffKey; size?: number; name?: strin
       className={url === null ? placeholderClass(color) : 'item-icon'}
       role="img"
       aria-label={label}
-      title={label}
+      data-tip={props.tip === false ? undefined : tipText([label, ...(props.tip ?? [])])}
+      data-tip-mod={props.tip === false ? undefined : modName(itemKey) ?? undefined}
       data-item-key={itemKey}
       data-icon-source={desc?.source ?? 'loading'}
       style={{

@@ -264,7 +264,7 @@ function CostRow(props: { costKey: string; name: string; value: number; onChange
     <tr data-cost-key={costKey}>
       <td>
         <span className="cost-name" title={costKey}>
-          {isStuffKey(costKey) && <ItemIcon itemKey={costKey} size={18} name={name} />}
+          {isStuffKey(costKey) && <ItemIcon itemKey={costKey} size={18} name={name} tip={false} />}
           {name}
         </span>
       </td>

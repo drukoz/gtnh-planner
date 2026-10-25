@@ -72,7 +72,7 @@ describe('display name', () => {
 describe('components', () => {
   it('draws a placeholder item icon of the given size', () => {
     const html = renderToStaticMarkup(<ItemIcon itemKey="gregtech:gt.metaitem.01@2032" size={32} />);
-    expect(html).toContain('title="gregtech:gt.metaitem.01@2032"');
+    expect(html).toContain('data-tip="gregtech:gt.metaitem.01@2032"');
     expect(html).toContain('width:32px');
     expect(html).toContain('data-item-key="gregtech:gt.metaitem.01@2032"');
   });

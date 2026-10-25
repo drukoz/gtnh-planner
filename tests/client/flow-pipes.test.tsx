@@ -117,4 +117,13 @@ describe('flow diagram: flanges (design spec §7 "Connected")', () => {
     expect(html).toMatch(/<g class="flow-row out main hl" data-port="mill\|out\|t:copper_wire@0"/);
     expect(html).toContain(`<rect class="flow-port" x="198" y="${rowCentre(node, 1) - 5}" width="4" height="10"></rect></g>`);
   });
+
+  // Phase 2 spec §6.4: an icon in a box shows no tip of its own (`tip={false}`), as the box tells what it holds; until Task 3b moves the
+  // box's words to its `data-tip`, its <title> tells them, so nothing shows two tips
+  it('draws no item tip inside a box, whose own title still tells it', () => {
+    const html = renderToStaticMarkup(<svg><FlowNodeShape node={node} /></svg>);
+    expect(html).not.toMatch(/<span class="item-icon[^"]*"[^>]*data-tip=/);
+    expect(html.match(/<span class="item-icon/g)).toHaveLength(3);                      // the head's icon and one a row, all without one
+    expect(html).toContain('<title>Wiremill\nLV · 32 EU/t · 1 machine\ntakes Copper Ingot 1/s\nmakes Copper Wire 2/s</title>');
+  });
 });

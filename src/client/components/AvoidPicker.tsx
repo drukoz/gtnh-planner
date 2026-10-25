@@ -48,7 +48,7 @@ export function AvoidPicker(props: AvoidPickerProps): ReactElement {
             const label = avoidLabel(entry, materials, nameOf);
             return (
               <li key={entry} className="avoid-chip" data-avoid-entry={entry} title={entry}>
-                {isStuffKey(entry) && <ItemIcon itemKey={entry} size={CHIP_ICON_SIZE} name={label} />}
+                {isStuffKey(entry) && <ItemIcon itemKey={entry} size={CHIP_ICON_SIZE} name={label} tip={false} />}
                 <span className="avoid-chip-name">{label}</span>
                 <button type="button" className="avoid-chip-remove" aria-label={`Remove ${label}`} onClick={() => set(avoidWithout(avoid, entry))}>×</button>
               </li>

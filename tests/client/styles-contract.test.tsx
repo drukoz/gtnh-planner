@@ -134,6 +134,7 @@ const KEYFRAMES: Record<string, string[]> = {
   'pipe-pulse': ['opacity'],
   'tip-in': ['opacity', 'transform'],                                                // ruling R27: a tooltip fades in and rises 2px
   'brand-flow': ['opacity'],                                                         // Phase 2 spec §5.3: logo C's pipe, frame by frame
+  'tip-out': ['opacity', 'transform'],                                               // Phase 2 spec §6.3: the shared tooltip's 80 ms exit
 };
 
 const FONT_IMPORTS = [
@@ -2464,6 +2465,7 @@ const PHASE2_RULES: string[] = [
   '::view-transition-old(root)', '::view-transition-new(root)',
   OVERLAYS, '.brand-mark::after',                                                    // Task 2: logo C's overlays (spec §5.3)
   '.fig',                                                                            // Task 2b: a figure in pixel text (spec §25)
+  '.nei-tooltip', '.nei-tooltip > :first-child', '.nei-tooltip-mod', ".nei-tooltip[data-state='closing']",   // Task 3a (spec §6.3)
 ];
 /** The colour literals a Phase 2 rule may write: each is the same in both looks (spec §4.4). */
 const SAME_IN_BOTH = ['#ffffff', '#000000', '#aaaaaa', '#100010', '#ffff55', 'rgb(0 0 0 / 0.4)'];
@@ -2550,5 +2552,32 @@ describe('the Machine GUI Phase 2: figures in VT323', () => {
     expect(1.15 * 13).toBeGreaterThanOrEqual(DIGITS_FLOOR);   // in the smallest Pixelify there is
     // the words stay in Pixelify: the badges and chips, the map tooltip and the 3D label keep their rules
     expectDeclared([['.badge, .chip', 'font', '13px/1.5 var(--font-pixel)'], [TIP, 'font', '14px/1.35 var(--font-pixel)'], [HOVER, 'font', '14px/1.35 var(--font-pixel)']]);
+  });
+});
+
+// The shared NEI tooltip (Phase 2 spec §6.3, Task 3a): the map tooltip's look in a rule of its own (never in `.map-tooltip`'s, whose pins
+// read that rule alone: R1), fixed in the window above every layer, the modal's included, and never taking the pointer (hit tests and
+// Playwright's clicks need that); its first line white and its mod line in --tip-mod's blue, italic. It rises in as the map's does, and
+// fades out in 80 ms as it is about to be removed, so its exit alone keeps its last frame (`forwards`).
+const NEI_TIP = '.nei-tooltip';
+const NEI_TIP_CLOSING = ".nei-tooltip[data-state='closing']";
+
+describe('the Machine GUI Phase 2: the shared NEI tooltip', () => {
+  it('draws the shared tooltip as an NEI tooltip above every layer, and fades it out in 80 ms', () => {
+    expectDeclared([
+      [NEI_TIP, 'position', 'fixed'], [NEI_TIP, 'top', '0'], [NEI_TIP, 'left', '0'], [NEI_TIP, 'z-index', '200'], [NEI_TIP, 'pointer-events', 'none'],
+      [NEI_TIP, 'width', 'max-content'], [NEI_TIP, 'max-width', '360px'], [NEI_TIP, 'padding', '6px 8px'], [NEI_TIP, 'overflow-wrap', 'anywhere'],
+      [NEI_TIP, 'background', 'var(--tip-bg)'], [NEI_TIP, 'border', '2px solid var(--tip-border)'],
+      [NEI_TIP, 'box-shadow', '0 0 0 1px #100010, inset 0 0 0 1px var(--tip-inner)'],
+      [NEI_TIP, 'color', '#aaaaaa'], [NEI_TIP, 'font', '14px/1.35 var(--font-pixel)'], [NEI_TIP, 'animation', 'tip-in 120ms var(--ease-out)'],
+      ['.nei-tooltip > :first-child', 'color', '#ffffff'],
+      ['.nei-tooltip-mod', 'color', 'var(--tip-mod)'], ['.nei-tooltip-mod', 'font-style', 'italic'],
+      [NEI_TIP_CLOSING, 'animation', 'tip-out 80ms var(--ease-in) forwards'],
+    ]);
+    expect(Number(declared(NEI_TIP, 'z-index'))).toBeGreaterThan(Number(declared('.modal-backdrop', 'z-index')));
+    expect(declared(NEI_TIP, 'border-radius') ?? '0').toBe('0');
+    expect(ruleBody('@keyframes tip-out')).toMatch(/^to \{ opacity: 0; transform: translateY\(2px\);? \}$/);
+    // an item icon's tip is this one, never a native title (spec §6.4)
+    expect(read('components/ItemIcon.tsx')).not.toMatch(/\btitle=/);
   });
 });

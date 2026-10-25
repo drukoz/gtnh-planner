@@ -166,7 +166,7 @@ function FlowRowShape(props: { node: PlacedNode; row: FlowRow; index: number; se
       <rect className="flow-hit" x={0} y={y - ROW_HEIGHT / 2} width={node.width} height={ROW_HEIGHT} />
       {icon && (
         <foreignObject x={left ? TEXT_LEFT : node.width - TEXT_LEFT - ICON_SIZE} y={y - ICON_SIZE / 2} width={ICON_SIZE} height={ICON_SIZE}>
-          <ItemIcon itemKey={row.key} size={ICON_SIZE} name={row.name} />
+          <ItemIcon itemKey={row.key} size={ICON_SIZE} name={row.name} tip={false} />
         </foreignObject>
       )}
       {/* A nested svg clips a row wider than the box; the full text is in the box's title. */}
@@ -220,7 +220,7 @@ export function FlowNodeShape(props: { node: PlacedNode; selected?: boolean; set
         <rect className="flow-hit" width={node.width} height={head} />
         {icon !== null && (
           <foreignObject x={TEXT_LEFT} y={ICON_TOP} width={ICON_SIZE} height={ICON_SIZE}>
-            <ItemIcon itemKey={icon} size={ICON_SIZE} name={node.keyName} />
+            <ItemIcon itemKey={icon} size={ICON_SIZE} name={node.keyName} tip={false} />
           </foreignObject>
         )}
         {/* A nested svg clips text that is wider than the box; the full text is in the title. */}

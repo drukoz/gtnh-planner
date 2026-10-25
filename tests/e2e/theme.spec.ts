@@ -150,6 +150,17 @@ const DARK_TOUR: DarkStop[] = [
     },
     rows: [{ what: 'the bar\'s Compare modes button', selector: '.compare-bar .compare-toggle', property: 'background-color', expected: 'rgb(60, 60, 60)' }],
   },
+  // Task 3a: the shared NEI tooltip is the same box in both looks (spec §6.3)
+  {
+    name: 'an item\'s tip',
+    open: async (page) => {
+      await createProject(page, 'Dark tip', LV_CIRCUITS);
+      await page.getByRole('tab', { name: 'Materials & steps' }).click();
+      await page.locator('li.mat-row .item-icon').first().hover();
+      await expect(page.getByRole('tooltip')).toBeVisible();
+    },
+    rows: [{ what: 'the shared tooltip', selector: '.nei-tooltip', property: 'background-color', expected: 'rgba(16, 0, 16, 0.94)' }],
+  },
 ];
 
 // a fresh context per test, in a dark OS

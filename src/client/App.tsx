@@ -1,8 +1,9 @@
 // The page for the current route: the login form on its own, every other page under the header nav, and the name
-// prompt over them until this browser has a name.
+// prompt over them until this browser has a name; and the page's one NEI tooltip (Phase 2 spec §6), above everything.
 
 import type { ReactElement } from 'react';
 import { NamePrompt } from './components/NamePrompt.tsx';
+import { TooltipHost } from './components/Tooltip.tsx';
 import { TopNav } from './components/TopNav.tsx';
 import { followLink, useRoute, type Route } from './router.ts';
 import { LoginPage } from './views/LoginPage.tsx';
@@ -42,6 +43,7 @@ export function App(): ReactElement {
       <TopNav current={route.name === 'top' ? route.path : ''} />
       <RoutePage route={route} />
       <NamePrompt />
+      <TooltipHost />
     </>
   );
 }

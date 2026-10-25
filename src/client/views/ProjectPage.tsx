@@ -181,7 +181,7 @@ export function PlanBanner(props: {
           <div className="banner-chips">
             {derived.map((key) => (
               <button key={key} type="button" className="banner-chip" data-key={key} title={`Show ${nameOf(key)} in the flow`} onClick={() => showInFlow({ kind: 'item', key })}>
-                <ItemIcon itemKey={key} size={16} name={nameOf(key)} />
+                <ItemIcon itemKey={key} size={16} name={nameOf(key)} tip={false} />
                 <span>{nameOf(key)}</span>
               </button>
             ))}

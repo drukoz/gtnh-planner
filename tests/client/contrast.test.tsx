@@ -207,6 +207,12 @@ const PAIRS: Pair[] = [
   // and a Flow box under the pointer, whose veil (--flow-hover) lightens it in light and darkens it in dark: its text and its lines
   ...FLOW_FILLS.map(([box, fill]): Pair => [`${box} box text under the pointer`, '--text', { over: '--flow-hover', on: fill }, AA]),
   ...ISSUE_FILLS.map(([box, fill]): Pair => [`${box} box lines under the pointer`, '--text-muted', { over: '--flow-hover', on: fill }, AA]),
+
+  // the shared NEI tooltip (Phase 2 Task 3a, spec §6.3): its white first line and grey details are the map tooltip's (above); its mod line
+  // is --tip-mod's blue, on the box over a panel and over the lightest a map or the 3D scene can put under it (the reason case below says
+  // why it is not the mockups' blue)
+  ['tooltip mod line, over a panel', '--tip-mod', { over: '--tip-bg', on: '--panel' }, AA],
+  ['tooltip mod line, over white', '--tip-mod', { over: '--tip-bg', on: '#ffffff' }, AA],
 ];
 
 describe('contrast of the Machine GUI palette', () => {
@@ -346,5 +352,13 @@ describe('contrast of the dark look', () => {
   it('darkens a box under the pointer: an 8 % white veil would leave the muted text short on an owned box', () => {
     // 3.79:1; the dark --flow-hover, 30 % black, keeps it at 4.5:1 or more (the table's "under the pointer" rows)
     expect(ratio(colour('dark', '--text-muted'), colour('dark', { over: 'rgb(255 255 255 / 0.08)', on: '--flow-owned' }))).toBeLessThan(AA);
+  });
+});
+
+// The shared NEI tooltip's mod line (Phase 2 spec §6.3): NEI's own blue, the mockups' #5555ff, reads 3.70:1 on the box over a panel, so the
+// line is --tip-mod's #8080ff (the table's "tooltip mod line" rows, 5.6:1 or more).
+describe('contrast of the shared tooltip', () => {
+  it('needs a lighter blue for its mod line: the mockups\' blue falls short on the box', () => {
+    expect(ratio('#5555ff', colour('light', { over: '--tip-bg', on: '--panel' }))).toBeLessThan(AA);
   });
 });

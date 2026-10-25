@@ -4,17 +4,19 @@
 
 import type { CSSProperties, ReactElement, Ref } from 'react';
 import { Figs } from '../components/Figs.tsx';
+import { alongAxis } from '../components/tooltip-model.ts';
 import { worldToScreen } from './render.ts';
 import type { MapViewport } from './types.ts';
 
 /** The gap (px) between the tooltip and the pointer, or the hovered block's square when that is drawn wider. */
 export const TOOLTIP_OFFSET = 12;
 
-/** Along one axis: past `end` when the tooltip fits there, else before `start` when it fits there, else inside `[0, box − size]`. */
+/**
+ * Along one axis: past `end` when the tooltip fits there, else before `start` when it fits there, else inside `[0, box − size]`: the
+ * shared tooltip's rule (`alongAxis`, Phase 2 spec §6.2), which began here.
+ */
 function along(start: number, end: number, size: number, box: number): number {
-  const after = end + TOOLTIP_OFFSET, before = start - TOOLTIP_OFFSET - size;
-  const at = after + size <= box || before < 0 ? after : before;
-  return Math.max(0, Math.min(at, box - size));
+  return alongAxis(start, end, size, box, TOOLTIP_OFFSET);
 }
 
 /**
