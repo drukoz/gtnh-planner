@@ -1,7 +1,9 @@
 // Fix wave 3 (F)'s pick on a model whose search ends at its start (the add-on 12 x 17 integration, F4): with a start,
 // HiGHS skips the root heuristics it runs without one, so on Duty plate's farm model the 50-node search returned its
 // 325-block start at the root (436 against 149 without it). `pickBuild` then solves once more without the start; the
-// start stays a pick candidate, so the pick is never dearer by `exactCost`. Synthetic: an injected solver, no HiGHS.
+// start stays a pick candidate, so the pick is never dearer by `exactCost`. It also covers fix wave 3 (F)'s retry of a
+// build MIP whose root LP relaxation does not solve, which no real-data test reaches since 12 x 17 F7b. Synthetic: an
+// injected solver, no HiGHS.
 
 import { describe, expect, it } from 'vitest';
 import { BUILD_MIP_RETRY_TOLERANCE } from '../../../src/server/planner/build-mip.ts';
@@ -52,5 +54,27 @@ describe('pickBuild when the search ends at its start', () => {
     const { calls, solver } = solverOf(AT_ROOT);
     await pickBuild(mip, undefined, {}, 30, model, solver);
     expect(calls).toHaveLength(1);
+  });
+});
+
+describe('pickBuild when the root LP relaxation does not solve', () => {
+  it('runs again at BUILD_MIP_RETRY_TOLERANCE from the same start and picks from that run', async () => {
+    // Fix wave 3 (F): the first solve stops itself where its root LP relaxation does not solve (`stopOnRootLpFailure`;
+    // its `x` is the start's). Good Electronic Circuit 2/min HV on AE2 did so until 12 x 17 F7b, so real-build-cost.test.ts
+    // no longer reaches this path.
+    const calls: LpModel[] = [];
+    const solver = async (m: LpModel): Promise<LpResult> => {
+      calls.push(m);
+      return m.stopOnRootLpFailure === true ? { ...AT_ROOT, rootLpFailed: true } : SEARCHED;
+    };
+    const picked = await pickBuild(mip, START, {}, 30, model, solver);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.stopOnRootLpFailure).toBe(true);
+    expect(calls[1]?.stopOnRootLpFailure).toBeUndefined();
+    expect(calls[1]?.feasibilityTolerance).toBe(BUILD_MIP_RETRY_TOLERANCE);
+    expect(calls[1]?.start).toEqual(START);
+    expect(picked.retried).toBe(true);
+    expect(picked.result.x).toEqual(BETTER);
+    expect(picked.bare).toBeUndefined();
   });
 });

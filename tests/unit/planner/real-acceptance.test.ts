@@ -45,6 +45,8 @@ const ALUMINIUM_INGOT = 'gregtech:gt.metaitem.01@11019';
 const RED_ALLOY_INGOT = 'gregtech:gt.metaitem.01@11308';
 const IRON_III_CHLORIDE = 'fluid:ironiiichloride';
 const RAW_SILICON_DUST = 'gregtech:gt.metaitem.01@2020';
+const IRON_DUST = 'gregtech:gt.metaitem.01@2032';
+const ACETONE = 'fluid:acetone';
 const SAND = 'minecraft:sand@0';
 const GRAVEL = 'minecraft:gravel@0';
 const COBBLESTONE = 'minecraft:cobblestone@0';
@@ -120,10 +122,10 @@ const BUILD_COST_PLAN_SECONDS = 13;
  * of its tier (fix wave 3 (E), the controller's ruling of 2026-10-23 on Task 3's finding (2): "every real-data plan-time
  * assertion of a plan at step charge 0 or with build cost ignored that prices its own line's candidate machines cold
  * […] gets the OQ1 (A) bound the same way as the build-cost plans: the next whole second above 1.25 x the slowest
- * quiet-host median of Step 1, measured as the first plan of its tier in a whole-file run"). Each timed so: 2 Good
+ * quiet-host median of Step 1, measured as the first plan of its tier in a whole-file run"). Each is timed so: 2 Good
  * Electronic Circuits a minute at HV with build cost ignored in this file's runs (its first HV plan), the other three
- * run alone. The slowest, the Calcite case alone, took 8.22 s, the median of three on 2026-10-24 (each run started at a
- * 1-minute load under 4): 1.25 × 8.22 = 10.28.
+ * run alone. It stays at the 11 s set on 2026-10-24 until the integration's A4 (its Task 12) times them again: since
+ * 12 x 17 F7b the Calcite case plans another line (Acetone), which that measure never timed.
  */
 const COLD_PRICES_PLAN_SECONDS = 11;
 /**
@@ -341,36 +343,32 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
 
   it(`plans 2 Good Electronic Circuits a minute at HV from ordinary materials, build cost ignored, in under ${GEC_HV_MAX_STEPS} steps and ${COLD_PRICES_PLAN_SECONDS} s`, async () => {
     // Before fix wave 3 (C) the line etched its Good Circuit Board in a chemical reactor with Iron III Chloride. With
-    // byproduct-only goods beyond the group's stock at BEYOND_STOCK_FACTOR times their price it crafts the board from gold
-    // wire on an Auto Workbench, in 49 steps, and makes no Iron III Chloride (real-build-cost.test.ts plans the line with
-    // build cost counted). Farms off (add-on 17 ruling S15): with them on, the default, the line plants a crop farm, and a
-    // farm step's swap list holds the export's recipes only (add-on 17 ruling S5), never its own.
+    // byproduct-only goods beyond the group's stock at BEYOND_STOCK_FACTOR times their price it crafted the board from gold
+    // wire on an Auto Workbench, in 49 steps at 0.788995443 raw a second, and made no Iron III Chloride. Since 12 x 17 F7b
+    // (ruling A) it etches the board in a Large Chemical Reactor with Iron III Chloride again, in 51 steps at 0.766145367:
+    // F7b fixes every virtual good's sink at 0, which leaves S1 the same (0.637795037) but changes which of its equal-raw
+    // solutions HiGHS returns, so the charge stage's one-node MIP starts from another (real-build-cost.test.ts plans the
+    // line with build cost counted). Farms off (add-on 17 ruling S15): with them on, the default, the line plants a crop
+    // farm, and a farm step's swap list holds the export's recipes only (add-on 17 ruling S5), never its own.
     const settings = { target: GOOD_ELECTRONIC_CIRCUIT, amount: 2, tier: 3, buildHorizonHours: null, farms: FARMS_OFF };
     await farmsOnLogged('Good Electronic Circuit HV x2, build cost ignored', "S15: a farm step's swap list holds the export's recipes only", settings,
       COLD_PRICES_PLAN_SECONDS);
     const { plan: p, seconds } = await plan(settings);
     expectSane(p, seconds, COLD_PRICES_PLAN_SECONDS, GEC_HV_MAX_STEPS);
     await expectSameBreakdown(p, settings);
-    // It adds up but for one good (fix spec R11, D13). The sodalite electrolyzer that alone makes its Raw Silicon Dust is
-    // named so, as is the reactor that alone makes Iron III Chloride where the line etches its board, not after the
-    // Hydrogen Cells and Chlorine other steps make too ("Hydrogen Cell is made 3 ways", "Chlorine is made 2 ways" before the
-    // final review), and no good is made two ways by a step that runs for an output it alone makes. Measured left:
-    // Hydrogen Cell, from the water electrolysis (97 % of it; it throws away 90 % of the Oxygen it alone makes) and the salt
-    // water electrolysis.
-    const issues = indexPlan(p).issues;
-    expect(issues.filter((i) => i.code !== 'multi-producer')).toEqual([]);
-    expect(issues.length).toBeLessThanOrEqual(1);
+    // It adds up (fix spec R11), and each step that makes Iron III Chloride or Raw Silicon Dust is named after an output the
+    // line has from it alone and takes in full (D13, `soleTakenOutputs`): the reactor that alone makes Iron III Chloride
+    // after it, not after the Hydrogen Cells the salt water electrolysis makes too ("Hydrogen Cell is made 3 ways",
+    // "Chlorine is made 2 ways" before the final review); the Ferrosilite electrolyzer that makes the Raw Silicon Dust after
+    // the Iron Dust it alone makes, which the Electric Blast Furnace and that reactor take in full, while the Raw Silicon
+    // Dust beyond the mixer's need goes to sink.
+    expect(indexPlan(p).issues).toEqual([]);
     const empties = emptyContainers(pack);
-    for (const issue of issues) {
-      for (const id of issue.stepIds ?? []) {
-        const maker = p.steps.find((s) => s.id === id) as PlanStep;
-        expect(soleTakenOutputs(p, maker, empties), `${pack.nameOf(issue.key)} made by ${id}`).toEqual([]);
-      }
-    }
-    for (const key of [IRON_III_CHLORIDE, RAW_SILICON_DUST]) {
+    for (const [key, names] of [[IRON_III_CHLORIDE, [IRON_III_CHLORIDE]], [RAW_SILICON_DUST, [IRON_DUST]]] as const) {
       const makers = p.steps.filter((s) => s.outputs.some((o) => o.key === key));
-      if (key === RAW_SILICON_DUST) expect(makers.length, key).toBeGreaterThan(0);   // no Iron III Chloride since (C)
-      expect(makers.map((s) => s.mainOutput), key).toEqual(makers.map(() => key));
+      expect(makers.length, key).toBeGreaterThan(0);
+      for (const maker of makers) expect(soleTakenOutputs(p, maker, empties), `${key} made by ${maker.id}`).toContain(maker.mainOutput);
+      expect(makers.map((s) => s.mainOutput), key).toEqual(names);
     }
     expect(p.steps.find((s) => s.mainOutput === GOOD_ELECTRONIC_CIRCUIT)?.mapId).toBe('gt.recipe.circuitassembler');
     expect(perMinute(p, 'minecraft:gold_ingot@0') + perMinute(p, 'gregtech:gt.metaitem.01@2086')).toBeGreaterThan(0);   // the board's gold foil
@@ -537,17 +535,20 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
     expect(p.buildList.some((l) => l.group === 'one-off' && pack.items.get(l.key)?.gt?.prefix === 'lens')).toBe(true);
   }, 60_000);
 
-  it("keeps the Large Chemical Reactor's Calcite catalyst out of 2 Good Electronic Circuits a minute at HV", async () => {
+  it("keeps the Large Chemical Reactor's Calcite catalyst out of 1,000 L of Acetone a minute at HV", async () => {
     // Plan 08 wrote this before there was a step charge, so it plans at the least raw material ("Least raw material", 0 %,
-    // fix spec R3): there the plain line makes its acetone in the only recipe of the 2.9 export that holds Calcite (from
-    // acetic acid, 480 EU/t). At the 2 % default (and at 5 %) the plain line makes no acetone and holds no Calcite, so
-    // there would be nothing to keep out. The least raw material is plan 09's objective, so build cost is ignored, as in
-    // this file's other checks of it: with build cost counted the build MIP's pick at 0 % holds no Calcite since fix wave
-    // 3 Task 7, 2.2 % cheaper by its own measure than the pick that held it. Farms off (add-on 17 ruling S15): with them on,
-    // the default, the plain line plants a crop farm and makes no acetone (since 12 x 17 F2), so there is nothing to keep out.
+    // fix spec R3): there the plain line (16 steps) makes its acetone in the only recipe of the 2.9 export that holds
+    // Calcite (dac6aa42cabad1bb, from acetic acid in the Large Chemical Reactor, 480 EU/t); avoiding Calcite (16 steps) it
+    // takes the one that holds Quicklime Dust (d46051150c412c5f), and `avoided` lists Calcite Dust, not unavoidable. The
+    // least raw material is plan 09's objective, so build cost is ignored, as in this file's other checks of it. Its line
+    // was 2 Good Electronic Circuits a minute at HV until 12 x 17 F7b (ruling A): F7b fixes every virtual good's sink at
+    // 0, which leaves S1 the same but changes which of its equal-raw solutions HiGHS returns, so plan 09's fewest-recipes
+    // stage (S3) finds that line in 80 recipes against 81, its acetone then made in 4ebad900a02ab3c1, which holds no
+    // Calcite: nothing to keep out. Farms off (add-on 17 ruling S15): with them on, the default, the line makes its acetone
+    // in b0bd0a2c72c56c96 (3 steps) and holds no Calcite.
     const avoid = ['Calcite'];
-    const settings = { target: GOOD_ELECTRONIC_CIRCUIT, amount: 2, tier: 3, avoid, stepCharge: 0, buildHorizonHours: null, farms: FARMS_OFF };
-    await farmsOnLogged('Good Electronic Circuit HV x2 avoiding Calcite', 'S15: the farms-on line makes no acetone, so it holds no Calcite', settings,
+    const settings = { target: ACETONE, amount: 1000, tier: 3, avoid, stepCharge: 0, buildHorizonHours: null, farms: FARMS_OFF };
+    await farmsOnLogged('Acetone HV avoiding Calcite', 'S15: the farms-on line makes its acetone in b0bd0a2c72c56c96 and holds no Calcite', settings,
       COLD_PRICES_PLAN_SECONDS);
     const { plan: p, seconds } = await plan(settings);
     expectAvoided(p, seconds, avoid, COLD_PRICES_PLAN_SECONDS);

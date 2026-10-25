@@ -552,6 +552,13 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
      * after Task 3 (Task 1 pinned 737bcd0's own, on a5f5100's prices). At "No limit" from fix wave 3 Task 7 on: every pinned
      * line's leanest line is within LEAN_BASE_ABOVE × σ, so its MIP is the one Task 4 pinned. Plan 12 planned no farm, so
      * these lines plan with farms off (add-on 17 ruling S15, `atOff`), each with its farms-on pick logged beside its pin.
+     * Advanced Circuit HV 1/h and 1/min with supporting lines are pinned at their picks after 12 x 17 F7b (ruling A), which
+     * fixes every virtual good's sink at 0: that raises no stage's optimum (a plan that sinks a virtual good sinks its
+     * options instead, at the same raw material and machines; S1 is the same to 9 digits, 0.00486171028 and 0.230496647),
+     * but it changes which of S1's equal-raw solutions HiGHS returns, and so the MIP's start and its 50-node search:
+     * 33.562427797 -> 34.522190074 and 27.699827544 -> 28.343800736 (buildStage's JSDoc records the same 1/h flip for
+     * another changed start). At 400 nodes and 3,000,000 simplex iterations they reach 33.383123261 and 27.173435929,
+     * below the old pins.
      */
     const PINNED: ReadonlyArray<[string, PlanSettings, number]> = [
       ['Electronic Circuit MV', atOff(ELECTRONIC_CIRCUIT, 2, 1), 12.451591979],
@@ -563,8 +570,8 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
       ['Electronic Circuit LV on Project Red', atOff(ELECTRONIC_CIRCUIT, 1, 1, { logistics: 'routed' }), 17.259551046],
       ['Electronic Circuit LV on AE2', atOff(ELECTRONIC_CIRCUIT, 1, 1, { logistics: 'ae2' }), 15.856850743],
       ['Advanced Circuit HV 1/min', atOff(ADVANCED_CIRCUIT, 3, 1, { routeDerived: false }), 22.294776901],
-      ['Advanced Circuit HV 1/h', atOff(ADVANCED_CIRCUIT, 3, 1, { routeDerived: false, per: 'hour' }), 33.562427797],
-      ['Advanced Circuit HV 1/min, supporting lines', atOff(ADVANCED_CIRCUIT, 3, 1), 27.699827544],
+      ['Advanced Circuit HV 1/h', atOff(ADVANCED_CIRCUIT, 3, 1, { routeDerived: false, per: 'hour' }), 34.522190074],
+      ['Advanced Circuit HV 1/min, supporting lines', atOff(ADVANCED_CIRCUIT, 3, 1), 28.343800736],
     ];
     const statsOf = (run: BuildRun): NonNullable<Solution['buildStats']> => run.sol.buildStats as NonNullable<Solution['buildStats']>;
     const logPick = (name: string, stats: NonNullable<Solution['buildStats']>): void => {
@@ -580,31 +587,41 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
       expect(stats.objective as number).toBeLessThanOrEqual(pinned * (1 + 1e-6));
     }, 300_000);
 
-    it('plans 2 Good Electronic Circuits a minute at HV on AE2 in at most 28 new machines, at most 16.371 by the build MIP', async () => {
+    it('plans 2 Good Electronic Circuits a minute at HV on AE2 in at most 29 new machines, at most 17.447792929 by the build MIP', async () => {
+      // Pinned at its pick after 12 x 17 F7b (ruling A; before it at most 16.371 and 28 new machines, retried): F7b fixes
+      // every virtual good's sink at 0, which leaves S1 the same (0.541250173) but changes which of its equal-raw solutions
+      // HiGHS returns, and so the MIP's start and search. Since F7b its root LP relaxation solves at 1e-10, so it runs no
+      // second time at BUILD_MIP_RETRY_TOLERANCE (fix wave 3 (F); build-pick.test.ts keeps that path), and its simplex
+      // iteration cap stops the search at 13 nodes. At 400 nodes and 3,000,000 simplex iterations it reaches 15.947785088.
       const s = atOff(GOOD_ELECTRONIC_CIRCUIT, 3, 2, { logistics: 'ae2' });
       const run = await buildRun({ ...s, rawCap: null }, false);
       const stats = statsOf(run);
       logPick('Good Electronic Circuit HV x2 on AE2', stats);
       logPick('Good Electronic Circuit HV x2 on AE2, farms on (S15, logged)', statsOf(await buildRun({ ...s, rawCap: null, farms: defaultFarmSettings() }, false)));
-      expect(stats.retried).toBe(true);   // its root LP relaxation does not solve at 1e-10
+      expect(stats.retried).toBeUndefined();   // since F7b its root LP relaxation solves at 1e-10
       expect(stats.status === 'optimal' || stats.stop === 'limit', `${stats.status}/${stats.stop}`).toBe(true);
-      expect(stats.objective as number).toBeLessThanOrEqual(16.371 + 1e-6);
+      expect(stats.objective as number).toBeLessThanOrEqual(17.447792929 * (1 + 1e-6));
       // Its new machines from that same solve (controller ruling on fix wave 3 (C), item 5): planLine also prices
-      // byproduct-only goods beyond the group's stock, which moves its plan past 28 new machines (29); that plan is logged.
-      expect(decidedBlocks(run.sol)).toBeLessThanOrEqual(28);
+      // byproduct-only goods beyond the group's stock, so its plan is another, measured after F7b at 28 new machines
+      // against the solve's 29; that plan is logged.
+      expect(decidedBlocks(run.sol)).toBeLessThanOrEqual(29);
       const { plan } = await timed({ ...s, rawCap: null });
       console.log(`real-build-cost pick Good Electronic Circuit HV x2 on AE2, as planLine plans it: ${plan.status}, ${plan.steps.length} steps, `
         + `${newBlocks(plan)} new machines (the solve's decision ${decidedBlocks(run.sol)})`);
       expect(plan.status, JSON.stringify(plan.warnings)).toBe('ok');
     }, 300_000);
 
-    it('proves its plan of 2 Good Electronic Circuits a minute at HV optimal within its iteration cap', async () => {
+    it('keeps its plan of 2 Good Electronic Circuits a minute at HV no worse than its measured pick within its node limit', async () => {
+      // Before 12 x 17 F7b (ruling A) the build MIP proved its pick, 17.755272959, optimal in 38 nodes. F7b fixes every
+      // virtual good's sink at 0, which leaves S1 the same (0.569357537) but changes which of its equal-raw solutions HiGHS
+      // returns, and so the MIP's start and search: the proof now needs 139 nodes, above BUILD_MIP_MAX_NODES, at the same
+      // objective (17.755276533 optimal at 400 nodes and 3,000,000 simplex iterations); at 50 nodes the bound is 16.126698813.
       const s = atOff(GOOD_ELECTRONIC_CIRCUIT, 3, 2, { rawCap: null });
       const stats = statsOf(await buildRun(s, false));
       logPick('Good Electronic Circuit HV x2', stats);
       logPick('Good Electronic Circuit HV x2, farms on (S15, logged)', statsOf(await buildRun({ ...s, farms: defaultFarmSettings() }, false)));
-      expect(stats.status).toBe('optimal');
-      expect(stats.objective as number).toBeLessThanOrEqual(17.755272959 * (1 + 1e-6));
+      expect(stats.status === 'optimal' || stats.stop === 'limit', `${stats.status}/${stats.stop}`).toBe(true);
+      expect(stats.objective as number).toBeLessThanOrEqual(17.755276533 * (1 + 1e-6));
       // At the default raw cap the same line is another problem (controller OQ4): its MIP as planLine solves it, logged.
       const capped = atOff(GOOD_ELECTRONIC_CIRCUIT, 3, 2);
       logPick('Good Electronic Circuit HV x2 at the default raw cap (logged only)', statsOf(await buildRun(capped)));
@@ -643,8 +660,9 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
       // Circuit Board from gold wire on an Auto Workbench in about half the steps of the plan that ignores build cost, which
       // etched the board in a chemical reactor with Iron III Chloride. Within the default +25 % raw cap it etches the board
       // too, in 49 steps against 50. With byproduct-only goods beyond the group's stock at BEYOND_STOCK_FACTOR times their
-      // price (fix wave 3 (C)) it plans 50 steps against 49, the plan that ignores build cost now crafting the board: at
-      // most one step more, and no worse by the build MIP's measure than plan 09's plan of its own graph nor, where it is
+      // price (fix wave 3 (C)) it planned 50 steps against 49, the plan that ignores build cost then crafting the board;
+      // since 12 x 17 F7b (ruling A) that plan etches it again, and both plan 51 steps (measured). It is held to at most
+      // one step more, and no worse by the build MIP's measure than plan 09's plan of its own graph nor, where it is
       // within the cap, than the plan that ignores build cost. With farms off (add-on 17 ruling S15, `atOff`): with farms on,
       // the default, the raw cap's leanest line counts the farms the group could build (the user's ruling U1), so the cap may
       // force them; the farms-on plans, with build cost and ignoring it, are logged.

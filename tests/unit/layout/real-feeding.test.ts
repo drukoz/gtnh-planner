@@ -316,16 +316,28 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('the feeding checker on the rese
         }
       }
 
-      // the job: AE2 cannot plan only a request whose item comes only by chance (a by-product that no pattern of whole, guaranteed
-      // outputs lists), and that request alone is left out (compared, not printed: a reason names items). The Electronic Circuit
-      // line made by hand hands its centrifuges' Sticky Resin to the Resistors it makes by hand, a request of its own, so Sticky
-      // Resin is left out. With crafting automated the line's one request, its product, is left out on the first such item its
-      // planning meets: its Sticky Resin with farm kinds off, its Carbon Dust with add-on 17's farms on (12 x 17 T1). A farm's
-      // own Sticky Resin goes to sink (12 x 17 F5), so ME holds none either way.
+      // the job: AE2 cannot plan a request whose item comes only by chance (a by-product that no pattern of whole, guaranteed
+      // outputs lists), nor (12 x 17 ruling B) one whose item only a laid step that takes nothing makes: the Vacuum Tube
+      // line's Rock Breaker, whose Cobblestone a Forge Hammer makes into the gravel of its sand (design spec §3.3, plan 12's
+      // D1: sand from rock-breaker cobblestone where that costs less). Such a step has no pattern (architecture §11.51), and
+      // the layout says so (`ae2_no_pattern`: what it makes goes back into ME storage, so jobs that need it rely on stock); the
+      // checker plans its one job at tick 0, when ME holds only the line's supply, though the steady run shows the breaker
+      // filling ME. Each such request alone is left out (compared, not printed: a reason names items), and how many only a
+      // step that takes nothing makes is pinned per line. The Electronic Circuit line made by hand hands its centrifuges'
+      // Sticky Resin to the Resistors it makes by hand, a request of its own, so Sticky Resin is left out. With crafting
+      // automated the line's one request, its product, is left out on the first such item its planning meets: its Sticky
+      // Resin with farm kinds off, its Carbon Dust with add-on 17's farms on (12 x 17 T1). A farm's own Sticky Resin goes to
+      // sink (12 x 17 F5), so ME holds none either way.
       const cannot = [...new Set(steady.map((f) => /the AE2 job cannot be planned: (.*)$/.exec(f.text)?.[1]).filter((x) => x !== undefined))];
       const lacking = cannot.map((why) => /^nothing makes (.*) and ME holds none$/.exec(why)?.[1]);
       const byChance = new Set(machines(model).flatMap((n) => n.recipes.flatMap((r) => r.outputs.filter((o) => o.chance < 1).map((o) => model.nameOf(o.key)))));
-      expect(lacking.every((name) => name !== undefined && byChance.has(name)), `${line.name}: ${cannot.length} unplanned requests, each an item made only by chance`).toBe(true);
+      const noPattern = new Set(layout.warnings.filter((w) => w.code === 'ae2_no_pattern').map((w) => w.stepId));
+      const selfRun = new Set(line.plan.steps.filter((s) => s.supply !== undefined && s.inputs.length === 0 && model.laid.includes(s.id) && noPattern.has(s.id))
+        .flatMap((s) => s.outputs.map((o) => model.nameOf(o.key))));
+      expect(lacking.every((name) => name !== undefined && (byChance.has(name) || selfRun.has(name))),
+        `${line.name}: ${cannot.length} unplanned requests, each an item made only by chance or only by a laid step that takes nothing`).toBe(true);
+      expect(lacking.filter((name) => name !== undefined && !byChance.has(name) && selfRun.has(name)).length,
+        `${line.name}: unplanned requests only a laid step that takes nothing makes`).toBe(line.name === 'vacuum-tube' ? 1 : 0);
       if (line.name === 'ec-user-auto') expect(lacking.length, 'ec-user-auto: its one request left out').toBe(1);
       else expect(lacking.includes(model.nameOf(STICKY_RESIN)), `${line.name}: Sticky Resin unplanned`).toBe(line.name === 'ec-user');
       // by hand, the line's other requests are planned and pushed: some machine runs
