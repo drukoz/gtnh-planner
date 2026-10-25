@@ -93,7 +93,7 @@ describe('machines', () => {
     expect(machineByMteId(pack, 211)).toMatchObject({ itemInSlots: 6, itemOutSlots: 1 });
     expect(machineByMteId(pack, 212)).toMatchObject({ itemInSlots: 9, itemOutSlots: 1 });
     expect(machineByMteId(pack, 4300)).toMatchObject({ itemInSlots: 2, itemOutSlots: 0 });   // no output slot is still a count
-    const macerator = (await makePack(sampleExportSpec())).machines.get(SAMPLE.macerator)!;
+    const macerator = machineByMteId(await makePack(sampleExportSpec()), SAMPLE.macerator)!;
     expect('itemInSlots' in macerator).toBe(false);
     expect('itemOutSlots' in macerator).toBe(false);
   });
@@ -125,7 +125,7 @@ describe('structure hatch rules', () => {
     const { structure } = await load({ ...line, elements: [{ hatches: ['muffler'] }], elementOf: [0, -1, -1, -1] });
     expect(structure.elements).toEqual([{ hatches: ['muffler'], cells: [[0, 0, 0]] }]);
     expect('ch' in structure.elements![0]!).toBe(false);
-    const ebf = (await makePack(sampleExportSpec())).machines.get(SAMPLE.ebf)!.structure!;
+    const ebf = machineByMteId(await makePack(sampleExportSpec()), SAMPLE.ebf)!.structure!;
     expect('elements' in ebf).toBe(false);
   });
 
