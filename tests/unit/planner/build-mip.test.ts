@@ -470,15 +470,18 @@ describe('the build-cost MIP', () => {
     expect([...(again.machines ?? [])].map(([id, m]) => [id, m.option.mteId, m.added])).toEqual([...(first.machines ?? [])].map(([id, m]) => [id, m.option.mteId, m.added]));
   });
 
-  it('says build-cost-approx when the search stopped at the root on its start and the search without it found nothing (12 x 17 F4)', async () => {
-    // Bounds of 0 nodes and 1 simplex iteration end the start's solve at the root (nodes 0) and the bare one before any
-    // whole solution: the plan is its start's, rounded up from an estimate, not the fallback's (`approx` false). On the
-    // solder line, as the glass line's MIP above ends optimal at the root under these bounds too and never stalls.
+  it('keeps its start without a search from nothing when its limits stop it before its root LP relaxation solves (12 x 17 F4)', async () => {
+    // Bounds of 0 nodes and 1 simplex iteration end the start's solve at the root (nodes 0) before its LP relaxation
+    // solves (no finite bound): a solve without the start would stop at the same place, so there is none (the
+    // integration's final review), and the plan is its start's, a whole MIP solution like any its limits stop. On the
+    // solder line, as the glass line's MIP above ends optimal at the root under these bounds. buildStage's note on a
+    // search from nothing that finds nothing is build-pick.test.ts's.
     const { sol } = await solvedWithBuild(solderSpec(), COSTS, [['t:board@0', 1 / 3600]], { options: SOLDER }, { buildMaxIterations: 1, buildMaxNodes: 0 });
     expect(sol.status).toBe('ok');
-    expect(sol.buildStats?.bare).toBe('stalled');
-    expect(sol.buildStats?.approx).toBe(false);
-    expect(sol.warnings.map((w) => w.code)).toContain('build-cost-approx');
+    expect(sol.buildStats).toMatchObject({ status: 'feasible', stop: 'limit', nodes: 0, approx: false });
+    expect(sol.buildStats?.bound).toBeUndefined();
+    expect(sol.buildStats?.bare).toBeUndefined();
+    expect(sol.warnings.map((w) => w.code)).not.toContain('build-cost-approx');
   });
 
   it('plans the same machines whatever the time guard, which never decides a plan', async () => {

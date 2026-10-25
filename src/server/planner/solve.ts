@@ -191,8 +191,9 @@ export interface Solution {
     earlier?: true;
     // optional addition (add-on 12 x 17 integration, F4)
     /**
-     * The solve ended at the root on its start, so it ran once more without it (`pickBuild`): `kept` when that gave a
-     * whole solution (a pick candidate beside the start), `stalled` when not (the plan then carries `build-cost-approx`).
+     * The solve ended at the root on its start after its root LP relaxation solved, so it ran once more without it
+     * (`pickBuild`): `kept` when that gave a whole solution (a pick candidate beside the start), `stalled` when not (the
+     * plan then carries `build-cost-approx`).
      */
     bare?: 'kept' | 'stalled';
     // optional addition (fix wave 3 (A), controller ruling 187)
@@ -1474,15 +1475,17 @@ function wholeBuild(r: LpResult): boolean {
  * limits only. One solve from `start` — BUILD_MIP_MAX_NODES nodes without strong branching (whose iterations escape the
  * iteration cap) within BUILD_MIP_MAX_LP_ITERATIONS — that stops itself when its root LP relaxation does not solve at
  * MIP_FEASIBILITY_TOLERANCE (`stopOnRootLpFailure`) and then runs again at BUILD_MIP_RETRY_TOLERANCE from the same
- * start. When the last solve stopped on its limits at the root (`nodes` 0) with nothing better than `start`, it solves
- * once more at BUILD_MIP_RETRY_TOLERANCE without the start (`bare`: `kept` when that gave a whole solution, which joins
- * the pick beside the start; `stalled` when not). The decision is the cheapest by `exactCost` (every machine at its true
- * build) of the whole solutions HiGHS reported on the way (`keepImproving`), of every solve: HiGHS ranks them by the
- * model, whose light steps are off by less than a machine each, and on 2 of 66 measured lines an earlier one is cheaper;
- * ties keep HiGHS's last. A solve the time guard stops gives nothing: when the last solve is no plan, `buildStage` falls
- * back as before. The result is the last solve's, with `x` the pick. `model` is the model solved: `mip.model`, or one a
- * caller derived from it for `start`; `solver` solves it (`solveLp`, or `solveLpAside` on the solver thread, which gives
- * the same result).
+ * start. When the last solve stopped on its limits at the root (`nodes` 0) after its root LP relaxation solved (its
+ * `bound` above TINY) with nothing better than `start`, it solves once more at BUILD_MIP_RETRY_TOLERANCE without the
+ * start (`bare`: `kept` when that gave a whole solution, which joins the pick beside the start; `stalled` when not); one
+ * its iteration cap stopped inside that relaxation, before the heuristics a start costs, is left as it is (a solve
+ * without the start would only spend the cap again at its root). The decision is the cheapest by `exactCost` (every
+ * machine at its true build) of the whole solutions HiGHS reported on the way (`keepImproving`), of every solve: HiGHS
+ * ranks them by the model, whose light steps are off by less than a machine each, and on 2 of 66 measured lines an
+ * earlier one is cheaper; ties keep HiGHS's last. A solve the time guard stops gives nothing: when the last solve is no
+ * plan, `buildStage` falls back as before. The result is the last solve's, with `x` the pick. `model` is the model
+ * solved: `mip.model`, or one a caller derived from it for `start`; `solver` solves it (`solveLp`, or `solveLpAside` on
+ * the solver thread, which gives the same result).
  */
 export async function pickBuild(
   mip: ReturnType<typeof buildMip>, start: number[] | undefined, opts: SolveOptions, limit: number, model: LpModel = mip.model,
@@ -1497,12 +1500,17 @@ export async function pickBuild(
   const first = await solve();
   const runs = [first];
   if (first.rootLpFailed === true) runs.push(await solve(BUILD_MIP_RETRY_TOLERANCE));
-  // A solve its limits ended at the root with nothing better than its start (a start costs HiGHS the root heuristics it
-  // runs without an incumbent: Duty plate with farms, 436 against 149): once more without it; the start stays a pick.
+  // A solve its limits ended at the root after its LP relaxation solved, with nothing better than its start (a start
+  // costs HiGHS the heuristics it runs on that relaxation without an incumbent: Duty plate with farms, 436 against 149,
+  // bound 143.87): once more without it; the start stays a pick. Not where the iteration cap stopped it inside that
+  // relaxation, before those heuristics (its bound at most TINY, or none, as no objective coefficient is below 0): a solve
+  // without the start only spends the cap again at its root (the integration's final review: Electronic Circuit MV on
+  // Project Red, two of every machine owned, bound 5.8e-10, where it found a plan of 3.7e8 against its start's 8.81, so
+  // the same plan, the start's, in a build MIP of 22.8 s against 13.0 s).
   let bare: { bare?: 'kept' | 'stalled' } = {};
   const stalled = runs[runs.length - 1] as LpResult;
   if (start !== undefined && wholeBuild(stalled) && stalled.stop === 'limit' && (stalled.nodes ?? 0) === 0
-    && runs.every((r) => (r.improving?.length ?? 0) <= 1)) {
+    && (stalled.bound ?? 0) > TINY && runs.every((r) => (r.improving?.length ?? 0) <= 1)) {
     const again = await solve(BUILD_MIP_RETRY_TOLERANCE, true);
     if (wholeBuild(again)) runs.push(again);
     bare = { bare: wholeBuild(again) ? 'kept' : 'stalled' };
