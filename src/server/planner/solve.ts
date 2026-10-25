@@ -8,7 +8,7 @@ import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import type { PlanWarning } from '../../shared/types/plan.ts';
 import {
   BUILD_MIP_MAX_LP_ITERATIONS, BUILD_MIP_MAX_NODES, BUILD_MIP_RETRY_TOLERANCE, BUILD_MIP_TIME_LIMIT_SECONDS, LEAN_BASE_ABOVE, buildMip, laterRoom,
-  roundUp, scaleOf, stepWeight, type BuildDecision, type BuildMipInput, type LaterRoom, type StepMachines, type StepWeights,
+  oneMakerGood, roundUp, scaleOf, stepWeight, type BuildDecision, type BuildMipInput, type LaterRoom, type StepMachines, type StepWeights,
 } from './build-mip.ts';
 import { canonicalRank, type CandidateGraph, type LpRecipe } from './candidates.ts';
 import { solveLp, solveLpAside, type LpModel, type LpResult, type LpRow } from './lp.ts';
@@ -1412,12 +1412,13 @@ interface SolvedMip {
 
 /**
  * The build MIP of `input` solved as the build stage does: started from the cheapest by its own objective of its start
- * (`buildMip`'s `start`) and `others` rounded up, among those within the raw cap and, on an AE2 line, making each item
- * good one way (`cheapestStart`; none when all leave a step short or split a good), a model with source binaries bounded
- * by the start it uses (`modelAt`, add-on 17 ruling S10; with none, `modelAt(Infinity)`, every source counted: on an AE2
- * line `buildMip`'s own start can split a good, which makes it no plan of the model, so its cost bounds no purchase;
- * 12 x 17 F6, ruling R8), solved and picked by `pickBuild` within the node and simplex-iteration limits that decide it
- * and the far time guard `limit` (skipped when `limit` is not above 0).
+ * (`buildMip`'s `start`: S1 rounded up or, in best multi-output, the cheapest pre-solve's plan; on an AE2 line S1's
+ * rounding only where it makes each item good one way, 12 x 17 F6) and `others` rounded up, among those within the raw
+ * cap and, on an AE2 line, making each item good one way (`cheapestStart`, ruling R8; none when all leave a step short
+ * or split a good), a model with source binaries bounded by the start it uses (`modelAt`, add-on 17 ruling S10; with
+ * none, `modelAt(Infinity)`: every source counted, as a start the MIP does not use bounds no purchase), solved and
+ * picked by `pickBuild` within the node and simplex-iteration limits that decide it and the far time guard `limit`
+ * (skipped when `limit` is not above 0).
  */
 async function solvedMip(
   lp: MainLp, input: BuildMipInput, others: ReadonlyArray<readonly number[] | null | undefined>, limit: number, opts: SolveOptions,
@@ -1534,9 +1535,11 @@ export async function pickBuild(
  * up both MIPs' seconds and nodes and keeps the multi-output MIP's status, stop, objective, bound and pick marks.
  *
  * Add-on 12 x 17 integration, F6 (the controller's ruling): on an AE2 line (`BuildModel.share`) the build MIP, the
- * leanest line's too, makes each item good one way (build-mip.ts's one-maker rows), and no start (`cheapestStart`, ruling
- * R8), kept plan (`cheaperPlan`) or fallback candidate that makes one two ways (`oneMakerEach`, farms aside: ruling R7)
- * brings the split back, but S1 as the fallback's last resort; nor is such a plan 09 plan the yardstick (ruling R9).
+ * leanest line's too, makes each item good one way (build-mip.ts's one-maker rows), and no start (`buildMip` takes no
+ * rounding of S1 that makes one two ways, so best multi-output still starts from the cheapest pre-solve's plan; and
+ * `cheapestStart`, ruling R8), kept plan (`cheaperPlan`) or fallback candidate that makes one two ways (`oneMakerEach`,
+ * farms aside: ruling R7) brings the split back, but S1 as the fallback's last resort; nor is such a plan 09 plan the
+ * yardstick (ruling R9).
  */
 async function buildStage(
   graph: CandidateGraph, lp: MainLp, s1: LpResult, warnings: PlanWarning[], opts: SolveOptions, model: BuildModel, demandScale: number,
@@ -1732,11 +1735,11 @@ async function runBuildMip(
 }
 
 /**
- * The MIP's start: S1 rounded up (`mip.start`) or one of `others` (runs, main columns first) rounded up, whichever costs
- * least in the MIP's own objective among those whose raw material is within `bound` (fix wave 3 (A)) and, on an AE2 line
- * (`share`), that make each item good one way (`oneMakerEach`: the MIP's one-maker rows make any other start infeasible;
- * 12 x 17 F6, ruling R8), with that cost (add-on 17's `modelAt` bounds its source binaries by it); undefined when none
- * is a plan.
+ * The MIP's start: its own (`mip.start`: S1 rounded up, or the cheapest pre-solve's plan) or one of `others` (runs, main
+ * columns first) rounded up, whichever costs least in the MIP's own objective among those whose raw material is within
+ * `bound` (fix wave 3 (A)) and, on an AE2 line (`share`), that make each item good one way (`oneMakerEach`: the MIP's
+ * one-maker rows make any other start infeasible; 12 x 17 F6, ruling R8), with that cost (add-on 17's `modelAt` bounds
+ * its source binaries by it); undefined when none is a plan.
  */
 function cheapestStart(
   lp: MainLp, mip: ReturnType<typeof buildMip>, bound: number | undefined, share: boolean,
@@ -1772,16 +1775,16 @@ function cheaperPlan(
 }
 
 /**
- * 12 x 17 F6: at most one running step makes each item good as its main output (an AE2 job feeds one pattern). A farm
- * is no pattern, so farm columns are left out (12 x 17 ruling R7), as the build MIP's one-maker rows leave them out.
+ * 12 x 17 F6: at most one running step makes each item good as its main output (an AE2 job feeds one pattern), of the
+ * makers the build MIP's one-maker rows bind (build-mip.ts `oneMakerGood`: farm columns left out, 12 x 17 ruling R7).
  */
 function oneMakerEach(lp: MainLp, x: readonly number[]): boolean {
   const seen = new Set<StuffKey>();
   for (let j = 0; j < lp.recipes.length; j++) {
-    const r = lp.recipes[j] as LpRecipe;
-    if (r.kind !== 'recipe' || r.farm === true || !((x[j] ?? 0) > TINY) || r.main === undefined || r.main.startsWith('fluid:')) continue;
-    if (seen.has(r.main)) return false;
-    seen.add(r.main);
+    const g = oneMakerGood(lp.recipes[j] as LpRecipe);
+    if (g === undefined || !((x[j] ?? 0) > TINY)) continue;
+    if (seen.has(g)) return false;
+    seen.add(g);
   }
   return true;
 }

@@ -18,6 +18,7 @@
 // the relaxation, a step whose machines one binary prices where that is exact up to one machine, no columns for options
 // another builds for less, and a start from plan 09's sparse plan (`solveLine`).
 
+import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import type { LpRecipe } from './candidates.ts';
 import type { LpModel, LpRow } from './lp.ts';
 import { poolKey, type BuildModel, type MachineOption } from './machine-options.ts';
@@ -139,7 +140,8 @@ export interface BuildMipInput {
   /**
    * A whole solution of the same model without the source binaries (the cheapest pre-solve's, solve.ts), which `buildMip`
    * extends with `s_j = 1` where it buys and starts from instead of `roundUp(input, x1)` when it is better in the model's
-   * objective.
+   * objective or that rounding is no plan (it leaves a step short or, on an AE2 line, makes an item good two ways: add-on
+   * 12 x 17 F6).
    */
   start?: readonly number[];
   // optional additions (fix wave 3 (A), (B2))
@@ -185,6 +187,32 @@ export interface StepWeights { hand: number; byHand: number }
 export function stepWeight(r: LpRecipe, weights: StepWeights): number {
   if (r.mapId !== 'crafting') return 1;
   return r.byHand !== undefined ? weights.byHand : weights.hand;
+}
+
+/**
+ * Add-on 12 x 17 F6: on an AE2 line (`BuildModel.share`) at most one step makes each item good as its main output, as an
+ * AE2 job crafts an item through the first pattern that makes it (layout/feeding/sim/ae2.ts). The good step column `r`
+ * makes as one of those makers: its `main` where that is an item; undefined for a conversion, a fluid or a farm (a farm is
+ * no pattern: what it sends the line comes in as a raw input, architecture §11.45 (7); 12 x 17 ruling R7). The one-maker
+ * rows (`layoutOf`), `buildMip`'s check of S1 rounded up and solve.ts's `oneMakerEach` all read it.
+ */
+export function oneMakerGood(r: LpRecipe): StuffKey | undefined {
+  return r.kind === 'recipe' && r.farm !== true && r.main !== undefined && !isFluidKey(r.main) ? r.main : undefined;
+}
+
+/**
+ * Add-on 12 x 17 F6: whether the runs `x` (main columns first) make an item good on two steps (`oneMakerGood`) that each
+ * run at all: a start of them sets both steps' binaries (`startOf`), which breaks the one-maker rows of an AE2 line.
+ */
+function twoMakers(lp: MainLp, x: readonly number[]): boolean {
+  const seen = new Set<StuffKey>();
+  for (let j = 0; j < lp.recipes.length; j++) {
+    const g = oneMakerGood(lp.recipes[j] as LpRecipe);
+    if (g === undefined || !((x[j] ?? 0) > 0)) continue;
+    if (seen.has(g)) return true;
+    seen.add(g);
+  }
+  return false;
 }
 
 /** Whole machines for `load` machines' worth: none for none, else at least one (a running step needs a machine). */
@@ -966,12 +994,12 @@ function layoutOf(input: BuildMipInput, withDerived: boolean): Layout {
   // ae2.ts), so at most one step makes an item good as its main output: a second maker would never be fed (12 x 17 F6, the
   // controller's ruling: where the raw cap forced a split, AE2 takes more machines rather than more raw material). A farm
   // is no pattern (what it sends the line comes in as a raw input, architecture §11.45 (7)), so its column is left out
-  // (12 x 17 ruling R7).
+  // (12 x 17 ruling R7): the makers are those `oneMakerGood` gives a good.
   if (model.share) {
     const byMain = new Map<string, number[]>();
     for (const s of steps) {
-      const g = s.r.main;
-      if (s.r.kind !== 'recipe' || s.r.farm === true || g === undefined || g.startsWith('fluid:')) continue;
+      const g = oneMakerGood(s.r);
+      if (g === undefined) continue;
       byMain.set(g, [...(byMain.get(g) ?? []), y.get(s.j) as number]);
     }
     for (const cols of byMain.values()) if (cols.length >= 2) rows.push({ lower: -Infinity, upper: 1, entries: cols.map((c): [number, number] => [c, 1]) });
@@ -1213,14 +1241,17 @@ function decodeMakeN(input: BuildMipInput, layout: Layout, x: readonly number[])
  * light steps (`Light`) at the build and charge of the machines `decode` gives them, from which the model's own objective
  * may be off by less than a machine each; `rounded(x, prefer)` is `roundUp(input, x, prefer)` with its objective so (its
  * columns filled as a start's; Infinity for a decision that leaves a step short), so the time guard's fallback can keep
- * the cheapest of several roundings. When `roundUp(input, x1)` leaves a step short, that start
- * is no plan, so its objective bounds no purchase, and nothing else does soundly (a step with no
- * machine options and no step charge has no bound of its own): the MIP, and so its relaxation, then has no
- * derived-purchase binaries, which only break ties among equally cheap plans.
+ * the cheapest of several roundings. When `roundUp(input, x1)` leaves a step short, or on an AE2 line (`model.share`)
+ * makes an item good on two steps (`oneMakerGood`), which breaks the one-maker rows (add-on 12 x 17 F6), that start is
+ * no plan, so its objective bounds no purchase, and nothing else does soundly (a step with no machine options and no
+ * step charge has no bound of its own): the MIP, and so its relaxation, then has no derived-purchase binaries, which
+ * only break ties among equally cheap plans.
  *
  * Add-on 17, best multi-output (`input.sources`; ruling S10): a binary `s_j` per source purchase column at the source
  * weight, 1 in a start where it buys; `start` is the cheaper in this objective of `roundUp(input, x1)`'s and
- * `input.start` extended with its binaries (`givenStart`), `startCost` its objective; `model` bounds each source by the
+ * `input.start` extended with its binaries (`givenStart`), the latter alone where the former is no plan (so on an AE2
+ * line the MIP still starts from cheapest's decision where S1 rounded up splits a good), `startCost` its objective;
+ * `model` bounds each source by the
  * start's objective, `x_j − M_j·s_j ≤ 0` with `M_j = startCost / c_j × (1 + 1e-6) + TINY`, valid as every objective term
  * is ≥ 0 — `modelAt(cost)` the same model bounded by another start's objective (solve.ts starts from `sparseWithin`'s
  * plan rounded up when that is cheaper still); without any start (`cost` Infinity) every binary is fixed to 1, as nothing
@@ -1236,7 +1267,10 @@ export function buildMip(input: BuildMipInput): {
 } {
   const width = input.lp.rawCost.length;
   const first = allocate(input, input.x1, undefined, 0);
-  const layout = layoutOf(input, first.decision.short === undefined);
+  // S1 rounded up is no plan where it leaves a step short or, on an AE2 line, makes an item good two ways, which breaks
+  // the one-maker rows (12 x 17 F6): then it is no start and its objective bounds no purchase (doc below).
+  const s1Plan = first.decision.short === undefined && !(input.model.share && twoMakers(input.lp, input.x1));
+  const layout = layoutOf(input, s1Plan);
   const costOf = (start: readonly number[]): number => {
     let cost = 0;
     layout.colCost.forEach((c, col) => {
@@ -1244,7 +1278,7 @@ export function buildMip(input: BuildMipInput): {
     });
     return cost;
   };
-  const s1Start = first.decision.short === undefined ? startOf(layout, width, input.x1, first, input.demandScale) : undefined;
+  const s1Start = s1Plan ? startOf(layout, width, input.x1, first, input.demandScale) : undefined;
   const s1StartCost = s1Start === undefined ? Infinity : costOf(s1Start);
   if (s1Start === undefined) {
     for (const d of layout.derived) layout.colUpper[d.col] = 0;   // no start bounds them: no binaries (doc above)
@@ -1254,7 +1288,8 @@ export function buildMip(input: BuildMipInput): {
       layout.rows.push({ lower: -Infinity, upper: 0, entries: [[d.j, 1], [d.col, -bigM]] });
     }
   }
-  // Add-on 17 (ruling S10): the cheapest pre-solve's solution, when it is better in this objective than roundUp(x1)'s.
+  // Add-on 17 (ruling S10): the cheapest pre-solve's solution, when it is better in this objective than roundUp(x1)'s or
+  // that is no plan (on an AE2 line, one that splits a good: 12 x 17 F6).
   let start = s1Start;
   let startCost = s1StartCost;
   const given = givenStart(layout, input.start);

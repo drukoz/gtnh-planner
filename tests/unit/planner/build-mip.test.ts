@@ -5,17 +5,25 @@
 // paid per new machine block, the cleanroom, the cheapest of plan 09's plan, the relaxation and S1 rounded up when the
 // time guard stops the MIP, and with build cost ignored plan 09's stages
 // within the owned-only bounds, their machines sized by plan 09's pick (ruling P2); the raw cap against the leanest line
-// and the step charge measured on that line (fix wave 3 (A), (B2)), and an owned block's share of the step charge (ledger
-// 265).
+// and the step charge measured on that line (fix wave 3 (A), (B2)), an owned block's share of the step charge (ledger
+// 265), and on an AE2 line no start from S1 rounded up where it makes an item good two ways (add-on 12 x 17 F6).
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+
+// The AE2 start case reads the inputs `solveLine` hands the build MIP; every call runs the real `buildMip`.
+vi.mock('../../../src/server/planner/build-mip.ts', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('../../../src/server/planner/build-mip.ts')>();
+  return { ...mod, buildMip: vi.fn(mod.buildMip) };
+});
+
 import {
   cleanSpec, fastSlowSpec, freeSpec, hammerSpec, handSpec, opt, pressSpec, solderSpec, solvedWithBuild, twinSpec, twoFreeSpec, twoPressSpec,
   woodSpec,
 } from '../../helpers/build-fixtures.ts';
 import type { StuffKey } from '../../../src/shared/keys.ts';
 import {
-  BUILD_MIP_MAX_LP_ITERATIONS, BUILD_MIP_MAX_NODES, BUILD_MIP_RETRY_TOLERANCE, BUILD_MIP_TIME_LIMIT_SECONDS, LEAN_BASE_ABOVE, OWNED_STEP_SHARE, type StepMachines,
+  BUILD_MIP_MAX_LP_ITERATIONS, BUILD_MIP_MAX_NODES, BUILD_MIP_RETRY_TOLERANCE, BUILD_MIP_TIME_LIMIT_SECONDS, LEAN_BASE_ABOVE, OWNED_STEP_SHARE, buildMip,
+  type BuildMipInput, type StepMachines,
 } from '../../../src/server/planner/build-mip.ts';
 import type { MachineOption } from '../../../src/server/planner/machine-options.ts';
 import { BY_HAND_FLOOR_CHARGE, type Solution, type SolveOptions } from '../../../src/server/planner/solve.ts';
@@ -33,6 +41,31 @@ const GATHERED: StuffKey[] = ['t:gravel@0', 't:sand@0'];
 const CHARGED = { stepCharge: 0.02, handWeight: 3 };
 /** An owned machine of `opt` that cannot be built here. */
 const unbuildable = (o: MachineOption): MachineOption => ({ ...o, canAdd: false, unbuildable: 'no recipe in this pack' });
+
+/**
+ * An item good made two ways from one raw material (add-on 12 x 17 F6): `g-plain` (1 a → 1 g) on a Basic Bending Machine
+ * (101), `g-twin` (6 a → 5 g + 5 h) on a Basic Forge Hammer (481) and `p-make` (2 g + 1 h → 1 p) on a Basic Assembler
+ * (121), all LV; nothing but the twin makes h.
+ */
+function twinMakerSpec(): Parameters<typeof solvedWithBuild>[0] {
+  const BENDER = 'gt.recipe.metalbender';
+  const HAMMER = 'gt.recipe.hammer';
+  const ASSEMBLER = 'gt.recipe.assembler';
+  return {
+    maps: [{ id: BENDER, name: 'Bending Machine' }, { id: HAMMER, name: 'Forge Hammer' }, { id: ASSEMBLER, name: 'Assembler' }],
+    machines: [
+      { mteId: 101, name: 'Basic Bending Machine', tier: 1, maps: [BENDER] },
+      { mteId: 481, name: 'Basic Forge Hammer', tier: 1, maps: [HAMMER] },
+      { mteId: 121, name: 'Basic Assembler', tier: 1, maps: [ASSEMBLER] },
+    ],
+    recipes: [
+      { id: 'g-plain', map: BENDER, in: [['t:a@0', 1]], out: [['t:g@0', 1]], eut: 24, dur: 100 },
+      { id: 'g-twin', map: HAMMER, in: [['t:a@0', 6]], out: [['t:g@0', 5], ['t:h@0', 5]], eut: 16, dur: 40 },
+      { id: 'p-make', map: ASSEMBLER, in: [['t:g@0', 2], ['t:h@0', 1]], out: [['t:p@0', 1]], eut: 16, dur: 100 },
+    ],
+  };
+}
+const TWIN_MAKERS = { 'g-plain': [opt(101, 1, 0.2, 17)], 'g-twin': [opt(481, 1, 0.5, 17)], 'p-make': [opt(121, 1, 0.2, 16)] };
 
 describe('the build-cost MIP', () => {
   it('builds the machine that pays for itself over the horizon', async () => {
@@ -274,6 +307,37 @@ describe('the build-cost MIP', () => {
     expect(runs).toEqual(['press-b', 'press-c']);
     expect(sol.machines?.get('press-b')).toMatchObject({ added: 0, ownedLoad: 1 });
     expect(sol.machines?.get('press-c')).toMatchObject({ option: { mteId: 102 }, added: 1 });
+  });
+
+  it('starts best multi-output from cheapest\'s decision on AE2 where S1 rounded up makes an item good two ways (12 x 17 F6)', async () => {
+    // 1 p a minute, a at 1: S1 makes g both ways (2.2 a for each p: the twin for the h, g-plain for the second g), and
+    // with the one-maker rows the MIP makes it on the twin alone (2.4 a), cheapest's decision. S1 rounded up still costs
+    // the multi-output MIP less (1 + 50 / 3,168 against 2.4 / 2.2 + 33 / 3,168 in σ, beside one source each), but it
+    // breaks those rows, so, like a rounding that leaves a step short, it is no plan: the MIP starts from cheapest's
+    // decision and is never worse than it (add-on 17's S10). A direct line keeps S1 rounded up as its start.
+    const spy = vi.mocked(buildMip);
+    const solved = async (share: boolean): Promise<{ runs: string[]; inputs: BuildMipInput[] }> => {
+      spy.mockClear();
+      const { runs } = await solvedWithBuild(twinMakerSpec(), { 't:a@0': 1 }, [['t:p@0', 1 / 60]], { options: TWIN_MAKERS, share }, { multiOutput: true });
+      return { runs, inputs: spy.mock.calls.map(([input]) => input) };
+    };
+    const ae2 = await solved(true);
+    expect(ae2.runs).toEqual(['g-twin', 'p-make']);
+    // first the MIP as cheapest solves it, then the multi-output one from its solution
+    const [pre, multi] = ae2.inputs as [BuildMipInput, BuildMipInput];
+    expect(pre.sources).toBeUndefined();
+    const given = multi.start as readonly number[];
+    const ran = (x: readonly number[]): string[] => pre.lp.recipes.flatMap((r, j) => ((x[j] ?? 0) > 1e-9 ? [r.id] : []));
+    expect(ran(pre.x1)).toEqual(['g-plain', 'g-twin', 'p-make']);
+    expect(ran(given)).toEqual(['g-twin', 'p-make']);
+    // the start is cheapest's decision with its source binary (a bought: 1), though S1 rounded up costs less
+    const mip = buildMip(multi);
+    expect(mip.start).toEqual([...given, 1]);
+    expect(mip.startAt(pre.x1)?.cost).toBeLessThan(mip.startCost);
+    expect(buildMip(pre).start).toBeUndefined();
+    const direct = await solved(false);
+    expect(direct.runs).toEqual(['g-plain', 'g-twin', 'p-make']);
+    expect(buildMip(direct.inputs[0] as BuildMipInput).start).toBeDefined();
   });
 
   it('builds a multiblock at the hatch tier that is cheaper to build', async () => {
