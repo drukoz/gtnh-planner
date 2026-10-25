@@ -3,11 +3,12 @@
 // materials, plus those base materials summed, each saying which lines need it. `expandBomLines` gives Plan 5's layout
 // parts the same breakdown.
 
-import { PSEUDO_IDS } from '../../shared/gt/tiers.ts';
+import { compareMachineId, isPseudoMachineId, machineIdOfLegacy, type MachineId } from '../../shared/ids.ts';
 import type { StuffKey } from '../../shared/keys.ts';
 import { machineGroups } from '../../shared/plan/pools.ts';
 import type { Machine, Pack } from '../../shared/types/pack.ts';
 import { FREE_KEYS, type BomLine, type PlanContext, type PlanSettings, type PlanStep, type PlanWarning } from '../../shared/types/plan.ts';
+import { allMachineIds, machineOf } from '../pack/lookup.ts';
 import { structureParts } from './build-cost.ts';
 import { buildCandidates, heldOption, type HeldAvoid, type LeafOracle, type LpRecipe, type PlanEnv } from './candidates.ts';
 import { analyzeCosts, makePrices, type CostAnalysis } from './costs.ts';
@@ -38,12 +39,14 @@ function round9(x: number): number {
   return Math.round(x * 1e9) / 1e9 || 0;
 }
 
-/** The pack's cleanroom (the lowest mteId when there are several), if it has one. */
+/** The pack's cleanroom (the lowest id when there are several), if it has one. */
 export function cleanroomMachine(pack: Pack): Machine | undefined {
   let room: Machine | undefined;
-  for (const m of pack.machines.values()) {
+  for (const id of allMachineIds(pack)) {
+    const m = machineOf(pack, id);
+    if (m === undefined) continue;
     const simpleName = m.cls.slice(m.cls.lastIndexOf('.') + 1);
-    if (simpleName === CLEANROOM_CLASS && (room === undefined || m.mteId < room.mteId)) room = m;
+    if (simpleName === CLEANROOM_CLASS && (room === undefined || compareMachineId(m.id, room.id) < 0)) room = m;
   }
   return room;
 }
@@ -110,15 +113,15 @@ export async function buildBom(
   };
 
   const makeN = opts.settings.mode === 'makeN';
-  const typesSeen = new Set<number>();
+  const typesSeen = new Set<MachineId>();
   // a sharing pool's machines once, by its first step (`machineGroups`): its steps' `count`, `owned` and held items are
   // the pool's
   for (const group of machineGroups(steps)) {
     const step = group[0]!;
-    const mteId = step.machine.mteId;
-    const machine = PSEUDO_IDS.has(mteId) ? undefined : pack.machines.get(mteId);
-    if (machine !== undefined && !(makeN && typesSeen.has(mteId))) {
-      typesSeen.add(mteId);
+    const id = machineIdOfLegacy(step.machine.mteId);
+    const machine = isPseudoMachineId(id) ? undefined : machineOf(pack, id);
+    if (machine !== undefined && !(makeN && typesSeen.has(id))) {
+      typesSeen.add(id);
       const n = step.count - step.owned;
       if (n > 0) {
         add(machine.itemKey, n, `${n}× ${step.machine.name}`, 'machines');
@@ -148,7 +151,7 @@ export async function buildBom(
     const products = [...new Set(clean.map((s) => stepProductName(pack, s)))].join(', ');
     const room = cleanroomMachine(pack);
     // the group's own cleanroom needs no building (plan 12 Task 6)
-    const owned = room !== undefined && (ownedPools(opts.ctx, opts.settings).get(room.mteId)?.length ?? 0) > 0;
+    const owned = room !== undefined && (ownedPools(opts.ctx, opts.settings).get(room.id)?.length ?? 0) > 0;
     if (room === undefined) warnings.push({ code: 'no-cleanroom', text: `Making ${products} needs a cleanroom, but this pack has no cleanroom machine` });
     else if (!owned) add(room.itemKey, 1, `cleanroom for ${products}`, 'machines');
   }

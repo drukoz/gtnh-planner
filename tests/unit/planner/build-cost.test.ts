@@ -9,6 +9,7 @@ import {
 import { planBasis } from '../../../src/server/planner/basis.ts';
 import { emptyContext } from '../../../src/server/planner/plan.ts';
 import { PSEUDO_MACHINES } from '../../../src/shared/gt/tiers.ts';
+import { MC_MACHINES } from '../../../src/shared/ids.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import type { Machine, Pack, Recipe } from '../../../src/shared/types/pack.ts';
 import { EBF_STRUCTURE, IDS, layoutPack, makePlan, type StepSpec } from '../../helpers/layout-fixtures.ts';
@@ -60,7 +61,7 @@ describe('machineBuildCost', () => {
     const prices = await pricesOf(pack, lv);
     expect(machineBuildCost(pack, prices, machine(pack, 122))).toBeNull();
     // A priced item on a pseudo machine (packFromSpec packs hold none).
-    expect(machineBuildCost(pack, prices, { ...machine(pack, 121), mteId: PSEUDO_MACHINES.CRAFTING_TABLE })).toBeNull();
+    expect(machineBuildCost(pack, prices, { ...machine(pack, 121), id: MC_MACHINES.CRAFTING_TABLE, mteId: PSEUDO_MACHINES.CRAFTING_TABLE })).toBeNull();
     expect(machineBuildCost(pack, prices, undefined)).toBeNull();
   });
 

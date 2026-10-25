@@ -15,12 +15,14 @@
 // before (the keys asked are part of the key).
 
 import { createHash } from 'node:crypto';
-import { PSEUDO_IDS, tierName } from '../../shared/gt/tiers.ts';
+import { tierName } from '../../shared/gt/tiers.ts';
+import { compareMachineId, isPseudoMachineId, legacyMteId } from '../../shared/ids.ts';
 import { isFluidKey, itemKey, type StuffKey } from '../../shared/keys.ts';
 import { defaultSettings } from '../../shared/project/apply-op.ts';
 import type { Machine, Pack, Recipe } from '../../shared/types/pack.ts';
 import type { HatchKind } from '../../shared/types/layout.ts';
 import type { BomLine, PlanContext, PlanSettings } from '../../shared/types/plan.ts';
+import { allMachineIds, machineByMteId, machineOf } from '../pack/lookup.ts';
 // GT's structure rules the layout lays a multiblock's hatches by (entries 47 and 49 (3): `hatchRulesOf`, which reads
 // only the machine and its export), read here so a multiblock's build holds the hatches its layout lays
 import { hatchRulesOf, KIND_CLASS, ruleNeeds, rulePower, ruleTakes, type HatchRule, type HatchSource } from '../layout/hatch-rules.ts';
@@ -236,13 +238,14 @@ function hatchesByClass(pack: Pack): ReadonlyMap<string, readonly Machine[]> {
   let byClass = HATCHES.get(pack);
   if (byClass === undefined) {
     const lists = new Map<string, Machine[]>();
-    for (const m of pack.machines.values()) {
-      if (m.kind !== 'hatch') continue;
+    for (const id of allMachineIds(pack)) {
+      const m = machineOf(pack, id);
+      if (m === undefined || m.kind !== 'hatch') continue;
       const list = lists.get(simpleName(m));
       if (list === undefined) lists.set(simpleName(m), [m]);
       else list.push(m);
     }
-    for (const list of lists.values()) list.sort((a, b) => (a.tier ?? Infinity) - (b.tier ?? Infinity) || a.mteId - b.mteId);
+    for (const list of lists.values()) list.sort((a, b) => (a.tier ?? Infinity) - (b.tier ?? Infinity) || compareMachineId(a.id, b.id));
     byClass = lists;
     HATCHES.set(pack, byClass);
   }
@@ -298,8 +301,8 @@ function structureBlocks(pack: Pack, m: Machine): Array<{ key: StuffKey; hatch: 
   const [cx, cy, cz] = s.controller;
   const cells: Array<{ key: StuffKey; hatch: boolean }> = [];
   for (const { pos, block } of s.blocks) {
-    if ((pos[0] === cx && pos[1] === cy && pos[2] === cz) || block.mteId === m.mteId || NOTHING_TO_PLACE.has(block.id)) continue;
-    const tile = block.mteId === undefined ? undefined : pack.machines.get(block.mteId);
+    if ((pos[0] === cx && pos[1] === cy && pos[2] === cz) || block.mteId === legacyMteId(m.id) || NOTHING_TO_PLACE.has(block.id)) continue;
+    const tile = block.mteId === undefined ? undefined : machineByMteId(pack, block.mteId);
     cells.push(tile === undefined
       ? { key: cellItem(block.id, block.meta), hatch: false }
       : { key: minimalHatch(pack, tile).itemKey, hatch: tile.kind === 'hatch' });
@@ -454,7 +457,7 @@ function laidRules(pack: Pack, m: Machine): LaidRules {
         kind: need.kind, cls: rule.classes?.[need.kind] ?? KIND_CLASS[need.kind], ...(need.chars === undefined ? {} : { chars: need.chars }), own: need.fluid !== undefined,
       })),
       exportedMuffler: (m.structure?.blocks ?? []).some((b) => {
-        const tile = b.block.mteId === undefined || b.block.mteId === m.mteId ? undefined : pack.machines.get(b.block.mteId);
+        const tile = b.block.mteId === undefined || b.block.mteId === legacyMteId(m.id) ? undefined : machineByMteId(pack, b.block.mteId);
         return tile?.kind === 'hatch' && simpleName(minimalHatch(pack, tile)) === KIND_CLASS.muffler;
       }),
     };
@@ -474,7 +477,7 @@ export function buildKeys(pack: Pack, machines: readonly Machine[]): StuffKey[] 
   const keys = new Set<StuffKey>();
   let multiblock = false;
   for (const m of machines) {
-    if (PSEUDO_IDS.has(m.mteId)) continue;
+    if (isPseudoMachineId(m.id)) continue;
     keys.add(m.itemKey);
     if (m.kind !== 'multiblock') continue;
     multiblock = true;
@@ -531,7 +534,7 @@ function billOf(pack: Pack, m: Machine, use: MachineUse | undefined): Array<[Stu
  * and a machine any of whose parts is priced Infinity (`machineGap` says why).
  */
 export function machineBuildCost(pack: Pack, prices: ItemPrices, m: Machine | undefined, use?: MachineUse): number | null {
-  if (m === undefined || PSEUDO_IDS.has(m.mteId)) return null;
+  if (m === undefined || isPseudoMachineId(m.id)) return null;
   let total = 0;
   for (const [key, n] of billOf(pack, m, use)) {
     const each = prices.cost(key);
@@ -548,7 +551,7 @@ export function machineBuildCost(pack: Pack, prices: ItemPrices, m: Machine | un
  * part nothing makes).
  */
 export function machineGap(pack: Pack, prices: ItemPrices, m: Machine | undefined, use?: MachineUse): PriceGap | null {
-  if (m === undefined || PSEUDO_IDS.has(m.mteId) || machineBuildCost(pack, prices, m, use) !== null) return null;
+  if (m === undefined || isPseudoMachineId(m.id) || machineBuildCost(pack, prices, m, use) !== null) return null;
   const own = prices.gap(m.itemKey);
   if (own !== undefined) return own;
   const parts = [...structureParts(pack, m).keys()].sort(byString);

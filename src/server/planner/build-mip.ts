@@ -17,7 +17,7 @@
 import type { LpRecipe } from './candidates.ts';
 import type { LpModel, LpRow } from './lp.ts';
 import { poolKey, type BuildModel, type MachineOption } from './machine-options.ts';
-import { legacyMteId } from '../../shared/ids.ts';
+import { compareMachineId, legacyMteId, type MachineId } from '../../shared/ids.ts';
 import { sig9 } from './round.ts';
 import { STEP_BIG_M, type MainLp } from './solve.ts';
 
@@ -190,19 +190,19 @@ function ownedOf(model: BuildModel, o: MachineOption): number {
   return model.owned.get(o.id) ?? o.owned;
 }
 
-/** Owned options in the order their machines are used: the most runs a second first, then the lower mteId. */
+/** Owned options in the order their machines are used: the most runs a second first, then the lower id. */
 function byCapacity(a: Usable, b: Usable): number {
-  return b.o.perMachine - a.o.perMachine || legacyMteId(a.o.id) - legacyMteId(b.o.id);
+  return b.o.perMachine - a.o.perMachine || compareMachineId(a.o.id, b.o.id);
 }
 
-/** The higher tier, then the lower mteId, first. */
+/** The higher tier, then the lower id, first. */
 function byTierDown(a: MachineOption, b: MachineOption): number {
-  return b.tier - a.tier || legacyMteId(a.id) - legacyMteId(b.id);
+  return b.tier - a.tier || compareMachineId(a.id, b.id);
 }
 
-/** Make N's pick among options: the lowest build, then the most runs a second, then the lowest mteId. */
+/** Make N's pick among options: the lowest build, then the most runs a second, then the lowest id. */
 function byBuildUp(a: MachineOption, b: MachineOption): number {
-  return a.solveBuild - b.solveBuild || b.perMachine - a.perMachine || legacyMteId(a.id) - legacyMteId(b.id);
+  return a.solveBuild - b.solveBuild || b.perMachine - a.perMachine || compareMachineId(a.id, b.id);
 }
 
 /** Make N's owned pick: the highest tier, then the lowest mteId. */
@@ -236,7 +236,7 @@ function stepMachines(model: BuildModel, use: StepUse, added: number): { m: Step
       others.push({ option: u.o, ownedLoad: value(v), capacity: u.o.perMachine * v, use: { holder: u.pool, option: u.o, fresh: 0, owned: v } });
     }
   }
-  others.sort((a, b) => b.capacity - a.capacity || legacyMteId(a.option.id) - legacyMteId(b.option.id));
+  others.sort((a, b) => b.capacity - a.capacity || compareMachineId(a.option.id, b.option.id));
   const m: StepMachines = share
     ? { option, added: 0, newLoad: use.fresh > 0 ? sig9(use.fresh) : 0, pool: poolKey(option, step.key), ownedLoad }
     : { option, added, newLoad: added, ownedLoad };
@@ -285,7 +285,7 @@ interface Allocation {
   added: Map<string, number>;
   held: Map<string, number>;
   /** Make N: the types it adds. */
-  types: Set<number>;
+  types: Set<MachineId>;
 }
 
 /**
@@ -320,13 +320,13 @@ function allocate(input: BuildMipInput, x: readonly number[], prefer?: (j: numbe
         continue;
       }
       const choices = step.options.filter(adds);
-      const again = choices.filter((o) => alloc.types.has(legacyMteId(o.id)));
+      const again = choices.filter((o) => alloc.types.has(o.id));
       const pick = preferred(step, choices) ?? [...(again.length > 0 ? again : choices)].sort(byBuildUp)[0];
       if (pick === undefined) {
         short.push(step.r.id);
         continue;
       }
-      alloc.types.add(legacyMteId(pick.id));
+      alloc.types.add(pick.id);
       machines.set(step.r.id, { option: pick, added: 1, newLoad: 1, ownedLoad: 0 });
     }
     if (short.length > 0) alloc.decision.short = short;
@@ -334,7 +334,7 @@ function allocate(input: BuildMipInput, x: readonly number[], prefer?: (j: numbe
   }
 
   const eps = floor * D;
-  const free = new Map<number, number>();   // per mteId: owned machines no pool holds (direct: none taken yet)
+  const free = new Map<MachineId, number>();   // per id: owned machines no pool holds (direct: none taken yet)
   const used = new Map<string, number>();   // per pool: owned machines' worth its steps use
   const load = new Map<string, number>();   // per pool: new machines' worth its steps use
   const uses: StepUse[] = [];
@@ -347,7 +347,7 @@ function allocate(input: BuildMipInput, x: readonly number[], prefer?: (j: numbe
     const owned = new Map<Usable, number>();
     for (const u of step.usable.filter((v) => v.o.owned > 0).sort(byCapacity)) {
       if (!(r > eps)) break;
-      const m = legacyMteId(u.o.id);
+      const m = u.o.id;
       const rho = u.o.perMachine;
       const left = free.get(m) ?? ownedOf(model, u.o);
       let t: number;
@@ -382,7 +382,7 @@ function allocate(input: BuildMipInput, x: readonly number[], prefer?: (j: numbe
         return blockCost(u.o, charge) * (machinesFor(before + r / u.o.perMachine) - machinesFor(before));
       };
       const pick = want !== undefined ? choices.find((u) => u.o === want)
-        : [...choices].sort((a, b) => cost(a) - cost(b) || b.o.perMachine - a.o.perMachine || legacyMteId(a.o.id) - legacyMteId(b.o.id) || a.o.tier - b.o.tier || a.index - b.index)[0];
+        : [...choices].sort((a, b) => cost(a) - cost(b) || b.o.perMachine - a.o.perMachine || compareMachineId(a.o.id, b.o.id) || a.o.tier - b.o.tier || a.index - b.index)[0];
       if (pick === undefined) {
         short.push(step.r.id);
       } else {
@@ -506,18 +506,18 @@ export function laterRoom(input: BuildMipInput, decision: BuildDecision): LaterR
     bounded.push({ j, capacity });
   });
   /** Per type, the owned machines the holders use. */
-  const held = new Map<number, number>();
+  const held = new Map<MachineId, number>();
   for (const h of holders.values()) {
     h.machines = (model.share ? (decision.pools.get(h.key)?.added ?? 0) : h.fresh) + machinesFor(h.owned);
-    held.set(legacyMteId(h.option.id), (held.get(legacyMteId(h.option.id)) ?? 0) + machinesFor(h.owned));
+    held.set(h.option.id, (held.get(h.option.id) ?? 0) + machinesFor(h.owned));
   }
   /** What `h` may take more for nothing beside `grants`: the owned machines of its type nobody uses. */
   const freeFor = (h: Holder, grants: ReadonlyMap<string, number>): number => {
-    const ht = legacyMteId(h.option.id);
+    const ht = h.option.id;
     let given = held.get(ht) ?? 0;
     for (const [key, g] of grants) {
       const hh = holders.get(key);
-      if (hh !== undefined && legacyMteId(hh.option.id) === ht) given += g;
+      if (hh !== undefined && hh.option.id === ht) given += g;
     }
     return Math.max(0, ownedOf(model, h.option) - given);
   };
@@ -585,7 +585,7 @@ interface Layout {
   sigma: number /* σ: the raw material one unit of the objective stands for */;
   charge: number /* the step charge on one new machine block, in raw material (`Scale`) */;
   steps: Step[]; members: Map<number, Member[]>; light: Map<number, Light>; pools: Map<string, Pool>;
-  z: Map<number, number> /* Make N: mteId → column */; y: Map<number, number> /* step column → column */; c?: number;
+  z: Map<MachineId, number> /* Make N: id → column */; y: Map<number, number> /* step column → column */; c?: number;
   derived: Array<{ j: number; col: number; weight: number }>;
   colCost: number[]; colUpper: number[]; integer: boolean[]; rows: LpRow[];
 }
@@ -648,9 +648,9 @@ function outdonePools(steps: readonly Step[], charge: number): Set<string> {
   return outdone;
 }
 
-/** Of two options at one build, whether `u` comes before `best`: the faster, then the lower mteId, tier and index. */
+/** Of two options at one build, whether `u` comes before `best`: the faster, then the lower id, tier and index. */
 function before(u: Usable, best: Usable): boolean {
-  return (u.o.perMachine - best.o.perMachine || legacyMteId(best.o.id) - legacyMteId(u.o.id) || best.o.tier - u.o.tier || best.index - u.index) > 0;
+  return (u.o.perMachine - best.o.perMachine || compareMachineId(best.o.id, u.o.id) || best.o.tier - u.o.tier || best.index - u.index) > 0;
 }
 
 /**
@@ -805,10 +805,10 @@ function layoutOf(input: BuildMipInput, withDerived: boolean): Layout {
     }
     // Owned machines: per type, whole machines per step without sharing; with it, per pool of the type the owned
     // machines it holds (a column when two or more pools of the type have steps, else all of them).
-    const byType = new Map<number, Pool[]>();
-    for (const pool of pools.values()) if (pool.members.some((m) => m.q !== undefined)) pushTo(byType, legacyMteId(pool.option.id), pool);
-    for (const mteId of [...byType.keys()].sort((a, b) => a - b)) {
-      const typePools = byType.get(mteId) as Pool[];
+    const byType = new Map<MachineId, Pool[]>();
+    for (const pool of pools.values()) if (pool.members.some((m) => m.q !== undefined)) pushTo(byType, pool.option.id, pool);
+    for (const id of [...byType.keys()].sort(compareMachineId)) {
+      const typePools = byType.get(id) as Pool[];
       const total = ownedOf(model, (typePools[0] as Pool).option);
       const owners = typePools.flatMap((p) => p.members.filter((m) => m.q !== undefined));
       if (!model.share) {
@@ -859,14 +859,14 @@ function layoutOf(input: BuildMipInput, withDerived: boolean): Layout {
 
   // Make N: one binary per type a step without an owned option could add, shared by every step that can use it, at its
   // build and the step charge on one machine block; a step that runs has one of its types.
-  const z = new Map<number, number>();
+  const z = new Map<MachineId, number>();
   if (!rate) {
-    const builds = new Map<number, number>();
+    const builds = new Map<MachineId, number>();
     const addable = steps.filter((s) => s.options.length > 0 && ownedPick(s.options) === undefined);
-    for (const s of addable) for (const o of s.options) if (adds(o)) { const lt = legacyMteId(o.id); builds.set(lt, Math.max(builds.get(lt) ?? 0, o.solveBuild)); }
-    for (const mteId of [...builds.keys()].sort((a, b) => a - b)) z.set(mteId, column(((builds.get(mteId) as number) + charge) / sigma, 1, true));
+    for (const s of addable) for (const o of s.options) if (adds(o)) { builds.set(o.id, Math.max(builds.get(o.id) ?? 0, o.solveBuild)); }
+    for (const id of [...builds.keys()].sort(compareMachineId)) z.set(id, column(((builds.get(id) as number) + charge) / sigma, 1, true));
     for (const s of addable) {
-      const types = [...new Set(s.options.filter(adds).map((o) => legacyMteId(o.id)))];
+      const types = [...new Set(s.options.filter(adds).map((o) => o.id))];
       if (types.length > 0) rows.push({ lower: -Infinity, upper: 0, entries: [[y.get(s.j) as number, 1], ...types.map((m): [number, number] => [z.get(m) as number, -1])] });
     }
   }
@@ -954,7 +954,7 @@ function startOf(layout: Layout, width: number, x: readonly number[], alloc: All
     if (pool.n !== undefined) start[pool.n] = alloc.added.get(pool.key) ?? 0;
     if (pool.u !== undefined) start[pool.u] = alloc.held.get(pool.key) ?? 0;
   }
-  for (const [mteId, col] of layout.z) start[col] = alloc.types.has(mteId) ? 1 : 0;
+  for (const [id, col] of layout.z) start[col] = alloc.types.has(id) ? 1 : 0;
   for (const [j, col] of layout.y) start[col] = (x[j] ?? 0) > 0 ? 1 : 0;
   for (const [j, l] of layout.light) start[l.e] = Math.max(0, l.perRun * D * Math.max(0, x[j] ?? 0) - l.first * (start[layout.y.get(j) as number] ?? 0));
   if (layout.c !== undefined) start[layout.c] = layout.steps.some((s) => s.r.needsCleanroom && (x[s.j] ?? 0) > 0) ? 1 : 0;
@@ -1042,7 +1042,7 @@ function decodeMakeN(input: BuildMipInput, layout: Layout, x: readonly number[])
       continue;
     }
     const choices = step.options.filter(adds);
-    const added = choices.filter((o) => (x[layout.z.get(legacyMteId(o.id)) ?? -1] ?? 0) >= 0.5);
+    const added = choices.filter((o) => (x[layout.z.get(o.id) ?? -1] ?? 0) >= 0.5);
     const pick = [...(added.length > 0 ? added : choices)].sort(byBuildUp)[0];
     if (pick !== undefined) machines.set(step.r.id, { option: pick, added: 1, newLoad: 1, ownedLoad: 0 });
   }

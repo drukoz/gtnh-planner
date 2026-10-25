@@ -22,7 +22,7 @@
 
 import { multiplierUnderOneTick, singleblockOverclock } from '../../src/shared/gt/overclock.ts';
 import { V } from '../../src/shared/gt/tiers.ts';
-import { legacyMteId, machineIdOfLegacy } from '../../src/shared/ids.ts';
+import { legacyMteId } from '../../src/shared/ids.ts';
 import type { StuffKey } from '../../src/shared/keys.ts';
 import type { Pack } from '../../src/shared/types/pack.ts';
 import { FREE_KEYS, type Plan, type PlanContext, type PlanSettings, type PlanStep } from '../../src/shared/types/plan.ts';
@@ -424,8 +424,7 @@ function checkProducers(pack: Pack, plan: Plan, led: Map<StuffKey, Ledger>): Vio
 
 function checkMachines(pack: Pack, settings: PlanSettings, plan: Plan, basis: PlanBasis, ctx: PlanContext, relTol: number): Violation[] {
   const out: Violation[] = [];
-  const rawOwned = ownedMachineMap(ctx, settings);
-  const owned = new Map([...rawOwned].map(([mteId, n]) => [machineIdOfLegacy(mteId), n]));
+  const owned = ownedMachineMap(ctx, settings);
   for (const step of plan.steps) {
     const label = stepLabel(pack, plan, step);
     const r = pack.recipeById.get(step.recipeId);

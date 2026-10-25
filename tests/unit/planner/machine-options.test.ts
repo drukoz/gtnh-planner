@@ -331,9 +331,9 @@ describe('lineBuildModel', () => {
   it('reads the owned pool from the world and the manual list', () => {
     const c: PlanContext = { ...emptyContext(), ownedMachines: [{ mteId: 121, count: 2, where: [{ dim: 0, pos: [1, 64, 1] }, { dim: 0, pos: [2, 64, 1] }] }] };
     const s: PlanSettings = { ...defaultSettings(), ownedManual: [{ mteId: 121, count: 1 }, { mteId: 111, count: 1 }] };
-    expect([...ownedPools(c, s)]).toEqual([[121, [{ dim: 0, pos: [1, 64, 1] }, { dim: 0, pos: [2, 64, 1] }, null]], [111, [null]]]);
-    expect([...ownedMachineMap(c, s)]).toEqual([[121, 3], [111, 1]]);
-    expect([...ownedPools(c, { ...s, declineReuse: [121] })]).toEqual([[111, [null]]]);
+    expect([...ownedPools(c, s)]).toEqual([['gt:111', [null]], ['gt:121', [{ dim: 0, pos: [1, 64, 1] }, { dim: 0, pos: [2, 64, 1] }, null]]]);
+    expect([...ownedMachineMap(c, s)]).toEqual([['gt:111', 1], ['gt:121', 3]]);
+    expect([...ownedPools(c, { ...s, declineReuse: [121] })]).toEqual([['gt:111', [null]]]);
     expect([...ownedPools(c, { ...s, reuseOwned: false })]).toEqual([]);
   });
 

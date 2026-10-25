@@ -330,8 +330,7 @@ export async function makeN(
 ): Promise<MakeNResult> {
   const { settings, groupTier, coilHeat, ctx, multiblocks } = opts;
   const whole = await wholeRuns(graph, sol, demand);
-  const rawPools = ownedPools(ctx, settings);
-  const pools: OwnedPools = opts.build?.pools ?? new Map([...rawPools].map(([mteId, units]) => [machineIdOfLegacy(mteId), units]));
+  const pools: OwnedPools = opts.build?.pools ?? ownedPools(ctx, settings);
   const owned: ReadonlyMap<MachineId, number> = new Map([...pools].map(([id, units]) => [id, units.length]));
   const picked = pickStepMachines(pack, graph, whole.runs, { settings, groupTier, coilHeat, owned, multiblocks, machines: sol.machines });
 

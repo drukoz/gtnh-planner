@@ -5,7 +5,7 @@
 
 import { multiblockOverclock, singleblockOverclock, voltageTier, type MachineOc } from '../../shared/gt/overclock.ts';
 import { V, tierName } from '../../shared/gt/tiers.ts';
-import { compareMachineId, legacyMteId, machineIdOfLegacy, isPseudoMachineId, MC_MACHINES, type MachineId } from '../../shared/ids.ts';
+import { compareMachineId, legacyMteId, isPseudoMachineId, MC_MACHINES, type MachineId } from '../../shared/ids.ts';
 import type { StuffKey } from '../../shared/keys.ts';
 import type { Ingredient, Machine, Pack, Product, Recipe } from '../../shared/types/pack.ts';
 import {
@@ -809,8 +809,7 @@ export function planSteps(
   },
 ): PlanStep[] {
   const { settings, groupTier, coilHeat, ctx, perSecondScale, multiblocks, build: model } = opts;
-  const rawPools = ownedPools(ctx, settings);
-  const pools: OwnedPools = model?.pools ?? new Map([...rawPools].map(([mteId, units]) => [machineIdOfLegacy(mteId), units]));
+  const pools: OwnedPools = model?.pools ?? ownedPools(ctx, settings);
   const owned: ReadonlyMap<MachineId, number> = new Map([...pools].map(([id, units]) => [id, units.length]));
   const line = stepLine(graph, sol.runs, opts.value);
   line.bought = boughtGoods(sol.buys);

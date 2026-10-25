@@ -62,7 +62,7 @@ describe('planSteps and buildFlows', () => {
   });
   it('declined machines are not counted as owned', async () => {
     const owned = [{ mteId: 121, count: 2 }, { mteId: 101, count: 1 }];
-    expect([...ownedMachineMap({ ...emptyContextForTest(), ownedMachines: owned }, { ...defaultSettings(), declineReuse: [121] })]).toEqual([[101, 1]]);
+    expect([...ownedMachineMap({ ...emptyContextForTest(), ownedMachines: owned }, { ...defaultSettings(), declineReuse: [121] })]).toEqual([['gt:101', 1]]);
     const { steps } = await lvCircuit(owned, [121]);
     expect(steps.find((s) => s.id === 'circuit-lv')).toMatchObject({ count: 5, owned: 0 });
     expect(steps.find((s) => s.id === 'bend-plate')).toMatchObject({ owned: 1 });

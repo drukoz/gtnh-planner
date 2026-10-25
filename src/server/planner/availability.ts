@@ -2,13 +2,14 @@
 // and capabilities the group can use at its tier, which goods it can get from them (a forward-chaining fixpoint over the
 // recipes it can run), where each good comes from, and what would unlock a good it cannot get yet.
 
-import { legacyMteId, machineIdOfLegacy } from '../../shared/ids.ts';
+import { legacyMteId, type MachineId } from '../../shared/ids.ts';
 import { defaultCoilHeat } from '../../shared/gt/overclock.ts';
 import { V, tierName } from '../../shared/gt/tiers.ts';
 import { isFluidKey, type ItemKey, type StuffKey } from '../../shared/keys.ts';
 import type { Ingredient, Item, OrePart, Pack, Recipe, Worldgen } from '../../shared/types/pack.ts';
 import { FREE_KEYS, type LeafClass, type PlanSettings, type ReachableDim, type SourceInfo } from '../../shared/types/plan.ts';
 import { PROGRAMMED_CIRCUIT_ID } from '../pack/recipes.ts';
+import { allMachineIds, machineOf } from '../pack/lookup.ts';
 import { acceptRecipe, multiblocksFor, type PlanEnv } from './candidates.ts';
 
 const MAX_TIER = V.length - 1;
@@ -342,14 +343,17 @@ function firstOptions(r: Recipe, rank: ReadonlyMap<StuffKey, number>, consumedOn
   return keys;
 }
 
-/** Multiblock mteIds by the key of their controller item. */
-const CONTROLLERS = new WeakMap<Pack, Map<StuffKey, number[]>>();
+/** Multiblock ids by the key of their controller item. */
+const CONTROLLERS = new WeakMap<Pack, Map<StuffKey, MachineId[]>>();
 
-function controllersOf(pack: Pack): Map<StuffKey, number[]> {
+function controllersOf(pack: Pack): Map<StuffKey, MachineId[]> {
   let byItem = CONTROLLERS.get(pack);
   if (byItem === undefined) {
     byItem = new Map();
-    for (const m of pack.machines.values()) if (m.kind === 'multiblock') addTo(byItem, m.itemKey, m.mteId);
+    for (const id of allMachineIds(pack)) {
+      const m = machineOf(pack, id);
+      if (m !== undefined && m.kind === 'multiblock') addTo(byItem, m.itemKey, id);
+    }
     CONTROLLERS.set(pack, byItem);
   }
   return byItem;
@@ -465,26 +469,26 @@ function computeState(pack: Pack, env: PlanEnv): State {
   const ungated: PlanEnv = { ...env, multiblocks: undefined, fromNothing: undefined };
   const noMultiblock: PlanEnv = { ...ungated, multiblocks: new Set() };
   /** Per recipe: undefined = not judged yet; [] = runs without a multiblock; null = never runs here; else its multiblocks. */
-  const gates: Array<number[] | null | undefined> = new Array(pack.recipes.length);
-  const gateOf = (i: number): number[] | null => {
+  const gates: Array<MachineId[] | null | undefined> = new Array(pack.recipes.length);
+  const gateOf = (i: number): MachineId[] | null => {
     let gate = gates[i];
     if (gate === undefined) {
       const r = pack.recipes[i] as Recipe;
       if (!acceptRecipe(pack, r, ungated).ok) gate = null;
-      else gate = acceptRecipe(pack, r, noMultiblock).ok ? [] : multiblocksFor(pack, r, ungated).map(legacyMteId);
+      else gate = acceptRecipe(pack, r, noMultiblock).ok ? [] : multiblocksFor(pack, r, ungated);
       gates[i] = gate;
     }
     return gate;
   };
 
   /** The fixpoint itself, with the recipes of `banned` left out. */
-  const run = (banned: ReadonlySet<number>): { queue: StuffKey[]; rank: Map<StuffKey, number>; why: Map<StuffKey, string>; built: Set<number> } => {
-    const built = new Set<number>();
+  const run = (banned: ReadonlySet<number>): { queue: StuffKey[]; rank: Map<StuffKey, number>; why: Map<StuffKey, string>; built: Set<MachineId> } => {
+    const built = new Set<MachineId>();
     const rank = new Map<StuffKey, number>();
     const queue: StuffKey[] = [];
     const why = new Map<StuffKey, string>();
-    /** Recipes that have every input slot and wait for one of their multiblocks, by mteId; and those released. */
-    const parked = new Map<number, number[]>();
+    /** Recipes that have every input slot and wait for one of their multiblocks, by id; and those released. */
+    const parked = new Map<MachineId, number[]>();
     const released: number[] = [];
     const add = (key: StuffKey, recipeId?: string): void => {
       if (rank.has(key)) return;
@@ -524,7 +528,7 @@ function computeState(pack: Pack, env: PlanEnv): State {
     };
     /** Every slot of recipe `i` is satisfied: it fires now, or once one of its multiblocks is built. */
     const ready = (i: number): void => {
-      const gate = gateOf(i) as number[];
+      const gate = gateOf(i) as MachineId[];
       if (gate.length === 0 || gate.some((id) => built.has(id))) fireNow(i);
       else for (const id of gate) addTo(parked, id, i);
     };
@@ -599,7 +603,7 @@ function computeState(pack: Pack, env: PlanEnv): State {
     const cell = r === undefined ? undefined : emptiedFrom(r, key);
     if (cell !== undefined) r = pack.recipeById.get(why.get(cell) ?? '') ?? r;
     if (r === undefined) return [];
-    const accepted = acceptRecipe(pack, r, { ...env, multiblocks: new Set([...built].map(machineIdOfLegacy)) });
+    const accepted = acceptRecipe(pack, r, { ...env, multiblocks: built });
     const mapId = accepted.ok ? accepted.mapId : (r.maps[0] ?? '');
     const inputs = firstOptions(r, rank).map((k) => pack.nameOf(k));
     const by = `made by ${pack.maps.get(mapId)?.name ?? mapId}`;
@@ -644,7 +648,7 @@ function computeState(pack: Pack, env: PlanEnv): State {
 
   const fromNothingIds = new Set([...fromNothing].map((i) => (pack.recipes[i] as Recipe).id));
   return {
-    avail: { tier: env.tier, available, classOf, sources, why, derivedFrom, depth, multiblocks: built, fromNothing: fromNothingIds },
+    avail: { tier: env.tier, available, classOf, sources, why, derivedFrom, depth, multiblocks: new Set([...built].map(legacyMteId)), fromNothing: fromNothingIds },
     rank, materialSources, fluidSources,
   };
 }

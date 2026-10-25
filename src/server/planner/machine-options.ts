@@ -13,7 +13,7 @@ import { basicInputSlots, ignoredByBlocking } from '../../shared/gt/feeding.ts';
 import { multiblockOverclock, singleblockOverclock, voltageTier, type MachineOc } from '../../shared/gt/overclock.ts';
 import { V, tierName } from '../../shared/gt/tiers.ts';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
-import { type MachineId, compareMachineId, machineIdOfLegacy } from '../../shared/ids.ts';
+import { type MachineId, compareMachineId } from '../../shared/ids.ts';
 import type { Machine, Pack, Recipe } from '../../shared/types/pack.ts';
 import {
   DEFAULT_BUILD_HORIZON_HOURS, type MachineWhere, type PlanContext, type PlanSettings,
@@ -602,8 +602,7 @@ export function optionMachines(
  * (`ae2Parts`); and the horizon.
  */
 export async function lineBuildModel(pack: Pack, graph: CandidateGraph, basis: PlanBasis, settings: PlanSettings, ctx: PlanContext): Promise<BuildModel> {
-  const rawPools = ownedPools(ctx, settings);
-  const pools: OwnedPools = new Map([...rawPools].map(([mteId, units]) => [machineIdOfLegacy(mteId), units]));
+  const pools: OwnedPools = ownedPools(ctx, settings);
   const owned: ReadonlyMap<MachineId, number> = new Map([...pools].map(([id, units]) => [id, units.length]));
   const capBy = benchCapBy(settings.logistics);
   const offerEnv = { groupTier: basis.tier, multiblocks: basis.env.multiblocks, automateCrafting: settings.automateCrafting, ...(capBy === undefined ? {} : { benchCapBy: capBy }) };
