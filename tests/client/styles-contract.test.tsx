@@ -3231,8 +3231,12 @@ describe('the Machine GUI Phase 2: toasts', () => {
       [TOAST, 'font', '13px/18px var(--font-ui)'], [TOAST, 'animation', 'toast-in var(--dur-slow) var(--ease-pop)'],
       [TOAST, 'display', 'flex'], [TOAST, 'align-items', 'center'], [TOAST, 'gap', '8px'], [TOAST, 'min-height', '44px'], [TOAST, 'padding', '6px 8px 6px 12px'],
       ['.toast > span', 'flex', '1'], ['.toast > span', 'min-width', '0'], ['.toast > span', 'overflow-wrap', 'anywhere'],
-      [TOAST_LEAVING, 'pointer-events', 'none'], [TOAST_LEAVING, 'animation', 'toast-out var(--dur-exit) var(--ease-in) forwards'],
+      [TOAST_LEAVING, 'pointer-events', 'none'],
+      // fix round 1, M4: the entrance stays first in the leaving rule's list, so a toast that goes during it goes from where it has got to
+      // (the entrance runs on with its own time, and the exit, which has no `from`, starts from it); the exit is the brief's
+      [TOAST_LEAVING, 'animation', 'toast-in var(--dur-slow) var(--ease-pop), toast-out var(--dur-exit) var(--ease-in) forwards'],
     ]);
+    expect(declared(TOAST_LEAVING, 'animation')).toBe(`${declared(TOAST, 'animation')}, toast-out var(--dur-exit) var(--ease-in) forwards`);
     // under every layer: the drawer's dimmed page (50) and the drawer (60), the modal (100) and the tooltip (200)
     const z = Number(declared(TOASTS, 'z-index'));
     const layers: Array<[string, string | undefined]> = [

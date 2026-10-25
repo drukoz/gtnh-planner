@@ -656,7 +656,9 @@ button.banner-chip { display: inline-flex; align-items: center; gap: 6px; min-he
    (100) and the tooltip (200). It takes no pointer, so its empty part never stands between a click and what is under it; a toast does, but
    for one that is leaving. A toast is a sentence, so Inter (R35), on a fixed 18 px line, in a row as tall as its small buttons, so no late
    font changes its height; its ink is the dark boxes' (the group at the top). It pops in once, and only its exit keeps its last frame, as
-   the store removes it once that has run. */
+   the store removes it once that has run. The leaving rule keeps `toast-in` first in its list, so a toast that goes during its entrance goes
+   from where the entrance has brought it (the entrance runs on, and the exit, with no `from` of its own, starts from it) instead of first
+   jumping to its full size; one that goes later does not run its entrance again (an animation kept in the list keeps its own time). */
 .toasts { position: fixed; right: 16px; bottom: 16px; z-index: 40; pointer-events: none; max-width: min(360px, 100vw - 32px); }
 .toasts > ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .toast {
@@ -664,7 +666,9 @@ button.banner-chip { display: inline-flex; align-items: center; gap: 6px; min-he
   background: var(--chat); border: 2px solid var(--outline); font: 13px/18px var(--font-ui); animation: toast-in var(--dur-slow) var(--ease-pop);
 }
 .toast > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.toast[data-state='leaving'] { pointer-events: none; animation: toast-out var(--dur-exit) var(--ease-in) forwards; }
+.toast[data-state='leaving'] {
+  pointer-events: none; animation: toast-in var(--dur-slow) var(--ease-pop), toast-out var(--dur-exit) var(--ease-in) forwards;
+}
 
 .notes { max-width: 760px; display: flex; flex-direction: column; gap: 16px; }
 .note-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 10px; }

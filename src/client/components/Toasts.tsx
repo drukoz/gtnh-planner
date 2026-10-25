@@ -2,10 +2,69 @@
 // there, empty or not, and polite: a screen reader hears each toast as it comes, once, and never one that goes (`aria-relevant="additions"`);
 // never an alert or a status. Each toast is its words, its action's button (Undo) when it has one, and Dismiss. Its time stops while the
 // pointer moves over it and while the focus is inside it (state/toasts.ts), and the region tells the store when the page is hidden. While the
-// settings drawer is open the project page makes the region inert with the top bar, so the drawer stays a layer of its own (ruling R36).
+// settings drawer is open the project page makes the region inert with the top bar, so the drawer stays a layer of its own (ruling R36), and
+// the store keeps any toast shown meanwhile waiting until it closes (ledger ruling P2-R56).
+//
+// Undo and Dismiss move the focus on before their toast goes from under it (ledger ruling P2-R57), so the keyboard never falls to the page's
+// body: back to where the focus came into the region from, else to the same button of the next toast still showing, else to the page's main.
 
-import { useEffect, type ReactElement } from 'react';
-import { actOnToast, dismissToast, pauseToast, resumeToast, toasts, useToasts, type Toast } from '../state/toasts.ts';
+import { useEffect, type FocusEvent, type ReactElement } from 'react';
+import { actOnToast, dismissToast, pauseToast, resumeToast, toasts, useToasts, type Toast, type ToastStore } from '../state/toasts.ts';
+
+/** Where the focus came into the region from: the element a focus from outside it left, or null when it came from nowhere (P2-R57). */
+let cameFrom: Element | null = null;
+
+/** The region's focusin: a focus that comes in from outside it remembers where from; one that moves inside it changes nothing. */
+function noteArrival(e: FocusEvent<HTMLElement>): void {
+  const from = e.relatedTarget;
+  if (from instanceof Node && e.currentTarget.contains(from)) return;
+  cameFrom = from instanceof Element ? from : null;
+}
+
+/** The types of input that take typing: the fields an Undo must not put the focus in (`moveFocusOff`). */
+const TYPED = new Set(['text', 'search', 'number', 'email', 'url', 'tel', 'password']);
+const takesTyping = (el: Element): boolean =>
+  el instanceof HTMLTextAreaElement || (el instanceof HTMLInputElement && TYPED.has(el.type)) || (el instanceof HTMLElement && el.isContentEditable);
+
+/** Focuses `el` and says whether it took the focus (an element hidden, disabled or gone does not). */
+function focusOn(el: Element | null, options?: FocusOptions): boolean {
+  if (!(el instanceof HTMLElement)) return false;
+  el.focus(options);
+  return document.activeElement === el;
+}
+
+/** The page's main, focused as a last resort, with a tabindex of -1 that it loses with the focus (it is no stop of the Tab order). */
+function focusMain(): void {
+  const main = document.querySelector('main');
+  if (!(main instanceof HTMLElement)) return;
+  if (!main.hasAttribute('tabindex')) {
+    main.setAttribute('tabindex', '-1');
+    main.addEventListener('blur', () => main.removeAttribute('tabindex'), { once: true });
+  }
+  main.focus({ preventScroll: true });
+}
+
+/**
+ * Before the toast of `button` goes from under the focus (its Undo, `acting`, or its Dismiss), the focus moves on (P2-R57): back to where it came
+ * into the region from, while that is in the page and not inert, and, for an Undo, not a field that takes typing (a field being edited keeps its
+ * draft, so the project's name would keep the name the Undo takes back and send it again on its blur); else to the same button of the next toast
+ * still showing, after this one or else before it (Dismiss, which every toast has, for an Undo that one lacks); else to the page's main. A focus
+ * that is not in the toast (a pointer's press that took none) is left where it is.
+ */
+function moveFocusOff(button: HTMLElement, acting: boolean): void {
+  const toast = button.closest('li');
+  if (toast === null || !toast.contains(document.activeElement)) return;
+  const from = cameFrom;
+  const back = from !== null && from.isConnected && from.closest('[inert]') === null && !toast.contains(from) && !(acting && takesTyping(from));
+  if (back && focusOn(from)) return;
+  const others = [...(toast.parentElement?.children ?? [])].filter((li) => li !== toast && li.getAttribute('data-state') === 'open');
+  const after = others.filter((li) => (toast.compareDocumentPosition(li) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0);
+  const before = others.filter((li) => !after.includes(li)).reverse();
+  for (const li of [...after, ...before]) {
+    if (focusOn((acting ? li.querySelector('button.primary') : null) ?? li.querySelector('button[aria-label="Dismiss"]'))) return;
+  }
+  focusMain();
+}
 
 /**
  * The region's markup for `toasts`, oldest first, so the newest sits nearest the corner: a toast that is leaving is drawn leaving
@@ -13,7 +72,7 @@ import { actOnToast, dismissToast, pauseToast, resumeToast, toasts, useToasts, t
  */
 export function ToastList(props: { toasts: readonly Toast[] }): ReactElement {
   return (
-    <section className="toasts" aria-label="Notifications">
+    <section className="toasts" aria-label="Notifications" onFocus={noteArrival}>
       <ol aria-live="polite" aria-relevant="additions">
         {props.toasts.map((t) => (
           <li
@@ -29,8 +88,26 @@ export function ToastList(props: { toasts: readonly Toast[] }): ReactElement {
             }}
           >
             <span>{t.text}</span>
-            {t.action !== undefined && <button type="button" className="small primary" onClick={() => actOnToast(t.id)}>{t.action.label}</button>}
-            <button type="button" className="small" aria-label="Dismiss" onClick={() => dismissToast(t.id)}>×</button>
+            {t.action !== undefined && (
+              <button
+                type="button" className="small primary"
+                onClick={(e) => {
+                  moveFocusOff(e.currentTarget, true);
+                  actOnToast(t.id);
+                }}
+              >
+                {t.action.label}
+              </button>
+            )}
+            <button
+              type="button" className="small" aria-label="Dismiss"
+              onClick={(e) => {
+                moveFocusOff(e.currentTarget, false);
+                dismissToast(t.id);
+              }}
+            >
+              ×
+            </button>
           </li>
         ))}
       </ol>
@@ -38,17 +115,23 @@ export function ToastList(props: { toasts: readonly Toast[] }): ReactElement {
   );
 }
 
+/**
+ * Tells `store` whether `doc` is hidden, now and at every `visibilitychange`, which holds every toast's time while the page is hidden; returns how
+ * to stop, which lets go of that hold: with no region to follow the page (the login page draws none), nothing holds a toast for it.
+ */
+export function followVisibility(doc: EventTarget & { readonly hidden: boolean }, store: Pick<ToastStore, 'setHidden'>): () => void {
+  const follow = (): void => store.setHidden(doc.hidden);
+  follow();
+  doc.addEventListener('visibilitychange', follow);
+  return () => {
+    doc.removeEventListener('visibilitychange', follow);
+    store.setHidden(false);
+  };
+}
+
 /** The App's region: its toasts, and the page's visibility, which holds every toast's time while the page is hidden. */
 export function Toasts(): ReactElement {
   const list = useToasts();
-  useEffect(() => {
-    const follow = (): void => toasts.setHidden(document.hidden);
-    follow();
-    document.addEventListener('visibilitychange', follow);
-    return () => {
-      document.removeEventListener('visibilitychange', follow);
-      toasts.setHidden(false);   // with no region to follow the page (the login page draws none), nothing holds a toast for it
-    };
-  }, []);
+  useEffect(() => followVisibility(document, toasts), []);
   return <ToastList toasts={list} />;
 }

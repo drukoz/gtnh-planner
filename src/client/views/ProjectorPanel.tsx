@@ -2,12 +2,13 @@
 // player with the chat command that loads this line in their game (shown once, right after it is made: the planner keeps
 // only its hash), the command that points the mod at this planner, the project's tokens with Revoke, and the mod's other
 // commands. The token list loads when the panel is first opened. Copy works over plain http too, where browsers have no
-// clipboard API, and says at the command what it did.
+// clipboard API, and says at the command what it did; a toast says it too, but inside the open drawer, where a toast would only wait
+// behind it, a polite line of the panel's own says it aloud instead (ledger ruling P2-R56).
 
 import { useEffect, useRef, useState, type CSSProperties, type ReactElement } from 'react';
 import { messageOf } from '../api/client.ts';
 import { createToken, listTokens, revokeToken } from '../api/projector.ts';
-import { showToast } from '../state/toasts.ts';
+import { showToast, toastsInert } from '../state/toasts.ts';
 import { TOKEN_LABEL_MAX, type CreateTokenResult, type TokenInfo } from '../../shared/types/projector.ts';
 import {
   COPY_HINT, PROJECTOR_COMMANDS, copyCommand, lastUsedText, loadCommand, revokeQuestion, urlCommand, type CopyOutcome, type CopyTools,
@@ -148,6 +149,7 @@ export function ProjectorPanel(props: { projectId: string }): ReactElement {
   const listRequest = useRef(0);        // number of the newest list request: an older answer that comes late is dropped
   const loadingOnOpen = useRef(false);  // the list asked for on opening is on its way
   const copyClick = useRef(0);          // number of the newest Copy click: only its outcome is shown
+  const [said, setSaid] = useState<number | null>(null);   // the Copy click the panel says "Copied" aloud for (inside the open drawer)
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => () => {
@@ -198,15 +200,21 @@ export function ProjectorPanel(props: { projectId: string }): ReactElement {
     const click = ++copyClick.current;
     if (copiedTimer.current !== null) clearTimeout(copiedTimer.current);
     copiedTimer.current = null;
+    setSaid(null);
     // called right here in the click: without a clipboard API the selection must be copied before the click ends
     void copyCommand(text, browserCopyTools(panel.current)).then((done) => {
       if (click !== copyClick.current) return;
       setCopied({ text, copied: done });
       // "Copied" turns back into "Copy" after a moment, and a toast says so too (Phase 2 spec §12.1); the hint to copy by hand, which a copy
-      // that failed shows instead, stays until the next click
+      // that failed shows instead, stays until the next click. Inside the open drawer a toast would only wait behind it, so there is none: the
+      // button's "Copied" is the feedback, and the panel's polite line says it aloud (ledger ruling P2-R56)
       if (!done) return;
-      copiedTimer.current = setTimeout(() => setCopied(null), COPIED_MS);
-      showToast('Command copied');
+      copiedTimer.current = setTimeout(() => {
+        setCopied(null);
+        setSaid(null);
+      }, COPIED_MS);
+      if (toastsInert()) setSaid(click);
+      else showToast('Command copied');
     });
   };
   return (
@@ -215,6 +223,8 @@ export function ProjectorPanel(props: { projectId: string }): ReactElement {
         projectId={projectId} origin={location.origin} now={new Date()} tokens={tokens} created={created} label={label} busy={busy}
         error={error} copied={copied} onLabel={setLabel} onCreate={create} onRevoke={revoke} onCopy={copy} onToggle={toggled}
       />
+      {/* always there, so a screen reader hears what is put in it: a new span for each copy, so a second one is heard too */}
+      <p className="visually-hidden" aria-live="polite">{said !== null && <span key={said}>Copied</span>}</p>
     </div>
   );
 }

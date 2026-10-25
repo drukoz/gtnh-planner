@@ -4,11 +4,17 @@
 // other page-wide stores (pin-focus.ts, flow-focus.ts).
 //
 // - A toast stays TOAST_MS, then leaves: it is drawn leaving for TOAST_EXIT_MS (the stylesheet's `toast-out`), then removed. However it goes
-//   (its time is up, Dismiss, a newer toast of its key, a fourth toast), it says so once, through its `onExpire`; one whose action was taken
-//   leaves without saying so. A toast already leaving is left as it is, so an `onExpire` that dismisses its own toast changes nothing.
+//   (its time is up, Dismiss, a newer toast of its key, a newer toast past the limit), it says so once, through its `onExpire`; one whose action
+//   was taken leaves without saying so, for it leaves before its action runs (ledger ruling P2-R58). A toast already leaving is left as it is,
+//   so an `onExpire` that dismisses its own toast changes nothing.
 // - Its time runs only while nothing holds it (spec §12.1): a pointer that moves over it (P2-D28: one that rests where the toast appeared does
-//   not), the focus inside it, or the page hidden. Let go, it runs on with the time it had left.
-// - At most TOAST_LIMIT show at once: a newer one makes the oldest leave. A newer toast of a key replaces an older one of that key at once.
+//   not), the focus inside it, the page hidden, or the settings drawer open over the region (`inert`). Let go, it runs on with the time it had
+//   left.
+// - A toast is drawn, so heard, only where it can be seen and reached (ledger ruling P2-R56): one shown while the drawer is open waits behind
+//   it, not drawn and its time still, and is drawn once the drawer closes, with its whole time; the drawer that the page opens by itself also
+//   takes back the toasts showing as it opens (the page's own arrival: "Created"), which come back with the time they had left.
+// - At most TOAST_LIMIT are drawn at once, counted as each is drawn: a newer one makes the oldest leave that no one holds by its pointer or
+//   focus (M3); with every one held, the newer waits, undrawn, until one is let go. A newer toast of a key replaces an older one of it at once.
 // - Toasts never take Escape and have no tooltip (spec §12.1). Their motion is the stylesheet's alone, so reduced motion reaches it there.
 // The clock is a parameter, so the tests run the store on fake timers.
 
@@ -16,7 +22,7 @@ import { useSyncExternalStore } from 'react';
 
 /** How long a toast stays (spec §12.1). */
 export const TOAST_MS = 5000;
-/** How many toasts show at once (spec §12.1): a newer one makes the oldest leave. */
+/** How many toasts are drawn at once (spec §12.1): a newer one makes the oldest leave that no one holds. */
 export const TOAST_LIMIT = 3;
 /** How long a toast that goes is drawn leaving, `--dur-exit` (the stylesheet's `toast-out`), before it is removed. */
 export const TOAST_EXIT_MS = 180;
@@ -34,23 +40,30 @@ export interface ToastOptions {
   /** Called once when it goes without its action taken: its time is up, or it is dismissed or replaced. */
   onExpire?(): void;
 }
-/** What holds a toast's time: a pointer moving over it, the focus inside it, the page hidden. */
-export type PauseReason = 'pointer' | 'focus' | 'hidden';
+/** What holds a toast's time: a pointer moving over it, the focus inside it, the page hidden, the drawer open over the region. */
+export type PauseReason = 'pointer' | 'focus' | 'hidden' | 'inert';
 
 export interface ToastStore {
-  /** Shows a toast; returns its id. */
+  /** Shows a toast, or keeps it waiting until it can be seen; returns its id. */
   show(text: string, opts?: ToastOptions): number;
-  /** Makes the toast of this id, or every toast of this key, leave, saying so (`onExpire`). */
+  /** Makes the toast of this id, or every toast of this key, leave, saying so (`onExpire`); one still waiting goes at once. */
   dismiss(idOrKey: number | string): void;
-  /** Takes the toast's action: it runs once, and the toast leaves without saying it expired. */
+  /** Takes the toast's action: the toast leaves, without saying it expired, and then its action runs, once (P2-R58). */
   act(id: number): void;
   /** Holds the toast's time for a reason, until it is let go for that reason (`resume`). */
   pause(id: number, why: PauseReason): void;
   resume(id: number, why: PauseReason): void;
   /** Holds every toast's time while the page is hidden, the ones shown meanwhile too. */
   setHidden(hidden: boolean): void;
+  /**
+   * Holds every toast's time while the drawer is open over the region, and keeps the ones shown meanwhile waiting, undrawn, until it closes
+   * (P2-R56); `takeBack`, for the drawer the page opens by itself, sends the toasts drawn as it opens back to wait with them.
+   */
+  setInert(inert: boolean, takeBack?: boolean): void;
+  /** Whether the drawer is open over the region, so a toast shown now would wait. */
+  isInert(): boolean;
   subscribe(fn: () => void): () => void;
-  /** The toasts, oldest first: the same array until one of them changes. */
+  /** The toasts drawn, oldest first: the same array until one of them changes. */
   getSnapshot(): readonly Toast[];
 }
 
@@ -69,25 +82,33 @@ interface Entry {
   toast: Toast;
   /** Called when it goes without its action taken; cleared once called, or once it can no longer be (it left, its action was taken). */
   onExpire: (() => void) | undefined;
-  /** What holds its time: it runs while this is empty. */
+  /** What holds its time. */
   holds: Set<PauseReason>;
-  /** The time it has left: all of it while held, from `started` while its timer runs. */
+  /** Not drawn yet: shown while the drawer was open, taken back by the drawer that opened by itself, or past the limit with all held. */
+  waiting: boolean;
+  /** The time it has left: all of it while it is held or waits, from `started` while its timer runs. */
   left: number;
   started: number;
   /** Its timer while its time runs, else null. */
   timer: unknown;
 }
 
+/** A hold that someone makes, by moving the pointer over a toast or putting the focus in it: the limit never takes such a toast (M3). */
+const heldByUser = (entry: Entry): boolean => entry.holds.has('pointer') || entry.holds.has('focus');
+
 export function createToastStore(clock: ToastClock = LIVE_CLOCK): ToastStore {
   let entries: Entry[] = [];
   let snapshot: readonly Toast[] = [];
   let hidden = false;
+  let inert = false;
   let nextId = 1;
   const listeners = new Set<() => void>();
 
-  /** Something drawn changed: a new snapshot, and every listener told. */
+  /** Something drawn may have changed: a new snapshot, and every listener told, if it did. */
   function changed(): void {
-    snapshot = entries.map((e) => e.toast);
+    const drawn = entries.filter((e) => !e.waiting).map((e) => e.toast);
+    if (drawn.length === snapshot.length && drawn.every((toast, i) => toast === snapshot[i])) return;
+    snapshot = drawn;
     for (const fn of [...listeners]) fn();
   }
   const byId = (id: number): Entry | undefined => entries.find((e) => e.toast.id === id);
@@ -96,29 +117,30 @@ export function createToastStore(clock: ToastClock = LIVE_CLOCK): ToastStore {
     for (const fn of said) fn?.();
   };
 
-  function start(entry: Entry): void {
-    entry.started = clock.now();
-    entry.timer = clock.setTimeout(() => {
-      entry.timer = null;
-      const said = retire(entry);
-      changed();
-      tell([said]);
-    }, entry.left);
-  }
+  /** Whether its time runs: drawn, not leaving, and held by nothing. */
+  const runs = (entry: Entry): boolean => !entry.waiting && !entry.toast.leaving && entry.holds.size === 0;
+  /** Stops its timer, keeping the time it has left. */
   function stop(entry: Entry): void {
     if (entry.timer === null) return;
     clock.clearTimeout(entry.timer);
     entry.timer = null;
     entry.left = Math.max(0, entry.left - (clock.now() - entry.started));
   }
-  function hold(entry: Entry, why: PauseReason): void {
-    if (entry.toast.leaving) return;
-    if (entry.holds.size === 0) stop(entry);
-    entry.holds.add(why);
-  }
-  function release(entry: Entry, why: PauseReason): void {
-    if (entry.toast.leaving || !entry.holds.delete(why)) return;
-    if (entry.holds.size === 0) start(entry);
+  /** Starts or stops its timer as `runs` says. */
+  function sync(entry: Entry): void {
+    if (!runs(entry)) {
+      stop(entry);
+      return;
+    }
+    if (entry.timer !== null) return;
+    entry.started = clock.now();
+    entry.timer = clock.setTimeout(() => {
+      entry.timer = null;
+      const said = [retire(entry)];
+      settle(said);
+      changed();
+      tell(said);
+    }, entry.left);
   }
   /** Removes a toast from the store (a leaving one once its exit has run); a toast already gone is left. */
   function remove(entry: Entry): void {
@@ -126,16 +148,16 @@ export function createToastStore(clock: ToastClock = LIVE_CLOCK): ToastStore {
     entries = entries.filter((e) => e !== entry);
     changed();
   }
-  /** Makes a toast leave: its time stops, it is drawn leaving, and removed after its exit. Returns what it is to tell (its onExpire, once). */
+  /** Makes a drawn toast leave: its time stops, it is drawn leaving, and removed after its exit. Returns what it is to tell (its onExpire). */
   function retire(entry: Entry): (() => void) | undefined {
-    stop(entry);
     entry.toast = { ...entry.toast, leaving: true };
+    sync(entry);
     const said = entry.onExpire;
     entry.onExpire = undefined;
     clock.setTimeout(() => remove(entry), TOAST_EXIT_MS);
     return said;
   }
-  /** Takes a toast away at once, with no exit (a newer one of its key replaces it). Returns what it is to tell, if it had not yet. */
+  /** Takes a toast away at once, with no exit (a newer one of its key replaces it, or it never was drawn). Returns what it is to tell. */
   function drop(entry: Entry): (() => void) | undefined {
     stop(entry);
     entries = entries.filter((e) => e !== entry);
@@ -143,17 +165,32 @@ export function createToastStore(clock: ToastClock = LIVE_CLOCK): ToastStore {
     entry.onExpire = undefined;
     return said;
   }
+  /**
+   * Draws the waiting toasts, oldest first, while the drawer is not over the region: each takes a place of the TOAST_LIMIT, making the
+   * oldest drawn toast that no one holds leave when they are all taken; when no one is free to go, it and the ones after it wait on.
+   */
+  function settle(said: Array<(() => void) | undefined>): void {
+    if (inert) return;
+    for (const entry of entries.filter((e) => e.waiting)) {
+      const showing = entries.filter((e) => !e.waiting && !e.toast.leaving);
+      if (showing.length >= TOAST_LIMIT) {
+        const free = showing.find((e) => !heldByUser(e));
+        if (free === undefined) return;
+        said.push(retire(free));
+      }
+      entry.waiting = false;
+      sync(entry);
+    }
+  }
 
   return {
     show(text, opts = {}) {
       const { action, key, ms = TOAST_MS, onExpire } = opts;
       const said: Array<(() => void) | undefined> = key === undefined ? [] : entries.filter((e) => e.toast.key === key).map(drop);
       const toast: Toast = { id: nextId++, text, ...(action === undefined ? {} : { action }), ...(key === undefined ? {} : { key }), leaving: false };
-      const entry: Entry = { toast, onExpire, holds: new Set<PauseReason>(hidden ? ['hidden'] : []), left: ms, started: 0, timer: null };
-      entries = [...entries, entry];
-      if (entry.holds.size === 0) start(entry);
-      const showing = entries.filter((e) => !e.toast.leaving);
-      for (const old of showing.slice(0, Math.max(0, showing.length - TOAST_LIMIT))) said.push(retire(old));
+      const holds = new Set<PauseReason>([...(hidden ? ['hidden' as const] : []), ...(inert ? ['inert' as const] : [])]);
+      entries = [...entries, { toast, onExpire, holds, waiting: true, left: ms, started: 0, timer: null }];
+      settle(said);
       changed();
       tell(said);
       return toast.id;
@@ -161,35 +198,68 @@ export function createToastStore(clock: ToastClock = LIVE_CLOCK): ToastStore {
     dismiss(idOrKey) {
       const going = entries.filter((e) => !e.toast.leaving && (typeof idOrKey === 'number' ? e.toast.id === idOrKey : e.toast.key === idOrKey));
       if (going.length === 0) return;
-      const said = going.map(retire);
+      const said = going.map((e) => (e.waiting ? drop(e) : retire(e)));
+      settle(said);
       changed();
       tell(said);
     },
     act(id) {
       const entry = byId(id);
       const action = entry?.toast.action;
-      if (entry === undefined || entry.toast.leaving || action === undefined) return;
-      // it leaves first, its onExpire dropped, so an action that dismisses its own toast cannot make it say it expired
+      if (entry === undefined || entry.waiting || entry.toast.leaving || action === undefined) return;
+      // it leaves first, its onExpire dropped, so an action that dismisses its own toast cannot make it say it expired (P2-R58)
       retire(entry);
+      const said: Array<(() => void) | undefined> = [];
+      settle(said);
       changed();
+      tell(said);
       void action.run();
     },
     pause(id, why) {
       const entry = byId(id);
-      if (entry !== undefined) hold(entry, why);
+      if (entry === undefined || entry.toast.leaving) return;
+      entry.holds.add(why);
+      sync(entry);
     },
     resume(id, why) {
       const entry = byId(id);
-      if (entry !== undefined) release(entry, why);
+      if (entry === undefined || entry.toast.leaving || !entry.holds.delete(why)) return;
+      sync(entry);
+      // a toast let go may now make way for one that waits for a place (M3)
+      const said: Array<(() => void) | undefined> = [];
+      settle(said);
+      changed();
+      tell(said);
     },
     setHidden(next) {
       if (next === hidden) return;
       hidden = next;
       for (const entry of entries) {
-        if (next) hold(entry, 'hidden');
-        else release(entry, 'hidden');
+        if (next) entry.holds.add('hidden');
+        else entry.holds.delete('hidden');
+        sync(entry);
       }
     },
+    setInert(next, takeBack = false) {
+      if (next === inert && !(next && takeBack)) return;
+      inert = next;
+      for (const entry of entries) {
+        if (next) entry.holds.add('inert');
+        else entry.holds.delete('inert');
+        // what the drawer that opened by itself takes back waits with the rest; its element goes, and with it any hold of a pointer or focus
+        if (next && takeBack && !entry.waiting && !entry.toast.leaving) {
+          entry.waiting = true;
+          entry.holds.delete('pointer');
+          entry.holds.delete('focus');
+        }
+        sync(entry);
+      }
+      const said: Array<(() => void) | undefined> = [];
+      settle(said);
+      changed();
+      tell(said);
+    },
+    isInert: () => inert,
     subscribe(fn) {
       listeners.add(fn);
       return () => {
@@ -224,6 +294,16 @@ export function pauseToast(id: number, why: PauseReason): void {
 
 export function resumeToast(id: number, why: PauseReason): void {
   toasts.resume(id, why);
+}
+
+/** The settings drawer is open over the App's region, or has closed (ProjectPage): see `ToastStore.setInert`. */
+export function setToastsInert(inert: boolean, takeBack?: boolean): void {
+  toasts.setInert(inert, takeBack);
+}
+
+/** Whether the drawer is open over the App's region, so a toast shown now would wait behind it (ProjectorPanel's copy makes none then). */
+export function toastsInert(): boolean {
+  return toasts.isInert();
 }
 
 /** The App's toasts, re-rendering when they change; the server snapshot is the same, so pages rendered to a string work too. */

@@ -1,11 +1,13 @@
 // Toasts (Phase 2 spec §12, D14; Task 9a): the store under fake timers — a toast stays 5 s, then leaves over 180 ms, saying so once; its time
 // stops while a pointer moves over it, while the focus is in it and while the page is hidden, and runs on with what it had left; three at
 // most, the oldest leaving first; a newer toast of a key replaces the older at once; an action runs once, and its toast leaves without
-// saying it expired — and the region's markup: polite, never an alert, with Undo and Dismiss.
+// saying it expired — and the region's markup: polite, never an alert, with Undo and Dismiss. Fix round 1: a toast shown while the drawer is
+// open waits behind it, undrawn and with its time still, and the drawer that opens by itself takes back the ones drawn (P2-R56); a toast
+// leaves before its action runs (P2-R58); the limit never takes a toast someone holds (M3); the region follows the page's visibility (M2).
 
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { ToastList } from '../../src/client/components/Toasts.tsx';
+import { followVisibility, ToastList } from '../../src/client/components/Toasts.tsx';
 import {
   createToastStore, dismissToast, showToast, TOAST_EXIT_MS, TOAST_LIMIT, TOAST_MS, toasts, type ToastStore,
 } from '../../src/client/state/toasts.ts';
@@ -107,6 +109,68 @@ describe('the toast store', () => {
     const run = vi.fn(); const plain = store.show('plain'); const undo = store.show('undo', { action: { label: 'Undo', run } });
     store.act(plain); expect(store.getSnapshot().find((t) => t.id === plain)!.leaving).toBe(false);
     store.act(undo); expect(run).toHaveBeenCalledTimes(1); expect(store.getSnapshot().find((t) => t.id === plain)!.leaving).toBe(false);
+  });
+
+  // ---- fix round 1 (ledger rulings P2-R56, P2-R58; minors M2, M3) ----
+
+  const find = (id: number) => store.getSnapshot().find((t) => t.id === id);
+
+  it('keeps a toast shown while the region is inert out of sight with its time still, and shows it, with its whole time, once the region is live', () => {
+    const before = store.show('Renamed to “B”'); store.setInert(true); const id = store.show('Upload finished');
+    expect(store.getSnapshot().map((t) => t.text)).toEqual(['Renamed to “B”']);                  // not drawn, so not announced either
+    vi.advanceTimersByTime(60_000); expect(find(before)!.leaving).toBe(false);                   // the drawer holds the one shown before it too
+    store.setInert(false); expect(store.getSnapshot().map((t) => t.text)).toEqual(['Renamed to “B”', 'Upload finished']);
+    vi.advanceTimersByTime(TOAST_MS - 1); expect(find(id)!.leaving).toBe(false); vi.advanceTimersByTime(1); expect(find(id)!.leaving).toBe(true);
+  });
+
+  it('takes back the toasts showing when the drawer opens by itself, and shows them again with the time they had left', () => {
+    const id = store.show('Created “X”'); vi.advanceTimersByTime(1000); store.pause(id, 'pointer');   // a hold its element can no longer let go of
+    store.setInert(true, true); expect(store.getSnapshot()).toEqual([]);
+    vi.advanceTimersByTime(60_000); store.setInert(false); expect(store.getSnapshot().map((t) => t.text)).toEqual(['Created “X”']);
+    vi.advanceTimersByTime(3999); expect(find(id)!.leaving).toBe(false); vi.advanceTimersByTime(1); expect(find(id)!.leaving).toBe(true);
+  });
+
+  it('drops a toast that waits behind the drawer when it is dismissed (P2-R54), telling it and never drawing it', () => {
+    store.setInert(true); const onExpire = vi.fn(); store.show('Renamed to “B”', { key: 'rename:p', onExpire });
+    const heard = vi.fn(); store.subscribe(heard);
+    store.dismiss('rename:p'); expect(onExpire).toHaveBeenCalledTimes(1); expect(heard).not.toHaveBeenCalled();
+    store.setInert(false); expect(store.getSnapshot()).toEqual([]); expect(onExpire).toHaveBeenCalledTimes(1);
+  });
+
+  it('counts the toasts that waited behind the drawer toward the three when they show', () => {
+    const [a] = [store.show('a'), store.show('b')]; store.setInert(true); store.show('c'); store.show('d');
+    expect(store.getSnapshot().map((t) => t.text)).toEqual(['a', 'b']);
+    store.setInert(false);
+    expect(store.getSnapshot().filter((t) => !t.leaving).map((t) => t.text)).toEqual(['b', 'c', 'd']); expect(find(a)!.leaving).toBe(true);
+  });
+
+  it('takes a toast away before running its action, so an action that dismisses its own toast does not say it expired (P2-R58)', () => {
+    const onExpire = vi.fn(); const id = store.show('x', { key: 'k', onExpire, action: { label: 'Undo', run: () => store.dismiss('k') } }); store.act(id); expect(onExpire).not.toHaveBeenCalled();
+  });
+
+  it('never makes a toast someone holds leave for a newer one; with every toast held the newest waits until one is let go (M3)', () => {
+    const [a, b, c] = [store.show('a'), store.show('b'), store.show('c')]; store.pause(a, 'pointer');
+    const d = store.show('d');
+    expect(find(a)!.leaving).toBe(false); expect(find(b)!.leaving).toBe(true);                   // the oldest that no one holds
+    vi.advanceTimersByTime(TOAST_EXIT_MS);
+    store.pause(c, 'focus'); store.pause(d, 'pointer'); const e = store.show('e');
+    expect(store.getSnapshot().map((t) => t.text)).toEqual(['a', 'c', 'd']);                    // all three held: e waits, unseen
+    vi.advanceTimersByTime(60_000); expect(find(e)).toBeUndefined();
+    store.resume(a, 'pointer');
+    expect(store.getSnapshot().filter((t) => !t.leaving).map((t) => t.text)).toEqual(['c', 'd', 'e']); expect(find(a)!.leaving).toBe(true);
+    vi.advanceTimersByTime(TOAST_MS - 1); expect(find(e)!.leaving).toBe(false); vi.advanceTimersByTime(1); expect(find(e)!.leaving).toBe(true);
+  });
+
+  it('follows the page\'s visibility through the region\'s listener, and lets go of the toasts when the region goes (M2)', () => {
+    const doc = Object.assign(new EventTarget(), { hidden: true });
+    const stop = followVisibility(doc, store);
+    const id = store.show('x'); vi.advanceTimersByTime(60_000); expect(find(id)!.leaving).toBe(false);   // hidden from the start
+    doc.hidden = false; doc.dispatchEvent(new Event('visibilitychange'));
+    vi.advanceTimersByTime(TOAST_MS - 1); expect(find(id)!.leaving).toBe(false);
+    doc.hidden = true; doc.dispatchEvent(new Event('visibilitychange')); vi.advanceTimersByTime(60_000); expect(find(id)!.leaving).toBe(false);
+    stop(); vi.advanceTimersByTime(1); expect(find(id)!.leaving).toBe(true);                     // no region, no page to wait for
+    const later = store.show('y'); doc.hidden = true; doc.dispatchEvent(new Event('visibilitychange'));   // heard by no one now
+    vi.advanceTimersByTime(TOAST_MS); expect(find(later)!.leaving).toBe(true);
   });
 
   it('shows the App\'s toasts through showToast and takes them away through dismissToast', () => {
