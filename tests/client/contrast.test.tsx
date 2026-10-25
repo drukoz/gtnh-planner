@@ -221,6 +221,15 @@ const PAIRS: Pair[] = [
   ...TIERS.map(([tier]): Pair => [`tier chip ${tier}`, `--tier-${tier.toLowerCase()}`, '--flow-chip', AA]),
   ['busy fill', '--flow-busy', '--flow-busy-track', GRAPHICS], ['busy fill, high', '--flow-busy-high', '--flow-busy-track', GRAPHICS],
   ['machine power on a new box', '--text-muted', '--flow-new', AA], ['machine power on an owned box', '--text-muted', '--flow-owned', AA],
+
+  // the step panel's recipe card (Phase 2 Task 5a, spec §8): a slot's stack count and its chance tag on their 2 px shadow (D8: the shadow is what
+  // they are read against; the bare light slot face is the reason case below), the readouts' label and value on their screen, and, as graphics,
+  // the progress arrow's white fill on its slot-grey base, the energy bar's red on its screen and the red ring of a slot the line does not supply
+  // in full on the recess round it (inside the ring is the slot's own image)
+  ['stack count on its shadow', '--stack-ink', '--stack-shadow', AA], ['chance tag on its shadow', '#ffff55', '--stack-shadow', AA],
+  ['recipe arrow fill on its base', '--stack-ink', '--slot', GRAPHICS], ['energy fill', '--energy', '--screen', GRAPHICS],
+  ['readout label', '--screen-muted', '--screen', AA], ['readout value', '--screen-text', '--screen', AA],
+  ['ring of a slot not supplied in full, on the recess', '--panel-error', '--panel', GRAPHICS],
 ];
 
 describe('contrast of the Machine GUI palette', () => {
@@ -373,5 +382,18 @@ describe('contrast of the dark look', () => {
 describe('contrast of the shared tooltip', () => {
   it('needs a lighter blue for its mod line: the mockups\' blue falls short on the box', () => {
     expect(ratio('#5555ff', colour('light', { over: '--tip-bg', on: '--panel' }))).toBeLessThan(AA);
+  });
+});
+
+// The recipe card (Phase 2 spec §8): a stack count is white over a 2 px dark shadow, the Minecraft convention (D8), and is measured against
+// that shadow (the table's row, 10.53:1 in light and 21:1 in dark); on the bare light slot face it would be 3.41:1. The arrow's base is an
+// aria-hidden shape (spec §3.5): its fill is what moves and what shows, measured on it in the table.
+describe('contrast of the recipe card', () => {
+  it('reads a stack count on its shadow: on the bare light slot face it would fall short (D8, accepted)', () => {
+    expect(ratio('#ffffff', '#8b8b8b')).toBeLessThan(AA);
+  });
+
+  it('lets the arrow\'s base go below 3:1 on the recess, in both looks: an aria-hidden shape its fill is measured on', () => {
+    for (const look of LOOKS) expect(ratio(colour(look, '--slot'), colour(look, '--panel')), look).toBeLessThan(GRAPHICS);
   });
 });

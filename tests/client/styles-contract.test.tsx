@@ -135,6 +135,7 @@ const KEYFRAMES: Record<string, string[]> = {
   'tip-in': ['opacity', 'transform'],                                                // ruling R27: a tooltip fades in and rises 2px
   'brand-flow': ['opacity'],                                                         // Phase 2 spec §5.3: logo C's pipe, frame by frame
   'tip-out': ['opacity', 'transform'],                                               // Phase 2 spec §6.3: the shared tooltip's 80 ms exit
+  'gt-arrow': ['transform'],                                                         // Phase 2 spec §11.3: the GT progress arrow fills in eight steps
 };
 
 const FONT_IMPORTS = [
@@ -1227,6 +1228,20 @@ const READOUT_RULES = [
   '.flow-machine-slot', '.flow-slot-lo', '.flow-slot-hi', '.flow-chip rect', CHIP_TEXT, '.flow-node .flow-chip.tier-max text', '.flow-node .flow-node-power',
   '.flow-busy-track', '.flow-busy-fill', '.flow-busy.high .flow-busy-fill', '.flow-node .flow-busy-text',
 ];
+/** A slot's stack count, the recipe card's and (Task 6a) the inventory grid's. */
+const STACK_COUNT = '.stack-count';
+/** The GT progress arrow's fill (spec §11.3), the recipe card's and (Task 8) the busy line's. */
+const ARROW_FILL = '.gt-arrow-fill';
+/**
+ * Phase 2 Task 5a (spec §8.4, §11.3): the step panel's recipe card, its slots with their counts and chance tags, the arrow, the energy bar, the
+ * readouts and the chips.
+ */
+const RECIPE_RULES = [
+  '.recipe-card', '.recipe-head', '.recipe-caption', '.recipe-strip', '.recipe-slots', '.recipe-slot', '.recipe-slot.slot-short > .item-icon', STACK_COUNT,
+  '.slot-chance', '.gt-arrow', ARROW_FILL, '.gt-arrow.on-chat', '.gt-arrow.on-chat .gt-arrow-fill', '.gt-arrow.still .gt-arrow-fill', '.recipe-power',
+  '.energy-bar', '.energy-fill', '.recipe-time', '.recipe-stats', '.readout', '.readout dt', '.readout dd', '.oc-chips', '.oc-chip.oc-now', '.oc-chip.oc-note',
+  '.badge.tier-chip', '.badge.tier-chip.tier-max',
+];
 /** The rules of this task that colour, edge or round something: none may read an alias of the old palette any more. */
 const FLOW_RULES = [
   '.flow-canvas', '.flow-node-box', '.flow-node.sink > .flow-node-box', '.flow-node-head[role=\'button\']:hover > .flow-hit',
@@ -1237,6 +1252,7 @@ const FLOW_RULES = [
   '.swatch.free', '.swatch.sink', '.flow-panel', '.flow-panel-section', '.flow-panel-title', WELLS, '.flow-panel .warnings',
   '.swap-option.unusable, .option-choice.unusable', '.port-short .port-rate, .port-warn', '.option-slot', '.option-slot-title',
   ...TIER_RULES, ...READOUT_RULES,                                                   // Phase 2 Task 4: the machine readout (spec §7.3)
+  ...RECIPE_RULES,                                                                   // Phase 2 Task 5a: the step panel's recipe card (spec §8.4)
 ];
 
 describe('the Machine GUI Flow diagram', () => {
@@ -2477,6 +2493,7 @@ const PHASE2_RULES: string[] = [
   '.fig',                                                                            // Task 2b: a figure in pixel text (spec §25)
   '.nei-tooltip', '.nei-tooltip > :first-child', '.nei-tooltip-mod', ".nei-tooltip[data-state='closing']",   // Task 3a (spec §6.3)
   ...TIER_RULES, ...READOUT_RULES,                                                   // Task 4: the Flow machine readout (spec §7.3)
+  ...RECIPE_RULES,                                                                   // Task 5a: the step panel's recipe card (spec §8.4)
 ];
 /** The colour literals a Phase 2 rule may write: each is the same in both looks (spec §4.4). */
 const SAME_IN_BOTH = ['#ffffff', '#000000', '#aaaaaa', '#100010', '#ffff55', 'rgb(0 0 0 / 0.4)'];
@@ -2537,6 +2554,7 @@ describe('the Machine GUI Phase 2: the dark look and the Theme button', () => {
 /** Every rule that names the digits' face (Tasks 5a and 7 append theirs). */
 const DIGIT_RULES: string[] = [
   '.fig', '.compare-row > dd', 'details.settings-section > summary > .muted', '.step-list li::marker', '.map-y', '.view3d-layer-text', '.smart-total',
+  STACK_COUNT, '.readout dd',                                                        // Task 5a: a slot's count and a recipe readout, whole in VT323
 ];
 /** VT323 only at 14px or more (plan ruling digits-floor): at 13px a stroke thins to half a pixel on a 1x screen. */
 const DIGITS_FLOOR = 14;
@@ -2646,5 +2664,69 @@ describe('the Machine GUI Phase 2: the Flow machine readout', () => {
     expect(inBlock('.flow-slot-lo, .flow-slot-hi')).toBeGreaterThan(inBlock('.flow-machine-slot'));
     // the readout's rules sit with the box's, after the flange's
     for (const selector of [...TIER_RULES, ...READOUT_RULES]) expect(position(selector), selector).toBeGreaterThan(position('.flow-row.hl .flow-port'));
+  });
+});
+
+// The step panel's recipe card (Phase 2 spec §8, Task 5a): one run as NEI draws it, in a recess of the panel (--bevel-inset): the slots, each
+// a 36 px item slot with its stack count at the bottom right (white VT323 16 px over its 2 px shadow, in the 14 px box Pixelify's 14 px had:
+// spec §25) and a chance tag at the top left (Pixelify, its digits Figs' span.fig); the GT progress arrow, whose fill runs three times in
+// 4.8 s and then rests full (spec §11.3); a 10 x 36 energy bar filled from the bottom to the share of what the machine can draw; then the
+// four readouts on screens in the dark box's ink (VT323 21 px, its digits as tall as the 18 px Pixelify of the mockup) and the chips. In
+// forced colours the two fills are the Highlight.
+describe('the Machine GUI Phase 2: the recipe card', () => {
+  it('draws one run as NEI does: slots with stack counts, an arrow that runs three times, readouts', () => {
+    expectDeclared([
+      ['.recipe-strip', 'background', 'var(--panel)'], ['.recipe-strip', 'box-shadow', 'var(--bevel-inset)'],
+      ['.recipe-slot', 'position', 'relative'],
+      [STACK_COUNT, 'position', 'absolute'], [STACK_COUNT, 'right', '1px'], [STACK_COUNT, 'bottom', '-2px'], [STACK_COUNT, 'z-index', '1'],
+      [STACK_COUNT, 'pointer-events', 'none'], [STACK_COUNT, 'font', '16px/14px var(--font-digits)'], [STACK_COUNT, 'font-size-adjust', 'cap-height 0.56'],
+      [STACK_COUNT, 'color', 'var(--stack-ink)'], [STACK_COUNT, 'text-shadow', '2px 2px 0 var(--stack-shadow)'],
+      // the chance tag keeps Pixelify, its digits in Figs' span.fig (spec §25: VT323's % reads as an x)
+      ['.slot-chance', 'position', 'absolute'], ['.slot-chance', 'left', '2px'], ['.slot-chance', 'top', '2px'], ['.slot-chance', 'z-index', '1'],
+      ['.slot-chance', 'pointer-events', 'none'], ['.slot-chance', 'font', '14px/1 var(--font-pixel)'], ['.slot-chance', 'color', '#ffff55'],
+      ['.slot-chance', 'text-shadow', '2px 2px 0 var(--stack-shadow)'],
+      ['.readout', 'padding', '5px 7px'], ['.readout', 'background', 'var(--screen)'], ['.readout', 'box-shadow', 'var(--bevel-screen)'],
+      ['.readout dt', 'font-size', '11px'], ['.readout dt', 'color', 'var(--ink-muted)'],
+      ['.readout dd', 'margin', '0'], ['.readout dd', 'font', '21px/21.6px var(--font-digits)'], ['.readout dd', 'font-size-adjust', 'cap-height 0.56'],
+      ['.readout dd', 'color', 'var(--screen-text)'], ['.readout dd', 'font-variant-numeric', 'tabular-nums'],
+      // spec §11.3, as written there
+      ['.gt-arrow', 'position', 'relative'], ['.gt-arrow', 'display', 'inline-block'], ['.gt-arrow', 'flex', 'none'], ['.gt-arrow', 'width', '22px'],
+      ['.gt-arrow', 'height', '16px'], ['.gt-arrow', 'vertical-align', 'middle'], ['.gt-arrow', 'background', 'var(--slot)'],
+      ['.gt-arrow', 'clip-path', 'polygon(0 35%, 60% 35%, 60% 0, 100% 50%, 60% 100%, 60% 65%, 0 65%)'],
+      [ARROW_FILL, 'position', 'absolute'], [ARROW_FILL, 'inset', '0'], [ARROW_FILL, 'background', 'var(--stack-ink)'], [ARROW_FILL, 'transform-origin', 'left'],
+      [ARROW_FILL, 'animation', 'gt-arrow 1.6s steps(8) 3'],
+      ['.gt-arrow.on-chat', 'background', 'var(--progress-base)'], ['.gt-arrow.on-chat', 'margin-right', '8px'],
+      ['.gt-arrow.on-chat .gt-arrow-fill', 'background', 'var(--accent)'], ['.gt-arrow.still .gt-arrow-fill', 'animation', 'none'],
+      ['.energy-bar', 'position', 'relative'], ['.energy-bar', 'width', '10px'], ['.energy-bar', 'height', '36px'], ['.energy-bar', 'overflow', 'hidden'],
+      ['.energy-bar', 'background', 'var(--screen)'], ['.energy-bar', 'box-shadow', 'inset 1px 1px 0 #000000'],
+      ['.energy-fill', 'position', 'absolute'], ['.energy-fill', 'inset', '0'], ['.energy-fill', 'transform', 'scaleY(var(--share))'],
+      ['.energy-fill', 'transform-origin', 'bottom'], ['.energy-fill', 'background', 'var(--energy)'],
+      // the chips: the tier's in its tier's ink (Task 4's .tier-<slug> classes), which beats the badge's white; MAX bold; the overclock tones
+      ['.badge.tier-chip', 'color', 'var(--tier-ink)'], ['.badge.tier-chip.tier-max', 'font-weight', '700'],
+      ['.oc-chip.oc-now', 'color', 'var(--ink-ok)'], ['.oc-chip.oc-note', 'color', 'var(--ink-warn)'],
+      ['.recipe-stats', 'grid-template-columns', 'repeat(2, minmax(0, 1fr))'],
+    ]);
+    // a tone's class is its own (oc-now, oc-note): a bare .note is the Notes tab's card, whose panel, edge and bevel would frame the chip
+    expect(position('.oc-chip.note')).toBe(-1); expect(position('.oc-chip.now')).toBe(-1);
+    expect(ruleBody('.note, .note-add')).toMatch(/box-shadow: var\(--bevel-panel\)/);
+    // below 1100 px the panel is the window's width, and the four readouts make one row
+    expect(declaredIn('@media (max-width: 1100px)', '.recipe-stats', 'grid-template-columns')).toBe('repeat(4, minmax(0, 1fr))');
+    // a readout is a screen in the dark box's light ink: it joins the dark group, after the seven members the chrome case pins
+    const dark = inkGroup('.banner').prelude.split(', ');
+    expect(dark.indexOf('.readout')).toBeGreaterThanOrEqual(7);
+    expect(dark).toEqual(expect.arrayContaining(['.compare-card > :where(p)', '.compare-column > :where(p)', '.readout']));
+    // the arrow is finite (WCAG 2.2.2: within 5 s, rulings R31 and D17) and rests full, its own style: no fill mode
+    const [, duration, , count] = (declared(ARROW_FILL, 'animation') ?? '').split(' ');
+    expect(Number.parseFloat(duration ?? '') * Number(count)).toBeLessThanOrEqual(5);
+    expect(declared(ARROW_FILL, 'animation')).not.toMatch(/forwards|backwards|both|infinite/);
+    expect(declared(ARROW_FILL, 'transform')).toBeUndefined();
+    // forced colours: the arrow's and the energy bar's fills are the Highlight (the chat arrow's own fill rule out-ranks a bare .gt-arrow-fill,
+    // so the block names it too), each after the rule it repaints
+    expect(inQuery(FORCED, '.gt-arrow-fill, .gt-arrow.on-chat .gt-arrow-fill, .energy-fill')).toEqual([['background', 'Highlight']]);
+    const { block } = forcedBlock();
+    for (const selector of [ARROW_FILL, '.gt-arrow.on-chat .gt-arrow-fill', '.energy-fill']) {
+      expect(position(selector), selector).toBeGreaterThan(-1);
+      expect(position(selector), selector).toBeLessThan(blocks.indexOf(block));
+    }
   });
 });

@@ -157,11 +157,11 @@ h2 { font-size: 1.2rem; margin: 0 0 var(--gap); }
 }
 /* Ink on a dark box (a chat box, a screen, a chip): light text on near black. It sets the focus ink too, so a dark box inside a
    panel does not take the panel's dark ring. The Compare card's notes are named by their place with the `p` in `:where()`, which keeps
-   them at the specificity of one class, so .muted and .error still win on them. */
+   them at the specificity of one class, so .muted and .error still win on them. A recipe card's readout tile is a screen (Phase 2 §8.4). */
 .banner, .plan-banner, .what-changed, .delete-confirm, .connection, .badge, .chip, .avoid-chip,
 .search-results, .mat-unlock, .flow-issues, .flow-infeasible,
 .flow-panel .ports, .flow-panel .oc-lines, .flow-panel .warnings, .flow-panel .sources, .flow-panel .used-by, .flow-panel .also-made,
-.view3d-warnings, .compare-card > :where(p), .compare-column > :where(p) {
+.view3d-warnings, .compare-card > :where(p), .compare-column > :where(p), .readout {
   --ink: #ffffff; --ink-muted: #aaaaaa; --ink-title: #ffff55; --ink-link: #ffff55;
   --ink-error: #ff5555; --ink-ok: #55ff55; --ink-warn: #ffaa00; --ink-focus: #ffff55;
   color: var(--ink);
@@ -1029,6 +1029,61 @@ button.link:hover:not(:disabled) { background: none; text-decoration: none; }
 .option-choice { align-items: flex-start; }
 .option-choice input { margin-top: 2px; }
 .choice-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+/*
+ * The step panel's recipe card (Phase 2 spec §8): one run as NEI draws it. Its tier chip (in its tier's ink, Task 4's .tier-<slug>) and
+ * "One run" lead it; the run's slots, the GT progress arrow between them and, at the right, the energy bar beside the run's time and power
+ * sit in a recess of the panel (the panel's bevel inverted) and wrap at its edge, so at the panel's narrowest the power takes a line of its
+ * own. A slot is a 32 px item icon, a 36 px slot, with its stack count at the bottom right (white VT323 16 px over a 2 px shadow, the
+ * Minecraft way, D8, in the 14 px box Pixelify's 14 px had: spec §25) and a chance tag at the top left (yellow Pixelify, its digits Figs'
+ * span.fig: VT323's % reads as an x); a slot the line does not supply in full is framed in red in place of its bevel. The arrow's fill
+ * sweeps in eight steps, three times in 4.8 s, then rests full, its own style (spec §11.3); the energy bar is filled from the bottom to
+ * what one machine draws of what it can (--share, set on the fill). The readouts are screens in the dark box's ink, their values VT323
+ * 21 px (as tall as the mockup's 18 px Pixelify), two a row beside the diagram and four below 1100 px; the overclock chips are badges,
+ * what overclocking did in green and its notes in amber.
+ */
+.recipe-card { display: flex; flex-direction: column; gap: 8px; }
+.recipe-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.recipe-caption { color: var(--ink-muted); font-size: 0.85rem; }
+.recipe-strip {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px; background: var(--panel); box-shadow: var(--bevel-inset);
+}
+.recipe-slots { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 2px; min-width: 0; }
+.recipe-slot { position: relative; display: flex; }
+.recipe-slot.slot-short > .item-icon { box-shadow: inset 0 0 0 2px var(--ink-error); }
+.stack-count {
+  position: absolute; right: 1px; bottom: -2px; z-index: 1; pointer-events: none; font: 16px/14px var(--font-digits); font-size-adjust: cap-height 0.56;
+  color: var(--stack-ink); text-shadow: 2px 2px 0 var(--stack-shadow);
+}
+.slot-chance {
+  position: absolute; left: 2px; top: 2px; z-index: 1; pointer-events: none; font: 14px/1 var(--font-pixel); color: #ffff55;
+  text-shadow: 2px 2px 0 var(--stack-shadow);
+}
+.gt-arrow {
+  position: relative; display: inline-block; flex: none; width: 22px; height: 16px; vertical-align: middle; background: var(--slot);
+  clip-path: polygon(0 35%, 60% 35%, 60% 0, 100% 50%, 60% 100%, 60% 65%, 0 65%);
+}
+.gt-arrow-fill { position: absolute; inset: 0; background: var(--stack-ink); transform-origin: left; animation: gt-arrow 1.6s steps(8) 3; }
+.gt-arrow.on-chat { background: var(--progress-base); margin-right: 8px; }
+.gt-arrow.on-chat .gt-arrow-fill { background: var(--accent); }
+.gt-arrow.still .gt-arrow-fill { animation: none; }
+@keyframes gt-arrow { from { transform: scaleX(0); } }
+.recipe-power { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+.energy-bar {
+  position: relative; flex: none; width: 10px; height: 36px; overflow: hidden; background: var(--screen); box-shadow: inset 1px 1px 0 #000000;
+}
+.energy-fill { position: absolute; inset: 0; background: var(--energy); transform-origin: bottom; transform: scaleY(var(--share)); }
+.recipe-time { font-size: 12px; line-height: 1.3; font-variant-numeric: tabular-nums; }
+.recipe-stats { margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.readout { padding: 5px 7px; background: var(--screen); box-shadow: var(--bevel-screen); }
+.readout dt { font-size: 11px; color: var(--ink-muted); }
+.readout dd {
+  margin: 0; font: 21px/21.6px var(--font-digits); font-size-adjust: cap-height 0.56; color: var(--screen-text); font-variant-numeric: tabular-nums;
+}
+.oc-chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.oc-chip.oc-now { color: var(--ink-ok); }
+.oc-chip.oc-note { color: var(--ink-warn); }
+.badge.tier-chip { color: var(--tier-ink); }
+.badge.tier-chip.tier-max { font-weight: 700; }
 
 /* Materials & steps (spec §3.10): the tree indents by depth, unlock texts are warnings, ticked rows are crossed out. Each section is a
    panel of its own (design spec §6), in the ink of a panel, with a pixel title: the same panel as a note, set into the tab's. */
@@ -1366,6 +1421,7 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
 @media (max-width: 1100px) {
   .flow.has-panel { grid-template-columns: minmax(0, 1fr); }
   .flow-panel { position: static; max-height: none; }
+  .recipe-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 
 /*
@@ -1605,4 +1661,7 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
      dark and the light one alike) the theme's text colour, each at the specificity of the slot's own rule, which it beats by coming after */
   .flow-machine-slot { fill: Canvas; }
   .flow-slot-lo, .flow-slot-hi { fill: CanvasText; }
+  /* Phase 2 Task 5a: the progress arrow's fill and the recipe card's energy fill, backgrounds the theme would paint its canvas like what
+     they lie on, are the Highlight (the chat arrow's own fill rule out-ranks a bare .gt-arrow-fill, so it is named too) */
+  .gt-arrow-fill, .gt-arrow.on-chat .gt-arrow-fill, .energy-fill { background: Highlight; }
 }

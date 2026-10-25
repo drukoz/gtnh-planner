@@ -8,9 +8,11 @@
 // recipe, or import the product instead) and its warnings. A raw material's panel: what kind of import it is and what
 // the line takes of it from a farm the group runs or another project (add-on 17), which steps use it, what a bought one
 // stands for, and making it in the line instead. Every choice sends one `settings` op with whole field values.
+// A step's panel opens on one run of its recipe as NEI draws it (Phase 2 spec §8: the slots, the progress arrow, the
+// power, the readouts and the overclock chips; hovering a slot lights its good as a row does).
 
-import { useId, useState, type ReactElement, type ReactNode } from 'react';
-import { tierName } from '../../shared/gt/tiers.ts';
+import { useId, useState, type CSSProperties, type ReactElement, type ReactNode } from 'react';
+import { tierName, V } from '../../shared/gt/tiers.ts';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import { indexPlan, ORPHAN_REL, SHORT_INPUT_SHARE, type PlanIndex } from '../../shared/plan/balance.ts';
 import { stepNameIn } from '../../shared/plan/pools.ts';
@@ -19,12 +21,13 @@ import {
   type StepTier,
 } from '../../shared/types/plan.ts';
 import { Figs } from '../components/Figs.tsx';
+import { GtArrow } from '../components/GtArrow.tsx';
 import { ItemIcon } from '../components/ItemIcon.tsx';
-import { formatNumber, formatPercent, formatRate } from '../format.ts';
+import { formatDuration, formatNumber, formatPercent, formatRate } from '../format.ts';
 import { endHoverFlowFocus, hoverFlowFocus } from '../state/flow-focus.ts';
 import {
-  flowEdgeId, haveSupplyPatch, importInsteadPatch, importWords, LEAF_WORD, makeHerePatch, ocLines, optionPatch, optionSlotKey, reusePatch, tierText,
-  useOnlyPatch,
+  flowEdgeId, haveSupplyPatch, importInsteadPatch, importWords, LEAF_WORD, machineReadout, makeHerePatch, ocChips, ocLines, optionPatch, optionSlotKey,
+  powerShare, recipeSlots, recipeStats, reusePatch, stackText, tierText, useOnlyPatch, type RecipeSlot,
 } from './flow-model.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
 
@@ -44,6 +47,9 @@ const SWAP_SHOWN = 5;
 /** Swap options each "more…" adds: a product can have a thousand ways (Wood Pulp), too many to list at once. */
 const SWAP_PAGE = 25;
 const PORT_ICON_SIZE = 16;
+/** A recipe card's slot: a 32 px item icon is a 36 px slot, its 2 px frame round it (Phase 2 spec §8.1). */
+const SLOT_ICON_SIZE = 32;
+const TICKS_PER_SECOND = 20;
 const RAW = 'raw';
 const OUT = 'out';
 const SINK = 'sink';
@@ -260,6 +266,96 @@ export function PortsSection(props: { step: PlanStep; plan: Plan; per: Per; onSe
         </>
       )}
     </section>
+  );
+}
+
+/**
+ * "LV · 32 V", "IV · 8,192 V × 2 A": the tier a step runs at and the most one of its machines draws, its voltage and its amps when more than
+ * one (the overclock inputs', else its tier's voltage at 1 A, as `ocLines` reads them).
+ */
+function tierChipText(step: PlanStep): string {
+  const volts = step.oc?.machineVoltage ?? V[step.machine.tier] ?? 0;
+  const amps = step.oc?.machineAmps ?? 1;
+  return `${tierText(step.machine.tier)} · ${formatNumber(volts)} V${amps > 1 ? ` × ${formatNumber(amps)} A` : ''}`;
+}
+
+/**
+ * One run of a step's recipe as NEI draws it (Phase 2 spec §8): the tier it runs at on a chip (none by hand or on a crafting table or a
+ * furnace, which have no voltage tier: plan ruling pseudo-tier-chip) and "One run"; in a recess of the panel, what a run takes and makes as
+ * 36 px slots with their stack counts (none for one item) and chance tags, the GT progress arrow between them, and at the right the energy
+ * bar, filled to what one machine draws of what it can, beside the run's time and power; the machines, how busy, and the power each and in
+ * all as readouts; and what overclocking did as chips. A slot is named by its good (and as not supplied in full when the line gets less of it
+ * than it needs) and its tip says what a run takes or makes of it, the chance of it and its rate in the line (P2-D39); hovering one lights
+ * the good in the diagram, as a port row does. A farm step's card is a machine's (plan ruling farm-step-card): a crop farm's harvest below
+ * one item comes at that chance, and a tree farm's tool is worn a use a run, where the others come by chance. No hooks: the tests call it as
+ * a plain function.
+ */
+export function RecipeCard(props: { step: PlanStep; plan: Plan; index: PlanIndex; per: Per }): ReactElement {
+  const { step, plan, index, per } = props;
+  const nameOf = namesOf(plan);
+  const ins = recipeSlots(step.inputs);
+  const outs = recipeSlots(step.outputs);
+  const tools = new Set(step.farm?.tools ?? []);
+  const tier = machineReadout(step).tier;
+  const share = powerShare(step);
+  const time = step.durationTicks > 0 ? formatDuration(step.durationTicks / TICKS_PER_SECOND) : null;
+  const power = step.euPerTick > 0 ? `${formatNumber(step.euPerTick)} EU/t` : null;
+  const chips = ocChips(step);
+  const slot = (side: 'in' | 'out', s: RecipeSlot, i: number): ReactElement => {
+    const taken = side === 'in' ? index.inputs.get(step.id)?.get(s.key) : undefined;
+    const port = side === 'in' ? taken : index.outputs.get(step.id)?.get(s.key);
+    const short = taken !== undefined && taken.needPerSecond > 0 && taken.perSecond < SHORT_INPUT_SHARE * taken.needPerSecond;
+    const worn = side === 'in' && tools.has(s.key);
+    const count = stackText(s.key, s.amount);
+    const rate = port === undefined ? [] : [`${rateOf(port.perSecond, per, s.key)} in the line`];
+    const tip = worn
+      ? [`wears 1 of its ${formatNumber(Math.round(1 / s.chance))} uses per run`, ...rate]
+      : [`${amountWords(s.key, s.amount, nameOf)} per run`, ...(s.chance < 1 ? [`${formatPercent(s.chance)} chance`] : []), ...rate];
+    return (
+      <li
+        key={`${side}:${i}:${s.key}`}
+        className={short ? 'recipe-slot slot-short' : 'recipe-slot'}
+        data-recipe-key={s.key}
+        onMouseEnter={() => hoverFlowFocus({ kind: 'item', key: s.key })}
+        onMouseLeave={endHoverFlowFocus}
+      >
+        <ItemIcon itemKey={s.key} size={SLOT_ICON_SIZE} name={short ? `${nameOf(s.key)}, not supplied in full` : nameOf(s.key)} tip={tip} />
+        {count !== '' && <span className="stack-count" aria-hidden="true">{count}</span>}
+        {s.chance < 1 && !worn && <span className="slot-chance" aria-hidden="true"><Figs text={formatPercent(s.chance)} /></span>}
+      </li>
+    );
+  };
+  return (
+    <div className="recipe-card" role="group" aria-label={`${mapName(step.mapId, nameOf)} recipe, one run`}>
+      <div className="recipe-head">
+        {tier !== null && <span className={`badge tier-chip tier-${tier.slug}`}><Figs text={tierChipText(step)} /></span>}
+        <span className="recipe-caption">One run</span>
+      </div>
+      {(ins.length > 0 || outs.length > 0) && (
+        <div className="recipe-strip">
+          {ins.length > 0 && <ul className="recipe-slots" aria-label="Takes per run">{ins.map((s, i) => slot('in', s, i))}</ul>}
+          <GtArrow tone="panel" still={step.durationTicks <= 0} />
+          {outs.length > 0 && <ul className="recipe-slots" aria-label="Makes per run">{outs.map((s, i) => slot('out', s, i))}</ul>}
+          {(share !== null || time !== null || power !== null) && (
+            <span className="recipe-power">
+              {share !== null && (
+                <span className="energy-bar" aria-hidden="true"><span className="energy-fill" style={{ '--share': share } as CSSProperties} /></span>
+              )}
+              {(time !== null || power !== null) && <span className="recipe-time">{time}{time !== null && power !== null && <br />}{power}</span>}
+            </span>
+          )}
+        </div>
+      )}
+      <dl className="recipe-stats">
+        {recipeStats(step).map((s) => <div key={s.label} className="readout"><dt>{s.label}</dt><dd>{s.value}</dd></div>)}
+      </dl>
+      {chips.length > 0 && (
+        <ul className="oc-chips" aria-label="Overclock">
+          {/* the tone's class is `oc-now` or `oc-note`: a bare `note` is the Notes tab's card, its panel, edge and bevel */}
+          {chips.map((c) => <li key={c.text} className={`badge oc-chip oc-${c.tone}`}><Figs text={c.text} /></li>)}
+        </ul>
+      )}
+    </div>
   );
 }
 
@@ -675,6 +771,7 @@ export function StepPanel(props: {
         {[machines, ...(step.mainOutput === undefined ? [] : [`makes ${nameOf(step.mainOutput)}`]), ...(step.handCraft ? ['by hand'] : [])].join(' · ')}
       </p>
       {shared !== null && <p>{shared}</p>}
+      <RecipeCard step={step} plan={plan} index={index} per={per} />
       <PortsSection step={step} plan={plan} per={per} index={index} onSelect={onSelect} />
       {step.farm !== undefined && (
         <section className="flow-panel-section">

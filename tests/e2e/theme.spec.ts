@@ -163,6 +163,19 @@ const DARK_TOUR: DarkStop[] = [
     },
     rows: [{ what: 'the shared tooltip', selector: '.nei-tooltip', property: 'background-color', expected: 'rgba(16, 0, 16, 0.94)' }],
   },
+  // Task 5a: the step panel's recipe card, its recess the dark panel's #2a2a2a and a readout tile the dark screen's #0b0b0b (spec §8.4)
+  {
+    name: 'a step\'s panel',
+    open: async (page) => {
+      await openWithPlan(page, circuitLv());
+      await page.locator('[data-step-id="circuit-lv"] .flow-node-head').click();
+      await expect(page.getByRole('complementary', { name: 'Step: Basic Assembler' })).toBeVisible();
+    },
+    rows: [
+      { what: 'the recipe strip', selector: '.recipe-strip', property: 'background-color', expected: 'rgb(42, 42, 42)' },
+      { what: 'a readout', selector: '.readout', property: 'background-color', expected: 'rgb(11, 11, 11)' },
+    ],
+  },
 ];
 
 // a fresh context per test, in a dark OS

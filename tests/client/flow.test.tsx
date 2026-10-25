@@ -7,7 +7,7 @@ import {
   formatNumber, formatRate, flowGraph, toElk, fromElk, ocLines, reusePatch, LEAF_WORD, focusSets, centreOn, flowEdgeId, rowCentre,
   collapsedLines, firstProducer, edgeTag, rowNameRoom, textWidth, LINE_COLLAPSE_STEPS, TEXT_CHAR_WIDTH, flowIssueLines, type FlowLayout, type FlowNode,
   machineIconKey, machineReadout, tierSlug, rowsTop, busyTrack, chipWidth, MACHINE_ICON, MACHINE_SLOT, STEP_HEAD_HEIGHT, BUSY_BAND, CHIP_HEIGHT,
-  CHIP_PADDING, CHIP_CHAR_WIDTH,
+  CHIP_PADDING, CHIP_CHAR_WIDTH, recipeSlots, stackText, recipeStats, ocChips, powerShare,
 } from '../../src/client/views/flow-model.ts';
 import { PSEUDO_MACHINE_ENTRIES } from '../../src/server/pack/machines.ts';
 import { TIER_NAMES } from '../../src/shared/gt/tiers.ts';
@@ -786,5 +786,51 @@ describe('flow diagram: machine readouts', () => {
     for (const [count, widest] of [['×2', 14.52], ['×5', 14.52], ['×1 shared', 62.64], ['×128', 28.34], ['×1024', 35.25]] as const) {
       expect(chipWidth(count) - 2 * CHIP_PADDING, count).toBeGreaterThanOrEqual(widest);
     }
+  });
+});
+
+// The recipe card's numbers (Phase 2 spec §8.2, §8.5; Task 5a): what one run takes and makes as NEI's slots draw it, the stack counts as
+// Minecraft writes them, the four readouts, the overclock chips and how full the energy bar is. A crop farm's expected drop below one item is
+// drawn as one at that chance, a fluid keeps its litres, and a tree farm's tool keeps the chance it wears at (plan ruling farm-step-card).
+describe('the recipe card\'s numbers', () => {
+  // the overclocked step of 'explains the overclock': an MV bending machine, its 100 t recipe in 50 t
+  const mvStep = step({ machine: { mteId: 102, name: 'Advanced Bending Machine', tier: 2 }, durationTicks: 50, overclocks: 1,
+    oc: { recipeEuPerTick: 24, recipeDurationTicks: 100, machineVoltage: 128, machineAmps: 1, perfect: false, heatOverclocks: 0 } });
+  it('writes stack counts as Minecraft does', () => {
+    expect([1, 2, 64, 1500, 12000].map((n) => stackText('t:x@0', n))).toEqual(['', '2', '64', '1.5k', '12k']);
+    expect([72, 144, 1000, 2300, 12000, 1_000_000].map((n) => stackText('fluid:water', n))).toEqual(['72L', '144L', '1B', '2.3B', '12B', '1kB']);
+    // a value that rounds to 1,000 of its unit is written in the next one, as compactNumber rolls up
+    expect([stackText('fluid:water', 999_500), stackText('fluid:water', 9_960), stackText('t:x@0', 999.6), stackText('t:x@0', 9_960)]).toEqual(['1kB', '10B', '1k', '10k']);
+    // and so on past 999k items and 999 kB: the next unit, so a count stays a few glyphs in its 36 px slot
+    expect([stackText('t:x@0', 999_500), stackText('t:x@0', 1_500_000), stackText('fluid:water', 2_000_000_000)]).toEqual(['1M', '1.5M', '2MB']);
+  });
+  it('gives a slot its nominal amount and its chance, and drops what a run never makes', () => {
+    const [slot] = recipeSlots([{ key: 't:dust@0', amount: 0.1, chance: 0.1 }]);
+    expect(slot!.amount).toBeCloseTo(1); expect(slot!.chance).toBe(0.1); expect(recipeSlots([{ key: 't:x@0', amount: 0, chance: 1 }])).toEqual([]);
+  });
+  it('draws an item a run makes less than one of as one at that chance, and keeps the litres of a fluid and the chance of a tool', () => {
+    expect(recipeSlots([{ key: 't:resin@0', amount: 0.9, chance: 1 }])).toEqual([{ key: 't:resin@0', amount: 1, chance: 0.9 }]);   // a crop harvest's expected drop
+    expect(recipeSlots([{ key: 't:rubber_wood@0', amount: 6.18, chance: 1 }])).toEqual([{ key: 't:rubber_wood@0', amount: 6.18, chance: 1 }]); expect(stackText('t:rubber_wood@0', 6.18)).toBe('6');
+    expect(recipeSlots([{ key: 'fluid:water', amount: 0.5, chance: 1 }])).toEqual([{ key: 'fluid:water', amount: 0.5, chance: 1 }]);
+    expect(recipeSlots([{ key: 'gregtech:gt.metatool.01@10', amount: 1 / 512, chance: 1 / 512 }])).toEqual([{ key: 'gregtech:gt.metatool.01@10', amount: 1, chance: 1 / 512 }]);
+  });
+  it('reads the machines, how busy, and the power each and in all', () => {
+    expect(recipeStats(step({ count: 1, utilization: 0.5 }))).toEqual([{ label: 'Machines', value: '×1' }, { label: 'Busy', value: '50%' }, { label: 'EU/t each', value: '16' }, { label: 'EU/t total', value: '16' }]);
+    expect(recipeStats(step({ count: 2, reused: { count: 0, where: [], others: [{ mteId: 2, name: 'x', tier: 2, count: 1, where: [], euPerTick: 24, runsPerSecondPerMachine: 1 }] } })).at(-1)).toEqual({ label: 'EU/t total', value: '56' });
+    expect(recipeStats(step({ pool: { id: 'pool:a', steps: ['a', 'b'] } }))[0]!.label).toBe('Shared machines');
+    expect(recipeStats(step({ handCraft: true }))).toEqual([{ label: 'Busy', value: '100%' }]);
+  });
+  it('says what overclocking did as chips', () => {
+    expect(ocChips(step({}))).toEqual([{ text: 'No overclock at LV', tone: 'now' }]);
+    expect(ocChips(mvStep)).toEqual([{ text: '1 overclock at MV', tone: 'now' }, { text: '2× faster', tone: 'note' }]);   // 100 t → 50 t
+    expect(ocChips({ ...mvStep, oc: { ...mvStep.oc!, heatOverclocks: 2 } }).at(-1)).toEqual({ text: '2 perfect from heat', tone: 'note' });
+    expect(ocChips({ ...mvStep, oc: { ...mvStep.oc!, perfect: true } }).at(-1)).toEqual({ text: 'perfect overclocks', tone: 'note' });
+    expect(ocChips(step({ handCraft: true }))).toEqual([]);
+    // nor on a crafting table or a furnace: they have no voltage tier to name, as they have no tier chip (plan ruling pseudo-tier-chip)
+    for (const mteId of [-1, -2]) expect(ocChips(step({ machine: { mteId, name: 'Furnace', tier: 0 }, euPerTick: 0, oc: undefined })), String(mteId)).toEqual([]);
+  });
+  it('fills the energy bar to the share of what the machine can draw', () => {
+    expect(powerShare(step({}))).toBe(0.5); expect(powerShare(step({ oc: undefined }))).toBe(0.5);   // 16 of LV's 32 V × 1 A
+    expect(powerShare(step({ handCraft: true }))).toBeNull(); expect(powerShare(step({ euPerTick: 0 }))).toBeNull();
   });
 });

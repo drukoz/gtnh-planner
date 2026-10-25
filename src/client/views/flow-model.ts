@@ -5,9 +5,10 @@
 // target, and supporting lines drawn open around their steps or collapsed into one box (a step that cannot avoid a
 // material on the avoid list badged, spec §3.3) — the ELK graph that lays them out (web-stack §7) and the
 // laid-out picture read back from it, what a focus lights (an item, a box or an arrow), what does not add up, the rate
-// and overclock texts (the shared formatter of fix spec §6.1), the word for each kind of import, and the settings
-// patches the panels send (fix spec §6.3), each with the whole new value of one setting. Base materials sit on the left
-// and the target on the right.
+// and overclock texts (the shared formatter of fix spec §6.1), the word for each kind of import, the settings patches
+// the panels send (fix spec §6.3), each with the whole new value of one setting, and the numbers of the step panel's
+// recipe card (Phase 2 spec §8: its slots and stack counts, its readouts, its overclock chips and its energy bar). Base
+// materials sit on the left and the target on the right.
 
 import type { ElkExtendedEdge, ElkNode, ElkPort } from 'elkjs/lib/elk-api.js';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
@@ -15,6 +16,7 @@ import { PSEUDO_IDS, PSEUDO_MACHINES, TIER_NAMES, V } from '../../shared/gt/tier
 import { joinNames } from '../../shared/layout/format.ts';
 import { indexPlan, issueText, type PlanIndex, type PlanIssue, type PlanIssueCode } from '../../shared/plan/balance.ts';
 import { settingsHash } from '../../shared/project/settings-hash.ts';
+import type { Product } from '../../shared/types/pack.ts';
 import { FREE_KEYS, type LeafClass, type Plan, type PlanFlow, type PlanSettings, type PlanStep, type PlanWarning } from '../../shared/types/plan.ts';
 import { formatDuration, formatNumber, formatPercent, formatRate } from '../format.ts';
 import { toggleList } from './settings-model.ts';
@@ -1269,4 +1271,101 @@ export function ocLines(step: PlanStep): string[] {
     `${n} ${n === 1 ? 'overclock' : 'overclocks'}${how} → ${step.euPerTick} EU/t × ${step.durationTicks} t`,
     `One machine: ${runsText(perMachine)} · needed: ${runsText(step.runsPerSecond)} → ${machinesText(step.count)}, ${formatPercent(step.utilization)} busy`,
   ];
+}
+
+/** Under 1 by more than this, an item's nominal amount a run is less than one item (a crop harvest's expected drop), not rounding. */
+const BELOW_ONE = 1e-9;
+/** A stack count's units, each 1,000 of the one before: an item's, and a fluid's (litres, buckets, thousands of buckets). */
+const ITEM_UNITS = ['', 'k', 'M'] as const;
+const FLUID_UNITS = ['L', 'B', 'kB', 'MB'] as const;
+
+/** One slot of the recipe card (Phase 2 spec §8.3): a good, what one run takes or makes of it when it comes, and how often it comes (1: every run). */
+export interface RecipeSlot { key: StuffKey; amount: number; chance: number }
+
+/**
+ * The slots of a run's inputs or outputs (Phase 2 spec §8.5): each product at its nominal amount, its expected amount over its chance; one a
+ * run never takes or makes left out. An item a run makes less than one of (a crop farm's harvest, add-on 17: 0.9 Sticky Resin) is one at
+ * that chance, as NEI draws a drop that does not always come (plan ruling farm-step-card); a fluid keeps its litres, and GT's nominal amounts
+ * are whole, so no GT slot changes.
+ */
+export function recipeSlots(products: readonly Product[]): RecipeSlot[] {
+  return products.filter((p) => p.amount > 0 && p.chance > 0).map((p) => {
+    const amount = p.chance < 1 ? p.amount / p.chance : p.amount;
+    return !isFluidKey(p.key) && amount < 1 - BELOW_ONE ? { key: p.key, amount: 1, chance: p.amount } : { key: p.key, amount, chance: p.chance };
+  });
+}
+
+/**
+ * The stack count a slot draws (Phase 2 spec §8.2), as Minecraft writes one: an item none for one, then its number to 999, then thousands
+ * (`1.5k`, `12k`); a fluid its litres to 999 (`144L`), then buckets (`1B`, `2.3B`, `12B`) and thousands of them (`1kB`). Past its first unit
+ * a figure keeps one decimal below 10 (`.0` dropped) and is whole above, and one that rounds to 1,000 of its unit is written in the next.
+ */
+export function stackText(key: StuffKey, amount: number): string {
+  if (!Number.isFinite(amount)) return '';
+  const fluid = isFluidKey(key);
+  const units = fluid ? FLUID_UNITS : ITEM_UNITS;
+  let value = fluid ? Math.max(1, Math.round(amount)) : Math.round(amount);
+  if (!fluid && value <= 1) return '';
+  let unit = 0;
+  while (unit < units.length - 1 && Math.round(value) >= 1000) {
+    value /= 1000;
+    unit++;
+  }
+  if (unit === 0) return `${value}${units[0]}`;
+  const tenths = Math.round(value * 10) / 10;
+  return `${tenths < 10 ? tenths : Math.round(value)}${units[unit]}`;
+}
+
+/** A readout of the recipe card (Phase 2 spec §8.1): its label and its value. */
+export interface RecipeStat { label: string; value: string }
+
+/**
+ * The recipe card's readouts (Phase 2 spec §8.1): its machines (`×5`; "Shared machines" for a sharing pool's), how busy they are, the power
+ * one draws and what they all draw, the owned machines of other tiers that run the step beside them included (`reused.others`, plan 12); a
+ * hand step, which has no machine, how busy only.
+ */
+export function recipeStats(step: PlanStep): RecipeStat[] {
+  const busy: RecipeStat = { label: 'Busy', value: formatPercent(step.utilization) };
+  if (step.handCraft) return [busy];
+  const others = (step.reused?.others ?? []).reduce((sum, o) => sum + o.count * o.euPerTick, 0);
+  return [
+    { label: step.pool === undefined ? 'Machines' : 'Shared machines', value: `×${step.count}` },
+    busy,
+    { label: 'EU/t each', value: formatNumber(step.euPerTick) },
+    { label: 'EU/t total', value: formatNumber(step.count * step.euPerTick + others) },
+  ];
+}
+
+/** An overclock chip of the recipe card (Phase 2 spec §8.1): what overclocking did (`now`, green) or a note on it (`note`, amber). */
+export interface OcChip { text: string; tone: 'now' | 'note' }
+
+/**
+ * What overclocking did, as chips (Phase 2 spec §8.1): "No overclock at LV", or "1 overclock at MV" and how much faster a run is for it ("2×
+ * faster": the recipe's ticks over the step's), then whether its overclocks were perfect, from an EBF's coil heat ("2 perfect from heat")
+ * or the machine's own ("perfect overclocks"). None by hand or on a crafting table or a furnace, which have no voltage tier to name (as
+ * they have no tier chip: plan ruling pseudo-tier-chip).
+ */
+export function ocChips(step: PlanStep): OcChip[] {
+  if (step.handCraft || PSEUDO_IDS.has(step.machine.mteId)) return [];
+  const tier = tierText(step.machine.tier);
+  const n = step.overclocks;
+  if (!(n > 0)) return [{ text: `No overclock at ${tier}`, tone: 'now' }];
+  const chips: OcChip[] = [{ text: `${n} ${n === 1 ? 'overclock' : 'overclocks'} at ${tier}`, tone: 'now' }];
+  const oc = step.oc;
+  if (oc === undefined) return chips;
+  const faster = oc.recipeDurationTicks / step.durationTicks;
+  if (Number.isFinite(faster) && faster > 1) chips.push({ text: `${formatNumber(faster)}× faster`, tone: 'note' });
+  if (oc.heatOverclocks > 0) chips.push({ text: `${oc.heatOverclocks} perfect from heat`, tone: 'note' });
+  else if (oc.perfect) chips.push({ text: 'perfect overclocks', tone: 'note' });
+  return chips;
+}
+
+/**
+ * How full the recipe card's energy bar is (Phase 2 spec §8.5): the step's EU/t over what one of its machines can draw, its voltage times its
+ * amps (without the overclock inputs, its tier's voltage at 1 A, as `ocLines` reads it), between 0 and 1; null by hand or at 0 EU/t.
+ */
+export function powerShare(step: PlanStep): number | null {
+  if (step.handCraft || !(step.euPerTick > 0)) return null;
+  const most = step.oc === undefined ? (V[step.machine.tier] ?? 0) : step.oc.machineVoltage * step.oc.machineAmps;
+  return most > 0 ? Math.min(1, step.euPerTick / most) : null;
 }
