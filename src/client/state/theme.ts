@@ -1,10 +1,11 @@
 // The look of the page (Phase 2 spec §4.1, §4.7; D2): Auto, Dark or Light, one choice for this browser, kept in localStorage under
 // `gtnh-planner:theme`. Auto is the default and puts no data-theme on <html>, so the stylesheet follows the OS by itself, with no JS;
 // Dark and Light set data-theme, which outranks the OS. The head script of index.html applies a stored Dark or Light before the app
-// runs, so a page never paints in the other look first, and startTheme takes over from there. The pipes-paused.ts pattern: a browser
-// that refuses storage keeps the choice for this page's lifetime, and so does one that can read its storage but not write it.
+// runs, so a page never paints in the other look first, and startTheme takes over from there. A browser that refuses storage keeps the
+// choice for this page's lifetime, and so does one that can read its storage but not write it (the one store of the per-browser settings,
+// browser-choice.ts: ledger ruling P2-R40).
 
-import { useSyncExternalStore } from 'react';
+import { createBrowserChoice } from './browser-choice.ts';
 import { prefersReducedMotion } from './motion.ts';
 
 export type ThemeChoice = 'auto' | 'dark' | 'light';
@@ -12,21 +13,27 @@ export const THEME_KEY = 'gtnh-planner:theme';
 /** The choices in the order the Theme button goes round them. */
 export const THEME_CHOICES: readonly ThemeChoice[] = ['auto', 'dark', 'light'];
 
-/** The choice made on this page when storage refused to keep it; null while storage keeps it (or nothing was chosen). */
-let pageValue: ThemeChoice | null = null;
-const listeners = new Set<() => void>();
-
 const isChoice = (value: unknown): value is ThemeChoice => THEME_CHOICES.some((choice) => choice === value);
+
+/**
+ * The choice is its own word in storage; a missing or unknown one is Auto. Once a choice is kept the look goes on the page, before the
+ * subscribers are told: it cross-fades in (§4.9) where the browser has View Transitions and the user has not asked for reduced motion, and
+ * switches at once otherwise (and where there is no document).
+ */
+const themeChoice = createBrowserChoice<ThemeChoice>({
+  key: THEME_KEY,
+  read: (stored) => (isChoice(stored) ? stored : 'auto'),
+  write: (choice) => choice,
+  onSet: (choice) => {
+    const doc: Partial<Pick<Document, 'startViewTransition'>> | undefined = globalThis.document;
+    if (doc?.startViewTransition !== undefined && !prefersReducedMotion()) doc.startViewTransition(() => applyTheme(choice));
+    else applyTheme(choice);
+  },
+});
 
 /** What this page chose when storage refused it, else what storage holds, else Auto (a missing or unknown value is Auto). */
 export function getThemeChoice(): ThemeChoice {
-  if (pageValue !== null) return pageValue;
-  try {
-    const stored = globalThis.localStorage?.getItem(THEME_KEY);
-    return isChoice(stored) ? stored : 'auto';
-  } catch {
-    return 'auto';   // storage is disabled or refused
-  }
+  return themeChoice.get();
 }
 
 /**
@@ -34,21 +41,7 @@ export function getThemeChoice(): ThemeChoice {
  * has View Transitions and the user has not asked for reduced motion, and switches at once otherwise (and where there is no document).
  */
 export function setThemeChoice(choice: ThemeChoice): void {
-  let kept = false;
-  try {
-    const storage = globalThis.localStorage;
-    if (storage !== undefined) {
-      storage.setItem(THEME_KEY, choice);
-      kept = true;
-    }
-  } catch {
-    // refused: kept for this page only
-  }
-  pageValue = kept ? null : choice;
-  const doc: Partial<Pick<Document, 'startViewTransition'>> | undefined = globalThis.document;
-  if (doc?.startViewTransition !== undefined && !prefersReducedMotion()) doc.startViewTransition(() => applyTheme(choice));
-  else applyTheme(choice);
-  for (const fn of [...listeners]) fn();
+  themeChoice.set(choice);
 }
 
 /** The choice after `choice` in the button's round: Auto → Dark → Light → Auto. */
@@ -68,20 +61,12 @@ export function applyTheme(
 
 /** Calls `fn` when the choice changes, here or in another tab of this browser; returns how to stop. */
 export function subscribeThemeChoice(fn: () => void): () => void {
-  const onStorage = (e: StorageEvent): void => {
-    if (e.key === null || e.key === THEME_KEY) fn();
-  };
-  listeners.add(fn);
-  globalThis.addEventListener?.('storage', onStorage);
-  return () => {
-    listeners.delete(fn);
-    globalThis.removeEventListener?.('storage', onStorage);
-  };
+  return themeChoice.subscribe(fn);
 }
 
 /** The choice, re-rendering when it changes; the server snapshot is the same, so pages rendered to a string work too. */
 export function useThemeChoice(): ThemeChoice {
-  return useSyncExternalStore(subscribeThemeChoice, getThemeChoice, getThemeChoice);
+  return themeChoice.use();
 }
 
 /**

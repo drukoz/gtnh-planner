@@ -1,26 +1,15 @@
 // The look of the page (Phase 2 spec §4, D2): Auto, Dark or Light, one choice for this browser kept in localStorage under
 // `gtnh-planner:theme`. Auto is the default and puts no data-theme on <html>, so the stylesheet follows the OS by itself; Dark and Light
 // set data-theme, which outranks the OS. The head script of index.html applies a stored Dark or Light before the app runs. These cases pin
-// the store (the pipes-paused.test.tsx pattern), the button and the head script; theme.spec.ts drives them in a browser.
+// how the choice is stored, the button and the head script; theme.spec.ts drives them in a browser. The store's storage cases (refused or
+// unwritable storage, its subscribers and storage events) are browser-choice.test.tsx's, asserted there for the look (ledger ruling P2-R40).
 
 import { readFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { ThemeButton } from '../../src/client/components/ThemeButton.tsx';
-import {
-  THEME_CHOICES, THEME_KEY, applyTheme, getThemeChoice, nextThemeChoice, setThemeChoice, subscribeThemeChoice,
-} from '../../src/client/state/theme.ts';
-
-/** A localStorage that keeps what it is given in `store`. */
-function keepIn(store: Map<string, string>): Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> {
-  return {
-    getItem: (key) => store.get(key) ?? null,
-    setItem: (key, value) => { store.set(key, value); },
-    removeItem: (key) => { store.delete(key); },
-  };
-}
-
-const refuse = (): never => { throw new Error('storage is disabled'); };
+import { THEME_CHOICES, THEME_KEY, applyTheme, getThemeChoice, nextThemeChoice, setThemeChoice } from '../../src/client/state/theme.ts';
+import { keepIn } from './storage-stub.ts';
 
 // A choice that storage keeps sets the module's page value back to null, which `vi.unstubAllGlobals()` alone would not: a test that
 // left a page value behind would decide the next one's reads.
@@ -37,21 +26,6 @@ describe('the look of the page', () => {
     expect(getThemeChoice()).toBe('auto');
     for (const choice of ['dark', 'light', 'auto'] as const) { setThemeChoice(choice); expect([store.get(THEME_KEY), getThemeChoice()]).toEqual([choice, choice]); }
     store.set(THEME_KEY, 'sepia'); expect(getThemeChoice()).toBe('auto');
-  });
-
-  it('keeps the choice for the page when storage refuses, or can be read but not written', () => {   // pipes-paused.test.tsx:56-72
-    vi.stubGlobal('localStorage', { getItem: refuse, setItem: refuse, removeItem: refuse });
-    expect(getThemeChoice()).toBe('auto'); expect(() => setThemeChoice('dark')).not.toThrow(); expect(getThemeChoice()).toBe('dark');
-    vi.stubGlobal('localStorage', { getItem: () => 'light', setItem: refuse, removeItem: refuse });   // a stale value it can still read
-    setThemeChoice('auto'); expect(getThemeChoice()).toBe('auto'); setThemeChoice('dark'); expect(getThemeChoice()).toBe('dark');
-  });
-
-  it('tells subscribers, re-reads on a storage event of its key or of a cleared storage, and stops when left', () => {
-    const heard = vi.fn(); const storage: Array<(e: { key: string | null }) => void> = [];
-    vi.stubGlobal('addEventListener', (type: string, fn: never) => { if (type === 'storage') storage.push(fn); }); vi.stubGlobal('removeEventListener', () => {});
-    const leave = subscribeThemeChoice(heard); setThemeChoice('dark'); expect(heard).toHaveBeenCalledTimes(1);
-    storage[0]!({ key: THEME_KEY }); storage[0]!({ key: null }); storage[0]!({ key: 'other' }); expect(heard).toHaveBeenCalledTimes(3);
-    leave(); setThemeChoice('light'); expect(heard).toHaveBeenCalledTimes(3);
   });
 
   it('cycles Auto → Dark → Light → Auto', () => expect(THEME_CHOICES.map(nextThemeChoice)).toEqual(['dark', 'light', 'auto']));

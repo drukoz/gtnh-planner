@@ -1,24 +1,15 @@
 // The Pause pipes setting (ruling R31, WCAG 2.2.2 Pause, Stop, Hide; design spec §7 "Motion budget"): the pipes of the Flow and
 // Connections diagrams move for as long as a diagram is shown, so the page offers a way to stop them. One value for this browser, kept in
 // localStorage under `gtnh-planner:pipes-paused` and shared by both toolbars; a browser that refuses storage keeps it for the page.
-// pipes.spec.ts presses the button in a browser; these cases pin the store and the button.
+// pipes.spec.ts presses the button in a browser; these cases pin how the setting is stored and the button. The store's storage cases (refused
+// storage, storage read but not written, its subscribers) are browser-choice.test.tsx's, asserted there for this setting (ledger ruling P2-R40).
 
 import { isValidElement, type ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { PipesButton } from '../../src/client/components/PipesButton.tsx';
-import { PIPES_PAUSED_KEY, getPipesPaused, setPipesPaused, subscribePipesPaused } from '../../src/client/state/pipes-paused.ts';
-
-/** A localStorage that keeps what it is given in `store`. */
-function keepIn(store: Map<string, string>): Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> {
-  return {
-    getItem: (key) => store.get(key) ?? null,
-    setItem: (key, value) => { store.set(key, value); },
-    removeItem: (key) => { store.delete(key); },
-  };
-}
-
-const refuse = (): never => { throw new Error('storage is disabled'); };
+import { PIPES_PAUSED_KEY, getPipesPaused, setPipesPaused } from '../../src/client/state/pipes-paused.ts';
+import { keepIn } from './storage-stub.ts';
 
 /** What `PipesButton` renders, unrendered, so that its props can be read. */
 function button(paused: boolean): ReactElement<Record<string, unknown>> {
@@ -51,35 +42,6 @@ describe('the Pause pipes setting', () => {
     // and anything but the pause's own value is no pause
     store.set(PIPES_PAUSED_KEY, 'yes');
     expect(getPipesPaused()).toBe(false);
-  });
-
-  it('survives a browser that refuses storage, and keeps the setting for the page', () => {
-    vi.stubGlobal('localStorage', { getItem: refuse, setItem: refuse, removeItem: refuse });
-    expect(getPipesPaused()).toBe(false);
-    expect(() => setPipesPaused(true)).not.toThrow();
-    expect(getPipesPaused()).toBe(true);
-    setPipesPaused(false);
-    expect(getPipesPaused()).toBe(false);
-  });
-
-  it('keeps the setting for the page in a browser that can read its storage but refuses to write it', () => {
-    // a private window of some browsers: the stale value it can still read must not win over the page's own
-    vi.stubGlobal('localStorage', { getItem: () => '0', setItem: refuse, removeItem: refuse });
-    setPipesPaused(true);
-    expect(getPipesPaused()).toBe(true);
-    setPipesPaused(false);
-    expect(getPipesPaused()).toBe(false);
-  });
-
-  it('tells every view that subscribed when it changes, and no longer once it has left', () => {
-    vi.stubGlobal('localStorage', keepIn(new Map()));
-    const heard = vi.fn();
-    const leave = subscribePipesPaused(heard);
-    setPipesPaused(true);
-    expect(heard).toHaveBeenCalledTimes(1);
-    leave();
-    setPipesPaused(false);
-    expect(heard).toHaveBeenCalledTimes(1);
   });
 });
 

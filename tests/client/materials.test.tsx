@@ -14,6 +14,7 @@ import { getFlowFocus, setFlowFocus } from '../../src/client/state/flow-focus.ts
 import { MATERIALS_VIEW_KEY, getMaterialsView, setMaterialsView } from '../../src/client/state/materials-view.ts';
 import { indexPlan } from '../../src/shared/plan/balance.ts';
 import type { Plan, PlanStep } from '../../src/shared/types/plan.ts';
+import { keepIn } from './storage-stub.ts';
 
 /** What a reader sees: the markup without its tags and comments, entities decoded. */
 function text(html: string): string {
@@ -26,15 +27,6 @@ function findAll(node: ReactNode, match: (e: ReactElement<Record<string, unknown
   if (Array.isArray(node)) return node.flatMap((n: ReactNode) => findAll(n, match));
   if (!isValidElement<Record<string, unknown>>(node)) return [];
   return [...(match(node) ? [node] : []), ...findAll(node.props.children as ReactNode, match)];
-}
-
-/** A localStorage that keeps what it is given in `store`. */
-function keepIn(store: Map<string, string>): Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> {
-  return {
-    getItem: (key) => store.get(key) ?? null,
-    setItem: (key, value) => { store.set(key, value); },
-    removeItem: (key) => { store.delete(key); },
-  };
 }
 
 // The Grid / List choice is a module's page value as well as storage's (state/materials-view.ts): a case that left Grid behind would draw
