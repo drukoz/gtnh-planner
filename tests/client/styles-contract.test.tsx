@@ -284,6 +284,38 @@ function selectorList(prelude: string): string[] {
   return out;
 }
 
+/** The index of the `)` that closes the parenthesis opened just before `from`; nested parentheses and quoted text are passed over. */
+function closing(text: string, from: number): number {
+  let depth = 1;
+  let quote = '';
+  for (let i = from; i < text.length; i++) {
+    const c = text.charAt(i);
+    if (quote !== '') {
+      if (c === quote) quote = '';
+    } else if (c === '"' || c === "'") quote = c;
+    else if (c === '(') depth++;
+    else if (c === ')' && --depth === 0) return i;
+  }
+  return text.length;
+}
+
+/**
+ * The selectors of a selector list (`selectorList`) and, at every depth, the selectors of each `:where(…)` and `:is(…)` argument list in them
+ * (ruling R45): `:where(a, summary):focus-visible` gives itself, `a` and `summary`.
+ */
+function selectorsDeep(prelude: string): string[] {
+  return selectorList(prelude).flatMap((selector) => {
+    const found = [selector];
+    const opener = /:(?:where|is)\(/gi;
+    for (let at = opener.exec(selector); at !== null; at = opener.exec(selector)) {
+      const end = closing(selector, opener.lastIndex);
+      found.push(...selectorsDeep(selector.slice(opener.lastIndex, end)));
+      opener.lastIndex = end + 1;
+    }
+    return found;
+  });
+}
+
 /** Where in the source the first rule for `selector` is; -1 when there is none. */
 function position(selector: string): number {
   const wanted = selector.replace(/\s+/g, ' ').trim();
@@ -299,6 +331,12 @@ const TICK = ':where(input[type=checkbox], input[type=radio])';
 const FIELD = 'input:not([type=checkbox], [type=radio], [type=range], [type=file])';
 const FIELDS = `:where(${FIELD}, textarea, select)`;
 const SUMMARY = 'details.settings-section > summary, details.disclosure > summary';
+/**
+ * The focus ring's colour rule (ruling R12): a borderless focusable has no dark edge of its own for the yellow ring to touch, so its ring takes
+ * the focus ink of its surface. Ruling R13: a summary and a tick have no dark edge either; R30: nor has a slider; R33: nor a file input. It is
+ * the one rule that names `summary` inside a `:where(…)`, a ring and nothing else, so the summary guard exempts it by this name (ruling R45).
+ */
+const RING_RULE = ':where(a, button.link, summary, input[type=checkbox], input[type=radio], input[type=range], input[type=file]):focus-visible';
 const BUTTON_FACE = 'background-color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out)';
 
 describe('the Machine GUI controls', () => {
@@ -469,10 +507,17 @@ describe('the Machine GUI controls', () => {
     ]);
     expect(declared(SUMMARY.replace(/summary/g, 'summary::before'), 'clip-path'), 'a pixel caret').toMatch(/^polygon\(/);
     // a global `summary` rule would also hit Materials' two inline disclosures and the thousands of storage rows. A selector list is cut
-    // at its top-level commas only (ruling R40, in place of R14's exemption of every `:focus-visible` rule): the focus ring's colour rule
-    // names `summary` inside `:where(…)` (ruling R13), one selector that recolours a ring and dresses nothing
-    expect(blocks.filter((b) => selectorList(b.prelude).some((s) => /^summary\b/.test(s))).map((b) => b.prelude)).toEqual([]);
+    // at its top-level commas only (ruling R40, in place of R14's exemption of every `:focus-visible` rule), and the guard reads the
+    // argument lists of `:where(…)` and `:is(…)` too, at any depth, where a bare `summary` once slipped past it (ruling R45). The one rule
+    // that names `summary` there is the focus ring's colour rule (ruling R13), one selector that recolours a ring and dresses nothing: it
+    // is exempted by its name, from the arguments only
+    const named = (b: Block): string[] => (b.prelude === RING_RULE ? selectorList(b.prelude) : selectorsDeep(b.prelude));
+    expect(blocks.filter((b) => named(b).some((s) => /^summary\b/.test(s))).map((b) => b.prelude)).toEqual([]);
     expect(selectorList(':where(a, button.link, summary):focus-visible, summary:hover')).toEqual([':where(a, button.link, summary):focus-visible', 'summary:hover']);
+    expect(selectorsDeep(':where(a, summary):focus-visible')).toContain('summary');
+    expect(selectorsDeep(':is(.x, summary)')).toContain('summary');
+    // the deep reading keeps every top-level selector, so it still sees what the cut at the commas sees
+    expect(selectorsDeep(':where(a, summary):focus-visible, summary:hover')).toEqual([':where(a, summary):focus-visible', 'a', 'summary', 'summary:hover']);
   });
 
   it('shows the keyboard focus as a 3px yellow ring that touches the control', () => {
@@ -486,12 +531,11 @@ describe('the Machine GUI controls', () => {
     const panels = blocks.find((b) => !b.nested && b.prelude.split(', ').includes('.tab-panel') && b.inner.includes('--ink:'));
     if (panels === undefined) throw new Error('styles.css has no rule that sets the panel ink');
     expect(declarations(panels.inner).filter(([name]) => name === '--ink-focus').map(([, value]) => value)).toEqual(['var(--panel-focus)']);
-    const link = ':where(a, button.link, summary, input[type=checkbox], input[type=radio], input[type=range], input[type=file]):focus-visible';   // ruling R13: a summary and a tick have no dark edge either; R30: nor has a slider; R33: nor a file input
-    expect(declared(link, 'outline-color')).toBe('var(--ink-focus)');
+    expect(declared(RING_RULE, 'outline-color')).toBe('var(--ink-focus)');
     // only the colour: the width and the offset stay the base ring's
-    expect(declarations(ruleBody(link)).map(([name]) => name)).toEqual(['outline-color']);
+    expect(declarations(ruleBody(RING_RULE)).map(([name]) => name)).toEqual(['outline-color']);
     // it has the base ring's specificity (0,1,0), so it is its place after the base ring that lets it recolour it
-    expect(position(link)).toBeGreaterThan(position(':focus-visible'));
+    expect(position(RING_RULE)).toBeGreaterThan(position(':focus-visible'));
   });
 
   it('draws badges and chips as dark rectangles with pixel text', () => {
@@ -1028,6 +1072,13 @@ const CARETS = 'button.mat-toggle::before, .mat-have summary::before, .mat-neede
 const CARETS_DOWN = "button.mat-toggle[aria-expanded='true']::before, .mat-have[open] summary::before, .mat-needed[open] summary::before";
 const INLINE_SUMMARY = '.mat-have summary, .mat-needed summary';
 const INLINE_CARET = '.mat-have summary::before, .mat-needed summary::before';
+/** Phase 2 Task 6b (spec §3.3, ruling R16): the two inline disclosures, which fold as a settings section does. */
+const MAT_DISCLOSURES = 'details.mat-have, details.mat-needed';
+/** The rules of that fold: one for the pair, then a rule of its own for each content box and for each open one (R28: no pseudo-element in a list). */
+const MAT_FOLD_RULES = [
+  MAT_DISCLOSURES, 'details.mat-have::details-content', 'details.mat-needed::details-content',
+  'details.mat-have[open]::details-content', 'details.mat-needed[open]::details-content',
+];
 const DARK_CHIP = '.badge, .chip';
 /** The rules of this task: none may read an alias of the old palette any more. */
 const SLOT_AND_MATERIALS_RULES = [
@@ -1173,6 +1224,31 @@ describe('the Machine GUI Materials & steps tab', () => {
     for (const property of ['background', 'border', 'box-shadow', 'min-height', 'display']) {
       expect(declared(INLINE_SUMMARY, property), `${INLINE_SUMMARY} { ${property} }`).toBeUndefined();
     }
+  });
+
+  it('opens and closes the Materials disclosures with an animated height', () => {
+    // a Stock or Needed disclosure folds as a settings section does (ruling R16, which spec §3.3 extends to these two): `interpolate-size`
+    // lets the content's block-size go between 0 and auto, its transition on content-visibility keeps it painted while it closes, and the
+    // content is a block formatting context clipped on the block axis, with the section's 4 px clip margin
+    expectDeclared([[MAT_DISCLOSURES, 'interpolate-size', 'allow-keywords']]);
+    const fold = 'block-size var(--dur-base) var(--ease-out), content-visibility var(--dur-base) var(--ease-out) allow-discrete';
+    for (const details of ['details.mat-have', 'details.mat-needed']) {
+      const content = `${details}::details-content`;
+      expectDeclared([
+        [content, 'display', 'flow-root'], [content, 'block-size', '0'], [content, 'overflow-y', 'clip'], [content, 'overflow-clip-margin', '4px'],
+        [content, 'transition', fold], [`${details}[open]::details-content`, 'block-size', 'auto'],
+      ]);
+      // the settings section's own transition
+      expect(declared(content, 'transition'), content).toBe(declared(SECTION_CONTENT, 'transition'));
+    }
+    // a rule of its own for each content box, never a list: the minifier once dropped a pseudo-element's half of one (R28)
+    expect(position('details.mat-have::details-content, details.mat-needed::details-content')).toBe(-1);
+    expect(position('details.mat-have[open]::details-content, details.mat-needed[open]::details-content')).toBe(-1);
+    // the summary stays the inline text it was: its rule is unchanged
+    expect(declarations(ruleBody(INLINE_SUMMARY))).toEqual([['cursor', 'pointer'], ['list-style', 'none']]);
+    // Phase 1's Task 5 minor: a row's tick and the rest of its line sit at the top of the line, so a disclosure that opens grows the row
+    // downward and the tick stays level with the icon (centred, it dropped to the middle of the taller line)
+    expectDeclared([['.mat-row > .tick', 'align-items', 'flex-start']]);
   });
 
   it('draws what unlocks a row as an amber chat box, the step numbers in VT323, and a pin as a small button', () => {
@@ -2266,7 +2342,11 @@ const FORCED = '@media (forced-colors: active)';
 /** The system colours of CSS Color 4: what a theme sets and a forced-colours page may still name. */
 const SYSTEM_COLOUR = /^(Canvas|CanvasText|LinkText|VisitedText|ActiveText|ButtonFace|ButtonText|ButtonBorder|Field|FieldText|Highlight|HighlightText|SelectedItem|SelectedItemText|Mark|MarkText|GrayText|AccentColor|AccentColorText)$/;
 const FAILED_FILLS = [".scan-row[data-state='failed'] progress::-webkit-progress-value", ".scan-row[data-state='failed'] progress::-moz-progress-bar"];
-const PICKED_CUES = `${ACTIVE_HIT}, ${PICKED_ROW}`;
+/**
+ * The cues of the highlighted search hit and the picked map row. The row is a button that takes the focus, and its cue, an outline, replaced
+ * the focus ring, so a focused picked row looked like any other picked row: the cue keeps off it while it shows the ring (ruling R42).
+ */
+const PICKED_CUES = `${ACTIVE_HIT}, ${PICKED_ROW}:not(:focus-visible)`;
 
 /** The one forced-colours block, and the rules inside it. */
 function forcedBlock(): { block: Block; rules: Block[] } {
@@ -2309,6 +2389,7 @@ describe('the Machine GUI in forced colours', () => {
 
   it('marks the selected tab, the highlighted search hit and the picked map row with cues the theme keeps', () => {
     expect(inQuery(FORCED, SELECTED)).toEqual([['text-decoration', 'underline']]);
+    // the picked map row's cue gives way to the focus ring, which it would replace (R42)
     expect(inQuery(FORCED, PICKED_CUES)).toEqual([['outline', '2px solid Highlight'], ['outline-offset', '-2px']]);
   });
 
@@ -2528,6 +2609,7 @@ const PHASE2_RULES: string[] = [
   '.flow-side',                                                                      // Task 5b: the panel's wrapper, slid in once (spec §8.6)
   '.flow-canvas:focus', '.flow-canvas:focus-visible',                                // Task 5b fix round 1: the canvas's focus (P2-R36)
   ...GRID_RULES,                                                                     // Task 6a: the inventory grid (spec §9.3)
+  ...MAT_FOLD_RULES,                                                                 // Task 6b: the Materials disclosures fold (spec §3.3, R16)
 ];
 /** The colour literals a Phase 2 rule may write: each is the same in both looks (spec §4.4). */
 const SAME_IN_BOTH = ['#ffffff', '#000000', '#aaaaaa', '#100010', '#ffff55', 'rgb(0 0 0 / 0.4)'];
