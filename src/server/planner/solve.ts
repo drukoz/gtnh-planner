@@ -600,19 +600,20 @@ export function firstBalanced<T extends { x: readonly number[] }>(stages: readon
 /**
  * The source columns, never part of a loop: recipes that consume nothing (rock breakers, pumps, ponds, farms), and
  * supply recipes (`LpRecipe.supply`, fix spec R2) such as the compressor that fills with air the cells a canner empties,
- * so a line that runs on free inputs alone (Nitrogen from air) keeps them.
+ * so a line that runs on free inputs alone (Nitrogen from air) keeps them, and add-on 17's synthetic farm recipes
+ * (`LpRecipe.farm`), which take water or soil but are no loop.
  */
 function sourceColumns(lp: MainLp): Set<number> {
   const sources = new Set<number>();
   lp.recipes.forEach((r, j) => {
-    if (r.supply === true || r.coeffs.every(([, c]) => c >= 0)) sources.add(j);
+    if (r.supply === true || r.farm === true || r.coeffs.every(([, c]) => c >= 0)) sources.add(j);
   });
   return sources;
 }
 
 /**
  * The loop guard. A line that needs no raw material at all either runs on sources (`sourceColumns`: recipes that consume
- * nothing and supply recipes, and the goods made from them) or on a loop in the data that makes matter from nothing
+ * nothing, supply and farm recipes, and the goods made from them) or on a loop in the data that makes matter from nothing
  * (x → 2 y, y → x). It is a loop when the demand can still be met with every purchase and every source fixed to 0; then
  * the loop is the least-runs steady state that, again without purchases or sources and with no demand, leaves any
  * surplus at all: only the loop's own recipes, not the recipes that turn its output into the target, nor recipes that

@@ -302,6 +302,37 @@ describe('loop guard and blockers', () => {
     expect(Object.fromEntries(s.runs)).toEqual({ breaker: 1 });
     expect(s.warnings).toEqual([]);
   });
+  it('takes a farm recipe for a source, not a loop (add-on 12 x 17 integration, F1)', async () => {
+    // A Crop Manager (`LpRecipe.farm`) takes water, which the line can also get back from the farm's wood (on real data a
+    // centrifuge, methane, hydrogen and distilled water): with the farm a source, as a pump is, the line runs the farm route
+    // at no raw material; the guard took the cycle for a data loop and banned the farm, the water chain and the heater.
+    const step = (id: string, coeffs: Array<[string, number]>, more: Partial<LpRecipe> = {}): LpRecipe => ({
+      id, kind: 'recipe', mapId: 'gt.recipe.macerator', euPerRun: 0, nonConsumed: [], needsCleanroom: false,
+      main: coeffs.find(([, c]) => c > 0)?.[0], coeffs: [...coeffs].sort(([a], [b]) => (a < b ? -1 : 1)), ...more,
+    });
+    const good = (key: string, buyable: boolean, cost: number, leafClass: LeafDecision['leafClass']): [string, GoodInfo] =>
+      [key, { key, buyable, cost, leafClass, virtual: false }];
+    const graph: CandidateGraph = {
+      targets: ['t@0'],
+      recipes: [
+        step('dry', [['wood@0', -1], ['fluid:water', 200]]),
+        step('farm', [['fluid:water', -100], ['wood@0', 1]], { farm: true }),
+        step('from-wood', [['wood@0', -10], ['t@0', 1]]),
+        step('heat', [['fluid:water', -6], ['steam@0', 960]]),
+        step('honest', [['raw@0', -1], ['steam@0', -1000], ['t@0', 1]]),
+        step('pump', [['fluid:water', 1000]], { supply: true }),
+      ],
+      goods: new Map([good('fluid:water', true, 0, 'free'), good('raw@0', true, 1, 'direct'), good('wood@0', false, 0, null),
+        good('t@0', false, 0, null), good('steam@0', false, 0, null)]),
+      blocked: new Map(), warnings: [],
+    };
+    const s = await solveLine(graph, one('t@0'));
+    expect(s.status).toBe('ok');
+    expect(s.banned ?? []).toEqual([]);
+    expect(s.warnings.map((w) => w.code)).not.toContain('free-loop');
+    expect(s.runs.has('farm')).toBe(true);
+    expect(s.rawCost).toBe(0);
+  });
   it('names what blocks a target only a loop makes', async () => {
     const s = await solveLine(graphFor(packFromSpec({ machines, recipes: loop() }), 'y@0', 1, rawOnly), one('y@0'));
     expect(s.status).toBe('infeasible');
