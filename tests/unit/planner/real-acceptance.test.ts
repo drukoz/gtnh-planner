@@ -12,7 +12,7 @@
 // plan 09's objective (the aluminium line's one blast furnace step, the least raw material at 0 %) read the same
 // settings with build cost ignored; real-build-cost.test.ts plans them with build cost counted. Plan times keep the
 // bounds fix wave 3 (E) measured on a quiet host: BUILD_COST_PLAN_SECONDS with build cost counted at a step charge,
-// COLD_PRICES_PLAN_SECONDS at 0 % or with build cost ignored.
+// COLD_PRICES_PLAN_SECONDS (re-timed by 12 x 17's A4 the same way) at 0 % or with build cost ignored.
 
 import { beforeAll, describe, expect, it } from 'vitest';
 import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
@@ -124,10 +124,13 @@ const BUILD_COST_PLAN_SECONDS = 13;
  * […] gets the OQ1 (A) bound the same way as the build-cost plans: the next whole second above 1.25 x the slowest
  * quiet-host median of Step 1, measured as the first plan of its tier in a whole-file run"). Each is timed so: 2 Good
  * Electronic Circuits a minute at HV with build cost ignored in this file's runs (its first HV plan), the other three
- * run alone. It stays at the 11 s set on 2026-10-24 until the integration's A4 (its Task 12) times them again: since
- * 12 x 17 F7b the Calcite case plans another line (Acetone), which that measure never timed.
+ * run alone. Re-timed by the integration's A4 (12 x 17 Task 12; Task 9 ruling A: since 12 x 17 F7b the Calcite case
+ * plans another line, Acetone, which the 11 s of 2026-10-24 never timed), the median of three on 2026-10-25, each run
+ * started at a 1-minute load under 4, with farms on as 12 x 17 F2 judges plan times: the Good Electronic Circuits 6.62 s
+ * farms on, 3.58 s farms off; alone, aluminium 3.93 s, the Advanced Circuit 5.85 s, the Acetone case 3.60 s farms on and
+ * 1.20 s farms off. The slowest, the Good Electronic Circuits farms on: 1.25 × 6.62 = 8.28.
  */
-const COLD_PRICES_PLAN_SECONDS = 11;
+const COLD_PRICES_PLAN_SECONDS = 9;
 /**
  * Step caps re-measured at the 2 % default step charge with supporting lines (ruling P14; the old caps came from plans of
  * the old rules, fix spec §2's from its 5 % prototype without supporting lines): measured + 5.
