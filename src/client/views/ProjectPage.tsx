@@ -373,15 +373,10 @@ export function ProjectPage(props: { id: string }): ReactElement {
   // asks for. It decides once, whatever happens to the project after: the reader closes the drawer, and nothing opens it again.
   const ready = project !== null && me !== '';
   const autoOpenDecided = useRef(false);
-  /** The page opened the drawer by itself: as it opens it takes back the toasts the page came with ("Created"), to show once it closes. */
-  const openedByPage = useRef(false);
   useEffect(() => {
     if (!ready || autoOpenDecided.current) return;
     autoOpenDecided.current = true;
-    if (project?.settings.target === null && matchMedia(NARROW).matches) {
-      openedByPage.current = true;
-      openSettings('search');
-    }
+    if (project?.settings.target === null && matchMedia(NARROW).matches) openSettings('search');
   }, [ready]);
   /** The plan banner's "Pick something to make": the drawer opens into the item search on a narrow window; beside the views the search takes the focus. */
   const pickTarget = (): void => {
@@ -413,18 +408,18 @@ export function ProjectPage(props: { id: string }): ReactElement {
   }, [settingsOpen]);
   // What lies outside this page while the drawer is open: the top bar, which the App draws above it, and the App's toasts after it (Phase 2
   // spec §12.3: Tab would otherwise leave the drawer for a toast's Undo) go inert with the rest of the page behind the drawer, at every
-  // opening, the one it makes by itself included. The toasts wait it out (ledger ruling P2-R56): their time stops, one shown meanwhile is
-  // drawn, so heard, only once the drawer closes, and the drawer that opens by itself takes back the ones its page came with. The drawer
-  // closes when the window grows past the width it is a drawer at (the stylesheet's query). It looks once more as it starts to listen: the
-  // page's own opening (the auto-open, in an effect) is a task or two older than this effect, and a window that grew in between fired its
-  // change before there was a listener. In a window still narrow that look does nothing; in one that has grown it closes the drawer at once,
-  // the cleanup giving the top bar and the toasts back, and, as for any widening, leaves the focus where it is (on the search, which sits
-  // beside the views then), not on a Settings button that is not drawn.
+  // opening, the one it makes by itself included. The toasts wait it out (ledger rulings P2-R56, P2-R56a): their time stops, one drawn
+  // already stays drawn behind it ("Created", which a project with no target brings to the drawer it opens by itself), and one shown
+  // meanwhile is drawn, so heard, only once the drawer closes. The drawer closes when the window grows past the width it is a drawer at (the
+  // stylesheet's query). It looks once more as it starts to listen: the page's own opening (the auto-open, in an effect) is a task or two
+  // older than this effect, and a window that grew in between fired its change before there was a listener. In a window still narrow that
+  // look does nothing; in one that has grown it closes the drawer at once, the cleanup giving the top bar and the toasts back, and, as for
+  // any widening, leaves the focus where it is (on the search, which sits beside the views then), not on a Settings button that is not drawn.
   useEffect(() => {
     if (!settingsOpen) return;
     const outside = ['.top-nav', '.toasts'].flatMap((selector) => document.querySelector<HTMLElement>(selector) ?? []);
     for (const layer of outside) layer.inert = true;
-    setToastsInert(true, openedByPage.current);
+    setToastsInert(true);
     const narrow = matchMedia(NARROW);
     const onWidth = (): void => {
       if (!narrow.matches) setSettingsOpen(false);
@@ -435,7 +430,6 @@ export function ProjectPage(props: { id: string }): ReactElement {
       narrow.removeEventListener('change', onWidth);
       for (const layer of outside) layer.inert = false;
       setToastsInert(false);
-      openedByPage.current = false;
     };
   }, [settingsOpen]);
   // The Compare card (add-on 17), once the project makes something: its "Compare modes" button is in the head and the card it opens is

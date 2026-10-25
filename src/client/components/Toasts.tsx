@@ -5,8 +5,10 @@
 // settings drawer is open the project page makes the region inert with the top bar, so the drawer stays a layer of its own (ruling R36), and
 // the store keeps any toast shown meanwhile waiting until it closes (ledger ruling P2-R56).
 //
-// Undo and Dismiss move the focus on before their toast goes from under it (ledger ruling P2-R57), so the keyboard never falls to the page's
-// body: back to where the focus came into the region from, else to the same button of the next toast still showing, else to the page's main.
+// Undo and Dismiss pressed from the keyboard move the focus on before their toast goes from under it (ledger ruling P2-R57), so the keyboard
+// never falls to the page's body: back to where the focus came into the region from, else to the same button of the next toast still
+// showing, else to the page's main. A pointer's press moves nothing: Chromium focuses the button it presses, and moving that focus on would
+// put it in the toast beside, which would then hold it and stop its time (fix round 2, M6).
 
 import { useEffect, type FocusEvent, type ReactElement } from 'react';
 import { actOnToast, dismissToast, pauseToast, resumeToast, toasts, useToasts, type Toast, type ToastStore } from '../state/toasts.ts';
@@ -26,9 +28,9 @@ const TYPED = new Set(['text', 'search', 'number', 'email', 'url', 'tel', 'passw
 const takesTyping = (el: Element): boolean =>
   el instanceof HTMLTextAreaElement || (el instanceof HTMLInputElement && TYPED.has(el.type)) || (el instanceof HTMLElement && el.isContentEditable);
 
-/** Focuses `el` and says whether it took the focus (an element hidden, disabled or gone does not). */
+/** Focuses `el`, an HTML or an SVG element (a Flow box's head), and says whether it took the focus (one hidden, disabled or gone does not). */
 function focusOn(el: Element | null, options?: FocusOptions): boolean {
-  if (!(el instanceof HTMLElement)) return false;
+  if (!(el instanceof HTMLElement || el instanceof SVGElement)) return false;
   el.focus(options);
   return document.activeElement === el;
 }
@@ -92,7 +94,7 @@ export function ToastList(props: { toasts: readonly Toast[] }): ReactElement {
               <button
                 type="button" className="small primary"
                 onClick={(e) => {
-                  moveFocusOff(e.currentTarget, true);
+                  if (e.detail === 0) moveFocusOff(e.currentTarget, true);   // the keyboard's press (Enter, Space) has no click count
                   actOnToast(t.id);
                 }}
               >
@@ -102,7 +104,7 @@ export function ToastList(props: { toasts: readonly Toast[] }): ReactElement {
             <button
               type="button" className="small" aria-label="Dismiss"
               onClick={(e) => {
-                moveFocusOff(e.currentTarget, false);
+                if (e.detail === 0) moveFocusOff(e.currentTarget, false);
                 dismissToast(t.id);
               }}
             >

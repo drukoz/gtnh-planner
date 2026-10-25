@@ -3,14 +3,14 @@
 // can be taken back: here, a rename. Under reduced motion a toast appears with no entrance. While the settings drawer is open the region is
 // inert, out of the keyboard's and the pointer's reach (the drawer is a layer of its own, ruling R36), whether the Settings button opened it
 // or it opened by itself (the Make-picker fix: below 900 px a project with no target opens it); so the narrow cases that rename give their
-// project a target, without which the drawer opens by itself and the head, the name with it, is inert. A toast that comes while the drawer is
-// open waits behind it, unseen and unheard, and shows when it closes; the drawer that opens by itself takes back the toasts its page came with
-// ("Created"); a command copied inside the drawer says so in place, and makes no toast (ledger ruling P2-R56). Undo or Dismiss from the
-// keyboard moves the focus on before the toast goes (P2-R57), and a rename's toast goes with its page (P2-R54). Task 9b adds the deleted
-// project and note.
+// project a target, without which the drawer opens by itself and the head, the name with it, is inert. A toast drawn before the drawer opens
+// stays drawn and paused behind it, so it is heard once ("Created", on a narrow window: ledger ruling P2-R56a); a command copied inside the
+// drawer says so in place, and makes no toast (P2-R56). Undo or Dismiss from the keyboard moves the focus on before the toast goes (P2-R57),
+// and a rename's toast goes with its page (P2-R54). Task 9b adds the deleted project and note.
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
-import { createProject, login, LV_CIRCUITS, setName, SETTINGS_BUTTON } from './helpers.ts';
+import { circuitLv } from './fixtures/plans.ts';
+import { createProject, login, LV_CIRCUITS, openWithPlan, setName, SETTINGS_BUTTON } from './helpers.ts';
 
 /** The toast that says `text`, in the region of notifications. */
 const toastOf = (page: Page, text: string): Locator =>
@@ -202,21 +202,34 @@ test('making a project and adding a note say so, with nothing to undo', async ({
 /** The project settings, the drawer below 900 px. */
 const settingsOf = (page: Page): Locator => page.locator('aside[aria-label="Project settings"]');
 
-// P2-R56 (a), through the one way a page reaches it: no toast can be made while the drawer is open (the head and the views are inert behind
-// it, a copy inside it makes none, and the World page stops its upload when it is left), but "Created" is made moments before the drawer of a
-// project with no target opens by itself on a narrow window. That drawer takes back the toasts its page came with: they wait behind it, not
-// drawn (so not announced), and show, as additions the polite list announces, once it closes.
-test('a project made on a narrow window says so once the drawer it opened by itself is closed', async ({ page }) => {
+// P2-R56a: a toast drawn before the drawer opens stays drawn behind it, paused, and is visible with the time it had left once the drawer
+// closes: added to the polite list once, so heard once. "Created" is made on the list, moments before the drawer of a project with no target
+// opens by itself on a narrow window. An observer the page starts with counts the toasts added to the list that say "Created".
+test('a project made on a narrow window says so once, its toast waiting drawn and paused behind the drawer that opens by itself', async ({ page }) => {
+  await page.addInitScript(() => {
+    const w = window as unknown as { createdAdded: number };
+    w.createdAdded = 0;
+    new MutationObserver((records) => {
+      for (const record of records) {
+        for (const node of record.addedNodes) {
+          if (node instanceof HTMLLIElement && node.closest('section.toasts') !== null && (node.textContent ?? '').includes('Created')) w.createdAdded += 1;
+        }
+      }
+    }).observe(document, { childList: true, subtree: true });
+  });
   await page.setViewportSize({ width: 800, height: 900 });
   await login(page); await setName(page, 'Ann');
   await page.goto('/');
   await page.getByLabel('New project').fill('Toasts made narrow');
   await page.getByRole('button', { name: 'Create' }).click();
   await expect(settingsOf(page)).toBeVisible();                                            // no target: the drawer opened by itself
-  await expect(page.locator('section.toasts')).toHaveAttribute('inert', '');
-  await expect(page.locator('section.toasts li')).toHaveCount(0);
+  const region = page.locator('section.toasts');
+  await expect(region).toHaveAttribute('inert', '');
+  const drawnBehind = await region.locator('li').count();
   await page.keyboard.press('Escape');
   await expect(toastOf(page, 'Created “Toasts made narrow”')).toBeVisible();
+  expect(await page.evaluate(() => (window as unknown as { createdAdded: number }).createdAdded), 'added to the polite list once').toBe(1);
+  expect(drawnBehind, 'drawn behind the drawer all the while').toBe(1);
 });
 
 // P2-R56 (b): a command copied inside the open drawer makes no toast (it would only wait behind the drawer): the button's "Copied" is the
@@ -330,5 +343,40 @@ test('a rename\'s toast goes with its page', async ({ page }) => {
   await expect(toast).toBeVisible();
   await page.getByRole('navigation', { name: 'Pages' }).getByRole('link', { name: 'Projects' }).click();
   await expect(page.locator('form.new-project')).toBeVisible();
+  await expect(toast).toHaveCount(0, { timeout: 2000 });                                   // well inside the 5 s it would have lived
+});
+
+// fix round 2, M5: the focus goes back to an SVG element too, here a Flow box's head (a <g> that takes the focus)
+test('Undo from the keyboard gives the focus back to the Flow box it came from', async ({ page }) => {
+  const id = await openWithPlan(page, circuitLv());
+  await rename(page, 'Toasts flow');
+  const toast = toastOf(page, 'Renamed to “Toasts flow”');
+  await expect(toast).toBeVisible();
+  await landed(page, id, 'Toasts flow');
+  const head = page.locator('[data-step-id="wire"] .flow-node-head');
+  await head.focus();
+  await toast.getByRole('button', { name: 'Undo' }).focus();
+  await page.keyboard.press('Enter');
   await expect(toast).toHaveCount(0);
+  await expect(head).toBeFocused();
+});
+
+// fix round 2, M6: only the keyboard's Undo or Dismiss moves the focus. A pointer's click focuses the button it presses (Chromium), and moving
+// that focus on would put it in the toast beside, which then holds it and stops its time
+test('a pointer\'s Dismiss leaves the focus alone, and the toast beside keeps its time', async ({ page }) => {
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Toasts clicked');
+  await rename(page, 'Toasts clicked, renamed');
+  await page.getByRole('tab', { name: 'Notes' }).click();
+  await page.getByLabel('Add a note').fill('Toasts clicked');
+  await page.getByRole('button', { name: 'Add note' }).click();
+  const older = toastOf(page, 'Renamed to “Toasts clicked, renamed”');
+  const newer = toastOf(page, 'Note added');
+  await expect(newer).toBeVisible();
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());       // nowhere for the focus to go back to
+  await newer.getByRole('button', { name: 'Dismiss' }).click();
+  await expect(newer).toHaveCount(0);
+  await expect(older.getByRole('button', { name: 'Dismiss' })).not.toBeFocused();
+  await page.mouse.move(5, 5);
+  await expect(older).toHaveCount(0, { timeout: 8000 });                                   // nothing holds it: it goes in its time
 });

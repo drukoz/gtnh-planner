@@ -2,8 +2,8 @@
 // stops while a pointer moves over it, while the focus is in it and while the page is hidden, and runs on with what it had left; three at
 // most, the oldest leaving first; a newer toast of a key replaces the older at once; an action runs once, and its toast leaves without
 // saying it expired — and the region's markup: polite, never an alert, with Undo and Dismiss. Fix round 1: a toast shown while the drawer is
-// open waits behind it, undrawn and with its time still, and the drawer that opens by itself takes back the ones drawn (P2-R56); a toast
-// leaves before its action runs (P2-R58); the limit never takes a toast someone holds (M3); the region follows the page's visibility (M2).
+// open waits behind it, undrawn and with its time still, and one drawn before stays drawn, paused (P2-R56, P2-R56a); a toast leaves before
+// its action runs (P2-R58); the limit never takes a toast someone holds (M3); the region follows the page's visibility (M2).
 
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -121,13 +121,6 @@ describe('the toast store', () => {
     vi.advanceTimersByTime(60_000); expect(find(before)!.leaving).toBe(false);                   // the drawer holds the one shown before it too
     store.setInert(false); expect(store.getSnapshot().map((t) => t.text)).toEqual(['Renamed to “B”', 'Upload finished']);
     vi.advanceTimersByTime(TOAST_MS - 1); expect(find(id)!.leaving).toBe(false); vi.advanceTimersByTime(1); expect(find(id)!.leaving).toBe(true);
-  });
-
-  it('takes back the toasts showing when the drawer opens by itself, and shows them again with the time they had left', () => {
-    const id = store.show('Created “X”'); vi.advanceTimersByTime(1000); store.pause(id, 'pointer');   // a hold its element can no longer let go of
-    store.setInert(true, true); expect(store.getSnapshot()).toEqual([]);
-    vi.advanceTimersByTime(60_000); store.setInert(false); expect(store.getSnapshot().map((t) => t.text)).toEqual(['Created “X”']);
-    vi.advanceTimersByTime(3999); expect(find(id)!.leaving).toBe(false); vi.advanceTimersByTime(1); expect(find(id)!.leaving).toBe(true);
   });
 
   it('drops a toast that waits behind the drawer when it is dismissed (P2-R54), telling it and never drawing it', () => {

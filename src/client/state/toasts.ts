@@ -11,8 +11,8 @@
 //   not), the focus inside it, the page hidden, or the settings drawer open over the region (`inert`). Let go, it runs on with the time it had
 //   left.
 // - A toast is drawn, so heard, only where it can be seen and reached (ledger ruling P2-R56): one shown while the drawer is open waits behind
-//   it, not drawn and its time still, and is drawn once the drawer closes, with its whole time; the drawer that the page opens by itself also
-//   takes back the toasts showing as it opens (the page's own arrival: "Created"), which come back with the time they had left.
+//   it, not drawn and its time still, and is drawn once the drawer closes, with its whole time. One drawn before the drawer opens stays drawn,
+//   paused behind it, and is there with the time it had left once it closes: it is added to the polite list once, so heard once (P2-R56a).
 // - At most TOAST_LIMIT are drawn at once, counted as each is drawn: a newer one makes the oldest leave that no one holds by its pointer or
 //   focus (M3); with every one held, the newer waits, undrawn, until one is let go. A newer toast of a key replaces an older one of it at once.
 // - Toasts never take Escape and have no tooltip (spec §12.1). Their motion is the stylesheet's alone, so reduced motion reaches it there.
@@ -56,10 +56,10 @@ export interface ToastStore {
   /** Holds every toast's time while the page is hidden, the ones shown meanwhile too. */
   setHidden(hidden: boolean): void;
   /**
-   * Holds every toast's time while the drawer is open over the region, and keeps the ones shown meanwhile waiting, undrawn, until it closes
-   * (P2-R56); `takeBack`, for the drawer the page opens by itself, sends the toasts drawn as it opens back to wait with them.
+   * Holds every toast's time while the drawer is open over the region, the ones drawn staying drawn, and keeps the ones shown meanwhile
+   * waiting, undrawn, until it closes (P2-R56, P2-R56a).
    */
-  setInert(inert: boolean, takeBack?: boolean): void;
+  setInert(inert: boolean): void;
   /** Whether the drawer is open over the region, so a toast shown now would wait. */
   isInert(): boolean;
   subscribe(fn: () => void): () => void;
@@ -84,7 +84,7 @@ interface Entry {
   onExpire: (() => void) | undefined;
   /** What holds its time. */
   holds: Set<PauseReason>;
-  /** Not drawn yet: shown while the drawer was open, taken back by the drawer that opened by itself, or past the limit with all held. */
+  /** Not drawn yet: shown while the drawer was open, or past the limit with every toast drawn held. */
   waiting: boolean;
   /** The time it has left: all of it while it is held or waits, from `started` while its timer runs. */
   left: number;
@@ -240,18 +240,12 @@ export function createToastStore(clock: ToastClock = LIVE_CLOCK): ToastStore {
         sync(entry);
       }
     },
-    setInert(next, takeBack = false) {
-      if (next === inert && !(next && takeBack)) return;
+    setInert(next) {
+      if (next === inert) return;
       inert = next;
       for (const entry of entries) {
         if (next) entry.holds.add('inert');
         else entry.holds.delete('inert');
-        // what the drawer that opened by itself takes back waits with the rest; its element goes, and with it any hold of a pointer or focus
-        if (next && takeBack && !entry.waiting && !entry.toast.leaving) {
-          entry.waiting = true;
-          entry.holds.delete('pointer');
-          entry.holds.delete('focus');
-        }
         sync(entry);
       }
       const said: Array<(() => void) | undefined> = [];
@@ -297,8 +291,8 @@ export function resumeToast(id: number, why: PauseReason): void {
 }
 
 /** The settings drawer is open over the App's region, or has closed (ProjectPage): see `ToastStore.setInert`. */
-export function setToastsInert(inert: boolean, takeBack?: boolean): void {
-  toasts.setInert(inert, takeBack);
+export function setToastsInert(inert: boolean): void {
+  toasts.setInert(inert);
 }
 
 /** Whether the drawer is open over the App's region, so a toast shown now would wait behind it (ProjectorPanel's copy makes none then). */
