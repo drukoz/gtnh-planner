@@ -20,6 +20,7 @@ import { openDb } from '../../../src/server/db/db.ts';
 import { loadPack } from '../../../src/server/pack/load.ts';
 import { TREE_FARM_MAP } from '../../../src/server/pack/recipes.ts';
 import { buildCostCounts } from '../../../src/server/planner/basis.ts';
+import { isAutoWorkbench } from '../../../src/server/planner/benches.ts';
 import { COMPARE_TIME_LIMIT_SECONDS, compareModes, compareSummary, modeSettings, rawKeys } from '../../../src/server/planner/compare.ts';
 import { TGS_MTE_ID, TGS_OP_TICKS, tgsOp } from '../../../src/server/planner/farms/tgs.ts';
 import { objectiveOf, type Need, type Offer } from '../../../src/server/planner/objective.ts';
@@ -61,6 +62,8 @@ const KNIFE = 'gregtech:gt.metatool.01@34';
 /** The operations a Steel saw or knife lasts (farms.md §1.5: Steel's durability 512, × 1 for both tools). */
 const STEEL_TOOL_USES = 512;
 const CENTRIFUGE_MAP = 'gt.recipe.centrifuge';
+/** The crafting table's map: its recipes run on an Auto Workbench where crafting is automated (architecture §11.39). */
+const CRAFTING_MAP = 'crafting';
 /** The export's Tree Growth Simulator rows (farms.md §1.6: 127 + 110 + 9 + 3 + 2). */
 const TREE_FARM_ROWS = 251;
 /**
@@ -178,6 +181,9 @@ describe.skipIf(!local)('planning modes, farms and surplus on the real export (a
   const coalType = (key: StuffKey): boolean => COAL_MATERIALS.has(pack.items.get(key)?.gt?.material ?? '');
   /** Which of the rubber goods `plan` buys (plan 17 Task 10): those `farmGood` names and the coal-type goods. */
   const rubberGoods = (plan: Plan): StuffKey[] => [...rawKeys(plan)].filter((key) => farmGood(key) || coalType(key)).sort();
+  /** Its crafting-table steps on an Auto Workbench, where they run with crafting automated (architecture §11.39). */
+  const benchSteps = (plan: Plan): string[] =>
+    plan.steps.filter((st) => st.mapId === CRAFTING_MAP && isAutoWorkbench(pack.machines.get(st.machine.mteId))).map((st) => st.id);
 
   beforeAll(async () => {
     pack = await loadPack(activeExportDir(loadConfig()));
@@ -205,15 +211,23 @@ describe.skipIf(!local)('planning modes, farms and surplus on the real export (a
 
   it.skipIf(owned === undefined)("plans the user's Electronic Circuit in the three modes", async () => {
     // Each mode's plan checked by the rules of its objective (ruling R13: a least-raw plan is plan 09's, so build cost is
-    // not counted there) on the line's own pack, where its farm recipes are (`farmPack`, the integration's F7a). Task 11
-    // ruling F-B: plan 17's farm expectations predate the live crop table (add-on 17 S19) and the export's Blood Sapling
-    // row (25 Bloodwood and 5 Redstone an operation at LV). Best multi-output puts the owned Tree Growth Simulator to work
-    // (asserted); which sapling it holds and whether the line buys Sticky Resin are logged, not asserted (plan 17 asked
-    // for rubber saplings and no resin bought).
+    // not counted there) on the line's own pack, where its farm recipes are (`farmPack`, the integration's F7a). R13's
+    // stated cost, least-raw machines checked by plan 09's pick rule, meets the one machine plan 09's rules no longer
+    // describe: with build cost ignored a step takes plan 09's pick among its build model's options (solve.ts `sized`,
+    // plan 12's ruling P2), and with crafting automated a crafting-table recipe's options are Auto Workbenches
+    // (architecture §11.39), where the checker's plan 09 pick is the automated crafting table. In least raw such a step's
+    // machine findings by plan 09's rules are logged, not asserted, and those by plan 12's (the checker's rule for a
+    // crafting-table step on an Auto Workbench) are asserted; every other finding is R13's. Task 11 ruling F-B: plan 17's
+    // farm expectations predate the live crop table (add-on 17 S19) and the export's Blood Sapling row (25 Bloodwood and 5
+    // Redstone an operation at LV). Best multi-output puts the owned Tree Growth Simulator to work (asserted); which
+    // sapling it holds and whether the line buys Sticky Resin are logged, not asserted (plan 17 asked for rubber saplings
+    // and no resin bought).
     const base = given(owned);
     const plans = new Map<PlanObjective, Plan>();
     const slow: string[] = [];
     const errors: string[] = [];
+    /** Plan 09's machine findings on least raw's crafting-table steps on an Auto Workbench (logged: R13's cost). */
+    const benchPicks: string[] = [];
     for (const o of PLAN_OBJECTIVES) {
       const s = modeSettings(base, o);
       const { plan, seconds } = await timedPlan(`the user's Electronic Circuit, ${o}`, s);
@@ -221,8 +235,19 @@ describe.skipIf(!local)('planning modes, farms and surplus on the real export (a
       if (plan.status !== 'ok') console.log(`real-objectives the user's Electronic Circuit, ${o}: ${plan.status}: ${JSON.stringify(plan.warnings)}`);
       if (!(seconds < OBJECTIVE_PLAN_SECONDS)) slow.push(`${o}: ${seconds.toFixed(2)} s`);
       const farmPack = (await linePricing(pack, s, ctx))?.pack;
-      for (const v of checkPlanInvariants(pack, s, plan, { buildCost: buildCostCounts(s), farmPack })) {
-        if (v.severity === 'error') errors.push(`${o}: ${v.kind}: ${v.message}`);
+      const buildCost = buildCostCounts(s);
+      const benches = new Set(buildCost ? [] : benchSteps(plan));
+      for (const v of checkPlanInvariants(pack, s, plan, { buildCost, farmPack })) {
+        if (v.severity !== 'error') continue;
+        if (v.kind === 'machines' && v.stepId !== undefined && benches.has(v.stepId)) benchPicks.push(`${o}: ${v.message}`);
+        else errors.push(`${o}: ${v.kind}: ${v.message}`);
+      }
+      if (benches.size > 0) {
+        for (const v of checkPlanInvariants(pack, s, plan, { buildCost: true, farmPack })) {
+          if (v.severity === 'error' && v.kind === 'machines' && v.stepId !== undefined && benches.has(v.stepId)) {
+            errors.push(`${o}: machines by plan 12's rules: ${v.message}`);
+          }
+        }
       }
     }
     // Fewer raw sources in best multi-output than in cheapest is guaranteed only where both build MIPs ended optimal on a
@@ -235,7 +260,8 @@ describe.skipIf(!local)('planning modes, farms and surplus on the real export (a
     console.log(`real-objectives the user's Electronic Circuit: raw sources ${sourcesOf(multi)} in best multi-output against ${sourcesOf(cheapest)} in cheapest `
       + `(${exact ? 'asserted' : 'logged: not both build MIPs optimal'}); cheapest's build MIP ${statsText(cheapRun.sol.buildStats)}; `
       + `best multi-output's (both MIPs) ${statsText(multiRun.sol.buildStats)}; best multi-output's rubber tree farms ${rubberTreeFarms(multi).join(' ') || 'none'}, `
-      + `${rawKeys(multi).has(STICKY_RESIN) ? 'buys' : 'buys no'} Sticky Resin; the checker's errors: ${errors.join('; ') || 'none'}`);
+      + `${rawKeys(multi).has(STICKY_RESIN) ? 'buys' : 'buys no'} Sticky Resin; the checker's errors: ${errors.join('; ') || 'none'}; `
+      + `plan 09's findings on least raw's crafting-table steps on an Auto Workbench (logged, R13's cost): ${benchPicks.join('; ') || 'none'}`);
     expect(PLAN_OBJECTIVES.map((o) => `${o} ${plans.get(o)?.status}`)).toEqual(PLAN_OBJECTIVES.map((o) => `${o} ok`));
     expect(slow, `over ${OBJECTIVE_PLAN_SECONDS} s`).toEqual([]);
     expect(errors).toEqual([]);
