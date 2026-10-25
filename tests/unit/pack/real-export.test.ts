@@ -5,6 +5,7 @@ import type { Pack, Recipe } from '../../../src/shared/types/pack.ts';
 import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
 import { tableItemCount } from '../../../src/server/pack/crops.ts';
 import { loadPack } from '../../../src/server/pack/load.ts';
+import { machineByMteId } from '../../../src/server/pack/lookup.ts';
 import { canonicalRecipe, recipeId } from '../../../src/server/pack/recipe-id.ts';
 import { searchPack } from '../../../src/server/pack/search.ts';
 import { runCli } from '../../helpers/run-cli.ts';
@@ -29,15 +30,15 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('real export (GTNH 2.9.0-RC-1)',
   });
 
   it('has English names and the common GT machines', () => {
-    expect(pack.machines.get(1000)).toMatchObject({ name: 'Electric Blast Furnace', kind: 'multiblock', heatOC: true });
-    expect(pack.machines.get(1169)).toMatchObject({ kind: 'multiblock', perfectOC: true });
-    expect(pack.machines.get(1002)!.perfectOC ?? false).toBe(false);
-    expect(pack.machines.get(140)!.kind).toBe('multiblock');                      // bricked blast furnace (IConstructable)
-    expect(pack.machines.get(114)!.kind).toBe('boiler');
-    expect(pack.machines.get(114)!.steamPerSecondMax).toBeGreaterThan(0);
-    expect(pack.machines.get(1120)).toMatchObject({ kind: 'turbine', tier: 1 });
-    expect(pack.machines.get(1120)!.turbineEfficiency).toBeCloseTo(3 / 7, 3);
-    for (const id of [90, 303, 373, 423, 512, 1121, 1122, 1172, 31040]) expect(pack.machines.has(id), `mte ${id}`).toBe(true);
+    expect(machineByMteId(pack, 1000)).toMatchObject({ name: 'Electric Blast Furnace', kind: 'multiblock', heatOC: true });
+    expect(machineByMteId(pack, 1169)).toMatchObject({ kind: 'multiblock', perfectOC: true });
+    expect(machineByMteId(pack, 1002)!.perfectOC ?? false).toBe(false);
+    expect(machineByMteId(pack, 140)!.kind).toBe('multiblock');                      // bricked blast furnace (IConstructable)
+    expect(machineByMteId(pack, 114)!.kind).toBe('boiler');
+    expect(machineByMteId(pack, 114)!.steamPerSecondMax).toBeGreaterThan(0);
+    expect(machineByMteId(pack, 1120)).toMatchObject({ kind: 'turbine', tier: 1 });
+    expect(machineByMteId(pack, 1120)!.turbineEfficiency).toBeCloseTo(3 / 7, 3);
+    for (const id of [90, 303, 373, 423, 512, 1121, 1122, 1172, 31040]) expect(machineByMteId(pack, id) !== undefined, `mte ${id}`).toBe(true);
     expect(pack.fluids.get('fluid:molten.iron')!.name).toBe('Molten Iron');
     expect(searchPack(pack, 'Iron Dust')[0]!.name).toBe('Iron Dust');
     expect(pack.machinesByMap.get('gt.recipe.macerator')).toContain(303);
@@ -59,10 +60,10 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('real export (GTNH 2.9.0-RC-1)',
   });
 
   it('has multiblock structures in the canonical frame', () => {
-    const ebf = pack.machines.get(1000)!.structure!;
+    const ebf = machineByMteId(pack, 1000)!.structure!;
     expect(ebf.size).toEqual([3, 4, 3]);
     expect(ebf.blocks.length + ebf.air.length).toBe(36);
-    const turbine = pack.machines.get(15524)!.structure!;   // 2.9 Large Steam Turbine: 3×3×6 plus a 3×3 air layer in front
+    const turbine = machineByMteId(pack, 15524)!.structure!;   // 2.9 Large Steam Turbine: 3×3×6 plus a 3×3 air layer in front
     expect(turbine.air).toHaveLength(9);
     expect([...turbine.size].sort((a, b) => a - b)).toEqual([3, 3, 7]);
   });

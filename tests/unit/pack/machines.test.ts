@@ -1,18 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import type { StructureElementLine, StructureLine } from '../../../src/server/pack/format.ts';
+import { machineByMteId } from '../../../src/server/pack/lookup.ts';
 import { makePack } from '../../helpers/make-pack.ts';
 import { SAMPLE, sampleExportSpec } from '../../helpers/sample-export.ts';
 
 describe('machines', () => {
   it('converts kinds, tiers, maps and power stats', async () => {
     const pack = await makePack(sampleExportSpec());
-    expect(pack.machines.get(SAMPLE.macerator)).toMatchObject({
+    expect(machineByMteId(pack, SAMPLE.macerator)).toMatchObject({
       mteId: 50, metaName: 'basicmachine.macerator.tier.01', name: 'Basic Macerator', itemKey: 'gregtech:gt.blockmachines@50',
       kind: 'basic', tier: 1, voltage: 32, amps: 1, maps: ['gt.recipe.macerator'],
     });
-    expect(pack.machines.get(SAMPLE.cable)!.cable).toEqual({ voltage: 32, amps: 1, lossPerBlock: 1, insulated: true, material: 'Tin' });
-    expect(pack.machines.get(SAMPLE.turbine)).toMatchObject({ kind: 'turbine', turbineEfficiency: 0.428571 });
-    expect(pack.machines.get(SAMPLE.ebf)).toMatchObject({ kind: 'multiblock', heatOC: true, maps: ['gt.recipe.blastfurnace'] });
+    expect(machineByMteId(pack, SAMPLE.cable)!.cable).toEqual({ voltage: 32, amps: 1, lossPerBlock: 1, insulated: true, material: 'Tin' });
+    expect(machineByMteId(pack, SAMPLE.turbine)).toMatchObject({ kind: 'turbine', turbineEfficiency: 0.428571 });
+    expect(machineByMteId(pack, SAMPLE.ebf)).toMatchObject({ kind: 'multiblock', heatOC: true, maps: ['gt.recipe.blastfurnace'] });
   });
 
   it('computes pipe throughput per second', async () => {
@@ -22,14 +23,14 @@ describe('machines', () => {
         { id: 5602, name: 'pipe.item.tin', cls: 'x', item: null, kind: 'item_pipe', itemPipe: { slots: 2, tickTime: 10, stepSize: 32768, restrictive: false, material: 'Tin' } },
       ],
     });
-    expect(pack.machines.get(5110)!.fluidPipe).toEqual({ litresPerSecond: 1200, material: 'Steel' });
-    expect(pack.machines.get(5602)!.itemPipe).toEqual({ stacksPerSecond: 4, material: 'Tin' });
+    expect(machineByMteId(pack, 5110)!.fluidPipe).toEqual({ litresPerSecond: 1200, material: 'Steel' });
+    expect(machineByMteId(pack, 5602)!.itemPipe).toEqual({ stacksPerSecond: 4, material: 'Tin' });
   });
 
   it('adds the assemblyline pseudo map and the crafting table and furnace pseudo machines', async () => {
     const pack = await makePack(sampleExportSpec());
-    expect(pack.machines.get(SAMPLE.assemblyLine)!.maps).toEqual(['gt.recipe.fakeAssemblylineProcess', 'assemblyline']);
-    expect(pack.machines.get(-1)).toMatchObject({ name: 'Crafting Table', itemKey: 'minecraft:crafting_table@0', maps: ['crafting'] });
+    expect(machineByMteId(pack, SAMPLE.assemblyLine)!.maps).toEqual(['gt.recipe.fakeAssemblylineProcess', 'assemblyline']);
+    expect(machineByMteId(pack, -1)).toMatchObject({ name: 'Crafting Table', itemKey: 'minecraft:crafting_table@0', maps: ['crafting'] });
     expect(pack.machinesByMap.get('crafting')).toEqual([-1]);
     expect(pack.machinesByMap.get('furnace')).toEqual([-2]);
     expect(pack.machinesByMap.get('assemblyline')).toEqual([SAMPLE.assemblyLine]);
@@ -38,7 +39,7 @@ describe('machines', () => {
   it('attaches multiblock structures', async () => {
     const pack = await makePack(sampleExportSpec());
     const casing = { id: 'gregtech:gt.blockcasings', meta: 11 };
-    expect(pack.machines.get(SAMPLE.ebf)!.structure).toEqual({
+    expect(machineByMteId(pack, SAMPLE.ebf)!.structure).toEqual({
       size: [3, 4, 3], controller: [1, 0, 0], air: [],
       blocks: [
         { pos: [0, 0, 0], block: casing },
@@ -70,7 +71,7 @@ describe('machines', () => {
       machines: [...machines, { ...machines[0]!, name: 'copy' }],
       structures: [{ id: 9, size: [1, 1, 1], controller: [0, 0, 0], palette: [], blocks: [], air: [] }],
     });
-    expect(pack.machines.get(1)!.metaName).toBe('m');
+    expect(machineByMteId(pack, 1)!.metaName).toBe('m');
     expect(pack.warnings).toEqual([
       'machines.jsonl.gz:2: duplicate machine id 1 ignored, the first line wins',
       'structures.jsonl.gz:1: structure for unknown machine 9 ignored',
@@ -88,10 +89,10 @@ describe('machines', () => {
         { id: 4300, name: 'basicmachine.test_sorter.tier.01', cls: 'x', item: null, kind: 'basic', tier: 1, itemInSlots: 2, itemOutSlots: 0 },
       ],
     });
-    expect(pack.machines.get(302)).toMatchObject({ itemInSlots: 1, itemOutSlots: 1 });
-    expect(pack.machines.get(211)).toMatchObject({ itemInSlots: 6, itemOutSlots: 1 });
-    expect(pack.machines.get(212)).toMatchObject({ itemInSlots: 9, itemOutSlots: 1 });
-    expect(pack.machines.get(4300)).toMatchObject({ itemInSlots: 2, itemOutSlots: 0 });   // no output slot is still a count
+    expect(machineByMteId(pack, 302)).toMatchObject({ itemInSlots: 1, itemOutSlots: 1 });
+    expect(machineByMteId(pack, 211)).toMatchObject({ itemInSlots: 6, itemOutSlots: 1 });
+    expect(machineByMteId(pack, 212)).toMatchObject({ itemInSlots: 9, itemOutSlots: 1 });
+    expect(machineByMteId(pack, 4300)).toMatchObject({ itemInSlots: 2, itemOutSlots: 0 });   // no output slot is still a count
     const macerator = (await makePack(sampleExportSpec())).machines.get(SAMPLE.macerator)!;
     expect('itemInSlots' in macerator).toBe(false);
     expect('itemOutSlots' in macerator).toBe(false);
@@ -108,7 +109,7 @@ describe('structure hatch rules', () => {
   };
   const load = async (structure: StructureLine) => {
     const pack = await makePack({ machines, structures: [structure] });
-    return { pack, structure: pack.machines.get(1000)!.structure! };
+    return { pack, structure: machineByMteId(pack, 1000)!.structure! };
   };
 
   it('reads the hatch rules of a structure (exporter 0.6.0)', async () => {

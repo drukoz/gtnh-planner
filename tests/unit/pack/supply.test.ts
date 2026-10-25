@@ -4,6 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import { deriveSupply, SUPPLY_PUMP_MAP } from '../../../src/server/pack/supply.ts';
 import { nbtHash, recipeId } from '../../../src/server/pack/recipe-id.ts';
+import { machineByMteId } from '../../../src/server/pack/lookup.ts';
 import { gtMachineId } from '../../../src/shared/ids.ts';
 import { itemKey } from '../../../src/shared/keys.ts';
 import type { Ingredient, Machine, Recipe, RecipeMapInfo } from '../../../src/shared/types/pack.ts';
@@ -136,7 +137,7 @@ describe('the loader', () => {
     const { supply: _flag, ...meta } = compressor!.meta;
     expect(contentId({ ...compressor!, meta })).toBe(compressor!.id);
     expect(pack.maps.get('pump')).toEqual({ id: 'pump', name: 'Pump', amps: 1, specialValue: 'none', aliases: [] });
-    expect(pack.machines.get(1140)?.maps).toEqual(['pump']);
+    expect(machineByMteId(pack, 1140)?.maps).toEqual(['pump']);
     expect(pack.machinesByMap.get('pump')).toEqual([1140]);
   });
 });
