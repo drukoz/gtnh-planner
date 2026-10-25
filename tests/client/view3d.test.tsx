@@ -38,6 +38,10 @@ describe('3D tab', () => {
   it('explains itself without WebGL2, while loading and when there is nothing to build', () => {
     expect(shell({ webgl: false })).toContain('The 3D view needs WebGL2 — the block list below still works');
     expect(shell({ layout: null, loading: true })).toContain('Laying out the line…');
+    // Phase 2 Task 8 (spec §11.1): the first layout on its way, beside a skeleton of the scene; but not without WebGL2, where no scene comes
+    expect(shell({ layout: null, loading: true })).toContain('Laying out the line…</p><div class="skeleton skeleton-scene" aria-hidden="true">');
+    expect(shell({ layout: null, loading: true, webgl: false })).toContain('Laying out the line…');
+    expect(shell({ layout: null, loading: true, webgl: false })).not.toContain('class="skeleton');
     expect(shell({ layout: { ...sampleLayout, status: 'empty', blocks: [] } })).toContain('Nothing new to build');
     expect(shell({ info: { title: 'Basic Macerator', lines: ['Facing south'] } })).toContain('data-testid="view3d-info"');
     // a line whose only new machines are farms (add-on 17): no blocks to draw, and it says why rather than nothing

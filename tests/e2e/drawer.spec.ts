@@ -10,11 +10,12 @@
 // drawer closed give their project a target, which keeps it from opening.
 //
 // The banners are inert behind the open drawer, so their status is not announced there: the drawer has a status line of its own (Phase 2
-// spec §17 R43, the last two tests), visually hidden, which counts the plan's problems and is empty once the drawer is closed.
+// spec §17 R43, the last three tests), visually hidden, which counts the plan's problems, says when there are none, and is empty once the
+// drawer is closed.
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
-import { copperUnsourced } from './fixtures/plans.ts';
-import { login, setName, createProject, openWithPlan } from './helpers.ts';
+import { circuitLv, copperUnsourced } from './fixtures/plans.ts';
+import { login, setName, createProject, holdReplan, LV_CIRCUITS, openWithPlan } from './helpers.ts';
 
 /** What the page behind the drawer is made of: inert while the drawer is open. */
 const BEHIND = ['.top-nav', '.project-head', '.project-banners', '.project-views'];
@@ -625,6 +626,7 @@ test('the drawer has a status line of its own (R43)', async ({ page }) => {
   await openWithPlan(page, copperUnsourced());                                       // its LV_CIRCUITS give a target: the drawer stays shut
   const status = page.locator("aside[aria-label='Project settings'] [role=status]");
   await page.getByRole('button', { name: SETTINGS_BUTTON }).click();                 // "Settings · Make: Basic Circuit"
+  await expect(page.getByRole('button', { name: 'Close settings' })).toBeVisible();   // the drawer is open
   await expect(status).toHaveText('The plan has 1 problem');                          // the Copper Ingot nothing supplies
   await page.keyboard.press('Escape');
   await expect(status).toHaveText('');
@@ -637,5 +639,23 @@ test('the drawer that opens by itself to pick a target says no problem (R43)', a
   await login(page); await setName(page, 'Ann');
   await createProject(page, 'Status, nothing yet');                                  // no target: the drawer opens by itself into the item search
   await expect(page.locator('.plan-banner button.link')).toHaveText('Pick something to make');   // the plan is in; the banner is inert, so found by class
+  await expect(page.getByRole('button', { name: 'Close settings' })).toBeVisible();   // the drawer is open
   await expect(page.locator("aside[aria-label='Project settings'] [role=status]")).toHaveText('');
+});
+
+// ledger ruling P2-R52: an update is heard to start in the drawer ("The plan is updating…"), and to end: a plan with nothing to warn about
+// says it has no problems
+test('the drawer says when an update ends with no problems (R43)', async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 900 });
+  const id = await openWithPlan(page, circuitLv(), { ...LV_CIRCUITS, useSurplus: false });   // nothing to warn about; no other project reaches it
+  const status = page.locator("aside[aria-label='Project settings'] [role=status]");
+  await page.getByRole('button', { name: SETTINGS_BUTTON }).click();
+  await expect(page.getByRole('button', { name: 'Close settings' })).toBeVisible();
+  await expect(status).toHaveText('No problems');
+  const letThrough = await holdReplan(page, id);
+  await expect(status).toHaveText('The plan is updating…');
+  await letThrough();
+  await expect(status).toHaveText('No problems');
+  await page.keyboard.press('Escape');
+  await expect(status).toHaveText('');
 });

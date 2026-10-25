@@ -2608,8 +2608,7 @@ const GRID_RULES = [
 const STRIP_HIDE = '.project-banners > .key-numbers ~ .plan-cost';
 const STRIP_RULES = [
   '.key-numbers', '.key-numbers > dl', '.key-number', '.key-number dt', '.key-number-sub', '.key-number dd', '.key-number-unit',
-  '.key-number dd.key-number-words', '.key-number.changed .key-number-sub', '.key-number-flash', '.key-numbers-wait', '.key-numbers-wait > div',
-  STRIP_HIDE,
+  '.key-number dd.key-number-words', '.key-number.changed .key-number-sub', '.key-number-flash', '.key-numbers-wait', STRIP_HIDE,
 ];
 
 /**
@@ -2626,10 +2625,14 @@ const SKELETON_RULES = [
 ];
 /** The Compare card's two (plan ruling compare-skeletons): a mode's six figures in the tiles' own grid, and the three modes framed as columns. */
 const COMPARE_SKELETON_RULES = ['.skeleton-readouts', '.skeleton-readouts .skeleton-block', '.skeleton-compare', '.skeleton-compare > .skeleton-readouts'];
-/** Task 8 (ledger ruling P2-R18): the plan's busy line, out of the flow, hung from the banners' box over the end of the tab strip. */
+/**
+ * Task 8 (ledger rulings P2-R18, P2-R51): the plan's busy line, out of the flow: on the key-numbers strip's top-right corner while the strip is
+ * drawn (a target is set), clipped from sight as `.visually-hidden` clips while it is not.
+ */
 const BUSY_LINE = '.plan-banner > p.muted';
+const BUSY_CHIP = '.project-banners > .key-numbers ~ .plan-banner > p.muted';
 const BUSY_ALONE = '.plan-banner:has(> p.muted:only-child)';
-const BUSY_RULES = ['.project-banners', BUSY_LINE];
+const BUSY_RULES = ['.project-banners', BUSY_LINE, BUSY_CHIP];
 
 /** The selectors of every rule Phase 2 adds; each later task appends its own. */
 const PHASE2_RULES: string[] = [
@@ -3005,7 +3008,7 @@ describe('the Machine GUI Phase 2: the key-numbers strip', () => {
       ['.key-number.changed .key-number-sub', 'color', 'var(--accent)'],
       ['.key-number-flash', 'position', 'absolute'], ['.key-number-flash', 'inset', '-2px'], ['.key-number-flash', 'border', '2px solid var(--accent)'],
       ['.key-number-flash', 'pointer-events', 'none'], ['.key-number-flash', 'animation', 'flash-out 700ms var(--ease-out)'], ['.key-number-flash', 'opacity', '0'],
-      ['.key-numbers-wait', 'display', 'grid'], ['.key-numbers-wait', 'margin', '0 0 8px'], ['.key-numbers-wait > div', 'height', '52px'],
+      ['.key-numbers-wait', 'display', 'grid'], ['.key-numbers-wait', 'margin', '0 0 8px'], ['.skeleton-strip .skeleton-block', 'height', '52px'],
       [STRIP_HIDE, 'position', 'absolute'], [STRIP_HIDE, 'width', '1px'], [STRIP_HIDE, 'height', '1px'], [STRIP_HIDE, 'overflow', 'hidden'],
       [STRIP_HIDE, 'clip-path', 'inset(50%)'], [STRIP_HIDE, 'white-space', 'nowrap'],
     ]);
@@ -3021,9 +3024,10 @@ describe('the Machine GUI Phase 2: the key-numbers strip', () => {
     // the place it keeps while the plan is on its way is the strip's own grid (its columns and gap) of blocks as tall as a tile, with no height
     // of its own, so it takes as much at every width and the views below never move when the figures come (ledger ruling P2-R48)
     expect(px(declared('.key-number', 'height')) + px(declared('.key-numbers', 'margin')?.split(' ')[2])).toBe(60);
-    expect(px(declared('.key-numbers-wait > div', 'height')) + px(declared('.key-numbers-wait', 'margin')?.split(' ')[2])).toBe(60);
+    // (ledger ruling P2-R50b: the strip's skeleton fills the wait box, and its blocks, the grid's items, carry the tile's 52 px)
+    expect(px(declared('.skeleton-strip .skeleton-block', 'height')) + px(declared('.key-numbers-wait', 'margin')?.split(' ')[2])).toBe(60);
     for (const property of ['grid-template-columns', 'gap']) expect(declared('.key-numbers-wait', property), property).toBe(declared('.key-numbers > dl', property));
-    expect(declared('.key-numbers-wait > div', 'height')).toBe(declared('.key-number', 'height'));
+    expect(declared('.skeleton-strip .skeleton-block', 'height')).toBe(declared('.key-number', 'height'));
     expect(declared('.key-numbers-wait', 'height')).toBeUndefined();
     // the flash: once, well under 5 s, and resting at the frame's own opacity, so no fill mode; it fades from full and takes no pointer
     expect(declared('.key-number-flash', 'animation')).not.toMatch(/infinite|forwards|backwards|both/);
@@ -3125,43 +3129,75 @@ describe('the Machine GUI Phase 2: skeletons', () => {
     }
     // forced colours: the blocks' grey, a background the theme paints like what they lie on, is GrayText (the well's blocks' own rule
     // out-ranks a bare .skeleton-block, so the block names it too), after the rules it repaints
-    expect(inQuery(FORCED, '.skeleton-block, .skeleton-diagram .skeleton-block')).toEqual([['background', 'GrayText']]);
+    const FORCED_BLOCKS = '.skeleton-block, .skeleton-diagram .skeleton-block, .skeleton-strip .skeleton-block';
+    expect(inQuery(FORCED, FORCED_BLOCKS)).toEqual([['background', 'GrayText']]);
     const { block, rules: forced } = forcedBlock();
-    for (const selector of [SKELETON_BLOCK, '.skeleton-diagram .skeleton-block']) expect(position(selector), selector).toBeLessThan(blocks.indexOf(block));
+    for (const selector of [SKELETON_BLOCK, '.skeleton-diagram .skeleton-block', '.skeleton-strip .skeleton-block']) {
+      expect(position(selector), selector).toBeLessThan(blocks.indexOf(block));
+    }
     const inBlock = (prelude: string): number => forced.findIndex((rule) => rule.prelude === prelude);
-    expect(inBlock('.skeleton-block, .skeleton-diagram .skeleton-block')).toBe(forced.length - 1);
+    expect(inBlock(FORCED_BLOCKS)).toBe(forced.length - 1);
   });
 
-  it('puts the strip\'s skeleton blocks in the wait box\'s own grid, as tall as a tile (ledger ruling P2-R48)', () => {
+  it('puts the strip\'s skeleton blocks in the wait box\'s own grid, as tall as a tile and in its dark face (ledger rulings P2-R48, P2-R53)', () => {
     // the skeleton draws no box: its blocks are the grid's items, so the wait box keeps the strip's height at every width, wrapped or not
     expectDeclared([['.skeleton-strip', 'display', 'contents'], ['.skeleton-strip .skeleton-block', 'height', '52px']]);
     expect(declared('.skeleton-strip .skeleton-block', 'height')).toBe(declared('.key-number', 'height'));
-    expect(declared('.skeleton-strip .skeleton-block', 'height')).toBe(declared('.key-numbers-wait > div', 'height'));
+    // ledger ruling P2-R50b: the wait box's own rule for its blocks sized nothing once the skeleton filled it, and is gone
+    expect(position('.key-numbers-wait > div')).toBe(-1);
+    // ledger ruling P2-R53: in the tiles' own dark face, in both looks, with a shimmer of the screen's lighter edge, so the strip does not
+    // flash from the skeleton grey to the dark tiles when the figures come
+    expectDeclared([
+      ['.skeleton-strip .skeleton-block', 'background', 'var(--screen)'],
+      ['.skeleton-strip .skeleton-block::after', 'background', 'linear-gradient(90deg, transparent, var(--screen-lo), transparent)'],
+    ]);
+    expect(declared('.skeleton-strip .skeleton-block', 'background')).toBe(declared('.key-number', 'background'));
+    // forced colours: GrayText as every skeleton block, the strip's own rule out-ranking a bare .skeleton-block, so the block names it too
+    expect(inQuery(FORCED, '.skeleton-block, .skeleton-diagram .skeleton-block, .skeleton-strip .skeleton-block')).toEqual([['background', 'GrayText']]);
   });
 
-  // ledger ruling P2-R18: a plan event (every replan of the project, and other projects' surplus) shows the busy line until the plan is
-  // fetched again; it pushed everything under the banners down the page and back (24.3 px under the banner's other lines, the whole
-  // banner's 60.3 px alone), which threw drags off the pointer (P2-R16) and made tests race. Out of the flow, it moves nothing.
-  it('hangs the plan\'s busy line from the banners\' box over the end of the tab strip, out of the flow, so a plan event moves nothing', () => {
+  // ledger rulings P2-R18 and P2-R51: a plan event (every replan of the project, and other projects' surplus) shows the busy line until the plan
+  // is fetched again. In the flow it pushed everything under the banners down the page and back (24.3 px under the banner's other lines, the
+  // whole banner's 60.3 px alone), which threw drags off the pointer (P2-R16) and made tests race; hung over the end of the tab strip it hid
+  // whole tabs wherever they fill the strip. So it sits on the key-numbers strip's top-right corner, over that tile's label row, which holds
+  // no control and no figure, and takes no room; with no strip it is clipped from sight, for a screen reader only.
+  it('sets the plan\'s busy line on the strip\'s top-right corner, out of the flow, and clips it from sight where there is no strip', () => {
+    const px = (value: string | undefined): number => Number.parseFloat(value ?? '');
+    // the banners' box is the line's containing block, and the strip is its first child: its top right is the strip's. It draws no box of
+    // its own (no block formatting context: its height is what it was, P2-R51)
+    expectDeclared([['.project-banners', 'position', 'relative']]);
+    expect(declared('.project-banners', 'display')).toBeUndefined();
+    // with no strip, the line is clipped as `.visually-hidden` clips, declaration for declaration
+    expect(declarations(ruleBody(BUSY_LINE))).toEqual(declarations(ruleBody('.visually-hidden')));
     expectDeclared([
-      // the banners' box is the line's containing block and keeps its last child's margin inside it, so its bottom is the top of the tabs
-      ['.project-banners', 'position', 'relative'], ['.project-banners', 'display', 'flow-root'],
-      [BUSY_LINE, 'position', 'absolute'], [BUSY_LINE, 'top', '100%'], [BUSY_LINE, 'right', '0'], [BUSY_LINE, 'pointer-events', 'none'],
-      [BUSY_LINE, 'display', 'flex'], [BUSY_LINE, 'align-items', 'center'], [BUSY_LINE, 'height', '28px'], [BUSY_LINE, 'margin', '7px 0 0'],
-      [BUSY_LINE, 'padding', '0 10px'], [BUSY_LINE, 'white-space', 'nowrap'],
-      // a chat box of its own, as the banner it came from, over the page's colour, so a tab it covers does not show through
-      [BUSY_LINE, 'background', 'linear-gradient(var(--chat), var(--chat)) var(--page)'], [BUSY_LINE, 'border', '2px solid var(--outline)'],
+      // with the strip: on its top-right corner, over the label row of that tile, the line's whole box shown again
+      [BUSY_CHIP, 'top', '0'], [BUSY_CHIP, 'right', '0'], [BUSY_CHIP, 'z-index', '2'], [BUSY_CHIP, 'width', 'auto'], [BUSY_CHIP, 'height', '20px'],
+      [BUSY_CHIP, 'overflow', 'visible'], [BUSY_CHIP, 'clip-path', 'none'], [BUSY_CHIP, 'margin', '0'], [BUSY_CHIP, 'padding', '0 3px'],
+      [BUSY_CHIP, 'display', 'flex'], [BUSY_CHIP, 'align-items', 'center'], [BUSY_CHIP, 'pointer-events', 'none'], [BUSY_CHIP, 'white-space', 'nowrap'],
+      // in the label's own words' size and line, Inter 11 px on 14 px
+      [BUSY_CHIP, 'font', '11px/14px var(--font-ui)'],
+      // a chat box of its own, as the banner it came from, over the page's colour, so the label row under it does not show through; its top
+      // and right edges are the tile's own black edge, so it draws the other two only
+      [BUSY_CHIP, 'background', 'linear-gradient(var(--chat), var(--chat)) var(--page)'],
+      [BUSY_CHIP, 'border-left', '2px solid var(--outline)'], [BUSY_CHIP, 'border-bottom', '2px solid var(--outline)'],
       // a banner that says nothing else draws no box, and still appears without the entrance
       [BUSY_ALONE, 'animation', 'none'], [BUSY_ALONE, 'margin', '0'], [BUSY_ALONE, 'padding', '0'], [BUSY_ALONE, 'border', '0'], [BUSY_ALONE, 'background', 'none'],
     ]);
-    // level with the tabs: its middle where theirs is (a tab sits 2 px down, 38 px tall)
-    const px = (value: string | undefined): number => Number.parseFloat(value ?? '');
-    expect(px(declared(BUSY_LINE, 'margin')) + px(declared(BUSY_LINE, 'height')) / 2).toBe(px(declared(TAB, 'top')) + px(declared(TAB, 'min-height')) / 2);
-    // over the tabs it covers in a narrow window, under the drawer's dimmed page
-    const z = Number(declared(BUSY_LINE, 'z-index'));
-    expect(z).toBeGreaterThan(Number(declared(TAB, 'z-index')));
+    expect(declared(BUSY_CHIP, 'font')).toBe(declared('.key-number dt', 'font'));
+    // as tall as a tile's edge, padding and label line together: it never reaches the figure under them
+    const line = (selector: string): number => px(/\/(\S+)/.exec(declared(selector, 'font') ?? '')?.[1]);
+    expect(px(declared(BUSY_CHIP, 'height'))).toBe(px(declared('.key-number', 'border')) + px(declared('.key-number', 'padding')) + line('.key-number dt'));
+    expect(declared(BUSY_CHIP, 'border')).toBeUndefined();
+    expect(declared('.key-number', 'border')).toBe('2px solid var(--outline)');
+    // the GT arrow fits inside its edge
+    expect(px(declared('.gt-arrow', 'height'))).toBeLessThanOrEqual(px(declared(BUSY_CHIP, 'height')) - px(declared(BUSY_CHIP, 'border-bottom')));
+    // over the tile, under the drawer's dimmed page
+    const z = Number(declared(BUSY_CHIP, 'z-index'));
+    expect(declared('.key-number', 'z-index')).toBeUndefined();
     expect(z).toBeLessThan(Number(declaredIn(NARROW, '.drawer-backdrop', 'z-index')));
     // no entrance: it shows on every replan (opacity and transform would be the only things it could move)
-    expect(declared(BUSY_LINE, 'animation')).toBeUndefined(); expect(declared(BUSY_LINE, 'transition')).toBeUndefined();
+    for (const rule of [BUSY_LINE, BUSY_CHIP]) {
+      expect(declared(rule, 'animation'), rule).toBeUndefined(); expect(declared(rule, 'transition'), rule).toBeUndefined();
+    }
   });
 });

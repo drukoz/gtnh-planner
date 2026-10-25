@@ -485,20 +485,26 @@ details.settings-section > summary .muted { color: inherit; }
 /* A derived material's chip is a small button with its 16px icon: the size of `button.small`, which its markup does not carry. */
 button.banner-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 0 10px 0 4px; font-size: 13px; }
 /*
- * The banner's busy line (Phase 2 spec §11.3, ledger ruling P2-R18): "Updating the plan…" after the GT progress arrow, on a chat box of its
- * own that hangs from the bottom right of the banners' box over the end of the tab strip, level with the tabs, out of the flow. Every replan
- * of the project and other projects' surplus send a plan event, and the line in the flow pushed everything under the banners down the page and
- * back (24.3 px, a whole banner's 60.3 px when it said nothing else), which threw drags off the pointer (P2-R16) and made tests race: now
- * nothing moves. The banners' box is its containing block, and a block formatting context, so its last child's margin is inside it and its
- * bottom is the top of the tabs, where it always was. The line's height is fixed, so no late font changes it, and it takes no pointer: where
- * the tabs fill the strip (a window below about 790 px, or one of 901 to about 1140 px beside the settings) it is drawn over the last of
- * them, above their z-index of 1 and under the drawer's dimmed page, and a click there still reaches the tab. Its face is the chat box over
- * the page's colour, as the banner is on the stone, so a tab under it does not show through.
+ * The banner's busy line (Phase 2 spec §11.3, ledger rulings P2-R18 and P2-R51): "Updating the plan…" after the GT progress arrow, out of
+ * the flow. Every replan of the project and other projects' surplus send a plan event, and the line in the flow pushed everything under the
+ * banners down the page and back (24.3 px, a whole banner's 60.3 px when it said nothing else), which threw drags off the pointer (P2-R16)
+ * and made tests race; now nothing moves. While the key-numbers strip is drawn (the project makes something, so a replan has figures to
+ * update) the line is a chat box of its own on the strip's top-right corner, the banners' box being its containing block and the strip its
+ * first child: 20 px tall, a tile's edge, padding and label line, in the labels' Inter 11 px, so it covers the label row of that tile and never
+ * a figure, at every width, and holds the 16 px arrow inside its edge. Its top and right edges are the tile's own black edge, so it draws its
+ * left and bottom ones only, and is as narrow as it can be: just under 140 px, so it stays within even the narrowest tile (140 px, at a
+ * 780 px window; past it is the 8 px gap to the next tile, never a figure). Its face is the chat box over the page's colour, so the label
+ * under it does not show through; it is drawn over the tile and under the drawer's dimmed page, and takes no pointer. With no strip it is
+ * clipped from sight as `.visually-hidden` clips: a screen reader still hears the banner's status.
  */
-.project-banners { position: relative; display: flow-root; }
+.project-banners { position: relative; }
 .plan-banner > p.muted {
-  position: absolute; top: 100%; right: 0; z-index: 2; display: flex; align-items: center; height: 28px; margin: 7px 0 0; padding: 0 10px;
-  background: linear-gradient(var(--chat), var(--chat)) var(--page); border: 2px solid var(--outline); white-space: nowrap; pointer-events: none;
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+}
+.project-banners > .key-numbers ~ .plan-banner > p.muted {
+  top: 0; right: 0; z-index: 2; width: auto; height: 20px; overflow: visible; clip-path: none; margin: 0; padding: 0 3px;
+  display: flex; align-items: center; font: 11px/14px var(--font-ui); background: linear-gradient(var(--chat), var(--chat)) var(--page);
+  border-left: 2px solid var(--outline); border-bottom: 2px solid var(--outline); white-space: nowrap; pointer-events: none;
 }
 /* What the plan costs to run and to build (plan 12), above the banner. It is a line on the stone: the ink of the page, with
    figures that line up. */
@@ -511,7 +517,8 @@ button.banner-chip { display: inline-flex; align-items: center; gap: 6px; min-he
  * §25), on one line, never shrunk and cut with an ellipsis past its tile, its unit in VT323 15 px on the same line, a rate in words in
  * Inter 15 px. A changed tile's qualifier reads yellow while a 2 px yellow frame fades once over its edge (opacity only; the frame rests at
  * its own opacity 0). The strip takes 60 px with its margin where its five tiles make one row. While the plan is on its way the strip's
- * place is its own grid of five empty blocks as tall as a tile, so it takes as much at every width, wrapped or not (ledger ruling P2-R48).
+ * place is its own grid, filled by its skeleton's five blocks as tall as a tile, so it takes as much at every width, wrapped or not (ledger
+ * rulings P2-R48, P2-R50b).
  * The plan's cost sentence stays on the page, hidden from sight as `.visually-hidden` hides, by a sibling rule (its paragraph takes no
  * class), and from a screen reader by the page, which hears the strip.
  */
@@ -538,7 +545,6 @@ button.banner-chip { display: inline-flex; align-items: center; gap: 6px; min-he
   animation: flash-out 700ms var(--ease-out); opacity: 0;
 }
 .key-numbers-wait { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin: 0 0 8px; }
-.key-numbers-wait > div { height: 52px; }
 .project-banners > .key-numbers ~ .plan-cost {
   position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
 }
@@ -706,12 +712,13 @@ svg .item-icon::after { content: none; }
  * jumps when the data comes and no late font changes one. A sheen passes over each block three times (4.2 s, within WCAG 2.2.2's 5 s), on
  * transform alone, and rests where it starts, off the block's left edge: no fill mode, so none of it shows. The geometry is the builder's
  * (§21): the project list's three cards, as far apart as its cards; a project page's head row (40 % wide), strip and views; the strip's five
- * tiles, which draw no box of
- * their own but are the wait box's grid's items, that grid being the strip's (ledger ruling P2-R48); a diagram's three boxes and a scene, set
- * into a well as their views are; lines, every other one shorter. The Compare card's (plan ruling compare-skeletons): a mode's six figures
- * in the tiles' own grid (`.compare-rows`'), 55 px blocks for its 54.7 px tiles, so they fall two a row or stacked as the tiles will; and its
- * three modes in its columns' grid, each frame edged as a column is and padded with the room of its title above the tiles (8 + 19.5 + 8 px)
- * and of its button below (8 + 36 + 8 px), 10 px at each side, so it has no height of its own and is as tall as a loaded column at every width.
+ * tiles, which draw no box of their own but are the wait box's grid's items, that grid being the strip's (ledger ruling P2-R48), in the
+ * tiles' own dark face with a shimmer of the screen's lighter edge, so the figures come with no flash from a lighter grey (P2-R53); a
+ * diagram's three boxes and a scene, set into a well as their views are; lines, every other one shorter. The Compare card's (plan ruling
+ * compare-skeletons): a mode's six figures in the tiles' own grid (`.compare-rows`'), 55 px blocks for its 54.7 px tiles, so they fall two
+ * a row or stacked as the tiles will; and its three modes in its columns' grid, each frame edged as a column is and padded with the room of
+ * its title above the tiles (8 + 19.5 + 8 px) and of its button below (8 + 36 + 8 px), 10 px at each side, so it has no height of its own
+ * and is as tall as a loaded column at every width.
  */
 .skeleton { display: flex; flex-direction: column; gap: 8px; }
 .skeleton-block { position: relative; overflow: hidden; height: 18px; background: var(--skeleton); }
@@ -725,7 +732,8 @@ svg .item-icon::after { content: none; }
 .skeleton-project .skeleton-block:nth-child(2) { height: 52px; }
 .skeleton-project .skeleton-block:nth-child(3) { height: 360px; }
 .skeleton-strip { display: contents; }
-.skeleton-strip .skeleton-block { height: 52px; }
+.skeleton-strip .skeleton-block { height: 52px; background: var(--screen); }
+.skeleton-strip .skeleton-block::after { background: linear-gradient(90deg, transparent, var(--screen-lo), transparent); }
 .skeleton-diagram, .skeleton-scene { background: var(--well); border: 2px solid var(--outline); box-shadow: var(--bevel-well); }
 .skeleton-diagram { display: grid; grid-template-columns: repeat(3, 110px); gap: 40px; align-content: center; height: 240px; padding: 20px; }
 .skeleton-diagram .skeleton-block { height: 70px; background: var(--skeleton-well); }
@@ -1864,6 +1872,6 @@ details.mat-needed[open]::details-content { block-size: auto; }
   .mat-meter-fill { background: Highlight; }
   .mat-view-toggle button[aria-pressed='true'] { text-decoration: underline; }
   /* Phase 2 Task 8: a skeleton's blocks, a background the theme would paint like the well or the page they lie on, are GrayText (the well's
-     blocks' own rule out-ranks a bare .skeleton-block, so it is named too), so the shape of what is coming stays */
-  .skeleton-block, .skeleton-diagram .skeleton-block { background: GrayText; }
+     blocks' and the strip's blocks' own rules out-rank a bare .skeleton-block, so they are named too), so the shape of what is coming stays */
+  .skeleton-block, .skeleton-diagram .skeleton-block, .skeleton-strip .skeleton-block { background: GrayText; }
 }

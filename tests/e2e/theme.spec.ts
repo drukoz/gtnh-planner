@@ -196,7 +196,8 @@ const DARK_TOUR: DarkStop[] = [
       { what: 'the meter', selector: '.mat-meter', property: 'background-color', expected: 'rgb(11, 11, 11)' },
     ],
   },
-  // Task 8: a page whose plan never comes, its Flow skeleton set into the dark well (#1a1a1a), its blocks the dark --skeleton-well (spec §11.2)
+  // Task 8: a page whose plan never comes, its Flow skeleton set into the dark well (#1a1a1a), its blocks the dark --skeleton-well (spec §11.2),
+  // and the strip's place in the tiles' dark face
   {
     name: 'a plan on its way',
     open: async (page) => {
@@ -207,6 +208,8 @@ const DARK_TOUR: DarkStop[] = [
     rows: [
       { what: 'the diagram\'s skeleton', selector: '.skeleton-diagram', property: 'background-color', expected: 'rgb(26, 26, 26)' },
       { what: 'its blocks', selector: '.skeleton-diagram .skeleton-block', property: 'background-color', expected: 'rgb(42, 42, 42)' },
+      // ledger ruling P2-R53: the strip's place in the tiles' own dark screen, #0b0b0b
+      { what: 'the strip\'s skeleton', selector: '.key-numbers-wait .skeleton-block', property: 'background-color', expected: 'rgb(11, 11, 11)' },
     ],
     close: async () => {
       for (const route of heldPlans.splice(0)) await route.abort().catch(() => { /* the page has gone */ });

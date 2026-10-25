@@ -10,8 +10,8 @@
 // opens the drawer by itself, once, into the item search; the plan banner's hint to pick something to make goes there too;
 // and the Settings button says what the line makes. At the top of the banners, the plan's key numbers sit in a strip of
 // readouts (Phase 2 spec §10): what it makes, its peak power, its machines, and what it costs to build and to run. While a new
-// plan is on its way the banner says so with the GT progress arrow, on a line that moves nothing (Phase 2 spec §11.3, ledger ruling
-// P2-R18), and the drawer, behind which the banners are inert, has a status line of its own (R43).
+// plan is on its way the banner says so with the GT progress arrow, on a line that moves nothing, on the strip's top-right corner (Phase 2
+// spec §11.3, ledger rulings P2-R18 and P2-R51), and the drawer, behind which the banners are inert, has a status line of its own (R43).
 
 import { useEffect, useLayoutEffect, useRef, useState, type ReactElement } from 'react';
 import type { StuffKey } from '../../shared/keys.ts';
@@ -132,20 +132,25 @@ function bannerItems(plan: Plan | null): BannerItems {
  * old one, in other words than the banner's busy line, which drawer.spec.ts finds by its text while the drawer is open (plan ruling
  * drawer-status-words); else how many problems the banner lists, its problems and its other warnings, but the hint to pick something to make,
  * which the drawer, the item search in it focused, is there to answer (plan ruling drawer-status-count), and never their words, which other
- * specs find by text; else nothing. What the plan uses beyond its line (a farm, another project's surplus) is no problem.
+ * specs find by text; else, for a plan that runs, that it has no problems, so an update is heard to end as it was heard to start (ledger
+ * ruling P2-R52); else nothing (no plan yet, or one with nothing to make). What the plan uses beyond its line (a farm, another project's
+ * surplus) is no problem.
  */
 export function drawerStatus(plan: Plan | null, planError: string | null, planLoading: boolean): string {
   if (planError !== null) return planError;
-  if (planLoading && plan !== null) return 'The plan is updating…';
+  if (plan === null) return '';
+  if (planLoading) return 'The plan is updating…';
   const { issues, others } = bannerItems(plan);
   const n = issues.length + others.filter((w) => w.code !== NO_TARGET).length;
-  return n === 0 ? '' : `The plan has ${n} ${n === 1 ? 'problem' : 'problems'}`;
+  if (n > 0) return `The plan has ${n} ${n === 1 ? 'problem' : 'problems'}`;
+  return plan.status === 'ok' ? 'No problems' : '';
 }
 
 /**
  * What the plan warns about (fix spec §6.4), above every project view: while a new plan is on its way, "Updating the plan…" after the GT
- * progress arrow (Phase 2 spec §11.3), on a chat box of its own that the stylesheet hangs over the end of the tab strip, out of the flow, so
- * it moves nothing on the page (ledger ruling P2-R18; a banner that says nothing else then draws no box); a summary of the integrity issues
+ * progress arrow (Phase 2 spec §11.3), on a chat box of its own that the stylesheet sets on the key-numbers strip's top-right corner, out of
+ * the flow, so it moves nothing on the page (ledger rulings P2-R18 and P2-R51; with no strip it is out of sight, and a banner that says
+ * nothing else draws no box); a summary of the integrity issues
  * (`indexPlan`: "This plan does not add up: …", with "Show in the flow") and each issue in the server's words, else
  * `issueText`'s (the client re-checks the plan it got); the derived materials the line buys as chips that show their
  * import in the flow, with "Plan them as supporting lines" while those are off; how much more raw material the plan

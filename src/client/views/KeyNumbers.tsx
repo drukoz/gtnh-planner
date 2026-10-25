@@ -8,7 +8,8 @@
 // then hidden from a screen reader (fix round 1, I2 and M2); the strip is no live region (the plan banner's status and What changed say
 // what changed). A project with no target has no strip; while its plan is on its way the strip's own grid of five empty blocks keeps its
 // place at every width, so nothing below moves when the figures come (ledger ruling P2-R48): the strip's skeleton, whose blocks are that
-// grid's (Phase 2 spec §11.1). It sits in the banners' box, so it goes inert with them behind an open drawer.
+// grid's (Phase 2 spec §11.1), in the tiles' own dark face (ledger ruling P2-R53). It sits in the banners' box, so it goes inert with them
+// behind an open drawer, and the plan's busy line sits on its top-right corner (ledger ruling P2-R51).
 
 import { useEffect, useRef, useState, type ReactElement } from 'react';
 import type { Plan, PlanSettings } from '../../shared/types/plan.ts';

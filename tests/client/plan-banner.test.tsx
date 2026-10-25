@@ -208,7 +208,8 @@ describe('plan banner: the hint to pick something to make', () => {
 // drawer has a status line of its own: the planner's error, else that the plan is updating (in other words than the banner's busy line,
 // which drawer.spec.ts finds by its text while the drawer is open: plan ruling drawer-status-words), else how many problems the banner
 // lists (never their words, which other e2e specs find by text), leaving out the hint to pick something to make, which the drawer answers
-// (plan ruling drawer-status-count). The banner's busy line carries the GT progress arrow on its chat box.
+// (plan ruling drawer-status-count), else, for a plan that runs, that it has no problems, so an update is heard to end as it was heard to
+// start (ledger ruling P2-R52). The banner's busy line carries the GT progress arrow on its chat box.
 describe('the drawer\'s status (R43)', () => {
   const hint = { code: 'no-target', text: 'Pick something to make' };
   const oneOrphan = planOf({
@@ -230,8 +231,13 @@ describe('the drawer\'s status (R43)', () => {
     // the hint to pick something to make is no problem: the drawer that opens by itself is where it is answered
     expect(drawerStatus(planOf({ status: 'empty', warnings: [hint] }), null, false)).toBe('');
     expect(drawerStatus(planOf({ status: 'empty', warnings: [hint, { code: 'no-recipe', text: 'Nothing at ≤ LV makes Glue' }] }), null, false)).toBe('The plan has 1 problem');
-    expect(drawerStatus(planOf({}), null, false)).toBe('');
+    // ledger ruling P2-R52: a plan that runs with nothing to warn about has no problems, and says so; one that is on its way is updating
+    expect(drawerStatus(planOf({}), null, false)).toBe('No problems');
+    expect(drawerStatus(planOf({}), null, true)).toBe('The plan is updating…');
+    // a plan that cannot run and says nothing about it is no "No problems"; it has none to count either
+    expect(drawerStatus(planOf({ status: 'infeasible' }), null, false)).toBe('');
     expect(drawerStatus(null, null, true)).toBe('');                                               // the first plan is on its way: the view says "Planning…"
+    expect(drawerStatus(null, null, false)).toBe('');
   });
 
   it('counts what the banner lists, its problems and other warnings, and not what the plan uses beyond its line', () => {
@@ -247,7 +253,7 @@ describe('the drawer\'s status (R43)', () => {
     const farmed = planOf({ steps: [step({ id: 'tgs', mapId: 'gt.recipe.treefarm', mainOutput: 't:wood@0', outputs: [{ key: 't:wood@0', amount: 1, chance: 1 }],
       farm: { kind: 'tgs', tier: 1, footprint: [7, 7, 7], text: 'Tree Growth Simulator', tools: [] } })], flows: [{ from: 'tgs', to: 'out', key: 't:wood@0', perSecond: 0.5 }] });
     expect(text(html(farmed))).toContain('This plan uses');
-    expect(drawerStatus(farmed, null, false)).toBe('');
+    expect(drawerStatus(farmed, null, false)).toBe('No problems');
   });
 
   it('draws the GT progress arrow in the banner\'s busy line', () => {
