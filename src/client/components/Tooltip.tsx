@@ -7,8 +7,8 @@
 //   the pointer and follows it, re-placed at most once a frame. Another trigger hides it at once and waits again.
 // - Focus: an element focused from the keyboard (`:focus-visible`) shows the tip of its trigger after the same wait, at the element (a Flow
 //   row shows its box's tip at the row); the focus leaving hides it, and Enter or Space on the element hides it until the focus moves.
-// - Touch: a tap shows the tip at once, above the trigger, unless the tap acts (tapActs: a link, a button, a field, a role that acts, or a
-//   trigger in an svg), and a second tap hides it. A long press (LONG_PRESS_MS within DRAG_THRESHOLD) shows it whatever the tap would do,
+// - Touch: a tap shows the tip at once, above the trigger, unless the tap acts (tapActs: a link, a button, a field, a role that acts, on the
+//   trigger, in it or round it, as a search option round its icon, or a trigger in an svg: P2-R20), and a second tap hides it. A long press (LONG_PRESS_MS within DRAG_THRESHOLD) shows it whatever the tap would do,
 //   and keeps the press's context menu and its click from what was pressed, so a long press never ticks or picks (P2-D21); both guards let
 //   go at the next press or LONG_PRESS_CLICK_MS after the finger lifts, so a browser that sends no click after a long press loses no tap.
 // - A press with a mouse or a pen hides the tip, and its trigger shows nothing until the pointer leaves it, as a native title. Escape
@@ -20,34 +20,44 @@
 //   a still pointer fires no pointerout, and a finger's tip hears no pointer event at all: Review Focus 2), re-reads its lines (a replan
 //   rewrites a box's), and keeps a focus or touch tip at its element.
 // - Its box gives the focused element (focus) or the trigger its id as one more `aria-describedby` token, unless the tip says no more than
-//   the element's own name (P2-D36); only that token is taken back.
+//   the element's own name (P2-D36); the lines that only repeat the name are hidden from assistive technology, so the description is what
+//   the tip adds, an icon's mod line say (P2-R22). Only that token is taken back.
+// - An element out of its svg's view shows no tip, not even for a frame; one never placed is dropped as it is, and only a tip that showed
+//   fades out (spec §6.2).
 
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactElement } from 'react';
 import { createPortal } from 'react-dom';
 import { DRAG_THRESHOLD } from '../views/pan-zoom.ts';
 import { Figs } from './Figs.tsx';
 import {
-  createRestTimer, describes, frameThrottle, hoverFrom, LONG_PRESS_CLICK_MS, LONG_PRESS_MS, placeTip, tapActs, TIP_ATTR, TIP_EXIT_MS,
-  TIP_MOD_ATTR, tipLines, type TapNode, type TipAnchor,
+  createRestTimer, describedLines, frameThrottle, hoverFrom, LONG_PRESS_CLICK_MS, LONG_PRESS_MS, placeTip, repeatsName, tapActs, TIP_ATTR,
+  TIP_EXIT_MS, TIP_MOD_ATTR, tipLines, type TapNode, type TipAnchor,
 } from './tooltip-model.ts';
 
 /** What showed the tip: the mouse or a pen resting on it, the keyboard's focus, or a finger. */
 type TipMode = 'pointer' | 'focus' | 'touch';
 
-/** The tip drawn: its trigger, the element it is placed at, how it was shown, the pointer (pointer tips), its lines and mod line. */
+/**
+ * The tip drawn: its trigger, the element it is placed at, how it was shown, the pointer (pointer tips), its lines and mod line, and the
+ * name of the element it describes, if it describes one (`TipLines` hides the lines that only repeat it).
+ */
 interface TipState {
-  trigger: Element; anchor: Element; mode: TipMode; x: number; y: number; lines: string[]; mod: string | null; closing: boolean;
+  trigger: Element; anchor: Element; mode: TipMode; x: number; y: number; lines: string[]; mod: string | null; named: string | null;
+  closing: boolean;
 }
 
 /**
- * What a tip's box holds (spec §6.3): a `<div>` a line, the first its title, then the mod line, if any, in `div.nei-tooltip-mod`; every
- * text through `Figs`, so its figures are VT323 and its words, `%` and `×` Pixelify (spec §25). Hook-free.
+ * What a tip's box holds (spec §6.3): a `<div>` a line, the first its title, its figures through `Figs` (VT323, its words, `%` and `×`
+ * Pixelify: spec §25); then the mod line, if any, in `div.nei-tooltip-mod`, a mod's name, which stays Pixelify, digits and all (plan ruling
+ * digits-mixed). `name` is the accessible name of the element the tip describes: a line that only repeats it is hidden from assistive
+ * technology, so the description is what the tip says beyond it (ledger ruling P2-R22). Hook-free.
  */
-export function TipLines(props: { lines: readonly string[]; mod: string | null }): ReactElement {
+export function TipLines(props: { lines: readonly string[]; mod: string | null; name?: string | null }): ReactElement {
+  const repeats = repeatsName(props.lines, props.name ?? null);
   return (
     <>
-      {props.lines.map((line, i) => <div key={i}><Figs text={line} /></div>)}
-      {props.mod !== null && <div className="nei-tooltip-mod"><Figs text={props.mod} /></div>}
+      {props.lines.map((line, i) => <div key={i} {...(repeats[i] === true ? { 'aria-hidden': true } : {})}><Figs text={line} /></div>)}
+      {props.mod !== null && <div className="nei-tooltip-mod">{props.mod}</div>}
     </>
   );
 }
@@ -79,14 +89,21 @@ function anchorBox(el: Element): TipAnchor | null {
   return box.right > box.left && box.bottom > box.top ? box : null;
 }
 
-/** The elements from what a tap touched up to its trigger, as `tapActs` reads them. */
-function tapPath(from: Element, trigger: Element): TapNode[] {
+/** An element as `tapActs` reads it. */
+function tapNode(el: Element): TapNode {
+  return { tag: el.localName, role: el.getAttribute('role'), hasHref: el.hasAttribute('href'), inSvg: el.closest('svg') !== null };
+}
+
+/** The elements from what a tap touched up to its trigger (`path`), and those above the trigger up to the document's root (`above`). */
+function tapPath(from: Element, trigger: Element): { path: TapNode[]; above: TapNode[] } {
   const path: TapNode[] = [];
   for (let el: Element | null = from; el !== null; el = el.parentElement) {
-    path.push({ tag: el.localName, role: el.getAttribute('role'), hasHref: el.hasAttribute('href'), inSvg: el.closest('svg') !== null });
+    path.push(tapNode(el));
     if (el === trigger) break;
   }
-  return path;
+  const above: TapNode[] = [];
+  for (let el = trigger.parentElement; el !== null; el = el.parentElement) above.push(tapNode(el));
+  return { path, above };
 }
 
 /** The tokens of an `aria-describedby` value. */
@@ -132,11 +149,17 @@ function startHost(id: string, draw: (tip: TipState | null) => void, box: () => 
   /** A long press's guards: its context menu and its click are its own, kept from what it was on. */
   const guard: { contextmenu: boolean; click: boolean; timer: ReturnType<typeof setTimeout> | null } = { contextmenu: false, click: false, timer: null };
 
-  const describe = (el: Element): void => {
-    if (!describes(shownText, el.getAttribute('aria-label'))) return;
+  /**
+   * Gives `el` the tip as one more `aria-describedby` token when the tip says more than its name (P2-D36, ledger ruling P2-R22: an icon's
+   * mod line is more), and gives back that name, whose lines `TipLines` hides from assistive technology; null when it describes nothing.
+   */
+  const describe = (lines: readonly string[], mod: string | null, el: Element): string | null => {
+    const name = el.getAttribute('aria-label');
+    if (describedLines(lines, mod, name).length === 0) return null;
     const ids = tokens(el.getAttribute('aria-describedby'));
     if (!ids.includes(id)) el.setAttribute('aria-describedby', [...ids, id].join(' '));
     described = el;
+    return name;
   };
   const undescribe = (): void => {
     const el = described;
@@ -151,30 +174,47 @@ function startHost(id: string, draw: (tip: TipState | null) => void, box: () => 
     const text = trigger.getAttribute(TIP_ATTR) ?? '';
     const lines = tipLines(text);
     if (lines.length === 0 || !trigger.isConnected || !anchor.isConnected) return;
+    // an element out of its svg's view (panned past the diagram's edge) shows no tip, not even for a frame (spec §6.2)
+    if (mode !== 'pointer' && anchorBox(anchor) === null) return;
     if (exitTimer !== null) clearTimeout(exitTimer);
     exitTimer = null;
     closing = false;
     undescribe();
-    shown = { trigger, anchor, mode, x: pointer.x, y: pointer.y, lines, mod: trigger.getAttribute(TIP_MOD_ATTR) || null, closing: false };
+    const mod = trigger.getAttribute(TIP_MOD_ATTR) || null;
+    const named = describe(lines, mod, mode === 'focus' ? anchor : trigger);
+    shown = { trigger, anchor, mode, x: pointer.x, y: pointer.y, lines, mod, named, closing: false };
     shownText = text;
     placed = '';
-    describe(mode === 'focus' ? anchor : trigger);
     draw(shown);
     if (frame === null) frame = requestAnimationFrame(watch);
   };
 
-  /** Hides the tip that shows: it goes at once for assistive technology and for the next Escape, and fades out (`tip-out`). */
-  const hide = (): void => {
+  /** The tip that shows stops showing: its description goes, and its loop and its following stop. Gives it back, or null when none showed. */
+  const unshow = (): TipState | null => {
     const last = shown;
-    if (last === null) return;
+    if (last === null) return null;
     shown = null;
     undescribe();
     if (frame !== null) cancelAnimationFrame(frame);
     frame = null;
     follow.cancel();
+    return last;
+  };
+  /** Hides the tip that shows: it goes at once for assistive technology and for the next Escape, and fades out (`tip-out`). */
+  const hide = (): void => {
+    const last = unshow();
+    if (last === null) return;
     closing = true;
     draw({ ...last, closing: true });
     exitTimer = setTimeout(gone, TIP_EXIT_MS);
+  };
+  /** Takes away, as it is, a tip that was never placed: it was never seen, so it has no exit to run. */
+  const drop = (): void => {
+    if (unshow() === null) return;
+    if (exitTimer !== null) clearTimeout(exitTimer);
+    exitTimer = null;
+    closing = false;
+    draw(null);
   };
   /** The box of a tip that went is taken away: its exit has run, or its fallback time has passed. */
   const gone = (): void => {
@@ -190,7 +230,9 @@ function startHost(id: string, draw: (tip: TipState | null) => void, box: () => 
     if (t === null || el === null) return;
     const anchor = t.mode === 'pointer' ? { left: t.x, right: t.x, top: t.y, bottom: t.y } : anchorBox(t.anchor);
     if (anchor === null) {
-      hide();
+      // its element has left its svg's view: a tip never placed yet goes as it is, before it is painted; one that showed fades
+      if (placed === '') drop();
+      else hide();
       return;
     }
     const room = { width: document.documentElement.clientWidth, height: document.documentElement.clientHeight };
@@ -220,9 +262,9 @@ function startHost(id: string, draw: (tip: TipState | null) => void, box: () => 
         return;
       }
       undescribe();
-      shown = { ...t, lines, mod };
+      const named = describe(lines, mod, t.mode === 'focus' ? t.anchor : t.trigger);
+      shown = { ...t, lines, mod, named };
       shownText = text;
-      describe(t.mode === 'focus' ? t.anchor : t.trigger);
       draw(shown);                                 // the layout effect places it again, at its new size
     } else if (t.mode !== 'pointer') {
       place();
@@ -344,7 +386,8 @@ function startHost(id: string, draw: (tip: TipState | null) => void, box: () => 
       return;
     }
     if (p.moved || p.wasShown || p.target === null || p.trigger === null || !p.trigger.isConnected) return;
-    if (tapActs(tapPath(p.target, p.trigger))) return;  // where a tap acts, it only acts
+    const { path, above } = tapPath(p.target, p.trigger);
+    if (tapActs(path, above)) return;                   // where a tap acts, it only acts: on the trigger, in it, or round it (P2-R20)
     show(p.trigger, p.trigger, 'touch');
   };
   const onPointerCancel = (e: PointerEvent): void => {
@@ -499,7 +542,7 @@ export function TooltipHost(): ReactElement | null {
         if (e.animationName === 'tip-out') host.current?.gone();
       }}
     >
-      <TipLines lines={tip.lines} mod={tip.mod} />
+      <TipLines lines={tip.lines} mod={tip.mod} name={tip.named} />
     </div>,
     document.body,
   );

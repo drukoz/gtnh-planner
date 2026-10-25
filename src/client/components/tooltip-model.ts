@@ -133,24 +133,46 @@ export function describes(tip: string, name: string | null): boolean {
   return words(tip) !== words(name ?? '');
 }
 
+/**
+ * Which of a tip's `lines` only repeat `name`, the accessible name of the element the tip describes: each line that says just that name,
+ * or all of them when together they are the name (a Flow box is named by its whole tip).
+ */
+export function repeatsName(lines: readonly string[], name: string | null): boolean[] {
+  const whole = !describes(lines.join('\n'), name);
+  return lines.map((line) => whole || !describes(line, name));
+}
+
+/**
+ * What a tip says beyond `name`, the accessible name of the element it describes: its lines but those that only repeat the name, then its
+ * mod line. That is its description (ledger ruling P2-R22, spec §6.6): an item icon's is its mod ("GregTech"), and none when the tip is the
+ * name alone, as an icon's with no mod.
+ */
+export function describedLines(lines: readonly string[], mod: string | null, name: string | null): string[] {
+  const repeats = repeatsName(lines, name);
+  return [...lines.filter((_, i) => repeats[i] !== true), ...(mod === null ? [] : [mod])];
+}
+
 /** An element on the way from what a tap touched up to its trigger, as `tapActs` reads it. */
 export interface TapNode { tag: string; role: string | null; hasHref: boolean; inSvg: boolean }
 
 const ACTING_TAGS = new Set(['button', 'input', 'select', 'textarea', 'summary', 'label']);
 const ACTING_ROLES = new Set(['button', 'checkbox', 'radio', 'tab', 'option', 'link']);
 
+/** A link, a button, a field, a summary, a label, or an element with a role that acts. */
+function acting(node: TapNode): boolean {
+  const tag = node.tag.toLowerCase();
+  if (ACTING_TAGS.has(tag) || (tag === 'a' && node.hasHref)) return true;
+  return (node.role ?? '').split(/\s+/).some((role) => ACTING_ROLES.has(role));
+}
+
 /**
- * Whether a tap does something of its own, from what it touched up to the trigger (`path`, the trigger last): a link, a button, a field,
- * a summary, a label or an element with a role that acts on the way, or a trigger in an svg (the diagrams pick on a tap). Where a tap
- * acts it only acts, and a long press or the focus shows the tip instead (P2-D21).
+ * Whether a tap does something of its own: an element that acts (a link, a button, a field, a summary, a label or a role that acts) from
+ * what it touched up to the trigger (`path`, the trigger last) or above the trigger up to the document's root (`above`: an icon in a search
+ * option or a summary), or a trigger in an svg (the diagrams pick on a tap). Where a tap acts it only acts, and a long press or the focus
+ * shows the tip instead (P2-D21, ledger ruling P2-R20).
  */
-export function tapActs(path: readonly TapNode[]): boolean {
-  const acts = path.some((node) => {
-    const tag = node.tag.toLowerCase();
-    if (ACTING_TAGS.has(tag) || (tag === 'a' && node.hasHref)) return true;
-    return (node.role ?? '').split(/\s+/).some((role) => ACTING_ROLES.has(role));
-  });
-  return acts || path[path.length - 1]?.inSvg === true;
+export function tapActs(path: readonly TapNode[], above: readonly TapNode[] = []): boolean {
+  return path.some(acting) || above.some(acting) || path[path.length - 1]?.inSvg === true;
 }
 
 /** Whether a pointer of this `pointerType` hovers: a mouse or a pen. A finger does not, so touch's pointerover and pointerout do nothing. */

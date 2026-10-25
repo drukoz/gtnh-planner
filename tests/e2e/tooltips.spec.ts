@@ -31,6 +31,28 @@ async function openDrawer(page: Page): Promise<{ toggle: Locator; settings: Loca
   return { toggle, settings };
 }
 
+/**
+ * Whether `tip`'s box sits right of and below `trigger`, which the pointer rests on the middle of: 12 px past the pointer on both axes
+ * (TIP_OFFSET, P2-D36), give or take a pixel, and the 2 px it rises in by.
+ */
+async function belowRightOf(tip: Locator, trigger: Locator): Promise<boolean> {
+  const [t, r] = [await tip.boundingBox(), await trigger.boundingBox()];
+  if (t === null || r === null) return false;
+  const [x, y] = [r.x + r.width / 2, r.y + r.height / 2];
+  return Math.abs(t.x - (x + 12)) <= 1.5 && t.y >= y + 12 - 1.5 && t.y <= y + 12 + 2 + 1.5;
+}
+
+/**
+ * Marks <html> (`data-test-tip-seen`) when the page holds a shared tip whose words contain `words` once a task's DOM changes have settled:
+ * a tip drawn for a frame, or one that fades, is caught; a box inserted and taken away again before the page is painted is not.
+ */
+const markTips = (page: Page, words = ''): Promise<void> => page.evaluate((w) => {
+  new MutationObserver(() => {
+    const tip = document.querySelector('.nei-tooltip');
+    if (tip !== null && (tip.textContent ?? '').includes(w)) document.documentElement.setAttribute('data-test-tip-seen', '');
+  }).observe(document.body, { childList: true, subtree: true, characterData: true });
+}, words);
+
 test('an item icon shows its name in the NEI tooltip, which takes no pointer and goes when the pointer leaves', async ({ page }) => {
   const icon = (await materialIcons(page, 'Icon tip')).first();
   await expect(icon).not.toHaveAttribute('title');                                      // the native title is gone (spec §6.4)
@@ -41,6 +63,7 @@ test('an item icon shows its name in the NEI tooltip, which takes no pointer and
   await expect(tip).toContainText(name!);
   await expect(tip).toHaveCSS('pointer-events', 'none');
   await expect.poll(() => inWindow(tip)).toBe(true);
+  await expect.poll(() => belowRightOf(tip, icon)).toBe(true);                         // right of and below the pointer, never above it
   await page.mouse.move(5, 5);
   await expect(tip).toHaveCount(0);
 });
@@ -81,9 +104,11 @@ test('in the drawer the first Escape hides a tip, the second closes the drawer',
   await settings.locator('.settings-target .item-icon').hover();
   const tip = page.getByRole('tooltip');
   await expect(tip).toBeVisible();
+  await page.evaluate(() => document.activeElement?.setAttribute('data-test-focused', ''));
   await page.keyboard.press('Escape');
   await expect(tip).toHaveCount(0);
   await expect(toggle).toHaveAttribute('aria-expanded', 'true');                         // the tip's Escape, not the drawer's
+  await expect(page.locator('[data-test-focused]')).toBeFocused();                       // and it leaves the focus where it was
   await page.keyboard.press('Escape');
   await expect(toggle).toHaveAttribute('aria-expanded', 'false');
 });
@@ -101,13 +126,129 @@ test('a tip whose trigger goes away under a still pointer goes too, and never ta
   const tip = page.getByRole('tooltip');
   await expect(tip).toBeVisible();
   await search.fill('zzqxv');                                                            // no match: the list unmounts, the pointer stays
+  // the list first, so the tip below goes because its trigger did (anything else that hid it earlier would leave the list open, and the
+  // Escape would be the list's)
+  await expect(page.getByRole('listbox', { name: 'Matches' })).toHaveCount(0);
   await expect(tip).toHaveCount(0);
   await page.keyboard.press('Escape');
   await expect(toggle).toHaveAttribute('aria-expanded', 'false');
 });
 
+// ledger ruling P2-R21 (spec §6.1, R15): one layer per press over a search list too: the first Escape hides the tip, and the list, which
+// skips a key whose default was prevented, stays open until the second
+test('over an open search list the first Escape hides the tip, the second closes the list', async ({ page }) => {
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Tip over a list', LV_CIRCUITS);
+  const settings = page.locator('aside[aria-label="Project settings"]');
+  const tip = page.getByRole('tooltip');
+  // the item search's list, and the tip of one of its icons
+  const search = settings.getByPlaceholder('Search items and fluids');
+  await search.fill('Iron Ingot');
+  const matches = settings.getByRole('listbox', { name: 'Matches' });
+  await settings.locator('[role=option] .item-icon').first().hover();
+  await expect(tip).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(tip).toHaveCount(0);
+  await expect(matches).toBeVisible();
+  await expect(search).toBeFocused();                                                   // the tip's Escape leaves the focus where it was
+  await page.keyboard.press('Escape');
+  await expect(matches).toBeHidden();
+  // the avoid box's list, and the tip of the target's icon above it
+  const avoid = settings.getByRole('combobox', { name: 'Avoid a material' });
+  await avoid.fill('copp');
+  const materials = settings.getByRole('listbox', { name: 'Materials' });
+  await expect(materials).toBeVisible();
+  await settings.locator('.settings-target .item-icon').hover();
+  await expect(tip).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(tip).toHaveCount(0);
+  await expect(materials).toBeVisible();
+  await expect(avoid).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(materials).toBeHidden();
+});
+
+// spec §6.2 (the fix round's I2): an element out of its svg's view shows no tip, not even for a frame (its box is never put in the page),
+// and one that leaves the view between its tip showing and the tip being laid out is dropped as it is, before the page is painted, with no
+// fade. A finger's long press shows an element tip at once when the browser's own long press (its context menu) comes first, so the presses
+// below, synthetic touch pointer events on three triggers of an svg of the test's own that draws past its edge, each in a task of its own,
+// show their tips at once: one out of the svg's view, one that leaves it in the same task, and one in it (the control)
+test('a tip whose element is out of its svg\'s view is never drawn, not even for a frame', async ({ page }) => {
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Out of view', LV_CIRCUITS);
+  await expect(page.getByRole('tab', { name: 'Flow' })).toBeVisible();
+  await page.evaluate(() => {
+    const NS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('width', '100');
+    svg.setAttribute('height', '100');
+    svg.style.cssText = 'position: fixed; left: 300px; top: 300px; overflow: visible; z-index: 99';
+    for (const [id, tip, x] of [['out-of-view', 'Out of view', 200], ['leaves-view', 'Leaves view', 10], ['in-view', 'In view', 50]] as const) {
+      const g = document.createElementNS(NS, 'g');
+      g.id = id;
+      g.setAttribute('data-tip', tip);
+      g.setAttribute('transform', `translate(${x} 10)`);
+      const rect = document.createElementNS(NS, 'rect');
+      rect.setAttribute('width', '20');
+      rect.setAttribute('height', '20');
+      g.append(rect);
+      svg.append(g);
+    }
+    document.body.append(svg);
+    // what the page's tips did: a box put in the page at all (`added`), and one still there once a task's changes have settled (`seen`)
+    const mark = (what: string): void => document.documentElement.setAttribute(`data-test-${what}`, '');
+    const words = (el: Element | null): string => (el?.matches('.nei-tooltip') === true ? el.textContent ?? '' : '');
+    new MutationObserver((records) => {
+      for (const record of records) {
+        for (const node of record.addedNodes) {
+          if (!(node instanceof Element)) continue;
+          if (words(node).includes('Out of view')) mark('out-of-view-added');
+          if (words(node).includes('Leaves view')) mark('leaves-view-added');
+        }
+      }
+      const shown = words(document.querySelector('.nei-tooltip'));
+      if (shown.includes('Out of view')) mark('out-of-view-seen');
+      if (shown.includes('Leaves view')) mark('leaves-view-seen');
+    }).observe(document.body, { childList: true, subtree: true, characterData: true });
+  });
+  /** A finger's long press on trigger `id`: down, the browser's long press, `moveTo` (a transform) in the same task, and up. */
+  const longPress = (id: string, moveTo: string | null = null): Promise<void> => page.evaluate(([id, moveTo]) => {
+    const g = document.getElementById(id);
+    const rect = g?.firstElementChild;
+    if (g === null || rect === null || rect === undefined) throw new Error(`no trigger ${id}`);
+    const at = rect.getBoundingClientRect();
+    const init: PointerEventInit = {
+      bubbles: true, cancelable: true, composed: true, pointerType: 'touch', pointerId: 31, isPrimary: true, clientX: at.left + 2, clientY: at.top + 2,
+    };
+    rect.dispatchEvent(new PointerEvent('pointerdown', init));
+    rect.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, composed: true }));
+    if (moveTo !== null) g.setAttribute('transform', moveTo);
+    rect.dispatchEvent(new PointerEvent('pointerup', init));
+  }, [id, moveTo] as const);
+  await longPress('out-of-view');                                                       // out of the svg's view as its tip would show
+  await longPress('leaves-view', 'translate(300 10)');                                  // in it as its tip shows, out before it is laid out
+  await longPress('in-view');                                                            // the control: in view, its tip shows
+  await expect(page.getByRole('tooltip')).toHaveText('In view');
+  const html = page.locator('html');
+  await expect(html).not.toHaveAttribute('data-test-out-of-view-added');               // show() drew nothing
+  await expect(html).toHaveAttribute('data-test-leaves-view-added');                   // this one was drawn, so place() had it to lay out ...
+  await expect(html).not.toHaveAttribute('data-test-leaves-view-seen');                // ... and dropped it before the page was painted
+});
+
 test.describe('on a touch screen', () => {
   test.use({ hasTouch: true });
+
+  // ledger ruling P2-R20 (spec §6.1): where a tap acts it only acts, on a trigger inside what acts too: a search option picks on a tap
+  test('a tap on a search option\'s icon picks it, and no tip shows at any point', async ({ page }) => {
+    await login(page); await setName(page, 'Ann');
+    await createProject(page, 'Tap picks', LV_CIRCUITS);
+    await markTips(page);
+    const settings = page.locator('aside[aria-label="Project settings"]');
+    await settings.getByPlaceholder('Search items and fluids').fill('Iron Ingot');
+    await settings.locator('[role=option] .item-icon').first().tap();
+    await expect(settings.locator('.settings-target-name')).toHaveText('Iron Ingot');                // it picked
+    await expect(page.locator('html')).not.toHaveAttribute('data-test-tip-seen');                    // and no tip showed, not even for a frame
+  });
 
   test('a tap shows an icon\'s tip, a second tap or a tap elsewhere hides it', async ({ page }) => {
     const icon = (await materialIcons(page, 'Tap tip')).first();
@@ -160,6 +301,7 @@ test.describe('on a touch screen', () => {
     await expect(tip).toBeVisible();
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
     await search.fill('zzqxv');                                                            // no match: the list unmounts
+    await expect(settings.getByRole('listbox', { name: 'Matches' })).toHaveCount(0);      // the list first, as above
     await expect(tip).toHaveCount(0);
     await page.keyboard.press('Escape');
     await expect(toggle).toHaveAttribute('aria-expanded', 'false');

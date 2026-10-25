@@ -7,7 +7,7 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { HOVER_DELAY_MS } from '../../src/client/map/hover.ts';
 import {
-  alongAxis, createRestTimer, describes, frameThrottle, hoverFrom, placeTip, tapActs, TIP_DELAY_MS, tipLines, tipText, type TapNode,
+  alongAxis, createRestTimer, describedLines, describes, frameThrottle, hoverFrom, placeTip, tapActs, TIP_DELAY_MS, tipLines, tipText, type TapNode,
 } from '../../src/client/components/tooltip-model.ts';
 import { MOD_NAMES, modName } from '../../src/client/components/mod-names.ts';
 import { TipLines } from '../../src/client/components/Tooltip.tsx';
@@ -63,6 +63,19 @@ describe('the shared tooltip: its lines and when it shows', () => {
     for (const path of [[n('span'), n('button')], [n('a', { hasHref: true })], [n('label')], [n('summary')], [n('li', { role: 'checkbox' })], [n('g', { inSvg: true })]]) expect(tapActs(path)).toBe(true);
   });
 
+  // ledger ruling P2-R20 (spec §6.1: where a tap acts, it only acts): what the trigger sits in counts too, up to the document's root
+  it('lets a tap on an icon inside a search option or a summary only act', () => {
+    const n = (tag: string, over: Partial<TapNode> = {}): TapNode => ({ tag, role: null, hasHref: false, inSvg: false, ...over });
+    const page = [n('div'), n('aside', { role: 'complementary' }), n('main'), n('body'), n('html')];
+    // ItemSearch's option picks on a click; FoundPanel's summary opens its details
+    expect(tapActs([n('img'), n('span')], [n('li', { role: 'option' }), n('ul', { role: 'listbox' }), ...page])).toBe(true);
+    expect(tapActs([n('span')], [n('span'), n('summary'), n('details'), n('li'), ...page])).toBe(true);
+    // a Materials row's icon sits beside its tick, not in it: nothing on the way up acts, and the tap shows the tip
+    expect(tapActs([n('span')], [n('li'), n('ul'), n('section'), n('div', { role: 'tabpanel' }), ...page])).toBe(false);
+    // the svg rule is the trigger's own: an element above it in an svg makes no tap act
+    expect(tapActs([n('span')], [n('div', { inSvg: true }), ...page])).toBe(false);
+  });
+
   it('hovers with a mouse or a pen, never with a finger', () => {   // spec §6.1: touch's pointerover and pointerout are ignored
     expect(['mouse', 'pen', 'touch', ''].map(hoverFrom)).toEqual([true, true, false, false]);
   });
@@ -85,4 +98,25 @@ describe('the shared tooltip: the mod line and the box', () => {
 
   // spec §25: a tip's figures in VT323, its words and its `%` and `×` in Pixelify
   it('writes a tip\'s figures in span.fig', () => expect(renderToStaticMarkup(<TipLines lines={['Copper Wire', 'need 80× · have 1,440', '10% chance']} mod="GregTech" />)).toBe('<div>Copper Wire</div><div>need <span class="fig">80</span>× · have <span class="fig">1,440</span></div><div><span class="fig">10</span>% chance</div><div class="nei-tooltip-mod">GregTech</div>'));
+
+  // plan ruling digits-mixed: a mod's name is a name, which stays Pixelify, digits and all
+  it('writes a mod line as the name it is, with no figure', () => {
+    expect(renderToStaticMarkup(<TipLines lines={['Copper Cable']} mod="IndustrialCraft 2" />)).toBe('<div>Copper Cable</div><div class="nei-tooltip-mod">IndustrialCraft 2</div>');
+  });
+
+  // ledger ruling P2-R22 (spec §6.6): the description is what the tip says beyond the element's name, its mod line included, so a screen
+  // reader hears "GregTech" and never the name twice
+  it('describes what a tip says beyond the name of the element it describes, and hides the lines that only repeat it', () => {
+    expect(describedLines(['Copper Wire'], 'GregTech', 'Copper Wire')).toEqual(['GregTech']);
+    expect(describedLines(['Copper Wire'], null, 'Copper Wire')).toEqual([]);
+    expect(describedLines(['Copper  Wire '], null, 'Copper Wire')).toEqual([]);
+    expect(describedLines(['Basic Wiremill', 'takes Copper Ingot 1/s'], null, 'Basic Wiremill')).toEqual(['takes Copper Ingot 1/s']);
+    expect(describedLines(['Basic Wiremill', 'LV · 32 EU/t'], null, 'Basic Wiremill\nLV · 32 EU/t')).toEqual([]);   // its name is the whole tip
+    expect(describedLines(['Basic Wiremill', 'LV · 32 EU/t'], null, 'Basic Wiremill, LV · 32 EU/t')).toEqual(['Basic Wiremill', 'LV · 32 EU/t']);
+    expect(describedLines(['Fit · F'], null, null)).toEqual(['Fit · F']);
+    expect(renderToStaticMarkup(<TipLines lines={['Copper Wire']} mod="GregTech" name="Copper Wire" />))
+      .toBe('<div aria-hidden="true">Copper Wire</div><div class="nei-tooltip-mod">GregTech</div>');
+    expect(renderToStaticMarkup(<TipLines lines={['Basic Wiremill', 'LV · 32 EU/t']} mod={null} name="Basic Wiremill" />))
+      .toBe('<div aria-hidden="true">Basic Wiremill</div><div>LV · <span class="fig">32</span> EU/t</div>');
+  });
 });

@@ -76,7 +76,8 @@ export function ItemSearch(props: { onPick(hit: SearchHit): void; placeholder?: 
         e.preventDefault();
         pick(hit);
       }
-    } else if (e.key === 'Escape') {
+    } else if (e.key === 'Escape' && !e.nativeEvent.defaultPrevented) {
+      // a key something has already handled (the shared tooltip's, hiding its tip) is not the list's: one layer per press (R15, P2-R21)
       setOpen(false);
     }
   };

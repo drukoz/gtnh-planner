@@ -99,7 +99,8 @@ function MaterialBox(props: { materials: readonly AvoidMaterial[]; onAdd(entry: 
       e.preventDefault();
       // The highlighted material while the list shows, else the text as typed.
       commit((showList ? hits[current]?.name : undefined) ?? text);
-    } else if (e.key === 'Escape') {
+    } else if (e.key === 'Escape' && !e.nativeEvent.defaultPrevented) {
+      // a key something has already handled (the shared tooltip's, hiding its tip) is not the list's: one layer per press (R15, P2-R21)
       setOpen(false);
     }
   };
