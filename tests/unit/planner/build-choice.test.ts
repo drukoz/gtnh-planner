@@ -10,6 +10,7 @@ import { describe, it, expect } from 'vitest';
 import { MINI_GT, miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec, type PackSpec } from '../../helpers/pack-spec.ts';
 import { largeBenderSpec } from '../../helpers/build-fixtures.ts';
+import { allMachines } from '../../../src/server/pack/lookup.ts';
 import { buildKeys, itemPrices } from '../../../src/server/planner/build-cost.ts';
 import { lineBuildModel, machineOptions, ONLY_REQUIRED_MULTIBLOCK_WEIGHT, type BuildModel } from '../../../src/server/planner/machine-options.ts';
 import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
@@ -237,7 +238,7 @@ describe('multiblocks only when nothing else can do it', () => {
     // The Large Bender (1100) is offered beside the Basic Bending Machine only because the group owns one.
     const pack = packFromSpec(largeBenderSpec());
     const lv = { ...defaultSettings(), tier: 1 };
-    const prices = await itemPrices(pack, lv, emptyContext(), buildKeys(pack, [...pack.machines.values()]));
+    const prices = await itemPrices(pack, lv, emptyContext(), buildKeys(pack, allMachines(pack)));
     const env = { groupTier: 1, coilHeat: 1801, owned: new Map([['gt:1100', 1]]), prices };
     const bend = pack.recipeById.get('bend-plate')!;
     expect(machineOptions(pack, bend, 'gt.recipe.metalbender', env).map((o) => [o.id, o.canAdd])).toEqual([['gt:101', true], ['gt:1100', true]]);

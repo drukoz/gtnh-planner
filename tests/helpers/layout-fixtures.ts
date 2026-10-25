@@ -19,6 +19,7 @@ import {
 } from '../../src/shared/types/world.ts';
 import { powerSummary } from '../../src/server/planner/plan.ts';
 import { MAX_AREA_VOXELS } from '../../src/server/world/area.ts';
+import { machineByMteId } from '../../src/server/pack/lookup.ts';
 
 /** The machine ids of the fixture pack. */
 export const IDS = {
@@ -231,7 +232,7 @@ export function emptyPack(): Pack {
 export function addLineParts(pack: Pack): Pack {
   for (const m of lineMachines()) addMachine(pack, m);
   for (const [key, name] of PART_ITEMS) pack.items.set(key, item(key, name));
-  const ebf = pack.machines.get(IDS.EBF);
+  const ebf = machineByMteId(pack, IDS.EBF);
   if (ebf !== undefined && ebf.structure === undefined) ebf.structure = structuredClone(EBF_STRUCTURE);
   return pack;
 }

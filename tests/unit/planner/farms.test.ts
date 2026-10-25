@@ -13,6 +13,7 @@ import { defaultFarmSettings, type FarmSettings } from '../../../src/shared/type
 import type { Pack, Recipe } from '../../../src/shared/types/pack.ts';
 import type { Plan, PlanContext, PlanSettings } from '../../../src/shared/types/plan.ts';
 import { recipeId } from '../../../src/server/pack/recipe-id.ts';
+import { machineByMteId } from '../../../src/server/pack/lookup.ts';
 import { planBasis } from '../../../src/server/planner/basis.ts';
 import { itemPrices, type ItemPrices } from '../../../src/server/planner/build-cost.ts';
 import type { CandidateGraph } from '../../../src/server/planner/candidates.ts';
@@ -265,8 +266,8 @@ describe('the synthetic farm recipes', () => {
     expect(pack.maps.has(CROP_MANAGER_MAP)).toBe(false);
     expect(farms.machinesByMap.get(CROP_MANAGER_MAP)).toEqual([28001, 28002]);
     expect(farms.machines.get(28001)).toMatchObject({ kind: 'basic', maps: [CROP_MANAGER_MAP], tier: 1, name: 'Basic Crop Manager' });
-    expect(pack.machines.get(28001)).toMatchObject({ kind: 'other', maps: [] });
-    expect(farms.machines.get(15541)).toBe(pack.machines.get(15541));
+    expect(machineByMteId(pack, 28001)).toMatchObject({ kind: 'other', maps: [] });
+    expect(farms.machines.get(15541)).toBe(machineByMteId(pack, 15541));
   });
 });
 

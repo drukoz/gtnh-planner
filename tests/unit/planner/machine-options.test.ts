@@ -8,6 +8,7 @@ import { describe, it, expect } from 'vitest';
 import { MINI_GT, miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec, type RecipeSpec } from '../../helpers/pack-spec.ts';
 import { centrifugeDustSpec, kitSpec, largeBenderSpec, sandSpec, withAutoWorkbenches, withPriceGap } from '../../helpers/build-fixtures.ts';
+import { allMachines } from '../../../src/server/pack/lookup.ts';
 import { buildCostCounts, planBasis } from '../../../src/server/planner/basis.ts';
 import { buildKeys, itemPrices, type ItemPrices } from '../../../src/server/planner/build-cost.ts';
 import { buildCandidates, type CandidateGraph, type LeafOracle } from '../../../src/server/planner/candidates.ts';
@@ -31,7 +32,7 @@ const CIRCUIT = 't:circuit@0';
 
 /** The prices of every machine of `pack` at `s`. */
 function pricesOf(pack: Pack, s: PlanSettings): Promise<ItemPrices> {
-  return itemPrices(pack, s, ctx, buildKeys(pack, [...pack.machines.values()]));
+  return itemPrices(pack, s, ctx, buildKeys(pack, allMachines(pack)));
 }
 
 function recipeOf(pack: Pack, id: string): Recipe {

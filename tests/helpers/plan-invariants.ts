@@ -26,6 +26,7 @@ import { legacyMteId } from '../../src/shared/ids.ts';
 import type { StuffKey } from '../../src/shared/keys.ts';
 import type { Pack } from '../../src/shared/types/pack.ts';
 import { FREE_KEYS, type Plan, type PlanContext, type PlanSettings, type PlanStep } from '../../src/shared/types/plan.ts';
+import { machineByMteId } from '../../src/server/pack/lookup.ts';
 import { planBasis, type PlanBasis } from '../../src/server/planner/basis.ts';
 import type { CandidateGraph } from '../../src/server/planner/candidates.ts';
 import { solveLp, type LpRow } from '../../src/server/planner/lp.ts';
@@ -459,7 +460,7 @@ function checkMachines(pack: Pack, settings: PlanSettings, plan: Plan, basis: Pl
       }
       // An independent overclock of a singleblock (gt-mechanics §2.2) and its voltage.
       if (pick.kind === 'basic') {
-        const machine = pack.machines.get(step.machine.mteId);
+        const machine = machineByMteId(pack, step.machine.mteId);
         const amps = machine?.amps ?? pack.maps.get(step.mapId)?.amps ?? 1;
         const oc = singleblockOverclock(r, { tier: step.machine.tier, amps });
         if (oc.euPerTick !== step.euPerTick || oc.durationTicks !== step.durationTicks) {

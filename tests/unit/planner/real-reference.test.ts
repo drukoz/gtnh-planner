@@ -10,6 +10,7 @@ import { dirname, join, resolve } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
 import { loadPack } from '../../../src/server/pack/load.ts';
+import { machineByMteId } from '../../../src/server/pack/lookup.ts';
 import { emptyContext, planLine, type SolveTuning } from '../../../src/server/planner/plan.ts';
 import { HAND_STEP_WEIGHT } from '../../../src/server/planner/solve.ts';
 import { normalizeSettings } from '../../../src/shared/project/apply-op.ts';
@@ -213,7 +214,7 @@ describe.skipIf(path === undefined)("the user's reference Electronic Circuit flo
     const required = await timed({ ...r1, multiblocks: 'only-required' });
     logPlan('R1, multiblocks only where required', required.plan, required.seconds);
     expect(required.plan.status, JSON.stringify(required.plan.warnings)).toBe('ok');
-    const multiblocks = required.plan.steps.filter((s) => pack.machines.get(s.machine.mteId)?.kind === 'multiblock');
+    const multiblocks = required.plan.steps.filter((s) => machineByMteId(pack, s.machine.mteId)?.kind === 'multiblock');
     console.log(`real-reference R1, multiblocks only where required: ${multiblocks.length === 0 ? 'no multiblock'
       : multiblocks.map((s) => `${s.count}× ${s.machine.name} (${s.recipeId}, ${s.owned} owned)`).join('; ')}`);
     for (const s of multiblocks) {

@@ -27,6 +27,7 @@ import { emptyScan, layoutLine } from '../../src/server/layout/layout.ts';
 import { amountList, finalItemOutputs, nameList, rawItemInputs, stepItemInputs, stepItemOutputs } from '../../src/server/layout/modes/mode.ts';
 import { manualReasonOf } from '../../src/server/layout/multiblock-rules.ts';
 import { resolveParts } from '../../src/server/layout/parts.ts';
+import { machineByMteId } from '../../src/server/pack/lookup.ts';
 import { lineGround, lineScan } from './enderio-fixtures.ts';
 import { EBF_STRUCTURE, IDS, layoutPack, makePlan, makeProject, type StepSpec } from './layout-fixtures.ts';
 
@@ -106,7 +107,7 @@ function feedMachines(): Machine[] {
 export function feedPack(): Pack {
   const pack = layoutPack();
   for (const [mteId, map] of FIXTURE_MAPS) {
-    const m = pack.machines.get(mteId);
+    const m = machineByMteId(pack, mteId);
     if (m === undefined) throw new Error(`the layout fixtures define no machine ${mteId}`);
     m.maps = [map];
   }
@@ -169,7 +170,7 @@ function stepRecipe(pack: Pack, spec: FeedStep, nominal: { inputs: readonly Prod
   }));
   for (const key of spec.held ?? []) inputs.push({ slot: itemSlot++, consumed: false, chance: 0, options: [{ key, amount: 1 }] });
   return {
-    id: spec.id, source: 'gt', maps: [...(pack.machines.get(spec.mteId)?.maps ?? [])], inputs, outputs, euPerTick: spec.euPerTick ?? 30,
+    id: spec.id, source: 'gt', maps: [...(machineByMteId(pack, spec.mteId)?.maps ?? [])], inputs, outputs, euPerTick: spec.euPerTick ?? 30,
     durationTicks: spec.ticks ?? DEFAULT_TICKS, amps: 1, specialValue: 0, meta: {}, flags: {},
   };
 }
@@ -268,7 +269,7 @@ export function legacyFeed(layout: Layout, pack: Pack, plan: Plan): Layout {
   const steps = new Map(plan.steps.map((s) => [s.id, s]));
   const unitName = (stepId: string | undefined): string | undefined => {
     const s = stepId === undefined ? undefined : steps.get(stepId);
-    return s === undefined ? undefined : pack.machines.get(s.machine.mteId)?.name;
+    return s === undefined ? undefined : machineByMteId(pack, s.machine.mteId)?.name;
   };
   const isStepBlock = (b: LayoutBlock | undefined): b is LayoutBlock & { stepId: string } =>
     b !== undefined && b.stepId !== undefined && (b.role === 'machine' || b.hatch === 'input_bus' || b.hatch === 'output_bus');
@@ -289,7 +290,7 @@ export function legacyFeed(layout: Layout, pack: Pack, plan: Plan): Layout {
     const placed = new Set<string>(), hand = new Set<string>();
     for (const b of live) {
       if (b.role !== 'machine' || b.stepId === undefined) continue;
-      const m = b.block.mteId === undefined ? undefined : pack.machines.get(b.block.mteId);
+      const m = b.block.mteId === undefined ? undefined : machineByMteId(pack, b.block.mteId);
       (m !== undefined && manualReasonOf(m) !== null ? hand : placed).add(b.stepId);
     }
     const items = plan.flows.filter((f) => !isFluidKey(f.key));
