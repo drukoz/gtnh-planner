@@ -16,26 +16,24 @@ import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
 import { loadPack } from '../../../src/server/pack/load.ts';
 import { benchCapBy } from '../../../src/server/planner/benches.ts';
 import { buildKeys, itemPrices, machineBuildCost, machineGap } from '../../../src/server/planner/build-cost.ts';
-import type { CandidateGraph } from '../../../src/server/planner/candidates.ts';
-import { lineBuildModel, optionMachines, sharesMachines, type BuildModel } from '../../../src/server/planner/machine-options.ts';
-import { emptyContext, groupStock, planLine, solveOptions, stockForm } from '../../../src/server/planner/plan.ts';
+import { optionMachines, sharesMachines } from '../../../src/server/planner/machine-options.ts';
+import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
 import { linePricing } from '../../../src/server/planner/pricing.ts';
-import { solveLine, type Solution } from '../../../src/server/planner/solve.ts';
+import type { Solution } from '../../../src/server/planner/solve.ts';
 import { tierName, V } from '../../../src/shared/gt/tiers.ts';
 import { isFluidKey, type StuffKey } from '../../../src/shared/keys.ts';
-import { defaultSettings, normalizeSettings } from '../../../src/shared/project/apply-op.ts';
+import { normalizeSettings } from '../../../src/shared/project/apply-op.ts';
 import { defaultFarmSettings } from '../../../src/shared/types/farm.ts';
 import type { Machine, Pack } from '../../../src/shared/types/pack.ts';
 import { DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_RAW_CAP, DEFAULT_STEP_CHARGE, type Plan, type PlanContext, type PlanSettings } from '../../../src/shared/types/plan.ts';
 import { buildObjective } from '../../helpers/build-objective.ts';
 import { REFERENCE, localDocPath, storedSettings } from '../../helpers/local-docs.ts';
+import {
+  CASES, ELECTRONIC_CIRCUIT, GOOD_ELECTRONIC_CIRCUIT, POLYETHYLENE_BAR, STEEL_INGOT, at, buildRun, newBlocks, type BuildRun, type Case,
+} from '../../helpers/real-build-cases.ts';
 import { USER_EC_STORED } from '../../helpers/user-project.ts';
 
-const ELECTRONIC_CIRCUIT = 'IC2:itemPartCircuit@0';
-const GOOD_ELECTRONIC_CIRCUIT = 'gregtech:gt.metaitem.01@32702';
 const ADVANCED_CIRCUIT = 'IC2:itemPartCircuitAdv@0';
-const POLYETHYLENE_BAR = 'gregtech:gt.metaitem.01@11874';
-const STEEL_INGOT = 'gregtech:gt.metaitem.01@11305';
 const ALUMINIUM_INGOT = 'gregtech:gt.metaitem.01@11019';
 const MICROPROCESSOR = 'gregtech:gt.metaitem.03@32078';
 const GLASS_TUBE = 'gregtech:gt.metaitem.03@32012';
@@ -72,65 +70,32 @@ const STEP_HEADROOM = 5;
 const AE2_POOL_MAX_STEPS = 9;
 /** `GTNH_BUILD_NODES`: the build MIP's node limit for a calibration run the controller asks for (`SolveOptions.buildMaxNodes`). */
 const NODES = process.env.GTNH_BUILD_NODES === undefined ? undefined : Number(process.env.GTNH_BUILD_NODES);
-const SECONDS_PER: Readonly<Record<PlanSettings['per'], number>> = { min: 60, hour: 3600 };
 /** Add-on 17's farms off (its ruling S15: a pin its farms change keeps its subject, and logs its farms-on plan beside it). */
 const FARMS_OFF = { ...defaultFarmSettings(), kinds: [] };
 
-/** One calibration plan: its settings and whether two of every candidate machine of its line are owned (`owning`). */
-interface Case { name: string; settings: PlanSettings; owned: boolean }
-
-const at = (target: StuffKey, tier: number, amount: number, more: Partial<PlanSettings> = {}): PlanSettings =>
-  ({ ...defaultSettings(), per: 'min', target, tier, amount, ...more });
 /** Farms off (add-on 17 ruling S15): the listed pins keep their subject and log their farms-on plan. */
 const atOff = (target: StuffKey, tier: number, amount: number, more: Partial<PlanSettings> = {}): PlanSettings =>
   at(target, tier, amount, { farms: FARMS_OFF, ...more });
 
 /**
- * The eleven calibration plans of plan 12 (seven nothing owned, two of them routed; four through `owning`), the
- * Electronic Circuit at LV on AE2 (ruling P15), and where its settings file is there the user's reference flow's R0, R1,
- * V1 and V4 (controller ruling 184): R0 as stored but crafted by hand, R1 crafted on Auto Workbenches, V1 without its pins
- * and stops, V4 without its pins.
+ * The calibration plans (`CASES`, tests/helpers/real-build-cases.ts: plan 12's eleven and the Electronic Circuit at LV
+ * on AE2) and, where its settings file is there, the user's reference flow's R0, R1, V1 and V4 (controller ruling 184):
+ * R0 as stored but crafted by hand, R1 crafted on Auto Workbenches, V1 without its pins and stops, V4 without its pins.
  */
-const CASES: Case[] = [
-  { name: 'Electronic Circuit MV', settings: at(ELECTRONIC_CIRCUIT, 2, 1), owned: false },
-  { name: 'Electronic Circuit MV on Project Red', settings: at(ELECTRONIC_CIRCUIT, 2, 1, { logistics: 'routed' }), owned: false },
-  { name: 'Good Electronic Circuit HV', settings: at(GOOD_ELECTRONIC_CIRCUIT, 3, 1), owned: false },
-  { name: 'Polyethylene Bar MV', settings: at(POLYETHYLENE_BAR, 2, 1), owned: false },
-  { name: 'Steel Ingot MV x10', settings: at(STEEL_INGOT, 2, 10), owned: false },
-  { name: 'Electronic Circuit LV', settings: at(ELECTRONIC_CIRCUIT, 1, 1), owned: false },
-  { name: 'Electronic Circuit LV on Project Red', settings: at(ELECTRONIC_CIRCUIT, 1, 1, { logistics: 'routed' }), owned: false },
-  { name: 'Electronic Circuit MV on Project Red', settings: at(ELECTRONIC_CIRCUIT, 2, 1, { logistics: 'routed' }), owned: true },
-  { name: 'Polyethylene Bar MV', settings: at(POLYETHYLENE_BAR, 2, 1), owned: true },
-  { name: 'Electronic Circuit LV', settings: at(ELECTRONIC_CIRCUIT, 1, 1), owned: true },
-  { name: 'Electronic Circuit LV on Project Red', settings: at(ELECTRONIC_CIRCUIT, 1, 1, { logistics: 'routed' }), owned: true },
-  { name: 'Electronic Circuit LV on AE2', settings: at(ELECTRONIC_CIRCUIT, 1, 1, { logistics: 'ae2' }), owned: false },
-];
+const CALIBRATION: Case[] = [...CASES];
 const local = process.env.GTNH_LOCAL === '1';
 const referenceFile = local ? localDocPath(REFERENCE, process.env.GTNH_REFERENCE) : undefined;
 if (local && referenceFile === undefined) console.log(`real-build-cost: the reference flow's cases skipped, no ${REFERENCE}`);
 if (referenceFile !== undefined) {
   const stored = normalizeSettings(storedSettings(referenceFile));
-  CASES.push(
+  CALIBRATION.push(
     { name: 'reference R0 (by hand)', settings: { ...stored, automateCrafting: false }, owned: false },
     { name: 'reference R1', settings: { ...stored, automateCrafting: true }, owned: false },
     { name: 'reference V1 (no pins, no stops)', settings: { ...stored, recipeChoice: {}, stopItems: [] }, owned: false },
     { name: 'reference V4 (no pins)', settings: { ...stored, recipeChoice: {} }, owned: false },
   );
 }
-const LABELLED = CASES.map((c) => ({ ...c, label: `${c.name}${c.owned ? ', two of every machine owned' : ''}` }));
-
-/** The line's build MIP run on its own, as `planLine` solves the line when nothing is avoided. */
-interface BuildRun {
-  sol: Solution; model: BuildModel; graph: CandidateGraph;
-  /** The line's first walk, before any recipe is walked around: its graph and build model (`optionMachines`' list for it). */
-  first: { graph: CandidateGraph; model: BuildModel };
-  /** Walks of the line, the last the one solved. */
-  rounds: number;
-  /** The step recipes the build models blocked (no machine that runs them can be built here or is owned), every walk's. */
-  blocked: string[];
-  /** How many of the pack's recipes alike to those were walked around with them (`BuildModel.blockedAlike`). */
-  alike: number;
-}
+const LABELLED = CALIBRATION.map((c) => ({ ...c, label: `${c.name}${c.owned ? ', two of every machine owned' : ''}` }));
 
 /**
  * The build MIP's measure of a plan (controller ruling 187; `buildObjective`, tests/helpers/build-objective.ts), its
@@ -247,39 +212,11 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
     ({ ...s, ownedManual: (await candidateMachines(s)).map((m) => ({ mteId: m.mteId, count: 2 })) });
 
   /**
-   * The line's build MIP on its own (plan 12 Task 5's walk): its pricing and build model, both made again without the
-   * recipes the model blocks (with the pack's alike ones) while it blocks any, as `planLine` does, then `solveLine` with
-   * the model, the group's stock as `planLine` passes it (`groupStock`, fix wave 3 (C); `stocked` false: none, the
-   * problem fix wave 3 (F) was set on) and the node limit of `GTNH_BUILD_NODES` when set.
+   * The line's build MIP on its own (`buildRun`, tests/helpers/real-build-cases.ts: as `planLine` solves it) on this
+   * file's pack and context, with the group's stock (`stocked` false: none, the problem fix wave 3 (F) was set on) and
+   * the node limit of `GTNH_BUILD_NODES` when set.
    */
-  const buildRun = async (s: PlanSettings, stocked = true): Promise<BuildRun> => {
-    const unbuildable = new Map<string, string>();
-    const blocked = new Set<string>();
-    let first: BuildRun['first'] | undefined;
-    for (let rounds = 1; ; rounds++) {
-      const pricing = linePricing(pack, s, ctx, { unbuildable });
-      if (pricing === null) throw new Error(`no line for ${s.target}`);
-      const { graph, basis, target } = await pricing;
-      const model = await lineBuildModel(pack, graph, basis, s, ctx);
-      first ??= { graph, model };
-      let grew = false;
-      for (const [id, why] of model.blocked) {
-        blocked.add(id);
-        if (unbuildable.has(id)) continue;
-        unbuildable.set(id, why);
-        grew = true;
-      }
-      if (grew) {
-        for (const [id, why] of model.blockedAlike ?? []) if (!unbuildable.has(id)) unbuildable.set(id, why);
-        continue;
-      }
-      const sol = await solveLine(graph, new Map([[target, s.amount / SECONDS_PER[s.per]]]), {
-        ...solveOptions(s), formRank: stockForm(pack), ...(stocked ? { stock: groupStock(s, ctx) } : {}), build: model,
-        ...(NODES === undefined ? {} : { buildMaxNodes: NODES }),
-      });
-      return { sol, model, graph, first, rounds, blocked: [...blocked].sort(), alike: unbuildable.size - blocked.size };
-    }
-  };
+  const runAlone = (s: PlanSettings, stocked = true): Promise<BuildRun> => buildRun(pack, ctx, s, { stocked, nodes: NODES });
 
   /**
    * Of the machines `optionMachines` lists for the line's graph — its first walk's, before any recipe is walked around
@@ -321,7 +258,7 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
    * keys and timings only. Returns the build run and the price table's seconds.
    */
   const logPlan = async (label: string, s: PlanSettings, plan: Plan, seconds: number, ignored?: Plan): Promise<{ run: BuildRun; priceSeconds: number }> => {
-    const run = await buildRun(s);
+    const run = await runAlone(s);
     const priceSeconds = await priceTableSeconds(s);
     const counts = machineCounts(run);
     const stats = run.sol.buildStats;
@@ -536,10 +473,6 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
   }, 180_000);
 
   describe('the build MIP pick (fix wave 3 (F), ledger 248)', () => {
-    /** New machine blocks: per step with a machine its machines beyond the owned ones, a sharing pool once (its first step). */
-    const newBlocks = (plan: Plan): number => plan.steps
-      .filter((st) => st.machine.mteId >= 0 && (st.pool === undefined || st.pool.steps[0] === st.id))
-      .reduce((n, st) => n + Math.max(0, st.count - st.owned), 0);
     /** New machine blocks of a solve's decision: each sharing pool's new machines once, each other step's own. */
     const decidedBlocks = (sol: Solution): number => {
       let n = 0;
@@ -580,9 +513,9 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
     };
 
     it.each(PINNED)('is no worse by the build MIP than its measured pin on %s', async (name, s, pinned) => {
-      const stats = statsOf(await buildRun({ ...s, rawCap: null }, false));
+      const stats = statsOf(await runAlone({ ...s, rawCap: null }, false));
       logPick(name, stats);
-      logPick(`${name}, farms on (S15, logged)`, statsOf(await buildRun({ ...s, rawCap: null, farms: defaultFarmSettings() }, false)));
+      logPick(`${name}, farms on (S15, logged)`, statsOf(await runAlone({ ...s, rawCap: null, farms: defaultFarmSettings() }, false)));
       expect(stats.approx).toBe(false);
       expect(stats.objective as number).toBeLessThanOrEqual(pinned * (1 + 1e-6));
     }, 300_000);
@@ -594,10 +527,10 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
       // second time at BUILD_MIP_RETRY_TOLERANCE (fix wave 3 (F); build-pick.test.ts keeps that path), and its simplex
       // iteration cap stops the search at 13 nodes. At 400 nodes and 3,000,000 simplex iterations it reaches 15.947785088.
       const s = atOff(GOOD_ELECTRONIC_CIRCUIT, 3, 2, { logistics: 'ae2' });
-      const run = await buildRun({ ...s, rawCap: null }, false);
+      const run = await runAlone({ ...s, rawCap: null }, false);
       const stats = statsOf(run);
       logPick('Good Electronic Circuit HV x2 on AE2', stats);
-      logPick('Good Electronic Circuit HV x2 on AE2, farms on (S15, logged)', statsOf(await buildRun({ ...s, rawCap: null, farms: defaultFarmSettings() }, false)));
+      logPick('Good Electronic Circuit HV x2 on AE2, farms on (S15, logged)', statsOf(await runAlone({ ...s, rawCap: null, farms: defaultFarmSettings() }, false)));
       expect(stats.retried).toBeUndefined();   // since F7b its root LP relaxation solves at 1e-10
       expect(stats.status === 'optimal' || stats.stop === 'limit', `${stats.status}/${stats.stop}`).toBe(true);
       expect(stats.objective as number).toBeLessThanOrEqual(17.447792929 * (1 + 1e-6));
@@ -617,15 +550,15 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
       // returns, and so the MIP's start and search: the proof now needs 139 nodes, above BUILD_MIP_MAX_NODES, at the same
       // objective (17.755276533 optimal at 400 nodes and 3,000,000 simplex iterations); at 50 nodes the bound is 16.126698813.
       const s = atOff(GOOD_ELECTRONIC_CIRCUIT, 3, 2, { rawCap: null });
-      const stats = statsOf(await buildRun(s, false));
+      const stats = statsOf(await runAlone(s, false));
       logPick('Good Electronic Circuit HV x2', stats);
-      logPick('Good Electronic Circuit HV x2, farms on (S15, logged)', statsOf(await buildRun({ ...s, farms: defaultFarmSettings() }, false)));
+      logPick('Good Electronic Circuit HV x2, farms on (S15, logged)', statsOf(await runAlone({ ...s, farms: defaultFarmSettings() }, false)));
       expect(stats.status === 'optimal' || stats.stop === 'limit', `${stats.status}/${stats.stop}`).toBe(true);
       expect(stats.objective as number).toBeLessThanOrEqual(17.755276533 * (1 + 1e-6));
       // At the default raw cap the same line is another problem (controller OQ4): its MIP as planLine solves it, logged.
       const capped = atOff(GOOD_ELECTRONIC_CIRCUIT, 3, 2);
-      logPick('Good Electronic Circuit HV x2 at the default raw cap (logged only)', statsOf(await buildRun(capped)));
-      logPick('Good Electronic Circuit HV x2 at the default raw cap, farms on (S15, logged)', statsOf(await buildRun({ ...capped, farms: defaultFarmSettings() })));
+      logPick('Good Electronic Circuit HV x2 at the default raw cap (logged only)', statsOf(await runAlone(capped)));
+      logPick('Good Electronic Circuit HV x2 at the default raw cap, farms on (S15, logged)', statsOf(await runAlone({ ...capped, farms: defaultFarmSettings() })));
     }, 300_000);
   });
 

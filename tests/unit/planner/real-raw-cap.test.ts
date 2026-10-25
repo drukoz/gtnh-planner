@@ -17,6 +17,7 @@ import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import { defaultFarmSettings } from '../../../src/shared/types/farm.ts';
 import type { Pack } from '../../../src/shared/types/pack.ts';
 import type { Plan, PlanSettings } from '../../../src/shared/types/plan.ts';
+import { newBlocks } from '../../helpers/real-build-cases.ts';
 
 const MOLTEN_POLYETHYLENE = 'fluid:molten.plastic';
 const RUBBER_WOOD = 'IC2:blockRubWood@0';
@@ -59,19 +60,6 @@ const beyondStock = (plan: Plan): string[] => plan.rawInputs
   .filter((r) => r.leafClass === 'byproduct' && r.perSecond * SECONDS_PER_DAY >= BEYOND_STOCK_PER_DAY)
   .map((r) => `${r.key} ${(r.perSecond * SECONDS_PER_DAY).toFixed(1)} a day`);
 
-const newBlocks = (plan: Plan): number => {
-  const pools = new Set<string>();
-  let n = 0;
-  for (const s of plan.steps) {
-    if (s.machine.mteId < 0) continue;
-    if (s.pool !== undefined) {
-      if (pools.has(s.pool.id)) continue;
-      pools.add(s.pool.id);
-    }
-    n += Math.max(0, s.count - s.owned);
-  }
-  return n;
-};
 const line = (name: string, plan: Plan): string => {
   const raw = plan.rawCost;
   return `real-raw-cap ${name}: ${plan.status}, ${plan.steps.length} steps, ${newBlocks(plan)} new blocks, raw ${raw?.perSecond} a second`
