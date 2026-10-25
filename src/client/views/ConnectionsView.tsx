@@ -25,7 +25,7 @@ import {
 import { usePipesPaused } from '../state/pipes-paused.ts';
 import { useLayout } from '../state/use-layout.ts';
 import { layoutFlow } from '../workers/elk.worker.ts';
-import { DRAG_THRESHOLD, fitView, resizeView, sameView, wheelFactor, zoomAround, type Size, type View } from './pan-zoom.ts';
+import { DRAG_THRESHOLD, fitView, pointIn, resizeView, sameView, wheelFactor, zoomAround, type Size, type View } from './pan-zoom.ts';
 import { pipeAnimationMode, pipeSeconds } from './pipe-motion.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
 
@@ -199,9 +199,10 @@ function EdgeShape(props: { edge: PlacedEdge; selected: boolean; onPick(pick: Co
 /**
  * The picture, under a Fit button and the Pause pipes button (ruling R31: paused, the area's `data-pipes` is `paused` and no pipe
  * moves), in an area as tall as the picture at its own size (at most 75vh) that moves and
- * zooms it as the flow diagram does: a drag moves it by what the pointer moved over the area (so the spot it grabbed stays
- * under the pointer while the area moves on the page), from a box too once the pointer has moved DRAG_THRESHOLD px (a
- * plain click still picks, and the click that ends a drag picks nothing), the wheel or a pinch zooms around the
+ * zooms it as the flow diagram does: a press becomes a drag once the pointer itself has moved DRAG_THRESHOLD px on the
+ * page, from a box too, and the drag moves the picture by what the pointer moved over the area (so the spot it grabbed
+ * stays under the pointer while the area moves on the page; ledger ruling P2-R16). A press the area moves under stays a
+ * click: a plain click still picks, and the click that ends a drag picks nothing. The wheel or a pinch zooms around the
  * pointer, and the arrow keys move it while the area has focus. Fit, also when the picture first shows and whenever its
  * boxes change, shows all of it. When the area changes size (the side panel opening or closing beside it), the view is
  * fitted again while nothing has moved or zoomed it since it was fitted, else it keeps the spot in its middle
@@ -221,8 +222,11 @@ function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: bool
   const [dragging, setDragging] = useState(false);
   /** The pipes stand still where they are: this browser's Pause pipes (ruling R31). */
   const pipesPaused = usePipesPaused();
-  /** The press that may become a drag: its pointer, where it went down in the area (`inArea`), and the view then. */
-  const drag = useRef<{ pointer: number; sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null);
+  /**
+   * The press that may become a drag: its pointer, where it went down on the page (`cx`, `cy`: client px) and in the area (`sx`, `sy`:
+   * `pointIn`), and the view then.
+   */
+  const drag = useRef<{ pointer: number; cx: number; cy: number; sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null);
   const dragged = useRef(false);
   // The view is fitted again only when the boxes change, not when someone else's change only moves a rate.
   const shape = useMemo(() => picture.nodes.map((n) => n.id).join('\n'), [picture]);
@@ -278,19 +282,10 @@ function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: bool
     return () => svg.removeEventListener('wheel', onWheel);
   }, []);
 
-  /**
-   * Where the pointer is in the area (px from its top left), from where the area is now: a drag moves the picture by what the pointer
-   * moved over the area, so the spot it was grabbed by stays under the pointer even when the area moves down or up the page meanwhile
-   * (the plan banner's busy line above the tabs comes and goes with every replan; ledger ruling P2-R16).
-   */
-  const inArea = (e: PointerEvent<SVGSVGElement>): [number, number] => {
-    const box = e.currentTarget.getBoundingClientRect();
-    return [e.clientX - box.left, e.clientY - box.top];
-  };
   const onPointerDown = (e: PointerEvent<SVGSVGElement>): void => {
     if (e.button !== 0 || drag.current !== null) return;   // one pointer at a time moves the picture
-    const [sx, sy] = inArea(e);
-    drag.current = { pointer: e.pointerId, sx, sy, ox: view.x, oy: view.y, moved: false };
+    const [sx, sy] = pointIn(e);
+    drag.current = { pointer: e.pointerId, cx: e.clientX, cy: e.clientY, sx, sy, ox: view.x, oy: view.y, moved: false };
   };
   const onPointerEnd = (e: PointerEvent<SVGSVGElement>): void => {
     const d = drag.current;
@@ -310,16 +305,16 @@ function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: bool
       onPointerEnd(e);   // released outside the picture before the drag began, so the svg never heard it
       return;
     }
-    const [px, py] = inArea(e);
-    const dx = px - d.sx;
-    const dy = py - d.sy;
     if (!d.moved) {
-      if (Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
+      // the pointer's own move decides: a still press stays a click while the area moves under it (P2-R16)
+      if (Math.hypot(e.clientX - d.cx, e.clientY - d.cy) < DRAG_THRESHOLD) return;
       d.moved = true;
       setDragging(true);
       e.currentTarget.setPointerCapture(e.pointerId);   // only now: a plain click must still reach the box under it
     }
-    setView((v) => ({ ...v, x: d.ox + dx, y: d.oy + dy }));
+    // the drag follows the area: the spot it grabbed stays under the pointer while the area moves on the page (`pointIn`, P2-R16)
+    const [px, py] = pointIn(e);
+    setView((v) => ({ ...v, x: d.ox + px - d.sx, y: d.oy + py - d.sy }));
   };
   const pickUnlessDragged = (p: ConnPick): void => {
     if (!dragged.current) onPick(p);

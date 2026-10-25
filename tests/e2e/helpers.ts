@@ -1,9 +1,9 @@
 // The shared end-to-end harness (architecture §11.7; Plans 3–5 use it too): log a page's browser context in, give it a
-// display name and a look, open a new project, and keep a replan's busy line above its tabs. All of it but the last works
-// before the first navigation, because the request context of `page.context()` resolves relative URLs against
-// `use.baseURL` and shares the browser context's cookie jar, so the page and its EventSource send `gp_session` (web-stack §10).
+// display name and a look, open a new project, and move the views under its banners (a replan's busy line, a spacer). All of
+// it but the last works before the first navigation, because the request context of `page.context()` resolves relative URLs
+// against `use.baseURL` and shares the browser context's cookie jar, so the page and its EventSource send `gp_session` (web-stack §10).
 
-import { expect, type Page } from '@playwright/test';
+import { expect, type Page, type Route } from '@playwright/test';
 import type { Plan, PlanSettings } from '../../src/shared/types/plan.ts';
 import type { Project } from '../../src/shared/types/project.ts';
 
@@ -98,7 +98,7 @@ export async function openWithPlan(page: Page, plan: Plan, settings: Partial<Pla
  * shows (24.3 px under the banner's other lines; a whole banner's height when the banner has nothing else to say). Here the server replans
  * the project with its own settings (a settings op that changes nothing), and the page's fetches of its plan wait. Resolves once the page has
  * asked and the line shows; the function lets the plan through, which comes back the same (from the server, or from an earlier route such
- * as `openWithPlan`'s), and resolves once the line has gone again.
+ * as `openWithPlan`'s), and resolves once the line has gone again and the hold is taken down, so no later fetch goes through it.
  */
 export async function holdReplan(page: Page, id: string): Promise<() => Promise<void>> {
   let release = (): void => {};
@@ -106,11 +106,13 @@ export async function holdReplan(page: Page, id: string): Promise<() => Promise<
     release = resolve;
   });
   let asked = false;
-  await page.route((url) => url.pathname === `/api/projects/${id}/plan`, async (route) => {
+  const plans = (url: URL): boolean => url.pathname === `/api/projects/${id}/plan`;
+  const hold = async (route: Route): Promise<void> => {
     asked = true;
     await held;
-    await route.fallback().catch(() => {});   // the page is closed by then when the test failed before letting the plan through
-  });
+    await route.fallback();
+  };
+  await page.route(plans, hold);
   const res = await page.request.post(`/api/projects/${id}/ops`, { data: { ops: [{ op: 'settings', patch: {} }] }, headers: { 'X-Planner-Name': 'e2e' } });
   if (!res.ok()) throw new Error(`POST /api/projects/${id}/ops answered ${res.status()}: ${await res.text()}`);
   await expect.poll(() => asked, { message: 'the page asks for the plan again' }).toBe(true);
@@ -119,5 +121,23 @@ export async function holdReplan(page: Page, id: string): Promise<() => Promise<
   return async () => {
     release();
     await expect(busy).toHaveCount(0);
+    await page.unroute(plans, hold);
+  };
+}
+
+/**
+ * Moves every view under the banners `px` down the page until the returned function takes it back up (ledger rulings P2-R16, P2-R18): a
+ * spacer above `.project-banners` that none of the page's own markup draws. It is the layout shift a test makes while the pointer is down,
+ * as a plan event's busy line makes one, without depending on what the page draws above its tabs.
+ */
+export async function shiftViews(page: Page, px: number): Promise<() => Promise<void>> {
+  await page.evaluate((height) => {
+    const spacer = document.createElement('div');
+    spacer.setAttribute('data-test-shift', '');
+    spacer.style.height = `${height}px`;
+    document.querySelector('.project-banners')!.before(spacer);
+  }, px);
+  return async () => {
+    await page.evaluate(() => document.querySelector('[data-test-shift]')?.remove());
   };
 }

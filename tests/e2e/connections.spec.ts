@@ -4,10 +4,10 @@
 // and from the background) and zooms it with the wheel, keeps its middle or fits it again when the side panel opens,
 // and shows a box's faces in full, and the 3D tab lists the Item Conduits (plan 11, ruling R7's lines, back with Plan
 // 5's 3D tab as merge follow-up F3). A drag keeps the box it started on under the pointer while the banner above the
-// tabs changes height (ledger ruling P2-R16).
+// tabs changes height, and a press the page moves under stays a click (ledger ruling P2-R16).
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
-import { createProject, holdReplan, login, setName } from './helpers.ts';
+import { createProject, holdReplan, login, setName, shiftViews } from './helpers.ts';
 import { uploadSampleWorld } from './world-upload.ts';
 
 /** Project `id`'s layout, from the layout route. */
@@ -154,6 +154,8 @@ test('plan an EnderIO line, read its conduit faces in the Connections tab and se
 // Ledger ruling P2-R16: a plan event (anyone's change to the project, or another project's surplus) shows "Updating the plan…" above the
 // tabs until the plan is fetched again, and that line moves the view down the page and back. A drag keeps the spot it grabbed under the
 // pointer meanwhile: the box moves on the page with the pointer, and the view's offset by what the pointer moved over the view.
+// TASK 8 RE-POINTS THIS PIN: it is the one pin that moves the view with the real busy line, the user's case (the others make their own
+// shift, `shiftViews`). Ledger ruling P2-R18 has Task 8 stop that line from reflowing; this pin's `shift < -20` precondition fails then.
 test('a drag keeps the box it started on under the pointer while the banner above the tabs changes height', async ({ page }) => {
   const id = await conduitsLine(page);
   await reopenSettled(page);
@@ -181,4 +183,30 @@ test('a drag keeps the box it started on under the pointer while the banner abov
   expect(y1! - y0!).toBeCloseTo(50 - shift, 3);                               // what the pointer moved over the view
   expect(k1).toBe(k0);
   await expect(page.getByTestId('conn-panel')).toHaveCount(0);
+});
+
+// A press is a click until the pointer itself has moved DRAG_THRESHOLD px on the page (P2-R16, fix round 1): when the page moves under a
+// still press (a spacer above the banners here, as the busy line does it), 1 px of jitter still leaves it a click. The box is picked, as a
+// click picks it, and no drag moves the view.
+test('a press that the page moves under stays a click: the box is picked and the view holds', async ({ page }) => {
+  const shift = 12;
+  await conduitsLine(page);
+  await reopenSettled(page);
+  const view = await showConnections(page);
+  const machine = view.locator('.conn-machine rect').first();
+  // an arrow key moves the view first: the panel's opening then keeps its offset's y and its zoom (a fitted view would be fitted again)
+  await view.locator('svg[role=group]').focus();
+  await page.keyboard.press('ArrowLeft');
+  const [, y0, k0] = await viewOf(view);
+  const from = (await machine.boundingBox())!;
+  expect(from.height, 'the pointer stays on the box when the view moves under it').toBeGreaterThan(2 * (shift + 2));
+  const [px, py] = [Math.round(from.x + from.width / 2), Math.round(from.y + from.height / 2)];
+  await page.mouse.move(px, py);
+  await page.mouse.down();
+  const unshift = await shiftViews(page, shift);                              // the view moves 12 px down under the still pointer
+  await page.mouse.move(px + 1, py);                                           // 1 px of jitter
+  await page.mouse.up();
+  await expect(page.getByTestId('conn-panel')).toContainText('Basic Bending Machine');
+  expect((await viewOf(view)).slice(1)).toEqual([y0, k0]);
+  await unshift();
 });

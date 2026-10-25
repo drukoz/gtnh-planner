@@ -1,11 +1,13 @@
 // Pan and zoom for an svg picture (the Connections tab's wire map, dragged at the user's request of 2026-10-19): the
 // zoom limits, a zoom around the pointer, a wheel turn's zoom and the view that fits a picture, with the flow diagram's
-// numbers.
+// numbers, and where a pointer is in its area.
 
 import { describe, it, expect } from 'vitest';
 import { clampZoom, fitView, wheelFactor, zoomAround, type View } from '../../src/client/views/pan-zoom.ts';
 // the follow-up of the drag (the review of 401d0ca): the side panel narrows the area
 import { resizeView, sameView } from '../../src/client/views/pan-zoom.ts';
+// the drag's anchor (ledger ruling P2-R16): the pointer over its area, from where the area is now
+import { pointIn } from '../../src/client/views/pan-zoom.ts';
 
 /** The picture point (in its own units) under the screen point (px, py) of the view. */
 const under = (v: View, px: number, py: number): [number, number] => [(px - v.x) / v.k, (py - v.y) / v.k];
@@ -85,5 +87,25 @@ describe('pan and zoom when the area changes size', () => {
     expect(sameView({ x: 16, y: 136, k: 0.6 }, { x: 16 + 1e-9, y: 136, k: 0.6 })).toBe(true);
     expect(sameView({ x: 16, y: 136, k: 0.6 }, { x: 17, y: 136, k: 0.6 })).toBe(false);
     expect(sameView({ x: 16, y: 136, k: 0.6 }, { x: 16, y: 136, k: 0.61 })).toBe(false);
+  });
+});
+
+describe('where the pointer is in its area', () => {
+  /** A pointer event at (clientX, clientY) on an element whose box the browser puts at `box` on the page, read at each call. */
+  const eventOn = (clientX: number, clientY: number, box: { left: number; top: number }) => ({
+    clientX, clientY, currentTarget: { getBoundingClientRect: () => ({ ...box }) } as unknown as Element,
+  });
+
+  it('is the pointer less the area\'s top left', () => {
+    expect(pointIn(eventOn(120, 90, { left: 20, top: 40 }))).toEqual([100, 50]);
+    expect(pointIn(eventOn(10, 30, { left: 20, top: 40 }))).toEqual([-10, -10]);   // left of and above the area: a drag holds the pointer
+  });
+
+  it('reads the area where it is now, so a still pointer moves over an area that moves on the page', () => {
+    const box = { left: 20, top: 40 };
+    const e = eventOn(120, 90, box);
+    expect(pointIn(e)).toEqual([100, 50]);
+    box.top += 24.296875;   // the plan banner's busy line comes above the tabs, and the area moves down the page
+    expect(pointIn(e)).toEqual([100, 50 - 24.296875]);
   });
 });

@@ -16,6 +16,7 @@ import { lruSet, SURFACE_Y, tileCache, tileKeyId, type TileKey } from '../map/ti
 import type { MapMarker, MapOverlay, MapViewport, MapViewProps } from '../map/types.ts';
 import type { StuffKey } from '../../shared/keys.ts';
 import { TILE_SIZE, tileOf, type MapTile, type WorldScan } from '../../shared/types/world.ts';
+import { pointIn } from './pan-zoom.ts';
 
 const START_PPB = 4;
 const ZOOM_STEP = 2;
@@ -421,10 +422,6 @@ export function MapView(props: MapViewProps): ReactElement {
   // A new view (pan, zoom, Y level, dimension, size) or scan hides the tooltip before it is painted, as unmounting does.
   useLayoutEffect(() => () => hoverTimer.clear(), [hoverTimer, view, scanId]);
 
-  const pointOf = (e: PointerEvent<HTMLCanvasElement>): [number, number] => {
-    const box = e.currentTarget.getBoundingClientRect();
-    return [e.clientX - box.left, e.clientY - box.top];
-  };
   /** Hands the event to the overlays, topmost first, until one consumes it. */
   const toOverlays = (kind: 'down' | 'move' | 'up', px: number, py: number): boolean => {
     const [wx, wz] = screenToWorld(view, px, py);
@@ -448,12 +445,12 @@ export function MapView(props: MapViewProps): ReactElement {
   const onPointerDown = (e: PointerEvent<HTMLCanvasElement>): void => {
     hoverTimer.clear();   // a press (a click, a pan, an overlay's drag) hides the tooltip
     if (e.button !== 0) return;
-    const [px, py] = pointOf(e);
+    const [px, py] = pointIn(e);
     e.currentTarget.setPointerCapture(e.pointerId);
     press.current = { pointerId: e.pointerId, startX: px, startY: py, lastX: px, lastY: py, consumed: toOverlays('down', px, py), dragging: false, panned: false };
   };
   const onPointerMove = (e: PointerEvent<HTMLCanvasElement>): void => {
-    const [px, py] = pointOf(e);
+    const [px, py] = pointIn(e);
     const consumed = toOverlays('move', px, py);
     const p = press.current;
     if (p === null || p.pointerId !== e.pointerId) {
@@ -478,7 +475,7 @@ export function MapView(props: MapViewProps): ReactElement {
     if (p === null || p.pointerId !== e.pointerId) return;
     press.current = null;
     e.currentTarget.style.cursor = 'grab';
-    const [px, py] = pointOf(e);
+    const [px, py] = pointIn(e);
     if (!p.consumed && !p.dragging && props.onMarkerClick !== undefined) {
       const marker = markerAt(view, markers, px, py);
       if (marker !== null) {

@@ -29,6 +29,7 @@ import {
   problemId, rowCentre, rowHasIcon, rowNameRoom, rowRate, rowsTop, toElk, useOnlyPatch,
   type FlowLayout, type FlowNode, type FlowRow, type FocusSets,
 } from './flow-model.ts';
+import { pointIn } from './pan-zoom.ts';
 import { pipeAnimationMode, pipeSeconds } from './pipe-motion.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
 import { RawPanel, StepPanel } from './StepPanel.tsx';
@@ -49,7 +50,10 @@ const ZOOM_STEP = 1.25;
 /** Wheel zoom per pixel of scroll. */
 const WHEEL_ZOOM = 0.0015;
 const WHEEL_LINE_PIXELS = 16;
-/** A press moves this far (px) before it counts as a drag instead of a click. */
+/**
+ * A press moves this far (px) before it counts as a drag instead of a click: the pointer's own move on the page, so a press stays a click
+ * while the canvas moves under a still pointer (ledger ruling P2-R16).
+ */
 const DRAG_THRESHOLD = 4;
 const ICON_SIZE = 16;
 const ICON_TOP = 6;
@@ -382,8 +386,8 @@ export function FlowIssues(props: {
 interface Hit { focus: Focus; node?: PlacedNode; toggle?: StuffKey }
 
 /**
- * The laid-out diagram (fix spec §6.2) with pan (a drag, which keeps the spot it grabbed under the pointer while the canvas
- * moves on the page) and zoom (wheel, buttons, Fit), Find item and the "Imports in
+ * The laid-out diagram (fix spec §6.2) with pan (a drag once the pointer itself has moved, which keeps the spot it grabbed
+ * under the pointer while the canvas moves on the page) and zoom (wheel, buttons, Fit), Find item and the "Imports in
  * one column" toggle; hovering lights what is under the pointer, a click pins it (a box click also calls `onOpen`),
  * Esc or a click on the empty canvas clears it. It opens on the target (or on what someone asked to see) whenever the
  * plan's steps change (`viewKey`), and centres the focus whenever a view asks (`revealFlowFocus`).
@@ -395,8 +399,11 @@ function FlowCanvas(props: {
   const { layout, viewKey, selectedId, goods, importsInOneColumn, onImportsInOneColumn, onOpen, onToggleLine } = props;
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [view, setView] = useState<View>({ zoom: 1, x: PAD, y: PAD });
-  /** The press that may become a drag: its pointer, where it went down on the canvas (`onCanvas`), and the view then. */
-  const drag = useRef<{ pointer: number; sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null);
+  /**
+   * The press that may become a drag: its pointer, where it went down on the page (`cx`, `cy`: client px) and on the canvas (`sx`, `sy`:
+   * `pointIn`), and the view then.
+   */
+  const drag = useRef<{ pointer: number; cx: number; cy: number; sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null);
   const dragged = useRef(false);
   /** A drag past `DRAG_THRESHOLD` is under way: the pipes stand still while it is (`dragging` on the svg). */
   const [dragging, setDragging] = useState(false);
@@ -505,19 +512,10 @@ function FlowCanvas(props: {
    * leave every pipe stopped until some later drag ended.
    */
   const settleDragging = (): void => setDragging(drag.current?.moved === true);
-  /**
-   * Where the pointer is on the canvas (px from its top left), from where the canvas is now: a drag moves the diagram by what the pointer
-   * moved over the canvas, so the spot it was grabbed by stays under the pointer even when the canvas moves down or up the page meanwhile
-   * (the plan banner's busy line above the tabs comes and goes with every replan; ledger ruling P2-R16).
-   */
-  const onCanvas = (e: PointerEvent<SVGSVGElement>): [number, number] => {
-    const box = e.currentTarget.getBoundingClientRect();
-    return [e.clientX - box.left, e.clientY - box.top];
-  };
   const onPointerDown = (e: PointerEvent<SVGSVGElement>): void => {
     if (e.button === 0) {
-      const [sx, sy] = onCanvas(e);
-      drag.current = { pointer: e.pointerId, sx, sy, ox: view.x, oy: view.y, moved: false };
+      const [sx, sy] = pointIn(e);
+      drag.current = { pointer: e.pointerId, cx: e.clientX, cy: e.clientY, sx, sy, ox: view.x, oy: view.y, moved: false };
     }
     settleDragging();
   };
@@ -527,16 +525,16 @@ function FlowCanvas(props: {
       hover(hitOf(e.target)?.focus ?? null);
       return;
     }
-    const [px, py] = onCanvas(e);
-    const dx = px - d.sx;
-    const dy = py - d.sy;
     if (!d.moved) {
-      if (Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
+      // the pointer's own move decides: a still press stays a click while the canvas moves under it (P2-R16)
+      if (Math.hypot(e.clientX - d.cx, e.clientY - d.cy) < DRAG_THRESHOLD) return;
       d.moved = true;
       e.currentTarget.setPointerCapture(e.pointerId);   // only now: a plain click must still reach the box under it
       setDragging(true);
     }
-    setView((v) => ({ ...v, x: d.ox + dx, y: d.oy + dy }));
+    // the drag follows the canvas: the spot it grabbed stays under the pointer while the canvas moves on the page (`pointIn`, P2-R16)
+    const [px, py] = pointIn(e);
+    setView((v) => ({ ...v, x: d.ox + px - d.sx, y: d.oy + py - d.sy }));
   };
   const onPointerEnd = (e: PointerEvent<SVGSVGElement>): void => {
     const d = drag.current;
