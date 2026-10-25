@@ -284,9 +284,9 @@ export interface MainLp {
   firstBuy: number; firstSink: number; rows: LpRow[];
   /**
    * Per column, its upper bound in every stage: Infinity, but for a step recipe that can only run on owned machines that
-   * cannot be built here (plan 12, `BuildModel.ownedOnly`, rate mode) the runs per unit of demand they do, and for a
+   * cannot be built here (plan 12, `BuildModel.ownedOnly`, rate mode) the runs per unit of demand they do, for a
    * byproduct-only good's first purchase with the group's stock (fix wave 3 (C)) its share of that stock per unit of
-   * demand.
+   * demand, and 0 for the sink of a virtual good (an ore-dictionary slot, 12 x 17 F7b).
    */
   upper: number[];
   /**
@@ -388,6 +388,11 @@ function mainLp(
     canonical[j] = (canonical[j] as number) + CANON_RANK_S4 * n;
   });
   const upper = new Array<number>(width).fill(Infinity);
+  // A virtual good (an ore-dictionary slot, ruling R6) is never sunk: a good the line throws away goes to sink itself, so
+  // `Plan.byproducts` lists it and its flow to sink carries it (12 x 17 F7b: a farm's spare saplings).
+  goods.forEach((key, g) => {
+    if (graph.goods.get(key)?.virtual === true) upper[firstSink + g] = 0;
+  });
   if (stock !== undefined) {
     buyable.forEach((key, i) => {
       if (byproduct(key)) upper[firstBuy + i] = Math.max(0, stock(key));

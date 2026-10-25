@@ -260,6 +260,26 @@ describe('solveLine', () => {
     const lv = await solveLine(graphFor(mini, 't:titanium_plate@0', 1), one('t:titanium_plate@0'), { probe: true });
     expect(lv.status).toBe('infeasible');
   });
+  it('sinks a by-product itself, never through an ore-dictionary slot it could fill (12 x 17 F7b)', async () => {
+    // make: raw -> t + s; other takes v, an ore-dictionary slot that 8 s fill (a farm's saplings into `alt:…Saplings*8` on
+    // real data). S4's least runs, purchases and sinks sank 1/8 v through the conversion instead of 1 s, so `byproducts`,
+    // which leaves virtual goods out, lost the sapling while its flow went to sink.
+    const conv: LpRecipe = { id: 'convert:v@0:s@0', kind: 'convert', mapId: null, coeffs: [['s@0', -8], ['v@0', 1]], euPerRun: 0, nonConsumed: [], needsCleanroom: false, main: 'v@0' };
+    const rec = (id: string, coeffs: Array<[string, number]>, main: string): LpRecipe =>
+      ({ id, kind: 'recipe', mapId: 'gt.recipe.macerator', coeffs, euPerRun: 0, nonConsumed: [], needsCleanroom: false, main });
+    const info = (key: string, buyable: boolean, cost: number, virtual = false): [string, GoodInfo] =>
+      [key, { key, buyable, cost, leafClass: buyable ? 'direct' : null, virtual }];
+    const graph: CandidateGraph = {
+      targets: ['t@0'],
+      recipes: [conv, rec('make', [['raw@0', -1], ['s@0', 1], ['t@0', 1]], 't@0'), rec('other', [['u@0', 1], ['v@0', -1]], 'u@0')],
+      goods: new Map([info('raw@0', true, 1), info('t@0', false, 0), info('s@0', false, 0), info('u@0', false, 0), info('v@0', false, 0, true)]),
+      blocked: new Map(), warnings: [],
+    };
+    const s = await solveLine(graph, one('t@0'));
+    expect(s.status).toBe('ok');
+    expect([...s.runs.keys()]).toEqual(['make']);
+    expect([...s.sinks]).toEqual([['s@0', 1]]);
+  });
 });
 
 describe('loop guard and blockers', () => {
