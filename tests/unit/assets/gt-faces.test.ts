@@ -9,6 +9,7 @@ import {
 } from '../../../src/server/assets/gt-faces.ts';
 import type { PackView } from '../../../src/server/assets/resolve.ts';
 import { buildTexturesDump, type DumpLayer } from '../../../src/server/assets/textures-dump.ts';
+import { miniGt } from '../../helpers/mini-gt.ts';
 
 const { index, dump } = gtSample();
 const copy: CopyResolver = (block, meta, side) => gtBlockFaces(dump, block, meta, copy)?.[FACES[side]!] ?? [];
@@ -91,7 +92,7 @@ describe('GT material templates (RC4)', () => {
     key, id: key.slice(0, key.lastIndexOf('@')), meta: Number(key.slice(key.lastIndexOf('@') + 1)), name: key, oreDict: [],
     ...(prefix !== undefined && material !== undefined ? { gt: { prefix, material, amount: 3628800 } } : {}),
   });
-  const pack: PackView = {
+  const pack: PackView = { ...miniGt(),
     machines: new Map(), materials: new Map(),
     items: new Map([
       item('gregtech:gt.blockframes@305', 'frameGt', 'Steel'), item('gregtech:bw.frames@10', 'frameGt', 'Steel'), item('gregtech:gt.blockframes@1'),

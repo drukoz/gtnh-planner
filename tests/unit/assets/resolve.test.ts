@@ -8,13 +8,14 @@ import { resolveBlocks, resolveIcons, resolveCovers, type AssetSources, type Pac
 import { FACES, hashColor, KIND_COLORS, type Rect } from '../../../src/shared/types/assets.ts';
 import { gtMachineId } from '../../../src/shared/ids.ts';
 import type { Item, Machine, MachineKind } from '../../../src/shared/types/pack.ts';
+import { miniGt } from '../../helpers/mini-gt.ts';
 
 const index = indexOf({ ...GT_SAMPLE_ASSETS, 'storagedrawers/textures/blocks/drawers_oak_front_1.png': {}, 'storagedrawers/textures/blocks/drawers_oak_side.png': {},
   'jabba/textures/blocks/barrel_side_0.png': {}, 'minecraft/textures/blocks/stone.png': {}, 't/textures/items/iron_ingot.png': {} });
 const dump = buildTexturesDump({ ...gtSampleFile(), textureNames: { blocks: { 'minecraft:stone': 'stone' }, items: { 't:iron_ingot': 't:iron_ingot' } } }, index);
 const machine = (mteId: number, kind: MachineKind): Machine => ({ id: gtMachineId(mteId), mteId, metaName: `m${mteId}`, name: `M${mteId}`, cls: 'X', itemKey: `gregtech:gt.blockmachines@${mteId}`, kind, maps: [] });
 const item = (key: string, material?: string): Item => ({ key, id: key.split('@')[0]!, meta: 0, name: key, oreDict: [], ...(material ? { gt: { prefix: 'ingot', material, amount: 3628800 } } : {}) });
-const pack: PackView = {
+const pack: PackView = { ...miniGt(),
   machines: new Map([[301, machine(301, 'basic')], [77, machine(77, 'steam')]]),
   items: new Map([['t:iron_ingot@0', item('t:iron_ingot@0', 'Iron')], ['t:mystery@0', item('t:mystery@0', 'Copper')], ['t:plain@0', item('t:plain@0')]]),
   materials: new Map([['Copper', { name: 'Copper', rgba: [255, 100, 0, 0], iconSet: 'SHINY', oreByproducts: [] }]]),
@@ -410,7 +411,7 @@ describe('GT material templates and pipe sides', () => {
     key, id: key.slice(0, key.lastIndexOf('@')), meta: Number(key.slice(key.lastIndexOf('@') + 1)), name: key, oreDict: [],
     ...(prefix !== undefined && material !== undefined ? { gt: { prefix, material, amount: 3628800 } } : {}),
   });
-  const templatePack: PackView = {
+  const templatePack: PackView = { ...miniGt(),
     machines: new Map(), materials: new Map(),
     items: new Map([
       gtItem('gregtech:gt.blockframes@305', 'frameGt', 'Steel'), gtItem('gregtech:gt.blockmetal5@11', 'block', 'PigIron'),
