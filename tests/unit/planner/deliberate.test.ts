@@ -2,19 +2,46 @@
 // of controller ruling 249's `needsMachine`): with the raw cap at its default the e2e Basic Circuit line makes 40 % of its
 // Iron Plates on one full Basic Bending Machine and the rest on the automated crafting table, the best plan the settings
 // ask for. The build stage marks such a split (`Plan.deliberate`), so plan 09's integrity check gives it as a note, not
-// as "This plan does not add up"; a split the plan's machines could do without stays an integrity issue. Mini-GT and
-// synthetic steps only: invented names, no game data.
+// as "This plan does not add up"; a split the plan's machines could do without stays an integrity issue. On an AE2 line
+// the build stage makes each item good one way instead (add-on 12 x 17 F6). Mini-GT and synthetic steps only: invented
+// names, no game data.
 
 import { describe, expect, it } from 'vitest';
 import { deliberateSplits, emptyContext, planLine } from '../../../src/server/planner/plan.ts';
+import type { StuffKey } from '../../../src/shared/keys.ts';
 import { indexPlan } from '../../../src/shared/plan/balance.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import type { Product } from '../../../src/shared/types/pack.ts';
 import type { PlanFlow, PlanSettings, PlanStep, RawInput } from '../../../src/shared/types/plan.ts';
+import { opt, solvedWithBuild } from '../../helpers/build-fixtures.ts';
 import { miniGt } from '../../helpers/mini-gt.ts';
+import type { PackSpec } from '../../helpers/pack-spec.ts';
 
 const PLATE = 't:iron_plate@0';
 const INGOT = 't:iron_ingot@0';
+
+const BENDER = 'gt.recipe.metalbender';
+const HAMMER = 'gt.recipe.hammer';
+const ASSEMBLER = 'gt.recipe.assembler';
+/**
+ * A good made two ways (12 x 17 F6): `g-plain` (1 a → 1 g) on a Basic Bending Machine (101), `g-twin` (1 b → 1 g + 1 h)
+ * on a Basic Forge Hammer (481), and `p-make` (2 g + 1 h → 1 p) on a Basic Assembler (121), all LV.
+ */
+function twinMakerSpec(): PackSpec {
+  return {
+    maps: [{ id: BENDER, name: 'Bending Machine' }, { id: HAMMER, name: 'Forge Hammer' }, { id: ASSEMBLER, name: 'Assembler' }],
+    machines: [
+      { mteId: 101, name: 'Basic Bending Machine', tier: 1, maps: [BENDER] },
+      { mteId: 481, name: 'Basic Forge Hammer', tier: 1, maps: [HAMMER] },
+      { mteId: 121, name: 'Basic Assembler', tier: 1, maps: [ASSEMBLER] },
+    ],
+    recipes: [
+      { id: 'g-plain', map: BENDER, in: [['t:a@0', 1]], out: [['t:g@0', 1]], eut: 24, dur: 100 },
+      { id: 'g-twin', map: HAMMER, in: [['t:b@0', 1]], out: [['t:g@0', 1], ['t:h@0', 1]], eut: 16, dur: 40 },
+      { id: 'p-make', map: ASSEMBLER, in: [['t:g@0', 2], ['t:h@0', 1]], out: [['t:p@0', 1]], eut: 16, dur: 100 },
+    ],
+  };
+}
 
 describe('a split the build stage makes on purpose', () => {
   const pack = miniGt();
@@ -36,6 +63,41 @@ describe('a split the build stage makes on purpose', () => {
     expect(plan.warnings.filter((w) => w.code === 'deliberate-split')).toEqual([{ code: 'deliberate-split', key: PLATE, stepId: 'hammer-plate',
       stepIds: ['hammer-plate', 'bend-plate'], share: [0.6, 0.4], text: 'Iron Plate is made 2 ways: Crafting table (automated) (60%) and Basic Bending '
         + 'Machine (40%). The Basic Bending Machine is full, and one more would cost more than the raw material it saves.' }]);
+  });
+
+  it('makes each item one way on AE2, with more machines rather than more raw material (12 x 17 F6)', async () => {
+    // An AE2 job crafts an item through the first pattern that makes it, so a second maker would never be fed (the user's
+    // "every machine input fed, no deadlock, in every mode"): on AE2 the line bends every plate, on 3 Basic Bending
+    // Machines, at the leanest line's raw material; the direct line above keeps its split.
+    const plan = await planLine(pack, S({ logistics: 'ae2' }), emptyContext());
+    expect(plan.status ?? 'ok').toBe('ok');
+    expect(plan.steps.filter((s) => s.mainOutput === PLATE).map((s) => [s.id, s.machine.name, s.count])).toEqual([['bend-plate', 'Basic Bending Machine', 3]]);
+    expect(plan.deliberate).toBeUndefined();
+    expect(plan.rawCost).toMatchObject({ perSecond: 1.5, leanestPerSecond: 1.5 });
+  });
+
+  it('keeps the split out on AE2 where plan 09\'s plan or the time guard\'s fallback would bring it back (12 x 17 F6)', async () => {
+    // 1 p a minute, a at 1 and b at 1.2: the least raw material makes g both ways (2.2 a p against 2.4 by the twin
+    // alone), and at a 2 % step charge so does plan 09's plan, which then costs less by the build MIP's measure than any
+    // plan making g one way. A direct line takes it, and it is ruling 187's yardstick there. On AE2 neither a pick
+    // (`cheaperPlan`) nor the fallback the build stage takes without a MIP answer (`buildTimeLimit` 0, as when the time
+    // guard stops the MIP) takes it, and it is no yardstick (12 x 17 ruling R9): the line makes g on the twin alone, 2.4 a p.
+    const options = { 'g-plain': [opt(101, 1, 0.2, 17)], 'g-twin': [opt(481, 1, 0.5, 17)], 'p-make': [opt(121, 1, 0.2, 16)] };
+    const demand: Array<[StuffKey, number]> = [['t:p@0', 1 / 60]];
+    const solve = (share: boolean, buildTimeLimit?: number): ReturnType<typeof solvedWithBuild> => solvedWithBuild(
+      twinMakerSpec(), { 't:a@0': 1, 't:b@0': 1.2 }, demand, { options, share },
+      { stepCharge: 0.02, rawCap: 0.25, ...(buildTimeLimit === undefined ? {} : { buildTimeLimit }) });
+    const direct = await solve(false);
+    expect(direct.runs).toEqual(['g-plain', 'g-twin', 'p-make']);
+    expect(direct.sol.buildStats?.ignoredObjective).toBeDefined();
+    for (const limit of [undefined, 0]) {
+      const ae2 = await solve(true, limit);
+      expect(ae2.sol.status, `time limit ${limit}`).toBe('ok');
+      expect(ae2.sol.buildStats?.approx, `time limit ${limit}`).toBe(limit === 0);
+      expect(ae2.runs, `time limit ${limit}`).toEqual(['g-twin', 'p-make']);
+      expect(Math.abs(ae2.sol.rawCost - 2.4 / 60), `time limit ${limit}`).toBeLessThan(1e-9);
+      expect(ae2.sol.buildStats?.ignoredObjective, `time limit ${limit}`).toBeUndefined();
+    }
   });
 
   it('marks nothing where the line makes each good one way, or ignores build cost', async () => {

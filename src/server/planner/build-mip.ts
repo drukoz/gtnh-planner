@@ -962,6 +962,20 @@ function layoutOf(input: BuildMipInput, withDerived: boolean): Layout {
     y.set(s.j, col);
     rows.push({ lower: -Infinity, upper: 0, entries: [[s.j, 1], [col, -X]] });
   }
+  // On an AE2 line (`model.share`) the job crafts each item through the first pattern that makes it (layout/feeding/sim/
+  // ae2.ts), so at most one step makes an item good as its main output: a second maker would never be fed (12 x 17 F6, the
+  // controller's ruling: where the raw cap forced a split, AE2 takes more machines rather than more raw material). A farm
+  // is no pattern (what it sends the line comes in as a raw input, architecture §11.45 (7)), so its column is left out
+  // (12 x 17 ruling R7).
+  if (model.share) {
+    const byMain = new Map<string, number[]>();
+    for (const s of steps) {
+      const g = s.r.main;
+      if (s.r.kind !== 'recipe' || s.r.farm === true || g === undefined || g.startsWith('fluid:')) continue;
+      byMain.set(g, [...(byMain.get(g) ?? []), y.get(s.j) as number]);
+    }
+    for (const cols of byMain.values()) if (cols.length >= 2) rows.push({ lower: -Infinity, upper: 1, entries: cols.map((c): [number, number] => [c, 1]) });
+  }
   // A light step's build: its first machine on its binary, and `e` ≥ the build of its runs at the least build per run a
   // second, less that first machine.
   for (const [j, l] of light) {

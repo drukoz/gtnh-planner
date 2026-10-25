@@ -197,9 +197,11 @@ export interface Solution {
     // optional addition (fix wave 3 (A), controller ruling 187)
     /**
      * Plan 09's plan of this graph ("Ignore build cost", `finish`) rounded up, by the measure of `objective` (`rounded`:
-     * every machine at its true build), where it is within the raw cap and leaves no step short: the plan controller
-     * ruling 187 holds the build stage's plan to. Where the decision comes from a whole MIP solution (`approx` false),
-     * `objective` is never above it (`cheaperPlan`). Absent where plan 09's plan is beyond the cap or leaves a step short.
+     * every machine at its true build), where it is within the raw cap, leaves no step short and, on an AE2 line
+     * (`BuildModel.share`), makes each item good one way: the plan controller ruling 187 holds the build stage's plan to.
+     * Where the decision comes from a whole MIP solution (`approx` false), `objective` is never above it (`cheaperPlan`).
+     * Absent where plan 09's plan is beyond the cap, leaves a step short or, on an AE2 line, makes an item good two ways,
+     * which the build stage may not take (12 x 17 F6, ruling R9).
      */
     ignoredObjective?: number;
   };
@@ -1410,17 +1412,19 @@ interface SolvedMip {
 
 /**
  * The build MIP of `input` solved as the build stage does: started from the cheapest by its own objective of its start
- * (`buildMip`'s `start`) and `others` rounded up, among those within the raw cap (`cheapestStart`; none when all leave a
- * step short), a model with source binaries bounded by the start it uses (`modelAt`, add-on 17 ruling S10), solved and
- * picked by `pickBuild` within the node and simplex-iteration limits that decide it and the far time guard `limit`
- * (skipped when `limit` is not above 0).
+ * (`buildMip`'s `start`) and `others` rounded up, among those within the raw cap and, on an AE2 line, making each item
+ * good one way (`cheapestStart`; none when all leave a step short or split a good), a model with source binaries bounded
+ * by the start it uses (`modelAt`, add-on 17 ruling S10; with none, `modelAt(Infinity)`, every source counted: on an AE2
+ * line `buildMip`'s own start can split a good, which makes it no plan of the model, so its cost bounds no purchase;
+ * 12 x 17 F6, ruling R8), solved and picked by `pickBuild` within the node and simplex-iteration limits that decide it
+ * and the far time guard `limit` (skipped when `limit` is not above 0).
  */
 async function solvedMip(
   lp: MainLp, input: BuildMipInput, others: ReadonlyArray<readonly number[] | null | undefined>, limit: number, opts: SolveOptions,
 ): Promise<SolvedMip> {
   const mip = buildMip(input);
-  const chosen = cheapestStart(lp, mip, input.rawBound, others);
-  const model = chosen === undefined ? mip.model : mip.modelAt(chosen.cost);
+  const chosen = cheapestStart(lp, mip, input.rawBound, input.model.share, others);
+  const model = mip.modelAt(chosen?.cost ?? Infinity);
   const { result, seconds, picked } = await runBuildMip(mip, chosen?.start, limit, opts, solveLp, model);
   return { mip, model, ...(result === undefined ? {} : { result }), seconds, picked };
 }
@@ -1528,6 +1532,11 @@ export async function pickBuild(
  * (`BuildDecision.dropped`) stay out of stage 5, as stage 5 would buy a dropped source back where that is less raw
  * material, and its fallback also weighs the pre-solve's plan rounded up and carries `sources-approx`. `buildStats` adds
  * up both MIPs' seconds and nodes and keeps the multi-output MIP's status, stop, objective, bound and pick marks.
+ *
+ * Add-on 12 x 17 integration, F6 (the controller's ruling): on an AE2 line (`BuildModel.share`) the build MIP, the
+ * leanest line's too, makes each item good one way (build-mip.ts's one-maker rows), and no start (`cheapestStart`, ruling
+ * R8), kept plan (`cheaperPlan`) or fallback candidate that makes one two ways (`oneMakerEach`, farms aside: ruling R7)
+ * brings the split back, but S1 as the fallback's last resort; nor is such a plan 09 plan the yardstick (ruling R9).
  */
 async function buildStage(
   graph: CandidateGraph, lp: MainLp, s1: LpResult, warnings: PlanWarning[], opts: SolveOptions, model: BuildModel, demandScale: number,
@@ -1588,8 +1597,8 @@ async function buildStage(
     // Fix wave 3 (A): the leanest line's plan and plan 09's plan, each rounded up, where one costs less than the MIP's
     // answer, all with every machine at its true build (`exactCost`, `rounded`): the MIP's model prices light steps within
     // a machine of the truth, so the plan is never dearer by the MIP's measure than either where it is within the cap
-    // (ruling 187; the leanest line's always is).
-    const better = cheaperPlan(lp, mip, input.rawBound, mip.exactCost(result.x), [lean?.x, ignoredPlan.x]);
+    // (ruling 187; the leanest line's always is). On an AE2 line only one that makes each item good one way (12 x 17 F6).
+    const better = cheaperPlan(lp, mip, input.rawBound, input.model.share, mip.exactCost(result.x), [lean?.x, ignoredPlan.x]);
     if (better !== undefined) ({ decision, from, cost: keptCost } = better);
   } else {
     approx = true;
@@ -1613,9 +1622,11 @@ async function buildStage(
       { ...mip.rounded(s1.x), from: s1.x },
     ];
     let kept: (typeof candidates)[number] | undefined;
-    // Fix wave 3 (A): only candidates within the raw cap (S1's rounding always is).
+    // Fix wave 3 (A): only candidates within the raw cap (S1's rounding always is). 12 x 17 F6: on an AE2 line only those
+    // that make each item good one way (plan 09's plan, the relaxation and S1 can split one; S1 stays the last resort).
     for (const c of candidates) {
-      if (c.decision.short === undefined && withinCap(lp, input.rawBound, c.from) && (kept === undefined || c.cost < kept.cost)) kept = c;
+      if (c.decision.short === undefined && withinCap(lp, input.rawBound, c.from) && (!input.model.share || oneMakerEach(lp, c.from))
+        && (kept === undefined || c.cost < kept.cost)) kept = c;
     }
     // When none covers the steps on owned machines, any of them ends the line below the same way: S1's.
     kept ??= candidates[candidates.length - 1] as (typeof candidates)[number];
@@ -1631,8 +1642,10 @@ async function buildStage(
     if (result.bound !== undefined) buildStats.bound = result.bound;
   }
   if (keptCost !== undefined) buildStats.objective = keptCost;
-  // Ruling 187's yardstick: plan 09's plan rounded up, where it is within the raw cap and leaves no step short.
-  const yardstick = withinCap(lp, input.rawBound, ignoredPlan.x) ? mip.rounded(ignoredPlan.x).cost : Infinity;
+  // Ruling 187's yardstick: plan 09's plan rounded up, where it is within the raw cap, leaves no step short and, on an AE2
+  // line, makes each item good one way (12 x 17 F6, ruling R9: a plan the build stage may not take holds it to nothing).
+  const yardstick = withinCap(lp, input.rawBound, ignoredPlan.x) && (!input.model.share || oneMakerEach(lp, ignoredPlan.x))
+    ? mip.rounded(ignoredPlan.x).cost : Infinity;
   if (Number.isFinite(yardstick)) buildStats.ignoredObjective = yardstick;
   if (decision.short !== undefined) {
     const sol = infeasibleLine([...warnings, ...ownedOnlyWarnings(lp, model, ownedOnlyRuns(bounded, s1.x))]);
@@ -1720,15 +1733,18 @@ async function runBuildMip(
 
 /**
  * The MIP's start: S1 rounded up (`mip.start`) or one of `others` (runs, main columns first) rounded up, whichever costs
- * least in the MIP's own objective among those whose raw material is within `bound` (fix wave 3 (A)), with that cost
- * (add-on 17's `modelAt` bounds its source binaries by it); undefined when none is a plan.
+ * least in the MIP's own objective among those whose raw material is within `bound` (fix wave 3 (A)) and, on an AE2 line
+ * (`share`), that make each item good one way (`oneMakerEach`: the MIP's one-maker rows make any other start infeasible;
+ * 12 x 17 F6, ruling R8), with that cost (add-on 17's `modelAt` bounds its source binaries by it); undefined when none
+ * is a plan.
  */
 function cheapestStart(
-  lp: MainLp, mip: ReturnType<typeof buildMip>, bound: number | undefined, others: ReadonlyArray<readonly number[] | null | undefined>,
+  lp: MainLp, mip: ReturnType<typeof buildMip>, bound: number | undefined, share: boolean,
+  others: ReadonlyArray<readonly number[] | null | undefined>,
 ): { start: number[]; cost: number } | undefined {
-  let best = mip.start === undefined ? undefined : { start: mip.start, cost: mip.startCost };
+  let best = mip.start === undefined || (share && !oneMakerEach(lp, mip.start)) ? undefined : { start: mip.start, cost: mip.startCost };
   for (const x of others) {
-    if (x === null || x === undefined || !withinCap(lp, bound, x)) continue;
+    if (x === null || x === undefined || !withinCap(lp, bound, x) || (share && !oneMakerEach(lp, x))) continue;
     const at = mip.startAt(x);
     if (at !== undefined && (best === undefined || at.cost < best.cost)) best = at;
   }
@@ -1737,19 +1753,37 @@ function cheapestStart(
 
 /**
  * Fix wave 3 (A): the cheapest of `plans` (runs, main columns first) rounded up (`rounded`: every machine at its true
- * build, by the MIP's objective), among those within the raw cap `bound` that leave no step short, where it costs less
- * than `cost` (the MIP's own answer by `exactCost`); the first on a tie; undefined when none does.
+ * build, by the MIP's objective), among those within the raw cap `bound` that leave no step short and, on an AE2 line
+ * (`share`), make each item good one way (`oneMakerEach`, 12 x 17 F6), where it costs less than `cost` (the MIP's own
+ * answer by `exactCost`); the first on a tie; undefined when none does.
  */
 function cheaperPlan(
-  lp: MainLp, mip: ReturnType<typeof buildMip>, bound: number | undefined, cost: number, plans: ReadonlyArray<readonly number[] | undefined>,
+  lp: MainLp, mip: ReturnType<typeof buildMip>, bound: number | undefined, share: boolean, cost: number,
+  plans: ReadonlyArray<readonly number[] | undefined>,
 ): { decision: BuildDecision; from: readonly number[]; cost: number } | undefined {
   let best: { decision: BuildDecision; from: readonly number[]; cost: number } | undefined;
   for (const x of plans) {
     if (x === undefined || !withinCap(lp, bound, x)) continue;
+    if (share && !oneMakerEach(lp, x)) continue;
     const r = mip.rounded(x);
     if (r.decision.short === undefined && r.cost < (best?.cost ?? cost)) best = { decision: r.decision, from: x, cost: r.cost };
   }
   return best;
+}
+
+/**
+ * 12 x 17 F6: at most one running step makes each item good as its main output (an AE2 job feeds one pattern). A farm
+ * is no pattern, so farm columns are left out (12 x 17 ruling R7), as the build MIP's one-maker rows leave them out.
+ */
+function oneMakerEach(lp: MainLp, x: readonly number[]): boolean {
+  const seen = new Set<StuffKey>();
+  for (let j = 0; j < lp.recipes.length; j++) {
+    const r = lp.recipes[j] as LpRecipe;
+    if (r.kind !== 'recipe' || r.farm === true || !((x[j] ?? 0) > TINY) || r.main === undefined || r.main.startsWith('fluid:')) continue;
+    if (seen.has(r.main)) return false;
+    seen.add(r.main);
+  }
+  return true;
 }
 
 /**
@@ -1767,7 +1801,7 @@ async function leanestLine(
   lp: MainLp, s1: LpResult, plain: BuildMipInput, sparse: readonly number[] | null, limit: number, opts: SolveOptions, uncapped: boolean,
 ): Promise<{ raw: number; x?: readonly number[] } | undefined> {
   const mip = buildMip({ ...plain, stepCharge: 0, pseudoCharge: plain.stepCharge });
-  const start = cheapestStart(lp, mip, undefined, [sparse]);
+  const start = cheapestStart(lp, mip, undefined, plain.model.share, [sparse]);
   if (uncapped && start !== undefined && start.cost <= LEAN_BASE_ABOVE) return undefined;
   const { result } = await runBuildMip(mip, start?.start, limit, opts, solveLpAside);
   if (!wholePlan(result)) return { raw: s1.objective };
