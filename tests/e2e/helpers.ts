@@ -124,37 +124,64 @@ export async function openConnections(page: Page): Promise<Locator> {
   return view;
 }
 
+/** A hold on a page's requests for a plan (`holdPlans`). */
+export interface PlanHold {
+  /** Whether a request came while held. */
+  asked(): boolean;
+  /** Lets every held request through (each goes on, as if never held: to the server, or to an earlier route), then takes the hold down. */
+  release(): Promise<void>;
+}
+
+/**
+ * Holds every request the page makes for the plan of project `id`, or of any project when no `id` is given, until `release`, so a test can see
+ * the page while its plan is on its way (Phase 2 Task 7's fix rounds: the strip's place, a unit's or an amount's change; Task 8's skeletons).
+ * A request that comes after `release` goes straight on.
+ */
+export async function holdPlans(page: Page, id?: string): Promise<PlanHold> {
+  let open = (): void => {};
+  const held = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  let asked = false;
+  const passing: Promise<void>[] = [];
+  const plans = (url: URL): boolean =>
+    (id === undefined ? /^\/api\/projects\/[^/]+\/plan$/.test(url.pathname) : url.pathname === `/api/projects/${id}/plan`);
+  const hold = async (route: Route): Promise<void> => {
+    asked = true;
+    const passed = held.then(() => route.fallback());
+    passing.push(passed);
+    await passed;
+  };
+  await page.route(plans, hold);
+  return {
+    asked: () => asked,
+    release: async () => {
+      open();
+      await Promise.all(passing);
+      await page.unroute(plans, hold);
+    },
+  };
+}
+
 /**
  * Puts "Updating the plan…" above the tabs of project `id`'s page, and keeps it there until the returned function is called (ledger ruling
  * P2-R16). The page hears a `plan` event whenever the server replans the project (anyone's change to it) or another project's summary
  * changes what it reads, and shows that line until it has fetched the plan again: every view under the banner moves down the page while it
  * shows (24.3 px under the banner's other lines; a whole banner's height when the banner has nothing else to say). Here the server replans
- * the project with its own settings (a settings op that changes nothing), and the page's fetches of its plan wait. Resolves once the page has
- * asked and the line shows; the function lets the plan through, which comes back the same (from the server, or from an earlier route such
- * as `openWithPlan`'s), and resolves once the line has gone again and the hold is taken down, so no later fetch goes through it.
+ * the project with its own settings (a settings op that changes nothing), and the page's fetches of its plan wait (`holdPlans`). Resolves
+ * once the page has asked and the line shows; the function lets the plan through, which comes back the same (from the server, or from an
+ * earlier route such as `openWithPlan`'s), takes the hold down, so no later fetch goes through it, and resolves once the line has gone again.
  */
 export async function holdReplan(page: Page, id: string): Promise<() => Promise<void>> {
-  let release = (): void => {};
-  const held = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  let asked = false;
-  const plans = (url: URL): boolean => url.pathname === `/api/projects/${id}/plan`;
-  const hold = async (route: Route): Promise<void> => {
-    asked = true;
-    await held;
-    await route.fallback();
-  };
-  await page.route(plans, hold);
+  const hold = await holdPlans(page, id);
   const res = await page.request.post(`/api/projects/${id}/ops`, { data: { ops: [{ op: 'settings', patch: {} }] }, headers: { 'X-Planner-Name': 'e2e' } });
   if (!res.ok()) throw new Error(`POST /api/projects/${id}/ops answered ${res.status()}: ${await res.text()}`);
-  await expect.poll(() => asked, { message: 'the page asks for the plan again' }).toBe(true);
+  await expect.poll(() => hold.asked(), { message: 'the page asks for the plan again' }).toBe(true);
   const busy = page.getByText('Updating the plan…');
   await expect(busy).toBeVisible();
   return async () => {
-    release();
+    await hold.release();
     await expect(busy).toHaveCount(0);
-    await page.unroute(plans, hold);
   };
 }
 

@@ -6,7 +6,7 @@
 
 import { test, expect, type Page, type Route } from '@playwright/test';
 import { circuitLv } from './fixtures/plans.ts';
-import { createProject, login, openWithPlan, setName, LV_CIRCUITS } from './helpers.ts';
+import { createProject, holdPlans, login, openWithPlan, setName, LV_CIRCUITS } from './helpers.ts';
 
 /** The figure the Output tile shows (the visually hidden copy beside it holds the final one). */
 const OUTPUT = '[data-key-number="output"] dd > span[aria-hidden]';
@@ -29,24 +29,6 @@ async function watchOutput(page: Page): Promise<() => Promise<OutputRecord>> {
     }).observe(strip, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['class'] });
   }, OUTPUT);
   return () => page.evaluate(() => (window as unknown as { stripRecord: OutputRecord }).stripRecord);
-}
-
-/**
- * Holds every request for a plan (`/api/projects/<id>/plan`, any project) from now on until the returned function lets them through, so a
- * page can be measured while its plan is on its way; `asked` says whether one came.
- */
-async function holdPlans(page: Page): Promise<{ release: () => void; asked: () => boolean }> {
-  let release = (): void => {};
-  const held = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  let asked = false;
-  await page.route((url) => /^\/api\/projects\/[^/]+\/plan$/.test(url.pathname), async (route) => {
-    asked = true;
-    await held;
-    await route.fallback();
-  });
-  return { release: () => release(), asked: () => asked };
 }
 
 /** Sets the Amount in the settings column; the field sends it once typing pauses. */
@@ -110,12 +92,49 @@ test('a change of the rate unit shows the new plan\'s figure at once, never the 
   await expect(unit).toHaveText('/min');
   await expect(page.locator(OUTPUT)).toHaveText('30');
   expect((await seen()).texts, 'nothing in the strip changed while the plan of the hour was on its way').toEqual([]);
-  plans.release();
+  await plans.release();
   await expect(unit).toHaveText('/h');
   await expect(page.locator(OUTPUT)).toHaveText('30');
   const { texts, units, classes } = await seen();
   expect([...new Set(texts)], 'only the figure of the plan, in its own unit').toEqual(['30']);
   expect([...new Set(units)], 'in hours once the plan of the hour came').toEqual(['/h']);
+  expect([...new Set(classes)], 'no flash').toEqual(['key-number']);
+});
+
+// fix round 2, ledger ruling P2-R49: an amount typed (sent on blur) and then a unit picked land in one replan, so the plan of the amount alone
+// never shows. The strip knows the plan on screen is still that of 30 a minute (it drew those settings, whose hash the plan carries): it
+// reads "30 /min" until the plan of 60 an hour comes, then "60 /h" at once, with no flash; never "1,800 /h"
+test('an amount and a unit changed in one replan show the old plan as it was, then the new one at once', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await login(page); await setName(page, 'Ann');
+  const id = await createProject(page, 'Strip amount and unit', LV_CIRCUITS);
+  const unit = page.locator('[data-key-number="output"] .key-number-unit');
+  await expect(page.locator(OUTPUT)).toHaveText('30');
+  await expect(unit).toHaveText('/min');
+  const seen = await watchOutput(page);
+  const plans = await holdPlans(page);
+
+  const settings = page.getByRole('complementary', { name: 'Project settings' });
+  const amount = settings.getByLabel('Amount', { exact: true });
+  await amount.fill('60');
+  await amount.blur();
+  await settings.getByRole('combobox', { name: 'Rate unit' }).selectOption('hour');
+  // both ops are the server's before any plan goes through: it plans the project's settings as they are when the page's request is answered
+  const stored = async (): Promise<unknown> => {
+    const { settings: s } = await (await page.request.get(`/api/projects/${id}`)).json() as { settings: { amount: number; per: string } };
+    return [s.amount, s.per];
+  };
+  await expect.poll(stored, { message: 'the server has both changes' }).toEqual([60, 'hour']);
+  await expect.poll(() => plans.asked(), { message: 'the page asks for the plan' }).toBe(true);
+  await expect(page.locator(OUTPUT)).toHaveText('30');
+  await expect(unit).toHaveText('/min');
+  expect((await seen()).texts, 'nothing in the strip changed while the plan was on its way').toEqual([]);
+  await plans.release();
+  await expect(unit).toHaveText('/h');
+  await expect(page.locator(OUTPUT)).toHaveText('60');
+  const { texts, units, classes } = await seen();
+  expect([...new Set(texts)], 'the new plan\'s figure, at once').toEqual(['60']);
+  expect([...new Set(units)], 'in its own unit').toEqual(['/h']);
   expect([...new Set(classes)], 'no flash').toEqual(['key-number']);
 });
 
@@ -132,7 +151,7 @@ for (const [width, rows] of [[779, 2], [390, 3]] as const) {
     await expect.poll(() => plans.asked(), { message: 'the page asks for its plan' }).toBe(true);
     const measure = (el: Element): { height: number; margin: string } => ({ height: el.getBoundingClientRect().height, margin: getComputedStyle(el).marginBottom });
     const waiting = await wait.evaluate(measure);
-    plans.release();
+    await plans.release();
     const strip = page.locator('.key-numbers');
     await expect(strip).toBeVisible();
     await expect(wait).toHaveCount(0);
@@ -155,7 +174,7 @@ test('clearing the target takes the strip and its cost sentence away at once, wh
   await expect(page.locator('svg.flow-canvas [data-step-id]').first()).toBeVisible();        // the old plan is still on screen
   await expect.poll(() => plans.asked(), { message: 'the page asks for the plan of no target' }).toBe(true);
   await expect(page.locator('.plan-cost')).toHaveCount(0);
-  plans.release();
+  await plans.release();
   await expect(page.locator('svg.flow-canvas [data-step-id]')).toHaveCount(0);
   await expect(page.locator('.plan-cost')).toHaveCount(0);
 });

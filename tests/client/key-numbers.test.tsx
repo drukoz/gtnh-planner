@@ -5,10 +5,11 @@
 
 import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { compactNumber, countUpAt, keyNumbers, machineCount, nextCount, type Count } from '../../src/client/views/key-numbers.ts';
+import { compactNumber, countUpAt, keyNumbers, machineCount, nextCount, nextFlash, planUnit, type Count } from '../../src/client/views/key-numbers.ts';
 import { KeyNumbers } from '../../src/client/views/KeyNumbers.tsx';
 import { PlanBanner } from '../../src/client/views/ProjectPage.tsx';
 import { defaultSettings } from '../../src/shared/project/apply-op.ts';
+import { settingsHash } from '../../src/shared/project/settings-hash.ts';
 import type { Plan, PlanStep } from '../../src/shared/types/plan.ts';
 
 // copies of plan-banner.test.tsx's helpers
@@ -120,6 +121,30 @@ describe('the key-numbers strip', () => {
     expect(keyNumbers(planOf({ ...plan, targetPerSecond: 30 / 3600 }), { ...RATE, per: 'hour' })![0]).toMatchObject({ text: '30', unit: '/h' });
     expect(keyNumbers(plan, { ...RATE, amount: 60 })![0]).toMatchObject({ value: 30, unit: '/min' });                // a new amount on its way
     expect(keyNumbers(planOf({ ...plan, targetPerSecond: 60 / 3600 }), { ...RATE, amount: 60 })![0]).toMatchObject({ text: '60', unit: '/h' });   // and back
+  });
+  // fix round 2, ledger ruling P2-R49: the strip knows the unit of the plan on screen from the settings it drew (their settingsHash, which the
+  // plan carries), and guesses it (fix round 1's `planPer`) only for settings it never drew. Typing an amount and then picking a unit lands in
+  // one replan: the plan of 30 a minute stays "30 /min" under settings of 60 an hour, and the plan of 60 an hour then shows "60 /h" at once,
+  // with no count and no flash; an amount alone, in its unit, still counts up and flashes (key-numbers.spec.ts's 30 → 60)
+  it('knows the unit of the plan on screen from the settings it drew, so an amount and a unit changed in one replan never mix', () => {
+    const drawn = (amount: number, per: 'min' | 'hour') => ({ ...defaultSettings(), target: 't:plate@0', amount, per });
+    const [minute30, minute60, hour60] = [drawn(30, 'min'), drawn(60, 'min'), drawn(60, 'hour')];
+    const onScreen = planOf({ ...plan, settingsHash: settingsHash(minute30) });                                  // 0.5 a second
+    const arrived = planOf({ ...plan, settingsHash: settingsHash(hour60), targetPerSecond: 60 / 3600 });
+    const units = new Map<string, 'min' | 'hour'>();
+    expect([minute30, minute60, hour60].map((s) => planUnit(units, s, onScreen))).toEqual(['min', 'min', 'min']);   // one plan, three renders
+    expect(keyNumbers(onScreen, hour60, planUnit(units, hour60, onScreen))![0]).toMatchObject({ value: 30, text: '30', unit: '/min' });
+    const next = keyNumbers(arrived, hour60, planUnit(units, hour60, arrived))![0]!;
+    expect(next).toMatchObject({ text: '60', unit: '/h' });
+    // when it comes, the tile's two steps: the figure at once, never counted from 30 /min, and no flash: another unit, another figure
+    expect(nextCount({ from: 30, to: 30, unit: '/min', shown: 30 }, next.value, next.unit, () => false)).toEqual({ from: next.value, to: next.value, unit: '/h', shown: next.value });
+    const shown = { text: '30', unit: '/min', figure: true, changes: 0, running: false };
+    expect(nextFlash(shown, next)).toEqual({ text: '60', unit: '/h', figure: true, changes: 0, running: false });
+    expect(nextFlash(shown, { text: '60', unit: '/min', value: 60 })).toEqual({ text: '60', unit: '/min', figure: true, changes: 1, running: true });
+    expect(nextFlash(shown, { text: '30', unit: '/min', value: 30 })).toBe(shown);                                // nothing changed
+    // a dash's figure coming flashes, as any changed text does; settings never drawn here leave the guess
+    expect(nextFlash({ text: '—', unit: '', figure: false, changes: 0, running: false }, { text: '30', unit: '/min', value: 30 })).toMatchObject({ changes: 1, running: true });
+    expect(planUnit(new Map(), hour60, onScreen)).toBeUndefined();
   });
   // fix round 1, M3 and M4: useCountUp's step (`nextCount`), the same target changing nothing, a new one counting on from the figure shown, and
   // at once from a dash, to a dash, in another unit and under reduced motion

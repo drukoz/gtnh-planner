@@ -9,6 +9,7 @@
 import { PSEUDO_IDS, TIER_NAMES } from '../../shared/gt/tiers.ts';
 import { isFluidKey } from '../../shared/keys.ts';
 import { machineGroups } from '../../shared/plan/pools.ts';
+import { settingsHash } from '../../shared/project/settings-hash.ts';
 import type { Plan, PlanSettings } from '../../shared/types/plan.ts';
 import { formatDuration, formatNumber, formatRate } from '../format.ts';
 import { horizonText, notCounted } from './plan-cost.ts';
@@ -47,6 +48,8 @@ const DASH = '—';
 const DASH_WORDS = 'not available';
 /** How near a rate must come to the settings' amount to be the plan of that amount: the server writes it to 9 significant digits (`sig9`). */
 const SAME_RATE = 1e-6;
+/** How many settings states `planUnit` remembers the unit of, the oldest forgotten first: far more than one replan's changes. */
+const UNITS_KEPT = 64;
 const SECONDS_PER: Readonly<Record<PlanSettings['per'], number>> = { min: 60, hour: 3600 };
 const PER_UNIT: Readonly<Record<PlanSettings['per'], string>> = { min: 'min', hour: 'h' };
 
@@ -90,6 +93,45 @@ export function nextCount(count: Count, target: number | null, unit: string, red
   return { from: instant ? target : count.shown, to: target, unit, shown: instant ? target : count.shown };
 }
 
+/** A tile's flash (spec §10.1): what it last showed (its text, its unit and whether that was a figure), how many times that changed (which keys
+ *  the frame, so each change replays it), and whether the frame still runs. */
+export interface Flash { text: string; unit: string; figure: boolean; changes: number; running: boolean }
+
+/**
+ * The flash's step when the tile comes to show `n`: a new text flashes the tile once (its frame replays, its qualifier turns yellow); but a
+ * figure that comes in another unit than the figure it replaces shows without a flash, as it shows without a count (`nextCount`): it is
+ * another figure, not a change of this one (fix round 2, ledger ruling P2-R49).
+ */
+export function nextFlash(flash: Flash, n: Pick<KeyNumber, 'text' | 'unit' | 'value'>): Flash {
+  const figure = n.value !== null;
+  if (flash.text === n.text && flash.unit === n.unit && flash.figure === figure) return flash;
+  const another = flash.figure && figure && flash.unit !== n.unit;
+  if (flash.text === n.text || another) return { ...flash, text: n.text, unit: n.unit, figure, running: another ? false : flash.running };
+  return { text: n.text, unit: n.unit, figure, changes: flash.changes + 1, running: true };
+}
+
+/** Each settings object's hash, worked out once (a page draws the same settings object again and again). */
+const HASHES = new WeakMap<PlanSettings, string>();
+
+/**
+ * The unit the plan on screen was made in (fix round 2, ledger ruling P2-R49): `units` remembers the unit of every settings state the page
+ * draws, by its hash, and the plan carries the hash of the settings it was made for (`Plan.settingsHash`, the same test as `flow-model.ts`'s
+ * "is this the plan of those settings"). So while the plan of 30 a minute is on screen under settings of 60 an hour, its unit is the minute;
+ * undefined for settings this page never drew (the strip then reads the plan's own figures: `planPer`).
+ */
+export function planUnit(units: Map<string, PlanSettings['per']>, settings: PlanSettings, plan: Plan | null): PlanSettings['per'] | undefined {
+  let hash = HASHES.get(settings);
+  if (hash === undefined) {
+    hash = settingsHash(settings);
+    HASHES.set(settings, hash);
+  }
+  if (!units.has(hash)) {
+    units.set(hash, settings.per);
+    if (units.size > UNITS_KEPT) units.delete(units.keys().next().value as string);
+  }
+  return plan === null ? undefined : units.get(plan.settingsHash);
+}
+
 /**
  * The machines the plan's steps run on, and how many of them are new (`count − owned`): a sharing pool's once, by its first step
  * (`machineGroups`), no hand step and no crafting table or furnace (`PSEUDO_IDS`); and in Make N, where the steps of one machine type share
@@ -123,9 +165,9 @@ function dash(id: KeyNumber['id'], label: string, sub = ''): KeyNumber {
 }
 
 /**
- * The unit the plan's rate was planned in (fix round 1, M3): the settings' when the rate gives their amount in it; else the other unit when
- * it gives the amount there (the unit was changed, and the plan of the new one is on its way: the tile stays as it was until that plan comes,
- * so a figure is never shown in a unit its plan was not made in); else the settings' (a new amount on its way, which the figure counts to).
+ * The unit the plan's rate was planned in, read from its own figures (fix round 1, M3), where `planUnit` does not know it: the settings' when
+ * the rate gives their amount in it; else the other unit when it gives the amount there (the unit was changed, and the plan of the new one is
+ * on its way); else the settings' (a new amount on its way, which the figure counts to).
  */
 function planPer(perSecond: number, settings: Pick<PlanSettings, 'per' | 'amount'>): PlanSettings['per'] {
   const gives = (per: PlanSettings['per']): boolean =>
@@ -140,14 +182,14 @@ function planPer(perSecond: number, settings: Pick<PlanSettings, 'per' | 'amount
  * for a figure in words, as `formatRate` writes it), and the name of the plan's target: never the settings' target, which is a newer pick
  * while its first plan is on its way (the Settings button and the panel name that one). In Make N the batch's count and the time it takes.
  */
-function outputTile(plan: Plan, settings: Pick<PlanSettings, 'per' | 'amount'>, batch: boolean, ok: boolean): KeyNumber {
+function outputTile(plan: Plan, settings: Pick<PlanSettings, 'per' | 'amount'>, batch: boolean, ok: boolean, planned?: PlanSettings['per']): KeyNumber {
   if (batch) return ok && plan.makeN !== undefined ? figure('output', 'Output', settings.amount, '', formatDuration(plan.makeN.totalSeconds)) : dash('output', 'Output');
   const target = plan.target;
   const name = target === undefined ? '' : plan.names?.[target] ?? target;
   const perSecond = plan.targetPerSecond;
   if (!ok || perSecond === undefined) return dash('output', 'Output', name);
   const fluid = target !== undefined && isFluidKey(target);
-  const per = planPer(perSecond, settings);
+  const per = planned ?? planPer(perSecond, settings);
   const rate = formatRate(perSecond, per, { fluid });
   if (rate.includes(' every ')) return { id: 'output', label: 'Output', value: null, text: rate, spoken: rate, unit: '', sub: name, words: true };
   return figure('output', 'Output', perSecond * SECONDS_PER[per], `${fluid ? 'L' : ''}/${PER_UNIT[per]}`, name);
@@ -168,12 +210,14 @@ function buildQualifiers(cost: NonNullable<Plan['cost']>, batch: boolean): strin
 }
 
 /**
- * The strip's five tiles for `plan` (spec §10.1), its rate in the unit it was planned in and a Make N batch's count; null while the plan is on
- * its way. A plan that cannot run (not `ok`) gives the five tiles with `—`, and so does a figure a plan lacks (a plan with no cost). A plan with
+ * The strip's five tiles for `plan` (spec §10.1), its rate in the unit it was planned in (`planned`, from `planUnit`, else read from its
+ * figures) and a Make N batch's count; null while the plan is on its way. A plan that cannot run (not `ok`) gives the five tiles with `—`, and so does a figure a plan lacks (a plan with no cost). A plan with
  * figures says itself whether it is a batch's (`makeN`), so the tiles never mix a running line's figures with a batch's while a plan for the
  * other mode is on its way; a plan without any is read in the mode the settings ask for.
  */
-export function keyNumbers(plan: Plan | null, settings: Pick<PlanSettings, 'mode' | 'per' | 'amount'>): KeyNumber[] | null {
+export function keyNumbers(
+  plan: Plan | null, settings: Pick<PlanSettings, 'mode' | 'per' | 'amount'>, planned?: PlanSettings['per'],
+): KeyNumber[] | null {
   if (plan === null) return null;
   const ok = (plan.status ?? 'ok') === 'ok';
   const batch = ok ? plan.makeN !== undefined : settings.mode === 'makeN';
@@ -183,7 +227,7 @@ export function keyNumbers(plan: Plan | null, settings: Pick<PlanSettings, 'mode
   const machines = machineCount(plan);
   const qualifiers = cost === undefined ? [] : buildQualifiers(cost, batch);
   return [
-    outputTile(plan, settings, batch, ok),
+    outputTile(plan, settings, batch, ok, planned),
     ok ? figure('power', 'Peak power', peakEUt, 'EU/t', `${tier === undefined ? '' : `${tier} · `}${formatNumber(amps)} A`) : dash('power', 'Peak power'),
     ok ? figure('machines', 'Machines', machines.total, '', `${formatNumber(machines.new)} new`) : dash('machines', 'Machines'),
     cost === undefined ? dash('build', 'To build') : figure('build', 'To build', cost.build, 'raw', qualifiers[0] ?? '', qualifiers.slice(1).join(', ')),
