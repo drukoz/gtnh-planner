@@ -1,7 +1,7 @@
 // The shared end-to-end harness (architecture §11.7; Plans 3–5 use it too): log a page's browser context in, give it a
-// display name and a look, and open a new project. All of it works before the first navigation, because the request context of
-// `page.context()` resolves relative URLs against `use.baseURL` and shares the browser context's cookie jar, so the
-// page and its EventSource send `gp_session` (web-stack §10).
+// display name and a look, open a new project, and keep a replan's busy line above its tabs. All of it but the last works
+// before the first navigation, because the request context of `page.context()` resolves relative URLs against
+// `use.baseURL` and shares the browser context's cookie jar, so the page and its EventSource send `gp_session` (web-stack §10).
 
 import { expect, type Page } from '@playwright/test';
 import type { Plan, PlanSettings } from '../../src/shared/types/plan.ts';
@@ -89,4 +89,35 @@ export async function openWithPlan(page: Page, plan: Plan, settings: Partial<Pla
   const id = await createProject(page, 'Flow focus', settings);
   await expect(page.locator('svg.flow-canvas [data-step-id]')).toHaveCount(plan.steps.length);
   return id;
+}
+
+/**
+ * Puts "Updating the plan…" above the tabs of project `id`'s page, and keeps it there until the returned function is called (ledger ruling
+ * P2-R16). The page hears a `plan` event whenever the server replans the project (anyone's change to it) or another project's summary
+ * changes what it reads, and shows that line until it has fetched the plan again: every view under the banner moves down the page while it
+ * shows (24.3 px under the banner's other lines; a whole banner's height when the banner has nothing else to say). Here the server replans
+ * the project with its own settings (a settings op that changes nothing), and the page's fetches of its plan wait. Resolves once the page has
+ * asked and the line shows; the function lets the plan through, which comes back the same (from the server, or from an earlier route such
+ * as `openWithPlan`'s), and resolves once the line has gone again.
+ */
+export async function holdReplan(page: Page, id: string): Promise<() => Promise<void>> {
+  let release = (): void => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let asked = false;
+  await page.route((url) => url.pathname === `/api/projects/${id}/plan`, async (route) => {
+    asked = true;
+    await held;
+    await route.fallback().catch(() => {});   // the page is closed by then when the test failed before letting the plan through
+  });
+  const res = await page.request.post(`/api/projects/${id}/ops`, { data: { ops: [{ op: 'settings', patch: {} }] }, headers: { 'X-Planner-Name': 'e2e' } });
+  if (!res.ok()) throw new Error(`POST /api/projects/${id}/ops answered ${res.status()}: ${await res.text()}`);
+  await expect.poll(() => asked, { message: 'the page asks for the plan again' }).toBe(true);
+  const busy = page.getByText('Updating the plan…');
+  await expect(busy).toBeVisible();
+  return async () => {
+    release();
+    await expect(busy).toHaveCount(0);
+  };
 }

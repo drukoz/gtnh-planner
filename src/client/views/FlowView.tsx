@@ -382,7 +382,8 @@ export function FlowIssues(props: {
 interface Hit { focus: Focus; node?: PlacedNode; toggle?: StuffKey }
 
 /**
- * The laid-out diagram (fix spec §6.2) with pan (drag) and zoom (wheel, buttons, Fit), Find item and the "Imports in
+ * The laid-out diagram (fix spec §6.2) with pan (a drag, which keeps the spot it grabbed under the pointer while the canvas
+ * moves on the page) and zoom (wheel, buttons, Fit), Find item and the "Imports in
  * one column" toggle; hovering lights what is under the pointer, a click pins it (a box click also calls `onOpen`),
  * Esc or a click on the empty canvas clears it. It opens on the target (or on what someone asked to see) whenever the
  * plan's steps change (`viewKey`), and centres the focus whenever a view asks (`revealFlowFocus`).
@@ -394,6 +395,7 @@ function FlowCanvas(props: {
   const { layout, viewKey, selectedId, goods, importsInOneColumn, onImportsInOneColumn, onOpen, onToggleLine } = props;
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [view, setView] = useState<View>({ zoom: 1, x: PAD, y: PAD });
+  /** The press that may become a drag: its pointer, where it went down on the canvas (`onCanvas`), and the view then. */
   const drag = useRef<{ pointer: number; sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null);
   const dragged = useRef(false);
   /** A drag past `DRAG_THRESHOLD` is under way: the pipes stand still while it is (`dragging` on the svg). */
@@ -503,8 +505,20 @@ function FlowCanvas(props: {
    * leave every pipe stopped until some later drag ended.
    */
   const settleDragging = (): void => setDragging(drag.current?.moved === true);
+  /**
+   * Where the pointer is on the canvas (px from its top left), from where the canvas is now: a drag moves the diagram by what the pointer
+   * moved over the canvas, so the spot it was grabbed by stays under the pointer even when the canvas moves down or up the page meanwhile
+   * (the plan banner's busy line above the tabs comes and goes with every replan; ledger ruling P2-R16).
+   */
+  const onCanvas = (e: PointerEvent<SVGSVGElement>): [number, number] => {
+    const box = e.currentTarget.getBoundingClientRect();
+    return [e.clientX - box.left, e.clientY - box.top];
+  };
   const onPointerDown = (e: PointerEvent<SVGSVGElement>): void => {
-    if (e.button === 0) drag.current = { pointer: e.pointerId, sx: e.clientX, sy: e.clientY, ox: view.x, oy: view.y, moved: false };
+    if (e.button === 0) {
+      const [sx, sy] = onCanvas(e);
+      drag.current = { pointer: e.pointerId, sx, sy, ox: view.x, oy: view.y, moved: false };
+    }
     settleDragging();
   };
   const onPointerMove = (e: PointerEvent<SVGSVGElement>): void => {
@@ -513,8 +527,9 @@ function FlowCanvas(props: {
       hover(hitOf(e.target)?.focus ?? null);
       return;
     }
-    const dx = e.clientX - d.sx;
-    const dy = e.clientY - d.sy;
+    const [px, py] = onCanvas(e);
+    const dx = px - d.sx;
+    const dy = py - d.sy;
     if (!d.moved) {
       if (Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
       d.moved = true;
