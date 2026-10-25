@@ -5,14 +5,16 @@
 import type { IncomingMessage } from 'node:http';
 import type { AppContext } from '../../app.ts';
 import { tableItemCount } from '../../pack/crops.ts';
+import { allMachineIds, machineOf, machinesForMap } from '../../pack/lookup.ts';
 import { searchPack } from '../../pack/search.ts';
 import { avoidableMaterials } from '../../planner/basis.ts';
 import { EXCLUSION_RULES } from '../../planner/candidates.ts';
 import { HttpError, readJson, sendJson, type Route } from '../router.ts';
 import { keyList } from './assets.ts';
+import { compareMachineId } from '../../../shared/ids.ts';
 import { recipeTier } from '../../../shared/gt/tiers.ts';
 import type { PackInfo, RecipeSummary, StuffInfo } from '../../../shared/types/api.ts';
-import type { Pack, Recipe } from '../../../shared/types/pack.ts';
+import type { Machine, Pack, Recipe } from '../../../shared/types/pack.ts';
 
 const MAX_RECIPES_PER_SIDE = 50;
 const DEFAULT_SEARCH_LIMIT = 20;
@@ -34,12 +36,10 @@ function machineNameOf(pack: Pack, r: Recipe): string {
   if (r.source === 'furnace') return 'Furnace';
   const map = r.maps[0];
   if (map === undefined) return 'Unknown machine';
-  let lowest: { name: string; tier: number; mteId: number } | null = null;
-  for (const id of pack.machinesByMap.get(map) ?? []) {
-    const m = pack.machines.get(id);
-    if (m === undefined) continue;
+  let lowest: { name: string; tier: number; id: Machine['id'] } | null = null;
+  for (const m of machinesForMap(pack, map)) {
     const tier = m.tier ?? 0;
-    if (lowest === null || tier < lowest.tier || (tier === lowest.tier && m.mteId < lowest.mteId)) lowest = { name: m.name, tier, mteId: m.mteId };
+    if (lowest === null || tier < lowest.tier || (tier === lowest.tier && compareMachineId(m.id, lowest.id) < 0)) lowest = { name: m.name, tier, id: m.id };
   }
   return lowest?.name ?? pack.maps.get(map)?.name ?? map;
 }
@@ -72,10 +72,12 @@ function byString(a: string, b: string): number {
  * tier (none first) and mteId.
  */
 function ownableMachines(pack: Pack): NonNullable<PackInfo['machines']> {
-  return [...pack.machines.values()]
+  return allMachineIds(pack)
+    .map((id) => machineOf(pack, id))
+    .filter((m): m is Machine => m !== undefined)
     .filter((m) => (m.kind === 'basic' || m.kind === 'multiblock') && m.maps.length > 0 && m.mteId >= 0)
-    .map((m) => (m.tier === undefined ? { mteId: m.mteId, name: m.name } : { mteId: m.mteId, name: m.name, tier: m.tier }))
-    .sort((a, b) => byString(a.name, b.name) || (a.tier ?? -1) - (b.tier ?? -1) || a.mteId - b.mteId);
+    .sort((a, b) => byString(a.name, b.name) || (a.tier ?? -1) - (b.tier ?? -1) || compareMachineId(a.id, b.id))
+    .map((m) => (m.tier === undefined ? { mteId: m.mteId, name: m.name } : { mteId: m.mteId, name: m.name, tier: m.tier }));
 }
 
 function summaries(pack: Pack, indices: readonly number[] | undefined): RecipeSummary[] {

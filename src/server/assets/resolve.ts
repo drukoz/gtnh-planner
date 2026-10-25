@@ -9,6 +9,7 @@ import {
   type BlockFaces, type CoverLayers, type Face, type IconDescriptor, type PipeLayers, type Rgb, type TextureLayer,
 } from '../../shared/types/assets.ts';
 import type { BlockRef, Pack } from '../../shared/types/pack.ts';
+import { machineByMteId } from '../pack/lookup.ts';
 import { curatedBlock, curatedItem, type CuratedBlock, type CuratedLayer } from './curated.ts';
 import {
   coverLayers, facesFrom, gtBlockFaces, gtFluidIcon, gtItemIcon, gtMachineFaces, gtMaterialBlockFaces, gtOreFaces, gtTemplateIcon, type CopyResolver,
@@ -19,8 +20,8 @@ import type { TexturesDump } from './textures-dump.ts';
 
 /** Icons rendered by NEI itself (Task 11's NEI index implements it). */
 export interface IconSource { icon(key: StuffKey): TextureLayer | null }
-/** All the resolver reads of a pack; a full `Pack` fits. */
-export type PackView = Pick<Pack, 'items' | 'machines' | 'materials' | 'fluidContainers'>;
+/** All the resolver reads of a pack; a full `Pack` fits (machine lookups go through `machineByMteId`). */
+export type PackView = Pack;
 export interface AssetSources { index: AssetIndex; dump: TexturesDump | null; nei: IconSource | null; pack: PackView | null }
 
 const GT_MACHINES = 'gregtech:gt.blockmachines';   // its item meta is the MTE id
@@ -183,7 +184,10 @@ function refFaces(src: AssetSources, ref: BlockRef, copy: CopyResolver): FoundFa
 
 /** Spec §3.8: a plain colour by machine kind, the casing colour for casings, else a stable colour per block. */
 export function blockFallbackColor(ref: BlockRef, pack: PackView | null): Rgb {
-  if (ref.mteId !== undefined) return rgbOf(KIND_COLORS[pack?.machines.get(ref.mteId)?.kind ?? 'other']);
+  if (ref.mteId !== undefined) {
+    const kind = pack === null ? undefined : machineByMteId(pack, ref.mteId)?.kind;
+    return rgbOf(KIND_COLORS[kind ?? 'other']);
+  }
   if (/casing/i.test(ref.id)) return rgbOf(KIND_COLORS.casing);
   return hashColor(`${ref.id}@${ref.meta}`);
 }

@@ -63,7 +63,7 @@ describe('projector payload', () => {
   it("says when the checked facing is a single-block machine's output side", () => {
     const withKind = (kind: MachineKind | null) => {
       const machines = new Map(pack.machines);
-      if (kind === null) machines.delete(201); else machines.set(201, { kind });
+      if (kind === null) machines.delete(201); else machines.set(201, { ...machines.get(201)!, kind });
       return projectorPayload(projectorProject(), projectorLayout(), { ...pack, machines });
     };
     // GT front facing = output side on basic and steam machines; a transformer's front is its front
@@ -84,7 +84,7 @@ describe('projector payload', () => {
     expect([p.blocks[3], p.blocks[4]]).toMatchObject([{ facing: 3, facingIsOutput: true, mainFacing: 4 }, { facing: 3, facingIsOutput: true, mainFacing: 4 }]);
     expect('mainFacing' in p.blocks[2]!).toBe(false);                                   // a transformer has one front
     const machines = new Map(pack.machines);
-    machines.set(201, { kind: 'multiblock' });
+    machines.set(201, { ...machines.get(201)!, kind: 'multiblock' });
     expect('mainFacing' in projectorPayload(projectorProject(), projectorLayout(), { ...pack, machines }).blocks[3]!).toBe(false);
     const noFront = projectorLayout(); delete noFront.blocks[4]!.mainFacing;
     expect('mainFacing' in projectorPayload(projectorProject(), noFront, pack).blocks[4]!).toBe(false);
