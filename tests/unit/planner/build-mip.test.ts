@@ -4,7 +4,8 @@
 // that cannot be built, Make N against the batch, the step charge against the raw material with gathered blocks dug and
 // paid per new machine block, the cleanroom, the cheapest of plan 09's plan, the relaxation and S1 rounded up when the
 // time guard stops the MIP, and with build cost ignored plan 09's stages
-// within the owned-only bounds, their machines sized by plan 09's pick (ruling P2); the raw cap against the leanest line
+// within the owned-only bounds (on whole owned machines where those bounds let two steps count on the same ones: 12 x 17
+// F-A), their machines sized by plan 09's pick (ruling P2); the raw cap against the leanest line
 // and the step charge measured on that line (fix wave 3 (A), (B2)), an owned block's share of the step charge (ledger
 // 265), and on an AE2 line no start from S1 rounded up where it makes an item good two ways (add-on 12 x 17 F6).
 
@@ -66,6 +67,32 @@ function twinMakerSpec(): Parameters<typeof solvedWithBuild>[0] {
   };
 }
 const TWIN_MAKERS = { 'g-plain': [opt(101, 1, 0.2, 17)], 'g-twin': [opt(481, 1, 0.5, 17)], 'p-make': [opt(121, 1, 0.2, 16)] };
+
+/**
+ * Two steps for one owned machine type that cannot be built (12 x 17 Task 11, F-A): `final` (1 g + 1 h → 1 t) on a Basic
+ * Bending Machine (101), g and h each made from a on a bender (`make-g` 5 a → 1 g, `make-h` 10 a → 1 h) or for less in
+ * the Owned Farm (301, on the wiremill map: `farm-g` 3 a → 1 g, `farm-h` 6 a → 1 h), all LV at 24 EU/t × 100 t; with
+ * `circuits` the farm recipes take programmed circuits 1 and 2, so on a network they share no machine.
+ */
+function ownedFarmSpec(circuits = false): Parameters<typeof solvedWithBuild>[0] {
+  const BENDER = 'gt.recipe.metalbender';
+  const WIREMILL = 'gt.recipe.wiremill';
+  const farm = (id: string, n: number, out: StuffKey, a: number): NonNullable<Parameters<typeof solvedWithBuild>[0]['recipes']>[number] => ({
+    id, map: WIREMILL, in: [['t:a@0', a], ...(circuits ? [{ nc: `gregtech:gt.integrated_circuit@${n}` }] : [])], out: [[out, 1]], eut: 24, dur: 100,
+    ...(circuits ? { meta: { circuit: n } } : {}),
+  });
+  return {
+    maps: [{ id: BENDER, name: 'Bending Machine' }, { id: WIREMILL, name: 'Wiremill' }],
+    machines: [{ mteId: 101, name: 'Basic Bending Machine', tier: 1, maps: [BENDER] }, { mteId: 301, name: 'Owned Farm', tier: 1, maps: [WIREMILL] }],
+    items: [{ key: 'gregtech:gt.integrated_circuit@1', name: 'Programmed Circuit' }, { key: 'gregtech:gt.integrated_circuit@2', name: 'Programmed Circuit' }],
+    recipes: [
+      { id: 'final', map: BENDER, in: [['t:g@0', 1], ['t:h@0', 1]], out: [['t:t@0', 1]], eut: 24, dur: 100 },
+      { id: 'make-g', map: BENDER, in: [['t:a@0', 5]], out: [['t:g@0', 1]], eut: 24, dur: 100 },
+      { id: 'make-h', map: BENDER, in: [['t:a@0', 10]], out: [['t:h@0', 1]], eut: 24, dur: 100 },
+      farm('farm-g', 1, 't:g@0', 3), farm('farm-h', 2, 't:h@0', 6),
+    ],
+  };
+}
 
 describe('the build-cost MIP', () => {
   it('builds the machine that pays for itself over the horizon', async () => {
@@ -574,6 +601,43 @@ describe('the build-cost MIP', () => {
     const short = await solvedWithBuild(pressSpec(), COSTS, [['t:t@0', 1]], { options: { press: [unbuildable(opt(101, 1, 0.2, null, 1))] }, horizonSeconds: null });
     expect(short.sol.status).toBe('infeasible');
     expect(short.sol.warnings).toContainEqual({ code: 'owned-only', key: 't:t@0', text: '1× M101, which cannot be built here (no recipe in this pack)' });
+  });
+
+  it('gives whole owned machines that cannot be built to the steps that save the most when build cost is ignored (12 x 17 F-A)', async () => {
+    // One Owned Farm (0.2 runs a second) for `farm-g` and `farm-h`, each bounded by all of it in plan 09's stages: at 0.1 t a
+    // second each needs half of it, so the least raw material ran both (9 a for each t), and sizing gave the farm to
+    // `farm-g`, first by id, and left `farm-h` short, so the line ended infeasible. With whole machines per step (a line
+    // that shares none gives each step its own) the one farm runs `farm-h`, which saves more: 5 + 6 = 11 a for each t
+    // against 3 + 10 = 13.
+    const farm = (owned: number): MachineOption => unbuildable(opt(301, 1, 0.2, null, owned));
+    const options = (owned: number): Record<string, MachineOption[]> => ({
+      final: [opt(101, 1, 0.2, 10)], 'make-g': [opt(101, 1, 0.2, 10)], 'make-h': [opt(101, 1, 0.2, 10)], 'farm-g': [farm(owned)], 'farm-h': [farm(owned)],
+    });
+    const line = (owned: number, rate: number, share = false, circuits = false) =>
+      solvedWithBuild(ownedFarmSpec(circuits), { 't:a@0': 1 }, [['t:t@0', rate]], { options: options(owned), horizonSeconds: null, share });
+    const one = await line(1, 0.1);
+    expect(one.sol.status, JSON.stringify(one.sol.warnings)).toBe('ok');
+    expect(one.runs).toEqual(['farm-h', 'final', 'make-g']);
+    expect(one.sol.rawCost).toBe(1.1);
+    expect(one.sol.machines?.get('farm-h')).toMatchObject({ option: { mteId: 301 }, added: 0, ownedLoad: 1 });
+    // Two farms run both steps, each on its own (unchanged).
+    const two = await line(2, 0.1);
+    expect(two.runs).toEqual(['farm-g', 'farm-h', 'final']);
+    expect(two.sol.rawCost).toBe(0.9);
+    // On a network the two steps share one pool of the farm (one sharing key): at 0.1 t a second it is busy all the time
+    // with both. At 0.16 they need 1.6 farms, which left `farm-h` short as well: the one farm makes all the h (0.8 of
+    // it) and a quarter of the g (0.2), the bender the rest: 0.96 + 3 × 0.04 + 5 × 0.12 = 1.68 a each second. With
+    // programmed circuits each step needs a farm of its own, as on a line that shares none.
+    expect((await line(1, 0.1, true)).sol.rawCost).toBe(0.9);
+    const pooled = await line(1, 0.16, true);
+    expect(pooled.sol.status, JSON.stringify(pooled.sol.warnings)).toBe('ok');
+    expect(pooled.runs).toEqual(['farm-g', 'farm-h', 'final', 'make-g']);
+    expect(pooled.sol.rawCost).toBe(1.68);
+    expect([...pooled.sol.runs]).toEqual([['farm-g', 0.04], ['farm-h', 0.16], ['final', 0.16], ['make-g', 0.12]]);
+    expect([...(pooled.sol.pools?.values() ?? [])].filter((p) => p.option.mteId === 301)).toMatchObject([{ added: 0, steps: ['farm-g', 'farm-h'] }]);
+    const keyed = await line(1, 0.1, true, true);
+    expect(keyed.runs).toEqual(['farm-h', 'final', 'make-g']);
+    expect(keyed.sol.rawCost).toBe(1.1);
   });
 
   it('runs the same twin of a recipe whatever the step charge, the horizon, sharing or mode', async () => {

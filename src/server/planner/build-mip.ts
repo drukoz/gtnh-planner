@@ -83,7 +83,9 @@ export interface BuildDecision {
   pools: Map<string, { option: MachineOption; added: number; steps: string[] }>;
   /**
    * `roundUp` only: the kept steps left with runs no machine covers — steps that can only use owned machines, whose
-   * type's owned machines other such steps took (`solveLine` ends the line with `owned-only` warnings); absent when none.
+   * type's owned machines other such steps took (`solveLine` ends the line with `owned-only` warnings; with build cost
+   * ignored, only where plan 09's stages on whole owned machines, `ownedOnlyMip`, leave one short too: 12 x 17 F-A);
+   * absent when none.
    */
   short?: string[];
   /**
@@ -546,6 +548,97 @@ function allocate(input: BuildMipInput, x: readonly number[], prefer?: (j: numbe
  */
 export function roundUp(input: BuildMipInput, x: readonly number[], prefer?: (j: number) => number | undefined): BuildDecision {
   return allocate(input, x, prefer).decision;
+}
+
+/**
+ * Branch-and-bound nodes `ownedOnlyMip`'s model may use: a node limit, never a time limit, so the plan is deterministic
+ * (like STEP_MIP_MAX_NODES). Its whole columns are the holders of the owned machines the group cannot build — a handful
+ * on real lines (the user's Electronic Circuit with one Tree Growth Simulator: two saplings, one machine) — so it ends
+ * long before this.
+ */
+export const OWNED_MIP_MAX_NODES = 1000;
+
+/**
+ * 12 x 17 Task 11 (F-A): the steps only owned machines that cannot be built here can run (`bounded`: solve.ts
+ * `boundOwnedOnly`) on whole machines, as `roundUp` holds them — a step's own machines of one option, or with
+ * `model.share` its sharing pool's (an owned machine serves one sharing key) — where each one's column bound alone, all of
+ * those machines, lets two of them count on the same ones, so that `roundUp` leaves one short. The model: the least raw
+ * material over the main LP with, per holder of such a step's owned option, a whole count of its machines (`n_h`), those
+ * of one type at most the group's together, the machines' worth each step takes of each of its holders (`ℓ`, at most
+ * `n_h` per holder together) and each step's runs within what they do (`D·x_j ≤ Σ ρ·ℓ`), within OWNED_MIP_MAX_NODES.
+ * `bounds` reads a solution: per step of `bounded`, the runs per unit of demand its share of its holders' machines does
+ * (each holder's machines split by what the solution gave its steps, the spare ones alike), which no later stage can run
+ * past whole machines with. Undefined when no step of `bounded` has an owned option.
+ */
+export function ownedOnlyMip(
+  lp: MainLp, model: BuildModel, demandScale: number, bounded: readonly number[],
+): { model: LpModel; bounds(x: readonly number[]): Map<number, number> } | undefined {
+  const D = demandScale;
+  const width = lp.rawCost.length;
+  /** Per step and owned option: its step column and runs a second a machine; its load column is `width` + its index. */
+  const uses: Array<{ j: number; perMachine: number }> = [];
+  /** Per holder: its type, the group's machines of it, and its uses (their indices). */
+  const holders: Array<{ mteId: number; owned: number; uses: number[] }> = [];
+  const holderAt = new Map<string, number>();
+  for (const j of bounded) {
+    const r = lp.recipes[j];
+    if (r === undefined) continue;
+    const key = model.sharingKey(r.id);
+    for (const o of model.options(r.id)) {
+      if (!(o.perMachine > 0) || !Number.isFinite(o.perMachine) || !(o.owned > 0)) continue;
+      const pool = poolOf(model, r.id, key, o);
+      let h = holderAt.get(pool);
+      if (h === undefined) {
+        h = holders.length;
+        holderAt.set(pool, h);
+        holders.push({ mteId: o.mteId, owned: ownedOf(model, o), uses: [] });
+      }
+      (holders[h] as (typeof holders)[number]).uses.push(uses.length);
+      uses.push({ j, perMachine: o.perMachine });
+    }
+  }
+  if (uses.length === 0) return undefined;
+  const firstHolder = width + uses.length;
+  const all = firstHolder + holders.length;
+  const rows: LpRow[] = [...lp.rows];
+  for (const j of bounded) {
+    const takes = uses.flatMap((u, i): Array<[number, number]> => (u.j === j ? [[width + i, -u.perMachine]] : []));
+    rows.push({ lower: -Infinity, upper: 0, entries: [[j, D], ...takes] });
+  }
+  const types = new Map<number, { owned: number; holders: number[] }>();
+  holders.forEach((h, k) => {
+    rows.push({ lower: -Infinity, upper: 0, entries: [...h.uses.map((i): [number, number] => [width + i, 1]), [firstHolder + k, -1]] });
+    const type = types.get(h.mteId);
+    if (type === undefined) types.set(h.mteId, { owned: h.owned, holders: [k] });
+    else type.holders.push(k);
+  });
+  for (const [, type] of [...types].sort(([a], [b]) => a - b)) {
+    rows.push({ lower: -Infinity, upper: type.owned, entries: type.holders.map((k): [number, number] => [firstHolder + k, 1]) });
+  }
+  return {
+    model: {
+      sense: 'min', colCost: [...lp.rawCost, ...new Array<number>(all - width).fill(0)], colLower: new Array<number>(all).fill(0),
+      colUpper: [...lp.upper, ...new Array<number>(uses.length).fill(Infinity), ...holders.map((h) => h.owned)], rows,
+      integer: new Array<boolean>(all).fill(false).fill(true, firstHolder), maxNodes: OWNED_MIP_MAX_NODES,
+    },
+    bounds: (x) => {
+      const out = new Map<number, number>(bounded.map((j) => [j, 0]));
+      holders.forEach((h, k) => {
+        const machines = Math.max(0, Math.round(x[firstHolder + k] ?? 0));
+        const load = (i: number): number => Math.max(0, x[width + i] ?? 0);
+        let used = 0;
+        for (const i of h.uses) used += load(i);
+        // Within the MIP's tolerance its loads may pass the machines by a hair: scaled to them, never past them.
+        const scale = used > machines ? machines / used : 1;
+        const spare = (machines - used * scale) / h.uses.length;
+        for (const i of h.uses) {
+          const u = uses[i] as (typeof uses)[number];
+          out.set(u.j, (out.get(u.j) ?? 0) + (u.perMachine * (load(i) * scale + spare)) / D);
+        }
+      });
+      return out;
+    },
+  };
 }
 
 /**

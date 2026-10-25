@@ -8,7 +8,8 @@ import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import type { PlanWarning } from '../../shared/types/plan.ts';
 import {
   BUILD_MIP_MAX_LP_ITERATIONS, BUILD_MIP_MAX_NODES, BUILD_MIP_RETRY_TOLERANCE, BUILD_MIP_TIME_LIMIT_SECONDS, LEAN_BASE_ABOVE, buildMip, laterRoom,
-  oneMakerGood, roundUp, scaleOf, stepWeight, type BuildDecision, type BuildMipInput, type LaterRoom, type StepMachines, type StepWeights,
+  oneMakerGood, ownedOnlyMip, roundUp, scaleOf, stepWeight, type BuildDecision, type BuildMipInput, type LaterRoom, type StepMachines,
+  type StepWeights,
 } from './build-mip.ts';
 import { canonicalRank, type CandidateGraph, type LpRecipe } from './candidates.ts';
 import { solveLp, solveLpAside, type LpModel, type LpResult, type LpRow } from './lp.ts';
@@ -284,9 +285,10 @@ export interface MainLp {
   firstBuy: number; firstSink: number; rows: LpRow[];
   /**
    * Per column, its upper bound in every stage: Infinity, but for a step recipe that can only run on owned machines that
-   * cannot be built here (plan 12, `BuildModel.ownedOnly`, rate mode) the runs per unit of demand they do, for a
-   * byproduct-only good's first purchase with the group's stock (fix wave 3 (C)) its share of that stock per unit of
-   * demand, and 0 for the sink of a virtual good (an ore-dictionary slot, 12 x 17 F7b).
+   * cannot be built here (plan 12, `BuildModel.ownedOnly`, rate mode) the runs per unit of demand they do (with build cost
+   * ignored, where plan 09's plan needs more whole machines of them than the group has, what its share of them does:
+   * `boundOwnedWhole`, 12 x 17 F-A), for a byproduct-only good's first purchase with the group's stock (fix wave 3 (C))
+   * its share of that stock per unit of demand, and 0 for the sink of a virtual good (an ore-dictionary slot, 12 x 17 F7b).
    */
   upper: number[];
   /**
@@ -1244,7 +1246,10 @@ function infeasibleLine(warnings: PlanWarning[]): Solution {
 /**
  * Rate mode with a build model (controller ruling OQ5 a, Amendment OQ3, ruling P2): each step recipe that can only run
  * on owned machines that cannot be built here (`BuildModel.ownedOnly`) runs at most what they do — `D·x_j ≤
- * runsPerSecond` as its column's upper bound in every stage. Returns the columns it bounds.
+ * runsPerSecond` as its column's upper bound in every stage. Returns the columns it bounds. Each column counts on all of
+ * those machines, so two such steps of one type may each count on the same ones: the build MIP gives every step whole
+ * machines itself, and with build cost ignored `boundOwnedWhole` bounds them by their share of whole machines where
+ * plan 09's plan would leave one short (12 x 17 F-A).
  */
 function boundOwnedOnly(lp: MainLp, model: BuildModel, demandScale: number): number[] {
   const bounded: number[] = [];
@@ -1255,6 +1260,25 @@ function boundOwnedOnly(lp: MainLp, model: BuildModel, demandScale: number): num
     bounded.push(j);
   });
   return bounded;
+}
+
+/**
+ * 12 x 17 Task 11 (F-A): the steps of `bounded` (`boundOwnedOnly`) on whole owned machines — each step on a line that
+ * shares none its own, each sharing pool its own on AE2, as `roundUp` sizes them — where their column bounds let two of
+ * them count on the same machines (the user's Electronic Circuit in least raw material, one Tree Growth Simulator owned:
+ * S1 ran it on a Blood Sapling, plan 09's later stages on a Rubber Tree Sapling too, and sizing gave it to the rubber
+ * one, first by id, and ended the line).
+ * The least raw material on whole machines (`ownedOnlyMip`) decides which steps run on them, and each step's bound in
+ * `lp.upper` becomes what its share of them does (`bounds`), never above its bound before. False, and `lp` unchanged,
+ * where no whole count of those machines plans the line within OWNED_MIP_MAX_NODES.
+ */
+async function boundOwnedWhole(lp: MainLp, model: BuildModel, demandScale: number, bounded: readonly number[]): Promise<boolean> {
+  const mip = ownedOnlyMip(lp, model, demandScale, bounded);
+  if (mip === undefined) return false;
+  const result = await solveLp(mip.model);
+  if (result.status !== 'optimal' && result.status !== 'feasible') return false;
+  for (const [j, upper] of mip.bounds(result.x)) lp.upper[j] = Math.min(lp.upper[j] ?? Infinity, upper);
+  return true;
 }
 
 /**
@@ -1830,22 +1854,41 @@ function planPick(options: readonly MachineOption[]): number | undefined {
 }
 
 /**
- * "Ignore build cost" with a model (ruling P2): plan 09's plan, whose stages kept the owned-only bounds, gets its
- * machines from `roundUp` of its columns with plan 09's pick (`planPick`) for new ones; a step it leaves short ends the
- * line with the `owned-only` warnings of the bounded steps S1 runs. No build MIP, so no `buildStats`.
+ * "Ignore build cost" with a model (ruling P2): plan 09's plan (`plan`, its stages from S1 `s1` within the owned-only
+ * bounds) gets its machines from `roundUp` of its columns with plan 09's pick (`planPick`) for new ones; undefined where
+ * that leaves a step short. No build MIP, so no `buildStats`.
  */
 function sized(
-  lp: MainLp, s1: LpResult, plan: { sol: Solution; x: readonly number[] }, warnings: PlanWarning[], opts: SolveOptions, model: BuildModel,
-  demandScale: number, bounded: readonly number[],
-): Solution {
+  lp: MainLp, s1: LpResult, plan: { sol: Solution; x: readonly number[] }, opts: SolveOptions, model: BuildModel, demandScale: number,
+): Solution | undefined {
   const input = buildInput(lp, s1, s1.objective, demandScale, model, opts);
   const decision = roundUp(input, plan.x, (j) => planPick(model.options(lp.recipes[j]?.id ?? '')));
-  if (decision.short !== undefined) return infeasibleLine([...warnings, ...ownedOnlyWarnings(lp, model, ownedOnlyRuns(bounded, s1.x))]);
+  if (decision.short !== undefined) return undefined;
   const { sol } = plan;
   sol.machines = decision.machines;
   sol.pools = decision.pools;
   sol.cleanroom = decision.cleanroom;
   return sol;
+}
+
+/**
+ * "Ignore build cost" with a model: plan 09's plan sized (`sized`). Where that leaves a step short — the steps only owned
+ * machines that cannot be built can run, each bounded by all of them, counted on the same ones (12 x 17 Task 11, F-A) —
+ * those steps are bounded by their share of whole owned machines (`boundOwnedWhole`, the least raw material on them) and
+ * plan 09's stages run again from the least raw material within those bounds; a line still short ends with the
+ * `owned-only` warnings of the bounded steps S1 runs. `warnings` gives the solve's warnings, a fresh list each call.
+ */
+async function ignoringBuild(
+  lp: MainLp, s1: LpResult, warnings: () => PlanWarning[], opts: SolveOptions, model: BuildModel, demandScale: number, bounded: readonly number[],
+): Promise<Solution> {
+  const plan = sized(lp, s1, await finish(lp, s1, warnings(), opts), opts, model, demandScale);
+  if (plan !== undefined) return plan;
+  if (bounded.length > 0 && await boundOwnedWhole(lp, model, demandScale, bounded)) {
+    const whole = await minimize(lp, lp.rawCost, []);
+    const again = whole.status === 'optimal' ? sized(lp, whole, await finish(lp, whole, warnings(), opts), opts, model, demandScale) : undefined;
+    if (again !== undefined) return again;
+  }
+  return infeasibleLine([...warnings(), ...ownedOnlyWarnings(lp, model, ownedOnlyRuns(bounded, s1.x))]);
 }
 
 /**
@@ -1894,8 +1937,9 @@ function cappedList(ids: readonly string[]): string {
  * cannot be built is bounded by them in every stage (`boundOwnedOnly`); when that makes S1 infeasible and S1 without
  * the bounds solves, the line is infeasible with an `owned-only` warning for each such step that S1 runs past its bound.
  * When the model counts build cost (`buildCounts`) the build stage replaces R3's stages 2–4 (`buildStage`); with build
- * cost ignored plan 09's stages run and their plan's machines are sized (`sized`). Machine counts are absolute (the
- * build stage works with the demand scale), so they are not scaled back.
+ * cost ignored plan 09's stages run and their plan's machines are sized (`sized`), where that leaves a step short again
+ * on whole owned machines (`ignoringBuild`, 12 x 17 F-A). Machine counts are absolute (the build stage works with the
+ * demand scale), so they are not scaled back.
  */
 export async function solveLine(graph: CandidateGraph, demand: ReadonlyMap<StuffKey, number>, opts: SolveOptions = {}): Promise<Solution> {
   let scale = 0;
@@ -1965,10 +2009,8 @@ async function solveUnit(graph: CandidateGraph, demand: ReadonlyMap<StuffKey, nu
       let done: Solution;
       if (opts.probe === true) done = probed(lp, s1, loopWarnings());
       else if (model !== undefined && buildCounts(model)) done = await buildStage(graph, lp, s1, loopWarnings(), opts, model, demandScale, bounded);
-      else {
-        const plan = await finish(lp, s1, loopWarnings(), opts);
-        done = model === undefined ? plan.sol : sized(lp, s1, plan, loopWarnings(), opts, model, demandScale, bounded);
-      }
+      else if (model !== undefined) done = await ignoringBuild(lp, s1, loopWarnings, opts, model, demandScale, bounded);
+      else done = (await finish(lp, s1, loopWarnings(), opts)).sol;
       // Of two twins every stage rates alike, the plan runs the same one whichever the solver met (`twinMoves`).
       if (done.status === 'ok') {
         done = withTwinsMoved(done, twinMoves(graph, recipes, demand, {
