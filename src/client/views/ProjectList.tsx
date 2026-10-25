@@ -17,6 +17,7 @@ import { localTime } from '../format.ts';
 import { followLink, navigate } from '../router.ts';
 import { alreadyDeletedNotice, deletedNotice, takeDeletedNotice } from '../state/deleted-notice.ts';
 import { useName } from '../state/name.ts';
+import { showToast } from '../state/toasts.ts';
 
 /** Display names of the projects' targets; a key the pack cannot name (or no export yet) shows as the key. */
 function useTargetNames(projects: ProjectListEntry[] | null): Record<string, string> {
@@ -135,6 +136,7 @@ export function ProjectList(): ReactElement {
     try {
       const body: CreateProjectBody = { name: name.trim() };
       const project = await apiPost<Project>('/api/projects', body);
+      showToast(`Created “${project.name}”`);   // the App's region outlives the list: the project's page shows it
       navigate(`/p/${encodeURIComponent(project.id)}`);
     } catch (err) {
       setError(messageOf(err));

@@ -29,6 +29,7 @@ import { tileCache } from '../map/tile-cache.ts';
 import type { MapMarker, MapOverlay, MapViewport } from '../map/types.ts';
 import { followLink } from '../router.ts';
 import { focusPin, usePinFocus } from '../state/pin-focus.ts';
+import { showToast } from '../state/toasts.ts';
 import { useLayout, type LayoutState } from '../state/use-layout.ts';
 import { MapView } from './MapView.tsx';
 import type { ProjectViewProps } from './project-tabs.ts';
@@ -402,6 +403,7 @@ function ScanMap(props: { project: Project; scan: WorldScan; scans: WorldScanLis
     const note: Omit<Note, 'by' | 'at'> = { id: newNoteId(), text, pin: { dim: pick.dim, x: pick.x, y: pick.y, z: pick.z } };
     send([{ op: 'addNote', note }]);
     setPick(null);
+    showToast('Note added');
   };
 
   return (

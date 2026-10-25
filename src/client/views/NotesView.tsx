@@ -6,6 +6,7 @@ import { MAX_NOTE_LENGTH } from '../../shared/project/apply-op.ts';
 import type { Plan } from '../../shared/types/plan.ts';
 import type { Note } from '../../shared/types/project.ts';
 import { localTime } from '../format.ts';
+import { showToast } from '../state/toasts.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
 
 /** A random UUID; crypto.randomUUID exists only on HTTPS and localhost, and friends reach the planner over plain HTTP. */
@@ -73,6 +74,7 @@ export function NotesView(props: ProjectViewProps): ReactElement {
     if (note === '') return;
     send([{ op: 'addNote', note: { id: newNoteId(), text: note } }]);
     setText('');
+    showToast('Note added');
   };
   return (
     <div className="notes">

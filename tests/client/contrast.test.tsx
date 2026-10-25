@@ -244,6 +244,12 @@ const PAIRS: Pair[] = [
   // the key-numbers strip (Phase 2 Task 7, spec §10): a changed tile's qualifier, yellow on its screen while the tile flashes; the label, the
   // qualifier at rest and the figure are the readout pairs above (Task 5a's: --screen-muted and --screen-text on --screen)
   ['strip changed accent', '--accent', '--screen', AA],
+
+  // the toasts (Phase 2 Task 9a, spec §12.3): white sentences on a chat box, which floats over whatever is in the window's corner, a panel or the
+  // stone; and Undo, the primary button's yellow on its face
+  ['toast text over a panel', '#ffffff', { over: '--chat', on: '--panel' }, AA],
+  ['toast text over the page', '#ffffff', { over: '--chat', on: '--page' }, AA],
+  ['Undo', '--accent', '--btn', AA],
 ];
 
 describe('contrast of the Machine GUI palette', () => {

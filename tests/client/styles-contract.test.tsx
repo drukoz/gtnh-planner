@@ -138,6 +138,8 @@ const KEYFRAMES: Record<string, string[]> = {
   'gt-arrow': ['transform'],                                                         // Phase 2 spec §11.3: the GT progress arrow fills in eight steps
   'flash-out': ['opacity'],                                                          // Phase 2 spec §10.1: a changed strip tile's frame fades once
   sheen: ['transform'],                                                              // Phase 2 spec §11.2: a skeleton's sheen passes over its blocks
+  'toast-in': ['opacity', 'transform'],                                              // Phase 2 spec §12.1: a toast pops in from 12 px below
+  'toast-out': ['opacity', 'transform'],                                             // Phase 2 spec §12.1: and sinks back out as it goes
 };
 
 const FONT_IMPORTS = [
@@ -2634,6 +2636,15 @@ const BUSY_CHIP = '.project-banners > .key-numbers ~ .plan-banner > p.muted';
 const BUSY_ALONE = '.plan-banner:has(> p.muted:only-child)';
 const BUSY_RULES = ['.project-banners', BUSY_LINE, BUSY_CHIP];
 
+/**
+ * Phase 2 Task 9a (spec §12.3): the toasts, chat boxes stacked in a region fixed in the window's bottom-right corner, under every layer; the
+ * region takes no pointer, its toasts do, but for one that is leaving.
+ */
+const TOASTS = '.toasts';
+const TOAST = '.toast';
+const TOAST_LEAVING = ".toast[data-state='leaving']";
+const TOAST_RULES = [TOASTS, '.toasts > ol', TOAST, '.toast > span', TOAST_LEAVING];
+
 /** The selectors of every rule Phase 2 adds; each later task appends its own. */
 const PHASE2_RULES: string[] = [
   '.theme-button', '.theme-button::before', ".theme-button[data-choice='dark']::before", ".theme-button[data-choice='light']::before",
@@ -2650,6 +2661,7 @@ const PHASE2_RULES: string[] = [
   ...STRIP_RULES,                                                                    // Task 7: the key-numbers strip (spec §10.2)
   ...SKELETON_RULES, ...COMPARE_SKELETON_RULES,                                      // Task 8: the skeletons (spec §11.2, compare-skeletons)
   ...BUSY_RULES,                                                                     // Task 8: the busy line out of the flow (P2-R18)
+  ...TOAST_RULES,                                                                    // Task 9a: the toasts (spec §12.3)
 ];
 /** The colour literals a Phase 2 rule may write: each is the same in both looks (spec §4.4). */
 const SAME_IN_BOTH = ['#ffffff', '#000000', '#aaaaaa', '#100010', '#ffff55', 'rgb(0 0 0 / 0.4)'];
@@ -3199,5 +3211,54 @@ describe('the Machine GUI Phase 2: skeletons', () => {
     for (const rule of [BUSY_LINE, BUSY_CHIP]) {
       expect(declared(rule, 'animation'), rule).toBeUndefined(); expect(declared(rule, 'transition'), rule).toBeUndefined();
     }
+  });
+});
+
+// Toasts (Phase 2 spec §12, Task 9a): what was just done, in chat boxes stacked in the window's bottom-right corner, 16 px in, at most 360 px
+// wide (less on a phone: 16 px from each edge); fixed, so they take no room on the page (spec §3.6), and under every layer: the drawer's dimmed
+// page and the drawer, the modal and the tooltip. The region takes no pointer, so its empty part never stands between a click and what is
+// under it; a toast does, but for one that is leaving. Toasts are sentences, so Inter (R35), on a fixed 18 px line (spec §3.6); a toast is a row
+// as tall as its edge, its padding and its small buttons. It pops in once (`toast-in`, --ease-pop) and, as the tooltip does, keeps the last frame
+// of its exit alone, being removed once that has run (`toast-out`, `forwards`).
+describe('the Machine GUI Phase 2: toasts', () => {
+  it('draws toasts as chat boxes in a corner, under every layer', () => {
+    expectDeclared([
+      [TOASTS, 'position', 'fixed'], [TOASTS, 'right', '16px'], [TOASTS, 'bottom', '16px'], [TOASTS, 'z-index', '40'], [TOASTS, 'pointer-events', 'none'],
+      [TOASTS, 'max-width', 'min(360px, 100vw - 32px)'],
+      ['.toasts > ol', 'list-style', 'none'], ['.toasts > ol', 'margin', '0'], ['.toasts > ol', 'padding', '0'], ['.toasts > ol', 'display', 'flex'],
+      ['.toasts > ol', 'flex-direction', 'column'], ['.toasts > ol', 'gap', '8px'],
+      [TOAST, 'pointer-events', 'auto'], [TOAST, 'background', 'var(--chat)'], [TOAST, 'border', '2px solid var(--outline)'],
+      [TOAST, 'font', '13px/18px var(--font-ui)'], [TOAST, 'animation', 'toast-in var(--dur-slow) var(--ease-pop)'],
+      [TOAST, 'display', 'flex'], [TOAST, 'align-items', 'center'], [TOAST, 'gap', '8px'], [TOAST, 'min-height', '44px'], [TOAST, 'padding', '6px 8px 6px 12px'],
+      ['.toast > span', 'flex', '1'], ['.toast > span', 'min-width', '0'], ['.toast > span', 'overflow-wrap', 'anywhere'],
+      [TOAST_LEAVING, 'pointer-events', 'none'], [TOAST_LEAVING, 'animation', 'toast-out var(--dur-exit) var(--ease-in) forwards'],
+    ]);
+    // under every layer: the drawer's dimmed page (50) and the drawer (60), the modal (100) and the tooltip (200)
+    const z = Number(declared(TOASTS, 'z-index'));
+    const layers: Array<[string, string | undefined]> = [
+      ['the drawer\'s dimmed page', declaredIn(NARROW, '.drawer-backdrop', 'z-index')], ['the drawer', declaredIn(NARROW, '.settings-panel', 'z-index')],
+      ['the modal', declared('.modal-backdrop', 'z-index')], ['the tooltip', declared(NEI_TIP, 'z-index')],
+    ];
+    for (const [layer, above] of layers) expect(z, layer).toBeLessThan(Number(above));
+    // a chat box in the light ink of the dark boxes, appended after the group's 7 pinned members
+    expect(inkGroup('.banner').prelude.split(', ').slice(7)).toContain(TOAST);
+    expect(inkGroup('.tab-panel').prelude.split(', ')).not.toContain(TOAST);
+    // it pops in once from 12 px below at 96 %, and sinks back as it goes, its exit kept to the end: it is removed once that has run
+    expect(ruleBody('@keyframes toast-in')).toMatch(/^from \{ opacity: 0; transform: translateY\(12px\) scale\(0\.96\);? \}$/);
+    expect(ruleBody('@keyframes toast-out')).toMatch(/^to \{ opacity: 0; transform: translateY\(12px\) scale\(0\.96\);? \}$/);
+    expect(declared(TOAST, 'animation')).not.toMatch(/infinite|forwards|backwards|both/);
+    // every height in px (spec §3.6): the 18 px line, and a row as tall as its edge, its padding and a small button (2 + 6 + 28 + 6 + 2)
+    const px = (value: string | undefined): number => Number.parseFloat(value ?? '');
+    const [padTop, , padBottom] = (declared(TOAST, 'padding') ?? '').split(' ').map(px);
+    expect(2 * px(declared(TOAST, 'border')) + padTop! + padBottom! + px(declared(':where(button.small)', 'min-height'))).toBe(px(declared(TOAST, 'min-height')));
+    // tokens and square corners, as every Phase 2 rule
+    for (const selector of TOAST_RULES) {
+      expect(ruleBody(selector), selector).not.toMatch(OLD_ALIASES);
+      expect(declared(selector, 'border-radius') ?? '0', selector).toBe('0');
+    }
+    // forced colours: a contrast theme keeps the edge, a border, in its text colour, and the chat face's 82 % (Chromium keeps a background's
+    // alpha), which would let what a toast floats over show through its words: the face is the theme's canvas, whole, after the rule it repaints
+    expect(inQuery(FORCED, TOAST)).toEqual([['background', 'Canvas']]);
+    expect(position(TOAST)).toBeLessThan(blocks.indexOf(forcedBlock().block));
   });
 });

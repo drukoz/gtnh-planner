@@ -12,10 +12,12 @@
 // readouts (Phase 2 spec §10): what it makes, its peak power, its machines, and what it costs to build and to run. While a new
 // plan is on its way the banner says so with the GT progress arrow, on a line that moves nothing, on the strip's top-right corner (Phase 2
 // spec §11.3, ledger rulings P2-R18 and P2-R51), and the drawer, behind which the banners are inert, has a status line of its own (R43).
+// A rename here says so in a toast, with Undo (Phase 2 spec §12).
 
 import { useEffect, useLayoutEffect, useRef, useState, type ReactElement } from 'react';
 import type { StuffKey } from '../../shared/keys.ts';
 import { indexPlan, issueText, type PlanIssue, type PlanIssueCode } from '../../shared/plan/balance.ts';
+import { validateOp } from '../../shared/project/apply-op.ts';
 import type { PackInfo } from '../../shared/types/api.ts';
 import type { Plan, PlanSettings, PlanWarning } from '../../shared/types/plan.ts';
 import type { ProjectOp } from '../../shared/types/project.ts';
@@ -33,6 +35,7 @@ import { leaveDeletedProject } from '../state/deleted-notice.ts';
 import { setFlowFocus, showInFlow } from '../state/flow-focus.ts';
 import { useName } from '../state/name.ts';
 import { useProject } from '../state/project-store.ts';
+import { dismissToast, showToast } from '../state/toasts.ts';
 import { CompareCard, CompareToggle, useCompare } from './CompareCard.tsx';
 import { ISSUE_ORDER, problemId } from './flow-model.ts';
 import { KeyNumbers } from './KeyNumbers.tsx';
@@ -322,6 +325,8 @@ export function ProjectPage(props: { id: string }): ReactElement {
   }, [deleted]);
   // What the flow diagram lights belongs to this project: leaving it (for another project or another page) clears it.
   useEffect(() => () => setFlowFocus(null), [props.id]);
+  // A rename's toast offers Undo through this page's store, which closes with the page: leaving takes the toast away, as its Undo is gone.
+  useEffect(() => () => dismissToast(`rename:${props.id}`), [props.id]);
   // The settings column is a drawer below 900 px, and a layer of its own while it is open (ruling R36): opening it moves the focus to
   // its Close settings button, and the page behind it is inert (the head, the banners and the views here, and the App's top bar above
   // this page), so neither the keyboard nor a click reaches what the drawer covers. Every way out, Escape, a click on the dimmed page,
@@ -401,16 +406,17 @@ export function ProjectPage(props: { id: string }): ReactElement {
       document.removeEventListener('keydown', closeOnEscape);
     };
   }, [settingsOpen]);
-  // What lies outside this page while the drawer is open: the top bar, which the App draws above it, goes inert with the rest of the
-  // page behind the drawer; and the drawer closes when the window grows past the width it is a drawer at (the stylesheet's query). It
-  // looks once more as it starts to listen: the page's own opening (the auto-open, in an effect) is a task or two older than this
-  // effect, and a window that grew in between fired its change before there was a listener. In a window still narrow that look does
-  // nothing; in one that has grown it closes the drawer at once, and, as for any widening, leaves the focus where it is (on the search,
-  // which sits beside the views then), not on a Settings button that is not drawn.
+  // What lies outside this page while the drawer is open: the top bar, which the App draws above it, and the App's toasts after it (Phase 2
+  // spec §12.3: Tab would otherwise leave the drawer for a toast's Undo) go inert with the rest of the page behind the drawer, at every
+  // opening, the one it makes by itself included; and the drawer closes when the window grows past the width it is a drawer at (the
+  // stylesheet's query). It looks once more as it starts to listen: the page's own opening (the auto-open, in an effect) is a task or two
+  // older than this effect, and a window that grew in between fired its change before there was a listener. In a window still narrow that
+  // look does nothing; in one that has grown it closes the drawer at once, the cleanup giving the top bar and the toasts back, and, as for
+  // any widening, leaves the focus where it is (on the search, which sits beside the views then), not on a Settings button that is not drawn.
   useEffect(() => {
     if (!settingsOpen) return;
-    const bar = document.querySelector<HTMLElement>('.top-nav');
-    if (bar !== null) bar.inert = true;
+    const outside = ['.top-nav', '.toasts'].flatMap((selector) => document.querySelector<HTMLElement>(selector) ?? []);
+    for (const layer of outside) layer.inert = true;
     const narrow = matchMedia(NARROW);
     const onWidth = (): void => {
       if (!narrow.matches) setSettingsOpen(false);
@@ -419,7 +425,7 @@ export function ProjectPage(props: { id: string }): ReactElement {
     onWidth();
     return () => {
       narrow.removeEventListener('change', onWidth);
-      if (bar !== null) bar.inert = false;
+      for (const layer of outside) layer.inert = false;
     };
   }, [settingsOpen]);
   // The Compare card (add-on 17), once the project makes something: its "Compare modes" button is in the head and the card it opens is
@@ -461,6 +467,15 @@ export function ProjectPage(props: { id: string }): ReactElement {
   }
   const active = PROJECT_TABS.find((t) => t.id === tab) ?? PROJECT_TABS[0]!;
   const View = active.component;
+  // A rename says so (Phase 2 spec §12.1), with Undo, which sends the name it had back; a newer rename's toast replaces this one. A name the
+  // store refuses (empty, too long) is not sent, and says why in the banner, so it gets no toast.
+  const before = project.name;
+  const rename = (name: string): void => {
+    send([{ op: 'rename', name }]);
+    if (validateOp({ op: 'rename', name }) !== null) return;
+    const undo = { label: 'Undo', run: () => send([{ op: 'rename', name: before }]) };
+    showToast(`Renamed to “${name}”`, { key: `rename:${project.id}`, action: undo });
+  };
   return (
     <main className="page project-page">
       <div className="project-head" inert={settingsOpen}>
@@ -468,7 +483,7 @@ export function ProjectPage(props: { id: string }): ReactElement {
           open={settingsOpen} onToggle={() => (settingsOpen ? closeSettings() : openSettings('close'))} ref={settingsToggle}
           targetName={project.settings.target === null ? null : names.nameOf(project.settings.target)}
         />
-        <ProjectName name={project.name} onRename={(name) => send([{ op: 'rename', name }])} />
+        <ProjectName name={project.name} onRename={rename} />
         {comparable && <CompareToggle open={compare.state.open} onToggle={toggleCompare} ref={compareHeadToggle} />}
         <span className={view.connected ? 'connection live' : 'connection'}>{view.connected ? 'live' : 'reconnecting…'}</span>
         <DeleteProject id={project.id} name={project.name} label="Delete project" onDeleted={() => view.markDeleted(me)} />

@@ -215,6 +215,18 @@ const DARK_TOUR: DarkStop[] = [
       for (const route of heldPlans.splice(0)) await route.abort().catch(() => { /* the page has gone */ });
     },
   },
+  // Task 9a: a toast is a chat box, the same in both looks (spec §12.3): a rename's, read while it shows
+  {
+    name: 'a toast',
+    open: async (page) => {
+      await createProject(page, 'Dark toast');
+      const field = page.getByRole('textbox', { name: 'Project name' });
+      await field.fill('Dark toast renamed');
+      await field.press('Enter');
+      await expect(page.locator('.toast')).toBeVisible();
+    },
+    rows: [{ what: 'a toast', selector: '.toast', property: 'background-color', expected: 'rgba(0, 0, 0, 0.82)' }],
+  },
 ];
 
 // a fresh context per test, in a dark OS

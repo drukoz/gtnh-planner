@@ -7,6 +7,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactElement } from 'react';
 import { messageOf } from '../api/client.ts';
 import { createToken, listTokens, revokeToken } from '../api/projector.ts';
+import { showToast } from '../state/toasts.ts';
 import { TOKEN_LABEL_MAX, type CreateTokenResult, type TokenInfo } from '../../shared/types/projector.ts';
 import {
   COPY_HINT, PROJECTOR_COMMANDS, copyCommand, lastUsedText, loadCommand, revokeQuestion, urlCommand, type CopyOutcome, type CopyTools,
@@ -201,8 +202,11 @@ export function ProjectorPanel(props: { projectId: string }): ReactElement {
     void copyCommand(text, browserCopyTools(panel.current)).then((done) => {
       if (click !== copyClick.current) return;
       setCopied({ text, copied: done });
-      // "Copied" turns back into "Copy" after a moment; the hint to copy by hand stays until the next click
-      if (done) copiedTimer.current = setTimeout(() => setCopied(null), COPIED_MS);
+      // "Copied" turns back into "Copy" after a moment, and a toast says so too (Phase 2 spec §12.1); the hint to copy by hand, which a copy
+      // that failed shows instead, stays until the next click
+      if (!done) return;
+      copiedTimer.current = setTimeout(() => setCopied(null), COPIED_MS);
+      showToast('Command copied');
     });
   };
   return (

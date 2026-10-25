@@ -157,11 +157,12 @@ h2 { font-size: 1.2rem; margin: 0 0 var(--gap); }
 }
 /* Ink on a dark box (a chat box, a screen, a chip): light text on near black. It sets the focus ink too, so a dark box inside a
    panel does not take the panel's dark ring. The Compare card's notes are named by their place with the `p` in `:where()`, which keeps
-   them at the specificity of one class, so .muted and .error still win on them. A recipe card's readout tile is a screen (Phase 2 §8.4). */
+   them at the specificity of one class, so .muted and .error still win on them. A recipe card's readout tile is a screen (Phase 2 §8.4),
+   and a toast a chat box (Phase 2 §12.3). */
 .banner, .plan-banner, .what-changed, .delete-confirm, .connection, .badge, .chip, .avoid-chip,
 .search-results, .mat-unlock, .flow-issues, .flow-infeasible,
 .flow-panel .ports, .flow-panel .oc-lines, .flow-panel .warnings, .flow-panel .sources, .flow-panel .used-by, .flow-panel .also-made,
-.view3d-warnings, .compare-card > :where(p), .compare-column > :where(p), .readout {
+.view3d-warnings, .compare-card > :where(p), .compare-column > :where(p), .readout, .toast {
   --ink: #ffffff; --ink-muted: #aaaaaa; --ink-title: #ffff55; --ink-link: #ffff55;
   --ink-error: #ff5555; --ink-ok: #55ff55; --ink-warn: #ffaa00; --ink-focus: #ffff55;
   color: var(--ink);
@@ -176,9 +177,11 @@ a, button.link { color: var(--ink-link); }
  * offset aside), and the dots that breathe or blink and the rim of a newly lit pipe that blinks once, on opacity alone (ruling
  * R19: a brightness pulse could not show on the lit pipe's white contents). A tooltip fades in and rises 2px (`tip-in`, ruling
  * R27). Logo C's pipe steps through its frames on opacity alone (`brand-flow`, Phase 2 spec §5.3). The shared tooltip fades out and
- * sinks 2px as it goes (`tip-out`, Phase 2 spec §6.3), the one exit that keeps its last frame, as the box is removed once it has run.
+ * sinks 2px as it goes (`tip-out`, Phase 2 spec §6.3), an exit that keeps its last frame, as the box is removed once it has run.
  * A changed tile of the key-numbers strip flashes its frame once, from full opacity to its own nothing (`flash-out`, Phase 2 spec §10.1).
  * A skeleton's sheen passes over its blocks from their left edge to their right, on transform alone (`sheen`, Phase 2 spec §11.2).
+ * A toast pops in from 12 px below at 96 % (`toast-in`) and sinks back out as it goes, the other exit that keeps its last frame, for it
+ * is removed once that has run (`toast-out`, Phase 2 spec §12.1).
  * Under reduced motion every duration is zero and an animation runs once, for a millisecond: nothing moves.
  */
 @keyframes fade-in { from { opacity: 0; } }
@@ -195,6 +198,8 @@ a, button.link { color: var(--ink-link); }
 @keyframes tip-out { to { opacity: 0; transform: translateY(2px); } }
 @keyframes flash-out { from { opacity: 1; } }
 @keyframes sheen { to { transform: translateX(100%); } }
+@keyframes toast-in { from { opacity: 0; transform: translateY(12px) scale(0.96); } }
+@keyframes toast-out { to { opacity: 0; transform: translateY(12px) scale(0.96); } }
 @media (prefers-reduced-motion: reduce) {
   :root { --dur-fast: 0ms; --dur-base: 0ms; --dur-slow: 0ms; --dur-exit: 0ms; }
   *, *::before, *::after {
@@ -644,6 +649,22 @@ button.banner-chip { display: inline-flex; align-items: center; gap: 6px; min-he
   box-shadow: var(--bevel-panel), 0 2px 0 #000; animation: scale-in var(--dur-slow) var(--ease-out);
 }
 .modal h2, .modal p { margin: 0; }
+
+/* Toasts (Phase 2 spec §12.3): what was just done, in chat boxes stacked in the window's bottom-right corner, 16 px in and at most 360 px
+   wide (on a phone, 16 px from each edge), the newest nearest the corner. The region is fixed, so it takes no room on the page (spec §3.6),
+   on layer 40: under the drawer's dimmed page (50) and the drawer (60), which make it inert while they are open (ProjectPage), the modal
+   (100) and the tooltip (200). It takes no pointer, so its empty part never stands between a click and what is under it; a toast does, but
+   for one that is leaving. A toast is a sentence, so Inter (R35), on a fixed 18 px line, in a row as tall as its small buttons, so no late
+   font changes its height; its ink is the dark boxes' (the group at the top). It pops in once, and only its exit keeps its last frame, as
+   the store removes it once that has run. */
+.toasts { position: fixed; right: 16px; bottom: 16px; z-index: 40; pointer-events: none; max-width: min(360px, 100vw - 32px); }
+.toasts > ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.toast {
+  display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 6px 8px 6px 12px; pointer-events: auto;
+  background: var(--chat); border: 2px solid var(--outline); font: 13px/18px var(--font-ui); animation: toast-in var(--dur-slow) var(--ease-pop);
+}
+.toast > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.toast[data-state='leaving'] { pointer-events: none; animation: toast-out var(--dur-exit) var(--ease-in) forwards; }
 
 .notes { max-width: 760px; display: flex; flex-direction: column; gap: 16px; }
 .note-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 10px; }
@@ -1871,6 +1892,9 @@ details.mat-needed[open]::details-content { block-size: auto; }
   .mat-slot-tick::before { background: Highlight; }
   .mat-meter-fill { background: Highlight; }
   .mat-view-toggle button[aria-pressed='true'] { text-decoration: underline; }
+  /* Phase 2 Task 9a: a toast floats over the page, and the theme keeps its chat face's 82 % (Chromium keeps a background's alpha), so what it
+     floats over would show through its words: its face is the theme's canvas, whole; its edge, a border, is the theme's text colour already */
+  .toast { background: Canvas; }
   /* Phase 2 Task 8: a skeleton's blocks, a background the theme would paint like the well or the page they lie on, are GrayText (the well's
      blocks' and the strip's blocks' own rules out-rank a bare .skeleton-block, so they are named too), so the shape of what is coming stays */
   .skeleton-block, .skeleton-diagram .skeleton-block, .skeleton-strip .skeleton-block { background: GrayText; }
