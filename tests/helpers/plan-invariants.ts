@@ -20,6 +20,7 @@
 // line's own candidate graph (solved at a normalized demand, so HiGHS tolerances cannot hand out goods), and for every
 // multi-producer / bought-and-made good whether the plan still works at the same raw cost without one of its sources.
 // With `buildCost` (plan 12) the checks that assume plan 09's objective follow plan 12's (`InvariantOptions.buildCost`).
+// With `farmPack` (add-on 17) every check but (g) reads the line's farm pack, and a farm step follows its farm recipe.
 
 import { multiblockOverclock, multiplierUnderOneTick, singleblockOverclock, voltageTier, type MachineOc } from '../../src/shared/gt/overclock.ts';
 import { V, tierName } from '../../src/shared/gt/tiers.ts';
@@ -78,6 +79,14 @@ export interface InvariantOptions {
    * B for the rest), or a purchase beside steps whose machines are full.
    */
   buildCost?: boolean;
+  // optional addition (add-on 17 Task 10, the add-on 12 x 17 integration's F7a)
+  /**
+   * The line's `LinePricing.pack` (the export pack and the line's farm recipes): every check reads recipes there, as farm
+   * recipes exist only there. A step whose recipe has `meta.farm` runs at `meta.farm.tier`, without overclocks, on one of
+   * `meta.farm.machines`, `meta.farm.parallel` crops or trees a machine; a raw row a farm or project supplies (`from`) or a
+   * farm's tool wear (`upkeep`) is no purchase without a source.
+   */
+  farmPack?: Pack;
 }
 
 const SECONDS_PER: Readonly<Record<PlanSettings['per'], number>> = { min: 60, hour: 3600 };
@@ -573,7 +582,14 @@ function checkMachines(pack: Pack, settings: PlanSettings, plan: Plan, basis: Pl
     }
     let parallel = 1;
     const machine = step.machine.mteId >= 0 ? pack.machines.get(step.machine.mteId) : undefined;
-    if (buildCost && machine !== undefined) {
+    const farm = r.meta.farm;
+    if (farm !== undefined) {
+      // A farm recipe (add-on 17): its own tier and machines, no overclock, `parallel` crops or trees a machine.
+      if (step.machine.tier !== farm.tier) out.push({ kind: 'machines', severity: 'error', stepId: step.id, message: `${label}: farm on T${step.machine.tier}, its recipe's tier ${farm.tier}` });
+      if (step.overclocks !== 0) out.push({ kind: 'machines', severity: 'error', stepId: step.id, message: `${label}: a farm step overclocked ×${step.overclocks}` });
+      if (!farm.machines.includes(step.machine.mteId)) out.push({ kind: 'machines', severity: 'error', stepId: step.id, message: `${label}: ${step.machine.name} is none of its farm's machines` });
+      parallel = farm.parallel;
+    } else if (buildCost && machine !== undefined) {
       // Plan 12: the solve picks the step's machine among those that can run it, at any eligible tier; its overclock is
       // recomputed for that tier.
       const why = notEligible(pack, r, step, machine, plan.tier, owned);
@@ -728,7 +744,7 @@ function checkRawSources(pack: Pack, plan: Plan): Violation[] {
     const name = pack.nameOf(r.key);
     if (!r.available) out.push({ kind: 'raw-source', severity: 'error', key: r.key, message: `${name} is bought but not available here` });
     if (r.leafClass === undefined) out.push({ kind: 'raw-source', severity: 'warn', key: r.key, message: `${name} is bought with no leaf class` });
-    if (r.sources.length === 0) {
+    if (r.sources.length === 0 && r.from === undefined && r.upkeep !== true) {
       out.push({ kind: 'raw-source', severity: r.leafClass === 'stop' ? 'info' : 'error', key: r.key, message: `${name} (${r.leafClass ?? '?'}) is bought with no source` });
     }
     if (!(r.perSecond > 0)) out.push({ kind: 'raw-source', severity: 'error', key: r.key, message: `${name}: raw input rate ${r.perSecond}` });
@@ -848,13 +864,14 @@ export function checkPlanInvariants(pack: Pack, settings: PlanSettings, plan: Pl
   if (plan.status !== 'ok') return [];
   const basis = planBasis(pack, settings, ctx);
   const led = ledgers(plan);
+  const lined = opts.farmPack ?? pack;
   return [
-    ...checkBalance(pack, settings, plan, led, relTol, absTol),
-    ...checkFlows(pack, settings, plan, led, relTol, absTol),
-    ...checkSupplySink(pack, plan),
-    ...checkProducers(pack, plan, led),
-    ...checkMachines(pack, settings, plan, basis, ctx, relTol, buildCost),
-    ...checkRawSources(pack, plan),
+    ...checkBalance(lined, settings, plan, led, relTol, absTol),
+    ...checkFlows(lined, settings, plan, led, relTol, absTol),
+    ...checkSupplySink(lined, plan),
+    ...checkProducers(lined, plan, led),
+    ...checkMachines(lined, settings, plan, basis, ctx, relTol, buildCost),
+    ...checkRawSources(lined, plan),
     ...checkDetours(pack, settings, plan, basis, buildCost),
   ];
 }

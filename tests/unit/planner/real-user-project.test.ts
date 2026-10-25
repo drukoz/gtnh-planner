@@ -22,6 +22,7 @@ import { isBaseItem } from '../../../src/server/planner/availability.ts';
 import { isAutoWorkbench } from '../../../src/server/planner/benches.ts';
 import { planBasis, type PlanBasis } from '../../../src/server/planner/basis.ts';
 import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
+import { linePricing } from '../../../src/server/planner/pricing.ts';
 import { isFluidKey, type StuffKey } from '../../../src/shared/keys.ts';
 import { indexPlan } from '../../../src/shared/plan/balance.ts';
 import { normalizeSettings } from '../../../src/shared/project/apply-op.ts';
@@ -361,7 +362,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')("the user's Electronic Circuit p
     }
   });
 
-  it('complaint 6, "recheck the planning step": few steps, little raw material above the least, the same line per minute, a sound plan', () => {
+  it('complaint 6, "recheck the planning step": few steps, little raw material above the least, the same line per minute, a sound plan', async () => {
     const p = P.plan;
     expect(p.steps.length).toBeLessThanOrEqual(P_MAX_STEPS);
     expect(PR.plan.steps.length).toBeLessThanOrEqual(PR_MAX_STEPS);
@@ -387,7 +388,8 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')("the user's Electronic Circuit p
     console.log(`real-user-project complaint 6: with build cost P uses ${(built.perSecond / built.leastPerSecond).toFixed(4)}× the least raw material `
       + `(ignoring it ${(raw.perSecond / raw.leastPerSecond).toFixed(4)}×), ${p.steps.length} steps (ignoring it ${P0.plan.steps.length}), PR ${PR.plan.steps.length}; `
       + `per hour only ${onlyHour.join(' ') || 'none'}, per minute only ${onlyMinute.join(' ') || 'none'}, worst rate ratio ${worstRatio(p, P1m.plan, 60).worst.toExponential(2)}`);
-    expect(checkPlanInvariants(pack, settings, p, { buildCost: true }).filter((v) => EXACT_KINDS.includes(v.kind) && v.severity !== 'info')
+    expect(checkPlanInvariants(pack, settings, p, { buildCost: true, farmPack: (await linePricing(pack, settings, emptyContext()))?.pack })
+      .filter((v) => EXACT_KINDS.includes(v.kind) && v.severity !== 'info')
       .map((v) => `${v.kind}/${v.severity}: ${v.message}`)).toEqual([]);
     expect(p.warnings).toContainEqual(expect.objectContaining({ code: 'pin-dominated', stepId: PINNED_RESISTOR }));
   });

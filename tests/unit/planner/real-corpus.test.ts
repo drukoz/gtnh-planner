@@ -17,6 +17,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
 import { loadPack } from '../../../src/server/pack/load.ts';
 import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
+import { linePricing } from '../../../src/server/planner/pricing.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import type { Pack } from '../../../src/shared/types/pack.ts';
 import { DEFAULT_STEP_CHARGE, type Plan, type PlanSettings } from '../../../src/shared/types/plan.ts';
@@ -97,7 +98,9 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('the plan 09 corpus on the real 
     expect(plan.warnings.map((w) => w.code).filter((c) => NEVER.includes(c)), name).toEqual([]);
     const stepCharge = settings.stepCharge ?? DEFAULT_STEP_CHARGE;
     const buildCost = settings.buildHorizonHours !== null;
-    const found = await checkPlanInvariantsDeep(pack, settings, plan, { marginal: false, stepCharge, buildCost });
+    const found = await checkPlanInvariantsDeep(pack, settings, plan, {
+      marginal: false, stepCharge, buildCost, farmPack: (await linePricing(pack, settings, emptyContext()))?.pack,
+    });
     const text = (v: Violation): string => `${v.kind}/${v.severity}: ${v.message}`;
     expect(found.filter((v) => EXACT_KINDS.includes(v.kind) && v.severity !== 'info').map(text), name).toEqual([]);
     // Kind (g): with build cost counted a detour into a gathered block is a note on AE2 and Project Red lines (plan 12's

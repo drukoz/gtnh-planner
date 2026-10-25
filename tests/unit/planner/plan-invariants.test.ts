@@ -5,13 +5,16 @@
 
 import { describe, expect, it } from 'vitest';
 import { LV_MACHINE_PARTS, gasSpec, kitSpec, sandSpec, withAutoWorkbenches, withBuildRecipes } from '../../helpers/build-fixtures.ts';
+import { farmPack } from '../../helpers/farm-fixtures.ts';
 import { MINI_GT, miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec } from '../../helpers/pack-spec.ts';
 import { checkPlanInvariants, checkPlanInvariantsDeep, countByKind, type Violation } from '../../helpers/plan-invariants.ts';
 import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
+import { linePricing } from '../../../src/server/planner/pricing.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
+import { defaultFarmSettings } from '../../../src/shared/types/farm.ts';
 import type { OreVein, Pack } from '../../../src/shared/types/pack.ts';
-import type { Plan, PlanContext, PlanSettings } from '../../../src/shared/types/plan.ts';
+import type { Plan, PlanContext, PlanSettings, PlanStep } from '../../../src/shared/types/plan.ts';
 
 /**
  * Mini-GT whose MV bender, MV assembler and fluid extractor can be built, with build cost ignored (plan 12; ruling P3):
@@ -292,5 +295,52 @@ describe('checkPlanInvariants with build cost counted', () => {
     both.flows.push({ from: 'raw', to: user.id, key: 't:iron_plate@0', perSecond: 0.1 }, { from: maker.id, to: 'sink', key: 't:iron_plate@0', perSecond: 0.1 });
     expect(errors(checkPlanInvariants(mini, s, both, { buildCost: true })).filter((v) => v.message.endsWith('throws it away')).map((v) => [v.kind, v.key]))
       .toEqual([['flow', 't:iron_plate@0']]);
+  });
+});
+
+describe('the farm mode (add-on 17 Task 10; 12 x 17 F7a)', () => {
+  it('checks a farm step against its farm recipe, in the line\'s farm pack', async () => {
+    const farms = farmPack();
+    const s: PlanSettings = { ...defaultSettings(), target: 't:rubber_dust@0', per: 'min', amount: 1, tier: 1 };
+    const plan = await planLine(farms, s, emptyContext());
+    expect(plan.status).toBe('ok');
+    expect(plan.steps.some((x) => x.farm?.kind === 'crop')).toBe(true);
+    // without the farm pack every farm step's recipe is missing from the export's
+    expect(errors(checkPlanInvariants(farms, s, plan, { buildCost: true })).map((v) => v.message).some((m) => m.endsWith('recipe not in the pack'))).toBe(true);
+    const linePack = (await linePricing(farms, s, emptyContext()))!.pack;
+    const v = checkPlanInvariants(farms, s, plan, { buildCost: true, farmPack: linePack });
+    expect(errors(v), JSON.stringify(countByKind(v))).toEqual([]);
+  });
+
+  it("still finds a farm step off its farm recipe, and reads a farm's supply or tool wear as no purchase without a source", async () => {
+    // The crop farm of the case above (one Basic Crop Manager tending 121 crop sticks, 0.013 of it busy) on another tier,
+    // overclocked, on a macerator, and with a second machine its sticks do not need.
+    const farms = farmPack();
+    const s: PlanSettings = { ...defaultSettings(), target: 't:rubber_dust@0', per: 'min', amount: 1, tier: 1 };
+    const plan = await planLine(farms, s, emptyContext());
+    const linePack = (await linePricing(farms, s, emptyContext()))!.pack;
+    const damaged = (change: (step: PlanStep) => void): string[] => {
+      const p = copy(plan);
+      change(p.steps.find((x) => x.farm?.kind === 'crop')!);
+      return errors(checkPlanInvariants(farms, s, p, { buildCost: true, farmPack: linePack })).map((x) => x.message);
+    };
+    expect(damaged((x) => { x.machine.tier = 2; })).toEqual([
+      expect.stringMatching(/: machine tier 2 above the group's tier 1$/), expect.stringMatching(/: farm on T2, its recipe's tier 1$/),
+    ]);
+    expect(damaged((x) => { x.overclocks = 1; })).toEqual([expect.stringMatching(/: a farm step overclocked ×1$/)]);
+    expect(damaged((x) => { x.machine = { mteId: 141, name: 'Basic Macerator', tier: 1 }; })).toEqual([expect.stringMatching(/: Basic Macerator is none of its farm's machines$/)]);
+    expect(damaged((x) => { x.count = 2; })).toEqual([expect.stringMatching(/: 2 machines where 1 would do \(0\.0131 busy\)$/)]);
+    // Resin boards beside a rubber farm the group runs, topped up by an owned Tree Growth Simulator (objectives.test.ts):
+    // the farm's wood comes in from it (`from`) and the simulator's saw and knife are upkeep, none of the three with a source.
+    const board: PlanSettings = {
+      ...defaultSettings(), target: 't:resin_board@0', per: 'min', amount: 1, tier: 1, ownedManual: [{ mteId: 15541, count: 1 }],
+      farms: { ...defaultFarmSettings(), kinds: ['tgs'], running: [{ name: 'Forestry rubber farm', outputs: [{ key: 't:rubber_wood@0', perMinute: 2 }] }] },
+    };
+    const owned = await planLine(farms, board, emptyContext());
+    expect(owned.rawInputs.filter((r) => r.sources.length === 0).map((r) => [r.key, r.upkeep === true ? 'upkeep' : r.from?.kind])).toEqual([
+      ['gregtech:gt.metatool.01@10', 'upkeep'], ['gregtech:gt.metatool.01@34', 'upkeep'], ['t:rubber_wood@0', 'farm'],
+    ]);
+    const boardPack = (await linePricing(farms, board, emptyContext()))!.pack;
+    expect(errors(checkPlanInvariants(farms, board, owned, { buildCost: true, farmPack: boardPack }))).toEqual([]);
   });
 });
