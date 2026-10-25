@@ -13,7 +13,9 @@
 //   (f) byproduct     byproducts listed = net surplus of every good (and nothing else)
 //   (g) free-detour   a chain of steps that only converts free inputs (water, lava, air, cobblestone and what is made
 //                     of them alone) into something that is itself directly a base or gathered material, with the raw
-//                     cost it saves
+//                     cost it saves; a farm step is a source, never free-fed, though a crop farm takes only water
+//                     (spec §3.3, Farms: priced by its build cost and upkeep), so neither it nor a step fed by what it
+//                     makes is such a chain (12 x 17 Task 12 ruling T12-A)
 //
 // `checkPlanInvariants` is synchronous and reads only the pack, the settings and the plan (plus the basis the planner
 // derives from them). `checkPlanInvariantsDeep` adds what needs the LP: an independent least-raw-material optimum of the
@@ -785,6 +787,9 @@ function gatheredOrBase(basis: PlanBasis, key: StuffKey): string | null {
 /**
  * The chains of steps fed by free inputs alone that end in a base or gathered material the plan then uses. What a
  * supply step makes (`PlanStep.supply`: a rock breaker's stone, a pump's water) counts as free input too (ruling P5).
+ * A farm step (`PlanStep.farm`) is a source, never free-fed, though a crop farm takes only water: spec §3.3 (Farms)
+ * prices a farm by its build cost and upkeep, so it is no free conversion, and what it makes feeds no free-fed step
+ * (12 x 17 Task 12 ruling T12-A).
  */
 export function freeDetours(pack: Pack, plan: Plan, basis: PlanBasis): Detour[] {
   const freeRaw = new Set<StuffKey>([
@@ -797,7 +802,7 @@ export function freeDetours(pack: Pack, plan: Plan, basis: PlanBasis): Detour[] 
     changed = false;
     for (const s of plan.steps) {
       if (freeFed.has(s.id)) continue;
-      if (s.inputs.length > 0 && s.inputs.every((p) => freeGoods.has(p.key))) {
+      if (s.farm === undefined && s.inputs.length > 0 && s.inputs.every((p) => freeGoods.has(p.key))) {
         freeFed.add(s.id);
         for (const p of s.outputs) freeGoods.add(p.key);
         changed = true;

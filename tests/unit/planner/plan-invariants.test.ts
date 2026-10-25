@@ -343,4 +343,25 @@ describe('the farm mode (add-on 17 Task 10; 12 x 17 F7a)', () => {
     const boardPack = (await linePricing(farms, board, emptyContext()))!.pack;
     expect(errors(checkPlanInvariants(farms, board, owned, { buildCost: true, farmPack: boardPack }))).toEqual([]);
   });
+
+  it('reads a farm step as a source, never a free detour, though it takes only water (12 x 17 Task 12 ruling T12-A)', async () => {
+    // A Wood Pulp line on a Rubber Bonsai farm: one Basic Crop Manager waters its crop sticks (water alone, a free input)
+    // and gathers Rubber Wood, a natural good, which a macerator grinds. Spec §3.3 (Farms) prices a farm by its build cost
+    // and upkeep, so it is a source, not a chain that turns free input into what the group would gather (kind (g)).
+    const farms = farmPack();
+    const s: PlanSettings = { ...defaultSettings(), target: 't:pulp@0', per: 'min', amount: 1, tier: 1 };
+    const plan = await planLine(farms, s, emptyContext());
+    expect(plan.status).toBe('ok');
+    const crop = plan.steps.find((x) => x.farm?.kind === 'crop');
+    expect(crop?.inputs.map((p) => p.key)).toEqual(['fluid:water']);
+    expect(crop?.outputs.map((p) => p.key)).toContain('t:rubber_wood@0');
+    const linePack = (await linePricing(farms, s, emptyContext()))!.pack;
+    const detours = (p: Plan): string[][] => checkPlanInvariants(farms, s, p, { buildCost: true, farmPack: linePack })
+      .filter((v) => v.kind === 'free-detour').map((v) => [v.severity, v.key ?? '']);
+    expect(detours(plan)).toEqual([]);
+    // The same water-fed step without its farm mark is still a free detour, as kind (g) reads every other step.
+    const unmarked = copy(plan);
+    delete unmarked.steps.find((x) => x.farm !== undefined)!.farm;
+    expect(detours(unmarked)).toEqual([['warn', 't:rubber_wood@0']]);
+  });
 });
