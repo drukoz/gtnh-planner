@@ -379,6 +379,17 @@ describe('the build-cost MIP', () => {
     expect([...(again.machines ?? [])].map(([id, m]) => [id, m.option.mteId, m.added])).toEqual([...(first.machines ?? [])].map(([id, m]) => [id, m.option.mteId, m.added]));
   });
 
+  it('says build-cost-approx when the search stopped at the root on its start and the search without it found nothing (12 x 17 F4)', async () => {
+    // Bounds of 0 nodes and 1 simplex iteration end the start's solve at the root (nodes 0) and the bare one before any
+    // whole solution: the plan is its start's, rounded up from an estimate, not the fallback's (`approx` false). On the
+    // solder line, as the glass line's MIP above ends optimal at the root under these bounds too and never stalls.
+    const { sol } = await solvedWithBuild(solderSpec(), COSTS, [['t:board@0', 1 / 3600]], { options: SOLDER }, { buildMaxIterations: 1, buildMaxNodes: 0 });
+    expect(sol.status).toBe('ok');
+    expect(sol.buildStats?.bare).toBe('stalled');
+    expect(sol.buildStats?.approx).toBe(false);
+    expect(sol.warnings.map((w) => w.code)).toContain('build-cost-approx');
+  });
+
   it('plans the same machines whatever the time guard, which never decides a plan', async () => {
     // The node limit decides: a guard of 5 s, the default 30 s or 10 minutes gives the same runs, machines, pools and
     // stats, on a line of one step per machine and on a network's sharing pools.

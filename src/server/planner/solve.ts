@@ -188,6 +188,12 @@ export interface Solution {
     retried?: true;
     /** The decision is an earlier incumbent than HiGHS's last, cheaper by `exactCost` (`pickBuild`). */
     earlier?: true;
+    // optional addition (add-on 12 x 17 integration, F4)
+    /**
+     * The solve ended at the root on its start, so it ran once more without it (`pickBuild`): `kept` when that gave a
+     * whole solution (a pick candidate beside the start), `stalled` when not (the plan then carries `build-cost-approx`).
+     */
+    bare?: 'kept' | 'stalled';
     // optional addition (fix wave 3 (A), controller ruling 187)
     /**
      * Plan 09's plan of this graph ("Ignore build cost", `finish`) rounded up, by the measure of `objective` (`rounded`:
@@ -1399,7 +1405,7 @@ function sourcesApprox(): PlanWarning {
 /** A build MIP of the build stage: its model as solved, its result (none when skipped), wall time and `pickBuild`'s marks. */
 interface SolvedMip {
   mip: ReturnType<typeof buildMip>; model: LpModel; result?: LpResult; seconds: number;
-  picked: Pick<NonNullable<Solution['buildStats']>, 'retried' | 'earlier'>;
+  picked: Pick<NonNullable<Solution['buildStats']>, 'retried' | 'earlier' | 'bare'>;
 }
 
 /**
@@ -1434,19 +1440,22 @@ function wholeBuild(r: LpResult): boolean {
  * limits only. One solve from `start` — BUILD_MIP_MAX_NODES nodes without strong branching (whose iterations escape the
  * iteration cap) within BUILD_MIP_MAX_LP_ITERATIONS — that stops itself when its root LP relaxation does not solve at
  * MIP_FEASIBILITY_TOLERANCE (`stopOnRootLpFailure`) and then runs again at BUILD_MIP_RETRY_TOLERANCE from the same
- * start. The decision is the cheapest by `exactCost` (every machine at its true build) of the whole solutions HiGHS
- * reported on the way (`keepImproving`), of both solves: HiGHS ranks them by the model, whose light steps are off by less
- * than a machine each, and on 2 of 66 measured lines an earlier one is cheaper; ties keep HiGHS's last. A solve the time
- * guard stops gives nothing: when the last solve is no plan, `buildStage` falls back as before. The result is the last
- * solve's, with `x` the pick. `model` is the model solved: `mip.model`, or one a caller derived from it for `start`;
- * `solver` solves it (`solveLp`, or `solveLpAside` on the solver thread, which gives the same result).
+ * start. When the last solve stopped on its limits at the root (`nodes` 0) with nothing better than `start`, it solves
+ * once more at BUILD_MIP_RETRY_TOLERANCE without the start (`bare`: `kept` when that gave a whole solution, which joins
+ * the pick beside the start; `stalled` when not). The decision is the cheapest by `exactCost` (every machine at its true
+ * build) of the whole solutions HiGHS reported on the way (`keepImproving`), of every solve: HiGHS ranks them by the
+ * model, whose light steps are off by less than a machine each, and on 2 of 66 measured lines an earlier one is cheaper;
+ * ties keep HiGHS's last. A solve the time guard stops gives nothing: when the last solve is no plan, `buildStage` falls
+ * back as before. The result is the last solve's, with `x` the pick. `model` is the model solved: `mip.model`, or one a
+ * caller derived from it for `start`; `solver` solves it (`solveLp`, or `solveLpAside` on the solver thread, which gives
+ * the same result).
  */
-async function pickBuild(
+export async function pickBuild(
   mip: ReturnType<typeof buildMip>, start: number[] | undefined, opts: SolveOptions, limit: number, model: LpModel = mip.model,
   solver: (model: LpModel) => Promise<LpResult> = solveLp,
-): Promise<{ result: LpResult; retried?: true; earlier?: true }> {
-  const solve = (tolerance?: number): Promise<LpResult> => solver({
-    ...model, ...(start === undefined ? {} : { start }),
+): Promise<{ result: LpResult; retried?: true; earlier?: true; bare?: 'kept' | 'stalled' }> {
+  const solve = (tolerance?: number, bare = false): Promise<LpResult> => solver({
+    ...model, ...(start === undefined || bare ? {} : { start }),
     maxNodes: opts.buildMaxNodes ?? BUILD_MIP_MAX_NODES, maxIterations: opts.buildMaxIterations ?? BUILD_MIP_MAX_LP_ITERATIONS, timeLimit: limit,
     strongBranching: false, keepImproving: true,
     ...(tolerance === undefined ? { stopOnRootLpFailure: true } : { feasibilityTolerance: tolerance }),
@@ -1454,9 +1463,19 @@ async function pickBuild(
   const first = await solve();
   const runs = [first];
   if (first.rootLpFailed === true) runs.push(await solve(BUILD_MIP_RETRY_TOLERANCE));
+  // A solve its limits ended at the root with nothing better than its start (a start costs HiGHS the root heuristics it
+  // runs without an incumbent: Duty plate with farms, 436 against 149): once more without it; the start stays a pick.
+  let bare: { bare?: 'kept' | 'stalled' } = {};
+  const stalled = runs[runs.length - 1] as LpResult;
+  if (start !== undefined && wholeBuild(stalled) && stalled.stop === 'limit' && (stalled.nodes ?? 0) === 0
+    && runs.every((r) => (r.improving?.length ?? 0) <= 1)) {
+    const again = await solve(BUILD_MIP_RETRY_TOLERANCE, true);
+    if (wholeBuild(again)) runs.push(again);
+    bare = { bare: wholeBuild(again) ? 'kept' : 'stalled' };
+  }
   const result = runs[runs.length - 1] as LpResult;
-  const retried = runs.length > 1 ? { retried: true as const } : {};
-  if (!wholeBuild(result)) return { result, ...retried };
+  const retried = first.rootLpFailed === true ? { retried: true as const } : {};
+  if (!wholeBuild(result)) return { result, ...retried, ...bare };
   let best = { x: result.x, cost: mip.exactCost(result.x) };
   for (const r of runs) {
     for (const x of r.improving ?? []) {
@@ -1464,7 +1483,7 @@ async function pickBuild(
       if (cost < best.cost * (1 - 1e-9) - 1e-12) best = { x, cost };
     }
   }
-  return { result: { ...result, x: best.x }, ...retried, ...(best.x !== result.x ? { earlier: true as const } : {}) };
+  return { result: { ...result, x: best.x }, ...retried, ...bare, ...(best.x !== result.x ? { earlier: true as const } : {}) };
 }
 
 /**
@@ -1557,6 +1576,8 @@ async function buildStage(
     : await solvedMip(lp, { ...input, sources, ...(pre === undefined ? {} : { start: pre.x }) }, others, limit, opts);
   const { mip, result } = run;
   const notes = [...warnings];
+  // F4: even the bare re-solve found nothing, so the plan is its start's, rounded up from an estimate.
+  if (run.picked.bare === 'stalled' && wholePlan(result)) notes.push(buildCostApprox());
   let decision: BuildDecision;
   let from: readonly number[];
   let approx = false;
@@ -1684,13 +1705,13 @@ function wholePlan(result: LpResult | undefined): result is LpResult {
 
 /**
  * The build MIP from `start`, solved and picked by `pickBuild` (fix wave 3 (F): its node and simplex-iteration limits,
- * the far time guard `limit`), with its seconds and `pickBuild`'s `retried`/`earlier`; no result when `limit` ≤ 0 (the
- * fallback's tests). `solver` and `model` as `pickBuild`'s.
+ * the far time guard `limit`), with its seconds and `pickBuild`'s `retried`/`earlier`/`bare`; no result when `limit` ≤ 0
+ * (the fallback's tests). `solver` and `model` as `pickBuild`'s.
  */
 async function runBuildMip(
   mip: ReturnType<typeof buildMip>, start: number[] | undefined, limit: number, opts: SolveOptions,
   solver: (model: LpModel) => Promise<LpResult> = solveLp, model: LpModel = mip.model,
-): Promise<{ result: LpResult | undefined; seconds: number; picked: Pick<NonNullable<Solution['buildStats']>, 'retried' | 'earlier'> }> {
+): Promise<{ result: LpResult | undefined; seconds: number; picked: Pick<NonNullable<Solution['buildStats']>, 'retried' | 'earlier' | 'bare'> }> {
   if (!(limit > 0)) return { result: undefined, seconds: 0, picked: {} };
   const began = performance.now();
   const { result, ...picked } = await pickBuild(mip, start, opts, limit, model, solver);
