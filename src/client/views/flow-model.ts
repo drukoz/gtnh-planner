@@ -1316,6 +1316,16 @@ export function stackText(key: StuffKey, amount: number): string {
   return `${tenths < 10 ? tenths : Math.round(value)}${units[unit]}`;
 }
 
+/**
+ * A slot's chance tag (Phase 2 spec §8.1), short enough to stay inside its 36 px slot: a whole percent, "<1%" below one, and never "100%" for
+ * a chance below a hundred ("99%"); the slot's name and tip say the whole chance (`formatPercent`). Measured in the app, Pixelify's % is 12.1
+ * px and VT323's digits 6.45 px, so "<0.1%" (39.9 px), "99.5%" (37.9) and ">99%" (33.4) pass the 32 px a tag has (2 px in, then its 2 px
+ * shadow), where "<1%" is 27.0 px and "99%" 25.0.
+ */
+export function chanceTag(chance: number): string {
+  return chance < 0.01 ? '<1%' : `${Math.min(99, Math.round(chance * 100))}%`;
+}
+
 /** A readout of the recipe card (Phase 2 spec §8.1): its label and its value. */
 export interface RecipeStat { label: string; value: string }
 

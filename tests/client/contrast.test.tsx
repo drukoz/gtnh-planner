@@ -396,4 +396,19 @@ describe('contrast of the recipe card', () => {
   it('lets the arrow\'s base go below 3:1 on the recess, in both looks: an aria-hidden shape its fill is measured on', () => {
     for (const look of LOOKS) expect(ratio(colour(look, '--slot'), colour(look, '--panel')), look).toBeLessThan(GRAPHICS);
   });
+
+  // ledger ruling P2-R30: in the dark look an empty bar's track and a readout tile's edge are grooves on the panel, exempt from 3:1; the fill
+  // and the printed figure carry the value, on the condition that each fill reads 3:1 or more on its track in both looks (the table's
+  // "energy fill" and "busy fill" rows), and a tile's text carries its own contrast
+  it('lets the empty energy track and a readout tile\'s edge go below 3:1 on the dark panel (ledger ruling P2-R30)', () => {
+    expect(ratio(colour('dark', '--screen'), colour('dark', '--panel'))).toBeLessThan(GRAPHICS);                // 1.37:1
+    // and, by the same ruling, Task 4's busy track on a new Flow box
+    expect(ratio(colour('dark', '--flow-busy-track'), colour('dark', '--flow-new'))).toBeLessThan(GRAPHICS);   // 1.49:1
+  });
+
+  // ledger ruling P2-R31: the red ring of a slot the line does not supply in full falls short against the light slot face inside it; the short
+  // state is also in the slot's name and tip, on the condition that the ring reads 3:1 or more against the recess round it (the table)
+  it('lets the short ring go below 3:1 against the light slot face inside it (ledger ruling P2-R31)', () => {
+    expect(ratio(colour('light', '--panel-error'), colour('light', '--slot'))).toBeLessThan(GRAPHICS);          // 2.27:1
+  });
 });

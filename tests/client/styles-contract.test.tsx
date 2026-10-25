@@ -2685,6 +2685,9 @@ describe('the Machine GUI Phase 2: the recipe card', () => {
       ['.slot-chance', 'position', 'absolute'], ['.slot-chance', 'left', '2px'], ['.slot-chance', 'top', '2px'], ['.slot-chance', 'z-index', '1'],
       ['.slot-chance', 'pointer-events', 'none'], ['.slot-chance', 'font', '14px/1 var(--font-pixel)'], ['.slot-chance', 'color', '#ffff55'],
       ['.slot-chance', 'text-shadow', '2px 2px 0 var(--stack-shadow)'],
+      // and it never draws past its own slot: 2 px in, at most 32 px wide, so its 2 px shadow ends at the slot's edge; a wider fallback face is
+      // clipped there (its text is short: chanceTag)
+      ['.slot-chance', 'max-width', '32px'], ['.slot-chance', 'overflow-x', 'clip'], ['.slot-chance', 'white-space', 'nowrap'],
       ['.readout', 'padding', '5px 7px'], ['.readout', 'background', 'var(--screen)'], ['.readout', 'box-shadow', 'var(--bevel-screen)'],
       ['.readout dt', 'font-size', '11px'], ['.readout dt', 'color', 'var(--ink-muted)'],
       ['.readout dd', 'margin', '0'], ['.readout dd', 'font', '21px/21.6px var(--font-digits)'], ['.readout dd', 'font-size-adjust', 'cap-height 0.56'],
@@ -2723,8 +2726,13 @@ describe('the Machine GUI Phase 2: the recipe card', () => {
     // forced colours: the arrow's and the energy bar's fills are the Highlight (the chat arrow's own fill rule out-ranks a bare .gt-arrow-fill,
     // so the block names it too), each after the rule it repaints
     expect(inQuery(FORCED, '.gt-arrow-fill, .gt-arrow.on-chat .gt-arrow-fill, .energy-fill')).toEqual([['background', 'Highlight']]);
+    // ledger ruling P2-R33: the theme paints over the backgrounds and drops the shadows the card's cues are drawn with, so the energy bar's
+    // track keeps an edge in the text colour (its fill has a scale), a short slot a Highlight ring, and the arrow its base in GrayText
+    expect(inQuery(FORCED, '.energy-bar')).toEqual([['outline', '1px solid CanvasText'], ['outline-offset', '-1px']]);
+    expect(inQuery(FORCED, '.recipe-slot.slot-short > .item-icon')).toEqual([['outline', '2px solid Highlight'], ['outline-offset', '-2px']]);
+    expect(inQuery(FORCED, '.gt-arrow, .gt-arrow.on-chat')).toEqual([['background', 'GrayText']]);
     const { block } = forcedBlock();
-    for (const selector of [ARROW_FILL, '.gt-arrow.on-chat .gt-arrow-fill', '.energy-fill']) {
+    for (const selector of [ARROW_FILL, '.gt-arrow.on-chat .gt-arrow-fill', '.energy-fill', '.energy-bar', '.recipe-slot.slot-short > .item-icon', '.gt-arrow', '.gt-arrow.on-chat']) {
       expect(position(selector), selector).toBeGreaterThan(-1);
       expect(position(selector), selector).toBeLessThan(blocks.indexOf(block));
     }

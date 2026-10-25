@@ -26,8 +26,8 @@ import { ItemIcon } from '../components/ItemIcon.tsx';
 import { formatDuration, formatNumber, formatPercent, formatRate } from '../format.ts';
 import { endHoverFlowFocus, hoverFlowFocus } from '../state/flow-focus.ts';
 import {
-  flowEdgeId, haveSupplyPatch, importInsteadPatch, importWords, LEAF_WORD, machineReadout, makeHerePatch, ocChips, ocLines, optionPatch, optionSlotKey,
-  powerShare, recipeSlots, recipeStats, reusePatch, stackText, tierText, useOnlyPatch, type RecipeSlot,
+  chanceTag, flowEdgeId, haveSupplyPatch, importInsteadPatch, importWords, LEAF_WORD, machineReadout, makeHerePatch, ocChips, ocLines, optionPatch,
+  optionSlotKey, powerShare, recipeSlots, recipeStats, reusePatch, stackText, tierText, useOnlyPatch, type RecipeSlot,
 } from './flow-model.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
 
@@ -280,15 +280,33 @@ function tierChipText(step: PlanStep): string {
 }
 
 /**
+ * A recipe slot's accessible name (ledger ruling P2-R32, which extends P2-D39): its good; then what a run takes or makes of it when that is
+ * not one, a fluid's litres always (its slot always draws them); then its chance when below 100 %; then that the line does not supply it in
+ * full. The count and the chance tag a slot draws are aria-hidden and the slot takes no focus, so its name says them. A tool a tree farm
+ * wears keeps the tool's name (plan ruling farm-step-card).
+ */
+function slotLabel(good: string, s: RecipeSlot, worn: boolean, short: boolean): string {
+  const parts = [good];
+  if (!worn) {
+    if (isFluidKey(s.key)) parts.push(`${formatNumber(s.amount)} L per run`);
+    else if (s.amount !== 1) parts.push(`${formatNumber(s.amount)} per run`);
+    if (s.chance < 1) parts.push(`${formatPercent(s.chance)} chance`);
+  }
+  if (short) parts.push('not supplied in full');
+  return parts.join(', ');
+}
+
+/**
  * One run of a step's recipe as NEI draws it (Phase 2 spec §8): the tier it runs at on a chip (none by hand or on a crafting table or a
  * furnace, which have no voltage tier: plan ruling pseudo-tier-chip) and "One run"; in a recess of the panel, what a run takes and makes as
  * 36 px slots with their stack counts (none for one item) and chance tags, the GT progress arrow between them, and at the right the energy
  * bar, filled to what one machine draws of what it can, beside the run's time and power; the machines, how busy, and the power each and in
- * all as readouts; and what overclocking did as chips. A slot is named by its good (and as not supplied in full when the line gets less of it
- * than it needs) and its tip says what a run takes or makes of it, the chance of it and its rate in the line (P2-D39); hovering one lights
- * the good in the diagram, as a port row does. A farm step's card is a machine's (plan ruling farm-step-card): a crop farm's harvest below
- * one item comes at that chance, and a tree farm's tool is worn a use a run, where the others come by chance. No hooks: the tests call it as
- * a plain function.
+ * all as readouts; and what overclocking did as chips. A slot is named by its good, what a run takes or makes of it, its chance and whether
+ * the line supplies it in full (`slotLabel`), and its tip says what a run takes or makes of it, the chance of it and its rate in the line
+ * (P2-D39); a chance tag is short enough for its slot (`chanceTag`), the tip and the name saying the whole chance; hovering one lights the
+ * good in the diagram, as a port row does. A farm step's card is a machine's (plan ruling farm-step-card): a crop farm's harvest below one
+ * item comes at that chance, and a tree farm's tool is worn a use a run, where the others come by chance. No hooks: the tests call it as a
+ * plain function.
  */
 export function RecipeCard(props: { step: PlanStep; plan: Plan; index: PlanIndex; per: Per }): ReactElement {
   const { step, plan, index, per } = props;
@@ -319,9 +337,9 @@ export function RecipeCard(props: { step: PlanStep; plan: Plan; index: PlanIndex
         onMouseEnter={() => hoverFlowFocus({ kind: 'item', key: s.key })}
         onMouseLeave={endHoverFlowFocus}
       >
-        <ItemIcon itemKey={s.key} size={SLOT_ICON_SIZE} name={short ? `${nameOf(s.key)}, not supplied in full` : nameOf(s.key)} tip={tip} />
+        <ItemIcon itemKey={s.key} size={SLOT_ICON_SIZE} name={nameOf(s.key)} label={slotLabel(nameOf(s.key), s, worn, short)} tip={tip} />
         {count !== '' && <span className="stack-count" aria-hidden="true">{count}</span>}
-        {s.chance < 1 && !worn && <span className="slot-chance" aria-hidden="true"><Figs text={formatPercent(s.chance)} /></span>}
+        {s.chance < 1 && !worn && <span className="slot-chance" aria-hidden="true"><Figs text={chanceTag(s.chance)} /></span>}
       </li>
     );
   };

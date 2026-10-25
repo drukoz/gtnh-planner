@@ -475,22 +475,43 @@ describe('step panel: recipe card', () => {
     expect(html.match(/data-port-key=/g)).toHaveLength(ports.match(/data-port-key=/g)!.length);
   });
 
-  it('names a slot\'s icon by its good, gives it the tip lines of a run, and marks a chance and a good the line does not supply in full', () => {
-    const wire = slotOf(panelHtml(circuit, wires), 't:copper_wire@0');
-    expect(wire).toContain('aria-label="1x Copper Wire"');
+  it('names a slot\'s icon by its good, what a run takes or makes of it and its chance, gives it the tip lines of a run, and marks a good the line does not supply in full', () => {
+    // ledger ruling P2-R32: the count and the chance tag a slot draws are aria-hidden and the slot takes no focus, so its name says them;
+    // the tip's first line stays the good's name, which the tooltip's description leaves out as it repeats the name (P2-R24)
+    const named = { ...wires, names: { ...wires.names, 'fluid:molten.tin': 'Molten Tin' } };
+    const html = panelHtml(circuit, named);
+    const wire = slotOf(html, 't:copper_wire@0');
+    expect(wire).toContain('aria-label="1x Copper Wire, 2 per run"');
     expect(wire).toContain('data-tip="1x Copper Wire\n2× 1x Copper Wire per run\n30/min in the line"');
-    // a chance output: its tag in the slot's top left, the digits VT323 and the % Pixelify (spec §25), and the chance in its tip
+    expect(slotOf(html, 'fluid:molten.tin')).toContain('aria-label="Molten Tin, 72 L per run"');      // a fluid in its litres
+    // an output: one a run, so its name is the good's, and its rate in the line is the port's going out
+    expect(slotOf(html, 't:circuit@0')).toContain('aria-label="Basic Circuit" data-tip="Basic Circuit\nBasic Circuit per run\n30/min in the line"');
+    // a chance output: its tag in the slot's top left, the digits VT323 and the % Pixelify (spec §25), and the chance in its name and tip
     const chancy = { ...circuit, outputs: [...circuit.outputs, { key: 't:dust@0', amount: 0.1, chance: 0.1 }] };
     const dust = slotOf(panelHtml(chancy, { ...wires, names: { ...wires.names, 't:dust@0': 'Tiny Pile of Dust' } }), 't:dust@0');
     expect(dust).toContain('<span class="slot-chance" aria-hidden="true"><span class="fig">10</span>%</span>');
+    expect(dust).toContain('aria-label="Tiny Pile of Dust, 10% chance"');
     expect(dust).toMatch(/data-tip="[^"]*\n10% chance/);
     expect(slotOf(panelHtml(circuit, wires), 't:circuit@0')).not.toContain('slot-chance');
     // the plan without the wiremill's wire: the slot is short, and says so in its name
     const short = planOf({ ...wires, flows: wires.flows.filter((f) => f.from !== 'wire') });
     const starved = slotOf(panelHtml(circuit, short), 't:copper_wire@0');
     expect(starved).toMatch(/^<li class="recipe-slot slot-short"/);
-    expect(starved).toMatch(/aria-label="[^"]*, not supplied in full"/);
+    expect(starved).toContain('aria-label="1x Copper Wire, 2 per run, not supplied in full"');
     expect(slotOf(panelHtml(circuit, wires), 't:copper_wire@0')).toMatch(/^<li class="recipe-slot"/);
+  });
+
+  it('writes a chance tag short enough to stay inside its slot, and the whole chance in the slot\'s name and tip', () => {
+    // a 5-glyph tag ("<0.1%", "99.5%") ran past the 36 px slot onto the next one: the tag says "<1%" below 1 % and never "100%"
+    const rare = { ...circuit, outputs: [...circuit.outputs, { key: 't:dust@0', amount: 0.0005, chance: 0.0005 }, { key: 't:gem@0', amount: 0.9995, chance: 0.9995 }] };
+    const html = panelHtml(rare, { ...wires, names: { ...wires.names, 't:dust@0': 'Tiny Pile of Dust', 't:gem@0': 'Gem' } });
+    const dust = slotOf(html, 't:dust@0');
+    expect(dust).toContain('<span class="slot-chance" aria-hidden="true">&lt;<span class="fig">1</span>%</span>');
+    expect(dust).toContain('aria-label="Tiny Pile of Dust, &lt;0.1% chance"');
+    expect(dust).toMatch(/data-tip="[^"]*\n&lt;0.1% chance/);
+    const gem = slotOf(html, 't:gem@0');
+    expect(gem).toContain('<span class="slot-chance" aria-hidden="true"><span class="fig">99</span>%</span>');
+    expect(gem).toContain('aria-label="Gem, &gt;99.9% chance"');
   });
 
   it('draws the arrow, the time and the power, and leads with the tier chip', () => {
@@ -501,6 +522,10 @@ describe('step panel: recipe card', () => {
     expect(html).toContain('<span class="badge tier-chip tier-lv">LV · <span class="fig">32</span> V</span>');
     // a 16 EU/t step of LV's 32 V × 1 A fills half its energy bar
     expect(html).toMatch(/<span class="energy-bar" aria-hidden="true"><span class="energy-fill" style="--share:0\.5"><\/span><\/span>/);
+    // a machine that draws two amps says so, its figures in span.fig
+    const twoAmps = step({ id: 'asm', machine: { mteId: 213, name: 'Large Assembler', tier: 3 }, euPerTick: 900,
+      oc: { recipeEuPerTick: 900, recipeDurationTicks: 100, machineVoltage: 512, machineAmps: 2, perfect: false, heatOverclocks: 0 } });
+    expect(card(twoAmps, wires)).toContain('<span class="badge tier-chip tier-hv">HV · <span class="fig">512</span> V × <span class="fig">2</span> A</span>');
   });
 
   it('draws no tier chip by hand or on a furnace, no energy bar by hand, and no strip for a step that takes and makes nothing', () => {
@@ -528,7 +553,9 @@ describe('step panel: recipe card', () => {
     expect(saw).not.toContain('slot-chance');
     expect(saw).not.toContain('stack-count');
     expect(saw).toContain('data-tip="Saw\nwears 1 of its 512 uses per run\n0.0586/min in the line"');
+    expect(saw).toContain('aria-label="Saw"');                                           // a worn tool keeps the tool's name
     expect(slotOf(tree, 't:rubber_wood@0')).toContain('<span class="stack-count" aria-hidden="true">25</span>');
+    expect(slotOf(tree, 't:rubber_wood@0')).toContain('aria-label="Rubber Wood, 25 per run"');
     expect(tree).toContain('<span class="badge tier-chip tier-lv">LV · <span class="fig">32</span> V</span>');
     expect(tree).toContain('No overclock at LV');                                         // farm recipes are never overclocked
     const cane = step({ id: 'cane', mapId: 'farm:crops', machine: { mteId: 28001, name: 'Basic Crop Manager', tier: 1 }, euPerTick: 0.107, durationTicks: 5120,
@@ -540,7 +567,9 @@ describe('step panel: recipe card', () => {
     expect(resin).toContain('<span class="slot-chance" aria-hidden="true"><span class="fig">90</span>%</span>');
     expect(resin).not.toContain('stack-count');
     expect(resin).toMatch(/data-tip="[^"]*\n90% chance/);
+    expect(resin).toContain('aria-label="Sticky Resin, 90% chance"');
     expect(slotOf(crop, 'fluid:water')).toContain('<span class="stack-count" aria-hidden="true">20L</span>');
+    expect(slotOf(crop, 'fluid:water')).toContain('aria-label="Water, 20 L per run"');
     expect(crop).toContain('4.27 min');
     expect(crop).toContain('0.107 EU/t');
     expect(crop).toContain('<span class="badge tier-chip tier-lv">');                    // the Crop Manager's own tier

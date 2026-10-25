@@ -7,7 +7,7 @@ import {
   formatNumber, formatRate, flowGraph, toElk, fromElk, ocLines, reusePatch, LEAF_WORD, focusSets, centreOn, flowEdgeId, rowCentre,
   collapsedLines, firstProducer, edgeTag, rowNameRoom, textWidth, LINE_COLLAPSE_STEPS, TEXT_CHAR_WIDTH, flowIssueLines, type FlowLayout, type FlowNode,
   machineIconKey, machineReadout, tierSlug, rowsTop, busyTrack, chipWidth, MACHINE_ICON, MACHINE_SLOT, STEP_HEAD_HEIGHT, BUSY_BAND, CHIP_HEIGHT,
-  CHIP_PADDING, CHIP_CHAR_WIDTH, recipeSlots, stackText, recipeStats, ocChips, powerShare,
+  CHIP_PADDING, CHIP_CHAR_WIDTH, recipeSlots, stackText, recipeStats, ocChips, powerShare, chanceTag,
 } from '../../src/client/views/flow-model.ts';
 import { PSEUDO_MACHINE_ENTRIES } from '../../src/server/pack/machines.ts';
 import { TIER_NAMES } from '../../src/shared/gt/tiers.ts';
@@ -803,6 +803,12 @@ describe('the recipe card\'s numbers', () => {
     expect([stackText('fluid:water', 999_500), stackText('fluid:water', 9_960), stackText('t:x@0', 999.6), stackText('t:x@0', 9_960)]).toEqual(['1kB', '10B', '1k', '10k']);
     // and so on past 999k items and 999 kB: the next unit, so a count stays a few glyphs in its 36 px slot
     expect([stackText('t:x@0', 999_500), stackText('t:x@0', 1_500_000), stackText('fluid:water', 2_000_000_000)]).toEqual(['1M', '1.5M', '2MB']);
+  });
+  it('writes a chance tag short enough for its slot: whole percents, "<1%" below one, and never "100%" below a hundred', () => {
+    // measured in the app: Pixelify's % is 12.1 px and VT323's digits 6.45 px, so "<0.1%" (39.9 px), "99.5%" (37.9) and ">99%" (33.4) pass
+    // the 32 px a tag has in its 36 px slot (2 px in, its 2 px shadow), and "<1%" (27.0) and "99%" (25.0) stay inside
+    expect([0.1, 0.125, 0.9, 0.01, 0.0099, 0.005, 0.0005, 0.99, 0.995, 0.9995].map(chanceTag))
+      .toEqual(['10%', '13%', '90%', '1%', '<1%', '<1%', '<1%', '99%', '99%', '99%']);
   });
   it('gives a slot its nominal amount and its chance, and drops what a run never makes', () => {
     const [slot] = recipeSlots([{ key: 't:dust@0', amount: 0.1, chance: 0.1 }]);
