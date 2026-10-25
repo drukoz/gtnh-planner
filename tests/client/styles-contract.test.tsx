@@ -2597,7 +2597,8 @@ describe('the Machine GUI Phase 2: the shared NEI tooltip', () => {
 // The Flow machine readout (Phase 2 spec §7.3, Task 4): a step box's head draws its machine in a slot with the inverted bevel of a Minecraft
 // slot, its tier and its count on Pixelify chips (the tier's in its own ink, the count's white; a count's digits ride in Task 2b's tspan.fig,
 // plan ruling digits-mixed) and its power in the box's quiet ink, over a busy band whose fill turns amber from 90 %. In forced colours the
-// fill is the Highlight and the track and the chips get an edge in the text colour, each rule at the specificity of the rule it repaints.
+// fill is the Highlight, the track and the chips get an edge in the text colour and the slot a frame in it round a face of the canvas
+// (ledger ruling P2-R26), each rule at the specificity of the rule it repaints.
 describe('the Machine GUI Phase 2: the Flow machine readout', () => {
   it('draws a step\'s machine in a slot, its tier and count on Pixelify chips, and how busy it is', () => {
     // each tier class names its tier's ink and nothing else
@@ -2628,11 +2629,21 @@ describe('the Machine GUI Phase 2: the Flow machine readout', () => {
     // track and the chips an edge in the text colour, all after the rules they repaint
     expect(inQuery(FORCED, '.flow-busy-fill, .flow-busy.high .flow-busy-fill')).toEqual([['fill', 'Highlight']]);
     expect(inQuery(FORCED, '.flow-busy-track, .flow-chip rect')).toEqual([['stroke', 'CanvasText']]);
-    const { block } = forcedBlock();
-    for (const selector of ['.flow-busy-fill', '.flow-busy.high .flow-busy-fill', '.flow-busy-track', '.flow-chip rect']) {
+    // ledger ruling P2-R26: the machine's slot is SVG fills too, its face and its two bevel strips: a face of the theme's canvas framed in its
+    // text colour, each rule at the specificity of the slot's own (0,1,0), which it beats by coming after it
+    expect(inQuery(FORCED, '.flow-machine-slot')).toEqual([['fill', 'Canvas']]);
+    expect(inQuery(FORCED, '.flow-slot-lo, .flow-slot-hi')).toEqual([['fill', 'CanvasText']]);
+    const { block, rules } = forcedBlock();
+    for (const selector of [
+      '.flow-busy-fill', '.flow-busy.high .flow-busy-fill', '.flow-busy-track', '.flow-chip rect', '.flow-machine-slot', '.flow-slot-lo', '.flow-slot-hi',
+    ]) {
       expect(position(selector), selector).toBeGreaterThan(-1);
       expect(position(selector), selector).toBeLessThan(blocks.indexOf(block));
     }
+    // the slot's rules were added at the end of the block, after the band's and the chips'
+    const inBlock = (prelude: string): number => rules.findIndex((rule) => rule.prelude === prelude);
+    expect(inBlock('.flow-machine-slot')).toBeGreaterThan(inBlock('.flow-busy-track, .flow-chip rect'));
+    expect(inBlock('.flow-slot-lo, .flow-slot-hi')).toBeGreaterThan(inBlock('.flow-machine-slot'));
     // the readout's rules sit with the box's, after the flange's
     for (const selector of [...TIER_RULES, ...READOUT_RULES]) expect(position(selector), selector).toBeGreaterThan(position('.flow-row.hl .flow-port'));
   });

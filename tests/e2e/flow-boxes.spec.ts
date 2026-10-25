@@ -2,7 +2,8 @@
 // its machine count on Pixelify chips (a count's digits in VT323, spec §25) and its power, over a busy band filled to how busy its machines
 // are. These cases ask Chromium what it draws: the wiremill's machine, chips and fill; every chip's text inside its chip, with the web fonts
 // and with them refused (ledger ruling P2-R8: a tier label in the fallback face is wider than in Pixelify), over a step at every tier; and in
-// forced colours a fill that still differs from its track and chips that keep an edge (spec §20).
+// forced colours a fill that still differs from its track, chips that keep an edge and a slot framed in the text colour (spec §20, ledger
+// ruling P2-R26).
 
 import { test, expect, type Browser } from '@playwright/test';
 import { TIER_NAMES } from '../../src/shared/gt/tiers.ts';
@@ -81,15 +82,20 @@ test('in forced colours the busy fill and track differ and the chips stay visibl
   const wireFill = await paint('[data-step-id="wire"] .flow-busy-fill', 'fill');
   expect(wireFill, 'the fill is not the colour of its track').not.toBe(await paint('[data-step-id="wire"] .flow-busy-track', 'fill'));
   // Chromium leaves an SVG paint as it is in forced colours: the fill is the theme's Highlight because the forced-colours block says so
-  const highlight = await page.evaluate(() => {
+  const system = (name: 'Highlight' | 'Canvas' | 'CanvasText'): Promise<string> => page.evaluate((colour) => {
     const probe = document.createElement('span');
-    probe.style.color = 'Highlight';
+    probe.style.color = colour;
     document.body.append(probe);
-    const colour = getComputedStyle(probe).color;
+    const computed = getComputedStyle(probe).color;
     probe.remove();
-    return colour;
-  });
-  expect(wireFill, 'the fill is the Highlight').toBe(highlight);
+    return computed;
+  }, name);
+  expect(wireFill, 'the fill is the Highlight').toBe(await system('Highlight'));
+  // ledger ruling P2-R26: the machine's slot keeps a frame, its two bevel strips in the theme's text colour, round a face of its canvas
+  for (const strip of ['.flow-slot-lo', '.flow-slot-hi']) {
+    expect(await paint(`[data-step-id="wire"] ${strip}`, 'fill'), `the slot's frame (${strip}) is the text colour`).toBe(await system('CanvasText'));
+  }
+  expect(await paint('[data-step-id="wire"] .flow-machine-slot', 'fill'), 'the slot\'s face is the canvas').toBe(await system('Canvas'));
   // the assembler is 100 % busy, so its band is the high one, whose fill the block repaints the same
   await expect(page.locator('[data-step-id="circuit-lv"] .flow-busy')).toHaveClass('flow-busy high');
   expect(await paint('[data-step-id="circuit-lv"] .flow-busy-fill', 'fill'), 'the high fill is repainted as the other').toBe(wireFill);
@@ -98,8 +104,10 @@ test('in forced colours the busy fill and track differ and the chips stay visibl
   const chipEdges = await strokes('.flow-chip rect');
   expect(chipEdges).toHaveLength(6);                                                    // three steps, a tier chip and a count chip each
   for (const edge of [...chipEdges, ...await strokes('.flow-busy-track')]) expect(edge).not.toBe('none');
-  // out of forced colours a chip has no edge and the high fill is its own colour: the forced-colours block is what drew the above
+  // out of forced colours a chip has no edge, the high fill is its own colour and the slot's strips are its two bevel colours again: the
+  // forced-colours block is what drew the above
   await page.emulateMedia({ forcedColors: 'none' });
   expect(await paint('.flow-chip rect', 'stroke')).toBe('none');
   expect(await paint('[data-step-id="circuit-lv"] .flow-busy-fill', 'fill')).not.toBe(await paint('[data-step-id="wire"] .flow-busy-fill', 'fill'));
+  expect(await paint('[data-step-id="wire"] .flow-slot-lo', 'fill')).not.toBe(await paint('[data-step-id="wire"] .flow-slot-hi', 'fill'));
 });

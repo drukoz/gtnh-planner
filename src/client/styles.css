@@ -1601,4 +1601,8 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
      faces on whatever the theme puts round them, get an edge in its text colour */
   .flow-busy-fill, .flow-busy.high .flow-busy-fill { fill: Highlight; }
   .flow-busy-track, .flow-chip rect { stroke: CanvasText; }
+  /* ledger ruling P2-R26: the machine's slot, SVG fills as well, keeps its frame: its face the theme's canvas, its two bevel strips (the
+     dark and the light one alike) the theme's text colour, each at the specificity of the slot's own rule, which it beats by coming after */
+  .flow-machine-slot { fill: Canvas; }
+  .flow-slot-lo, .flow-slot-hi { fill: CanvasText; }
 }
