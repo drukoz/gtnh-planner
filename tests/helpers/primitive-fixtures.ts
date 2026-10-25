@@ -65,7 +65,8 @@ export function primitivePack(): Pack {
     machine(COKE, 'Coke Oven', 'multimachine.cokeoven', `${MULTI}MTECokeOven`, { structure: box([3, 3, 3], [1, 1, 0], COKE, COKE_BRICKS, [], [[1, 1, 1]]) }),
   ];
   for (const m of machines) {
-    pack.machines.set(m.mteId, m);
+    pack.machines.set(m.id, m);
+    pack.machineByMteId.set(m.mteId, m);
     pack.items.set(m.itemKey, { key: m.itemKey, ...parseItemKey(m.itemKey), name: m.name, oreDict: [] });
   }
   for (const [key, name] of GOODS) pack.items.set(key, { key, ...parseItemKey(key), name, oreDict: [] });

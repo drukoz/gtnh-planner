@@ -262,7 +262,9 @@ describe('machineBuildCost', () => {
       const ruled = both(ebfRule, IDS.EBF, smelt, 2);
       expect(ruled.build).toContain('MTEHatchMuffler');
       expect(ruled.build).toEqual(ruled.layout);
-      ebfRule.machines.set(IDS.EBF, { ...ebf, cls: `${ebf.cls}ExportOnly` });
+      const exportOnly = { ...ebf, cls: `${ebf.cls}ExportOnly` };
+      ebfRule.machines.set(exportOnly.id, exportOnly);
+      ebfRule.machineByMteId.set(IDS.EBF, exportOnly);
       const alone = both(ebfRule, IDS.EBF, { ...smelt, id: 'e2' }, 2);
       expect(alone.build).not.toContain('MTEHatchMuffler');
       expect(alone.build).toEqual(alone.layout);

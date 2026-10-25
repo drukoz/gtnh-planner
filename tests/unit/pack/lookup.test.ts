@@ -11,9 +11,10 @@ import type { Pack } from '../../../src/shared/types/pack.ts';
 function packWithPseudo(): Pack {
   const pack = miniGt();
   for (const pseudo of PSEUDO_MACHINE_ENTRIES) {
-    pack.machines.set(pseudo.mteId, pseudo);
+    pack.machines.set(pseudo.id, pseudo);
+    pack.machineByMteId.set(pseudo.mteId, pseudo);
     const mapId = pseudo.maps[0]!;
-    pack.machinesByMap.set(mapId, [...(pack.machinesByMap.get(mapId) ?? []), pseudo.mteId]);
+    pack.machinesByMap.set(mapId, [...(pack.machinesByMap.get(mapId) ?? []), pseudo.id]);
   }
   return pack;
 }
@@ -22,7 +23,7 @@ describe('the pack lookup', () => {
   const pack = packWithPseudo();
 
   it('finds a machine by its id and by its legacy mte id, and gives no machine for an id the pack lacks', () => {
-    const m = pack.machines.get(101)!;
+    const m = pack.machines.get(gtMachineId(101))!;
     expect(machineOf(pack, gtMachineId(101))).toBe(m);
     expect(machineByMteId(pack, 101)).toBe(m);
     expect(machineOf(pack, m.id)).toBe(m);
@@ -34,11 +35,11 @@ describe('the pack lookup', () => {
   it('lists the machines of a map in `machinesByMap` order, as ids and as machines', () => {
     expect(machineIdsForMap(pack, 'crafting')).toEqual([MC_MACHINES.CRAFTING_TABLE]);
     expect(machineIdsForMap(pack, 'furnace')).toEqual([MC_MACHINES.FURNACE]);
-    expect(machinesForMap(pack, 'crafting')).toEqual([pack.machines.get(-1)]);
-    expect(machinesForMap(pack, 'furnace')).toEqual([pack.machines.get(-2)]);
+    expect(machinesForMap(pack, 'crafting')).toEqual([pack.machines.get(MC_MACHINES.CRAFTING_TABLE)]);
+    expect(machinesForMap(pack, 'furnace')).toEqual([pack.machines.get(MC_MACHINES.FURNACE)]);
     for (const mapId of pack.maps.keys()) {
       const direct = pack.machinesByMap.get(mapId) ?? [];
-      expect(machineIdsForMap(pack, mapId)).toEqual(direct.map(machineIdOfLegacy));
+      expect(machineIdsForMap(pack, mapId)).toEqual(direct);
     }
   });
 

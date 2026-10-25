@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { machineByMteId } from '../../../src/server/pack/lookup.ts';
 import { packFromSpec } from '../../helpers/pack-spec.ts';
+import { gtMachineId } from '../../../src/shared/ids.ts';
 
 describe('packFromSpec', () => {
   it('fills the loader conventions as defaults', () => {
@@ -20,9 +20,9 @@ describe('packFromSpec', () => {
     expect(p.manifest.exportId).toBe('test');
     expect([...p.maps.keys()]).toEqual(['crafting', 'gt.recipe.mixer']);
     expect(p.maps.get('crafting')).toMatchObject({ name: 'Crafting Table', amps: 0, specialValue: 'none' });
-    expect(p.machinesByMap.get('gt.recipe.mixer')).toEqual([3, 7]);
-    expect(machineByMteId(p, 7)).toMatchObject({ itemKey: 'machine:7@0', kind: 'basic', tier: 2, voltage: 128 });
-    expect(machineByMteId(p, 7)?.amps).toBeUndefined();
+    expect(p.machinesByMap.get('gt.recipe.mixer')).toEqual([gtMachineId(3), gtMachineId(7)]);
+    expect(p.machines.get(gtMachineId(7))).toMatchObject({ itemKey: 'machine:7@0', kind: 'basic', tier: 2, voltage: 128 });
+    expect(p.machines.get(gtMachineId(7))?.amps).toBeUndefined();
 
     const [craft, smelt, mix] = [p.recipes[0]!, p.recipes[1]!, p.recipes[2]!];
     expect(craft).toMatchObject({ id: 'r1', source: 'crafting', euPerTick: 0, durationTicks: 0, amps: 0 });

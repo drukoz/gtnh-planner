@@ -5,6 +5,7 @@ import { gtMachineId } from '../../../src/shared/ids.ts';
 import { layoutPack } from '../../helpers/layout-fixtures.ts';
 import { emptyContext } from '../../../src/server/planner/plan.ts';
 import type { LayoutPowerContext } from '../../../src/shared/types/layout.ts';
+import type { Machine } from '../../../src/shared/types/pack.ts';
 import type { PlanContext, PowerSummary } from '../../../src/shared/types/plan.ts';
 
 const power: PowerSummary = { peakEUt: 60, averageEUt: 50, voltageTier: 1, amps: 2 };
@@ -74,9 +75,12 @@ describe('power rules', () => {
 
   it('suggests another generator when the pack has no turbine at that tier', () => {
     const pack = layoutPack();
-    pack.machines.delete(1121);                                       // the MV turbine
-    pack.machines.set(1111, { id: gtMachineId(1111), mteId: 1111, metaName: 'generator.combustion.tier.02', name: 'Advanced Combustion Generator',
-      cls: 'gregtech.common.tileentities.generators.MTEDieselGenerator', itemKey: 'gregtech:gt.blockmachines@1111', kind: 'generator', tier: 2, voltage: 128, amps: 1, maps: [] });
+    pack.machines.delete(gtMachineId(1121));                          // the MV turbine
+    pack.machineByMteId.delete(1121);
+    const gen: Machine = { id: gtMachineId(1111), mteId: 1111, metaName: 'generator.combustion.tier.02', name: 'Advanced Combustion Generator',
+      cls: 'gregtech.common.tileentities.generators.MTEDieselGenerator', itemKey: 'gregtech:gt.blockmachines@1111', kind: 'generator', tier: 2, voltage: 128, amps: 1, maps: [] };
+    pack.machines.set(gen.id, gen);
+    pack.machineByMteId.set(1111, gen);
     expect(generatorSuggestion(pack, 300, 2)).toEqual({ text: 'Add about 3× Advanced Combustion Generator to cover 300 EU/t',
       lines: [{ key: 'gregtech:gt.blockmachines@1111', amount: 3, why: why('300'), group: 'power' }] });   // ceil(300 / (128 × 1))
   });

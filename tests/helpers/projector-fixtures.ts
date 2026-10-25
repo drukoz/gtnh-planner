@@ -1,6 +1,6 @@
 import type { PayloadPack } from '../../src/server/projector/payload.ts';
 import type { Layout } from '../../src/shared/types/layout.ts';
-import { gtMachineId } from '../../src/shared/ids.ts';
+import { gtMachineId, type MachineId } from '../../src/shared/ids.ts';
 import type { Machine, MachineKind } from '../../src/shared/types/pack.ts';
 import type { Project } from '../../src/shared/types/project.ts';
 import { defaultSettings } from '../../src/shared/project/apply-op.ts';
@@ -12,9 +12,14 @@ const GT = (mteId: number) => ({ id: 'gregtech:gt.blockmachines', meta: 0, mteId
 /** What the payload reads from the pack for `projectorLayout()`: the conveyor's name and the kind of each GT machine. */
 export function projectorPack(): PayloadPack {
   const kinds: Array<[number, MachineKind]> = [[1180, 'cable'], [21, 'transformer'], [201, 'basic'], [5110, 'item_pipe'], [5131, 'fluid_pipe']];
-  const machines = new Map<number, Machine>(kinds.map(([mteId, kind]) => [mteId,
-    { id: gtMachineId(mteId), mteId, metaName: `m${mteId}`, name: `M${mteId}`, cls: 'X', itemKey: `gregtech:gt.blockmachines@${mteId}`, kind, maps: [] }]));
-  return { ...miniGt(), nameOf: (k) => (k === CONVEYOR ? 'Conveyor Module (LV)' : k), machines };
+  const machines = new Map<MachineId, Machine>();
+  const machineByMteId = new Map<number, Machine>();
+  for (const [mteId, kind] of kinds) {
+    const m: Machine = { id: gtMachineId(mteId), mteId, metaName: `m${mteId}`, name: `M${mteId}`, cls: 'X', itemKey: `gregtech:gt.blockmachines@${mteId}`, kind, maps: [] };
+    machines.set(m.id, m);
+    machineByMteId.set(mteId, m);
+  }
+  return { ...miniGt(), nameOf: (k) => (k === CONVEYOR ? 'Conveyor Module (LV)' : k), machines, machineByMteId };
 }
 
 // One block per membership rule; texts follow Plan 5 Task 10, labels Plan 5 Tasks 5-8. Coordinates are synthetic.

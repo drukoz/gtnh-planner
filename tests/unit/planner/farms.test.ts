@@ -6,7 +6,7 @@
 // on owned farms only. The final review: the soil each crop is planted on (`cropSoil`), one the line can get.
 
 import { describe, it, expect } from 'vitest';
-import type { MachineId } from '../../../src/shared/ids.ts';
+import { gtMachineId, type MachineId } from '../../../src/shared/ids.ts';
 import type { StuffKey } from '../../../src/shared/keys.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import { defaultFarmSettings, type FarmSettings } from '../../../src/shared/types/farm.ts';
@@ -264,10 +264,10 @@ describe('the synthetic farm recipes', () => {
     expect(pack.producers.get(RESIN)?.some((i) => pack.recipes[i]?.meta.farm !== undefined)).toBe(false);
     expect(farms.maps.get(CROP_MANAGER_MAP)).toEqual({ id: CROP_MANAGER_MAP, name: 'Crop Manager', amps: 1, specialValue: 'none', aliases: [] });
     expect(pack.maps.has(CROP_MANAGER_MAP)).toBe(false);
-    expect(farms.machinesByMap.get(CROP_MANAGER_MAP)).toEqual([28001, 28002]);
-    expect(machineByMteId(farms, 28001)).toMatchObject({ kind: 'basic', maps: [CROP_MANAGER_MAP], tier: 1, name: 'Basic Crop Manager' });
+    expect(farms.machinesByMap.get(CROP_MANAGER_MAP)).toEqual([gtMachineId(28001), gtMachineId(28002)]);
+    expect(farms.machines.get(gtMachineId(28001))).toMatchObject({ kind: 'basic', maps: [CROP_MANAGER_MAP], tier: 1, name: 'Basic Crop Manager' });
     expect(machineByMteId(pack, 28001)).toMatchObject({ kind: 'other', maps: [] });
-    expect(machineByMteId(farms, 15541)).toBe(machineByMteId(pack, 15541));
+    expect(farms.machines.get(gtMachineId(15541))).toBe(machineByMteId(pack, 15541));
   });
 });
 

@@ -5,7 +5,7 @@
 
 import type { FactMachine, ScanPackFacts } from '../../src/server/world/facts.ts';
 import { itemKey, type ItemKey } from '../../src/shared/keys.ts';
-import { gtMachineId } from '../../src/shared/ids.ts';
+import { gtMachineId, machineIdOfLegacy, type MachineId } from '../../src/shared/ids.ts';
 import type { DimensionInfo, Item, Machine, MachineKind, Pack } from '../../src/shared/types/pack.ts';
 
 const TEST_EXPORT_ID = 'test-export';
@@ -82,6 +82,7 @@ export function testPack(): Pack {
     const key = itemKey(BATTERY_ITEM, b.meta);
     return [key, { key, id: BATTERY_ITEM, meta: b.meta, name: b.name, oreDict: [], electric: { maxCharge: b.maxCharge, tier: b.tier, canProvideEnergy: true } }];
   }));
+  const cloned = structuredClone(MACHINES);
   return {
     manifest: {
       format: 'gtnh-planner-export/1', exportId: TEST_EXPORT_ID, exporterVersion: 'test', exportedAt: '2026-10-17T00:00:00Z',
@@ -89,7 +90,8 @@ export function testPack(): Pack {
     },
     items, fluids: new Map(), oreDict: new Map(),
     maps: new Map(), recipes: [], recipeById: new Map(), producers: new Map(), consumers: new Map(),
-    machines: new Map<number, Machine>(structuredClone(MACHINES).map((m) => [m.mteId, m])), machinesByMap: new Map(),
+    machines: new Map<MachineId, Machine>(cloned.map((m) => [m.id, m] as const)),
+    machineByMteId: new Map<number, Machine>(cloned.map((m) => [m.mteId, m] as const)), machinesByMap: new Map(),
     materials: new Map(),
     worldgen: { dimensions: DIMENSIONS.map((d) => ({ ...d })), veins: [], fluidSources: [], capabilities: [], byproducts: {} },
     nameOf: (key) => items.get(key)?.name ?? key,
@@ -98,8 +100,11 @@ export function testPack(): Pack {
 
 /** `pack` without machine `mteId` (also gone from `machinesByMap`); `pack` itself is left as it is. */
 export function packWithout(pack: Pack, mteId: number): Pack {
+  const machineId = machineIdOfLegacy(mteId);
   const machines = new Map(pack.machines);
-  machines.delete(mteId);
-  const machinesByMap = new Map([...pack.machinesByMap].map(([map, ids]) => [map, ids.filter((id) => id !== mteId)]));
-  return { ...pack, machines, machinesByMap };
+  machines.delete(machineId);
+  const machineByMteId = new Map(pack.machineByMteId);
+  machineByMteId.delete(mteId);
+  const machinesByMap = new Map([...pack.machinesByMap].map(([map, ids]) => [map, ids.filter((id) => id !== machineId)]));
+  return { ...pack, machines, machineByMteId, machinesByMap };
 }

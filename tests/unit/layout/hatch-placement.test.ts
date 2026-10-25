@@ -3,6 +3,7 @@ import { addedBlocks, overlaps, placeUnits, replacedCasings, unitsFromPlan } fro
 import { elementMap, elementTakes, hatchRuleFor } from '../../../src/server/layout/hatch-rules.ts';
 import { emptyScan, layoutLine } from '../../../src/server/layout/layout.ts';
 import { machineByMteId } from '../../../src/server/pack/lookup.ts';
+import { gtMachineId } from '../../../src/shared/ids.ts';
 import { OPPOSITE, posKey, step, type Vec3 } from '../../../src/shared/layout/geometry.ts';
 import { FACES } from '../../../src/shared/types/assets.ts';
 import type { Layout, LayoutBlock } from '../../../src/shared/types/layout.ts';
@@ -301,7 +302,9 @@ describe('hatches by GregTech\'s rules', () => {
     // structure hatch at the lowest tier of its class (Task 2's `minimalHatch`), and so does the layout (plan 12 Task 6),
     // so that cell replaces nothing on the list
     const pack = layoutPack();
-    pack.machines.set(99, { ...machineByMteId(pack, IDS.MUFFLER)!, mteId: 99, name: 'Muffler Hatch (UHV)', tier: 9, itemKey: 'gregtech:gt.blockmachines@99' });
+    const uhv = { ...machineByMteId(pack, IDS.MUFFLER)!, id: gtMachineId(99), mteId: 99, name: 'Muffler Hatch (UHV)', tier: 9, itemKey: 'gregtech:gt.blockmachines@99' };
+    pack.machines.set(uhv.id, uhv);
+    pack.machineByMteId.set(99, uhv);
     const ebf = machineByMteId(pack, IDS.EBF)!;
     ebf.structure = { ...ebf.structure!, blocks: ebf.structure!.blocks.map((b) => (posKey(b.pos) === '1,3,1' ? { pos: b.pos, block: { id: 'gregtech:gt.blockmachines', meta: 3, mteId: 99 } } : b)) };
     const { units, warnings } = unitsFromPlan(pack, makePlan([ebfOxygen]));

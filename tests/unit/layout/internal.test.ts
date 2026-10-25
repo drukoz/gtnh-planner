@@ -4,6 +4,7 @@ import { unitsFromPlan, placeUnits, type LocalBlock, type Placement, type Unit }
 import { hookupAllowanceVolts, tierGroups, transformerStages } from '../../../src/server/layout/power.ts';
 import { resolveParts } from '../../../src/server/layout/parts.ts';
 import { layoutPack, makePlan, IDS } from '../../helpers/layout-fixtures.ts';
+import { machineIdOfLegacy } from '../../../src/shared/ids.ts';
 import { DIRS, posKey, step, type Vec3 } from '../../../src/shared/layout/geometry.ts';
 import type { Machine } from '../../../src/shared/types/pack.ts';
 
@@ -249,7 +250,10 @@ describe('internal routing edge cases', () => {
     ]);
     // with no pipe laid above it, the face keeps its one pump, sized for both fluids
     const noPipe = layoutPack();
-    for (const id of [IDS.SMALL_BRONZE_PIPE, IDS.BRONZE_PIPE]) noPipe.machines.delete(id);
+    for (const id of [IDS.SMALL_BRONZE_PIPE, IDS.BRONZE_PIPE]) {
+      noPipe.machines.delete(machineIdOfLegacy(id));
+      noPipe.machineByMteId.delete(id);
+    }
     expect(route(noPipe, plan, null).r.covers).toEqual([{ pos: [1, 0, 1], cover: { face: 'up', item: 'gregtech:gt.metaitem.01@32610',
       settings: { mode: 'export', allowInput: false, rate: 5, unit: 'L/s' } } }]);
   });
@@ -326,14 +330,18 @@ describe('internal routing edge cases', () => {
 
   it('says what the export lacks and still places what it can', () => {
     const noTransformer = layoutPack();
-    noTransformer.machines.delete(IDS.TRANSFORMER_LV);
+    noTransformer.machines.delete(machineIdOfLegacy(IDS.TRANSFORMER_LV));
+    noTransformer.machineByMteId.delete(IDS.TRANSFORMER_LV);
     const a = route(noTransformer, twoStep(), 2).r;
     expect(a.warnings.map((w) => w.code)).toEqual(['cable_amps', 'no_transformer', 'cable_loss_high']);
     expect(a.warnings[1]).toEqual({ code: 'no_transformer', text: 'No LV transformer in this export' });
     expect(a.blocks.some((b) => b.role === 'transformer')).toBe(false);
 
     const noMvCable = layoutPack();
-    for (const id of [IDS.COPPER_1X, IDS.ANNEALED_1X, IDS.ANNEALED_2X, IDS.SILVER_1X, IDS.SILVER_2X]) noMvCable.machines.delete(id);
+    for (const id of [IDS.COPPER_1X, IDS.ANNEALED_1X, IDS.ANNEALED_2X, IDS.SILVER_1X, IDS.SILVER_2X]) {
+      noMvCable.machines.delete(machineIdOfLegacy(id));
+      noMvCable.machineByMteId.delete(id);
+    }
     const b = route(noMvCable, twoStep(), 2);
     expect(b.r.warnings.slice(0, 2)).toEqual([{ code: 'no_cable', text: 'No cable for MV in this export' },
       { code: 'route_failed', stepId: 's2', text: 'Could not wire Advanced Assembler inside the line — connect it by hand' }]);
@@ -343,7 +351,10 @@ describe('internal routing edge cases', () => {
     expect(b.r.supplyRun).toHaveLength(5);
 
     const noPipe = layoutPack();
-    for (const id of [IDS.SMALL_BRONZE_PIPE, IDS.BRONZE_PIPE]) noPipe.machines.delete(id);
+    for (const id of [IDS.SMALL_BRONZE_PIPE, IDS.BRONZE_PIPE]) {
+      noPipe.machines.delete(machineIdOfLegacy(id));
+      noPipe.machineByMteId.delete(id);
+    }
     const fluidPlan = makePlan([
       { id: 'x', mteId: IDS.EXTRACTOR, count: 1, outputs: [['fluid:molten.iron', 144]] },
       { id: 'y', mteId: IDS.SOLIDIFIER, count: 1, inputs: [['fluid:molten.iron', 144]], outputs: [['t:out_y@0', 1]] },

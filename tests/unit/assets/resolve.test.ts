@@ -15,8 +15,10 @@ const index = indexOf({ ...GT_SAMPLE_ASSETS, 'storagedrawers/textures/blocks/dra
 const dump = buildTexturesDump({ ...gtSampleFile(), textureNames: { blocks: { 'minecraft:stone': 'stone' }, items: { 't:iron_ingot': 't:iron_ingot' } } }, index);
 const machine = (mteId: number, kind: MachineKind): Machine => ({ id: gtMachineId(mteId), mteId, metaName: `m${mteId}`, name: `M${mteId}`, cls: 'X', itemKey: `gregtech:gt.blockmachines@${mteId}`, kind, maps: [] });
 const item = (key: string, material?: string): Item => ({ key, id: key.split('@')[0]!, meta: 0, name: key, oreDict: [], ...(material ? { gt: { prefix: 'ingot', material, amount: 3628800 } } : {}) });
+const ms = [machine(301, 'basic'), machine(77, 'steam')];
 const pack: PackView = { ...miniGt(),
-  machines: new Map([[301, machine(301, 'basic')], [77, machine(77, 'steam')]]),
+  machines: new Map(ms.map((m) => [m.id, m] as const)),
+  machineByMteId: new Map(ms.map((m) => [m.mteId, m] as const)),
   items: new Map([['t:iron_ingot@0', item('t:iron_ingot@0', 'Iron')], ['t:mystery@0', item('t:mystery@0', 'Copper')], ['t:plain@0', item('t:plain@0')]]),
   materials: new Map([['Copper', { name: 'Copper', rgba: [255, 100, 0, 0], iconSet: 'SHINY', oreByproducts: [] }]]),
 };

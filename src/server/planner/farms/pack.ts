@@ -3,6 +3,7 @@
 // It serves the line's own walks, the build model's machine options and plan assembly only; machine prices, the cost
 // model, build-list breakdowns, swap lists and option prices read the export pack it was made from (`exportPack`).
 
+import { compareMachineId } from '../../../shared/ids.ts';
 import type { StuffKey } from '../../../shared/keys.ts';
 import type { Machine, Pack, Recipe, RecipeMapInfo } from '../../../shared/types/pack.ts';
 import { machineByMteId } from '../../pack/lookup.ts';
@@ -58,18 +59,20 @@ function farmPackOf(pack: Pack, recipes: readonly Recipe[]): Pack {
   const map: RecipeMapInfo = { id: CROP_MANAGER_MAP, name: 'Crop Manager', amps: 1, specialValue: 'none', aliases: [] };
   maps.set(CROP_MANAGER_MAP, map);
   const machines = new Map(pack.machines);
+  const byMteId = new Map(pack.machineByMteId);
   const managers: Machine[] = [];
   for (const id of CROP_MANAGER_MTE_IDS) {
     const m = machineByMteId(pack, id);
     if (m === undefined) continue;
     const manager: Machine = { ...m, kind: 'basic', maps: [CROP_MANAGER_MAP] };
-    machines.set(id, manager);
+    machines.set(manager.id, manager);
+    byMteId.set(id, manager);
     managers.push(manager);
   }
   const machinesByMap = new Map(pack.machinesByMap);
-  // in the order of every other map's machines (pack/indices.ts `buildMachinesByMap`): tier, then mteId
-  machinesByMap.set(CROP_MANAGER_MAP, managers.sort((a, b) => (a.tier ?? 0) - (b.tier ?? 0) || a.mteId - b.mteId).map((m) => m.mteId));
-  return { ...pack, recipes: all, recipeById, producers, consumers, maps, machines, machinesByMap };
+  // in the order of every other map's machines (pack/indices.ts `buildMachinesByMap`): tier, then machine id
+  machinesByMap.set(CROP_MANAGER_MAP, managers.sort((a, b) => (a.tier ?? 0) - (b.tier ?? 0) || compareMachineId(a.id, b.id)).map((m) => m.id));
+  return { ...pack, recipes: all, recipeById, producers, consumers, maps, machines, machineByMteId: byMteId, machinesByMap };
 }
 
 /**

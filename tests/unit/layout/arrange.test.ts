@@ -6,7 +6,8 @@ import { kitSpec } from '../../helpers/build-fixtures.ts';
 import { FRONT_BOX_ELEMENTS, FRONT_BOX_ID, hatchExportPack, withElements } from '../../helpers/hatch-export-fixtures.ts';
 import { layoutPack, makePlan, IDS, type StepSpec } from '../../helpers/layout-fixtures.ts';
 import { packFromSpec } from '../../helpers/pack-spec.ts';
-import type { Recipe } from '../../../src/shared/types/pack.ts';
+import type { Machine, Recipe } from '../../../src/shared/types/pack.ts';
+import { gtMachineId } from '../../../src/shared/ids.ts';
 import { machineByMteId } from '../../../src/server/pack/lookup.ts';
 
 const withCircuit = (id: string, circuit: number): Recipe => ({ id, source: 'gt', maps: [], inputs: [], outputs: [], euPerTick: 30, durationTicks: 100,
@@ -205,7 +206,9 @@ describe('placement: tiers apart, front and output side apart', () => {
     // machines (and the tree that crosses the spine to them) standing in front of a lower tier's walled those off
     const STEAM = 2099;
     const pack = layoutPack();
-    pack.machines.set(STEAM, { ...machineByMteId(pack, IDS.MACERATOR)!, mteId: STEAM, name: 'Steam Macerator', kind: 'steam' });
+    const steam: Machine = { ...machineByMteId(pack, IDS.MACERATOR)!, id: gtMachineId(STEAM), mteId: STEAM, name: 'Steam Macerator', kind: 'steam' };
+    pack.machines.set(steam.id, steam);
+    pack.machineByMteId.set(STEAM, steam);
     const plan = makePlan([
       { id: 'h', mteId: IDS.CHEM_HV, count: 1, tier: 3, euPerTick: 256 },
       { id: 'm', mteId: IDS.ASSEMBLER, count: 2, tier: 2, euPerTick: 64 },

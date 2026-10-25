@@ -48,7 +48,8 @@ function item(key: ItemKey, name: string): Item {
 }
 
 function addMachine(pack: Pack, m: Machine): void {
-  pack.machines.set(m.mteId, m);
+  pack.machines.set(m.id, m);
+  pack.machineByMteId.set(m.mteId, m);
   pack.items.set(m.itemKey, item(m.itemKey, m.name));
 }
 

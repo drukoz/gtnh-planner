@@ -19,6 +19,7 @@ import { basename, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { pipeline } from 'node:stream';
 import { createGunzip } from 'node:zlib';
+import { gtMachineId, machineIdOfLegacy } from '../../shared/ids.ts';
 import { fluidKey, itemKey, type FluidKey, type ItemKey } from '../../shared/keys.ts';
 import type { Fluid, Item, Pack, PackManifest, RecipeMapInfo } from '../../shared/types/pack.ts';
 import { cropTable } from './crops.ts';
@@ -335,7 +336,8 @@ function newLoadState(src: ExportSource): LoadState {
   const pack: LoadingPack = {
     manifest: toPackManifest(src.manifest),
     items, fluids, oreDict: new Map(), maps: new Map(), recipes: [], recipeById: new Map(),
-    producers: new Map(), consumers: new Map(), machines: new Map(), machinesByMap: new Map(), materials: new Map(),
+    producers: new Map(), consumers: new Map(), machines: new Map(), machinesByMap: new Map(),
+    machineByMteId: new Map(), materials: new Map(),
     worldgen: { dimensions: [], veins: [], fluidSources: [], capabilities: [], byproducts: {} },
     nameOf: (key) => items.get(key)?.name ?? fluids.get(key)?.name ?? key,
     fluidContainers: [], warnings: [],
@@ -488,19 +490,26 @@ async function readRecipes({ src, ctx, recipes, furnace }: LoadState): Promise<v
 /** The export's machines (a duplicate id warns, the first line wins), then the pack's copies of the pseudo machines. */
 async function readMachines({ src, pack, ctx }: LoadState): Promise<void> {
   await eachLine(src, 'machines', (line, n) => {
-    if (pack.machines.has(line.id)) ctx.warn(`${EXPORT_FILES.machines}:${n}: duplicate machine id ${line.id} ignored, the first line wins`);
-    else pack.machines.set(line.id, toMachine(line, ctx));
+    const id = gtMachineId(line.id);
+    if (pack.machines.has(id)) ctx.warn(`${EXPORT_FILES.machines}:${n}: duplicate machine id ${id} ignored, the first line wins`);
+    else {
+      const machine = toMachine(line, ctx);
+      pack.machines.set(machine.id, machine);
+      pack.machineByMteId.set(machine.mteId, machine);
+    }
   });
   for (const pseudo of PSEUDO_MACHINE_ENTRIES) {
-    if (pack.machines.has(pseudo.mteId)) ctx.warn(`machine ${pseudo.mteId} of the export is replaced by the pseudo machine of that id`);
-    pack.machines.set(pseudo.mteId, { ...pseudo, maps: [...pseudo.maps] });
+    if (pack.machines.has(pseudo.id)) ctx.warn(`machine ${pseudo.mteId} of the export is replaced by the pseudo machine of that id`);
+    const machine = { ...pseudo, maps: [...pseudo.maps] };
+    pack.machines.set(pseudo.id, machine);
+    pack.machineByMteId.set(pseudo.mteId, machine);
   }
 }
 
 /** Each structure goes to the machine of its id; one for an unknown machine, a second one and a truncated one warn. */
 async function readStructures({ src, pack, ctx }: LoadState): Promise<void> {
   await eachLine(src, 'structures', (line, n) => {
-    const machine = pack.machines.get(line.id);
+    const machine = pack.machines.get(gtMachineId(line.id));
     if (machine === undefined) {
       ctx.warn(`${EXPORT_FILES.structures}:${n}: structure for unknown machine ${line.id} ignored`);
       return;
@@ -544,8 +553,8 @@ function addDerivedRecipes({ pack, recipes, furnace, ctx }: LoadState): void {
     const map = supply.pumpMap.id;
     if (pack.maps.has(map)) ctx.warn(`recipe map ${map} of the export is replaced by the pseudo map of the pumps`);
     pack.maps.set(map, supply.pumpMap);
-    for (const id of supply.pumpMachines) {
-      const machine = pack.machines.get(id);
+    for (const mteId of supply.pumpMachines) {
+      const machine = pack.machines.get(machineIdOfLegacy(mteId));
       if (machine !== undefined && !machine.maps.includes(map)) machine.maps.push(map);
     }
   }

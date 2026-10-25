@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { StructureElementLine, StructureLine } from '../../../src/server/pack/format.ts';
 import { machineByMteId } from '../../../src/server/pack/lookup.ts';
+import { gtMachineId, machineIdOfLegacy } from '../../../src/shared/ids.ts';
 import { makePack } from '../../helpers/make-pack.ts';
 import { SAMPLE, sampleExportSpec } from '../../helpers/sample-export.ts';
 
@@ -31,9 +32,9 @@ describe('machines', () => {
     const pack = await makePack(sampleExportSpec());
     expect(machineByMteId(pack, SAMPLE.assemblyLine)!.maps).toEqual(['gt.recipe.fakeAssemblylineProcess', 'assemblyline']);
     expect(machineByMteId(pack, -1)).toMatchObject({ name: 'Crafting Table', itemKey: 'minecraft:crafting_table@0', maps: ['crafting'] });
-    expect(pack.machinesByMap.get('crafting')).toEqual([-1]);
-    expect(pack.machinesByMap.get('furnace')).toEqual([-2]);
-    expect(pack.machinesByMap.get('assemblyline')).toEqual([SAMPLE.assemblyLine]);
+    expect(pack.machinesByMap.get('crafting')).toEqual([machineIdOfLegacy(-1)]);
+    expect(pack.machinesByMap.get('furnace')).toEqual([machineIdOfLegacy(-2)]);
+    expect(pack.machinesByMap.get('assemblyline')).toEqual([gtMachineId(SAMPLE.assemblyLine)]);
   });
 
   it('attaches multiblock structures', async () => {
@@ -60,7 +61,7 @@ describe('machines', () => {
       ],
       structures: [{ id: 77, size: [1, 1, 1], controller: [0, 0, 0], palette: [], blocks: [], air: [], truncated: true }],
     });
-    expect(pack.machinesByMap.get('gt.recipe.macerator')).toEqual([50, 51, 52]);
+    expect(pack.machinesByMap.get('gt.recipe.macerator')).toEqual([gtMachineId(50), gtMachineId(51), gtMachineId(52)]);
     expect(pack.warnings!.some((w) => w.startsWith('machine 77 (odd)'))).toBe(true);
     expect(pack.warnings!.some((w) => w.includes('77') && w.includes('truncated'))).toBe(true);
   });
@@ -73,7 +74,7 @@ describe('machines', () => {
     });
     expect(machineByMteId(pack, 1)!.metaName).toBe('m');
     expect(pack.warnings).toEqual([
-      'machines.jsonl.gz:2: duplicate machine id 1 ignored, the first line wins',
+      'machines.jsonl.gz:2: duplicate machine id gt:1 ignored, the first line wins',
       'structures.jsonl.gz:1: structure for unknown machine 9 ignored',
     ]);
     await expect(makePack({ machines, structures: [{ id: 1, size: [1, 1, 1], controller: [0, 0, 0], palette: [], blocks: [[0, 0, 0, 3]], air: [] }] }))

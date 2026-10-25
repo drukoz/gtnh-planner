@@ -83,7 +83,8 @@ export function hatchExportPack(): Pack {
   const pack = hatchPack();
   for (const m of [box(FRONT_BOX_ID, 'Test Front Box', 'multimachine.testfrontbox', 'MTETestFrontBox'),
     box(STEAM_BOX_ID, 'Test Steam Box', 'multimachine.teststeambox', 'MTETestSteamBox')]) {
-    pack.machines.set(m.mteId, m);
+    pack.machines.set(m.id, m);
+    pack.machineByMteId.set(m.mteId, m);
     pack.items.set(m.itemKey, { key: m.itemKey, id: GT_BLOCK, meta: m.mteId, name: m.name, oreDict: [] });
   }
   for (let k = 1; k <= 4; k++) {

@@ -63,7 +63,8 @@ function fluid(name: string, display: string): Fluid {
 export function hatchPack(): Pack {
   const pack = layoutPack();
   const add = (m: Machine): void => {
-    pack.machines.set(m.mteId, m);
+    pack.machines.set(m.id, m);
+    pack.machineByMteId.set(m.mteId, m);
     pack.items.set(m.itemKey, { key: m.itemKey, id: GT_BLOCK, meta: m.mteId, name: m.name, oreDict: [] });
   };
   add(multi(HATCH_IDS.DT, 'Distillation Tower', 'MTEDistillationTower', dtStructure()));

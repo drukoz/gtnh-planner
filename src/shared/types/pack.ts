@@ -154,15 +154,17 @@ export interface CropCard {
   likedBiomes: string[]; soils: StuffKey[]; requirements: string[] /* empty = none */; seed: StuffKey | null; minSeedBedTier: number;
 }
 /**
- * `machines` also holds the pseudo machines -1 (crafting table, map 'crafting') and -2 (furnace, map 'furnace'), not
- * -3 (hand); `machinesByMap` includes them and the 'assemblyline' pseudo map.
+ * `machines` also holds the pseudo machines `mc:crafting_table` (map 'crafting') and `mc:furnace` (map 'furnace'), not
+ * `mc:hand`; `machinesByMap` includes them and the 'assemblyline' pseudo map.
  */
 export interface Pack {
   manifest: PackManifest;
   items: Map<ItemKey, Item>; fluids: Map<FluidKey, Fluid>; oreDict: Map<string, ItemKey[]>;
   maps: Map<string, RecipeMapInfo>; recipes: Recipe[]; recipeById: Map<string, Recipe>;
   producers: Map<StuffKey, number[]>; consumers: Map<StuffKey, number[]>;   // indices into recipes
-  machines: Map<number, Machine>; machinesByMap: Map<string, number[]>;
+  machines: Map<MachineId, Machine>; machinesByMap: Map<string, MachineId[]>;
+  /** Only GT machines and the pseudo ones: what a world scan's `mID` and a structure's `BlockRef.mteId` resolve through. */
+  machineByMteId: Map<number, Machine>;
   materials: Map<string, GtMaterial>; worldgen: Worldgen;
   nameOf(key: StuffKey): string;
   // optional additions

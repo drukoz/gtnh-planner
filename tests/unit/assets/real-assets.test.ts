@@ -2,13 +2,13 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { join } from 'node:path';
 import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
 import { loadPack } from '../../../src/server/pack/load.ts';
-import { allMachines } from '../../../src/server/pack/lookup.ts';
 import { loadAssetIndex, type AssetIndex } from '../../../src/server/assets/index.ts';
 import { loadTexturesDump } from '../../../src/server/assets/textures-dump.ts';
 import { loadNeiIndex } from '../../../src/server/assets/nei.ts';
 import { curatedIds } from '../../../src/server/assets/curated.ts';
 import { resolveBlocks, resolveIcons, type AssetSources } from '../../../src/server/assets/resolve.ts';
 import { FACES } from '../../../src/shared/types/assets.ts';
+import { legacyMteId } from '../../../src/shared/ids.ts';
 import type { Pack } from '../../../src/shared/types/pack.ts';
 
 const GT = 'gregtech/textures/blocks/';
@@ -95,7 +95,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('real assets (GTNH 2.9.0-RC-1)',
   });
 
   it('reports coverage', () => {
-    const machines = allMachines(pack).map((m) => ({ id: 'gregtech:gt.blockmachines', meta: 0, mteId: m.mteId }));
+    const machines = [...pack.machines.keys()].map((id) => ({ id: 'gregtech:gt.blockmachines', meta: 0, mteId: legacyMteId(id) }));
     const blocks = resolveBlocks(src, machines);
     const keys = [...pack.items.keys(), ...pack.fluids.keys()];
     const icons = resolveIcons(src, keys);
