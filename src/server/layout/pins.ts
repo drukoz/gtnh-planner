@@ -51,7 +51,7 @@ function compareText(a: string, b: string): number {
 /**
  * Spec §3.3, §3.7: the base's machines (same base and dimension) a plan step reuses, nearest to `near` first (manhattan,
  * ties by posKey). A step with the planner's units (`PlanStep.reused.units`, plan 12, architecture §11 entry 39) runs on
-  * those: per id the distinct unit indices in the order the steps (by id) first use them — a step's own units, then
+ * those: per id the distinct unit indices in the order the steps (by id) first use them — a step's own units, then
  * each of its `reused.others` entries' — are that type's machines nearest the site, one index one machine, so a machine
  * several steps share is the same one for each and stands nearest the line, whatever the planner's pool order; an index
  * past the base's machines of the type (an owned machine elsewhere, or one of the "Machines we have" list) has no

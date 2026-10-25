@@ -209,8 +209,8 @@ export function pickFluidPipe(pack: Pack, litresPerSecond: number): Machine | nu
 
 /**
  * The transformer between `lowerTier + 1` and `lowerTier` (a transformer's tier is its lower side, gt-mechanics §3.6):
-  * the plain `MTETransformer` before others of that tier (hi-amp, power transformers), then id.
-  */
+ * the plain `MTETransformer` before others of that tier (hi-amp, power transformers), then id.
+ */
 export function pickTransformer(pack: Pack, lowerTier: number): Machine | null {
   const rank = (m: Machine) => (simpleClassName(m.cls) === 'MTETransformer' ? 0 : 1);
   const transformers = allMachineIds(pack).map((id) => machineOf(pack, id))
@@ -239,9 +239,9 @@ export function hatchLitres(tier: number): number {
 
 /**
  * The hatch of class `cls`: of exactly `tier` when given; else the lowest tier that holds `need.slots` (buses) or
-  * `need.litres` (fluid hatches), else the lowest tier. Ties by id. A hatch without a tier sorts last and never
-  * counts as big enough. Callers that get one smaller than `need` warn `hatch_small`.
-  */
+ * `need.litres` (fluid hatches), else the lowest tier. Ties by id. A hatch without a tier sorts last and never
+ * counts as big enough. Callers that get one smaller than `need` warn `hatch_small`.
+ */
 export function pickHatch(pack: Pack, cls: HatchClass, tier: number | null, need?: { slots?: number; litres?: number }): Machine | null {
   const hatches = allMachineIds(pack).map((id) => machineOf(pack, id))
     .filter((m): m is Machine => m !== undefined && m.kind === 'hatch' && simpleClassName(m.cls) === cls);
