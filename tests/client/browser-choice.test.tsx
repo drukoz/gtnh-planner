@@ -3,9 +3,10 @@
 // whose own tests keep how each writes and reads its value (pipes-paused.test.tsx '1' / '0', theme.test.tsx its three choices and junk as Auto,
 // materials-view.test.tsx Grid / List): the default with nothing stored or no storage at all; a browser that refuses storage; one that can read
 // its storage but not write it, whose stale value never wins over the page's own; word of a change here or in another tab (a storage event of
-// the key, or of a cleared storage) and none once a subscriber has left; and the hook. The cases of the three modules' tests that said these
-// for each module (pipes-paused.test.tsx's refused storage, its storage read but not written, and its subscribers; theme.test.tsx's refused or
-// unwritable storage and its subscribers and storage events; materials-view.test.tsx's three) moved here.
+// the key, or of a cleared storage) and none once a subscriber has left, and word of a change storage did not keep (refused, or no storage at
+// all); and the hook. The cases of the three modules' tests that said these for each module (pipes-paused.test.tsx's refused storage, its
+// storage read but not written, and its subscribers; theme.test.tsx's refused or unwritable storage, and its subscribers and storage events,
+// which it heard with no storage at all; materials-view.test.tsx's three) moved here.
 
 import type { ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -104,6 +105,21 @@ describe.each(CHOICES)('$name, kept for this browser', (choice) => {
     expect(removed).toEqual([added[0]]);
     store.set(choice.fallback);
     expect(heard).toHaveBeenCalledTimes(3);
+  });
+
+  it('tells every subscriber of a value storage did not keep: storage refused, or no storage at all', () => {
+    // theme.test.tsx's subscriber case ran with no storage at all: a choice the page keeps for itself is still a change every view hears
+    for (const [storage, what] of [[{ getItem: refuse, setItem: refuse, removeItem: refuse }, 'storage refused'], [undefined, 'no storage']] as const) {
+      vi.stubGlobal('localStorage', storage);
+      const heard = vi.fn();
+      const alsoHeard = vi.fn();
+      const leave = [store.subscribe(heard), store.subscribe(alsoHeard)];
+      store.set(choice.other);
+      expect([heard.mock.calls.length, alsoHeard.mock.calls.length], what).toEqual([1, 1]);
+      store.set(choice.fallback);
+      expect([heard.mock.calls.length, alsoHeard.mock.calls.length], what).toEqual([2, 2]);
+      for (const stop of leave) stop();
+    }
   });
 
   it('renders the choice through its hook, the server snapshot the same as the store\'s', () => {

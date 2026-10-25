@@ -263,7 +263,10 @@ test('in forced colours the slots, the tick, the meter and the pressed toggle ke
   await slot.click();
   await expect(slot).toHaveAttribute('data-marked', 'true');
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());   // a focused slot shows its ring in place of the frame
-  /** What a slot computes: its outline, which in forced colours is the frame its dropped bevel leaves it. */
+  /**
+   * What each slot's button computes: its outline, the frame forced colours give it for its dropped bevel. Only a +N slot shows it: on a slot
+   * with an icon the icon's face covers it, and the icon's own outline is the frame the screen shows (P2-R41; the painted check below).
+   */
   const frames = (): Promise<string[]> => page.locator('button.mat-slot').evaluateAll((slots) => slots.map((el) => {
     const style = getComputedStyle(el);
     return `${style.outlineStyle} ${style.outlineWidth}`;
