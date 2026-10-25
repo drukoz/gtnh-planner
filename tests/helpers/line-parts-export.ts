@@ -5,6 +5,7 @@
 // The rows are read off `addLineParts(emptyPack())`, so the fixture table stays the one source.
 
 import type { ItemLine, MachineLine } from '../../src/server/pack/format.ts';
+import { allMachines } from '../../src/server/pack/lookup.ts';
 import { parseItemKey } from '../../src/shared/keys.ts';
 import type { Machine } from '../../src/shared/types/pack.ts';
 import { addLineParts, emptyPack } from './layout-fixtures.ts';
@@ -40,6 +41,6 @@ export function withLineParts(spec: ExportSpec): ExportSpec {
     const { id, meta } = parseItemKey(item.key);
     indexOf.set(item.key, items.push({ id, m: meta, dn: item.name }) - 1);
   }
-  const machines = [...parts.machines.values()].map((m) => machineLine(m, indexOf.get(m.itemKey)!));
+  const machines = allMachines(parts).map((m) => machineLine(m, indexOf.get(m.itemKey)!));
   return { ...spec, items, machines: [...(spec.machines ?? []), ...machines] };
 }

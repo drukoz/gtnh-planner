@@ -99,7 +99,7 @@ describe('pack facts', () => {
   it('packWithout drops one machine and leaves the pack it came from alone', () => {
     const pack = testPack();
     const without = packWithout(pack, 2002);
-    expect([without.machines.has(2002), without.machines.has(2001), machineByMteId(pack, 2002) !== undefined]).toEqual([false, true, true]);
+    expect([machineByMteId(without, 2002) !== undefined, machineByMteId(without, 2001) !== undefined, machineByMteId(pack, 2002) !== undefined]).toEqual([false, true, true]);
     expect(packFacts(without).machines.has(2002)).toBe(false);
   });
 

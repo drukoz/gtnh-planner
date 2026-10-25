@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { join } from 'node:path';
 import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
 import { loadPack } from '../../../src/server/pack/load.ts';
+import { allMachines } from '../../../src/server/pack/lookup.ts';
 import { loadAssetIndex, type AssetIndex } from '../../../src/server/assets/index.ts';
 import { loadTexturesDump } from '../../../src/server/assets/textures-dump.ts';
 import { loadNeiIndex } from '../../../src/server/assets/nei.ts';
@@ -94,7 +95,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('real assets (GTNH 2.9.0-RC-1)',
   });
 
   it('reports coverage', () => {
-    const machines = [...pack.machines.keys()].map((mteId) => ({ id: 'gregtech:gt.blockmachines', meta: 0, mteId }));
+    const machines = allMachines(pack).map((m) => ({ id: 'gregtech:gt.blockmachines', meta: 0, mteId: m.mteId }));
     const blocks = resolveBlocks(src, machines);
     const keys = [...pack.items.keys(), ...pack.fluids.keys()];
     const icons = resolveIcons(src, keys);

@@ -265,9 +265,9 @@ describe('the synthetic farm recipes', () => {
     expect(farms.maps.get(CROP_MANAGER_MAP)).toEqual({ id: CROP_MANAGER_MAP, name: 'Crop Manager', amps: 1, specialValue: 'none', aliases: [] });
     expect(pack.maps.has(CROP_MANAGER_MAP)).toBe(false);
     expect(farms.machinesByMap.get(CROP_MANAGER_MAP)).toEqual([28001, 28002]);
-    expect(farms.machines.get(28001)).toMatchObject({ kind: 'basic', maps: [CROP_MANAGER_MAP], tier: 1, name: 'Basic Crop Manager' });
+    expect(machineByMteId(farms, 28001)).toMatchObject({ kind: 'basic', maps: [CROP_MANAGER_MAP], tier: 1, name: 'Basic Crop Manager' });
     expect(machineByMteId(pack, 28001)).toMatchObject({ kind: 'other', maps: [] });
-    expect(farms.machines.get(15541)).toBe(machineByMteId(pack, 15541));
+    expect(machineByMteId(farms, 15541)).toBe(machineByMteId(pack, 15541));
   });
 });
 

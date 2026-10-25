@@ -16,6 +16,7 @@ import { emptyScan, layoutLine } from '../../../src/server/layout/layout.ts';
 import { aeRunShares } from '../../../src/server/layout/modes/ae2.ts';
 import { buildMode, PORT_SPACING } from '../../../src/server/layout/modes/mode.ts';
 import { ae2IdleEUt, resolveParts } from '../../../src/server/layout/parts.ts';
+import { machineByMteId } from '../../../src/server/pack/lookup.ts';
 import { projectorPayload } from '../../../src/server/projector/payload.ts';
 import type { StuffKey } from '../../../src/shared/keys.ts';
 import type { PatternSpec } from '../../../src/shared/types/feed.ts';
@@ -165,7 +166,7 @@ describe('AE2 feeding', () => {
     };
     const p = pack();
     p.items.set(COBBLE, { key: COBBLE, id: 'minecraft:cobblestone', meta: 0, name: 'Cobblestone', oreDict: [] });
-    p.machines.set(ROCK_BREAKER, { ...p.machines.get(IDS.MACERATOR)!, mteId: ROCK_BREAKER, name: 'Basic Rock Breaker',
+    p.machines.set(ROCK_BREAKER, { ...machineByMteId(p, IDS.MACERATOR)!, mteId: ROCK_BREAKER, name: 'Basic Rock Breaker',
       metaName: 'basicmachine.rockbreaker.tier.01', itemKey: `gregtech:gt.blockmachines@${ROCK_BREAKER}` });
     // the loader's rock breaker supply recipe, its display item gone (pack supply.ts)
     expect(takesNothing(p, ROCK_BREAKER, 'rock-breaker')).toEqual([{ code: 'ae2_no_pattern', stepId: 'r', text: 'AE2 cannot plan the Basic Rock '
