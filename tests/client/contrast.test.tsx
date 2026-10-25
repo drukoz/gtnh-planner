@@ -213,6 +213,14 @@ const PAIRS: Pair[] = [
   // why it is not the mockups' blue)
   ['tooltip mod line, over a panel', '--tip-mod', { over: '--tip-bg', on: '--panel' }, AA],
   ['tooltip mod line, over white', '--tip-mod', { over: '--tip-bg', on: '#ffffff' }, AA],
+
+  // a Flow step box's machine readout (Phase 2 Task 4, spec §7): the count chip's white and each tier's own ink on the chip (the tier tokens,
+  // which the chip reads through --tier-ink), the busy band's two fills on its track as graphics, and the machine's power (and "by hand")
+  // in the box's quiet ink on a new and on an owned box; the band's words are the box text (the table's "box text" rows)
+  ['count chip', '--stack-ink', '--flow-chip', AA],
+  ...TIERS.map(([tier]): Pair => [`tier chip ${tier}`, `--tier-${tier.toLowerCase()}`, '--flow-chip', AA]),
+  ['busy fill', '--flow-busy', '--flow-busy-track', GRAPHICS], ['busy fill, high', '--flow-busy-high', '--flow-busy-track', GRAPHICS],
+  ['machine power on a new box', '--text-muted', '--flow-new', AA], ['machine power on an owned box', '--text-muted', '--flow-owned', AA],
 ];
 
 describe('contrast of the Machine GUI palette', () => {
@@ -230,6 +238,11 @@ describe.each(LOOKS)('contrast in the %s look', (look) => {
   it.each(PAIRS.filter(([, , , , looks]) => looks === undefined || looks.includes(look)))('%s', (_what, fg, bg, min) => {
     expect(ratio(colour(look, fg), colour(look, bg)), `${named(fg)} on ${named(bg)}`).toBeGreaterThanOrEqual(min);
   });
+});
+
+// Phase 2 Task 4: a tier chip reads its tier's token, which is the tier ink Phase 1 measured on a screen (the table's "tier" rows), in both looks
+it('reads each tier token as the tier ink measured on a screen, in both looks', () => {
+  for (const look of LOOKS) for (const [tier, ink] of TIERS) expect(colour(look, `--tier-${tier.toLowerCase()}`), `${look} ${tier}`).toBe(ink);
 });
 
 it('reads the light tokens as the literals Phase 1 measured', () => {

@@ -2,6 +2,7 @@
 // Mini-GT goods, maps and machines only (tests/helpers/mini-gt.ts), so what a panel sends still makes sense to the real
 // e2e server. Step ids are the Mini-GT recipe ids, not the content hashes of the e2e export; rates are per second.
 
+import { TIER_NAMES } from '../../../src/shared/gt/tiers.ts';
 import type { Product } from '../../../src/shared/types/pack.ts';
 import type { Plan, PlanFlow, PlanStep, RawInput } from '../../../src/shared/types/plan.ts';
 
@@ -83,6 +84,21 @@ export function platesTwoWays(): Plan {
     ],
     rawInputs: [mined('t:copper_ingot@0', 0.5), mined('t:iron_ingot@0', 0.505), mined('t:redstone@0', 0.5)],
   });
+}
+
+/**
+ * A step at every voltage tier, ULV to MAX, each with a machine count of its own and every other one shared by a pool: every tier chip there is
+ * and count chips from "×1" to "×1024 shared" (Phase 2 Task 4, ledger ruling P2-R8: the chips' text must fit with the web fonts and without).
+ * Nothing flows, so the boxes have no rows.
+ */
+export function everyTier(): Plan {
+  const counts = [1, 2, 5, 12, 64, 128, 1024];
+  const steps = TIER_NAMES.map((name, tier) => step({
+    id: `tier-${tier}`, mapId: 'gt.recipe.assembler', machine: { mteId: 121, name: `${name} Assembler`, tier }, mainOutput: 't:circuit@0',
+    count: counts[tier % counts.length] ?? 1, euPerTick: 8 * 4 ** tier,
+    ...(tier % 2 === 0 ? { pool: { id: `pool:tier-${tier}`, steps: [`tier-${tier}`, `tier-${tier + 1}`] } } : {}),
+  }));
+  return planOf({ tier: 1, targetPerSecond: 0.5, steps, flows: [], rawInputs: [] });
 }
 
 /** Basic Circuit at MV, 1 an hour: the cheaper assembler recipe on Molten Iron from a fluid extractor. */

@@ -6,7 +6,11 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import {
   formatNumber, formatRate, flowGraph, toElk, fromElk, ocLines, reusePatch, LEAF_WORD, focusSets, centreOn, flowEdgeId, rowCentre,
   collapsedLines, firstProducer, edgeTag, rowNameRoom, textWidth, LINE_COLLAPSE_STEPS, TEXT_CHAR_WIDTH, flowIssueLines, type FlowLayout, type FlowNode,
+  machineIconKey, machineReadout, tierSlug, rowsTop, busyTrack, chipWidth, MACHINE_ICON, MACHINE_SLOT, STEP_HEAD_HEIGHT, BUSY_BAND, CHIP_HEIGHT,
+  CHIP_PADDING, CHIP_CHAR_WIDTH,
 } from '../../src/client/views/flow-model.ts';
+import { PSEUDO_MACHINE_ENTRIES } from '../../src/server/pack/machines.ts';
+import { TIER_NAMES } from '../../src/shared/gt/tiers.ts';
 import { formatNumber as sharedNumber, formatRate as sharedRate } from '../../src/shared/format.ts';
 import { FlowView, FlowNodeShape, FlowIssues, FlowLegend } from '../../src/client/views/FlowView.tsx';
 import { StepPanel } from '../../src/client/views/StepPanel.tsx';
@@ -640,5 +644,147 @@ describe('flow diagram: what it renders (fix spec §6.2)', () => {
   it('explains every kind of box in the legend', () => {
     const legend = text(renderToStaticMarkup(<FlowLegend />));
     for (const word of ['Owned', 'New', 'Import', 'Free', 'No source', 'Left over', 'Supporting line', 'Target']) expect(legend).toContain(word);
+  });
+});
+
+// Phase 2 spec §7 (Task 4): a step box's head is a machine readout, its machine's icon in a slot, its tier and count on chips and its power,
+// over a band filled to how busy its machines are; the box's words (`lines`) stay as they were, its name and its tip. Plan rulings
+// pseudo-tier-chip (a crafting table or furnace has no voltage tier, so no tier chip), farm-step-readout (add-on 17's farms are machine
+// steps) and digits-mixed (a count's digits in VT323, its × in Pixelify); ledger ruling P2-R8 (a chip is 10 px a character, so the widest
+// tier label fits in the fallback face too).
+describe('flow diagram: machine readouts', () => {
+  const at0 = (n: FlowNode) => ({ ...n, x: 0, y: 0 });
+  it('keys a machine\'s icon by its MTE id, a pseudo machine as the server does, and a hand step none', () => {
+    expect(machineIconKey({ mteId: 121, name: 'Basic Assembler', tier: 1 }, false)).toBe('gregtech:gt.blockmachines@121');
+    for (const m of PSEUDO_MACHINE_ENTRIES) expect(machineIconKey({ mteId: m.mteId, name: m.name, tier: 0 }, false), m.name).toBe(m.itemKey);   // src/server/pack/machines.ts:41-44
+    expect(machineIconKey({ mteId: -1, name: 'Crafting table (by hand)', tier: 0 }, true)).toBeNull();
+    expect(machineIconKey({ mteId: -3, name: 'By hand', tier: 0 }, false)).toBeNull();                    // PSEUDO_MACHINES.HAND has no item
+  });
+  it('reads a step\'s tier, machines, power and how busy it is', () => {
+    expect(machineReadout(step({}))).toEqual({ iconKey: 'gregtech:gt.blockmachines@121', tier: { name: 'LV', slug: 'lv' }, count: '×5', power: '16 EU/t', busy: 1, busyText: '100%', high: true });
+    expect(machineReadout(step({ count: 1, pool: { id: 'pool:a', steps: ['a', 'circuit-lv'] } })).count).toBe('×1 shared');
+    expect(machineReadout(step({ utilization: 0.625 }))).toMatchObject({ busy: 0.625, busyText: '63%', high: false });
+    expect(machineReadout(step({ utilization: 0.9 })).high).toBe(true); expect(machineReadout(step({ utilization: 1.4 })).busy).toBe(1);
+    expect(machineReadout(step({ euPerTick: 0 })).power).toBeNull();
+    expect(machineReadout(step({ handCraft: true, machine: { mteId: -1, name: 'Crafting table (by hand)', tier: 0 } }))).toMatchObject({ iconKey: null, tier: null, count: null, power: null });
+    expect(machineReadout(step({ machine: { mteId: -2, name: 'Furnace', tier: 0 }, euPerTick: 0 })))   // no voltage tier, so no chip (plan ruling pseudo-tier-chip)
+      .toMatchObject({ iconKey: 'minecraft:furnace@0', tier: null, count: '×5', power: null });
+    // the band never fills past its track or below nothing, and its words are the box's own (lines[0]'s "… · 140% busy")
+    expect(machineReadout(step({ utilization: 1.4 })).busyText).toBe('140%');
+    expect(machineReadout(step({ utilization: -0.2 })).busy).toBe(0); expect(machineReadout(step({ utilization: Number.NaN })).busy).toBe(0);
+  });
+  it('slugs a tier for its colour class, and an unknown one as unknown', () => {
+    expect([0, 1, 6, 14].map(tierSlug)).toEqual(['ulv', 'lv', 'luv', 'max']); expect(tierSlug(15)).toBe('unknown'); expect(tierSlug(-1)).toBe('unknown');
+    expect(tierSlug(1.5)).toBe('unknown');
+  });
+  it('starts a readout box\'s rows below its 46 px head and 16 px busy band', () => {
+    const box = nodeOf(flowGraph(plan, 'min'), 'circuit-lv');
+    expect(box.machine).toBeDefined(); expect(rowsTop(box)).toBe(46 + 16 + 16 * (box.lines.length - 1));
+    expect(rowsTop({ ...box, avoidBadge: { text: 'x', warnings: [] } })).toBe(46 + 16 + 16 * box.lines.length);
+    expect(rowsTop({ ...box, machine: undefined })).toBe(28 + 16 * box.lines.length);   // a stub, as today
+    expect(box.lines).toEqual(['LV · 16 EU/t · 5 machines · 100% busy']);                    // the words stay (:71)
+    expect([MACHINE_ICON, MACHINE_SLOT, STEP_HEAD_HEIGHT, BUSY_BAND, CHIP_HEIGHT, CHIP_PADDING]).toEqual([32, 36, 46, 16, 16, 5]);
+    // only a step has a readout: a stub, the target and a collapsed line keep their heads
+    const closed = flowGraph(red, 'hour', { collapsedLines: new Set([RED]) });
+    expect(closed.nodes.filter((n) => n.machine !== undefined).map((n) => n.id)).toEqual(['wire']);
+    expect(g.nodes.filter((n) => n.machine === undefined).map((n) => n.kind).sort()).toEqual(['import', 'import', 'import', 'missing', 'out', 'sink']);
+  });
+  it('draws a readout box\'s machine, chips and busy bar in its head', () => {
+    const html = renderToStaticMarkup(<svg><FlowNodeShape node={at0(nodeOf(flowGraph(plan, 'min'), 'circuit-lv'))} /></svg>);
+    expect(html).toContain('<g class="flow-machine" aria-hidden="true">'); expect(html).toContain('data-item-key="gregtech:gt.blockmachines@121"');
+    expect(html).toMatch(/<g class="flow-chip tier-lv" transform="translate\(52 25\)"><rect width="30" height="16"><\/rect><text x="15" y="12.5">LV<\/text><\/g>/);
+    expect(html).toContain('>×<tspan class="fig">5</tspan></text>'); expect(html).toContain('>16 EU/t</text>'); expect(html).toContain('<g class="flow-busy high">');   // a count's digits in VT323 (spec §25)
+    const node = at0(nodeOf(flowGraph(plan, 'min'), 'circuit-lv'));
+    expect(html).toContain(`<rect class="flow-busy-fill" x="8" y="51" width="${busyTrack(node)}" height="6">`);
+    expect(html.match(/<g class="([^"]*)" data-node-id/)?.[1]).toBe('flow-node step new'); expect(html).not.toMatch(/\b(hl|dim)\b/); expect(html).not.toContain('<circle');
+    // the slot and its 2 px bevel, the 32 px icon filling its own foreignObject inside it, the count chip 4 px after the tier's and the
+    // power 6 px after the count's; the band's track, and its words at the box's right edge
+    expect(html).toContain('<rect class="flow-machine-slot" x="8" y="6" width="36" height="36"></rect><path class="flow-slot-lo" d="M 8 6 H 44 V 8 H 10 V 42 H 8 Z"></path><path class="flow-slot-hi" d="M 44 6 V 42 H 8 V 40 H 42 V 6 Z"></path><foreignObject x="10" y="8" width="32" height="32"><span class="item-icon');
+    expect(html).toContain('<g class="flow-chip" transform="translate(86 25)"><rect width="30" height="16"></rect><text x="15" y="12.5">×<tspan class="fig">5</tspan></text></g><text class="flow-node-power" x="122" y="37">16 EU/t</text>');
+    expect(html).toContain(`<rect class="flow-busy-track" x="8" y="51" width="${busyTrack(node)}" height="6"></rect>`);
+    expect(html).toContain(`<text class="flow-busy-text" x="${node.width - 8}" y="57">100%</text>`);
+    // the title beside the slot, on its baseline; no 16 px head icon and no first line: the readout draws them
+    expect(html).toContain('<text class="flow-node-title" x="52" y="19">Basic Assembler</text>');
+    expect(html).not.toContain('class="flow-node-line"');
+    expect(html.match(/<foreignObject [^>]*>/g)).toEqual(['<foreignObject x="10" y="8" width="32" height="32">', expect.stringContaining('width="16" height="16"'), expect.stringContaining('width="16" height="16"')]);
+    // the words stay the box's name and tip
+    expect(html).toContain('aria-label="Basic Assembler, LV · 16 EU/t · 5 machines · 100% busy"');
+    expect(html).toContain('data-tip="Basic Assembler\nLV · 16 EU/t · 5 machines · 100% busy\ntakes Redstone 30/min\nmakes Basic Circuit 30/min"');
+  });
+  it('draws a pseudo machine\'s count chip first, and a hand step\'s "by hand" with no chip', () => {
+    const box = (s: PlanStep): string => renderToStaticMarkup(<svg><FlowNodeShape node={at0(nodeOf(flowGraph({ ...plan, steps: [s] } as Plan, 'min'), 'circuit-lv'))} /></svg>);
+    const furnace = box({ ...plan.steps[0]!, machine: { mteId: -2, name: 'Furnace', tier: 0 }, euPerTick: 0 });
+    expect(furnace).toContain('<g class="flow-chip" transform="translate(52 25)"><rect width="30" height="16"></rect><text x="15" y="12.5">×<tspan class="fig">5</tspan></text></g>');
+    expect(furnace).not.toContain('flow-chip tier-'); expect(furnace).toContain('data-item-key="minecraft:furnace@0"');
+    const hand = box({ ...plan.steps[0]!, handCraft: true, machine: { mteId: -1, name: 'Crafting table (by hand)', tier: 0 }, euPerTick: 0 });
+    expect(hand).toContain('<text class="flow-node-power" x="52" y="37">by hand</text>'); expect(hand).not.toContain('flow-chip');
+    expect(hand).toMatch(/<foreignObject x="10" y="8" width="32" height="32"><span class="item-icon[^>]*data-item-key="t:circuit@0"/);   // its slot shows its main output
+    expect(hand).toContain('<g class="flow-busy high">');                                                     // it keeps its band
+    // a hand step that makes nothing in particular has an empty slot
+    expect(box({ ...plan.steps[0]!, handCraft: true, mainOutput: undefined, machine: { mteId: -1, name: 'Crafting table (by hand)', tier: 0 } }))
+      .not.toContain('<foreignObject x="10" y="8"');
+  });
+  it('reads a farm step as the farm machine it needs, tier chip and all, and cuts its farm words below the band', () => {
+    // add-on 17: a Tree Growth Simulator's tier is its energy hatch's and a Crop Manager's its own, voltage tiers both, so plan ruling pseudo-tier-chip does not apply
+    const words = 'Tree Growth Simulator (LV): Rubber Sapling in the controller; Saw and Knife (Steel) in an input bus';
+    const tgs: PlanStep = { ...plan.steps[0]!, machine: { mteId: 15541, name: 'Tree Growth Simulator', tier: 1 }, count: 1, euPerTick: 30, utilization: 0.5,
+      farm: { kind: 'tgs', tier: 1, footprint: [7, 7, 7], text: words, sapling: 't:rubber_sapling@0', tools: ['gregtech:gt.metatool.01@10'] } };
+    expect(machineReadout(tgs)).toEqual({ iconKey: 'gregtech:gt.blockmachines@15541', tier: { name: 'LV', slug: 'lv' }, count: '×1', power: '30 EU/t', busy: 0.5, busyText: '50%', high: false });
+    // a Crop Manager draws a fraction of an EU/t: its recipe's EU/t × the 121 crop sticks it tends (farmOc)
+    expect(machineReadout({ ...tgs, machine: { mteId: 28001, name: 'Basic Crop Manager', tier: 1 }, euPerTick: (4.5235540375 / 5120) * 121 }))
+      .toMatchObject({ iconKey: 'gregtech:gt.blockmachines@28001', tier: { name: 'LV', slug: 'lv' }, count: '×1', power: '0.107 EU/t' });
+    const box = nodeOf(flowGraph({ ...plan, steps: [tgs] } as Plan, 'min'), 'circuit-lv');
+    expect(box.lines).toEqual(['LV · 30 EU/t · 1 machine · 50% busy', words]);   // the words keep the whole sentence
+    expect(box.width).toBe(330); expect(rowsTop(box)).toBe(46 + 16 + 16);
+    const html = renderToStaticMarkup(<svg><FlowNodeShape node={at0(box)} /></svg>);
+    expect(html).toContain('data-item-key="gregtech:gt.blockmachines@15541"'); expect(html).toContain('<g class="flow-chip tier-lv" transform="translate(52 25)">');
+    expect(html).toContain('<text class="flow-node-line" x="8" y="73">Tree Growth Simulator (LV): Rubber Sapling in the…</text>');
+    expect(html).not.toContain('t:rubber_sapling@0');                                                         // the slot never shows the sapling
+    expect(html).toContain(`data-tip="Tree Growth Simulator\nLV · 30 EU/t · 1 machine · 50% busy\n${words}\n`);   // the tip keeps them whole
+  });
+  it('sizes a readout box to its head, its chip row and its band, and puts a second line and the badge below the band', () => {
+    // the chip row of a UMV pool step: 52 + 40 (UMV) + 4 + 110 (×12 shared) + 6 + 62 (1,920 EU/t) + 8; the band alone needs 120
+    const pooled = step({ machine: { mteId: 121, name: 'Basic Assembler', tier: 12 }, count: 12, euPerTick: 1920, pool: { id: 'pool:a', steps: ['a', 'circuit-lv'] } });
+    expect(nodeOf(flowGraph({ ...plan, steps: [pooled] } as Plan, 'min'), 'circuit-lv').width).toBe(52 + 40 + 4 + 110 + 6 + 62 + 8);
+    expect(machineReadout(pooled)).toMatchObject({ tier: { name: 'UMV', slug: 'umv' }, count: '×12 shared', power: '1,920 EU/t' });
+    expect(8 + 60 + 6 + textWidth('>99.9%', TEXT_CHAR_WIDTH) + 8).toBe(120);
+    expect(busyTrack({ width: 190 })).toBe(130); expect(busyTrack({ width: 330 })).toBe(270);
+    // a long machine name sizes the head: 8 + 36 + 8 + its 13 px title + 8, up to the widest box
+    const named = (name: string): number => nodeOf(flowGraph({ ...plan, steps: [step({ machine: { mteId: 121, name, tier: 1 } })] } as Plan, 'min'), 'circuit-lv').width;
+    expect(named('Electric Blast Furnace Controller')).toBe(60 + textWidth('Electric Blast Furnace Controller', 7.4));
+    expect(named('Extremely Advanced Large Multiblock Assembling Machine')).toBe(330);
+    // an owned step's second line and the avoid badge, below the band
+    const text = 'Basic Assembler uses Redstone — no recipe at LV avoids it';
+    const owned = flowGraph({ ...plan, steps: [step({ owned: 2, inputs: plan.steps[0]!.inputs, outputs: plan.steps[0]!.outputs })],
+      warnings: [{ code: 'avoid-unavoidable', key: 't:redstone@0', stepId: 'circuit-lv', text }] } as Plan, 'min');
+    const box = nodeOf(owned, 'circuit-lv');
+    expect(box.lines).toEqual(['LV · 16 EU/t · 5 machines · 100% busy', '2 owned']);
+    const html = renderToStaticMarkup(<svg><FlowNodeShape node={at0(box)} /></svg>);
+    expect(html).toContain('<text class="flow-node-line" x="8" y="73">2 owned</text>');
+    expect(html).toContain('<g class="flow-avoid-badge" data-avoid-badge="" transform="translate(4 78)">');
+    expect(rowsTop(box)).toBe(46 + 16 + 16 + 16);
+    expect(html).toContain(`<rect class="flow-hit" width="${box.width}" height="${rowsTop(box)}"></rect>`);   // the head's hit area holds the band
+  });
+  it('makes every chip wide enough for its text in Pixelify and in its fallback, MAX in bold too (ledger ruling P2-R8)', () => {
+    expect(CHIP_CHAR_WIDTH).toBe(10);
+    expect(chipWidth('MAX')).toBe(40); expect(chipWidth('LV')).toBe(30); expect(chipWidth('×1 shared')).toBe(100);
+    // measured in Chromium at 13 px ($SCRATCH/p2/4/probe-chips.mjs): with the web fonts refused the tier labels are the fallback's
+    // (Helvetica here), wider than Pixelify's, MAX in bold; at 9 px a character MV, HV, UV, ZPM, UHV, UMV and MAX spilled into the padding
+    const FALLBACK: Record<string, number> = {
+      ULV: 24.34, LV: 14.95, MV: 19.5, HV: 18.06, EV: 17.34, IV: 12.3, LuV: 23.14, ZPM: 27.45, UV: 18.06, UHV: 27.45, UEV: 26.73, UIV: 21.67,
+      UMV: 28.89, UXV: 26.73, MAX: 28.89,
+    };
+    const PIXELIFY: Record<string, number> = {
+      ULV: 22.86, LV: 15.25, MV: 17.59, HV: 15.25, EV: 15.25, IV: 12.88, LuV: 22.61, ZPM: 25.22, UV: 15.25, UHV: 22.86, UEV: 22.86, UIV: 20.5,
+      UMV: 24.95, UXV: 22.61, MAX: 25.16,
+    };
+    for (const name of TIER_NAMES) {
+      expect(chipWidth(name) - 2 * CHIP_PADDING, name).toBeGreaterThanOrEqual(FALLBACK[name]!);
+      expect(chipWidth(name) - 2 * CHIP_PADDING, name).toBeGreaterThanOrEqual(PIXELIFY[name]!);
+    }
+    // a count's × in Pixelify and its digits in VT323 (the fallback: Menlo, size-adjusted), the wider of the two faces (spec §25)
+    for (const [count, widest] of [['×2', 14.52], ['×5', 14.52], ['×1 shared', 62.64], ['×128', 28.34], ['×1024', 35.25]] as const) {
+      expect(chipWidth(count) - 2 * CHIP_PADDING, count).toBeGreaterThanOrEqual(widest);
+    }
   });
 });

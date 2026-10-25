@@ -857,6 +857,40 @@ button.avoid-chip-remove { width: 24px; height: 24px; min-height: 0; padding: 0;
 /* A port is a pipe flange (FlowView's FLANGE_DEPTH by FLANGE_HEIGHT): a slot grey with a black edge, yellow when its row is lit. */
 .flow-port { fill: var(--flange); stroke: var(--outline); stroke-width: 1; }
 .flow-row.hl .flow-port { fill: var(--accent); }
+/*
+ * A step box's machine readout (Phase 2 spec §7.3): the machine in a slot with the inverted bevel of a Minecraft slot (two 2px strips,
+ * dark top and left, light bottom and right); its tier and machine count on dark chips in Pixelify 13px, the one diagram text that leaves
+ * the system font (a count's digits in VT323 through tspan.fig: spec §25), the tier's in its tier's ink, which each `.tier-<slug>` names
+ * (the recipe card's chips read it too), MAX's in bold, the count's white; its power in the box's quiet ink; and the busy band, a dark track
+ * filled in green, amber from 90%, its percentage at the right in the diagram's 11px, its figures in columns. No shadow: the box's is its own.
+ */
+.tier-ulv { --tier-ink: var(--tier-ulv); }
+.tier-lv { --tier-ink: var(--tier-lv); }
+.tier-mv { --tier-ink: var(--tier-mv); }
+.tier-hv { --tier-ink: var(--tier-hv); }
+.tier-ev { --tier-ink: var(--tier-ev); }
+.tier-iv { --tier-ink: var(--tier-iv); }
+.tier-luv { --tier-ink: var(--tier-luv); }
+.tier-zpm { --tier-ink: var(--tier-zpm); }
+.tier-uv { --tier-ink: var(--tier-uv); }
+.tier-uhv { --tier-ink: var(--tier-uhv); }
+.tier-uev { --tier-ink: var(--tier-uev); }
+.tier-uiv { --tier-ink: var(--tier-uiv); }
+.tier-umv { --tier-ink: var(--tier-umv); }
+.tier-uxv { --tier-ink: var(--tier-uxv); }
+.tier-max { --tier-ink: var(--tier-max); }
+.flow-machine-slot { fill: var(--slot); }
+.flow-slot-lo { fill: var(--slot-lo); }
+.flow-slot-hi { fill: var(--slot-hi); }
+.flow-chip rect { fill: var(--flow-chip); }
+/* (0,2,1): it beats `.flow-node text`, whose 11.5px is the diagram's; the shorthand resets the weight, so MAX's bold is a rule of its own */
+.flow-node .flow-chip text { fill: var(--tier-ink, var(--stack-ink)); font: 13px/1 var(--font-pixel); text-anchor: middle; }
+.flow-node .flow-chip.tier-max text { font-weight: 700; }
+.flow-node .flow-node-power { fill: var(--text-muted); font-size: 11px; }
+.flow-busy-track { fill: var(--flow-busy-track); }
+.flow-busy-fill { fill: var(--flow-busy); }
+.flow-busy.high .flow-busy-fill { fill: var(--flow-busy-high); }
+.flow-node .flow-busy-text { font-size: 11px; font-variant-numeric: tabular-nums; text-anchor: end; }
 .flow-stop-owned { stop-color: var(--flow-owned); }
 .flow-stop-new { stop-color: var(--flow-new); }
 /*
@@ -1562,4 +1596,9 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
   /* add-on 17: the open Compare card's button, and the mode the project plans in, whose yellow is gone in a contrast theme */
   .compare-toggle[aria-expanded='true'] { text-decoration: underline; }
   .compare-column.current { outline: 2px solid Highlight; outline-offset: -4px; }
+  /* Phase 2 Task 4: Chromium leaves an SVG paint as it is here, so a Flow box's busy fill would keep a green or an amber the theme does not
+     have: it takes the Highlight (the amber one's rule out-ranks the plain fill's, so it is named too); the busy track and the chips, dark
+     faces on whatever the theme puts round them, get an edge in its text colour */
+  .flow-busy-fill, .flow-busy.high .flow-busy-fill { fill: Highlight; }
+  .flow-busy-track, .flow-chip rect { stroke: CanvasText; }
 }

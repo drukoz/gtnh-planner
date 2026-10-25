@@ -1218,6 +1218,15 @@ const WELLS = PANEL_LISTS.join(', ');
 const ISSUE_RED = '.flow-row.issue-orphan-input .flow-row-text, .flow-row.issue-short-input .flow-row-text';
 const ISSUE_AMBER = '.flow-row.issue-multi-producer .flow-row-text, .flow-row.issue-bought-and-made .flow-row-text';
 const ISSUE_RED_RATE = '.flow-row.issue-orphan-input .flow-row-rate, .flow-row.issue-short-input .flow-row-rate';
+/** Phase 2 Task 4 (spec §7.3): each tier's ink class, which the Flow chips (and Task 5a's recipe card) read, ULV to MAX. */
+const TIER_SLUGS = ['ulv', 'lv', 'mv', 'hv', 'ev', 'iv', 'luv', 'zpm', 'uv', 'uhv', 'uev', 'uiv', 'umv', 'uxv', 'max'];
+const TIER_RULES = TIER_SLUGS.map((slug) => `.tier-${slug}`);
+const CHIP_TEXT = '.flow-node .flow-chip text';
+/** Phase 2 Task 4 (spec §7.3): a step box's machine readout, its slot, its two chips, its power and its busy band. */
+const READOUT_RULES = [
+  '.flow-machine-slot', '.flow-slot-lo', '.flow-slot-hi', '.flow-chip rect', CHIP_TEXT, '.flow-node .flow-chip.tier-max text', '.flow-node .flow-node-power',
+  '.flow-busy-track', '.flow-busy-fill', '.flow-busy.high .flow-busy-fill', '.flow-node .flow-busy-text',
+];
 /** The rules of this task that colour, edge or round something: none may read an alias of the old palette any more. */
 const FLOW_RULES = [
   '.flow-canvas', '.flow-node-box', '.flow-node.sink > .flow-node-box', '.flow-node-head[role=\'button\']:hover > .flow-hit',
@@ -1227,6 +1236,7 @@ const FLOW_RULES = [
   '.flow-line-toggle text', '.flow-edge-tag rect', '.flow-edge-tag text', '.flow-issues', '.flow-infeasible', '.flow-legend', '.swatch',
   '.swatch.free', '.swatch.sink', '.flow-panel', '.flow-panel-section', '.flow-panel-title', WELLS, '.flow-panel .warnings',
   '.swap-option.unusable, .option-choice.unusable', '.port-short .port-rate, .port-warn', '.option-slot', '.option-slot-title',
+  ...TIER_RULES, ...READOUT_RULES,                                                   // Phase 2 Task 4: the machine readout (spec §7.3)
 ];
 
 describe('the Machine GUI Flow diagram', () => {
@@ -2466,6 +2476,7 @@ const PHASE2_RULES: string[] = [
   OVERLAYS, '.brand-mark::after',                                                    // Task 2: logo C's overlays (spec §5.3)
   '.fig',                                                                            // Task 2b: a figure in pixel text (spec §25)
   '.nei-tooltip', '.nei-tooltip > :first-child', '.nei-tooltip-mod', ".nei-tooltip[data-state='closing']",   // Task 3a (spec §6.3)
+  ...TIER_RULES, ...READOUT_RULES,                                                   // Task 4: the Flow machine readout (spec §7.3)
 ];
 /** The colour literals a Phase 2 rule may write: each is the same in both looks (spec §4.4). */
 const SAME_IN_BOTH = ['#ffffff', '#000000', '#aaaaaa', '#100010', '#ffff55', 'rgb(0 0 0 / 0.4)'];
@@ -2580,5 +2591,49 @@ describe('the Machine GUI Phase 2: the shared NEI tooltip', () => {
     // an item icon's tip is this one, never a native title, and so is a diagram box's or arrow's, never an SVG title (spec §6.4)
     expect(read('components/ItemIcon.tsx')).not.toMatch(/\btitle=/);
     for (const file of ['views/FlowView.tsx', 'views/ConnectionsView.tsx']) expect(read(file), file).not.toMatch(/<title[\s>]/);
+  });
+});
+
+// The Flow machine readout (Phase 2 spec §7.3, Task 4): a step box's head draws its machine in a slot with the inverted bevel of a Minecraft
+// slot, its tier and its count on Pixelify chips (the tier's in its own ink, the count's white; a count's digits ride in Task 2b's tspan.fig,
+// plan ruling digits-mixed) and its power in the box's quiet ink, over a busy band whose fill turns amber from 90 %. In forced colours the
+// fill is the Highlight and the track and the chips get an edge in the text colour, each rule at the specificity of the rule it repaints.
+describe('the Machine GUI Phase 2: the Flow machine readout', () => {
+  it('draws a step\'s machine in a slot, its tier and count on Pixelify chips, and how busy it is', () => {
+    // each tier class names its tier's ink and nothing else
+    for (const slug of TIER_SLUGS) expect(declarations(ruleBody(`.tier-${slug}`)), slug).toEqual([['--tier-ink', `var(--tier-${slug})`]]);
+    expect(TIER_SLUGS.map((slug) => rootTokens().has(`--tier-${slug}`))).toEqual(TIER_SLUGS.map(() => true));
+    expectDeclared([
+      ['.flow-node .flow-chip.tier-max text', 'font-weight', '700'],
+      ['.flow-machine-slot', 'fill', 'var(--slot)'], ['.flow-slot-lo', 'fill', 'var(--slot-lo)'], ['.flow-slot-hi', 'fill', 'var(--slot-hi)'],
+      ['.flow-chip rect', 'fill', 'var(--flow-chip)'],
+      [CHIP_TEXT, 'fill', 'var(--tier-ink, var(--stack-ink))'], [CHIP_TEXT, 'font', '13px/1 var(--font-pixel)'], [CHIP_TEXT, 'text-anchor', 'middle'],
+      ['.flow-node .flow-node-power', 'fill', 'var(--text-muted)'], ['.flow-node .flow-node-power', 'font-size', '11px'],
+      ['.flow-busy-track', 'fill', 'var(--flow-busy-track)'], ['.flow-busy-fill', 'fill', 'var(--flow-busy)'],
+      ['.flow-busy.high .flow-busy-fill', 'fill', 'var(--flow-busy-high)'],
+      ['.flow-node .flow-busy-text', 'font-size', '11px'], ['.flow-node .flow-busy-text', 'font-variant-numeric', 'tabular-nums'],
+      ['.flow-node .flow-busy-text', 'text-anchor', 'end'],
+    ]);
+    // a count's digits ride in Task 2b's tspan.fig: no chip rule names the digits' face, and the chip text's font is all Pixelify
+    for (const selector of [...TIER_RULES, ...READOUT_RULES]) expect(ruleBody(selector).includes('--font-digits'), selector).toBe(false);
+    // the weight comes after the font shorthand of the chip text's rule, which resets it on the text itself: MAX's rule is its own
+    expect(declarations(ruleBody('.flow-node .flow-chip.tier-max text'))).toEqual([['font-weight', '700']]);
+    // the power and the band's words keep the diagram's font, which flow-model measures (6.2 px a character): only a size
+    for (const words of ['.flow-node .flow-node-power', '.flow-node .flow-busy-text']) {
+      expect(declared(words, 'font'), words).toBeUndefined(); expect(declared(words, 'font-family'), words).toBeUndefined();
+    }
+    // no shadow on a chip or a slot: among the Flow rules only the box has one (the case above)
+    for (const selector of READOUT_RULES) expect(ruleBody(selector), selector).not.toMatch(/shadow/);
+    // forced colours: the fills in the Highlight (the high one's own rule out-ranks a bare .flow-busy-fill, so the block names it too), the
+    // track and the chips an edge in the text colour, all after the rules they repaint
+    expect(inQuery(FORCED, '.flow-busy-fill, .flow-busy.high .flow-busy-fill')).toEqual([['fill', 'Highlight']]);
+    expect(inQuery(FORCED, '.flow-busy-track, .flow-chip rect')).toEqual([['stroke', 'CanvasText']]);
+    const { block } = forcedBlock();
+    for (const selector of ['.flow-busy-fill', '.flow-busy.high .flow-busy-fill', '.flow-busy-track', '.flow-chip rect']) {
+      expect(position(selector), selector).toBeGreaterThan(-1);
+      expect(position(selector), selector).toBeLessThan(blocks.indexOf(block));
+    }
+    // the readout's rules sit with the box's, after the flange's
+    for (const selector of [...TIER_RULES, ...READOUT_RULES]) expect(position(selector), selector).toBeGreaterThan(position('.flow-row.hl .flow-port'));
   });
 });

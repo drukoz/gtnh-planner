@@ -7,7 +7,8 @@
 import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { FlowDefs, FlowEdgeShape, FlowNodeShape } from '../../src/client/views/FlowView.tsx';
-import { rowCentre, type FlowLayout, type FocusSets } from '../../src/client/views/flow-model.ts';
+import { machineReadout, rowCentre, type FlowLayout, type FocusSets } from '../../src/client/views/flow-model.ts';
+import type { PlanStep } from '../../src/shared/types/plan.ts';
 
 type Edge = FlowLayout['edges'][number];
 
@@ -57,8 +58,8 @@ describe('flow diagram: pipes (design spec §7)', () => {
     expect(lit).toMatch(/class="[^"]*\bhl\b[^"]*"/);
     expect(lit).toContain('marker-end="url(#flow-arrow-hl)"');
     expect(classes(lit)).toEqual(['flow-edge item hl', 'flow-edge-hit', 'flow-edge-line', 'flow-edge-flow']);
-    // a lit missing arrow is lit first: its head turns yellow like every lit head
-    expect(draw(edge, true, true)).toContain('marker-end="url(#flow-arrow-hl)"');
+    // a lit missing arrow keeps its white head (ruling R41): yellow reads 2.95:1 on its red casing
+    expect(draw(edge, true, true)).toContain('marker-end="url(#flow-arrow-missing)"');
     const dimmed = draw(edge, false);
     expect(classes(dimmed)).toEqual(['flow-edge item dim', 'flow-edge-hit', 'flow-edge-line', 'flow-edge-flow']);
     expect(dimmed).toContain('marker-end="url(#flow-arrow)"');
@@ -108,6 +109,27 @@ describe('flow diagram: flanges (design spec §7 "Connected")', () => {
     expect(html.match(/<g class="([^"]*)" data-node-id/)?.[1]).toBe('flow-node step new');
     expect(html).not.toMatch(/\b(hl|dim)\b/);
     expect(html).not.toContain('<circle');
+  });
+
+  // Phase 2 spec §7.6 (Task 4): the same box with its machine readout, whose head (46 px) and busy band (16 px) push the rows down 18 px;
+  // each flange still sits on its row's centre line, as ELK's port does (both read rowCentre), and the box keeps the pins above
+  it('ends each row on its flange under a machine readout too, the rows below the head and the busy band', () => {
+    const wiremill: PlanStep = {
+      id: 'mill', recipeId: 'mill', mapId: 'gt.recipe.wiremill', machine: { mteId: 111, name: 'Wiremill', tier: 1 }, count: 1, owned: 0, runsPerSecond: 1,
+      utilization: 0.5, euPerTick: 32, durationTicks: 100, overclocks: 0, inputs: [], outputs: [], alternatives: [], handCraft: false, warnings: [],
+    };
+    const readout = { ...node, machine: machineReadout(wiremill) };
+    expect(rowCentre(readout, 1)).toBe(rowCentre(node, 1) + 18);
+    const html = renderToStaticMarkup(<svg><FlowNodeShape node={readout} /></svg>);
+    expect(html).toContain(`<rect class="flow-port" x="198" y="${rowCentre(readout, 1) - 5}" width="4" height="10"`);
+    expect(html).toContain(`<rect class="flow-port" x="-2" y="${rowCentre(readout, 0) - 5}" width="4" height="10"`);
+    expect(html.match(/<rect class="flow-port" x="[-\d.]+" y="[-\d.]+" width="4" height="10"><\/rect><\/g>/g)).toHaveLength(2);
+    expect(html.match(/<g class="([^"]*)" data-node-id/)?.[1]).toBe('flow-node step new');
+    expect(html).not.toMatch(/\b(hl|dim)\b/);
+    expect(html).not.toContain('<circle');
+    // the machine's icon shows no tip of its own either: the box's tells it
+    expect(html).not.toMatch(/<span class="item-icon[^"]*"[^>]*data-tip=/);
+    expect(html).toContain('data-item-key="gregtech:gt.blockmachines@111"');
   });
 
   it('lights a row on its group under a focus, never on its flange', () => {

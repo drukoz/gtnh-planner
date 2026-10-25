@@ -1,7 +1,8 @@
 // The flow diagram (spec §3.9, fix spec §6.2): base materials on the left, the target on the right, one box per recipe
-// step (machine; tier, EU/t, machines, how busy) listing the goods it takes and makes as rows, an import stub beside each
-// step that takes a bought good, a red stub where nothing supplies an input, and supporting lines as groups that
-// collapse. Green boxes are machines the group owns, grey ones are new; a warning badge marks a step that uses a material
+// step (its machine as a readout, Phase 2 spec §7: the machine's icon, its tier and count chips, its power and a band of
+// how busy it is) listing the goods it takes and makes as rows, an import stub beside each step that takes a bought good,
+// a red stub where nothing supplies an input, and supporting lines as groups that collapse. Green boxes are machines the
+// group owns, grey ones are new; a warning badge marks a step that uses a material
 // on the avoid list as nothing at the tier avoids it (spec §3.3). Each arrow is a pipe whose contents move from the output
 // toward the input, ending on the flange of its port (design spec §7); Pause pipes stops them (ruling R31). Hovering a row,
 // a box or an arrow lights what it connects (the flow focus); a click pins it, and a click on a box also opens its panel;
@@ -16,6 +17,7 @@ import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import type { PlanIndex } from '../../shared/plan/balance.ts';
 import type { Plan, PlanSettings } from '../../shared/types/plan.ts';
 import { messageOf } from '../api/client.ts';
+import { Figs } from '../components/Figs.tsx';
 import { ItemIcon } from '../components/ItemIcon.tsx';
 import { PipesButton } from '../components/PipesButton.tsx';
 import { tipText } from '../components/tooltip-model.ts';
@@ -25,10 +27,12 @@ import {
 import { usePipesPaused } from '../state/pipes-paused.ts';
 import { layoutFlow } from '../workers/elk.worker.ts';
 import {
-  ICON_SPACE, NODE_LINE_HEIGHT, NODE_TITLE_HEIGHT, PORT_SIZE, ROW_HEIGHT, TEXT_CHAR_WIDTH, TEXT_LEFT, TITLE_CHAR_WIDTH, TOGGLE_SPACE,
-  centreOn, clipText, collapsedLines, edgeTag, findableGoods, flowGraph, flowIssueLines, focusAnchor, focusSets, fromElk, lineNodeId,
-  problemId, rowCentre, rowHasIcon, rowNameRoom, rowRate, rowsTop, toElk, useOnlyPatch,
-  type FlowLayout, type FlowNode, type FlowRow, type FocusSets,
+  BUSY_BAND, BUSY_TRACK_HEIGHT, BUSY_TRACK_TOP, CHIP_GAP, CHIP_HEIGHT, HAND_WORDS, ICON_SPACE, MACHINE_ICON, MACHINE_SLOT, NODE_LINE_HEIGHT,
+  NODE_TITLE_HEIGHT, PORT_SIZE, POWER_GAP, READOUT_LEFT, ROW_HEIGHT, SLOT_TOP, STEP_HEAD_HEIGHT, TEXT_CHAR_WIDTH, TEXT_LEFT, TITLE_CHAR_WIDTH,
+  TOGGLE_SPACE,
+  busyTrack, centreOn, chipWidth, clipText, collapsedLines, edgeTag, findableGoods, flowGraph, flowIssueLines, focusAnchor, focusSets, fromElk,
+  lineNodeId, problemId, rowCentre, rowHasIcon, rowNameRoom, rowRate, rowsTop, toElk, useOnlyPatch,
+  type FlowLayout, type FlowNode, type FlowRow, type FocusSets, type MachineReadout,
 } from './flow-model.ts';
 import { pointIn } from './pan-zoom.ts';
 import { pipeAnimationMode, pipeSeconds } from './pipe-motion.ts';
@@ -69,6 +73,18 @@ const FLANGE_HEIGHT = 10;
 /** The open/collapse button of a supporting line, and its room from the top right corner of its box. */
 const TOGGLE_SIZE = 20;
 const TOGGLE_MARGIN = 8;
+/** A box's title baseline. */
+const TITLE_BASELINE = 19;
+/** A machine readout's chip row (Phase 2 spec §7.3): its top, its chips' baseline, and the power's baseline beside them. */
+const CHIP_TOP = 25;
+const CHIP_BASELINE = 12.5;
+const POWER_BASELINE = 37;
+/** The slot's inverted bevel, 2 px strips over its face: the dark top and left, then the light bottom and right (a Minecraft slot's). */
+const BEVEL = 2;
+const SLOT_RIGHT = TEXT_LEFT + MACHINE_SLOT;
+const SLOT_BOTTOM = SLOT_TOP + MACHINE_SLOT;
+const SLOT_LO = `M ${TEXT_LEFT} ${SLOT_TOP} H ${SLOT_RIGHT} V ${SLOT_TOP + BEVEL} H ${TEXT_LEFT + BEVEL} V ${SLOT_BOTTOM} H ${TEXT_LEFT} Z`;
+const SLOT_HI = `M ${SLOT_RIGHT} ${SLOT_TOP} V ${SLOT_BOTTOM} H ${TEXT_LEFT} V ${SLOT_BOTTOM - BEVEL} H ${SLOT_RIGHT - BEVEL} V ${SLOT_TOP} Z`;
 
 const OWNED_CLASS: Record<FlowNode['owned'], string> = { all: 'owned', some: 'partly-owned', none: 'new' };
 
@@ -183,12 +199,66 @@ function FlowRowShape(props: { node: PlacedNode; row: FlowRow; index: number; se
 }
 
 /**
+ * A step box's machine readout (Phase 2 spec §7.3), in its head: the machine's 32 px icon (a hand step's main output; none without either)
+ * in a 36 px slot with the inverted bevel of a Minecraft slot; the tier chip in its tier's ink (none by hand or on a crafting table or a
+ * furnace: plan ruling pseudo-tier-chip) and the count chip, each 4 px after the one before, their figures in VT323 (`Figs`, plan ruling
+ * digits-mixed); the power 6 px after the last chip, or "by hand" in their place; and under the head the busy band, its track filled to how
+ * busy the machines are (`high`, amber, from 90 %) and its percentage at the box's right edge. It only draws: the box's first line says it
+ * all in words, the head's name and the box's tip, so it is aria-hidden and its icon shows no tip of its own.
+ */
+function MachineReadoutShape(props: { node: PlacedNode; machine: MachineReadout }): ReactElement {
+  const { node, machine } = props;
+  const icon = machine.iconKey ?? node.key;
+  const chips: Array<{ part: string; className: string; text: string }> = [];
+  if (machine.tier !== null) chips.push({ part: 'tier', className: `flow-chip tier-${machine.tier.slug}`, text: machine.tier.name });
+  if (machine.count !== null) chips.push({ part: 'count', className: 'flow-chip', text: machine.count });
+  let next = READOUT_LEFT;
+  const drawn = chips.map((chip) => {
+    const width = chipWidth(chip.text);
+    const x = next;
+    next += width + CHIP_GAP;
+    return (
+      <g key={chip.part} className={chip.className} transform={`translate(${x} ${CHIP_TOP})`}>
+        <rect width={width} height={CHIP_HEIGHT} />
+        <text x={width / 2} y={CHIP_BASELINE}><Figs text={chip.text} svg /></text>
+      </g>
+    );
+  });
+  // only a hand step has no count: it has no machine, and its chip row says so
+  const power = machine.count === null ? HAND_WORDS : machine.power;
+  const powerX = chips.length === 0 ? READOUT_LEFT : next - CHIP_GAP + POWER_GAP;
+  const track = busyTrack(node);
+  const trackY = STEP_HEAD_HEIGHT + BUSY_TRACK_TOP;
+  return (
+    <g className="flow-machine" aria-hidden="true">
+      <rect className="flow-machine-slot" x={TEXT_LEFT} y={SLOT_TOP} width={MACHINE_SLOT} height={MACHINE_SLOT} />
+      <path className="flow-slot-lo" d={SLOT_LO} />
+      <path className="flow-slot-hi" d={SLOT_HI} />
+      {icon !== null && (
+        <foreignObject x={TEXT_LEFT + BEVEL} y={SLOT_TOP + BEVEL} width={MACHINE_ICON} height={MACHINE_ICON}>
+          <ItemIcon itemKey={icon} size={MACHINE_ICON} name={machine.iconKey === null ? node.keyName : node.title} tip={false} />
+        </foreignObject>
+      )}
+      {drawn}
+      {power !== null && <text className="flow-node-power" x={powerX} y={POWER_BASELINE}>{power}</text>}
+      <g className={machine.high ? 'flow-busy high' : 'flow-busy'}>
+        <rect className="flow-busy-track" x={TEXT_LEFT} y={trackY} width={track} height={BUSY_TRACK_HEIGHT} />
+        <rect className="flow-busy-fill" x={TEXT_LEFT} y={trackY} width={track * machine.busy} height={BUSY_TRACK_HEIGHT} />
+        <text className="flow-busy-text" x={node.width - TEXT_LEFT} y={trackY + BUSY_TRACK_HEIGHT}>{machine.busyText}</text>
+      </g>
+    </g>
+  );
+}
+
+/**
  * One box: `data-node-id` and `data-kind` on a group (and `data-step-id` on a step's only, ruling P17) holding the box,
  * a head with its item icon, title and lines (a button on a step or an import stub, whose click opens its panel), the
- * badge of avoided goods it uses (`data-avoid-badge`, whose warnings join its tooltip), and a row per good. Its words,
- * one a line (its title, its lines, those warnings and its rows'), are its tooltip and its accessible name (`data-tip`
- * and `aria-label`, Phase 2 spec §6.4), which a focused head or row shows at itself. Under a focus it is lit (`hl`, and
- * `producer` or `consumer`) or dimmed (`dim`).
+ * badge of avoided goods it uses (`data-avoid-badge`, whose warnings join its tooltip), and a row per good. A step's head
+ * is its machine readout (`MachineReadoutShape`, Phase 2 spec §7) beside its title, which draws its first line; its other
+ * lines follow under the busy band, each cut with "…" at the box's edge. Its words, one a line (its title, its lines,
+ * those warnings and its rows'), are its tooltip and its accessible name (`data-tip` and `aria-label`, Phase 2 spec
+ * §6.4), which a focused head or row shows at itself. Under a focus it is lit (`hl`, and `producer` or `consumer`) or
+ * dimmed (`dim`).
  */
 export function FlowNodeShape(props: { node: PlacedNode; selected?: boolean; sets?: FocusSets | null }): ReactElement {
   const { node, selected = false } = props;
@@ -202,11 +272,16 @@ export function FlowNodeShape(props: { node: PlacedNode; selected?: boolean; set
     if (sets.consumers.has(node.id)) classes.push('consumer');
   }
   if (selected) classes.push('selected');
-  const icon = node.key;
+  const { machine } = node;
+  // a readout draws the machine's icon in its slot, so the head's 16 px icon of the main output is not drawn
+  const icon = machine === undefined ? node.key : null;
   const badge = node.avoidBadge;
   const head = rowsTop(node);
   const toggle = node.kind === 'line' ? TOGGLE_SPACE : 0;
-  const titleX = TEXT_LEFT + (icon !== null ? ICON_SPACE : 0);
+  const titleX = machine !== undefined ? READOUT_LEFT : TEXT_LEFT + (icon !== null ? ICON_SPACE : 0);
+  // the lines drawn below the title, or below a readout's band, whose chips and band say the first one
+  const linesTop = machine === undefined ? NODE_TITLE_HEIGHT : STEP_HEAD_HEIGHT + BUSY_BAND;
+  const shown = machine === undefined ? node.lines : node.lines.slice(1);
   const described = [node.title, ...node.lines, ...(badge?.warnings ?? [])];
   const tip = tipText([...described, ...node.rows.map((r) => rowWords(node, r))]);
   const opens = node.kind === 'step' || node.kind === 'import';
@@ -230,12 +305,15 @@ export function FlowNodeShape(props: { node: PlacedNode; selected?: boolean; set
         )}
         {/* A nested svg clips text that is wider than the box; the full text is in the box's tooltip and accessible name. */}
         <svg width={node.width - toggle} height={head}>
-          <text className="flow-node-title" x={titleX} y={19}>{clipText(node.title, node.width - toggle - titleX - TEXT_LEFT, TITLE_CHAR_WIDTH)}</text>
-          {node.lines.map((line, i) => (
-            <text key={`${i}:${line}`} className="flow-node-line" x={TEXT_LEFT} y={NODE_TITLE_HEIGHT + NODE_LINE_HEIGHT * i + 11}>{line}</text>
+          {machine !== undefined && <MachineReadoutShape node={node} machine={machine} />}
+          <text className="flow-node-title" x={titleX} y={TITLE_BASELINE}>{clipText(node.title, node.width - toggle - titleX - TEXT_LEFT, TITLE_CHAR_WIDTH)}</text>
+          {shown.map((line, i) => (
+            <text key={`${i}:${line}`} className="flow-node-line" x={TEXT_LEFT} y={linesTop + NODE_LINE_HEIGHT * i + 11}>
+              {machine === undefined ? line : clipText(line, node.width - 2 * TEXT_LEFT, TEXT_CHAR_WIDTH)}
+            </text>
           ))}
           {badge !== undefined && (
-            <g className="flow-avoid-badge" data-avoid-badge="" transform={`translate(${BADGE_LEFT} ${NODE_TITLE_HEIGHT + NODE_LINE_HEIGHT * node.lines.length})`}>
+            <g className="flow-avoid-badge" data-avoid-badge="" transform={`translate(${BADGE_LEFT} ${linesTop + NODE_LINE_HEIGHT * shown.length})`}>
               <rect width={node.width - 2 * BADGE_LEFT} height={NODE_LINE_HEIGHT - 2} />
               <text x={TEXT_LEFT - BADGE_LEFT} y={11}>{badge.text}</text>
             </g>
@@ -252,11 +330,12 @@ export function FlowNodeShape(props: { node: PlacedNode; selected?: boolean; set
 
 /**
  * One arrow, drawn as a pipe (design spec §7): a 10 px transparent path to hover and click, the casing with its head (a
- * red casing with a white head from a stub of what is missing, ruling R34), the good moving inside it from the output
- * toward the input (`fluid` or `item`, at the speed of its rate: `--pipe-dur` from `pipeSeconds`; nothing moves from a
- * missing source), its accessible name "name · rate · From → To" and its tooltip, which says those three a line each
- * (Phase 2 spec §6.4, P2-D36), and the rate as its label where a port has other arrows. Under a focus the group alone is
- * lit (`hl`) or dimmed (`dim`). A lit arrow writes "name · rate" in its tag above the boxes instead (`EdgeTagShape`).
+ * red casing with a white head from a stub of what is missing, ruling R34, which stays white when the arrow is lit:
+ * the lit yellow reads 2.95:1 on that red, ruling R41), the good moving inside it from the output toward the input
+ * (`fluid` or `item`, at the speed of its rate: `--pipe-dur` from `pipeSeconds`; nothing moves from a missing source),
+ * its accessible name "name · rate · From → To" and its tooltip, which says those three a line each (Phase 2 spec §6.4,
+ * P2-D36), and the rate as its label where a port has other arrows. Under a focus the group alone is lit (`hl`) or
+ * dimmed (`dim`). A lit arrow writes "name · rate" in its tag above the boxes instead (`EdgeTagShape`).
  */
 export function FlowEdgeShape(props: { edge: PlacedEdge; lit: boolean | null; missing: boolean }): ReactElement | null {
   const { edge, lit, missing } = props;
@@ -266,7 +345,7 @@ export function FlowEdgeShape(props: { edge: PlacedEdge; lit: boolean | null; mi
   const classes = ['flow-edge', fluid ? 'fluid' : 'item'];
   if (missing) classes.push('missing');
   if (lit !== null) classes.push(lit ? 'hl' : 'dim');
-  const arrow = lit === true ? 'flow-arrow-hl' : missing ? 'flow-arrow-missing' : fluid ? 'flow-arrow-fluid' : 'flow-arrow';
+  const arrow = missing ? 'flow-arrow-missing' : lit === true ? 'flow-arrow-hl' : fluid ? 'flow-arrow-fluid' : 'flow-arrow';
   return (
     <g
       className={classes.join(' ')} data-edge-id={edge.id} data-key={edge.key}

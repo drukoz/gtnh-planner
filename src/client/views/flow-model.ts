@@ -1,8 +1,9 @@
 // What the flow diagram shows (spec §3.9, fix spec §6.2), as pure functions: the boxes and arrows of a plan — a box per
-// step listing the goods it takes and makes as rows (each row an ELK port, so an arrow leaves the row of its good), an
-// import stub beside each step that takes a bought good, a red stub where nothing supplies an input, a stub for each
-// good left over, the target, and supporting lines drawn open around their steps or collapsed into one box (a step that
-// cannot avoid a material on the avoid list badged, spec §3.3) — the ELK graph that lays them out (web-stack §7) and the
+// step listing the goods it takes and makes as rows (each row an ELK port, so an arrow leaves the row of its good), its
+// head a machine readout (Phase 2 spec §7: the machine, its tier and count, its power, how busy), an import stub beside
+// each step that takes a bought good, a red stub where nothing supplies an input, a stub for each good left over, the
+// target, and supporting lines drawn open around their steps or collapsed into one box (a step that cannot avoid a
+// material on the avoid list badged, spec §3.3) — the ELK graph that lays them out (web-stack §7) and the
 // laid-out picture read back from it, what a focus lights (an item, a box or an arrow), what does not add up, the rate
 // and overclock texts (the shared formatter of fix spec §6.1), the word for each kind of import, and the settings
 // patches the panels send (fix spec §6.3), each with the whole new value of one setting. Base materials sit on the left
@@ -10,7 +11,7 @@
 
 import type { ElkExtendedEdge, ElkNode, ElkPort } from 'elkjs/lib/elk-api.js';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
-import { TIER_NAMES, V } from '../../shared/gt/tiers.ts';
+import { PSEUDO_IDS, PSEUDO_MACHINES, TIER_NAMES, V } from '../../shared/gt/tiers.ts';
 import { joinNames } from '../../shared/layout/format.ts';
 import { indexPlan, issueText, type PlanIndex, type PlanIssue, type PlanIssueCode } from '../../shared/plan/balance.ts';
 import { settingsHash } from '../../shared/project/settings-hash.ts';
@@ -55,6 +56,20 @@ export interface FlowNode {
   leaf?: LeafClass;
   /** The open supporting line (`line:<key>`, a `FlowGroup`) whose box holds this one. */
   group?: string;
+  // optional addition (Phase 2 spec §7.2)
+  /** A step box's machine readout, which its head draws in place of `lines[0]` (every step has one; no stub or line does). */
+  machine?: MachineReadout;
+}
+
+/**
+ * A step box's machine readout (Phase 2 spec §7): what the head draws in place of `lines[0]`, which stays as its words. The machine's icon
+ * (`gregtech:gt.blockmachines@<mteId>`, the crafting table's or the furnace's for a pseudo machine, none by hand); its voltage tier (none by
+ * hand or on a pseudo machine, plan ruling pseudo-tier-chip); its machines, "×5" or "×1 shared" for a pool's (none by hand, so `count` is
+ * null for a hand step only); its power (none by hand or at 0 EU/t); how busy, between 0 and 1, in the box's words, and from 90 % `high`.
+ */
+export interface MachineReadout {
+  iconKey: StuffKey | null; tier: { name: string; slug: string } | null; count: string | null; power: string | null;
+  busy: number; busyText: string; high: boolean;
 }
 
 /**
@@ -143,6 +158,39 @@ const LABEL_HEIGHT = 14;
  * outer face, `PORT_SIZE` outside the box (where FlowView's flange has its outer face too).
  */
 export const PORT_SIZE = 2;
+/**
+ * A step box's machine readout (Phase 2 spec §7.2): a 46 px head holding the machine's 32 px icon in a 36 px slot at (8, 6), the title beside
+ * it and a row of 16 px chips (the tier's, then the count's) and the power; under it a 16 px busy band, a 6 px track 5 px down it, the
+ * percentage at its right end. A chip is its text at `CHIP_CHAR_WIDTH` a character with `CHIP_PADDING` each side: 10 px a character, not
+ * spec §7.2's 9, holds every tier label in the fallback face as well as in Pixelify 13 px (ledger ruling P2-R8: with the web fonts refused,
+ * MV is 19.5 px and a bold MAX 28.9 px), and a count's VT323 digits either way (spec §25).
+ */
+export const MACHINE_ICON = 32;
+export const MACHINE_SLOT = 36;
+export const STEP_HEAD_HEIGHT = 46;
+export const BUSY_BAND = 16;
+export const CHIP_HEIGHT = 16;
+export const CHIP_PADDING = 5;
+export const CHIP_CHAR_WIDTH = 10;
+/** The slot's top; the readout's title, chips and power start right of the slot: 8 + 36 + 8. */
+export const SLOT_TOP = 6;
+export const READOUT_LEFT = TEXT_LEFT + MACHINE_SLOT + TEXT_LEFT;
+/** Between two chips; between the last chip and the power, which needs 2 px more. */
+export const CHIP_GAP = 4;
+export const POWER_GAP = 6;
+/** The busy band's track: its height and its top in the band; it is at least this long, with this gap before the band's percentage. */
+export const BUSY_TRACK_HEIGHT = 6;
+export const BUSY_TRACK_TOP = 5;
+const BUSY_TRACK_MIN = 60;
+const BUSY_GAP = 6;
+/** The room the band leaves for its percentage: the widest share `formatPercent` writes below a whole 100 % (`121%` is narrower). */
+const WIDEST_BUSY = '>99.9%';
+/** What a hand step's chip row says in place of its tier, its machines and its power. */
+export const HAND_WORDS = 'by hand';
+/** From this share up the busy band's fill is the amber of a machine that is nearly always busy. */
+const HIGH_BUSY = 0.9;
+/** The block every GT machine item belongs to: its meta is the machine's MTE id (the server's resolver, `assets/resolve.ts`). */
+const GT_MACHINE_BLOCK = 'gregtech:gt.blockmachines';
 /** Room around the boxes of an open supporting line; its title sits in the top band. */
 const GROUP_PADDING = '[top=36,left=12,bottom=12,right=12]';
 
@@ -172,6 +220,68 @@ function trimZeros(text: string): string {
 /** A tier's name; a tier outside 0..14 shows as its number instead of breaking the diagram. */
 export function tierText(t: number): string {
   return TIER_NAMES[t] ?? `tier ${t}`;
+}
+
+/** A tier's colour class name, `ulv` … `max` (`.tier-<slug>`, which the recipe card's chips share); `unknown` outside 0..14. */
+export function tierSlug(t: number): string {
+  return TIER_NAMES[t]?.toLowerCase() ?? 'unknown';
+}
+
+/**
+ * The item a machine is drawn as (Phase 2 spec §7.2): a GT machine's item, whose meta is its MTE id; the crafting table's and the vanilla
+ * furnace's for those pseudo machines, the keys the server gives them (`PSEUDO_MACHINE_ENTRIES`, server/pack/machines.ts: a unit test
+ * compares them); none by hand.
+ */
+export function machineIconKey(machine: PlanStep['machine'], handCraft: boolean): StuffKey | null {
+  if (handCraft) return null;
+  if (machine.mteId === PSEUDO_MACHINES.CRAFTING_TABLE) return 'minecraft:crafting_table@0';
+  if (machine.mteId === PSEUDO_MACHINES.FURNACE) return 'minecraft:furnace@0';
+  return Number.isSafeInteger(machine.mteId) && machine.mteId >= 0 ? `${GT_MACHINE_BLOCK}@${machine.mteId}` : null;
+}
+
+/**
+ * What a step box's head shows of its machine (Phase 2 spec §7.2, `MachineReadout`). Add-on 17's farm steps are machine steps (plan ruling
+ * farm-step-readout): a Tree Growth Simulator's tier is its energy hatch's and a Crop Manager's its own, so they have their chip; a Crop
+ * Manager's fraction of an EU/t reads as `formatNumber` writes it ("0.107 EU/t"). How busy reads as the box's words do (`lines[0]`), and
+ * the band holds between empty and full.
+ */
+export function machineReadout(step: PlanStep): MachineReadout {
+  const hand = step.handCraft;
+  const voltage = !hand && !PSEUDO_IDS.has(step.machine.mteId);
+  return {
+    iconKey: machineIconKey(step.machine, hand),
+    tier: voltage ? { name: tierText(step.machine.tier), slug: tierSlug(step.machine.tier) } : null,
+    count: hand ? null : `×${step.count}${step.pool === undefined ? '' : ' shared'}`,
+    power: hand || step.euPerTick === 0 ? null : `${formatNumber(step.euPerTick)} EU/t`,
+    busy: Number.isNaN(step.utilization) ? 0 : Math.min(1, Math.max(0, step.utilization)),
+    busyText: formatPercent(step.utilization),
+    high: step.utilization >= HIGH_BUSY,
+  };
+}
+
+/** A chip's width (Phase 2 spec §7.2): its text at `CHIP_CHAR_WIDTH` a character and `CHIP_PADDING` each side. */
+export function chipWidth(text: string): number {
+  return text.length * CHIP_CHAR_WIDTH + 2 * CHIP_PADDING;
+}
+
+/** How long a readout box's busy track is: its width but the sides, the gap and the widest percentage at its end. */
+export function busyTrack(node: Pick<FlowNode, 'width'>): number {
+  return node.width - 2 * TEXT_LEFT - BUSY_GAP - textWidth(WIDEST_BUSY, TEXT_CHAR_WIDTH);
+}
+
+/**
+ * How wide a box with a machine readout must be for its head (the slot, the 13 px title), its chip row (each chip and the gap after it, the
+ * power 2 px further, or "by hand") and its busy band (the shortest track, the gap and the widest percentage), each with its margins.
+ */
+function readoutWidths(title: string, machine: MachineReadout): number[] {
+  let chipRow = READOUT_LEFT;
+  for (const chip of [machine.tier?.name, machine.count]) if (chip !== undefined && chip !== null) chipRow += chipWidth(chip) + CHIP_GAP;
+  if (machine.count === null) chipRow += textWidth(HAND_WORDS, TEXT_CHAR_WIDTH);
+  else if (machine.power !== null) chipRow += POWER_GAP - CHIP_GAP + textWidth(machine.power, TEXT_CHAR_WIDTH);
+  return [
+    READOUT_LEFT + textWidth(title, TITLE_CHAR_WIDTH) + TEXT_LEFT, chipRow + TEXT_LEFT,
+    TEXT_LEFT + BUSY_TRACK_MIN + BUSY_GAP + textWidth(WIDEST_BUSY, TEXT_CHAR_WIDTH) + TEXT_LEFT,
+  ];
 }
 
 /** A rate of a good in the project's unit, in litres for a fluid. */
@@ -251,13 +361,19 @@ function unavoidableByStep(plan: Plan): Map<string, PlanWarning[]> {
   return byStep;
 }
 
-/** Where a box's rows start: below its title, its lines and its avoid badge. */
-export function rowsTop(node: Pick<FlowNode, 'lines' | 'avoidBadge'>): number {
-  return NODE_TITLE_HEIGHT + NODE_LINE_HEIGHT * (node.lines.length + (node.avoidBadge === undefined ? 0 : 1));
+/**
+ * Where a box's rows start: below its title, its lines and its avoid badge; a step box's below its machine readout's head and busy band,
+ * which draw its first line, then its other lines and its badge (Phase 2 spec §7.2). The ELK ports, the drawn rows and `fromElk`'s fallback
+ * all read it, so they move together.
+ */
+export function rowsTop(node: Pick<FlowNode, 'lines' | 'avoidBadge' | 'machine'>): number {
+  const badge = node.avoidBadge === undefined ? 0 : 1;
+  if (node.machine === undefined) return NODE_TITLE_HEIGHT + NODE_LINE_HEIGHT * (node.lines.length + badge);
+  return STEP_HEAD_HEIGHT + BUSY_BAND + NODE_LINE_HEIGHT * (Math.max(0, node.lines.length - 1) + badge);   // lines[0] is the readout
 }
 
 /** The middle of a box's `i`-th row, from the box's top: where that row's port sits. */
-export function rowCentre(node: Pick<FlowNode, 'lines' | 'avoidBadge'>, i: number): number {
+export function rowCentre(node: Pick<FlowNode, 'lines' | 'avoidBadge' | 'machine'>, i: number): number {
   return rowsTop(node) + ROW_HEIGHT * i + ROW_HEIGHT / 2;
 }
 
@@ -287,13 +403,19 @@ export function clipText(text: string, width: number, charWidth: number): string
   return `${text.slice(0, Math.max(1, Math.floor(width / charWidth) - 1)).trimEnd()}…`;
 }
 
-/** A box sized to its text (fix spec §6.2): as wide as its widest text, within 190–330 px, as tall as its rows need. */
+/**
+ * A box sized to its text (fix spec §6.2): as wide as its widest text, within 190–330 px, as tall as its rows need. A step box's head is its
+ * machine readout, which draws its first line (Phase 2 spec §7.2): its head, chip row and busy band count instead of its title and that line.
+ */
 function sized(node: Omit<FlowNode, 'width' | 'height'>): FlowNode {
   const icon = node.key !== null ? ICON_SPACE : 0;
   const rowIcon = rowHasIcon(node) ? ICON_SPACE : 0;
+  const { machine } = node;
   const widths = [
-    2 * TEXT_LEFT + icon + (node.kind === 'line' ? TOGGLE_SPACE : 0) + textWidth(node.title, TITLE_CHAR_WIDTH),
-    ...node.lines.map((line) => 2 * TEXT_LEFT + textWidth(line, TEXT_CHAR_WIDTH)),
+    ...(machine === undefined
+      ? [2 * TEXT_LEFT + icon + (node.kind === 'line' ? TOGGLE_SPACE : 0) + textWidth(node.title, TITLE_CHAR_WIDTH)]
+      : readoutWidths(node.title, machine)),
+    ...(machine === undefined ? node.lines : node.lines.slice(1)).map((line) => 2 * TEXT_LEFT + textWidth(line, TEXT_CHAR_WIDTH)),
     ...(node.avoidBadge === undefined ? [] : [2 * TEXT_LEFT + textWidth(node.avoidBadge.text, TEXT_CHAR_WIDTH)]),
     ...node.rows.map((r) => 2 * TEXT_LEFT + rowIcon + textWidth(r.name, TEXT_CHAR_WIDTH) + textWidth(` ${rowRate(r)}`, TEXT_CHAR_WIDTH)),
   ];
@@ -478,11 +600,12 @@ function groupOf(ctx: GraphContext, stepId: string): string | undefined {
   return line !== undefined && !ctx.collapsed.has(line.key) ? lineNodeId(line.key) : undefined;
 }
 
-/** A step's box: its machine, its line, its rows, and the badge of the avoided goods it cannot do without. */
+/** A step's box: its machine and its readout (Phase 2 spec §7.2), its line, its rows, and the badge of the avoided goods it cannot do without. */
 function stepBox(ctx: GraphContext, step: PlanStep, unavoidable: readonly PlanWarning[] | undefined): Unsized {
   const key = step.mainOutput ?? null;
   const box: Unsized = {
     id: step.id, kind: 'step', key, title: step.machine.name, lines: stepLines(step, ctx.nameOf), owned: ownedState(step), rows: stepRows(step, ctx),
+    machine: machineReadout(step),
   };
   if (key !== null) box.keyName = ctx.nameOf(key);
   const group = groupOf(ctx, step.id);
@@ -680,7 +803,8 @@ function openGroups(ctx: GraphContext, nodes: readonly FlowNode[]): FlowGroup[] 
 /**
  * The boxes and arrows of a plan (fix spec §6.2), sorted by id so the layout never depends on the plan's order:
  * - a box per step titled by its machine, with its line (tier, EU/t, machines, how busy), what it supplies, what is owned,
- *   and a row per good it takes and makes; a step that uses goods on the avoid list gets a badge naming them;
+ *   and a row per good it takes and makes; a step that uses goods on the avoid list gets a badge naming them; its machine
+ *   readout, which its head draws in place of that first line (Phase 2 spec §7);
  * - an import stub `import:<key>@<step>` beside each step that takes a bought good, named by its kind of import;
  * - a stub `missing:<key>@<step>` into each input nothing supplies ("no source in the plan") or supplies short ("short");
  * - a stub `sink:<key>@<step>` for each good a step leaves over;
