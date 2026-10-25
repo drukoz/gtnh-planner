@@ -2,9 +2,10 @@
 // gather, craft, place, power, logistics, configure, hand-craft, test. Step ids name what a step is about (a build-list
 // key, a plan step id, the logistics mode), never its position, so the marks people tick survive a re-plan.
 
-import { PSEUDO_IDS, tierName } from '../../shared/gt/tiers.ts';
+import { tierName } from '../../shared/gt/tiers.ts';
 import { isFluidKey, parseItemKey, type StuffKey } from '../../shared/keys.ts';
 import { joinNames } from '../../shared/layout/format.ts';
+import { isPseudoMachineId, machineIdOfLegacy, type MachineId } from '../../shared/ids.ts';
 import { machineGroups } from '../../shared/plan/pools.ts';
 import type { Pack } from '../../shared/types/pack.ts';
 import type { BuildStep, LogisticsMode, PlanSettings, PlanStep, PowerSummary } from '../../shared/types/plan.ts';
@@ -52,26 +53,27 @@ function isProgrammedCircuit(key: StuffKey): boolean {
  * steps that list no units (rate: each such step's; Make N: the type's first step's).
  */
 function machinesToPlace(steps: readonly PlanStep[], makeN: boolean): Array<{ name: string; added: number; reused: number }> {
-  const types = new Map<number, { name: string; added: number; owned: number; units: Set<number> }>();
-  const typeOf = (mteId: number, name: string): { name: string; added: number; owned: number; units: Set<number> } => {
-    let type = types.get(mteId);
-    if (type === undefined) types.set(mteId, (type = { name, added: 0, owned: 0, units: new Set() }));
+  const types = new Map<MachineId, { name: string; added: number; owned: number; units: Set<number> }>();
+  const typeOf = (id: MachineId, name: string): { name: string; added: number; owned: number; units: Set<number> } => {
+    let type = types.get(id);
+    if (type === undefined) types.set(id, (type = { name, added: 0, owned: 0, units: new Set() }));
     return type;
   };
   const counting = new Set(machineGroups(steps).map((group) => group[0]));
-  const seen = new Set<number>();
+  const seen = new Set<MachineId>();
   for (const step of steps) {
-    const { mteId, name } = step.machine;
-    if (step.handCraft || PSEUDO_IDS.has(mteId)) continue;
-    const first = !seen.has(mteId);
-    seen.add(mteId);
-    const type = typeOf(mteId, name);
+    const id = machineIdOfLegacy(step.machine.mteId);
+    const { name } = step.machine;
+    if (step.handCraft || isPseudoMachineId(id)) continue;
+    const first = !seen.has(id);
+    seen.add(id);
+    const type = typeOf(id, name);
     if (makeN ? first : counting.has(step)) type.added += Math.max(0, step.count - step.owned);
     const units = step.reused?.units;
     if (units !== undefined) for (const u of units) type.units.add(u);
     else if (!makeN || first) type.owned += step.owned;
     for (const o of step.reused?.others ?? []) {
-      const other = typeOf(o.mteId, o.name);
+      const other = typeOf(machineIdOfLegacy(o.mteId), o.name);
       if (o.units !== undefined) for (const u of o.units) other.units.add(u);
       else other.owned += o.count;
     }
