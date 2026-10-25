@@ -780,7 +780,7 @@ export function StepPanel(props: {
   const machines = step.count === 1 ? '1 machine' : `${step.count} machines`;
   const shared = sharedMachineText(step, plan);
   return (
-    <aside className="flow-panel" aria-label={`Step: ${step.machine.name}`}>
+    <aside className="flow-panel" aria-label={`Step: ${step.machine.name}`} tabIndex={-1}>
       <PanelHead
         itemKey={step.mainOutput ?? null} title={step.machine.name} onClose={onClose}
         itemName={step.mainOutput === undefined ? undefined : nameOf(step.mainOutput)}
@@ -878,7 +878,7 @@ export function RawPanel(props: {
   const kind = leaf !== undefined ? LEAF_WORD[leaf] : input === undefined || input.available ? 'base material' : LEAF_WORD.unavailable;
   const via = input === undefined ? null : pricedViaText(input, nameOf);
   return (
-    <aside className="flow-panel" aria-label={`Import: ${name}`}>
+    <aside className="flow-panel" aria-label={`Import: ${name}`} tabIndex={-1}>
       <PanelHead itemKey={itemKey} itemName={name} title={name} onClose={onClose} />
       {input !== undefined && (
         <p className="muted">

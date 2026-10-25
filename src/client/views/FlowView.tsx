@@ -8,6 +8,7 @@
 // a box or an arrow lights what it connects (the flow focus); a click pins it, and a click on a box also opens its panel;
 // Esc or a click on the empty canvas clears it. Find item and the Show buttons light a good and centre the step that makes
 // it. ELK lays the diagram out in its own worker (web-stack §7); drag pans and the wheel zooms.
+// The panel slides in once and each new one fades in; a step picked inside a panel takes the focus to its own (Phase 2 spec §8.6).
 
 import {
   useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactElement,
@@ -729,6 +730,10 @@ function FlowDiagram(props: {
   const [laid, setLaid] = useState<{ layout: FlowLayout; viewKey: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Selected>(null);
+  /** The side panel's wrapper: it stays mounted while a panel is open, so it slides in once (Phase 2 spec §8.6). */
+  const sideRef = useRef<HTMLDivElement | null>(null);
+  /** A step picked inside the panel replaced it: the new panel takes the focus, which went with the control that was picked (P2-D33). */
+  const focusPanel = useRef(false);
 
   useEffect(() => {
     if (graph.nodes.length === 0) return undefined;
@@ -748,12 +753,23 @@ function FlowDiagram(props: {
       live = false;
     };
   }, [graph, viewKey]);
+  // The focus goes to the panel of a step picked inside the old panel, before it paints; a pick on the canvas leaves the focus where it is.
+  // The new panel stands where the old one stood, so taking the focus scrolls nothing: the page would jump to show a panel's cut-off end.
+  useLayoutEffect(() => {
+    if (!focusPanel.current) return;
+    focusPanel.current = false;
+    sideRef.current?.querySelector('aside')?.focus({ preventScroll: true });
+  }, [selected]);
 
   if (graph.nodes.length === 0) return <p className="muted">This plan has nothing to draw.</p>;
 
-  /** A step picked in a panel (a Takes/Makes peer, a Used by step): the row hovered there is gone with its panel. */
+  /**
+   * A step picked in a panel (a Takes/Makes peer, a Used by step): the row hovered there is gone with its panel, and so is the control
+   * that had the focus, which the new panel takes.
+   */
   const selectStep = (id: string): void => {
     endHoverFlowFocus();
+    focusPanel.current = true;
     setSelected({ kind: 'step', id });
   };
   const close = (): void => setSelected(null);
@@ -761,7 +777,7 @@ function FlowDiagram(props: {
   let selectedId: string | null = null;
   if (selected?.kind === 'step') {
     const step = plan.steps.find((s) => s.id === selected.id);
-    // Keyed by the step, so its open "more…" pages close when another step is picked.
+    // Keyed by the step, so its open "more…" pages close when another step is picked; its wrapper stays, and only the panel fades in anew.
     if (step !== undefined) {
       panel = <StepPanel key={step.id} step={step} plan={plan} settings={settings} per={per} send={send} onClose={close} onSelect={selectStep} base={props.base} />;
       selectedId = step.id;
@@ -793,7 +809,7 @@ function FlowDiagram(props: {
           />
         )}
       </div>
-      {panel}
+      {panel !== null && <div className="flow-side" ref={sideRef}>{panel}</div>}
     </div>
   );
 }

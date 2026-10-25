@@ -4,6 +4,8 @@
 // three runs (still under reduced motion), a fluid's "144L" and a chance tag inside their slot with the web fonts and without them (spec §25:
 // VT323, and a fallback drawn as tall), the arrow's and the energy bar's fills in forced colours and the edges that keep the track, the
 // arrow and a short slot there (spec §20, ledger ruling P2-R33), and the arrow going on through a new plan for the same step (spec §8.7).
+// Task 5b adds the panel sliding in once, and a step picked inside it taking the focus to its own panel, which stands where the old one
+// stood (spec §8.6).
 
 import { test, expect, type Browser, type Locator, type Page } from '@playwright/test';
 import { circuitLv, circuitMvPerHour, copperUnsourced } from './fixtures/plans.ts';
@@ -53,6 +55,69 @@ test('the arrow runs three times, and is still under reduced motion', async ({ p
   expect(await run()).toEqual({ name: 'gt-arrow', count: '3', duration: '1.6s' });       // 4.8 s, then it rests full (spec §8.7)
   await page.emulateMedia({ reducedMotion: 'reduce' });
   expect((await run()).duration).toBe('0.001s');
+});
+
+test('picking another box swaps the panel without sliding it in again', async ({ page }) => {
+  await openAssembler(page);
+  const side = page.locator('.flow-side');
+  /** The animations of the panel's wrapper itself (its slide-in), not of what it holds. */
+  const running = (): Promise<number> => side.evaluate((el) => el.getAnimations().length);
+  await expect.poll(running).toBe(0);                                                    // the first pick's slide-in has run
+  await side.evaluate((el) => el.setAttribute('data-was-here', ''));
+  await page.getByRole('button', { name: 'Fit' }).click();
+  const head = page.locator('[data-step-id="wire"] .flow-node-head');
+  await head.click();
+  // read at once: a wrapper mounted by this pick would be sliding in for 260 ms
+  expect(await running(), 'the wrapper slides in again').toBe(0);
+  const mill = page.getByRole('complementary', { name: 'Step: Basic Wiremill' });
+  await expect(mill).toBeVisible();
+  // the same wrapper (spec §8.6), round a new panel, which fades in over 160 ms
+  await expect(page.locator('.flow-side[data-was-here]')).toHaveCount(1);
+  expect(await mill.evaluate((el) => { const s = getComputedStyle(el); return `${s.animationName} ${s.animationDuration}`; })).toBe('fade-in 0.16s');
+  // a pick on the canvas leaves the focus where the click put it
+  await expect(head).toBeFocused();
+  await expect(mill).not.toBeFocused();
+  // nor does a switch from a step's panel to an import's slide it in again
+  await page.locator('[data-node-id^="import:t:copper_ingot@0@"]').click();
+  expect(await running(), 'the wrapper slides in again for an import').toBe(0);
+  await expect(page.getByRole('complementary', { name: 'Import: Copper Ingot' })).toBeVisible();
+  await expect(page.locator('.flow-side[data-was-here]')).toHaveCount(1);
+});
+
+test('a peer picked inside the panel takes the focus to the new panel', async ({ page }) => {
+  const { panel } = await openAssembler(page);
+  await panel.getByRole('button', { name: 'Basic Wiremill (1x Copper Wire)' }).click();   // under Takes: where its wire comes from
+  const mill = page.getByRole('complementary', { name: 'Step: Basic Wiremill' });
+  await expect(mill).toBeFocused();
+  // and a step picked in an import's panel (Used by) takes it to the step's panel
+  await page.getByRole('button', { name: 'Fit' }).click();
+  await page.locator('[data-node-id^="import:t:copper_ingot@0@"]').click();
+  const ingot = page.getByRole('complementary', { name: 'Import: Copper Ingot' });
+  await expect(ingot).toBeVisible();
+  await ingot.getByRole('button', { name: 'Basic Wiremill (1x Copper Wire)' }).click();
+  await expect(mill).toBeFocused();
+  // and on a narrow window, where the panel grows with what it holds: no scroll container there, which Chromium lets take the focus with no
+  // tabindex, so only the panel's own tabindex can take it
+  await page.setViewportSize({ width: 1000, height: 900 });
+  await mill.getByRole('button', { name: 'Basic Assembler (Basic Circuit)' }).click();   // under Makes: where its wire goes
+  await expect(page.getByRole('complementary', { name: 'Step: Basic Assembler' })).toBeFocused();
+});
+
+test('the panel that takes the focus stands where the old one stood, and the page does not scroll', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const { panel } = await openAssembler(page);
+  const peer = panel.getByRole('button', { name: 'Basic Wiremill (1x Copper Wire)' });
+  await peer.scrollIntoViewIfNeeded();
+  const scrolled = await page.evaluate(() => scrollY);
+  const old = await panel.boundingBox();
+  if (old === null) throw new Error('the panel has no box');
+  // the premise: the panel runs past the bottom of the window, so a focus that scrolled would move the page to show its end
+  expect(old.y + old.height, 'the panel ends below the window').toBeGreaterThan(900);
+  await peer.click();
+  const mill = page.getByRole('complementary', { name: 'Step: Basic Wiremill' });
+  await expect(mill).toBeFocused();
+  expect(await page.evaluate(() => scrollY), 'the page scrolled').toBe(scrolled);
+  expect((await mill.boundingBox())?.y, 'the new panel starts where the old one did').toBe(old.y);
 });
 
 /** The output slot of the Basic Fluid Extractor (144 L of Molten Iron a run) and its count, as Chromium lays them out. */

@@ -1445,10 +1445,15 @@ describe('the Machine GUI Flow diagram', () => {
     expectDeclared([['.swatch.sink', 'border-color', 'var(--flow-sink-line)']]);
   });
 
-  it('slides the side panel in as a Machine GUI panel, with its lists as dark wells, and never animates the grid', () => {
+  it('slides the side panel in once as a Machine GUI panel with dark wells, fades in each new pick, and never animates the grid', () => {
     expectDeclared([
       ['.flow-panel', 'background', 'var(--panel)'], ['.flow-panel', 'border', '2px solid var(--outline)'], ['.flow-panel', 'border-radius', '0'],
-      ['.flow-panel', 'box-shadow', 'var(--bevel-panel)'], ['.flow-panel', 'animation', 'slide-in-right var(--dur-slow) var(--ease-out)'],
+      ['.flow-panel', 'box-shadow', 'var(--bevel-panel)'],
+      // Phase 2 spec §8.6 (D7; the deliberate change of §3.9): the wrapper, which stays mounted, sticks and slides in once; the panel inside
+      // it, keyed by its box, fades in on each pick
+      ['.flow-side', 'animation', 'slide-in-right var(--dur-slow) var(--ease-out)'],
+      ['.flow-side', 'position', 'sticky'], ['.flow-side', 'top', '12px'],
+      ['.flow-panel', 'animation', 'fade-in var(--dur-base) var(--ease-out)'],
       ['.flow-panel-head h3', 'font', '600 16px/1.3 var(--font-pixel)'],
       [WELLS, 'background', 'var(--screen)'], [WELLS, 'box-shadow', 'var(--bevel-well)'],
       ['.flow-panel .warnings', 'color', 'var(--ink-error)'], ['.port-short .port-rate, .port-warn', 'color', 'var(--ink-error)'],
@@ -1460,11 +1465,17 @@ describe('the Machine GUI Flow diagram', () => {
       // when both axes clip (measured in a browser for this task)
       ['.flow', 'overflow-y', 'clip'], ['.flow', 'overflow-clip-margin', '4px'],
     ]);
+    expect(declared('.flow-panel', 'position'), 'the panel sticks through its wrapper only').toBeUndefined();
     // the grid column changes at once (the e2e tests read it): nothing animates or transitions the grid or the panel's width
     for (const block of blocks.filter((b) => b.prelude === '.flow' || b.prelude === '.flow.has-panel')) {
       expect(block.inner, block.prelude).not.toMatch(/transition|animation/);
     }
     expect(ruleBody('.flow-panel')).not.toMatch(/transition|(^|; )width/);
+    expect(ruleBody('.flow-side')).not.toMatch(/transition|(^|; )width/);
+    // a narrow screen (spec §8.6): the wrapper stops sticking and the panel takes its whole height, in the page's flow
+    expect(declaredIn('@media (max-width: 1100px)', '.flow-side', 'position')).toBe('static');
+    expect(declaredIn('@media (max-width: 1100px)', '.flow-panel', 'max-height')).toBe('none');
+    expect(declaredIn('@media (max-width: 1100px)', '.flow-panel', 'position')).toBeUndefined();
     // the hand-offs: a 16px tick centred on the first line of its text, and the steps under a port past its 20px slot
     expectDeclared([['.swap-option input', 'margin-top', '2px'], ['.option-choice input', 'margin-top', '2px'], ['.port-peers', 'padding-left', '26px']]);
   });
@@ -2494,6 +2505,7 @@ const PHASE2_RULES: string[] = [
   '.nei-tooltip', '.nei-tooltip > :first-child', '.nei-tooltip-mod', ".nei-tooltip[data-state='closing']",   // Task 3a (spec §6.3)
   ...TIER_RULES, ...READOUT_RULES,                                                   // Task 4: the Flow machine readout (spec §7.3)
   ...RECIPE_RULES,                                                                   // Task 5a: the step panel's recipe card (spec §8.4)
+  '.flow-side',                                                                      // Task 5b: the panel's wrapper, slid in once (spec §8.6)
 ];
 /** The colour literals a Phase 2 rule may write: each is the same in both looks (spec §4.4). */
 const SAME_IN_BOTH = ['#ffffff', '#000000', '#aaaaaa', '#100010', '#ffff55', 'rgb(0 0 0 / 0.4)'];

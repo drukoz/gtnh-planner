@@ -307,6 +307,17 @@ describe('raw material panel', () => {
   });
 });
 
+// Phase 2 spec §8.6 (P2-D33): a step picked inside a panel (a Takes or Makes peer, a Used by step) replaces it, and the focus goes to the new
+// panel rather than to the page, so each aside can take the focus from a script and stays out of the tab order; the h3 stays bare.
+describe('step panel: the panel can take the focus', () => {
+  it('gives the step panel and the import panel tabindex -1', () => {
+    expect(panelHtml(wire, wires)).toContain('<aside class="flow-panel" aria-label="Step: Wiremill" tabindex="-1">');
+    expect(renderToStaticMarkup(
+      <RawPanel itemKey="t:copper_ingot@0" plan={wires} settings={S()} per="min" send={() => {}} onClose={() => {}} onSelect={() => {}} />,
+    )).toContain('<aside class="flow-panel" aria-label="Import: Copper Ingot" tabindex="-1">');
+  });
+});
+
 describe('patch builders', () => {
   it('send the whole new value of one setting', () => {
     const s = S({ recipeChoice: { 't:x@0': 'r0' }, stopItems: ['t:b@0'], expandItems: ['t:b@0'], haveSupply: ['fluid:water'], optionChoice: { 'r0#1': 't:y@0' } });
