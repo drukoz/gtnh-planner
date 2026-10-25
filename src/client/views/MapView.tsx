@@ -23,7 +23,10 @@ const ZOOM_STEP = 2;
 /** The wheel zooms by WHEEL_ZOOM^(−deltaY/100). */
 const WHEEL_ZOOM = 1.2;
 const WHEEL_LINE_PIXELS = 16;
-/** A press moves this far (px) before it counts as a drag instead of a click. */
+/**
+ * A press moves this far (px) before it counts as a drag instead of a click: the pointer's own move on the page, so a press stays a click
+ * while the map moves under a still pointer, as in the diagrams (ledger rulings P2-R16, P2-R19).
+ */
 const DRAG_THRESHOLD = 4;
 const MARKER_RADIUS = 9;
 /** A click this close (px) to a marker's centre is a click on the marker. */
@@ -271,8 +274,12 @@ class MapRenderer {
   }
 }
 
-/** A press on the canvas: where it started, whether an overlay took it, whether it has become a drag and panned the map. */
-interface Press { pointerId: number; startX: number; startY: number; lastX: number; lastY: number; consumed: boolean; dragging: boolean; panned: boolean }
+/**
+ * A press on the canvas: where it went down on the page (`cx`, `cy`: client px, which decide when it becomes a drag), where the pointer
+ * last was on the canvas (`lastX`, `lastY`: `pointIn`, which the pan follows), whether an overlay took it, whether it has become a drag
+ * and panned the map.
+ */
+interface Press { pointerId: number; cx: number; cy: number; lastX: number; lastY: number; consumed: boolean; dragging: boolean; panned: boolean }
 
 /** A scan's palette names: each entry's English name in palette order, and every GT tile entity's name by mteId. */
 interface PaletteNames { blocks: readonly string[]; mte: ReadonlyMap<number, string> }
@@ -447,7 +454,7 @@ export function MapView(props: MapViewProps): ReactElement {
     if (e.button !== 0) return;
     const [px, py] = pointIn(e);
     e.currentTarget.setPointerCapture(e.pointerId);
-    press.current = { pointerId: e.pointerId, startX: px, startY: py, lastX: px, lastY: py, consumed: toOverlays('down', px, py), dragging: false, panned: false };
+    press.current = { pointerId: e.pointerId, cx: e.clientX, cy: e.clientY, lastX: px, lastY: py, consumed: toOverlays('down', px, py), dragging: false, panned: false };
   };
   const onPointerMove = (e: PointerEvent<HTMLCanvasElement>): void => {
     const [px, py] = pointIn(e);
@@ -459,7 +466,9 @@ export function MapView(props: MapViewProps): ReactElement {
       hoverAt(px, py);
       return;
     }
-    if (!p.dragging && Math.hypot(px - p.startX, py - p.startY) >= DRAG_THRESHOLD) p.dragging = true;
+    // the pointer's own move decides: a still press stays a click while the map moves under it (P2-R16, P2-R19); a pan then follows
+    // the map from the press on (`lastX`, `lastY` are still the press's point until it starts)
+    if (!p.dragging && Math.hypot(e.clientX - p.cx, e.clientY - p.cy) >= DRAG_THRESHOLD) p.dragging = true;
     if (!p.dragging) return;
     if (!p.consumed && !consumed) {
       const dx = px - p.lastX, dy = py - p.lastY;
