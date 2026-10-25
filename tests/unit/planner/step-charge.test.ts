@@ -7,7 +7,7 @@ import { miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec, type PackSpec, type RecipeSpec } from '../../helpers/pack-spec.ts';
 import { buildCandidates, type LeafOracle, type PlanEnv } from '../../../src/server/planner/candidates.ts';
 import { emptyContext, planLine, solveOptions } from '../../../src/server/planner/plan.ts';
-import { solveLine, type SolveOptions } from '../../../src/server/planner/solve.ts';
+import { BY_HAND_FLOOR_CHARGE, solveLine, type SolveOptions } from '../../../src/server/planner/solve.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import type { PlanSettings } from '../../../src/shared/types/plan.ts';
 
@@ -97,6 +97,13 @@ describe('planLine and the step charge', () => {
     // A project stored before the setting existed plans with the default.
     const { stepCharge: _, ...old } = defaultSettings();
     expect(solveOptions(old as PlanSettings).stepCharge).toBe(0.5);
+  });
+  it('floors a by-hand step at the "Some machines" charge where crafting is automated and the charge is 0 (U2)', () => {
+    expect(BY_HAND_FLOOR_CHARGE).toBe(0.02);
+    expect(solveOptions({ ...defaultSettings(), stepCharge: 0 }).byHandFloor).toBe(BY_HAND_FLOOR_CHARGE);
+    expect(solveOptions({ ...defaultSettings(), stepCharge: 0, mode: 'makeN' }).byHandFloor).toBe(BY_HAND_FLOOR_CHARGE);
+    expect(solveOptions({ ...defaultSettings(), stepCharge: 0, automateCrafting: false }).byHandFloor).toBeUndefined();
+    expect(solveOptions(defaultSettings()).byHandFloor).toBeUndefined();
   });
   it('warns about a step left to hand-crafting', async () => {
     // An LV Machine Hull a minute: the hull and its tin cables have no machine recipe at LV. Crafted by hand, with build

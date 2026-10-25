@@ -121,8 +121,8 @@ describe('reusing machines we have (Make N)', () => {
   });
   it('with the switch off, adds one new machine per type and reuses none, hammering the plates a new bender would not pay for', async () => {
     // Plan 12: a batch always weighs build cost, and for 10 circuits a new Basic Bending Machine (17 raw) costs more than
-    // the 10 extra iron ingots that hammering the plates takes.
-    const p = await planLine(pack, N({ reuseOwned: false }), TWO_ASSEMBLERS);
+    // the 10 extra iron ingots that hammering the plates takes (at No limit: at the default cap the bender wins, U2/F3b).
+    const p = await planLine(pack, N({ reuseOwned: false, rawCap: null }), TWO_ASSEMBLERS);
     expect(p.steps.map((s) => [s.id, s.count, s.owned, s.reused])).toEqual([
       ['circuit-lv', 1, 0, undefined], ['hammer-plate', 1, 0, undefined], ['wire', 1, 0, undefined]]);
     expect(built(p, ASSEMBLER)).toBe(1);

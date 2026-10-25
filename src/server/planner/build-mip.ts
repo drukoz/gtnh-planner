@@ -151,6 +151,17 @@ export interface BuildMipInput {
   leanRaw?: number;
   /** The raw cap: the most raw material per unit of demand (Σ rawCost·x) the plan may use (`layoutOf`); absent: none. */
   rawBound?: number;
+  // optional additions (add-on 12 x 17 integration: F3b, U2)
+  /**
+   * The charge in σ on one block a pseudo step pays (by hand, or on another pseudo machine) in place of `perBlock`: the
+   * leanest line's MIP, at step charge 0, keeps the project's charge on them (solve.ts `leanestLine`); absent: `perBlock`.
+   */
+  pseudoCharge?: number;
+  /**
+   * The least charge in σ on one block a crafting-table pseudo step pays (`SolveOptions.byHandFloor`: crafting automated
+   * at step charge 0, the user's "crafting always automated"); absent: 0.
+   */
+  byHandFloor?: number;
 }
 
 function byString(a: string, b: string): number {
@@ -938,13 +949,15 @@ function layoutOf(input: BuildMipInput, withDerived: boolean): Layout {
   // 265), so a step's binary carries it only where the step runs on no machine the MIP counts — by hand or on another
   // pseudo machine — once, a crafting-table step `handWeight` times (one no Auto Workbench runs, `LpRecipe.byHand`,
   // `byHandWeight` times: controller ruling 214), at a block's charge in σ (`perBlock`: `stepCharge`, or more where fix
-  // wave 3 (B2) re-bases it). (A fewest-recipes tie-break of 1e-6 on every binary made the root
+  // wave 3 (B2) re-bases it). The leanest line pays the project's charge here (`pseudoCharge`, F3b), and a crafting-table
+  // step at least `byHandFloor` (U2). (A fewest-recipes tie-break of 1e-6 on every binary made the root
   // node of Good Electronic Circuit HV take 3.9 s instead of 2.5 s for the same plan, and decided no plan.)
   const y = new Map<number, number>();
   for (const s of steps) {
     const first = light.get(s.j)?.first ?? 0;
+    const blockCharge = Math.max(input.pseudoCharge ?? perBlock, s.r.mapId === 'crafting' ? input.byHandFloor ?? 0 : 0);
     const pseudo = s.usable.length === 0
-      ? perBlock * stepWeight(s.r, { hand: input.handWeight, byHand: input.byHandWeight ?? 1 }) : 0;
+      ? blockCharge * stepWeight(s.r, { hand: input.handWeight, byHand: input.byHandWeight ?? 1 }) : 0;
     const col = column(pseudo + first / sigma, 1, true);
     y.set(s.j, col);
     rows.push({ lower: -Infinity, upper: 0, entries: [[s.j, 1], [col, -X]] });

@@ -339,9 +339,12 @@ describe('build cost in Make N', () => {
     expect(ids(many)).toEqual(['bend-plate', 'circuit-lv', 'wire']);
     expect(many.cost).toMatchObject({ build: 50, batch: 192, horizonHours: null });
     expect(many.cost?.runPerHour).toBe(sig9((192 * 3600) / many.makeN!.totalSeconds));
-    const few = await planLine(pack, S({ mode: 'makeN', amount: 8 }), emptyContext());
+    const few = await planLine(pack, S({ mode: 'makeN', amount: 8, rawCap: null }), emptyContext());
     expect(ids(few)).toEqual(['circuit-lv', 'hammer-plate', 'wire']);
     expect(few.cost).toMatchObject({ build: 33, batch: 32 });
+    const capped = await planLine(pack, S({ mode: 'makeN', amount: 8 }), emptyContext());
+    expect(ids(capped)).toEqual(['bend-plate', 'circuit-lv', 'wire']);   // the default cap: the leanest line charges the hammer step (U2, F3b)
+    expect(capped.cost).toMatchObject({ build: 50, batch: 24 });
   });
 
   it('tells the steps that share an Auto Workbench in a batch to set its grid between batches (controller ruling 177)', async () => {

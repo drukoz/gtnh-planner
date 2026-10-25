@@ -18,7 +18,7 @@ import {
   BUILD_MIP_MAX_LP_ITERATIONS, BUILD_MIP_MAX_NODES, BUILD_MIP_RETRY_TOLERANCE, BUILD_MIP_TIME_LIMIT_SECONDS, LEAN_BASE_ABOVE, OWNED_STEP_SHARE, type StepMachines,
 } from '../../../src/server/planner/build-mip.ts';
 import type { MachineOption } from '../../../src/server/planner/machine-options.ts';
-import type { Solution, SolveOptions } from '../../../src/server/planner/solve.ts';
+import { BY_HAND_FLOOR_CHARGE, type Solution, type SolveOptions } from '../../../src/server/planner/solve.ts';
 
 const COSTS: Record<StuffKey, number> = { 't:a@0': 1, 't:b@0': 1, 't:part@0': 1, 't:tin_ingot@0': 1, 't:antimony@0': 1 };
 /** Each board recipe on an assembler, each extractor recipe on an extractor, the alloy smelter (Task 4's solder line). */
@@ -322,6 +322,16 @@ describe('the build-cost MIP', () => {
     expect((await solvedWithBuild(handSpec(), COSTS, [['t:t@0', 1 / 3600]], build, CHARGED)).runs).toEqual(['p-hand']);
   });
 
+  it('charges a crafting step at least the floor where crafting is automated and the step charge is 0 (U2)', async () => {
+    // σ = 1,440 at 1 a minute: the machine's 10 / 1,440 = 0.007 against BY_HAND_FLOOR_CHARGE × 3 = 0.06 by hand; without
+    // the floor the hand step cost nothing. At 1 an hour (σ = 24) the machine's 0.42 is more: the floor is a charge, not a ban.
+    const build = { options: { 'p-machine': [opt(101, 1, 0.2, 10)] } };
+    const floor = { stepCharge: 0, handWeight: 3, byHandFloor: BY_HAND_FLOOR_CHARGE };
+    expect((await solvedWithBuild(handSpec(), COSTS, [['t:t@0', 1 / 60]], build, { stepCharge: 0, handWeight: 3 })).runs).toEqual(['p-hand']);
+    expect((await solvedWithBuild(handSpec(), COSTS, [['t:t@0', 1 / 60]], build, floor)).runs).toEqual(['p-machine']);
+    expect((await solvedWithBuild(handSpec(), COSTS, [['t:t@0', 1 / 3600]], build, floor)).runs).toEqual(['p-hand']);
+  });
+
   it('builds a cleanroom only when it pays', async () => {
     // 1/min: 1,440 + 110 < 2,880 + 10; 1/h: 24 + 110 > 48 + 10. A pricing-gap cleanroom weighs its stand-in.
     const options = { clean: [opt(101, 1, 0.2, 10)], dirty: [opt(111, 1, 0.2, 10)] };
@@ -553,6 +563,17 @@ describe('the raw cap and the leanest line (fix wave 3 (A), (B2))', () => {
       expect(sol.leanRawCost).toBe(0.000277777778);       // the log line's 1 raw a tank
       expect(sol.rawCost).toBe(0.000277777778);
     }
+  });
+
+  it('keeps the project\'s charge on a hand step in the leanest line, so the cap never forces one (F3b)', async () => {
+    // p-hand crafts t from c (0.7) by hand, p-machine bends it from a (1) on a machine of 10, 1 a minute: σ = 0.7 a minute
+    // over the day (1,008). At step charge 0 a hand step cost nothing, so the leanest line crafted by hand at 0.7 and the
+    // +25 % cap (0.875) forced the hand step on the plan. With the project's 0.5 × 3 on it the leanest line bends (1.43 +
+    // 0.01 against 1 + 1.5 in σ): the cap is 1.25 and the plan bends too.
+    const build = { options: { 'p-machine': [opt(101, 1, 0.2, 10)] } };
+    const { runs, sol } = await solvedWithBuild(freeSpec(), { 't:a@0': 1, 't:c@0': 0.7 }, [['t:t@0', 1 / 60]], build, { stepCharge: 0.5, handWeight: 3, rawCap: 0.25 });
+    expect(runs).toEqual(['p-machine']);
+    expect(sol.leanRawCost).toBe(0.0166666667);
   });
 
   it('weighs Fewest machines against the leanest line\'s raw material where S1\'s needs machines nobody would build (T2)', async () => {

@@ -588,4 +588,15 @@ describe('farms in the line', () => {
     expect(tgs.count).toBe(1);
     expect(owned.buildList.some((l) => l.key === 'machine:15541@0' || l.key === 't:rubber_sapling@0')).toBe(false);
   });
+
+  it('measures the raw cap against a leanest line that counts the farms the group could build (U1)', async () => {
+    // U1: the cap's leanest line counts the farms the group could build (the user's literal reading; the fix list's F3a,
+    // which priced the leanest line farm-free, is dropped). With farms on the leanest line makes the dust from a farm for
+    // less raw material than without (measured on ab850b8: 0 against 0.0111111111 a second); F3a made them equal.
+    const s = settingsOf(RUBBER_DUST, { amount: 1, tier: 1 });
+    const on = await planLine(farmPack(), s, emptyContext());
+    const off = await planLine(farmPack(), { ...s, farms: { ...defaultFarmSettings(), kinds: [] } }, emptyContext());
+    expect(on.rawCost?.leanestPerSecond).toBeDefined();
+    expect(on.rawCost!.leanestPerSecond!).toBeLessThan(off.rawCost!.leanestPerSecond!);
+  });
 });

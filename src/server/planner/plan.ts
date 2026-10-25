@@ -36,8 +36,8 @@ import { horizonHoursOf, objectiveOf, runningSupplies, type Need, type Offer } f
 import { aloneGraph, linePricing, lineWalk, type CostModel, type LinePricing } from './pricing.ts';
 import { sig9 } from './round.ts';
 import {
-  HAND_STEP_WEIGHT, MAX_NAMED_LOOP_RECIPES, solveLine, standaloneCosts, type CreditColumn, type Solution, type SolveOptions, type Standalone,
-  type SupplyColumn,
+  BY_HAND_FLOOR_CHARGE, HAND_STEP_WEIGHT, MAX_NAMED_LOOP_RECIPES, solveLine, standaloneCosts, type CreditColumn, type Solution, type SolveOptions,
+  type Standalone, type SupplyColumn,
 } from './solve.ts';
 import { buildSteps } from './steps.ts';
 
@@ -67,12 +67,13 @@ export const PIN_DOMINATED_SHARE = 1.01;
  * How the line's solves trade steps against raw material (fix spec R3): the project's step charge (a project stored
  * before it gets the default), and a crafting-table step weighs HAND_STEP_WEIGHT steps in a running line whose crafting
  * is not automated (fix spec D7; a Make N batch may be crafted by hand), as does one no Auto Workbench runs in a running
- * line whose crafting is (`byHandWeight`, controller ruling 214); with recipe pins, the pinned recipes, which no twin
- * replaces (`twinMoves`, solve.ts); wherever build cost counts, the project's raw cap (fix wave 3 (A): `DEFAULT_RAW_CAP`
- * for a project stored without one, none at "No limit"). Add-on 17 (architecture §11.45): best multi-output
- * (`objectiveOf`) sets `multiOutput`; `line` adds the goods its farms wear (`upkeep`) and, in rate mode only, its capped
- * free supplies and the needs it may be credited for (a Make N batch has no steady rate to cap them by), each only when
- * it has some.
+ * line whose crafting is (`byHandWeight`, controller ruling 214); with crafting automated and a step charge of 0, a
+ * crafting-table step on no machine still pays BY_HAND_FLOOR_CHARGE a block, in both modes (`byHandFloor`, the
+ * controller's U2 ruling); with recipe pins, the pinned recipes, which no twin replaces (`twinMoves`, solve.ts); wherever
+ * build cost counts, the project's raw cap (fix wave 3 (A): `DEFAULT_RAW_CAP` for a project stored without one, none at
+ * "No limit"). Add-on 17 (architecture §11.45): best multi-output (`objectiveOf`) sets `multiOutput`; `line` adds the
+ * goods its farms wear (`upkeep`) and, in rate mode only, its capped free supplies and the needs it may be credited for
+ * (a Make N batch has no steady rate to cap them by), each only when it has some.
  */
 export function solveOptions(
   settings: PlanSettings, line?: { upkeep?: ReadonlySet<StuffKey>; supplies?: readonly SupplyColumn[]; credits?: readonly CreditColumn[] },
@@ -83,6 +84,8 @@ export function solveOptions(
   };
   // with crafting automated, a crafting-table recipe no Auto Workbench runs is still crafted by hand (controller ruling 214)
   if (settings.mode === 'rate' && settings.automateCrafting) options.byHandWeight = HAND_STEP_WEIGHT;
+  // ...and never costs nothing there (the controller's U2 ruling): at step charge 0 it pays BY_HAND_FLOOR_CHARGE a block
+  if (settings.automateCrafting && !((settings.stepCharge ?? DEFAULT_STEP_CHARGE) > 0)) options.byHandFloor = BY_HAND_FLOOR_CHARGE;
   const pinned = Object.values(settings.recipeChoice);
   if (pinned.length > 0) options.pinnedRecipes = new Set(pinned);
   // Fix wave 3 (A): the raw cap, wherever build cost counts (the build stage reads it only with a step charge above 0).

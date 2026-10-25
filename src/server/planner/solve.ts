@@ -32,6 +32,12 @@ export interface SolveOptions {
    * crafted by hand: HAND_STEP_WEIGHT in rate mode (`solveOptions`), else 1 (absent: 1).
    */
   byHandWeight?: number;
+  // optional addition (add-on 12 x 17 integration, U2)
+  /**
+   * With crafting automated and no step charge: the least charge on one block a crafting-table step no Auto Workbench runs
+   * pays in the build MIP (BY_HAND_FLOOR_CHARGE, `solveOptions`), so a by-hand step never costs nothing; absent: none.
+   */
+  byHandFloor?: number;
   /** S1 only: whether the line plans and its least-raw solution (avoid trials, below). */
   probe?: boolean;
   // optional additions (plan 12: build cost, architecture §11.39)
@@ -111,6 +117,11 @@ export const STEP_CHARGE_CAP = 0.25;
 export const BEYOND_STOCK_FACTOR = 10;
 /** A crafting-table step weighs this many steps in a running line with crafting not automated (fix spec D7). */
 export const HAND_STEP_WEIGHT = 3;
+/**
+ * The least step charge a crafting-table step crafted by hand pays where crafting is automated and the project's step
+ * charge is 0 (the controller's U2 ruling on the user's "crafting always automated"): the "Some machines" preset.
+ */
+export const BY_HAND_FLOOR_CHARGE = 0.02;
 /** In the step-charge MIP a step recipe runs at most this many times the largest run count of S1 (its big-M). */
 export const STEP_BIG_M = 100;
 /** The step-charge MIP stops after its root node: a node limit, never a time limit, so the plan is deterministic. */
@@ -1364,7 +1375,7 @@ function buildInput(lp: MainLp, s1: LpResult, s1g: number, demandScale: number, 
   const input: BuildMipInput = {
     lp, x1: s1.x, s1: s1.objective, s1g, columnCost: s1.objective > TINY ? relativeCosts(lp, s1) : [], derived: pricedDerived(lp),
     demandScale, model, stepCharge: Number.isFinite(charge) && charge > 0 ? charge : 0, handWeight: opts.handWeight ?? 1,
-    byHandWeight: opts.byHandWeight ?? 1,
+    byHandWeight: opts.byHandWeight ?? 1, ...(opts.byHandFloor === undefined ? {} : { byHandFloor: opts.byHandFloor }),
   };
   const planting = model.mode === 'rate' ? model.planting : undefined;
   const plantings = planting === undefined ? [] : lp.recipes.flatMap((r, j) => {
@@ -1721,19 +1732,20 @@ function cheaperPlan(
 }
 
 /**
- * Fix wave 3 (A), (B2): the leanest line — the build MIP of `plain` at step charge 0, from the cheaper of S1 and `sparse`
- * rounded up: the least raw material over the horizon plus the build of its machines, what "Least raw material" plans —
- * its raw material per unit of demand and its runs (main columns); S1's when that MIP gives no plan (its time guard, or
- * `limit` ≤ 0), so the cap is then measured against the least raw material, never looser. `uncapped` (No limit, controller
- * OQ1 (D)): none, and no MIP solved, where that start costs at most LEAN_BASE_ABOVE in the MIP's objective (σ units) —
- * the line's raw material over the horizon is at most that, so it could not re-base the step charge (`scaleOf`), and
- * with no cap nothing else reads it. Its MIP solves on the solver thread (`solveLpAside`, the same result as here), so
- * `buildStage` solves plan 09's plan meanwhile.
+ * Fix wave 3 (A), (B2): the leanest line — the build MIP of `plain` at step charge 0, its by-hand and other pseudo steps
+ * still at the project's charge (`pseudoCharge`, the controller's U2 ruling: crafting always automated), from the cheaper
+ * of S1 and `sparse` rounded up: the least raw material over the horizon plus the build of its machines, what "Least raw
+ * material" plans — its raw material per unit of demand and its runs (main columns); S1's when that MIP gives no plan
+ * (its time guard, or `limit` ≤ 0), so the cap is then measured against the least raw material, never looser.
+ * `uncapped` (No limit, controller OQ1 (D)): none, and no MIP solved, where that start costs at most LEAN_BASE_ABOVE in
+ * the MIP's objective (σ units) — the line's raw material over the horizon is at most that, so it could not re-base the
+ * step charge (`scaleOf`), and with no cap nothing else reads it. Its MIP solves on the solver thread (`solveLpAside`,
+ * the same result as here), so `buildStage` solves plan 09's plan meanwhile.
  */
 async function leanestLine(
   lp: MainLp, s1: LpResult, plain: BuildMipInput, sparse: readonly number[] | null, limit: number, opts: SolveOptions, uncapped: boolean,
 ): Promise<{ raw: number; x?: readonly number[] } | undefined> {
-  const mip = buildMip({ ...plain, stepCharge: 0 });
+  const mip = buildMip({ ...plain, stepCharge: 0, pseudoCharge: plain.stepCharge });
   const start = cheapestStart(lp, mip, undefined, [sparse]);
   if (uncapped && start !== undefined && start.cost <= LEAN_BASE_ABOVE) return undefined;
   const { result } = await runBuildMip(mip, start?.start, limit, opts, solveLpAside);
