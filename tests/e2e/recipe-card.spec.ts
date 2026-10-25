@@ -5,10 +5,11 @@
 // VT323, and a fallback drawn as tall), the arrow's and the energy bar's fills in forced colours and the edges that keep the track, the
 // arrow and a short slot there (spec §20, ledger ruling P2-R33), and the arrow going on through a new plan for the same step (spec §8.7).
 // Task 5b adds the panel sliding in once, and a step picked inside it taking the focus to its own panel, which stands where the old one
-// stood (spec §8.6).
+// stood (spec §8.6), its head scrolled into the window when the window shows none of it (ledger ruling P2-R35); and Close giving the focus
+// back to the box head that opened the panel, or to the diagram once a replan has removed that box (ledger ruling P2-R36).
 
 import { test, expect, type Browser, type Locator, type Page } from '@playwright/test';
-import { circuitLv, circuitMvPerHour, copperUnsourced } from './fixtures/plans.ts';
+import { circuitLv, circuitMvPerHour, copperUnsourced, platesTwoWays } from './fixtures/plans.ts';
 import { LV_CIRCUITS, openWithPlan } from './helpers.ts';
 
 /** Opens circuitLv and the Basic Assembler's panel; returns the panel and the project's id. */
@@ -118,6 +119,66 @@ test('the panel that takes the focus stands where the old one stood, and the pag
   await expect(mill).toBeFocused();
   expect(await page.evaluate(() => scrollY), 'the page scrolled').toBe(scrolled);
   expect((await mill.boundingBox())?.y, 'the new panel starts where the old one did').toBe(old.y);
+});
+
+// ledger ruling P2-R35: a head the window does not show at all is scrolled in, by the least scroll, so the focus stays in sight
+test('a step picked inside a panel whose head is above the window brings the new head into the window by the least scroll', async ({ page }) => {
+  // one column, where the panel sits below the diagram as tall as what it holds; a short window, so the new panel is long enough that the page
+  // keeps its scroll when the panel is swapped
+  await page.setViewportSize({ width: 1000, height: 600 });
+  const { panel } = await openAssembler(page);
+  const head = panel.locator('.flow-panel-head');
+  const peer = panel.getByRole('button', { name: 'Basic Wiremill (1x Copper Wire)' });
+  const at = await head.boundingBox();
+  if (at === null) throw new Error('the head has no box');
+  await page.evaluate((dy) => scrollBy(0, dy), at.y + at.height + 40);                     // the head's bottom 40 px above the window
+  const before = { scroll: await page.evaluate(() => scrollY), head: await head.boundingBox() };
+  if (before.head === null) throw new Error('the head has no box');
+  // the premise: the head is wholly above the window, and the peer can be clicked where it is
+  expect(before.head.y + before.head.height, 'the head ends above the window').toBeLessThan(0);
+  await expect(peer).toBeInViewport();
+  await peer.click();
+  const mill = page.getByRole('complementary', { name: 'Step: Basic Wiremill' });
+  await expect(mill).toBeFocused();
+  const now = { scroll: await page.evaluate(() => scrollY), head: await mill.locator('.flow-panel-head').boundingBox() };
+  if (now.head === null) throw new Error('the new head has no box');
+  // the new head stands where the old one did, so the least scroll puts it at the top of the window: the page moved up by its distance above
+  expect(Math.abs(now.head.y), `the new head's top ${now.head.y} is at the top of the window`).toBeLessThan(1);
+  expect(Math.abs(before.scroll - now.scroll + before.head.y), 'the page moved up by the head\'s distance above the window').toBeLessThan(1);
+});
+
+// ledger ruling P2-R36: Close gives the focus back to the head of the box that opened the panel, while it is drawn, else to the diagram
+test('Close gives the focus back to the box head that opened the panel from the keyboard', async ({ page }) => {
+  await openWithPlan(page, circuitLv());
+  const head = page.locator('[data-step-id="circuit-lv"] .flow-node-head');
+  await head.focus();
+  await page.keyboard.press('Enter');                                                      // a pick on the canvas, which keeps the focus
+  const panel = page.getByRole('complementary', { name: 'Step: Basic Assembler' });
+  await expect(panel).toBeVisible();
+  await expect(head).toBeFocused();
+  await panel.getByRole('button', { name: 'Close the panel' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(panel).toHaveCount(0);
+  await expect(head).toBeFocused();
+});
+
+test('Close after a replan removed the box that opened the panel gives the focus to the diagram', async ({ page }) => {
+  const id = await openWithPlan(page, platesTwoWays());
+  await page.getByRole('button', { name: 'Fit' }).click();
+  const opener = page.locator('[data-node-id="import:t:iron_ingot@0@hammer-plate"]');      // the hammer's Iron Ingot stub
+  await opener.click();
+  const panel = page.getByRole('complementary', { name: 'Import: Iron Ingot' });
+  await expect(panel).toBeVisible();
+  // the next plan has no hammer, so its stub goes, while the bending machine still takes Iron Ingot and the panel stays (a later route wins)
+  await page.route('**/api/projects/*/plan', (route) => route.fulfill({ json: circuitLv() }));
+  const ops = [{ op: 'settings', patch: { amount: 31 } }];
+  expect((await page.request.post(`/api/projects/${id}/ops`, { headers: { 'X-Planner-Name': 'e2e' }, data: { ops } })).ok()).toBe(true);
+  await expect(page.locator('svg.flow-canvas [data-step-id]')).toHaveCount(3);
+  await expect(opener).toHaveCount(0);
+  await expect(panel).toBeVisible();
+  await panel.getByRole('button', { name: 'Close the panel' }).click();
+  await expect(panel).toHaveCount(0);
+  await expect(page.locator('svg.flow-canvas')).toBeFocused();
 });
 
 /** The output slot of the Basic Fluid Extractor (144 L of Molten Iron a run) and its count, as Chromium lays them out. */

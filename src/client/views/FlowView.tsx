@@ -8,7 +8,8 @@
 // a box or an arrow lights what it connects (the flow focus); a click pins it, and a click on a box also opens its panel;
 // Esc or a click on the empty canvas clears it. Find item and the Show buttons light a good and centre the step that makes
 // it. ELK lays the diagram out in its own worker (web-stack §7); drag pans and the wheel zooms.
-// The panel slides in once and each new one fades in; a step picked inside a panel takes the focus to its own (Phase 2 spec §8.6).
+// The panel slides in once and each new one fades in; a step picked inside a panel takes the focus to its own (Phase 2 spec §8.6), and
+// its Close gives the focus back to the box head that opened it, or to the canvas once that box is gone (ledger ruling P2-R36).
 
 import {
   useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactElement,
@@ -475,7 +476,8 @@ interface Hit { focus: Focus; node?: PlacedNode; toggle?: StuffKey }
  * under the pointer while the canvas moves on the page) and zoom (wheel, buttons, Fit), Find item and the "Imports in
  * one column" toggle; hovering lights what is under the pointer, a click pins it (a box click also calls `onOpen`),
  * Esc or a click on the empty canvas clears it. It opens on the target (or on what someone asked to see) whenever the
- * plan's steps change (`viewKey`), and centres the focus whenever a view asks (`revealFlowFocus`).
+ * plan's steps change (`viewKey`), and centres the focus whenever a view asks (`revealFlowFocus`). The canvas can take the
+ * focus from a script, out of the tab order: a panel's Close gives it there once the box that opened the panel is gone (P2-R36).
  */
 function FlowCanvas(props: {
   layout: FlowLayout; viewKey: string; selectedId: string | null; goods: Array<{ key: StuffKey; name: string }>;
@@ -680,6 +682,7 @@ function FlowCanvas(props: {
         className={canvasClasses.join(' ')}
         role="group"
         aria-label="Flow diagram"
+        tabIndex={-1}
         style={{ height: `min(${Math.ceil(layout.height + 2 * PAD)}px, 75vh)` }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
@@ -704,6 +707,21 @@ function FlowCanvas(props: {
       <FlowLegend />
     </div>
   );
+}
+
+/** True when the window (`width` × `height`) shows no part of `box`: it lies wholly above, below, left or right of it (ledger ruling P2-R35). */
+export function outsideWindow(box: { top: number; bottom: number; left: number; right: number }, width: number, height: number): boolean {
+  return box.bottom <= 0 || box.top >= height || box.right <= 0 || box.left >= width;
+}
+
+/**
+ * Gives `el` the focus without moving the page, then, only when the window shows no part of `seen` (what must be in sight: a panel's head, or
+ * `el` itself), scrolls `seen` in by the least scroll, so the focus stays in sight (ledger rulings P2-R35 and P2-R36; WCAG 2.4.11). What the
+ * window shows, even in part, never moves the page.
+ */
+function focusInWindow(el: HTMLElement | SVGElement, seen: Element = el): void {
+  el.focus({ preventScroll: true });
+  if (outsideWindow(seen.getBoundingClientRect(), innerWidth, innerHeight)) seen.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
 /** The box whose panel is open: a step, or an import stub (its panel is about its good). */
@@ -734,6 +752,10 @@ function FlowDiagram(props: {
   const sideRef = useRef<HTMLDivElement | null>(null);
   /** A step picked inside the panel replaced it: the new panel takes the focus, which went with the control that was picked (P2-D33). */
   const focusPanel = useRef(false);
+  /** The diagram's column: its Flow canvas takes the focus when the panel's Close finds the box that opened the panel gone (P2-R36). */
+  const mainRef = useRef<HTMLDivElement | null>(null);
+  /** The panel was closed with its Close button: the box whose head takes the focus back (P2-R36), else null. */
+  const refocusBox = useRef<string | null>(null);
 
   useEffect(() => {
     if (graph.nodes.length === 0) return undefined;
@@ -753,12 +775,24 @@ function FlowDiagram(props: {
       live = false;
     };
   }, [graph, viewKey]);
-  // The focus goes to the panel of a step picked inside the old panel, before it paints; a pick on the canvas leaves the focus where it is.
-  // The new panel stands where the old one stood, so taking the focus scrolls nothing: the page would jump to show a panel's cut-off end.
+  // Before it paints, the focus goes to the panel of a step picked inside the old panel, and the panel's Close gives it back to the head of
+  // the box that opened the panel, or to the canvas once a replan has removed that box; a pick on the canvas leaves the focus where it is.
+  // The new panel stands where the old one stood, so neither moves the page unless the window shows nothing of the panel's head or of the
+  // box head (a plain focus would jump the page to show a panel's cut-off end): then that comes in by the least scroll (P2-R35, P2-R36).
   useLayoutEffect(() => {
-    if (!focusPanel.current) return;
-    focusPanel.current = false;
-    sideRef.current?.querySelector('aside')?.focus({ preventScroll: true });
+    if (focusPanel.current) {
+      focusPanel.current = false;
+      const aside = sideRef.current?.querySelector('aside') ?? null;
+      if (aside !== null) focusInWindow(aside, aside.querySelector('.flow-panel-head') ?? aside);
+    }
+    const box = refocusBox.current;
+    if (box !== null) {
+      refocusBox.current = null;
+      const canvas = mainRef.current?.querySelector<SVGSVGElement>('svg.flow-canvas') ?? null;
+      const node = [...(canvas?.querySelectorAll('[data-node-id]') ?? [])].find((el) => el.getAttribute('data-node-id') === box);
+      const target = node?.querySelector<SVGGElement>('.flow-node-head[tabindex]') ?? canvas;
+      if (target !== null) focusInWindow(target);
+    }
   }, [selected]);
 
   if (graph.nodes.length === 0) return <p className="muted">This plan has nothing to draw.</p>;
@@ -772,7 +806,14 @@ function FlowDiagram(props: {
     focusPanel.current = true;
     setSelected({ kind: 'step', id });
   };
-  const close = (): void => setSelected(null);
+  /**
+   * The panel's Close: the focus goes back to the head of its box, the one a pick on the canvas opened it from (for a step reached from a
+   * panel, the box of that step), while it is drawn (P2-R36).
+   */
+  const close = (): void => {
+    refocusBox.current = selected === null ? null : selected.kind === 'step' ? selected.id : selected.nodeId;
+    setSelected(null);
+  };
   let panel: ReactElement | null = null;
   let selectedId: string | null = null;
   if (selected?.kind === 'step') {
@@ -796,7 +837,7 @@ function FlowDiagram(props: {
 
   return (
     <div className={panel === null ? 'flow' : 'flow has-panel'}>
-      <div className="flow-main">
+      <div className="flow-main" ref={mainRef}>
         <WhatChanged previous={previousPlan} plan={plan} />
         <FlowIssues plan={plan} settings={settings} send={send} onShow={(key) => revealFlowFocus({ kind: 'item', key })} />
         {error !== null && <p className="error" role="alert">{`Could not lay out the diagram: ${error}`}</p>}

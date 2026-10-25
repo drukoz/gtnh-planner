@@ -12,7 +12,7 @@ import {
 import { PSEUDO_MACHINE_ENTRIES } from '../../src/server/pack/machines.ts';
 import { TIER_NAMES } from '../../src/shared/gt/tiers.ts';
 import { formatNumber as sharedNumber, formatRate as sharedRate } from '../../src/shared/format.ts';
-import { FlowView, FlowNodeShape, FlowIssues, FlowLegend } from '../../src/client/views/FlowView.tsx';
+import { FlowView, FlowNodeShape, FlowIssues, FlowLegend, outsideWindow } from '../../src/client/views/FlowView.tsx';
 import { StepPanel } from '../../src/client/views/StepPanel.tsx';
 import { defaultSettings } from '../../src/shared/project/apply-op.ts';
 import { settingsHash } from '../../src/shared/project/settings-hash.ts';
@@ -838,5 +838,22 @@ describe('the recipe card\'s numbers', () => {
   it('fills the energy bar to the share of what the machine can draw', () => {
     expect(powerShare(step({}))).toBe(0.5); expect(powerShare(step({ oc: undefined }))).toBe(0.5);   // 16 of LV's 32 V × 1 A
     expect(powerShare(step({ handCraft: true }))).toBeNull(); expect(powerShare(step({ euPerTick: 0 }))).toBeNull();
+  });
+});
+
+// Ledger ruling P2-R35: the step panel that takes the focus after a pick inside the old one moves the page only when its head is outside the
+// window, wholly: a head the window shows, even in part, keeps the page still, and a hidden one is scrolled in by the least scroll.
+describe('flow diagram: a box outside the window', () => {
+  it('is one no part of which the window shows', () => {
+    type Box = { top: number; bottom: number; left: number; right: number };
+    const box = (top: number, bottom: number, left = 10, right = 300): Box => ({ top, bottom, left, right });
+    expect(outsideWindow(box(-60, -20), 1000, 600), 'wholly above').toBe(true);
+    expect(outsideWindow(box(-40, 0), 1000, 600), 'its bottom edge on the top of the window').toBe(true);
+    expect(outsideWindow(box(600, 640), 1000, 600), 'wholly below').toBe(true);
+    expect(outsideWindow(box(100, 140, -400, -10), 1000, 600), 'wholly left').toBe(true);
+    expect(outsideWindow(box(100, 140, 1000, 1200), 1000, 600), 'wholly right').toBe(true);
+    expect(outsideWindow(box(-20, 20), 1000, 600), 'cut by the top edge').toBe(false);
+    expect(outsideWindow(box(580, 620), 1000, 600), 'cut by the bottom edge').toBe(false);
+    expect(outsideWindow(box(100, 140), 1000, 600), 'inside').toBe(false);
   });
 });
