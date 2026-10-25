@@ -18,6 +18,7 @@
 // one block back from the spine with nothing of the line touching it.
 // Every order and tie-break is fixed, so the same plan gives the same placement.
 
+import { isPseudoMachineId, machineIdOfLegacy } from '../../shared/ids.ts';
 import { isFluidKey, itemKey, type ItemKey, type StuffKey } from '../../shared/keys.ts';
 import { joinNames } from '../../shared/layout/format.ts';
 import { DIRS, OPPOSITE, posKey, step, type Vec3 } from '../../shared/layout/geometry.ts';
@@ -27,6 +28,7 @@ import type { BlockRef, Machine, Pack, Product, Recipe } from '../../shared/type
 import { machineGroups } from '../../shared/plan/pools.ts';
 import type { BomLine, Plan, PlanStep, PlanWarning } from '../../shared/types/plan.ts';
 import { UNKNOWN_BLOCK } from '../../shared/types/world.ts';
+import { machineByMteId, machineOf } from '../pack/lookup.ts';
 import { stepProductName } from '../planner/bom.ts';
 import { minimalHatch } from '../planner/build-cost.ts';
 import { isAutoWorkbench } from '../planner/machine-options.ts';
@@ -303,7 +305,7 @@ function structureCells(pack: Pack, m: Machine): Shape | null {
   const cells = st.blocks.map((b): UnitCell => {
     if (samePos(b.pos, st.controller)) return { pos: [...b.pos], block: machineRef(m), role: 'machine', label: m.name, item: m.itemKey };
     if (b.block.mteId === undefined) return casingCell(pack, b.pos, b.block);
-    const exported = pack.machines.get(b.block.mteId);
+    const exported = machineByMteId(pack, b.block.mteId);
     if (exported === undefined) return { pos: [...b.pos], block: { ...b.block }, role: 'hatch', label: `${b.block.id} #${b.block.mteId}` };
     const hatch = minimalHatch(pack, exported);
     return { pos: [...b.pos], block: machineRef(hatch), role: 'hatch', label: hatch.name, item: hatch.itemKey };
@@ -553,7 +555,7 @@ function growLayers(shape: Shape, extra: number): Shape {
 
 /** A machine whose class simple name is `cls`. */
 function isClass(pack: Pack, mteId: number | undefined, cls: string): boolean {
-  return mteId !== undefined && simpleClassName(pack.machines.get(mteId)?.cls) === cls;
+  return mteId !== undefined && simpleClassName(machineByMteId(pack, mteId)?.cls) === cls;
 }
 
 /**
@@ -842,8 +844,9 @@ export function unitsFromPlan(pack: Pack, plan: Plan, opts: UnitOptions = {}): {
   for (const { steps: group } of groups) {
     const s = group[0]!;
     const count = s.count - s.owned;
-    if (s.farm !== undefined || s.handCraft || s.machine.mteId < 0 || count <= 0) continue;
-    const m = pack.machines.get(s.machine.mteId);
+    const machineId = machineIdOfLegacy(s.machine.mteId);
+    if (s.farm !== undefined || s.handCraft || isPseudoMachineId(machineId) || count <= 0) continue;
+    const m = machineOf(pack, machineId);
     if (m === undefined) {
       warnings.push({ code: 'unknown_machine', stepId: s.id, text: `${s.machine.name} (#${s.machine.mteId}) is not in this recipe export` });
       continue;

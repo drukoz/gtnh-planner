@@ -5,6 +5,7 @@
 // pack gives the same layout. Class checks compare the simple class name (architecture §11.19).
 
 import { tierName } from '../../shared/gt/tiers.ts';
+import { compareMachineId } from '../../shared/ids.ts';
 import { parseItemKey, type ItemKey, type StuffKey } from '../../shared/keys.ts';
 import { CONDUIT_NAMES, FLUID_CONDUITS } from '../../shared/layout/enderio.ts';
 import { fmtRate } from '../../shared/layout/format.ts';
@@ -12,6 +13,7 @@ import { ae2CableBlockRef, conduitBlockRef, partBlockRef } from '../../shared/ty
 import type { ConduitKind, LayoutBlock } from '../../shared/types/layout.ts';
 import type { BlockRef, Machine, Pack } from '../../shared/types/pack.ts';
 import type { PlanWarning } from '../../shared/types/plan.ts';
+import { allMachineIds, machineOf } from '../pack/lookup.ts';
 import { simpleClassName } from '../world/facts.ts';
 import { GT_MACHINE_BLOCK } from '../world/tiles.ts';
 
@@ -152,10 +154,10 @@ export function machineRef(m: Machine): BlockRef {
 
 type CableMachine = Machine & { cable: NonNullable<Machine['cable']> };
 
-/** Insulated before bare (bare wires shock players, gt-mechanics §3.3), then loss, voltage, amps and mteId, all ascending. */
+/** Insulated before bare (bare wires shock players, gt-mechanics §3.3), then loss, voltage, amps and id, all ascending. */
 function cableOrder(a: CableMachine, b: CableMachine): number {
   return Number(b.cable.insulated) - Number(a.cable.insulated) || a.cable.lossPerBlock - b.cable.lossPerBlock
-    || a.cable.voltage - b.cable.voltage || a.cable.amps - b.cable.amps || a.mteId - b.mteId;
+    || a.cable.voltage - b.cable.voltage || a.cable.amps - b.cable.amps || compareMachineId(a.id, b.id);
 }
 
 /**
@@ -165,7 +167,10 @@ function cableOrder(a: CableMachine, b: CableMachine): number {
  */
 export function pickCable(pack: Pack, need: { volts: number; amps: number }): { cable: Machine; ampsShort: boolean } | null {
   const rated: CableMachine[] = [];
-  for (const m of pack.machines.values()) if (m.kind === 'cable' && m.cable !== undefined && m.cable.voltage >= need.volts) rated.push(m as CableMachine);
+  for (const id of allMachineIds(pack)) {
+    const m = machineOf(pack, id);
+    if (m !== undefined && m.kind === 'cable' && m.cable !== undefined && m.cable.voltage >= need.volts) rated.push(m as CableMachine);
+  }
   if (rated.length === 0) return null;
   const enough = rated.filter((m) => m.cable.amps >= need.amps);
   if (enough.length > 0) return { cable: enough.sort(cableOrder)[0]!, ampsShort: false };
@@ -173,9 +178,9 @@ export function pickCable(pack: Pack, need: { volts: number; amps: number }): { 
   return { cable: rated.filter((m) => m.cable.amps === most).sort(cableOrder)[0]!, ampsShort: true };
 }
 
-/** The candidate with the smallest capacity ≥ `rate`, else the one with the largest; ties by mteId. */
+/** The candidate with the smallest capacity ≥ `rate`, else the one with the largest; ties by id. */
 function smallestEnough(candidates: ReadonlyArray<{ m: Machine; capacity: number }>, rate: number): Machine | null {
-  const sorted = [...candidates].sort((a, b) => a.capacity - b.capacity || a.m.mteId - b.m.mteId);
+  const sorted = [...candidates].sort((a, b) => a.capacity - b.capacity || compareMachineId(a.m.id, b.m.id));
   const enough = sorted.find((c) => c.capacity >= rate);
   if (enough !== undefined) return enough.m;
   const largest = sorted[sorted.length - 1];
@@ -185,25 +190,32 @@ function smallestEnough(candidates: ReadonlyArray<{ m: Machine; capacity: number
 /** The item pipe for `stacksPerSecond` (`Machine.itemPipe`). */
 export function pickItemPipe(pack: Pack, stacksPerSecond: number): Machine | null {
   const candidates: Array<{ m: Machine; capacity: number }> = [];
-  for (const m of pack.machines.values()) if (m.kind === 'item_pipe' && m.itemPipe !== undefined) candidates.push({ m, capacity: m.itemPipe.stacksPerSecond });
+  for (const id of allMachineIds(pack)) {
+    const m = machineOf(pack, id);
+    if (m !== undefined && m.kind === 'item_pipe' && m.itemPipe !== undefined) candidates.push({ m, capacity: m.itemPipe.stacksPerSecond });
+  }
   return smallestEnough(candidates, stacksPerSecond);
 }
 
 /** The fluid pipe for `litresPerSecond` (`Machine.fluidPipe`). */
 export function pickFluidPipe(pack: Pack, litresPerSecond: number): Machine | null {
   const candidates: Array<{ m: Machine; capacity: number }> = [];
-  for (const m of pack.machines.values()) if (m.kind === 'fluid_pipe' && m.fluidPipe !== undefined) candidates.push({ m, capacity: m.fluidPipe.litresPerSecond });
+  for (const id of allMachineIds(pack)) {
+    const m = machineOf(pack, id);
+    if (m !== undefined && m.kind === 'fluid_pipe' && m.fluidPipe !== undefined) candidates.push({ m, capacity: m.fluidPipe.litresPerSecond });
+  }
   return smallestEnough(candidates, litresPerSecond);
 }
 
 /**
  * The transformer between `lowerTier + 1` and `lowerTier` (a transformer's tier is its lower side, gt-mechanics §3.6):
- * the plain `MTETransformer` before others of that tier (hi-amp, power transformers), then mteId.
- */
+  * the plain `MTETransformer` before others of that tier (hi-amp, power transformers), then id.
+  */
 export function pickTransformer(pack: Pack, lowerTier: number): Machine | null {
   const rank = (m: Machine) => (simpleClassName(m.cls) === 'MTETransformer' ? 0 : 1);
-  const transformers = [...pack.machines.values()].filter((m) => m.kind === 'transformer' && m.tier === lowerTier);
-  return transformers.sort((a, b) => rank(a) - rank(b) || a.mteId - b.mteId)[0] ?? null;
+  const transformers = allMachineIds(pack).map((id) => machineOf(pack, id))
+    .filter((m): m is Machine => m !== undefined && m.kind === 'transformer' && m.tier === lowerTier);
+  return transformers.sort((a, b) => rank(a) - rank(b) || compareMachineId(a.id, b.id))[0] ?? null;
 }
 
 // ---- Hatches and buses ----
@@ -227,12 +239,13 @@ export function hatchLitres(tier: number): number {
 
 /**
  * The hatch of class `cls`: of exactly `tier` when given; else the lowest tier that holds `need.slots` (buses) or
- * `need.litres` (fluid hatches), else the lowest tier. Ties by mteId. A hatch without a tier sorts last and never
- * counts as big enough. Callers that get one smaller than `need` warn `hatch_small`.
- */
+  * `need.litres` (fluid hatches), else the lowest tier. Ties by id. A hatch without a tier sorts last and never
+  * counts as big enough. Callers that get one smaller than `need` warn `hatch_small`.
+  */
 export function pickHatch(pack: Pack, cls: HatchClass, tier: number | null, need?: { slots?: number; litres?: number }): Machine | null {
-  const hatches = [...pack.machines.values()].filter((m) => m.kind === 'hatch' && simpleClassName(m.cls) === cls);
-  const byTier = (a: Machine, b: Machine) => (a.tier ?? Infinity) - (b.tier ?? Infinity) || a.mteId - b.mteId;
+  const hatches = allMachineIds(pack).map((id) => machineOf(pack, id))
+    .filter((m): m is Machine => m !== undefined && m.kind === 'hatch' && simpleClassName(m.cls) === cls);
+  const byTier = (a: Machine, b: Machine) => (a.tier ?? Infinity) - (b.tier ?? Infinity) || compareMachineId(a.id, b.id);
   if (tier !== null) return hatches.filter((m) => m.tier === tier).sort(byTier)[0] ?? null;
   hatches.sort(byTier);
   const holds = (m: Machine): boolean => {

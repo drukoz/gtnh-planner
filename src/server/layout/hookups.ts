@@ -21,6 +21,7 @@ import type { BomLine, LogisticsMode, PlanWarning } from '../../shared/types/pla
 import {
   AIR_INDEX, UNKNOWN_INDEX, type Base, type LogisticsNetwork, type PowerNetwork, type TapPoint, type Voxels, type WorldScan,
 } from '../../shared/types/world.ts';
+import { machineByMteId } from '../pack/lookup.ts';
 import type { BlockConfig } from './arrange.ts';
 import type { ModeHookup } from './modes/mode.ts';
 import { findPath, linkBits, MAX_PATH_NODES, straightPath, type PathBounds } from './path.ts';
@@ -179,7 +180,7 @@ function intersect(a: PathBounds, b: PathBounds): PathBounds {
 /** The machine name by mteId, else the item name of `id@meta`, else the block id. */
 export function blockName(pack: Pack, ref: BlockRef): string {
   if (ref.mteId !== undefined) {
-    const machine = pack.machines.get(ref.mteId);
+    const machine = machineByMteId(pack, ref.mteId);
     if (machine !== undefined) return machine.name;
   }
   let name: string | undefined;
@@ -255,7 +256,7 @@ function cableAmpsOf(tap: LayoutTap): number {
 export function tapCableAmps(pack: Pack, vox: Voxels | null, tap: LayoutTap): number | undefined {
   if (tap.cableAmps !== undefined) return tap.cableAmps;
   const ref = existingBlock(vox, tap.pos);
-  return ref?.mteId === undefined ? undefined : pack.machines.get(ref.mteId)?.cable?.amps;
+  return ref?.mteId === undefined ? undefined : machineByMteId(pack, ref.mteId)?.cable?.amps;
 }
 
 /**

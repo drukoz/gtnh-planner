@@ -23,6 +23,7 @@ import type { Pack } from '../../shared/types/pack.ts';
 import type { BomLine, LogisticsMode, Plan, PlanContext, PlanWarning, PowerSummary } from '../../shared/types/plan.ts';
 import type { Project } from '../../shared/types/project.ts';
 import { findBase, type Base, type BBox, type LogisticsNetwork, type PowerNetwork, type Voxels, type WorldScan } from '../../shared/types/world.ts';
+import { machineByMteId } from '../pack/lookup.ts';
 import { emptyContext } from '../planner/plan.ts';
 import { contextFromScan } from '../world/context.ts';
 import { ENERGY_HATCH_RE, simpleClassName } from '../world/facts.ts';
@@ -110,7 +111,7 @@ function supplyTaps(net: PowerNetwork): { tier: number; taps: LayoutTap[]; other
 /** The taps with their own cable's amp rating (`cableAmps`): the scan's cable at the tap, else its block in `vox`. */
 function ratedTaps(pack: Pack, scan: WorldScan, vox: Voxels | null, taps: readonly LayoutTap[]): LayoutTap[] {
   const ratings = new Map<string, number>();
-  for (const p of scan.pipes) if (p.amps !== undefined && (p.kind ?? pack.machines.get(p.mteId)?.kind) === 'cable') ratings.set(`${p.dim}|${posKey(p.pos)}`, p.amps);
+  for (const p of scan.pipes) if (p.amps !== undefined && (p.kind ?? machineByMteId(pack, p.mteId)?.kind) === 'cable') ratings.set(`${p.dim}|${posKey(p.pos)}`, p.amps);
   return taps.map((t): LayoutTap => {
     const amps = t.cableAmps ?? ratings.get(`${t.dim}|${posKey(t.pos)}`) ?? tapCableAmps(pack, vox, t);
     return amps === undefined ? { ...t, pos: [...t.pos] } : { ...t, pos: [...t.pos], cableAmps: amps };
@@ -128,7 +129,7 @@ function networkCableTaps(pack: Pack, scan: WorldScan, net: PowerNetwork, dim: n
   const isListed = new Set(listed.map((t) => posKey(t.pos)));
   const taps: LayoutTap[] = [];
   for (const p of scan.pipes) {
-    const machine = pack.machines.get(p.mteId);
+    const machine = machineByMteId(pack, p.mteId);
     if (p.networkId !== net.id || p.dim !== dim || p.voltageTier !== supplyTier || (p.kind ?? machine?.kind) !== 'cable') continue;
     const amps = p.amps ?? machine?.cable?.amps;
     if (amps === undefined || isListed.has(posKey(p.pos))) continue;
@@ -164,14 +165,14 @@ function ratedTier(volts: number): number {
 function baseKeepAway(pack: Pack, scan: WorldScan, dim: number, supplyTier: number, tap: Vec3): Set<string> {
   const keys = new Set<string>();
   for (const p of scan.pipes) {
-    const machine = pack.machines.get(p.mteId);
+    const machine = machineByMteId(pack, p.mteId);
     if (p.dim !== dim || (p.kind ?? machine?.kind) !== 'cable') continue;
     const tier = p.voltageTier ?? (machine?.cable === undefined ? undefined : ratedTier(machine.cable.voltage));
     if (tier !== supplyTier) keys.add(posKey(p.pos));
   }
   for (const m of scan.machines) {
     if (m.dim !== dim) continue;
-    const machine = pack.machines.get(m.mteId);
+    const machine = machineByMteId(pack, m.mteId);
     const kind = m.kind ?? machine?.kind, tier = m.tier ?? machine?.tier;
     if (kind === undefined || tier === undefined) continue;
     const consumer = kind === 'basic' || (kind === 'hatch' && machine !== undefined && ENERGY_HATCH_RE.test(simpleClassName(machine.cls) ?? ''));
