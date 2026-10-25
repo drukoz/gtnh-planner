@@ -38,6 +38,7 @@ import type { Pack } from '../../../shared/types/pack.ts';
 import type { BomLine, Plan, PlanStep, PlanWarning } from '../../../shared/types/plan.ts';
 import { stepOneOffs } from '../../planner/bom.ts';
 import { AE2_POOL_MAX_PATTERNS, isAutoWorkbench } from '../../planner/machine-options.ts';
+import { machineByMteId } from '../../pack/lookup.ts';
 import { comparePos } from '../../world/graph.ts';
 import type { HostCover, LocalBlock, PlacedUnit } from '../arrange.ts';
 import { benchPattern } from '../bench.ts';
@@ -104,7 +105,7 @@ type StepFeed =
  * blocking mode does not ignore (`ignoredByBlocking`).
  */
 function blocksInto(pack: Pack, step: PlanStep): boolean {
-  if (isAutoWorkbench(pack.machines.get(step.machine.mteId))) return false;
+  if (isAutoWorkbench(machineByMteId(pack, step.machine.mteId))) return false;
   return stepOneOffs(pack, step).every((held) => ignoredByBlocking(pack, held.key));
 }
 

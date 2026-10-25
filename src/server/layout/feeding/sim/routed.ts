@@ -111,6 +111,8 @@ interface Pipe {
   readonly answerers: readonly Answerer[];
   /** What is on its way to it, by key: dispatched to it and not yet taken off (`transitQueue`). */
   readonly transit: Map<number, number>;
+  /** The full stacks its transit needs: `Σ ⌈count / stackLimit(key)⌉` over `transit`. */
+  transitSlots: number;
   /** Its send queue, head first. */
   readonly queue: Payload[];
 }
@@ -131,6 +133,8 @@ interface Payload {
   edge: Pipe; from: Pipe; base: number;
   /** Its next step and that step's tick; `enters`: the pipe an `ENTER` step enters. */
   step: typeof ARRIVE | typeof ENTER | typeof WANDER; at: number; enters: Pipe | null;
+  /** `prTravelTicks(0, priority)`: what a bounce and a wander wait. */
+  retry: number;
   /** It has been counted as bounced, or as wandering; it has gone in. */
   bounced: boolean; wandered: boolean; done: boolean;
   /** The pipe of its last try that took nothing, and that pipe's inventory's `changes` then (null: none yet). */
@@ -146,8 +150,12 @@ interface Actor {
   readonly pipe: Pipe;
   /** What an extractor's or a broadcaster's filter passes. */
   readonly pass: Uint8Array;
+  /** Whether the chip can ever do something: an extractor or a broadcaster whose filter passes some item, a stock keeper with a stock. */
+  readonly active: boolean;
   /** A stock keeper's stock, each item once (its first entry) in slot order, and whether it asks only while it stores none. */
   readonly stock: ReadonlyArray<{ readonly key: number; readonly count: number }>; readonly whenEmpty: boolean;
+  /** An extractor's last listing, kept while its inventory's `changes` stays what it was listed at. */
+  readonly listKeys: number[]; readonly listCounts: number[]; listChanges: number;
   /** The tick it acts next; a stock keeper's passes that requested nothing since the last that did. */
   next: number; idle: number;
   /** A broadcaster's orders, head first. */
@@ -178,7 +186,7 @@ export function routedModel(net: RoutedNet, env: SimEnv): NetworkModel {
       answerers.push({ rank: PR_PRIORITY_ORDER.indexOf(priority), own: chip.priority ?? 0, priority, pass: chip.kind === 'overflow' ? null : compile(chip, keys) });
     }
     return {
-      index, spec, inv, side: ref?.side ?? -1, slots: inv === null || ref === null ? [] : inv.sideSlots(ref.side), answerers, transit: new Map(), queue: [],
+      index, spec, inv, side: ref?.side ?? -1, slots: inv === null || ref === null ? [] : inv.sideSlots(ref.side), answerers, transit: new Map(), transitSlots: 0, queue: [],
     };
   });
   const hopsOf = (a: Pipe, b: Pipe): number | undefined => net.hops[a.spec.id]?.[b.spec.id];
@@ -230,16 +238,24 @@ export function routedModel(net: RoutedNet, env: SimEnv): NetworkModel {
     }
     if (room <= 0) return room;
     const limit = keys.limit(key);
-    for (const [k, n] of p.transit) room -= k === key ? n : limit * Math.ceil(n / keys.limit(k));
-    return room;
+    const own = p.transit.get(key) ?? 0;
+    return room - (p.transitSlots * limit - (limit * Math.ceil(own / limit) - own));
   };
 
   /** The room of the answer `answer` gave last. */
   let answerRoom = 0;
+  const skipStamp = new Int32Array(pipes.length);
+  let skipGen = 0;
   /** The best answer for `key` from pipe `from` but the pipes in `skip`: the first candidate whose room is above 0, or null. */
   const answer = (key: number, from: Pipe, skip: readonly Pipe[]): Candidate | null => {
+    if (skipGen === 0x7fffffff) {
+      skipStamp.fill(0);
+      skipGen = 1;
+    } else skipGen++;
+    const gen = skipGen;
+    for (const s of skip) skipStamp[s.index] = gen;
     for (const c of candidates(from, key)) {
-      if (skip.includes(c.pipe)) continue;
+      if (skipStamp[c.pipe.index] === gen) continue;
       const room = roomOf(c.pipe, key);
       if (room > 0) {
         answerRoom = room;
@@ -258,6 +274,7 @@ export function routedModel(net: RoutedNet, env: SimEnv): NetworkModel {
   const enqueue = (pipe: Pipe, key: number, count: number, dest: Pipe, priority: PrPriority): void => {
     pipe.queue.push({
       key, count, priority, dest, heading: dest.spec.target!.node, edge: dest, from: pipe, base: -1, step: ARRIVE, at: NEVER, enters: null,
+      retry: prTravelTicks(0, priority),
       bounced: false, wandered: false, done: false, tried: null, triedAt: 0,
     });
   };
@@ -265,7 +282,11 @@ export function routedModel(net: RoutedNet, env: SimEnv): NetworkModel {
   /** `pipe` sends payload `p`, the head of its send queue, at tick `t`: from then it counts in its destination's transit (`itemExpected`). */
   const dispatch = (pipe: Pipe, p: Payload, t: number): void => {
     const dest = p.dest!;
-    dest.transit.set(p.key, (dest.transit.get(p.key) ?? 0) + p.count);
+    const limit = keys.limit(p.key);
+    const before = dest.transit.get(p.key) ?? 0;
+    const after = before + p.count;
+    dest.transit.set(p.key, after);
+    dest.transitSlots += Math.ceil(after / limit) - Math.ceil(before / limit);
     p.base = t;
     p.at = t + prTravelTicks(hopsOf(pipe, dest) ?? 0, p.priority);
     flying.push(p);
@@ -275,9 +296,16 @@ export function routedModel(net: RoutedNet, env: SimEnv): NetworkModel {
 
   /** `itemReceived`: the last `n` of a payload of `key` went into `p`'s inventory, and its transit of `key` drops by them, never below 0. */
   const received = (p: Pipe, key: number, n: number): void => {
-    const left = (p.transit.get(key) ?? 0) - n;
-    if (left > 0) p.transit.set(key, left);
-    else p.transit.delete(key);
+    const limit = keys.limit(key);
+    const before = p.transit.get(key) ?? 0;
+    const left = before - n;
+    if (left > 0) {
+      p.transit.set(key, left);
+      p.transitSlots += Math.ceil(left / limit) - Math.ceil(before / limit);
+    } else {
+      p.transit.delete(key);
+      p.transitSlots -= Math.ceil(before / limit);
+    }
   };
 
   /** The payloads that lost their way, by the node they were heading for and item, in the order they first did (`pr_wander_path`). */
@@ -297,6 +325,7 @@ export function routedModel(net: RoutedNet, env: SimEnv): NetworkModel {
       p.edge = c.pipe;
       p.heading = c.pipe.spec.target!.node;
       p.priority = c.priority;
+      p.retry = prTravelTicks(0, c.priority);
       p.step = ARRIVE;
       p.at = t + prTravelTicks(c.hops, c.priority);
       return;
@@ -310,8 +339,9 @@ export function routedModel(net: RoutedNet, env: SimEnv): NetworkModel {
     }
     p.dest = null;
     p.priority = 'wandering';
+    p.retry = prTravelTicks(0, 'wandering');
     p.step = WANDER;
-    p.at = t + prTravelTicks(0, 'wandering');
+    p.at = t + p.retry;
   };
 
   /**
@@ -372,7 +402,7 @@ export function routedModel(net: RoutedNet, env: SimEnv): NetworkModel {
       p.bounced = true;
       stats.bounced(p.heading, p.key, p.count, t);
     }
-    p.at = t + prTravelTicks(0, p.priority);
+    p.at = t + p.retry;
   };
 
   /** The payloads' entity (phase `arrivals`): each tick, the payloads whose step falls on it, in dispatch order. */
@@ -418,13 +448,13 @@ export function routedModel(net: RoutedNet, env: SimEnv): NetworkModel {
         const key = keys.id(s.key);
         if (!stock.some((e) => e.key === key)) stock.push({ key, count: s.count });
       }
-      const actor: Actor = { kind: chip.kind, pipe, pass: compile(chip, keys), stock, whenEmpty: chip.requestMode === 'when_empty', next: 0, idle: 0, orders: [] };
+      const pass = compile(chip, keys);
+      const actor: Actor = { kind: chip.kind, pipe, pass, active: chip.kind === 'stock_keeper' ? stock.length > 0 : pass.includes(1), stock, whenEmpty: chip.requestMode === 'when_empty', listKeys: [], listCounts: [], listChanges: -1, next: 0, idle: 0, orders: [] };
       actor.next = env.loadedAt + delayOf(actor) - 1;
       actors.push(actor);
     }
   }
-  /** Whether a chip can ever do something: an extractor or a broadcaster whose filter passes some item, a stock keeper with a stock. */
-  const acts = (a: Actor): boolean => (a.kind === 'stock_keeper' ? a.stock.length > 0 : a.pass.includes(1));
+  const acts = (a: Actor): boolean => a.active;
   const broadcasters = actors.filter((a) => a.kind === 'broadcaster' && acts(a));
 
   /** Up to `n` of `key` out of `slots` of `inv`, in slot order, where it lets them out of `side`. Returns what it took. */
@@ -449,13 +479,13 @@ export function routedModel(net: RoutedNet, env: SimEnv): NetworkModel {
     return n;
   };
 
-  // one extractor act's listing, and the pipes it has sent one item to: kept between acts, so an act allocates nothing
-  const listedKeys: number[] = [];
-  const listedCounts: number[] = [];
+  // one extractor act's pipes it has sent one item to: kept between acts, so an act allocates nothing
   const sentTo: Pipe[] = [];
 
   /** `getAllItemStacks` (open question 5): each item `slots` of `inv` hold, once, with its total, in the order of the slot it first stands in. */
-  const list = (inv: SimInv, slots: readonly number[]): void => {
+  const list = (inv: SimInv, slots: readonly number[], a: Actor): void => {
+    const listedKeys = a.listKeys;
+    const listedCounts = a.listCounts;
     listedKeys.length = 0;
     listedCounts.length = 0;
     for (const slot of slots) {
@@ -467,6 +497,7 @@ export function routedModel(net: RoutedNet, env: SimEnv): NetworkModel {
         listedCounts.push(s.count);
       } else listedCounts[i]! += s.count;
     }
+    a.listChanges = inv.changes;
   };
 
   /**
@@ -480,7 +511,9 @@ export function routedModel(net: RoutedNet, env: SimEnv): NetworkModel {
     const bus = pipe.spec.target?.bus;
     // rule 9: what it takes out of an input bus is pulled back (research §3.2)
     const pulls = bus !== undefined && inputBuses.has(bus);
-    list(inv, pipe.slots);
+    if (a.listChanges !== inv.changes) list(inv, pipe.slots, a);
+    const listedKeys = a.listKeys;
+    const listedCounts = a.listCounts;
     for (let i = 0; i < listedKeys.length; i++) {
       const key = listedKeys[i]!;
       if (a.pass[key] !== 1) continue;
@@ -683,8 +716,9 @@ export function routedModel(net: RoutedNet, env: SimEnv): NetworkModel {
         if (seen === undefined) lostQueues.push({ pipe, key: q.key, n: q.count });
         else seen.n += q.count;
       }
-      pipe.queue.length = 0;
-      pipe.transit.clear();
+       pipe.queue.length = 0;
+       pipe.transit.clear();
+       pipe.transitSlots = 0;
     }
     for (const p of flying) lose(p, t);
     for (const a of actors) {
@@ -806,8 +840,8 @@ export function routedModel(net: RoutedNet, env: SimEnv): NetworkModel {
     })),
     ...lostWays.map(({ node, key, n }): FeedUnknown => ({
       code: 'pr_wander_path', text: `${fmtInt(n)} ${model.nameOf(keys.key(key))} on their way to ${model.nodes.find((x) => x.id === node)?.label ?? node} `
-        + `lost their way: the checker keeps a wandering payload at the pipe where it lost its way, asking for a route there every ${prTravelTicks(0, 'wandering')} `
-        + 'ticks, as it does not follow its random path through the pipes', key: keys.key(key), ...where(node),
+      + `lost their way: the checker keeps a wandering payload at the pipe where it lost its way, asking for a route there every ${prTravelTicks(0, 'wandering')} `
+      + 'ticks, as it does not follow its random path through the pipes', key: keys.key(key), ...where(node),
     })),
   ];
 

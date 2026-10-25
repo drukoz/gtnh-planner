@@ -30,6 +30,7 @@ import { stepItemInputs } from '../../../src/server/layout/modes/mode.ts';
 import { loadPack } from '../../../src/server/pack/load.ts';
 import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
 import { isFluidKey, type StuffKey } from '../../../src/shared/keys.ts';
+import { legacyMteId } from '../../../src/shared/ids.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import type { Layout } from '../../../src/shared/types/layout.ts';
 import type { Pack } from '../../../src/shared/types/pack.ts';
@@ -122,7 +123,7 @@ function machines(model: FeedModel): Array<Exclude<FeedNode, { kind: 'chest' }>>
 
 /** A machine as a message may name it: its place among the model's machines and its mteId, never its name or cell. */
 function who(model: FeedModel, node: Exclude<FeedNode, { kind: 'chest' }>): string {
-  return `machine ${machines(model).indexOf(node)} (mteId ${node.mteId})`;
+  return `machine ${machines(model).indexOf(node)} (mteId ${legacyMteId(node.machineId)})`;
 }
 
 /** Every item key the model names (its supply, sinks, plan rates and recipes), sorted: an item's place in it stands for the item. */
@@ -364,7 +365,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('the feeding checker on the rese
       // the others crowded there (the research also names the Electronic Circuit line's Circuit Assembler): counts and mteIds only
       const others = machines(model).filter((n) => crowded.has(n.label) && !chestFed.includes(n));
       console.log(`real-feeding ${line.name} enderio (Multi Stack Input unset): multistack_on crowds ${machinesText(chestFed.length)} fed from the input chest `
-        + `and ${others.length} ${others.length === 1 ? 'other' : 'others'}${others.length > 0 ? ` (mteIds ${others.map((n) => n.mteId).join(' ')})` : ''}`);
+         + `and ${others.length} ${others.length === 1 ? 'other' : 'others'}${others.length > 0 ? ` (mteIds ${others.map((n) => legacyMteId(n.machineId)).join(' ')})` : ''}`);
     }
     // red-alloy's two Alloy Smelters and the Electronic Circuit lines' Alloy Smelter
     expect(crowdedFromChest).toBeGreaterThanOrEqual(2);
