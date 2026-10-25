@@ -893,7 +893,8 @@ function baseDurationTicks(r: Recipe, mapId: string, pick: MachinePick): number 
  * significant digits and are sorted by `from`, `to`, `key`. Add-on 17: what the line takes of a capped free supply (a
  * farm the group runs, another project's surplus: `Solution.supplied`, by its column's good) reaches it as a bought input
  * does, from `raw`, so the layout's input chest, the flow diagram's imports and `indexPlan`'s ports count it; what it is
- * credited for (`Solution.credited`) is already part of what it sinks.
+ * credited for (`Solution.credited`) is already part of what it sinks. What goes to `sink` is first what comes from outside
+ * the line (`raw`, a farm step: `LpRecipe.farm`), up to what each makes; the rest is split pro rata (12 x 17 F5).
  */
 export function buildFlows(graph: CandidateGraph, sol: Solution, targets: StuffKey[]): PlanFlow[] {
   const { made, used } = recipeAmounts(graph, sol.runs);
@@ -922,16 +923,36 @@ export function buildFlows(graph: CandidateGraph, sol: Solution, targets: StuffK
     for (const [to, amount] of users ?? []) addAmount(used, ends.option, to, (taken * amount) / total);
   }
 
+  // What the line throws away of a good is first what comes from outside it (`raw`, a farm step, which the layout never
+  // places): a good the line also makes is then never brought in while sunk (12 x 17 F5: the layout listed it on both chests
+  // and EnderIO moved it between them for ever). The rest is split pro rata; totals, byproducts and credits are unchanged.
+  const outside = new Set<string>([RAW, ...graph.recipes.filter((r) => r.farm === true).map((r) => r.id)]);
   const flows: PlanFlow[] = [];
   for (const [key, producers] of made) {
     if (graph.goods.get(key)?.virtual === true) continue;
     const consumers = used.get(key);
-    const total = sum(consumers);
-    if (consumers === undefined || total <= 0) continue;
-    for (const [from, produced] of producers) {
-      for (const [to, amount] of consumers) {
+    if (consumers === undefined || sum(consumers) <= 0) continue;
+    const left = new Map(producers);
+    const takers = new Map(consumers);
+    let sunk = takers.get(SINK) ?? 0;
+    if (sunk > 0) {
+      for (const [from, produced] of producers) {
+        if (!outside.has(from) || sunk <= 0) continue;
+        const take = Math.min(produced, sunk);
+        if (take > FLOW_DROP_REL * produced) flows.push({ from, to: SINK, key, perSecond: sig9(take) });
+        left.set(from, produced - take);
+        sunk -= take;
+      }
+      if (sunk > 0) takers.set(SINK, sunk);
+      else takers.delete(SINK);
+    }
+    const total = sum(takers);
+    if (total <= 0) continue;
+    for (const [from, produced] of left) {
+      const all = producers.get(from) ?? produced;
+      for (const [to, amount] of takers) {
         const perSecond = (produced * amount) / total;
-        if (perSecond > FLOW_DROP_REL * produced) flows.push({ from, to, key, perSecond: sig9(perSecond) });
+        if (perSecond > FLOW_DROP_REL * all) flows.push({ from, to, key, perSecond: sig9(perSecond) });
       }
     }
   }

@@ -274,6 +274,26 @@ const RAW = 'raw';
 const OUT = 'out';
 const SINK = 'sink';
 
+/**
+ * The add-on 12 x 17 integration's F5: no item comes into a laid step from outside the line (`raw`, or a farm step, which
+ * the layout never places) while a laid step sends it to `sink` or `out`: the layout would list it on both chests, and
+ * EnderIO then moves it from one to the other for ever.
+ */
+function checkSupplySink(pack: Pack, plan: Plan): Violation[] {
+  const farms = new Set(plan.steps.filter((s) => s.farm !== undefined).map((s) => s.id));
+  const laid = (node: string): boolean => node !== RAW && node !== SINK && node !== OUT && !farms.has(node);
+  const fed = new Set<StuffKey>();
+  const thrown = new Set<StuffKey>();
+  for (const f of plan.flows) {
+    if (f.key.startsWith('fluid:')) continue;
+    if ((f.from === RAW || farms.has(f.from)) && laid(f.to)) fed.add(f.key);
+    if (laid(f.from) && (f.to === SINK || f.to === OUT)) thrown.add(f.key);
+  }
+  return [...fed].filter((key) => thrown.has(key)).sort().map((key): Violation => ({
+    kind: 'flow', severity: 'error', key, message: `${pack.nameOf(key)} comes into the line from outside it while a step of the line throws it away`,
+  }));
+}
+
 function checkFlows(pack: Pack, settings: PlanSettings, plan: Plan, led: Map<StuffKey, Ledger>, relTol: number, absTol: number): Violation[] {
   /**
    * What the 9-digit rounding of every step rate, buy and sink touching `key` (flows split producers by share), and of
@@ -831,6 +851,7 @@ export function checkPlanInvariants(pack: Pack, settings: PlanSettings, plan: Pl
   return [
     ...checkBalance(pack, settings, plan, led, relTol, absTol),
     ...checkFlows(pack, settings, plan, led, relTol, absTol),
+    ...checkSupplySink(pack, plan),
     ...checkProducers(pack, plan, led),
     ...checkMachines(pack, settings, plan, basis, ctx, relTol, buildCost),
     ...checkRawSources(pack, plan),

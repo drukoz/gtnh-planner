@@ -280,4 +280,17 @@ describe('checkPlanInvariants with build cost counted', () => {
     expect(room?.message).toContain('has room for more within its machines');
     expect(room?.data?.needsMachine).toBeUndefined();
   });
+
+  it('reports an item that comes in from raw while a step of the line throws it away (12 x 17 F5)', async () => {
+    const mini = miniGt();
+    const s: PlanSettings = { ...defaultSettings(), target: 't:circuit@0', per: 'min', amount: 30, tier: 1, rawCap: null };
+    const plan = await planLine(mini, s, emptyContext());
+    expect(errors(checkPlanInvariants(mini, s, plan, { buildCost: true }))).toEqual([]);
+    const maker = plan.steps.find((x) => x.mainOutput === 't:iron_plate@0')!;
+    const user = plan.steps.find((x) => x.inputs.some((i) => i.key === 't:iron_plate@0'))!;
+    const both = copy(plan);
+    both.flows.push({ from: 'raw', to: user.id, key: 't:iron_plate@0', perSecond: 0.1 }, { from: maker.id, to: 'sink', key: 't:iron_plate@0', perSecond: 0.1 });
+    expect(errors(checkPlanInvariants(mini, s, both, { buildCost: true })).filter((v) => v.message.endsWith('throws it away')).map((v) => [v.kind, v.key]))
+      .toEqual([['flow', 't:iron_plate@0']]);
+  });
 });
