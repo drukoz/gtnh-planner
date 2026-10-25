@@ -8,7 +8,8 @@
 // that the Settings button in the head slides in over a dimmed page (design spec §7a), a layer of its own while it is
 // open (ruling R36). What to make is the first of its sections, so it is never left out of sight: a project with no target
 // opens the drawer by itself, once, into the item search; the plan banner's hint to pick something to make goes there too;
-// and the Settings button says what the line makes.
+// and the Settings button says what the line makes. At the top of the banners, the plan's key numbers sit in a strip of
+// readouts (Phase 2 spec §10): what it makes, its peak power, its machines, and what it costs to build and to run.
 
 import { useEffect, useLayoutEffect, useRef, useState, type ReactElement } from 'react';
 import type { StuffKey } from '../../shared/keys.ts';
@@ -30,6 +31,7 @@ import { useName } from '../state/name.ts';
 import { useProject } from '../state/project-store.ts';
 import { CompareCard, CompareToggle, useCompare } from './CompareCard.tsx';
 import { ISSUE_ORDER, problemId } from './flow-model.ts';
+import { KeyNumbers } from './KeyNumbers.tsx';
 import { sourceNotes } from './materials-model.ts';
 import { costLine } from './plan-cost.ts';
 import { PROJECT_TABS, tabFromHash } from './project-tabs.ts';
@@ -424,9 +426,11 @@ export function ProjectPage(props: { id: string }): ReactElement {
         <DeleteProject id={project.id} name={project.name} label="Delete project" onDeleted={() => view.markDeleted(me)} />
       </div>
       {/* The banners' own box, so the page behind an open drawer can be inert in three pieces (ruling R36); it adds no space.
+          The key-numbers strip (Phase 2 spec §10) leads it, the plan's cost sentence beside it hidden from sight by a sibling rule.
           The Compare card (add-on 17) sits under the plan banner, in the same box, so it goes inert with them, and so does the bar that
-          holds its button on a narrow window. */}
+          holds its button on a narrow window: both below the strip, the card the box's last child (plan ruling p2-d44-landed). */}
       <div className="project-banners" inert={settingsOpen}>
+        <KeyNumbers plan={plan} settings={project.settings} />
         {view.error !== null && <p className="banner error" role="alert">{view.error}</p>}
         <PlanBanner plan={plan} planError={view.planError} planLoading={view.planLoading} settings={project.settings} send={send} onPickTarget={pickTarget} />
         {comparable && (

@@ -109,6 +109,8 @@ const DARK_TOUR: DarkStop[] = [
       { what: 'a hint of Plan for', selector: '.settings-section p.choice-hint', property: 'color', expected: 'rgb(168, 168, 168)' },
       // Task 4: a step box's chip, the dark screen's #0b0b0b through --flow-chip (spec §7.5)
       { what: 'a chip', selector: '[data-step-id="wire"] .flow-chip rect', property: 'fill', expected: 'rgb(11, 11, 11)' },
+      // Task 7: a key-numbers tile, the dark screen's #0b0b0b (spec §10.2, §4.11)
+      { what: 'a key-numbers tile', selector: '.key-number', property: 'background-color', expected: 'rgb(11, 11, 11)' },
     ],
   },
   // the base's surfaces (plan ruling base-surfaces-dark): they read the tokens, so the dark blocks reach them with no rule of their own

@@ -177,6 +177,7 @@ a, button.link { color: var(--ink-link); }
  * R19: a brightness pulse could not show on the lit pipe's white contents). A tooltip fades in and rises 2px (`tip-in`, ruling
  * R27). Logo C's pipe steps through its frames on opacity alone (`brand-flow`, Phase 2 spec §5.3). The shared tooltip fades out and
  * sinks 2px as it goes (`tip-out`, Phase 2 spec §6.3), the one exit that keeps its last frame, as the box is removed once it has run.
+ * A changed tile of the key-numbers strip flashes its frame once, from full opacity to its own nothing (`flash-out`, Phase 2 spec §10.1).
  * Under reduced motion every duration is zero and an animation runs once, for a millisecond: nothing moves.
  */
 @keyframes fade-in { from { opacity: 0; } }
@@ -191,6 +192,7 @@ a, button.link { color: var(--ink-link); }
 @keyframes pipe-pulse { 0%, 100% { opacity: 1; } 35% { opacity: 0.15; } }
 @keyframes brand-flow { 0% { opacity: 1; } 33.333% { opacity: 0; } }
 @keyframes tip-out { to { opacity: 0; transform: translateY(2px); } }
+@keyframes flash-out { from { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) {
   :root { --dur-fast: 0ms; --dur-base: 0ms; --dur-slow: 0ms; --dur-exit: 0ms; }
   *, *::before, *::after {
@@ -482,6 +484,43 @@ button.banner-chip { display: inline-flex; align-items: center; gap: 6px; min-he
 /* What the plan costs to run and to build (plan 12), above the banner. It is a line on the stone: the ink of the page, with
    figures that line up. */
 .plan-cost { margin: 0 0 var(--gap); color: var(--ink); font-family: var(--font-ui); font-size: 14px; font-variant-numeric: tabular-nums; }
+/*
+ * The key-numbers strip (Phase 2 spec §10): five readout tiles at the top of the banners' box, each a screen in a black edge with its bevel,
+ * five to a row down to a 732 px box (a 780 px window). A tile is 52 px whichever font is in, every line in px: a label row of 11 px Inter
+ * on a 14 px line, the label in capitals and on one line, its qualifier at the right in the page's case, cut with an ellipsis where the
+ * tile is narrow; then the figure in VT323 28 px on a 26 px line (its digits as tall as the 24 px Pixelify the strip was first drawn in,
+ * §25), on one line, never shrunk and cut with an ellipsis past its tile, its unit in VT323 15 px on the same line, a rate in words in
+ * Inter 15 px. A changed tile's qualifier reads yellow while a 2 px yellow frame fades once over its edge (opacity only; the frame rests at
+ * its own opacity 0). The strip takes 60 px with its margin, and so does the empty box that keeps its place while the plan is on its way.
+ * The plan's cost sentence stays for a screen reader, hidden from sight as `.visually-hidden` hides, by a sibling rule: its paragraph takes
+ * no class.
+ */
+.key-numbers { margin: 0 0 8px; }
+.key-numbers > dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin: 0; }
+.key-number {
+  position: relative; height: 52px; padding: 4px 10px;
+  background: var(--screen); border: 2px solid var(--outline); box-shadow: var(--bevel-screen);
+}
+.key-number dt {
+  display: flex; justify-content: space-between; gap: 6px; white-space: nowrap;
+  font: 11px/14px var(--font-ui); text-transform: uppercase; letter-spacing: 0.06em; color: var(--screen-muted);
+}
+.key-number-sub { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-transform: none; letter-spacing: 0; }
+.key-number dd {
+  margin: 0; font: 28px/26px var(--font-digits); font-size-adjust: cap-height 0.56; color: var(--screen-text); font-variant-numeric: tabular-nums;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.key-number-unit { margin-left: 4px; font: 15px/26px var(--font-digits); color: var(--screen-muted); font-size-adjust: cap-height 0.56; }
+.key-number dd.key-number-words { font: 15px/26px var(--font-ui); }
+.key-number.changed .key-number-sub { color: var(--accent); }
+.key-number-flash {
+  position: absolute; inset: -2px; border: 2px solid var(--accent); pointer-events: none;
+  animation: flash-out 700ms var(--ease-out); opacity: 0;
+}
+.key-numbers-wait { height: 52px; margin: 0 0 8px; }
+.project-banners > .key-numbers ~ .plan-cost {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+}
 /*
  * The Compare card (add-on 17): the three planning modes side by side, under the plan banner. Its button is a small button in the
  * project head (in a bar of its own under the banner at 900 px and below), yellow while the card is open, so a closed card takes no

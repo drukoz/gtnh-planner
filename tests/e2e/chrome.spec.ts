@@ -2,7 +2,8 @@
 // design spec §7a). The end-to-end tests aim the mouse at canvas centres, so the top bar and the tab strip must measure the same
 // whether the web fonts have arrived or never do: a font swap would otherwise shift every canvas under them. And a user who asked
 // for reduced motion gets a live dot that holds still, and a logo whose pipe never moves (Phase 2 spec §5.3: it flows six turns
-// otherwise, then rests on its still frame). The figures, in VT323 (Phase 2 spec §25), keep their boxes whether that face arrives or not.
+// otherwise, then rests on its still frame). The figures, in VT323 (Phase 2 spec §25), keep their boxes whether that face arrives or not,
+// and so does the key-numbers strip above the tabs (Phase 2 spec §10), within its 60 px.
 
 import { test, expect, type Browser } from '@playwright/test';
 import { login, setName, createProject, LV_CIRCUITS } from './helpers.ts';
@@ -148,4 +149,34 @@ test('figures in VT323 keep their boxes whether the fonts arrive or not', async 
   expect(withFonts.count).toBe(without.count);
   expect(withFonts.tile).toBe(without.tile);
   expect(without.tile).toBeCloseTo(54.7, 0);
+});
+
+test('the key-numbers strip keeps its height whether the fonts arrive or not, within 60 px', async ({ browser }) => {
+  // spec §10.2 and §3.6: 52 px tiles on lines of fixed px heights, so a late VT323 (the face of the strip's figures, spec §25) moves nothing
+  // under them; with its margin the strip takes at most 60 px, the 27.7 px it adds to the 32.3 px cost line it replaces
+  const strip = async (blockFonts: boolean): Promise<{ height: number; margin: number; loaded: string[] }> => {
+    const context = await browser.newContext();
+    try {
+      const page = await context.newPage();
+      if (blockFonts) await page.route(/\.woff2?$/, (route) => route.abort());
+      await login(page); await setName(page, 'Ann');
+      await createProject(page, blockFonts ? 'Strip without fonts' : 'Strip with fonts', LV_CIRCUITS);
+      const box = page.locator('.key-numbers');
+      await expect(box).toBeVisible();
+      await page.evaluate(async () => { await document.fonts.ready; });
+      return {
+        height: (await box.boundingBox())!.height,
+        margin: await box.evaluate((el) => Number.parseFloat(getComputedStyle(el).marginBottom)),
+        loaded: await page.evaluate(() => [...document.fonts].filter((face) => face.status === 'loaded').map((face) => face.family)),
+      };
+    } finally {
+      await context.close();
+    }
+  };
+  const without = await strip(true);
+  const withFonts = await strip(false);
+  expect(without.loaded, 'the faces that loaded with the font files refused').toEqual([]);
+  expect(withFonts.loaded.some((family) => family.includes('VT323')), 'a VT323 face loaded with the font files served').toBe(true);
+  expect(withFonts.height).toBe(without.height);
+  expect(without.height + without.margin).toBeLessThanOrEqual(60);
 });

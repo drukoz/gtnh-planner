@@ -240,6 +240,10 @@ const PAIRS: Pair[] = [
   ['pressed Grid / List', '--accent', '--btn-lo', AA],
   ['grid tick on a marked slot\'s dimmed face', '--screen-text', { over: 'rgb(0 0 0 / 0.4)', on: '--slot' }, GRAPHICS],
   ['grid slot focus ring on the slot beside it', '--panel-focus', '--slot', GRAPHICS], ['grid slot focus ring on the recess', '--panel-focus', '--panel', GRAPHICS],
+
+  // the key-numbers strip (Phase 2 Task 7, spec §10): a changed tile's qualifier, yellow on its screen while the tile flashes; the label, the
+  // qualifier at rest and the figure are the readout pairs above (Task 5a's: --screen-muted and --screen-text on --screen)
+  ['strip changed accent', '--accent', '--screen', AA],
 ];
 
 describe('contrast of the Machine GUI palette', () => {

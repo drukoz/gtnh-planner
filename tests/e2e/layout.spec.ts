@@ -50,6 +50,9 @@ test('plan a line, see it on the map, move it, follow a pin and look at it in 3D
 
   await panel.getByRole('button', { name: 'Move line' }).click();
   const box = (await page.locator('canvas[role=img]').boundingBox())!;
+  // the chrome's height budget (Phase 2 spec §3.6): with the key-numbers strip above the tabs the canvas's middle, which the drag below
+  // presses, stays well inside the 720 px window
+  expect(box.y + box.height / 2).toBeLessThan(700);
   const screen = (x: number, z: number) => [box.x + box.width / 2 + (x - 4.5) * 4, box.y + box.height / 2 + (z - 5.5) * 4];   // Plan 4: focus = base centre + 0.5, 4 px per block
   const [sx, sy] = screen(layout.origin[0] + layout.size[0] / 2, layout.origin[2] + layout.size[2] / 2);
   await page.mouse.move(sx!, sy!);

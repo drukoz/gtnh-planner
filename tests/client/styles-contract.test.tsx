@@ -136,6 +136,7 @@ const KEYFRAMES: Record<string, string[]> = {
   'brand-flow': ['opacity'],                                                         // Phase 2 spec §5.3: logo C's pipe, frame by frame
   'tip-out': ['opacity', 'transform'],                                               // Phase 2 spec §6.3: the shared tooltip's 80 ms exit
   'gt-arrow': ['transform'],                                                         // Phase 2 spec §11.3: the GT progress arrow fills in eight steps
+  'flash-out': ['opacity'],                                                          // Phase 2 spec §10.1: a changed strip tile's frame fades once
 };
 
 const FONT_IMPORTS = [
@@ -2597,6 +2598,17 @@ const GRID_RULES = [
   'button.mat-slot-more', 'button.mat-slot-more > .stack-count',
 ];
 
+/**
+ * Phase 2 Task 7 (spec §10.2): the key-numbers strip, five readout tiles at the top of the banners' box, each a label row with its qualifier
+ * over a VT323 figure and its unit; a changed tile's frame and qualifier flash once; the place it keeps while its plan is on its way; and the
+ * plan's cost sentence beside it, kept for a screen reader and hidden from sight by a sibling rule (`.plan-cost`'s own rule is pinned).
+ */
+const STRIP_HIDE = '.project-banners > .key-numbers ~ .plan-cost';
+const STRIP_RULES = [
+  '.key-numbers', '.key-numbers > dl', '.key-number', '.key-number dt', '.key-number-sub', '.key-number dd', '.key-number-unit',
+  '.key-number dd.key-number-words', '.key-number.changed .key-number-sub', '.key-number-flash', '.key-numbers-wait', STRIP_HIDE,
+];
+
 /** The selectors of every rule Phase 2 adds; each later task appends its own. */
 const PHASE2_RULES: string[] = [
   '.theme-button', '.theme-button::before', ".theme-button[data-choice='dark']::before", ".theme-button[data-choice='light']::before",
@@ -2610,6 +2622,7 @@ const PHASE2_RULES: string[] = [
   '.flow-canvas:focus', '.flow-canvas:focus-visible',                                // Task 5b fix round 1: the canvas's focus (P2-R36)
   ...GRID_RULES,                                                                     // Task 6a: the inventory grid (spec §9.3)
   ...MAT_FOLD_RULES,                                                                 // Task 6b: the Materials disclosures fold (spec §3.3, R16)
+  ...STRIP_RULES,                                                                    // Task 7: the key-numbers strip (spec §10.2)
 ];
 /** The colour literals a Phase 2 rule may write: each is the same in both looks (spec §4.4). */
 const SAME_IN_BOTH = ['#ffffff', '#000000', '#aaaaaa', '#100010', '#ffff55', 'rgb(0 0 0 / 0.4)'];
@@ -2671,6 +2684,7 @@ describe('the Machine GUI Phase 2: the dark look and the Theme button', () => {
 const DIGIT_RULES: string[] = [
   '.fig', '.compare-row > dd', 'details.settings-section > summary > .muted', '.step-list li::marker', '.map-y', '.view3d-layer-text', '.smart-total',
   STACK_COUNT, '.readout dd',                                                        // Task 5a: a slot's count and a recipe readout, whole in VT323
+  '.key-number dd', '.key-number-unit',                                              // Task 7: the strip's figure and its unit, whole in VT323
 ];
 /** VT323 only at 14px or more (plan ruling digits-floor): at 13px a stroke thins to half a pixel on a 1x screen. */
 const DIGITS_FLOOR = 14;
@@ -2927,6 +2941,73 @@ describe('the Machine GUI Phase 2: the inventory grid', () => {
     expect(inBlock('button.mat-slot:not(:focus-visible)')).toBeGreaterThan(inBlock('.gt-arrow, .gt-arrow.on-chat'));
     // tokens and square corners, as every rule of the slots and Materials
     for (const selector of GRID_RULES) {
+      expect(ruleBody(selector), selector).not.toMatch(OLD_ALIASES);
+      expect(declared(selector, 'border-radius') ?? '0', selector).toBe('0');
+    }
+  });
+});
+
+// The key-numbers strip (Phase 2 spec §10, Task 7): five readout tiles at the top of the banners' box, each a screen in a black edge with its
+// bevel, 52 px tall whichever font is in: a label row of 11 px Inter on a 14 px line, its qualifier at the right cut with an ellipsis, over the
+// figure in VT323 28 px on a 26 px line, its digits as tall as the 24 px Pixelify the spec first gave it (§25, plan rulings digits-sizes and
+// strip-figures), on one line and never shrunk, its unit VT323 15 px on the same 26 px line, and a rate in words in Inter 15 px. A changed
+// tile's 2 px yellow frame fades once over its edge (opacity only, no fill mode: the frame rests at its own opacity 0) while its qualifier
+// reads yellow. The strip takes 60 px with its margin, and so does the empty box that keeps its place while the plan is on its way; the
+// plan's cost sentence beside it stays for a screen reader, hidden from sight by a sibling rule, as `.visually-hidden` hides (its own rule,
+// `.plan-cost`, is pinned by the chrome case above and left as it is).
+describe('the Machine GUI Phase 2: the key-numbers strip', () => {
+  it('shows the key numbers on 52 px readout tiles, and hides the cost sentence beside them', () => {
+    expectDeclared([
+      ['.key-numbers', 'margin', '0 0 8px'],
+      ['.key-numbers > dl', 'display', 'grid'], ['.key-numbers > dl', 'grid-template-columns', 'repeat(auto-fit, minmax(140px, 1fr))'],
+      ['.key-numbers > dl', 'gap', '8px'], ['.key-numbers > dl', 'margin', '0'],
+      ['.key-number', 'position', 'relative'], ['.key-number', 'height', '52px'], ['.key-number', 'padding', '4px 10px'],
+      ['.key-number', 'background', 'var(--screen)'], ['.key-number', 'border', '2px solid var(--outline)'], ['.key-number', 'box-shadow', 'var(--bevel-screen)'],
+      ['.key-number dt', 'display', 'flex'], ['.key-number dt', 'justify-content', 'space-between'], ['.key-number dt', 'gap', '6px'],
+      ['.key-number dt', 'font', '11px/14px var(--font-ui)'], ['.key-number dt', 'text-transform', 'uppercase'], ['.key-number dt', 'letter-spacing', '0.06em'],
+      ['.key-number dt', 'color', 'var(--screen-muted)'],
+      // the label keeps its one line: only the qualifier gives way, cut with an ellipsis
+      ['.key-number dt', 'white-space', 'nowrap'],
+      ['.key-number-sub', 'min-width', '0'], ['.key-number-sub', 'overflow', 'hidden'], ['.key-number-sub', 'text-overflow', 'ellipsis'],
+      ['.key-number-sub', 'white-space', 'nowrap'], ['.key-number-sub', 'text-transform', 'none'], ['.key-number-sub', 'letter-spacing', '0'],
+      ['.key-number dd', 'margin', '0'], ['.key-number dd', 'font', '28px/26px var(--font-digits)'], ['.key-number dd', 'font-size-adjust', 'cap-height 0.56'],
+      ['.key-number dd', 'color', 'var(--screen-text)'], ['.key-number dd', 'font-variant-numeric', 'tabular-nums'],
+      // a figure on one line, as the Compare tiles' since 4bef36c, and never shrunk (plan ruling strip-figures): no size container, no clamp
+      ['.key-number dd', 'white-space', 'nowrap'], ['.key-number dd', 'overflow', 'hidden'], ['.key-number dd', 'text-overflow', 'ellipsis'],
+      ['.key-number-unit', 'margin-left', '4px'], ['.key-number-unit', 'font', '15px/26px var(--font-digits)'],
+      ['.key-number-unit', 'font-size-adjust', 'cap-height 0.56'], ['.key-number-unit', 'color', 'var(--screen-muted)'],
+      ['.key-number dd.key-number-words', 'font', '15px/26px var(--font-ui)'],
+      ['.key-number.changed .key-number-sub', 'color', 'var(--accent)'],
+      ['.key-number-flash', 'position', 'absolute'], ['.key-number-flash', 'inset', '-2px'], ['.key-number-flash', 'border', '2px solid var(--accent)'],
+      ['.key-number-flash', 'pointer-events', 'none'], ['.key-number-flash', 'animation', 'flash-out 700ms var(--ease-out)'], ['.key-number-flash', 'opacity', '0'],
+      ['.key-numbers-wait', 'height', '52px'], ['.key-numbers-wait', 'margin', '0 0 8px'],
+      [STRIP_HIDE, 'position', 'absolute'], [STRIP_HIDE, 'width', '1px'], [STRIP_HIDE, 'height', '1px'], [STRIP_HIDE, 'overflow', 'hidden'],
+      [STRIP_HIDE, 'clip-path', 'inset(50%)'], [STRIP_HIDE, 'white-space', 'nowrap'],
+    ]);
+    // the tile adds up to its 52 px, line boxes in px: 2 x 2 of edge, 2 x 4 of padding, the label's 14 px line and the figure's 26 px line;
+    // the unit sits on the figure's line, and the words take it too
+    const px = (value: string | undefined): number => Number.parseFloat(value ?? '');
+    const line = (selector: string): number => px(/\/(\S+)/.exec(declared(selector, 'font') ?? '')?.[1]);
+    const tile = 2 * px(declared('.key-number', 'border')) + 2 * px(declared('.key-number', 'padding')) + line('.key-number dt') + line('.key-number dd');
+    expect(tile).toBe(px(declared('.key-number', 'height')));
+    expect([line('.key-number-unit'), line('.key-number dd.key-number-words')]).toEqual([line('.key-number dd'), line('.key-number dd')]);
+    expect(declared('.key-number dd', 'container-type')).toBeUndefined(); expect(declared('.key-number dd', 'font-size')).toBeUndefined();
+    // with its margin the strip takes 60 px (spec §3.6: +27.7 px against the 32.3 px cost line it replaces), and the box that keeps its place
+    // while the plan is on its way takes as much, so the views below never move when the figures come
+    expect(px(declared('.key-number', 'height')) + px(declared('.key-numbers', 'margin')?.split(' ')[2])).toBe(60);
+    expect(px(declared('.key-numbers-wait', 'height')) + px(declared('.key-numbers-wait', 'margin')?.split(' ')[2])).toBe(60);
+    // the flash: once, well under 5 s, and resting at the frame's own opacity, so no fill mode; it fades from full and takes no pointer
+    expect(declared('.key-number-flash', 'animation')).not.toMatch(/infinite|forwards|backwards|both/);
+    expect(ruleBody('@keyframes flash-out')).toMatch(/^from \{ opacity: 1;? \}$/);
+    // the sentence is hidden as `.visually-hidden` hides, declaration for declaration, and the rule of the sentence itself is left alone
+    expect(declarations(ruleBody(STRIP_HIDE))).toEqual(declarations(ruleBody('.visually-hidden')));
+    expect(declarations(ruleBody('.plan-cost'))).toEqual([
+      ['margin', '0 0 var(--gap)'], ['color', 'var(--ink)'], ['font-family', 'var(--font-ui)'], ['font-size', '14px'], ['font-variant-numeric', 'tabular-nums'],
+    ]);
+    // the strip's rules sit after the cost line's and before the Compare card's (the box's order: the strip, the sentence, the banner, the card)
+    for (const selector of STRIP_RULES) {
+      expect(position(selector), selector).toBeGreaterThan(position('.plan-cost'));
+      expect(position(selector), selector).toBeLessThan(position(".compare-toggle[aria-expanded='true']"));
       expect(ruleBody(selector), selector).not.toMatch(OLD_ALIASES);
       expect(declared(selector, 'border-radius') ?? '0', selector).toBe('0');
     }
