@@ -116,14 +116,17 @@ describe('the Connections tab', () => {
     expect(html).toContain('Could not load the layout: boom');
     expect(html).toContain('Could not lay out the connections: elk');
   });
-  // plan 11, Task 8's review ruling: a box is a fixed 260 px wide, so a text too long for it ends in … and the box's
-  // tooltip (its first child, as in the flow diagram) holds every text in full
+  // plan 11, Task 8's review ruling: a box is a fixed 260 px wide, so a text too long for it ends in … and the box's tip
+  // and accessible name (its `data-tip` and `aria-label`, as in the flow diagram; Phase 2 spec §6.4) hold every text in full
   it('cuts a box text too long for its box with …, and keeps every text of the box in full in its tooltip', () => {
-    const box = /<g data-node="step:b"[^>]*>(.*?)<\/g>/s.exec(shell())![1]!;
-    expect(/^<title>(.*?)<\/title><rect /s.exec(box)?.[1])
-      .toBe('1× Advanced Assembler\nMV · 30 EU/t\nAdvanced Assembler, south side · Item Conduit — In / Out · in Red · out Yellow');
+    const [, tag, box] = /(<g data-node="step:b"[^>]*>)(.*?)<\/g>/s.exec(shell())!;
+    const full = '1× Advanced Assembler\nMV · 30 EU/t\nAdvanced Assembler, south side · Item Conduit — In / Out · in Red · out Yellow';
+    expect(/ data-tip="([^"]*)"/.exec(tag!)?.[1]).toBe(full);
+    expect(/ aria-label="([^"]*)"/.exec(tag!)?.[1]).toBe(full);
+    expect(box).toMatch(/^<rect /);
     expect(box).toMatch(/data-face="step:b#conduit:1,64,1:item:north"[^>]*>Advanced Assembler, south side · Item …<\/text>/);
     expect(box).not.toContain('Item Conduit</text>');
+    expect(shell()).not.toContain('<title');                                           // no SVG title is left in the picture
   });
   it('shows a title of up to 32 characters and a line or face row of up to 38 whole, and cuts a longer one there', () => {
     const text = (n: number): string => 'abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ'.slice(0, n);
@@ -135,7 +138,7 @@ describe('the Connections tab', () => {
     const texts = (html: string): string[] => [...html.matchAll(/<text class="(conn-[a-z]+)"[^>]*>(.*?)<\/text>/g)].map((m) => `${m[1]}: ${m[2]}`);
     expect(texts(draw(32, 38))).toEqual([`conn-title: ${text(32)}`, `conn-line: ${text(38)}`, `conn-face: ${text(38)}`]);
     expect(texts(draw(33, 39))).toEqual([`conn-title: ${text(32)}…`, `conn-line: ${text(38)}…`, `conn-face: ${text(38)}…`]);
-    expect(draw(33, 39)).toContain(`<title>${text(33)}\n${text(39)}\n${text(39)}</title>`);
+    expect(draw(33, 39)).toContain(`data-tip="${text(33)}\n${text(39)}\n${text(39)}"`);
   });
   it('lays the line out before it draws it', () => {
     const project = { id: 'P1', settings: { mode: 'rate', per: 'min', logistics: 'enderio' }, placement: null, world: { scanId: null, baseId: null } } as never;
@@ -256,7 +259,7 @@ describe('the Connections pipes', () => {
 
   it('draws square boxes, the face rows\' part starting where the rect ends', () => {
     const box = /<g data-node="step:a"[^>]*>(.*?)<\/g>/s.exec(shell())![1]!;
-    expect(box).toMatch(/<\/title><rect width="260" height="46" rx="0"><\/rect><path d="M 0 46 H 260 V 84 /);
+    expect(box).toMatch(/^<rect width="260" height="46" rx="0"><\/rect><path d="M 0 46 H 260 V 84 /);
   });
 
   // ruling R31 (WCAG 2.2.2): the pipes move for as long as the picture is shown, so a text button after Fit stops them all, the one

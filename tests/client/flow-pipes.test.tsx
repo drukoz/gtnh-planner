@@ -13,7 +13,7 @@ type Edge = FlowLayout['edges'][number];
 
 const edge: Edge = {
   id: 'e1', from: 'a', to: 'b', key: 't:iron_ingot@0', fromPort: 'a|out|t:iron_ingot@0', toPort: 'b|in|t:iron_ingot@0', perSecond: 1,
-  name: 'Iron Ingot', rate: '1/s', title: 'Iron Ingot · 1/s · A → B', points: [[0, 0], [40, 0]],
+  name: 'Iron Ingot', rate: '1/s', title: 'Iron Ingot · 1/s · A → B', route: 'A → B', points: [[0, 0], [40, 0]],
 };
 
 /** One arrow as the diagram draws it: unlit (`null`), lit (`true`) or dimmed (`false`). */
@@ -30,9 +30,10 @@ describe('flow diagram: pipes (design spec §7)', () => {
     expect(html).toContain('style="--pipe-dur:1s"');
     expect(html).toContain('<path class="flow-edge-flow" d="M 0 0 L 40 0">');
     expect(html).toContain('marker-end="url(#flow-arrow)"');
-    // the group keeps what the hit test and the e2e tests read, the speed after them; then the tooltip, the hit path, the casing
-    // (which carries the head), the contents
-    expect(html).toContain('<g class="flow-edge item" data-edge-id="e1" data-key="t:iron_ingot@0" style="--pipe-dur:1s"><title>');
+    // the group keeps what the hit test and the e2e tests read, the speed after them, then its accessible name and its tooltip's three
+    // lines (Phase 2 spec §6.4); then the hit path, the casing (which carries the head), the contents
+    expect(html).toContain('<g class="flow-edge item" data-edge-id="e1" data-key="t:iron_ingot@0" style="--pipe-dur:1s" aria-label="Iron Ingot · 1/s · A → B" data-tip="Iron Ingot\n1/s\nA → B"><path class="flow-edge-hit"');
+    expect(html).not.toContain('<title');
     expect(classes(html)).toEqual(['flow-edge item', 'flow-edge-hit', 'flow-edge-line', 'flow-edge-flow']);
     expect(html).toMatch(/<path class="flow-edge-line" d="M 0 0 L 40 0" marker-end="url\(#flow-arrow\)"><\/path><path class="flow-edge-flow"/);
   });
@@ -118,12 +119,23 @@ describe('flow diagram: flanges (design spec §7 "Connected")', () => {
     expect(html).toContain(`<rect class="flow-port" x="198" y="${rowCentre(node, 1) - 5}" width="4" height="10"></rect></g>`);
   });
 
-  // Phase 2 spec §6.4: an icon in a box shows no tip of its own (`tip={false}`), as the box tells what it holds; until Task 3b moves the
-  // box's words to its `data-tip`, its <title> tells them, so nothing shows two tips
-  it('draws no item tip inside a box, whose own title still tells it', () => {
+  // Phase 2 spec §6.4: an icon in a box shows no tip of its own (`tip={false}`), as the box tells what it holds in its own tip (its
+  // `data-tip`), so nothing shows two tips
+  it('draws no item tip inside a box, whose own tip tells it', () => {
     const html = renderToStaticMarkup(<svg><FlowNodeShape node={node} /></svg>);
     expect(html).not.toMatch(/<span class="item-icon[^"]*"[^>]*data-tip=/);
     expect(html.match(/<span class="item-icon/g)).toHaveLength(3);                      // the head's icon and one a row, all without one
-    expect(html).toContain('<title>Wiremill\nLV · 32 EU/t · 1 machine\ntakes Copper Ingot 1/s\nmakes Copper Wire 2/s</title>');
+    expect(html).toContain(' data-tip="Wiremill\nLV · 32 EU/t · 1 machine\ntakes Copper Ingot 1/s\nmakes Copper Wire 2/s">');
+  });
+
+  // Phase 2 spec §6.4 and §6.6: the box's words, its title, lines and rows, one a line, are its tip and its accessible name, written after
+  // its transform (its class stays right before data-node-id); no SVG title, so the box rect is its first child
+  it('tells a box\'s words in its tooltip and name', () => {
+    const html = renderToStaticMarkup(<svg><FlowNodeShape node={node} /></svg>);
+    expect(html).not.toContain('<title');
+    const tip = 'Wiremill\nLV · 32 EU/t · 1 machine\ntakes Copper Ingot 1/s\nmakes Copper Wire 2/s';
+    expect(html).toContain(
+      `<g class="flow-node step new" data-node-id="mill" data-step-id="mill" data-kind="step" transform="translate(0 0)" aria-label="${tip}" data-tip="${tip}"><rect class="flow-node-box"`,
+    );
   });
 });

@@ -2577,7 +2577,8 @@ describe('the Machine GUI Phase 2: the shared NEI tooltip', () => {
     expect(Number(declared(NEI_TIP, 'z-index'))).toBeGreaterThan(Number(declared('.modal-backdrop', 'z-index')));
     expect(declared(NEI_TIP, 'border-radius') ?? '0').toBe('0');
     expect(ruleBody('@keyframes tip-out')).toMatch(/^to \{ opacity: 0; transform: translateY\(2px\);? \}$/);
-    // an item icon's tip is this one, never a native title (spec §6.4)
+    // an item icon's tip is this one, never a native title, and so is a diagram box's or arrow's, never an SVG title (spec §6.4)
     expect(read('components/ItemIcon.tsx')).not.toMatch(/\btitle=/);
+    for (const file of ['views/FlowView.tsx', 'views/ConnectionsView.tsx']) expect(read(file), file).not.toContain('<title>');
   });
 });

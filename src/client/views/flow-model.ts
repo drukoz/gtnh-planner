@@ -73,12 +73,15 @@ export const LEAF_WORD: Record<LeafClass, string> = {
 
 /**
  * One arrow, from an output port to an input port: the good, its rate (per second and as text), the rate as its label
- * only where a port at either end has two or more arrows (the box rows say it otherwise), and its tooltip
+ * only where a port at either end has two or more arrows (the box rows say it otherwise), and its accessible name
  * "name · rate · From → To".
  */
 export interface FlowEdge {
   id: string; from: string; to: string; key: StuffKey; fromPort: string; toPort: string; perSecond: number; name: string; rate: string;
   label?: string; title: string;
+  // optional addition (Phase 2 spec §6.4, P2-D36)
+  /** Where it runs, "From → To", the end of its title: its tooltip's third line, under its good and its rate. */
+  route?: string;
 }
 
 /** An open supporting line (fix spec §6.2): an ELK compound node `line:<key>` titled "<name> line" around its boxes. */
@@ -409,7 +412,7 @@ function stepRows(step: PlanStep, ctx: RowContext): FlowRow[] {
 interface Stub { kind: 'import' | 'missing' | 'sink'; key: StuffKey; perSecond: number; group?: string; leaf?: LeafClass; issue?: PlanIssueCode }
 
 /** An arrow before its words: its ends, its good and how much flows. */
-type Arrow = Omit<FlowEdge, 'name' | 'rate' | 'label' | 'title'>;
+type Arrow = Omit<FlowEdge, 'name' | 'rate' | 'label' | 'title' | 'route'>;
 
 /** A box before its size. */
 type Unsized = Omit<FlowNode, 'width' | 'height'>;
@@ -625,8 +628,8 @@ function targetBox(ctx: GraphContext): Unsized | undefined {
 
 /**
  * The arrows with a row at both ends (a flow to a step the plan does not list would break the layout), sorted by id,
- * each with its good's name and rate, the rate as its label where a port at either end has other arrows, and its
- * tooltip "name · rate · From → To".
+ * each with its good's name and rate, the rate as its label where a port at either end has other arrows, its route
+ * "From → To", and its title "name · rate · From → To" (its accessible name; the three are its tooltip's lines).
  */
 function finishArrows(ctx: GraphContext, arrows: Iterable<Arrow>, nodes: readonly FlowNode[]): FlowEdge[] {
   const ports = new Set(nodes.flatMap((n) => n.rows.map((r) => r.port)));
@@ -634,7 +637,7 @@ function finishArrows(ctx: GraphContext, arrows: Iterable<Arrow>, nodes: readonl
   const atPort = new Map<string, number>();
   for (const a of kept) for (const port of [a.fromPort, a.toPort]) atPort.set(port, (atPort.get(port) ?? 0) + 1);
   const byId = new Map(nodes.map((n) => [n.id, n]));
-  /** How a tooltip names one end of an arrow. */
+  /** How an arrow's route names one of its ends. */
   const endWords = (id: string): string => {
     const node = byId.get(id);
     switch (node?.kind) {
@@ -655,7 +658,8 @@ function finishArrows(ctx: GraphContext, arrows: Iterable<Arrow>, nodes: readonl
   return kept.map((a): FlowEdge => {
     const name = ctx.nameOf(a.key);
     const rate = ctx.rateOf(a.perSecond, a.key);
-    const edge: FlowEdge = { ...a, name, rate, title: `${name} · ${rate} · ${endWords(a.from)} → ${endWords(a.to)}` };
+    const route = `${endWords(a.from)} → ${endWords(a.to)}`;
+    const edge: FlowEdge = { ...a, name, rate, title: `${name} · ${rate} · ${route}`, route };
     if ((atPort.get(a.fromPort) ?? 0) > 1 || (atPort.get(a.toPort) ?? 0) > 1) edge.label = rate;
     return edge;
   }).sort((a, b) => byString(a.id, b.id));

@@ -491,6 +491,17 @@ describe('flow diagram: what it renders (fix spec §6.2)', () => {
     expect(classOf(stub)).toEqual(expect.arrayContaining(['import', 'leaf-derived', 'dim']));
     expect(renderToStaticMarkup(<svg><FlowNodeShape node={at0(nodeOf(g, 'missing:fluid:pva@mixer'))} /></svg>)).toContain('data-kind="missing"');
   });
+  // Phase 2 spec §6.4 and P2-D36: a collapsed line's open button tells its name in its tooltip, and an arrow's tooltip has three lines,
+  // its good, its rate and its route, which its title (its accessible name) runs together
+  it('tells a line\'s open button and every arrow\'s good, rate and route in their tooltips', () => {
+    const closed = flowGraph(red, 'hour', { collapsedLines: new Set([RED]) });
+    const html = renderToStaticMarkup(<svg><FlowNodeShape node={at0(nodeOf(closed, 'line:fluid:molten.redalloy'))} /></svg>);
+    expect(html).toContain('data-tip="Open the Red Alloy line"');
+    expect(html).not.toContain('<title');
+    const { edges } = flowGraph(plan, 'min');
+    expect(edges.length).toBeGreaterThan(0);
+    for (const e of edges) expect(e.title, e.id).toBe(`${e.name} · ${e.rate} · ${e.route}`);
+  });
   it('lists what does not add up above the diagram, each with Show, and Keep only for a good made two ways', () => {
     const send = vi.fn();
     const onShow = vi.fn();

@@ -18,6 +18,7 @@ import type { Plan, PlanSettings } from '../../shared/types/plan.ts';
 import { messageOf } from '../api/client.ts';
 import { ItemIcon } from '../components/ItemIcon.tsx';
 import { PipesButton } from '../components/PipesButton.tsx';
+import { tipText } from '../components/tooltip-model.ts';
 import {
   endHoverFlowFocus, getFlowFocus, hoverFlowFocus, revealFlowFocus, setFlowFocus, useFlowFocus, useFlowReveal, type Focus,
 } from '../state/flow-focus.ts';
@@ -127,15 +128,15 @@ function rowWords(node: FlowNode, row: FlowRow): string {
   return `${row.side === 'in' ? 'takes' : 'makes'} ${row.name} ${rowRate(row)}`;
 }
 
-/** The open/collapse button of a supporting line (`data-line-toggle`). */
+/** The open/collapse button of a supporting line (`data-line-toggle`), whose name is its tooltip too (Phase 2 spec §6.4). */
 function LineToggle(props: { lineKey: StuffKey; title: string; open: boolean; x: number; y: number }): ReactElement {
   const { lineKey, title, open, x, y } = props;
+  const label = `${open ? 'Collapse' : 'Open'} the ${title}`;
   return (
     <g
       className="flow-line-toggle" data-line-toggle={lineKey} role="button" tabIndex={0} aria-expanded={open}
-      aria-label={`${open ? 'Collapse' : 'Open'} the ${title}`} transform={`translate(${x} ${y})`}
+      aria-label={label} transform={`translate(${x} ${y})`} data-tip={label}
     >
-      <title>{`${open ? 'Collapse' : 'Open'} the ${title}`}</title>
       <rect width={TOGGLE_SIZE} height={TOGGLE_SIZE} />
       <text x={TOGGLE_SIZE / 2} y={15} textAnchor="middle">{open ? '−' : '+'}</text>
     </g>
@@ -169,7 +170,7 @@ function FlowRowShape(props: { node: PlacedNode; row: FlowRow; index: number; se
           <ItemIcon itemKey={row.key} size={ICON_SIZE} name={row.name} tip={false} />
         </foreignObject>
       )}
-      {/* A nested svg clips a row wider than the box; the full text is in the box's title. */}
+      {/* A nested svg clips a row wider than the box; the full text is in the box's tooltip and accessible name. */}
       <svg x={0} y={y - ROW_HEIGHT / 2} width={node.width} height={ROW_HEIGHT}>
         <text className="flow-row-text" x={textX} y={ROW_HEIGHT / 2 + 4} {...(left ? {} : { textAnchor: 'end' })}>
           {`${clipText(row.name, room, TEXT_CHAR_WIDTH)} `}
@@ -184,8 +185,10 @@ function FlowRowShape(props: { node: PlacedNode; row: FlowRow; index: number; se
 /**
  * One box: `data-node-id` and `data-kind` on a group (and `data-step-id` on a step's only, ruling P17) holding the box,
  * a head with its item icon, title and lines (a button on a step or an import stub, whose click opens its panel), the
- * badge of avoided goods it uses (`data-avoid-badge`, whose warnings join its tooltip), and a row per good. Under a
- * focus it is lit (`hl`, and `producer` or `consumer`) or dimmed (`dim`).
+ * badge of avoided goods it uses (`data-avoid-badge`, whose warnings join its tooltip), and a row per good. Its words,
+ * one a line (its title, its lines, those warnings and its rows'), are its tooltip and its accessible name (`data-tip`
+ * and `aria-label`, Phase 2 spec §6.4), which a focused head or row shows at itself. Under a focus it is lit (`hl`, and
+ * `producer` or `consumer`) or dimmed (`dim`).
  */
 export function FlowNodeShape(props: { node: PlacedNode; selected?: boolean; sets?: FocusSets | null }): ReactElement {
   const { node, selected = false } = props;
@@ -205,6 +208,7 @@ export function FlowNodeShape(props: { node: PlacedNode; selected?: boolean; set
   const toggle = node.kind === 'line' ? TOGGLE_SPACE : 0;
   const titleX = TEXT_LEFT + (icon !== null ? ICON_SPACE : 0);
   const described = [node.title, ...node.lines, ...(badge?.warnings ?? [])];
+  const tip = tipText([...described, ...node.rows.map((r) => rowWords(node, r))]);
   const opens = node.kind === 'step' || node.kind === 'import';
   return (
     <g
@@ -213,8 +217,9 @@ export function FlowNodeShape(props: { node: PlacedNode; selected?: boolean; set
       {...(node.kind === 'step' ? { 'data-step-id': node.id } : {})}
       data-kind={node.kind}
       transform={`translate(${node.x} ${node.y})`}
+      aria-label={tip}
+      data-tip={tip}
     >
-      <title>{[...described, ...node.rows.map((r) => rowWords(node, r))].join('\n')}</title>
       <rect className="flow-node-box" width={node.width} height={node.height} />
       <g className="flow-node-head" {...(opens ? { role: 'button', tabIndex: 0, 'aria-label': described.join(', '), 'aria-pressed': selected } : {})}>
         <rect className="flow-hit" width={node.width} height={head} />
@@ -223,7 +228,7 @@ export function FlowNodeShape(props: { node: PlacedNode; selected?: boolean; set
             <ItemIcon itemKey={icon} size={ICON_SIZE} name={node.keyName} tip={false} />
           </foreignObject>
         )}
-        {/* A nested svg clips text that is wider than the box; the full text is in the title. */}
+        {/* A nested svg clips text that is wider than the box; the full text is in the box's tooltip and accessible name. */}
         <svg width={node.width - toggle} height={head}>
           <text className="flow-node-title" x={titleX} y={19}>{clipText(node.title, node.width - toggle - titleX - TEXT_LEFT, TITLE_CHAR_WIDTH)}</text>
           {node.lines.map((line, i) => (
@@ -249,9 +254,9 @@ export function FlowNodeShape(props: { node: PlacedNode; selected?: boolean; set
  * One arrow, drawn as a pipe (design spec §7): a 10 px transparent path to hover and click, the casing with its head (a
  * red casing with a white head from a stub of what is missing, ruling R34), the good moving inside it from the output
  * toward the input (`fluid` or `item`, at the speed of its rate: `--pipe-dur` from `pipeSeconds`; nothing moves from a
- * missing source), its tooltip "name · rate · From → To", and the rate as its label where a port has other arrows. Under a
- * focus the group alone is lit (`hl`) or dimmed (`dim`). A lit arrow writes "name · rate" in its tag above the boxes
- * instead (`EdgeTagShape`).
+ * missing source), its accessible name "name · rate · From → To" and its tooltip, which says those three a line each
+ * (Phase 2 spec §6.4, P2-D36), and the rate as its label where a port has other arrows. Under a focus the group alone is
+ * lit (`hl`) or dimmed (`dim`). A lit arrow writes "name · rate" in its tag above the boxes instead (`EdgeTagShape`).
  */
 export function FlowEdgeShape(props: { edge: PlacedEdge; lit: boolean | null; missing: boolean }): ReactElement | null {
   const { edge, lit, missing } = props;
@@ -266,8 +271,8 @@ export function FlowEdgeShape(props: { edge: PlacedEdge; lit: boolean | null; mi
     <g
       className={classes.join(' ')} data-edge-id={edge.id} data-key={edge.key}
       style={{ '--pipe-dur': `${pipeSeconds(edge.perSecond, fluid)}s` } as CSSProperties}
+      aria-label={edge.title} data-tip={tipText([edge.name, edge.rate, edge.route])}
     >
-      <title>{edge.title}</title>
       <path className="flow-edge-hit" d={d} />
       <path className="flow-edge-line" d={d} markerEnd={`url(#${arrow})`} />
       {!missing && <path className="flow-edge-flow" d={d} />}

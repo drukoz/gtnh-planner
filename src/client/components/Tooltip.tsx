@@ -77,7 +77,8 @@ function outermostSvg(el: Element): SVGSVGElement | null {
 
 /**
  * Where an element tip is placed beside: `el`'s box in the window, cut to its outermost svg's (a box panned past the diagram's edge is
- * not there to see); null when nothing of it is left, and the tip then does not show.
+ * not there to see); null when nothing of it is left, and the tip then does not show. A line is left: a Flow arrow that runs straight has
+ * a box with no height, and is drawn all the same (a box of no size at all is nothing).
  */
 function anchorBox(el: Element): TipAnchor | null {
   const r = el.getBoundingClientRect();
@@ -87,7 +88,8 @@ function anchorBox(el: Element): TipAnchor | null {
     const s = svg.getBoundingClientRect();
     box = { left: Math.max(box.left, s.left), top: Math.max(box.top, s.top), right: Math.min(box.right, s.right), bottom: Math.min(box.bottom, s.bottom) };
   }
-  return box.right > box.left && box.bottom > box.top ? box : null;
+  const across = box.right - box.left, down = box.bottom - box.top;
+  return across >= 0 && down >= 0 && across + down > 0 ? box : null;
 }
 
 /** An element as `tapActs` reads it. */

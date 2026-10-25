@@ -1,10 +1,12 @@
 // The shared NEI tooltip (Phase 2 spec §6, Task 3a): one TooltipHost shows the `data-tip` of what the mouse rests on, in a box fixed in
 // the window above every layer that never takes the pointer, one tip at a time. A tap shows it where the tap does nothing else, a long
 // press anywhere (and the press then neither ticks nor picks), and Escape hides a tip before it closes anything. Task 3a puts it on the
-// item icons; Task 3b gives the diagrams theirs (spec §6.7's cases 3 to 6).
+// item icons; Task 3b gives the diagrams' boxes and arrows theirs (spec §6.7's cases 3 to 6; on a touch screen a tap on a box or an arrow,
+// which only picks, and a long press on a straight arrow, which shows its tip).
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
-import { createProject, login, LV_CIRCUITS, setName, SETTINGS_BUTTON } from './helpers.ts';
+import { circuitLv } from './fixtures/plans.ts';
+import { createProject, login, LV_CIRCUITS, openConnections, openWithPlan, setName, SETTINGS_BUTTON } from './helpers.ts';
 import { uploadSampleWorld } from './world-upload.ts';
 
 /** Opens a new project that makes 30 Basic Circuits a minute on its Materials & steps tab, and gives the icons of its rows. */
@@ -80,6 +82,95 @@ test('one tip at a time: the last icon pointed at', async ({ page }) => {
   await expect(title).toHaveText(nameA!);
   await b.hover();
   await expect(title).toHaveText(nameB!);
+});
+
+/** The top of `tip`'s box is at or below the bottom of `el`'s: an element tip sits below its element (spec §6.2). */
+async function below(tip: Locator, el: Locator): Promise<boolean> {
+  const [t, e] = [await tip.boundingBox(), await el.boundingBox()];
+  return t !== null && e !== null && t.y >= e.y + e.height;
+}
+
+// spec §6.7 (3), P2-D22: a box's tip is its words, one a line (the machine first, then its line, then what it takes and makes), and the
+// press that hides it clears the Flow highlight too, for Flow's own Escape hears it whatever the tip did with it
+test('a Flow box\'s tip lists its machine and what it takes, and Escape clears it with the highlight', async ({ page }) => {
+  await openWithPlan(page, circuitLv());
+  const canvas = page.locator('svg.flow-canvas');
+  await page.locator('[data-step-id="wire"] .flow-node-head').hover();                 // its rect.flow-hit lies over the box's rect
+  const tip = page.getByRole('tooltip');
+  await expect(tip.locator(':scope > :first-child')).toHaveText('Basic Wiremill');
+  await expect(tip.locator(':scope > div').filter({ hasText: 'takes Copper Ingot' })).toHaveCount(1);
+  await expect(canvas).toHaveClass(/\bfocusing\b/);                                    // the hover lit the box
+  await page.keyboard.press('Escape');
+  await expect(tip).toHaveCount(0);
+  await expect(canvas).not.toHaveClass(/\bfocusing\b/);
+});
+
+// spec §6.7 (4), P2-D36: an arrow's tip says its good, its rate and its route, a line each
+test('an arrow\'s tip has three lines', async ({ page }) => {
+  await openWithPlan(page, circuitLv());
+  const hit = page.locator('[data-edge-id^="wire|out"] path.flow-edge-hit');
+  // the middle of the arrow, on the screen
+  const at = await hit.evaluate((path: SVGPathElement) => {
+    const point = path.getPointAtLength(path.getTotalLength() / 2);
+    const screen = new DOMPoint(point.x, point.y).matrixTransform(path.getScreenCTM() ?? undefined);
+    return { x: screen.x, y: screen.y };
+  });
+  await page.mouse.move(at.x, at.y);
+  await expect(page.getByRole('tooltip').locator(':scope > div')).toHaveCount(3);
+});
+
+// spec §6.7 (5), §6.2, §6.6: a focus tip is its trigger's, at the element focused, below it, and describes that element while it shows
+// (a box's head or row is named by less than the box's whole tip); a row shows its box's tip at the row
+test('a step head focused from the keyboard shows its box\'s tip below it, described by it, and tabbing away clears both', async ({ page }) => {
+  await openWithPlan(page, circuitLv());
+  const tip = page.getByRole('tooltip');
+  const title = tip.locator(':scope > :first-child');
+  /** Focuses `el` from the keyboard (`:focus-visible`): focused, then away and back with Shift+Tab and Tab. */
+  const keyboardFocus = async (el: Locator): Promise<void> => {
+    await el.focus();
+    await page.keyboard.press('Shift+Tab');
+    await page.keyboard.press('Tab');
+    await expect(el).toBeFocused();
+  };
+  const box = page.locator('[data-step-id="wire"]');
+  const head = box.locator('.flow-node-head');
+  await keyboardFocus(head);
+  await expect(title).toHaveText('Basic Wiremill');
+  await expect.poll(() => below(tip, head)).toBe(true);
+  const id = await tip.getAttribute('id');
+  expect(id).toBeTruthy();
+  await expect(head).toHaveAttribute('aria-describedby', id!);
+  await page.keyboard.press('Tab');                                                      // the box's first row
+  const row = box.locator('.flow-row').first();
+  await expect(row).toBeFocused();
+  await expect(title).toHaveText('Basic Wiremill');                                       // the same box's tip, at the row
+  await expect.poll(() => below(tip, row)).toBe(true);
+  await expect(row).toHaveAttribute('aria-describedby', id!);
+  await expect(head).not.toHaveAttribute('aria-describedby');
+  await page.keyboard.press('Escape');
+  await expect(tip).toHaveCount(0);
+  await expect(row).not.toHaveAttribute('aria-describedby');
+  // the canvas's first stop for the keyboard, and out of the canvas to the toolbar's last control, which has no tip
+  const first = page.locator('svg.flow-canvas [tabindex="0"]').first();
+  const words = await first.evaluate((el) => el.closest('[data-tip]')?.getAttribute('data-tip')?.split('\n')[0] ?? '');
+  expect(words).not.toBe('');
+  await keyboardFocus(first);
+  await expect(title).toHaveText(words);
+  await expect(first).toHaveAttribute('aria-describedby', id!);
+  await page.keyboard.press('Shift+Tab');
+  await expect(page.getByRole('checkbox', { name: 'Imports in one column' })).toBeFocused();
+  await expect(tip).toHaveCount(0);
+  await expect(first).not.toHaveAttribute('aria-describedby');
+});
+
+// spec §6.7 (6): a Connections box's tip holds every text of the box in full, its conduit face's mode too (`In / Out`), and a press hides it
+test('a Connections box\'s tip tells its texts in full, and a press hides it', async ({ page }) => {
+  const view = await openConnections(page);
+  await view.locator('.conn-machine > rect').first().hover();
+  const tip = page.getByRole('tooltip');
+  await expect(tip).toContainText('In / Out');
+  await page.mouse.down();
+  await expect(tip).toHaveCount(0);
 });
 
 test('under reduced motion a tip appears at once', async ({ page }) => {
@@ -407,5 +498,51 @@ test.describe('on a touch screen', () => {
     await page.keyboard.press('Escape');
     await expect(toggle).toHaveAttribute('aria-expanded', 'false');
     await expect(toggle).toHaveText(/Make: Basic Circuit$/);                             // the long press picked nothing
+  });
+
+  // spec §6.1, P2-D21: a diagram picks on a tap, so a tap on an svg trigger only acts; a long press or the focus shows a box's tip
+  test('a tap on a Flow box picks it and shows no tip', async ({ page }) => {
+    await openWithPlan(page, circuitLv());
+    await markTips(page);
+    await page.locator('[data-step-id="wire"] .flow-node-head').tap();
+    await expect(page.getByRole('complementary', { name: 'Step: Basic Wiremill' })).toBeVisible();
+    await expect(page.getByRole('tooltip')).toHaveCount(0);
+    await expect(page.locator('html')).not.toHaveAttribute('data-test-tip-seen');                    // not even for a frame
+  });
+
+  // the same for what acts only because it is in a diagram: a box's head is a button, which acts anyway, but an arrow has no role, so the
+  // svg rule alone keeps its tap a pick (it lights the arrow) with no tip
+  test('a tap on a Flow arrow lights it and shows no tip', async ({ page }) => {
+    await openWithPlan(page, circuitLv());
+    await markTips(page);
+    const arrow = page.locator('[data-edge-id^="wire|out"]');
+    const at = await arrow.locator('path.flow-edge-hit').evaluate((path: SVGPathElement) => {
+      const point = path.getPointAtLength(path.getTotalLength() / 2);
+      const screen = new DOMPoint(point.x, point.y).matrixTransform(path.getScreenCTM() ?? undefined);
+      return { x: screen.x, y: screen.y };
+    });
+    await page.touchscreen.tap(at.x, at.y);
+    await expect(arrow).toHaveClass(/\bhl\b/);                                                       // it picked the arrow
+    await expect(page.getByRole('tooltip')).toHaveCount(0);
+    await expect(page.locator('html')).not.toHaveAttribute('data-test-tip-seen');
+  });
+
+  // P2-D21: a finger sees an arrow's tip by a long press, the one way it has (a tap picks the arrow, and an arrow takes no focus), straight
+  // arrows too: one drawn level with its rows has a box with no height, a line, which is in the diagram's view all the same (spec §6.2)
+  test('a long press on a straight Flow arrow shows its tip', async ({ page }) => {
+    await openWithPlan(page, circuitLv());
+    const arrow = page.locator('[data-edge-id^="wire|out"]');
+    expect(await arrow.evaluate((g) => g.getBoundingClientRect().height)).toBe(0);               // it runs straight: its box is a line
+    const at = await arrow.locator('path.flow-edge-hit').evaluate((path: SVGPathElement) => {
+      const point = path.getPointAtLength(path.getTotalLength() / 2);
+      const screen = new DOMPoint(point.x, point.y).matrixTransform(path.getScreenCTM() ?? undefined);
+      return { x: screen.x, y: screen.y };
+    });
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [at] });
+    const tip = page.getByRole('tooltip');
+    await expect(tip.locator(':scope > div')).toHaveCount(3);                                       // polled while the finger is down
+    await expect(tip.locator(':scope > :first-child')).toHaveText('1x Copper Wire');
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
   });
 });

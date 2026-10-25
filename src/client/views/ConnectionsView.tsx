@@ -18,6 +18,7 @@ import type { Plan } from '../../shared/types/plan.ts';
 import { messageOf } from '../api/client.ts';
 import { Figs } from '../components/Figs.tsx';
 import { PipesButton } from '../components/PipesButton.tsx';
+import { tipText } from '../components/tooltip-model.ts';
 import {
   CONN_LINE_HEIGHT, CONN_TITLE_HEIGHT, connectionsElk, connectionsFromElk, connectionsGraph, faceLines, faceModeText, hasLine, pickDetails,
   type ConnEdge, type ConnFace, type ConnGraph, type ConnLayout, type ConnPick, type ConnVia,
@@ -67,7 +68,7 @@ const DIVIDER_GAP = 2;
  * A box text longer than this many characters shows its first that many and '…' (plan 11, Task 8's review ruling): a
  * title (13 px bold) and a line or face row (11.5 px). Measured for a box `CONN_NODE_WIDTH` (260 px) wide: cut there,
  * every title and face row of the pack's machines and hatches fits with 8 px to spare on each side. The box's tooltip
- * and the panel hold the whole text.
+ * and accessible name, and the panel, hold the whole text.
  */
 const TITLE_CHARS = 32;
 const ROW_CHARS = 38;
@@ -101,7 +102,7 @@ function facesOutline(width: number, top: number, bottom: number): string {
   return `M 0 ${top} H ${width} V ${bottom - r} A ${r} ${r} 0 0 1 ${width - r} ${bottom} H ${r} A ${r} ${r} 0 0 1 0 ${bottom - r} Z`;
 }
 
-/** A face row in the box's tooltip: its title, and a conduit face's mode after a dash. */
+/** A face row in the box's tooltip and accessible name: its title, and a conduit face's mode after a dash. */
 function faceTip(face: ConnFace): string {
   return face.mode === undefined ? face.title : `${face.title} — ${faceModeText(face.mode)}`;
 }
@@ -112,14 +113,15 @@ function faceTip(face: ConnFace): string {
  * it, or on the face rows' background, picks the box, and a click on either line of a face row picks that face. Only the
  * face rows take clicks among the texts, so the middle of the rect is always the rect's own. A face row is `selected`
  * when picked and `linked` when the picked link leaves or enters through it (`linked` holds those faces). A text too
- * long for the box ends in '…' (`cut`), and the box's tooltip, its first child as in the flow diagram, holds every text
- * in full, one per line; the panel shows a picked one in full too. The nested svg still clips anything wider than the
- * box.
+ * long for the box ends in '…' (`cut`), and the box's tooltip and accessible name (its `data-tip` and `aria-label`, as
+ * in the flow diagram: Phase 2 spec §6.4) hold every text in full, one per line of the tooltip; the panel shows a picked
+ * one in full too. The nested svg still clips anything wider than the box.
  */
 function NodeShape(props: { node: PlacedNode; pick: ConnPick | null; linked: ReadonlySet<string>; onPick(pick: ConnPick): void }): ReactElement {
   const { node, pick, linked, onPick } = props;
   const picked = pick !== null && 'node' in pick && pick.node === node.id ? pick : null;
   const top = facesTop(node);
+  const tip = tipText([node.title, ...node.lines, ...node.faces.map(faceTip)]);
   const pickBox = (): void => onPick({ node: node.id });
   /** Each face row's first line, counted from the divider. */
   let lines = 0;
@@ -129,8 +131,10 @@ function NodeShape(props: { node: PlacedNode; pick: ConnPick | null; linked: Rea
     return at;
   });
   return (
-    <g data-node={node.id} className={`conn-node conn-${node.kind}${picked === null ? '' : ' selected'}`} transform={`translate(${node.x} ${node.y})`}>
-      <title>{[node.title, ...node.lines, ...node.faces.map(faceTip)].join('\n')}</title>
+    <g
+      data-node={node.id} className={`conn-node conn-${node.kind}${picked === null ? '' : ' selected'}`} transform={`translate(${node.x} ${node.y})`}
+      aria-label={tip} data-tip={tip}
+    >
       {/* the face rows' part, drawn over the rect's lower edge (and its corners, were they rounded), gives the box one outline */}
       <rect width={node.width} height={node.faces.length === 0 ? node.height : top + CORNER} rx={CORNER} onClick={pickBox} />
       {node.faces.length > 0 && <path d={facesOutline(node.width, top, node.height)} onClick={pickBox} />}

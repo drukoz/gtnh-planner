@@ -7,8 +7,7 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import type { Plan, PlanSettings } from '../../src/shared/types/plan.ts';
 import { circuitLv } from './fixtures/plans.ts';
-import { createProject, login, setName } from './helpers.ts';
-import { uploadSampleWorld } from './world-upload.ts';
+import { createProject, login, openConnections, setName } from './helpers.ts';
 
 const LV_CIRCUITS: Partial<PlanSettings> = { target: 't:circuit@0', amount: 30, per: 'min', tier: 1 };
 
@@ -142,25 +141,6 @@ test('reduced motion stills the pipes', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   expect(await count(), 'without the preference the pipes flow for ever, so the check above is not vacuous').toBe('infinite');
 });
-
-/** Opens a new project with an EnderIO line laid out on the sample world's base, on its Connections tab (connections.spec.ts). */
-async function openConnections(page: Page): Promise<Locator> {
-  await login(page);
-  await setName(page, 'E2E');
-  const scanId = await uploadSampleWorld(page);
-  const id = await createProject(page, 'Pipes conduits');
-  const ops = [{ op: 'settings', patch: { target: 't:iron_plate@0', amount: 24, per: 'min', logistics: 'enderio' } }, { op: 'world', scanId, baseId: '0:0:0' }];
-  expect((await page.request.post(`/api/projects/${id}/ops`, { data: { ops }, headers: { 'X-Planner-Name': 'E2E' } })).ok()).toBe(true);
-  await expect.poll(async () => (await (await page.request.get(`/api/projects/${id}/layout`)).json()).status, { timeout: 30_000 }).toBe('ok');
-  const view = page.getByTestId('connections');
-  // the layout's warnings can still be coming in above the tabs and move them: click again until the tab shows
-  await expect(async () => {
-    await page.getByRole('tab', { name: 'Connections' }).click();
-    await expect(view).toBeVisible({ timeout: 2_000 });
-  }).toPass();
-  await expect(view).toContainText('2× Basic Bending Machine');
-  return view;
-}
 
 test('connections pipes move', async ({ page }) => {
   const view = await openConnections(page);
